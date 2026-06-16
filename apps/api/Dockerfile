@@ -1,0 +1,30 @@
+FROM python:3.12-slim AS runtime
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PORT=8010 \
+    DATABASE_URL=sqlite:////data/app.db \
+    STORAGE_DIR=/data \
+    FFMPEG_BINARY=ffmpeg \
+    FFPROBE_BINARY=ffprobe
+
+WORKDIR /app
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ffmpeg curl ca-certificates fonts-noto-cjk \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY apps/api/requirements.txt ./requirements.txt
+RUN pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir -r requirements.txt
+
+COPY apps/api/ ./
+
+RUN mkdir -p /data
+
+EXPOSE 8010
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+    CMD curl -fsS http://127.0.0.1:${PORT}/api/health || exit 1
+
+CMD ["sh", "-c", "uvicorn app.main:app --host 0.0.0.0 --port ${PORT}"]

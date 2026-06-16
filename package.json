@@ -1,0 +1,16 @@
+{
+  "name": "viral-shorts-monorepo",
+  "private": true,
+  "workspaces": [
+    "apps/web"
+  ],
+  "scripts": {
+    "dev:web": "npm --workspace apps/web run dev",
+    "build:web": "npm --workspace apps/web run build",
+    "lint:web": "npm --workspace apps/web run lint",
+    "docker:build": "docker compose -p ai-shorts build",
+    "docker:up": "docker compose -p ai-shorts up --build",
+    "docker:down": "docker compose -p ai-shorts down",
+    "docker:logs": "docker compose -p ai-shorts logs -f"
+  }
+}
