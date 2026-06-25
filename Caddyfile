@@ -1,0 +1,27 @@
+# Reverse proxy + automatic HTTPS for the API (api.stepai.kr).
+# Requires ports 80/443 open and DNS A record pointing at the VM BEFORE first
+# boot so Caddy can complete the ACME HTTP-01 challenge.
+
+{
+	email {$ACME_EMAIL}
+}
+
+{$API_DOMAIN} {
+	# Stream large multipart uploads (sources up to ~2GB) without buffering.
+	# Generous cap returns a clean 413 above it; the app also self-enforces
+	# MAX_UPLOAD_MB. No read/write timeouts are set (Caddy defaults to none),
+	# so long uploads and video Range responses stream fine.
+	request_body {
+		max_size 2200MB
+	}
+
+	reverse_proxy api:8010 {
+		# Preserve the original Host/scheme so OAuth redirect URIs and cookie
+		# Secure/SameSite behave correctly behind the proxy.
+		header_up Host {host}
+		header_up X-Forwarded-Proto {scheme}
+		header_up X-Forwarded-For {remote_host}
+	}
+
+	encode zstd gzip
+}

@@ -56,11 +56,13 @@ class Clip(Base):
     reason = Column(Text, nullable=False)
     video_url = Column(String, nullable=False)
     thumbnail_url = Column(String, nullable=False)
+    source_thumbnail_url = Column(String, nullable=True)
     thumbnail_text = Column(String, nullable=True)
     thumbnail_description = Column(Text, nullable=True)
     best_frame_time = Column(Float, nullable=True)
     transcript = Column(Text, nullable=False)
     evaluation_json = Column(JSON, nullable=True)
+    ppl_analysis_json = Column(JSON, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     job = relationship("Job", back_populates="clips")

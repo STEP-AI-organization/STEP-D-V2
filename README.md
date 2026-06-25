@@ -26,6 +26,61 @@ scripts/
 tests/
 ```
 
+## 실행하기 (Run the App)
+
+### 방법 A — Docker로 한 번에 띄우기 (권장)
+
+Docker Desktop을 켠 뒤, 프로젝트 루트에서:
+
+```powershell
+# 최초 1회: 환경 파일 생성 후 API 키 입력
+Copy-Item .env.docker.example .env
+
+# 서버(api) + 웹(web) 빌드 & 실행
+npm run docker:up
+# = docker compose -p ai-shorts up --build
+
+# 백그라운드로 띄우려면
+docker compose -p ai-shorts up --build -d
+```
+
+접속 주소:
+
+- 웹: http://localhost:3000
+- API Health: http://127.0.0.1:8010/api/health
+- API Docs: http://127.0.0.1:8010/docs
+
+관리 명령어:
+
+```powershell
+npm run docker:logs   # 로그 실시간 보기
+npm run docker:down   # 중지 + 컨테이너 제거
+npm run docker:build  # 이미지만 다시 빌드
+```
+
+> `web` 컨테이너는 `api` 헬스체크가 통과한 뒤 자동으로 시작됩니다. 최초 빌드는 몇 분 걸릴 수 있습니다.
+
+### 방법 B — 로컬에서 직접 띄우기 (개발용)
+
+Docker 없이 코드를 고치면서 띄울 때 사용합니다. **FFmpeg / ffprobe**가 PATH에 설치돼 있어야 합니다. 터미널 2개를 띄웁니다.
+
+```powershell
+# 터미널 1 — API 서버
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r apps/api/requirements.txt
+cd apps/api
+uvicorn app.main:app --host 127.0.0.1 --port 8010 --reload
+```
+
+```powershell
+# 터미널 2 — 웹
+npm install
+npm run dev:web
+```
+
+자세한 환경변수 설정은 아래 [Quick Start](#quick-start) 이하를 참고하세요.
+
 ## Quick Start
 
 Create a local environment file:
@@ -147,6 +202,17 @@ npm run docker:logs
 npm run docker:down
 ```
 
+## Deploy (Public / Production)
+
+Full runbook: [deploy/runbook.md](deploy/runbook.md). Topology:
+
+- **Web** → Vercel (`app.stepai.kr`), root dir `apps/web`, env `NEXT_PUBLIC_API_BASE_URL=https://api.stepai.kr`.
+- **API** → GCP Compute Engine VM (Docker), `api.stepai.kr`, Caddy auto-HTTPS — see `docker-compose.prod.yml` + `Caddyfile`.
+- **DB** → Cloud SQL for PostgreSQL via the cloud-sql-proxy sidecar.
+- **Media** → GCS bucket (set `STORAGE_BACKEND=gcs`, `GCS_BUCKET`); durable clips/thumbnails served off-VM. Local dev keeps `STORAGE_BACKEND=local` (default).
+
+Config template: `apps/api/.env.production.example`. On the VM: `bash deploy/setup-vm.sh`.
+
 ## Storage
 
 ```text
@@ -156,7 +222,7 @@ storage/
   media files
 ```
 
-Local SQLite data and generated media are stored under `storage/`. For production, use Postgres and object storage such as S3, GCS, or R2.
+Local SQLite data and generated media are stored under `storage/`. For production, set `STORAGE_BACKEND=gcs` + `GCS_BUCKET` so durable artifacts (clips, thumbnails, highlights, assets) mirror to Google Cloud Storage; 2GB source uploads and temp files stay on the VM disk.
 
 ## Verification
 

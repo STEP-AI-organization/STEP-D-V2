@@ -73,7 +73,7 @@ def build_authorization_url(settings: Settings, return_url: str | None = None) -
         "scope": " ".join(YOUTUBE_SCOPES),
         "access_type": "offline",
         "include_granted_scopes": "true",
-        "prompt": "consent",
+        "prompt": "select_account consent",
         "state": state,
     }
     return f"{GOOGLE_AUTH_URL}?{urlencode(params)}"

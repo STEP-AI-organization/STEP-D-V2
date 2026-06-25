@@ -88,6 +88,25 @@ class SubtitleRenderTest(unittest.TestCase):
         self.assertIn(",1,4,1,2,80,80,190,1", content)
         self.assertNotIn("{\\c&H00E6FF&}jackpot", content)
 
+    def test_build_ass_subtitles_uses_highlight_color_override(self):
+        # The editor's emphasis-color picker (#FF4A1C) should drive the baked
+        # highlight so it matches the preview captions: #RRGGBB -> &H00BBGGRR.
+        transcript = {"segments": [{"start": 0.0, "end": 2.0, "text": "this is jackpot moment"}]}
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output = Path(temp_dir) / "clip.ass"
+            build_ass_subtitles(
+                transcript,
+                0.0,
+                3.0,
+                _settings(),
+                output,
+                hook_terms=["jackpot"],
+                highlight_color_override="#FF4A1C",
+            )
+            content = output.read_text(encoding="utf-8")
+
+        self.assertIn("{\\c&H1C4AFF&}jackpot{\\c&HFFFFFF&}", content)
+
     def test_build_ass_subtitles_returns_none_when_disabled(self):
         transcript = {"segments": [{"start": 0.0, "end": 1.0, "text": "hello"}]}
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -76,7 +76,7 @@ def _gemini_title_options(clip: "Clip", settings: "Settings") -> list[dict[str, 
     body = {
         "contents": [{"role": "user", "parts": [{"text": prompt}]}],
         "generationConfig": {
-            "temperature": 0.45,
+            "temperature": 0.72,
             "responseMimeType": "application/json",
             "responseSchema": TITLE_OPTION_SCHEMA,
         },

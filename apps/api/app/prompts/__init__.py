@@ -10,6 +10,7 @@ from app.prompts.caption_detection import (
     build_caption_detection_prompt,
 )
 from app.prompts.clip_evaluation import EVALUATION_SCHEMA, build_evaluation_prompt
+from app.prompts.ppl_detection import PPL_DETECTION_SCHEMA, build_ppl_prompt
 from app.prompts.title_options import TITLE_OPTION_SCHEMA, build_title_options_prompt
 from app.prompts.transcription import TRANSCRIPTION_PROMPT
 
@@ -18,6 +19,8 @@ __all__ = [
     "build_evaluation_prompt",
     "CAPTION_DETECTION_SCHEMA",
     "build_caption_detection_prompt",
+    "PPL_DETECTION_SCHEMA",
+    "build_ppl_prompt",
     "TITLE_OPTION_SCHEMA",
     "build_title_options_prompt",
     "TRANSCRIPTION_PROMPT",

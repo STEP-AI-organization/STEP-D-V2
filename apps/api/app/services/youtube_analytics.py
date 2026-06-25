@@ -133,7 +133,7 @@ def fetch_video_comments(access_token: str, video_id: str, limit: int = 20) -> l
                 "part": "snippet",
                 "videoId": video_id,
                 "maxResults": max(1, min(50, limit)),
-                "order": "relevance",
+                "order": "time",
                 "textFormat": "plainText",
             },
         )

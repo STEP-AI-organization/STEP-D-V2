@@ -9,14 +9,28 @@ from app.core.config import Settings
 from app.prompts import (
     CAPTION_DETECTION_SCHEMA,
     EVALUATION_SCHEMA,
+    PPL_DETECTION_SCHEMA,
     build_caption_detection_prompt,
     build_evaluation_prompt,
+    build_ppl_prompt,
 )
 from app.services.candidates import Candidate
+from app.services.scoring import normalize_score
 
 
 class GeminiError(RuntimeError):
     pass
+
+
+SCORE_FIELDS = ("score", "hook_score", "emotion_score", "retention_score", "shareability_score")
+
+
+def _normalize_evaluation_scores(result: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(result)
+    for field in SCORE_FIELDS:
+        if field in normalized:
+            normalized[field] = normalize_score(normalized[field])
+    return normalized
 
 
 def _image_part(path: Path) -> dict[str, Any]:
@@ -111,9 +125,46 @@ def evaluate_candidate(candidate: Candidate, frame_paths: list[Path], settings: 
         raise GeminiError(f"Gemini API error after {len(errors)} attempt(s): {' | '.join(errors)}")
 
     payload = response.json()
-    result = _clean_json(_extract_text(payload))
+    result = _normalize_evaluation_scores(_clean_json(_extract_text(payload)))
     result["_raw"] = payload
     return result
+
+
+def detect_ppl(frame_paths: list[Path], frame_times: list[float], settings: Settings) -> list[dict[str, Any]]:
+    """Detect branded products in an ordered list of frames.
+
+    Returns the raw per-frame detections list (one entry per input frame). The
+    caller maps ``frame_index`` back to timestamps and aggregates products.
+    """
+    if not frame_paths:
+        return []
+    if not settings.gemini_api_key:
+        raise GeminiError("GEMINI_API_KEY is required for PPL detection.")
+
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{settings.gemini_model}:generateContent"
+    parts: list[dict[str, Any]] = [{"text": build_ppl_prompt(frame_times)}]
+    parts.extend(_image_part(path) for path in frame_paths)
+
+    headers = {
+        "Content-Type": "application/json",
+        "x-goog-api-key": settings.gemini_api_key,
+    }
+    errors: list[str] = []
+    response = None
+    with httpx.Client(timeout=settings.gemini_timeout_seconds) as client:
+        for body in _body_variants(parts, PPL_DETECTION_SCHEMA):
+            response = client.post(url, headers=headers, json=body)
+            if response.status_code < 400:
+                break
+            errors.append(f"{response.status_code}: {response.text[:500]}")
+            if response.status_code != 400:
+                break
+    if response is None or response.status_code >= 400:
+        raise GeminiError(f"Gemini API error after {len(errors)} attempt(s): {' | '.join(errors)}")
+
+    result = _clean_json(_extract_text(response.json()))
+    frames = result.get("frames")
+    return frames if isinstance(frames, list) else []
 
 
 def detect_burned_in_captions(frame_paths: list[Path], settings: Settings) -> dict[str, Any]:

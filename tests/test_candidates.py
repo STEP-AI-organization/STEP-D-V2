@@ -58,6 +58,49 @@ class CandidateDetectionTest(unittest.TestCase):
         self.assertIn("반전", candidates[0].hook_terms)
         self.assertGreaterEqual(candidates[0].local_score, 60)
 
+    def test_anchor_window_keeps_hook_near_the_opening(self):
+        transcript = {
+            "segments": [
+                {"start": 0.0, "end": 8.0, "text": "평범한 설명이 조금 이어집니다."},
+                {"start": 20.0, "end": 26.0, "text": "그런데 여기서 진짜 소름 돋는 반전이 나옵니다."},
+                {"start": 27.0, "end": 42.0, "text": "댓글 반응이 갈릴 만큼 분위기가 완전히 바뀌었어요."},
+            ],
+        }
+
+        candidates = detect_candidates(
+            transcript=transcript,
+            video_duration=70.0,
+            min_seconds=20,
+            max_seconds=45,
+            target_seconds=30,
+            max_candidates=3,
+        )
+
+        self.assertGreaterEqual(len(candidates), 1)
+        self.assertLessEqual(20.0 - candidates[0].start, 2.0)
+        self.assertIn("반전", candidates[0].hook_terms)
+
+    def test_plain_korean_segments_use_low_weight_fallback_windows(self):
+        transcript = {
+            "segments": [
+                {"start": 0.0, "end": 12.0, "text": "오늘은 자료를 정리하고 다음 일정을 설명했습니다."},
+                {"start": 15.0, "end": 27.0, "text": "이어서 평범한 안내와 배경 설명이 계속됩니다."},
+                {"start": 30.0, "end": 42.0, "text": "마무리로 전체 내용을 다시 한번 정리했습니다."},
+            ],
+        }
+
+        candidates = detect_candidates(
+            transcript=transcript,
+            video_duration=60.0,
+            min_seconds=20,
+            max_seconds=45,
+            target_seconds=30,
+            max_candidates=5,
+        )
+
+        self.assertGreaterEqual(len(candidates), 1)
+        self.assertTrue(all(candidate.local_score < 32 for candidate in candidates))
+
 
 class CandidateBoundaryRefinementTest(unittest.TestCase):
     def test_expands_mid_segment_start_to_first_word_padding(self):

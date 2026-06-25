@@ -1,0 +1,72 @@
+# Production stack for the GCP Compute Engine VM (api.stepai.kr).
+#
+# Delta vs docker-compose.yml: no local Postgres (managed Cloud SQL via the
+# cloud-sql-proxy sidecar), media mirrored to GCS, and Caddy terminating TLS in
+# front of the API. The web frontend runs on Vercel and is NOT in this file.
+#
+# Run with a single env file used both for ${...} interpolation and as the API's
+# env_file:
+#   docker compose --env-file apps/api/.env.production -f docker-compose.prod.yml up -d --build
+#
+# Required vars in apps/api/.env.production (see apps/api/.env.production.example):
+#   INSTANCE_CONNECTION_NAME, API_DOMAIN, ACME_EMAIL, DATA_DIR,
+#   plus all app config (DATABASE_URL pointing at cloud-sql-proxy:5432, GCS_*, OAuth, keys).
+name: ai-shorts-prod
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    image: ai-shorts-api:prod
+    restart: unless-stopped
+    env_file:
+      - apps/api/.env.production
+    environment:
+      # STORAGE_DIR is baked to /data in the image; the host SSD is mounted there.
+      STORAGE_DIR: /data
+    volumes:
+      - ${DATA_DIR:-/data}:/data
+    depends_on:
+      cloud-sql-proxy:
+        condition: service_started
+    expose:
+      - "8010"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8010/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+  cloud-sql-proxy:
+    image: gcr.io/cloud-sql-connectors/cloud-sql-proxy:2.14.1
+    restart: unless-stopped
+    # Auth uses the VM's attached service account via ADC (metadata server) —
+    # no key file. The SA needs roles/cloudsql.client.
+    command:
+      - "${INSTANCE_CONNECTION_NAME}"
+      - "--address=0.0.0.0"
+      - "--port=5432"
+    expose:
+      - "5432"
+
+  caddy:
+    image: caddy:2.8-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      API_DOMAIN: ${API_DOMAIN}
+      ACME_EMAIL: ${ACME_EMAIL}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - api
+
+volumes:
+  caddy-data:
+  caddy-config:

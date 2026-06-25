@@ -1,13 +1,16 @@
 ﻿"use client";
 
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { ShortcutEditor, type EditorState, type ShortcutEditorDraft } from "./components/ShortcutEditor";
 import {
+  analyzePpl,
   API_BASE_URL,
   applyCreative,
   autoDistribute,
   cancelPublish,
   cancelYouTubeChannelDraft,
-  confirmYouTubeChannelDraft,
+  clipDownloadUrl,
+  confirmManyYouTubeChannelDraft,
   disconnectChannel,
   getChannelAnalytics,
   getChannelInsights,
@@ -25,7 +28,9 @@ import {
   publishToYouTube,
   regenerateThumbnailTexts,
   regenerateTitles,
+  renderHighlight,
   retrimClip,
+  savePplLinks,
   setDefaultChannel,
   updateChannelStyleNote,
   uploadVideo,
@@ -36,6 +41,8 @@ import {
   type SubtitleMode,
   type VideoInspection,
   type ChannelInsights,
+  type HighlightRenderResponse,
+  type PplAnalysis,
   type YouTubeChannel,
   type YouTubeChannelDraft,
   type YouTubePublish,
@@ -61,17 +68,98 @@ type ThumbTextOption = { id: string; text: string; note: string };
 type Clip = {
   id: string; rank: number; score: number; start: string; end: string; durSec: number;
   startSec: number; endSec: number;
-  caption: string; title: string; reason: string; labels: string[];
+  caption: string; title: string; reason: string; transcript?: string; labels: string[];
   yt: { title: string; tags: string[] };
   description: string;
   publishTags: string[];
+  category?: string;
+  madeForKids?: boolean;
+  uploadNote?: string;
+  thumbnailText?: string | null;
   titleOptions: TitleOption[];
   thumbTextOptions: ThumbTextOption[];
   editStatus?: string | null;
   videoUrl?: string;
   thumbnailUrl?: string;
+  sourceThumbnailUrl?: string;
   packageUrl?: string | null;
+  pplAnalysis?: PplAnalysis | null;
+  initialEditorState?: Partial<EditorState>;
 };
+
+const SAMPLE_CLIPS: Clip[] = [
+  {
+    id: "sample-clip-1",
+    rank: 1,
+    score: 94,
+    start: "02:14",
+    end: "02:58",
+    durSec: 44,
+    startSec: 134,
+    endSec: 178,
+    caption: "이 장면 진짜 댓글 터집니다",
+    title: "대화 흐름이 한 번에 뒤집히는 순간",
+    reason: "첫 3초에 반전 포인트가 바로 나오고, 뒤이어 감정 리액션이 이어져 쇼츠 훅으로 쓰기 좋습니다.",
+    labels: ["반전", "리액션", "댓글유도"],
+    yt: { title: "이 장면 진짜 댓글 터집니다 #하이라이트", tags: ["쇼츠", "하이라이트", "반전"] },
+    description: "긴 영상에서 바로 잘라 쓰기 좋은 하이라이트 샘플입니다.",
+    publishTags: ["쇼츠", "하이라이트", "반전"],
+    titleOptions: [
+      { id: "sample-clip-1-t1", text: "대화 흐름이 한 번에 뒤집히는 순간", overlay: "이 장면 진짜 댓글 터집니다", note: "반전 포인트를 바로 노출합니다." },
+      { id: "sample-clip-1-t2", text: "방금 표정 보고 다시 돌려봤습니다", overlay: "표정이 다 했네", note: "리액션 중심 훅입니다." },
+    ],
+    thumbTextOptions: [
+      { id: "sample-clip-1-th1", text: "댓글 터짐", note: "참여 유도형 문구" },
+      { id: "sample-clip-1-th2", text: "표정 주목", note: "장면 집중형 문구" },
+    ],
+  },
+  {
+    id: "sample-clip-2",
+    rank: 2,
+    score: 89,
+    start: "06:02",
+    end: "06:39",
+    durSec: 37,
+    startSec: 362,
+    endSec: 399,
+    caption: "여기서 분위기가 완전히 바뀜",
+    title: "갑자기 모두가 조용해진 이유",
+    reason: "장면 전환과 대사 밀도가 좋아 중간 이탈을 줄이기 쉬운 구간입니다.",
+    labels: ["몰입", "전환", "대사"],
+    yt: { title: "갑자기 모두가 조용해진 이유", tags: ["몰입", "토크", "쇼츠"] },
+    description: "샘플 클립 설명입니다.",
+    publishTags: ["몰입", "토크", "쇼츠"],
+    titleOptions: [
+      { id: "sample-clip-2-t1", text: "갑자기 모두가 조용해진 이유", overlay: "분위기 급반전", note: "긴장감을 앞에 배치합니다." },
+    ],
+    thumbTextOptions: [
+      { id: "sample-clip-2-th1", text: "급반전", note: "전환 강조" },
+    ],
+  },
+  {
+    id: "sample-clip-3",
+    rank: 3,
+    score: 84,
+    start: "11:20",
+    end: "12:01",
+    durSec: 41,
+    startSec: 680,
+    endSec: 721,
+    caption: "짧게 잘라도 맥락이 살아있어요",
+    title: "긴 영상에서 바로 쇼츠 되는 구간",
+    reason: "앞뒤 설명 없이도 이해되는 독립 장면이라 바로 편집 테스트에 쓰기 좋습니다.",
+    labels: ["요약", "독립장면", "입문"],
+    yt: { title: "긴 영상에서 바로 쇼츠 되는 구간", tags: ["편집", "쇼츠", "요약"] },
+    description: "샘플 클립 설명입니다.",
+    publishTags: ["편집", "쇼츠", "요약"],
+    titleOptions: [
+      { id: "sample-clip-3-t1", text: "긴 영상에서 바로 쇼츠 되는 구간", overlay: "바로 써도 됨", note: "편집 완성도를 강조합니다." },
+    ],
+    thumbTextOptions: [
+      { id: "sample-clip-3-th1", text: "바로 써도 됨", note: "완성형 문구" },
+    ],
+  },
+];
 
 type Privacy = "public" | "unlisted" | "private";
 const PRIVACY_LABELS: Record<Privacy, string> = { public: "공개", unlisted: "일부 공개", private: "비공개" };
@@ -85,6 +173,14 @@ type PublishDraft = {
   tags: string;
   privacy: Privacy;
   scheduleLocal: string;
+};
+
+type HighlightDraft = {
+  title: string;
+  clipIds: string[];
+  aspect: "landscape" | "vertical" | "square";
+  maxDurationSeconds: number;
+  result?: HighlightRenderResponse | null;
 };
 
 const PUBLISH_STATUS_META: Record<string, { label: string; color: string; bg: string; bd: string }> = {
@@ -190,6 +286,23 @@ const stageFromProgress = (progress: number) => {
 };
 
 const errorMessage = (error: unknown) => error instanceof Error ? error.message : "알 수 없는 오류가 발생했어요";
+const isRecord = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
+
+// Extract the 11-char YouTube video id from watch / youtu.be / shorts / embed URLs.
+const youtubeId = (url?: string | null): string | null => {
+  if (!url) return null;
+  const patterns = [
+    /[?&]v=([a-zA-Z0-9_-]{11})/,
+    /youtu\.be\/([a-zA-Z0-9_-]{11})/,
+    /\/shorts\/([a-zA-Z0-9_-]{11})/,
+    /\/embed\/([a-zA-Z0-9_-]{11})/,
+  ];
+  for (const re of patterns) {
+    const m = url.match(re);
+    if (m) return m[1];
+  }
+  return null;
+};
 
 const fallbackTitleOptions = (clip: BackendClip): TitleOption[] => {
   const caption = clip.thumbnail_text || clip.transcript?.slice(0, 18) || clip.title;
@@ -217,6 +330,9 @@ const mapBackendClip = (clip: BackendClip): Clip => {
       note: option.reason || option.style || "",
     }))
     .filter(option => option.text);
+  const savedEditorState = isRecord(clip.creative_settings?.editor_state)
+    ? (clip.creative_settings.editor_state as Partial<EditorState>)
+    : undefined;
 
   return {
     id: clip.clip_id,
@@ -229,6 +345,7 @@ const mapBackendClip = (clip: BackendClip): Clip => {
     durSec: Math.max(1, Math.round(clip.duration_seconds)),
     caption: clip.thumbnail_text || clip.transcript?.slice(0, 32) || clip.title,
     title: clip.title,
+    transcript: clip.transcript,
     reason: clip.clip_briefing?.why_it_works || clip.reason,
     labels,
     yt: {
@@ -237,22 +354,29 @@ const mapBackendClip = (clip: BackendClip): Clip => {
     },
     description: clip.youtube_metadata?.description || "",
     publishTags: clip.youtube_metadata?.tags?.length ? clip.youtube_metadata.tags : clip.youtube_metadata?.hashtags || [],
+    category: clip.youtube_metadata?.category,
+    madeForKids: clip.youtube_metadata?.made_for_kids,
+    uploadNote: clip.youtube_metadata?.upload_note,
+    thumbnailText: clip.youtube_metadata?.thumbnail_text || clip.thumbnail_text,
     titleOptions: options,
     thumbTextOptions,
     editStatus: clip.edit_status ?? null,
     videoUrl: resolveMedia(clip.video_url),
     thumbnailUrl: resolveMedia(clip.thumbnail_url),
+    sourceThumbnailUrl: resolveMedia(clip.source_thumbnail_url),
     packageUrl: resolveMedia(clip.youtube_package_url),
+    pplAnalysis: clip.ppl_analysis ?? null,
+    initialEditorState: savedEditorState,
   };
 };
 
 /* ----------------------------- LIVE DATA TYPES + TRANSFORMS ----------------------------- */
 
-type ProjectCard = { id: string; title: string; date: string; dur: string; posterIdx: number; status: string; shorts: { clipId: string; state: string }[] };
+type ProjectCard = { id: string; title: string; date: string; dur: string; posterIdx: number; status: string; source: string; ytId: string | null; sourceUrl?: string | null; originalVideoUrl?: string | null; shorts: { clipId: string; state: string }[] };
 type SchedItem = { publishId: string; clipId: string; day: number; month: number; year: number; time: string; title: string; status: string; rawStatus: string; scheduleStamp?: string | null; thumb?: string | null };
 type PickerClip = { clipId: string; jobId: string; title: string; thumb?: string | null; score: number; status: string; project: string };
 type CommentItem = { author: string; text: string; likes: number; time: string };
-type ChannelVideo = { id: string; title: string; date: string; views: string; likes: string; comments: string; posterIdx: number; url?: string };
+type ChannelVideo = { id: string; title: string; date: string; views: string; likes: string; comments: string; posterIdx: number; url?: string; thumbnailUrl?: string | null };
 type ChannelCard = {
   id: string;
   channelId: string;
@@ -345,6 +469,10 @@ const mapStudioProject = (p: StudioProject, idx: number): ProjectCard => ({
   dur: fmtDur(p.duration),
   posterIdx: idx,
   status: jobStatusKo(p.status),
+  source: p.source || "upload",
+  ytId: youtubeId(p.source_url),
+  sourceUrl: p.source_url,
+  originalVideoUrl: resolveMedia(p.original_video_url),
   shorts: (p.clips || []).map(c => ({ clipId: c.clip_id, state: publishStateKo(c.status) })),
 });
 
@@ -383,6 +511,56 @@ const mapChannel = (ch: YouTubeChannel, idx: number): ChannelCard => ({
   isDefault: ch.is_default,
 });
 
+/* ----------------------------- PPL OVERLAY PLAYER ----------------------------- */
+
+const PPL_BOX_COLORS = ["#FF4A1C", "#27E0A0", "#5B8CFF", "#FFD400", "#FF49DB", "#15A088"];
+
+// 9:16 player that draws brand/product bounding boxes synced to playback.
+// Boxes are normalized 0..1 of the rendered frame, so a 9:16 box maps them directly.
+function PplOverlayPlayer({ analysis, videoUrl, poster }: { analysis: PplAnalysis; videoUrl?: string; poster?: string }) {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const [t, setT] = useState(0);
+  useEffect(() => {
+    const v = videoRef.current;
+    if (!v) return undefined;
+    const onTime = () => setT(v.currentTime);
+    v.addEventListener("timeupdate", onTime);
+    v.addEventListener("seeked", onTime);
+    return () => { v.removeEventListener("timeupdate", onTime); v.removeEventListener("seeked", onTime); };
+  }, []);
+  const colorFor = (id: string) => {
+    const idx = analysis.products.findIndex(p => p.id === id);
+    return PPL_BOX_COLORS[(idx < 0 ? 0 : idx) % PPL_BOX_COLORS.length];
+  };
+  const detections = useMemo(() => {
+    if (!analysis.frames.length) return [];
+    let best = analysis.frames[0];
+    for (const f of analysis.frames) {
+      if (Math.abs(f.timestamp - t) < Math.abs(best.timestamp - t)) best = f;
+    }
+    return best.detections;
+  }, [analysis, t]);
+  return (
+    <div style={{ position: "relative", width: "100%", maxWidth: 300, margin: "0 auto", aspectRatio: "9 / 16", borderRadius: 12, overflow: "hidden", background: "#000", boxShadow: "0 10px 30px -16px rgba(0,0,0,.6)" }}>
+      {videoUrl ? (
+        <video ref={videoRef} src={videoUrl} controls playsInline preload="metadata" poster={poster} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", background: "#050505" }} />
+      ) : poster ? (
+        <div style={{ position: "absolute", inset: 0, backgroundImage: `url(${poster})`, backgroundSize: "cover", backgroundPosition: "center" }} />
+      ) : null}
+      {detections.map((d, i) => {
+        const color = colorFor(d.product_id);
+        return (
+          <div key={`${d.product_id}-${i}`} style={{ position: "absolute", left: `${d.box[0] * 100}%`, top: `${d.box[1] * 100}%`, width: `${d.box[2] * 100}%`, height: `${d.box[3] * 100}%`, border: `2px solid ${color}`, borderRadius: 5, boxShadow: "0 0 0 1px rgba(0,0,0,.45)", pointerEvents: "none", transition: "all .12s linear" }}>
+            <span style={{ position: "absolute", left: -2, top: d.box[1] < 0.08 ? "100%" : -19, whiteSpace: "nowrap", fontSize: 10, fontWeight: 800, color: "#fff", background: color, padding: "1px 5px", borderRadius: 4, boxShadow: "0 2px 6px rgba(0,0,0,.4)" }}>
+              {d.brand} · {d.product}
+            </span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 /* ----------------------------- COMPONENT ----------------------------- */
 
 export default function Home() {
@@ -398,6 +576,7 @@ export default function Home() {
   const [dragging, setDragging] = useState(false);
   const [fileName, setFileName] = useState<string | null>(null);
   const [ytUrl, setYtUrl] = useState("");
+  const [ytPreviewId, setYtPreviewId] = useState<string | null>(null);
   const [progress, setProgress] = useState(0);
   const [stageIndex, setStageIndex] = useState(0);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
@@ -413,14 +592,19 @@ export default function Home() {
   const [studioLoaded, setStudioLoaded] = useState(false);
   const [channelDraftId, setChannelDraftId] = useState<string | null>(null);
   const [channelDraft, setChannelDraft] = useState<YouTubeChannelDraft | null>(null);
-  const [selectedDraftChannelId, setSelectedDraftChannelId] = useState<string | null>(null);
+  const [selectedDraftChannelIds, setSelectedDraftChannelIds] = useState<string[]>([]);
   const [channelDraftLoading, setChannelDraftLoading] = useState(false);
   const [channelDraftSaving, setChannelDraftSaving] = useState(false);
 
   // results
   const [filter, setFilter] = useState<"top" | "all" | "short" | "custom">("top");
   const [selectedClipId, setSelectedClipId] = useState<string | null>(null);
-  const [tab, setTab] = useState<"titles" | "overlay" | "youtube">("titles");
+  const [tab, setTab] = useState<"titles" | "overlay" | "youtube" | "ppl">("titles");
+
+  // PPL (product placement) analysis — on-demand per clip
+  const [pplData, setPplData] = useState<Record<string, PplAnalysis | null>>({});
+  const [pplBusy, setPplBusy] = useState(false);
+  const [pplLinkDraft, setPplLinkDraft] = useState<Record<string, string>>({});
   const [titleSeed, setTitleSeed] = useState(0);
   const [chosenTitle, setChosenTitle] = useState<Record<string, string>>({});
   const [revisions, setRevisions] = useState<Record<string, number>>({});
@@ -438,6 +622,10 @@ export default function Home() {
   const [channelBusy, setChannelBusy] = useState<string | null>(null);
   const publishPollers = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
 
+  // highlight render flow
+  const [highlightDraft, setHighlightDraft] = useState<HighlightDraft | null>(null);
+  const [highlightBusy, setHighlightBusy] = useState(false);
+
   // clip editor (titles / thumbnail text / re-cut / creative apply)
   const [chosenThumb, setChosenThumb] = useState<Record<string, string>>({});
   const [titleBusy, setTitleBusy] = useState(false);
@@ -445,6 +633,7 @@ export default function Home() {
   const [applyBusy, setApplyBusy] = useState(false);
   const [retrimBusy, setRetrimBusy] = useState(false);
   const [trimDraft, setTrimDraft] = useState<{ clipId: string; start: number; end: number } | null>(null);
+  const [editorClipId, setEditorClipId] = useState<string | null>(null);
 
   // candidate curation (session-local)
   const [pinned, setPinned] = useState<Set<string>>(new Set());
@@ -495,15 +684,16 @@ export default function Home() {
     if (procTimer.current) clearInterval(procTimer.current);
     if (pollTimer.current) clearTimeout(pollTimer.current);
     setNav("home"); setView("empty"); setFileName(null); setProgress(0); setStageIndex(0);
-    setSelectedFile(null); setInspection(null); setInspecting(false); setBackendError(null); setBackendJobId(null); setBackendClips(null);
-    setSelectedClipId(null); setOpenProject(null); setOpenChannel(null); setOpenVideo(null);
+    setSelectedFile(null); setYtPreviewId(null); setInspection(null); setInspecting(false); setBackendError(null); setBackendJobId(null); setBackendClips(null);
+    setSelectedClipId(null); setEditorClipId(null); setOpenProject(null); setOpenChannel(null); setOpenVideo(null);
   };
   const switchNav = (k: NavKey) => {
-    setNav(k); setOpenProject(null); setOpenChannel(null); setOpenVideo(null); setSelectedClipId(null);
+    setNav(k); setOpenProject(null); setOpenChannel(null); setOpenVideo(null); setSelectedClipId(null); setEditorClipId(null);
   };
   const pickFile = (fileOrName?: File | string | null) => {
     if (pollTimer.current) clearTimeout(pollTimer.current);
     setProgress(0); setStageIndex(0); setBackendError(null); setBackendJobId(null); setBackendClips(null); setSelectedClipId(null);
+    setYtPreviewId(null);
     if (fileOrName instanceof File) {
       setSelectedFile(fileOrName);
       setFileName(fileOrName.name || "업로드 영상.mp4");
@@ -535,7 +725,10 @@ export default function Home() {
   const importYt = () => {
     const u = ytUrl.trim();
     if (!u) { showToast("유튜브 링크를 붙여넣어 주세요"); return; }
+    const id = youtubeId(u);
+    if (!id) { showToast("유효한 유튜브 링크가 아니에요. 영상 주소를 확인해 주세요"); return; }
     pickFile("유튜브 영상 · " + u.replace(/^https?:\/\/(www\.)?/, "").slice(0, 42));
+    setYtPreviewId(id);
     showToast("유튜브 링크를 준비했어요");
   };
   const pollJob = async (jobId: string) => {
@@ -687,12 +880,13 @@ export default function Home() {
   const loadChannelDraft = async (draftId: string) => {
     setChannelDraftId(draftId);
     setChannelDraft(null);
-    setSelectedDraftChannelId(null);
+    setSelectedDraftChannelIds([]);
     setChannelDraftLoading(true);
     try {
       const draft = await getYouTubeChannelDraft(draftId);
       setChannelDraft(draft);
-      setSelectedDraftChannelId(draft.channels.find(ch => !ch.already_connected)?.channel_id ?? draft.channels[0]?.channel_id ?? null);
+      const unconnected = draft.channels.filter(ch => !ch.already_connected).map(ch => ch.channel_id);
+      setSelectedDraftChannelIds(unconnected.length ? unconnected : draft.channels.slice(0, 1).map(ch => ch.channel_id));
     } catch (error) {
       setChannelDraftId(null);
       showToast(errorMessage(error));
@@ -705,29 +899,34 @@ export default function Home() {
     const id = channelDraftId;
     setChannelDraftId(null);
     setChannelDraft(null);
-    setSelectedDraftChannelId(null);
+    setSelectedDraftChannelIds([]);
     if (id) {
       try { await cancelYouTubeChannelDraft(id); } catch {}
     }
   };
 
   const confirmChannelDraft = async () => {
-    if (!channelDraft || !selectedDraftChannelId) return;
-    const selected = channelDraft.channels.find(ch => ch.channel_id === selectedDraftChannelId);
+    if (!channelDraft || selectedDraftChannelIds.length === 0) return;
+    const selected = channelDraft.channels.filter(ch => selectedDraftChannelIds.includes(ch.channel_id));
     setChannelDraftSaving(true);
     try {
-      await confirmYouTubeChannelDraft(channelDraft.id, selectedDraftChannelId);
+      await confirmManyYouTubeChannelDraft(channelDraft.id, selectedDraftChannelIds);
       setChannelDraftId(null);
       setChannelDraft(null);
-      setSelectedDraftChannelId(null);
+      setSelectedDraftChannelIds([]);
       await loadChannels();
-      showToast(selected?.already_connected ? "YouTube 채널 연결을 갱신했어요" : "YouTube 채널을 추가했어요");
+      const allRefresh = selected.length > 0 && selected.every(ch => ch.already_connected);
+      showToast(allRefresh ? `YouTube 채널 ${selected.length}개 연결을 갱신했어요` : `YouTube 채널 ${selected.length}개를 추가했어요`);
       setNav("analytics");
     } catch (error) {
       showToast(errorMessage(error));
     } finally {
       setChannelDraftSaving(false);
     }
+  };
+
+  const toggleDraftChannel = (channelId: string) => {
+    setSelectedDraftChannelIds(ids => ids.includes(channelId) ? ids.filter(id => id !== channelId) : [...ids, channelId]);
   };
 
   useEffect(() => {
@@ -822,7 +1021,7 @@ export default function Home() {
       const videos: ChannelVideo[] = a.videos.map((v, i) => ({
         id: v.video_id, title: v.title, date: relDays(v.published_at),
         views: fmtCount(v.view_count), likes: fmtCount(v.like_count), comments: fmtCount(v.comment_count),
-        posterIdx: i, url: v.url,
+        posterIdx: i, url: v.url, thumbnailUrl: v.thumbnail || (v.video_id ? `https://i.ytimg.com/vi/${v.video_id}/mqdefault.jpg` : null),
       }));
       setChannels(prev => prev.map(c => c.id === channelDbId ? {
         ...c,
@@ -849,7 +1048,7 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [openChannel, openVideo]);
 
-  const activeClips = useMemo(() => backendClips ?? [], [backendClips]);
+  const activeClips = useMemo(() => backendClips ?? (view === "results" ? SAMPLE_CLIPS : []), [backendClips, view]);
 
   const sortedClips = useMemo(() => {
     const list = activeClips.filter(c => !hidden.has(c.id));
@@ -870,6 +1069,7 @@ export default function Home() {
   const hiddenCount = useMemo(() => activeClips.filter(c => hidden.has(c.id)).length, [activeClips, hidden]);
 
   const sel = activeClips.find(c => c.id === selectedClipId) || null;
+  const editorClip = activeClips.find(c => c.id === editorClipId) || null;
   const selPoster = sel ? POSTERS[(sel.rank - 1) % POSTERS.length] : POSTERS[0];
   const titleBase = sel ? sel.titleOptions : [];
   const k = sel ? (titleBase.length ? titleSeed % titleBase.length : 0) : 0;
@@ -882,6 +1082,65 @@ export default function Home() {
   const selPublish = sel ? publishState[sel.id] ?? null : null;
   const selPublishBusy = !!selPublish && (selPublish.status === "pending" || selPublish.status === "uploading");
   const defChannel = channels.find(c => c.isDefault) || channels[0] || null;
+  const currentJobId = backendJobId || openProject || null;
+
+  const openClipEditor = (clipId?: string) => {
+    const id = clipId || selectedClipId || activeClips[0]?.id;
+    if (!id) {
+      showToast("편집할 클립을 먼저 선택하세요");
+      return;
+    }
+    setEditorClipId(id);
+  };
+
+  const openHighlightDraft = () => {
+    if (!activeClips.length) {
+      showToast("하이라이트로 만들 클립이 없어요");
+      return;
+    }
+    if (!currentJobId) {
+      showToast("하이라이트 MP4 생성은 실제 분석된 프로젝트에서 사용할 수 있어요");
+      return;
+    }
+    const preferred = sortedClips.filter(c => !hidden.has(c.id)).slice(0, 5);
+    const initial = (preferred.length ? preferred : activeClips).slice(0, 5).map(c => c.id);
+    setHighlightDraft({
+      title: `${homeName.replace(/\.[^.]+$/, "")} 하이라이트`.slice(0, 80),
+      clipIds: initial,
+      aspect: "landscape",
+      maxDurationSeconds: 720,
+      result: null,
+    });
+  };
+
+  const toggleHighlightClip = (clipId: string) => {
+    setHighlightDraft(d => {
+      if (!d) return d;
+      const exists = d.clipIds.includes(clipId);
+      return { ...d, result: null, clipIds: exists ? d.clipIds.filter(id => id !== clipId) : [...d.clipIds, clipId] };
+    });
+  };
+
+  const doRenderHighlight = async () => {
+    if (!highlightDraft || !currentJobId) return;
+    if (!highlightDraft.title.trim()) { showToast("하이라이트 제목을 입력하세요"); return; }
+    if (highlightDraft.clipIds.length === 0) { showToast("하이라이트에 넣을 클립을 선택하세요"); return; }
+    setHighlightBusy(true);
+    try {
+      const res = await renderHighlight(currentJobId, {
+        clip_ids: highlightDraft.clipIds,
+        title: highlightDraft.title.trim(),
+        aspect: highlightDraft.aspect,
+        max_duration_seconds: highlightDraft.maxDurationSeconds,
+      });
+      setHighlightDraft(d => (d ? { ...d, result: res } : d));
+      showToast("하이라이트 MP4를 만들었어요");
+    } catch (error) {
+      showToast(errorMessage(error));
+    } finally {
+      setHighlightBusy(false);
+    }
+  };
 
   const schedulePublishPoll = (publishId: string, clipId: string) => {
     const tick = async () => {
@@ -987,6 +1246,41 @@ export default function Home() {
     }
   };
 
+  const runPpl = async () => {
+    if (!sel) return;
+    setPplBusy(true);
+    try {
+      const analysis = await analyzePpl(sel.id);
+      setPplData(s => ({ ...s, [sel.id]: analysis }));
+      const draft: Record<string, string> = {};
+      (analysis?.products || []).forEach(p => { draft[`${sel.id}|${p.id}`] = p.affiliate_url || ""; });
+      setPplLinkDraft(s => ({ ...s, ...draft }));
+      showToast(analysis && analysis.products.length ? `PPL 분석 완료 · 상품 ${analysis.products.length}개` : "감지된 상품이 없어요");
+    } catch (error) {
+      showToast("PPL 분석 실패: " + errorMessage(error));
+    } finally {
+      setPplBusy(false);
+    }
+  };
+
+  const savePpl = async () => {
+    if (!sel) return;
+    const current = pplData[sel.id] ?? sel.pplAnalysis;
+    if (!current) return;
+    const links: Record<string, string> = {};
+    current.products.forEach(p => {
+      const draft = pplLinkDraft[`${sel.id}|${p.id}`];
+      if (draft !== undefined) links[p.id] = draft;
+    });
+    try {
+      const updated = await savePplLinks(sel.id, links);
+      setPplData(s => ({ ...s, [sel.id]: updated }));
+      showToast("제휴 링크를 저장했어요");
+    } catch (error) {
+      showToast("저장 실패: " + errorMessage(error));
+    }
+  };
+
   const regenThumbs = async () => {
     if (!sel) return;
     setThumbBusy(true);
@@ -1016,6 +1310,34 @@ export default function Home() {
       replaceClip(updated);
       setRevisions(r => ({ ...r, [sel.id]: (r[sel.id] || 1) + 1 }));
       showToast("새 설정으로 세로 쇼츠를 다시 렌더했어요");
+    } catch (error) {
+      showToast(errorMessage(error));
+    } finally {
+      setApplyBusy(false);
+    }
+  };
+
+  const saveShortcutEditor = async (draft: ShortcutEditorDraft) => {
+    const target = activeClips.find(c => c.id === editorClipId);
+    if (!target) return;
+    setApplyBusy(true);
+    try {
+      const updated = await applyCreative(target.id, {
+        title: draft.title.slice(0, 180),
+        thumbnail_text: draft.thumbnailText.slice(0, 120),
+        template_id: draft.templateId,
+        overlay_position: draft.overlayPosition,
+        overlay_scale: draft.overlayScale,
+        editor_state: draft.editorState as unknown as Record<string, unknown>,
+        burn_overlays: draft.burnOverlays as unknown as Record<string, unknown>[],
+        metadata_overrides: {
+          editor_state: draft.editorState,
+          burn_overlays: draft.burnOverlays,
+        },
+      });
+      replaceClip(updated);
+      setRevisions(r => ({ ...r, [target.id]: (r[target.id] || 1) + 1 }));
+      showToast("편집기 설정으로 다시 렌더했어요");
     } catch (error) {
       showToast(errorMessage(error));
     } finally {
@@ -1182,8 +1504,13 @@ export default function Home() {
   const selChan = channels.find(c => c.id === openChannel) || null;
   const selInsights = selChan ? insights[selChan.id] ?? null : null;
   const curVideo = selChan ? (selChan.videos.find(v => v.id === openVideo) || selChan.videos[0]) : null;
-  const selectedDraftChannel = channelDraft?.channels.find(ch => ch.channel_id === selectedDraftChannelId) || null;
+  const selectedDraftChannels = channelDraft ? channelDraft.channels.filter(ch => selectedDraftChannelIds.includes(ch.channel_id)) : [];
   const publishChannel = publishDraft ? channels.find(c => c.id === publishDraft.channelDbId) || null : null;
+  const publishClip = publishDraft ? activeClips.find(c => c.id === publishDraft.clipId) || null : null;
+  const publishPreviewTags = publishDraft ? parseTagInput(publishDraft.tags) : [];
+  const publishScheduleStamp = publishDraft?.mode === "schedule" ? toScheduleStamp(publishDraft.scheduleLocal) : null;
+  const highlightSelectedClips = highlightDraft ? highlightDraft.clipIds.map(id => activeClips.find(c => c.id === id)).filter((c): c is Clip => !!c) : [];
+  const highlightTotalSeconds = highlightSelectedClips.reduce((sum, clip) => sum + clip.durSec, 0);
   const autoDistTimesCount = autoDist ? Math.max(1, autoDist.times.split(",").map(t => t.trim()).filter(t => /^\d{1,2}:\d{2}$/.test(t)).length) : 1;
 
   const isProjectList = nav === "projects" && !selProj;
@@ -1273,7 +1600,7 @@ export default function Home() {
           })}
         </div>
         <div style={{ marginTop: "auto", display: "flex", flexDirection: "column", alignItems: "center", gap: 6, width: "100%" }}>
-          <button className="sc-railbtn" style={{ width: 46, height: 42, border: 0, borderRadius: 12, background: "transparent", color: "#FF4A1C", display: "grid", placeItems: "center", cursor: "pointer" }} title="편집">
+          <button onClick={() => openClipEditor()} className="sc-railbtn" style={{ width: 46, height: 42, border: 0, borderRadius: 12, background: "transparent", color: "#FF4A1C", display: "grid", placeItems: "center", cursor: "pointer" }} title="편집">
             <Icon d={["M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7", "M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5Z"]} size={20} />
           </button>
           <button className="sc-railbtn" style={{ width: 46, height: 42, border: 0, borderRadius: 12, background: "transparent", color: "#E0B23A", display: "grid", placeItems: "center", cursor: "pointer" }} title="업그레이드">
@@ -1361,11 +1688,14 @@ export default function Home() {
                     {sourcePreviewUrl && (
                       <video src={sourcePreviewUrl} controls muted playsInline preload="metadata" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain", background: "#050505", zIndex: 1 }} />
                     )}
-                    <div style={{ position: "absolute", inset: 0, background: `radial-gradient(120% 80% at 50% 8%,${upPoster.glow},transparent 60%)` }} />
-                    <div style={{ position: "absolute", inset: 0, background: "linear-gradient(180deg,rgba(0,0,0,.12),transparent 38%,rgba(0,0,0,.6))" }} />
-                    <span style={{ position: "absolute", top: 12, right: 12, zIndex: 2, fontFamily: "'Space Mono',monospace", fontSize: 12, fontWeight: 700, color: "#fff", background: "rgba(0,0,0,.5)", padding: "4px 9px", borderRadius: 8, backdropFilter: "blur(4px)" }}>{formatDuration(inspection?.duration_seconds) || "42:18"}</span>
-                    <span style={{ position: "absolute", bottom: 12, left: 14, right: 14, zIndex: 2, fontSize: 13, fontWeight: 700, color: "#fff", textShadow: "0 1px 8px rgba(0,0,0,.65)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{fileName}</span>
-                    {!sourcePreviewUrl && <div style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center" }}>
+                    {!sourcePreviewUrl && ytPreviewId && (
+                      <iframe src={`https://www.youtube.com/embed/${ytPreviewId}`} title="유튜브 미리보기" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowFullScreen style={{ position: "absolute", inset: 0, width: "100%", height: "100%", border: 0, background: "#050505", zIndex: 1 }} />
+                    )}
+                    {!ytPreviewId && <div style={{ position: "absolute", inset: 0, background: `radial-gradient(120% 80% at 50% 8%,${upPoster.glow},transparent 60%)` }} />}
+                    {!ytPreviewId && <div style={{ position: "absolute", inset: 0, background: "linear-gradient(180deg,rgba(0,0,0,.12),transparent 38%,rgba(0,0,0,.6))" }} />}
+                    {!ytPreviewId && <span style={{ position: "absolute", top: 12, right: 12, zIndex: 2, fontFamily: "'Space Mono',monospace", fontSize: 12, fontWeight: 700, color: "#fff", background: "rgba(0,0,0,.5)", padding: "4px 9px", borderRadius: 8, backdropFilter: "blur(4px)" }}>{formatDuration(inspection?.duration_seconds) || "42:18"}</span>}
+                    {!ytPreviewId && <span style={{ position: "absolute", bottom: 12, left: 14, right: 14, zIndex: 2, fontSize: 13, fontWeight: 700, color: "#fff", textShadow: "0 1px 8px rgba(0,0,0,.65)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{fileName}</span>}
+                    {!sourcePreviewUrl && !ytPreviewId && <div style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center" }}>
                       <span style={{ width: 58, height: 58, borderRadius: "50%", background: "rgba(255,255,255,.92)", display: "grid", placeItems: "center", boxShadow: "0 10px 24px rgba(0,0,0,.45)" }}>
                         <svg width="24" height="24" viewBox="0 0 24 24" fill="#16120D"><path d="M8 5.5v13l11-6.5-11-6.5Z" /></svg>
                       </span>
@@ -1419,9 +1749,12 @@ export default function Home() {
                 {sourcePreviewUrl && (
                   <video src={sourcePreviewUrl} controls muted playsInline preload="metadata" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain", background: "#050505", zIndex: 1 }} />
                 )}
-                <div style={{ position: "absolute", inset: 0, background: `radial-gradient(120% 80% at 50% 8%,${upPoster.glow},transparent 60%)` }} />
-                <div style={{ position: "absolute", inset: 0, background: "linear-gradient(180deg,rgba(0,0,0,.1),rgba(0,0,0,.5))" }} />
-                <span style={{ position: "absolute", bottom: 10, left: 12, right: 12, zIndex: 2, fontSize: 12, fontWeight: 700, color: "#fff", textShadow: "0 1px 8px rgba(0,0,0,.65)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{fileName}</span>
+                {!sourcePreviewUrl && ytPreviewId && (
+                  <iframe src={`https://www.youtube.com/embed/${ytPreviewId}`} title="유튜브 미리보기" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowFullScreen style={{ position: "absolute", inset: 0, width: "100%", height: "100%", border: 0, background: "#050505", zIndex: 1 }} />
+                )}
+                {!ytPreviewId && <div style={{ position: "absolute", inset: 0, background: `radial-gradient(120% 80% at 50% 8%,${upPoster.glow},transparent 60%)` }} />}
+                {!ytPreviewId && <div style={{ position: "absolute", inset: 0, background: "linear-gradient(180deg,rgba(0,0,0,.1),rgba(0,0,0,.5))" }} />}
+                {!ytPreviewId && <span style={{ position: "absolute", bottom: 10, left: 12, right: 12, zIndex: 2, fontSize: 12, fontWeight: 700, color: "#fff", textShadow: "0 1px 8px rgba(0,0,0,.65)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{fileName}</span>}
               </div>
               <h1 style={{ margin: 0, fontSize: 26, fontWeight: 800, letterSpacing: "-.02em", color: "#16120D" }}>이 영상에 자막이 있나요?</h1>
               <p style={{ margin: "12px auto 28px", fontSize: 14.5, lineHeight: 1.6, color: "#6E6457", maxWidth: "42ch" }}>{inspection?.has_subtitle_stream ? "파일 안에서 자막 스트림을 찾았어요. 이미 자막이 보이는 영상이면 추가 자막 없이 분석하세요." : "자막이 있으면 추가 자막을 넣지 않아요. 없으면 음성 전사(STT)로 쇼츠용 자막을 먼저 만들어요."}</p>
@@ -1496,8 +1829,8 @@ export default function Home() {
                   <p style={{ margin: "8px 0 0", fontSize: 14, color: "#8C8273" }}>점수가 높을수록 첫 3초 이탈률이 낮고 끝까지 볼 확률이 높아요. 카드를 눌러 제목·자막·유튜브 패키지를 편집하세요.</p>
                 </div>
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                  <button style={{ height: 40, padding: "0 14px", border: "1px solid #E1D8C6", borderRadius: 11, background: "#fff", color: "#5B5346", display: "inline-flex", alignItems: "center", gap: 7, fontSize: 13.5, fontWeight: 600, cursor: "pointer" }}>
-                    <Icon d={["M9 11l3 3 8-8", "M20 12v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h9"]} size={16} />선택
+                  <button onClick={openHighlightDraft} style={{ height: 40, padding: "0 14px", border: "1px solid #E1D8C6", borderRadius: 11, background: "#fff", color: "#5B5346", display: "inline-flex", alignItems: "center", gap: 7, fontSize: 13.5, fontWeight: 700, cursor: "pointer" }}>
+                    <Icon d={["M4 5h16v14H4z", "m10 9 5 3-5 3V9Z"]} size={16} />하이라이트 만들기
                   </button>
                   <button onClick={reset} style={{ height: 40, padding: "0 16px", border: 0, borderRadius: 11, background: "#16120D", color: "#fff", display: "inline-flex", alignItems: "center", gap: 7, fontSize: 13.5, fontWeight: 700, cursor: "pointer" }}>
                     <Icon d={["M12 5v14", "M5 12h14"]} size={16} strokeWidth={2} />새 영상
@@ -1538,9 +1871,6 @@ export default function Home() {
                           </div>
                           <span style={{ fontFamily: "'Space Mono',monospace", fontSize: 11, fontWeight: 700, color: "#fff", background: "rgba(0,0,0,.45)", padding: "4px 8px", borderRadius: 7, backdropFilter: "blur(4px)" }}>{c.durSec}초</span>
                         </div>
-                        <div style={{ position: "absolute", left: 14, right: 14, top: "50%", transform: "translateY(-50%)", textAlign: "center" }}>
-                          <span style={{ display: "inline", fontSize: 17, fontWeight: 800, lineHeight: 1.32, color: "#fff", letterSpacing: "-.01em", textShadow: "0 2px 12px rgba(0,0,0,.6)", background: "linear-gradient(transparent 62%,rgba(255,74,28,.9) 62%)", WebkitBoxDecorationBreak: "clone", padding: "0 3px" }}>{c.caption}</span>
-                        </div>
                         <div style={{ position: "absolute", left: 14, right: 14, bottom: 14 }}>
                           <div style={{ fontSize: 12, color: "rgba(255,255,255,.82)", fontFamily: "'Space Mono',monospace" }}>{c.start} – {c.end}</div>
                         </div>
@@ -1557,6 +1887,10 @@ export default function Home() {
                           <button onClick={() => togglePin(c.id)} title={pinned.has(c.id) ? "고정 해제" : "고정"}
                             style={{ height: 30, padding: "0 10px", border: `1px solid ${pinned.has(c.id) ? ACCENT : "#E1D8C6"}`, borderRadius: 9, background: pinned.has(c.id) ? "#FFF4EF" : "#fff", color: pinned.has(c.id) ? "#A04A2E" : "#5B5346", display: "inline-flex", alignItems: "center", gap: 5, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
                             <Icon d={["M9 4h6l-1 7 3 3v2H7v-2l3-3-1-7Z", "M12 16v5"]} size={13} strokeWidth={1.8} />고정
+                          </button>
+                          <button onClick={() => openClipEditor(c.id)} title="편집기 열기"
+                            style={{ height: 30, padding: "0 10px", border: "1px solid #F0D9CE", borderRadius: 9, background: "#FFF4EF", color: "#C83920", display: "inline-flex", alignItems: "center", gap: 5, fontSize: 12, fontWeight: 700, cursor: "pointer" }}>
+                            <Icon d={["M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7", "M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5Z"]} size={13} strokeWidth={1.8} />편집
                           </button>
                           <button onClick={() => moveCandidate(c.id, -1)} title="위로" style={{ width: 30, height: 30, flex: "0 0 auto", border: "1px solid #E1D8C6", borderRadius: 9, background: "#fff", color: "#5B5346", display: "grid", placeItems: "center", cursor: "pointer" }}>
                             <Icon d={["M12 19V5", "M5 12l7-7 7 7"]} size={14} strokeWidth={2} />
@@ -1599,7 +1933,14 @@ export default function Home() {
                     <article key={pj.id} className="sc-card" onClick={() => void openProjectDetail(pj.id)}
                       style={{ borderRadius: 18, background: "#fff", border: "1px solid #EAE1D0", overflow: "hidden", cursor: "pointer", boxShadow: "0 1px 2px rgba(40,30,20,.04)", transition: "transform .18s,box-shadow .18s,border-color .18s" }}>
                       <div style={{ position: "relative", aspectRatio: "16/9", background: po.g, overflow: "hidden" }}>
-                        <div style={{ position: "absolute", inset: 0, background: `radial-gradient(120% 80% at 50% 8%,${po.glow},transparent 60%)` }} />
+                        {pj.ytId ? (
+                          // eslint-disable-next-line @next/next/no-img-element -- external YouTube thumbnail
+                          <img src={`https://i.ytimg.com/vi/${pj.ytId}/hqdefault.jpg`} alt="" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }} />
+                        ) : pj.originalVideoUrl ? (
+                          <video src={`${pj.originalVideoUrl}#t=1`} muted playsInline preload="metadata" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", background: "#0E0E12" }} />
+                        ) : (
+                          <div style={{ position: "absolute", inset: 0, background: `radial-gradient(120% 80% at 50% 8%,${po.glow},transparent 60%)` }} />
+                        )}
                         <div style={{ position: "absolute", inset: 0, background: "linear-gradient(180deg,rgba(0,0,0,.12),transparent 40%,rgba(0,0,0,.62))" }} />
                         <span style={{ position: "absolute", top: 10, right: 10, fontFamily: "'Space Mono',monospace", fontSize: 11, fontWeight: 700, color: "#fff", background: "rgba(0,0,0,.5)", padding: "3px 8px", borderRadius: 7 }}>{pj.dur}</span>
                         <span style={{ position: "absolute", bottom: 11, left: 13, display: "inline-flex", alignItems: "center", gap: 6, color: "#fff", fontSize: 12.5, fontWeight: 700, textShadow: "0 1px 6px rgba(0,0,0,.6)" }}>
@@ -1632,10 +1973,47 @@ export default function Home() {
                   <h1 style={{ margin: 0, fontSize: 26, fontWeight: 800, letterSpacing: "-.02em", color: "#16120D", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: "60ch" }}>{selProj.title}</h1>
                   <p style={{ margin: "8px 0 0", fontSize: 13.5, color: "#8C8273", fontFamily: "'Space Mono',monospace" }}>{selProj.date} · {selProj.dur} · 쇼츠 {selProj.shorts.length}개</p>
                 </div>
-                <button onClick={() => showToast("다운로드를 시작했어요")} style={{ height: 40, padding: "0 16px", border: "1px solid #E1D8C6", borderRadius: 11, background: "#fff", color: "#5B5346", display: "inline-flex", alignItems: "center", gap: 7, fontSize: 13.5, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" }}>
-                  <Icon d={["M12 3v12m0 0 4-4m-4 4-4-4", "M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"]} size={16} strokeWidth={1.9} />전체 다운로드
-                </button>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <button onClick={openHighlightDraft} style={{ height: 40, padding: "0 16px", border: 0, borderRadius: 11, background: "#16120D", color: "#fff", display: "inline-flex", alignItems: "center", gap: 7, fontSize: 13.5, fontWeight: 700, cursor: "pointer", whiteSpace: "nowrap" }}>
+                    <Icon d={["M4 5h16v14H4z", "m10 9 5 3-5 3V9Z"]} size={16} strokeWidth={1.9} />하이라이트 만들기
+                  </button>
+                  <button onClick={() => showToast("다운로드를 시작했어요")} style={{ height: 40, padding: "0 16px", border: "1px solid #E1D8C6", borderRadius: 11, background: "#fff", color: "#5B5346", display: "inline-flex", alignItems: "center", gap: 7, fontSize: 13.5, fontWeight: 600, cursor: "pointer", whiteSpace: "nowrap" }}>
+                    <Icon d={["M12 3v12m0 0 4-4m-4 4-4-4", "M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"]} size={16} strokeWidth={1.9} />전체 다운로드
+                  </button>
+                </div>
               </div>
+
+              {/* 원본 영상 미리보기 — 유튜브 임포트면 유튜브 화면, MP4 업로드면 첫 프레임 */}
+              {(selProj.ytId || selProj.originalVideoUrl) && (
+                <section style={{ marginBottom: 26, background: "#fff", border: "1px solid #EAE1D0", borderRadius: 18, overflow: "hidden", boxShadow: "0 1px 2px rgba(40,30,20,.04)" }}>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "14px 18px", borderBottom: "1px solid #F1EADD" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 9, minWidth: 0 }}>
+                      <span style={{ width: 30, height: 30, borderRadius: 8, background: "#16120D", color: ACCENT, display: "grid", placeItems: "center", flex: "0 0 auto" }}>
+                        <Icon d={["M4 5h16v14H4z", "m10 9 5 3-5 3V9Z"]} size={16} strokeWidth={1.9} />
+                      </span>
+                      <span style={{ fontSize: 14, fontWeight: 700, color: "#16120D" }}>원본 영상</span>
+                      <span style={{ display: "inline-flex", alignItems: "center", height: 22, padding: "0 9px", borderRadius: 999, fontSize: 11, fontWeight: 700, background: selProj.ytId ? "#FDECEA" : "#EEF3FB", color: selProj.ytId ? "#C0392B" : "#3C77C2", border: `1px solid ${selProj.ytId ? "#F5C9C2" : "#CFE0F5"}` }}>
+                        {selProj.ytId ? "유튜브" : "업로드 MP4"}
+                      </span>
+                    </div>
+                    {selProj.ytId && selProj.sourceUrl && (
+                      <a href={selProj.sourceUrl} target="_blank" rel="noreferrer" style={{ flex: "0 0 auto", display: "inline-flex", alignItems: "center", gap: 5, height: 30, padding: "0 11px", borderRadius: 9, background: "#fff", border: "1px solid #E1D8C6", color: "#5B5346", fontSize: 12, fontWeight: 700, textDecoration: "none" }}>
+                        <Icon d={["M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6", "M15 3h6v6", "M10 14 21 3"]} size={14} strokeWidth={1.9} />유튜브에서 보기
+                      </a>
+                    )}
+                  </div>
+                  <div style={{ padding: 18 }}>
+                    <div style={{ position: "relative", width: "100%", maxWidth: 640, margin: "0 auto", aspectRatio: "16/9", borderRadius: 12, overflow: "hidden", background: "#050505" }}>
+                      {selProj.ytId ? (
+                        <iframe src={`https://www.youtube.com/embed/${selProj.ytId}`} title="원본 유튜브 영상" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture" allowFullScreen style={{ position: "absolute", inset: 0, width: "100%", height: "100%", border: 0 }} />
+                      ) : (
+                        <video src={`${selProj.originalVideoUrl}#t=0.1`} controls playsInline preload="metadata" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "contain", background: "#050505" }} />
+                      )}
+                    </div>
+                  </div>
+                </section>
+              )}
+
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(216px,1fr))", gap: 22 }}>
                 {selProj.shorts.map((sh, i) => {
                   const c = activeClips.find(x => x.id === sh.clipId);
@@ -1647,6 +2025,7 @@ export default function Home() {
                     <article key={i} className="sc-card" onClick={() => { setSelectedClipId(c.id); setTab("titles"); }}
                       style={{ borderRadius: 18, background: "#fff", border: "1px solid #EAE1D0", overflow: "hidden", cursor: "pointer", boxShadow: "0 1px 2px rgba(40,30,20,.04)", transition: "transform .18s,box-shadow .18s,border-color .18s" }}>
                       <div style={{ position: "relative", aspectRatio: "9/16", background: po.g, overflow: "hidden" }}>
+                        {c.thumbnailUrl && <div style={{ position: "absolute", inset: 0, backgroundImage: `url(${c.thumbnailUrl})`, backgroundSize: "cover", backgroundPosition: "center" }} />}
                         <div style={{ position: "absolute", inset: 0, background: `radial-gradient(120% 60% at 50% 18%,${po.glow},transparent 60%)` }} />
                         <div style={{ position: "absolute", inset: 0, background: "linear-gradient(180deg,rgba(0,0,0,.28),transparent 30%,transparent 58%,rgba(0,0,0,.72))" }} />
                         <div style={{ position: "absolute", top: 10, left: 10, right: 10, display: "flex", alignItems: "flex-start", justifyContent: "space-between" }}>
@@ -1656,9 +2035,6 @@ export default function Home() {
                           </div>
                           <span style={{ fontFamily: "'Space Mono',monospace", fontSize: 11, fontWeight: 700, color: "#fff", background: "rgba(0,0,0,.45)", padding: "4px 8px", borderRadius: 7 }}>{c.durSec}초</span>
                         </div>
-                        <div style={{ position: "absolute", left: 14, right: 14, top: "50%", transform: "translateY(-50%)", textAlign: "center" }}>
-                          <span style={{ display: "inline", fontSize: 16, fontWeight: 800, lineHeight: 1.32, color: "#fff", textShadow: "0 2px 12px rgba(0,0,0,.6)", background: "linear-gradient(transparent 62%,rgba(255,74,28,.9) 62%)", WebkitBoxDecorationBreak: "clone", padding: "0 3px" }}>{c.caption}</span>
-                        </div>
                         <div style={{ position: "absolute", left: 12, bottom: 12 }}>
                           <span style={{ display: "inline-flex", alignItems: "center", height: 24, padding: "0 9px", borderRadius: 999, fontSize: 11, fontWeight: 700, background: pill.bg, color: pill.fg, border: `1px solid ${pill.bd}` }}>{sh.state}</span>
                         </div>
@@ -1666,6 +2042,11 @@ export default function Home() {
                       <div style={{ padding: "13px 15px 15px" }}>
                         <h3 style={{ margin: 0, fontSize: 14, fontWeight: 700, lineHeight: 1.4, color: "#16120D", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{c.title}</h3>
                         <div style={{ marginTop: 8, fontSize: 11.5, color: "#9A8F7E", fontFamily: "'Space Mono',monospace" }}>{c.start} – {c.end}</div>
+                        <div onClick={e => e.stopPropagation()} style={{ marginTop: 12, display: "flex", gap: 8 }}>
+                          <button onClick={() => openClipEditor(c.id)} style={{ flex: 1, height: 34, border: "1px solid #F0D9CE", borderRadius: 10, background: "#FFF4EF", color: "#C83920", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 6, fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}>
+                            <Icon d={["M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7", "M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5Z"]} size={14} strokeWidth={1.8} />편집
+                          </button>
+                        </div>
                       </div>
                     </article>
                   );
@@ -1902,9 +2283,14 @@ export default function Home() {
                     {selChan.videos.map(v => {
                       const po = POSTERS[v.posterIdx % POSTERS.length];
                       const on = v.id === openVideo;
+                      const thumb = v.thumbnailUrl || (v.id ? `https://i.ytimg.com/vi/${v.id}/mqdefault.jpg` : null);
                       return (
                         <article key={v.id} onClick={() => setOpenVideo(v.id)} style={{ display: "flex", gap: 14, padding: 12, borderRadius: 14, background: on ? "#FFF4EF" : "#fff", border: `1.5px solid ${on ? ACCENT : "#EAE1D0"}`, cursor: "pointer", transition: "all .14s" }}>
                           <div style={{ position: "relative", width: 84, height: 50, borderRadius: 9, background: po.g, flex: "0 0 auto", overflow: "hidden" }}>
+                            {thumb && (
+                              // eslint-disable-next-line @next/next/no-img-element -- external YouTube video thumbnail
+                              <img src={thumb} alt="" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }} />
+                            )}
                             <div style={{ position: "absolute", inset: 0, background: "linear-gradient(180deg,rgba(0,0,0,.05),rgba(0,0,0,.5))" }} />
                             <span style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center" }}><svg width="20" height="20" viewBox="0 0 24 24" fill="#fff"><path d="M8 5.5v13l11-6.5-11-6.5Z" /></svg></span>
                           </div>
@@ -1923,6 +2309,15 @@ export default function Home() {
                   </div>
                 </div>
                 <div style={{ background: "#fff", border: "1px solid #EAE1D0", borderRadius: 18, padding: 18, position: "sticky", top: 14 }}>
+                  {curVideo && (curVideo.thumbnailUrl || curVideo.id) && (
+                    <a href={curVideo.url} target="_blank" rel="noreferrer" style={{ display: "block", position: "relative", width: "100%", aspectRatio: "16 / 9", borderRadius: 12, overflow: "hidden", marginBottom: 13, background: "#1A1510" }}>
+                      {/* eslint-disable-next-line @next/next/no-img-element -- external YouTube video thumbnail */}
+                      <img src={curVideo.thumbnailUrl || `https://i.ytimg.com/vi/${curVideo.id}/hqdefault.jpg`} alt="" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }} />
+                      <span style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center", background: "linear-gradient(180deg,rgba(0,0,0,.05),rgba(0,0,0,.35))" }}>
+                        <span style={{ width: 44, height: 44, borderRadius: "50%", background: "rgba(200,57,32,.92)", display: "grid", placeItems: "center" }}><svg width="20" height="20" viewBox="0 0 24 24" fill="#fff"><path d="M8 5.5v13l11-6.5-11-6.5Z" /></svg></span>
+                      </span>
+                    </a>
+                  )}
                   <div style={{ fontSize: 13.5, fontWeight: 700, color: "#16120D", lineHeight: 1.4, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{curVideo?.title}</div>
                   <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8, margin: "14px 0 16px" }}>
                     <div style={{ textAlign: "center", padding: "11px 6px", borderRadius: 11, background: "#FBF7EF", border: "1px solid #EFE7D8" }}>
@@ -2006,6 +2401,16 @@ export default function Home() {
         </main>
       </div>
 
+      {editorClip && (
+        <ShortcutEditor
+          key={editorClip.id}
+          clip={{ ...editorClip, channelName: defChannel?.name || "공식 채널명" }}
+          onClose={() => setEditorClipId(null)}
+          onSave={saveShortcutEditor}
+          saving={applyBusy}
+        />
+      )}
+
       {/* CLIP MODAL */}
       {sel && (
         <div onClick={() => setSelectedClipId(null)} style={{ position: "fixed", inset: 0, zIndex: 60, background: "rgba(20,15,10,.62)", backdropFilter: "blur(6px)", display: "grid", placeItems: "center", padding: 24, animation: "scFade .2s ease both" }}>
@@ -2017,29 +2422,28 @@ export default function Home() {
                   <video src={sel.videoUrl} controls playsInline preload="metadata" poster={sel.thumbnailUrl} style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover", background: "#050505", zIndex: 1 }} />
                 )}
                 {!sel.videoUrl && sel.thumbnailUrl && <div style={{ position: "absolute", inset: 0, backgroundImage: `url(${sel.thumbnailUrl})`, backgroundSize: "cover", backgroundPosition: "center" }} />}
-                <div style={{ position: "absolute", inset: 0, background: `radial-gradient(120% 60% at 50% 18%,${selPoster.glow},transparent 60%)` }} />
-                <div style={{ position: "absolute", inset: 0, background: "linear-gradient(180deg,rgba(0,0,0,.34),transparent 30%,transparent 56%,rgba(0,0,0,.74))" }} />
+                <div style={{ position: "absolute", inset: 0, background: `radial-gradient(120% 60% at 50% 18%,${selPoster.glow},transparent 60%)`, pointerEvents: "none" }} />
+                <div style={{ position: "absolute", inset: 0, background: "linear-gradient(180deg,rgba(0,0,0,.34),transparent 30%,transparent 56%,rgba(0,0,0,.74))", pointerEvents: "none" }} />
                 <div style={{ position: "absolute", top: 12, left: 12, zIndex: 2, display: "inline-flex", alignItems: "center", gap: 6, height: 28, padding: "0 11px 0 9px", borderRadius: 999, background: scoreColors(sel.score).bg, color: scoreColors(sel.score).fg }}>
                   <svg width="13" height="13" viewBox="0 0 24 24" fill="currentColor"><path d="M13 2 4 13h6l-1 9 9-12h-6l1-8Z" /></svg>
                   <span style={{ fontFamily: "'Space Grotesk',sans-serif", fontSize: 14, fontWeight: 700 }}>{sel.score}</span>
-                </div>
-                <div style={{ position: "absolute", left: 16, right: 16, top: "50%", transform: "translateY(-50%)", textAlign: "center", zIndex: 2 }}>
-                  <span style={{ display: "inline", fontSize: 19, fontWeight: 800, lineHeight: 1.34, color: "#fff", textShadow: "0 2px 12px rgba(0,0,0,.6)", background: "linear-gradient(transparent 62%,rgba(255,74,28,.9) 62%)", WebkitBoxDecorationBreak: "clone", padding: "0 3px" }}>{overlayText}</span>
                 </div>
                 {!sel.videoUrl && <div style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center" }}>
                   <span style={{ width: 58, height: 58, borderRadius: "50%", background: "rgba(255,255,255,.92)", display: "grid", placeItems: "center", boxShadow: "0 10px 24px rgba(0,0,0,.5)", cursor: "pointer" }}>
                     <svg width="24" height="24" viewBox="0 0 24 24" fill="#16120D"><path d="M8 5.5v13l11-6.5-11-6.5Z" /></svg>
                   </span>
                 </div>}
-                <div style={{ position: "absolute", left: 14, right: 14, bottom: 14, zIndex: 2 }}>
-                  <div style={{ height: 4, borderRadius: 999, background: "rgba(255,255,255,.28)", overflow: "hidden" }}><div style={{ height: "100%", width: "34%", background: ACCENT, borderRadius: 999 }} /></div>
-                  <div style={{ display: "flex", justifyContent: "space-between", marginTop: 7, fontFamily: "'Space Mono',monospace", fontSize: 11, color: "rgba(255,255,255,.78)" }}>
-                    <span>{sel.start}</span><span>{sel.end}</span>
+                {!sel.videoUrl && (
+                  <div style={{ position: "absolute", left: 14, right: 14, bottom: 14, zIndex: 2 }}>
+                    <div style={{ height: 4, borderRadius: 999, background: "rgba(255,255,255,.28)", overflow: "hidden" }}><div style={{ height: "100%", width: "34%", background: ACCENT, borderRadius: 999 }} /></div>
+                    <div style={{ display: "flex", justifyContent: "space-between", marginTop: 7, fontFamily: "'Space Mono',monospace", fontSize: 11, color: "rgba(255,255,255,.78)" }}>
+                      <span>{sel.start}</span><span>{sel.end}</span>
+                    </div>
                   </div>
-                </div>
+                )}
               </div>
               <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
-                <a href={sel.videoUrl || "#"} download onClick={e => { if (!sel.videoUrl) e.preventDefault(); showToast("다운로드를 시작했어요"); }} style={{ flex: 1, height: 44, border: "1px solid #3A3128", borderRadius: 11, background: "#221C16", color: "#F4ECDD", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 8, fontSize: 13.5, fontWeight: 700, textDecoration: "none", cursor: "pointer" }}>
+                <a href={sel.videoUrl ? clipDownloadUrl(sel.id) : "#"} download onClick={e => { if (!sel.videoUrl) { e.preventDefault(); return; } showToast("다운로드를 시작했어요"); }} style={{ flex: 1, height: 44, border: "1px solid #3A3128", borderRadius: 11, background: "#221C16", color: "#F4ECDD", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 8, fontSize: 13.5, fontWeight: 700, textDecoration: "none", cursor: "pointer" }}>
                   <Icon d={["M12 3v12m0 0 4-4m-4 4-4-4", "M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"]} size={16} strokeWidth={1.9} />MP4 다운로드
                 </a>
                 <button onClick={() => setTab("youtube")} style={{ flex: 1, height: 44, border: 0, borderRadius: 11, background: ACCENT, color: "#fff", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 8, fontSize: 13.5, fontWeight: 700, cursor: "pointer", boxShadow: "0 10px 22px -12px rgba(255,74,28,.9)" }}>
@@ -2060,17 +2464,95 @@ export default function Home() {
               </div>
               <h2 style={{ margin: "6px 0 0", fontSize: 21, fontWeight: 800, lineHeight: 1.32, letterSpacing: "-.01em", color: "#16120D", paddingRight: 44 }}>{sel.title}</h2>
               <p style={{ margin: "10px 0 18px", fontSize: 13.5, lineHeight: 1.6, color: "#8C8273" }}>{sel.reason}</p>
+              <button onClick={() => openClipEditor(sel.id)} style={{ width: "100%", height: 44, border: "1px solid #F0D9CE", borderRadius: 12, background: "#FFF4EF", color: "#C83920", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 8, fontSize: 13.5, fontWeight: 800, cursor: "pointer", marginBottom: 14 }}>
+                <Icon d={["M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7", "M18.5 2.5a2.12 2.12 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5Z"]} size={16} strokeWidth={1.9} />풀스크린 편집기 열기
+              </button>
 
               {/* tabs */}
               <div style={{ display: "flex", gap: 6, padding: 4, background: "#EBE3D4", borderRadius: 12, marginBottom: 18 }}>
-                {(["titles", "overlay", "youtube"] as const).map(t => {
-                  const labels = { titles: "제목", overlay: "자막 스타일", youtube: "유튜브" };
+                {(["titles", "overlay", "youtube", "ppl"] as const).map(t => {
+                  const labels = { titles: "제목", overlay: "자막 스타일", youtube: "유튜브", ppl: "PPL" };
                   const on = tab === t;
                   return (
                     <button key={t} onClick={() => setTab(t)} style={{ flex: 1, height: 38, border: 0, borderRadius: 9, background: on ? "#fff" : "transparent", color: on ? "#16120D" : "#7A7060", fontSize: 13.5, fontWeight: 700, cursor: "pointer", boxShadow: on ? "0 2px 6px rgba(40,30,20,.1)" : "none", transition: "all .15s" }}>{labels[t]}</button>
                   );
                 })}
               </div>
+
+              {tab === "ppl" && (() => {
+                const ppl = pplData[sel.id] ?? sel.pplAnalysis ?? null;
+                const fmt1 = (n: number) => (Math.round(n * 10) / 10).toFixed(1);
+                return (
+                  <div>
+                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginBottom: 6 }}>
+                      <div style={{ fontSize: 13.5, fontWeight: 700, color: "#16120D" }}>PPL 상품 분석 <span style={{ color: "#A0957F" }}>· 화면 속 브랜드·상품 감지</span></div>
+                      <button onClick={() => void runPpl()} disabled={pplBusy || !sel.videoUrl} style={{ height: 32, padding: "0 12px", border: "1px solid #E1D8C6", borderRadius: 9, background: "#fff", color: "#A04A2E", display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12.5, fontWeight: 700, cursor: pplBusy || !sel.videoUrl ? "not-allowed" : "pointer", opacity: pplBusy || !sel.videoUrl ? 0.6 : 1, whiteSpace: "nowrap" }}>
+                        <Icon d={["M3 12a9 9 0 0 1 15-6.7L21 8", "M21 3v5h-5", "M21 12a9 9 0 0 1-15 6.7L3 16", "M3 21v-5h5"]} size={14} strokeWidth={2} style={pplBusy ? { animation: "scSpin 1s linear infinite" } : undefined} />
+                        {pplBusy ? "분석 중…" : ppl ? "다시 분석" : "분석 시작"}
+                      </button>
+                    </div>
+                    <p style={{ margin: "0 0 14px", fontSize: 12.5, lineHeight: 1.6, color: "#9A8F7E" }}>재생되는 쇼츠에서 브랜드·상품을 인식해 화면 위에 박스로 표시하고, 협찬·제휴에 쓸 노출 리포트를 만들어요.</p>
+
+                    {!sel.videoUrl && (
+                      <div style={{ padding: "16px 14px", borderRadius: 12, background: "#FBF3E3", border: "1px solid #EFD9A8", color: "#8C6A1E", fontSize: 12.5, lineHeight: 1.5 }}>렌더된 쇼츠 영상이 있어야 PPL 분석을 할 수 있어요. 먼저 클립을 렌더해 주세요.</div>
+                    )}
+
+                    {pplBusy && (
+                      <div style={{ padding: "18px 14px", borderRadius: 12, background: "#fff", border: "1px solid #EAE1D0", color: "#7A7060", fontSize: 12.5, display: "flex", alignItems: "center", gap: 10 }}>
+                        <Icon d={["M3 12a9 9 0 0 1 15-6.7L21 8", "M21 3v5h-5", "M21 12a9 9 0 0 1-15 6.7L3 16", "M3 21v-5h5"]} size={16} strokeWidth={2} style={{ animation: "scSpin 1s linear infinite" }} />
+                        프레임을 추출하고 Gemini가 상품을 인식하는 중이에요… (10~30초)
+                      </div>
+                    )}
+
+                    {!ppl && !pplBusy && sel.videoUrl && (
+                      <div style={{ padding: "22px 16px", textAlign: "center", borderRadius: 12, background: "#fff", border: "1px dashed #D9CEB6", color: "#9A8F7E", fontSize: 12.5 }}>아직 분석하지 않았어요. <b style={{ color: "#A04A2E" }}>분석 시작</b>을 눌러 화면 속 상품을 찾아보세요.</div>
+                    )}
+
+                    {ppl && (
+                      <>
+                        <PplOverlayPlayer analysis={ppl} videoUrl={sel.videoUrl} poster={sel.sourceThumbnailUrl || sel.thumbnailUrl} />
+                        <div style={{ margin: "10px 0 16px", fontSize: 11, color: "#9A8F7E", textAlign: "center", fontFamily: "'Space Mono',monospace" }}>{ppl.frame_count}개 프레임 분석 · 상품 {ppl.products.length}개 감지 · 재생하면 박스가 따라와요</div>
+
+                        {ppl.products.length === 0 ? (
+                          <div style={{ padding: "18px 14px", textAlign: "center", borderRadius: 12, background: "#fff", border: "1px solid #EAE1D0", color: "#9A8F7E", fontSize: 12.5 }}>감지된 브랜드·상품이 없어요. 로고가 또렷한 구간이 있다면 다시 분석해 보세요.</div>
+                        ) : (
+                          <>
+                            <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: ".04em", color: "#A0957F", textTransform: "uppercase", margin: "0 0 9px" }}>협찬 노출 리포트</div>
+                            <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 20 }}>
+                              {ppl.products.map((p, i) => (
+                                <div key={p.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "11px 13px", borderRadius: 12, background: "#fff", border: "1px solid #EAE1D0" }}>
+                                  <span style={{ flex: "0 0 auto", width: 12, height: 12, borderRadius: 3, background: PPL_BOX_COLORS[i % PPL_BOX_COLORS.length] }} />
+                                  <div style={{ flex: 1, minWidth: 0 }}>
+                                    <div style={{ fontSize: 13.5, fontWeight: 700, color: "#16120D", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{p.brand} · {p.product}</div>
+                                    <div style={{ marginTop: 3, fontSize: 11, color: "#9A8F7E", fontFamily: "'Space Mono',monospace" }}>노출 {fmt1(p.exposure_seconds)}초 · {fmt1(p.first_seen)}s–{fmt1(p.last_seen)}s{p.category ? ` · ${p.category}` : ""}</div>
+                                  </div>
+                                  <span style={{ flex: "0 0 auto", fontSize: 11, fontWeight: 700, color: "#7A7060", background: "#F3EEE3", border: "1px solid #EAE1D0", borderRadius: 999, padding: "3px 9px" }}>{Math.round(p.confidence * 100)}%</span>
+                                </div>
+                              ))}
+                            </div>
+
+                            <div style={{ fontSize: 12, fontWeight: 800, letterSpacing: ".04em", color: "#A0957F", textTransform: "uppercase", margin: "0 0 9px" }}>상품 태깅 · 제휴 링크</div>
+                            <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                              {ppl.products.map(p => {
+                                const key = `${sel.id}|${p.id}`;
+                                return (
+                                  <div key={p.id}>
+                                    <label style={{ display: "block", fontSize: 12, fontWeight: 700, color: "#16120D", marginBottom: 5 }}>{p.brand} · {p.product}</label>
+                                    <input value={pplLinkDraft[key] ?? p.affiliate_url ?? ""} onChange={e => setPplLinkDraft(s => ({ ...s, [key]: e.target.value }))} placeholder="제휴/쇼핑 링크 URL을 붙여넣으세요" style={{ ...PUB_INPUT }} />
+                                  </div>
+                                );
+                              })}
+                            </div>
+                            <button onClick={() => void savePpl()} style={{ marginTop: 14, width: "100%", height: 42, border: 0, borderRadius: 11, background: "#16120D", color: "#fff", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 8, fontSize: 13, fontWeight: 700, cursor: "pointer" }}>
+                              <Icon d={["M5 12l5 5L20 7"]} size={16} strokeWidth={2.2} />제휴 링크 저장
+                            </button>
+                          </>
+                        )}
+                      </>
+                    )}
+                  </div>
+                );
+              })()}
 
               {tab === "titles" && (
                 <div>
@@ -2333,9 +2815,9 @@ export default function Home() {
 
                 <div style={{ display: "flex", flexDirection: "column", gap: 9 }}>
                   {channelDraft.channels.map((candidate, idx) => {
-                    const selected = candidate.channel_id === selectedDraftChannelId;
+                    const selected = selectedDraftChannelIds.includes(candidate.channel_id);
                     return (
-                      <button key={candidate.channel_id} onClick={() => setSelectedDraftChannelId(candidate.channel_id)}
+                      <button key={candidate.channel_id} onClick={() => toggleDraftChannel(candidate.channel_id)}
                         style={{ width: "100%", display: "flex", alignItems: "center", gap: 13, padding: 12, borderRadius: 13, border: `1.5px solid ${selected ? ACCENT : "#E6DDCB"}`, background: selected ? "#FFF4EF" : "#fff", color: "#16120D", textAlign: "left", cursor: "pointer" }}>
                         {candidate.thumbnail_url ? (
                           // eslint-disable-next-line @next/next/no-img-element -- external YouTube avatar
@@ -2362,8 +2844,8 @@ export default function Home() {
 
                 <div style={{ marginTop: 18, display: "flex", gap: 10 }}>
                   <button onClick={() => void closeChannelDraft()} disabled={channelDraftSaving} style={{ flex: 1, height: 44, border: "1px solid #E1D8C6", borderRadius: 11, background: "#fff", color: "#5B5346", fontSize: 13.5, fontWeight: 700, cursor: channelDraftSaving ? "not-allowed" : "pointer" }}>취소</button>
-                  <button onClick={() => void confirmChannelDraft()} disabled={!selectedDraftChannel || channelDraftSaving} style={{ flex: 1.4, height: 44, border: 0, borderRadius: 11, background: selectedDraftChannel && !channelDraftSaving ? ACCENT : "#D8CDB6", color: "#fff", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 8, fontSize: 13.5, fontWeight: 800, cursor: selectedDraftChannel && !channelDraftSaving ? "pointer" : "not-allowed", boxShadow: selectedDraftChannel && !channelDraftSaving ? "0 10px 22px -12px rgba(255,74,28,.9)" : "none" }}>
-                    {channelDraftSaving ? "추가 중…" : selectedDraftChannel?.already_connected ? "이 채널 갱신" : "이 채널 추가"}
+                  <button onClick={() => void confirmChannelDraft()} disabled={selectedDraftChannels.length === 0 || channelDraftSaving} style={{ flex: 1.4, height: 44, border: 0, borderRadius: 11, background: selectedDraftChannels.length > 0 && !channelDraftSaving ? ACCENT : "#D8CDB6", color: "#fff", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 8, fontSize: 13.5, fontWeight: 800, cursor: selectedDraftChannels.length > 0 && !channelDraftSaving ? "pointer" : "not-allowed", boxShadow: selectedDraftChannels.length > 0 && !channelDraftSaving ? "0 10px 22px -12px rgba(255,74,28,.9)" : "none" }}>
+                    {channelDraftSaving ? "추가 중…" : selectedDraftChannels.length === 1 ? "1개 채널 추가" : `${selectedDraftChannels.length}개 채널 추가`}
                   </button>
                 </div>
               </>
@@ -2374,6 +2856,115 @@ export default function Home() {
                 <button onClick={() => void closeChannelDraft()} style={{ height: 42, padding: "0 18px", border: 0, borderRadius: 11, background: "#16120D", color: "#fff", fontSize: 13.5, fontWeight: 700, cursor: "pointer" }}>확인</button>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* HIGHLIGHT RENDER MODAL */}
+      {highlightDraft && (
+        <div onClick={() => { if (!highlightBusy) setHighlightDraft(null); }} style={{ position: "fixed", inset: 0, zIndex: 94, display: "grid", placeItems: "center", padding: 22, background: "rgba(22,18,13,.5)", backdropFilter: "blur(8px)", animation: "scFade .2s ease both" }}>
+          <div onClick={e => e.stopPropagation()} style={{ width: "min(760px,100%)", maxHeight: "min(840px,calc(100vh - 44px))", overflow: "auto", borderRadius: 18, background: "#FFFDF8", border: "1px solid #E6DDCB", boxShadow: "0 30px 80px -36px rgba(22,18,13,.65)", padding: 22, animation: "scPop .2s ease both" }}>
+            <div style={{ display: "flex", alignItems: "flex-start", gap: 14, marginBottom: 18 }}>
+              <span style={{ width: 42, height: 42, borderRadius: 12, background: "#16120D", color: ACCENT, display: "grid", placeItems: "center", flex: "0 0 auto" }}>
+                <Icon d={["M4 5h16v14H4z", "m10 9 5 3-5 3V9Z"]} size={20} strokeWidth={1.9} />
+              </span>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <h2 style={{ margin: 0, fontSize: 20, fontWeight: 800, color: "#16120D" }}>하이라이트 만들기</h2>
+                <p style={{ margin: "6px 0 0", fontSize: 13, lineHeight: 1.5, color: "#7A7060" }}>선택한 후보 클립을 하나의 MP4로 이어붙입니다. 방송/유튜브용 16:9부터 쇼츠형 세로 하이라이트까지 만들 수 있어요.</p>
+              </div>
+              <button onClick={() => { if (!highlightBusy) setHighlightDraft(null); }} style={{ width: 34, height: 34, border: "1px solid #E1D8C6", borderRadius: 10, background: "#fff", color: "#7A7060", display: "grid", placeItems: "center", cursor: highlightBusy ? "not-allowed" : "pointer", flex: "0 0 auto" }} title="닫기">
+                <Icon d={["M6 6l12 12", "M18 6 6 18"]} size={16} strokeWidth={2} />
+              </button>
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) 220px", gap: 16, alignItems: "start" }}>
+              <div>
+                <div style={{ marginBottom: 14 }}>
+                  <span style={PUB_LABEL}>하이라이트 제목</span>
+                  <input value={highlightDraft.title} maxLength={120} onChange={e => setHighlightDraft(d => (d ? { ...d, result: null, title: e.target.value } : d))} style={PUB_INPUT} />
+                </div>
+
+                <div style={{ marginBottom: 14 }}>
+                  <span style={PUB_LABEL}>포맷</span>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 8 }}>
+                    {([
+                      ["landscape", "16:9", "방송/유튜브"],
+                      ["vertical", "9:16", "세로 하이라이트"],
+                      ["square", "1:1", "SNS 컷"],
+                    ] as const).map(([value, label, note]) => {
+                      const on = highlightDraft.aspect === value;
+                      return (
+                        <button key={value} onClick={() => setHighlightDraft(d => (d ? { ...d, result: null, aspect: value } : d))} style={{ minWidth: 0, height: 58, border: `1.5px solid ${on ? "#16120D" : "#E1D8C6"}`, borderRadius: 12, background: on ? "#16120D" : "#fff", color: on ? "#fff" : "#5B5346", cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 3 }}>
+                          <span style={{ fontSize: 14, fontWeight: 800 }}>{label}</span>
+                          <span style={{ fontSize: 10.5, color: on ? "#F4ECDD" : "#A0957F", whiteSpace: "nowrap" }}>{note}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div style={{ marginBottom: 14 }}>
+                  <span style={PUB_LABEL}>최대 길이</span>
+                  <div style={{ display: "flex", gap: 8 }}>
+                    {[180, 360, 720].map(seconds => {
+                      const on = highlightDraft.maxDurationSeconds === seconds;
+                      return (
+                        <button key={seconds} onClick={() => setHighlightDraft(d => (d ? { ...d, result: null, maxDurationSeconds: seconds } : d))} style={{ flex: 1, height: 38, border: `1.5px solid ${on ? ACCENT : "#E1D8C6"}`, borderRadius: 10, background: on ? "#FFF4EF" : "#fff", color: on ? "#C83920" : "#5B5346", fontSize: 12.5, fontWeight: 800, cursor: "pointer" }}>{formatDuration(seconds)}</button>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                <div>
+                  <span style={PUB_LABEL}>클립 선택 · {highlightDraft.clipIds.length}개</span>
+                  <div style={{ display: "grid", gap: 8, maxHeight: 280, overflow: "auto", paddingRight: 3 }}>
+                    {sortedClips.map((clip, index) => {
+                      const on = highlightDraft.clipIds.includes(clip.id);
+                      const order = highlightDraft.clipIds.indexOf(clip.id) + 1;
+                      return (
+                        <button key={clip.id} onClick={() => toggleHighlightClip(clip.id)} style={{ width: "100%", minWidth: 0, display: "grid", gridTemplateColumns: "34px minmax(0,1fr) auto", gap: 10, alignItems: "center", padding: "10px 11px", borderRadius: 12, border: `1.5px solid ${on ? ACCENT : "#E6DDCB"}`, background: on ? "#FFF4EF" : "#fff", color: "#16120D", cursor: "pointer", textAlign: "left" }}>
+                          <span style={{ width: 26, height: 26, borderRadius: "50%", background: on ? ACCENT : "#F4EFE4", color: on ? "#fff" : "#A0957F", display: "grid", placeItems: "center", fontSize: 11.5, fontWeight: 800, fontFamily: "'Space Mono',monospace" }}>{on ? order : index + 1}</span>
+                          <span style={{ minWidth: 0 }}>
+                            <span style={{ display: "block", fontSize: 13, fontWeight: 800, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{clip.title}</span>
+                            <span style={{ display: "block", marginTop: 2, fontSize: 11.5, color: "#9A8F7E", fontFamily: "'Space Mono',monospace" }}>{clip.start} - {clip.end} · {clip.durSec}초</span>
+                          </span>
+                          <span style={{ width: 20, height: 20, borderRadius: "50%", border: `2px solid ${on ? ACCENT : "#D8CDB6"}`, background: on ? ACCENT : "#fff", display: "grid", placeItems: "center" }}>
+                            {on && <Icon d="m6 11 3 3 7-7" size={12} stroke="#fff" strokeWidth={2.6} />}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+
+              <div style={{ position: "sticky", top: 0, display: "grid", gap: 12 }}>
+                <div style={{ padding: 14, borderRadius: 13, background: "#FBF7EF", border: "1px solid #EFE7D8" }}>
+                  <div style={{ fontSize: 11, fontWeight: 800, color: "#A0957F", marginBottom: 9 }}>요약</div>
+                  <div style={{ display: "grid", gap: 7, fontSize: 12.5, color: "#5B5346" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}><span>선택</span><b style={{ color: "#16120D" }}>{highlightDraft.clipIds.length}개</b></div>
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}><span>예상 길이</span><b style={{ color: "#16120D" }}>{formatDuration(Math.min(highlightTotalSeconds, highlightDraft.maxDurationSeconds))}</b></div>
+                    <div style={{ display: "flex", justifyContent: "space-between", gap: 10 }}><span>포맷</span><b style={{ color: "#16120D" }}>{highlightDraft.aspect === "landscape" ? "16:9" : highlightDraft.aspect === "vertical" ? "9:16" : "1:1"}</b></div>
+                  </div>
+                </div>
+
+                {highlightDraft.result && (
+                  <div style={{ padding: 12, borderRadius: 13, background: "#fff", border: "1px solid #E6DDCB" }}>
+                    <video src={mediaUrl(highlightDraft.result.video_url)} controls playsInline style={{ width: "100%", aspectRatio: highlightDraft.result.aspect === "vertical" ? "9/16" : highlightDraft.result.aspect === "square" ? "1/1" : "16/9", background: "#050505", borderRadius: 10, objectFit: "contain" }} />
+                    <a href={mediaUrl(highlightDraft.result.video_url)} download style={{ marginTop: 10, height: 38, borderRadius: 10, background: "#16120D", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", gap: 7, fontSize: 12.5, fontWeight: 800, textDecoration: "none" }}>
+                      <Icon d={["M12 3v12m0 0 4-4m-4 4-4-4", "M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"]} size={15} strokeWidth={1.9} />MP4 다운로드
+                    </a>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div style={{ marginTop: 18, display: "flex", gap: 10 }}>
+              <button onClick={() => { if (!highlightBusy) setHighlightDraft(null); }} disabled={highlightBusy} style={{ flex: 1, height: 46, border: "1px solid #E1D8C6", borderRadius: 11, background: "#fff", color: "#5B5346", fontSize: 13.5, fontWeight: 700, cursor: highlightBusy ? "not-allowed" : "pointer" }}>닫기</button>
+              <button onClick={() => void doRenderHighlight()} disabled={highlightBusy || highlightDraft.clipIds.length === 0} style={{ flex: 1.35, height: 46, border: 0, borderRadius: 11, background: highlightBusy || highlightDraft.clipIds.length === 0 ? "#D8CDB6" : ACCENT, color: "#fff", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 8, fontSize: 13.5, fontWeight: 800, cursor: highlightBusy || highlightDraft.clipIds.length === 0 ? "not-allowed" : "pointer", boxShadow: highlightBusy ? "none" : "0 12px 26px -12px rgba(255,74,28,.9)" }}>
+                {highlightBusy ? <><Icon d={["M12 3a9 9 0 1 0 9 9"]} size={16} stroke="#fff" strokeWidth={2.4} style={{ animation: "scSpin 1s linear infinite" }} />생성 중…</> : <><Icon d={["M4 5h16v14H4z", "m10 9 5 3-5 3V9Z"]} size={16} strokeWidth={1.9} />하이라이트 MP4 생성</>}
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -2476,6 +3067,57 @@ export default function Home() {
                 <input type="datetime-local" value={publishDraft.scheduleLocal} onChange={e => setPublishDraft(d => (d ? { ...d, scheduleLocal: e.target.value } : d))} style={PUB_INPUT} />
               </div>
             )}
+
+            {/* metadata preview */}
+            <div style={{ marginTop: 18, paddingTop: 16, borderTop: "1px solid #EFE7D8" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+                <Icon d={["M4 4h16v16H4z", "M8 8h8", "M8 12h8", "M8 16h5"]} size={16} stroke="#C83920" strokeWidth={1.9} />
+                <span style={{ fontSize: 13.5, fontWeight: 800, color: "#16120D" }}>업로드될 메타데이터 미리보기</span>
+              </div>
+              <div style={{ display: "grid", gap: 8, padding: 12, borderRadius: 12, background: "#FBF7EF", border: "1px solid #EFE7D8" }}>
+                <div style={{ display: "grid", gridTemplateColumns: "82px minmax(0,1fr)", gap: 10, alignItems: "start" }}>
+                  <span style={{ fontSize: 11, fontWeight: 800, color: "#A0957F" }}>채널</span>
+                  <span style={{ minWidth: 0, fontSize: 12.5, fontWeight: 700, color: "#16120D", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{publishChannel?.name || "선택된 채널"}</span>
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "82px minmax(0,1fr)", gap: 10, alignItems: "start" }}>
+                  <span style={{ fontSize: 11, fontWeight: 800, color: "#A0957F" }}>제목</span>
+                  <span style={{ minWidth: 0, fontSize: 13, lineHeight: 1.45, fontWeight: 800, color: "#16120D", overflowWrap: "anywhere" }}>{publishDraft.title.trim() || "제목 없음"} <span style={{ color: "#A0957F", fontWeight: 700 }}>({publishDraft.title.trim().length}/100)</span></span>
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "82px minmax(0,1fr)", gap: 10, alignItems: "start" }}>
+                  <span style={{ fontSize: 11, fontWeight: 800, color: "#A0957F" }}>설명</span>
+                  <span style={{ minWidth: 0, maxHeight: 96, overflow: "auto", whiteSpace: "pre-wrap", overflowWrap: "anywhere", fontSize: 12.5, lineHeight: 1.5, color: publishDraft.description.trim() ? "#3A3025" : "#A0957F" }}>{publishDraft.description.trim() || "설명 없이 업로드됩니다."}</span>
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "82px minmax(0,1fr)", gap: 10, alignItems: "start" }}>
+                  <span style={{ fontSize: 11, fontWeight: 800, color: "#A0957F" }}>태그</span>
+                  <div style={{ minWidth: 0, display: "flex", flexWrap: "wrap", gap: 6 }}>
+                    {publishPreviewTags.length ? publishPreviewTags.map(tag => (
+                      <span key={tag} style={{ maxWidth: "100%", padding: "4px 8px", borderRadius: 999, background: "#fff", border: "1px solid #E6DDCB", color: "#5B5346", fontSize: 11.5, fontWeight: 700, overflowWrap: "anywhere" }}>{tag}</span>
+                    )) : (
+                      <span style={{ fontSize: 12.5, color: "#A0957F" }}>태그 없이 업로드됩니다.</span>
+                    )}
+                  </div>
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "82px minmax(0,1fr)", gap: 10, alignItems: "start" }}>
+                  <span style={{ fontSize: 11, fontWeight: 800, color: "#A0957F" }}>공개</span>
+                  <span style={{ minWidth: 0, fontSize: 12.5, color: "#3A3025" }}>{PRIVACY_LABELS[publishDraft.privacy]}{publishDraft.mode === "schedule" ? ` · ${publishScheduleStamp ? `${fmtStamp(publishScheduleStamp)} KST` : "예약 시간 미선택"}` : " · 즉시 발행"}</span>
+                </div>
+                {(publishClip?.thumbnailText || publishClip?.category || typeof publishClip?.madeForKids === "boolean") && (
+                  <div style={{ display: "grid", gridTemplateColumns: "82px minmax(0,1fr)", gap: 10, alignItems: "start" }}>
+                    <span style={{ fontSize: 11, fontWeight: 800, color: "#A0957F" }}>참고</span>
+                    <span style={{ minWidth: 0, fontSize: 12.5, lineHeight: 1.5, color: "#7A7060" }}>
+                      {publishClip?.thumbnailText ? `썸네일 문구: ${publishClip.thumbnailText}` : ""}
+                      {publishClip?.thumbnailText && (publishClip?.category || typeof publishClip?.madeForKids === "boolean") ? " · " : ""}
+                      {publishClip?.category ? `카테고리: ${publishClip.category}` : ""}
+                      {publishClip?.category && typeof publishClip?.madeForKids === "boolean" ? " · " : ""}
+                      {typeof publishClip?.madeForKids === "boolean" ? `아동용: ${publishClip.madeForKids ? "예" : "아니오"}` : ""}
+                    </span>
+                  </div>
+                )}
+                {publishScheduleStamp && (
+                  <div style={{ marginTop: 2, paddingTop: 8, borderTop: "1px solid #EFE7D8", fontSize: 11.5, color: "#9A8F7E", fontFamily: "'Space Mono',monospace" }}>schedule_date: {publishScheduleStamp}</div>
+                )}
+              </div>
+            </div>
 
             <div style={{ marginTop: 18, display: "flex", gap: 10 }}>
               <button onClick={() => { if (!publishing) setPublishDraft(null); }} disabled={publishing} style={{ flex: 1, height: 46, border: "1px solid #E1D8C6", borderRadius: 11, background: "#fff", color: "#5B5346", fontSize: 13.5, fontWeight: 700, cursor: publishing ? "not-allowed" : "pointer" }}>취소</button>
@@ -2634,5 +3276,3 @@ function GlobalStyle() {
 
 // silence unused import warnings for ReactNode (kept for future extension)
 export type _Unused = ReactNode;
-
-

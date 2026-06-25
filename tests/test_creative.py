@@ -36,6 +36,9 @@ class CreativeTitleOptionsTest(unittest.TestCase):
         self.assertEqual(5, len(options))
         self.assertIn("hook", {option["style"] for option in options})
         self.assertIn("comment", {option["style"] for option in options})
+        self.assertFalse(any(option["title"].endswith("이 장면 진짜 뭐죠?") for option in options))
+        joined_titles = " ".join(option["title"] for option in options)
+        self.assertTrue(any(term in joined_titles for term in ["못 넘깁니다", "얼어붙음", "멈췄습니다", "싸움"]))
         for option in options:
             self.assertLessEqual(len(option["title"]), 70)
             self.assertLessEqual(len(option["overlay_text"]), 24)

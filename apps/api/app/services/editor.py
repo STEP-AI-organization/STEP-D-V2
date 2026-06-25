@@ -4,8 +4,8 @@ from typing import Any
 from app.core.config import get_settings
 from app.core.database import session_scope
 from app.models import Clip, Job
-from app.services.ffmpeg import extract_thumbnail, render_segments
-from app.services.storage import media_path_from_url
+from app.services.ffmpeg import extract_source_frame, extract_thumbnail, render_segments
+from app.services.storage import ensure_job_dirs, media_path_from_url, media_url
 from app.services.timecode import parse_time
 
 
@@ -122,6 +122,12 @@ def rerender_clip(clip_id: str) -> None:
 
             render_segments(source_path, video_path, segments, settings, title_text=render_title, text_overlays=text_overlays)
             extract_thumbnail(source_path, thumbnail_path, best_frame_time, settings, title_text=render_title, text_overlays=text_overlays)
+            try:
+                source_thumb_path = ensure_job_dirs(settings, clip.job_id)["thumbnails"] / f"source_{clip.rank:03d}.jpg"
+                extract_source_frame(source_path, source_thumb_path, best_frame_time, settings)
+                clip.source_thumbnail_url = media_url(settings, source_thumb_path)
+            except Exception:
+                pass
             clip.start_time = min(segment["start"] for segment in segments)
             clip.end_time = max(segment["end"] for segment in segments)
             _patch_clip_status(clip, "rendered")

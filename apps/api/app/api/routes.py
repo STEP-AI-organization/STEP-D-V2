@@ -1,3 +1,5 @@
+import base64
+import binascii
 import json
 import re
 from tempfile import TemporaryDirectory
@@ -16,9 +18,13 @@ from app.schemas import (
     AssetUploadResponse,
     ClipResponse,
     CreativeApplyRequest,
+    HighlightRenderRequest,
+    HighlightRenderResponse,
     HealthResponse,
     JobDebugResponse,
     JobResponse,
+    PplAnalysisResponse,
+    PplLinksRequest,
     RenderTemplate,
     ResultsResponse,
     RetrimRequest,
@@ -35,9 +41,17 @@ from app.schemas import (
 from app.services.creative import generate_thumbnail_text_options, generate_title_options
 from app.services.clip_briefing import build_clip_briefing
 from app.services.clip_signals import build_korean_shorts_signals
-from app.services.ffmpeg import cut_clip, extract_thumbnail, ffmpeg_available, probe_duration, probe_has_subtitle_stream
+from app.services.ffmpeg import (
+    cut_clip,
+    extract_thumbnail,
+    ffmpeg_available,
+    probe_duration,
+    probe_has_subtitle_stream,
+    render_highlight_segments,
+)
 from app.services.pipeline import import_and_process, process_job, subtitle_render_plan
-from app.services.storage import ensure_job_dirs, media_url, safe_job_id
+from app.services.ppl import analyze_clip_ppl, update_ppl_affiliate_links
+from app.services.storage import ensure_job_dirs, media_path_from_url, media_url, safe_job_id
 from app.services.subtitles import (
     available_style_presets,
     build_ass_subtitles,
@@ -82,6 +96,7 @@ def _clip_response(clip: Clip) -> ClipResponse:
         reason=clip.reason,
         video_url=clip.video_url,
         thumbnail_url=clip.thumbnail_url,
+        source_thumbnail_url=clip.source_thumbnail_url,
         thumbnail_text=clip.thumbnail_text,
         thumbnail_description=clip.thumbnail_description,
         best_frame_time=clip.best_frame_time,
@@ -95,6 +110,7 @@ def _clip_response(clip: Clip) -> ClipResponse:
         youtube_package_url=f"{settings.public_base_url.rstrip('/') if settings.public_base_url else ''}/api/clips/{clip.id}/youtube-package",
         korean_shorts_signals=korean_shorts_signals,
         clip_briefing=build_clip_briefing(clip, youtube_metadata, korean_shorts_signals),
+        ppl_analysis=clip.ppl_analysis_json or None,
     )
 
 
@@ -155,6 +171,55 @@ def _asset_path(settings, job_id: str, asset_id: str | None) -> Path | None:
     return path
 
 
+def _data_url_to_asset(settings, job_id: str, value: str, index: int) -> Path | None:
+    if not value.startswith("data:image/"):
+        return None
+    try:
+        header, encoded = value.split(",", 1)
+    except ValueError:
+        return None
+    mime = header.split(";", 1)[0].removeprefix("data:").lower()
+    suffix = { "image/png": ".png", "image/jpeg": ".jpg", "image/jpg": ".jpg", "image/webp": ".webp" }.get(mime)
+    if not suffix:
+        return None
+    try:
+        data = base64.b64decode(encoded, validate=True)
+    except (binascii.Error, ValueError):
+        return None
+    if not data or len(data) > 10 * 1024 * 1024:
+        return None
+    path = ensure_job_dirs(settings, job_id)["assets"] / f"editor_overlay_{index:02d}_{uuid4().hex}{suffix}"
+    path.write_bytes(data)
+    return path
+
+
+def _prepare_burn_overlays(settings, job_id: str, overlays: list[dict] | None) -> list[dict]:
+    prepared: list[dict] = []
+    if not isinstance(overlays, list):
+        return prepared
+    for index, item in enumerate(overlays[:24]):
+        if not isinstance(item, dict):
+            continue
+        kind = str(item.get("kind") or "").lower()
+        next_item = dict(item)
+        if kind == "image":
+            src = str(next_item.pop("src", "") or "")
+            asset_path = _data_url_to_asset(settings, job_id, src, index)
+            if asset_path:
+                next_item["path"] = str(asset_path)
+            elif src.startswith("/media/") or "/media/" in src:
+                try:
+                    from app.services.storage import media_path_from_url
+
+                    next_item["path"] = str(media_path_from_url(settings, src))
+                except Exception:
+                    continue
+            elif not next_item.get("path"):
+                continue
+        prepared.append(next_item)
+    return prepared
+
+
 @router.get("/health", response_model=HealthResponse)
 def health():
     settings = get_settings()
@@ -193,6 +258,7 @@ def health():
 
 @router.get("/studio/summary", response_model=StudioSummaryResponse)
 def studio_summary(db: Session = Depends(get_db)):
+    settings = get_settings()
     jobs = db.query(Job).order_by(Job.updated_at.desc(), Job.created_at.desc()).limit(24).all()
     job_ids = [job.id for job in jobs]
     clips = (
@@ -222,6 +288,15 @@ def studio_summary(db: Session = Depends(get_db)):
     for job in jobs:
         job_clips = clips_by_job.get(job.id, [])
         metadata = job.metadata_json if isinstance(job.metadata_json, dict) else {}
+        source_url = metadata.get("source_url")
+        original_video_url = None
+        if job.input_path:
+            try:
+                input_path = Path(job.input_path)
+                if input_path.exists():
+                    original_video_url = media_url(settings, input_path)
+            except (ValueError, OSError):
+                original_video_url = None
         project_clips = []
         for clip in job_clips[:8]:
             publish = latest_publish.get(clip.id)
@@ -251,6 +326,8 @@ def studio_summary(db: Session = Depends(get_db)):
                 clip_count=len(job_clips),
                 top_score=max((clip.score for clip in job_clips), default=None),
                 source=str(metadata.get("source") or "upload"),
+                source_url=source_url if isinstance(source_url, str) else None,
+                original_video_url=original_video_url,
                 subtitle_mode=str(metadata.get("shorts_subtitle_mode") or metadata.get("subtitle_mode") or "auto"),
                 style_preset=str(metadata.get("shorts_style_preset") or metadata.get("style_preset") or "korean_pop"),
                 created_at=job.created_at,
@@ -467,6 +544,27 @@ def regenerate_thumbnail_texts(clip_id: str, db: Session = Depends(get_db)):
     return ThumbnailTextOptionsResponse(clip_id=clip.id, options=options)
 
 
+@router.post("/clips/{clip_id}/ppl", response_model=PplAnalysisResponse)
+def analyze_ppl(clip_id: str, db: Session = Depends(get_db)):
+    if not db.get(Clip, clip_id):
+        raise HTTPException(status_code=404, detail="Clip not found.")
+    try:
+        analysis = analyze_clip_ppl(clip_id)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001 — surface Gemini/render errors to the client
+        raise HTTPException(status_code=502, detail=f"PPL analysis failed: {exc}") from exc
+    return PplAnalysisResponse(clip_id=clip_id, analysis=analysis)
+
+
+@router.patch("/clips/{clip_id}/ppl/links", response_model=PplAnalysisResponse)
+def patch_ppl_links(clip_id: str, request: PplLinksRequest, db: Session = Depends(get_db)):
+    if not db.get(Clip, clip_id):
+        raise HTTPException(status_code=404, detail="Clip not found.")
+    analysis = update_ppl_affiliate_links(clip_id, request.links)
+    return PplAnalysisResponse(clip_id=clip_id, analysis=analysis)
+
+
 @router.post("/clips/{clip_id}/retrim", response_model=ClipResponse)
 def retrim_clip(clip_id: str, request: RetrimRequest, db: Session = Depends(get_db)):
     clip = db.get(Clip, clip_id)
@@ -576,6 +674,14 @@ def apply_creative(clip_id: str, request: CreativeApplyRequest, db: Session = De
     clip_path, thumb_path = _clip_paths(settings, clip)
     evaluation = dict(clip.evaluation_json or {})
     revision = int(evaluation.get("render_revision") or 0) + 1
+    metadata_overrides = request.metadata_overrides or {}
+    editor_state = request.editor_state
+    if editor_state is None and isinstance(metadata_overrides.get("editor_state"), dict):
+        editor_state = metadata_overrides.get("editor_state")
+    burn_overlays = request.burn_overlays
+    if burn_overlays is None and isinstance(metadata_overrides.get("burn_overlays"), list):
+        burn_overlays = metadata_overrides.get("burn_overlays")
+    prepared_overlays = _prepare_burn_overlays(settings, clip.job_id, burn_overlays)
     creative_settings = {
         **template,
         "title": request.title,
@@ -585,7 +691,9 @@ def apply_creative(clip_id: str, request: CreativeApplyRequest, db: Session = De
         "overlay_position": request.overlay_position,
         "overlay_scale": max(0.04, min(0.4, float(request.overlay_scale))),
         "overlay_opacity": 0.92,
-        "metadata_overrides": request.metadata_overrides or {},
+        "editor_state": editor_state or {},
+        "burn_overlays": prepared_overlays,
+        "metadata_overrides": metadata_overrides,
     }
     if asset_path:
         creative_settings["badge_text"] = ""
@@ -607,6 +715,7 @@ def apply_creative(clip_id: str, request: CreativeApplyRequest, db: Session = De
             dirs["clips"] / f"short_{clip.rank:03d}.ass",
             hook_terms=[str(term) for term in evaluation.get("hook_terms", [])],
             style_preset=subtitle_plan["style_preset"],
+            highlight_color_override=(editor_state or {}).get("hl"),
         )
     cut_clip(
         Path(job.input_path),
@@ -638,8 +747,10 @@ def apply_creative(clip_id: str, request: CreativeApplyRequest, db: Session = De
     evaluation["shorts_subtitle_mode"] = subtitle_plan["mode"]
     evaluation["shorts_subtitles_rendered"] = bool(subtitle_path)
     evaluation["source_has_subtitle_stream"] = subtitle_plan["source_has_subtitle_stream"]
-    if request.metadata_overrides:
-        evaluation["metadata_overrides"] = request.metadata_overrides
+    if metadata_overrides:
+        evaluation["metadata_overrides"] = metadata_overrides
+    if editor_state:
+        evaluation["editor_state"] = editor_state
     clip.title = title_text[:180]
     clip.thumbnail_text = thumbnail_text[:120]
     clip.video_url = _revision_media_url(settings, clip_path, revision)
@@ -649,6 +760,89 @@ def apply_creative(clip_id: str, request: CreativeApplyRequest, db: Session = De
     db.commit()
     db.refresh(clip)
     return _clip_response(clip)
+
+
+@router.post(
+    "/jobs/{job_id}/highlights/render",
+    response_model=HighlightRenderResponse,
+    response_model_by_alias=False,
+)
+def render_highlight(job_id: str, request: HighlightRenderRequest, db: Session = Depends(get_db)):
+    job = db.get(Job, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    source_path = Path(job.input_path)
+    if not source_path.exists():
+        raise HTTPException(status_code=404, detail="Source video not found.")
+
+    requested_ids = [str(clip_id) for clip_id in request.clip_ids[:24]]
+    query = db.query(Clip).filter(Clip.job_id == job.id)
+    if requested_ids:
+        clips = query.filter(Clip.id.in_(requested_ids)).all()
+        by_id = {clip.id: clip for clip in clips}
+        ordered = [by_id[clip_id] for clip_id in requested_ids if clip_id in by_id]
+    else:
+        ordered = query.order_by(Clip.rank.asc()).limit(8).all()
+    if not ordered:
+        raise HTTPException(status_code=400, detail="No clips selected for highlight.")
+
+    max_duration = max(15.0, min(1800.0, float(request.max_duration_seconds or 720)))
+    segments: list[dict[str, float]] = []
+    total = 0.0
+    for clip in ordered:
+        start = max(0.0, float(clip.start_time))
+        end = max(start + 0.1, float(clip.end_time))
+        duration = end - start
+        if total + duration > max_duration:
+            remaining = max_duration - total
+            if remaining < 3.0:
+                break
+            end = start + remaining
+            duration = remaining
+        segments.append({"start": start, "end": end})
+        total += duration
+        if total >= max_duration:
+            break
+    if not segments:
+        raise HTTPException(status_code=400, detail="Selected clips are too short for highlight rendering.")
+
+    settings = get_settings()
+    aspect = str(request.aspect or "landscape").strip().lower()
+    if aspect not in {"landscape", "vertical", "square"}:
+        aspect = "landscape"
+    title = " ".join(str(request.title or "").split())[:120] or f"{job.original_filename} 하이라이트"
+    output_path = ensure_job_dirs(settings, job.id)["highlights"] / f"highlight_{uuid4().hex[:10]}.mp4"
+    try:
+        render_highlight_segments(source_path, output_path, segments, settings, title_text=title, aspect=aspect)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Highlight render failed: {str(exc)[:300]}") from exc
+
+    result = {
+        "id": output_path.stem,
+        "title": title,
+        "video_url": media_url(settings, output_path),
+        "duration_seconds": round(total, 2),
+        "clip_count": len(segments),
+        "aspect": aspect,
+        "clip_ids": [clip.id for clip in ordered[: len(segments)]],
+    }
+    metadata = dict(job.metadata_json or {})
+    history = metadata.get("highlights")
+    if not isinstance(history, list):
+        history = []
+    history.append(result)
+    metadata["highlights"] = history[-20:]
+    job.metadata_json = metadata
+    db.add(job)
+    db.commit()
+    return HighlightRenderResponse(
+        job_id=job.id,
+        title=title,
+        video_url=result["video_url"],
+        duration_seconds=result["duration_seconds"],
+        clip_count=result["clip_count"],
+        aspect=aspect,
+    )
 
 
 @router.get("/clips/{clip_id}/youtube-package")
@@ -667,6 +861,22 @@ def download_youtube_package(clip_id: str, db: Session = Depends(get_db)):
         media_type="application/zip",
         filename=f"{clip.job_id}_clip_{clip.rank:03d}_youtube_package.zip",
     )
+
+
+@router.get("/clips/{clip_id}/download")
+def download_clip_video(clip_id: str, db: Session = Depends(get_db)):
+    """Stream the clip's rendered MP4 with a Content-Disposition: attachment header
+    so the browser downloads it instead of playing it inline (the bare /media URL
+    is served inline, and the <a download> attribute is ignored cross-origin)."""
+    clip = db.get(Clip, clip_id)
+    if not clip:
+        raise HTTPException(status_code=404, detail="Clip not found.")
+    settings = get_settings()
+    video_path = media_path_from_url(settings, clip.video_url)
+    if not video_path.exists():
+        raise HTTPException(status_code=404, detail="Clip video file not found.")
+    filename = f"{clip.job_id}_clip_{clip.rank:03d}.mp4"
+    return FileResponse(video_path, media_type="video/mp4", filename=filename)
 
 
 @router.get("/jobs/latest-completed", response_model=ResultsResponse, response_model_by_alias=False)

@@ -38,8 +38,10 @@ class YouTubeMetadataTest(unittest.TestCase):
         metadata = build_youtube_metadata(clip)
 
         self.assertLessEqual(len(metadata["description"]), 5000)
+        self.assertIn("#Shorts", metadata["description"])
         self.assertLessEqual(len(",".join(metadata["tags"])), 500)
-        self.assertEqual("반전 있는 한국 쇼츠 제목", metadata["youtube_title"])
+        self.assertIn("Shorts", metadata["tags"])
+        self.assertEqual("반전 있는 한국 쇼츠 제목 #short", metadata["youtube_title"])
 
     def test_metadata_adds_korean_shorts_labels_and_hashtags(self):
         clip = SimpleNamespace(
@@ -58,6 +60,9 @@ class YouTubeMetadataTest(unittest.TestCase):
 
         self.assertIn("한국쇼츠", metadata["labels"])
         self.assertIn("반전", metadata["labels"])
+        self.assertTrue(metadata["youtube_title"].endswith(" #short"))
+        self.assertIn("#Shorts", metadata["hashtags"])
+        self.assertIn("#Shorts", metadata["description"])
         self.assertIn("#한국쇼츠", metadata["hashtags"])
         self.assertIn("유튜브쇼츠", metadata["tags"])
 

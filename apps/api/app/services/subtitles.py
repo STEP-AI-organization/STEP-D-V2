@@ -93,6 +93,17 @@ def _ass_override_color(value: object, default: str) -> str:
     return f"&H{style_color[4:]}&"
 
 
+def _hex_to_ass_color(value: object) -> str | None:
+    """Convert a web hex color (#RRGGBB) to an ASS style color (&H00BBGGRR)."""
+    text = str(value or "").strip().lstrip("#")
+    if len(text) == 3:
+        text = "".join(ch * 2 for ch in text)
+    if not re.fullmatch(r"[0-9A-Fa-f]{6}", text):
+        return None
+    rr, gg, bb = text[0:2], text[2:4], text[4:6]
+    return f"&H00{bb}{gg}{rr}".upper()
+
+
 def _highlight_terms(hook_terms: list[str] | None) -> list[str]:
     seen: set[str] = set()
     terms: list[str] = []
@@ -225,6 +236,7 @@ def build_ass_subtitles(
     output_path: Path,
     hook_terms: list[str] | None = None,
     style_preset: str | None = None,
+    highlight_color_override: str | None = None,
 ) -> Path | None:
     if not getattr(settings, "shorts_subtitles_enabled", True):
         return None
@@ -253,6 +265,12 @@ def build_ass_subtitles(
     highlight_enabled = bool(
         _preset_value(settings, preset, "highlight_enabled", "shorts_subtitle_highlight_enabled", True)
     )
+    # The editor's emphasis-color picker (state.hl) wins so the baked highlight
+    # matches the color shown in the preview captions.
+    override_highlight = _hex_to_ass_color(highlight_color_override)
+    if override_highlight:
+        highlight_color = override_highlight
+        highlight_enabled = True
     outline = max(0, int(_preset_value(settings, preset, "outline", "shorts_subtitle_outline", 5) or 0))
     shadow = max(0, int(_preset_value(settings, preset, "shadow", "shorts_subtitle_shadow", 2) or 0))
 

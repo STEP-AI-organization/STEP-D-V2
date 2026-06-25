@@ -12,6 +12,7 @@ from app.services.ffmpeg import (
     cut_clip,
     extract_audio,
     extract_frames,
+    extract_source_frame,
     extract_thumbnail,
     probe_has_subtitle_stream,
     probe_duration,
@@ -20,7 +21,7 @@ from app.services.ffmpeg import (
 from app.services.gemini import detect_burned_in_captions, evaluate_candidate
 from app.services.korean_shorts import build_title_options
 from app.services.openai_stt import transcribe_audio_chunks
-from app.services.scoring import clamp_score, final_score
+from app.services.scoring import clamp_score, final_score, normalize_score
 from app.services.storage import ensure_job_dirs, media_url
 from app.services.subtitles import build_ass_subtitles, normalize_style_preset, normalize_subtitle_mode
 from app.services.timecode import parse_time
@@ -198,6 +199,7 @@ def _persist_clip(
     evaluation: dict[str, Any],
     clip_path: Path,
     thumbnail_path: Path,
+    source_thumbnail_path: Path | None,
     settings,
 ) -> None:
     score = final_score(candidate, evaluation)
@@ -221,12 +223,13 @@ def _persist_clip(
         title=str(evaluation.get("title") or _fallback_title(candidate))[:180],
         score=score,
         local_score=float(candidate.local_score),
-        gemini_score=clamp_score(evaluation.get("score"), default=score),
+        gemini_score=normalize_score(evaluation.get("score"), default=score),
         start_time=float(candidate.start),
         end_time=float(candidate.end),
         reason=str(evaluation.get("reason") or "Transcript and representative frames show short-form potential."),
         video_url=media_url(settings, clip_path),
         thumbnail_url=media_url(settings, thumbnail_path),
+        source_thumbnail_url=media_url(settings, source_thumbnail_path) if source_thumbnail_path else None,
         thumbnail_text=str(evaluation.get("thumbnail_text") or "")[:120],
         thumbnail_description=str(evaluation.get("thumbnail_description") or ""),
         best_frame_time=parse_time(evaluation.get("best_frame_time"), default=candidate.anchor_time),
@@ -366,6 +369,7 @@ def process_job(job_id: str) -> None:
             for rank, (candidate, evaluation, _frames) in enumerate(winners, start=1):
                 clip_path = dirs["clips"] / f"short_{rank:03d}.mp4"
                 thumb_path = dirs["thumbnails"] / f"short_{rank:03d}.jpg"
+                source_thumb_path = dirs["thumbnails"] / f"source_{rank:03d}.jpg"
                 render_title = _render_title(candidate, evaluation)
                 subtitle_path = None
                 if subtitle_plan["render"]:
@@ -394,7 +398,11 @@ def process_job(job_id: str) -> None:
                 if best_frame_time < candidate.start or best_frame_time > candidate.end:
                     best_frame_time = candidate.anchor_time
                 extract_thumbnail(input_path, thumb_path, best_frame_time, settings, title_text=render_title)
-                _persist_clip(db, job_id, rank, candidate, evaluation, clip_path, thumb_path, settings)
+                try:
+                    extract_source_frame(input_path, source_thumb_path, best_frame_time, settings)
+                except Exception:
+                    source_thumb_path = None
+                _persist_clip(db, job_id, rank, candidate, evaluation, clip_path, thumb_path, source_thumb_path, settings)
 
         _save_json(
             dirs["job"] / "evaluations.json",

@@ -7,6 +7,7 @@ import httpx
 from app.core.config import Settings, get_settings
 from app.core.database import session_scope
 from app.models import Clip, YouTubeChannel, YouTubePublish
+from app.services.youtube_metadata import normalize_shorts_publish_metadata
 from app.services.youtube_oauth import refresh_access_token as refresh_channel_access_token
 from app.services.storage import media_path_from_url
 
@@ -41,10 +42,6 @@ def update_youtube_schedule(access_token: str, video_id: str, schedule_date: str
 
 def youtube_configured(settings: Settings) -> bool:
     return bool(settings.youtube_client_id and settings.youtube_client_secret)
-
-
-def sanitize_youtube_text(text: str) -> str:
-    return str(text or "").replace("<", "(").replace(">", ")").strip()
 
 
 def _schedule_to_iso(value: str) -> str:
@@ -120,6 +117,11 @@ def _update_publish(publish_id: str, **values: Any) -> None:
 
 def _video_metadata(publish: YouTubePublish, settings: Settings) -> dict[str, Any]:
     privacy_status = publish.privacy_status or settings.youtube_default_privacy_status
+    title, description, tags = normalize_shorts_publish_metadata(
+        publish.title,
+        publish.description or "",
+        publish.tags_json or [],
+    )
     status: dict[str, Any] = {
         "privacyStatus": privacy_status,
         "selfDeclaredMadeForKids": False,
@@ -130,9 +132,9 @@ def _video_metadata(publish: YouTubePublish, settings: Settings) -> dict[str, An
 
     return {
         "snippet": {
-            "title": sanitize_youtube_text(publish.title),
-            "description": sanitize_youtube_text(publish.description or ""),
-            "tags": publish.tags_json or [],
+            "title": title,
+            "description": description,
+            "tags": tags,
             "categoryId": publish.category_id or settings.youtube_category_id,
         },
         "status": status,

@@ -8,8 +8,14 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 from app.prompts.transcription import TRANSCRIPTION_PROMPT
 
 
-API_ROOT = Path(__file__).resolve().parents[2]
-REPO_ROOT = Path(__file__).resolve().parents[4]
+# In the repo, config.py is apps/api/app/core/config.py, so the api root is 2
+# levels up and the monorepo root is 4. In the Docker image only apps/api is
+# copied (to /app), so there is no level-4 parent — fall back to the filesystem
+# root instead of raising IndexError. REPO_ROOT is only used to look for an
+# optional .env one level above the api root.
+_PARENTS = Path(__file__).resolve().parents
+API_ROOT = _PARENTS[2]
+REPO_ROOT = _PARENTS[4] if len(_PARENTS) > 4 else _PARENTS[-1]
 
 
 class Settings(BaseSettings):
@@ -18,6 +24,19 @@ class Settings(BaseSettings):
     database_url: str = "sqlite:///./storage/app.db"
     storage_dir: Path = Path("./storage")
     public_base_url: str = ""
+
+    # Media storage backend. "local" serves files from storage_dir via the
+    # /media mount (default; local dev is untouched). "gcs" mirrors durable
+    # artifacts (rendered clips/thumbnails/highlights/assets) to a public GCS
+    # bucket for off-VM serving + survival across VM replacement. See
+    # app.services.storage and app.services.gcs.
+    storage_backend: str = "local"
+    gcs_bucket: str = ""
+    # Optional CDN / custom domain in front of the bucket. When empty, media
+    # URLs use https://storage.googleapis.com/<bucket>/<key>.
+    gcs_public_base_url: str = ""
+    # Optional key prefix inside the bucket (e.g. "prod"). Empty = bucket root.
+    gcs_prefix: str = ""
 
     openai_api_key: str = ""
     openai_transcribe_model: str = "whisper-1"
@@ -29,16 +48,24 @@ class Settings(BaseSettings):
     gemini_timeout_seconds: int = 90
     gemini_max_eval_candidates: int = 12
 
+    # PPL (product placement) analysis — on-demand brand/product detection on the rendered short.
+    ppl_max_frames: int = 8
+    ppl_sample_interval_seconds: float = 1.0
+    ppl_min_confidence: float = 0.35
+
     max_upload_mb: int = 2048
     youtube_max_source_seconds: int = 3600
+    # Optional yt-dlp cookies file (Netscape format) to reduce bot challenges /
+    # 429s when importing YouTube URLs from a datacenter server IP.
+    ytdlp_cookies_file: str = ""
     max_candidate_count: int = 30
     final_clip_count: int = 8
     min_clip_seconds: int = 20
-    max_clip_seconds: int = 90
-    target_clip_seconds: int = 45
+    max_clip_seconds: int = 75
+    target_clip_seconds: int = 38
     frame_count_per_candidate: int = 4
     boundary_refine_enabled: bool = True
-    boundary_max_seconds: int = 70
+    boundary_max_seconds: int = 60
     boundary_start_lookback_seconds: float = 6.0
     boundary_end_lookahead_seconds: float = 8.0
     boundary_pre_padding_seconds: float = 0.4

@@ -13,11 +13,11 @@ if TYPE_CHECKING:
 EVALUATION_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
-        "score": {"type": "integer"},
-        "hook_score": {"type": "integer"},
-        "emotion_score": {"type": "integer"},
-        "retention_score": {"type": "integer"},
-        "shareability_score": {"type": "integer"},
+        "score": {"type": "integer", "minimum": 0, "maximum": 100},
+        "hook_score": {"type": "integer", "minimum": 0, "maximum": 100},
+        "emotion_score": {"type": "integer", "minimum": 0, "maximum": 100},
+        "retention_score": {"type": "integer", "minimum": 0, "maximum": 100},
+        "shareability_score": {"type": "integer", "minimum": 0, "maximum": 100},
         "reason": {"type": "string"},
         "title": {"type": "string"},
         "thumbnail_text": {"type": "string"},
@@ -46,11 +46,18 @@ You are evaluating a short-form clip candidate. Return JSON only.
 Important constraints:
 - The full video is not provided. You only receive representative frames and transcript.
 - Score the standalone viral potential for TikTok/Reels/YouTube Shorts.
+- All score fields must be integers from 0 to 100. Do not use a 1-10 scale.
 - best_frame_time must be an absolute timestamp within the candidate range.
 - Titles and thumbnail text should be Korean if the transcript is Korean.
 - Prefer Korean Shorts patterns: fast first-line hook, clear emotional reaction,
   curiosity gap, reversal/payoff, comment-worthy tension, and natural Korean
   spoken phrasing. Avoid stiff translated English.
+- The returned title must be viral and provocative, not a neutral summary.
+  Prefer titles that make viewers ask "what happened?", "why did they react?",
+  or "what was the final line?" while staying truthful to the transcript.
+- Avoid bland titles like "반전 있는 장면", "대화가 바뀌는 순간", or
+  "하이라이트 장면". Use concrete tension words only when supported:
+  소름, 반전, 난리, 정색, 멈칫, 댓글 갈림, 분위기 뒤집힘.
 - Penalize clips that require too much missing context from the full episode.
 
 Candidate:

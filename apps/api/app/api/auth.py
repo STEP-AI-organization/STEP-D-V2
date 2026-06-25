@@ -144,8 +144,13 @@ def google_callback(
         value=token,
         max_age=settings.session_ttl_days * 86400,
         httponly=True,
-        samesite="lax",
-        secure=False,
+        # SameSite=None so the session cookie is still sent when the web app and
+        # the API are on different hosts (e.g. localhost:3000 -> 127.0.0.1:8010);
+        # with Lax it is dropped on cross-site fetches and the user looks logged
+        # out on every reload. None requires Secure, which localhost/127.0.0.1
+        # accept over http (they are treated as secure contexts).
+        samesite="none",
+        secure=True,
         path="/",
     )
     return redirect
@@ -154,5 +159,5 @@ def google_callback(
 @router.post("/logout")
 def logout(response: Response):
     settings = get_settings()
-    response.delete_cookie(key=settings.session_cookie_name, path="/")
+    response.delete_cookie(key=settings.session_cookie_name, path="/", samesite="none", secure=True)
     return {"ok": True}

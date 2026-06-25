@@ -1,3 +1,28 @@
+/* Bundled brand font — must match the font ffmpeg burns into the render
+   (apps/api/assets/fonts/GmarketSansTTFBold.ttf) so the editor preview and the
+   baked output use identical glyph metrics. */
+@font-face {
+  font-family: "GmarketSansBold";
+  src: url("/fonts/GmarketSansTTFBold.ttf") format("truetype");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "GmarketSansMedium";
+  src: url("/fonts/GmarketSansTTFMedium.ttf") format("truetype");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "GmarketSansLight";
+  src: url("/fonts/GmarketSansTTFLight.ttf") format("truetype");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
 :root {
   --bg: #070708;
   --panel: #0c0c0e;

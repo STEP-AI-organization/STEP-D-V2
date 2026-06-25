@@ -88,7 +88,25 @@ export type CreativeApplyRequest = {
   asset_id?: string | null;
   overlay_position: string;
   overlay_scale: number;
+  editor_state?: Record<string, unknown>;
+  burn_overlays?: Record<string, unknown>[];
   metadata_overrides?: Record<string, unknown>;
+};
+
+export type HighlightRenderRequest = {
+  clip_ids: string[];
+  title: string;
+  aspect?: "landscape" | "vertical" | "square";
+  max_duration_seconds?: number;
+};
+
+export type HighlightRenderResponse = {
+  job_id: string;
+  title: string;
+  video_url: string;
+  duration_seconds: number;
+  clip_count: number;
+  aspect: string;
 };
 
 export type AssetUploadResponse = {
@@ -113,6 +131,7 @@ export type Clip = {
   reason: string;
   video_url: string;
   thumbnail_url: string;
+  source_thumbnail_url?: string | null;
   thumbnail_text?: string | null;
   thumbnail_description?: string | null;
   best_frame_time?: number | null;
@@ -126,6 +145,44 @@ export type Clip = {
   youtube_package_url?: string | null;
   korean_shorts_signals: KoreanShortsSignals;
   clip_briefing: ClipBriefing;
+  ppl_analysis?: PplAnalysis | null;
+};
+
+export type PplDetection = {
+  product_id: string;
+  brand: string;
+  product: string;
+  box: [number, number, number, number]; // [x, y, w, h] normalized 0..1
+  confidence: number;
+};
+
+export type PplFrame = {
+  timestamp: number;
+  detections: PplDetection[];
+};
+
+export type PplProduct = {
+  id: string;
+  brand: string;
+  product: string;
+  category: string;
+  confidence: number;
+  first_seen: number;
+  last_seen: number;
+  frames_seen: number;
+  exposure_seconds: number;
+  best_box: [number, number, number, number];
+  affiliate_url: string;
+};
+
+export type PplAnalysis = {
+  status: string;
+  model?: string;
+  analyzed_at?: string;
+  duration_seconds: number;
+  frame_count: number;
+  products: PplProduct[];
+  frames: PplFrame[];
 };
 
 export type Results = {
@@ -308,6 +365,8 @@ export type StudioProject = {
   clip_count: number;
   top_score?: number | null;
   source: string;
+  source_url?: string | null;
+  original_video_url?: string | null;
   subtitle_mode: string;
   style_preset: string;
   created_at: string;
@@ -456,6 +515,25 @@ export async function retrimClip(
   });
 }
 
+export async function analyzePpl(clipId: string): Promise<PplAnalysis | null> {
+  const res = await request<{ clip_id: string; analysis: PplAnalysis | null }>(`/api/clips/${clipId}/ppl`, {
+    method: "POST"
+  });
+  return res.analysis;
+}
+
+export async function savePplLinks(
+  clipId: string,
+  links: Record<string, string>
+): Promise<PplAnalysis | null> {
+  const res = await request<{ clip_id: string; analysis: PplAnalysis | null }>(`/api/clips/${clipId}/ppl/links`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ links })
+  });
+  return res.analysis;
+}
+
 export async function uploadOverlayAsset(jobId: string, file: File): Promise<AssetUploadResponse> {
   const body = new FormData();
   body.append("file", file);
@@ -475,9 +553,26 @@ export async function applyCreative(clipId: string, payload: CreativeApplyReques
   });
 }
 
+export async function renderHighlight(
+  jobId: string,
+  payload: HighlightRenderRequest
+): Promise<HighlightRenderResponse> {
+  return request<HighlightRenderResponse>(`/api/jobs/${jobId}/highlights/render`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload)
+  });
+}
+
 export function mediaUrl(path: string): string {
   if (path.startsWith("http://") || path.startsWith("https://")) return path;
   return `${API_BASE_URL}${path}`;
+}
+
+// Forces a file download (Content-Disposition: attachment) instead of inline
+// playback — the plain /media URL plays inline and <a download> is ignored cross-origin.
+export function clipDownloadUrl(clipId: string): string {
+  return `${API_BASE_URL}/api/clips/${clipId}/download`;
 }
 
 export async function getYouTubeStatus(): Promise<YouTubeStatus> {
@@ -539,6 +634,17 @@ export async function confirmYouTubeChannelDraft(
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ channel_id: channelId })
+  });
+}
+
+export async function confirmManyYouTubeChannelDraft(
+  draftId: string,
+  channelIds: string[]
+): Promise<YouTubeChannel[]> {
+  return request<YouTubeChannel[]>(`/api/youtube/channel-drafts/${draftId}/confirm-many`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ channel_ids: channelIds })
   });
 }
 

@@ -77,7 +77,25 @@ class CreativeApplyRequest(BaseModel):
     asset_id: Optional[str] = None
     overlay_position: str = "top_right"
     overlay_scale: float = 0.12
+    editor_state: Optional[Dict[str, Any]] = None
+    burn_overlays: Optional[List[Dict[str, Any]]] = None
     metadata_overrides: Optional[Dict[str, Any]] = None
+
+
+class HighlightRenderRequest(BaseModel):
+    clip_ids: List[str] = Field(default_factory=list)
+    title: str = "하이라이트"
+    aspect: str = "landscape"
+    max_duration_seconds: int = 720
+
+
+class HighlightRenderResponse(BaseModel):
+    job_id: str
+    title: str
+    video_url: str
+    duration_seconds: float
+    clip_count: int
+    aspect: str
 
 
 class JobResponse(BaseModel):
@@ -108,6 +126,7 @@ class ClipResponse(BaseModel):
     reason: str
     video_url: str
     thumbnail_url: str
+    source_thumbnail_url: Optional[str] = None
     thumbnail_text: Optional[str] = None
     thumbnail_description: Optional[str] = None
     best_frame_time: Optional[float] = None
@@ -121,8 +140,18 @@ class ClipResponse(BaseModel):
     youtube_package_url: Optional[str] = None
     korean_shorts_signals: Dict[str, Any] = Field(default_factory=dict)
     clip_briefing: Dict[str, Any] = Field(default_factory=dict)
+    ppl_analysis: Optional[Dict[str, Any]] = None
 
     model_config = {"populate_by_name": True}
+
+
+class PplAnalysisResponse(BaseModel):
+    clip_id: str
+    analysis: Optional[Dict[str, Any]] = None
+
+
+class PplLinksRequest(BaseModel):
+    links: Dict[str, str] = Field(default_factory=dict)
 
 
 class ResultsResponse(BaseModel):
@@ -175,6 +204,8 @@ class StudioProject(BaseModel):
     clip_count: int
     top_score: Optional[int] = None
     source: str = "upload"
+    source_url: Optional[str] = None
+    original_video_url: Optional[str] = None
     subtitle_mode: str = "auto"
     style_preset: str = "korean_pop"
     created_at: datetime
@@ -242,6 +273,10 @@ class YouTubeChannelDraftResponse(BaseModel):
 
 class YouTubeChannelDraftConfirmRequest(BaseModel):
     channel_id: str
+
+
+class YouTubeChannelDraftConfirmManyRequest(BaseModel):
+    channel_ids: List[str]
 
 
 class YouTubeStatusResponse(BaseModel):

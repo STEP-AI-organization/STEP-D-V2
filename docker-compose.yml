@@ -1,3 +1,7 @@
+# Explicit project name: the repo folder name is non-ASCII (Korean), which makes
+# Compose derive an empty project name and fail ("project name must not be empty").
+name: ai-shorts
+
 services:
   api:
     build:
@@ -6,7 +10,7 @@ services:
     image: ai-shorts-api:local
     environment:
       ENVIRONMENT: production
-      DATABASE_URL: sqlite:////data/app.db
+      DATABASE_URL: postgresql+psycopg2://${POSTGRES_USER:-shorts}:${POSTGRES_PASSWORD:-shorts}@postgres:5432/${POSTGRES_DB:-shorts}
       STORAGE_DIR: /data
       PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-http://127.0.0.1:8010}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
@@ -65,6 +69,9 @@ services:
       - "8010:8010"
     volumes:
       - api-data:/data
+    depends_on:
+      postgres:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8010/api/health"]
       interval: 30s
@@ -72,21 +79,27 @@ services:
       retries: 3
       start_period: 20s
 
-  web:
-    build:
-      context: .
-      dockerfile: apps/web/Dockerfile
-      args:
-        NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://127.0.0.1:8010}
-    image: ai-shorts-web:local
+  postgres:
+    image: postgres:16-alpine
     environment:
-      NODE_ENV: production
-      PORT: 3000
+      POSTGRES_USER: ${POSTGRES_USER:-shorts}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-shorts}
+      POSTGRES_DB: ${POSTGRES_DB:-shorts}
     ports:
-      - "3000:3000"
-    depends_on:
-      api:
-        condition: service_healthy
+      # Exposed so local `uvicorn` can share the same database as the container.
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-shorts} -d ${POSTGRES_DB:-shorts}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+# The web frontend runs outside Docker (e.g. `npm run dev` in apps/web). Only the
+# api and postgres run in Docker here.
 
 volumes:
   api-data:
+  postgres-data:

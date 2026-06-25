@@ -100,6 +100,10 @@ def _base_opts(settings: Settings) -> dict[str, Any]:
     location = _ffmpeg_location(settings)
     if location:
         opts["ffmpeg_location"] = location
+    cookies = str(getattr(settings, "ytdlp_cookies_file", "") or "").strip()
+    if cookies and Path(cookies).exists():
+        # Reduces bot challenges / 429s when importing from a datacenter IP.
+        opts["cookiefile"] = cookies
     return opts
 
 

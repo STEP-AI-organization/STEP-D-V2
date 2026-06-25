@@ -2,6 +2,7 @@
 .env.*
 !.env.example
 !.env.docker.example
+!.env.production.example
 .venv/
 venv/
 __pycache__/
@@ -18,3 +19,8 @@ dist/
 coverage/
 *.log
 apps/api/assets/fonts/*.zip
+
+# Local docs / archives / scratch — not part of the app
+*.docx
+*.zip
+/ziCO95nk

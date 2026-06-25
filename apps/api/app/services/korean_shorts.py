@@ -8,13 +8,16 @@ HOOK_CATEGORIES: dict[str, tuple[int, tuple[str, ...]]] = {
         (
             "충격",
             "소름",
+            "소름돋",
             "대박",
             "미쳤",
+            "미친",
             "레전드",
             "실화",
             "역대급",
             "말도 안",
             "진짜?",
+            "난리",
             "shocking",
             "crazy",
         ),
@@ -27,10 +30,12 @@ HOOK_CATEGORIES: dict[str, tuple[int, tuple[str, ...]]] = {
             "근데",
             "하지만",
             "알고 보니",
+            "알고보니",
             "갑자기",
             "결국",
             "분위기",
             "뒤집",
+            "바뀌",
             "twist",
         ),
     ),
@@ -38,6 +43,8 @@ HOOK_CATEGORIES: dict[str, tuple[int, tuple[str, ...]]] = {
         18,
         (
             "왜",
+            "뭐야",
+            "무슨",
             "어떻게",
             "비밀",
             "처음 공개",
@@ -46,6 +53,9 @@ HOOK_CATEGORIES: dict[str, tuple[int, tuple[str, ...]]] = {
             "이유",
             "진실",
             "공개",
+            "마지막",
+            "결말",
+            "한마디",
             "secret",
         ),
     ),
@@ -54,6 +64,7 @@ HOOK_CATEGORIES: dict[str, tuple[int, tuple[str, ...]]] = {
         (
             "논란",
             "싸움",
+            "말싸움",
             "분노",
             "화났",
             "정색",
@@ -62,6 +73,7 @@ HOOK_CATEGORIES: dict[str, tuple[int, tuple[str, ...]]] = {
             "경고",
             "하지 마",
             "절대",
+            "갈릴",
         ),
     ),
     "emotion": (
@@ -69,14 +81,18 @@ HOOK_CATEGORIES: dict[str, tuple[int, tuple[str, ...]]] = {
         (
             "눈물",
             "울컥",
+            "오열",
             "감동",
             "슬프",
             "웃긴",
+            "웃겨",
+            "폭소",
             "빵터",
             "멘붕",
             "당황",
             "무섭",
             "설렘",
+            "빡침",
         ),
     ),
     "payoff": (
@@ -87,6 +103,7 @@ HOOK_CATEGORIES: dict[str, tuple[int, tuple[str, ...]]] = {
             "해야 합니다",
             "이렇게",
             "바뀝니다",
+            "드디어",
             "성공",
             "실패",
             "결과",
@@ -96,8 +113,8 @@ HOOK_CATEGORIES: dict[str, tuple[int, tuple[str, ...]]] = {
     ),
 }
 
-SPOKEN_ENDINGS = ("잖아", "거야", "거죠", "거예요", "했어요", "합니다", "아니에요", "맞아요")
-COMMENT_TRIGGERS = ("여러분", "댓글", "인정", "공감", "맞죠", "어때요")
+SPOKEN_ENDINGS = ("잖아", "잖아요", "거야", "거죠", "거예요", "했어요", "합니다", "아니에요", "맞아요", "네요")
+COMMENT_TRIGGERS = ("여러분", "댓글", "반응", "인정", "공감", "맞죠", "어때요", "갈릴", "난리", "태그")
 TOKEN_RE = re.compile(r"[0-9A-Za-z가-힣]{2,}")
 STOPWORDS = {
     "그리고",
@@ -183,9 +200,9 @@ def labels(text: str) -> list[str]:
     result = ["쇼츠", "한국쇼츠"]
     label_map = {
         "충격": ("충격", "소름", "대박", "미쳤", "역대급"),
-        "반전": ("반전", "그런데", "근데", "알고 보니", "결국"),
-        "논란": ("논란", "싸움", "분노", "저격", "폭로"),
-        "감정": ("눈물", "울컥", "감동", "웃긴", "당황"),
+        "반전": ("반전", "그런데", "근데", "알고 보니", "알고보니", "결국", "마지막"),
+        "논란": ("논란", "싸움", "분노", "저격", "폭로", "갈릴"),
+        "감정": ("눈물", "울컥", "오열", "감동", "웃긴", "폭소", "당황"),
         "꿀팁": ("꿀팁", "방법", "이렇게", "정답", "성공"),
     }
     for label, needles in label_map.items():
@@ -197,6 +214,21 @@ def labels(text: str) -> list[str]:
 def split_sentences(text: str) -> list[str]:
     parts = re.split(r"(?<=[.!?。！？])\s+|(?<=[.!?。！？])", text)
     return [clean_text(part) for part in parts if clean_text(part)]
+
+
+def _viral_base_title(base: str, hook: str) -> str:
+    if not base:
+        return f"{hook} 터진 순간 다들 멈췄습니다"
+    if len(base) <= 30:
+        return f"{base}, 이건 그냥 못 넘깁니다"
+    return f"{hook} 때문에 분위기 바로 뒤집힘"
+
+
+def _quote_hook(sentence: str, hook: str) -> str:
+    quote = clean_text(sentence, 28)
+    if quote:
+        return f'"{quote}" 이 말 나오자마자 끝났습니다'
+    return f"{hook} 나온 뒤 반응이 갈렸습니다"
 
 
 def build_title_options(
@@ -215,11 +247,11 @@ def build_title_options(
     overlay = clean_text(thumbnail_text or hook, 18)
 
     raw = [
-        (base, overlay, "balanced", "현재 제목과 핵심 대사를 유지한 안정형 옵션입니다."),
-        (f"{hook}, 이 장면 진짜 뭐죠?", clean_text(hook, 18), "hook", "한국 쇼츠에서 잘 먹히는 반응형 훅입니다."),
-        ("끝까지 보면 반전 있습니다", "반전 있습니다", "curiosity", "완주율을 노리는 궁금증형 제목입니다."),
-        (clean_text(first, 64), clean_text(first, 18), "quote", "첫 대사를 바로 노출하는 대사형 옵션입니다."),
-        (f"이거 댓글 반응 갈릴 듯", clean_text(second or overlay, 18), "comment", "댓글 참여를 유도하는 한국 쇼츠형 옵션입니다."),
+        (_viral_base_title(base, hook), overlay, "shock", "중립 요약보다 클릭을 유도하는 반응형 제목입니다."),
+        (f"{hook} 터진 순간, 분위기 바로 얼어붙음", clean_text(f"{hook} 터진 순간", 18), "hook", "첫 문장에서 감정 반응을 강하게 여는 훅입니다."),
+        ("마지막 한마디 듣고 다들 멈췄습니다", "마지막 한마디", "curiosity", "결말을 숨겨 완주율을 노리는 궁금증형 제목입니다."),
+        (_quote_hook(first, hook), clean_text(first or hook, 18), "quote", "강한 대사를 사건처럼 보이게 만드는 대사형 옵션입니다."),
+        ("이 장면은 댓글 싸움 날 듯", "댓글 갈릴 듯", "comment", "댓글 참여를 유도하는 자극형 옵션입니다."),
     ]
 
     options: list[dict[str, str]] = []

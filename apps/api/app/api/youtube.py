@@ -6,6 +6,7 @@ login — and publishes rendered clips to it. Channels are owned by the app user
 (``YouTubeChannel.user_id``), so each user only sees and publishes to their own.
 """
 
+import logging
 import re
 from datetime import datetime, timedelta
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
@@ -28,6 +29,7 @@ from app.schemas import (
     ReschedulePublishRequest,
     VideoCommentResponse,
     YouTubeChannelCandidate,
+    YouTubeChannelDraftConfirmManyRequest,
     YouTubeChannelDraftConfirmRequest,
     YouTubeChannelDraftResponse,
     YouTubeChannelResponse,
@@ -43,7 +45,7 @@ from app.services.youtube_analytics import (
     fetch_video_comments,
     fetch_video_stats,
 )
-from app.services.youtube_metadata import build_youtube_metadata
+from app.services.youtube_metadata import build_youtube_metadata, normalize_shorts_publish_metadata
 from app.services.youtube_oauth import (
     build_authorization_url,
     channel_payload,
@@ -53,8 +55,14 @@ from app.services.youtube_oauth import (
     fetch_my_channels,
     parse_oauth_state,
 )
-from app.services.youtube_publish import publish_youtube_clip, update_youtube_schedule, youtube_configured
+from app.services.youtube_publish import (
+    publish_youtube_clip,
+    update_youtube_schedule,
+    youtube_configured,
+)
 
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/youtube", tags=["youtube"])
 
@@ -187,6 +195,67 @@ def _delete_expired_drafts(db: Session, user_id: str) -> None:
     ).delete(synchronize_session=False)
 
 
+def _upsert_channel_from_draft(
+    db: Session,
+    user: User,
+    draft: YouTubeChannelDraft,
+    selected: dict,
+    existing_for_user: list[YouTubeChannel],
+) -> YouTubeChannel:
+    channel_id = str(selected.get("id") or "")
+    if not channel_id:
+        raise HTTPException(status_code=400, detail="Selected channel did not include a YouTube channel id.")
+
+    existing = next((channel for channel in existing_for_user if channel.channel_id == channel_id), None)
+    profile = draft.google_profile_json if isinstance(draft.google_profile_json, dict) else {}
+    profile_email = str(profile.get("email") or "")
+    profile_sub = str(profile.get("sub") or "")
+    account_fallback = next(
+        (
+            channel.refresh_token
+            for channel in existing_for_user
+            if channel.refresh_token
+            and (
+                (profile_sub and channel.google_account_id == profile_sub)
+                or (profile_email and channel.google_account_email == profile_email)
+            )
+        ),
+        None,
+    )
+    tokens = {
+        "access_token": draft.access_token,
+        "refresh_token": draft.refresh_token,
+        "token_type": draft.token_type,
+        "scope": draft.scope,
+        "expires_at": draft.token_expires_at,
+    }
+    data = channel_payload(
+        selected,
+        tokens,
+        fallback_refresh_token=(existing.refresh_token if existing else account_fallback),
+        google_profile=profile,
+    )
+    if not data["channel_id"]:
+        raise HTTPException(status_code=400, detail="Selected channel did not include a YouTube channel id.")
+
+    if existing:
+        for key, value in data.items():
+            if value is not None:
+                setattr(existing, key, value)
+        return existing
+
+    has_default = any(bool(channel.is_default) for channel in existing_for_user)
+    channel = YouTubeChannel(
+        id=uuid4().hex,
+        user_id=user.id,
+        is_default=0 if has_default else 1,
+        **data,
+    )
+    db.add(channel)
+    existing_for_user.append(channel)
+    return channel
+
+
 @router.get("/status", response_model=YouTubeStatusResponse)
 def youtube_status(
     db: Session = Depends(get_db),
@@ -307,43 +376,43 @@ def confirm_channel_draft(
         raise HTTPException(status_code=404, detail="Selected channel was not found in this connection draft.")
 
     existing_for_user = _channels(db, user.id)
-    existing = next((channel for channel in existing_for_user if channel.channel_id == request.channel_id), None)
-    has_default = any(bool(channel.is_default) for channel in existing_for_user)
-    profile = draft.google_profile_json if isinstance(draft.google_profile_json, dict) else {}
-    tokens = {
-        "access_token": draft.access_token,
-        "refresh_token": draft.refresh_token,
-        "token_type": draft.token_type,
-        "scope": draft.scope,
-        "expires_at": draft.token_expires_at,
-    }
-    data = channel_payload(
-        selected,
-        tokens,
-        fallback_refresh_token=(existing.refresh_token if existing else None),
-        google_profile=profile,
-    )
-    if not data["channel_id"]:
-        raise HTTPException(status_code=400, detail="Selected channel did not include a YouTube channel id.")
-
-    if existing:
-        for key, value in data.items():
-            if value is not None:
-                setattr(existing, key, value)
-        channel = existing
-    else:
-        channel = YouTubeChannel(
-            id=uuid4().hex,
-            user_id=user.id,
-            is_default=0 if has_default else 1,
-            **data,
-        )
-        db.add(channel)
+    channel = _upsert_channel_from_draft(db, user, draft, selected, existing_for_user)
 
     db.delete(draft)
     db.commit()
     db.refresh(channel)
     return _channel_response(channel)
+
+
+@router.post("/channel-drafts/{draft_id}/confirm-many", response_model=list[YouTubeChannelResponse])
+def confirm_many_channel_draft(
+    draft_id: str,
+    request: YouTubeChannelDraftConfirmManyRequest,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    draft = _owned_draft(db, draft_id, user)
+    requested_ids = [str(channel_id) for channel_id in request.channel_ids if str(channel_id or "").strip()]
+    requested_ids = list(dict.fromkeys(requested_ids))
+    if not requested_ids:
+        raise HTTPException(status_code=400, detail="Select at least one YouTube channel.")
+
+    items = draft.channels_json if isinstance(draft.channels_json, list) else []
+    by_id = {str(item.get("id") or ""): item for item in items}
+    missing = [channel_id for channel_id in requested_ids if channel_id not in by_id]
+    if missing:
+        raise HTTPException(status_code=404, detail="One or more selected channels were not found in this connection draft.")
+
+    existing_for_user = _channels(db, user.id)
+    channels = [
+        _upsert_channel_from_draft(db, user, draft, by_id[channel_id], existing_for_user)
+        for channel_id in requested_ids
+    ]
+    db.delete(draft)
+    db.commit()
+    for channel in channels:
+        db.refresh(channel)
+    return [_channel_response(channel) for channel in channels]
 
 
 @router.delete("/channel-drafts/{draft_id}", status_code=204)
@@ -511,6 +580,7 @@ def video_comments(
             db.commit()
         comments = fetch_video_comments(access_token, video_id, max(1, min(50, limit)))
     except Exception as exc:  # noqa: BLE001 - surface upstream YouTube/API errors
+        logger.exception("Failed to load comments for video %s (channel %s)", video_id, channel_db_id)
         raise HTTPException(status_code=502, detail=f"Failed to load comments: {exc}") from exc
     return [VideoCommentResponse(**comment) for comment in comments]
 
@@ -628,14 +698,19 @@ def auto_distribute(
 
         metadata = build_youtube_metadata(clip)
         title = (metadata.get("youtube_title") or clip.title).strip()[:100]
+        title, description, tags = normalize_shorts_publish_metadata(
+            title,
+            metadata.get("description", ""),
+            list(metadata.get("tags") or []),
+        )
         publish = YouTubePublish(
             id=uuid4().hex,
             clip_id=clip.id,
             job_id=clip.job_id,
             status="pending",
             title=title,
-            description=metadata.get("description", ""),
-            tags_json=list(metadata.get("tags") or []),
+            description=description,
+            tags_json=tags,
             privacy_status=privacy_status,
             category_id=settings.youtube_category_id,
             schedule_date=stamp,
@@ -693,6 +768,7 @@ def publish_clip(
     title = (request.title or metadata.get("youtube_title") or clip.title).strip()
     description = request.description if request.description is not None else metadata.get("description", "")
     tags = request.tags if request.tags is not None else list(metadata.get("tags") or [])
+    title, description, tags = normalize_shorts_publish_metadata(title[:100], description, tags)
 
     publish_metadata = {
         "youtube_channel_db_id": channel.id,
@@ -706,7 +782,7 @@ def publish_clip(
         clip_id=clip.id,
         job_id=clip.job_id,
         status="pending",
-        title=title[:100],
+        title=title,
         description=description,
         tags_json=tags,
         privacy_status=privacy_status,

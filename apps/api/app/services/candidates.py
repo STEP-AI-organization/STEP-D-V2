@@ -5,6 +5,10 @@ from typing import Any
 from app.services.korean_shorts import score_text_for_korean_shorts, unique
 
 
+SIGNAL_SCORE_THRESHOLD = 32.0
+ANCHOR_PRE_ROLL_SECONDS = 1.5
+
+
 HOOK_TERMS = {
     "shock": [
         "충격",
@@ -270,7 +274,7 @@ def _window_for_anchor(
     anchor = segments[anchor_index]
     anchor_start = float(anchor.get("start") or 0.0)
     anchor_end = float(anchor.get("end") or anchor_start)
-    start = max(0.0, anchor_start - 4.0)
+    start = max(0.0, anchor_start - ANCHOR_PRE_ROLL_SECONDS)
     end = min(duration, max(anchor_end + 18.0, start + target_seconds))
 
     while end - start < min_seconds and end < duration:
@@ -307,7 +311,7 @@ def detect_candidates(
     scored: list[tuple[int, float, list[str]]] = []
     for index, segment in enumerate(segments):
         score, terms = _score_text(_segment_text(segment))
-        if score >= 20:
+        if score >= SIGNAL_SCORE_THRESHOLD:
             scored.append((index, score, terms))
     scored.sort(key=lambda item: item[1], reverse=True)
 
