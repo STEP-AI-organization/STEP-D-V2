@@ -948,7 +948,7 @@ export default function Home() {
     const connectAfterLogin = params.get("connect_youtube") === "1";
     const shouldClean = Boolean(youtube || draftId || login || message || connectAfterLogin);
 
-    if (shouldClean) {
+    if (shouldClean && API_BASE_URL) {
       try {
         const api = new URL(API_BASE_URL);
         const localHosts = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);

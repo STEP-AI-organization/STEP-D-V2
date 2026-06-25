@@ -399,9 +399,13 @@ export type StudioSummary = {
   schedule: StudioScheduleItem[];
 };
 
-export const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8010";
+const API_PROXY_ENABLED = process.env.NEXT_PUBLIC_API_PROXY === "true";
+const CONFIGURED_API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://127.0.0.1:8010";
+
+export const API_BASE_URL = API_PROXY_ENABLED ? "" : CONFIGURED_API_BASE_URL.replace(/\/$/, "");
 
 function normalizeLocalReturnUrl(returnUrl: string): string {
+  if (!API_BASE_URL) return returnUrl;
   try {
     const target = new URL(returnUrl);
     const api = new URL(API_BASE_URL);
