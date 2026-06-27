@@ -829,6 +829,10 @@ export async function getJobPplReport(jobId: string): Promise<PplReport> {
   return request<PplReport>(`/api/jobs/${jobId}/ppl-report`);
 }
 
+export function pplReportCsvUrl(jobId: string): string {
+  return `${API_BASE_URL}/api/jobs/${jobId}/ppl-report/csv`;
+}
+
 export async function getClipYouTubeStats(clipId: string): Promise<ClipYouTubeStats> {
   return request<ClipYouTubeStats>(`/api/clips/${clipId}/youtube-stats`);
 }

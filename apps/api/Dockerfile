@@ -17,8 +17,11 @@ COPY --from=deno-bin /deno /usr/local/bin/deno
 WORKDIR /app
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ffmpeg curl ca-certificates fonts-noto-cjk nodejs \
+    && apt-get install -y --no-install-recommends ffmpeg curl ca-certificates fonts-noto-cjk nodejs fontconfig \
     && rm -rf /var/lib/apt/lists/*
+
+COPY apps/api/assets/fonts/ /usr/share/fonts/truetype/gmarket/
+RUN fc-cache -fv
 
 COPY apps/api/requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir --upgrade pip \

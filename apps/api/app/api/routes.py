@@ -1,5 +1,7 @@
 import base64
 import binascii
+import csv
+import io
 import json
 import re
 import shutil
@@ -8,7 +10,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile, status
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
@@ -623,6 +625,47 @@ def get_job_ppl_report(job_id: str, db: Session = Depends(get_db)):
         "analyzed_clips": total_analyzed,
         "brands": brand_list,
     }
+
+
+@router.get("/jobs/{job_id}/ppl-report/csv")
+def download_job_ppl_report_csv(job_id: str, db: Session = Depends(get_db)):
+    """Download job-level PPL report as CSV for client delivery."""
+    job = db.get(Job, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    clips = db.query(Clip).filter(Clip.job_id == job_id).all()
+    clip_map = {c.id: c for c in clips}
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["클립 번호", "클립 제목", "브랜드", "상품명", "카테고리", "화면 노출(초)", "음성 언급(회)", "신뢰도(%)", "구간 시작(s)", "구간 종료(s)", "제휴 링크"])
+
+    for clip in sorted(clips, key=lambda c: c.rank):
+        analysis = clip.ppl_analysis_json
+        if not analysis or analysis.get("status") != "done":
+            continue
+        for product in analysis.get("products") or []:
+            writer.writerow([
+                clip.rank,
+                clip.title,
+                product.get("brand") or "",
+                product.get("product") or "",
+                product.get("category") or "",
+                product.get("exposure_seconds") or 0,
+                len(product.get("voice_mentions") or []),
+                round((product.get("confidence") or 0) * 100, 1),
+                product.get("first_seen") or 0,
+                product.get("last_seen") or 0,
+                product.get("affiliate_url") or "",
+            ])
+
+    output.seek(0)
+    filename = f"ppl_report_{job_id[:8]}.csv"
+    return StreamingResponse(
+        iter([output.getvalue().encode("utf-8-sig")]),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.get("/clips/{clip_id}/youtube-stats")

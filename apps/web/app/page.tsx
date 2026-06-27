@@ -18,6 +18,7 @@ import {
   getClipYouTubeStats,
   getJob,
   getJobPplReport,
+  pplReportCsvUrl,
   getPublishStatus,
   getResults,
   getStudioSummary,
@@ -2671,20 +2672,29 @@ export default function Home() {
                               const isOpen = pplReportOpen[sel.jobId];
                               return (
                                 <div style={{ marginBottom: 20 }}>
-                                  <button
-                                    onClick={() => {
-                                      if (report) {
-                                        setPplReportOpen(s => ({ ...s, [sel.jobId!]: !isOpen }));
-                                      } else {
-                                        void loadPplReport(sel.jobId!);
-                                      }
-                                    }}
-                                    disabled={pplReportBusy}
-                                    style={{ width: "100%", height: 38, border: "1px solid #D9CEB6", borderRadius: 10, background: "#FAFAF7", color: "#5A5040", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 7, fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}
-                                  >
-                                    <Icon d={["M9 12h6", "M12 9v6", "M3 12a9 9 0 1 0 18 0 9 9 0 0 0-18 0"]} size={14} strokeWidth={2} />
-                                    {pplReportBusy ? "집계 중…" : (report && isOpen) ? "전체 리포트 닫기" : "전체 클립 PPL 리포트 보기"}
-                                  </button>
+                                  <div style={{ display: "flex", gap: 7 }}>
+                                    <button
+                                      onClick={() => {
+                                        if (report) {
+                                          setPplReportOpen(s => ({ ...s, [sel.jobId!]: !isOpen }));
+                                        } else {
+                                          void loadPplReport(sel.jobId!);
+                                        }
+                                      }}
+                                      disabled={pplReportBusy}
+                                      style={{ flex: 1, height: 38, border: "1px solid #D9CEB6", borderRadius: 10, background: "#FAFAF7", color: "#5A5040", display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 7, fontSize: 12.5, fontWeight: 700, cursor: "pointer" }}
+                                    >
+                                      <Icon d={["M9 12h6", "M12 9v6", "M3 12a9 9 0 1 0 18 0 9 9 0 0 0-18 0"]} size={14} strokeWidth={2} />
+                                      {pplReportBusy ? "집계 중…" : (report && isOpen) ? "리포트 닫기" : "전체 PPL 리포트"}
+                                    </button>
+                                    <a
+                                      href={pplReportCsvUrl(sel.jobId!)}
+                                      download
+                                      style={{ height: 38, padding: "0 14px", border: "1px solid #C5DCA8", borderRadius: 10, background: "#EBF3E0", color: "#4A7A2E", display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12.5, fontWeight: 700, textDecoration: "none", whiteSpace: "nowrap" }}
+                                    >
+                                      <Icon d={["M12 3v12m0 0 4-4m-4 4-4-4", "M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"]} size={14} strokeWidth={2} />CSV
+                                    </a>
+                                  </div>
                                   {report && isOpen && (
                                     <div style={{ marginTop: 10, padding: "14px", borderRadius: 12, background: "#fff", border: "1px solid #EAE1D0" }}>
                                       <div style={{ fontSize: 11.5, color: "#7A7060", marginBottom: 10 }}>총 {report.total_clips}개 클립 중 {report.analyzed_clips}개 분석됨</div>
