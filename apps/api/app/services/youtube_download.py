@@ -19,8 +19,8 @@ from yt_dlp.utils import DownloadError, ExtractorError, UnsupportedError
 from app.core.config import Settings
 
 
-# Prefer H.264 mp4 video + AAC m4a audio (merged), then any progressive mp4, then best.
-_FORMAT = "bv*[ext=mp4][vcodec^=avc1]+ba[ext=m4a]/b[ext=mp4][vcodec^=avc1]/b[ext=mp4]/b"
+# Prefer H.264 mp4+m4a, then any best video+audio (ffmpeg merges to mp4 regardless).
+_FORMAT = "bestvideo[ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a]/bestvideo[ext=mp4]+bestaudio/bestvideo+bestaudio/best"
 
 # Ordered (substring, code, friendly message); first match wins.
 _ERROR_PATTERNS: list[tuple[str, str, str]] = [
@@ -38,6 +38,11 @@ _ERROR_PATTERNS: list[tuple[str, str, str]] = [
     ("video unavailable", "unavailable", "삭제되었거나 사용할 수 없는 영상입니다."),
     ("removed", "unavailable", "삭제되었거나 사용할 수 없는 영상입니다."),
     ("copyright", "unavailable", "삭제되었거나 사용할 수 없는 영상입니다."),
+    ("too many requests", "rate_limited", "YouTube에서 요청을 차단했습니다 (429). 잠시 후 다시 시도하거나 쿠키 파일을 설정하세요."),
+    ("http error 429", "rate_limited", "YouTube에서 요청을 차단했습니다 (429). 잠시 후 다시 시도하거나 쿠키 파일을 설정하세요."),
+    ("sign in to confirm", "bot_challenge", "YouTube 봇 차단에 걸렸습니다. YTDLP_COOKIES_FILE 설정이 필요합니다."),
+    ("please sign in", "bot_challenge", "YouTube 봇 차단에 걸렸습니다. YTDLP_COOKIES_FILE 설정이 필요합니다."),
+    ("confirm you're not a bot", "bot_challenge", "YouTube 봇 차단에 걸렸습니다. YTDLP_COOKIES_FILE 설정이 필요합니다."),
     ("urlopen error", "network", "네트워크 오류로 영상을 가져오지 못했습니다. 잠시 후 다시 시도해 주세요."),
     ("timed out", "network", "네트워크 오류로 영상을 가져오지 못했습니다. 잠시 후 다시 시도해 주세요."),
     ("getaddrinfo failed", "network", "네트워크 오류로 영상을 가져오지 못했습니다. 잠시 후 다시 시도해 주세요."),
@@ -96,6 +101,14 @@ def _base_opts(settings: Settings) -> dict[str, Any]:
         "fragment_retries": 3,
         "socket_timeout": 30,
         "overwrites": True,
+        # yt-dlp >=2026 uses EJS (External JavaScript Support) for YouTube's
+        # "n" throttling parameter. Deno is baked into the image.
+        # Must be a list — passing a string causes yt-dlp to iterate chars.
+        "remote_components": ["ejs:github"],
+        # android_vr bypasses YouTube's SABR-only streaming experiment that
+        # affects datacenter IPs on the standard android client, restoring
+        # full DASH format availability (1080p+). web is the fallback.
+        "extractor_args": {"youtube": {"player_client": ["android_vr", "web"]}},
     }
     location = _ffmpeg_location(settings)
     if location:

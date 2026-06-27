@@ -2,6 +2,7 @@ import base64
 import binascii
 import json
 import re
+import shutil
 from tempfile import TemporaryDirectory
 from pathlib import Path
 from uuid import uuid4
@@ -899,6 +900,21 @@ def get_job(job_id: str, db: Session = Depends(get_db)):
     if not job:
         raise HTTPException(status_code=404, detail="Job not found.")
     return job
+
+
+@router.delete("/jobs/{job_id}", status_code=204)
+def delete_job(job_id: str, db: Session = Depends(get_db)):
+    job = db.get(Job, job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    settings = get_settings()
+    db.query(YouTubePublish).filter(YouTubePublish.job_id == job_id).delete()
+    db.delete(job)
+    db.commit()
+    for subdir in ("uploads", "jobs"):
+        p = settings.storage_dir / subdir / job_id
+        if p.exists():
+            shutil.rmtree(p, ignore_errors=True)
 
 
 @router.get("/jobs/{job_id}/debug", response_model=JobDebugResponse)

@@ -37,23 +37,23 @@ title must be under 70 chars, ideally 16-42 Korean characters.
 overlay_text must be 5-14 Korean characters when possible, under 24 chars, and suitable for a bold Korean thumbnail caption.
 
 Tone:
-- Make the titles viral, sharp, and curiosity-driven. They should feel like a Korean Shorts creator wrote them, not a neutral summary.
-- Prefer tension words when supported by the transcript: 소름, 반전, 난리, 정색, 멈칫, 뒤집힘, 댓글 갈림, 끝남, 못 넘김.
-- Every option must create an open loop: viewers should want to know "왜?", "뭐라고 했길래?", or "그래서 어떻게 됐는데?"
+- Write titles the way a popular Korean Shorts creator would — casual, natural, and rooted in what actually happened in the clip.
+- Hook the viewer by surfacing the most surprising, funny, or emotionally resonant moment — but in your own words, not a template.
+- Every title should make someone stop scrolling because they want to know what happened next, who said it, or what the reaction was.
+
+What to avoid:
+- Formulaic filler phrases like "그냥은 못 넘깁니다", "실화냐", "이거 실화임?", "레전드", "충격", "소름" — unless the transcript genuinely supports that level.
+- Bland summaries ("대화 흐름이 바뀌는 순간", "반전 있는 장면") with no concrete detail.
+- Generic hooks ("이 장면 진짜 뭐죠?") not anchored to something specific from the transcript.
+- Hashtags, episode numbers, or stiff phrasing.
+- Defamatory, sexual, or harmful claims.
 
 Generate these 5 distinct styles:
-1. shock/reaction: the most scroll-stopping version.
-2. reversal/payoff: tease the turn without spoiling the ending.
-3. quote-trigger: use the strongest spoken line or paraphrase it as a hook.
-4. comment-bait: invite disagreement, agreement, or tagging someone.
-5. curiosity-gap: make the viewer feel they missed something important.
-
-Rules:
-- Be provocative, but do not invent facts that are not clearly implied by the transcript.
-- Avoid bland summaries like "대화 흐름이 바뀌는 순간" or "반전 있는 장면".
-- Avoid generic titles like "이 장면 진짜 뭐죠?" unless a concrete detail is attached.
-- No hashtags, no episode numbers, no stiff translated English.
-- Do not use defamatory, sexual, or harmful claims. Do not claim "충격", "레전드", or "논란" unless the transcript supports that intensity.
+1. shock/reaction: the most scroll-stopping version — what's the single most jaw-dropping moment?
+2. reversal/payoff: tease the unexpected turn without spoiling the ending.
+3. quote-trigger: pull the strongest actual line from the transcript and let it do the work.
+4. comment-bait: word it so viewers want to respond, agree, or tag someone they know.
+5. curiosity-gap: make the viewer feel like they missed something important and need to watch.
 
 Current title: {clip.title}
 Reason: {clip.reason}
