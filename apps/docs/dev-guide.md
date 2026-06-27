@@ -59,34 +59,29 @@ Storage는 `./storage/` 로컬 볼륨 마운트
 ─────────────────────────────────────────────────
 git commit + git push
     ↓
-deploy.ps1 실행
-    ↓
-gcloud scp → 소스 파일 전송  →  apps/api/, docker-compose.prod.yml, Caddyfile
-    ↓
-gcloud ssh → deploy.sh 실행  →  docker compose build api
-                              →  docker compose up -d --force-recreate api
-                              →  헬스체크 폴링 (30회 × 2초)
+gcloud ssh → VM에서:
+    git pull origin main
+    docker compose --env-file apps/api/.env.production \
+        -f docker-compose.prod.yml up -d --build
 ```
 
-### 배포 명령
+> **주의:** SCP 방식은 `/home/STEPAI05/` 권한 문제로 동작하지 않음.  
+> 반드시 VM에서 직접 `git pull` + `docker compose up --build` 순서를 따를 것.
+
+### 배포 명령 (로컬에서 한 줄로)
 
 ```powershell
-# 전체 배포 (빌드 + 업로드)
-.\deploy.ps1
-
-# 빌드 없이 파일만 전송
-.\deploy.ps1 -NoBuild
-
-# 파일 전송 없이 VM에서 재시작만
-.\deploy.ps1 -NoSync
+gcloud compute ssh shorts-api --project=step-d --zone=asia-northeast3-a `
+  --command="sudo bash -c 'cd /home/STEPAI05/app && git pull origin main && docker compose --env-file apps/api/.env.production -f docker-compose.prod.yml up -d --build 2>&1'"
 ```
 
 ### 배포 스크립트 위치
 
 | 파일 | 역할 |
 |------|------|
-| `deploy.ps1` | 개발자 머신에서 실행. gcloud scp + ssh 조율 |
-| `deploy/deploy.sh` | VM에서 실행. docker compose build + up + 헬스체크 |
+| `deploy.ps1` | 개발자 머신에서 실행하는 Windows 스크립트 (SCP 방식 — 현재 권한 문제로 미사용) |
+| `deploy/deploy.sh` | VM-side 빌드/재시작/헬스체크 스크립트 |
+| `deploy/runbook.md` | 최초 VM 세팅 전체 절차 |
 
 ---
 
@@ -180,16 +175,17 @@ GEMINI_MODEL=gemini-3.5-flash
 
 ### 자막 폰트 변경
 
-현재 임시 설정:
-```
-SHORTS_SUBTITLE_FONT_NAME=Noto Sans CJK KR
-```
+G마켓 산스 TTF는 Dockerfile에 이미 설치됨 (`apps/api/assets/fonts/GmarketSansTTF*.ttf` → `/usr/share/fonts/truetype/gmarket/`).
 
-G마켓 산스 영구 적용 방법:
-1. `.ttf` 파일을 `apps/api/fonts/` 폴더에 추가
-2. `Dockerfile`에 `COPY fonts/ /usr/share/fonts/custom/` 추가
-3. `fc-cache -fv` 실행 라인 추가
-4. 이미지 재빌드
+**VM에서 활성화하려면:**  
+`/home/STEPAI05/app/apps/api/.env.production`에서 아래 줄을 **삭제** (또는 주석 처리):
+```
+SHORTS_SUBTITLE_FONT_NAME=Noto Sans CJK KR   ← 이 줄 제거
+```
+제거 후 이미지 재빌드 없이 컨테이너 재시작만으로 적용됨:
+```bash
+sudo docker compose --env-file apps/api/.env.production -f docker-compose.prod.yml up -d api
+```
 
 ### 클립 설정 (클립 수·길이 등)
 

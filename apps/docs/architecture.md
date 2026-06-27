@@ -149,6 +149,21 @@ User
 | POST | `/api/jobs/{job_id}/assets` | 오버레이 이미지 업로드 |
 | POST | `/api/jobs/{job_id}/highlights/render` | 하이라이트 편집본 렌더링 |
 
+### PPL 리포트
+
+| Method | Path | 설명 |
+|--------|------|------|
+| POST | `/api/clips/{clip_id}/ppl` | PPL 분석 실행 (Gemini Vision) |
+| PATCH | `/api/clips/{clip_id}/ppl/links` | 어필리에이트 링크 저장 |
+| GET | `/api/jobs/{job_id}/ppl-report` | 잡 레벨 브랜드별 통합 집계 |
+| GET | `/api/jobs/{job_id}/ppl-report/csv` | CSV 내보내기 (UTF-8 BOM) |
+
+### 편집 제안
+
+| Method | Path | 설명 |
+|--------|------|------|
+| GET | `/api/jobs/{job_id}/silence-report` | 원본 영상 무음 구간 탐지 (noise_db, min_duration 파라미터) |
+
 ### YouTube 연동
 
 | Method | Path | 설명 |
@@ -158,6 +173,8 @@ User
 | GET | `/api/youtube/status` | 연결된 채널·기본 채널 조회 |
 | POST | `/api/youtube/clips/{clip_id}/publish` | YouTube 업로드/예약 |
 | GET | `/api/youtube/channels/{channel_id}/analytics` | 채널 지표 조회 |
+| GET | `/api/youtube/clips/{clip_id}/comments` | 댓글 목록 (`?summarize=true`로 AI 요약 포함) |
+| GET | `/api/clips/{clip_id}/youtube-stats` | 클립 실시간 성과 (조회수·좋아요·댓글 수) |
 
 ---
 
@@ -181,6 +198,8 @@ User
    ↓
 6. refine_boundaries()
    - 정확한 발화 시작/끝으로 경계 미세 조정
+   - 한국어 종결어미(다/요/죠/네 등) + 마침표 기반 문장 끝 스냅
+   - max 길이 초과 시에도 동일 기준 적용
    ↓
 7. 상위 N개 클립 렌더링 (ffmpeg)
    - 9:16 1080×1920 버티컬 쇼츠
@@ -241,6 +260,6 @@ User
 | `target_clip_seconds` | 38 | 목표 클립 길이 |
 | `shorts_width/height` | 1080 × 1920 | 쇼츠 해상도 |
 | `shorts_reframe_mode` | blur | 배경 처리 방식 |
-| `shorts_subtitle_font_name` | Noto Sans CJK KR | 자막 폰트 (컨테이너) |
+| `shorts_subtitle_font_name` | G마켓 산스 TTF Bold | 자막 폰트 (Dockerfile 설치 완료, VM env override 해제 필요) |
 | `ppl_max_frames` | 8 | PPL 분석 최대 프레임 수 |
 | `ppl_min_confidence` | 0.35 | PPL 탐지 최소 신뢰도 |
