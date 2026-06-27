@@ -159,10 +159,10 @@ def extract_frames(
             [
                 settings.ffmpeg_binary,
                 "-y",
-                "-ss",
-                f"{max(0.0, seconds):.3f}",
                 "-i",
                 str(video_path),
+                "-ss",
+                f"{max(0.0, seconds):.3f}",
                 "-frames:v",
                 "1",
                 "-q:v",
