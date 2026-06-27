@@ -1,3 +1,4 @@
+import re
 from dataclasses import asdict, dataclass
 from math import ceil
 from typing import Any
@@ -158,6 +159,22 @@ def _words_in_range(words: list[dict[str, Any]], start: float, end: float) -> li
     return [word for word in words if float(word["end"]) >= start and float(word["start"]) <= end]
 
 
+# Korean sentence-final endings: declarative/polite forms that close a thought.
+_SENTENCE_END_RE = re.compile(r"[다요죠네야나지까래습니]\s*[.!?~…]?\s*$")
+
+
+def _is_sentence_end(text: str) -> bool:
+    """True if text ends at a natural speech boundary (punctuation or Korean sentence-final morpheme)."""
+    text = text.strip()
+    if not text:
+        return False
+    # Universal punctuation
+    if text[-1] in (".", "!", "?", "~", "…"):
+        return True
+    # Korean morpheme endings that close an utterance
+    return bool(_SENTENCE_END_RE.search(text))
+
+
 def _word_or_segment_start(
     first_segment: dict[str, Any] | None,
     words: list[dict[str, Any]],
@@ -245,9 +262,12 @@ def _trim_to_max_duration(
         if float(seg["end"]) + post_padding_seconds <= max_end and float(seg["end"]) - start >= min_seconds
     ]
     if complete_segments:
-        segment_end, _ = _word_or_segment_end(complete_segments[-1], words, max_end, max_end)
+        sentence_segs = [s for s in complete_segments if _is_sentence_end(_segment_text(s))]
+        best_seg = sentence_segs[-1] if sentence_segs else complete_segments[-1]
+        segment_end, _ = _word_or_segment_end(best_seg, words, max_end, max_end)
         if segment_end is not None:
-            return start, min(max_end, segment_end + post_padding_seconds), "max-duration-segment"
+            reason = "max-duration-sentence" if sentence_segs else "max-duration-segment"
+            return start, min(max_end, segment_end + post_padding_seconds), reason
     return start, max_end, "max-duration-hard"
 
 
@@ -426,7 +446,14 @@ def refine_candidates(
                 for seg in segments
                 if float(seg["start"]) <= end_ceiling and float(seg["end"]) >= rough_start
             ]
-        last_segment = end_segments[-1] if end_segments else None
+
+        # Prefer a segment that closes a sentence so we never cut mid-speech.
+        # Must end at or after (rough_end - 2s) so we don't over-shorten the clip.
+        sentence_end_segs = [
+            seg for seg in end_segments
+            if float(seg["end"]) >= rough_end - 2.0 and _is_sentence_end(_segment_text(seg))
+        ]
+        last_segment = sentence_end_segs[-1] if sentence_end_segs else (end_segments[-1] if end_segments else None)
 
         start_anchor, start_source = _word_or_segment_start(
             first_segment,
