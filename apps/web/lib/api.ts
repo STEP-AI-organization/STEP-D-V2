@@ -598,6 +598,11 @@ export async function logout(): Promise<void> {
   await fetch(`${API_BASE_URL}/api/auth/logout`, { method: "POST", credentials: "include" });
 }
 
+export async function deleteJob(jobId: string): Promise<void> {
+  const res = await fetch(`${API_BASE_URL}/api/jobs/${jobId}`, { method: "DELETE", credentials: "include" });
+  if (!res.ok && res.status !== 204) throw new Error(`삭제 실패: ${res.status}`);
+}
+
 export function youtubeConnectUrl(returnUrl?: string): string {
   const target = normalizeLocalReturnUrl(returnUrl ?? (typeof window !== "undefined" ? window.location.href : ""));
   const query = target ? `?return_url=${encodeURIComponent(target)}` : "";

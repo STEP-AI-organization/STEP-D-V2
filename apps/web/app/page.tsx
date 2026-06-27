@@ -11,6 +11,7 @@ import {
   cancelYouTubeChannelDraft,
   clipDownloadUrl,
   confirmManyYouTubeChannelDraft,
+  deleteJob,
   disconnectChannel,
   getChannelAnalytics,
   getChannelInsights,
@@ -1001,6 +1002,19 @@ export default function Home() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const handleDeleteProject = async (e: React.MouseEvent, jobId: string) => {
+    e.stopPropagation();
+    if (!confirm("프로젝트를 삭제하면 영상과 쇼츠 클립이 모두 사라집니다. 계속할까요?")) return;
+    try {
+      await deleteJob(jobId);
+      setProjects(prev => prev.filter(p => p.id !== jobId));
+      if (openProject === jobId) setOpenProject(null);
+      showToast("프로젝트를 삭제했어요");
+    } catch {
+      showToast("삭제에 실패했어요. 다시 시도해 주세요");
+    }
+  };
+
   const openProjectDetail = async (jobId: string) => {
     setOpenProject(jobId);
     setBackendClips(null);
@@ -1952,7 +1966,14 @@ export default function Home() {
                         <h3 style={{ margin: 0, fontSize: 14.5, fontWeight: 700, color: "#16120D", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{pj.title}</h3>
                         <div style={{ marginTop: 8, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
                           <span style={{ fontSize: 12.5, color: "#8C8273", fontFamily: "'Space Mono',monospace" }}>{pj.date}</span>
-                          <span style={{ fontSize: 11.5, fontWeight: 700, color: "#1F8A5B", background: "#E7F5EE", border: "1px solid #BFE6D2", borderRadius: 999, padding: "2px 9px" }}>{pj.status}</span>
+                          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                            <span style={{ fontSize: 11.5, fontWeight: 700, color: "#1F8A5B", background: "#E7F5EE", border: "1px solid #BFE6D2", borderRadius: 999, padding: "2px 9px" }}>{pj.status}</span>
+                            <button onClick={e => void handleDeleteProject(e, pj.id)} title="프로젝트 삭제" style={{ display: "grid", placeItems: "center", width: 28, height: 28, border: "1px solid #EAE1D0", borderRadius: 8, background: "#fff", color: "#B0A090", cursor: "pointer", padding: 0, flexShrink: 0 }}
+                              onMouseEnter={e => { (e.currentTarget as HTMLButtonElement).style.background = "#FEF2F2"; (e.currentTarget as HTMLButtonElement).style.color = "#DC2626"; (e.currentTarget as HTMLButtonElement).style.borderColor = "#FECACA"; }}
+                              onMouseLeave={e => { (e.currentTarget as HTMLButtonElement).style.background = "#fff"; (e.currentTarget as HTMLButtonElement).style.color = "#B0A090"; (e.currentTarget as HTMLButtonElement).style.borderColor = "#EAE1D0"; }}>
+                              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
+                            </button>
+                          </div>
                         </div>
                       </div>
                     </article>
