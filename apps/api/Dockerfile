@@ -1,3 +1,7 @@
+# Deno binary — yt-dlp >=2026 requires an external JS runtime to decrypt
+# YouTube's "n" throttling parameter. Deno is the default supported runtime.
+FROM denoland/deno:bin AS deno-bin
+
 FROM python:3.12-slim AS runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -8,10 +12,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     FFMPEG_BINARY=ffmpeg \
     FFPROBE_BINARY=ffprobe
 
+COPY --from=deno-bin /deno /usr/local/bin/deno
+
 WORKDIR /app
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ffmpeg curl ca-certificates fonts-noto-cjk \
+    && apt-get install -y --no-install-recommends ffmpeg curl ca-certificates fonts-noto-cjk nodejs \
     && rm -rf /var/lib/apt/lists/*
 
 COPY apps/api/requirements.txt ./requirements.txt
