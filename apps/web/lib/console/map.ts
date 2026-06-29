@@ -68,6 +68,7 @@ export type ProjectCard = {
   status: string;
   source: string;
   ytId: string | null;
+  thumb?: string | null;
   sourceUrl?: string | null;
   originalVideoUrl?: string | null;
   shorts: { clipId: string; state: string }[];
@@ -212,19 +213,31 @@ export const mapBackendClip = (clip: BackendClip): Clip => {
   };
 };
 
-export const mapStudioProject = (p: StudioProject, idx: number): ProjectCard => ({
-  id: p.job_id,
-  title: p.original_filename || p.title || "프로젝트",
-  date: fmtDateDots(p.created_at),
-  dur: fmtDur(p.duration),
-  posterIdx: idx,
-  status: jobStatusKo(p.status),
-  source: p.source || "upload",
-  ytId: youtubeId(p.source_url),
-  sourceUrl: p.source_url,
-  originalVideoUrl: resolveMedia(p.original_video_url),
-  shorts: (p.clips || []).map((c) => ({ clipId: c.clip_id, state: publishStateKo(c.status) })),
-});
+export const mapStudioProject = (p: StudioProject, idx: number): ProjectCard => {
+  const ytId = youtubeId(p.source_url);
+  const firstClipThumb = (p.clips || []).map((c) => c.thumbnail_url).find(Boolean);
+  // Prefer the YouTube source thumbnail (the "original video photo"); fall back
+  // to a generated clip frame for uploads.
+  const thumb = ytId
+    ? `https://i.ytimg.com/vi/${ytId}/hqdefault.jpg`
+    : firstClipThumb
+    ? resolveMedia(firstClipThumb) ?? null
+    : null;
+  return {
+    id: p.job_id,
+    title: p.original_filename || p.title || "프로젝트",
+    date: fmtDateDots(p.created_at),
+    dur: fmtDur(p.duration),
+    posterIdx: idx,
+    status: jobStatusKo(p.status),
+    source: p.source || "upload",
+    ytId,
+    thumb,
+    sourceUrl: p.source_url,
+    originalVideoUrl: resolveMedia(p.original_video_url),
+    shorts: (p.clips || []).map((c) => ({ clipId: c.clip_id, state: publishStateKo(c.status) })),
+  };
+};
 
 export const mapScheduleItem = (s: StudioScheduleItem): SchedItem | null => {
   if (s.status === "cancelled") return null;

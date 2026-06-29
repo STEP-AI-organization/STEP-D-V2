@@ -234,8 +234,13 @@ export function StudioScreen() {
               const poster = POSTERS[p.posterIdx % POSTERS.length];
               return (
                 <div key={p.id} style={card({ overflow: "hidden", display: "flex", flexDirection: "column" })}>
-                  <div style={{ position: "relative", height: 118, background: poster.g, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                    <div style={{ width: 40, height: 40, borderRadius: 11, background: "rgba(255,255,255,.18)", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, fontWeight: 800 }}>{p.title.slice(0, 1)}</div>
+                  <div style={{ position: "relative", height: 118, background: poster.g, display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden" }}>
+                    {p.thumb ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={p.thumb} alt="" style={{ position: "absolute", inset: 0, width: "100%", height: "100%", objectFit: "cover" }} />
+                    ) : (
+                      <div style={{ width: 40, height: 40, borderRadius: 11, background: "rgba(255,255,255,.18)", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16, fontWeight: 800 }}>{p.title.slice(0, 1)}</div>
+                    )}
                     <span style={{ position: "absolute", top: 8, left: 8, fontSize: 9.5, fontWeight: 700, color: "#fff", background: "rgba(16,18,24,.55)", padding: "2px 7px", borderRadius: 5 }}>{p.ytId ? "YouTube" : "업로드"}</span>
                     {p.dur && <span style={{ position: "absolute", bottom: 8, right: 8, fontSize: 10.5, fontWeight: 700, color: "#fff", background: "rgba(16,18,24,.78)", padding: "2px 7px", borderRadius: 5 }}>{p.dur}</span>}
                   </div>
