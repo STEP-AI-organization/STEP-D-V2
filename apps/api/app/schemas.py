@@ -404,3 +404,17 @@ class AuthUser(BaseModel):
 
 class AuthMeResponse(BaseModel):
     user: Optional[AuthUser] = None
+
+
+class ReportChatMessage(BaseModel):
+    role: str  # "user" | "assistant"
+    content: str
+
+
+class ReportChatRequest(BaseModel):
+    messages: List[ReportChatMessage] = Field(default_factory=list)
+    context: Dict[str, Any] = Field(default_factory=dict)
+
+
+class ReportChatResponse(BaseModel):
+    answer: str

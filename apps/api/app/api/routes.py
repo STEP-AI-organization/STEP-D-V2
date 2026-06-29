@@ -29,6 +29,8 @@ from app.schemas import (
     PplAnalysisResponse,
     PplLinksRequest,
     RenderTemplate,
+    ReportChatRequest,
+    ReportChatResponse,
     ResultsResponse,
     RetrimRequest,
     StudioProject,
@@ -1187,3 +1189,24 @@ def get_results(job_id: str, db: Session = Depends(get_db)):
         status=job.status,
         clips=[_clip_response(clip) for clip in clips],
     )
+
+
+@router.post("/report/chat", response_model=ReportChatResponse)
+def report_chat(payload: ReportChatRequest):
+    """Conversational analyst over the console's data context (Gemini text)."""
+    from app.services.gemini import GeminiError, call_text_prompt
+
+    settings = get_settings()
+    context_json = json.dumps(payload.context, ensure_ascii=False)[:6000]
+    convo = "\n".join(f"{m.role}: {m.content}" for m in payload.messages[-12:])
+    prompt = (
+        "당신은 크리에이터의 수익·채널·커머스 데이터를 해석해 주는 한국어 애널리스트입니다.\n"
+        "아래 데이터 컨텍스트를 근거로 마지막 사용자 질문에 간결하고 실행가능하게 한국어로 답하세요.\n"
+        "숫자는 컨텍스트에 있는 값만 사용하고, 추정/가정값은 '추정'이라고 명시하세요. 마크다운을 적절히 사용하세요.\n\n"
+        f"[데이터 컨텍스트]\n{context_json}\n\n[대화]\n{convo}\n\nassistant:"
+    )
+    try:
+        answer = call_text_prompt(prompt, settings).strip()
+    except (GeminiError, Exception):  # noqa: BLE001 - graceful fallback for the demo console
+        answer = "지금은 리포트 답변을 생성하지 못했어요. 잠시 후 다시 시도해 주세요."
+    return ReportChatResponse(answer=answer or "답변을 생성하지 못했어요. 다시 시도해 주세요.")

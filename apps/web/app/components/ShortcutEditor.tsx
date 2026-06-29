@@ -156,7 +156,7 @@ export type EditorState = {
 type MoveKey = "titleX" | "titleY" | "footX" | "footY" | "bottomX" | "bottomY";
 type TemplatePresetId = "stacked_channel" | "full_bleed" | "caption_card" | "news_bar" | "comment_hook";
 
-const ACCENT = "#FF4A1C";
+const ACCENT = "#6C5CE7";
 const PANEL = "#F6F1E8";
 const LINE = "#E1D8C6";
 const TEXT = "#16120D";
@@ -227,7 +227,7 @@ const ASPECTS: { k: AspectKey; css: string; h: string; tY: number; vY: number; b
   { k: "9:16", css: "9 / 16", h: "100%", tY: 6, vY: 0, bY: 90 },
 ];
 
-const COLORS = ["#FF4A1C", "#FFD400", "#27E0A0", "#5B8CFF", "#FF49DB", "#FFFFFF"];
+const COLORS = ["#6C5CE7", "#FFD400", "#27E0A0", "#5B8CFF", "#FF49DB", "#FFFFFF"];
 const BG_SWATCHES = [
   { label: "화이트", color: "#ffffff" },
   { label: "블랙", color: "#0E0E12" },
@@ -725,7 +725,7 @@ function buildBurnOverlays(state: EditorState): BurnOverlay[] {
         y: overlay.y,
         fontSize: 14,
         color: "#FFFFFF",
-        boxColor: "#FF4A1C",
+        boxColor: "#6C5CE7",
         boxAlpha: 1,
         boxBorder: 12,
         shadow: false,
@@ -772,7 +772,7 @@ function buildBurnOverlays(state: EditorState): BurnOverlay[] {
         x: overlay.x,
         y: overlay.y,
         fontSize: 48,
-        color: "#FF4A1C",
+        color: "#6C5CE7",
         shadow: true,
       });
     }
@@ -1261,7 +1261,7 @@ export function ShortcutEditor({ clip, onClose, onSave, saving = false }: Shortc
     <div style={{ position: "fixed", inset: 0, zIndex: 120, height: "100vh", display: "flex", flexDirection: "column", background: "#EFE8DA", color: TEXT, fontFamily: "'Pretendard',system-ui,sans-serif", WebkitFontSmoothing: "antialiased", overflow: "hidden" }}>
       <style>{`
         .shortcut-editor input[type=range]{-webkit-appearance:none;appearance:none;height:5px;border-radius:99px;background:#D8CDB6;outline:none}
-        .shortcut-editor input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;height:16px;border-radius:50%;background:#FF4A1C;cursor:pointer;box-shadow:0 0 0 4px rgba(255,74,28,.18)}
+        .shortcut-editor input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;height:16px;border-radius:50%;background:#6C5CE7;cursor:pointer;box-shadow:0 0 0 4px rgba(108,92,231,.18)}
         .shortcut-editor button:disabled{opacity:.55;cursor:not-allowed}
         @media (max-width: 900px){
           .shortcut-editor-body{display:block !important;overflow:auto !important}
@@ -1281,7 +1281,7 @@ export function ShortcutEditor({ clip, onClose, onSave, saving = false }: Shortc
             <button onClick={resetEditor} style={{ height: 38, padding: "0 15px", border: `1px solid ${LINE}`, borderRadius: 10, background: SOFT, color: "#5B5346", display: "inline-flex", alignItems: "center", gap: 7, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
               <RefreshCw size={15} />초기화
             </button>
-            <button onClick={() => void handleSave()} disabled={saving} style={{ height: 38, padding: "0 18px", border: 0, borderRadius: 10, background: ACCENT, color: "#fff", display: "inline-flex", alignItems: "center", gap: 8, fontSize: 13.5, fontWeight: 700, cursor: "pointer", boxShadow: "0 8px 18px -9px rgba(255,74,28,.9)" }}>
+            <button onClick={() => void handleSave()} disabled={saving} style={{ height: 38, padding: "0 18px", border: 0, borderRadius: 10, background: ACCENT, color: "#fff", display: "inline-flex", alignItems: "center", gap: 8, fontSize: 13.5, fontWeight: 700, cursor: "pointer", boxShadow: "0 8px 18px -9px rgba(108,92,231,.9)" }}>
               <Save size={15} />{saving ? "저장 중..." : "저장하기"}
             </button>
             <button onClick={onClose} style={{ width: 38, height: 38, border: `1px solid ${LINE}`, borderRadius: 10, background: "#fff", color: "#5B5346", display: "grid", placeItems: "center", cursor: "pointer" }} title="닫기">
@@ -1328,13 +1328,13 @@ export function ShortcutEditor({ clip, onClose, onSave, saving = false }: Shortc
                   </div>
                   {state.dualFrame && <div style={{ position: "absolute", top: "50%", left: 0, right: 0, height: 2, background: ACCENT }} />}
                   <div onClick={() => set("playing", !state.playing)} style={{ position: "absolute", inset: 0, display: "grid", placeItems: "center", cursor: "pointer" }}>
-                    <span style={{ width: 52, height: 52, borderRadius: "50%", background: ACCENT, display: "grid", placeItems: "center", boxShadow: "0 10px 24px rgba(255,74,28,.5)", opacity: state.playing ? 0 : 1, transition: "opacity .18s" }}>
+                    <span style={{ width: 52, height: 52, borderRadius: "50%", background: ACCENT, display: "grid", placeItems: "center", boxShadow: "0 10px 24px rgba(108,92,231,.5)", opacity: state.playing ? 0 : 1, transition: "opacity .18s" }}>
                       <Play size={22} fill="#fff" color="#fff" />
                     </span>
                   </div>
                 </div>
                 <div onMouseDown={startVideoMove} style={{ position: "absolute", left: "50%", top: 8, transform: "translateX(-50%)", width: 28, height: 28, borderRadius: 7, background: "#fff", border: `1px solid ${ACCENT}`, display: "grid", placeItems: "center", cursor: "move", zIndex: 4, boxShadow: "0 3px 8px rgba(0,0,0,.2)" }} title="영상 이동">
-                  <Move size={14} color="#C83920" />
+                  <Move size={14} color="#5B4BD6" />
                 </div>
               </div>
 
@@ -1405,7 +1405,7 @@ export function ShortcutEditor({ clip, onClose, onSave, saving = false }: Shortc
                 </div>
               )}
 
-              {state.deadzone && <div style={{ position: "absolute", inset: "7% 6%", border: "1.5px dashed rgba(255,74,28,.55)", borderRadius: 6, pointerEvents: "none" }} />}
+              {state.deadzone && <div style={{ position: "absolute", inset: "7% 6%", border: "1.5px dashed rgba(108,92,231,.55)", borderRadius: 6, pointerEvents: "none" }} />}
 
               {state.ytLayout && (
                 <>
@@ -1464,7 +1464,7 @@ export function ShortcutEditor({ clip, onClose, onSave, saving = false }: Shortc
                             minHeight: 76,
                             border: `1.5px solid ${active ? ACCENT : "#E7DECC"}`,
                             borderRadius: 12,
-                            background: active ? "#FFF1EC" : "#fff",
+                            background: active ? "#F2F0FE" : "#fff",
                             color: TEXT,
                             cursor: "pointer",
                             display: "grid",
@@ -1482,7 +1482,7 @@ export function ShortcutEditor({ clip, onClose, onSave, saving = false }: Shortc
                           </span>
                           <span style={{ minWidth: 0 }}>
                             <span style={{ display: "flex", alignItems: "center", gap: 7, minWidth: 0 }}>
-                              <span style={{ fontSize: 13.5, fontWeight: 800, color: active ? "#C83920" : TEXT, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{preset.label}</span>
+                              <span style={{ fontSize: 13.5, fontWeight: 800, color: active ? "#5B4BD6" : TEXT, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{preset.label}</span>
                               {active && <Check size={14} color={ACCENT} strokeWidth={3} />}
                             </span>
                             <span style={{ display: "block", marginTop: 4, fontSize: 11.5, color: "#8C8273", lineHeight: 1.35 }}>{preset.hint}</span>
@@ -1497,13 +1497,13 @@ export function ShortcutEditor({ clip, onClose, onSave, saving = false }: Shortc
                     {ASPECTS.map(item => {
                       const active = state.aspect === item.k;
                       return (
-                        <button key={item.k} onClick={() => setState(prev => ({ ...prev, aspect: item.k, titleY: item.tY, videoY: item.vY, bottomY: item.bY }))} style={{ border: `1.5px solid ${active ? ACCENT : "#E7DECC"}`, borderRadius: 11, background: active ? "#FFF1EC" : "#fff", padding: "11px 8px 8px", cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
+                        <button key={item.k} onClick={() => setState(prev => ({ ...prev, aspect: item.k, titleY: item.tY, videoY: item.vY, bottomY: item.bY }))} style={{ border: `1.5px solid ${active ? ACCENT : "#E7DECC"}`, borderRadius: 11, background: active ? "#F2F0FE" : "#fff", padding: "11px 8px 8px", cursor: "pointer", display: "flex", flexDirection: "column", alignItems: "center", gap: 8 }}>
                           <span style={{ width: 32, height: 54, borderRadius: 7, border: `2px solid ${active ? ACCENT : "#CFC6B4"}`, display: "block", position: "relative", overflow: "hidden", background: "#fff" }}>
                             <span style={{ position: "absolute", left: 0, right: 0, top: "50%", transform: "translateY(-50%)", height: item.h, background: active ? "linear-gradient(120deg,#FF8A4C,#2A160C)" : "#D8CDB6", display: "grid", placeItems: "center" }}>
                               <Play size={10} fill={active ? "#fff" : SOFT} color={active ? "#fff" : SOFT} />
                             </span>
                           </span>
-                          <span style={{ fontSize: 11.5, fontWeight: 700, color: active ? "#C83920" : "#5B5346", fontFamily: "'Space Mono',monospace" }}>{item.k}</span>
+                          <span style={{ fontSize: 11.5, fontWeight: 700, color: active ? "#5B4BD6" : "#5B5346", fontFamily: "'Space Mono',monospace" }}>{item.k}</span>
                         </button>
                       );
                     })}
@@ -1548,7 +1548,7 @@ export function ShortcutEditor({ clip, onClose, onSave, saving = false }: Shortc
                         const active = state.titleAlign === key;
                         const Icon = key === "left" ? AlignLeft : key === "right" ? AlignRight : AlignCenter;
                         return (
-                          <button key={key} onClick={() => set("titleAlign", key)} style={{ flex: 1, height: 38, border: `1px solid ${active ? ACCENT : LINE}`, borderRadius: 10, background: active ? "#FFF1EC" : "#fff", color: active ? "#C83920" : "#5B5346", display: "grid", placeItems: "center", cursor: "pointer" }}>
+                          <button key={key} onClick={() => set("titleAlign", key)} style={{ flex: 1, height: 38, border: `1px solid ${active ? ACCENT : LINE}`, borderRadius: 10, background: active ? "#F2F0FE" : "#fff", color: active ? "#5B4BD6" : "#5B5346", display: "grid", placeItems: "center", cursor: "pointer" }}>
                             <Icon size={18} />
                           </button>
                         );
@@ -1708,7 +1708,7 @@ export function ShortcutEditor({ clip, onClose, onSave, saving = false }: Shortc
             {state.playing ? <Pause size={18} fill="#fff" /> : <Play size={18} fill="#fff" />}
           </button>
           <div style={{ fontFamily: "'Space Mono',monospace", fontSize: 13, fontWeight: 700, flex: "0 0 auto" }}>
-            <span style={{ color: "#C83920" }}>{formatSeconds(state.t)}</span><span style={{ color: "#A0957F" }}> / {formatSeconds(duration)}</span>
+            <span style={{ color: "#5B4BD6" }}>{formatSeconds(state.t)}</span><span style={{ color: "#A0957F" }}> / {formatSeconds(duration)}</span>
           </div>
 
           <div data-editor-track onClick={onScrub} style={{ flex: 1, position: "relative", height: 44, borderRadius: 10, background: "#EBE3D4", cursor: "pointer", overflow: "hidden", display: "flex", alignItems: "center", minWidth: 180 }}>
@@ -1727,7 +1727,7 @@ export function ShortcutEditor({ clip, onClose, onSave, saving = false }: Shortc
               </>
             )}
             <div style={{ position: "absolute", top: 0, bottom: 0, left: playPct, width: 2, background: ACCENT, zIndex: 5, pointerEvents: "none" }}>
-              <span style={{ position: "absolute", top: -2, left: -6, width: 14, height: 14, borderRadius: "50%", background: ACCENT, boxShadow: "0 2px 6px rgba(255,74,28,.7)" }} />
+              <span style={{ position: "absolute", top: -2, left: -6, width: 14, height: 14, borderRadius: "50%", background: ACCENT, boxShadow: "0 2px 6px rgba(108,92,231,.7)" }} />
             </div>
           </div>
 
@@ -1803,7 +1803,7 @@ function TextLinePanel({
                 {TITLE_FONTS.map(item => {
                   const active = font === item.key;
                   return (
-                    <button key={item.key} onClick={() => onFont(item.key)} style={{ flex: 1, height: 38, border: `1.5px solid ${active ? ACCENT : LINE}`, borderRadius: 9, background: active ? "#FFF1EC" : "#fff", color: active ? "#C83920" : "#5B5346", fontFamily: `'${item.family}',sans-serif`, fontSize: 13.5, cursor: "pointer" }}>
+                    <button key={item.key} onClick={() => onFont(item.key)} style={{ flex: 1, height: 38, border: `1.5px solid ${active ? ACCENT : LINE}`, borderRadius: 9, background: active ? "#F2F0FE" : "#fff", color: active ? "#5B4BD6" : "#5B5346", fontFamily: `'${item.family}',sans-serif`, fontSize: 13.5, cursor: "pointer" }}>
                       {item.label}
                     </button>
                   );

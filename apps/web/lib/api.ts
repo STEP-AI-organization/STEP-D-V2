@@ -866,3 +866,16 @@ export function pplReportCsvUrl(jobId: string): string {
 export async function getClipYouTubeStats(clipId: string): Promise<ClipYouTubeStats> {
   return request<ClipYouTubeStats>(`/api/clips/${clipId}/youtube-stats`);
 }
+
+export type ReportChatMessage = { role: "user" | "assistant"; content: string };
+
+export async function reportChat(payload: {
+  messages: ReportChatMessage[];
+  context: Record<string, unknown>;
+}): Promise<{ answer: string }> {
+  return request<{ answer: string }>("/api/report/chat", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
