@@ -436,42 +436,79 @@ function MetaButton({ clip }: { clip: ShortcutEditorClip }) {
   const description =
     clip.caption?.trim() || "이 장면, 댓글 터집니다 👀 풀영상은 채널에서 확인하세요! #쇼츠 #전참시 #원희";
   const duration = fmtDur(clip.durSec);
-  const row = (label: string, value: string) => (
-    <div style={{ display: "flex", justifyContent: "space-between", gap: 12, fontSize: 12, padding: "5px 0", borderBottom: `1px solid ${LINE}` }}>
-      <span style={{ color: "#9A8F7E", flex: "0 0 auto" }}>{label}</span>
-      <span style={{ color: TEXT, fontWeight: 600, textAlign: "right" }}>{value}</span>
+
+  const stat = (label: string, value: string, sub: string) => (
+    <div style={{ background: SOFT, border: `1px solid ${LINE}`, borderRadius: 10, padding: "9px 11px" }}>
+      <div style={{ fontSize: 10, color: "#9A8F7E", fontWeight: 600 }}>{label}</div>
+      <div style={{ fontSize: 17, fontWeight: 800, color: ACCENT, marginTop: 2, letterSpacing: "-.4px", lineHeight: 1.1 }}>{value}</div>
+      <div style={{ fontSize: 9.5, color: "#B0A691", marginTop: 1 }}>{sub}</div>
     </div>
   );
+  const row = (label: string, value: string, accent?: boolean) => (
+    <div style={{ display: "flex", justifyContent: "space-between", gap: 12, fontSize: 12, padding: "6px 0", borderBottom: `1px solid ${LINE}` }}>
+      <span style={{ color: "#9A8F7E", flex: "0 0 auto" }}>{label}</span>
+      <span style={{ color: accent ? ACCENT : TEXT, fontWeight: 700, textAlign: "right" }}>{value}</span>
+    </div>
+  );
+
   return (
     <div style={{ position: "relative" }} onMouseEnter={() => setOpen(true)} onMouseLeave={() => setOpen(false)}>
       <button style={{ height: 38, padding: "0 14px", border: `1px solid ${LINE}`, borderRadius: 10, background: "#fff", color: "#5B5346", display: "inline-flex", alignItems: "center", gap: 7, fontSize: 13, fontWeight: 600, cursor: "default" }}>
         <Info size={15} />메타데이터
       </button>
       {open && (
-        <div style={{ position: "absolute", top: "calc(100% + 8px)", right: 0, width: 340, background: "#fff", border: `1px solid ${LINE}`, borderRadius: 12, boxShadow: "0 16px 40px -12px rgba(22,18,13,.4)", padding: "14px 16px", zIndex: 60, cursor: "default" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 8 }}>
-            <Youtube size={16} color="#FF0000" />
-            <span style={{ fontSize: 12, fontWeight: 800, color: "#FF0000", letterSpacing: ".3px" }}>쇼츠 배포 메타데이터</span>
+        <div style={{ position: "absolute", top: "calc(100% + 8px)", right: 0, width: 384, background: "#fff", border: `1px solid ${LINE}`, borderRadius: 14, boxShadow: "0 20px 50px -12px rgba(22,18,13,.45)", padding: "16px 18px", zIndex: 60, cursor: "default", maxHeight: "min(620px, 82vh)", overflowY: "auto" }}>
+          {/* header */}
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 12 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
+              <Youtube size={16} color="#FF0000" />
+              <span style={{ fontSize: 12.5, fontWeight: 800, color: TEXT, letterSpacing: ".2px" }}>쇼츠 배포 메타데이터</span>
+            </div>
+            <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 10, fontWeight: 800, color: "#fff", background: "linear-gradient(135deg,#6C5CE7,#22C3E0)", padding: "3px 9px", borderRadius: 999, letterSpacing: ".3px" }}>
+              <Sparkles size={11} />AI 최적화
+            </span>
           </div>
-          <div style={{ fontSize: 13, fontWeight: 750, color: TEXT, lineHeight: 1.4, marginBottom: 4 }}>{title}</div>
-          <div style={{ fontSize: 11.5, color: "#9A8F7E", marginBottom: 10 }}>{channel} · 발행 대기</div>
+
+          <div style={{ fontSize: 13.5, fontWeight: 750, color: TEXT, lineHeight: 1.4, marginBottom: 3 }}>{title}</div>
+          <div style={{ fontSize: 11.5, color: "#9A8F7E", marginBottom: 12 }}>{channel} · 발행 대기 · 9:16 쇼츠</div>
+
+          {/* AI 예측 성과 */}
+          <div style={{ fontSize: 10.5, fontWeight: 700, color: ACCENT, letterSpacing: ".4px", marginBottom: 7 }}>AI 예측 성과</div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginBottom: 14 }}>
+            {stat("예상 조회수", "12.4만", "30일 · 상위 8%")}
+            {stat("예상 CTR", "8.7%", "썸네일·제목 A/B")}
+            {stat("SEO 점수", "94", "100점 만점")}
+            {stat("완주율 예측", "71%", "벤치 대비 +18%p")}
+          </div>
+
+          {/* 발행 설정 */}
+          <div style={{ fontSize: 10.5, fontWeight: 700, color: "#9A8F7E", letterSpacing: ".4px", marginBottom: 2 }}>발행 설정</div>
           {row("발행 채널", channel)}
-          {row("형식", "쇼츠 (9:16)")}
+          {row("형식", "쇼츠 (9:16) · 1080×1920")}
           {row("길이", duration)}
           {row("공개 설정", "공개")}
           {row("카테고리", "엔터테인먼트")}
-          {row("발행 시점", "즉시 발행")}
-          <div style={{ marginTop: 10 }}>
-            <div style={{ fontSize: 11, color: "#9A8F7E", marginBottom: 5 }}>해시태그</div>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
-              {tags.map((t) => (
-                <span key={t} style={{ fontSize: 11, color: "#5B5346", background: SOFT, border: `1px solid ${LINE}`, borderRadius: 999, padding: "2px 8px" }}>#{t}</span>
-              ))}
-            </div>
+          {row("언어 · 자막", "한국어 · 자동 자막")}
+          {row("AI 추천 발행", "수 19:00 (KST)", true)}
+
+          {/* 해시태그 */}
+          <div style={{ display: "flex", alignItems: "center", gap: 6, margin: "12px 0 6px" }}>
+            <span style={{ fontSize: 11, color: "#9A8F7E" }}>해시태그</span>
+            <span style={{ fontSize: 9, fontWeight: 700, color: ACCENT, background: "rgba(108,92,231,.1)", padding: "1px 6px", borderRadius: 999 }}>AI 추천</span>
           </div>
-          <div style={{ marginTop: 10 }}>
-            <div style={{ fontSize: 11, color: "#9A8F7E", marginBottom: 4 }}>설명</div>
-            <div style={{ fontSize: 11.5, color: "#5B5346", lineHeight: 1.5 }}>{description}</div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
+            {tags.map((t) => (
+              <span key={t} style={{ fontSize: 11, color: "#5B5346", background: SOFT, border: `1px solid ${LINE}`, borderRadius: 999, padding: "2px 8px" }}>#{t}</span>
+            ))}
+          </div>
+
+          {/* 설명 */}
+          <div style={{ fontSize: 11, color: "#9A8F7E", margin: "12px 0 4px" }}>설명</div>
+          <div style={{ fontSize: 11.5, color: "#5B5346", lineHeight: 1.5 }}>{description}</div>
+
+          <div style={{ display: "flex", alignItems: "center", gap: 5, marginTop: 12, paddingTop: 10, borderTop: `1px solid ${LINE}`, fontSize: 10, color: "#B0A691" }}>
+            <Sparkles size={11} color={ACCENT} />
+            <span>STEP D AI가 제목·태그·설명·발행 시점을 자동 최적화했습니다.</span>
           </div>
         </div>
       )}
