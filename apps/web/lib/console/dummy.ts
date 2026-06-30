@@ -287,7 +287,7 @@ export const DUMMY_CHANNELS: DummyChannel[] = [
 ];
 
 /* ----- schedule dummy (calendar demo data, 발행/예약 mix) ----- */
-export const DUMMY_SCHED: SchedItem[] = [
+const SCHED_BASE: SchedItem[] = [
   // ─── June (month=5) ── past + today: 발행 ───────────────────────────────
   { publishId:"ds-001", clipId:"dc-001", year:2026, month:5, day:2, time:"09:00", title:"[나는 솔로 22기] 첫 만남 케미 폭발 순간", status:"발행", rawStatus:"published" },
   { publishId:"ds-002", clipId:"dc-002", year:2026, month:5, day:2, time:"18:00", title:"[현역가왕2] 고음 폭발 – 심사위원 전원 기립", status:"발행", rawStatus:"published" },
@@ -371,6 +371,42 @@ export const DUMMY_SCHED: SchedItem[] = [
   { publishId:"ds-079", clipId:"dc-079", year:2026, month:6, day:20, time:"09:00", title:"[골 때리는 그녀들] 우승 트로피 수여 – 영광의 순간", status:"예약", rawStatus:"scheduled" },
   { publishId:"ds-080", clipId:"dc-080", year:2026, month:6, day:21, time:"18:00", title:"[한일가왕전] 시즌 총결산 – 명장면 모음", status:"예약", rawStatus:"scheduled" },
 ];
+
+// ── 데모 밀도 보강: 결정적(비랜덤 → 하이드레이션 안전) 생성으로 일자별 배포 수를 약 2배로 ──
+const SCHED_X_PROGRAMS = ["나는 솔로 22기", "현역가왕2", "강철부대W", "쯔양먹방", "지구마불 시즌3", "골 때리는 그녀들", "한일가왕전", "미스터리 수사단"];
+const SCHED_X_TITLES = ["비하인드 미공개 컷", "댓글 반응 베스트", "역대급 리액션 다시보기", "1분 요약 하이라이트", "MZ 시청자 반응 폭발", "쇼츠 조회수 1위 클립", "라이브 채팅 발췌", "명대사 모음"];
+const SCHED_X_TIMES = ["07:30", "11:00", "13:30", "15:00", "20:00", "23:00"];
+
+function buildSchedExtra(): SchedItem[] {
+  const out: SchedItem[] = [];
+  let n = 81;
+  const push = (month: number, day: number, k: number, status: string, raw: string) => {
+    const seed = day + k * 5 + month * 7;
+    out.push({
+      publishId: `ds-${String(n).padStart(3, "0")}`,
+      clipId: `dc-${String(n).padStart(3, "0")}`,
+      year: 2026,
+      month,
+      day,
+      time: SCHED_X_TIMES[seed % SCHED_X_TIMES.length],
+      title: `[${SCHED_X_PROGRAMS[seed % SCHED_X_PROGRAMS.length]}] ${SCHED_X_TITLES[(seed + 3) % SCHED_X_TITLES.length]}`,
+      status,
+      rawStatus: raw,
+    });
+    n++;
+  };
+  for (let d = 2; d <= 29; d++) {
+    const cnt = d % 3 === 0 ? 3 : 2;
+    for (let k = 0; k < cnt; k++) push(5, d, k, "발행", "published");
+  }
+  for (let d = 1; d <= 21; d++) {
+    const cnt = d % 2 === 0 ? 2 : 1;
+    for (let k = 0; k < cnt; k++) push(6, d, k, "예약", "scheduled");
+  }
+  return out;
+}
+
+export const DUMMY_SCHED: SchedItem[] = [...SCHED_BASE, ...buildSchedExtra()];
 
 /* ----- settlement rows (settings 정산) ----- */
 export type SettleRow = { name: string; color: string; smr: boolean; rpm: string; share: string; views: string; amount: string };
