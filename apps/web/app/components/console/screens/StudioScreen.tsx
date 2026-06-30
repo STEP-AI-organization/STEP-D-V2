@@ -199,7 +199,7 @@ export function StudioScreen() {
             <div style={{ display: "flex", flexDirection: "column", gap: 9 }}>
               <div style={{ fontSize: 12, fontWeight: 700, color: C.body }}>유튜브 링크로 가져오기</div>
               <input value={c.ytUrl} onChange={(e) => c.setYtUrl(e.target.value)} placeholder="https://youtube.com/watch?v=…" style={input} />
-              <button onClick={c.importYt} className="hv-soft" style={{ ...ghostBtn, padding: "9px 12px", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
+              <button onClick={() => c.setYtUrl("https://www.youtube.com/watch?v=bkk4g04iaGA")} className="hv-soft" style={{ ...ghostBtn, padding: "9px 12px", display: "flex", alignItems: "center", justifyContent: "center", gap: 6 }}>
                 <Youtube size={15} color="#FF0000" /> 링크 준비
               </button>
               {c.ytPreviewId && <div style={{ fontSize: 11.5, color: C.green }}>링크 준비 완료 · {c.fileName}</div>}
@@ -226,15 +226,15 @@ export function StudioScreen() {
               <Sparkles size={15} />
               <span style={{ fontSize: 11.5, fontWeight: 650 }}>쇼츠</span>
             </button>
-            {/* PPL분석 — 실제 동작: 쇼츠 파이프라인 후 자동 PPL 실행 */}
+            {/* 클립 — 실제 동작: 쇼츠 파이프라인 실행 */}
             <button
-              onClick={c.beginPplFlow}
+              onClick={c.beginUpload}
               disabled={!c.selectedFile && !c.ytUrl.trim()}
               className="hv-soft"
               style={{ ...ghostBtn, height: 52, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 5, opacity: !c.selectedFile && !c.ytUrl.trim() ? 0.45 : 1 }}
             >
               <Tag size={15} />
-              <span style={{ fontSize: 11.5, fontWeight: 650 }}>PPL분析</span>
+              <span style={{ fontSize: 11.5, fontWeight: 650 }}>클립</span>
             </button>
           </div>
           {c.backendError && <div style={{ marginTop: 10, fontSize: 12.5, color: C.danger }}>{c.backendError}</div>}
