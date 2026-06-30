@@ -77,7 +77,7 @@ export default function LandingPage() {
             <span className="grad-txt">자산을 수익으로</span>
           </h1>
           <p className="sub">
-            방송이 끝난 영상을 STEP D가 분석해, 잘 될 장면만 골라 하이라이트·쇼츠·클립으로 만들고, 모든 채널에 유통해 광고(조회수)와 커머스로 수익까지. 콘텐츠가 돈이 되는 미디어 운영 서비스입니다.
+            방송이 끝난 영상을 STEP D가 분석해, 잘 될 장면만 골라 <span style={{ whiteSpace: "nowrap" }}>하이라이트·쇼츠·클립</span>으로 만들고, 모든 채널에 유통해 <span style={{ whiteSpace: "nowrap" }}>광고(조회수)</span>와 커머스로 수익까지. 콘텐츠가 돈이 되는 미디어 운영 서비스입니다.
           </p>
           <div className="cta">
             <Link href={APP_URL} className="btn btn-p">
