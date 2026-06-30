@@ -158,18 +158,18 @@ export type CommerceProduct = {
   fg: string;
 };
 export const PRODUCTS: CommerceProduct[] = [
-  { id: "pr1", brand: "농심", product: "신라면 멀티팩", cat: "식품", prog: "쯔양먹방 · 5회", ts: "02:14", plat: "쿠팡", platColor: "#E94928", rate: "3%", clicks: "12,400", revN: 8600000, bg: "#FDEBE3", fg: "#C2603A" },
-  { id: "pr2", brand: "삼성전자", product: "갤럭시 버즈3", cat: "전자·IT", prog: "현역가왕2 · 7회", ts: "41:05", plat: "쿠팡", platColor: "#E94928", rate: "3.5%", clicks: "8,200", revN: 14200000, bg: "#E6EAF5", fg: "#2D4FA0" },
-  { id: "pr3", brand: "나이키", product: "머큐리얼 축구화", cat: "스포츠", prog: "골 때리는 그녀들 · 12회", ts: "27:33", plat: "쿠팡", platColor: "#E94928", rate: "4%", clicks: "9,600", revN: 11800000, bg: "#ECECF2", fg: "#16181D" },
+  { id: "pr1", brand: "농심", product: "신라면 멀티팩", cat: "식품", prog: "쯔양먹방 · 5회", ts: "02:14", plat: "쿠팡", platColor: "#346AFF", rate: "3%", clicks: "12,400", revN: 8600000, bg: "#FDEBE3", fg: "#C2603A" },
+  { id: "pr2", brand: "삼성전자", product: "갤럭시 버즈3", cat: "전자·IT", prog: "현역가왕2 · 7회", ts: "41:05", plat: "쿠팡", platColor: "#346AFF", rate: "3.5%", clicks: "8,200", revN: 14200000, bg: "#E6EAF5", fg: "#2D4FA0" },
+  { id: "pr3", brand: "나이키", product: "머큐리얼 축구화", cat: "스포츠", prog: "골 때리는 그녀들 · 12회", ts: "27:33", plat: "쿠팡", platColor: "#346AFF", rate: "4%", clicks: "9,600", revN: 11800000, bg: "#ECECF2", fg: "#16181D" },
   { id: "pr4", brand: "올리브영", product: "로즈 립틴트", cat: "패션·뷰티", prog: "나는 솔로 22기 · 5회", ts: "22:07", plat: "올리브영", platColor: "#3CB05A", rate: "8%", clicks: "15,300", revN: 9600000, bg: "#E6F0E9", fg: "#1F8A5B" },
-  { id: "pr5", brand: "다이슨", product: "에어랩 멀티스타일러", cat: "패션·뷰티", prog: "나는 솔로 22기 · 3회", ts: "18:42", plat: "쿠팡", platColor: "#E94928", rate: "3.5%", clicks: "6,800", revN: 21000000, bg: "#EDE9FE", fg: "#6C5CE7" },
-  { id: "pr6", brand: "코카콜라", product: "제로 350ml", cat: "식품", prog: "쯔양먹방 · 5회", ts: "05:51", plat: "쿠팡", platColor: "#E94928", rate: "3%", clicks: "5,400", revN: 4200000, bg: "#FDEBEA", fg: "#C0392B" },
+  { id: "pr5", brand: "다이슨", product: "에어랩 멀티스타일러", cat: "패션·뷰티", prog: "나는 솔로 22기 · 3회", ts: "18:42", plat: "쿠팡", platColor: "#346AFF", rate: "3.5%", clicks: "6,800", revN: 21000000, bg: "#EDE9FE", fg: "#6C5CE7" },
+  { id: "pr6", brand: "코카콜라", product: "제로 350ml", cat: "식품", prog: "쯔양먹방 · 5회", ts: "05:51", plat: "쿠팡", platColor: "#346AFF", rate: "3%", clicks: "5,400", revN: 4200000, bg: "#FDEBEA", fg: "#C0392B" },
   { id: "pr7", brand: "스탠리", product: "어드벤처 텀블러", cat: "리빙", prog: "지구마불 시즌3 · 4회", ts: "33:18", plat: "11번가", platColor: "#FF5A4D", rate: "4%", clicks: "7,100", revN: 5800000, bg: "#E6F0E9", fg: "#1F7A4D" },
   { id: "pr8", brand: "무신사", product: "스탠다드 후디", cat: "패션·뷰티", prog: "강철부대W · 3회", ts: "14:29", plat: "무신사", platColor: "#16181D", rate: "5%", clicks: "4,900", revN: 6700000, bg: "#ECECF2", fg: "#16181D" },
 ];
 
 export const PLATFORM_META: Record<string, string> = {
-  쿠팡: "#E94928",
+  쿠팡: "#346AFF",
   올리브영: "#3CB05A",
   무신사: "#16181D",
   "11번가": "#FF5A4D",

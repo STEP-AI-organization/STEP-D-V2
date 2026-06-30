@@ -5,7 +5,7 @@ import { C, card, ghostBtn } from "@/lib/console/theme";
 import { useConsole } from "../ConsoleProvider";
 
 const COMMERCE_ACCOUNTS = [
-  { k: "coupang", name: "쿠팡 파트너스", color: "#E94928" },
+  { k: "coupang", name: "쿠팡 파트너스", color: "#346AFF" },
   { k: "oliveyoung", name: "올리브영 쇼핑 파트너", color: "#3CB05A" },
   { k: "musinsa", name: "무신사 파트너", color: "#16181D" },
   { k: "st11", name: "11번가 파트너스", color: "#FF5A4D" },
