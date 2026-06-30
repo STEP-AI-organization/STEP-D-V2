@@ -114,10 +114,9 @@ export function StudioScreen() {
                     </div>
                     <div style={{ flex: 1, minHeight: 10 }} />
                     <div style={{ display: "flex", gap: 6, marginTop: 10 }}>
-                      <button onClick={() => c.openClipEditor(clip.id)} className="hv-btn-primary" style={{ flex: 2, ...primaryBtn, height: 34, display: "flex", alignItems: "center", justifyContent: "center", gap: 5 }}>
+                      <button onClick={() => c.openClipEditor(clip.id)} className="hv-btn-primary" style={{ flex: 1, ...primaryBtn, height: 34, display: "flex", alignItems: "center", justifyContent: "center", gap: 5 }}>
                         <Pencil size={13} /> 편집
                       </button>
-                      <button onClick={() => c.openPublishDraft(clip, "now")} className="hv-soft" style={{ flex: 1, ...ghostBtn, height: 34 }}>발행</button>
                       <a href={clipDownloadUrl(clip.id)} className="hv-soft" title="다운로드" style={{ ...ghostBtn, width: 34, height: 34, display: "flex", alignItems: "center", justifyContent: "center" }}>
                         <Download size={14} />
                       </a>

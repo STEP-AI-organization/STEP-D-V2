@@ -151,7 +151,7 @@ export type CommerceItem = {
  * 라이브로 만든 것처럼 노출한다. 시연이 끝나면 DEMO_MODE=false 로 끄면 실제 분석으로 복귀. */
 const DEMO_MODE = true;
 const DEMO_JOB_ID = "0dae66ed8cc64983b69222457721f4e2";
-const DEMO_FAKE_MS = 9500; // 가짜 분석 진행 시간(대략)
+const DEMO_FAKE_MS = 80000; // 가짜 분석 진행 시간(대략 1분 20초)
 
 function useConsoleState() {
   /* ---- nav / global ---- */

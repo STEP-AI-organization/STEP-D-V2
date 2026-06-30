@@ -472,7 +472,6 @@ function MetaButton() {
             <div style={{ fontSize: 11, color: "#9A8F7E", marginBottom: 4 }}>설명</div>
             <div style={{ fontSize: 11.5, color: "#5B5346", lineHeight: 1.5 }}>{YT_META.description}</div>
           </div>
-          <div style={{ marginTop: 10, fontSize: 10, color: "#B8AE9E" }}>※ 데모용 예시 데이터입니다.</div>
         </div>
       )}
     </div>
