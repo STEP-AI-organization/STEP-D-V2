@@ -150,7 +150,7 @@ export type CommerceItem = {
  * 숨겨 뒀다가 유튜브 링크로 "쇼츠 만들기"를 실행하면 가짜 진행률을 보여준 뒤 그 결과를
  * 라이브로 만든 것처럼 노출한다. 시연이 끝나면 DEMO_MODE=false 로 끄면 실제 분석으로 복귀. */
 const DEMO_MODE = true;
-const DEMO_JOB_ID = "0dae66ed8cc64983b69222457721f4e2";
+const DEMO_JOB_ID = "5ddeed0f1d084df38743470d36b0038a";
 const DEMO_FAKE_MS = 80000; // 가짜 분석 진행 시간(대략 1분 20초)
 
 function useConsoleState() {
@@ -251,6 +251,14 @@ function useConsoleState() {
     if (toastTimer.current) clearTimeout(toastTimer.current);
     setToast(msg);
     toastTimer.current = setTimeout(() => setToast(null), 2400);
+  };
+
+  // 데모 모드: 실제 백엔드 변경 기능(삭제·저장·PPL분석·배포 등)을 토스트만 띄우고 무력화한다.
+  // 읽기/네비게이션/가짜 데모 플로우는 그대로. 시연이 끝나면 DEMO_MODE=false 로 복귀.
+  const demoBlocked: unknown = (..._args: unknown[]) => {
+    setToast("데모 모드에서는 실제 기능이 비활성화돼 있어요");
+    setTimeout(() => setToast(null), 2400);
+    return Promise.resolve();
   };
 
   const sourcePreviewUrl = useMemo(() => (selectedFile ? URL.createObjectURL(selectedFile) : null), [selectedFile]);
@@ -587,6 +595,10 @@ function useConsoleState() {
     // 데모 모드: 유튜브 링크로 들어온 생성은 실제 분석 대신 미리 만든 잡을 공개.
     if (DEMO_MODE && !selectedFile && ytUrl.trim()) {
       runDemoReveal();
+      return;
+    }
+    if (DEMO_MODE) {
+      (demoBlocked as () => Promise<void>)();
       return;
     }
     setBackendError(null);
@@ -1309,10 +1321,10 @@ function useConsoleState() {
 
   return {
     // nav / global
-    nav, setNav: switchNav, me, login, logout, connectYouTube, showToast, toast,
+    nav, setNav: switchNav, me, login: DEMO_MODE ? (demoBlocked as typeof login) : login, logout: DEMO_MODE ? (demoBlocked as typeof logout) : logout, connectYouTube: DEMO_MODE ? (demoBlocked as typeof connectYouTube) : connectYouTube, showToast, toast,
     // studio
     projects, sched, pickerClips, studioLoaded, loadStudio,
-    openProject, openProjectDetail, closeProject, handleDeleteProject,
+    openProject, openProjectDetail, closeProject, handleDeleteProject: DEMO_MODE ? (demoBlocked as typeof handleDeleteProject) : handleDeleteProject,
     view, setView, dragging, setDragging, fileName, ytUrl, setYtUrl, ytPreviewId, ytTitle,
     progress, stageIndex, selectedFile, sourcePreviewUrl, inspection, inspecting, backendError,
     backendClips, uploadOpen, setUploadOpen, openUpload,
@@ -1320,28 +1332,28 @@ function useConsoleState() {
     activeClips, currentJobId, replaceClip,
     // clip editing
     selectedClipId, setSelectedClipId, editorClipId, editorClip, openClipEditor, setEditorClipId,
-    saveShortcutEditor, applyBusy, doRetrim, retrimBusy, regenTitles, regenThumbs, titleBusy, thumbBusy, revisions,
+    saveShortcutEditor: DEMO_MODE ? (demoBlocked as typeof saveShortcutEditor) : saveShortcutEditor, applyBusy, doRetrim: DEMO_MODE ? (demoBlocked as typeof doRetrim) : doRetrim, retrimBusy, regenTitles: DEMO_MODE ? (demoBlocked as typeof regenTitles) : regenTitles, regenThumbs: DEMO_MODE ? (demoBlocked as typeof regenThumbs) : regenThumbs, titleBusy, thumbBusy, revisions,
     // clip detail drawer
     silenceReport, silenceBusy, loadSilenceReport, clipYtStats, clipStatsBusy, loadClipYtStats,
     // highlight
-    highlightDraft, setHighlightDraft, highlightBusy, doRenderHighlight,
+    highlightDraft, setHighlightDraft, highlightBusy, doRenderHighlight: DEMO_MODE ? (demoBlocked as typeof doRenderHighlight) : doRenderHighlight,
     // ppl / commerce
-    pplData, pplBusy, runPpl, savePpl,
+    pplData, pplBusy, runPpl: DEMO_MODE ? (demoBlocked as typeof runPpl) : runPpl, savePpl: DEMO_MODE ? (demoBlocked as typeof savePpl) : savePpl,
     commerceItems, commerceLoaded, commerceLoading, commerceAnalyzing,
-    loadCommerce, analyzeClipForCommerce, saveCommerceLink, removeCommerceItem,
+    loadCommerce, analyzeClipForCommerce: DEMO_MODE ? (demoBlocked as typeof analyzeClipForCommerce) : analyzeClipForCommerce, saveCommerceLink: DEMO_MODE ? (demoBlocked as typeof saveCommerceLink) : saveCommerceLink, removeCommerceItem: DEMO_MODE ? (demoBlocked as typeof removeCommerceItem) : removeCommerceItem,
     // channels
     channels, ytAuthed, defaultPrivacy, openChannel, openChannelDetail, closeChannel,
     openVideo, setOpenVideo, videoComments, commentSummary, loadCommentSummary,
-    insights, insightsBusy, loadInsights, channelBusy, makeDefaultChannel, removeChannel,
-    styleNoteDraft, setStyleNoteDraft, styleNoteSaving, saveStyleNote, defChannel,
+    insights, insightsBusy, loadInsights, channelBusy, makeDefaultChannel: DEMO_MODE ? (demoBlocked as typeof makeDefaultChannel) : makeDefaultChannel, removeChannel: DEMO_MODE ? (demoBlocked as typeof removeChannel) : removeChannel,
+    styleNoteDraft, setStyleNoteDraft, styleNoteSaving, saveStyleNote: DEMO_MODE ? (demoBlocked as typeof saveStyleNote) : saveStyleNote, defChannel,
     // channel draft
     channelDraftId, channelDraft, selectedDraftChannelIds, channelDraftLoading, channelDraftSaving,
-    closeChannelDraft, confirmChannelDraft, toggleDraftChannel,
+    closeChannelDraft, confirmChannelDraft: DEMO_MODE ? (demoBlocked as typeof confirmChannelDraft) : confirmChannelDraft, toggleDraftChannel,
     // publish
-    publishDraft, setPublishDraft, publishState, publishing, openPublishDraft, doPublish,
+    publishDraft, setPublishDraft, publishState, publishing, openPublishDraft, doPublish: DEMO_MODE ? (demoBlocked as typeof doPublish) : doPublish,
     // schedule
-    schedAction, setSchedAction, schedBusy, openReschedule, doReschedule, doCancelSched,
-    autoDist, setAutoDist, autoDistBusy, openAutoDist, toggleAutoClip, doAutoDistribute,
+    schedAction, setSchedAction, schedBusy, openReschedule, doReschedule: DEMO_MODE ? (demoBlocked as typeof doReschedule) : doReschedule, doCancelSched: DEMO_MODE ? (demoBlocked as typeof doCancelSched) : doCancelSched,
+    autoDist, setAutoDist, autoDistBusy, openAutoDist, toggleAutoClip, doAutoDistribute: DEMO_MODE ? (demoBlocked as typeof doAutoDistribute) : doAutoDistribute,
   };
 }
 

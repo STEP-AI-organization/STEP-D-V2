@@ -433,8 +433,13 @@ function MetaButton({ clip }: { clip: ShortcutEditorClip }) {
   const title = (clip.yt?.title || clip.title || "").trim() || "제목 미설정";
   const channel = (clip.channelName || "전지적 참견 시점").trim();
   const tags = clip.yt?.tags?.length ? clip.yt.tags : ["쇼츠", "전참시", "원희", "아일릿", "예능"];
-  const description =
-    clip.caption?.trim() || "이 장면, 댓글 터집니다 👀 풀영상은 채널에서 확인하세요! #쇼츠 #전참시 #원희";
+  // 클립별 설명: 훅(캡션/제목) + CTA + 해시태그 → 영상마다 다른 설명이 채워진다.
+  const hook = (clip.caption?.trim() || clip.reason?.trim() || title).replace(/\s+/g, " ");
+  const description = [
+    hook,
+    `📺 풀영상은 ${channel} 채널에서 확인하세요!`,
+    tags.map((t) => "#" + t).join(" "),
+  ].join("\n");
   const duration = fmtDur(clip.durSec);
 
   const stat = (label: string, value: string, sub: string) => (
@@ -504,7 +509,7 @@ function MetaButton({ clip }: { clip: ShortcutEditorClip }) {
 
           {/* 설명 */}
           <div style={{ fontSize: 11, color: "#9A8F7E", margin: "12px 0 4px" }}>설명</div>
-          <div style={{ fontSize: 11.5, color: "#5B5346", lineHeight: 1.5 }}>{description}</div>
+          <div style={{ fontSize: 11.5, color: "#5B5346", lineHeight: 1.55, whiteSpace: "pre-wrap" }}>{description}</div>
 
           <div style={{ display: "flex", alignItems: "center", gap: 5, marginTop: 12, paddingTop: 10, borderTop: `1px solid ${LINE}`, fontSize: 10, color: "#B0A691" }}>
             <Sparkles size={11} color={ACCENT} />
