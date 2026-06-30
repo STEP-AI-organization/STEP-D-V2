@@ -15,9 +15,15 @@ type Track = {
   start: number;
   end: number;
   kfs: Keyframe[];
+  detectionTimes: number[];
 };
+type Segment = { start: number; end: number };
 
 const PAD = 0.75;
+const SEGMENT_PRE_ROLL = 0.45;
+const SEGMENT_POST_ROLL = 0.75;
+const SEGMENT_MERGE_GAP = 0.7;
+const SKIP_COOLDOWN_MS = 280;
 
 const lerp = (a: number, b: number, r: number) => a + (b - a) * r;
 const clamp = (value: number, min = 0, max = 1) => Math.min(max, Math.max(min, value));
@@ -124,12 +130,64 @@ function sampleBox(track: Track, t: number, maxGap: number): Box | null {
   return null;
 }
 
+function segmentsForTrack(track: Track, maxGap: number): Segment[] {
+  const times = [...track.detectionTimes]
+    .filter((value) => Number.isFinite(value))
+    .sort((a, b) => a - b);
+  if (!times.length) {
+    return [{ start: Math.max(0, track.start - SEGMENT_PRE_ROLL), end: track.start + 2.4 }];
+  }
+
+  const segments: Segment[] = [];
+  let start = times[0];
+  let end = times[0];
+  const splitGap = Math.max(0.9, Math.min(maxGap, 2.8));
+  for (let i = 1; i < times.length; i++) {
+    const next = times[i];
+    if (next - end <= splitGap) {
+      end = next;
+      continue;
+    }
+    segments.push({ start: Math.max(0, start - SEGMENT_PRE_ROLL), end: end + SEGMENT_POST_ROLL });
+    start = next;
+    end = next;
+  }
+  segments.push({ start: Math.max(0, start - SEGMENT_PRE_ROLL), end: end + SEGMENT_POST_ROLL });
+  return segments;
+}
+
+function mergeSegments(tracks: Track[], maxGap: number): Segment[] {
+  const source = tracks
+    .flatMap((track) => segmentsForTrack(track, maxGap))
+    .filter((segment) => Number.isFinite(segment.start) && Number.isFinite(segment.end) && segment.end > segment.start)
+    .sort((a, b) => a.start - b.start);
+  const merged: Segment[] = [];
+  for (const segment of source) {
+    const last = merged[merged.length - 1];
+    if (last && segment.start <= last.end + SEGMENT_MERGE_GAP) {
+      last.end = Math.max(last.end, segment.end);
+    } else {
+      merged.push({ ...segment });
+    }
+  }
+  return merged;
+}
+
+function segmentAt(segments: Segment[], t: number): Segment | null {
+  return segments.find((segment) => segment.start - 0.08 <= t && t <= segment.end + 0.08) || null;
+}
+
+function nextSegment(segments: Segment[], t: number): Segment | null {
+  return segments.find((segment) => segment.start > t + 0.12) || segments[0] || null;
+}
+
 // 9:16 player that draws brand/product bounding boxes synced to playback.
 // Boxes are normalized 0..1 of the rendered frame. The per-frame detections form
 // a keyframe track per product; the box is interpolated between keyframes and
 // hidden whenever the product is not on screen (no nearby detection).
 export function PplOverlayPlayer({ analysis, videoUrl, poster, maxWidth = 300 }: { analysis: PplAnalysis; videoUrl?: string; poster?: string; maxWidth?: number }) {
   const videoRef = useRef<HTMLVideoElement>(null);
+  const lastSkipRef = useRef(0);
   const [t, setT] = useState(0);
 
   useEffect(() => {
@@ -182,7 +240,8 @@ export function PplOverlayPlayer({ analysis, videoUrl, poster, maxWidth = 300 }:
       }
     }
     return analysis.products.map((product) => {
-      const kfs = buildKeyframes(product, raw.get(product.id) || []);
+      const detections = raw.get(product.id) || [];
+      const kfs = buildKeyframes(product, detections);
       const { start, end } = detectionWindow(product, kfs);
       return {
         id: product.id,
@@ -192,6 +251,7 @@ export function PplOverlayPlayer({ analysis, videoUrl, poster, maxWidth = 300 }:
         start,
         end,
         kfs,
+        detectionTimes: detections.map((kf) => kf.t),
       };
     });
   }, [analysis]);
@@ -204,6 +264,7 @@ export function PplOverlayPlayer({ analysis, videoUrl, poster, maxWidth = 300 }:
     const starts = tracks.map((track) => track.start).filter((value) => Number.isFinite(value));
     return starts.length ? Math.min(...starts) : 0;
   }, [tracks]);
+  const visibleSegments = useMemo(() => mergeSegments(tracks, maxGap), [tracks, maxGap]);
 
   useEffect(() => {
     const v = videoRef.current;
@@ -218,6 +279,19 @@ export function PplOverlayPlayer({ analysis, videoUrl, poster, maxWidth = 300 }:
     else v.addEventListener("loadedmetadata", cue, { once: true });
     return () => v.removeEventListener("loadedmetadata", cue);
   }, [cueStart, videoUrl]);
+
+  useEffect(() => {
+    const v = videoRef.current;
+    if (!v || !videoUrl || v.paused || !visibleSegments.length) return;
+    if (segmentAt(visibleSegments, t)) return;
+    const now = Date.now();
+    if (now - lastSkipRef.current < SKIP_COOLDOWN_MS) return;
+    const target = nextSegment(visibleSegments, t);
+    if (!target || Math.abs(v.currentTime - target.start) < 0.2) return;
+    lastSkipRef.current = now;
+    v.currentTime = target.start;
+    setT(target.start);
+  }, [t, videoUrl, visibleSegments]);
 
   // Boxes visible at the current playback time.
   const active = useMemo(() => {
@@ -242,7 +316,7 @@ export function PplOverlayPlayer({ analysis, videoUrl, poster, maxWidth = 300 }:
           <div key={d.id} style={{ position: "absolute", left: `${d.box[0] * 100}%`, top: `${d.box[1] * 100}%`, width: `${d.box[2] * 100}%`, height: `${d.box[3] * 100}%`, border: `2px solid ${color}`, borderRadius: 7, boxShadow: `0 0 0 1px rgba(0,0,0,.5), 0 0 18px ${color}66, inset 0 0 18px rgba(255,255,255,.08)`, pointerEvents: "none", transition: "left .08s linear, top .08s linear, width .08s linear, height .08s linear" }}>
             <span style={{ position: "absolute", inset: -5, borderRadius: 10, border: `1px solid ${color}55`, opacity: 0.9 }} />
             <span style={{ position: "absolute", left: -2, top: d.box[1] < 0.08 ? "100%" : -24, whiteSpace: "nowrap", fontSize: 10.5, fontWeight: 850, color: "#fff", background: `linear-gradient(90deg, ${color}, rgba(16,18,24,.9))`, padding: "3px 7px", borderRadius: 5, boxShadow: "0 4px 12px rgba(0,0,0,.42)" }}>
-              {d.brand} · {d.product}
+              {d.brand} / {d.product}
               <span style={{ marginLeft: 6, opacity: 0.82, fontSize: 9 }}>{Math.round(d.confidence * 100)}%</span>
             </span>
           </div>
