@@ -8,7 +8,7 @@ const PRIVACIES: Privacy[] = ["public", "unlisted", "private"];
 
 function Backdrop({ onClose, children }: { onClose: () => void; children: React.ReactNode }) {
   return (
-    <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 70, background: "rgba(16,18,24,.4)", display: "grid", placeItems: "center", padding: 24, animation: "scrimIn .18s ease" }}>
+    <div onClick={onClose} style={{ position: "fixed", inset: 0, zIndex: 130, background: "rgba(16,18,24,.4)", display: "grid", placeItems: "center", padding: 24, animation: "scrimIn .18s ease" }}>
       <div onClick={(e) => e.stopPropagation()} style={{ animation: "scPop .25s ease both" }}>
         {children}
       </div>

@@ -90,6 +90,9 @@ type ShortcutEditorProps = {
   onClose: () => void;
   onSave: (draft: ShortcutEditorDraft) => void | Promise<void>;
   saving?: boolean;
+  onPublish?: () => void;
+  onAnalyzeBrand?: () => void;
+  analyzing?: boolean;
 };
 
 type EditorTab = "title" | "channel" | "layout" | "captions" | "elements";
@@ -962,7 +965,7 @@ function EditableText({
   );
 }
 
-export function ShortcutEditor({ clip, onClose, onSave, saving = false }: ShortcutEditorProps) {
+export function ShortcutEditor({ clip, onClose, onSave, saving = false, onPublish, onAnalyzeBrand, analyzing = false }: ShortcutEditorProps) {
   const [state, setState] = useState<EditorState>(() => makeInitialState(clip));
   const [toast, setToast] = useState<string | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1278,6 +1281,16 @@ export function ShortcutEditor({ clip, onClose, onSave, saving = false }: Shortc
             쇼츠 제목, 자막, 레이아웃을 미리 보면서 조정하세요.
           </span>
           <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 10 }}>
+            {onAnalyzeBrand && (
+              <button onClick={onAnalyzeBrand} disabled={analyzing} style={{ height: 38, padding: "0 14px", border: `1px solid ${LINE}`, borderRadius: 10, background: "#fff", color: "#5B5346", display: "inline-flex", alignItems: "center", gap: 7, fontSize: 13, fontWeight: 600, cursor: analyzing ? "default" : "pointer", opacity: analyzing ? 0.6 : 1 }}>
+                <Sparkles size={15} />{analyzing ? "분석 중..." : "브랜드 분석"}
+              </button>
+            )}
+            {onPublish && (
+              <button onClick={onPublish} style={{ height: 38, padding: "0 14px", border: `1px solid ${LINE}`, borderRadius: 10, background: "#fff", color: "#5B5346", display: "inline-flex", alignItems: "center", gap: 7, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
+                <Youtube size={15} color="#FF0000" />배포
+              </button>
+            )}
             <button onClick={resetEditor} style={{ height: 38, padding: "0 15px", border: `1px solid ${LINE}`, borderRadius: 10, background: SOFT, color: "#5B5346", display: "inline-flex", alignItems: "center", gap: 7, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
               <RefreshCw size={15} />초기화
             </button>

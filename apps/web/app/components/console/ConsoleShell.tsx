@@ -15,7 +15,7 @@ import { ReportScreen } from "./screens/ReportScreen";
 import { SettingsScreen } from "./screens/SettingsScreen";
 
 export function ConsoleShell() {
-  const { nav, toast, editorClip, setEditorClipId, saveShortcutEditor, applyBusy, defChannel } = useConsole();
+  const { nav, toast, editorClip, setEditorClipId, saveShortcutEditor, applyBusy, defChannel, openPublishDraft, runPpl, pplBusy } = useConsole();
   return (
     <div style={{ display: "flex", height: "100vh", width: "100%", overflow: "hidden", ...SHELL_BG }}>
       <Sidebar />
@@ -41,6 +41,9 @@ export function ConsoleShell() {
           onClose={() => setEditorClipId(null)}
           onSave={saveShortcutEditor}
           saving={applyBusy}
+          onPublish={() => openPublishDraft(editorClip, "now")}
+          onAnalyzeBrand={() => void runPpl(editorClip.id)}
+          analyzing={pplBusy === editorClip.id}
         />
       )}
 
