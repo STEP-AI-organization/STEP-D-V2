@@ -1,8 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { Download, Pencil, Send } from "lucide-react";
-import { clipDownloadUrl } from "@/lib/api";
+import { Download, FileDown, Pencil, Send } from "lucide-react";
+import { clipDownloadUrl, pplReportCsvUrl } from "@/lib/api";
 import { C, card, ghostBtn, primaryBtn, segBtn, segWrap } from "@/lib/console/theme";
 import { fmtCount, formatDuration } from "@/lib/console/format";
 import { useConsole } from "../ConsoleProvider";
@@ -84,6 +84,11 @@ export function ClipDetailDrawer() {
                             </div>
                           ))}
                         </div>
+                        {jobId && (
+                          <a href={pplReportCsvUrl(jobId)} className="hv-soft" style={{ ...ghostBtn, marginTop: 10, height: 36, display: "flex", alignItems: "center", justifyContent: "center", gap: 6, textDecoration: "none", color: C.body, fontSize: 12.5 }}>
+                            <FileDown size={13} /> 브랜드 리포트 CSV
+                          </a>
+                        )}
                       </>
                     ) : (
                       <div style={{ textAlign: "center", padding: "20px 0" }}>

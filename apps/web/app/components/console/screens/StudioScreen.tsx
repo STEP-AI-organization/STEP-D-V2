@@ -1,8 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { BarChart2, Download, Film, Pencil, Plus, Sparkles, Tag, Upload, Youtube, Zap } from "lucide-react";
-import { clipDownloadUrl } from "@/lib/api";
+import { BarChart2, Download, FileDown, Film, Pencil, Plus, Sparkles, Tag, Upload, Youtube, Zap } from "lucide-react";
+import { clipDownloadUrl, pplReportCsvUrl } from "@/lib/api";
 import { C, POSTERS, card, ghostBtn, input, primaryBtn } from "@/lib/console/theme";
 import { useConsole } from "../ConsoleProvider";
 import { ClipDetailDrawer } from "./ClipDetailDrawer";
@@ -101,6 +101,16 @@ export function StudioScreen() {
           >
             <Film size={14} /> 하이라이트 만들기
           </button>
+          {c.currentJobId && (
+            <a
+              href={pplReportCsvUrl(c.currentJobId)}
+              className="hv-soft"
+              title="이 프로젝트의 PPL 브랜드 통합 리포트를 CSV로 내려받아요 (광고주 핸드오프용)"
+              style={{ ...ghostBtn, padding: "8px 14px", display: "flex", alignItems: "center", gap: 6, textDecoration: "none", color: C.body }}
+            >
+              <FileDown size={14} /> 브랜드 리포트 CSV
+            </a>
+          )}
         </div>
 
         {c.activeClips.length === 0 ? (
