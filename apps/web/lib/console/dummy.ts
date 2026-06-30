@@ -336,7 +336,10 @@ const SCHED_BASE: SchedItem[] = [
   { publishId:"ds-045", clipId:"dc-045", year:2026, month:5, day:29, time:"09:00", title:"[현역가왕2] 8회 무대 직캠 – 첫 공개", status:"발행", rawStatus:"published" },
   { publishId:"ds-046", clipId:"dc-046", year:2026, month:5, day:30, time:"18:00", title:"[강철부대W] 4회 결승 미션 예고", status:"예약", rawStatus:"scheduled" },
   // ─── July (month=6) ── 예약 ───────────────────────────────────────────
-  { publishId:"ds-047", clipId:"dc-047", year:2026, month:6, day:1, time:"09:00", title:"[나는 솔로 22기] 최종 커플 발표 – 결말 공개", status:"예약", rawStatus:"scheduled" },
+  // 7/1 데모: 원희(전참시) — 우리가 직접 생성한 쇼츠 배포 (배포 현황 상단 노출)
+  { publishId:"ds-wh1", clipId:"dc-wh1", year:2026, month:6, day:1, time:"09:00", title:"[전참시] 예뻤어., 이건 그냥 못 넘깁니다 #쇼츠", status:"예약", rawStatus:"scheduled" },
+  { publishId:"ds-wh2", clipId:"dc-wh2", year:2026, month:6, day:1, time:"18:00", title:"[전참시] 아, 진짜?, 이건 그냥 못 넘깁니다 #쇼츠", status:"예약", rawStatus:"scheduled" },
+  { publishId:"ds-047", clipId:"dc-047", year:2026, month:6, day:1, time:"21:00", title:"[전참시] 내일 영양제 한번 사볼까?, 이건 그냥 못 넘깁니다 #쇼츠", status:"예약", rawStatus:"scheduled" },
   { publishId:"ds-048", clipId:"dc-048", year:2026, month:6, day:1, time:"18:00", title:"[현역가왕2] 8회 명장면 하이라이트 모음", status:"예약", rawStatus:"scheduled" },
   { publishId:"ds-049", clipId:"dc-049", year:2026, month:6, day:2, time:"09:00", title:"[골 때리는 그녀들] 17회 선발 라인업 공개", status:"예약", rawStatus:"scheduled" },
   { publishId:"ds-050", clipId:"dc-050", year:2026, month:6, day:2, time:"12:00", title:"[지구마불 시즌3] 5회 입국 거부 위기 순간", status:"예약", rawStatus:"scheduled" },

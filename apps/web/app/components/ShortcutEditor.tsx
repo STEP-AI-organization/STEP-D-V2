@@ -420,22 +420,22 @@ const TABS: { key: EditorTab; label: string; icon: ReactNode }[] = [
   { key: "elements", label: "요소", icon: <Palette size={16} /> },
 ];
 
-/* 데모용 원본 유튜브 메타데이터(예시) — 편집기 상단 '메타데이터' 버튼 호버 시 노출. */
-const YT_META = {
-  videoTitle: "[전참시] 방에 동물 피규어만 100개?! 핫템까지 쓸어 담는 MZ 원희의 일상 공개",
-  channel: "MBC 전지적 참견 시점",
-  publishedAt: "2026. 6. 20.",
-  duration: "12:47",
-  views: "1,284,902",
-  likes: "23,481",
-  comments: "1,902",
-  category: "엔터테인먼트",
-  tags: ["전지적참견시점", "전참시", "아일릿", "원희", "MBC", "예능", "원희엄마"],
-  description: "방에 동물 피규어만 100개?! 핫템까지 쓸어 담는 MZ 원희의 솔직한 일상. 매니저와 함께한 하루 공개 #전지적참견시점 #아일릿 #원희",
-};
+/* 발행할 쇼츠의 배포 메타데이터(데모) — 편집기 상단 '메타데이터' 버튼 호버 시 노출.
+ * 원본 영상이 아니라, 지금 만들어 유튜브에 올릴 쇼츠의 업로드 메타데이터를 보여준다.
+ * 제목·해시태그·채널·길이는 편집 중인 클립 값을 쓰고, 발행 항목은 데모용 기본값. */
+function fmtDur(sec?: number) {
+  const s = Math.max(0, Math.round(sec || 0));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+}
 
-function MetaButton() {
+function MetaButton({ clip }: { clip: ShortcutEditorClip }) {
   const [open, setOpen] = useState(false);
+  const title = (clip.yt?.title || clip.title || "").trim() || "제목 미설정";
+  const channel = (clip.channelName || "전지적 참견 시점").trim();
+  const tags = clip.yt?.tags?.length ? clip.yt.tags : ["쇼츠", "전참시", "원희", "아일릿", "예능"];
+  const description =
+    clip.caption?.trim() || "이 장면, 댓글 터집니다 👀 풀영상은 채널에서 확인하세요! #쇼츠 #전참시 #원희";
+  const duration = fmtDur(clip.durSec);
   const row = (label: string, value: string) => (
     <div style={{ display: "flex", justifyContent: "space-between", gap: 12, fontSize: 12, padding: "5px 0", borderBottom: `1px solid ${LINE}` }}>
       <span style={{ color: "#9A8F7E", flex: "0 0 auto" }}>{label}</span>
@@ -451,26 +451,27 @@ function MetaButton() {
         <div style={{ position: "absolute", top: "calc(100% + 8px)", right: 0, width: 340, background: "#fff", border: `1px solid ${LINE}`, borderRadius: 12, boxShadow: "0 16px 40px -12px rgba(22,18,13,.4)", padding: "14px 16px", zIndex: 60, cursor: "default" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 8 }}>
             <Youtube size={16} color="#FF0000" />
-            <span style={{ fontSize: 12, fontWeight: 800, color: "#FF0000", letterSpacing: ".3px" }}>YouTube 원본 메타데이터</span>
+            <span style={{ fontSize: 12, fontWeight: 800, color: "#FF0000", letterSpacing: ".3px" }}>쇼츠 배포 메타데이터</span>
           </div>
-          <div style={{ fontSize: 13, fontWeight: 750, color: TEXT, lineHeight: 1.4, marginBottom: 4 }}>{YT_META.videoTitle}</div>
-          <div style={{ fontSize: 11.5, color: "#9A8F7E", marginBottom: 10 }}>{YT_META.channel} · {YT_META.publishedAt}</div>
-          {row("조회수", YT_META.views + "회")}
-          {row("좋아요", YT_META.likes)}
-          {row("댓글", YT_META.comments)}
-          {row("길이", YT_META.duration)}
-          {row("카테고리", YT_META.category)}
+          <div style={{ fontSize: 13, fontWeight: 750, color: TEXT, lineHeight: 1.4, marginBottom: 4 }}>{title}</div>
+          <div style={{ fontSize: 11.5, color: "#9A8F7E", marginBottom: 10 }}>{channel} · 발행 대기</div>
+          {row("발행 채널", channel)}
+          {row("형식", "쇼츠 (9:16)")}
+          {row("길이", duration)}
+          {row("공개 설정", "공개")}
+          {row("카테고리", "엔터테인먼트")}
+          {row("발행 시점", "즉시 발행")}
           <div style={{ marginTop: 10 }}>
-            <div style={{ fontSize: 11, color: "#9A8F7E", marginBottom: 5 }}>태그</div>
+            <div style={{ fontSize: 11, color: "#9A8F7E", marginBottom: 5 }}>해시태그</div>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
-              {YT_META.tags.map((t) => (
+              {tags.map((t) => (
                 <span key={t} style={{ fontSize: 11, color: "#5B5346", background: SOFT, border: `1px solid ${LINE}`, borderRadius: 999, padding: "2px 8px" }}>#{t}</span>
               ))}
             </div>
           </div>
           <div style={{ marginTop: 10 }}>
             <div style={{ fontSize: 11, color: "#9A8F7E", marginBottom: 4 }}>설명</div>
-            <div style={{ fontSize: 11.5, color: "#5B5346", lineHeight: 1.5 }}>{YT_META.description}</div>
+            <div style={{ fontSize: 11.5, color: "#5B5346", lineHeight: 1.5 }}>{description}</div>
           </div>
         </div>
       )}
@@ -1340,7 +1341,7 @@ export function ShortcutEditor({ clip, onClose, onSave, saving = false, onPublis
             쇼츠 제목, 자막, 레이아웃을 미리 보면서 조정하세요.
           </span>
           <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 10 }}>
-            <MetaButton />
+            <MetaButton clip={clip} />
             {onAnalyzeBrand && (
               <button onClick={onAnalyzeBrand} disabled={analyzing} style={{ height: 38, padding: "0 14px", border: `1px solid ${LINE}`, borderRadius: 10, background: "#fff", color: "#5B5346", display: "inline-flex", alignItems: "center", gap: 7, fontSize: 13, fontWeight: 600, cursor: analyzing ? "default" : "pointer", opacity: analyzing ? 0.6 : 1 }}>
                 <Sparkles size={15} />{analyzing ? "분석 중..." : "브랜드 분석"}

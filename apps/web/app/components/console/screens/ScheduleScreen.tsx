@@ -21,7 +21,8 @@ export function ScheduleScreen() {
   const [monthOffset, setMonthOffset] = useState(0);
   const [tab, setTab] = useState<"status" | "manage">("status");
 
-  const now = new Date();
+  // 데모 기준일: 2026-07-01 (내일 발표) — 항상 7월에 열리고 7/1이 오늘·선택일이 되도록 고정
+  const now = new Date(2026, 6, 1);
   const base = new Date(now.getFullYear(), now.getMonth() + monthOffset, 1);
   const Y = base.getFullYear();
   const M = base.getMonth();

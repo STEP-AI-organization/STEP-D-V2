@@ -31,7 +31,6 @@ export function Topbar() {
       }}
     >
       <div style={{ fontSize: 15, fontWeight: 700, letterSpacing: "-.3px" }}>{TITLES[nav]}</div>
-      <span style={{ fontSize: 11, color: C.muted, background: C.rowHover2, padding: "3px 8px", borderRadius: 6, fontWeight: 600 }}>2026 · 6월</span>
       <div style={{ flex: 1 }} />
       <div style={{ display: "flex", alignItems: "center", gap: 8, background: C.rowHover2, border: `1px solid ${C.line}`, borderRadius: 9, padding: "7px 11px", width: 210, color: C.muted, fontSize: 12.5 }}>
         <Search size={14} />

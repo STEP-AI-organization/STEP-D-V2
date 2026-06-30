@@ -324,7 +324,7 @@ function ClipThumb({ clip, bg, pubStatus }: { clip: Clip; bg: string; pubStatus?
     else { v.pause(); setPlaying(false); }
   };
   return (
-    <div onClick={clip.videoUrl ? toggle : undefined} onMouseEnter={enter} onMouseLeave={leave} title="마우스를 올리면 미리보기" style={{ position: "relative", aspectRatio: "9 / 16", background: bg, overflow: "hidden", cursor: clip.videoUrl ? "pointer" : "default" }}>
+    <div onClick={clip.videoUrl ? toggle : undefined} onMouseEnter={enter} onMouseLeave={leave} style={{ position: "relative", aspectRatio: "9 / 16", background: bg, overflow: "hidden", cursor: clip.videoUrl ? "pointer" : "default" }}>
       {/* 썸네일은 항상 베이스로 깔고, 영상은 재생 중에만 위에 페이드인 (포스터는 재생 후 검게 남는 문제 회피) */}
       {clip.thumbnailUrl && (
         // eslint-disable-next-line @next/next/no-img-element
