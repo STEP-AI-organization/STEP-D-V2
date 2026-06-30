@@ -14,7 +14,6 @@ import {
   TREND_PREV,
   type Program,
 } from "@/lib/console/dummy";
-import { Sparkline } from "../charts";
 import { DrilldownPanel } from "../DrilldownPanel";
 import { useConsole } from "../ConsoleProvider";
 
@@ -60,8 +59,6 @@ export function DashboardScreen() {
     { label: "활성 프로그램", value: String(c.projects.length || 14), caption: "운영 중", est: false },
   ];
 
-  const sparkValues = TREND_6.map((m) => m.ch + m.cm);
-
   return (
     <div style={{ maxWidth: 1180, margin: "0 auto", padding: "26px 28px 60px" }}>
       {/* greeting */}
@@ -84,10 +81,6 @@ export function DashboardScreen() {
             <div style={{ display: "flex", alignItems: "center", gap: 4, color: C.green, fontWeight: 700, fontSize: 14, marginBottom: 7 }}>▲ 32%</div>
           </div>
           <div style={{ fontSize: 11.5, color: C.dim, marginTop: 7 }}>지난달 대비 ▲32% · 조회수 기반 추정 · 가정값 조정 가능</div>
-        </div>
-        <div style={{ flex: "1 1 240px", minWidth: 220, maxWidth: 340, height: 130, overflow: "hidden" }}>
-          <Sparkline values={sparkValues} />
-          <div style={{ fontSize: 10.5, color: C.dim, textAlign: "right", marginTop: 2 }}>최근 6개월 추세</div>
         </div>
       </section>
 

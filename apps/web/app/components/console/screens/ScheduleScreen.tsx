@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import { C, card, ghostBtn, primaryBtn, segBtn, segWrap } from "@/lib/console/theme";
 import type { SchedItem } from "@/lib/console/map";
+import { DUMMY_SCHED } from "@/lib/console/dummy";
 import { useConsole } from "../ConsoleProvider";
 
 const WEEKDAYS = [
@@ -30,13 +31,18 @@ export function ScheduleScreen() {
 
   const [selectedDay, setSelectedDay] = useState<number>(now.getDate());
 
+  const allSched = useMemo(() => {
+    if (c.sched.length > 0) return c.sched;
+    return DUMMY_SCHED;
+  }, [c.sched]);
+
   const byDay = useMemo(() => {
     const map: Record<number, SchedItem[]> = {};
-    c.sched.filter((it) => it.year === Y && it.month === M).forEach((it) => {
+    allSched.filter((it) => it.year === Y && it.month === M).forEach((it) => {
       (map[it.day] = map[it.day] || []).push(it);
     });
     return map;
-  }, [c.sched, Y, M]);
+  }, [allSched, Y, M]);
 
   type Cell = { day: number | null };
   const cells: Cell[] = [];
@@ -45,7 +51,7 @@ export function ScheduleScreen() {
   while (cells.length % 7 !== 0) cells.push({ day: null });
 
   const dayItems = byDay[selectedDay] || [];
-  const upcoming = c.sched.filter((it) => it.status === "예약");
+  const upcoming = allSched.filter((it) => it.status === "예약");
 
   return (
     <div style={{ maxWidth: 1320, margin: "0 auto", padding: "22px 28px 60px" }}>

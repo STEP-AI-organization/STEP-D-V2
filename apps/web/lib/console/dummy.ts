@@ -1,4 +1,4 @@
-import type { Clip } from "./map";
+import type { Clip, SchedItem } from "./map";
 
 /* ============================================================================
  * Dummy datasets ported from the "수익 콘솔" HTML DCLogic. Screens prefer real
@@ -286,6 +286,92 @@ export const DUMMY_CHANNELS: DummyChannel[] = [
   },
 ];
 
+/* ----- schedule dummy (calendar demo data, 발행/예약 mix) ----- */
+export const DUMMY_SCHED: SchedItem[] = [
+  // ─── June (month=5) ── past + today: 발행 ───────────────────────────────
+  { publishId:"ds-001", clipId:"dc-001", year:2026, month:5, day:2, time:"09:00", title:"[나는 솔로 22기] 첫 만남 케미 폭발 순간", status:"발행", rawStatus:"published" },
+  { publishId:"ds-002", clipId:"dc-002", year:2026, month:5, day:2, time:"18:00", title:"[현역가왕2] 고음 폭발 – 심사위원 전원 기립", status:"발행", rawStatus:"published" },
+  { publishId:"ds-003", clipId:"dc-003", year:2026, month:5, day:3, time:"12:00", title:"[강철부대W] 마지막 1초 역전 – 역대급 명장면", status:"발행", rawStatus:"published" },
+  { publishId:"ds-004", clipId:"dc-004", year:2026, month:5, day:4, time:"09:00", title:"[쯔양먹방] 12인분 클리어 신기록", status:"발행", rawStatus:"published" },
+  { publishId:"ds-005", clipId:"dc-005", year:2026, month:5, day:4, time:"21:00", title:"[지구마불 시즌3] 현지 시장 먹부림", status:"발행", rawStatus:"published" },
+  { publishId:"ds-006", clipId:"dc-006", year:2026, month:5, day:5, time:"09:00", title:"[나는 솔로 22기] 반전 고백 – 모두가 울었다", status:"발행", rawStatus:"published" },
+  { publishId:"ds-007", clipId:"dc-007", year:2026, month:5, day:5, time:"18:00", title:"[골 때리는 그녀들] 극장골 모음 16회", status:"발행", rawStatus:"published" },
+  { publishId:"ds-008", clipId:"dc-008", year:2026, month:5, day:6, time:"12:00", title:"[한일가왕전] 한국 vs 일본 듀엣 명승부", status:"발행", rawStatus:"published" },
+  { publishId:"ds-009", clipId:"dc-009", year:2026, month:5, day:7, time:"09:00", title:"[현역가왕2] 무대 직캠 – 최고 하이라이트", status:"발행", rawStatus:"published" },
+  { publishId:"ds-010", clipId:"dc-010", year:2026, month:5, day:7, time:"18:00", title:"[나는 솔로 22기] 데이트 상대 최종 선택 순간", status:"발행", rawStatus:"published" },
+  { publishId:"ds-011", clipId:"dc-011", year:2026, month:5, day:8, time:"09:00", title:"[강철부대W] 체력 한계 돌파 – 팀원 감동 포옹", status:"발행", rawStatus:"published" },
+  { publishId:"ds-012", clipId:"dc-012", year:2026, month:5, day:9, time:"12:00", title:"[쯔양먹방] 사장님 표정이 다했습니다", status:"발행", rawStatus:"published" },
+  { publishId:"ds-013", clipId:"dc-013", year:2026, month:5, day:9, time:"18:00", title:"[미스터리 수사단] 결정적 단서 공개 순간", status:"발행", rawStatus:"published" },
+  { publishId:"ds-014", clipId:"dc-014", year:2026, month:5, day:10, time:"09:00", title:"[지구마불 시즌3] 숨겨진 맛집 – 현지인이 알려준 곳", status:"발행", rawStatus:"published" },
+  { publishId:"ds-015", clipId:"dc-015", year:2026, month:5, day:10, time:"21:00", title:"[현역가왕2] 최후의 1인 무대 완성", status:"발행", rawStatus:"published" },
+  { publishId:"ds-016", clipId:"dc-016", year:2026, month:5, day:11, time:"12:00", title:"[골 때리는 그녀들] 감독 새 역할 – 눈물의 교체", status:"발행", rawStatus:"published" },
+  { publishId:"ds-017", clipId:"dc-017", year:2026, month:5, day:12, time:"09:00", title:"[나는 솔로 22기] 진심 고백 눈물 참기 챌린지", status:"발행", rawStatus:"published" },
+  { publishId:"ds-018", clipId:"dc-018", year:2026, month:5, day:12, time:"18:00", title:"[한일가왕전] 결승 무대 – 관객 기립박수", status:"발행", rawStatus:"published" },
+  { publishId:"ds-019", clipId:"dc-019", year:2026, month:5, day:13, time:"09:00", title:"[강철부대W] 팀워크 퍼펙트 – 역대급 기록 달성", status:"발행", rawStatus:"published" },
+  { publishId:"ds-020", clipId:"dc-020", year:2026, month:5, day:14, time:"12:00", title:"[쯔양먹방] 한입에 등극 – 새 기록 탄생", status:"발행", rawStatus:"published" },
+  { publishId:"ds-021", clipId:"dc-021", year:2026, month:5, day:14, time:"21:00", title:"[미스터리 수사단] 반전의 진실 – 모두가 틀렸다", status:"발행", rawStatus:"published" },
+  { publishId:"ds-022", clipId:"dc-022", year:2026, month:5, day:15, time:"09:00", title:"[나는 솔로 22기] 탈락 눈물 – 진심 담은 작별", status:"발행", rawStatus:"published" },
+  { publishId:"ds-023", clipId:"dc-023", year:2026, month:5, day:15, time:"18:00", title:"[지구마불 시즌3] 길 잃은 PD – 진짜 여행 시작", status:"발행", rawStatus:"published" },
+  { publishId:"ds-024", clipId:"dc-024", year:2026, month:5, day:16, time:"12:00", title:"[현역가왕2] 꺾이지 않는 심장 – 감동 무대", status:"발행", rawStatus:"published" },
+  { publishId:"ds-025", clipId:"dc-025", year:2026, month:5, day:17, time:"09:00", title:"[골 때리는 그녀들] 역전 대역전 – 마지막 골", status:"발행", rawStatus:"published" },
+  { publishId:"ds-026", clipId:"dc-026", year:2026, month:5, day:17, time:"21:00", title:"[강철부대W] 역대급 미션 클리어 – 신기록", status:"발행", rawStatus:"published" },
+  { publishId:"ds-027", clipId:"dc-027", year:2026, month:5, day:18, time:"09:00", title:"[나는 솔로 22기] 최종 선택 결과 – 충격 반전", status:"발행", rawStatus:"published" },
+  { publishId:"ds-028", clipId:"dc-028", year:2026, month:5, day:18, time:"18:00", title:"[쯔양먹방] 신메뉴 도전 – 첫 반응 솔직 리뷰", status:"발행", rawStatus:"published" },
+  { publishId:"ds-029", clipId:"dc-029", year:2026, month:5, day:19, time:"12:00", title:"[미스터리 수사단] 마지막 퍼즐 조각 – 진범 공개", status:"발행", rawStatus:"published" },
+  { publishId:"ds-030", clipId:"dc-030", year:2026, month:5, day:20, time:"09:00", title:"[한일가왕전] 글로벌 자막 클립 – 해외 반응 폭발", status:"발행", rawStatus:"published" },
+  { publishId:"ds-031", clipId:"dc-031", year:2026, month:5, day:20, time:"18:00", title:"[지구마불 시즌3] 현지인 친구 만들기 – 감동 엔딩", status:"발행", rawStatus:"published" },
+  { publishId:"ds-032", clipId:"dc-032", year:2026, month:5, day:21, time:"09:00", title:"[골 때리는 그녀들] 눈물의 마지막 경기", status:"발행", rawStatus:"published" },
+  { publishId:"ds-033", clipId:"dc-033", year:2026, month:5, day:22, time:"12:00", title:"[현역가왕2] 심사위원도 인정한 무대", status:"발행", rawStatus:"published" },
+  { publishId:"ds-034", clipId:"dc-034", year:2026, month:5, day:22, time:"21:00", title:"[나는 솔로 22기] 짝사랑 고백 – 이 눈물 실화냐", status:"발행", rawStatus:"published" },
+  { publishId:"ds-035", clipId:"dc-035", year:2026, month:5, day:23, time:"09:00", title:"[강철부대W] 강인한 정신력 – 포기 없는 도전", status:"발행", rawStatus:"published" },
+  { publishId:"ds-036", clipId:"dc-036", year:2026, month:5, day:24, time:"12:00", title:"[쯔양먹방] 폭식 챌린지 – 기록이 곧 역사", status:"발행", rawStatus:"published" },
+  { publishId:"ds-037", clipId:"dc-037", year:2026, month:5, day:24, time:"18:00", title:"[한일가왕전] 양국 관객 하나 된 순간", status:"발행", rawStatus:"published" },
+  { publishId:"ds-038", clipId:"dc-038", year:2026, month:5, day:25, time:"09:00", title:"[지구마불 시즌3] 환율 쇼크 – 여행 예산 위기", status:"발행", rawStatus:"published" },
+  { publishId:"ds-039", clipId:"dc-039", year:2026, month:5, day:25, time:"21:00", title:"[나는 솔로 22기] 선택 뒤집기 – 결말 충격", status:"발행", rawStatus:"published" },
+  { publishId:"ds-040", clipId:"dc-040", year:2026, month:5, day:26, time:"09:00", title:"[현역가왕2] 전율의 피날레 – 마지막 무대", status:"발행", rawStatus:"published" },
+  { publishId:"ds-041", clipId:"dc-041", year:2026, month:5, day:26, time:"18:00", title:"[골 때리는 그녀들] 페널티킥 드라마 – 승부차기", status:"발행", rawStatus:"published" },
+  { publishId:"ds-042", clipId:"dc-042", year:2026, month:5, day:27, time:"12:00", title:"[강철부대W] 부상 투혼 – 팀을 위한 희생", status:"발행", rawStatus:"published" },
+  { publishId:"ds-043", clipId:"dc-043", year:2026, month:5, day:28, time:"09:00", title:"[쯔양먹방] 사장도 놀란 먹방 속도", status:"발행", rawStatus:"published" },
+  { publishId:"ds-044", clipId:"dc-044", year:2026, month:5, day:28, time:"18:00", title:"[나는 솔로 22기] 최종화 미리보기 – 결말 예측 불가", status:"발행", rawStatus:"published" },
+  { publishId:"ds-045", clipId:"dc-045", year:2026, month:5, day:29, time:"09:00", title:"[현역가왕2] 8회 무대 직캠 – 첫 공개", status:"발행", rawStatus:"published" },
+  { publishId:"ds-046", clipId:"dc-046", year:2026, month:5, day:30, time:"18:00", title:"[강철부대W] 4회 결승 미션 예고", status:"예약", rawStatus:"scheduled" },
+  // ─── July (month=6) ── 예약 ───────────────────────────────────────────
+  { publishId:"ds-047", clipId:"dc-047", year:2026, month:6, day:1, time:"09:00", title:"[나는 솔로 22기] 최종 커플 발표 – 결말 공개", status:"예약", rawStatus:"scheduled" },
+  { publishId:"ds-048", clipId:"dc-048", year:2026, month:6, day:1, time:"18:00", title:"[현역가왕2] 8회 명장면 하이라이트 모음", status:"예약", rawStatus:"scheduled" },
+  { publishId:"ds-049", clipId:"dc-049", year:2026, month:6, day:2, time:"09:00", title:"[골 때리는 그녀들] 17회 선발 라인업 공개", status:"예약", rawStatus:"scheduled" },
+  { publishId:"ds-050", clipId:"dc-050", year:2026, month:6, day:2, time:"12:00", title:"[지구마불 시즌3] 5회 입국 거부 위기 순간", status:"예약", rawStatus:"scheduled" },
+  { publishId:"ds-051", clipId:"dc-051", year:2026, month:6, day:3, time:"09:00", title:"[쯔양먹방] 6회 신기록 도전 – 예고 클립", status:"예약", rawStatus:"scheduled" },
+  { publishId:"ds-052", clipId:"dc-052", year:2026, month:6, day:3, time:"21:00", title:"[강철부대W] 4회 최정예 선발 – 역대급 긴장감", status:"예약", rawStatus:"scheduled" },
+  { publishId:"ds-053", clipId:"dc-053", year:2026, month:6, day:4, time:"09:00", title:"[한일가왕전] 4회 – 역대급 콜라보 무대 예고", status:"예약", rawStatus:"scheduled" },
+  { publishId:"ds-054", clipId:"dc-054", year:2026, month:6, day:5, time:"12:00", title:"[나는 솔로 22기] 스페셜 편 – 미방송 인터뷰", status:"예약", rawStatus:"scheduled" },
+  { publishId:"ds-055", clipId:"dc-055", year:2026, month:6, day:5, time:"18:00", title:"[현역가왕2] 9회 – 개인 무대 서바이벌", status:"예약", rawStatus:"scheduled" },
+  { publishId:"ds-056", clipId:"dc-056", year:2026, month:6, day:6, time:"09:00", title:"[미스터리 수사단] 5회 – 새로운 용의자 등장", status:"예약", rawStatus:"scheduled" },
+  { publishId:"ds-057", clipId:"dc-057", year:2026, month:6, day:7, time:"09:00", title:"[골 때리는 그녀들] 17회 전반전 – 충격 실책", status:"예약", rawStatus:"scheduled" },
+  { publishId:"ds-058", clipId:"dc-058", year:2026, month:6, day:7, time:"18:00", title:"[지구마불 시즌3] 5회 – 비행기 놓친 PD", status:"예약", rawStatus:"scheduled" },
+  { publishId:"ds-059", clipId:"dc-059", year:2026, month:6, day:8, time:"12:00", title:"[강철부대W] 4회 – 물리적 한계를 넘은 도전", status:"예약", rawStatus:"scheduled" },
+  { publishId:"ds-060", clipId:"dc-060", year:2026, month:6, day:8, time:"21:00", title:"[쯔양먹방] 6회 – 진짜 사장님이 나타났다", status:"예약", rawStatus:"scheduled" },
+  { publishId:"ds-061", clipId:"dc-061", year:2026, month:6, day:9, time:"09:00", title:"[현역가왕2] 탈락자 마지막 무대 – 눈물의 퇴장", status:"예약", rawStatus:"scheduled" },
+  { publishId:"ds-062", clipId:"dc-062", year:2026, month:6, day:9, time:"18:00", title:"[나는 솔로 22기] 번외편 – 재결합 스포일러?", status:"예약", rawStatus:"scheduled" },
+  { publishId:"ds-063", clipId:"dc-063", year:2026, month:6, day:10, time:"09:00", title:"[한일가왕전] 4회 – 역대급 퍼포먼스 첫 공개", status:"예약", rawStatus:"scheduled" },
+  { publishId:"ds-064", clipId:"dc-064", year:2026, month:6, day:11, time:"12:00", title:"[골 때리는 그녀들] 후반전 – 드라마틱 역전골", status:"예약", rawStatus:"scheduled" },
+  { publishId:"ds-065", clipId:"dc-065", year:2026, month:6, day:11, time:"18:00", title:"[강철부대W] 결승 진출 – 최후의 8인 확정", status:"예약", rawStatus:"scheduled" },
+  { publishId:"ds-066", clipId:"dc-066", year:2026, month:6, day:12, time:"09:00", title:"[지구마불 시즌3] 6회 – 예산 제로 도전 시작", status:"예약", rawStatus:"scheduled" },
+  { publishId:"ds-067", clipId:"dc-067", year:2026, month:6, day:12, time:"21:00", title:"[쯔양먹방] 6회 – 최종 보스 음식 등장", status:"예약", rawStatus:"scheduled" },
+  { publishId:"ds-068", clipId:"dc-068", year:2026, month:6, day:13, time:"09:00", title:"[현역가왕2] 9회 명장면 – 최후의 2인 무대", status:"예약", rawStatus:"scheduled" },
+  { publishId:"ds-069", clipId:"dc-069", year:2026, month:6, day:14, time:"12:00", title:"[나는 솔로 22기] 재회 스페셜 – 결말 후 이야기", status:"예약", rawStatus:"scheduled" },
+  { publishId:"ds-070", clipId:"dc-070", year:2026, month:6, day:14, time:"18:00", title:"[미스터리 수사단] 5회 – 충격 반전 + 진범 공개", status:"예약", rawStatus:"scheduled" },
+  { publishId:"ds-071", clipId:"dc-071", year:2026, month:6, day:15, time:"09:00", title:"[강철부대W] 결승전 – 최강자 가린다", status:"예약", rawStatus:"scheduled" },
+  { publishId:"ds-072", clipId:"dc-072", year:2026, month:6, day:15, time:"21:00", title:"[한일가왕전] 결승 무대 – 역사에 남을 콜라보", status:"예약", rawStatus:"scheduled" },
+  { publishId:"ds-073", clipId:"dc-073", year:2026, month:6, day:16, time:"12:00", title:"[골 때리는 그녀들] 결승전 예고 – 최강팀 격돌", status:"예약", rawStatus:"scheduled" },
+  { publishId:"ds-074", clipId:"dc-074", year:2026, month:6, day:17, time:"09:00", title:"[지구마불 시즌3] 최종화 – 세계 일주 완성", status:"예약", rawStatus:"scheduled" },
+  { publishId:"ds-075", clipId:"dc-075", year:2026, month:6, day:17, time:"18:00", title:"[현역가왕2] 결승 – 왕좌를 차지할 단 한 명", status:"예약", rawStatus:"scheduled" },
+  { publishId:"ds-076", clipId:"dc-076", year:2026, month:6, day:18, time:"09:00", title:"[쯔양먹방] 역대급 파이널 먹방 – 한계 돌파", status:"예약", rawStatus:"scheduled" },
+  { publishId:"ds-077", clipId:"dc-077", year:2026, month:6, day:19, time:"12:00", title:"[강철부대W] 최강 전사 탄생 – 역사적 순간", status:"예약", rawStatus:"scheduled" },
+  { publishId:"ds-078", clipId:"dc-078", year:2026, month:6, day:19, time:"21:00", title:"[나는 솔로 22기] 커플 성사 최종 발표 다시보기", status:"예약", rawStatus:"scheduled" },
+  { publishId:"ds-079", clipId:"dc-079", year:2026, month:6, day:20, time:"09:00", title:"[골 때리는 그녀들] 우승 트로피 수여 – 영광의 순간", status:"예약", rawStatus:"scheduled" },
+  { publishId:"ds-080", clipId:"dc-080", year:2026, month:6, day:21, time:"18:00", title:"[한일가왕전] 시즌 총결산 – 명장면 모음", status:"예약", rawStatus:"scheduled" },
+];
+
 /* ----- settlement rows (settings 정산) ----- */
 export type SettleRow = { name: string; color: string; smr: boolean; rpm: string; share: string; views: string; amount: string };
 
@@ -349,3 +435,137 @@ export const SAMPLE_CLIPS: Clip[] = [
     thumbTextOptions: [{ id: "sample-clip-3-th1", text: "바로 써도 됨", note: "완성형 문구" }],
   },
 ];
+
+/* ----- report screen: demo chat messages + instant replies ----- */
+export type DemoChatMsg = { role: "user" | "assistant"; content: string };
+
+export const DEMO_CHAT_MESSAGES: DemoChatMsg[] = [
+  {
+    role: "user",
+    content: "이번 달 수익을 한 문단으로 요약해줘",
+  },
+  {
+    role: "assistant",
+    content: `이번 달 총 추정 수익은 **₩8,672만**입니다 (콘텐츠 광고 ₩482만 + 커머스 연동 ₩8,190만 합산). 전월 대비 **+32% 성장**했으며, YouTube 광고가 52%·네이버TV SMR 18% 순으로 수익을 구성합니다.
+
+## 프로그램 TOP 3
+- **나는 솔로 22기** — 조회수 130만 · 추정 수익 ₩91만
+- **현역가왕2** — 조회수 92만 · 추정 수익 ₩64만
+- **골 때리는 그녀들** — 조회수 88만 · 추정 수익 ₩61.6만
+
+커머스 부문 1위는 **다이슨 에어랩** (₩2,100만), 이어 삼성 갤럭시 버즈3 (₩1,420만) 순입니다. 7월 예약 발행 35건이 순차 집행되면 성장세는 이어질 것으로 보입니다.`,
+  },
+  {
+    role: "user",
+    content: "구독자 성장률이 가장 높은 채널은?",
+  },
+  {
+    role: "assistant",
+    content: `**나는 솔로 공식 채널**이 최근 30일 기준 **+4.3% (+8.8만 명)**으로 전체 1위입니다.
+
+## 채널별 30일 성장률
+
+- **나는 솔로 공식** — +4.3% (+8.8만) · 등급 A
+- **KT ENA 공식** — +3.5% (+6.2만) · 등급 A-
+- **현역가왕 하이라이트** — +3.4% (+4.7만) · 등급 A-
+- **ENA 쇼퍼 (TikTok)** — +3.4% (+2.4만) · 등급 B+
+- **쯔양먹방** — +3.3% (+3.1만) · 등급 B+
+
+**AI 인사이트:** '데이트 상대 선택 순간' 클립이 32만 뷰를 기록하며 나는 솔로 채널의 신규 구독 유입을 견인했습니다. ENA 쇼퍼 TikTok 채널의 성장률이 유튜브 메인과 근접해 크로스 포스팅 확대를 검토할 시점입니다.`,
+  },
+];
+
+export const DEMO_REPLY_MAP: [string[], string][] = [
+  [
+    ["수익", "얼마", "요약", "한 문단"],
+    `이번 달 총 추정 수익은 **₩8,672만**입니다 (콘텐츠 광고 ₩482만 + 커머스 연동 ₩8,190만 합산). 전월 대비 **+32% 성장**했으며, YouTube 광고가 52%·네이버TV SMR 18% 순으로 수익을 구성합니다.
+
+## 프로그램 TOP 3
+- **나는 솔로 22기** — 조회수 130만 · 추정 수익 ₩91만
+- **현역가왕2** — 조회수 92만 · 추정 수익 ₩64만
+- **골 때리는 그녀들** — 조회수 88만 · 추정 수익 ₩61.6만
+
+커머스 1위는 **다이슨 에어랩** (₩2,100만), 이어 삼성 갤럭시 버즈3 (₩1,420만) 순입니다.`,
+  ],
+  [
+    ["구독자", "성장", "성장률", "채널"],
+    `**나는 솔로 공식 채널**이 최근 30일 기준 **+4.3% (+8.8만 명)**으로 전체 1위입니다.
+
+## 채널별 30일 성장률
+
+- **나는 솔로 공식** — +4.3% (+8.8만) · 등급 A
+- **KT ENA 공식** — +3.5% (+6.2만) · 등급 A-
+- **현역가왕 하이라이트** — +3.4% (+4.7만) · 등급 A-
+- **ENA 쇼퍼 (TikTok)** — +3.4% (+2.4만) · 등급 B+
+- **쯔양먹방** — +3.3% (+3.1만) · 등급 B+
+
+**AI 인사이트:** ENA 쇼퍼 TikTok 채널의 성장률이 유튜브 메인과 근접해 크로스 포스팅 확대를 검토할 시점입니다.`,
+  ],
+  [
+    ["쯔양", "먹방", "5회"],
+    `쯔양먹방 5회 추정 수익은 **₩267,500**이며, 두 가지 경로에서 발생했습니다.
+
+## 수익 경로 분해
+
+**① YouTube 광고 (약 62%)**
+- 발행 클립 30개 · 총 조회수 38만
+- RPM ₩2,000 기준 → 약 ₩16만 추정
+
+**② 커머스 연동 (약 38%)**
+- 농심 신라면 멀티팩 (쿠팡) — 12,400 클릭 · ₩860만 기여
+- 코카콜라 제로 (쿠팡) — 5,400 클릭 · ₩420만 기여
+
+**최고 기여 클립**
+- '한입에 등극' — 7.2만 뷰 · 완주율 72% · 댓글 참여 +63%
+- '12인분 클리어' — 5.1만 뷰 · 재시청 급증
+
+**추천:** 다음 회차에 대용량 밀키트 브랜드를 추가 연결하면 커머스 수익을 30~50% 더 끌어올릴 수 있습니다.`,
+  ],
+  [
+    ["PPL", "광고주", "광고"],
+    `현재 연동된 8개 브랜드의 PPL 성과를 요약합니다.
+
+## 브랜드별 성과 TOP 5
+
+- **다이슨** (에어랩) — 클릭 6,800 · 수수료 3.5% → **₩2,100만**
+- **삼성전자** (갤럭시 버즈3) — 클릭 8,200 · 수수료 3.5% → **₩1,420만**
+- **나이키** (머큐리얼) — 클릭 9,600 · 수수료 4.0% → **₩1,180만**
+- **올리브영** (로즈 립틴트) — 클릭 15,300 · 수수료 8.0% → **₩960만**
+- **농심** (신라면) — 클릭 12,400 · 수수료 3.0% → **₩860만**
+
+**인사이트:** 올리브영의 수수료율(8%)이 가장 높고, 클릭수도 15,300건으로 1위입니다. 나는 솔로 22기와 뷰티 브랜드 조합이 특히 효과적입니다.
+
+보고서 파일이 필요하다면 **"보고서 만들어줘"** 라고 입력하세요.`,
+  ],
+  [
+    ["7월", "스케줄", "예약", "배포 계획"],
+    `7월 예약 발행은 총 **35건**으로, 7월 1일부터 21일까지 순차 집행됩니다.
+
+## 주차별 배포 계획
+
+**1주차 (7.1~7.7) — 12건**
+- 나는 솔로 22기 최종 커플 발표 외 5건
+- 현역가왕2 8회 하이라이트 외 3건
+- 골 때리는 그녀들 17회 외 3건
+
+**2주차 (7.8~7.14) — 14건**
+- 강철부대W 결승 진출 · 쯔양먹방 6회 · 지구마불 5회 외
+
+**3주차 (7.15~7.21) — 9건**
+- 강철부대W 최강 전사 결정 · 현역가왕2 결승 · 골때 우승 외
+
+**최적 발행 시간:** 09:00·12:00·18:00·21:00 4개 슬롯으로 자동 분배됩니다.`,
+  ],
+];
+
+export const REPORT_CHAT_RESPONSE = `PPL 광고주 제안 보고서를 생성했어요. 파일이 자동으로 다운로드됩니다.
+
+## 보고서 포함 내용
+- **Executive Summary** — KPI 4개 (발행 클립 1,863건 · 조회수 1,240만 · 수익 ₩3,840만)
+- **채널 성과** — 6개 채널 구독자·성장률·추정 수익
+- **프로그램별 PPL 노출** — 8개 프로그램 클립·조회수·회차 수익
+- **커머스 연동 현황** — 8개 브랜드 클릭·전환·매출
+- **PPL 패키지 제안** — Starter · Standard · Premium
+- **7월 배포 스케줄** — 35건 예약 현황
+
+광고주에게 직접 전달하거나 내부 검토용으로 활용하세요.`;
