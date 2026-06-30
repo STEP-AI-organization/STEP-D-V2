@@ -60,7 +60,6 @@ export function CommerceScreen() {
   const [linkPlat, setLinkPlat] = useState<Record<string, string>>({});
   const [deployed, setDeployed] = useState<Record<string, boolean>>({});
   const [cta, setCta] = useState<Record<string, string>>({});
-  const [showAnalyze, setShowAnalyze] = useState(false);
 
   useEffect(() => {
     if (!c.commerceLoaded && !c.commerceLoading && c.projects.length) void c.loadCommerce();
@@ -216,39 +215,10 @@ export function CommerceScreen() {
   /* -------- LIST -------- */
   return (
     <div style={{ maxWidth: 1180, margin: "0 auto", padding: "26px 28px 60px" }}>
-      <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", marginBottom: 16 }}>
-        <div>
-          <div style={{ fontSize: 19, fontWeight: 750, letterSpacing: "-.4px" }}>커머스 콘텐츠</div>
-          <div style={{ fontSize: 12.5, color: C.muted, marginTop: 5 }}>클립에서 AI가 인식한 브랜드를 외부 커머스에 연결합니다.</div>
-        </div>
-        <button onClick={() => setShowAnalyze((v) => !v)} className="hv-btn-primary" style={{ border: "none", background: C.violet, color: "#fff", fontSize: 12.5, fontWeight: 650, padding: "9px 14px", borderRadius: 9, cursor: "pointer" }}>{showAnalyze ? "분석 패널 닫기" : "클립 브랜드 분석"}</button>
+      <div style={{ marginBottom: 16 }}>
+        <div style={{ fontSize: 19, fontWeight: 750, letterSpacing: "-.4px" }}>커머스 콘텐츠</div>
+        <div style={{ fontSize: 12.5, color: C.muted, marginTop: 5 }}>클립에서 AI가 인식한 브랜드를 외부 커머스에 연결합니다.</div>
       </div>
-
-      {/* analyze panel */}
-      {showAnalyze && (
-        <div style={card({ padding: "16px 18px", marginBottom: 16 })}>
-          <div style={{ fontSize: 12.5, fontWeight: 700, marginBottom: 4 }}>브랜드 분석할 클립</div>
-          <div style={{ fontSize: 11.5, color: C.muted, marginBottom: 12 }}>Gemini 비전으로 클립 속 브랜드·제품을 인식합니다(클립당 수 초 소요).</div>
-          {c.pickerClips.length === 0 ? (
-            <div style={{ fontSize: 12.5, color: C.muted }}>먼저 스튜디오에서 쇼츠를 만들어 주세요.</div>
-          ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 300, overflowY: "auto" }}>
-              {c.pickerClips.map((pc) => {
-                const analyzed = items.some((i) => i.clipId === pc.clipId);
-                const busy = c.commerceAnalyzing === pc.clipId;
-                return (
-                  <div key={pc.clipId} className="hv-row" style={{ display: "flex", alignItems: "center", gap: 10, padding: "8px 9px", borderRadius: 8 }}>
-                    <span style={{ flex: 1, fontSize: 12.5, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{pc.title}</span>
-                    <span style={{ fontSize: 11, color: C.muted }}>{pc.project}</span>
-                    {analyzed && <span style={{ fontSize: 10, color: C.green, fontWeight: 700 }}>분석됨</span>}
-                    <button onClick={() => void c.analyzeClipForCommerce(pc)} disabled={busy} style={{ ...ghostBtn, padding: "5px 11px", fontSize: 11, opacity: busy ? 0.6 : 1 }}>{busy ? "분석 중…" : analyzed ? "재분석" : "분석"}</button>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-      )}
 
       {/* KPIs */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 14, marginBottom: 18 }}>
@@ -272,8 +242,7 @@ export function CommerceScreen() {
       ) : items.length === 0 ? (
         <div style={card({ padding: 40, textAlign: "center" })}>
           <div style={{ fontSize: 14, fontWeight: 700 }}>아직 인식된 브랜드가 없어요</div>
-          <div style={{ fontSize: 12.5, color: C.muted, marginTop: 8, lineHeight: 1.6 }}>위의 &lsquo;클립 브랜드 분석&rsquo;에서 클립을 선택해 AI 브랜드 인식을 실행하세요.</div>
-          <button onClick={() => setShowAnalyze(true)} className="hv-btn-primary" style={{ marginTop: 16, border: "none", background: C.violet, color: "#fff", fontSize: 13, fontWeight: 650, padding: "10px 18px", borderRadius: 9, cursor: "pointer" }}>브랜드 분석 시작</button>
+          <div style={{ fontSize: 12.5, color: C.muted, marginTop: 8, lineHeight: 1.6 }}>스튜디오에서 쇼츠를 만들면 AI가 인식한 브랜드가 여기에 표시됩니다.</div>
         </div>
       ) : (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 14 }}>
