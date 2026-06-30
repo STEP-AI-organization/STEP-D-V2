@@ -16,6 +16,7 @@ import {
   ArrowRight,
   Check,
   FileText,
+  Info,
   LayoutTemplate,
   MessageCircle,
   Move,
@@ -418,6 +419,65 @@ const TABS: { key: EditorTab; label: string; icon: ReactNode }[] = [
   { key: "captions", label: "자막", icon: <FileText size={16} /> },
   { key: "elements", label: "요소", icon: <Palette size={16} /> },
 ];
+
+/* 데모용 원본 유튜브 메타데이터(예시) — 편집기 상단 '메타데이터' 버튼 호버 시 노출. */
+const YT_META = {
+  videoTitle: "[전참시] 방에 동물 피규어만 100개?! 핫템까지 쓸어 담는 MZ 원희의 일상 공개",
+  channel: "MBC 전지적 참견 시점",
+  publishedAt: "2026. 6. 20.",
+  duration: "12:47",
+  views: "1,284,902",
+  likes: "23,481",
+  comments: "1,902",
+  category: "엔터테인먼트",
+  tags: ["전지적참견시점", "전참시", "아일릿", "원희", "MBC", "예능", "원희엄마"],
+  description: "방에 동물 피규어만 100개?! 핫템까지 쓸어 담는 MZ 원희의 솔직한 일상. 매니저와 함께한 하루 공개 #전지적참견시점 #아일릿 #원희",
+};
+
+function MetaButton() {
+  const [open, setOpen] = useState(false);
+  const row = (label: string, value: string) => (
+    <div style={{ display: "flex", justifyContent: "space-between", gap: 12, fontSize: 12, padding: "5px 0", borderBottom: `1px solid ${LINE}` }}>
+      <span style={{ color: "#9A8F7E", flex: "0 0 auto" }}>{label}</span>
+      <span style={{ color: TEXT, fontWeight: 600, textAlign: "right" }}>{value}</span>
+    </div>
+  );
+  return (
+    <div style={{ position: "relative" }} onMouseEnter={() => setOpen(true)} onMouseLeave={() => setOpen(false)}>
+      <button style={{ height: 38, padding: "0 14px", border: `1px solid ${LINE}`, borderRadius: 10, background: "#fff", color: "#5B5346", display: "inline-flex", alignItems: "center", gap: 7, fontSize: 13, fontWeight: 600, cursor: "default" }}>
+        <Info size={15} />메타데이터
+      </button>
+      {open && (
+        <div style={{ position: "absolute", top: "calc(100% + 8px)", right: 0, width: 340, background: "#fff", border: `1px solid ${LINE}`, borderRadius: 12, boxShadow: "0 16px 40px -12px rgba(22,18,13,.4)", padding: "14px 16px", zIndex: 60, cursor: "default" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 8 }}>
+            <Youtube size={16} color="#FF0000" />
+            <span style={{ fontSize: 12, fontWeight: 800, color: "#FF0000", letterSpacing: ".3px" }}>YouTube 원본 메타데이터</span>
+          </div>
+          <div style={{ fontSize: 13, fontWeight: 750, color: TEXT, lineHeight: 1.4, marginBottom: 4 }}>{YT_META.videoTitle}</div>
+          <div style={{ fontSize: 11.5, color: "#9A8F7E", marginBottom: 10 }}>{YT_META.channel} · {YT_META.publishedAt}</div>
+          {row("조회수", YT_META.views + "회")}
+          {row("좋아요", YT_META.likes)}
+          {row("댓글", YT_META.comments)}
+          {row("길이", YT_META.duration)}
+          {row("카테고리", YT_META.category)}
+          <div style={{ marginTop: 10 }}>
+            <div style={{ fontSize: 11, color: "#9A8F7E", marginBottom: 5 }}>태그</div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
+              {YT_META.tags.map((t) => (
+                <span key={t} style={{ fontSize: 11, color: "#5B5346", background: SOFT, border: `1px solid ${LINE}`, borderRadius: 999, padding: "2px 8px" }}>#{t}</span>
+              ))}
+            </div>
+          </div>
+          <div style={{ marginTop: 10 }}>
+            <div style={{ fontSize: 11, color: "#9A8F7E", marginBottom: 4 }}>설명</div>
+            <div style={{ fontSize: 11.5, color: "#5B5346", lineHeight: 1.5 }}>{YT_META.description}</div>
+          </div>
+          <div style={{ marginTop: 10, fontSize: 10, color: "#B8AE9E" }}>※ 데모용 예시 데이터입니다.</div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 const HOOK_TABS: { key: EditorState["hookTab"]; label: string; title: string; row: string; value: string }[] = [
   { key: "hook", label: "하이라이트 훅", title: "첫 3초 훅", row: "훅 길이", value: "3초" },
@@ -1281,6 +1341,7 @@ export function ShortcutEditor({ clip, onClose, onSave, saving = false, onPublis
             쇼츠 제목, 자막, 레이아웃을 미리 보면서 조정하세요.
           </span>
           <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 10 }}>
+            <MetaButton />
             {onAnalyzeBrand && (
               <button onClick={onAnalyzeBrand} disabled={analyzing} style={{ height: 38, padding: "0 14px", border: `1px solid ${LINE}`, borderRadius: 10, background: "#fff", color: "#5B5346", display: "inline-flex", alignItems: "center", gap: 7, fontSize: 13, fontWeight: 600, cursor: analyzing ? "default" : "pointer", opacity: analyzing ? 0.6 : 1 }}>
                 <Sparkles size={15} />{analyzing ? "분석 중..." : "브랜드 분석"}
