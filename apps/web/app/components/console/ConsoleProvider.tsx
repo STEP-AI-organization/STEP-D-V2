@@ -161,6 +161,7 @@ function useConsoleState() {
   const [fileName, setFileName] = useState<string | null>(null);
   const [ytUrl, setYtUrl] = useState("");
   const [ytPreviewId, setYtPreviewId] = useState<string | null>(null);
+  const [ytTitle, setYtTitle] = useState("");
   const [progress, setProgress] = useState(0);
   const [stageIndex, setStageIndex] = useState(0);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
@@ -430,6 +431,7 @@ function useConsoleState() {
     setBackendClips(null);
     setSelectedClipId(null);
     setYtPreviewId(null);
+    setYtTitle("");
     if (fileOrName instanceof File) {
       setSelectedFile(fileOrName);
       setFileName(fileOrName.name || "업로드 영상.mp4");
@@ -476,6 +478,13 @@ function useConsoleState() {
     pickFile("유튜브 영상 · " + u.replace(/^https?:\/\/(www\.)?/, "").slice(0, 42));
     setYtPreviewId(id);
     showToast("유튜브 링크를 준비했어요");
+    // 실제 영상 제목을 oEmbed로 가져와 자막 질문 화면에 표시.
+    fetch(`https://www.youtube.com/oembed?url=${encodeURIComponent(u)}&format=json`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (d && typeof d.title === "string") setYtTitle(d.title);
+      })
+      .catch(() => {});
   };
   const pollJob = async (jobId: string) => {
     if (pollTimer.current) clearTimeout(pollTimer.current);
@@ -565,6 +574,7 @@ function useConsoleState() {
     setStageIndex(0);
     setSelectedFile(null);
     setYtPreviewId(null);
+    setYtTitle("");
     setYtUrl("");
     setInspection(null);
     setInspecting(false);
@@ -1216,7 +1226,7 @@ function useConsoleState() {
     // studio
     projects, sched, pickerClips, studioLoaded, loadStudio,
     openProject, openProjectDetail, closeProject, handleDeleteProject,
-    view, setView, dragging, setDragging, fileName, ytUrl, setYtUrl, ytPreviewId,
+    view, setView, dragging, setDragging, fileName, ytUrl, setYtUrl, ytPreviewId, ytTitle,
     progress, stageIndex, selectedFile, sourcePreviewUrl, inspection, inspecting, backendError,
     backendClips, uploadOpen, setUploadOpen, openUpload,
     pickFile, onFileInput, onDrop, importYt, beginUpload, beginPplFlow, answerSubs, startBackendJob, resetUpload,

@@ -25,9 +25,31 @@ export function StudioScreen() {
     return (
       <div style={{ maxWidth: 720, margin: "0 auto", padding: "40px 28px 60px" }}>
         <div style={card({ padding: "28px 30px" })}>
-          <div style={{ fontSize: 17, fontWeight: 750, letterSpacing: "-.3px" }}>자막을 어떻게 처리할까요?</div>
+          {/* 영상 미리보기 (썸네일 + 제목) */}
+          {(() => {
+            const ytThumb = c.ytPreviewId ? `https://i.ytimg.com/vi/${c.ytPreviewId}/hqdefault.jpg` : null;
+            const title = c.ytTitle || (c.ytPreviewId ? "유튜브 영상" : c.fileName) || "선택한 영상";
+            return (
+              <div style={{ display: "flex", gap: 16, alignItems: "center", marginBottom: 22, paddingBottom: 20, borderBottom: `1px solid ${C.lineSoft}` }}>
+                <div style={{ width: 168, height: 94, borderRadius: 10, overflow: "hidden", background: C.ink, flex: "0 0 168px", display: "flex", alignItems: "center", justifyContent: "center" }}>
+                  {ytThumb ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={ytThumb} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                  ) : (
+                    <Upload size={26} color="#fff" />
+                  )}
+                </div>
+                <div style={{ minWidth: 0 }}>
+                  <span style={{ fontSize: 10.5, fontWeight: 700, color: C.violet, background: C.violetSoft, padding: "2px 8px", borderRadius: 5 }}>{c.ytPreviewId ? "YouTube 영상" : "업로드 영상"}</span>
+                  <div style={{ fontSize: 16, fontWeight: 750, letterSpacing: "-.3px", marginTop: 8, lineHeight: 1.35, display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", overflow: "hidden" }}>{title}</div>
+                  <div style={{ fontSize: 11.5, color: C.muted, marginTop: 6, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", maxWidth: 360 }}>{c.fileName}</div>
+                </div>
+              </div>
+            );
+          })()}
+          <div style={{ fontSize: 17, fontWeight: 750, letterSpacing: "-.3px" }}>이 영상, 자막이 이미 있나요?</div>
           <div style={{ fontSize: 13, color: C.body, marginTop: 8, lineHeight: 1.6 }}>
-            {c.fileName || "선택한 영상"} · 영상에 이미 화면 자막이 있다면 그대로 두고, 없다면 AI가 자동으로 자막을 만들어 입혀요.
+            영상에 이미 화면 자막이 있다면 그대로 두고, 없다면 AI가 자동으로 자막을 만들어 입혀요.
             {c.inspection?.has_subtitle_stream ? " (내장 자막 트랙이 감지됐어요)" : ""}
           </div>
           {c.backendError && <div style={{ marginTop: 12, fontSize: 12.5, color: C.danger }}>{c.backendError}</div>}
