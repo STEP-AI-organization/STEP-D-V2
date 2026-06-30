@@ -63,7 +63,7 @@ export function DashboardScreen() {
     <div style={{ maxWidth: 1180, margin: "0 auto", padding: "26px 28px 60px" }}>
       {/* greeting */}
       <div style={{ marginBottom: 18 }}>
-        <div style={{ fontSize: 23, fontWeight: 750, letterSpacing: "-.6px" }}>{c.me?.name || "양승훈"}님, 반갑습니다</div>
+        <div style={{ fontSize: 23, fontWeight: 750, letterSpacing: "-.6px" }}>STEPAI님, 반갑습니다</div>
         <div style={{ fontSize: 13.5, color: C.body, marginTop: 7, lineHeight: 1.55, maxWidth: 680 }}>
           이번 달 ENA 콘텐츠 성과를 한눈에 정리했어요. 본방송이 끝난 다음날에도 ENA 클립이 채널 곳곳에서 조회수를 모으고 있어요.
         </div>
