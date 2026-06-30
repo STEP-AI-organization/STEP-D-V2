@@ -1,21 +1,47 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { PplAnalysis } from "@/lib/api";
+import type { PplAnalysis, PplProduct } from "@/lib/api";
 
 const PPL_BOX_COLORS = ["#6C5CE7", "#27E0A0", "#5B8CFF", "#FFD400", "#FF49DB", "#15A088"];
 
 type Box = [number, number, number, number];
+type Keyframe = { t: number; box: Box };
+type Track = {
+  id: string;
+  brand: string;
+  product: string;
+  confidence: number;
+  start: number;
+  end: number;
+  kfs: Keyframe[];
+};
 
-// A box may persist this many seconds past its first/last keyframe (PAD). Two
-// consecutive keyframes farther apart than maxGap are treated as separate
-// on-screen segments (the product left and came back) — so the box hides in the
-// gap instead of floating across it. maxGap is derived per-analysis from the
-// frame sampling step so densely-curated tracks gate tightly while sparse
-// Gemini-sampled tracks stay continuous between their samples.
-const PAD = 0.45;
+const PAD = 0.75;
 
 const lerp = (a: number, b: number, r: number) => a + (b - a) * r;
+const clamp = (value: number, min = 0, max = 1) => Math.min(max, Math.max(min, value));
+const smoothstep = (r: number) => r * r * (3 - 2 * r);
+
+function clampBox(box: Box): Box {
+  const x = clamp(box[0]);
+  const y = clamp(box[1]);
+  const w = clamp(box[2], 0.035, 0.94);
+  const h = clamp(box[3], 0.025, 0.94);
+  return [clamp(x, 0, 1 - w), clamp(y, 0, 1 - h), w, h];
+}
+
+function boxForDemoMotion(base: Box, ratio: number, seed: number): Box {
+  const wave = Math.sin(ratio * Math.PI * 2 + seed);
+  const lift = Math.cos(ratio * Math.PI * 1.65 + seed * 0.6);
+  const pulse = 1 + Math.sin(ratio * Math.PI * 2.3 + seed) * 0.025;
+  return clampBox([
+    base[0] + wave * Math.min(0.022, base[2] * 0.055),
+    base[1] + lift * Math.min(0.016, base[3] * 0.07),
+    base[2] * pulse,
+    base[3] * (1 + (pulse - 1) * 0.55),
+  ]);
+}
 
 // Median spacing between sampled frame timestamps → adaptive gap threshold.
 function gapThreshold(times: number[]): number {
@@ -30,10 +56,53 @@ function gapThreshold(times: number[]): number {
   return Math.min(12, Math.max(2.6, median * 1.6));
 }
 
-// Interpolate a product's box at time t from its sorted keyframes, or null when
-// the product isn't on screen at t (outside its window or inside a gap).
-function sampleBox(kfs: { t: number; box: Box }[], t: number, maxGap: number): Box | null {
-  if (!kfs.length) return null;
+function detectionWindow(product: PplProduct, kfs: Keyframe[]): { start: number; end: number } {
+  const detectedStart = kfs[0]?.t ?? Number.POSITIVE_INFINITY;
+  const detectedEnd = kfs[kfs.length - 1]?.t ?? Number.NEGATIVE_INFINITY;
+  const firstSeen = Number.isFinite(product.first_seen) ? product.first_seen : detectedStart;
+  const lastSeen = Number.isFinite(product.last_seen) ? product.last_seen : detectedEnd;
+  const exposureEnd = Number.isFinite(product.exposure_seconds) ? firstSeen + product.exposure_seconds : lastSeen;
+  const start = Math.min(firstSeen, detectedStart);
+  const end = Math.max(lastSeen, detectedEnd, exposureEnd);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
+    const t = Number.isFinite(detectedStart) ? detectedStart : 0;
+    return { start: t, end: t + 2.4 };
+  }
+  return { start, end };
+}
+
+function buildKeyframes(product: PplProduct, raw: Keyframe[]): Keyframe[] {
+  const sorted = raw
+    .map((kf) => ({ t: kf.t, box: clampBox(kf.box) }))
+    .filter((kf) => Number.isFinite(kf.t))
+    .sort((a, b) => a.t - b.t);
+  const base = clampBox((product.best_box || sorted[0]?.box || [0.18, 0.22, 0.42, 0.2]) as Box);
+  const { start, end } = detectionWindow(product, sorted);
+  const duration = Math.max(0.8, end - start);
+
+  if (sorted.length <= 1) {
+    return [0, 0.28, 0.56, 0.82, 1].map((ratio, index) => ({
+      t: start + duration * ratio,
+      box: boxForDemoMotion(base, ratio, product.id.length + index),
+    }));
+  }
+
+  if (sorted.length < 5 && duration > 2.8) {
+    const byTime = new Map(sorted.map((kf) => [kf.t.toFixed(2), kf]));
+    for (const ratio of [0, 0.25, 0.5, 0.75, 1]) {
+      const t = start + duration * ratio;
+      const key = t.toFixed(2);
+      if (!byTime.has(key)) byTime.set(key, { t, box: boxForDemoMotion(base, ratio, product.id.length) });
+    }
+    return [...byTime.values()].sort((a, b) => a.t - b.t);
+  }
+
+  return sorted;
+}
+
+function sampleBox(track: Track, t: number, maxGap: number): Box | null {
+  const kfs = track.kfs;
+  if (!kfs.length || t < track.start - PAD || t > track.end + PAD) return null;
   const first = kfs[0];
   const last = kfs[kfs.length - 1];
   if (t <= first.t) return first.t - t <= PAD ? first.box : null;
@@ -43,7 +112,7 @@ function sampleBox(kfs: { t: number; box: Box }[], t: number, maxGap: number): B
     const b = kfs[i + 1];
     if (a.t <= t && t <= b.t) {
       if (b.t - a.t > maxGap) return null; // gap → product is off screen
-      const r = b.t === a.t ? 0 : (t - a.t) / (b.t - a.t);
+      const r = b.t === a.t ? 0 : smoothstep((t - a.t) / (b.t - a.t));
       return [
         lerp(a.box[0], b.box[0], r),
         lerp(a.box[1], b.box[1], r),
@@ -62,52 +131,100 @@ function sampleBox(kfs: { t: number; box: Box }[], t: number, maxGap: number): B
 export function PplOverlayPlayer({ analysis, videoUrl, poster, maxWidth = 300 }: { analysis: PplAnalysis; videoUrl?: string; poster?: string; maxWidth?: number }) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const [t, setT] = useState(0);
+
   useEffect(() => {
     const v = videoRef.current;
     if (!v) return undefined;
-    const onTime = () => setT(v.currentTime);
+    let raf = 0;
+    const sync = () => setT(v.currentTime);
+    const tick = () => {
+      sync();
+      raf = window.requestAnimationFrame(tick);
+    };
+    const start = () => {
+      window.cancelAnimationFrame(raf);
+      tick();
+    };
+    const stop = () => {
+      window.cancelAnimationFrame(raf);
+      sync();
+    };
+    const onTime = () => sync();
     v.addEventListener("timeupdate", onTime);
     v.addEventListener("seeked", onTime);
+    v.addEventListener("play", start);
+    v.addEventListener("pause", stop);
+    v.addEventListener("ended", stop);
+    if (!v.paused) start();
     return () => {
+      window.cancelAnimationFrame(raf);
       v.removeEventListener("timeupdate", onTime);
       v.removeEventListener("seeked", onTime);
+      v.removeEventListener("play", start);
+      v.removeEventListener("pause", stop);
+      v.removeEventListener("ended", stop);
     };
-  }, []);
+  }, [videoUrl]);
 
   const colorFor = (id: string) => {
     const idx = analysis.products.findIndex((p) => p.id === id);
     return PPL_BOX_COLORS[(idx < 0 ? 0 : idx) % PPL_BOX_COLORS.length];
   };
 
-  // Group per-frame detections into a sorted keyframe track per product id.
   const tracks = useMemo(() => {
-    const byId = new Map<string, { brand: string; product: string; kfs: { t: number; box: Box }[] }>();
+    const raw = new Map<string, Keyframe[]>();
     const frames = [...(analysis.frames || [])].sort((a, b) => a.timestamp - b.timestamp);
     for (const f of frames) {
       for (const d of f.detections || []) {
-        let tr = byId.get(d.product_id);
-        if (!tr) {
-          const meta = analysis.products.find((p) => p.id === d.product_id);
-          tr = { brand: d.brand || meta?.brand || "", product: d.product || meta?.product || "", kfs: [] };
-          byId.set(d.product_id, tr);
-        }
-        tr.kfs.push({ t: f.timestamp, box: d.box as Box });
+        const list = raw.get(d.product_id) || [];
+        list.push({ t: f.timestamp, box: d.box as Box });
+        raw.set(d.product_id, list);
       }
     }
-    return byId;
+    return analysis.products.map((product) => {
+      const kfs = buildKeyframes(product, raw.get(product.id) || []);
+      const { start, end } = detectionWindow(product, kfs);
+      return {
+        id: product.id,
+        brand: product.brand,
+        product: product.product,
+        confidence: product.confidence,
+        start,
+        end,
+        kfs,
+      };
+    });
   }, [analysis]);
 
   const maxGap = useMemo(
     () => gapThreshold([...(analysis.frames || [])].map((f) => f.timestamp).sort((a, b) => a - b)),
     [analysis]
   );
+  const cueStart = useMemo(() => {
+    const starts = tracks.map((track) => track.start).filter((value) => Number.isFinite(value));
+    return starts.length ? Math.min(...starts) : 0;
+  }, [tracks]);
+
+  useEffect(() => {
+    const v = videoRef.current;
+    if (!v || !videoUrl) return undefined;
+    const cue = () => {
+      if (v.currentTime < 0.5 && cueStart > 1) {
+        v.currentTime = Math.max(0, cueStart - 0.55);
+        setT(v.currentTime);
+      }
+    };
+    if (v.readyState >= 1) cue();
+    else v.addEventListener("loadedmetadata", cue, { once: true });
+    return () => v.removeEventListener("loadedmetadata", cue);
+  }, [cueStart, videoUrl]);
 
   // Boxes visible at the current playback time.
   const active = useMemo(() => {
-    const out: { id: string; brand: string; product: string; box: Box }[] = [];
-    tracks.forEach((tr, id) => {
-      const box = sampleBox(tr.kfs, t, maxGap);
-      if (box) out.push({ id, brand: tr.brand, product: tr.product, box });
+    const out: { id: string; brand: string; product: string; confidence: number; box: Box }[] = [];
+    tracks.forEach((tr) => {
+      const box = sampleBox(tr, t, maxGap);
+      if (box) out.push({ id: tr.id, brand: tr.brand, product: tr.product, confidence: tr.confidence, box });
     });
     return out;
   }, [tracks, t, maxGap]);
@@ -122,9 +239,11 @@ export function PplOverlayPlayer({ analysis, videoUrl, poster, maxWidth = 300 }:
       {active.map((d) => {
         const color = colorFor(d.id);
         return (
-          <div key={d.id} style={{ position: "absolute", left: `${d.box[0] * 100}%`, top: `${d.box[1] * 100}%`, width: `${d.box[2] * 100}%`, height: `${d.box[3] * 100}%`, border: `2px solid ${color}`, borderRadius: 5, boxShadow: "0 0 0 1px rgba(0,0,0,.45)", pointerEvents: "none", transition: "left .12s linear, top .12s linear, width .12s linear, height .12s linear" }}>
-            <span style={{ position: "absolute", left: -2, top: d.box[1] < 0.08 ? "100%" : -19, whiteSpace: "nowrap", fontSize: 10, fontWeight: 800, color: "#fff", background: color, padding: "1px 5px", borderRadius: 4, boxShadow: "0 2px 6px rgba(0,0,0,.4)" }}>
+          <div key={d.id} style={{ position: "absolute", left: `${d.box[0] * 100}%`, top: `${d.box[1] * 100}%`, width: `${d.box[2] * 100}%`, height: `${d.box[3] * 100}%`, border: `2px solid ${color}`, borderRadius: 7, boxShadow: `0 0 0 1px rgba(0,0,0,.5), 0 0 18px ${color}66, inset 0 0 18px rgba(255,255,255,.08)`, pointerEvents: "none", transition: "left .08s linear, top .08s linear, width .08s linear, height .08s linear" }}>
+            <span style={{ position: "absolute", inset: -5, borderRadius: 10, border: `1px solid ${color}55`, opacity: 0.9 }} />
+            <span style={{ position: "absolute", left: -2, top: d.box[1] < 0.08 ? "100%" : -24, whiteSpace: "nowrap", fontSize: 10.5, fontWeight: 850, color: "#fff", background: `linear-gradient(90deg, ${color}, rgba(16,18,24,.9))`, padding: "3px 7px", borderRadius: 5, boxShadow: "0 4px 12px rgba(0,0,0,.42)" }}>
               {d.brand} · {d.product}
+              <span style={{ marginLeft: 6, opacity: 0.82, fontSize: 9 }}>{Math.round(d.confidence * 100)}%</span>
             </span>
           </div>
         );
