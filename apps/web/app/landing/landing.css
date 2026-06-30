@@ -13,6 +13,8 @@ html { scroll-behavior: smooth; }
   font-family:'Pretendard','맑은 고딕','Malgun Gothic',sans-serif;
   background:#fff; color:var(--txt); line-height:1.65;
   -webkit-font-smoothing:antialiased; overflow-x:hidden; min-height:100vh;
+  /* 한국어는 어절(띄어쓰기) 단위로만 줄바꿈 — '만/들고'처럼 단어 중간이 쪼개지지 않게 */
+  word-break:keep-all; overflow-wrap:break-word;
 }
 .stepd-landing *{margin:0;padding:0;box-sizing:border-box}
 .stepd-landing a{color:inherit;text-decoration:none}
