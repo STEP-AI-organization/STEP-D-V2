@@ -49,7 +49,7 @@ const platUrl = (plat: string, brand: string, product: string): string => {
   }
 };
 const estRevenue = (exposure: number, voiceMentions: number, rate: number) =>
-  Math.round((exposure * 90000 + voiceMentions * 18000) * (rate / 100));
+  Math.round((exposure * 135000 + voiceMentions * 27000) * (rate / 100));
 
 export function CommerceScreen() {
   const c = useConsole();
