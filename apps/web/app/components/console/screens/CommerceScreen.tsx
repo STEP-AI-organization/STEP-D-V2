@@ -4,10 +4,11 @@ import { useEffect, useMemo, useState } from "react";
 import { C, card, estimateBadge, ghostBtn } from "@/lib/console/theme";
 import { fmtKor } from "@/lib/console/format";
 import { CAT_PLATS, PLATFORM_META, PLAT_RATE } from "@/lib/console/dummy";
-import { useConsole } from "../ConsoleProvider";
+import { useConsole, type CommerceItem } from "../ConsoleProvider";
 import { PplOverlayPlayer } from "../PplOverlayPlayer";
 
 const CTA_CHIPS = ["지금 구매하기", "최저가 보러가기", "한정 수량 구매", "상세 정보 보기"];
+const DEMO_FALLBACK_PLATFORMS = ["쿠팡", "11번가", "올리브영"];
 
 // Map a free-form PPL category to one of our platform groups.
 const catGroup = (cat: string): keyof typeof CAT_PLATS | "기타" => {
@@ -19,8 +20,22 @@ const catGroup = (cat: string): keyof typeof CAT_PLATS | "기타" => {
   if (/리빙|생활|주방|가구|home/i.test(c)) return "리빙";
   return "기타";
 };
-const candidatesFor = (cat: string): string[] => CAT_PLATS[catGroup(cat) as keyof typeof CAT_PLATS] || ["쿠팡", "11번가"];
-const bestPlat = (cat: string) => candidatesFor(cat).reduce((a, b) => (PLAT_RATE[b] > PLAT_RATE[a] ? b : a));
+const candidatesFor = (cat: string): string[] => CAT_PLATS[catGroup(cat) as keyof typeof CAT_PLATS] || DEMO_FALLBACK_PLATFORMS;
+const highestRatePlat = (cat: string) => candidatesFor(cat).reduce((a, b) => (PLAT_RATE[b] > PLAT_RATE[a] ? b : a));
+const recommendedPlatFor = (item: Pick<CommerceItem, "category">, index = 0) => {
+  const group = catGroup(item.category);
+  if (group === "기타") return DEMO_FALLBACK_PLATFORMS[index % DEMO_FALLBACK_PLATFORMS.length];
+
+  const categoryDefault: Partial<Record<keyof typeof CAT_PLATS, string>> = {
+    식품: "쿠팡",
+    "전자·IT": "쿠팡",
+    리빙: "쿠팡",
+    스포츠: "쿠팡",
+    "패션·뷰티": "올리브영",
+  };
+  const preferred = categoryDefault[group];
+  return preferred && candidatesFor(item.category).includes(preferred) ? preferred : highestRatePlat(item.category);
+};
 
 // Real, persistable affiliate search URL (partner-id tagging needs the actual account).
 const platUrl = (plat: string, brand: string, product: string): string => {
@@ -55,7 +70,7 @@ export function CommerceScreen() {
   const items = c.commerceItems;
   const linkedCount = items.filter((i) => i.affiliateUrl).length;
   const revTotal = useMemo(
-    () => items.reduce((a, i) => a + estRevenue(i.exposure, i.voiceMentions, PLAT_RATE[linkPlat[i.key] || bestPlat(i.category)] || 3), 0),
+    () => items.reduce((a, i, index) => a + estRevenue(i.exposure, i.voiceMentions, PLAT_RATE[linkPlat[i.key] || recommendedPlatFor(i, index)] || 3), 0),
     [items, linkPlat]
   );
 
@@ -63,8 +78,10 @@ export function CommerceScreen() {
 
   /* -------- DETAIL -------- */
   if (sel) {
+    const selIndex = Math.max(0, items.findIndex((i) => i.key === sel.key));
     const cands = candidatesFor(sel.category);
-    const chosen = linkPlat[sel.key] || bestPlat(sel.category);
+    const recommended = recommendedPlatFor(sel, selIndex);
+    const chosen = linkPlat[sel.key] || recommended;
     const isDeployed = !!deployed[sel.key];
     const chosenCta = cta[sel.key] || "지금 구매하기";
     const rate = PLAT_RATE[chosen] || 3;
@@ -147,7 +164,7 @@ export function CommerceScreen() {
               <div style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 18 }}>
                 {cands.map((o) => {
                   const on = o === chosen;
-                  const rec = o === bestPlat(sel.category);
+                  const rec = o === recommended;
                   return (
                     <div key={o} onClick={() => setLinkPlat((s) => ({ ...s, [sel.key]: o }))} style={{ display: "flex", alignItems: "center", gap: 11, border: on ? `2px solid ${C.violet}` : `1px solid ${C.line}`, background: on ? "#FAF9FE" : "#fff", borderRadius: 11, padding: "12px 14px", cursor: "pointer" }}>
                       <span style={{ width: 30, height: 30, borderRadius: 8, background: PLATFORM_META[o] || C.muted, flex: "0 0 30px" }} />
@@ -260,8 +277,8 @@ export function CommerceScreen() {
         </div>
       ) : (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 14 }}>
-          {items.map((it) => {
-            const chosen = linkPlat[it.key] || bestPlat(it.category);
+          {items.map((it, index) => {
+            const chosen = linkPlat[it.key] || recommendedPlatFor(it, index);
             const isDeployed = !!deployed[it.key];
             return (
               <div key={it.key} onClick={() => setSelectedKey(it.key)} className="hv-violet" style={card({ overflow: "hidden", display: "flex", flexDirection: "column", cursor: "pointer" })}>
