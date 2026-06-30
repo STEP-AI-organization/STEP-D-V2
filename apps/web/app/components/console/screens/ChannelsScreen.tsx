@@ -16,6 +16,29 @@ const gradeStyle = (g: string) => {
 
 type ChView = DummyChannel & { real: boolean; realId?: string; isDefault?: boolean };
 
+// Deterministic demo video list for a channel (title · 게시일 · 조회수 · 좋아요 · 댓글).
+function demoVideos(chn: ChView) {
+  const extra = [
+    `${chn.name} 명장면 하이라이트`,
+    "역대급 반전 모음.zip",
+    "비하인드 미공개 컷",
+    "1분 요약 다시보기",
+    "레전드 순간 TOP5",
+    "댓글 터진 그 장면",
+    "풀버전 직캠 모음",
+    "이번 주 베스트 클립",
+  ];
+  const titles = [...chn.uploads.map((u) => u.t), ...extra].slice(0, 8);
+  return titles.map((t, i) => {
+    const seed = (i * 13 + chn.subsN) % 9;
+    const views = Math.max(8000, Math.round(chn.d30viewsN * (0.24 - i * 0.024) * (0.78 + seed / 12)));
+    const likes = Math.round(views * (0.028 + (seed % 5) / 120));
+    const comments = Math.round(views * (0.0035 + (seed % 3) / 400));
+    const dt = new Date(2026, 5, 30 - (1 + i * 2 + (seed % 2)));
+    return { id: `dv${i}`, title: t, date: `${dt.getMonth() + 1}.${String(dt.getDate()).padStart(2, "0")}`, views, likes, comments };
+  });
+}
+
 export function ChannelsScreen() {
   const c = useConsole();
   const [period, setPeriod] = useState<"일" | "월" | "연">("월");
@@ -40,11 +63,12 @@ export function ChannelsScreen() {
     return DUMMY_CHANNELS.map((d) => ({ ...d, real: false }));
   }, [c.channels]);
 
-  const selected = c.openChannel ? views.find((v) => v.realId === c.openChannel) : null;
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const selected = selectedId ? views.find((v) => (v.realId || v.id) === selectedId) : null;
 
   /* ---------------- DETAIL ---------------- */
   if (selected) {
-    const real = c.channels.find((ch) => ch.id === selected.realId);
+    const real = selected.realId ? c.channels.find((ch) => ch.id === selected.realId) : undefined;
     const gs = gradeStyle(selected.grade);
 
     // 12-month subscriber growth (estimate, derived from d30 rate)
@@ -84,13 +108,18 @@ export function ChannelsScreen() {
           .slice(0, 6)
           .map((u, i) => ({ t: u.t, views: fmtKor(Math.max(1200, Math.round((selected.d30viewsN * (period === "일" ? 0.045 : period === "연" ? 11.5 : 1) * (0.92 - i * 0.11))))) + "회", id: String(i) }))) as { t: string; views: string; id: string }[];
 
+    // uploaded-videos table rows (real videos if loaded, else rich demo set)
+    const videoRows = real?.videos?.length
+      ? real.videos.map((v) => ({ id: v.id, title: v.title, date: v.date, views: v.views, likes: v.likes, comments: v.comments, clickable: true }))
+      : demoVideos(selected).map((v) => ({ id: v.id, title: v.title, date: v.date, views: fmtKor(v.views), likes: fmtKor(v.likes), comments: fmtKor(v.comments), clickable: false }));
+
     const periodTabs: ("일" | "월" | "연")[] = ["일", "월", "연"];
     const curVideo = real?.videos.find((v) => v.id === c.openVideo) || null;
     const summary = curVideo && c.openChannel ? c.commentSummary[`${c.openChannel}|${curVideo.id}`] : null;
 
     return (
       <div style={{ maxWidth: 1180, margin: "0 auto", padding: "26px 28px 60px" }}>
-        <div onClick={c.closeChannel} className="hv-darklink" style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12.5, color: C.body, fontWeight: 600, cursor: "pointer", marginBottom: 16 }}>← 채널 목록</div>
+        <div onClick={() => { setSelectedId(null); c.closeChannel(); }} className="hv-darklink" style={{ display: "inline-flex", alignItems: "center", gap: 6, fontSize: 12.5, color: C.body, fontWeight: 600, cursor: "pointer", marginBottom: 16 }}>← 채널 목록</div>
 
         {/* header */}
         <section style={card({ padding: "24px 26px", marginBottom: 14, display: "flex", alignItems: "center", gap: 20, flexWrap: "wrap" })}>
@@ -182,28 +211,29 @@ export function ChannelsScreen() {
           ))}
         </div>
 
-        {/* recent uploads (real videos clickable → comment summary) */}
-        <div style={card({ padding: "20px 22px" })}>
-          <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 14 }}>최근 업로드</div>
-          {(realVideos.length
-            ? realVideos.slice(0, 4).map((v) => ({ id: v.id, title: v.title, date: v.date, views: v.views, thumbnailUrl: v.thumbnailUrl ?? null }))
-            : selected.uploads.map((u, i) => ({ id: String(i), title: u.t, date: u.when, views: u.v, thumbnailUrl: null as string | null }))
-          ).map((u) => (
-            <div key={u.id} onClick={() => real && c.setOpenVideo(u.id)} className={real ? "hv-row" : undefined} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 8px", borderBottom: `1px solid ${C.lineSoft}`, cursor: real ? "pointer" : "default", borderRadius: 7 }}>
-              <div style={{ width: 54, height: 34, borderRadius: 7, background: C.lineSoft, flex: "0 0 54px", overflow: "hidden" }}>
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                {u.thumbnailUrl ? <img src={u.thumbnailUrl} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : null}
-              </div>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 13, fontWeight: 600, letterSpacing: "-.2px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{u.title}</div>
-                <div style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>{u.date}</div>
-              </div>
-              <span style={{ fontSize: 12.5, fontWeight: 650, color: C.sub, fontFeatureSettings: "'tnum' 1" }}>{u.views}</span>
+        {/* uploaded videos: title · 게시일 · 조회수 · 좋아요 · 댓글 */}
+        <div style={card({ overflow: "hidden" })}>
+          <div style={{ padding: "17px 20px 13px", display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ fontSize: 14, fontWeight: 700 }}>업로드한 영상</span>
+            <span style={{ fontSize: 11, color: C.muted, background: C.rowHover2, padding: "2px 8px", borderRadius: 6, fontWeight: 600 }}>{videoRows.length}개</span>
+            {!real && <span style={estimateBadge}>데모</span>}
+            {real && <span style={{ fontSize: 11, color: C.faint, marginLeft: "auto" }}>영상을 누르면 AI 댓글 요약</span>}
+          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 60px 88px 76px 60px", padding: "0 20px 9px", fontSize: 11, color: C.muted, fontWeight: 600, borderBottom: `1px solid ${C.lineSoft}` }}>
+            <span>영상</span><span style={{ textAlign: "right" }}>게시일</span><span style={{ textAlign: "right" }}>조회수</span><span style={{ textAlign: "right" }}>좋아요</span><span style={{ textAlign: "right" }}>댓글</span>
+          </div>
+          {videoRows.map((v) => (
+            <div key={v.id} onClick={() => v.clickable && c.setOpenVideo(v.id)} className={v.clickable ? "hv-row" : undefined} style={{ display: "grid", gridTemplateColumns: "1fr 60px 88px 76px 60px", alignItems: "center", padding: "11px 20px", borderBottom: `1px solid ${C.lineSoft}`, cursor: v.clickable ? "pointer" : "default" }}>
+              <span style={{ fontSize: 12.5, color: C.ink, fontWeight: 600, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", paddingRight: 10 }}>{v.title}</span>
+              <span style={{ textAlign: "right", fontSize: 12, color: C.muted, fontFeatureSettings: "'tnum' 1" }}>{v.date}</span>
+              <span style={{ textAlign: "right", fontSize: 12.5, fontWeight: 700, color: C.ink, fontFeatureSettings: "'tnum' 1" }}>{v.views}</span>
+              <span style={{ textAlign: "right", fontSize: 12, color: C.body, fontFeatureSettings: "'tnum' 1" }}>{v.likes}</span>
+              <span style={{ textAlign: "right", fontSize: 12, color: C.body, fontFeatureSettings: "'tnum' 1" }}>{v.comments}</span>
             </div>
           ))}
 
           {curVideo && (
-            <div style={{ marginTop: 14, background: C.violetSoft, borderRadius: 11, padding: "14px 15px" }}>
+            <div style={{ margin: "14px 16px 16px", background: C.violetSoft, borderRadius: 11, padding: "14px 15px" }}>
               <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
                 <span style={{ fontSize: 12, fontWeight: 700, color: C.violet }}>AI 댓글 요약</span>
                 {!summary && <button onClick={() => c.openChannel && c.loadCommentSummary(c.openChannel, curVideo.id)} style={{ marginLeft: "auto", border: "none", background: C.violet, color: "#fff", fontSize: 11, fontWeight: 650, padding: "4px 10px", borderRadius: 6, cursor: "pointer" }}>요약하기</button>}
@@ -254,7 +284,7 @@ export function ChannelsScreen() {
         {views.map((v) => {
           const gs = gradeStyle(v.grade);
           return (
-            <div key={v.realId || v.id} onClick={() => v.real && v.realId && c.openChannelDetail(v.realId)} className="hv-card" style={card({ padding: 18, cursor: v.real ? "pointer" : "default" })}>
+            <div key={v.realId || v.id} onClick={() => { const id = v.realId || v.id; setSelectedId(id); if (v.real && v.realId) c.openChannelDetail(v.realId); }} className="hv-card" style={card({ padding: 18, cursor: "pointer" })}>
               <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
                 <div style={{ position: "relative", flex: "0 0 46px" }}>
                   <div style={{ width: 46, height: 46, borderRadius: "50%", background: v.avBg, color: v.avFg, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 15, fontWeight: 800, letterSpacing: "-.5px" }}>{v.initial}</div>
