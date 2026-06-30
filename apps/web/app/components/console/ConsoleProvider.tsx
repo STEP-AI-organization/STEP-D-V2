@@ -246,7 +246,11 @@ function useConsoleState() {
   const [toast, setToast] = useState<string | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const demoRevealedRef = useRef(false); // 데모 잡이 "공개"됐는지 (공개 후엔 라이브러리에도 표시)
+  // 데모 잡이 "공개"됐는지. sessionStorage에 저장해서 랜딩↔콘솔 뒤로가기/새로고침에도
+  // 유지된다(공개 후엔 라이브러리에 계속 보이고, 복귀 시 생성 결과도 다시 띄움).
+  const demoRevealedRef = useRef(
+    typeof window !== "undefined" && window.sessionStorage.getItem("stepd_demo_revealed") === "1"
+  );
   const showToast = (msg: string) => {
     if (toastTimer.current) clearTimeout(toastTimer.current);
     setToast(msg);
@@ -333,6 +337,19 @@ function useConsoleState() {
       void getMe().then(setMe).catch(() => setMe(null));
       void loadStudio();
       void loadChannels();
+      // 데모 공개 상태가 유지돼 있으면(랜딩에서 뒤로가기/새로고침 복귀) 생성 결과를 다시 띄운다.
+      if (DEMO_MODE && demoRevealedRef.current) {
+        void getResults(DEMO_JOB_ID)
+          .then((results) => {
+            setBackendClips(results.clips.map(mapBackendClip));
+            setBackendJobId(DEMO_JOB_ID);
+            setProgress(100);
+            setStageIndex(3);
+            setView("results");
+            setNav("studio");
+          })
+          .catch(() => { /* 백엔드 미접속 시 무시 */ });
+      }
     }, 0);
     return () => window.clearTimeout(timer);
   }, []);
@@ -558,6 +575,7 @@ function useConsoleState() {
       setStageIndex(3);
       setView("results");
       demoRevealedRef.current = true;
+      try { window.sessionStorage.setItem("stepd_demo_revealed", "1"); } catch { /* ignore */ }
       void loadStudio(); // 이제 라이브러리에도 등장
       showToast(`쇼츠 후보 ${clips.length}개를 만들었어요`);
     } catch (error) {
