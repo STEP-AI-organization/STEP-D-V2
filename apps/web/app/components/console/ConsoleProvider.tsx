@@ -74,6 +74,7 @@ import {
   errorMessage,
   fmtCount,
   relDays,
+  resolveMedia,
   stageFromProgress,
   toScheduleStamp,
   youtubeId,
@@ -137,6 +138,10 @@ export type CommerceItem = {
   voiceMentions: number;
   confidence: number;
   affiliateUrl: string;
+  videoUrl?: string;
+  thumbnail?: string;
+  // Single-brand overlay (frames filtered to THIS product only) for the box player.
+  overlay?: PplAnalysis;
 };
 
 function useConsoleState() {
@@ -936,6 +941,36 @@ function useConsoleState() {
     }
   };
 
+  // Build commerce items from a clip's PPL analysis — one per product, each with
+  // a single-brand overlay (frames filtered to THAT product only) for the box player.
+  const buildCommerceItems = (
+    meta: { jobId: string; clipId: string; clipTitle: string; projectTitle: string; videoUrl?: string; thumbnail?: string },
+    a: PplAnalysis | null
+  ): CommerceItem[] =>
+    (a?.products || []).map((pr) => {
+      const frames = (a!.frames || [])
+        .map((f) => ({ timestamp: f.timestamp, detections: (f.detections || []).filter((d) => d.product_id === pr.id) }))
+        .filter((f) => f.detections.length);
+      return {
+        key: `${meta.clipId}|${pr.id}`,
+        jobId: meta.jobId,
+        clipId: meta.clipId,
+        clipTitle: meta.clipTitle,
+        projectTitle: meta.projectTitle,
+        productId: pr.id,
+        brand: pr.brand,
+        product: pr.product,
+        category: pr.category,
+        exposure: pr.exposure_seconds,
+        voiceMentions: (pr.voice_mentions || []).length,
+        confidence: pr.confidence,
+        affiliateUrl: pr.affiliate_url || "",
+        videoUrl: meta.videoUrl,
+        thumbnail: meta.thumbnail,
+        overlay: { status: a!.status, duration_seconds: a!.duration_seconds, frame_count: frames.length, products: [pr], frames },
+      };
+    });
+
   // Collect already-analyzed PPL products across every project into commerce items.
   const loadCommerce = async () => {
     if (commerceLoading) return;
@@ -946,24 +981,12 @@ function useConsoleState() {
         try {
           const res = await getResults(p.id);
           res.clips.forEach((cl) => {
-            const a = cl.ppl_analysis;
-            if (a?.products?.length) {
-              a.products.forEach((pr) =>
-                items.push({
-                  key: `${cl.clip_id}|${pr.id}`,
-                  jobId: p.id,
-                  clipId: cl.clip_id,
-                  clipTitle: cl.title,
-                  projectTitle: p.title,
-                  productId: pr.id,
-                  brand: pr.brand,
-                  product: pr.product,
-                  category: pr.category,
-                  exposure: pr.exposure_seconds,
-                  voiceMentions: (pr.voice_mentions || []).length,
-                  confidence: pr.confidence,
-                  affiliateUrl: pr.affiliate_url || "",
-                })
+            if (cl.ppl_analysis?.products?.length) {
+              items.push(
+                ...buildCommerceItems(
+                  { jobId: p.id, clipId: cl.clip_id, clipTitle: cl.title, projectTitle: p.title, videoUrl: resolveMedia(cl.video_url), thumbnail: resolveMedia(cl.thumbnail_url) },
+                  cl.ppl_analysis
+                )
               );
             }
           });
@@ -983,21 +1006,10 @@ function useConsoleState() {
     setCommerceAnalyzing(clip.clipId);
     try {
       const a = await analyzePpl(clip.clipId);
-      const fresh: CommerceItem[] = (a?.products || []).map((pr) => ({
-        key: `${clip.clipId}|${pr.id}`,
-        jobId: clip.jobId,
-        clipId: clip.clipId,
-        clipTitle: clip.title,
-        projectTitle: clip.project,
-        productId: pr.id,
-        brand: pr.brand,
-        product: pr.product,
-        category: pr.category,
-        exposure: pr.exposure_seconds,
-        voiceMentions: (pr.voice_mentions || []).length,
-        confidence: pr.confidence,
-        affiliateUrl: pr.affiliate_url || "",
-      }));
+      const fresh = buildCommerceItems(
+        { jobId: clip.jobId, clipId: clip.clipId, clipTitle: clip.title, projectTitle: clip.project, thumbnail: resolveMedia(clip.thumb) },
+        a
+      );
       setCommerceItems((prev) => [...prev.filter((x) => x.clipId !== clip.clipId), ...fresh]);
       setCommerceLoaded(true);
       showToast(fresh.length ? `브랜드 ${fresh.length}개를 인식했어요` : "감지된 브랜드가 없어요");

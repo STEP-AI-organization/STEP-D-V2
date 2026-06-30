@@ -5,6 +5,7 @@ import { C, card, estimateBadge, ghostBtn } from "@/lib/console/theme";
 import { fmtKor } from "@/lib/console/format";
 import { CAT_PLATS, PLATFORM_META, PLAT_RATE } from "@/lib/console/dummy";
 import { useConsole } from "../ConsoleProvider";
+import { PplOverlayPlayer } from "../PplOverlayPlayer";
 
 const CTA_CHIPS = ["지금 구매하기", "최저가 보러가기", "한정 수량 구매", "상세 정보 보기"];
 
@@ -84,8 +85,20 @@ export function CommerceScreen() {
             {/* preview + real recognition meta */}
             <div>
               {(() => {
-                const videoUrl = videoFor(sel.clipId);
-                const thumb = thumbFor(sel.clipId);
+                const videoUrl = sel.videoUrl ?? videoFor(sel.clipId) ?? undefined;
+                const thumb = sel.thumbnail ?? thumbFor(sel.clipId) ?? undefined;
+                // 단일 브랜드 오버레이(이 브랜드의 박스만) — 프레임 좌표가 있을 때
+                if (sel.overlay && sel.overlay.frames.length) {
+                  return (
+                    <div style={{ position: "relative", maxWidth: 260, margin: "0 auto" }}>
+                      <div style={{ position: "absolute", top: 12, left: 12, zIndex: 3, display: "flex", alignItems: "center", gap: 7, background: "rgba(0,0,0,.55)", backdropFilter: "blur(6px)", padding: "5px 10px", borderRadius: 8, pointerEvents: "none" }}>
+                        <span style={{ width: 7, height: 7, borderRadius: "50%", background: "#3CE08F" }} />
+                        <span style={{ fontSize: 11, fontWeight: 700, color: "#fff" }}>{sel.brand} 인식 · 오버레이</span>
+                      </div>
+                      <PplOverlayPlayer analysis={sel.overlay} videoUrl={videoUrl} poster={thumb} />
+                    </div>
+                  );
+                }
                 return (
                   <div style={{ borderRadius: 14, overflow: "hidden", background: C.ink, position: "relative", aspectRatio: "9 / 16", maxHeight: 460 }}>
                     {videoUrl ? (
