@@ -457,12 +457,14 @@ function MetaButton({ clip }: { clip: ShortcutEditorClip }) {
   );
 
   return (
-    <div style={{ position: "relative" }} onMouseEnter={() => setOpen(true)} onMouseLeave={() => setOpen(false)}>
-      <button style={{ height: 38, padding: "0 14px", border: `1px solid ${LINE}`, borderRadius: 10, background: "#fff", color: "#5B5346", display: "inline-flex", alignItems: "center", gap: 7, fontSize: 13, fontWeight: 600, cursor: "default" }}>
+    <div style={{ position: "relative" }}>
+      <button onClick={() => setOpen((v) => !v)} className="se-press" style={{ height: 38, padding: "0 14px", border: `1px solid ${open ? ACCENT : LINE}`, borderRadius: 10, background: open ? SOFT : "#fff", color: open ? ACCENT : "#5B5346", display: "inline-flex", alignItems: "center", gap: 7, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
         <Info size={15} />메타데이터
       </button>
       {open && (
-        <div style={{ position: "absolute", top: "calc(100% + 8px)", right: 0, width: 384, background: "#fff", border: `1px solid ${LINE}`, borderRadius: 14, boxShadow: "0 20px 50px -12px rgba(22,18,13,.45)", padding: "16px 18px", zIndex: 60, cursor: "default", maxHeight: "min(620px, 82vh)", overflowY: "auto" }}>
+        <>
+          <div onClick={() => setOpen(false)} style={{ position: "fixed", inset: 0, zIndex: 59 }} />
+          <div style={{ position: "absolute", top: "calc(100% + 8px)", right: 0, width: 384, background: "#fff", border: `1px solid ${LINE}`, borderRadius: 14, boxShadow: "0 20px 50px -12px rgba(22,18,13,.45)", padding: "16px 18px", zIndex: 60, cursor: "default", maxHeight: "min(620px, 82vh)", overflowY: "auto" }}>
           {/* header */}
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: 12 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 7 }}>
@@ -515,7 +517,8 @@ function MetaButton({ clip }: { clip: ShortcutEditorClip }) {
             <Sparkles size={11} color={ACCENT} />
             <span>STEP D AI가 제목·태그·설명·발행 시점을 자동 최적화했습니다.</span>
           </div>
-        </div>
+          </div>
+        </>
       )}
     </div>
   );
@@ -1368,6 +1371,8 @@ export function ShortcutEditor({ clip, onClose, onSave, saving = false, onPublis
         .shortcut-editor input[type=range]{-webkit-appearance:none;appearance:none;height:5px;border-radius:99px;background:#D8CDB6;outline:none}
         .shortcut-editor input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;height:16px;border-radius:50%;background:#6C5CE7;cursor:pointer;box-shadow:0 0 0 4px rgba(108,92,231,.18)}
         .shortcut-editor button:disabled{opacity:.55;cursor:not-allowed}
+        .se-press{transition:transform .07s ease}
+        .se-press:active{transform:scale(.94)}
         @media (max-width: 900px){
           .shortcut-editor-body{display:block !important;overflow:auto !important}
           .shortcut-editor-stage{min-height:640px}
@@ -1385,19 +1390,19 @@ export function ShortcutEditor({ clip, onClose, onSave, saving = false, onPublis
           <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 10 }}>
             <MetaButton clip={clip} />
             {onAnalyzeBrand && (
-              <button onClick={onAnalyzeBrand} disabled={analyzing} style={{ height: 38, padding: "0 14px", border: `1px solid ${LINE}`, borderRadius: 10, background: "#fff", color: "#5B5346", display: "inline-flex", alignItems: "center", gap: 7, fontSize: 13, fontWeight: 600, cursor: analyzing ? "default" : "pointer", opacity: analyzing ? 0.6 : 1 }}>
+              <button onClick={onAnalyzeBrand} disabled={analyzing} className="se-press" style={{ height: 38, padding: "0 14px", border: `1px solid ${LINE}`, borderRadius: 10, background: "#fff", color: "#5B5346", display: "inline-flex", alignItems: "center", gap: 7, fontSize: 13, fontWeight: 600, cursor: analyzing ? "default" : "pointer", opacity: analyzing ? 0.6 : 1 }}>
                 <Sparkles size={15} />{analyzing ? "분석 중..." : "브랜드 분석"}
               </button>
             )}
             {onPublish && (
-              <button onClick={onPublish} style={{ height: 38, padding: "0 14px", border: `1px solid ${LINE}`, borderRadius: 10, background: "#fff", color: "#5B5346", display: "inline-flex", alignItems: "center", gap: 7, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
+              <button onClick={onPublish} className="se-press" style={{ height: 38, padding: "0 14px", border: `1px solid ${LINE}`, borderRadius: 10, background: "#fff", color: "#5B5346", display: "inline-flex", alignItems: "center", gap: 7, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
                 <Youtube size={15} color="#FF0000" />배포
               </button>
             )}
-            <button onClick={resetEditor} style={{ height: 38, padding: "0 15px", border: `1px solid ${LINE}`, borderRadius: 10, background: SOFT, color: "#5B5346", display: "inline-flex", alignItems: "center", gap: 7, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
+            <button onClick={resetEditor} className="se-press" style={{ height: 38, padding: "0 15px", border: `1px solid ${LINE}`, borderRadius: 10, background: SOFT, color: "#5B5346", display: "inline-flex", alignItems: "center", gap: 7, fontSize: 13, fontWeight: 600, cursor: "pointer" }}>
               <RefreshCw size={15} />초기화
             </button>
-            <button onClick={() => void handleSave()} disabled={saving} style={{ height: 38, padding: "0 18px", border: 0, borderRadius: 10, background: ACCENT, color: "#fff", display: "inline-flex", alignItems: "center", gap: 8, fontSize: 13.5, fontWeight: 700, cursor: "pointer", boxShadow: "0 8px 18px -9px rgba(108,92,231,.9)" }}>
+            <button onClick={() => void handleSave()} disabled={saving} className="se-press" style={{ height: 38, padding: "0 18px", border: 0, borderRadius: 10, background: ACCENT, color: "#fff", display: "inline-flex", alignItems: "center", gap: 8, fontSize: 13.5, fontWeight: 700, cursor: "pointer", boxShadow: "0 8px 18px -9px rgba(108,92,231,.9)" }}>
               <Save size={15} />{saving ? "저장 중..." : "저장하기"}
             </button>
             <button onClick={onClose} style={{ width: 38, height: 38, border: `1px solid ${LINE}`, borderRadius: 10, background: "#fff", color: "#5B5346", display: "grid", placeItems: "center", cursor: "pointer" }} title="닫기">
