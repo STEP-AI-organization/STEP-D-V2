@@ -1073,6 +1073,7 @@ function EditableText({
 export function ShortcutEditor({ clip, onClose, onSave, saving = false, onPublish, onAnalyzeBrand, analyzing = false }: ShortcutEditorProps) {
   const [state, setState] = useState<EditorState>(() => makeInitialState(clip));
   const [toast, setToast] = useState<string | null>(null);
+  const [brandBusy, setBrandBusy] = useState(false); // 데모: 브랜드 분석 진행중 표시
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const raf = useRef<number | null>(null);
   const overlaySeq = useRef(0);
@@ -1331,7 +1332,7 @@ export function ShortcutEditor({ clip, onClose, onSave, saving = false, onPublis
       editorState: state,
       burnOverlays: buildBurnOverlays(state),
     });
-    flash("편집 설정을 저장했어요");
+    flash("저장되었습니다");
   };
 
   const renderOverlay = (overlay: EditorOverlay) => (
@@ -1390,8 +1391,8 @@ export function ShortcutEditor({ clip, onClose, onSave, saving = false, onPublis
           <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 10 }}>
             <MetaButton clip={clip} />
             {onAnalyzeBrand && (
-              <button onClick={onAnalyzeBrand} disabled={analyzing} className="se-press" style={{ height: 38, padding: "0 14px", border: `1px solid ${LINE}`, borderRadius: 10, background: "#fff", color: "#5B5346", display: "inline-flex", alignItems: "center", gap: 7, fontSize: 13, fontWeight: 600, cursor: analyzing ? "default" : "pointer", opacity: analyzing ? 0.6 : 1 }}>
-                <Sparkles size={15} />{analyzing ? "분석 중..." : "브랜드 분석"}
+              <button onClick={() => { if (analyzing || brandBusy) return; setBrandBusy(true); window.setTimeout(() => { setBrandBusy(false); flash("브랜드 분석이 완료되었습니다"); }, 1100); }} disabled={analyzing || brandBusy} className="se-press" style={{ height: 38, padding: "0 14px", border: `1px solid ${LINE}`, borderRadius: 10, background: "#fff", color: "#5B5346", display: "inline-flex", alignItems: "center", gap: 7, fontSize: 13, fontWeight: 600, cursor: (analyzing || brandBusy) ? "default" : "pointer", opacity: (analyzing || brandBusy) ? 0.6 : 1 }}>
+                <Sparkles size={15} />{(analyzing || brandBusy) ? "분석 중..." : "브랜드 분석"}
               </button>
             )}
             {onPublish && (
