@@ -1,0 +1,46 @@
+# STEP-D Server — Cloud Build config
+# Triggered by GitHub push to main branch
+substitutions:
+  _REGION: us-central1
+  _SERVICE_NAME: stepd-server
+  _GCS_BUCKET: stepd-media
+  _CLOUD_SQL_INSTANCE: step-d:us-central1:stepd-db
+
+steps:
+  - name: gcr.io/k8s-skaffold/pack
+    entrypoint: pack
+    args:
+      - build
+      - --builder=gcr.io/buildpacks/builder:latest
+      - --publish
+      - gcr.io/$PROJECT_ID/stepd-server:$SHORT_SHA
+
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - $_SERVICE_NAME
+      - --image=gcr.io/$PROJECT_ID/stepd-server:$SHORT_SHA
+      - --region=$_REGION
+      - --allow-unauthenticated
+      - --cpu=2
+      - --memory=4Gi
+      - --timeout=600
+      - --concurrency=10
+      - --min-instances=0
+      - --max-instances=5
+      - --set-env-vars=NODE_ENV=production,PORT=4000,GCS_BUCKET=$_GCS_BUCKET
+      - --set-secrets=DATABASE_URL=stepd-db-url:latest
+      - --set-secrets=GOOGLE_CLIENT_ID=stepd-google-client-id:latest
+      - --set-secrets=GOOGLE_CLIENT_SECRET=stepd-google-client-secret:latest
+      - --set-secrets=JWT_SECRET=stepd-jwt-secret:latest
+      - --set-secrets=PUBLIC_URL=stepd-public-url:latest
+      - --add-cloudsql-instances=$_CLOUD_SQL_INSTANCE
+      - --service-account=stepd-deployer@$PROJECT_ID.iam.gserviceaccount.com
+
+options:
+  machineType: E2_HIGHCPU_8
+  logging: CLOUD_LOGGING_ONLY
+
+timeout: 1200s

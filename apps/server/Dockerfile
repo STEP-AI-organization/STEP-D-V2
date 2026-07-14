@@ -16,27 +16,22 @@ ENV PNPM_HOME=/pnpm
 ENV PATH="$PNPM_HOME:$PATH"
 RUN npm install -g pnpm@latest
 
-WORKDIR /app
-
 # ── deps layer (cached) ──────────────────────────────────────────────────────
 FROM base AS deps
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
-COPY apps/server/package.json apps/server/
-COPY apps/web/package.json apps/web/ 2>/dev/null || true
-RUN pnpm install --frozen-lockfile
-
-# ── build ─────────────────────────────────────────────────────────────────────
-FROM deps AS build
-COPY tsconfig.base.json ./ 2>/dev/null || true
-COPY apps/server/tsconfig.json apps/server/
-COPY apps/server/src apps/server/src
-RUN pnpm --filter server build
+WORKDIR /app/apps/server
+COPY apps/server/package.json ./
+RUN pnpm install --no-frozen-lockfile
 
 # ── runtime ──────────────────────────────────────────────────────────────────
 FROM base AS runtime
-COPY --from=deps /app/node_modules /app/node_modules
-COPY --from=build /app/apps/server/dist /app/apps/server/dist
-COPY --from=deps /app/apps/server/node_modules /app/apps/server/node_modules 2>/dev/null || true
+WORKDIR /app
+# Copy all monorepo files needed (no node_modules, handled separately)
+COPY package.json ./
+COPY apps/server apps/server
+# Overwrite server node_modules from deps layer
+COPY --from=deps /app/apps/server/node_modules /app/apps/server/node_modules
 
 EXPOSE 4000
-CMD ["node", "/app/apps/server/dist/index.js"]
+ENV NODE_ENV=production
+WORKDIR /app/apps/server
+CMD ["npx", "tsx", "src/index.ts"]

@@ -2,13 +2,13 @@
 # STEP-D Server — Cloud Run / Cloud SQL deployment
 # Usage:
 #   1. Build + push:
-#      gcloud builds submit apps/server --tag gcr.io/$(gcloud config get project)/stepd-server
+#      gcloud builds submit apps/server --tag us-central1-docker.pkg.dev/$(gcloud config get project)/stepd-server/stepd-server
 #
 #   2. Deploy to Cloud Run:
 #      gcloud run deploy stepd-server \
-#        --image gcr.io/$(gcloud config get project)/stepd-server \
+#        --image us-central1-docker.pkg.dev/$(gcloud config get project)/stepd-server/stepd-server \
 #        --platform managed \
-#        --region asia-northeast3 \
+#        --region us-central1 \
 #        --allow-unauthenticated \
 #        --cpu 2 \
 #        --memory 4Gi \
@@ -16,41 +16,22 @@
 #        --concurrency 10 \
 #        --min-instances 0 \
 #        --max-instances 5 \
-#        --set-env-vars="NODE_ENV=production,PORT=4000" \
+#        --set-env-vars="NODE_ENV=production,PORT=4000,GCS_BUCKET=stepd-media" \
 #        --set-secrets="DATABASE_URL=stepd-db-url:latest" \
 #        --set-secrets="GOOGLE_CLIENT_ID=stepd-google-client-id:latest" \
 #        --set-secrets="GOOGLE_CLIENT_SECRET=stepd-google-client-secret:latest" \
 #        --set-secrets="JWT_SECRET=stepd-jwt-secret:latest" \
 #        --set-secrets="PUBLIC_URL=stepd-public-url:latest" \
-#        --set-env-vars="GCS_BUCKET=stepd-uploads" \
-#        --add-cloudsql-instances $(gcloud config get project):asia-northeast3:stepd-db
-#
-#  Prerequisites:
-#   - GCP project with Cloud Run, Cloud SQL, Secret Manager, Cloud Storage APIs enabled
-#   - Cloud SQL PostgreSQL instance named "stepd-db" in asia-northeast3
-#   - Database "stepd" created:
-#       gcloud sql databases create stepd --instance=stepd-db
-#   - Schema applied:
-#       gcloud sql connect stepd-db --user=postgres --database=stepd
-#         (then run: \i apps/server/schema.sql)
-#   - GCS bucket created:
-#       gsutil mb -l asia-northeast3 gs://stepd-uploads
-#   - Secrets in Secret Manager:
-#       gcloud secrets create stepd-db-url --replication-policy=automatic
-#       echo -n "postgresql://stepd-user:password@//cloudsql/project:region:stepd-db/stepd" | \
-#         gcloud secrets versions add stepd-db-url --data-file=-
-#     (replace with actual Cloud SQL socket connection string)
-#   - Service account for Cloud Run with:
-#       roles/cloudsql.client (Cloud SQL access)
-#       roles/storage.objectAdmin (GCS bucket writes)
-#       roles/secretmanager.secretAccessor (Secret Manager access)
+#        --add-cloudsql-instances step-d:us-central1:stepd-db \
+#        --service-account stepd-deployer@step-d.iam.gserviceaccount.com
 # =========================================================
 echo "Deploying STEP-D server to Cloud Run..."
 
 PROJECT_ID=$(gcloud config get project)
-REGION=asia-northeast3
-IMAGE="gcr.io/${PROJECT_ID}/stepd-server"
+REGION=us-central1
+IMAGE="us-central1-docker.pkg.dev/${PROJECT_ID}/stepd-server/stepd-server"
 SERVICE_NAME="stepd-server"
+SA="stepd-deployer@${PROJECT_ID}.iam.gserviceaccount.com"
 
 echo "=== Building container image ==="
 gcloud builds submit apps/server --tag "${IMAGE}"
@@ -67,14 +48,14 @@ gcloud run deploy "${SERVICE_NAME}" \
   --concurrency 10 \
   --min-instances 0 \
   --max-instances 5 \
-  --set-env-vars="NODE_ENV=production,PORT=4000" \
+  --set-env-vars="NODE_ENV=production,PORT=4000,GCS_BUCKET=stepd-media" \
   --set-secrets="DATABASE_URL=stepd-db-url:latest" \
   --set-secrets="GOOGLE_CLIENT_ID=stepd-google-client-id:latest" \
   --set-secrets="GOOGLE_CLIENT_SECRET=stepd-google-client-secret:latest" \
   --set-secrets="JWT_SECRET=stepd-jwt-secret:latest" \
   --set-secrets="PUBLIC_URL=stepd-public-url:latest" \
-  --set-env-vars="GCS_BUCKET=stepd-uploads" \
-  --add-cloudsql-instances "${PROJECT_ID}:${REGION}:stepd-db"
+  --add-cloudsql-instances "${PROJECT_ID}:${REGION}:stepd-db" \
+  --service-account "${SA}"
 
 echo "=== Done ==="
 echo "Get the service URL with:"

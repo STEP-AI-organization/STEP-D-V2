@@ -1,0 +1,57 @@
+# Root-level Cloud Build config for STEP-D server
+# Builds from repo root so Dockerfile can access monorepo package.json etc.
+# Triggered by GitHub push (main branch) or manually via gcloud builds submit.
+substitutions:
+  _REGION: us-central1
+  _SERVICE_NAME: stepd-server
+  _GCS_BUCKET: stepd-media
+  _CLOUD_SQL_INSTANCE: step-d:us-central1:stepd-db
+
+steps:
+  - name: gcr.io/cloud-builders/docker
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        docker build \
+          -f apps/server/Dockerfile \
+          -t us-central1-docker.pkg.dev/$PROJECT_ID/stepd-server/stepd-server:$$(date +%s) \
+          -t us-central1-docker.pkg.dev/$PROJECT_ID/stepd-server/stepd-server:latest \
+          .
+
+  - name: gcr.io/cloud-builders/docker
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        docker push us-central1-docker.pkg.dev/$PROJECT_ID/stepd-server/stepd-server:latest
+
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        gcloud run deploy $_SERVICE_NAME \
+          --image=us-central1-docker.pkg.dev/$PROJECT_ID/stepd-server/stepd-server:latest \
+          --region=$_REGION \
+          --allow-unauthenticated \
+          --cpu=2 \
+          --memory=4Gi \
+          --timeout=600 \
+          --concurrency=10 \
+          --min-instances=0 \
+          --max-instances=5 \
+          --set-env-vars=NODE_ENV=production,PORT=4000,GCS_BUCKET=$_GCS_BUCKET \
+          --set-secrets=DATABASE_URL=stepd-db-url:latest \
+          --set-secrets=GOOGLE_CLIENT_ID=stepd-google-client-id:latest \
+          --set-secrets=GOOGLE_CLIENT_SECRET=stepd-google-client-secret:latest \
+          --set-secrets=JWT_SECRET=stepd-jwt-secret:latest \
+          --set-secrets=PUBLIC_URL=stepd-public-url:latest \
+          --add-cloudsql-instances=$_CLOUD_SQL_INSTANCE \
+          --service-account=stepd-deployer@$PROJECT_ID.iam.gserviceaccount.com
+
+options:
+  machineType: E2_HIGHCPU_8
+  logging: CLOUD_LOGGING_ONLY
+
+timeout: 1200s
