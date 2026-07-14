@@ -37,6 +37,7 @@ import {
   getLatestVideoStat,
   getChannelViewTrend,
   getChannelTrendSummary,
+  getChannelAnalytics,
   getPool,
   type MediaRow,
   type YouTubeChannel,
@@ -52,6 +53,7 @@ import {
   TokenRevokedError,
   type PersistTokens,
 } from "./youtube.ts";
+import { runChannelPipeline, runDueChannels } from "./channel-pipeline.ts";
 import {
   uploadPath,
   thumbPath,
@@ -527,6 +529,15 @@ const oauthCallback = async (c: Context) => {
     }
 
     await upsertYouTubeChannel(channel);
+
+    // Kick the analysis immediately so the channel isn't empty while the creator is
+    // still looking at the success page. Best-effort only: Cloud Run throttles CPU
+    // once we redirect, so this may not finish. The scheduler is the guarantee —
+    // lastSyncedAt is NULL until a run completes, which keeps the channel "due".
+    void runChannelPipeline(GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, channel.channelId, { force: true })
+      .then((r) => console.log("[pipeline/on-connect]", JSON.stringify(r)))
+      .catch((err) => console.error("[pipeline/on-connect]", err));
+
     const params = new URLSearchParams({ success: "1", channelId: channel.channelId, channelName: channel.channelName });
     return c.redirect(`/register?${params}`);
   } catch (err: any) {
@@ -647,6 +658,55 @@ app.get("/api/youtube/analytics/:channelId", async (c) => {
     console.error("[youtube/analytics]", err);
     return c.json({ error: err.message }, 500);
   }
+});
+
+// ── Analysis pipeline (scheduler-driven) ─────────────────────────────────
+
+/**
+ * Cloud Scheduler hits this. Runs every channel that is due — and a freshly
+ * connected channel is always due, so this also catches anything the on-connect
+ * kick failed to finish before Cloud Run throttled it.
+ *
+ * The service is IAM-protected (no public invoker), so the scheduler's OIDC token
+ * is the auth; there is no separate shared secret to leak.
+ */
+app.post("/api/youtube/pipeline/run", async (c) => {
+  if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET) return c.json({ error: "OAuth not configured" }, 500);
+
+  const started = Date.now();
+  const results = await runDueChannels(GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET);
+  const ran = results.filter((r) => !r.skipped);
+
+  console.log(`[pipeline/run] ${ran.length}/${results.length} channels in ${Date.now() - started}ms`);
+  return c.json({
+    ok: true,
+    channels: results.length,
+    ran: ran.length,
+    tookMs: Date.now() - started,
+    results,
+  });
+});
+
+/** Force a single channel through the pipeline now, ignoring the staleness windows. */
+app.post("/api/youtube/pipeline/run/:channelId", async (c) => {
+  if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET) return c.json({ error: "OAuth not configured" }, 500);
+
+  const result = await runChannelPipeline(
+    GOOGLE_CLIENT_ID,
+    GOOGLE_CLIENT_SECRET,
+    c.req.param("channelId"),
+    { force: true },
+  );
+  return c.json(result, result.error ? 500 : 200);
+});
+
+/** Stored daily analytics for a channel — served from our DB, not YouTube. */
+app.get("/api/youtube/analytics/:channelId/daily", async (c) => {
+  const channelId = c.req.param("channelId");
+  const days = Number(c.req.query("days")) || 90;
+  const fromDay = new Date(Date.now() - days * 86_400_000).toISOString().slice(0, 10);
+  const rows = await getChannelAnalytics(channelId, fromDay);
+  return c.json({ channelId, days: rows.length, rows });
 });
 
 // ── YouTube video sync & trends ──────────────────────────────────────────

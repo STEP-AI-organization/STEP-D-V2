@@ -129,9 +129,34 @@ async function migrate(): Promise<void> {
       commentCount BIGINT NOT NULL DEFAULT 0
     );
 
+    -- Daily channel metrics from the YouTube Analytics API. Keyed by (channel, day)
+    -- so re-fetching a window overwrites instead of duplicating — YouTube keeps
+    -- revising the last few days, so the pipeline re-pulls a trailing window.
+    CREATE TABLE IF NOT EXISTS channel_analytics (
+      channelId               TEXT NOT NULL,
+      day                     TEXT NOT NULL,
+      views                   BIGINT NOT NULL DEFAULT 0,
+      estimatedMinutesWatched BIGINT NOT NULL DEFAULT 0,
+      averageViewDuration     REAL NOT NULL DEFAULT 0,
+      averageViewPercentage   REAL NOT NULL DEFAULT 0,
+      subscribersGained       BIGINT NOT NULL DEFAULT 0,
+      subscribersLost         BIGINT NOT NULL DEFAULT 0,
+      fetchedAt               BIGINT NOT NULL,
+      PRIMARY KEY (channelId, day)
+    );
+
     CREATE INDEX IF NOT EXISTS idx_channel_videos_channel ON channel_videos(channelId);
     CREATE INDEX IF NOT EXISTS idx_video_stats_video ON video_stats(videoId);
     CREATE INDEX IF NOT EXISTS idx_video_stats_snapshot ON video_stats(snapshotAt);
+  `);
+
+  // Added after the table shipped, so existing deployments need them backfilled.
+  // These drive the scheduler: NULL means "never ran", so a newly connected channel
+  // gets picked up on the next tick even if the on-connect kick never got CPU.
+  await pool.query(`
+    ALTER TABLE youtube_channels ADD COLUMN IF NOT EXISTS lastSyncedAt   BIGINT;
+    ALTER TABLE youtube_channels ADD COLUMN IF NOT EXISTS lastAnalyzedAt BIGINT;
+    ALTER TABLE youtube_channels ADD COLUMN IF NOT EXISTS lastError      TEXT;
   `);
 }
 
@@ -216,16 +241,90 @@ export interface YouTubeChannel {
   email: string | null;
   status: string;
   connectedAt: number;
+  /** null = never run. Drives which channels the scheduler picks up. */
+  lastSyncedAt?: number | null;
+  lastAnalyzedAt?: number | null;
+  lastError?: string | null;
+}
+
+// ── channel analytics (YouTube Analytics API, daily) ───────────────────────────
+
+export interface ChannelAnalyticsDay {
+  channelId: string;
+  day: string;
+  views: number;
+  estimatedMinutesWatched: number;
+  averageViewDuration: number;
+  averageViewPercentage: number;
+  subscribersGained: number;
+  subscribersLost: number;
+  fetchedAt: number;
+}
+
+export async function upsertChannelAnalytics(rows: ChannelAnalyticsDay[]): Promise<void> {
+  for (const r of rows) {
+    await pool.query(
+      `INSERT INTO channel_analytics
+         (channelId, day, views, estimatedMinutesWatched, averageViewDuration,
+          averageViewPercentage, subscribersGained, subscribersLost, fetchedAt)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+       ON CONFLICT (channelId, day) DO UPDATE SET
+         views                   = EXCLUDED.views,
+         estimatedMinutesWatched = EXCLUDED.estimatedMinutesWatched,
+         averageViewDuration     = EXCLUDED.averageViewDuration,
+         averageViewPercentage   = EXCLUDED.averageViewPercentage,
+         subscribersGained       = EXCLUDED.subscribersGained,
+         subscribersLost         = EXCLUDED.subscribersLost,
+         fetchedAt               = EXCLUDED.fetchedAt`,
+      [r.channelId, r.day, r.views, r.estimatedMinutesWatched, r.averageViewDuration,
+        r.averageViewPercentage, r.subscribersGained, r.subscribersLost, r.fetchedAt],
+    );
+  }
+}
+
+export async function getChannelAnalytics(
+  channelId: string,
+  fromDay: string,
+): Promise<ChannelAnalyticsDay[]> {
+  const { rows } = await pool.query(
+    `SELECT channelid AS "channelId", day, views,
+            estimatedminuteswatched AS "estimatedMinutesWatched",
+            averageviewduration AS "averageViewDuration",
+            averageviewpercentage AS "averageViewPercentage",
+            subscribersgained AS "subscribersGained",
+            subscriberslost AS "subscribersLost",
+            fetchedat AS "fetchedAt"
+       FROM channel_analytics
+      WHERE channelId = $1 AND day >= $2
+      ORDER BY day ASC`,
+    [channelId, fromDay],
+  );
+  return rows as unknown as ChannelAnalyticsDay[];
+}
+
+/** Records a completed pipeline run (or the error that stopped it). */
+export async function markChannelRun(
+  channelId: string,
+  patch: { lastSyncedAt?: number; lastAnalyzedAt?: number; lastError?: string | null },
+): Promise<void> {
+  await pool.query(
+    `UPDATE youtube_channels
+        SET lastSyncedAt   = COALESCE($2, lastSyncedAt),
+            lastAnalyzedAt = COALESCE($3, lastAnalyzedAt),
+            lastError      = $4
+      WHERE channelId = $1`,
+    [channelId, patch.lastSyncedAt ?? null, patch.lastAnalyzedAt ?? null, patch.lastError ?? null],
+  );
 }
 
 export async function listYouTubeChannels(): Promise<YouTubeChannel[]> {
-  const { rows } = await pool.query("SELECT * FROM youtube_channels ORDER BY connectedAt DESC");
+  const { rows } = await pool.query(`SELECT id, channelid AS "channelId", channelname AS "channelName", channelurl AS "channelUrl", thumbnail, subscribers, refreshtoken AS "refreshToken", accesstoken AS "accessToken", expiresat AS "expiresAt", scope, email, status, connectedat AS "connectedAt", lastsyncedat AS "lastSyncedAt", lastanalyzedat AS "lastAnalyzedAt", lasterror AS "lastError" FROM youtube_channels ORDER BY connectedAt DESC`);
   return rows as unknown as YouTubeChannel[];
 }
 
 export async function getYouTubeChannelByChannelId(channelId: string): Promise<YouTubeChannel | undefined> {
   const { rows } = await pool.query(
-    "SELECT * FROM youtube_channels WHERE channelId = $1",
+    `SELECT id, channelid AS "channelId", channelname AS "channelName", channelurl AS "channelUrl", thumbnail, subscribers, refreshtoken AS "refreshToken", accesstoken AS "accessToken", expiresat AS "expiresAt", scope, email, status, connectedat AS "connectedAt", lastsyncedat AS "lastSyncedAt", lastanalyzedat AS "lastAnalyzedAt", lasterror AS "lastError" FROM youtube_channels WHERE channelId = $1`,
     [channelId],
   );
   return rows[0] as YouTubeChannel | undefined;
@@ -304,7 +403,7 @@ export async function upsertChannelVideo(v: ChannelVideo): Promise<void> {
 
 export async function listChannelVideos(channelId: string): Promise<ChannelVideo[]> {
   const { rows } = await pool.query(
-    "SELECT * FROM channel_videos WHERE channelId = $1 ORDER BY publishedAt DESC",
+    `SELECT id, channelid AS "channelId", videoid AS "videoId", title, description, publishedat AS "publishedAt", durationsec AS "durationSec", thumbnail, viewcount AS "viewCount", likecount AS "likeCount", commentcount AS "commentCount", lastsynced AS "lastSynced" FROM channel_videos WHERE channelId = $1 ORDER BY publishedAt DESC`,
     [channelId],
   );
   return rows as unknown as ChannelVideo[];
@@ -312,7 +411,7 @@ export async function listChannelVideos(channelId: string): Promise<ChannelVideo
 
 export async function getChannelVideoByVideoId(videoId: string): Promise<ChannelVideo | undefined> {
   const { rows } = await pool.query(
-    "SELECT * FROM channel_videos WHERE videoId = $1",
+    `SELECT id, channelid AS "channelId", videoid AS "videoId", title, description, publishedat AS "publishedAt", durationsec AS "durationSec", thumbnail, viewcount AS "viewCount", likecount AS "likeCount", commentcount AS "commentCount", lastsynced AS "lastSynced" FROM channel_videos WHERE videoId = $1`,
     [videoId],
   );
   return rows[0] as ChannelVideo | undefined;
@@ -338,7 +437,7 @@ export async function insertVideoStat(s: VideoStat): Promise<void> {
 
 export async function getLatestVideoStat(videoId: string): Promise<VideoStat | undefined> {
   const { rows } = await pool.query(
-    "SELECT * FROM video_stats WHERE videoId = $1 ORDER BY snapshotAt DESC LIMIT 1",
+    `SELECT id, videoid AS "videoId", channelid AS "channelId", snapshotat AS "snapshotAt", viewcount AS "viewCount", likecount AS "likeCount", commentcount AS "commentCount" FROM video_stats WHERE videoId = $1 ORDER BY snapshotAt DESC LIMIT 1`,
     [videoId],
   );
   return rows[0] as VideoStat | undefined;
@@ -347,7 +446,7 @@ export async function getLatestVideoStat(videoId: string): Promise<VideoStat | u
 export async function getVideoStats(videoId: string, days = 30): Promise<VideoStat[]> {
   const cutoff = Date.now() - days * 86_400_000;
   const { rows } = await pool.query(
-    "SELECT * FROM video_stats WHERE videoId = $1 AND snapshotAt >= $2 ORDER BY snapshotAt ASC",
+    `SELECT id, videoid AS "videoId", channelid AS "channelId", snapshotat AS "snapshotAt", viewcount AS "viewCount", likecount AS "likeCount", commentcount AS "commentCount" FROM video_stats WHERE videoId = $1 AND snapshotAt >= $2 ORDER BY snapshotAt ASC`,
     [videoId, cutoff],
   );
   return rows as unknown as VideoStat[];
@@ -356,7 +455,7 @@ export async function getVideoStats(videoId: string, days = 30): Promise<VideoSt
 export async function getChannelStats(channelId: string, days = 7): Promise<VideoStat[]> {
   const cutoff = Date.now() - days * 86_400_000;
   const { rows } = await pool.query(
-    "SELECT * FROM video_stats WHERE channelId = $1 AND snapshotAt >= $2 ORDER BY snapshotAt ASC",
+    `SELECT id, videoid AS "videoId", channelid AS "channelId", snapshotat AS "snapshotAt", viewcount AS "viewCount", likecount AS "likeCount", commentcount AS "commentCount" FROM video_stats WHERE channelId = $1 AND snapshotAt >= $2 ORDER BY snapshotAt ASC`,
     [channelId, cutoff],
   );
   return rows as unknown as VideoStat[];
@@ -428,12 +527,12 @@ export async function insertMedia(m: MediaRow): Promise<void> {
 }
 
 export async function getMedia(id: string): Promise<MediaRow | undefined> {
-  const { rows } = await pool.query("SELECT * FROM media WHERE id = $1", [id]);
+  const { rows } = await pool.query(`SELECT id, episodeid AS "episodeId", role, title, filename, path, mime, size, durationsec AS "durationSec", width, height, codec, hasaudio AS "hasAudio", thumbpath AS "thumbPath", createdat AS "createdAt" FROM media WHERE id = $1`, [id]);
   return rows[0] as MediaRow | undefined;
 }
 
 export async function listMedia(): Promise<MediaRow[]> {
-  const { rows } = await pool.query("SELECT * FROM media ORDER BY createdAt DESC");
+  const { rows } = await pool.query(`SELECT id, episodeid AS "episodeId", role, title, filename, path, mime, size, durationsec AS "durationSec", width, height, codec, hasaudio AS "hasAudio", thumbpath AS "thumbPath", createdat AS "createdAt" FROM media ORDER BY createdAt DESC`);
   return rows as unknown as MediaRow[];
 }
 
