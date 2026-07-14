@@ -44,7 +44,14 @@ import {
 } from "./db-pg.ts";
 import { hasFfmpeg, probe, captureThumbnail, trimEncode } from "./ffmpeg.ts";
 import { buildRecommendations, newId } from "./pipeline.ts";
-import { syncChannelVideos, fetchChannelAnalytics, getFreshAccessToken } from "./youtube.ts";
+import {
+  syncChannelVideos,
+  fetchChannelAnalytics,
+  withAccessToken,
+  refreshChannelToken,
+  TokenRevokedError,
+  type PersistTokens,
+} from "./youtube.ts";
 import {
   uploadPath,
   thumbPath,
@@ -476,21 +483,6 @@ async function fetchYtChannelInfo(accessToken: string) {
   };
 }
 
-async function refreshAccessToken(refreshToken: string) {
-  const params = new URLSearchParams({
-    refresh_token: refreshToken,
-    client_id: GOOGLE_CLIENT_ID,
-    client_secret: GOOGLE_CLIENT_SECRET,
-    grant_type: "refresh_token",
-  });
-  const res = await fetch("https://oauth2.googleapis.com/token", {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: params,
-  });
-  if (!res.ok) throw new Error(`Token refresh failed (${res.status}): ${await res.text()}`);
-  return res.json() as Promise<{ access_token: string; expires_in: number }>;
-}
 
 app.get("/api/youtube/auth", (c) => {
   if (!GOOGLE_CLIENT_ID) return c.json({ error: "GOOGLE_CLIENT_ID not configured" }, 500);
@@ -573,11 +565,16 @@ app.post("/api/youtube/refresh", async (c) => {
   if (!ch) return c.json({ error: "channel not found" }, 404);
   if (!ch.refreshToken) return c.json({ error: "no refresh token" }, 400);
 
+  if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET) return c.json({ error: "OAuth not configured" }, 500);
+
   try {
-    const data = await refreshAccessToken(ch.refreshToken);
-    await upsertYouTubeChannel({ ...ch, accessToken: data.access_token, expiresAt: Date.now() + (data.expires_in ?? 3600) * 1000 });
-    return c.json({ ok: true, expiresAt: Date.now() + (data.expires_in ?? 3600) * 1000 });
+    await refreshChannelToken(GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, ch, persistTokensFor(ch));
+    return c.json({ ok: true, expiresAt: ch.expiresAt });
   } catch (err: any) {
+    if (err instanceof TokenRevokedError) {
+      await markRevoked(ch);
+      return c.json({ error: "revoked", message: "Refresh token is no longer valid — the channel must be reconnected." }, 409);
+    }
     return c.json({ error: err.message }, 500);
   }
 });
@@ -587,6 +584,17 @@ app.post("/api/youtube/refresh", async (c) => {
 /** YYYY-MM-DD, `days` ago (Analytics API only accepts this format). */
 function isoDay(days = 0): string {
   return new Date(Date.now() - days * 86_400_000).toISOString().slice(0, 10);
+}
+
+/** Writes a refreshed access token (and its expiry) back to the channel row. */
+function persistTokensFor(ch: YouTubeChannel): PersistTokens {
+  return ({ accessToken, expiresAt }) =>
+    upsertYouTubeChannel({ ...ch, accessToken, expiresAt });
+}
+
+/** A dead refresh token means the creator must reconnect — park the channel. */
+async function markRevoked(ch: YouTubeChannel): Promise<void> {
+  await upsertYouTubeChannel({ ...ch, status: "revoked" });
 }
 
 /**
@@ -615,21 +623,25 @@ app.get("/api/youtube/analytics/:channelId", async (c) => {
   }
 
   try {
-    const accessToken = await getFreshAccessToken(GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, ch.refreshToken);
-    const report = await fetchChannelAnalytics(accessToken, {
-      startDate: c.req.query("start") ?? isoDay(90),
-      endDate: c.req.query("end") ?? isoDay(0),
-      dimensions: c.req.query("dimensions") ?? "day",
-      metrics: c.req.query("metrics") ?? undefined,
-      sort: c.req.query("sort") ?? undefined,
-      maxResults: Number(c.req.query("maxResults")) || undefined,
-    });
+    const report = await withAccessToken(
+      GOOGLE_CLIENT_ID,
+      GOOGLE_CLIENT_SECRET,
+      ch,
+      persistTokensFor(ch),
+      (accessToken) =>
+        fetchChannelAnalytics(accessToken, {
+          startDate: c.req.query("start") ?? isoDay(90),
+          endDate: c.req.query("end") ?? isoDay(0),
+          dimensions: c.req.query("dimensions") ?? "day",
+          metrics: c.req.query("metrics") ?? undefined,
+          sort: c.req.query("sort") ?? undefined,
+          maxResults: Number(c.req.query("maxResults")) || undefined,
+        }),
+    );
     return c.json({ channelId, channelName: ch.channelName, ...report });
   } catch (err: any) {
-    // The creator revoked us (or the token aged out in Testing mode). Park the
-    // channel rather than retrying a token that will never work again.
-    if (String(err.message).includes("invalid_grant")) {
-      await upsertYouTubeChannel({ ...ch, status: "revoked" });
+    if (err instanceof TokenRevokedError) {
+      await markRevoked(ch);
       return c.json({ error: "revoked", message: "Refresh token is no longer valid — the channel must be reconnected." }, 409);
     }
     console.error("[youtube/analytics]", err);
@@ -647,11 +659,8 @@ app.post("/api/youtube/sync/:channelId", async (c) => {
   if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET) return c.json({ error: "OAuth not configured" }, 500);
 
   try {
-    const result = await syncChannelVideos(GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, ch);
-
-    if (result.refreshedToken && result.refreshedToken !== ch.accessToken) {
-      await upsertYouTubeChannel({ ...ch, accessToken: result.refreshedToken });
-    }
+    // syncChannelVideos refreshes and persists the token itself (expiry included).
+    const result = await syncChannelVideos(GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, ch, persistTokensFor(ch));
 
     const now = Date.now();
     let inserted = 0;
@@ -701,6 +710,10 @@ app.post("/api/youtube/sync/:channelId", async (c) => {
       snapshotCount: result.videos.length,
     });
   } catch (err: any) {
+    if (err instanceof TokenRevokedError) {
+      await markRevoked(ch);
+      return c.json({ error: "revoked", message: "Refresh token is no longer valid — the channel must be reconnected." }, 409);
+    }
     console.error("[sync]", err);
     return c.json({ error: err.message }, 500);
   }

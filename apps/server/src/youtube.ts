@@ -50,7 +50,7 @@ export async function fetchChannelAnalytics(
     headers: { Authorization: `Bearer ${accessToken}` },
   });
   if (!res.ok) {
-    throw new Error(`YouTube Analytics failed (${res.status}): ${await res.text()}`);
+    throw new YouTubeApiError(res.status, `YouTube Analytics failed (${res.status}): ${await res.text()}`);
   }
 
   const data = (await res.json()) as {
@@ -66,42 +66,152 @@ export async function fetchChannelAnalytics(
   return { columns, rows };
 }
 
-/** Trade a stored refresh token for a usable access token. */
-export async function getFreshAccessToken(
-  clientId: string,
-  clientSecret: string,
-  refreshToken: string,
-): Promise<string> {
-  const { access_token } = await refreshAccessToken(clientId, clientSecret, refreshToken);
-  return access_token;
+// ── Token management ──────────────────────────────────────────────────────────
+//
+// We hold each creator's refresh token; access tokens live ~1h. Every YouTube call
+// therefore goes through `withAccessToken`, which reuses the stored access token
+// until it is close to expiry, refreshes when it isn't, and retries once if Google
+// rejects a token we believed was still good.
+
+/** Carries the HTTP status so callers can tell "expired" (401) from "no scope" (403). */
+export class YouTubeApiError extends Error {
+  readonly status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = "YouTubeApiError";
+    this.status = status;
+  }
 }
 
-/** Refresh an access token. Mirrors the refresh in index.ts (used by sync). */
-async function refreshAccessToken(
+/** The creator revoked us, or the refresh token aged out. Re-consent is the only fix. */
+export class TokenRevokedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "TokenRevokedError";
+  }
+}
+
+/** Refresh this early so a token never expires mid-request. */
+const EXPIRY_SKEW_MS = 5 * 60_000;
+
+export interface ChannelTokens {
+  channelId: string;
+  accessToken: string | null;
+  refreshToken: string;
+  expiresAt: number | null;
+}
+
+/** Called with a freshly minted token so it outlives the process. */
+export type PersistTokens = (t: { accessToken: string; expiresAt: number }) => void | Promise<void>;
+
+/** Refreshes in flight, keyed by channel — parallel callers share one round trip. */
+const refreshing = new Map<string, Promise<{ accessToken: string; expiresAt: number }>>();
+
+async function requestRefresh(
   clientId: string,
   clientSecret: string,
   refreshToken: string,
-): Promise<{ access_token: string; expires_in: number }> {
-  const params = new URLSearchParams({
-    refresh_token: refreshToken,
-    client_id: clientId,
-    client_secret: clientSecret,
-    grant_type: "refresh_token",
-  });
+): Promise<{ accessToken: string; expiresAt: number }> {
   const res = await fetch("https://oauth2.googleapis.com/token", {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: params,
+    body: new URLSearchParams({
+      refresh_token: refreshToken,
+      client_id: clientId,
+      client_secret: clientSecret,
+      grant_type: "refresh_token",
+    }),
   });
-  if (!res.ok) throw new Error(`Token refresh failed (${res.status}): ${await res.text()}`);
-  return res.json() as Promise<{ access_token: string; expires_in: number }>;
+
+  const body = await res.text();
+  if (!res.ok) {
+    // invalid_grant is terminal: the token is dead and retrying cannot revive it.
+    if (body.includes("invalid_grant")) {
+      throw new TokenRevokedError(`Refresh token rejected: ${body}`);
+    }
+    throw new YouTubeApiError(res.status, `Token refresh failed (${res.status}): ${body}`);
+  }
+  const data = JSON.parse(body) as { access_token: string; expires_in?: number };
+  return {
+    accessToken: data.access_token,
+    expiresAt: Date.now() + (data.expires_in ?? 3600) * 1000,
+  };
+}
+
+/**
+ * Force a refresh regardless of the stored expiry, persist it, and return the token.
+ * Concurrent callers for the same channel share a single round trip to Google.
+ */
+export async function refreshChannelToken(
+  clientId: string,
+  clientSecret: string,
+  ch: ChannelTokens,
+  persist: PersistTokens,
+): Promise<string> {
+  return refreshAndPersist(clientId, clientSecret, ch, persist);
+}
+
+async function refreshAndPersist(
+  clientId: string,
+  clientSecret: string,
+  ch: ChannelTokens,
+  persist: PersistTokens,
+): Promise<string> {
+  let pending = refreshing.get(ch.channelId);
+  if (!pending) {
+    pending = requestRefresh(clientId, clientSecret, ch.refreshToken);
+    refreshing.set(ch.channelId, pending);
+    pending.finally(() => refreshing.delete(ch.channelId)).catch(() => {});
+  }
+
+  const fresh = await pending;
+  // Persist BOTH fields. Saving the token without its new expiry would leave the
+  // stored expiry in the past, so every later call would refresh again.
+  await persist(fresh);
+  ch.accessToken = fresh.accessToken;
+  ch.expiresAt = fresh.expiresAt;
+  return fresh.accessToken;
+}
+
+function isExpired(ch: ChannelTokens): boolean {
+  if (!ch.accessToken) return true;
+  if (ch.expiresAt == null) return true;
+  return Date.now() > ch.expiresAt - EXPIRY_SKEW_MS;
+}
+
+/**
+ * Run `call` with a valid access token for this channel.
+ *
+ * Refreshes up front when the stored token is missing or near expiry, and retries
+ * once if Google still answers 401 — a token can die early (revoked scope, clock
+ * skew, password change) and the stored expiry would not know it. A 403 is NOT
+ * retried: that means missing scope or exhausted quota, and a new token won't help.
+ */
+export async function withAccessToken<T>(
+  clientId: string,
+  clientSecret: string,
+  ch: ChannelTokens,
+  persist: PersistTokens,
+  call: (accessToken: string) => Promise<T>,
+): Promise<T> {
+  let token = isExpired(ch)
+    ? await refreshAndPersist(clientId, clientSecret, ch, persist)
+    : ch.accessToken!;
+
+  try {
+    return await call(token);
+  } catch (err) {
+    if (!(err instanceof YouTubeApiError) || err.status !== 401) throw err;
+    token = await refreshAndPersist(clientId, clientSecret, ch, persist);
+    return call(token);
+  }
 }
 
 /** Fetch the uploads playlist ID for a channel. */
 async function getUploadsPlaylistId(accessToken: string, channelId: string): Promise<string> {
   const url = `https://www.googleapis.com/youtube/v3/channels?part=contentDetails&id=${channelId}`;
   const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
-  if (!res.ok) throw new Error(`Failed to get channel details (${res.status}): ${await res.text()}`);
+  if (!res.ok) throw new YouTubeApiError(res.status, `Failed to get channel details (${res.status}): ${await res.text()}`);
   const data = (await res.json()) as {
     items?: { contentDetails: { relatedPlaylists: { uploads: string } } }[];
   };
@@ -128,7 +238,7 @@ async function fetchPlaylistItems(
     const res = await fetch(`https://www.googleapis.com/youtube/v3/playlistItems?${params}`, {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
-    if (!res.ok) throw new Error(`Playlist items failed (${res.status}): ${await res.text()}`);
+    if (!res.ok) throw new YouTubeApiError(res.status, `Playlist items failed (${res.status}): ${await res.text()}`);
     const data = (await res.json()) as {
       items?: { snippet: { resourceId: { videoId: string }; title: string; description: string; publishedAt: string; thumbnails?: { high?: { url: string }; default?: { url: string } } } }[];
       nextPageToken?: string;
@@ -165,7 +275,7 @@ async function fetchVideosBatch(
     const res = await fetch(`https://www.googleapis.com/youtube/v3/videos?${params}`, {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
-    if (!res.ok) throw new Error(`Video stats failed (${res.status}): ${await res.text()}`);
+    if (!res.ok) throw new YouTubeApiError(res.status, `Video stats failed (${res.status}): ${await res.text()}`);
     const data = (await res.json()) as {
       items?: {
         id: string;
@@ -197,52 +307,44 @@ function parseIsoDuration(iso: string): number {
 
 export interface SyncResult {
   videos: YtVideoItem[];
-  refreshedToken: string | null;
 }
 
 /**
- * Main sync function:
- * 1. Refresh access token if needed.
- * 2. Fetch uploads playlist → video IDs.
- * 3. Fetch statistics + duration for all videos.
- * 4. Return structured video items.
+ * Pull a channel's uploads and their statistics.
+ *
+ * The whole sync runs under one `withAccessToken` so a token that expires partway
+ * through (this can page through 500 videos) is refreshed and the call retried,
+ * instead of failing halfway.
  */
 export async function syncChannelVideos(
   clientId: string,
   clientSecret: string,
-  channel: { channelId: string; accessToken: string | null; refreshToken: string; expiresAt: number | null },
+  channel: ChannelTokens,
+  persist: PersistTokens,
 ): Promise<SyncResult> {
-  let accessToken = channel.accessToken ?? "";
+  const videos = await withAccessToken(clientId, clientSecret, channel, persist, async (accessToken) => {
+    const uploadsPlaylistId = await getUploadsPlaylistId(accessToken, channel.channelId);
+    const playlistItems = await fetchPlaylistItems(accessToken, uploadsPlaylistId);
+    if (playlistItems.length === 0) return [];
 
-  // Refresh if token is expired or missing.
-  if (!accessToken || (channel.expiresAt && Date.now() > channel.expiresAt - 300_000)) {
-    const fresh = await refreshAccessToken(clientId, clientSecret, channel.refreshToken);
-    accessToken = fresh.access_token;
-  }
+    const statsMap = await fetchVideosBatch(accessToken, playlistItems.map((p) => p.videoId));
 
-  const uploadsPlaylistId = await getUploadsPlaylistId(accessToken, channel.channelId);
-  const playlistItems = await fetchPlaylistItems(accessToken, uploadsPlaylistId);
-
-  if (playlistItems.length === 0) return { videos: [], refreshedToken: accessToken };
-
-  const videoIds = playlistItems.map((p) => p.videoId);
-  const statsMap = await fetchVideosBatch(accessToken, videoIds);
-
-  const videos: YtVideoItem[] = playlistItems.map((p) => {
-    const stats = statsMap.get(p.videoId);
-    const thumb = p.snippet.thumbnails?.high?.url ?? p.snippet.thumbnails?.default?.url ?? null;
-    return {
-      videoId: p.videoId,
-      title: p.snippet.title,
-      description: p.snippet.description,
-      publishedAt: p.snippet.publishedAt,
-      durationSec: stats?.durationSec ?? 0,
-      thumbnail: thumb,
-      viewCount: stats?.viewCount ?? 0,
-      likeCount: stats?.likeCount ?? 0,
-      commentCount: stats?.commentCount ?? 0,
-    };
+    return playlistItems.map<YtVideoItem>((p) => {
+      const stats = statsMap.get(p.videoId);
+      const thumb = p.snippet.thumbnails?.high?.url ?? p.snippet.thumbnails?.default?.url ?? null;
+      return {
+        videoId: p.videoId,
+        title: p.snippet.title,
+        description: p.snippet.description,
+        publishedAt: p.snippet.publishedAt,
+        durationSec: stats?.durationSec ?? 0,
+        thumbnail: thumb,
+        viewCount: stats?.viewCount ?? 0,
+        likeCount: stats?.likeCount ?? 0,
+        commentCount: stats?.commentCount ?? 0,
+      };
+    });
   });
 
-  return { videos, refreshedToken: accessToken };
+  return { videos };
 }
