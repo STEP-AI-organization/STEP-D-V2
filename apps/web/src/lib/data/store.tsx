@@ -66,6 +66,18 @@ function toConnections(value: unknown): Connections {
   return NO_CONNECTIONS;
 }
 
+/**
+ * Not every episode the server returns carries a pipeline (a seeded one does not),
+ * and every screen dereferences `episode.pipeline.stageStatus` unguarded — one such
+ * episode took the whole app down.
+ */
+function toEpisode(e: Partial<Episode>): Episode {
+  return {
+    ...e,
+    pipeline: e.pipeline ?? { stage: "source", stageStatus: "idle" },
+  } as Episode;
+}
+
 /** The server omits section/episodeCount/status, which our screens treat as required. */
 function toProgram(p: Partial<Program>): Program {
   return {
@@ -235,7 +247,7 @@ export function AppDataProvider({
   const applyServerState = useCallback((s: Awaited<ReturnType<typeof fetchState>>) => {
     setState({
       programs: (s.programs as Partial<Program>[]).map(toProgram),
-      episodes: s.episodes as Episode[],
+      episodes: (s.episodes as Partial<Episode>[]).map(toEpisode),
       recommendations: s.recommendations as Recommendation[],
       clips: s.clips as Clip[],
       jobs: s.jobs as JobEvent[],
