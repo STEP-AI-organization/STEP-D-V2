@@ -18,10 +18,7 @@
     "tsx": "^4.19.2"
   },
   "devDependencies": {
-    "@types/node": "^24",
-    "typescript": "^5"
-  },
-  "pnpm": {
-    "onlyBuiltDependencies": ["esbuild"]
+      "@types/node": "^24",
+      "typescript": "^5"
+    }
   }
-}
