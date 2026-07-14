@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "step-d-web",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--filter", "@stepd/web", "dev"],
+      "port": 3100
+    },
+    {
+      "name": "step-d-server",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--filter", "@stepd/server", "dev"],
+      "port": 4000
+    }
+  ]
+}

@@ -1,0 +1,196 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+/* Class-based dark mode: the topbar theme toggle sets `.dark` on <html>.
+   Initial theme is resolved by an inline no-flash script in the root layout. */
+@custom-variant dark (&:is(.dark *));
+
+/*
+  Design tokens — STEPD v2 (polish pass).
+
+  Base stays achromatic (neutral surfaces); a single calm indigo carries the
+  brand accent and appears ONLY on primary actions, active nav, links, focus
+  rings, and selection states. Status hues (green/blue/amber/red/neutral) are
+  reserved for pipeline & distribution semantics and are kept low-chroma.
+  Light surfaces layer canvas → card → popover for subtle depth; dark mode
+  lifts cards above the canvas by lightness (shadows read poorly on black).
+  All foreground/background pairs target WCAG AA.
+*/
+:root {
+  --background: 0 0% 98%;
+  --foreground: 0 0% 9%;
+  --card: 0 0% 100%;
+  --card-foreground: 0 0% 9%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 0 0% 9%;
+
+  /* Brand accent — indigo (calm, professional). Used sparingly. */
+  --primary: 243 75% 58%;
+  --primary-foreground: 0 0% 100%;
+
+  --secondary: 0 0% 96.1%;
+  --secondary-foreground: 0 0% 9%;
+  --muted: 0 0% 96.1%;
+  --muted-foreground: 0 0% 42%;
+  --accent: 0 0% 95.5%;
+  --accent-foreground: 0 0% 9%;
+  --destructive: 0 72% 51%;
+  --destructive-foreground: 0 0% 100%;
+  --border: 0 0% 90%;
+  --input: 0 0% 88%;
+  --ring: 243 75% 58%;
+  --radius: 0.5rem;
+
+  /* Status palette — pipeline / distribution state legibility (design principle §9).
+     Single source of truth; consumed via StatusBadge / PipelineStrip.
+     idle=neutral · progress=blue · done=green · warn=amber · error=red. */
+  --status-idle: 0 0% 45%;
+  --status-progress: 217 85% 53%;
+  --status-done: 142 55% 32%;
+  --status-warn: 30 75% 38%;
+  --status-error: 0 72% 51%;
+}
+
+.dark {
+  --background: 0 0% 4%;
+  --foreground: 0 0% 96%;
+  --card: 0 0% 7.5%;
+  --card-foreground: 0 0% 96%;
+  --popover: 0 0% 9%;
+  --popover-foreground: 0 0% 96%;
+
+  /* Dark mode flips the accent: a lighter indigo so it stays AA both as a
+     button fill (with the deep-indigo foreground below) AND as text/links on
+     the dark canvas — a single mid-indigo can't satisfy both. */
+  --primary: 243 90% 76%;
+  --primary-foreground: 243 47% 13%;
+
+  --secondary: 0 0% 15%;
+  --secondary-foreground: 0 0% 96%;
+  --muted: 0 0% 15%;
+  --muted-foreground: 0 0% 65%;
+  --accent: 0 0% 17%;
+  --accent-foreground: 0 0% 98%;
+  --destructive: 0 66% 54%;
+  --destructive-foreground: 0 0% 100%;
+  --border: 0 0% 17%;
+  --input: 0 0% 20%;
+  --ring: 243 90% 76%;
+
+  --status-idle: 0 0% 64%;
+  --status-progress: 213 90% 66%;
+  --status-done: 142 58% 55%;
+  --status-warn: 36 92% 60%;
+  --status-error: 0 74% 63%;
+}
+
+@theme inline {
+  --color-background: hsl(var(--background));
+  --color-foreground: hsl(var(--foreground));
+  --color-card: hsl(var(--card));
+  --color-card-foreground: hsl(var(--card-foreground));
+  --color-popover: hsl(var(--popover));
+  --color-popover-foreground: hsl(var(--popover-foreground));
+  --color-primary: hsl(var(--primary));
+  --color-primary-foreground: hsl(var(--primary-foreground));
+  --color-secondary: hsl(var(--secondary));
+  --color-secondary-foreground: hsl(var(--secondary-foreground));
+  --color-muted: hsl(var(--muted));
+  --color-muted-foreground: hsl(var(--muted-foreground));
+  --color-accent: hsl(var(--accent));
+  --color-accent-foreground: hsl(var(--accent-foreground));
+  --color-destructive: hsl(var(--destructive));
+  --color-destructive-foreground: hsl(var(--destructive-foreground));
+  --color-border: hsl(var(--border));
+  --color-input: hsl(var(--input));
+  --color-ring: hsl(var(--ring));
+
+  --color-status-idle: hsl(var(--status-idle));
+  --color-status-progress: hsl(var(--status-progress));
+  --color-status-done: hsl(var(--status-done));
+  --color-status-warn: hsl(var(--status-warn));
+  --color-status-error: hsl(var(--status-error));
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+
+  --font-sans: var(--font-sans);
+
+  /* Motion — kept short and uniform (micro-detail §5). */
+  --default-transition-duration: 150ms;
+  --default-transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+@layer base {
+  * {
+    border-color: hsl(var(--border));
+  }
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+  body {
+    background-color: hsl(var(--background));
+    color: hsl(var(--foreground));
+    font-family: var(--font-sans);
+    font-feature-settings: "cv11", "ss01";
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* Consistent focus ring for every interactive element that doesn't opt into
+     its own ring utility (a11y §2). Modern browsers clip the outline to the
+     element's border-radius, so this reads correctly on rounded controls. */
+  :focus-visible {
+    outline: 2px solid hsl(var(--ring));
+    outline-offset: 2px;
+  }
+
+  /* Native form controls adopt the brand accent (checkboxes, time/date, range). */
+  input[type="checkbox"],
+  input[type="radio"],
+  input[type="range"],
+  input[type="time"],
+  input[type="date"],
+  input[type="datetime-local"] {
+    accent-color: hsl(var(--primary));
+  }
+
+  ::selection {
+    background-color: hsl(var(--primary) / 0.2);
+  }
+
+  /* Respect reduced-motion: strip transitions/animations (pulse, ping, spin,
+     drawer slide). Live states still read via static color/dot. */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    ::before,
+    ::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+/*
+  Typographic scale — operator tool: clear hierarchy, generous line-height for
+  Korean. Applied via shared components (PageHeader, SectionHeading, CardTitle)
+  so headings/section-labels/body never drift.
+*/
+@layer components {
+  .text-page-title {
+    font-size: 1.375rem; /* 22px */
+    line-height: 1.875rem;
+    font-weight: 600;
+    letter-spacing: -0.014em;
+  }
+}
+
+/* Tabular numbers for dense operator tables/metrics. */
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}

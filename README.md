@@ -1,247 +1,67 @@
-# STEP-D V2
+# STEP-D (monorepo)
 
-AI Shorts Studio for turning long videos into vertical YouTube Shorts, connecting YouTube channels, publishing clips, scheduling uploads, and reviewing channel performance.
+KT ENA 방송 콘텐츠 제작·배포 스튜디오의 **UX 재설계** 버전 + **v2 전용 백엔드**.
+실제 영상을 올려 업로드 → 소스 재생 → 추천 → 채택(실제 트림 인코딩) → 편집 → 배포/엑셀까지
+로컬에서 그대로 돌려볼 수 있다. (원본 STEPD `C:\Users\STEPAI05\STEPD` 는 별도 저장소로 미수정.)
 
-## Features
+## 구조 (pnpm 워크스페이스)
 
-- Upload MP4 files or import from a YouTube URL
-- Transcribe Korean audio with OpenAI STT
-- Generate candidate highlight segments from the transcript
-- Score top candidates with Gemini Vision
-- Render 9:16 vertical Shorts with captions and title overlays
-- Generate YouTube titles, descriptions, tags, hashtags, and labels
-- Sign in with Google and connect YouTube channels
-- Show connected channel profile, description, metrics, videos, and comments
-- Prepare immediate publishing and scheduled publishing workflows
-- Manage projects, schedules, channels, and auto-publish queues
-
-## Repository Layout
-
-```text
+```
 apps/
-  api/   FastAPI, SQLite, FFmpeg, OpenAI STT, Gemini, YouTube OAuth
-  web/   Next.js dashboard UI
-scripts/
-  dev.ps1
-tests/
+  web/      Next.js 16 프론트엔드 (@stepd/web, :3100)
+  server/   신규 백엔드 (@stepd/server, :4000) — Hono + node:sqlite + ffmpeg
+packages/   (공유 패키지 자리)
+docs/       설계·분석 문서
+storage/    런타임 데이터 (업로드 영상·썸네일·클립·sqlite) — git 무시
 ```
 
-## 실행하기 (Run the App)
+## 사전 요구
 
-### 방법 A — Docker로 한 번에 띄우기 (권장)
+- **Node ≥ 22** (내장 `node:sqlite` 사용 — 네이티브 빌드 불필요)
+- **pnpm**
+- **ffmpeg / ffprobe** (실제 영상 프로브·썸네일·트림 인코딩용). 없으면 업로드는 되지만
+  메타데이터/썸네일/클립 인코딩은 건너뛴다.
 
-Docker Desktop을 켠 뒤, 프로젝트 루트에서:
+## 실행
 
-```powershell
-# 최초 1회: 환경 파일 생성 후 API 키 입력
-Copy-Item .env.docker.example .env
-
-# 서버(api) + 웹(web) 빌드 & 실행
-npm run docker:up
-# = docker compose -p ai-shorts up --build
-
-# 백그라운드로 띄우려면
-docker compose -p ai-shorts up --build -d
+```bash
+pnpm install
+pnpm dev          # web(:3100) + server(:4000) 동시 실행
+# 또는 개별:
+pnpm dev:web      # 프론트만
+pnpm dev:server   # 백엔드만
+pnpm build        # 전체 빌드
+pnpm typecheck    # 전체 타입체크
 ```
 
-접속 주소:
+열기: **http://localhost:3100**  ·  백엔드 상태: http://localhost:4000/health
 
-- 웹: http://localhost:3000
-- API Health: http://127.0.0.1:8010/api/health
-- API Docs: http://127.0.0.1:8010/docs
+프론트는 서버가 떠 있으면 자동으로 서버 데이터를 쓰고, 서버가 없으면 목 데이터로 단독 구동한다.
 
-관리 명령어:
+## 실제 영상으로 해보기
 
-```powershell
-npm run docker:logs   # 로그 실시간 보기
-npm run docker:down   # 중지 + 컨테이너 제거
-npm run docker:build  # 이미지만 다시 빌드
-```
+1. `pnpm dev` 로 둘 다 실행 → http://localhost:3100 접속.
+2. **콘텐츠** 화면 → **영상 업로드** → 프로그램 선택 후 영상 파일(mp4/mov/webm)을 끌어다 놓기.
+   - 서버가 ffprobe로 길이/해상도/코덱을 읽고, 썸네일을 뽑고, **새 회차 + 추천**을 생성한다.
+3. 생성된 회차의 **소스** 탭에서 업로드한 실제 영상이 재생된다.
+4. **추천** 탭에서 [채택] → 서버가 해당 구간을 **ffmpeg로 트림 인코딩**해 실제 클립을 만든다.
+   [편집] 을 누르면 에디터에서 그 클립 영상이 재생된다.
+5. **배포**(채널별 준비도) · **엑셀 내보내기** 도 그대로 동작한다.
 
-> `web` 컨테이너는 `api` 헬스체크가 통과한 뒤 자동으로 시작됩니다. 최초 빌드는 몇 분 걸릴 수 있습니다.
+## 설정 / 리셋
 
-### 방법 B — 로컬에서 직접 띄우기 (개발용)
+- `NEXT_PUBLIC_API_URL` (web): 백엔드 주소. 기본 `http://localhost:4000`.
+- `PORT` (server): 기본 `4000`. `STEPD_STORAGE_DIR`: 저장 위치(기본 `./storage`).
+- **데이터 초기화:** `storage/stepd.sqlite` 삭제 후 서버 재시작 → 시드로 다시 시작.
 
-Docker 없이 코드를 고치면서 띄울 때 사용합니다. **FFmpeg / ffprobe**가 PATH에 설치돼 있어야 합니다. 터미널 2개를 띄웁니다.
+## 아직 seam(키 필요)
 
-```powershell
-# 터미널 1 — API 서버
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r apps/api/requirements.txt
-cd apps/api
-uvicorn app.main:app --host 127.0.0.1 --port 8010 --reload
-```
+- **AI 추천:** 현재는 길이 기반 휴리스틱. `GEMINI_API_KEY` 연결 시 실제 분석으로 교체(동일 shape).
+- **실제 채널 배포(SMR/YouTube/Meta):** UI·상태는 실동작(로컬 기록), 실제 송출은 OAuth·계정 필요.
 
-```powershell
-# 터미널 2 — 웹
-npm install
-npm run dev:web
-```
+자세한 백엔드 설계·매핑: [`docs/backend-notes.md`](docs/backend-notes.md).
 
-자세한 환경변수 설정은 아래 [Quick Start](#quick-start) 이하를 참고하세요.
+## 참조 소스 (읽기 전용, 미수정)
 
-## Quick Start
-
-Create a local environment file:
-
-```powershell
-Copy-Item .env.example .env
-```
-
-Required values:
-
-```env
-OPENAI_API_KEY=...
-GEMINI_API_KEY=...
-PUBLIC_BASE_URL=http://127.0.0.1:8010
-NEXT_PUBLIC_API_BASE_URL=http://127.0.0.1:8010
-WEB_BASE_URL=http://127.0.0.1:3000
-```
-
-Run the API:
-
-```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-cd apps/api
-uvicorn app.main:app --host 127.0.0.1 --port 8010 --reload
-```
-
-Run the web app:
-
-```powershell
-npm install
-npm --workspace apps/web run dev
-```
-
-Open:
-
-- Web: http://127.0.0.1:3000
-- API docs: http://127.0.0.1:8010/docs
-- Health: http://127.0.0.1:8010/api/health
-
-## YouTube OAuth Setup
-
-Create an OAuth client in Google Cloud Console and enable YouTube Data API v3.
-
-Register these redirect URIs:
-
-```text
-http://127.0.0.1:8010/api/auth/google/callback
-http://127.0.0.1:8010/api/youtube/oauth/callback
-```
-
-Example `.env` values:
-
-```env
-YOUTUBE_CLIENT_ID=...
-YOUTUBE_CLIENT_SECRET=...
-AUTH_OAUTH_REDIRECT_URI=http://127.0.0.1:8010/api/auth/google/callback
-YOUTUBE_OAUTH_REDIRECT_URI=http://127.0.0.1:8010/api/youtube/oauth/callback
-SESSION_SECRET=change-me-to-a-long-random-string
-```
-
-App login and YouTube channel connection are separate flows. Sign in to the app first, then connect a YouTube channel from the Channel screen.
-
-For local development, prefer `http://127.0.0.1:3000` instead of mixing `localhost` and `127.0.0.1`, because browser cookies are host-specific.
-
-## Main API Endpoints
-
-- `POST /api/upload`
-- `GET /api/jobs/{job_id}`
-- `GET /api/jobs/{job_id}/results`
-- `GET /api/jobs/latest-completed`
-- `GET /api/studio/summary`
-- `GET /api/youtube/status`
-- `GET /api/youtube/oauth/start`
-- `GET /api/youtube/channel-drafts/{draft_id}`
-- `POST /api/youtube/channel-drafts/{draft_id}/confirm`
-- `POST /api/youtube/clips/{clip_id}/publish`
-- `GET /api/youtube/channels/{channel_db_id}/analytics`
-
-## Rendering Options
-
-```env
-RENDER_VERTICAL_SHORTS=true
-SHORTS_REFRAME_MODE=blur
-SHORTS_WIDTH=1080
-SHORTS_HEIGHT=1920
-SHORTS_SUBTITLES_ENABLED=true
-SHORTS_STYLE_PRESET_DEFAULT=korean_pop
-SHORTS_SUBTITLE_MODE_DEFAULT=auto
-BURNED_IN_CAPTION_DETECTION_ENABLED=true
-```
-
-`SHORTS_REFRAME_MODE=blur` keeps the source video visible in the center and fills the 9:16 canvas with a blurred background copy. Use `fit` for plain preservation or `crop` for a center crop.
-
-## Cost Controls
-
-```env
-GEMINI_MAX_EVAL_CANDIDATES=12
-MAX_CANDIDATE_COUNT=30
-FINAL_CLIP_COUNT=8
-```
-
-Lower `GEMINI_MAX_EVAL_CANDIDATES` to reduce Gemini Vision usage. The pipeline first narrows candidates with transcript-based local scoring, then sends only the top candidates to Gemini Vision.
-
-## Docker
-
-```powershell
-Copy-Item .env.docker.example .env
-docker compose -p ai-shorts up --build
-```
-
-Useful commands:
-
-```powershell
-npm run docker:build
-npm run docker:up
-npm run docker:logs
-npm run docker:down
-```
-
-## Deploy (Public / Production)
-
-Full runbook: [deploy/runbook.md](deploy/runbook.md). Topology:
-
-- **Web** → Vercel (`app.stepai.kr`), root dir `apps/web`, env `NEXT_PUBLIC_API_BASE_URL=https://api.stepai.kr`.
-- **API** → GCP Compute Engine VM (Docker), `api.stepai.kr`, Caddy auto-HTTPS — see `docker-compose.prod.yml` + `Caddyfile`.
-- **DB** → Cloud SQL for PostgreSQL via the cloud-sql-proxy sidecar.
-- **Media** → GCS bucket (set `STORAGE_BACKEND=gcs`, `GCS_BUCKET`); durable clips/thumbnails served off-VM. Local dev keeps `STORAGE_BACKEND=local` (default).
-
-Config template: `apps/api/.env.production.example`. On the VM: `bash deploy/setup-vm.sh`.
-
-## Storage
-
-```text
-storage/
-  uploads/
-  jobs/
-  media files
-```
-
-Local SQLite data and generated media are stored under `storage/`. For production, set `STORAGE_BACKEND=gcs` + `GCS_BUCKET` so durable artifacts (clips, thumbnails, highlights, assets) mirror to Google Cloud Storage; 2GB source uploads and temp files stay on the VM disk.
-
-## Verification
-
-```powershell
-python -m compileall apps\api\app
-npm --workspace apps/web run lint
-npm --workspace apps/web run build
-```
-
-To run Python tests, install `pytest` first:
-
-```powershell
-pip install pytest
-python -m pytest tests
-```
-
-## Notes
-
-- Do not commit `.env` or real API keys.
-- Keep `WEB_BASE_URL`, `NEXT_PUBLIC_API_BASE_URL`, and OAuth redirect URIs aligned.
-- Add the web origin to `CORS_ORIGINS` in production.
-- Set public API URLs at build time for the Next.js web image.
+- STEPD: `C:\Users\STEPAI05\STEPD`
+- StepD(롱퐁 쇼츠화): `C:\Users\STEPAI05\OneDrive\문서\롱퐁 쇼츠화`

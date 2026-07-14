@@ -1,16 +1,17 @@
 {
-  "name": "viral-shorts-monorepo",
+  "name": "step-d",
+  "version": "0.1.0",
   "private": true,
-  "workspaces": [
-    "apps/web"
-  ],
+  "description": "STEP-D — UX-first studio (monorepo: web + server). Original STEPD is a separate read-only repo.",
   "scripts": {
-    "dev:web": "npm --workspace apps/web run dev",
-    "build:web": "npm --workspace apps/web run build",
-    "lint:web": "npm --workspace apps/web run lint",
-    "docker:build": "docker compose -p ai-shorts build",
-    "docker:up": "docker compose -p ai-shorts up --build",
-    "docker:down": "docker compose -p ai-shorts down",
-    "docker:logs": "docker compose -p ai-shorts logs -f"
+    "dev": "pnpm -r --parallel dev",
+    "dev:web": "pnpm --filter @stepd/web dev",
+    "dev:server": "pnpm --filter @stepd/server dev",
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
+    "start": "pnpm -r --parallel start"
+  },
+  "engines": {
+    "node": ">=22"
   }
 }
