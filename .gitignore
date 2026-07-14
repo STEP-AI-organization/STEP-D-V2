@@ -30,3 +30,7 @@ gcp-keys/
 
 # Tool scratch cache
 .hermes/
+
+# npm lockfile — this repo is a pnpm workspace (root pnpm-lock.yaml)
+package-lock.json
+.vercel
