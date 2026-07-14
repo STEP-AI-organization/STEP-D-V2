@@ -52,6 +52,33 @@ interface AppState {
   connections: Connections;
 }
 
+const NO_CONNECTIONS: Connections = { youtube: false, meta: false, metaInstagram: false };
+
+/**
+ * The server sends `connections` as lineage edges ({from,to,type}) — a different
+ * concept that collides on the same key with our channel-connection flags. Take the
+ * object shape when it is one, otherwise treat every channel as unconnected.
+ */
+function toConnections(value: unknown): Connections {
+  if (value && typeof value === "object" && !Array.isArray(value) && "youtube" in value) {
+    return value as Connections;
+  }
+  return NO_CONNECTIONS;
+}
+
+/** The server omits section/episodeCount/status, which our screens treat as required. */
+function toProgram(p: Partial<Program>): Program {
+  return {
+    ...p,
+    id: p.id ?? "",
+    title: p.title ?? "(제목 없음)",
+    section: p.section ?? "미분류",
+    targetAge: p.targetAge ?? 0,
+    episodeCount: p.episodeCount ?? 0,
+    status: p.status ?? "active",
+  } as Program;
+}
+
 interface AppData extends AppState {
   // real-video backend
   media: MediaAsset[];
@@ -207,12 +234,12 @@ export function AppDataProvider({
 
   const applyServerState = useCallback((s: Awaited<ReturnType<typeof fetchState>>) => {
     setState({
-      programs: s.programs as Program[],
+      programs: (s.programs as Partial<Program>[]).map(toProgram),
       episodes: s.episodes as Episode[],
       recommendations: s.recommendations as Recommendation[],
       clips: s.clips as Clip[],
       jobs: s.jobs as JobEvent[],
-      connections: s.connections,
+      connections: toConnections(s.connections),
     });
     setMedia(s.media as MediaAsset[]);
     connectedRef.current = true;
