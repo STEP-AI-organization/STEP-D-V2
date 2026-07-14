@@ -54,6 +54,7 @@ import {
   type PersistTokens,
 } from "./youtube.ts";
 import { runChannelPipeline, runDueChannels } from "./channel-pipeline.ts";
+import { initQueue, enqueue, queueStats } from "./queue.ts";
 import {
   uploadPath,
   thumbPath,
@@ -74,7 +75,8 @@ console.log(`[stepd-server] ffmpeg available: ${FFMPEG}`);
 
 // Init DB in background — don't block server startup
 initDb()
-  .then(() => { dbReady = true; console.log("[stepd-server] database ready"); })
+  .then(() => initQueue())
+  .then(() => { dbReady = true; console.log("[stepd-server] database + queue ready"); })
   .catch((err) => console.error("[stepd-server] database init failed (server still running):", err));
 console.log(`[stepd-server] storage mode: ${useGcs() ? "GCS" : "local"}`);
 
@@ -530,13 +532,12 @@ const oauthCallback = async (c: Context) => {
 
     await upsertYouTubeChannel(channel);
 
-    // Kick the analysis immediately so the channel isn't empty while the creator is
-    // still looking at the success page. Best-effort only: Cloud Run throttles CPU
-    // once we redirect, so this may not finish. The scheduler is the guarantee —
-    // lastSyncedAt is NULL until a run completes, which keeps the channel "due".
-    void runChannelPipeline(GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, channel.channelId, { force: true })
-      .then((r) => console.log("[pipeline/on-connect]", JSON.stringify(r)))
-      .catch((err) => console.error("[pipeline/on-connect]", err));
+    // Hand the analysis to the worker rather than starting it here: Cloud Run throttles
+    // CPU the moment we redirect, so anything kicked off inline would likely be killed.
+    // This is a single INSERT inside the request — it cannot be thrown away.
+    await enqueue("channel.analyze", { channelId: channel.channelId, force: true }, {
+      dedupeKey: `channel.analyze:${channel.channelId}`,
+    });
 
     const params = new URLSearchParams({ success: "1", channelId: channel.channelId, channelName: channel.channelName });
     return c.redirect(`/register?${params}`);
@@ -687,18 +688,23 @@ app.post("/api/youtube/pipeline/run", async (c) => {
   });
 });
 
-/** Force a single channel through the pipeline now, ignoring the staleness windows. */
+/** Queue a single channel for the worker to pick up now. */
 app.post("/api/youtube/pipeline/run/:channelId", async (c) => {
-  if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET) return c.json({ error: "OAuth not configured" }, 500);
-
-  const result = await runChannelPipeline(
-    GOOGLE_CLIENT_ID,
-    GOOGLE_CLIENT_SECRET,
-    c.req.param("channelId"),
-    { force: true },
-  );
-  return c.json(result, result.error ? 500 : 200);
+  const channelId = c.req.param("channelId");
+  const jobId = await enqueue("channel.analyze", { channelId, force: true }, {
+    dedupeKey: `channel.analyze:${channelId}`,
+  });
+  return c.json({
+    ok: true,
+    channelId,
+    jobId,
+    queued: jobId !== null,
+    note: jobId ? "queued" : "a run for this channel is already in flight",
+  });
 });
+
+/** Queue depth — the quickest way to tell whether the worker VM is alive. */
+app.get("/api/queue/stats", async (c) => c.json(await queueStats()));
 
 /** Stored daily analytics for a channel — served from our DB, not YouTube. */
 app.get("/api/youtube/analytics/:channelId/daily", async (c) => {
