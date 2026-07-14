@@ -58,9 +58,15 @@ import {
   useGcs,
 } from "./storage-gcs.ts";
 
-await initDb();
-const FFMPEG = await hasFfmpeg();
-console.log(`[stepd-server] ffmpeg available: ${FFMPEG}`);
+let dbReady = false;
+let FFMPEG = false;
+
+// Init DB in background — don't block server startup
+initDb()
+  .then(() => { dbReady = true; console.log("[stepd-server] database ready"); })
+  .catch((err) => console.error("[stepd-server] database init failed (server still running):", err));
+
+hasFfmpeg().then((f) => { FFMPEG = f; console.log(`[stepd-server] ffmpeg available: ${FFMPEG}`); });
 console.log(`[stepd-server] storage mode: ${useGcs() ? "GCS" : "local"}`);
 
 const app = new Hono();
@@ -69,8 +75,7 @@ app.use("/api/*", cors({ origin: (o) => o ?? "*", credentials: false }));
 
 // ── health ──────────────────────────────────────────────────────────────────
 app.get("/health", async (c) => {
-  const media = await listMedia();
-  return c.json({ ok: true, ffmpeg: FFMPEG, mediaCount: media.length });
+  return c.json({ ok: dbReady, ffmpeg: FFMPEG });
 });
 
 // ── full state (web InitialData + media) ──────────────────────────────────────
