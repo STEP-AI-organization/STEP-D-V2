@@ -16,6 +16,12 @@ export async function getIdToken(): Promise<string> {
     authClient = createIdTokenClient();
   }
   const client = await authClient;
+  // getRequestHeaders() returns a fetch Headers, not a plain object — indexing it
+  // yields undefined, which would send an empty Authorization and get us a 403.
   const headers = await client.getRequestHeaders();
-  return (headers as unknown as Record<string, string>)["Authorization"] ?? "";
+  const authorization = headers.get("authorization");
+  if (!authorization) {
+    throw new Error("google-auth-library returned no Authorization header — check CLOUD_RUN_URL (ID token audience) and the service account key");
+  }
+  return authorization;
 }
