@@ -50,7 +50,7 @@ export default function SystemPage() {
         <div className="flex items-center justify-between mb-4">
           <h2 className="text-lg font-semibold text-white">YouTube 채널 연동</h2>
           <Button
-            onClick={() => { window.open(getYouTubeAuthUrl(), "_blank"); }}
+            onClick={() => { window.open(getYouTubeAuthUrl(undefined, "publish"), "_blank"); }}
             className="bg-white text-zinc-900 hover:bg-zinc-100"
           >
             + 채널 추가

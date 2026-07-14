@@ -13,6 +13,69 @@ export interface YtVideoItem {
   commentCount: number;
 }
 
+/** One row of a YouTube Analytics report, keyed by column name. */
+export type AnalyticsRow = Record<string, string | number>;
+
+export interface AnalyticsReport {
+  columns: string[];
+  rows: AnalyticsRow[];
+}
+
+export const DEFAULT_ANALYTICS_METRICS =
+  "views,estimatedMinutesWatched,averageViewDuration,averageViewPercentage,subscribersGained,subscribersLost";
+
+/**
+ * YouTube Analytics API — the numbers the Data API cannot give us (watch time,
+ * retention, traffic sources, demographics).
+ *
+ * `ids=channel==MINE` means "the channel owning this access token". Reading a
+ * third party's channel by id requires content-owner (MCN) access, so the whole
+ * design hinges on holding each creator's own refresh token.
+ */
+export async function fetchChannelAnalytics(
+  accessToken: string,
+  opts: { startDate: string; endDate: string; metrics?: string; dimensions?: string; sort?: string; maxResults?: number },
+): Promise<AnalyticsReport> {
+  const params = new URLSearchParams({
+    ids: "channel==MINE",
+    startDate: opts.startDate,
+    endDate: opts.endDate,
+    metrics: opts.metrics || DEFAULT_ANALYTICS_METRICS,
+  });
+  if (opts.dimensions) params.set("dimensions", opts.dimensions);
+  if (opts.sort) params.set("sort", opts.sort);
+  if (opts.maxResults) params.set("maxResults", String(opts.maxResults));
+
+  const res = await fetch(`https://youtubeanalytics.googleapis.com/v2/reports?${params}`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!res.ok) {
+    throw new Error(`YouTube Analytics failed (${res.status}): ${await res.text()}`);
+  }
+
+  const data = (await res.json()) as {
+    columnHeaders?: { name: string }[];
+    rows?: (string | number)[][];
+  };
+  const columns = (data.columnHeaders ?? []).map((h) => h.name);
+  const rows = (data.rows ?? []).map((row) => {
+    const obj: AnalyticsRow = {};
+    columns.forEach((col, i) => { obj[col] = row[i]; });
+    return obj;
+  });
+  return { columns, rows };
+}
+
+/** Trade a stored refresh token for a usable access token. */
+export async function getFreshAccessToken(
+  clientId: string,
+  clientSecret: string,
+  refreshToken: string,
+): Promise<string> {
+  const { access_token } = await refreshAccessToken(clientId, clientSecret, refreshToken);
+  return access_token;
+}
+
 /** Refresh an access token. Mirrors the refresh in index.ts (used by sync). */
 async function refreshAccessToken(
   clientId: string,

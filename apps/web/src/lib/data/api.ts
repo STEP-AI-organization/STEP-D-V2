@@ -113,10 +113,36 @@ export async function fetchYouTubeChannels(): Promise<YouTubeChannelInfo[]> {
   return data.channels;
 }
 
-export function getYouTubeAuthUrl(channelUrl?: string): string {
-  const base = `${API_BASE}/youtube/auth`;
-  if (channelUrl) return `${base}?channel=${encodeURIComponent(channelUrl)}`;
-  return base;
+/**
+ * `analytics` (default) asks an external creator for read-only access so we can
+ * pull their channel metrics. `publish` asks for upload rights and is only for
+ * our own channels — never send it to a partner.
+ */
+export type ConsentMode = "analytics" | "publish";
+
+export function getYouTubeAuthUrl(channelUrl?: string, mode: ConsentMode = "analytics"): string {
+  const params = new URLSearchParams({ mode });
+  if (channelUrl) params.set("channel", channelUrl);
+  return `${API_BASE}/youtube/auth?${params}`;
+}
+
+export interface ChannelAnalytics {
+  channelId: string;
+  channelName: string;
+  columns: string[];
+  rows: Record<string, string | number>[];
+}
+
+export async function fetchChannelAnalytics(
+  channelId: string,
+  opts: { start?: string; end?: string; dimensions?: string; metrics?: string } = {},
+): Promise<ChannelAnalytics> {
+  const params = new URLSearchParams(
+    Object.entries(opts).filter(([, v]) => v) as [string, string][],
+  );
+  const res = await fetch(`${API_BASE}/youtube/analytics/${channelId}?${params}`);
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).message ?? `Analytics failed (${res.status})`);
+  return res.json();
 }
 
 export async function deleteYouTubeChannel(channelId: string): Promise<void> {

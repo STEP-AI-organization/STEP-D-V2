@@ -6,7 +6,7 @@
  * Video processing: real ffmpeg (system-installed, baked into Docker image).
  */
 import { serve } from "@hono/node-server";
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { cors } from "hono/cors";
 import { logger } from "hono/logger";
 import fs from "node:fs";
@@ -44,7 +44,7 @@ import {
 } from "./db-pg.ts";
 import { hasFfmpeg, probe, captureThumbnail, trimEncode } from "./ffmpeg.ts";
 import { buildRecommendations, newId } from "./pipeline.ts";
-import { syncChannelVideos } from "./youtube.ts";
+import { syncChannelVideos, fetchChannelAnalytics, getFreshAccessToken } from "./youtube.ts";
 import {
   uploadPath,
   thumbPath,
@@ -393,15 +393,49 @@ app.post("/api/distributions/retry", async (c) => {
 
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID ?? "";
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET ?? "";
-const YT_SCOPES = "https://www.googleapis.com/auth/youtube https://www.googleapis.com/auth/youtube.channel-memberships.creator https://www.googleapis.com/auth/youtube.force-ssl";
 const PORT = Number(process.env.PORT ?? 4000);
 
-function googleAuthUrl(state: string): string {
+/**
+ * Two consent modes, two scope sets.
+ *
+ * analytics — an external creator connecting their own channel so we can read its
+ *   metrics. Read-only on purpose: these refresh tokens sit in our DB, and a leaked
+ *   write-scoped token would let an attacker edit or delete a partner's videos.
+ * publish — our own channels, which we upload to.
+ */
+export type ConsentMode = "analytics" | "publish";
+
+const YT_ANALYTICS_SCOPES = [
+  "https://www.googleapis.com/auth/youtube.readonly", // channel + video metadata (Data API)
+  "https://www.googleapis.com/auth/yt-analytics.readonly", // watch time, traffic, demographics
+].join(" ");
+
+const YT_PUBLISH_SCOPES = [
+  "https://www.googleapis.com/auth/youtube",
+  "https://www.googleapis.com/auth/youtube.force-ssl",
+  "https://www.googleapis.com/auth/youtube.channel-memberships.creator",
+].join(" ");
+
+/** Analytics needs this scope; channels connected before the split won't have it. */
+const YT_ANALYTICS_SCOPE = "https://www.googleapis.com/auth/yt-analytics.readonly";
+
+/** Must byte-match a redirect URI registered on the OAuth client in GCP. */
+const OAUTH_CALLBACK_PATH = "/api/youtube/oauth/callback";
+
+function redirectUri(): string {
+  return `${process.env.PUBLIC_URL ?? `http://localhost:${PORT}`}${OAUTH_CALLBACK_PATH}`;
+}
+
+function scopesFor(mode: ConsentMode): string {
+  return mode === "publish" ? YT_PUBLISH_SCOPES : YT_ANALYTICS_SCOPES;
+}
+
+function googleAuthUrl(state: string, mode: ConsentMode): string {
   const params = new URLSearchParams({
     client_id: GOOGLE_CLIENT_ID,
-    redirect_uri: `${process.env.PUBLIC_URL ?? `http://localhost:${PORT}`}/api/youtube/callback`,
+    redirect_uri: redirectUri(),
     response_type: "code",
-    scope: YT_SCOPES,
+    scope: scopesFor(mode),
     access_type: "offline",
     prompt: "consent",
     state,
@@ -414,7 +448,7 @@ async function exchangeCode(code: string) {
     code,
     client_id: GOOGLE_CLIENT_ID,
     client_secret: GOOGLE_CLIENT_SECRET,
-    redirect_uri: `${process.env.PUBLIC_URL ?? `http://localhost:${PORT}`}/api/youtube/callback`,
+    redirect_uri: redirectUri(),
     grant_type: "authorization_code",
   });
   const res = await fetch("https://oauth2.googleapis.com/token", {
@@ -461,11 +495,12 @@ async function refreshAccessToken(refreshToken: string) {
 app.get("/api/youtube/auth", (c) => {
   if (!GOOGLE_CLIENT_ID) return c.json({ error: "GOOGLE_CLIENT_ID not configured" }, 500);
   const channelUrl = c.req.query("channel") ?? "";
-  const state = channelUrl ? Buffer.from(JSON.stringify({ channel: channelUrl })).toString("base64") : "";
-  return c.redirect(googleAuthUrl(state));
+  const mode: ConsentMode = c.req.query("mode") === "publish" ? "publish" : "analytics";
+  const state = Buffer.from(JSON.stringify({ channel: channelUrl, mode })).toString("base64");
+  return c.redirect(googleAuthUrl(state, mode));
 });
 
-app.get("/api/youtube/callback", async (c) => {
+const oauthCallback = async (c: Context) => {
   const code = c.req.query("code");
   const error = c.req.query("error");
   if (error) return c.redirect(`/register?error=access_denied`);
@@ -506,7 +541,12 @@ app.get("/api/youtube/callback", async (c) => {
     console.error("[oauth/callback]", err);
     return c.redirect(`/register?error=${encodeURIComponent(err.message)}`);
   }
-});
+};
+
+// The path registered in GCP. The bare /callback is kept so links already sent out
+// (and the legacy client config) keep working.
+app.get(OAUTH_CALLBACK_PATH, oauthCallback);
+app.get("/api/youtube/callback", oauthCallback);
 
 app.get("/api/youtube/channels", async (c) => {
   const channels = (await listYouTubeChannels()).map((ch: YouTubeChannel) => ({
@@ -538,6 +578,61 @@ app.post("/api/youtube/refresh", async (c) => {
     await upsertYouTubeChannel({ ...ch, accessToken: data.access_token, expiresAt: Date.now() + (data.expires_in ?? 3600) * 1000 });
     return c.json({ ok: true, expiresAt: Date.now() + (data.expires_in ?? 3600) * 1000 });
   } catch (err: any) {
+    return c.json({ error: err.message }, 500);
+  }
+});
+
+// ── YouTube Analytics (channel analysis) ─────────────────────────────────
+
+/** YYYY-MM-DD, `days` ago (Analytics API only accepts this format). */
+function isoDay(days = 0): string {
+  return new Date(Date.now() - days * 86_400_000).toISOString().slice(0, 10);
+}
+
+/**
+ * Channel analysis report. Defaults to the last 90 days broken down by day.
+ *
+ *   GET /api/youtube/analytics/:channelId
+ *       ?start=2026-01-01&end=2026-07-14
+ *       &dimensions=day|video|insightTrafficSourceType|ageGroup,gender
+ *       &metrics=views,estimatedMinutesWatched,...
+ */
+app.get("/api/youtube/analytics/:channelId", async (c) => {
+  const channelId = c.req.param("channelId");
+  const ch = await getYouTubeChannelByChannelId(channelId);
+  if (!ch) return c.json({ error: "channel not found" }, 404);
+  if (!ch.refreshToken) return c.json({ error: "no refresh token for this channel" }, 400);
+  if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET) return c.json({ error: "OAuth not configured" }, 500);
+
+  // Channels connected before the scope split have no analytics grant — Google would
+  // answer 403, so say plainly that the creator has to reconnect.
+  if (ch.scope && !ch.scope.includes(YT_ANALYTICS_SCOPE)) {
+    return c.json({
+      error: "channel_needs_reconsent",
+      message: "This channel was connected without the analytics scope. Ask the creator to reconnect via /register.",
+      scope: ch.scope,
+    }, 409);
+  }
+
+  try {
+    const accessToken = await getFreshAccessToken(GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, ch.refreshToken);
+    const report = await fetchChannelAnalytics(accessToken, {
+      startDate: c.req.query("start") ?? isoDay(90),
+      endDate: c.req.query("end") ?? isoDay(0),
+      dimensions: c.req.query("dimensions") ?? "day",
+      metrics: c.req.query("metrics") ?? undefined,
+      sort: c.req.query("sort") ?? undefined,
+      maxResults: Number(c.req.query("maxResults")) || undefined,
+    });
+    return c.json({ channelId, channelName: ch.channelName, ...report });
+  } catch (err: any) {
+    // The creator revoked us (or the token aged out in Testing mode). Park the
+    // channel rather than retrying a token that will never work again.
+    if (String(err.message).includes("invalid_grant")) {
+      await upsertYouTubeChannel({ ...ch, status: "revoked" });
+      return c.json({ error: "revoked", message: "Refresh token is no longer valid — the channel must be reconnected." }, 409);
+    }
+    console.error("[youtube/analytics]", err);
     return c.json({ error: err.message }, 500);
   }
 });
