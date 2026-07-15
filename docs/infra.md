@@ -140,7 +140,9 @@ Postgres 기반. `FOR UPDATE SKIP LOCKED` claim, dedupeKey, 지수백오프.
 
 ## 변경 이력
 
-- **2026-07-15**: 콘텐츠 파이프라인(core/) 실서비스 배선 — content.analyze 잡, content_analysis
-  테이블, 워커 파이썬 환경. STT를 관리형 Gemini 오디오로 전환(GPU-free, 서울). Vertex 서울 리전.
-  `.gcloudignore` 추가. 워커 VM(e2-small) 유지(GPU 불요).
+- **2026-07-15 (배포 완료)**: 콘텐츠 파이프라인(core/) 실서비스 배선 + **프로덕션 배포**.
+  content.analyze 잡, content_analysis 테이블, 워커 파이썬 환경. STT를 관리형 Gemini
+  오디오로 전환(GPU-free, 서울). Vertex 서울 리전. `.gcloudignore` 추가(빌드 5.2GB→소스만).
+  Cloud Run 배포 SUCCESS. 워커 VM에 파이썬 venv 설치·CORE_PYTHON 주입·Vertex 스모크 OK.
+  워커 VM(e2-small) 유지(GPU 불요). ⚠️ 미검증: 실제 업로드→content.analyze E2E, 프레임 GCS 호스팅(v1 생략).
 - 그 이전: YouTube 채널·영상 애널리틱스 트랙, Vercel 배포, Cloud Run/워커/큐 기반 구축.
