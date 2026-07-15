@@ -12,6 +12,7 @@ import { logger } from "hono/logger";
 import fs from "node:fs";
 import path from "node:path";
 import { Readable } from "node:stream";
+import { fileURLToPath } from "node:url";
 import {
   initDb,
   getState,
@@ -859,6 +860,99 @@ app.get("/api/youtube/trends/video/:videoId", async (c) => {
 app.delete("/api/youtube/videos/:videoId", async (c) => {
   await deleteChannelVideo(c.req.param("videoId"));
   return c.json({ ok: true });
+});
+
+// ── Lab (실험 admin) ──────────────────────────────────────────────────────────
+// Serves the core pipeline's local outputs to the standalone admin frontend.
+// This reads repo-root core/ directly — a LOCAL-DEV shim. In production the core
+// pipeline runs on the worker VM and its results live in the DB/GCS; these routes
+// would then read from there. Kept on this single server so "one backend" holds.
+const LAB_CORE_DIR = process.env.CORE_DIR
+  ? path.resolve(process.env.CORE_DIR)
+  : path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../core");
+const ADMIN_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../admin");
+
+function labJson(name: string): unknown | null {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(LAB_CORE_DIR, name), "utf-8"));
+  } catch {
+    return null;
+  }
+}
+
+/** Combined lab payload: video + stats + raw/refined transcript + scenes. */
+app.get("/api/lab/data", (c) => {
+  const pipe = (labJson("pipeline_output.json") as any) || {};
+  const refined = (labJson("refined_segments.json") as any[]) || [];
+  const scenes = (labJson("scenes.json") as any[]) || [];
+  const raw = pipe.segments || [];
+  const videoName = pipe.video ? path.basename(pipe.video) : null;
+  const talk = scenes.filter((s) => s?.has_dialogue).length;
+  return c.json({
+    video: videoName ? "/api/lab/video" : null,
+    video_name: videoName,
+    stats: {
+      duration: pipe.duration ?? null,
+      segments: raw.length,
+      refined: refined.length,
+      scenes: scenes.length,
+      scenes_dialogue: talk,
+      scenes_silent: scenes.length - talk,
+    },
+    raw,
+    refined,
+    scenes,
+  });
+});
+
+/** Scene frame by basename (path-traversal guarded). */
+app.get("/api/lab/frames/:name", (c) => {
+  const name = path.basename(c.req.param("name"));
+  const file = path.join(LAB_CORE_DIR, "scene_frames", name);
+  if (!file.startsWith(path.join(LAB_CORE_DIR, "scene_frames")) || !fs.existsSync(file)) {
+    return c.json({ error: "not found" }, 404);
+  }
+  return new Response(fs.readFileSync(file), {
+    headers: { "Content-Type": "image/jpeg", "Cache-Control": "max-age=3600" },
+  });
+});
+
+/** Source video with HTTP range support (so <video> seeking works). */
+app.get("/api/lab/video", (c) => {
+  const pipe = labJson("pipeline_output.json") as any;
+  const name = pipe?.video ? path.basename(pipe.video) : null;
+  if (!name) return c.json({ error: "no video" }, 404);
+  const file = path.join(LAB_CORE_DIR, name);
+  if (!fs.existsSync(file)) return c.json({ error: "not found" }, 404);
+
+  const size = fs.statSync(file).size;
+  const range = c.req.header("range");
+  if (range) {
+    const m = /bytes=(\d*)-(\d*)/.exec(range);
+    const start = m && m[1] ? parseInt(m[1], 10) : 0;
+    const end = m && m[2] ? parseInt(m[2], 10) : size - 1;
+    return new Response(Readable.toWeb(fs.createReadStream(file, { start, end })) as ReadableStream, {
+      status: 206,
+      headers: {
+        "Content-Range": `bytes ${start}-${end}/${size}`,
+        "Accept-Ranges": "bytes",
+        "Content-Length": String(end - start + 1),
+        "Content-Type": "video/mp4",
+      },
+    });
+  }
+  return new Response(Readable.toWeb(fs.createReadStream(file)) as ReadableStream, {
+    headers: { "Content-Length": String(size), "Content-Type": "video/mp4", "Accept-Ranges": "bytes" },
+  });
+});
+
+/** Serve the admin frontend locally (in prod it deploys to Vercel separately). */
+app.get("/lab", (c) => {
+  try {
+    return c.html(fs.readFileSync(path.join(ADMIN_DIR, "index.html"), "utf-8"));
+  } catch {
+    return c.text("admin/index.html not found", 404);
+  }
 });
 
 // ── start ─────────────────────────────────────────────────────────────────────
