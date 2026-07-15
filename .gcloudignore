@@ -1,0 +1,32 @@
+# Keep the Cloud Build upload small. The server Dockerfile only needs the monorepo
+# source (apps/*, package.json, pnpm-lock.yaml) — not venvs, media, or build output.
+# Without this, gcloud uploads core/.venv310 (multi-GB torch/CUDA) as build context.
+
+.git/
+
+# Python virtualenvs (multi-GB with torch/CUDA)
+**/.venv/
+**/.venv310/
+**/__pycache__/
+
+# Node
+**/node_modules/
+**/.next/
+**/.next-codex-build/
+
+# Media & pipeline artifacts (local dev only)
+*.mp4
+*.wav
+*.m4a
+*.webm
+core/scene_frames/
+core/*.srt
+core/*.json
+core/*.jpg
+storage/
+
+# Misc large/local
+*.pdf
+*.zip
+*.docx
+gcp-keys/
