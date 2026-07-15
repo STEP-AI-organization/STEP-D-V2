@@ -1,0 +1,19 @@
+# STEP D Core — AI Speech Recognition & Clip Recommendation Pipeline
+# Based on VideoLingo's WhisperX pipeline (Apache 2.0).
+# Runtime uses faster-whisper (CTranslate2 backend), not WhisperX/PyTorch.
+
+# STT — faster-whisper on CTranslate2
+faster-whisper>=1.0.0
+
+# YouTube download (downloader.py)
+yt-dlp>=2024.0
+
+# ── GPU (CUDA) ────────────────────────────────────────────────────────────────
+# faster-whisper on GPU needs the CUDA 12 cuDNN runtime. Install for CUDA inference:
+#   pip install nvidia-cudnn-cu12==8.9.7.29
+# (9.x fails with a missing-symbol error — see WHISPERX_GUIDE.md.)
+# PyTorch is NOT required — asr.py only touches torch opportunistically to free VRAM
+# and no-ops without it.
+
+# ── Optional ──────────────────────────────────────────────────────────────────
+# google-genai>=1.0.0   # Gemini API for visual scoring (not yet wired in)

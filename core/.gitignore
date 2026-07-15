@@ -1,0 +1,23 @@
+# core/ — keep source (*.py, *.ts, *.md, requirements.txt) only.
+# Input media and generated artifacts stay out of git.
+
+# Input videos / extracted audio
+*.mp4
+*.wav
+*.m4a
+*.webm
+
+# Generated transcripts / subtitles
+*.srt
+*.vtt
+*.ass
+
+# Pipeline outputs
+pipeline_output.json
+whisperx_result*.json
+test_transcript.srt
+
+# Python
+__pycache__/
+*.pyc
+.venv*/
