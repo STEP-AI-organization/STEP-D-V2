@@ -68,8 +68,12 @@
 - 접속: Cloud Run=유닉스 소켓, 워커=cloud-sql-proxy TCP, 로컬=도커 PG 별도(`stepd-pg`).
 - 주요 테이블: `entities`(program/episode/…), `media`, `youtube_channels`, `channel_videos`,
   `video_stats`, `channel_analytics`, `job_queue`, `content_analysis`(콘텐츠 파이프라인 결과).
-- ⚠️ 함정: Postgres가 따옴표 없는 식별자를 소문자로 접음 → `SELECT *`는 소문자 키. camelCase는
+- ⚠️ 함정1(키): Postgres가 따옴표 없는 식별자를 소문자로 접음 → `SELECT *`는 소문자 키. camelCase는
   명시적 별칭(`AS "camelCase"`) 필수. (전례: refreshToken/media 필드 유실 버그, 수정됨.)
+- ⚠️ 함정2(날짜): node-postgres가 `BIGINT`(int8)를 **문자열**로 반환. 프론트에서 `new Date("1752…")`는
+  epoch ms 문자열을 날짜로 파싱 못 해 **Invalid Date**. 반드시 `new Date(Number(x))`. 대상 필드:
+  `connectedAt`·`createdAt`·`expiresAt`·`lastSyncedAt` 등 모든 BIGINT 타임스탬프.
+  (전례: 배포채널 "Invalid Date 연결" 버그, 2026-07-15 수정.)
 
 ### 4. GCS 버킷
 - `stepd-media` — 업로드 영상·썸네일·클립 (`GCS_BUCKET`).
@@ -140,6 +144,10 @@ Postgres 기반. `FOR UPDATE SKIP LOCKED` claim, dedupeKey, 지수백오프.
 
 ## 변경 이력
 
+- **2026-07-15 (프론트 점검·핫픽스)**: 실서비스 프론트 UX 점검(헤드리스 전 페이지). 크래시 0.
+  사용자 노출 포맷 버그 3종 수정·배포·검증: ①배포채널 "Invalid Date 연결"(BIGINT→문자열, §3 함정2)
+  ②회차 상세 "null화"(episodeNumber null 미가드) ③추천 카드 "NaN:NaN"(formatTimecode NaN).
+  Vercel 배포 Ready 확인 후 재캡처로 세 버그 소멸 검증.
 - **2026-07-15 (배포 완료)**: 콘텐츠 파이프라인(core/) 실서비스 배선 + **프로덕션 배포**.
   content.analyze 잡, content_analysis 테이블, 워커 파이썬 환경. STT를 관리형 Gemini
   오디오로 전환(GPU-free, 서울). Vertex 서울 리전. `.gcloudignore` 추가(빌드 5.2GB→소스만).
