@@ -52,7 +52,7 @@ import {
   type YouTubeChannel,
   type ChannelVideo,
 } from "./db-pg.ts";
-import { hasFfmpeg, probe, captureThumbnail, trimEncode, remuxFaststart } from "./ffmpeg.ts";
+import { hasFfmpeg, probe, captureThumbnail, trimEncode, remuxFaststart, renderShort } from "./ffmpeg.ts";
 import { newId } from "./pipeline.ts";
 import {
   syncChannelVideos,
@@ -572,11 +572,84 @@ app.post("/api/media/upload", async (c) => {
   return c.json(result);
 });
 
+// ── construct F: editorState → reframe dims + ASS overlay ──────────────────────
+//
+// The web editor authors overlays in a fixed-aspect preview stage (percent positions,
+// px font sizes). To bake WYSIWYG we map: position% → output px, and font px → output px
+// via a canonical stage size (portrait H≈640, landscape W≈900 — the CSS clamps in
+// editor-preview.tsx). ASS PlayRes == output size so \pos maps 1:1.
+function renderDims(aspect: string): { W: number; H: number; stageH: number } {
+  switch (aspect) {
+    case "16:9": return { W: 1920, H: 1080, stageH: (900 * 1080) / 1920 };
+    case "1:1":  return { W: 1080, H: 1080, stageH: 900 };
+    case "4:5":  return { W: 1080, H: 1350, stageH: 640 };
+    case "9:16":
+    default:     return { W: 1080, H: 1920, stageH: 640 };
+  }
+}
+/** #RRGGBB → ASS &H00BBGGRR (opaque). */
+function hexToAss(hex: string): string {
+  const m = /^#?([0-9a-fA-F]{6})$/.exec(hex ?? "");
+  if (!m) return "&H00FFFFFF&";
+  return `&H00${m[1].slice(4, 6)}${m[1].slice(2, 4)}${m[1].slice(0, 2)}`.toUpperCase() + "&";
+}
+function assEscape(text: string): string {
+  return String(text ?? "").replace(/\\/g, "\\\\").replace(/[{}]/g, (ch) => "\\" + ch).replace(/\r?\n/g, "\\N");
+}
+function assTime(sec: number): string {
+  const s = Math.max(0, sec);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  return `${h}:${String(m).padStart(2, "0")}:${(s % 60).toFixed(2).padStart(5, "0")}`;
+}
 /**
- * Render one clip's segment from the master into a 9:16 deliverable (trim-encode).
- * This is the ONE expensive render (plan §2.4 deferred-render invariant) — called only
- * from the explicit /export step, never from adopt/select/edit. Returns the new clip
- * media + probe metadata, or null if the master is missing / the encode fails.
+ * Build an ASS file from an EditorState (title lines + channel badge + elements), or null
+ * when there's nothing to burn. Spoken STT captions are NOT here (they come from the
+ * transcript, not editorState — a later piece); the preview's caption is a static sample.
+ */
+function buildEditorAss(es: any, W: number, H: number, stageH: number, durSec: number): string | null {
+  if (!es || typeof es !== "object") return null;
+  const scale = H / stageH;
+  const end = assTime(durSec);
+  const ev: string[] = [];
+  const put = (an: number, x: number, y: number, fs: number, color: string, bord: number, bordColor: string, text: string) =>
+    ev.push(`Dialogue: 0,0:00:00.00,${end},Default,,0,0,0,,{\\an${an}\\pos(${x},${y})\\fs${fs}\\c${color}\\b1\\bord${bord}\\3c${bordColor}\\shad1}${assEscape(text)}`);
+
+  let yOff = 0;
+  for (const t of Array.isArray(es.titleLines) ? es.titleLines : []) {
+    if (!t?.text?.trim()) continue;
+    const fs = Math.max(12, Math.round((t.size ?? 30) * scale));
+    const x = Math.round(((es.titleX ?? 50) / 100) * W);
+    const y = Math.round(((es.titleY ?? 8) / 100) * H) + yOff;
+    const an = es.titleAlign === "left" ? 7 : es.titleAlign === "right" ? 9 : 8;
+    put(an, x, y, fs, hexToAss(t.color ?? "#FFFFFF"), 2, "&H00000000&", t.text);
+    yOff += Math.round(fs * 1.15);
+  }
+  if (es.showChannel && es.channelName?.trim()) {
+    const fs = Math.max(12, Math.round(14 * scale * 1.2));
+    put(8, Math.round(0.5 * W), Math.round(((es.channelY ?? 82) / 100) * H), fs, "&H00FFFFFF&", 2, "&H00000000&", "▶ " + es.channelName);
+  }
+  for (const el of Array.isArray(es.elements) ? es.elements : []) {
+    if (!el?.text?.trim()) continue;
+    const fs = Math.max(12, Math.round((el.size ?? (el.type === "arrow" ? 40 : 14)) * scale));
+    put(5, Math.round(((el.x ?? 50) / 100) * W), Math.round(((el.y ?? 50) / 100) * H), fs, "&H0016120D&", 3, "&H00FFFFFF&", el.text);
+  }
+  if (!ev.length) return null;
+  return (
+    `[Script Info]\nScriptType: v4.00+\nPlayResX: ${W}\nPlayResY: ${H}\nWrapStyle: 2\nScaledBorderAndShadow: yes\n\n` +
+    `[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, OutlineColour, BackColour, Bold, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n` +
+    `Style: Default,Noto Sans CJK KR,48,&H00FFFFFF,&H00000000,&H00000000,1,1,2,1,5,20,20,20,1\n\n` +
+    `[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n` +
+    ev.join("\n") + "\n"
+  );
+}
+
+/**
+ * Render one clip's segment into the final deliverable — the ONE expensive render (plan
+ * §2.4 deferred-render invariant), called only from /clips/:id/export. Reframes to the
+ * chosen aspect (blur-cover 9:16) and burns the editorState overlays via libass. A plain
+ * 16:9 highlight with no overlay takes the cheap trim path. Returns the new clip media +
+ * probe metadata, or null if the master is missing / the render fails.
  */
 async function renderClipMedia(opts: {
   master: MediaRow;
@@ -584,12 +657,15 @@ async function renderClipMedia(opts: {
   startTime: number;
   endTime: number;
   title: string;
+  editorState?: any;
+  aspect?: string;
 }): Promise<
   | { clipMediaId: string; clipStored: string; thumbStored: string | null;
       cmeta: { durationSec: number; width: number; height: number; codec: string; hasAudio: boolean } }
   | null
 > {
-  const { master, episodeId, startTime, endTime, title } = opts;
+  const { master, episodeId, startTime, endTime, title, editorState } = opts;
+  const aspect = opts.aspect ?? editorState?.aspect ?? "9:16";
   const masterObjPath = parseObjectPath(master.path);
   if (!(await fileExists(masterObjPath))) return null;
 
@@ -599,15 +675,24 @@ async function renderClipMedia(opts: {
   const clipObjPath = clipPath(clipMediaId);
   const tmpPath = path.join(tmpDir, `${clipMediaId}.mp4`);
   const thumbTmp = path.join(tmpDir, `${clipMediaId}.jpg`);
+  const assTmp = path.join(tmpDir, `${clipMediaId}.ass`);
 
-  // ffmpeg reads the master directly. For GCS we hand it a short-lived signed URL and let
-  // trimEncode seek via HTTP range (-ss before -i) — only the requested segment is fetched,
-  // so a multi-hour master never lands in Cloud Run's RAM.
+  const { W, H, stageH } = renderDims(aspect);
+  const ass = buildEditorAss(editorState, W, H, stageH, endTime - startTime);
+  if (ass) fs.writeFileSync(assTmp, ass, "utf-8");
+
+  // ffmpeg reads the master directly. For GCS we hand it a short-lived signed URL and seek
+  // via HTTP range (-ss before -i) — only the requested segment is fetched, so a multi-hour
+  // master never lands in Cloud Run's RAM.
   const srcPath = useGcs() ? await signedReadUrl(masterObjPath) : master.path;
   try {
-    await trimEncode(srcPath, startTime, endTime, tmpPath);
+    if (!ass && aspect === "16:9") {
+      await trimEncode(srcPath, startTime, endTime, tmpPath);
+    } else {
+      await renderShort({ inputPath: srcPath, startTime, endTime, outputPath: tmpPath, width: W, height: H, assPath: ass ? assTmp : null });
+    }
     const cmeta = await probe(tmpPath).catch(() => ({
-      durationSec: Math.max(1, endTime - startTime), width: 0, height: 0, codec: "h264", hasAudio: true,
+      durationSec: Math.max(1, endTime - startTime), width: W, height: H, codec: "h264", hasAudio: true,
     }));
     const clipStored = await uploadFile(clipObjPath, tmpPath);
 
@@ -625,12 +710,13 @@ async function renderClipMedia(opts: {
     await insertMedia(cRow);
     return { clipMediaId, clipStored, thumbStored, cmeta };
   } catch (err) {
-    console.error("[render] trim-encode failed:", err);
+    console.error("[render] render failed:", err);
     return null;
   } finally {
     // /tmp is RAM-backed on Cloud Run — always clear the temps.
     try { fs.unlinkSync(tmpPath); } catch {}
     try { fs.unlinkSync(thumbTmp); } catch {}
+    try { fs.unlinkSync(assTmp); } catch {}
   }
 }
 
@@ -807,8 +893,18 @@ app.post("/api/clips/:id/export", async (c) => {
     return c.json({ error: "no master video or ffmpeg unavailable to render" }, 409);
   }
 
+  // Apply the editor's fine trim within the adopted segment (trimIn/trimOut are relative to
+  // the segment). Clamp so the render never escapes [start, end] — the AI-selected window is
+  // the outer bound; F just reflects the editor's decisions inside it (§2.4).
+  const es = clip.editorState;
+  const segLen = end - start;
+  const inRel = Math.min(Math.max(0, Number(es?.trimIn ?? 0)), Math.max(0, segLen - 0.1));
+  const outRel = Math.min(Math.max(inRel + 0.1, Number(es?.trimOut ?? segLen)), segLen);
+
   const rendered = await renderClipMedia({
-    master, episodeId: clip.episodeId, startTime: start, endTime: end, title: clip.title,
+    master, episodeId: clip.episodeId,
+    startTime: start + inRel, endTime: start + outRel,
+    title: clip.title, editorState: es, aspect: es?.aspect,
   });
   if (!rendered) return c.json({ error: "render failed" }, 500);
 
