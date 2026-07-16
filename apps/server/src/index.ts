@@ -13,6 +13,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
+import crypto from "node:crypto";
 import {
   initDb,
   getState,
@@ -571,7 +572,74 @@ app.post("/api/media/upload", async (c) => {
   return c.json(result);
 });
 
-// ── adopt recommendation → clip (real trim-encode when a master video exists) ──
+/**
+ * Render one clip's segment from the master into a 9:16 deliverable (trim-encode).
+ * This is the ONE expensive render (plan §2.4 deferred-render invariant) — called only
+ * from the explicit /export step, never from adopt/select/edit. Returns the new clip
+ * media + probe metadata, or null if the master is missing / the encode fails.
+ */
+async function renderClipMedia(opts: {
+  master: MediaRow;
+  episodeId: string;
+  startTime: number;
+  endTime: number;
+  title: string;
+}): Promise<
+  | { clipMediaId: string; clipStored: string; thumbStored: string | null;
+      cmeta: { durationSec: number; width: number; height: number; codec: string; hasAudio: boolean } }
+  | null
+> {
+  const { master, episodeId, startTime, endTime, title } = opts;
+  const masterObjPath = parseObjectPath(master.path);
+  if (!(await fileExists(masterObjPath))) return null;
+
+  const tmpDir = path.resolve("/tmp/stepd-clips");
+  fs.mkdirSync(tmpDir, { recursive: true });
+  const clipMediaId = newId("m");
+  const clipObjPath = clipPath(clipMediaId);
+  const tmpPath = path.join(tmpDir, `${clipMediaId}.mp4`);
+  const thumbTmp = path.join(tmpDir, `${clipMediaId}.jpg`);
+
+  // ffmpeg reads the master directly. For GCS we hand it a short-lived signed URL and let
+  // trimEncode seek via HTTP range (-ss before -i) — only the requested segment is fetched,
+  // so a multi-hour master never lands in Cloud Run's RAM.
+  const srcPath = useGcs() ? await signedReadUrl(masterObjPath) : master.path;
+  try {
+    await trimEncode(srcPath, startTime, endTime, tmpPath);
+    const cmeta = await probe(tmpPath).catch(() => ({
+      durationSec: Math.max(1, endTime - startTime), width: 0, height: 0, codec: "h264", hasAudio: true,
+    }));
+    const clipStored = await uploadFile(clipObjPath, tmpPath);
+
+    await captureThumbnail(tmpPath, Math.min(1, cmeta.durationSec / 2), thumbTmp).catch(() => {});
+    let thumbStored: string | null = null;
+    if (fs.existsSync(thumbTmp)) thumbStored = await uploadFile(thumbPath(clipMediaId), thumbTmp);
+
+    const cRow: MediaRow = {
+      id: clipMediaId, episodeId, role: "clip", title,
+      filename: `${title}.mp4`, path: clipStored, mime: "video/mp4",
+      size: fs.statSync(tmpPath).size, durationSec: cmeta.durationSec,
+      width: cmeta.width, height: cmeta.height, codec: cmeta.codec, hasAudio: cmeta.hasAudio ? 1 : 0,
+      thumbPath: thumbStored, createdAt: Date.now(),
+    };
+    await insertMedia(cRow);
+    return { clipMediaId, clipStored, thumbStored, cmeta };
+  } catch (err) {
+    console.error("[render] trim-encode failed:", err);
+    return null;
+  } finally {
+    // /tmp is RAM-backed on Cloud Run — always clear the temps.
+    try { fs.unlinkSync(tmpPath); } catch {}
+    try { fs.unlinkSync(thumbTmp); } catch {}
+  }
+}
+
+// ── adopt recommendation → clip (METADATA ONLY — no render, plan §2.4) ─────────
+//
+// Adopt confirms the segment + decision; it does NOT encode. The expensive 9:16 +
+// subtitle bake happens exactly once, later, at /clips/:id/export. Until then the
+// editor previews the segment by streaming the master windowed to [startTime,endTime]
+// (editor-shell falls back to sourceMediaId / master when clip.mediaId is absent).
 app.post("/api/recommendations/:id/adopt", async (c) => {
   const recId = c.req.param("id");
   const rec = await getEntity<any>("recommendation", recId);
@@ -594,66 +662,18 @@ app.post("/api/recommendations/:id/adopt", async (c) => {
     aspectRatio: rec.kind === "short" ? "9:16-crop-main" : "16:9",
     durationSec: Math.max(1, rec.endTime - rec.startTime),
     thumbnailLabel: chosen?.label,
+    thumbnailUrl: rec.thumbnailUrl,
     synopsis: rec.editNote ?? undefined,
-    status: "ready",
+    // Decision-only state: not yet rendered. Segment + source drive render-free preview
+    // and the later single render.
+    status: "editing",
+    rendered: false,
+    startTime: rec.startTime,
+    endTime: rec.endTime,
+    sourceMediaId: master?.id,
     sourceRecommendationId: rec.id,
     distributions: [],
   };
-
-  // Real clip: trim-encode the segment from the master video.
-  if (master && FFMPEG) {
-    const masterObjPath = parseObjectPath(master.path);
-    const masterExists = await fileExists(masterObjPath);
-    if (masterExists) {
-      try {
-        const tmpDir = path.resolve("/tmp/stepd-clips");
-        fs.mkdirSync(tmpDir, { recursive: true });
-        const clipMediaId = newId("m");
-        const clipObjPath = clipPath(clipMediaId);
-        const tmpPath = path.join(tmpDir, `${clipMediaId}.mp4`);
-
-        // ffmpeg reads the master directly. For GCS we hand it a short-lived signed URL
-        // and let trimEncode seek via HTTP range (-ss before -i) — only the requested
-        // segment is fetched, so a multi-hour master never lands in Cloud Run's RAM.
-        const srcPath = useGcs() ? await signedReadUrl(masterObjPath) : master.path;
-
-        await trimEncode(srcPath, rec.startTime, rec.endTime, tmpPath);
-        const cmeta = await probe(tmpPath).catch(() => ({
-          durationSec: clip.durationSec, width: 0, height: 0, codec: "h264", hasAudio: true,
-        }));
-
-        // Upload clip to GCS
-        const clipStored = await uploadFile(clipObjPath, tmpPath);
-
-        // Thumbnail
-        const thumbObjPath = thumbPath(clipMediaId);
-        const thumbTmp = path.join(tmpDir, `${clipMediaId}.jpg`);
-        await captureThumbnail(tmpPath, Math.min(1, cmeta.durationSec / 2), thumbTmp).catch(() => {});
-        let thumbStored: string | null = null;
-        if (fs.existsSync(thumbTmp)) {
-          thumbStored = await uploadFile(thumbObjPath, thumbTmp);
-        }
-
-        const cRow: MediaRow = {
-          id: clipMediaId, episodeId: rec.episodeId, role: "clip", title: clip.title,
-          filename: `${clip.title}.mp4`, path: clipStored, mime: "video/mp4",
-          size: fs.statSync(tmpPath).size, durationSec: cmeta.durationSec,
-          width: cmeta.width, height: cmeta.height, codec: cmeta.codec, hasAudio: cmeta.hasAudio ? 1 : 0,
-          thumbPath: thumbStored, createdAt: Date.now(),
-        };
-        await insertMedia(cRow);
-        clip.mediaId = clipMediaId;
-        clip.videoUrl = `/media/${clipMediaId}/stream`;
-        clip.sourceMediaId = master.id;
-
-        // Cleanup temp (srcPath is now either a signed URL or the local master — nothing to delete).
-        try { fs.unlinkSync(tmpPath); } catch {}
-        try { fs.unlinkSync(thumbTmp); } catch {}
-      } catch (err) {
-        console.error("[adopt] trim-encode failed:", err);
-      }
-    }
-  }
 
   await prependEntity("clip", clipId, clip);
   await putEntity("recommendation", recId, { ...rec, status: "adopted", adoptedClipId: clipId });
@@ -680,9 +700,15 @@ app.post("/api/distributions/publish", async (c) => {
     platforms?: string[];
   }>();
   const status = b.scheduled ? "scheduled" : "published";
+  // Only rendered clips ship (plan §2.4: distribution consumes the final render, never a
+  // draft). A clip is renderable-shipped once it has an encoded media (mediaId) or is
+  // already live. Un-rendered adopts are skipped and reported so the caller can prompt export.
+  const skipped: string[] = [];
   for (const clipId of b.clipIds) {
     const clip = await getEntity<any>("clip", clipId);
     if (!clip) continue;
+    const isRendered = clip.rendered === true || Boolean(clip.mediaId) || clip.status === "published";
+    if (!isRendered) { skipped.push(clipId); continue; }
     const dists = [...(clip.distributions ?? [])];
     const value: any = { channel: b.channel, status, reserveDate: b.reserveDate, error: undefined };
     if (b.channel === "meta" && b.platforms) value.platforms = b.platforms;
@@ -691,7 +717,7 @@ app.post("/api/distributions/publish", async (c) => {
     else dists.push(value);
     await putEntity("clip", clipId, { ...clip, status: "published", distributions: dists });
   }
-  return c.json({ ok: true });
+  return c.json({ ok: true, ...(skipped.length ? { skipped } : {}) });
 });
 
 // ── retry a failed distribution ───────────────────────────────────────────────
@@ -744,6 +770,60 @@ app.patch("/api/clips/:id/editor", async (c) => {
 
   await putEntity("clip", clipId, { ...clip, editorState: body.editorState });
   return c.json({ ok: true, clipId });
+});
+
+// ── export/render a clip → the single expensive render (plan §2.4) ────────────
+//
+// The ONLY place ffmpeg bakes the deliverable. Idempotent: a render-revision hash of
+// the operator's decisions (segment + aspect + editorState) caches the result, so
+// re-confirming identical decisions returns the existing render instead of re-encoding.
+// (v1 trims the segment; the 9:16 reframe + ASS subtitle bake — construct F — layers in
+//  here later without changing this contract.)
+app.post("/api/clips/:id/export", async (c) => {
+  const clipId = c.req.param("id");
+  const clip = await getEntity<any>("clip", clipId);
+  if (!clip) return c.json({ error: "clip not found" }, 404);
+
+  const start = Number(clip.startTime ?? 0);
+  const end = Number(clip.endTime ?? start + (clip.durationSec ?? 0));
+  if (!(end > start)) return c.json({ error: "clip has no valid segment to render" }, 400);
+
+  const revision = crypto
+    .createHash("sha256")
+    .update(JSON.stringify({ start, end, aspectRatio: clip.aspectRatio, editorState: clip.editorState ?? null }))
+    .digest("hex")
+    .slice(0, 16);
+
+  // Cache hit: identical decisions already rendered — don't re-encode.
+  if (clip.rendered && clip.renderRevision === revision && clip.mediaId) {
+    return c.json({ clipId, clip, cached: true });
+  }
+
+  const allMedia = await listMedia();
+  const master =
+    (clip.sourceMediaId ? allMedia.find((m) => m.id === clip.sourceMediaId) : undefined) ??
+    allMedia.find((m) => m.episodeId === clip.episodeId && m.role === "master");
+  if (!master || !FFMPEG) {
+    return c.json({ error: "no master video or ffmpeg unavailable to render" }, 409);
+  }
+
+  const rendered = await renderClipMedia({
+    master, episodeId: clip.episodeId, startTime: start, endTime: end, title: clip.title,
+  });
+  if (!rendered) return c.json({ error: "render failed" }, 500);
+
+  const next = {
+    ...clip,
+    status: "ready",
+    rendered: true,
+    renderRevision: revision,
+    mediaId: rendered.clipMediaId,
+    sourceMediaId: master.id,
+    videoUrl: `/media/${rendered.clipMediaId}/stream`,
+    durationSec: rendered.cmeta.durationSec || clip.durationSec,
+  };
+  await putEntity("clip", clipId, next);
+  return c.json({ clipId, clip: next });
 });
 
 // ── YouTube OAuth & channel management ────────────────────────────────────────
