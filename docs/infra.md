@@ -144,6 +144,14 @@ Postgres 기반. `FOR UPDATE SKIP LOCKED` claim, dedupeKey, 지수백오프.
 
 ## 변경 이력
 
+- **2026-07-16 (리포 이전 + 채널 트렌드 재설계)**: GitHub 리포를 `STEP-AI-official/STEP-D-V2`
+  → **`STEP-AI-organization/STEP-D-V2`**로 이전(origin 변경 + Vercel 프로젝트 Git 재연결).
+  ⚠️ **함정(중요): Vercel git 배포는 커밋 author 이메일이 Vercel 팀 멤버여야 함** — `ha983885@snu.ac.kr`
+  (hakyungjin) author 커밋은 "Git author must have access to the project" 로 **전 배포가 UNKNOWN 차단**됐다.
+  → 배포 커밋은 반드시 **`contact@stepai.kr`** author로(`git config user.email contact@stepai.kr`).
+  채널 트렌드: 성장률/트렌드를 `channel_analytics`(실 일별)로 교체, 채널 수익 수집, 영상 검색·정렬·페이지네이션.
+  core/ 폐기 파일 8개 제거(pipeline·segment·downloader·subtitles·bridge·test_pipeline + stale 문서 2).
+
 - **2026-07-16 (편집기 + 채널 애널리틱스)**: 검수 편집기 직접조작 완성(실영상 트랜스포트·웨이브폼·
   타임코드 입력·오버레이 드래그/인라인편집/리사이즈/스냅·저장=EditorState 영속화, 전부 무렌더 §2.4).
   채널 트렌드: 영상 클릭 **500 수정**(snapshotAt BIGINT→Date, §3 함정2), 분석 강화(평균시청시간·시청률·
