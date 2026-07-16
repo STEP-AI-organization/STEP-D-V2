@@ -2,8 +2,15 @@
 
 import { useState, useEffect } from "react";
 import Link from "next/link";
-import { ChevronLeft, FileVideo, Search, Sparkles, Clapperboard, Send, Loader2 } from "lucide-react";
-import { getMediaAnalysis, getStreamUrl, type MediaAnalysis } from "@/lib/data/api";
+import { ChevronLeft, FileVideo, Search, Sparkles, Clapperboard, Send, Loader2, Flame, Layers, FileText } from "lucide-react";
+import {
+  getMediaAnalysis,
+  getStreamUrl,
+  type MediaAnalysis,
+  type AnalysisScene,
+  type AnalysisShort,
+  type AnalysisTranscriptSegment,
+} from "@/lib/data/api";
 import { cn } from "@/lib/utils";
 import { PageHeader } from "@/components/ui/page-header";
 import { Card } from "@/components/ui/card";
@@ -321,12 +328,24 @@ function SourceTab({ episodeId }: { episodeId: string }) {
   );
 }
 
-/** Real 3-Pass scene analysis from the content pipeline (content_analysis). */
+/** Vision score → color class (green ≥70, amber ≥45, muted below) — mirrors STEP D Lab. */
+function scoreColorClass(v: number): string {
+  return v >= 70 ? "text-status-done" : v >= 45 ? "text-status-warn" : "text-muted-foreground";
+}
+
+type AnalyzeView = "shorts" | "scenes" | "script";
+
+/**
+ * Real AI content-pipeline result (content_analysis), surfaced to the operator the way
+ * the internal STEP D Lab shows it: 🔥 shorts recommendations / scenes / transcript.
+ * (Scene frame images aren't hosted in prod yet — content-pipeline.ts, "frame hosting comes later".)
+ */
 function AnalyzeTab({ episodeId }: { episodeId: string }) {
   const { mediaForEpisode } = useAppData();
   const master = mediaForEpisode(episodeId, "master");
   const [analysis, setAnalysis] = useState<MediaAnalysis | null>(null);
   const [loading, setLoading] = useState(false);
+  const [view, setView] = useState<AnalyzeView>("shorts");
 
   useEffect(() => {
     if (!master) return;
@@ -361,7 +380,10 @@ function AnalyzeTab({ episodeId }: { episodeId: string }) {
     );
   }
 
-  const scenes = analysis?.data?.scenes ?? [];
+  const data = analysis?.data;
+  const scenes = data?.scenes ?? [];
+  const shorts = [...(data?.shorts ?? [])].sort((a, b) => (a.rank ?? 99) - (b.rank ?? 99));
+  const transcript = (data?.transcript ?? []).filter((s) => (s.text ?? "").trim());
   const status = analysis?.status;
 
   if (loading && !analysis) {
@@ -376,7 +398,7 @@ function AnalyzeTab({ episodeId }: { episodeId: string }) {
       />
     );
   }
-  if (!scenes.length) {
+  if (!scenes.length && !shorts.length && !transcript.length) {
     return (
       <EmptyState
         icon={Loader2}
@@ -386,34 +408,170 @@ function AnalyzeTab({ episodeId }: { episodeId: string }) {
     );
   }
 
+  const dialogue = scenes.filter((s) => s.has_dialogue).length;
+  const stats = [
+    { label: "쇼츠 추천", value: shorts.length },
+    { label: "장면", value: scenes.length },
+    { label: "무음 장면", value: scenes.length - dialogue },
+    { label: "자막", value: transcript.length },
+  ];
+  const tabs: { key: AnalyzeView; label: string; icon: typeof Flame; count: number }[] = [
+    { key: "shorts", label: "쇼츠 추천", icon: Flame, count: shorts.length },
+    { key: "scenes", label: "장면", icon: Layers, count: scenes.length },
+    { key: "script", label: "자막", icon: FileText, count: transcript.length },
+  ];
+
+  return (
+    <div className="space-y-3">
+      <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+        {stats.map((s) => (
+          <Card key={s.label} className="p-3">
+            <div className="text-lg font-bold tabular-nums">{s.value}</div>
+            <div className="text-xs text-muted-foreground">{s.label}</div>
+          </Card>
+        ))}
+      </div>
+
+      <div className="flex w-fit rounded-lg border border-border p-0.5">
+        {tabs.map((t) => {
+          const Icon = t.icon;
+          return (
+            <button
+              key={t.key}
+              onClick={() => setView(t.key)}
+              className={cn(
+                "flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition",
+                view === t.key ? "bg-muted text-foreground" : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              <Icon className="size-3.5" /> {t.label}
+              <span className="tabular-nums opacity-70">{t.count}</span>
+            </button>
+          );
+        })}
+      </div>
+
+      {view === "shorts" && <ShortsView shorts={shorts} />}
+      {view === "scenes" && <ScenesView scenes={scenes} />}
+      {view === "script" && <ScriptView transcript={transcript} />}
+    </div>
+  );
+}
+
+/** 🔥 AI-recommended shorts — rank, time window, reason, tags. */
+function ShortsView({ shorts }: { shorts: AnalysisShort[] }) {
+  if (!shorts.length) {
+    return <Card className="p-8 text-center text-sm text-muted-foreground">아직 쇼츠 추천이 없습니다.</Card>;
+  }
   return (
     <Card className="overflow-hidden">
-      <div className="flex items-center gap-2 border-b border-border px-4 py-2.5 text-sm font-semibold">
-        <Search className="size-4" /> 장면 분석 · {scenes.length}개
+      <ul className="divide-y divide-border">
+        {shorts.map((s, i) => (
+          <li key={i} className="flex gap-3 px-4 py-3">
+            <span className="mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-md bg-status-warn/10 text-xs font-bold text-status-warn">
+              #{s.rank ?? i + 1}
+            </span>
+            <div className="min-w-0 flex-1">
+              <div className="text-sm font-semibold">{s.title || "제목 없음"}</div>
+              <div className="mt-0.5 text-xs tabular-nums text-muted-foreground">
+                {formatTimecode(s.start)} ~ {formatTimecode(s.end)} · {Math.round(s.end - s.start)}초
+              </div>
+              {s.reason && <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{s.reason}</p>}
+              {s.tags && s.tags.length > 0 && (
+                <div className="mt-1.5 flex flex-wrap gap-1">
+                  {s.tags.map((t) => (
+                    <Badge key={t} className="text-muted-foreground">{t}</Badge>
+                  ))}
+                </div>
+              )}
+            </div>
+          </li>
+        ))}
+      </ul>
+    </Card>
+  );
+}
+
+/** Scene list — color-coded vision score, dialogue/silent, tags, on-screen names, dialogue. */
+function ScenesView({ scenes }: { scenes: AnalysisScene[] }) {
+  const [sort, setSort] = useState<"time" | "score">("time");
+  const [silentOnly, setSilentOnly] = useState(false);
+
+  let list = silentOnly ? scenes.filter((s) => !s.has_dialogue) : scenes;
+  if (sort === "score") list = [...list].sort((a, b) => (b.vision_score ?? -1) - (a.vision_score ?? -1));
+  const scored = scenes.filter((s) => s.vision_score != null).length;
+
+  return (
+    <Card className="overflow-hidden">
+      <div className="flex flex-wrap items-center gap-2 border-b border-border px-3 py-2">
+        <div className="flex rounded-md border border-border p-0.5">
+          <button
+            onClick={() => setSort("time")}
+            className={cn("rounded px-2 py-1 text-xs transition", sort === "time" ? "bg-muted text-foreground" : "text-muted-foreground hover:text-foreground")}
+          >시간순</button>
+          <button
+            onClick={() => setSort("score")}
+            className={cn("rounded px-2 py-1 text-xs transition", sort === "score" ? "bg-muted text-foreground" : "text-muted-foreground hover:text-foreground")}
+          >시각점수순</button>
+        </div>
+        <button
+          onClick={() => setSilentOnly((v) => !v)}
+          className={cn("rounded-md border border-border px-2 py-1 text-xs transition", silentOnly ? "bg-muted text-foreground" : "text-muted-foreground hover:text-foreground")}
+        >무음만</button>
+        <span className="text-xs text-muted-foreground">시각채점 {scored}/{scenes.length}</span>
       </div>
       <ul className="divide-y divide-border">
-        {scenes.map((s, i) => {
-          const names = s.on_screen_names ?? [];
-          const desc = s.vision_reason || s.text || `장면 ${s.index ?? i + 1}`;
-          return (
-            <li key={s.index ?? i} className="flex items-center gap-3 px-4 py-2.5 text-sm">
-              <span className="tabular-nums text-xs text-muted-foreground">{formatTimecode(s.start)}</span>
-              <span className="flex-1 truncate">{desc}</span>
+        {list.map((s, i) => (
+          <li key={s.index ?? i} className="px-4 py-2.5">
+            <div className="flex flex-wrap items-center gap-2 text-sm">
+              <span className="tabular-nums text-xs text-muted-foreground">
+                {formatTimecode(s.start)}{s.end != null ? `–${formatTimecode(s.end)}` : ""}
+              </span>
               {typeof s.vision_score === "number" && (
-                <span className="tabular-nums text-xs text-muted-foreground">{s.vision_score}</span>
+                <span className={cn("tabular-nums text-xs font-bold", scoreColorClass(s.vision_score))}>{s.vision_score}</span>
               )}
-              {names.length > 0 && (
-                <span className="flex shrink-0 gap-1">
-                  {names.slice(0, 3).map((t) => (
-                    <Badge key={t} className="text-muted-foreground">
-                      {t}
-                    </Badge>
+              <span className={cn("rounded-full px-1.5 py-0.5 text-[10px]", s.has_dialogue ? "bg-status-done/10 text-status-done" : "bg-status-warn/10 text-status-warn")}>
+                {s.has_dialogue ? "대사" : "무음"}
+              </span>
+              {s.on_screen_names && s.on_screen_names.length > 0 && (
+                <span className="ml-auto flex flex-wrap gap-1">
+                  {s.on_screen_names.slice(0, 3).map((t) => (
+                    <Badge key={t} className="text-muted-foreground">🏷 {t}</Badge>
                   ))}
                 </span>
               )}
-            </li>
-          );
-        })}
+            </div>
+            {(s.vision_reason || s.text) && (
+              <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{s.vision_reason || s.text}</p>
+            )}
+            {s.vision_tags && s.vision_tags.length > 0 && (
+              <div className="mt-1 flex flex-wrap gap-1">
+                {s.vision_tags.map((t) => (
+                  <Badge key={t} className="text-muted-foreground">{t}</Badge>
+                ))}
+              </div>
+            )}
+          </li>
+        ))}
+      </ul>
+    </Card>
+  );
+}
+
+/** Refined transcript — timecode + text. */
+function ScriptView({ transcript }: { transcript: AnalysisTranscriptSegment[] }) {
+  if (!transcript.length) {
+    return <Card className="p-8 text-center text-sm text-muted-foreground">표시할 자막이 없습니다.</Card>;
+  }
+  return (
+    <Card className="max-h-[60vh] overflow-y-auto">
+      <ul className="divide-y divide-border">
+        {transcript.map((s, i) => (
+          <li key={i} className="flex gap-3 px-4 py-2 text-sm">
+            <span className="shrink-0 tabular-nums text-xs text-muted-foreground">{formatTimecode(s.start)}</span>
+            <span>{s.text}</span>
+          </li>
+        ))}
       </ul>
     </Card>
   );

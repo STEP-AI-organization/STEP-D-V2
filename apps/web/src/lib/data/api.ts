@@ -45,11 +45,32 @@ export interface AnalysisScene {
   text?: string;
   vision_reason?: string;
   vision_score?: number;
+  vision_tags?: string[];
+  has_dialogue?: boolean;
   on_screen_names?: string[];
+}
+/** One AI-recommended short (core.recommend output). */
+export interface AnalysisShort {
+  rank?: number;
+  title?: string;
+  start: number;
+  end: number;
+  reason?: string;
+  tags?: string[];
+}
+/** One refined transcript segment (STT → refine). */
+export interface AnalysisTranscriptSegment {
+  start: number;
+  end?: number;
+  text?: string;
 }
 export interface MediaAnalysis {
   status: "pending" | "done" | "failed" | null;
-  data?: { transcript?: unknown[]; scenes?: AnalysisScene[]; shorts?: unknown[] } | null;
+  data?: {
+    transcript?: AnalysisTranscriptSegment[];
+    scenes?: AnalysisScene[];
+    shorts?: AnalysisShort[];
+  } | null;
   error?: string | null;
 }
 
