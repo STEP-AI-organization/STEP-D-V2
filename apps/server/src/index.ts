@@ -51,7 +51,7 @@ import {
   type YouTubeChannel,
   type ChannelVideo,
 } from "./db-pg.ts";
-import { hasFfmpeg, probe, captureThumbnail, trimEncode } from "./ffmpeg.ts";
+import { hasFfmpeg, probe, captureThumbnail, trimEncode, remuxFaststart } from "./ffmpeg.ts";
 import { newId } from "./pipeline.ts";
 import {
   syncChannelVideos,
@@ -203,6 +203,30 @@ app.post("/api/admin/queue/purge", async (c) => {
     resetContentJobs: rst.rowCount ?? 0,
     reQueuedContentJobs: reQueued,
   });
+});
+
+// ── admin: remux an existing master to progressive mp4 in place (for files uploaded
+//    before the ingest remux, or to re-fix a fragmented upload). ──
+app.post("/api/admin/remux/:id", async (c) => {
+  const m = await getMedia(c.req.param("id"));
+  if (!m) return c.json({ error: "media not found" }, 404);
+  if (!FFMPEG || !useGcs()) return c.json({ error: "ffmpeg + GCS required" }, 400);
+  const objPath = parseObjectPath(m.path);
+  if (!(await fileExists(objPath))) return c.json({ error: "file not found in storage" }, 404);
+
+  const tmpDir = path.resolve("/tmp/stepd-uploads");
+  fs.mkdirSync(tmpDir, { recursive: true });
+  const webTmp = path.join(tmpDir, `${m.id}-web.mp4`);
+  try {
+    const inUrl = await signedReadUrl(objPath);
+    await remuxFaststart(inUrl, webTmp);
+    await uploadFile(objPath, webTmp);
+    return c.json({ ok: true, size: fs.statSync(webTmp).size });
+  } catch (e) {
+    return c.json({ error: String((e as Error)?.message ?? e).slice(0, 300) }, 500);
+  } finally {
+    try { fs.unlinkSync(webTmp); } catch {}
+  }
 });
 
 // ── video streaming ───────────────────────────────────────────────────────────
@@ -414,9 +438,32 @@ app.post("/api/media/finalize", async (c) => {
   const title = typeof body.title === "string" && body.title ? String(body.title) : filename;
   const mime =
     typeof body.contentType === "string" && body.contentType ? String(body.contentType) : "video/mp4";
-  const size =
+  let size =
     typeof body.size === "number" && body.size > 0 ? body.size : await fileSize(objectPath).catch(() => 0);
   const storedPath = `gs://${process.env.GCS_BUCKET}/${objectPath}`;
+
+  // Normalize to a browser-streamable progressive mp4. Uploaded files are often fragmented
+  // (fMP4: tiny init moov + moof/mdat fragments) which a plain <video> can't play smoothly.
+  // Remux container-only (-c copy, no re-encode → seconds) to moov-at-front progressive and
+  // replace the object in place. Size-guarded so Cloud Run's RAM-backed /tmp doesn't OOM;
+  // larger masters keep the original (a disk-backed worker remux can cover those later).
+  const REMUX_MAX = 1500 * 1024 * 1024; // 1.5 GB
+  if (FFMPEG && size > 0 && size <= REMUX_MAX) {
+    const tmpDir = path.resolve("/tmp/stepd-uploads");
+    fs.mkdirSync(tmpDir, { recursive: true });
+    const webTmp = path.join(tmpDir, `${mediaId}-web.mp4`);
+    try {
+      const inUrl = await signedReadUrl(objectPath);
+      await remuxFaststart(inUrl, webTmp);
+      await uploadFile(objectPath, webTmp); // overwrite fMP4 with progressive
+      size = fs.statSync(webTmp).size;
+      console.log(`[finalize] remuxed ${mediaId} → progressive mp4 (${size} bytes)`);
+    } catch (e) {
+      console.error("[finalize] remux failed — keeping original (may not stream if fragmented):", e);
+    } finally {
+      try { fs.unlinkSync(webTmp); } catch {}
+    }
+  }
 
   // Probe + thumbnail by handing ffmpeg a short-lived signed URL. ffmpeg range-reads only
   // the bytes it needs (header for probe, one frame for the thumb) — no multi-GB download,

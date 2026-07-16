@@ -92,6 +92,27 @@ export function captureThumbnail(
   });
 }
 
+/**
+ * Remux a video to a browser-friendly progressive mp4 (single moov at the front, no
+ * fragments) WITHOUT re-encoding (`-c copy` → fast). Uploaded files are frequently
+ * fragmented (fMP4: tiny init moov + moof/mdat fragments) which a plain <video> element
+ * can't stream. `input` may be a local path or an https signed URL.
+ */
+export function remuxFaststart(input: string, outputPath: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    execFile(
+      "ffmpeg",
+      ["-y", "-i", input, "-c", "copy", "-movflags", "+faststart", "-f", "mp4", outputPath],
+      { timeout: 300_000 },
+      (err) => {
+        if (err) return reject(err);
+        if (!fs.existsSync(outputPath)) return reject(new Error("remux output not produced"));
+        resolve();
+      },
+    );
+  });
+}
+
 export function trimEncode(
   inputPath: string,
   startTime: number,
