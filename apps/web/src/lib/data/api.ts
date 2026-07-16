@@ -116,6 +116,9 @@ export interface YouTubeChannelInfo {
   status: string;
   connectedAt: number;
   email: string | null;
+  /** BIGINT epoch (as string) or null — set once the analyze job's steps land. */
+  lastSyncedAt?: number | string | null;
+  lastAnalyzedAt?: number | string | null;
 }
 
 export async function fetchYouTubeChannels(): Promise<YouTubeChannelInfo[]> {

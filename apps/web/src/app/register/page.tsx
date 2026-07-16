@@ -102,17 +102,25 @@ function RegisterFlow() {
       if (vids.status === "fulfilled") { vc = vids.value.videoCount; setVideoCount(vc); }
       if (trends.status === "fulfilled") setSummary(trends.value.summary);
       if (daily.status === "fulfilled") { days = daily.value.length; setAnalyticsDays(days); }
+      let synced = false;
+      let analyzed = false;
       if (channels.status === "fulfilled") {
         const me = channels.value.find((c) => c.channelId === channelId);
         if (me) {
           setThumbnail(me.thumbnail);
           if (me.subscribers) setSubscribers(Number(me.subscribers) || 0);
           if (me.channelName) setChannelName(me.channelName);
+          synced = me.lastSyncedAt != null;
+          analyzed = me.lastAnalyzedAt != null;
         }
       }
 
-      // "Deeply analyzed" = uploads pulled AND the 1-year backfill landed.
-      const ready = vc > 0 && days > 0;
+      // Finish when the analyze job settled, or content+backfill is visible, or the
+      // sync ran and the channel simply has no uploads — so an empty channel doesn't
+      // spin the full 90s ceiling. (attempts guard avoids concluding "empty" mid-sync.)
+      const hasContent = vc > 0 && days > 0;
+      const emptyChannel = synced && vc === 0 && attempts >= 3;
+      const ready = analyzed || hasContent || emptyChannel;
       const elapsed = performance.now() - startedAt;
       if ((ready && elapsed > MIN_MS) || attempts >= MAX_ATTEMPTS) {
         setPhase("done");

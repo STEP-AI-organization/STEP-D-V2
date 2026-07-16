@@ -646,6 +646,10 @@ app.get("/api/youtube/channels", async (c) => {
     status: ch.status,
     connectedAt: ch.connectedAt,
     email: ch.email,
+    // Progress signals so the onboarding flow knows when the analyze job settled
+    // (and can finish fast on channels that simply have no uploads).
+    lastSyncedAt: ch.lastSyncedAt ?? null,
+    lastAnalyzedAt: ch.lastAnalyzedAt ?? null,
   }));
   return c.json({ channels });
 });
