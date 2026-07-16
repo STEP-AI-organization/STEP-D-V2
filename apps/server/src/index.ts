@@ -603,42 +603,93 @@ function assTime(sec: number): string {
   return `${h}:${String(m).padStart(2, "0")}:${(s % 60).toFixed(2).padStart(5, "0")}`;
 }
 /**
- * Build an ASS file from an EditorState (title lines + channel badge + elements), or null
- * when there's nothing to burn. Spoken STT captions are NOT here (they come from the
- * transcript, not editorState — a later piece); the preview's caption is a static sample.
+ * Window a master-timeline transcript ({start,end,text} seconds) to a render window and
+ * rebase to render-relative seconds (0-based). Keeps only segments that overlap
+ * [winStart, winEnd] and carry text — the spoken subtitles that belong on this clip.
  */
-function buildEditorAss(es: any, W: number, H: number, stageH: number, durSec: number): string | null {
-  if (!es || typeof es !== "object") return null;
+function windowCaptions(
+  transcript: unknown,
+  winStart: number,
+  winEnd: number,
+): { start: number; end: number; text: string }[] {
+  if (!Array.isArray(transcript)) return [];
+  const dur = winEnd - winStart;
+  const out: { start: number; end: number; text: string }[] = [];
+  for (const s of transcript) {
+    const st = Number((s as any)?.start);
+    const en = Number((s as any)?.end);
+    const text = String((s as any)?.text ?? "").trim();
+    if (!text || !isFinite(st) || !isFinite(en) || en <= winStart || st >= winEnd) continue;
+    const rs = Math.max(0, st - winStart);
+    const re = Math.min(dur, en - winStart);
+    if (re > rs + 0.05) out.push({ start: rs, end: re, text });
+  }
+  return out;
+}
+
+/**
+ * Build an ASS file to burn at render time — the EditorState overlays (title/channel/
+ * elements, Default style) PLUS the STT caption track (spoken subtitles, Caption style,
+ * bottom-center per shorts convention). `captions` are render-relative seconds (see
+ * windowCaptions). Returns null when there is nothing to burn. This is what replaces the
+ * preview's static sample caption with the real transcript.
+ */
+function buildEditorAss(
+  es: any,
+  W: number,
+  H: number,
+  stageH: number,
+  durSec: number,
+  captions?: { start: number; end: number; text: string }[],
+): string | null {
   const scale = H / stageH;
   const end = assTime(durSec);
   const ev: string[] = [];
   const put = (an: number, x: number, y: number, fs: number, color: string, bord: number, bordColor: string, text: string) =>
     ev.push(`Dialogue: 0,0:00:00.00,${end},Default,,0,0,0,,{\\an${an}\\pos(${x},${y})\\fs${fs}\\c${color}\\b1\\bord${bord}\\3c${bordColor}\\shad1}${assEscape(text)}`);
 
-  let yOff = 0;
-  for (const t of Array.isArray(es.titleLines) ? es.titleLines : []) {
-    if (!t?.text?.trim()) continue;
-    const fs = Math.max(12, Math.round((t.size ?? 30) * scale));
-    const x = Math.round(((es.titleX ?? 50) / 100) * W);
-    const y = Math.round(((es.titleY ?? 8) / 100) * H) + yOff;
-    const an = es.titleAlign === "left" ? 7 : es.titleAlign === "right" ? 9 : 8;
-    put(an, x, y, fs, hexToAss(t.color ?? "#FFFFFF"), 2, "&H00000000&", t.text);
-    yOff += Math.round(fs * 1.15);
+  if (es && typeof es === "object") {
+    let yOff = 0;
+    for (const t of Array.isArray(es.titleLines) ? es.titleLines : []) {
+      if (!t?.text?.trim()) continue;
+      const fs = Math.max(12, Math.round((t.size ?? 30) * scale));
+      const x = Math.round(((es.titleX ?? 50) / 100) * W);
+      const y = Math.round(((es.titleY ?? 8) / 100) * H) + yOff;
+      const an = es.titleAlign === "left" ? 7 : es.titleAlign === "right" ? 9 : 8;
+      put(an, x, y, fs, hexToAss(t.color ?? "#FFFFFF"), 2, "&H00000000&", t.text);
+      yOff += Math.round(fs * 1.15);
+    }
+    if (es.showChannel && es.channelName?.trim()) {
+      const fs = Math.max(12, Math.round(14 * scale * 1.2));
+      put(8, Math.round(0.5 * W), Math.round(((es.channelY ?? 82) / 100) * H), fs, "&H00FFFFFF&", 2, "&H00000000&", "▶ " + es.channelName);
+    }
+    for (const el of Array.isArray(es.elements) ? es.elements : []) {
+      if (!el?.text?.trim()) continue;
+      const fs = Math.max(12, Math.round((el.size ?? (el.type === "arrow" ? 40 : 14)) * scale));
+      put(5, Math.round(((el.x ?? 50) / 100) * W), Math.round(((el.y ?? 50) / 100) * H), fs, "&H0016120D&", 3, "&H00FFFFFF&", el.text);
+    }
   }
-  if (es.showChannel && es.channelName?.trim()) {
-    const fs = Math.max(12, Math.round(14 * scale * 1.2));
-    put(8, Math.round(0.5 * W), Math.round(((es.channelY ?? 82) / 100) * H), fs, "&H00FFFFFF&", 2, "&H00000000&", "▶ " + es.channelName);
+
+  // STT captions — bottom-center Caption style. On unless editorState explicitly turns
+  // them off (captionsOn === false). karaoke \k needs word timings; refined transcript is
+  // sentence-level, so we show one Dialogue per segment.
+  const capOn = es && typeof es === "object" ? es.captionsOn !== false : true;
+  if (capOn) {
+    for (const cap of Array.isArray(captions) ? captions : []) {
+      const text = String(cap.text ?? "").trim();
+      if (!text || !(cap.end > cap.start)) continue;
+      ev.push(`Dialogue: 0,${assTime(cap.start)},${assTime(cap.end)},Caption,,0,0,0,,${assEscape(text)}`);
+    }
   }
-  for (const el of Array.isArray(es.elements) ? es.elements : []) {
-    if (!el?.text?.trim()) continue;
-    const fs = Math.max(12, Math.round((el.size ?? (el.type === "arrow" ? 40 : 14)) * scale));
-    put(5, Math.round(((el.x ?? 50) / 100) * W), Math.round(((el.y ?? 50) / 100) * H), fs, "&H0016120D&", 3, "&H00FFFFFF&", el.text);
-  }
+
   if (!ev.length) return null;
+  const capFs = Math.round(H * 0.042);
+  const capMV = Math.round(H * 0.14);
   return (
     `[Script Info]\nScriptType: v4.00+\nPlayResX: ${W}\nPlayResY: ${H}\nWrapStyle: 2\nScaledBorderAndShadow: yes\n\n` +
     `[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, OutlineColour, BackColour, Bold, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n` +
-    `Style: Default,Noto Sans CJK KR,48,&H00FFFFFF,&H00000000,&H00000000,1,1,2,1,5,20,20,20,1\n\n` +
+    `Style: Default,Noto Sans CJK KR,48,&H00FFFFFF,&H00000000,&H00000000,1,1,2,1,5,20,20,20,1\n` +
+    `Style: Caption,Noto Sans CJK KR,${capFs},&H00FFFFFF,&H00000000,&H80000000,1,1,3,1,2,60,60,${capMV},1\n\n` +
     `[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n` +
     ev.join("\n") + "\n"
   );
@@ -659,6 +710,7 @@ async function renderClipMedia(opts: {
   title: string;
   editorState?: any;
   aspect?: string;
+  captions?: { start: number; end: number; text: string }[];
 }): Promise<
   | { clipMediaId: string; clipStored: string; thumbStored: string | null;
       cmeta: { durationSec: number; width: number; height: number; codec: string; hasAudio: boolean } }
@@ -678,7 +730,7 @@ async function renderClipMedia(opts: {
   const assTmp = path.join(tmpDir, `${clipMediaId}.ass`);
 
   const { W, H, stageH } = renderDims(aspect);
-  const ass = buildEditorAss(editorState, W, H, stageH, endTime - startTime);
+  const ass = buildEditorAss(editorState, W, H, stageH, endTime - startTime, opts.captions);
   if (ass) fs.writeFileSync(assTmp, ass, "utf-8");
 
   // ffmpeg reads the master directly. For GCS we hand it a short-lived signed URL and seek
@@ -874,9 +926,16 @@ app.post("/api/clips/:id/export", async (c) => {
   const end = Number(clip.endTime ?? start + (clip.durationSec ?? 0));
   if (!(end > start)) return c.json({ error: "clip has no valid segment to render" }, 400);
 
+  // STT transcript for the master (spoken subtitles). Segments are master-timeline seconds;
+  // we window them to the render range below. A fingerprint (count + updatedAt) goes into the
+  // revision hash so a re-transcribe invalidates the cached render.
+  const ca = clip.sourceMediaId ? await getContentAnalysis(clip.sourceMediaId) : undefined;
+  const transcript = (ca?.data as any)?.transcript;
+  const captionsFp = { n: Array.isArray(transcript) ? transcript.length : 0, u: ca?.updatedAt ?? 0 };
+
   const revision = crypto
     .createHash("sha256")
-    .update(JSON.stringify({ start, end, aspectRatio: clip.aspectRatio, editorState: clip.editorState ?? null }))
+    .update(JSON.stringify({ start, end, aspectRatio: clip.aspectRatio, editorState: clip.editorState ?? null, captionsFp }))
     .digest("hex")
     .slice(0, 16);
 
@@ -900,11 +959,16 @@ app.post("/api/clips/:id/export", async (c) => {
   const segLen = end - start;
   const inRel = Math.min(Math.max(0, Number(es?.trimIn ?? 0)), Math.max(0, segLen - 0.1));
   const outRel = Math.min(Math.max(inRel + 0.1, Number(es?.trimOut ?? segLen)), segLen);
+  const renderStart = start + inRel;
+  const renderEnd = start + outRel;
+
+  // Spoken subtitles that fall inside the render window, rebased to 0.
+  const captions = windowCaptions(transcript, renderStart, renderEnd);
 
   const rendered = await renderClipMedia({
     master, episodeId: clip.episodeId,
-    startTime: start + inRel, endTime: start + outRel,
-    title: clip.title, editorState: es, aspect: es?.aspect,
+    startTime: renderStart, endTime: renderEnd,
+    title: clip.title, editorState: es, aspect: es?.aspect, captions,
   });
   if (!rendered) return c.json({ error: "render failed" }, 500);
 
