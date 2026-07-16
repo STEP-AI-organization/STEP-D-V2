@@ -1,9 +1,9 @@
 /**
  * STEP-D — domain types.
  *
- * Mirrors STEPD's Drizzle entities (the system of record; see docs/step-d-ux-plan.md §11),
- * simplified for the UI layer. The mock data layer (lib/data) and, later, the real SPFN
- * API (milestone M6) both satisfy these shapes behind a single data seam (lib/data/repo).
+ * Domain shapes for the UI layer (storage contract: docs/reference/data-model.md).
+ * Both the mock data layer (lib/data) and the live @stepd/server REST client
+ * (lib/data/api.ts) satisfy these shapes.
  */
 
 import type { EditorState } from "@/lib/editor/presets";
@@ -221,6 +221,8 @@ export interface YouTubeChannelVideo {
   likeCount: number;
   commentCount: number;
   lastSynced: number;
+  /** True if this upload is a YouTube Short (verified server-side via a /shorts/ probe, not by duration). */
+  isShort?: boolean;
 }
 
 export interface ChannelTrendSummary {

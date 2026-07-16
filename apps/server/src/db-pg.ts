@@ -6,7 +6,6 @@
  */
 import pg from "pg";
 import { seed } from "./seed.ts";
-import { SHORTS_MAX_DURATION_SEC } from "./config.ts";
 
 const { Pool } = pg;
 
@@ -195,9 +194,12 @@ async function migrate(): Promise<void> {
     ALTER TABLE youtube_channels ADD COLUMN IF NOT EXISTS lastError      TEXT;
   `);
 
-  // Shorts flag — derived from durationSec at write time (see upsertChannelVideo).
+  // Shorts flag — verified by probing youtube.com/shorts/<id> (see youtube.ts:isShortVideo).
+  // shortCheckedAt is null until probed; rows carried over from the old duration heuristic
+  // have it null, so the next sync re-classifies them for real.
   await pool.query(`
     ALTER TABLE channel_videos ADD COLUMN IF NOT EXISTS isShort BOOLEAN NOT NULL DEFAULT FALSE;
+    ALTER TABLE channel_videos ADD COLUMN IF NOT EXISTS shortCheckedAt BIGINT;
   `);
 
   // Daily estimated revenue (USD) — only nonzero on monetized channels whose consent
@@ -435,7 +437,7 @@ export interface ChannelVideo {
   likeCount: number;
   commentCount: number;
   lastSynced: number;
-  /** Derived from durationSec on write; ignored if supplied to upsertChannelVideo. */
+  /** True if a YouTube Short. Verified async via a /shorts/ probe, not by upsertChannelVideo. */
   isShort?: boolean;
 }
 
@@ -450,12 +452,13 @@ export interface VideoStat {
 }
 
 export async function upsertChannelVideo(v: ChannelVideo): Promise<void> {
-  // isShort is derived here so the threshold lives in exactly one place (config.ts),
-  // not at each call site. durationSec 0 means "unknown" — not a Short.
-  const isShort = v.durationSec > 0 && v.durationSec <= SHORTS_MAX_DURATION_SEC;
+  // isShort is NOT written here — it's verified asynchronously by probing youtube.com/shorts
+  // (see classifyShorts / setChannelVideoShort). A new row starts unclassified
+  // (shortCheckedAt null → DEFAULT FALSE); upserting an existing row leaves its verified
+  // isShort/shortCheckedAt untouched, so a re-sync never clobbers a real verdict.
   await pool.query(
-    `INSERT INTO channel_videos (id, channelId, videoId, title, description, publishedAt, durationSec, thumbnail, viewCount, likeCount, commentCount, lastSynced, isShort)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+    `INSERT INTO channel_videos (id, channelId, videoId, title, description, publishedAt, durationSec, thumbnail, viewCount, likeCount, commentCount, lastSynced)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
      ON CONFLICT (videoId) DO UPDATE SET
        title = EXCLUDED.title,
        description = EXCLUDED.description,
@@ -464,10 +467,37 @@ export async function upsertChannelVideo(v: ChannelVideo): Promise<void> {
        viewCount = EXCLUDED.viewCount,
        likeCount = EXCLUDED.likeCount,
        commentCount = EXCLUDED.commentCount,
-       lastSynced = EXCLUDED.lastSynced,
-       isShort = EXCLUDED.isShort`,
+       lastSynced = EXCLUDED.lastSynced`,
     [v.id, v.channelId, v.videoId, v.title, v.description, v.publishedAt,
-     v.durationSec, v.thumbnail, v.viewCount, v.likeCount, v.commentCount, v.lastSynced, isShort],
+     v.durationSec, v.thumbnail, v.viewCount, v.likeCount, v.commentCount, v.lastSynced],
+  );
+}
+
+/** Video IDs on this channel whose Shorts status hasn't been verified yet (newest first). */
+export async function getUncheckedShortVideoIds(channelId: string, limit: number): Promise<string[]> {
+  const { rows } = await pool.query(
+    `SELECT videoid AS "videoId" FROM channel_videos
+     WHERE channelId = $1 AND shortCheckedAt IS NULL
+     ORDER BY publishedAt DESC LIMIT $2`,
+    [channelId, limit],
+  );
+  return rows.map((r) => r.videoId as string);
+}
+
+/** How many uploads on this channel still await Shorts classification. */
+export async function countUncheckedShortVideos(channelId: string): Promise<number> {
+  const { rows } = await pool.query(
+    `SELECT COUNT(*)::int AS n FROM channel_videos WHERE channelId = $1 AND shortCheckedAt IS NULL`,
+    [channelId],
+  );
+  return (rows[0]?.n as number) ?? 0;
+}
+
+/** Persist a verified Shorts verdict (checkedAt marks the row as classified). */
+export async function setChannelVideoShort(videoId: string, isShort: boolean, checkedAt: number): Promise<void> {
+  await pool.query(
+    `UPDATE channel_videos SET isShort = $2, shortCheckedAt = $3 WHERE videoId = $1`,
+    [videoId, isShort, checkedAt],
   );
 }
 

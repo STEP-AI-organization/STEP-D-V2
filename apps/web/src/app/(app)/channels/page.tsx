@@ -81,6 +81,14 @@ const SORT_TABS: { key: VideoSort; label: string }[] = [
   { key: "comments", label: "댓글순" },
 ];
 
+/** 일반영상 / 쇼츠 분리 — v.isShort는 서버가 /shorts/ 프로브로 판별 (길이 아님). */
+type VideoKind = "all" | "regular" | "shorts";
+const KIND_TABS: { key: VideoKind; label: string }[] = [
+  { key: "all", label: "전체" },
+  { key: "regular", label: "일반영상" },
+  { key: "shorts", label: "쇼츠" },
+];
+
 /** YouTube Analytics traffic-source codes → Korean labels. */
 const TRAFFIC_LABELS: Record<string, string> = {
   YT_SEARCH: "YouTube 검색",
@@ -111,6 +119,7 @@ export default function ChannelTrendsPage() {
   const [error, setError] = useState<string | null>(null);
   const [videoSearch, setVideoSearch] = useState("");
   const [videoSort, setVideoSort] = useState<VideoSort>("recent");
+  const [videoKind, setVideoKind] = useState<VideoKind>("all");
   const [videoPage, setVideoPage] = useState(0);
 
   useEffect(() => {
@@ -173,18 +182,31 @@ export default function ChannelTrendsPage() {
 
   const selectedChannel = channels.find((c) => c.channelId === selectedId);
 
-  // Reset paging whenever the filter/sort/channel changes.
-  useEffect(() => setVideoPage(0), [videoSearch, videoSort, selectedId]);
+  // Reset paging whenever the filter/sort/type/channel changes.
+  useEffect(() => setVideoPage(0), [videoSearch, videoSort, videoKind, selectedId]);
 
-  // Search + sort + paginate client-side so large channels (thousands of uploads) stay usable.
-  const shownVideos = useMemo(() => {
+  // Search + split (일반/쇼츠) + sort + paginate client-side so large channels stay usable.
+  // Search runs first so the type-tab counts reflect the current search.
+  const searchFiltered = useMemo(() => {
     const q = videoSearch.trim().toLowerCase();
-    const list = q ? videos.filter((v) => v.title.toLowerCase().includes(q)) : videos;
+    return q ? videos.filter((v) => v.title.toLowerCase().includes(q)) : videos;
+  }, [videos, videoSearch]);
+
+  const kindCounts = useMemo(() => {
+    let shorts = 0;
+    for (const v of searchFiltered) if (v.isShort) shorts++;
+    return { all: searchFiltered.length, shorts, regular: searchFiltered.length - shorts };
+  }, [searchFiltered]);
+
+  const shownVideos = useMemo(() => {
+    let list = searchFiltered;
+    if (videoKind === "shorts") list = list.filter((v) => v.isShort);
+    else if (videoKind === "regular") list = list.filter((v) => !v.isShort);
     if (videoSort === "recent") return list; // server already returns newest-first
     return [...list].sort((a, b) =>
       videoSort === "views" ? b.viewCount - a.viewCount : b.commentCount - a.commentCount,
     );
-  }, [videos, videoSearch, videoSort]);
+  }, [searchFiltered, videoKind, videoSort]);
   const totalPages = Math.max(1, Math.ceil(shownVideos.length / VIDEO_PAGE_SIZE));
   const page = Math.min(videoPage, totalPages - 1);
   const pagedVideos = shownVideos.slice(page * VIDEO_PAGE_SIZE, (page + 1) * VIDEO_PAGE_SIZE);
@@ -272,10 +294,18 @@ export default function ChannelTrendsPage() {
                 <span className="text-2xl font-bold text-status-done">{fmtUsd(summary.channelRevenue ?? 0)}</span>
                 <span className="text-xs text-muted-foreground">최근 {periodDays}일 채널 예상 수익 · 영상 클릭 시 영상별 수익</span>
               </div>
+            ) : selectedChannel?.hasMonetaryScope === false ? (
+              <p className="text-xs leading-relaxed text-muted-foreground">
+                이 채널은 <b className="text-foreground">수익 권한(monetary) 없이</b> 연결됐습니다.
+                배포채널 페이지에서 <b className="text-foreground">‘분석·수익 연결’</b>로 재연결하고,
+                구글 동의 화면의 <b className="text-foreground">‘수익 정보 보기’</b>를 켜주세요.
+              </p>
             ) : (
               <p className="text-xs leading-relaxed text-muted-foreground">
-                수익 지표는 <b className="text-foreground">수익화(YPP) 채널</b>을 <b className="text-foreground">소유자 권한(monetary)으로 재연결</b>하면 표시됩니다.
-                지금 연결된 채널은 수익화 전이거나 예전 권한으로 연결돼 있어 매출 데이터가 없습니다.
+                수익 권한은 있지만 매출 데이터가 <b className="text-foreground">0</b>입니다 —
+                <b className="text-foreground">수익화(YPP) 전</b>이거나, 수익을{" "}
+                <b className="text-foreground">콘텐츠 소유자(MCN·방송사 CMS)가 관리</b>하는 채널이면
+                크리에이터 권한으로는 수익이 조회되지 않습니다.
               </p>
             )}
           </div>
@@ -345,6 +375,22 @@ export default function ChannelTrendsPage() {
               </span>
             </h3>
             <div className="flex flex-1 flex-wrap items-center gap-2 sm:justify-end">
+              <div className="flex rounded-md border border-border p-0.5">
+                {KIND_TABS.map((t) => (
+                  <button
+                    key={t.key}
+                    onClick={() => setVideoKind(t.key)}
+                    className={`flex items-center gap-1 rounded px-2 py-1 text-xs transition ${
+                      videoKind === t.key ? "bg-muted text-foreground" : "text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    {t.label}
+                    <span className="tabular-nums text-[10px] opacity-70">
+                      {t.key === "all" ? kindCounts.all : t.key === "shorts" ? kindCounts.shorts : kindCounts.regular}
+                    </span>
+                  </button>
+                ))}
+              </div>
               <div className="relative">
                 <Search className="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-muted-foreground" />
                 <input
@@ -391,14 +437,21 @@ export default function ChannelTrendsPage() {
                         : "border-border"
                     }`}
                   >
-                    {v.thumbnail ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img src={v.thumbnail} alt="" className="h-14 w-24 shrink-0 rounded object-cover" />
-                    ) : (
-                      <div className="flex h-14 w-24 shrink-0 items-center justify-center rounded bg-muted text-muted-foreground">
-                        <Play className="size-4" />
-                      </div>
-                    )}
+                    <div className="relative h-14 w-24 shrink-0">
+                      {v.thumbnail ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={v.thumbnail} alt="" className="h-14 w-24 rounded object-cover" />
+                      ) : (
+                        <div className="flex h-14 w-24 items-center justify-center rounded bg-muted text-muted-foreground">
+                          <Play className="size-4" />
+                        </div>
+                      )}
+                      {v.isShort && (
+                        <span className="absolute bottom-0.5 right-0.5 rounded bg-black/75 px-1 text-[9px] font-medium leading-tight text-white">
+                          쇼츠
+                        </span>
+                      )}
+                    </div>
                     <div className="min-w-0 flex-1">
                       <p className="mb-1 line-clamp-2 font-medium leading-tight">{v.title}</p>
                       <div className="flex flex-wrap gap-x-2 gap-y-0.5 text-muted-foreground">

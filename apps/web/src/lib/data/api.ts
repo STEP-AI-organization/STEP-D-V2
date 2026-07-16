@@ -323,6 +323,10 @@ export interface YouTubeChannelInfo {
   /** BIGINT epoch (as string) or null — set once the analyze job's steps land. */
   lastSyncedAt?: number | string | null;
   lastAnalyzedAt?: number | string | null;
+  /** True if the consent granted the revenue (monetary) scope. */
+  hasMonetaryScope?: boolean;
+  /** Last pipeline error for this channel, if any. */
+  lastError?: string | null;
 }
 
 export async function fetchYouTubeChannels(): Promise<YouTubeChannelInfo[]> {

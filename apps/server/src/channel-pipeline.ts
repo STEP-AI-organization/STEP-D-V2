@@ -13,6 +13,8 @@ import {
   upsertYouTubeChannel,
   upsertChannelVideo,
   getChannelVideoByVideoId,
+  getUncheckedShortVideoIds,
+  setChannelVideoShort,
   insertVideoStat,
   getLatestVideoStat,
   upsertChannelAnalytics,
@@ -23,13 +25,15 @@ import {
 } from "./db-pg.ts";
 import {
   syncChannelVideos,
+  classifyShorts,
   fetchChannelAnalytics,
   withAccessToken,
   TokenRevokedError,
+  YouTubeApiError,
   type PersistTokens,
 } from "./youtube.ts";
 import { enqueue } from "./queue.ts";
-import { HOTWATCH_POLL_MS } from "./config.ts";
+import { HOTWATCH_POLL_MS, SHORTS_PROBE_MAX_PER_SYNC, SHORTS_PROBE_CONCURRENCY } from "./config.ts";
 
 /** Re-sync uploads this often. Each run costs Data API quota, so don't go below this. */
 const VIDEO_SYNC_INTERVAL_MS = 6 * 60 * 60 * 1000;
@@ -191,6 +195,14 @@ async function syncVideos(
     }
   }
 
+  // Verify Shorts via the /shorts/ probe (Data API has no flag; duration is unreliable).
+  // Only not-yet-classified uploads are probed, capped per run and cached forever.
+  const uncheckedIds = await getUncheckedShortVideoIds(ch.channelId, SHORTS_PROBE_MAX_PER_SYNC);
+  const verdicts = await classifyShorts(uncheckedIds, SHORTS_PROBE_CONCURRENCY);
+  for (const [videoId, isShort] of verdicts) {
+    await setChannelVideoShort(videoId, isShort, now);
+  }
+
   return videos.length;
 }
 
@@ -224,8 +236,10 @@ async function syncAnalytics(
     fetchedAt,
   }));
 
-  // Daily revenue — monetized channels whose consent includes the monetary scope only.
-  // Soft: any error (403 = not monetized / no scope) just leaves revenue at 0.
+  // Daily revenue — only resolves on a monetized channel whose token carries the monetary
+  // scope. A channel whose revenue is administered by a content owner (MCN / broadcaster
+  // CMS) 403s here because channel==MINE cannot read owner-level revenue. We LOG the outcome
+  // instead of swallowing it, so a silent $0 is diagnosable (403 vs no rows vs real data).
   try {
     const rev = await withAccessToken(clientId, clientSecret, ch, persist, (token) =>
       fetchChannelAnalytics(token, {
@@ -238,8 +252,13 @@ async function syncAnalytics(
     const byDay = new Map<string, number>();
     for (const r of rev.rows) byDay.set(String(r.day), num(r.estimatedRevenue));
     for (const row of rows) row.estimatedRevenue = byDay.get(row.day) ?? 0;
-  } catch {
-    // revenue is optional; non-monetized channels 403 here
+    const total = [...byDay.values()].reduce((a, b) => a + b, 0);
+    console.log(`[revenue] ${ch.channelId}: ${rev.rows.length} day(s), total $${total.toFixed(2)}`);
+  } catch (err) {
+    // Revenue is optional — keep 0, but say why so it isn't an invisible failure.
+    const status = err instanceof YouTubeApiError ? err.status : "?";
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn(`[revenue] ${ch.channelId}: skipped (status ${status}) — ${msg.slice(0, 300)}`);
   }
 
   await upsertChannelAnalytics(rows);

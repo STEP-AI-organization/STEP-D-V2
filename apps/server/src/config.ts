@@ -5,14 +5,19 @@
  * quota one channel sweep can spend.
  */
 
-/** Uploads at or below this length are treated as Shorts (durationSec heuristic). */
-export const SHORTS_MAX_DURATION_SEC = 180;
-
 /**
- * Per channel.analyze completion, only the N most-recent uploads get queued for
- * per-video analytics. 30 × 4 Analytics calls = 120 calls per channel, per run.
+ * Shorts are classified by probing youtube.com/shorts/<id> (see youtube.ts:isShortVideo),
+ * NOT by duration — YouTube raised the Shorts limit to 3 min, so length is unreliable.
+ * One sync probes at most this many not-yet-classified uploads; the rest wait for the
+ * next sync. Each verdict is cached forever (a video's Shorts status never changes).
  */
-export const VIDEO_ANALYZE_MAX_VIDEOS = 30;
+export const SHORTS_PROBE_MAX_PER_SYNC = 400;
+/** Concurrent /shorts/ probes — modest so we don't hammer youtube.com from one IP. */
+export const SHORTS_PROBE_CONCURRENCY = 8;
+
+// Per-video analytics is fanned out for EVERY synced upload of a channel — no count cap.
+// The staleness gates below (fresh daily / aged weekly) are what bound the Analytics
+// quota now, so a re-run only re-pulls the videos actually due.
 
 /** Under this age a video is "fresh": polled daily, and its comments are collected. */
 export const FRESH_VIDEO_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;

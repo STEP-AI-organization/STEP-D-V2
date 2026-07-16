@@ -64,8 +64,9 @@ CREATE TABLE IF NOT EXISTS channel_videos (
   viewCount    BIGINT NOT NULL DEFAULT 0,
   likeCount    BIGINT NOT NULL DEFAULT 0,
   commentCount BIGINT NOT NULL DEFAULT 0,
-  lastSynced   BIGINT NOT NULL,
-  isShort      BOOLEAN NOT NULL DEFAULT FALSE  -- durationSec <= SHORTS_MAX_DURATION_SEC (config.ts)
+  lastSynced     BIGINT NOT NULL,
+  isShort        BOOLEAN NOT NULL DEFAULT FALSE,  -- verified via a youtube.com/shorts probe (youtube.ts)
+  shortCheckedAt BIGINT                           -- when isShort was verified; null = not yet classified
 );
 
 CREATE TABLE IF NOT EXISTS video_stats (

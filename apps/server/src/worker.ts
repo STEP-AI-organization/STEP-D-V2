@@ -37,7 +37,6 @@ import {
   type PersistTokens,
 } from "./youtube.ts";
 import {
-  VIDEO_ANALYZE_MAX_VIDEOS,
   FRESH_VIDEO_WINDOW_MS,
   VIDEO_ANALYZE_FRESH_INTERVAL_MS,
   VIDEO_ANALYZE_AGED_INTERVAL_MS,
@@ -133,18 +132,17 @@ async function handleChannelAnalyze(job: Job): Promise<void> {
 }
 
 /**
- * After a channel run, queue per-video jobs for the N most-recent uploads that are due.
- * The staleness gates here are what bound the Analytics quota: video.analyze costs 4
- * calls, so we only re-pull daily (fresh <7d) or weekly (aged), and only for the top N.
+ * After a channel run, queue per-video jobs for EVERY synced upload that's due — no count
+ * cap. The staleness gates below (fresh daily / aged weekly) are what bound the Analytics
+ * quota (video.analyze costs 4 calls), so a re-run only re-pulls videos actually due.
  */
 async function enqueueDueVideoJobs(channelId: string): Promise<void> {
-  const videos = await listChannelVideos(channelId); // publishedAt DESC
-  const recent = videos.slice(0, VIDEO_ANALYZE_MAX_VIDEOS);
+  const targets = await listChannelVideos(channelId); // every synced upload
   const now = Date.now();
   let analyzeQueued = 0;
   let commentsQueued = 0;
 
-  for (const v of recent) {
+  for (const v of targets) {
     const ageMs = now - Date.parse(v.publishedAt);
     const fresh = Number.isFinite(ageMs) && ageMs < FRESH_VIDEO_WINDOW_MS;
 

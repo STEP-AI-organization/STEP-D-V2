@@ -351,6 +351,61 @@ export async function syncChannelVideos(
   return { videos };
 }
 
+// ── Shorts classification ─────────────────────────────────────────────────────────
+//
+// The Data API exposes no "is this a Short?" field, and duration is unreliable (Shorts
+// can now run up to 3 min). The one robust signal is the canonical URL: a Short resolves
+// at youtube.com/shorts/<id> with 200, while a regular upload answers 303 (redirect to
+// /watch). We probe with a manual-redirect GET and treat status 200 as the only Short —
+// verified against real uploads: a Short → 200, a long-form video → 303.
+
+/** True if `videoId` is a YouTube Short. Throws on network error so callers can retry. */
+export async function isShortVideo(videoId: string, timeoutMs = 6000): Promise<boolean> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const res = await fetch(`https://www.youtube.com/shorts/${videoId}`, {
+      method: "GET",
+      redirect: "manual",
+      signal: ctrl.signal,
+      // A browser-like UA; the bare-fetch default can draw a consent interstitial.
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36",
+      },
+    });
+    // Status line is all we need — don't pull the Short's HTML body over the wire.
+    res.body?.cancel().catch(() => {});
+    return res.status === 200;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Classify many uploads with bounded concurrency. A probe that errors is omitted from
+ * the result (left for the next sync to retry), so the map holds only firm verdicts.
+ */
+export async function classifyShorts(
+  videoIds: string[],
+  concurrency = 8,
+): Promise<Map<string, boolean>> {
+  const verdicts = new Map<string, boolean>();
+  let next = 0;
+  async function worker(): Promise<void> {
+    while (next < videoIds.length) {
+      const id = videoIds[next++];
+      try {
+        verdicts.set(id, await isShortVideo(id));
+      } catch {
+        // network/timeout — omit; shortCheckedAt stays null so the next sync retries.
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(concurrency, videoIds.length) }, worker));
+  return verdicts;
+}
+
 // ── per-video analytics ─────────────────────────────────────────────────────────
 
 export interface VideoAnalyticsResult {
@@ -499,7 +554,11 @@ export async function fetchVideoComments(
   });
   if (!res.ok) {
     const body = await res.text();
-    if (res.status === 403 && body.includes("commentsDisabled")) return [];
+    // Any 403 on comments is non-transient — disabled comments, or a token without the
+    // comments scope (ACCESS_TOKEN_SCOPE_INSUFFICIENT). Skip (empty) instead of throwing:
+    // throwing makes the job retry 5× and the scheduler re-enqueue it every tick, which
+    // floods the queue and starves other work (e.g. content.analyze).
+    if (res.status === 403) return [];
     throw new YouTubeApiError(res.status, `Comment threads failed (${res.status}): ${body}`);
   }
   const data = (await res.json()) as {

@@ -32,6 +32,9 @@ import {
   getChannelVideoByVideoId,
   deleteChannelVideo,
   deleteChannelVideosForChannel,
+  getUncheckedShortVideoIds,
+  setChannelVideoShort,
+  countUncheckedShortVideos,
   insertVideoStat,
   getVideoStats,
   getLatestVideoStat,
@@ -52,12 +55,14 @@ import { hasFfmpeg, probe, captureThumbnail, trimEncode } from "./ffmpeg.ts";
 import { newId } from "./pipeline.ts";
 import {
   syncChannelVideos,
+  classifyShorts,
   fetchChannelAnalytics,
   withAccessToken,
   refreshChannelToken,
   TokenRevokedError,
   type PersistTokens,
 } from "./youtube.ts";
+import { SHORTS_PROBE_MAX_PER_SYNC, SHORTS_PROBE_CONCURRENCY } from "./config.ts";
 import { runChannelPipeline, runDueChannels } from "./channel-pipeline.ts";
 import { initQueue, enqueue, queueStats } from "./queue.ts";
 import {
@@ -113,7 +118,7 @@ app.post("/api/programs", async (c) => {
     ? body.cast.filter((x: unknown): x is string => typeof x === "string")
     : [];
 
-  // SMR feed metadata (program-level, set once — docs/publish-fields-ux-plan.md §5.1③).
+  // SMR feed metadata (program-level, set once — docs/plans/publish-fields-ux-plan.md §5.1③).
   const smr: { programCode?: string; category?: string; weekdays?: number[] } = {};
   if (typeof body.programCode === "string" && body.programCode.trim()) {
     smr.programCode = body.programCode.trim().toLowerCase();
@@ -161,6 +166,45 @@ app.post("/api/admin/reset", async (c) => {
   return c.json({ ok: true, deletedMedia: media.length });
 });
 
+// ── admin: drain the YouTube-analytics job flood + re-kick content.analyze ──
+app.post("/api/admin/queue/purge", async (c) => {
+  const body = await c.req.json().catch(() => ({}) as Record<string, unknown>);
+  if (body.confirm !== "PURGE") return c.json({ error: "body.confirm must be 'PURGE'" }, 400);
+  const pool = getPool();
+  const now = Date.now();
+  // Drop the video.* backlog (comments/analytics) — safe to delete, re-enqueued on the
+  // next channel tick. This is what starves content.analyze.
+  const del = await pool.query(
+    "DELETE FROM job_queue WHERE type LIKE 'video.%' AND status IN ('pending','failed')",
+  );
+  // Drop zombie content.analyze jobs whose media no longer exists (e.g. left over from a
+  // reset). They fail "media not found" forever and, being oldest, block the real job.
+  const dead = await pool.query(
+    "DELETE FROM job_queue WHERE type='content.analyze' AND (payload->>'mediaId') NOT IN (SELECT id FROM media)",
+  );
+  // Free the surviving content.analyze jobs (stuck 'running' from a crash, or waiting) so
+  // the worker runs them now.
+  const rst = await pool.query(
+    "UPDATE job_queue SET status='pending', lockedAt=NULL, runAfter=$1, attempts=0, updatedAt=$1 WHERE type='content.analyze' AND status IN ('running','pending')",
+    [now],
+  );
+  // Guarantee every master media has a runnable analyze job (dedupe skips ones already
+  // in flight) — covers the case where the job was lost/never created.
+  const masters = await pool.query("SELECT id FROM media WHERE role = 'master'");
+  let reQueued = 0;
+  for (const m of masters.rows as { id: string }[]) {
+    const id = await enqueue("content.analyze", { mediaId: m.id }, { dedupeKey: `content.analyze:${m.id}` });
+    if (id) reQueued++;
+  }
+  return c.json({
+    ok: true,
+    deletedVideoJobs: del.rowCount ?? 0,
+    deletedZombieContentJobs: dead.rowCount ?? 0,
+    resetContentJobs: rst.rowCount ?? 0,
+    reQueuedContentJobs: reQueued,
+  });
+});
+
 // ── video streaming (HTTP range) ──────────────────────────────────────────────
 app.get("/api/media/:id/stream", async (c) => {
   const m = await getMedia(c.req.param("id"));
@@ -173,34 +217,32 @@ app.get("/api/media/:id/stream", async (c) => {
   const size = await fileSize(objPath);
   const range = c.req.header("range");
 
+  // Always serve a BOUNDED chunk as 206 — even for a rangeless request. A full-file
+  // response (74 MB in one stream) errors through the Vercel proxy / GCS stream and 500s;
+  // capping every response keeps it small and fast, and the browser just walks the file
+  // with follow-up range requests (standard progressive video streaming).
+  const CHUNK = 4 * 1024 * 1024;
+  let start = 0;
+  let reqEnd = size - 1;
   if (range) {
     const match = /bytes=(\d*)-(\d*)/.exec(range);
-    let start = match && match[1] ? parseInt(match[1], 10) : 0;
-    let end = match && match[2] ? parseInt(match[2], 10) : size - 1;
-    if (Number.isNaN(start)) start = 0;
-    if (Number.isNaN(end) || end >= size) end = size - 1;
-    if (start > end || start >= size) {
-      return new Response(null, { status: 416, headers: { "Content-Range": `bytes */${size}` } });
-    }
-    const stream = createReadStream(objPath, start, end);
-    return new Response(stream, {
-      status: 206,
-      headers: {
-        "Content-Range": `bytes ${start}-${end}/${size}`,
-        "Accept-Ranges": "bytes",
-        "Content-Length": String(end - start + 1),
-        "Content-Type": m.mime,
-        "Cache-Control": "no-store",
-      },
-    });
+    if (match?.[1]) start = parseInt(match[1], 10);
+    if (match?.[2]) reqEnd = parseInt(match[2], 10);
   }
+  if (Number.isNaN(start) || start < 0) start = 0;
+  if (Number.isNaN(reqEnd) || reqEnd >= size) reqEnd = size - 1;
+  if (start > reqEnd || start >= size) {
+    return new Response(null, { status: 416, headers: { "Content-Range": `bytes */${size}` } });
+  }
+  const end = Math.min(reqEnd, start + CHUNK - 1, size - 1);
 
-  const stream = createReadStream(objPath);
+  const stream = createReadStream(objPath, start, end);
   return new Response(stream, {
-    status: 200,
+    status: 206,
     headers: {
-      "Content-Length": String(size),
+      "Content-Range": `bytes ${start}-${end}/${size}`,
       "Accept-Ranges": "bytes",
+      "Content-Length": String(end - start + 1),
       "Content-Type": m.mime,
       "Cache-Control": "no-store",
     },
@@ -262,7 +304,9 @@ async function buildEpisodeAndMedia(opts: {
     episodeNumber: nextEpNum,
     broadDate,
     targetAge: program.targetAge,
-    pipeline: { stage: "recommend", stageStatus: "done", note: "업로드 영상 · 추천 생성됨", progress: 100 },
+    // Truthful status: the AI content pipeline is enqueued, not done. The worker flips
+    // this to recommend/done once shorts land (content-pipeline.ts).
+    pipeline: { stage: "analyze", stageStatus: "progress", note: "AI 장면 분석 중…", progress: 30 },
   };
   await prependEntity("episode", episodeId, episode);
 
@@ -771,10 +815,20 @@ const oauthCallback = async (c: Context) => {
 
     await upsertYouTubeChannel(channel);
 
-    // Hand the analysis to the worker rather than starting it here: Cloud Run throttles
-    // CPU the moment we redirect, so anything kicked off inline would likely be killed.
-    // This is a single INSERT inside the request — it cannot be thrown away.
-    await enqueue("channel.analyze", { channelId: channel.channelId, force: true }, {
+    // Channel-level analysis (video sync + daily analytics + revenue) is light, so run it
+    // HERE on Cloud Run, awaited inside the request — CPU is available while we haven't
+    // responded yet (the throttle only hits work left running after the response). This
+    // keeps it off the shared worker queue, which is reserved for the heavy per-video and
+    // content jobs, so a fresh connect isn't stuck behind that backlog.
+    try {
+      await runChannelPipeline(GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, channel.channelId, { force: true });
+    } catch (err) {
+      console.error("[oauth/callback] inline channel analysis failed; worker will retry", err);
+    }
+    // Fan out the heavy part — per-video analytics for every upload — to the worker. force
+    // is off: if the inline run above already synced, the worker skips the re-sync and just
+    // enqueues the per-video jobs; if it failed, the channel is still due so the worker runs it.
+    await enqueue("channel.analyze", { channelId: channel.channelId, force: false }, {
       dedupeKey: `channel.analyze:${channel.channelId}`,
     });
 
@@ -805,6 +859,10 @@ app.get("/api/youtube/channels", async (c) => {
     // (and can finish fast on channels that simply have no uploads).
     lastSyncedAt: ch.lastSyncedAt ?? null,
     lastAnalyzedAt: ch.lastAnalyzedAt ?? null,
+    // Did this channel's consent include the revenue (monetary) scope? Lets the UI tell
+    // "connected without revenue permission" apart from "has permission but $0 revenue".
+    hasMonetaryScope: (ch.scope ?? "").includes("yt-analytics-monetary.readonly"),
+    lastError: ch.lastError ?? null,
   }));
   return c.json({ channels });
 });
@@ -1010,6 +1068,16 @@ app.post("/api/youtube/sync/:channelId", async (c) => {
       else inserted++;
     }
 
+    // Verify Shorts by probing youtube.com/shorts/<id> — the Data API has no Shorts flag
+    // and duration is unreliable. Cached per video (shortCheckedAt), so this only probes
+    // not-yet-classified uploads; a large backlog spreads across successive syncs.
+    const uncheckedIds = await getUncheckedShortVideoIds(channelId, SHORTS_PROBE_MAX_PER_SYNC);
+    const verdicts = await classifyShorts(uncheckedIds, SHORTS_PROBE_CONCURRENCY);
+    for (const [videoId, isShort] of verdicts) {
+      await setChannelVideoShort(videoId, isShort, now);
+    }
+    const shortsPending = await countUncheckedShortVideos(channelId);
+
     return c.json({
       ok: true,
       channelId,
@@ -1017,6 +1085,8 @@ app.post("/api/youtube/sync/:channelId", async (c) => {
       inserted,
       updated,
       snapshotCount: result.videos.length,
+      shortsClassified: verdicts.size,
+      shortsPending,
     });
   } catch (err: any) {
     if (err instanceof TokenRevokedError) {

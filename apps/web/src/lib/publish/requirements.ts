@@ -1,5 +1,5 @@
 /**
- * Channel publish-readiness engine (docs/publish-fields-ux-plan.md §5.2).
+ * Channel publish-readiness engine (docs/plans/publish-fields-ux-plan.md §5.2).
  *
  * Each distribution channel has its OWN required fields; a clip can be ready for
  * one channel and not another. This module computes, per channel, a checklist of
@@ -212,7 +212,7 @@ function youtubeChecks(ctx: EvalContext): RequirementCheck[] {
       met: connections.youtube,
       detail: connections.youtube ? "연결됨" : "YouTube 채널 미연결",
       scope: "account",
-      fix: { label: "채널 연결", href: "/system" },
+      fix: { label: "채널 연결", href: "/publish-channels" },
     },
     {
       key: "yt-file",
@@ -242,7 +242,7 @@ function metaChecks(ctx: EvalContext): RequirementCheck[] {
       met: connections.meta,
       detail: connections.meta ? "연결됨" : "Meta 페이지 미연결",
       scope: "account",
-      fix: { label: "계정 연결", href: "/system" },
+      fix: { label: "계정 연결", href: "/publish-channels" },
     },
     {
       key: "meta-platforms",
@@ -261,7 +261,7 @@ function metaChecks(ctx: EvalContext): RequirementCheck[] {
           ? "연결됨"
           : "IG 비즈니스 계정 연결 필요",
       scope: "account",
-      fix: { label: "계정 연결", href: "/system" },
+      fix: { label: "계정 연결", href: "/publish-channels" },
     },
     {
       key: "meta-vertical",

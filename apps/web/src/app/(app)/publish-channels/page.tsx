@@ -10,7 +10,7 @@ import type { YouTubeChannelInfo } from "@/lib/data/api";
 import { fetchYouTubeChannels, getYouTubeAuthUrl, deleteYouTubeChannel } from "@/lib/data/api";
 import { ChannelAnalysis } from "@/components/channel-analysis";
 
-export default function SystemPage() {
+export default function PublishChannelsPage() {
   const [channels, setChannels] = useState<YouTubeChannelInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [banner, setBanner] = useState<string | null>(null);
@@ -29,7 +29,7 @@ export default function SystemPage() {
   useEffect(() => {
     loadChannels();
 
-    // We come back here after the OAuth round trip (return=/system). Show the result,
+    // We come back here after the OAuth round trip (return=/publish-channels). Show the result,
     // then strip the params so a refresh doesn't repeat the banner. Reading
     // location.search directly avoids the <Suspense> that useSearchParams would force.
     const params = new URLSearchParams(window.location.search);
@@ -39,7 +39,7 @@ export default function SystemPage() {
       setBanner(`❌ 채널 연결 실패: ${decodeURIComponent(params.get("error")!)}`);
     }
     if (params.get("success") || params.get("error")) {
-      window.history.replaceState(null, "", "/system");
+      window.history.replaceState(null, "", "/publish-channels");
     }
   }, []);
 
@@ -62,14 +62,29 @@ export default function SystemPage() {
 
       {/* YouTube 채널 연동 */}
       <section className="mb-10">
-        <div className="flex items-center justify-between mb-4">
-          <h2 className="text-lg font-semibold text-white">YouTube 채널 연동</h2>
-          <Button
-            onClick={() => { window.location.href = getYouTubeAuthUrl(undefined, "publish", "/system"); }}
-            className="bg-white text-zinc-900 hover:bg-zinc-100"
-          >
-            + 채널 추가
-          </Button>
+        <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <h2 className="text-lg font-semibold text-white">YouTube 채널 연동</h2>
+            <p className="mt-1 text-xs leading-relaxed text-zinc-500">
+              <b className="text-zinc-300">분석·수익 연결</b>은 조회수·시청시간·<b className="text-zinc-300">수익(수익화 채널)</b>을 읽어옵니다.{" "}
+              <b className="text-zinc-300">업로드 채널</b>은 클립을 이 채널로 배포합니다.
+              같은 채널을 둘 다 쓰려면 각각 한 번씩 연결하세요(토큰이 서로 덮어씁니다).
+            </p>
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            <Button
+              variant="outline"
+              onClick={() => { window.location.href = getYouTubeAuthUrl(undefined, "analytics", "/publish-channels"); }}
+            >
+              + 분석·수익 연결
+            </Button>
+            <Button
+              onClick={() => { window.location.href = getYouTubeAuthUrl(undefined, "publish", "/publish-channels"); }}
+              className="bg-white text-zinc-900 hover:bg-zinc-100"
+            >
+              + 업로드 채널
+            </Button>
+          </div>
         </div>
 
         {banner && (
@@ -85,7 +100,7 @@ export default function SystemPage() {
             <EmptyState
               icon={Youtube}
               title="연동된 YouTube 채널이 없습니다"
-              description="'채널 추가' 버튼으로 YouTube 채널을 연결하세요. 외부 협력자는 /register 페이지에서 직접 등록할 수 있습니다."
+              description="위 버튼으로 채널을 연결하세요 — 분석·수익은 '분석·수익 연결', 클립 배포는 '업로드 채널'. 외부 협력자는 /register 페이지에서 직접 등록할 수 있습니다."
             />
           </Card>
         ) : (

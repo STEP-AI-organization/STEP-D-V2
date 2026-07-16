@@ -34,7 +34,7 @@ export const NAV: NavItem[] = [
   { href: "/distribution", label: "배포현황", icon: Send, badgeKey: "distributionFailed" },
   { href: "/analytics", label: "성과", icon: BarChart3, roles: ["admin", "superadmin"] },
   { href: "/channels", label: "채널 트렌드", icon: TrendingUp, roles: ["admin", "superadmin"] },
-  { href: "/system", label: "배포채널", icon: Settings, roles: ["admin", "superadmin"] },
+  { href: "/publish-channels", label: "배포채널", icon: Settings, roles: ["admin", "superadmin"] },
 ];
 
 export function navForRole(role: Role): NavItem[] {

@@ -32,7 +32,7 @@ import type {
   Recommendation,
 } from "@/lib/types";
 import type { DistributionChannel } from "@/lib/constants";
-import { seedInitialData, type InitialData } from "@/lib/data/repository";
+import { type InitialData } from "@/lib/data/repository";
 import {
   API_BASE,
   fetchState,
@@ -56,6 +56,17 @@ interface AppState {
 }
 
 const NO_CONNECTIONS: Connections = { youtube: false, meta: false, metaInstagram: false };
+
+/** Empty starting state — screens show nothing/skeleton until /api/state loads, instead
+ *  of flashing mock seed data for a moment on every refresh. */
+const EMPTY_STATE: AppState = {
+  programs: [],
+  episodes: [],
+  recommendations: [],
+  clips: [],
+  jobs: [],
+  connections: NO_CONNECTIONS,
+};
 
 /**
  * The server sends `connections` as lineage edges ({from,to,type}) — a different
@@ -99,6 +110,8 @@ interface AppData extends AppState {
   media: MediaAsset[];
   apiBase: string;
   serverConnected: boolean;
+  /** True until the first /api/state load settles — screens can show a skeleton meanwhile. */
+  loading: boolean;
   // derived, live
   inbox: InboxItem[];
   badgeCounts: { inbox: number; recommendations: number; distributionFailed: number };
@@ -254,9 +267,12 @@ export function AppDataProvider({
   /** Seed data. Defaults to the mock; the SERVER mode replaces it on mount. */
   initial?: InitialData;
 }) {
-  const [state, setState] = useState<AppState>(() => initial ?? seedInitialData());
+  const [state, setState] = useState<AppState>(() => initial ?? EMPTY_STATE);
   const [media, setMedia] = useState<MediaAsset[]>([]);
   const [serverConnected, setServerConnected] = useState(false);
+  // Loading until the first /api/state settles (unless seeded via `initial`). Screens can
+  // gate on this instead of rendering the empty state as if the data were really empty.
+  const [loading, setLoading] = useState(() => !initial);
   const connectedRef = useRef(false);
 
   const applyServerState = useCallback((s: Awaited<ReturnType<typeof fetchState>>) => {
@@ -290,7 +306,9 @@ export function AppDataProvider({
         const s = await fetchState();
         if (alive) applyServerState(s);
       } catch {
-        /* server down — stay on the mock seed */
+        /* server unreachable — leave the store empty (no mock fallback) */
+      } finally {
+        if (alive) setLoading(false);
       }
     })();
     return () => {
@@ -505,6 +523,7 @@ export function AppDataProvider({
       media,
       apiBase: API_BASE,
       serverConnected,
+      loading,
       inbox,
       badgeCounts: deriveBadges(state, inbox),
       getEpisode: (id) => state.episodes.find((e) => e.id === id),
@@ -530,6 +549,7 @@ export function AppDataProvider({
     state,
     media,
     serverConnected,
+    loading,
     adoptRecommendation,
     saveClipEditor,
     rejectRecommendation,

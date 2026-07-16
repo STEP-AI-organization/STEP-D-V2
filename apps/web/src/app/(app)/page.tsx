@@ -32,7 +32,7 @@ const ICON_TONE: Record<StatusTone, string> = {
 };
 
 export default function HomePage() {
-  const { inbox, episodes, clips, retryDistribution } = useAppData();
+  const { inbox, episodes, clips, retryDistribution, loading } = useAppData();
   const { toast } = useToast();
   const inProgress = episodes.filter((e) => e.pipeline.stageStatus === "progress");
 
@@ -59,8 +59,10 @@ export default function HomePage() {
       />
 
       <section className="mb-8">
-        <SectionHeading count={inbox.length}>내 액션 필요</SectionHeading>
-        {inbox.length === 0 ? (
+        <SectionHeading count={loading ? undefined : inbox.length}>내 액션 필요</SectionHeading>
+        {loading ? (
+          <div className="py-8 text-center text-sm text-muted-foreground">불러오는 중…</div>
+        ) : inbox.length === 0 ? (
           <EmptyState
             icon={CheckCircle2}
             title="지금 처리할 항목이 없습니다"
@@ -117,7 +119,7 @@ export default function HomePage() {
       </section>
 
       <section>
-        <SectionHeading count={inProgress.length}>진행 중</SectionHeading>
+        <SectionHeading count={loading ? undefined : inProgress.length}>진행 중</SectionHeading>
         <div className="space-y-2">
           {inProgress.map((ep) => (
             <Link key={ep.id} href={`/episodes/${ep.id}`} className="block">
@@ -136,13 +138,15 @@ export default function HomePage() {
               </Card>
             </Link>
           ))}
-          {inProgress.length === 0 && (
+          {loading ? (
+            <div className="py-6 text-center text-sm text-muted-foreground">불러오는 중…</div>
+          ) : inProgress.length === 0 ? (
             <EmptyState
               icon={Inbox}
               compact
               title="진행 중인 자동 파이프라인이 없습니다"
             />
-          )}
+          ) : null}
         </div>
       </section>
     </>
