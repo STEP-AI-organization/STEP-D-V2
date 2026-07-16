@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { ArrowLeft, Save, Send, Info, Check, Sparkles } from "lucide-react";
+import { ArrowLeft, Save, Send, Info, Check, Sparkles, Film } from "lucide-react";
 import { useAppData } from "@/lib/data/store";
 import { getStreamUrl } from "@/lib/data/api";
 import {
@@ -18,7 +18,7 @@ import { EditorAiPanel } from "@/components/editor/editor-ai-panel";
 import type { Recommendation } from "@/lib/types";
 
 export function EditorShell({ clipId }: { clipId: string }) {
-  const { clips, recsForEpisode, mediaForEpisode, saveClipEditor } = useAppData();
+  const { clips, recsForEpisode, mediaForEpisode, saveClipEditor, exportClip } = useAppData();
   const clip = clips.find((c) => c.id === clipId);
 
   const title = clip?.title ?? "새 클립";
@@ -44,6 +44,8 @@ export function EditorShell({ clipId }: { clipId: string }) {
   );
   const [saved, setSaved] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [exporting, setExporting] = useState(false);
+  const rendered = clip?.status === "ready" || clip?.status === "published";
 
   // Hydrate from a previously saved revision once the clip lands (async store load /
   // hard refresh). Keyed on clip id so it runs on first arrival, never clobbering edits.
@@ -66,6 +68,22 @@ export function EditorShell({ clipId }: { clipId: string }) {
       setSaved(true);
     } finally {
       setSaving(false);
+    }
+  }
+
+  // The single expensive render (plan §2.4): everything above was metadata. Persist the
+  // latest decisions first so the render (and its revision-hash cache) reflects them.
+  async function confirmExport() {
+    if (!clip) return;
+    setExporting(true);
+    try {
+      if (!saved) {
+        await saveClipEditor(clip.id, state);
+        setSaved(true);
+      }
+      await exportClip(clip.id);
+    } finally {
+      setExporting(false);
     }
   }
 
@@ -136,6 +154,15 @@ export function EditorShell({ clipId }: { clipId: string }) {
           >
             {saved ? <Check className="size-4 text-emerald-400" /> : <Save className="size-4" />}
             {saving ? "저장 중…" : saved ? "저장됨" : "저장"}
+          </button>
+          <button
+            onClick={confirmExport}
+            disabled={exporting}
+            title="편집 결정을 최종 렌더로 굽습니다 (렌더는 여기서 단 한 번 — plan §2.4)"
+            className="inline-flex items-center gap-1.5 rounded-md border border-zinc-700 px-3 py-1.5 text-sm text-zinc-200 hover:bg-zinc-800 disabled:opacity-60"
+          >
+            {rendered ? <Check className="size-4 text-emerald-400" /> : <Film className="size-4" />}
+            {exporting ? "렌더 중…" : rendered ? "확정됨" : "확정(렌더)"}
           </button>
           <Link
             href="/distribution"

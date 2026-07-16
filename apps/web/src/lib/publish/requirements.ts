@@ -83,7 +83,9 @@ export function isVertical(aspectRatio: string): boolean {
 
 /** The clip has been encoded (has a deliverable file). */
 export function isEncoded(clip: Clip): boolean {
-  return clip.status !== "editing";
+  // "Rendered" = has an encoded deliverable (plan §2.4). A draft/mid-encode clip isn't
+  // shippable — only the single export render produces a distributable file.
+  return clip.rendered === true || Boolean(clip.mediaId) || clip.status === "ready" || clip.status === "published";
 }
 
 function weekdaysLabel(weekdays?: number[]): string {
@@ -157,6 +159,13 @@ function smrChecks(ctx: EvalContext): RequirementCheck[] {
   const { clip, episode, program, inputs } = ctx;
   const ageOk = episode ? (TARGET_AGES as readonly number[]).includes(episode.targetAge) : false;
   return [
+    {
+      key: "smr-file",
+      label: "확정(렌더) 완료",
+      met: isEncoded(clip),
+      detail: isEncoded(clip) ? "완료" : "에디터에서 확정(렌더) 필요",
+      scope: "clip",
+    },
     {
       key: "smr-cliptype",
       label: "클립 유형",

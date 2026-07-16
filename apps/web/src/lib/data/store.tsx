@@ -39,6 +39,7 @@ import {
   uploadVideo as apiUploadVideo,
   createProgram as apiCreateProgram,
   adoptRec,
+  exportClip as exportClipApi,
   rejectRec,
   publishClips,
   retryDist,
@@ -124,6 +125,8 @@ interface AppData extends AppState {
   mediaForEpisode: (episodeId: string, role?: string) => MediaAsset | undefined;
   // actions
   adoptRecommendation: (id: string) => Promise<string>;
+  /** Confirm/export a clip — triggers the single server render (plan §2.4). Draft until here. */
+  exportClip: (clipId: string) => Promise<void>;
   /** Persist the editor's decision blob on a clip (metadata only, no render). */
   saveClipEditor: (clipId: string, editorState: EditorState) => Promise<void>;
   rejectRecommendation: (id: string, reason: string) => void;
@@ -317,7 +320,8 @@ export function AppDataProvider({
   }, [applyServerState]);
 
   const adoptRecommendation = useCallback(async (id: string): Promise<string> => {
-    // SERVER: the backend trim-encodes a real clip and returns it (with videoUrl).
+    // SERVER: adopt confirms the segment as a DRAFT clip (metadata only, no render — §2.4).
+    // The single render happens later via exportClip().
     if (connectedRef.current) {
       const { clipId, clip } = await adoptRec(id);
       setState((prev) => ({
@@ -379,6 +383,32 @@ export function AppDataProvider({
       };
     });
     return clipId;
+  }, []);
+
+  const exportClip = useCallback(async (clipId: string): Promise<void> => {
+    // SERVER: the single expensive render (plan §2.4). Server bakes once + caches by
+    // revision hash, then returns the rendered (status:"ready") clip.
+    if (connectedRef.current) {
+      const { clip } = await exportClipApi(clipId);
+      setState((prev) => ({
+        ...prev,
+        clips: prev.clips.map((c) => (c.id === clipId ? (clip as Clip) : c)),
+      }));
+      return;
+    }
+    // MOCK: simulate the encode → ready transition so the flow works standalone.
+    setState((prev) => ({
+      ...prev,
+      clips: prev.clips.map((c) => (c.id === clipId ? { ...c, status: "encoding" } : c)),
+    }));
+    window.setTimeout(() => {
+      setState((s) => ({
+        ...s,
+        clips: s.clips.map((c) =>
+          c.id === clipId ? { ...c, status: "ready", rendered: true } : c,
+        ),
+      }));
+    }, 1200);
   }, []);
 
   const rejectRecommendation = useCallback((id: string, reason: string) => {
@@ -534,6 +564,7 @@ export function AppDataProvider({
       mediaForEpisode: (episodeId, role = "master") =>
         media.find((m) => m.episodeId === episodeId && m.role === role),
       adoptRecommendation,
+      exportClip,
       saveClipEditor,
       rejectRecommendation,
       selectThumbnail,
@@ -551,6 +582,7 @@ export function AppDataProvider({
     serverConnected,
     loading,
     adoptRecommendation,
+    exportClip,
     saveClipEditor,
     rejectRecommendation,
     selectThumbnail,

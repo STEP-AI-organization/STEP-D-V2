@@ -313,6 +313,15 @@ export async function adoptRec(recId: string): Promise<{ clipId: string; clip: u
   return json(await fetch(`${API_BASE}/recommendations/${recId}/adopt`, { method: "POST" }));
 }
 
+/**
+ * Confirm/export a clip — the single expensive render (plan §2.4). The server bakes the
+ * deliverable once and caches by revision hash, so re-exporting identical decisions is a
+ * no-op. Returns the updated (rendered, status:"ready") clip.
+ */
+export async function exportClip(clipId: string): Promise<{ clipId: string; clip: unknown; cached?: boolean }> {
+  return json(await fetch(`${API_BASE}/clips/${clipId}/export`, { method: "POST" }));
+}
+
 export async function rejectRec(recId: string, reason: string): Promise<void> {
   await fetch(`${API_BASE}/recommendations/${recId}/reject`, {
     method: "POST",

@@ -125,6 +125,13 @@ export interface Clip {
   /** Real backend: media id of the encoded clip / the source master it came from. */
   mediaId?: string;
   sourceMediaId?: string;
+  /** True once the single export render produced a deliverable (plan §2.4 deferred-render). */
+  rendered?: boolean;
+  /** Hash of the render-affecting decisions — caches identical re-exports (no re-encode). */
+  renderRevision?: string;
+  /** Adopted segment window in the master (seconds) — drives render-free preview + export. */
+  startTime?: number;
+  endTime?: number;
   status: "editing" | "encoding" | "ready" | "published";
   /** Lineage back-references. */
   sourceRecommendationId?: string;
