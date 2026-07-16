@@ -1,95 +1,95 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Sync code changes to the GCP VM and redeploy the api container.
+    Build + deploy the STEP-D server (apps/server) to Cloud Run.
 
 .DESCRIPTION
-    1. Upload apps/api/, docker-compose.prod.yml, Caddyfile, and deploy/ to VM
-       (protects the server's .env.production — never overwritten).
-    2. SSH into the VM and run deploy/deploy.sh which builds + restarts the api
-       container and polls the health check endpoint.
+    Runs the root cloudbuild.yaml, which builds apps/server/Dockerfile (ffmpeg baked in),
+    pushes the image to Artifact Registry, and deploys the `stepd-server` Cloud Run service
+    in us-central1 (project step-d). After a successful deploy it polls /health to confirm
+    the new revision is serving.
 
-.PARAMETER NoBuild
-    Skip `docker compose build` — only restart the existing image.
-    Use when you only changed a config value or want a quick restart.
+    NOTE: This deploys ONLY the server. The web app (apps/web) deploys via Vercel on
+    `git push origin main`. The old apps/api Python VM path is gone.
 
-.PARAMETER NoSync
-    Skip the file-upload step and only run deploy/deploy.sh on the VM.
-    Useful when you've already uploaded files or are restarting after a failure.
+.PARAMETER SkipPull
+    Skip the `git pull` step (deploy the current working tree as-is).
+
+.PARAMETER SkipHealthCheck
+    Skip the post-deploy /health poll (just build + deploy).
 
 .EXAMPLE
-    .\deploy.ps1                       # full sync + build + restart
-    .\deploy.ps1 -NoBuild              # sync files, skip rebuild, just restart
-    .\deploy.ps1 -NoSync               # rebuild + restart without re-uploading
-    .\deploy.ps1 -NoSync -NoBuild      # restart container only (fastest)
+    .\deploy.ps1                    # git pull + build + deploy + health check
+    .\deploy.ps1 -SkipPull          # deploy current tree without pulling
+    .\deploy.ps1 -SkipHealthCheck   # build + deploy only
 #>
 param(
-    [switch]$NoBuild,
-    [switch]$NoSync
+    [switch]$SkipPull,
+    [switch]$SkipHealthCheck
 )
 
 $ErrorActionPreference = "Stop"
 
 $PROJECT = "step-d"
-$ZONE    = "asia-northeast3-a"
-$VM      = "shorts-api"
-$APP     = "/home/STEPAI05/app"
+$REGION  = "us-central1"
+$SERVICE = "stepd-server"
+$CONFIG  = "cloudbuild.yaml"
 
-# gcloud args shared across all commands
-$G = "--project=$PROJECT", "--zone=$ZONE"
-
-function Invoke-SSH ([string]$Cmd) {
-    gcloud compute ssh $VM @G --command=$Cmd
-    if ($LASTEXITCODE -ne 0) { throw "SSH command failed (exit $LASTEXITCODE)" }
+# Run from the repo root so Cloud Build can access the whole monorepo (Dockerfile needs it).
+$repoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
+Set-Location $repoRoot
+if (-not (Test-Path $CONFIG)) {
+    throw "cloudbuild.yaml not found in $repoRoot — run this from the repo root."
 }
 
-function Invoke-SCP ([string[]]$SrcArgs, [string]$Dest) {
-    gcloud compute scp @G --compress @SrcArgs "${VM}:${Dest}"
-    if ($LASTEXITCODE -ne 0) { throw "SCP failed for: $SrcArgs" }
-}
-
-# ── 1. Sync ───────────────────────────────────────────────────────────────────
-if (-not $NoSync) {
-    Write-Host ""
-    Write-Host "==> [1/2] Syncing source files to VM..." -ForegroundColor Cyan
-
-    # apps/api/ — Python app, Dockerfile, requirements.txt
-    # gcloud scp copies the named dir itself: "apps/api" → DEST/api/
-    gcloud compute scp @G --compress --recurse "apps\api" "${VM}:${APP}/apps/"
-    if ($LASTEXITCODE -ne 0) { throw "SCP failed: apps/api" }
-
-    # Top-level compose and Caddy config
-    gcloud compute scp @G --compress `
-        "docker-compose.prod.yml" `
-        "${VM}:${APP}/docker-compose.prod.yml"
-    if ($LASTEXITCODE -ne 0) { throw "SCP failed: docker-compose.prod.yml" }
-
-    if (Test-Path "Caddyfile") {
-        gcloud compute scp @G --compress "Caddyfile" "${VM}:${APP}/Caddyfile"
-        if ($LASTEXITCODE -ne 0) { throw "SCP failed: Caddyfile" }
-    }
-
-    # Deploy scripts (so deploy.sh itself is always up to date)
-    gcloud compute scp @G --compress --recurse "deploy" "${VM}:${APP}/"
-    if ($LASTEXITCODE -ne 0) { throw "SCP failed: deploy/" }
-
-    # Protect server secrets: remove any .env files that got synced
-    Invoke-SSH @"
-rm -f ${APP}/apps/api/.env ${APP}/apps/api/.env.local ${APP}/apps/api/.env.production
-chmod +x ${APP}/deploy/deploy.sh
-"@
-
-    Write-Host "==> Files synced." -ForegroundColor Green
+# ── 1. Pull latest ──────────────────────────────────────────────────────────────
+if ($SkipPull) {
+    Write-Host "==> Skipping git pull (-SkipPull)." -ForegroundColor Yellow
 } else {
-    Write-Host "==> Skipping sync (-NoSync)." -ForegroundColor Yellow
+    $branch = (git rev-parse --abbrev-ref HEAD).Trim()
+    Write-Host "==> Pulling latest ($branch)..." -ForegroundColor Cyan
+    git pull --ff-only
+    if ($LASTEXITCODE -ne 0) {
+        throw "git pull failed (exit $LASTEXITCODE) — resolve conflicts / commit local changes, or re-run with -SkipPull."
+    }
 }
 
-# ── 2. Deploy ─────────────────────────────────────────────────────────────────
+# ── 2. Build + deploy ───────────────────────────────────────────────────────────
 Write-Host ""
-Write-Host "==> [2/2] Deploying on VM..." -ForegroundColor Cyan
+Write-Host "==> Building + deploying '$SERVICE' to Cloud Run ($REGION, project=$PROJECT)..." -ForegroundColor Cyan
+Write-Host "    (Docker build + Artifact Registry push + Cloud Run deploy — 보통 5~10분)" -ForegroundColor DarkGray
+Write-Host ""
 
-$deployArgs = if ($NoBuild) { "--no-build" } else { "" }
-Invoke-SSH "${APP}/deploy/deploy.sh $deployArgs"
+gcloud builds submit --config=$CONFIG --project=$PROJECT
+if ($LASTEXITCODE -ne 0) { throw "Cloud Build failed (exit $LASTEXITCODE)" }
 
 Write-Host ""
-Write-Host "==> Deploy complete!" -ForegroundColor Green
+Write-Host "==> Deployed." -ForegroundColor Green
+
+# ── 3. Health check ─────────────────────────────────────────────────────────────
+if ($SkipHealthCheck) {
+    Write-Host "==> Skipping health check (-SkipHealthCheck)." -ForegroundColor Yellow
+    return
+}
+
+Write-Host "==> Resolving service URL..." -ForegroundColor Cyan
+$url = gcloud run services describe $SERVICE --project=$PROJECT --region=$REGION --format="value(status.url)"
+if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($url)) {
+    Write-Host "!! Could not resolve service URL — check the Cloud Run console." -ForegroundColor Yellow
+    return
+}
+$url = $url.Trim()
+Write-Host "    $url" -ForegroundColor DarkGray
+
+Write-Host "==> Polling $url/health ..." -ForegroundColor Cyan
+try {
+    $resp = Invoke-RestMethod -Uri "$url/health" -Method Get -TimeoutSec 30
+    Write-Host ""
+    Write-Host "==> Health: ok=$($resp.ok) ffmpeg=$($resp.ffmpeg)" -ForegroundColor Green
+    Write-Host "==> Deploy complete!" -ForegroundColor Green
+} catch {
+    Write-Host ""
+    Write-Host "!! Health check failed: $($_.Exception.Message)" -ForegroundColor Yellow
+    Write-Host "   (배포 자체는 성공했을 수 있음 — 콜드스타트/DB 초기화 대기일 수 있으니 잠시 후 다시 확인)" -ForegroundColor DarkGray
+    Write-Host "   수동 확인:  curl $url/health" -ForegroundColor DarkGray
+}
