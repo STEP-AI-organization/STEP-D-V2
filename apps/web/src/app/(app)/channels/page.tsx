@@ -54,6 +54,17 @@ function fmtUsd(n: number): string {
   return n >= 1000 ? `$${(n / 1000).toFixed(1)}K` : `$${n.toFixed(2)}`;
 }
 
+/** Growth display: huge % on a tiny prior base reads like a bug, so show it as a
+ *  multiplier (×N) once it's large, "신규" when there's no prior base, else a plain %. */
+function growthDisplay(s: ChannelTrendSummary): { text: string; tone: "done" | "error" | "idle" | "progress" } {
+  if (s.earlierPeriodViews === 0) {
+    return { text: s.recentPeriodViews > 0 ? "신규" : "—", tone: "progress" };
+  }
+  const g = s.growthPercent;
+  if (g >= 1000) return { text: `×${Math.round(g / 100 + 1)}`, tone: "done" };
+  return { text: `${g > 0 ? "+" : ""}${g}%`, tone: g > 0 ? "done" : g < 0 ? "error" : "idle" };
+}
+
 /** Watch minutes → hours label. */
 function fmtHours(min: number): string {
   const h = min / 60;
@@ -231,9 +242,9 @@ export default function ChannelTrendsPage() {
             />
             <StatTile
               icon={TrendingUp}
-              tone={summary.growthPercent > 0 ? "done" : summary.growthPercent < 0 ? "error" : "idle"}
+              tone={growthDisplay(summary).tone}
               label="성장률"
-              value={`${summary.growthPercent > 0 ? "+" : ""}${summary.growthPercent}%`}
+              value={growthDisplay(summary).text}
               sub={`이전 ${periodDays}일 대비`}
             />
             <StatTile
