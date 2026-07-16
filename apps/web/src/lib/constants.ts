@@ -3,7 +3,7 @@
  *
  * In STEPD these tables (clipType / clipCategory / targetAge / aspectRatio / status)
  * are re-defined independently across 5+ files with slightly different labels.
- * v2 centralizes them here so labels/colors never drift. (See docs/step-d-ux-plan.md §9.)
+ * v2 centralizes them here so labels/colors never drift. (See docs/reference/glossary.md.)
  */
 
 // ── Clip types ────────────────────────────────────────────────────────────────

@@ -1,8 +1,24 @@
 # STEP-D — 배포 필수 필드 분리 UX 계획서
 
-> 작성 2026-07-12. 대상: `C:\Users\STEPAI05\step-d`. 분석 소스: `C:\Users\STEPAI05\STEPD`(원본, **읽기 전용·미수정**).
-> 문제: **채널마다 배포 필수 필드가 다른데 SMR 때문에 전부 한 번에 입력하고 가야 하는 구조**. 원인을 원본에서 정확히 규명하고 v2 개선안을 세운다. (구현 아님 — 분석+계획)
+> 작성 2026-07-12 · 갱신 2026-07-16. 대상: `C:\Users\STEPAI05\step-d`. 분석 소스: `C:\Users\STEPAI05\STEPD`(원본, **읽기 전용·미수정**).[^legacy]
+> 문제: **채널마다 배포 필수 필드가 다른데 SMR 때문에 전부 한 번에 입력하고 가야 하는 구조**. 원인을 원본에서 정확히 규명하고 v2 개선안을 세운다. (작성 당시 구현 아님 — 분석+계획. 이후 §5.2안이 구현됨, 아래 배너.)
 > file:line 인용은 조사 시점(2026-07-12) 기준. 원본 코드 변경 시 재확인 필요.
+
+[^legacy]: 헤더의 두 경로와 §1~§4·§7.1의 모든 file:line 인용(`src/server/smr/*`, `src/app/(app)/studio/*` 등)은 **레거시 STEPD 저장소 분석 기록**이다. 현 모노레포(`C:\Users\STEPAI05\STEPD-repo`)에는 해당 파일이 존재하지 않으며, 인용은 "왜 이렇게 설계했나"의 역사적 근거로 보존한다. 현 레포 구현 위치는 아래 배너의 매핑 표를 볼 것.
+
+> ✅ **프론트 구현 완료 — 이 문서는 설계 근거서로 유지** (2026-07-16 확인)
+> §5.2 준비도 모델과 §6 변경점이 현 모노레포에 구현되어 있고, 구현 코드가 이 문서를 정본 근거로 인용한다 (`requirements.ts`·`publish-dialog.tsx` 헤더 주석이 본 문서 §5.2를 명시).
+>
+> | 이 문서의 개념 | 현 레포 구현 |
+> |---|---|
+> | §5.2 채널별 준비도 판정 엔진 | `apps/web/src/lib/publish/requirements.ts` — `evaluateChannel` / `evaluateChannels` / `structuralBlockers` / `programSmrChecks` |
+> | §5.2/§6 발행 다이얼로그(채널별 독립 카드) | `apps/web/src/components/publish-dialog.tsx` |
+> | 계정 1회 연결 — 채널 연동 화면 | `apps/web/src/app/(app)/publish-channels/page.tsx` (현재 YouTube OAuth 연동만) |
+> | 채널별 발행 상태 서버 기록 | `apps/server/src/index.ts` `POST /api/distributions/publish` — clip.distributions에 channel·status·reserveDate·platforms 기록 |
+> | §5.1③ 프로그램 SMR 메타(1회 설정) | `apps/server/src/index.ts` `POST /api/programs` — programCode(소문자 강제)·category·weekdays 저장 + `new-program-dialog.tsx` 입력 폼 |
+> | 타입/데이터 모델 | `apps/web/src/lib/types.ts` — `ProgramSmrConfig` · `Connections` · `DistributionState`(channel별 status·reserveDate·platforms) |
+>
+> 남은 것은 백엔드 **실전송**이다 — §7.3 "남은 백엔드 갭" 참조.
 
 ---
 
@@ -193,29 +209,34 @@ DB NOT-NULL로 항상 존재(검증 재확인 안 함): `clipId, originId, title
 ### 5.4 리스크·완화
 - **SMR 프로그램 설정을 숨기면 다시 조용한 실패.** → 프로그램 준비 배지 + 발행 시 명시 차단 메시지("이 프로그램은 피드 요건 3개 미충족 → 게시해도 네이버 미노출")로 **가시화**가 핵심.
 - **AI 선채움 오류(enum/카테고리).** → enum(clipType/clipCategory/section/targetAge)은 목 데이터에서도 검증 규칙을 그대로 반영, 잘못된 값은 채널 카드에서 경고.
-- **데이터 seam 충실도.** v2 목 모델을 실제와 정렬: 채널별 `metadata`(YT/Meta) vs clip 컬럼(SMR), reserveDate 강제, platformIsUse. M6 백엔드 연결 시 매핑 표(§7) 유지.
+- **데이터 seam 충실도.** v2 모델을 실제와 정렬: 채널별 `metadata`(YT/Meta) vs clip 컬럼(SMR), reserveDate 강제, platformIsUse. 채널별 상태 기록 seam은 현 서버에 이미 존재(§7.2) — 실전송 연결 시 매핑 표(§7.1) 유지.
 - **썸네일 채널차(Meta 미사용, T6 숏폼은 커스텀 커버 없음).** 카드에서 채널별로만 노출.
-- **범위 크리프.** 이번 계획은 "필드 분리 UX"에 한정 — 실제 발행 API 연동/토큰 플로우는 M6.
+- **범위 크리프.** 이번 계획은 "필드 분리 UX"에 한정 — 실제 발행 API 연동/토큰 플로우는 후속(§7.3 남은 백엔드 갭).
 
 ---
 
-## 6. 현재 v2 통합 배포 다이얼로그 대비 변경점
+## 6. 당시 v2 통합 배포 다이얼로그 대비 변경점 — ✅ 구현 완료
 
-현 v2(`src/components/publish-dialog.tsx`, `distribution/page.tsx`):
+작성 당시 v2 다이얼로그(`src/components/publish-dialog.tsx`, `distribution/page.tsx`)는 **구현 전 상태**였다:
 - 채널 **다중 체크박스** + 즉시/예약 + SMR reserveDate 정직성 노트. 모든 채널을 **균일**하게 취급, 채널 고유 필드/준비도 개념 없음.
+- → 이 "변경 전" 상태는 **현 코드에 더 이상 존재하지 않는다.** 현재의 `apps/web/src/components/publish-dialog.tsx`는 아래 변경점을 §5.2 모델 그대로 구현했다(채널별 독립 카드 · 요건 체크리스트 · 준비된 채널만 개별 발행).
 
-변경:
-1. 채널을 **체크박스 → 준비도 카드**로. 각 카드에 채널별 요건 체크리스트.
-2. **"지금 배포"는 선택 채널 요건만** 요구(전 채널 일괄 강제 아님). 준비된 채널만 활성.
-3. **SMR 카드에 프로그램 피드 요건 배지 + 딥링크**, reserveDate는 카드 안 필수 입력으로.
-4. 공통 필드(AI 선채움)는 **상단 1회 검토**, 채널 고유는 아코디언.
-5. 채널별 상태(`DistributionState.status`)를 카드가 그대로 반영(이미 채널별 모델).
+변경(전부 구현됨):
+1. 채널을 **체크박스 → 준비도 카드**로. 각 카드에 채널별 요건 체크리스트. ✅ (`ChannelCard`가 `evaluateChannel` 결과를 렌더)
+2. **"지금 배포"는 선택 채널 요건만** 요구(전 채널 일괄 강제 아님). 준비된 채널만 활성. ✅ (미준비 클립은 발행 대상에서 제외되고 "N개 미준비 제외"로 노출)
+3. **SMR 카드에 프로그램 피드 요건 배지 + 딥링크**, reserveDate는 카드 안 필수 입력으로. ✅ (`programSmrChecks`의 `fix.href="/programs"` 딥링크; SMR은 즉시 발행도 `nowReserve()`로 reserveDate 강제)
+4. 공통 필드(AI 선채움)는 **상단 1회 검토**, 채널 고유는 아코디언. ✅ (`CommonSummary` 상단 요약 + 채널 고유 입력은 해당 채널 카드 안에서만 노출)
+5. 채널별 상태(`DistributionState.status`)를 카드가 그대로 반영(이미 채널별 모델). ✅
 
 ---
 
-## 7. 데이터 seam — 실제 백엔드 매핑(M6 대비)
+## 7. 데이터 seam — 백엔드 매핑
 
-| v2 개념 | 원본 실체 |
+> 원래 이 절은 "M6 백엔드 연결 시 매핑"을 대비한 미래형이었다. 정정: **채널별 상태 기록(recording) seam은 이미 존재한다**(§7.2). 아직 없는 것은 실전송이다(§7.3).
+
+### 7.1 레거시 STEPD 매핑 (역사 근거)
+
+| v2 개념 | 원본(레거시 STEPD) 실체 |
 |---|---|
 | 채널별 발행 상태 | `distributions` (unique `targetType+targetId+channel`), 상태는 `metadata.uploadStatus ?? (isUse==='Y'?published:pending)` (`schedule/page.tsx:214`) |
 | 채널 고유 필드(YT/Meta) | `distributions.metadata` jsonb (`distribution.entity.ts:22`) |
@@ -225,10 +246,26 @@ DB NOT-NULL로 항상 존재(검증 재확인 안 함): `clipId, originId, title
 | 채널 검증 | SMR=`validateClip/Content/Program`(피드 읽기), YT/Meta=발행 시 route guard |
 | 프로그램 피드 요건 | `validateAggregateFeedProgramInfo` (`validator.ts:92`) |
 
+### 7.2 현 레포 서버 seam — 이미 존재 (2026-07-16 확인)
+
+- `POST /api/distributions/publish` (`apps/server/src/index.ts`) — 클립 엔티티의 `distributions` 배열에 채널별 `{channel, status(published|scheduled), reserveDate, platforms(Meta만)}`를 upsert. §5.2가 전제한 채널별 행 구조 그대로.
+- `POST /api/programs` (`apps/server/src/index.ts`) — 프로그램 SMR 메타(`programCode` 소문자 강제 · `category` · `weekdays`)를 프로그램 엔티티에 저장(§5.1③ 반영).
+- 검증 규칙은 프론트 `requirements.ts`가 레거시 validator를 재현: programCode `^[a-z0-9]+$`, targetAge enum(0/7/12/15/19), 편성요일 ≥1, IG 세로 비율 등.
+
+### 7.3 남은 백엔드 갭 (실전송 — 미구현)
+
+현 서버의 publish는 **상태 기록만** 한다. 레거시가 하던 실제 채널 전송은 아직 없다:
+
+- **SMR XML 피드 렌더 없음** — `serializeFeedClipMediaInfos` 상당(clip 컬럼 → `<clipmediainfo>` XML)이 현 서버에 없다. 피드 자체가 없으므로 read-time 게이트(`validateClip` 상당)도 서버엔 없다 — 프론트 체크리스트(§5.2)가 그 검증을 발행 전으로 앞당겨 대신하는 구조.
+- **Meta Reels 실전송 없음** — IG/FB 업로드 잡·파일 probe 검증 상당이 없다. `platforms` 선택만 기록된다.
+- **YouTube 실업로드 없음** — 현 `apps/server/src/youtube.ts`는 조회(업로드 목록·통계·애널리틱스) 전용으로 `videos.insert` 경로가 없다. (OAuth·채널 동기화·애널리틱스는 실동작.)
+- **계정 연결 플래그 미배선** — 서버 `/api/state`의 `connections`는 시드가 계보(lineage) 에지 배열이라, 프론트 `toConnections`(`store.tsx`)가 채널 플래그 형태가 아니면 전부 미연결 처리한다. YouTube OAuth가 실제 연결돼 있어도 준비도 카드의 "채널 연결" 체크에는 반영되지 않는다.
+
 ---
 
 ## 8. 열린 질문 / 후속
-- SMR 프로그램 준비 UI를 **프로그램 화면**에 둘지, 배포 카드 딥링크로만 둘지 (권장: 프로그램 화면에 "SMR 피드 준비" 섹션 + 배포에서 배지·링크).
+- ~~SMR 프로그램 준비 UI를 **프로그램 화면**에 둘지, 배포 카드 딥링크로만 둘지~~ → **권장안대로 구현됨**: 프로그램 생성 폼(`new-program-dialog.tsx`)에 SMR 피드 입력 + 배포 카드에서 `/programs` 딥링크.
 - YouTube 공개상태 불일치(코드 public vs 문서 private) — v2 카피는 **코드 실동작 기준**으로.
 - SFTP-CSV 경로는 원본에서 미배선·컬럼 미확정 → v2 범위 제외(플래그만).
-- 목 검증 규칙을 어느 깊이까지 재현할지(enum·형식까지 vs 존재유무만) — 권장: enum·형식까지(조용한 실패 재현 방지 학습 효과).
+- ~~목 검증 규칙을 어느 깊이까지 재현할지(enum·형식까지 vs 존재유무만)~~ → **enum·형식까지 구현됨**(`requirements.ts`: programCode 형식, clipType/targetAge enum — 조용한 실패 재현 방지).
+- (신규) §7.3 남은 백엔드 갭 — SMR XML 피드 렌더 · Meta 실전송 · YouTube 실업로드 · 계정 연결 플래그 배선.

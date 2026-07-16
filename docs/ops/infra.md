@@ -1,7 +1,8 @@
 # STEP-D 인프라 (실서비스)
 
-> 전체 인프라의 단일 진실 소스. **바뀌면 여기 갱신한다.** 최종: 2026-07-15.
-> 레거시 `deploy/INFRA.md`(shorts-vm/shorts-pg)는 폐기된 구 시스템 — 혼동 주의.
+> 전체 인프라의 단일 진실 소스. **바뀌면 여기 갱신한다.** 최종: 2026-07-16.
+> 레거시 주의: 구 시스템(shorts-vm/shorts-pg) 문서는 폐기·삭제됐고, 리포에 남은 `apps/api`
+> (구 Python FastAPI)는 레거시 잔존물 — 현 서버(`apps/server`)는 이를 전혀 사용하지 않는다.
 
 ## 한눈에
 
@@ -46,13 +47,16 @@
 
 ### 1. Cloud Run — `stepd-server` (하나뿐인 백엔드)
 - 리전 `us-central1`, Node/Hono, `apps/server`.
-- **비공개(IAM)** — 공개 invoker 없음. 프론트는 Vercel rewrite로 ID 토큰 프록시 경유.
+- **비공개(IAM)** — invoker 바인딩은 `domain:stepai.kr` + `serviceAccount:stepd-deployer@step-d.iam.gserviceaccount.com` 둘뿐, `allUsers` 없음. 직접 URL 익명 접근은 403 (2026-07-16 실측).
+  프론트는 Vercel rewrite로 **ID 토큰 프록시** 경유(`apps/web/next.config.ts` → `apps/web/src/app/api/proxy/[[...path]]/route.ts`) — 그래서 `stepd.stepai.kr/api/*`는 익명 200이다(공개면은 Vercel 웹뿐).
+- ⚠️ 함정: 루트 `cloudbuild.yaml:37`과 `apps/server/cloudbuild.yaml:26` 둘 다 `--allow-unauthenticated` 플래그가 남아 있다. 현재는 배포 SA에 IAM 변경 권한이 없어 경고 후 무시되는 것으로 추정 — IAM에 반영되지 않아 실효 없음(실측). 단 권한이 생기는 순간 **매 배포가 서비스를 공개로 뒤집는다** → 플래그 제거 권장.
 - 리소스: cpu 2 / mem 4Gi / timeout 600s / concurrency 10 / min 0 / max 5 (cloudbuild.yaml).
 - 서비스계정: `stepd-deployer@step-d.iam.gserviceaccount.com`.
 - env/시크릿(cloudbuild.yaml `--set-secrets`): `DATABASE_URL`=stepd-db-url, `GOOGLE_CLIENT_ID/SECRET`,
   `JWT_SECRET`, `PUBLIC_URL`=stepd-public-url. 평문 env: `NODE_ENV`, `GCS_BUCKET`=stepd-media.
 - Cloud SQL 연결: `--add-cloudsql-instances step-d:us-central1:stepd-db` (유닉스 소켓).
-- **자동배포 안 됨** — `gcloud builds submit` 또는 `deploy-server.ps1`로 수동.
+- 빌드 설정 정본은 **루트 `cloudbuild.yaml`**(docker 빌드, `apps/server/Dockerfile`) — `deploy-server.ps1:101`이 이걸 submit 한다. `apps/server/cloudbuild.yaml`(buildpacks 빌드)도 공존하지만 배포 경로에서 안 쓴다.
+- **자동배포 안 됨** — 두 cloudbuild.yaml 헤더의 "Triggered by GitHub push" 주석은 낡은 서술이고 GitHub 트리거는 없다. 실제 운영은 `deploy-server.ps1`의 수동 `gcloud builds submit`이 정본.
 
 ### 2. 워커 VM — `stepd-worker`
 - `e2-small` (2 vCPU / 2GB), zone `us-central1-a`, Ubuntu 24.04, 부트디스크 20GB.
@@ -62,6 +66,9 @@
 - DB 접속: cloud-sql-proxy(`127.0.0.1:5432`) 경유. 시크릿 `stepd-worker-db-url`(Cloud Run과 값 다름 — 소켓 vs TCP).
 - Python 파이프라인: `/opt/stepd/core/.venv` (deploy/worker-pipeline-setup.sh), `CORE_PYTHON`으로 워커에 주입.
 - 프로비저닝: `deploy/worker-vm.sh`(Node) → `deploy/worker-pipeline-setup.sh`(Python).
+- ⚠️ 함정: `deploy/worker-vm.sh:17`의 `REPO_URL` 기본값이 **구 리포**(`STEP-AI-official/STEP-D-V2`)다.
+  리포는 `STEP-AI-organization`으로 이전됐으므로(변경 이력 2026-07-16 참고) 신규 워커 프로비저닝 시
+  그대로 돌리면 구 리포를 클론한다 — `REPO_URL` 오버라이드 또는 스크립트 수정 필요.
 
 ### 3. Cloud SQL — `stepd-db`
 - PostgreSQL 16. 인스턴스 연결명 `step-d:us-central1:stepd-db`.
@@ -74,6 +81,9 @@
   epoch ms 문자열을 날짜로 파싱 못 해 **Invalid Date**. 반드시 `new Date(Number(x))`. 대상 필드:
   `connectedAt`·`createdAt`·`expiresAt`·`lastSyncedAt` 등 모든 BIGINT 타임스탬프.
   (전례: 배포채널 "Invalid Date 연결" 버그, 2026-07-15 수정.)
+- ⚠️ 함정3(스키마 소재): `job_queue`·`content_analysis`·`channel_analytics`는 `apps/server/schema.sql`에
+  **없다** — 서버/워커 기동 시 코드가 런타임 생성한다(`queue.ts:44` initQueue, `db-pg.ts:135`·`db-pg.ts:215`).
+  schema.sql만 돌려서 새 DB를 부트스트랩하면 이 셋이 빠진다. 상세: [../reference/data-model.md](../reference/data-model.md).
 
 ### 4. GCS 버킷
 - `stepd-media` — 업로드 영상·썸네일·클립 (`GCS_BUCKET`).
@@ -105,7 +115,7 @@ STT(Gemini 오디오, 서울) → 자막정제 → 장면분할(scenedetect+ffmp
 - 진입점: `python -m core.analyze <video> --out <dir>` → analysis.json(transcript+scenes+shorts).
 - 실측: 8분 영상 ≈ 512초(vision+names가 프레임당 Gemini 호출이라 지배적).
 - 실서비스 흐름·배선: [content-pipeline-prod.md](content-pipeline-prod.md).
-- 파이프라인 계획: [pipeline-plan.md](pipeline-plan.md), 인물엔진: [context-engine-plan.md](context-engine-plan.md).
+- 파이프라인 계획: [../plans/pipeline-plan.md](../plans/pipeline-plan.md), 인물엔진: [../plans/context-engine-plan.md](../plans/context-engine-plan.md).
 
 ## 잡 큐 (job_queue)
 
@@ -131,6 +141,7 @@ Postgres 기반. `FOR UPDATE SKIP LOCKED` claim, dedupeKey, 지수백오프.
 |---|---|
 | 프론트(Vercel) | `.\deploy\deploy-web.ps1` (또는 main 푸시) |
 | 백엔드(Cloud Run + 워커) | `.\deploy\deploy-server.ps1` |
+| 워커만 (코드 갱신·재시작) | 루트 `.\deploy-worker.ps1` — SSH → `git reset --hard origin/main` → 재시작 (`deploy-server.ps1 -Only worker`와 같은 일) |
 | 워커 파이썬 환경(1회) | `deploy/worker-pipeline-setup.sh` + `CORE_PYTHON` env |
 
 - Cloud Build 업로드는 `.gcloudignore`로 venv/미디어 제외(안 하면 5.2GB).

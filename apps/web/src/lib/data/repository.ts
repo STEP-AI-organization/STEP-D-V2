@@ -1,10 +1,11 @@
 /**
- * STEP-D — data repository (the backend integration seam).
+ * STEP-D — data repository (mock fallback seam).
  *
- * The whole app talks to a single `StepDRepository`. Today `mockRepository` serves the
- * in-memory seed; at milestone M6 we swap `activeRepository` to `apiRepository`, which
- * maps each call to the existing STEPD SPFN RPC endpoints (see docs/integration-map.md).
- * Screens and the store never change — only this module.
+ * ⚠️ 폐기된 통합 표면: 원래 "M6에서 activeRepository를 apiRepository(STEPD SPFN RPC)로
+ * 스왑"하는 계획이었으나 그 경로는 폐기됐다. 실제 서버 연동은 lib/data/api.ts(REST,
+ * @stepd/server)와 store.tsx의 fetchState() 폴백 구조로 이미 가동 중이다.
+ * mockRepository는 서버 미연결 시 store가 쓰는 목 시드 소스로만 살아 있다.
+ * (정리 방향: docs/plans/step-d-master-build-plan.md 죽은 코드 목록 참고)
  */
 
 import type { Clip, Connections, Episode, JobEvent, Program, Recommendation } from "@/lib/types";
@@ -61,31 +62,26 @@ export const mockRepository: StepDRepository = {
 };
 
 /**
- * Real backend implementation — STUB. Wire at M6. Each method maps to a documented
- * STEPD SPFN RPC endpoint (docs/integration-map.md). Kept as a throwing stub so the
- * integration surface is explicit and typed.
+ * Dead stub — 계획했던 SPFN RPC 통합이 폐기되어 어디서도 호출되지 않는다.
+ * 실 서버 연동은 lib/data/api.ts(fetchState/adoptRec/publishClips …)를 볼 것.
  */
 export const apiRepository: StepDRepository = {
-  // GET /source-sets, /programs, /contents, /recommendations, /clips, /distributions …
   loadInitial: notWired("loadInitial"),
-  // POST /source-sets/:id/recommend/:recId/adopt → editor.exportClips + register-clip.job
   adopt: notWired("adopt"),
   reject: notWired("reject"),
-  // smr-admin.publishClip / youtube.youtubePublish / meta.metaPublish
   publish: notWired("publish"),
   retry: notWired("retry"),
-  // SSE over the SPFN event stream (sourceSetChanged / job progress)
   subscribeJobs: () => {
-    throw new Error("apiRepository.subscribeJobs: M6에서 SPFN 이벤트 스트림에 연결");
+    throw new Error("apiRepository.subscribeJobs: 폐기된 스텁 — 실 연동은 lib/data/api.ts");
   },
 };
 
 /** A stub whose call throws — assignable to any repository method signature. */
 function notWired(name: string): () => never {
   return () => {
-    throw new Error(`apiRepository.${name}: M6에서 SPFN RPC에 연결 (docs/integration-map.md 참조)`);
+    throw new Error(`apiRepository.${name}: 폐기된 SPFN 통합 스텁 — 실 연동은 lib/data/api.ts`);
   };
 }
 
-/** The repository the app uses. Swap to `apiRepository` at M6. */
+/** The repository the store uses as the mock fallback (실서버 연동은 api.ts 경유). */
 export const activeRepository: StepDRepository = mockRepository;

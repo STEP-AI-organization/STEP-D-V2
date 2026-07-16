@@ -1,67 +1,31 @@
 # STEP-D (monorepo)
 
-KT ENA 방송 콘텐츠 제작·배포 스튜디오의 **UX 재설계** 버전 + **v2 전용 백엔드**.
-실제 영상을 올려 업로드 → 소스 재생 → 추천 → 채택(실제 트림 인코딩) → 편집 → 배포/엑셀까지
-로컬에서 그대로 돌려볼 수 있다. (원본 STEPD `C:\Users\STEPAI05\STEPD` 는 별도 저장소로 미수정.)
+방송사·MCN 운영자 중심의 클립/쇼츠 스튜디오. 긴 영상을 올리면 AI 파이프라인이 추천 구간을
+생성하고, 운영자가 채택하면 트림·인코딩된 클립이 되어 편집 → 멀티채널 배포 → 성과 추적까지 이어진다.
 
 ## 구조 (pnpm 워크스페이스)
 
 ```
 apps/
-  web/      Next.js 16 프론트엔드 (@stepd/web, :3100)
-  server/   신규 백엔드 (@stepd/server, :4000) — Hono + node:sqlite + ffmpeg
-packages/   (공유 패키지 자리)
-docs/       설계·분석 문서
-storage/    런타임 데이터 (업로드 영상·썸네일·클립·sqlite) — git 무시
+  web/      Next.js 16 프론트엔드 (@stepd/web) → Vercel (stepd.stepai.kr)
+  server/   백엔드 (@stepd/server) — Hono + PostgreSQL + GCS + ffmpeg → Cloud Run
+            + 별도 워커 프로세스(worker.ts) → GCE VM (stepd-worker)
+  api/      ⚠️ 레거시 (구 STEPD, Python FastAPI) — 미사용, 새 코드 금지
+core/       Python AI 파이프라인 (STT→정제→장면→비전→이름→쇼츠 추천) — 워커가 스폰
+admin/      STEP D Lab — core/ 분석 결과 검수 도구 (/lab)
+deploy/     배포 스크립트 (deploy-server.ps1 · deploy-web.ps1) + 워커 VM 프로비저닝
+docs/       문서 — 시작점: docs/README.md
 ```
+
+## 시작하기
+
+- **로컬 개발**: [docs/ops/local-dev.md](docs/ops/local-dev.md) — `dev.ps1` 하나로 웹+서버+Postgres 기동
+- **문서 전체 지도**: [docs/README.md](docs/README.md) — 현황(ops) / 계획(plans) / 레퍼런스 구분
+- **인프라 단일 진실 소스**: [docs/ops/infra.md](docs/ops/infra.md)
+- **배포**: [docs/ops/deploy.md](docs/ops/deploy.md)
 
 ## 사전 요구
 
-- **Node ≥ 22** (내장 `node:sqlite` 사용 — 네이티브 빌드 불필요)
-- **pnpm**
-- **ffmpeg / ffprobe** (실제 영상 프로브·썸네일·트림 인코딩용). 없으면 업로드는 되지만
-  메타데이터/썸네일/클립 인코딩은 건너뛴다.
-
-## 실행
-
-```bash
-pnpm install
-pnpm dev          # web(:3100) + server(:4000) 동시 실행
-# 또는 개별:
-pnpm dev:web      # 프론트만
-pnpm dev:server   # 백엔드만
-pnpm build        # 전체 빌드
-pnpm typecheck    # 전체 타입체크
-```
-
-열기: **http://localhost:3100**  ·  백엔드 상태: http://localhost:4000/health
-
-프론트는 서버가 떠 있으면 자동으로 서버 데이터를 쓰고, 서버가 없으면 목 데이터로 단독 구동한다.
-
-## 실제 영상으로 해보기
-
-1. `pnpm dev` 로 둘 다 실행 → http://localhost:3100 접속.
-2. **콘텐츠** 화면 → **영상 업로드** → 프로그램 선택 후 영상 파일(mp4/mov/webm)을 끌어다 놓기.
-   - 서버가 ffprobe로 길이/해상도/코덱을 읽고, 썸네일을 뽑고, **새 회차 + 추천**을 생성한다.
-3. 생성된 회차의 **소스** 탭에서 업로드한 실제 영상이 재생된다.
-4. **추천** 탭에서 [채택] → 서버가 해당 구간을 **ffmpeg로 트림 인코딩**해 실제 클립을 만든다.
-   [편집] 을 누르면 에디터에서 그 클립 영상이 재생된다.
-5. **배포**(채널별 준비도) · **엑셀 내보내기** 도 그대로 동작한다.
-
-## 설정 / 리셋
-
-- `NEXT_PUBLIC_API_URL` (web): 백엔드 주소. 기본 `http://localhost:4000`.
-- `PORT` (server): 기본 `4000`. `STEPD_STORAGE_DIR`: 저장 위치(기본 `./storage`).
-- **데이터 초기화:** `storage/stepd.sqlite` 삭제 후 서버 재시작 → 시드로 다시 시작.
-
-## 아직 seam(키 필요)
-
-- **AI 추천:** 현재는 길이 기반 휴리스틱. `GEMINI_API_KEY` 연결 시 실제 분석으로 교체(동일 shape).
-- **실제 채널 배포(SMR/YouTube/Meta):** UI·상태는 실동작(로컬 기록), 실제 송출은 OAuth·계정 필요.
-
-자세한 백엔드 설계·매핑: [`docs/backend-notes.md`](docs/backend-notes.md).
-
-## 참조 소스 (읽기 전용, 미수정)
-
-- STEPD: `C:\Users\STEPAI05\STEPD`
-- StepD(롱퐁 쇼츠화): `C:\Users\STEPAI05\OneDrive\문서\롱퐁 쇼츠화`
+- **Node ≥ 22**, **pnpm**, **Docker Desktop** (로컬 Postgres)
+- **ffmpeg / ffprobe** (영상 프로브·썸네일·트림 인코딩)
+- AI 파이프라인(core/)을 로컬에서 돌리려면 Python 3.11+ 및 GCP 인증 — docs/ops/local-dev.md 참고

@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>STEP-D 프로그램 홈 — 프로토타입</title>
+<style>
+  :root{
+    --bg:#0b0c0f; --panel:#14161b; --panel2:#1b1e25; --line:#262a33;
+    --ink:#eef0f5; --mut:#9aa1ad; --dim:#6d7480;
+    --pri:#4f8cff; --pink:#f472b6; --emerald:#34d399; --amber:#fbbf24; --violet:#a78bfa;
+  }
+  *{box-sizing:border-box; margin:0; padding:0;}
+  body{background:var(--bg); color:var(--ink); font-family:'Malgun Gothic','Pretendard',sans-serif; font-size:14px; line-height:1.55;}
+  a{color:inherit; text-decoration:none;}
+  .wrap{max-width:1080px; margin:0 auto; padding:0 20px 80px;}
+  button{font-family:inherit; cursor:pointer; border:none;}
+
+  /* ── 히어로 (키아트) ── */
+  .hero{position:relative; height:360px; border-radius:0 0 20px 20px; overflow:hidden;
+    background:linear-gradient(115deg,#3b1d3f 0%,#1d2440 55%,#0e2a33 100%);}
+  .hero::after{content:""; position:absolute; inset:0; background:linear-gradient(180deg,transparent 30%,rgba(11,12,15,.92) 92%);}
+  .hero .art{position:absolute; right:6%; top:14%; font-size:130px; opacity:.9; filter:drop-shadow(0 10px 30px #0008);}
+  .heroin{position:absolute; left:0; right:0; bottom:0; padding:24px 28px; z-index:2; display:flex; gap:20px; align-items:flex-end;}
+  .poster{width:120px; aspect-ratio:2/3; border-radius:10px; background:linear-gradient(160deg,#f472b6,#7c5cff);
+    display:flex; align-items:center; justify-content:center; font-size:40px; box-shadow:0 10px 30px #000a; flex-shrink:0;}
+  .heromtea{flex:1;}
+  .ptitle{font-size:30px; font-weight:800; letter-spacing:-.5px;}
+  .badges{display:flex; gap:6px; flex-wrap:wrap; margin-top:8px;}
+  .bdg{font-size:11px; padding:3px 9px; border-radius:6px; background:#ffffff18; color:#fff; backdrop-filter:blur(4px);}
+  .bdg.rate{background:var(--amber); color:#3a2a00; font-weight:bold;}
+  .moods{display:flex; gap:6px; flex-wrap:wrap; margin-top:10px;}
+  .mood{font-size:11px; padding:3px 10px; border-radius:12px; border:1px solid #ffffff2e; color:#e6e9f2;}
+  .heroacts{display:flex; gap:8px; flex-shrink:0;}
+  .cta{background:var(--pri); color:#fff; font-weight:bold; padding:11px 18px; border-radius:10px; font-size:13px;}
+  .cta:hover{background:#3b7bff;}
+  .ghost{background:#ffffff1c; color:#fff; padding:11px 14px; border-radius:10px; font-size:13px;}
+
+  /* ── 시놉시스 ── */
+  .syn{margin:18px 4px 0; color:var(--mut); max-width:760px;}
+  .syn b{color:var(--ink);}
+  .more{color:var(--pri); font-size:12px; background:none; padding:0; margin-left:6px;}
+  .factrow{display:flex; gap:22px; flex-wrap:wrap; margin:14px 4px 0; font-size:12.5px; color:var(--dim);}
+  .factrow b{color:var(--mut); font-weight:normal; margin-right:6px;}
+
+  /* ── 탭 ── */
+  .tabs{display:flex; gap:2px; margin:26px 0 0; border-bottom:1px solid var(--line); position:sticky; top:0; background:var(--bg); z-index:5;}
+  .tabs button{background:none; color:var(--dim); font-size:14px; padding:12px 18px; border-bottom:2px solid transparent;}
+  .tabs button.on{color:var(--ink); border-bottom-color:var(--pri); font-weight:bold;}
+  .pane{display:none; padding-top:22px;}
+  .pane.on{display:block;}
+  h3{font-size:16px; margin:26px 0 12px; display:flex; align-items:center; gap:8px;}
+  h3 .sub{font-size:12px; color:var(--dim); font-weight:normal;}
+  h3 .chip-n{font-size:10px; background:var(--pri); color:#fff; border-radius:8px; padding:1px 7px;}
+
+  /* ── 출연진 ── */
+  .genpick{display:flex; gap:6px; margin-bottom:14px;}
+  .genpick button{background:var(--panel2); color:var(--mut); border-radius:16px; padding:5px 14px; font-size:12px; border:1px solid var(--line);}
+  .genpick button.on{background:var(--pri); border-color:var(--pri); color:#fff;}
+  .castrow{display:flex; gap:14px; overflow-x:auto; padding:4px 2px 12px;}
+  .cast{flex-shrink:0; width:96px; text-align:center; cursor:pointer;}
+  .cast .face{width:76px; height:76px; margin:0 auto; border-radius:50%; display:flex; align-items:center; justify-content:center;
+    font-size:32px; background:linear-gradient(160deg,var(--panel2),var(--line)); border:2px solid var(--line); position:relative;}
+  .cast:hover .face{border-color:var(--pri);}
+  .cast .mcb{position:absolute; bottom:-4px; right:-2px; font-size:9px; background:var(--violet); color:#fff; padding:1px 6px; border-radius:7px;}
+  .cast .nm{margin-top:7px; font-size:13px; font-weight:bold;}
+  .cast .yr{font-size:11px; color:var(--dim);}
+  .cast .hot{font-size:10px; margin-top:3px; color:var(--pink); font-weight:bold;}
+  .cast .hot.up::before{content:"▲ ";}
+
+  /* ── 프로그램 이해 프로파일 (우리 차별화) ── */
+  .profile{background:var(--panel); border:1px solid var(--line); border-radius:14px; padding:16px 18px; display:grid; grid-template-columns:1fr 1fr; gap:14px 26px;}
+  .profile .cell b{display:block; font-size:11px; color:var(--dim); margin-bottom:5px; letter-spacing:.5px;}
+  .profile .cell span{font-size:12.5px; color:var(--mut);}
+  .hooktags{display:flex; gap:5px; flex-wrap:wrap;}
+  .hooktags i{font-style:normal; font-size:11px; padding:2px 9px; border-radius:10px; background:var(--panel2); border:1px solid var(--line); color:var(--mut);}
+  .hooktags i.up{color:var(--pink); border-color:#f472b655;}
+
+  /* ── 회차 ── */
+  .eplist{display:flex; flex-direction:column; gap:10px;}
+  .ep{display:flex; gap:14px; background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:12px 14px; align-items:center;}
+  .ep .thumb{width:120px; aspect-ratio:16/9; border-radius:8px; flex-shrink:0; display:flex; align-items:center; justify-content:center; font-size:28px;}
+  .ep .info{flex:1; min-width:0;}
+  .ep .et{font-weight:bold; font-size:14px;}
+  .ep .ed{font-size:12px; color:var(--dim); margin-top:2px;}
+  .ep .es{font-size:12.5px; color:var(--mut); margin-top:5px; overflow:hidden; text-overflow:ellipsis; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical;}
+  .ep .st{flex-shrink:0; text-align:right;}
+  .stt{font-size:11px; padding:3px 9px; border-radius:8px; display:inline-block;}
+  .stt.done{background:#0c2b21; color:var(--emerald);}
+  .stt.run{background:#2b230c; color:var(--amber);}
+  .ep .cnt{display:block; font-size:11px; color:var(--dim); margin-top:6px;}
+
+  /* ── 클립 그리드 ── */
+  .fbar{display:flex; gap:6px; margin-bottom:14px; flex-wrap:wrap;}
+  .fbar button{background:var(--panel2); color:var(--mut); border-radius:14px; padding:4px 12px; font-size:12px; border:1px solid var(--line);}
+  .fbar button.on{background:var(--ink); color:var(--bg); border-color:var(--ink); font-weight:bold;}
+  .grid{display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:14px;}
+  .clip{cursor:pointer;}
+  .clip .cthumb{aspect-ratio:9/16; border-radius:10px; position:relative; display:flex; align-items:center; justify-content:center; font-size:36px; overflow:hidden; border:1px solid var(--line);}
+  .clip.wide{grid-column:span 2;}
+  .clip.wide .cthumb{aspect-ratio:16/9;}
+  .cthumb .dur{position:absolute; right:6px; bottom:6px; font-size:10px; background:#000b; padding:1px 6px; border-radius:4px; font-family:Consolas,monospace;}
+  .cthumb .ch{position:absolute; left:6px; top:6px; font-size:9px; padding:2px 7px; border-radius:6px; background:#000b;}
+  .ch.yt{color:#ff6b6b;} .ch.rl{color:#f9a8d4;} .ch.nv{color:#6ee7b7;}
+  .cthumb .who{position:absolute; left:6px; bottom:6px; font-size:9px; background:#000b; color:var(--violet); padding:2px 7px; border-radius:6px;}
+  .clip .ct{font-size:12.5px; margin-top:7px; overflow:hidden; text-overflow:ellipsis; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical;}
+  .clip .cv{font-size:11px; color:var(--dim); margin-top:3px;}
+  .clip .cv b{color:var(--pink); font-weight:bold;}
+
+  /* 성과 */
+  .kpis{display:grid; grid-template-columns:repeat(4,1fr); gap:12px; margin-bottom:20px;}
+  .kpi{background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:14px;}
+  .kpi b{font-size:22px; font-family:Consolas,monospace;}
+  .kpi span{display:block; font-size:11px; color:var(--dim); margin-top:3px;}
+  .kpi .d{font-size:11px; color:var(--emerald);}
+  .note{font-size:12px; color:var(--dim); background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px 14px;}
+</style>
+</head>
+<body>
+
+<!-- 히어로 -->
+<div class="hero">
+  <div class="art">💘</div>
+  <div class="heroin">
+    <div class="poster">🏕️</div>
+    <div class="heromtea">
+      <div class="ptitle">나는 SOLO</div>
+      <div class="badges">
+        <span class="bdg">ENA · SBS플러스</span><span class="bdg">수 밤 10:30</span>
+        <span class="bdg rate">15세</span><span class="bdg">연애 리얼리티 · 기수제</span><span class="bdg">방영 중</span>
+      </div>
+      <div class="moods">
+        <span class="mood"># 극사실주의</span><span class="mood"># 돌직구</span><span class="mood"># 삼각관계</span><span class="mood"># 캐릭터 맛집</span>
+      </div>
+    </div>
+    <div class="heroacts">
+      <button class="cta">+ 새 회차 업로드</button>
+      <button class="ghost">프로파일 편집</button>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+  <p class="syn"><b>결혼을 간절히 원하는 솔로 남녀들이 모여 사랑을 찾기 위해 고군분투하는 극사실주의 데이팅 프로그램.</b>
+    기수제로 진행되며 자기소개 → 데이트 신청 → 최종 선택의 구조를 갖는다.<button class="more">더보기</button></p>
+  <div class="factrow">
+    <span><b>연출</b>남규홍</span><span><b>첫 방송</b>2021.07.14</span><span><b>현재</b>25기 (191회~)</span>
+    <span><b>스핀오프</b>나는 SOLO, 그 후 사랑은 계속된다</span><span><b>수상</b>2024 퍼스트브랜드 대상</span>
+  </div>
+
+  <!-- 탭 -->
+  <div class="tabs">
+    <button class="on" data-t="home">홈</button>
+    <button data-t="ep">회차</button>
+    <button data-t="clip">클립</button>
+    <button data-t="stat">성과</button>
+  </div>
+
+  <!-- 홈 -->
+  <div class="pane on" id="p-home">
+    <h3>출연진 <span class="sub">기수·가명 기준 — 인물 지식 베이스 연결</span></h3>
+    <div class="genpick">
+      <button>22기</button><button class="on">23기</button><button>24기</button><button>25기</button><button>MC</button>
+    </div>
+    <div class="castrow" id="castrow"></div>
+
+    <h3>프로그램 이해 프로파일 <span class="chip-n">STEP-D</span> <span class="sub">추천 엔진이 이 프로그램을 이해하는 기준</span></h3>
+    <div class="profile">
+      <div class="cell"><b>포맷 문법</b><span>기수제 · 자기소개 → 데이트 신청 → 최종 선택. 회차 후반부에 관계 변곡점 집중</span></div>
+      <div class="cell"><b>시청 포인트</b><span>삼각관계 긴장 · 돌직구 발언 · 예상 밖 선택 · 출연자 캐릭터성</span></div>
+      <div class="cell"><b>훅 가중치</b><div class="hooktags"><i class="up">반전 ↑</i><i class="up">돌직구 ↑</i><i>감정 고조</i><i>질문</i><i style="opacity:.5">정보성 ↓</i></div></div>
+      <div class="cell"><b>금기·주의</b><span>최종 선택 결과 스포일러 경계 · 출연자 개인 신상 이슈 시 선정 제외</span></div>
+    </div>
+
+    <h3>최근 클립 <span class="sub">최신 회차에서 생성됨</span></h3>
+    <div class="grid" id="homegrid"></div>
+  </div>
+
+  <!-- 회차 -->
+  <div class="pane" id="p-ep">
+    <div class="eplist">
+      <div class="ep"><div class="thumb" style="background:linear-gradient(160deg,#31435f,#131822)">🎤</div>
+        <div class="info"><div class="et">180회 — 23기 최종 선택</div><div class="ed">2024.12.18 · 88분</div>
+          <div class="es">마지막 데이트가 끝나고, 여섯 커플의 운명이 갈리는 최종 선택의 시간. 영숙의 선택은 모두의 예상을 뒤엎는다.</div></div>
+        <div class="st"><span class="stt done">분석 완료</span><span class="cnt">쇼츠 8 · 클립 3 · 배포 9</span></div></div>
+      <div class="ep"><div class="thumb" style="background:linear-gradient(160deg,#5f3143,#221318)">💘</div>
+        <div class="info"><div class="et">179회 — 마지막 데이트</div><div class="ed">2024.12.11 · 92분</div>
+          <div class="es">영숙이 영호에게 준비한 깜짝 세레나데. 데이트 신청의 향방이 바뀌기 시작한다.</div></div>
+        <div class="st"><span class="stt done">분석 완료</span><span class="cnt">쇼츠 8 · 클립 2 · 배포 10</span></div></div>
+      <div class="ep"><div class="thumb" style="background:linear-gradient(160deg,#3f5f31,#141c10)">🏕️</div>
+        <div class="info"><div class="et">178회 — 새 인연의 등장</div><div class="ed">2024.12.04 · 90분</div>
+          <div class="es">돌싱 특집의 새 국면. 늦은 밤 옥순과 상철의 대화가 숙소 분위기를 뒤흔든다.</div></div>
+        <div class="st"><span class="stt run">추천 검수 대기 6</span><span class="cnt">쇼츠 2 · 클립 1</span></div></div>
+    </div>
+  </div>
+
+  <!-- 클립 -->
+  <div class="pane" id="p-clip">
+    <div class="fbar">
+      <button class="on">전체</button><button>쇼츠</button><button>클립(하이라이트)</button><button>YouTube</button><button>Reels</button><button>네이버TV</button><button>인물: 영숙</button>
+    </div>
+    <div class="grid" id="clipgrid"></div>
+  </div>
+
+  <!-- 성과 -->
+  <div class="pane" id="p-stat">
+    <div class="kpis">
+      <div class="kpi"><b>4.2M</b><span>최근 30일 조회수</span><span class="d">▲ 18%</span></div>
+      <div class="kpi"><b>61%</b><span>쇼츠 평균 완주율</span><span class="d">▲ 4%p</span></div>
+      <div class="kpi"><b>2.3x</b><span>영숙 클립 성과 배수</span><span class="d">채널 평균 대비</span></div>
+      <div class="kpi"><b>+12.4K</b><span>구독 전환</span><span class="d">▲ 9%</span></div>
+    </div>
+    <div class="note">💡 채널 분석 인사이트 — 이 채널에서 <b style="color:var(--pink)">돌직구 훅 · 30초대 · 수요일 21시 게시</b> 조합이 가장 좋았습니다. 다음 회차 추천에 자동 반영됩니다. 댓글 기대 포인트: <b style="color:var(--ink)">"영숙 답장 언제 나옴?"</b> (412회 언급)</div>
+  </div>
+</div>
+
+<script>
+// 출연진 (23기 — 가명·생년, 화제성은 인물 KB에서)
+const CAST = [
+  {nm:"영숙", yr:"1990년생", e:"🌸", hot:"화제성 2.3x", up:1},
+  {nm:"영호", yr:"1987년생", e:"🎸", hot:"화제성 1.8x", up:1},
+  {nm:"옥순", yr:"1991년생", e:"🌙", hot:"화제성 1.2x"},
+  {nm:"상철", yr:"1985년생", e:"⚡", hot:"화제성 1.1x"},
+  {nm:"정숙", yr:"1992년생", e:"🍀", hot:"화제성 0.9x"},
+  {nm:"영수", yr:"1984년생", e:"🏔️", hot:"화제성 0.8x"},
+  {nm:"광수", yr:"1988년생", e:"🎯", hot:"화제성 0.7x"},
+  {nm:"데프콘", yr:"MC", e:"🎙️", mc:1},
+  {nm:"이이경", yr:"MC", e:"🎙️", mc:1},
+];
+document.getElementById("castrow").innerHTML = CAST.map(c=>`
+  <div class="cast"><div class="face">${c.e}${c.mc?'<span class="mcb">MC</span>':''}</div>
+  <div class="nm">${c.nm}</div><div class="yr">${c.yr}</div>${c.hot?`<div class="hot ${c.up?"up":""}">${c.hot}</div>`:""}</div>`).join("");
+
+// 클립 데이터
+const CLIPS = [
+  {t:"영숙이 영호에게 부른 노래, 스튜디오 뒤집어짐", ch:"yt", chn:"Shorts", v:"1.2M", d:"0:38", who:"영숙", e:"🎤", g:"#5f3143,#1b0e13"},
+  {t:"\"이 노래 아세요?\" 돌직구 세레나데", ch:"rl", chn:"Reels", v:"640K", d:"0:31", who:"영숙", e:"💘", g:"#43315f,#120e1b"},
+  {t:"옥순·상철 새벽 대화 전문", ch:"yt", chn:"Shorts", v:"420K", d:"0:52", who:"옥순", e:"🌙", g:"#31435f,#0e131b"},
+  {t:"[하이라이트] 23기 마지막 데이트 풀버전", ch:"nv", chn:"네이버TV", v:"210K", d:"12:04", who:"전원", e:"🏕️", g:"#315f43,#0e1b13", wide:1},
+  {t:"MC들도 놀란 최종 선택의 순간", ch:"yt", chn:"Shorts", v:"980K", d:"0:44", who:"영숙", e:"😮", g:"#5f5231,#1b170e"},
+  {t:"영호의 얼떨떨한 리액션 모음", ch:"rl", chn:"Reels", v:"350K", d:"0:29", who:"영호", e:"😳", g:"#5f3131,#1b0e0e"},
+];
+const clipHtml = c=>`
+  <div class="clip ${c.wide?"wide":""}"><div class="cthumb" style="background:linear-gradient(160deg,${c.g})">
+    <span style="font-size:34px">${c.e}</span>
+    <span class="ch ${c.ch}">${c.chn}</span><span class="dur">${c.d}</span><span class="who">${c.who}</span></div>
+  <div class="ct">${c.t}</div><div class="cv"><b>${c.v}</b> 조회 · 완주 63%</div></div>`;
+document.getElementById("homegrid").innerHTML = CLIPS.slice(0,4).map(clipHtml).join("");
+document.getElementById("clipgrid").innerHTML = CLIPS.map(clipHtml).join("");
+
+// 탭
+document.querySelectorAll(".tabs button").forEach(b=>b.addEventListener("click",()=>{
+  document.querySelectorAll(".tabs button").forEach(x=>x.classList.remove("on"));
+  document.querySelectorAll(".pane").forEach(x=>x.classList.remove("on"));
+  b.classList.add("on"); document.getElementById("p-"+b.dataset.t).classList.add("on");
+}));
+// 기수 선택 (데모)
+document.querySelectorAll(".genpick button").forEach(b=>b.addEventListener("click",()=>{
+  document.querySelectorAll(".genpick button").forEach(x=>x.classList.remove("on")); b.classList.add("on");
+}));
+document.querySelectorAll(".fbar button").forEach(b=>b.addEventListener("click",()=>{
+  document.querySelectorAll(".fbar button").forEach(x=>x.classList.remove("on")); b.classList.add("on");
+}));
+</script>
+</body>
+</html>

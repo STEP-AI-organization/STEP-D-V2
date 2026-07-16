@@ -1,14 +1,34 @@
 # STEP-D AI 파이프라인 구현 계획
 
-> 상위 확장: [context-engine-plan.md](context-engine-plan.md) — 인물·서사 컨텍스트 엔진(CX 트랙). 객체인식 기술 선정: [object-detection-research.md](object-detection-research.md)
+> 상위 확장: [context-engine-plan.md](context-engine-plan.md) — 인물·서사 컨텍스트 엔진(CX 트랙). 객체인식 기술 선정: [../research/object-detection-research.md](../research/object-detection-research.md)
 
-> 2026-07-14 작성. 발명신고서(구성 A~J)를 실제 제품으로 구현하기 위한 빌드/오픈소스/API 결정.
+> 2026-07-14 작성 · 2026-07-16 실측 대조 갱신. 발명신고서(구성 A~J)를 실제 제품으로 구현하기 위한 빌드/오픈소스/API 결정.
 > 전제: AI는 **관리형 API 위주**(GPU 자체 운영 없음), 현 Cloud Run + Cloud SQL + GCS 구조 유지.
+
+> **⚠️ 계획 문서(2026-07-14) — 이후 구현이 일부 결정을 대체함. 아래 '계획 vs 실제' 표 참조.**
+> 본문의 해당 대목에는 원문을 유지하고 "**→ 실제:**" 주석을 달았다.
+
+## 계획 vs 실제 (2026-07-16 기준)
+
+| 이 문서의 결정 | 실제 구현 (코드 확인) |
+|---------------|---------------------|
+| 작업 큐 = **pg-boss** (MIT) | **자체 구현 `apps/server/src/queue.ts`** — Postgres `job_queue` 테이블(코드가 런타임 생성), `FOR UPDATE SKIP LOCKED` 클레임, dedupeKey 부분 유니크 인덱스(in-flight 중복 방지), 지수 백오프(30초→최대 30분, maxAttempts 5). pg-boss는 도입되지 않았다. 운영 상세: [../ops/worker-queue.md](../ops/worker-queue.md) |
+| STT = **Clova Speech** 1차 | **Gemini가 관리형 기본** — `core/asr.py`, `STT_PROVIDER=gemini` 기본 / `whisper`(로컬 GPU faster-whisper) 2-provider 어댑터. 관리형 Google STT가 한국어 고유명사를 뭉개는("정우성"→"정구속") 품질 문제가 실측돼 Gemini로 확정(Vertex asia-northeast3 서울). Clova는 코드에 없다 |
+| 신규 구현은 **apps/server(TS)** | AI 파이프라인은 **파이썬 `core/` 패키지**(analyze·asr·refine·scenes·vision·names·recommend)로 구현됨. 워커의 `content-pipeline.ts`가 `python -m core.analyze`를 스폰한다 |
+| `buildRecommendations()` 휴리스틱을 AP2에서 교체 | 교체가 아니라 **死코드화** — `pipeline.ts`에 정의만 남고 어디서도 호출되지 않는다(타 파일은 `newId`만 import). 실추천은 `core/recommend.py`(장면 타임라인 → Gemini 단일 추론) 결과를 `content-pipeline.ts`의 `writeRecommendationsFromShorts`가 회차 추천 보드에 기록 |
+| 렌더/변환은 **Cloud Run Jobs**(또는 별도 워커 서비스)로 분리 | **상시 GCE 워커 VM**(`stepd-worker`, e2-small, GPU 없음)으로 분리 — `worker.ts` 폴링 루프가 잡을 처리하고 Cloud Run은 enqueue만 한다. '별도 워커' 예상은 적중, Cloud Run Jobs는 아님 |
+
+**테이블명 매핑 각주** — 본문이 제안한 정규 테이블은 실제 스키마에서 다음으로 대체됐다:
+
+- `transcript` 테이블(구성 B) → 별도 테이블 없음. 전사는 `content_analysis` JSONB(transcript+scenes+shorts 통합 블롭, `db-pg.ts`가 런타임 생성 — schema.sql에 없음)에 저장된다.
+- `metrics_snapshot`(채널 분석 1단계) → `video_stats`(주기 스냅샷) + `video_analytics`(요약/트래픽/시청층) + `video_retention`(리텐션 커브 JSON) + `video_comments`(이상 schema.sql) + `channel_analytics`(런타임 생성). 상세: [../reference/data-model.md](../reference/data-model.md)
+
+**배포·운영** — cloudbuild.yaml은 Cloud Run 서버(stepd-server)만 배포하며, 워커 VM은 루트 `deploy-worker.ps1`(git reset --hard origin/main + systemctl restart stepd-worker)로 수동 배포한다.
 
 ## 원칙
 
 - **특허 청구 대상인 로직은 전부 자체 구현** — 훅 사전(C), 종결어미 스냅(D), 융합 가중치(E), STT 단일 원천 구조(B), PPL 이중 신호 결합(H). 오픈소스는 이 로직들의 "재료"(형태소 분석, 인코딩, 얼굴 검출)로만 사용.
-- **무거운 연산은 검증된 오픈소스**(ffmpeg 계열), **모델 추론은 관리형 API**(Clova/Gemini), **판단 로직은 우리 코드**.
+- **무거운 연산은 검증된 오픈소스**(ffmpeg 계열), **모델 추론은 관리형 API**(Gemini — 당초 Clova 병기했으나 미채택), **판단 로직은 우리 코드**.
 - 모든 타임스탬프는 비디오 PTS 기준 초 단위로 통일 (구성 D).
 - **추천은 채널·프로그램 적합도가 1급 개념** — "이 회차의 좋은 구간"이 아니라 "이 프로그램의 이 구간이 어느 채널에 맞는가"를 출력한다 (아래 전용 섹션).
 
@@ -37,23 +57,26 @@
 
 - 비전·로컬 점수는 채널 무관 1회 계산(비용 유지), 채널 적합 계수만 채널 수만큼 곱한다 → LLM 호출 증가 없음.
 - 추천 보드 UI는 채널 탭/필터로 "이 채널에 보낼 상위 N개"를 보여주고, 채택 시 그 채널 규격으로 렌더 프리셋(길이·자막·썸네일)이 자동 선택된다.
+- **→ 실제:** 이 점수 구조는 아직 미구현. 현행 추천은 `core/recommend.py`가 장면 타임라인(시각점수 포함)을 Gemini 단일 추론에 넘겨 쇼츠를 고르는 방식이고, 채널 적합 계수·매트릭스는 계획으로 남아 있다.
 
 **성과 환류(J)와의 연결** — 성과 데이터는 반드시 (프로그램, 채널, 훅 카테고리, 길이 구간) 차원으로 적재. 환류 배치가 채널 프로파일의 소프트 성향을 갱신 → 다음 회차 추천이 채널별로 점점 달라지는 폐루프.
 
 ## 현재 상태 → 목표 갭
 
-| 구성 | 발명신고서 | 현재 (apps/server) | 갭 |
+2026-07-16 실측 반영. "현재" 열은 apps/server(TS) + core/(파이썬)를 함께 본다.
+
+| 구성 | 발명신고서 | 현재 (apps/server + core/) | 갭 |
 |------|-----------|-------------------|----|
-| A 수집·변환 | MXF/파일/URL → 리먹스 분기 + 프록시 | 파일 업로드 + ffprobe만 | 프록시 생성, 리먹스 분기, URL 임포트, 작업 큐 없음 |
-| B STT 1회-공유 | 단어 타임스탬프 STT → 전 단계 공유 | 없음 | 전부 신규 |
-| C 훅 사전 후보 | 한국어 훅 사전 + 로컬 점수 | `buildRecommendations()` 균등분할 휴리스틱 | 전부 신규 (레거시 apps/api에 유사 코드 있음 — 이식 검토) |
-| D 경계 스냅 | 종결어미·발화 경계 스냅 | 없음 | 전부 신규 |
-| E 융합 평가 | 상위 20개 × 7프레임 비전 평가, 0.70/0.30 | 없음 | 전부 신규 |
+| A 수집·변환 | MXF/파일/URL → 리먹스 분기 + 프록시 | 파일 업로드(+GCS 직접 resumable) + ffprobe, 자체 job_queue 작업 큐 가동 | 프록시 생성, 리먹스 분기, URL 임포트 신규 (작업 큐는 완료) |
+| B STT 1회-공유 | 단어 타임스탬프 STT → 전 단계 공유 | `core/asr.py` Gemini STT 가동(발화 단위) — 전사는 content_analysis JSON으로 후속 단계에 공유 | 단어 타임스탬프는 로컬 whisper 모드만. transcript 정규 테이블 없음 |
+| C 훅 사전 후보 | 한국어 훅 사전 + 로컬 점수 | 훅 사전 없음. 실추천은 `core/recommend.py`(Gemini 추론)가 대행 — `buildRecommendations()` 휴리스틱은 死코드 | 훅 사전(로컬 점수) 전부 신규 (레거시 apps/api 유사 코드는 이식 안 됨) |
+| D 경계 스냅 | 종결어미·발화 경계 스냅 | 없음 (`core/refine.py`는 자막 정제이지 경계 스냅 아님) | 전부 신규 — 기본 STT가 발화 단위라 '단어 스냅' 전제 재검토 필요(구성 D 주석) |
+| E 융합 평가 | 상위 20개 × 7프레임 비전 평가, 0.70/0.30 | 부분 구현: `core/scenes.py`(장면 분할+프레임) + `core/vision.py`(장면별 대표 프레임 시각 채점) + `core/recommend.py`(융합 추론) | 0.70/0.30 가중 공식·후보 상한 계단·채널 적합 계수 미구현 |
 | F 렌더링 | 9:16 리프레이밍 + 자막 번인 + 템플릿 | `trimEncode` 단순 트림 | 리프레이밍/자막/템플릿/render revision 신규 |
-| G 썸네일 | 자동 추천 + 규격 최적화 | `captureThumbnail` 1장 고정 | 후보 스코어링 신규 |
-| H PPL | 비전+음성 이중 신호 | 없음 | 전부 신규 |
-| I 제목·메타 | 바이럴 패턴 제목, 무음 리포트 | 없음 | 전부 신규 |
-| J 배포·환류 | 멀티플랫폼 업로드 + 성과 환류 | YouTube OAuth/동기화만 실동작, publish는 스텁 | 실업로드, Meta/SMR, 댓글 요약, 환류 신규 |
+| G 썸네일 | 자동 추천 + 규격 최적화 | `captureThumbnail` 1장 고정 (추천에 시작/핵심/끝 3후보 시점 제안만 생성) | 후보 스코어링 신규 |
+| H PPL | 비전+음성 이중 신호 | 없음 (core/vision.py 프레임 분석 인프라는 재사용 가능) | 전부 신규 |
+| I 제목·메타 | 바이럴 패턴 제목, 무음 리포트 | 부분: 쇼츠 추천이 제목·이유를 함께 생성(`core/recommend.py`) | 패턴 템플릿·무음 리포트 신규 |
+| J 배포·환류 | 멀티플랫폼 업로드 + 성과 환류 | YouTube OAuth/동기화 + 채널·영상 분석 수집(channel.analyze/video.* 잡) 실동작. publish는 DB 기록만(실업로드 없음) | 실업로드, Meta/SMR, 댓글 요약(수집은 가동), 환류 신규 |
 
 ## 빌드 vs 오픈소스 vs API 결정
 
@@ -63,28 +86,32 @@
 |------|------|------|
 | 변환/프록시/리먹스 | **ffmpeg** (이미 도입) | MXF 포함 방송 규격 디코딩 지원. 리먹스 분기는 ffprobe 코덱 검사(H.264+AAC이면 `-c copy`) — 분기 로직만 자체 구현 |
 | URL 임포트 | **yt-dlp** (오픈소스, Unlicense) | 사실상 표준. 서버에 바이너리 동봉 |
-| 작업 큐 | **pg-boss** (MIT) | Postgres 기반 큐 — Cloud SQL 재활용, Redis 불필요. 업로드→분석→렌더 단계를 잡 체인으로 |
+| 작업 큐 | ~~pg-boss (MIT)~~ → **실제: 자체 `queue.ts`** | Postgres 기반 큐라는 판단은 유지(Cloud SQL 재활용, Redis 불필요) — 다만 pg-boss 대신 직접 구현했다(SKIP LOCKED/dedupe/백오프, '계획 vs 실제' 표) |
 | 프록시 정책 | 자체 | 480p/720p 저해상도 + 오디오 16kHz mono wav 분리(STT 입력용) |
 
 ### 구성 B — STT 1회 실행·공유 (축)
 
 | 항목 | 선택 | 근거 |
 |------|------|------|
-| STT | **Clova Speech 장문 인식 API** (1차) | 한국어 예능·드라마 인식률 최우선. 타임스탬프/화자 분리 제공, 초당 과금(≈10초 5원). 국내 방송사 고객 데이터 국내 처리 이점 |
-| STT 대안 | OpenAI `whisper-1` (verbose_json, word timestamps) / Gemini | 어댑터 인터페이스로 교체 가능하게. 벤치마크 후 확정 |
+| STT | ~~Clova Speech 장문 인식 API (1차)~~ | 한국어 인식률 최우선이라는 기준은 유지 — 결과는 아래 주석 |
+| STT 대안 | OpenAI `whisper-1` / Gemini | 어댑터 인터페이스로 교체 가능하게. 벤치마크 후 확정 |
 | 전사 저장 구조 | **자체 설계 (핵심)** | `transcript` 테이블: 단어/문장별 start·end(PTS 기준). C/D/F(자막)/I(제목)/H(브랜드 언급)가 전부 이 테이블만 읽는다 — 재호출 금지 |
+
+**→ 실제 (2026-07-16):** Clova 미채택. `core/asr.py`가 **Gemini(관리형 기본, Vertex asia-northeast3)** / **faster-whisper(로컬 GPU)** 2-provider 어댑터로 구현됐다 — "어댑터로 교체 가능하게"는 그대로 실현. 선정 근거도 계획의 기준대로 한국어 품질이었다(관리형 Google STT가 "정우성"→"정구속"으로 뭉갬 → Gemini/whisper는 유지). 단 **Gemini는 발화(utterance) 단위 타임스탬프만 반환하고 단어 단위가 없다**(`asr.py`의 `"words": []`) — 단어 타임스탬프는 로컬 whisper 모드(`word_timestamps=True`)에서만 나온다. 저장은 `transcript` 정규 테이블 대신 `content_analysis` JSONB 통합(상단 각주). "1회 실행 → 전 단계 공유" 원칙 자체는 `core/analyze.py`가 STT 결과를 refine→scenes→recommend로 넘기는 구조로 지켜지고 있다.
 
 ### 구성 C — 훅 사전 후보 탐지 → **100% 자체 구현 (핵심 IP)**
 
 - 훅 표현 사전(감탄/반전/질문/고조 카테고리) = 데이터 자산. JSON/DB로 관리, 운영하며 증보.
 - 형태소 분석 보조: **Kiwi** — Node 바인딩 `kiwi-nlp`(WASM, npm). 라이선스 LGPL v3이나 서버사이드 SaaS 사용(배포 아님)이라 문제없음.
 - 파라미터(프리롤 2.5s, 후보 상한 30, 중첩 상한 0.35)는 config로 외부화.
+- **→ 실제:** 미착수. 현행 후보 선정은 훅 사전 없이 `core/recommend.py`의 Gemini 추론이 담당한다.
 
 ### 구성 D — 종결어미 스냅 → **100% 자체 구현 (핵심 IP)**
 
 - Kiwi 형태소 태그(EF 종결어미 등)로 문장 종결 판별 + STT 단어 타임스탬프로 스냅.
 - 발화 경계(무음) 검출: **ffmpeg `silencedetect`** 출력 파싱 — 별도 VAD 모델 불필요(1차). 정밀도 부족하면 Silero VAD(MIT, ONNX로 Node 실행 가능) 추가.
 - 룩백 8s/룩어헤드 10s/패딩 0.7s·1.2s config 외부화.
+- **→ 실제:** 미착수. 그리고 전제가 바뀌었다 — 기본 실행 경로(Gemini STT)에는 단어 타임스탬프가 없으므로 "STT 단어 타임스탬프로 스냅"이 그대로 성립하지 않는다. 발화 경계 단위 스냅으로 재설계하거나, 정밀 스냅이 필요한 구간만 whisper(단어 단위) 병행 실행하는 조정이 필요하다.
 
 ### 구성 E — 비전 융합 평가
 
@@ -93,6 +120,8 @@
 | 프레임 추출 | ffmpeg (후보당 7장) | 프록시에서 추출 |
 | 비전 평가 | **Gemini API** (멀티모달) | 4축 루브릭을 structured output(JSON)으로. 상위 20개 한정 → 호출 상수화 |
 | 융합·랭킹 | 자체 (핵심) | 0.70/0.30 가중, 길이 제약(20~75s, 목표 38s) 반영 |
+
+**→ 실제:** 부분 구현 — 장면 분할·프레임 추출은 `core/scenes.py`, 시각 채점은 `core/vision.py`(장면당 대표 프레임 1장, Gemini Vision structured output), 융합·랭킹은 `core/recommend.py`가 장면 타임라인 전체(화면분석+대사+인물자막+시각점수)를 Gemini 단일 추론에 넘겨 쇼츠 구간을 고른다. "상위 20개 × 7프레임" 계단과 0.70/0.30 가중 공식은 채택되지 않았다(추론 위임으로 대체) — 명시적 가중 융합·채널 적합 계수는 여전히 계획.
 
 ### 구성 F — 렌더링
 
@@ -117,6 +146,7 @@
 ### 구성 I — 제목·메타
 
 - LLM API(Gemini) + 바이럴 패턴 5종 프롬프트 템플릿(자체 자산). 무음 리포트는 D의 silencedetect 결과 재사용.
+- **→ 실제:** 쇼츠 추천이 제목·이유(reason)·태그를 이미 함께 생성한다(`core/recommend.py`). 패턴 템플릿 체계·무음 리포트는 미착수.
 
 ### 구성 J — 배포·성과 환류
 
@@ -125,8 +155,8 @@
 | YouTube 업로드 | **YouTube Data API v3** resumable upload | OAuth 이미 구현됨 — publish 스텁을 실업로드로 교체 |
 | Meta Reels | **Instagram/Facebook Graph API** | 앱 심사 필요 — 리드타임 김, 일찍 착수 |
 | SMR 계열 | 어댑터 인터페이스만 설계 | 표준 공개 API 없음. 계약사별 전달 방식(FTP/CMS) 확인 후 어댑터 구현 |
-| 스케줄러 | pg-boss 지연 잡(A와 동일 큐) | 별도 인프라 불필요 |
-| 댓글 요약 | LLM API | 수집은 YouTube API(이미 트렌드 수집 동작 중) |
+| 스케줄러 | ~~pg-boss 지연 잡~~ → **실제: 자체 job_queue 지연 잡**(`enqueue`의 `delayMs`) | 별도 인프라 불필요 — 판단 유지, 구현체만 교체 |
+| 댓글 요약 | LLM API | 수집은 이미 가동(`video.comments` 잡 — 상위 댓글 적재) |
 | 성과 환류 | 자체 (핵심) | 클립 성과 → 훅 사전 가중치/제목 패턴 보정 배치 |
 
 ## 채널 분석 파이프라인 (J 확장 — 알고리즘 적합 최적화)
@@ -135,10 +165,12 @@
 
 **1) 수집 (일배치 + 게시 직후 집중 폴링)**
 
-- YouTube Analytics API: `views`, `engagedViews`, `averageViewDuration/Percentage`, **리텐션 커브**(`elapsedVideoTimeRatio` × `audienceWatchRatio`, `relativeRetentionPerformance`), 트래픽 소스(SHORTS 피드 진입 비율), 시청층(연령/성별), 구독 전환. 기존 `youtube.ts` 확장, pg-boss 스케줄 잡.
+- YouTube Analytics API: `views`, `engagedViews`, `averageViewDuration/Percentage`, **리텐션 커브**(`elapsedVideoTimeRatio` × `audienceWatchRatio`, `relativeRetentionPerformance`), 트래픽 소스(SHORTS 피드 진입 비율), 시청층(연령/성별), 구독 전환. 기존 `youtube.ts` 확장, 큐 스케줄 잡.
 - 게시 후 0~48시간은 시간 단위 스냅샷(초기 시딩 구간이 승부처), 이후 일 단위.
 - Meta Reels: Graph API insights(재생·도달·평균 시청시간·저장/공유). SMR: 어댑터별 가능한 지표만.
 - 저장: `metrics_snapshot` 정규 테이블 — (클립, 채널, 시각, 지표) + 리텐션 커브는 JSON.
+
+**→ 실제:** 수집(1단계)은 YouTube 채널 범위에서 이미 워커로 가동 중이다 — 15분 스윕이 `channel.analyze`를 큐잉하고, 영상별로 `video.analyze`(애널리틱스+리텐션 커브), `video.comments`(상위 댓글), `video.hotwatch`(신규 업로드 48시간 시간별 스냅샷, 자기 재큐)로 팬아웃한다(`worker.ts`, `config.ts`). 저장은 `metrics_snapshot`이 아니라 video_stats/video_analytics/video_retention/video_comments(상단 각주). 다만 이는 "채널의 기존 영상" 분석이고, **우리가 배포한 클립의 성과 조인(2~6단계)은 미착수**다. 현황: [../ops/pipeline-current.md](../ops/pipeline-current.md)
 
 **2) 정규화 — 채널 베이스라인 대비**
 
@@ -163,7 +195,7 @@
 
 **6) 실험 루프** — F의 '복사 후 수정' 변형판을 A/B로 활용: 같은 구간, 다른 시작점/제목/썸네일을 다른 시간대에 게시하고 2)의 정규화 지표로 비교. 게시 시각 추천도 여기서 산출.
 
-구현 비용: 신규 인프라 없음 — 기존 YouTube OAuth + pg-boss + Cloud SQL로 전부 처리. 분석은 SQL + 경량 통계(자체 구현), ML 도입은 데이터 확보 후 판단.
+구현 비용: 신규 인프라 없음 — 기존 YouTube OAuth + 자체 job_queue + Cloud SQL로 전부 처리(당초 pg-boss 표기 → 자체 큐로 대체). 분석은 SQL + 경량 통계(자체 구현), ML 도입은 데이터 확보 후 판단.
 
 ## 트렌드 분석 모듈 (T) — 지금 먹히는 형식을 역분석해서 제작에 반영
 
@@ -196,22 +228,25 @@
 
 ## 마일스톤 (AP = AI Pipeline)
 
-- **AP1 — 파이프라인 골격** (선행): pg-boss 도입, 업로드→프록시 생성→분석→렌더 잡 체인, 리먹스 분기, GCS↔/tmp 수명 관리(OOM 방지).
-- **AP2 — 진짜 추천**: Clova STT 연동 + transcript 테이블, 훅 사전 C + 경계 스냅 D. `buildRecommendations()` 교체. **프로그램·채널 프로파일 스키마와 하드 제약 필터를 이때부터 포함** (나중에 붙이면 데이터 모델 재작업). ← 가장 먼저 체감 가치가 생기는 지점
+- **AP1 — 파이프라인 골격** (선행): ~~pg-boss~~ 작업 큐 도입, 업로드→프록시 생성→분석→렌더 잡 체인, 리먹스 분기, GCS↔/tmp 수명 관리(OOM 방지).
+- **AP2 — 진짜 추천**: ~~Clova~~ STT 연동 + transcript 저장, 훅 사전 C + 경계 스냅 D. `buildRecommendations()` 교체. **프로그램·채널 프로파일 스키마와 하드 제약 필터를 이때부터 포함** (나중에 붙이면 데이터 모델 재작업). ← 가장 먼저 체감 가치가 생기는 지점
 - **AP3 — 융합 평가 + 렌더링**: Gemini 비전 평가 E + 채널 적합 계수 랭킹(후보×채널 매트릭스, 추천 보드 채널 탭), 9:16 블러 배경 + ASS 자막 번인 + 템플릿 F(채널별 렌더 프리셋), 썸네일 스코어링 G.
 - **AP4 — 배포 실동작**: YouTube 실업로드, 스케줄러, 제목/메타 생성 I(프로그램·채널 프로파일 반영), Meta 앱 심사 착수. **채널 분석 수집(1~3단계)도 여기서 시작** — 데이터는 빨리 쌓을수록 좋고, 수집 자체는 기존 인프라로 가벼움.
 - **AP5 — 차별화 완성**: PPL 리포트 H, 화자 추적 리프레이밍, 댓글 요약, 채널 분석 진단·프로파일 갱신·A/B 루프(4~6단계), 트렌드 분석 모듈 T(수집·역분석·주간 리포트 → 콜드오픈 옵션 등 제작 반영), SMR 어댑터.
 
+**→ 진척 (2026-07-16):** AP1의 큐·잡 체인은 자체 job_queue + `content.analyze` 잡으로 가동(프록시·리먹스 제외). AP2·AP3의 분석 축은 core/(asr→refine→scenes→vision→recommend)로 부분 선행 구현 — 단 훅 사전(C)·경계 스냅(D)·프로파일/채널 적합 계수는 미착수. AP4 항목 중 채널 분석 수집은 예정보다 앞당겨 이미 가동 중(`channel.analyze`/`video.*` 잡). 렌더 고도화(F)·실업로드(J)는 미착수. as-built 상세: [../ops/content-pipeline-prod.md](../ops/content-pipeline-prod.md)
+
 ## 인프라·비용 노트
 
-- 렌더/변환은 CPU·시간 소모 큼 → Cloud Run **Jobs**(또는 별도 워커 서비스)로 분리, API 서비스와 스케일 정책 분리. `/tmp`는 tmpfs이므로 잡 종료 시 정리 필수.
-- 회차당 API 비용 상한(90분 기준 추정): STT ≈ 수천 원(Clova 초당 과금), 비전 평가 ≤ 20후보 × 7프레임 = 140 이미지 호출(계단 구조로 고정), 제목/요약 소액. → 회차당 원가 산정 가능 = B2B 과금 설계 근거.
-- STT·LLM은 어댑터 인터페이스로 감싸 공급자 교체 가능하게 (Clova↔Whisper↔Gemini).
-- 레거시 `apps/api`(Python)에 STT·Gemini 평가 코드가 있음 — 로직 참고용으로만 쓰고 신규 구현은 apps/server(TS)로.
+- 렌더/변환은 CPU·시간 소모 큼 → Cloud Run **Jobs**(또는 별도 워커 서비스)로 분리, API 서비스와 스케일 정책 분리. `/tmp`는 tmpfs이므로 잡 종료 시 정리 필수. **→ 실제:** 상시 GCE 워커 VM(`stepd-worker`, e2-small, GPU 없음)으로 분리됐다 — Cloud Run은 enqueue만, 무거운 잡은 전부 워커. /tmp 정리는 `content-pipeline.ts`가 임시 디렉터리를 finally에서 삭제하는 것으로 구현됨.
+- 회차당 API 비용 상한(90분 기준 추정): STT ≈ 수천 원(~~Clova 초당 과금~~ → 실제는 Gemini 오디오 토큰 과금 — 단가 재산정 필요), 비전 평가는 호출 계단 구조로 고정(→ 실제는 장면당 1프레임 채점 + 추론 1콜), 제목/요약 소액. → 회차당 원가 산정 가능 = B2B 과금 설계 근거.
+- STT·LLM은 어댑터 인터페이스로 감싸 공급자 교체 가능하게 (~~Clova↔~~Whisper↔Gemini — `core/asr.py`의 `STT_PROVIDER`로 구현됨).
+- 레거시 `apps/api`(Python)에 STT·Gemini 평가 코드가 있음 — 로직 참고용으로만 쓰고 신규 구현은 apps/server(TS)로. **→ 실제:** 신규 AI 구현은 TS가 아니라 별도 파이썬 패키지 `core/`로 갔고, apps/api 코드는 이식되지 않았다.
+- **배포·운영(실제):** cloudbuild.yaml은 Cloud Run 서버만 배포, 워커 VM은 `deploy-worker.ps1` 수동 배포 (상단 '계획 vs 실제' 참조).
 
 ## 핵심 리스크
 
-1. **Clova STT 단어 단위 정밀도** — 스냅 정제(D)의 전제. AP2 초기에 실측 벤치마크(예능 1회차)로 검증, 미달 시 Whisper word-level로 전환.
+1. **~~Clova~~ STT 단어 단위 정밀도** — 스냅 정제(D)의 전제. **→ 실제:** Clova 미채택으로 리스크의 내용이 바뀌었다. 현 리스크는 **기본 STT(Gemini)가 발화 단위 타임스탬프만 준다는 것**(단어 단위 부재, `core/asr.py`) — 종결어미 스냅(D)의 단어 정밀도 전제가 기본 경로에서 성립하지 않는다. 완화책: 발화 경계 기준으로 스냅 재설계, 또는 정밀 스냅 구간만 로컬 whisper(word timestamps) 병행.
 2. **Meta 앱 심사 리드타임** — AP4보다 먼저 신청.
 3. **SMR 전달 방식 불명** — 계약/실무 채널로 조기 확인 필요.
 4. **ffmpeg 필터 그래프 복잡도**(블러 배경+자막+오버레이) — AP3 초기에 프로토타입으로 화질·속도 검증.

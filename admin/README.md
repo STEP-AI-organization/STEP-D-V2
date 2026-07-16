@@ -25,10 +25,9 @@ core/  (파이썬 파이프라인: pipeline_output.json · refined_segments.json
 ## 로컬 실행
 
 ```powershell
-# 1. 코어 파이프라인을 먼저 돌려 결과 생성 (core/)
-core/.venv310/Scripts/python -m core.pipeline core/영상.mp4          # STT + 세그먼트
-core/.venv310/Scripts/python -m core.refine   core/pipeline_output.json  # 자막 정제
-core/.venv310/Scripts/python -m core.scenes   core/영상.mp4 --transcript core/refined_segments.json  # 장면
+# 1. 코어 파이프라인 결과 생성 (core/)
+#    프로덕션 진입점은 core.analyze 하나 (STT→정제→장면→시각채점→이름자막→쇼츠)
+core/.venv310/Scripts/python -m core.analyze core/영상.mp4 --out core   # → analysis.json + scene_frames/
 
 # 2. 서버 띄우기 (하나뿐인 백엔드)
 cd apps/server; $env:PORT=4100; pnpm start
@@ -36,6 +35,22 @@ cd apps/server; $env:PORT=4100; pnpm start
 # 3. 브라우저
 #   http://localhost:4100/lab
 ```
+
+⚠️ 단, `/api/lab/data`는 `analysis.json`이 아니라 **단계별 산출물**(`pipeline_output.json` ·
+`refined_segments.json` · `scenes.json` · `shorts.json`)을 읽는다. `core.analyze`는 이 파일들을
+만들지 않으므로, lab 화면을 새 결과로 갱신하려면 단계별 CLI를 직접 돌린다:
+
+```powershell
+core/.venv310/Scripts/python -m core.refine    core/pipeline_output.json   # → refined_segments.json
+core/.venv310/Scripts/python -m core.scenes    core/영상.mp4 --transcript core/refined_segments.json  # → scenes.json + scene_frames/
+core/.venv310/Scripts/python -m core.vision    core/scenes.json            # scenes.json에 시각점수 in-place
+core/.venv310/Scripts/python -m core.names     core/scenes.json            # scenes.json에 이름자막 in-place
+core/.venv310/Scripts/python -m core.recommend core/scenes.json            # → shorts.json
+```
+
+원시 STT(`pipeline_output.json`)를 만들던 구 `core.pipeline` 모듈은 제거됨 — 현재 `core/`의
+`pipeline_output.json`은 보존된 샘플 산출물이다. 전체 파이프라인·스키마는
+[docs/reference/core-pipeline-reference.md](../docs/reference/core-pipeline-reference.md) 참고.
 
 ## 화면
 

@@ -35,7 +35,7 @@ const CHANNELS: DistributionChannel[] = ["smr", "youtube", "meta"];
 const META_PLATFORMS: MetaPlatform[] = ["instagram", "facebook"];
 
 /**
- * Readiness publish surface (docs/publish-fields-ux-plan.md §5.2).
+ * Readiness publish surface (docs/plans/publish-fields-ux-plan.md §5.2).
  * Each channel is an independent card: its own required-field checklist, its own
  * inputs, and its own publish action — so YouTube/Meta can go out while SMR is
  * still incomplete. No silent drops: exactly what's missing is shown.

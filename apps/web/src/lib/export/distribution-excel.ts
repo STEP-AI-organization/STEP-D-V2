@@ -9,9 +9,9 @@
  * finance team's existing workflow unchanged.
  *
  * v2 is a mock/client prototype, so the workbook is built in the browser and
- * downloaded via a Blob. Backend mapping (M6): this becomes the server route
+ * downloaded via a Blob. Backend mapping: this becomes the server route
  * above — see the mapping notes at the bottom of this file and
- * docs/publish-fields-ux-plan.md §7.
+ * docs/plans/publish-fields-ux-plan.md §7.
  */
 
 import type ExcelJSNS from "exceljs";

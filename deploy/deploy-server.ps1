@@ -109,7 +109,7 @@ if ($doWorker) {
 
   gcloud compute instances describe $WorkerVm --zone $WorkerZone --project $Project --format="value(name)" | Out-Null
   if ($LASTEXITCODE -ne 0) {
-    Say-Warn "VM '$WorkerVm' 이 없습니다 — 건너뜁니다. 생성 방법은 docs/worker-queue.md."
+    Say-Warn "VM '$WorkerVm' 이 없습니다 — 건너뜁니다. 생성 방법은 docs/ops/worker-queue.md."
   } else {
     # 워커는 SIGTERM 을 받으면 처리 중인 잡을 끝내고 종료한다 → restart 가 작업을 자르지 않는다.
     $remote = @(

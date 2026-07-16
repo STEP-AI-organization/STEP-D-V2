@@ -205,7 +205,7 @@ app.post("/api/admin/queue/purge", async (c) => {
   });
 });
 
-// ── video streaming (HTTP range) ──────────────────────────────────────────────
+// ── video streaming ───────────────────────────────────────────────────────────
 app.get("/api/media/:id/stream", async (c) => {
   const m = await getMedia(c.req.param("id"));
   if (!m) return c.json({ error: "media not found" }, 404);
@@ -214,13 +214,18 @@ app.get("/api/media/:id/stream", async (c) => {
   const exists = await fileExists(objPath);
   if (!exists) return c.json({ error: "media file not found" }, 404);
 
+  // GCS mode: redirect the player straight to a signed Cloud Storage URL and let it stream
+  // directly from GCS — native range support, no size cap, CDN-fast. Routing a 74 MB video
+  // through the Vercel proxy + Cloud Run chokes (proxy caps large responses). Same principle
+  // as direct-to-GCS upload: the bytes should never pass through our servers.
+  if (useGcs()) {
+    const url = await signedReadUrl(objPath, 6 * 60 * 60 * 1000); // 6h — comfortably covers playback
+    return c.redirect(url, 302);
+  }
+
+  // Local dev (no GCS): serve the file directly in bounded 206 chunks.
   const size = await fileSize(objPath);
   const range = c.req.header("range");
-
-  // Always serve a BOUNDED chunk as 206 — even for a rangeless request. A full-file
-  // response (74 MB in one stream) errors through the Vercel proxy / GCS stream and 500s;
-  // capping every response keeps it small and fast, and the browser just walks the file
-  // with follow-up range requests (standard progressive video streaming).
   const CHUNK = 4 * 1024 * 1024;
   let start = 0;
   let reqEnd = size - 1;

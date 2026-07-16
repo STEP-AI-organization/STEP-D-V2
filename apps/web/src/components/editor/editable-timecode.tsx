@@ -5,7 +5,7 @@ import { useEffect, useState } from "react";
 /**
  * Precise, typeable timecode field (m:ss.d). Commits on blur / Enter, reverts on
  * Escape or unparseable input, and reflects external changes (slider drag, rec apply)
- * while not focused. Pattern per docs/opencut-integration-plan.md (editable-timecode),
+ * while not focused. Pattern per docs/plans/opencut-integration-plan.md (editable-timecode),
  * implemented natively against our EditorState — no vendored code.
  */
 export function formatTc(sec: number): string {

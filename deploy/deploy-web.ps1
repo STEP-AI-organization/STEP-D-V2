@@ -95,7 +95,7 @@ Ok "푸시 완료 — Vercel 빌드 시작"
 
 # ── 4. Vercel 빌드 감시 ───────────────────────────────────────────────────────
 if (-not (Test-Path $TokenFile)) {
-  Warn "Vercel 토큰 없음 ($TokenFile) — 대시보드에서 확인하세요 (docs/vercel-ops.md)"
+  Warn "Vercel 토큰 없음 ($TokenFile) — 대시보드에서 확인하세요 (docs/ops/vercel-ops.md)"
   exit 0
 }
 $token = (Get-Content $TokenFile -Raw).Trim()

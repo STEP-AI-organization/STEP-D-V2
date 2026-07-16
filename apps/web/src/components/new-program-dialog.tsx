@@ -9,7 +9,7 @@ import { useToast } from "@/components/ui/toast";
 import { TARGET_AGES, targetAgeLabel } from "@/lib/constants";
 import { WEEKDAYS } from "@/lib/reserve-date";
 
-// 장르(section) — SMR clipCategory 01–11 (docs/step-d-ux-plan.md).
+// 장르(section) — SMR clipCategory 01–11 (docs/reference/glossary.md).
 const SECTIONS = ["드라마/영화", "예능", "뮤직", "시사", "교양", "라이프", "스포츠", "게임", "어린이", "뉴스", "애니"];
 // SMR 프로그램 카테고리 코드(01/02/03). 라벨 미확정 — 코드로 노출.
 const SMR_CATEGORIES = ["01", "02", "03"];
