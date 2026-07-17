@@ -41,6 +41,8 @@ const STALE_LOCK_MS = 30 * 60 * 1000;
 const BASE_BACKOFF_MS = 30_000;
 const MAX_BACKOFF_MS = 30 * 60 * 1000;
 
+// Also captured in the node-pg-migrate baseline (migrations/1784246400000_baseline-*.cjs).
+// Both are IF NOT EXISTS and coexist as a safety net — keep them in sync. See docs/ops/migrations.md.
 export async function initQueue(): Promise<void> {
   const pool = getPool();
   await pool.query(`

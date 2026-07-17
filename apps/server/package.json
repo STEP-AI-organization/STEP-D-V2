@@ -9,7 +9,11 @@
     "start": "tsx --env-file .env src/index.ts",
     "build": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
-    "worker": "tsx --env-file-if-exists=.env src/worker.ts"
+    "worker": "tsx --env-file-if-exists=.env src/worker.ts",
+    "migrate": "node-pg-migrate --envPath .env --migrations-dir migrations --migrations-table pgmigrations",
+    "migrate:up": "pnpm migrate up",
+    "migrate:down": "pnpm migrate down",
+    "migrate:create": "pnpm migrate create"
   },
   "dependencies": {
     "@google-cloud/storage": "^7.15.0",
@@ -22,6 +26,7 @@
   "devDependencies": {
     "@types/node": "^24",
     "@types/pg": "^8.20.0",
+    "node-pg-migrate": "^7.9.1",
     "typescript": "^5"
   }
 }

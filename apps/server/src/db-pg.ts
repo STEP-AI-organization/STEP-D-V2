@@ -55,6 +55,9 @@ export async function initDb(): Promise<void> {
   await seedIfEmpty();
 }
 
+// Runtime schema bootstrap (safety net). Mirrored by the node-pg-migrate baseline
+// migrations/1784246400000_baseline-production-schema.cjs — both are all IF NOT EXISTS,
+// so they coexist. Keep new tables/columns reflected in BOTH. See docs/ops/migrations.md.
 async function migrate(): Promise<void> {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS entities (
