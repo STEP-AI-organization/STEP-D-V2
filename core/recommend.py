@@ -201,6 +201,32 @@ def apply_profile_fit(shorts: list[dict], profile: dict | None, duration: float)
     return out
 
 
+def apply_learned_rerank(
+    shorts: list[dict],
+    scenes: list[dict],
+    model=None,
+    channel_ctx: dict | None = None,
+) -> list[dict]:
+    """RESERVED — the learned re-ranking layer. Currently a no-op by design.
+
+    This is the seat the feasibility study (docs/research/highlight-model-feasibility.md §5-1)
+    reserves for a trained scorer (LightGBM over the tabular features already persisted in
+    `content_analysis.data`): `final = appeal × program_fit × channel_fit × learned`. It sits
+    at THIS layer — after Gemini's judgment, alongside apply_profile_fit/apply_channel_fit —
+    so Gemini keeps making the creative call and the model only re-ranks.
+
+    Not implemented: the study's 1단계 (label/feature join + offline dataset) and 2단계
+    (offline A/B gate) must land first. Shipping an untrained scorer here would degrade the
+    pick with no evidence it helps. The signature is fixed now so the call site doesn't have
+    to change when the model arrives; until then `model=None` returns the input untouched.
+    """
+    if model is None:
+        return shorts
+    raise NotImplementedError(
+        "학습형 재랭킹은 아직 미구현 — 오프라인 데이터셋/AB 게이트(§7 1~2단계) 통과 후 편입"
+    )
+
+
 # ── genre auto-detection ────────────────────────────────────────────────────────
 
 _DETECT_SCHEMA = {
@@ -431,10 +457,13 @@ def recommend(
     genre: str = "auto",
     on_progress: Optional[Callable[[int, int], None]] = None,
     profile: dict | None = None,
+    channels: list[str] | None = None,
 ) -> dict:
     """Two-phase shorts pick. Returns {"genre": resolved, "shorts": [...]}.
     A program `profile` (optional) steers the prompts and re-ranks by program-fit
-    (hookWeights × targetLength, minus taboos) — non-destructive when absent."""
+    (hookWeights × targetLength, minus taboos) — non-destructive when absent.
+    `channels` (배포처 keys, default all built-in) adds a per-destination fit matrix on
+    each short (`channel_scores`) without touching the board's own ranking."""
     if not scenes:
         return {"genre": DEFAULT_GENRE, "shorts": []}
     client = genai.Client(vertexai=True, project=PROJECT, location=LOCATION)
@@ -489,7 +518,31 @@ def recommend(
     if profile and before != len(shorts):
         print(f"   프로파일 적합 적용: {before} → {len(shorts)} (금기 제외)")
 
-    return {"genre": genre, "shorts": validate_shorts(shorts, duration, n)}
+    shorts = validate_shorts(shorts, duration, n)
+
+    # Channel(배포처) fit — 최종 = 융합 × 채널적합 × 프로그램적합, evaluated PER destination.
+    # Runs after validate_shorts so the matrix only covers candidates that actually survived,
+    # and is purely additive (adds channel_scores; final_score/rank stay as-is).
+    try:
+        from .channels import apply_channel_fit
+        shorts = apply_channel_fit(shorts, scenes, channels)
+    except Exception as e:
+        # The matrix is additive — losing it costs the per-destination view, not the pick.
+        print(f"   (채널 적합 건너뜀: {str(e)[:80]})")
+    _log_channel_matrix(shorts)
+
+    return {"genre": genre, "shorts": shorts}
+
+
+def _log_channel_matrix(shorts: list[dict]) -> None:
+    """Log each destination's own #1 — the whole point of the axis is that they differ."""
+    cells = shorts[0].get("channel_scores") if shorts else None
+    if not cells:
+        return
+    for key, cell in cells.items():
+        top = min(shorts, key=lambda s: s["channel_scores"][key]["rank"])
+        print(f"   [{cell['label']}] #1 『{str(top.get('title',''))[:20]}』"
+              f" (fit {top['channel_scores'][key]['fit']:.2f})")
 
 
 def main() -> None:
