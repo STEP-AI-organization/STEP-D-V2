@@ -55,6 +55,13 @@ import {
 import { hasFfmpeg, probe, captureThumbnail, trimEncode, remuxFaststart, renderShort } from "./ffmpeg.ts";
 import { newId } from "./pipeline.ts";
 import {
+  normalizeProfile,
+  promptForMode,
+  PROFILE_RESPONSE_SCHEMA,
+  type GenerateMode,
+} from "./profile.ts";
+import { geminiGenerate, parseJsonLoose } from "./gemini.ts";
+import {
   syncChannelVideos,
   classifyShorts,
   fetchChannelAnalytics,
@@ -143,9 +150,63 @@ app.post("/api/programs", async (c) => {
     episodeCount: 0,
     status: "active" as const,
     ...(Object.keys(smr).length ? { smr } : {}),
+    // Optional understanding profile (feeds candidate scoring — plan §program-fit). Stored
+    // as JSON on the entity; normalized so downstream can trust the shape.
+    ...(body.profile !== undefined ? { profile: normalizeProfile(body.profile) } : {}),
   };
   await prependEntity("program", id, program);
   return c.json({ program });
+});
+
+// ── get one program (incl. its understanding profile) ──
+app.get("/api/programs/:id", async (c) => {
+  const program = await getEntity<Record<string, unknown>>("program", c.req.param("id"));
+  if (!program) return c.json({ error: "program not found" }, 404);
+  return c.json({ program });
+});
+
+// ── generate an understanding profile via Vertex Gemini (3 modes) ──
+// mode: direct(프로그램명/장르/설명) · websearch(프로그램명→웹검색+sources) · planning(기획정보).
+// Returns a normalized profile; the caller reviews then POST/PATCHes it onto a program.
+app.post("/api/programs/profile/generate", async (c) => {
+  const body = await c.req.json().catch(() => ({}) as Record<string, unknown>);
+  const mode: GenerateMode =
+    body.mode === "websearch" || body.mode === "planning" ? body.mode : "direct";
+  const input = typeof body.input === "string" ? body.input.trim() : "";
+  if (!input) return c.json({ error: "input required" }, 400);
+
+  const prompt = `${promptForMode(mode)}\n\n=== 입력 ===\n${input}`;
+  try {
+    // Web-search mode grounds via the googleSearch tool (no responseSchema allowed with
+    // tools); the other modes use the strict JSON responseSchema.
+    const useSearch = mode === "websearch";
+    const res = await geminiGenerate(prompt, {
+      ...(useSearch
+        ? { tools: [{ googleSearch: {} }], temperature: 0.4 }
+        : { schema: PROFILE_RESPONSE_SCHEMA, temperature: 0.3 }),
+    });
+    const profile = normalizeProfile(parseJsonLoose(res.text));
+    if (mode === "planning") profile.memes = []; // 미방영작 — 밈 없음
+    if (useSearch && res.sources.length && !profile.sources?.length) profile.sources = res.sources;
+    return c.json({ mode, profile });
+  } catch (e) {
+    // websearch may be unavailable (grounding/quota) → tell the caller so the UI can fall
+    // back to client-provided material, rather than 500-ing the whole flow.
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error("[profile.generate] failed:", msg);
+    return c.json({ error: "profile generation failed", detail: msg.slice(0, 200), mode }, 502);
+  }
+});
+
+// ── set/replace a program's understanding profile ──
+app.patch("/api/programs/:id/profile", async (c) => {
+  const id = c.req.param("id");
+  const program = await getEntity<Record<string, unknown>>("program", id);
+  if (!program) return c.json({ error: "program not found" }, 404);
+  const body = await c.req.json().catch(() => ({}) as Record<string, unknown>);
+  const profile = normalizeProfile(body.profile ?? body);
+  await putEntity("program", id, { ...program, profile });
+  return c.json({ program: { ...program, profile } });
 });
 
 // ── admin: wipe all content (programs/episodes/recommendations/clips + media). Irreversible. ──
