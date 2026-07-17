@@ -407,9 +407,22 @@ export async function runContentAnalyze(mediaId: string): Promise<void> {
     fs.rmSync(work, { recursive: true, force: true });
   } catch (err: any) {
     const partial = collectPartial(work);
+    // Persist whatever frames + stage outputs DID complete before the crash, so a partial
+    // run is still viewable in the Lab/editor. Without this, collectPartial's salvaged
+    // scenes reference frames that never left the worker's local work dir (which isn't
+    // web-reachable), and the Lab shows scenes with broken images. Non-fatal, and only
+    // worth doing when something was actually salvaged.
+    const stored = partial ? await persistArtifacts(work, mediaId) : null;
     await saveContentAnalysis(mediaId, {
       error: String(err?.message ?? err).slice(0, 1000),
-      ...(partial ? { data: partial } : {}),
+      ...(partial
+        ? {
+            data: {
+              ...partial,
+              ...(stored ? { framesBase: stored.base, framesStored: stored.frames > 0 } : {}),
+            },
+          }
+        : {}),
     });
     // Consolidate the partial transcript into the shared table too (refine may not have
     // run yet — fall back to the raw STT segments collectPartial salvaged).
