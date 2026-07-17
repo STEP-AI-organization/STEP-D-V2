@@ -42,7 +42,7 @@ from .scenes import build_scenes, extract_frame
 from .vision import analyze_frames, _frame_done
 from .recommend import recommend
 
-CHECKPOINTS = ("stt.json", "refined.json", "scenes.json", "shorts.json", "analysis.json")
+CHECKPOINTS = ("stt.json", "refined.json", "scenes.json", "cast.json", "shorts.json", "analysis.json")
 
 
 # ── checkpoint plumbing ─────────────────────────────────────────────────────────
@@ -99,8 +99,13 @@ def analyze(
     genre: str = "auto",
     resume: bool = True,
     profile: dict | None = None,
+    cast_registry: list[dict] | None = None,
+    channels: list[str] | None = None,
 ) -> dict:
-    """Run all stages (skipping checkpointed ones). Returns the analysis dict."""
+    """Run all stages (skipping checkpointed ones). Returns the analysis dict.
+    `cast_registry` (프로그램 출연자 목록) normalizes on-screen name captions into a
+    per-person timeline; `channels` selects the 배포처 fit matrix. Both are optional —
+    absent, the run behaves exactly as before plus the new (empty/candidate-only) fields."""
     out_dir.mkdir(parents=True, exist_ok=True)
     frames_dir = out_dir / "scene_frames"
     t0 = time.time()
@@ -220,6 +225,25 @@ def analyze(
     timed("frames", ts)
     _progress("frames", 75, "프레임 분석 완료")
 
+    # 4c) cast timeline — lower-third name captions × the program's cast registry.
+    # Reads scenes[].on_screen_names only (no extra model calls, no face recognition), so
+    # it's cheap and safe to run every time. Registry-less runs still produce candidates.
+    ts = time.time()
+    cast = _load_json(out_dir / "cast.json")
+    if cast and isinstance(cast, dict) and cast.get("people") is not None:
+        step(f"캐스트 타임라인 — 체크포인트 재사용 ({len(cast['people'])}명)")
+    else:
+        try:
+            from .cast import build_cast_timeline
+            _progress("cast", 75, "출연자 타임라인 구성")
+            cast = build_cast_timeline(scenes, cast_registry or [])
+            _save_json(out_dir / "cast.json", cast)
+            step(f"캐스트 타임라인 — 확정 {cast['matchedCount']}명 · 후보 {cast['candidateCount']}명")
+        except Exception as e:
+            step(f"  (캐스트 타임라인 건너뜀: {str(e)[:70]})")
+            cast = None
+    timed("cast", ts)
+
     # 5) shorts recommendation (two-phase, genre-aware) ---------------------------
     ts = time.time()
     rec = _load_json(out_dir / "shorts.json")
@@ -227,7 +251,7 @@ def analyze(
         step("쇼츠 추천…")
         _progress("recommend", 76, "쇼츠 추천 중")
         rec = recommend(
-            scenes, n=shorts_n, genre=genre, profile=profile,
+            scenes, n=shorts_n, genre=genre, profile=profile, channels=channels,
             on_progress=lambda done, total: _progress("recommend", 76 + 16 * done / max(1, total), f"후보 추출 {done}/{total} 구간"),
         )
         _save_json(out_dir / "shorts.json", rec)
@@ -246,6 +270,7 @@ def analyze(
         "genre": rec.get("genre"),
         "transcript": refined,
         "scenes": scenes,
+        "cast": cast,
         "shorts": shorts,
         "took_sec": round(time.time() - t0, 1),
         "stage_sec": stage_took,
@@ -258,7 +283,7 @@ def analyze(
 
 def main() -> None:
     if len(sys.argv) < 2:
-        print("Usage: python -m core.analyze <video> [--out <dir>] [--shorts N] [--genre auto|variety|talk|drama|sports|news|music|documentary] [--profile <profile.json>] [--no-resume]")
+        print("Usage: python -m core.analyze <video> [--out <dir>] [--shorts N] [--genre auto|variety|talk|drama|sports|news|music|documentary] [--profile <profile.json>] [--cast <registry.json>] [--channels youtube_shorts,instagram_reels,smr] [--no-resume]")
         sys.exit(1)
 
     video = sys.argv[1]
@@ -275,9 +300,25 @@ def main() -> None:
         except Exception as e:
             print(f"   (프로파일 로드 실패, 무시: {str(e)[:80]})")
 
-    result = analyze(video, out_dir, shorts_n=n, genre=genre, resume=resume, profile=profile)
+    # Optional cast registry (--cast <registry.json>) → on-screen name captions get
+    # normalized onto registered people; without it every name stays a candidate.
+    cast_registry = None
+    if "--cast" in sys.argv:
+        from .cast import load_registry
+        cast_registry = load_registry(sys.argv[sys.argv.index("--cast") + 1])
+
+    # Optional destination filter (--channels a,b) → per-channel fit matrix. Default: all.
+    channels = None
+    if "--channels" in sys.argv:
+        channels = [c.strip() for c in sys.argv[sys.argv.index("--channels") + 1].split(",") if c.strip()]
+
+    result = analyze(video, out_dir, shorts_n=n, genre=genre, resume=resume, profile=profile,
+                     cast_registry=cast_registry, channels=channels)
+    cast = result.get("cast") or {}
     print(f"\n=== 요약 ===")
-    print(f"  {len(result['transcript'])} 자막 · {len(result['scenes'])} 장면 · {len(result['shorts'])} 쇼츠 · 장르 {result['genre']} · {result['took_sec']}초")
+    print(f"  {len(result['transcript'])} 자막 · {len(result['scenes'])} 장면 · {len(result['shorts'])} 쇼츠 · "
+          f"출연자 {cast.get('matchedCount', 0)}확정/{cast.get('candidateCount', 0)}후보 · "
+          f"장르 {result['genre']} · {result['took_sec']}초")
     for s in sorted(result["shorts"], key=lambda x: x.get("rank", 99))[:5]:
         print(f"  #{s.get('rank')} [{int(s['start']//60)}:{int(s['start']%60):02d}] appeal {s.get('appeal')} 『{s.get('title','')}』")
 
