@@ -18,6 +18,7 @@ export function EditorTimeline({
   state,
   update,
   duration,
+  startOffset = 0,
   video,
   videoUrl,
   onTogglePlay,
@@ -25,6 +26,9 @@ export function EditorTimeline({
   state: EditorState;
   update: Update;
   duration: number;
+  /** Master-absolute seconds where the segment (relative t=0) begins. The <video> streams
+   *  the master, so we map segment-relative time ⇄ element time by ± startOffset. */
+  startOffset?: number;
   video: HTMLVideoElement | null;
   videoUrl?: string;
   onTogglePlay: () => void;
@@ -40,32 +44,34 @@ export function EditorTimeline({
     if (!video) return;
     const onPlay = () => setPlaying(true);
     const onPause = () => setPlaying(false);
-    const onTime = () => setT(video.currentTime);
+    const onTime = () => setT(video.currentTime - startOffset);
     video.addEventListener("play", onPlay);
     video.addEventListener("pause", onPause);
     video.addEventListener("seeked", onTime);
     setPlaying(!video.paused);
-    setT(video.currentTime);
+    setT(video.currentTime - startOffset);
     return () => {
       video.removeEventListener("play", onPlay);
       video.removeEventListener("pause", onPause);
       video.removeEventListener("seeked", onTime);
     };
-  }, [video]);
+  }, [video, startOffset]);
 
-  // While playing, advance the playhead from the element and loop within the trim window.
+  // While playing, advance the playhead from the element and loop within the trim window
+  // (both in segment-relative seconds; the element runs at startOffset + relative).
   useEffect(() => {
     if (!video || !playing) return;
     const loop = () => {
-      if (video.currentTime >= state.trimOut) video.currentTime = state.trimIn;
-      setT(video.currentTime);
+      const rel = video.currentTime - startOffset;
+      if (rel >= state.trimOut) video.currentTime = startOffset + state.trimIn;
+      setT(video.currentTime - startOffset);
       raf.current = requestAnimationFrame(loop);
     };
     raf.current = requestAnimationFrame(loop);
     return () => {
       if (raf.current) cancelAnimationFrame(raf.current);
     };
-  }, [video, playing, state.trimIn, state.trimOut]);
+  }, [video, playing, startOffset, state.trimIn, state.trimOut]);
 
   // Keep playback speed in sync with the transport.
   useEffect(() => {
@@ -77,7 +83,7 @@ export function EditorTimeline({
 
   function seekTo(sec: number) {
     const clamped = Math.max(0, Math.min(sec, duration));
-    if (video) video.currentTime = clamped;
+    if (video) video.currentTime = startOffset + clamped;
     setT(clamped);
   }
   function onTrackClick(e: React.MouseEvent<HTMLDivElement>) {

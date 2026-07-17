@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { ArrowLeft, Save, Send, Info, Check, Sparkles, Film } from "lucide-react";
 import { useAppData } from "@/lib/data/store";
-import { getStreamUrl } from "@/lib/data/api";
+import { getStreamUrl, getMediaAnalysis, type AnalysisTranscriptSegment } from "@/lib/data/api";
 import {
   applyTemplate,
   makeInitialEditorState,
@@ -29,6 +29,13 @@ export function EditorShell({ clipId }: { clipId: string }) {
   // signed GCS URL the player streams directly from Cloud Storage (no proxy in the byte path).
   const master = clip ? mediaForEpisode(clip.episodeId, "master") : undefined;
   const mediaId = clip?.mediaId ?? master?.id;
+  // Draft clips preview the MASTER (no render yet); confirmed clips preview their own baked
+  // 9:16 file. When previewing the master we must seek into the clip's segment (startTime)
+  // so what plays — and the captions we overlay — match the eventual render (WYSIWYG, §2.4).
+  const previewingMaster = !clip?.mediaId;
+  const segStart = previewingMaster ? Number(clip?.startTime ?? 0) : 0;
+  // Master id that owns the STT transcript (the segment was cut from it).
+  const transcriptMediaId = clip?.sourceMediaId ?? master?.id;
   const [videoUrl, setVideoUrl] = useState<string>();
   useEffect(() => {
     let cancelled = false;
@@ -38,6 +45,23 @@ export function EditorShell({ clipId }: { clipId: string }) {
       cancelled = true;
     };
   }, [mediaId]);
+
+  // Real STT transcript for the master (spoken-subtitle preview). Only when previewing the
+  // master — a confirmed clip already has captions burned in, so we don't overlay them.
+  const [transcript, setTranscript] = useState<AnalysisTranscriptSegment[] | undefined>();
+  useEffect(() => {
+    let alive = true;
+    if (previewingMaster && transcriptMediaId) {
+      getMediaAnalysis(transcriptMediaId)
+        .then((a) => alive && setTranscript(Array.isArray(a.data?.transcript) ? a.data!.transcript : undefined))
+        .catch(() => alive && setTranscript(undefined));
+    } else {
+      setTranscript(undefined);
+    }
+    return () => {
+      alive = false;
+    };
+  }, [transcriptMediaId, previewingMaster]);
 
   const [state, setState] = useState<EditorState>(
     () => clip?.editorState ?? makeInitialEditorState(title, duration),
@@ -104,31 +128,64 @@ export function EditorShell({ clipId }: { clipId: string }) {
   }
 
   // The real <video> element is the transport's source of truth; both the preview
-  // (which mounts it) and the timeline (which drives it) share this handle.
+  // (which mounts it) and the timeline (which drives it) share this handle. The timeline
+  // runs in segment-relative seconds [0, durationSec]; the video seeks at segStart + r.
   const [videoEl, setVideoEl] = useState<HTMLVideoElement | null>(null);
-  const [videoDuration, setVideoDuration] = useState<number | null>(null);
-  const timelineDuration = videoDuration ?? duration;
+  const timelineDuration = duration;
+
+  // Track the element's position (master-absolute) to drive the live caption overlay.
+  const [videoTime, setVideoTime] = useState(0);
+  useEffect(() => {
+    const v = videoEl;
+    if (!v) return;
+    const onTime = () => setVideoTime(v.currentTime);
+    v.addEventListener("timeupdate", onTime);
+    v.addEventListener("seeked", onTime);
+    return () => {
+      v.removeEventListener("timeupdate", onTime);
+      v.removeEventListener("seeked", onTime);
+    };
+  }, [videoEl]);
+
+  // The spoken caption under the playhead — same source & timeline as the render burn-in,
+  // so what you see here is what gets baked. offsetMs applies the ±sync fine-tune.
+  const captionText = useMemo(() => {
+    if (!transcript) return undefined;
+    const t = videoTime + (state.offsetMs || 0) / 1000; // master-absolute seconds
+    const seg = transcript.find(
+      (s) => Number(s.start ?? 0) <= t && t < Number(s.end ?? Number(s.start ?? 0) + 3),
+    );
+    return (seg?.text ?? "").trim() || undefined;
+  }, [transcript, videoTime, state.offsetMs]);
 
   const togglePlay = useCallback(() => {
     const v = videoEl;
     if (!v) return;
     if (v.paused) {
-      // Snap into the trim window before playing so preview stays render-free (§2.4).
-      if (v.currentTime < state.trimIn || v.currentTime >= state.trimOut - 0.05) {
-        v.currentTime = state.trimIn;
-      }
+      // Snap into the segment's trim window (master-absolute) before playing so the preview
+      // shows the same footage the render will cut — render-free (§2.4).
+      const lo = segStart + state.trimIn;
+      const hi = segStart + state.trimOut;
+      if (v.currentTime < lo || v.currentTime >= hi - 0.05) v.currentTime = lo;
       void v.play();
     } else {
       v.pause();
     }
-  }, [videoEl, state.trimIn, state.trimOut]);
+  }, [videoEl, segStart, state.trimIn, state.trimOut]);
 
+  // On load, park the playhead at the segment start so the first frame is the clip's, not
+  // the master's opening (only meaningful when previewing the master).
   const handleDuration = useCallback(
-    (d: number) => {
-      setVideoDuration(d);
-      if (state.trimOut > d) update({ trimOut: d });
+    (_d: number) => {
+      if (videoEl && previewingMaster) {
+        try {
+          videoEl.currentTime = segStart + state.trimIn;
+        } catch {
+          /* seeking before ready — the timeline will seek on first interaction */
+        }
+      }
     },
-    [state.trimOut],
+    [videoEl, previewingMaster, segStart, state.trimIn],
   );
 
   const backHref = clip ? `/episodes/${clip.episodeId}?tab=clips` : "/clips";
@@ -188,6 +245,8 @@ export function EditorShell({ clipId }: { clipId: string }) {
             videoRef={setVideoEl}
             onDuration={handleDuration}
             onTogglePlay={togglePlay}
+            caption={captionText}
+            hasTranscript={!!transcript}
           />
         </div>
 
@@ -202,6 +261,7 @@ export function EditorShell({ clipId }: { clipId: string }) {
           state={state}
           update={update}
           duration={timelineDuration}
+          startOffset={segStart}
           video={videoEl}
           videoUrl={videoUrl}
           onTogglePlay={togglePlay}

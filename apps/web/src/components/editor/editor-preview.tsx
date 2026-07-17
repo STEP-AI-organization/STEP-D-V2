@@ -20,6 +20,8 @@ export function EditorPreview({
   videoRef,
   onDuration,
   onTogglePlay,
+  caption,
+  hasTranscript,
 }: {
   state: EditorState;
   update: (patch: Partial<EditorState>) => void;
@@ -27,6 +29,10 @@ export function EditorPreview({
   videoRef?: Ref<HTMLVideoElement>;
   onDuration?: (seconds: number) => void;
   onTogglePlay?: () => void;
+  /** Real STT caption under the playhead (from the master transcript). */
+  caption?: string;
+  /** Whether a transcript is loaded — false ⇒ show the sample placeholder instead. */
+  hasTranscript?: boolean;
 }) {
   const ratio = ASPECTS[state.aspect].ratio;
   const stageRef = useRef<HTMLDivElement | null>(null);
@@ -137,8 +143,17 @@ export function EditorPreview({
           })}
         </Movable>
 
-        {/* captions (karaoke sample — auto-generated from STT later) */}
-        {state.captionsOn && (
+        {/* captions — the REAL STT line under the playhead (same transcript + timeline the
+            render burns in, so preview = final). Falls back to a sample only when no
+            transcript is loaded, so the caption zone never looks empty/broken. */}
+        {state.captionsOn && hasTranscript && caption && (
+          <div className="absolute inset-x-0 px-6 text-center" style={{ top: "72%" }}>
+            <span className="rounded px-1 text-lg font-bold" style={{ color: "#fff", textShadow: "0 2px 6px rgba(0,0,0,.6)" }}>
+              {caption}
+            </span>
+          </div>
+        )}
+        {state.captionsOn && !hasTranscript && (
           <div className="absolute inset-x-0 px-6 text-center" style={{ top: "72%" }}>
             <span className="rounded px-1 text-lg font-bold" style={{ color: "#fff", textShadow: "0 2px 6px rgba(0,0,0,.6)" }}>
               지금 이 장면이 <span style={{ color: state.highlightColor }}>가장 먼저</span> 잡혀야 해요
