@@ -2,7 +2,7 @@
 
 > 스키마를 **버전 순차**로 관리한다. 도구: [`node-pg-migrate`](https://salsita.github.io/node-pg-migrate/) v7.
 > 위치: `apps/server/migrations/` · 추적 테이블: `pgmigrations` · 접속: `DATABASE_URL`.
-> 개발자용 짧은 규칙: [apps/server/migrations/README.md](../../apps/server/migrations/README.md).
+> 개발자용 짧은 규칙: [apps/server/MIGRATIONS.md](../../apps/server/MIGRATIONS.md).
 
 ## 버전관리 체계
 
@@ -43,11 +43,21 @@ pnpm migrate up --fake       # 실행 없이 "적용됨"으로만 표시 (프로
 
 `.cjs` 파일에 `exports.up` / `exports.down`. `pgm.sql(...)`로 raw SQL을 넣는 게 가장 명시적이다. 되도록
 additive(`ADD COLUMN IF NOT EXISTS` 등)하게 쓰고, 되돌릴 수 없는 변경은 `exports.down = false;`. 자세한
-템플릿·예시는 [migrations/README.md](../../apps/server/migrations/README.md).
+템플릿·예시는 [apps/server/MIGRATIONS.md](../../apps/server/MIGRATIONS.md).
+
+## ⚠️ migrations/ 폴더에는 `.cjs` 마이그레이션만
+
+node-pg-migrate는 마이그레이션 디렉터리의 **모든 파일을 `require()`** 한다(기본 무시 패턴은 닷파일뿐).
+`README.md` 같은 게 섞여 있으면 JS로 파싱하려다 `SyntaxError`로 죽고, **`migrate up`이 아예 안 돈다.**
+실제로 0001 도입 당시 `migrations/README.md`가 그 폴더에 있어서 이 상태였다(→ `apps/server/MIGRATIONS.md`로 이동).
+
+- **폴더에 마이그레이션 파일만 유지**한다 — 플래그 없이 `npx node-pg-migrate …`로 돌려도 안전해지는 유일한 보장.
+- `package.json`의 `migrate` 스크립트는 추가 방어로 `--ignore-pattern "(?!\d{4}_.*\.cjs$).*"`(= `NNNN_*.cjs`만
+  허용)를 붙인다. 스크립트를 거칠 때만 적용되니 위 규칙을 대체하지는 않는다.
 
 ## 빈 DB 재현 검증 (로컬/CI)
 
-Docker Postgres로 검증된 절차 (2026-07-17 실측 통과):
+Docker Postgres로 검증된 절차 (2026-07-17 재실측 통과, 0002 포함):
 
 ```bash
 docker run -d --name pgtest -e POSTGRES_PASSWORD=test -e POSTGRES_DB=stepd -p 55433:5432 postgres:16
@@ -58,9 +68,13 @@ pnpm migrate:status    # 전부 [x] applied 확인
 docker rm -f pgtest
 ```
 
-검증 항목(실측 통과): 순번 순서대로 적용 · `migrate:status` 정확 · `migrate down`이 직전 1개만 역적용 ·
-재실행 시 `No migrations to run!`(멱등) · 추적행 삭제 후 재실행해도 기존 스키마에 no-op(IF NOT EXISTS) ·
-`--fake`는 DDL 없이 추적행만 기록 · baseline `down` 거부.
+검증 항목(실측 통과): 순번 순서대로 적용(`pgmigrations` = 0001 → 0002) · `migrate:status` 정확 ·
+`migrate down`이 직전 1개만 역적용(0002만 드랍, 나머지 13개 테이블 무손상) · 재실행 시
+`No migrations to run!`(멱등) · baseline `down` 거부.
+
+> **이력:** 최초 도입(534661d) 당시 "실측 통과"로 적어 뒀지만, 같은 커밋이 `migrations/README.md`를
+> 그 폴더에 넣는 바람에 이후 `migrate up`은 어떤 경로로도 실행되지 않았다(위 "`.cjs`만" 절 참고).
+> 0002 작업 중 발견해 고쳤고, 위 항목은 그 수정 이후 다시 측정한 결과다.
 
 ## ⚠️ 프로덕션 (Cloud SQL) — 반드시 확인 후
 

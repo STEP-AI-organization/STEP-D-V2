@@ -1,8 +1,10 @@
 # DB 마이그레이션 — 버전관리 규칙
 
-스키마 변경은 **여기(migrations/)에 새 번호 파일을 추가하는 것으로만** 한다.
+스키마 변경은 **`migrations/`에 새 번호 파일을 추가하는 것으로만** 한다.
 도구: [node-pg-migrate](https://salsita.github.io/node-pg-migrate/) v7 · 추적 테이블: `pgmigrations` · 접속: `DATABASE_URL`.
-운영 절차·프로덕션 반영은 [docs/ops/migrations.md](../../../docs/ops/migrations.md) 참고.
+운영 절차·프로덕션 반영은 [docs/ops/migrations.md](../../docs/ops/migrations.md) 참고.
+
+> 이 문서가 `migrations/` **밖에** 있는 이유는 아래 "migrations/ 폴더에는 마이그레이션 파일만" 참고.
 
 ## 파일명 규칙
 
@@ -11,8 +13,32 @@ NNNN_kebab-slug.cjs        예) 0001_baseline.cjs, 0002_add-clip-status.cjs
 ```
 
 - 4자리 순번(`0001`, `0002`, …) — 적용 순서 = 버전 순서. node-pg-migrate가 숫자 프리픽스로 정렬한다.
+  (실행 중 `Can't determine timestamp for 0002` 경고가 뜨는데, 순번을 타임스탬프로 못 읽었다는 뜻일 뿐
+  정렬·적용은 정상이다. 무해.)
 - `0001_baseline.cjs` = version 1. 현재 프로덕션 전체 스키마의 스냅샷(비가역, `down=false`).
 - 확장자는 `.cjs` (CommonJS). 이 워크스페이스는 `type: module`이라 `.js`는 ESM으로 로드되니 `.cjs`를 쓴다.
+
+## ⚠️ migrations/ 폴더에는 마이그레이션 파일만
+
+**`migrations/`에 `.cjs`가 아닌 파일을 절대 두지 말 것** (README·메모·백업 등).
+
+node-pg-migrate는 마이그레이션 디렉터리의 **모든 파일을 `require()`** 한다. 기본 무시 패턴은
+`^\..*`(닷파일)뿐이라, `README.md` 같은 파일이 있으면 그걸 JS로 파싱하려다 터진다:
+
+```
+Error: Can't get migration files: …/migrations/README.md:1
+# DB 마이그레이션 — 버전관리 규칙
+^
+SyntaxError: Invalid or unexpected token
+```
+
+이 때문에 `migrate up`이 **아예 실행되지 않는다**(실제로 이 문서가 여기 있어서 그랬고, 그래서 밖으로 뺐다).
+
+방어는 2겹이다:
+1. **폴더를 깨끗하게 유지** — 이게 진짜 보장. `npx node-pg-migrate …` 처럼 플래그 없이 직접 돌려도 안전해진다.
+2. `package.json`의 `migrate` 스크립트가 `--ignore-pattern "(?!\d{4}_.*\.cjs$).*"` 로 **`NNNN_*.cjs`만 허용**
+   — 실수로 파일이 들어와도 `pnpm migrate …` 경로는 버틴다. 단, 이건 스크립트를 거칠 때만 적용되므로
+   1번을 대체하지 않는다.
 
 ## 명령어 (apps/server 안에서)
 

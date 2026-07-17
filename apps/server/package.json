@@ -10,7 +10,7 @@
     "build": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
     "worker": "tsx --env-file-if-exists=.env src/worker.ts",
-    "migrate": "node-pg-migrate --envPath .env --migrations-dir migrations --migrations-table pgmigrations",
+    "migrate": "node-pg-migrate --envPath .env --migrations-dir migrations --migrations-table pgmigrations --ignore-pattern \"(?!\\d{4}_.*\\.cjs$).*\"",
     "migrate:up": "pnpm migrate up",
     "migrate:down": "pnpm migrate down",
     "migrate:redo": "pnpm migrate redo",
