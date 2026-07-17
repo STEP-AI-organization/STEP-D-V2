@@ -850,6 +850,35 @@ function normalizeAspect(aspectRatio: unknown): string | null {
 }
 
 /**
+ * Pick the destination a candidate is best suited to, from the (후보 × 배포처) matrix that
+ * core/channels.py attached to the recommendation. Used at adopt to seed clip.targetChannel —
+ * a default the operator can always override at export, never a decision.
+ *
+ * `usable` (the candidate's length sits inside the destination's range) is a gate, not a
+ * tie-break: core deliberately deranks an out-of-range candidate instead of dropping it, so a
+ * destination can win on score while still being one the clip cannot ship to. Among usable
+ * destinations the highest score wins (score = 융합 × 프로그램적합 × 채널적합, comparable
+ * across destinations because only the channel-fit factor differs).
+ *
+ * Returns null when nothing is usable, or the matrix is absent/unrecognised. Null means "no
+ * preset" downstream — the clip renders at its own aspect over the full segment, i.e. exactly
+ * what it did before this existed. That's the deliberate choice: guessing a destination the
+ * clip doesn't fit would truncate or reframe a deliverable nobody asked to change.
+ */
+function pickTargetChannel(channelScores: unknown): string | null {
+  if (!channelScores || typeof channelScores !== "object") return null;
+  let best: { key: string; score: number } | null = null;
+  for (const [key, cell] of Object.entries(channelScores as Record<string, any>)) {
+    if (!RENDER_PRESETS[key] || !cell || typeof cell !== "object") continue;
+    if (cell.usable !== true) continue;
+    const score = Number(cell.score ?? cell.fit);
+    if (!isFinite(score)) continue;
+    if (!best || score > best.score) best = { key, score };
+  }
+  return best?.key ?? null;
+}
+
+/**
  * Resolve the render preset for an export. Explicit request `channel` wins, else whatever the
  * clip was adopted/targeted for. Unknown or absent → null (no preset; the clip's own aspect
  * and full segment are used), so a destination we don't model never silently reshapes a render.
@@ -1142,6 +1171,9 @@ app.post("/api/recommendations/:id/adopt", async (c) => {
     endTime: rec.endTime,
     sourceMediaId: master?.id,
     sourceRecommendationId: rec.id,
+    // The AI's suggested destination (F3) — metadata only, still no render (§2.4). It seeds
+    // the export selector's default; the operator's pick at export overrides it.
+    targetChannel: pickTargetChannel(rec.channelScores),
     distributions: [],
   };
 

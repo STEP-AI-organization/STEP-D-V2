@@ -15,7 +15,7 @@ import { EditorPreview } from "@/components/editor/editor-preview";
 import { EditorPanel } from "@/components/editor/editor-panel";
 import { EditorTimeline } from "@/components/editor/editor-timeline";
 import { EditorAiPanel } from "@/components/editor/editor-ai-panel";
-import type { Recommendation } from "@/lib/types";
+import { RENDER_CHANNELS, type Recommendation, type RenderChannel } from "@/lib/types";
 
 export function EditorShell({ clipId }: { clipId: string }) {
   const { clips, recsForEpisode, mediaForEpisode, saveClipEditor, exportClip } = useAppData();
@@ -71,6 +71,36 @@ export function EditorShell({ clipId }: { clipId: string }) {
   const [exporting, setExporting] = useState(false);
   const rendered = clip?.status === "ready" || clip?.status === "published";
 
+  // ── F3: which destination this export renders for ───────────────────────────
+  //
+  // "" = 원본 유지 (no preset): the clip renders at its own aspect over the full segment —
+  // exactly the behaviour that existed before presets. That is deliberately the fallback
+  // default: seeding Shorts for everything would reframe a 16:9 하이라이트 to vertical and
+  // cap it at 60s, silently changing what today's clips produce. A preset only applies when
+  // something actually chose one — the AI matrix at adopt (targetChannel), or the operator here.
+  const [channel, setChannel] = useState<RenderChannel | "">("");
+  const [capped, setCapped] = useState<{ maxSec: number; requestedSec: number } | null>(null);
+
+  // Seed from the clip's AI-suggested destination once it lands. Keyed on clip id so it never
+  // clobbers an operator's pick mid-session — their choice outranks the suggestion.
+  useEffect(() => {
+    setChannel(clip?.targetChannel ?? "");
+    setCapped(null);
+  }, [clip?.id, clip?.targetChannel]);
+
+  const preset = channel ? RENDER_CHANNELS[channel] : null;
+
+  // A chosen destination OWNS the frame. This is not cosmetic: the server resolves the render
+  // aspect as editorState.aspect > preset > clip.aspectRatio, and buildEditorAss maps overlay
+  // \pos from the preview stage's aspect. If the two disagreed, picking "SMR · 16:9" would
+  // either render 9:16 anyway (es.aspect always wins — it's never unset) or bake overlays at
+  // coordinates authored against a different frame. Forcing it here keeps preview == render.
+  // No-op while channel is "" — which is why existing clips (no targetChannel) are untouched.
+  useEffect(() => {
+    if (preset && state.aspect !== preset.aspect) update({ aspect: preset.aspect });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [preset?.aspect, state.aspect]);
+
   // Hydrate from a previously saved revision once the clip lands (async store load /
   // hard refresh). Keyed on clip id so it runs on first arrival, never clobbering edits.
   useEffect(() => {
@@ -105,7 +135,8 @@ export function EditorShell({ clipId }: { clipId: string }) {
         await saveClipEditor(clip.id, state);
         setSaved(true);
       }
-      await exportClip(clip.id);
+      const res = await exportClip(clip.id, channel || undefined);
+      setCapped(res.capped);
     } finally {
       setExporting(false);
     }
@@ -212,10 +243,36 @@ export function EditorShell({ clipId }: { clipId: string }) {
             {saved ? <Check className="size-4 text-emerald-400" /> : <Save className="size-4" />}
             {saving ? "저장 중…" : saved ? "저장됨" : "저장"}
           </button>
+          {/* F3 배포처 프리셋 — 렌더 비율과 길이 캡을 결정한다. 선택 즉시 렌더되지 않는다:
+              확정(렌더)을 눌러야 서버가 단 한 번 굽는다 (plan §2.4). */}
+          <label className="flex items-center gap-1.5 text-sm text-zinc-400">
+            <span className="sr-only">배포처 렌더 프리셋</span>
+            <select
+              value={channel}
+              onChange={(e) => {
+                setChannel(e.target.value as RenderChannel | "");
+                setCapped(null);
+              }}
+              disabled={exporting}
+              title="렌더할 배포처를 고릅니다 — 비율과 길이 상한이 여기서 정해집니다"
+              className="rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-sm text-zinc-200 disabled:opacity-60"
+            >
+              <option value="">원본 유지 (프리셋 없음)</option>
+              {(Object.keys(RENDER_CHANNELS) as RenderChannel[]).map((k) => (
+                <option key={k} value={k}>
+                  {RENDER_CHANNELS[k].label} · {RENDER_CHANNELS[k].aspect} · 최대 {RENDER_CHANNELS[k].maxSec}초
+                </option>
+              ))}
+            </select>
+          </label>
           <button
             onClick={confirmExport}
             disabled={exporting}
-            title="편집 결정을 최종 렌더로 굽습니다 (렌더는 여기서 단 한 번 — plan §2.4)"
+            title={
+              preset
+                ? `${preset.label} 프리셋으로 렌더합니다 — ${preset.aspect}, 최대 ${preset.maxSec}초 (렌더는 여기서 단 한 번 — plan §2.4)`
+                : "클립 원본 비율로 구간 전체를 렌더합니다 (렌더는 여기서 단 한 번 — plan §2.4)"
+            }
             className="inline-flex items-center gap-1.5 rounded-md border border-zinc-700 px-3 py-1.5 text-sm text-zinc-200 hover:bg-zinc-800 disabled:opacity-60"
           >
             {rendered ? <Check className="size-4 text-emerald-400" /> : <Film className="size-4" />}
@@ -229,6 +286,21 @@ export function EditorShell({ clipId }: { clipId: string }) {
           </Link>
         </div>
       </header>
+
+      {/* The preset's length cap shortened the deliverable. The operator picked a longer
+          segment and got a shorter file — say so rather than let it pass unnoticed. */}
+      {capped && (
+        <div
+          role="status"
+          className="flex items-start gap-2 border-b border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-200"
+        >
+          <Info className="mt-0.5 size-4 shrink-0" />
+          <span>
+            {preset?.label ?? "선택한 배포처"}의 길이 상한 {capped.maxSec}초에 맞춰 잘렸습니다 — 고른 구간은{" "}
+            {capped.requestedSec.toFixed(1)}초입니다. 전체를 살리려면 배포처를 바꾸거나 “원본 유지”로 렌더하세요.
+          </span>
+        </div>
+      )}
 
       {/* body — 3 columns; side panels fold away on narrow viewports so the
           preview never gets crushed (AI panel below lg, properties below md). */}

@@ -4,7 +4,7 @@
  * standalone — this module is only used once a live server is detected.
  */
 import type { DistributionChannel } from "@/lib/constants";
-import type { MetaPlatform, Program } from "@/lib/types";
+import type { MetaPlatform, Program, RenderChannel } from "@/lib/types";
 import type { EditorState } from "@/lib/editor/presets";
 
 export const API_BASE =
@@ -312,9 +312,6 @@ function uploadVideoMultipart(
 export async function adoptRec(recId: string): Promise<{ clipId: string; clip: unknown }> {
   return json(await fetch(`${API_BASE}/recommendations/${recId}/adopt`, { method: "POST" }));
 }
-
-/** Destinations with a render preset (frame + length cap) — server RENDER_PRESETS keys. */
-export type RenderChannel = "youtube_shorts" | "instagram_reels" | "smr";
 
 /**
  * Confirm/export a clip — the single expensive render (plan §2.4). The server bakes the

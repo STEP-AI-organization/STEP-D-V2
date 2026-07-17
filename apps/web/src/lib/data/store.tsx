@@ -28,6 +28,7 @@ import type {
   JobEvent,
   MediaAsset,
   MetaPlatform,
+  RenderChannel,
   Program,
   Recommendation,
 } from "@/lib/types";
@@ -106,6 +107,14 @@ function toProgram(p: Partial<Program>): Program {
   } as Program;
 }
 
+/**
+ * What an export reports back. `capped` is set when the destination preset's maxSec made the
+ * deliverable shorter than the segment the operator chose — surfaced, never swallowed.
+ */
+export interface ExportResult {
+  capped: { maxSec: number; requestedSec: number } | null;
+}
+
 interface AppData extends AppState {
   // real-video backend
   media: MediaAsset[];
@@ -125,8 +134,11 @@ interface AppData extends AppState {
   mediaForEpisode: (episodeId: string, role?: string) => MediaAsset | undefined;
   // actions
   adoptRecommendation: (id: string) => Promise<string>;
-  /** Confirm/export a clip — triggers the single server render (plan §2.4). Draft until here. */
-  exportClip: (clipId: string) => Promise<void>;
+  /**
+   * Confirm/export a clip — triggers the single server render (plan §2.4). Draft until here.
+   * `channel` applies that destination's render preset (frame + length cap); omit for 원본 유지.
+   */
+  exportClip: (clipId: string, channel?: RenderChannel) => Promise<ExportResult>;
   /** Persist the editor's decision blob on a clip (metadata only, no render). */
   saveClipEditor: (clipId: string, editorState: EditorState) => Promise<void>;
   rejectRecommendation: (id: string, reason: string) => void;
@@ -385,16 +397,19 @@ export function AppDataProvider({
     return clipId;
   }, []);
 
-  const exportClip = useCallback(async (clipId: string): Promise<void> => {
+  const exportClip = useCallback(async (clipId: string, channel?: RenderChannel): Promise<ExportResult> => {
     // SERVER: the single expensive render (plan §2.4). Server bakes once + caches by
-    // revision hash, then returns the rendered (status:"ready") clip.
+    // revision hash, then returns the rendered (status:"ready") clip. `channel` picks the
+    // destination render preset (F3); omitted = 원본 유지 (the clip's own aspect, no cap).
     if (connectedRef.current) {
-      const { clip } = await exportClipApi(clipId);
+      const { clip, capped } = await exportClipApi(clipId, channel);
       setState((prev) => ({
         ...prev,
         clips: prev.clips.map((c) => (c.id === clipId ? (clip as Clip) : c)),
       }));
-      return;
+      // Handed back so the caller can tell the operator the deliverable is shorter than the
+      // segment they picked — a cap must never pass silently.
+      return { capped: capped ?? null };
     }
     // MOCK: simulate the encode → ready transition so the flow works standalone.
     setState((prev) => ({
@@ -409,6 +424,7 @@ export function AppDataProvider({
         ),
       }));
     }, 1200);
+    return { capped: null };
   }, []);
 
   const rejectRecommendation = useCallback((id: string, reason: string) => {

@@ -6,7 +6,7 @@
  * (lib/data/api.ts) satisfy these shapes.
  */
 
-import type { EditorState } from "@/lib/editor/presets";
+import type { AspectKey, EditorState } from "@/lib/editor/presets";
 import type {
   AspectRatio,
   ClipCategory,
@@ -105,6 +105,23 @@ export interface Recommendation {
 }
 
 // ── Clip (finished asset) ────────────────────────────────────────────────────────
+/**
+ * Destinations that have a render preset (frame + hard length cap) — mirrors the server's
+ * RENDER_PRESETS keys, which in turn mirror core/channels.py CHANNEL_PRESETS.
+ */
+export type RenderChannel = "youtube_shorts" | "instagram_reels" | "smr";
+
+/**
+ * What each preset does to the render. Labels/caps are shown in the export selector, and
+ * `aspect` is the frame the editor switches to when that destination is picked — it must stay
+ * an AspectKey so preview and burn-in agree. Mirrors the server's RENDER_PRESETS.
+ */
+export const RENDER_CHANNELS: Record<RenderChannel, { label: string; aspect: AspectKey; maxSec: number }> = {
+  youtube_shorts: { label: "YouTube Shorts", aspect: "9:16", maxSec: 60 },
+  instagram_reels: { label: "Instagram Reels", aspect: "9:16", maxSec: 90 },
+  smr: { label: "SMR (포털 VOD)", aspect: "16:9", maxSec: 180 },
+};
+
 export interface Clip {
   id: string;
   episodeId: string;
@@ -129,6 +146,14 @@ export interface Clip {
   rendered?: boolean;
   /** Hash of the render-affecting decisions — caches identical re-exports (no re-encode). */
   renderRevision?: string;
+  /**
+   * Destination the AI matrix suggested at adopt (F3) — seeds the export selector's default.
+   * Null/absent = no suggestion (matrix absent, or the clip fits nowhere): the export defaults
+   * to "원본 유지", which renders exactly as it did before presets existed.
+   */
+  targetChannel?: RenderChannel | null;
+  /** The preset the last export actually rendered with (null = 원본 유지). */
+  renderPreset?: RenderChannel | null;
   /** Adopted segment window in the master (seconds) — drives render-free preview + export. */
   startTime?: number;
   endTime?: number;

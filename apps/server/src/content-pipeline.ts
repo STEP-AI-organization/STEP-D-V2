@@ -148,6 +148,16 @@ function runAnalyze(
 type Short = {
   rank?: number; appeal?: number; start?: number; end?: number;
   title?: string; reason?: string; tags?: string[];
+  /** (후보 × 배포처) matrix from core/channels.py apply_channel_fit — absent when the
+   *  analysis ran without destinations, or on any pre-matrix run. */
+  channel_scores?: Record<string, ChannelScore>;
+};
+
+/** One (candidate × destination) cell — core/channels.py channel_fit(). */
+type ChannelScore = {
+  fit?: number; score?: number; rank?: number;
+  usable?: boolean; lengthSec?: number;
+  len_fit?: number; hook_w?: number; caption_fit?: number; aspect_fit?: number;
 };
 
 const MIN_SHORT_SEC = 3;
@@ -179,6 +189,10 @@ function recFromShort(episodeId: string, s: Short) {
     ],
     selectedThumbnailId: `${id}-t2`,
     adoptedClipId: null,
+    // Carried so adopt can derive the clip's target destination (F3) without re-running the
+    // analysis. Null (not omitted) when the matrix never ran — adopt treats that as "no
+    // suggestion" and leaves targetChannel unset.
+    channelScores: s.channel_scores ?? null,
   };
 }
 
