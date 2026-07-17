@@ -7,7 +7,8 @@ fixes obvious mis-recognitions from context. This is STT *cleanup only* — it d
 not summarize, invent, or pick clips.
 
 Timestamps are preserved 1:1 with the input segments (a fully-redundant line just
-becomes empty), so the refined SRT stays perfectly in sync with the video.
+becomes empty), so the refined SRT stays perfectly in sync with the video. Word-level
+timestamps (`words`, present on the whisper path) ride along too, for \\k karaoke burn-in.
 
 Auth: Application Default Credentials — run `gcloud auth application-default login`
 once. No API key; uses the GCP project's Vertex AI.
@@ -91,6 +92,21 @@ def _apply_glossary(text: str, glossary: dict) -> str:
     return text
 
 
+def _apply_glossary_words(words: list, glossary: dict) -> list:
+    """Apply the glossary to each word token too, so word-level karaoke (\\k) in the render
+    shows the same corrected text as the sentence. Single-word fixes (names) apply; multi-
+    word glossary entries just don't match a lone token (harmless). Returns new dicts."""
+    if not words or not glossary:
+        return words or []
+    out = []
+    for w in words:
+        w2 = dict(w) if isinstance(w, dict) else w
+        if isinstance(w2, dict) and isinstance(w2.get("word"), str):
+            w2["word"] = _apply_glossary(w2["word"], glossary)
+        out.append(w2)
+    return out
+
+
 def refine_segments(segments: list[dict]) -> list[dict]:
     """Return segments with cleaned `text`, same length/order/timestamps as input."""
     client = _client()
@@ -131,6 +147,14 @@ def refine_segments(segments: list[dict]) -> list[dict]:
             for j in range(len(batch)):
                 refined[i + j]["text"] = _apply_glossary(batch[j]["text"], glossary)
             print(f"   (batch {i}-{i + len(batch)} failed, kept raw: {str(e)[:120]})")
+
+    # Word-level timestamps ride along on the copied dicts (dict(s) above), which the render
+    # uses for \k karaoke. Apply the glossary to those tokens too so the sung text matches
+    # the cleaned sentence. (Gemini STT yields no words → this is a no-op there; whisper does.)
+    if glossary:
+        for r in refined:
+            if r.get("words"):
+                r["words"] = _apply_glossary_words(r.get("words"), glossary)
 
     return refined
 

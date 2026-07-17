@@ -607,14 +607,13 @@ function assTime(sec: number): string {
  * rebase to render-relative seconds (0-based). Keeps only segments that overlap
  * [winStart, winEnd] and carry text — the spoken subtitles that belong on this clip.
  */
-function windowCaptions(
-  transcript: unknown,
-  winStart: number,
-  winEnd: number,
-): { start: number; end: number; text: string }[] {
+type CaptionWord = { word: string; start: number; end: number };
+type Caption = { start: number; end: number; text: string; words?: CaptionWord[] };
+
+function windowCaptions(transcript: unknown, winStart: number, winEnd: number): Caption[] {
   if (!Array.isArray(transcript)) return [];
   const dur = winEnd - winStart;
-  const out: { start: number; end: number; text: string }[] = [];
+  const out: Caption[] = [];
   for (const s of transcript) {
     const st = Number((s as any)?.start);
     const en = Number((s as any)?.end);
@@ -622,7 +621,24 @@ function windowCaptions(
     if (!text || !isFinite(st) || !isFinite(en) || en <= winStart || st >= winEnd) continue;
     const rs = Math.max(0, st - winStart);
     const re = Math.min(dur, en - winStart);
-    if (re > rs + 0.05) out.push({ start: rs, end: re, text });
+    if (re <= rs + 0.05) continue;
+    const cap: Caption = { start: rs, end: re, text };
+    // Word timings (whisper path) → rebase into the window for \k karaoke. Gemini has none.
+    const raw = (s as any)?.words;
+    if (Array.isArray(raw) && raw.length) {
+      const words: CaptionWord[] = [];
+      for (const w of raw) {
+        const wt = String((w as any)?.word ?? "");
+        const ws0 = Number((w as any)?.start);
+        const we0 = Number((w as any)?.end);
+        if (!wt.trim() || !isFinite(ws0) || !isFinite(we0)) continue;
+        const ws = Math.max(rs, ws0 - winStart);
+        const we = Math.min(re, we0 - winStart);
+        if (we > ws) words.push({ word: wt, start: ws, end: we });
+      }
+      if (words.length) cap.words = words;
+    }
+    out.push(cap);
   }
   return out;
 }
@@ -640,7 +656,7 @@ function buildEditorAss(
   H: number,
   stageH: number,
   durSec: number,
-  captions?: { start: number; end: number; text: string }[],
+  captions?: Caption[],
 ): string | null {
   const scale = H / stageH;
   const end = assTime(durSec);
@@ -670,15 +686,34 @@ function buildEditorAss(
     }
   }
 
-  // STT captions — bottom-center Caption style. On unless editorState explicitly turns
-  // them off (captionsOn === false). karaoke \k needs word timings; refined transcript is
-  // sentence-level, so we show one Dialogue per segment.
+  // STT captions — bottom-center Caption style. On unless editorState explicitly turns them
+  // off (captionsOn === false). When word timings are present (whisper path) we burn \k
+  // karaoke — the sung word sweeps from white to the highlight colour; otherwise one plain
+  // Dialogue per sentence (gemini path). Inline \1c/\2c keep the Caption style unchanged.
   const capOn = es && typeof es === "object" ? es.captionsOn !== false : true;
   if (capOn) {
+    const capHi = hexToAss((es && typeof es === "object" && es.highlightColor) || "#FFD400");
     for (const cap of Array.isArray(captions) ? captions : []) {
       const text = String(cap.text ?? "").trim();
       if (!text || !(cap.end > cap.start)) continue;
-      ev.push(`Dialogue: 0,${assTime(cap.start)},${assTime(cap.end)},Caption,,0,0,0,,${assEscape(text)}`);
+      const start = assTime(cap.start);
+      const end = assTime(cap.end);
+      if (Array.isArray(cap.words) && cap.words.length) {
+        // sung = highlight (\1c), un-sung = white (\2c); \k durations are centiseconds.
+        let k = `{\\2c&H00FFFFFF&\\1c${capHi}}`;
+        let prev = cap.start;
+        for (const w of cap.words) {
+          const ws = Math.max(cap.start, Number(w.start));
+          const we = Math.max(ws, Math.min(cap.end, Number(w.end)));
+          const gap = Math.round((ws - prev) * 100);
+          if (gap > 2) k += `{\\k${gap}}`;
+          k += `{\\k${Math.max(1, Math.round((we - ws) * 100))}}${assEscape(w.word)}`;
+          prev = we;
+        }
+        ev.push(`Dialogue: 0,${start},${end},Caption,,0,0,0,,${k}`);
+      } else {
+        ev.push(`Dialogue: 0,${start},${end},Caption,,0,0,0,,${assEscape(text)}`);
+      }
     }
   }
 
@@ -733,7 +768,7 @@ async function renderClipMedia(opts: {
   title: string;
   editorState?: any;
   aspect?: string;
-  captions?: { start: number; end: number; text: string }[];
+  captions?: Caption[];
 }): Promise<
   | { clipMediaId: string; clipStored: string; thumbStored: string | null;
       cmeta: { durationSec: number; width: number; height: number; codec: string; hasAudio: boolean } }
