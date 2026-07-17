@@ -34,6 +34,7 @@ const EST_VIEWS: Record<DistributionChannel, number> = { smr: 82000, youtube: 12
 const DIST_STATUS_LABEL: Record<string, string> = {
   published: "게시됨",
   scheduled: "예약됨",
+  pending: "업로드 중",
   failed: "실패",
   none: "—",
 };

@@ -156,13 +156,16 @@ export type MetaPlatform = "instagram" | "facebook";
 
 export interface DistributionState {
   channel: DistributionChannel;
-  status: "none" | "scheduled" | "published" | "failed";
+  /** "pending" = upload queued/in-flight on the worker; resolves to published/scheduled/failed. */
+  status: "none" | "pending" | "scheduled" | "published" | "failed";
   reserveDate?: string; // KST, honest scheduling (plan §7.5)
   error?: string;
   /** Channel-specific metadata captured at publish (mirrors STEPD distributions.metadata jsonb). */
   platforms?: MetaPlatform[]; // Meta: which surfaces were published
   /** External ref on the channel — YouTube videoId / Meta post id (→ dist.metadata.youtubeVideoId). */
   externalId?: string;
+  /** YouTube: the connected channel this clip was (or is being) uploaded to. */
+  youtubeChannelId?: string;
 }
 
 // ── Inbox / action-queue item (home screen) ──────────────────────────────────────

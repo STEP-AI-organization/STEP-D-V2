@@ -19,12 +19,14 @@ import type { Clip, DistributionState } from "@/lib/types";
 const CHANNELS = Object.keys(DISTRIBUTION_CHANNELS) as DistributionChannel[];
 const DIST_TONE: Record<DistributionState["status"], StatusTone> = {
   none: "idle",
+  pending: "progress",
   scheduled: "warn",
   published: "done",
   failed: "error",
 };
 const DIST_LABEL: Record<DistributionState["status"], string> = {
   none: "—",
+  pending: "업로드 중",
   scheduled: "예약됨",
   published: "게시됨",
   failed: "실패",

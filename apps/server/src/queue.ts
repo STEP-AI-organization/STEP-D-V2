@@ -18,7 +18,9 @@ export type JobType =
   | "video.comments"
   // Content pipeline (uploaded episodes): STT → refine → scenes → vision → shorts.
   // Distinct from the video.* YouTube-analytics jobs above.
-  | "content.analyze";
+  | "content.analyze"
+  // Distribution: resumable-upload a rendered clip to a connected YouTube channel.
+  | "distribution.publish";
 
 export type JobStatus = "pending" | "running" | "done" | "failed";
 

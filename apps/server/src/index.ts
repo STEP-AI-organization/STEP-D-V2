@@ -948,6 +948,48 @@ app.post("/api/recommendations/:id/reject", async (c) => {
 });
 
 // ── publish clips to one channel ──────────────────────────────────────────────
+//
+// A clip is renderable-shipped once it has the single export render (mediaId) or is already
+// live (plan §2.4: distribution consumes the final render, never a draft). Un-rendered adopts
+// are skipped and reported so the caller can prompt export.
+function isClipRendered(clip: any): boolean {
+  return clip.rendered === true || Boolean(clip.mediaId) || clip.status === "published";
+}
+
+/** Upsert one channel's entry in a clip's distributions array (returns a fresh copy). */
+function upsertDistribution(distributions: any[], channel: string, value: Record<string, unknown>): any[] {
+  const next = (distributions ?? []).map((d: any) => ({ ...d }));
+  const existing = next.find((d: any) => d.channel === channel);
+  if (existing) Object.assign(existing, value);
+  else next.push({ channel, ...value });
+  return next;
+}
+
+/** The upload grant is the plain youtube scope; readonly (analytics) can't upload. */
+const YT_UPLOAD_SCOPE = "https://www.googleapis.com/auth/youtube";
+
+/**
+ * Resolve the connected channel we upload to. A channel can publish only if its consent
+ * included the upload scope (channels connected in analytics mode cannot). `explicitId`
+ * picks a specific channel; otherwise, when exactly one channel is publish-capable we use
+ * it. Returns null when none qualify (caller tells the operator to connect one in publish
+ * mode) or when the id is ambiguous/unknown.
+ */
+async function resolveYouTubePublishChannel(explicitId?: string): Promise<YouTubeChannel | null> {
+  const channels = await listYouTubeChannels();
+  const canPublish = (ch: YouTubeChannel) =>
+    ch.status !== "revoked" && Boolean(ch.refreshToken) &&
+    (ch.scope ?? "").split(" ").includes(YT_UPLOAD_SCOPE);
+  if (explicitId) {
+    const ch = channels.find((c) => c.channelId === explicitId);
+    return ch && canPublish(ch) ? ch : null;
+  }
+  const eligible = channels.filter(canPublish);
+  // Exactly one publish channel is the common case (single operator channel). With several,
+  // require an explicit id rather than guessing which one the operator meant.
+  return eligible.length === 1 ? eligible[0] : null;
+}
+
 app.post("/api/distributions/publish", async (c) => {
   const b = await c.req.json<{
     clipIds: string[];
@@ -955,24 +997,57 @@ app.post("/api/distributions/publish", async (c) => {
     reserveDate?: string;
     scheduled?: boolean;
     platforms?: string[];
+    /** YouTube: which connected channel to upload to (defaults to the sole publish channel). */
+    youtubeChannelId?: string;
+    /** YouTube visibility for an immediate publish. Defaults to "public" (the publish intent). */
+    privacy?: "public" | "unlisted" | "private";
   }>();
-  const status = b.scheduled ? "scheduled" : "published";
-  // Only rendered clips ship (plan §2.4: distribution consumes the final render, never a
-  // draft). A clip is renderable-shipped once it has an encoded media (mediaId) or is
-  // already live. Un-rendered adopts are skipped and reported so the caller can prompt export.
+
   const skipped: string[] = [];
+
+  // ── YouTube: real resumable upload, off-loaded to the worker ──
+  if (b.channel === "youtube") {
+    const target = await resolveYouTubePublishChannel(b.youtubeChannelId);
+    if (!target) {
+      return c.json({
+        error: "no_publish_channel",
+        message: "업로드 권한(게시 모드)으로 연결된 YouTube 채널이 없거나, 여러 채널 중 대상을 지정해야 합니다.",
+      }, 409);
+    }
+    const queued: string[] = [];
+    for (const clipId of b.clipIds) {
+      const clip = await getEntity<any>("clip", clipId);
+      if (!clip) continue;
+      if (!isClipRendered(clip)) { skipped.push(clipId); continue; }
+      // Mark the distribution in-flight, then hand the heavy upload to the worker. The
+      // worker flips 'pending'→'published'/'scheduled'/'failed' and records the videoId.
+      const distributions = upsertDistribution(clip.distributions, "youtube", {
+        status: "pending", youtubeChannelId: target.channelId, error: undefined,
+        ...(b.reserveDate ? { reserveDate: b.reserveDate } : {}),
+      });
+      await putEntity("clip", clipId, { ...clip, distributions });
+      await enqueue("distribution.publish", {
+        clipId,
+        channelId: target.channelId,
+        privacy: b.privacy,
+        // Honest scheduling: a reserveDate only takes effect if it parses to a future instant.
+        publishAt: b.scheduled ? b.reserveDate : undefined,
+      }, { dedupeKey: `distribution.publish:${clipId}` });
+      queued.push(clipId);
+    }
+    return c.json({ ok: true, queued, ...(skipped.length ? { skipped } : {}) });
+  }
+
+  // ── Meta / SMR: still a status-only stub (real push not implemented) ──
+  const status = b.scheduled ? "scheduled" : "published";
   for (const clipId of b.clipIds) {
     const clip = await getEntity<any>("clip", clipId);
     if (!clip) continue;
-    const isRendered = clip.rendered === true || Boolean(clip.mediaId) || clip.status === "published";
-    if (!isRendered) { skipped.push(clipId); continue; }
-    const dists = [...(clip.distributions ?? [])];
-    const value: any = { channel: b.channel, status, reserveDate: b.reserveDate, error: undefined };
+    if (!isClipRendered(clip)) { skipped.push(clipId); continue; }
+    const value: any = { status, reserveDate: b.reserveDate, error: undefined };
     if (b.channel === "meta" && b.platforms) value.platforms = b.platforms;
-    const existing = dists.find((d: any) => d.channel === b.channel);
-    if (existing) Object.assign(existing, value);
-    else dists.push(value);
-    await putEntity("clip", clipId, { ...clip, status: "published", distributions: dists });
+    const distributions = upsertDistribution(clip.distributions, b.channel, value);
+    await putEntity("clip", clipId, { ...clip, status: "published", distributions });
   }
   return c.json({ ok: true, ...(skipped.length ? { skipped } : {}) });
 });
@@ -982,10 +1057,30 @@ app.post("/api/distributions/retry", async (c) => {
   const b = await c.req.json<{ clipId: string; channel: string }>();
   const clip = await getEntity<any>("clip", b.clipId);
   if (!clip) return c.json({ error: "clip not found" }, 404);
-  const dists = (clip.distributions ?? []).map((d: any) =>
+
+  // YouTube: re-run the real upload. Reuse the channel captured at first publish; fall back
+  // to the sole publish channel if the record is missing.
+  if (b.channel === "youtube") {
+    const prev = (clip.distributions ?? []).find((d: any) => d.channel === "youtube");
+    const target = await resolveYouTubePublishChannel(prev?.youtubeChannelId);
+    if (!target) {
+      return c.json({ error: "no_publish_channel", message: "재시도할 YouTube 채널을 찾을 수 없습니다." }, 409);
+    }
+    const distributions = upsertDistribution(clip.distributions, "youtube", {
+      status: "pending", youtubeChannelId: target.channelId, error: undefined,
+    });
+    await putEntity("clip", b.clipId, { ...clip, distributions });
+    await enqueue("distribution.publish", {
+      clipId: b.clipId, channelId: target.channelId,
+      publishAt: prev?.reserveDate,
+    }, { dedupeKey: `distribution.publish:${b.clipId}` });
+    return c.json({ ok: true, queued: true });
+  }
+
+  const distributions = (clip.distributions ?? []).map((d: any) =>
     d.channel === b.channel ? { ...d, status: "published", error: undefined } : d,
   );
-  await putEntity("clip", b.clipId, { ...clip, distributions: dists });
+  await putEntity("clip", b.clipId, { ...clip, distributions });
   return c.json({ ok: true });
 });
 

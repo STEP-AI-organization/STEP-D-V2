@@ -351,6 +351,90 @@ export async function syncChannelVideos(
   return { videos };
 }
 
+// ── video upload (resumable) ──────────────────────────────────────────────────────
+//
+// Uploads one rendered clip to the channel that owns `accessToken`. Uses the resumable
+// protocol (session start → PUT bytes → finalize) even though we send the whole file in a
+// single PUT: rendered clips (shorts / short highlights) are small enough to hold in memory
+// on the worker VM, and one PUT to the session URL is a valid resumable upload. The session
+// framing means a mid-upload network drop can be resumed by a future caller if we ever need
+// to chunk large deliverables — the metadata round-trip stays identical.
+
+export interface VideoUploadMeta {
+  title: string;
+  description?: string;
+  tags?: string[];
+  /** YouTube category id — default 22 (People & Blogs). */
+  categoryId?: string;
+  privacyStatus: "public" | "unlisted" | "private";
+  /** RFC3339. When set, YouTube keeps the video private until this instant, then publishes it.
+   *  Requires privacyStatus "private" — the caller is responsible for pairing them. */
+  publishAt?: string | null;
+  /** COPPA self-declaration — default false. */
+  madeForKids?: boolean;
+}
+
+/**
+ * Resumable-upload a video and return its id. `body` is the full file (rendered clip).
+ * Throws YouTubeApiError on HTTP failure so `withAccessToken` can refresh+retry a 401.
+ */
+export async function uploadVideoResumable(
+  accessToken: string,
+  file: { body: Buffer; contentType?: string },
+  meta: VideoUploadMeta,
+): Promise<{ videoId: string }> {
+  const snippet: Record<string, unknown> = {
+    // YouTube hard-caps: title 100 chars, description 5000. Trim so a long AI title/synopsis
+    // doesn't 400 the whole upload.
+    title: (meta.title || "무제 클립").slice(0, 100),
+    description: (meta.description ?? "").slice(0, 5000),
+    categoryId: meta.categoryId ?? "22",
+  };
+  if (meta.tags?.length) snippet.tags = meta.tags.slice(0, 30);
+
+  const status: Record<string, unknown> = {
+    privacyStatus: meta.publishAt ? "private" : meta.privacyStatus,
+    selfDeclaredMadeForKids: meta.madeForKids ?? false,
+  };
+  if (meta.publishAt) status.publishAt = meta.publishAt;
+
+  const contentType = file.contentType || "video/*";
+
+  // 1) Open the resumable session. The metadata rides in the JSON body; the byte length is
+  //    declared up front so YouTube can validate the later PUT.
+  const startRes = await fetch(
+    "https://www.googleapis.com/upload/youtube/v3/videos?uploadType=resumable&part=snippet,status",
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json; charset=UTF-8",
+        "X-Upload-Content-Type": contentType,
+        "X-Upload-Content-Length": String(file.body.byteLength),
+      },
+      body: JSON.stringify({ snippet, status }),
+    },
+  );
+  if (!startRes.ok) {
+    throw new YouTubeApiError(startRes.status, `Upload session start failed (${startRes.status}): ${await startRes.text()}`);
+  }
+  const uploadUrl = startRes.headers.get("location");
+  if (!uploadUrl) throw new Error("YouTube resumable upload: session URL missing from response");
+
+  // 2) Send the bytes (single chunk) — a 2xx here finalizes the upload and returns the video.
+  const putRes = await fetch(uploadUrl, {
+    method: "PUT",
+    headers: { "Content-Type": contentType },
+    body: file.body,
+  });
+  if (!putRes.ok) {
+    throw new YouTubeApiError(putRes.status, `Upload PUT failed (${putRes.status}): ${await putRes.text()}`);
+  }
+  const data = (await putRes.json()) as { id?: string };
+  if (!data.id) throw new Error("YouTube upload: response had no video id");
+  return { videoId: data.id };
+}
+
 // ── Shorts classification ─────────────────────────────────────────────────────────
 //
 // The Data API exposes no "is this a Short?" field, and duration is unreliable (Shorts
