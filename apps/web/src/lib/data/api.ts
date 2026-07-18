@@ -589,3 +589,52 @@ export async function fetchVideoAnalytics(videoId: string): Promise<VideoAnalyti
 export async function deleteTrackedVideo(videoId: string): Promise<void> {
   await fetch(`${API_BASE}/youtube/videos/${videoId}`, { method: "DELETE" });
 }
+
+// ── ops/diagnostics (superadmin /ops dashboard) ─────────────────────────────────
+export interface OpsJob {
+  id: string;
+  type: string;
+  payload: Record<string, unknown>;
+  status: "pending" | "running" | "done" | "failed";
+  attempts: number;
+  maxAttempts: number;
+  runAfter: number;
+  lockedAt: number | null;
+  error: string | null;
+  createdAt: number;
+  updatedAt: number;
+}
+export interface OpsJobsResponse {
+  jobs: OpsJob[];
+  stats: { pending: number; running: number; done: number; failed: number };
+}
+/** Live job list + queue depth for the ops dashboard. */
+export async function fetchOpsJobs(limit = 100): Promise<OpsJobsResponse> {
+  return json<OpsJobsResponse>(await fetch(`${API_BASE}/admin/jobs?limit=${limit}`, { cache: "no-store" }));
+}
+
+export interface OpsMediaRow {
+  mediaId: string;
+  episodeId: string | null;
+  title: string;
+  durationSec: number;
+  hasAudio: boolean;
+  createdAt: number;
+  analysis: {
+    status: "pending" | "done" | "failed";
+    error: string | null;
+    genre: string | null;
+    scenes: number | null;
+    shorts: number | null;
+    cast: number | null;
+    stagesDone: string[] | null;
+    hasData: boolean;
+    tookMs: number;
+    updatedAt: number;
+  } | null;
+  pipeline: { stage?: string; stageStatus?: string; progress?: number; note?: string; blockedReason?: string } | null;
+}
+/** Per-uploaded-video analysis summary (status, counts, error, live stage) for the dashboard. */
+export async function fetchOpsMediaAnalysis(): Promise<{ media: OpsMediaRow[] }> {
+  return json<{ media: OpsMediaRow[] }>(await fetch(`${API_BASE}/admin/media-analysis`, { cache: "no-store" }));
+}

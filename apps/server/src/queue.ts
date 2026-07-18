@@ -193,6 +193,24 @@ export async function requeueStale(): Promise<number> {
   return rowCount ?? 0;
 }
 
+/**
+ * List individual jobs for the ops dashboard — newest activity first. Postgres lowercases
+ * unquoted identifiers, so every camelCase column is aliased (same as claimJob's RETURNING).
+ */
+export async function listJobs(limit = 100): Promise<Job[]> {
+  const { rows } = await getPool().query(
+    `SELECT id, type, payload, status, attempts,
+            maxattempts AS "maxAttempts", runafter AS "runAfter",
+            lockedat AS "lockedAt", error,
+            createdat AS "createdAt", updatedat AS "updatedAt"
+       FROM job_queue
+      ORDER BY updatedAt DESC
+      LIMIT $1`,
+    [Math.max(1, Math.min(500, limit))],
+  );
+  return rows as Job[];
+}
+
 export async function queueStats(): Promise<Record<JobStatus, number>> {
   const { rows } = await getPool().query(
     `SELECT status, COUNT(*)::int AS n FROM job_queue GROUP BY status`,

@@ -46,6 +46,8 @@ import {
   getChannelAnalytics,
   markContentAnalysisPending,
   getContentAnalysis,
+  listContentAnalysisSummary,
+  listEntities,
   getTranscript,
   listProgramCast,
   getCastMember,
@@ -83,7 +85,7 @@ import {
 } from "./youtube.ts";
 import { SHORTS_PROBE_MAX_PER_SYNC, SHORTS_PROBE_CONCURRENCY } from "./config.ts";
 import { runChannelPipeline, runDueChannels } from "./channel-pipeline.ts";
-import { initQueue, enqueue, queueStats } from "./queue.ts";
+import { initQueue, enqueue, queueStats, listJobs } from "./queue.ts";
 import {
   uploadPath,
   thumbPath,
@@ -2084,6 +2086,60 @@ app.post("/api/youtube/pipeline/run/:channelId", async (c) => {
 
 /** Queue depth — the quickest way to tell whether the worker VM is alive. */
 app.get("/api/queue/stats", async (c) => c.json(await queueStats()));
+
+// ── ops/diagnostics: raw queue + per-media analysis (superadmin dashboard /ops) ──
+/** Individual jobs, newest activity first — the live view of what the worker is doing. */
+app.get("/api/admin/jobs", async (c) => {
+  const limit = Number(c.req.query("limit")) || 100;
+  const jobs = await listJobs(limit);
+  return c.json({ jobs, stats: await queueStats() });
+});
+
+/**
+ * Per-uploaded-video summary: analysis status + scene/shorts/cast counts + genre + error +
+ * the episode's live pipeline stage/progress. One row per master media — the "what came out
+ * of each upload, and what broke" table. Drill-down stays on GET /api/media/:id/analysis.
+ */
+app.get("/api/admin/media-analysis", async (c) => {
+  const [media, summaries, episodes] = await Promise.all([
+    listMedia(),
+    listContentAnalysisSummary(),
+    listEntities<any>("episode"),
+  ]);
+  const byMedia = new Map(summaries.map((s) => [s.mediaId, s]));
+  const epById = new Map(episodes.map((e) => [e.id, e]));
+  const rows = media
+    .filter((m) => m.role === "master")
+    .sort((a, b) => b.createdAt - a.createdAt)
+    .map((m) => {
+      const ca = byMedia.get(m.id);
+      const ep = m.episodeId ? epById.get(m.episodeId) : undefined;
+      return {
+        mediaId: m.id,
+        episodeId: m.episodeId,
+        title: m.title,
+        durationSec: m.durationSec,
+        hasAudio: !!m.hasAudio,
+        createdAt: m.createdAt,
+        analysis: ca
+          ? {
+              status: ca.status,
+              error: ca.error,
+              genre: ca.genre,
+              scenes: ca.scenes,
+              shorts: ca.shorts,
+              cast: ca.cast,
+              stagesDone: ca.stagesDone,
+              hasData: ca.hasData,
+              tookMs: ca.updatedAt - ca.createdAt,
+              updatedAt: ca.updatedAt,
+            }
+          : null,
+        pipeline: ep?.pipeline ?? null,
+      };
+    });
+  return c.json({ media: rows });
+});
 
 /** Stored daily analytics for a channel — served from our DB, not YouTube. */
 app.get("/api/youtube/analytics/:channelId/daily", async (c) => {

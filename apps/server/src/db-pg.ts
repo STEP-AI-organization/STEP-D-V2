@@ -933,6 +933,40 @@ export async function getContentAnalysis(mediaId: string): Promise<ContentAnalys
   return rows[0] as ContentAnalysis | undefined;
 }
 
+export interface ContentAnalysisSummary {
+  mediaId: string;
+  status: string;
+  error: string | null;
+  scenes: number | null;
+  shorts: number | null;
+  cast: number | null;
+  genre: string | null;
+  stagesDone: string[] | null;
+  hasData: boolean;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/**
+ * Per-media analysis summary for the ops dashboard — counts/status/error only, WITHOUT
+ * pulling the (potentially large) transcript+scenes blob for every row. jsonb_typeof guards
+ * so a null/failed/partial `data` yields null counts instead of erroring.
+ */
+export async function listContentAnalysisSummary(): Promise<ContentAnalysisSummary[]> {
+  const { rows } = await pool.query(
+    `SELECT mediaid AS "mediaId", status, error,
+            createdat AS "createdAt", updatedat AS "updatedAt",
+            (data IS NOT NULL) AS "hasData",
+            data->>'genre' AS "genre",
+            CASE WHEN jsonb_typeof(data->'stagesDone')='array' THEN data->'stagesDone' END AS "stagesDone",
+            CASE WHEN jsonb_typeof(data->'scenes')='array' THEN jsonb_array_length(data->'scenes') END AS "scenes",
+            CASE WHEN jsonb_typeof(data->'shorts')='array' THEN jsonb_array_length(data->'shorts') END AS "shorts",
+            CASE WHEN jsonb_typeof(data->'cast'->'people')='array' THEN jsonb_array_length(data->'cast'->'people') END AS "cast"
+       FROM content_analysis`,
+  );
+  return rows as ContentAnalysisSummary[];
+}
+
 // ── transcript (canonical STT store, shared across consumers) ────────────────────
 //
 // One row per media (mediaId PK). `segments` holds utterance-level segments with word
