@@ -9,7 +9,6 @@ algorithm judged least likely to be a payoff moment.
 
 Signals (each isolated + optional; a missing lib or a bad frame contributes 0):
   - faces     : OpenCV Haar cascade face count on the representative frame
-  - motion    : OpenCV Farneback optical-flow magnitude between two in-scene frames
   - audio     : librosa onset strength (or numpy RMS fallback) over the scene's audio
   - caption   : Canny edge density in the lower third (broadcast burn-in captions live there)
   - dialogue  : transcript char density (chars / second)
@@ -34,9 +33,9 @@ from typing import Callable, Optional
 VISION_PREFILTER = (os.environ.get("VISION_PREFILTER") or "on").lower() not in ("off", "0", "false", "none", "")
 VISION_GEMINI_MAX = int(os.environ.get("VISION_GEMINI_MAX") or 30)
 
-# Signal weights (sum ≈ 1). Faces + motion carry the most: a payoff moment is usually a
-# reacting person and/or physical action. Tune via the env-free constant if needed.
-WEIGHTS = {"faces": 0.25, "motion": 0.25, "audio": 0.20, "caption": 0.15, "dialogue": 0.15}
+# Signal weights (sum ≈ 1). Faces carry the most: a payoff moment is usually a
+# reacting person. Tune via the env-free constant if needed.
+WEIGHTS = {"faces": 0.35, "audio": 0.25, "caption": 0.20, "dialogue": 0.20}
 
 
 # ── optional-dependency guards ──────────────────────────────────────────────────
@@ -76,29 +75,6 @@ def _caption_likeness(cv2, img) -> float:
         gray = cv2.cvtColor(band, cv2.COLOR_BGR2GRAY)
         edges = cv2.Canny(gray, 100, 200)
         return float((edges > 0).mean())
-    except Exception:
-        return 0.0
-
-
-def _motion(cv2, cap, t1: float, t2: float) -> float:
-    """Mean optical-flow magnitude between two frames sampled inside the scene."""
-    try:
-        def grab(t):
-            cap.set(cv2.CAP_PROP_POS_MSEC, t * 1000.0)
-            ok, fr = cap.read()
-            if not ok or fr is None:
-                return None
-            w = 320
-            fr = cv2.resize(fr, (w, max(1, int(w * fr.shape[0] / fr.shape[1]))))
-            return cv2.cvtColor(fr, cv2.COLOR_BGR2GRAY)
-
-        a = grab(t1)
-        b = grab(t2)
-        if a is None or b is None or a.shape != b.shape:
-            return 0.0
-        flow = cv2.calcOpticalFlowFarneback(a, b, None, 0.5, 3, 15, 3, 5, 1.2, 0)
-        mag = (flow[..., 0] ** 2 + flow[..., 1] ** 2) ** 0.5
-        return float(mag.mean())
     except Exception:
         return 0.0
 
@@ -165,20 +141,15 @@ def score_scenes_heuristic(
     if not targets:
         return
 
-    raw = {id(s): {"faces": 0.0, "motion": 0.0, "audio": 0.0, "caption": 0.0, "dialogue": 0.0} for s in targets}
+    raw = {id(s): {"faces": 0.0, "audio": 0.0, "caption": 0.0, "dialogue": 0.0} for s in targets}
 
-    # Visual signals (faces, caption band, motion) — need OpenCV.
+    # Visual signals (faces, caption band) — need OpenCV.
     face_clf = None
-    cap = None
     if cv2 is not None:
         try:
             face_clf = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
         except Exception:
             face_clf = None
-        try:
-            cap = cv2.VideoCapture(video_path)
-        except Exception:
-            cap = None
 
     for i, s in enumerate(targets):
         r = raw[id(s)]
@@ -194,17 +165,8 @@ def score_scenes_heuristic(
                 if face_clf is not None:
                     r["faces"] = _face_count(face_clf, cv2, img)
                 r["caption"] = _caption_likeness(cv2, img)
-            if cap is not None:
-                st = float(s.get("start", 0))
-                en = float(s.get("end", st + 1))
-                r["motion"] = _motion(cv2, cap, st + (en - st) * 0.33, st + (en - st) * 0.66)
         if on_progress:
             on_progress(i + 1, len(targets))
-    if cap is not None:
-        try:
-            cap.release()
-        except Exception:
-            pass
 
     # Audio signal — one wav extract for the whole video, then per-scene energy.
     librosa = _try_librosa()

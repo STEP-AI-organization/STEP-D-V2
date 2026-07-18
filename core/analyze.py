@@ -235,30 +235,15 @@ def analyze(
     ts = time.time()
     pending = sum(1 for s in scenes if s.get("frame") and not _frame_done(s))
     if pending:
-        # 4a) OCR baseline — PaddleOCR reads burned-in text off ALL frames locally (cheap).
-        # Gemini (top-N below) then re-reads only the frames it also scores = validation.
-        # No-op when OCR_PROVIDER=off or PaddleOCR is missing (Gemini-only OCR, as before).
-        try:
-            from .ocr import ocr_scenes, enabled as ocr_enabled
-            if ocr_enabled():
-                step("프레임 OCR 사전추출 (PaddleOCR)…")
-                scenes = ocr_scenes(
-                    scenes, out_dir,
-                    on_progress=lambda d, t: _progress("frames", 45 + 2 * d / max(1, t), f"OCR 사전추출 {d}/{t}"),
-                )
-                _save_json(out_dir / "scenes.json", scenes)
-        except Exception as e:
-            step(f"  (OCR 사전추출 건너뜀: {str(e)[:70]})")
-
-        # 4b) algorithmic pre-filter — score every scene cheaply (faces/motion/audio/
-        # caption/dialogue) and send only the top-N frames to Gemini. The rest keep a
-        # heuristic vision_score (+ the PaddleOCR text above) and are skipped, cutting
-        # Gemini image calls ~85%. No-op when VISION_PREFILTER=off or OpenCV is missing.
+        # 4a) algorithmic pre-filter — score every scene cheaply (faces/audio/caption/
+        # dialogue) and send only the top-N frames to Gemini. The rest keep a heuristic
+        # vision_score and are skipped, cutting Gemini image calls ~85%. No-op when
+        # VISION_PREFILTER=off or OpenCV is missing.
         try:
             from .prefilter import select_for_vision
             sent = select_for_vision(
                 scenes, str(video_path), out_dir,
-                on_progress=lambda d, t: _progress("frames", 47 + 2 * d / max(1, t), f"장면 사전필터 {d}/{t}"),
+                on_progress=lambda d, t: _progress("frames", 45 + 4 * d / max(1, t), f"장면 사전필터 {d}/{t}"),
             )
             if sent is not None:
                 _save_json(out_dir / "scenes.json", scenes)  # persist heur + prefilled scores
