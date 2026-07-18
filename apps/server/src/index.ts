@@ -1261,6 +1261,29 @@ function ffVolumeFilter(track: any): string | null {
 }
 
 /**
+ * Uniform playback speed to bake, from EditorState. Only the global `speed` (the timeline's
+ * ×-button) is baked; per-track speedPoints (ramping) are variable-rate and need a
+ * multi-segment render, so they're deferred — returning 1 there keeps the render at normal
+ * speed rather than faking a ramp as uniform (which would mismatch the preview).
+ */
+function uniformSpeed(es: any): number {
+  const mt = Array.isArray(es?.tracks) ? es.tracks[0] : undefined;
+  if (Array.isArray(mt?.speedPoints) && mt.speedPoints.length > 0) return 1;
+  const s = Number(es?.speed ?? 1);
+  return isFinite(s) && s > 0 ? s : 1;
+}
+
+/** ffmpeg atempo is limited to [0.5, 2] per instance — chain to reach any factor. */
+function atempoChain(speed: number): string {
+  let s = speed;
+  const parts: string[] = [];
+  while (s > 2.0 + 1e-9) { parts.push("atempo=2.0"); s /= 2; }
+  while (s < 0.5 - 1e-9) { parts.push("atempo=0.5"); s *= 2; }
+  parts.push(`atempo=${s.toFixed(4)}`);
+  return parts.join(",");
+}
+
+/**
  * Render one clip's segment into the final deliverable — the ONE expensive render (plan
  * §2.4 deferred-render invariant), called only from /clips/:id/export. Reframes to the
  * chosen aspect (blur-cover 9:16) and burns the editorState overlays via libass. A plain
@@ -1298,25 +1321,27 @@ async function renderClipMedia(opts: {
   const ass = buildEditorAss(editorState, W, H, stageH, endTime - startTime, opts.captions);
   if (ass) fs.writeFileSync(assTmp, ass, "utf-8");
 
-  // Bake the main track's colour grade + volume into the render — previously these were
-  // preview-only (CSS), so the deliverable silently ignored the operator's edits.
+  // Bake the main track's colour grade + volume + uniform speed into the render — previously
+  // these were preview-only, so the deliverable silently ignored the operator's edits.
   const mainTrack = Array.isArray(editorState?.tracks) ? editorState.tracks[0] : undefined;
   const videoFilters = ffGradeFilter(mainTrack?.filters);
-  const audioFilter = master.hasAudio ? ffVolumeFilter(mainTrack) : null;
+  const speed = uniformSpeed(editorState);
+  const audioParts = [ffVolumeFilter(mainTrack), speed !== 1 ? atempoChain(speed) : null].filter(Boolean) as string[];
+  const audioFilter = master.hasAudio && audioParts.length ? audioParts.join(",") : null;
 
   // ffmpeg reads the master directly. For GCS we hand it a short-lived signed URL and seek
   // via HTTP range (-ss before -i) — only the requested segment is fetched, so a multi-hour
   // master never lands in Cloud Run's RAM.
   const srcPath = useGcs() ? await signedReadUrl(masterObjPath) : master.path;
   try {
-    if (!ass && !videoFilters && !audioFilter && aspect === "16:9") {
+    if (!ass && !videoFilters && !audioFilter && speed === 1 && aspect === "16:9") {
       // Fast path only when there's genuinely nothing to bake (no overlays, no grade, no
-      // volume change, native 16:9). Any edit routes through renderShort so it lands.
+      // volume change, no speed change, native 16:9). Any edit routes through renderShort.
       await trimEncode(srcPath, startTime, endTime, tmpPath);
     } else {
       await renderShort({
         inputPath: srcPath, startTime, endTime, outputPath: tmpPath, width: W, height: H,
-        assPath: ass ? assTmp : null, videoFilters, audioFilter,
+        assPath: ass ? assTmp : null, videoFilters, audioFilter, speed,
       });
     }
     const cmeta = await probe(tmpPath).catch(() => ({
@@ -1657,10 +1682,14 @@ app.post("/api/clips/:id/export", async (c) => {
   // deranks over-length candidates rather than dropping them), the render clamps. It is
   // reported back as `capped` rather than silently truncated: the operator asked for a
   // longer segment and deserves to know the deliverable is shorter than the segment.
+  // The delivered length is the segment scaled by playback speed (2× fast halves it), so the
+  // maxSec cap must clamp the OUTPUT length, not the raw segment — otherwise a slowed clip
+  // could still overrun YouTube's 60s Shorts limit.
+  const spd = uniformSpeed(es);
   let capped: { maxSec: number; requestedSec: number } | null = null;
-  if (preset && renderEnd - renderStart > preset.maxSec) {
-    capped = { maxSec: preset.maxSec, requestedSec: Number((renderEnd - renderStart).toFixed(2)) };
-    renderEnd = renderStart + preset.maxSec;
+  if (preset && (renderEnd - renderStart) / spd > preset.maxSec) {
+    capped = { maxSec: preset.maxSec, requestedSec: Number(((renderEnd - renderStart) / spd).toFixed(2)) };
+    renderEnd = renderStart + preset.maxSec * spd; // segment length that yields maxSec output
   }
 
   // Cache hit: identical decisions already rendered — don't re-encode.

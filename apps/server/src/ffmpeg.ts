@@ -127,9 +127,13 @@ export type RenderShortOpts = {
   /** Optional ffmpeg video-filter fragment (colour grade), e.g. "eq=contrast=1.20,colorbalance=rm=0.15".
    *  Applied to the composited frame before the ASS burn so overlays stay ungraded. */
   videoFilters?: string | null;
-  /** Optional ffmpeg audio-filter fragment, e.g. "volume=0.500". Only pass when the source
-   *  actually has an audio stream (ffmpeg errors on -af with no audio). */
+  /** Optional ffmpeg audio-filter fragment, e.g. "volume=0.500" (may already include atempo
+   *  for speed). Only pass when the source actually has an audio stream (ffmpeg errors on -af
+   *  with no audio). */
   audioFilter?: string | null;
+  /** Uniform playback speed (1 = normal, 2 = 2× fast, 0.5 = half). Burned via setpts AFTER
+   *  the ASS/overlay burn so captions speed up in sync. Audio atempo is expected in audioFilter. */
+  speed?: number;
 };
 
 /**
@@ -142,6 +146,10 @@ export function renderShort(opts: RenderShortOpts): Promise<void> {
   const { inputPath, startTime, endTime, outputPath, width: W, height: H, assPath, videoFilters, audioFilter } = opts;
   const duration = endTime - startTime;
   if (duration <= 0) return Promise.reject(new Error("Invalid render duration"));
+  const speed = opts.speed && opts.speed > 0 ? opts.speed : 1;
+  // Sped-up video is shorter (duration/speed); the output -t must match or slow-mo would be
+  // truncated back to the source length.
+  const outDur = duration / speed;
 
   // Blurred cover behind a fit-to-frame foreground → 9:16 (or any target) with no letterbox.
   let vf =
@@ -162,12 +170,18 @@ export function renderShort(opts: RenderShortOpts): Promise<void> {
     vf += `;${last}ass='${esc}'[vout]`;
     last = "[vout]";
   }
+  // Speed LAST — after the burn, so the captions/overlays already baked into the frames
+  // speed up in lockstep and never desync.
+  if (speed !== 1) {
+    vf += `;${last}setpts=PTS/${speed}[vspd]`;
+    last = "[vspd]";
+  }
 
   const args = [
     "-y",
     "-ss", String(startTime),
     "-i", inputPath,
-    "-t", String(duration),
+    "-t", String(outDur),
     "-filter_complex", vf,
     "-map", last,
     "-map", "0:a?",
