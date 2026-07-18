@@ -42,8 +42,9 @@ from .refine import refine_segments
 from .scenes import build_scenes, extract_frame
 from .vision import analyze_frames, _frame_done
 from .recommend import recommend
+from .narrative import build_narrative
 
-CHECKPOINTS = ("stt.json", "refined.json", "scenes.json", "cast.json", "timeline.json", "shorts.json", "analysis.json")
+CHECKPOINTS = ("stt.json", "refined.json", "scenes.json", "cast.json", "timeline.json", "narrative.json", "shorts.json", "analysis.json")
 
 
 # ── checkpoint plumbing ─────────────────────────────────────────────────────────
@@ -100,6 +101,7 @@ def _prepare_checkpoints(
     # carry no fingerprint and survive any param change.
     params = {
         "cast.json": _fingerprint(cast_registry),
+        "narrative.json": _fingerprint(cast_registry),
         "shorts.json": _fingerprint(genre, shorts_n, profile, channels),
         "analysis.json": _fingerprint(genre, shorts_n, profile, channels, cast_registry),
     }
@@ -325,6 +327,27 @@ def analyze(
                 step(f"  (포트레이트 건너뜀: {str(e)[:70]})")
     timed("portraits", ts)
 
+    # 4f) narrative summary — 전체 서사 요약 + 구간별/인물/갈등 분석 (timeline 없어도 refined만으로 동작)
+    ts = time.time()
+    narrative = _load_json(out_dir / "narrative.json")
+    if isinstance(narrative, dict) and narrative.get("full_summary") and narrative.get("segments"):
+        step(f"서사 요약 — 체크포인트 재사용 ({len(narrative['segments'])} 구간)")
+    else:
+        try:
+            _progress("narrative", 82, "서사 요약 생성")
+            narrative = build_narrative(
+                refined, scenes, cast, timeline,
+                on_progress=lambda done, total: _progress("narrative", 82 + 3 * done / max(1, total), f"서사 요약 {done}/{total} 배치"),
+            )
+            _save_json(out_dir / "narrative.json", narrative)
+            step(f"서사 요약 — {len(narrative.get('segments', []))} 구간 · 갈등 {len(narrative.get('key_conflicts', []))}건")
+        except Exception as e:
+            step(f"  (서사 요약 건너뜀: {str(e)[:70]})")
+            import traceback
+            traceback.print_exc()
+            narrative = None
+    timed("narrative", ts)
+
     # 5) shorts recommendation (two-phase, genre-aware) ---------------------------
     ts = time.time()
     rec = _load_json(out_dir / "shorts.json")
@@ -334,10 +357,10 @@ def analyze(
     # genuinely-empty leftovers.
     if not (isinstance(rec, dict) and isinstance(rec.get("shorts"), list) and rec.get("shorts")):
         step("쇼츠 추천…")
-        _progress("recommend", 82, "쇼츠 추천 중")
+        _progress("recommend", 85, "쇼츠 추천 중")
         rec = recommend(
             scenes, n=shorts_n, genre=genre, profile=profile, channels=channels,
-            on_progress=lambda done, total: _progress("recommend", 82 + 12 * done / max(1, total), f"후보 추출 {done}/{total} 구간"),
+            on_progress=lambda done, total: _progress("recommend", 85 + 10 * done / max(1, total), f"후보 추출 {done}/{total} 구간"),
         )
         _save_json(out_dir / "shorts.json", rec)
     else:
@@ -357,6 +380,7 @@ def analyze(
         "scenes": scenes,
         "cast": cast,
         "timeline": timeline,
+        "narrative": narrative,
         "shorts": shorts,
         "took_sec": round(time.time() - t0, 1),
         "stage_sec": stage_took,

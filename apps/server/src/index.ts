@@ -186,6 +186,45 @@ app.get("/api/programs/:id", async (c) => {
   return c.json({ program });
 });
 
+// ── update a program (partial merge — only fields present in the body change) ──
+app.patch("/api/programs/:id", async (c) => {
+  const id = c.req.param("id");
+  const program = await getEntity<Record<string, unknown>>("program", id);
+  if (!program) return c.json({ error: "program not found" }, 404);
+  const body = await c.req.json().catch(() => ({}) as Record<string, unknown>);
+
+  const next: Record<string, unknown> = { ...program };
+  if (typeof body.title === "string" && body.title.trim()) next.title = body.title.trim();
+  if (typeof body.section === "string" && body.section.trim()) next.section = body.section.trim();
+  if (typeof body.targetAge === "number") next.targetAge = body.targetAge;
+  if (Array.isArray(body.cast)) {
+    next.cast = body.cast.filter((x: unknown): x is string => typeof x === "string");
+  }
+
+  // SMR: merge onto the existing config so fields absent from the body survive; an
+  // explicitly-sent empty value clears that field (the edit UI sends what it manages).
+  const smr = { ...((program.smr as Record<string, unknown> | undefined) ?? {}) };
+  if (typeof body.programCode === "string") {
+    const code = body.programCode.trim().toLowerCase();
+    if (code) smr.programCode = code;
+    else delete smr.programCode;
+  }
+  if (typeof body.category === "string") {
+    if (body.category.trim()) smr.category = body.category.trim();
+    else delete smr.category;
+  }
+  if (Array.isArray(body.weekdays)) {
+    const days = body.weekdays.filter((n: unknown): n is number => typeof n === "number" && n >= 0 && n <= 6);
+    if (days.length) smr.weekdays = days;
+    else delete smr.weekdays;
+  }
+  if (Object.keys(smr).length) next.smr = smr;
+  else delete next.smr;
+
+  await putEntity("program", id, next);
+  return c.json({ program: next });
+});
+
 // ── generate an understanding profile via Vertex Gemini (3 modes) ──
 // mode: direct(프로그램명/장르/설명) · websearch(프로그램명→웹검색+sources) · planning(기획정보).
 // Returns a normalized profile; the caller reviews then POST/PATCHes it onto a program.

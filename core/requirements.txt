@@ -8,8 +8,7 @@ google-genai>=1.0.0
 
 # Scene segmentation (scenes.py) — shot-change detection + frame extraction.
 # opencv also powers the algorithmic scene pre-filter (prefilter.py): Haar face count +
-# Farneback optical-flow motion + Canny caption-band density, to send only the top-N
-# frames to Gemini Vision.
+# Canny caption-band density, to send only the top-N frames to Gemini Vision.
 scenedetect>=0.6
 opencv-python>=4.8
 

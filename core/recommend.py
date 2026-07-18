@@ -484,7 +484,7 @@ HEUR_MAX_SEC = 60.0      # the floor never cuts longer than this (validate's 180
 
 def _scene_signal(s: dict) -> float:
     """0-1 'this is a payoff moment' score from whatever signals a scene carries —
-    Gemini/heuristic vision score, dialogue density, on-screen captions, motion."""
+    Gemini/heuristic vision score, dialogue density, on-screen captions."""
     vs = s.get("vision_score")
     vis = (float(vs) / 100.0) if isinstance(vs, (int, float)) else 0.4
     hs = s.get("heur_score")

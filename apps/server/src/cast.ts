@@ -38,6 +38,8 @@ export interface CastMemberInput {
   role: string;
   season: string;
   note: string;
+  /** Display-only profile image URL (operator-entered) — never used for matching. */
+  imageUrl?: string;
 }
 
 const asString = (v: unknown, fallback = ""): string =>
@@ -54,6 +56,9 @@ export function normalizeCastInput(raw: unknown): CastMemberInput | null {
   const r = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
   const name = asString(r.name);
   if (!name) return null;
+  // Only https URLs are stored — anything else (http, data:, javascript:, plain text) degrades
+  // to '' so the client never renders an untrusted scheme.
+  const imageUrl = asString(r.imageUrl);
   return {
     name,
     // A name that also appears in aliases is noise — the matcher tries the canonical name first.
@@ -61,6 +66,7 @@ export function normalizeCastInput(raw: unknown): CastMemberInput | null {
     role: asString(r.role),
     season: asString(r.season),
     note: asString(r.note),
+    imageUrl: imageUrl.startsWith("https://") ? imageUrl : "",
   };
 }
 

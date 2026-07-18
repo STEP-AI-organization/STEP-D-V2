@@ -1076,6 +1076,8 @@ export interface CastMember {
   role: string;
   season: string;
   note: string;
+  /** Display-only profile image URL — '' when none. Matching stays caption-based. */
+  imageUrl?: string;
   createdAt: number;
   updatedAt: number;
 }
@@ -1106,7 +1108,7 @@ export interface EpisodeCastRow {
 }
 
 const CAST_COLS = `castid AS "castId", programid AS "programId", name, aliases, role, season, note,
-                   createdat AS "createdAt", updatedat AS "updatedAt"`;
+                   imageurl AS "imageUrl", createdat AS "createdAt", updatedat AS "updatedAt"`;
 
 export async function listProgramCast(programId: string): Promise<CastMember[]> {
   const { rows } = await pool.query(
@@ -1127,13 +1129,13 @@ export async function upsertCastMember(
 ): Promise<void> {
   const now = Date.now();
   await pool.query(
-    `INSERT INTO program_cast (castId, programId, name, aliases, role, season, note, createdAt, updatedAt)
-     VALUES ($1,$2,$3,$4::jsonb,$5,$6,$7,$8,$8)
+    `INSERT INTO program_cast (castId, programId, name, aliases, role, season, note, imageUrl, createdAt, updatedAt)
+     VALUES ($1,$2,$3,$4::jsonb,$5,$6,$7,$8,$9,$9)
      ON CONFLICT (castId) DO UPDATE SET
        programId = EXCLUDED.programId, name = EXCLUDED.name, aliases = EXCLUDED.aliases,
        role = EXCLUDED.role, season = EXCLUDED.season, note = EXCLUDED.note,
-       updatedAt = EXCLUDED.updatedAt`,
-    [m.castId, m.programId, m.name, JSON.stringify(m.aliases ?? []), m.role ?? "", m.season ?? "", m.note ?? "", now],
+       imageUrl = EXCLUDED.imageUrl, updatedAt = EXCLUDED.updatedAt`,
+    [m.castId, m.programId, m.name, JSON.stringify(m.aliases ?? []), m.role ?? "", m.season ?? "", m.note ?? "", m.imageUrl ?? "", now],
   );
 }
 
