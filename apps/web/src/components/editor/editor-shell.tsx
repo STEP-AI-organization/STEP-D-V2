@@ -2,14 +2,17 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { ArrowLeft, Save, Send, Info, Check, Sparkles, Film } from "lucide-react";
+import { ArrowLeft, Save, Send, Info, Check, Sparkles, Film, Plus } from "lucide-react";
 import { useAppData } from "@/lib/data/store";
 import { getStreamUrl, getMediaAnalysis, type AnalysisTranscriptSegment } from "@/lib/data/api";
 import {
   applyTemplate,
+  ensureTracks,
   makeInitialEditorState,
   type EditorState,
+  type EditorTrack,
 } from "@/lib/editor/presets";
+import { useEditorHistory } from "@/lib/editor/useEditorHistory";
 import { formatDuration } from "@/lib/utils";
 import { EditorPreview } from "@/components/editor/editor-preview";
 import { EditorPanel } from "@/components/editor/editor-panel";
@@ -63,8 +66,16 @@ export function EditorShell({ clipId }: { clipId: string }) {
     };
   }, [transcriptMediaId, previewingMaster]);
 
-  const [state, setState] = useState<EditorState>(
-    () => clip?.editorState ?? makeInitialEditorState(title, duration),
+  const {
+    state,
+    setState,
+    undo,
+    redo,
+    reset,
+    canUndo,
+    canRedo,
+  } = useEditorHistory(() =>
+    clip?.editorState ? ensureTracks(clip.editorState, duration) : makeInitialEditorState(title, duration),
   );
   const [saved, setSaved] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -111,7 +122,7 @@ export function EditorShell({ clipId }: { clipId: string }) {
   // hard refresh). Keyed on clip id so it runs on first arrival, never clobbering edits.
   useEffect(() => {
     if (clip?.editorState) {
-      setState(clip.editorState);
+      reset(ensureTracks(clip.editorState, duration));
       setSaved(true);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -152,15 +163,64 @@ export function EditorShell({ clipId }: { clipId: string }) {
     setState((s) => ({ ...s, ...patch }));
     setSaved(false);
   };
+
+  // Ctrl+Z / Ctrl+Y (and Ctrl+Shift+Z) — skipped while typing so text fields keep native undo.
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+      const key = e.key.toLowerCase();
+      if (key === "z" && !e.shiftKey) {
+        if (canUndo) {
+          e.preventDefault();
+          undo();
+          setSaved(false);
+        }
+      } else if (key === "y" || (key === "z" && e.shiftKey)) {
+        if (canRedo) {
+          e.preventDefault();
+          redo();
+          setSaved(false);
+        }
+      }
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [undo, redo, canUndo, canRedo]);
   const applyTpl = (id: EditorState["templateId"]) => setState((s) => applyTemplate(s, id));
 
   function applyRec(rec: Recommendation) {
-    setState((s) => ({
-      ...s,
-      titleLines: [{ ...s.titleLines[0], text: rec.title }, ...s.titleLines.slice(1)],
-      trimIn: 0,
-      trimOut: Math.max(1, rec.endTime - rec.startTime),
-    }));
+    setState((s) => {
+      const trimIn = 0;
+      const trimOut = Math.max(1, rec.endTime - rec.startTime);
+      const [main, ...rest] = s.tracks ?? [];
+      return {
+        ...s,
+        titleLines: [{ ...s.titleLines[0], text: rec.title }, ...s.titleLines.slice(1)],
+        trimIn,
+        trimOut,
+        tracks: main ? [{ ...main, trimIn, trimOut }, ...rest] : s.tracks,
+      };
+    });
+    setSaved(false);
+  }
+
+  // Phase 1: a new layer duplicates the main track's trim (same video for all tracks).
+  function addTrack() {
+    setState((s) => {
+      const tracks = s.tracks ?? [];
+      const main = tracks[0];
+      const track: EditorTrack = {
+        id: `track-${Date.now()}`,
+        label: `트랙 ${tracks.length + 1}`,
+        trimIn: main?.trimIn ?? s.trimIn,
+        trimOut: main?.trimOut ?? s.trimOut,
+        startTime: main?.startTime ?? 0,
+        duration: main?.duration ?? Math.max(1, duration),
+      };
+      return { ...s, tracks: [...tracks, track] };
+    });
     setSaved(false);
   }
 
@@ -343,8 +403,15 @@ export function EditorShell({ clipId }: { clipId: string }) {
           startOffset={segStart}
           video={videoEl}
           videoUrl={videoUrl}
+          tracks={state.tracks}
           onTogglePlay={togglePlay}
         />
+        <button
+          onClick={addTrack}
+          className="mt-2 inline-flex items-center gap-1 rounded-md border border-dashed border-zinc-700 px-2 py-1 text-xs text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
+        >
+          <Plus className="size-3.5" /> 트랙 추가
+        </button>
       </footer>
     </div>
   );

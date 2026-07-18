@@ -38,6 +38,23 @@ export function defaultElementSize(type: ElementType): number {
   return type === "arrow" ? 40 : 14;
 }
 
+export interface EditorTrack {
+  id: string;
+  label: string;
+  /** Track-relative seconds (0 = track start) */
+  trimIn: number;
+  trimOut: number;
+  /** Position on master timeline */
+  startTime: number;
+  duration: number;
+  /** For future: media source. For MVP, all tracks share the same video */
+  mediaId?: string;
+}
+
+export function makeMainTrack(trimIn: number, trimOut: number, duration: number): EditorTrack {
+  return { id: "track-main", label: "메인", trimIn, trimOut, startTime: 0, duration };
+}
+
 export interface EditorState {
   templateId: TemplateId;
   aspect: AspectKey;
@@ -57,6 +74,9 @@ export interface EditorState {
   elements: EditorElement[];
   trimIn: number; // seconds
   trimOut: number; // seconds
+  /** Vertical layers (phase 1: all share the same video). tracks[0] is the main track,
+   *  whose trim mirrors trimIn/trimOut (the master trim the render actually cuts). */
+  tracks: EditorTrack[];
   speed: number;
   hookOn: boolean;
   silenceCut: boolean;
@@ -128,6 +148,7 @@ export const TEMPLATE_PRESETS: TemplatePreset[] = [
 ];
 
 export function makeInitialEditorState(title: string, durationSec: number): EditorState {
+  const dur = Math.max(1, durationSec);
   return {
     templateId: "stacked_channel",
     aspect: "9:16",
@@ -146,12 +167,21 @@ export function makeInitialEditorState(title: string, durationSec: number): Edit
     showSafeArea: false,
     elements: [],
     trimIn: 0,
-    trimOut: Math.max(1, durationSec),
+    trimOut: dur,
+    tracks: [makeMainTrack(0, dur, dur)],
     speed: 1,
     hookOn: true,
     silenceCut: false,
     offsetMs: 0,
   };
+}
+
+/** Saved editorState from before multi-track has no `tracks` — hydrate a main track
+ *  from the master trim so old clips keep working unchanged. */
+export function ensureTracks(state: EditorState, durationSec: number): EditorState {
+  if (Array.isArray(state.tracks) && state.tracks.length > 0) return state;
+  const dur = Math.max(1, durationSec);
+  return { ...state, tracks: [makeMainTrack(state.trimIn ?? 0, state.trimOut ?? dur, dur)] };
 }
 
 export function applyTemplate(state: EditorState, id: TemplateId): EditorState {

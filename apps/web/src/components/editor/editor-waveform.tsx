@@ -96,8 +96,11 @@ export function Waveform({ peaks, className }: { peaks: Float32Array | null; cla
     };
 
     draw();
-    window.addEventListener("resize", draw);
-    return () => window.removeEventListener("resize", draw);
+    // ResizeObserver (not window resize): the timeline zoom changes the parent's
+    // width without a window resize, and the canvas must redraw at the new width.
+    const ro = new ResizeObserver(draw);
+    ro.observe(parent);
+    return () => ro.disconnect();
   }, [peaks]);
 
   return <canvas ref={ref} className={className} />;
