@@ -64,10 +64,10 @@ export default function PublishChannelsPage() {
       <section className="mb-10">
         <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
           <div>
-            <h2 className="text-lg font-semibold text-white">YouTube 채널 연동</h2>
-            <p className="mt-1 text-xs leading-relaxed text-zinc-500">
-              <b className="text-zinc-300">분석·수익 연결</b>은 조회수·시청시간·<b className="text-zinc-300">수익(수익화 채널)</b>을 읽어옵니다.{" "}
-              <b className="text-zinc-300">업로드 채널</b>은 클립을 이 채널로 배포합니다.
+            <h2 className="text-lg font-semibold text-foreground">YouTube 채널 연동</h2>
+            <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+              <b className="text-foreground">분석·수익 연결</b>은 조회수·시청시간·<b className="text-foreground">수익(수익화 채널)</b>을 읽어옵니다.{" "}
+              <b className="text-foreground">업로드 채널</b>은 클립을 이 채널로 배포합니다.
               같은 채널을 둘 다 쓰려면 각각 한 번씩 연결하세요(토큰이 서로 덮어씁니다).
             </p>
           </div>
@@ -80,7 +80,6 @@ export default function PublishChannelsPage() {
             </Button>
             <Button
               onClick={() => { window.location.href = getYouTubeAuthUrl(undefined, "publish", "/publish-channels"); }}
-              className="bg-white text-zinc-900 hover:bg-zinc-100"
             >
               + 업로드 채널
             </Button>
@@ -88,13 +87,13 @@ export default function PublishChannelsPage() {
         </div>
 
         {banner && (
-          <div className="mb-4 rounded-xl border border-zinc-800 bg-zinc-900/60 px-4 py-3 text-sm text-zinc-200">
+          <div className="mb-4 rounded-xl border border-border bg-muted/50 px-4 py-3 text-sm text-foreground">
             {banner}
           </div>
         )}
 
         {loading ? (
-          <div className="text-zinc-500 text-sm">불러오는 중...</div>
+          <div className="text-muted-foreground text-sm">불러오는 중...</div>
         ) : channels.length === 0 ? (
           <Card className="p-8">
             <EmptyState
@@ -112,13 +111,13 @@ export default function PublishChannelsPage() {
                     {ch.thumbnail ? (
                       <img src={ch.thumbnail} alt={ch.channelName} className="w-10 h-10 rounded-full" />
                     ) : (
-                      <div className="w-10 h-10 rounded-full bg-zinc-700 flex items-center justify-center text-zinc-400 text-sm">
+                      <div className="w-10 h-10 rounded-full bg-muted flex items-center justify-center text-muted-foreground text-sm">
                         {ch.channelName.charAt(0)}
                       </div>
                     )}
                     <div>
-                      <div className="text-sm font-medium text-white">{ch.channelName}</div>
-                      <div className="text-xs text-zinc-500">
+                      <div className="text-sm font-medium text-foreground">{ch.channelName}</div>
+                      <div className="text-xs text-muted-foreground">
                         구독자 {ch.subscribers ?? "?"}명
                         {ch.connectedAt && ` · ${new Date(Number(ch.connectedAt)).toLocaleDateString("ko-KR")} 연결`}
                       </div>
@@ -136,7 +135,7 @@ export default function PublishChannelsPage() {
                     </span>
                     <button
                       onClick={() => handleDelete(ch.channelId)}
-                      className="text-xs text-zinc-500 hover:text-red-400 transition px-2 py-1"
+                      className="text-xs text-muted-foreground hover:text-status-error transition px-2 py-1"
                     >
                       삭제
                     </button>

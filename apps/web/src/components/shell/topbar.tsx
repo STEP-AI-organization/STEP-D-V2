@@ -1,9 +1,10 @@
 "use client";
 
-import { Menu } from "lucide-react";
+import { Menu, Search } from "lucide-react";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { JobCenter } from "@/components/shell/job-center";
 
-/** Top app bar: mobile nav toggle · breadcrumb slot · theme. */
+/** Top app bar: mobile nav toggle · breadcrumb slot · job center · theme. */
 export function Topbar({ breadcrumb }: { breadcrumb?: React.ReactNode }) {
   return (
     <header className="sticky top-0 z-20 flex h-14 items-center gap-2 border-b border-border bg-background/80 px-4 backdrop-blur sm:gap-3 sm:px-5">
@@ -19,6 +20,22 @@ export function Topbar({ breadcrumb }: { breadcrumb?: React.ReactNode }) {
 
       <div className="min-w-0 flex-1 truncate text-sm text-muted-foreground">{breadcrumb}</div>
 
+      {/* Click entry point for the command palette — previously ⌘K/Ctrl+K only, unreachable
+          by mouse/touch users and on mobile. */}
+      <button
+        type="button"
+        onClick={() => window.dispatchEvent(new Event("open-command-palette"))}
+        className="flex h-9 items-center gap-2 rounded-md border border-border px-2.5 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+        aria-label="검색 · 빠른 이동"
+        title="검색 · 빠른 이동"
+      >
+        <Search className="size-4" />
+        <kbd className="hidden rounded border border-border bg-muted px-1.5 text-[10px] sm:inline">
+          ⌘K
+        </kbd>
+      </button>
+
+      <JobCenter />
       <ThemeToggle />
     </header>
   );

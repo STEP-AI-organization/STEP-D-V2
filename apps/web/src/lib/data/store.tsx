@@ -331,6 +331,39 @@ export function AppDataProvider({
     };
   }, [applyServerState]);
 
+  // ── adaptive /api/state polling ────────────────────────────────────────────────
+  // The content pipeline runs for minutes on the worker and reports progress via
+  // episode.pipeline, but a one-shot mount fetch leaves the dashboard/회차 진행률 frozen
+  // until the operator hits F5. Poll on a cadence that reflects what's happening:
+  //   · active work in flight (a running job or a stage 'progress')  → fast (8s)
+  //   · connected but idle                                           → slow heartbeat (45s)
+  //   · disconnected                                                 → reconnect probe (15s)
+  // Read the latest state through a ref so the self-scheduling loop never re-subscribes.
+  const stateRef = useRef(state);
+  stateRef.current = state;
+  useEffect(() => {
+    let alive = true;
+    let timer: ReturnType<typeof setTimeout>;
+    const nextDelay = () => {
+      if (!connectedRef.current) return 15_000;
+      const s = stateRef.current;
+      const active =
+        s.jobs.some((j) => j.status === "running") ||
+        s.episodes.some((e) => e.pipeline?.stageStatus === "progress");
+      return active ? 8_000 : 45_000;
+    };
+    const tick = async () => {
+      if (!alive) return;
+      await refresh();
+      if (alive) timer = setTimeout(tick, nextDelay());
+    };
+    timer = setTimeout(tick, nextDelay());
+    return () => {
+      alive = false;
+      clearTimeout(timer);
+    };
+  }, [refresh]);
+
   const adoptRecommendation = useCallback(async (id: string): Promise<string> => {
     // SERVER: adopt confirms the segment as a DRAFT clip (metadata only, no render — §2.4).
     // The single render happens later via exportClip().
@@ -514,23 +547,50 @@ export function AppDataProvider({
   );
 
   const retryDistribution = useCallback((clipId: string, channel: DistributionChannel) => {
-    setState((prev) => ({
-      ...prev,
-      clips: prev.clips.map((clip) =>
-        clip.id === clipId
-          ? {
-              ...clip,
-              distributions: clip.distributions.map((d) =>
-                d.channel === channel ? { ...d, status: "published", error: undefined } : d,
-              ),
-            }
-          : clip,
-      ),
-      jobs: prev.jobs.map((j) =>
-        j.episodeId && j.status === "failed" ? { ...j, status: "done", needsAction: false } : j,
-      ),
-    }));
-    if (connectedRef.current) void retryDist(clipId, channel).catch(() => {});
+    // Optimistic: mark ONLY this clip's channel in-flight (pending) — retry queues an
+    // upload, it doesn't instantly publish. The /api/state poll reconciles to the real
+    // published/failed status. Previously this marked EVERY failed job across all episodes
+    // 'done' and hard-set 'published', so the board lied on any server error.
+    setState((prev) => {
+      const target = prev.clips.find((c) => c.id === clipId);
+      return {
+        ...prev,
+        clips: prev.clips.map((clip) =>
+          clip.id === clipId
+            ? {
+                ...clip,
+                distributions: clip.distributions.map((d) =>
+                  d.channel === channel ? { ...d, status: "pending", error: undefined } : d,
+                ),
+              }
+            : clip,
+        ),
+        // Only the retried clip's own episode jobs move to running — never a blanket sweep.
+        jobs: prev.jobs.map((j) =>
+          target && j.episodeId === target.episodeId && j.status === "failed"
+            ? { ...j, status: "running", needsAction: false }
+            : j,
+        ),
+      };
+    });
+    if (connectedRef.current) {
+      void retryDist(clipId, channel).catch(() => {
+        // Roll back so the board reflects reality instead of a phantom success.
+        setState((prev) => ({
+          ...prev,
+          clips: prev.clips.map((clip) =>
+            clip.id === clipId
+              ? {
+                  ...clip,
+                  distributions: clip.distributions.map((d) =>
+                    d.channel === channel ? { ...d, status: "failed", error: "재시도 요청 실패" } : d,
+                  ),
+                }
+              : clip,
+          ),
+        }));
+      });
+    }
   }, []);
 
   const uploadVideo = useCallback(

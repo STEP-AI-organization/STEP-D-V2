@@ -33,7 +33,7 @@ const DIST_LABEL: Record<DistributionState["status"], string> = {
 };
 
 export default function DistributionPage() {
-  const { clips, retryDistribution, bulkPublish, getEpisode, getProgram, connections } = useAppData();
+  const { clips, retryDistribution, bulkPublish, getEpisode, getProgram, connections, loading } = useAppData();
   const { toast } = useToast();
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [dialogClips, setDialogClips] = useState<string[] | null>(null);
@@ -188,6 +188,16 @@ export default function DistributionPage() {
                 </TR>
               );
             })}
+            {clips.length === 0 && (
+              <tr>
+                <td
+                  colSpan={CHANNELS.length + 3}
+                  className="px-4 py-12 text-center text-sm text-muted-foreground"
+                >
+                  {loading ? "클립을 불러오는 중…" : "배포할 클립이 없습니다. 회차에서 추천을 채택해 클립을 만드세요."}
+                </td>
+              </tr>
+            )}
           </TBody>
         </Table>
       </Card>

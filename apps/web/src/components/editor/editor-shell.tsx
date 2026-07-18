@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { ArrowLeft, Save, Send, Info, Check, Sparkles, Film, Plus } from "lucide-react";
 import { useAppData } from "@/lib/data/store";
+import { useToast } from "@/components/ui/toast";
 import { getStreamUrl, getMediaAnalysis, type AnalysisTranscriptSegment } from "@/lib/data/api";
 import {
   applyTemplate,
@@ -22,6 +23,7 @@ import { RENDER_CHANNELS, type Recommendation, type RenderChannel } from "@/lib/
 
 export function EditorShell({ clipId }: { clipId: string }) {
   const { clips, recsForEpisode, mediaForEpisode, saveClipEditor, exportClip } = useAppData();
+  const { toast } = useToast();
   const clip = clips.find((c) => c.id === clipId);
 
   const title = clip?.title ?? "새 클립";
@@ -137,6 +139,14 @@ export function EditorShell({ clipId }: { clipId: string }) {
     try {
       await saveClipEditor(clip.id, state);
       setSaved(true);
+    } catch (e) {
+      // A silent failure here means the operator keeps editing on top of unsaved work and
+      // loses it on refresh — surface it instead of just resetting the button.
+      toast({
+        title: "저장 실패",
+        description: e instanceof Error ? e.message : "편집 내용을 저장하지 못했습니다.",
+        tone: "error",
+      });
     } finally {
       setSaving(false);
     }
@@ -154,6 +164,15 @@ export function EditorShell({ clipId }: { clipId: string }) {
       }
       const res = await exportClip(clip.id, channel || undefined);
       setCapped(res.capped);
+      // The render can take minutes — confirm it actually finished, not just that the
+      // button reset. capped is surfaced separately by the banner below.
+      toast({ title: "렌더 완료", description: "클립이 확정·인코딩되었습니다.", tone: "done" });
+    } catch (e) {
+      toast({
+        title: "렌더 실패",
+        description: e instanceof Error ? e.message : "클립 확정(렌더)에 실패했습니다. 다시 시도해 주세요.",
+        tone: "error",
+      });
     } finally {
       setExporting(false);
     }
@@ -288,6 +307,50 @@ export function EditorShell({ clipId }: { clipId: string }) {
     },
     [videoEl, previewingMaster, segStart, state.trimIn],
   );
+
+  // Editor keyboard shortcuts (beyond undo/redo): space = play/pause, I/O = trim in/out at
+  // the playhead, Ctrl/⌘+S = save. Skipped while typing so text fields behave normally.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+      const key = e.key.toLowerCase();
+      if ((e.ctrlKey || e.metaKey) && key === "s") {
+        e.preventDefault();
+        void save();
+        return;
+      }
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      const rel = Math.max(0, Math.min(videoTime - segStart, duration)); // segment-relative playhead
+      if (e.code === "Space") {
+        e.preventDefault();
+        togglePlay();
+      } else if (key === "i") {
+        e.preventDefault();
+        const trimIn = Math.max(0, Math.min(rel, state.trimOut - 0.1));
+        setState((s) => {
+          const [main, ...rest] = s.tracks ?? [];
+          return main
+            ? { ...s, trimIn, tracks: [{ ...main, trimIn }, ...rest] }
+            : { ...s, trimIn };
+        });
+        setSaved(false);
+      } else if (key === "o") {
+        e.preventDefault();
+        const trimOut = Math.max(state.trimIn + 0.1, Math.min(rel, duration));
+        setState((s) => {
+          const [main, ...rest] = s.tracks ?? [];
+          return main
+            ? { ...s, trimOut, tracks: [{ ...main, trimOut }, ...rest] }
+            : { ...s, trimOut };
+        });
+        setSaved(false);
+      }
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [togglePlay, videoTime, segStart, duration, state.trimIn, state.trimOut]);
 
   const backHref = clip ? `/episodes/${clip.episodeId}?tab=clips` : "/clips";
 

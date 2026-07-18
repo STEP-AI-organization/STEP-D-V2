@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { ChevronLeft, FileVideo } from "lucide-react";
+import { ChevronLeft, FileVideo, Loader2 } from "lucide-react";
 import { PageHeader } from "@/components/ui/page-header";
 import { Card } from "@/components/ui/card";
 import { StatusBadge } from "@/components/ui/status-badge";
@@ -30,8 +30,19 @@ export function EpisodeDetail({
   episodeId: string;
   initialTab?: string;
 }) {
-  const { getEpisode } = useAppData();
+  const { getEpisode, loading } = useAppData();
   const episode = getEpisode(episodeId);
+
+  // While the first /api/state load is still settling, a deep-linked or refreshed URL has
+  // no episode yet — showing "찾을 수 없음" here would falsely tell the operator the link is
+  // dead. Wait for the load to finish before deciding it's truly missing.
+  if (!episode && loading) {
+    return (
+      <div className="flex min-h-[40vh] items-center justify-center text-sm text-muted-foreground">
+        <Loader2 className="mr-2 size-4 animate-spin" /> 회차를 불러오는 중…
+      </div>
+    );
+  }
 
   if (!episode) {
     return (

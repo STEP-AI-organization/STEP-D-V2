@@ -61,6 +61,11 @@ export function JobCenter() {
             <div className="px-2 py-1.5 text-xs font-semibold text-muted-foreground">
               진행 중 {running} · 조치 필요 {actionable}
             </div>
+            {jobs.length === 0 && (
+              <div className="px-2 py-6 text-center text-xs text-muted-foreground">
+                진행 중이거나 조치가 필요한 작업이 없습니다.
+              </div>
+            )}
             <ul className="space-y-0.5">
               {jobs.map((job) => (
                 <li

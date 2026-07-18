@@ -7,6 +7,7 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { EmptyState } from "@/components/ui/empty-state";
+import { Skeleton } from "@/components/ui/skeleton";
 import { PipelineStrip } from "@/components/pipeline-strip";
 import { useAppData } from "@/lib/data/store";
 import { PIPELINE_STAGE_LABELS, targetAgeLabel } from "@/lib/constants";
@@ -32,7 +33,7 @@ const SECTION_EMOJI: Record<string, string> = {
 };
 
 export default function ProgramsPage() {
-  const { programs, episodes, recommendations, clips } = useAppData();
+  const { programs, episodes, recommendations, clips, loading } = useAppData();
 
   return (
     <>
@@ -47,7 +48,13 @@ export default function ProgramsPage() {
         }
       />
 
-      {programs.length === 0 ? (
+      {loading && programs.length === 0 ? (
+        <div className="space-y-3">
+          {[0, 1, 2].map((i) => (
+            <Skeleton key={i} className="h-24 w-full rounded-xl" />
+          ))}
+        </div>
+      ) : programs.length === 0 ? (
         <EmptyState
           icon={LayoutGrid}
           title="아직 프로그램이 없습니다"

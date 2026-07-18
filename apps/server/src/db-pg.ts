@@ -286,6 +286,43 @@ export async function prependEntity(kind: EntityKind, id: string, data: unknown)
   await putEntity(kind, id, data, rows[0].m);
 }
 
+/**
+ * Adopt a recommendation → clip as ONE atomic unit. The clip insert and the rec's
+ * status flip must commit together: a crash between two separate writes would otherwise
+ * leave an orphan clip with the rec still 'pending', and the client retry (guarded only by
+ * status !== 'pending') would mint a SECOND clip. A transaction makes it exact.
+ */
+export async function commitAdoption(
+  clipId: string,
+  clip: unknown,
+  recId: string,
+  rec: unknown,
+): Promise<void> {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const { rows } = await client.query(
+      "SELECT COALESCE(MIN(ord), 0) - 1 AS m FROM entities WHERE kind = 'clip'",
+    );
+    await client.query(
+      `INSERT INTO entities (kind, id, data, ord) VALUES ('clip', $1, $2::jsonb, $3)
+       ON CONFLICT (kind, id) DO UPDATE SET data = $2::jsonb`,
+      [clipId, JSON.stringify(clip), rows[0].m],
+    );
+    await client.query(
+      `INSERT INTO entities (kind, id, data, ord) VALUES ('recommendation', $1, $2::jsonb, 0)
+       ON CONFLICT (kind, id) DO UPDATE SET data = $2::jsonb`,
+      [recId, JSON.stringify(rec)],
+    );
+    await client.query("COMMIT");
+  } catch (e) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
 // ── connections ────────────────────────────────────────────────────────────────
 
 export async function getConnections(): Promise<{ youtube: boolean; meta: boolean; metaInstagram: boolean }> {

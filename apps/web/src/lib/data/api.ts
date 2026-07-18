@@ -81,6 +81,13 @@ export async function getMediaAnalysis(mediaId: string): Promise<MediaAnalysis> 
   return res.json();
 }
 
+/** Re-run the AI content pipeline for a media (operator recovery from a failed analysis). */
+export async function reanalyzeMedia(mediaId: string): Promise<{ ok: boolean; queued: boolean }> {
+  const res = await fetch(`${API_BASE}/media/${mediaId}/analyze`, { method: "POST" });
+  if (!res.ok) throw new Error(`재분석 요청 실패 (${res.status})`);
+  return res.json();
+}
+
 /**
  * A playable video URL for a media id. In production this is a short-lived signed GCS URL
  * the <video> element streams directly from Cloud Storage (no proxy/redirect in the byte

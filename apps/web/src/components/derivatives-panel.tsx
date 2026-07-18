@@ -20,8 +20,9 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { RecommendationCard } from "@/components/recommendation-card";
 import { PublishDialog } from "@/components/publish-dialog";
 import { useAppData } from "@/lib/data/store";
-import { type AnalysisScene } from "@/lib/data/api";
+import { type AnalysisScene, reanalyzeMedia } from "@/lib/data/api";
 import { useMediaAnalysisPoll } from "@/lib/data/use-media-analysis";
+import { useToast } from "@/components/ui/toast";
 import {
   ASPECT_RATIOS,
   CLIP_TYPES,
@@ -232,9 +233,24 @@ type AnalyzeView = "shorts" | "scenes" | "script";
 
 function AnalyzeTab({ episodeId }: { episodeId: string }) {
   const { mediaForEpisode } = useAppData();
+  const { toast } = useToast();
   const master = mediaForEpisode(episodeId, "master");
   const { analysis, loading } = useMediaAnalysisPoll(master?.id);
   const [view, setView] = useState<AnalyzeView>("shorts");
+  const [retrying, setRetrying] = useState(false);
+
+  async function retryAnalysis() {
+    if (!master) return;
+    setRetrying(true);
+    try {
+      await reanalyzeMedia(master.id);
+      toast({ title: "재분석 시작", description: "AI 분석을 다시 큐에 넣었습니다. 진행률은 위 파이프라인에서 확인하세요.", tone: "progress" });
+    } catch (e) {
+      toast({ title: "재분석 요청 실패", description: e instanceof Error ? e.message : "다시 시도해 주세요.", tone: "error" });
+    } finally {
+      setRetrying(false);
+    }
+  }
 
   if (!master) {
     return <EmptyState icon={Search} compact title="분석할 영상이 없어요" />;
@@ -243,7 +259,19 @@ function AnalyzeTab({ episodeId }: { episodeId: string }) {
     return <Card className="p-6 text-center text-sm text-muted-foreground">분석 정보를 불러오는 중…</Card>;
   }
   if (analysis?.status === "failed") {
-    return <EmptyState icon={Search} compact title="분석 실패" description={analysis.error ?? "재시도 필요"} />;
+    return (
+      <EmptyState
+        icon={Search}
+        compact
+        title="분석 실패"
+        description={analysis.error ?? "재시도 필요"}
+        action={
+          <Button size="sm" variant="outline" onClick={retryAnalysis} disabled={retrying}>
+            {retrying ? "요청 중…" : "분석 재시도"}
+          </Button>
+        }
+      />
+    );
   }
 
   const data = analysis?.data;

@@ -42,7 +42,7 @@ const CLIP_STATUS_LABEL: Record<Clip["status"], string> = {
 };
 
 export function ClipsView({ initial }: { initial: Filters }) {
-  const { clips, programs, episodes } = useAppData();
+  const { clips, programs, episodes, loading } = useAppData();
   const [filters, setFilters] = useState<Filters>(initial);
   const { views, save, remove } = useSavedViews<Filters>("stepd-clip-views");
 
@@ -212,7 +212,7 @@ export function ClipsView({ initial }: { initial: Filters }) {
             {filtered.length === 0 && (
               <tr>
                 <td colSpan={8} className="px-4 py-12 text-center text-sm text-muted-foreground">
-                  조건에 맞는 클립이 없습니다.
+                  {loading ? "클립을 불러오는 중…" : "조건에 맞는 클립이 없습니다."}
                 </td>
               </tr>
             )}

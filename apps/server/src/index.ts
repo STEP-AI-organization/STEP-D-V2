@@ -20,6 +20,7 @@ import {
   getEntity,
   putEntity,
   prependEntity,
+  commitAdoption,
   listMedia,
   getMedia,
   insertMedia,
@@ -532,6 +533,28 @@ app.get("/api/media/:id/analysis", async (c) => {
   return c.json(row);
 });
 
+// ── re-run the AI content pipeline for one media (operator recovery from a failed run) ──
+// A failed analysis was a dead-end in the UI — nothing let the operator re-kick it. Resumes
+// from checkpoints, so a re-run only pays for the stages that never finished.
+app.post("/api/media/:id/analyze", async (c) => {
+  const mediaId = c.req.param("id");
+  const media = await getMedia(mediaId);
+  if (!media) return c.json({ error: "media not found" }, 404);
+  await markContentAnalysisPending(mediaId);
+  const jobId = await enqueue("content.analyze", { mediaId }, { dedupeKey: `content.analyze:${mediaId}` });
+  if (media.episodeId) {
+    const ep = await getEntity<Record<string, unknown>>("episode", media.episodeId);
+    if (ep) {
+      await putEntity("episode", media.episodeId, {
+        ...ep,
+        pipeline: { stage: "analyze", stageStatus: "progress", note: "재분석 대기 중", progress: 0 },
+      });
+    }
+  }
+  // jobId null = a run is already queued/in-flight; treat as success (idempotent).
+  return c.json({ ok: true, queued: jobId != null });
+});
+
 // ── stored scene frames (uploaded by the worker to analysis/{mediaId}/scene_frames/) ──
 // scenes[].frame in the analysis data is "scene_frames/scene_0001.jpg" — the web/Lab
 // fetch it here. 404 for pre-persistence analyses (framesStored !== true).
@@ -718,7 +741,10 @@ app.post("/api/media/finalize", async (c) => {
   // Remux container-only (-c copy, no re-encode → seconds) to moov-at-front progressive and
   // replace the object in place. Size-guarded so Cloud Run's RAM-backed /tmp doesn't OOM;
   // larger masters keep the original (a disk-backed worker remux can cover those later).
-  const REMUX_MAX = 1500 * 1024 * 1024; // 1.5 GB
+  // The threshold must fit the instance's memory budget (the whole output lives in tmpfs
+  // alongside node + ffmpeg), so it's env-tunable — default 512 MB is safe on a 2 GB
+  // instance; raise REMUX_MAX_MB only if the Cloud Run instance has the RAM to spare.
+  const REMUX_MAX = (Number(process.env.REMUX_MAX_MB) || 512) * 1024 * 1024;
   if (FFMPEG && size > 0 && size <= REMUX_MAX) {
     const tmpDir = path.resolve("/tmp/stepd-uploads");
     fs.mkdirSync(tmpDir, { recursive: true });
@@ -965,6 +991,29 @@ function windowCaptions(transcript: unknown, winStart: number, winEnd: number): 
 }
 
 /**
+ * Approximate per-word timings from a caption's text + [start,end] when the STT provider
+ * gave none. Production STT is Gemini (utterance-level, words:[]), so without this the
+ * signature word-pop karaoke sweep never fires. Not frame-accurate, but allocating the
+ * span by syllable count (Korean: 1 글자 ≈ 1 음절) gives a natural phrase-level sweep —
+ * the same heuristic Opus-style tools use. Real word timings (whisper path) always win.
+ */
+function synthesizeWords(text: string, start: number, end: number): CaptionWord[] {
+  const tokens = text.split(/\s+/).filter(Boolean);
+  const dur = end - start;
+  if (tokens.length < 2 || !(dur > 0)) return []; // single token gains nothing from a sweep
+  const weights = tokens.map((t) => Math.max(1, [...t].length));
+  const total = weights.reduce((a, b) => a + b, 0);
+  const words: CaptionWord[] = [];
+  let t = start;
+  tokens.forEach((tok, i) => {
+    const we = i === tokens.length - 1 ? end : t + (weights[i] / total) * dur;
+    words.push({ word: tok, start: t, end: we });
+    t = we;
+  });
+  return words;
+}
+
+/**
  * Build an ASS file to burn at render time — the EditorState overlays (title/channel/
  * elements, Default style) PLUS the STT caption track (spoken subtitles, Caption style,
  * bottom-center per shorts convention). `captions` are render-relative seconds (see
@@ -1019,11 +1068,20 @@ function buildEditorAss(
       if (!text || !(cap.end > cap.start)) continue;
       const start = assTime(cap.start);
       const end = assTime(cap.end);
-      if (Array.isArray(cap.words) && cap.words.length) {
+      // Real word timings if the STT had them; otherwise synthesize a sweep (unless the
+      // operator turned karaoke off via es.karaoke === false).
+      const karaokeOn = !(es && typeof es === "object" && (es as any).karaoke === false);
+      const words =
+        Array.isArray(cap.words) && cap.words.length
+          ? cap.words
+          : karaokeOn
+            ? synthesizeWords(text, cap.start, cap.end)
+            : [];
+      if (words.length) {
         // sung = highlight (\1c), un-sung = white (\2c); \k durations are centiseconds.
         let k = `{\\2c&H00FFFFFF&\\1c${capHi}}`;
         let prev = cap.start;
-        for (const w of cap.words) {
+        for (const w of words) {
           const ws = Math.max(cap.start, Number(w.start));
           const we = Math.max(ws, Math.min(cap.end, Number(w.end)));
           const gap = Math.round((ws - prev) * 100);
@@ -1195,8 +1253,9 @@ app.post("/api/recommendations/:id/adopt", async (c) => {
     distributions: [],
   };
 
-  await prependEntity("clip", clipId, clip);
-  await putEntity("recommendation", recId, { ...rec, status: "adopted", adoptedClipId: clipId });
+  // Atomic: clip insert + rec flip commit together, so a crash can't orphan a clip and
+  // let a retry mint a second one.
+  await commitAdoption(clipId, clip, recId, { ...rec, status: "adopted", adoptedClipId: clipId });
   return c.json({ clipId, clip });
 });
 

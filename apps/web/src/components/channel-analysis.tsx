@@ -19,7 +19,7 @@ export function ChannelAnalysis({ channelId }: { channelId: string }) {
   const summary = rows && rows.length > 0 ? summarize(rows) : null;
 
   return (
-    <div className="mt-3 border-t border-zinc-800 pt-3">
+    <div className="mt-3 border-t border-border pt-3">
       {summary ? (
         <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs">
           <Metric label="조회수(90일)" value={fmt(summary.views)} />
@@ -28,9 +28,9 @@ export function ChannelAnalysis({ channelId }: { channelId: string }) {
           <Metric label="수집일수" value={`${summary.days}일`} />
         </div>
       ) : rows === null ? (
-        <span className="text-xs text-zinc-600">불러오는 중…</span>
+        <span className="text-xs text-muted-foreground">불러오는 중…</span>
       ) : (
-        <span className="text-xs text-zinc-600 flex items-center gap-1.5">
+        <span className="text-xs text-muted-foreground flex items-center gap-1.5">
           <BarChart3 className="w-3.5 h-3.5" />
           아직 수집된 분석 데이터가 없습니다
         </span>
@@ -54,8 +54,8 @@ function summarize(rows: ChannelDailyRow[]) {
 function Metric({ label, value }: { label: string; value: string }) {
   return (
     <span>
-      <span className="text-zinc-500">{label} </span>
-      <span className="font-medium text-zinc-200">{value}</span>
+      <span className="text-muted-foreground">{label} </span>
+      <span className="font-medium text-foreground">{value}</span>
     </span>
   );
 }
