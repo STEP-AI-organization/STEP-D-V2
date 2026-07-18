@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { ArrowLeft, Save, Send, Info, Check, Sparkles, Film } from "lucide-react";
 import { useAppData } from "@/lib/data/store";
@@ -81,9 +81,15 @@ export function EditorShell({ clipId }: { clipId: string }) {
   const [channel, setChannel] = useState<RenderChannel | "">("");
   const [capped, setCapped] = useState<{ maxSec: number; requestedSec: number } | null>(null);
 
-  // Seed from the clip's AI-suggested destination once it lands. Keyed on clip id so it never
-  // clobbers an operator's pick mid-session — their choice outranks the suggestion.
+  // Seed from the clip's AI-suggested destination once it lands. Once the operator picks a
+  // preset themselves (channelPickedRef), the seed must never clobber it — their choice
+  // outranks the suggestion. The ref resets per clip so a new clip seeds fresh.
+  const channelPickedRef = useRef(false);
   useEffect(() => {
+    channelPickedRef.current = false;
+  }, [clip?.id]);
+  useEffect(() => {
+    if (channelPickedRef.current) return;
     setChannel(clip?.targetChannel ?? "");
     setCapped(null);
   }, [clip?.id, clip?.targetChannel]);
@@ -250,6 +256,7 @@ export function EditorShell({ clipId }: { clipId: string }) {
             <select
               value={channel}
               onChange={(e) => {
+                channelPickedRef.current = true;
                 setChannel(e.target.value as RenderChannel | "");
                 setCapped(null);
               }}

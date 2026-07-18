@@ -164,6 +164,13 @@ def analyze_frames(
     with ThreadPoolExecutor(max_workers=WORKERS) as ex:
         list(ex.map(work, targets))
 
+    # Every single call failing means Vertex itself is down, not a bad frame — raise so
+    # the job retries (failed scenes keep vision_score=None and are redone on resume)
+    # instead of completing with an unscored timeline.
+    failures = sum(1 for s in targets if s.get("_frame_error"))
+    if total and failures == total:
+        raise RuntimeError(f"frame analysis: all {total} Gemini calls failed (Vertex outage?)")
+
     return scenes
 
 

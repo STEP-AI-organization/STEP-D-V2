@@ -99,6 +99,12 @@ import {
   deletePrefix,
 } from "./storage-gcs.ts";
 
+// A stray async error (e.g. a GCS stream 'error' after the response started, or a background
+// promise rejecting) must not kill the whole Cloud Run instance mid-request — same guard the
+// worker has (worker.ts main()). Log loudly and keep serving.
+process.on("unhandledRejection", (reason) => console.error("[stepd-server] unhandledRejection (surviving):", reason));
+process.on("uncaughtException", (err) => console.error("[stepd-server] uncaughtException (surviving):", err));
+
 // Sync init — no CPU throttling issues on Cloud Run
 let dbReady = false;
 const FFMPEG = hasFfmpeg();
@@ -297,7 +303,8 @@ app.get("/api/media/:id/cast", async (c) => {
  */
 app.post("/api/media/:id/cast/:name/status", async (c) => {
   const mediaId = c.req.param("id");
-  const name = decodeURIComponent(c.req.param("name"));
+  // Hono already URL-decodes params — a second decodeURIComponent throws on literal '%'.
+  const name = c.req.param("name");
   const body = await c.req.json().catch(() => ({}) as Record<string, unknown>);
   const status = String(body.status ?? "");
   if (!["confirmed", "rejected", "candidate", "matched"].includes(status)) {
@@ -321,7 +328,7 @@ app.post("/api/media/:id/cast/:name/status", async (c) => {
  */
 app.post("/api/media/:id/cast/:name/register", async (c) => {
   const mediaId = c.req.param("id");
-  const name = decodeURIComponent(c.req.param("name"));
+  const name = c.req.param("name");
   const media = await getMedia(mediaId);
   if (!media?.episodeId) return c.json({ error: "media not found or not linked to an episode" }, 404);
   const episode = await getEntity<any>("episode", media.episodeId);
@@ -528,10 +535,12 @@ app.get("/api/media/:id/analysis", async (c) => {
 // scenes[].frame in the analysis data is "scene_frames/scene_0001.jpg" — the web/Lab
 // fetch it here. 404 for pre-persistence analyses (framesStored !== true).
 app.get("/api/media/:id/analysis/frames/:name", async (c) => {
+  const id = c.req.param("id");
   const name = c.req.param("name");
+  if (!/^[\w-]+$/.test(id)) return c.json({ error: "bad media id" }, 400);
   if (!/^scene_\d+\.jpg$/.test(name)) return c.json({ error: "bad frame name" }, 400);
 
-  const objPath = `analysis/${c.req.param("id")}/scene_frames/${name}`;
+  const objPath = `analysis/${id}/scene_frames/${name}`;
   if (!(await fileExists(objPath))) return c.json({ error: "not found" }, 404);
 
   return new Response(createReadStream(objPath), {
@@ -676,6 +685,14 @@ app.post("/api/media/finalize", async (c) => {
   const mediaId = typeof body.mediaId === "string" ? String(body.mediaId) : "";
   const objectPath = typeof body.objectPath === "string" ? String(body.objectPath) : "";
   if (!mediaId || !objectPath) return c.json({ error: "mediaId and objectPath required" }, 400);
+  // Only accept the objectPath this mediaId's upload-init would have issued — otherwise a
+  // client could point finalize at (and remux-overwrite) an arbitrary object in the bucket.
+  if (
+    !/^[\w-]+$/.test(mediaId) ||
+    !new RegExp(`^uploads/${mediaId}\\.\\w+$`).test(objectPath)
+  ) {
+    return c.json({ error: "objectPath does not match mediaId" }, 400);
+  }
   if (!useGcs()) return c.json({ error: "finalize is GCS-mode only" }, 400);
 
   const programId =

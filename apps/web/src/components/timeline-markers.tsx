@@ -40,8 +40,12 @@ export function TimelineMarkers({
 
       {/* Segment markers */}
       {markers.map((m, i) => {
-        const leftPct = (m.start / durationSec) * 100;
-        const widthPct = Math.max(((m.end - m.start) / durationSec) * 100, 1);
+        // Clamp to the track — markers can carry times past the media duration.
+        const leftPct = Math.min(Math.max((m.start / durationSec) * 100, 0), 100);
+        const widthPct = Math.min(
+          Math.max(((m.end - m.start) / durationSec) * 100, 1),
+          100 - leftPct,
+        );
 
         return (
           <button
@@ -68,7 +72,7 @@ export function TimelineMarkers({
       {currentTime > 0 && (
         <div
           className="absolute top-0 h-full w-0.5 bg-foreground transition-all duration-100"
-          style={{ left: `${(currentTime / durationSec) * 100}%` }}
+          style={{ left: `${Math.min((currentTime / durationSec) * 100, 100)}%` }}
         />
       )}
 

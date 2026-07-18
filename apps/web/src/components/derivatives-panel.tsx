@@ -20,14 +20,14 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { RecommendationCard } from "@/components/recommendation-card";
 import { PublishDialog } from "@/components/publish-dialog";
 import { useAppData } from "@/lib/data/store";
-import { getMediaAnalysis, type MediaAnalysis, type AnalysisScene } from "@/lib/data/api";
+import { type AnalysisScene } from "@/lib/data/api";
+import { useMediaAnalysisPoll } from "@/lib/data/use-media-analysis";
 import {
   ASPECT_RATIOS,
   CLIP_TYPES,
   DISTRIBUTION_CHANNELS,
 } from "@/lib/constants";
 import { cn, formatDuration, formatTimecode } from "@/lib/utils";
-import { useEffect } from "react";
 
 type PanelTab = "recommend" | "clips" | "analyze" | "distribute";
 
@@ -233,27 +233,8 @@ type AnalyzeView = "shorts" | "scenes" | "script";
 function AnalyzeTab({ episodeId }: { episodeId: string }) {
   const { mediaForEpisode } = useAppData();
   const master = mediaForEpisode(episodeId, "master");
-  const [analysis, setAnalysis] = useState<MediaAnalysis | null>(null);
-  const [loading, setLoading] = useState(false);
+  const { analysis, loading } = useMediaAnalysisPoll(master?.id);
   const [view, setView] = useState<AnalyzeView>("shorts");
-
-  useEffect(() => {
-    if (!master) return;
-    let cancelled = false;
-    setLoading(true);
-    getMediaAnalysis(master.id)
-      .then((a) => !cancelled && setAnalysis(a))
-      .catch(() => !cancelled && setAnalysis(null))
-      .finally(() => !cancelled && setLoading(false));
-    const timer = setInterval(async () => {
-      const a = await getMediaAnalysis(master.id).catch(() => null);
-      if (!cancelled && a) {
-        setAnalysis(a);
-        if (a.status === "done" || a.status === "failed") clearInterval(timer);
-      }
-    }, 20_000);
-    return () => { cancelled = true; clearInterval(timer); };
-  }, [master?.id]);
 
   if (!master) {
     return <EmptyState icon={Search} compact title="분석할 영상이 없어요" />;

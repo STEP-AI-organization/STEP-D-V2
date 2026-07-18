@@ -477,10 +477,13 @@ def recommend(
     print(f"   1단계: {len(chunks)} 구간에서 후보 추출…")
     done = [0]
 
+    failed = [0]
+
     def scan(chunk: list[dict]) -> list[dict]:
         try:
             cands = _extract_candidates(client, chunk, genre, profile)
         except Exception as e:
+            failed[0] += 1
             print(f"   (구간 {_mmss(chunk[0]['start'])}~ 후보 추출 실패, 스킵: {str(e)[:80]})")
             cands = []
         done[0] += 1
@@ -494,6 +497,12 @@ def recommend(
     print(f"   후보 {len(candidates)}개")
 
     if not candidates:
+        # No candidates *because calls errored* is an outage, not "the model found nothing".
+        # Raise so the job retries instead of checkpointing an empty shorts.json forever.
+        if failed[0]:
+            raise RuntimeError(
+                f"candidate extraction failed for {failed[0]}/{len(chunks)} chunks with zero candidates"
+            )
         return {"genre": genre, "shorts": []}
 
     if len(chunks) == 1:

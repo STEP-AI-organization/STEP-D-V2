@@ -78,7 +78,9 @@ export function EditorTimeline({
     if (video) video.playbackRate = state.speed;
   }, [video, state.speed]);
 
-  const pct = (v: number) => `${(v / Math.max(1, duration)) * 100}%`;
+  // Clamped: t is segment-relative and can run negative / past duration while the
+  // element plays the master outside the segment window.
+  const pct = (v: number) => `${Math.min(100, Math.max(0, (v / Math.max(1, duration)) * 100))}%`;
   const trimmedLen = Math.max(0, state.trimOut - state.trimIn);
 
   function seekTo(sec: number) {

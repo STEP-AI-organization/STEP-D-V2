@@ -3,8 +3,9 @@
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { FileVideo, Loader2 } from "lucide-react";
 import { Card } from "@/components/ui/card";
-import { getMediaAnalysis, getStreamUrl, type MediaAnalysis } from "@/lib/data/api";
+import { getStreamUrl } from "@/lib/data/api";
 import { useAppData } from "@/lib/data/store";
+import { useMediaAnalysisPoll } from "@/lib/data/use-media-analysis";
 import { formatTimecode } from "@/lib/utils";
 import { TimelineMarkers, markersFromAnalysis, type TimelineMarker } from "./timeline-markers";
 
@@ -16,8 +17,7 @@ export function SourcePanel({ episodeId }: { episodeId: string }) {
   const { mediaForEpisode, recommendations } = useAppData();
   const master = mediaForEpisode(episodeId, "master");
   const [videoSrc, setVideoSrc] = useState<string>();
-  const [analysis, setAnalysis] = useState<MediaAnalysis | null>(null);
-  const [loading, setLoading] = useState(false);
+  const { analysis, loading } = useMediaAnalysisPoll(master?.id);
   const [currentTime, setCurrentTime] = useState(0);
   const videoRef = useRef<HTMLVideoElement>(null);
 
@@ -29,26 +29,6 @@ export function SourcePanel({ episodeId }: { episodeId: string }) {
       .then((u) => { if (!cancelled) setVideoSrc(u); })
       .catch(() => {});
     return () => { cancelled = true; };
-  }, [master?.id]);
-
-  // Load AI analysis for markers
-  useEffect(() => {
-    if (!master) return;
-    let cancelled = false;
-    const load = () =>
-      getMediaAnalysis(master.id)
-        .then((a) => !cancelled && setAnalysis(a))
-        .catch(() => !cancelled && setAnalysis(null));
-    setLoading(true);
-    load().finally(() => !cancelled && setLoading(false));
-    const timer = setInterval(async () => {
-      const a = await getMediaAnalysis(master.id).catch(() => null);
-      if (!cancelled && a) {
-        setAnalysis(a);
-        if (a.status === "done" || a.status === "failed") clearInterval(timer);
-      }
-    }, 20_000);
-    return () => { cancelled = true; clearInterval(timer); };
   }, [master?.id]);
 
   const seekTo = useCallback(

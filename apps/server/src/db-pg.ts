@@ -756,14 +756,20 @@ export async function insertMedia(m: MediaRow): Promise<void> {
   );
 }
 
+// node-pg returns BIGINT columns (size, createdAt) as strings — coerce so numeric
+// comparisons (e.g. the content-pipeline resume check) and arithmetic don't misbehave.
+function coerceMediaRow(r: any): MediaRow {
+  return { ...r, size: Number(r.size), createdAt: Number(r.createdAt) } as MediaRow;
+}
+
 export async function getMedia(id: string): Promise<MediaRow | undefined> {
   const { rows } = await pool.query(`SELECT id, episodeid AS "episodeId", role, title, filename, path, mime, size, durationsec AS "durationSec", width, height, codec, hasaudio AS "hasAudio", thumbpath AS "thumbPath", createdat AS "createdAt" FROM media WHERE id = $1`, [id]);
-  return rows[0] as MediaRow | undefined;
+  return rows[0] ? coerceMediaRow(rows[0]) : undefined;
 }
 
 export async function listMedia(): Promise<MediaRow[]> {
   const { rows } = await pool.query(`SELECT id, episodeid AS "episodeId", role, title, filename, path, mime, size, durationsec AS "durationSec", width, height, codec, hasaudio AS "hasAudio", thumbpath AS "thumbPath", createdat AS "createdAt" FROM media ORDER BY createdAt DESC`);
-  return rows as unknown as MediaRow[];
+  return rows.map(coerceMediaRow);
 }
 
 export async function updateMediaThumb(id: string, thumbPath: string): Promise<void> {

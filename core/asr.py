@@ -161,6 +161,8 @@ def _transcribe_gemini(audio_or_video: str, language: str, on_progress=None) -> 
         thinking_config=types.ThinkingConfig(thinking_budget=0),
     )
 
+    failed = [0]
+
     def do_window(start: float, dur: float, depth: int = 0) -> list[dict]:
         try:
             resp = client.models.generate_content(
@@ -178,6 +180,7 @@ def _transcribe_gemini(audio_or_video: str, language: str, on_progress=None) -> 
             if depth < 2 and dur > 20:
                 half = dur / 2
                 return do_window(start, half, depth + 1) + do_window(start + half, half, depth + 1)
+            failed[0] += 1
             print(f"   (STT window @{start:.0f}s+{dur:.0f}s failed, skipped: {str(e)[:70]})")
             return []
         out = []
@@ -217,6 +220,12 @@ def _transcribe_gemini(audio_or_video: str, language: str, on_progress=None) -> 
 
     segments = [seg for batch in results for seg in batch]
     segments.sort(key=lambda s: s["start"])
+    # An outage (all/most windows erroring with nothing transcribed) must fail the run —
+    # returning an empty result would be checkpointed and become permanent silent data loss.
+    if failed[0] and not segments:
+        raise RuntimeError(
+            f"Gemini STT: {failed[0]}/{len(starts)} windows failed and no segments were produced"
+        )
     return {"segments": segments, "language": language}
 
 

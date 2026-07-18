@@ -428,13 +428,26 @@ export function AppDataProvider({
   }, []);
 
   const rejectRecommendation = useCallback((id: string, reason: string) => {
-    setState((prev) => ({
-      ...prev,
-      recommendations: prev.recommendations.map((r) =>
-        r.id === id ? { ...r, status: "rejected", rejectReason: reason } : r,
-      ),
-    }));
-    if (connectedRef.current) void rejectRec(id, reason).catch(() => {});
+    let prevRec: Recommendation | undefined;
+    setState((prev) => {
+      prevRec = prev.recommendations.find((r) => r.id === id);
+      return {
+        ...prev,
+        recommendations: prev.recommendations.map((r) =>
+          r.id === id ? { ...r, status: "rejected", rejectReason: reason } : r,
+        ),
+      };
+    });
+    if (connectedRef.current)
+      void rejectRec(id, reason).catch(() => {
+        // Roll back the optimistic reject so the board doesn't lie about server state.
+        setState((prev) => ({
+          ...prev,
+          recommendations: prev.recommendations.map((r) =>
+            r.id === id && prevRec ? prevRec : r,
+          ),
+        }));
+      });
   }, []);
 
   const selectThumbnail = useCallback((recId: string, thumbId: string) => {
