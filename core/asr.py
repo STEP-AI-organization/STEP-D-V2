@@ -182,15 +182,18 @@ def _transcribe_gemini(audio_or_video: str, language: str, on_progress=None) -> 
             return []
         out = []
         for r in rows:
-            text = (r.get("text") or "").strip()
-            if not text:
-                continue
-            out.append({
-                "start": round(start + float(r.get("start", 0)), 3),
-                "end": round(start + float(r.get("end", 0)), 3),
-                "text": text,
-                "words": [],  # Gemini gives utterance-level, not word-level, timestamps
-            })
+            try:
+                text = (r.get("text") or "").strip()
+                if not text:
+                    continue
+                out.append({
+                    "start": round(start + float(r.get("start", 0)), 3),
+                    "end": round(start + float(r.get("end", 0)), 3),
+                    "text": text,
+                    "words": [],  # Gemini gives utterance-level, not word-level, timestamps
+                })
+            except Exception:
+                continue  # one malformed row shouldn't abort the whole transcription
         return out
 
     try:

@@ -104,7 +104,8 @@ def _motion(cv2, cap, t1: float, t2: float) -> float:
 
 
 def _extract_wav(video_path: str) -> Optional[str]:
-    out = tempfile.mktemp(suffix=".wav")
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
+        out = f.name
     try:
         subprocess.run(
             ["ffmpeg", "-y", "-v", "quiet", "-i", video_path,
@@ -113,6 +114,8 @@ def _extract_wav(video_path: str) -> Optional[str]:
         )
         return out if os.path.exists(out) else None
     except Exception:
+        if os.path.exists(out):
+            os.remove(out)
         return None
 
 

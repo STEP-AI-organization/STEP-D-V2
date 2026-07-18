@@ -504,7 +504,11 @@ def recommend(
             s["rank"] = i
     else:
         print(f"   2단계: 합성 — 최종 {n}개 선별…")
-        shorts = _synthesize(client, candidates, n, genre, duration, profile)
+        try:
+            shorts = _synthesize(client, candidates, n, genre, duration, profile)
+        except Exception as e:
+            print(f"   (합성 실패: {str(e)[:80]})")
+            shorts = []
         if not shorts:  # synthesis flaked — degrade to best candidates, not to nothing
             print("   (합성 결과 없음 → 후보 appeal 순으로 대체)")
             shorts = sorted(candidates, key=lambda c: -(c.get("appeal") or 0))

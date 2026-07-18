@@ -123,7 +123,7 @@ def analyze(
     _progress("stt", 3, "음성 인식 준비")
     ts = time.time()
     stt = _load_json(out_dir / "stt.json")
-    if stt and stt.get("segments"):
+    if stt and "segments" in stt:
         step(f"STT — 체크포인트 재사용 ({len(stt['segments'])} 세그먼트)")
     else:
         step("STT (관리형)…")

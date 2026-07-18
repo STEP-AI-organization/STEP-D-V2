@@ -1418,19 +1418,6 @@ app.post("/api/clips/:id/export", async (c) => {
     .digest("hex")
     .slice(0, 16);
 
-  // Cache hit: identical decisions already rendered — don't re-encode.
-  if (clip.rendered && clip.renderRevision === revision && clip.mediaId) {
-    return c.json({ clipId, clip, cached: true, preset: preset?.key ?? null });
-  }
-
-  const allMedia = await listMedia();
-  const master =
-    (clip.sourceMediaId ? allMedia.find((m) => m.id === clip.sourceMediaId) : undefined) ??
-    allMedia.find((m) => m.episodeId === clip.episodeId && m.role === "master");
-  if (!master || !FFMPEG) {
-    return c.json({ error: "no master video or ffmpeg unavailable to render" }, 409);
-  }
-
   // Apply the editor's fine trim within the adopted segment (trimIn/trimOut are relative to
   // the segment). Clamp so the render never escapes [start, end] — the AI-selected window is
   // the outer bound; F just reflects the editor's decisions inside it (§2.4).
@@ -1450,6 +1437,19 @@ app.post("/api/clips/:id/export", async (c) => {
   if (preset && renderEnd - renderStart > preset.maxSec) {
     capped = { maxSec: preset.maxSec, requestedSec: Number((renderEnd - renderStart).toFixed(2)) };
     renderEnd = renderStart + preset.maxSec;
+  }
+
+  // Cache hit: identical decisions already rendered — don't re-encode.
+  if (clip.rendered && clip.renderRevision === revision && clip.mediaId) {
+    return c.json({ clipId, clip, cached: true, preset: preset?.key ?? null, capped });
+  }
+
+  const allMedia = await listMedia();
+  const master =
+    (clip.sourceMediaId ? allMedia.find((m) => m.id === clip.sourceMediaId) : undefined) ??
+    allMedia.find((m) => m.episodeId === clip.episodeId && m.role === "master");
+  if (!master || !FFMPEG) {
+    return c.json({ error: "no master video or ffmpeg unavailable to render" }, 409);
   }
 
   // Aspect precedence: an explicit operator choice in the editor wins (they saw the frame and

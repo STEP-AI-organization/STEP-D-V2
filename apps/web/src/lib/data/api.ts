@@ -337,7 +337,7 @@ export async function exportClip(
     await fetch(`${API_BASE}/clips/${clipId}/export`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(channel ? { channel } : {}),
+      body: JSON.stringify({ channel: channel ?? "" }),
     }),
   );
 }
@@ -355,11 +355,15 @@ export async function publishClips(
   channel: DistributionChannel,
   opts: { reserveDate?: string; scheduled?: boolean; platforms?: MetaPlatform[] },
 ): Promise<void> {
-  await fetch(`${API_BASE}/distributions/publish`, {
+  const res = await fetch(`${API_BASE}/distributions/publish`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ clipIds, channel, ...opts }),
   });
+  if (!res.ok) {
+    const body = (await res.json().catch(() => null)) as { error?: string; message?: string } | null;
+    throw new Error(body?.message ?? body?.error ?? `${res.status} ${res.statusText}`);
+  }
 }
 
 export async function retryDist(clipId: string, channel: DistributionChannel): Promise<void> {

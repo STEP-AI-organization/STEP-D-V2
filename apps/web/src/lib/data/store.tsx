@@ -454,7 +454,23 @@ export function AppDataProvider({
           reserveDate: opts?.reserveDate,
           scheduled: opts?.scheduled,
           platforms: opts?.platforms,
-        }).catch(() => {});
+        }).catch((err: unknown) => {
+          const message = err instanceof Error ? err.message : String(err);
+          const ids = new Set(clipIds);
+          setState((prev) => ({
+            ...prev,
+            clips: prev.clips.map((clip) =>
+              ids.has(clip.id)
+                ? {
+                    ...clip,
+                    distributions: clip.distributions.map((d) =>
+                      d.channel === channel ? { ...d, status: "failed" as const, error: message } : d,
+                    ),
+                  }
+                : clip,
+            ),
+          }));
+        });
       }
     },
     [],
