@@ -1020,6 +1020,52 @@ function synthesizeWords(text: string, start: number, end: number): CaptionWord[
  * windowCaptions). Returns null when there is nothing to burn. This is what replaces the
  * preview's static sample caption with the real transcript.
  */
+type KfPoint = { time: number; x?: number; y?: number; scale?: number; opacity?: number; rotation?: number };
+/** Server mirror of web sampleKeyframes() (lib/editor/presets.ts) — linear per-property
+ *  interpolation, values hold at both ends. `t` is render-relative seconds (= the preview's
+ *  localT = segT − trimIn), so keyframe timing burns identically to what the operator saw. */
+function sampleKf(kfs: KfPoint[], t: number) {
+  const sorted = [...kfs].sort((a, b) => a.time - b.time);
+  const prop = (key: "x" | "y" | "scale" | "opacity" | "rotation"): number | undefined => {
+    const pts = sorted.filter((k) => typeof k[key] === "number");
+    if (!pts.length) return undefined;
+    if (t <= pts[0].time) return pts[0][key];
+    const last = pts[pts.length - 1];
+    if (t >= last.time) return last[key];
+    for (let i = 0; i < pts.length - 1; i++) {
+      const a = pts[i], b = pts[i + 1];
+      if (t >= a.time && t <= b.time) {
+        const f = b.time === a.time ? 0 : (t - a.time) / (b.time - a.time);
+        return (a[key] as number) + ((b[key] as number) - (a[key] as number)) * f;
+      }
+    }
+    return last[key];
+  };
+  return { x: prop("x"), y: prop("y"), scale: prop("scale") ?? 1, opacity: prop("opacity") ?? 1, rotation: prop("rotation") ?? 0 };
+}
+/** ASS alpha tag from CSS opacity (1=opaque→&H00&, 0=transparent→&HFF&). */
+function assAlpha(opacity: number): string {
+  const a = Math.round((1 - Math.max(0, Math.min(1, opacity))) * 255);
+  return `\\alpha&H${a.toString(16).padStart(2, "0").toUpperCase()}&`;
+}
+
+/**
+ * Pick the "keyword" tokens to color-emphasize in a caption — the content words that carry
+ * the meaning (CapCut/Opus highlight these). Cheap, dependency-free heuristic: the longest
+ * tokens by letter/number count (Korean content words tend to be 2+ syllables; particles and
+ * endings are short), capped at ~a third of the line so it stays selective. Mirror this on
+ * the web (editor-preview) so the burn matches the preview. Returns 0-based indices.
+ */
+export function pickKeywordIdx(tokens: string[]): Set<number> {
+  const scored = tokens
+    .map((t, i) => ({ i, len: [...t.replace(/[^\p{L}\p{N}]/gu, "")].length }))
+    .filter((x) => x.len >= 2);
+  if (!scored.length) return new Set();
+  scored.sort((a, b) => b.len - a.len);
+  const n = Math.max(1, Math.round(tokens.length / 3));
+  return new Set(scored.slice(0, n).map((x) => x.i));
+}
+
 function buildEditorAss(
   es: any,
   W: number,
@@ -1031,18 +1077,45 @@ function buildEditorAss(
   const scale = H / stageH;
   const end = assTime(durSec);
   const ev: string[] = [];
+  // Overlay show-windows (startSec/endSec) are segment-relative (0 at the adopted segment
+  // start); the render window starts at trimIn, so subtract it to get render-relative time.
+  // Keyframe times are ALREADY render-relative (localT = segT − trimIn), so they need no shift.
+  const trimIn = Number(es?.trimIn ?? 0);
+  const putWin = (an: number, x: number, y: number, fs: number, color: string, bord: number, bordColor: string, text: string, vs: number, ve: number, extra = "") =>
+    ev.push(`Dialogue: 0,${assTime(vs)},${assTime(ve)},Default,,0,0,0,,{\\an${an}\\pos(${Math.round(x)},${Math.round(y)})\\fs${fs}\\c${color}\\b1\\bord${bord}\\3c${bordColor}\\shad1${extra}}${assEscape(text)}`);
   const put = (an: number, x: number, y: number, fs: number, color: string, bord: number, bordColor: string, text: string) =>
-    ev.push(`Dialogue: 0,0:00:00.00,${end},Default,,0,0,0,,{\\an${an}\\pos(${x},${y})\\fs${fs}\\c${color}\\b1\\bord${bord}\\3c${bordColor}\\shad1}${assEscape(text)}`);
+    putWin(an, x, y, fs, color, bord, bordColor, text, 0, durSec);
+  // Visible [start,end] render-relative window for an overlay; null if it never shows.
+  const winFor = (o: { startSec?: number; endSec?: number }): [number, number] | null => {
+    const vs = Math.max(0, o.startSec != null ? o.startSec - trimIn : 0);
+    const ve = Math.min(durSec, o.endSec != null ? o.endSec - trimIn : durSec);
+    return ve > vs + 0.02 ? [vs, ve] : null;
+  };
+  const SAMPLE_STEP = 0.1; // 10 fps keyframe sampling — smooth enough, cheap for libass
 
   if (es && typeof es === "object") {
     let yOff = 0;
     for (const t of Array.isArray(es.titleLines) ? es.titleLines : []) {
       if (!t?.text?.trim()) continue;
       const fs = Math.max(12, Math.round((t.size ?? 30) * scale));
-      const x = Math.round(((es.titleX ?? 50) / 100) * W);
-      const y = Math.round(((es.titleY ?? 8) / 100) * H) + yOff;
+      const bx = ((es.titleX ?? 50) / 100) * W;
+      const by = ((es.titleY ?? 8) / 100) * H + yOff;
       const an = es.titleAlign === "left" ? 7 : es.titleAlign === "right" ? 9 : 8;
-      put(an, x, y, fs, hexToAss(t.color ?? "#FFFFFF"), 2, "&H00000000&", t.text);
+      const color = hexToAss(t.color ?? "#FFFFFF");
+      const win = winFor(t);
+      if (win) {
+        const kfs: KfPoint[] = Array.isArray(t.keyframes) ? t.keyframes : [];
+        if (kfs.length) {
+          // Title-line keyframe x/y are OFFSETS from the layout (cqw/cqh = % of stage).
+          for (let s = win[0]; s < win[1] - 1e-6; s += SAMPLE_STEP) {
+            const k = sampleKf(kfs, s);
+            const extra = `\\fscx${Math.round(k.scale * 100)}\\fscy${Math.round(k.scale * 100)}${assAlpha(k.opacity)}\\frz${(-k.rotation).toFixed(1)}`;
+            putWin(an, bx + ((k.x ?? 0) / 100) * W, by + ((k.y ?? 0) / 100) * H, fs, color, 2, "&H00000000&", t.text, s, Math.min(win[1], s + SAMPLE_STEP), extra);
+          }
+        } else {
+          putWin(an, bx, by, fs, color, 2, "&H00000000&", t.text, win[0], win[1]);
+        }
+      }
       yOff += Math.round(fs * 1.15);
     }
     if (es.showChannel && es.channelName?.trim()) {
@@ -1052,7 +1125,19 @@ function buildEditorAss(
     for (const el of Array.isArray(es.elements) ? es.elements : []) {
       if (!el?.text?.trim()) continue;
       const fs = Math.max(12, Math.round((el.size ?? (el.type === "arrow" ? 40 : 14)) * scale));
-      put(5, Math.round(((el.x ?? 50) / 100) * W), Math.round(((el.y ?? 50) / 100) * H), fs, "&H0016120D&", 3, "&H00FFFFFF&", el.text);
+      const win = winFor(el);
+      if (!win) continue;
+      const kfs: KfPoint[] = Array.isArray(el.keyframes) ? el.keyframes : [];
+      if (kfs.length) {
+        // Element keyframe x/y are ABSOLUTE stage % (fall back to the element's own x/y).
+        for (let s = win[0]; s < win[1] - 1e-6; s += SAMPLE_STEP) {
+          const k = sampleKf(kfs, s);
+          const extra = `\\fscx${Math.round(k.scale * 100)}\\fscy${Math.round(k.scale * 100)}${assAlpha(k.opacity)}\\frz${(-k.rotation).toFixed(1)}`;
+          putWin(5, ((k.x ?? el.x ?? 50) / 100) * W, ((k.y ?? el.y ?? 50) / 100) * H, fs, "&H0016120D&", 3, "&H00FFFFFF&", el.text, s, Math.min(win[1], s + SAMPLE_STEP), extra);
+        }
+      } else {
+        putWin(5, ((el.x ?? 50) / 100) * W, ((el.y ?? 50) / 100) * H, fs, "&H0016120D&", 3, "&H00FFFFFF&", el.text, win[0], win[1]);
+      }
     }
   }
 
@@ -1063,13 +1148,14 @@ function buildEditorAss(
   const capOn = es && typeof es === "object" ? es.captionsOn !== false : true;
   if (capOn) {
     const capHi = hexToAss((es && typeof es === "object" && es.highlightColor) || "#FFD400");
+    // Keyword tokens sweep to a distinct colour; default = the highlight colour (so it's a
+    // no-op unless the operator picks one), matching CapCut/Opus keyword emphasis.
+    const capKey = hexToAss((es && typeof es === "object" && es.keywordColor) || (es && typeof es === "object" && es.highlightColor) || "#FFD400");
+    const white = "&H00FFFFFF&";
     for (const cap of Array.isArray(captions) ? captions : []) {
       const text = String(cap.text ?? "").trim();
       if (!text || !(cap.end > cap.start)) continue;
-      const start = assTime(cap.start);
-      const end = assTime(cap.end);
-      // Real word timings if the STT had them; otherwise synthesize a sweep (unless the
-      // operator turned karaoke off via es.karaoke === false).
+      // Real word timings if the STT had them; otherwise synthesize (unless karaoke is off).
       const karaokeOn = !(es && typeof es === "object" && (es as any).karaoke === false);
       const words =
         Array.isArray(cap.words) && cap.words.length
@@ -1078,20 +1164,26 @@ function buildEditorAss(
             ? synthesizeWords(text, cap.start, cap.end)
             : [];
       if (words.length) {
-        // sung = highlight (\1c), un-sung = white (\2c); \k durations are centiseconds.
-        let k = `{\\2c&H00FFFFFF&\\1c${capHi}}`;
+        // Word-by-word highlight (the signature "AI short" caption): one Dialogue per word
+        // window, whole line in white, the active word in the highlight colour and keyword
+        // words in the keyword colour. Colour-only (no per-word scale) so a centre-anchored
+        // line never jitters as the active word changes. Windows are sequential → exactly one
+        // line shows at a time; each spans [prevEnd, wordEnd] so there's no gap.
+        const keyIdx = pickKeywordIdx(words.map((w) => String(w.word)));
         let prev = cap.start;
-        for (const w of words) {
-          const ws = Math.max(cap.start, Number(w.start));
-          const we = Math.max(ws, Math.min(cap.end, Number(w.end)));
-          const gap = Math.round((ws - prev) * 100);
-          if (gap > 2) k += `{\\k${gap}}`;
-          k += `{\\k${Math.max(1, Math.round((we - ws) * 100))}}${assEscape(w.word)}`;
+        words.forEach((w, i) => {
+          const we = Math.max(prev + 0.01, Math.min(cap.end, Number(w.end)));
+          const lineEnd = i === words.length - 1 ? cap.end : we;
+          const parts = words.map((ww, j) => {
+            const tok = assEscape(String(ww.word));
+            if (j === i) return `{\\1c${keyIdx.has(j) ? capKey : capHi}}${tok}{\\1c${white}}`;
+            return tok;
+          });
+          ev.push(`Dialogue: 0,${assTime(prev)},${assTime(lineEnd)},Caption,,0,0,0,,{\\1c${white}}${parts.join(" ")}`);
           prev = we;
-        }
-        ev.push(`Dialogue: 0,${start},${end},Caption,,0,0,0,,${k}`);
+        });
       } else {
-        ev.push(`Dialogue: 0,${start},${end},Caption,,0,0,0,,${assEscape(text)}`);
+        ev.push(`Dialogue: 0,${assTime(cap.start)},${assTime(cap.end)},Caption,,0,0,0,,${assEscape(text)}`);
       }
     }
   }
