@@ -336,11 +336,15 @@ function CaptionsTab({ state, update }: { state: EditorState; update: Update }) 
         </select>
       </div>
       <div>
-        <Label>강조 색</Label>
+        <Label>강조 색 (현재 단어)</Label>
         <Swatches colors={COLOR_SWATCHES} value={state.highlightColor} onPick={(c) => update({ highlightColor: c })} />
       </div>
+      <div>
+        <Label>키워드 색</Label>
+        <Swatches colors={COLOR_SWATCHES} value={state.keywordColor ?? state.highlightColor} onPick={(c) => update({ keywordColor: c })} />
+      </div>
       <div className="rounded-md border border-dashed border-zinc-700 p-2 text-[11px] text-zinc-400">
-        자막은 STT(말자막)로 자동 생성됩니다. 실제 STT 연동은 M6에서 활성화됩니다. 원본에 자막이 있으면 자동으로 건너뜁니다.
+        자막은 STT(말자막)로 단어별로 켜집니다 — 말하는 단어는 <b>강조 색</b>, 핵심 단어는 <b>키워드 색</b>으로 표시됩니다. 원본에 자막이 있으면 자동으로 건너뜁니다.
       </div>
     </>
   );

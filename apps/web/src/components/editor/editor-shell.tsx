@@ -10,6 +10,8 @@ import {
   applyTemplate,
   ensureTracks,
   makeInitialEditorState,
+  synthesizeCaptionWords,
+  pickKeywordIdx,
   type EditorState,
   type EditorTrack,
 } from "@/lib/editor/presets";
@@ -269,14 +271,24 @@ export function EditorShell({ clipId }: { clipId: string }) {
 
   // The spoken caption under the playhead — same source & timeline as the render burn-in,
   // so what you see here is what gets baked. offsetMs applies the ±sync fine-tune.
-  const captionText = useMemo(() => {
+  const captionData = useMemo(() => {
     if (!transcript) return undefined;
     const t = videoTime + (state.offsetMs || 0) / 1000; // master-absolute seconds
     const seg = transcript.find(
       (s) => Number(s.start ?? 0) <= t && t < Number(s.end ?? Number(s.start ?? 0) + 3),
     );
-    return (seg?.text ?? "").trim() || undefined;
+    const text = (seg?.text ?? "").trim();
+    if (!seg || !text) return undefined;
+    const segEnd = Number(seg.end ?? Number(seg.start) + 3);
+    // Word-by-word highlight, mirroring the render (buildEditorAss): the same synthesized
+    // word timings + keyword pick, so the preview shows exactly what burns in.
+    const words = synthesizeCaptionWords(text, Number(seg.start), segEnd);
+    if (!words.length) return { text, words: [], activeIdx: -1, keyIdx: new Set<number>() };
+    let activeIdx = words.findIndex((w) => t >= w.start && t < w.end);
+    if (activeIdx < 0) activeIdx = t >= segEnd ? words.length - 1 : 0;
+    return { text, words, activeIdx, keyIdx: pickKeywordIdx(words.map((w) => w.word)) };
   }, [transcript, videoTime, state.offsetMs]);
+  const captionText = captionData?.text;
 
   const togglePlay = useCallback(() => {
     const v = videoEl;
@@ -452,6 +464,9 @@ export function EditorShell({ clipId }: { clipId: string }) {
             onDuration={handleDuration}
             onTogglePlay={togglePlay}
             caption={captionText}
+            captionWords={captionData?.words}
+            captionActiveIdx={captionData?.activeIdx ?? -1}
+            captionKeyIdx={captionData?.keyIdx}
             hasTranscript={!!transcript}
             currentTime={videoTime - segStart}
           />

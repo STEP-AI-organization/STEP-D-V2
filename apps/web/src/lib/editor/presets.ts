@@ -113,6 +113,42 @@ export interface EditorElement {
   endSec?: number;
 }
 
+/** A caption word window (seconds). Mirrors the server's Caption word shape. */
+export interface CaptionWord { word: string; start: number; end: number }
+
+/**
+ * Approximate per-word timings from a caption's text + [start,end] when STT gave none.
+ * MUST match the server's synthesizeWords (apps/server/src/index.ts) so the preview's
+ * word-by-word highlight lands exactly where the render burns it. Syllable-weighted
+ * (Korean: 1 글자 ≈ 1 음절); single-token captions gain nothing and return [].
+ */
+export function synthesizeCaptionWords(text: string, start: number, end: number): CaptionWord[] {
+  const tokens = text.split(/\s+/).filter(Boolean);
+  const dur = end - start;
+  if (tokens.length < 2 || !(dur > 0)) return [];
+  const weights = tokens.map((t) => Math.max(1, [...t].length));
+  const total = weights.reduce((a, b) => a + b, 0);
+  const out: CaptionWord[] = [];
+  let t = start;
+  tokens.forEach((tok, i) => {
+    const we = i === tokens.length - 1 ? end : t + (weights[i] / total) * dur;
+    out.push({ word: tok, start: t, end: we });
+    t = we;
+  });
+  return out;
+}
+
+/** Keyword (content-word) indices to colour-emphasize — mirror of the server's pickKeywordIdx. */
+export function pickKeywordIdx(tokens: string[]): Set<number> {
+  const scored = tokens
+    .map((t, i) => ({ i, len: [...t.replace(/[^\p{L}\p{N}]/gu, "")].length }))
+    .filter((x) => x.len >= 2);
+  if (!scored.length) return new Set<number>();
+  scored.sort((a, b) => b.len - a.len);
+  const n = Math.max(1, Math.round(tokens.length / 3));
+  return new Set(scored.slice(0, n).map((x) => x.i));
+}
+
 /** Whether a timed overlay (title line / element) is visible at segment time `t`. */
 export function overlayVisibleAt(o: { startSec?: number; endSec?: number }, t: number): boolean {
   if (o.startSec != null && t < o.startSec) return false;
@@ -210,6 +246,8 @@ export interface EditorState {
   captionsOn: boolean;
   captionStyle: CaptionStyle;
   highlightColor: string;
+  /** Colour for keyword (content-word) emphasis in captions. Absent = same as highlightColor. */
+  keywordColor?: string;
   showSafeArea: boolean;
   elements: EditorElement[];
   trimIn: number; // seconds
