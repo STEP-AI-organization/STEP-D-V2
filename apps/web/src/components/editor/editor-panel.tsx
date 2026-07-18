@@ -611,7 +611,7 @@ function FiltersTab({ state, update }: { state: EditorState; update: Update }) {
         <RotateCcw className="size-3.5" /> 기본값으로 초기화
       </Button>
       <div className="rounded-md border border-dashed border-zinc-700 p-2 text-[11px] text-zinc-400">
-        필터는 미리보기에 실시간(CSS)으로 적용됩니다. 최종 렌더 반영은 서버 파이프라인 연동 시 활성화됩니다.
+        필터는 미리보기(CSS)와 최종 렌더(ffmpeg)에 함께 적용됩니다. 색감은 근사치라 미리보기와 미세하게 다를 수 있습니다.
       </div>
     </>
   );

@@ -1225,11 +1225,47 @@ function captionAssStyle(style: string, fs: number, mv: number): string {
 }
 
 /**
+/**
+ * Map the editor's colour filters (FilterSettings, CSS-percent scale mirrored from
+ * lib/editor/presets.ts::filterCss) to an ffmpeg video-filter fragment. Returns null when
+ * everything is at its neutral default. brightness is CSS-multiplicative in the preview but
+ * ffmpeg eq.brightness is additive — approximated so the direction/feel matches (not a
+ * pixel-exact match, which is impossible across CSS and libavfilter).
+ */
+function ffGradeFilter(f: any): string | null {
+  if (!f || typeof f !== "object") return null;
+  const parts: string[] = [];
+  const eq: string[] = [];
+  const b = Number(f.brightness ?? 100);
+  const c = Number(f.contrast ?? 100);
+  const s = Number(f.saturation ?? 100);
+  const w = Number(f.warmth ?? 0);
+  if (b !== 100) eq.push(`brightness=${((b - 100) / 200).toFixed(3)}`); // additive approx of CSS %
+  if (c !== 100) eq.push(`contrast=${(c / 100).toFixed(3)}`);
+  if (s !== 100) eq.push(`saturation=${(s / 100).toFixed(3)}`);
+  if (eq.length) parts.push(`eq=${eq.join(":")}`);
+  if (w) {
+    const k = (Math.max(-100, Math.min(100, w)) / 100) * 0.3; // warm = +red/−blue, cool = inverse
+    parts.push(`colorbalance=rm=${k.toFixed(3)}:bm=${(-k).toFixed(3)}`);
+  }
+  return parts.length ? parts.join(",") : null;
+}
+
+/** Map the main track's volume/mute to an ffmpeg audio-filter fragment, or null if neutral. */
+function ffVolumeFilter(track: any): string | null {
+  if (!track || typeof track !== "object") return null;
+  if (track.muted) return "volume=0";
+  const v = Number(track.volume ?? 1);
+  if (!isFinite(v) || v === 1) return null;
+  return `volume=${Math.max(0, Math.min(2, v)).toFixed(3)}`;
+}
+
+/**
  * Render one clip's segment into the final deliverable — the ONE expensive render (plan
  * §2.4 deferred-render invariant), called only from /clips/:id/export. Reframes to the
  * chosen aspect (blur-cover 9:16) and burns the editorState overlays via libass. A plain
- * 16:9 highlight with no overlay takes the cheap trim path. Returns the new clip media +
- * probe metadata, or null if the master is missing / the render fails.
+ * 16:9 highlight with no overlay/grade/volume takes the cheap trim path. Returns the new
+ * clip media + probe metadata, or null if the master is missing / the render fails.
  */
 async function renderClipMedia(opts: {
   master: MediaRow;
@@ -1262,15 +1298,26 @@ async function renderClipMedia(opts: {
   const ass = buildEditorAss(editorState, W, H, stageH, endTime - startTime, opts.captions);
   if (ass) fs.writeFileSync(assTmp, ass, "utf-8");
 
+  // Bake the main track's colour grade + volume into the render — previously these were
+  // preview-only (CSS), so the deliverable silently ignored the operator's edits.
+  const mainTrack = Array.isArray(editorState?.tracks) ? editorState.tracks[0] : undefined;
+  const videoFilters = ffGradeFilter(mainTrack?.filters);
+  const audioFilter = master.hasAudio ? ffVolumeFilter(mainTrack) : null;
+
   // ffmpeg reads the master directly. For GCS we hand it a short-lived signed URL and seek
   // via HTTP range (-ss before -i) — only the requested segment is fetched, so a multi-hour
   // master never lands in Cloud Run's RAM.
   const srcPath = useGcs() ? await signedReadUrl(masterObjPath) : master.path;
   try {
-    if (!ass && aspect === "16:9") {
+    if (!ass && !videoFilters && !audioFilter && aspect === "16:9") {
+      // Fast path only when there's genuinely nothing to bake (no overlays, no grade, no
+      // volume change, native 16:9). Any edit routes through renderShort so it lands.
       await trimEncode(srcPath, startTime, endTime, tmpPath);
     } else {
-      await renderShort({ inputPath: srcPath, startTime, endTime, outputPath: tmpPath, width: W, height: H, assPath: ass ? assTmp : null });
+      await renderShort({
+        inputPath: srcPath, startTime, endTime, outputPath: tmpPath, width: W, height: H,
+        assPath: ass ? assTmp : null, videoFilters, audioFilter,
+      });
     }
     const cmeta = await probe(tmpPath).catch(() => ({
       durationSec: Math.max(1, endTime - startTime), width: W, height: H, codec: "h264", hasAudio: true,
