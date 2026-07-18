@@ -302,7 +302,11 @@ def analyze(
     # 5) shorts recommendation (two-phase, genre-aware) ---------------------------
     ts = time.time()
     rec = _load_json(out_dir / "shorts.json")
-    if not (isinstance(rec, dict) and isinstance(rec.get("shorts"), list)):
+    # An EMPTY shorts checkpoint is not a valid "done" — regenerate it. Otherwise a single
+    # empty pick (old bug) would be reused on every resume and the board would stay at 0
+    # forever. recommend() now guarantees a non-empty result, so this only re-runs the
+    # genuinely-empty leftovers.
+    if not (isinstance(rec, dict) and isinstance(rec.get("shorts"), list) and rec.get("shorts")):
         step("쇼츠 추천…")
         _progress("recommend", 76, "쇼츠 추천 중")
         rec = recommend(

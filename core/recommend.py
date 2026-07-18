@@ -147,10 +147,11 @@ def _base_system(genre: str, profile: dict | None = None) -> str:
 이 장르에서 쇼츠로 터지는 구간의 기준:
 {p['guidance']}
 
-공통 규칙:
-- 하나의 쇼츠는 완결된 단위여야 한다: 훅(초반 시선강탈) → 전개 → 마무리.
-- 여러 장면을 자연스럽게 이어 붙여 하나의 구간으로 (start=첫 장면 시작, end=끝 장면 끝).
-- 길이는 15~60초 권장 (짧은 임팩트 컷은 15초 미만도 허용).
+공통 규칙(긴 영상에서 숏폼을 뽑는 편집자의 눈으로):
+- 하나의 쇼츠는 완결된 단위여야 한다: 훅(초반 시선강탈) → 전개 → 마무리(펀치라인/여운).
+- 피크(터지는 순간)만 자르지 말고, 이해에 필요한 짧은 빌드업을 앞에 붙이고 반응/여운까지 담아라.
+- 여러 장면을 자연스럽게 이어 붙여 하나의 구간으로 (start=첫 장면 시작, end=끝 장면 끝), 문장·장면 경계에서 깔끔히 끊어라.
+- 길이는 30~60초를 기본으로 한 완결 컷 (임팩트가 확실하면 15~30초도 허용). 군더더기·늘어지는 설명은 잘라낸다.
 - appeal은 바이럴 잠재력의 절대평가다: 5=확실히 터진다, 4=강함, 3=쓸만함, 2=약함, 1=비추천.{_profile_block(profile)}"""
 
 
@@ -438,9 +439,19 @@ def validate_shorts(shorts: list[dict], duration: float, n: int) -> list[dict]:
         if duration > 0:
             start = min(start, duration)
             end = min(end, duration)
-        if end - start < MIN_SHORT_SEC or end - start > MAX_SHORT_SEC:
-            print(f"   (후보 제외 — 길이 {end - start:.1f}s: {s.get('title', '')[:30]})")
-            continue
+        length = end - start
+        if length > MAX_SHORT_SEC:
+            # Over-length → TRIM the tail instead of dropping (the hook is usually early).
+            # Dropping here is exactly how a whole board went empty; trimming keeps the pick.
+            print(f"   (길이 초과 {length:.0f}s → {MAX_SHORT_SEC}s 트림: {s.get('title', '')[:30]})")
+            end = start + MAX_SHORT_SEC
+        elif length < MIN_SHORT_SEC:
+            # Too short → extend to the minimum; drop only if truly degenerate (can't reach 1s).
+            extended = min(duration, start + MIN_SHORT_SEC) if duration > 0 else start + MIN_SHORT_SEC
+            if extended - start < 1.0:
+                print(f"   (후보 제외 — 길이 {length:.1f}s: {s.get('title', '')[:30]})")
+                continue
+            end = extended
         appeal = s.get("appeal")
         try:
             appeal = max(1, min(5, int(appeal)))
@@ -455,6 +466,141 @@ def validate_shorts(shorts: list[dict], duration: float, n: int) -> list[dict]:
         s["rank"] = i
         if s["appeal"] is None:
             s["appeal"] = max(1, 6 - i)  # last-resort fallback, not the normal path
+    return out
+
+
+# ── guaranteed floor: editor-style mechanical picker ─────────────────────────────
+# When the AI path yields nothing shippable (model found nothing / synthesis flaked /
+# everything trimmed away), the board must NOT go empty. This cuts shorts the way a
+# human editor would from long-form: find the payoff, keep a little build-up in front,
+# land on a clean scene boundary, and aim for the 30~60s sweet spot. No model calls.
+
+HEUR_AIM_SEC = 45.0      # an editor's default shorts length
+HEUR_MIN_SEC = 30.0      # the 30~60s sweet spot to land in when the material allows
+HEUR_MAX_SEC = 60.0      # the floor never cuts longer than this (validate's 180s is the hard ceiling)
+HEUR_LEADIN_SEC = 12.0   # build-up kept in front of the peak so the payoff has setup
+
+
+def _scene_signal(s: dict) -> float:
+    """0-1 'this is a payoff moment' score from whatever signals a scene carries —
+    Gemini/heuristic vision score, dialogue density, on-screen captions, motion."""
+    vs = s.get("vision_score")
+    vis = (float(vs) / 100.0) if isinstance(vs, (int, float)) else 0.4
+    hs = s.get("heur_score")
+    if isinstance(hs, (int, float)):
+        vis = 0.6 * vis + 0.4 * (float(hs) / 100.0)
+    dur = max(0.1, float(s.get("duration") or (float(s.get("end", 0)) - float(s.get("start", 0))) or 1.0))
+    dialogue = min(1.0, (len((s.get("text") or "").strip()) / dur) / 12.0)  # ~12 chars/s = dense
+    caption = 1.0 if (s.get("on_screen_text") or s.get("on_screen_names")) else 0.0
+    return round(0.6 * vis + 0.3 * dialogue + 0.1 * caption, 4)
+
+
+def _heur_title(s: dict) -> str:
+    names = s.get("on_screen_names") or []
+    if names:
+        return f"{names[0]} 하이라이트"
+    txt = (s.get("text") or "").strip()
+    if txt:
+        return f"“{txt[:18]}…”" if len(txt) > 18 else f"“{txt}”"
+    ost = s.get("on_screen_text") or []
+    if ost:
+        return str(ost[0])[:20]
+    return "하이라이트 구간"
+
+
+def _heur_tags(window: list[dict]) -> list[str]:
+    tags = []
+    if any((s.get("text") or "").strip() for s in window):
+        tags.append("대사")
+    if any((s.get("on_screen_text") or s.get("on_screen_names")) for s in window):
+        tags.append("자막")
+    if not tags:
+        tags.append("하이라이트")
+    return tags
+
+
+def _grow_editor(seed: int, usable: list[dict], used: list[bool], aim: float, hard_max: float) -> tuple[int, int, float, float]:
+    """Grow a window around the peak scene like an editor cutting a short:
+      (a) pull a little build-up in front of the peak (bounded lead-in),
+      (b) extend forward to the aim length, snapping to whole scenes (clean boundaries)."""
+    peak_start = float(usable[seed]["start"])
+    lo = hi = seed
+    start, end = peak_start, float(usable[seed]["end"])
+
+    while lo - 1 >= 0 and not used[lo - 1]:
+        prev_start = float(usable[lo - 1]["start"])
+        if peak_start - prev_start > HEUR_LEADIN_SEC or end - prev_start > hard_max:
+            break
+        lo -= 1
+        start = prev_start
+
+    while end - start < aim and hi + 1 < len(usable) and not used[hi + 1]:
+        cand_end = float(usable[hi + 1]["end"])
+        if cand_end - start > hard_max:
+            break
+        hi += 1
+        end = cand_end
+
+    # Still under the sweet spot? pull a touch more build-up rather than ship a stub.
+    while end - start < HEUR_MIN_SEC and lo - 1 >= 0 and not used[lo - 1]:
+        cand_start = float(usable[lo - 1]["start"])
+        if end - cand_start > hard_max:
+            break
+        lo -= 1
+        start = cand_start
+
+    return lo, hi, start, end
+
+
+def heuristic_shorts(scenes: list[dict], n: int, duration: float, genre: str) -> list[dict]:
+    """Mechanical, model-free picker. Guarantees >=1 short whenever scenes exist so the
+    recommendation board is never empty. Picks the highest-signal moments and cuts each
+    into a 30~60s window (build-up → peak → clean boundary), non-overlapping, top-n by signal."""
+    usable = [
+        s for s in scenes
+        if isinstance(s.get("start"), (int, float))
+        and isinstance(s.get("end"), (int, float))
+        and float(s["end"]) > float(s["start"])
+    ]
+    if not usable:
+        return []
+    usable.sort(key=lambda s: float(s["start"]))
+    sig = [_scene_signal(s) for s in usable]
+    seeds = sorted(range(len(usable)), key=lambda i: -sig[i])
+
+    aim = min(HEUR_AIM_SEC, max(MIN_SHORT_SEC, duration or HEUR_AIM_SEC))
+    hard_max = min(HEUR_MAX_SEC, max(aim, duration or HEUR_MAX_SEC))
+
+    used = [False] * len(usable)
+    chosen: list[tuple[int, int, float, float, float]] = []
+    for seed in seeds:
+        if used[seed]:
+            continue
+        lo, hi, start, end = _grow_editor(seed, usable, used, aim, hard_max)
+        for k in range(lo, hi + 1):
+            used[k] = True
+        seg_sig = max(sig[k] for k in range(lo, hi + 1))
+        chosen.append((lo, hi, round(start, 1), round(end, 1), seg_sig))
+        if len(chosen) >= n:
+            break
+
+    chosen.sort(key=lambda c: -c[4])
+    out = []
+    for rank, (lo, hi, start, end, sc) in enumerate(chosen, 1):
+        peak = max(range(lo, hi + 1), key=lambda k: sig[k])
+        out.append({
+            "rank": rank,
+            "start": start,
+            "end": end,
+            "title": _heur_title(usable[peak]),
+            "reason": "AI 후보가 비어 자동 선별 — 신호(대사·자막·표정/움직임)가 강한 순간을 30~60초로 컷",
+            "appeal": max(1, min(5, 2 + round(sc * 3))),
+            "scene_from": usable[lo].get("index"),
+            "scene_to": usable[hi].get("index"),
+            "tags": _heur_tags(usable[lo:hi + 1]),
+            "hook": "기타",
+            "source": "heuristic",
+        })
     return out
 
 
@@ -506,15 +652,17 @@ def recommend(
     print(f"   후보 {len(candidates)}개")
 
     if not candidates:
-        # No candidates *because calls errored* is an outage, not "the model found nothing".
-        # Raise so the job retries instead of checkpointing an empty shorts.json forever.
-        if failed[0]:
+        # EVERY chunk erroring is a real outage (not "the model found nothing"): raise so the
+        # job retries and can still get real AI picks instead of locking a heuristic floor in.
+        if failed[0] >= len(chunks):
             raise RuntimeError(
                 f"candidate extraction failed for {failed[0]}/{len(chunks)} chunks with zero candidates"
             )
-        return {"genre": genre, "shorts": []}
-
-    if len(chunks) == 1:
+        # Model genuinely returned nothing (or only some chunks errored) → fall through to the
+        # guaranteed floor below instead of dead-ending the board at 0.
+        print("   (후보 0개 — 휴리스틱 폴백으로 보장)")
+        shorts = []
+    elif len(chunks) == 1:
         # Single chunk = Phase 1 already saw the whole video; a synthesis pass adds
         # nothing but latency. Rank by the model's own appeal.
         shorts = sorted(candidates, key=lambda c: -(c.get("appeal") or 0))
@@ -533,18 +681,26 @@ def recommend(
             for i, s in enumerate(shorts, 1):
                 s["rank"] = i
 
-    # Program-fit re-rank (최종 = 융합 × 프로그램적합): weights prized hooks, drops taboos,
-    # nudges toward the target length. No-op when the profile carries no signal.
-    before = len(shorts)
-    shorts = apply_profile_fit(shorts, profile, duration)
-    if profile and before != len(shorts):
-        print(f"   프로파일 적합 적용: {before} → {len(shorts)} (금기 제외)")
+    if shorts:
+        # Program-fit re-rank (최종 = 융합 × 프로그램적합): weights prized hooks, drops taboos,
+        # nudges toward the target length. No-op when the profile carries no signal.
+        before = len(shorts)
+        shorts = apply_profile_fit(shorts, profile, duration)
+        if profile and before != len(shorts):
+            print(f"   프로파일 적합 적용: {before} → {len(shorts)} (금기 제외)")
+        shorts = validate_shorts(shorts, duration, n)
 
-    shorts = validate_shorts(shorts, duration, n)
+    # GUARANTEE — the board is never empty. If the AI path produced nothing shippable
+    # (found nothing, synthesis flaked, or validation trimmed everything away), cut shorts
+    # mechanically from the scene signals. Always yields >=1 when scenes exist.
+    if not shorts:
+        floor = heuristic_shorts(scenes, n, duration, genre)
+        shorts = validate_shorts(floor, duration, n) or floor
+        print(f"   휴리스틱 폴백 — 쇼츠 {len(shorts)}개 생성 (편집자식 30~60초 컷)")
 
     # Channel(배포처) fit — 최종 = 융합 × 채널적합 × 프로그램적합, evaluated PER destination.
-    # Runs after validate_shorts so the matrix only covers candidates that actually survived,
-    # and is purely additive (adds channel_scores; final_score/rank stay as-is).
+    # Runs after validation so the matrix only covers picks that actually survived, and is
+    # purely additive (adds channel_scores; final_score/rank stay as-is).
     try:
         from .channels import apply_channel_fit
         shorts = apply_channel_fit(shorts, scenes, channels)
