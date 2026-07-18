@@ -147,11 +147,12 @@ def _base_system(genre: str, profile: dict | None = None) -> str:
 이 장르에서 쇼츠로 터지는 구간의 기준:
 {p['guidance']}
 
-공통 규칙(긴 영상에서 숏폼을 뽑는 편집자의 눈으로):
-- 하나의 쇼츠는 완결된 단위여야 한다: 훅(초반 시선강탈) → 전개 → 마무리(펀치라인/여운).
-- 피크(터지는 순간)만 자르지 말고, 이해에 필요한 짧은 빌드업을 앞에 붙이고 반응/여운까지 담아라.
-- 여러 장면을 자연스럽게 이어 붙여 하나의 구간으로 (start=첫 장면 시작, end=끝 장면 끝), 문장·장면 경계에서 깔끔히 끊어라.
-- 길이는 30~60초를 기본으로 한 완결 컷 (임팩트가 확실하면 15~30초도 허용). 군더더기·늘어지는 설명은 잘라낸다.
+공통 규칙(긴 영상에서 숏폼(쇼츠)을 뽑는 편집자의 눈으로):
+- 훅이 맨 앞이다: 가장 센 순간(펀치라인·리액션·사건)에서 곧바로 시작해 첫 1~2초에 시선을 잡아라.
+  빌드업·도입·배경설명으로 시작하지 마라 — 그 사이에 시청자는 넘긴다.
+- start는 그 강한 순간이 시작되는 지점. 늘어지는 여운·군더더기는 담지 말고 순간이 끝나면 바로 끊어라.
+- 스스로 이해되는 한 덩어리면 된다 (맥락이 꼭 필요하면 최소한만). 장면·문장 경계에서 깔끔히 끊어라.
+- 길이는 30~60초 (임팩트가 확실하면 15~30초도 좋다). 짧고 강하게.
 - appeal은 바이럴 잠재력의 절대평가다: 5=확실히 터진다, 4=강함, 3=쓸만함, 2=약함, 1=비추천.{_profile_block(profile)}"""
 
 
@@ -469,16 +470,16 @@ def validate_shorts(shorts: list[dict], duration: float, n: int) -> list[dict]:
     return out
 
 
-# ── guaranteed floor: editor-style mechanical picker ─────────────────────────────
+# ── guaranteed floor: hook-first mechanical picker ───────────────────────────────
 # When the AI path yields nothing shippable (model found nothing / synthesis flaked /
 # everything trimmed away), the board must NOT go empty. This cuts shorts the way a
-# human editor would from long-form: find the payoff, keep a little build-up in front,
-# land on a clean scene boundary, and aim for the 30~60s sweet spot. No model calls.
+# shorts editor would from long-form: START at the hook (the peak) — no build-up, no
+# intro — and extend FORWARD to fill the 30~60s window, snapping to scene boundaries.
+# No model calls.
 
-HEUR_AIM_SEC = 45.0      # an editor's default shorts length
-HEUR_MIN_SEC = 30.0      # the 30~60s sweet spot to land in when the material allows
+HEUR_AIM_SEC = 45.0      # target shorts length
+HEUR_MIN_SEC = 30.0      # the 30~60s window to land in when the material allows
 HEUR_MAX_SEC = 60.0      # the floor never cuts longer than this (validate's 180s is the hard ceiling)
-HEUR_LEADIN_SEC = 12.0   # build-up kept in front of the peak so the payoff has setup
 
 
 def _scene_signal(s: dict) -> float:
@@ -519,20 +520,13 @@ def _heur_tags(window: list[dict]) -> list[str]:
     return tags
 
 
-def _grow_editor(seed: int, usable: list[dict], used: list[bool], aim: float, hard_max: float) -> tuple[int, int, float, float]:
-    """Grow a window around the peak scene like an editor cutting a short:
-      (a) pull a little build-up in front of the peak (bounded lead-in),
-      (b) extend forward to the aim length, snapping to whole scenes (clean boundaries)."""
-    peak_start = float(usable[seed]["start"])
+def _cut_from_hook(seed: int, usable: list[dict], used: list[bool], aim: float, hard_max: float) -> tuple[int, int, float, float]:
+    """Cut a short that STARTS at the hook (the peak scene) — no lead-in — and extends
+    FORWARD to the aim length, snapping to whole scenes (clean boundaries). Only pulls
+    backward as a last-resort fallback when the peak sits too near the end to fill forward
+    (a stub is worse than a hair of preceding context)."""
     lo = hi = seed
-    start, end = peak_start, float(usable[seed]["end"])
-
-    while lo - 1 >= 0 and not used[lo - 1]:
-        prev_start = float(usable[lo - 1]["start"])
-        if peak_start - prev_start > HEUR_LEADIN_SEC or end - prev_start > hard_max:
-            break
-        lo -= 1
-        start = prev_start
+    start, end = float(usable[seed]["start"]), float(usable[seed]["end"])
 
     while end - start < aim and hi + 1 < len(usable) and not used[hi + 1]:
         cand_end = float(usable[hi + 1]["end"])
@@ -541,7 +535,7 @@ def _grow_editor(seed: int, usable: list[dict], used: list[bool], aim: float, ha
         hi += 1
         end = cand_end
 
-    # Still under the sweet spot? pull a touch more build-up rather than ship a stub.
+    # Fallback only: peak too close to the end to reach the minimum forward → pull from behind.
     while end - start < HEUR_MIN_SEC and lo - 1 >= 0 and not used[lo - 1]:
         cand_start = float(usable[lo - 1]["start"])
         if end - cand_start > hard_max:
@@ -554,8 +548,8 @@ def _grow_editor(seed: int, usable: list[dict], used: list[bool], aim: float, ha
 
 def heuristic_shorts(scenes: list[dict], n: int, duration: float, genre: str) -> list[dict]:
     """Mechanical, model-free picker. Guarantees >=1 short whenever scenes exist so the
-    recommendation board is never empty. Picks the highest-signal moments and cuts each
-    into a 30~60s window (build-up → peak → clean boundary), non-overlapping, top-n by signal."""
+    recommendation board is never empty. Picks the highest-signal moments and cuts each into
+    a 30~60s window that STARTS at the hook and runs forward, non-overlapping, top-n by signal."""
     usable = [
         s for s in scenes
         if isinstance(s.get("start"), (int, float))
@@ -576,7 +570,7 @@ def heuristic_shorts(scenes: list[dict], n: int, duration: float, genre: str) ->
     for seed in seeds:
         if used[seed]:
             continue
-        lo, hi, start, end = _grow_editor(seed, usable, used, aim, hard_max)
+        lo, hi, start, end = _cut_from_hook(seed, usable, used, aim, hard_max)
         for k in range(lo, hi + 1):
             used[k] = True
         seg_sig = max(sig[k] for k in range(lo, hi + 1))
@@ -593,7 +587,7 @@ def heuristic_shorts(scenes: list[dict], n: int, duration: float, genre: str) ->
             "start": start,
             "end": end,
             "title": _heur_title(usable[peak]),
-            "reason": "AI 후보가 비어 자동 선별 — 신호(대사·자막·표정/움직임)가 강한 순간을 30~60초로 컷",
+            "reason": "AI 후보가 비어 자동 선별 — 신호(대사·자막·표정/움직임)가 가장 센 순간에서 시작해 30~60초로 컷",
             "appeal": max(1, min(5, 2 + round(sc * 3))),
             "scene_from": usable[lo].get("index"),
             "scene_to": usable[hi].get("index"),
