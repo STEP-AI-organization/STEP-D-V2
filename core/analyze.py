@@ -23,6 +23,7 @@ Run:
     python -m core.analyze <video> --out <dir> [--shorts N] [--genre auto|variety|…] [--no-resume]
     python -m core.analyze core/TpQgkCs0TzE.mp4          # writes analysis.json next to it
 """
+import hashlib
 import json
 import os
 import shutil
@@ -61,22 +62,72 @@ def _load_json(path: Path):
         return None
 
 
-def _prepare_checkpoints(out_dir: Path, video_path: str, resume: bool) -> None:
-    """Keep checkpoints only if they belong to THIS video (and resume is wanted)."""
+def _fingerprint(*parts) -> str:
+    """Stable short hash of the params a stage's output depends on."""
+    raw = json.dumps(parts, ensure_ascii=False, sort_keys=True, default=str)
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
+
+
+def _prepare_checkpoints(
+    out_dir: Path,
+    video_path: str,
+    resume: bool,
+    *,
+    genre: str = "auto",
+    shorts_n: int = 5,
+    profile: dict | None = None,
+    channels: list[str] | None = None,
+    cast_registry: list[dict] | None = None,
+) -> None:
+    """Keep checkpoints only if they belong to THIS video AND were produced with the same
+    params. Two independent invalidations:
+
+    1. Video identity — if the source video differs, wipe everything. A transient stat()
+       failure must NOT count as "different video": we only wipe on a *known* mismatch
+       (name differs, or both sizes are known and differ), never on an unknown size.
+    2. Params — genre/profile/channels/cast changing between runs must not silently return
+       a stale cast/shorts timeline. Each param-dependent checkpoint carries a fingerprint;
+       only the ones whose params changed are dropped, so the expensive STT/scene/frame work
+       is preserved.
+    """
     manifest_path = out_dir / "manifest.json"
     try:
-        st = Path(video_path).stat()
-        manifest = {"video_name": Path(video_path).name, "video_size": st.st_size}
+        video_size = Path(video_path).stat().st_size
     except OSError:
-        manifest = {"video_name": Path(video_path).name, "video_size": None}
+        video_size = None  # unknown — do NOT treat as a mismatch
+    video_name = Path(video_path).name
+    # Per-stage param fingerprints. STT/refine/scenes depend only on the video, so they
+    # carry no fingerprint and survive any param change.
+    params = {
+        "cast.json": _fingerprint(cast_registry),
+        "shorts.json": _fingerprint(genre, shorts_n, profile, channels),
+        "analysis.json": _fingerprint(genre, shorts_n, profile, channels, cast_registry),
+    }
+    manifest = {"video_name": video_name, "video_size": video_size, "params": params}
 
-    prior = _load_json(manifest_path)
-    if not resume or prior != manifest:
-        if prior is not None and prior != manifest:
+    prior = _load_json(manifest_path) or {}
+    prior_name = prior.get("video_name")
+    prior_size = prior.get("video_size")
+    video_changed = (
+        prior_name is not None
+        and (prior_name != video_name
+             or (prior_size is not None and video_size is not None and prior_size != video_size))
+    )
+
+    if not resume or video_changed:
+        if video_changed:
             print("체크포인트가 다른 영상의 것 — 초기화")
         for name in CHECKPOINTS:
             (out_dir / name).unlink(missing_ok=True)
         shutil.rmtree(out_dir / "scene_frames", ignore_errors=True)
+    else:
+        # Same video, resuming — drop only the checkpoints whose params changed.
+        prior_params = prior.get("params", {})
+        for name, fp in params.items():
+            if prior_params.get(name) != fp:
+                if (out_dir / name).exists():
+                    print(f"파라미터 변경 — {name} 재생성")
+                (out_dir / name).unlink(missing_ok=True)
     _save_json(manifest_path, manifest)
 
 
@@ -117,7 +168,11 @@ def analyze(
     def timed(name: str, t_start: float) -> None:
         stage_took[name] = round(time.time() - t_start, 1)
 
-    _prepare_checkpoints(out_dir, video_path, resume)
+    _prepare_checkpoints(
+        out_dir, video_path, resume,
+        genre=genre, shorts_n=shorts_n, profile=profile,
+        channels=channels, cast_registry=cast_registry,
+    )
 
     # 1) STT ------------------------------------------------------------------
     _progress("stt", 3, "음성 인식 준비")

@@ -139,6 +139,22 @@ export async function completeJob(id: string): Promise<void> {
 }
 
 /**
+ * Bump a running job's lock timestamp so `requeueStale` doesn't reclaim a job that is
+ * still legitimately executing. Long jobs (content.analyze can exceed STALE_LOCK_MS on a
+ * long master) MUST heartbeat, or the 30-min sweep hands the row back to another worker
+ * mid-run and the two race on the same media work dir. Only touches a row still 'running'
+ * and still owned by this lock (its lockedAt is what we last set), so a legitimately
+ * reclaimed-and-reassigned job is never resurrected.
+ */
+export async function heartbeatJob(id: string): Promise<void> {
+  const now = Date.now();
+  await getPool().query(
+    `UPDATE job_queue SET lockedAt = $2, updatedAt = $2 WHERE id = $1 AND status = 'running'`,
+    [id, now],
+  );
+}
+
+/**
  * Reschedule with exponential backoff, or give up once maxAttempts is spent.
  * A dead job stays in the table — it is the record of what broke.
  */

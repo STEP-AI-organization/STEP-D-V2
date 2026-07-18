@@ -27,6 +27,7 @@ import {
   listYouTubeChannels,
   getYouTubeChannelByChannelId,
   upsertYouTubeChannel,
+  updateYouTubeTokens,
   deleteYouTubeChannel,
   listChannelVideos,
   upsertChannelVideo,
@@ -1263,7 +1264,12 @@ app.post("/api/distributions/publish", async (c) => {
     youtubeChannelId?: string;
     /** YouTube visibility for an immediate publish. Defaults to "public" (the publish intent). */
     privacy?: "public" | "unlisted" | "private";
-  }>();
+  }>().catch(() => null);
+
+  // Reject malformed input up front — a bad/empty body must be a 400, not a 500.
+  if (!b || !Array.isArray(b.clipIds) || !b.channel) {
+    return c.json({ error: "bad_request", message: "clipIds(배열)와 channel이 필요합니다." }, 400);
+  }
 
   const skipped: string[] = [];
 
@@ -1323,7 +1329,10 @@ app.post("/api/distributions/publish", async (c) => {
 
 // ── retry a failed distribution ───────────────────────────────────────────────
 app.post("/api/distributions/retry", async (c) => {
-  const b = await c.req.json<{ clipId: string; channel: string }>();
+  const b = await c.req.json<{ clipId: string; channel: string }>().catch(() => null);
+  if (!b || !b.clipId || !b.channel) {
+    return c.json({ error: "bad_request", message: "clipId와 channel이 필요합니다." }, 400);
+  }
   const clip = await getEntity<any>("clip", b.clipId);
   if (!clip) return c.json({ error: "clip not found" }, 404);
 
@@ -1741,8 +1750,10 @@ function isoDay(days = 0): string {
 
 /** Writes a refreshed access token (and its expiry) back to the channel row. */
 function persistTokensFor(ch: YouTubeChannel): PersistTokens {
+  // Targeted two-column write — a full-row upsert from this snapshot could clobber a
+  // concurrent reconnect's refreshToken or revive a just-revoked channel (see B6).
   return ({ accessToken, expiresAt }) =>
-    upsertYouTubeChannel({ ...ch, accessToken, expiresAt });
+    updateYouTubeTokens(ch.channelId, accessToken, expiresAt);
 }
 
 /** A dead refresh token means the creator must reconnect — park the channel. */

@@ -427,6 +427,23 @@ export async function deleteYouTubeChannel(channelId: string): Promise<void> {
   await pool.query("DELETE FROM youtube_channels WHERE channelId = $1", [channelId]);
 }
 
+/**
+ * Persist a refreshed access token WITHOUT touching any other column. A full-row
+ * upsert from an in-memory snapshot (captured at job start) can clobber a concurrent
+ * reconnect's new refreshToken or resurrect a channel that was just marked 'revoked' —
+ * so token persistence must be a targeted two-column write, not a whole-row overwrite.
+ */
+export async function updateYouTubeTokens(
+  channelId: string,
+  accessToken: string,
+  expiresAt: number,
+): Promise<void> {
+  await pool.query(
+    "UPDATE youtube_channels SET accessToken = $2, expiresAt = $3 WHERE channelId = $1",
+    [channelId, accessToken, expiresAt],
+  );
+}
+
 // ── channel videos ─────────────────────────────────────────────────────────────
 
 export interface ChannelVideo {
@@ -853,7 +870,12 @@ export async function saveContentAnalysis(
     `INSERT INTO content_analysis (mediaId, status, data, error, createdAt, updatedAt)
      VALUES ($1, $2, $3::jsonb, $4, $5, $5)
      ON CONFLICT (mediaId) DO UPDATE SET
-       status = EXCLUDED.status, data = EXCLUDED.data, error = EXCLUDED.error, updatedAt = $5`,
+       status = EXCLUDED.status,
+       -- A data-less write (e.g. a re-analysis that failed before any checkpoint)
+       -- must NOT wipe a previously-stored good analysis. Only overwrite when we
+       -- actually have new data; otherwise keep the prior blob.
+       data = COALESCE(EXCLUDED.data, content_analysis.data),
+       error = EXCLUDED.error, updatedAt = $5`,
     [
       mediaId,
       result.error ? "failed" : "done",

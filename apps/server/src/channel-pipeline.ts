@@ -11,6 +11,7 @@ import {
   getYouTubeChannelByChannelId,
   listYouTubeChannels,
   upsertYouTubeChannel,
+  updateYouTubeTokens,
   upsertChannelVideo,
   getChannelVideoByVideoId,
   getUncheckedShortVideoIds,
@@ -139,7 +140,8 @@ function isDue(last: number | null | undefined, interval: number, now: number): 
 }
 
 function persistTokensFor(ch: YouTubeChannel): PersistTokens {
-  return ({ accessToken, expiresAt }) => upsertYouTubeChannel({ ...ch, accessToken, expiresAt });
+  // Targeted two-column write — never a full-row upsert from this snapshot (see B6).
+  return ({ accessToken, expiresAt }) => updateYouTubeTokens(ch.channelId, accessToken, expiresAt);
 }
 
 async function syncVideos(

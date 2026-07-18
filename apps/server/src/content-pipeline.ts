@@ -198,8 +198,11 @@ function recFromShort(episodeId: string, s: Short) {
 
 /**
  * Surface the AI shorts on the episode's recommendation board.
- * Idempotent: clears any prior recs for the episode first, so a re-run replaces
- * rather than duplicates. Degenerate spans are dropped, not silently stretched.
+ * Idempotent: on a re-run it clears prior *pending* recs and re-inserts fresh ones,
+ * but PRESERVES operator decisions (adopted/rejected) — those carry a clip link and
+ * a reject reason that a blind delete would orphan. New recs that overlap a preserved
+ * decision are skipped so the same span isn't offered (and re-adopted) twice.
+ * Degenerate spans are dropped, not silently stretched.
  */
 async function writeRecommendationsFromShorts(
   episodeId: string,
@@ -213,11 +216,32 @@ async function writeRecommendationsFromShorts(
     if (!ok) console.warn(`[worker] dropping invalid short ${start}~${end}s "${s.title ?? ""}"`);
     return ok;
   });
-  await getPool().query(
-    "DELETE FROM entities WHERE kind = 'recommendation' AND data->>'episodeId' = $1",
+  // Snapshot operator-decided recs (anything not 'pending') BEFORE deleting, so we can
+  // both keep them and avoid re-offering their spans.
+  const { rows: kept } = await getPool().query<{ startTime: number; endTime: number }>(
+    `SELECT (data->>'startTime')::float8 AS "startTime", (data->>'endTime')::float8 AS "endTime"
+       FROM entities
+      WHERE kind = 'recommendation'
+        AND data->>'episodeId' = $1
+        AND COALESCE(data->>'status', 'pending') <> 'pending'`,
     [episodeId],
   );
-  const sorted = [...valid].sort((a, b) => (a.rank ?? 99) - (b.rank ?? 99));
+  await getPool().query(
+    `DELETE FROM entities WHERE kind = 'recommendation' AND data->>'episodeId' = $1
+       AND COALESCE(data->>'status', 'pending') = 'pending'`,
+    [episodeId],
+  );
+  // Two spans "overlap" when they share >50% of the shorter span — enough to treat the
+  // new pick as the same clip the operator already handled.
+  const overlapsKept = (start: number, end: number) =>
+    kept.some((k) => {
+      const inter = Math.min(end, k.endTime) - Math.max(start, k.startTime);
+      if (inter <= 0) return false;
+      const shorter = Math.min(end - start, k.endTime - k.startTime) || 1;
+      return inter / shorter > 0.5;
+    });
+  const fresh = valid.filter((s) => !overlapsKept(Number(s.start) || 0, Number(s.end) || 0));
+  const sorted = [...fresh].sort((a, b) => (a.rank ?? 99) - (b.rank ?? 99));
   // Insert worst-rank first so prepend leaves rank 1 at the front of the board.
   for (let i = sorted.length - 1; i >= 0; i--) {
     const rec = recFromShort(episodeId, sorted[i]);

@@ -122,7 +122,10 @@ def refine_segments(segments: list[dict]) -> list[dict]:
 
     for i in range(0, len(segments), BATCH):
         batch = segments[i:i + BATCH]
-        numbered = "\n".join(f"{i + j + 1}. {s['text']}" for j, s in enumerate(batch))
+        # Number each batch LOCALLY (1..N), not globally. Models routinely renumber from 1
+        # despite instructions; a global offset (batch 2 = 41..80) then matches nothing and
+        # silently drops the whole batch's refinement. Local numbering + offset-back is robust.
+        numbered = "\n".join(f"{j + 1}. {s['text']}" for j, s in enumerate(batch))
         try:
             resp = client.models.generate_content(
                 model=MODEL,
@@ -134,12 +137,19 @@ def refine_segments(segments: list[dict]) -> list[dict]:
                     response_schema=RESPONSE_SCHEMA,
                 ),
             )
-            rows = json.loads(resp.text)
-            by_n = {int(r["n"]): r.get("text", "") for r in rows if "n" in r}
+            rows = json.loads(resp.text or "[]")
+            # Guard each row's `n` individually — one garbage/None value must not blow up the
+            # whole comprehension and discard the entire batch's refinement.
+            by_n: dict[int, str] = {}
+            for r in rows:
+                try:
+                    by_n[int(r["n"])] = r.get("text", "")
+                except (KeyError, TypeError, ValueError):
+                    continue
             for j in range(len(batch)):
-                n = i + j + 1
+                n = j + 1  # local index the model was shown
                 if n in by_n:
-                    refined[n - 1]["text"] = _apply_glossary(by_n[n].strip(), glossary)
+                    refined[i + j]["text"] = _apply_glossary(by_n[n].strip(), glossary)
             done = min(i + BATCH, len(segments))
             print(f"   refined {done}/{len(segments)}")
         except Exception as e:

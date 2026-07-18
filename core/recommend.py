@@ -257,9 +257,11 @@ def detect_genre(client, scenes: list[dict]) -> str:
                 temperature=0,
                 response_mime_type="application/json",
                 response_schema=_DETECT_SCHEMA,
+                max_output_tokens=256,
+                thinking_config=types.ThinkingConfig(thinking_budget=0),
             ),
         )
-        g = json.loads(resp.text).get("genre", DEFAULT_GENRE)
+        g = json.loads(resp.text or "{}").get("genre", DEFAULT_GENRE)
         return g if g in GENRE_PACKS else DEFAULT_GENRE
     except Exception as e:
         print(f"   (장르 감지 실패 → {DEFAULT_GENRE}: {str(e)[:80]})")
@@ -361,9 +363,13 @@ def _extract_candidates(client, chunk: list[dict], genre: str, profile: dict | N
             temperature=0,
             response_mime_type="application/json",
             response_schema=_PHASE1_SCHEMA,
+            # A long scene timeline can yield many candidates — give the JSON the full
+            # output budget (default dynamic thinking tokens were truncating it).
+            max_output_tokens=8192,
+            thinking_config=types.ThinkingConfig(thinking_budget=0),
         ),
     )
-    return json.loads(resp.text).get("candidates", [])
+    return json.loads(resp.text or "{}").get("candidates", [])
 
 
 # ── Phase 2: global synthesis ───────────────────────────────────────────────────
@@ -410,9 +416,12 @@ def _synthesize(client, candidates: list[dict], n: int, genre: str, duration: fl
             temperature=0,
             response_mime_type="application/json",
             response_schema=_PHASE2_SCHEMA,
+            # NOTE: intentionally NO thinking_budget=0 here — Phase 2 is the deliberate
+            # reasoning call (sees all candidates + evidence and selects). Only guard against
+            # a blocked/empty response; the caller degrades to best candidates on empty.
         ),
     )
-    return json.loads(resp.text).get("shorts", [])
+    return json.loads(resp.text or "{}").get("shorts", [])
 
 
 # ── validation ──────────────────────────────────────────────────────────────────

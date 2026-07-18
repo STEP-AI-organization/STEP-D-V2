@@ -48,6 +48,9 @@ LOCATION = os.environ.get("VERTEX_LOCATION") or "asia-northeast3"
 MODEL = os.environ.get("GEMINI_MODEL") or "gemini-2.5-flash"
 WORKERS = 6  # concurrent Vertex calls — enough to be quick, gentle on quota
 SAVE_EVERY = 20  # scenes between checkpoint saves (bounds re-work after a crash)
+# A frame that fails this many times is treated as deterministically un-analyzable
+# (safety block, persistent truncation) and permanently skipped, not retried forever.
+MAX_FRAME_ATTEMPTS = 3
 
 PROMPT = """이 이미지는 한국어 방송의 한 장면(대표 프레임)이다. 아래 두 가지를 한 번에 수행하라.
 
@@ -92,9 +95,16 @@ def analyze_frame(client, frame_path: Path, dialogue: str) -> dict:
             temperature=0,  # deterministic: a re-run scores the same frame the same way
             response_mime_type="application/json",
             response_schema=SCHEMA,
+            max_output_tokens=2048,
+            # No reasoning needed for a single-frame score + OCR — free the whole output
+            # budget for JSON. Default dynamic thinking tokens were eating into it and
+            # truncating text-heavy frames' on_screen_text arrays (→ json.loads crash).
+            thinking_config=types.ThinkingConfig(thinking_budget=0),
         ),
     )
-    return json.loads(resp.text)
+    # A blocked/empty response returns text=None; json.loads(None) would raise a confusing
+    # TypeError. Treat it as an empty result so the caller marks the frame failed cleanly.
+    return json.loads(resp.text or "{}")
 
 
 def _frame_done(scene: dict) -> bool:
@@ -142,12 +152,23 @@ def analyze_frames(
                 scene.pop("_frame_error", None)
         except Exception as e:
             with lock:
-                scene["vision_score"] = None
-                scene["vision_reason"] = f"(평가 실패: {str(e)[:80]})"
+                attempts = int(scene.get("_frame_attempts", 0)) + 1
+                scene["_frame_attempts"] = attempts
                 scene["vision_tags"] = []
                 scene["on_screen_names"] = []
                 scene["on_screen_text"] = []
-                scene["_frame_error"] = str(e)[:80]
+                if attempts >= MAX_FRAME_ATTEMPTS:
+                    # Deterministically un-analyzable (safety block, persistent truncation).
+                    # Mark it permanently skipped (score 0, both halves present) so it
+                    # satisfies _frame_done and stops being retried forever — one bad frame
+                    # must never dead-letter a 200-frame analysis.
+                    scene["vision_score"] = 0
+                    scene["vision_reason"] = f"(분석 불가 · {attempts}회 실패: {str(e)[:60]})"
+                    scene.pop("_frame_error", None)
+                else:
+                    scene["vision_score"] = None
+                    scene["vision_reason"] = f"(평가 실패: {str(e)[:80]})"
+                    scene["_frame_error"] = str(e)[:80]
         with lock:
             done[0] += 1
             n = done[0]
@@ -164,11 +185,13 @@ def analyze_frames(
     with ThreadPoolExecutor(max_workers=WORKERS) as ex:
         list(ex.map(work, targets))
 
-    # Every single call failing means Vertex itself is down, not a bad frame — raise so
-    # the job retries (failed scenes keep vision_score=None and are redone on resume)
-    # instead of completing with an unscored timeline.
+    # Distinguish a real Vertex outage from a poison frame. Only a COLD start where every
+    # call failed and nothing had ever succeeded (skipped == 0) is treated as an outage
+    # worth failing the job for. If earlier frames already scored (skipped > 0), a remaining
+    # all-fail is a handful of un-analyzable frames — they exhaust MAX_FRAME_ATTEMPTS and get
+    # permanently skipped above, so we must NOT raise (that would dead-letter the whole run).
     failures = sum(1 for s in targets if s.get("_frame_error"))
-    if total and failures == total:
+    if total and failures == total and skipped == 0:
         raise RuntimeError(f"frame analysis: all {total} Gemini calls failed (Vertex outage?)")
 
     return scenes

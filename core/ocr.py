@@ -27,9 +27,13 @@ from typing import Callable, Optional
 OCR_PROVIDER = (os.environ.get("OCR_PROVIDER") or "paddle").lower()
 _ENABLED = OCR_PROVIDER in ("paddle", "paddleocr", "on", "1", "true")
 
-# A name caption is a short all-Hangul token (2–4 chars). Combined with a lower-third
-# position test, this separates 이름표(lower-third) from program titles / meme captions.
-_HANGUL_NAME = re.compile(r"^[가-힣]{2,4}$")
+# A name caption is a 2–4 char Hangul name, optionally preceded by a season/rank prefix
+# — the broadcast lower-third convention ("23기 영숙", "12호 철수"). The old pure-Hangul
+# pattern rejected every prefixed caption, so on PaddleOCR-only frames (the ~85% majority)
+# the product's headline "23기 영숙" example never populated on_screen_names. We keep the
+# original token; cast.normalize_name handles the prefix downstream. Combined with a
+# lower-third position test, this still separates 이름표 from program titles / meme captions.
+_HANGUL_NAME = re.compile(r"^(?:\d{1,3}(?:기|호|대|년|월|회)?)?[가-힣]{2,4}$")
 
 _reader = None
 _reader_tried = False

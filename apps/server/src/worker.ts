@@ -15,6 +15,7 @@ import {
   listYouTubeChannels,
   getYouTubeChannelByChannelId,
   upsertYouTubeChannel,
+  updateYouTubeTokens,
   listChannelVideos,
   getChannelVideoByVideoId,
   insertVideoStat,
@@ -28,7 +29,7 @@ import {
   getMedia,
   type YouTubeChannel,
 } from "./db-pg.ts";
-import { initQueue, claimJob, completeJob, failJob, requeueStale, enqueue, queueStats, type Job, type JobType } from "./queue.ts";
+import { initQueue, claimJob, completeJob, failJob, requeueStale, heartbeatJob, enqueue, queueStats, type Job, type JobType } from "./queue.ts";
 import { runChannelPipeline } from "./channel-pipeline.ts";
 import { runContentAnalyze } from "./content-pipeline.ts";
 import {
@@ -101,7 +102,8 @@ function isoDay(days = 0): string {
 }
 
 function persistTokensFor(ch: YouTubeChannel): PersistTokens {
-  return ({ accessToken, expiresAt }) => upsertYouTubeChannel({ ...ch, accessToken, expiresAt });
+  // Targeted two-column write — never a full-row upsert from this snapshot (see B6).
+  return ({ accessToken, expiresAt }) => updateYouTubeTokens(ch.channelId, accessToken, expiresAt);
 }
 
 function withChannelToken<T>(ch: YouTubeChannel, call: (token: string) => Promise<T>): Promise<T> {
@@ -470,8 +472,16 @@ async function loop(): Promise<void> {
       continue;
     }
 
+    // Keep the lock fresh while the job runs, so requeueStale (30-min sweep) never hands a
+    // still-executing long job (content.analyze) to a second worker. 5-min cadence, well
+    // under the 30-min stale window.
+    const beat = setInterval(() => {
+      void heartbeatJob(job!.id).catch((err) => console.error("[worker] heartbeat failed", err));
+    }, 5 * 60 * 1000);
+    if (typeof beat.unref === "function") beat.unref();
     try {
       const followUp = await handle(job);
+      clearInterval(beat);
       await completeJob(job.id);
       // Enqueue any successor only now that this row is 'done', so a self-scheduling
       // job (hotwatch) can reuse its own dedupeKey without colliding with itself.
@@ -480,6 +490,7 @@ async function loop(): Promise<void> {
         if (!id) console.warn(`[worker] follow-up ${followUp.type} for ${job.id} was deduped`);
       }
     } catch (err: any) {
+      clearInterval(beat);
       if (err instanceof TokenRevokedError) {
         // Refreshing can never succeed again — park the channel and stop retrying.
         const channelId = String(job.payload.channelId ?? "");
