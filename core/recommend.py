@@ -428,6 +428,39 @@ def _synthesize(client, candidates: list[dict], n: int, genre: str, duration: fl
 
 # ── validation ──────────────────────────────────────────────────────────────────
 
+# Two picks that cover the same moment are a visible board defect (same clip twice, in two
+# of only ~5 slots). Phase 2 synthesis is *asked* to merge overlaps, but the single-chunk
+# path (no synthesis), the synthesis-flake fallback (ranked by appeal), and even a synthesis
+# that simply didn't merge all leave overlaps in. This is the one enforced de-dup.
+DEDUP_OVERLAP_RATIO = 0.5  # drop a later pick overlapping a kept one by >50% of the shorter span
+
+
+def _dedup_overlaps(shorts: list[dict]) -> list[dict]:
+    """Greedy, order-preserving: walk picks in their already-ranked order and drop any later
+    pick whose span overlaps an already-kept pick by more than DEDUP_OVERLAP_RATIO of the
+    shorter of the two. Keeps the higher-ranked pick of each overlapping cluster, so the freed
+    slots fall through to the next distinct moment (a more diverse board), not a duplicate."""
+    kept: list[dict] = []
+    for s in shorts:
+        try:
+            s0, s1 = float(s.get("start", 0)), float(s.get("end", 0))
+        except (TypeError, ValueError):
+            continue
+        slen = s1 - s0
+        if slen <= 0:
+            continue
+        dup = False
+        for k in kept:
+            k0, k1 = float(k["start"]), float(k["end"])
+            inter = min(s1, k1) - max(s0, k0)
+            if inter > 0 and inter >= DEDUP_OVERLAP_RATIO * min(slen, k1 - k0):
+                dup = True
+                break
+        if not dup:
+            kept.append(s)
+    return kept
+
+
 def validate_shorts(shorts: list[dict], duration: float, n: int) -> list[dict]:
     """Clamp/normalize the model output; drop degenerate spans instead of 'fixing' them."""
     out = []
@@ -460,8 +493,11 @@ def validate_shorts(shorts: list[dict], duration: float, n: int) -> list[dict]:
             appeal = None
         out.append({**s, "start": round(start, 1), "end": round(end, 1), "appeal": appeal})
 
-    # Order by the model's rank when present, else by appeal — then re-number 1..n.
+    # Order by the model's rank when present, else by appeal — then drop overlapping
+    # duplicates BEFORE capping, so freed slots fall through to the next distinct moment
+    # rather than being spent on a second copy of the same clip. Re-number 1..n after.
     out.sort(key=lambda s: (s.get("rank") if isinstance(s.get("rank"), int) else 99, -(s.get("appeal") or 0)))
+    out = _dedup_overlaps(out)
     out = out[:n]
     for i, s in enumerate(out, 1):
         s["rank"] = i
