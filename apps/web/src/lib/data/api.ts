@@ -63,6 +63,7 @@ export interface AnalysisTranscriptSegment {
   start: number;
   end?: number;
   text?: string;
+  appealScore?: number;
 }
 export interface NarrativeSegment {
   block_index: number;
