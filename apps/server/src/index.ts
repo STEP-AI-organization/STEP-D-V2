@@ -658,6 +658,10 @@ async function buildEpisodeAndMedia(opts: {
   size: number;
   meta: { durationSec: number; width: number; height: number; codec: string; hasAudio: boolean };
   thumbPath: string | null;
+  /** Set when the master file isn't in storage yet (YouTube import): replaces the default
+   *  pipeline note and skips the content.analyze enqueue — the download job does that
+   *  once the file actually lands in GCS. */
+  pendingIngestNote?: string;
 }) {
   const { mediaId, programId, program, storedPath, filename, title, mime, size, meta } = opts;
 
@@ -677,7 +681,9 @@ async function buildEpisodeAndMedia(opts: {
     targetAge: program.targetAge,
     // Truthful status: the AI content pipeline is enqueued, not done. The worker flips
     // this to recommend/done once shorts land (content-pipeline.ts).
-    pipeline: { stage: "analyze", stageStatus: "progress", note: "AI 장면 분석 중…", progress: 30 },
+    pipeline: opts.pendingIngestNote
+      ? { stage: "analyze", stageStatus: "progress", note: opts.pendingIngestNote, progress: 5 }
+      : { stage: "analyze", stageStatus: "progress", note: "AI 장면 분석 중…", progress: 30 },
   };
   await prependEntity("episode", episodeId, episode);
 
@@ -702,11 +708,13 @@ async function buildEpisodeAndMedia(opts: {
 
   // No heuristic placeholder recommendations — real segments come from the AI content
   // pipeline (content.analyze) on the worker. Uploads start with an empty recommend board.
-  try {
-    await markContentAnalysisPending(mediaId);
-    await enqueue("content.analyze", { mediaId }, { dedupeKey: `content.analyze:${mediaId}` });
-  } catch (err) {
-    console.error("[upload] failed to enqueue content.analyze", err);
+  if (!opts.pendingIngestNote) {
+    try {
+      await markContentAnalysisPending(mediaId);
+      await enqueue("content.analyze", { mediaId }, { dedupeKey: `content.analyze:${mediaId}` });
+    } catch (err) {
+      console.error("[upload] failed to enqueue content.analyze", err);
+    }
   }
 
   return { media: mediaPublic(row), episode, recommendations: [] };
@@ -888,6 +896,48 @@ app.post("/api/media/upload", async (c) => {
     meta, thumbPath: thumbStored,
   });
   return c.json(result);
+});
+
+// ── YouTube URL import: episode + placeholder media now, download on the worker VM ──
+// Cloud Run can't hold a multi-GB download, so this route only records intent: the
+// youtube.download job (worker.ts) runs yt-dlp, lands the file in GCS, fills the media
+// row with real facts, and enqueues content.analyze — rejoining the normal upload flow.
+const YOUTUBE_URL_RE =
+  /^https?:\/\/(?:www\.|m\.)?(?:youtube\.com\/(?:watch\?[^#]*\bv=|shorts\/|live\/)|youtu\.be\/)[\w-]{6,}/;
+
+app.post("/api/media/from-youtube", async (c) => {
+  const body = await c.req.json().catch(() => ({}) as Record<string, unknown>);
+  const url = typeof body.url === "string" ? body.url.trim() : "";
+  if (!YOUTUBE_URL_RE.test(url)) return c.json({ error: "유효한 YouTube URL이 아닙니다" }, 400);
+
+  const programId =
+    typeof body.programId === "string" && body.programId ? String(body.programId) : "p1";
+  const program = await getEntity<{ id: string; title: string; targetAge: number }>("program", programId);
+  if (!program) return c.json({ error: "program not found" }, 400);
+
+  const title = typeof body.title === "string" && body.title.trim() ? body.title.trim() : "YouTube 영상";
+  const mediaId = newId("m");
+
+  const result = await buildEpisodeAndMedia({
+    mediaId,
+    programId,
+    program,
+    storedPath: `youtube:${url}`, // placeholder — replaced with the GCS URI after download
+    filename: `${mediaId}.mp4`,
+    title,
+    mime: "video/mp4",
+    size: 0,
+    meta: { durationSec: 0, width: 0, height: 0, codec: "", hasAudio: false },
+    thumbPath: null,
+    pendingIngestNote: "YouTube 영상 다운로드 대기 중…",
+  });
+
+  const jobId = await enqueue(
+    "youtube.download",
+    { mediaId, url, programId, title },
+    { dedupeKey: `youtube.download:${mediaId}` },
+  );
+  return c.json({ ...result, ok: true, queued: jobId != null });
 });
 
 // ── construct F: editorState → reframe dims + ASS overlay ──────────────────────

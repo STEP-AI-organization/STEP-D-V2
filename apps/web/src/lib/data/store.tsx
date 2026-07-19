@@ -38,6 +38,7 @@ import {
   API_BASE,
   fetchState,
   uploadVideo as apiUploadVideo,
+  importYoutubeVideo as apiImportYoutubeVideo,
   createProgram as apiCreateProgram,
   adoptRec,
   exportClip as exportClipApi,
@@ -150,6 +151,8 @@ interface AppData extends AppState {
   retryDistribution: (clipId: string, channel: DistributionChannel) => void;
   /** Upload a real video → creates an episode + recommendations. Returns episodeId. */
   uploadVideo: (file: File, programId: string, title?: string, onProgress?: (pct: number) => void) => Promise<string>;
+  /** Queue a YouTube URL import — the worker downloads then analyzes. Returns episodeId. */
+  importYoutube: (url: string, programId: string, title?: string) => Promise<string>;
   /** Create a program (content root). Returns the new programId. */
   createProgram: (input: {
     title: string;
@@ -603,6 +606,16 @@ export function AppDataProvider({
     [refresh],
   );
 
+  const importYoutube = useCallback(
+    async (url: string, programId: string, title?: string): Promise<string> => {
+      if (!connectedRef.current) throw new Error("YouTube 가져오기는 백엔드 서버가 필요합니다 (pnpm dev:server).");
+      const res = await apiImportYoutubeVideo(url, programId, title);
+      await refresh();
+      return res.episodeId;
+    },
+    [refresh],
+  );
+
   const createProgram = useCallback(
     async (input: {
       title: string;
@@ -678,6 +691,7 @@ export function AppDataProvider({
       publishToChannel,
       retryDistribution,
       uploadVideo,
+      importYoutube,
       createProgram,
       refresh,
     };
@@ -696,6 +710,7 @@ export function AppDataProvider({
     publishToChannel,
     retryDistribution,
     uploadVideo,
+    importYoutube,
     createProgram,
     refresh,
   ]);

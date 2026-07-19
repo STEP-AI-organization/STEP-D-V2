@@ -27,6 +27,10 @@ fi
 "$VENV/bin/pip" install --quiet --upgrade pip
 "$VENV/bin/pip" install --quiet -r "$APP_DIR/core/requirements.txt"
 
+echo "==> yt-dlp (YouTube URL ingest — worker's youtube.download job spawns \`yt-dlp\`)"
+"$VENV/bin/pip" install --quiet --upgrade yt-dlp
+sudo ln -sf "$VENV/bin/yt-dlp" /usr/local/bin/yt-dlp
+
 # Optional "reduce-Gemini" extras — the algorithmic pre-processing stack that lets the
 # pipeline lean less on Gemini (STT fallback, richer scene pre-filter, real OCR). All are
 # OPTIONAL: the pipeline degrades gracefully to the Gemini path without them, so this block

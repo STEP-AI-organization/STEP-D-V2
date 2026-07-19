@@ -248,6 +248,26 @@ export async function uploadVideo(
   );
 }
 
+/**
+ * Import a YouTube video by URL. The server only creates the episode + a placeholder
+ * media row and queues the download on the worker VM (yt-dlp → GCS → content.analyze),
+ * so this resolves immediately — progress then shows on the episode's pipeline status.
+ */
+export async function importYoutubeVideo(
+  url: string,
+  programId: string,
+  title?: string,
+): Promise<{ episodeId: string; mediaId: string }> {
+  const res = await json<{ episode: { id: string }; media: { id: string } }>(
+    await fetch(`${API_BASE}/media/from-youtube`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url, programId, title }),
+    }),
+  );
+  return { episodeId: res.episode.id, mediaId: res.media.id };
+}
+
 /** PUT the file to a GCS resumable session URI in chunks, resuming on transient failures. */
 async function uploadResumable(
   sessionUrl: string,

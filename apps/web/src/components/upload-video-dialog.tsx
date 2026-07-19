@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Upload, Loader2, X, Film, AlertTriangle } from "lucide-react";
+import { Upload, Loader2, X, Film, AlertTriangle, Youtube, Info } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { useAppData } from "@/lib/data/store";
@@ -43,12 +43,19 @@ function fmtEta(sec: number): string {
   return `약 ${h}시간 ${m}분`;
 }
 
+// Same shape the server validates (watch / shorts / live / youtu.be) — reject early here
+// so a typo doesn't cost a round-trip.
+const YOUTUBE_URL_RE =
+  /^https?:\/\/(?:www\.|m\.)?(?:youtube\.com\/(?:watch\?[^#]*\bv=|shorts\/|live\/)|youtu\.be\/)[\w-]{6,}/;
+
 function UploadDialog({ onClose, defaultProgramId }: { onClose: () => void; defaultProgramId?: string }) {
-  const { programs, uploadVideo } = useAppData();
+  const { programs, uploadVideo, importYoutube } = useAppData();
   const { toast } = useToast();
   const router = useRouter();
+  const [mode, setMode] = useState<"file" | "youtube">("file");
   const [programId, setProgramId] = useState(defaultProgramId ?? programs[0]?.id ?? "");
   const [file, setFile] = useState<File | null>(null);
+  const [url, setUrl] = useState("");
   const [title, setTitle] = useState("");
   const [busy, setBusy] = useState(false);
   const [pct, setPct] = useState(0);
@@ -106,6 +113,29 @@ function UploadDialog({ onClose, defaultProgramId }: { onClose: () => void; defa
     }
   }
 
+  async function submitYoutube() {
+    if (busy) return;
+    const trimmed = url.trim();
+    if (!YOUTUBE_URL_RE.test(trimmed)) {
+      toast({ title: "URL 확인 필요", description: "유효한 YouTube 링크가 아닙니다", tone: "error" });
+      return;
+    }
+    setBusy(true);
+    try {
+      const episodeId = await importYoutube(trimmed, programId, title.trim() || undefined);
+      toast({
+        title: "가져오기 시작",
+        description: "YouTube 영상 다운로드가 시작되었습니다 (Worker에서 처리)",
+        tone: "done",
+      });
+      onClose();
+      router.push(`/episodes/${episodeId}`);
+    } catch (err) {
+      toast({ title: "가져오기 실패", description: err instanceof Error ? err.message : String(err), tone: "error" });
+      setBusy(false);
+    }
+  }
+
   const uploadedBytes = file ? Math.min(file.size, (pct / 100) * file.size) : 0;
   const remaining = file ? Math.max(0, file.size - uploadedBytes) : 0;
   const etaSec = speed > 0 ? remaining / speed : Infinity;
@@ -127,6 +157,30 @@ function UploadDialog({ onClose, defaultProgramId }: { onClose: () => void; defa
         </div>
 
         <div className="space-y-4 p-4">
+          {/* source toggle: local file vs YouTube link */}
+          <div className="grid grid-cols-2 gap-1 rounded-lg bg-muted p-1 text-xs font-medium">
+            <button
+              onClick={() => !busy && setMode("file")}
+              disabled={busy}
+              className={cn(
+                "flex items-center justify-center gap-1.5 rounded-md px-3 py-1.5 transition-colors",
+                mode === "file" ? "bg-background shadow-sm" : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              <Upload className="size-3.5" /> 파일 업로드
+            </button>
+            <button
+              onClick={() => !busy && setMode("youtube")}
+              disabled={busy}
+              className={cn(
+                "flex items-center justify-center gap-1.5 rounded-md px-3 py-1.5 transition-colors",
+                mode === "youtube" ? "bg-background shadow-sm" : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              <Youtube className="size-3.5" /> 유튜브 링크
+            </button>
+          </div>
+
           <div>
             <div className="mb-1.5 text-xs font-semibold text-muted-foreground">프로그램</div>
             <select
@@ -143,7 +197,45 @@ function UploadDialog({ onClose, defaultProgramId }: { onClose: () => void; defa
             </select>
           </div>
 
+          {mode === "youtube" && (
+            <>
+              <div>
+                <div className="mb-1.5 text-xs font-semibold text-muted-foreground">YouTube URL</div>
+                <input
+                  value={url}
+                  onChange={(e) => setUrl(e.target.value)}
+                  disabled={busy}
+                  placeholder="https://www.youtube.com/watch?v=…"
+                  className="h-9 w-full rounded-md border border-border bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+                />
+              </div>
+              <div>
+                <div className="mb-1.5 text-xs font-semibold text-muted-foreground">제목 (선택)</div>
+                <input
+                  value={title}
+                  onChange={(e) => setTitle(e.target.value)}
+                  disabled={busy}
+                  placeholder="비우면 &quot;YouTube 영상&quot;으로 표시"
+                  className="h-9 w-full rounded-md border border-border bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
+                />
+              </div>
+              <div className="flex items-start gap-2 rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+                <Info className="mt-px size-4 shrink-0" />
+                <span>
+                  영상은 <b>Worker에서 다운로드</b>된 뒤 자동으로 AI 분석이 시작됩니다. 진행 상황은 생성된
+                  회차 화면에서 확인할 수 있습니다.
+                </span>
+              </div>
+              {busy && (
+                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <Loader2 className="size-4 animate-spin" /> YouTube 영상 다운로드 중… (Worker에서 처리)
+                </div>
+              )}
+            </>
+          )}
+
           {/* drop zone — locked while uploading */}
+          {mode === "file" && (<>
           <div
             onClick={busy ? undefined : () => inputRef.current?.click()}
             onDragOver={(e) => {
@@ -233,15 +325,22 @@ function UploadDialog({ onClose, defaultProgramId }: { onClose: () => void; defa
               </div>
             </div>
           )}
+          </>)}
         </div>
 
         <div className="flex items-center justify-end gap-2 border-t border-border px-4 py-3">
           <Button variant="outline" size="sm" onClick={onClose} disabled={busy}>
             취소
           </Button>
-          <Button size="sm" onClick={submit} disabled={!file || busy}>
-            {busy ? <Loader2 className="animate-spin" /> : <Upload />}
-            {busy ? (pct < 100 ? "업로드 중…" : "처리 중…") : "업로드"}
+          <Button
+            size="sm"
+            onClick={mode === "file" ? submit : submitYoutube}
+            disabled={busy || (mode === "file" ? !file : !url.trim())}
+          >
+            {busy ? <Loader2 className="animate-spin" /> : mode === "file" ? <Upload /> : <Youtube />}
+            {mode === "file"
+              ? busy ? (pct < 100 ? "업로드 중…" : "처리 중…") : "업로드"
+              : busy ? "가져오는 중…" : "가져오기"}
           </Button>
         </div>
       </div>

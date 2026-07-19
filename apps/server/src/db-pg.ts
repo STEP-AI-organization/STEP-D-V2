@@ -830,6 +830,29 @@ export async function updateMediaThumb(id: string, thumbPath: string): Promise<v
   await pool.query("UPDATE media SET thumbPath = $1 WHERE id = $2", [thumbPath, id]);
 }
 
+/** Fill a placeholder media row (e.g. a queued YouTube import) with the real file's facts. */
+export async function updateMediaSource(
+  id: string,
+  m: {
+    path: string;
+    mime: string;
+    size: number;
+    durationSec: number;
+    width: number;
+    height: number;
+    codec: string;
+    hasAudio: number;
+    thumbPath: string | null;
+  },
+): Promise<void> {
+  await pool.query(
+    `UPDATE media SET path = $2, mime = $3, size = $4, durationSec = $5,
+       width = $6, height = $7, codec = $8, hasAudio = $9, thumbPath = $10
+     WHERE id = $1`,
+    [id, m.path, m.mime, m.size, m.durationSec, m.width, m.height, m.codec, m.hasAudio, m.thumbPath],
+  );
+}
+
 // ── assembled state ────────────────────────────────────────────────────────────
 
 export async function getState() {

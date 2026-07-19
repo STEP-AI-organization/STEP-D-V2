@@ -10,6 +10,10 @@
  *
  * Run:  pnpm --filter @stepd/server worker
  */
+import { spawn } from "node:child_process";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import {
   initDb,
   listYouTubeChannels,
@@ -27,8 +31,12 @@ import {
   getEntity,
   putEntity,
   getMedia,
+  updateMediaSource,
+  markContentAnalysisPending,
   type YouTubeChannel,
 } from "./db-pg.ts";
+import { probe, captureThumbnail } from "./ffmpeg.ts";
+import { uploadFile, uploadPath, thumbPath } from "./storage-gcs.ts";
 import { initQueue, claimJob, completeJob, failJob, requeueStale, heartbeatJob, enqueue, queueStats, type Job, type JobType } from "./queue.ts";
 import { runChannelPipeline } from "./channel-pipeline.ts";
 import { runContentAnalyze } from "./content-pipeline.ts";
@@ -68,7 +76,7 @@ const TICK_INTERVAL_MS = 15 * 60 * 1000;
  * jobs, and vice versa. Unset / "all" keeps the legacy single worker that drains everything.
  */
 const JOB_LANES: Record<"content" | "youtube", JobType[]> = {
-  content: ["content.analyze"],
+  content: ["content.analyze", "youtube.download"],
   youtube: ["channel.analyze", "video.analyze", "video.hotwatch", "video.comments", "distribution.publish"],
 };
 const WORKER_JOBS = (process.env.WORKER_JOBS ?? "all").trim().toLowerCase();
@@ -137,6 +145,7 @@ async function handle(job: Job): Promise<FollowUp | void> {
     case "video.comments":  return handleVideoComments(job);
     case "distribution.publish": return handleDistributionPublish(job);
     case "content.analyze": { await runContentAnalyze(String(job.payload.mediaId ?? "")); return; }
+    case "youtube.download": return handleYoutubeDownload(job);
     default:
       throw new Error(`unknown job type: ${(job as Job).type}`);
   }
@@ -308,6 +317,112 @@ async function handleVideoComments(job: Job): Promise<void> {
     });
   }
   console.log(`[worker] video.comments ${videoId}: ${comments.length} threads`);
+}
+
+// ── youtube.download — ingest a YouTube URL as a master media ─────────────────────
+//
+// The API route only creates the episode + a placeholder media row and queues this job;
+// the actual yt-dlp download runs here on the VM (Cloud Run can't hold a multi-GB file
+// or a long download). Once the file is in GCS the flow rejoins the normal upload path:
+// media row gets the real facts, then content.analyze is enqueued.
+
+const YT_DLP = process.env.YT_DLP ?? "yt-dlp";
+
+function runYtDlp(args: string[]): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(YT_DLP, args, { stdio: ["ignore", "ignore", "pipe"] });
+    let stderr = "";
+    child.stderr.on("data", (d) => { stderr += String(d); });
+    child.on("error", (err: NodeJS.ErrnoException) => {
+      reject(err.code === "ENOENT"
+        ? new Error("yt-dlp가 설치되어 있지 않습니다 — worker VM에서 deploy/worker-pipeline-setup.sh를 재실행하세요")
+        : err);
+    });
+    child.on("close", (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(`yt-dlp exited ${code}: ${stderr.slice(-800)}`));
+    });
+  });
+}
+
+async function handleYoutubeDownload(job: Job): Promise<void> {
+  const mediaId = String(job.payload.mediaId ?? "");
+  const url = String(job.payload.url ?? "");
+  if (!mediaId || !url) throw new Error("youtube.download requires mediaId + url");
+
+  const media = await getMedia(mediaId);
+  if (!media) { console.warn(`[worker] youtube.download: media ${mediaId} gone — dropping`); return; }
+
+  const setEpisodeNote = async (note: string, stageStatus: string, progress: number) => {
+    if (!media.episodeId) return;
+    const ep = await getEntity<Record<string, unknown>>("episode", media.episodeId);
+    if (ep) {
+      await putEntity("episode", media.episodeId, {
+        ...ep,
+        pipeline: { stage: "analyze", stageStatus, note, progress },
+      });
+    }
+  };
+
+  // Stable per-media dir: a retried job resumes yt-dlp's .part file instead of restarting.
+  const workDir = path.join(os.tmpdir(), "stepd-youtube", mediaId);
+  fs.mkdirSync(workDir, { recursive: true });
+  const outPath = path.join(workDir, "source.mp4");
+
+  try {
+    await setEpisodeNote("YouTube 영상 다운로드 중…", "progress", 10);
+
+    await runYtDlp([
+      "--no-playlist",
+      "--no-progress",
+      "-f", "bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/bv*+ba/b",
+      "--merge-output-format", "mp4",
+      "-o", outPath,
+      url,
+    ]);
+    if (!fs.existsSync(outPath)) throw new Error("yt-dlp가 출력 파일을 만들지 못했습니다");
+
+    let meta = { durationSec: 0, width: 0, height: 0, codec: "", hasAudio: false };
+    meta = await probe(outPath).catch((e) => {
+      console.error(`[worker] youtube.download ${mediaId}: probe failed`, e);
+      return meta;
+    });
+
+    let thumbStored: string | null = null;
+    const thumbTmp = path.join(workDir, "thumb.jpg");
+    try {
+      await captureThumbnail(outPath, Math.max(1, meta.durationSec * 0.1), thumbTmp);
+      thumbStored = await uploadFile(thumbPath(mediaId), thumbTmp);
+    } catch (e) {
+      console.error(`[worker] youtube.download ${mediaId}: thumbnail failed`, e);
+    }
+
+    const storedPath = await uploadFile(uploadPath(mediaId, ".mp4"), outPath);
+    const size = fs.statSync(outPath).size;
+
+    await updateMediaSource(mediaId, {
+      path: storedPath,
+      mime: "video/mp4",
+      size,
+      durationSec: meta.durationSec,
+      width: meta.width,
+      height: meta.height,
+      codec: meta.codec,
+      hasAudio: meta.hasAudio ? 1 : 0,
+      thumbPath: thumbStored,
+    });
+
+    await markContentAnalysisPending(mediaId);
+    await enqueue("content.analyze", { mediaId }, { dedupeKey: `content.analyze:${mediaId}` });
+    await setEpisodeNote("AI 장면 분석 대기 중…", "progress", 30);
+    console.log(`[worker] youtube.download ${mediaId}: ${size} bytes → ${storedPath}`);
+
+    // Success only — a failed attempt keeps its .part files so the retry resumes.
+    fs.rmSync(workDir, { recursive: true, force: true });
+  } catch (err) {
+    await setEpisodeNote("YouTube 다운로드 실패 — 자동 재시도 대기", "error", 0).catch(() => {});
+    throw err;
+  }
 }
 
 // ── distribution.publish — upload a rendered clip to YouTube ──────────────────────
