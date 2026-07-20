@@ -137,6 +137,21 @@ def _xcorr(long_f: np.ndarray, short_f: np.ndarray) -> np.ndarray:
     return corr / n_short
 
 
+def align_many(
+    long_path: str,
+    short_paths: list[str],
+    min_score: float = MIN_SCORE,
+    min_peak_ratio: float = MIN_PEAK_RATIO,
+) -> list[AlignResult]:
+    """롱폼 하나에 여러 숏폼을 대조한다.
+
+    롱폼 디코딩·특징추출을 **한 번만** 한다. 숏폼마다 따로 호출하면 61분짜리를 매번 다시
+    처리해서(1회 1~2분) 16개면 20분을 넘긴다 — 실제로 타임아웃이 났다.
+    """
+    lf = _feature(_decode(long_path))
+    return [_align_one(lf, p, min_score, min_peak_ratio) for p in short_paths]
+
+
 def align(
     long_path: str,
     short_path: str,
@@ -144,11 +159,15 @@ def align(
     min_peak_ratio: float = MIN_PEAK_RATIO,
 ) -> AlignResult:
     """숏폼이 롱폼의 몇 초 지점에서 시작하는지 추정한다."""
-    long_y = _decode(long_path)
+    return align_many(long_path, [short_path], min_score, min_peak_ratio)[0]
+
+
+def _align_one(
+    lf: np.ndarray, short_path: str, min_score: float, min_peak_ratio: float
+) -> AlignResult:
     short_y = _decode(short_path)
     dur = float(short_y.size) / SR
-
-    lf, sf = _feature(long_y), _feature(short_y)
+    sf = _feature(short_y)
     if sf.shape[1] < 8 or lf.shape[1] <= sf.shape[1]:
         return AlignResult(False, 0.0, dur, 0.0, 0.0, "오디오가 너무 짧거나 롱폼보다 깁니다")
 
@@ -190,6 +209,8 @@ def align_urls(long_url: str, short_url: str) -> AlignResult:
 
 if __name__ == "__main__":
     if len(sys.argv) < 3:
-        print("usage: python -m core.align <longform> <short>", file=sys.stderr)
+        print("usage: python -m core.align <longform> <short> [short2 ...]", file=sys.stderr)
         raise SystemExit(2)
-    print(align(sys.argv[1], sys.argv[2]).to_json())
+    # 숏폼별로 한 줄씩 JSON — 워커가 순서대로 읽어 매핑한다.
+    for r in align_many(sys.argv[1], sys.argv[2:]):
+        print(r.to_json(), flush=True)

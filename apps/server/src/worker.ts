@@ -511,9 +511,14 @@ interface AlignOut {
   reason?: string;
 }
 
-function runAlign(longPath: string, shortPath: string): Promise<AlignOut> {
+/**
+ * 숏폼들을 한 번의 호출로 정렬한다 — core.align이 롱폼 특징을 한 번만 계산하도록.
+ * 숏폼마다 호출하면 61분 롱폼을 매번 다시 디코딩해 16개에 20분을 넘긴다.
+ * 반환은 입력 순서와 1:1.
+ */
+function runAlign(longPath: string, shortPaths: string[]): Promise<AlignOut[]> {
   return new Promise((resolve, reject) => {
-    const proc = spawn(CORE_PYTHON_BIN, ["-m", "core.align", longPath, shortPath], {
+    const proc = spawn(CORE_PYTHON_BIN, ["-m", "core.align", longPath, ...shortPaths], {
       cwd: CORE_REPO_ROOT,
       env: { ...process.env, PYTHONPATH: "", PYTHONIOENCODING: "utf-8", PYTHONUTF8: "1" },
       stdio: ["ignore", "pipe", "pipe"],
@@ -526,7 +531,8 @@ function runAlign(longPath: string, shortPath: string): Promise<AlignOut> {
     proc.on("close", (code) => {
       if (code !== 0) return reject(new Error(`core.align exited ${code}: ${errText.slice(-300)}`));
       try {
-        resolve(JSON.parse(out.trim().split("\n").pop() || "{}") as AlignOut);
+        const lines = out.trim().split("\n").filter((l) => l.trim().startsWith("{"));
+        resolve(lines.map((l) => JSON.parse(l) as AlignOut));
       } catch (e) {
         reject(new Error(`core.align 출력 파싱 실패: ${String(e)} / ${out.slice(-200)}`));
       }
@@ -553,32 +559,41 @@ async function handleMatchAlign(job: Job): Promise<void> {
   let low = 0;
   try {
     await fetchAudio(longVideoId, longPath);
+
+    // 오디오를 먼저 다 받고, 정렬은 한 번의 파이썬 호출로 (롱폼 특징 재계산 방지).
+    const ready: { id: string; path: string }[] = [];
     for (const sid of shortIds) {
-      const shortPath = path.join(dir, `${sid.replace(/[^\w-]/g, "_")}.m4a`);
+      const p = path.join(dir, `${sid.replace(/[^\w-]/g, "_")}.m4a`);
       try {
-        await fetchAudio(sid, shortPath);
-        const r = await runAlign(longPath, shortPath);
-        if (!r.ok) {
-          low++;
-          console.warn(`[worker] match.align ${sid}: 신뢰도 미달 — ${r.reason ?? ""}`);
-          continue;
-        }
-        await upsertShortSourceMap({
-          shortVideoId: sid,
-          channelId,
-          longVideoId,
-          segStart: r.offset_sec,
-          segEnd: r.offset_sec + r.duration_sec,
-          source: "auto",
-          confidence: r.peak_ratio,
-          note: null,
-        });
-        ok++;
+        await fetchAudio(sid, p);
+        ready.push({ id: sid, path: p });
       } catch (e) {
-        console.error(`[worker] match.align ${sid} 실패:`, e);
-      } finally {
-        fs.rmSync(shortPath, { force: true });
+        console.error(`[worker] match.align ${sid} 다운로드 실패:`, e);
       }
+    }
+    if (!ready.length) throw new Error("정렬할 숏폼 오디오를 하나도 받지 못했습니다");
+
+    const results = await runAlign(longPath, ready.map((r) => r.path));
+    for (let i = 0; i < ready.length; i++) {
+      const r = results[i];
+      const sid = ready[i].id;
+      if (!r) continue;
+      if (!r.ok) {
+        low++;
+        console.warn(`[worker] match.align ${sid}: 신뢰도 미달 — ${r.reason ?? ""}`);
+        continue;
+      }
+      await upsertShortSourceMap({
+        shortVideoId: sid,
+        channelId,
+        longVideoId,
+        segStart: r.offset_sec,
+        segEnd: r.offset_sec + r.duration_sec,
+        source: "auto",
+        confidence: r.score,
+        note: null,
+      });
+      ok++;
     }
     console.log(`[worker] match.align ${longVideoId}: ${ok}건 추정, ${low}건 신뢰도 미달`);
   } finally {
