@@ -54,6 +54,11 @@ function UploadDialog({ onClose, defaultProgramId }: { onClose: () => void; defa
   const router = useRouter();
   const [mode, setMode] = useState<"file" | "youtube">("file");
   const [programId, setProgramId] = useState(defaultProgramId ?? programs[0]?.id ?? "");
+  // The store may still be loading when the dialog opens — fill in once programs arrive,
+  // otherwise programId stays "" forever (blank select, server-side fallback on submit).
+  useEffect(() => {
+    if (!programId && programs.length > 0) setProgramId(defaultProgramId ?? programs[0].id);
+  }, [programId, programs, defaultProgramId]);
   const [file, setFile] = useState<File | null>(null);
   const [url, setUrl] = useState("");
   const [title, setTitle] = useState("");
@@ -335,7 +340,7 @@ function UploadDialog({ onClose, defaultProgramId }: { onClose: () => void; defa
           <Button
             size="sm"
             onClick={mode === "file" ? submit : submitYoutube}
-            disabled={busy || (mode === "file" ? !file : !url.trim())}
+            disabled={busy || !programId || (mode === "file" ? !file : !url.trim())}
           >
             {busy ? <Loader2 className="animate-spin" /> : mode === "file" ? <Upload /> : <Youtube />}
             {mode === "file"

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback, useMemo } from "react";
+import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import { RefreshCw, TrendingUp, Eye, ThumbsUp, MessageCircle, Play, AlertCircle, Clock, Percent, Share2, UserPlus, DollarSign, Coins, Search, ChevronLeft, ChevronRight, Users, Timer, Wallet } from "lucide-react";
 import { PageHeader } from "@/components/ui/page-header";
 import { Card } from "@/components/ui/card";
@@ -143,7 +143,13 @@ export default function ChannelTrendsPage() {
       .catch((e) => setError(e.message));
   }, []);
 
+  // 빠른 채널/영상 전환 시 늦게 도착한 이전 요청의 응답을 무시하기 위한 요청 id.
+  const loadReqRef = useRef(0);
+  const videoReqRef = useRef(0);
+
   const loadChannelData = useCallback(async (channelId: string) => {
+    const req = ++loadReqRef.current;
+    videoReqRef.current++; // 채널이 바뀌면 진행 중이던 영상 상세 요청도 무효
     setLoadingVideos(true);
     setLoadingTrend(true);
     setError(null);
@@ -152,14 +158,18 @@ export default function ChannelTrendsPage() {
         fetchChannelVideos(channelId),
         fetchChannelTrends(channelId, 90),
       ]);
+      if (req !== loadReqRef.current) return;
       setVideos(v.videos);
       setTrend(t.trend);
       setSummary(t.summary);
     } catch (e: any) {
+      if (req !== loadReqRef.current) return;
       setError(e.message);
     } finally {
-      setLoadingVideos(false);
-      setLoadingTrend(false);
+      if (req === loadReqRef.current) {
+        setLoadingVideos(false);
+        setLoadingTrend(false);
+      }
     }
   }, []);
 
@@ -182,6 +192,7 @@ export default function ChannelTrendsPage() {
   };
 
   const handleVideoClick = async (videoId: string) => {
+    const req = ++videoReqRef.current;
     setVideoTrend(null);
     setVideoAnalytics(null);
     setError(null);
@@ -190,6 +201,7 @@ export default function ChannelTrendsPage() {
       fetchVideoTrend(videoId, 30).catch(() => null),
       fetchVideoAnalytics(videoId).catch(() => null),
     ]);
+    if (req !== videoReqRef.current) return;
     setVideoTrend(vt);
     setVideoAnalytics(va);
     if (!vt && !va) setError("영상 데이터를 불러오지 못했습니다.");

@@ -118,7 +118,7 @@ export async function claimJob(types?: JobType[]): Promise<Job | null> {
        updatedAt = $1
      WHERE id = (
        SELECT id FROM job_queue
-        WHERE status = 'pending' AND runAfter <= $1 ${laneFilter}
+        WHERE status = 'pending' AND runAfter <= $1 AND attempts < maxAttempts ${laneFilter}
         ORDER BY runAfter ASC, createdAt ASC
         FOR UPDATE SKIP LOCKED
         LIMIT 1
@@ -179,6 +179,9 @@ export async function failJob(id: string, error: string): Promise<void> {
   const exhausted = job.attempts >= job.maxAttempts;
   const backoff = Math.min(BASE_BACKOFF_MS * 2 ** (job.attempts - 1), MAX_BACKOFF_MS);
 
+  // status = 'running' guard: only the row's live run may fail it. Without this, a
+  // straggler failJob (e.g. the catch firing after completeJob already succeeded)
+  // would flip a 'done' row back to 'pending' and re-run a finished job.
   await getPool().query(
     `UPDATE job_queue SET
        status    = $2,
@@ -186,20 +189,46 @@ export async function failJob(id: string, error: string): Promise<void> {
        lockedAt  = NULL,
        error     = $4,
        updatedAt = $5
-     WHERE id = $1`,
+     WHERE id = $1 AND status = 'running'`,
     [id, exhausted ? "failed" : "pending", now + backoff, error.slice(0, 1000), now],
   );
 }
 
-/** A worker that dies mid-job leaves its row locked forever — hand those back. */
+/**
+ * A worker that dies mid-job leaves its row locked forever — hand those back.
+ * A crash never reaches failJob, so exhaustion must be enforced here too: a job whose
+ * attempts are spent goes to 'failed' instead of 'pending', or a job that OOM-kills the
+ * worker would crash-loop forever (claimJob's attempts filter is the second half of this).
+ */
 export async function requeueStale(): Promise<number> {
   const now = Date.now();
   const { rowCount } = await getPool().query(
-    `UPDATE job_queue SET status = 'pending', lockedAt = NULL, updatedAt = $1
+    `UPDATE job_queue SET
+       status    = CASE WHEN attempts >= maxAttempts THEN 'failed' ELSE 'pending' END,
+       error     = CASE WHEN attempts >= maxAttempts
+                        THEN COALESCE(error, 'worker died mid-job (attempts exhausted)')
+                        ELSE error END,
+       lockedAt  = NULL,
+       updatedAt = $1
       WHERE status = 'running' AND lockedAt IS NOT NULL AND lockedAt < $2`,
     [now, now - STALE_LOCK_MS],
   );
   return rowCount ?? 0;
+}
+
+/**
+ * Last time a job with this dedupeKey finished ('done'). Lets due-checks gate on "when did
+ * we last TRY" rather than on data rows a zero-result run never writes (e.g. video.comments
+ * on a video with no comments would otherwise be "due" on every sweep forever).
+ */
+export async function lastDoneJobAt(type: JobType, dedupeKey: string): Promise<number | null> {
+  const { rows } = await getPool().query(
+    `SELECT MAX(updatedAt) AS t FROM job_queue
+      WHERE type = $1 AND dedupeKey = $2 AND status = 'done'`,
+    [type, dedupeKey],
+  );
+  const t = rows[0]?.t;
+  return t == null ? null : Number(t);
 }
 
 /**

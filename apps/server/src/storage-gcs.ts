@@ -64,8 +64,12 @@ export async function writeFile(objectPath: string, buffer: Buffer): Promise<str
 export async function uploadFile(objectPath: string, localPath: string): Promise<string> {
   const b = getBucket();
   if (b) {
-    const file = b.file(objectPath);
-    await file.save(fs.readFileSync(localPath), { contentType: guessMime(objectPath) });
+    // Streamed, NOT readFileSync: a 512 MB remux output would otherwise sit in tmpfs AND
+    // as a heap Buffer at once — enough to OOM a 2 GB Cloud Run instance on its own.
+    await b.upload(localPath, {
+      destination: objectPath,
+      contentType: guessMime(objectPath),
+    });
     return gcsUri(objectPath);
   }
   // Local fallback: move file

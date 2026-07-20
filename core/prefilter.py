@@ -96,12 +96,27 @@ def _extract_wav(video_path: str) -> Optional[str]:
 
 
 def _load_wav(wav_path: str):
+    """블록 단위로 읽어 float32 버퍼에 바로 캐스팅 — 전체 raw bytes(int16)와 변환 임시
+    배열을 동시에 상주시키지 않아 3시간물 기준 피크 메모리를 수백 MB 줄인다.
+    (onset envelope는 전체 신호가 필요해 완전 청크 처리로는 특징 의미가 달라짐 —
+    최종 float32 배열 하나만 유지하는 절충.)"""
     import wave
     import numpy as np
     with wave.open(wav_path, "rb") as w:
         sr = w.getframerate()
-        raw = w.readframes(w.getnframes())
-    y = np.frombuffer(raw, dtype=np.int16).astype("float32") / 32768.0
+        n = w.getnframes()
+        y = np.empty(n, dtype="float32")
+        pos = 0
+        block = sr * 60  # 60초 블록
+        while pos < n:
+            raw = w.readframes(min(block, n - pos))
+            if not raw:
+                break
+            chunk = np.frombuffer(raw, dtype=np.int16)
+            y[pos:pos + chunk.size] = chunk  # int16→float32 캐스팅 (블록 크기 임시만)
+            pos += chunk.size
+    y = y[:pos]
+    y /= 32768.0  # in-place — 전체 크기 임시 배열을 만들지 않는다
     return y, sr
 
 
@@ -180,6 +195,8 @@ def score_scenes_heuristic(
                     env = librosa.onset.onset_strength(y=y, sr=sr)
                 except Exception:
                     env = None
+            if env is not None:
+                y = None  # env 경로는 y를 안 쓴다 — 3시간물 ~350MB 즉시 해제
             for s in targets:
                 raw[id(s)]["audio"] = _audio_energy(y, sr, env, float(s.get("start", 0)), float(s.get("end", 0)))
         except Exception:

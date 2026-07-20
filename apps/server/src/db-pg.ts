@@ -291,16 +291,30 @@ export async function prependEntity(kind: EntityKind, id: string, data: unknown)
  * status flip must commit together: a crash between two separate writes would otherwise
  * leave an orphan clip with the rec still 'pending', and the client retry (guarded only by
  * status !== 'pending') would mint a SECOND clip. A transaction makes it exact.
+ *
+ * Returns false (writing NOTHING) when the rec is no longer 'pending' — the route's
+ * check-then-act guard is not transactional, so two concurrent adopts both see 'pending';
+ * this WHERE clause is what actually stops the second one from minting a duplicate clip.
  */
 export async function commitAdoption(
   clipId: string,
   clip: unknown,
   recId: string,
   rec: unknown,
-): Promise<void> {
+): Promise<boolean> {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
+    const flipped = await client.query(
+      `UPDATE entities SET data = $2::jsonb
+        WHERE kind = 'recommendation' AND id = $1
+          AND COALESCE(data->>'status', 'pending') = 'pending'`,
+      [recId, JSON.stringify(rec)],
+    );
+    if ((flipped.rowCount ?? 0) === 0) {
+      await client.query("ROLLBACK");
+      return false;
+    }
     const { rows } = await client.query(
       "SELECT COALESCE(MIN(ord), 0) - 1 AS m FROM entities WHERE kind = 'clip'",
     );
@@ -309,18 +323,30 @@ export async function commitAdoption(
        ON CONFLICT (kind, id) DO UPDATE SET data = $2::jsonb`,
       [clipId, JSON.stringify(clip), rows[0].m],
     );
-    await client.query(
-      `INSERT INTO entities (kind, id, data, ord) VALUES ('recommendation', $1, $2::jsonb, 0)
-       ON CONFLICT (kind, id) DO UPDATE SET data = $2::jsonb`,
-      [recId, JSON.stringify(rec)],
-    );
     await client.query("COMMIT");
+    return true;
   } catch (e) {
     await client.query("ROLLBACK").catch(() => {});
     throw e;
   } finally {
     client.release();
   }
+}
+
+/**
+ * Flip a pending recommendation to rejected in one guarded write (no read-modify-write).
+ * Returns false when the rec was already decided — rejecting an ADOPTED rec would strand
+ * its clip on the board while the rec claims 'rejected'.
+ */
+export async function markRecommendationRejected(recId: string, reason: string): Promise<boolean> {
+  const { rowCount } = await pool.query(
+    `UPDATE entities
+        SET data = data || jsonb_build_object('status', 'rejected', 'rejectReason', $2::text)
+      WHERE kind = 'recommendation' AND id = $1
+        AND COALESCE(data->>'status', 'pending') = 'pending'`,
+    [recId, reason],
+  );
+  return (rowCount ?? 0) > 0;
 }
 
 // ── connections ────────────────────────────────────────────────────────────────
@@ -479,6 +505,30 @@ export async function updateYouTubeTokens(
     "UPDATE youtube_channels SET accessToken = $2, expiresAt = $3 WHERE channelId = $1",
     [channelId, accessToken, expiresAt],
   );
+}
+
+/**
+ * Park a channel whose refresh token is dead — a status-only write, for the same reason
+ * as updateYouTubeTokens: a full-row upsert from the caller's stale snapshot would clobber
+ * a concurrent reconnect's fresh refreshToken with the dead one. When the caller knows
+ * WHICH token died, pass it: the update then no-ops if a reconnect already swapped tokens,
+ * so a slow in-flight request can never re-park a just-reconnected channel.
+ */
+export async function markYouTubeChannelRevoked(
+  channelId: string,
+  deadRefreshToken?: string,
+): Promise<void> {
+  if (deadRefreshToken) {
+    await pool.query(
+      "UPDATE youtube_channels SET status = 'revoked' WHERE channelId = $1 AND refreshToken = $2",
+      [channelId, deadRefreshToken],
+    );
+  } else {
+    await pool.query(
+      "UPDATE youtube_channels SET status = 'revoked' WHERE channelId = $1",
+      [channelId],
+    );
+  }
 }
 
 // ── channel videos ─────────────────────────────────────────────────────────────

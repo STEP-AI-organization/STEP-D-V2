@@ -83,7 +83,8 @@ def run(scenes: list[dict], base_dir: Path, limit: int | None = None) -> list[di
             scene["_names_error"] = str(e)[:80]
         done[0] += 1
         if done[0] % 10 == 0 or done[0] == total:
-            print(f"   {done[0]}/{total}")
+            # 워커 스레드 출력 — \n 포함 단일 write로 원자화 (진행 로그 줄 섞임 방지)
+            print(f"   {done[0]}/{total}\n", end="", flush=True)
 
     with ThreadPoolExecutor(max_workers=WORKERS) as ex:
         list(ex.map(work, targets))

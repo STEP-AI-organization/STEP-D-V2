@@ -21,6 +21,7 @@ import {
   putEntity,
   prependEntity,
   commitAdoption,
+  markRecommendationRejected,
   listMedia,
   getMedia,
   insertMedia,
@@ -29,6 +30,7 @@ import {
   getYouTubeChannelByChannelId,
   upsertYouTubeChannel,
   updateYouTubeTokens,
+  markYouTubeChannelRevoked,
   deleteYouTubeChannel,
   listChannelVideos,
   upsertChannelVideo,
@@ -384,6 +386,12 @@ app.post("/api/media/:id/cast/:name/register", async (c) => {
   if (!input) return c.json({ error: "name is required" }, 400);
   if (input.name !== name && !input.aliases.includes(name)) input.aliases.push(name);
 
+  // Verify the episode-cast entry BEFORE creating the roster member: the old order
+  // committed the member, then 404'd on a missing entry — and the client's retry hit
+  // 409 "이미 등록된 출연자" for a request it was told had failed.
+  const entry = (await listEpisodeCast(mediaId)).find((p) => p.name === name);
+  if (!entry) return c.json({ error: "cast entry not found for this media" }, 404);
+
   const castId = newId("cast");
   try {
     await upsertCastMember({ castId, programId: episode.programId, ...input });
@@ -665,10 +673,14 @@ async function buildEpisodeAndMedia(opts: {
 }) {
   const { mediaId, programId, program, storedPath, filename, title, mime, size, meta } = opts;
 
-  const state = await getState();
-  const episodes = state.episodes as Array<{ programId: string; episodeNumber: number }>;
-  const nextEpNum =
-    Math.max(0, ...episodes.filter((e) => e.programId === programId).map((e) => e.episodeNumber)) + 1;
+  // MAX straight from the DB (not a getState snapshot carried across awaits) so two
+  // near-simultaneous uploads to the same program rarely mint the same episodeNumber.
+  const { rows: epRows } = await getPool().query<{ m: number }>(
+    `SELECT COALESCE(MAX((data->>'episodeNumber')::int), 0) AS m
+       FROM entities WHERE kind = 'episode' AND data->>'programId' = $1`,
+    [programId],
+  );
+  const nextEpNum = Number(epRows[0]?.m ?? 0) + 1;
   const episodeId = newId("e");
   const today = new Date();
   const broadDate = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
@@ -773,6 +785,17 @@ app.post("/api/media/finalize", async (c) => {
   const program = await getEntity<{ id: string; title: string; targetAge: number }>("program", programId);
   if (!program) return c.json({ error: "program not found" }, 400);
 
+  // Idempotent replay: a client whose network dropped after a successful finalize will
+  // retry it. The rows already exist — return them, instead of duplicating the episode
+  // and then 500ing on the media INSERT (which stranded an orphan "분석 중" episode).
+  const existing = await getMedia(mediaId);
+  if (existing) {
+    const episode = existing.episodeId
+      ? await getEntity<Record<string, unknown>>("episode", existing.episodeId)
+      : null;
+    return c.json({ media: mediaPublic(existing), episode, recommendations: [] });
+  }
+
   // Confirm the object actually landed in GCS before we build rows around it.
   if (!(await fileExists(objectPath))) return c.json({ error: "upload not found in storage" }, 400);
 
@@ -781,8 +804,11 @@ app.post("/api/media/finalize", async (c) => {
   const title = typeof body.title === "string" && body.title ? String(body.title) : filename;
   const mime =
     typeof body.contentType === "string" && body.contentType ? String(body.contentType) : "video/mp4";
-  let size =
-    typeof body.size === "number" && body.size > 0 ? body.size : await fileSize(objectPath).catch(() => 0);
+  // Server-authoritative size: the remux gate below is an OOM guard for RAM-backed /tmp,
+  // so it must never trust a client-supplied number (size: 1 on a 10 GB object would pull
+  // the whole remux output into tmpfs). body.size is display-only.
+  let size = await fileSize(objectPath).catch(() => 0);
+  if (size <= 0 && typeof body.size === "number" && body.size > 0) size = body.size;
   const storedPath = `gs://${process.env.GCS_BUCKET}/${objectPath}`;
 
   // Normalize to a browser-streamable progressive mp4. Uploaded files are often fragmented
@@ -794,7 +820,8 @@ app.post("/api/media/finalize", async (c) => {
   // alongside node + ffmpeg), so it's env-tunable — default 512 MB is safe on a 2 GB
   // instance; raise REMUX_MAX_MB only if the Cloud Run instance has the RAM to spare.
   const REMUX_MAX = (Number(process.env.REMUX_MAX_MB) || 512) * 1024 * 1024;
-  if (FFMPEG && size > 0 && size <= REMUX_MAX) {
+  const remuxSize = await fileSize(objectPath).catch(() => 0); // never the client's number
+  if (FFMPEG && remuxSize > 0 && remuxSize <= REMUX_MAX) {
     const tmpDir = path.resolve("/tmp/stepd-uploads");
     fs.mkdirSync(tmpDir, { recursive: true });
     const webTmp = path.join(tmpDir, `${mediaId}-web.mp4`);
@@ -932,11 +959,24 @@ app.post("/api/media/from-youtube", async (c) => {
     pendingIngestNote: "YouTube 영상 다운로드 대기 중…",
   });
 
-  const jobId = await enqueue(
-    "youtube.download",
-    { mediaId, url, programId, title },
-    { dedupeKey: `youtube.download:${mediaId}` },
-  );
+  let jobId: string | null;
+  try {
+    jobId = await enqueue(
+      "youtube.download",
+      { mediaId, url, programId, title },
+      { dedupeKey: `youtube.download:${mediaId}` },
+    );
+  } catch (err) {
+    // Without the job the placeholder episode would sit at "다운로드 대기 중…" forever
+    // (content.analyze can't run against a youtube: placeholder path, so there's no
+    // re-kick). Roll the rows back so the operator can simply retry the import.
+    console.error("[from-youtube] enqueue failed — rolling back placeholder rows", err);
+    await getPool().query("DELETE FROM media WHERE id = $1", [mediaId]).catch(() => {});
+    await getPool()
+      .query("DELETE FROM entities WHERE kind = 'episode' AND id = $1", [result.episode.id])
+      .catch(() => {});
+    return c.json({ error: "다운로드 잡 큐잉 실패 — 다시 시도해 주세요" }, 500);
+  }
   return c.json({ ...result, ok: true, queued: jobId != null });
 });
 
@@ -1418,7 +1458,11 @@ async function renderClipMedia(opts: {
   const videoFilters = ffGradeFilter(mainTrack?.filters);
   const speed = uniformSpeed(editorState);
   const audioParts = [ffVolumeFilter(mainTrack), speed !== 1 ? atempoChain(speed) : null].filter(Boolean) as string[];
-  const audioFilter = master.hasAudio && audioParts.length ? audioParts.join(",") : null;
+  // NOT gated on master.hasAudio: finalize's probe may degrade to hasAudio=0 on a video
+  // that does have audio, and skipping atempo then ships a desynced deliverable (video at
+  // 2×, audio at 1×, chopped by -t). With `-map 0:a?`, -af on a truly audio-less file is
+  // simply a no-op — safe either way.
+  const audioFilter = audioParts.length ? audioParts.join(",") : null;
 
   // ffmpeg reads the master directly. For GCS we hand it a short-lived signed URL and seek
   // via HTTP range (-ss before -i) — only the requested segment is fetched, so a multi-hour
@@ -1509,8 +1553,13 @@ app.post("/api/recommendations/:id/adopt", async (c) => {
   };
 
   // Atomic: clip insert + rec flip commit together, so a crash can't orphan a clip and
-  // let a retry mint a second one.
-  await commitAdoption(clipId, clip, recId, { ...rec, status: "adopted", adoptedClipId: clipId });
+  // let a retry mint a second one. commitAdoption's own pending-guard closes the race the
+  // route-level check above can't (two concurrent adopts both reading 'pending').
+  const committed = await commitAdoption(clipId, clip, recId, { ...rec, status: "adopted", adoptedClipId: clipId });
+  if (!committed) {
+    const latest = await getEntity<any>("recommendation", recId);
+    return c.json({ clipId: latest?.adoptedClipId });
+  }
   return c.json({ clipId, clip });
 });
 
@@ -1520,7 +1569,13 @@ app.post("/api/recommendations/:id/reject", async (c) => {
   const rec = await getEntity<any>("recommendation", recId);
   if (!rec) return c.json({ error: "recommendation not found" }, 404);
   const { reason } = await c.req.json<{ reason?: string }>().catch(() => ({ reason: "기타" }));
-  await putEntity("recommendation", recId, { ...rec, status: "rejected", rejectReason: reason ?? "기타" });
+  // Guarded single write: rejecting an already-adopted rec (race with adopt) would strand
+  // the minted clip on the board while the rec claims 'rejected'.
+  const flipped = await markRecommendationRejected(recId, reason ?? "기타");
+  if (!flipped) {
+    const latest = await getEntity<any>("recommendation", recId);
+    return c.json({ error: "already decided", status: latest?.status ?? "unknown" }, 409);
+  }
   return c.json({ ok: true });
 });
 
@@ -1636,7 +1691,13 @@ app.post("/api/distributions/publish", async (c) => {
     const value: any = { status, reserveDate: b.reserveDate, error: undefined };
     if (b.channel === "meta" && b.platforms) value.platforms = b.platforms;
     const distributions = upsertDistribution(clip.distributions, b.channel, value);
-    await putEntity("clip", clipId, { ...clip, status: "published", distributions });
+    // A scheduled (future) distribution must not flip the clip itself to published —
+    // every board/filter reads clip.status, and "scheduled" lives on the distribution.
+    await putEntity("clip", clipId, {
+      ...clip,
+      ...(b.scheduled ? {} : { status: "published" }),
+      distributions,
+    });
   }
   return c.json({ ok: true, ...(skipped.length ? { skipped } : {}) });
 });
@@ -1812,15 +1873,20 @@ app.post("/api/clips/:id/export", async (c) => {
   });
   if (!rendered) return c.json({ error: "render failed" }, 500);
 
+  // Merge onto the LATEST row, not the pre-render snapshot: the render takes up to minutes,
+  // and an editor save (PATCH /:id/editor) landing meanwhile must survive this write. If the
+  // editorState did change, `revision` no longer matches it, so the cache check correctly
+  // re-renders on the next export.
+  const latest = (await getEntity<any>("clip", clipId)) ?? clip;
   const next = {
-    ...clip,
+    ...latest,
     status: "ready",
     rendered: true,
     renderRevision: revision,
     mediaId: rendered.clipMediaId,
     sourceMediaId: master.id,
     videoUrl: `/media/${rendered.clipMediaId}/stream`,
-    durationSec: rendered.cmeta.durationSec || clip.durationSec,
+    durationSec: rendered.cmeta.durationSec || latest.durationSec,
     renderPreset: preset?.key ?? null,
   };
   await putEntity("clip", clipId, next);
@@ -2040,7 +2106,8 @@ app.delete("/api/youtube/channels/:channelId", async (c) => {
 });
 
 app.post("/api/youtube/refresh", async (c) => {
-  const { channelId } = await c.req.json<{ channelId: string }>();
+  const { channelId } = await c.req.json<{ channelId: string }>().catch(() => ({ channelId: "" }));
+  if (!channelId) return c.json({ error: "channelId required" }, 400);
   const ch = await getYouTubeChannelByChannelId(channelId);
   if (!ch) return c.json({ error: "channel not found" }, 404);
   if (!ch.refreshToken) return c.json({ error: "no refresh token" }, 400);
@@ -2074,9 +2141,14 @@ function persistTokensFor(ch: YouTubeChannel): PersistTokens {
     updateYouTubeTokens(ch.channelId, accessToken, expiresAt);
 }
 
-/** A dead refresh token means the creator must reconnect — park the channel. */
+/**
+ * A dead refresh token means the creator must reconnect — park the channel.
+ * Status-only guarded write (see db-pg B6): a full-row upsert from this handler's stale
+ * snapshot would overwrite a concurrent reconnect's fresh refreshToken with the dead one
+ * and brick the channel. Passing the dead token makes the park a no-op after a reconnect.
+ */
 async function markRevoked(ch: YouTubeChannel): Promise<void> {
-  await upsertYouTubeChannel({ ...ch, status: "revoked" });
+  await markYouTubeChannelRevoked(ch.channelId, ch.refreshToken);
 }
 
 /**

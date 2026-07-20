@@ -32,6 +32,8 @@ for _s in (sys.stdout, sys.stderr):
 from google import genai
 from google.genai import types
 
+from .retry import call_with_retry
+
 PROJECT = os.environ.get("GOOGLE_CLOUD_PROJECT") or "step-d"
 LOCATION = os.environ.get("VERTEX_LOCATION") or "asia-northeast3"
 MODEL = os.environ.get("GEMINI_MODEL") or "gemini-2.5-flash"
@@ -141,7 +143,8 @@ def build_full_summary(client, refined: list[dict], cast: dict | None, timeline:
 - `## 회차 마무리 상태` — 에피소드가 끝난 시점의 상황/떡밥
 
 규칙: 스크립트에 근거한 내용만 쓰고 지어내지 마라. 추측이 필요하면 "~로 보인다"로 표시하라."""
-    resp = client.models.generate_content(
+    # 429/503 일시 오류는 제자리 백오프 재시도 (실패 시 해당 파트만 비우는 폴백 유지).
+    resp = call_with_retry(lambda: client.models.generate_content(
         model=MODEL,
         contents="다음 자료로 에피소드 전체 서사 요약을 작성하라.\n\n" + "\n\n".join(parts),
         config=types.GenerateContentConfig(
@@ -149,7 +152,7 @@ def build_full_summary(client, refined: list[dict], cast: dict | None, timeline:
             temperature=0,
             max_output_tokens=8192,
         ),
-    )
+    ))
     return (resp.text or "").strip()
 
 
@@ -207,7 +210,7 @@ def build_segment_analysis(
                 lines.append("화면 자막 인물: " + ", ".join(seg["characters"][:8]))
             lines.extend(_transcript_lines(refined, seg["start"], seg["end"], BLOCK_MAX_LINES) or ["(자막 없음)"])
         try:
-            resp = client.models.generate_content(
+            resp = call_with_retry(lambda: client.models.generate_content(
                 model=MODEL,
                 contents="다음 블록들을 분석하라.\n" + "\n".join(lines),
                 config=types.GenerateContentConfig(
@@ -217,7 +220,7 @@ def build_segment_analysis(
                     response_schema=_SEGMENT_SCHEMA,
                     max_output_tokens=8192,
                 ),
-            )
+            ))
             by_index = {int(r["block_index"]): r for r in json.loads(resp.text or "[]")
                         if isinstance(r, dict) and "block_index" in r}
             for i in idxs:
@@ -268,7 +271,7 @@ def build_character_analysis(client, refined: list[dict], cast: dict | None) -> 
 자막에 근거한 내용만 쓰고, 근거가 없는 인물은 빈 배열로 둔다. name은 목록의 이름 그대로."""
     prompt = (_cast_block(cast) + "\n\n자막 스크립트:\n"
               + "\n".join(_transcript_lines(refined, max_lines=800)))
-    resp = client.models.generate_content(
+    resp = call_with_retry(lambda: client.models.generate_content(
         model=MODEL,
         contents="위 인물들을 분석하라.\n\n" + prompt,
         config=types.GenerateContentConfig(
@@ -278,7 +281,7 @@ def build_character_analysis(client, refined: list[dict], cast: dict | None) -> 
             response_schema=_CHARACTER_SCHEMA,
             max_output_tokens=8192,
         ),
-    )
+    ))
     by_name = {str(r.get("name", "")).strip(): r for r in json.loads(resp.text or "[]") if isinstance(r, dict)}
     out = []
     for p in people:
@@ -324,7 +327,7 @@ def build_conflict_analysis(client, refined: list[dict], cast: dict | None) -> l
 자막에 근거한 내용만 쓰고 지어내지 마라."""
     cast_txt = _cast_block(cast)
     prompt = ((cast_txt + "\n\n") if cast_txt else "") + "자막 스크립트:\n" + "\n".join(_transcript_lines(refined))
-    resp = client.models.generate_content(
+    resp = call_with_retry(lambda: client.models.generate_content(
         model=MODEL,
         contents="주요 갈등/사건을 추출하라.\n\n" + prompt,
         config=types.GenerateContentConfig(
@@ -334,7 +337,7 @@ def build_conflict_analysis(client, refined: list[dict], cast: dict | None) -> l
             response_schema=_CONFLICT_SCHEMA,
             max_output_tokens=8192,
         ),
-    )
+    ))
     out = []
     for r in json.loads(resp.text or "[]"):
         if not isinstance(r, dict) or not str(r.get("title", "")).strip():

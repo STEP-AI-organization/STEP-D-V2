@@ -278,12 +278,15 @@ async function uploadResumable(
   let offset = 0;
 
   while (offset < total) {
-    const end = Math.min(offset + RESUMABLE_CHUNK, total);
-    const chunk = file.slice(offset, end);
+    let end = Math.min(offset + RESUMABLE_CHUNK, total);
 
     let res: ChunkResponse | null = null;
     let lastErr: unknown = null;
     for (let attempt = 0; attempt < CHUNK_RETRIES; attempt++) {
+      // Re-slice from the CURRENT offset each attempt — after a committed-offset resync a
+      // stale slice's Content-Range would mismatch and GCS 400s the whole upload.
+      end = Math.min(offset + RESUMABLE_CHUNK, total);
+      const chunk = file.slice(offset, end);
       try {
         res = await putChunk(sessionUrl, chunk, offset, end - 1, total, (loaded) => {
           if (onProgress) onProgress(Math.min(99, Math.round(((offset + loaded) / total) * 100)));
@@ -393,7 +396,8 @@ function uploadVideoMultipart(
   });
 }
 
-export async function adoptRec(recId: string): Promise<{ clipId: string; clip: unknown }> {
+// `clip` is absent when the rec was already adopted (server returns just the clipId).
+export async function adoptRec(recId: string): Promise<{ clipId: string; clip?: unknown }> {
   return json(await fetch(`${API_BASE}/recommendations/${recId}/adopt`, { method: "POST" }));
 }
 
@@ -427,11 +431,15 @@ export async function exportClip(
 }
 
 export async function rejectRec(recId: string, reason: string): Promise<void> {
-  await fetch(`${API_BASE}/recommendations/${recId}/reject`, {
+  const res = await fetch(`${API_BASE}/recommendations/${recId}/reject`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ reason }),
   });
+  if (!res.ok) {
+    const body = (await res.json().catch(() => null)) as { error?: string; message?: string } | null;
+    throw new Error(body?.message ?? body?.error ?? `${res.status} ${res.statusText}`);
+  }
 }
 
 export async function publishClips(
@@ -451,11 +459,15 @@ export async function publishClips(
 }
 
 export async function retryDist(clipId: string, channel: DistributionChannel): Promise<void> {
-  await fetch(`${API_BASE}/distributions/retry`, {
+  const res = await fetch(`${API_BASE}/distributions/retry`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ clipId, channel }),
   });
+  if (!res.ok) {
+    const body = (await res.json().catch(() => null)) as { error?: string; message?: string } | null;
+    throw new Error(body?.message ?? body?.error ?? `${res.status} ${res.statusText}`);
+  }
 }
 
 // ── YouTube channels ───────────────────────────────────────────────────────────
@@ -480,6 +492,10 @@ export interface YouTubeChannelInfo {
 
 export async function fetchYouTubeChannels(): Promise<YouTubeChannelInfo[]> {
   const res = await fetch(`${API_BASE}/youtube/channels`);
+  if (!res.ok) {
+    const body = (await res.json().catch(() => null)) as { error?: string; message?: string } | null;
+    throw new Error(body?.message ?? body?.error ?? `${res.status} ${res.statusText}`);
+  }
   const data = await res.json() as { channels: YouTubeChannelInfo[] };
   return data.channels;
 }
@@ -522,7 +538,11 @@ export async function fetchChannelAnalytics(
 }
 
 export async function deleteYouTubeChannel(channelId: string): Promise<void> {
-  await fetch(`${API_BASE}/youtube/channels/${channelId}`, { method: "DELETE" });
+  const res = await fetch(`${API_BASE}/youtube/channels/${channelId}`, { method: "DELETE" });
+  if (!res.ok) {
+    const body = (await res.json().catch(() => null)) as { error?: string; message?: string } | null;
+    throw new Error(body?.message ?? body?.error ?? `${res.status} ${res.statusText}`);
+  }
 }
 
 /**
@@ -664,7 +684,11 @@ export async function fetchVideoAnalytics(videoId: string): Promise<VideoAnalyti
 }
 
 export async function deleteTrackedVideo(videoId: string): Promise<void> {
-  await fetch(`${API_BASE}/youtube/videos/${videoId}`, { method: "DELETE" });
+  const res = await fetch(`${API_BASE}/youtube/videos/${videoId}`, { method: "DELETE" });
+  if (!res.ok) {
+    const body = (await res.json().catch(() => null)) as { error?: string; message?: string } | null;
+    throw new Error(body?.message ?? body?.error ?? `${res.status} ${res.statusText}`);
+  }
 }
 
 // ── ops/diagnostics (superadmin /ops dashboard) ─────────────────────────────────

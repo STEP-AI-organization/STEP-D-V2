@@ -34,7 +34,7 @@ import {
   type PersistTokens,
 } from "./youtube.ts";
 import { enqueue } from "./queue.ts";
-import { HOTWATCH_POLL_MS, SHORTS_PROBE_MAX_PER_SYNC, SHORTS_PROBE_CONCURRENCY } from "./config.ts";
+import { HOTWATCH_POLL_MS, HOTWATCH_WINDOW_MS, SHORTS_PROBE_MAX_PER_SYNC, SHORTS_PROBE_CONCURRENCY } from "./config.ts";
 
 /** Re-sync uploads this often. Each run costs Data API quota, so don't go below this. */
 const VIDEO_SYNC_INTERVAL_MS = 6 * 60 * 60 * 1000;
@@ -174,7 +174,9 @@ async function syncVideos(
     // First time we've ever seen this upload → kick off 48h high-density polling.
     // Deduped so a second sync before the row is committed can't double-schedule; the
     // hotwatch job itself decides when to stop (publish age) and re-enqueues meanwhile.
-    if (!existing) {
+    // Age-gated here too: the first sync of a freshly connected channel sees the ENTIRE
+    // back catalog as "new" — without the gate that's up to 500 pointless hotwatch jobs.
+    if (!existing && now - Date.parse(v.publishedAt) < HOTWATCH_WINDOW_MS) {
       await enqueue(
         "video.hotwatch",
         { videoId: v.videoId, channelId: ch.channelId, publishedAt: v.publishedAt },

@@ -292,6 +292,11 @@ export function AppDataProvider({
   // gate on this instead of rendering the empty state as if the data were really empty.
   const [loading, setLoading] = useState(() => !initial);
   const connectedRef = useRef(false);
+  // Bumped by every optimistic mutation. A /api/state poll that started BEFORE a mutation
+  // must not clobber the optimistic state with its pre-action snapshot — refresh() captures
+  // the epoch before the fetch and skips the wholesale replace if it moved (the next
+  // scheduled poll picks up fresh server state).
+  const mutationEpochRef = useRef(0);
 
   const applyServerState = useCallback((s: Awaited<ReturnType<typeof fetchState>>) => {
     setState({
@@ -308,8 +313,10 @@ export function AppDataProvider({
   }, []);
 
   const refresh = useCallback(async () => {
+    const epoch = mutationEpochRef.current;
     try {
-      applyServerState(await fetchState());
+      const s = await fetchState();
+      if (epoch === mutationEpochRef.current) applyServerState(s);
     } catch {
       connectedRef.current = false;
       setServerConnected(false);
@@ -372,13 +379,19 @@ export function AppDataProvider({
     // The single render happens later via exportClip().
     if (connectedRef.current) {
       const { clipId, clip } = await adoptRec(id);
+      mutationEpochRef.current++;
       setState((prev) => ({
         ...prev,
         recommendations: prev.recommendations.map((r) =>
           r.id === id ? { ...r, status: "adopted", adoptedClipId: clipId } : r,
         ),
-        clips: [clip as Clip, ...prev.clips.filter((c) => c.id !== clipId)],
+        // Already-adopted recs come back with clipId only — never insert an undefined clip.
+        clips: clip
+          ? [clip as Clip, ...prev.clips.filter((c) => c.id !== clipId)]
+          : prev.clips,
       }));
+      // No clip in the response: pull the real one from the server.
+      if (!clip) void refresh();
       return clipId;
     }
 
@@ -431,7 +444,7 @@ export function AppDataProvider({
       };
     });
     return clipId;
-  }, []);
+  }, [refresh]);
 
   const exportClip = useCallback(async (clipId: string, channel?: RenderChannel): Promise<ExportResult> => {
     // SERVER: the single expensive render (plan §2.4). Server bakes once + caches by
@@ -439,6 +452,7 @@ export function AppDataProvider({
     // destination render preset (F3); omitted = 원본 유지 (the clip's own aspect, no cap).
     if (connectedRef.current) {
       const { clip, capped } = await exportClipApi(clipId, channel);
+      mutationEpochRef.current++;
       setState((prev) => ({
         ...prev,
         clips: prev.clips.map((c) => (c.id === clipId ? (clip as Clip) : c)),
@@ -464,6 +478,7 @@ export function AppDataProvider({
   }, []);
 
   const rejectRecommendation = useCallback((id: string, reason: string) => {
+    mutationEpochRef.current++;
     let prevRec: Recommendation | undefined;
     setState((prev) => {
       prevRec = prev.recommendations.find((r) => r.id === id);
@@ -487,6 +502,7 @@ export function AppDataProvider({
   }, []);
 
   const selectThumbnail = useCallback((recId: string, thumbId: string) => {
+    mutationEpochRef.current++;
     setState((prev) => ({
       ...prev,
       recommendations: prev.recommendations.map((r) =>
@@ -527,6 +543,7 @@ export function AppDataProvider({
 
   const publishClip = useCallback(
     (clipId: string, channels: DistributionChannel[], opts?: PublishOpts) => {
+      mutationEpochRef.current++;
       setState((prev) => ({ ...prev, clips: applyPublish(prev.clips, new Set([clipId]), channels, opts) }));
       fireServerPublish([clipId], channels, opts);
     },
@@ -535,6 +552,7 @@ export function AppDataProvider({
 
   const bulkPublish = useCallback(
     (clipIds: string[], channels: DistributionChannel[], opts?: PublishOpts) => {
+      mutationEpochRef.current++;
       setState((prev) => ({ ...prev, clips: applyPublish(prev.clips, new Set(clipIds), channels, opts) }));
       fireServerPublish(clipIds, channels, opts);
     },
@@ -543,6 +561,7 @@ export function AppDataProvider({
 
   const publishToChannel = useCallback(
     (clipIds: string[], channel: DistributionChannel, opts?: PublishOpts) => {
+      mutationEpochRef.current++;
       setState((prev) => ({ ...prev, clips: applyPublish(prev.clips, new Set(clipIds), [channel], opts) }));
       fireServerPublish(clipIds, [channel], opts);
     },
@@ -550,6 +569,7 @@ export function AppDataProvider({
   );
 
   const retryDistribution = useCallback((clipId: string, channel: DistributionChannel) => {
+    mutationEpochRef.current++;
     // Optimistic: mark ONLY this clip's channel in-flight (pending) — retry queues an
     // upload, it doesn't instantly publish. The /api/state poll reconciles to the real
     // published/failed status. Previously this marked EVERY failed job across all episodes
@@ -654,6 +674,7 @@ export function AppDataProvider({
   );
 
   const saveClipEditor = useCallback(async (clipId: string, editorState: EditorState) => {
+    mutationEpochRef.current++;
     // Persist locally first so reopening restores the edit even in mock mode.
     setState((prev) => ({
       ...prev,

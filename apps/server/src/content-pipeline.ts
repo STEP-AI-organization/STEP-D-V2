@@ -32,7 +32,7 @@ import { Readable } from "node:stream";
 
 import {
   getMedia, saveContentAnalysis, saveTranscript, saveEpisodeCast, listProgramCast,
-  prependEntity, getPool, getEntity, putEntity,
+  getPool, getEntity, putEntity,
 } from "./db-pg.ts";
 import type { TranscriptSegment } from "./db-pg.ts";
 import { toCoreRegistry, timelineToRows } from "./cast.ts";
@@ -50,7 +50,14 @@ const WORK_ROOT = path.join(os.tmpdir(), "stepd-content");
 const WORK_DIR_TTL_MS = 48 * 60 * 60 * 1000;
 
 /** Stage outputs core/analyze.py checkpoints into the work dir (upload order). */
-const CHECKPOINT_FILES = ["analysis.json", "scenes.json", "cast.json", "timeline.json", "shorts.json", "refined.json", "stt.json", "manifest.json"];
+const CHECKPOINT_FILES = ["analysis.json", "scenes.json", "cast.json", "timeline.json", "narrative.json", "shorts.json", "refined.json", "stt.json", "manifest.json"];
+
+/**
+ * Watchdog: kill the python child after this long with NO stdout output. A hung Vertex
+ * call would otherwise keep the job 'running' forever — the heartbeat refreshes the lock
+ * indefinitely, so requeueStale can never reclaim it and the content lane wedges.
+ */
+const STALL_TIMEOUT_MS = (Number(process.env.CORE_ANALYZE_STALL_MIN) || 30) * 60 * 1000;
 
 function workDirFor(mediaId: string): string {
   return path.join(WORK_ROOT, mediaId.replace(/[^a-zA-Z0-9_-]/g, "_"));
@@ -69,7 +76,7 @@ function sweepStaleWorkDirs(): void {
     if (!e.isDirectory()) continue;
     const dir = path.join(WORK_ROOT, e.name);
     try {
-      if (fs.statSync(dir).mtimeMs < cutoff) {
+      if (newestMtimeMs(dir) < cutoff) {
         fs.rmSync(dir, { recursive: true, force: true });
         console.log(`[worker] content.analyze: swept stale work dir ${e.name}`);
       }
@@ -77,6 +84,24 @@ function sweepStaleWorkDirs(): void {
       // raced/locked — next sweep gets it
     }
   }
+}
+
+/**
+ * Staleness = newest mtime of the dir OR any direct child. The dir's own mtime only moves
+ * on create/rename — a long in-place write (a growing download, an appended log) leaves it
+ * untouched, and judging by dir mtime alone would let a sibling worker sweep an ACTIVE dir.
+ */
+export function newestMtimeMs(dir: string): number {
+  let newest = fs.statSync(dir).mtimeMs;
+  for (const f of fs.readdirSync(dir)) {
+    try {
+      const t = fs.statSync(path.join(dir, f)).mtimeMs;
+      if (t > newest) newest = t;
+    } catch {
+      // entry vanished mid-scan
+    }
+  }
+  return newest;
 }
 
 async function downloadToTemp(storedPath: string, dest: string): Promise<void> {
@@ -95,6 +120,14 @@ async function downloadToTemp(storedPath: string, dest: string): Promise<void> {
 
 /** Pipeline progress line: `@@PROGRESS {"stage":"stt","pct":12,"note":"…"}`. */
 type Progress = { stage?: string; pct?: number; note?: string };
+
+// The in-flight python child, killed on process exit so a worker restart doesn't leave an
+// orphan racing the retried job on the same work dir (SIGKILL of node can't be caught, but
+// normal exits and uncaught-exception exits can).
+let activeChild: ReturnType<typeof spawn> | null = null;
+process.on("exit", () => {
+  if (activeChild && activeChild.exitCode == null) activeChild.kill("SIGKILL");
+});
 
 function runAnalyze(
   videoPath: string,
@@ -124,9 +157,27 @@ function runAnalyze(
         stdio: ["ignore", "pipe", "inherit"],
       },
     );
+    activeChild = proc;
+
+    // Stall watchdog: every stdout line re-arms it. The pipeline prints per-window/-frame/
+    // -batch progress on stdout, so a long silence means a hung call, not slow work.
+    let stalled = false;
+    let stallTimer: NodeJS.Timeout | undefined;
+    const armStall = () => {
+      if (stallTimer) clearTimeout(stallTimer);
+      stallTimer = setTimeout(() => {
+        stalled = true;
+        console.error(`[worker] core.analyze: no output for ${STALL_TIMEOUT_MS / 60000}min — killing child`);
+        proc.kill("SIGKILL");
+      }, STALL_TIMEOUT_MS);
+      if (typeof stallTimer.unref === "function") stallTimer.unref();
+    };
+    armStall();
+
     // Parse progress markers out of stdout; everything else passes through to the log.
     const rl = readline.createInterface({ input: proc.stdout! });
     rl.on("line", (line) => {
+      armStall();
       if (line.startsWith("@@PROGRESS ")) {
         try {
           onProgress(JSON.parse(line.slice("@@PROGRESS ".length)) as Progress);
@@ -137,10 +188,18 @@ function runAnalyze(
       }
       console.log(`[core] ${line}`);
     });
-    proc.on("close", (code) =>
-      code === 0 ? resolve() : reject(new Error(`core.analyze exited ${code}`)),
-    );
-    proc.on("error", reject);
+    proc.on("close", (code) => {
+      if (stallTimer) clearTimeout(stallTimer);
+      activeChild = null;
+      if (stalled) reject(new Error(`core.analyze stalled (${STALL_TIMEOUT_MS / 60000}min without output) — killed`));
+      else if (code === 0) resolve();
+      else reject(new Error(`core.analyze exited ${code}`));
+    });
+    proc.on("error", (err) => {
+      if (stallTimer) clearTimeout(stallTimer);
+      activeChild = null;
+      reject(err);
+    });
   });
 }
 
@@ -226,11 +285,6 @@ async function writeRecommendationsFromShorts(
         AND COALESCE(data->>'status', 'pending') <> 'pending'`,
     [episodeId],
   );
-  await getPool().query(
-    `DELETE FROM entities WHERE kind = 'recommendation' AND data->>'episodeId' = $1
-       AND COALESCE(data->>'status', 'pending') = 'pending'`,
-    [episodeId],
-  );
   // Two spans "overlap" when they share >50% of the shorter span — enough to treat the
   // new pick as the same clip the operator already handled.
   const overlapsKept = (start: number, end: number) =>
@@ -242,10 +296,35 @@ async function writeRecommendationsFromShorts(
     });
   const fresh = valid.filter((s) => !overlapsKept(Number(s.start) || 0, Number(s.end) || 0));
   const sorted = [...fresh].sort((a, b) => (a.rank ?? 99) - (b.rank ?? 99));
-  // Insert worst-rank first so prepend leaves rank 1 at the front of the board.
-  for (let i = sorted.length - 1; i >= 0; i--) {
-    const rec = recFromShort(episodeId, sorted[i]);
-    await prependEntity("recommendation", rec.id, rec);
+
+  // Delete + re-insert as ONE transaction: an error mid-insert must not leave the board
+  // half-emptied while the analysis job records success (nothing would ever retry it).
+  const client = await getPool().connect();
+  try {
+    await client.query("BEGIN");
+    await client.query(
+      `DELETE FROM entities WHERE kind = 'recommendation' AND data->>'episodeId' = $1
+         AND COALESCE(data->>'status', 'pending') = 'pending'`,
+      [episodeId],
+    );
+    // Insert worst-rank first so prepend semantics leave rank 1 at the front of the board.
+    for (let i = sorted.length - 1; i >= 0; i--) {
+      const rec = recFromShort(episodeId, sorted[i]);
+      const { rows } = await client.query(
+        "SELECT COALESCE(MIN(ord), 0) - 1 AS m FROM entities WHERE kind = 'recommendation'",
+      );
+      await client.query(
+        `INSERT INTO entities (kind, id, data, ord) VALUES ('recommendation', $1, $2::jsonb, $3)
+         ON CONFLICT (kind, id) DO UPDATE SET data = $2::jsonb, ord = $3`,
+        [rec.id, JSON.stringify(rec), rows[0].m],
+      );
+    }
+    await client.query("COMMIT");
+  } catch (e) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw e;
+  } finally {
+    client.release();
   }
   return sorted.length;
 }
@@ -374,6 +453,10 @@ export async function runContentAnalyze(mediaId: string): Promise<void> {
   fs.mkdirSync(work, { recursive: true });
   const videoPath = path.join(work, `source${path.extname(media.filename) || ".mp4"}`);
 
+  // Hoisted so the catch can drain in-flight progress writes before writing the error
+  // status — otherwise a late "progress 40%" write can overwrite "error" (last writer wins).
+  let chain = Promise.resolve();
+
   try {
     // A retry reuses the already-downloaded source (size must match — a mismatch
     // means the previous download was cut off, so pull it again).
@@ -387,7 +470,6 @@ export async function runContentAnalyze(mediaId: string): Promise<void> {
     // Mirror pipeline progress onto the episode (throttled — every line is a DB write).
     let lastPct = -10;
     let lastWrite = 0;
-    let chain = Promise.resolve();
     const onProgress = (p: Progress) => {
       const pct = Math.max(0, Math.min(99, Number(p.pct) || 0));
       const now = Date.now();
@@ -515,6 +597,9 @@ export async function runContentAnalyze(mediaId: string): Promise<void> {
       await persistCast(mediaId, p.cast);
     }
     if (media.episodeId) {
+      // Drain any in-flight throttled progress write first, or it lands AFTER this and
+      // the UI shows "AI 분석 중… 40%" instead of the error state until the next retry.
+      await chain.catch(() => {});
       await setEpisodePipeline(media.episodeId, {
         stage: "analyze",
         stageStatus: "error",

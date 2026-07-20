@@ -18,7 +18,7 @@ import {
   initDb,
   listYouTubeChannels,
   getYouTubeChannelByChannelId,
-  upsertYouTubeChannel,
+  markYouTubeChannelRevoked,
   updateYouTubeTokens,
   listChannelVideos,
   getChannelVideoByVideoId,
@@ -37,9 +37,9 @@ import {
 } from "./db-pg.ts";
 import { probe, captureThumbnail } from "./ffmpeg.ts";
 import { uploadFile, uploadPath, thumbPath } from "./storage-gcs.ts";
-import { initQueue, claimJob, completeJob, failJob, requeueStale, heartbeatJob, enqueue, queueStats, type Job, type JobType } from "./queue.ts";
+import { initQueue, claimJob, completeJob, failJob, requeueStale, heartbeatJob, enqueue, lastDoneJobAt, queueStats, type Job, type JobType } from "./queue.ts";
 import { runChannelPipeline } from "./channel-pipeline.ts";
-import { runContentAnalyze } from "./content-pipeline.ts";
+import { runContentAnalyze, newestMtimeMs } from "./content-pipeline.ts";
 import {
   withAccessToken,
   fetchVideoAnalytics,
@@ -118,10 +118,9 @@ function withChannelToken<T>(ch: YouTubeChannel, call: (token: string) => Promis
   return withAccessToken(GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, ch, persistTokensFor(ch), call);
 }
 
-/** A dead refresh token means the creator must reconnect — park the channel. */
+/** A dead refresh token means the creator must reconnect — park the channel (status-only). */
 async function markChannelRevoked(channelId: string): Promise<void> {
-  const ch = await getYouTubeChannelByChannelId(channelId);
-  if (ch) await upsertYouTubeChannel({ ...ch, status: "revoked" });
+  await markYouTubeChannelRevoked(channelId);
 }
 
 /**
@@ -173,6 +172,13 @@ async function handleChannelAnalyze(job: Job): Promise<void> {
  * quota (video.analyze costs 4 calls), so a re-run only re-pulls videos actually due.
  */
 async function enqueueDueVideoJobs(channelId: string): Promise<void> {
+  const ch = await loadActiveChannel(channelId);
+  if (!ch) return;
+  // The video.analyze handler unconditionally skips channels without the analytics scope,
+  // so nothing ever lands in video_analytics and `!prev` would re-queue every upload on
+  // every sweep forever. Gate the fan-out on the same condition the handler uses.
+  const canAnalyze = !ch.scope || ch.scope.includes(YT_ANALYTICS_SCOPE);
+
   const targets = await listChannelVideos(channelId); // every synced upload
   const now = Date.now();
   let analyzeQueued = 0;
@@ -184,16 +190,20 @@ async function enqueueDueVideoJobs(channelId: string): Promise<void> {
 
     const prev = await getVideoAnalytics(v.videoId);
     const interval = fresh ? VIDEO_ANALYZE_FRESH_INTERVAL_MS : VIDEO_ANALYZE_AGED_INTERVAL_MS;
-    if (!prev || now - prev.fetchedAt >= interval) {
+    if (canAnalyze && (!prev || now - prev.fetchedAt >= interval)) {
       const id = await enqueue("video.analyze", { videoId: v.videoId, channelId }, {
         dedupeKey: `video.analyze:${v.videoId}`,
       });
       if (id) analyzeQueued++;
     }
 
-    // Comments only for fresh videos, at most daily.
+    // Comments only for fresh videos, at most daily. Due-ness must consider the last
+    // ATTEMPT, not just stored rows — a video with zero (or disabled) comments writes
+    // nothing, and gating on rows alone would burn an API call every sweep for 7 days.
     if (fresh) {
-      const last = await getLatestCommentFetchedAt(v.videoId);
+      const lastStored = await getLatestCommentFetchedAt(v.videoId);
+      const lastTried = await lastDoneJobAt("video.comments", `video.comments:${v.videoId}`);
+      const last = Math.max(lastStored ?? 0, lastTried ?? 0) || null;
       if (last == null || now - last >= VIDEO_COMMENTS_INTERVAL_MS) {
         const id = await enqueue("video.comments", { videoId: v.videoId, channelId }, {
           dedupeKey: `video.comments:${v.videoId}`,
@@ -346,7 +356,9 @@ function sweepStaleYoutubeDirs(): void {
     if (!e.isDirectory()) continue;
     const dir = path.join(YT_WORK_ROOT, e.name);
     try {
-      if (fs.statSync(dir).mtimeMs < cutoff) {
+      // newestMtimeMs: a growing .part file updates its own mtime, not the dir's —
+      // dir-mtime-only would let a sibling worker sweep an ACTIVE download at the TTL edge.
+      if (newestMtimeMs(dir) < cutoff) {
         fs.rmSync(dir, { recursive: true, force: true });
         console.log(`[worker] youtube.download: swept stale work dir ${e.name}`);
       }
@@ -411,11 +423,17 @@ async function handleYoutubeDownload(job: Job): Promise<void> {
     ]);
     if (!fs.existsSync(outPath)) throw new Error("yt-dlp가 출력 파일을 만들지 못했습니다");
 
-    let meta = { durationSec: 0, width: 0, height: 0, codec: "", hasAudio: false };
-    meta = await probe(outPath).catch((e) => {
-      console.error(`[worker] youtube.download ${mediaId}: probe failed`, e);
-      return meta;
-    });
+    // A crash mid-merge leaves a truncated source.mp4 that a retried yt-dlp treats as
+    // "already downloaded" — so a broken probe here means a corrupt file, not a soft
+    // degrade. Delete it and fail the attempt so the retry downloads fresh.
+    let meta: Awaited<ReturnType<typeof probe>>;
+    try {
+      meta = await probe(outPath);
+      if (!(meta.durationSec > 0)) throw new Error(`probe returned duration ${meta.durationSec}`);
+    } catch (e: any) {
+      fs.rmSync(outPath, { force: true });
+      throw new Error(`다운로드 파일 손상(probe 실패) — 재시도 시 새로 받습니다: ${String(e?.message ?? e).slice(0, 200)}`);
+    }
 
     let thumbStored: string | null = null;
     const thumbTmp = path.join(workDir, "thumb.jpg");
@@ -643,9 +661,16 @@ async function loop(): Promise<void> {
       await completeJob(job.id);
       // Enqueue any successor only now that this row is 'done', so a self-scheduling
       // job (hotwatch) can reuse its own dedupeKey without colliding with itself.
+      // Isolated try/catch: an enqueue failure must not fall into the outer catch's
+      // failJob after completeJob already succeeded (failJob's status guard is the
+      // second line of defense, but the job must also not be reported as failed).
       if (followUp) {
-        const id = await enqueue(followUp.type, followUp.payload, followUp.opts);
-        if (!id) console.warn(`[worker] follow-up ${followUp.type} for ${job.id} was deduped`);
+        try {
+          const id = await enqueue(followUp.type, followUp.payload, followUp.opts);
+          if (!id) console.warn(`[worker] follow-up ${followUp.type} for ${job.id} was deduped`);
+        } catch (e) {
+          console.error(`[worker] follow-up enqueue failed for ${job.id} (${followUp.type}):`, e);
+        }
       }
     } catch (err: any) {
       clearInterval(beat);

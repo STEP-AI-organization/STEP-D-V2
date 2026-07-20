@@ -32,6 +32,8 @@ for _s in (sys.stdout, sys.stderr):
 from google import genai
 from google.genai import types
 
+from .retry import call_with_retry
+
 PROJECT = os.environ.get("GOOGLE_CLOUD_PROJECT") or "step-d"
 # Seoul — transcripts can carry personal info; keep processing in-country (data residency).
 LOCATION = os.environ.get("VERTEX_LOCATION") or "asia-northeast3"
@@ -120,6 +122,8 @@ def refine_segments(segments: list[dict]) -> list[dict]:
         pairs = ", ".join(f'"{w}"→"{r}"' for w, r in glossary.items())
         system += f"\n\n용어 교정 사전(이 오인식은 반드시 오른쪽으로 고쳐라): {pairs}"
 
+    failed_batches = 0
+    total_batches = (len(segments) + BATCH - 1) // BATCH
     for i in range(0, len(segments), BATCH):
         batch = segments[i:i + BATCH]
         # Number each batch LOCALLY (1..N), not globally. Models routinely renumber from 1
@@ -127,7 +131,9 @@ def refine_segments(segments: list[dict]) -> list[dict]:
         # silently drops the whole batch's refinement. Local numbering + offset-back is robust.
         numbered = "\n".join(f"{j + 1}. {s['text']}" for j, s in enumerate(batch))
         try:
-            resp = client.models.generate_content(
+            # 429/503 일시 오류는 제자리 백오프 재시도 — 정제 실패가 원문 그대로
+            # 체크포인트에 구워지는(silent degrade) 것을 막는다.
+            resp = call_with_retry(lambda: client.models.generate_content(
                 model=MODEL,
                 contents=numbered,
                 config=types.GenerateContentConfig(
@@ -136,7 +142,7 @@ def refine_segments(segments: list[dict]) -> list[dict]:
                     response_mime_type="application/json",
                     response_schema=RESPONSE_SCHEMA,
                 ),
-            )
+            ))
             rows = json.loads(resp.text or "[]")
             # Guard each row's `n` individually — one garbage/None value must not blow up the
             # whole comprehension and discard the entire batch's refinement.
@@ -154,9 +160,18 @@ def refine_segments(segments: list[dict]) -> list[dict]:
             print(f"   refined {done}/{len(segments)}")
         except Exception as e:
             # Keep this batch's original text (glossary still applied) rather than losing it.
+            failed_batches += 1
             for j in range(len(batch)):
                 refined[i + j]["text"] = _apply_glossary(batch[j]["text"], glossary)
             print(f"   (batch {i}-{i + len(batch)} failed, kept raw: {str(e)[:120]})")
+
+    # 스로틀 폭풍으로 배치 20% 초과가 원문으로 남았다면, 그 결과를 체크포인트로 굳히지
+    # 말고 실패시켜 잡 재시도(정제 단계 재실행)로 넘긴다. 소수 실패는 원문 유지로 충분.
+    if total_batches and failed_batches > total_batches * 0.2:
+        raise RuntimeError(
+            f"refine: {failed_batches}/{total_batches} batches kept raw STT text (>20%) — "
+            "failing so the job retries instead of baking raw text into the checkpoint"
+        )
 
     # Word-level timestamps ride along on the copied dicts (dict(s) above), which the render
     # uses for \k karaoke. Apply the glossary to those tokens too so the sung text matches

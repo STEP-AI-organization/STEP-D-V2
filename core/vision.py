@@ -40,6 +40,8 @@ for _s in (sys.stdout, sys.stderr):
 from google import genai
 from google.genai import types
 
+from .retry import call_with_retry
+
 PROJECT = os.environ.get("GOOGLE_CLOUD_PROJECT") or "step-d"
 # Seoul: frames carry identifiable Korean people (biometric/sensitive data), so keep
 # them in-country to avoid a cross-border transfer with no PIPA basis. Vertex serves
@@ -85,7 +87,9 @@ SCHEMA = {
 def analyze_frame(client, frame_path: Path, dialogue: str) -> dict:
     img = frame_path.read_bytes()
     context = f"\n\n참고 — 이 장면에서 들리는 대사: \"{dialogue}\"" if dialogue else "\n\n(이 장면은 대사가 없다. 화면만으로 판단하라.)"
-    resp = client.models.generate_content(
+    # 429/503 일시 오류는 제자리 백오프 재시도 — 프레임별 MAX_FRAME_ATTEMPTS가 이미
+    # 있으므로 attempts=3이면 충분하다.
+    resp = call_with_retry(lambda: client.models.generate_content(
         model=MODEL,
         contents=[
             types.Part.from_bytes(data=img, mime_type="image/jpeg"),
@@ -101,7 +105,7 @@ def analyze_frame(client, frame_path: Path, dialogue: str) -> dict:
             # truncating text-heavy frames' on_screen_text arrays (→ json.loads crash).
             thinking_config=types.ThinkingConfig(thinking_budget=0),
         ),
-    )
+    ), attempts=3)
     # A blocked/empty response returns text=None; json.loads(None) would raise a confusing
     # TypeError. Treat it as an empty result so the caller marks the frame failed cleanly.
     return json.loads(resp.text or "{}")
@@ -144,6 +148,10 @@ def analyze_frames(
         return scenes
 
     done = [0]
+    # 이번 실행의 성패 카운터 — _frame_error만 세면 MAX_FRAME_ATTEMPTS에 도달해 영구
+    # 스킵된 프레임이 빠져나가, 지속 아웃티지가 3번째 재시도에서 전량 0점으로 통과한다.
+    run_success = [0]
+    run_fail = [0]
     lock = threading.Lock()  # guards scene-dict writes + counter + save_cb snapshots
 
     def work(scene: dict) -> None:
@@ -151,6 +159,7 @@ def analyze_frames(
         try:
             r = analyze_frame(client, frame, scene.get("text", ""))
             with lock:
+                run_success[0] += 1
                 scene["vision_score"] = int(r.get("score", 0))
                 scene["vision_reason"] = (r.get("reason") or "").strip()
                 scene["vision_tags"] = r.get("tags", [])[:3]
@@ -159,6 +168,7 @@ def analyze_frames(
                 scene.pop("_frame_error", None)
         except Exception as e:
             with lock:
+                run_fail[0] += 1
                 attempts = int(scene.get("_frame_attempts", 0)) + 1
                 scene["_frame_attempts"] = attempts
                 scene["vision_tags"] = []
@@ -183,9 +193,10 @@ def analyze_frames(
                 try:
                     save_cb()
                 except Exception as e:
-                    print(f"   (체크포인트 저장 실패: {str(e)[:80]})")
+                    print(f"   (체크포인트 저장 실패: {str(e)[:80]})\n", end="", flush=True)
         if n % 10 == 0 or n == total:
-            print(f"   analyzed {n}/{total}")
+            # 워커 스레드 출력 — 페이로드에 \n을 포함한 단일 write여야 @@PROGRESS 줄과 안 섞인다.
+            print(f"   analyzed {n}/{total}\n", end="", flush=True)
         if on_progress:
             on_progress(n, total)
 
@@ -199,10 +210,25 @@ def analyze_frames(
     # MAX_FRAME_ATTEMPTS and get permanently skipped above, so we must NOT raise (that would
     # dead-letter the whole run). Prefiltered heuristic scores don't count as successes:
     # with VISION_PREFILTER=on they always exist, so gating on `skipped` here would silently
-    # disable outage retry on the common path.
-    failures = sum(1 for s in targets if s.get("_frame_error"))
-    if total and failures == total and prior_success == 0:
-        raise RuntimeError(f"frame analysis: all {total} Gemini calls failed (Vertex outage?)")
+    # disable outage retry on the common path. run_success 카운터 기준: _frame_error만 세면
+    # 이번 실행에 MAX_FRAME_ATTEMPTS를 소진해 영구 스킵된 프레임이 빠져, 지속 아웃티지의
+    # 3번째 잡 재시도가 전량 0점으로 조용히 통과해 버린다.
+    if total and run_success[0] == 0 and prior_success == 0:
+        # 콜드 아웃티지: 이번 실행에서 영구 스킵으로 굳힌 프레임을 재시도 가능 상태로
+        # 되돌린다 — 아웃티지 중 소진한 시도는 프레임 탓이 아니므로 카운트도 되돌린다.
+        for s in targets:
+            if str(s.get("vision_reason") or "").startswith("(분석 불가"):
+                s["_frame_error"] = str(s.get("vision_reason"))[:80]
+                s["vision_score"] = None
+                s["_frame_attempts"] = max(0, int(s.get("_frame_attempts", 1)) - 1)
+        if save_cb:
+            try:
+                save_cb()  # 복원을 체크포인트에 반영한 뒤에 실패시킨다
+            except Exception as e:
+                print(f"   (체크포인트 저장 실패: {str(e)[:80]})")
+        raise RuntimeError(
+            f"frame analysis: all {run_fail[0]}/{total} Gemini calls failed this run (Vertex outage?)"
+        )
 
     return scenes
 

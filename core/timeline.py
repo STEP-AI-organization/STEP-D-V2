@@ -30,6 +30,8 @@ for _s in (sys.stdout, sys.stderr):
 from google import genai
 from google.genai import types
 
+from .retry import call_with_retry
+
 PROJECT = os.environ.get("GOOGLE_CLOUD_PROJECT") or "step-d"
 LOCATION = os.environ.get("VERTEX_LOCATION") or "asia-northeast3"
 MODEL = os.environ.get("GEMINI_MODEL") or "gemini-2.5-flash"
@@ -146,7 +148,8 @@ def _summarize_chunk(client, chunk: list[tuple[int, dict]]) -> None:
             lines.append(_scene_line(s))
     prompt = ("다음은 한국어 방송 영상의 시간대별 블록과 각 블록의 장면 목록이다. "
               "블록마다 label / summary / key_points를 생성하라.\n" + "\n".join(lines))
-    resp = client.models.generate_content(
+    # 429/503 일시 오류는 제자리 백오프 재시도 (실패 시 기본 라벨 폴백은 그대로).
+    resp = call_with_retry(lambda: client.models.generate_content(
         model=MODEL,
         contents=prompt,
         config=types.GenerateContentConfig(
@@ -156,7 +159,7 @@ def _summarize_chunk(client, chunk: list[tuple[int, dict]]) -> None:
             response_schema=SCHEMA,
             max_output_tokens=4096,
         ),
-    )
+    ))
     by_index = {int(r["index"]): r for r in json.loads(resp.text or "[]") if isinstance(r, dict) and "index" in r}
     for idx, b in chunk:
         r = by_index.get(idx)

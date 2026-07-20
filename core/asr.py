@@ -30,6 +30,8 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Optional
 
+from .retry import call_with_retry, is_transient
+
 STT_PROVIDER = (os.environ.get("STT_PROVIDER") or "gemini").lower()
 # Auto-fallback to faster-whisper when the primary (Gemini) yields nothing. On by default;
 # STT_FALLBACK=off|none|0 disables it (then a Gemini failure just means no transcript).
@@ -44,6 +46,11 @@ GEMINI_MODEL = os.environ.get("GEMINI_STT_MODEL") or os.environ.get("GEMINI_MODE
 # within the token budget (dense speech in a long window overflows and truncates).
 STT_WINDOW_SEC = int(os.environ.get("STT_WINDOW_SEC") or 90)
 STT_WORKERS = int(os.environ.get("STT_WORKERS") or 6)
+
+
+class STTOutageError(RuntimeError):
+    """Gemini STT 아웃티지/과다 실패. 빈·구멍 전사를 체크포인트로 굳히면 영구 데이터
+    손실이므로, 폴백까지 실패하면 이 예외를 전파해 잡 재시도로 넘겨야 한다."""
 
 
 def extract_audio(video_path: str, output_path: Optional[str] = None) -> str:
@@ -76,8 +83,14 @@ def transcribe(
         return _transcribe_whisper(audio_path, language, model_name, device, compute_type, beam_size)
 
     # Primary: managed Gemini (GPU-free, in-country).
+    outage: Optional[Exception] = None
     try:
         result = _transcribe_gemini(audio_path, language, on_progress=on_progress)
+    except STTOutageError as e:
+        # 아웃티지/과다 실패 — 폴백이 못 살리면 아래에서 재던져 잡을 실패시킨다.
+        print(f"   (STT Gemini 실패: {str(e)[:100]})")
+        outage = e
+        result = {"segments": [], "language": language}
     except Exception as e:
         print(f"   (STT Gemini 실패: {str(e)[:100]})")
         result = {"segments": [], "language": language}
@@ -95,6 +108,9 @@ def transcribe(
                 return fb
         except Exception as e:
             print(f"   (STT 폴백(faster-whisper) 불가: {str(e)[:100]})")
+    if outage is not None:
+        # 아웃티지인데 폴백도 실패 — 빈 전사를 체크포인트로 굳히는 대신 잡 재시도.
+        raise outage
     return result  # empty → pipeline continues transcript-free (frames-only candidates)
 
 
@@ -165,23 +181,27 @@ def _transcribe_gemini(audio_or_video: str, language: str, on_progress=None) -> 
 
     def do_window(start: float, dur: float, depth: int = 0) -> list[dict]:
         try:
-            resp = client.models.generate_content(
+            # 429/503 같은 일시 오류는 제자리에서 백오프 재시도 — 반으로 쪼개 재호출하면
+            # 스로틀 중에 호출량만 2배가 된다.
+            resp = call_with_retry(lambda: client.models.generate_content(
                 model=GEMINI_MODEL,
                 contents=[
                     types.Part.from_bytes(data=_slice_wav(wav_path, start, dur), mime_type="audio/wav"),
                     _GEMINI_PROMPT,
                 ],
                 config=config,
-            )
+            ))
             rows = json.loads(resp.text or "[]")
         except Exception as e:
             # A dense/noisy window can overflow the JSON output and truncate. Split it in
             # half and retry so we don't lose the whole window (e.g. the intro montage).
-            if depth < 2 and dur > 20:
+            # 단, 일시 오류(재시도 소진)는 분할해도 소용없다 — 절단/파싱류만 분할한다.
+            if not is_transient(e) and depth < 2 and dur > 20:
                 half = dur / 2
                 return do_window(start, half, depth + 1) + do_window(start + half, half, depth + 1)
             failed[0] += 1
-            print(f"   (STT window @{start:.0f}s+{dur:.0f}s failed, skipped: {str(e)[:70]})")
+            print(f"   (STT window @{start:.0f}s+{dur:.0f}s failed, skipped: {str(e)[:70]})\n",
+                  end="", flush=True)
             return []
         out = []
         for r in rows:
@@ -206,7 +226,14 @@ def _transcribe_gemini(audio_or_video: str, language: str, on_progress=None) -> 
         done = [0]
 
         def run_window(s: float) -> list[dict]:
-            rows = do_window(s, min(STT_WINDOW_SEC, total - s))
+            # 창 끝을 +2s 오버랩해 경계에 걸친 발화가 중간에 잘리지 않게 한다.
+            # 오버랩 구간에서 '시작'하는 발화는 다음 창 소유이므로 버리고,
+            # 경계를 살짝 넘겨 끝나는 발화는 end만 오버랩 한도로 클램프한다.
+            rows = do_window(s, min(STT_WINDOW_SEC + 2.0, total - s))
+            boundary = s + STT_WINDOW_SEC
+            rows = [r for r in rows if r["start"] < boundary]
+            for r in rows:
+                r["end"] = min(r["end"], boundary + 2.0)
             done[0] += 1
             if on_progress:
                 on_progress(done[0], len(starts))
@@ -223,8 +250,15 @@ def _transcribe_gemini(audio_or_video: str, language: str, on_progress=None) -> 
     # An outage (all/most windows erroring with nothing transcribed) must fail the run —
     # returning an empty result would be checkpointed and become permanent silent data loss.
     if failed[0] and not segments:
-        raise RuntimeError(
+        raise STTOutageError(
             f"Gemini STT: {failed[0]}/{len(starts)} windows failed and no segments were produced"
+        )
+    # 일부만 성공해도 구멍이 10%를 넘으면 실패 처리 — 구멍 난 전사가 체크포인트로
+    # 굳어 영구화되는 것보다 잡 재시도(완료 단계부터 재개)가 낫다.
+    if failed[0] > max(1, len(starts) * 0.1):
+        raise STTOutageError(
+            f"Gemini STT: {failed[0]}/{len(starts)} windows failed (>10%) — "
+            "holey transcript, failing so the job retries instead of checkpointing data loss"
         )
     return {"segments": segments, "language": language}
 

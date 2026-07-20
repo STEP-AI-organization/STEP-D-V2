@@ -40,6 +40,8 @@ for _s in (sys.stdout, sys.stderr):
 from google import genai
 from google.genai import types
 
+from .retry import call_with_retry
+
 PROJECT = os.environ.get("GOOGLE_CLOUD_PROJECT") or "step-d"
 LOCATION = os.environ.get("VERTEX_LOCATION") or "asia-northeast3"
 MODEL = os.environ.get("GEMINI_MODEL") or "gemini-2.5-flash"
@@ -142,7 +144,7 @@ def _profile_block(profile: dict | None) -> str:
 def _base_system(genre: str, profile: dict | None = None) -> str:
     p = _pack(genre)
     return f"""너는 {p['label']} 콘텐츠의 숏폼(쇼츠) 편집 전문가다. 아래는 영상을 장면 단위로 분석한
-타임라인이다. 각 줄: [장면번호] 시각~시각 (길이) | 화면분석 | 대사 | 등장인물(화면자막) | 시각점수(0-100).
+타임라인이다. 각 줄: [장면번호] 시작초~끝초 (시:분 표기, 길이) | 화면분석 | 대사 | 등장인물(화면자막) | 시각점수(0-100).
 
 이 장르에서 쇼츠로 터지는 구간의 기준:
 {p['guidance']}
@@ -252,7 +254,8 @@ def detect_genre(client, scenes: list[dict]) -> str:
     )
     labels = ", ".join(f"{k}({v['label']})" for k, v in GENRE_PACKS.items())
     try:
-        resp = client.models.generate_content(
+        # 429/503 일시 오류는 제자리 백오프 재시도 (실패 시 기본 장르 폴백은 그대로).
+        resp = call_with_retry(lambda: client.models.generate_content(
             model=MODEL,
             contents=f"다음은 한 영상의 분석 샘플이다. 이 콘텐츠의 장르를 하나 골라라: {labels}\n\n{sample}",
             config=types.GenerateContentConfig(
@@ -262,7 +265,7 @@ def detect_genre(client, scenes: list[dict]) -> str:
                 max_output_tokens=256,
                 thinking_config=types.ThinkingConfig(thinking_budget=0),
             ),
-        )
+        ))
         g = json.loads(resp.text or "{}").get("genre", DEFAULT_GENRE)
         return g if g in GENRE_PACKS else DEFAULT_GENRE
     except Exception as e:
@@ -273,7 +276,10 @@ def detect_genre(client, scenes: list[dict]) -> str:
 # ── timeline formatting + chunking ──────────────────────────────────────────────
 
 def _mmss(s: float) -> str:
-    return f"{int(s // 60)}:{int(s % 60):02d}"
+    s = int(s)
+    if s >= 3600:  # 1시간 이상은 h:mm:ss — 75:30 같은 모호한 표기를 피한다
+        return f"{s // 3600}:{(s % 3600) // 60:02d}:{s % 60:02d}"
+    return f"{s // 60}:{s % 60:02d}"
 
 
 def build_timeline(scenes: list[dict]) -> str:
@@ -283,8 +289,11 @@ def build_timeline(scenes: list[dict]) -> str:
         vis = s.get("vision_reason", "")
         txt = (s.get("text") or "").strip() or "-"
         score = s.get("vision_score")
+        # 원시 초를 함께 표기 — 모델이 start/end로 되돌려줄 값은 이 초 값이다
+        # (mm:ss만 주면 모델이 초로 환산하다 어긋난다).
         lines.append(
-            f"[{s['index']}] {_mmss(s['start'])}~{_mmss(s['end'])} ({s['duration']:.0f}s)"
+            f"[{s['index']}] {float(s['start']):.1f}~{float(s['end']):.1f}초"
+            f" ({_mmss(s['start'])}~{_mmss(s['end'])}, {s['duration']:.0f}s)"
             f" | 화면:{vis} | 대사:{txt} | 인물:{names or '-'} | 시각:{score if score is not None else '-'}"
         )
     return "\n".join(lines)
@@ -354,10 +363,12 @@ def _extract_candidates(client, chunk: list[dict], genre: str, profile: dict | N
 
 지금 보는 타임라인은 전체 영상의 일부 구간이다. 이 구간 안에서만 후보를 골라라.
 - 최대 {PER_CHUNK}개. 확신 없는 구간은 넣지 마라 — 0개도 답이다.
+- start/end는 타임라인 각 줄에 표기된 '초' 값(예: 754.2~779.8초)을 그대로 복사하라.
+  분:초 표기를 초로 환산해 쓰지 마라.
 - 각 후보: start(초), end(초), title(클릭 유도 한국어 제목), reason(왜 터지는지 한 문장),
   appeal(1-5 절대평가), scene_from/scene_to(포함 장면번호), tags(리액션/폭소/반전/서사/자막 등),
   hook(반전/감정고조/돌직구/질문/정보성/웃음/갈등/공감/기타 중 가장 잘 맞는 하나)."""
-    resp = client.models.generate_content(
+    resp = call_with_retry(lambda: client.models.generate_content(
         model=MODEL,
         contents=f"이 구간에서 쇼츠 후보를 골라라.\n\n=== 장면 타임라인 ({_mmss(chunk[0]['start'])}~{_mmss(chunk[-1]['end'])}) ===\n{build_timeline(chunk)}",
         config=types.GenerateContentConfig(
@@ -370,7 +381,7 @@ def _extract_candidates(client, chunk: list[dict], genre: str, profile: dict | N
             max_output_tokens=8192,
             thinking_config=types.ThinkingConfig(thinking_budget=0),
         ),
-    )
+    ))
     return json.loads(resp.text or "{}").get("candidates", [])
 
 
@@ -396,8 +407,10 @@ def _synthesize(client, candidates: list[dict], n: int, genre: str, duration: fl
     lines = []
     for i, c in enumerate(sorted(candidates, key=lambda c: c.get("start", 0)), 1):
         tags = "/".join(c.get("tags", []))
+        # 원시 초를 함께 표기 — start/end는 이 초 값을 그대로 복사받는다.
         lines.append(
-            f"[후보{i}] {_mmss(c.get('start', 0))}~{_mmss(c.get('end', 0))}"
+            f"[후보{i}] {float(c.get('start', 0)):.1f}~{float(c.get('end', 0)):.1f}초"
+            f" ({_mmss(c.get('start', 0))}~{_mmss(c.get('end', 0))})"
             f" | appeal:{c.get('appeal', '-')} | {c.get('title', '')} | {c.get('reason', '')}"
             f" | 장면:{c.get('scene_from', '-')}~{c.get('scene_to', '-')} | {tags or '-'}"
         )
@@ -405,12 +418,14 @@ def _synthesize(client, candidates: list[dict], n: int, genre: str, duration: fl
 
 아래는 영상 전체({_mmss(duration)})를 구간별로 스캔해 뽑은 쇼츠 후보 목록이다.
 이 중에서 최종 {n}개를 골라 순위를 매겨라.
+- start/end는 후보에 표기된 '초' 값(예: 754.2~779.8초)을 그대로 복사하라.
+  분:초 표기를 초로 환산해 쓰지 마라.
 - 겹치거나 바로 이어지는 후보는 하나로 병합해도 된다 (start/end를 병합 범위로).
 - 후보 목록에 없는 새로운 구간을 만들지 마라.
 - 비슷한 종류만 몰리지 않게, 영상 전체를 대표하도록 다양성도 고려하라.
 - 각 항목: rank(1=최고), start, end, title, reason, appeal(1-5 절대평가 — 순위와 별개),
   scene_from/scene_to, tags, hook(반전/감정고조/돌직구/질문/정보성/웃음/갈등/공감/기타 중 하나)."""
-    resp = client.models.generate_content(
+    resp = call_with_retry(lambda: client.models.generate_content(
         model=MODEL,
         contents=f"최종 쇼츠 {n}개를 골라라.\n\n=== 후보 목록 ===\n" + "\n".join(lines),
         config=types.GenerateContentConfig(
@@ -422,20 +437,43 @@ def _synthesize(client, candidates: list[dict], n: int, genre: str, duration: fl
             # reasoning call (sees all candidates + evidence and selects). Only guard against
             # a blocked/empty response; the caller degrades to best candidates on empty.
         ),
-    )
+    ))
     return json.loads(resp.text or "{}").get("shorts", [])
 
 
 # ── validation ──────────────────────────────────────────────────────────────────
 
-def validate_shorts(shorts: list[dict], duration: float, n: int) -> list[dict]:
-    """Clamp/normalize the model output; drop degenerate spans instead of 'fixing' them."""
+def validate_shorts(shorts: list[dict], duration: float, n: int,
+                    candidates: list[dict] | None = None) -> list[dict]:
+    """Clamp/normalize the model output; drop degenerate spans instead of 'fixing' them.
+    candidates가 있으면 모델이 돌려준 구간을 1단계 후보에 대조한다: start가 어떤 후보의
+    start와 ±3s면 그 후보의 정확한 값으로 스냅(모델의 분:초 환산 오차 제거), 모든 후보와
+    15s 넘게 어긋나면 지어낸 구간으로 보고 버린다 (2단계 규칙: 후보 밖 구간 금지)."""
+    snap: list[tuple[float, float]] = []
+    for c in candidates or []:
+        try:
+            snap.append((float(c.get("start", 0)), float(c.get("end", 0))))
+        except (TypeError, ValueError):
+            continue
+
     out = []
     for s in shorts:
         try:
             start = max(0.0, float(s.get("start", 0)))
             end = float(s.get("end", 0))
         except (TypeError, ValueError):
+            continue
+        if snap:
+            near = min(snap, key=lambda c: abs(c[0] - start))
+            dev = abs(near[0] - start)
+            if dev <= 3.0:
+                start, end = near
+            elif dev > 15.0:
+                print(f"   (후보와 불일치 {dev:.0f}s → 제외: {str(s.get('title', ''))[:30]})")
+                continue
+        # 역전/영길이 구간은 '3초로 늘리기'가 아니라 제외 — start>=end는 데이터가 아니라 오류다.
+        if end <= start:
+            print(f"   (역전/영길이 구간 제외 {start:.1f}~{end:.1f}s: {str(s.get('title', ''))[:30]})")
             continue
         if duration > 0:
             start = min(start, duration)
@@ -633,7 +671,9 @@ def recommend(
             cands = _extract_candidates(client, chunk, genre, profile)
         except Exception as e:
             failed[0] += 1
-            print(f"   (구간 {_mmss(chunk[0]['start'])}~ 후보 추출 실패, 스킵: {str(e)[:80]})")
+            # 워커 스레드 출력 — \n 포함 단일 write로 원자화 (@@PROGRESS 줄 섞임 방지)
+            print(f"   (구간 {_mmss(chunk[0]['start'])}~ 후보 추출 실패, 스킵: {str(e)[:80]})\n",
+                  end="", flush=True)
             cands = []
         done[0] += 1
         if on_progress:
@@ -682,7 +722,7 @@ def recommend(
         shorts = apply_profile_fit(shorts, profile, duration)
         if profile and before != len(shorts):
             print(f"   프로파일 적합 적용: {before} → {len(shorts)} (금기 제외)")
-        shorts = validate_shorts(shorts, duration, n)
+        shorts = validate_shorts(shorts, duration, n, candidates=candidates)
 
     # GUARANTEE — the board is never empty. If the AI path produced nothing shippable
     # (found nothing, synthesis flaked, or validation trimmed everything away), cut shorts

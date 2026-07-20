@@ -18,9 +18,15 @@ function fetchOnce(mediaId: string, p: Poller) {
       p.last = a;
       p.loaded = true;
       p.subs.forEach((fn) => fn(a));
-      if ((a.status === "done" || a.status === "failed") && p.timer != null) {
-        clearInterval(p.timer);
-        p.timer = null;
+      // Decide settled-ness from THIS result, not the cached status at mount — after a
+      // 재분석 the server flips back to pending and polling must self-restart.
+      if (a.status === "done" || a.status === "failed") {
+        if (p.timer != null) {
+          clearInterval(p.timer);
+          p.timer = null;
+        }
+      } else if (p.timer == null && p.subs.size > 0) {
+        p.timer = window.setInterval(() => fetchOnce(mediaId, p), 20_000);
       }
     })
     .catch(() => {

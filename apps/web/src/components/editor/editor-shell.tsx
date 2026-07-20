@@ -122,12 +122,20 @@ export function EditorShell({ clipId }: { clipId: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [preset?.aspect, state.aspect]);
 
-  // Hydrate from a previously saved revision once the clip lands (async store load /
-  // hard refresh). Keyed on clip id so it runs on first arrival, never clobbering edits.
+  // Hydrate once the clip first lands (async store load / hard refresh). A saved revision
+  // restores as before; a never-saved draft re-inits from the clip's REAL title/duration —
+  // on hard refresh the store starts empty, so the history was seeded with the placeholder
+  // ("새 클립", 40s) and 확정(렌더) would bake a wrong cut. Only auto-reset while the
+  // operator hasn't edited yet (canUndo), so in-flight edits are never clobbered.
+  const hydratedClipId = useRef<string | undefined>(undefined);
   useEffect(() => {
-    if (clip?.editorState) {
+    if (!clip || hydratedClipId.current === clip.id) return;
+    hydratedClipId.current = clip.id;
+    if (clip.editorState) {
       reset(ensureTracks(clip.editorState, duration));
       setSaved(true);
+    } else if (!canUndo) {
+      reset(makeInitialEditorState(clip.title, duration));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [clip?.id]);
@@ -492,7 +500,9 @@ export function EditorShell({ clipId }: { clipId: string }) {
           duration={timelineDuration}
           startOffset={segStart}
           video={videoEl}
-          videoUrl={videoUrl}
+          // 마스터 프리뷰(미렌더 드래프트)에선 파형 생략 — useAudioPeaks가 파일 전체를
+          // 받아 디코드하므로 수 GB 마스터면 탭이 OOM 난다. 렌더된 클립만 파형 표시.
+          videoUrl={previewingMaster ? undefined : videoUrl}
           tracks={state.tracks}
           onTogglePlay={togglePlay}
         />
