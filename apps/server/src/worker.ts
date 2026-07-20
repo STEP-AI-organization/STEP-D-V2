@@ -35,6 +35,8 @@ import {
   updateMediaSource,
   markContentAnalysisPending,
   upsertShortSourceMap,
+  listSourceMapsMissingSegment,
+  setShortSourceSegment,
   type YouTubeChannel,
 } from "./db-pg.ts";
 import { probe, captureThumbnail } from "./ffmpeg.ts";
@@ -80,7 +82,7 @@ const TICK_INTERVAL_MS = 15 * 60 * 1000;
 const JOB_LANES: Record<"content" | "youtube", JobType[]> = {
   // match.align도 content 레인 — 파이썬·ffmpeg로 오디오를 돌리는 무거운 잡이라
   // YouTube API 레인(짧고 쿼터 위주)에 섞으면 그쪽을 막는다.
-  content: ["content.analyze", "youtube.download", "match.align"],
+  content: ["content.analyze", "youtube.download", "match.align", "match.segment"],
   youtube: ["channel.analyze", "video.analyze", "video.hotwatch", "video.comments", "distribution.publish"],
 };
 const WORKER_JOBS = (process.env.WORKER_JOBS ?? "all").trim().toLowerCase();
@@ -150,6 +152,7 @@ async function handle(job: Job): Promise<FollowUp | void> {
     case "content.analyze": { await runContentAnalyze(String(job.payload.mediaId ?? "")); return; }
     case "youtube.download": return handleYoutubeDownload(job);
     case "match.align": return handleMatchAlign(job);
+    case "match.segment": return handleMatchSegment(job);
     default:
       throw new Error(`unknown job type: ${(job as Job).type}`);
   }
@@ -601,6 +604,102 @@ async function handleMatchAlign(job: Job): Promise<void> {
   } finally {
     // 롱폼 오디오는 25분짜리라 남겨두면 VM 디스크를 먹는다. 잡 단위로 정리.
     fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+// ── match.segment — 매칭 구간의 LEARN 입력(자막·장면요약) 채우기 ──────────────────
+//
+// core/segment.py가 구간을 보고 Gemini 1회로 자막·장면요약·감정·훅을 만든다. 롱폼을
+// 편당 한 번만 받고 그 안의 구간을 여러 개 처리하므로, 롱폼 단위로 묶어 스폰한다.
+// (구간마다 yt-dlp --download-sections를 쓰면 사실상 전체를 재인코딩해 훨씬 비싸다.)
+
+interface SegmentOut {
+  id?: string;
+  transcript?: string;
+  scene_summary?: string;
+  emotion?: string;
+  hook?: string;
+  error?: string;
+}
+
+/** 롱폼 1편 + 구간 여러 개 → 구간별 설명 (파이썬 1회 스폰). */
+function runSegment(longVideoId: string, spans: { id: string; start: number; end: number }[]): Promise<SegmentOut[]> {
+  return new Promise((resolve, reject) => {
+    const proc = spawn(CORE_PYTHON_BIN, ["-m", "core.segment", ytAudioUrl(longVideoId), "-"], {
+      cwd: CORE_REPO_ROOT,
+      env: { ...process.env, PYTHONPATH: "", PYTHONIOENCODING: "utf-8", PYTHONUTF8: "1" },
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    let out = "";
+    let errText = "";
+    proc.stdout.on("data", (d) => (out += String(d)));
+    proc.stderr.on("data", (d) => (errText += String(d)));
+    proc.on("error", reject);
+    proc.on("close", (code) => {
+      if (code !== 0) return reject(new Error(`core.segment exited ${code}: ${errText.slice(-300)}`));
+      try {
+        resolve(
+          out.trim().split("\n")
+            .filter((l) => l.trim().startsWith("{"))
+            .map((l) => JSON.parse(l) as SegmentOut),
+        );
+      } catch (e) {
+        reject(new Error(`core.segment 출력 파싱 실패: ${String(e)} / ${out.slice(-200)}`));
+      }
+    });
+    proc.stdin.write(JSON.stringify(spans));
+    proc.stdin.end();
+  });
+}
+
+async function handleMatchSegment(job: Job): Promise<void> {
+  const channelId = String(job.payload.channelId ?? "");
+  if (!channelId) throw new Error("match.segment requires payload.channelId");
+  const limit = Number(job.payload.limitLongforms) || 3; // 잡 하나가 오래 붙잡지 않게
+
+  const pending = await listSourceMapsMissingSegment(channelId);
+  if (!pending.length) {
+    console.log(`[worker] match.segment ${channelId}: 채울 구간 없음`);
+    return;
+  }
+  // 롱폼별로 묶는다 — 다운로드를 편당 1회로 줄이는 게 이 잡의 핵심.
+  const byLong = new Map<string, typeof pending>();
+  for (const m of pending) {
+    const arr = byLong.get(m.longVideoId) ?? [];
+    arr.push(m);
+    byLong.set(m.longVideoId, arr);
+  }
+
+  let done = 0;
+  let failed = 0;
+  for (const [longVideoId, maps] of [...byLong.entries()].slice(0, limit)) {
+    try {
+      const results = await runSegment(
+        longVideoId,
+        maps.map((m) => ({ id: m.shortVideoId, start: m.segStart, end: m.segEnd })),
+      );
+      for (const r of results) {
+        if (!r.id) continue;
+        if (r.error || !r.scene_summary) {
+          failed++;
+          console.warn(`[worker] match.segment ${r.id}: ${r.error ?? "요약 없음"}`);
+          continue;
+        }
+        await setShortSourceSegment(r.id, r);
+        done++;
+      }
+    } catch (e) {
+      failed += maps.length;
+      console.error(`[worker] match.segment ${longVideoId} 실패:`, e);
+    }
+  }
+
+  // 남은 롱폼이 있으면 스스로 이어서 — 한 잡이 수십 편을 붙들지 않게 나눠 돈다.
+  const left = byLong.size - Math.min(limit, byLong.size);
+  console.log(`[worker] match.segment ${channelId}: ${done}건 채움, ${failed}건 실패, 롱폼 ${left}편 남음`);
+  if (left > 0) {
+    await enqueue("match.segment", { channelId, limitLongforms: limit },
+      { dedupeKey: `match.segment:${channelId}`, delayMs: 5_000 }).catch(() => null);
   }
 }
 

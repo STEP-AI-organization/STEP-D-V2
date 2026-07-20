@@ -663,6 +663,12 @@ export interface ShortSourceMap {
   confidence: number | null;
   /** 자동 추정을 사람이 확인한 시각. null이면 아직 검수 전. */
   confirmedAt: number | null;
+  /** LEARN 입력 — core/segment.py가 구간을 보고 채운다 (migrations/0007). */
+  segTranscript: string | null;
+  segSummary: string | null;
+  segEmotion: string | null;
+  segHook: string | null;
+  segAt: number | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -670,6 +676,8 @@ export interface ShortSourceMap {
 const SOURCE_MAP_COLS = `shortvideoid AS "shortVideoId", channelid AS "channelId",
   longvideoid AS "longVideoId", segstart AS "segStart", segend AS "segEnd", note,
   source, confidence, confirmedat AS "confirmedAt",
+  segtranscript AS "segTranscript", segsummary AS "segSummary",
+  segemotion AS "segEmotion", seghook AS "segHook", segat AS "segAt",
   createdat AS "createdAt", updatedat AS "updatedAt"`;
 
 /** Create or replace the mapping for one short (re-matching overwrites). */
@@ -715,6 +723,32 @@ export async function listShortSourceMaps(channelId: string): Promise<ShortSourc
     [channelId],
   );
   return rows as ShortSourceMap[];
+}
+
+/** 아직 구간 설명이 없는 매핑 — 롱폼별로 묶어 배치 처리하기 위한 조회. */
+export async function listSourceMapsMissingSegment(channelId: string): Promise<ShortSourceMap[]> {
+  const { rows } = await pool.query(
+    `SELECT ${SOURCE_MAP_COLS} FROM short_source_map
+      WHERE channelId = $1 AND (segSummary IS NULL OR segSummary = '')
+      ORDER BY longVideoId, segStart`,
+    [channelId],
+  );
+  return rows as ShortSourceMap[];
+}
+
+/** core/segment.py 결과를 매핑에 적재. */
+export async function setShortSourceSegment(
+  shortVideoId: string,
+  seg: { transcript?: string; scene_summary?: string; emotion?: string; hook?: string },
+): Promise<void> {
+  await pool.query(
+    `UPDATE short_source_map
+        SET segTranscript = $2, segSummary = $3, segEmotion = $4, segHook = $5,
+            segAt = $6, updatedAt = $6
+      WHERE shortVideoId = $1`,
+    [shortVideoId, seg.transcript ?? null, seg.scene_summary ?? null,
+     seg.emotion ?? null, seg.hook ?? null, Date.now()],
+  );
 }
 
 export async function deleteShortSourceMap(shortVideoId: string): Promise<boolean> {

@@ -23,6 +23,8 @@ export type JobType =
   | "youtube.download"
   // Lab: 선택한 숏폼들이 롱폼의 어느 구간에서 나왔는지 오디오 정렬로 추적.
   | "match.align"
+  // Lab: 매칭된 구간의 자막·장면요약을 채워 LEARN 입력을 완성.
+  | "match.segment"
   // Distribution: resumable-upload a rendered clip to a connected YouTube channel.
   | "distribution.publish";
 

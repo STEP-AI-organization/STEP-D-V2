@@ -62,6 +62,7 @@ import {
   listVideoComments,
   upsertShortSourceMap,
   listShortSourceMaps,
+  listSourceMapsMissingSegment,
   deleteShortSourceMap,
   getPool,
   type MediaRow,
@@ -3092,6 +3093,33 @@ app.get("/api/lab/match/overview", async (c) => {
   return c.json({ channels: out });
 });
 
+/**
+ * 매칭된 구간의 자막·장면요약을 채운다(LEARN 입력 완성).
+ * 롱폼 단위로 묶어 처리하므로 잡 하나가 여러 구간을 커버한다.
+ */
+app.post("/api/lab/match/segment", async (c) => {
+  const denied = labWriteDenied(c);
+  if (denied) return denied;
+  const b = await c.req.json<{ channelId?: string; limitLongforms?: number }>().catch(() => null);
+  if (!b?.channelId) return c.json({ error: "bad_request", message: "channelId가 필요합니다." }, 400);
+
+  const missing = await listSourceMapsMissingSegment(b.channelId);
+  if (!missing.length) return c.json({ ok: true, queued: false, missing: 0, message: "채울 구간이 없습니다." });
+
+  const jobId = await enqueue(
+    "match.segment",
+    { channelId: b.channelId, limitLongforms: Math.min(Math.max(Number(b.limitLongforms) || 3, 1), 10) },
+    { dedupeKey: `match.segment:${b.channelId}` },
+  );
+  return c.json({
+    ok: true,
+    queued: jobId != null,
+    alreadyPending: jobId == null,
+    missing: missing.length,
+    longforms: new Set(missing.map((m) => m.longVideoId)).size,
+  });
+});
+
 /** 진행 상황 — Lab이 폴링해 보여준다. */
 app.get("/api/lab/match/status/:channelId", async (c) => {
   const channelId = c.req.param("channelId");
@@ -3110,6 +3138,7 @@ app.get("/api/lab/match/status/:channelId", async (c) => {
     matched: maps.length,
     auto: maps.filter((m) => m.source === "auto").length,
     confirmed: maps.filter((m) => m.confirmedAt).length,
+    described: maps.filter((m) => m.segSummary).length,
   });
 });
 
@@ -3176,9 +3205,11 @@ app.get("/api/lab/match/export/:channelId", async (c) => {
         segStart: m.segStart,
         segEnd: m.segEnd,
         segLenSec: Number((m.segEnd - m.segStart).toFixed(2)),
-        // Filled once the longform has been analyzed — the LEARN prompt needs these.
-        transcript_slice: null,
-        scene_summary: null,
+        // core/segment.py(match.segment 잡)가 채운다. 비어 있으면 아직 미처리.
+        transcript_slice: m.segTranscript,
+        scene_summary: m.segSummary,
+        emotion: m.segEmotion,
+        hook: m.segHook,
       },
       note: m.note,
     };
