@@ -22,6 +22,7 @@ import {
   fetchVideoTrend,
   fetchVideoAnalytics,
   syncChannelVideos,
+  refreshVideoComments,
   type YouTubeChannelInfo,
   type VideoAnalytics,
 } from "@/lib/data/api";
@@ -89,6 +90,8 @@ function fmtHours(min: number): string {
 }
 
 const VIDEO_PAGE_SIZE = 12;
+/** 접힌 상태에서 보여줄 댓글 수 (전체는 "전체 보기"로 펼친다). */
+const COMMENT_PREVIEW = 5;
 type VideoSort = "recent" | "views" | "comments";
 const SORT_TABS: { key: VideoSort; label: string }[] = [
   { key: "recent", label: "최신순" },
@@ -136,6 +139,9 @@ export default function ChannelTrendsPage() {
   const [videoSort, setVideoSort] = useState<VideoSort>("recent");
   const [videoKind, setVideoKind] = useState<VideoKind>("all");
   const [videoPage, setVideoPage] = useState(0);
+  /** idle = 버튼 노출 · loading = 수집 대기 폴링 중 · empty = 수집했지만 댓글 0건 */
+  const [commentJob, setCommentJob] = useState<"idle" | "loading" | "empty">("idle");
+  const [commentsOpen, setCommentsOpen] = useState(false);
 
   useEffect(() => {
     fetchYouTubeChannels()
@@ -196,6 +202,8 @@ export default function ChannelTrendsPage() {
     setVideoTrend(null);
     setVideoAnalytics(null);
     setError(null);
+    setCommentJob("idle");
+    setCommentsOpen(false);
     // Independent so one failing (or empty) never blanks the other.
     const [vt, va] = await Promise.all([
       fetchVideoTrend(videoId, 30).catch(() => null),
@@ -205,6 +213,39 @@ export default function ChannelTrendsPage() {
     setVideoTrend(vt);
     setVideoAnalytics(va);
     if (!vt && !va) setError("영상 데이터를 불러오지 못했습니다.");
+  };
+
+  /**
+   * 댓글 온디맨드 수집. 워커가 자동 수집하는 건 업로드 7일 이내 영상뿐이라, 지난 영상은
+   * 여기서 직접 요청해야 한다. 서버는 잡을 큐잉만 하므로 결과는 폴링으로 확인한다.
+   */
+  const handleLoadComments = async () => {
+    const videoId = videoAnalytics?.video.videoId;
+    if (!videoId || commentJob !== "idle") return;
+    const req = videoReqRef.current;
+    setCommentJob("loading");
+    setError(null);
+    try {
+      await refreshVideoComments(videoId);
+      // 워커 폴링 간격을 감안해 최대 ~40초 동안 5초 간격으로 재조회한다.
+      for (let i = 0; i < 8; i++) {
+        await new Promise((r) => setTimeout(r, 5000));
+        // 사용자가 그 사이 다른 영상을 클릭했으면 중단 — 남의 패널을 덮어쓰지 않는다.
+        if (req !== videoReqRef.current) return;
+        const va = await fetchVideoAnalytics(videoId).catch(() => null);
+        if (req !== videoReqRef.current) return;
+        if (va && va.comments.length > 0) {
+          setVideoAnalytics(va);
+          setCommentJob("idle");
+          return;
+        }
+      }
+      setCommentJob("empty");
+    } catch (e: any) {
+      if (req !== videoReqRef.current) return;
+      setError(e.message);
+      setCommentJob("idle");
+    }
   };
 
   const selectedChannel = channels.find((c) => c.channelId === selectedId);
@@ -735,23 +776,77 @@ export default function ChannelTrendsPage() {
             </div>
           )}
 
-          {/* top comments */}
-          {videoAnalytics && videoAnalytics.comments.length > 0 && (
+          {/* 댓글 — 수집된 게 없어도 섹션은 항상 띄운다. "댓글이 없는 영상"과 "아직 수집 안 한
+              영상"을 구분해 주지 않으면 운영자가 기능 자체를 못 찾는다. */}
+          {videoAnalytics && (
             <div className="mt-4">
-              <h4 className="mb-2 text-xs font-semibold text-muted-foreground">인기 댓글</h4>
-              <div className="space-y-2">
-                {videoAnalytics.comments.slice(0, 5).map((cm, i) => (
-                  <div key={i} className="rounded-md border border-border p-2 text-xs">
-                    <div className="mb-0.5 flex items-center gap-2 text-muted-foreground">
-                      <span className="font-medium text-foreground">{cm.author}</span>
-                      <span className="flex items-center gap-0.5">
-                        <ThumbsUp className="size-3" /> {fmt(cm.likeCount)}
-                      </span>
-                    </div>
-                    <p className="line-clamp-2">{cm.text}</p>
-                  </div>
-                ))}
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <h4 className="text-xs font-semibold text-muted-foreground">
+                  댓글
+                  {videoAnalytics.comments.length > 0 && (
+                    <span className="ml-1 font-normal">
+                      상위 {videoAnalytics.comments.length}개 · 좋아요순
+                    </span>
+                  )}
+                </h4>
+                {videoAnalytics.comments.length > COMMENT_PREVIEW && (
+                  <button
+                    type="button"
+                    onClick={() => setCommentsOpen((v) => !v)}
+                    className="text-xs text-muted-foreground hover:text-foreground"
+                  >
+                    {commentsOpen ? "접기" : `전체 보기 (${videoAnalytics.comments.length})`}
+                  </button>
+                )}
               </div>
+
+              {videoAnalytics.comments.length > 0 ? (
+                <div
+                  className={
+                    commentsOpen ? "max-h-96 space-y-2 overflow-y-auto pr-1" : "space-y-2"
+                  }
+                >
+                  {(commentsOpen
+                    ? videoAnalytics.comments
+                    : videoAnalytics.comments.slice(0, COMMENT_PREVIEW)
+                  ).map((cm) => (
+                    <div key={cm.id} className="rounded-md border border-border p-2 text-xs">
+                      <div className="mb-0.5 flex items-center gap-2 text-muted-foreground">
+                        <span className="font-medium text-foreground">{cm.author}</span>
+                        <span className="flex items-center gap-0.5">
+                          <ThumbsUp className="size-3" /> {fmt(cm.likeCount)}
+                        </span>
+                        <span>{fmtDate(cm.publishedAt)}</span>
+                      </div>
+                      <p className={commentsOpen ? "whitespace-pre-wrap" : "line-clamp-2"}>
+                        {cm.text}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="rounded-md border border-dashed border-border p-3 text-xs text-muted-foreground">
+                  {commentJob === "loading" ? (
+                    <span className="flex items-center gap-2">
+                      <RefreshCw className="size-3 animate-spin" />
+                      댓글을 수집하는 중입니다… (최대 1분)
+                    </span>
+                  ) : commentJob === "empty" ? (
+                    "수집된 댓글이 없습니다 — 댓글이 없거나 업로더가 댓글을 사용 중지한 영상입니다."
+                  ) : (
+                    <span className="flex flex-wrap items-center gap-2">
+                      아직 수집된 댓글이 없습니다. 자동 수집은 업로드 7일 이내 영상만 대상입니다.
+                      <button
+                        type="button"
+                        onClick={handleLoadComments}
+                        className="flex items-center gap-1 rounded-md border border-border px-2 py-1 font-medium text-foreground hover:bg-muted"
+                      >
+                        <MessageCircle className="size-3" /> 댓글 불러오기
+                      </button>
+                    </span>
+                  )}
+                </div>
+              )}
             </div>
           )}
 

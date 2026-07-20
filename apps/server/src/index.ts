@@ -2478,6 +2478,28 @@ app.get("/api/youtube/videos/:videoId/analytics", async (c) => {
   });
 });
 
+/**
+ * On-demand comment collection for ONE video, at any age.
+ * The scheduled fan-out (worker enqueueDueVideoJobs) only queues video.comments for
+ * uploads younger than FRESH_VIDEO_WINDOW_MS, so older videos never get comments unless
+ * an operator asks here. Queue-only (Cloud Run does not call YouTube); the caller polls
+ * /analytics for the result. dedupeKey keeps repeat clicks from stacking jobs.
+ */
+app.post("/api/youtube/videos/:videoId/comments/refresh", async (c) => {
+  const videoId = c.req.param("videoId");
+  const video = await getChannelVideoByVideoId(videoId);
+  if (!video) return c.json({ error: "video not found" }, 404);
+
+  const jobId = await enqueue(
+    "video.comments",
+    { videoId, channelId: video.channelId },
+    { dedupeKey: `video.comments:${videoId}` },
+  );
+  // enqueue() returns null when an identical job is already pending — that is success
+  // from the caller's point of view, not an error.
+  return c.json({ queued: true, jobId, alreadyPending: jobId == null });
+});
+
 app.delete("/api/youtube/videos/:videoId", async (c) => {
   await deleteChannelVideo(c.req.param("videoId"));
   return c.json({ ok: true });

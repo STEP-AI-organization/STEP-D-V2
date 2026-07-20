@@ -661,6 +661,7 @@ export interface VideoDemographic {
   percentage?: number;
 }
 export interface VideoComment {
+  id: string;
   author: string;
   text: string;
   likeCount: number;
@@ -681,6 +682,17 @@ export interface VideoAnalytics {
 export async function fetchVideoAnalytics(videoId: string): Promise<VideoAnalytics> {
   const res = await fetch(`${API_BASE}/youtube/videos/${videoId}/analytics`);
   return json<VideoAnalytics>(res);
+}
+
+/** 워커에 이 영상의 댓글 수집을 요청한다 (업로드 7일이 지난 영상은 자동 수집 대상이 아님).
+ *  잡을 큐잉만 하므로, 완료 여부는 fetchVideoAnalytics를 다시 불러 확인해야 한다. */
+export async function refreshVideoComments(
+  videoId: string,
+): Promise<{ queued: boolean; alreadyPending: boolean }> {
+  const res = await fetch(`${API_BASE}/youtube/videos/${videoId}/comments/refresh`, {
+    method: "POST",
+  });
+  return json(res);
 }
 
 export async function deleteTrackedVideo(videoId: string): Promise<void> {
