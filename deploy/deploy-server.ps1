@@ -173,7 +173,12 @@ if ($doWorker) {
       "bash $WorkerDir/deploy/worker-env.sh || echo '[deploy] !! worker-env 동기화 실패 — /etc/stepd/worker.env 확인 필요'",
       # Two-lane split (stepd-worker-youtube / -content). Falls back to the legacy single
       # worker until worker-vm.sh has been re-run on the VM to create the lane services.
-      "if systemctl list-unit-files | grep -q stepd-worker-youtube; then sudo systemctl restart stepd-worker-youtube stepd-worker-content; else sudo systemctl restart stepd-worker; fi",
+      #
+      # ⚠️ 레인이 있으면 레거시 stepd-worker 를 반드시 중지한다. 예전에는 재시작 대상에서만
+      # 빼서, 이미 떠 있던 레거시가 계속 살아남아 **구버전 코드로 모든 잡 타입을 가로챘다**
+      # (WORKER_JOBS 미설정 = claim all). 2026-07-20 에 25시간째 돌던 것이 발견됐고,
+      # 새 잡 타입이 "unknown job type" 으로 5회 실패해 죽는 원인이었다.
+      "if systemctl list-unit-files | grep -q stepd-worker-youtube; then sudo systemctl disable --now stepd-worker 2>/dev/null || true; sudo systemctl restart stepd-worker-youtube stepd-worker-content; else sudo systemctl restart stepd-worker; fi",
       "sleep 3",
       "systemctl is-active stepd-worker-youtube stepd-worker-content 2>/dev/null || systemctl is-active stepd-worker"
     ) -join "; "
