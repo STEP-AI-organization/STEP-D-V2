@@ -84,20 +84,33 @@ def _mel_filters(sr: int, n_fft: int, n_mels: int) -> np.ndarray:
 _FB = _mel_filters(SR, N_FFT, N_MELS)
 
 
+FRAME_BLOCK = 2048  # 한 번에 STFT할 프레임 수
+
+
 def _feature(y: np.ndarray) -> np.ndarray:
     """로그-멜 스펙트로그램 → 프레임별 평균 제거·정규화한 (n_mels, T) 행렬.
 
     프레임별 정규화가 핵심이다. 숏폼은 라우드니스 노멀라이즈를 거치거나 BGM이 얹혀 음량·
     스펙트럼 기울기가 달라지는데, 여기서 그 성분을 빼야 '같은 소리'로 매칭된다.
+
+    STFT는 블록 단위로 돌린다. 25분 롱폼이면 프레임이 5만 개를 넘어서, 한 번에 인덱싱하면
+    인덱스 배열만 400MB를 넘겨 워커가 OOM으로 죽는다(실제로 죽었다).
     """
     if y.size < N_FFT:
         return np.zeros((N_MELS, 0), dtype=np.float32)
     n_frames = 1 + (y.size - N_FFT) // HOP
-    idx = np.arange(N_FFT)[None, :] + HOP * np.arange(n_frames)[:, None]
     win = np.hanning(N_FFT).astype(np.float32)
-    spec = np.fft.rfft(y[idx] * win, axis=1)
-    power = (np.abs(spec) ** 2).astype(np.float32)
-    mel = np.log1p(power @ _FB.T).T            # (n_mels, T)
+    base = np.arange(N_FFT, dtype=np.int64)
+    mel = np.empty((N_MELS, n_frames), dtype=np.float32)
+
+    for s in range(0, n_frames, FRAME_BLOCK):
+        e = min(s + FRAME_BLOCK, n_frames)
+        idx = base[None, :] + HOP * np.arange(s, e, dtype=np.int64)[:, None]
+        spec = np.fft.rfft(y[idx] * win, axis=1)
+        power = (np.abs(spec) ** 2).astype(np.float32)
+        mel[:, s:e] = np.log1p(power @ _FB.T).T
+        del idx, spec, power
+
     mel -= mel.mean(axis=0, keepdims=True)     # 프레임별 스펙트럼 기울기 제거
     norm = np.linalg.norm(mel, axis=0, keepdims=True)
     return mel / np.maximum(norm, 1e-8)
