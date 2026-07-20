@@ -9,7 +9,7 @@ import {
   setToken,
 } from "../api";
 import type { LabChannel, LabMatchData, LabSourceMap } from "../types";
-import { fmtLong, nfmt, parseTime } from "../util";
+import { fmtDur, fmtLong, nfmt, parseTime } from "../util";
 
 // ── YouTube IFrame API ───────────────────────────────────────────────────────
 // The source longforms live on YouTube, not in our GCS, so the native <video> player the
@@ -215,8 +215,10 @@ export default function MatchTab() {
     for (const m of data?.maps ?? []) {
       if (m.longVideoId !== longId) continue;
       pre[m.shortVideoId] = {
-        start: String(Math.round(m.segStart)),
-        end: String(Math.round(m.segEnd)),
+        // 입력칸도 분:초로 — 롱폼은 60분이 넘어서 "2731"보다 "45:31"이 읽힌다.
+        // parseTime이 m:ss·h:mm:ss·초를 모두 받으므로 손으로 초를 쳐도 그대로 동작한다.
+        start: fmtLong(m.segStart),
+        end: fmtLong(m.segEnd),
         note: m.note ?? "",
       };
     }
@@ -242,7 +244,7 @@ export default function MatchTab() {
       setMsg({ kind: "err", text: "롱폼 플레이어가 아직 준비되지 않았습니다." });
       return;
     }
-    const t = String(Math.max(0, Math.round(p.getCurrentTime())));
+    const t = fmtLong(Math.max(0, Math.round(p.getCurrentTime())));
     patch(videoId, which === "start" ? { start: t } : { end: t });
     setMsg(null);
   };
@@ -502,7 +504,8 @@ export default function MatchTab() {
                           <input
                             value={d.start}
                             onChange={(e) => patch(id, { start: e.target.value })}
-                            placeholder="시작"
+                            placeholder="0:00"
+                            title="분:초 (예 3:15). 초로 입력해도 됩니다."
                           />
                           <button className="cap" onClick={() => capture(id, "end")}>
                             ⏱ 끝
@@ -510,7 +513,8 @@ export default function MatchTab() {
                           <input
                             value={d.end}
                             onChange={(e) => patch(id, { end: e.target.value })}
-                            placeholder="끝"
+                            placeholder="0:00"
+                            title="분:초 (예 4:03). 초로 입력해도 됩니다."
                           />
                           {st.s != null && (
                             <button
@@ -530,8 +534,8 @@ export default function MatchTab() {
                             {st.len == null
                               ? "구간 미지정"
                               : st.ok
-                                ? `${Math.round(st.len)}초 (${fmtLong(st.s!)} ~ ${fmtLong(st.e!)})`
-                                : `${Math.round(st.len)}초 — 0 초과 180초 이하`}
+                                ? `${fmtLong(st.s!)} ~ ${fmtLong(st.e!)} · 길이 ${fmtDur(st.len)}`
+                                : `길이 ${fmtDur(st.len)} — 0초 초과 3분 이하여야 합니다`}
                           </span>
                         </div>
                       </div>

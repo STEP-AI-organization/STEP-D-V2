@@ -24,6 +24,15 @@ export const parseTime = (raw: string): number | null => {
 
 export const nfmt = (n: number): string => n.toLocaleString("ko-KR");
 
+/** 구간 '길이' 표기: 1분 미만은 "48초", 넘으면 "1분 12초". */
+export const fmtDur = (sec: number): string => {
+  const s = Math.round(Math.abs(sec));
+  if (s < 60) return `${s}초`;
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  return r ? `${m}분 ${r}초` : `${m}분`;
+};
+
 /** Scene frame images are served by basename from the latest analysis dir. */
 export const frameUrl = (f: string): string => `${API}/api/lab/frames/${f.split("/").pop()}`;
 
