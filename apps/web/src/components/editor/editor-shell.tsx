@@ -111,16 +111,35 @@ export function EditorShell({ clipId }: { clipId: string }) {
 
   const preset = channel ? RENDER_CHANNELS[channel] : null;
 
-  // A chosen destination OWNS the frame. This is not cosmetic: the server resolves the render
+  // Operator's manual 종횡비 pick beats the preset (aspectOverrideRef). Without this, the
+  // force-sync effect below reverts every layout-tab aspect click instantly, so on the common
+  // path (AI-adopted clips carry a targetChannel → preset) the 레이아웃 탭 종횡비 buttons look
+  // dead. Reset per clip and whenever the operator switches destination — the new preset owns
+  // the frame again until they override it once more.
+  const aspectOverrideRef = useRef(false);
+  useEffect(() => {
+    aspectOverrideRef.current = false;
+  }, [clip?.id, channel]);
+
+  // A chosen destination seeds the frame. This is not cosmetic: the server resolves the render
   // aspect as editorState.aspect > preset > clip.aspectRatio, and buildEditorAss maps overlay
-  // \pos from the preview stage's aspect. If the two disagreed, picking "SMR · 16:9" would
-  // either render 9:16 anyway (es.aspect always wins — it's never unset) or bake overlays at
-  // coordinates authored against a different frame. Forcing it here keeps preview == render.
+  // \pos from the preview stage's aspect — so preview must match what the render will use.
+  // es.aspect is always set, so seeding it to the preset keeps preview == render by default;
+  // an explicit operator override is honored by that same precedence, so it stays consistent.
   // No-op while channel is "" — which is why existing clips (no targetChannel) are untouched.
   useEffect(() => {
-    if (preset && state.aspect !== preset.aspect) update({ aspect: preset.aspect });
+    if (preset && !aspectOverrideRef.current && state.aspect !== preset.aspect) {
+      update({ aspect: preset.aspect });
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [preset?.aspect, state.aspect]);
+
+  // Layout tab writes through this: an aspect patch is an explicit operator override, so it
+  // must stick against the preset force-sync. All other patches pass straight through.
+  const panelUpdate = (patch: Partial<EditorState>) => {
+    if ("aspect" in patch) aspectOverrideRef.current = true;
+    update(patch);
+  };
 
   // Hydrate once the clip first lands (async store load / hard refresh). A saved revision
   // restores as before; a never-saved draft re-inits from the clip's REAL title/duration —
@@ -488,7 +507,7 @@ export function EditorShell({ clipId }: { clipId: string }) {
         </div>
 
         <aside className="hidden w-72 shrink-0 border-l border-zinc-800 md:block xl:w-80">
-          <EditorPanel state={state} update={update} applyTpl={applyTpl} />
+          <EditorPanel state={state} update={panelUpdate} applyTpl={applyTpl} />
         </aside>
       </div>
 
