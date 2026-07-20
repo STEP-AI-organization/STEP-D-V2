@@ -33,7 +33,15 @@ SR = 16_000
 N_FFT = 1024
 HOP = 512            # 초당 31.25 프레임 — 구간 정확도 ±0.03초면 충분하고 25분도 가볍다
 N_MELS = 40
-MIN_PEAK_RATIO = 2.0  # 최고점이 차순위의 2배는 돼야 채택
+
+# 임계값은 실측으로 잡았다 (2026-07-20, 하하PD [ㅈㄸㄸ원정대5] 61분 롱폼 + 실제 숏폼 4개,
+# 대조군은 무관한 영상·다른 회차 숏폼 10건):
+#   양성(진짜 그 롱폼에서 잘린 숏폼) score 0.886~0.998 · ratio 1.66~1.82
+#   음성(무관)                      score 0.403~0.601 · ratio 1.00~1.09
+#   합성 정답컷(동일 오디오)         score 0.966~0.991 → 오프셋 오차 4ms
+# 두 지표 모두 간격이 넓어 어느 쪽으로도 안전하게 자를 수 있다. 둘 다 만족해야 채택한다.
+MIN_SCORE = 0.80
+MIN_PEAK_RATIO = 1.25
 
 
 @dataclass
@@ -129,7 +137,12 @@ def _xcorr(long_f: np.ndarray, short_f: np.ndarray) -> np.ndarray:
     return corr / n_short
 
 
-def align(long_path: str, short_path: str, min_peak_ratio: float = MIN_PEAK_RATIO) -> AlignResult:
+def align(
+    long_path: str,
+    short_path: str,
+    min_score: float = MIN_SCORE,
+    min_peak_ratio: float = MIN_PEAK_RATIO,
+) -> AlignResult:
     """숏폼이 롱폼의 몇 초 지점에서 시작하는지 추정한다."""
     long_y = _decode(long_path)
     short_y = _decode(short_path)
@@ -152,10 +165,11 @@ def align(long_path: str, short_path: str, min_peak_ratio: float = MIN_PEAK_RATI
     ratio = peak / runner if runner > 1e-6 else float("inf")
 
     offset = best * HOP / SR
-    if peak <= 0 or ratio < min_peak_ratio:
+    if peak < min_score or ratio < min_peak_ratio:
         return AlignResult(
-            False, offset, dur, peak, ratio,
-            f"신뢰도 부족 (최고점 {peak:.3f}, 차순위 대비 {ratio:.2f}배) — 배속·BGM 덧입힘·재편집 가능성",
+            False, round(offset, 2), round(dur, 2), round(peak, 4), round(ratio, 2),
+            f"신뢰도 부족 (일치도 {peak:.3f} < {min_score}, 차순위 대비 {ratio:.2f}배 < {min_peak_ratio}) — "
+            "다른 롱폼에서 나왔거나 배속·BGM 덧입힘·여러 구간 재편집일 수 있습니다",
         )
     return AlignResult(True, round(offset, 2), round(dur, 2), round(peak, 4), round(ratio, 2))
 
