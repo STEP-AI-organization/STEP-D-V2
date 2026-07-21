@@ -118,6 +118,25 @@ add_var GOOGLE_CLOUD_PROJECT "$PROJECT"
 add_var VERTEX_LOCATION      "$VERTEX_LOCATION"
 add_var STT_PROVIDER         "$STT_PROVIDER"
 
+# ── yt-dlp 쿠키 (선택) ───────────────────────────────────────────────────────────
+# 공개 VM IP는 대량 다운로드 시 유튜브에 403/봇차단당한다. 계정 쿠키를 붙이면 지역제한·
+# 봇차단·레이트리밋이 한 번에 풀린다. 다른 시크릿과 달리 쿠키는 만료·회전되므로
+# **매번 시크릿에서 다시 받아 파일을 갱신**한다(고정값인 DATABASE_URL과 다른 취급).
+# 시크릿이 없으면 조용히 건너뛴다 — 쿠키 없이도 지역제한 없는 영상은 받아진다.
+COOKIE_FILE="$(dirname "$ENV_FILE")/ytdlp-cookies.txt"
+if gcloud secrets describe stepd-ytdlp-cookies --project="$PROJECT" >/dev/null 2>&1; then
+  if gcloud secrets versions access latest --secret=stepd-ytdlp-cookies --project="$PROJECT" \
+       | $SUDO tee "$COOKIE_FILE" >/dev/null; then
+    $SUDO chmod 600 "$COOKIE_FILE"
+    add_var YTDLP_COOKIES "$COOKIE_FILE"
+    echo "   refreshed: ytdlp-cookies.txt"
+  else
+    echo "   !! ytdlp-cookies 시크릿 접근 실패 — 쿠키 없이 진행" >&2
+  fi
+else
+  echo "   (ytdlp-cookies 시크릿 없음 — 쿠키 미사용)"
+fi
+
 $SUDO chmod 600 "$ENV_FILE"
 
 echo

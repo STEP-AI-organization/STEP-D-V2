@@ -53,7 +53,14 @@ _PROMPT = """이 영상 구간은 롱폼에서 잘려 숏폼으로 발행된 부
 
 
 def _run(cmd: list[str]) -> None:
-    """실패 시 stderr를 예외 메시지에 담는다 — 안 그러면 원인이 통째로 사라진다."""
+    """실패 시 stderr를 예외 메시지에 담는다 — 안 그러면 원인이 통째로 사라진다.
+
+    yt-dlp 호출이면 YTDLP_COOKIES(파일 존재 시)를 --cookies로 붙인다 — 지역제한·봇차단·
+    레이트리밋을 계정 인증으로 우회한다. worker.ts와 같은 규약.
+    """
+    cookies = os.environ.get("YTDLP_COOKIES") or ""
+    if cmd and cmd[0] == "yt-dlp" and cookies and os.path.exists(cookies):
+        cmd = [cmd[0], "--cookies", cookies, *cmd[1:]]
     p = subprocess.run(cmd, capture_output=True, text=True, errors="replace")
     if p.returncode != 0:
         raise RuntimeError(f"{cmd[0]} exited {p.returncode}: {(p.stderr or '')[-400:]}")

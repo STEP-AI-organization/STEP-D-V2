@@ -345,6 +345,10 @@ async function handleVideoComments(job: Job): Promise<void> {
 // media row gets the real facts, then content.analyze is enqueued.
 
 const YT_DLP = process.env.YT_DLP ?? "yt-dlp";
+// 계정 쿠키 파일 경로. 있으면 모든 yt-dlp 호출에 --cookies로 붙는다 — 지역제한·봇차단·
+// 레이트리밋을 계정 인증으로 우회한다(공개 VM IP는 대량 다운로드 시 곧 403 당한다).
+// 값은 Secret Manager(stepd-ytdlp-cookies)에 있고, worker.env가 파일로 떨군다.
+const YTDLP_COOKIES = process.env.YTDLP_COOKIES ?? "";
 
 // Failed-forever downloads keep their .part files (see the catch below) so a retry resumes.
 // But once a job exhausts maxAttempts it's dead and nothing ever deletes its (possibly
@@ -378,7 +382,11 @@ function sweepStaleYoutubeDirs(): void {
 
 function runYtDlp(args: string[]): Promise<void> {
   return new Promise((resolve, reject) => {
-    const child = spawn(YT_DLP, args, { stdio: ["ignore", "ignore", "pipe"] });
+    // 쿠키 파일이 실제로 존재할 때만 붙인다 — 경로만 있고 파일이 없으면 yt-dlp가 죽는다.
+    const withCookies = YTDLP_COOKIES && fs.existsSync(YTDLP_COOKIES)
+      ? ["--cookies", YTDLP_COOKIES, ...args]
+      : args;
+    const child = spawn(YT_DLP, withCookies, { stdio: ["ignore", "ignore", "pipe"] });
     let stderr = "";
     child.stderr.on("data", (d) => { stderr += String(d); });
     child.on("error", (err: NodeJS.ErrnoException) => {
