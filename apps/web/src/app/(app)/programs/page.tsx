@@ -38,6 +38,7 @@ export default function ProgramsPage() {
   return (
     <>
       <PageHeader
+        eyebrow="프로그램 → 회차"
         title="콘텐츠"
         description="프로그램 → 회차. 각 회차의 파이프라인 진행 상태를 한눈에 보고, 클릭해 진행 허브로 이동합니다."
         actions={

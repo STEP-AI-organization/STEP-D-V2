@@ -147,8 +147,8 @@ function UploadDialog({ onClose, defaultProgramId }: { onClose: () => void; defa
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-black/50" onClick={busy ? undefined : onClose} aria-hidden />
-      <div className="relative w-full max-w-md rounded-xl border border-border bg-card shadow-2xl">
+      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={busy ? undefined : onClose} aria-hidden />
+      <div className="relative w-full max-w-md rounded-2xl border border-input bg-popover shadow-2xl">
         <div className="flex items-center justify-between border-b border-border px-4 py-3">
           <h2 className="text-sm font-semibold">실제 영상 업로드</h2>
           <button

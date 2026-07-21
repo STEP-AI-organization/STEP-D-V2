@@ -54,6 +54,7 @@ export default function AnalyticsPage() {
   return (
     <>
       <PageHeader
+        eyebrow="게시 클립 성과"
         title="성과 & 추적"
         description="추천 채택률, 추천→클립→배포 계보, 채널별 성과. 성과 수치는 M6 백엔드 연결 시 실측으로 대체됩니다."
         actions={<ExportExcelButton />}

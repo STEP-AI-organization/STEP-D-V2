@@ -80,10 +80,11 @@ export function DerivativesPanel({
 
   return (
     <div className="flex h-full flex-col">
-      {/* Tab bar */}
-      <div className="-mx-1 mb-3 flex gap-0.5 border-b border-border pb-px">
+      {/* Tab bar — Review OS underline tabs */}
+      <div className="mb-4 flex gap-1 border-b border-border">
         {TABS.map((t) => {
           const Icon = t.icon;
+          const active = tab === t.key;
           const count =
             t.key === "recommend"
               ? pendingRecs.length
@@ -96,16 +97,16 @@ export function DerivativesPanel({
               key={t.key}
               onClick={() => setTab(t.key)}
               className={cn(
-                "flex items-center gap-1 rounded-t-md px-3 py-2 text-xs font-medium transition-colors",
-                tab === t.key
-                  ? "bg-card text-foreground shadow-[0_1px_0_var(--color-card)]"
-                  : "text-muted-foreground hover:text-foreground",
+                "-mb-px flex items-center gap-1.5 border-b-2 px-3 py-2.5 text-[13px] font-semibold transition-colors",
+                active
+                  ? "border-brand text-foreground"
+                  : "border-transparent text-muted-foreground hover:text-foreground",
               )}
             >
               <Icon className="size-3.5" />
               {t.label}
               {typeof count === "number" && count > 0 && (
-                <span className="ml-1 rounded-full bg-muted px-1.5 py-px text-[10px] font-bold">
+                <span className="ml-0.5 rounded-md bg-brand/15 px-1.5 py-0.5 text-[10px] font-bold tabular-nums text-brand">
                   {count}
                 </span>
               )}

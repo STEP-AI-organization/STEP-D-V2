@@ -96,6 +96,7 @@ export default function OpsPage() {
   return (
     <>
       <PageHeader
+        eyebrow="파이프라인 상태"
         title="운영 · 진단"
         description="큐가 어떻게 도는지, 업로드 영상에서 뭐가 나오고 뭐가 깨지는지 — 로우레벨로 봅니다."
         actions={

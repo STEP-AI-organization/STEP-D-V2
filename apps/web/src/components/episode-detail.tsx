@@ -106,12 +106,12 @@ export function EpisodeDetail({
 
         {/* RIGHT: Tabbed derivatives panel */}
         <div className="lg:col-span-2">
-          <div className="rounded-lg border border-border bg-card p-4">
+          <Card className="p-4">
             <div className="mb-3 text-xs font-semibold text-muted-foreground">
               📦 이 원본의 파생 콘텐츠
             </div>
             <DerivativesPanel episodeId={episodeId} initialTab={initialTab} />
-          </div>
+          </Card>
         </div>
       </div>
     </>

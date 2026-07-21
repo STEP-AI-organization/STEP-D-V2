@@ -13,10 +13,12 @@ export function AppShell({
   return (
     <div className="min-h-screen">
       <Sidebar />
-      <div className="lg:pl-56">
+      <div className="lg:pl-57.5">
         <Topbar breadcrumb={breadcrumb} />
         <ConnectionBanner />
-        <main className="mx-auto max-w-[1400px] px-4 py-6 sm:px-6">{children}</main>
+        <main className="mx-auto max-w-[1400px] px-4 py-6 sm:px-6 lg:px-7.5 lg:py-6.5">
+          {children}
+        </main>
       </div>
     </div>
   );

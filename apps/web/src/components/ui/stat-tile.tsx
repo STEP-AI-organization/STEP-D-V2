@@ -26,15 +26,20 @@ export function StatTile({
   tone?: StatusTone;
 }) {
   return (
-    <Card className="p-4">
-      <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground">
+    <Card className="px-4.5 py-4">
+      <div className="flex items-center gap-1.5 text-[11.5px] font-semibold text-muted-foreground">
         {Icon && <Icon className="size-3.5" />}
         {label}
       </div>
-      <div className={cn("mt-1.5 text-2xl font-bold tabular-nums tracking-tight", TONE_TEXT[tone])}>
+      <div
+        className={cn(
+          "grotesk mt-2 text-[30px] font-bold leading-none tracking-tight tabular-nums",
+          TONE_TEXT[tone],
+        )}
+      >
         {value}
       </div>
-      {sub && <div className="mt-0.5 text-xs text-muted-foreground">{sub}</div>}
+      {sub && <div className="mt-2 text-[11.5px] font-medium text-muted-foreground">{sub}</div>}
     </Card>
   );
 }

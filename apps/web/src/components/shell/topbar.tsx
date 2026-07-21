@@ -3,6 +3,7 @@
 import { Menu, Search } from "lucide-react";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { JobCenter } from "@/components/shell/job-center";
+import { UploadVideoButton } from "@/components/upload-video-dialog";
 
 /** Top app bar: mobile nav toggle · breadcrumb slot · job center · theme. */
 export function Topbar({ breadcrumb }: { breadcrumb?: React.ReactNode }) {
@@ -25,15 +26,21 @@ export function Topbar({ breadcrumb }: { breadcrumb?: React.ReactNode }) {
       <button
         type="button"
         onClick={() => window.dispatchEvent(new Event("open-command-palette"))}
-        className="flex h-9 items-center gap-2 rounded-md border border-border px-2.5 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+        className="flex h-9 items-center gap-2 rounded-[9px] border border-border bg-card px-2.5 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
         aria-label="검색 · 빠른 이동"
         title="검색 · 빠른 이동"
       >
         <Search className="size-4" />
-        <kbd className="hidden rounded border border-border bg-muted px-1.5 text-[10px] sm:inline">
+        <kbd className="mono hidden rounded border border-border bg-elevated px-1.5 text-[10px] sm:inline">
           ⌘K
         </kbd>
       </button>
+
+      {/* Global 원본 업로드 — the prototype surfaces this CTA in the header on every
+          screen (opens the same upload dialog as the 콘텐츠 page). */}
+      <div className="hidden sm:block">
+        <UploadVideoButton variant="default" />
+      </div>
 
       <JobCenter />
       <ThemeToggle />

@@ -283,6 +283,7 @@ export default function ChannelTrendsPage() {
   return (
     <>
       <PageHeader
+        eyebrow="YouTube 채널 분석"
         title="채널 트렌드"
         description="YouTube 채널별 영상 조회수 추세와 성과 분석"
       />

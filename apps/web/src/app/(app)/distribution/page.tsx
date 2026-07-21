@@ -91,6 +91,7 @@ export default function DistributionPage() {
   return (
     <>
       <PageHeader
+        eyebrow="멀티채널 배포"
         title="배포현황"
         description="클립 × 채널 현황. 채널마다 필수 요건을 확인하고 준비된 채널부터 개별 발행합니다. 실패는 그 자리에서 재시도합니다."
         actions={

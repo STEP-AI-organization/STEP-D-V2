@@ -56,6 +56,7 @@ export default function PublishChannelsPage() {
   return (
     <>
       <PageHeader
+        eyebrow="연동 채널 관리"
         title="배포채널"
         description="콘텐츠를 배포·분석할 채널을 연동하고 관리합니다 (YouTube 등)."
       />

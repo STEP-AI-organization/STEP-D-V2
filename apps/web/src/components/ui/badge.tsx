@@ -10,7 +10,7 @@ const badgeVariants = cva(
         /** Neutral outline — the default meta chip (type, ratio, tag). */
         outline: "border border-border text-foreground",
         secondary: "border border-transparent bg-secondary text-secondary-foreground",
-        accent: "border border-primary/25 bg-primary/10 text-primary",
+        accent: "border border-brand/30 bg-brand/10 text-brand",
         muted: "border border-transparent bg-muted text-muted-foreground",
       },
     },

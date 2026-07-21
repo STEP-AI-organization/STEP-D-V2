@@ -52,9 +52,9 @@ export function PublishDialog({
 
   return (
     <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto p-4 py-[6vh]">
-      <div className="absolute inset-0 bg-black/50" onClick={onClose} aria-hidden />
-      <div className="relative w-full max-w-2xl rounded-xl border border-border bg-card shadow-2xl">
-        <div className="sticky top-0 z-10 flex items-center justify-between gap-3 rounded-t-xl border-b border-border bg-card px-4 py-3">
+      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} aria-hidden />
+      <div className="relative w-full max-w-2xl rounded-2xl border border-input bg-popover shadow-2xl">
+        <div className="sticky top-0 z-10 flex items-center justify-between gap-3 rounded-t-2xl border-b border-border bg-popover px-4 py-3">
           <div className="min-w-0">
             <h2 className="text-sm font-semibold">채널별 배포</h2>
             <p className="truncate text-xs text-muted-foreground">

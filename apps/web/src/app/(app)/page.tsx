@@ -54,6 +54,7 @@ export default function HomePage() {
   return (
     <>
       <PageHeader
+        eyebrow="이번 주 미디어 운영"
         title="대시보드"
         description="지금 당신의 액션을 기다리는 작업입니다. 각 항목에서 바로 다음 단계로 진행하세요."
       />

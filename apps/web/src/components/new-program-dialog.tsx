@@ -89,8 +89,8 @@ function NewProgramDialog({ onClose }: { onClose: () => void }) {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-black/50" onClick={busy ? undefined : onClose} aria-hidden />
-      <div className="relative flex max-h-[90vh] w-full max-w-lg flex-col rounded-xl border border-border bg-card shadow-2xl">
+      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={busy ? undefined : onClose} aria-hidden />
+      <div className="relative flex max-h-[90vh] w-full max-w-lg flex-col rounded-2xl border border-input bg-popover shadow-2xl">
         <div className="flex items-center justify-between border-b border-border px-4 py-3">
           <h2 className="text-sm font-semibold">새 프로그램</h2>
           <button

@@ -7,7 +7,8 @@ import { getStreamUrl } from "@/lib/data/api";
 import { useAppData } from "@/lib/data/store";
 import { useMediaAnalysisPoll } from "@/lib/data/use-media-analysis";
 import { formatTimecode } from "@/lib/utils";
-import { TimelineMarkers, markersFromAnalysis, type TimelineMarker } from "./timeline-markers";
+import { markersFromAnalysis, type TimelineMarker } from "./timeline-markers";
+import { ReviewTimeline, type TimelineLane, type TimelineBlock } from "./review-timeline";
 
 /**
  * Left panel — source video player with AI timeline markers.
@@ -67,6 +68,67 @@ export function SourcePanel({ episodeId }: { episodeId: string }) {
     return markersFromAnalysis(analysis?.data?.shorts ?? []);
   }, [recommendations, episodeId, analysis?.data?.shorts]);
 
+  // Multi-lane highlight timeline (visual layer). 쇼츠/분석 use real analysis
+  // segments when present; lanes with no data source fall back to clearly-tagged
+  // 샘플 blocks so the highlight visual always renders (see ReviewTimeline).
+  const timelineLanes: TimelineLane[] = useMemo(() => {
+    const scenes = analysis?.data?.scenes ?? [];
+    const shortsBlocks: TimelineBlock[] = allMarkers.map((m, i) => ({
+      id: `sh${i}`,
+      start: m.start,
+      end: m.end,
+      title: m.label || `쇼츠 후보 ${i + 1}`,
+      sub: m.appeal != null ? `어필 ${m.appeal}` : undefined,
+    }));
+    const sceneBlocks: TimelineBlock[] = scenes
+      .filter((s) => s.start != null && s.end != null)
+      .slice(0, 60)
+      .map((s, i) => ({
+        id: `sc${i}`,
+        start: Number(s.start),
+        end: Number(s.end),
+        title: `장면 ${(s.index ?? i) + 1}`,
+        sub: s.vision_score != null ? `Vision ${s.vision_score}` : undefined,
+      }));
+
+    const sample = (prefix: string, title: string, spans: [number, number][]): TimelineBlock[] =>
+      spans.map(([a, b], i) => ({
+        id: `${prefix}${i}`,
+        start: durationSec * a,
+        end: durationSec * b,
+        title,
+        sub: "샘플 데이터",
+      }));
+
+    return [
+      shortsBlocks.length
+        ? { key: "shorts", label: "쇼츠 후보", color: "#8b7cf6", blocks: shortsBlocks }
+        : {
+            key: "shorts",
+            label: "쇼츠 후보",
+            color: "#8b7cf6",
+            sample: true,
+            blocks: sample("sh", "쇼츠 후보 구간", [[0.07, 0.12], [0.34, 0.4], [0.66, 0.72]]),
+          },
+      {
+        key: "ppl",
+        label: "PPL·브랜드",
+        color: "#f5a524",
+        sample: true,
+        blocks: sample("ppl", "브랜드 노출 구간", [[0.09, 0.11], [0.41, 0.44], [0.77, 0.79]]),
+      },
+      sceneBlocks.length
+        ? { key: "analysis", label: "분석 구간", color: "#5e9bff", blocks: sceneBlocks }
+        : {
+            key: "analysis",
+            label: "분석 구간",
+            color: "#5e9bff",
+            sample: true,
+            blocks: sample("an", "분석 구간", [[0, 0.18], [0.18, 0.35], [0.35, 0.55], [0.55, 0.78], [0.78, 1]]),
+          },
+    ];
+  }, [allMarkers, analysis?.data?.scenes, durationSec]);
+
   if (!master) {
     return (
       <Card className="flex h-64 flex-col items-center justify-center gap-3">
@@ -111,20 +173,15 @@ export function SourcePanel({ episodeId }: { episodeId: string }) {
         </Card>
       )}
 
-      {/* Timeline markers — TimelineMarkers renders nothing without a duration to scale to,
-          which would otherwise leave an empty captioned card behind. */}
-      {durationSec > 0 && allMarkers.length > 0 && (
-        <Card className="px-3 pb-8 pt-3">
-          <div className="mb-2 text-xs font-semibold text-muted-foreground">
-            AI 분석 구간 ({allMarkers.length}개 마커)
-          </div>
-          <TimelineMarkers
-            markers={allMarkers}
-            durationSec={durationSec}
-            currentTime={currentTime}
-            onSeek={seekTo}
-          />
-        </Card>
+      {/* Multi-lane highlight timeline (쇼츠 / PPL / 분석) — visual layer; needs a
+          duration to scale the tracks to. */}
+      {durationSec > 0 && (
+        <ReviewTimeline
+          durationSec={durationSec}
+          currentTime={currentTime}
+          onSeek={seekTo}
+          lanes={timelineLanes}
+        />
       )}
 
       {/* Quick stats */}

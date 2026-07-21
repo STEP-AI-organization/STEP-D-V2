@@ -17,6 +17,14 @@
   All foreground/background pairs target WCAG AA.
 */
 :root {
+  /* Font stacks — Pretendard body, Space Grotesk display (.grotesk), JetBrains
+     Mono for numerics/timecodes (.mono / font-mono). Matches the Review OS design. */
+  --font-sans: "Pretendard", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "JetBrains Mono", "Space Mono", ui-monospace, SFMono-Regular, Menlo,
+    Consolas, monospace;
+  --font-display: "Space Grotesk", var(--font-sans);
+
   --background: 0 0% 98%;
   --foreground: 0 0% 9%;
   --card: 0 0% 100%;
@@ -24,9 +32,12 @@
   --popover: 0 0% 100%;
   --popover-foreground: 0 0% 9%;
 
-  /* Brand accent — indigo (calm, professional). Used sparingly. */
-  --primary: 243 75% 58%;
+  /* Brand accent — indigo (calm, professional). Used sparingly.
+     `--primary` fills buttons/active states; `--brand` is the lighter link/label
+     tone (Review OS #8b93ff) used for eyebrows, links, active nav icons. */
+  --primary: 235 82% 63%;
   --primary-foreground: 0 0% 100%;
+  --brand: 235 82% 60%;
 
   --secondary: 0 0% 96.1%;
   --secondary-foreground: 0 0% 9%;
@@ -38,8 +49,8 @@
   --destructive-foreground: 0 0% 100%;
   --border: 0 0% 90%;
   --input: 0 0% 88%;
-  --ring: 243 75% 58%;
-  --radius: 0.5rem;
+  --ring: 235 82% 63%;
+  --radius: 0.75rem;
 
   /* Status palette — pipeline / distribution state legibility (design principle §9).
      Single source of truth; consumed via StatusBadge / PipelineStrip.
@@ -52,36 +63,45 @@
 }
 
 .dark {
-  --background: 0 0% 4%;
-  --foreground: 0 0% 96%;
-  --card: 0 0% 7.5%;
-  --card-foreground: 0 0% 96%;
-  --popover: 0 0% 9%;
-  --popover-foreground: 0 0% 96%;
+  /* ── STEP D Review OS — dark theme (imported from the Claude Design prototype).
+     Canvas #0a0a0a · cards #161616 · panels/modals #131313 · borders #262626/#232323
+     · text #eceef2 · muted #9a9a9a/#707070. Committed dark surfaces, no shadows —
+     depth reads via lightness + borders. ─────────────────────────────────────── */
+  --background: 0 0% 4%; /* #0a0a0a canvas */
+  --foreground: 220 16% 94%; /* #eceef2 */
+  --card: 0 0% 8.5%; /* #161616 content cards */
+  --card-foreground: 220 16% 94%;
+  --popover: 0 0% 7.5%; /* #131313 modals / menus */
+  --popover-foreground: 220 16% 94%;
+  --panel: 0 0% 7.5%; /* #131313 sidebar / modal chrome */
+  --elevated: 0 0% 5.5%; /* #0e0e0e inset tracks / wells */
 
-  /* Dark mode flips the accent: a lighter indigo so it stays AA both as a
-     button fill (with the deep-indigo foreground below) AND as text/links on
-     the dark canvas — a single mid-indigo can't satisfy both. */
-  --primary: 243 90% 76%;
-  --primary-foreground: 243 47% 13%;
+  /* Two indigos: #6b74f0 fills primary buttons & active pips (white text);
+     #8b93ff (--brand) carries links, eyebrows, active-nav icons on the near-black
+     canvas — both clear AA against #0a0a0a. */
+  --primary: 235 82% 68%; /* #6b74f0 */
+  --primary-foreground: 0 0% 100%;
+  --brand: 234 100% 77%; /* #8b93ff */
 
-  --secondary: 0 0% 15%;
-  --secondary-foreground: 0 0% 96%;
-  --muted: 0 0% 15%;
-  --muted-foreground: 0 0% 65%;
-  --accent: 0 0% 17%;
-  --accent-foreground: 0 0% 98%;
-  --destructive: 0 66% 54%;
+  --secondary: 0 0% 12%; /* #1e1e1e secondary buttons / hover fills */
+  --secondary-foreground: 0 0% 81%; /* #cfcfcf */
+  --muted: 0 0% 5.5%; /* #0e0e0e wells */
+  --muted-foreground: 0 0% 60%; /* #9a9a9a */
+  --accent: 0 0% 12%; /* #1e1e1e hover surface */
+  --accent-foreground: 220 16% 94%;
+  --destructive: 353 100% 71%; /* #ff6b78 */
   --destructive-foreground: 0 0% 100%;
-  --border: 0 0% 17%;
-  --input: 0 0% 20%;
-  --ring: 243 90% 76%;
+  --border: 0 0% 15%; /* #262626 card borders */
+  --input: 0 0% 17%; /* #2b2b2b form controls */
+  --ring: 235 82% 68%;
 
-  --status-idle: 0 0% 64%;
-  --status-progress: 213 90% 66%;
-  --status-done: 142 58% 55%;
-  --status-warn: 36 92% 60%;
-  --status-error: 0 74% 63%;
+  /* Pipeline / distribution semantics — prototype hues.
+     idle #707070 · progress #5e9bff · done #34d399 · warn #fbbf24 · error #ff6b78. */
+  --status-idle: 0 0% 44%;
+  --status-progress: 217 100% 68%;
+  --status-done: 158 64% 52%;
+  --status-warn: 43 96% 56%;
+  --status-error: 353 100% 71%;
 }
 
 @theme inline {
@@ -93,6 +113,9 @@
   --color-popover-foreground: hsl(var(--popover-foreground));
   --color-primary: hsl(var(--primary));
   --color-primary-foreground: hsl(var(--primary-foreground));
+  --color-brand: hsl(var(--brand));
+  --color-panel: hsl(var(--panel, var(--card)));
+  --color-elevated: hsl(var(--elevated, var(--muted)));
   --color-secondary: hsl(var(--secondary));
   --color-secondary-foreground: hsl(var(--secondary-foreground));
   --color-muted: hsl(var(--muted));
@@ -117,6 +140,8 @@
   --radius-xl: calc(var(--radius) + 4px);
 
   --font-sans: var(--font-sans);
+  --font-mono: var(--font-mono);
+  --font-display: var(--font-display);
 
   /* Motion — kept short and uniform (micro-detail §5). */
   --default-transition-duration: 150ms;
@@ -182,11 +207,31 @@
   so headings/section-labels/body never drift.
 */
 @layer components {
+  /* Display type — Space Grotesk drives page titles and big numerics, matching
+     the Review OS prototype. `.grotesk` opts a single element in; `.mono` swaps
+     to JetBrains Mono for timecodes/ranges. */
+  .grotesk {
+    font-family: var(--font-display);
+  }
+  .mono {
+    font-family: var(--font-mono);
+    font-feature-settings: normal;
+  }
+
   .text-page-title {
-    font-size: 1.375rem; /* 22px */
-    line-height: 1.875rem;
+    font-family: var(--font-display);
+    font-size: 1.5625rem; /* 25px — prototype h1 */
+    line-height: 2rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+  }
+
+  /* Eyebrow label sitting above a page title (Review OS accent kicker). */
+  .text-eyebrow {
+    font-size: 0.84375rem; /* 13.5px */
+    line-height: 1.1rem;
     font-weight: 600;
-    letter-spacing: -0.014em;
+    color: hsl(var(--brand));
   }
 }
 

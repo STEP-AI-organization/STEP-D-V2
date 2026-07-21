@@ -8,6 +8,7 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { Table, THead, TBody, TR, TH, TD } from "@/components/ui/table";
+import { PublishDialog } from "@/components/publish-dialog";
 import { useAppData } from "@/lib/data/store";
 import { useSavedViews } from "@/lib/use-saved-views";
 import {
@@ -44,6 +45,7 @@ const CLIP_STATUS_LABEL: Record<Clip["status"], string> = {
 export function ClipsView({ initial }: { initial: Filters }) {
   const { clips, programs, episodes, loading } = useAppData();
   const [filters, setFilters] = useState<Filters>(initial);
+  const [publishClipId, setPublishClipId] = useState<string | null>(null);
   const { views, save, remove } = useSavedViews<Filters>("stepd-clip-views");
 
   function update(patch: Partial<Filters>) {
@@ -77,6 +79,7 @@ export function ClipsView({ initial }: { initial: Filters }) {
   return (
     <>
       <PageHeader
+        eyebrow="전체 프로그램"
         title="클립"
         description="완성된 클립·쇼츠 목록입니다. 필터는 URL에 동기화되고, 자주 쓰는 조합은 뷰로 저장됩니다."
       />
@@ -200,12 +203,21 @@ export function ClipsView({ initial }: { initial: Filters }) {
                   </div>
                 </TD>
                 <TD numeric>
-                  <Link
-                    href={`/editor/${clip.id}`}
-                    className="text-xs font-medium text-primary underline-offset-2 hover:underline"
-                  >
-                    편집
-                  </Link>
+                  <div className="flex items-center justify-end gap-2.5">
+                    <Link
+                      href={`/editor/${clip.id}`}
+                      className="text-xs font-semibold text-secondary-foreground underline-offset-2 hover:text-foreground hover:underline"
+                    >
+                      편집
+                    </Link>
+                    <button
+                      type="button"
+                      onClick={() => setPublishClipId(clip.id)}
+                      className="text-xs font-semibold text-brand underline-offset-2 hover:underline"
+                    >
+                      배포
+                    </button>
+                  </div>
                 </TD>
               </TR>
             ))}
@@ -219,6 +231,10 @@ export function ClipsView({ initial }: { initial: Filters }) {
           </TBody>
         </Table>
       </Card>
+
+      {publishClipId && (
+        <PublishDialog clipIds={[publishClipId]} onClose={() => setPublishClipId(null)} />
+      )}
     </>
   );
 }
