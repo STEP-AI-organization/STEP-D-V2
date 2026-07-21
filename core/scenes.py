@@ -18,6 +18,8 @@ Run:
 import json
 import subprocess
 import sys
+import threading
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -31,8 +33,24 @@ from scenedetect import detect, ContentDetector
 
 
 def detect_scenes(video_path: str, threshold: float = 27.0) -> list[tuple[float, float]]:
-    """Shot boundaries as (start_sec, end_sec). Falls back to one whole-video scene."""
-    scene_list = detect(video_path, ContentDetector(threshold=threshold))
+    """Shot boundaries as (start_sec, end_sec). Falls back to one whole-video scene.
+
+    긴 영상(60분+)은 detect()가 전 프레임을 디코딩하느라 수십 분간 출력이 없다. 워커의
+    stall 워치독(30분 무출력→강제 종료)이 이걸 '멈춤'으로 오판해 죽였다(원정대5 61분 실패).
+    감지 중 60초마다 하트비트를 stdout에 찍어 워치독을 재무장시킨다 — 진짜 멈춤은 여전히 잡힌다."""
+    stop = threading.Event()
+
+    def _heartbeat() -> None:
+        t0 = time.time()
+        while not stop.wait(60):
+            print(f"[core] 장면 감지 진행 중… ({int(time.time() - t0)}s 경과)", flush=True)
+
+    hb = threading.Thread(target=_heartbeat, daemon=True)
+    hb.start()
+    try:
+        scene_list = detect(video_path, ContentDetector(threshold=threshold))
+    finally:
+        stop.set()
     scenes = [(s.get_seconds(), e.get_seconds()) for s, e in scene_list]
     if not scenes:  # no cuts detected (static/continuous) — treat the video as one scene
         dur = _video_duration(video_path)
