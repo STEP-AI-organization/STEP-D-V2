@@ -427,48 +427,59 @@ async function handleYoutubeDownload(job: Job): Promise<void> {
   // Stable per-media dir: a retried job resumes yt-dlp's .part file instead of restarting.
   const workDir = path.join(YT_WORK_ROOT, mediaId);
   fs.mkdirSync(workDir, { recursive: true });
-  const outPath = path.join(workDir, "source.mp4");
+  // fast(자막만 빠른 추천): 오디오만 받는다 — STT엔 소리만 필요. 풀 영상(수백MB~2GB) 대신
+  // ~수십MB로 5-10배 빠르다. 단 이 미디어로 나중에 풀 파이프라인(시각 분석)은 못 돌린다.
+  const fast = Boolean(job.payload.fast);
+  const outPath = path.join(workDir, fast ? "source.m4a" : "source.mp4");
 
   try {
     await setEpisodeNote("YouTube 영상 다운로드 중…", "progress", 10);
 
-    await runYtDlp([
-      "--no-playlist",
-      "--no-progress",
-      "-f", "bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/bv*+ba/b",
-      "--merge-output-format", "mp4",
-      "-o", outPath,
-      url,
-    ]);
-    if (!fs.existsSync(outPath)) throw new Error("yt-dlp가 출력 파일을 만들지 못했습니다");
+    await runYtDlp(fast
+      ? ["--no-playlist", "--no-progress", "-f", "bestaudio[ext=m4a]/bestaudio/best", "-o", outPath, url]
+      : ["--no-playlist", "--no-progress",
+         "-f", "bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/bv*+ba/b",
+         "--merge-output-format", "mp4", "-o", outPath, url]);
 
-    // A crash mid-merge leaves a truncated source.mp4 that a retried yt-dlp treats as
+    // yt-dlp가 컨테이너에 따라 다른 확장자로 저장할 수 있어(webm 등) 정확 경로가 없으면 glob 폴백.
+    let realPath = outPath;
+    if (!fs.existsSync(realPath)) {
+      const base = path.basename(outPath, path.extname(outPath)); // "source"
+      const hit = fs.readdirSync(workDir).find((f) => f.startsWith(base + ".") && !f.endsWith(".part"));
+      if (hit) realPath = path.join(workDir, hit);
+    }
+    if (!fs.existsSync(realPath)) throw new Error("yt-dlp가 출력 파일을 만들지 못했습니다");
+
+    // A crash mid-merge leaves a truncated file that a retried yt-dlp treats as
     // "already downloaded" — so a broken probe here means a corrupt file, not a soft
     // degrade. Delete it and fail the attempt so the retry downloads fresh.
     let meta: Awaited<ReturnType<typeof probe>>;
     try {
-      meta = await probe(outPath);
+      meta = await probe(realPath);
       if (!(meta.durationSec > 0)) throw new Error(`probe returned duration ${meta.durationSec}`);
     } catch (e: any) {
-      fs.rmSync(outPath, { force: true });
+      fs.rmSync(realPath, { force: true });
       throw new Error(`다운로드 파일 손상(probe 실패) — 재시도 시 새로 받습니다: ${String(e?.message ?? e).slice(0, 200)}`);
     }
 
     let thumbStored: string | null = null;
-    const thumbTmp = path.join(workDir, "thumb.jpg");
-    try {
-      await captureThumbnail(outPath, Math.max(1, meta.durationSec * 0.1), thumbTmp);
-      thumbStored = await uploadFile(thumbPath(mediaId), thumbTmp);
-    } catch (e) {
-      console.error(`[worker] youtube.download ${mediaId}: thumbnail failed`, e);
+    if (!fast) {  // 오디오만 받은 경우 썸네일(비디오 프레임)이 없으므로 건너뛴다
+      const thumbTmp = path.join(workDir, "thumb.jpg");
+      try {
+        await captureThumbnail(realPath, Math.max(1, meta.durationSec * 0.1), thumbTmp);
+        thumbStored = await uploadFile(thumbPath(mediaId), thumbTmp);
+      } catch (e) {
+        console.error(`[worker] youtube.download ${mediaId}: thumbnail failed`, e);
+      }
     }
 
-    const storedPath = await uploadFile(uploadPath(mediaId, ".mp4"), outPath);
-    const size = fs.statSync(outPath).size;
+    const ext = fast ? (path.extname(realPath) || ".m4a") : ".mp4";
+    const storedPath = await uploadFile(uploadPath(mediaId, ext), realPath);
+    const size = fs.statSync(realPath).size;
 
     await updateMediaSource(mediaId, {
       path: storedPath,
-      mime: "video/mp4",
+      mime: fast ? "audio/mp4" : "video/mp4",
       size,
       durationSec: meta.durationSec,
       width: meta.width,
@@ -479,8 +490,7 @@ async function handleYoutubeDownload(job: Job): Promise<void> {
     });
 
     await markContentAnalysisPending(mediaId);
-    // fast(자막만 빠른 추천)를 다운로드 잡에서 이어받아 content.analyze로 전달 — 대량 배치용.
-    const fast = Boolean(job.payload.fast);
+    // fast를 content.analyze로 이어 전달 — 대량 배치용.
     await enqueue("content.analyze", { mediaId, ...(fast ? { fast: true } : {}) }, { dedupeKey: `content.analyze:${mediaId}` });
     await setEpisodeNote("AI 장면 분석 대기 중…", "progress", 30);
     console.log(`[worker] youtube.download ${mediaId}: ${size} bytes → ${storedPath}`);
