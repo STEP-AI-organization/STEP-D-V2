@@ -68,6 +68,7 @@ def main() -> None:
     ap.add_argument("--truth", required=True)
     ap.add_argument("--profile", default=None, help="learn 결과 JSON — 있으면 on/off 둘 다 비교")
     ap.add_argument("--genre", default="variety")
+    ap.add_argument("--out", default=None, help="결과 JSON을 이 파일에 저장(recommend 로그와 분리)")
     a = ap.parse_args()
 
     truth_export = json.load(open(a.truth, encoding="utf-8"))
@@ -110,7 +111,15 @@ def main() -> None:
         result["headline"] = f"Hit@10 기준: {verdicts['hit@10']['verdict']} " \
             f"(off {verdicts['hit@10']['off_mean']} → on {verdicts['hit@10']['on_mean']}, σ {verdicts['hit@10']['noise_sigma']})"
 
-    print(json.dumps(result, ensure_ascii=False, indent=2))
+    out_json = json.dumps(result, ensure_ascii=False, indent=2)
+    if a.out:
+        with open(a.out, "w", encoding="utf-8") as f:
+            f.write(out_json)
+        print(f"@@RESULT written to {a.out}")
+        if result.get("headline"):
+            print("@@HEADLINE " + result["headline"])
+    else:
+        print(out_json)
 
 
 if __name__ == "__main__":
