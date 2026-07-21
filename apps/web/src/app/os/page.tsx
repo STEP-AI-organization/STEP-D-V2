@@ -15,8 +15,9 @@
 import { useState, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { useAppData } from "@/lib/data/store";
+import { getYouTubeAuthUrl } from "@/lib/data/api";
 import { formatTimecode } from "@/lib/utils";
-import type { Episode } from "@/lib/types";
+import type { Episode, Clip, Program, InboxItem } from "@/lib/types";
 import { Programs, GlobalClips, Distribution, Analytics, Trends, Channels, Ops } from "./screens";
 import { UploadModal, NewProgramModal, DistributeModal, RegisterModal } from "./modals";
 
@@ -266,7 +267,7 @@ export default function ReviewOsPage() {
 
         <div className="min-h-0 flex-1 overflow-auto">
           {screen === "library" && <Library lib={lib} setLib={setLib} programs={programTitles} videos={libVideos} loading={app.loading} onOpen={openDeriv} />}
-          {screen === "dashboard" && <Dashboard onOpen={(id) => { const vid = VIDEOS.find((x) => x.id === id); if (vid) pickVideo(vid); }} goLibrary={() => setScreen("library")} />}
+          {screen === "dashboard" && <Dashboard inbox={app.inbox} episodes={app.episodes} clips={app.clips} programs={app.programs} loading={app.loading} onOpenEpisode={openDeriv} goLibrary={() => setScreen("library")} />}
           {screen === "review" && (
             <Review
               v={v} tab={tab} setTab={(t) => { setTab(t); setSel(null); }} sel={sel} setSel={setSel}
@@ -278,11 +279,11 @@ export default function ReviewOsPage() {
             />
           )}
           {screen === "programs" && <Programs programs={app.programs} episodes={app.episodes} loading={app.loading} onOpenProgram={(t) => { setLib(t); setScreen("library"); }} onNewProgram={() => setNewProgOpen(true)} onUpload={(id) => { setUploadProg(id); setUploadOpen(true); }} />}
-          {screen === "clips" && <GlobalClips flash={flash} onDistribute={(t) => setDistClip(t)} />}
-          {screen === "dist" && <Distribution flash={flash} />}
+          {screen === "clips" && <GlobalClips clips={app.clips} loading={app.loading} onEdit={(id) => router.push(`/editor/${id}`)} onDistribute={(id) => setDistClip(id)} />}
+          {screen === "dist" && <Distribution clips={app.clips} loading={app.loading} onRetry={app.retryDistribution} />}
           {screen === "analytics" && <Analytics />}
           {screen === "trends" && <Trends />}
-          {screen === "channels" && <Channels flash={flash} onRegister={() => setRegisterOpen(true)} />}
+          {screen === "channels" && <Channels onRegister={() => setRegisterOpen(true)} />}
           {screen === "ops" && <Ops />}
         </div>
       </main>
@@ -300,8 +301,8 @@ export default function ReviewOsPage() {
         />
       )}
       {newProgOpen && <NewProgramModal onClose={() => setNewProgOpen(false)} flash={flash} onCreate={async (input) => { await app.createProgram(input); flash("프로그램 생성됨"); }} />}
-      {distClip && <DistributeModal clip={distClip} onClose={() => setDistClip(null)} flash={flash} />}
-      {registerOpen && <RegisterModal onClose={() => setRegisterOpen(false)} flash={flash} />}
+      {distClip && <DistributeModal clipTitle={app.getClip(distClip)?.title ?? "클립"} onClose={() => setDistClip(null)} onPublish={(channels) => { app.publishClip(distClip, channels); flash(`${channels.length}개 채널에 배포 예약`); setDistClip(null); }} />}
+      {registerOpen && <RegisterModal onClose={() => setRegisterOpen(false)} onConnect={() => { window.location.href = getYouTubeAuthUrl(undefined, "analytics", "/os"); }} />}
 
       {toast && (
         <div className="fixed bottom-6 left-1/2 z-[60] flex -translate-x-1/2 items-center gap-[9px] rounded-[10px] border border-[#333333] bg-[#1a1e26] px-[18px] py-[11px] text-[13px] font-semibold text-[#eceef2] shadow-[0_12px_30px_rgba(0,0,0,.35)]">
@@ -371,71 +372,80 @@ function Stat({ n, label }: { n: number; label: string }) {
   return (<div><div className="grotesk text-[17px] font-bold text-[#eceef2]">{n}</div><div className="mt-px text-[10px] text-[#707070]">{label}</div></div>);
 }
 
-/* ─────────────────────────── DASHBOARD ─────────────────────────── */
-const DASH_KPI = [
-  { label: "이번 주 원본 처리", value: "23", unit: "건", delta: "▴ 지난주 +6", color: "#eceef2" },
-  { label: "원본당 평균 검수", value: "18", unit: "분", delta: "▾ 2시간 → 20분↓", color: "#8b93ff" },
-  { label: "이번 주 배포 클립", value: "147", unit: "개", delta: "▴ +31", color: "#eceef2" },
-  { label: "배포 클립 총 조회", value: "2.4", unit: "M", delta: "▴ +18%", color: "#eceef2" },
-];
-const DASH_QUEUE = [
-  { label: "심야 다큐 · 2화", stage: "분석", pct: 62, color: "#fbbf24" },
-  { label: "트롯 대잔치 · 13화", stage: "분할", pct: 28, color: "#8b93ff" },
-];
-const DASH_ALERTS = [
-  { t: "개인정보 노출 의심 4건", s: "솔로천국 S4·8화 검수 대기", c: "#ff6b78", go: "v1" },
-  { t: "분석 실패 1건", s: "심야 다큐·3화 — 오디오 트랙 없음", c: "#ff6b78", go: "" },
-  { t: "확정 대기 클립 9개", s: "환승로그·5화 익스포트 전", c: "#fbbf24", go: "v4" },
-];
-function Dashboard({ onOpen, goLibrary }: { onOpen: (id: string) => void; goLibrary: () => void }) {
-  const review = VIDEOS.filter((x) => x.ok && (x.status.l.includes("검토") || x.status.l.includes("확정")));
+/* ─────────────────────────── DASHBOARD (real) ─────────────────────────── */
+function Dashboard({ inbox, episodes, clips, programs, loading, onOpenEpisode, goLibrary }: {
+  inbox: InboxItem[]; episodes: Episode[]; clips: Clip[]; programs: Program[]; loading: boolean;
+  onOpenEpisode: (id: string) => void; goLibrary: () => void;
+}) {
+  const kpi = [
+    { label: "프로그램", value: String(programs.length), color: "#eceef2" },
+    { label: "회차", value: String(episodes.length), color: "#eceef2" },
+    { label: "클립", value: String(clips.length), color: "#8b93ff" },
+    { label: "게시 클립", value: String(clips.filter((c) => c.status === "published").length), color: "#34d399" },
+  ];
+  const review = episodes.filter((e) => e.pipeline.stage === "recommend" && e.pipeline.stageStatus !== "error").slice(0, 6);
+  const queue = episodes.filter((e) => e.pipeline.stageStatus === "progress").slice(0, 5);
+  const ALERT_C: Record<string, string> = { error: "#ff6b78", warn: "#fbbf24", progress: "#8b93ff", done: "#34d399", idle: "#9a9a9a" };
   return (
     <div className="max-w-[1320px] px-[30px] py-[26px]">
-      <div className="mb-[7px] text-[13.5px] font-semibold text-[#8b93ff]">이번 주 미디어 운영</div>
+      <div className="mb-[7px] text-[13.5px] font-semibold text-[#8b93ff]">미디어 운영 현황</div>
       <h1 className="grotesk mb-5 text-[25px] font-bold tracking-[-.5px]">대시보드</h1>
       <div className="mb-5 grid gap-3.5 [grid-template-columns:repeat(auto-fit,minmax(210px,1fr))]">
-        {DASH_KPI.map((k) => (
+        {kpi.map((k) => (
           <div key={k.label} className="rounded-[14px] border border-[#262626] bg-[#161616] px-[18px] py-4">
             <div className="mb-[9px] text-[11.5px] font-semibold text-[#707070]">{k.label}</div>
-            <div className="flex items-baseline gap-1"><span className="grotesk text-[30px] font-bold tracking-[-.5px]" style={{ color: k.color }}>{k.value}</span><span className="text-[14px] font-semibold text-[#9a9a9a]">{k.unit}</span></div>
-            <div className="mt-[7px] text-[11.5px] font-semibold text-[#34d399]">{k.delta}</div>
+            <div className="grotesk text-[30px] font-bold tracking-[-.5px]" style={{ color: k.color }}>{k.value}</div>
           </div>
         ))}
       </div>
       <div className="grid items-start gap-[18px] [grid-template-columns:1fr_340px]">
         <div className="rounded-[14px] border border-[#262626] bg-[#161616] px-5 py-[18px]">
           <div className="mb-3.5 flex items-center"><span className="text-[14px] font-bold">검수 대기</span><span className="flex-1" /><button onClick={goLibrary} className="text-[12.5px] font-semibold text-[#8b93ff] hover:text-[#a7adff]">전체 콘텐츠 →</button></div>
-          <div className="flex flex-col gap-2.5">
-            {review.map((r) => (
-              <button key={r.id} onClick={() => onOpen(r.id)} className="flex items-center gap-[13px] rounded-[11px] border border-[#232323] bg-[#121212] px-3 py-[11px] text-left text-inherit transition-colors hover:border-[#3a3a3a]">
-                <div className="h-11 w-[78px] flex-none rounded-[7px]" style={{ background: THUMBS[r.thumb] }} />
-                <div className="min-w-0 flex-1"><div className="text-[13.5px] font-bold tracking-[-.3px]">{r.prog} · {r.ep}</div><div className="mt-0.5 text-[11.5px] text-[#707070]">원본 {r.dur} · 쇼츠 {r.shorts} · QC {r.issues} · {r.uploaded}</div></div>
-                <span className="flex-none rounded-full px-[9px] py-[3px] text-[10.5px] font-bold" style={{ color: r.status.c, background: r.status.bg }}>{r.status.l}</span>
-              </button>
-            ))}
-          </div>
+          {loading && episodes.length === 0 ? (
+            <div className="py-8 text-center text-[12.5px] text-[#707070]">불러오는 중…</div>
+          ) : review.length === 0 ? (
+            <div className="py-8 text-center text-[12.5px] text-[#707070]">검수 대기 중인 회차가 없어요.</div>
+          ) : (
+            <div className="flex flex-col gap-2.5">
+              {review.map((e, i) => (
+                <button key={e.id} onClick={() => onOpenEpisode(e.id)} className="flex items-center gap-[13px] rounded-[11px] border border-[#232323] bg-[#121212] px-3 py-[11px] text-left text-inherit transition-colors hover:border-[#3a3a3a]">
+                  <div className="h-11 w-[78px] flex-none rounded-[7px]" style={{ background: THUMBS[i % THUMBS.length] }} />
+                  <div className="min-w-0 flex-1"><div className="text-[13.5px] font-bold tracking-[-.3px]">{e.programTitle} · {e.episodeNumber}화</div><div className="mt-0.5 text-[11.5px] text-[#707070]">{e.pipeline.note ?? "추천 검토 대기"}</div></div>
+                  <span className="flex-none rounded-full px-[9px] py-[3px] text-[10.5px] font-bold text-[#8b93ff]" style={{ background: "rgba(139,147,255,.15)" }}>검토</span>
+                </button>
+              ))}
+            </div>
+          )}
         </div>
         <div className="flex flex-col gap-4">
           <div className="rounded-[14px] border border-[#262626] bg-[#161616] px-[18px] py-4">
             <div className="mb-[13px] text-[13px] font-bold">처리 큐</div>
-            {DASH_QUEUE.map((q) => (
-              <div key={q.label} className="mb-3">
-                <div className="mb-[5px] flex justify-between text-[12px]"><span className="font-semibold text-[#cfcfcf]">{q.label}</span><span className="mono text-[#9a9a9a]">{q.stage} {q.pct}%</span></div>
-                <div className="h-1.5 overflow-hidden rounded-full bg-[#0e0e0e]"><div className="h-full rounded-full" style={{ width: `${q.pct}%`, background: q.color }} /></div>
-              </div>
-            ))}
-            <div className="mt-0.5 text-[11.5px] text-[#707070]">분석 워커 4대 가동 · 유휴 1대</div>
+            {queue.length === 0 ? (
+              <div className="text-[11.5px] text-[#707070]">진행 중인 분석이 없어요.</div>
+            ) : queue.map((e) => {
+              const pct = e.pipeline.progress ?? 0;
+              return (
+                <div key={e.id} className="mb-3">
+                  <div className="mb-[5px] flex justify-between text-[12px]"><span className="font-semibold text-[#cfcfcf]">{e.programTitle} · {e.episodeNumber}화</span><span className="mono text-[#9a9a9a]">{e.pipeline.stage} {pct}%</span></div>
+                  <div className="h-1.5 overflow-hidden rounded-full bg-[#0e0e0e]"><div className="h-full rounded-full" style={{ width: `${pct}%`, background: "#fbbf24" }} /></div>
+                </div>
+              );
+            })}
           </div>
           <div className="rounded-[14px] border border-[#262626] bg-[#161616] px-[18px] py-4">
             <div className="mb-[11px] text-[13px] font-bold">확인 필요</div>
-            <div className="flex flex-col gap-0.5">
-              {DASH_ALERTS.map((a) => (
-                <button key={a.t} onClick={() => (a.go ? onOpen(a.go) : goLibrary())} className="flex items-start gap-2.5 rounded-[9px] px-2 py-[9px] text-left text-inherit hover:bg-[#1e1e1e]">
-                  <span className="mt-1 size-2 flex-none rounded-full" style={{ background: a.c }} />
-                  <span><span className="block text-[12.5px] font-semibold">{a.t}</span><span className="text-[11px] text-[#707070]">{a.s}</span></span>
-                </button>
-              ))}
-            </div>
+            {inbox.length === 0 ? (
+              <div className="text-[11.5px] text-[#707070]">지금 처리할 항목이 없어요.</div>
+            ) : (
+              <div className="flex flex-col gap-0.5">
+                {inbox.slice(0, 6).map((a) => (
+                  <button key={a.id} onClick={() => (a.episodeId ? onOpenEpisode(a.episodeId) : goLibrary())} className="flex items-start gap-2.5 rounded-[9px] px-2 py-[9px] text-left text-inherit hover:bg-[#1e1e1e]">
+                    <span className="mt-1 size-2 flex-none rounded-full" style={{ background: ALERT_C[a.tone] ?? "#9a9a9a" }} />
+                    <span><span className="block text-[12.5px] font-semibold">{a.title}{typeof a.count === "number" ? ` · ${a.count}` : ""}</span><span className="text-[11px] text-[#707070]">{a.subtitle}</span></span>
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       </div>

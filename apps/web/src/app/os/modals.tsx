@@ -3,7 +3,7 @@
 /** STEP D Review OS — React port, modals (업로드·새 프로그램·배포·채널 등록).
  *  Wired to the real store: upload/create/publish hit the backend via useAppData(). */
 import { useRef, useState } from "react";
-import { PLATFORMS, CHANNELS } from "./screens";
+import { DISTRIBUTION_CHANNELS, type DistributionChannel } from "@/lib/constants";
 
 const X = <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2}><path d="M6 6l12 12M18 6L6 18" /></svg>;
 const Back = <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2}><path d="M15 6l-6 6 6 6" /></svg>;
@@ -158,80 +158,48 @@ export function NewProgramModal({ onClose, flash, onCreate }: { onClose: () => v
   );
 }
 
-/* ─────────── DISTRIBUTE ─────────── */
-export function DistributeModal({ clip, onClose, flash }: { clip: string; onClose: () => void; flash: (m: string) => void }) {
-  const [plat, setPlat] = useState<string | null>(null);
+/* ─────────── DISTRIBUTE (real) ─────────── */
+export function DistributeModal({ clipTitle, onClose, onPublish }: {
+  clipTitle: string; onClose: () => void; onPublish: (channels: DistributionChannel[]) => void;
+}) {
   const [sel, setSel] = useState<Record<string, boolean>>({});
-  const P = plat ? PLATFORMS.find((x) => x.key === plat)! : null;
-  const chans = plat ? CHANNELS.filter((c) => c.plat === plat) : [];
-  const selCount = Object.values(sel).filter(Boolean).length;
+  const channels = Object.entries(DISTRIBUTION_CHANNELS) as [DistributionChannel, string][];
+  const selected = channels.filter(([k]) => sel[k]).map(([k]) => k);
   return (
     <Overlay onClose={onClose}>
-      <div className="w-[480px] max-w-full overflow-hidden rounded-2xl border border-[#2b2b2b] bg-[#131313] shadow-[0_24px_60px_rgba(0,0,0,.5)]">
-        <Head title="배포" sub={clip} onClose={onClose} onBack={plat ? () => setPlat(null) : undefined} />
-        {!plat ? (
-          <div className="p-5">
-            <div className="mb-4 text-[12.5px] text-[#9a9a9a]">어느 플랫폼에 배포할까요?</div>
-            <div className="flex flex-col gap-2.5">
-              {PLATFORMS.map((p) => (
-                <button key={p.key} onClick={() => { setPlat(p.key); setSel({}); }} className="flex items-center gap-[13px] rounded-[11px] border border-[#262626] bg-[#161616] px-[15px] py-3.5 text-left text-inherit transition-colors hover:border-[#3a3a3a] hover:bg-[#1e1e1e]">
-                  <span className="size-3 flex-none rounded-[3px]" style={{ background: p.c }} /><span className="flex-1 text-[14px] font-bold">{p.name}</span><span className="text-[11.5px] text-[#707070]">{CHANNELS.filter((c) => c.plat === p.key).length}개 채널</span>
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#5a5a5a" strokeWidth={2.2}><path d="M9 6l6 6-6 6" /></svg>
+      <div className="w-[460px] max-w-full overflow-hidden rounded-2xl border border-[#2b2b2b] bg-[#131313] shadow-[0_24px_60px_rgba(0,0,0,.5)]">
+        <Head title="배포" sub={clipTitle} onClose={onClose} />
+        <div className="p-5">
+          <div className="mb-3.5 text-[12.5px] text-[#9a9a9a]">어느 채널에 배포할까요?</div>
+          <div className="mb-[18px] flex flex-col gap-2">
+            {channels.map(([k, label]) => {
+              const on = !!sel[k];
+              return (
+                <button key={k} onClick={() => setSel((s) => ({ ...s, [k]: !s[k] }))} className="flex items-center gap-3 rounded-[10px] border px-3.5 py-3 text-left text-inherit" style={{ borderColor: on ? "rgba(139,147,255,.5)" : "#262626", background: on ? "rgba(139,147,255,.06)" : "#161616" }}>
+                  <span className="flex size-[18px] flex-none items-center justify-center rounded-[5px] border" style={on ? { background: "#6b74f0", borderColor: "#6b74f0" } : { borderColor: "#3a3a3a" }}>{on && <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth={3}><path d="M20 6L9 17l-5-5" /></svg>}</span>
+                  <span className="flex-1 text-[13.5px] font-bold">{label}</span>
                 </button>
-              ))}
-            </div>
+              );
+            })}
           </div>
-        ) : (
-          <div className="p-5">
-            <div className="mb-3.5 flex items-center gap-2.5"><span className="size-3 rounded-[3px]" style={{ background: P!.c }} /><span className="text-[14px] font-bold">{P!.name} 채널 선택</span></div>
-            <div className="mb-[18px] flex flex-col gap-2">
-              {chans.map((ch) => {
-                const on = !!sel[ch.handle];
-                return (
-                  <button key={ch.handle} onClick={() => setSel((s) => ({ ...s, [ch.handle]: !s[ch.handle] }))} className="flex items-center gap-3 rounded-[10px] border px-3.5 py-3 text-left text-inherit" style={{ borderColor: on ? "rgba(139,147,255,.5)" : "#262626", background: on ? "rgba(139,147,255,.06)" : "#161616" }}>
-                    <span className="flex size-[18px] flex-none items-center justify-center rounded-[5px] border" style={on ? { background: "#6b74f0", borderColor: "#6b74f0" } : { borderColor: "#3a3a3a" }}>{on && <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth={3}><path d="M20 6L9 17l-5-5" /></svg>}</span>
-                    <span className="flex-1"><span className="block text-[13.5px] font-bold">{ch.handle}</span><span className="text-[11px] text-[#707070]">{ch.progs.join(", ")} · {ch.count}</span></span>
-                  </button>
-                );
-              })}
-            </div>
-            <button onClick={() => { if (selCount < 1) return; onClose(); flash(`${selCount}개 채널에 배포 예약됨`); }} className="w-full rounded-[9px] py-2.5 text-[13px] font-semibold" style={selCount ? { background: "#6b74f0", color: "#fff" } : { background: "#1e1e1e", color: "#5a5a5a" }}>{selCount}개 채널에 배포 예약</button>
-          </div>
-        )}
+          <button onClick={() => selected.length && onPublish(selected)} disabled={!selected.length} className="w-full rounded-[9px] py-2.5 text-[13px] font-semibold disabled:cursor-not-allowed" style={selected.length ? { background: "#6b74f0", color: "#fff" } : { background: "#1e1e1e", color: "#5a5a5a" }}>{selected.length}개 채널에 배포</button>
+        </div>
       </div>
     </Overlay>
   );
 }
 
-/* ─────────── REGISTER CHANNEL ─────────── */
-export function RegisterModal({ onClose, flash }: { onClose: () => void; flash: (m: string) => void }) {
-  const [plat, setPlat] = useState<string | null>(null);
-  const P = plat ? PLATFORMS.find((x) => x.key === plat)! : null;
+/* ─────────── REGISTER CHANNEL (real YouTube OAuth) ─────────── */
+export function RegisterModal({ onClose, onConnect }: { onClose: () => void; onConnect: () => void }) {
   return (
     <Overlay onClose={onClose}>
       <div className="w-[460px] max-w-full overflow-hidden rounded-2xl border border-[#2b2b2b] bg-[#131313] shadow-[0_24px_60px_rgba(0,0,0,.5)]">
-        <Head title="채널 등록" onClose={onClose} onBack={plat ? () => setPlat(null) : undefined} />
-        {!plat ? (
-          <div className="p-5">
-            <div className="mb-4 text-[12.5px] text-[#9a9a9a]">어떤 플랫폼의 계정을 추가할까요?</div>
-            <div className="flex flex-col gap-2.5">
-              {PLATFORMS.map((p) => (
-                <button key={p.key} onClick={() => setPlat(p.key)} className="flex items-center gap-[13px] rounded-[11px] border border-[#262626] bg-[#161616] px-[15px] py-3.5 text-left text-inherit transition-colors hover:border-[#3a3a3a] hover:bg-[#1e1e1e]">
-                  <span className="size-3 flex-none rounded-[3px]" style={{ background: p.c }} /><span className="flex-1"><span className="block text-[14px] font-bold">{p.name}</span><span className="text-[11.5px] text-[#707070]">{p.desc}</span></span>
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#5a5a5a" strokeWidth={2.2}><path d="M9 6l6 6-6 6" /></svg>
-                </button>
-              ))}
-            </div>
-          </div>
-        ) : (
-          <div className="p-5">
-            <div className="mb-4 flex items-center gap-2.5"><span className="size-3 rounded-[3px]" style={{ background: P!.c }} /><span className="text-[14px] font-bold">{P!.name} 계정 연결</span></div>
-            <div className={labelCls}>계정 핸들</div>
-            <div className="mb-3.5 rounded-[9px] border border-[#2b2b2b] bg-[#161616] px-3 py-2.5 text-[13px] text-[#9a9a9a]">@channel_handle</div>
-            <div className="mb-[18px] flex items-center gap-2.5 rounded-[10px] border border-[#232323] bg-[#121212] px-3 py-3"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#8b93ff" strokeWidth={2}><path d="M12 2v6M12 22v-6M2 12h6M22 12h-6" /></svg><span className="text-[11.5px] leading-[1.45] text-[#c3c8ff]">{P!.name} 계정으로 로그인해 게시 권한을 승인하면 연결이 완료돼요.</span></div>
-            <button onClick={() => { onClose(); flash(`${P!.name} 계정 연결됨 (OAuth 데모)`); }} className="w-full rounded-[9px] bg-[#6b74f0] py-2.5 text-[13px] font-semibold text-white hover:bg-[#5a63e6]">{P!.name} 계정으로 연결</button>
-          </div>
-        )}
+        <Head title="채널 등록" onClose={onClose} />
+        <div className="p-5">
+          <div className="mb-4 flex items-center gap-2.5"><span className="size-3 rounded-[3px] bg-[#ff6b78]" /><span className="text-[14px] font-bold">YouTube 채널 연결</span></div>
+          <div className="mb-[18px] flex items-center gap-2.5 rounded-[10px] border border-[#232323] bg-[#121212] px-3 py-3"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#8b93ff" strokeWidth={2} className="flex-none"><path d="M12 2v6M12 22v-6M2 12h6M22 12h-6" /></svg><span className="text-[11.5px] leading-[1.45] text-[#c3c8ff]">Google 로그인으로 채널 접근을 승인하면 분석·배포처로 연동돼요.</span></div>
+          <button onClick={onConnect} className="w-full rounded-[9px] bg-[#6b74f0] py-2.5 text-[13px] font-semibold text-white hover:bg-[#5a63e6]">Google로 YouTube 연결</button>
+        </div>
       </div>
     </Overlay>
   );
