@@ -121,6 +121,21 @@ STT(Gemini 오디오, 서울) → 자막정제 → 장면분할(scenedetect+ffmp
 - 실측: 8분 영상 ≈ 512초(vision+names가 프레임당 Gemini 호출이라 지배적).
 - 실서비스 흐름·배선: [pipeline-current.md](pipeline-current.md).
 - 파이프라인 계획: [../plans/pipeline-plan.md](../plans/pipeline-plan.md), 인물엔진: [../plans/context-engine-plan.md](../plans/context-engine-plan.md).
+- **빠른 모드** `--fast`(잡 `fast:true` 또는 워커 `CORE_ANALYZE_FAST=1`): 시각 분석 스킵, 자막만으로 추천 → 61분 영상 96초. 대량 배치용.
+
+### 영상 수집 경로 — 실서비스 vs 연구 (봇차단 관점)
+
+**핵심: 실서비스는 YouTube를 스크래핑하지 않는다 → 봇차단 위험 없음.**
+
+| 경로 | 방식 | 봇차단 |
+|---|---|---|
+| **실서비스** | 운영자가 자기 롱폼 **업로드**(GCS resumable) → content.analyze | ❌ 없음 (스크래핑 아님) |
+| **연동 채널 자동수집**(미래 옵션) | YouTube **Data API**(OAuth 인증) | ❌ 없음 (공식·인증) |
+| **연구 데이터셋 수집**(현재) | `youtube.download`/`match.*`가 **yt-dlp**로 공개 채널 당김 | ⚠️ **있음** (일회성) |
+
+- yt-dlp 스크래핑은 **연구용 데이터셋 구축**에만 쓴다 — 데이터센터 IP + 누적 요청이 YouTube 봇차단("Sign in to confirm you're not a bot")을 유발한다. 제품 루프가 여기 의존하지 않으므로 **프로덕션 리스크 아님**.
+- 완화(연구용, 일회성이라 이 정도로 충분): ① 다운로드 **스로틀**(간격) — 제일 효과·무료, ② 제대로 된 로그인 **쿠키**(`stepd-ytdlp-cookies`; 계정 밴 위험 유의), ③ 필요 시 **레지던셜 프록시**(데이터센터 IP가 근본 원인).
+- fast 다운로드는 **오디오만** 받아(youtube.download `fast:true`) 용량·시간을 크게 줄이지만, **봇차단 자체는 못 피한다**(별개 문제).
 
 ## 잡 큐 (job_queue)
 
