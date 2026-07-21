@@ -449,10 +449,11 @@ def _synthesize(client, candidates: list[dict], n: int, genre: str, duration: fl
 # 장면 경계로 전방 확장해 이 창에 맞춘다(휴리스틱 폴백 HEUR_AIM/MIN과 같은 규범).
 VALIDATE_MIN_SEC = 30.0
 VALIDATE_AIM_SEC = 45.0
+VALIDATE_MAX_SEC = 60.0  # 짧은 구간 확장 시 넘지 않는 상한(하드 실링 MAX_SHORT_SEC=180과 별개)
 
 
 def _extend_to_min(start: float, end: float, scenes: list[dict] | None,
-                   aim: float = VALIDATE_AIM_SEC, hard_max: float = HEUR_MAX_SEC) -> tuple[float, float]:
+                   aim: float = VALIDATE_AIM_SEC, hard_max: float = VALIDATE_MAX_SEC) -> tuple[float, float]:
     """너무 짧은 구간을 장면 경계에 맞춰 목표 길이까지 늘린다.
     모델이 잡은 지점(펀치라인)은 대개 '터지는 순간'이라, 앞으로 확장해 셋업을 담고 뒤로도
     조금 확장해 여운을 담는다 — 실제 편집자의 30~60초 클립이 그렇게 구성된다.
