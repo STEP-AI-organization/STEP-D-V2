@@ -28,8 +28,23 @@ fi
 "$VENV/bin/pip" install --quiet -r "$APP_DIR/core/requirements.txt"
 
 echo "==> yt-dlp (YouTube URL ingest — worker's youtube.download job spawns \`yt-dlp\`)"
-"$VENV/bin/pip" install --quiet --upgrade yt-dlp
+# NIGHTLY, not stable. YouTube rotates its 'n' challenge (a JS puzzle gating media formats);
+# a stable yt-dlp that predates the current puzzle fails with "n challenge solving failed →
+# Only images are available", and NO media downloads at all (hit 2026-07-21). Nightly tracks
+# the puzzle. Pin nightly + keep it updated on every provisioning run.
+"$VENV/bin/pip" install --quiet --upgrade --pre "yt-dlp[default]"
 sudo ln -sf "$VENV/bin/yt-dlp" /usr/local/bin/yt-dlp
+
+echo "==> deno (JS runtime for yt-dlp's n-challenge solver — EJS)"
+# yt-dlp needs a JS runtime to run the challenge solver. Without it, same "Only images"
+# failure as an outdated yt-dlp. deno is the runtime yt-dlp enables by default.
+if ! command -v deno >/dev/null 2>&1; then
+  sudo apt-get install -y -qq unzip
+  curl -fsSL -o /tmp/deno.zip \
+    https://github.com/denoland/deno/releases/latest/download/deno-x86_64-unknown-linux-gnu.zip
+  sudo unzip -oq /tmp/deno.zip -d /usr/local/bin && sudo chmod +x /usr/local/bin/deno
+fi
+deno --version | head -1
 
 # Optional "reduce-Gemini" extras — the algorithmic pre-processing stack that lets the
 # pipeline lean less on Gemini (STT fallback, richer scene pre-filter, real OCR). All are
