@@ -151,7 +151,7 @@ async function handle(job: Job): Promise<FollowUp | void> {
     case "video.hotwatch":  return handleVideoHotwatch(job);
     case "video.comments":  return handleVideoComments(job);
     case "distribution.publish": return handleDistributionPublish(job);
-    case "content.analyze": { await runContentAnalyze(String(job.payload.mediaId ?? "")); return; }
+    case "content.analyze": { await runContentAnalyze(String(job.payload.mediaId ?? ""), Boolean(job.payload.fast)); return; }
     case "youtube.download": return handleYoutubeDownload(job);
     case "match.align": return handleMatchAlign(job);
     case "match.segment": return handleMatchSegment(job);

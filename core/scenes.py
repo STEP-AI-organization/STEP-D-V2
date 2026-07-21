@@ -32,6 +32,43 @@ for _s in (sys.stdout, sys.stderr):
 from scenedetect import detect, ContentDetector
 
 
+def scenes_from_transcript(segments: list[dict], max_sec: float = 18.0,
+                           gap_sec: float = 1.5) -> list[dict]:
+    """자막(STT) 세그먼트를 '장면'으로 묶는다 — 빠른 모드에서 시각 장면감지를 대체.
+
+    시각 장면감지(detect)+프레임 추출이 긴 영상 분석 시간의 최대 74%를 먹는다(실측). 대사
+    기반 콘텐츠는 '터지는 순간'이 곧 대사 순간이라, 자막 타임스탬프만으로 후보 구간을 만들면
+    그 비용을 통째로 건너뛴다. 긴 침묵(gap)이나 누적 길이 초과에서 끊어 대사 덩어리를 만든다.
+    frame은 없다(has_dialogue만) — recommend는 text 기반으로 동작하므로 문제없다."""
+    chunks: list[dict] = []
+    cur: dict | None = None
+    for s in segments:
+        try:
+            st, en = float(s.get("start", 0)), float(s.get("end", 0))
+        except (TypeError, ValueError):
+            continue
+        if en <= st:
+            continue
+        txt = (s.get("text") or "").strip()
+        if cur is None:
+            cur = {"start": st, "end": en, "texts": [txt] if txt else []}
+        elif (st - cur["end"]) > gap_sec or (en - cur["start"]) > max_sec:
+            chunks.append(cur)
+            cur = {"start": st, "end": en, "texts": [txt] if txt else []}
+        else:
+            cur["end"] = en
+            if txt:
+                cur["texts"].append(txt)
+    if cur:
+        chunks.append(cur)
+    return [
+        {"index": i, "start": round(c["start"], 2), "end": round(c["end"], 2),
+         "duration": round(c["end"] - c["start"], 2), "frame": None,
+         "text": " ".join(c["texts"]), "has_dialogue": bool(c["texts"])}
+        for i, c in enumerate(chunks)
+    ]
+
+
 def detect_scenes(video_path: str, threshold: float = 27.0) -> list[tuple[float, float]]:
     """Shot boundaries as (start_sec, end_sec). Falls back to one whole-video scene.
 

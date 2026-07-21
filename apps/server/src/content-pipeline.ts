@@ -136,11 +136,13 @@ function runAnalyze(
   onProgress: (p: Progress) => void,
   profilePath?: string,
   castPath?: string,
+  fast?: boolean,
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     const args = ["-u", "-m", "core.analyze", videoPath, "--out", outDir];
     if (profilePath) args.push("--profile", profilePath);
     if (castPath) args.push("--cast", castPath);
+    if (fast) args.push("--fast");  // 자막만으로 빠른 추천 (시각 분석 스킵)
     const proc = spawn(
       CORE_PYTHON,
       args,
@@ -444,8 +446,9 @@ function collectPartial(work: string): Record<string, unknown> | undefined {
   };
 }
 
-/** Run the full content pipeline for one uploaded media and persist the result. */
-export async function runContentAnalyze(mediaId: string): Promise<void> {
+/** Run the content pipeline for one uploaded media and persist the result.
+ *  `fast`(잡 페이로드 fast:true) — 자막만으로 빠른 추천, 시각 분석 스킵(~10배). 기본 false=풀. */
+export async function runContentAnalyze(mediaId: string, fast = false): Promise<void> {
   const media = await getMedia(mediaId);
   if (!media) throw new Error(`content.analyze: media ${mediaId} not found`);
 
@@ -537,7 +540,7 @@ export async function runContentAnalyze(mediaId: string): Promise<void> {
       console.error("[worker] program context resolve failed (proceeding without):", e);
     }
 
-    await runAnalyze(videoPath, work, onProgress, profilePath, castPath);
+    await runAnalyze(videoPath, work, onProgress, profilePath, castPath, fast);
     await chain.catch(() => {});
 
     const analysis = JSON.parse(fs.readFileSync(path.join(work, "analysis.json"), "utf-8"));

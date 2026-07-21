@@ -39,7 +39,7 @@ for _s in (sys.stdout, sys.stderr):
 
 from .asr import transcribe, get_segments
 from .refine import refine_segments
-from .scenes import build_scenes, extract_frame
+from .scenes import build_scenes, extract_frame, scenes_from_transcript
 from .vision import analyze_frames, _frame_done
 from .recommend import recommend
 from .narrative import build_narrative
@@ -154,6 +154,7 @@ def analyze(
     profile: dict | None = None,
     cast_registry: list[dict] | None = None,
     channels: list[str] | None = None,
+    fast: bool = False,
 ) -> dict:
     """Run all stages (skipping checkpointed ones). Returns the analysis dict.
     `cast_registry` (프로그램 출연자 목록) normalizes on-screen name captions into a
@@ -193,6 +194,34 @@ def analyze(
     step(f"  {len(segments)} 세그먼트")
     timed("stt", ts)
     _progress("stt", 30, f"음성 인식 완료 · {len(segments)} 세그먼트")
+
+    # ── 빠른 모드 (fast) — 자막만으로 바로 추천. 시각 장면감지·프레임·비전·정제·서사를 스킵해
+    # 긴 영상 분석 시간의 최대 74%(장면감지+프레임)를 절감한다. 대사 기반 콘텐츠에 적합.
+    # fast=False(기본)면 이 블록을 건너뛰고 기존 풀 파이프라인이 그대로 돈다 — 아무것도 안 바뀐다.
+    if fast:
+        step("빠른 모드 — 자막 세그먼트로 추천 (시각 분석 스킵)")
+        scenes = scenes_from_transcript(segments)
+        step(f"  {len(scenes)} 자막 장면")
+        _progress("recommend", 50, "쇼츠 추천 중 (빠른 모드)")
+        ts = time.time()
+        rec = recommend(
+            scenes, n=shorts_n, genre=genre, profile=profile, channels=channels,
+            transcript=segments,
+            on_progress=lambda done, total: _progress("recommend", 50 + 45 * done / max(1, total), f"후보 추출 {done}/{total} 구간"),
+        )
+        timed("recommend", ts)
+        shorts = rec["shorts"]
+        duration = scenes[-1]["end"] if scenes else (segments[-1]["end"] if segments else 0)
+        result = {
+            "video": str(video_path), "duration": duration, "genre": rec.get("genre"),
+            "transcript": segments, "scenes": scenes, "cast": [], "timeline": [],
+            "narrative": {}, "shorts": shorts, "fast": True,
+            "took_sec": round(time.time() - t0, 1), "stage_sec": stage_took,
+        }
+        _save_json(out_dir / "analysis.json", result)
+        step(f"완료 (빠른 모드) — {len(shorts)} 쇼츠 · {result['took_sec']}s")
+        _progress("done", 100, "분석 완료 (빠른 모드)")
+        return result
 
     # 2) refine ----------------------------------------------------------------
     ts = time.time()
@@ -403,7 +432,7 @@ def analyze(
 
 def main() -> None:
     if len(sys.argv) < 2:
-        print("Usage: python -m core.analyze <video> [--out <dir>] [--shorts N] [--genre auto|variety|talk|drama|sports|news|music|documentary] [--profile <profile.json>] [--cast <registry.json>] [--channels youtube_shorts,instagram_reels,smr] [--no-resume]")
+        print("Usage: python -m core.analyze <video> [--out <dir>] [--shorts N] [--genre auto|variety|talk|drama|sports|news|music|documentary] [--profile <profile.json>] [--cast <registry.json>] [--channels youtube_shorts,instagram_reels,smr] [--no-resume] [--fast]")
         sys.exit(1)
 
     video = sys.argv[1]
@@ -411,6 +440,7 @@ def main() -> None:
     n = int(sys.argv[sys.argv.index("--shorts") + 1]) if "--shorts" in sys.argv else 5
     genre = sys.argv[sys.argv.index("--genre") + 1] if "--genre" in sys.argv else "auto"
     resume = "--no-resume" not in sys.argv
+    fast = "--fast" in sys.argv  # 자막만으로 빠른 추천 (시각 분석 스킵, ~10배 빠름)
 
     # Optional program understanding profile (--profile <path.json>) → program-fit prior.
     profile = None
@@ -433,7 +463,7 @@ def main() -> None:
         channels = [c.strip() for c in sys.argv[sys.argv.index("--channels") + 1].split(",") if c.strip()]
 
     result = analyze(video, out_dir, shorts_n=n, genre=genre, resume=resume, profile=profile,
-                     cast_registry=cast_registry, channels=channels)
+                     cast_registry=cast_registry, channels=channels, fast=fast)
     cast = result.get("cast") or {}
     print(f"\n=== 요약 ===")
     print(f"  {len(result['transcript'])} 자막 · {len(result['scenes'])} 장면 · {len(result['shorts'])} 쇼츠 · "
