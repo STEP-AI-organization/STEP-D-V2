@@ -3,6 +3,7 @@
 /** STEP D Review OS — React port, remaining screens (프로그램·클립·배포현황·성과·채널
  *  트렌드·배포채널·운영). Faithful to the prototype's demo data + palette. */
 import { useState } from "react";
+import type { Program, Episode } from "@/lib/types";
 
 const THUMBS = [
   "linear-gradient(160deg,#2b2620,#17140f)",
@@ -34,36 +35,44 @@ const Plus = <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke=
 
 /* ─────────── PROGRAMS ─────────── */
 const SECTION_EMOJI: Record<string, string> = { 예능: "🎬", "드라마/영화": "🎭", 뮤직: "🎵", 시사: "📰", 교양: "📚", 라이프: "🌿", 스포츠: "⚽", 게임: "🎮", 어린이: "🧸", 뉴스: "📡", 애니: "✨" };
-const PROGDATA = [
-  { id: "p1", title: "솔로천국 시즌4", section: "예능", age: 15, cast: ["영숙", "광수", "영자"], eps: 8, shorts: 64, smrReady: true, missing: [] as string[] },
-  { id: "p2", title: "환승로그", section: "예능", age: 15, cast: ["지훈", "수아"], eps: 5, shorts: 24, smrReady: false, missing: ["프로그램 코드", "편성 요일"] },
-  { id: "p3", title: "심야 다큐", section: "교양", age: 12, cast: [], eps: 3, shorts: 9, smrReady: false, missing: ["출연자", "편성 요일"] },
-  { id: "p4", title: "트롯 대잔치", section: "뮤직", age: 0, cast: ["현숙", "영탁"], eps: 12, shorts: 120, smrReady: true, missing: [] },
-];
 const ageLabel = (a: number) => (a === 0 ? "전체" : `${a}세`);
-export function Programs({ onOpenProgram, onNewProgram, onUpload }: { onOpenProgram: (t: string) => void; onNewProgram: () => void; onUpload: (t: string) => void }) {
+export function Programs({ programs, episodes, loading, onOpenProgram, onNewProgram, onUpload }: {
+  programs: Program[]; episodes: Episode[]; loading: boolean;
+  onOpenProgram: (t: string) => void; onNewProgram: () => void; onUpload: (id: string) => void;
+}) {
   return (
     <div className="max-w-[1080px] px-[30px] py-[26px]">
       <Eyebrow kicker="프로그램 → 회차" title="프로그램" desc="프로그램을 먼저 등록한 뒤 원본을 업로드하면 회차·추천이 생성돼요." action={<PrimaryBtn onClick={onNewProgram}>{Plus}새 프로그램</PrimaryBtn>} />
-      <div className="flex flex-col gap-3">
-        {PROGDATA.map((p) => {
-          const cast = p.cast.length ? `출연 ${p.cast.slice(0, 3).join(", ")}${p.cast.length > 3 ? " 외" : ""}` : "출연 미등록";
-          return (
-            <div key={p.id} className="flex flex-wrap items-center gap-4 rounded-[14px] border border-[#262626] bg-[#161616] px-[18px] py-4">
-              <div className="flex h-[68px] w-[52px] flex-none items-center justify-center rounded-[10px] border border-[#262626] bg-[linear-gradient(160deg,rgba(139,147,255,.2),rgba(139,147,255,.05))] text-[26px]">{SECTION_EMOJI[p.section] || p.title.charAt(0)}</div>
-              <div className="min-w-[180px] flex-1">
-                <div className="flex flex-wrap items-center gap-2"><span className="text-[16px] font-bold tracking-[-.3px]">{p.title}</span><span className="rounded-[6px] border border-[#2b2b2b] bg-[#0e0e0e] px-2 py-0.5 text-[11px] font-semibold text-[#9a9a9a]">{p.section}</span><span className="rounded-[6px] border border-[#2b2b2b] bg-[#0e0e0e] px-2 py-0.5 text-[11px] font-semibold text-[#9a9a9a]">{ageLabel(p.age)}</span></div>
-                <div className="mt-[5px] text-[12px] text-[#707070]">회차 {p.eps} · 쇼츠 {p.shorts} · {cast}</div>
-                <div className="mt-[9px]"><span className="inline-flex items-center gap-[5px] rounded-full px-2.5 py-[3px] text-[11px] font-bold" style={p.smrReady ? { color: "#34d399", background: "rgba(52,211,153,.12)" } : { color: "#fbbf24", background: "rgba(251,191,36,.12)" }}>{p.smrReady ? "SMR 피드 준비 완료" : `SMR 피드 ${p.missing.length || 1}개 미충족`}</span></div>
+      {loading && programs.length === 0 ? (
+        <div className="py-16 text-center text-[13px] text-[#707070]">불러오는 중…</div>
+      ) : programs.length === 0 ? (
+        <div className="rounded-[14px] border border-dashed border-[#2b2b2b] py-16 text-center">
+          <div className="text-[14px] font-semibold text-[#cfcfcf]">아직 프로그램이 없어요</div>
+          <div className="mt-1.5 text-[12.5px] text-[#707070]">먼저 <b className="text-[#8b93ff]">새 프로그램</b>을 만든 뒤 원본을 업로드하세요.</div>
+        </div>
+      ) : (
+        <div className="flex flex-col gap-3">
+          {programs.map((p) => {
+            const eps = p.episodeCount || episodes.filter((e) => e.programId === p.id).length;
+            const cast = p.cast?.length ? `출연 ${p.cast.slice(0, 3).join(", ")}${p.cast.length > 3 ? " 외" : ""}` : "출연 미등록";
+            const smrReady = !!(p.smr?.programCode && p.smr?.weekdays?.length);
+            return (
+              <div key={p.id} className="flex flex-wrap items-center gap-4 rounded-[14px] border border-[#262626] bg-[#161616] px-[18px] py-4">
+                <div className="flex h-[68px] w-[52px] flex-none items-center justify-center rounded-[10px] border border-[#262626] bg-[linear-gradient(160deg,rgba(139,147,255,.2),rgba(139,147,255,.05))] text-[26px]">{SECTION_EMOJI[p.section] || p.title.charAt(0)}</div>
+                <div className="min-w-[180px] flex-1">
+                  <div className="flex flex-wrap items-center gap-2"><span className="text-[16px] font-bold tracking-[-.3px]">{p.title}</span><span className="rounded-[6px] border border-[#2b2b2b] bg-[#0e0e0e] px-2 py-0.5 text-[11px] font-semibold text-[#9a9a9a]">{p.section}</span><span className="rounded-[6px] border border-[#2b2b2b] bg-[#0e0e0e] px-2 py-0.5 text-[11px] font-semibold text-[#9a9a9a]">{ageLabel(p.targetAge)}</span></div>
+                  <div className="mt-[5px] text-[12px] text-[#707070]">회차 {eps} · {cast}</div>
+                  <div className="mt-[9px]"><span className="inline-flex items-center gap-[5px] rounded-full px-2.5 py-[3px] text-[11px] font-bold" style={smrReady ? { color: "#34d399", background: "rgba(52,211,153,.12)" } : { color: "#fbbf24", background: "rgba(251,191,36,.12)" }}>{smrReady ? "SMR 피드 준비 완료" : "SMR 피드 미충족"}</span></div>
+                </div>
+                <div className="flex flex-none gap-2">
+                  <button onClick={() => onOpenProgram(p.title)} className="rounded-[9px] border border-[#2b2b2b] bg-[#1e1e1e] px-[15px] py-[9px] text-[12.5px] font-semibold text-[#cfcfcf] hover:border-[#3a3a3a] hover:text-[#e5e5e5]">회차 보기</button>
+                  <PrimaryBtn onClick={() => onUpload(p.id)}><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2}><path d="M12 3v12M8 11l4-4 4 4M4 19h16" /></svg>업로드</PrimaryBtn>
+                </div>
               </div>
-              <div className="flex flex-none gap-2">
-                <button onClick={() => onOpenProgram(p.title)} className="rounded-[9px] border border-[#2b2b2b] bg-[#1e1e1e] px-[15px] py-[9px] text-[12.5px] font-semibold text-[#cfcfcf] hover:border-[#3a3a3a] hover:text-[#e5e5e5]">회차 보기</button>
-                <PrimaryBtn onClick={() => onUpload(p.title)}><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2}><path d="M12 3v12M8 11l4-4 4 4M4 19h16" /></svg>업로드</PrimaryBtn>
-              </div>
-            </div>
-          );
-        })}
-      </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
