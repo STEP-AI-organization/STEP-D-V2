@@ -1,9 +1,10 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  // Serve the STEP D Review OS design prototype (public/review-os.html + support.js)
-  // at the site root. The real app routes (/programs, /clips, …) stay reachable.
+  // Serve the React port of the STEP D Review OS prototype (src/app/os) at the site
+  // root. The real app routes (/programs, /clips, …) stay reachable. The raw-HTML
+  // prototype remains at /review-os.html as a reference.
   async redirects() {
-    return [{ source: "/", destination: "/review-os.html", permanent: false }];
+    return [{ source: "/", destination: "/os", permanent: false }];
   },
 };
 
