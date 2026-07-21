@@ -152,6 +152,31 @@ def _slice_wav(wav_path: str, start_sec: float, dur_sec: float) -> bytes:
         return buf.getvalue()
 
 
+def _parse_rows(text: str) -> list[dict]:
+    """Gemini STT 응답을 파싱하되, 절단된 JSON이면 완성된 객체만 건진다.
+
+    밀도 높은 대화 윈도우는 출력이 길어져 JSON이 중간에 잘린다("Unterminated string").
+    통째로 버리면 그 윈도우 전체가 사라지므로, 마지막으로 온전히 닫힌 `}`까지만 살려
+    배열을 복구한다 — 절반이라도 건지는 게 0보다 낫다.
+    """
+    text = (text or "").strip()
+    try:
+        data = json.loads(text)
+        return data if isinstance(data, list) else []
+    except json.JSONDecodeError:
+        pass
+    # 절단 복구: 마지막으로 닫힌 객체 뒤에서 잘라 배열을 닫는다.
+    last = text.rfind("}")
+    if last == -1:
+        return []
+    salvaged = text[: last + 1] + "]"
+    try:
+        data = json.loads(salvaged)
+        return data if isinstance(data, list) else []
+    except json.JSONDecodeError:
+        return []
+
+
 def _transcribe_gemini(audio_or_video: str, language: str, on_progress=None) -> dict:
     from google import genai
     from google.genai import types
@@ -191,12 +216,13 @@ def _transcribe_gemini(audio_or_video: str, language: str, on_progress=None) -> 
                 ],
                 config=config,
             ))
-            rows = json.loads(resp.text or "[]")
+            rows = _parse_rows(resp.text or "[]")
         except Exception as e:
             # A dense/noisy window can overflow the JSON output and truncate. Split it in
             # half and retry so we don't lose the whole window (e.g. the intro montage).
             # 단, 일시 오류(재시도 소진)는 분할해도 소용없다 — 절단/파싱류만 분할한다.
-            if not is_transient(e) and depth < 2 and dur > 20:
+            # dur>12로 낮춘 이유: 23초 윈도우가 절단돼 실패하는 사례를 봤다(밀도 높은 대화).
+            if not is_transient(e) and depth < 3 and dur > 12:
                 half = dur / 2
                 return do_window(start, half, depth + 1) + do_window(start + half, half, depth + 1)
             failed[0] += 1
