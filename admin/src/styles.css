@@ -177,3 +177,25 @@ video { width: 100%; border-radius: 10px; background: #000; }
 .lp-len { margin-top: 8px; font-size: 12px; color: var(--mut); }
 .lp-len b { color: var(--accent); }
 .m-msg.warn { color: var(--warn); }
+
+/* 안내 배너 + 다음 할 일 */
+.d-intro { padding: 12px 14px; border-radius: 10px; background: var(--panel2);
+  border: 1px solid var(--border); font-size: 13px; line-height: 1.7; color: var(--mut);
+  margin-bottom: 14px; }
+.d-intro b { color: var(--text); }
+.dim { color: var(--mut2); }
+
+.d-next { display: flex; align-items: center; gap: 14px; padding: 14px 16px; border-radius: 12px;
+  margin: 4px 0 12px; border: 1px solid var(--accent); background: linear-gradient(90deg, rgba(110,168,254,.10), transparent); }
+.d-next.wait { border-color: var(--border); background: var(--panel); }
+.d-next-body { flex: 1; min-width: 0; }
+.d-next-title { font-size: 14px; font-weight: 700; }
+.d-next-desc { font-size: 12px; color: var(--mut); margin-top: 3px; line-height: 1.5; }
+.d-next-cta { background: var(--accent); color: #08111f; border: 0; font-weight: 700;
+  padding: 10px 20px; border-radius: 9px; cursor: pointer; font-size: 14px; white-space: nowrap; flex-shrink: 0; }
+.d-next.wait .d-next-cta { background: var(--panel2); color: var(--text); border: 1px solid var(--border); }
+.d-next-cta:disabled { opacity: .45; cursor: not-allowed; }
+
+.d-more { margin-top: 10px; }
+.d-more > summary { font-size: 12px; color: var(--mut2); cursor: pointer; user-select: none; }
+.d-more > summary:hover { color: var(--mut); }

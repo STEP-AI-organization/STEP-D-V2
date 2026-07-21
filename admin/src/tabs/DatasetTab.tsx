@@ -170,18 +170,23 @@ export default function DatasetTab() {
 
   return (
     <div>
+      {/* ── 안내 배너 ─────────────────────────────────────────────────── */}
+      <div className="d-intro">
+        <b>채널마다 "잘 터지는 규칙"을 학습합니다.</b> 채널을 고르면 아래에 진행 상황과 다음 할 일이
+        나옵니다. ① 숏폼↔롱폼 매칭 → ② 구간 설명 → ③ 규칙 학습, 순서대로 버튼만 누르면 됩니다.
+      </div>
+
       {/* ── 전 채널 현황 ─────────────────────────────────────────────── */}
       <div className="d-head">
-        <b>채널 현황</b>
+        <b>채널 목록 <span className="dim" style={{ fontWeight: 400 }}>(행을 클릭해 선택)</span></b>
         <span className="m-msg">
-          숏폼 {nfmt(totals.shorts)} · 매칭 <b className="m-picked">{nfmt(totals.matched)}</b> · 남음{" "}
-          {nfmt(totals.remaining)}
+          전체 매칭 <b className="m-picked">{nfmt(totals.matched)}</b>건 · 남은 숏폼 {nfmt(totals.remaining)}
           {totals.pending + totals.running > 0 && (
-            <> · 잡 대기 {totals.pending} / 실행 {totals.running}</>
+            <> · 작업중 {totals.running} / 대기 {totals.pending}</>
           )}
         </span>
-        <button onClick={bulkAll} disabled={busy || !token} title="연동된 모든 채널을 한 번에">
-          ⚡⚡ 전 채널 자동 매칭
+        <button onClick={bulkAll} disabled={busy || !token} title="연동된 모든 채널을 한 번에 매칭">
+          ⚡ 전 채널 한 번에 매칭
         </button>
       </div>
 
@@ -244,51 +249,94 @@ export default function DatasetTab() {
             </div>
           );
         };
+        const remaining = rows.find((r) => r.channelId === channelId)?.remaining ?? 0;
+        // "다음 할 일"을 하나로 안내 — 사용자가 순서를 고민하지 않게.
+        type Next = { title: string; desc: string; cta: string; run: () => void; disabled?: boolean; tone?: "go" | "wait" };
+        let next: Next;
+        if (busyJobs) {
+          next = {
+            title: "작업이 돌아가고 있어요",
+            desc: `워커가 처리 중입니다 (실행 ${jobs?.running ?? 0} · 대기 ${jobs?.pending ?? 0}). 20초마다 자동 새로고침되니 기다리시면 됩니다.`,
+            cta: "새로고침", run: () => refreshChannel(channelId), tone: "wait",
+          };
+        } else if (matched === 0) {
+          next = {
+            title: "1단계 — 숏폼을 롱폼에 매칭하세요",
+            desc: `이 채널의 숏폼 ${remaining}개가 어느 롱폼 구간에서 나왔는지 자동으로 찾습니다.`,
+            cta: "⚡ 매칭 시작", run: () => bulkOne(channelId),
+          };
+        } else if (described < matched) {
+          next = {
+            title: "2단계 — 매칭 구간을 설명하세요",
+            desc: `${matched}건 중 ${described}건 완료. 남은 ${matched - described}건의 자막·장면을 채워야 규칙을 배울 수 있어요.`,
+            cta: `✍️ 나머지 ${matched - described}건 설명`, run: fillSegments,
+          };
+        } else if (!learned?.ready) {
+          next = {
+            title: "3단계 — 규칙을 학습하세요",
+            desc: "매칭·설명이 다 됐습니다. 이제 고성과 규칙을 뽑아 이 채널의 추천에 반영합니다.",
+            cta: "🧠 규칙 학습 실행", run: learnRules,
+          };
+        } else {
+          next = {
+            title: "학습 완료 — 데이터가 쌓이면 더 정확해져요",
+            desc: "규칙이 저장돼 이 채널 영상 분석에 자동 반영됩니다. 매칭을 더 늘리고 다시 학습하면 정확도가 올라갑니다.",
+            cta: "🔄 규칙 다시 학습", run: learnRules, tone: "wait",
+          };
+        }
+
         return (
           <div style={{ marginTop: 22 }}>
             <div className="d-head">
-              <b>🧠 학습 파이프라인 — {selName}</b>
-              {busyJobs && <span className="m-msg">잡 실행중 {jobs?.running ?? 0} · 대기 {jobs?.pending ?? 0}</span>}
-              {jobs?.failed ? <span className="m-msg err">실패 {jobs.failed}</span> : null}
+              <b>🧠 {selName} 학습 진행</b>
+              {jobs?.failed ? <span className="m-msg err">· 실패 {jobs.failed}건 (레이트리밋일 수 있어요)</span> : null}
             </div>
 
+            {/* 다음 할 일 배너 — 지금 뭘 눌러야 하는지 하나로 */}
+            <div className={`d-next ${next.tone ?? "go"}`}>
+              <div className="d-next-body">
+                <div className="d-next-title">{next.title}</div>
+                <div className="d-next-desc">{next.desc}</div>
+              </div>
+              <button className="d-next-cta" disabled={busy || !token || next.disabled}
+                onClick={next.run}>
+                {busy ? "처리 중…" : next.cta}
+              </button>
+            </div>
+            {!token && <div className="m-msg err" style={{ marginBottom: 8 }}>실행하려면 쓰기 토큰이 필요합니다.</div>}
+
             <div className="lp-steps">
-              {step(1, "① 매칭 (숏폼↔롱폼 구간)", matched, matched || 1, busyJobs)}
-              {step(2, "② 구간 설명 (자막·장면)", described, matched, described < matched && busyJobs)}
+              {step(1, "① 매칭", matched, matched || 1, busyJobs)}
+              {step(2, "② 구간 설명", described, matched, described < matched && busyJobs)}
               {step(3, "③ 규칙 학습", learned?.ready ? 1 : 0, 1, false)}
             </div>
 
-            <div className="m-actions" style={{ marginTop: 10 }}>
-              <button className="cap" disabled={busy || !token || matched === 0}
-                onClick={() => bulkOne(channelId)} title="미매칭 숏폼을 롱폼에 자동 매칭">
-                ⚡ 매칭 채우기
-              </button>
-              <button className="cap" disabled={busy || !token || described >= matched}
-                onClick={fillSegments} title="매칭 구간의 자막·장면요약 생성">
-                ✍️ 설명 채우기 ({matched - described} 남음)
-              </button>
-              <button className="save" disabled={busy || !token || matched === 0}
-                onClick={learnRules} title="고성과 규칙 학습 → 채널 프로파일 저장">
-                🧠 규칙 학습 실행
-              </button>
-              <span className="m-msg" style={{ marginLeft: 4 }}>
-                버튼 하나로 됩니다 — 설명이 덜 됐으면 학습이 알아서 먼저 채웁니다.
-              </span>
-            </div>
+            {/* 세부 조작은 접어둠 — 평소엔 위 배너 하나로 충분 */}
+            <details className="d-more">
+              <summary>단계별로 직접 실행 / 다시 하기</summary>
+              <div className="m-actions" style={{ marginTop: 8 }}>
+                <button className="cap" disabled={busy || !token}
+                  onClick={() => bulkOne(channelId)}>⚡ 매칭 채우기</button>
+                <button className="cap" disabled={busy || !token || described >= matched}
+                  onClick={fillSegments}>✍️ 설명 채우기 ({Math.max(0, matched - described)} 남음)</button>
+                <button className="cap" disabled={busy || !token || matched === 0}
+                  onClick={learnRules}>🧠 규칙 학습</button>
+              </div>
+            </details>
 
             {/* 학습된 규칙 카드 */}
             {learned?.ready ? (
               <div className="lp-profile">
                 <div className="lp-phead">
-                  <b>학습된 채널 규칙</b>
+                  <b>📋 이 채널에서 배운 규칙</b>
                   <span className={`lp-conf ${(learned.confidence ?? 0) >= 0.7 ? "hi" : "mid"}`}>
                     신뢰도 {Math.round((learned.confidence ?? 0) * 100)}%
                   </span>
                   {learned.sample && (
-                    <span className="m-msg">표본 high {learned.sample.high} / low {learned.sample.low}</span>
+                    <span className="m-msg">잘된 숏폼 {learned.sample.high}개 vs 아쉬운 것 {learned.sample.low}개로 학습</span>
                   )}
                   {(learned.confidence ?? 0) < 0.7 && (
-                    <span className="m-msg warn">· 표본 더 쌓이면 정확해집니다</span>
+                    <span className="m-msg warn">· 매칭을 더 늘려 다시 학습하면 정확해져요</span>
                   )}
                 </div>
                 <div className="lp-cols">
