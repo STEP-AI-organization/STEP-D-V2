@@ -141,6 +141,7 @@ export interface LearnPair {
     longVideoId: string; title: string | null; durationSec: number;
     segStart: number; segEnd: number; segLenSec: number;
     transcript_slice: string | null; scene_summary: string | null;
+    emotion: string | null; hook: string | null;
   };
   note: string | null;
 }
