@@ -20,6 +20,7 @@ import {
 } from "@/lib/editor/presets";
 import { useAudioPeaks, Waveform } from "@/components/editor/editor-waveform";
 import { TimecodeInput } from "@/components/editor/editable-timecode";
+import { getRulerConfig, shouldShowLabel, formatRulerLabel } from "@/vendor/opencut/ruler-utils";
 
 type Update = (patch: Partial<EditorState>) => void;
 const SPEEDS = [0.5, 1, 1.5, 2];
@@ -614,6 +615,35 @@ export function EditorTimeline({
               className="relative cursor-pointer"
               style={{ width: `${zoom * 100}%` }}
             >
+              {/* CapCut 스타일 눈금(ruler) — opencut-classic의 ruler-utils 패턴 이식.
+                  60px/s×zoom을 기준으로 스마트 간격(2·3·5·10·15 프레임)을 계산해 라벨은 넓게(≥120px),
+                  틱은 촘촘히(≥18px) 배치. 우리 EditorState에 fps 필드가 없으므로 기본 30fps로 고정. */}
+              {duration > 0 && (() => {
+                const fps = { numerator: 30, denominator: 1 };
+                const cfg = getRulerConfig({ zoomLevel: zoom, fps });
+                const ticks: number[] = [];
+                for (let t = 0; t <= duration; t += cfg.tickIntervalSeconds) {
+                  ticks.push(Math.round(t * 1000) / 1000);
+                  if (ticks.length > 400) break; // 안전장치
+                }
+                return (
+                  <div className="relative h-4 border-b border-zinc-800/70 bg-zinc-950/40">
+                    {ticks.map((t, i) => {
+                      const isLabel = shouldShowLabel({ time: t, labelIntervalSeconds: cfg.labelIntervalSeconds });
+                      return (
+                        <div key={i} className="absolute top-0 h-full" style={{ left: pct(t) }}>
+                          <div className={cn("h-full w-px", isLabel ? "bg-zinc-600" : "bg-zinc-800")} />
+                          {isLabel && (
+                            <div className="absolute left-0.5 top-0.5 whitespace-nowrap text-[9px] tabular-nums text-zinc-500">
+                              {formatRulerLabel({ timeInSeconds: t, fps })}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })()}
               <div className="space-y-1">
                 {overlayItems.map((o) => {
                   const os = o.item.startSec ?? 0;

@@ -37,3 +37,4 @@ package-lock.json
 
 .vercel
 .env*
+apps/web/src/vendor/opencut-src/
