@@ -14,7 +14,17 @@ export type TemplateId =
   | "caption_card"
   | "news_bar"
   | "comment_hook";
-export type CaptionStyle = "korean_pop" | "clean" | "news";
+export type CaptionStyle =
+  | "korean_pop"    // 예능 팝 (기본, 두꺼운 검은 스트로크)
+  | "clean"         // 미니멀 (얇은 그림자)
+  | "news"          // 뉴스 바 (검은 박스)
+  | "yellow_pop"    // 노란 팝 (하하PD 학습 신호 · 강한 노랑)
+  | "cyan_neon"     // 시안 네온 (Z세대 릴즈 유행)
+  | "pink_bubble"   // 핑크 버블
+  | "outline_bold"  // 굵은 아웃라인만
+  | "shadow_soft"   // 부드러운 그림자
+  | "highlight_bar" // 형광펜 하이라이트
+  | "typewriter";   // 타자기 검정 박스
 export type ElementType = "cta" | "sticker" | "arrow" | "bubble";
 
 export interface KeyframePoint {
@@ -272,6 +282,13 @@ export const CAPTION_STYLES: Record<CaptionStyle, string> = {
   korean_pop: "코리안 팝",
   clean: "클린",
   news: "뉴스",
+  yellow_pop: "노란 팝",
+  cyan_neon: "시안 네온",
+  pink_bubble: "핑크 버블",
+  outline_bold: "굵은 아웃라인",
+  shadow_soft: "부드러운 그림자",
+  highlight_bar: "형광펜",
+  typewriter: "타자기",
 };
 
 export const COLOR_SWATCHES = ["#FFFFFF", "#FFD400", "#27E0A0", "#5B8CFF", "#FF49DB", "#16120D"];

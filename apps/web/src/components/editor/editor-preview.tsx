@@ -22,12 +22,27 @@ import { Movable, SnapGuides, InlineText, type Guides } from "@/components/edito
  */
 function captionStyleClasses(style: CaptionStyle): { cls: string; style: CSSProperties } {
   // fontSize in cqh = % of stage height, matching the render's capFs (H*0.042) with the same
-  // per-style multipliers as captionAssStyle(): korean_pop ×1.05, clean ×0.92, news ×1.0.
+  // per-style multipliers as captionAssStyle() on the server. 새 스타일은 서버 미러 미완 —
+  // 프리뷰 전용(현행 렌더는 korean_pop/clean/news로 폴백). 서버 확장은 별건.
   switch (style) {
     case "news":
       return { cls: "rounded bg-black/70 px-2 py-0.5 font-bold", style: { color: "#fff", fontSize: "4.2cqh" } };
     case "clean":
       return { cls: "px-1 font-semibold", style: { color: "#fff", textShadow: "0 1px 3px rgba(0,0,0,.55)", fontSize: "3.9cqh" } };
+    case "yellow_pop":
+      return { cls: "px-1 font-extrabold", style: { color: "#FFD400", textShadow: "0 2px 6px rgba(0,0,0,.75)", WebkitTextStroke: "1.4px rgba(0,0,0,.9)", fontSize: "4.4cqh" } };
+    case "cyan_neon":
+      return { cls: "px-1 font-extrabold", style: { color: "#00E5FF", textShadow: "0 0 8px #00E5FF, 0 0 16px #00B8D4", fontSize: "4.3cqh" } };
+    case "pink_bubble":
+      return { cls: "rounded-full bg-pink-500/85 px-3 py-0.5 font-bold", style: { color: "#fff", textShadow: "0 1px 2px rgba(0,0,0,.4)", fontSize: "3.9cqh" } };
+    case "outline_bold":
+      return { cls: "px-1 font-black", style: { color: "transparent", WebkitTextStroke: "2px #fff", fontSize: "4.6cqh" } };
+    case "shadow_soft":
+      return { cls: "px-1 font-medium", style: { color: "#fff", textShadow: "0 2px 12px rgba(0,0,0,.5)", fontSize: "3.9cqh" } };
+    case "highlight_bar":
+      return { cls: "px-1.5 font-bold", style: { color: "#111", background: "linear-gradient(180deg, transparent 55%, #FFE066 55%)", fontSize: "4.1cqh" } };
+    case "typewriter":
+      return { cls: "bg-black px-2 py-0.5 font-bold tracking-wide", style: { color: "#fff", fontFamily: "ui-monospace, monospace", fontSize: "3.8cqh" } };
     case "korean_pop":
     default:
       return {
