@@ -41,7 +41,8 @@
 |---|---|
 | [step-d-master-build-plan.md](plans/step-d-master-build-plan.md) | **종합 빌드 플랜 (정본)** — 아키텍처·로드맵·갭·착수점 |
 | [pipeline-plan.md](plans/pipeline-plan.md) | AI 파이프라인 청사진 (발명신고서 구성 A~J) |
-| [shorts-engine-성과보고-2026-07-21.md](plans/shorts-engine-성과보고-2026-07-21.md) | **쇼츠 엔진 성과보고 (읽기용 요약·진입점)** — A/B 결과·빠른모드(61분→96초)·데이터셋 3층·다음 단계 |
+| [shorts-engine-research-report.md](plans/shorts-engine-research-report.md) | **쇼츠 엔진 연구보고서 (종합·자세)** — 배경·방법론·Exp 1-4·실패 F1-7·결론·재현법. 보고서/IR용 정본 |
+| [shorts-engine-성과보고-2026-07-21.md](plans/shorts-engine-성과보고-2026-07-21.md) | 쇼츠 엔진 성과보고 (읽기용 짧은 요약) — 아침 확인용 진입점 |
 | [shorts-engine-experiments-2026-07-21.md](plans/shorts-engine-experiments-2026-07-21.md) | 쇼츠 엔진 실증 실험 **상세 로그** — 인프라·측정 방법론·다중 홀드아웃 A/B·폐기 실험·로드맵 (성과보고의 근거) |
 | [shorts-engine-experiment-log.md](plans/shorts-engine-experiment-log.md) | 쇼츠 엔진 **실험 연대기(로그)** — 방법론 진화 시간순 기록(IoU→Topic 등). 새 실험은 여기 append (보고서용) |
 | [context-engine-plan.md](plans/context-engine-plan.md) | 인물·서사 컨텍스트 엔진(CX 트랙) 설계 |
