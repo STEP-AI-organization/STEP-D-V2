@@ -51,7 +51,7 @@ const WORK_ROOT = path.join(os.tmpdir(), "stepd-content");
 const WORK_DIR_TTL_MS = 48 * 60 * 60 * 1000;
 
 /** Stage outputs core/analyze.py checkpoints into the work dir (upload order). */
-const CHECKPOINT_FILES = ["analysis.json", "scenes.json", "cast.json", "timeline.json", "narrative.json", "shorts.json", "refined.json", "stt.json", "manifest.json"];
+const CHECKPOINT_FILES = ["analysis.json", "scenes.json", "cast.json", "timeline.json", "narrative.json", "shorts.json", "refined.json", "faces.json", "stt.json", "manifest.json"];
 
 /**
  * Watchdog: kill the python child after this long with NO stdout output. A hung Vertex
@@ -359,6 +359,19 @@ async function persistArtifacts(work: string, mediaId: string): Promise<{ base: 
         await Promise.all(
           frames.slice(i, i + CONCURRENCY).map((f) =>
             uploadFile(`${base}/scene_frames/${f}`, path.join(framesDir, f)),
+          ),
+        );
+      }
+    }
+    // face_clusters/ — 얼굴 클러스터별 대표 크롭. UI 인물 매핑 화면에서 <img src>로 뜸.
+    const faceDir = path.join(work, "face_clusters");
+    if (fs.existsSync(faceDir)) {
+      const faceFiles = fs.readdirSync(faceDir).filter((f) => f.endsWith(".jpg"));
+      const CONCURRENCY = 8;
+      for (let i = 0; i < faceFiles.length; i += CONCURRENCY) {
+        await Promise.all(
+          faceFiles.slice(i, i + CONCURRENCY).map((f) =>
+            uploadFile(`${base}/face_clusters/${f}`, path.join(faceDir, f)),
           ),
         );
       }

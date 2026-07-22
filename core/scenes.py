@@ -32,6 +32,64 @@ for _s in (sys.stdout, sys.stderr):
 from scenedetect import detect, ContentDetector
 
 
+def scenes_from_duration_chunks(
+    segments: list[dict],
+    chunk_sec: float = 300.0,
+    pad_sec: float = 5.0,
+) -> list[dict]:
+    """전체 길이를 고정 5분 청크로 자른다 — AI-driven 씬 분할 대체.
+
+    청크 단위는 (1) 병렬 분석 유닛(각 청크가 독립 Gemini 호출 대상), (2) 요약·상세 unit.
+    ±pad_sec 겹치기로 발화 중간에서 잘려 문맥이 끊기는 걸 완화 — merge 단계에서 중복 dedupe.
+    쇼츠 recommend는 이 청크 경계를 무시하고 자유 start/end로 뽑으므로, 청크가 30초짜리 하이라
+    이트를 갈라도 문제없다(청크는 요약 단위일 뿐 후보 seed 아님).
+
+    반환 shape은 scenes_from_transcript와 동일해서 downstream(recommend·cast·narrative)이 그대로
+    동작한다. text는 청크 시간창에 겹치는 세그먼트를 concat, has_dialogue는 그 존재 여부."""
+    # 전체 길이 산정 — 마지막 세그먼트 end. 세그먼트 없으면 빈 리스트.
+    if not segments:
+        return []
+    try:
+        total = max(float(s.get("end", 0)) for s in segments)
+    except (TypeError, ValueError):
+        return []
+    if total <= 0:
+        return []
+
+    chunks: list[dict] = []
+    idx = 0
+    t = 0.0
+    while t < total:
+        # 경계 pad — 첫/끝 청크는 안쪽으로만 넉넉히
+        raw_end = min(t + chunk_sec, total)
+        st_pad = max(0.0, t - pad_sec) if idx > 0 else 0.0
+        en_pad = min(total, raw_end + pad_sec) if raw_end < total else total
+        # 이 창에 겹치는 세그먼트 텍스트 모으기 (겹침 판정: seg.start < en_pad AND seg.end > st_pad)
+        texts: list[str] = []
+        for s in segments:
+            try:
+                sst, sen = float(s.get("start", 0)), float(s.get("end", 0))
+            except (TypeError, ValueError):
+                continue
+            if sen <= st_pad or sst >= en_pad:
+                continue
+            txt = (s.get("text") or "").strip()
+            if txt:
+                texts.append(txt)
+        chunks.append({
+            "index": idx,
+            "start": round(st_pad, 2),
+            "end": round(en_pad, 2),
+            "duration": round(en_pad - st_pad, 2),
+            "frame": None,
+            "text": " ".join(texts),
+            "has_dialogue": bool(texts),
+        })
+        idx += 1
+        t = raw_end
+    return chunks
+
+
 def scenes_from_transcript(segments: list[dict], max_sec: float = 18.0,
                            gap_sec: float = 1.5) -> list[dict]:
     """자막(STT) 세그먼트를 '장면'으로 묶는다 — 빠른 모드에서 시각 장면감지를 대체.

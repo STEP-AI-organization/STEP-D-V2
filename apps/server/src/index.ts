@@ -627,6 +627,35 @@ app.get("/api/media/:id/analysis/frames/:name", async (c) => {
   });
 });
 
+// face_clusters/{label}_{i}.jpg — 얼굴 클러스터 대표 크롭. faces.py가 저장한 것.
+// name 형식: M1_0.jpg / F2_2.jpg (성별 M|F + 클러스터 번호 + 대표 인덱스).
+app.get("/api/media/:id/analysis/faces/:name", async (c) => {
+  const id = c.req.param("id");
+  const name = c.req.param("name");
+  if (!/^[\w-]+$/.test(id)) return c.json({ error: "bad media id" }, 400);
+  if (!/^[MF]\d+_\d+\.jpg$/.test(name)) return c.json({ error: "bad face crop name" }, 400);
+
+  const objPath = `analysis/${id}/face_clusters/${name}`;
+  if (!(await fileExists(objPath))) return c.json({ error: "not found" }, 404);
+
+  return new Response(createReadStream(objPath), {
+    status: 200,
+    headers: { "Content-Type": "image/jpeg", "Cache-Control": "max-age=86400" },
+  });
+});
+
+// faces.json — 얼굴 클러스터 메타(라벨·카운트·성별·대표 크롭 경로·매핑).
+app.get("/api/media/:id/faces", async (c) => {
+  const id = c.req.param("id");
+  if (!/^[\w-]+$/.test(id)) return c.json({ error: "bad media id" }, 400);
+  const objPath = `analysis/${id}/faces.json`;
+  if (!(await fileExists(objPath))) return c.json({ clusters: {}, mapping: {}, labeled_segments: 0 });
+  return new Response(createReadStream(objPath), {
+    status: 200,
+    headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" },
+  });
+});
+
 /**
  * Resolve a media's transcript from the canonical `transcript` table, falling back to
  * the copy embedded in content_analysis.data.transcript for rows analyzed before the

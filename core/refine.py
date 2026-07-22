@@ -20,7 +20,9 @@ Run:
 import json
 import os
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+from threading import Lock
 
 # Windows consoles default to cp949 and crash on non-Latin/emoji output.
 for _s in (sys.stdout, sys.stderr):
@@ -39,10 +41,14 @@ PROJECT = os.environ.get("GOOGLE_CLOUD_PROJECT") or "step-d"
 LOCATION = os.environ.get("VERTEX_LOCATION") or "asia-northeast3"
 MODEL = os.environ.get("GEMINI_MODEL") or "gemini-2.5-flash"
 BATCH = 40  # segments per Gemini call — small enough to stay coherent, big enough to be cheap
+# 배치 병렬 워커 수. Gemini Vertex는 몇 개까지 잘 소화(STT_WORKERS와 유사). 너무 크면 429.
+REFINE_WORKERS = int(os.environ.get("REFINE_WORKERS") or 4)
 
 SYSTEM = """너는 한국어 예능/방송 자막 정제 전문가다.
 입력은 자동 음성 인식(STT) 결과로, 번호가 매겨진 자막 줄들이다.
-각 줄을 시청자가 읽기 좋은 자막으로 다듬어라:
+각 줄을 시청자가 읽기 좋은 자막으로 다듬고, 발화자(speaker)를 라벨링한다.
+
+정제(cleanup):
 - 맞춤법·띄어쓰기·오타 교정 (예: "됬어"→"됐어", "어떻해"→"어떡해", "않되"→"안 돼")
 - 명백한 반복 제거 (예: "밥 먹었어? 밥 먹었어? 밥 먹었어?" → "밥 먹었어?")
 - 말더듬·파편 정리, 자연스러운 구두점 추가
@@ -52,6 +58,13 @@ SYSTEM = """너는 한국어 예능/방송 자막 정제 전문가다.
 말맛 보존 (중요):
 - 예능 자막이다. 구어체·반말·유행어·감탄사는 그대로 살려라 ("ㅋㅋ", "대박", "재밌어").
 - 맞춤법만 고치고, 문어체나 존댓말로 바꾸지 마라. 말투를 표준어로 다듬지 마라.
+
+발화자 라벨(speaker) — 문맥으로 추정:
+- 자막에서 상대를 부르는 이름/호칭, 자기 소개, 이전 대사의 반응 대상 등을 단서로 삼는다.
+- 확신할 때만 실명/별명을 채운다 (예: "이영자", "김수현").
+- 확신 못 하면 anonymous 라벨: 남성이면 "M1", "M2"…, 여성이면 "F1", "F2"…, 성별도 불명이면 "?"
+- 같은 배치 안에서는 같은 발화자에게 같은 라벨을 일관되게 부여한다.
+- 나레이션/자막해설/OFF 음성은 "NARR".
 
 엄격한 규칙:
 - 번호(n)는 절대 바꾸지 마라. 입력한 모든 번호를 그대로 출력한다.
@@ -65,6 +78,7 @@ RESPONSE_SCHEMA = {
         "properties": {
             "n": {"type": "INTEGER"},
             "text": {"type": "STRING"},
+            "speaker": {"type": "STRING"},
         },
         "required": ["n", "text"],
     },
@@ -109,8 +123,16 @@ def _apply_glossary_words(words: list, glossary: dict) -> list:
     return out
 
 
-def refine_segments(segments: list[dict]) -> list[dict]:
-    """Return segments with cleaned `text`, same length/order/timestamps as input."""
+def refine_segments(segments: list[dict], cast_registry: list[dict] | None = None) -> list[dict]:
+    """Return segments with cleaned `text` + `speaker` label, same length/order/timestamps.
+
+    배치들은 서로 독립이라 ThreadPoolExecutor로 병렬 호출. Gemini 모델 자체가 배치별 stateless.
+    각 스레드는 자기 배치의 슬라이스 [i:i+BATCH]에만 write하므로 lock 불필요.
+
+    cast_registry (사용자가 프로그램에 사전등록한 출연자 명단, primary source of truth)가 있으면
+    speaker 라벨을 이 목록에서 매칭. 목록에 없는 인물처럼 보이면 M1/F1... fallback 유지 —
+    사용자가 나중에 검토·추가할 수 있도록. STT 오인식(옥순→옥수, 정순→정선 등)까지 문맥으로
+    복구할 것을 프롬프트에서 지시."""
     client = _client()
     glossary = load_glossary()
     refined = [dict(s) for s in segments]  # copy; fall back to original text on failure
@@ -122,9 +144,37 @@ def refine_segments(segments: list[dict]) -> list[dict]:
         pairs = ", ".join(f'"{w}"→"{r}"' for w, r in glossary.items())
         system += f"\n\n용어 교정 사전(이 오인식은 반드시 오른쪽으로 고쳐라): {pairs}"
 
-    failed_batches = 0
+    # 등록된 캐스트가 있으면 speaker 매칭의 primary source. 사용자가 프로그램 만들 때 넣은 명단이라
+    # 이걸 우선 신뢰하되, 이 명단에 없는데 대사·문맥으로 새 사람이 나오는 것 같으면 fallback 라벨.
+    cast_names: list[str] = []
+    if cast_registry:
+        for m in cast_registry:
+            n = (m.get("name") or "").strip()
+            if n:
+                cast_names.append(n)
+            for a in (m.get("aliases") or []):
+                a = (a or "").strip()
+                if a:
+                    cast_names.append(a)
+    if cast_names:
+        joined = ", ".join(cast_names)
+        system += (
+            "\n\n등록된 출연자 명단(primary — speaker는 이 이름 중 하나를 우선 사용):\n"
+            f"{joined}\n"
+            "- STT 오인식 주의: 이 명단의 이름과 발음이 비슷하면 명단 이름으로 정규화 (예: 옥수→옥순, 정선→정순).\n"
+            "- 대사에서 서로 부르는 호칭(예: 'XX 님', 'OO아,')이 명단에 있으면 그 답변자가 그 인물일 가능성 높음.\n"
+            "- 명단에 없는데 확실히 다른 사람이 등장한 것 같으면 M1/M2/F1/F2... 유지 (사용자 검토용 flag)."
+        )
+
     total_batches = (len(segments) + BATCH - 1) // BATCH
-    for i in range(0, len(segments), BATCH):
+    if total_batches == 0:
+        return refined
+
+    print_lock = Lock()
+    done_counter = {"n": 0}
+
+    def _do_batch(i: int) -> bool:
+        """한 배치 처리. True=성공, False=실패(원문 유지). i는 전역 오프셋."""
         batch = segments[i:i + BATCH]
         # Number each batch LOCALLY (1..N), not globally. Models routinely renumber from 1
         # despite instructions; a global offset (batch 2 = 41..80) then matches nothing and
@@ -146,28 +196,44 @@ def refine_segments(segments: list[dict]) -> list[dict]:
             rows = json.loads(resp.text or "[]")
             # Guard each row's `n` individually — one garbage/None value must not blow up the
             # whole comprehension and discard the entire batch's refinement.
-            by_n: dict[int, str] = {}
+            by_n: dict[int, dict] = {}
             for r in rows:
                 try:
-                    by_n[int(r["n"])] = r.get("text", "")
+                    by_n[int(r["n"])] = r
                 except (KeyError, TypeError, ValueError):
                     continue
             for j in range(len(batch)):
                 n = j + 1  # local index the model was shown
-                if n in by_n:
-                    refined[i + j]["text"] = _apply_glossary(by_n[n].strip(), glossary)
-            done = min(i + BATCH, len(segments))
-            print(f"   refined {done}/{len(segments)}")
+                row = by_n.get(n)
+                if row:
+                    refined[i + j]["text"] = _apply_glossary((row.get("text") or "").strip(), glossary)
+                    sp = (row.get("speaker") or "").strip()
+                    if sp:
+                        refined[i + j]["speaker"] = sp
+            with print_lock:
+                done_counter["n"] += 1
+                print(f"   refined batch {done_counter['n']}/{total_batches} (segments {i}..{i + len(batch) - 1})")
+            return True
         except Exception as e:
             # Keep this batch's original text (glossary still applied) rather than losing it.
-            failed_batches += 1
             for j in range(len(batch)):
                 refined[i + j]["text"] = _apply_glossary(batch[j]["text"], glossary)
-            print(f"   (batch {i}-{i + len(batch)} failed, kept raw: {str(e)[:120]})")
+            with print_lock:
+                done_counter["n"] += 1
+                print(f"   (batch {i}-{i + len(batch)} failed, kept raw: {str(e)[:120]})")
+            return False
+
+    # 병렬 실행 — REFINE_WORKERS만큼 동시. 배치 순서는 결과에 영향 없음(각자 자기 슬라이스만).
+    failed_batches = 0
+    with ThreadPoolExecutor(max_workers=REFINE_WORKERS) as ex:
+        futures = [ex.submit(_do_batch, i) for i in range(0, len(segments), BATCH)]
+        for fut in as_completed(futures):
+            if not fut.result():
+                failed_batches += 1
 
     # 스로틀 폭풍으로 배치 20% 초과가 원문으로 남았다면, 그 결과를 체크포인트로 굳히지
     # 말고 실패시켜 잡 재시도(정제 단계 재실행)로 넘긴다. 소수 실패는 원문 유지로 충분.
-    if total_batches and failed_batches > total_batches * 0.2:
+    if failed_batches > total_batches * 0.2:
         raise RuntimeError(
             f"refine: {failed_batches}/{total_batches} batches kept raw STT text (>20%) — "
             "failing so the job retries instead of baking raw text into the checkpoint"

@@ -39,12 +39,11 @@ for _s in (sys.stdout, sys.stderr):
 
 from .asr import transcribe, get_segments
 from .refine import refine_segments
-from .scenes import build_scenes, extract_frame, scenes_from_transcript
-from .vision import analyze_frames, _frame_done
+from .scenes import scenes_from_transcript, scenes_from_duration_chunks
 from .recommend import recommend
 from .narrative import build_narrative
 
-CHECKPOINTS = ("stt.json", "refined.json", "scenes.json", "cast.json", "timeline.json", "narrative.json", "shorts.json", "analysis.json")
+CHECKPOINTS = ("stt.json", "refined.json", "faces.json", "scenes.json", "cast.json", "timeline.json", "narrative.json", "shorts.json", "analysis.json")
 
 
 # ── checkpoint plumbing ─────────────────────────────────────────────────────────
@@ -97,9 +96,10 @@ def _prepare_checkpoints(
     except OSError:
         video_size = None  # unknown — do NOT treat as a mismatch
     video_name = Path(video_path).name
-    # Per-stage param fingerprints. STT/refine/scenes depend only on the video, so they
-    # carry no fingerprint and survive any param change.
+    # Per-stage param fingerprints. STT는 영상만 의존, scenes(5분 청크)도 refined 의존.
+    # refine은 cast_registry를 프롬프트에 넣으므로(speaker 라벨링) cast 바뀌면 무효화 필요.
     params = {
+        "refined.json": _fingerprint(cast_registry),
         "cast.json": _fingerprint(cast_registry),
         "narrative.json": _fingerprint(cast_registry),
         "shorts.json": _fingerprint(genre, shorts_n, profile, channels),
@@ -161,7 +161,6 @@ def analyze(
     per-person timeline; `channels` selects the 배포처 fit matrix. Both are optional —
     absent, the run behaves exactly as before plus the new (empty/candidate-only) fields."""
     out_dir.mkdir(parents=True, exist_ok=True)
-    frames_dir = out_dir / "scene_frames"
     t0 = time.time()
     stage_took: dict[str, float] = {}
 
@@ -231,85 +230,95 @@ def analyze(
     else:
         step("자막 정제…")
         _progress("refine", 31, "자막 정제 중")
-        refined = refine_segments(segments)
+        refined = refine_segments(segments, cast_registry=cast_registry)
         _save_json(out_dir / "refined.json", refined)
     timed("refine", ts)
     _progress("refine", 38, "자막 정제 완료")
 
-    # 3) scenes + frames ---------------------------------------------------------
+    # 2.5) 얼굴 검출·클러스터링 (2026-07-22 신설).
+    # 각 세그먼트 중간 프레임에서 얼굴 검출 → 임베딩 → HDBSCAN 무감독 클러스터링 →
+    # 클러스터별 M1/F1/M2/F2 라벨을 refined[].speaker에 덮어씀. 배치 독립성 문제(refine의
+    # per-batch M1이 서로 다른 사람) 자동 해결 — 클러스터링은 전역이므로 M1은 항상 같은 얼굴.
+    # 사용자가 UI에서 "M2=정숙" 매핑 저장하면 rename만으로 끝남 (apply_mapping).
+    # 실패해도 파이프라인 계속 (refined는 텍스트 기반 speaker 유지).
+    ts = time.time()
+    faces = _load_json(out_dir / "faces.json")
+    if faces and isinstance(faces, dict) and faces.get("clusters") is not None:
+        step(f"얼굴 클러스터 — 체크포인트 재사용 ({len(faces.get('clusters', {}))} 클러스터)")
+        # 저장된 매핑이 있으면 refined에 적용 (재실행 시 사용자 라벨 유지)
+        try:
+            from .faces import apply_mapping
+            refined = apply_mapping(refined, faces.get("mapping") or {})
+            _save_json(out_dir / "refined.json", refined)
+        except Exception as e:
+            step(f"  (매핑 적용 스킵: {str(e)[:70]})")
+    else:
+        try:
+            from .faces import build_face_index
+            _progress("faces", 40, "얼굴 검출·클러스터링 중")
+            step("얼굴 검출·클러스터링…")
+            refined, faces = build_face_index(
+                video_path, refined, out_dir,
+                on_progress=lambda done, total: _progress("faces", 40 + 12 * done / max(1, total), f"얼굴 검출 {done}/{total} 프레임"),
+            )
+            _save_json(out_dir / "refined.json", refined)  # speaker 라벨 덮어써졌으므로 재저장
+            _save_json(out_dir / "faces.json", faces)
+            step(f"  클러스터 {len(faces.get('clusters', {}))}개 · 라벨링 {faces.get('labeled_segments', 0)}/{len(refined)} 세그먼트")
+        except Exception as e:
+            step(f"  (얼굴 클러스터링 스킵: {str(e)[:120]})")
+            import traceback
+            traceback.print_exc()
+            faces = None
+    timed("faces", ts)
+    _progress("faces", 52, "얼굴 클러스터링 완료")
+
+    # 3) 5분 청크 분할 — 옛 AI-driven 씬 분할 + frames 스테이지 삭제 (2026-07-22).
+    # 청크는 (a) 다음 단계들의 병렬 유닛(예정), (b) 요약·상세 단위. 쇼츠 recommend는 청크 경계
+    # 무시하고 자유 start/end로 뽑으므로 청크가 30초 하이라이트를 갈라도 무방. ±5초 padding으로
+    # 발화 중간 절단은 완화됨.
     ts = time.time()
     scenes = _load_json(out_dir / "scenes.json")
     if scenes:
-        step(f"장면 분할 — 체크포인트 재사용 ({len(scenes)} 장면)")
-        # Frames live next to the checkpoint; re-extract any that went missing.
-        frames_dir.mkdir(parents=True, exist_ok=True)
-        repaired = 0
-        for sc in scenes:
-            if sc.get("frame") and not (out_dir / sc["frame"]).exists():
-                mid = (sc["start"] + sc["end"]) / 2
-                if extract_frame(video_path, mid, str(out_dir / sc["frame"])):
-                    repaired += 1
-                else:
-                    sc["frame"] = None
-        if repaired:
-            step(f"  누락 프레임 {repaired}개 재추출")
+        step(f"청크 분할 — 체크포인트 재사용 ({len(scenes)} 청크)")
     else:
-        step("장면 분할 + 프레임…")
-        _progress("scenes", 39, "장면 분할 중")
-        scenes = build_scenes(video_path, refined, frames_dir)
+        step("5분 청크 분할…")
+        _progress("scenes", 40, "5분 청크 분할 중")
+        scenes = scenes_from_duration_chunks(refined)
         _save_json(out_dir / "scenes.json", scenes)
-    step(f"  {len(scenes)} 장면")
+    step(f"  {len(scenes)} 청크")
     timed("scenes", ts)
-    _progress("scenes", 45, f"장면 분할 완료 · {len(scenes)} 장면")
+    _progress("scenes", 50, f"청크 분할 완료 · {len(scenes)} 청크")
 
-    # 4) frame analysis (vision score + name captions, one call per frame) -------
-    ts = time.time()
-    pending = sum(1 for s in scenes if s.get("frame") and not _frame_done(s))
-    if pending:
-        # 4a) algorithmic pre-filter — score every scene cheaply (faces/audio/caption/
-        # dialogue) and send only the top-N frames to Gemini. The rest keep a heuristic
-        # vision_score and are skipped, cutting Gemini image calls ~85%. No-op when
-        # VISION_PREFILTER=off or OpenCV is missing.
-        try:
-            from .prefilter import select_for_vision
-            sent = select_for_vision(
-                scenes, str(video_path), out_dir,
-                on_progress=lambda d, t: _progress("frames", 45 + 4 * d / max(1, t), f"장면 사전필터 {d}/{t}"),
-            )
-            if sent is not None:
-                _save_json(out_dir / "scenes.json", scenes)  # persist heur + prefilled scores
-                step(f"  사전필터 — Gemini 투입 {sent} 장면 (나머지 휴리스틱 스킵)")
-                pending = sum(1 for s in scenes if s.get("frame") and not _frame_done(s))
-        except Exception as e:
-            step(f"  (사전필터 건너뜀: {str(e)[:70]})")
-
-    if pending:
-        step(f"프레임 분석 (시각채점+이름자막, {pending} 장면)…")
-        scenes = analyze_frames(
-            scenes, out_dir,
-            save_cb=lambda: _save_json(out_dir / "scenes.json", scenes),
-            on_progress=lambda done, total: _progress("frames", 49 + 26 * done / max(1, total), f"프레임 분석 {done}/{total}"),
-        )
-        _save_json(out_dir / "scenes.json", scenes)
-    else:
-        step("프레임 분석 — 체크포인트 재사용")
-    timed("frames", ts)
-    _progress("frames", 75, "프레임 분석 완료")
-
-    # 4c) cast timeline — lower-third name captions × the program's cast registry.
-    # Reads scenes[].on_screen_names only (no extra model calls, no face recognition), so
-    # it's cheap and safe to run every time. Registry-less runs still produce candidates.
+    # 4) cast timeline (+ portraits merged in same stage) --------------------------
+    # 옛 파이프라인은 cast(75%) → portraits(79%)를 별도 스테이지로 굴렸음. 이제 한 스텝으로
+    # 합침. cast.py가 scenes[].on_screen_names에 의존했었지만, frames 스테이지 삭제로 그 필드가
+    # 사라짐 → 지금은 정보 부족 시 empty cast로 fall through. Phase C에서 refined[].speaker 라벨
+    # 기반으로 재작성 + 화자 불명 씬만 on-demand vision(1~2 프레임)으로 보강.
     ts = time.time()
     cast = _load_json(out_dir / "cast.json")
-    if cast and isinstance(cast, dict) and cast.get("people") is not None:
-        step(f"캐스트 타임라인 — 체크포인트 재사용 ({len(cast['people'])}명)")
+    if cast and isinstance(cast, dict) and cast.get("people") is not None and cast.get("portraitsGenerated"):
+        step(f"출연자 타임라인·포트레이트 — 체크포인트 재사용 ({len(cast['people'])}명)")
     else:
         try:
             from .cast import build_cast_timeline
-            _progress("cast", 75, "출연자 타임라인 구성")
+            _progress("cast", 55, "출연자 타임라인 구성")
             cast = build_cast_timeline(scenes, cast_registry or [])
+            step(f"  캐스트 확정 {cast.get('matchedCount', 0)}명 · 후보 {cast.get('candidateCount', 0)}명")
             _save_json(out_dir / "cast.json", cast)
-            step(f"캐스트 타임라인 — 확정 {cast['matchedCount']}명 · 후보 {cast['candidateCount']}명")
+            # 포트레이트는 people이 있을 때만. 실패해도 cast 자체는 살아있음.
+            if isinstance(cast, dict) and cast.get("people"):
+                try:
+                    from .portraits import build_portraits
+                    _progress("cast", 65, "출연진 포트레이트 생성")
+                    cast = build_portraits(
+                        cast, scenes, out_dir,
+                        on_progress=lambda done, total: _progress("cast", 65 + 5 * done / max(1, total), f"포트레이트 {done}/{total}"),
+                    )
+                    _save_json(out_dir / "cast.json", cast)
+                    made = sum(1 for p in cast["people"] if p.get("thumbnail"))
+                    step(f"  포트레이트 {made}명 생성")
+                except Exception as e:
+                    step(f"  (포트레이트 건너뜀: {str(e)[:70]})")
         except Exception as e:
             step(f"  (캐스트 타임라인 건너뜀: {str(e)[:70]})")
             cast = None
@@ -335,28 +344,8 @@ def analyze(
             timeline = None
     timed("timeline", ts)
 
-    # 4e) cast portraits — 인물별 대표 프레임 + Gemini 설명. cast.json을 in-place 보강.
-    # portraitsGenerated 마커가 체크포인트 역할 (cast.json이 param 변경으로 날아가면 같이 재생성).
-    ts = time.time()
-    if isinstance(cast, dict) and cast.get("people"):
-        if cast.get("portraitsGenerated"):
-            step("출연진 포트레이트 — 체크포인트 재사용")
-        else:
-            try:
-                from .portraits import build_portraits
-                _progress("portraits", 79, "출연진 포트레이트 생성")
-                cast = build_portraits(
-                    cast, scenes, out_dir,
-                    on_progress=lambda done, total: _progress("portraits", 79 + 3 * done / max(1, total), f"인물 {done}/{total}"),
-                )
-                _save_json(out_dir / "cast.json", cast)
-                made = sum(1 for p in cast["people"] if p.get("thumbnail"))
-                step(f"출연진 포트레이트 — {made}명 생성")
-            except Exception as e:
-                step(f"  (포트레이트 건너뜀: {str(e)[:70]})")
-    timed("portraits", ts)
-
-    # 4f) narrative summary — 전체 서사 요약 + 구간별/인물/갈등 분석 (timeline 없어도 refined만으로 동작)
+    # 4e) narrative summary — 전체 서사 요약 + 구간별/인물/갈등 분석 (timeline 없어도 refined만으로 동작)
+    # (portraits는 cast 스테이지에 병합됨 — 위 참조)
     ts = time.time()
     narrative = _load_json(out_dir / "narrative.json")
     # A completed checkpoint has at least one non-empty output. Requiring full_summary AND
