@@ -76,7 +76,8 @@ def main() -> None:
     ap.add_argument("--runs", type=int, default=3)
     ap.add_argument("--holdout", action="append", required=True)
     ap.add_argument("--truth", required=True)
-    ap.add_argument("--profile", default=None)
+    ap.add_argument("--profile", default=None, help="프로파일 A (예: base)")
+    ap.add_argument("--profile-b", dest="profile_b", default=None, help="프로파일 B (예: base+few-shot) — 있으면 off/A/B 3조건")
     ap.add_argument("--genre", default="variety")
     ap.add_argument("--out", default=None)
     a = ap.parse_args()
@@ -94,12 +95,16 @@ def main() -> None:
     result = {"holdouts": list(scenes_by_ho),
               "published_total": sum(len(v) for v in pub_by_ho.values()), "runs": a.runs}
     result["profile_off"] = _run_condition(scenes_by_ho, pub_by_ho, None, a.runs, a.genre)
+    head = [f"off {result['profile_off'][10]['mean']}"]
     if a.profile:
         prof = json.load(open(a.profile, encoding="utf-8")).get("recommend_profile")
-        result["profile_on"] = _run_condition(scenes_by_ho, pub_by_ho, prof, a.runs, a.genre)
-        off = result["profile_off"][10]["mean"]
-        on = result["profile_on"][10]["mean"]
-        result["headline"] = f"Topic-Hit@10: off {off} → on {on} (내용 기반)"
+        result["profile_a"] = _run_condition(scenes_by_ho, pub_by_ho, prof, a.runs, a.genre)
+        head.append(f"base {result['profile_a'][10]['mean']}")
+    if a.profile_b:
+        prof_b = json.load(open(a.profile_b, encoding="utf-8")).get("recommend_profile")
+        result["profile_b"] = _run_condition(scenes_by_ho, pub_by_ho, prof_b, a.runs, a.genre)
+        head.append(f"base+예시 {result['profile_b'][10]['mean']}")
+    result["headline"] = "Topic-Hit@10(내용): " + " → ".join(head)
 
     txt = json.dumps(result, ensure_ascii=False, indent=2)
     if a.out:
