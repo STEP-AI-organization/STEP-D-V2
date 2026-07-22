@@ -675,6 +675,9 @@ async function buildEpisodeAndMedia(opts: {
    *  pipeline note and skips the content.analyze enqueue — the download job does that
    *  once the file actually lands in GCS. */
   pendingIngestNote?: string;
+  /** 업로드 UI의 모드 선택("빠른 분석" = true, "정밀 분석" = false, 기본 false). 잡 페이로드로
+   *  content.analyze로 전달돼 python -m core.analyze --fast 여부를 결정. */
+  fast?: boolean;
 }) {
   const { mediaId, programId, program, storedPath, filename, title, mime, size, meta } = opts;
 
@@ -728,7 +731,11 @@ async function buildEpisodeAndMedia(opts: {
   if (!opts.pendingIngestNote) {
     try {
       await markContentAnalysisPending(mediaId);
-      await enqueue("content.analyze", { mediaId }, { dedupeKey: `content.analyze:${mediaId}` });
+      await enqueue(
+        "content.analyze",
+        { mediaId, ...(opts.fast ? { fast: true } : {}) },
+        { dedupeKey: `content.analyze:${mediaId}` },
+      );
     } catch (err) {
       console.error("[upload] failed to enqueue content.analyze", err);
     }
@@ -876,6 +883,7 @@ app.post("/api/media/finalize", async (c) => {
   const result = await buildEpisodeAndMedia({
     mediaId, programId, program, storedPath,
     filename, title, mime, size, meta, thumbPath: thumbStored,
+    fast: body.fast === true,
   });
   return c.json(result);
 });
@@ -926,6 +934,7 @@ app.post("/api/media/upload", async (c) => {
     mediaId, programId, program, storedPath,
     filename: file.name, title, mime: file.type || "video/mp4", size: file.size,
     meta, thumbPath: thumbStored,
+    fast: body["fast"] === "true" || body["fast"] === true,
   });
   return c.json(result);
 });
@@ -1363,13 +1372,40 @@ function buildEditorAss(
  */
 function captionAssStyle(style: string, fs: number, mv: number): string {
   const font = "Noto Sans CJK KR";
+  // ASS 필드: Name, Fontname, Fontsize, PrimaryColour, OutlineColour, BackColour, Bold,
+  //          BorderStyle(1=outline+shadow, 3=box), Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+  // 색은 &HAABBGGRR (Alpha·B·G·R). 프리뷰(editor-preview.tsx:captionStyleClasses)와 시각 매칭.
   switch (style) {
     case "news":
+      // 뉴스: 흰 텍스트 + 반투명 검은 박스 (프리뷰 rounded bg-black/70)
       return `Style: Caption,${font},${fs},&H00FFFFFF,&H00000000,&HA0000000,1,3,0,0,2,60,60,${mv},1`;
     case "clean":
+      // 클린: 흰 텍스트 + 얇은 그림자 (프리뷰 textShadow 0 1px 3px)
       return `Style: Caption,${font},${Math.round(fs * 0.92)},&H00FFFFFF,&H00000000,&H00000000,1,1,1,0,2,60,60,${mv},1`;
+    case "yellow_pop":
+      // 노란 팝 (하하 학습 신호): 노랑 #FFD400 (BGR &H0000D4FF) + 검정 스트로크 + 그림자
+      return `Style: Caption,${font},${Math.round(fs * 1.05)},&H0000D4FF,&H00000000,&H80000000,1,1,4,2,2,60,60,${mv},1`;
+    case "cyan_neon":
+      // 시안 네온: 시안 #00E5FF (BGR &H00FFE500) + 시안 아웃라인 (네온 그로우 근사, ASS는 진짜 glow 없음)
+      return `Style: Caption,${font},${Math.round(fs * 1.03)},&H00FFE500,&H00CC8500,&H00000000,1,1,3,0,2,60,60,${mv},1`;
+    case "pink_bubble":
+      // 핑크 버블: 흰 텍스트 + 핑크 박스 #EC4899 (BGR &H009948EC)
+      return `Style: Caption,${font},${Math.round(fs * 0.93)},&H00FFFFFF,&H00000000,&HD09948EC,1,3,0,0,2,60,60,${mv},1`;
+    case "outline_bold":
+      // 굵은 아웃라인만: 프리뷰가 transparent + 2px 흰 stroke → 검정 fill + 굵은 흰 스트로크(근사)
+      return `Style: Caption,${font},${Math.round(fs * 1.10)},&H00000000,&H00FFFFFF,&H00000000,1,1,5,0,2,60,60,${mv},1`;
+    case "shadow_soft":
+      // 부드러운 그림자: 흰 텍스트 + 큰 부드러운 그림자 (프리뷰 0 2px 12px)
+      return `Style: Caption,${font},${Math.round(fs * 0.93)},&H00FFFFFF,&H00000000,&H80000000,0,1,0,4,2,60,60,${mv},1`;
+    case "highlight_bar":
+      // 형광펜: 검정 텍스트 + 노랑 박스 #FFE066 (BGR &H0066E0FF)
+      return `Style: Caption,${font},${Math.round(fs * 0.98)},&H00000000,&H00000000,&H0066E0FF,1,3,0,0,2,60,60,${mv},1`;
+    case "typewriter":
+      // 타자기: 흰 텍스트 + 검정 박스 + 자간 넓게 (Bold=1)
+      return `Style: Caption,Courier New,${Math.round(fs * 0.91)},&H00FFFFFF,&H00000000,&HFF000000,1,3,0,0,2,60,60,${mv},1`;
     case "korean_pop":
     default:
+      // 예능 팝 (기본): 흰 텍스트 + 두꺼운 검정 스트로크 + 그림자
       return `Style: Caption,${font},${Math.round(fs * 1.05)},&H00FFFFFF,&H00000000,&H80000000,1,1,4,2,2,60,60,${mv},1`;
   }
 }
