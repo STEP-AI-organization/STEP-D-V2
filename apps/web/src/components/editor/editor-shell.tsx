@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { ArrowLeft, Save, Send, Info, Check, Sparkles, Film, Plus } from "lucide-react";
+import { ArrowLeft, Save, Send, Info, Check, Sparkles, Film, Plus, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen } from "lucide-react";
 import { useAppData } from "@/lib/data/store";
 import { useToast } from "@/components/ui/toast";
 import { getStreamUrl, getMediaAnalysis, type AnalysisTranscriptSegment, type AnalysisScene } from "@/lib/data/api";
@@ -101,6 +101,9 @@ export function EditorShell({ clipId }: { clipId: string }) {
   const [exportElapsed, setExportElapsed] = useState(0);
   // 키프레임 선택 상태 (타임라인 다이아몬드 ↔ 속성 패널 공유, C1).
   const [kfSel, setKfSel] = useState<KfSelection>(null);
+  // CapCut 스타일 좌우 패널 접기/펼치기 상태 (기본 펼침 — 처음엔 다 보이게)
+  const [leftOpen, setLeftOpen] = useState(true);
+  const [rightOpen, setRightOpen] = useState(true);
   useEffect(() => {
     if (!exporting) { setExportElapsed(0); return; }
     const t0 = Date.now();
@@ -513,13 +516,37 @@ export function EditorShell({ clipId }: { clipId: string }) {
         </div>
       )}
 
-      {/* body — 3 columns; side panels fold away on narrow viewports so the
-          preview never gets crushed (AI panel below lg, properties below md). */}
+      {/* body — CapCut 스타일 3열. 좌우 aside는 접었다 폈다 (버튼·아이콘 바). 접히면 프리뷰 확장. */}
       <div className="flex min-h-0 flex-1">
-        <aside className="hidden w-52 shrink-0 border-r border-zinc-800 lg:block xl:w-60">
-          <EditorAiPanel recs={recs} scenes={scenes} onApply={applyRec} />
-        </aside>
+        {/* 좌: AI 패널 (접힘 시 얇은 아이콘 바) */}
+        {leftOpen ? (
+          <aside className="hidden w-52 shrink-0 border-r border-zinc-800 bg-zinc-950 lg:block xl:w-60">
+            <div className="flex h-8 items-center justify-between border-b border-zinc-800 px-2 text-[11px] font-medium text-zinc-400">
+              <span>AI 패널</span>
+              <button
+                onClick={() => setLeftOpen(false)}
+                className="rounded p-1 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200"
+                title="접기"
+              >
+                <PanelLeftClose className="size-3.5" />
+              </button>
+            </div>
+            <EditorAiPanel recs={recs} scenes={scenes} onApply={applyRec} />
+          </aside>
+        ) : (
+          <div className="hidden w-10 shrink-0 flex-col items-center border-r border-zinc-800 bg-zinc-950 py-2 lg:flex">
+            <button
+              onClick={() => setLeftOpen(true)}
+              className="rounded p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
+              title="AI 패널 펼치기"
+            >
+              <PanelLeftOpen className="size-4" />
+            </button>
+            <Sparkles className="mt-2 size-3.5 text-zinc-600" />
+          </div>
+        )}
 
+        {/* 중앙: 프리뷰 (확장 가능) */}
         <div className="flex min-w-0 flex-1 items-center justify-center overflow-auto bg-zinc-900 p-4 sm:p-6">
           <EditorPreview
             state={state}
@@ -537,9 +564,32 @@ export function EditorShell({ clipId }: { clipId: string }) {
           />
         </div>
 
-        <aside className="hidden w-72 shrink-0 border-l border-zinc-800 md:block xl:w-80">
-          <EditorPanel state={state} update={panelUpdate} applyTpl={applyTpl} kfSel={kfSel} setKfSel={setKfSel} />
-        </aside>
+        {/* 우: 속성 패널 (접힘 시 얇은 아이콘 바) */}
+        {rightOpen ? (
+          <aside className="hidden w-72 shrink-0 border-l border-zinc-800 bg-zinc-950 md:block xl:w-80">
+            <div className="flex h-8 items-center justify-between border-b border-zinc-800 px-2 text-[11px] font-medium text-zinc-400">
+              <button
+                onClick={() => setRightOpen(false)}
+                className="rounded p-1 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200"
+                title="접기"
+              >
+                <PanelRightClose className="size-3.5" />
+              </button>
+              <span>속성</span>
+            </div>
+            <EditorPanel state={state} update={panelUpdate} applyTpl={applyTpl} kfSel={kfSel} setKfSel={setKfSel} />
+          </aside>
+        ) : (
+          <div className="hidden w-10 shrink-0 flex-col items-center border-l border-zinc-800 bg-zinc-950 py-2 md:flex">
+            <button
+              onClick={() => setRightOpen(true)}
+              className="rounded p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
+              title="속성 패널 펼치기"
+            >
+              <PanelRightOpen className="size-4" />
+            </button>
+          </div>
+        )}
       </div>
 
       {/* timeline */}
