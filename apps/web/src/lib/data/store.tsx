@@ -187,7 +187,7 @@ function applyPublish(
 ): Clip[] {
   return clips.map((clip) => {
     if (!ids.has(clip.id)) return clip;
-    const next = clip.distributions.map((d) => ({ ...d }));
+    const next = (clip.distributions ?? []).map((d) => ({ ...d }));
     for (const channel of channels) {
       const value = {
         channel,
@@ -236,7 +236,9 @@ function deriveInbox(state: AppState): InboxItem[] {
 
   // Failed distributions needing retry.
   for (const clip of state.clips) {
-    const failed = clip.distributions.filter((d) => d.status === "failed");
+    // 안전장치: 옛/불완전 클립엔 distributions 필드가 없을 수 있음 (seed·mock·마이그레이션 도중).
+    const dists = clip.distributions ?? [];
+    const failed = dists.filter((d) => d.status === "failed");
     if (failed.length > 0) {
       items.push({
         id: `inbox-failed-${clip.id}`,
@@ -252,7 +254,8 @@ function deriveInbox(state: AppState): InboxItem[] {
 
   // Ready clips not yet published anywhere.
   for (const clip of state.clips) {
-    const anyLive = clip.distributions.some(
+    const dists = clip.distributions ?? [];
+    const anyLive = dists.some(
       (d) => d.status === "published" || d.status === "scheduled",
     );
     if (clip.status === "ready" && !anyLive) {
@@ -276,7 +279,7 @@ function deriveBadges(state: AppState, inbox: InboxItem[]) {
     inbox: inbox.length,
     recommendations: state.recommendations.filter((r) => r.status === "pending").length,
     distributionFailed: state.clips.reduce(
-      (n, c) => n + c.distributions.filter((d) => d.status === "failed").length,
+      (n, c) => n + (c.distributions ?? []).filter((d) => d.status === "failed").length,
       0,
     ),
   };
@@ -304,11 +307,18 @@ export function AppDataProvider({
   const mutationEpochRef = useRef(0);
 
   const applyServerState = useCallback((s: Awaited<ReturnType<typeof fetchState>>) => {
+    // 옛/불완전 clip에 distributions·기타 배열 필드가 없으면 빈 배열로 정규화 —
+    // 8+ 컴포넌트가 clip.distributions.map/find/filter를 직접 호출해서 undefined면 크래시.
+    // seed·mock·옛 스키마 저장분에서 흔한 문제.
+    const clips = (s.clips as Partial<Clip>[]).map((c) => ({
+      ...c,
+      distributions: c.distributions ?? [],
+    } as Clip));
     setState({
       programs: (s.programs as Partial<Program>[]).map(toProgram),
       episodes: (s.episodes as Partial<Episode>[]).map(toEpisode),
       recommendations: s.recommendations as Recommendation[],
-      clips: s.clips as Clip[],
+      clips,
       jobs: s.jobs as JobEvent[],
       connections: toConnections(s.connections),
     });
@@ -533,7 +543,7 @@ export function AppDataProvider({
               ids.has(clip.id)
                 ? {
                     ...clip,
-                    distributions: clip.distributions.map((d) =>
+                    distributions: (clip.distributions ?? []).map((d) =>
                       d.channel === channel ? { ...d, status: "failed" as const, error: message } : d,
                     ),
                   }
@@ -587,7 +597,7 @@ export function AppDataProvider({
           clip.id === clipId
             ? {
                 ...clip,
-                distributions: clip.distributions.map((d) =>
+                distributions: (clip.distributions ?? []).map((d) =>
                   d.channel === channel ? { ...d, status: "pending", error: undefined } : d,
                 ),
               }
@@ -610,7 +620,7 @@ export function AppDataProvider({
             clip.id === clipId
               ? {
                   ...clip,
-                  distributions: clip.distributions.map((d) =>
+                  distributions: (clip.distributions ?? []).map((d) =>
                     d.channel === channel ? { ...d, status: "failed", error: "재시도 요청 실패" } : d,
                   ),
                 }
