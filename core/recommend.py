@@ -137,6 +137,20 @@ def _profile_block(profile: dict | None) -> str:
         lines.append(f"- 목표 길이: {profile['targetLength']} 에 맞는 완결 구간 우선")
     if profile.get("castType"):
         lines.append(f"- 출연진: {profile['castType']}")
+    # ④ few-shot: 이 채널에서 실제로 터진/안 터진 구간 예시. 추상 규칙보다 원본 예시가 훨씬
+    # 잘 이끈다 — "이런 순간을 찾아라 / 이런 건 피해라"를 구체 사례로 보여준다.
+    ex = profile.get("examples") or {}
+    hi_ex, lo_ex = ex.get("high") or [], ex.get("low") or []
+    if hi_ex:
+        lines.append("- 이 채널에서 **실제로 터진 순간** 예시 (이런 걸 찾아라):")
+        for e in hi_ex[:3]:
+            snip = f' — "{e.get("snippet")}"' if e.get("snippet") else ""
+            lines.append(f"    · [×{e.get('ratio','?')}] {e.get('title','')}{snip}")
+    if lo_ex:
+        lines.append("- 이 채널에서 **안 터진** 예시 (이런 건 피하라):")
+        for e in lo_ex[:3]:
+            snip = f' — "{e.get("snippet")}"' if e.get("snippet") else ""
+            lines.append(f"    · [×{e.get('ratio','?')}] {e.get('title','')}{snip}")
     lines.append("- 각 후보의 hook 필드에 위 8개 훅 카테고리 중 가장 잘 맞는 하나(없으면 '기타')를 반드시 채워라.")
     return "\n".join(lines)
 

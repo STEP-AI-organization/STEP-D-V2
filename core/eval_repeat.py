@@ -67,6 +67,8 @@ def main() -> None:
     ap.add_argument("--holdout", action="append", required=True, help="longVideoId=scenes.json ...")
     ap.add_argument("--truth", required=True)
     ap.add_argument("--profile", default=None, help="learn 결과 JSON — 있으면 on/off 둘 다 비교")
+    ap.add_argument("--profile-b", dest="profile_b", default=None,
+                    help="두 번째 프로파일(예: base+few-shot) — 있으면 base(A)와 직접 head-to-head 비교")
     ap.add_argument("--genre", default="variety")
     ap.add_argument("--out", default=None, help="결과 JSON을 이 파일에 저장(recommend 로그와 분리)")
     a = ap.parse_args()

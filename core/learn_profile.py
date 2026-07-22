@@ -130,8 +130,28 @@ def learn(export: dict, min_desc: int = 5) -> dict:
     profile["stats"] = stats.get("reading", {})
     # recommend.py가 이미 읽는 프로파일 형식으로 변환 — 기존 스티어링 배선을 그대로 탄다.
     # 전체 통계(hook_signals)를 넘겨 hookWeights를 lift로 차등한다(균일 가중 회귀 방지).
-    profile["recommend_profile"] = to_recommend_profile(profile, stats)
+    # + 실제 고/저성과 구간을 few-shot 예시로 첨부 — 추상 규칙보다 원본 예시가 LLM을 잘 이끈다(④).
+    profile["recommend_profile"] = to_recommend_profile(profile, stats, _examples(high, low))
     return profile
+
+
+def _examples(high: list[dict], low: list[dict], n: int = 3) -> dict:
+    """실제 고성과/저성과 구간을 few-shot 예시로 뽑는다. 각 예시: 발행 숏폼 제목(무엇이 터졌나)
+    + 소스 구간 자막 발췌(무슨 순간) + 성과 배수. recommend 프롬프트에 원본 예시로 들어간다."""
+    def pick(pairs: list[dict], best: bool) -> list[dict]:
+        ranked = sorted(pairs, key=lambda x: (x.get("performance") or {}).get("ratio", 0), reverse=best)
+        out = []
+        for p in ranked[:n]:
+            s, src = p.get("short") or {}, p.get("source") or {}
+            txt = (src.get("transcript_slice") or src.get("transcript") or src.get("scene_summary") or "")
+            out.append({
+                "title": (s.get("title") or "")[:50],
+                "snippet": " ".join(str(txt).split())[:110],
+                "hook": (src.get("hook") or "")[:12],
+                "ratio": round(float((p.get("performance") or {}).get("ratio", 0)), 1),
+            })
+        return out
+    return {"high": pick(high, True), "low": pick(low, False)}
 
 
 # 훅 카테고리 매핑 (learn이 자유 텍스트로 훅을 뱉을 수 있어 8개 표준 키로 정규화)
@@ -143,7 +163,7 @@ _HOOK_MAP = {
 }
 
 
-def to_recommend_profile(learned: dict, full_stats: dict | None = None) -> dict:
+def to_recommend_profile(learned: dict, full_stats: dict | None = None, examples: dict | None = None) -> dict:
     """LEARN 규칙 → recommend/profile.ts가 읽는 ProgramProfile 형식.
 
     핵심은 hookWeights(고성과 훅을 1.0 위로 올림)와 targetLength·taboos·watchPoints다.
@@ -193,6 +213,8 @@ def to_recommend_profile(learned: dict, full_stats: dict | None = None) -> dict:
         "editTone": "",
         "targetLength": target,
         "castType": "",
+        # ④ few-shot: 실제 고/저성과 구간 예시 — recommend 프롬프트에 원본으로 주입
+        "examples": examples or {},
         # 출처 표식 — 프로그램 프로파일(사람 입력)과 구분, confidence 추적용
         "_source": "learned",
         "_confidence": conf,
