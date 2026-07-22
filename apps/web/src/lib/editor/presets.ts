@@ -45,12 +45,23 @@ export interface KeyframeSample {
 }
 
 /** Linear per-property interpolation across keyframes; values hold at both ends.
- *  null = no keyframes → caller renders the static layout unchanged (backward compat). */
+ *  null = no keyframes → caller renders the static layout unchanged (backward compat).
+ *  안전장치: 저장된 상태 복원 시 keyframes에 NaN·undefined·time 누락이 섞이면 좌표가
+ *  NaN으로 점프해 오버레이가 화면에서 사라지거나 렌더 오류가 난다. 유효성 검증을 진입에서
+ *  강제해, 잘못된 keyframe은 조용히 필터하고 나머지로만 보간한다. */
 export function sampleKeyframes(keyframes: KeyframePoint[] | undefined, time: number): KeyframeSample | null {
   if (!keyframes || keyframes.length === 0) return null;
-  const sorted = [...keyframes].sort((a, b) => a.time - b.time);
+  // time 자체가 유한수인지 방어 (NaN이 들어오면 모든 비교가 false라 last를 반환 → 부드럽지 못한 점프)
+  if (!Number.isFinite(time)) return null;
+  // time이 유한하고 keyframes에 time 필드가 유효한 것만 사용. NaN·undefined·Infinity 배제.
+  const sorted = keyframes
+    .filter((k) => k && Number.isFinite(k.time))
+    .slice()
+    .sort((a, b) => a.time - b.time);
+  if (sorted.length === 0) return null;
   function prop(key: "x" | "y" | "scale" | "opacity" | "rotation"): number | undefined {
-    const pts = sorted.filter((k) => typeof k[key] === "number");
+    // 유한한 값만 남김 (NaN·Infinity 배제 — 이걸로 다음 보간이 오염되면 좌표 폭발)
+    const pts = sorted.filter((k) => typeof k[key] === "number" && Number.isFinite(k[key] as number));
     if (pts.length === 0) return undefined;
     if (time <= pts[0].time) return pts[0][key];
     const last = pts[pts.length - 1];
@@ -59,8 +70,13 @@ export function sampleKeyframes(keyframes: KeyframePoint[] | undefined, time: nu
       const a = pts[i];
       const b = pts[i + 1];
       if (time >= a.time && time <= b.time) {
+        // 동일 time 두 개 있을 때 0으로 나누기 방지 (기존 안전장치 유지)
         const f = b.time === a.time ? 0 : (time - a.time) / (b.time - a.time);
-        return (a[key] as number) + ((b[key] as number) - (a[key] as number)) * f;
+        const va = a[key] as number;
+        const vb = b[key] as number;
+        const out = va + (vb - va) * f;
+        // 보간 결과가 유한한지 최종 확인 (극단 경우 대비)
+        return Number.isFinite(out) ? out : va;
       }
     }
     return last[key];
@@ -374,6 +390,9 @@ export function makeInitialEditorState(title: string, durationSec: number): Edit
 /** Saved editorState from before multi-track has no `tracks` — hydrate a main track
  *  from the master trim so old clips keep working unchanged. Tracks saved before
  *  speed-ramping / volume get their defaults filled in (uniform speed, full volume). */
+/** 저장된 EditorState 로드 시 스키마 진화 대응 — 옛 클립을 새 필드로 안전 마이그레이션.
+ *  원칙: 필드가 없으면 안전한 기본값 자동 채움 → undefined 접근으로 인한 크래시 방지.
+ *  새 필드 추가 시 여기 fallback을 반드시 등록할 것 (안 하면 옛 클립 로드가 폭발한다). */
 export function ensureTracks(state: EditorState, durationSec: number): EditorState {
   const dur = Math.max(1, durationSec);
   const tracks =
@@ -386,7 +405,54 @@ export function ensureTracks(state: EditorState, durationSec: number): EditorSta
           transition: tr.transition ?? { type: "cut" as const, duration: 0 },
         }))
       : [makeMainTrack(state.trimIn ?? 0, state.trimOut ?? dur, dur)];
-  return { ...state, tracks };
+
+  // titleLines·elements의 keyframes가 undefined거나 배열 아닌 경우 빈 배열로 정규화.
+  // sampleKeyframes는 undefined도 처리하지만, 다른 소비자(server render·인덱스 접근)가 배열 가정할 수 있음.
+  const titleLines = Array.isArray(state.titleLines)
+    ? state.titleLines.map((l) => ({ ...l, keyframes: Array.isArray(l.keyframes) ? l.keyframes : [] }))
+    : [];
+  const elements = Array.isArray(state.elements)
+    ? state.elements.map((e) => ({ ...e, keyframes: Array.isArray(e.keyframes) ? e.keyframes : [] }))
+    : [];
+
+  // 새 필드 fallback — 옛 클립엔 없을 수 있음. 여기 나열된 것 외에 새 필드가 추가되면 여기에도 추가.
+  return {
+    ...state,
+    tracks,
+    titleLines,
+    elements,
+    // 자막 관련 (2026-07-22 확장: 10 스타일)
+    captionStyle: state.captionStyle ?? "korean_pop",
+    captionsOn: typeof state.captionsOn === "boolean" ? state.captionsOn : true,
+    highlightColor: state.highlightColor ?? "#FFD400",
+    keywordColor: state.keywordColor ?? state.highlightColor ?? "#FFD400",
+    // 종횡비·배경·강조색
+    aspect: state.aspect ?? "9:16",
+    bg: state.bg ?? "#0E0E12",
+    accent: state.accent ?? "#FFD400",
+    templateId: state.templateId ?? "stacked_channel",
+    // 제목 배치
+    titleAlign: state.titleAlign ?? "center",
+    titleX: typeof state.titleX === "number" ? state.titleX : 50,
+    titleY: typeof state.titleY === "number" ? state.titleY : 8,
+    // 채널
+    showChannel: typeof state.showChannel === "boolean" ? state.showChannel : true,
+    channelName: state.channelName ?? "",
+    channelY: typeof state.channelY === "number" ? state.channelY : 82,
+    // 세이프에어리어·필터
+    showSafeArea: typeof state.showSafeArea === "boolean" ? state.showSafeArea : false,
+    // 속도·훅
+    speed: typeof state.speed === "number" && state.speed > 0 ? state.speed : 1,
+    hookOn: typeof state.hookOn === "boolean" ? state.hookOn : false,
+    silenceCut: typeof state.silenceCut === "boolean" ? state.silenceCut : false,
+    offsetMs: typeof state.offsetMs === "number" ? state.offsetMs : 0,
+    // 트림 (안전 범위 클램프)
+    trimIn: typeof state.trimIn === "number" && Number.isFinite(state.trimIn) ? Math.max(0, state.trimIn) : 0,
+    trimOut:
+      typeof state.trimOut === "number" && Number.isFinite(state.trimOut) && state.trimOut > (state.trimIn ?? 0)
+        ? Math.min(dur, state.trimOut)
+        : dur,
+  };
 }
 
 export function applyTemplate(state: EditorState, id: TemplateId): EditorState {

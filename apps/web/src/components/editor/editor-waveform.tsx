@@ -2,13 +2,19 @@
 
 import { useEffect, useRef, useState } from "react";
 
+/** 크기 상한 — 이보다 큰 미디어는 파형 스킵. 60분 마스터(GB급) 부주의 접근 시 탭 OOM 방지.
+ *  50MB는 짧은 클립(3~5분 30fps mp4)의 상단쯤 — 우리 채택된 short 클립은 여기 안쪽. */
+const MAX_AUDIO_BYTES = 50 * 1024 * 1024;
+
 /**
  * Decode a media URL's audio to downsampled peaks (client-side Web Audio) so the
  * operator can see speech boundaries while retrimming (opencut-integration-plan
  * Phase 1). Returns null while loading, on decode error, or when there is no audio.
  *
- * Note: fetches the whole file to decode, so this targets short adopted clips — not
- * full episode masters. A server-side peaks endpoint is the scale path (plan §7.4).
+ * Safety (2026-07-22 HIGH-4-1 fix): HEAD로 Content-Length를 미리 확인해 상한 초과 시
+ * 파형을 즉시 포기(스킵)한다. 초과 파일을 그대로 arrayBuffer로 받으면 큰 회차 마스터
+ * 선택 시 브라우저 탭이 잠기거나 OOM으로 죽는다. shell이 previewingMaster에서 undefined를
+ * 넘겨 이 훅을 스킵시키지만, 이중 안전장치로 여기에도 상한을 둔다.
  */
 export function useAudioPeaks(url: string | undefined, buckets = 900): Float32Array | null {
   const [peaks, setPeaks] = useState<Float32Array | null>(null);
@@ -24,8 +30,34 @@ export function useAudioPeaks(url: string | undefined, buckets = 900): Float32Ar
     (async () => {
       let ctx: AudioContext | undefined;
       try {
+        // 1) HEAD로 크기 미리 확인 — 상한 초과면 즉시 스킵(다운로드 시작 안 함)
+        let size = -1;
+        try {
+          const head = await fetch(url, { method: "HEAD", signal: ctrl.signal });
+          const len = head.headers.get("Content-Length");
+          if (len) size = Number.parseInt(len, 10);
+        } catch {
+          // HEAD 실패해도 GET은 시도 (Range 요청·CORS 등의 이유일 수 있음)
+        }
+        if (size > MAX_AUDIO_BYTES) {
+          // 크기 초과 — 파형 스킵. shell의 previewingMaster 가드와 함께 이중 방어.
+          if (!cancelled) setPeaks(null);
+          return;
+        }
+
+        // 2) 상한 이내 → 정상 다운로드·디코드
         const res = await fetch(url, { signal: ctrl.signal });
+        // HEAD 없이 왔을 때 대비 — 응답 헤더에서도 재확인
+        const respLen = res.headers.get("Content-Length");
+        if (respLen && Number.parseInt(respLen, 10) > MAX_AUDIO_BYTES) {
+          if (!cancelled) setPeaks(null);
+          return;
+        }
         const raw = await res.arrayBuffer();
+        if (raw.byteLength > MAX_AUDIO_BYTES) {
+          if (!cancelled) setPeaks(null);
+          return;
+        }
         const AC: typeof AudioContext | undefined =
           window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
         if (!AC) return;
