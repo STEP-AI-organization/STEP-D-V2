@@ -5,7 +5,7 @@ import Link from "next/link";
 import { ArrowLeft, Save, Send, Info, Check, Sparkles, Film, Plus } from "lucide-react";
 import { useAppData } from "@/lib/data/store";
 import { useToast } from "@/components/ui/toast";
-import { getStreamUrl, getMediaAnalysis, type AnalysisTranscriptSegment } from "@/lib/data/api";
+import { getStreamUrl, getMediaAnalysis, type AnalysisTranscriptSegment, type AnalysisScene } from "@/lib/data/api";
 import {
   applyTemplate,
   ensureTracks,
@@ -56,13 +56,26 @@ export function EditorShell({ clipId }: { clipId: string }) {
   // Real STT transcript for the master (spoken-subtitle preview). Only when previewing the
   // master — a confirmed clip already has captions burned in, so we don't overlay them.
   const [transcript, setTranscript] = useState<AnalysisTranscriptSegment[] | undefined>();
+  // Real analysis scenes for the AI panel "분석" tab — always fetched when we have a
+  // transcript media id (independent of previewingMaster; scenes are metadata, not overlay).
+  const [scenes, setScenes] = useState<AnalysisScene[] | undefined>();
   useEffect(() => {
     let alive = true;
-    if (previewingMaster && transcriptMediaId) {
+    if (transcriptMediaId) {
       getMediaAnalysis(transcriptMediaId)
-        .then((a) => alive && setTranscript(Array.isArray(a.data?.transcript) ? a.data!.transcript : undefined))
-        .catch(() => alive && setTranscript(undefined));
+        .then((a) => {
+          if (!alive) return;
+          setScenes(Array.isArray(a.data?.scenes) ? a.data!.scenes : undefined);
+          // 마스터 미리보기일 때만 자막 오버레이 (확정 클립은 이미 번인)
+          setTranscript(previewingMaster && Array.isArray(a.data?.transcript) ? a.data!.transcript : undefined);
+        })
+        .catch(() => {
+          if (!alive) return;
+          setScenes(undefined);
+          setTranscript(undefined);
+        });
     } else {
+      setScenes(undefined);
       setTranscript(undefined);
     }
     return () => {
@@ -486,7 +499,7 @@ export function EditorShell({ clipId }: { clipId: string }) {
           preview never gets crushed (AI panel below lg, properties below md). */}
       <div className="flex min-h-0 flex-1">
         <aside className="hidden w-52 shrink-0 border-r border-zinc-800 lg:block xl:w-60">
-          <EditorAiPanel recs={recs} onApply={applyRec} />
+          <EditorAiPanel recs={recs} scenes={scenes} onApply={applyRec} />
         </aside>
 
         <div className="flex min-w-0 flex-1 items-center justify-center overflow-auto bg-zinc-900 p-4 sm:p-6">
