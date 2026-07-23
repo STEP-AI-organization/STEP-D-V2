@@ -29,6 +29,7 @@ import os
 import shutil
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor, Future
 from pathlib import Path
 
 for _s in (sys.stdout, sys.stderr):
@@ -40,10 +41,10 @@ for _s in (sys.stdout, sys.stderr):
 from .asr import transcribe, get_segments
 from .refine import refine_segments
 from .scenes import scenes_from_transcript, scenes_from_duration_chunks
-from .recommend import recommend
+from .recommend import recommend, recommend_narrative_first
 from .narrative import build_narrative
 
-CHECKPOINTS = ("stt.json", "refined.json", "faces.json", "scenes.json", "cast.json", "timeline.json", "narrative.json", "shorts.json", "analysis.json")
+CHECKPOINTS = ("stt.json", "refined.json", "faces.json", "ppl.json", "scenes.json", "cast.json", "timeline.json", "narrative.json", "shorts.json", "analysis.json")
 
 
 # ── checkpoint plumbing ─────────────────────────────────────────────────────────
@@ -98,12 +99,20 @@ def _prepare_checkpoints(
     video_name = Path(video_path).name
     # Per-stage param fingerprints. STT는 영상만 의존, scenes(5분 청크)도 refined 의존.
     # refine·recommend는 cast_registry를 프롬프트에 넣으므로 cast 바뀌면 재실행.
+    # RECOMMEND_VER: recommend 프롬프트/로직이 바뀌면 이 문자열을 올려 기존 shorts.json 캐시를
+    # 무효화. 2026-07-23g: narrative-first 트리 구조 (시나리오×변형×best) + 길이 제한 완화
+    # (60→120초 · 완결성 우선 · 하드실링 180초).
+    RECOMMEND_VER = "2026-07-23t"
+    REFINE_VER = "2026-07-23a"  # refine 프롬프트 변경 시 올려 refined.json 캐시 무효화
+    FACES_VER = "2026-07-23a"   # faces 스테이지 로직 (full_frames 저장·vision auto-map) 변경 태그
+    RECOMMEND_MODE = os.environ.get("RECOMMEND_MODE") or "narrative_first"
     params = {
-        "refined.json": _fingerprint(cast_registry),
-        "cast.json": _fingerprint(cast_registry),
-        "narrative.json": _fingerprint(cast_registry),
-        "shorts.json": _fingerprint(genre, shorts_n, profile, channels, cast_registry),
-        "analysis.json": _fingerprint(genre, shorts_n, profile, channels, cast_registry),
+        "refined.json": _fingerprint(cast_registry, REFINE_VER),
+        "faces.json": _fingerprint(cast_registry, FACES_VER),
+        "cast.json": _fingerprint(cast_registry, REFINE_VER),
+        "narrative.json": _fingerprint(cast_registry, REFINE_VER),
+        "shorts.json": _fingerprint(genre, shorts_n, profile, channels, cast_registry, RECOMMEND_VER, RECOMMEND_MODE, REFINE_VER, FACES_VER),
+        "analysis.json": _fingerprint(genre, shorts_n, profile, channels, cast_registry, RECOMMEND_VER, RECOMMEND_MODE, REFINE_VER, FACES_VER),
     }
     manifest = {"video_name": video_name, "video_size": video_size, "params": params}
 
@@ -175,6 +184,35 @@ def analyze(
         genre=genre, shorts_n=shorts_n, profile=profile,
         channels=channels, cast_registry=cast_registry,
     )
+
+    # ── PPL 병렬 시작 (2026-07-23 A1 최적화) ────────────────────────────────
+    # PPL은 video만 참조하고 refined는 안 씀. 순차로 STT→refine→faces 뒤에 돌리는 대신 STT와
+    # 동시에 백그라운드 스레드로 시작해 wall clock을 압축한다. 원래 PPL 자리에서 join.
+    # duration은 cv2로 직접 산정 (refined 대기 불필요). 캐시 있으면 스킵.
+    ppl_future: Future | None = None
+    ppl_executor: ThreadPoolExecutor | None = None
+    _ppl_cached = _load_json(out_dir / "ppl.json")
+    if not (isinstance(_ppl_cached, dict) and _ppl_cached.get("detections") is not None) and not fast:
+        try:
+            from .ppl import build_ppl_index
+            import cv2
+            cap = cv2.VideoCapture(str(video_path))
+            fps = cap.get(cv2.CAP_PROP_FPS) or 30
+            fn = cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0
+            _dur_est = fn / fps if fps > 0 else 0
+            cap.release()
+            if _dur_est > 0:
+                ppl_executor = ThreadPoolExecutor(max_workers=1)
+                # progress는 원래 스테이지(ppl 53-60%) 자리에서 fire하도록 join 시점에서 재계산
+                # (병렬 실행 중에는 UI에 이중 갱신 방지 위해 조용히 진행)
+                # on_progress 안 넘김 (STT 진행률과 UI 충돌 방지 · join 시점에서 완료 로그)
+                ppl_future = ppl_executor.submit(
+                    build_ppl_index, video_path, _dur_est, out_dir,
+                )
+                step(f"[병렬] PPL 백그라운드 시작 (duration={int(_dur_est)}s)")
+        except Exception as e:
+            step(f"  (PPL 병렬 시작 실패, 순차 폴백: {str(e)[:70]})")
+            ppl_future = None
 
     # 1) STT ------------------------------------------------------------------
     _progress("stt", 3, "음성 인식 준비")
@@ -269,8 +307,60 @@ def analyze(
             import traceback
             traceback.print_exc()
             faces = None
+
+    # 2.6) Vision auto-map (2026-07-23): 얼굴 클러스터 대표 프레임 → Gemini Vision → 이름 매칭.
+    # cast_registry(사전등록) 있으면 그 안에서 매칭 우선. 없으면 화면 자막 캡션 감지, celebrity는
+    # hallucination 위험이라 cast 없이는 스킵. 매칭 결과는 faces.json.mapping에 병합해 refined에 확산.
+    if isinstance(faces, dict) and faces.get("clusters"):
+        try:
+            from .faces import vision_auto_map_clusters, apply_mapping
+            step("Vision auto-map (얼굴 → 이름)…")
+            _progress("faces", 55, "Vision 자동 매핑 중")
+            existing_mapping = faces.get("mapping") or {}
+            vision_map = vision_auto_map_clusters(faces, out_dir, cast_registry=cast_registry)
+            if vision_map:
+                # 사용자가 이미 수동 매핑한 클러스터는 존중, 그 외에 Vision 결과 병합
+                merged = dict(existing_mapping)
+                for k, v in vision_map.items():
+                    if not existing_mapping.get(k):
+                        merged[k] = v
+                faces["mapping"] = merged
+                _save_json(out_dir / "faces.json", faces)
+                refined = apply_mapping(refined, merged)
+                _save_json(out_dir / "refined.json", refined)
+                step(f"  Vision auto-map {len(vision_map)}건 병합 (총 mapping {len(merged)}) · refined 실명 확산")
+            else:
+                step("  Vision auto-map 결과 없음 (cast_registry 없거나 매칭 불가)")
+        except Exception as e:
+            step(f"  (Vision auto-map 스킵: {str(e)[:120]})")
+
     timed("faces", ts)
-    _progress("faces", 52, "얼굴 클러스터링 완료")
+    _progress("faces", 60, "얼굴 처리 완료")
+
+    # 2.7) PPL·브랜드 검출 (2026-07-22 신규 · 2026-07-23 A1: STT부터 병렬 백그라운드).
+    # 위에서 백그라운드로 시작한 ppl_future가 있으면 여기서 join. 없으면 캐시/폴백/스킵.
+    ts = time.time()
+    if ppl_future is not None:
+        _progress("ppl", 53, "PPL 병렬 결과 대기 중")
+        step("PPL·브랜드 검출 (병렬 join)…")
+        try:
+            ppl = ppl_future.result()
+            _save_json(out_dir / "ppl.json", ppl)
+            step(f"  검출 구간 {len(ppl.get('detections', []))}개 · 브랜드 {len(ppl.get('brand_summary', {}))}종")
+        except Exception as e:
+            step(f"  (PPL 검출 스킵: {str(e)[:120]})")
+            import traceback
+            traceback.print_exc()
+            ppl = None
+        finally:
+            if ppl_executor is not None:
+                ppl_executor.shutdown(wait=False)
+    else:
+        ppl = _load_json(out_dir / "ppl.json")
+        if ppl and isinstance(ppl, dict) and ppl.get("detections") is not None:
+            step(f"PPL 검출 — 체크포인트 재사용 ({len(ppl['detections'])} 구간 · {len(ppl.get('brand_summary', {}))} 브랜드)")
+    timed("ppl", ts)
+    _progress("ppl", 60, "PPL 검출 완료")
 
     # 3) 5분 청크 분할 — 옛 AI-driven 씬 분할 + frames 스테이지 삭제 (2026-07-22).
     # 청크는 (a) 다음 단계들의 병렬 유닛(예정), (b) 요약·상세 단위. 쇼츠 recommend는 청크 경계
@@ -386,11 +476,27 @@ def analyze(
     if not (isinstance(rec, dict) and isinstance(rec.get("shorts"), list) and rec.get("shorts")):
         step("쇼츠 추천…")
         _progress("recommend", 85, "쇼츠 추천 중")
-        rec = recommend(
-            scenes, n=shorts_n, genre=genre, profile=profile, channels=channels,
-            transcript=refined, cast_registry=cast_registry,
-            on_progress=lambda done, total: _progress("recommend", 85 + 10 * done / max(1, total), f"후보 추출 {done}/{total} 구간"),
-        )
+        # 2026-07-23: RECOMMEND_MODE로 두 파이프라인 스위칭. 기본 narrative_first (신규 · top-down).
+        # chunk_scan은 폴백/호환 유지. cast_people은 항상 빈 배열이라 어느 쪽에도 안 넘김.
+        mode = os.environ.get("RECOMMEND_MODE") or "narrative_first"
+        if mode == "narrative_first":
+            rec = recommend_narrative_first(
+                scenes, n=shorts_n, genre=genre, profile=profile, channels=channels,
+                transcript=refined, cast_registry=cast_registry,
+                narrative=narrative if isinstance(narrative, dict) else None,
+                faces=faces if isinstance(faces, dict) else None,
+                ppl_detections=(ppl or {}).get("detections") if isinstance(ppl, dict) else None,
+                on_progress=lambda done, total: _progress("recommend", 85 + 10 * done / max(1, total), f"쇼츠 pool·선정 {done}/{total}"),
+            )
+        else:
+            rec = recommend(
+                scenes, n=shorts_n, genre=genre, profile=profile, channels=channels,
+                transcript=refined, cast_registry=cast_registry,
+                narrative_segments=(narrative or {}).get("segments") if isinstance(narrative, dict) else None,
+                key_conflicts=(narrative or {}).get("key_conflicts") if isinstance(narrative, dict) else None,
+                ppl_detections=(ppl or {}).get("detections") if isinstance(ppl, dict) else None,
+                on_progress=lambda done, total: _progress("recommend", 85 + 10 * done / max(1, total), f"후보 추출 {done}/{total} 구간"),
+            )
         _save_json(out_dir / "shorts.json", rec)
     else:
         step(f"쇼츠 추천 — 체크포인트 재사용 ({len(rec['shorts'])}개)")
@@ -411,12 +517,18 @@ def analyze(
         "timeline": timeline,
         "narrative": narrative,
         "shorts": shorts,
+        "ppl": ppl or {},
         "took_sec": round(time.time() - t0, 1),
         "stage_sec": stage_took,
     }
     _save_json(out_dir / "analysis.json", result)
     step(f"완료 → {out_dir / 'analysis.json'}")
     _progress("done", 100, "분석 완료")
+    # 완료 마커 — 워커가 이걸 감지 즉시 DB write 시작. python close 이벤트 대기 안 함
+    # (Windows에서 native library cleanup crash로 subprocess exit code non-zero 되어
+    # 워커가 결과 무시하는 문제 우회). 2026-07-23.
+    sys.stdout.write(f"@@COMPLETE {out_dir / 'analysis.json'}\n")
+    sys.stdout.flush()
     return result
 
 
@@ -464,4 +576,17 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    # Native library (InsightFace ONNX/DirectML) teardown 에서 Windows access violation
+    # (0xC0000005 = -1073741819) 이 관찰됨 — 정상 완료 후에도 exit code non-zero가 되어
+    # 워커가 결과를 무시하고 DB write 스킵. main() 정상 반환 즉시 os._exit(0)로 native
+    # cleanup 건너뛰고 성공 exit code 보장. flush는 os._exit 전에 위험(flush 자체가 native
+    # 콜 트리거)해 skip — 파이프라인 로그는 print()가 즉시 write 하므로 손실 없음.
+    try:
+        main()
+        os._exit(0)
+    except SystemExit as se:
+        os._exit(int(se.code) if isinstance(se.code, int) else 0)
+    except BaseException:
+        import traceback
+        traceback.print_exc()
+        os._exit(1)

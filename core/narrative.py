@@ -20,6 +20,7 @@ import json
 import math
 import os
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -40,8 +41,10 @@ MODEL = os.environ.get("GEMINI_MODEL") or "gemini-2.5-flash"
 
 BLOCKS_PER_CALL = 5        # 구간별 분석: 블록 5개씩 배칭
 FALLBACK_BLOCK_MIN = 5     # timeline 없을 때 refined로 합성하는 블록 크기(분)
-FULL_MAX_LINES = 1500      # 전체 요약에 보내는 자막 라인 상한 (초과 시 균등 샘플링)
-BLOCK_MAX_LINES = 80       # 블록당 자막 라인 상한
+# 90분+ 방송(3000+ 세그)에서 상한 1500은 절반 이상 균등 샘플링돼 서사 결이 얇아짐.
+# max_output_tokens 8192 확보돼 있어 입력 상한 상향해도 잘림 위험 낮음.
+FULL_MAX_LINES = 3000      # 전체 요약에 보내는 자막 라인 상한
+BLOCK_MAX_LINES = 160      # 블록당 자막 라인 상한 (5분 블록 대사 밀도 대응)
 LINE_CHARS = 120           # 라인당 대사 발췌 길이
 MAX_PEOPLE = 15            # 인물 분석 대상 상한 (totalSec 상위)
 
@@ -59,15 +62,21 @@ def _sample(items: list, limit: int) -> list:
 
 def _transcript_lines(refined: list[dict], start: float | None = None, end: float | None = None,
                       max_lines: int = FULL_MAX_LINES) -> list[str]:
-    """타임스탬프 붙은 자막 라인. start/end로 구간 필터, 초과 시 균등 샘플링."""
+    """타임스탬프+화자 붙은 자막 라인. start/end로 구간 필터, 초과 시 균등 샘플링.
+    refine이 붙인 speaker(실명 또는 M1/F1 폴백)를 포함해야 서사·인물·갈등 분석이 '누가
+    누구한테 뭘 말했는지'를 볼 수 있다 — speaker 없으면 대명사·호칭에서만 추론해 결이 얇아짐."""
     segs = [
         s for s in refined
         if (s.get("text") or "").strip()
         and (start is None or float(s.get("end", 0)) > start)
         and (end is None or float(s.get("start", 0)) < end)
     ]
-    return [f"[{_fmt(float(s.get('start', 0)))}] {str(s['text']).strip()[:LINE_CHARS]}"
-            for s in _sample(segs, max_lines)]
+    out = []
+    for s in _sample(segs, max_lines):
+        sp = (s.get("speaker") or "").strip()
+        prefix = f"[{_fmt(float(s.get('start', 0)))}]" + (f" [{sp}]" if sp else "")
+        out.append(f"{prefix} {str(s['text']).strip()[:LINE_CHARS]}")
+    return out
 
 
 def _cast_people(cast: dict | None) -> list[dict]:
@@ -426,44 +435,82 @@ def build_narrative(
     cast_registry: list[dict] | None = None,
 ) -> dict:
     """전체 서사 요약 + 구간별/인물/갈등 분석. timeline이 없으면 refined로 블록을 합성한다.
-    개별 파트 실패는 그 파트만 비우고 계속한다 (파이프라인 무중단)."""
+    개별 파트 실패는 그 파트만 비우고 계속한다 (파이프라인 무중단).
+
+    2026-07-23 병렬화: 4개 하위 콜(full_summary·segments·characters·key_conflicts)은 서로 독립
+    (다 refined/cast/timeline만 필요)이라 ThreadPoolExecutor로 병렬 실행. 순차 대비 -140s 예상.
+    각 콜의 지수 백오프 재시도는 원자적 유지."""
     if not refined:
         raise ValueError("refined 자막이 비어 있어 서사 요약 불가")
     client = genai.Client(vertexai=True, project=PROJECT, location=LOCATION)
     blocks = _blocks(timeline, refined, scenes)
     n_batches = max(1, math.ceil(len(blocks) / BLOCKS_PER_CALL)) if blocks else 0
     total = 1 + n_batches + 2  # full + segment batches + characters + conflicts
+    done = {"n": 0}
+    from threading import Lock
+    tick_lock = Lock()
 
-    def tick(done: int) -> None:
-        if on_progress:
-            on_progress(done, total)
+    def tick(count: int = 1) -> None:
+        with tick_lock:
+            done["n"] += count
+            if on_progress:
+                on_progress(done["n"], total)
 
-    try:
-        full_summary = build_full_summary(client, refined, cast, timeline)
-    except Exception as e:
-        print(f"   (전체 요약 실패: {str(e)[:80]})")
-        full_summary = ""
-    tick(1)
+    def _do_full():
+        try:
+            r = build_full_summary(client, refined, cast, timeline)
+        except Exception as e:
+            print(f"   (전체 요약 실패: {str(e)[:80]})", flush=True)
+            r = ""
+        tick(1)
+        return r
 
-    segments = build_segment_analysis(
-        client, refined, blocks,
-        on_progress=on_progress, progress_offset=1, progress_total=total,
-        cast_registry=cast_registry,
-    ) if blocks else []
+    def _do_segments():
+        if not blocks:
+            return []
+        # segments 내부는 배치별 tick. build_segment_analysis의 on_progress는 (done_i, total_i).
+        # 우리는 매 배치 완료마다 외부 tick(1). last_seen로 delta만 반영해 double-count 방지.
+        seg_state = {"last": 0}
+        def _seg_tick(d: int, _t: int) -> None:
+            delta = d - seg_state["last"]
+            seg_state["last"] = d
+            if delta > 0:
+                tick(delta)
+        return build_segment_analysis(
+            client, refined, blocks,
+            on_progress=_seg_tick,
+            progress_offset=0, progress_total=total,
+            cast_registry=cast_registry,
+        )
 
-    try:
-        characters = build_character_analysis(client, refined, cast)
-    except Exception as e:
-        print(f"   (인물 분석 실패: {str(e)[:80]})")
-        characters = []
-    tick(1 + n_batches + 1)
+    def _do_characters():
+        try:
+            r = build_character_analysis(client, refined, cast)
+        except Exception as e:
+            print(f"   (인물 분석 실패: {str(e)[:80]})", flush=True)
+            r = []
+        tick(1)
+        return r
 
-    try:
-        key_conflicts = build_conflict_analysis(client, refined, cast)
-    except Exception as e:
-        print(f"   (갈등 분석 실패: {str(e)[:80]})")
-        key_conflicts = []
-    tick(total)
+    def _do_conflicts():
+        try:
+            r = build_conflict_analysis(client, refined, cast)
+        except Exception as e:
+            print(f"   (갈등 분석 실패: {str(e)[:80]})", flush=True)
+            r = []
+        tick(1)
+        return r
+
+    # 4개 하위 콜 병렬 실행. 429 throttle은 각 콜의 call_with_retry가 지수 백오프로 처리.
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        f_full = ex.submit(_do_full)
+        f_segs = ex.submit(_do_segments)
+        f_chars = ex.submit(_do_characters)
+        f_confs = ex.submit(_do_conflicts)
+        full_summary = f_full.result()
+        segments = f_segs.result()
+        characters = f_chars.result()
+        key_conflicts = f_confs.result()
 
     return {
         "full_summary": full_summary,

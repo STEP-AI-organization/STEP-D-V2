@@ -50,10 +50,13 @@ def _call_with_timeout(fn, timeout: float):
     return box.get("v")
 
 
-def call_with_retry(fn, *, attempts: int = 4, base_delay: float = 2.0, timeout: float = 120.0):
+def call_with_retry(fn, *, attempts: int = 4, base_delay: float = 2.0, timeout: float = 600.0):
     """fn()을 호출하되 일시 오류면 지수 백오프+지터로 재시도. 비일시 오류는 즉시 재던짐.
     각 호출은 timeout초로 제한(행 방지) — 초과하면 일시 오류로 보고 재시도한다.
-    워커 스레드에서도 쓰이므로 로그는 한 번의 write로 원자적으로 낸다."""
+    워커 스레드에서도 쓰이므로 로그는 한 번의 write로 원자적으로 낸다.
+
+    2026-07-23: 긴 영상(90분+) 정밀 분석에서 Vision·narrative 콜이 120s를 초과하는 경우가
+    관찰됨(대용량 프레임·긴 prompt) → 600s(10분)로 상향. 여전히 hang은 잘라내되 정상 처리는 살림."""
     for i in range(attempts):
         try:
             return _call_with_timeout(fn, timeout)

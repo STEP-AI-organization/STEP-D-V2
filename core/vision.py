@@ -99,7 +99,7 @@ def analyze_frame(client, frame_path: Path, dialogue: str) -> dict:
             temperature=0,  # deterministic: a re-run scores the same frame the same way
             response_mime_type="application/json",
             response_schema=SCHEMA,
-            max_output_tokens=2048,
+            max_output_tokens=8192,
             # No reasoning needed for a single-frame score + OCR — free the whole output
             # budget for JSON. Default dynamic thinking tokens were eating into it and
             # truncating text-heavy frames' on_screen_text arrays (→ json.loads crash).
