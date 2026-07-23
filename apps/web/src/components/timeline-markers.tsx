@@ -7,14 +7,24 @@ export interface TimelineMarker {
   start: number;
   /** seconds from video end */
   end: number;
-  /** 1–5 appeal score (core/recommend.py 절대평가 — 5=확실히 터진다, 1=비추천) */
+  /** 1–5 legacy compressed appeal (호환용). 색·크기 결정에는 score100 우선. */
   appeal: number;
+  /** 3축 가중합 0-100 (2026-07-23~). 있으면 이걸 우선 사용. */
+  score100?: number;
   /** Short label */
   label?: string;
 }
 
-/** Neutral appeal ("쓸만함") for segments that carry no score of their own. */
+/** Neutral score (0-100) — 스코어 없는 세그먼트용 중립값. legacy appeal 3에 해당. */
+const NEUTRAL_SCORE = 50;
 const NEUTRAL_APPEAL = 3;
+
+/** 마커 색·크기·툴팁의 단일 진실 소스. score100(0-100) 우선, 없으면 legacy appeal에서 근사. */
+function markerScore(m: TimelineMarker): number {
+  if (typeof m.score100 === "number") return Math.round(m.score100);
+  if (typeof m.appeal === "number") return Math.round((m.appeal - 1) * 25);
+  return NEUTRAL_SCORE;
+}
 
 /**
  * Opus Clip-style timeline markers — AI-recommended highlight segments
@@ -47,16 +57,18 @@ export function TimelineMarkers({
           100 - leftPct,
         );
 
+        const sc = markerScore(m);
         return (
           <button
             key={i}
-            title={`${m.label ?? ""} (${m.appeal}점)`}
+            title={`${m.label ?? ""} (${sc}점)`}
             onClick={() => onSeek?.(m.start)}
             className={cn(
               "absolute top-1/2 -translate-y-1/2 rounded-full transition-all hover:opacity-90",
-              m.appeal >= 4
+              // 0-100 스케일 임계: 75+=인기, 50+=후보, 그 이하 옅게. (legacy 5·4·3에 대응)
+              sc >= 75
                 ? "h-2 bg-status-done shadow-[0_0_6px_var(--color-status-done)]"
-                : m.appeal >= 3
+                : sc >= 50
                   ? "h-1.5 bg-status-warn"
                   : "h-1 bg-muted-foreground/40"
             )}
@@ -91,7 +103,7 @@ export function TimelineMarkers({
 
 /** Build TimelineMarker[] from AI analysis shorts or recommendations. */
 export function markersFromAnalysis(
-  shorts: { start: number; end: number; appeal?: number; title?: string }[],
+  shorts: { start: number; end: number; appeal?: number; score100?: number; title?: string }[],
 ): TimelineMarker[] {
   return shorts
     .filter((s) => s.start != null && s.end != null)
@@ -99,6 +111,7 @@ export function markersFromAnalysis(
       start: s.start,
       end: s.end,
       appeal: s.appeal ?? NEUTRAL_APPEAL,
+      score100: s.score100,
       label: s.title,
     }))
     .sort((a, b) => a.start - b.start);

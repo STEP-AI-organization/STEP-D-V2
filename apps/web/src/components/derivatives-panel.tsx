@@ -9,27 +9,34 @@ import {
   Send,
   Layers,
   FileText,
-  Flame,
   Loader2,
   BookOpen,
   Users,
+  ShoppingBag,
 } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { EmptyState } from "@/components/ui/empty-state";
-import { RecommendationCard } from "@/components/recommendation-card";
 import { NarrativeView } from "./narrative-view";
 import { CastView } from "./cast-view";
 import { PublishDialog } from "@/components/publish-dialog";
+import { ShortsCard } from "./shorts-card";
+import { PplView } from "./ppl-view";
+import { useVideoSeek } from "./episode/seek-context";
+import type { MediaAsset } from "@/lib/types";
 import { useAppData } from "@/lib/data/store";
 import {
   type AnalysisScene,
+  type AnalysisShort,
+  type AnalysisTranscriptSegment,
   type EpisodeCastResponse,
   type MediaFaces,
+  type PplData,
   fetchEpisodeCast,
   getMediaFaces,
+  getMediaPpl,
   patchMediaFacesMapping,
   reanalyzeMedia,
 } from "@/lib/data/api";
@@ -66,7 +73,8 @@ export function DerivativesPanel({
   episodeId: string;
   initialTab?: string;
 }) {
-  const { recsForEpisode, clipsForEpisode } = useAppData();
+  const app = useAppData();
+  const { clipsForEpisode, mediaForEpisode } = app;
   const [tab, setTabState] = useState<PanelTab>(isPanelTab(initialTab) ? initialTab : "recommend");
   const [publishClipId, setPublishClipId] = useState<string | null>(null);
 
@@ -77,8 +85,11 @@ export function DerivativesPanel({
     window.history.replaceState(null, "", url.toString());
   }
 
-  const recs = recsForEpisode(episodeId);
-  const pendingRecs = recs.filter((r) => r.status === "pending").sort((a, b) => b.appeal - a.appeal);
+  // 추천 탭 = 분석 파이프라인이 뽑은 shorts 목록. 서버가 recFromShort로 1:1 rec을 만들어 두므로
+  // ShortsCard가 recsForEpisode에서 매칭해 채택 버튼을 붙임.
+  const master = mediaForEpisode(episodeId, "master");
+  const { analysis, loading } = useMediaAnalysisPoll(master?.id);
+  const shorts = [...(analysis?.data?.shorts ?? [])].sort((a, b) => (a.rank ?? 99) - (b.rank ?? 99));
   const clips = clipsForEpisode(episodeId);
 
   return (
@@ -90,7 +101,7 @@ export function DerivativesPanel({
           const active = tab === t.key;
           const count =
             t.key === "recommend"
-              ? pendingRecs.length
+              ? shorts.length
               : t.key === "clips"
                 ? clips.length
                 : undefined;
@@ -120,7 +131,15 @@ export function DerivativesPanel({
 
       {/* Panel content */}
       <div className="flex-1 overflow-y-auto pr-1">
-        {tab === "recommend" && <RecommendTab recs={recs} pendingRecs={pendingRecs} />}
+        {tab === "recommend" && (
+          <RecommendTab
+            shorts={shorts}
+            master={master}
+            episodeId={episodeId}
+            apiBase={app.apiBase}
+            loading={loading && !analysis}
+          />
+        )}
         {tab === "clips" && <ClipsTab clips={clips} />}
         {tab === "analyze" && <AnalyzeTab episodeId={episodeId} />}
         {tab === "distribute" && (
@@ -137,14 +156,30 @@ export function DerivativesPanel({
 
 /* ── Sub-tabs ── */
 
+/**
+ * 추천 탭 — 분석 산출 shorts를 ShortsCard 그리드로 렌더.
+ * 이전에는 분석 서브탭에도 동일한 카드가 있어 두 번 나타났음. 이제 여기만.
+ */
 function RecommendTab({
-  recs,
-  pendingRecs,
+  shorts,
+  master,
+  episodeId,
+  apiBase,
+  loading,
 }: {
-  recs: ReturnType<typeof useAppData>["recsForEpisode"] extends (...a: any[]) => infer R ? R : never;
-  pendingRecs: ReturnType<typeof useAppData>["recsForEpisode"] extends (...a: any[]) => infer R ? R : never;
+  shorts: AnalysisShort[];
+  master: MediaAsset | undefined;
+  episodeId: string;
+  apiBase: string;
+  loading: boolean;
 }) {
-  if (pendingRecs.length === 0 && recs.length === 0) {
+  if (!master) {
+    return <EmptyState icon={Sparkles} compact title="분석할 영상이 없어요" />;
+  }
+  if (loading) {
+    return <Card className="p-6 text-center text-sm text-muted-foreground">추천 정보를 불러오는 중…</Card>;
+  }
+  if (shorts.length === 0) {
     return (
       <EmptyState
         icon={Sparkles}
@@ -154,35 +189,40 @@ function RecommendTab({
       />
     );
   }
-
+  // 2026-07-23: 3-type (숏폼/클립/하이라이트) 그룹핑 표시. type 필드 없으면 legacy shortform.
+  const groups: { key: string; label: string; badge: string; items: AnalysisShort[] }[] = [
+    { key: "shortform", label: "숏폼", badge: "40~60초 · SNS 배포", items: [] },
+    { key: "clip", label: "클립", badge: "1~10분 · SMR·재편집·코너/세션", items: [] },
+    { key: "highlight", label: "하이라이트", badge: "여러 영상 종합 (준비 중)", items: [] },
+  ];
+  for (const s of shorts) {
+    const t = (s as any).type || "shortform";
+    const g = groups.find((x) => x.key === t) ?? groups[0];
+    g.items.push(s);
+  }
   return (
-    <div className="space-y-4">
-      {pendingRecs.length > 0 && (
-        <div>
-          <div className="mb-2 text-[11px] font-semibold text-muted-foreground">
-            🔥 신규 추천 ({pendingRecs.length})
+    <div className="space-y-6">
+      {groups.filter((g) => g.items.length > 0).map((g) => (
+        <div key={g.key} className="space-y-2">
+          <div className="flex items-baseline gap-2 border-b border-border/60 pb-1">
+            <h3 className="text-base font-semibold">{g.label}</h3>
+            <span className="text-xs text-muted-foreground">{g.badge}</span>
+            <span className="ml-auto text-xs text-muted-foreground">{g.items.length}건</span>
           </div>
-          <div className="grid gap-2 sm:grid-cols-2">
-            {pendingRecs.map((rec) => (
-              <RecommendationCard key={rec.id} rec={rec} />
+          <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+            {g.items.map((s, i) => (
+              <ShortsCard
+                key={`${g.key}-${s.start}-${s.end}-${i}`}
+                short={s}
+                index={i}
+                mediaId={master.id}
+                episodeId={episodeId}
+                apiBase={apiBase}
+              />
             ))}
           </div>
         </div>
-      )}
-      {recs.some((r) => r.status !== "pending") && (
-        <div>
-          <div className="mb-2 text-[11px] font-semibold text-muted-foreground">
-            처리 완료
-          </div>
-          <div className="grid gap-2 sm:grid-cols-2">
-            {recs
-              .filter((r) => r.status !== "pending")
-              .map((rec) => (
-                <RecommendationCard key={rec.id} rec={rec} />
-              ))}
-          </div>
-        </div>
-      )}
+      ))}
     </div>
   );
 }
@@ -192,47 +232,125 @@ function ClipsTab({
 }: {
   clips: ReturnType<typeof useAppData>["clipsForEpisode"] extends (...a: any[]) => infer R ? R : never;
 }) {
+  const app = useAppData();
+  const seek = useVideoSeek();
+
   if (clips.length === 0) {
     return (
       <EmptyState
         icon={Clapperboard}
         compact
         title="아직 클립이 없습니다"
-        description="추천을 채택하면 생성됩니다."
+        description="쇼츠 추천을 채택하면 클립이 만들어져요."
       />
     );
   }
 
   return (
     <div className="space-y-2">
-      {clips.map((clip) => (
-        <Card key={clip.id} className="p-3">
-          <div className="flex items-start justify-between gap-2">
-            <div className="min-w-0 flex-1">
-              <div className="text-sm font-semibold leading-snug">{clip.title}</div>
-              <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
-                <Badge>{CLIP_TYPES[clip.clipType]}</Badge>
-                <span>{ASPECT_RATIOS[clip.aspectRatio]}</span>
-                <span>· {formatDuration(clip.durationSec)}</span>
+      {clips.map((clip) => {
+        const rendered = clip.status === "ready" || clip.status === "published";
+        const start = typeof clip.startTime === "number" ? clip.startTime : 0;
+        // 렌더된 클립: 자체 mp4 스트림(clip.videoUrl) 재생 · 미렌더: 원본 startTime 프레임
+        const previewSrc = rendered && clip.videoUrl
+          ? `${app.apiBase}${clip.videoUrl}`
+          : undefined;
+        const thumbSrc = clip.thumbnailUrl
+          ? `${app.apiBase}${clip.thumbnailUrl}`
+          : clip.sourceMediaId
+            ? `${app.apiBase}/media/${clip.sourceMediaId}/frame?t=${start.toFixed(2)}`
+            : undefined;
+        return (
+          <Card key={clip.id} className="overflow-hidden p-0">
+            <div className="flex gap-3 p-2.5">
+              {/* Preview column — rendered면 인라인 재생, 아니면 원본 프레임 썸네일(클릭 시 원본 seek) */}
+              <div className="relative w-40 shrink-0 overflow-hidden rounded-md bg-black">
+                {previewSrc ? (
+                  <video
+                    src={previewSrc}
+                    controls
+                    preload="metadata"
+                    className="aspect-video w-full object-contain"
+                  />
+                ) : thumbSrc ? (
+                  <button
+                    type="button"
+                    onClick={() => seek?.seekTo(start)}
+                    className="group relative block aspect-video w-full"
+                    title={`▶ 원본 ${formatTimecode(start)}부터 재생`}
+                  >
+                    <img
+                      src={thumbSrc}
+                      alt=""
+                      loading="lazy"
+                      className="absolute inset-0 size-full object-cover"
+                      onError={(e) => { (e.currentTarget as HTMLImageElement).style.opacity = "0"; }}
+                    />
+                    <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-black/0 transition group-hover:bg-black/25">
+                      <span className="rounded-full bg-white/90 px-2 py-1 text-[10px] font-bold text-black opacity-0 transition group-hover:opacity-100">
+                        ▶ 원본
+                      </span>
+                    </div>
+                  </button>
+                ) : (
+                  <div className="flex aspect-video w-full items-center justify-center text-muted-foreground">
+                    <Clapperboard className="size-6" />
+                  </div>
+                )}
+              </div>
+
+              {/* Content column */}
+              <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="line-clamp-2 text-[13px] font-semibold leading-snug">{clip.title}</div>
+                    <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[10.5px] text-muted-foreground">
+                      <Badge>{CLIP_TYPES[clip.clipType]}</Badge>
+                      <span>{ASPECT_RATIOS[clip.aspectRatio]}</span>
+                      <span>· {formatDuration(clip.durationSec)}</span>
+                      {typeof clip.startTime === "number" && typeof clip.endTime === "number" && (
+                        <span className="tabular-nums">
+                          · 원본 {formatTimecode(clip.startTime)}–{formatTimecode(clip.endTime)}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <StatusBadge
+                    tone={clip.status === "encoding" ? "progress" : rendered ? "done" : "warn"}
+                    pulse={clip.status === "encoding"}
+                  >
+                    {clip.status === "encoding"
+                      ? "인코딩"
+                      : clip.status === "ready"
+                        ? "렌더 완료"
+                        : clip.status === "published"
+                          ? "배포됨"
+                          : "편집 대기"}
+                  </StatusBadge>
+                </div>
+
+                <div className="mt-auto flex items-center gap-2 pt-1">
+                  <Link
+                    href={`/editor/${clip.id}`}
+                    className="text-[11.5px] font-semibold text-brand underline-offset-2 hover:underline"
+                  >
+                    {rendered ? "편집기 · 재렌더" : "편집기 열기 →"}
+                  </Link>
+                  {previewSrc && (
+                    <a
+                      href={previewSrc}
+                      download={`${clip.title}.mp4`}
+                      className="text-[11.5px] font-medium text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+                    >
+                      다운로드
+                    </a>
+                  )}
+                </div>
               </div>
             </div>
-            <StatusBadge
-              tone={clip.status === "encoding" ? "progress" : "done"}
-              pulse={clip.status === "encoding"}
-            >
-              {clip.status === "encoding" ? "인코딩" : clip.status === "ready" ? "준비" : "배포"}
-            </StatusBadge>
-          </div>
-          <div className="mt-2 flex items-center gap-2">
-            <Link
-              href={`/editor/${clip.id}`}
-              className="text-xs font-medium text-primary underline-offset-2 hover:underline"
-            >
-              편집기 열기
-            </Link>
-          </div>
-        </Card>
-      ))}
+          </Card>
+        );
+      })}
     </div>
   );
 }
@@ -242,7 +360,7 @@ function scoreColorClass(v: number): string {
   return v >= 70 ? "text-status-done" : v >= 45 ? "text-status-warn" : "text-muted-foreground";
 }
 
-type AnalyzeView = "shorts" | "scenes" | "script" | "narrative" | "cast";
+type AnalyzeView = "scenes" | "script" | "narrative" | "cast" | "ppl";
 
 function AnalyzeTab({ episodeId }: { episodeId: string }) {
   const app = useAppData();
@@ -250,10 +368,12 @@ function AnalyzeTab({ episodeId }: { episodeId: string }) {
   const { toast } = useToast();
   const master = mediaForEpisode(episodeId, "master");
   const { analysis, loading } = useMediaAnalysisPoll(master?.id);
-  const [view, setView] = useState<AnalyzeView>("shorts");
+  // 쇼츠 추천은 상단 "추천" 탭에서 노출. 여기 서브탭은 원본 분석 산출물 전용.
+  const [view, setView] = useState<AnalyzeView>("scenes");
   const [retrying, setRetrying] = useState<false | "fast" | "full">(false);
   const [castData, setCastData] = useState<EpisodeCastResponse | null>(null);
   const [faces, setFaces] = useState<MediaFaces | null>(null);
+  const [ppl, setPpl] = useState<PplData | null>(null);
   const [pendingMap, setPendingMap] = useState<Record<string, string>>({});
   const [savingMap, setSavingMap] = useState(false);
 
@@ -270,6 +390,16 @@ function AnalyzeTab({ episodeId }: { episodeId: string }) {
     if (!masterId) return;
     let alive = true;
     const load = () => { getMediaFaces(masterId).then((f) => { if (alive) setFaces(f); }).catch(() => {}); };
+    load();
+    const t = window.setInterval(load, 20000);
+    return () => { alive = false; clearInterval(t); };
+  }, [masterId]);
+
+  // ppl.json 20초 폴링 — faces와 동일 패턴, 분석 완료 전에도 부분 결과 표시.
+  useEffect(() => {
+    if (!masterId) return;
+    let alive = true;
+    const load = () => { getMediaPpl(masterId).then((p) => { if (alive) setPpl(p); }).catch(() => {}); };
     load();
     const t = window.setInterval(load, 20000);
     return () => { alive = false; clearInterval(t); };
@@ -339,12 +469,15 @@ function AnalyzeTab({ episodeId }: { episodeId: string }) {
 
   const faceClusters = faces?.clusters ?? {};
   const faceCount = Object.keys(faceClusters).length;
-  const subTabs: { key: AnalyzeView; label: string; icon: typeof Flame; count: number }[] = [
-    { key: "shorts", label: "쇼츠 추천", icon: Flame, count: shorts.length },
+  // ppl은 analysis.data.ppl 우선 → 폴링본 폴백 (분석 완료 이후에도 폴링본이 더 신선할 수 있음)
+  const pplData = ppl ?? (data?.ppl ?? null);
+  const pplCount = pplData?.detections?.length ?? 0;
+  const subTabs: { key: AnalyzeView; label: string; icon: typeof Layers; count: number }[] = [
     { key: "scenes", label: "장면", icon: Layers, count: scenes.length },
     { key: "script", label: "자막", icon: FileText, count: transcript.length },
     { key: "narrative", label: "서사", icon: BookOpen, count: narrative?.segments?.length ?? 0 },
     { key: "cast", label: "인물", icon: Users, count: faceCount || (castData?.people?.length ?? 0) },
+    { key: "ppl", label: "PPL·브랜드", icon: ShoppingBag, count: pplCount },
   ];
 
   return (
@@ -376,34 +509,6 @@ function AnalyzeTab({ episodeId }: { episodeId: string }) {
           );
         })}
       </div>
-
-      {view === "shorts" && (
-        <Card className="overflow-hidden">
-          <ul className="divide-y divide-border">
-            {shorts.map((s, i) => (
-              <li key={i} className="flex gap-3 px-3 py-2.5">
-                <span className="mt-0.5 flex size-5 shrink-0 items-center justify-center rounded-md bg-status-warn/10 text-[11px] font-bold text-status-warn">
-                  #{s.rank ?? i + 1}
-                </span>
-                <div className="min-w-0 flex-1">
-                  <div className="text-[13px] font-semibold">{s.title || "제목 없음"}</div>
-                  <div className="mt-0.5 text-[11px] tabular-nums text-muted-foreground">
-                    {formatTimecode(s.start)}~{formatTimecode(s.end)} · {Math.round(s.end - s.start)}초
-                  </div>
-                  {s.reason && <p className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">{s.reason}</p>}
-                  {s.tags && s.tags.length > 0 && (
-                    <div className="mt-1.5 flex flex-wrap gap-1">
-                      {s.tags.map((t) => (
-                        <Badge key={t} className="text-muted-foreground">{t}</Badge>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              </li>
-            ))}
-          </ul>
-        </Card>
-      )}
 
       {view === "scenes" && <ScenesView scenes={scenes} />}
 
@@ -441,25 +546,175 @@ function AnalyzeTab({ episodeId }: { episodeId: string }) {
       )}
 
       {view === "script" && (
-        <Card className="max-h-[50vh] overflow-y-auto">
-          <ul className="divide-y divide-border">
-            {transcript.map((s, i) => (
-              <li key={i} className="flex gap-2 px-3 py-1.5 text-[12px]">
-                <span className="shrink-0 tabular-nums text-[11px] text-muted-foreground">{formatTimecode(s.start)}</span>
-                <span>{s.text}</span>
-              </li>
-            ))}
-          </ul>
-        </Card>
+        <ScriptView
+          transcript={transcript}
+          savedMap={faces?.mapping ?? {}}
+          pendingMap={pendingMap}
+          setPendingMap={setPendingMap}
+          onSave={async () => {
+            if (!master || savingMap || Object.keys(pendingMap).length === 0) return;
+            setSavingMap(true);
+            try {
+              await patchMediaFacesMapping(master.id, pendingMap);
+              setPendingMap({});
+              const fresh = await getMediaFaces(master.id);
+              setFaces(fresh);
+              toast({ title: "화자 이름 저장됨", description: "자막의 speaker가 rename 됐어요.", tone: "done" });
+            } catch (e) {
+              toast({ title: "저장 실패", description: e instanceof Error ? e.message : "다시 시도해 주세요.", tone: "error" });
+            } finally {
+              setSavingMap(false);
+            }
+          }}
+          savingMap={savingMap}
+          programCast={programCast}
+        />
+      )}
+
+      {view === "ppl" && (
+        <PplView ppl={pplData} mediaId={master.id} apiBase={app.apiBase} />
       )}
     </div>
   );
 }
 
-/** Scene list — color-coded vision score, dialogue/silent, tags, on-screen names, dialogue. */
+const FALLBACK_SPEAKER_RE = /^(M\d+|F\d+|MC\d*|NARR|\?)$/;
+
+/** 자막 리스트 — 행 클릭 시 상단 원본 플레이어를 그 순간으로 seek + 재생.
+ *  상단 "화자 이름 지정" 바에서 M1/F1/MC/NARR/? 같은 폴백 라벨에 이름을 붙이면
+ *  faces 매핑 API로 저장 → refined.speaker 전체 rename. 저장 전 pending은 뱃지에 즉시 반영. */
+function ScriptView({
+  transcript,
+  savedMap,
+  pendingMap,
+  setPendingMap,
+  onSave,
+  savingMap,
+  programCast,
+}: {
+  transcript: AnalysisTranscriptSegment[];
+  savedMap: Record<string, string>;
+  pendingMap: Record<string, string>;
+  setPendingMap: React.Dispatch<React.SetStateAction<Record<string, string>>>;
+  onSave: () => Promise<void>;
+  savingMap: boolean;
+  programCast: string[];
+}) {
+  const seek = useVideoSeek();
+  const effectiveMap: Record<string, string> = { ...savedMap, ...pendingMap };
+  const pendingCount = Object.keys(pendingMap).length;
+
+  // 자막에 실제로 등장한 폴백 라벨만 매핑 대상으로. 등장 순 유지.
+  const seen = new Set<string>();
+  const fallbackSpeakers: string[] = [];
+  for (const s of transcript) {
+    const sp = (s.speaker ?? "").trim();
+    if (sp && FALLBACK_SPEAKER_RE.test(sp) && !seen.has(sp)) {
+      seen.add(sp);
+      fallbackSpeakers.push(sp);
+    }
+  }
+
+  return (
+    <div className="flex flex-col gap-2">
+      {fallbackSpeakers.length > 0 && (
+        <div className="rounded-md border border-brand/25 bg-brand/5 p-2.5">
+          <div className="mb-1.5 flex items-center gap-2 text-[11px] text-brand">
+            <span className="flex-1 font-semibold">
+              화자 이름 지정 · {fallbackSpeakers.length}명
+              <span className="ml-1 font-normal text-brand/70">
+                (M1·F1 같은 임시 라벨에 실명 붙이기)
+              </span>
+            </span>
+            <Button size="xs" onClick={onSave} disabled={pendingCount === 0 || savingMap}>
+              {savingMap
+                ? "저장 중…"
+                : pendingCount > 0
+                  ? `${pendingCount}개 저장`
+                  : "저장할 이름 없음"}
+            </Button>
+          </div>
+          <div
+            className="grid gap-1.5"
+            style={{ gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))" }}
+          >
+            {fallbackSpeakers.map((sp) => {
+              const currentValue = effectiveMap[sp] ?? "";
+              const isPending = pendingMap[sp] != null;
+              return (
+                <div
+                  key={sp}
+                  className="flex items-center gap-1.5 rounded border border-border bg-background px-1.5 py-1"
+                  style={isPending ? { borderColor: "var(--color-brand)" } : undefined}
+                >
+                  <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] font-bold text-muted-foreground">
+                    {sp}
+                  </span>
+                  <input
+                    list={`speaker-cast-${sp}`}
+                    value={currentValue}
+                    placeholder="이름"
+                    onChange={(e) => setPendingMap((prev) => ({ ...prev, [sp]: e.target.value }))}
+                    className="w-full min-w-0 rounded border border-input bg-background px-1.5 py-0.5 text-[11px]"
+                  />
+                  <datalist id={`speaker-cast-${sp}`}>
+                    {programCast.map((n) => (
+                      <option key={n} value={n} />
+                    ))}
+                  </datalist>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      <Card className="max-h-[60vh] overflow-y-auto">
+        <ul className="divide-y divide-border">
+          {transcript.map((s, i) => {
+            const rawSp = s.speaker ?? "";
+            // pending 우선, 없으면 saved, 그것도 없으면 원본 라벨.
+            const displaySp = rawSp ? (effectiveMap[rawSp] || rawSp) : "";
+            const isFallback = displaySp !== "" && FALLBACK_SPEAKER_RE.test(displaySp);
+            return (
+              <li
+                key={i}
+                className="flex cursor-pointer items-start gap-2 px-3 py-1.5 text-[12px] hover:bg-muted/40"
+                onClick={() => seek?.seekTo(s.start)}
+                title={`▶ ${formatTimecode(s.start)}부터 재생`}
+              >
+                <span className="shrink-0 pt-0.5 tabular-nums text-[11px] text-muted-foreground">
+                  {formatTimecode(s.start)}
+                </span>
+                {displaySp && (
+                  <span
+                    className={cn(
+                      "shrink-0 rounded px-1.5 py-0.5 text-[10px] font-bold",
+                      isFallback
+                        ? "bg-muted text-muted-foreground"
+                        : "bg-brand/15 text-brand",
+                    )}
+                    title={isFallback ? "폴백 라벨 · 위에서 이름 지정 가능" : "실명 라벨"}
+                  >
+                    {displaySp}
+                  </span>
+                )}
+                <span className="leading-relaxed">{s.text}</span>
+              </li>
+            );
+          })}
+        </ul>
+      </Card>
+    </div>
+  );
+}
+
+/** Scene list — color-coded vision score, dialogue/silent, tags, on-screen names, dialogue.
+ *  씬 행 클릭 시 상단 원본 플레이어를 그 씬 시작 시각으로 seek. */
 function ScenesView({ scenes }: { scenes: AnalysisScene[] }) {
   const [sort, setSort] = useState<"time" | "score">("time");
   const [silentOnly, setSilentOnly] = useState(false);
+  const seek = useVideoSeek();
 
   let list = silentOnly ? scenes.filter((s) => !s.has_dialogue) : scenes;
   if (sort === "score") list = [...list].sort((a, b) => (b.vision_score ?? -1) - (a.vision_score ?? -1));
@@ -486,7 +741,12 @@ function ScenesView({ scenes }: { scenes: AnalysisScene[] }) {
       </div>
       <ul className="divide-y divide-border">
         {list.map((s, i) => (
-          <li key={s.index ?? i} className="px-3 py-2">
+          <li
+            key={s.index ?? i}
+            className="cursor-pointer px-3 py-2 hover:bg-muted/40"
+            onClick={() => seek?.seekTo(s.start)}
+            title={`▶ ${formatTimecode(s.start)}부터 재생`}
+          >
             <div className="flex flex-wrap items-center gap-2">
               <span className="tabular-nums text-[11px] text-muted-foreground">
                 {formatTimecode(s.start)}{s.end != null ? `–${formatTimecode(s.end)}` : ""}
@@ -618,16 +878,19 @@ function FaceClustersView({
                     );
                   })}
                 </div>
-                <select
+                {/* 이름 입력 — 프로그램 cast는 자동완성 후보로, 그 외 임의 이름도 자유 입력 */}
+                <input
+                  list={`cast-suggest-${label}`}
                   value={currentValue}
+                  placeholder="이름 입력 또는 선택"
                   onChange={(e) => setPendingMap((prev) => ({ ...prev, [label]: e.target.value }))}
                   className="w-full rounded border border-input bg-background px-2 py-1 text-[11.5px]"
-                >
-                  <option value="">— 선택 안 함 —</option>
+                />
+                <datalist id={`cast-suggest-${label}`}>
                   {programCast.map((n) => (
-                    <option key={n} value={n}>{n}</option>
+                    <option key={n} value={n} />
                   ))}
-                </select>
+                </datalist>
                 {savedMap[label] && !isPending && (
                   <div className="mt-1 text-[10.5px] text-status-done">✓ 저장됨 · {savedMap[label]}</div>
                 )}

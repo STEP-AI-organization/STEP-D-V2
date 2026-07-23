@@ -6,6 +6,7 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { PipelineStrip } from "@/components/pipeline-strip";
 import { SourcePanel } from "@/components/source-panel";
 import { DerivativesPanel } from "@/components/derivatives-panel";
+import { SeekProvider } from "@/components/episode/seek-context";
 import { useAppData } from "@/lib/data/store";
 import { targetAgeLabel } from "@/lib/constants";
 
@@ -90,11 +91,14 @@ export function EpisodeDetail({
         </div>
       )}
 
-      {/* 상단: 소스 영상 전폭. 하단: 파생 탭바 (카드 껍질 제거 — 탭바가 곧 섹션 헤더). */}
-      <div className="space-y-6">
-        <SourcePanel episodeId={episodeId} />
-        <DerivativesPanel episodeId={episodeId} initialTab={initialTab} />
-      </div>
+      {/* SeekProvider — 상단 원본 플레이어와 하단 파생 카드(쇼츠·씬·자막·narrative)를 잇는 배선.
+          카드 썸네일/시간칩 클릭 → 상단 <video>가 그 순간 seek+재생. 검증 흐름의 척추. */}
+      <SeekProvider>
+        <div className="space-y-6">
+          <SourcePanel episodeId={episodeId} />
+          <DerivativesPanel episodeId={episodeId} initialTab={initialTab} />
+        </div>
+      </SeekProvider>
     </>
   );
 }

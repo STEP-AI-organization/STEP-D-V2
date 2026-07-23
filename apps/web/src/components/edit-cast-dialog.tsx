@@ -31,24 +31,40 @@ export function EditCastButton({ program }: { program: Program }) {
 function EditCastDialog({ program, onClose }: { program: Program; onClose: () => void }) {
   const { updateProgram } = useAppData();
   const { toast } = useToast();
-  const initial = (program.cast ?? []).join(", ");
-  const [text, setText] = useState(initial);
+  // 한 명씩 개별 관리 (2026-07-23 · 사용자 방향: 쉼표 구분 헷갈림 → 한 명씩 등록·삭제).
+  const [cast, setCast] = useState<string[]>(program.cast ?? []);
+  const [newName, setNewName] = useState("");
   const [busy, setBusy] = useState(false);
 
-  // 쉼표·줄바꿈 둘 다 구분자로 · 중복 제거
-  const preview = Array.from(new Set(text.split(/[,\n]/).map((s) => s.trim()).filter(Boolean)));
-
-  async function submit() {
-    if (busy) return;
+  async function persist(next: string[]) {
     setBusy(true);
     try {
-      await updateProgram(program.id, { cast: preview });
-      toast({ title: `출연자 ${preview.length}명 저장`, description: "다음 재분석부터 refine·recommend 프롬프트에 반영돼요.", tone: "done" });
-      onClose();
+      await updateProgram(program.id, { cast: next });
+      setCast(next);
     } catch (e) {
-      toast({ title: "출연자 저장 실패", description: e instanceof Error ? e.message : "다시 시도해 주세요.", tone: "error" });
+      toast({ title: "저장 실패", description: e instanceof Error ? e.message : "다시 시도해 주세요.", tone: "error" });
+    } finally {
       setBusy(false);
     }
+  }
+
+  async function addName() {
+    const name = newName.trim();
+    if (!name) return;
+    if (cast.includes(name)) {
+      toast({ title: "이미 등록됨", description: `${name} 은(는) 이미 명단에 있음`, tone: "warn" });
+      return;
+    }
+    const next = [...cast, name];
+    await persist(next);
+    setNewName("");
+    // 연속 등록 편의: 저장 후 입력 필드 다시 포커스
+    setTimeout(() => document.getElementById("new-cast-input")?.focus(), 0);
+  }
+
+  async function removeName(name: string) {
+    const next = cast.filter((n) => n !== name);
+    await persist(next);
   }
 
   return (
@@ -68,32 +84,74 @@ function EditCastDialog({ program, onClose }: { program: Program; onClose: () =>
         <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-auto p-5">
           <div className="rounded-md border border-brand/25 bg-brand/5 px-3 py-2.5">
             <div className="mb-1 text-[11.5px] font-bold text-brand">refine speaker 라벨링의 primary source</div>
-            <div className="text-[11.5px] leading-relaxed text-muted-foreground">쉼표(,) 또는 줄바꿈으로 구분. STT 오인식(예: 옥순→옥수)은 이 명단 기준으로 자동 정규화 시도. 명단에 없는 인물은 M1/F1... fallback으로 남아 검토용 flag가 됨.</div>
-          </div>
-          <div>
-            <div className="mb-1 text-[11.5px] font-semibold text-muted-foreground">출연자 명단</div>
-            <textarea
-              value={text}
-              onChange={(e) => setText(e.target.value)}
-              placeholder="영수, 영호, 영식, 영철, 광수, 상철, 영자, 영숙, 옥순, 정숙, 현숙, 순자"
-              rows={5}
-              className="w-full resize-none rounded-md border border-input bg-background px-3 py-2.5 text-sm outline-none"
-            />
-          </div>
-          {preview.length > 0 && (
-            <div>
-              <div className="mb-1 text-[11.5px] font-semibold text-muted-foreground">미리보기 · {preview.length}명</div>
-              <div className="flex flex-wrap gap-1">
-                {preview.map((n) => (
-                  <span key={n} className="rounded border border-border bg-muted px-1.5 py-0.5 text-[11.5px] font-semibold">{n}</span>
-                ))}
-              </div>
+            <div className="text-[11.5px] leading-relaxed text-muted-foreground">
+              한 명씩 이름 입력 · Enter로 추가 · 각 항목 옆 ✕로 삭제. 저장은 자동 (변경 즉시 서버 반영).
+              STT 오인식(예: 옥순→옥수)은 이 명단 기준으로 자동 정규화 시도. 명단에 없는 인물은
+              M1/F1... fallback으로 남음.
             </div>
-          )}
+          </div>
+
+          {/* 이름 입력 */}
+          <div>
+            <div className="mb-1 text-[11.5px] font-semibold text-muted-foreground">이름 추가</div>
+            <div className="flex gap-2">
+              <input
+                id="new-cast-input"
+                autoFocus
+                value={newName}
+                onChange={(e) => setNewName(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    void addName();
+                  }
+                }}
+                placeholder="예: 은규"
+                disabled={busy}
+                className="h-9 flex-1 rounded-md border border-input bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              />
+              <Button size="sm" onClick={addName} disabled={busy || !newName.trim()}>
+                추가
+              </Button>
+            </div>
+          </div>
+
+          {/* 등록된 명단 */}
+          <div>
+            <div className="mb-1 flex items-baseline gap-2">
+              <span className="text-[11.5px] font-semibold text-muted-foreground">등록된 명단</span>
+              <span className="text-[11px] tabular-nums text-muted-foreground/70">{cast.length}명</span>
+            </div>
+            {cast.length === 0 ? (
+              <div className="rounded-md border border-dashed border-border px-3 py-4 text-center text-[11.5px] text-muted-foreground">
+                아직 등록된 출연자가 없어요. 위에 이름을 입력하고 Enter.
+              </div>
+            ) : (
+              <ul className="space-y-1">
+                {cast.map((name) => (
+                  <li
+                    key={name}
+                    className="flex items-center justify-between rounded-md border border-border bg-muted/40 px-3 py-1.5"
+                  >
+                    <span className="text-[13px] font-semibold">{name}</span>
+                    <button
+                      onClick={() => removeName(name)}
+                      disabled={busy}
+                      title="삭제"
+                      className="text-lg leading-none text-muted-foreground hover:text-status-warn disabled:opacity-40"
+                    >
+                      ✕
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
         </div>
         <div className="flex justify-end gap-2 border-t border-border px-5 py-3">
-          <Button size="sm" variant="outline" onClick={onClose}>취소</Button>
-          <Button size="sm" onClick={submit} disabled={busy}>{busy ? "저장 중…" : "저장"}</Button>
+          <Button size="sm" variant="outline" onClick={onClose}>
+            닫기
+          </Button>
         </div>
       </div>
     </div>

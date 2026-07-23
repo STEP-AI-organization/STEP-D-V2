@@ -9,6 +9,7 @@ import { useMediaAnalysisPoll } from "@/lib/data/use-media-analysis";
 import { formatTimecode } from "@/lib/utils";
 import { markersFromAnalysis, type TimelineMarker } from "./timeline-markers";
 import { ReviewTimeline, type TimelineLane, type TimelineBlock } from "./review-timeline";
+import { useVideoSeek } from "./episode/seek-context";
 
 /**
  * Left panel — source video player with AI timeline markers.
@@ -22,6 +23,15 @@ export function SourcePanel({ episodeId }: { episodeId: string }) {
   const [currentTime, setCurrentTime] = useState(0);
   const videoRef = useRef<HTMLVideoElement>(null);
 
+  // 상위 SeekProvider에 이 <video>를 등록 → 다른 카드가 seekTo() 하면 여기서 재생.
+  // SourcePanel이 언마운트되면 등록 해제.
+  const seekCtx = useVideoSeek();
+  useEffect(() => {
+    seekCtx?.registerVideo(videoRef.current);
+    return () => seekCtx?.registerVideo(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [videoSrc]);
+
   // Load stream URL
   useEffect(() => {
     if (!master) return;
@@ -32,15 +42,17 @@ export function SourcePanel({ episodeId }: { episodeId: string }) {
     return () => { cancelled = true; };
   }, [master?.id]);
 
+  // 내부 seek — 타임라인 lane 클릭용. 컨텍스트 있으면 그쪽으로 넘김.
   const seekTo = useCallback(
     (time: number) => {
+      if (seekCtx) return seekCtx.seekTo(time);
       const video = videoRef.current;
       if (video) {
         video.currentTime = time;
         video.play().catch(() => {});
       }
     },
-    [videoRef],
+    [seekCtx],
   );
 
   const onTimeUpdate = useCallback(() => {
@@ -51,7 +63,7 @@ export function SourcePanel({ episodeId }: { episodeId: string }) {
   const durationSec = master?.durationSec ?? 0;
 
   // Recommendations are minted 1:1 from the analysis shorts (server recFromShort), so drawing
-  // both would double every segment. Prefer the recs — they carry the real 1–5 appeal score —
+  // both would double every segment. Prefer the recs — they carry the real score fields —
   // and fall back to the raw shorts only before the board has been wired up.
   // Memoised on the store's own array: recsForEpisode() allocates a new one per call, and this
   // recomputes on every timeupdate tick otherwise.
@@ -62,23 +74,31 @@ export function SourcePanel({ episodeId }: { episodeId: string }) {
         start: r.startTime!,
         end: r.endTime!,
         appeal: r.appeal,
+        score100: r.score100,
         label: r.title,
       }));
     if (recMarkers.length > 0) return recMarkers.sort((a, b) => a.start - b.start);
     return markersFromAnalysis(analysis?.data?.shorts ?? []);
   }, [recommendations, episodeId, analysis?.data?.shorts]);
 
-  // Multi-lane highlight timeline (visual layer). 쇼츠/분석 use real analysis
+  // Multi-lane highlight timeline (visual layer). 쇼츠/분석/PPL use real analysis
   // segments when present; lanes with no data source fall back to clearly-tagged
   // 샘플 blocks so the highlight visual always renders (see ReviewTimeline).
   const timelineLanes: TimelineLane[] = useMemo(() => {
     const scenes = analysis?.data?.scenes ?? [];
+    const pplDetections = analysis?.data?.ppl?.detections ?? [];
     const shortsBlocks: TimelineBlock[] = allMarkers.map((m, i) => ({
       id: `sh${i}`,
       start: m.start,
       end: m.end,
       title: m.label || `쇼츠 후보 ${i + 1}`,
-      sub: m.appeal != null ? `어필 ${m.appeal}` : undefined,
+      // score100(0-100)이 있으면 그걸, 없으면 legacy appeal(1-5)에서 근사. 옛 회차 호환.
+      sub:
+        typeof m.score100 === "number"
+          ? `${Math.round(m.score100)}점`
+          : typeof m.appeal === "number"
+            ? `${Math.round((m.appeal - 1) * 25)}점`
+            : undefined,
     }));
     const sceneBlocks: TimelineBlock[] = scenes
       .filter((s) => s.start != null && s.end != null)
@@ -90,6 +110,13 @@ export function SourcePanel({ episodeId }: { episodeId: string }) {
         title: `장면 ${(s.index ?? i) + 1}`,
         sub: s.vision_score != null ? `Vision ${s.vision_score}` : undefined,
       }));
+    const pplBlocks: TimelineBlock[] = pplDetections.map((d, i) => ({
+      id: `pp${i}`,
+      start: Number(d.start),
+      end: Number(d.end),
+      title: d.brand,
+      sub: d.category || undefined,
+    }));
 
     const sample = (prefix: string, title: string, spans: [number, number][]): TimelineBlock[] =>
       spans.map(([a, b], i) => ({
@@ -110,13 +137,15 @@ export function SourcePanel({ episodeId }: { episodeId: string }) {
             sample: true,
             blocks: sample("sh", "쇼츠 후보 구간", [[0.07, 0.12], [0.34, 0.4], [0.66, 0.72]]),
           },
-      {
-        key: "ppl",
-        label: "PPL·브랜드",
-        color: "#f5a524",
-        sample: true,
-        blocks: sample("ppl", "브랜드 노출 구간", [[0.09, 0.11], [0.41, 0.44], [0.77, 0.79]]),
-      },
+      pplBlocks.length
+        ? { key: "ppl", label: "PPL·브랜드", color: "#f5a524", blocks: pplBlocks }
+        : {
+            key: "ppl",
+            label: "PPL·브랜드",
+            color: "#f5a524",
+            sample: true,
+            blocks: sample("ppl", "브랜드 노출 구간", [[0.09, 0.11], [0.41, 0.44], [0.77, 0.79]]),
+          },
       sceneBlocks.length
         ? { key: "analysis", label: "분석 구간", color: "#5e9bff", blocks: sceneBlocks }
         : {
@@ -127,7 +156,7 @@ export function SourcePanel({ episodeId }: { episodeId: string }) {
             blocks: sample("an", "분석 구간", [[0, 0.18], [0.18, 0.35], [0.35, 0.55], [0.55, 0.78], [0.78, 1]]),
           },
     ];
-  }, [allMarkers, analysis?.data?.scenes, durationSec]);
+  }, [allMarkers, analysis?.data?.scenes, analysis?.data?.ppl?.detections, durationSec]);
 
   if (!master) {
     return (
