@@ -32,12 +32,26 @@ for _s in (sys.stdout, sys.stderr):
 from scenedetect import detect, ContentDetector
 
 
+# 장르별 청크 크기 — 예능은 코너 단위(3분), 드라마는 서사 아크 단위(5분).
+# 이 값이 narrative segment 크기·recommend 후보 seed 밀도를 결정한다.
+# 예능: 코너·미션이 보통 2-4분이라 3분 청크가 한 코너를 대략 담음. 5분이면 여러 코너가 섞여
+#      요약이 뭉개짐(현재 문제).
+# 드라마: 씬 하나가 40-90s, 씬 여러 개가 모여 서사 블록. 5분이 자연스러움. 3분이면 한 블록이
+#        여러 청크로 갈라져 감정 흐름이 끊긴다.
+_CHUNK_SEC_BY_GENRE = {
+    "variety": 180.0,
+    "drama": 300.0,
+}
+_DEFAULT_CHUNK_SEC = 300.0
+
+
 def scenes_from_duration_chunks(
     segments: list[dict],
-    chunk_sec: float = 300.0,
+    chunk_sec: float | None = None,
     pad_sec: float = 5.0,
+    genre: str | None = None,
 ) -> list[dict]:
-    """전체 길이를 고정 5분 청크로 자른다 — AI-driven 씬 분할 대체.
+    """전체 길이를 장르별 청크로 자른다 — AI-driven 씬 분할 대체.
 
     청크 단위는 (1) 병렬 분석 유닛(각 청크가 독립 Gemini 호출 대상), (2) 요약·상세 unit.
     ±pad_sec 겹치기로 발화 중간에서 잘려 문맥이 끊기는 걸 완화 — merge 단계에서 중복 dedupe.
@@ -45,7 +59,12 @@ def scenes_from_duration_chunks(
     이트를 갈라도 문제없다(청크는 요약 단위일 뿐 후보 seed 아님).
 
     반환 shape은 scenes_from_transcript와 동일해서 downstream(recommend·cast·narrative)이 그대로
-    동작한다. text는 청크 시간창에 겹치는 세그먼트를 concat, has_dialogue는 그 존재 여부."""
+    동작한다. text는 청크 시간창에 겹치는 세그먼트를 concat, has_dialogue는 그 존재 여부.
+
+    genre — "variety"(180s) · "drama"(300s). None/알 수 없으면 300s 폴백.
+    chunk_sec — 명시 값 있으면 최우선(테스트 용도). None이면 genre에서 결정."""
+    if chunk_sec is None:
+        chunk_sec = _CHUNK_SEC_BY_GENRE.get(genre or "", _DEFAULT_CHUNK_SEC)
     # 전체 길이 산정 — 마지막 세그먼트 end. 세그먼트 없으면 빈 리스트.
     if not segments:
         return []

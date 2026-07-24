@@ -184,7 +184,37 @@ def _apply_glossary_words(words: list, glossary: dict) -> list:
     return out
 
 
-def refine_segments(segments: list[dict], cast_registry: list[dict] | None = None) -> list[dict]:
+def _program_context_block(ctx: dict | None) -> str:
+    """program_context.json(프로그램 상세 페이지에서 사용자 입력)을 프롬프트 블록으로 렌더.
+    refine이 문맥을 알면 특유의 밈·용어·인물 관계 정규화가 훨씬 정확. 예: 나솔은 '기수'·'솔로',
+    유퀴즈는 '큰절'·'퀴즈', 드라마는 극중이름·설정 반영. 없으면 빈 문자열."""
+    if not isinstance(ctx, dict) or not ctx:
+        return ""
+    lines: list[str] = ["\n\n이 프로그램에 대한 사전 정보(정제 시 문맥으로 사용):"]
+    order = [
+        ("title", "제목"), ("section", "장르"), ("synopsis", "시놉시스"),
+        ("broadcaster", "방송사"), ("schedule", "편성"), ("firstAiredDate", "첫방송"),
+        ("currentInfo", "현재회차"), ("director", "연출"),
+    ]
+    for k, label in order:
+        v = ctx.get(k)
+        if isinstance(v, str) and v.strip():
+            lines.append(f"- {label}: {v.strip()[:200]}")
+    moods = ctx.get("moods")
+    if isinstance(moods, list) and moods:
+        moods_txt = ", ".join(str(m) for m in moods if isinstance(m, str) and m.strip())
+        if moods_txt:
+            lines.append(f"- 분위기·서브장르: {moods_txt}")
+    if len(lines) == 1:  # only header, no content
+        return ""
+    return "\n".join(lines)
+
+
+def refine_segments(
+    segments: list[dict],
+    cast_registry: list[dict] | None = None,
+    program_context: dict | None = None,
+) -> list[dict]:
     """Return segments with cleaned `text` + `speaker` label, same length/order/timestamps.
 
     배치들은 서로 독립이라 ThreadPoolExecutor로 병렬 호출. Gemini 모델 자체가 배치별 stateless.
@@ -193,7 +223,10 @@ def refine_segments(segments: list[dict], cast_registry: list[dict] | None = Non
     cast_registry (사용자가 프로그램에 사전등록한 출연자 명단, primary source of truth)가 있으면
     speaker 라벨을 이 목록에서 매칭. 목록에 없는 인물처럼 보이면 M1/F1... fallback 유지 —
     사용자가 나중에 검토·추가할 수 있도록. STT 오인식(옥순→옥수, 정순→정선 등)까지 문맥으로
-    복구할 것을 프롬프트에서 지시."""
+    복구할 것을 프롬프트에서 지시.
+
+    program_context (프로그램 상세에서 사용자 입력) — 시놉시스·분위기 태그·크레딧 등을 문맥으로
+    주면 밈·용어·인물 관계 정규화가 정확해진다. content-pipeline이 프로그램 엔티티에서 수집."""
     client = _client()
     glossary = load_glossary()
     refined = [dict(s) for s in segments]  # copy; fall back to original text on failure
@@ -204,6 +237,11 @@ def refine_segments(segments: list[dict], cast_registry: list[dict] | None = Non
     if glossary:
         pairs = ", ".join(f'"{w}"→"{r}"' for w, r in glossary.items())
         system += f"\n\n용어 교정 사전(이 오인식은 반드시 오른쪽으로 고쳐라): {pairs}"
+
+    # 프로그램 정보(사용자 입력) — 문맥으로 주입. 있으면 정제 품질 향상.
+    ctx_block = _program_context_block(program_context)
+    if ctx_block:
+        system += ctx_block
 
     # 등록된 캐스트가 있으면 speaker 매칭의 primary source. 사용자가 프로그램 만들 때 넣은 명단이라
     # 이걸 우선 신뢰하되, 이 명단에 없는데 대사·문맥으로 새 사람이 나오는 것 같으면 fallback 라벨.

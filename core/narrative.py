@@ -127,8 +127,15 @@ def _blocks(timeline: dict | None, refined: list[dict], scenes: list[dict]) -> l
 
 # ── 1) full summary ─────────────────────────────────────────────────────────────
 
-def build_full_summary(client, refined: list[dict], cast: dict | None, timeline: dict | None) -> str:
-    """에피소드 전체 서사 요약 (마크다운). 자막 전체 + 캐스트 + 블록 개요를 한 호출로."""
+def build_full_summary(
+    client,
+    refined: list[dict],
+    cast: dict | None,
+    timeline: dict | None,
+    program_context: dict | None = None,
+) -> str:
+    """에피소드 전체 서사 요약 (마크다운). 자막 전체 + 캐스트 + 블록 개요를 한 호출로.
+    program_context가 있으면 시놉시스·분위기 등 프로그램 정보가 시스템 프롬프트에 붙어 결이 맞음."""
     parts = []
     cast_txt = _cast_block(cast)
     if cast_txt:
@@ -152,6 +159,8 @@ def build_full_summary(client, refined: list[dict], cast: dict | None, timeline:
 - `## 회차 마무리 상태` — 에피소드가 끝난 시점의 상황/떡밥
 
 규칙: 스크립트에 근거한 내용만 쓰고 지어내지 마라. 추측이 필요하면 "~로 보인다"로 표시하라."""
+    # 프로그램 정보(사용자가 프로그램 상세 페이지에서 입력) — 시놉시스·분위기 등 있으면 문맥 강화.
+    system += _program_context_block(program_context)
     # 429/503 일시 오류는 제자리 백오프 재시도 (실패 시 해당 파트만 비우는 폴백 유지).
     resp = call_with_retry(lambda: client.models.generate_content(
         model=MODEL,
@@ -425,6 +434,29 @@ def build_conflict_analysis(client, refined: list[dict], cast: dict | None) -> l
 
 # ── entrypoint ──────────────────────────────────────────────────────────────────
 
+def _program_context_block(ctx: dict | None) -> str:
+    """program_context.json(사용자 입력) → 프롬프트 블록. narrative가 문맥을 알면 서사 요약이
+    실 프로그램 결에 맞음(예: 나솔=매칭/데이트, 유퀴즈=인터뷰, 드라마=극중 아크). 없으면 빈 문자열."""
+    if not isinstance(ctx, dict) or not ctx:
+        return ""
+    lines: list[str] = ["\n\n이 프로그램에 대한 사전 정보(서사 요약 시 문맥으로 반영):"]
+    order = [
+        ("title", "제목"), ("section", "장르"), ("synopsis", "시놉시스"),
+        ("broadcaster", "방송사"), ("schedule", "편성"), ("director", "연출"),
+        ("currentInfo", "회차 위치"),
+    ]
+    for k, label in order:
+        v = ctx.get(k)
+        if isinstance(v, str) and v.strip():
+            lines.append(f"- {label}: {v.strip()[:200]}")
+    moods = ctx.get("moods")
+    if isinstance(moods, list) and moods:
+        moods_txt = ", ".join(str(m) for m in moods if isinstance(m, str) and m.strip())
+        if moods_txt:
+            lines.append(f"- 분위기·서브장르: {moods_txt}")
+    return "\n".join(lines) if len(lines) > 1 else ""
+
+
 def build_narrative(
     refined: list[dict],
     scenes: list[dict],
@@ -433,6 +465,7 @@ def build_narrative(
     *,
     on_progress: Optional[Callable[[int, int], None]] = None,
     cast_registry: list[dict] | None = None,
+    program_context: dict | None = None,
 ) -> dict:
     """전체 서사 요약 + 구간별/인물/갈등 분석. timeline이 없으면 refined로 블록을 합성한다.
     개별 파트 실패는 그 파트만 비우고 계속한다 (파이프라인 무중단).
@@ -458,7 +491,7 @@ def build_narrative(
 
     def _do_full():
         try:
-            r = build_full_summary(client, refined, cast, timeline)
+            r = build_full_summary(client, refined, cast, timeline, program_context=program_context)
         except Exception as e:
             print(f"   (전체 요약 실패: {str(e)[:80]})", flush=True)
             r = ""

@@ -42,6 +42,7 @@ from google import genai
 from google.genai import types
 
 from .retry import call_with_retry
+from .shots import detect_shots, nearest_shot
 
 PROJECT = os.environ.get("GOOGLE_CLOUD_PROJECT") or "step-d"
 LOCATION = os.environ.get("VERTEX_LOCATION") or "asia-northeast3"
@@ -233,6 +234,55 @@ def _cast_block(cast_registry: list[dict] | None) -> str:
     )
 
 
+def _program_context_block(ctx: dict | None) -> str:
+    """프로그램 정보(시놉시스·태그·크레딧·방영정보)를 프롬프트에 힌트로 주입.
+    사용자가 상세 페이지에서 입력한 정보 그대로 → AI가 이 프로그램의 결·톤·인물 관계를
+    이해한 상태로 판단. 자막에 없는 사실을 만들라는 뜻은 아니고, '어떤 프로그램인지'만
+    알려주는 배경 브리핑. 각 필드 optional — 채워진 것만 나열. 비면 no-op."""
+    if not ctx or not isinstance(ctx, dict):
+        return ""
+    lines: list[str] = []
+    if ctx.get("title"):
+        lines.append(f"- 제목: {ctx['title']}")
+    if ctx.get("section"):
+        lines.append(f"- 장르: {ctx['section']}")
+    if ctx.get("broadcaster"):
+        lines.append(f"- 채널: {ctx['broadcaster']}")
+    if ctx.get("schedule"):
+        lines.append(f"- 편성: {ctx['schedule']}")
+    if ctx.get("firstAiredDate") or ctx.get("currentInfo"):
+        pair = " · ".join([p for p in [ctx.get("firstAiredDate"), ctx.get("currentInfo")] if p])
+        lines.append(f"- 방영: {pair}")
+    if ctx.get("director"):
+        lines.append(f"- 연출: {ctx['director']}")
+    if ctx.get("spinoff"):
+        lines.append(f"- 스핀오프: {ctx['spinoff']}")
+    if ctx.get("awards"):
+        lines.append(f"- 수상: {ctx['awards']}")
+    moods = ctx.get("moods")
+    if isinstance(moods, list) and moods:
+        lines.append(f"- 분위기 태그: {', '.join(str(m) for m in moods if m)}")
+    synopsis = ctx.get("synopsis")
+    if synopsis:
+        # 시놉시스는 길 수 있으니 400자로 컷 (프롬프트 낭비 방지)
+        s = str(synopsis).strip()
+        if len(s) > 400:
+            s = s[:400] + "…"
+        lines.append(f"- 시놉시스: {s}")
+    if not lines:
+        return ""
+    return (
+        "\n\n프로그램 정보(사용자 입력 · 이 프로그램의 결을 이해하는 배경 브리핑):\n"
+        + "\n".join(lines)
+        + "\n- 위 정보는 '어떤 프로그램인지'만 알려주는 배경. 자막에 없는 사실을 이 정보로 채우지는 마라."
+    )
+
+
+# recommend()·recommend_narrative_first() 호출 스코프 동안만 활성 — _base_system에서 참조.
+# 매 콜마다 recommend/RNF 진입시 세팅, 종료시 초기화. threading 없어 안전.
+_CURRENT_PROGRAM_CTX: dict | None = None
+
+
 def _base_system(genre: str, profile: dict | None = None, cast_registry: list[dict] | None = None) -> str:
     p = _pack(genre)
     return f"""너는 {p['label']} 콘텐츠의 숏폼(쇼츠) 편집 전문가다. 아래는 영상을 장면 단위로 분석한
@@ -249,7 +299,7 @@ def _base_system(genre: str, profile: dict | None = None, cast_registry: list[di
 - **길이는 완결성이 최우선.** 30~90초를 기본으로, 스토리 완결에 필요하면 120초까지 허용.
   스토리가 잘리면 실패 — 60초 안에 못 담으면 60초 넘어라. 하드 실링 180초. 20초 미만은
   정말 그 한 컷으로 완결될 때만. start/end는 장면·문장 경계에서 깔끔히 끊어라.
-- appeal은 바이럴 잠재력의 절대평가다: 5=확실히 터진다, 4=강함, 3=쓸만함, 2=약함, 1=비추천.{_profile_block(profile)}{_cast_block(cast_registry)}"""
+- appeal은 바이럴 잠재력의 절대평가다: 5=확실히 터진다, 4=강함, 3=쓸만함, 2=약함, 1=비추천.{_profile_block(profile)}{_cast_block(cast_registry)}{_program_context_block(_CURRENT_PROGRAM_CTX)}"""
 
 
 def _parse_target_len(profile: dict | None) -> float | None:
@@ -1270,7 +1320,10 @@ def _retitle_final_windows(client, shorts: list[dict], transcript: list[dict] | 
         "  (d) **인용형** — 자막의 짧은 대사 조각을 인용부호로. 앞뒤 서술 최소.\n"
         "대표 title은 5개 중 가장 훅이 강한 것 하나를 골라 넣는다.\n"
         "5개 후보 모두 자막 근거는 동일. 서로 다른 결을 강제 — 문구·어미만 다른 것은 실격.\n"
-        f"index는 입력의 쇼츠 번호를 그대로 돌려준다.{cast_block}\n"
+        f"index는 입력의 쇼츠 번호를 그대로 돌려준다.{cast_block}"
+        # 사용자가 입력한 프로그램 정보(시놉시스·태그·크레딧·방영정보)를 배경 브리핑으로 얹기.
+        # recommend()가 활성화한 _CURRENT_PROGRAM_CTX를 읽어 program_context_block으로 렌더.
+        f"{_program_context_block(_CURRENT_PROGRAM_CTX)}\n"
         "\n"
         'Return ONLY a valid JSON object like '
         '{"titles":[{"index":0,"title":"...","candidates":["...","...","...","..."]}]}.'
@@ -1474,6 +1527,7 @@ def recommend(
     key_conflicts: list[dict] | None = None,
     cast_people: list[dict] | None = None,
     ppl_detections: list[dict] | None = None,
+    program_context: dict | None = None,
 ) -> dict:
     """Two-phase shorts pick. Returns {"genre": resolved, "shorts": [...]}.
     A program `profile` (optional) steers the prompts and re-ranks by program-fit
@@ -1482,6 +1536,33 @@ def recommend(
     each short (`channel_scores`) without touching the board's own ranking."""
     if not scenes:
         return {"genre": DEFAULT_GENRE, "shorts": []}
+    # 프로그램 컨텍스트 활성화 (recommend 스코프 동안만). _base_system이 이 globals을 읽는다.
+    global _CURRENT_PROGRAM_CTX
+    _prev_ctx = _CURRENT_PROGRAM_CTX
+    _CURRENT_PROGRAM_CTX = program_context
+    try:
+        return _recommend_impl(scenes, n, genre, on_progress, profile, channels, transcript,
+                               cast_registry, narrative_segments, key_conflicts, cast_people,
+                               ppl_detections, program_context)
+    finally:
+        _CURRENT_PROGRAM_CTX = _prev_ctx
+
+
+def _recommend_impl(
+    scenes: list[dict],
+    n: int,
+    genre: str,
+    on_progress: Optional[Callable[[int, int], None]],
+    profile: dict | None,
+    channels: list[str] | None,
+    transcript: list[dict] | None,
+    cast_registry: list[dict] | None,
+    narrative_segments: list[dict] | None,
+    key_conflicts: list[dict] | None,
+    cast_people: list[dict] | None,
+    ppl_detections: list[dict] | None,
+    program_context: dict | None,
+) -> dict:
     client = genai.Client(vertexai=True, project=PROJECT, location=LOCATION)
 
     # 영상 길이에 맞춰 추천 수를 늘린다. 실측(2026-07-21): 13분 영상에서 편집자는 숏폼 3개를
@@ -2007,6 +2088,9 @@ def _expand_single_scenario(
 **숏폼(shortform) 정의**:
 - **40~60초** · SNS 배포. 훅은 첫 2~3초 (스와이프 방지가 목표).
 - 단일 순간에 집중 · setup + payoff + closure 최소 압축. 감정·펀치라인·반전이 명확.
+- **⚠️ 시나리오 title이 promise한 내용이 setup~end 창 안에 실제로 있어야 함**. 예: title이
+  "원규의 한의사 반전"이면 창 안에 원규 직업 공개 순간(자막에서 "저는 한의사입니다" 등)이
+  실제로 담겨야. 없으면 setup을 앞으로 확장해서 그 순간 포함시켜라.
 
 **⚠️ 시간 필드 형식**: setup_start_sec / payoff_moment_sec / payoff_end_sec 는 **초 단위 숫자**만.
 자막 [08:43]이면 523.0으로 환산. "8:43" 같은 콜론 포함 문자열 절대 금지.
@@ -2130,13 +2214,15 @@ def propose_clips(
 - 시나리오 하나로 국한하지 마라 — 같은 주제의 여러 순간을 이어붙일 수 있음.
 
 **클립 조건**:
-1. **완결이 최우선**. 실제 코너·주제가 40초짜리면 40초로, 8분이면 8분. 억지로 시간 늘리거나
-   자르지 마라 (다음 신 유입 or 침묵 유발). **원 스토리 길이 존중**.
+1. **완결이 최우선**. 실제 코너·주제가 1분이면 1분, 8분이면 8분. 원 스토리 길이 존중.
 2. 각 클립은 서로 다른 코너·주제 (중복 금지).
 3. 훅은 시작 30초 안 (넘길 유혹 방지).
-4. 시청자가 그 코너·주제 전체를 보고 싶어할 만한 응집력.
-5. **참고 범위 40초~10분** · 하드 실링 10분 (600초) 넘지 마라. 하한은 없음.
+4. **⚠️ title이 promise한 모든 요소가 setup~end 안에 실제로 있어야 함**. 예: title이
+   "지연과 원규의 직업 공개"면 setup~end 사이에 두 사람 공개 순간이 다 담겨야. 하나만
+   담기면 title에서 다른 사람 이름 빼거나, 시간 창 확장해서 둘 다 담기.
+5. **범위 60초~10분** · 하드 실링 10분 (600초). 60초 미만 절대 금지 — 그건 코너 아님, 숏폼.
    1~5분급 코너 클립, 5~10분급 큰 세션 (여러 코너 묶임)도 OK.
+6. setup_start_sec / payoff_end_sec 사이 **최소 60초** · 그 미만이면 시나리오 재검토 or 제외.
 
 **⚠️ 시간 필드 형식**: setup_start_sec / payoff_end_sec 는 **초 단위 숫자**만. "8:43" 금지.
 영상 총 길이 밖 시간 절대 반환 금지.
@@ -2497,10 +2583,12 @@ def _parse_variations_json(raw: str) -> list[dict]:
 
 def _refine_story_boundary(
     story: dict, transcript: list[dict] | None, scenes: list[dict] | None, duration: float,
-    vtype: str = "shortform",
+    vtype: str = "shortform", shots: list[float] | None = None,
 ) -> tuple[float, float]:
     """스토리의 setup_start / payoff_end 를 문장·발화·장면 경계로 정렬. 타입별 길이 창 적용.
-    vtype: 'shortform' (40~60s) | 'clip' (60~300s) | 'highlight' (300~600s)."""
+    vtype: 'shortform' (40~60s) | 'clip' (60~300s) | 'highlight' (300~600s).
+    shots: 프레임 diff 기반 shot boundary 시각(sec) 리스트. 있으면 end 스냅 후 가장 가까운
+    shot boundary(±3s)로 한 번 더 맞춰 시각적 컷과 일치시킴. 없으면 STT 기반 스냅만 사용."""
     if vtype == "clip":
         vmin, vmax, vaim = CLIP_MIN_SEC, CLIP_MAX_SEC, 120.0
     elif vtype == "highlight":
@@ -2531,15 +2619,24 @@ def _refine_story_boundary(
     #     (기존 CLIP_MIN_SEC=60 강제 확장이 다음 신 유입·억지 편집 유발 관찰됨)
     #   - 공통: 상한 초과 시 payoff 기준 trim.
     length = end - start
-    if length < vmin and vtype == "shortform":
+    # 절대 하한(안전망) — 극단 잘림 방지. 클립은 최소 1분 (60s) — 그 미만은 코너가 아니라
+    # 숏폼임. 2026-07-24 사용자 지적: 클립 49~56초로 나옴 → ABS_MIN 30→60 상향.
+    ABS_MIN = {"shortform": 15.0, "clip": 60.0, "highlight": 120.0}.get(vtype, 15.0)
+    if length < ABS_MIN:
+        # payoff_moment 중심으로 aim 근처 확장 (완결이 우선 · 하지만 최소 크기는 보장)
+        wanted = max(ABS_MIN, min(vaim, duration if duration > 0 else vaim))
+        start = max(0.0, peak - wanted * 0.6)
+        end = min(duration if duration > 0 else peak + wanted * 0.4, peak + wanted * 0.4)
+        if scenes:
+            start, end = _extend_to_min(start, end, scenes, aim=wanted, hard_max=vmax)
+            if duration > 0:
+                end = min(end, duration)
+    elif length < vmin and vtype == "shortform":
+        # 숏폼만 aim까지 추가 확장 (SNS 컨텍스트 특성)
         if scenes:
             start, end = _extend_to_min(start, end, scenes, aim=vaim, hard_max=vmax)
             if duration > 0:
                 end = min(end, duration)
-        if end - start < vmin:
-            wanted = min(vaim, duration if duration > 0 else vaim)
-            start = max(0.0, peak - wanted * 0.6)
-            end = min(duration if duration > 0 else peak + wanted * 0.4, peak + wanted * 0.4)
     elif length > vmax:
         # 타입 상한 초과 → payoff_moment 중심 앞 2/3, 뒤 1/3 trim
         before = vmax * 2 / 3
@@ -2556,6 +2653,16 @@ def _refine_story_boundary(
         end = _snap_to_content_end(end, transcript)
         if duration > 0:
             end = min(end, duration)
+    # Shot boundary 스냅 (있으면). STT 스냅으로 대사 경계는 맞췄지만 시각적 컷이 어긋나면
+    # 다음 신이 스치듯 들어옴. ±3s 안에 shot boundary 있으면 그리로 맞춰 시각적으로도 딱 잘림.
+    # 없으면(ffmpeg 없음/윈도 스캔 실패) 아무것도 안 함. 2026-07-24 사용자 지적: "장면전환점을
+    # 데이터화 해야 함, STT만으론 못 잡음".
+    if shots:
+        start = nearest_shot(start, shots, max_shift=3.0)
+        end = nearest_shot(end, shots, max_shift=3.0)
+        if duration > 0:
+            end = min(end, duration)
+        start = max(0.0, start)
     return round(start, 1), round(end, 1)
 
 
@@ -2573,15 +2680,194 @@ def recommend_narrative_first(
     narrative: dict | None = None,
     faces: dict | None = None,
     ppl_detections: list[dict] | None = None,
+    video_path: str | None = None,
+    program_context: dict | None = None,
+    beats: list[dict] | None = None,
 ) -> dict:
     """narrative-first 파이프라인. Phase A(pool) → Phase B(select) → refine_boundaries → 반환.
-    기존 recommend()와 시그니처 유사 · 몇 개 다름:
-    - narrative_segments/key_conflicts/cast_people 대신 narrative dict 전체 받음
-    - faces dict 추가 (얼굴 클러스터 요약)
-    - cast_people 제거 (데이터 없음)"""
+    beats(선택): AI-정돈 편집 최소 완결 단위 리스트. 있으면 Phase B가 자유 시각 뽑기 대신
+    beat 조합 방식으로 동작(2026-07-24 · 클립이 60초 미만으로 나오는 문제 근본 fix)."""
     if not transcript:
         return {"genre": DEFAULT_GENRE, "shorts": [], "mode": "narrative_first",
                 "error": "transcript empty"}
+    # 프로그램 컨텍스트 활성화 (RNF 스코프 동안만).
+    global _CURRENT_PROGRAM_CTX
+    _prev_ctx = _CURRENT_PROGRAM_CTX
+    _CURRENT_PROGRAM_CTX = program_context
+    try:
+        return _recommend_narrative_first_impl(
+            scenes, n, genre, on_progress, profile, channels, transcript,
+            cast_registry, narrative, faces, ppl_detections, video_path,
+            beats or [],
+        )
+    finally:
+        _CURRENT_PROGRAM_CTX = _prev_ctx
+
+
+def _best_beat_for_scenario(sc: dict, beats: list[dict]) -> dict | None:
+    """시나리오와 가장 겹치는 beat 반환. core_moment 포함하는 beat 최우선 · 없으면
+    approx 창과 오버랩 큰 beat. 매칭 실패 시 None."""
+    if not beats:
+        return None
+    try:
+        sc_start = float(sc.get("approx_start_sec", 0))
+        sc_end = float(sc.get("approx_end_sec", 0))
+        sc_core = float(sc.get("core_moment_sec", (sc_start + sc_end) / 2))
+    except (TypeError, ValueError):
+        return None
+    # core_moment 포함 beat 우선
+    for b in beats:
+        if b["start"] <= sc_core <= b["end"]:
+            return b
+    # 오버랩 큰 beat
+    best, best_ov = None, 0.0
+    for b in beats:
+        ov = max(0.0, min(b["end"], sc_end) - max(b["start"], sc_start))
+        if ov > best_ov:
+            best, best_ov = b, ov
+    return best
+
+
+def _cut_shortform_from_beat(beat: dict, sc_core: float,
+                             sf_min: float = 40.0, sf_max: float = 60.0) -> tuple[float, float]:
+    """beat 안에서 shortform 컷 결정 (규칙 기반).
+    - beat 길이 <= sf_max: beat 그대로 사용 (짧아도 완결).
+    - beat 길이 > sf_max: core_moment 중심 앞뒤 균형 컷 (setup 2/3, 여운 1/3).
+      core가 beat 밖이면 beat 앞부분 sf_max초.
+    """
+    b_start, b_end = float(beat["start"]), float(beat["end"])
+    length = b_end - b_start
+    if length <= sf_max:
+        return b_start, b_end
+    # 큰 beat → core 기준 컷
+    if b_start <= sc_core <= b_end:
+        before = sf_max * 0.6
+        after = sf_max * 0.4
+        start = max(b_start, sc_core - before)
+        end = min(b_end, start + sf_max)
+        # 뒤 여유가 부족하면 앞을 당김
+        if end - start < sf_max:
+            start = max(b_start, end - sf_max)
+        return round(start, 1), round(end, 1)
+    # core가 밖 → beat 앞부분
+    return round(b_start, 1), round(min(b_end, b_start + sf_max), 1)
+
+
+def _build_from_beats(
+    scenarios: list[dict], beats: list[dict], transcript: list[dict] | None,
+    duration: float, genre: str, profile: dict | None,
+    faces: dict | None, ppl_detections: list[dict] | None,
+    cast_registry: list[dict] | None,
+) -> list[dict]:
+    """beats 기반 shortform + clip 조립 (자유 시각 뽑기 제거).
+    각 시나리오 → 매칭 beat 하나 → shortform 컷 + clip(beat 그대로).
+    2026-07-24: 클립이 60초 미만·대사 중간 잘림 문제 근본 fix — beat 경계가 이미
+    편집자가 그대로 쓸 수 있는 완결 단위라 refine 불필요."""
+    shorts: list[dict] = []
+    used_beat_ids: set = set()
+    for sc in scenarios:
+        try:
+            sid = int(sc.get("id", -1))
+        except (TypeError, ValueError):
+            continue
+        beat = _best_beat_for_scenario(sc, beats)
+        if not beat:
+            print(f"   (시나리오 {sid} 매칭 beat 없음 · 제외: {sc.get('story_title','')[:24]})")
+            continue
+        try:
+            sc_core = float(sc.get("core_moment_sec", (beat["start"] + beat["end"]) / 2))
+        except (TypeError, ValueError):
+            sc_core = (beat["start"] + beat["end"]) / 2
+
+        # A) 숏폼: beat 안에서 40~60초 컷
+        sf_start, sf_end = _cut_shortform_from_beat(beat, sc_core)
+        if sf_end > sf_start:
+            derived = {"hook_strength": 7, "payoff": 7, "completeness": 8}
+            shorts.append({
+                "type": "shortform",
+                "start": sf_start, "end": sf_end,
+                "title": (sc.get("story_title") or "").strip() or "무제",
+                "reason": (sc.get("story_synopsis") or beat.get("summary") or "").strip(),
+                "story_synopsis": (sc.get("story_synopsis") or "").strip(),
+                "hook_strength": 7, "payoff": 7, "completeness": 8,
+                "appeal": _appeal_from_axes(derived) or 3,
+                "score100": _axes_score(derived),
+                "hook": (sc.get("hook") or beat.get("hook") or "기타").strip(),
+                "tags": [str(t).strip() for t in (sc.get("tags") or []) if str(t).strip()],
+                "characters": [str(c).strip() for c in (sc.get("characters") or beat.get("characters") or []) if str(c).strip()],
+                "scenario_id": sid, "beat_id": beat.get("id"),
+                "source": "narrative_first_beats",
+            })
+
+        # B) 클립: beat 하나 그대로 (같은 beat 중복 금지)
+        if beat.get("id") in used_beat_ids:
+            continue
+        used_beat_ids.add(beat.get("id"))
+        clip_length = beat["end"] - beat["start"]
+        if clip_length < 60.0:
+            # beat이 60초 미만이면 clip으로는 부적합 (숏폼만 만들고 clip 스킵)
+            continue
+        derived = {"hook_strength": 7, "payoff": 7, "completeness": 8}
+        shorts.append({
+            "type": "clip",
+            "start": beat["start"], "end": beat["end"],
+            "title": (beat.get("title") or sc.get("story_title") or "").strip() or "무제",
+            "reason": (beat.get("summary") or sc.get("story_synopsis") or "").strip(),
+            "story_synopsis": (beat.get("summary") or "").strip(),
+            "hook_strength": 7, "payoff": 7, "completeness": 8,
+            "appeal": _appeal_from_axes(derived) or 3,
+            "score100": _axes_score(derived),
+            "hook": (beat.get("hook") or "기타").strip(),
+            "tags": [str(t).strip() for t in (sc.get("tags") or []) if str(t).strip()],
+            "characters": [str(c).strip() for c in (beat.get("characters") or []) if str(c).strip()],
+            "scenario_id": sid, "beat_id": beat.get("id"),
+            "source": "narrative_first_beats",
+        })
+
+    # 시나리오에 매칭 안 된 beat 중 60초+인 것도 clip 후보로 추가 (최대 n_extra개)
+    extra_clips = 0
+    for b in beats:
+        if extra_clips >= 3:
+            break
+        if b.get("id") in used_beat_ids:
+            continue
+        if (b["end"] - b["start"]) < 60.0:
+            continue
+        derived = {"hook_strength": 6, "payoff": 6, "completeness": 7}
+        shorts.append({
+            "type": "clip",
+            "start": b["start"], "end": b["end"],
+            "title": (b.get("title") or "").strip() or "무제",
+            "reason": (b.get("summary") or "").strip(),
+            "story_synopsis": (b.get("summary") or "").strip(),
+            "hook_strength": 6, "payoff": 6, "completeness": 7,
+            "appeal": _appeal_from_axes(derived) or 3,
+            "score100": _axes_score(derived),
+            "hook": (b.get("hook") or "기타").strip(),
+            "tags": [], "characters": [str(c).strip() for c in (b.get("characters") or []) if str(c).strip()],
+            "scenario_id": None, "beat_id": b.get("id"),
+            "source": "narrative_first_beats",
+        })
+        used_beat_ids.add(b.get("id"))
+        extra_clips += 1
+    return shorts
+
+
+def _recommend_narrative_first_impl(
+    scenes: list[dict],
+    n: int,
+    genre: str,
+    on_progress: Optional[Callable[[int, int], None]],
+    profile: dict | None,
+    channels: list[str] | None,
+    transcript: list[dict] | None,
+    cast_registry: list[dict] | None,
+    narrative: dict | None,
+    faces: dict | None,
+    ppl_detections: list[dict] | None,
+    video_path: str | None,
+    beats: list[dict],
+) -> dict:
     client = genai.Client(vertexai=True, project=PROJECT, location=LOCATION)
 
     # 영상 길이 · n 산정 (기존 로직 재사용)
@@ -2617,6 +2903,37 @@ def recommend_narrative_first(
             ppl_detections=ppl_detections,
         )
 
+    # === Phase B (신규 · 2026-07-24): beats가 있으면 beat 조합 방식으로 우선 처리 ===
+    # 자유 시각 뽑기가 클립 60초 미만·대사 중간 잘림을 유발한 근본 원인. beat는 이미
+    # 완결 단위로 정돈돼 있어 그대로 사용하면 됨.
+    if beats:
+        print(f"   Phase B: beat 조합 방식 (beats {len(beats)}개 사용)")
+        if on_progress:
+            on_progress(3, 3)
+        shorts = _build_from_beats(
+            scenarios, beats, transcript, duration, genre, profile,
+            faces, ppl_detections, cast_registry,
+        )
+        # rank + fit (아래 공통 로직 재사용을 위해 mid-return 대신 shorts만 채우고 진행)
+        def type_order_new(s: dict) -> int:
+            return {"shortform": 0, "clip": 1, "highlight": 2}.get(s.get("type", ""), 9)
+        shorts.sort(key=lambda s: (type_order_new(s), -s.get("score100", 0), -s.get("hook_strength", 0)))
+        type_rank_counter: dict = {}
+        for s in shorts:
+            t = s.get("type", "unknown")
+            type_rank_counter[t] = type_rank_counter.get(t, 0) + 1
+            s["rank"] = type_rank_counter[t]
+        if shorts:
+            shorts = apply_profile_fit(shorts, profile, duration)
+            try:
+                from .channels import apply_channel_fit
+                shorts = apply_channel_fit(shorts, scenes or [], channels)
+            except Exception as e:
+                print(f"   (채널 적합 건너뜀: {str(e)[:80]})")
+        return {"genre": genre, "shorts": shorts, "mode": "narrative_first_beats",
+                "scenarios_count": len(scenarios), "beats_count": len(beats)}
+
+    # === 기존 Phase B (beats 없을 때 fallback) ===
     # Phase B: 시나리오별 숏폼만 · propose_clips (코너/주제) 병렬.
     # 하이라이트는 60분+ 영상에서만 (짧은 영상은 회차 요약이 무의미 · 사용자 방향 2026-07-23).
     from concurrent.futures import ThreadPoolExecutor as _TPE
@@ -2644,6 +2961,36 @@ def recommend_narrative_first(
 
     # 시나리오 id → scenario dict 매핑
     by_id = {int(s.get("id", -1)): s for s in scenarios if isinstance(s.get("id"), (int, float))}
+
+    # Shot boundary 감지 — 시나리오 approx 창 + clip_defs 창 union만 스캔 (전체 60분 스캔 X).
+    # ffmpeg fps=1, threshold 0.55로 큰 컷만. video_path 없거나 ffmpeg 실패 시 빈 리스트로 조용히
+    # 폴백해 refine 로직이 STT 스냅만으로 계속 동작. 2026-07-24.
+    shots: list[float] = []
+    if video_path:
+        windows: list[tuple[float, float]] = []
+        for s in scenarios:
+            try:
+                ast = float(s.get("approx_start_sec", 0))
+                aen = float(s.get("approx_end_sec", 0))
+                if aen > ast:
+                    windows.append((ast, aen))
+            except (TypeError, ValueError):
+                continue
+        for c in (clip_defs or []):
+            try:
+                cst = float(c.get("setup_start_sec", 0) or 0)
+                cen = float(c.get("payoff_end_sec", 0) or 0)
+                if cen > cst:
+                    windows.append((cst, cen))
+            except (TypeError, ValueError):
+                continue
+        if windows:
+            try:
+                shots = detect_shots(video_path, windows, threshold=0.55, fps=1)
+                print(f"   shot boundary {len(shots)}개 감지 (창 {len(windows)}개)")
+            except Exception as e:
+                print(f"   (shot detect 실패 · 스킵: {str(e)[:60]})")
+                shots = []
 
     # Phase B 폴백: 변형 없으면 시나리오의 approx_start/end로 단일 변형 만들어 진행
     if not variations:
@@ -2697,7 +3044,7 @@ def recommend_narrative_first(
             "payoff_moment_sec": vdata.get("payoff_moment_sec"),
             "payoff_end_sec": vdata.get("payoff_end_sec"),
         }
-        start, end = _refine_story_boundary(story_wrap, transcript, scenes, duration, vtype="shortform")
+        start, end = _refine_story_boundary(story_wrap, transcript, scenes, duration, vtype="shortform", shots=shots)
         if end <= start or (end - start) < 1.0:
             print(f"   (숏폼 경계 실패 · 시나리오 {sid} 제외: {scenario.get('story_title','')[:24]})")
             continue
@@ -2731,7 +3078,7 @@ def recommend_narrative_first(
             "payoff_moment_sec": c.get("payoff_moment_sec", (float(c.get("setup_start_sec") or 0) + float(c.get("payoff_end_sec") or 0)) / 2),
             "payoff_end_sec": c.get("payoff_end_sec"),
         }
-        start, end = _refine_story_boundary(clip_wrap, transcript, scenes, duration, vtype="clip")
+        start, end = _refine_story_boundary(clip_wrap, transcript, scenes, duration, vtype="clip", shots=shots)
         if end <= start or (end - start) < 1.0:
             print(f"   (클립 경계 실패 · 제외: {c.get('title','')[:24]})")
             continue

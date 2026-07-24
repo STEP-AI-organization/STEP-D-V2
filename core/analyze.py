@@ -43,8 +43,11 @@ from .refine import refine_segments
 from .scenes import scenes_from_transcript, scenes_from_duration_chunks
 from .recommend import recommend, recommend_narrative_first
 from .narrative import build_narrative
+from .shots import detect_shots
+from .scene_type import classify_shot_types
+from .beats import build_beats
 
-CHECKPOINTS = ("stt.json", "refined.json", "faces.json", "ppl.json", "scenes.json", "cast.json", "timeline.json", "narrative.json", "shorts.json", "analysis.json")
+CHECKPOINTS = ("stt.json", "refined.json", "faces.json", "ppl.json", "scenes.json", "cast.json", "timeline.json", "narrative.json", "shots.json", "scene_type.json", "beats.json", "shorts.json", "analysis.json")
 
 
 # ── checkpoint plumbing ─────────────────────────────────────────────────────────
@@ -102,17 +105,26 @@ def _prepare_checkpoints(
     # RECOMMEND_VER: recommend 프롬프트/로직이 바뀌면 이 문자열을 올려 기존 shorts.json 캐시를
     # 무효화. 2026-07-23g: narrative-first 트리 구조 (시나리오×변형×best) + 길이 제한 완화
     # (60→120초 · 완결성 우선 · 하드실링 180초).
-    RECOMMEND_VER = "2026-07-23t"
-    REFINE_VER = "2026-07-23a"  # refine 프롬프트 변경 시 올려 refined.json 캐시 무효화
-    FACES_VER = "2026-07-23a"   # faces 스테이지 로직 (full_frames 저장·vision auto-map) 변경 태그
+    RECOMMEND_VER = "2026-07-24c"  # beat 조합 기반으로 재작성 (자유 시각 뽑기 제거)
+    REFINE_VER = "2026-07-24a"  # STT 하이브리드로 timestamp 정확도 반영 · refined 재실행
+    FACES_VER = "2026-07-23b"   # faces stage: full_frame_segs 추가 (STT 컨텍스트 활용)
+    SHOTS_VER = "2026-07-24a"   # shot boundary detection: ffmpeg scene, fps=1, thr=0.55
+    SCENE_TYPE_VER = "2026-07-24a"  # shot 프레임 → Vision batch: interview/on_scene/other
+    BEATS_VER = "2026-07-24b"   # beats 프롬프트 + shot_types 통합 (예능 문법)
+    STT_VER = "2026-07-24-hybrid"  # Gemini text + whisper timestamp 하이브리드 (실측 87.5% 정렬)
+    STT_PROVIDER_ENV = (os.environ.get("STT_PROVIDER") or "gemini").lower()
     RECOMMEND_MODE = os.environ.get("RECOMMEND_MODE") or "narrative_first"
     params = {
-        "refined.json": _fingerprint(cast_registry, REFINE_VER),
+        "stt.json": _fingerprint(STT_VER, STT_PROVIDER_ENV),
+        "refined.json": _fingerprint(cast_registry, REFINE_VER, STT_VER, STT_PROVIDER_ENV),
         "faces.json": _fingerprint(cast_registry, FACES_VER),
-        "cast.json": _fingerprint(cast_registry, REFINE_VER),
-        "narrative.json": _fingerprint(cast_registry, REFINE_VER),
-        "shorts.json": _fingerprint(genre, shorts_n, profile, channels, cast_registry, RECOMMEND_VER, RECOMMEND_MODE, REFINE_VER, FACES_VER),
-        "analysis.json": _fingerprint(genre, shorts_n, profile, channels, cast_registry, RECOMMEND_VER, RECOMMEND_MODE, REFINE_VER, FACES_VER),
+        "cast.json": _fingerprint(cast_registry, REFINE_VER, STT_VER),
+        "narrative.json": _fingerprint(cast_registry, REFINE_VER, STT_VER),
+        "shots.json": _fingerprint(SHOTS_VER),
+        "scene_type.json": _fingerprint(SCENE_TYPE_VER, SHOTS_VER),
+        "beats.json": _fingerprint(BEATS_VER, REFINE_VER, SHOTS_VER, SCENE_TYPE_VER, STT_VER),
+        "shorts.json": _fingerprint(genre, shorts_n, profile, channels, cast_registry, RECOMMEND_VER, RECOMMEND_MODE, REFINE_VER, FACES_VER, BEATS_VER, STT_VER),
+        "analysis.json": _fingerprint(genre, shorts_n, profile, channels, cast_registry, RECOMMEND_VER, RECOMMEND_MODE, REFINE_VER, FACES_VER, BEATS_VER, STT_VER),
     }
     manifest = {"video_name": video_name, "video_size": video_size, "params": params}
 
@@ -164,6 +176,7 @@ def analyze(
     cast_registry: list[dict] | None = None,
     channels: list[str] | None = None,
     fast: bool = False,
+    program_context: dict | None = None,
 ) -> dict:
     """Run all stages (skipping checkpointed ones). Returns the analysis dict.
     `cast_registry` (프로그램 출연자 목록) normalizes on-screen name captions into a
@@ -244,6 +257,7 @@ def analyze(
         rec = recommend(
             scenes, n=shorts_n, genre=genre, profile=profile, channels=channels,
             transcript=segments, cast_registry=cast_registry,
+            program_context=program_context,
             on_progress=lambda done, total: _progress("recommend", 50 + 45 * done / max(1, total), f"후보 추출 {done}/{total} 구간"),
         )
         timed("recommend", ts)
@@ -268,7 +282,7 @@ def analyze(
     else:
         step("자막 정제…")
         _progress("refine", 31, "자막 정제 중")
-        refined = refine_segments(segments, cast_registry=cast_registry)
+        refined = refine_segments(segments, cast_registry=cast_registry, program_context=program_context)
         _save_json(out_dir / "refined.json", refined)
     timed("refine", ts)
     _progress("refine", 38, "자막 정제 완료")
@@ -295,9 +309,13 @@ def analyze(
             from .faces import build_face_index
             _progress("faces", 40, "얼굴 검출·클러스터링 중")
             step("얼굴 검출·클러스터링…")
+            # 사용자가 등록한 캐스트 사진 폴더 (있으면 클러스터 매칭에 사용). 서버가 work/cast_photos/에
+            # 프로그램 상세 페이지의 castPhotos data URL들을 파일로 풀어놓는다. 없으면 no-op.
+            _cast_photos_dir = out_dir / "cast_photos"
             refined, faces = build_face_index(
                 video_path, refined, out_dir,
                 on_progress=lambda done, total: _progress("faces", 40 + 12 * done / max(1, total), f"얼굴 검출 {done}/{total} 프레임"),
+                cast_photos_dir=_cast_photos_dir if _cast_photos_dir.exists() else None,
             )
             _save_json(out_dir / "refined.json", refined)  # speaker 라벨 덮어써졌으므로 재저장
             _save_json(out_dir / "faces.json", faces)
@@ -317,7 +335,7 @@ def analyze(
             step("Vision auto-map (얼굴 → 이름)…")
             _progress("faces", 55, "Vision 자동 매핑 중")
             existing_mapping = faces.get("mapping") or {}
-            vision_map = vision_auto_map_clusters(faces, out_dir, cast_registry=cast_registry)
+            vision_map = vision_auto_map_clusters(faces, out_dir, cast_registry=cast_registry, refined=refined)
             if vision_map:
                 # 사용자가 이미 수동 매핑한 클러스터는 존중, 그 외에 Vision 결과 병합
                 merged = dict(existing_mapping)
@@ -371,9 +389,11 @@ def analyze(
     if scenes:
         step(f"청크 분할 — 체크포인트 재사용 ({len(scenes)} 청크)")
     else:
-        step("5분 청크 분할…")
-        _progress("scenes", 40, "5분 청크 분할 중")
-        scenes = scenes_from_duration_chunks(refined)
+        # 장르별 청크 크기 — 예능 180s(코너 단위), 드라마 300s(서사 아크 단위).
+        # genre 인자가 chunks/shots/faces 파라미터 결정하는 단일 진실 소스.
+        step(f"청크 분할 (genre={genre})…")
+        _progress("scenes", 40, "청크 분할 중")
+        scenes = scenes_from_duration_chunks(refined, genre=genre)
         _save_json(out_dir / "scenes.json", scenes)
     step(f"  {len(scenes)} 청크")
     timed("scenes", ts)
@@ -456,6 +476,7 @@ def analyze(
                 refined, scenes, cast, timeline,
                 on_progress=lambda done, total: _progress("narrative", 82 + 3 * done / max(1, total), f"서사 요약 {done}/{total} 배치"),
                 cast_registry=cast_registry,
+                program_context=program_context,
             )
             _save_json(out_dir / "narrative.json", narrative)
             step(f"서사 요약 — {len(narrative.get('segments', []))} 구간 · 갈등 {len(narrative.get('key_conflicts', []))}건")
@@ -465,6 +486,97 @@ def analyze(
             traceback.print_exc()
             narrative = None
     timed("narrative", ts)
+
+    # 4f) shot boundary detection — 프레임 diff 기반 시각적 전환점. narrative.segments 창만 스캔.
+    ts = time.time()
+    shots_data = _load_json(out_dir / "shots.json")
+    if isinstance(shots_data, dict) and isinstance(shots_data.get("shots"), list):
+        step(f"shot boundary — 체크포인트 재사용 ({len(shots_data['shots'])}개)")
+    else:
+        _progress("shots", 83, "shot boundary 감지")
+        windows: list[tuple[float, float]] = []
+        if isinstance(narrative, dict) and isinstance(narrative.get("segments"), list):
+            for s in narrative["segments"]:
+                try:
+                    st = float(s.get("start", 0)); en = float(s.get("end", 0))
+                    if en > st:
+                        windows.append((st, en))
+                except (TypeError, ValueError):
+                    continue
+        if not windows and refined:
+            # narrative 없으면 전체
+            try:
+                total = float(refined[-1].get("end", 0))
+                if total > 0:
+                    windows = [(0.0, total)]
+            except (TypeError, ValueError, IndexError):
+                pass
+        # threshold는 detect_shots가 genre에서 결정(variety 0.55·drama 0.35). shots.json에는
+        # 실제 사용된 임계를 기록해 재분석 재현성 확보.
+        try:
+            shots_list = detect_shots(str(video_path), windows, fps=1, genre=genre) if windows else []
+            # detect_shots가 사용한 실제 threshold — 로깅/체크포인트용으로 재계산.
+            from .shots import _SHOT_THRESHOLD_BY_GENRE, _DEFAULT_SHOT_THRESHOLD
+            used_th = _SHOT_THRESHOLD_BY_GENRE.get(genre or "", _DEFAULT_SHOT_THRESHOLD)
+            shots_data = {"shots": shots_list, "windows": len(windows), "threshold": used_th, "fps": 1, "genre": genre}
+            _save_json(out_dir / "shots.json", shots_data)
+            step(f"shot boundary — {len(shots_list)}개 (창 {len(windows)}개, threshold={used_th}, genre={genre})")
+        except Exception as e:
+            step(f"  (shot boundary 실패 · 빈 리스트로 진행: {str(e)[:70]})")
+            shots_data = {"shots": [], "windows": 0, "threshold": 0.55, "fps": 1}
+            _save_json(out_dir / "shots.json", shots_data)
+    timed("shots", ts)
+
+    # 4g) scene_type — shot별 대표 프레임 → Gemini Vision batch로 interview/on_scene/other 분류.
+    # 한국 예능은 현장 원 신 + 인서트 인터뷰룸이 교차 편집 · STT만으론 구별 불가 · 프레임 필수.
+    ts = time.time()
+    scene_type_data = _load_json(out_dir / "scene_type.json")
+    if isinstance(scene_type_data, dict) and isinstance(scene_type_data.get("shot_types"), list):
+        step(f"scene_type — 체크포인트 재사용 ({len(scene_type_data['shot_types'])} shot)")
+    else:
+        _progress("scene_type", 83, "shot 유형 분류 (interview/on_scene)")
+        try:
+            duration_for_st = float(scenes[-1]["end"]) if scenes else (float(refined[-1]["end"]) if refined else 0.0)
+            shot_types = classify_shot_types(
+                str(video_path),
+                (shots_data or {}).get("shots") or [],
+                duration_for_st,
+                out_dir / "shot_frames",
+            )
+            scene_type_data = {"shot_types": shot_types}
+            _save_json(out_dir / "scene_type.json", scene_type_data)
+            step(f"scene_type — {len(shot_types)} shot 분류 완료")
+        except Exception as e:
+            step(f"  (scene_type 실패 · 빈 리스트로 진행: {str(e)[:70]})")
+            scene_type_data = {"shot_types": []}
+            _save_json(out_dir / "scene_type.json", scene_type_data)
+    timed("scene_type", ts)
+
+    # 4h) beats — AI-정돈 편집 최소 완결 단위. narrative + STT + shots + shot_types 종합.
+    ts = time.time()
+    beats_data = _load_json(out_dir / "beats.json")
+    if isinstance(beats_data, dict) and isinstance(beats_data.get("beats"), list) and beats_data["beats"]:
+        step(f"beat — 체크포인트 재사용 ({len(beats_data['beats'])}개)")
+    else:
+        _progress("beats", 84, "편집 단위(beat) 생성")
+        try:
+            beats_data = build_beats(
+                narrative if isinstance(narrative, dict) else None,
+                refined,
+                (shots_data or {}).get("shots") or [],
+                float(scenes[-1]["end"]) if scenes else (float(refined[-1]["end"]) if refined else 0.0),
+                shot_types=(scene_type_data or {}).get("shot_types") or [],
+                on_progress=lambda done, total: _progress("beats", 84 + 1 * done / max(1, total), f"beat 생성 {done}/{total}"),
+            )
+            _save_json(out_dir / "beats.json", beats_data)
+            step(f"beat — {len(beats_data.get('beats') or [])}개 생성")
+        except Exception as e:
+            step(f"  (beat 생성 실패 · 빈 리스트로 진행: {str(e)[:70]})")
+            import traceback
+            traceback.print_exc()
+            beats_data = {"beats": []}
+            _save_json(out_dir / "beats.json", beats_data)
+    timed("beats", ts)
 
     # 5) shorts recommendation (two-phase, genre-aware) ---------------------------
     ts = time.time()
@@ -486,6 +598,9 @@ def analyze(
                 narrative=narrative if isinstance(narrative, dict) else None,
                 faces=faces if isinstance(faces, dict) else None,
                 ppl_detections=(ppl or {}).get("detections") if isinstance(ppl, dict) else None,
+                video_path=str(video_path),
+                program_context=program_context,
+                beats=(beats_data or {}).get("beats") or [],
                 on_progress=lambda done, total: _progress("recommend", 85 + 10 * done / max(1, total), f"쇼츠 pool·선정 {done}/{total}"),
             )
         else:
@@ -495,6 +610,7 @@ def analyze(
                 narrative_segments=(narrative or {}).get("segments") if isinstance(narrative, dict) else None,
                 key_conflicts=(narrative or {}).get("key_conflicts") if isinstance(narrative, dict) else None,
                 ppl_detections=(ppl or {}).get("detections") if isinstance(ppl, dict) else None,
+                program_context=program_context,
                 on_progress=lambda done, total: _progress("recommend", 85 + 10 * done / max(1, total), f"후보 추출 {done}/{total} 구간"),
             )
         _save_json(out_dir / "shorts.json", rec)
@@ -564,8 +680,20 @@ def main() -> None:
     if "--channels" in sys.argv:
         channels = [c.strip() for c in sys.argv[sys.argv.index("--channels") + 1].split(",") if c.strip()]
 
+    # Optional program context (--program-context <path.json>) — 사용자가 프로그램 상세 페이지
+    # 에서 입력한 시놉시스·태그·크레딧·방영정보 등. recommend/retitle 프롬프트에 배경으로 주입.
+    program_context = None
+    if "--program-context" in sys.argv:
+        try:
+            program_context = json.loads(
+                Path(sys.argv[sys.argv.index("--program-context") + 1]).read_text(encoding="utf-8")
+            )
+        except Exception as e:
+            print(f"   (프로그램 컨텍스트 로드 실패, 무시: {str(e)[:80]})")
+
     result = analyze(video, out_dir, shorts_n=n, genre=genre, resume=resume, profile=profile,
-                     cast_registry=cast_registry, channels=channels, fast=fast)
+                     cast_registry=cast_registry, channels=channels, fast=fast,
+                     program_context=program_context)
     cast = result.get("cast") or {}
     print(f"\n=== 요약 ===")
     print(f"  {len(result['transcript'])} 자막 · {len(result['scenes'])} 장면 · {len(result['shorts'])} 쇼츠 · "

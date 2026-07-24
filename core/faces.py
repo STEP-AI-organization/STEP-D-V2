@@ -48,25 +48,47 @@ _APP = None
 def _get_app():
     """FaceAnalysis 싱글턴. 첫 호출 시 모델 로드 + (없으면) 다운로드.
 
-    GPU(CUDA) 사용 가능하면 우선 · 없으면 CPU 폴백. RTX급 GPU에서 프레임당 ~5-10ms로
-    CPU 대비 100배 빠름. onnxruntime-gpu가 없거나 CUDA 초기화 실패하면 자동 CPU."""
+    GPU 강제(2026-07-24) — CPU 폴백은 명시 opt-in만.
+    이유: 실측 CPU는 얼굴당 ~50ms, GPU는 ~5ms. 108분 영상에서 faces가 346s vs 4192s로
+    12배 편차 관찰됨(m_153d4e79 vs m_84c95ff0). CPU 폴백 허용은 총 처리시간을 60분 밖으로
+    밀어내 서비스 사용 불가로 만듦. providers 리스트에 CPU를 아예 안 넣어서 GPU 초기화 실패 시
+    onnxruntime이 세션 생성 단계에서 raise → 워커가 명확한 에러를 로그로 남김.
+
+    폴백이 정말 필요한 로컬 디버깅에선 `FACES_ALLOW_CPU=1` 환경변수로 opt-in."""
     global _APP
     if _APP is not None:
         return _APP
     import onnxruntime as ort
     from insightface.app import FaceAnalysis
     available = set(ort.get_available_providers())
-    # 우선순위: DirectML(Windows GPU · CUDA 툴킷 불필요) > CUDA(리눅스/CUDA 설치돼있으면) > CPU.
-    # 첫 실행 로그에 실제 사용 provider 남겨서 GPU 붙었는지 눈으로 확인.
-    providers = []
-    ctx_id = -1
+
+    allow_cpu = os.environ.get("FACES_ALLOW_CPU", "").strip().lower() in ("1", "true", "yes")
+
+    # DirectML(Windows · CUDA 툴킷 불필요) 우선, 그다음 CUDA(Linux).
+    gpu_provider: str | None = None
     if "DmlExecutionProvider" in available:
-        providers.append("DmlExecutionProvider")
-        ctx_id = 0
+        gpu_provider = "DmlExecutionProvider"
     elif "CUDAExecutionProvider" in available:
-        providers.append("CUDAExecutionProvider")
+        gpu_provider = "CUDAExecutionProvider"
+
+    if gpu_provider is None:
+        if not allow_cpu:
+            raise RuntimeError(
+                "[faces] GPU provider unavailable. "
+                f"installed onnxruntime providers: {sorted(available)}. "
+                "faces stage requires GPU (CPU is ~10× slower per face; can push 60min video "
+                "past 60min processing, making the pipeline unusable in production). "
+                "Fix: install onnxruntime-directml (Windows) or onnxruntime-gpu (Linux/CUDA). "
+                "Debug override: set env FACES_ALLOW_CPU=1 to allow CPU fallback (slow)."
+            )
+        providers = ["CPUExecutionProvider"]
+        ctx_id = -1
+        print("[faces] ⚠️ FACES_ALLOW_CPU=1 → CPU 강제 폴백 (예상 처리시간 10× 증가)")
+    else:
+        # CPU 폴백을 리스트에 안 넣음 = GPU 초기화 실패 시 세션 생성 자체가 raise (silent CPU 폴백 차단).
+        providers = [gpu_provider]
         ctx_id = 0
-    providers.append("CPUExecutionProvider")
+
     app = FaceAnalysis(name="buffalo_l", providers=providers)
     # det_size는 감지 정확도 vs 속도 tradeoff. 640x640이 안정적. GPU면 320도 고려 가능.
     app.prepare(ctx_id=ctx_id, det_size=(640, 640))
@@ -171,6 +193,7 @@ def build_face_index(
     refined: list[dict],
     out_dir: Path,
     on_progress: Optional[Callable[[int, int], None]] = None,
+    cast_photos_dir: Path | None = None,
 ) -> tuple[list[dict], dict]:
     """메인 진입.
 
@@ -205,6 +228,15 @@ def build_face_index(
     flat_embs: list[np.ndarray] = []
     flat_ref: list[tuple[int, int]] = []  # (seg_i, face_j_in_seg)
 
+    # 최소 샘플 간격 — 짧은 대사 세그가 몰리면(예능 리액션 컷) 프레임 수 폭증.
+    # 같은 사람이 같은 컷에서 여러 프레임 잡혀도 클러스터링은 centroid로 수렴 → 결과 거의 동일.
+    # 3s 하한이면 대사 세그가 1-2s 몰려도 최대 절반은 스킵되어 총 프레임 수 30-50% 절감.
+    # 스킵된 세그는 speaker 라벨링에 못 참여하지만, refined는 이후에 인접 세그의 speaker를 상속.
+    _MIN_SAMPLE_INTERVAL_SEC = 3.0
+    last_sampled_ts: float = -1.0e9
+    sampled = 0
+    skipped_interval = 0
+
     t0 = time.time()
     for i, seg in enumerate(refined):
         try:
@@ -218,11 +250,19 @@ def build_face_index(
         except (TypeError, ValueError):
             pass
         ts = start + min(0.5, max(0.0, (end - start) / 2))
+        # 하한 간격 미달이면 이 세그는 스킵 (per_seg_faces[i]는 빈 리스트로 유지 → speaker 상속으로 커버)
+        if ts - last_sampled_ts < _MIN_SAMPLE_INTERVAL_SEC:
+            skipped_interval += 1
+            if on_progress and (i % 20 == 0 or i == n - 1):
+                on_progress(i + 1, n)
+            continue
         frame = _seek_frame(cap, ts)
         if frame is None:
             if on_progress and (i % 20 == 0 or i == n - 1):
                 on_progress(i + 1, n)
             continue
+        last_sampled_ts = ts
+        sampled += 1
         faces = _detect(frame)
         per_seg_faces[i] = faces
         for j, f in enumerate(faces):
@@ -234,7 +274,10 @@ def build_face_index(
 
     detect_sec = time.time() - t0
     total_faces = len(flat_embs)
-    print(f"[faces] 프레임 {n}개 처리 · 얼굴 총 {total_faces}개 검출 · {detect_sec:.1f}s")
+    print(
+        f"[faces] 세그 {n}개 중 {sampled}개 샘플 · {skipped_interval}개 간격 스킵 · "
+        f"얼굴 총 {total_faces}개 검출 · {detect_sec:.1f}s"
+    )
 
     if total_faces < 5:
         # 클러스터링에 최소 샘플 필요 — 너무 적으면 스킵
@@ -429,21 +472,59 @@ def build_face_index(
             except Exception:
                 pass
         cap.release()
+        # full_frames와 짝지어 시점 seg_i 저장 (Vision auto-map이 STT 컨텍스트 뽑기용)
+        full_seg_ids = [seg_i for seg_i, _face_j, _area in picks]
         clusters_meta[label] = {
             "cluster_id": int(c_id),
             "count": rec["count"],
             "gender_hint": max(set(rec["genders"]), key=rec["genders"].count),
             "representative_frames": reps,       # 얼굴 크롭 (사용자 UI · 매핑 확인용)
             "full_frames": full_reps,             # 전체 프레임 (Vision auto-map 캡션 감지용)
+            "full_frame_segs": full_seg_ids,      # 각 full_frame의 seg_i (STT 컨텍스트용)
         }
+
+    # ── 사용자 등록 캐스트 사진 → 클러스터 매칭 (2026-07-24) ─────────────────────
+    # 사용자가 프로그램 상세 페이지에서 인물 사진을 올렸으면 그 사진 embedding으로 클러스터에
+    # 직접 이름을 붙인다. 다수결 auto-mapping / Vision LLM 매칭보다 근거가 강력해서 우선순위 top —
+    # 겹치는 클러스터는 사진 매칭이 override. 사진 없거나 얼굴 검출 실패면 no-op.
+    photo_mapping: dict[str, str] = {}
+    if cast_photos_dir:
+        try:
+            cast_embs = load_cast_photo_embeddings(cast_photos_dir)
+            if cast_embs:
+                photo_mapping = match_clusters_by_photos(
+                    faces_json={},  # 이 시점엔 아직 안 만들어짐 — dummy
+                    per_seg_faces=per_seg_faces,
+                    flat_ref=flat_ref,
+                    cluster_labels=cluster_labels,
+                    cluster_to_label=cluster_to_label,
+                    cast_photo_embs=cast_embs,
+                )
+                if photo_mapping:
+                    # 사진 매칭이 우세: 다수결과 병합하되 사진 매칭 결과가 이깁니다.
+                    for lbl, nm in photo_mapping.items():
+                        auto_mapping[lbl] = nm
+                    # 사진 매칭이 확정한 라벨은 refined에서도 다시 확산 (다수결 자리에 없었을 수 있음).
+                    propagated_photo = 0
+                    for i in range(n):
+                        sp = refined[i].get("speaker") or ""
+                        if sp in photo_mapping:
+                            refined[i]["speaker"] = photo_mapping[sp]
+                            propagated_photo += 1
+                    print(f"[faces·photo] 확산 {propagated_photo}개 세그먼트")
+        except Exception as e:
+            print(f"[faces·photo] 사진 매칭 실패 (스킵): {str(e)[:120]}")
+            import traceback
+            traceback.print_exc()
 
     faces_json = {
         "clusters": clusters_meta,
         # mapping 초깃값 = auto-mapping (공인/등록 cast는 refine이 이미 확신했고, 그걸 클러스터에
-        # 다수결로 붙였음). 사용자 UI에서 확인·수정 가능.
+        # 다수결로 붙였음) + 사진 매칭(사용자 등록 인물 사진). 사용자 UI에서 확인·수정 가능.
         "mapping": dict(auto_mapping),
         "labeled_segments": labeled,
         "auto_mapped_clusters": len(auto_mapping),
+        "photo_mapped_clusters": len(photo_mapping),
         "total_frames_scanned": n,
         "total_faces_detected": total_faces,
         "detect_sec": round(detect_sec, 1),
@@ -463,11 +544,139 @@ def apply_mapping(refined: list[dict], mapping: dict) -> list[dict]:
     return refined
 
 
+# ── 사용자 등록 캐스트 사진 → 클러스터 자동 매칭 ──────────────────────────────
+# 사용자가 프로그램 상세 페이지에서 인물별 사진을 업로드하면 server가 work/cast_photos/*.{jpg,png}로
+# 풀어놓는다. faces.py는 이 폴더를 스캔해서 각 사진의 face embedding을 뽑고, 이미 만들어진
+# 클러스터 centroid와 코사인 유사도로 매칭 → faces.mapping에 병합. Vision LLM(vision_auto_map)이나
+# refine 다수결(auto_mapping)보다 **직접 근거**라 우선순위 최상. 사진이 없거나 얼굴 검출 실패면 no-op.
+_PHOTO_MATCH_MIN_SIM = 0.35  # cosine similarity 임계값. buffalo_l ArcFace embedding 기준 경험값.
+_PHOTO_MATCH_MARGIN = 0.05   # 1등과 2등의 차이가 이 이상이어야 확정 (혼동 방지).
+_PHOTO_EXTS = (".jpg", ".jpeg", ".png", ".webp", ".bmp")
+
+
+def _photo_embedding(app, img_path: Path) -> "np.ndarray | None":
+    """캐스트 사진 1장 → L2 정규화된 embedding. 검출 실패/다중 얼굴 시 None.
+    다중 얼굴이면 가장 큰 얼굴 선택 (프로필 사진에서 배경 얼굴 노이즈 회피)."""
+    try:
+        img = cv2.imread(str(img_path))
+        if img is None:
+            return None
+        faces = app.get(img)
+        if not faces:
+            return None
+        faces.sort(key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]), reverse=True)
+        return faces[0].normed_embedding
+    except Exception as e:
+        print(f"[faces·photo] embedding 실패 {img_path.name}: {str(e)[:80]}")
+        return None
+
+
+def load_cast_photo_embeddings(cast_photos_dir: Path) -> dict[str, "np.ndarray"]:
+    """cast_photos_dir 안의 이미지 파일들을 이름(파일명 stem)→embedding 로 매핑.
+    이름은 원본 캐스트 이름 그대로(예: '정우성.jpg' → '정우성'). 파일 없으면 빈 dict."""
+    if not cast_photos_dir or not cast_photos_dir.exists() or not cast_photos_dir.is_dir():
+        return {}
+    files = [p for p in sorted(cast_photos_dir.iterdir()) if p.suffix.lower() in _PHOTO_EXTS]
+    if not files:
+        return {}
+    app = _get_app()
+    if app is None:
+        print(f"[faces·photo] insightface 초기화 실패 — 사진 매칭 스킵")
+        return {}
+    out: dict[str, np.ndarray] = {}
+    for p in files:
+        emb = _photo_embedding(app, p)
+        if emb is None:
+            print(f"[faces·photo] 얼굴 검출 실패 (스킵): {p.name}")
+            continue
+        # 파일 stem을 이름으로. server가 '/', '\', NUL만 치환하고 한글은 그대로 저장.
+        out[p.stem] = emb
+    if out:
+        print(f"[faces·photo] 캐스트 사진 임베딩 {len(out)}/{len(files)}장 확보")
+    return out
+
+
+def match_clusters_by_photos(
+    faces_json: dict,
+    per_seg_faces: list[list[dict]] | None,
+    flat_ref: list[tuple[int, int]] | None,
+    cluster_labels: "np.ndarray | None",
+    cluster_to_label: dict[int, str] | None,
+    cast_photo_embs: dict[str, "np.ndarray"],
+) -> dict[str, str]:
+    """캐스트 사진 embedding ↔ 클러스터 centroid embedding 매칭.
+
+    반환: {cluster_label: cast_name} — 확정된 것만 (임계값·margin 만족).
+    각 사진 별로 가장 유사도가 높은 클러스터를 골라, 그 유사도가 임계 & 2등과의 margin 조건을
+    만족하면 확정. 한 클러스터에 여러 사진이 몰리면 가장 유사도 높은 하나만 채택 (합리적 tie-break).
+    사진이 없으면 no-op.
+    """
+    if not cast_photo_embs or per_seg_faces is None or flat_ref is None or cluster_to_label is None:
+        return {}
+    if cluster_labels is None or len(cluster_labels) == 0:
+        return {}
+
+    # 1) 클러스터 → 멤버 embedding 리스트 → centroid (L2 정규화)
+    cluster_members: dict[int, list[np.ndarray]] = {}
+    for k, lbl in enumerate(cluster_labels):
+        lbl = int(lbl)
+        if lbl < 0:
+            continue
+        seg_i, face_j = flat_ref[k]
+        try:
+            emb = per_seg_faces[seg_i][face_j]["embedding"]
+        except (IndexError, KeyError):
+            continue
+        cluster_members.setdefault(lbl, []).append(emb)
+    if not cluster_members:
+        return {}
+    centroids: dict[str, np.ndarray] = {}
+    for cid, embs in cluster_members.items():
+        lbl = cluster_to_label.get(cid)
+        if not lbl:
+            continue
+        arr = np.asarray(embs, dtype=np.float32)
+        c = arr.mean(axis=0)
+        norm = np.linalg.norm(c)
+        if norm > 1e-8:
+            c = c / norm
+        centroids[lbl] = c
+
+    # 2) 각 사진에 대해 가장 유사도 높은 클러스터 후보 계산
+    #    similarity = 코사인 = normed dot product (embedding들이 이미 L2 정규화됨)
+    photo_top: dict[str, tuple[str, float, float]] = {}  # name → (best_label, best_sim, second_sim)
+    for name, pemb in cast_photo_embs.items():
+        sims = [(lbl, float(np.dot(pemb, c))) for lbl, c in centroids.items()]
+        if not sims:
+            continue
+        sims.sort(key=lambda x: -x[1])
+        best_lbl, best_sim = sims[0]
+        second_sim = sims[1][1] if len(sims) > 1 else -1.0
+        photo_top[name] = (best_lbl, best_sim, second_sim)
+
+    # 3) 임계·margin 만족한 매칭만 확정. 같은 클러스터에 여러 사진이 겨루면 유사도 최고 하나만.
+    confirmed: dict[str, tuple[str, float]] = {}  # cluster_label → (name, sim)
+    for name, (lbl, sim, second) in photo_top.items():
+        if sim < _PHOTO_MATCH_MIN_SIM:
+            continue
+        if (sim - second) < _PHOTO_MATCH_MARGIN:
+            continue
+        prev = confirmed.get(lbl)
+        if not prev or sim > prev[1]:
+            confirmed[lbl] = (name, sim)
+    mapping = {lbl: nm for lbl, (nm, _) in confirmed.items()}
+    if mapping:
+        detail = ", ".join(f"{lbl}↔{nm}({confirmed[lbl][1]:.2f})" for lbl, nm in mapping.items())
+        print(f"[faces·photo] 사진→클러스터 매칭 확정 {len(mapping)}개: {detail}")
+    return mapping
+
+
 def vision_auto_map_clusters(
     faces_json: dict,
     out_dir: Path,
     cast_registry: list[dict] | None = None,
     workers: int = 5,
+    refined: list[dict] | None = None,
 ) -> dict:
     """얼굴 클러스터 자동 매핑 (2026-07-23 · 사용자 방향).
 
@@ -495,9 +704,11 @@ def vision_auto_map_clusters(
                 a = str(a).strip()
                 if a:
                     cast_names.append(a)
+    has_cast = bool(cast_names)
     cast_block = (
-        f"\n등록된 출연자 명단 (이 안에서 매칭 우선): {', '.join(cast_names)}"
-        if cast_names else ""
+        f"\n\n**등록된 명단 ({len(cast_names)}명 · 반드시 이 중 하나 선택 · 명단 밖 이름 금지)**:\n"
+        f"{', '.join(cast_names)}"
+        if has_cast else ""
     )
 
     # Vision 임포트 (지연)
@@ -510,19 +721,31 @@ def vision_auto_map_clusters(
     model = os.environ.get("GEMINI_MODEL") or "gemini-2.5-flash"
     client = genai.Client(vertexai=True, project=project, location=location)
 
-    system = f"""너는 방송 클립에서 얼굴 인물 식별 전문가다. 아래 이미지들은 같은 인물의 여러 프레임이다.
-
-**우선순위로 이름 판정**:
-1. **화면 자막 캡션**: 이미지에 "이름 : 대사" or "이름 (설명)" 같은 방송 자막이 보이면 그 이름을
-   가장 신뢰. 프레임 하단·상단·측면 자막 확인.
-2. **등록 명단 매칭**: 위 명단에 있는 사람과 얼굴이 매칭되면 그 이름.
-3. **유명 공인**: 위 두 개 없으면 얼굴이 유명한 공인(연예인·아이돌·MC·정치인·스포츠 선수)인지
-   판단. 확신 시 실명.
-4. **모르는 인물**: 셋 다 아니면 null.
+    # cast 있으면 "반드시 명단 중 하나" 강제 · 없으면 caption/celebrity 자유 판정
+    if has_cast:
+        system = f"""너는 방송 얼굴 식별 전문가다. 아래 이미지들은 같은 인물이다.
 {cast_block}
 
-**반환 형식** (JSON): {{"name": "홍길동", "source": "caption|registry|celebrity|unknown", "confidence": 0.9}}
-name=null이면 매칭 실패."""
+**판정 규칙**:
+1. **화면 자막 캡션 우선**: 프레임에 "이름 : 대사" 형태 자막이 있으면 그 이름 (등록 명단과 매칭).
+2. **STT 대사 컨텍스트 활용**: 프레임 시점 대사에 호칭("XX아", "XX씨", "XX님")이나 자기소개
+   ("저는 XX입니다") 있으면 강한 힌트. 예: "지연아 어떻게 생각해?" 다음 대답 얼굴 = 지연.
+3. **명단 강제 선택**: 위 명단 {len(cast_names)}명 중 얼굴 특징(성별·나이대·헤어·복장 등)이 가장
+   맞는 사람 **1명**을 골라라. 완전 확신 없어도 가장 유사한 후보 선택.
+4. **정말 명단 아무도 아니다** 싶으면 (예: 스태프·나레이터·엑스트라) name=null · source=unknown.
+5. celebrity source 금지 · 반드시 위 명단 안에서만.
+
+**반환 형식** (JSON): {{"name":"민경","source":"caption|stt|registry","confidence":0.85,"reason":"장발 20대 여성"}}
+confidence: 0.9+ = 확신 · 0.7-0.9 = 유력 · 0.5-0.7 = 후보 · <0.5 = null 로."""
+    else:
+        system = """너는 방송 얼굴 식별 전문가다. 아래 이미지들은 같은 인물이다.
+
+**판정 규칙**:
+1. 프레임에 "이름 : 대사" 형태 화면 자막이 있으면 그 이름 (source=caption).
+2. 자막 없고 얼굴이 유명 공인(연예인·아이돌·MC·정치인·스포츠 선수)이면 실명 (source=celebrity).
+3. 둘 다 아니면 name=null.
+
+**반환 형식** (JSON): {"name":"홍길동","source":"caption|celebrity|unknown","confidence":0.9}"""
 
     def _read_bytes(rel_path: str) -> bytes | None:
         p = out_dir / rel_path
@@ -531,12 +754,34 @@ name=null이면 매칭 실패."""
         except OSError:
             return None
 
+    def _stt_context(seg_ids: list[int], window: int = 3) -> str:
+        """각 seg_i 앞뒤 window개 대사 뽑기 · '호칭·자기소개' 컨텍스트로 얼굴 매칭 강화."""
+        if not refined or not seg_ids:
+            return ""
+        picked_lines: list[str] = []
+        seen_i: set[int] = set()
+        for si in seg_ids[:5]:  # 프레임 5개까지 컨텍스트
+            for i in range(max(0, si - window), min(len(refined), si + window + 1)):
+                if i in seen_i:
+                    continue
+                seen_i.add(i)
+                s = refined[i]
+                txt = (s.get("text") or "").strip()
+                if not txt:
+                    continue
+                mark = " ← 이 프레임" if i == si else ""
+                picked_lines.append(f"  [{i}] {txt[:100]}{mark}")
+        if not picked_lines:
+            return ""
+        return "\n\n**이 인물이 등장한 프레임 시점의 대사 컨텍스트** (호칭·자기소개로 매칭 강화):\n" + "\n".join(picked_lines[:20])
+
     def _one_cluster(label: str, meta: dict) -> tuple[str, str | None, str, float]:
         """(label, name, source, confidence) 반환.
-        full_frames (전체 프레임 · 캡션 감지용) 우선 · 없으면 representative_frames(얼굴 크롭) 폴백."""
+        full_frames (전체 프레임 · 캡션 감지용) 우선 · 없으면 representative_frames(얼굴 크롭) 폴백.
+        각 프레임 시점의 STT 대사 컨텍스트 함께 (호칭·자기소개로 매칭 강화)."""
         full_frames = meta.get("full_frames") or []
+        full_segs = meta.get("full_frame_segs") or []
         reps = meta.get("representative_frames") or []
-        # 최대 8장 (full 5 + crop 3 = 8). caption 감지 확률 up.
         images: list[types.Part] = []
         for rel in full_frames[:5]:
             b = _read_bytes(rel)
@@ -548,10 +793,13 @@ name=null이면 매칭 실패."""
                 images.append(types.Part.from_bytes(data=b, mime_type="image/jpeg"))
         if not images:
             return label, None, "no_image", 0.0
+        stt_ctx = _stt_context(full_segs)
         try:
             resp = call_with_retry(lambda: client.models.generate_content(
                 model=model,
-                contents=images + [f"이 인물의 이름을 판정하라 (클러스터 {label} · {meta.get('gender_hint','?')})."],
+                contents=images + [
+                    f"이 인물(클러스터 {label} · 성별 {meta.get('gender_hint','?')})의 이름을 판정하라." + stt_ctx
+                ],
                 config=types.GenerateContentConfig(
                     system_instruction=system,
                     temperature=0,
@@ -574,22 +822,27 @@ name=null이면 매칭 실패."""
     from concurrent.futures import ThreadPoolExecutor, as_completed
     result: dict[str, str] = {}
     skipped_celebrity = 0
+    skipped_offlist = 0
     t0 = time.time()
+    # cast 있으면 명단 밖 이름 필터링 (Vision이 강제 선택 지시 어겼을 수도)
+    cast_set = set(cast_names) if has_cast else None
     with ThreadPoolExecutor(max_workers=workers) as ex:
         futures = [ex.submit(_one_cluster, lbl, meta) for lbl, meta in clusters.items()]
         for fut in as_completed(futures):
             lbl, name, source, conf = fut.result()
-            if not name or conf < 0.5:
+            if not name or conf < 0.4:
                 continue
-            # 2026-07-23 hallucination 방지: cast_registry 없이 celebrity source 결과는 신뢰 X.
-            # 일반인 리얼리티(환승연애 등)에서 무명 참가자를 얼굴 비슷한 유명 연예인으로 잘못
-            # 매칭한 사례 관찰 (F2→장기용, F1→나나 등 모두 오탐).
-            # caption(화면 자막) or registry(사전등록) source 만 신뢰.
-            if source == "celebrity" and not cast_names:
+            # celebrity source는 cast 없을 때만 (hallucination 위험). cast 있으면 명단 밖은 배제.
+            if source == "celebrity" and not has_cast:
                 skipped_celebrity += 1
-                print(f"[faces] skip {lbl} → {name} ({source} · conf {conf:.2f}) · cast_registry 없이 celebrity 판정은 hallucination 위험", flush=True)
+                print(f"[faces] skip {lbl} → {name} (celebrity · conf {conf:.2f}) · cast 없어 hallucination 위험", flush=True)
+                continue
+            # cast 있는데 명단 밖 이름 반환 시 배제 (프롬프트 지시 어긴 케이스)
+            if cast_set is not None and name not in cast_set and source != "caption":
+                skipped_offlist += 1
+                print(f"[faces] skip {lbl} → {name} ({source} · conf {conf:.2f}) · 명단 밖 이름", flush=True)
                 continue
             result[lbl] = name
             print(f"[faces] auto-map {lbl} → {name} ({source} · conf {conf:.2f})", flush=True)
-    print(f"[faces] Vision auto-map: {len(result)}/{len(clusters)} 확정 · skip {skipped_celebrity} · {time.time()-t0:.1f}s")
+    print(f"[faces] Vision auto-map: {len(result)}/{len(clusters)} 확정 · skip celebrity={skipped_celebrity} · offlist={skipped_offlist} · {time.time()-t0:.1f}s")
     return result

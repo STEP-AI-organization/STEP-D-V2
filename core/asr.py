@@ -77,10 +77,15 @@ def transcribe(
     """Transcribe via the configured provider. Returns {segments, language}.
     on_progress(done, total) fires per completed window (gemini provider only).
 
-    STT_PROVIDER=whisper → whisper only. Otherwise Gemini is primary and, on failure or an
-    empty result, we fall back to faster-whisper (int8 CPU) when STT_FALLBACK is on."""
+    STT_PROVIDER 옵션:
+      - "whisper": faster-whisper 단독
+      - "hybrid" : Gemini text + whisper timestamp 병렬 (2026-07-24 신규 · 정확한 시각)
+      - 기본     : Gemini 단독 + 실패 시 whisper fallback
+    """
     if STT_PROVIDER == "whisper":
         return _transcribe_whisper(audio_path, language, model_name, device, compute_type, beam_size)
+    if STT_PROVIDER == "hybrid":
+        return _transcribe_hybrid(audio_path, language, on_progress=on_progress, beam_size=beam_size)
 
     # Primary: managed Gemini (GPU-free, in-country).
     outage: Optional[Exception] = None
@@ -330,6 +335,223 @@ def _transcribe_whisper(
         "segments": segments,
         "language": info.language,
         "language_probability": info.language_probability,
+    }
+
+
+# ── Hybrid: Gemini text + whisper timestamp (2026-07-24) ────────────────────────
+#
+# 관찰: Gemini asr는 text는 정확하지만 segment 시작·끝 timestamp가 부정확 (특히 60분+
+# 영상에서 초 단위 drift). 이 시각이 downstream(shorts 자르기·editor 자막 sync)에 그대로
+# 흘러가 큰 오차 유발. faster-whisper는 wav2vec2 forced alignment 원리로 word-level
+# timestamp가 훨씬 정확 (10~50ms). 두 개 병렬 실행해서 text는 Gemini · 시각은 whisper.
+
+def _norm_ko(s: str) -> str:
+    """한국어 매칭용 정규화: 공백·구두점 제거, 소문자화."""
+    import re
+    return re.sub(r"[\s\.,\?!\-…·'\"]+", "", (s or "")).lower()
+
+
+def _align_gemini_to_whisper(gemini_segs: list[dict], whisper_segs: list[dict]) -> tuple[list[dict], dict]:
+    """Word-level alignment (v2 · 2026-07-24 개선):
+
+    이전 v1의 두 이슈 fix:
+      a) 매칭률 39% → whisper words flat list에서 subsequence 검색으로 향상
+      b) 짧은 텍스트("직업만" 3글자) 팽창 → text 길이만큼의 word range 정확 매핑
+
+    알고리즘:
+      1) whisper segs → flat words list (시간순 · abs_start/abs_end/text)
+      2) 각 Gemini seg text 정규화
+      3) Gemini seg 시각 ± 5초 range 안의 words 후보 추림
+      4) 후보 words의 text concat에서 Gemini text 앞 10글자로 시작 위치 pinpoint
+      5) 매칭 못하면 앞 5글자 · 3글자 순서로 부분 매칭 재시도
+      6) Gemini text 길이만큼의 word range 정확히 매핑 · 첫 word.start ~ 마지막 word.end
+      7) 팽창 방지: 매칭 word range 총 text 길이가 Gemini 길이 대비 3배 초과면 reject
+    """
+    if not gemini_segs or not whisper_segs:
+        return gemini_segs, {"aligned": 0, "kept": len(gemini_segs), "mean_shift_ms": 0.0, "max_shift_ms": 0.0}
+
+    # 1) whisper words flat list
+    flat_words: list[dict] = []
+    for ws in whisper_segs:
+        for w in (ws.get("words") or []):
+            try:
+                st = float(w.get("start", 0)); en = float(w.get("end", 0))
+            except (TypeError, ValueError):
+                continue
+            if en <= st:
+                continue
+            txt = _norm_ko(w.get("word") or "")
+            if not txt:
+                continue
+            flat_words.append({"start": st, "end": en, "text": txt})
+    if not flat_words:
+        # whisper words 정보 없음 (fallback: seg 단위) — v1 방식으로 폴백
+        return gemini_segs, {"aligned": 0, "kept": len(gemini_segs), "mean_shift_ms": 0.0, "max_shift_ms": 0.0, "note": "no_whisper_words"}
+
+    aligned: list[dict] = []
+    shifts_ms: list[float] = []
+    kept = 0
+    W_WINDOW = 5.0
+
+    for g in gemini_segs:
+        try:
+            g_start = float(g.get("start", 0))
+            g_end = float(g.get("end", g_start + 3))
+        except (TypeError, ValueError):
+            aligned.append(g); kept += 1; continue
+        g_text_norm = _norm_ko(g.get("text", ""))
+        if len(g_text_norm) < 2:
+            aligned.append(g); kept += 1; continue
+
+        # 후보 words: Gemini seg 시각 ± 5s 겹치는 것들 (index 유지)
+        lo, hi = g_start - W_WINDOW, g_end + W_WINDOW
+        cand = [(i, w) for i, w in enumerate(flat_words) if w["end"] > lo and w["start"] < hi]
+        if not cand:
+            aligned.append(g); kept += 1; continue
+
+        # 후보 words의 text concat + 각 word 시작 char 인덱스 매핑
+        char_starts: list[tuple[int, int]] = []  # [(char_index, cand_index)] 각 word 시작
+        cand_text = ""
+        for idx, (_, w) in enumerate(cand):
+            char_starts.append((len(cand_text), idx))
+            cand_text += w["text"]
+
+        # 매칭 시도: 앞 10, 앞 5, 앞 3글자 순으로 pinpoint
+        pos = -1
+        for prefix_len in (10, 5, 3):
+            if len(g_text_norm) < prefix_len:
+                continue
+            key = g_text_norm[:prefix_len]
+            pos = cand_text.find(key)
+            if pos >= 0:
+                break
+        # 짧으면 (< 3글자) 전체 일치 시도
+        if pos < 0 and len(g_text_norm) >= 2:
+            pos = cand_text.find(g_text_norm)
+
+        # 매칭 실패해도 시작·끝은 확실히 잡음 (2026-07-24 사용자 지적):
+        # nearest whisper word start로 시작 확정 · 한글 음절 평균 0.15초 × 글자수로 duration 추정.
+        # 이렇게 하면 kept 세그도 시작만이라도 whisper 기준 · 끝은 발화 예상 길이로 완결.
+        if pos < 0:
+            # Gemini start와 가장 가까운 word 찾기
+            nearest = min(cand, key=lambda pr: abs(pr[1]["start"] - g_start))
+            near_start = nearest[1]["start"]
+            est_dur = max(0.5, min(15.0, len(g_text_norm) * 0.15))
+            near_end = near_start + est_dur
+            shift = (near_start - g_start) * 1000.0
+            shifts_ms.append(shift)
+            new_seg = dict(g)
+            new_seg["start"] = round(near_start, 3)
+            new_seg["end"] = round(near_end, 3)
+            new_seg["orig_start"] = g_start
+            new_seg["orig_end"] = g_end
+            new_seg["align_source"] = "whisper_nearest"
+            aligned.append(new_seg)
+            continue
+
+        # pos에 해당하는 첫 word 찾기
+        first_word_idx = None
+        for char_i, cand_i in char_starts:
+            if char_i <= pos:
+                first_word_idx = cand_i
+            else:
+                break
+        if first_word_idx is None:
+            aligned.append(g); kept += 1; continue
+
+        # Gemini text 길이만큼의 word range 매핑 · 팽창 방지
+        target_char_end = pos + len(g_text_norm)
+        acc_char = 0
+        last_word_idx = first_word_idx
+        for idx in range(first_word_idx, len(cand)):
+            wtl = len(cand[idx][1]["text"])
+            acc_char += wtl
+            last_word_idx = idx
+            if char_starts[first_word_idx][0] + acc_char >= target_char_end:
+                break
+        # 팽창 검증: 매칭 word range 총 char 수가 Gemini 대비 3배 초과면 reject
+        matched_char_len = sum(len(cand[i][1]["text"]) for i in range(first_word_idx, last_word_idx + 1))
+        if matched_char_len > len(g_text_norm) * 3:
+            aligned.append(g); kept += 1; continue
+
+        new_start = cand[first_word_idx][1]["start"]
+        new_end = cand[last_word_idx][1]["end"]
+        if new_end <= new_start:
+            aligned.append(g); kept += 1; continue
+
+        shift = (new_start - g_start) * 1000.0
+        shifts_ms.append(shift)
+        new_seg = dict(g)
+        new_seg["start"] = round(new_start, 3)
+        new_seg["end"] = round(new_end, 3)
+        new_seg["orig_start"] = g_start
+        new_seg["orig_end"] = g_end
+        new_seg["align_source"] = "whisper_word"
+        aligned.append(new_seg)
+
+    stats = {
+        "aligned": len(aligned) - kept,
+        "kept": kept,
+        "mean_shift_ms": round(sum(shifts_ms) / len(shifts_ms), 1) if shifts_ms else 0.0,
+        "max_shift_ms": round(max(abs(s) for s in shifts_ms), 1) if shifts_ms else 0.0,
+        "min_shift_ms": round(min(shifts_ms), 1) if shifts_ms else 0.0,
+        "max_pos_shift_ms": round(max(shifts_ms), 1) if shifts_ms else 0.0,
+    }
+    return aligned, stats
+
+
+def _seq_similar(a: str, b: str) -> float:
+    """difflib 기반 유사도 (0.0~1.0). 짧은 문자열엔 정확 · 긴 문자열엔 부분 매칭도 잡음."""
+    from difflib import SequenceMatcher
+    if not a or not b:
+        return 0.0
+    return SequenceMatcher(None, a, b).ratio()
+
+
+def _whisper_device_auto() -> tuple[str, str]:
+    """CUDA 사용 가능하면 (cuda, float16), 아니면 (cpu, int8) 폴백. faster-whisper 최적 세팅."""
+    try:
+        import torch
+        if torch.cuda.is_available():
+            return ("cuda", "float16")
+    except Exception:
+        pass
+    return ("cpu", "int8")
+
+
+def _transcribe_hybrid(audio_path: str, language: str, on_progress=None, beam_size: int = 5) -> dict:
+    """Gemini + faster-whisper 병렬 실행 · Gemini text 유지 · whisper timestamp로 재정렬.
+    whisper는 CUDA 있으면 GPU float16으로 (RTX 급이면 30분 영상 1~2분) · 없으면 CPU int8."""
+    dev, ctype = _whisper_device_auto()
+    print(f"   STT hybrid: Gemini + faster-whisper({dev} · {ctype}) 병렬 실행 중")
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=2) as ex:
+        f_gem = ex.submit(_transcribe_gemini, audio_path, language, on_progress)
+        f_whi = ex.submit(_transcribe_whisper, audio_path, language, "large-v3", dev, ctype, beam_size)
+        try:
+            gem = f_gem.result()
+        except Exception as e:
+            print(f"   STT hybrid: Gemini 실패 ({str(e)[:80]}) → whisper 단독 결과 사용")
+            return f_whi.result()
+        try:
+            whi = f_whi.result()
+        except Exception as e:
+            print(f"   STT hybrid: whisper 실패 ({str(e)[:80]}) → Gemini 단독 결과 반환 (timestamp 부정확)")
+            return gem
+
+    gem_segs = gem.get("segments", [])
+    whi_segs = whi.get("segments", [])
+    if not gem_segs or not whi_segs:
+        print(f"   STT hybrid: 한쪽 빈 결과 → Gemini 반환")
+        return gem
+
+    aligned, stats = _align_gemini_to_whisper(gem_segs, whi_segs)
+    print(f"   STT hybrid: alignment {stats['aligned']}/{len(gem_segs)} 재정렬 · "
+          f"평균 shift {stats['mean_shift_ms']:+.0f}ms · max {stats['max_shift_ms']:.0f}ms")
+    return {
+        "segments": aligned,
+        "language": gem.get("language", language),
+        "alignment_stats": stats,
     }
 
 
