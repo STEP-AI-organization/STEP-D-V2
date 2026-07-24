@@ -11,6 +11,7 @@ import { cors } from "hono/cors";
 import { logger } from "hono/logger";
 import fs from "node:fs";
 import path from "node:path";
+import { spawn } from "node:child_process";
 import { Readable } from "node:stream";
 import { fileURLToPath } from "node:url";
 import crypto from "node:crypto";
@@ -81,6 +82,7 @@ import {
 import { normalizeCastInput } from "./cast.ts";
 import { youtubeUploadEnabled, UPLOAD_DISABLED_CODE, UPLOAD_DISABLED_MESSAGE } from "./upload-gate.ts";
 import { geminiGenerate, parseJsonLoose } from "./gemini.ts";
+import { syncProgramFromFacesForMedia } from "./content-pipeline.ts";
 import {
   syncChannelVideos,
   classifyShorts,
@@ -168,6 +170,11 @@ app.post("/api/programs", async (c) => {
     if (days.length) smr.weekdays = days;
   }
 
+  const pipelineGenre =
+    typeof body.pipelineGenre === "string" && (body.pipelineGenre === "variety" || body.pipelineGenre === "drama")
+      ? body.pipelineGenre
+      : undefined;
+
   const id = newId("p");
   const program = {
     id,
@@ -177,6 +184,7 @@ app.post("/api/programs", async (c) => {
     cast,
     episodeCount: 0,
     status: "active" as const,
+    ...(pipelineGenre ? { pipelineGenre } : {}),
     ...(Object.keys(smr).length ? { smr } : {}),
     // Optional understanding profile (feeds candidate scoring — plan §program-fit). Stored
     // as JSON on the entity; normalized so downstream can trust the shape.
@@ -193,6 +201,160 @@ app.get("/api/programs/:id", async (c) => {
   return c.json({ program });
 });
 
+// ── 얼굴 분석 → program 수동 sync (파이프라인 native crash 우회) ──
+// 워커 python subprocess가 native cleanup crash로 tsx까지 죽어 자동 sync 못 도달하는 경우
+// 사용자가 UI에서 강제 트리거. mediaId 없으면 이 프로그램의 가장 최근 분석 media 자동 선택.
+app.post("/api/programs/:id/sync-from-analysis", async (c) => {
+  const id = c.req.param("id");
+  const program = await getEntity<any>("program", id);
+  if (!program) return c.json({ error: "program not found" }, 404);
+
+  const body = await c.req.json().catch(() => ({}) as Record<string, unknown>);
+  let mediaId = typeof body.mediaId === "string" ? body.mediaId : "";
+
+  if (!mediaId) {
+    // 이 프로그램의 최근 분석된 media 자동 선택. 최근 content_analysis 기준.
+    try {
+      const { rows } = await getPool().query(
+        `SELECT ca.mediaid
+           FROM content_analysis ca
+           JOIN entities e ON e.kind='media' AND e.id = ca.mediaid
+           JOIN entities ep ON ep.kind='episode' AND ep.id = e.data->>'episodeId'
+          WHERE ep.data->>'programId' = $1
+          ORDER BY ca.updatedat DESC NULLS LAST
+          LIMIT 1`,
+        [id],
+      );
+      if (rows[0]?.mediaid) mediaId = rows[0].mediaid as string;
+    } catch (e) {
+      console.warn("[sync-from-analysis] media lookup failed:", e);
+    }
+  }
+  if (!mediaId) return c.json({ error: "no analyzed media found for this program" }, 404);
+
+  try {
+    const r = await syncProgramFromFacesForMedia(id, mediaId);
+    return c.json({
+      mediaId,
+      workDirExists: r.workDirExists,
+      addedNames: r.addedNames,
+      addedPhotos: r.addedPhotos,
+    });
+  } catch (e) {
+    return c.json({ error: e instanceof Error ? e.message : String(e), mediaId }, 500);
+  }
+});
+
+// ── autofill program metadata via Gemini + google_search grounding ──
+// 프로그램 제목만으로 웹 검색·팩트체크로 나머지 필드 자동 채움 (2단계: 검색·수집 → 팩트체크).
+// 출연자·SMR은 채우지 않음. 결과는 저장하지 않고 반환만 — 사용자가 UI에서 확인 후 저장.
+const AUTOFILL_REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+app.post("/api/programs/:id/autofill", async (c) => {
+  const id = c.req.param("id");
+  const program = await getEntity<Record<string, unknown>>("program", id);
+  if (!program) return c.json({ error: "program not found" }, 404);
+  const title = typeof program.title === "string" ? program.title.trim() : "";
+  if (!title) return c.json({ error: "program title empty" }, 400);
+
+  const CORE_PYTHON =
+    process.env.CORE_PYTHON ||
+    path.join(AUTOFILL_REPO_ROOT, "core", ".venv310", "Scripts", "python.exe");
+  const cwd = AUTOFILL_REPO_ROOT;
+
+  const result: unknown = await new Promise((resolve, reject) => {
+    const proc = spawn(CORE_PYTHON, ["-X", "utf8", "-m", "core.autofill_program", "--mode", "questions", title], {
+      cwd, env: process.env, stdio: ["ignore", "pipe", "pipe"],
+    });
+    let out = "", err = "";
+    proc.stdout.on("data", (b) => { out += b.toString(); });
+    proc.stderr.on("data", (b) => { err += b.toString(); });
+    // 90초 안에 안 끝나면 킬 — grounding 콜 2번이라 대개 20~40초.
+    const to = setTimeout(() => { try { proc.kill("SIGKILL"); } catch {} }, 90_000);
+    proc.on("error", (e) => { clearTimeout(to); reject(e); });
+    proc.on("close", (code) => {
+      clearTimeout(to);
+      if (code !== 0 && !out.trim()) {
+        return reject(new Error(`autofill exit ${code}: ${err.slice(-300)}`));
+      }
+      try { resolve(JSON.parse(out)); }
+      catch (e) { reject(new Error(`autofill parse: ${(e as Error).message} · out=${out.slice(0, 200)}`)); }
+    });
+  }).catch((e) => {
+    console.error("[programs.autofill] failed:", e instanceof Error ? e.message : e);
+    return { error: e instanceof Error ? e.message : String(e) };
+  });
+
+  const r = (result || {}) as Record<string, unknown>;
+  if (r.error && !r.fields) {
+    return c.json({ error: "autofill failed", detail: String(r.error).slice(0, 300) }, 502);
+  }
+  return c.json({
+    draft: (r.draft as Record<string, unknown>) || {},
+    sources: (r.sources as unknown[]) || [],
+    evidence: (r.evidence as Record<string, unknown>) || {},
+    dropped: (r.dropped as string[]) || [],
+    questions: (r.questions as unknown[]) || [],
+  });
+});
+
+// ── 대화형 자동 채움 (stateless · history 전체 클라이언트에서 전송) — [사용 안 함, 참고용] ──
+app.post("/api/programs/:id/autofill/chat", async (c) => {
+  const id = c.req.param("id");
+  const program = await getEntity<Record<string, unknown>>("program", id);
+  if (!program) return c.json({ error: "program not found" }, 404);
+  const title = typeof program.title === "string" ? program.title.trim() : "";
+  if (!title) return c.json({ error: "program title empty" }, 400);
+
+  const body = await c.req.json().catch(() => ({}) as Record<string, unknown>);
+  const history = Array.isArray(body.history) ? body.history : [];
+  const draft = (body.draft && typeof body.draft === "object") ? body.draft : {};
+  const sources = Array.isArray(body.sources) ? body.sources : [];
+
+  const CORE_PYTHON =
+    process.env.CORE_PYTHON ||
+    path.join(AUTOFILL_REPO_ROOT, "core", ".venv310", "Scripts", "python.exe");
+
+  const result: unknown = await new Promise((resolve, reject) => {
+    const args = [
+      "-X", "utf8", "-m", "core.autofill_program",
+      "--mode", "chat", title,
+      "--history", JSON.stringify(history),
+      "--draft", JSON.stringify(draft),
+      "--sources", JSON.stringify(sources),
+    ];
+    const proc = spawn(CORE_PYTHON, args, {
+      cwd: AUTOFILL_REPO_ROOT, env: process.env, stdio: ["ignore", "pipe", "pipe"],
+    });
+    let out = "", err = "";
+    proc.stdout.on("data", (b) => { out += b.toString(); });
+    proc.stderr.on("data", (b) => { err += b.toString(); });
+    const to = setTimeout(() => { try { proc.kill("SIGKILL"); } catch {} }, 90_000);
+    proc.on("error", (e) => { clearTimeout(to); reject(e); });
+    proc.on("close", (code) => {
+      clearTimeout(to);
+      if (code !== 0 && !out.trim()) {
+        return reject(new Error(`autofill.chat exit ${code}: ${err.slice(-300)}`));
+      }
+      try { resolve(JSON.parse(out)); }
+      catch (e) { reject(new Error(`autofill.chat parse: ${(e as Error).message}`)); }
+    });
+  }).catch((e) => {
+    console.error("[programs.autofill.chat] failed:", e instanceof Error ? e.message : e);
+    return { message: e instanceof Error ? e.message : String(e), action: "error" };
+  });
+
+  const r = (result || {}) as Record<string, unknown>;
+  return c.json({
+    message: typeof r.message === "string" ? r.message : "",
+    action: (r.action as string) || "error",
+    draft: (r.draft as Record<string, unknown>) || {},
+    fields: (r.fields as Record<string, unknown>) || undefined,
+    sources: (r.sources as unknown[]) || [],
+    evidence: (r.evidence as Record<string, unknown>) || undefined,
+    dropped: (r.dropped as string[]) || undefined,
+  });
+});
+
 // ── update a program (partial merge — only fields present in the body change) ──
 app.patch("/api/programs/:id", async (c) => {
   const id = c.req.param("id");
@@ -204,6 +366,52 @@ app.patch("/api/programs/:id", async (c) => {
   if (typeof body.title === "string" && body.title.trim()) next.title = body.title.trim();
   if (typeof body.section === "string" && body.section.trim()) next.section = body.section.trim();
   if (typeof body.targetAge === "number") next.targetAge = body.targetAge;
+  // 파이프라인 분기 축 — variety/drama만 유효. 빈 문자열/기타는 제거(=미설정 → auto).
+  if (typeof body.pipelineGenre === "string") {
+    const g = body.pipelineGenre.trim();
+    if (g === "variety" || g === "drama") next.pipelineGenre = g;
+    else delete next.pipelineGenre;
+  }
+  // ── TV/OTT 프로그램 정보 필드 (모두 optional). 빈 문자열 = 필드 삭제, 문자열이면 저장. ──
+  const strFields = [
+    "synopsis", "broadcaster", "schedule", "firstAiredDate", "currentInfo",
+    "director", "spinoff", "awards",
+  ] as const;
+  for (const k of strFields) {
+    const v = body[k];
+    if (typeof v === "string") {
+      const t = v.trim();
+      if (t) next[k] = t;
+      else delete next[k];
+    }
+  }
+  if (Array.isArray(body.moods)) {
+    const moods: string[] = [];
+    for (const x of body.moods) {
+      if (typeof x !== "string") continue;
+      const t = x.trim();
+      if (t) moods.push(t);
+    }
+    if (moods.length) next.moods = moods;
+    else delete next.moods;
+  }
+  // 프로그램 포스터 이미지(data URL) — 빈 문자열이면 삭제, 값 있으면 저장.
+  if (typeof body.posterImageDataUrl === "string") {
+    const s = body.posterImageDataUrl.trim();
+    if (s) next.posterImageDataUrl = s;
+    else delete next.posterImageDataUrl;
+  }
+  // 출연자별 인물 이미지 매핑 — 객체(name→dataUrl). cast에 없는 키는 서버 측에서도 정리.
+  if (body.castPhotos && typeof body.castPhotos === "object" && !Array.isArray(body.castPhotos)) {
+    const photos: Record<string, string> = {};
+    for (const [k, v] of Object.entries(body.castPhotos)) {
+      if (typeof k === "string" && typeof v === "string" && v.trim()) {
+        photos[k] = v;
+      }
+    }
+    if (Object.keys(photos).length) next.castPhotos = photos;
+    else delete next.castPhotos;
+  }
   if (Array.isArray(body.cast)) {
     next.cast = body.cast.filter((x: unknown): x is string => typeof x === "string");
     // 2026-07-23: entities.data.cast → program_cast 테이블 sync. 파이프라인(listProgramCast)이
@@ -221,6 +429,16 @@ app.patch("/api/programs/:id", async (c) => {
         // (programId, name, season) unique · 중복이면 조용히 skip
         if (e?.code !== "23505") throw e;
       }
+    }
+    // cast에서 사라진 이름은 castPhotos 매핑에서도 orphan 정리.
+    if (next.castPhotos && typeof next.castPhotos === "object") {
+      const keep = new Set(next.cast as string[]);
+      const pruned: Record<string, string> = {};
+      for (const [k, v] of Object.entries(next.castPhotos as Record<string, string>)) {
+        if (keep.has(k)) pruned[k] = v;
+      }
+      if (Object.keys(pruned).length) next.castPhotos = pruned;
+      else delete next.castPhotos;
     }
   }
 
@@ -790,9 +1008,36 @@ app.patch("/api/media/:id/faces/mapping", async (c) => {
   faces.mapping = next;
   fs.writeFileSync(facesPath, JSON.stringify(faces, null, 2), "utf-8");
 
-  // refined.json의 speaker rename — 매핑 있으면 실명으로. 없어진 매핑은 원 라벨 복원 못하지만
-  // 이번엔 최소 요구(적용된 매핑만 반영). 원 라벨 보존이 필요하면 speaker_raw 필드 도입할 것.
-  let rewritten = 0;
+  // 2026-07-23: 저장 즉시 모든 downstream rename (사용자 방향 · 재분석 없이 반영).
+  // 규칙: (a) refined.speaker 정확 매칭 · (b) narrative/shorts text 필드는 word-boundary 정규식.
+  //   cluster label(M1/F1/... 정형)만 매칭 · 실제 title에 우연 등장 확률 매우 낮음.
+  const rename = (text: string): string => {
+    let out = text;
+    for (const [lbl, name] of Object.entries(next)) {
+      if (!lbl || !name || lbl === name) continue;
+      // \b은 한글에서 안 통해서 [^A-Za-z0-9_] lookahead/behind로. lbl은 항상 영숫자.
+      const re = new RegExp(`(^|[^A-Za-z0-9_])${lbl}(?![A-Za-z0-9_])`, "g");
+      out = out.replace(re, (_m, pre) => `${pre}${name}`);
+    }
+    return out;
+  };
+  const renameArr = (arr: unknown): unknown => {
+    if (!Array.isArray(arr)) return arr;
+    return arr.map((v) => (typeof v === "string" ? rename(v) : v));
+  };
+  const walk = (obj: any): any => {
+    // 재귀 rename — object 전체 문자열 필드에 적용. 성능 이슈 없을 크기.
+    if (typeof obj === "string") return rename(obj);
+    if (Array.isArray(obj)) return obj.map(walk);
+    if (obj && typeof obj === "object") {
+      const out: any = {};
+      for (const [k, v] of Object.entries(obj)) out[k] = walk(v);
+      return out;
+    }
+    return obj;
+  };
+
+  let refinedRewritten = 0;
   if (fs.existsSync(refinedPath) && Object.keys(next).length > 0) {
     const refined = JSON.parse(fs.readFileSync(refinedPath, "utf-8")) as Array<Record<string, unknown>>;
     for (const seg of refined) {
@@ -800,13 +1045,103 @@ app.patch("/api/media/:id/faces/mapping", async (c) => {
       const mapped = next[sp];
       if (mapped && seg.speaker !== mapped) {
         seg.speaker = mapped;
-        rewritten++;
+        refinedRewritten++;
       }
     }
     fs.writeFileSync(refinedPath, JSON.stringify(refined, null, 2), "utf-8");
   }
 
-  return c.json({ ok: true, mapping: next, refined_rewritten: rewritten });
+  // narrative.json · shorts.json · analysis.json rename (문자열 필드 walk)
+  const narrPath = path.join(storageBase, "analysis", id, "narrative.json");
+  const shortsPath = path.join(storageBase, "analysis", id, "shorts.json");
+  const analysisPath = path.join(storageBase, "analysis", id, "analysis.json");
+  let narrRewritten = 0, shortsRewritten = 0;
+  if (fs.existsSync(narrPath) && Object.keys(next).length > 0) {
+    const narr = JSON.parse(fs.readFileSync(narrPath, "utf-8"));
+    const before = JSON.stringify(narr);
+    const after = walk(narr);
+    const afterStr = JSON.stringify(after);
+    if (before !== afterStr) {
+      fs.writeFileSync(narrPath, JSON.stringify(after, null, 2), "utf-8");
+      narrRewritten = 1;
+    }
+  }
+  if (fs.existsSync(shortsPath) && Object.keys(next).length > 0) {
+    const shorts = JSON.parse(fs.readFileSync(shortsPath, "utf-8"));
+    const before = JSON.stringify(shorts);
+    const after = walk(shorts);
+    const afterStr = JSON.stringify(after);
+    if (before !== afterStr) {
+      fs.writeFileSync(shortsPath, JSON.stringify(after, null, 2), "utf-8");
+      shortsRewritten = 1;
+    }
+    // analysis.json 도 shorts 필드 갱신 (통째 rename)
+    if (fs.existsSync(analysisPath)) {
+      const analysis = JSON.parse(fs.readFileSync(analysisPath, "utf-8"));
+      const updated = walk(analysis);
+      fs.writeFileSync(analysisPath, JSON.stringify(updated, null, 2), "utf-8");
+    }
+  }
+
+  // DB rename: content_analysis.data · recommendations
+  const pool = getPool();
+  let dbShortsRenamed = 0, dbRecsRenamed = 0;
+  if (Object.keys(next).length > 0) {
+    // content_analysis 데이터 통째 walk
+    try {
+      const { rows } = await pool.query("SELECT data FROM content_analysis WHERE mediaId = $1", [id]);
+      if (rows[0]?.data) {
+        const before = JSON.stringify(rows[0].data);
+        const after = walk(rows[0].data);
+        const afterStr = JSON.stringify(after);
+        if (before !== afterStr) {
+          await pool.query(
+            "UPDATE content_analysis SET data = $1::jsonb, updatedAt = $2 WHERE mediaId = $3",
+            [afterStr, Date.now(), id],
+          );
+          dbShortsRenamed = 1;
+        }
+      }
+    } catch (e) {
+      console.error(`[faces/mapping] content_analysis rename failed:`, e);
+    }
+    // recommendations 엔티티들 rename
+    try {
+      // 이 media의 episode를 찾아서 그 episode의 recommendations 다 rename
+      const mediaRow = await pool.query("SELECT episodeid FROM media WHERE id = $1", [id]);
+      const episodeId = mediaRow.rows[0]?.episodeid;
+      if (episodeId) {
+        const recRows = await pool.query(
+          "SELECT id, data FROM entities WHERE kind='recommendation' AND data->>'episodeId' = $1",
+          [episodeId],
+        );
+        for (const r of recRows.rows) {
+          const before = JSON.stringify(r.data);
+          const after = walk(r.data);
+          const afterStr = JSON.stringify(after);
+          if (before !== afterStr) {
+            await pool.query(
+              "UPDATE entities SET data = $1::jsonb WHERE kind='recommendation' AND id = $2",
+              [afterStr, r.id],
+            );
+            dbRecsRenamed++;
+          }
+        }
+      }
+    } catch (e) {
+      console.error(`[faces/mapping] recommendations rename failed:`, e);
+    }
+  }
+
+  return c.json({
+    ok: true,
+    mapping: next,
+    refined_rewritten: refinedRewritten,
+    narrative_rewritten: narrRewritten,
+    shorts_rewritten: shortsRewritten,
+    db_content_analysis_updated: dbShortsRenamed,
+    db_recommendations_renamed: dbRecsRenamed,
+  });
 });
 
 /**

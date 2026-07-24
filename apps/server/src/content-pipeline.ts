@@ -139,11 +139,19 @@ function runAnalyze(
   profilePath?: string,
   castPath?: string,
   fast?: boolean,
+  programContextPath?: string,
+  genre?: string,
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     const args = ["-u", "-m", "core.analyze", videoPath, "--out", outDir];
     if (profilePath) args.push("--profile", profilePath);
     if (castPath) args.push("--cast", castPath);
+    // 사용자가 프로그램 정보(시놉시스·태그·크레딧 등)를 입력해두면 recommend/retitle
+    // 프롬프트에 컨텍스트 블록으로 주입 → AI가 이 프로그램의 결에 맞게 판단.
+    if (programContextPath) args.push("--program-context", programContextPath);
+    // 파이프라인 트랙 명시(variety|drama). 미지정이면 코어가 auto — Gemini 판정으로 부정확할 수
+    // 있어 사용자가 EditProgramDialog에서 지정하는 게 정답. 씬 청크·shot 임계·recommend 팩 결정.
+    if (genre === "variety" || genre === "drama") args.push("--genre", genre);
     if (fast) args.push("--fast");  // 자막만으로 빠른 추천 (시각 분석 스킵)
     // 2026-07-23: Windows에서 python native crash(0xC0000005) 가 tsx 워커 프로세스까지 kill
     // 하는 문제 관찰 (job object 공유로 인한 cascade). detached:true 로 별도 process group
@@ -159,7 +167,7 @@ function runAnalyze(
           PYTHONPATH: "",
           PYTHONIOENCODING: "utf-8",
           PYTHONUTF8: "1",
-          STT_PROVIDER: process.env.STT_PROVIDER || "gemini",
+          STT_PROVIDER: process.env.STT_PROVIDER || "hybrid",
           GOOGLE_CLOUD_PROJECT: process.env.GOOGLE_CLOUD_PROJECT || "step-d",
           VERTEX_LOCATION: process.env.VERTEX_LOCATION || "asia-northeast3",
         },
@@ -321,6 +329,94 @@ function recFromShort(episodeId: string, s: Short) {
     channelScores: s.channel_scores ?? null,
   };
 }
+
+/**
+ * 파이프라인 → program 역방향 동기화 (2026-07-24).
+ *
+ * 워커가 확정한 얼굴 클러스터↔이름 매핑(faces.json.mapping)을 프로그램 상세로 반영:
+ * 1) mapping 확정 이름 중 program.cast에 없는 것 append (기존 이름 유지, orphan 정리 안 함)
+ * 2) 확정 이름의 program.castPhotos[name]이 비어있으면 클러스터 대표 프레임을 dataURL로 세팅
+ *
+ * 이렇게 하면 사용자는 프로그램 만들자마자 분석 한 번 돌리면 출연자 목록·사진이 자동 채워짐.
+ * 다음 회차 분석엔 이 채워진 정보(cast_registry + castPhotos embedding)가 다시 primary source로
+ * 넘어가 정확도가 계속 올라감.
+ */
+export async function syncProgramFromFacesForMedia(
+  programId: string,
+  mediaId: string,
+): Promise<{ addedNames: string[]; addedPhotos: string[]; workDirExists: boolean }> {
+  const work = workDirFor(mediaId);
+  if (!fs.existsSync(work)) {
+    return { addedNames: [], addedPhotos: [], workDirExists: false };
+  }
+  const r = await syncProgramFromFaces(programId, work);
+  return { ...r, workDirExists: true };
+}
+
+async function syncProgramFromFaces(
+  programId: string,
+  workDir: string,
+): Promise<{ addedNames: string[]; addedPhotos: string[] }> {
+  const facesPath = path.join(workDir, "faces.json");
+  if (!fs.existsSync(facesPath)) return { addedNames: [], addedPhotos: [] };
+  let faces: any;
+  try { faces = JSON.parse(fs.readFileSync(facesPath, "utf-8")); }
+  catch { return { addedNames: [], addedPhotos: [] }; }
+  const mapping = (faces?.mapping || {}) as Record<string, string>;
+  const clusters = (faces?.clusters || {}) as Record<string, any>;
+  // 확정 이름만: '?', 'NARR', 공백, 알려진 sentinel 제외.
+  const confirmed: { label: string; name: string }[] = [];
+  const RESERVED = new Set(["?", "NARR", "narr", "unknown", "N/A", "-"]);
+  for (const [lbl, nm] of Object.entries(mapping)) {
+    const clean = String(nm || "").trim();
+    if (!clean || RESERVED.has(clean)) continue;
+    confirmed.push({ label: lbl, name: clean });
+  }
+  if (confirmed.length === 0) return { addedNames: [], addedPhotos: [] };
+
+  const program = await getEntity<any>("program", programId);
+  if (!program) return { addedNames: [], addedPhotos: [] };
+
+  const prevCast: string[] = Array.isArray(program.cast) ? program.cast.map((s: unknown) => String(s).trim()).filter(Boolean) : [];
+  const prevCastSet = new Set(prevCast);
+  const nextCast = [...prevCast];
+  const addedNames: string[] = [];
+  for (const { name } of confirmed) {
+    if (!prevCastSet.has(name)) {
+      nextCast.push(name);
+      prevCastSet.add(name);
+      addedNames.push(name);
+    }
+  }
+
+  const prevPhotos = (program.castPhotos && typeof program.castPhotos === "object")
+    ? { ...program.castPhotos } as Record<string, string>
+    : {};
+  const addedPhotos: string[] = [];
+  for (const { label, name } of confirmed) {
+    if (prevPhotos[name]) continue; // 이미 사용자·이전 sync가 채운 사진 유지
+    const meta = clusters[label];
+    const reps = Array.isArray(meta?.representative_frames) ? meta.representative_frames : [];
+    if (reps.length === 0) continue;
+    const relPath = String(reps[0]);
+    const absPath = path.join(workDir, relPath);
+    if (!fs.existsSync(absPath)) continue;
+    try {
+      const buf = fs.readFileSync(absPath);
+      if (buf.length > 256 * 1024) continue; // UI 상한과 같은 제한
+      const ext = relPath.toLowerCase().endsWith(".png") ? "png"
+        : relPath.toLowerCase().endsWith(".webp") ? "webp" : "jpeg";
+      prevPhotos[name] = `data:image/${ext};base64,${buf.toString("base64")}`;
+      addedPhotos.push(name);
+    } catch { /* 다음 이름 계속 */ }
+  }
+
+  if (addedNames.length === 0 && addedPhotos.length === 0) return { addedNames: [], addedPhotos: [] };
+  const nextProgram = { ...program, cast: nextCast, castPhotos: prevPhotos };
+  await putEntity("program", programId, nextProgram);
+  return { addedNames, addedPhotos };
+}
+
 
 /**
  * Surface the AI shorts on the episode's recommendation board.
@@ -593,9 +689,15 @@ export async function runContentAnalyze(mediaId: string, fast = false): Promise<
     // every detected name stays an unmatched candidate).
     let profilePath: string | undefined;
     let castPath: string | undefined;
+    let programContextPath: string | undefined;
+    // 파이프라인 트랙 — try 블록 안에서 결정된 값을 밖에서 runAnalyze 호출할 때 써야 하므로 hoist.
+    let pipelineGenre: string | undefined;
     try {
       const episode = media.episodeId ? await getEntity<any>("episode", media.episodeId) : undefined;
       const program = episode?.programId ? await getEntity<any>("program", episode.programId) : undefined;
+      if (program?.pipelineGenre === "variety" || program?.pipelineGenre === "drama") {
+        pipelineGenre = program.pipelineGenre;
+      }
       // 우선순위: 사람이 입력한 프로그램 프로파일 > 학습된 채널 프로파일. 둘 다 recommend가
       // 같은 형식으로 읽는다. 채널 프로파일은 learn_profile이 만든 recommend_profile을 쓴다.
       let profileObj: unknown = program?.profile && typeof program.profile === "object" ? program.profile : null;
@@ -627,6 +729,59 @@ export async function runContentAnalyze(mediaId: string, fast = false): Promise<
           fs.writeFileSync(castPath, JSON.stringify(toCoreRegistry(roster)), "utf-8");
           console.log(`[worker] content.analyze ${mediaId}: cast registry ${roster.length} members`);
         }
+        // 프로그램 상세 페이지에서 등록한 캐스트 인물 사진(program.castPhotos: name → data URL)을
+        // work/cast_photos/{safe_name}.{ext}로 풀어 놓는다. faces.py가 이 폴더를 스캔해서
+        // 인물 embedding을 뽑고 클러스터에 이름을 자동 매칭한다. 사진 없는 캐스트는 스킵.
+        const castPhotos = program?.castPhotos && typeof program.castPhotos === "object"
+          ? (program.castPhotos as Record<string, string>)
+          : undefined;
+        if (castPhotos && Object.keys(castPhotos).length > 0) {
+          const photosDir = path.join(work, "cast_photos");
+          fs.mkdirSync(photosDir, { recursive: true });
+          let written = 0;
+          for (const [name, dataUrl] of Object.entries(castPhotos)) {
+            if (typeof dataUrl !== "string") continue;
+            // "data:image/jpeg;base64,AAAA…" → mime + base64. mime 없으면 image/jpeg 폴백.
+            const m = /^data:(image\/[a-zA-Z+.-]+);base64,(.+)$/.exec(dataUrl);
+            if (!m) continue;
+            const mime = m[1];
+            const buf = Buffer.from(m[2], "base64");
+            const ext = mime === "image/png" ? "png" : mime === "image/webp" ? "webp" : "jpg";
+            // 파일명 안전화 — 한글은 그대로 두되 슬래시·백슬래시·NUL만 제거.
+            const safe = name.replace(/[/\\\0]/g, "_").trim().slice(0, 60) || `cast_${written}`;
+            try {
+              fs.writeFileSync(path.join(photosDir, `${safe}.${ext}`), buf);
+              written++;
+            } catch (e) {
+              console.warn(`[worker] cast photo write skipped (${safe}):`, e);
+            }
+          }
+          if (written > 0) {
+            console.log(`[worker] content.analyze ${mediaId}: cast photos ${written} written to ${photosDir}`);
+          }
+        }
+      }
+      // 프로그램 정보(시놉시스·태그·크레딧 등) — 사용자가 상세 페이지에서 입력. 하나라도
+      // 채워져 있으면 program_context.json 로 넘겨 AI 프롬프트에 반영.
+      if (program) {
+        const ctx: Record<string, unknown> = {};
+        for (const k of [
+          "title", "section", "synopsis", "broadcaster", "schedule",
+          "firstAiredDate", "currentInfo", "director", "spinoff", "awards",
+        ] as const) {
+          const v = (program as Record<string, unknown>)[k];
+          if (typeof v === "string" && v.trim()) ctx[k] = v.trim();
+        }
+        if (Array.isArray(program.moods)) {
+          const moods = (program.moods as unknown[]).filter((x): x is string => typeof x === "string" && x.trim().length > 0);
+          if (moods.length) ctx.moods = moods;
+        }
+        if (typeof program.targetAge === "number") ctx.targetAge = program.targetAge;
+        if (Object.keys(ctx).length > 0) {
+          programContextPath = path.join(work, "program_context.json");
+          fs.writeFileSync(programContextPath, JSON.stringify(ctx), "utf-8");
+          console.log(`[worker] content.analyze ${mediaId}: program context (${Object.keys(ctx).join(",")})`);
+        }
       }
     } catch (e) {
       console.error("[worker] program context resolve failed (proceeding without):", e);
@@ -635,7 +790,7 @@ export async function runContentAnalyze(mediaId: string, fast = false): Promise<
     // 2026-07-23: runAnalyze reject 되어도 analysis.json 있으면 결과 사용 (native cleanup crash 등).
     // 워커 안정성 개선의 두 번째 축 — 파일 있으면 DB write 반드시 진행, 없으면 진짜 실패.
     try {
-      await runAnalyze(videoPath, work, onProgress, profilePath, castPath, fast);
+      await runAnalyze(videoPath, work, onProgress, profilePath, castPath, fast, programContextPath, pipelineGenre);
     } catch (e) {
       const analysisPath = path.join(work, "analysis.json");
       if (!fs.existsSync(analysisPath)) throw e;
@@ -664,6 +819,25 @@ export async function runContentAnalyze(mediaId: string, fast = false): Promise<
     // seat for the operator's confirm/reject). content_analysis.data.cast keeps the run's
     // own copy, so this is additive.
     const castRows = await persistCast(mediaId, analysis?.cast);
+
+    // 프로그램 상세로 역방향 동기화: 확정 이름 → program.cast · 대표 프레임 → program.castPhotos.
+    // 사용자가 처음 만든 프로그램이라도 첫 분석 후 자동으로 출연자·사진이 채워짐. 다음 분석엔
+    // 이 사진이 다시 embedding matching primary source로 넘어가 정확도 계속 향상.
+    try {
+      const epForSync = media.episodeId ? await getEntity<any>("episode", media.episodeId) : undefined;
+      if (epForSync?.programId) {
+        const synced = await syncProgramFromFaces(epForSync.programId, work);
+        if (synced.addedNames.length || synced.addedPhotos.length) {
+          console.log(
+            `[worker] content.analyze ${mediaId}: program 동기화 · 이름 +${synced.addedNames.length}` +
+            ` (${synced.addedNames.slice(0, 5).join(",")}) · 사진 +${synced.addedPhotos.length}` +
+            ` (${synced.addedPhotos.slice(0, 5).join(",")})`,
+          );
+        }
+      }
+    } catch (e) {
+      console.warn(`[worker] content.analyze ${mediaId}: program sync 실패 (non-fatal):`, e);
+    }
 
     const shorts: Short[] = Array.isArray(analysis?.shorts) ? analysis.shorts : [];
     // Surface the AI shorts on the episode's recommendation board (the product payoff).
