@@ -300,11 +300,42 @@ def _transcribe_gemini(audio_or_video: str, language: str, on_progress=None) -> 
 def _transcribe_whisper(
     audio_path: str, language: str, model_name: str, device: str, compute_type: str, beam_size: int,
 ) -> dict:
+    # CTranslate2가 cuDNN 8을 요구 · Windows에선 자체 DLL 검색이 site-packages를 못 봐서
+    # cudnn_ops_infer64_8.dll not found로 die. add_dll_directory·PATH 다 무시 · ctypes로
+    # 미리 명시 로드하면 프로세스 DLL cache에 붙어 이후 CTranslate2가 찾음.
+    if os.name == "nt" and device == "cuda":
+        try:
+            import ctypes, importlib
+            for pkg_name in ("nvidia.cudnn", "nvidia.cublas"):
+                try:
+                    pkg = importlib.import_module(pkg_name)
+                    bin_dir = os.path.join(os.path.dirname(pkg.__file__), "bin")
+                    if not os.path.isdir(bin_dir):
+                        continue
+                    for fn in os.listdir(bin_dir):
+                        if fn.endswith(".dll"):
+                            try:
+                                ctypes.CDLL(os.path.join(bin_dir, fn))
+                            except OSError:
+                                pass  # dependency 순서 이슈 · 뒤에서 다시 시도됨
+                except Exception:
+                    continue
+        except Exception:
+            pass
+
     from faster_whisper import WhisperModel  # lazy: not installed on the GPU-less worker
 
     if device != "cuda" and compute_type == "float16":
         compute_type = "int8"  # float16 is CPU-unsupported (CTranslate2 falls back slowly)
-    model = WhisperModel(model_name, device=device, compute_type=compute_type)
+    try:
+        model = WhisperModel(model_name, device=device, compute_type=compute_type)
+    except Exception as e:
+        # GPU 실패(cuDNN DLL 못 찾음 등) 시 CPU int8로 자동 폴백. 30분 영상 8~10분 (느림).
+        if device == "cuda":
+            print(f"   [whisper] GPU 로드 실패 ({str(e)[:80]}) → CPU int8 폴백")
+            model = WhisperModel(model_name, device="cpu", compute_type="int8")
+        else:
+            raise
 
     segments_iter, info = model.transcribe(
         audio_path,
