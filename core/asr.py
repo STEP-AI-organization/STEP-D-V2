@@ -399,14 +399,31 @@ def _get_silero() -> tuple:
 
 
 def _get_speech_windows(audio_path: str) -> list[tuple[float, float]]:
-    """오디오 파일에서 사람 목소리 구간 리스트 (초 단위). 실패하면 빈 리스트."""
+    """오디오 파일에서 사람 목소리 구간 리스트 (초 단위). 실패하면 빈 리스트.
+    soundfile backend가 mp4/mkv 못 읽어 · wav가 아니면 tempfile로 변환."""
     model, utils = _get_silero()
     if model is None:
+        return []
+    # wav 아니면 임시 변환 (16kHz mono)
+    src = audio_path
+    tmp_wav = None
+    try:
+        if not audio_path.lower().endswith((".wav", ".flac")):
+            import tempfile
+            tmp_wav = tempfile.NamedTemporaryFile(suffix=".wav", delete=False).name
+            subprocess.run(
+                ["ffmpeg", "-y", "-v", "quiet", "-i", audio_path,
+                 "-vn", "-ac", "1", "-ar", "16000", "-acodec", "pcm_s16le", tmp_wav],
+                check=True,
+            )
+            src = tmp_wav
+    except Exception as e:
+        print(f"   [vad] wav 변환 실패: {str(e)[:100]}")
         return []
     try:
         get_speech_timestamps = utils[0]
         read_audio = utils[2]
-        wav = read_audio(audio_path, sampling_rate=16000)
+        wav = read_audio(src, sampling_rate=16000)
         ts_list = get_speech_timestamps(
             wav, model,
             sampling_rate=16000,
