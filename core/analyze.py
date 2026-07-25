@@ -352,6 +352,22 @@ def analyze(
         except Exception as e:
             step(f"  (Vision auto-map 스킵: {str(e)[:120]})")
 
+        # 화자↔얼굴 크로스매칭 (PyAnnote diarization 결과 있을 때만).
+        # STT에 diarization_turns 있으면 시각 겹침 기반 매핑 · 실명 라벨 정확도 향상.
+        try:
+            stt_data = _load_json(out_dir / "stt.json") or {}
+            turns = stt_data.get("diarization_turns") or []
+            if turns and faces and refined:
+                from .speaker_face_map import map_speakers_to_face_clusters
+                sf_map = map_speakers_to_face_clusters(faces, refined, turns)
+                if sf_map.get("map"):
+                    faces["speaker_face_map"] = sf_map
+                    _save_json(out_dir / "faces.json", faces)
+                    step(f"  화자↔얼굴 매핑 {len(sf_map['map'])}건: " +
+                         ", ".join(f"{s}→{c}" for s, c in list(sf_map['map'].items())[:5]))
+        except Exception as e:
+            step(f"  (화자-얼굴 매핑 스킵: {str(e)[:80]})")
+
     timed("faces", ts)
     _progress("faces", 60, "얼굴 처리 완료")
 
