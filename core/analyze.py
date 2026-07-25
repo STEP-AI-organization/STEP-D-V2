@@ -111,7 +111,7 @@ def _prepare_checkpoints(
     SHOTS_VER = "2026-07-24a"   # shot boundary detection: ffmpeg scene, fps=1, thr=0.55
     SCENE_TYPE_VER = "2026-07-24a"  # shot 프레임 → Vision batch: interview/on_scene/other
     BEATS_VER = "2026-07-24b"   # beats 프롬프트 + shot_types 통합 (예능 문법)
-    STT_VER = "2026-07-25-vad"  # Silero VAD 프리필터 + hybrid alignment · 모든 path에 VAD 스냅 적용
+    STT_VER = "2026-07-25-vad-diarize"  # Silero VAD + PyAnnote 화자분리(HF_TOKEN 있을 때) 통합
     STT_PROVIDER_ENV = (os.environ.get("STT_PROVIDER") or "gemini").lower()
     RECOMMEND_MODE = os.environ.get("RECOMMEND_MODE") or "narrative_first"
     params = {

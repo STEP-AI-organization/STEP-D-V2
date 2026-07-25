@@ -452,20 +452,125 @@ def _snap_to_speech_windows(segs: list[dict], windows: list[tuple[float, float]]
     return out, stats
 
 
+# ── PyAnnote 화자분리 (2026-07-25) ──────────────────────────────────────────────
+#
+# 오디오 기반 화자분리 (누가 언제 말했는지). STT의 speaker 필드가 텍스트 힌트에만 의존하는
+# 문제(같은 사람이 여러 세그 걸치는데 다른 speaker로 잡히는 등) 근본 fix. pyannote/speaker-
+# diarization-3.1 (HuggingFace token 필요 · pyannote/segmentation-3.0 accept 필요).
+#
+# 결과 → 각 STT 세그에 speaker="SPEAKER_00"/"SPEAKER_01"/... 붙임. refine·faces가 이걸
+# 실명(M1/F1 or 진짜 이름)에 매핑.
+
+_diarization_pipeline = None
+
+
+def _get_diarization_pipeline():
+    """PyAnnote 3.1 pipeline lazy load · HF_TOKEN 필요 (없으면 None · 스킵)."""
+    global _diarization_pipeline
+    if _diarization_pipeline is not None:
+        return _diarization_pipeline
+    hf_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN")
+    if not hf_token:
+        print("   [diarize] HF_TOKEN 없음 · 화자분리 스킵 (설정: 환경변수 HF_TOKEN)")
+        return None
+    try:
+        from pyannote.audio import Pipeline
+        pipeline = Pipeline.from_pretrained(
+            "pyannote/speaker-diarization-3.1", use_auth_token=hf_token,
+        )
+        try:
+            import torch
+            if torch.cuda.is_available():
+                pipeline.to(torch.device("cuda"))
+                print("   [diarize] PyAnnote 3.1 로드 (CUDA)")
+            else:
+                print("   [diarize] PyAnnote 3.1 로드 (CPU · 느림)")
+        except Exception:
+            pass
+        _diarization_pipeline = pipeline
+        return pipeline
+    except Exception as e:
+        print(f"   [diarize] pipeline 로드 실패: {str(e)[:150]}")
+        return None
+
+
+def _diarize_audio(audio_path: str) -> list[dict] | None:
+    """오디오 → 화자별 발화 구간 리스트. 실패 시 None."""
+    pipeline = _get_diarization_pipeline()
+    if pipeline is None:
+        return None
+    try:
+        diarization = pipeline(audio_path)
+        turns = []
+        for turn, _, speaker in diarization.itertracks(yield_label=True):
+            turns.append({
+                "start": round(float(turn.start), 3),
+                "end": round(float(turn.end), 3),
+                "speaker": str(speaker),
+            })
+        return turns
+    except Exception as e:
+        print(f"   [diarize] 실행 실패: {str(e)[:150]}")
+        return None
+
+
+def _assign_speakers(segs: list[dict], turns: list[dict]) -> tuple[list[dict], dict]:
+    """각 STT 세그의 mid time을 포함하는 diarization turn의 speaker 붙임.
+    포함 turn 없으면 가장 가까운 turn (오디오 없는 짧은 gap 커버)."""
+    if not segs or not turns:
+        return segs, {"assigned": 0, "unique_speakers": 0}
+    out = []
+    assigned = 0
+    speakers_seen: set = set()
+    for s in segs:
+        try:
+            st = float(s.get("start", 0)); en = float(s.get("end", st + 1))
+        except (TypeError, ValueError):
+            out.append(s); continue
+        mid = (st + en) / 2
+        # 포함 turn
+        matched = None
+        for t in turns:
+            if t["start"] <= mid <= t["end"]:
+                matched = t["speaker"]; break
+        # 없으면 nearest
+        if not matched:
+            matched = min(turns, key=lambda t: min(abs(t["start"] - mid), abs(t["end"] - mid)))["speaker"]
+        new_seg = dict(s)
+        new_seg["speaker"] = matched  # pyannote SPEAKER_00, SPEAKER_01 형태
+        speakers_seen.add(matched)
+        out.append(new_seg)
+        assigned += 1
+    return out, {"assigned": assigned, "unique_speakers": len(speakers_seen)}
+
+
 def _apply_vad_postprocess(audio_path: str, result: dict) -> dict:
-    """STT 결과 세그먼트 시각을 Silero VAD 음성 구간으로 스냅 · 공통 후처리.
-    whisper 단독·hybrid에서 whisper 폴백된 경우 등 모든 path에서 사용."""
+    """STT 결과 세그먼트 후처리 · 공통:
+    1) Silero VAD → 음성 구간 boundary 스냅 (timestamp 밀림 fix)
+    2) PyAnnote diarization → speaker_id 배정 (HF_TOKEN 있을 때만)
+    """
     segs = result.get("segments") if isinstance(result, dict) else None
     if not segs:
         return result
+
+    # 1) VAD 스냅
     windows = _get_speech_windows(audio_path)
-    if not windows:
-        return result
-    snapped, stats = _snap_to_speech_windows(segs, windows)
-    print(f"   [vad] {stats['windows']} window · 스냅 start {stats['snapped_start']} · "
-          f"end {stats['snapped_end']} · 평균 {stats['mean_snap_ms']:+.0f}ms")
-    result["segments"] = snapped
-    result["vad_stats"] = stats
+    if windows:
+        segs, stats = _snap_to_speech_windows(segs, windows)
+        print(f"   [vad] {stats['windows']} window · 스냅 start {stats['snapped_start']} · "
+              f"end {stats['snapped_end']} · 평균 {stats['mean_snap_ms']:+.0f}ms")
+        result["segments"] = segs
+        result["vad_stats"] = stats
+
+    # 2) 화자분리 (HF_TOKEN 있으면)
+    turns = _diarize_audio(audio_path)
+    if turns:
+        segs, dstats = _assign_speakers(segs, turns)
+        print(f"   [diarize] turn {len(turns)}개 · seg에 speaker 배정 {dstats['assigned']} · "
+              f"화자 {dstats['unique_speakers']}명")
+        result["segments"] = segs
+        result["diarization_stats"] = dstats
+        result["diarization_turns"] = turns  # 진단·downstream 참고용
     return result
 
 
