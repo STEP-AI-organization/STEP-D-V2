@@ -83,7 +83,8 @@ def transcribe(
       - 기본     : Gemini 단독 + 실패 시 whisper fallback
     """
     if STT_PROVIDER == "whisper":
-        return _transcribe_whisper(audio_path, language, model_name, device, compute_type, beam_size)
+        r = _transcribe_whisper(audio_path, language, model_name, device, compute_type, beam_size)
+        return _apply_vad_postprocess(audio_path, r)
     if STT_PROVIDER == "hybrid":
         return _transcribe_hybrid(audio_path, language, on_progress=on_progress, beam_size=beam_size)
 
@@ -100,7 +101,7 @@ def transcribe(
         print(f"   (STT Gemini 실패: {str(e)[:100]})")
         result = {"segments": [], "language": language}
     if result.get("segments"):
-        return result
+        return _apply_vad_postprocess(audio_path, result)
 
     # Algorithmic fallback: faster-whisper large-v3 (int8, CPU) so a Gemini outage/timeout
     # doesn't zero out the transcript. Lazy import → absent lib just means we skip it.
@@ -110,7 +111,7 @@ def transcribe(
             fb = _transcribe_whisper(audio_path, language, "large-v3", "cpu", "int8", beam_size)
             if fb.get("segments"):
                 print(f"   STT 폴백 성공: {len(fb['segments'])} 세그먼트")
-                return fb
+                return _apply_vad_postprocess(audio_path, fb)
         except Exception as e:
             print(f"   (STT 폴백(faster-whisper) 불가: {str(e)[:100]})")
     if outage is not None:
@@ -338,6 +339,136 @@ def _transcribe_whisper(
     }
 
 
+# ── Silero VAD: 음성 구간 사전 필터 (2026-07-25) ────────────────────────────────
+#
+# 문제: STT는 BGM·묵음·효과음 구간에서도 텍스트를 뽑거나(할루시네이션) 시각을 뒤로 밀어버림.
+# 방송 원본은 인트로 로고 20초 + 오프닝 음악 15초 등 사람 목소리 없는 구간이 많아 누적 오차 큼.
+# 해결: Silero VAD로 "사람 목소리 있는 구간(speech windows)"만 미리 뽑음 · STT 결과 시각을
+# 이 window boundary로 스냅해 음성 없는 곳에 잘못 앉은 시각을 밀어냄.
+
+_silero_model = None
+_silero_utils = None
+
+
+def _get_silero() -> tuple:
+    """Lazy load Silero VAD (torch.hub · 첫 호출 시 다운로드)."""
+    global _silero_model, _silero_utils
+    if _silero_model is not None:
+        return _silero_model, _silero_utils
+    try:
+        import torch
+        model, utils = torch.hub.load(
+            repo_or_dir='snakers4/silero-vad', model='silero_vad', trust_repo=True,
+        )
+        _silero_model, _silero_utils = model, utils
+        return model, utils
+    except Exception as e:
+        print(f"   [vad] Silero 로드 실패: {str(e)[:100]}")
+        return None, None
+
+
+def _get_speech_windows(audio_path: str) -> list[tuple[float, float]]:
+    """오디오 파일에서 사람 목소리 구간 리스트 (초 단위). 실패하면 빈 리스트."""
+    model, utils = _get_silero()
+    if model is None:
+        return []
+    try:
+        get_speech_timestamps = utils[0]
+        read_audio = utils[2]
+        wav = read_audio(audio_path, sampling_rate=16000)
+        ts_list = get_speech_timestamps(
+            wav, model,
+            sampling_rate=16000,
+            min_speech_duration_ms=250,   # 0.25s 이하 짧은 음성 무시 (효과음 필터)
+            min_silence_duration_ms=300,  # 0.3s 이상 침묵을 window 경계로
+            speech_pad_ms=100,             # 각 window 앞뒤 100ms 여유 (자연 발화 감안)
+        )
+        return [(t["start"] / 16000, t["end"] / 16000) for t in ts_list]
+    except Exception as e:
+        print(f"   [vad] 음성 구간 감지 실패: {str(e)[:100]}")
+        return []
+
+
+def _snap_to_speech_windows(segs: list[dict], windows: list[tuple[float, float]],
+                            max_shift_sec: float = 2.0) -> tuple[list[dict], dict]:
+    """세그먼트 각 start/end를 가장 가까운 speech window boundary로 스냅.
+    조건: 이동 폭 max_shift_sec 이내일 때만 스냅. 그 외는 원값 유지 (억지 스냅 방지).
+    반환: (조정된 segs, {snapped: n, mean_snap_ms, max_snap_ms}).
+    """
+    if not segs or not windows:
+        return segs, {"snapped_start": 0, "snapped_end": 0, "mean_snap_ms": 0.0, "max_snap_ms": 0.0}
+
+    # window 시작·끝 boundary list
+    w_starts = [w[0] for w in windows]
+    w_ends = [w[1] for w in windows]
+
+    def nearest(target: float, candidates: list[float]) -> float | None:
+        if not candidates:
+            return None
+        return min(candidates, key=lambda x: abs(x - target))
+
+    out: list[dict] = []
+    shifts: list[float] = []
+    snapped_start = 0
+    snapped_end = 0
+    for s in segs:
+        try:
+            st = float(s.get("start", 0)); en = float(s.get("end", st + 3))
+        except (TypeError, ValueError):
+            out.append(s); continue
+        # start를 window start 중 가장 가까운 것에 스냅
+        cand_start = nearest(st, w_starts)
+        new_st = st
+        if cand_start is not None and abs(cand_start - st) <= max_shift_sec:
+            new_st = cand_start
+            if abs(new_st - st) > 0.01:
+                shifts.append((new_st - st) * 1000)
+                snapped_start += 1
+        # end를 window end 중 가장 가까운 것에 스냅
+        cand_end = nearest(en, w_ends)
+        new_en = en
+        if cand_end is not None and abs(cand_end - en) <= max_shift_sec:
+            new_en = cand_end
+            if abs(new_en - en) > 0.01:
+                shifts.append((new_en - en) * 1000)
+                snapped_end += 1
+        if new_en <= new_st:  # 스냅으로 잘못된 순서 방지
+            new_en = new_st + max(0.5, en - st)
+        new_seg = dict(s)
+        new_seg["start"] = round(new_st, 3)
+        new_seg["end"] = round(new_en, 3)
+        if "align_source" in s:
+            new_seg["align_source"] = s["align_source"] + "+vad"
+        else:
+            new_seg["align_source"] = "vad"
+        out.append(new_seg)
+    stats = {
+        "snapped_start": snapped_start,
+        "snapped_end": snapped_end,
+        "mean_snap_ms": round(sum(shifts) / len(shifts), 1) if shifts else 0.0,
+        "max_snap_ms": round(max(abs(x) for x in shifts), 1) if shifts else 0.0,
+        "windows": len(windows),
+    }
+    return out, stats
+
+
+def _apply_vad_postprocess(audio_path: str, result: dict) -> dict:
+    """STT 결과 세그먼트 시각을 Silero VAD 음성 구간으로 스냅 · 공통 후처리.
+    whisper 단독·hybrid에서 whisper 폴백된 경우 등 모든 path에서 사용."""
+    segs = result.get("segments") if isinstance(result, dict) else None
+    if not segs:
+        return result
+    windows = _get_speech_windows(audio_path)
+    if not windows:
+        return result
+    snapped, stats = _snap_to_speech_windows(segs, windows)
+    print(f"   [vad] {stats['windows']} window · 스냅 start {stats['snapped_start']} · "
+          f"end {stats['snapped_end']} · 평균 {stats['mean_snap_ms']:+.0f}ms")
+    result["segments"] = snapped
+    result["vad_stats"] = stats
+    return result
+
+
 # ── Hybrid: Gemini text + whisper timestamp (2026-07-24) ────────────────────────
 #
 # 관찰: Gemini asr는 text는 정확하지만 segment 시작·끝 timestamp가 부정확 (특히 60분+
@@ -532,7 +663,7 @@ def _transcribe_hybrid(audio_path: str, language: str, on_progress=None, beam_si
             gem = f_gem.result()
         except Exception as e:
             print(f"   STT hybrid: Gemini 실패 ({str(e)[:80]}) → whisper 단독 결과 사용")
-            return f_whi.result()
+            return _apply_vad_postprocess(audio_path, f_whi.result())
         try:
             whi = f_whi.result()
         except Exception as e:
@@ -543,16 +674,18 @@ def _transcribe_hybrid(audio_path: str, language: str, on_progress=None, beam_si
     whi_segs = whi.get("segments", [])
     if not gem_segs or not whi_segs:
         print(f"   STT hybrid: 한쪽 빈 결과 → Gemini 반환")
-        return gem
+        return _apply_vad_postprocess(audio_path, gem)
 
     aligned, stats = _align_gemini_to_whisper(gem_segs, whi_segs)
     print(f"   STT hybrid: alignment {stats['aligned']}/{len(gem_segs)} 재정렬 · "
           f"평균 shift {stats['mean_shift_ms']:+.0f}ms · max {stats['max_shift_ms']:.0f}ms")
-    return {
+
+    result = {
         "segments": aligned,
         "language": gem.get("language", language),
         "alignment_stats": stats,
     }
+    return _apply_vad_postprocess(audio_path, result)
 
 
 # ── Shared helpers ──────────────────────────────────────────────────────────────
