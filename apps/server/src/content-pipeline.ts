@@ -233,30 +233,41 @@ function runAnalyze(
       console.log(`[core] ${line}`);
     });
     proc.on("close", (code) => {
-      if (stallTimer) clearTimeout(stallTimer);
-      activeChild = null;
-      if (earlyResolved) return;  // @@COMPLETE로 이미 resolve됨 · 뒤늦은 exit code 무시
-      if (stalled) {
-        reject(new Error(`core.analyze stalled (${STALL_TIMEOUT_MS / 60000}min without output) — killed`));
-        return;
+      // 2026-07-26: close handler 자체를 try/catch로 감쌈 · 여기서 뿜는 예외가 워커 프로세스를
+      // 죽여왔다 (Windows subprocess pipe close 이벤트 순서 문제 · uncaughtException 훅으로도
+      // 못 잡힘 관찰). 절대 여기서 throw 나가지 않게.
+      try {
+        if (stallTimer) clearTimeout(stallTimer);
+        activeChild = null;
+        if (earlyResolved) return;
+        if (stalled) {
+          reject(new Error(`core.analyze stalled (${STALL_TIMEOUT_MS / 60000}min without output) — killed`));
+          return;
+        }
+        if (code === 0) { resolve(); return; }
+        const analysisPath = path.join(outDir, "analysis.json");
+        if (fs.existsSync(analysisPath)) {
+          console.warn(`[worker] core.analyze exited ${code} · @@COMPLETE 없음 · analysis.json 존재하므로 결과 사용`);
+          resolve();
+          return;
+        }
+        reject(new Error(`core.analyze exited ${code}`));
+      } catch (e) {
+        console.error("[worker] close handler err (swallowed):", e);
+        try { resolve(); } catch { /* ignore */ }
       }
-      if (code === 0) {
-        resolve();
-        return;
-      }
-      // Fallback: @@COMPLETE 없이 종료 (구 코드 or 예외) — analysis.json 있으면 사용
-      const analysisPath = path.join(outDir, "analysis.json");
-      if (fs.existsSync(analysisPath)) {
-        console.warn(`[worker] core.analyze exited ${code} · @@COMPLETE 없음 · analysis.json 존재하므로 결과 사용`);
-        resolve();
-        return;
-      }
-      reject(new Error(`core.analyze exited ${code}`));
     });
     proc.on("error", (err) => {
-      if (stallTimer) clearTimeout(stallTimer);
-      activeChild = null;
-      reject(err);
+      try {
+        if (stallTimer) clearTimeout(stallTimer);
+        activeChild = null;
+        // native crash 시 close도 error도 함께 fire될 수 있음 · earlyResolved면 무시.
+        if (earlyResolved) return;
+        console.warn("[worker] python subprocess error:", err.message);
+        reject(err);
+      } catch (e) {
+        console.error("[worker] error handler err (swallowed):", e);
+      }
     });
   });
 }
