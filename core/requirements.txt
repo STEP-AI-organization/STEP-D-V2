@@ -28,6 +28,16 @@ yt-dlp>=2024.0
 
 # ffmpeg/ffprobe must be on PATH (system install), used for audio/frame extraction.
 
+# ── Thumbnail engine (core/thumbnail.py · Phase 1+, docs/plans/thumbnail-engine-plan.md) ─────
+# 인물 누끼 + 배경 + 자막 결합 썸네일 자동 생성.
+# rembg 첫 실행 시 isnet-general-use.onnx ~179MB를 ~/.u2net/에 다운받는다 (한 번만).
+# onnxruntime-directml 로 Windows GPU 가속 가능하지만 rembg 2.0 은 기본 CPU 선택 —
+# GPU 쓰려면 new_session(providers=['DmlExecutionProvider','CPUExecutionProvider']) 명시.
+# Pillow 는 이미 다른 스테이지가 depend 하지만 여기 문서화.
+rembg>=2.0.69
+Pillow>=10.0
+# 폰트 파일은 assets/thumbnail-fonts/ (gitignore + scripts/download-fonts.ps1 로 다운).
+
 # ── Optional: faster-whisper (MIT) — STT provider AND the Gemini-STT fallback ────
 # Two uses, both optional:
 #   1) STT_PROVIDER=whisper — run it as the primary (needs CUDA for large-v3 float16).
