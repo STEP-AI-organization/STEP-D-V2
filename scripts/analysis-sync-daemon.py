@@ -26,7 +26,11 @@ for _s in (sys.stdout, sys.stderr):
 import psycopg2
 
 STORAGE_ROOT = Path(r"C:/Users/STEPAI05/STEPD-repo/apps/server/storage/analysis")
+# 워커 workdir (crash로 후처리 못 도달 시 파일이 여기 남음 · 여기서 storage로 자동 복사).
+import tempfile as _tf
+WORK_ROOT = Path(_tf.gettempdir()) / "stepd-content"
 DB_URL = os.environ.get("DATABASE_URL") or "postgresql://postgres:postgres@localhost:5432/stepd"
+API_BASE = os.environ.get("STEPD_API_BASE") or "http://localhost:4100"
 POLL_INTERVAL_SEC = 5.0
 MIN_SHORT_SEC = 3
 
@@ -150,6 +154,64 @@ def _update_episode_pipeline(conn, episode_id: str, count: int) -> None:
     cur.close()
 
 
+def _sync_program_from_analysis(episode_id: str) -> None:
+    """워커 crash로 못 도달한 syncProgramFromFaces를 서버 API로 대신 트리거.
+    faces.json.mapping + speaker_face_map → program.cast/castPhotos 자동 반영."""
+    try:
+        import urllib.request
+        # episode_id → programId 조회
+        conn = psycopg2.connect(DB_URL)
+        cur = conn.cursor()
+        cur.execute("SELECT data->>'programId' FROM entities WHERE kind='episode' AND id=%s", (episode_id,))
+        row = cur.fetchone()
+        cur.close(); conn.close()
+        if not row or not row[0]:
+            return
+        program_id = row[0]
+        req = urllib.request.Request(
+            f"{API_BASE}/api/programs/{program_id}/sync-from-analysis",
+            method="POST",
+            headers={"Content-Type": "application/json"},
+            data=b"{}",
+        )
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            body = json.loads(resp.read())
+        added = len(body.get("addedNames", [])) + len(body.get("addedPhotos", []))
+        if added:
+            _log(f"  ✓ program {program_id} sync: 이름 +{len(body.get('addedNames', []))} · 사진 +{len(body.get('addedPhotos', []))}")
+    except Exception as e:
+        _log(f"  (program sync 스킵: {str(e)[:80]})")
+
+
+def promote_workdir_files(media_id: str) -> bool:
+    """워커 crash로 workdir(Temp/stepd-content/{mediaId}/)에만 남은 shorts/analysis를
+    storage(apps/server/storage/analysis/{mediaId}/)로 복사. 이렇게 하면 이후 정규 sync 로직이
+    새 파일을 감지 · 후처리 완주."""
+    src = WORK_ROOT / media_id
+    dst = STORAGE_ROOT / media_id
+    if not src.exists():
+        return False
+    dst.mkdir(parents=True, exist_ok=True)
+    import shutil as _sh
+    copied = 0
+    for name in ("shorts.json", "analysis.json", "beats.json"):
+        s = src / name
+        d = dst / name
+        if not s.exists():
+            continue
+        try:
+            src_m = s.stat().st_mtime
+            dst_m = d.stat().st_mtime if d.exists() else 0
+            if src_m > dst_m:
+                _sh.copy2(s, d)
+                copied += 1
+        except OSError:
+            continue
+    if copied:
+        _log(f"→ promote workdir → storage {media_id}: {copied} files")
+    return copied > 0
+
+
 def process_media(conn, media_dir: Path) -> None:
     media_id = media_dir.name
     shorts_file = media_dir / "shorts.json"
@@ -205,6 +267,10 @@ def process_media(conn, media_dir: Path) -> None:
     else:
         _log(f"  (episode 없음 or shorts 없음 · recommendations skip)")
 
+    # 3) program.cast/castPhotos 자동 sync (워커 crash 우회 · faces.json 이 workdir에 있으면)
+    if episode_id:
+        _sync_program_from_analysis(episode_id)
+
     _mtime_cache[media_id] = mtime
 
 
@@ -236,6 +302,14 @@ def main() -> None:
             time.sleep(30)
             continue
         try:
+            # 워커 crash로 workdir에만 남은 파일 storage로 promote (crash 우회)
+            if WORK_ROOT.exists():
+                for wd in WORK_ROOT.iterdir():
+                    if wd.is_dir():
+                        try:
+                            promote_workdir_files(wd.name)
+                        except Exception as e:
+                            _log(f"⚠️ workdir promote {wd.name}: {e}")
             for media_dir in STORAGE_ROOT.iterdir():
                 if not media_dir.is_dir():
                     continue
