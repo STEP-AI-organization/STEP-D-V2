@@ -736,24 +736,42 @@ contents:
           출력: 16:9 · 사람/텍스트 없음
 ```
 
-### 13.4 실 파일럿 (사용자 조정 원함)
+### 13.4 실 파일럿 결과 · default 확정 (2026-07-26)
 
-**시연 URL 하나에서 실제 돌려보고 결과 봐야**. 조정 축:
+환승연애 workdir(m_5ec98a5a) 실측 5개 조합 (`scripts/thumbnail_pilot.py`).
+상세: [`../research/thumbnail-source-experiments.md`](../research/thumbnail-source-experiments.md)
 
-- reference 이미지 개수 (2장 vs 4장 vs 6장 — 많으면 무거워짐 · 적으면 컨텍스트 부족)
-- prompt에 시놉시스 몇 자까지 (200자 vs 500자)
-- style enum 실측 (cinematic 만드는지 · illustration 튀는지)
-- 인물 사진 첨부 여부의 실제 효과 (라이선스 안전 vs 톤 반영 실효)
-- Gemini 2.5 flash image vs Imagen 4 어느 게 예능/드라마 톤 더 살리는지
+| 실험 | 소스 | 결과 |
+|------|------|------|
+| A | 텍스트만 | 일반적 · 프로그램 톤 없음 |
+| B | +프레임 1장 | 하우스 톤 유사 · 사람 없음 |
+| C | +프레임 +인물 사진 1장 | ⚠️ **얼굴 재현** — 인물 사진 첨부 위험 확인 |
+| D | +프레임 2장 (인물 shot + 배경 shot) +인물 2명 | B보다 세련 · 배경 shot 추가가 sanitize |
+| E | D + 시놉시스 | **가장 자연스러움** · 감성 톤 확실히 반영 |
 
-**조정 순서**:
-1. reference 없이 (텍스트만) 1개 생성 → 기준선
-2. 원본 프레임 1장만 첨부 → 개선?
-3. + 인물 사진 → 개선?
-4. + 시놉시스 텍스트 → 개선?
-5. reference_mode "composition" vs "style" 비교
+**default 확정**: `generate_background()` 는 **프레임 2장 (인물 있는 shot + 배경 shot) + 시놉시스 200~300자**만 자동 첨부.
 
-이 실측 결과는 `docs/research/thumbnail-source-experiments.md`에 기록해서 도구 default 세팅 결정.
+- **인물 사진 (castPhotos) 자동 첨부 X** — 얼굴 재현 위험 (C가 실증) 대비 톤 반영 실효 낮음.
+- 인물의 실 얼굴은 어차피 **Layer 2 (Person) 에서 원본 프레임 rembg**로 담는다 — Layer 0 배경에는 사람 그리지 마.
+- AI가 `generate_background()` 인자로 `cast_reference_names` 를 넘기면 시스템은 warn 로그 + 무시.
+- 배경 shot 없으면 프레임 1장만 (인물 있는 shot) + 프롬프트에 "인물 지우고 배경만" 강조.
+
+### 13.5 원칙 재확인 — 합치기는 시스템의 몫
+
+파일럿이 확인한 것: **AI가 이미지 파일을 만드는 건 Layer 0 배경 한정 · 그것도 인물 없이**.
+
+```
+배경 이미지 (Layer 0)      = AI 생성 (Gemini 2.5 flash image) — 사람·텍스트 없이
+인물 컷아웃 (Layer 2)      = 시스템 (원본 프레임 → rembg alpha)
+자막 (Layer 4)             = 시스템 (폰트 렌더 + outline + shadow)
+─────────────────────────────────────────────────────────────
+최종 composite             = 시스템 (Pillow 레이어 순차 합성)
+```
+
+**AI에게 "썸네일 한 장 완성해줘"라고 시켜서 얻은 이미지는 절대 최종물이 아니다.** AI 생성 배경은
+캔버스의 한 레이어일 뿐 · 사용자에게 보이는 최종 썸네일은 시스템이 Pillow로 배경+인물 alpha+자막을
+순차 합성한 결과. 이 원칙을 어긴다는 건 (a) 인물 얼굴 라이선스 문제 (b) 자막 폰트 통제 상실
+(c) 재렌더/부분 override 불가.
 
 ---
 
