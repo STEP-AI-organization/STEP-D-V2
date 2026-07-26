@@ -1,70 +1,50 @@
-# 로컬 컴을 프로덕션 워커 VM으로 실행 (aena 방식 · GPU 비용 절감).
-# 실행: powershell -File scripts\start-local-worker.ps1
+# Boot the local production worker stack under pm2.
+# Usage: powershell -File scripts\start-local-worker.ps1
 #
-# 세팅 요구사항:
-#   - C:\Users\STEPAI05\cloud-sql-proxy\cloud-sql-proxy.exe (v2.14.1+)
-#   - C:\Users\STEPAI05\stepd-deployer-key.json (SA · roles/cloudsql.client + storage + aiplatform.user)
-#   - apps\server\.env.worker (DATABASE_URL은 127.0.0.1:5434 프록시 경유)
-#   - GCE stepd-worker VM은 stop 상태여야 잡 중복 픽업 없음
-#
-# 프록시(5434) + watchdog(worker:prod)를 백그라운드로 띄운다.
-# 종료: taskkill /F /IM cloud-sql-proxy.exe · Get-CimInstance Win32_Process | Where CommandLine -match worker
+# Requires: node/pnpm, pm2 (npm i -g pm2), cloud-sql-proxy.exe, SA key.
+# Idempotent: safe to re-run - pm2 will not double-start online apps.
 
-$ErrorActionPreference = "Continue"
+$ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot
-$LogDir = Join-Path $Root "logs"
-if (-not (Test-Path $LogDir)) { New-Item -ItemType Directory -Path $LogDir -Force | Out-Null }
+Set-Location $Root
 
-$ProxyExe = "C:\Users\STEPAI05\cloud-sql-proxy\cloud-sql-proxy.exe"
+function Fail($msg) { Write-Host "[FAIL] $msg" -ForegroundColor Red; exit 1 }
+function Info($msg) { Write-Host "[info] $msg" -ForegroundColor Cyan }
+function Ok($msg)   { Write-Host "[ ok ] $msg" -ForegroundColor Green }
+
+# preflight
 $SaKey = "C:\Users\STEPAI05\stepd-deployer-key.json"
-$Instance = "step-d:us-central1:stepd-db"
-$ProxyPort = 5434
+$ProxyExe = "C:\Users\STEPAI05\cloud-sql-proxy\cloud-sql-proxy.exe"
+$EnvFile = Join-Path $Root "apps\server\.env.worker"
+if (-not (Test-Path $SaKey)) { Fail "SA key missing: $SaKey" }
+if (-not (Test-Path $ProxyExe)) { Fail "cloud-sql-proxy missing: $ProxyExe" }
+if (-not (Test-Path $EnvFile)) { Fail "apps/server/.env.worker missing (contains prod DATABASE_URL etc.)" }
+$pm2Version = & pm2 --version 2>&1 | Select-Object -Last 1
+if ($LASTEXITCODE -ne 0) { Fail "pm2 not installed. Run: npm i -g pm2" }
 
-if (-not (Test-Path $ProxyExe)) { Write-Error "cloud-sql-proxy.exe 없음: $ProxyExe"; exit 1 }
-if (-not (Test-Path $SaKey)) { Write-Error "SA key 없음: $SaKey"; exit 1 }
+Info ("pm2 version: {0}" -f $pm2Version)
+Info "starting ecosystem.config.cjs..."
+pm2 start ecosystem.config.cjs
+if ($LASTEXITCODE -ne 0) { Fail "pm2 start failed" }
 
-# 1) Cloud SQL Auth Proxy (127.0.0.1:5434 → step-d:us-central1:stepd-db)
-$proxyRunning = Get-CimInstance Win32_Process -Filter "Name='cloud-sql-proxy.exe'" -ErrorAction SilentlyContinue
-if (-not $proxyRunning) {
-  $proxyLog = Join-Path $LogDir "cloud-sql-proxy.log"
-  Start-Process -FilePath $ProxyExe `
-    -ArgumentList "--address","127.0.0.1","--port",$ProxyPort,"--credentials-file",$SaKey,$Instance `
-    -RedirectStandardOutput $proxyLog -RedirectStandardError ($proxyLog + ".err") `
-    -WindowStyle Hidden
-  Write-Output "proxy started · log=$proxyLog · port=$ProxyPort"
-  Start-Sleep -Seconds 3
-} else {
-  Write-Output "proxy already running (pid=$($proxyRunning.ProcessId))"
-}
+Info "pm2 save (survives daemon restart via 'pm2 resurrect')..."
+pm2 save | Out-Null
 
-# 2) Watchdog을 WORKER_SCRIPT=worker:prod 로 실행 (로컬 dev와 격리)
-$env:WORKER_SCRIPT = "worker:prod"
-$env:GOOGLE_APPLICATION_CREDENTIALS = $SaKey
+Start-Sleep -Seconds 3
+Ok "started."
+pm2 list
 
-$watchdogRunning = Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" -ErrorAction SilentlyContinue |
-  Where-Object { $_.CommandLine -match "worker-watchdog.ps1" }
-if (-not $watchdogRunning) {
-  $watchdogScript = Join-Path $PSScriptRoot "worker-watchdog.ps1"
-  $watchdogLog = Join-Path $LogDir "watchdog-prod.log"
-  Start-Process -FilePath "powershell.exe" `
-    -ArgumentList "-NoProfile","-ExecutionPolicy","Bypass","-File",$watchdogScript `
-    -RedirectStandardOutput $watchdogLog -RedirectStandardError ($watchdogLog + ".err") `
-    -WindowStyle Hidden `
-    -Environment @{ WORKER_SCRIPT="worker:prod"; GOOGLE_APPLICATION_CREDENTIALS=$SaKey } `
-    -ErrorAction SilentlyContinue
-  # -Environment는 PS 7.4+ 필요. PS 5.1은 그냥 상속됨 ($env: 위에서 세팅 완료).
-  if ($LASTEXITCODE -ne 0) {
-    Start-Process -FilePath "powershell.exe" `
-      -ArgumentList "-NoProfile","-ExecutionPolicy","Bypass","-File",$watchdogScript `
-      -RedirectStandardOutput $watchdogLog -RedirectStandardError ($watchdogLog + ".err") `
-      -WindowStyle Hidden
-  }
-  Write-Output "watchdog started · log=$watchdogLog · script=worker:prod"
-} else {
-  Write-Output "watchdog already running (pid=$($watchdogRunning.ProcessId))"
-}
-
-Write-Output ""
-Write-Output "로컬 워커 = 프로덕션 큐 폴링 모드."
-Write-Output "GCE stepd-worker VM은 stop 상태여야 함:"
-Write-Output "  gcloud compute instances describe stepd-worker --zone=us-central1-a --format=value(status)"
+Write-Host ""
+Info "next steps:"
+Write-Host "  pm2 status                   # health"
+Write-Host "  pm2 logs stepd-worker        # live logs"
+Write-Host "  pm2 monit                    # dashboard"
+Write-Host "  scripts\update-local-worker.ps1   # git pull + safe restart"
+Write-Host "  pm2 stop all                 # stop everything"
+Write-Host ""
+Info "GCE stepd-worker VM should stay TERMINATED:"
+Write-Host "  gcloud compute instances describe stepd-worker --zone=us-central1-a --format=value(status)"
+Write-Host ""
+Info "auto-start on Windows boot (optional):"
+Write-Host "  npm i -g pm2-installer && pm2-installer  # creates Windows service"
+Write-Host "  or: register 'pm2 resurrect' in Task Scheduler at logon"

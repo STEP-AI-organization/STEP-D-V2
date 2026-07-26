@@ -1,3 +1,6 @@
+# [DEPRECATED 2026-07-26] pm2로 대체됨 - ecosystem.config.cjs + scripts/start-local-worker.ps1
+# 아직 파일은 남겨둠 (pm2 없는 환경 fallback용). 신규 배선은 pm2 사용할 것.
+#
 # Worker watchdog - restarts the tsx worker if it dies (Windows subprocess native crash).
 # 이전 이슈: Start-Process -FilePath "pnpm"이 확장자 없어 "%1은 올바른 Win32..." 오류.
 # fix: pnpm.cmd 절대경로로 실행 + GOOGLE_APPLICATION_CREDENTIALS 상속.
