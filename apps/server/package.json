@@ -10,6 +10,7 @@
     "build": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
     "worker": "node --unhandled-rejections=warn --import tsx --env-file-if-exists=.env src/worker.ts",
+    "worker:prod": "node --unhandled-rejections=warn --import tsx --env-file-if-exists=.env.worker src/worker.ts",
     "migrate": "node-pg-migrate --envPath .env --migrations-dir migrations --migrations-table pgmigrations --ignore-pattern \"(?!\\d{4}_.*\\.cjs$).*\"",
     "migrate:up": "pnpm migrate up",
     "migrate:down": "pnpm migrate down",

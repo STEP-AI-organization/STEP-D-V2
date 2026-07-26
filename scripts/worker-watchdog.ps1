@@ -19,6 +19,10 @@ if (-not $env:GOOGLE_APPLICATION_CREDENTIALS -and (Test-Path $SaKeyDefault)) {
   $env:GOOGLE_APPLICATION_CREDENTIALS = $SaKeyDefault
 }
 
+# 워커 스크립트 선택: 로컬 컴을 프로덕션 워커 VM으로 쓰려면 $env:WORKER_SCRIPT="worker:prod"
+# 기본은 로컬 dev용 "worker" ( .env 로드)
+$WorkerScript = if ($env:WORKER_SCRIPT) { $env:WORKER_SCRIPT } else { "worker" }
+
 function Write-WatchdogLog($msg) {
   $ts = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
   $line = "[$ts] $msg"
@@ -32,13 +36,13 @@ function Test-WorkerAlive {
   return @($procs).Count -gt 0
 }
 
-Write-WatchdogLog "watchdog started · pnpm=$PnpmCmd · SA=$env:GOOGLE_APPLICATION_CREDENTIALS"
+Write-WatchdogLog "watchdog started · pnpm=$PnpmCmd · SA=$env:GOOGLE_APPLICATION_CREDENTIALS · script=$WorkerScript"
 while ($true) {
   if (-not (Test-WorkerAlive)) {
-    Write-WatchdogLog "worker not running - restarting"
+    Write-WatchdogLog "worker not running - restarting ($WorkerScript)"
     $newLog = Join-Path $LogDir ("worker-{0:yyyyMMdd-HHmmss}.log" -f (Get-Date))
     try {
-      Start-Process -FilePath $PnpmCmd -ArgumentList "run","worker" `
+      Start-Process -FilePath $PnpmCmd -ArgumentList "run",$WorkerScript `
         -WorkingDirectory $ServerDir `
         -RedirectStandardOutput $newLog `
         -RedirectStandardError ($newLog + ".err") `
