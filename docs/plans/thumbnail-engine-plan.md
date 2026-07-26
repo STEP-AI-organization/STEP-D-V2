@@ -40,93 +40,193 @@
 
 ---
 
-## 2. AI vs 시스템 책임 분리 (핵심 원칙)
+## 2. Layer Canvas + Photoshop-MCP 도구 모델
 
-> **"AI 그냥 잘 만들어" 금지.** AI는 판단·창의만 · 시스템은 픽셀 합성·측정·규칙 실행.
-> AI 콜은 반드시 **구조화된 JSON 결정**을 반환하고, 시스템은 그 결정을 그대로 렌더.
-> 그래야 재현·디버깅·override 가능.
+> **핵심 발상 2가지**:
+> 1. **Layer Canvas**: 썸네일 = 미리 정의된 레이어 스택 (Photoshop 문서 개념). 시스템이 캔버스·Z-order·
+>    마스크·블렌드를 관리.
+> 2. **Photoshop-MCP 도구 API**: AI에게 JSON 하나 던지라고 하지 않고, **Photoshop 조작 도구들**을 노출하고
+>    (create_layer · load_frame · segment_person · generate_background · add_text · apply_filter · export)
+>    AI가 **function calling으로 도구를 순차 호출**해서 조립.
+>
+> 결과: AI가 이전 도구 결과(예: "인물 컷아웃 크기" · "자막이 배경과 겹치는 영역")를 보고
+> 다음 도구를 조정. 사용자는 특정 도구 호출만 override 가능 ("배경만 바꿔" · "자막 위치만 이동").
 
-### 2.1 담당 매트릭스
+### 2.1 캔버스 · 레이어 정의 (시스템이 관리)
 
-| 항목 | 담당 | 근거 |
-|------|------|------|
-| 후보 프레임 시점 선정 (몇 초?) | **시스템** (알고리즘) | scene_frames + 얼굴 크기 + shot_type 이미 있음 · 규칙적으로 top-N |
-| **어느 프레임이 훅으로 좋은가** | **AI** (Vision) | 표정·구도·상황 이해 필요 · 알고리즘 불가 |
-| 얼굴 bbox 검출 | **시스템** (insightface) | 결정론적 CV · AI 낭비 |
-| **인물 여러 명 중 누구를 강조** | **AI** (판단) | 내러티브 상 중요도 · 대사 화자 · 반응 |
-| 인물 세그멘테이션 (alpha mask) | **시스템** (rembg) | 픽셀 처리 · AI 못 함 |
-| **자막 카피 (3~5 variant)** | **AI** (텍스트 생성) | 인용/훅/의문/충격 톤 · 창의 |
-| 자막 자동 개행 (2어절씩 wrap) | **시스템** (알고리즘) | 폭 계산 · 결정론 |
-| 자막 폰트 · 크기 결정 | **시스템** (프리셋 룩업) | program.section 기반 |
-| **자막 색 · 배경 대비 톤** | **AI가 지정** → 시스템 렌더 | 프레임 컬러 팔레트 이해 필요 |
-| 색 대비 안전성 (WCAG 4.5:1) | **시스템** (계산 + AI 제안 검증) | AI가 어긴 대비는 시스템이 자동 보정 |
-| **레이아웃 (인물 좌/우 · 자막 위치)** | **AI가 결정** → 시스템 배치 | 얼굴 방향·구도 상 자연스러움 |
-| 배경 blur/그라디언트 렌더 | **시스템** (Pillow) | 픽셀 연산 |
-| **배경 스타일 선택 (blur vs gradient)** | **AI가 결정** | 원본 프레임 분석 후 판단 |
-| 이미지 압축 · GCS 업로드 · DB write | **시스템** | 인프라 |
-| variant 3~5개 생성 오케스트레이션 | **시스템** (병렬 spawn) | 잡 큐잉 |
-| 재생성 · 사용자 pick 상태 관리 | **시스템** | CRUD |
+썸네일 캔버스는 **고정 6-레이어 스택** (Z-order 아래→위):
 
-### 2.2 파이프라인 흐름
+```
+Layer 0 : Background      배경 이미지 (AI 생성 or 원본 blur or 단색/그라디언트)
+Layer 1 : BackFx          배경 이펙트 (halo · vignette · noise · lens flare)
+Layer 2 : Person          인물 컷아웃 (원본 프레임 + rembg alpha)
+Layer 3 : PersonFx        인물 강조 (outline glow · shadow · color pop)
+Layer 4 : Caption         메인 자막 (2~4어절 · 큰 폰트 · outline + shadow)
+Layer 5 : FrontFx         전경 스티커 (별표 · 화살표 · 배지 · 이모지)
+```
+
+각 레이어는 **소스 (source)** + **변형 (transform)** + **블렌드 (blend)** 3요소:
+
+```ts
+interface Layer {
+  role: "background" | "backfx" | "person" | "personfx" | "caption" | "frontfx";
+  source: LayerSource;      // 무엇 (AI 생성 / rembg / 원본 프레임 / 텍스트 / 스티커)
+  transform: LayerTransform;// 어디에·얼마나 (bbox · rotation · scale · opacity)
+  blend: BlendMode;         // "normal" | "multiply" | "screen" | ...
+  mask?: LayerMask;         // alpha PNG · 그라디언트 마스크 등
+}
+```
+
+이렇게 정의해 두면:
+- 사용자 override = **특정 레이어의 source만 교체** (다른 레이어는 그대로)
+- AI 재생성 = **특정 레이어만 재요청** (전체 재렌더 불필요)
+- 병렬화 = 각 레이어 소스 생성 병렬 → 최종 composite만 순차
+
+### 2.2 담당 매트릭스 (레이어별)
+
+| Layer | AI 담당 | 시스템 담당 |
+|-------|--------|-------------|
+| **0 Background** | 어떤 mode (AI 생성 / 원본 blur / 그라디언트) · AI 생성 시 프롬프트 텍스트 · 팔레트 지정 | Gemini image gen 콜 or Pillow blur/그라디언트 렌더 · fetch · resize |
+| **1 BackFx** | 어떤 이펙트 (halo · vignette · lens flare) · 컬러 | Pillow 필터 · 마스크 렌더 |
+| **2 Person** | 어느 프레임 · 어느 인물 강조 (여러 명이면 화자 우선) · 좌/우/중앙 배치 · 크기 % | 프레임 다운 · rembg 세그 · alpha 크롭 · resize · 배치 픽셀 계산 |
+| **3 PersonFx** | glow 색 · shadow 방향 · color pop 사용 여부 | Pillow blur+dilate로 outline · shadow 오프셋 |
+| **4 Caption** | 텍스트 · 톤 (인용/훅/의문/충격) · 색 (문자·outline) · 폰트 스타일 힌트 | 자동 개행 · 폰트 파일 룩업 · outline + shadow 렌더 · WCAG 대비 검증·보정 |
+| **5 FrontFx** | 스티커 종류 · 개수 · 위치 · 회전 | SVG 라이브러리에서 로드 · Pillow 오버레이 |
+| **Composite** | (관여 없음) | Pillow에서 레이어 순차 합성 · 최종 crop 16:9/9:16 |
+| **캔버스 정의 자체** | (관여 없음) | 이 §2.1 스택 · Z-order · 규칙 |
+
+**변하지 않는 원칙** (지난 §의 유지):
+- 후보 프레임 시점 = 시스템 알고리즘 (scene_frames + shot_types)
+- 얼굴 bbox = 시스템 (insightface)
+- 인물 세그멘테이션 = 시스템 (rembg)
+- 폰트·자동 개행·WCAG 대비 = 시스템
+- variant 오케스트레이션·GCS·DB = 시스템
+
+**새로 추가**:
+- **AI가 이미지 파일을 직접 만들어도 됨** (Layer 0 배경 한정) — Gemini 2.5 flash image / Imagen.
+  - **인물·자막은 여전히 시스템이 픽셀 조합** (누끼는 실 원본 · 자막은 폰트 렌더).
+  - AI 이미지 실패 시 원본 blur로 자동 폴백.
+
+### 2.3 Photoshop-MCP 도구 API (핵심)
+
+시스템이 AI에게 노출하는 **도구 세트**. Vertex Gemini의 function calling으로 AI가 호출.
+각 도구는 순수 함수 · **결정론적** · 결과는 즉시 문서 상태 갱신 + AI에게 다음 콜용으로 반환.
+
+**문서 상태(Document)**: AI 대화 세션 하나가 문서 하나 편집. 세션 종료 = export_thumbnail → 완성.
+
+```
+# Discovery (읽기 전용 · AI가 판단하려고 부름)
+list_candidate_frames(top_k=5) → [{id, sec, faces:[{name,bbox,size}], shot_type}]
+inspect_frame(frame_id) → {width, height, dominant_colors, brightness, face_details}
+get_shorts_context() → {title, description, scene_summary, cast_names, program:{section,mood}}
+
+# Document / Layer 관리
+create_document(aspect="16:9"|"9:16") → doc_id  (레이어 스택 초기화 · Layer 0~5 slot 예약)
+list_layers() → [{role, source_summary, transform, visible}]
+set_layer_visible(role, visible)
+clear_layer(role)
+
+# Layer 0 · Background 소스
+set_background_from_frame(frame_id, filter:"blur"|"none", blur_px:int)
+set_background_gradient(colors:[str,str], angle:int)
+set_background_solid(color:str)
+generate_background(prompt:str, style:"cinematic"|"illustration"|"photo",
+                   palette_hint:[str,...])
+  → AI 이미지 (Gemini 2.5 flash image or Imagen) 생성 · Layer 0에 배치
+
+# Layer 1 · BackFx
+add_backfx_halo(center:[x,y], radius:int, color:str, opacity:float)
+add_backfx_vignette(strength:float)
+add_backfx_lens_flare(pos:[x,y], intensity:float)
+
+# Layer 2 · Person
+set_person_from_frame(frame_id, subject:"largest_face"|"name:XXX"|"bbox:xyxy",
+                     side:"left"|"right"|"center", scale:float)
+  → 시스템: 프레임 다운 + rembg 세그 + alpha 크롭 + 좌표 계산 · Layer 2에 배치
+  ← 반환: {rendered_bbox, silhouette_edges} (다음 도구 결정에 사용)
+
+# Layer 3 · PersonFx
+add_person_outline(color:str, width:int)
+add_person_shadow(offset:[x,y], blur:int, color:str, opacity:float)
+add_person_color_pop(intensity:float)  # 인물 채도↑, 배경 채도↓
+
+# Layer 4 · Caption
+add_caption(text:str, position:"top"|"middle"|"bottom"|[x,y],
+           text_color:str, outline_color:str, size_hint:"XL"|"L"|"M",
+           font_role:"variety"|"drama"|"news"|"documentary",
+           tone_tag:"인용"|"훅"|"의문"|"충격"|"기본")
+  ← 시스템 자동 처리: 2어절 개행 · 폰트 룩업 · WCAG 대비 검증·보정 · outline+shadow
+  ← 반환: {caption_bbox, contrast_ratio, was_adjusted}
+add_subtitle(text, position, ...)  # 부제 (작은 폰트)
+
+# Layer 5 · FrontFx
+add_sticker(kind:"arrow-right"|"star-burst"|"shock-badge"|..., pos:[x,y],
+           size:int, rotation_deg:int, color?:str)
+add_speech_bubble(text, target_bbox, style:"round"|"pointed", tail_dir:"left"|"right")
+
+# 반복 · 판단 지원
+render_preview() → PNG base64 (AI가 시각적으로 결과 확인 · 자막 겹침·인물 잘림 등 판정)
+undo_last() → 마지막 도구 되돌리기
+export_thumbnail() → 최종 composite · GCS 업로드 · variant DB write
+```
+
+**세션 종료 조건**:
+- AI가 `export_thumbnail()` 호출 (완성)
+- 또는 시스템이 turn 한도(예: 12 turn) 초과 시 자동 export
+
+### 2.4 파이프라인 흐름 (도구 호출 시퀀스)
 
 ```
 [analyze 완료 · shorts.json 있음]
         ↓
-[신규 스테이지: thumbnail]  ← content-pipeline.ts에 배선
+[신규 스테이지: thumbnail] ← content-pipeline.ts에 배선
         │
-        ├── 각 shorts (top-N) 마다:
-        │
-        │     ┌──── SYSTEM ────────────────────────────────────────┐
-        │     │ 1. 후보 프레임 3~5장 뽑기                          │
-        │     │    (scene_frames + shot_types + faces.py bbox 재활용)│
-        │     │    → 규칙: 얼굴 크기 top-K + shot_type in [클로즈업, 미디엄]│
-        │     │ 2. 각 프레임 얼굴 bbox · 크기 · 위치 · 표정 태그    │
-        │     │    (기존 faces.py 결과)                            │
-        │     └────────────────────────────────────────────────────┘
-        │                              ↓
-        │     ┌──── AI (Vertex Gemini Vision · 1콜 · JSON out) ────┐
-        │     │ Input: 후보 프레임 3~5장 + 쇼츠 컨텍스트            │
-        │     │   (title, description, scene_summary, cast 이름,   │
-        │     │    program.section, program.mood)                   │
-        │     │ AI 결정 (§12 스키마):                              │
-        │     │   { chosenFrame: "frame_002",                      │
-        │     │     chosenReason: "..",                            │
-        │     │     focusPerson: {name, bbox, side:"left"|"right"},│
-        │     │     captionVariants: [ {text, tone, dominantColor} × 3~5 ],│
-        │     │     background: { mode:"blur"|"gradient"|"halo",   │
-        │     │                    palette:["#hex","#hex"] },      │
-        │     │     layout: "person-left-caption-right"|...        │
-        │     │   }                                                 │
-        │     └────────────────────────────────────────────────────┘
-        │                              ↓
-        │     ┌──── SYSTEM (결정론적 실행) ────────────────────────┐
-        │     │ 3. 선택된 프레임 다운 (GCS)                        │
-        │     │ 4. rembg 인물 세그 → alpha PNG                    │
-        │     │ 5. 배경 렌더 (AI가 지정한 mode/palette로 Pillow)   │
-        │     │ 6. Pillow 합성:                                    │
-        │     │    · 인물 컷아웃 배치 (AI가 지정한 side)           │
-        │     │    · 자막 각 variant마다:                           │
-        │     │       - 자동 개행 (2어절씩 · 폭 계산)              │
-        │     │       - 폰트 프리셋 (section 기반)                 │
-        │     │       - AI가 준 색 → WCAG 대비 검증 · 미달시 자동 보정│
-        │     │       - outline + shadow                          │
-        │     │    · variant마다 1280×720 (16:9) + 1080×1920 (9:16)│
-        │     │ 7. GCS 업로드: analysis/{mediaId}/thumbnails/{shortId}/{variantId}_{ratio}.png│
-        │     │ 8. DB write: recommendation.data.thumbnails[]      │
-        │     └────────────────────────────────────────────────────┘
-        │
-        └── (사용자 UI · 재생성 요청 시) → AI 콜만 재실행 (프레임 후보 그대로 재사용)
-                ↓
+        └── 각 shorts (top-N) 마다:
+              │
+              ┌── SYSTEM: candidate 프레임 뽑기 (list_candidate_frames가 반환할 것)
+              │  · scene_frames + shot_types + faces bbox 재활용
+              │
+              ┌── AI 세션 시작 (Vertex Gemini · function calling multi-turn)
+              │  · 시스템이 tool 세트 + 첫 프롬프트 던짐
+              │  · AI는 도구 호출 반복 (예시 turn):
+              │      turn 1: get_shorts_context()
+              │      turn 2: list_candidate_frames(top_k=5)
+              │      turn 3: inspect_frame("frame_002")
+              │      turn 4: create_document(aspect="16:9")
+              │      turn 5: generate_background(prompt="..", style="cinematic",
+              │                                 palette_hint=["#1a2b3c","#e8d4a0"])
+              │      turn 6: set_person_from_frame("frame_002",
+              │                                    subject="name:원규", side="left", scale=0.9)
+              │      turn 7: add_person_outline(color="#ffee00", width=4)
+              │      turn 8: add_caption("제가\n결혼할래요?", position="right",
+              │                          text_color="#ffffff", outline_color="#000000",
+              │                          size_hint="XL", font_role="variety", tone_tag="인용")
+              │      turn 9: render_preview()  ← AI가 결과 봄
+              │      turn 10: (자막이 인물 얼굴에 겹치면) undo_last() + add_caption(position="bottom")
+              │      turn 11: add_sticker(kind="shock-badge", pos=[850,60], size=120)
+              │      turn 12: export_thumbnail()  ← 세션 종료
+              │
+              ┌── SYSTEM: export_thumbnail() 처리
+              │  · 최종 composite (레이어 순차 합성)
+              │  · 16:9 + 9:16 두 종 렌더
+              │  · GCS 업로드: analysis/{mediaId}/thumbnails/{shortId}/{variantId}_{ratio}.png
+              │  · DB write: recommendation.data.thumbnails[]
+              │  · AI turn 로그 전체 저장 → recommendation.data.thumbnailSession (재현·디버깅용)
+              │
+              └── variant 3~5개 필요하면 위 AI 세션을 병렬로 N번 (다른 seed)
+                     ↓
 [Web UI: 클립 카드 · 편집기에 variant grid · 사용자 pick · chosen 갱신]
 ```
 
-### 2.3 왜 이렇게 나누는가
+### 2.5 왜 이렇게 나누는가 (도구 API 방식 이점)
 
-- **재현 가능**: 같은 AI JSON 결정 → 같은 이미지 항상 나옴 (시스템 결정론)
-- **디버깅**: AI 결정 로그가 남아 "왜 이 프레임 골랐는지" 추적 가능
-- **override**: 사용자가 특정 필드만 바꾸고 시스템 렌더만 재실행 (AI 재콜 없이)
-- **비용**: AI 콜 1개로 3~5 variant 다 커버 (자막·배경·레이아웃 다 JSON에 포함) · 매 variant Gemini 콜 안 함
-- **테스트**: 시스템 렌더 로직은 fixture JSON으로 unit test 가능
+- **재현 가능**: 도구 호출 시퀀스가 로그로 저장 → 같은 시퀀스 replay = 같은 이미지
+- **디버깅**: 어느 turn에서 잘못됐는지 정확히 추적 (예: "turn 8 add_caption 후 render_preview 결과 나쁨")
+- **부분 override**: 사용자가 turn 시퀀스에서 특정 turn만 교체 → 그 뒤 replay ("turn 8 자막만 바꿔")
+- **AI 자기 수정**: `render_preview()`가 반환한 이미지를 AI가 재판단해서 undo/재조합 (자막 겹침·색 대비 등)
+- **비용**: 세션 하나 = 다중 도구 콜이지만 각 함수 응답은 짧아서 실제 토큰은 통제 가능. 이미지 생성 도구만 별도 비용.
+- **테스트**: 각 도구는 순수 함수 · fixture 인자로 unit test 가능
+- **미래 확장**: 새 도구(예: `add_speech_bubble`, `apply_film_grain`)만 추가하면 AI가 알아서 씀
 
 ---
 
@@ -155,107 +255,136 @@
 - **Pillow (PIL)** — 파이썬 표준. 알파 채널 · 블러 · 텍스트 · outline · shadow 전부 지원.
 - ImageMagick / OpenCV 불필요.
 
-### 3.4 AI 콜 구조 (§2.1 매트릭스의 AI 담당 부분)
+### 3.4 AI 콜 구조 (§2.3 도구 API를 실행)
 
-**1콜로 모든 판단 통합** (자막·프레임·인물·배경·레이아웃 다 하나의 JSON에):
+**Function calling multi-turn 세션** (JSON 단일 응답 아님):
 
-- Model: Vertex Gemini 2.5-flash (Vision · JSON mode)
-- Input:
-  - 후보 프레임 3~5장 (base64 · 720p로 downsample → 토큰 절약)
-  - 컨텍스트: `shorts.title`·`shorts.description`·`scene_summary`·`cast_names[]`·`program.section`·`program.mood`·`speaker_at_frame`
-  - 기존 `recommend.py`의 예능 자막 톤 규칙 재활용 [[title-prompt-yeneung-caption-tone]]
-- Output: **구조화 JSON** (§12 스키마) — 시스템이 파싱 실패 시 fallback 프리셋 사용
-- 재생성 요청: 같은 인풋 · temperature 1.5 · seed 다르게 → 새 variant
+- Model: `gemini-2.5-flash` (function calling + vision · Vertex asia-northeast3)
+- Tools: §2.3 도구 세트 전부 JSON schema로 declare (Vertex `tools=[Tool(function_declarations=[...])]`)
+- 시스템 프롬프트: "너는 방송사 편집팀의 썸네일 디자이너다. 아래 도구들을 순차 호출해 완성해라. 마지막은 export_thumbnail." + [[title-prompt-yeneung-caption-tone]] 인용
+- 첫 turn user 메시지: 쇼츠 컨텍스트 요약
+- Turn 한도: 12 (넘으면 시스템이 강제 export)
+- 각 turn마다 시스템이 함수 실제 실행 후 결과를 다음 turn의 tool response로 반환
+- Temperature: 1.0 (도구 순서 다양성 · 재생성은 1.5 + 다른 seed)
 
-**시스템은 이 JSON을 파싱해서 Pillow로 렌더만.** AI에게 이미지 파일 시켜서 안 됨 (Gemini image generation 안 씀).
+**AI 이미지 생성 도구** (`generate_background`):
+- Model 선택 우선순위:
+  1. `gemini-2.5-flash-image` (nano banana · 저비용 · 빠름) — Vertex/AI Studio 지원 확인 후
+  2. `imagen-4.0-generate-preview` (Vertex Imagen) — 상용 · 고품질 · 폴백
+  3. Vertex 못 쓰면 Pillow blur 원본 자동 폴백
+- Prompt 강제 접두: "photo · 16:9 · cinematic · 사람 없음 · text 없음"
+- 출력: base64 PNG · GCS 업로드 후 Layer 0 source URL
+
+**Variant 3~5개**: 같은 컨텍스트 · 병렬 세션 N개 (다른 seed) · 각자 다른 도구 조합 결과.
+
+**시스템은 도구 실행 · Pillow 합성만.** 인물 컷아웃·자막·스티커는 시스템이 조작 · AI 이미지 생성은 배경 한정.
 
 ---
 
 ## 4. 신규 파일 · 배선
 
 ```
-core/thumbnail.py                        # NEW · 세그+합성 파이썬 진입점
-core/thumbnail_layouts.py                # NEW · 프리셋(예능/드라마/뉴스) 레이아웃
-assets/thumbnail-fonts/                  # NEW · TTF/OTF 파일들
+core/thumbnail/                          # NEW · 패키지 (파일 여러 개)
+  ├── __init__.py
+  ├── canvas.py                          # Layer/Document 클래스 · Pillow composite
+  ├── tools.py                           # §2.3 도구 함수 (create_document, set_person_from_frame, add_caption 등)
+  ├── tool_declarations.py               # Vertex Gemini function declarations
+  ├── ai_session.py                      # multi-turn function calling 오케스트레이션
+  ├── image_gen.py                       # generate_background (Gemini 2.5 flash image / Imagen)
+  ├── layouts.py                         # 프리셋 룩업 (variety/drama/news 폰트·색)
+  ├── contrast.py                        # WCAG 대비 계산·자동 보정
+  └── __main__.py                        # CLI: python -m core.thumbnail --recommendation-id X
+
+assets/thumbnail-fonts/                  # ✓ 완료 · Pretendard/Noto Sans/Serif KR
+assets/thumbnail-stickers/               # NEW · SVG 스티커 라이브러리 (Phase 3)
 apps/server/src/content-pipeline.ts      # 편집 · thumbnail 스테이지 추가
 apps/server/src/index.ts                 # 편집 · POST /api/recommendations/:id/thumbnails/regenerate
-apps/server/src/db-pg.ts                 # 편집 · thumbnails 필드 저장/조회 helper
-apps/web/src/lib/data/api.ts             # 편집 · regenerateThumbnails 함수
-apps/web/src/components/thumbnail-picker.tsx  # NEW · variant grid · 선택 UI
-apps/web/src/components/derivatives-panel.tsx # 편집 · 쇼츠 탭에 썸네일 섹션
-docs/reference/thumbnail-schema.md       # NEW · variant/style 스키마 문서
+                                         #        + PATCH /api/recommendations/:id/thumbnails/:variantId (사용자 override)
+apps/server/src/db-pg.ts                 # 편집 · thumbnails · thumbnailSession(turn 로그) 필드
+apps/web/src/lib/data/api.ts             # 편집 · regenerateThumbnails · patchThumbnailVariant
+apps/web/src/components/thumbnail-picker.tsx  # NEW · variant grid + 사용자 pick
+apps/web/src/components/thumbnail-editor.tsx  # NEW (Phase 5) · Photoshop-lite 편집기 · 도구별 조작
+docs/reference/thumbnail-schema.md       # NEW · Layer/Variant/Session 스키마 문서
 ```
 
 ---
 
 ## 5. Phase별 착수 계획
 
-각 Phase에 **AI 담당 · 시스템 담당** 명시. AI는 Vertex Gemini 콜 · 시스템은 파이썬 코드.
+각 Phase에 **도구 세트 · AI · 시스템** 담당 명시.
 
-### Phase 1 — MVP (2~3일) : 최소 회로 · AI 결정 1콜 + 시스템 렌더
+### Phase 1 — 도구 API 골격 + Layer 스택 + 최소 회로 (3~4일)
 
-**AI 담당** (§12 프롬프트 스키마):
-- 후보 3장 중 훅 프레임 1개 선정 (`chosenFrame`, `chosenReason`)
-- 자막 카피 1개 (기본 톤 · shorts.title 재활용 or 다듬기)
-- 배경 스타일 `mode:"blur"` 확정 (Phase 1은 blur 고정)
-- 인물 좌/우 배치 결정 (`focusPerson.side`)
+**신규 도구** (§2.3 중 필수 최소):
+- `list_candidate_frames`, `inspect_frame`, `get_shorts_context` (읽기)
+- `create_document(aspect)`
+- `set_background_from_frame(frame_id, filter="blur")`
+- `set_person_from_frame(frame_id, subject="largest_face", side)`
+- `add_caption(text, position, tone_tag)`
+- `render_preview()`, `undo_last()`, `export_thumbnail()`
 
-**시스템 담당**:
-- [ ] `core/thumbnail.py` 신규
-  - 후보 프레임 추출 (scene_frames 재활용)
-  - AI Vision 콜 (Gemini 2.5-flash · JSON out · 파싱 실패 fallback)
-  - rembg 세그멘테이션 (isnet-general-use)
-  - Pillow 합성 (배경 blur → 인물 alpha 배치 → 자막 렌더)
-  - 자막 자동 개행 · 폰트 프리셋 (Pretendard Bold)
-  - CLI: `python -m core.thumbnail --recommendation-id X`
-- [ ] `content-pipeline.ts`: `analyze` 완료 후 `thumbnail` 스테이지 스폰 (상위 3 shorts)
-- [ ] GCS 업로드 · `entities.recommendation.data.thumbnails[0]`
-- [ ] Web: 클립 카드에 썸네일 이미지 표시 (기존 프레임 스냅샷 대체)
-
-**검증**: 시연용 유튜브 URL 하나로 e2e · AI JSON 로그 · 이미지 결과 사람 평가.
-
-### Phase 2 — Variant + 톤 (2일) : AI 콜에 variant 담기
-
-**AI 담당** (기존 스키마 확장):
-- `captionVariants[]` 3~5개 각각 다른 톤 (인용/훅/의문/충격) · 각자 색 팔레트 지정
-- `background.palette` (프레임 이해 기반 컬러 톤)
+**AI 담당**: 위 도구들을 순차 호출로 조립 (multi-turn function calling).
 
 **시스템 담당**:
-- [ ] Pillow 렌더 loop — variant마다 이미지 하나씩 만들기
-- [ ] 프리셋 룩업 (예능=Noto Sans KR Black · 드라마=Noto Serif KR Black) — `program.section` 기반
-- [ ] WCAG 대비 계산 · AI가 준 색이 미달이면 자동 outline 두께 증가 또는 색 반전
-- [ ] Web: variant grid UI · 클릭해서 pick · `chosen` 필드 갱신 API
+- [ ] `core/thumbnail/canvas.py` — Layer 클래스 + Document + Pillow composite
+- [ ] `core/thumbnail/tools.py` — 필수 도구 8개 구현
+- [ ] `core/thumbnail/tool_declarations.py` — Vertex function schemas
+- [ ] `core/thumbnail/ai_session.py` — multi-turn 오케스트레이션 + turn 한도 · 예외 처리
+- [ ] `core/thumbnail/contrast.py` — WCAG 대비 계산·자동 outline 보정
+- [ ] `content-pipeline.ts` — analyze 완료 후 thumbnail 스테이지 스폰 (상위 3 shorts · 각 variant 1개)
+- [ ] GCS 업로드 · `recommendation.data.thumbnails[]` · `thumbnailSession` (turn 로그)
+- [ ] Web: 클립 카드에 썸네일 이미지 표시
 
-### Phase 3 — 레이아웃 다양화 (2일) : AI 판단 폭 넓히기
+**검증**: 시연용 유튜브 URL 하나 · turn 로그 사람 리뷰 · 자막 겹침·인물 잘림 등 실측.
 
-**AI 담당**:
-- 인물 여러 명 프레임에서 강조 대상 지정 (`focusPerson.name` · 대사 화자 우선)
-- `layout` enum 확장: `"person-left-caption-right"`, `"person-right-caption-left"`, `"person-center-caption-bottom"`, `"person-center-caption-diagonal"`
-- 벡터 스티커 필요 여부 · 종류 (`stickers: ["arrow-right", "shock-star"]`) · 위치
+### Phase 2 — AI 이미지 생성 배경 (2일)
 
-**시스템 담당**:
-- [ ] 레이아웃 프리셋별 Pillow 배치 함수
-- [ ] SVG 스티커 라이브러리 (에셋으로 20~30개) · Pillow 오버레이
-- [ ] 얼굴 bbox 기준 인물 자동 crop · 얼굴이 잘리지 않게 여백 룰
+**신규 도구**:
+- `generate_background(prompt, style, palette_hint)` — Gemini 2.5 flash image / Imagen
+- `set_background_gradient(colors, angle)`, `set_background_solid(color)`
 
-### Phase 4 — 9:16 세로 (1일) : 시스템만 확장
-
-**AI 담당**: 변경 없음 (같은 JSON 재사용).
+**AI 담당**: `generate_background()` 호출 · 프롬프트 작문 (프레임 팔레트 참고 · 인물 없음 · 텍스트 없음)
 
 **시스템 담당**:
-- [ ] 9:16 레이아웃 별도 함수 (같은 인물 alpha · 다른 배치 · 자막 더 크게)
-- [ ] 세로 영상 원본 대응 (좌우 blur 확장 · 인물 중앙)
-- [ ] `thumbnails[]`에 aspectRatio 필드로 구분
+- [ ] `core/thumbnail/image_gen.py` — Vertex 이미지 모델 어댑터 (Gemini flash image 우선 · Imagen 폴백)
+- [ ] 실패 시 원본 blur 자동 폴백 (`set_background_from_frame`로 대체) · 세션 turn에 이유 기록
+- [ ] 생성 이미지 GCS 캐시 (프롬프트 해시 키 · 재세션 시 재사용)
 
-### Phase 5 — 사용자 컨트롤 (2일) : Override + 부분 재실행
+### Phase 3 — 이펙트 · 스티커 도구 확장 (2일)
 
-**AI 담당**:
-- "재생성" 요청: 같은 컨텍스트 · temperature/seed만 다르게 → 새 JSON
+**신규 도구**:
+- `add_backfx_halo`, `add_backfx_vignette`, `add_backfx_lens_flare`
+- `add_person_outline`, `add_person_shadow`, `add_person_color_pop`
+- `add_sticker(kind, pos, size, rotation)` · `add_speech_bubble`
+
+**AI 담당**: 이펙트/스티커 필요성·종류·위치 판단 · `render_preview()` 후 자기 수정
 
 **시스템 담당**:
-- [ ] "이 자막으로 바꿔" · "이 프레임으로 다시" · "색 이렇게" — AI 콜 없이 시스템 렌더만 재실행
-- [ ] 완성 이미지 다운로드 버튼 · YouTube publish에 자동 첨부 (`snippet.thumbnails`)
-- [ ] 사용자 pick 이력 (어떤 톤이 채택률 높은지) — Phase 6+ A/B 학습 준비
+- [ ] `assets/thumbnail-stickers/` SVG 20~30개 (별표·화살표·배지·리액션)
+- [ ] Pillow 필터 (halo=radial blur · vignette=corner darken · flare=lens flare stamp)
+- [ ] 얼굴 bbox 기준 자동 crop (얼굴 잘리지 않게 안전 여백)
+
+### Phase 4 — 9:16 세로 (1일)
+
+**AI 담당**: 같은 도구 세트 · aspect="9:16"로 create_document (도구 자체는 aspect-agnostic)
+
+**시스템 담당**:
+- [ ] Canvas가 9:16이면 자막 더 크게 · 인물 중앙 우선 프리셋 자동 힌트
+- [ ] `variant` 하나에서 export_thumbnail이 16:9 + 9:16 두 파일 동시 생성
+
+### Phase 5 — 사용자 컨트롤 (Photoshop-lite UI) (3일)
+
+**신규 도구** (사용자→시스템 직접):
+- Web UI에서 `patch_variant` API로 특정 도구 turn 교체
+- 예: turn 8 자막 텍스트 override → 이후 turn replay
+
+**AI 담당**: "다르게 다시" 요청 시 새 세션 (temperature 1.5 · 다른 seed)
+
+**시스템 담당**:
+- [ ] `PATCH /api/recommendations/:id/thumbnails/:variantId` — 특정 turn args만 patch · replay
+- [ ] Web: `thumbnail-editor.tsx` — Photoshop-lite (layer 리스트 · 각 layer 소스 편집 · undo/redo)
+- [ ] 완성 이미지 다운로드 · YouTube publish 자동 첨부 (`snippet.thumbnails`)
+- [ ] 사용자 pick·override 이력 → Phase 6+ 학습 데이터
 
 ---
 
@@ -320,11 +449,12 @@ interface ThumbnailVariant {
 
 ## 9. 향후 확장 (Phase 6+)
 
-- **AI 이미지 생성 배경**: 자막·시놉시스 기반 배경 이미지 (SDXL 로컬 · 또는 Vertex Imagen)
-- **얼굴 표정 변형**: 놀람·웃음 강조 (LivePortrait · 사용자 반발 가능성 있음)
 - **A/B 테스트 자동화**: 여러 variant 실제 발행 · 클릭률 학습 · 개인 채널 최적화 [[shorts-engine-experiment-log]]
-- **템플릿 라이브러리**: 사용자가 즐겨찾기 프리셋 저장 · 다음 회차 재사용
-- **브랜딩 요소**: 프로그램 로고 · 회차 번호 · 방영일 워터마크 자동 삽입
+- **템플릿 라이브러리**: 사용자가 즐겨찾기 세션 저장 (도구 turn 시퀀스) · 다음 회차 재사용
+- **브랜딩 요소**: 프로그램 로고 · 회차 번호 · 방영일 워터마크 자동 삽입 (`add_watermark` 도구)
+- **AI 도구 학습**: 사용자가 자주 undo하는 조합 → 시스템 프롬프트 개선 자동 반영
+- **얼굴 표정 강조** (LivePortrait): 스코프 밖 (§11) · 필요해지면 별도 계획서
+- **동영상 썸네일** (motion): YouTube API 별개 · 별도 계획서
 
 ---
 
@@ -342,119 +472,184 @@ Phase 1 착수 전 확인 필요:
 
 ## 11. Non-goals (이 문서에서 다루지 않는 것)
 
-- **AI 이미지 생성** (SDXL · Imagen 등으로 배경을 그리는 것): §9 향후.
-- **얼굴 표정 변형** (LivePortrait · deepfake): 윤리적 반발 · §9 향후.
+- **얼굴 표정 변형** (LivePortrait · deepfake로 웃음/놀람 만들기): 윤리적 반발 · 스코프 밖.
 - **자동 A/B 테스트 · 클릭률 학습**: [[shorts-engine-experiment-log]] 흐름과 통합 · §9 향후.
-- **동영상 썸네일 (motion thumbnails)**: YouTube API 별개 기능 · 지금 스코프 X.
-- **AI가 이미지 파일을 직접 만드는 것**: **금지** (§2.3). 시스템이 Pillow로 결정론적으로 렌더.
+- **동영상 썸네일 (motion thumbnails)**: YouTube API 별개 기능 · 스코프 밖.
+- **AI가 인물/자막까지 이미지로 통째 생성**: **금지** — 실제 출연자 얼굴은 원본 프레임 rembg로만 (합성 이미지 얼굴은 라이선스·법적 문제).
+  - AI 이미지 생성 = **Layer 0 배경 한정** (풍경·질감·추상 · 사람 없음).
+- **완전 자유 캔버스**: 6-레이어 스택 고정. 무한 레이어 추가는 스코프 밖 (필요시 stack 규격을 늘림).
 
 ---
 
-## 12. AI 프롬프트 · 응답 스키마 (핵심 계약)
+## 12. AI 세션 · 도구 API 계약
 
-### 12.1 Vertex Gemini 콜 스펙
+### 12.1 Vertex Gemini function calling 스펙
 
-- Model: `gemini-2.5-flash` (Vision · JSON mode)
-- `generation_config`:
-  - `response_mime_type: "application/json"`
-  - `response_schema`: 아래 §12.3 스키마
-  - `temperature: 1.2` (자막 창의성)
-  - `max_output_tokens: 2048`
-- Timeout: 30초 · 실패 시 시스템 fallback (§12.4)
+- Model: `gemini-2.5-flash` (Vision + function calling · Vertex asia-northeast3)
+- Config:
+  - `tools=[Tool(function_declarations=<§12.2 도구 세트>)]`
+  - `tool_config={"function_calling_config":{"mode":"AUTO"}}`
+  - `temperature: 1.0` (기본) · 재생성 세션은 `1.5` + 다른 seed
+  - `max_output_tokens: 4096`
+- Turn 한도: 12 (넘으면 시스템이 `export_thumbnail()` 강제)
+- 각 세션 = variant 1개 → variant 3~5개면 병렬 세션 N개
 
-### 12.2 프롬프트 골격 (한국어)
+### 12.2 도구 declarations (Vertex `FunctionDeclaration` 스타일)
+
+§2.3 도구 시그니처를 Vertex JSON schema로 그대로 옮긴 것. Phase 1은 굵은 표시만.
+
+```python
+TOOLS = [
+    # ── Discovery (읽기 · 필수) ──────────────────────────────
+    { "name": "get_shorts_context",
+      "description": "쇼츠 제목·설명·장면 요약·출연자·프로그램 정보 반환.",
+      "parameters": {"type":"object","properties":{}}},
+
+    { "name": "list_candidate_frames",
+      "description": "후보 프레임 리스트 (scene_frames + shot_types + 얼굴 bbox).",
+      "parameters":{"type":"object","properties":{
+        "top_k":{"type":"integer","default":5}}}},
+
+    { "name": "inspect_frame",
+      "description": "특정 프레임의 도미넌트 컬러·밝기·얼굴 상세.",
+      "parameters":{"type":"object","required":["frame_id"],"properties":{
+        "frame_id":{"type":"string"}}}},
+
+    # ── Document (Phase 1 필수) ──────────────────────────────
+    { "name": "create_document",
+      "description": "레이어 캔버스 초기화 (16:9 or 9:16 · Layer 0~5 예약).",
+      "parameters":{"type":"object","required":["aspect"],"properties":{
+        "aspect":{"type":"string","enum":["16:9","9:16"]}}}},
+
+    { "name": "list_layers",   # 상태 조회
+      "parameters":{"type":"object","properties":{}}},
+
+    { "name": "clear_layer",
+      "parameters":{"type":"object","required":["role"],"properties":{
+        "role":{"type":"string","enum":["background","backfx","person","personfx","caption","frontfx"]}}}},
+
+    # ── Layer 0 Background (Phase 1: blur만 · Phase 2: 나머지) ─
+    { "name": "set_background_from_frame",
+      "parameters":{"type":"object","required":["frame_id"],"properties":{
+        "frame_id":{"type":"string"},
+        "filter":{"type":"string","enum":["blur","none"],"default":"blur"},
+        "blur_px":{"type":"integer","default":24}}}},
+
+    { "name": "set_background_gradient",   # Phase 2
+      "parameters":{"type":"object","required":["colors"],"properties":{
+        "colors":{"type":"array","items":{"type":"string"},"minItems":2,"maxItems":3},
+        "angle":{"type":"integer","default":90}}}},
+
+    { "name": "generate_background",       # Phase 2 (AI 이미지)
+      "description": "Gemini 2.5 flash image / Imagen으로 배경 생성. 사람·텍스트 금지 자동 접두.",
+      "parameters":{"type":"object","required":["prompt","style"],"properties":{
+        "prompt":{"type":"string"},
+        "style":{"type":"string","enum":["cinematic","illustration","photo","abstract"]},
+        "palette_hint":{"type":"array","items":{"type":"string"}}}}},
+
+    # ── Layer 2 Person (Phase 1 필수) ────────────────────────
+    { "name": "set_person_from_frame",
+      "description": "프레임 → rembg 세그 → alpha 컷아웃 → Layer 2 배치.",
+      "parameters":{"type":"object","required":["frame_id","subject","side"],"properties":{
+        "frame_id":{"type":"string"},
+        "subject":{"type":"string","description":"'largest_face' | 'name:XXX' | 'bbox:x1,y1,x2,y2'"},
+        "side":{"type":"string","enum":["left","right","center"]},
+        "scale":{"type":"number","default":0.9,"minimum":0.5,"maximum":1.2}}}},
+
+    # ── Layer 3 PersonFx (Phase 3) ───────────────────────────
+    { "name": "add_person_outline",
+      "parameters":{"type":"object","required":["color"],"properties":{
+        "color":{"type":"string"},
+        "width":{"type":"integer","default":6}}}},
+
+    { "name": "add_person_shadow",
+      "parameters":{"type":"object","properties":{
+        "offset":{"type":"array","items":{"type":"integer"},"default":[8,8]},
+        "blur":{"type":"integer","default":20},
+        "color":{"type":"string","default":"#000000"},
+        "opacity":{"type":"number","default":0.5}}}},
+
+    # ── Layer 4 Caption (Phase 1 필수) ───────────────────────
+    { "name": "add_caption",
+      "description": "메인 자막. 자동 개행·폰트 룩업·WCAG 대비 보정은 시스템이 알아서.",
+      "parameters":{"type":"object","required":["text","position","tone_tag"],"properties":{
+        "text":{"type":"string"},
+        "position":{"type":"string","enum":["top","middle","bottom","top-left","top-right","bottom-left","bottom-right"]},
+        "text_color":{"type":"string","default":"#ffffff"},
+        "outline_color":{"type":"string","default":"#000000"},
+        "size_hint":{"type":"string","enum":["XL","L","M"],"default":"XL"},
+        "font_role":{"type":"string","enum":["variety","drama","news","documentary"],"default":"variety"},
+        "tone_tag":{"type":"string","enum":["인용","훅","의문","충격","기본"]}}}},
+
+    # ── Layer 5 FrontFx (Phase 3) ────────────────────────────
+    { "name": "add_sticker",
+      "parameters":{"type":"object","required":["kind","pos"],"properties":{
+        "kind":{"type":"string","description":"assets/thumbnail-stickers 파일명 (without .svg)"},
+        "pos":{"type":"array","items":{"type":"integer"},"minItems":2,"maxItems":2},
+        "size":{"type":"integer","default":120},
+        "rotation_deg":{"type":"integer","default":0}}}},
+
+    # ── Reflection / Control (Phase 1 필수) ──────────────────
+    { "name": "render_preview",
+      "description": "현재까지 조합된 미리보기 PNG(base64). AI가 다음 결정에 사용.",
+      "parameters":{"type":"object","properties":{}}},
+
+    { "name": "undo_last",
+      "parameters":{"type":"object","properties":{}}},
+
+    { "name": "export_thumbnail",
+      "description": "세션 종료 · 최종 composite · GCS 업로드 · DB write.",
+      "parameters":{"type":"object","properties":{}}},
+]
+```
+
+### 12.3 시스템 프롬프트 (세션 첫 turn)
 
 ```
-너는 한국 방송사 편집팀의 썸네일 디자이너다. 아래 후보 프레임 3~5장과
-쇼츠 컨텍스트를 보고, "이 쇼츠가 클릭될 만한 썸네일"을 만들기 위한
-편집 결정을 내려라. 결정만 하면 시스템이 픽셀 합성한다.
+너는 한국 방송사 편집팀의 썸네일 디자이너다. 도구를 순차 호출해서
+"이 쇼츠가 클릭될 만한 썸네일" 하나를 조립한다.
 
-[쇼츠 컨텍스트]
-- 프로그램: {program.title} ({program.section}, {program.mood})
-- 쇼츠 제목: {shorts.title}
-- 쇼츠 설명: {shorts.description}
-- 장면 요약: {shorts.scene_summary}
-- 출연자: {cast_names}
-- 대사 화자 (프레임별): {speaker_at_frame}
+권장 순서 (참고 · 필수 아님):
+  1) get_shorts_context() 로 무슨 쇼츠인지 파악
+  2) list_candidate_frames() + inspect_frame() 로 프레임 골라
+  3) create_document(aspect="16:9")
+  4) 배경 (Phase 1은 set_background_from_frame(filter="blur"))
+  5) set_person_from_frame(...)
+  6) add_caption(...)  ← 2~4어절 · 큰 폰트 지향 ·
+                        clickbait 어휘 금칙 (담백·여운·인용 톤)
+  7) render_preview() 로 확인 · 문제 있으면 undo_last() 후 다시
+  8) export_thumbnail() 로 완료
 
-[후보 프레임]
-(3~5장 이미지 · 각각 frame_XXX id 붙임)
-
-[결정할 것]
-1. chosenFrame: 훅으로 가장 좋은 프레임 하나 (표정·구도·상황 고려)
-2. chosenReason: 왜 그 프레임인지 (30자 이내)
-3. focusPerson: 강조할 인물 (여러 명이면 대사 화자·큰 얼굴 우선)
-4. captionVariants: 자막 후보 3개 (인용/훅/의문 각 하나)
-   · 2~4어절 (큰 폰트에 들어가야 함)
-   · [[title-prompt-yeneung-caption-tone]] 규칙 준수 (담백·여운·clickbait 금칙)
-5. background: blur(원본 blur) / gradient(단색 톤) / halo(인물 강조광) 중 하나
-   · palette: 프레임 컬러 톤에서 뽑은 2~3색
-6. layout: 인물 좌/우/중앙 + 자막 반대편 (구도 상 자연스러운 방향)
-
-[출력]
-아래 JSON 스키마 그대로. 설명·markdown 금지.
+규칙:
+- 인물·자막은 이미지 파일로 만들지 마 (인물은 원본 프레임 · 자막은 시스템 폰트).
+- generate_background 는 배경 한정 · 프롬프트에 사람/텍스트 금지.
+- 자막 톤은 예능이면 담백·여운, 드라마면 감정어. 프로그램 section 참고.
+- 최대 12 turn. 넘으면 시스템이 자동 export.
 ```
 
-### 12.3 응답 JSON 스키마
+### 12.4 시스템 fallback (AI 실패 · 도구 호출 없이 세션 종료)
 
-```json
-{
-  "chosenFrame": "frame_002",
-  "chosenReason": "터지는 리액션 · 정면 응시",
-  "focusPerson": {
-    "name": "원규",
-    "bbox": [320, 180, 620, 560],
-    "side": "left"
-  },
-  "captionVariants": [
-    {
-      "text": "제가\n결혼할래요?",
-      "tone": "인용",
-      "textColor": "#ffffff",
-      "outlineColor": "#000000"
-    },
-    {
-      "text": "3년 만에\n말했다",
-      "tone": "훅",
-      "textColor": "#ffee00",
-      "outlineColor": "#000000"
-    },
-    {
-      "text": "다들 정지",
-      "tone": "충격",
-      "textColor": "#ff3355",
-      "outlineColor": "#ffffff"
-    }
-  ],
-  "background": {
-    "mode": "blur",
-    "palette": ["#1a2b3c", "#e8d4a0"]
-  },
-  "layout": "person-left-caption-right",
-  "stickers": []
-}
-```
-
-### 12.4 시스템 fallback (AI 실패 · JSON 파싱 실패 시)
-
-시스템은 AI 없이도 최소 썸네일을 만들 수 있어야 한다:
+AI가 아예 도구를 하나도 안 부르거나 turn 12 초과 시 시스템이 최소 썸네일 조립:
 
 ```
-chosenFrame = 후보 중 얼굴 크기 top-1
-focusPerson = insightface bbox 최대
-captionVariants = [{ text: shorts.title, tone: "기본",
-                     textColor: "#ffffff", outlineColor: "#000000" }]
-background = { mode: "blur", palette: ["#000000", "#ffffff"] }
-layout = "person-center-caption-bottom"
+create_document(aspect="16:9")
+set_background_from_frame(largest_face_frame, filter="blur", blur_px=32)
+set_person_from_frame(largest_face_frame, subject="largest_face", side="center", scale=0.9)
+add_caption(shorts.title, position="bottom", tone_tag="기본",
+           text_color="#ffffff", outline_color="#000000", size_hint="XL")
+export_thumbnail()
 ```
 
-이 폴백은 **AI 실패를 감춤이 아니라 최소 결과 보증** · 로그에는 명확히 "AI_FAIL: <원인>" 기록.
+로그에는 명확히 `AI_FAIL: <reason> · fallback_used` 기록.
 
-### 12.5 재생성 (사용자가 "다시" 눌렀을 때)
+### 12.5 재생성 · Override 정책
 
-- **자막만 재생성**: 시스템이 프롬프트에 "이전 자막: [...]. 이번엔 완전 다른 톤" 추가 · temperature 1.5 · seed 다르게 → 새 `captionVariants[]`만 갱신.
-- **전체 재생성**: 위와 같지만 프레임 선정도 다시.
-- **특정 필드 수동 편집** (자막 텍스트만 바꾸기 등): AI 콜 없음 · 시스템 렌더만 재실행 · GCS 이미지만 덮어쓰기.
+- **variant 3~5개** = 초기부터 병렬 세션 N개 (각자 다른 seed · temperature 1.0)
+- **"완전 다시"** = 새 세션 (temperature 1.5 · 다른 seed)
+- **"자막만 다르게"** = 기존 세션 turn 로그에서 add_caption turn 이후 replay + 새 자막 힌트 프롬프트
+- **사용자 수동 편집** (Phase 5): AI 없이 사용자가 도구를 직접 부름 (Web UI → PATCH API)
+  예: 자막 텍스트만 바꾸기 → `add_caption(...)` turn args 교체 → 이후 turn replay
+- **turn 로그 저장**: `recommendation.data.thumbnailSession[]` — 각 turn의 tool 이름 · args · result summary
 
 ---
 
