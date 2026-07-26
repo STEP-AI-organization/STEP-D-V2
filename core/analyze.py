@@ -235,8 +235,13 @@ def analyze(
         step(f"STT — 체크포인트 재사용 ({len(stt['segments'])} 세그먼트)")
     else:
         step("STT (관리형)…")
+        # cast_registry 있으면 화자분리 KMeans의 n_clusters 힌트로 사용 (실측 정확도↑).
+        _expected_speakers = None
+        if isinstance(cast_registry, list) and cast_registry:
+            _expected_speakers = len(cast_registry)
         stt = transcribe(
             video_path, language="ko",
+            expected_speakers=_expected_speakers,
             on_progress=lambda done, total: _progress("stt", 3 + 27 * done / max(1, total), f"음성 인식 {done}/{total} 윈도우"),
         )
         _save_json(out_dir / "stt.json", stt)

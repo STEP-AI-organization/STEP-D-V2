@@ -73,6 +73,7 @@ def transcribe(
     compute_type: str = "float16",
     beam_size: int = 5,
     on_progress=None,
+    expected_speakers: int | None = None,
 ) -> dict:
     """Transcribe via the configured provider. Returns {segments, language}.
     on_progress(done, total) fires per completed window (gemini provider only).
@@ -84,9 +85,10 @@ def transcribe(
     """
     if STT_PROVIDER == "whisper":
         r = _transcribe_whisper(audio_path, language, model_name, device, compute_type, beam_size)
-        return _apply_vad_postprocess(audio_path, r)
+        return _apply_vad_postprocess(audio_path, r, expected_speakers=expected_speakers)
     if STT_PROVIDER == "hybrid":
-        return _transcribe_hybrid(audio_path, language, on_progress=on_progress, beam_size=beam_size)
+        return _transcribe_hybrid(audio_path, language, on_progress=on_progress,
+                                  beam_size=beam_size, expected_speakers=expected_speakers)
 
     # Primary: managed Gemini (GPU-free, in-country).
     outage: Optional[Exception] = None
@@ -548,14 +550,16 @@ def _get_ecapa_classifier():
         return None
 
 
-def _diarize_audio(audio_path: str, segments: list[dict] | None = None) -> list[dict] | None:
-    """오디오 → 화자별 발화 구간 리스트. SpeechBrain ECAPA embedding + Agglomerative 클러스터링.
+def _diarize_audio(audio_path: str, segments: list[dict] | None = None,
+                   expected_speakers: int | None = None) -> list[dict] | None:
+    """오디오 → 화자별 발화 구간. SpeechBrain ECAPA embedding + 클러스터링.
 
-    각 STT 세그의 오디오 슬라이스에서 speaker embedding 뽑고, cosine distance threshold로
-    자동 화자 수 결정 · 각 세그에 SPEAKER_00·01·... 배정. HF token 불필요.
+    expected_speakers 있으면 KMeans (n_clusters 고정) · 없으면 Agglomerative (threshold auto).
+    KMeans가 실측에서 훨씬 정확 (환승연애 9명 · Agglomerative 0.8→다수 vs KMeans 9).
+
+    min duration 1.0s · 너무 짧은 세그는 embedding 노이즈로 부정확.
     """
     if not segments:
-        print("   [diarize] segments 없음 · 스킵")
         return None
     classifier = _get_ecapa_classifier()
     if classifier is None:
@@ -564,11 +568,9 @@ def _diarize_audio(audio_path: str, segments: list[dict] | None = None) -> list[
         import torch
         import torchaudio
         import numpy as np
-        from sklearn.cluster import AgglomerativeClustering
 
         # 오디오 로드 (mp4면 임시 wav 변환)
         src = audio_path
-        tmp_wav = None
         if not audio_path.lower().endswith((".wav", ".flac")):
             import tempfile
             tmp_wav = tempfile.NamedTemporaryFile(suffix=".wav", delete=False).name
@@ -584,14 +586,14 @@ def _diarize_audio(audio_path: str, segments: list[dict] | None = None) -> list[
             waveform = torchaudio.functional.resample(waveform, sr, 16000)
             sr = 16000
         if waveform.shape[0] > 1:
-            waveform = waveform.mean(dim=0, keepdim=True)  # mono
+            waveform = waveform.mean(dim=0, keepdim=True)
         device = "cuda" if torch.cuda.is_available() else "cpu"
         waveform = waveform.to(device)
 
-        # 각 세그의 embedding 뽑기 (min 0.5s · 너무 짧으면 skip)
+        # embedding · min 1.0s (짧으면 노이즈)
         embeddings: list[np.ndarray] = []
         seg_indices: list[int] = []
-        MIN_DUR = 0.5
+        MIN_DUR = 1.0
         for i, seg in enumerate(segments):
             try:
                 st = float(seg.get("start", 0)); en = float(seg.get("end", st + 1))
@@ -613,23 +615,29 @@ def _diarize_audio(audio_path: str, segments: list[dict] | None = None) -> list[
             print(f"   [diarize] 유효 세그 부족 ({len(embeddings)}개) · 스킵")
             return None
 
-        # Agglomerative 클러스터링 (cosine distance · threshold auto)
         X = np.array(embeddings)
-        # L2 정규화 (cosine similarity 위해)
         X = X / (np.linalg.norm(X, axis=1, keepdims=True) + 1e-8)
-        # ECAPA + 방송 마이크 조건에서는 같은 화자도 embedding 편차 큼(웃음·감정·거리).
-        # 실측 threshold 0.35→111명, 0.65→46명 (환승연애 실제 9명). 0.8로 재상향.
-        clustering = AgglomerativeClustering(
-            n_clusters=None,
-            metric="cosine",
-            linkage="average",
-            distance_threshold=0.8,
-        )
-        labels = clustering.fit_predict(X)
-        n_speakers = len(set(labels))
-        print(f"   [diarize] SpeechBrain: {len(embeddings)} seg → {n_speakers}명 화자")
 
-        # 세그별 speaker 배정 → turn list 반환 (호환성 유지)
+        # KMeans (expected_speakers 있을 때 · 정확도↑) or Agglomerative (자동 결정)
+        if expected_speakers and expected_speakers >= 2 and expected_speakers <= len(embeddings):
+            from sklearn.cluster import KMeans
+            # 방송 예능은 host/narrator 추가 있을 수 있어 cast+1~2 여유
+            k = min(expected_speakers + 2, len(embeddings))
+            km = KMeans(n_clusters=k, random_state=42, n_init=10)
+            labels = km.fit_predict(X)
+            method = f"KMeans k={k} (cast_size={expected_speakers})"
+        else:
+            from sklearn.cluster import AgglomerativeClustering
+            clustering = AgglomerativeClustering(
+                n_clusters=None, metric="cosine", linkage="average",
+                distance_threshold=0.8,
+            )
+            labels = clustering.fit_predict(X)
+            method = "Agglomerative threshold=0.8"
+
+        n_speakers = len(set(labels))
+        print(f"   [diarize] SpeechBrain · {method} · {len(embeddings)} seg → {n_speakers}명")
+
         turns = []
         for seg_i, lbl in zip(seg_indices, labels):
             seg = segments[seg_i]
@@ -675,10 +683,11 @@ def _assign_speakers(segs: list[dict], turns: list[dict]) -> tuple[list[dict], d
     return out, {"assigned": assigned, "unique_speakers": len(speakers_seen)}
 
 
-def _apply_vad_postprocess(audio_path: str, result: dict) -> dict:
+def _apply_vad_postprocess(audio_path: str, result: dict,
+                           expected_speakers: int | None = None) -> dict:
     """STT 결과 세그먼트 후처리 · 공통:
     1) Silero VAD → 음성 구간 boundary 스냅 (timestamp 밀림 fix)
-    2) PyAnnote diarization → speaker_id 배정 (HF_TOKEN 있을 때만)
+    2) SpeechBrain ECAPA diarization → speaker_id 배정
     """
     segs = result.get("segments") if isinstance(result, dict) else None
     if not segs:
@@ -694,7 +703,7 @@ def _apply_vad_postprocess(audio_path: str, result: dict) -> dict:
         result["vad_stats"] = stats
 
     # 2) 화자분리 (SpeechBrain ECAPA · HF token 불필요)
-    turns = _diarize_audio(audio_path, segments=segs)
+    turns = _diarize_audio(audio_path, segments=segs, expected_speakers=expected_speakers)
     if turns:
         segs, dstats = _assign_speakers(segs, turns)
         print(f"   [diarize] turn {len(turns)}개 · seg에 speaker 배정 {dstats['assigned']} · "
@@ -886,7 +895,8 @@ def _whisper_device_auto() -> tuple[str, str]:
     return ("cpu", "int8")
 
 
-def _transcribe_hybrid(audio_path: str, language: str, on_progress=None, beam_size: int = 5) -> dict:
+def _transcribe_hybrid(audio_path: str, language: str, on_progress=None, beam_size: int = 5,
+                       expected_speakers: int | None = None) -> dict:
     """Gemini + faster-whisper 병렬 실행 · Gemini text 유지 · whisper timestamp로 재정렬.
     whisper는 CUDA 있으면 GPU float16으로 (RTX 급이면 30분 영상 1~2분) · 없으면 CPU int8."""
     dev, ctype = _whisper_device_auto()
@@ -899,7 +909,7 @@ def _transcribe_hybrid(audio_path: str, language: str, on_progress=None, beam_si
             gem = f_gem.result()
         except Exception as e:
             print(f"   STT hybrid: Gemini 실패 ({str(e)[:80]}) → whisper 단독 결과 사용")
-            return _apply_vad_postprocess(audio_path, f_whi.result())
+            return _apply_vad_postprocess(audio_path, f_whi.result(), expected_speakers=expected_speakers)
         try:
             whi = f_whi.result()
         except Exception as e:
@@ -910,7 +920,7 @@ def _transcribe_hybrid(audio_path: str, language: str, on_progress=None, beam_si
     whi_segs = whi.get("segments", [])
     if not gem_segs or not whi_segs:
         print(f"   STT hybrid: 한쪽 빈 결과 → Gemini 반환")
-        return _apply_vad_postprocess(audio_path, gem)
+        return _apply_vad_postprocess(audio_path, gem, expected_speakers=expected_speakers)
 
     aligned, stats = _align_gemini_to_whisper(gem_segs, whi_segs)
     print(f"   STT hybrid: alignment {stats['aligned']}/{len(gem_segs)} 재정렬 · "
@@ -921,7 +931,7 @@ def _transcribe_hybrid(audio_path: str, language: str, on_progress=None, beam_si
         "language": gem.get("language", language),
         "alignment_stats": stats,
     }
-    return _apply_vad_postprocess(audio_path, result)
+    return _apply_vad_postprocess(audio_path, result, expected_speakers=expected_speakers)
 
 
 # ── Shared helpers ──────────────────────────────────────────────────────────────
