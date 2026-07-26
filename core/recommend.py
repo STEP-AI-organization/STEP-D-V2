@@ -207,9 +207,9 @@ def _profile_block(profile: dict | None) -> str:
     return "\n".join(lines)
 
 
-def _cast_block(cast_registry: list[dict] | None) -> str:
+def _cast_block(cast_registry: list[dict] | None, transcript: list[dict] | None = None) -> str:
     """출연진 명단 블록 — 등록 캐스트 이름을 제목·설명에 정확히 반영하도록. STT 오인식 정규화
-    지시 포함. cast 없으면 빈 문자열(no-op)."""
+    지시 포함. transcript 있으면 각 화자의 자기소개 대사도 힌트로 추출 (speaker table 강화)."""
     if not cast_registry:
         return ""
     names: list[str] = []
@@ -225,12 +225,41 @@ def _cast_block(cast_registry: list[dict] | None) -> str:
                 names.append(a)
     if not names:
         return ""
+
+    # 각 화자의 자기소개 · 직업 언급 · 주요 대사 (프롬프트 상단 speaker table)
+    intro_lines: list[str] = []
+    if transcript:
+        from collections import defaultdict
+        by_sp: dict[str, list[tuple[float, str]]] = defaultdict(list)
+        name_set = set(names)
+        for s in transcript:
+            sp = (s.get("speaker") or "").strip()
+            if sp not in name_set:
+                continue
+            txt = (s.get("text") or "").strip()
+            if not txt:
+                continue
+            # 자기소개·직업·호칭 힌트 (max 3개/화자)
+            if any(k in txt for k in ("저는 ", "제가 ", "제 이름", "제 직업", "저의 ", "년차", "직업입니다", "회사")):
+                if len(by_sp[sp]) < 3:
+                    try:
+                        by_sp[sp].append((float(s.get("start", 0)), txt[:70]))
+                    except (TypeError, ValueError):
+                        continue
+        if by_sp:
+            intro_lines.append("\n[화자별 자기소개·직업 힌트 · 이 정보로 대사·제목 정확 매칭]")
+            for sp in sorted(by_sp.keys()):
+                items = by_sp[sp]
+                fmt = " · ".join(f"[{int(t)//60}:{int(t)%60:02d}] \"{tx}\"" for t, tx in items)
+                intro_lines.append(f"- {sp}: {fmt}")
+
     return (
         "\n\n등록된 출연진:\n"
         f"- 이 명단만 실명으로 사용: {', '.join(names)}\n"
         "- STT 오인식은 이 명단 기준으로 정규화 (예: 옥수→옥순, 정선→정순).\n"
         "- 대사에서 서로 부르는 호칭(XX 님/OO아)이 명단에 있으면 실명으로.\n"
         "- 명단에 없는 이름은 만들지 마라 — 잘 모르는 인물은 '한 출연자', '진행자' 같은 역할 지칭."
+        + ("\n" + "\n".join(intro_lines) if intro_lines else "")
     )
 
 
@@ -283,7 +312,8 @@ def _program_context_block(ctx: dict | None) -> str:
 _CURRENT_PROGRAM_CTX: dict | None = None
 
 
-def _base_system(genre: str, profile: dict | None = None, cast_registry: list[dict] | None = None) -> str:
+def _base_system(genre: str, profile: dict | None = None, cast_registry: list[dict] | None = None,
+                 transcript: list[dict] | None = None) -> str:
     p = _pack(genre)
     return f"""너는 {p['label']} 콘텐츠의 숏폼(쇼츠) 편집 전문가다. 아래는 영상을 장면 단위로 분석한
 타임라인이다. 각 줄: [장면번호] 시작초~끝초 (시:분 표기, 길이) | 화면분석 | 대사 | 등장인물(화면자막) | 시각점수(0-100).
@@ -299,7 +329,7 @@ def _base_system(genre: str, profile: dict | None = None, cast_registry: list[di
 - **길이는 완결성이 최우선.** 30~90초를 기본으로, 스토리 완결에 필요하면 120초까지 허용.
   스토리가 잘리면 실패 — 60초 안에 못 담으면 60초 넘어라. 하드 실링 180초. 20초 미만은
   정말 그 한 컷으로 완결될 때만. start/end는 장면·문장 경계에서 깔끔히 끊어라.
-- appeal은 바이럴 잠재력의 절대평가다: 5=확실히 터진다, 4=강함, 3=쓸만함, 2=약함, 1=비추천.{_profile_block(profile)}{_cast_block(cast_registry)}{_program_context_block(_CURRENT_PROGRAM_CTX)}"""
+- appeal은 바이럴 잠재력의 절대평가다: 5=확실히 터진다, 4=강함, 3=쓸만함, 2=약함, 1=비추천.{_profile_block(profile)}{_cast_block(cast_registry, transcript)}{_program_context_block(_CURRENT_PROGRAM_CTX)}"""
 
 
 def _parse_target_len(profile: dict | None) -> float | None:
@@ -612,7 +642,7 @@ def _extract_candidates(client, chunk: list[dict], genre: str, profile: dict | N
     conflicts_ctx = _conflicts_context_for_range(key_conflicts, c_start, c_end)
     cast_ctx = _cast_timeline_context_for_range(cast_people, c_start, c_end)
     ppl_ctx = _ppl_context_for_range(ppl_detections, c_start, c_end)
-    system = _base_system(genre, profile, cast_registry) + f"""
+    system = _base_system(genre, profile, cast_registry, transcript) + f"""
 
 지금 보는 타임라인은 전체 영상의 일부 구간이다. 이 구간 안에서만 후보를 골라라.
 - 각 장면 아래 '대사:' 블록의 [MM:SS] 접두어는 그 대사가 발화된 실제 시각이다.
@@ -686,7 +716,7 @@ def _synthesize(client, candidates: list[dict], n: int, genre: str, duration: fl
             f" | 3축:{axes} | {c.get('title', '')} | {c.get('reason', '')}"
             f" | 장면:{c.get('scene_from', '-')}~{c.get('scene_to', '-')} | {tags or '-'}"
         )
-    system = _base_system(genre, profile, cast_registry) + f"""
+    system = _base_system(genre, profile, cast_registry, transcript) + f"""
 
 아래는 영상 전체({_mmss(duration)})를 구간별로 스캔해 뽑은 쇼츠 후보 목록이다. 3축(h=hook_strength,
 p=payoff, c=completeness — 각 0-10)은 Phase 1에서 매긴 근거값이다.
@@ -1280,7 +1310,7 @@ def _retitle_final_windows(client, shorts: list[dict], transcript: list[dict] | 
         )
     if not lines:
         return shorts
-    cast_block = _cast_block(cast_registry)
+    cast_block = _cast_block(cast_registry, transcript)
     n_alt = _TITLE_CANDIDATES_PER_SHORT
     # 예능 자막 톤 프롬프트. 원칙:
     #  1) 담백한 상황 묘사 + 여운 → 궁금증. clickbait 어휘 반복 금지.
@@ -1954,7 +1984,7 @@ def propose_scenarios(
     if profile:
         system += _profile_block(profile)
     if cast_registry:
-        system += _cast_block(cast_registry)
+        system += _cast_block(cast_registry, transcript)
 
     contents_parts = []
     narr_ctx = _narr_full_context(narrative)
@@ -2107,7 +2137,7 @@ def _expand_single_scenario(
     if profile:
         system += _profile_block(profile)
     if cast_registry:
-        system += _cast_block(cast_registry)
+        system += _cast_block(cast_registry, transcript)
 
     # 시나리오 지역 자막 (앞뒤 20s 여유)
     lo = max(0.0, ast - 20)
@@ -2241,7 +2271,7 @@ def propose_clips(
     if profile:
         system += _profile_block(profile)
     if cast_registry:
-        system += _cast_block(cast_registry)
+        system += _cast_block(cast_registry, transcript)
 
     contents_parts = []
     narr_ctx = _narr_full_context(narrative)
@@ -2326,7 +2356,7 @@ role은 "opening_hook" | "development" | "climax" | "closing" 중 하나.
     if profile:
         system += _profile_block(profile)
     if cast_registry:
-        system += _cast_block(cast_registry)
+        system += _cast_block(cast_registry, transcript)
 
     # 시나리오 요약 + narrative
     scenario_lines = []
@@ -2470,7 +2500,7 @@ def _expand_and_pick_variations_UNUSED_(
     if profile:
         system += _profile_block(profile)
     if cast_registry:
-        system += _cast_block(cast_registry)
+        system += _cast_block(cast_registry, transcript)
 
     # 시나리오 목록 + 서사 근거 (각 시나리오 지역만) 컨텍스트
     contents_parts = []
