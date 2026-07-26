@@ -595,9 +595,30 @@ TOOLS = [
         "size":{"type":"integer","default":120},
         "rotation_deg":{"type":"integer","default":0}}}},
 
+    # ── Coordinate / Layout helpers (Phase 1 필수 · §14 참고) ────
+    { "name": "get_canvas_info",
+      "description": "캔버스 크기·안전 영역·현재 레이어 실 bbox 반환.",
+      "parameters":{"type":"object","properties":{}}},
+      # returns: {size:[W,H], safe_zone:[x1,y1,x2,y2], layers:[{role, bbox, visible}]}
+
+    { "name": "suggest_caption_position",
+      "description": "자막 텍스트 길이·인물 bbox·안전 영역 감안 · 자동 위치·크기 제안.",
+      "parameters":{"type":"object","required":["text","size_hint"],"properties":{
+        "text":{"type":"string"},
+        "size_hint":{"type":"string","enum":["XL","L","M"]},
+        "prefer":{"type":"string","enum":["opposite_person","top","bottom","auto"],"default":"opposite_person"}}}},
+      # returns: {position:[x,y], estimated_bbox, needs_wrap:bool, wrap_lines:int}
+
+    { "name": "check_overlap",
+      "description": "두 레이어(또는 bbox)의 겹침 IoU · 안전 영역 침범 여부.",
+      "parameters":{"type":"object","properties":{
+        "a":{"type":"string","description":"레이어 role 또는 'bbox:x1,y1,x2,y2'"},
+        "b":{"type":"string"}}}},
+      # returns: {iou:float, a_safe:bool, b_safe:bool, warning:str?}
+
     # ── Reflection / Control (Phase 1 필수) ──────────────────
     { "name": "render_preview",
-      "description": "현재까지 조합된 미리보기 PNG(base64). AI가 다음 결정에 사용.",
+      "description": "현재까지 조합된 미리보기 PNG(base64) + 모든 레이어 실 bbox. AI가 겹침·잘림 판정.",
       "parameters":{"type":"object","properties":{}}},
 
     { "name": "undo_last",
@@ -772,6 +793,120 @@ contents:
 캔버스의 한 레이어일 뿐 · 사용자에게 보이는 최종 썸네일은 시스템이 Pillow로 배경+인물 alpha+자막을
 순차 합성한 결과. 이 원칙을 어긴다는 건 (a) 인물 얼굴 라이선스 문제 (b) 자막 폰트 통제 상실
 (c) 재렌더/부분 override 불가.
+
+---
+
+## 14. 좌표 시스템 · 안전 영역 · 충돌 회피 (합치기 알고리즘)
+
+> 합치기 = 시스템의 몫. 시스템이 좌표를 결정론적으로 계산해서 **인물 잘림·자막 겹침·화면 밖 노출** 없이 조립.
+> AI는 "어디쯤" 힌트만 (position="right", side="left") · **정확한 픽셀 좌표는 시스템이 결정**.
+
+### 14.1 좌표계 · 안전 영역
+
+- **캔버스**: 16:9 = 1280×720 · 9:16 = 1080×1920 (모든 픽셀 좌표 여기 기준)
+- **원점**: 좌상단 (0,0) · x→오른쪽 · y→아래
+- **안전 영역 (safe zone)**: 화면 가장자리에서 **각 60px 안쪽** 사각형 (1280×720 기준 60,60 ~ 1220,660).
+  - YouTube 재생 UI · 채널 뱃지 · 진행 바가 가리는 영역 회피
+  - 자막·인물 얼굴·주요 스티커는 반드시 safe zone 안에 완전 포함
+- **얼굴 안전 영역**: 얼굴 bbox는 세로 상단 15% 안쪽으로 떨어져야 (자막 옆에 얼굴이 잘리지 않게)
+
+### 14.2 인물(Layer 2) 좌표 계산 알고리즘
+
+시스템이 `set_person_from_frame(subject, side, scale)`을 실행할 때:
+
+```
+1. 원본 프레임 rembg → alpha PNG (segmented person)
+2. subject 해석 → 얼굴 bbox 얻기 (insightface)
+   · "largest_face": faces 중 최대
+   · "name:XXX": episode_cast에서 name 매치 후 bbox
+   · "bbox:x1,y1,x2,y2": 그대로
+3. 인물 crop 규칙:
+   · 상단: 얼굴 상단 y - 얼굴 높이 * 0.3 (머리 여백)
+   · 하단: 얼굴 하단 y + 얼굴 높이 * 4.0 (상반신 or 전신)
+   · 좌우: 얼굴 중심 ± 얼굴 폭 * 1.5
+   · 원본 프레임을 벗어나면 max 클램프 + 여백 채움 (배경 blur 확장)
+4. resize: crop된 인물 높이 = 캔버스 높이 * scale (기본 0.9)
+5. 배치 좌표 (side 기준):
+   · "left":   x = safe_zone.left + 20
+   · "right":  x = safe_zone.right - 인물_폭 - 20
+   · "center": x = (캔버스_폭 - 인물_폭) / 2
+   · y = 캔버스_하단 정렬 · 얼굴은 세로 40% 위치가 되도록 auto 조정
+6. 얼굴 bbox를 캔버스 좌표계로 변환해 기록 (자막 배치가 참고)
+```
+
+### 14.3 자막(Layer 4) 좌표 계산 · 자동 wrap
+
+시스템이 `add_caption(text, position, size_hint, ...)` 실행 시:
+
+```
+1. 폰트·크기 결정:
+   · size_hint XL=120px · L=90px · M=70px
+   · font_role → 파일 룩업 (variety=NotoSansKR-Black · drama=NotoSerifKR-Black 등)
+2. 자동 개행 (wrap):
+   · 텍스트를 어절(공백)로 분할
+   · 폭 계산 (Pillow font.getbbox) · 자막 최대 폭 = safe_zone_width * 0.55
+   · 2~3어절씩 묶어 줄바꿈 · 3줄 넘으면 폰트 -20px 단계 축소 후 재시도
+3. 자막 전체 bbox 계산 (개행 반영 · outline + shadow 포함)
+4. 위치 결정:
+   · position="top"|"bottom"|"middle": safe zone 안 y 좌표 · x는 인물 반대편
+   · position=[x,y]: 좌표 그대로 (safe zone 검증)
+   · position="opposite_person" (suggest_caption_position 결과): 인물 bbox 반대편 자동
+5. 충돌 검사 (§14.4):
+   · 인물 bbox와 IoU > 0.10 이면 자동 조정 시도
+     (a) 좌우 반대편 이동 · (b) 상하 반대편 · (c) 폰트 -10 축소
+   · 3번 시도 후에도 실패 = warn 로그 · AI 다음 turn에서 undo 유도
+6. WCAG 대비 보정 (contrast.py):
+   · 배경 평균 밝기 확인 · text_color와 대비 4.5:1 미만이면
+     outline_color 자동 반전 or outline 폭 +2px
+```
+
+### 14.4 충돌 감지 · 회피
+
+시스템이 항상 체크하는 것:
+
+| 검사 | 임계 | 실패 시 |
+|------|------|--------|
+| 인물 bbox × 자막 bbox IoU | > 0.10 | 자막 위치 자동 조정 (§14.3 5) |
+| 인물 얼굴 bbox × safe zone | 얼굴이 안전 영역 밖 | 인물 재배치 (scale ↓ or side 변경) |
+| 자막 bbox × safe zone | 자막이 안전 영역 밖 | 폰트 축소 · 개행 재계산 |
+| 인물 화면 잘림 (얼굴이 캔버스 밖) | 얼굴 bbox 벗어남 | crop 재계산 · 실패 시 다른 프레임 후보 요청 |
+| 스티커 × 얼굴 | 얼굴 위 스티커 | 스티커 위치 회피 (인물 반대편) |
+| 자막 × 배경 색 대비 | < 4.5:1 | outline 두께 up · 반전 |
+
+### 14.5 AI 자기수정 흐름 (`render_preview`)
+
+```
+turn N   : add_caption(text="...", position="right", size_hint="XL")
+turn N+1 : render_preview()   ← 시스템이 자막 실 bbox 반환
+           → AI가 "자막이 인물 얼굴에 살짝 겹침" 판단
+turn N+2 : undo_last()
+turn N+3 : add_caption(text="...", position="bottom", size_hint="XL")
+turn N+4 : render_preview()   ← 다시 확인 · OK
+turn N+5 : export_thumbnail()
+```
+
+`render_preview()` 반환값에는:
+- PNG base64 (AI가 시각적으로 확인)
+- 모든 레이어의 실 bbox
+- 감지된 충돌 warning 리스트 (`["caption overlaps person by IoU 0.12", "sticker outside safe zone"]`)
+
+AI가 warning을 보고 스스로 undo · 재배치. 시스템이 warning을 반환한다고 자동 조정하지는 않음
+(자동 조정은 §14.3의 add_caption 안에서만 · 명시적 · 예측 가능하게).
+
+### 14.6 프리셋 레이아웃 (자주 쓰는 조합)
+
+layout enum 값이 사실은 좌표 프리셋:
+
+| Layout | 인물 side · scale | 자막 position · size | 얼굴 대비 자막 |
+|--------|-------------------|---------------------|---------------|
+| `person-left-caption-right` | left · 0.9 | right · XL | 완전 분리 |
+| `person-right-caption-left` | right · 0.9 | left · XL | 완전 분리 |
+| `person-center-caption-bottom` | center · 0.85 | bottom · XL | 얼굴 위 자막 X |
+| `person-center-caption-top` | center · 0.85 | top · XL | 얼굴 아래 상반신 |
+| `person-left-caption-diagonal` | left · 0.95 | top-right + bottom-left 분리 · L | 대각선 이야기 |
+
+AI가 layout enum만 지정하면 시스템이 위 프리셋을 자동 적용 (인물 side/scale + 자막 위치까지).
+AI가 세부 조정하고 싶으면 도구 개별 호출 (add_caption(position=[x,y])).
 
 ---
 
