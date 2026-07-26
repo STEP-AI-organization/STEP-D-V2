@@ -617,11 +617,13 @@ def _diarize_audio(audio_path: str, segments: list[dict] | None = None) -> list[
         X = np.array(embeddings)
         # L2 정규화 (cosine similarity 위해)
         X = X / (np.linalg.norm(X, axis=1, keepdims=True) + 1e-8)
+        # ECAPA cosine distance: 동일인 대개 0.4~0.6 · 서로 다른 사람 0.7~1.0.
+        # threshold 0.35는 매우 엄격 → 실측 111명 과분할. 0.65로 상향 (환승연애 실측 시 9명 근처 목표).
         clustering = AgglomerativeClustering(
             n_clusters=None,
             metric="cosine",
             linkage="average",
-            distance_threshold=0.35,  # 경험값 · 0.3~0.4 · 낮으면 세분화
+            distance_threshold=0.65,
         )
         labels = clustering.fit_predict(X)
         n_speakers = len(set(labels))
