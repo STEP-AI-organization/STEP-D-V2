@@ -509,56 +509,137 @@ def _snap_to_speech_windows(segs: list[dict], windows: list[tuple[float, float]]
 # 결과 → 각 STT 세그에 speaker="SPEAKER_00"/"SPEAKER_01"/... 붙임. refine·faces가 이걸
 # 실명(M1/F1 or 진짜 이름)에 매핑.
 
-_diarization_pipeline = None
+_ecapa_classifier = None
 
 
-def _get_diarization_pipeline():
-    """PyAnnote 3.1 pipeline lazy load · HF_TOKEN 필요 (없으면 None · 스킵)."""
-    global _diarization_pipeline
-    if _diarization_pipeline is not None:
-        return _diarization_pipeline
-    hf_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN")
-    if not hf_token:
-        print("   [diarize] HF_TOKEN 없음 · 화자분리 스킵 (설정: 환경변수 HF_TOKEN)")
-        return None
+def _get_ecapa_classifier():
+    """SpeechBrain ECAPA-TDNN speaker embedding 모델 lazy load.
+    HF token 불필요 (public model) · Windows symlink 권한 문제 monkey-patch로 우회."""
+    global _ecapa_classifier
+    if _ecapa_classifier is not None:
+        return _ecapa_classifier
     try:
-        from pyannote.audio import Pipeline
-        pipeline = Pipeline.from_pretrained(
-            "pyannote/speaker-diarization-3.1", use_auth_token=hf_token,
-        )
+        # Windows symlink 권한 우회: SpeechBrain fetch를 copy로 monkey-patch (관리자 X)
         try:
-            import torch
-            if torch.cuda.is_available():
-                pipeline.to(torch.device("cuda"))
-                print("   [diarize] PyAnnote 3.1 로드 (CUDA)")
-            else:
-                print("   [diarize] PyAnnote 3.1 로드 (CPU · 느림)")
+            import speechbrain.utils.fetching as _fetch
+            import shutil as _sh
+            _orig = _fetch.link_with_strategy
+            def _copy_only(src, dst, strategy):
+                if hasattr(dst, "exists") and dst.exists():
+                    return
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                _sh.copy2(src, dst)
+            _fetch.link_with_strategy = _copy_only
         except Exception:
             pass
-        _diarization_pipeline = pipeline
-        return pipeline
+        from speechbrain.inference.speaker import EncoderClassifier
+        import torch
+        run_opts = {"device": "cuda"} if torch.cuda.is_available() else None
+        classifier = EncoderClassifier.from_hparams(
+            source="speechbrain/spkrec-ecapa-voxceleb",
+            savedir=os.path.join(os.path.expanduser("~"), ".cache", "speechbrain", "ecapa"),
+            run_opts=run_opts,
+        )
+        print(f"   [diarize] SpeechBrain ECAPA 로드 ({'CUDA' if run_opts else 'CPU'})")
+        _ecapa_classifier = classifier
+        return classifier
     except Exception as e:
-        print(f"   [diarize] pipeline 로드 실패: {str(e)[:150]}")
+        print(f"   [diarize] ECAPA 로드 실패: {str(e)[:150]}")
         return None
 
 
-def _diarize_audio(audio_path: str) -> list[dict] | None:
-    """오디오 → 화자별 발화 구간 리스트. 실패 시 None."""
-    pipeline = _get_diarization_pipeline()
-    if pipeline is None:
+def _diarize_audio(audio_path: str, segments: list[dict] | None = None) -> list[dict] | None:
+    """오디오 → 화자별 발화 구간 리스트. SpeechBrain ECAPA embedding + Agglomerative 클러스터링.
+
+    각 STT 세그의 오디오 슬라이스에서 speaker embedding 뽑고, cosine distance threshold로
+    자동 화자 수 결정 · 각 세그에 SPEAKER_00·01·... 배정. HF token 불필요.
+    """
+    if not segments:
+        print("   [diarize] segments 없음 · 스킵")
+        return None
+    classifier = _get_ecapa_classifier()
+    if classifier is None:
         return None
     try:
-        diarization = pipeline(audio_path)
+        import torch
+        import torchaudio
+        import numpy as np
+        from sklearn.cluster import AgglomerativeClustering
+
+        # 오디오 로드 (mp4면 임시 wav 변환)
+        src = audio_path
+        tmp_wav = None
+        if not audio_path.lower().endswith((".wav", ".flac")):
+            import tempfile
+            tmp_wav = tempfile.NamedTemporaryFile(suffix=".wav", delete=False).name
+            subprocess.run(
+                ["ffmpeg", "-y", "-v", "quiet", "-i", audio_path,
+                 "-vn", "-ac", "1", "-ar", "16000", "-acodec", "pcm_s16le", tmp_wav],
+                check=True,
+            )
+            src = tmp_wav
+
+        waveform, sr = torchaudio.load(src)
+        if sr != 16000:
+            waveform = torchaudio.functional.resample(waveform, sr, 16000)
+            sr = 16000
+        if waveform.shape[0] > 1:
+            waveform = waveform.mean(dim=0, keepdim=True)  # mono
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        waveform = waveform.to(device)
+
+        # 각 세그의 embedding 뽑기 (min 0.5s · 너무 짧으면 skip)
+        embeddings: list[np.ndarray] = []
+        seg_indices: list[int] = []
+        MIN_DUR = 0.5
+        for i, seg in enumerate(segments):
+            try:
+                st = float(seg.get("start", 0)); en = float(seg.get("end", st + 1))
+            except (TypeError, ValueError):
+                continue
+            if en - st < MIN_DUR:
+                continue
+            start_sample = int(st * sr)
+            end_sample = min(int(en * sr), waveform.shape[1])
+            if end_sample <= start_sample:
+                continue
+            slice_wav = waveform[:, start_sample:end_sample]
+            with torch.no_grad():
+                emb = classifier.encode_batch(slice_wav).squeeze().cpu().numpy()
+            embeddings.append(emb)
+            seg_indices.append(i)
+
+        if len(embeddings) < 2:
+            print(f"   [diarize] 유효 세그 부족 ({len(embeddings)}개) · 스킵")
+            return None
+
+        # Agglomerative 클러스터링 (cosine distance · threshold auto)
+        X = np.array(embeddings)
+        # L2 정규화 (cosine similarity 위해)
+        X = X / (np.linalg.norm(X, axis=1, keepdims=True) + 1e-8)
+        clustering = AgglomerativeClustering(
+            n_clusters=None,
+            metric="cosine",
+            linkage="average",
+            distance_threshold=0.35,  # 경험값 · 0.3~0.4 · 낮으면 세분화
+        )
+        labels = clustering.fit_predict(X)
+        n_speakers = len(set(labels))
+        print(f"   [diarize] SpeechBrain: {len(embeddings)} seg → {n_speakers}명 화자")
+
+        # 세그별 speaker 배정 → turn list 반환 (호환성 유지)
         turns = []
-        for turn, _, speaker in diarization.itertracks(yield_label=True):
+        for seg_i, lbl in zip(seg_indices, labels):
+            seg = segments[seg_i]
             turns.append({
-                "start": round(float(turn.start), 3),
-                "end": round(float(turn.end), 3),
-                "speaker": str(speaker),
+                "start": round(float(seg.get("start", 0)), 3),
+                "end": round(float(seg.get("end", 0)), 3),
+                "speaker": f"SPEAKER_{int(lbl):02d}",
             })
         return turns
     except Exception as e:
-        print(f"   [diarize] 실행 실패: {str(e)[:150]}")
+        print(f"   [diarize] 실행 실패: {str(e)[:200]}")
+        import traceback; traceback.print_exc()
         return None
 
 
@@ -610,8 +691,8 @@ def _apply_vad_postprocess(audio_path: str, result: dict) -> dict:
         result["segments"] = segs
         result["vad_stats"] = stats
 
-    # 2) 화자분리 (HF_TOKEN 있으면)
-    turns = _diarize_audio(audio_path)
+    # 2) 화자분리 (SpeechBrain ECAPA · HF token 불필요)
+    turns = _diarize_audio(audio_path, segments=segs)
     if turns:
         segs, dstats = _assign_speakers(segs, turns)
         print(f"   [diarize] turn {len(turns)}개 · seg에 speaker 배정 {dstats['assigned']} · "
