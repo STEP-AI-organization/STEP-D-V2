@@ -1,75 +1,34 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Deploy latest main to the STEP-D worker VM (stepd-worker) and restart it.
+    로컬 워커(pm2) 업데이트 · 재시작. GCE VM 은 더 이상 안 쓴다.
 
 .DESCRIPTION
-    The worker runs the TS source from /opt/stepd (tsx), so a deploy is just:
-    fetch origin → hard-reset to origin/main → restart the systemd service.
-
-    Uses `git reset --hard` (not `pull`) on purpose: it discards any local drift on
-    the VM (e.g. a file hot-copied via scp) and makes the tree exactly match main —
-    so the deploy is idempotent and never blocks on "local changes would be overwritten".
-
-    Auth: the VM's git remote already carries a read-only token in its URL, so fetch
-    works non-interactively. (Rotate that token periodically; see runbook.)
-
-.PARAMETER DeploySaAccount
-    이 계정으로 gcloud 를 실행한다 (gcloud --account). stepd-deployer 같은 배포 SA 를 넣으면
-    hkj 재인증 프롬프트 없이 비대화형으로 통과. 미지정 시 env:DEPLOY_SA_ACCOUNT → 활성 계정 순.
+    2026-07-26 이후 워커는 로컬 컴 pm2 프로세스. 이 스크립트는
+    scripts/update-local-worker.ps1 을 그대로 호출하는 얇은 래퍼다 (기존 tooling
+    호환용). 새 스크립트를 바로 써도 된다.
 
 .EXAMPLE
-    .\deploy-worker.ps1
-    $env:DEPLOY_SA_ACCOUNT = "stepd-deployer@step-d.iam.gserviceaccount.com"; .\deploy-worker.ps1
+    .\deploy-worker.ps1              # git pull + typecheck + safe pm2 restart
+    .\deploy-worker.ps1 -Force       # running 잡 있어도 재시작
+    .\deploy-worker.ps1 -SkipPull    # 로컬 편집만 반영
 #>
 param(
-    [switch]$SkipRestart,
-    # 배포 SA (gcloud --account). 미지정 시 env:DEPLOY_SA_ACCOUNT → 활성 계정 순.
-    [string]$DeploySaAccount = $env:DEPLOY_SA_ACCOUNT
+    [switch]$Force,
+    [switch]$SkipPull,
+    [switch]$SkipInstall,
+    [switch]$SkipTypecheck
 )
 
 $ErrorActionPreference = "Stop"
+$Script = Join-Path $PSScriptRoot "scripts\update-local-worker.ps1"
+if (-not (Test-Path $Script)) { Write-Host "실패: $Script 없음" -ForegroundColor Red; exit 1 }
 
-$PROJECT = "step-d"
-$ZONE    = "us-central1-a"
-$VM      = "stepd-worker"
-$APP     = "/opt/stepd"
+$passArgs = @()
+if ($Force)         { $passArgs += "-Force" }
+if ($SkipPull)      { $passArgs += "-SkipPull" }
+if ($SkipInstall)   { $passArgs += "-SkipInstall" }
+if ($SkipTypecheck) { $passArgs += "-SkipTypecheck" }
 
-# ── 비대화형 네이티브 실행 래퍼 ────────────────────────────────────────────────
-# PowerShell 5.1 은 gcloud 가 정상 진행상황을 stderr 로 내는 것만으로도 EAP='Stop' 에서
-# NativeCommandError 로 조기 종료할 수 있다. 이 래퍼는 그 구간에서만 EAP 를 풀고 성공/실패를
-# 오직 $LASTEXITCODE 로만 판정한다. 배포 SA 가 있으면 --account 로 비대화형 고정.
-$script:DeployAccount = $DeploySaAccount
-
-function Invoke-Gcloud {
-    param([Parameter(ValueFromRemainingArguments = $true)][string[]]$GcloudArgs)
-    if ($script:DeployAccount) { $GcloudArgs = @($GcloudArgs) + "--account=$script:DeployAccount" }
-    $prevEap = $ErrorActionPreference
-    $ErrorActionPreference = 'Continue'
-    try {
-        & gcloud @GcloudArgs 2>&1 | ForEach-Object { Write-Host $_ }
-    } finally {
-        $ErrorActionPreference = $prevEap
-    }
-    return $LASTEXITCODE
-}
-
-$restart = if ($SkipRestart) {
-    "echo 'skip restart'"
-} else {
-    "sudo systemctl daemon-reload && sudo systemctl restart stepd-worker && sleep 3 && systemctl is-active stepd-worker"
-}
-
-# Single remote command: update code, (re)start, and confirm the shorts wiring is present.
-$remote = "cd $APP && sudo git fetch origin && sudo git reset --hard origin/main && $restart && echo '--- 배선 확인 ---' && grep -c writeRecommendationsFromShorts apps/server/src/content-pipeline.ts"
-
-Write-Host ""
-Write-Host "==> Deploying latest main to worker VM '$VM' ($ZONE)..." -ForegroundColor Cyan
-Write-Host "    배포 계정: $(if ($script:DeployAccount) { "$script:DeployAccount (--account, 비대화형)" } else { 'gcloud 활성 계정 (기본)' })"
-Write-Host ""
-
-$sshCode = Invoke-Gcloud compute ssh $VM --zone=$ZONE --project=$PROJECT --command=$remote
-if ($sshCode -ne 0) { throw "worker deploy failed (exit $sshCode)" }
-
-Write-Host ""
-Write-Host "==> Worker deploy complete. (기대: 'active' 그리고 '1' 이상)" -ForegroundColor Green
+& powershell -NoProfile -ExecutionPolicy Bypass -File $Script @passArgs
+exit $LASTEXITCODE
