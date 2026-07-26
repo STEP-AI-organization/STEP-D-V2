@@ -78,10 +78,10 @@ def build_tool() -> types.Tool:
             },
         ),
 
-        # ── Layer 2 · Person ─────────────────────────────────
+        # ── Layer 2 · Person (원본 프레임 rembg · 안전 기본) ──
         types.FunctionDeclaration(
             name="set_person_from_frame",
-            description="프레임 → 얼굴 bbox crop → rembg alpha → 캔버스 배치.",
+            description="원본 프레임 → 얼굴 bbox crop → rembg alpha → 캔버스 배치. 실제 프레임 그대로.",
             parameters={
                 "type": "OBJECT",
                 "required": ["frame_id", "subject", "side"],
@@ -91,6 +91,49 @@ def build_tool() -> types.Tool:
                         "description": "'largest_face' | 'name:XXX' | 'bbox:x1,y1,x2,y2'"},
                     "side": {"type": "STRING", "enum": ["left", "right", "center"]},
                     "scale": {"type": "NUMBER", "description": "0.5~1.2, 기본 0.9"},
+                },
+            },
+        ),
+
+        # ── Layer 2 · Person (castPhoto → AI 재생성 · 얼굴 identity 유지) ──
+        types.FunctionDeclaration(
+            name="set_person_from_cast_photo",
+            description=("castPhotos/<cast_name>.jpg 를 참고로 Gemini 이미지 재생성 → rembg → 배치. "
+                         "얼굴 identity 100퍼센트 유지 강제 프롬프트 · 다른 얼굴로 바뀌면 안 됨. "
+                         "포즈/각도/조명/배경만 썸네일용으로 최적화."),
+            parameters={
+                "type": "OBJECT",
+                "required": ["cast_name", "side"],
+                "properties": {
+                    "cast_name": {"type": "STRING",
+                        "description": "castPhotos 폴더의 인물 이름 (program.cast_names 중 하나)"},
+                    "side": {"type": "STRING", "enum": ["left", "right", "center"]},
+                    "scale": {"type": "NUMBER", "description": "0.5~1.2, 기본 0.95"},
+                    "style_prompt": {"type": "STRING",
+                        "description": ("포즈·표정·조명 힌트. 예: '정면 · 놀란 표정 · 강한 조명 · 상반신 · 배경 투명'. "
+                                        "얼굴 특징 바꾸는 지시(성별·나이·인종)는 무시됨.")},
+                },
+            },
+        ),
+
+        # ── Layer 0 · Background (AI 생성 · Phase 2) ───────
+        types.FunctionDeclaration(
+            name="generate_and_set_background",
+            description=("Gemini 2.5 flash image 로 배경 생성 → Layer 0. "
+                         "시스템이 자동으로 프레임 + 시놉시스 첨부 (인물 사진은 첨부 X). "
+                         "프롬프트에 사람·텍스트 언급 금지."),
+            parameters={
+                "type": "OBJECT",
+                "required": ["prompt"],
+                "properties": {
+                    "prompt": {"type": "STRING",
+                        "description": "장면·톤 지시 (사람·텍스트 언급 금지)"},
+                    "style": {"type": "STRING",
+                        "enum": ["cinematic", "illustration", "photo", "abstract"]},
+                    "palette_hint": {"type": "ARRAY", "items": {"type": "STRING"},
+                        "description": "hex 컬러 배열 (예: ['#1a2b3c','#e8d4a0'])"},
+                    "context_frame_ids": {"type": "ARRAY", "items": {"type": "STRING"},
+                        "description": "참고 프레임 id 배열 (기본: 인물 shot + 배경 shot 2장)"},
                 },
             },
         ),

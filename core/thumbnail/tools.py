@@ -19,6 +19,7 @@ from .canvas import (
     bbox_iou,
 )
 from .contrast import ensure_min_contrast, sample_bg_color
+from . import image_gen
 
 FONT_ROOT = pathlib.Path(__file__).resolve().parents[2] / "assets" / "thumbnail-fonts"
 
@@ -231,6 +232,103 @@ def set_person_from_frame(ctx: SessionContext, frame_id: str,
     return {"applied": True, "bbox": list(tr.bbox()), "face_bbox_canvas": face_bbox_canvas}
 
 
+# ── Layer 2 · Person (castPhoto → AI 재생성 → rembg → 배치) ──
+def set_person_from_cast_photo(ctx: SessionContext, cast_name: str,
+                               side: str = "right", scale: float = 0.95,
+                               style_prompt: str = "정면 · 자연스러운 미소 · 시네마틱 조명 · 상반신 · 배경 투명") -> dict:
+    """castPhotos/<name>.jpg → Gemini 이미지 재생성 (얼굴 identity 유지) → rembg → Layer 2."""
+    _require_doc(ctx)
+    cast_dir = ctx.media_dir / "cast_photos"
+    photo = cast_dir / f"{cast_name}.jpg"
+    if not photo.exists():
+        # 확장자 다양 · 대체 검색
+        cand = list(cast_dir.glob(f"{cast_name}.*")) if cast_dir.exists() else []
+        if not cand:
+            return {"error": f"castPhoto not found: {cast_name} (checked {cast_dir})"}
+        photo = cand[0]
+
+    # 프로그램 톤 힌트
+    prog = ctx.shorts_ctx.get("program", {}) if ctx.shorts_ctx else {}
+    prog_info = f"{prog.get('title','')} ({prog.get('section','')})"
+
+    # AI 재생성 (얼굴 identity 유지 강제 프롬프트)
+    gen_bytes = image_gen.generate_person_thumbnail(
+        cast_photo=photo.read_bytes(),
+        style_prompt=style_prompt,
+        program_info=prog_info,
+    )
+    if not gen_bytes:
+        return {"error": "image gen returned no image · fallback to raw castPhoto"}
+
+    gen_img = Image.open(io.BytesIO(gen_bytes)).convert("RGB")
+
+    # rembg (배경이 이미 투명이면 사실상 no-op · 안전장치)
+    try:
+        from rembg import new_session, remove
+        session = new_session("isnet-general-use")
+        seg = remove(gen_img, session=session)
+    except Exception as e:
+        return {"error": f"rembg failed: {str(e)[:200]}"}
+
+    cw, ch = ctx.doc.size
+    target_h = int(ch * scale)
+    ratio = target_h / seg.height
+    target_w = int(seg.width * ratio)
+    seg = seg.resize((target_w, target_h), Image.LANCZOS)
+
+    sx1, _, sx2, _ = ctx.doc.safe_zone
+    if side == "left":
+        x = sx1 + 20
+    elif side == "right":
+        x = sx2 - target_w - 20
+    else:
+        x = (cw - target_w) // 2
+    # 세로: 인물 하단 정렬 · 상단 여백
+    y = ch - target_h
+    if y < 0:
+        y = 0
+
+    tr = LayerTransform(x=x, y=y, width=target_w, height=target_h)
+    ctx.doc.set_layer("person", seg, tr, meta={
+        "source_cast": cast_name, "generated": True,
+        "side": side, "scale": scale, "style_prompt": style_prompt,
+    })
+    return {"applied": True, "bbox": list(tr.bbox()), "generated_from": cast_name}
+
+
+# ── Layer 0 · Background (Phase 2 — AI 이미지 생성) ─────────
+def generate_and_set_background(ctx: SessionContext, prompt: str, style: str = "cinematic",
+                                palette_hint: Optional[list] = None,
+                                context_frame_ids: Optional[list] = None) -> dict:
+    """§13 default: 프레임 2장(있으면) + 시놉시스 · 인물 사진 X · AI 이미지 생성 → 배경."""
+    _require_doc(ctx)
+    frames_bytes: list[bytes] = []
+    for fid in (context_frame_ids or [])[:2]:
+        fr = _find_frame(ctx, fid)
+        if fr:
+            frames_bytes.append(pathlib.Path(fr["path"]).read_bytes())
+    prog = ctx.shorts_ctx.get("program", {}) if ctx.shorts_ctx else {}
+    synopsis = prog.get("synopsis", "")
+    prog_info = f"{prog.get('title','')} ({prog.get('section','')})"
+
+    img_bytes = image_gen.generate_background(
+        prompt=prompt, style=style, palette_hint=palette_hint,
+        context_frames=frames_bytes, synopsis=synopsis, program_info=prog_info,
+    )
+    if not img_bytes:
+        return {"error": "image gen returned no image"}
+
+    bg = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+    cw, ch = ctx.doc.size
+    bg = _cover_resize(bg, (cw, ch))
+    tr = LayerTransform(x=0, y=0, width=cw, height=ch, opacity=1.0)
+    ctx.doc.set_layer("background", bg.convert("RGBA"), tr, meta={
+        "generated": True, "prompt": prompt, "style": style,
+        "used_frames": context_frame_ids or [],
+    })
+    return {"applied": True, "bbox": list(tr.bbox())}
+
+
 # ── Layer 4 · Caption (자동 wrap · 대비 보정) ─────────────────
 def add_caption(ctx: SessionContext, text: str, position: str = "bottom",
                 text_color: str = "#ffffff", outline_color: str = "#000000",
@@ -376,9 +474,14 @@ def render_preview(ctx: SessionContext) -> dict:
     buf = io.BytesIO()
     img.save(buf, format="PNG", optimize=True)
     b64 = base64.b64encode(buf.getvalue()).decode("ascii")
-    # 충돌 warning
     warnings: list[str] = []
     L = ctx.doc.layers
+    # 필수 layer 누락 감지 (Layer 2 Person · Layer 4 Caption)
+    if L["person"].source is None:
+        warnings.append("MISSING person layer — 인물이 없다. set_person_from_cast_photo(cast_name=...) 또는 set_person_from_frame(frame_id=..., subject='name:XXX') 호출 필요. 인물 없이 export 하지 마.")
+    if L["caption"].source is None:
+        warnings.append("MISSING caption layer — 자막 없음. add_caption(...) 필요.")
+    # 충돌 warning
     if L["person"].source and L["caption"].source:
         pbb = L["person"].transform.bbox()
         cbb = tuple(L["caption"].meta.get("caption_bbox", L["caption"].transform.bbox()))
@@ -403,8 +506,12 @@ def undo_last(ctx: SessionContext) -> dict:
 
 
 def export_thumbnail(ctx: SessionContext, out_dir: pathlib.Path,
-                     variant_id: str = "v1") -> dict:
+                     variant_id: str = "v1", allow_no_person: bool = False) -> dict:
     _require_doc(ctx)
+    # 인물 없으면 export 거부 (사용자 요구: 인물 반드시)
+    if not allow_no_person and ctx.doc.layers["person"].source is None:
+        return {"error": "person layer 비어있음 · 인물 없이 export 불가. "
+                          "set_person_from_cast_photo 또는 set_person_from_frame 먼저 호출."}
     out_dir = pathlib.Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     img = ctx.doc.composite()

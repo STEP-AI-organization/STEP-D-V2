@@ -22,44 +22,62 @@ MODEL_IMAGE = "gemini-2.5-flash-image"          # 배경 이미지 생성 (us-ce
 DEFAULT_LOCATION = "us-central1"                # 이미지 모델 접근성 · text 도 여기서 문제 X
 MAX_TURNS = 12
 
-SYSTEM_INSTRUCTION = """너는 한국 방송사 편집팀의 썸네일 디자이너다. 아래 도구를 순차 호출해서
+SYSTEM_INSTRUCTION = """너는 한국 방송사 편집팀의 썸네일 디자이너다. 도구를 순차 호출해서
 "이 쇼츠가 클릭될 만한 썸네일" 하나를 조립한다.
 
-권장 순서 (참고 · 필수 아님):
-  1) get_shorts_context() 로 무슨 쇼츠인지 파악
-  2) list_candidate_frames() + inspect_frame() 로 프레임 골라
-  3) create_document(aspect="16:9")
-  4) set_background_from_frame(frame_id=..., filter="blur")  ← Phase 1 은 blur 고정
-  5) set_person_from_frame(frame_id=..., subject="largest_face"|"name:XXX", side="left"|"right")
-  6) add_caption(text=..., position="bottom"|"top"|"auto", tone_tag="인용"|"훅"|"의문"|"충격"|"기본",
-                 size_hint="XL", font_role="variety")
-     - 2~4어절 · 큰 폰트에 들어갈 짧은 문장
-     - clickbait 어휘 금칙 · 담백·여운 · 인용/훅/의문 중 하나 톤
-  7) render_preview() 로 warnings 확인 · 겹치면 undo_last() + 다시
-  8) export_thumbnail() 로 완료 · 세션 종료
+**필수 최종 상태** (모두 있어야 export 가능):
+  - Layer 0 Background (배경)
+  - Layer 2 Person (인물)         ← 반드시 · 자막만 있는 배경은 실패
+  - Layer 4 Caption (자막)
+
+권장 순서:
+  1) get_shorts_context() · list_candidate_frames() · inspect_frame() 로 파악
+  2) create_document(aspect="16:9")
+  3) [배경] 다음 중 하나:
+       (a) set_background_from_frame(frame_id=..., filter="blur")   ← 빠름·안전
+       (b) generate_and_set_background(prompt=..., style="cinematic",
+                                       context_frame_ids=["shot_00XX","shot_00YY"])
+                                                                   ← 톤 살리려면
+  4) [인물 반드시] 다음 중 하나 선택:
+       (a) set_person_from_cast_photo(cast_name="...", side="left"|"right",
+                                      style_prompt="...")
+           → castPhoto 를 참고로 AI 재생성 (얼굴 identity 유지 강제).
+             썸네일용 포즈·표정·조명 최적화.
+       (b) set_person_from_frame(frame_id=..., subject="name:XXX"|"largest_face",
+                                 side="left"|"right")
+           → 원본 프레임 rembg (실 프레임 그대로 · 안전 · 빠름).
+       두 방법 다 시도해서 render_preview() 로 비교 후 좋은 것 선택 가능.
+  5) add_caption(text=..., position="bottom"|"auto", tone_tag="인용"|"훅"|"의문"|"기본",
+                 size_hint="XL", font_role="variety"|"drama")
+     - 2~4어절 · 큰 폰트 · clickbait 어휘 금칙 (담백·여운·인용)
+  6) render_preview() → warnings 확인 · 겹치면 undo_last() + 재배치
+  7) 최종 확인 후 export_thumbnail()
 
 규칙:
-- 인물·자막은 절대 이미지로 만들지 마 (인물은 원본 프레임 · 자막은 시스템 폰트).
+- 자막은 시스템 폰트로 렌더 (이미지로 만들지 마).
+- 인물 얼굴은 절대 다른 얼굴로 바꾸지 마 (set_person_from_cast_photo 도 identity 유지 강제).
 - 최대 12 turn · 넘으면 시스템 자동 export.
-- 자막은 clickbait 어휘 금칙 (예: "충격", "레전드", "역대급", "미쳤다" 남용 X).
+- 인물 없이 export 하지 마 (사용자가 인물을 원함).
 """
 
 
 TOOL_DISPATCH: dict[str, Callable] = {
-    "get_shorts_context":         T.get_shorts_context,
-    "list_candidate_frames":      T.list_candidate_frames,
-    "inspect_frame":              T.inspect_frame,
-    "create_document":            T.create_document,
-    "list_layers":                T.list_layers,
-    "clear_layer":                T.clear_layer,
-    "set_background_from_frame":  T.set_background_from_frame,
-    "set_person_from_frame":      T.set_person_from_frame,
-    "add_caption":                T.add_caption,
-    "get_canvas_info":            T.get_canvas_info,
-    "suggest_caption_position":   T.suggest_caption_position,
-    "check_overlap":              T.check_overlap,
-    "render_preview":             T.render_preview,
-    "undo_last":                  T.undo_last,
+    "get_shorts_context":            T.get_shorts_context,
+    "list_candidate_frames":         T.list_candidate_frames,
+    "inspect_frame":                 T.inspect_frame,
+    "create_document":               T.create_document,
+    "list_layers":                   T.list_layers,
+    "clear_layer":                   T.clear_layer,
+    "set_background_from_frame":     T.set_background_from_frame,
+    "generate_and_set_background":   T.generate_and_set_background,
+    "set_person_from_frame":         T.set_person_from_frame,
+    "set_person_from_cast_photo":    T.set_person_from_cast_photo,
+    "add_caption":                   T.add_caption,
+    "get_canvas_info":               T.get_canvas_info,
+    "suggest_caption_position":      T.suggest_caption_position,
+    "check_overlap":                 T.check_overlap,
+    "render_preview":                T.render_preview,
+    "undo_last":                     T.undo_last,
     # export_thumbnail 은 out_dir 필요 · run_session 이 wrap
 }
 
@@ -137,9 +155,21 @@ def run_session(
         text_parts = [p.text for p in (cand.content.parts or []) if getattr(p, "text", None)]
 
         if not function_calls:
-            turns_log.append({"turn": turn_i, "type": "text", "text": " ".join(text_parts)[:300]})
-            finish_reason = "model_stopped_no_call"
-            break
+            # AI가 함수 안 부르고 텍스트만 뱉었을 때: 재프롬프트 시도 (1회) → 그래도 없으면 강제 export
+            turns_log.append({"turn": turn_i, "type": "text_no_call", "text": " ".join(text_parts)[:400]})
+            has_person = ctx.doc is not None and ctx.doc.layers["person"].source is not None
+            has_caption = ctx.doc is not None and ctx.doc.layers["caption"].source is not None
+            nudge_parts: list[str] = []
+            if not has_person:
+                nudge_parts.append("인물이 없다. set_person_from_cast_photo(cast_name='...') 를 지금 호출하라.")
+            if not has_caption:
+                nudge_parts.append("자막이 없다. add_caption(...) 을 지금 호출하라.")
+            if not nudge_parts:
+                nudge_parts.append("export_thumbnail() 을 호출해서 세션 종료하라.")
+            nudge = "함수만 호출하라 (설명 텍스트 없이). " + " ".join(nudge_parts)
+            history.append(types.Content(role="user", parts=[types.Part.from_text(text=nudge)]))
+            # 다음 turn 으로 계속
+            continue
 
         # 각 함수 호출 실행 → tool response 추가
         tool_response_parts: list[types.Part] = []
