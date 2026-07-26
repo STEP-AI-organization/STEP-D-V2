@@ -370,6 +370,39 @@ def analyze(
                     _save_json(out_dir / "faces.json", faces)
                     step(f"  화자↔얼굴 매핑 {len(sf_map['map'])}건: " +
                          ", ".join(f"{s}→{c}" for s, c in list(sf_map['map'].items())[:5]))
+
+                    # SPEAKER_00 → F6 → 실명(지연) 체인으로 refined 실명 확산.
+                    # STT의 SpeechBrain speaker와 faces cluster 이름을 결합 · 최종 실명 rewrite.
+                    face_names = faces.get("mapping") or {}
+                    speaker_realname = {}
+                    for sp, cluster in sf_map["map"].items():
+                        nm = (face_names.get(cluster) or "").strip()
+                        if nm and nm not in ("NARR", "?", "unknown", "-"):
+                            speaker_realname[sp] = nm
+                    if speaker_realname:
+                        # STT diarize가 각 세그에 붙인 speaker 필드가 있으면 그걸 우선 확산
+                        stt_segs = stt_data.get("segments") or []
+                        seg_speaker_by_time = {}
+                        for s in stt_segs:
+                            sp = s.get("speaker", "")
+                            if sp in speaker_realname:
+                                key = round(float(s.get("start", 0)), 2)
+                                seg_speaker_by_time[key] = speaker_realname[sp]
+                        rewritten = 0
+                        for seg in refined:
+                            # refined와 stt는 시각 매핑 · 인접 값이면 확산
+                            st = round(float(seg.get("start", 0)), 2)
+                            # 시각 tolerance ±1s
+                            for k in (st, round(st - 1, 2), round(st + 1, 2)):
+                                if k in seg_speaker_by_time:
+                                    new_name = seg_speaker_by_time[k]
+                                    if seg.get("speaker") != new_name:
+                                        seg["speaker"] = new_name
+                                        rewritten += 1
+                                    break
+                        if rewritten:
+                            _save_json(out_dir / "refined.json", refined)
+                            step(f"  화자실명 확산 {rewritten}개 세그 · {speaker_realname}")
         except Exception as e:
             step(f"  (화자-얼굴 매핑 스킵: {str(e)[:80]})")
 
