@@ -1,14 +1,16 @@
 "use client";
 
 import Link from "next/link";
-import { ChevronRight, Film, LayoutGrid } from "lucide-react";
+import { ChevronRight, Film, LayoutGrid, Trash2, Loader2 } from "lucide-react";
 import { PageHeader } from "@/components/ui/page-header";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
 import { PipelineStrip } from "@/components/pipeline-strip";
+import { useToast } from "@/components/ui/toast";
 import { useAppData } from "@/lib/data/store";
 import { PIPELINE_STAGE_LABELS, targetAgeLabel } from "@/lib/constants";
 import { programSmrChecks } from "@/lib/publish/requirements";
@@ -115,6 +117,7 @@ function ProgramCard({ program, eps, recs, clips }: { program: Program; eps: Epi
         <div className="flex shrink-0 items-center gap-1.5">
           <EditProgramButton program={program} />
           <UploadVideoButton programId={program.id} />
+          <DeleteProgramButton program={program} episodeCount={eps.length} />
         </div>
       </div>
 
@@ -144,8 +147,9 @@ function ProgramCard({ program, eps, recs, clips }: { program: Program; eps: Epi
               );
               const epClips = clips.filter((c) => c.episodeId === ep.id);
               return (
-              <Link key={ep.id} href={`/episodes/${ep.id}`} className="block">
-                <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-card p-3 transition-colors hover:bg-accent/40">
+              <div key={ep.id} className="relative">
+                <Link href={`/episodes/${ep.id}`} className="block">
+                <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-card p-3 pr-11 transition-colors hover:bg-accent/40">
                   <div className="min-w-40">
                     <div className="text-sm font-semibold">{ep.episodeNumber}화</div>
                     <div className="text-xs text-muted-foreground">방송 {ep.broadDate}</div>
@@ -175,12 +179,82 @@ function ProgramCard({ program, eps, recs, clips }: { program: Program; eps: Epi
                   </div>
                 </div>
               </Link>
+                <DeleteEpisodeButton episode={ep} />
+              </div>
               );
             })}
           </div>
         )}
       </div>
     </Card>
+  );
+}
+
+/** Program card delete button — 삭제 성공 시 store가 알아서 목록에서 빼준다. */
+function DeleteProgramButton({ program, episodeCount }: { program: Program; episodeCount: number }) {
+  const { deleteProgram } = useAppData();
+  const { toast } = useToast();
+  const [busy, setBusy] = useState(false);
+
+  async function run() {
+    const msg =
+      episodeCount > 0
+        ? `프로그램 "${program.title}"과 회차 ${episodeCount}개(미디어·추천·클립·GCS 파일 전부)를 완전히 삭제합니다. 되돌릴 수 없습니다.`
+        : `프로그램 "${program.title}"을 완전히 삭제합니다. 되돌릴 수 없습니다.`;
+    if (!confirm(msg)) return;
+    setBusy(true);
+    try {
+      await deleteProgram(program.id);
+      toast({ title: "프로그램 삭제됨", description: program.title, tone: "done" });
+    } catch (err) {
+      toast({ title: "삭제 실패", description: err instanceof Error ? err.message : String(err), tone: "error" });
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Button
+      size="sm"
+      variant="outline"
+      onClick={run}
+      disabled={busy}
+      title="이 프로그램과 회차 전부 완전 삭제"
+      className="text-status-error hover:bg-status-error/10"
+    >
+      {busy ? <Loader2 className="animate-spin" /> : <Trash2 />}
+    </Button>
+  );
+}
+
+/** Episode row delete — Link 위에 절대 위치. e.stopPropagation 대신 button을 Link 밖으로 뺐다. */
+function DeleteEpisodeButton({ episode }: { episode: Episode }) {
+  const { deleteEpisode } = useAppData();
+  const { toast } = useToast();
+  const [busy, setBusy] = useState(false);
+
+  async function run() {
+    const label = episode.episodeNumber != null ? `${episode.episodeNumber}화` : "이 회차";
+    if (!confirm(`${label}과 관련 미디어·추천·클립·GCS 파일을 완전히 삭제합니다. 되돌릴 수 없습니다.`)) return;
+    setBusy(true);
+    try {
+      await deleteEpisode(episode.id);
+      toast({ title: "회차 삭제됨", description: label, tone: "done" });
+    } catch (err) {
+      toast({ title: "삭제 실패", description: err instanceof Error ? err.message : String(err), tone: "error" });
+      setBusy(false);
+    }
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={run}
+      disabled={busy}
+      title="이 회차 완전 삭제"
+      className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md p-1.5 text-status-error opacity-70 hover:bg-status-error/10 hover:opacity-100 disabled:opacity-40"
+    >
+      {busy ? <Loader2 className="size-4 animate-spin" /> : <Trash2 className="size-4" />}
+    </button>
   );
 }
 

@@ -41,6 +41,8 @@ import {
   importYoutubeVideo as apiImportYoutubeVideo,
   createProgram as apiCreateProgram,
   updateProgram as apiUpdateProgram,
+  deleteProgram as apiDeleteProgram,
+  deleteEpisode as apiDeleteEpisode,
   type UpdateProgramInput,
   adoptRec,
   exportClip as exportClipApi,
@@ -168,6 +170,10 @@ interface AppData extends AppState {
   }) => Promise<string>;
   /** Update a program in place. cast 갱신이 주 용도 — 다음 재분석부터 refine 프롬프트에 반영. */
   updateProgram: (id: string, patch: UpdateProgramInput) => Promise<void>;
+  /** 프로그램 하드 삭제 (cascade). 회차·미디어·GCS 파일·추천/클립 모두 정리. */
+  deleteProgram: (id: string) => Promise<void>;
+  /** 회차 하드 삭제 (cascade). 미디어·GCS 파일·추천/클립 모두 정리. */
+  deleteEpisode: (id: string) => Promise<void>;
   refresh: () => Promise<void>;
 }
 
@@ -718,6 +724,47 @@ export function AppDataProvider({
     [refresh],
   );
 
+  const deleteProgram = useCallback(
+    async (id: string): Promise<void> => {
+      mutationEpochRef.current++;
+      if (connectedRef.current) {
+        await apiDeleteProgram(id);
+        await refresh();
+        return;
+      }
+      // Mock/offline mode: prune program + its child episodes/recommendations/clips locally.
+      setState((prev) => {
+        const epIds = new Set(prev.episodes.filter((e) => e.programId === id).map((e) => e.id));
+        return {
+          ...prev,
+          programs: prev.programs.filter((p) => p.id !== id),
+          episodes: prev.episodes.filter((e) => e.programId !== id),
+          recommendations: prev.recommendations.filter((r) => !epIds.has(r.episodeId)),
+          clips: prev.clips.filter((c) => !epIds.has(c.episodeId)),
+        };
+      });
+    },
+    [refresh],
+  );
+
+  const deleteEpisode = useCallback(
+    async (id: string): Promise<void> => {
+      mutationEpochRef.current++;
+      if (connectedRef.current) {
+        await apiDeleteEpisode(id);
+        await refresh();
+        return;
+      }
+      setState((prev) => ({
+        ...prev,
+        episodes: prev.episodes.filter((e) => e.id !== id),
+        recommendations: prev.recommendations.filter((r) => r.episodeId !== id),
+        clips: prev.clips.filter((c) => c.episodeId !== id),
+      }));
+    },
+    [refresh],
+  );
+
   const saveClipEditor = useCallback(async (clipId: string, editorState: EditorState) => {
     mutationEpochRef.current++;
     // 서버가 master-absolute trim을 받으면 clip.startTime/endTime을 그 트림에 맞춰 옮기고
@@ -765,6 +812,8 @@ export function AppDataProvider({
       importYoutube,
       createProgram,
       updateProgram,
+      deleteProgram,
+      deleteEpisode,
       refresh,
     };
   }, [
@@ -785,6 +834,8 @@ export function AppDataProvider({
     importYoutube,
     createProgram,
     updateProgram,
+    deleteProgram,
+    deleteEpisode,
     refresh,
   ]);
 

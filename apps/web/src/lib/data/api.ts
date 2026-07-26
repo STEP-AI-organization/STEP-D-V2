@@ -925,6 +925,24 @@ export async function deleteTrackedVideo(videoId: string): Promise<void> {
   }
 }
 
+/** 프로그램 하드 삭제 · cascade (모든 회차 · 미디어 · GCS 파일 · 추천/클립). */
+export async function deleteProgram(programId: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/programs/${programId}`, { method: "DELETE" });
+  if (!res.ok) {
+    const body = (await res.json().catch(() => null)) as { error?: string; message?: string } | null;
+    throw new Error(body?.message ?? body?.error ?? `${res.status} ${res.statusText}`);
+  }
+}
+
+/** 회차 하드 삭제 · cascade (미디어 · GCS 파일 · 추천/클립). */
+export async function deleteEpisode(episodeId: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/episodes/${episodeId}`, { method: "DELETE" });
+  if (!res.ok) {
+    const body = (await res.json().catch(() => null)) as { error?: string; message?: string } | null;
+    throw new Error(body?.message ?? body?.error ?? `${res.status} ${res.statusText}`);
+  }
+}
+
 // ── ops/diagnostics (superadmin /ops dashboard) ─────────────────────────────────
 export interface OpsJob {
   id: string;

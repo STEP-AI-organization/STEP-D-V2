@@ -52,7 +52,7 @@ const textareaCls =
 export default function ProgramDetailPage() {
   const params = useParams<{ id: string }>();
   const router = useRouter();
-  const { programs, episodes, updateProgram, loading } = useAppData();
+  const { programs, episodes, updateProgram, deleteProgram, loading } = useAppData();
   const { toast } = useToast();
   const program = programs.find((p) => p.id === params.id);
   const programEpisodes = useMemo(
@@ -78,6 +78,7 @@ export default function ProgramDetailPage() {
       program={program}
       episodeCount={programEpisodes.length}
       onSave={updateProgram}
+      onDelete={deleteProgram}
       onDone={() => router.push("/programs")}
       onOpenToast={toast}
     />
@@ -90,12 +91,14 @@ function ProgramDetailInner({
   program,
   episodeCount,
   onSave,
+  onDelete,
   onDone,
   onOpenToast,
 }: {
   program: Program;
   episodeCount: number;
   onSave: ReturnType<typeof useAppData>["updateProgram"];
+  onDelete: ReturnType<typeof useAppData>["deleteProgram"];
   onDone: () => void;
   onOpenToast: ToastFn;
 }) {
@@ -127,6 +130,28 @@ function ProgramDetailInner({
   const [autofillApplied, setAutofillApplied] = useState<string[]>([]);
   // 얼굴 분석 → program 수동 sync
   const [syncing, setSyncing] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+
+  async function runDelete() {
+    const msg =
+      episodeCount > 0
+        ? `프로그램 "${program.title}"과 회차 ${episodeCount}개(그리고 미디어·추천·클립·GCS 파일 전부)를 완전히 삭제합니다. 되돌릴 수 없습니다.`
+        : `프로그램 "${program.title}"을 완전히 삭제합니다. 되돌릴 수 없습니다.`;
+    if (!confirm(msg)) return;
+    setDeleting(true);
+    try {
+      await onDelete(program.id);
+      onOpenToast({ title: "삭제됨", description: program.title, tone: "done" });
+      onDone();
+    } catch (err) {
+      onOpenToast({
+        title: "삭제 실패",
+        description: err instanceof Error ? err.message : String(err),
+        tone: "error",
+      });
+      setDeleting(false);
+    }
+  }
 
   // 다른 세션·서버가 program을 업데이트하면 그대로 반영 (사용자가 편집 중이면 조심 — 초기값만 세팅).
   const hydratedRef = useHydratedRef(program.id);
@@ -360,10 +385,21 @@ function ProgramDetailInner({
           {autofilling ? <Loader2 className="animate-spin" /> : <Sparkles />}
           {autofilling ? "검색·팩트체크…" : "AI 자동 채움"}
         </Button>
-        <Button size="sm" variant="outline" onClick={onDone} disabled={busy}>
+        <Button
+          size="sm"
+          variant="outline"
+          onClick={runDelete}
+          disabled={deleting || busy}
+          className="text-status-error hover:bg-status-error/10"
+          title={episodeCount > 0 ? `이 프로그램과 회차 ${episodeCount}개(추천·클립·GCS 파일 포함) 완전 삭제` : "이 프로그램을 완전 삭제"}
+        >
+          {deleting ? <Loader2 className="animate-spin" /> : <Trash2 />}
+          {deleting ? "삭제 중…" : "삭제"}
+        </Button>
+        <Button size="sm" variant="outline" onClick={onDone} disabled={busy || deleting}>
           닫기
         </Button>
-        <Button size="sm" onClick={save} disabled={!canSave}>
+        <Button size="sm" onClick={save} disabled={!canSave || deleting}>
           {busy ? <Loader2 className="animate-spin" /> : <Save />}
           저장
         </Button>

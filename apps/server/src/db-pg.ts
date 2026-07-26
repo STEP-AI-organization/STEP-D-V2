@@ -1014,6 +1014,40 @@ export async function updateMediaThumb(id: string, thumbPath: string): Promise<v
   await pool.query("UPDATE media SET thumbPath = $1 WHERE id = $2", [thumbPath, id]);
 }
 
+/**
+ * Delete a media row and its per-mediaId derived stores. Does NOT touch GCS files or the
+ * parent episode/program — the route orchestrates that (mirrors admin/reset ordering).
+ * Individual DELETEs are guarded so a not-yet-migrated table cannot fail the whole cascade.
+ */
+export async function deleteMediaData(mediaId: string): Promise<void> {
+  await pool.query("DELETE FROM media WHERE id = $1", [mediaId]);
+  try { await pool.query("DELETE FROM content_analysis WHERE mediaId = $1", [mediaId]); } catch {}
+  try { await pool.query("DELETE FROM transcript WHERE mediaId = $1", [mediaId]); } catch {}
+  try { await pool.query("DELETE FROM episode_cast WHERE mediaId = $1", [mediaId]); } catch {}
+  // 진행중/대기중 잡 정리 — done/failed는 이력이라 보존.
+  try {
+    await pool.query(
+      "DELETE FROM job_queue WHERE (payload->>'mediaId') = $1 AND status IN ('pending','running','failed')",
+      [mediaId],
+    );
+  } catch {}
+}
+
+export async function deleteEntityRow(kind: EntityKind, id: string): Promise<void> {
+  await pool.query("DELETE FROM entities WHERE kind = $1 AND id = $2", [kind, id]);
+}
+
+/**
+ * Delete recommendations and clips scoped to a given episode. entities.data.episodeId is
+ * JSONB-scanned — cheaper than fetching all rows into Node just to filter in JS.
+ */
+export async function deleteEntitiesByEpisode(episodeId: string): Promise<void> {
+  await pool.query(
+    "DELETE FROM entities WHERE kind IN ('recommendation','clip') AND data->>'episodeId' = $1",
+    [episodeId],
+  );
+}
+
 /** Fill a placeholder media row (e.g. a queued YouTube import) with the real file's facts. */
 export async function updateMediaSource(
   id: string,

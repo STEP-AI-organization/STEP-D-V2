@@ -52,6 +52,9 @@ import {
   listContentAnalysisSummary,
   listEntities,
   getTranscript,
+  deleteMediaData,
+  deleteEntityRow,
+  deleteEntitiesByEpisode,
   listProgramCast,
   getCastMember,
   upsertCastMember,
@@ -563,6 +566,69 @@ app.delete("/api/programs/:id/cast/:castId", async (c) => {
   // Past timelines keep their findings (they're evidence); they just lose the roster link.
   await deleteCastMember(castId);
   return c.json({ ok: true, castId });
+});
+
+// ── hard delete: media / episode / program (cascade — see admin/reset for the pattern) ──
+//
+// Order matters: GCS files first (source + thumb + analysis/{id} prefix) so a mid-delete
+// crash leaves DB pointing at gone-files (recoverable) rather than DB gone with orphan
+// files (silent GCS cost). Then per-media derived tables (content_analysis, transcript,
+// episode_cast, in-flight jobs). Then entities.
+async function deleteMediaCascade(m: MediaRow): Promise<void> {
+  try { await deleteFile(parseObjectPath(m.path)); } catch {}
+  if (m.thumbPath) { try { await deleteFile(parseObjectPath(m.thumbPath)); } catch {} }
+  try { await deletePrefix(`analysis/${m.id}`); } catch {}
+  await deleteMediaData(m.id);
+}
+
+app.delete("/api/media/:id", async (c) => {
+  const id = c.req.param("id");
+  const m = await getMedia(id);
+  if (!m) return c.json({ error: "media not found" }, 404);
+  await deleteMediaCascade(m);
+  return c.json({ ok: true, mediaId: id });
+});
+
+app.delete("/api/episodes/:id", async (c) => {
+  const id = c.req.param("id");
+  const ep = await getEntity<{ id: string; programId?: string }>("episode", id);
+  if (!ep) return c.json({ error: "episode not found" }, 404);
+
+  // 자식 미디어 전부 (master + any derivatives)
+  const media = (await listMedia()).filter((m) => m.episodeId === id);
+  for (const m of media) await deleteMediaCascade(m);
+
+  // 자식 recommendations · clips (JSONB scan)
+  await deleteEntitiesByEpisode(id);
+  await deleteEntityRow("episode", id);
+
+  return c.json({ ok: true, episodeId: id, mediaDeleted: media.length });
+});
+
+app.delete("/api/programs/:id", async (c) => {
+  const id = c.req.param("id");
+  const program = await getEntity<{ id: string }>("program", id);
+  if (!program) return c.json({ error: "program not found" }, 404);
+
+  // 프로그램 하위 회차 전부 조회 → 각각 위 episode cascade와 동일 순서로 정리
+  const episodes = (await listEntities<{ id: string; programId?: string }>("episode"))
+    .filter((e) => e.programId === id);
+  const allMedia = await listMedia();
+  let mediaCount = 0;
+  for (const ep of episodes) {
+    const media = allMedia.filter((m) => m.episodeId === ep.id);
+    for (const m of media) { await deleteMediaCascade(m); mediaCount++; }
+    await deleteEntitiesByEpisode(ep.id);
+    await deleteEntityRow("episode", ep.id);
+  }
+
+  // program_cast (roster) 정리 · 각 castId도 지워 episode_cast의 castId 링크가 orphan 되는 걸 방지.
+  try {
+    await getPool().query("DELETE FROM program_cast WHERE programid = $1", [id]);
+  } catch {}
+
+  await deleteEntityRow("program", id);
+  return c.json({ ok: true, programId: id, episodesDeleted: episodes.length, mediaDeleted: mediaCount });
 });
 
 // ── episode cast timeline (출연자 × 등장 구간) ──

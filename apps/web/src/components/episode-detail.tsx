@@ -1,12 +1,15 @@
 "use client";
 
 import Link from "next/link";
-import { ChevronLeft, FileVideo, Loader2 } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { useState } from "react";
+import { ChevronLeft, FileVideo, Loader2, Trash2 } from "lucide-react";
 import { EmptyState } from "@/components/ui/empty-state";
 import { PipelineStrip } from "@/components/pipeline-strip";
 import { SourcePanel } from "@/components/source-panel";
 import { DerivativesPanel } from "@/components/derivatives-panel";
 import { SeekProvider } from "@/components/episode/seek-context";
+import { useToast } from "@/components/ui/toast";
 import { useAppData } from "@/lib/data/store";
 import { targetAgeLabel } from "@/lib/constants";
 
@@ -22,8 +25,26 @@ export function EpisodeDetail({
   episodeId: string;
   initialTab?: string;
 }) {
-  const { getEpisode, loading } = useAppData();
+  const { getEpisode, deleteEpisode, loading } = useAppData();
+  const { toast } = useToast();
+  const router = useRouter();
+  const [deleting, setDeleting] = useState(false);
   const episode = getEpisode(episodeId);
+
+  async function runDelete() {
+    if (!episode) return;
+    const label = episode.episodeNumber != null ? `${episode.programTitle} · ${episode.episodeNumber}화` : episode.programTitle;
+    if (!confirm(`"${label}"과 관련 미디어·추천·클립·GCS 파일을 완전히 삭제합니다. 되돌릴 수 없습니다.`)) return;
+    setDeleting(true);
+    try {
+      await deleteEpisode(episodeId);
+      toast({ title: "회차 삭제됨", description: label, tone: "done" });
+      router.push("/programs");
+    } catch (err) {
+      toast({ title: "삭제 실패", description: err instanceof Error ? err.message : String(err), tone: "error" });
+      setDeleting(false);
+    }
+  }
 
   // While the first /api/state load is still settling, a deep-linked or refreshed URL has
   // no episode yet — showing "찾을 수 없음" here would falsely tell the operator the link is
@@ -80,8 +101,18 @@ export function EpisodeDetail({
             )}
           </p>
         </div>
-        <div className="shrink-0">
+        <div className="flex shrink-0 items-center gap-2">
           <PipelineStrip pipeline={episode.pipeline} />
+          <button
+            type="button"
+            onClick={runDelete}
+            disabled={deleting}
+            title="이 회차 완전 삭제 (미디어·추천·클립·GCS 파일 포함)"
+            className="inline-flex items-center gap-1 rounded-md border border-status-error/30 px-2 py-1 text-xs font-medium text-status-error opacity-80 transition hover:bg-status-error/10 hover:opacity-100 disabled:opacity-40"
+          >
+            {deleting ? <Loader2 className="size-3.5 animate-spin" /> : <Trash2 className="size-3.5" />}
+            {deleting ? "삭제 중…" : "회차 삭제"}
+          </button>
         </div>
       </div>
 
