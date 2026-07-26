@@ -540,12 +540,18 @@ TOOLS = [
         "colors":{"type":"array","items":{"type":"string"},"minItems":2,"maxItems":3},
         "angle":{"type":"integer","default":90}}}},
 
-    { "name": "generate_background",       # Phase 2 (AI 이미지)
-      "description": "Gemini 2.5 flash image / Imagen으로 배경 생성. 사람·텍스트 금지 자동 접두.",
+    { "name": "generate_background",       # Phase 2 (AI 이미지 · reference-guided)
+      "description": "Gemini 2.5 flash image로 배경 생성. 원본 프레임(장면 톤)과 인물 사진(스타일)을 reference로 · 사람·텍스트 자동 금지 접두.",
       "parameters":{"type":"object","required":["prompt","style"],"properties":{
-        "prompt":{"type":"string"},
+        "prompt":{"type":"string","description":"장면·분위기 지시 (사람·텍스트 언급 금지)"},
         "style":{"type":"string","enum":["cinematic","illustration","photo","abstract"]},
-        "palette_hint":{"type":"array","items":{"type":"string"}}}}},
+        "palette_hint":{"type":"array","items":{"type":"string"}},
+        "context_frame_ids":{"type":"array","items":{"type":"string"},
+          "description":"원본 프레임 id 배열. 장면 톤·조명·구도 참고 (인물 부분은 시스템이 masking)"},
+        "cast_reference_names":{"type":"array","items":{"type":"string"},
+          "description":"프로그램 castPhotos 참고할 인물 이름들. 의상·스타일링 톤만 반영 · 얼굴 재현 금지"},
+        "reference_mode":{"type":"string","enum":["style","composition","palette"],"default":"style",
+          "description":"style=톤/조명만 · composition=구도까지 · palette=색만"}}}},
 
     # ── Layer 2 Person (Phase 1 필수) ────────────────────────
     { "name": "set_person_from_frame",
@@ -653,9 +659,108 @@ export_thumbnail()
 
 ---
 
+## 13. 배경 이미지 생성 소스 정책 (`generate_background`)
+
+> "AI 알아서 상상해서 그려" 금지. 항상 **영상 실체 + 인물 실체**를 근거로.
+
+### 13.1 시스템이 자동 첨부하는 4가지 소스
+
+시스템이 `generate_background` 도구 호출을 받으면 AI가 넘긴 `prompt`·`style`·`palette_hint` 위에
+**아래 소스들을 Vertex Gemini image gen 요청에 자동으로 첨부**. AI가 명시하지 않아도 붙는다.
+
+| 소스 | 무엇 | 왜 | reference_mode 별 사용 |
+|------|------|-----|-------------------------|
+| **A. 원본 프레임(들)** | AI가 넘긴 `context_frame_ids` (기본: 선택한 프레임 · 앞뒤 1장씩) | 장면의 실제 조명·시간대·인테리어·야외성·색 톤 유지 | style/composition 필수 · palette는 팔레트 추출만 |
+| **B. 인물 사진** | `program.castPhotos[{name}]` (기본: focus 인물의 사진 · 없으면 skip) | 의상·헤어·전체 실루엣 스타일 참고 (얼굴은 재현 금지) | style 선택적 · composition 시 강함 |
+| **C. 시놉시스 · 프로그램 정보** | `program.synopsis`·`section`·`mood` | 장르 톤 (예능=밝음/캐주얼 · 드라마=어두움/영화적 · 다큐=자연스러움) | 항상 텍스트 프롬프트에 첨부 |
+| **D. 쇼츠 장면 요약** | `shorts.scene_summary`·`shorts.beats[].situation` | 상황 (인테리어·야외·조명·인원) | 항상 텍스트 프롬프트에 첨부 |
+
+시스템 프롬프트 자동 접두 (AI 프롬프트 앞에 붙음):
+
+```
+목표: 위 참고 이미지들의 장면 톤·조명·색을 유지한 배경 이미지 생성.
+제약:
+- 사람 얼굴·전신 그리지 마 (인물은 별도 레이어에서 원본 사진으로 처리)
+- 텍스트·자막·글자 그리지 마 (자막은 별도 레이어)
+- 참고 이미지의 인테리어·야외성·시간대 유지
+- 참고 인물 사진의 의상 톤·컬러 팔레트 부드럽게 반영
+컨텍스트:
+- 프로그램: {program.title} ({section}, mood: {mood})
+- 시놉시스: {synopsis[:200]}
+- 장면 요약: {scene_summary}
+```
+
+### 13.2 인물 사진 처리 (라이선스·법적 안전)
+
+- **castPhotos는 시스템이 "스타일 레퍼런스"로만 사용** — 프롬프트에 "얼굴 재현 금지"·"의상·컬러만 참고" 명시.
+- Gemini 2.5 flash image가 얼굴을 그려버리면 시스템이 후처리로 **얼굴 blur 검증** (insightface로 face detect → 신뢰도 낮으면 재생성 or 강제 blur).
+- 만약 castPhotos에 이 프로그램 출연자 사진이 없으면 → 원본 프레임만 사용 (인물 사진 소스 skip).
+
+### 13.3 예시 실제 요청 페이로드
+
+**AI 도구 호출** (Vertex function calling turn):
+```json
+{
+  "name": "generate_background",
+  "args": {
+    "prompt": "밤 · 카페 · 창가 · 도시 야경 은은한 반사",
+    "style": "cinematic",
+    "palette_hint": ["#1a2b3c", "#e8d4a0"],
+    "context_frame_ids": ["frame_002", "frame_005"],
+    "cast_reference_names": ["원규", "지연"],
+    "reference_mode": "style"
+  }
+}
+```
+
+**시스템이 Vertex image gen에 보내는 실제 요청**:
+```
+model: gemini-2.5-flash-image
+contents:
+  - role: user
+    parts:
+      - image: <프레임 002 · GCS에서 다운>
+      - image: <프레임 005>
+      - image: <castPhotos.원규 · dataurl 디코드>
+      - image: <castPhotos.지연>
+      - text: |
+          목표: 위 참고 이미지들의 장면 톤·조명·색을 유지한 배경 이미지 생성.
+          제약: [위 자동 접두 그대로]
+          컨텍스트: [프로그램·시놉시스·장면 요약]
+
+          [AI 프롬프트]
+          밤 · 카페 · 창가 · 도시 야경 은은한 반사
+          style: cinematic
+          palette hint: #1a2b3c, #e8d4a0
+
+          출력: 16:9 · 사람/텍스트 없음
+```
+
+### 13.4 실 파일럿 (사용자 조정 원함)
+
+**시연 URL 하나에서 실제 돌려보고 결과 봐야**. 조정 축:
+
+- reference 이미지 개수 (2장 vs 4장 vs 6장 — 많으면 무거워짐 · 적으면 컨텍스트 부족)
+- prompt에 시놉시스 몇 자까지 (200자 vs 500자)
+- style enum 실측 (cinematic 만드는지 · illustration 튀는지)
+- 인물 사진 첨부 여부의 실제 효과 (라이선스 안전 vs 톤 반영 실효)
+- Gemini 2.5 flash image vs Imagen 4 어느 게 예능/드라마 톤 더 살리는지
+
+**조정 순서**:
+1. reference 없이 (텍스트만) 1개 생성 → 기준선
+2. 원본 프레임 1장만 첨부 → 개선?
+3. + 인물 사진 → 개선?
+4. + 시놉시스 텍스트 → 개선?
+5. reference_mode "composition" vs "style" 비교
+
+이 실측 결과는 `docs/research/thumbnail-source-experiments.md`에 기록해서 도구 default 세팅 결정.
+
+---
+
 ## 부록. 참고 링크
 
 - rembg: https://github.com/danielgatis/rembg
 - Pillow docs: https://pillow.readthedocs.io/
 - SIL OFL: https://scripts.sil.org/OFL
+- Vertex Gemini image gen: https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/gemini
 - 방송 썸네일 관례 정리 (내부 관찰): 별도 리서치 문서 없음 · 필요 시 `docs/research/thumbnail-benchmark.md` 신규
