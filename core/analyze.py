@@ -380,29 +380,49 @@ def analyze(
                         if nm and nm not in ("NARR", "?", "unknown", "-"):
                             speaker_realname[sp] = nm
                     if speaker_realname:
-                        # STT diarize가 각 세그에 붙인 speaker 필드가 있으면 그걸 우선 확산
+                        # STT diarize speaker + 실명 매핑 있는 세그만 정리 (시각 range 리스트)
                         stt_segs = stt_data.get("segments") or []
-                        seg_speaker_by_time = {}
+                        stt_ranges = []  # (start, end, realname)
                         for s in stt_segs:
                             sp = s.get("speaker", "")
                             if sp in speaker_realname:
-                                key = round(float(s.get("start", 0)), 2)
-                                seg_speaker_by_time[key] = speaker_realname[sp]
+                                try:
+                                    st = float(s.get("start", 0)); en = float(s.get("end", st + 1))
+                                except (TypeError, ValueError):
+                                    continue
+                                stt_ranges.append((st, en, speaker_realname[sp]))
+                        stt_ranges.sort(key=lambda x: x[0])
+
+                        def best_speaker(rs: float, re: float) -> str | None:
+                            """refined 세그(rs~re)와 시간 overlap 가장 큰 STT range의 speaker."""
+                            best_ov = 0.0; best_name = None
+                            for st_s, st_e, nm in stt_ranges:
+                                if st_e < rs - 0.5 or st_s > re + 0.5:
+                                    continue
+                                ov = max(0.0, min(re, st_e) - max(rs, st_s))
+                                if ov > best_ov:
+                                    best_ov = ov; best_name = nm
+                            # overlap 없으면 nearest (mid time 기준)
+                            if best_name is None:
+                                mid = (rs + re) / 2
+                                nearest = min(stt_ranges, key=lambda x: min(abs(x[0]-mid), abs(x[1]-mid)))
+                                if abs(nearest[0] - mid) < 3.0 or abs(nearest[1] - mid) < 3.0:
+                                    best_name = nearest[2]
+                            return best_name
+
                         rewritten = 0
                         for seg in refined:
-                            # refined와 stt는 시각 매핑 · 인접 값이면 확산
-                            st = round(float(seg.get("start", 0)), 2)
-                            # 시각 tolerance ±1s
-                            for k in (st, round(st - 1, 2), round(st + 1, 2)):
-                                if k in seg_speaker_by_time:
-                                    new_name = seg_speaker_by_time[k]
-                                    if seg.get("speaker") != new_name:
-                                        seg["speaker"] = new_name
-                                        rewritten += 1
-                                    break
+                            try:
+                                rs = float(seg.get("start", 0)); re = float(seg.get("end", rs + 1))
+                            except (TypeError, ValueError):
+                                continue
+                            new_name = best_speaker(rs, re)
+                            if new_name and seg.get("speaker") != new_name:
+                                seg["speaker"] = new_name
+                                rewritten += 1
                         if rewritten:
                             _save_json(out_dir / "refined.json", refined)
-                            step(f"  화자실명 확산 {rewritten}개 세그 · {speaker_realname}")
+                            step(f"  화자실명 확산 {rewritten}개 세그 (overlap 기반) · {speaker_realname}")
         except Exception as e:
             step(f"  (화자-얼굴 매핑 스킵: {str(e)[:80]})")
 
