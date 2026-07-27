@@ -763,18 +763,48 @@ def generate_variant_prompts(
         "required": ["variants"],
     }
 
+    # 참고 스타일 프로파일 로드 (assets/thumbnail-reference/)
+    ref_dir = pathlib.Path(__file__).resolve().parents[2] / "assets" / "thumbnail-reference"
+    style_profile_md = ""
+    style_ref_images: list[pathlib.Path] = []
+    if ref_dir.exists():
+        sp = ref_dir / "style_profile.md"
+        if sp.exists():
+            style_profile_md = sp.read_text(encoding="utf-8")
+        style_ref_images = (sorted(ref_dir.glob("*.png")) + sorted(ref_dir.glob("*.jpg")))[:2]
+
+    user_parts: list = []
+    for ref_p in style_ref_images:
+        try:
+            user_parts.append(types.Part.from_bytes(
+                data=ref_p.read_bytes(), mime_type="image/png"))
+        except Exception:
+            pass
+    if style_ref_images:
+        user_parts.append(types.Part.from_text(text=(
+            f"[위 {len(style_ref_images)}장은 실제 방송사 유튜브 썸네일 · 스타일 참고용]\n"
+            "**중요**: 톤·구도·자막 계층·색·감정 대비만 참고. "
+            "**참고 이미지의 자막 문장은 절대 카피하지 마** "
+            "(caption 은 오직 아래 이 쇼츠의 대사·핵심 순간에서 뽑을 것).\n"
+        )))
+    if style_profile_md:
+        user_parts.append(types.Part.from_text(text=(
+            "[스타일 프로파일 · 참고 이미지에서 뽑아낸 원칙]\n"
+            + style_profile_md + "\n"
+        )))
+    user_parts.append(types.Part.from_text(text=prompt_user))
+
     client = genai.Client(vertexai=True, project=project, location=location)
     try:
         resp = client.models.generate_content(
             model=MODEL,
-            contents=[types.Content(role="user",
-                                    parts=[types.Part.from_text(text=prompt_user)])],
+            contents=[types.Content(role="user", parts=user_parts)],
             config=types.GenerateContentConfig(
                 system_instruction=VARIANT_SYSTEM,
                 response_mime_type="application/json",
                 response_schema=schema,
                 temperature=1.2,
-                max_output_tokens=2048,
+                max_output_tokens=4096,
             ),
         )
     except Exception as e:
