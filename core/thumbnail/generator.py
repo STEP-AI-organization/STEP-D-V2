@@ -782,6 +782,7 @@ class ThumbnailGenerator:
 # 인물 세그 유틸 (birefnet-portrait 우선 · 얼굴 alpha 강제 · edge feather)
 # ──────────────────────────────────────────────────────────────
 _REMBG_SESSIONS: dict[str, object] = {}
+_INSPY_REMOVER = None
 
 def _get_rembg(model: str):
     """rembg 세션 캐시 · 최초 1회만 load."""
@@ -789,6 +790,28 @@ def _get_rembg(model: str):
         from rembg import new_session
         _REMBG_SESSIONS[model] = new_session(model)
     return _REMBG_SESSIONS[model]
+
+
+def _get_inspyrenet():
+    """InSPyReNet (transparent-background) · Portrait SOTA · GPU 자동."""
+    global _INSPY_REMOVER
+    if _INSPY_REMOVER is None:
+        from transparent_background import Remover
+        _INSPY_REMOVER = Remover(mode="base", jit=False)
+    return _INSPY_REMOVER
+
+
+def _seg_inspyrenet(img: "Image.Image") -> Optional["Image.Image"]:
+    """InSPyReNet 세그 · 반환 RGBA. 실패 시 None."""
+    try:
+        remover = _get_inspyrenet()
+        # transparent_background Remover.process(img, type='rgba') → PIL RGBA
+        r = remover.process(img.convert("RGB"), type="rgba")
+        if r and r.mode == "RGBA":
+            return r
+    except Exception:
+        pass
+    return None
 
 
 def _radial_feather_fallback(img: "Image.Image",
@@ -832,24 +855,36 @@ def _segment_person(img: "Image.Image",
     from PIL import Image as _Im, ImageFilter as _F
     import numpy as _np
 
-    # 1) 세그 시도 (birefnet-portrait → u2net_human_seg → isnet-general-use 폴백)
+    # 1) 세그 시도: InSPyReNet (SOTA · GPU) 우선 · 실패 시 rembg 폴백
     seg = None
     best_avg = 0.0
-    for model in ("birefnet-portrait", "u2net_human_seg", "isnet-general-use"):
-        try:
-            session = _get_rembg(model)
-            r = remove(img, session=session)
-            if r and r.mode == "RGBA":
-                a = _np.array(r.split()[-1], dtype=_np.uint8)
-                avg = float(a.mean()) / 255.0
-                # 0.15~0.85 사이 · 유효한 세그 (너무 낮으면 인물 못잡음 · 너무 높으면 배경도 다 남음)
-                if 0.15 <= avg <= 0.85:
-                    seg = r; best_avg = avg
-                    break
-                if avg > best_avg:
-                    best_avg = avg
-        except Exception:
-            continue
+    # InSPyReNet 첫 시도
+    try:
+        r = _seg_inspyrenet(img)
+        if r and r.mode == "RGBA":
+            a = _np.array(r.split()[-1], dtype=_np.uint8)
+            avg = float(a.mean()) / 255.0
+            if 0.10 <= avg <= 0.92:  # InSPyReNet은 대체로 정확 · 임계 여유
+                seg = r; best_avg = avg
+    except Exception:
+        pass
+
+    # 폴백: rembg 모델들
+    if seg is None:
+        for model in ("birefnet-portrait", "u2net_human_seg", "isnet-general-use"):
+            try:
+                session = _get_rembg(model)
+                r = remove(img, session=session)
+                if r and r.mode == "RGBA":
+                    a = _np.array(r.split()[-1], dtype=_np.uint8)
+                    avg = float(a.mean()) / 255.0
+                    if 0.15 <= avg <= 0.85:
+                        seg = r; best_avg = avg
+                        break
+                    if avg > best_avg:
+                        best_avg = avg
+            except Exception:
+                continue
 
     # 유효한 세그 실패 (alpha 극단) · radial feather fallback (얼굴 중심 부드럽게)
     if seg is None:
