@@ -30,6 +30,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from . import planner as PL
 from . import nano_banana as NB
 from . import ctr_predictor as CTR
+from . import caption_overlay as OV
 
 
 def run_pipeline(
@@ -113,11 +114,21 @@ def run_pipeline(
 
     def _gen_one(vid: str, plan_v: dict, frame: pathlib.Path) -> tuple[str, bytes | None]:
         try:
+            # (a) 자막 없는 이미지 생성
             img = NB.generate_thumbnail(
                 background=plan_v.get("background", "원본 프레임 그대로"),
                 layout=plan_v.get("layout", "인물 중앙 · 자막 하단"),
-                caption=plan_v.get("caption", ""),
+                caption_position=plan_v.get("caption_position", "bottom-left"),
                 frame=frame,
+            )
+            if not img:
+                return vid, None
+            # (b) 시스템 오버레이 · 정확한 한글 폰트로 자막 얹기
+            img = OV.render_caption(
+                img_bytes=img,
+                caption=plan_v.get("caption", ""),
+                position=plan_v.get("caption_position", "bottom-left"),
+                size=plan_v.get("caption_size", "L"),
             )
             return vid, img
         except Exception as e:

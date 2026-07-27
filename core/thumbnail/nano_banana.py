@@ -25,20 +25,24 @@ def _client(project: Optional[str] = None) -> genai.Client:
 def generate_thumbnail(
     background: str,
     layout: str,
-    caption: str,
+    caption_position: str,
     frame: pathlib.Path,
     project: Optional[str] = None,
 ) -> Optional[bytes]:
-    """(배경, 배치, 제목) + 대표 프레임 → 완성 썸네일."""
+    """(배경, 배치) + 대표 프레임 → 자막 없는 이미지 (자막은 시스템이 나중에 오버레이).
+
+    caption_position 은 자막 얹힐 자리를 비워두라고 이미지 AI 에게 알려주는 힌트일 뿐,
+    실제 자막 텍스트는 렌더하지 않는다.
+    """
     prompt = (
         f"이 프레임을 바탕으로 16:9 유튜브 썸네일 (방송사 톤).\n"
         f"인물 얼굴은 그대로 유지 · 재해석 X.\n\n"
         f"**배경**: {background}\n"
-        f"**배치**: {layout}\n"
-        f"**제목** (이 문장 그대로 · 오타 X): {caption}\n\n"
-        f"규칙:\n"
-        f"- 자막은 위 '제목' 문장 하나만 큰 폰트로 · 다른 텍스트·로고·부제·워터마크 X\n"
-        f"- 배경/배치 지시대로 · 인물 얼굴 자막에 가리지 마"
+        f"**배치**: {layout}\n\n"
+        f"**중요 규칙**:\n"
+        f"- 이미지에 **어떤 텍스트도 그리지 마** (자막·로고·워터마크·부제·수식어 다 X)\n"
+        f"- **{caption_position}** 위치에 자막이 나중에 얹힐 예정 · 그 공간은 인물·주요 요소 없이 비워둘 것\n"
+        f"- 배경/배치 지시대로만 · 텍스트는 절대 그리지 마"
     )
 
     client = _client(project)

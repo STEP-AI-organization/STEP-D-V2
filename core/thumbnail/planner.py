@@ -642,28 +642,40 @@ def _index_faces_by_frame(faces_data: Any) -> dict[str, list[dict]]:
 # ═════════════════════════════════════════════════════════════════
 
 VARIANT_SYSTEM = """너는 한국 유튜브 썸네일 기획자다.
-쇼츠 하나에 대해 서로 다른 톤의 후보 N 개를 각각 (background, layout, caption) 세 필드로 짠다.
+쇼츠 하나에 대해 서로 다른 톤의 후보 N 개를 각각 5필드로 짠다.
 
-각 필드 규격:
-- background: 배경 처리 한 문장 · 프레임 어떻게 쓸지 (예: "원본 프레임 그대로", "왼쪽 어둡게 그라디언트", "채도 살짝 낮추기")
+**중요**: 자막(caption)은 시스템이 나중에 폰트로 렌더해서 정확한 위치에 얹는다.
+너는 자막 문장·위치·크기만 정하면 됨. 이미지 생성 AI 는 자막을 그리지 않는다.
+
+필드:
+- background: 배경 처리 한 문장 · 이미지 AI 에게 보낼 지시 (예: "원본 프레임 유지·왼쪽 하단 어둡게 그라디언트")
   · AI 재생성 요청 X · 프레임 활용법만
-- layout: 인물·자막 배치 한 문장 (예: "인물 오른쪽·자막 왼쪽 하단 2줄", "자막 상단 중앙·인물 하단 가득")
-  · 자막이 인물 얼굴 가리지 않도록
-- caption: 자막 문장 하나 · **핵심 + 어그로**
+- layout: 인물 배치 한 문장 · 이미지 AI 에게 보낼 지시 (예: "인물 오른쪽 하단 · 얼굴 크게")
+  · 자막 얹힐 자리 비어 있도록
+- caption: 자막 문장 하나 (2~6단어 · 8음절 이내 · 시스템 오버레이 텍스트)
+- caption_position: 자막 위치 9슬롯 중 하나
+  ("top-left" · "top-center" · "top-right" ·
+   "middle-left" · "middle-center" · "middle-right" ·
+   "bottom-left" · "bottom-center" · "bottom-right")
+- caption_size: "S" · "M" · "L" · "XL" · 자막 폰트 크기 힌트
 
 자막(caption) 대원칙:
 - 핵심 (뭐 벌어지는지) + 어그로 (궁금증)
 - 감상형 X ("돌아갈까?", "흔들리는 마음", "사랑? 미련?" X)
 - 좋은 예: "3년 만에 만난 전 남친", "결국 이 커플 폭발", "폭탄 발언 나옴", "이 사람 진심이었네"
-- 2~6단어 · 8음절 이내
 - 실제 쇼츠 대사·핵심 순간에서 근거 뽑기 · 상상 X · shorts.title/description 만 보고 지어내지 마
 
 variant 간 다양성:
 - 서로 다른 톤 (예: v1 훅 질문, v2 사건 명시, v3 인용 대사)
-- 자막 위치도 다르게 (top/bottom/side)
+- 자막 위치도 다르게 (top/bottom/side 골고루)
 - 배경 처리도 다르게
 
-출력: JSON `{"variants": [{"background":..., "layout":..., "caption":...}, ...]}` 만. 마크다운/설명 X.
+layout ↔ caption_position 정합:
+- layout 에서 인물 오른쪽 배치 지시했으면 caption_position 은 left 계열
+- layout 에서 인물 하단 지시했으면 caption_position 은 top 계열
+- 자막이 인물 얼굴 가리지 않도록
+
+출력: JSON `{"variants": [{...5필드...}, ...]}` 만. 마크다운/설명 X.
 """
 
 
@@ -727,8 +739,15 @@ def generate_variant_prompts(
                         "background": {"type": "STRING"},
                         "layout": {"type": "STRING"},
                         "caption": {"type": "STRING"},
+                        "caption_position": {"type": "STRING", "enum": [
+                            "top-left", "top-center", "top-right",
+                            "middle-left", "middle-center", "middle-right",
+                            "bottom-left", "bottom-center", "bottom-right",
+                        ]},
+                        "caption_size": {"type": "STRING", "enum": ["S", "M", "L", "XL"]},
                     },
-                    "required": ["background", "layout", "caption"],
+                    "required": ["background", "layout", "caption",
+                                  "caption_position", "caption_size"],
                 },
             },
         },
@@ -736,26 +755,43 @@ def generate_variant_prompts(
     }
 
     client = genai.Client(vertexai=True, project=project, location=location)
-    resp = client.models.generate_content(
-        model=MODEL,
-        contents=[types.Content(role="user",
-                                parts=[types.Part.from_text(text=prompt_user)])],
-        config=types.GenerateContentConfig(
-            system_instruction=VARIANT_SYSTEM,
-            response_mime_type="application/json",
-            response_schema=schema,
-            temperature=1.2,
-            max_output_tokens=2048,
-        ),
-    )
+    try:
+        resp = client.models.generate_content(
+            model=MODEL,
+            contents=[types.Content(role="user",
+                                    parts=[types.Part.from_text(text=prompt_user)])],
+            config=types.GenerateContentConfig(
+                system_instruction=VARIANT_SYSTEM,
+                response_mime_type="application/json",
+                response_schema=schema,
+                temperature=1.2,
+                max_output_tokens=2048,
+            ),
+        )
+    except Exception as e:
+        import sys as _sys
+        print(f"[variant_planner] Gemini call failed: {str(e)[:300]}", file=_sys.stderr)
+        return []
     if not resp.text:
+        import sys as _sys
+        finish = None
+        try:
+            finish = resp.candidates[0].finish_reason if resp.candidates else None
+        except Exception:
+            pass
+        print(f"[variant_planner] empty resp.text · finish_reason={finish}", file=_sys.stderr)
         return []
     try:
         data = json.loads(resp.text)
-    except Exception:
+    except Exception as e:
+        import sys as _sys
+        print(f"[variant_planner] json parse fail: {str(e)[:200]} · text={resp.text[:200]}",
+              file=_sys.stderr)
         return []
     variants = data.get("variants", [])
     if not isinstance(variants, list):
+        import sys as _sys
+        print(f"[variant_planner] variants not list · type={type(variants)}", file=_sys.stderr)
         return []
     # 정확히 n 개 로 맞추기 (부족하면 마지막 반복 · 넘치면 자름)
     variants = [v for v in variants if isinstance(v, dict) and v.get("caption")]

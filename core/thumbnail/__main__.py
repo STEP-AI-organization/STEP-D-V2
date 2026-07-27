@@ -126,15 +126,22 @@ def _run_nano_banana(args) -> int:
         print("[FAIL] no frames in workdir", file=sys.stderr)
         return 2
 
+    from . import caption_overlay as OV
     img_bytes = NB.generate_thumbnail(
         background=plan_v.get("background", "원본 프레임 그대로"),
         layout=plan_v.get("layout", "인물 중앙 · 자막 하단"),
-        caption=plan_v.get("caption", ""),
+        caption_position=plan_v.get("caption_position", "bottom-left"),
         frame=frames[0],
     )
     if not img_bytes:
         print("[FAIL] nano banana returned no image", file=sys.stderr)
         return 2
+    img_bytes = OV.render_caption(
+        img_bytes=img_bytes,
+        caption=plan_v.get("caption", ""),
+        position=plan_v.get("caption_position", "bottom-left"),
+        size=plan_v.get("caption_size", "L"),
+    )
 
     dest = out / f"{args.variant_id}_nano_16x9.png"
     dest.write_bytes(img_bytes)
