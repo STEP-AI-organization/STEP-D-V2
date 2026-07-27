@@ -22,11 +22,27 @@ from .presets import get_preset
 FONT_ROOT = pathlib.Path(__file__).resolve().parents[2] / "assets" / "thumbnail-fonts"
 
 FONT_PRESETS: dict[str, str] = {
-    "variety": "NotoSansKR-Black.otf",
-    "drama": "NotoSerifKR-Black.otf",
-    "news": "Pretendard-ExtraBold.otf",
-    "documentary": "Pretendard-Bold.otf",
-    "_default": "Pretendard-Black.otf",
+    # 예능 · 리얼리티 · 임팩트 (검은고딕 · 통통 · 붓)
+    "variety":     "BlackHanSans-Regular.ttf",  # 검은고딕 · 예능 표준
+    "impact":      "BlackHanSans-Regular.ttf",  # alias
+    "reaction":    "BlackHanSans-Regular.ttf",  # 렉카·리액션
+    "cute":        "DoHyeon-Regular.ttf",       # 통통 · 유쾌
+    "handwrite":   "Jua-Regular.ttf",           # 손글씨 · 캐주얼
+    "brush":       "Gugi-Regular.ttf",          # 붓글씨 · 예능 스페셜
+
+    # 드라마 · 감성 (명조 · 잔잔)
+    "drama":       "GowunBatang-Bold.ttf",      # 감성 명조 (Gowun)
+    "magazine":    "GowunBatang-Bold.ttf",      # 매체 리뷰
+
+    # 뉴스 · 정보성 (고딕 · 정갈)
+    "news":        "Pretendard-ExtraBold.otf",
+    "documentary": "GothicA1-Black.ttf",        # 다큐 · 무게감
+
+    # 음악 · 무대 (밝은 통통)
+    "music_show":  "DoHyeon-Regular.ttf",
+
+    # 기본
+    "_default":    "Pretendard-Black.otf",
 }
 
 SIZE_PX: dict[str, int] = {"XL": 120, "L": 90, "M": 70}
@@ -352,38 +368,11 @@ class ThumbnailGenerator:
                 raise ValueError(f"Cast photo not found: {cast_name}")
             photo = cand[0]
 
-        # castPhoto → AI 재생성 (얼굴 identity 유지 · 배경 투명 강제). 실패 시 원본 사용.
-        style_prompt = plan.get(
-            "style_prompt",
-            "상반신 · 정면 or 3/4 · 자연스러운 표정 · 시네마틱 조명 · 배경 완전 투명",
-        )
+        # castPhoto 원본 그대로 사용 (얼굴 100퍼센트 유지). AI 재생성은 얼굴이 바뀌는 문제로 폐기.
+        # 스타일 조정은 다음 개선(Phase 3+)에서 face-swap 없이 rembg + 후처리로.
         used_ai_gen = False
-        try:
-            from . import image_gen
-            import io as _io
-            prog_info = ""
-            pc = self.media_dir / "program_context.json"
-            if pc.exists():
-                try:
-                    import json as _json
-                    _pd = _json.loads(pc.read_text(encoding="utf-8"))
-                    prog_info = f"{_pd.get('title','')} ({_pd.get('section','')})".strip(" ()")
-                except Exception:
-                    pass
-            gen_bytes = image_gen.generate_person_thumbnail(
-                cast_photo=photo.read_bytes(),
-                style_prompt=style_prompt,
-                program_info=prog_info,
-            )
-            if gen_bytes:
-                src = Image.open(_io.BytesIO(gen_bytes)).convert("RGB")
-                used_ai_gen = True
-        except Exception as e:
-            src = None
-            ai_error = str(e)[:200]
-
-        if not used_ai_gen:
-            src = Image.open(photo).convert("RGB")
+        style_prompt = plan.get("style_prompt", "")
+        src = Image.open(photo).convert("RGB")
         src_w, src_h = src.size
 
         # (§14.2) 얼굴 bbox 검출 · 못 찾으면 이미지 상단 중앙 30~70% 근사
@@ -402,13 +391,28 @@ class ThumbnailGenerator:
         crop_right  = min(src_w, int((fx1 + fx2) / 2 + fw * 1.5))
         cropped = src.crop((crop_left, crop_top, crop_right, crop_bottom))
 
-        # rembg
+        # rembg · 인물 특화 모델 (u2net_human_seg) · 실패시만 원본
+        # castPhoto 는 close-up 이라 isnet-general-use 가 잘 안 잡음 (0.35 미만 자주).
+        # human_seg 는 사람 형상 특화 · 얼굴+상반신 대체로 성공.
         try:
             from rembg import new_session, remove
-            session = new_session("isnet-general-use")
+            session = new_session("u2net_human_seg")
             seg = remove(cropped, session=session)
-        except Exception as e:
-            raise RuntimeError(f"rembg failed: {e}")
+            if seg.mode == "RGBA":
+                a = seg.split()[-1]
+                import numpy as np
+                a_np = np.array(a, dtype=np.uint8)
+                avg = float(a_np.mean()) / 255.0
+                # 매우 낮을 때(0.1 미만)만 실패로 판단 · 원본 그대로
+                if avg < 0.1:
+                    seg = cropped.convert("RGBA")
+        except Exception:
+            # 모델 다운 실패 등 · isnet-general-use 재시도
+            try:
+                session = new_session("isnet-general-use")
+                seg = remove(cropped, session=session)
+            except Exception:
+                seg = cropped.convert("RGBA")
 
         # 리사이즈
         target_h = int(self.ch * scale)

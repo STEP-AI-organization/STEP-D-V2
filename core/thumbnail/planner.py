@@ -42,6 +42,26 @@ SYSTEM_INSTRUCTION = """너는 한국 방송사 편집팀의 썸네일 **기획�
 - source="frame": 원본 프레임에서 rembg로 컷아웃. 실제 방송 화면 그대로 → 신뢰도 높음.
 - source="cast_photo": castPhotos 폴더의 인물 사진 → Gemini로 썸네일용 포즈/조명 재생성(얼굴 identity 강제 유지) → rembg. 더 멋진 포즈/표정 가능.
 
+[자막 대원칙 · 반드시 지킬 것]
+**썸네일 자막 = 핵심(이 쇼츠에서 실제로 뭐가 벌어지는지) + 어그로(궁금증·클릭 유도)**
+둘 다 있어야 함. 감성 여운·정갈한 문구는 클릭 안 됨.
+
+좋은 예 (핵심 + 어그로):
+- "3년 만에 만난 전 남친" (핵심 "3년만 · 전 남친" + 어그로 "만남")
+- "결국 이 커플 폭발" (핵심 "커플" + 어그로 "폭발")
+- "환승 확정 순간" (핵심 "환승" + 어그로 "확정 순간")
+- "폭탄 발언 나옴" (핵심 "발언" + 어그로 "폭탄")
+- "이 사람 진심이었네" (핵심 "이 사람" + 어그로 "진심 확인")
+
+나쁜 예 (감성만 · 뭐 벌어지는지 모름):
+- "돌아갈까? 직진할까?" (질문만 · 핵심 없음)
+- "사랑? 미련? 새로운 인연?" (감성 여운만)
+- "흔들리는 마음" (감상)
+- "다시 만날 수 있을까?" (막연)
+
+**필수**: 이 쇼츠의 컨텍스트(shorts.title, description, cast_names)에서 **구체 사건·인물·결과** 하나를
+자막에 담을 것. "감정 여운"은 예능 다큐용 · 리얼리티는 사건 명시.
+
 [자막 톤 가이드 · 요즘 유튜브 (2025~2026) 실제 톤]
 ※ 아래 "좋은 예" 스타일로 · "나쁜 예"는 뉴스 앵커/올드 광고 톤이니 피할 것.
 
@@ -180,7 +200,9 @@ THUMBNAIL_PLAN_SCHEMA = {
                 "position": {"type": "STRING", "enum": ["top", "middle", "bottom", "auto"]},
                 "tone_tag": {"type": "STRING", "enum": ["인용", "훅", "의문", "충격", "기본"]},
                 "size_hint": {"type": "STRING", "enum": ["XL", "L", "M"]},
-                "font_role": {"type": "STRING", "enum": ["variety", "drama", "news", "documentary"]},
+                "font_role": {"type": "STRING",
+                    "enum": ["variety", "impact", "reaction", "cute", "handwrite", "brush",
+                             "drama", "magazine", "news", "documentary", "music_show"]},
                 "text_color": {"type": "STRING"},
                 "outline_color": {"type": "STRING"},
             },

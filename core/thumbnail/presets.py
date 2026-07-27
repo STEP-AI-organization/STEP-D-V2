@@ -30,7 +30,7 @@ PRESETS: dict[str, StylePreset] = {
         "id": "broadcast_official",
         "description": ("방송사 공식 채널(tvN·JTBC·MBC) 톤. 인물 크게·짧고 임팩트 자막·"
                         "정돈된 컬러. 요즘 유튜브 스타일. 예: '[EP.4] 폭탄 발언', '드디어 만남', '표정 봐'."),
-        "font_role": "variety",
+        "font_role": "impact",
         "text_color": "#ffffff",
         "outline_color": "#000000",
         "caption_tone_pool": ["인용", "기본"],
@@ -46,7 +46,7 @@ PRESETS: dict[str, StylePreset] = {
         "id": "magazine",
         "description": ("매체 리뷰/에세이 톤. 감성적·잔잔·시네마틱. 자막 짧고 여운·인용부호 O. "
                         "예: '\"그 말은 하지 마\"', '01. 흘러간 시간', '…라고 씁니다'."),
-        "font_role": "drama",
+        "font_role": "magazine",
         "text_color": "#f5f5f0",
         "outline_color": "#1a1a1a",
         "caption_tone_pool": ["인용", "의문"],
@@ -62,7 +62,7 @@ PRESETS: dict[str, StylePreset] = {
         "id": "reaction",
         "description": ("이슈·리액션 채널 톤. 짧고 임팩트·강한 색 대비·물음표·기호. "
                         "예: '이거 실화?', '결국 터짐', '표정 봐', '설마 진짜?'. clickbait 남용 금지."),
-        "font_role": "variety",
+        "font_role": "impact",
         "text_color": "#ffee00",
         "outline_color": "#000000",
         "caption_tone_pool": ["훅", "충격", "의문"],
@@ -78,7 +78,7 @@ PRESETS: dict[str, StylePreset] = {
         "id": "music_show",
         "description": ("음악 방송/무대 클립 톤. 밝은 조명·컬러풀·인물 강조. "
                         "예: '무대 첫 공개', '팬미팅 실황'."),
-        "font_role": "variety",
+        "font_role": "music_show",
         "text_color": "#ffffff",
         "outline_color": "#7c2ae8",
         "caption_tone_pool": ["훅", "기본"],
