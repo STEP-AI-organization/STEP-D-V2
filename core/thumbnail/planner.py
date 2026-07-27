@@ -113,6 +113,7 @@ def build_planner_prompt(
     candidate_frames: list[dict],
     program_info: dict,
     cast_photos: list[str],
+    shorts_slice: dict | None = None,
 ) -> str:
     """Planner에게 줄 첫 user 프롬프트 구성."""
     frames_summary = []
@@ -134,12 +135,41 @@ def build_planner_prompt(
     cast_list = ", ".join(cast_photos) if cast_photos else "없음"
     prog = program_info or {}
 
+    # shorts 구간 실 내용 블록 (자막 "핵심" 근거)
+    slice_block = ""
+    if shorts_slice:
+        parts_s = [f"\n[**이 쇼츠 구간 안 실제 내용** · {shorts_slice.get('start')}~{shorts_slice.get('end')}s "
+                   f"({shorts_slice.get('duration')}초) — 자막 핵심의 근거]"]
+        nseg = shorts_slice.get("narrative_segment")
+        if nseg:
+            parts_s.append(f"  블록 제목: {nseg.get('title','')}")
+            parts_s.append(f"  요약: {nseg.get('summary','')}")
+            if nseg.get("emotional_tone"):
+                parts_s.append(f"  감정 톤: {nseg['emotional_tone']}")
+        km = shorts_slice.get("key_moments") or []
+        if km:
+            parts_s.append("  핵심 순간:")
+            for k in km[:6]:
+                parts_s.append(f"    - {k}")
+        tl = shorts_slice.get("transcript_lines") or []
+        if tl:
+            parts_s.append("  실제 대사 (STT · 최대 30줄):")
+            for line in tl[:30]:
+                parts_s.append(f"    · {line}")
+        sc = shorts_slice.get("scene_summaries") or []
+        if sc:
+            parts_s.append("  씬:")
+            for s in sc:
+                parts_s.append(f"    · {s}")
+        slice_block = "\n".join(parts_s) + "\n"
+
     return (
         f"[쇼츠 정보]\n"
         f"  제목: {shorts_ctx.get('title', '')}\n"
         f"  설명: {shorts_ctx.get('description', '')}\n"
-        f"  출연자: {', '.join(shorts_ctx.get('cast_names', [])) or '미상'}\n\n"
-        f"[프로그램]\n"
+        f"  출연자: {', '.join(shorts_ctx.get('cast_names', [])) or '미상'}\n"
+        + slice_block +
+        f"\n[프로그램]\n"
         f"  제목: {prog.get('title', '')}\n"
         f"  코너: {prog.get('section', '')}\n"
         f"  분위기: {prog.get('mood', '')}\n"
@@ -150,8 +180,10 @@ def build_planner_prompt(
         f"{cast_list}\n\n"
         f"{presets_prompt_summary()}\n\n"
         "위 정보를 종합해 **최적의 스타일 프리셋을 선택**하고 (preset_id) "
-        "그 프리셋 톤에 맞는 **ThumbnailPlan JSON**을 하나만 출력하라. "
-        "프리셋의 font_role·tone·position은 그대로 따르되 · text 는 쇼츠 컨텍스트에 맞게 새로 작성. "
+        "그 프리셋 톤에 맞는 **ThumbnailPlan JSON**을 하나만 출력하라.\n"
+        "**자막 text 는 반드시 위 '이 쇼츠 구간 안 실제 내용'의 대사·핵심 순간·요약에서 뽑아라** "
+        "(상상하지 마 · shorts.title/description 만으로 지어내지 마).\n"
+        "프리셋의 font_role·tone·position은 그대로 따르되 · text 만 shorts 구간 근거로 새로 작성.\n"
         "출력은 JSON만. 마크다운/설명 금지."
     )
 
@@ -295,8 +327,25 @@ def generate_plan(
     # 프로그램 정보
     program_info = shorts_ctx.get("program", {})
 
+    # shorts 구간 실 내용 슬라이싱 (§자막 핵심 근거)
+    shorts_slice = None
+    shorts_meta = shorts_ctx.get("shorts") if isinstance(shorts_ctx.get("shorts"), dict) else None
+    if not shorts_meta:
+        # 스모크 편의: shorts 지정 없으면 narrative의 첫 segment 를 임시 사용
+        nar = _safe_load(media_dir / "narrative.json", default={})
+        if isinstance(nar, dict):
+            segs = nar.get("segments", []) or []
+            if segs:
+                s0 = segs[0]
+                shorts_meta = {"start": s0.get("start", 0), "end": s0.get("end", 60),
+                                "title": s0.get("title", ""), "description": s0.get("summary", "")}
+                shorts_ctx.setdefault("title", shorts_meta["title"])
+                shorts_ctx.setdefault("description", shorts_meta["description"])
+    if shorts_meta and shorts_meta.get("end", 0) > shorts_meta.get("start", 0):
+        shorts_slice = load_shorts_slice(media_dir, shorts_meta)
+
     # 프롬프트 구성
-    user_prompt = build_planner_prompt(shorts_ctx, candidate_frames, program_info, cast_photos)
+    user_prompt = build_planner_prompt(shorts_ctx, candidate_frames, program_info, cast_photos, shorts_slice)
 
     # 벤치마크 이미지 (실 유튜브 방송사 썸네일) few-shot 첨부
     benchmark_parts: list[types.Part] = []
@@ -351,6 +400,75 @@ def generate_plan(
     (out_dir / "plan.json").write_text(json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
 
     return plan
+
+
+def load_shorts_slice(media_dir: pathlib.Path, shorts: dict) -> dict:
+    """shorts.start~end 구간의 실제 대사·씬·narrative 슬라이싱 (Planner "핵심" 근거).
+
+    shorts = {"start": float, "end": float, ...}
+    반환: {"transcript_lines": [...], "narrative_segment": {...}, "key_moments": [...],
+           "scene_summaries": [...], "duration": float}
+    """
+    start = float(shorts.get("start", 0.0))
+    end = float(shorts.get("end", 0.0))
+    if end <= start:
+        return {}
+
+    slice_data: dict = {"start": start, "end": end, "duration": round(end - start, 1)}
+
+    # 1) refined.json → shorts 구간 안 대사 (speaker + text)
+    refined = _safe_load(media_dir / "refined.json", default=[])
+    trans_lines: list[str] = []
+    if isinstance(refined, list):
+        for seg in refined:
+            s = float(seg.get("start", 0)); e = float(seg.get("end", 0))
+            if e < start - 0.5 or s > end + 0.5:
+                continue
+            sp = seg.get("speaker", "") or ""
+            tx = (seg.get("text") or "").strip()
+            if tx:
+                trans_lines.append(f"[{sp}] {tx}" if sp else tx)
+    slice_data["transcript_lines"] = trans_lines[:30]  # 최대 30줄 (토큰 절약)
+
+    # 2) narrative.json 해당 segment (shorts를 포함하는 segment 하나)
+    nar = _safe_load(media_dir / "narrative.json", default={})
+    if isinstance(nar, dict):
+        for seg in nar.get("segments", []) or []:
+            s = float(seg.get("start", 0)); e = float(seg.get("end", 0))
+            if s <= start and e >= end:
+                slice_data["narrative_segment"] = {
+                    "title": seg.get("title"),
+                    "summary": (seg.get("summary") or "")[:400],
+                    "characters": seg.get("characters", [])[:5],
+                    "emotional_tone": seg.get("emotional_tone"),
+                    "locations": seg.get("locations", [])[:3],
+                }
+                # 이 shorts 구간에 걸치는 key_moments만
+                km_all = seg.get("key_moments", []) or []
+                slice_data["key_moments"] = km_all[:6]
+                break
+
+    # 3) scenes.json 겹침 씬 (요약만)
+    sc = _safe_load(media_dir / "scenes.json", default=[])
+    scene_summaries: list[str] = []
+    if isinstance(sc, list):
+        for s2 in sc:
+            ss = float(s2.get("start", 0)); se = float(s2.get("end", 0))
+            if se < start or ss > end:
+                continue
+            tx = (s2.get("text") or "").strip()
+            if tx:
+                scene_summaries.append(f"[{int(ss)}~{int(se)}s] {tx[:120]}")
+    slice_data["scene_summaries"] = scene_summaries[:4]
+
+    return slice_data
+
+
+def _safe_load(p: pathlib.Path, default: Any) -> Any:
+    try:
+        return json.loads(p.read_text(encoding="utf-8")) if p.exists() else default
+    except Exception:
+        return default
 
 
 def _index_faces_by_frame(faces_data: Any) -> dict[str, list[dict]]:

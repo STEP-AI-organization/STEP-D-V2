@@ -274,6 +274,8 @@ class ThumbnailGenerator:
     def _person_from_frame(self, plan: dict) -> LayerResult:
         frame_id = plan["frame_id"]
         subject = plan.get("subject", "largest_face")
+        side = plan.get("side", "left")
+        scale = plan.get("scale", 0.9)
 
         frame = self._find_frame(frame_id)
         if not frame:
@@ -364,9 +366,19 @@ class ThumbnailGenerator:
         photo = cast_dir / f"{cast_name}.jpg"
         if not photo.exists():
             cand = list(cast_dir.glob(f"{cast_name}.*")) if cast_dir.exists() else []
-            if not cand:
-                raise ValueError(f"Cast photo not found: {cast_name}")
-            photo = cand[0]
+            if cand:
+                photo = cand[0]
+            else:
+                # narrative 대사 화자 ↔ 등록 castPhoto 이름 매핑 어긋남 흔함.
+                # 폴백: frame source 로 자동 전환 (얼굴 큰 shot 하나 골라 원본 rembg).
+                first_face_frame = self._get_first_face_frame()
+                if first_face_frame:
+                    return self._person_from_frame({
+                        "frame_id": first_face_frame,
+                        "subject": "largest_face",
+                        "side": side, "scale": scale,
+                    })
+                raise ValueError(f"Cast photo not found: {cast_name} · no face frame either")
 
         # castPhoto 원본 그대로 사용 (얼굴 100퍼센트 유지). AI 재생성은 얼굴이 바뀌는 문제로 폐기.
         # 스타일 조정은 다음 개선(Phase 3+)에서 face-swap 없이 rembg + 후처리로.
