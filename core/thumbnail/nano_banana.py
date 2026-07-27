@@ -85,18 +85,13 @@ def generate_thumbnail(
     # 참고 이미지 콜라주 하나
     reference = _make_reference_collage(cast_photos, frames)
 
-    program_hint = ""
-    if program_title:
-        program_hint = f" 프로그램: {program_title}"
-        if program_section:
-            program_hint += f" ({program_section})"
-
     prompt = (
-        f"이 이미지를 바탕으로 실제 방송사 유튜브 썸네일을 만들어줘 (16:9 · 가로).\n"
-        f"인물들의 얼굴은 그대로 유지.\n"
-        f"자막 텍스트: '{caption_text}'\n"
-        f"{program_hint}\n"
-        f"유튜브 알고리즘이 좋아하는 톤 · 큰 자막 · 임팩트 있게."
+        f"이 이미지를 바탕으로 실제 방송사 유튜브 썸네일 (16:9 · 가로).\n"
+        f"인물들의 얼굴은 그대로 유지 · 재해석 X.\n\n"
+        f"**이미지에 넣을 자막 (이 문장 그대로 · 오타 X)**:\n{caption_text}\n\n"
+        f"규칙:\n"
+        f"- 자막은 위 문장 하나만 큰 폰트로 · 다른 텍스트·프로그램 이름·로고·부제·워터마크는 그리지 마\n"
+        f"- 유튜브 알고리즘이 좋아하는 임팩트 톤"
     )
 
     client = _client(project)
