@@ -33,14 +33,19 @@ SYSTEM_INSTRUCTION = """너는 한국 방송사 편집팀의 썸네일 **기획�
 5. layout_hints: {person_side, caption_position, safe_zone_respected: true}
 ──────────────────
 
-[배경 모드 선택 가이드]
-- frame_blur: 가장 안전·빠름. 원본 프레임 블러 → 인물과 톤 일치. "원본 느낌 살리기" 좋음.
-- ai_generate: 컨셉추얼한 배경 필요 시(감정·분위기 강조). 프롬프트에 **사람·텍스트 언급 금지**.
-- gradient/solid: 브랜드 컬러·단색 강조 필요 시.
+[배경 모드 선택 가이드 · 중요]
+- **frame_blur 강력 권장**: 원본 프레임 blur → 인물과 톤 완벽 일치. 방송 실 컷 느낌.
+- **frame_original**: 원본 프레임 그대로 cover-fit (변형 없음). 인물이 이미 프레임 안에 있어서
+  Layer 2 인물이 원본 위에 겹침. 구도 살릴 때 좋음.
+- gradient/solid: 브랜드 컬러·단색만.
+- **ai_generate 사용 금지**: 원본 프레임과 톤 어긋남·시간 낭비. 위 3개 중 하나 필수.
 
-[인물 소스 선택 가이드]
-- source="frame": 원본 프레임에서 rembg로 컷아웃. 실제 방송 화면 그대로 → 신뢰도 높음.
-- source="cast_photo": castPhotos 폴더의 인물 사진 원본 → rembg. 얼굴 identity 100퍼센트 유지.
+[인물 소스 선택 가이드 · 중요]
+- **source="frame" 강력 권장**: 원본 프레임에서 상반신 세그 (rembg + face alpha 강제).
+  실제 방송 화면 · 배경 있어서 세그 정확도 훨씬 좋음.
+- source="cast_photo" 는 얼굴 close-up (증명사진 스타일)이라 rembg 세그 실패 잦음.
+  꼭 필요한 경우(specific 인물 강조 · 프레임 없음)만 사용.
+- 여러 인물 (persons) 배열도 최대한 source="frame"으로 각각 frame_id 지정.
 
 [여러 인물 (persons 배열) 사용 가이드]
 - 이 쇼츠가 **여러 인물 간 대화·리액션·대립·삼각관계**를 다루면 persons 배열 사용.
@@ -106,22 +111,22 @@ SYSTEM_INSTRUCTION = """너는 한국 방송사 편집팀의 썸네일 **기획�
 
 [출력 형식] **오직 JSON 하나만** 출력. 마크다운 코드블록 금지. 설명 텍스트 금지.
 
-예시 A · 단일 인물:
+예시 A · 단일 인물 (frame 기반):
 {
   "preset_id": "reaction",
-  "background": {"mode": "ai_generate", "prompt": "밤 카페 · 진한 조명 대비", "style": "photo"},
-  "person": {"source": "cast_photo", "cast_name": "원규", "side": "right", "scale": 1.0},
+  "background": {"mode": "frame_blur", "frame_id": "shot_0042", "blur_px": 24},
+  "person": {"source": "frame", "frame_id": "shot_0042", "subject": "largest_face", "side": "right", "scale": 1.0},
   "caption": {"text": "이거 실화?", "position": "auto", "tone_tag": "훅", "size_hint": "XL", "font_role": "impact"},
   "layout_hints": {"person_side": "right", "caption_position": "left", "safe_zone_respected": true}
 }
 
-예시 B · **여러 인물** (화자 2명 이상 · 리액션·대립 있으면 이 형식 필수):
+예시 B · **여러 인물** (frame 각각 + frame_original 배경):
 {
   "preset_id": "reaction",
-  "background": {"mode": "ai_generate", "prompt": "카페 실내 · 대화 자리", "style": "photo"},
+  "background": {"mode": "frame_original", "frame_id": "shot_0009"},
   "persons": [
-    {"source": "cast_photo", "cast_name": "원규", "side": "left", "scale": 1.0, "z_index": 1},
-    {"source": "cast_photo", "cast_name": "지연", "side": "right", "scale": 0.9, "z_index": 0}
+    {"source": "frame", "frame_id": "shot_0042", "subject": "name:원규", "side": "left", "scale": 1.0, "z_index": 1},
+    {"source": "frame", "frame_id": "shot_0053", "subject": "name:지연", "side": "right", "scale": 0.9, "z_index": 0}
   ],
   "caption": {"text": "3년 만에 만남", "position": "middle", "tone_tag": "훅", "size_hint": "XL", "font_role": "impact"},
   "layout_hints": {"caption_position": "middle", "safe_zone_respected": true}
@@ -240,7 +245,7 @@ THUMBNAIL_PLAN_SCHEMA = {
         "background": {
             "type": "OBJECT",
             "properties": {
-                "mode": {"type": "STRING", "enum": ["frame_blur", "ai_generate", "gradient", "solid"]},
+                "mode": {"type": "STRING", "enum": ["frame_blur", "frame_original", "gradient", "solid"]},
                 "frame_id": {"type": "STRING"},
                 "blur_px": {"type": "INTEGER", "minimum": 0, "maximum": 100},
                 "prompt": {"type": "STRING"},
@@ -454,34 +459,65 @@ def generate_plan(
 
     plan = json.loads(resp.text)
 
-    # Post-process: shorts 화자 2명 이상인데 Planner가 person 하나만 냈으면 · persons 자동 생성
+    # Post-process:
+    # 1) 화자 2명 이상인데 Planner가 person 하나만 → persons 자동 생성 (frame 소스로)
+    # 2) source=cast_photo면 frame으로 강제 전환 (세그 품질 이슈)
+    # 3) background.mode=ai_generate면 frame_blur로 강제 전환
+    if isinstance(plan.get("background"), dict) and plan["background"].get("mode") == "ai_generate":
+        # 프레임 하나 골라서 frame_blur 로
+        first_frame = candidate_frames[0]["id"] if candidate_frames else None
+        if first_frame:
+            plan["background"] = {"mode": "frame_blur", "frame_id": first_frame, "blur_px": 24}
+
+    # persons 배열 없으면 · 화자 여러명 이면 · frame 기반 persons 자동
     if shorts_slice and not (isinstance(plan.get("persons"), list) and len(plan["persons"]) >= 2):
-        speakers = []
+        speakers: list[str] = []
         seen: set[str] = set()
         for line in shorts_slice.get("transcript_lines", []) or []:
             if line.startswith("[") and "]" in line:
                 sp = line[1:line.index("]")].strip()
                 if sp and sp not in seen and sp not in ("NARR",) and not sp.startswith("M"):
                     seen.add(sp); speakers.append(sp)
-        # 실제 castPhoto 있는 화자만 우선
-        cast_dir = media_dir / "cast_photos"
-        available_cast = set(p.stem for p in cast_dir.glob("*")) if cast_dir.exists() else set()
-        cast_speakers = [s for s in speakers if s in available_cast]
-        if len(cast_speakers) >= 2:
-            # 최대 3명 · side: left/right or left/center/right
-            picks = cast_speakers[:3]
-            if len(picks) == 2:
-                sides = ["left", "right"]; scales = [1.0, 0.85]
-            else:
-                sides = ["left", "center", "right"]; scales = [0.9, 1.0, 0.85]
-            plan["persons"] = [
-                {"source": "cast_photo", "cast_name": n, "side": s, "scale": sc, "z_index": i}
-                for i, (n, s, sc) in enumerate(zip(picks, sides, scales))
-            ]
-            plan.setdefault("_meta", {})["persons_auto_added"] = {
-                "reason": f"{len(speakers)} speakers detected · {len(cast_speakers)} with castPhotos",
-                "picks": picks,
-            }
+        if len(speakers) >= 2:
+            # 얼굴 큰 프레임 top-N 에서 각 화자에 배정 (또는 그냥 largest_face 여러 개)
+            face_frames = [f["id"] for f in candidate_frames][:3]
+            if len(face_frames) >= 2:
+                picks = face_frames[:min(3, len(speakers))]
+                if len(picks) == 2:
+                    sides = ["left", "right"]; scales = [1.0, 0.9]
+                else:
+                    sides = ["left", "center", "right"]; scales = [0.9, 1.0, 0.85]
+                plan["persons"] = [
+                    {"source": "frame", "frame_id": fid, "subject": "largest_face",
+                     "side": s, "scale": sc, "z_index": i}
+                    for i, (fid, s, sc) in enumerate(zip(picks, sides, scales))
+                ]
+                plan.setdefault("_meta", {})["persons_auto_added"] = {
+                    "reason": f"{len(speakers)} speakers · frame-based auto persons",
+                    "picks": picks,
+                }
+
+    # 단일 person도 castPhoto면 frame으로 전환 (세그 안정)
+    if isinstance(plan.get("person"), dict) and plan["person"].get("source") == "cast_photo":
+        first_face_frame = next(
+            (f["id"] for f in candidate_frames), None)
+        if first_face_frame:
+            plan["person"] = {"source": "frame", "frame_id": first_face_frame,
+                              "subject": "largest_face",
+                              "side": plan["person"].get("side", "right"),
+                              "scale": plan["person"].get("scale", 0.9)}
+            plan.setdefault("_meta", {})["person_forced_frame"] = True
+
+    # persons 안 각 요소도 cast_photo → frame 강제 전환
+    if isinstance(plan.get("persons"), list):
+        face_frames_pool = [f["id"] for f in candidate_frames]
+        for i, p in enumerate(plan["persons"]):
+            if p.get("source") == "cast_photo":
+                if face_frames_pool:
+                    fid = face_frames_pool[i % len(face_frames_pool)]
+                    p["source"] = "frame"; p["frame_id"] = fid
+                    p["subject"] = "largest_face"
+                    p.pop("cast_name", None); p.pop("style_prompt", None)
 
     # 계획 저장 (디버깅/재현용)
     out_dir = media_dir / "thumbnails" / variant_id

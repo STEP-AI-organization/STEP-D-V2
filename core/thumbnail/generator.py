@@ -90,8 +90,12 @@ class ThumbnailGenerator:
 
         if mode == "frame_blur":
             return self._bg_from_frame(bg_plan)
+        elif mode == "frame_original":
+            # 원본 프레임 그대로 (blur 없이 cover-fit)
+            return self._bg_from_frame({**bg_plan, "blur_px": 0})
         elif mode == "ai_generate":
-            return self._bg_ai_generate(bg_plan)
+            # 사용자 결정 2026-07-27: AI 배경 폐기 · frame_blur 로 강제 전환
+            return self._bg_from_frame({**bg_plan, "blur_px": bg_plan.get("blur_px", 24)})
         elif mode == "gradient":
             return self._bg_gradient(bg_plan)
         elif mode == "solid":
@@ -358,19 +362,17 @@ class ThumbnailGenerator:
         # Crop 영역 계산 (§14.2)
         fx1, fy1, fx2, fy2 = face_bbox
         fw, fh = fx2 - fx1, fy2 - fy1
+        # 여러 인물 프레임에서 옆 인물 배제하려고 crop 여유 좁게 (얼굴 중심 · 상반신)
         crop_top = max(0, int(fy1 - fh * 0.3))
-        crop_bottom = min(src_h, int(fy2 + fh * 4.0))
-        crop_left = max(0, int((fx1 + fx2) / 2 - fw * 1.5))
-        crop_right = min(src_w, int((fx1 + fx2) / 2 + fw * 1.5))
+        crop_bottom = min(src_h, int(fy2 + fh * 2.5))
+        crop_left = max(0, int((fx1 + fx2) / 2 - fw * 1.0))
+        crop_right = min(src_w, int((fx1 + fx2) / 2 + fw * 1.0))
         cropped = src.crop((crop_left, crop_top, crop_right, crop_bottom))
 
-        # rembg 세그멘테이션
-        try:
-            from rembg import new_session, remove
-            session = new_session("isnet-general-use")
-            seg = remove(cropped, session=session)  # RGBA
-        except Exception as e:
-            raise RuntimeError(f"rembg failed: {e}")
+        # 인물 세그 (birefnet-portrait 우선 · 얼굴 alpha 강제 · edge feather)
+        face_in_crop = (int(fx1 - crop_left), int(fy1 - crop_top),
+                        int(fx2 - crop_left), int(fy2 - crop_top))
+        seg = _segment_person(cropped, face_bbox_in_img=face_in_crop)
 
         # 리사이즈 (인물 높이 = 캔버스 높이 * scale)
         target_h = int(self.ch * scale)
@@ -468,28 +470,10 @@ class ThumbnailGenerator:
         crop_right  = min(src_w, int((fx1 + fx2) / 2 + fw * 1.5))
         cropped = src.crop((crop_left, crop_top, crop_right, crop_bottom))
 
-        # rembg · 인물 특화 모델 (u2net_human_seg) · 실패시만 원본
-        # castPhoto 는 close-up 이라 isnet-general-use 가 잘 안 잡음 (0.35 미만 자주).
-        # human_seg 는 사람 형상 특화 · 얼굴+상반신 대체로 성공.
-        try:
-            from rembg import new_session, remove
-            session = new_session("u2net_human_seg")
-            seg = remove(cropped, session=session)
-            if seg.mode == "RGBA":
-                a = seg.split()[-1]
-                import numpy as np
-                a_np = np.array(a, dtype=np.uint8)
-                avg = float(a_np.mean()) / 255.0
-                # 매우 낮을 때(0.1 미만)만 실패로 판단 · 원본 그대로
-                if avg < 0.1:
-                    seg = cropped.convert("RGBA")
-        except Exception:
-            # 모델 다운 실패 등 · isnet-general-use 재시도
-            try:
-                session = new_session("isnet-general-use")
-                seg = remove(cropped, session=session)
-            except Exception:
-                seg = cropped.convert("RGBA")
+        # 인물 세그 (birefnet-portrait 우선 · 얼굴 alpha 강제 · edge feather)
+        face_in_crop = (int(fx1 - crop_left), int(fy1 - crop_top),
+                        int(fx2 - crop_left), int(fy2 - crop_top))
+        seg = _segment_person(cropped, face_bbox_in_img=face_in_crop)
 
         # 리사이즈
         target_h = int(self.ch * scale)
@@ -792,6 +776,115 @@ class ThumbnailGenerator:
                     "cluster": det.get("cluster") or det.get("cluster_id"),
                 })
         return idx
+
+
+# ──────────────────────────────────────────────────────────────
+# 인물 세그 유틸 (birefnet-portrait 우선 · 얼굴 alpha 강제 · edge feather)
+# ──────────────────────────────────────────────────────────────
+_REMBG_SESSIONS: dict[str, object] = {}
+
+def _get_rembg(model: str):
+    """rembg 세션 캐시 · 최초 1회만 load."""
+    if model not in _REMBG_SESSIONS:
+        from rembg import new_session
+        _REMBG_SESSIONS[model] = new_session(model)
+    return _REMBG_SESSIONS[model]
+
+
+def _radial_feather_fallback(img: "Image.Image",
+                             face_bbox: Optional[tuple[int, int, int, int]]) -> "Image.Image":
+    """세그 완전 실패시 · 얼굴 중심 radial gradient (타원)로 부드럽게 fade.
+    사각형 배경 튀는 것 방지."""
+    from PIL import Image as _Im, ImageDraw as _D
+    W, H = img.size
+    # 얼굴 중심 · 반경
+    if face_bbox:
+        cx = (face_bbox[0] + face_bbox[2]) / 2
+        cy = (face_bbox[1] + face_bbox[3]) / 2
+        fw = face_bbox[2] - face_bbox[0]
+        fh = face_bbox[3] - face_bbox[1]
+        # 얼굴 크기의 2.5배 반경 (상반신 커버)
+        rx = int(max(fw, fh) * 2.5)
+        ry = int(max(fw, fh) * 3.0)
+    else:
+        cx, cy = W / 2, H * 0.4
+        rx, ry = int(W * 0.4), int(H * 0.5)
+
+    # 큰 마스크 캔버스에 타원 그림 · Gaussian blur 로 부드럽게
+    mask = _Im.new("L", (W, H), 0)
+    d = _D.Draw(mask)
+    d.ellipse((int(cx - rx), int(cy - ry), int(cx + rx), int(cy + ry)), fill=255)
+    from PIL import ImageFilter as _F
+    mask = mask.filter(_F.GaussianBlur(radius=max(20, min(W, H) // 20)))
+    out = img.convert("RGBA")
+    out.putalpha(mask)
+    return out
+
+
+def _segment_person(img: "Image.Image",
+                    face_bbox_in_img: Optional[tuple[int, int, int, int]] = None,
+                    ) -> "Image.Image":
+    """인물 세그 · 여러 모델 폴백 · 얼굴 영역 alpha 강제 · edge feather.
+
+    반환: RGBA (alpha 채널 정제됨). 실패해도 원본 RGBA로 폴백 (얼굴 살림).
+    """
+    from rembg import remove
+    from PIL import Image as _Im, ImageFilter as _F
+    import numpy as _np
+
+    # 1) 세그 시도 (birefnet-portrait → u2net_human_seg → isnet-general-use 폴백)
+    seg = None
+    best_avg = 0.0
+    for model in ("birefnet-portrait", "u2net_human_seg", "isnet-general-use"):
+        try:
+            session = _get_rembg(model)
+            r = remove(img, session=session)
+            if r and r.mode == "RGBA":
+                a = _np.array(r.split()[-1], dtype=_np.uint8)
+                avg = float(a.mean()) / 255.0
+                # 0.15~0.85 사이 · 유효한 세그 (너무 낮으면 인물 못잡음 · 너무 높으면 배경도 다 남음)
+                if 0.15 <= avg <= 0.85:
+                    seg = r; best_avg = avg
+                    break
+                if avg > best_avg:
+                    best_avg = avg
+        except Exception:
+            continue
+
+    # 유효한 세그 실패 (alpha 극단) · radial feather fallback (얼굴 중심 부드럽게)
+    if seg is None:
+        return _radial_feather_fallback(img, face_bbox_in_img)
+
+    # 2) 얼굴 bbox 있으면 얼굴 영역 alpha=255 강제 (rembg가 얼굴 부분 놓치는 경우 방지)
+    if face_bbox_in_img:
+        fx1, fy1, fx2, fy2 = face_bbox_in_img
+        # 얼굴 위 20퍼센트 여유 · 이마 살림
+        fh = fy2 - fy1
+        fy1 = max(0, int(fy1 - fh * 0.2))
+        alpha = _np.array(seg.split()[-1], dtype=_np.uint8)
+        # 얼굴 영역 alpha 값 낮으면 255로 강제
+        H, W = alpha.shape
+        x1 = max(0, min(int(fx1), W - 1))
+        y1 = max(0, min(int(fy1), H - 1))
+        x2 = max(0, min(int(fx2), W))
+        y2 = max(0, min(int(fy2), H))
+        if x2 > x1 and y2 > y1:
+            face_region = alpha[y1:y2, x1:x2]
+            face_region[face_region < 200] = 255
+            alpha[y1:y2, x1:x2] = face_region
+            rgb = seg.convert("RGB")
+            seg = _Im.merge("RGBA", (*rgb.split(), _Im.fromarray(alpha)))
+
+    # 3) Edge feather (alpha 채널에 살짝 blur → 뾰족한 경계 완화)
+    try:
+        alpha = seg.split()[-1]
+        alpha_smooth = alpha.filter(_F.GaussianBlur(radius=1.5))
+        rgb = seg.convert("RGB")
+        seg = _Im.merge("RGBA", (*rgb.split(), alpha_smooth))
+    except Exception:
+        pass
+
+    return seg
 
 
 # ──────────────────────────────────────────────────────────────
