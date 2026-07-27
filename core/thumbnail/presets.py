@@ -28,8 +28,8 @@ PRESETS: dict[str, StylePreset] = {
     # ─────────────────────────────────────────────────────────
     "broadcast_official": {
         "id": "broadcast_official",
-        "description": ("방송사 공식 채널(tvN·JTBC·MBC) 톤. 인물 크게·차분한 자막·"
-                        "정돈된 컬러. 자극 어휘 X. 예: '드디어 첫 만남', '진심을 말하다'."),
+        "description": ("방송사 공식 채널(tvN·JTBC·MBC) 톤. 인물 크게·짧고 임팩트 자막·"
+                        "정돈된 컬러. 요즘 유튜브 스타일. 예: '[EP.4] 폭탄 발언', '드디어 만남', '표정 봐'."),
         "font_role": "variety",
         "text_color": "#ffffff",
         "outline_color": "#000000",
@@ -44,8 +44,8 @@ PRESETS: dict[str, StylePreset] = {
     # ─────────────────────────────────────────────────────────
     "magazine": {
         "id": "magazine",
-        "description": ("매체 리뷰/에세이 톤. 감성적·잔잔·시네마틱. 자막 짧고 여운. "
-                        "드라마·다큐멘터리 재구성 채널. 예: '그 순간, 우리는', '조용히 흘러간 하루'."),
+        "description": ("매체 리뷰/에세이 톤. 감성적·잔잔·시네마틱. 자막 짧고 여운·인용부호 O. "
+                        "예: '\"그 말은 하지 마\"', '01. 흘러간 시간', '…라고 씁니다'."),
         "font_role": "drama",
         "text_color": "#f5f5f0",
         "outline_color": "#1a1a1a",
@@ -60,8 +60,8 @@ PRESETS: dict[str, StylePreset] = {
     # ─────────────────────────────────────────────────────────
     "reaction": {
         "id": "reaction",
-        "description": ("렉카·리액션·이슈 채널 톤. 임팩트 큰 자막·강한 색 대비·"
-                        "충격/훅 톤. 예: '이거 실화?', '충격 반전', '결국 터졌다'. clickbait는 여전히 조심."),
+        "description": ("이슈·리액션 채널 톤. 짧고 임팩트·강한 색 대비·물음표·기호. "
+                        "예: '이거 실화?', '결국 터짐', '표정 봐', '설마 진짜?'. clickbait 남용 금지."),
         "font_role": "variety",
         "text_color": "#ffee00",
         "outline_color": "#000000",
