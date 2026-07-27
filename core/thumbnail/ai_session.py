@@ -94,7 +94,8 @@ def run_session(
     exported_paths: dict[str, str] = {}
     layers_meta: dict[str, Any] = {}
     try:
-        for aspect in ("16:9", "9:16"):
+        # 16:9만 (사용자 결정 2026-07-27 · 세로는 별도 계획으로)
+        for aspect in ("16:9",):
             layers = Generator.generate_all_layers(media_dir, plan, aspect=aspect)
             meta = Compositor.compose_thumbnail(
                 layers=layers,

@@ -100,26 +100,81 @@ class ThumbnailGenerator:
         )
 
     def _bg_ai_generate(self, plan: dict) -> LayerResult:
-        """Deterministic fallback for an AI-planned conceptual background.
-
-        The planner may choose ``ai_generate``, but phase 2 must not make another
-        model decision or call an image API.  Prefer a supplied palette gradient;
-        otherwise use a blurred source frame so output remains reproducible from
-        the plan and analysis work directory.
+        """Planner가 ai_generate 요청 시 실제 Gemini 2.5 flash image 호출 (§13 default).
+        시스템이 자동으로 프레임 2장(있으면) + 시놉시스 첨부 · 인물 사진은 첨부 X.
+        실패 시 그라디언트 → 프레임 blur → 단색 순 폴백.
         """
-        palette = plan.get("palette_hint") or plan.get("colors")
-        context_frame_ids = plan.get("context_frame_ids", [])
+        from . import image_gen
+
+        prompt = plan.get("prompt", "쇼츠 썸네일 배경 · 사람 없이 톤만")
+        style = plan.get("style", "cinematic")
+        palette = plan.get("palette_hint")
+        context_frame_ids = plan.get("context_frame_ids") or []
+
+        # 컨텍스트 프레임 자동 선택 (있는 프레임 앞 2개)
+        if not context_frame_ids:
+            first = self._get_first_face_frame()
+            if first:
+                context_frame_ids = [first]
+        frames_bytes: list[bytes] = []
+        for fid in context_frame_ids[:2]:
+            fr = self._find_frame(fid)
+            if fr:
+                frames_bytes.append(pathlib.Path(fr["path"]).read_bytes())
+
+        # 프로그램 정보 (planner가 넘긴 shorts_context 있으면 활용 · 없으면 workdir 로드)
+        prog_info = ""
+        synopsis = ""
+        pc = self.media_dir / "program_context.json"
+        if pc.exists():
+            try:
+                import json as _json
+                data = _json.loads(pc.read_text(encoding="utf-8"))
+                prog_info = f"{data.get('title','')} ({data.get('section','')})".strip(" ()")
+                synopsis = (data.get("synopsis") or "")[:300]
+            except Exception:
+                pass
+
+        try:
+            img_bytes = image_gen.generate_background(
+                prompt=prompt, style=style, palette_hint=palette,
+                context_frames=frames_bytes, synopsis=synopsis, program_info=prog_info,
+            )
+        except Exception as e:
+            img_bytes = None
+            gen_error = str(e)[:200]
+        else:
+            gen_error = None
+
+        if img_bytes:
+            from PIL import Image as _Im
+            import io as _io
+            bg = _Im.open(_io.BytesIO(img_bytes)).convert("RGB")
+            # cover fit
+            tw, th = self.size
+            sw, sh = bg.size
+            scale_r = max(tw / sw, th / sh)
+            nw, nh = int(sw * scale_r), int(sh * scale_r)
+            bg = bg.resize((nw, nh), _Im.LANCZOS)
+            x = (nw - tw) // 2; y = (nh - th) // 2
+            bg = bg.crop((x, y, x + tw, y + th))
+            tr = LayerTransform(x=0, y=0, width=tw, height=th)
+            return LayerResult(
+                role="background", image=bg.convert("RGBA"), transform=tr,
+                meta={"planned_mode": "ai_generate", "generated": True,
+                      "prompt": prompt, "style": style,
+                      "used_frames": context_frame_ids},
+            )
+
+        # 폴백 체인: gradient → frame blur → solid
         if isinstance(palette, list) and len(palette) >= 2:
             result = self._bg_gradient({"colors": palette[:2], "angle": plan.get("angle", 45)})
-            result.meta["planned_mode"] = "ai_generate"
-            return result
-        frame_id = context_frame_ids[0] if context_frame_ids else self._get_first_face_frame()
-        if frame_id:
-            result = self._bg_from_frame({"frame_id": frame_id, "blur_px": 24})
-            result.meta["planned_mode"] = "ai_generate"
-            return result
-        result = self._bg_solid({"color": "#1a1a2e"})
+        elif context_frame_ids:
+            result = self._bg_from_frame({"frame_id": context_frame_ids[0], "blur_px": 24})
+        else:
+            result = self._bg_solid({"color": "#1a1a2e"})
         result.meta["planned_mode"] = "ai_generate"
+        result.meta["ai_gen_error"] = gen_error or "no_image_returned"
         return result
 
     def _bg_gradient(self, plan: dict) -> LayerResult:
@@ -215,21 +270,24 @@ class ThumbnailGenerator:
         target_w = int(seg.width * ratio)
         seg = seg.resize((target_w, target_h), Image.LANCZOS)
 
-        # 배치 (좌/우/중앙, 하단 정렬 + 얼굴 위치 보정)
+        # 배치 (aspect 별 · 9:16은 중앙+얼굴 33% · 16:9은 side+얼굴 40%)
+        is_vertical = self.aspect == "9:16"
         sx1, sy1, sx2, sy2 = self.safe_zone
-        if side == "left":
-            x = sx1 + 20
-        elif side == "right":
-            x = sx2 - target_w - 20
-        else:
+        if is_vertical:
             x = (self.cw - target_w) // 2
+            ideal_face_ratio = 0.33
+        else:
+            if side == "left":
+                x = sx1 + 20
+            elif side == "right":
+                x = sx2 - target_w - 20
+            else:
+                x = (self.cw - target_w) // 2
+            ideal_face_ratio = 0.4
 
-        y = self.ch - target_h  # 하단 정렬
-
-        # 얼굴이 세로 40% 근처 오도록 미세 조정
         face_center_in_crop = (fy1 + fh / 2) - crop_top
         face_center_in_seg = int(face_center_in_crop * ratio)
-        ideal_face_y = int(self.ch * 0.4)
+        ideal_face_y = int(self.ch * ideal_face_ratio)
         y_adj = ideal_face_y - face_center_in_seg
         y = max(self.ch - target_h - 40, min(y_adj, 20))
 
@@ -261,7 +319,6 @@ class ThumbnailGenerator:
         side = plan["side"]
         scale = plan.get("scale", 0.95)
 
-
         cast_dir = self.media_dir / "cast_photos"
         photo = cast_dir / f"{cast_name}.jpg"
         if not photo.exists():
@@ -270,48 +327,112 @@ class ThumbnailGenerator:
                 raise ValueError(f"Cast photo not found: {cast_name}")
             photo = cand[0]
 
+        # castPhoto → AI 재생성 (얼굴 identity 유지 · 배경 투명 강제). 실패 시 원본 사용.
+        style_prompt = plan.get(
+            "style_prompt",
+            "상반신 · 정면 or 3/4 · 자연스러운 표정 · 시네마틱 조명 · 배경 완전 투명",
+        )
+        used_ai_gen = False
+        try:
+            from . import image_gen
+            import io as _io
+            prog_info = ""
+            pc = self.media_dir / "program_context.json"
+            if pc.exists():
+                try:
+                    import json as _json
+                    _pd = _json.loads(pc.read_text(encoding="utf-8"))
+                    prog_info = f"{_pd.get('title','')} ({_pd.get('section','')})".strip(" ()")
+                except Exception:
+                    pass
+            gen_bytes = image_gen.generate_person_thumbnail(
+                cast_photo=photo.read_bytes(),
+                style_prompt=style_prompt,
+                program_info=prog_info,
+            )
+            if gen_bytes:
+                src = Image.open(_io.BytesIO(gen_bytes)).convert("RGB")
+                used_ai_gen = True
+        except Exception as e:
+            src = None
+            ai_error = str(e)[:200]
 
-        # Phase 2 is deterministic: use the supplied cast asset directly rather
-        # than making an image-generation call after the planner has decided.
-        gen_img = Image.open(photo).convert("RGB")
+        if not used_ai_gen:
+            src = Image.open(photo).convert("RGB")
+        src_w, src_h = src.size
 
-        # rembg (배경이 이미 투명이면 no-op)
+        # (§14.2) 얼굴 bbox 검출 · 못 찾으면 이미지 상단 중앙 30~70% 근사
+        face_bbox = _detect_face_bbox(src)
+        if face_bbox is None:
+            # 폴백: 상단 중앙 (portrait 사진 일반적 얼굴 위치)
+            face_bbox = (int(src_w * 0.25), int(src_h * 0.08),
+                         int(src_w * 0.75), int(src_h * 0.45))
+
+        # crop 규칙 · 얼굴 위 30% 여유 · 얼굴 아래 4배 (상반신) · 좌우 1.5배
+        fx1, fy1, fx2, fy2 = face_bbox
+        fw, fh = fx2 - fx1, fy2 - fy1
+        crop_top    = max(0, int(fy1 - fh * 0.3))
+        crop_bottom = min(src_h, int(fy2 + fh * 4.0))
+        crop_left   = max(0, int((fx1 + fx2) / 2 - fw * 1.5))
+        crop_right  = min(src_w, int((fx1 + fx2) / 2 + fw * 1.5))
+        cropped = src.crop((crop_left, crop_top, crop_right, crop_bottom))
+
+        # rembg
         try:
             from rembg import new_session, remove
             session = new_session("isnet-general-use")
-            seg = remove(gen_img, session=session)
+            seg = remove(cropped, session=session)
         except Exception as e:
             raise RuntimeError(f"rembg failed: {e}")
 
+        # 리사이즈
         target_h = int(self.ch * scale)
         ratio = target_h / seg.height
         target_w = int(seg.width * ratio)
         seg = seg.resize((target_w, target_h), Image.LANCZOS)
 
+        # 배치 · 9:16은 인물 중앙 강제 · 얼굴 세로 위치도 aspect 별 다르게
+        is_vertical = self.aspect == "9:16"
         sx1, _, sx2, _ = self.safe_zone
-        if side == "left":
-            x = sx1 + 20
-        elif side == "right":
-            x = sx2 - target_w - 20
-        else:
+        if is_vertical:
+            # 세로: 인물 중앙 고정 · 얼굴은 세로 33% (자막 하단 큰 자리 확보)
             x = (self.cw - target_w) // 2
+            ideal_face_ratio = 0.33
+        else:
+            if side == "left":
+                x = sx1 + 20
+            elif side == "right":
+                x = sx2 - target_w - 20
+            else:
+                x = (self.cw - target_w) // 2
+            ideal_face_ratio = 0.4
 
-        y = self.ch - target_h
-        if y < 0:
-            y = 0
+        face_center_in_crop = (fy1 + fh / 2) - crop_top
+        face_center_in_seg = int(face_center_in_crop * ratio)
+        ideal_face_y = int(self.ch * ideal_face_ratio)
+        y_adj = ideal_face_y - face_center_in_seg
+        y = max(self.ch - target_h - 40, min(y_adj, 20))
 
         tr = LayerTransform(x=x, y=y, width=target_w, height=target_h)
-
+        face_bbox_canvas = [
+            x + int((fx1 - crop_left) * ratio),
+            y + int((fy1 - crop_top) * ratio),
+            x + int((fx2 - crop_left) * ratio),
+            y + int((fy2 - crop_top) * ratio),
+        ]
         return LayerResult(
             role="person",
             image=seg,
             transform=tr,
             meta={
                 "source_cast": cast_name,
-                "generated": False,
-                "side": side,
+                "generated": used_ai_gen,
+                "side": side if not is_vertical else "center",
                 "scale": scale,
-                "style_prompt": plan.get("style_prompt", ""),
+                "style_prompt": style_prompt,
+                "face_bbox_used": list(face_bbox),
+                "face_bbox_canvas": face_bbox_canvas,
+                "aspect": self.aspect,
             },
         )
 
@@ -353,38 +474,44 @@ class ThumbnailGenerator:
         pad = outline_w_est + 6
         sx1, sy1, sx2, sy2 = self.safe_zone
 
-        # 인물 반대편 배치 로직
+        # 인물 반대편 배치 로직 (aspect 반영)
+        is_vertical = self.aspect == "9:16"
         person_layer = self.plan.get("_person_layer_result")
-        if position == "auto" and person_layer:
+        if position == "auto" and is_vertical:
+            # 세로: 자막은 하단 큰 자리 (인물 중앙 아래)
+            cx = (self.cw - txt_w) // 2
+            cy = sy2 - txt_h - 40
+            position_used = "bottom(auto·9:16)"
+        elif position == "auto" and person_layer:
             px1, _, px2, _ = person_layer.transform.bbox()
             person_center = (px1 + px2) / 2
             if person_center < self.cw / 2:
                 cx = int((self.cw / 2 + sx2) / 2 - txt_w / 2)
-                position_used = "right"
+                position_used = "right(opposite-person)"
             else:
                 cx = int((sx1 + self.cw / 2) / 2 - txt_w / 2)
-                position_used = "left"
+                position_used = "left(opposite-person)"
+            cy = (self.ch - txt_h) // 2
+        elif position == "top":
+            cx = (self.cw - txt_w) // 2
+            cy = sy1 + 20
+            position_used = "top"
+        elif position == "middle":
+            cx = (self.cw - txt_w) // 2
+            cy = (self.ch - txt_h) // 2
+            position_used = "middle"
+        elif position == "bottom":
+            cx = (self.cw - txt_w) // 2
+            cy = sy2 - txt_h - 20
+            position_used = "bottom"
+        elif position in ("left", "right"):
+            cx = sx1 + 20 if position == "left" else sx2 - txt_w - 20
+            cy = (self.ch - txt_h) // 2
+            position_used = position
         else:
-            if position == "top":
-                cx = (self.cw - txt_w) // 2
-                cy = sy1 + 20
-                position_used = "top"
-            elif position == "middle":
-                cx = (self.cw - txt_w) // 2
-                cy = (self.ch - txt_h) // 2
-                position_used = "middle"
-            elif position == "bottom":
-                cx = (self.cw - txt_w) // 2
-                cy = sy2 - txt_h - 20
-                position_used = "bottom"
-            elif position in ("left", "right"):
-                cx = sx1 + 20 if position == "left" else sx2 - txt_w - 20
-                cy = (self.ch - txt_h) // 2
-                position_used = position
-            else:
-                cx = (self.cw - txt_w) // 2
-                cy = sy2 - txt_h - 20
-                position_used = "bottom"
+            cx = (self.cw - txt_w) // 2
+            cy = sy2 - txt_h - 20
+            position_used = "bottom(fallback)"
 
         # 대비 보정 — 현재 캔버스 상태 필요하므로 합성 후 샘플링하는 방식으로 변경 필요
         # 여기서는 기본값 사용, 합성 단계에서 재보정
@@ -559,6 +686,32 @@ class ThumbnailGenerator:
                     "cluster": det.get("cluster") or det.get("cluster_id"),
                 })
         return idx
+
+
+# ──────────────────────────────────────────────────────────────
+# 얼굴 검출 유틸 (castPhoto 얼굴 앵커 crop 용 · insightface)
+# ──────────────────────────────────────────────────────────────
+_FACE_APP = None
+
+def _detect_face_bbox(img: Image.Image) -> Optional[tuple[int, int, int, int]]:
+    """PIL 이미지 → 가장 큰 얼굴 bbox (x1,y1,x2,y2). 실패/미검출 시 None."""
+    global _FACE_APP
+    try:
+        import numpy as np
+        if _FACE_APP is None:
+            from insightface.app import FaceAnalysis
+            _FACE_APP = FaceAnalysis(name="buffalo_l", providers=["CPUExecutionProvider"])
+            _FACE_APP.prepare(ctx_id=-1, det_size=(640, 640))
+        arr = np.array(img.convert("RGB"))[:, :, ::-1]  # RGB→BGR
+        faces = _FACE_APP.get(arr)
+        if not faces:
+            return None
+        # 가장 큰 얼굴
+        largest = max(faces, key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]))
+        x1, y1, x2, y2 = largest.bbox.astype(int)
+        return (int(x1), int(y1), int(x2), int(y2))
+    except Exception:
+        return None
 
 
 def generate_all_layers(media_dir: pathlib.Path, plan: dict, aspect: str = "16:9") -> dict[LayerRole, LayerResult]:
