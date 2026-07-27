@@ -276,6 +276,33 @@ def generate_plan(
     # 프롬프트 구성
     user_prompt = build_planner_prompt(shorts_ctx, candidate_frames, program_info, cast_photos)
 
+    # 벤치마크 이미지 (실 유튜브 방송사 썸네일) few-shot 첨부
+    benchmark_parts: list[types.Part] = []
+    bench_root = pathlib.Path(__file__).resolve().parents[2] / "assets" / "thumbnail-benchmark"
+    if bench_root.exists():
+        # 각 채널 폴더에서 2장씩 · 최대 8장 (토큰 관리)
+        picks: list[pathlib.Path] = []
+        for ch_dir in sorted(bench_root.iterdir()):
+            if not ch_dir.is_dir():
+                continue
+            jpgs = sorted(ch_dir.glob("*.jpg"))
+            picks.extend(jpgs[:2])
+        for p in picks[:8]:
+            try:
+                benchmark_parts.append(types.Part.from_bytes(
+                    data=p.read_bytes(), mime_type="image/jpeg"))
+            except Exception:
+                pass
+
+    parts: list = list(benchmark_parts)
+    if benchmark_parts:
+        parts.append(types.Part.from_text(text=(
+            "[위 이미지는 실제 방송사 유튜브 (JTBC·MBC·Netflix Korea) 최근 썸네일들이다. "
+            "이 톤·자막 스타일·구도·색·인물 크기·기호 사용을 참고해서 계획을 짜라. "
+            "\"올드한 뉴스 앵커 톤\"이 아니라 이런 실제 유행 톤으로.]\n\n"
+        )))
+    parts.append(types.Part.from_text(text=user_prompt))
+
     # Vertex Gemini 호출 (structured output)
     client = genai.Client(vertexai=True, project=project, location=location)
     cfg = types.GenerateContentConfig(
@@ -287,7 +314,7 @@ def generate_plan(
     )
     resp = client.models.generate_content(
         model=MODEL,
-        contents=[types.Content(role="user", parts=[types.Part.from_text(text=user_prompt)])],
+        contents=[types.Content(role="user", parts=parts)],
         config=cfg,
     )
 
