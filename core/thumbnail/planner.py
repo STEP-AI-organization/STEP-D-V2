@@ -40,7 +40,15 @@ SYSTEM_INSTRUCTION = """너는 한국 방송사 편집팀의 썸네일 **기획�
 
 [인물 소스 선택 가이드]
 - source="frame": 원본 프레임에서 rembg로 컷아웃. 실제 방송 화면 그대로 → 신뢰도 높음.
-- source="cast_photo": castPhotos 폴더의 인물 사진 → Gemini로 썸네일용 포즈/조명 재생성(얼굴 identity 강제 유지) → rembg. 더 멋진 포즈/표정 가능.
+- source="cast_photo": castPhotos 폴더의 인물 사진 원본 → rembg. 얼굴 identity 100퍼센트 유지.
+
+[여러 인물 (persons 배열) 사용 가이드]
+- 이 쇼츠가 **여러 인물 간 대화·리액션·대립·삼각관계**를 다루면 persons 배열 사용.
+- 예: 환승연애·연애전쟁 = 2~4명 · 예능 리액션 = 2~3명 · 인터뷰 = 1명.
+- side: "left" · "left-mid" · "center" · "right-mid" · "right" 5구간.
+- scale: 메인 화자·주목 인물 0.9~1.1 · 리액션 서브 0.5~0.7 (한블리 스타일: 큰 인물 + 작은 리액션 컷).
+- z_index: 겹칠 때 앞뒤 · 큰 게 앞.
+- persons 배열 있으면 person 필드 무시 (배열이 우선).
 
 [자막 대원칙 · 반드시 지킬 것]
 **썸네일 자막 = 핵심(이 쇼츠에서 실제로 뭐가 벌어지는지) + 어그로(궁금증·클릭 유도)**
@@ -97,15 +105,27 @@ SYSTEM_INSTRUCTION = """너는 한국 방송사 편집팀의 썸네일 **기획�
 - 폰트: 예능=굴림/검정 계열(variety), 드라마=명조(drama), 뉴스=고딕(news)
 
 [출력 형식] **오직 JSON 하나만** 출력. 마크다운 코드블록 금지. 설명 텍스트 금지.
-```json
+
+예시 A · 단일 인물:
 {
   "preset_id": "reaction",
   "background": {"mode": "ai_generate", "prompt": "밤 카페 · 진한 조명 대비", "style": "photo"},
   "person": {"source": "cast_photo", "cast_name": "원규", "side": "right", "scale": 1.0},
-  "caption": {"text": "이거 실화?", "position": "auto", "tone_tag": "훅", "size_hint": "XL", "font_role": "variety"},
+  "caption": {"text": "이거 실화?", "position": "auto", "tone_tag": "훅", "size_hint": "XL", "font_role": "impact"},
   "layout_hints": {"person_side": "right", "caption_position": "left", "safe_zone_respected": true}
 }
-```"""
+
+예시 B · **여러 인물** (화자 2명 이상 · 리액션·대립 있으면 이 형식 필수):
+{
+  "preset_id": "reaction",
+  "background": {"mode": "ai_generate", "prompt": "카페 실내 · 대화 자리", "style": "photo"},
+  "persons": [
+    {"source": "cast_photo", "cast_name": "원규", "side": "left", "scale": 1.0, "z_index": 1},
+    {"source": "cast_photo", "cast_name": "지연", "side": "right", "scale": 0.9, "z_index": 0}
+  ],
+  "caption": {"text": "3년 만에 만남", "position": "middle", "tone_tag": "훅", "size_hint": "XL", "font_role": "impact"},
+  "layout_hints": {"caption_position": "middle", "safe_zone_respected": true}
+}"""
 
 
 def build_planner_prompt(
@@ -134,6 +154,25 @@ def build_planner_prompt(
 
     cast_list = ", ".join(cast_photos) if cast_photos else "없음"
     prog = program_info or {}
+
+    # shorts 구간 화자 목록 (2명 이상이면 persons 배열 강제)
+    speakers_in_shorts: list[str] = []
+    if shorts_slice:
+        seen: set[str] = set()
+        for line in shorts_slice.get("transcript_lines", []) or []:
+            if line.startswith("[") and "]" in line:
+                sp = line[1:line.index("]")].strip()
+                if sp and sp not in seen:
+                    seen.add(sp); speakers_in_shorts.append(sp)
+
+    multi_person_directive = ""
+    if len(speakers_in_shorts) >= 2:
+        multi_person_directive = (
+            f"\n\n[**여러 인물 필수**] 이 쇼츠 구간에 화자 {len(speakers_in_shorts)}명 "
+            f"({', '.join(speakers_in_shorts[:5])})이 대화·리액션 함. "
+            f"**반드시 persons 배열로 이 화자들을 최소 2명 배치**. "
+            f"person 단일 필드 쓰지 마. side: left/right 최소 · 3명 이상이면 left/center/right."
+        )
 
     # shorts 구간 실 내용 블록 (자막 "핵심" 근거)
     slice_block = ""
@@ -179,6 +218,7 @@ def build_planner_prompt(
         f"[사용 가능 캐스트 사진]\n"
         f"{cast_list}\n\n"
         f"{presets_prompt_summary()}\n\n"
+        + multi_person_directive + "\n\n"
         "위 정보를 종합해 **최적의 스타일 프리셋을 선택**하고 (preset_id) "
         "그 프리셋 톤에 맞는 **ThumbnailPlan JSON**을 하나만 출력하라.\n"
         "**자막 text 는 반드시 위 '이 쇼츠 구간 안 실제 내용'의 대사·핵심 순간·요약에서 뽑아라** "
@@ -214,6 +254,7 @@ THUMBNAIL_PLAN_SCHEMA = {
         },
         "person": {
             "type": "OBJECT",
+            "description": "단일 인물 (persons 배열 없을 때만 사용)",
             "properties": {
                 "source": {"type": "STRING", "enum": ["frame", "cast_photo"]},
                 "frame_id": {"type": "STRING"},
@@ -224,6 +265,25 @@ THUMBNAIL_PLAN_SCHEMA = {
                 "style_prompt": {"type": "STRING"},
             },
             "required": ["source", "side", "scale"],
+        },
+        "persons": {
+            "type": "ARRAY",
+            "description": ("여러 인물 합성 (한블리·연애전쟁 스타일 · 2~4명). "
+                            "이 배열 있으면 person 필드 무시. 각 인물 크기·위치 다르게."),
+            "items": {
+                "type": "OBJECT",
+                "properties": {
+                    "source": {"type": "STRING", "enum": ["frame", "cast_photo"]},
+                    "frame_id": {"type": "STRING"},
+                    "cast_name": {"type": "STRING"},
+                    "subject": {"type": "STRING"},
+                    "side": {"type": "STRING", "enum": ["left", "left-mid", "center", "right-mid", "right"]},
+                    "scale": {"type": "NUMBER", "minimum": 0.4, "maximum": 1.3,
+                        "description": "메인 인물 0.9~1.1 · 서브 인물 0.5~0.7"},
+                    "z_index": {"type": "INTEGER", "description": "0=뒤 · 큰 값=앞 (겹칠 때)"},
+                },
+                "required": ["source", "side", "scale"],
+            },
         },
         "caption": {
             "type": "OBJECT",
@@ -393,6 +453,35 @@ def generate_plan(
         raise RuntimeError("Planner returned empty response")
 
     plan = json.loads(resp.text)
+
+    # Post-process: shorts 화자 2명 이상인데 Planner가 person 하나만 냈으면 · persons 자동 생성
+    if shorts_slice and not (isinstance(plan.get("persons"), list) and len(plan["persons"]) >= 2):
+        speakers = []
+        seen: set[str] = set()
+        for line in shorts_slice.get("transcript_lines", []) or []:
+            if line.startswith("[") and "]" in line:
+                sp = line[1:line.index("]")].strip()
+                if sp and sp not in seen and sp not in ("NARR",) and not sp.startswith("M"):
+                    seen.add(sp); speakers.append(sp)
+        # 실제 castPhoto 있는 화자만 우선
+        cast_dir = media_dir / "cast_photos"
+        available_cast = set(p.stem for p in cast_dir.glob("*")) if cast_dir.exists() else set()
+        cast_speakers = [s for s in speakers if s in available_cast]
+        if len(cast_speakers) >= 2:
+            # 최대 3명 · side: left/right or left/center/right
+            picks = cast_speakers[:3]
+            if len(picks) == 2:
+                sides = ["left", "right"]; scales = [1.0, 0.85]
+            else:
+                sides = ["left", "center", "right"]; scales = [0.9, 1.0, 0.85]
+            plan["persons"] = [
+                {"source": "cast_photo", "cast_name": n, "side": s, "scale": sc, "z_index": i}
+                for i, (n, s, sc) in enumerate(zip(picks, sides, scales))
+            ]
+            plan.setdefault("_meta", {})["persons_auto_added"] = {
+                "reason": f"{len(speakers)} speakers detected · {len(cast_speakers)} with castPhotos",
+                "picks": picks,
+            }
 
     # 계획 저장 (디버깅/재현용)
     out_dir = media_dir / "thumbnails" / variant_id

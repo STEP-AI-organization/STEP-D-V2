@@ -238,11 +238,13 @@ class ThumbnailGenerator:
     # Person (Layer 2)
     # ──────────────────────────────────────────────────────────────
     def _apply_preset_defaults(self) -> None:
-        """Plan에 지정 안 된 필드를 프리셋 default로 채운다 (있는 값은 덮어쓰지 않음)."""
+        """Plan에 지정 안 된 필드를 프리셋 default로 채운다 (있는 값은 덮어쓰지 않음).
+        persons 배열이 있으면 person 단일 필드는 건드리지 않음."""
         p = self.preset
-        pers = self.plan.setdefault("person", {})
-        pers.setdefault("side", p["person_side_default"])
-        pers.setdefault("scale", p["person_scale_default"])
+        if not (isinstance(self.plan.get("persons"), list) and len(self.plan["persons"]) >= 1):
+            pers = self.plan.setdefault("person", {})
+            pers.setdefault("side", p["person_side_default"])
+            pers.setdefault("scale", p["person_scale_default"])
         cap = self.plan.setdefault("caption", {})
         cap.setdefault("position", p["caption_position_default"])
         cap.setdefault("size_hint", p["caption_size_default"])
@@ -259,10 +261,13 @@ class ThumbnailGenerator:
                 bg["prompt"] = f"{hint} · {existing}" if existing else hint
 
     def generate_person(self) -> LayerResult:
+        # persons 배열 우선 (여러 인물 합성 · 한블리·연애전쟁 스타일)
+        persons = self.plan.get("persons")
+        if isinstance(persons, list) and len(persons) >= 2:
+            return self._persons_composite(persons)
+
         person_plan = self.plan["person"]
         source = person_plan["source"]
-        side = person_plan["side"]
-        scale = person_plan.get("scale", 0.9)
 
         if source == "frame":
             return self._person_from_frame(person_plan)
@@ -270,6 +275,66 @@ class ThumbnailGenerator:
             return self._person_from_cast_photo(person_plan)
         else:
             raise ValueError(f"Unknown person source: {source}")
+
+    def _persons_composite(self, persons: list[dict]) -> LayerResult:
+        """여러 인물 alpha 를 하나의 캔버스 크기 person layer 로 합성.
+        각 인물은 side/scale/z_index 기준 배치. 얼굴 identity 유지 (castPhoto 우선).
+        """
+        # side 문자열 → 상대 x 위치 (0.0=왼쪽 · 1.0=오른쪽)
+        SIDE_X: dict[str, float] = {
+            "left": 0.12, "left-mid": 0.30, "center": 0.50,
+            "right-mid": 0.70, "right": 0.88,
+        }
+        canvas = Image.new("RGBA", self.size, (0, 0, 0, 0))
+        placed: list[dict] = []
+        # z_index 오름차순 (작은 것 먼저 · 큰 것 뒤에 = 앞쪽)
+        for i, p in enumerate(persons):
+            p.setdefault("z_index", i)
+        for p in sorted(persons, key=lambda x: x.get("z_index", 0)):
+            try:
+                sub = self._one_person_layer(p)  # LayerResult · alpha 이미지 + transform
+            except Exception as e:
+                # 하나 실패는 skip · 다른 인물은 살림
+                placed.append({"skipped": True, "reason": str(e)[:200]})
+                continue
+
+            side = p.get("side", "center")
+            sx = SIDE_X.get(side, 0.5)
+            person_img = sub.image
+            pw, ph = person_img.size
+            x = int(self.cw * sx - pw / 2)
+            # 세로: 얼굴 40% 위치 (frame/cast 규칙 재활용)
+            face_bb = sub.meta.get("face_bbox_canvas")
+            if face_bb:
+                # sub.transform 안에 이미 얼굴 y가 세로 40% 되도록 조정됨 · 그대로 사용
+                y = sub.transform.y
+            else:
+                y = self.ch - ph
+            # 캔버스 밖으로 나가지 않게 clamp
+            x = max(-int(pw * 0.15), min(x, self.cw - int(pw * 0.85)))
+            y = max(0, min(y, self.ch - int(ph * 0.85)))
+
+            canvas.alpha_composite(person_img, (x, y))
+            placed.append({
+                "source": p.get("source"),
+                "id": p.get("cast_name") or p.get("frame_id"),
+                "side": side, "scale": p.get("scale"),
+                "bbox_on_canvas": [x, y, x + pw, y + ph],
+            })
+
+        tr = LayerTransform(x=0, y=0, width=self.cw, height=self.ch)
+        return LayerResult(
+            role="person", image=canvas, transform=tr,
+            meta={"multi_persons": True, "count": len(persons), "placed": placed},
+        )
+
+    def _one_person_layer(self, plan: dict) -> LayerResult:
+        """persons 배열 안 하나의 인물 → 원본 rembg (alpha 이미지). scale은 캔버스 대비 상대."""
+        src_plan = dict(plan)
+        source = src_plan.get("source", "frame")
+        if source == "cast_photo":
+            return self._person_from_cast_photo(src_plan)
+        return self._person_from_frame(src_plan)
 
     def _person_from_frame(self, plan: dict) -> LayerResult:
         frame_id = plan["frame_id"]

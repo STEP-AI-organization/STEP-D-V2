@@ -155,8 +155,8 @@ def run_multi_variant(
 
 
 def _validate_plan(plan: dict) -> None:
-    """Planner 출력 JSON 필수 필드 검증."""
-    required = ["background", "person", "caption", "layout_hints"]
+    """Planner 출력 JSON 필수 필드 검증. persons 배열이면 person 단일 필드는 optional."""
+    required = ["background", "caption", "layout_hints"]
     for key in required:
         if key not in plan:
             raise ValueError(f"Plan missing required key: {key}")
@@ -170,18 +170,27 @@ def _validate_plan(plan: dict) -> None:
     if bg["mode"] == "ai_generate" and "prompt" not in bg:
         raise ValueError("ai_generate mode requires prompt")
 
-    # person
-    person = plan["person"]
-    if "source" not in person:
-        raise ValueError("person.source required")
-    if person["source"] == "frame" and "frame_id" not in person:
-        raise ValueError("person source=frame requires frame_id")
-    if person["source"] == "cast_photo" and "cast_name" not in person:
-        raise ValueError("person source=cast_photo requires cast_name")
-    if "side" not in person:
-        raise ValueError("person.side required")
-    if "scale" not in person:
-        raise ValueError("person.scale required")
+    # person or persons — 최소 하나 있어야
+    has_persons = isinstance(plan.get("persons"), list) and len(plan["persons"]) >= 1
+    has_single = isinstance(plan.get("person"), dict)
+    if not (has_persons or has_single):
+        raise ValueError("either 'person' object or 'persons' array required")
+    if has_persons:
+        for i, p in enumerate(plan["persons"]):
+            if "source" not in p:
+                raise ValueError(f"persons[{i}].source required")
+            if p["source"] == "frame" and "frame_id" not in p:
+                raise ValueError(f"persons[{i}] source=frame requires frame_id")
+            if p["source"] == "cast_photo" and "cast_name" not in p:
+                raise ValueError(f"persons[{i}] source=cast_photo requires cast_name")
+    elif has_single:
+        person = plan["person"]
+        if "source" not in person:
+            raise ValueError("person.source required")
+        if person["source"] == "frame" and "frame_id" not in person:
+            raise ValueError("person source=frame requires frame_id")
+        if person["source"] == "cast_photo" and "cast_name" not in person:
+            raise ValueError("person source=cast_photo requires cast_name")
 
     # caption
     cap = plan["caption"]
