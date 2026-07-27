@@ -479,42 +479,64 @@ def generate_plan(
                 if sp and sp not in seen and sp not in ("NARR",) and not sp.startswith("M"):
                     seen.add(sp); speakers.append(sp)
         if len(speakers) >= 2:
-            # 얼굴 큰 프레임 top-N 에서 각 화자에 배정 (또는 그냥 largest_face 여러 개)
-            face_frames = [f["id"] for f in candidate_frames][:3]
-            if len(face_frames) >= 2:
-                picks = face_frames[:min(3, len(speakers))]
-                if len(picks) == 2:
+            # castPhoto 있는 화자 우선 (얼굴 그대로 사용) · 부족하면 frame 폴백
+            cast_dir_pre = media_dir / "cast_photos"
+            avail = {p.stem for p in cast_dir_pre.glob("*")} if cast_dir_pre.exists() else set()
+            cast_speakers = [s for s in speakers if s in avail]
+            picks_persons: list[dict] = []
+            if len(cast_speakers) >= 2:
+                use = cast_speakers[:min(3, len(cast_speakers))]
+                if len(use) == 2:
                     sides = ["left", "right"]; scales = [1.0, 0.9]
                 else:
                     sides = ["left", "center", "right"]; scales = [0.9, 1.0, 0.85]
-                plan["persons"] = [
-                    {"source": "frame", "frame_id": fid, "subject": "largest_face",
-                     "side": s, "scale": sc, "z_index": i}
-                    for i, (fid, s, sc) in enumerate(zip(picks, sides, scales))
+                picks_persons = [
+                    {"source": "cast_photo", "cast_name": nm, "side": s, "scale": sc, "z_index": i}
+                    for i, (nm, s, sc) in enumerate(zip(use, sides, scales))
                 ]
+                reason = f"castPhoto 우선 · {len(use)}명"
+            else:
+                frames_pool = [f["id"] for f in candidate_frames][:3]
+                if len(frames_pool) >= 2:
+                    use = frames_pool[:min(3, len(speakers))]
+                    if len(use) == 2:
+                        sides = ["left", "right"]; scales = [1.0, 0.9]
+                    else:
+                        sides = ["left", "center", "right"]; scales = [0.9, 1.0, 0.85]
+                    picks_persons = [
+                        {"source": "frame", "frame_id": fid, "subject": "largest_face",
+                         "side": s, "scale": sc, "z_index": i}
+                        for i, (fid, s, sc) in enumerate(zip(use, sides, scales))
+                    ]
+                    reason = f"frame 폴백 · castPhoto 없음"
+            if picks_persons:
+                plan["persons"] = picks_persons
                 plan.setdefault("_meta", {})["persons_auto_added"] = {
-                    "reason": f"{len(speakers)} speakers · frame-based auto persons",
-                    "picks": picks,
+                    "reason": reason, "count": len(picks_persons),
                 }
 
-    # 단일 person도 castPhoto면 frame으로 전환 (세그 안정)
-    if isinstance(plan.get("person"), dict) and plan["person"].get("source") == "cast_photo":
-        first_face_frame = next(
-            (f["id"] for f in candidate_frames), None)
-        if first_face_frame:
-            plan["person"] = {"source": "frame", "frame_id": first_face_frame,
-                              "subject": "largest_face",
-                              "side": plan["person"].get("side", "right"),
-                              "scale": plan["person"].get("scale", 0.9)}
-            plan.setdefault("_meta", {})["person_forced_frame"] = True
+    # castPhoto 있으면 그대로 사용 (사용자 원칙: AI 조합만·얼굴 100퍼센트 유지).
+    # 요청된 cast_name 이 castPhotos 폴더에 없을 때만 frame 폴백.
+    cast_dir = media_dir / "cast_photos"
+    available_cast = {p.stem for p in cast_dir.glob("*")} if cast_dir.exists() else set()
 
-    # persons 안 각 요소도 cast_photo → frame 강제 전환
+    if isinstance(plan.get("person"), dict) and plan["person"].get("source") == "cast_photo":
+        cn = plan["person"].get("cast_name", "")
+        if cn not in available_cast:
+            first_frame = candidate_frames[0]["id"] if candidate_frames else None
+            if first_frame:
+                plan["person"] = {"source": "frame", "frame_id": first_frame,
+                                   "subject": "largest_face",
+                                   "side": plan["person"].get("side", "right"),
+                                   "scale": plan["person"].get("scale", 0.9)}
+                plan.setdefault("_meta", {})["person_frame_fallback"] = f"castPhoto '{cn}' not found"
+
     if isinstance(plan.get("persons"), list):
-        face_frames_pool = [f["id"] for f in candidate_frames]
+        frames_pool = [f["id"] for f in candidate_frames]
         for i, p in enumerate(plan["persons"]):
-            if p.get("source") == "cast_photo":
-                if face_frames_pool:
-                    fid = face_frames_pool[i % len(face_frames_pool)]
+            if p.get("source") == "cast_photo" and p.get("cast_name") not in available_cast:
+                if frames_pool:
+                    fid = frames_pool[i % len(frames_pool)]
                     p["source"] = "frame"; p["frame_id"] = fid
                     p["subject"] = "largest_face"
                     p.pop("cast_name", None); p.pop("style_prompt", None)

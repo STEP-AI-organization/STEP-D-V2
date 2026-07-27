@@ -470,10 +470,11 @@ class ThumbnailGenerator:
         crop_right  = min(src_w, int((fx1 + fx2) / 2 + fw * 1.5))
         cropped = src.crop((crop_left, crop_top, crop_right, crop_bottom))
 
-        # 인물 세그 (birefnet-portrait 우선 · 얼굴 alpha 강제 · edge feather)
+        # castPhoto = 원본 그대로 · 얼굴 중심 부드러운 타원 마스크 (사용자 원칙: AI 조합만 · 재생성 X).
+        # rembg 세그 안 함 (얼굴 close-up에서 안 됨) · 얼굴 100퍼센트 유지.
         face_in_crop = (int(fx1 - crop_left), int(fy1 - crop_top),
                         int(fx2 - crop_left), int(fy2 - crop_top))
-        seg = _segment_person(cropped, face_bbox_in_img=face_in_crop)
+        seg = _radial_feather_fallback(cropped, face_in_crop)
 
         # 리사이즈
         target_h = int(self.ch * scale)
