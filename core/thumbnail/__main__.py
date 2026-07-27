@@ -127,11 +127,25 @@ def _run_nano_banana(args) -> int:
         return 2
 
     from . import caption_overlay as OV
+    # featured_cast 조회
+    cast_dir = media / "cast_photos"
+    photos: list[pathlib.Path] = []
+    names_found: list[str] = []
+    if cast_dir.exists():
+        for nm in plan_v.get("featured_cast", []) or []:
+            for ext in ("jpg", "jpeg", "png", "webp"):
+                p = cast_dir / f"{nm}.{ext}"
+                if p.exists():
+                    photos.append(p); names_found.append(nm); break
+    print(f"[nano] featured_cast={plan_v.get('featured_cast')} · resolved={names_found}")
+
     img_bytes = NB.generate_thumbnail(
         background=plan_v.get("background", "원본 프레임 그대로"),
         layout=plan_v.get("layout", "인물 중앙 · 자막 하단"),
         caption_position=plan_v.get("caption_position", "bottom-left"),
         frame=frames[0],
+        cast_photos=photos,
+        cast_names=names_found,
     )
     if not img_bytes:
         print("[FAIL] nano banana returned no image", file=sys.stderr)

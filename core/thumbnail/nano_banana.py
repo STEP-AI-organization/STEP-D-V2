@@ -6,6 +6,7 @@
 """
 from __future__ import annotations
 
+import mimetypes
 import os
 import pathlib
 from typing import Optional
@@ -22,27 +23,54 @@ def _client(project: Optional[str] = None) -> genai.Client:
     return genai.Client(vertexai=True, project=project, location=LOCATION)
 
 
+def _mime(path: pathlib.Path) -> str:
+    m, _ = mimetypes.guess_type(str(path))
+    return m or "image/jpeg"
+
+
 def generate_thumbnail(
     background: str,
     layout: str,
     caption_position: str,
     frame: pathlib.Path,
+    cast_photos: Optional[list[pathlib.Path]] = None,
+    cast_names: Optional[list[str]] = None,
     project: Optional[str] = None,
 ) -> Optional[bytes]:
-    """(배경, 배치) + 대표 프레임 → 자막 없는 이미지 (자막은 시스템이 나중에 오버레이).
+    """(배경, 배치) + 프레임 + 계획된 출연자 사진 → 자막 없는 이미지.
 
-    caption_position 은 자막 얹힐 자리를 비워두라고 이미지 AI 에게 알려주는 힌트일 뿐,
-    실제 자막 텍스트는 렌더하지 않는다.
+    - frame: 배경/톤 참고용 대표 프레임 하나
+    - cast_photos: Planner 가 이 variant 에 지목한 인물의 등록 사진들 (0~3장)
+    - cast_names: cast_photos 와 순서 매칭되는 이름 배열 (프롬프트에 언급용)
+    - caption_position: 자막 얹힐 자리 (그 공간 비워두라는 힌트)
+
+    자막 텍스트는 이 함수가 그리지 않는다. 시스템이 나중에 Pillow 로 오버레이.
     """
+    cast_photos = cast_photos or []
+    cast_names = cast_names or []
+
+    if cast_photos:
+        cast_line = " · ".join(cast_names) if cast_names else f"{len(cast_photos)}명"
+        cast_directive = (
+            f"\n**주인공**: {cast_line}\n"
+            f"- 아래 첨부된 인물 사진(들)이 이 썸네일의 주인공\n"
+            f"- **첨부 사진의 얼굴 identity 100% 유지** · 얼굴 재해석·변형 절대 X\n"
+            f"- 프레임 안 다른 인물은 참고만 · 주인공 얼굴은 첨부 사진 기준"
+        )
+    else:
+        cast_directive = (
+            "\n- 프레임 안 인물 얼굴 그대로 유지 · 재해석 X"
+        )
+
     prompt = (
-        f"이 프레임을 바탕으로 16:9 유튜브 썸네일 (방송사 톤).\n"
-        f"인물 얼굴은 그대로 유지 · 재해석 X.\n\n"
+        f"16:9 유튜브 썸네일 (방송사 톤). 첨부한 프레임은 배경/톤 참고용.\n\n"
         f"**배경**: {background}\n"
-        f"**배치**: {layout}\n\n"
-        f"**중요 규칙**:\n"
-        f"- 이미지에 **어떤 텍스트도 그리지 마** (자막·로고·워터마크·부제·수식어 다 X)\n"
-        f"- **{caption_position}** 위치에 자막이 나중에 얹힐 예정 · 그 공간은 인물·주요 요소 없이 비워둘 것\n"
-        f"- 배경/배치 지시대로만 · 텍스트는 절대 그리지 마"
+        f"**배치**: {layout}"
+        f"{cast_directive}\n\n"
+        f"**필수 규칙**:\n"
+        f"- 이미지에 **어떤 텍스트도 그리지 마** (자막·로고·워터마크·부제 다 X)\n"
+        f"- **{caption_position}** 위치는 자막이 나중에 얹힐 자리 · 인물·주요 요소 없이 비워둘 것\n"
+        f"- 배경/배치 지시대로만"
     )
 
     client = _client(project)
@@ -53,10 +81,17 @@ def generate_thumbnail(
     except Exception:
         cfg = types.GenerateContentConfig(response_modalities=["IMAGE", "TEXT"])
 
-    parts = [
+    parts: list = [
         types.Part.from_bytes(data=pathlib.Path(frame).read_bytes(), mime_type="image/jpeg"),
-        types.Part.from_text(text=prompt),
     ]
+    for cp in cast_photos:
+        try:
+            parts.append(types.Part.from_bytes(data=pathlib.Path(cp).read_bytes(),
+                                                mime_type=_mime(pathlib.Path(cp))))
+        except Exception:
+            pass
+    parts.append(types.Part.from_text(text=prompt))
+
     resp = client.models.generate_content(model=MODEL, contents=parts, config=cfg)
     for c in resp.candidates or []:
         for p in (c.content.parts or []):

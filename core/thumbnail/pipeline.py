@@ -112,18 +112,39 @@ def run_pipeline(
     variant_images: dict[str, bytes] = {}
     variant_paths: dict[str, str] = {}
 
+    cast_dir = media_dir / "cast_photos"
+
+    def _resolve_cast_photos(names: list[str]) -> tuple[list[pathlib.Path], list[str]]:
+        """이름 리스트 → 등록된 castPhoto 경로. 없는 이름은 조용히 스킵."""
+        if not cast_dir.exists():
+            return [], []
+        photos: list[pathlib.Path] = []
+        found: list[str] = []
+        for nm in names or []:
+            for ext in ("jpg", "jpeg", "png", "webp"):
+                p = cast_dir / f"{nm}.{ext}"
+                if p.exists():
+                    photos.append(p); found.append(nm); break
+        return photos, found
+
     def _gen_one(vid: str, plan_v: dict, frame: pathlib.Path) -> tuple[str, bytes | None]:
         try:
-            # (a) 자막 없는 이미지 생성
+            # (a) 계획된 인물 사진 조회
+            featured = plan_v.get("featured_cast", []) or []
+            cast_photos, cast_names_found = _resolve_cast_photos(featured)
+            print(f"  [{vid}] featured_cast={featured} · resolved={cast_names_found}")
+            # (b) 자막 없는 이미지 생성 (frame + castPhotos)
             img = NB.generate_thumbnail(
                 background=plan_v.get("background", "원본 프레임 그대로"),
                 layout=plan_v.get("layout", "인물 중앙 · 자막 하단"),
                 caption_position=plan_v.get("caption_position", "bottom-left"),
                 frame=frame,
+                cast_photos=cast_photos,
+                cast_names=cast_names_found,
             )
             if not img:
                 return vid, None
-            # (b) 시스템 오버레이 · 정확한 한글 폰트로 자막 얹기
+            # (c) 시스템 오버레이 · 정확한 한글 폰트로 자막 얹기
             img = OV.render_caption(
                 img_bytes=img,
                 caption=plan_v.get("caption", ""),

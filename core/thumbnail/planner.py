@@ -652,6 +652,10 @@ VARIANT_SYSTEM = """너는 한국 유튜브 썸네일 기획자다.
   · AI 재생성 요청 X · 프레임 활용법만
 - layout: 인물 배치 한 문장 · 이미지 AI 에게 보낼 지시 (예: "인물 오른쪽 하단 · 얼굴 크게")
   · 자막 얹힐 자리 비어 있도록
+- featured_cast: 이 썸네일의 주인공 인물 이름 배열 (1~3명 · 쇼츠 cast_names 에서만)
+  · 시스템이 이 이름들의 등록된 인물 사진을 이미지 AI 에 레퍼런스로 첨부한다
+  · variant 별로 다르게: 예 v1=[주인공1명] · v2=[리액션2명] · v3=[대립2명]
+  · cast_names 가 비었으면 빈 배열
 - caption: 자막 문장 하나 (2~6단어 · 8음절 이내 · 시스템 오버레이 텍스트)
 - caption_position: 자막 위치 9슬롯 중 하나
   ("top-left" · "top-center" · "top-right" ·
@@ -738,6 +742,11 @@ def generate_variant_prompts(
                     "properties": {
                         "background": {"type": "STRING"},
                         "layout": {"type": "STRING"},
+                        "featured_cast": {
+                            "type": "ARRAY",
+                            "items": {"type": "STRING"},
+                            "description": "썸네일 주인공 인물 이름 (1~3명 · cast_names 에서만)",
+                        },
                         "caption": {"type": "STRING"},
                         "caption_position": {"type": "STRING", "enum": [
                             "top-left", "top-center", "top-right",
@@ -746,7 +755,7 @@ def generate_variant_prompts(
                         ]},
                         "caption_size": {"type": "STRING", "enum": ["S", "M", "L", "XL"]},
                     },
-                    "required": ["background", "layout", "caption",
+                    "required": ["background", "layout", "featured_cast", "caption",
                                   "caption_position", "caption_size"],
                 },
             },
