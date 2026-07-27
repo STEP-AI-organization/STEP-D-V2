@@ -1,88 +1,198 @@
-"""Vertex Gemini function calling multi-turn 오케스트레이션 (§2.4, §12).
+"""Vertex Gemini 멀티턴 오케스트레이션 — Phase 1+2+3 분리 버전.
 
-시스템 프롬프트 · turn 한도 12 · 각 turn 마다 시스템이 함수 실행 → tool response → AI 다음 turn.
+Flow:
+  1) Planner (AI): shorts_ctx + candidate_frames + cast_photos → ThumbnailPlan JSON
+  2) Generator (System): plan + media_dir → {layer: LayerResult}
+  3) Compositor (System): layers → final PNG (16:9 + 9:16)
+
+이전 버전은 AI가 도구를 순차 호출하며 직접 합성까지 했음.
+이제는 AI=Planner만 담당, 생성/합성은 시스템이 결정론적 수행.
 """
+
 from __future__ import annotations
 
-import base64
 import json
 import os
 import pathlib
 import time
-from typing import Any, Callable
-
-from google import genai
-from google.genai import types
-
-from . import tools as T
-from .tool_declarations import build_tool
-
-MODEL_TEXT = "gemini-2.5-flash"                 # function calling · Vision (asia-northeast3 지원)
-MODEL_IMAGE = "gemini-2.5-flash-image"          # 배경 이미지 생성 (us-central1 만)
-DEFAULT_LOCATION = "us-central1"                # 이미지 모델 접근성 · text 도 여기서 문제 X
-MAX_TURNS = 12
-
-SYSTEM_INSTRUCTION = """너는 한국 방송사 편집팀의 썸네일 디자이너다. 도구를 순차 호출해서
-"이 쇼츠가 클릭될 만한 썸네일" 하나를 조립한다.
-
-**필수 최종 상태** (모두 있어야 export 가능):
-  - Layer 0 Background (배경)
-  - Layer 2 Person (인물)         ← 반드시 · 자막만 있는 배경은 실패
-  - Layer 4 Caption (자막)
-
-권장 순서:
-  1) get_shorts_context() · list_candidate_frames() · inspect_frame() 로 파악
-  2) create_document(aspect="16:9")
-  3) [배경] 다음 중 하나:
-       (a) set_background_from_frame(frame_id=..., filter="blur")   ← 빠름·안전
-       (b) generate_and_set_background(prompt=..., style="cinematic",
-                                       context_frame_ids=["shot_00XX","shot_00YY"])
-                                                                   ← 톤 살리려면
-  4) [인물 반드시] 다음 중 하나 선택:
-       (a) set_person_from_cast_photo(cast_name="...", side="left"|"right",
-                                      style_prompt="...")
-           → castPhoto 를 참고로 AI 재생성 (얼굴 identity 유지 강제).
-             썸네일용 포즈·표정·조명 최적화.
-       (b) set_person_from_frame(frame_id=..., subject="name:XXX"|"largest_face",
-                                 side="left"|"right")
-           → 원본 프레임 rembg (실 프레임 그대로 · 안전 · 빠름).
-       두 방법 다 시도해서 render_preview() 로 비교 후 좋은 것 선택 가능.
-  5) add_caption(text=..., position="bottom"|"auto", tone_tag="인용"|"훅"|"의문"|"기본",
-                 size_hint="XL", font_role="variety"|"drama")
-     - 2~4어절 · 큰 폰트 · clickbait 어휘 금칙 (담백·여운·인용)
-  6) render_preview() → warnings 확인 · 겹치면 undo_last() + 재배치
-  7) 최종 확인 후 export_thumbnail()
-
-규칙:
-- 자막은 시스템 폰트로 렌더 (이미지로 만들지 마).
-- 인물 얼굴은 절대 다른 얼굴로 바꾸지 마 (set_person_from_cast_photo 도 identity 유지 강제).
-- 최대 12 turn · 넘으면 시스템 자동 export.
-- 인물 없이 export 하지 마 (사용자가 인물을 원함).
-"""
+from typing import Any, Optional
 
 
-TOOL_DISPATCH: dict[str, Callable] = {
-    "get_shorts_context":            T.get_shorts_context,
-    "list_candidate_frames":         T.list_candidate_frames,
-    "inspect_frame":                 T.inspect_frame,
-    "create_document":               T.create_document,
-    "list_layers":                   T.list_layers,
-    "clear_layer":                   T.clear_layer,
-    "set_background_from_frame":     T.set_background_from_frame,
-    "generate_and_set_background":   T.generate_and_set_background,
-    "set_person_from_frame":         T.set_person_from_frame,
-    "set_person_from_cast_photo":    T.set_person_from_cast_photo,
-    "add_caption":                   T.add_caption,
-    "get_canvas_info":               T.get_canvas_info,
-    "suggest_caption_position":      T.suggest_caption_position,
-    "check_overlap":                 T.check_overlap,
-    "render_preview":                T.render_preview,
-    "undo_last":                     T.undo_last,
-    # export_thumbnail 은 out_dir 필요 · run_session 이 wrap
-}
+from . import planner as Planner
+from . import generator as Generator
+from . import compositor as Compositor
+
+
+MODEL = "gemini-2.5-flash"
+DEFAULT_LOCATION = "us-central1"
+MAX_RETRIES = 2
 
 
 def run_session(
+    media_dir: pathlib.Path,
+    out_dir: pathlib.Path,
+    variant_id: str = "v1",
+    shorts_context: dict | None = None,
+    hint_prompt: str = "쇼츠 썸네일 기획",
+    project: str | None = None,
+    location: str = DEFAULT_LOCATION,
+) -> dict:
+    """한 variant 생성 세션 실행. 반환: {status, plan, layers_meta, exported_paths, took_sec}."""
+    project = project or os.environ.get("GOOGLE_CLOUD_PROJECT", "step-d")
+    t0 = time.time()
+
+    # ──────────────────────────────────────────────
+    # 0) 컨텍스트 준비 (shorts_context가 없으면 workdir에서 최소 로드)
+    # ──────────────────────────────────────────────
+    if shorts_context is None:
+        pc = media_dir / "program_context.json"
+        if pc.exists():
+            data = json.loads(pc.read_text(encoding="utf-8"))
+            shorts_context = {
+                "program": {"title": data.get("title"), "section": data.get("section"),
+                            "mood": data.get("mood"), "synopsis": (data.get("synopsis") or "")[:400]},
+                "cast_names": data.get("cast") or [],
+                "title": data.get("title", "쇼츠"),
+                "description": "",
+            }
+        else:
+            shorts_context = {"title": "쇼츠", "description": "", "cast_names": []}
+
+    # ──────────────────────────────────────────────
+    # 1) Phase 1: Planner (AI) — 계획 JSON 생성
+    # ──────────────────────────────────────────────
+    plan = None
+    last_error = None
+
+    for attempt in range(MAX_RETRIES + 1):
+        try:
+            plan = Planner.generate_plan(
+                media_dir=media_dir,
+                variant_id=f"{variant_id}_plan_attempt{attempt}",
+                shorts_context=shorts_context,
+                project=project,
+                location=location,
+            )
+            # 계획 검증
+            _validate_plan(plan)
+            break
+        except Exception as e:
+            last_error = e
+            if attempt < MAX_RETRIES:
+                time.sleep(1.5 * (attempt + 1))
+                continue
+            return {
+                "status": "planner_failed",
+                "error": str(last_error),
+                "took_sec": round(time.time() - t0, 1),
+            }
+
+    # ──────────────────────────────────────────────
+    # 2+3) Regenerate deterministic layers for each canvas before composition.
+    # A 16:9 transform cannot safely be reused for 9:16 (notably captions and
+    # subject placement); the AI plan remains one decision shared by both.
+    exported_paths: dict[str, str] = {}
+    layers_meta: dict[str, Any] = {}
+    try:
+        for aspect in ("16:9", "9:16"):
+            layers = Generator.generate_all_layers(media_dir, plan, aspect=aspect)
+            meta = Compositor.compose_thumbnail(
+                layers=layers,
+                out_dir=out_dir,
+                variant_id=variant_id,
+                aspects=(aspect,),
+            )
+            exported_paths.update(meta["aspects"])
+            layers_meta[aspect] = {
+                k: {"size": v.image.size, "transform": (v.transform.x, v.transform.y, v.transform.width, v.transform.height)}
+                for k, v in layers.items()
+            }
+    except Exception as e:
+        return {
+            "status": "generator_or_compositor_failed",
+            "plan": plan,
+            "error": str(e),
+            "took_sec": round(time.time() - t0, 1),
+        }
+
+    return {
+        "status": "completed",
+        "variant_id": variant_id,
+        "plan": plan,
+        "layers_meta": layers_meta,
+        "exported_paths": exported_paths,
+        "meta_path": str(out_dir / f"{variant_id}_meta.json"),
+        "took_sec": round(time.time() - t0, 1),
+    }
+
+
+def run_multi_variant(
+    media_dir: pathlib.Path,
+    out_dir: pathlib.Path,
+    n_variants: int = 3,
+    shorts_context: dict | None = None,
+    project: str | None = None,
+    location: str = DEFAULT_LOCATION,
+) -> list[dict]:
+    """여러 variant 병렬 생성 (순차 실행, 향후 asyncio/ThreadPool로 병렬화 가능)."""
+    results = []
+    for i in range(n_variants):
+        variant_id = f"v{i+1}"
+        print(f"[thumbnail] Generating variant {variant_id}...")
+        result = run_session(
+            media_dir=media_dir,
+            out_dir=out_dir,
+            variant_id=variant_id,
+            shorts_context=shorts_context,
+            project=project,
+            location=location,
+        )
+        results.append(result)
+        if result["status"] != "completed":
+            print(f"[thumbnail] Variant {variant_id} failed: {result.get('error')}")
+    return results
+
+
+def _validate_plan(plan: dict) -> None:
+    """Planner 출력 JSON 필수 필드 검증."""
+    required = ["background", "person", "caption", "layout_hints"]
+    for key in required:
+        if key not in plan:
+            raise ValueError(f"Plan missing required key: {key}")
+
+    # background
+    bg = plan["background"]
+    if "mode" not in bg:
+        raise ValueError("background.mode required")
+    if bg["mode"] == "frame_blur" and "frame_id" not in bg:
+        raise ValueError("frame_blur mode requires frame_id")
+    if bg["mode"] == "ai_generate" and "prompt" not in bg:
+        raise ValueError("ai_generate mode requires prompt")
+
+    # person
+    person = plan["person"]
+    if "source" not in person:
+        raise ValueError("person.source required")
+    if person["source"] == "frame" and "frame_id" not in person:
+        raise ValueError("person source=frame requires frame_id")
+    if person["source"] == "cast_photo" and "cast_name" not in person:
+        raise ValueError("person source=cast_photo requires cast_name")
+    if "side" not in person:
+        raise ValueError("person.side required")
+    if "scale" not in person:
+        raise ValueError("person.scale required")
+
+    # caption
+    cap = plan["caption"]
+    for req in ["text", "position", "tone_tag", "size_hint", "font_role"]:
+        if req not in cap:
+            raise ValueError(f"caption.{req} required")
+
+
+# ──────────────────────────────────────────────
+# Legacy 호환: 기존 ai_session.run_session 시그니처 유지
+# ──────────────────────────────────────────────
+def run_session_legacy(
     media_dir: pathlib.Path,
     out_dir: pathlib.Path,
     variant_id: str = "v1",
@@ -91,161 +201,28 @@ def run_session(
     project: str | None = None,
     location: str = DEFAULT_LOCATION,
 ) -> dict:
-    """한 variant 하나 만드는 세션. 반환: {status, turns[], exported_path?}."""
-    project = project or os.environ.get("GOOGLE_CLOUD_PROJECT", "step-d")
+    """기존 코드 호환용 래퍼. 내부적으로 새 3-phase 실행."""
+    result = run_session(media_dir, out_dir, variant_id, shorts_context, hint_prompt, project, location)
 
-    # 세션 컨텍스트
-    ctx = T.SessionContext(media_dir=pathlib.Path(media_dir))
-    if shorts_context:
-        ctx.shorts_ctx = shorts_context
-    else:
-        # workdir에서 최소 컨텍스트 로드 (program_context.json)
-        pc = pathlib.Path(media_dir) / "program_context.json"
-        if pc.exists():
-            data = json.loads(pc.read_text(encoding="utf-8"))
-            ctx.shorts_ctx = {
-                "program": {"title": data.get("title"), "section": data.get("section"),
-                            "mood": data.get("mood"), "synopsis": (data.get("synopsis") or "")[:400]},
-                "cast_names": data.get("cast") or [],
-                "title": data.get("title", "쇼츠"),
-                "description": "",
-            }
-
-    # export 는 세션 종료 처리 · 여기 미리 wrapping
-    def _dispatch_export(_ctx: T.SessionContext) -> dict:
-        return T.export_thumbnail(_ctx, out_dir=out_dir, variant_id=variant_id)
-
-    dispatch = dict(TOOL_DISPATCH)
-    dispatch["export_thumbnail"] = _dispatch_export
-
-    # Vertex 클라이언트
-    client = genai.Client(vertexai=True, project=project, location=location)
-    tool = build_tool()
-    cfg = types.GenerateContentConfig(
-        tools=[tool],
-        system_instruction=SYSTEM_INSTRUCTION,
-        temperature=1.0,
-    )
-
-    # 첫 user message
-    first_user = _build_first_user(ctx.shorts_ctx, hint_prompt)
-    history: list[types.Content] = [
-        types.Content(role="user", parts=[types.Part.from_text(text=first_user)])
-    ]
-
-    turns_log: list[dict] = []
-    exported_path: str | None = None
-    finish_reason: str = "completed"
-
-    for turn_i in range(MAX_TURNS):
-        resp = client.models.generate_content(
-            model=MODEL_TEXT,
-            contents=history,
-            config=cfg,
-        )
-        if not resp.candidates:
-            finish_reason = "no_candidate"
-            break
-        cand = resp.candidates[0]
-        history.append(cand.content)   # model turn 추가
-
-        # 함수 호출 파싱
-        function_calls = [p.function_call for p in (cand.content.parts or [])
-                          if getattr(p, "function_call", None)]
-        text_parts = [p.text for p in (cand.content.parts or []) if getattr(p, "text", None)]
-
-        if not function_calls:
-            # AI가 함수 안 부르고 텍스트만 뱉었을 때: 재프롬프트 시도 (1회) → 그래도 없으면 강제 export
-            turns_log.append({"turn": turn_i, "type": "text_no_call", "text": " ".join(text_parts)[:400]})
-            has_person = ctx.doc is not None and ctx.doc.layers["person"].source is not None
-            has_caption = ctx.doc is not None and ctx.doc.layers["caption"].source is not None
-            nudge_parts: list[str] = []
-            if not has_person:
-                nudge_parts.append("인물이 없다. set_person_from_cast_photo(cast_name='...') 를 지금 호출하라.")
-            if not has_caption:
-                nudge_parts.append("자막이 없다. add_caption(...) 을 지금 호출하라.")
-            if not nudge_parts:
-                nudge_parts.append("export_thumbnail() 을 호출해서 세션 종료하라.")
-            nudge = "함수만 호출하라 (설명 텍스트 없이). " + " ".join(nudge_parts)
-            history.append(types.Content(role="user", parts=[types.Part.from_text(text=nudge)]))
-            # 다음 turn 으로 계속
-            continue
-
-        # 각 함수 호출 실행 → tool response 추가
-        tool_response_parts: list[types.Part] = []
-        for fc in function_calls:
-            name = fc.name
-            args = dict(fc.args) if fc.args else {}
-            try:
-                fn = dispatch.get(name)
-                if not fn:
-                    result: dict = {"error": f"unknown tool: {name}"}
-                else:
-                    result = fn(ctx, **args)
-            except Exception as e:
-                result = {"error": f"{type(e).__name__}: {str(e)[:200]}"}
-
-            turns_log.append({"turn": turn_i, "type": "tool_call", "name": name,
-                              "args": args, "result_summary": _summarize(result)})
-
-            # render_preview 는 이미지가 크니 · b64 를 inline_data 로 넘겨 AI 가 실제로 보게
-            if name == "render_preview" and "preview_png_b64" in result:
-                img_bytes = base64.b64decode(result["preview_png_b64"])
-                summary = {k: v for k, v in result.items() if k != "preview_png_b64"}
-                tool_response_parts.append(types.Part.from_function_response(
-                    name=name, response=summary))
-                tool_response_parts.append(types.Part.from_bytes(
-                    data=img_bytes, mime_type="image/png"))
-            else:
-                tool_response_parts.append(types.Part.from_function_response(
-                    name=name, response=result))
-
-            if name == "export_thumbnail" and result.get("exported"):
-                exported_path = result.get("path")
-
-        history.append(types.Content(role="user", parts=tool_response_parts))
-
-        if exported_path:
-            finish_reason = "exported"
-            break
-    else:
-        # turn 한도 도달 · 강제 export
-        try:
-            result = _dispatch_export(ctx)
-            exported_path = result.get("path")
-            turns_log.append({"turn": MAX_TURNS, "type": "forced_export",
-                              "result_summary": _summarize(result)})
-            finish_reason = "forced_export"
-        except Exception as e:
-            finish_reason = f"forced_export_fail: {e}"
-
+    # 기존 반환 형식에 맞춤
     return {
-        "status": finish_reason,
-        "turns": turns_log,
-        "exported_path": exported_path,
+        "status": result["status"],
+        "turns": [{"phase": "planner", "plan": result.get("plan")},
+                  {"phase": "generator", "layers": list(result.get("layers_meta", {}).keys())},
+                  {"phase": "compositor", "exported": result.get("exported_paths")}],
+        "exported_path": result.get("exported_paths", {}).get("16:9"),
         "variant_id": variant_id,
     }
 
 
-def _build_first_user(shorts_ctx: dict, hint_prompt: str) -> str:
-    prog = shorts_ctx.get("program", {})
-    return (
-        f"[힌트] {hint_prompt}\n\n"
-        f"[프로그램] {prog.get('title','?')} ({prog.get('section','')})"
-        + (f" mood: {prog.get('mood')}" if prog.get('mood') else "")
-        + f"\n[출연자] {', '.join(shorts_ctx.get('cast_names', []))}\n"
-        f"[시놉시스] {prog.get('synopsis','')}\n\n"
-        f"[쇼츠 제목] {shorts_ctx.get('title','')}\n"
-        f"[쇼츠 설명] {shorts_ctx.get('description','')}\n\n"
-        "위 컨텍스트로 썸네일을 조립해라. 도구를 순차 호출하고, 마지막에 export_thumbnail 로 완료."
-    )
+if __name__ == "__main__":
+    import sys
+    if len(sys.argv) < 3:
+        print("Usage: python -m core.thumbnail.ai_session <media_dir> <out_dir> [variant_id]")
+        sys.exit(1)
+    media_dir = pathlib.Path(sys.argv[1])
+    out_dir = pathlib.Path(sys.argv[2])
+    variant_id = sys.argv[3] if len(sys.argv) > 3 else "v1"
 
-
-def _summarize(result: dict) -> str:
-    """AI turn 로그에 저장할 짧은 요약 (전체 dict은 크니까)."""
-    if isinstance(result, dict):
-        if "error" in result:
-            return f"ERROR: {result['error']}"
-        keys = list(result.keys())[:5]
-        return f"OK · keys={keys}"
-    return str(result)[:120]
+    result = run_session(media_dir, out_dir, variant_id)
+    print(json.dumps(result, ensure_ascii=False, indent=2))
