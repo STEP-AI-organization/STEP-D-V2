@@ -101,31 +101,29 @@ def run_pipeline(
     }
     log["took"]["5_frames"] = round(time.time() - t, 2)
 
-    # ─── ⑥ 이미지 생성 (variant N개 병렬) ────────────────────
+    # ─── ⑥ 이미지 생성 (variant N개 병렬 · 각각 다른 프레임 하나) ─
+    # 사용자 원칙: nano banana 에 프레임 하나 + 자막만 · castPhoto/벤치마크 X
     t = time.time()
     variant_images: dict[str, bytes] = {}
     variant_paths: dict[str, str] = {}
-    def _gen_one(vid: str, seed_frames: list[pathlib.Path]) -> tuple[str, bytes | None]:
+    def _gen_one(vid: str, frame: pathlib.Path) -> tuple[str, bytes | None]:
         try:
-            img = NB.generate_thumbnail(
-                caption_text=caption,
-                cast_photos=cast_photos,
-                frames=seed_frames,
-                program_title=pc.get("title", ""),
-                program_section=pc.get("section", ""),
-            )
+            img = NB.generate_thumbnail(caption_text=caption, frame=frame)
             return vid, img
         except Exception as e:
             print(f"[gen {vid}] fail: {str(e)[:200]}", file=sys.stderr)
             return vid, None
 
-    # 각 variant는 다른 프레임 조합 (다양성)
-    variant_seeds = [picked_frames[i:i+3] for i in range(min(n_variants, len(picked_frames)-2))]
-    while len(variant_seeds) < n_variants:
-        variant_seeds.append(picked_frames[:3])
+    # 각 variant 는 다른 대표 프레임 하나씩 (top-N 중 앞에서 · 부족하면 순환)
+    variant_frames: list[pathlib.Path] = []
+    if picked_frames:
+        for i in range(n_variants):
+            variant_frames.append(picked_frames[i % len(picked_frames)])
+    else:
+        return {"status": "no_frames", "log": log}
 
     with ThreadPoolExecutor(max_workers=n_variants) as ex:
-        futs = [ex.submit(_gen_one, f"v{i+1}", variant_seeds[i]) for i in range(n_variants)]
+        futs = [ex.submit(_gen_one, f"v{i+1}", variant_frames[i]) for i in range(n_variants)]
         for f in as_completed(futs):
             vid, img_bytes = f.result()
             if img_bytes:

@@ -120,13 +120,11 @@ def _run_nano_banana(args) -> int:
     frames = sorted(shot_dir.glob("shot_*.jpg"))[:3] if shot_dir.exists() else []
     print(f"[nano] castPhotos: {len(cast_photos)} · frames: {len(frames)}")
 
-    # 3) 이미지 하나 + 짧은 프롬프트 (심플)
-    img_bytes = NB.generate_thumbnail(
-        caption_text=caption_text,
-        cast_photos=cast_photos, frames=frames,
-        program_title=pc.get("title", ""),
-        program_section=pc.get("section", ""),
-    )
+    # 3) 대표 프레임 하나 + 자막만 (극단 심플)
+    if not frames:
+        print("[FAIL] no frames in workdir", file=sys.stderr)
+        return 2
+    img_bytes = NB.generate_thumbnail(caption_text=caption_text, frame=frames[0])
     if not img_bytes:
         print("[FAIL] nano banana returned no image", file=sys.stderr)
         return 2
