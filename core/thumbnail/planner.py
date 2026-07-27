@@ -15,6 +15,8 @@ from typing import Any, Optional
 from google import genai
 from google.genai import types
 
+from .presets import PRESETS, prompt_summary as presets_prompt_summary, get_preset
+
 MODEL = "gemini-2.5-flash"
 DEFAULT_LOCATION = "us-central1"
 
@@ -24,10 +26,11 @@ SYSTEM_INSTRUCTION = """너는 한국 방송사 편집팀의 썸네일 **기획�
 
 ──────────────────
 [필수 포함 요소] (누락 시 계획 불완전 → 재시도)
-1. background: {mode: "frame_blur"|"ai_generate"|"gradient"|"solid", ...상세 파라미터}
-2. person: {source: "frame"|"cast_photo", frame_id?, cast_name?, subject?, side: "left"|"right"|"center", scale: 0.5~1.2}
-3. caption: {text: "...", position: "top"|"middle"|"bottom"|"auto", tone_tag: "인용"|"훅"|"의문"|"충격"|"기본", size_hint: "XL"|"L"|"M", font_role: "variety"|"drama"|"news"|"documentary"}
-4. layout_hints: {person_side, caption_position, safe_zone_respected: true}
+1. **preset_id**: 아래 스타일 프리셋 중 하나 (프로그램 성격에 맞게 선택)
+2. background: {mode: "frame_blur"|"ai_generate"|"gradient"|"solid", ...상세 파라미터}
+3. person: {source: "frame"|"cast_photo", frame_id?, cast_name?, subject?, side, scale}
+4. caption: {text, position, tone_tag, size_hint, font_role}
+5. layout_hints: {person_side, caption_position, safe_zone_respected: true}
 ──────────────────
 
 [배경 모드 선택 가이드]
@@ -102,7 +105,10 @@ def build_planner_prompt(
         f"{json.dumps(frames_summary, ensure_ascii=False, indent=2)}\n\n"
         f"[사용 가능 캐스트 사진]\n"
         f"{cast_list}\n\n"
-        "위 정보를 종합해 **최적의 썸네일 설계도(ThumbnailPlan JSON)**를 하나만 출력하라. "
+        f"{presets_prompt_summary()}\n\n"
+        "위 정보를 종합해 **최적의 스타일 프리셋을 선택**하고 (preset_id) "
+        "그 프리셋 톤에 맞는 **ThumbnailPlan JSON**을 하나만 출력하라. "
+        "프리셋의 font_role·tone·position은 그대로 따르되 · text 는 쇼츠 컨텍스트에 맞게 새로 작성. "
         "출력은 JSON만. 마크다운/설명 금지."
     )
 
@@ -111,6 +117,11 @@ def build_planner_prompt(
 THUMBNAIL_PLAN_SCHEMA = {
     "type": "OBJECT",
     "properties": {
+        "preset_id": {
+            "type": "STRING",
+            "enum": list(PRESETS.keys()),
+            "description": "스타일 프리셋 선택 (broadcast_official/magazine/reaction/music_show/news/documentary)",
+        },
         "background": {
             "type": "OBJECT",
             "properties": {
@@ -161,7 +172,7 @@ THUMBNAIL_PLAN_SCHEMA = {
             },
         },
     },
-    "required": ["background", "person", "caption", "layout_hints"],
+    "required": ["preset_id", "background", "person", "caption", "layout_hints"],
 }
 
 

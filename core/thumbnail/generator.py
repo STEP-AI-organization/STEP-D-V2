@@ -16,6 +16,7 @@ from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 from .canvas import ASPECT_SIZE, Document, Layer, LayerRole, LayerTransform, SAFE_MARGIN
 from .contrast import ensure_min_contrast, sample_bg_color
+from .presets import get_preset
 
 
 FONT_ROOT = pathlib.Path(__file__).resolve().parents[2] / "assets" / "thumbnail-fonts"
@@ -56,6 +57,9 @@ class ThumbnailGenerator:
         self.size = ASPECT_SIZE[aspect]
         self.cw, self.ch = self.size
         self.safe_zone = (SAFE_MARGIN, SAFE_MARGIN, self.cw - SAFE_MARGIN, self.ch - SAFE_MARGIN)
+        # 프리셋 룩업 · plan 필드가 비어있으면 프리셋 default로 채움
+        self.preset = get_preset(plan.get("preset_id"))
+        self._apply_preset_defaults()
 
         # 캐시
         self._frames_cache: Optional[list[dict]] = None
@@ -217,6 +221,27 @@ class ThumbnailGenerator:
     # ──────────────────────────────────────────────────────────────
     # Person (Layer 2)
     # ──────────────────────────────────────────────────────────────
+    def _apply_preset_defaults(self) -> None:
+        """Plan에 지정 안 된 필드를 프리셋 default로 채운다 (있는 값은 덮어쓰지 않음)."""
+        p = self.preset
+        pers = self.plan.setdefault("person", {})
+        pers.setdefault("side", p["person_side_default"])
+        pers.setdefault("scale", p["person_scale_default"])
+        cap = self.plan.setdefault("caption", {})
+        cap.setdefault("position", p["caption_position_default"])
+        cap.setdefault("size_hint", p["caption_size_default"])
+        cap.setdefault("font_role", p["font_role"])
+        cap.setdefault("text_color", p["text_color"])
+        cap.setdefault("outline_color", p["outline_color"])
+        bg = self.plan.setdefault("background", {"mode": "ai_generate"})
+        if bg.get("mode") == "ai_generate":
+            bg.setdefault("style", p["background_style_default"])
+            # 프리셋 힌트를 프롬프트에 접두
+            hint = p["background_prompt_hint"]
+            existing = bg.get("prompt", "")
+            if hint and hint not in existing:
+                bg["prompt"] = f"{hint} · {existing}" if existing else hint
+
     def generate_person(self) -> LayerResult:
         person_plan = self.plan["person"]
         source = person_plan["source"]
