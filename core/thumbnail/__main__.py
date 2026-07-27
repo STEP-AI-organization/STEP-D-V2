@@ -84,7 +84,7 @@ def main() -> int:
 
 
 def _run_nano_banana(args) -> int:
-    """심플: castPhotos + 프레임 콜라주 하나 + 자막 한 줄 → Gemini nano banana 통짜."""
+    """심플: (배경/배치/제목) + 프레임 하나 → Gemini nano banana."""
     from . import nano_banana as NB, planner as PL
     media = pathlib.Path(args.media_dir).resolve()
     out = pathlib.Path(args.out).resolve() if args.out else \
@@ -93,7 +93,7 @@ def _run_nano_banana(args) -> int:
     print(f"[nano] media = {media}")
     print(f"[nano] out   = {out}\n")
 
-    # 1) 컨텍스트 · 자막 (Planner)
+    # 1) 컨텍스트
     pc = json.loads((media / "program_context.json").read_text(encoding="utf-8")) \
         if (media / "program_context.json").exists() else {}
     shorts_ctx = {
@@ -107,24 +107,31 @@ def _run_nano_banana(args) -> int:
         s0 = nar["segments"][0]
         shorts_ctx["title"] = s0.get("title", shorts_ctx["title"])
         shorts_ctx["description"] = s0.get("summary", "")
+        shorts_ctx["shorts"] = {"start": s0.get("start", 0), "end": s0.get("end", 60)}
 
-    plan = PL.generate_plan(media_dir=media, variant_id=args.variant_id + "_planonly",
-                             shorts_context=shorts_ctx)
-    caption_text = plan.get("caption", {}).get("text", "")
-    print(f"[nano] caption = {caption_text}")
+    # 2) Planner (variant 1 개)
+    plans = PL.generate_variant_prompts(media_dir=media, n=1, shorts_context=shorts_ctx)
+    if not plans:
+        print("[FAIL] planner returned no variants", file=sys.stderr)
+        return 2
+    plan_v = plans[0]
+    print(f"[nano] background = {plan_v.get('background')}")
+    print(f"[nano] layout     = {plan_v.get('layout')}")
+    print(f"[nano] caption    = {plan_v.get('caption')}")
 
-    # 2) 자료
-    cast_dir = media / "cast_photos"
-    cast_photos = sorted(cast_dir.glob("*")) if cast_dir.exists() else []
+    # 3) 프레임
     shot_dir = media / "shot_frames"
-    frames = sorted(shot_dir.glob("shot_*.jpg"))[:3] if shot_dir.exists() else []
-    print(f"[nano] castPhotos: {len(cast_photos)} · frames: {len(frames)}")
-
-    # 3) 대표 프레임 하나 + 자막만 (극단 심플)
+    frames = sorted(shot_dir.glob("shot_*.jpg"))[:1] if shot_dir.exists() else []
     if not frames:
         print("[FAIL] no frames in workdir", file=sys.stderr)
         return 2
-    img_bytes = NB.generate_thumbnail(caption_text=caption_text, frame=frames[0])
+
+    img_bytes = NB.generate_thumbnail(
+        background=plan_v.get("background", "원본 프레임 그대로"),
+        layout=plan_v.get("layout", "인물 중앙 · 자막 하단"),
+        caption=plan_v.get("caption", ""),
+        frame=frames[0],
+    )
     if not img_bytes:
         print("[FAIL] nano banana returned no image", file=sys.stderr)
         return 2
@@ -133,9 +140,7 @@ def _run_nano_banana(args) -> int:
     dest.write_bytes(img_bytes)
     print(f"\n=== 세션 결과 ===\nstatus : completed\nexport : {dest}")
     (out / f"{args.variant_id}_nano_meta.json").write_text(json.dumps({
-        "caption": caption_text, "plan": plan,
-        "cast_photos": [str(p) for p in cast_photos],
-        "frames": [str(p) for p in frames], "shorts_ctx": shorts_ctx,
+        "plan": plan_v, "frame": str(frames[0]), "shorts_ctx": shorts_ctx,
     }, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
     return 0
 

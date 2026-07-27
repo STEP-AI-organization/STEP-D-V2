@@ -636,6 +636,136 @@ def _index_faces_by_frame(faces_data: Any) -> dict[str, list[dict]]:
     return idx
 
 
+# ═════════════════════════════════════════════════════════════════
+# nano banana 용 minimal variant planner (2026-07-27)
+# 사용자 원칙: 생성 AI 에는 (배경, 배치, 제목) + 프레임 하나만 넘긴다.
+# ═════════════════════════════════════════════════════════════════
+
+VARIANT_SYSTEM = """너는 한국 유튜브 썸네일 기획자다.
+쇼츠 하나에 대해 서로 다른 톤의 후보 N 개를 각각 (background, layout, caption) 세 필드로 짠다.
+
+각 필드 규격:
+- background: 배경 처리 한 문장 · 프레임 어떻게 쓸지 (예: "원본 프레임 그대로", "왼쪽 어둡게 그라디언트", "채도 살짝 낮추기")
+  · AI 재생성 요청 X · 프레임 활용법만
+- layout: 인물·자막 배치 한 문장 (예: "인물 오른쪽·자막 왼쪽 하단 2줄", "자막 상단 중앙·인물 하단 가득")
+  · 자막이 인물 얼굴 가리지 않도록
+- caption: 자막 문장 하나 · **핵심 + 어그로**
+
+자막(caption) 대원칙:
+- 핵심 (뭐 벌어지는지) + 어그로 (궁금증)
+- 감상형 X ("돌아갈까?", "흔들리는 마음", "사랑? 미련?" X)
+- 좋은 예: "3년 만에 만난 전 남친", "결국 이 커플 폭발", "폭탄 발언 나옴", "이 사람 진심이었네"
+- 2~6단어 · 8음절 이내
+- 실제 쇼츠 대사·핵심 순간에서 근거 뽑기 · 상상 X · shorts.title/description 만 보고 지어내지 마
+
+variant 간 다양성:
+- 서로 다른 톤 (예: v1 훅 질문, v2 사건 명시, v3 인용 대사)
+- 자막 위치도 다르게 (top/bottom/side)
+- 배경 처리도 다르게
+
+출력: JSON `{"variants": [{"background":..., "layout":..., "caption":...}, ...]}` 만. 마크다운/설명 X.
+"""
+
+
+def generate_variant_prompts(
+    media_dir: pathlib.Path,
+    n: int = 3,
+    shorts_context: dict | None = None,
+    project: str | None = None,
+    location: str = DEFAULT_LOCATION,
+) -> list[dict]:
+    """nano banana 용 N 개 variant 프롬프트 (배경/배치/제목) 세트."""
+    project = project or os.environ.get("GOOGLE_CLOUD_PROJECT", "step-d")
+
+    shorts_ctx = shorts_context or {}
+    shorts_meta = shorts_ctx.get("shorts") if isinstance(shorts_ctx.get("shorts"), dict) else None
+    shorts_slice = None
+    if not shorts_meta:
+        nar = _safe_load(media_dir / "narrative.json", default={})
+        if isinstance(nar, dict):
+            segs = nar.get("segments", []) or []
+            if segs:
+                s0 = segs[0]
+                shorts_meta = {"start": s0.get("start", 0), "end": s0.get("end", 60),
+                               "title": s0.get("title", ""), "description": s0.get("summary", "")}
+                shorts_ctx.setdefault("title", shorts_meta["title"])
+                shorts_ctx.setdefault("description", shorts_meta["description"])
+    if shorts_meta and shorts_meta.get("end", 0) > shorts_meta.get("start", 0):
+        shorts_slice = load_shorts_slice(media_dir, shorts_meta)
+
+    lines = ["[쇼츠]",
+             f"  제목: {shorts_ctx.get('title', '')}",
+             f"  요약: {shorts_ctx.get('description', '')}"]
+    if shorts_slice:
+        nseg = shorts_slice.get("narrative_segment")
+        if nseg:
+            lines.append(f"  블록 요약: {nseg.get('summary', '')}")
+            if nseg.get("emotional_tone"):
+                lines.append(f"  감정 톤: {nseg['emotional_tone']}")
+        km = shorts_slice.get("key_moments", []) or []
+        if km:
+            lines.append("[핵심 순간]")
+            for k in km[:6]:
+                lines.append(f"  · {k}")
+        tl = shorts_slice.get("transcript_lines", []) or []
+        if tl:
+            lines.append("[실제 대사]")
+            for t in tl[:20]:
+                lines.append(f"  · {t}")
+    lines.append(f"\n위 쇼츠 기준 · 서로 다른 톤의 썸네일 후보 **{n}개** 를 짜라.")
+    lines.append("각 후보는 (background, layout, caption) 세 필드. JSON 배열로.")
+    prompt_user = "\n".join(lines)
+
+    schema = {
+        "type": "OBJECT",
+        "properties": {
+            "variants": {
+                "type": "ARRAY",
+                "items": {
+                    "type": "OBJECT",
+                    "properties": {
+                        "background": {"type": "STRING"},
+                        "layout": {"type": "STRING"},
+                        "caption": {"type": "STRING"},
+                    },
+                    "required": ["background", "layout", "caption"],
+                },
+            },
+        },
+        "required": ["variants"],
+    }
+
+    client = genai.Client(vertexai=True, project=project, location=location)
+    resp = client.models.generate_content(
+        model=MODEL,
+        contents=[types.Content(role="user",
+                                parts=[types.Part.from_text(text=prompt_user)])],
+        config=types.GenerateContentConfig(
+            system_instruction=VARIANT_SYSTEM,
+            response_mime_type="application/json",
+            response_schema=schema,
+            temperature=1.2,
+            max_output_tokens=2048,
+        ),
+    )
+    if not resp.text:
+        return []
+    try:
+        data = json.loads(resp.text)
+    except Exception:
+        return []
+    variants = data.get("variants", [])
+    if not isinstance(variants, list):
+        return []
+    # 정확히 n 개 로 맞추기 (부족하면 마지막 반복 · 넘치면 자름)
+    variants = [v for v in variants if isinstance(v, dict) and v.get("caption")]
+    if not variants:
+        return []
+    while len(variants) < n:
+        variants.append(dict(variants[-1]))
+    return variants[:n]
+
+
 if __name__ == "__main__":
     import sys
     if len(sys.argv) < 2:

@@ -69,21 +69,22 @@ def run_pipeline(
     }
     log["took"]["3_clip_analysis"] = round(time.time() - t, 2)
 
-    # ─── ④ 썸네일 기획 AI (Planner) ───────────────────────────
+    # ─── ④ 썸네일 기획 AI (Planner · variant N 세트) ─────────
+    # 각 variant 마다 (background/layout/caption) 다르게. AI 에 넘길 필드 오직 이 3개.
     t = time.time()
     shorts_ctx_with_shorts = dict(shorts_ctx); shorts_ctx_with_shorts["shorts"] = shorts
-    plan = PL.generate_plan(
+    variant_plans = PL.generate_variant_prompts(
         media_dir=media_dir,
-        variant_id="plan",
+        n=n_variants,
         shorts_context=shorts_ctx_with_shorts,
     )
-    caption = plan.get("caption", {}).get("text", "")
     log["stages"]["4_planner"] = {
-        "caption": caption,
-        "preset_id": plan.get("preset_id"),
+        "requested": n_variants,
+        "returned": len(variant_plans),
+        "variants": variant_plans,
     }
     log["took"]["4_planner"] = round(time.time() - t, 2)
-    if not caption:
+    if not variant_plans:
         return {"status": "planner_failed", "log": log}
 
     # ─── ⑤ 대표 프레임 추출 ─────────────────────────────────────
@@ -101,29 +102,33 @@ def run_pipeline(
     }
     log["took"]["5_frames"] = round(time.time() - t, 2)
 
-    # ─── ⑥ 이미지 생성 (variant N개 병렬 · 각각 다른 프레임 하나) ─
-    # 사용자 원칙: nano banana 에 프레임 하나 + 자막만 · castPhoto/벤치마크 X
+    # ─── ⑥ 이미지 생성 (variant N개 병렬 · 각각 다른 plan + 다른 프레임) ─
+    # 사용자 원칙: nano banana 에 (배경/배치/제목) + 프레임 하나 · 그 외 X
     t = time.time()
+    if not picked_frames:
+        return {"status": "no_frames", "log": log}
+
     variant_images: dict[str, bytes] = {}
     variant_paths: dict[str, str] = {}
-    def _gen_one(vid: str, frame: pathlib.Path) -> tuple[str, bytes | None]:
+
+    def _gen_one(vid: str, plan_v: dict, frame: pathlib.Path) -> tuple[str, bytes | None]:
         try:
-            img = NB.generate_thumbnail(caption_text=caption, frame=frame)
+            img = NB.generate_thumbnail(
+                background=plan_v.get("background", "원본 프레임 그대로"),
+                layout=plan_v.get("layout", "인물 중앙 · 자막 하단"),
+                caption=plan_v.get("caption", ""),
+                frame=frame,
+            )
             return vid, img
         except Exception as e:
             print(f"[gen {vid}] fail: {str(e)[:200]}", file=sys.stderr)
             return vid, None
 
-    # 각 variant 는 다른 대표 프레임 하나씩 (top-N 중 앞에서 · 부족하면 순환)
-    variant_frames: list[pathlib.Path] = []
-    if picked_frames:
-        for i in range(n_variants):
-            variant_frames.append(picked_frames[i % len(picked_frames)])
-    else:
-        return {"status": "no_frames", "log": log}
-
+    # 각 variant 는 다른 plan · 다른 프레임 (부족하면 순환)
     with ThreadPoolExecutor(max_workers=n_variants) as ex:
-        futs = [ex.submit(_gen_one, f"v{i+1}", variant_frames[i]) for i in range(n_variants)]
+        futs = [ex.submit(_gen_one, f"v{i+1}", variant_plans[i],
+                          picked_frames[i % len(picked_frames)])
+                for i in range(n_variants)]
         for f in as_completed(futs):
             vid, img_bytes = f.result()
             if img_bytes:
