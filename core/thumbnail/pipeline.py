@@ -132,25 +132,35 @@ def run_pipeline(
             # (a) 계획된 인물 사진 조회
             featured = plan_v.get("featured_cast", []) or []
             cast_photos, cast_names_found = _resolve_cast_photos(featured)
-            print(f"  [{vid}] featured_cast={featured} · resolved={cast_names_found}")
+            # captions 배열 (신규) 또는 단일 caption (구) 정규화
+            captions = plan_v.get("captions") or []
+            if not captions and plan_v.get("caption"):
+                captions = [{
+                    "text": plan_v["caption"],
+                    "role": "main",
+                    "position": plan_v.get("caption_position", "bottom-left"),
+                    "size": plan_v.get("caption_size", "L"),
+                }]
+            # nano banana 힌트용 · main 자막 위치를 자리 비우기 지시로 전달
+            main_pos = "bottom-left"
+            for c in captions:
+                if c.get("role") == "main":
+                    main_pos = c.get("position", main_pos); break
+            print(f"  [{vid}] featured_cast={featured} · resolved={cast_names_found} · "
+                  f"captions={[c.get('role') for c in captions]}")
             # (b) 자막 없는 이미지 생성 (frame + castPhotos)
             img = NB.generate_thumbnail(
                 background=plan_v.get("background", "원본 프레임 그대로"),
                 layout=plan_v.get("layout", "인물 중앙 · 자막 하단"),
-                caption_position=plan_v.get("caption_position", "bottom-left"),
+                caption_position=main_pos,
                 frame=frame,
                 cast_photos=cast_photos,
                 cast_names=cast_names_found,
             )
             if not img:
                 return vid, None
-            # (c) 시스템 오버레이 · 정확한 한글 폰트로 자막 얹기
-            img = OV.render_caption(
-                img_bytes=img,
-                caption=plan_v.get("caption", ""),
-                position=plan_v.get("caption_position", "bottom-left"),
-                size=plan_v.get("caption_size", "L"),
-            )
+            # (c) 시스템 오버레이 · role 별 계층 렌더
+            img = OV.render_captions(img_bytes=img, captions=captions)
             return vid, img
         except Exception as e:
             print(f"[gen {vid}] fail: {str(e)[:200]}", file=sys.stderr)

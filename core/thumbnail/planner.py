@@ -656,12 +656,16 @@ VARIANT_SYSTEM = """너는 한국 유튜브 썸네일 기획자다.
   · 시스템이 이 이름들의 등록된 인물 사진을 이미지 AI 에 레퍼런스로 첨부한다
   · variant 별로 다르게: 예 v1=[주인공1명] · v2=[리액션2명] · v3=[대립2명]
   · cast_names 가 비었으면 빈 배열
-- caption: 자막 문장 하나 (2~6단어 · 8음절 이내 · 시스템 오버레이 텍스트)
-- caption_position: 자막 위치 9슬롯 중 하나
-  ("top-left" · "top-center" · "top-right" ·
-   "middle-left" · "middle-center" · "middle-right" ·
-   "bottom-left" · "bottom-center" · "bottom-right")
-- caption_size: "S" · "M" · "L" · "XL" · 자막 폰트 크기 힌트
+- captions: 자막 계층 배열 (1~4개 · 참고 스타일의 배지·인용·부제·메인 4단 위계)
+  · 각 element: {text, role, position, size}
+  · role 은 4종 중 골라 조합:
+    - "main": 메인 카피 · 큰 굵은 고딕 · 청록 배경 pill · 하단 좌/중 정렬 지배적
+    - "quote": 인물 대사 인용 · 흰 손글씨 · 따옴표 자동 · 인물 근처 (middle-*)
+    - "badge": 감탄사·라벨 · 핑크 배지 pill · 상단/코너 (top-left/right)
+    - "subtitle": 메인 위에 얇게 · 회색 얇은 · 메인 위 바로 위 (bottom-left 위)
+  · 필수: main 1개 · 나머지는 필요할 때 (강제 X · 3~4개면 참고 톤 근접)
+  · text 는 각각 다른 정보 (중복 X · 배지=감탄 · 인용=대사 · 부제=맥락 · 메인=사건)
+- (deprecated · 하위호환용) caption/caption_position/caption_size: 단일 자막 (captions 있으면 무시)
 
 자막(caption) 대원칙:
 - 핵심 (뭐 벌어지는지) + 어그로 (궁금증)
@@ -732,6 +736,11 @@ def generate_variant_prompts(
     lines.append("각 후보는 (background, layout, caption) 세 필드. JSON 배열로.")
     prompt_user = "\n".join(lines)
 
+    POSITIONS = [
+        "top-left", "top-center", "top-right",
+        "middle-left", "middle-center", "middle-right",
+        "bottom-left", "bottom-center", "bottom-right",
+    ]
     schema = {
         "type": "OBJECT",
         "properties": {
@@ -747,16 +756,23 @@ def generate_variant_prompts(
                             "items": {"type": "STRING"},
                             "description": "썸네일 주인공 인물 이름 (1~3명 · cast_names 에서만)",
                         },
-                        "caption": {"type": "STRING"},
-                        "caption_position": {"type": "STRING", "enum": [
-                            "top-left", "top-center", "top-right",
-                            "middle-left", "middle-center", "middle-right",
-                            "bottom-left", "bottom-center", "bottom-right",
-                        ]},
-                        "caption_size": {"type": "STRING", "enum": ["S", "M", "L", "XL"]},
+                        "captions": {
+                            "type": "ARRAY",
+                            "description": "자막 계층 (1~4개 · 참고 4단 위계)",
+                            "items": {
+                                "type": "OBJECT",
+                                "properties": {
+                                    "text": {"type": "STRING"},
+                                    "role": {"type": "STRING",
+                                             "enum": ["main", "quote", "badge", "subtitle"]},
+                                    "position": {"type": "STRING", "enum": POSITIONS},
+                                    "size": {"type": "STRING", "enum": ["S", "M", "L", "XL"]},
+                                },
+                                "required": ["text", "role", "position", "size"],
+                            },
+                        },
                     },
-                    "required": ["background", "layout", "featured_cast", "caption",
-                                  "caption_position", "caption_size"],
+                    "required": ["background", "layout", "featured_cast", "captions"],
                 },
             },
         },
@@ -804,7 +820,7 @@ def generate_variant_prompts(
                 response_mime_type="application/json",
                 response_schema=schema,
                 temperature=1.2,
-                max_output_tokens=4096,
+                max_output_tokens=8192,
             ),
         )
     except Exception as e:
@@ -833,7 +849,12 @@ def generate_variant_prompts(
         print(f"[variant_planner] variants not list · type={type(variants)}", file=_sys.stderr)
         return []
     # 정확히 n 개 로 맞추기 (부족하면 마지막 반복 · 넘치면 자름)
-    variants = [v for v in variants if isinstance(v, dict) and v.get("caption")]
+    # 유효 조건: dict + (captions 배열 비어있지 않음 OR caption 있음)
+    def _has_text(v: dict) -> bool:
+        if v.get("captions") and any((c or {}).get("text") for c in v["captions"]):
+            return True
+        return bool(v.get("caption"))
+    variants = [v for v in variants if isinstance(v, dict) and _has_text(v)]
     if not variants:
         return []
     while len(variants) < n:

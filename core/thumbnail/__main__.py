@@ -139,10 +139,22 @@ def _run_nano_banana(args) -> int:
                     photos.append(p); names_found.append(nm); break
     print(f"[nano] featured_cast={plan_v.get('featured_cast')} · resolved={names_found}")
 
+    captions = plan_v.get("captions") or []
+    if not captions and plan_v.get("caption"):
+        captions = [{
+            "text": plan_v["caption"], "role": "main",
+            "position": plan_v.get("caption_position", "bottom-left"),
+            "size": plan_v.get("caption_size", "L"),
+        }]
+    main_pos = "bottom-left"
+    for c in captions:
+        if c.get("role") == "main":
+            main_pos = c.get("position", main_pos); break
+
     img_bytes = NB.generate_thumbnail(
         background=plan_v.get("background", "원본 프레임 그대로"),
         layout=plan_v.get("layout", "인물 중앙 · 자막 하단"),
-        caption_position=plan_v.get("caption_position", "bottom-left"),
+        caption_position=main_pos,
         frame=frames[0],
         cast_photos=photos,
         cast_names=names_found,
@@ -150,12 +162,7 @@ def _run_nano_banana(args) -> int:
     if not img_bytes:
         print("[FAIL] nano banana returned no image", file=sys.stderr)
         return 2
-    img_bytes = OV.render_caption(
-        img_bytes=img_bytes,
-        caption=plan_v.get("caption", ""),
-        position=plan_v.get("caption_position", "bottom-left"),
-        size=plan_v.get("caption_size", "L"),
-    )
+    img_bytes = OV.render_captions(img_bytes=img_bytes, captions=captions)
 
     dest = out / f"{args.variant_id}_nano_16x9.png"
     dest.write_bytes(img_bytes)

@@ -1,9 +1,9 @@
-"""자막 오버레이 · nano banana 결과 이미지 위에 한글 폰트로 정확한 자막 얹기.
+"""자막 오버레이 · nano banana 결과 이미지 위에 한글 폰트로 자막 계층 얹기.
 
 사용자 원칙 (2026-07-27):
 "글자는 이미지 생성으로 처리하지 말고 위치만 잡아주고 · AI 는 글꼴로 렌더해서 붙이기."
 
-nano banana 는 텍스트 없는 이미지 생성 · 여기서 Pillow 로 자막 렌더.
+방송사 톤 학습: 4단 자막 계층 (배지·인용·부제·메인) · 각 role 별 폰트·색·배경 다르게.
 """
 from __future__ import annotations
 
@@ -14,9 +14,9 @@ from typing import Optional
 from PIL import Image, ImageDraw, ImageFont
 
 FONT_DIR = pathlib.Path(__file__).resolve().parents[2] / "assets" / "thumbnail-fonts"
-DEFAULT_FONT = "BlackHanSans-Regular.ttf"  # 임팩트 톤 기본
+DEFAULT_FONT = "BlackHanSans-Regular.ttf"
 
-# 9 슬롯 좌표 계산용 앵커 (x_frac, y_frac, h_anchor, v_anchor)
+# 9 슬롯 좌표 앵커 (x_frac, y_frac, h_anchor, v_anchor)
 POSITION_ANCHORS: dict[str, tuple[float, float, str, str]] = {
     "top-left":       (0.05, 0.05, "left",   "top"),
     "top-center":     (0.50, 0.05, "center", "top"),
@@ -29,8 +29,60 @@ POSITION_ANCHORS: dict[str, tuple[float, float, str, str]] = {
     "bottom-right":   (0.95, 0.95, "right",  "bottom"),
 }
 
-# 이미지 높이 대비 폰트 크기 비율
-SIZE_RATIO = {"S": 0.08, "M": 0.11, "L": 0.14, "XL": 0.18}
+# 이미지 높이 대비 폰트 크기 비율 (main 기준 · 다른 role 은 size_boost 로 축소)
+SIZE_RATIO = {"S": 0.10, "M": 0.14, "L": 0.18, "XL": 0.22}
+
+# role 별 렌더 스타일 (참고 이미지 학습 기반)
+ROLE_STYLES: dict[str, dict] = {
+    "main": {
+        "font": "BlackHanSans-Regular.ttf",
+        "text_color": (255, 255, 255),
+        "outline_color": (0, 0, 0),
+        "pill_bg": (54, 189, 190),   # 밝은 청록 (참고 스타일)
+        "pill_padding": (0.35, 0.15),  # (x, y) 폰트 대비 배수
+        "size_boost": 1.0,
+    },
+    "quote": {
+        "font": "GowunBatang-Bold.ttf",
+        "text_color": (255, 255, 255),
+        "outline_color": (0, 0, 0),
+        "pill_bg": None,
+        "size_boost": 0.6,
+        "quote_wrap": True,
+    },
+    "badge": {
+        "font": "Jua-Regular.ttf",
+        "text_color": (255, 255, 255),
+        "outline_color": (200, 60, 100),
+        "pill_bg": (232, 92, 145),
+        "pill_padding": (0.3, 0.12),
+        "size_boost": 0.55,
+    },
+    "subtitle": {
+        "font": "Pretendard-Bold.otf",
+        "text_color": (200, 200, 200),
+        "outline_color": (0, 0, 0),
+        "pill_bg": None,
+        "size_boost": 0.55,
+    },
+}
+
+
+def render_captions(
+    img_bytes: bytes,
+    captions: list[dict],
+) -> bytes:
+    """이미지 위에 자막 계층 여러 개 렌더 → PNG bytes.
+
+    captions: list of {text, role, position, size}
+    role 별 폰트·색·배경 pill 자동 적용.
+    """
+    img = Image.open(io.BytesIO(img_bytes)).convert("RGBA")
+    for cap in captions or []:
+        _render_one(img, cap)
+    out = io.BytesIO()
+    img.convert("RGB").save(out, format="PNG", optimize=True)
+    return out.getvalue()
 
 
 def render_caption(
@@ -38,61 +90,86 @@ def render_caption(
     caption: str,
     position: str = "bottom-left",
     size: str = "L",
-    font_name: str = DEFAULT_FONT,
-    text_color: tuple[int, int, int] = (255, 255, 255),
-    outline_color: tuple[int, int, int] = (0, 0, 0),
+    role: str = "main",
 ) -> bytes:
-    """이미지 위에 자막 렌더 → PNG bytes."""
-    img = Image.open(io.BytesIO(img_bytes)).convert("RGBA")
-    W, H = img.size
+    """단일 자막 (하위호환)."""
+    return render_captions(img_bytes, [{
+        "text": caption, "role": role, "position": position, "size": size,
+    }])
 
-    font_path = FONT_DIR / font_name
+
+def _render_one(img: Image.Image, cap: dict) -> None:
+    """캡션 하나 렌더 (in-place · RGBA 이미지 위에)."""
+    text = (cap.get("text") or "").strip()
+    if not text:
+        return
+    role = cap.get("role", "main")
+    position = cap.get("position", "bottom-left")
+    size = cap.get("size", "L")
+    style = ROLE_STYLES.get(role, ROLE_STYLES["main"])
+
+    W, H = img.size
+    draw = ImageDraw.Draw(img)
+
+    # role 별 스타일 결정
+    font_path = FONT_DIR / style["font"]
     if not font_path.exists():
         font_path = FONT_DIR / DEFAULT_FONT
-    font_size = int(H * SIZE_RATIO.get(size, SIZE_RATIO["L"]))
+    boost = style.get("size_boost", 1.0)
+    font_size = max(16, int(H * SIZE_RATIO.get(size, SIZE_RATIO["L"]) * boost))
     font = ImageFont.truetype(str(font_path), font_size)
 
-    # 자막이 너무 길면 자동 줄바꿈 (안전영역 90% 폭 기준)
-    lines = _wrap_text(caption, font, max_width=int(W * 0.9))
+    display = text
+    if style.get("quote_wrap"):
+        if not (display.startswith('"') or display.startswith("“")):
+            display = f'"{display}"'
 
+    lines = _wrap_text(display, font, max_width=int(W * 0.9))
     line_h = font.getbbox("가")[3] - font.getbbox("가")[1]
-    line_gap = int(line_h * 0.35)
+    line_gap = int(line_h * 0.3)
     total_h = line_h * len(lines) + line_gap * (len(lines) - 1)
 
-    ax, ay, h_anchor, v_anchor = POSITION_ANCHORS.get(
-        position, POSITION_ANCHORS["bottom-left"])
+    ax, ay, h_anchor, v_anchor = POSITION_ANCHORS.get(position, POSITION_ANCHORS["bottom-left"])
     px = int(W * ax); py = int(H * ay)
 
     if v_anchor == "top":
         y_start = py
     elif v_anchor == "middle":
         y_start = py - total_h // 2
-    else:  # bottom
+    else:
         y_start = py - total_h
 
-    draw = ImageDraw.Draw(img)
     outline_px = max(2, font_size // 20)
+    outline_color = style["outline_color"]
+    text_color = style["text_color"]
+    pill_bg = style.get("pill_bg")
+    pill_pad = style.get("pill_padding", (0.25, 0.1))
 
     for i, line in enumerate(lines):
-        line_w = draw.textlength(line, font=font)
+        line_w = int(draw.textlength(line, font=font))
         if h_anchor == "left":
             x = px
         elif h_anchor == "center":
-            x = px - int(line_w // 2)
-        else:  # right
-            x = px - int(line_w)
+            x = px - line_w // 2
+        else:
+            x = px - line_w
         y = y_start + i * (line_h + line_gap)
-        # 외곽선
-        for dx in range(-outline_px, outline_px + 1):
-            for dy in range(-outline_px, outline_px + 1):
-                if dx * dx + dy * dy <= outline_px * outline_px:
-                    draw.text((x + dx, y + dy), line, font=font, fill=outline_color)
-        # 본 텍스트
-        draw.text((x, y), line, font=font, fill=text_color)
 
-    out = io.BytesIO()
-    img.convert("RGB").save(out, format="PNG", optimize=True)
-    return out.getvalue()
+        # pill 배경 (main/badge)
+        if pill_bg:
+            pad_x = int(font_size * pill_pad[0])
+            pad_y = int(font_size * pill_pad[1])
+            pill_box = (x - pad_x, y - pad_y, x + line_w + pad_x, y + line_h + pad_y)
+            radius = int(font_size * 0.25)
+            draw.rounded_rectangle(pill_box, radius=radius, fill=pill_bg)
+
+        # 외곽선 (pill 없을 때만 강조 · pill 있으면 얇게)
+        px_out = 1 if pill_bg else outline_px
+        for dx in range(-px_out, px_out + 1):
+            for dy in range(-px_out, px_out + 1):
+                if dx * dx + dy * dy <= px_out * px_out:
+                    draw.text((x + dx, y + dy), line, font=font, fill=outline_color)
+        draw.text((x, y), line, font=font, fill=text_color)
 
 
 def _wrap_text(text: str, font: ImageFont.FreeTypeFont, max_width: int) -> list[str]:
