@@ -106,12 +106,12 @@ def _prepare_checkpoints(
     # 무효화. 2026-07-23g: narrative-first 트리 구조 (시나리오×변형×best) + 길이 제한 완화
     # (60→120초 · 완결성 우선 · 하드실링 180초).
     RECOMMEND_VER = "2026-07-24c"  # beat 조합 기반으로 재작성 (자유 시각 뽑기 제거)
-    REFINE_VER = "2026-07-24a"  # STT 하이브리드로 timestamp 정확도 반영 · refined 재실행
-    FACES_VER = "2026-07-23b"   # faces stage: full_frame_segs 추가 (STT 컨텍스트 활용)
+    REFINE_VER = "2026-07-27-anonymous-speakers"  # 자막만 정제 · 화자 실명 추론 금지
+    FACES_VER = "2026-07-27-object-only"   # 얼굴 클러스터만 생성 · 이름 자동 매핑 금지
     SHOTS_VER = "2026-07-24a"   # shot boundary detection: ffmpeg scene, fps=1, thr=0.55
     SCENE_TYPE_VER = "2026-07-24a"  # shot 프레임 → Vision batch: interview/on_scene/other
     BEATS_VER = "2026-07-24b"   # beats 프롬프트 + shot_types 통합 (예능 문법)
-    STT_VER = "2026-07-25-vad-diarize"  # Silero VAD + PyAnnote 화자분리(HF_TOKEN 있을 때) 통합
+    STT_VER = "2026-07-27-word-normalize"  # + word.end 침묵 삼킴 clip + duration 이상치 cap (drift fix)
     STT_PROVIDER_ENV = (os.environ.get("STT_PROVIDER") or "gemini").lower()
     RECOMMEND_MODE = os.environ.get("RECOMMEND_MODE") or "narrative_first"
     params = {
@@ -331,34 +331,11 @@ def analyze(
             traceback.print_exc()
             faces = None
 
-    # 2.6) Vision auto-map (2026-07-23): 얼굴 클러스터 대표 프레임 → Gemini Vision → 이름 매칭.
-    # cast_registry(사전등록) 있으면 그 안에서 매칭 우선. 없으면 화면 자막 캡션 감지, celebrity는
-    # hallucination 위험이라 cast 없이는 스킵. 매칭 결과는 faces.json.mapping에 병합해 refined에 확산.
+    # 2.6) 얼굴 클러스터와 익명 화자의 시각적 연결만 저장한다.
+    # Vision·등록 cast·대사 문맥으로 실명을 자동 추론하지 않는다. 이름 지정은 프론트 운영자만 한다.
     if isinstance(faces, dict) and faces.get("clusters"):
-        try:
-            from .faces import vision_auto_map_clusters, apply_mapping
-            step("Vision auto-map (얼굴 → 이름)…")
-            _progress("faces", 55, "Vision 자동 매핑 중")
-            existing_mapping = faces.get("mapping") or {}
-            vision_map = vision_auto_map_clusters(faces, out_dir, cast_registry=cast_registry, refined=refined)
-            if vision_map:
-                # 사용자가 이미 수동 매핑한 클러스터는 존중, 그 외에 Vision 결과 병합
-                merged = dict(existing_mapping)
-                for k, v in vision_map.items():
-                    if not existing_mapping.get(k):
-                        merged[k] = v
-                faces["mapping"] = merged
-                _save_json(out_dir / "faces.json", faces)
-                refined = apply_mapping(refined, merged)
-                _save_json(out_dir / "refined.json", refined)
-                step(f"  Vision auto-map {len(vision_map)}건 병합 (총 mapping {len(merged)}) · refined 실명 확산")
-            else:
-                step("  Vision auto-map 결과 없음 (cast_registry 없거나 매칭 불가)")
-        except Exception as e:
-            step(f"  (Vision auto-map 스킵: {str(e)[:120]})")
-
         # 화자↔얼굴 크로스매칭 (PyAnnote diarization 결과 있을 때만).
-        # STT에 diarization_turns 있으면 시각 겹침 기반 매핑 · 실명 라벨 정확도 향상.
+        # STT에 diarization_turns 있으면 시각 겹침 기반으로 익명 화자↔얼굴 클러스터만 연결한다.
         try:
             stt_data = _load_json(out_dir / "stt.json") or {}
             turns = stt_data.get("diarization_turns") or []
@@ -371,58 +348,7 @@ def analyze(
                     step(f"  화자↔얼굴 매핑 {len(sf_map['map'])}건: " +
                          ", ".join(f"{s}→{c}" for s, c in list(sf_map['map'].items())[:5]))
 
-                    # SPEAKER_00 → F6 → 실명(지연) 체인으로 refined 실명 확산.
-                    # STT의 SpeechBrain speaker와 faces cluster 이름을 결합 · 최종 실명 rewrite.
-                    face_names = faces.get("mapping") or {}
-                    speaker_realname = {}
-                    for sp, cluster in sf_map["map"].items():
-                        nm = (face_names.get(cluster) or "").strip()
-                        if nm and nm not in ("NARR", "?", "unknown", "-"):
-                            speaker_realname[sp] = nm
-                    if speaker_realname:
-                        # STT diarize speaker + 실명 매핑 있는 세그만 정리 (시각 range 리스트)
-                        stt_segs = stt_data.get("segments") or []
-                        stt_ranges = []  # (start, end, realname)
-                        for s in stt_segs:
-                            sp = s.get("speaker", "")
-                            if sp in speaker_realname:
-                                try:
-                                    st = float(s.get("start", 0)); en = float(s.get("end", st + 1))
-                                except (TypeError, ValueError):
-                                    continue
-                                stt_ranges.append((st, en, speaker_realname[sp]))
-                        stt_ranges.sort(key=lambda x: x[0])
 
-                        def best_speaker(rs: float, re: float) -> str | None:
-                            """refined 세그(rs~re)와 시간 overlap 가장 큰 STT range의 speaker."""
-                            best_ov = 0.0; best_name = None
-                            for st_s, st_e, nm in stt_ranges:
-                                if st_e < rs - 0.5 or st_s > re + 0.5:
-                                    continue
-                                ov = max(0.0, min(re, st_e) - max(rs, st_s))
-                                if ov > best_ov:
-                                    best_ov = ov; best_name = nm
-                            # overlap 없으면 nearest (mid time 기준)
-                            if best_name is None:
-                                mid = (rs + re) / 2
-                                nearest = min(stt_ranges, key=lambda x: min(abs(x[0]-mid), abs(x[1]-mid)))
-                                if abs(nearest[0] - mid) < 3.0 or abs(nearest[1] - mid) < 3.0:
-                                    best_name = nearest[2]
-                            return best_name
-
-                        rewritten = 0
-                        for seg in refined:
-                            try:
-                                rs = float(seg.get("start", 0)); re = float(seg.get("end", rs + 1))
-                            except (TypeError, ValueError):
-                                continue
-                            new_name = best_speaker(rs, re)
-                            if new_name and seg.get("speaker") != new_name:
-                                seg["speaker"] = new_name
-                                rewritten += 1
-                        if rewritten:
-                            _save_json(out_dir / "refined.json", refined)
-                            step(f"  화자실명 확산 {rewritten}개 세그 (overlap 기반) · {speaker_realname}")
         except Exception as e:
             step(f"  (화자-얼굴 매핑 스킵: {str(e)[:80]})")
 

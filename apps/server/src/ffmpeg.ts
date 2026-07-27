@@ -10,6 +10,8 @@ export type ProbeResult = {
   height: number;
   codec: string;
   hasAudio: boolean;
+  /** Frame rate parsed from r_frame_rate ("30000/1001" → 29.97). 0 when unknown. */
+  fps: number;
 };
 
 /** #rrggbb 또는 rrggbb 문자열을 3~6자 안 되면 fallback으로 대체. ffmpeg color 필터에 넘길 값 정규화용. */
@@ -56,12 +58,20 @@ export function probe(filePath: string): Promise<ProbeResult> {
           const audioStream = (data.streams ?? []).find(
             (s: any) => s.codec_type === "audio"
           );
+          // r_frame_rate is "num/den" (e.g. "30000/1001" for NTSC 29.97). Zero-guard the
+          // divisor — some containers report "0/0" for still images or bad streams.
+          const rate = String(videoStream?.r_frame_rate ?? "");
+          const [rnStr, rdStr] = rate.split("/");
+          const rn = parseFloat(rnStr || "0");
+          const rd = parseFloat(rdStr || "1");
+          const fps = rd > 0 && rn > 0 ? rn / rd : 0;
           resolve({
             durationSec: parseFloat(format.duration ?? "0") || 0,
             width: videoStream?.width ?? 0,
             height: videoStream?.height ?? 0,
             codec: videoStream?.codec_name ?? "",
             hasAudio: !!audioStream,
+            fps,
           });
         } catch (e) {
           reject(new Error(`ffprobe parse error: ${e}`));

@@ -106,6 +106,7 @@ import {
   uploadFile,
   fileSize,
   fileExists,
+  readFile,
   createReadStream,
   parseObjectPath,
   useGcs,
@@ -427,7 +428,15 @@ app.patch("/api/programs/:id", async (c) => {
       if (!trimmed) continue;
       const castId = newId("cast");
       try {
-        await upsertCastMember({ castId, programId: id, name: trimmed });
+        await upsertCastMember({ 
+          castId, 
+          programId: id, 
+          name: trimmed,
+          aliases: [],
+          role: "member",
+          season: "",
+          note: ""
+        });
       } catch (e: any) {
         // (programId, name, season) unique · 중복이면 조용히 skip
         if (e?.code !== "23505") throw e;
@@ -1037,9 +1046,8 @@ app.get("/api/media/:id/ppl", async (c) => {
   });
 });
 
-// 인물 매핑 저장 — {mapping: {"M1":"정숙","F2":"영자",...}}을 faces.json에 병합 저장하고
-// refined.json의 speaker 필드도 즉시 rename. 다음 조회부터 UI가 실명으로 표시.
-// (GCS 모드는 별도 처리 필요 — 지금은 로컬만.)
+// 익명 화자/얼굴 클러스터 이름 지정 저장. 자동 추론은 하지 않으며, 운영자가 프론트에서 등록 cast를
+// 선택하거나 직접 입력한 이름만 faces.json.mapping에 보존한다.
 app.patch("/api/media/:id/faces/mapping", async (c) => {
   const id = c.req.param("id");
   if (!/^[\w-]+$/.test(id)) return c.json({ error: "bad media id" }, 400);
@@ -1049,16 +1057,19 @@ app.patch("/api/media/:id/faces/mapping", async (c) => {
     return c.json({ error: "mapping (object) required" }, 400);
   }
   const useGCS = !!process.env.GCS_BUCKET;
-  if (useGCS) return c.json({ error: "GCS mode PATCH 미구현 — 로컬에서 사용" }, 501);
+  const facesObjectPath = `analysis/${id}/faces.json`;
   const storageBase = process.env.STEPD_STORAGE_DIR
     ? path.resolve(process.env.STEPD_STORAGE_DIR)
     : path.resolve(process.cwd(), "storage");
-  const facesPath = path.join(storageBase, "analysis", id, "faces.json");
+  const facesPath = path.join(storageBase, facesObjectPath);
   const refinedPath = path.join(storageBase, "analysis", id, "refined.json");
-  if (!fs.existsSync(facesPath)) return c.json({ error: "faces.json not found" }, 404);
+  if (useGCS ? !(await fileExists(facesObjectPath)) : !fs.existsSync(facesPath)) {
+    return c.json({ error: "faces.json not found" }, 404);
+  }
 
   // faces.json mapping 병합 (빈 문자열 값은 매핑 제거)
-  const faces = JSON.parse(fs.readFileSync(facesPath, "utf-8")) as {
+  const facesRaw = useGCS ? await readFile(facesObjectPath) : fs.readFileSync(facesPath);
+  const faces = JSON.parse(facesRaw.toString("utf-8")) as {
     mapping?: Record<string, string>;
     clusters?: Record<string, unknown>;
     labeled_segments?: number;
@@ -1072,6 +1083,20 @@ app.patch("/api/media/:id/faces/mapping", async (c) => {
     else delete next[k];
   }
   faces.mapping = next;
+  if (useGCS) {
+    await writeFile(facesObjectPath, Buffer.from(JSON.stringify(faces, null, 2), "utf-8"));
+    // UI는 faces.mapping을 다음 조회에서 읽어 익명 화자 표시명으로 사용한다. GCS 분석 산출물은
+    // immutable하게 두고, 수동 이름을 transcript·추천 텍스트에 자동 확산하지 않는다.
+    return c.json({
+      ok: true,
+      mapping: next,
+      refined_rewritten: 0,
+      narrative_rewritten: 0,
+      shorts_rewritten: 0,
+      db_content_analysis_updated: 0,
+      db_recommendations_renamed: 0,
+    });
+  }
   fs.writeFileSync(facesPath, JSON.stringify(faces, null, 2), "utf-8");
 
   // 2026-07-23: 저장 즉시 모든 downstream rename (사용자 방향 · 재분석 없이 반영).
@@ -1474,7 +1499,7 @@ app.post("/api/media/finalize", async (c) => {
 app.post("/api/media/upload", async (c) => {
   const body = await c.req.parseBody();
   const file = body["file"];
-  if (!(file instanceof File)) return c.json({ error: "file field required" }, 400);
+  if (typeof file === "string" || !(file as any).arrayBuffer || typeof file === "boolean") return c.json({ error: "file field required" }, 400);
 
   const programId = typeof body["programId"] === "string" && body["programId"] ? String(body["programId"]) : "p1";
   const program = await getEntity<{ id: string; title: string; targetAge: number }>("program", programId);
@@ -1517,7 +1542,7 @@ app.post("/api/media/upload", async (c) => {
     mediaId, programId, program, storedPath,
     filename: file.name, title, mime: file.type || "video/mp4", size: file.size,
     meta, thumbPath: thumbStored,
-    fast: body["fast"] === "true" || body["fast"] === true,
+    fast: body["fast"] === "true",
   });
   return c.json(result);
 });
@@ -1698,6 +1723,60 @@ function assTime(sec: number): string {
  */
 type CaptionWord = { word: string; start: number; end: number };
 type Caption = { start: number; end: number; text: string; words?: CaptionWord[] };
+
+/**
+ * 컷 boundary를 STT word 경계에 스냅한다 — 렌더가 대사 중간에서 시작/끊기는 걸 원천 차단.
+ *
+ * mode="start": target을 감싸는(또는 tolerance 이내) word가 있으면 그 word.start로 당김.
+ *               target이 침묵 구간(어느 word 안에도 없음)이면 손대지 않음 — 침묵 컷은 안전.
+ * mode="end":   대칭. 감싸는 word가 있으면 그 word.end로 밀어 발화 완결.
+ *
+ * words[] 없는 세그(구 Gemini 경로 등)는 seg.start/end를 word 하나로 취급해 폴백.
+ * 이동 폭 tolerance(기본 0.4s)를 넘으면 스냅하지 않는다 — 원래 의도를 존중.
+ */
+function snapToWordBoundary(
+  target: number,
+  transcript: unknown,
+  mode: "start" | "end",
+  tolerance = 0.4,
+): number {
+  if (!Array.isArray(transcript)) return target;
+  let best: number | null = null;
+  for (const s of transcript) {
+    const segStart = Number((s as any)?.start);
+    const segEnd = Number((s as any)?.end);
+    if (!isFinite(segStart) || !isFinite(segEnd)) continue;
+    // Cheap early skip: seg 전체가 tolerance 밖이면 words 훑을 필요 없음.
+    if (segEnd < target - tolerance || segStart > target + tolerance) continue;
+    const rawWords = (s as any)?.words;
+    const wordList: Array<{ start: number; end: number }> =
+      Array.isArray(rawWords) && rawWords.length
+        ? rawWords
+            .map((w: any) => ({ start: Number(w?.start), end: Number(w?.end) }))
+            .filter((w: { start: number; end: number }) => isFinite(w.start) && isFinite(w.end))
+        : [{ start: segStart, end: segEnd }]; // 폴백: 세그 전체를 하나의 word로
+    for (const w of wordList) {
+      // target을 감싸는 word가 있으면 그 word 경계에 스냅
+      if (w.start <= target && target <= w.end) {
+        const snapped = mode === "start" ? w.start : w.end;
+        return snapped;
+      }
+      // 감싸진 않지만 이 boundary 자체가 tolerance 안이면 후보로
+      const candidate = mode === "start" ? w.start : w.end;
+      const shift = Math.abs(candidate - target);
+      if (shift <= tolerance && (best === null || shift < Math.abs(best - target))) {
+        best = candidate;
+      }
+    }
+  }
+  return best ?? target;
+}
+
+/** 프레임 그리드로 quantize — round(t*fps)/fps. fps<=0이면 원값 (probe 실패 안전장치). */
+function snapToFrame(t: number, fps: number): number {
+  if (!fps || fps <= 0) return t;
+  return Math.round(t * fps) / fps;
+}
 
 function windowCaptions(transcript: unknown, winStart: number, winEnd: number): Caption[] {
   if (!Array.isArray(transcript)) return [];
@@ -2153,6 +2232,28 @@ async function renderClipMedia(opts: {
   }
 }
 
+// ── select generated thumbnail ─────────────────────────────────────────────────
+// Exactly one variant is marked chosen so later adoption has a stable, persisted decision.
+app.patch("/api/recommendations/:id/thumbnail", async (c) => {
+  const recId = c.req.param("id");
+  const rec = await getEntity<any>("recommendation", recId);
+  if (!rec) return c.json({ error: "recommendation not found" }, 404);
+  const body = await c.req.json<{ variantId?: unknown }>().catch(() => null);
+  const variantId = typeof body?.variantId === "string" ? body.variantId.trim() : "";
+  if (!variantId) return c.json({ error: "variantId is required" }, 400);
+  const thumbnails = Array.isArray(rec.thumbnails) ? rec.thumbnails : [];
+  if (!thumbnails.some((thumbnail: any) => thumbnail?.id === variantId)) {
+    return c.json({ error: "thumbnail variant not found" }, 404);
+  }
+  const updated = {
+    ...rec,
+    selectedThumbnailId: variantId,
+    thumbnails: thumbnails.map((thumbnail: any) => ({ ...thumbnail, chosen: thumbnail.id === variantId })),
+  };
+  await putEntity("recommendation", recId, updated);
+  return c.json({ recommendation: updated });
+});
+
 // ── adopt recommendation → clip (METADATA ONLY — no render, plan §2.4) ─────────
 //
 // Adopt confirms the segment + decision; it does NOT encode. The expensive 9:16 +
@@ -2168,7 +2269,16 @@ app.post("/api/recommendations/:id/adopt", async (c) => {
   const episode = await getEntity<any>("episode", rec.episodeId);
   const allMedia = await listMedia();
   const master = allMedia.find((m) => m.episodeId === rec.episodeId && m.role === "master");
-  const chosen = rec.thumbnailCandidates?.find((t: any) => t.id === rec.selectedThumbnailId) ?? rec.thumbnailCandidates?.[0];
+  const chosenVariant = Array.isArray(rec.thumbnails)
+    ? rec.thumbnails.find((thumbnail: any) => thumbnail.id === rec.selectedThumbnailId)
+      ?? rec.thumbnails.find((thumbnail: any) => thumbnail.chosen)
+      ?? rec.thumbnails[0]
+    : undefined;
+  const chosenCandidate = rec.thumbnailCandidates?.find((thumbnail: any) => thumbnail.id === rec.selectedThumbnailId)
+    ?? rec.thumbnailCandidates?.[0];
+  const chosenThumbnailUrl = chosenVariant?.urls?.["16:9"]
+    ?? chosenVariant?.urls?.["9:16"]
+    ?? rec.thumbnailUrl;
 
   const clipId = newId("c");
   const clip: any = {
@@ -2180,8 +2290,8 @@ app.post("/api/recommendations/:id/adopt", async (c) => {
     targetAge: episode?.targetAge ?? 0,
     aspectRatio: rec.kind === "short" ? "9:16-crop-main" : "16:9",
     durationSec: Math.max(1, rec.endTime - rec.startTime),
-    thumbnailLabel: chosen?.label,
-    thumbnailUrl: rec.thumbnailUrl,
+    thumbnailLabel: chosenVariant?.caption_text ?? chosenCandidate?.label,
+    thumbnailUrl: chosenThumbnailUrl,
     synopsis: rec.editNote ?? undefined,
     // Decision-only state: not yet rendered. Segment + source drive render-free preview
     // and the later single render.
@@ -2730,12 +2840,31 @@ app.post("/api/clips/:id/export", async (c) => {
   // 9:16 blur frame.
   const aspect = normalizeAspect(es?.aspect) ?? preset?.aspect ?? normalizeAspect(clip.aspectRatio) ?? "9:16";
 
+  // 컷 boundary를 STT word 경계 → 프레임 그리드로 스냅. 대사 중간 절단 방지 + ffmpeg -ss
+  // 요청 시각이 실제 디코드 프레임과 일치해 렌더 결과가 요청 시각과 sub-frame 일치.
+  // fps 못 얻으면(probe 실패·오디오만 있는 파일) frame snap은 no-op이라 안전.
+  const wordSnapStart = snapToWordBoundary(renderStart, transcript, "start");
+  const wordSnapEnd = snapToWordBoundary(renderEnd, transcript, "end");
+  let masterFps = 0;
+  try {
+    const srcForProbe = useGcs() ? await signedReadUrl(parseObjectPath(master.path)) : master.path;
+    masterFps = (await probe(srcForProbe)).fps;
+  } catch {
+    // probe 실패해도 word-snap만으로도 대사 안전은 확보됨 — frame snap만 스킵.
+  }
+  const snappedStart = snapToFrame(wordSnapStart, masterFps);
+  const snappedEnd = snapToFrame(wordSnapEnd, masterFps);
+  if (Math.abs(snappedStart - renderStart) > 0.001 || Math.abs(snappedEnd - renderEnd) > 0.001) {
+    console.log(`[render] snap ${renderStart.toFixed(3)}→${snappedStart.toFixed(3)}s · ` +
+      `${renderEnd.toFixed(3)}→${snappedEnd.toFixed(3)}s @ ${masterFps.toFixed(2)}fps`);
+  }
+
   // Spoken subtitles that fall inside the render window, rebased to 0.
-  const captions = windowCaptions(transcript, renderStart, renderEnd);
+  const captions = windowCaptions(transcript, snappedStart, snappedEnd);
 
   const rendered = await renderClipMedia({
     master, episodeId: clip.episodeId,
-    startTime: renderStart, endTime: renderEnd,
+    startTime: snappedStart, endTime: snappedEnd,
     title: clip.title, editorState: es, aspect, captions,
   });
   if (!rendered) return c.json({ error: "render failed" }, 500);

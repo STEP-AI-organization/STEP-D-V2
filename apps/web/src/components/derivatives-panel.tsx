@@ -581,10 +581,10 @@ function AnalyzeTab({ episodeId }: { episodeId: string }) {
   );
 }
 
-const FALLBACK_SPEAKER_RE = /^(M\d+|F\d+|MC\d*|NARR|\?)$/;
+const FALLBACK_SPEAKER_RE = /^(발화자\s*\d+|M\d+|F\d+|MC\d*|NARR|\?)$/;
 
 /** 자막 리스트 — 행 클릭 시 상단 원본 플레이어를 그 순간으로 seek + 재생.
- *  상단 "화자 이름 지정" 바에서 M1/F1/MC/NARR/? 같은 폴백 라벨에 이름을 붙이면
+ *  상단 "화자 이름 지정" 바에서 발화자 1/2 같은 익명 라벨에 이름을 붙이면
  *  faces 매핑 API로 저장 → refined.speaker 전체 rename. 저장 전 pending은 뱃지에 즉시 반영. */
 function ScriptView({
   transcript,
@@ -626,7 +626,7 @@ function ScriptView({
             <span className="flex-1 font-semibold">
               화자 이름 지정 · {fallbackSpeakers.length}명
               <span className="ml-1 font-normal text-brand/70">
-                (M1·F1 같은 임시 라벨에 실명 붙이기)
+                (발화자 1·2 같은 익명 라벨에 실명 지정)
               </span>
             </span>
             <Button size="xs" onClick={onSave} disabled={pendingCount === 0 || savingMap}>
@@ -688,6 +688,12 @@ function ScriptView({
               >
                 <span className="shrink-0 pt-0.5 tabular-nums text-[11px] text-muted-foreground">
                   {formatTimecode(s.start)}
+                  {s.end != null && (
+                    <span className="text-muted-foreground/60">
+                      {" → "}
+                      {formatTimecode(s.end)}
+                    </span>
+                  )}
                 </span>
                 {displaySp && (
                   <span
