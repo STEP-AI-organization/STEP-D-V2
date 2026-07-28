@@ -30,7 +30,8 @@ POSITION_ANCHORS: dict[str, tuple[float, float, str, str]] = {
 }
 
 # 이미지 높이 대비 폰트 크기 비율 (main 기준 · 다른 role 은 size_boost 로 축소)
-SIZE_RATIO = {"S": 0.10, "M": 0.14, "L": 0.18, "XL": 0.22}
+# 방송사 절제 톤 · main 은 15~18% H 정도가 적정 (렉카 22%+ 너무 큼)
+SIZE_RATIO = {"S": 0.08, "M": 0.11, "L": 0.14, "XL": 0.17}
 
 # role 별 렌더 스타일 (참고 이미지 학습 기반)
 ROLE_STYLES: dict[str, dict] = {
@@ -38,9 +39,10 @@ ROLE_STYLES: dict[str, dict] = {
         "font": "BlackHanSans-Regular.ttf",
         "text_color": (255, 255, 255),
         "outline_color": (0, 0, 0),
-        "pill_bg": (54, 189, 190),   # 밝은 청록 (참고 스타일)
-        "pill_padding": (0.35, 0.15),  # (x, y) 폰트 대비 배수
-        "size_boost": 1.0,
+        # 방송사 톤: pill 없이 흰 글씨 + 굵은 검정 외곽선 (참고 이미지 실제 톤)
+        "pill_bg": None,
+        "pill_padding": (0.3, 0.12),
+        "size_boost": 0.9,
     },
     "quote": {
         "font": "GowunBatang-Bold.ttf",
