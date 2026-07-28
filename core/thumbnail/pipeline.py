@@ -77,11 +77,21 @@ def _plan_variants(shorts_meta: dict, references: list[dict],
     lines.append("")
     lines.append("[reference 후보]")
     for r in references:
-        lines.append(f"  - {r['id']}: {r.get('description','')}")
+        meta_parts = []
+        if r.get("person_count"): meta_parts.append(f"{r['person_count']}인")
+        if r.get("composition"):  meta_parts.append(r["composition"])
+        if r.get("mood"):         meta_parts.append(r["mood"])
+        meta = " · ".join(meta_parts)
+        lines.append(f"  - {r['id']}: {meta} · {r.get('description','')[:80]}")
     lines.append("")
     lines.append(f"[등록 인물] {', '.join(available_cast) if available_cast else '(없음)'}")
     lines.append("")
     lines.append(f"variant **{n}개** 짜라.")
+    lines.append("")
+    lines.append("**reference 선택 원칙**:")
+    lines.append("- reference person_count 와 featured_cast 배열 길이 매칭 (2인 reference → cast 2명)")
+    lines.append("- reference mood 와 shorts 톤 정합 (충격 shorts → 충격 reference)")
+    lines.append("- variant 마다 다른 reference (다양성)")
 
     schema = {
         "type": "OBJECT",
@@ -126,20 +136,39 @@ def _plan_variants(shorts_meta: dict, references: list[dict],
 
 
 def _load_references() -> list[dict]:
+    """assets/thumbnail-reference/manifest.json 우선 · 없으면 파일 스캔."""
     if not REF_DIR.exists():
         return []
-    refs: list[dict] = []
-    style = {}
-    sp = REF_DIR / "style_profile.json"
-    if sp.exists():
+    manifest_p = REF_DIR / "manifest.json"
+    if manifest_p.exists():
         try:
-            style = json.loads(sp.read_text(encoding="utf-8"))
+            data = json.loads(manifest_p.read_text(encoding="utf-8"))
+            refs = []
+            for m in data:
+                if not m.get("_analyzed", True):
+                    continue
+                p = REF_DIR.parent / m["path"]
+                if not p.exists():
+                    continue
+                refs.append({
+                    "id": m["id"], "path": p,
+                    "person_count": m.get("person_count", 0),
+                    "mood": m.get("mood", ""),
+                    "composition": m.get("composition", ""),
+                    "style_tags": m.get("style_tags", []),
+                    "caption_style": m.get("caption_style", ""),
+                    "description": m.get("description", ""),
+                })
+            if refs:
+                return refs
         except Exception:
             pass
+    # 폴백: 파일 스캔 · 메타 없음
+    refs: list[dict] = []
     for p in sorted(REF_DIR.glob("*")):
         if p.suffix.lower() not in {".png", ".jpg", ".jpeg", ".webp"}:
             continue
-        refs.append({"id": p.stem, "path": p, "description": style.get(p.stem, "")})
+        refs.append({"id": p.stem, "path": p, "description": ""})
     return refs
 
 
