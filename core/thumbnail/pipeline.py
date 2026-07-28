@@ -51,33 +51,33 @@ def _expand_template(plan_v: dict) -> dict:
     person_slots = plan_v.get("person_slots") or {}
     caption_slots = plan_v.get("caption_slots") or {}
 
-    # person_layouts 생성
+    # person_layouts 생성 · xywh 있으면 그대로 · 없으면 position/size
     person_layouts = []
     featured_cast = []
     for zone in tpl["person_zones"]:
         nm = person_slots.get(zone["id"])
         if not nm:
             continue
-        person_layouts.append({
-            "name": nm,
-            "position": zone["position"],
-            "size": zone["size"],
-            "z_index": zone.get("z_index", 0),
-        })
+        pl: dict = {"name": nm, "z_index": zone.get("z_index", 0)}
+        if zone.get("xywh"):
+            pl["xywh"] = zone["xywh"]
+        if zone.get("position"): pl["position"] = zone["position"]
+        if zone.get("size"):     pl["size"] = zone["size"]
+        person_layouts.append(pl)
         featured_cast.append(nm)
 
-    # captions 생성
+    # captions 생성 · xywh 있으면 그대로
     captions = []
     for zone in tpl["caption_zones"]:
         text = caption_slots.get(zone["id"])
         if not text:
             continue
-        captions.append({
-            "text": text,
-            "role": zone["role"],
-            "position": zone["position"],
-            "size": zone["size"],
-        })
+        cap: dict = {"text": text, "role": zone["role"]}
+        if zone.get("xywh"):
+            cap["xywh"] = zone["xywh"]
+        if zone.get("position"): cap["position"] = zone["position"]
+        if zone.get("size"):     cap["size"] = zone["size"]
+        captions.append(cap)
 
     # background 지시 · template + Planner 힌트 결합
     bg_hint = tpl["background"].get("nano_hint", "")

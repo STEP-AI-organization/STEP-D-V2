@@ -186,13 +186,12 @@ def composite_persons(
 ) -> bytes:
     """배경 이미지 위에 계획된 인물들 합성.
 
-    person_layouts: [{name, position, size}]
-    cast_photo_paths: {name: Path} · 매핑되지 않는 이름은 스킵
+    person_layouts: [{name, xywh?, position?, size?, z_index?}]
+      - xywh (신규 · HTML 디자이너 출력): [x, y, w, h] 정규화 (0.0~1.0) · 이 박스 안에 인물 배치
+      - position/size (legacy): 9슬롯 앵커 + S/M/L/XL 크기
     """
     bg = Image.open(io.BytesIO(bg_bytes)).convert("RGBA")
     W, H = bg.size
-
-    # z_index 낮은 순 (뒤부터) 렌더 · 없으면 배열 순서
     layouts = sorted(person_layouts or [], key=lambda p: p.get("z_index", 0))
 
     for pl in layouts:
@@ -207,23 +206,36 @@ def composite_persons(
             import sys as _sys
             print(f"[person_compositor] cutout fail · {name} · {str(e)[:120]}", file=_sys.stderr)
             continue
-        # 크기 조정 (인물 높이 기준)
-        target_h = max(1, int(H * PERSON_SIZE_RATIO.get(pl.get("size", "L"), PERSON_SIZE_RATIO["L"])))
-        src_w, src_h = cutout.size
-        scale = target_h / src_h
-        new_w = max(1, int(src_w * scale))
-        cutout = cutout.resize((new_w, target_h), Image.LANCZOS)
 
-        # 앵커 위치
-        ax, ay, ha, va = POSITION_ANCHORS.get(
-            pl.get("position", "middle-center"), POSITION_ANCHORS["middle-center"])
-        px, py = int(W * ax), int(H * ay)
-        if ha == "left":   x = px
-        elif ha == "center": x = px - new_w // 2
-        else:              x = px - new_w
-        if va == "top":    y = py
-        elif va == "middle": y = py - target_h // 2
-        else:              y = py - target_h
+        xywh = pl.get("xywh")
+        if xywh and len(xywh) == 4:
+            # 신규 방식: xywh 박스 안에 인물이 최대한 크게 (contain fit · 하단 정렬)
+            bx, by, bw, bh = xywh
+            box_w = max(1, int(W * bw)); box_h = max(1, int(H * bh))
+            src_w, src_h = cutout.size
+            scale = min(box_w / src_w, box_h / src_h)
+            new_w = max(1, int(src_w * scale)); new_h = max(1, int(src_h * scale))
+            cutout = cutout.resize((new_w, new_h), Image.LANCZOS)
+            # box 안 하단 중앙 정렬 (인물 발/어깨가 box 하단에 맞물림)
+            x = int(W * bx) + (box_w - new_w) // 2
+            y = int(H * by) + (box_h - new_h)
+        else:
+            # legacy: 9슬롯 앵커 + size ratio
+            target_h = max(1, int(H * PERSON_SIZE_RATIO.get(pl.get("size", "L"),
+                                                              PERSON_SIZE_RATIO["L"])))
+            src_w, src_h = cutout.size
+            scale = target_h / src_h
+            new_w = max(1, int(src_w * scale))
+            cutout = cutout.resize((new_w, target_h), Image.LANCZOS)
+            ax, ay, ha, va = POSITION_ANCHORS.get(
+                pl.get("position", "middle-center"), POSITION_ANCHORS["middle-center"])
+            px, py = int(W * ax), int(H * ay)
+            if ha == "left":   x = px
+            elif ha == "center": x = px - new_w // 2
+            else:              x = px - new_w
+            if va == "top":    y = py
+            elif va == "middle": y = py - target_h // 2
+            else:              y = py - target_h
 
         bg.alpha_composite(cutout, (x, y))
 

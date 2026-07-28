@@ -101,39 +101,63 @@ def render_caption(
 
 
 def _render_one(img: Image.Image, cap: dict) -> None:
-    """캡션 하나 렌더 (in-place · RGBA 이미지 위에)."""
+    """캡션 하나 렌더 (in-place · RGBA 이미지 위에).
+
+    cap 좌표 우선순위:
+    - xywh: [x, y, w, h] 정규화 박스 (HTML 디자이너 출력) · 이 박스 안에 맞춤
+    - position (9슬롯) + size (S/M/L/XL): legacy 앵커
+    """
     text = (cap.get("text") or "").strip()
     if not text:
         return
     role = cap.get("role", "main")
-    position = cap.get("position", "bottom-left")
-    size = cap.get("size", "L")
     style = ROLE_STYLES.get(role, ROLE_STYLES["main"])
-
     W, H = img.size
     draw = ImageDraw.Draw(img)
 
-    # role 별 스타일 결정
+    xywh = cap.get("xywh")
+    if xywh and len(xywh) == 4:
+        # 신규: xywh 박스 · 폰트 크기는 box 높이의 60% 정도
+        bx, by, bw, bh = xywh
+        box_w = max(20, int(W * bw)); box_h = max(20, int(H * bh))
+        font_size = max(16, int(box_h * 0.55))
+        font_path = FONT_DIR / style["font"]
+        if not font_path.exists():
+            font_path = FONT_DIR / DEFAULT_FONT
+        font = ImageFont.truetype(str(font_path), font_size)
+        display = text
+        if style.get("quote_wrap") and not (display.startswith('"') or display.startswith("“")):
+            display = f'"{display}"'
+        lines = _wrap_text(display, font, max_width=box_w)
+        line_h = font.getbbox("가")[3] - font.getbbox("가")[1]
+        line_gap = int(line_h * 0.25)
+        total_h = line_h * len(lines) + line_gap * (len(lines) - 1)
+        # 박스 하단 정렬 (자막은 통상 아래쪽)
+        y_start = int(H * by) + box_h - total_h
+        # 좌측 정렬 기본
+        px = int(W * bx); h_anchor = "left"
+        return _draw_lines(draw, font, lines, px, y_start, line_h, line_gap, style, h_anchor,
+                            box_w=box_w)
+
+    # legacy · 9슬롯 앵커
+    position = cap.get("position", "bottom-left")
+    size = cap.get("size", "L")
     font_path = FONT_DIR / style["font"]
     if not font_path.exists():
         font_path = FONT_DIR / DEFAULT_FONT
     boost = style.get("size_boost", 1.0)
     font_size = max(16, int(H * SIZE_RATIO.get(size, SIZE_RATIO["L"]) * boost))
     font = ImageFont.truetype(str(font_path), font_size)
-
     display = text
     if style.get("quote_wrap"):
         if not (display.startswith('"') or display.startswith("“")):
             display = f'"{display}"'
-
     lines = _wrap_text(display, font, max_width=int(W * 0.9))
     line_h = font.getbbox("가")[3] - font.getbbox("가")[1]
     line_gap = int(line_h * 0.3)
     total_h = line_h * len(lines) + line_gap * (len(lines) - 1)
-
     ax, ay, h_anchor, v_anchor = POSITION_ANCHORS.get(position, POSITION_ANCHORS["bottom-left"])
     px = int(W * ax); py = int(H * ay)
-
     if v_anchor == "top":
         y_start = py
     elif v_anchor == "middle":
@@ -141,23 +165,30 @@ def _render_one(img: Image.Image, cap: dict) -> None:
     else:
         y_start = py - total_h
 
-    outline_px = max(2, font_size // 20)
+    _draw_lines(draw, font, lines, px, y_start, line_h, line_gap, style, h_anchor)
+
+
+def _draw_lines(draw: ImageDraw.ImageDraw, font: ImageFont.FreeTypeFont,
+                lines: list[str], px: int, y_start: int,
+                line_h: int, line_gap: int, style: dict, h_anchor: str,
+                box_w: int | None = None) -> None:
     outline_color = style["outline_color"]
     text_color = style["text_color"]
     pill_bg = style.get("pill_bg")
     pill_pad = style.get("pill_padding", (0.25, 0.1))
+    font_size = font.size
+    outline_px = max(2, font_size // 20)
 
     for i, line in enumerate(lines):
         line_w = int(draw.textlength(line, font=font))
         if h_anchor == "left":
             x = px
         elif h_anchor == "center":
-            x = px - line_w // 2
+            x = (px + (box_w // 2 if box_w else 0)) - line_w // 2 if box_w else px - line_w // 2
         else:
             x = px - line_w
         y = y_start + i * (line_h + line_gap)
 
-        # pill 배경 (main/badge)
         if pill_bg:
             pad_x = int(font_size * pill_pad[0])
             pad_y = int(font_size * pill_pad[1])
@@ -165,7 +196,6 @@ def _render_one(img: Image.Image, cap: dict) -> None:
             radius = int(font_size * 0.25)
             draw.rounded_rectangle(pill_box, radius=radius, fill=pill_bg)
 
-        # 외곽선 (pill 없을 때만 강조 · pill 있으면 얇게)
         px_out = 1 if pill_bg else outline_px
         for dx in range(-px_out, px_out + 1):
             for dy in range(-px_out, px_out + 1):

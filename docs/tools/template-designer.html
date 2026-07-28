@@ -1,0 +1,413 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>STEP-D · 썸네일 템플릿 디자이너</title>
+<style>
+  :root {
+    --bg: #0f1116; --panel: #1a1d26; --border: #2a2f3a;
+    --text: #e8e9ee; --muted: #8b8f9c;
+    --person: rgba(46, 213, 115, 0.28); --person-b: #2ed573;
+    --main: rgba(255, 71, 87, 0.28);     --main-b: #ff4757;
+    --subtitle: rgba(255, 165, 2, 0.28); --subtitle-b: #ffa502;
+    --quote: rgba(83, 82, 237, 0.28);    --quote-b: #5352ed;
+    --badge: rgba(255, 107, 156, 0.28);  --badge-b: #ff6b9c;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 20px; background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Pretendard", sans-serif; }
+  .layout { display: grid; grid-template-columns: 1fr 340px; gap: 20px; max-width: 1600px; margin: 0 auto; }
+  h1 { margin: 0 0 6px; font-size: 20px; }
+  .hint { color: var(--muted); font-size: 13px; margin: 0 0 16px; }
+  .canvas-wrap { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px; }
+  .canvas-info { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; font-size: 12px; color: var(--muted); }
+  .canvas {
+    position: relative; width: 100%; aspect-ratio: 16 / 9;
+    background: #2a2f3a url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="60" height="60"><rect fill="%23333" width="60" height="60"/><path stroke="%23444" stroke-width="1" d="M0 30h60M30 0v60"/></svg>');
+    border: 2px solid #444; border-radius: 8px; overflow: hidden; user-select: none;
+  }
+  .grid-overlay { position: absolute; inset: 0; pointer-events: none; }
+  .grid-overlay div {
+    position: absolute; border: 1px dashed rgba(255,255,255,0.15);
+    display: flex; align-items: center; justify-content: center;
+    color: rgba(255,255,255,0.2); font-size: 10px;
+  }
+  .zone {
+    position: absolute; border: 2px solid; border-radius: 4px;
+    cursor: move; overflow: hidden;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 12px; font-weight: 700;
+  }
+  .zone.selected { outline: 2px dashed white; outline-offset: 2px; }
+  .zone .lbl { pointer-events: none; padding: 2px 6px; background: rgba(0,0,0,0.55); border-radius: 3px; }
+  .zone .resize {
+    position: absolute; right: 0; bottom: 0; width: 14px; height: 14px;
+    background: white; cursor: nwse-resize; border-radius: 2px;
+  }
+  .zone.person   { background: var(--person);   border-color: var(--person-b); }
+  .zone.main     { background: var(--main);     border-color: var(--main-b); }
+  .zone.subtitle { background: var(--subtitle); border-color: var(--subtitle-b); }
+  .zone.quote    { background: var(--quote);    border-color: var(--quote-b); }
+  .zone.badge    { background: var(--badge);    border-color: var(--badge-b); }
+
+  .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px; }
+  .panel h2 { margin: 0 0 8px; font-size: 14px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
+  .panel + .panel { margin-top: 14px; }
+  select, input, button { background: #262a35; color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; font-size: 13px; font-family: inherit; }
+  button { cursor: pointer; }
+  button:hover { background: #313641; }
+  button.primary { background: #5352ed; border-color: #5352ed; }
+  button.danger { background: #ff4757; border-color: #ff4757; }
+  .row { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+  .zone-list { display: flex; flex-direction: column; gap: 6px; max-height: 260px; overflow-y: auto; }
+  .zone-row { display: flex; align-items: center; gap: 6px; padding: 6px; background: #262a35; border-radius: 6px; font-size: 12px; }
+  .zone-row .swatch { width: 12px; height: 12px; border-radius: 3px; }
+  .zone-row .id { flex: 1; font-family: monospace; }
+  .zone-row .coord { color: var(--muted); font-family: monospace; font-size: 10px; }
+  .zone-row button { padding: 2px 8px; font-size: 11px; }
+  textarea { width: 100%; height: 220px; background: #0a0c11; color: #b8f5b8;
+    border: 1px solid var(--border); border-radius: 6px; padding: 10px;
+    font-family: "SF Mono", Consolas, monospace; font-size: 11px; resize: vertical; }
+  label { display: block; margin: 8px 0 4px; font-size: 12px; color: var(--muted); }
+  input[type="text"] { width: 100%; }
+</style>
+</head>
+<body>
+
+<h1>썸네일 템플릿 디자이너</h1>
+<p class="hint">
+  1) 프리셋 로드 or 빈 캔버스에서 시작 · 2) 존 추가 · 드래그·리사이즈 · 3) Export JSON 복사해서 Claude 에게 붙여넣기
+</p>
+
+<div class="layout">
+  <div>
+    <div class="canvas-wrap">
+      <div class="canvas-info">
+        <span>16:9 캔버스 (1920×1080 기준 · 정규화 좌표 0.0-1.0)</span>
+        <span id="canvasSize" style="font-family:monospace;">-- × --</span>
+      </div>
+      <div id="canvas" class="canvas">
+        <div class="grid-overlay" id="grid"></div>
+      </div>
+    </div>
+  </div>
+
+  <div>
+    <div class="panel">
+      <h2>템플릿 프리셋</h2>
+      <div class="row">
+        <select id="preset">
+          <option value="blank">비어 있음</option>
+          <option value="T1">T1 · 1인 클로즈업</option>
+          <option value="T2">T2 · 2인 대립</option>
+          <option value="T3">T3 · 명대사</option>
+          <option value="T4">T4 · 리액션·반전</option>
+        </select>
+        <button id="btnLoad">로드</button>
+      </div>
+      <label>템플릿 ID (export 에 사용)</label>
+      <input id="tplId" type="text" placeholder="예: T5_custom_hero">
+      <label>설명</label>
+      <input id="tplDesc" type="text" placeholder="예: 클로즈업 + 큰 badge">
+    </div>
+
+    <div class="panel">
+      <h2>존 추가</h2>
+      <div class="row">
+        <select id="zoneType">
+          <option value="person">person</option>
+          <option value="main">caption · main</option>
+          <option value="subtitle">caption · subtitle</option>
+          <option value="quote">caption · quote</option>
+          <option value="badge">caption · badge</option>
+        </select>
+        <input id="zoneId" type="text" placeholder="id (예: hero / cap_main)" style="width:140px;">
+        <button id="btnAdd" class="primary">추가</button>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>존 목록</h2>
+      <div id="zoneList" class="zone-list"></div>
+    </div>
+
+    <div class="panel">
+      <h2>Export</h2>
+      <div class="row">
+        <button id="btnExport" class="primary">JSON 생성</button>
+        <button id="btnCopy">복사</button>
+        <button id="btnClear" class="danger">전체 지우기</button>
+      </div>
+      <textarea id="exportOut" placeholder="Export JSON 생성 클릭"></textarea>
+    </div>
+  </div>
+</div>
+
+<script>
+const CANVAS = document.getElementById("canvas");
+const GRID = document.getElementById("grid");
+const ZONE_LIST = document.getElementById("zoneList");
+const EXPORT_OUT = document.getElementById("exportOut");
+
+let ZONES = []; // {id, type, x, y, w, h, ref}
+let SELECTED = null;
+
+// 9-slot 격자 (참고 표시)
+const SLOTS = [
+  ["top-left",0.03,0.02], ["top-center",0.50,0.02], ["top-right",0.97,0.02],
+  ["middle-left",0.03,0.50], ["middle-center",0.50,0.50], ["middle-right",0.97,0.50],
+  ["bottom-left",0.03,1.00], ["bottom-center",0.50,1.00], ["bottom-right",0.97,1.00],
+];
+
+// 프리셋 (현재 templates.py 반영)
+const PRESETS = {
+  T1: {
+    id: "T1_closeup", desc: "1인 클로즈업 · 감정·표정·독백·리액션 집중",
+    zones: [
+      { type:"person",   id:"hero",     x:0.55, y:0.20, w:0.42, h:0.78 },
+      { type:"subtitle", id:"cap_sub",  x:0.03, y:0.40, w:0.45, h:0.10 },
+      { type:"main",     id:"cap_main", x:0.03, y:0.72, w:0.55, h:0.20 },
+    ],
+  },
+  T2: {
+    id: "T2_split", desc: "2인 대립/대비 · 좌우 분할",
+    zones: [
+      { type:"person", id:"left",     x:0.02, y:0.40, w:0.40, h:0.58 },
+      { type:"person", id:"right",    x:0.58, y:0.40, w:0.40, h:0.58 },
+      { type:"main",   id:"cap_main", x:0.15, y:0.03, w:0.70, h:0.18 },
+    ],
+  },
+  T3: {
+    id: "T3_quote", desc: "명대사·폭탄 발언 · 인용 hero",
+    zones: [
+      { type:"person",   id:"hero",      x:0.60, y:0.40, w:0.35, h:0.58 },
+      { type:"quote",    id:"cap_quote", x:0.03, y:0.35, w:0.55, h:0.25 },
+      { type:"subtitle", id:"cap_sub",   x:0.03, y:0.85, w:0.35, h:0.10 },
+    ],
+  },
+  T4: {
+    id: "T4_reaction", desc: "리액션·반전 · 메인 + 원인 서브",
+    zones: [
+      { type:"person", id:"reactor",   x:0.05, y:0.42, w:0.36, h:0.55 },
+      { type:"person", id:"cause",     x:0.72, y:0.03, w:0.25, h:0.42 },
+      { type:"badge",  id:"cap_badge", x:0.03, y:0.03, w:0.28, h:0.09 },
+      { type:"main",   id:"cap_main",  x:0.50, y:0.80, w:0.48, h:0.15 },
+    ],
+  },
+};
+
+function updateCanvasSize() {
+  const r = CANVAS.getBoundingClientRect();
+  document.getElementById("canvasSize").textContent = `${Math.round(r.width)} × ${Math.round(r.height)}`;
+}
+window.addEventListener("resize", updateCanvasSize);
+
+// 9-slot 격자 시각 표시
+function drawGrid() {
+  GRID.innerHTML = "";
+  const rows = [
+    [0.00, 0.33],   // top
+    [0.33, 0.67],   // middle
+    [0.67, 1.00],   // bottom
+  ];
+  const cols = [[0,0.33],[0.33,0.67],[0.67,1.00]];
+  const names = [["TL","TC","TR"],["ML","MC","MR"],["BL","BC","BR"]];
+  rows.forEach(([y0,y1], i) => cols.forEach(([x0,x1], j) => {
+    const d = document.createElement("div");
+    d.style.left = (x0*100)+"%"; d.style.top = (y0*100)+"%";
+    d.style.width = ((x1-x0)*100)+"%"; d.style.height = ((y1-y0)*100)+"%";
+    d.textContent = names[i][j];
+    GRID.appendChild(d);
+  }));
+}
+drawGrid();
+updateCanvasSize();
+
+function makeZone(spec) {
+  const el = document.createElement("div");
+  el.className = "zone " + spec.type;
+  el.dataset.id = spec.id;
+  const lbl = document.createElement("div");
+  lbl.className = "lbl";
+  lbl.textContent = `${spec.id} [${spec.type}]`;
+  el.appendChild(lbl);
+  const r = document.createElement("div");
+  r.className = "resize";
+  el.appendChild(r);
+  positionZone(el, spec);
+  CANVAS.appendChild(el);
+  makeDraggable(el, spec, r);
+  el.addEventListener("mousedown", () => selectZone(spec));
+  return el;
+}
+
+function positionZone(el, s) {
+  el.style.left = (s.x*100)+"%";
+  el.style.top = (s.y*100)+"%";
+  el.style.width = (s.w*100)+"%";
+  el.style.height = (s.h*100)+"%";
+}
+
+function makeDraggable(el, spec, resizeHandle) {
+  let start = null;
+  el.addEventListener("mousedown", (e) => {
+    if (e.target === resizeHandle) return;
+    const r = CANVAS.getBoundingClientRect();
+    start = { mx: e.clientX, my: e.clientY, sx: spec.x, sy: spec.y, W: r.width, H: r.height };
+    e.preventDefault();
+    const move = (ev) => {
+      const dx = (ev.clientX - start.mx) / start.W;
+      const dy = (ev.clientY - start.my) / start.H;
+      spec.x = Math.max(0, Math.min(1 - spec.w, start.sx + dx));
+      spec.y = Math.max(0, Math.min(1 - spec.h, start.sy + dy));
+      positionZone(el, spec);
+      updateZoneList();
+    };
+    const up = () => { window.removeEventListener("mousemove", move); window.removeEventListener("mouseup", up); };
+    window.addEventListener("mousemove", move); window.addEventListener("mouseup", up);
+  });
+  resizeHandle.addEventListener("mousedown", (e) => {
+    e.stopPropagation();
+    const r = CANVAS.getBoundingClientRect();
+    const startR = { mx: e.clientX, my: e.clientY, sw: spec.w, sh: spec.h, W: r.width, H: r.height };
+    const move = (ev) => {
+      const dw = (ev.clientX - startR.mx) / startR.W;
+      const dh = (ev.clientY - startR.my) / startR.H;
+      spec.w = Math.max(0.05, Math.min(1 - spec.x, startR.sw + dw));
+      spec.h = Math.max(0.05, Math.min(1 - spec.y, startR.sh + dh));
+      positionZone(el, spec);
+      updateZoneList();
+    };
+    const up = () => { window.removeEventListener("mousemove", move); window.removeEventListener("mouseup", up); };
+    window.addEventListener("mousemove", move); window.addEventListener("mouseup", up);
+  });
+}
+
+function selectZone(spec) {
+  SELECTED = spec;
+  document.querySelectorAll(".zone").forEach(z =>
+    z.classList.toggle("selected", z.dataset.id === spec.id));
+}
+
+function updateZoneList() {
+  ZONE_LIST.innerHTML = "";
+  ZONES.forEach(spec => {
+    const row = document.createElement("div");
+    row.className = "zone-row";
+    const sw = document.createElement("div");
+    sw.className = "swatch"; sw.style.background = getComputedStyle(document.documentElement).getPropertyValue("--"+spec.type+"-b");
+    row.appendChild(sw);
+    const id = document.createElement("div");
+    id.className = "id"; id.textContent = `${spec.id} · ${spec.type}`;
+    row.appendChild(id);
+    const c = document.createElement("div");
+    c.className = "coord"; c.textContent = `${spec.x.toFixed(2)},${spec.y.toFixed(2)} · ${spec.w.toFixed(2)}×${spec.h.toFixed(2)}`;
+    row.appendChild(c);
+    const b = document.createElement("button");
+    b.textContent = "삭제";
+    b.onclick = () => { removeZone(spec); };
+    row.appendChild(b);
+    ZONE_LIST.appendChild(row);
+  });
+}
+
+function addZone(type, id) {
+  if (!id) { alert("id 를 입력하세요"); return; }
+  if (ZONES.some(z => z.id === id)) { alert("id 중복"); return; }
+  const spec = { type, id, x: 0.30, y: 0.30, w: 0.35, h: 0.30 };
+  spec.ref = makeZone(spec);
+  ZONES.push(spec);
+  updateZoneList();
+  selectZone(spec);
+}
+
+function removeZone(spec) {
+  if (spec.ref && spec.ref.parentNode) spec.ref.parentNode.removeChild(spec.ref);
+  ZONES = ZONES.filter(z => z !== spec);
+  updateZoneList();
+}
+
+function clearAll() {
+  ZONES.slice().forEach(removeZone);
+}
+
+function loadPreset() {
+  const key = document.getElementById("preset").value;
+  clearAll();
+  if (key === "blank") return;
+  const p = PRESETS[key];
+  document.getElementById("tplId").value = p.id;
+  document.getElementById("tplDesc").value = p.desc;
+  p.zones.forEach(z => {
+    const spec = { ...z };
+    spec.ref = makeZone(spec);
+    ZONES.push(spec);
+  });
+  updateZoneList();
+}
+
+// 정규화 xywh → 가장 가까운 9-slot 이름 (anchor 계산용 힌트)
+function nearestSlot(spec) {
+  // 존의 앵커 (bottom-* 은 하단 중앙, top-* 은 상단 중앙 등)
+  // person/main 은 하단 앵커 · badge/subtitle 은 위치 그대로
+  const cx = spec.x + spec.w/2;
+  const cy = spec.y + spec.h/2;
+  let best = null; let bestD = 9;
+  for (const [name, sx, sy] of SLOTS) {
+    const d = (cx-sx)**2 + (cy-sy)**2;
+    if (d < bestD) { bestD = d; best = name; }
+  }
+  return best;
+}
+
+// size hint (S/M/L/XL) · h 기준
+function sizeHint(h) {
+  if (h < 0.30) return "S";
+  if (h < 0.50) return "M";
+  if (h < 0.70) return "L";
+  return "XL";
+}
+
+function exportJson() {
+  const tplId = document.getElementById("tplId").value.trim() || "T_custom";
+  const desc = document.getElementById("tplDesc").value.trim() || "";
+  const persons = ZONES.filter(z => z.type === "person").map((z, i) => ({
+    id: z.id, position: nearestSlot(z), size: sizeHint(z.h), z_index: i,
+    xywh: [round(z.x), round(z.y), round(z.w), round(z.h)],
+  }));
+  const captions = ZONES.filter(z => z.type !== "person").map(z => ({
+    id: z.id, role: z.type, position: nearestSlot(z), size: sizeHint(z.h),
+    xywh: [round(z.x), round(z.y), round(z.w), round(z.h)],
+  }));
+  const obj = {
+    id: tplId,
+    description: desc,
+    person_zones: persons,
+    caption_zones: captions,
+    background: { mode: "source_blur", blur: "medium",
+      nano_hint: "원본 프레임 blur · 인물 없이 배경 톤만" },
+  };
+  EXPORT_OUT.value = JSON.stringify(obj, null, 2);
+}
+function round(v) { return Math.round(v * 1000) / 1000; }
+
+document.getElementById("btnAdd").onclick = () => {
+  addZone(document.getElementById("zoneType").value,
+          document.getElementById("zoneId").value.trim());
+  document.getElementById("zoneId").value = "";
+};
+document.getElementById("btnLoad").onclick = loadPreset;
+document.getElementById("btnClear").onclick = clearAll;
+document.getElementById("btnExport").onclick = exportJson;
+document.getElementById("btnCopy").onclick = () => {
+  if (!EXPORT_OUT.value) exportJson();
+  EXPORT_OUT.select(); document.execCommand("copy");
+  alert("복사됨");
+};
+
+// 초기: T1 로드
+document.getElementById("preset").value = "T1";
+loadPreset();
+</script>
+</body>
+</html>
