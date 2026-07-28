@@ -14,8 +14,8 @@ from typing import Optional
 from google import genai
 from google.genai import types
 
-MODEL = "gemini-2.5-flash-image"
-LOCATION = "us-central1"
+MODEL = "gemini-3-pro-image"     # 최신 최상위 이미지 모델 (2026-07)
+LOCATION = "global"               # 3.x 이미지는 global 엔드포인트만
 
 
 def _client(project: Optional[str] = None) -> genai.Client:
