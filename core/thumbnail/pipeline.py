@@ -31,6 +31,7 @@ from . import planner as PL
 from . import nano_banana as NB
 from . import ctr_predictor as CTR
 from . import caption_overlay as OV
+from . import person_compositor as PC
 
 
 def run_pipeline(
@@ -132,34 +133,57 @@ def run_pipeline(
             # (a) 계획된 인물 사진 조회
             featured = plan_v.get("featured_cast", []) or []
             cast_photos, cast_names_found = _resolve_cast_photos(featured)
-            # captions 배열 (신규) 또는 단일 caption (구) 정규화
+            # {name: path} 매핑 (compositor 용)
+            cast_map: dict[str, pathlib.Path] = dict(zip(cast_names_found, cast_photos))
+            # captions 정규화
             captions = plan_v.get("captions") or []
             if not captions and plan_v.get("caption"):
                 captions = [{
-                    "text": plan_v["caption"],
-                    "role": "main",
+                    "text": plan_v["caption"], "role": "main",
                     "position": plan_v.get("caption_position", "bottom-left"),
                     "size": plan_v.get("caption_size", "L"),
                 }]
-            # nano banana 힌트용 · main 자막 위치를 자리 비우기 지시로 전달
             main_pos = "bottom-left"
             for c in captions:
                 if c.get("role") == "main":
                     main_pos = c.get("position", main_pos); break
+
+            # person_layouts (신규 · 합성용) — 없으면 auto-fallback
+            person_layouts = plan_v.get("person_layouts") or []
+            if not person_layouts and cast_names_found:
+                # 기본: 첫 인물 middle-center L · 두번째 middle-right M · 세번째 middle-left S
+                defaults = [("middle-center", "L"), ("middle-right", "M"), ("middle-left", "S")]
+                person_layouts = [
+                    {"name": nm, "position": defaults[i % len(defaults)][0],
+                     "size": defaults[i % len(defaults)][1], "z_index": i}
+                    for i, nm in enumerate(cast_names_found)
+                ]
+
             print(f"  [{vid}] featured_cast={featured} · resolved={cast_names_found} · "
+                  f"persons={[(pl.get('name'), pl.get('position'), pl.get('size')) for pl in person_layouts]} · "
                   f"captions={[c.get('role') for c in captions]}")
-            # (b) 자막 없는 이미지 생성 (frame + castPhotos)
+
+            # (b) 배경 생성 (hybrid · 인물 없는 blur 배경)
             img = NB.generate_thumbnail(
-                background=plan_v.get("background", "원본 프레임 그대로"),
-                layout=plan_v.get("layout", "인물 중앙 · 자막 하단"),
+                background=plan_v.get("background", "원본 프레임 blur 처리"),
+                layout=plan_v.get("layout", ""),
                 caption_position=main_pos,
                 frame=frame,
-                cast_photos=cast_photos,
-                cast_names=cast_names_found,
+                cast_photos=[],  # hybrid 에서는 castPhoto 넘기지 않음
+                cast_names=[],
+                mode="hybrid",
             )
             if not img:
                 return vid, None
-            # (c) 시스템 오버레이 · role 별 계층 렌더
+            # (c) castPhoto 세그 + 배경 위 합성 (얼굴 identity 100%)
+            if person_layouts and cast_map:
+                try:
+                    img = PC.composite_persons(bg_bytes=img,
+                                                person_layouts=person_layouts,
+                                                cast_photo_paths=cast_map)
+                except Exception as e:
+                    print(f"  [{vid}] compositor fail · {str(e)[:150]}", file=sys.stderr)
+            # (d) 자막 계층 오버레이
             img = OV.render_captions(img_bytes=img, captions=captions)
             return vid, img
         except Exception as e:

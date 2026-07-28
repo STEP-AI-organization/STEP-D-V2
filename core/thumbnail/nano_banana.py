@@ -35,43 +35,62 @@ def generate_thumbnail(
     frame: pathlib.Path,
     cast_photos: Optional[list[pathlib.Path]] = None,
     cast_names: Optional[list[str]] = None,
+    mode: str = "hybrid",
     project: Optional[str] = None,
 ) -> Optional[bytes]:
-    """(배경, 배치) + 프레임 + 계획된 출연자 사진 → 자막 없는 이미지.
+    """(배경, 배치) + 프레임 → 이미지.
 
-    - frame: 배경/톤 참고용 대표 프레임 하나
-    - cast_photos: Planner 가 이 variant 에 지목한 인물의 등록 사진들 (0~3장)
-    - cast_names: cast_photos 와 순서 매칭되는 이름 배열 (프롬프트에 언급용)
-    - caption_position: 자막 얹힐 자리 (그 공간 비워두라는 힌트)
+    mode:
+      - "hybrid" (기본): **인물 없는 blur 배경** 만 생성 · 인물은 나중에 castPhoto 로 합성
+      - "full": 인물 포함 완전 이미지 (이전 방식 · 얼굴 미묘 변형 이슈)
 
-    자막 텍스트는 이 함수가 그리지 않는다. 시스템이 나중에 Pillow 로 오버레이.
+    자막은 시스템이 나중에 Pillow 로 오버레이.
     """
     cast_photos = cast_photos or []
     cast_names = cast_names or []
 
-    if cast_photos:
-        cast_line = " · ".join(cast_names) if cast_names else f"{len(cast_photos)}명"
-        cast_directive = (
-            f"\n**주인공**: {cast_line}\n"
-            f"- 아래 첨부된 인물 사진(들)이 이 썸네일의 주인공\n"
-            f"- **첨부 사진의 얼굴 identity 100% 유지** · 얼굴 재해석·변형 절대 X\n"
-            f"- 프레임 안 다른 인물은 참고만 · 주인공 얼굴은 첨부 사진 기준"
+    if mode == "hybrid":
+        # 인물 없는 배경만 · castPhoto 붙일 자리 비워둠
+        prompt = (
+            f"16:9 유튜브 썸네일 배경 (방송사 톤). 이 프레임의 톤·색·조명 유지.\n\n"
+            f"**배경 지시**: {background}\n\n"
+            f"**필수 규칙**:\n"
+            f"- **인물(사람)을 그리지 마** · 프레임 안 인물 자리는 blur 처리 or 소품·환경으로 채움\n"
+            f"- 이미지에 어떤 텍스트도 X (자막·로고·워터마크·부제)\n"
+            f"- 원본 프레임 강한 blur (radius 15~25px) 처리 후 톤 조정 느낌\n"
+            f"- 인물이 나중에 합성될 예정이므로 · 중앙·인물 자리는 심플하게"
         )
+        parts: list = [
+            types.Part.from_bytes(data=pathlib.Path(frame).read_bytes(),
+                                   mime_type="image/jpeg"),
+            types.Part.from_text(text=prompt),
+        ]
     else:
-        cast_directive = (
-            "\n- 프레임 안 인물 얼굴 그대로 유지 · 재해석 X"
+        # full mode (이전 배선 유지 · castPhoto 함께 보내기)
+        if cast_photos:
+            cast_line = " · ".join(cast_names) if cast_names else f"{len(cast_photos)}명"
+            cast_directive = (
+                f"\n**주인공**: {cast_line}\n"
+                f"- 아래 첨부된 인물 사진(들)의 얼굴 identity 100% 유지 · 재해석 X"
+            )
+        else:
+            cast_directive = "\n- 프레임 안 인물 얼굴 그대로 유지 · 재해석 X"
+        prompt = (
+            f"16:9 유튜브 썸네일 (방송사 톤). 프레임 배경/톤 참고.\n\n"
+            f"**배경**: {background}\n**배치**: {layout}{cast_directive}\n\n"
+            f"**필수**: 어떤 텍스트도 X · {caption_position} 자리 비움"
         )
-
-    prompt = (
-        f"16:9 유튜브 썸네일 (방송사 톤). 첨부한 프레임은 배경/톤 참고용.\n\n"
-        f"**배경**: {background}\n"
-        f"**배치**: {layout}"
-        f"{cast_directive}\n\n"
-        f"**필수 규칙**:\n"
-        f"- 이미지에 **어떤 텍스트도 그리지 마** (자막·로고·워터마크·부제 다 X)\n"
-        f"- **{caption_position}** 위치는 자막이 나중에 얹힐 자리 · 인물·주요 요소 없이 비워둘 것\n"
-        f"- 배경/배치 지시대로만"
-    )
+        parts = [
+            types.Part.from_bytes(data=pathlib.Path(frame).read_bytes(),
+                                   mime_type="image/jpeg"),
+        ]
+        for cp in cast_photos:
+            try:
+                parts.append(types.Part.from_bytes(data=pathlib.Path(cp).read_bytes(),
+                                                    mime_type=_mime(pathlib.Path(cp))))
+            except Exception:
+                pass
+        parts.append(types.Part.from_text(text=prompt))
 
     client = _client(project)
     try:
@@ -80,17 +99,6 @@ def generate_thumbnail(
                                           image_config=img_cfg)
     except Exception:
         cfg = types.GenerateContentConfig(response_modalities=["IMAGE", "TEXT"])
-
-    parts: list = [
-        types.Part.from_bytes(data=pathlib.Path(frame).read_bytes(), mime_type="image/jpeg"),
-    ]
-    for cp in cast_photos:
-        try:
-            parts.append(types.Part.from_bytes(data=pathlib.Path(cp).read_bytes(),
-                                                mime_type=_mime(pathlib.Path(cp))))
-        except Exception:
-            pass
-    parts.append(types.Part.from_text(text=prompt))
 
     resp = client.models.generate_content(model=MODEL, contents=parts, config=cfg)
     for c in resp.candidates or []:

@@ -789,7 +789,24 @@ def generate_variant_prompts(
                         "featured_cast": {
                             "type": "ARRAY",
                             "items": {"type": "STRING"},
-                            "description": "썸네일 주인공 인물 이름 (1~3명 · cast_names 에서만)",
+                            "description": "썸네일 주인공 인물 이름 (1~3명 · 등록 목록에서만)",
+                        },
+                        "person_layouts": {
+                            "type": "ARRAY",
+                            "description": ("featured_cast 각 인물의 배치 · {name, position(9슬롯), size(S/M/L/XL), z_index}. "
+                                            "size = 배경 이미지 높이 대비 인물 높이 (L=75%). "
+                                            "position: main person 은 middle-* / bottom-* 지배적. "
+                                            "여러 명이면 서로 다른 position + z_index."),
+                            "items": {
+                                "type": "OBJECT",
+                                "properties": {
+                                    "name": {"type": "STRING"},
+                                    "position": {"type": "STRING", "enum": POSITIONS},
+                                    "size": {"type": "STRING", "enum": ["S", "M", "L", "XL"]},
+                                    "z_index": {"type": "INTEGER"},
+                                },
+                                "required": ["name", "position", "size"],
+                            },
                         },
                         "captions": {
                             "type": "ARRAY",
