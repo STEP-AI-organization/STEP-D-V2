@@ -31,7 +31,16 @@ from . import ctr_predictor as CTR
 from . import person_compositor as PC
 from .planner import load_shorts_slice
 
-REF_DIR = pathlib.Path(__file__).resolve().parents[2] / "assets" / "thumbnail-reference"
+def _resolve_ref_dir() -> pathlib.Path:
+    """THUMBNAIL_REFS_DIR env 있으면 그것 · 없으면 assets/thumbnail-reference/ (로컬 dev)."""
+    env = os.environ.get("THUMBNAIL_REFS_DIR", "").strip()
+    if env:
+        p = pathlib.Path(env)
+        if p.exists():
+            return p
+    return pathlib.Path(__file__).resolve().parents[2] / "assets" / "thumbnail-reference"
+
+REF_DIR = _resolve_ref_dir()
 MODEL = "gemini-2.5-flash"
 LOCATION = "asia-northeast3"
 

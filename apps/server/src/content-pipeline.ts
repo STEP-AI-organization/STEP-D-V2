@@ -523,6 +523,53 @@ async function writeRecommendationsFromShorts(
     const thumbOutDir = path.join(workDir, "thumbnails");
     fs.mkdirSync(thumbOutDir, { recursive: true });
 
+    // GCS 에서 template references 를 workdir/thumbnail-refs/ 로 sync (Cloud Run 이 GCS 에 저장한 것)
+    // 로컬 pm2 워커에서도 GCS ADC 로 접근 가능 · assets/thumbnail-reference/ 로컬 파일이 없을 수도 있으니.
+    const refsCacheDir = path.join(workDir, "thumbnail-refs");
+    try {
+      const { useGcs, readFile, fileExists } = await import("./storage-gcs.ts");
+      if (useGcs()) {
+        const manifestGcs = "templates/thumbnail/manifest.json";
+        if (await fileExists(manifestGcs)) {
+          fs.mkdirSync(refsCacheDir, { recursive: true });
+          fs.mkdirSync(path.join(refsCacheDir, "cleaned"), { recursive: true });
+          const manifestBuf = await readFile(manifestGcs);
+          const entries = JSON.parse(manifestBuf.toString("utf-8"));
+          // 로컬 manifest 는 path 를 상대경로 (파일명) 로 재작성
+          const localEntries: any[] = [];
+          for (const e of entries) {
+            const fname = String(e.path || "").split("/").pop() || "";
+            if (!fname) continue;
+            const origGcs = String(e.path).startsWith("templates/")
+              ? String(e.path)
+              : `templates/thumbnail/${fname}`;
+            try {
+              const b = await readFile(origGcs);
+              fs.writeFileSync(path.join(refsCacheDir, fname), b);
+            } catch (err) { console.warn(`[thumb-sync] orig fail ${e.id}`, err); continue; }
+            const local: any = { ...e, path: fname };
+            if (e.cleaned_path) {
+              const cf = String(e.cleaned_path).split("/").pop() || "";
+              const cGcs = String(e.cleaned_path).startsWith("templates/")
+                ? String(e.cleaned_path)
+                : `templates/thumbnail/cleaned/${cf}`;
+              try {
+                const cb = await readFile(cGcs);
+                fs.writeFileSync(path.join(refsCacheDir, "cleaned", cf), cb);
+                local.cleaned_path = `cleaned/${cf}`;
+              } catch (err) { console.warn(`[thumb-sync] cleaned fail ${e.id}`, err); }
+            }
+            localEntries.push(local);
+          }
+          fs.writeFileSync(path.join(refsCacheDir, "manifest.json"),
+                           JSON.stringify(localEntries, null, 2), "utf-8");
+          console.log(`[thumb-sync] ${localEntries.length} refs → ${refsCacheDir}`);
+        }
+      }
+    } catch (err) {
+      console.warn("[thumb-sync] GCS sync failed (falling back to local assets/)", err);
+    }
+
     // shorts_context.json 생성 (planner가 읽음)
     const shortsContextPath = path.join(workDir, "shorts_context.json");
     // analysis.json에서 shorts 정보 추출
@@ -572,6 +619,10 @@ async function writeRecommendationsFromShorts(
           PYTHONPATH: "",
           PYTHONIOENCODING: "utf-8",
           PYTHONUTF8: "1",
+          // 워커가 GCS 에서 sync 한 refs 있으면 pipeline 이 이것 우선 사용
+          ...(fs.existsSync(path.join(refsCacheDir, "manifest.json"))
+            ? { THUMBNAIL_REFS_DIR: refsCacheDir }
+            : {}),
         },
         stdio: ["ignore", "pipe", "pipe"],
         detached: isWindows,

@@ -2233,43 +2233,95 @@ async function renderClipMedia(opts: {
 }
 
 // ── thumbnail template refs (Web UI CRUD · 2026-07-28) ─────────────────────────
-// Templates are broadcaster-quality reference thumbnails · used by swap pipeline.
-// Storage: local `assets/thumbnail-reference/` (기존 · manifest.json 자동 sync).
+// Templates = 방송사 완성작 · swap 파이프라인용 reference.
+// Storage:
+//   Production (GCS mode): templates/thumbnail/{id}.{ext} + templates/thumbnail/manifest.json
+//   Local dev: assets/thumbnail-reference/{id}.{ext} + manifest.json (기존)
+// Cloud Run 컨테이너는 재시작 시 로컬 fs 유실 · GCS 우선.
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const THUMB_REF_DIR = path.join(REPO_ROOT, "assets", "thumbnail-reference");
 const THUMB_MANIFEST = path.join(THUMB_REF_DIR, "manifest.json");
-function readThumbManifest(): any[] {
+const THUMB_GCS_PREFIX = "templates/thumbnail";
+const THUMB_GCS_MANIFEST = `${THUMB_GCS_PREFIX}/manifest.json`;
+
+async function readThumbManifest(): Promise<any[]> {
+  if (useGcs()) {
+    try {
+      if (await fileExists(THUMB_GCS_MANIFEST)) {
+        const buf = await readFile(THUMB_GCS_MANIFEST);
+        return JSON.parse(buf.toString("utf-8"));
+      }
+    } catch (e) { console.warn("[thumb-refs] GCS manifest read fail", e); }
+    return [];
+  }
   try {
     if (!fs.existsSync(THUMB_MANIFEST)) return [];
     return JSON.parse(fs.readFileSync(THUMB_MANIFEST, "utf-8")) as any[];
   } catch { return []; }
 }
-function writeThumbManifest(entries: any[]) {
+
+async function writeThumbManifest(entries: any[]): Promise<void> {
+  const json = JSON.stringify(entries, null, 2);
+  if (useGcs()) {
+    await writeFile(THUMB_GCS_MANIFEST, Buffer.from(json, "utf-8"));
+    return;
+  }
   fs.mkdirSync(THUMB_REF_DIR, { recursive: true });
-  fs.writeFileSync(THUMB_MANIFEST, JSON.stringify(entries, null, 2), "utf-8");
+  fs.writeFileSync(THUMB_MANIFEST, json, "utf-8");
+}
+
+/** Resolve stored path (relative to repo root) → GCS object path or local fs path. */
+function refGcsPath(entry: any): string | null {
+  if (!useGcs() || !entry?.path) return null;
+  // entry.path is either "assets/thumbnail-reference/{id}.{ext}" (legacy · migrate) or
+  // "templates/thumbnail/{id}.{ext}" (GCS-native).
+  const p = String(entry.path);
+  if (p.startsWith("templates/")) return p;
+  // Legacy assets/ path → migrate to templates/thumbnail/ convention
+  const fname = path.basename(p);
+  return `${THUMB_GCS_PREFIX}/${fname}`;
+}
+
+function refCleanedGcsPath(entry: any): string | null {
+  if (!useGcs() || !entry?.cleaned_path) return null;
+  const p = String(entry.cleaned_path);
+  if (p.startsWith("templates/")) return p;
+  const fname = path.basename(p);
+  return `${THUMB_GCS_PREFIX}/cleaned/${fname}`;
 }
 
 // GET · 모든 template metadata
 app.get("/api/thumbnail-refs", async (c) => {
-  const items = readThumbManifest();
+  const items = await readThumbManifest();
   return c.json({ items });
 });
 
-// GET · template 이미지 파일 (파일 이름 sanitize)
+// GET · template 이미지 (GCS or local)
 app.get("/api/thumbnail-refs/:id/image", async (c) => {
   const id = c.req.param("id").replace(/[^\w.-]/g, "");
-  const entries = readThumbManifest();
+  const variant = c.req.query("variant"); // "cleaned" 또는 원본
+  const entries = await readThumbManifest();
   const entry = entries.find((e: any) => e.id === id);
   if (!entry) return c.json({ error: "not found" }, 404);
-  const p = path.join(REPO_ROOT, String(entry.path || ""));
+  const gcsPath = variant === "cleaned" ? refCleanedGcsPath(entry) : refGcsPath(entry);
+  if (useGcs() && gcsPath) {
+    if (!(await fileExists(gcsPath))) return c.json({ error: "file missing on GCS" }, 404);
+    const buf = await readFile(gcsPath);
+    const ext = gcsPath.split(".").pop()?.toLowerCase() || "jpg";
+    const mime = ext === "png" ? "image/png" : ext === "webp" ? "image/webp" : "image/jpeg";
+    return new Response(buf, { headers: { "content-type": mime, "cache-control": "public, max-age=600" } });
+  }
+  // Local fallback
+  const rel = variant === "cleaned" ? entry.cleaned_path : entry.path;
+  if (!rel) return c.json({ error: "no path" }, 404);
+  const p = path.join(REPO_ROOT, String(rel));
   if (!fs.existsSync(p)) return c.json({ error: "file missing" }, 404);
   const ext = path.extname(p).slice(1).toLowerCase();
   const mime = ext === "png" ? "image/png" : ext === "webp" ? "image/webp" : "image/jpeg";
-  const buf = fs.readFileSync(p);
-  return new Response(buf, { headers: { "content-type": mime } });
+  return new Response(fs.readFileSync(p), { headers: { "content-type": mime } });
 });
 
-// POST · 이미지 업로드 (multipart) · manifest 에 entry 추가 (Vision 분석은 별도 스크립트)
+// POST · 이미지 업로드 (multipart) · GCS(prod) or local(dev) 저장
 app.post("/api/thumbnail-refs", async (c) => {
   const form = await c.req.formData().catch(() => null);
   if (!form) return c.json({ error: "multipart required" }, 400);
@@ -2281,9 +2333,7 @@ app.post("/api/thumbnail-refs", async (c) => {
   if (!["png", "jpg", "jpeg", "webp"].includes(ext)) {
     return c.json({ error: "unsupported ext" }, 400);
   }
-  // id: 사용자 지정 or 자동
-  fs.mkdirSync(THUMB_REF_DIR, { recursive: true });
-  const entries = readThumbManifest();
+  const entries = await readThumbManifest();
   const usedIds = new Set(entries.map((e: any) => e.id));
   let id = idHint || `ref_${String(Date.now()).slice(-8)}`;
   id = id.replace(/[^\w.-]/g, "_");
@@ -2291,21 +2341,31 @@ app.post("/api/thumbnail-refs", async (c) => {
   while (usedIds.has(id)) { id = `${idHint || "ref"}_${n++}`; }
   const fname = `${id}.${ext}`;
   const buf = Buffer.from(await file.arrayBuffer());
-  fs.writeFileSync(path.join(THUMB_REF_DIR, fname), buf);
+
+  let storedPath: string;
+  if (useGcs()) {
+    const gcsPath = `${THUMB_GCS_PREFIX}/${fname}`;
+    await writeFile(gcsPath, buf);
+    storedPath = gcsPath;
+  } else {
+    fs.mkdirSync(THUMB_REF_DIR, { recursive: true });
+    fs.writeFileSync(path.join(THUMB_REF_DIR, fname), buf);
+    storedPath = `assets/thumbnail-reference/${fname}`;
+  }
   const entry = {
-    id, path: `assets/thumbnail-reference/${fname}`,
+    id, path: storedPath,
     _analyzed: false, program, custom_tags: [],
     uploaded_at: new Date().toISOString(),
   };
   entries.push(entry);
-  writeThumbManifest(entries);
+  await writeThumbManifest(entries);
   return c.json({ item: entry });
 });
 
 // PATCH · metadata 편집 (program·custom_tags·user_note 등)
 app.patch("/api/thumbnail-refs/:id", async (c) => {
   const id = c.req.param("id");
-  const entries = readThumbManifest();
+  const entries = await readThumbManifest();
   const idx = entries.findIndex((e: any) => e.id === id);
   if (idx < 0) return c.json({ error: "not found" }, 404);
   const body = await c.req.json<any>().catch(() => ({}));
@@ -2314,19 +2374,30 @@ app.patch("/api/thumbnail-refs/:id", async (c) => {
     if (k in body) patch[k] = body[k];
   }
   entries[idx] = { ...entries[idx], ...patch };
-  writeThumbManifest(entries);
+  await writeThumbManifest(entries);
   return c.json({ item: entries[idx] });
 });
 
-// DELETE · manifest 삭제 + 파일 삭제
+// DELETE · manifest + 파일 삭제 (GCS + local)
 app.delete("/api/thumbnail-refs/:id", async (c) => {
   const id = c.req.param("id");
-  const entries = readThumbManifest();
+  const entries = await readThumbManifest();
   const entry = entries.find((e: any) => e.id === id);
   if (!entry) return c.json({ error: "not found" }, 404);
-  const p = path.join(REPO_ROOT, String(entry.path || ""));
-  try { if (fs.existsSync(p)) fs.unlinkSync(p); } catch {}
-  writeThumbManifest(entries.filter((e: any) => e.id !== id));
+  if (useGcs()) {
+    try {
+      const gp = refGcsPath(entry); if (gp) await deleteFile(gp);
+      const cp = refCleanedGcsPath(entry); if (cp) await deleteFile(cp);
+    } catch (e) { console.warn("[thumb-refs] GCS delete err", e); }
+  } else {
+    const p = path.join(REPO_ROOT, String(entry.path || ""));
+    try { if (fs.existsSync(p)) fs.unlinkSync(p); } catch {}
+    if (entry.cleaned_path) {
+      const cp = path.join(REPO_ROOT, String(entry.cleaned_path));
+      try { if (fs.existsSync(cp)) fs.unlinkSync(cp); } catch {}
+    }
+  }
+  await writeThumbManifest(entries.filter((e: any) => e.id !== id));
   return c.json({ ok: true });
 });
 
@@ -2334,7 +2405,7 @@ app.delete("/api/thumbnail-refs/:id", async (c) => {
 app.post("/api/thumbnail-refs/batch/:action", async (c) => {
   const action = c.req.param("action");
   if (!["analyze", "preprocess"].includes(action)) return c.json({ error: "action" }, 400);
-  const entries = readThumbManifest();
+  const entries = await readThumbManifest();
   const targets = entries.filter((e: any) =>
     action === "analyze" ? !e._analyzed : !e.cleaned_path);
   if (!targets.length) return c.json({ ok: true, processed: 0, note: "nothing to do" });
@@ -2369,9 +2440,15 @@ app.post("/api/thumbnail-refs/batch/:action", async (c) => {
 // POST · template 사전 가공 (텍스트→슬롯 라벨 · 얼굴→실루엣)
 app.post("/api/thumbnail-refs/:id/preprocess", async (c) => {
   const id = c.req.param("id").replace(/[^\w.-]/g, "");
-  const entries = readThumbManifest();
+  const entries = await readThumbManifest();
   const entry = entries.find((e: any) => e.id === id);
   if (!entry) return c.json({ error: "not found" }, 404);
+  if (useGcs()) {
+    return c.json({
+      error: "preprocess not supported on Cloud Run",
+      hint: "로컬 워커에서 실행하세요: python scripts/thumbnail_preprocess_template.py " + id,
+    }, 501);
+  }
   const scriptPath = path.join(REPO_ROOT, "scripts", "thumbnail_preprocess_template.py");
   const python = process.env.CORE_PYTHON || "python";
   const { spawn } = await import("node:child_process");
@@ -2388,16 +2465,22 @@ app.post("/api/thumbnail-refs/:id/preprocess", async (c) => {
   } catch (e: any) {
     return c.json({ error: String(e?.message || e) }, 500);
   }
-  const updated = readThumbManifest().find((e: any) => e.id === id);
+  const updated = (await readThumbManifest()).find((e: any) => e.id === id);
   return c.json({ item: updated });
 });
 
 // POST · Vision 자동 분석 (기존 entry · 새 업로드 후 · manifest _analyzed=false → true)
 app.post("/api/thumbnail-refs/:id/analyze", async (c) => {
   const id = c.req.param("id").replace(/[^\w.-]/g, "");
-  const entries = readThumbManifest();
+  const entries = await readThumbManifest();
   const entry = entries.find((e: any) => e.id === id);
   if (!entry) return c.json({ error: "not found" }, 404);
+  if (useGcs()) {
+    return c.json({
+      error: "analyze not supported on Cloud Run",
+      hint: "로컬 워커에서 실행: python scripts/thumbnail_reference_manifest.py",
+    }, 501);
+  }
   // Python 스크립트 호출
   const scriptPath = path.join(REPO_ROOT, "scripts", "thumbnail_reference_manifest.py");
   const python = process.env.CORE_PYTHON || "python";
@@ -2411,8 +2494,8 @@ app.post("/api/thumbnail-refs/:id/analyze", async (c) => {
     proc.on("close", (code) => code === 0 ? resolve() : reject(new Error(`analyze exit ${code}: ${stderr.slice(-500)}`)));
     proc.on("error", reject);
   }).catch((e) => c.json({ error: String(e) }, 500));
-  const updated = readThumbManifest().find((e: any) => e.id === id);
-  return c.json({ item: updated });
+  const updated2 = (await readThumbManifest()).find((e: any) => e.id === id);
+  return c.json({ item: updated2 });
 });
 
 // POST · YouTube 채널 이미 sync 된 영상 중 상위 뷰 썸네일 자동 수집 → refs 로 추가
@@ -2431,7 +2514,7 @@ app.post("/api/thumbnail-refs/import-youtube", async (c) => {
     [channelId, max]
   );
   if (!rows.length) return c.json({ error: "no synced videos for channel", channelId }, 404);
-  const entries = readThumbManifest();
+  const entries = await readThumbManifest();
   const usedIds = new Set(entries.map((e: any) => e.id));
   const added: any[] = [];
   for (const r of rows) {
@@ -2444,9 +2527,18 @@ app.post("/api/thumbnail-refs/import-youtube", async (c) => {
     try {
       const buf = Buffer.from(await (await fetch(thumbUrl)).arrayBuffer());
       const fname = `${id}.jpg`;
-      fs.writeFileSync(path.join(THUMB_REF_DIR, fname), buf);
+      let storedPath: string;
+      if (useGcs()) {
+        const gcsPath = `${THUMB_GCS_PREFIX}/${fname}`;
+        await writeFile(gcsPath, buf);
+        storedPath = gcsPath;
+      } else {
+        fs.mkdirSync(THUMB_REF_DIR, { recursive: true });
+        fs.writeFileSync(path.join(THUMB_REF_DIR, fname), buf);
+        storedPath = `assets/thumbnail-reference/${fname}`;
+      }
       const entry = {
-        id, path: `assets/thumbnail-reference/${fname}`,
+        id, path: storedPath,
         _analyzed: false, program, custom_tags: ["youtube"],
         source: { videoId: v.videoId, title: v.title, viewCount: v.viewCount },
         uploaded_at: new Date().toISOString(),
@@ -2456,7 +2548,7 @@ app.post("/api/thumbnail-refs/import-youtube", async (c) => {
       console.error("[thumb-import]", id, e);
     }
   }
-  writeThumbManifest(entries);
+  await writeThumbManifest(entries);
   return c.json({ added: added.length, items: added });
 });
 
