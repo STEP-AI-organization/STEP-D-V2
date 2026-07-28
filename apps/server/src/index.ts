@@ -1613,6 +1613,21 @@ app.post("/api/media/from-youtube", async (c) => {
       .catch(() => {});
     return c.json({ error: "다운로드 잡 큐잉 실패 — 다시 시도해 주세요" }, 500);
   }
+  // 시청자 댓글도 병행 수집 — 연동 채널의 영상일 때만(sourceChannelId 있을 때). yt-dlp 다운로드가
+  // 수 분~수십 분 걸리는 동안 YouTube Data API 로 상위 좋아요 댓글을 미리 받아둔다. content.analyze
+  // 가 시작될 때쯤이면 video_comments 에 이미 들어있어 content-pipeline 이 그대로 뽑아 comments.json
+  // 으로 넘긴다. dedupe 로 스케줄러의 daily fan-out 잡과 중복돼도 하나만 실행.
+  if (sourceVideoId && sourceChannelId) {
+    try {
+      await enqueue(
+        "video.comments",
+        { videoId: sourceVideoId, channelId: sourceChannelId },
+        { dedupeKey: `video.comments:${sourceVideoId}` },
+      );
+    } catch (err) {
+      console.warn("[from-youtube] video.comments enqueue skipped:", err);
+    }
+  }
   return c.json({ ...result, ok: true, queued: jobId != null });
 });
 

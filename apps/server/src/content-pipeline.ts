@@ -32,7 +32,7 @@ import { Readable } from "node:stream";
 
 import {
   getMedia, saveContentAnalysis, saveTranscript, saveEpisodeCast, listProgramCast,
-  getChannelPointProfile,
+  getChannelPointProfile, listVideoComments,
   getPool, getEntity, putEntity,
 } from "./db-pg.ts";
 import type { TranscriptSegment } from "./db-pg.ts";
@@ -51,7 +51,7 @@ const WORK_ROOT = path.join(os.tmpdir(), "stepd-content");
 const WORK_DIR_TTL_MS = 48 * 60 * 60 * 1000;
 
 /** Stage outputs core/analyze.py checkpoints into the work dir (upload order). */
-const CHECKPOINT_FILES = ["analysis.json", "scenes.json", "cast.json", "timeline.json", "narrative.json", "shorts.json", "refined.json", "faces.json", "ppl.json", "stt.json", "manifest.json"];
+const CHECKPOINT_FILES = ["analysis.json", "scenes.json", "cast.json", "timeline.json", "narrative.json", "shorts.json", "refined.json", "faces.json", "ppl.json", "stt.json", "manifest.json", "comments.json", "viewer_signals.json"];
 
 /**
  * Watchdog: kill the python child after this long with NO stdout output. A hung Vertex
@@ -998,6 +998,31 @@ export async function runContentAnalyze(mediaId: string, fast = false): Promise<
           programContextPath = path.join(work, "program_context.json");
           fs.writeFileSync(programContextPath, JSON.stringify(ctx), "utf-8");
           console.log(`[worker] content.analyze ${mediaId}: program context (${Object.keys(ctx).join(",")})`);
+        }
+      }
+
+      // 시청자 댓글 → viewer_signals 배선 (2026-07-28). 이 롱폼이 유튜브에서 온
+      // 영상(from-youtube 경로)이면 episode.sourceVideoId 가 남아있고, 그 videoId 로
+      // 이미 수집돼 있는 상위 좋아요 댓글을 뽑아 work/comments.json 으로 넘긴다.
+      // core.analyze 가 이 파일을 감지해 build_viewer_signals 로 profile에 병합 →
+      // recommend 프롬프트에 시청자 실측 반응(상위 순간·시간 언급·감정) 컨텍스트가 들어감.
+      // 댓글 없음/외부 채널(연동 안 됨) 케이스는 파일 미생성 → 기존과 동일 동작.
+      const sourceVideoId = typeof episode?.sourceVideoId === "string" ? episode.sourceVideoId : "";
+      if (sourceVideoId) {
+        try {
+          const comments = await listVideoComments(sourceVideoId, 100);
+          if (comments.length > 0) {
+            const commentsPath = path.join(work, "comments.json");
+            const slim = comments.map((c) => ({
+              text: c.text,
+              likeCount: Number(c.likeCount) || 0,
+              publishedAt: c.publishedAt,
+            }));
+            fs.writeFileSync(commentsPath, JSON.stringify(slim), "utf-8");
+            console.log(`[worker] content.analyze ${mediaId}: viewer comments ${comments.length} → comments.json (videoId=${sourceVideoId})`);
+          }
+        } catch (e) {
+          console.warn(`[worker] content.analyze ${mediaId}: viewer comments load skipped:`, e);
         }
       }
     } catch (e) {

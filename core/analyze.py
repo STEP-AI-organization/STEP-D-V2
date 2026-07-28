@@ -47,7 +47,7 @@ from .shots import detect_shots
 from .scene_type import classify_shot_types
 from .beats import build_beats
 
-CHECKPOINTS = ("stt.json", "refined.json", "faces.json", "ppl.json", "scenes.json", "cast.json", "timeline.json", "narrative.json", "shots.json", "scene_type.json", "beats.json", "shorts.json", "analysis.json")
+CHECKPOINTS = ("stt.json", "refined.json", "faces.json", "ppl.json", "scenes.json", "cast.json", "timeline.json", "narrative.json", "shots.json", "scene_type.json", "beats.json", "viewer_signals.json", "shorts.json", "analysis.json")
 
 
 # ── checkpoint plumbing ─────────────────────────────────────────────────────────
@@ -112,8 +112,18 @@ def _prepare_checkpoints(
     SCENE_TYPE_VER = "2026-07-24a"  # shot 프레임 → Vision batch: interview/on_scene/other
     BEATS_VER = "2026-07-28-gap-split-speaker"   # gap-fill을 화자 전환점에서 세분화 (auto beat 통째 담기 방지)
     STT_VER = "2026-07-27-word-normalize"  # + word.end 침묵 삼킴 clip + duration 이상치 cap (drift fix)
+    VIEWER_SIGNALS_VER = "2026-07-28-init"  # 댓글→viewer_signals 초기 버전. Gemini 프롬프트 변경 시 상향.
     STT_PROVIDER_ENV = (os.environ.get("STT_PROVIDER") or "gemini").lower()
     RECOMMEND_MODE = os.environ.get("RECOMMEND_MODE") or "narrative_first"
+    # 댓글 파일이 바뀌면 viewer_signals·shorts 를 재생성해야 하므로 내용 해시를 지문에 포함.
+    # 없으면 빈 문자열 — 있다가 사라진 케이스도 감지되어 캐시가 무효화된다.
+    _comments_path = out_dir / "comments.json"
+    _comments_hash = ""
+    if _comments_path.exists():
+        try:
+            _comments_hash = hashlib.sha1(_comments_path.read_bytes()).hexdigest()[:16]
+        except OSError:
+            pass
     params = {
         "stt.json": _fingerprint(STT_VER, STT_PROVIDER_ENV),
         "refined.json": _fingerprint(cast_registry, REFINE_VER, STT_VER, STT_PROVIDER_ENV),
@@ -123,8 +133,9 @@ def _prepare_checkpoints(
         "shots.json": _fingerprint(SHOTS_VER),
         "scene_type.json": _fingerprint(SCENE_TYPE_VER, SHOTS_VER),
         "beats.json": _fingerprint(BEATS_VER, REFINE_VER, SHOTS_VER, SCENE_TYPE_VER, STT_VER),
-        "shorts.json": _fingerprint(genre, shorts_n, profile, channels, cast_registry, RECOMMEND_VER, RECOMMEND_MODE, REFINE_VER, FACES_VER, BEATS_VER, STT_VER),
-        "analysis.json": _fingerprint(genre, shorts_n, profile, channels, cast_registry, RECOMMEND_VER, RECOMMEND_MODE, REFINE_VER, FACES_VER, BEATS_VER, STT_VER),
+        "viewer_signals.json": _fingerprint(VIEWER_SIGNALS_VER, _comments_hash),
+        "shorts.json": _fingerprint(genre, shorts_n, profile, channels, cast_registry, RECOMMEND_VER, RECOMMEND_MODE, REFINE_VER, FACES_VER, BEATS_VER, STT_VER, _comments_hash),
+        "analysis.json": _fingerprint(genre, shorts_n, profile, channels, cast_registry, RECOMMEND_VER, RECOMMEND_MODE, REFINE_VER, FACES_VER, BEATS_VER, STT_VER, _comments_hash),
     }
     manifest = {"video_name": video_name, "video_size": video_size, "params": params}
 
@@ -249,6 +260,38 @@ def analyze(
     step(f"  {len(segments)} 세그먼트")
     timed("stt", ts)
     _progress("stt", 30, f"음성 인식 완료 · {len(segments)} 세그먼트")
+
+    # ── 시청자 신호 (2026-07-28) — 이 롱폼 원본의 상위 좋아요 댓글에서 뽑은 반응.
+    # content-pipeline이 out_dir/comments.json 으로 넘겨준다 (from-youtube 경로 · sourceVideoId
+    # 있을 때만). build_viewer_signals 는 timestamp 정규식 파싱 + Gemini 1회 요약으로
+    # top_moments·dominant_emotion·top_demands·explicit_timestamps 를 dict 로 만든다.
+    # 그걸 profile 에 병합하면 recommend._profile_block 이 이미 있는 로직으로 프롬프트에
+    # 녹여 픽에 반영한다. comments.json 없거나 실패해도 파이프라인은 원상태로 계속 진행.
+    viewer_signals_path = out_dir / "comments.json"
+    if viewer_signals_path.exists():
+        ts = time.time()
+        vs = _load_json(out_dir / "viewer_signals.json")
+        if isinstance(vs, dict) and (vs.get("top_moments") or vs.get("explicit_timestamps") or vs.get("dominant_emotion")):
+            step(f"시청자 신호 — 체크포인트 재사용 (moments {len(vs.get('top_moments') or [])})")
+        else:
+            try:
+                from .comment_signal import build_viewer_signals
+                comments = _load_json(viewer_signals_path) or []
+                dur = float(segments[-1].get("end") or 0) if segments else None
+                step(f"시청자 신호 생성 (댓글 {len(comments)}개)…")
+                vs = build_viewer_signals(comments, duration_sec=dur)
+                _save_json(out_dir / "viewer_signals.json", vs)
+                step(f"  moments {len(vs.get('top_moments') or [])}"
+                     f" · timestamps {len(vs.get('explicit_timestamps') or [])}"
+                     f" · emotion '{vs.get('dominant_emotion') or '-'}'")
+            except Exception as e:
+                step(f"  (viewer_signals 생성 스킵: {str(e)[:80]})")
+                vs = None
+        timed("viewer_signals", ts)
+        # profile 오염 방지 위해 얕은 복사 후 병합.
+        if isinstance(vs, dict) and (vs.get("top_moments") or vs.get("explicit_timestamps") or vs.get("dominant_emotion")):
+            profile = dict(profile or {})
+            profile["viewer_signals"] = vs
 
     # ── 빠른 모드 (fast) — 자막만으로 바로 추천. 시각 장면감지·프레임·비전·정제·서사를 스킵해
     # 긴 영상 분석 시간의 최대 74%(장면감지+프레임)를 절감한다. 대사 기반 콘텐츠에 적합.
