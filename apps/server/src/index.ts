@@ -2330,6 +2330,42 @@ app.delete("/api/thumbnail-refs/:id", async (c) => {
   return c.json({ ok: true });
 });
 
+// POST · 전체 미분석/미가공 항목 배치 처리 (분석 or 가공)
+app.post("/api/thumbnail-refs/batch/:action", async (c) => {
+  const action = c.req.param("action");
+  if (!["analyze", "preprocess"].includes(action)) return c.json({ error: "action" }, 400);
+  const entries = readThumbManifest();
+  const targets = entries.filter((e: any) =>
+    action === "analyze" ? !e._analyzed : !e.cleaned_path);
+  if (!targets.length) return c.json({ ok: true, processed: 0, note: "nothing to do" });
+  const scriptName = action === "analyze"
+    ? "thumbnail_reference_manifest.py"
+    : "thumbnail_preprocess_template.py";
+  const scriptPath = path.join(REPO_ROOT, "scripts", scriptName);
+  const python = process.env.CORE_PYTHON || "python";
+  const { spawn } = await import("node:child_process");
+  const results: any[] = [];
+  for (const target of targets) {
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const args = action === "analyze" ? [scriptPath] : [scriptPath, target.id];
+        const proc = spawn(python, args, {
+          cwd: REPO_ROOT, env: { ...process.env, PYTHONIOENCODING: "utf-8" },
+        });
+        let stderr = "";
+        proc.stderr.on("data", (d) => { stderr += d.toString(); });
+        proc.on("close", (code) => code === 0 ? resolve() : reject(new Error(`${action} ${target.id} exit ${code}: ${stderr.slice(-300)}`)));
+        proc.on("error", reject);
+      });
+      results.push({ id: target.id, ok: true });
+    } catch (e: any) {
+      results.push({ id: target.id, ok: false, error: String(e?.message || e) });
+    }
+    if (action === "analyze") break;  // analyze 는 전체 스캔 · 한 번만
+  }
+  return c.json({ ok: true, processed: results.length, results });
+});
+
 // POST · template 사전 가공 (텍스트→슬롯 라벨 · 얼굴→실루엣)
 app.post("/api/thumbnail-refs/:id/preprocess", async (c) => {
   const id = c.req.param("id").replace(/[^\w.-]/g, "");

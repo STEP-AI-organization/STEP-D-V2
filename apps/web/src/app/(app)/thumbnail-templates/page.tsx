@@ -143,6 +143,32 @@ export default function ThumbnailTemplatesPage() {
         actions={
           <div className="flex gap-2">
             <Button variant="outline" onClick={async () => {
+              if (!confirm("모든 미분석 template Vision 분석 (수십 초/개 소요)?")) return;
+              try {
+                const r = await api<{ processed: number }>("/thumbnail-refs/batch/analyze",
+                  { method: "POST" });
+                push({ tone: "done", title: `전체 분석: ${r.processed}개 처리` });
+                refresh();
+              } catch (e: any) {
+                push({ tone: "error", title: "분석 실패", description: String(e?.message || e) });
+              }
+            }}>
+              <Sparkles className="w-4 h-4 mr-2" /> 전체 분석
+            </Button>
+            <Button variant="outline" onClick={async () => {
+              if (!confirm("모든 미가공 template 사전 가공 (수십 초/개 소요)?")) return;
+              try {
+                const r = await api<{ processed: number }>("/thumbnail-refs/batch/preprocess",
+                  { method: "POST" });
+                push({ tone: "done", title: `전체 가공: ${r.processed}개 처리` });
+                refresh();
+              } catch (e: any) {
+                push({ tone: "error", title: "가공 실패", description: String(e?.message || e) });
+              }
+            }}>
+              <Sparkles className="w-4 h-4 mr-2" /> 전체 가공
+            </Button>
+            <Button variant="outline" onClick={async () => {
               const channelId = prompt("YouTube channelId (동기화된 채널)");
               if (!channelId) return;
               const program = prompt("프로그램 태그 (선택 · 비면 global)") || "";

@@ -212,23 +212,48 @@ def run_pipeline(
                                    "title": shorts.get("title", "")}
     log["took"]["1_context"] = round(time.time() - t, 2)
 
-    # ─── ② Reference pool ─── 프로그램 필터 우선 ─────
+    # ─── ② Reference pool ─── 프로그램 필터 + heuristic top-K ────
     t = time.time()
     all_refs = _load_references()
     # 프로그램 컨텍스트 (workdir program_context.json)
     program_ctx = _safe_load(media_dir / "program_context.json", {})
     program_id = (program_ctx.get("title") if isinstance(program_ctx, dict) else "") or ""
-    # program 태그 매칭 우선 · 매칭 X 이면 전체
-    if program_id:
-        matched = [r for r in all_refs if (r.get("program") or "") == program_id]
-        references = matched or all_refs
-        filter_note = f"program='{program_id}' matched {len(matched)}/{len(all_refs)}"
-    else:
-        references = all_refs
-        filter_note = "no program filter (global pool)"
+
+    # 화자 수 (transcript 안 [이름] 태그 세기)
+    speakers_hint = 0
+    for line in shorts_meta.get("transcript_sample") or []:
+        if line.startswith("[") and "]" in line:
+            speakers_hint = max(speakers_hint, 1)
+    # 대충 넉넉히 · 2~3 인
+    speaker_count = min(4, max(1, len(set(
+        line[1:line.index("]")].strip() for line in (shorts_meta.get("transcript_sample") or [])
+        if line.startswith("[") and "]" in line
+    )) or 2))
+
+    # heuristic 점수 (수십 개 pool 대비)
+    TOP_K = max(n_variants * 2, 8)  # Planner 는 top-K 만 봄
+    def _score(r: dict) -> float:
+        s = 0.0
+        if program_id and (r.get("program") or "") == program_id:
+            s += 3.0
+        pc = int(r.get("person_count") or 0)
+        if pc > 0:
+            # 화자 수 근접
+            s += max(0.0, 2.0 - abs(pc - speaker_count) * 0.7)
+        if r.get("cleaned"):
+            s += 0.5   # cleaned template 살짝 선호
+        # description 유무
+        if r.get("description"):
+            s += 0.2
+        return s
+    scored = sorted(all_refs, key=_score, reverse=True)
+    references = scored[:TOP_K]
+
     log["stages"]["2_references"] = {"count": len(references), "total": len(all_refs),
-                                       "filter": filter_note,
-                                       "ids": [r["id"] for r in references]}
+                                       "top_k": TOP_K, "speaker_count": speaker_count,
+                                       "program_id": program_id,
+                                       "ids": [r["id"] for r in references],
+                                       "scores": [(r["id"], round(_score(r), 2)) for r in references]}
     log["took"]["2_references"] = round(time.time() - t, 2)
     if not references:
         return {"status": "no_references", "log": log}
