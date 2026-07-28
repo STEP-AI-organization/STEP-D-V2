@@ -642,10 +642,21 @@ def _index_faces_by_frame(faces_data: Any) -> dict[str, list[dict]]:
 # ═════════════════════════════════════════════════════════════════
 
 VARIANT_SYSTEM = """너는 한국 유튜브 썸네일 기획자다.
-쇼츠 하나에 대해 서로 다른 톤의 후보 N 개를 각각 5필드로 짠다.
+쇼츠 하나에 대해 **먼저 원핵훅(hook_summary) 한 문장**을 정리한 뒤,
+그 훅을 서로 다른 각도로 시각화한 **variant N 개**를 짠다.
+
+**작업 순서 (반드시 이 순서로 사고)**:
+1. hook_summary: 이 쇼츠의 "해보(=시청자가 왜 클릭하나) 못 한 문장". 실제 대사·핵심 순간에서 근거.
+2. variants[N]: 각 variant 는 hook_summary 를 **다른 각도**로 시각화.
+   - v1: 인물 감정 표현 각도 · v2: 상황·환경·반전 각도 · v3: 인용·대사 각도 등 뷰 분화
 
 **중요**: 자막(caption)은 시스템이 나중에 폰트로 렌더해서 정확한 위치에 얹는다.
 너는 자막 문장·위치·크기만 정하면 됨. 이미지 생성 AI 는 자막을 그리지 않는다.
+
+**주인공 인물 선택 (featured_cast) — 반드시 지킴**:
+- 아래 user 메시지의 "[등록된 인물 (썸네일 사용 가능)]" 목록에서**만** 이름을 뽑는다.
+- 목록 밖 이름 (narrative characters 에는 있지만 등록 X) 은 **절대** 선택 X.
+- 등록 목록이 비어 있으면 featured_cast 는 빈 배열 (프레임 인물 그대로 사용).
 
 필드:
 - background: 배경 처리 한 문장 · 이미지 AI 에게 보낼 지시 (예: "원본 프레임 유지·왼쪽 하단 어둡게 그라디언트")
@@ -688,7 +699,7 @@ layout ↔ caption_position 정합:
 - layout 에서 인물 하단 지시했으면 caption_position 은 top 계열
 - 자막이 인물 얼굴 가리지 않도록
 
-출력: JSON `{"variants": [{...5필드...}, ...]}` 만. 마크다운/설명 X.
+출력: JSON `{"hook_summary": "...", "variants": [{...}, ...]}` 만. 마크다운/설명 X.
 """
 
 
@@ -718,6 +729,14 @@ def generate_variant_prompts(
     if shorts_meta and shorts_meta.get("end", 0) > shorts_meta.get("start", 0):
         shorts_slice = load_shorts_slice(media_dir, shorts_meta)
 
+    # 등록된 인물 (썸네일 사용 가능) — Planner featured_cast 강제용
+    cast_dir = media_dir / "cast_photos"
+    available_cast: list[str] = []
+    if cast_dir.exists():
+        exts = {".jpg", ".jpeg", ".png", ".webp"}
+        available_cast = sorted({p.stem for p in cast_dir.iterdir()
+                                 if p.suffix.lower() in exts})
+
     lines = ["[쇼츠]",
              f"  제목: {shorts_ctx.get('title', '')}",
              f"  요약: {shorts_ctx.get('description', '')}"]
@@ -737,8 +756,15 @@ def generate_variant_prompts(
             lines.append("[실제 대사]")
             for t in tl[:20]:
                 lines.append(f"  · {t}")
-    lines.append(f"\n위 쇼츠 기준 · 서로 다른 톤의 썸네일 후보 **{n}개** 를 짜라.")
-    lines.append("각 후보는 (background, layout, caption) 세 필드. JSON 배열로.")
+    lines.append("\n[등록된 인물 (썸네일 사용 가능)]")
+    if available_cast:
+        lines.append(f"  {', '.join(available_cast)}")
+        lines.append(f"  → featured_cast 는 반드시 이 {len(available_cast)}명 중에서만 선택 · 그 외 이름 절대 X")
+    else:
+        lines.append("  (등록 없음 · featured_cast 는 빈 배열 [] 로)")
+    lines.append(f"\n위 쇼츠 기준 · 먼저 hook_summary 한 문장 · 그 다음 서로 다른 각도의 variant **{n}개**.")
+    lines.append("hook_summary = 이 쇼츠의 '해보' 못 한 문장 (시청자가 왜 클릭할까).")
+    lines.append("variant 는 hook 을 다른 각도로 시각화 (인물 감정 / 상황·환경 / 인용·대사 등).")
     prompt_user = "\n".join(lines)
 
     POSITIONS = [
@@ -749,6 +775,10 @@ def generate_variant_prompts(
     schema = {
         "type": "OBJECT",
         "properties": {
+            "hook_summary": {
+                "type": "STRING",
+                "description": "이 쇼츠의 원핵훅 · 한 문장 (시청자가 왜 클릭하나 · 실제 대사·순간 근거)",
+            },
             "variants": {
                 "type": "ARRAY",
                 "items": {
@@ -781,7 +811,7 @@ def generate_variant_prompts(
                 },
             },
         },
-        "required": ["variants"],
+        "required": ["hook_summary", "variants"],
     }
 
     # 참고 스타일 프로파일 로드 (assets/thumbnail-reference/)
@@ -848,23 +878,45 @@ def generate_variant_prompts(
         print(f"[variant_planner] json parse fail: {str(e)[:200]} · text={resp.text[:200]}",
               file=_sys.stderr)
         return []
+    hook_summary = data.get("hook_summary", "")
     variants = data.get("variants", [])
     if not isinstance(variants, list):
         import sys as _sys
         print(f"[variant_planner] variants not list · type={type(variants)}", file=_sys.stderr)
         return []
-    # 정확히 n 개 로 맞추기 (부족하면 마지막 반복 · 넘치면 자름)
-    # 유효 조건: dict + (captions 배열 비어있지 않음 OR caption 있음)
+
     def _has_text(v: dict) -> bool:
         if v.get("captions") and any((c or {}).get("text") for c in v["captions"]):
             return True
         return bool(v.get("caption"))
+
     variants = [v for v in variants if isinstance(v, dict) and _has_text(v)]
     if not variants:
         return []
+
+    # featured_cast 를 등록 목록으로 강제 필터 (목록 밖 이름 제거)
+    avail_set = set(available_cast)
+    for v in variants:
+        fc = v.get("featured_cast") or []
+        if isinstance(fc, list) and avail_set:
+            filtered = [n for n in fc if n in avail_set]
+            if filtered != fc:
+                v.setdefault("_meta", {})["featured_cast_filtered"] = {
+                    "requested": fc, "kept": filtered,
+                }
+                v["featured_cast"] = filtered
+
     while len(variants) < n:
         variants.append(dict(variants[-1]))
-    return variants[:n]
+    variants = variants[:n]
+
+    # hook_summary 를 모든 variant 에 붙여서 downstream 가 접근 가능하게 (또한 stdout 로그)
+    if hook_summary:
+        print(f"[variant_planner] hook_summary: {hook_summary}")
+        for v in variants:
+            v.setdefault("_hook_summary", hook_summary)
+
+    return variants
 
 
 if __name__ == "__main__":
