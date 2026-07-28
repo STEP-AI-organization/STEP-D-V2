@@ -13,6 +13,7 @@ import { useToast } from "@/components/ui/toast";
 interface RefItem {
   id: string;
   path: string;
+  cleaned_path?: string;
   _analyzed?: boolean;
   person_count?: number;
   mood?: string;
@@ -97,6 +98,19 @@ export default function ThumbnailTemplatesPage() {
       refresh();
     } catch (e: any) {
       push({ tone: "error", title: "분석 실패", description: String(e?.message || e) });
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const onPreprocess = async (id: string) => {
+    setBusyId(id);
+    try {
+      await api(`/thumbnail-refs/${id}/preprocess`, { method: "POST" });
+      push({ tone: "done", title: `사전 가공 완료: ${id}` });
+      refresh();
+    } catch (e: any) {
+      push({ tone: "error", title: "가공 실패", description: String(e?.message || e) });
     } finally {
       setBusyId(null);
     }
@@ -201,18 +215,29 @@ export default function ThumbnailTemplatesPage() {
                           onClick={() => setEditing(item)}>편집</Button>
                   {!item._analyzed && (
                     <Button size="sm" variant="outline" disabled={busyId === item.id}
-                            onClick={() => onAnalyze(item.id)}>
+                            onClick={() => onAnalyze(item.id)} title="Vision 분석">
                       {busyId === item.id
                         ? <Loader2 className="w-3 h-3 animate-spin" />
                         : <Sparkles className="w-3 h-3" />}
                     </Button>
                   )}
+                  <Button size="sm" variant={item.cleaned_path ? "outline" : "default"}
+                          disabled={busyId === item.id}
+                          onClick={() => onPreprocess(item.id)}
+                          title="사전 가공 (텍스트→슬롯 라벨·얼굴→실루엣)">
+                    {busyId === item.id
+                      ? <Loader2 className="w-3 h-3 animate-spin" />
+                      : <span className="text-[10px]">{item.cleaned_path ? "재가공" : "가공"}</span>}
+                  </Button>
                   <Button size="sm" variant="outline"
                           disabled={busyId === item.id}
                           onClick={() => onDelete(item.id)}>
                     <Trash2 className="w-3 h-3" />
                   </Button>
                 </div>
+                {item.cleaned_path && (
+                  <div className="text-[10px] text-emerald-500">✓ cleaned template</div>
+                )}
               </Card>
             ))}
           </div>

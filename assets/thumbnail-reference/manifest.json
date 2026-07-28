@@ -17,7 +17,8 @@
       "teal"
     ],
     "caption_style": "하단 대형 흰색/청록색 볼드체 + 중앙 인용 손글씨 + 상단 감탄사 손글씨",
-    "description": "두 인물이 놀란 표정으로 반응하며, 배경에는 출연진들이 모여있고, 직업 공개에 대한 반전과 놀라움을 예고하는 자막이 있다."
+    "description": "두 인물이 놀란 표정으로 반응하며, 배경에는 출연진들이 모여있고, 직업 공개에 대한 반전과 놀라움을 예고하는 자막이 있다.",
+    "cleaned_path": "assets/thumbnail-reference/cleaned/ref_001_clean.png"
   },
   {
     "id": "ref_002",
@@ -37,7 +38,8 @@
       "검정색"
     ],
     "caption_style": "상단 핑크 손글씨 인용 + 하단 청록색 굵은 고딕체",
-    "description": "주방에서 두 남녀가 생각에 잠긴 표정으로 앉아있고, 관계에 대한 속마음을 담은 큰 자막이 강조된 썸네일."
+    "description": "주방에서 두 남녀가 생각에 잠긴 표정으로 앉아있고, 관계에 대한 속마음을 담은 큰 자막이 강조된 썸네일.",
+    "cleaned_path": "assets/thumbnail-reference/cleaned/ref_002_clean.png"
   },
   {
     "id": "ref_003",
@@ -57,7 +59,8 @@
       "pink"
     ],
     "caption_style": "하단 핑크색 강조 제목 + 상단 인용구",
-    "description": "한 커플이 귓속말을 하고 손깍지를 끼는 모습과 이를 지켜보는 다른 출연자의 반응이 담긴 연애 리얼리티 프로그램 썸네일."
+    "description": "한 커플이 귓속말을 하고 손깍지를 끼는 모습과 이를 지켜보는 다른 출연자의 반응이 담긴 연애 리얼리티 프로그램 썸네일.",
+    "cleaned_path": "assets/thumbnail-reference/cleaned/ref_003_clean.png"
   },
   {
     "id": "ref_004",

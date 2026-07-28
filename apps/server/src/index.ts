@@ -2330,6 +2330,32 @@ app.delete("/api/thumbnail-refs/:id", async (c) => {
   return c.json({ ok: true });
 });
 
+// POST · template 사전 가공 (텍스트→슬롯 라벨 · 얼굴→실루엣)
+app.post("/api/thumbnail-refs/:id/preprocess", async (c) => {
+  const id = c.req.param("id").replace(/[^\w.-]/g, "");
+  const entries = readThumbManifest();
+  const entry = entries.find((e: any) => e.id === id);
+  if (!entry) return c.json({ error: "not found" }, 404);
+  const scriptPath = path.join(REPO_ROOT, "scripts", "thumbnail_preprocess_template.py");
+  const python = process.env.CORE_PYTHON || "python";
+  const { spawn } = await import("node:child_process");
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const proc = spawn(python, [scriptPath, id, "--force"], {
+        cwd: REPO_ROOT, env: { ...process.env, PYTHONIOENCODING: "utf-8" },
+      });
+      let stderr = "";
+      proc.stderr.on("data", (d) => { stderr += d.toString(); });
+      proc.on("close", (code) => code === 0 ? resolve() : reject(new Error(`preprocess exit ${code}: ${stderr.slice(-500)}`)));
+      proc.on("error", reject);
+    });
+  } catch (e: any) {
+    return c.json({ error: String(e?.message || e) }, 500);
+  }
+  const updated = readThumbManifest().find((e: any) => e.id === id);
+  return c.json({ item: updated });
+});
+
 // POST · Vision 자동 분석 (기존 entry · 새 업로드 후 · manifest _analyzed=false → true)
 app.post("/api/thumbnail-refs/:id/analyze", async (c) => {
   const id = c.req.param("id").replace(/[^\w.-]/g, "");

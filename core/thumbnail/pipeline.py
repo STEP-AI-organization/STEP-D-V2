@@ -150,8 +150,16 @@ def _load_references() -> list[dict]:
                 p = REF_DIR.parent / m["path"]
                 if not p.exists():
                     continue
+                # cleaned_path 우선 (사전 가공된 template)
+                use_p = p
+                if m.get("cleaned_path"):
+                    cp = REF_DIR.parent / m["cleaned_path"]
+                    if cp.exists():
+                        use_p = cp
                 refs.append({
-                    "id": m["id"], "path": p,
+                    "id": m["id"], "path": use_p,
+                    "orig_path": p,
+                    "cleaned": bool(m.get("cleaned_path") and use_p != p),
                     "person_count": m.get("person_count", 0),
                     "mood": m.get("mood", ""),
                     "composition": m.get("composition", ""),
