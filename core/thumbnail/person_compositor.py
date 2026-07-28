@@ -76,21 +76,22 @@ def _cutout_local(img_path: pathlib.Path) -> Image.Image:
     return Image.open(io.BytesIO(out)).convert("RGBA")
 
 
-# 9 슬롯 앵커 (caption_overlay 와 동일 좌표계)
+# 9 슬롯 앵커 · 이미지 잘림 방지 · 여백 좀 여유롭게
 POSITION_ANCHORS: dict[str, tuple[float, float, str, str]] = {
-    "top-left":       (0.05, 0.05, "left",   "top"),
-    "top-center":     (0.50, 0.05, "center", "top"),
-    "top-right":      (0.95, 0.05, "right",  "top"),
-    "middle-left":    (0.05, 0.50, "left",   "middle"),
+    "top-left":       (0.03, 0.02, "left",   "top"),
+    "top-center":     (0.50, 0.02, "center", "top"),
+    "top-right":      (0.97, 0.02, "right",  "top"),
+    "middle-left":    (0.03, 0.50, "left",   "middle"),
     "middle-center":  (0.50, 0.50, "center", "middle"),
-    "middle-right":   (0.95, 0.50, "right",  "middle"),
-    "bottom-left":    (0.05, 1.00, "left",   "bottom"),
+    "middle-right":   (0.97, 0.50, "right",  "middle"),
+    "bottom-left":    (0.03, 1.00, "left",   "bottom"),
     "bottom-center":  (0.50, 1.00, "center", "bottom"),
-    "bottom-right":   (0.95, 1.00, "right",  "bottom"),
+    "bottom-right":   (0.97, 1.00, "right",  "bottom"),
 }
 
 # 인물 크기 · 배경 이미지 높이 대비 인물 최종 높이 비율
-PERSON_SIZE_RATIO = {"S": 0.45, "M": 0.60, "L": 0.75, "XL": 0.95}
+# 방송사 절제 톤 · XL 도 화면 3/4 이하 · 상단 서브는 S/M 로
+PERSON_SIZE_RATIO = {"S": 0.35, "M": 0.50, "L": 0.65, "XL": 0.80}
 
 
 def cutout_person(img_path: pathlib.Path) -> Image.Image:

@@ -20,13 +20,14 @@ TEMPLATES: dict[str, dict[str, Any]] = {
     "T1_closeup": {
         "description": "1인 클로즈업 · 감정·표정·독백·리액션 집중",
         "person_zones": [
-            {"id": "hero", "position": "bottom-right", "size": "XL", "z_index": 0},
+            # hero L (0.65H) · 상반신 · 화면 우측 절반
+            {"id": "hero", "position": "bottom-right", "size": "L", "z_index": 0},
         ],
         "caption_zones": [
-            {"id": "cap_sub",  "role": "subtitle", "position": "bottom-left",
-             "size": "M", "max_chars": 15},
+            {"id": "cap_sub",  "role": "subtitle", "position": "middle-left",
+             "size": "S", "max_chars": 12},
             {"id": "cap_main", "role": "main",     "position": "bottom-left",
-             "size": "L", "max_chars": 12},
+             "size": "L", "max_chars": 10},
         ],
         "background": {
             "mode": "source_blur", "blur": "heavy", "vignette": True,
@@ -38,8 +39,9 @@ TEMPLATES: dict[str, dict[str, Any]] = {
     "T2_split": {
         "description": "2인 대립/대비 · 좌우 분할 · 관계·긴장 프레이밍",
         "person_zones": [
-            {"id": "left",  "position": "bottom-left",  "size": "L", "z_index": 0},
-            {"id": "right", "position": "bottom-right", "size": "L", "z_index": 0},
+            # 각각 M (0.50H) · 상반신 · 좌우 대칭
+            {"id": "left",  "position": "bottom-left",  "size": "M", "z_index": 0},
+            {"id": "right", "position": "bottom-right", "size": "M", "z_index": 0},
         ],
         "caption_zones": [
             {"id": "cap_main", "role": "main", "position": "top-center",
@@ -55,11 +57,12 @@ TEMPLATES: dict[str, dict[str, Any]] = {
     "T3_quote": {
         "description": "명대사·폭탄 발언 임팩트 · 인용문 hero",
         "person_zones": [
-            {"id": "hero", "position": "bottom-right", "size": "L", "z_index": 0},
+            # hero M (0.50H) · 우측 하단
+            {"id": "hero", "position": "bottom-right", "size": "M", "z_index": 0},
         ],
         "caption_zones": [
             {"id": "cap_quote", "role": "quote",    "position": "middle-left",
-             "size": "L", "max_chars": 18},
+             "size": "L", "max_chars": 16},
             {"id": "cap_sub",   "role": "subtitle", "position": "bottom-left",
              "size": "S",  "max_chars": 10},
         ],
@@ -73,14 +76,15 @@ TEMPLATES: dict[str, dict[str, Any]] = {
     "T4_reaction": {
         "description": "리액션·반전·놀람 · 메인 리액션 + 원인/상대 인물 서브",
         "person_zones": [
-            {"id": "reactor", "position": "bottom-center", "size": "L", "z_index": 1},
-            {"id": "cause",   "position": "top-right",     "size": "M", "z_index": 0},
+            # 메인 리액션 M (0.50H) 하단 · 원인 S (0.35H) 상단 우측
+            {"id": "reactor", "position": "bottom-left", "size": "M", "z_index": 1},
+            {"id": "cause",   "position": "top-right",   "size": "S", "z_index": 0},
         ],
         "caption_zones": [
             {"id": "cap_badge", "role": "badge", "position": "top-left",
              "size": "S", "max_chars": 6},
-            {"id": "cap_main",  "role": "main",  "position": "bottom-left",
-             "size": "L", "max_chars": 12},
+            {"id": "cap_main",  "role": "main",  "position": "bottom-right",
+             "size": "L", "max_chars": 10},
         ],
         "background": {
             "mode": "source_blur", "blur": "medium",
