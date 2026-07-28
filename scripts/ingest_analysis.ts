@@ -144,6 +144,46 @@ async function main() {
     console.log(`[ingest] transcript · ${segments.length} segs`);
   }
 
+  // 7) recommendation 엔티티 생성 (shorts → rec) — 프론트 채택 버튼 활성화용.
+  //    content-pipeline.ts::recFromShort와 동일 스키마.
+  const shorts = (analysis.shorts || []) as any[];
+  let recCount = 0;
+  for (let i = 0; i < shorts.length; i++) {
+    const s = shorts[i];
+    const start = Number(s.start) || 0;
+    const end = Number(s.end) || 0;
+    if (end <= start) continue;
+    const recId = newId("r");
+    const mid = start + (end - start) * 0.4;
+    const appeal = typeof s.appeal === "number" ? s.appeal : 3;
+    const rec = {
+      id: recId,
+      episodeId,
+      kind: "short",
+      title: s.title || "쇼츠 추천",
+      appeal: Math.max(1, Math.min(5, appeal)),
+      score100: typeof s.score100 === "number" ? s.score100 : undefined,
+      hookStrength: typeof s.hook_strength === "number" ? s.hook_strength : undefined,
+      payoff: typeof s.payoff === "number" ? s.payoff : undefined,
+      completeness: typeof s.completeness === "number" ? s.completeness : undefined,
+      startTime: start,
+      endTime: end,
+      editNote: s.reason || "",
+      tags: Array.isArray(s.tags) ? s.tags : [],
+      status: "pending",
+      thumbnailCandidates: [
+        { id: `${recId}-t1`, label: "시작", time: start + 0.5 },
+        { id: `${recId}-t2`, label: "핵심", time: mid },
+        { id: `${recId}-t3`, label: "끝", time: Math.max(start + 1, end - 1) },
+      ],
+      selectedThumbnailId: `${recId}-t2`,
+      adoptedClipId: null,
+    };
+    await prependEntity("recommendation", recId, rec);
+    recCount++;
+  }
+  console.log(`[ingest] recommendations · ${recCount}개`);
+
   console.log(`\n✓ 완료. 프론트에서 확인:`);
   console.log(`   http://localhost:3000/episodes/${episodeId}`);
   console.log(`   또는 http://localhost:3000/ 에서 "${programTitle}" > #${episodeNumber}`);
