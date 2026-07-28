@@ -16,7 +16,7 @@ from google import genai
 from google.genai import types
 
 from .presets import PRESETS, prompt_summary as presets_prompt_summary, get_preset
-from .templates import TEMPLATES, list_templates_summary
+from .templates import TEMPLATES, list_templates_summary, collect_all_slot_ids
 
 MODEL = "gemini-2.5-flash"
 DEFAULT_LOCATION = "us-central1"
@@ -767,13 +767,27 @@ def generate_variant_prompts(
     lines.append("\n" + list_templates_summary())
     lines.append("")
     lines.append(f"위 쇼츠 기준 · 먼저 hook_summary 한 문장 · 그 다음 서로 다른 template 의 variant **{n}개**.")
-    lines.append("각 variant 는:")
-    lines.append("  1. template_id 하나 선택 (T1/T2/T3/T4)")
-    lines.append("  2. person_slots: 그 템플릿의 person_zone 각 id 에 등록 인물 이름 매핑")
-    lines.append("  3. caption_slots: 그 템플릿의 caption_zone 각 id 에 텍스트 매핑 (max_chars 준수)")
-    lines.append("position/size 는 template 이 결정 · Planner 는 정하지 않음.")
-    lines.append("hook_summary = 이 쇼츠의 '해보' 못 한 문장 (시청자가 왜 클릭할까).")
-    lines.append("variant 다양성: 서로 다른 template 조합 (예: v1=T1 클로즈업, v2=T2 대립, v3=T3 명대사).")
+    lines.append("")
+    lines.append("**출력 JSON 스키마 (반드시 이 구조 · 다른 필드 X · 마크다운 X)**:")
+    lines.append('```')
+    lines.append('{')
+    lines.append('  "hook_summary": "이 쇼츠의 해보 못 한 문장",')
+    lines.append('  "variants": [')
+    lines.append('    {')
+    lines.append('      "template_id": "T1_closeup",')
+    lines.append('      "person_slots": {"hero": "민경"},')
+    lines.append('      "caption_slots": {"cap_main": "결국 터졌다", "cap_sub": "모두 놀란 순간"}')
+    lines.append('    }')
+    lines.append('  ]')
+    lines.append('}')
+    lines.append('```')
+    lines.append("")
+    lines.append("각 variant 규칙:")
+    lines.append("- template_id: 위 T1~T5 중 하나")
+    lines.append("- person_slots: 선택한 template 의 person_slots 배열 각 id 에 등록 인물 이름 매핑")
+    lines.append("- caption_slots: 선택한 template 의 caption_slots 배열 각 id 에 텍스트 매핑")
+    lines.append("- 이름은 반드시 등록 목록에서만 · 텍스트는 shorts 대사·순간 근거")
+    lines.append("variant 다양성: 서로 다른 template (예: v1=T1, v2=T2, v3=T4 등)")
     prompt_user = "\n".join(lines)
 
     POSITIONS = [
@@ -782,6 +796,9 @@ def generate_variant_prompts(
         "bottom-left", "bottom-center", "bottom-right",
     ]
     template_ids = list(TEMPLATES.keys())
+    all_person_ids, all_caption_ids = collect_all_slot_ids()
+    person_slot_props = {pid: {"type": "STRING"} for pid in all_person_ids}
+    caption_slot_props = {cid: {"type": "STRING"} for cid in all_caption_ids}
     schema = {
         "type": "OBJECT",
         "properties": {
@@ -795,35 +812,22 @@ def generate_variant_prompts(
                     "type": "OBJECT",
                     "properties": {
                         "template_id": {"type": "STRING", "enum": template_ids,
-                                         "description": "선택한 템플릿 · position/size 는 이 템플릿이 결정"},
+                                         "description": "선택한 템플릿 · 좌표/크기는 이 템플릿이 결정"},
                         "person_slots": {
                             "type": "OBJECT",
-                            "description": ("템플릿의 person_zone id → 등록 인물 이름 매핑. "
-                                            "예: T1 = {\"hero\": \"민경\"} · T2 = {\"left\": \"민경\", \"right\": \"백현\"}. "
-                                            "이름은 반드시 등록 목록에서만."),
-                            "properties": {
-                                "hero":    {"type": "STRING"},
-                                "left":    {"type": "STRING"},
-                                "right":   {"type": "STRING"},
-                                "reactor": {"type": "STRING"},
-                                "cause":   {"type": "STRING"},
-                            },
+                            "description": ("템플릿 person_zone id → 등록 인물 이름. "
+                                            "선택한 template 의 person_slots 만 채움. 이름은 등록 목록에서만."),
+                            "properties": person_slot_props,
                         },
                         "caption_slots": {
                             "type": "OBJECT",
-                            "description": ("템플릿의 caption_zone id → 텍스트 매핑. "
-                                            "예: T1 = {\"cap_main\": \"결국 터졌다\", \"cap_sub\": \"모두 놀란 순간\"}. "
-                                            "max_chars 준수. 자막 텍스트는 shorts 대사·순간에서 근거."),
-                            "properties": {
-                                "cap_main":  {"type": "STRING"},
-                                "cap_sub":   {"type": "STRING"},
-                                "cap_quote": {"type": "STRING"},
-                                "cap_badge": {"type": "STRING"},
-                            },
+                            "description": ("템플릿 caption_zone id → 텍스트. "
+                                            "선택한 template 의 caption_slots 만 채움. shorts 대사·순간 근거."),
+                            "properties": caption_slot_props,
                         },
                         "background_hint": {
                             "type": "STRING",
-                            "description": "(선택) 배경 처리 추가 지시 · template.background.nano_hint 를 보완",
+                            "description": "(선택) 배경 처리 추가 지시",
                         },
                     },
                     "required": ["template_id", "person_slots", "caption_slots"],
@@ -873,8 +877,8 @@ def generate_variant_prompts(
                 system_instruction=VARIANT_SYSTEM,
                 response_mime_type="application/json",
                 response_schema=schema,
-                temperature=1.0,
-                max_output_tokens=16384,
+                temperature=0.9,
+                max_output_tokens=8192,
             ),
         )
     except Exception as e:
