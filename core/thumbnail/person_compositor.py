@@ -104,6 +104,72 @@ def cutout_person(img_path: pathlib.Path) -> Image.Image:
     return _cutout_local(img_path)
 
 
+# ═════════════════════════════════════════════════════════════════════
+# faces.json full_frames 에서 상반신 자동 crop (자막 배제)
+# ═════════════════════════════════════════════════════════════════════
+# 사용자 지시 (2026-07-28):
+# "누끼 딸 때는 자막 없는 프레임 해야 함 · 자막이 같이 딸려옴"
+# full_frame 은 자막 있음 → 하단 CAPTION_BAND_RATIO 만큼 자르고 세그
+
+CAPTION_BAND_RATIO = 0.25  # 하단 25% = 자막 영역 heuristic (한국 방송 통상)
+_DERIVED_CACHE: dict[tuple[str, str], pathlib.Path] = {}
+
+
+def derive_person_source(name: str, media_dir: pathlib.Path) -> Optional[pathlib.Path]:
+    """cast name → faces.json cluster mapping → 상반신 crop 파일 경로.
+
+    - faces.json.mapping[cluster_id] == name 인 cluster 찾음
+    - clusters[cid].full_frames 목록의 첫 이미지 사용
+    - 하단 25% (자막 밴드) 제거한 upper body crop 을 workdir/derived_cast/ 에 저장
+    - 이미 캐시 있으면 재사용
+    """
+    import json
+    cache_key = (str(media_dir), name)
+    if cache_key in _DERIVED_CACHE:
+        cached = _DERIVED_CACHE[cache_key]
+        if cached.exists():
+            return cached
+
+    faces_path = media_dir / "faces.json"
+    if not faces_path.exists():
+        return None
+    try:
+        faces_data = json.loads(faces_path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+
+    mapping = faces_data.get("mapping", {}) or {}
+    clusters = faces_data.get("clusters", {}) or {}
+    matched_cids = [cid for cid, nm in mapping.items() if nm == name]
+    if not matched_cids:
+        return None
+
+    # 첫 매칭 cluster 의 full_frames 사용 (선호: 가장 큰 count)
+    matched_cids.sort(key=lambda c: -int((clusters.get(c) or {}).get("count", 0)))
+    for cid in matched_cids:
+        cluster = clusters.get(cid) or {}
+        full_frames = cluster.get("full_frames") or []
+        for rel in full_frames:
+            fp = media_dir / rel
+            if not fp.exists():
+                continue
+            # 상반신 crop 저장
+            out_dir = media_dir / "derived_cast"
+            out_dir.mkdir(parents=True, exist_ok=True)
+            out_path = out_dir / f"{name}_upper.jpg"
+            try:
+                img = Image.open(fp).convert("RGB")
+                w, h = img.size
+                # 하단 자막 밴드 제거
+                cropped_h = int(h * (1.0 - CAPTION_BAND_RATIO))
+                img.crop((0, 0, w, cropped_h)).save(out_path, quality=92)
+                _DERIVED_CACHE[cache_key] = out_path
+                return out_path
+            except Exception:
+                continue
+    return None
+
+
 def _crop_to_content(rgba: Image.Image) -> Image.Image:
     """alpha 채널의 bbox 로 여백 크롭."""
     bbox = rgba.getbbox()

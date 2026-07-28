@@ -116,16 +116,25 @@ def run_pipeline(
     cast_dir = media_dir / "cast_photos"
 
     def _resolve_cast_photos(names: list[str]) -> tuple[list[pathlib.Path], list[str]]:
-        """이름 리스트 → 등록된 castPhoto 경로. 없는 이름은 조용히 스킵."""
-        if not cast_dir.exists():
-            return [], []
+        """이름 리스트 → 인물 소스 경로. 우선순위:
+        1. faces.json 의 full_frame 에서 상반신 자동 crop (자막 배제 · derived_cast/)
+           → 실 방송 상황 · 얼굴 identity 100% + 상반신 포함
+        2. 등록된 cast_photos/{name}.{ext} 폴백
+        """
         photos: list[pathlib.Path] = []
         found: list[str] = []
         for nm in names or []:
-            for ext in ("jpg", "jpeg", "png", "webp"):
-                p = cast_dir / f"{nm}.{ext}"
-                if p.exists():
-                    photos.append(p); found.append(nm); break
+            # (1) faces.json 기반 자동 상반신
+            derived = PC.derive_person_source(nm, media_dir)
+            if derived and derived.exists():
+                photos.append(derived); found.append(nm)
+                continue
+            # (2) 등록 castPhoto 폴백
+            if cast_dir.exists():
+                for ext in ("jpg", "jpeg", "png", "webp"):
+                    p = cast_dir / f"{nm}.{ext}"
+                    if p.exists():
+                        photos.append(p); found.append(nm); break
         return photos, found
 
     def _gen_one(vid: str, plan_v: dict, frame: pathlib.Path) -> tuple[str, bytes | None]:
