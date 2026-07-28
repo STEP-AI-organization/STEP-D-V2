@@ -54,7 +54,8 @@ CHUNK_MAX_SEC = 600  # …or max 10 minutes of footage, whichever comes first
 CHUNK_OVERLAP = 6    # scenes repeated from the previous chunk so a bit spanning the cut isn't lost
 PER_CHUNK = 6        # candidate cap per chunk (Phase 2 prunes)
 MIN_SHORT_SEC = 3    # anything shorter is a glitch, not a short
-MAX_SHORT_SEC = 180  # anything longer isn't a short
+# 운영 기준: 쇼츠는 완결성을 보존하되 1분 30초를 넘기지 않는다.
+MAX_SHORT_SEC = 90
 
 # ── genre packs ─────────────────────────────────────────────────────────────────
 # What "터지는 구간" means differs by genre; the pack swaps the editorial judgment,
@@ -326,8 +327,8 @@ def _base_system(genre: str, profile: dict | None = None, cast_registry: list[di
   짧은 빌드업(질문·상황설정·긴장)부터 리액션·마무리까지. 맥락이 있어야 웃음·감동이 터진다.
 - 훅은 앞쪽에 두되(첫 2~3초 안에 관심), 그렇다고 펀치라인만 잘라내지 마라. 셋업 없이
   결정타만 있으면 왜 웃긴지 몰라 넘긴다 — 실제 잘 나가는 쇼츠는 셋업→터짐→여운을 담는다.
-- **길이는 완결성이 최우선.** 30~90초를 기본으로, 스토리 완결에 필요하면 120초까지 허용.
-  스토리가 잘리면 실패 — 60초 안에 못 담으면 60초 넘어라. 하드 실링 180초. 20초 미만은
+- **길이는 완결성이 최우선.** 30~90초 안에서, 60초 안에 못 담으면 60초를 넘어 완결시켜라.
+  단, 숏폼 하드 실링은 90초다. 20초 미만은
   정말 그 한 컷으로 완결될 때만. start/end는 장면·문장 경계에서 깔끔히 끊어라.
 - appeal은 바이럴 잠재력의 절대평가다: 5=확실히 터진다, 4=강함, 3=쓸만함, 2=약함, 1=비추천.{_profile_block(profile)}{_cast_block(cast_registry, transcript)}{_program_context_block(_CURRENT_PROGRAM_CTX)}"""
 
@@ -754,9 +755,9 @@ p=payoff, c=completeness — 각 0-10)은 Phase 1에서 매긴 근거값이다.
 # 장면 경계로 전방 확장해 이 창에 맞춘다(휴리스틱 폴백 HEUR_AIM/MIN과 같은 규범).
 VALIDATE_MIN_SEC = 30.0
 VALIDATE_AIM_SEC = 45.0
-# 완결성 우선 원칙 (2026-07-23 · 사용자 방향 전환): 60초 하드 트림이 스토리 잘림 유발.
-# 완결에 필요하면 120초까지 허용 · MAX_SHORT_SEC=180 하드 실링만 유지.
-VALIDATE_MAX_SEC = 120.0  # 확장·trim 판정 상한 (완결에 필요한 만큼 담기)
+# 완결성 우선: 60초 하드 트림은 스토리 잘림을 유발한다.
+# 단, 운영자가 정한 90초를 절대 넘기지 않는다.
+VALIDATE_MAX_SEC = 90.0
 
 
 def _extend_to_min(start: float, end: float, scenes: list[dict] | None,
@@ -1116,7 +1117,7 @@ def validate_shorts(shorts: list[dict], duration: float, n: int,
 
 HEUR_AIM_SEC = 45.0      # target shorts length
 HEUR_MIN_SEC = 30.0      # the 30~90s window to land in when the material allows
-HEUR_MAX_SEC = 90.0      # 완결성 우선 (2026-07-23): 60→90초로 완화. 하드 실링은 180s.
+HEUR_MAX_SEC = 90.0      # 운영 상한: 1분 30초
 
 
 def _scene_signal(s: dict) -> float:
@@ -1757,7 +1758,7 @@ def main() -> None:
 #   하이라이트(highlight): 5~10분 · TV 재방송·홈페이지 · 여러 시나리오 조합 (별도 로직)
 # 시나리오당 [숏폼 + 클립] 2개 명시적 반환 (best 선정 없음, 둘 다 output).
 SHORTFORM_MIN_SEC = 40.0
-SHORTFORM_MAX_SEC = 60.0
+SHORTFORM_MAX_SEC = 90.0
 # 2026-07-23: 하이라이트(단일 영상용) 삭제 → 클립이 그 지위 흡수 (1~10분).
 # 완결이 우선이라 하한은 강제 확장 안 함.
 CLIP_MIN_SEC = 60.0
@@ -2616,7 +2617,7 @@ def _refine_story_boundary(
     vtype: str = "shortform", shots: list[float] | None = None,
 ) -> tuple[float, float]:
     """스토리의 setup_start / payoff_end 를 문장·발화·장면 경계로 정렬. 타입별 길이 창 적용.
-    vtype: 'shortform' (40~60s) | 'clip' (60~300s) | 'highlight' (300~600s).
+    vtype: 'shortform' (40~90s) | 'clip' (60~300s) | 'highlight' (300~600s).
     shots: 프레임 diff 기반 shot boundary 시각(sec) 리스트. 있으면 end 스냅 후 가장 가까운
     shot boundary(±3s)로 한 번 더 맞춰 시각적 컷과 일치시킴. 없으면 STT 기반 스냅만 사용."""
     if vtype == "clip":
@@ -2758,29 +2759,269 @@ def _best_beat_for_scenario(sc: dict, beats: list[dict]) -> dict | None:
     return best
 
 
-def _cut_shortform_from_beat(beat: dict, sc_core: float,
-                             sf_min: float = 40.0, sf_max: float = 60.0) -> tuple[float, float]:
-    """beat 안에서 shortform 컷 결정 (규칙 기반).
-    - beat 길이 <= sf_max: beat 그대로 사용 (짧아도 완결).
-    - beat 길이 > sf_max: core_moment 중심 앞뒤 균형 컷 (setup 2/3, 여운 1/3).
-      core가 beat 밖이면 beat 앞부분 sf_max초.
+_SHORTS_FROM_BEATS_SCHEMA = {
+    "type": "OBJECT",
+    "properties": {
+        "shorts": {
+            "type": "ARRAY",
+            "items": {
+                "type": "OBJECT",
+                "properties": {
+                    "beat_ids": {"type": "ARRAY", "items": {"type": "INTEGER"}},
+                    "title": {"type": "STRING"},
+                    "hook": {"type": "STRING"},
+                    "tags": {"type": "ARRAY", "items": {"type": "STRING"}},
+                    "why": {"type": "STRING"},
+                },
+                "required": ["beat_ids", "title", "hook"],
+            },
+        },
+    },
+    "required": ["shorts"],
+}
+
+
+def propose_shorts_beat_only(
+    client, beats: list[dict], transcript: list[dict] | None,
+    genre: str, n: int, cast_registry: list[dict] | None,
+    profile: dict | None = None,
+) -> list[dict]:
+    """오로지 beat 목록만 입력으로 shorts N개 생성 (2026-07-27).
+
+    사용자 방향: "오로지 추천하는애는 비트만주고 그 비트를 붙여서 쇼츠를 만들음."
+    이전 Phase A(propose_scenarios)는 서사·자막·인물을 다 봐서 시나리오 5개를 지어냈고,
+    그 과정에서 실제 대사에 없는 사건(예: "골프 회사원→배우 전향")을 지어 hallucination
+    유발. 이제 recommender는 편집자가 정돈한 beat 목록만 보고 조합만 결정한다.
+
+    각 short = 인접·관련 beat 1~3개 조합 (beat_ids 지정).
+    - 제목·hook·tags는 선택한 beats의 summary에서만 유도 (grounded).
+    - 시각 = 조합된 beats의 first.start ~ last.end.
+    - 같은 beat_ids 조합 중복 금지.
     """
-    b_start, b_end = float(beat["start"]), float(beat["end"])
-    length = b_end - b_start
-    if length <= sf_max:
-        return b_start, b_end
-    # 큰 beat → core 기준 컷
-    if b_start <= sc_core <= b_end:
-        before = sf_max * 0.6
-        after = sf_max * 0.4
-        start = max(b_start, sc_core - before)
-        end = min(b_end, start + sf_max)
-        # 뒤 여유가 부족하면 앞을 당김
-        if end - start < sf_max:
-            start = max(b_start, end - sf_max)
-        return round(start, 1), round(end, 1)
-    # core가 밖 → beat 앞부분
-    return round(b_start, 1), round(min(b_end, b_start + sf_max), 1)
+    if not beats:
+        return []
+    pack = _pack(genre)
+
+    # beat 목록 + 각 beat 구간의 실제 대사 (grounding — summary만으론 hallucination 방지 부족)
+    def _beat_dialogue(b: dict, max_chars: int = 300) -> str:
+        try:
+            bs = float(b.get("start", 0)); be = float(b.get("end", 0))
+        except (TypeError, ValueError):
+            return ""
+        acc: list[str] = []
+        used = 0
+        for t in (transcript or []):
+            try:
+                ts = float(t.get("start", 0)); te = float(t.get("end", 0))
+            except (TypeError, ValueError):
+                continue
+            if te <= bs or ts >= be:
+                continue
+            txt = (t.get("text") or "").strip()
+            if not txt:
+                continue
+            acc.append(txt)
+            used += len(txt)
+            if used >= max_chars:
+                break
+        return " ".join(acc)[:max_chars]
+
+    lines = ["=== 사용 가능 beat (id, 시각, hook, 인물, 제목 / 요약 / 실제 대사) ==="]
+    for i, b in enumerate(beats):
+        st = float(b.get("start", 0)); en = float(b.get("end", 0))
+        dur = en - st
+        hook = (b.get("hook") or "-").strip()
+        chars = ",".join(str(c).strip() for c in (b.get("characters") or []))[:40]
+        title = (b.get("title") or "").strip()[:60]
+        summary = (b.get("summary") or "").strip()[:200]
+        dialogue = _beat_dialogue(b)
+        lines.append(f"[b{i}] {_mmss(st)}~{_mmss(en)} ({dur:.0f}s) · {hook} · {chars or '-'} · \"{title}\"")
+        if summary:
+            lines.append(f"      요약: {summary}")
+        if dialogue:
+            lines.append(f"      대사: {dialogue}")
+
+    system = f"""너는 {pack['label']} SNS 쇼츠(YouTube Shorts/IG Reels/TikTok) 편집자다.
+편집자가 이미 정돈한 **beat 목록**만 보고 쇼츠 {n}개를 선정한다.
+
+이 장르 터지는 기준:
+{pack['guidance']}
+
+**🚨 절대 규칙 — 지어내기 금지**:
+1. 각 쇼츠는 **정확히 아래 beat 목록의 beat_id들만 조합**해서 만든다. 새 시각·대사를 지어내지 마라.
+2. 제목·hook·tags는 반드시 **선택한 beat들의 "대사" 필드에 실제 나온 단어·인물·사건**만 참조.
+3. summary는 참고용이고 **대사 필드가 진실**이다. 대사에 없는 사건·직업·감정·이름을 제목에 넣지 마.
+4. 예: 대사에 "골프 회사"만 있고 "배우"는 없으면 title에 "배우" 넣지 마. 대사에 "지연" 없으면
+   title에 "지연" 쓰지 마. 대사 근거로만 재구성해라.
+
+**🚨 시제·부정 왜곡 금지 (매우 중요)**:
+- 대사에 "**지금은 X를 그만두고 Y이다**" 있으면 title에 X를 현재 직업처럼 쓰지 마. Y가 현재.
+  예: 대사 "10년 연기했고요. 지금은 배우를 그만두고 연기 선생님입니다" → **title은 "연기 선생님"**,
+      "10년차 배우"는 오답. 과거·전직 사실을 현재로 왜곡 금지.
+- 대사에 "~아니다", "~못했다", "~없다" 있으면 title에서도 부정 유지. 긍정으로 뒤집지 마.
+- 인용 시 대사 원문 어투 존중.
+
+**🚨 다인 커버 규칙**:
+- 조합한 beat들에 **2명 이상 서로 다른 인물의 자기소개·핵심 순간**이 있으면 title에서 두 명 다
+  언급하거나 "두 사람의 반전 직업"처럼 복수형 사용. 한 명만 뽑고 다른 사람 무시 금지.
+- 예: b5=지아, b6=지아 리액션, b7=유진 자기소개까지 담겼으면 title이 "지아·유진의 반전 직업" 같이
+  둘 다 잡아라. "지아만" 언급하는 title은 반쪽 정보.
+
+**🚨 익명 라벨 규칙**:
+- 입력에 "발화자 1", "발화자 3" 같은 라벨이 나오면 그건 STT 화자분리 임시 ID일 뿐.
+- **title·tags·why에 "발화자 N"을 절대로 노출 금지**. 사용자가 볼 문구다.
+- 대사에 실제 이름이 있으면 그 이름 사용 (예: "지연", "원균"). 없으면 "한 출연자", "누군가",
+  "그녀", "첫 참가자" 같은 자연스러운 표현.
+
+**조합 규칙**:
+- 각 쇼츠는 필요한 beat 수만큼 조합 (보통 3~5개, 리액션까지 담으려면 4~6개도 OK).
+- **총 span 목표는 40초~1분30초, 최대 2분(120s)까지 허용**. 자기소개+리액션+인터뷰룸 다 담으면
+  자연히 60~120s. 파편(30초대) 지양.
+- beat_ids는 **시각순 인접**(index 연속) 또는 같은 인물·화제로 관련된 beat만 묶어라.
+
+**🚨 자기소개 + 리액션 필수 결합 (매우 중요)**:
+- 자기소개·핵심 발표 beat을 뽑을 때는 **그 뒤에 나오는 다른 출연자 리액션·감상 beat들도 반드시
+  같은 쇼츠에 함께** 담아라. 리액션 없이 자기소개만 뽑으면 반쪽 스토리.
+- 리액션 beat 판별: hook=감정고조·공감·질문·웃음, title에 "리액션", "놀란", "반응", "감상", "회상",
+  "인터뷰룸", "느낌" 등 포함. 또는 같은 시각대에서 다른 화자가 그 인물에 대해 말하는 beat.
+- 예: b5=원균 자기소개(정보성) + b6=놀란 리액션(감정고조) + b7=긍정 인상(공감) + b8=인터뷰룸 회상
+  → 모두 하나의 쇼츠 [b5,b6,b7,b8]. b7,b8을 빼면 반쪽.
+- **자기소개 shorts의 마지막 beat은 반드시 리액션·감상 beat이어야 함** — 자기소개 발화 beat에서 끝나면 여운 없음.
+
+- **완결성 우선**: 원 신(setup) → 리액션 → 인터뷰룸(payoff·이유·회상)이 있으면 반드시 **인터뷰룸까지
+  포함**해서 이유·감정 완결. 원 신만 뽑고 인터뷰룸을 별도 쇼츠로 쪼개면 스토리가 반쪽.
+- 완전히 동일한 beat_ids 조합 금지 (다양성).
+- 결과 쇼츠들이 서로 다른 시간대·주제·인물을 다루도록 다양성 확보.
+
+**🚨 커버리지 규칙**:
+- 각 자기소개(정보성 hook이면서 새 인물 등장) beat은 최소 하나의 쇼츠에 포함되어야 한다.
+  자기소개 통째 누락 금지. 요청 n개 안에 다 못 담으면 우선순위 낮은 쇼츠 대신 자기소개 shorts 확보.
+
+**인물 이름 사용 규칙 (필수)**:
+- 위 beat들의 characters·summary에 **실제로 언급된 이름만** 사용.
+- summary에 "지연"이 등장하지 않으면 title에 "지연" 넣지 마라. 인물명 지어내기 금지.
+- 이름이 불확실하면 title에서 인물명 생략 ("한 출연자가...", "그의..." 등으로 표현).
+
+**title 규칙**:
+- 12~30자 · 자연스러운 한국어 · 방송 자막 톤.
+- 물음표·느낌표 남용 금지(1개까지). 억지 낚시 금지.
+- 위 beat summary들에 실제 나온 단어·인물·직업만 사용. 없는 걸 지어내지 마.
+- 좋은 예: "원균이 한의사였다니, 반전에 웅성" · "무용 숨긴 민경의 속마음"
+
+**hook**: 반전 / 감정고조 / 돌직구 / 질문 / 정보성 / 웃음 / 갈등 / 공감 / 기타 중 하나.
+
+**반환 형식** (JSON):
+{{"shorts":[
+  {{"beat_ids":[3,4], "title":"원균 한의사 반전 공개", "hook":"반전", "tags":["직업공개","한의사"],
+    "why":"b3에서 원균이 한의사 자기소개, b4에서 다른 출연자 놀란 리액션. 완결 흐름."}}
+]}}
+"""
+    if profile:
+        system += _profile_block(profile)
+    if cast_registry:
+        system += _cast_block(cast_registry, transcript)
+    # 프로그램 컨텍스트(시놉시스·톤·분위기)를 힌트로 주입 — title이 그 프로그램 결에 맞게 나오도록.
+    # _CURRENT_PROGRAM_CTX는 recommend()가 활성화. 없으면 no-op.
+    ctx_block = _program_context_block(_CURRENT_PROGRAM_CTX)
+    if ctx_block:
+        system += (
+            "\n\n**🚨 프로그램 톤 반영 (title 어투에 필수 반영) 🚨**:\n" + ctx_block +
+            "\n\n위 프로그램의 결·정체성을 title에 살려라. **형식적·설명적 title 절대 금지.**\n"
+            "\n"
+            "**연애 리얼리티** (환승연애, 나는 솔로, 하트시그널 등)면:\n"
+            "- 감정·관계 축을 title 앞에 세워라. 직업·정보는 뒤나 부차적으로.\n"
+            "- 'X', '전 연인', '설렘', '들킬까 봐', '숨긴 이유', '앞에서'... 관계 어휘 활용.\n"
+            "- ❌ 나쁜 예 (형식적): \"원균, 7년차 한의사 반전 직업 공개!\"\n"
+            "- ✅ 좋은 예 (감정): \"모두 얼어붙은 원균의 정체... 한의사였다니\"\n"
+            "- ❌ \"무용학과 졸업 후 예술경영 전공, 무용 강사의 숨겨진 이유\"\n"
+            "- ✅ \"X에게 들킬까 봐, 무용을 감춘 민경의 속마음\"\n"
+            "- ❌ \"공무원 1등 합격 후 요식업 전향, 스페인 음식점 사장님\"\n"
+            "- ✅ \"1등 합격 뒤 접은 공무원... 데이트 요리의 정체는\"\n"
+            "\n"
+            "**토크쇼/예능**이면 리액션·반전·펀치라인 어휘. **다큐/뉴스**면 정보·인용 톤.\n"
+            "핵심: 시청자가 SNS 피드에서 스크롤 멈출 title. 담백하되 여운·긴장·감정 포함.\n"
+        )
+
+    prompt = "\n".join(lines) + f"\n\n=== 뽑을 쇼츠 수: {n}개 ==="
+    try:
+        resp = call_with_retry(lambda: client.models.generate_content(
+            model=MODEL,
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                system_instruction=system,
+                temperature=0.3,
+                response_mime_type="application/json",
+                response_schema=_SHORTS_FROM_BEATS_SCHEMA,
+                max_output_tokens=8192,
+                thinking_config=types.ThinkingConfig(thinking_budget=0),
+            ),
+        ))
+        data = json.loads(resp.text or "{}")
+    except Exception as e:
+        print(f"   (beat-only shorts 실패: {str(e)[:120]})")
+        return []
+
+    picked = data.get("shorts") or []
+    print(f"   beat-only: {len(picked)}개 쇼츠 (요청 {n}, beats {len(beats)}개)")
+
+    # 검증 + 조립
+    shorts: list[dict] = []
+    seen_combos: set = set()
+    for idx, s in enumerate(picked):
+        raw_ids = s.get("beat_ids") or []
+        try:
+            ids = sorted(int(x) for x in raw_ids)
+        except (TypeError, ValueError):
+            print(f"   (shorts #{idx} beat_ids 파싱 실패, 스킵)")
+            continue
+        ids = [i for i in ids if 0 <= i < len(beats)]
+        if not ids:
+            continue
+        combo_key = tuple(ids)
+        if combo_key in seen_combos:
+            print(f"   (shorts #{idx} 중복 조합 {combo_key}, 스킵)")
+            continue
+        seen_combos.add(combo_key)
+
+        picked_beats = [beats[i] for i in ids]
+        sf_start = float(picked_beats[0]["start"])
+        sf_end = float(picked_beats[-1]["end"])
+        if sf_end <= sf_start:
+            continue
+        # 서버측 duration 상·하한 없음 (2026-07-27 사용자 방향): AI 프롬프트에서 40~90s 목표만
+        # 느슨하게 지시하고 결정은 AI에 맡김. 하드 컷은 뒤집혀 있거나(end<=start) invalid ids만.
+        title = (s.get("title") or "").strip() or (picked_beats[0].get("title") or "무제")
+        hook = (s.get("hook") or picked_beats[0].get("hook") or "기타").strip()
+        tags = [str(t).strip() for t in (s.get("tags") or []) if str(t).strip()]
+        # characters: 조합된 beats의 union
+        chars_set: list[str] = []
+        for pb in picked_beats:
+            for c in (pb.get("characters") or []):
+                c = str(c).strip()
+                if c and c not in chars_set:
+                    chars_set.append(c)
+        # summary: 각 beat summary를 이어붙여 근거로 명시 (grounded)
+        reason = " · ".join((pb.get("summary") or "").strip() for pb in picked_beats if pb.get("summary"))
+
+        derived = {"hook_strength": 7, "payoff": 7, "completeness": 8}
+        shorts.append({
+            "type": "shortform",
+            "start": sf_start,
+            "end": sf_end,
+            "title": title,
+            "reason": reason[:400],
+            "story_synopsis": reason[:400],
+            "why": (s.get("why") or "").strip()[:200],
+            "hook_strength": 7, "payoff": 7, "completeness": 8,
+            "appeal": _appeal_from_axes(derived) or 3,
+            "score100": _axes_score(derived),
+            "hook": hook,
+            "tags": tags,
+            "characters": chars_set,
+            "beat_ids": ids,
+            "source": "beat_only",
+        })
+    return shorts
 
 
 def _build_from_beats(
@@ -2804,13 +3045,9 @@ def _build_from_beats(
         if not beat:
             print(f"   (시나리오 {sid} 매칭 beat 없음 · 제외: {sc.get('story_title','')[:24]})")
             continue
-        try:
-            sc_core = float(sc.get("core_moment_sec", (beat["start"] + beat["end"]) / 2))
-        except (TypeError, ValueError):
-            sc_core = (beat["start"] + beat["end"]) / 2
-
-        # A) 숏폼: beat 안에서 40~60초 컷
-        sf_start, sf_end = _cut_shortform_from_beat(beat, sc_core)
+        # A) 숏폼: beat는 편집자가 정돈한 완결 퍼즐 조각이다.
+        # 길이 상·하한이나 core 기준 재단을 절대 적용하지 않고 원래 경계를 그대로 보존한다.
+        sf_start, sf_end = float(beat["start"]), float(beat["end"])
         if sf_end > sf_start:
             derived = {"hook_strength": 7, "payoff": 7, "completeness": 8}
             shorts.append({
@@ -2909,42 +3146,27 @@ def _recommend_narrative_first_impl(
         duration = 0.0
     vid_min = duration / 60.0
     n = max(n, min(20, round(vid_min / 10.0 * 3) or n))
+    # beat-only 모드에서는 beat 개수 기반으로 n 자동 확장 (자기소개 통째 누락 방지 · 2026-07-28).
+    # 평균 beat 3~4개로 하나의 자기소개+리액션 shorts 구성한다고 가정하면 n ≈ len(beats)/4.
+    if beats:
+        n = max(n, min(20, len(beats) // 4))
 
     if genre == "auto" or genre not in GENRE_PACKS:
         genre = detect_genre(client, scenes or []) if scenes else DEFAULT_GENRE
         print(f"   장르 감지: {genre} ({_pack(genre)['label']})")
 
-    if on_progress:
-        on_progress(1, 3)
-    # Phase A: 시나리오 정의 (N개, 주제 레벨)
-    scenarios = propose_scenarios(
-        client, narrative, transcript, profile, genre, n, duration,
-        cast_registry=cast_registry, faces=faces, ppl_detections=ppl_detections,
-    )
-    if on_progress:
-        on_progress(2, 3)
-    if not scenarios:
-        print("   (narrative-first 시나리오 실패 · chunk_scan 폴백)")
-        return recommend(
-            scenes=scenes or [], n=n, genre=genre, profile=profile, channels=channels,
-            transcript=transcript, cast_registry=cast_registry,
-            narrative_segments=(narrative or {}).get("segments"),
-            key_conflicts=(narrative or {}).get("key_conflicts"),
-            ppl_detections=ppl_detections,
-        )
-
-    # === Phase B (신규 · 2026-07-24): beats가 있으면 beat 조합 방식으로 우선 처리 ===
-    # 자유 시각 뽑기가 클립 60초 미만·대사 중간 잘림을 유발한 근본 원인. beat는 이미
-    # 완결 단위로 정돈돼 있어 그대로 사용하면 됨.
+    # === beats가 있으면 beat-only 경로 (2026-07-27 · 사용자 방향) ===
+    # 오로지 beat 목록만 입력으로 shorts 생성. Phase A(scenarios) 완전 스킵으로
+    # 시나리오 hallucination 원천 차단 (실측: "골프 회사원→배우 전향" 같은 없는 이야기 지어냄).
     if beats:
-        print(f"   Phase B: beat 조합 방식 (beats {len(beats)}개 사용)")
+        print(f"   beat-only 모드: {len(beats)}개 beat만 입력, scenarios 스킵")
+        if on_progress:
+            on_progress(2, 3)
+        shorts = propose_shorts_beat_only(
+            client, beats, transcript, genre, n, cast_registry, profile,
+        )
         if on_progress:
             on_progress(3, 3)
-        shorts = _build_from_beats(
-            scenarios, beats, transcript, duration, genre, profile,
-            faces, ppl_detections, cast_registry,
-        )
-        # rank + fit (아래 공통 로직 재사용을 위해 mid-return 대신 shorts만 채우고 진행)
         def type_order_new(s: dict) -> int:
             return {"shortform": 0, "clip": 1, "highlight": 2}.get(s.get("type", ""), 9)
         shorts.sort(key=lambda s: (type_order_new(s), -s.get("score100", 0), -s.get("hook_strength", 0)))
@@ -2960,8 +3182,27 @@ def _recommend_narrative_first_impl(
                 shorts = apply_channel_fit(shorts, scenes or [], channels)
             except Exception as e:
                 print(f"   (채널 적합 건너뜀: {str(e)[:80]})")
-        return {"genre": genre, "shorts": shorts, "mode": "narrative_first_beats",
-                "scenarios_count": len(scenarios), "beats_count": len(beats)}
+        return {"genre": genre, "shorts": shorts, "mode": "beat_only",
+                "beats_count": len(beats)}
+
+    # === Fallback (beats 없을 때): 기존 Phase A→B 경로 ===
+    if on_progress:
+        on_progress(1, 3)
+    scenarios = propose_scenarios(
+        client, narrative, transcript, profile, genre, n, duration,
+        cast_registry=cast_registry, faces=faces, ppl_detections=ppl_detections,
+    )
+    if on_progress:
+        on_progress(2, 3)
+    if not scenarios:
+        print("   (narrative-first 시나리오 실패 · chunk_scan 폴백)")
+        return recommend(
+            scenes=scenes or [], n=n, genre=genre, profile=profile, channels=channels,
+            transcript=transcript, cast_registry=cast_registry,
+            narrative_segments=(narrative or {}).get("segments"),
+            key_conflicts=(narrative or {}).get("key_conflicts"),
+            ppl_detections=ppl_detections,
+        )
 
     # === 기존 Phase B (beats 없을 때 fallback) ===
     # Phase B: 시나리오별 숏폼만 · propose_clips (코너/주제) 병렬.

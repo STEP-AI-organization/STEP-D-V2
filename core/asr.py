@@ -876,7 +876,19 @@ def _format_timestamp(seconds: float) -> str:
 
 
 def get_segments(result: dict) -> list[dict]:
-    return [
-        {"start": seg["start"], "end": seg["end"], "text": seg["text"].strip(), "words": seg.get("words", [])}
-        for seg in result["segments"]
-    ]
+    """stt 결과에서 downstream(refine/beats)이 쓰는 세그 필드만 뽑는다.
+    2026-07-27: speaker 필드 보존 추가 — diarization 결과가 refine에서 사라져 beats·shorts가
+    화자 인식 못 하는 문제 fix. 같은 화자 monologue 중간에서 beat이 잘리는 사용자 지적 원인."""
+    out = []
+    for seg in result["segments"]:
+        row = {
+            "start": seg["start"],
+            "end": seg["end"],
+            "text": (seg.get("text") or "").strip(),
+            "words": seg.get("words", []),
+        }
+        sp = (seg.get("speaker") or "").strip()
+        if sp:
+            row["speaker"] = sp
+        out.append(row)
+    return out

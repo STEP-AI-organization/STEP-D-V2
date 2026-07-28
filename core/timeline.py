@@ -81,7 +81,14 @@ def pick_block_minutes(duration_sec: float, requested: Optional[int] = None) -> 
 
 
 def _group_scenes(scenes: list[dict], block_minutes: int) -> list[dict]:
-    """장면들을 시간순 정렬 후 블록에 배정 (장면 중앙 시각 기준). 빈 블록은 버린다."""
+    """장면들을 시간순 정렬 후 블록에 배정.
+
+    2026-07-27 수정: 이전엔 씬 mid-point가 블록 안일 때만 배정 + 빈 블록 drop이라 씬(=5분 청크)
+    이 블록(=3분)보다 크면 중간 블록이 완전히 사라져 narrative·beats·shorts에 hole이 생겼다.
+    (실측 592s 영상에서 180~360s 3분이 통째로 skip → shorts hallucination의 근원.)
+    이제 **씬이 블록과 조금이라도 겹치면 그 블록의 member**로 배정하고, 겹치는 씬이 없어도
+    블록 자체는 유지해서 downstream이 transcript로 그 시간대를 채울 수 있게 한다.
+    """
     scenes = sorted(scenes, key=lambda s: float(s.get("start", 0)))
     duration = max((float(s.get("end", 0)) for s in scenes), default=0.0)
     size = block_minutes * 60
@@ -89,10 +96,16 @@ def _group_scenes(scenes: list[dict], block_minutes: int) -> list[dict]:
     blocks = []
     for i in range(n):
         b_start, b_end = i * size, min((i + 1) * size, duration)
-        members = [s for s in scenes if b_start <= (float(s.get("start", 0)) + float(s.get("end", 0))) / 2 < b_end
-                   or (i == n - 1 and (float(s.get("start", 0)) + float(s.get("end", 0))) / 2 >= b_end)]
-        if not members:
-            continue
+        # 겹침 기반 배정 (mid-point 기반은 씬 > 블록일 때 hole 발생).
+        members = []
+        for s in scenes:
+            try:
+                sst = float(s.get("start", 0))
+                sen = float(s.get("end", 0))
+            except (TypeError, ValueError):
+                continue
+            if sen > b_start and sst < b_end:
+                members.append(s)
         names: list[str] = []
         for s in members:
             for nm in (s.get("on_screen_names") or []):
@@ -108,7 +121,7 @@ def _group_scenes(scenes: list[dict], block_minutes: int) -> list[dict]:
             "on_screen_names": names,
             "scene_count": len(members),
             "scene_indices": [s.get("index", j) for j, s in enumerate(members)],
-            "_scenes": members,  # 내부용 — 저장 전에 제거
+            "_scenes": members,  # 내부용 — 저장 전에 제거 · 빈 리스트여도 블록 자체는 유지
         })
     return blocks
 

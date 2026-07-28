@@ -43,9 +43,8 @@ PROJECT = os.environ.get("GOOGLE_CLOUD_PROJECT") or "step-d"
 LOCATION = os.environ.get("VERTEX_LOCATION") or "asia-northeast3"
 MODEL = os.environ.get("GEMINI_MODEL") or "gemini-2.5-flash"
 
-MIN_BEAT_SEC = 20.0     # 이 미만은 파편 · 인접 beat와 병합
-SUBDIVIDE_SEC = 600.0   # 이 초과는 재분해 시도. 예능은 원 신+리액션+인터뷰 다 담으면 자연스럽게
-                        # 길어짐 → 임계 완화 (2026-07-24 사용자 지적).
+MIN_BEAT_SEC = 8.0      # 이 미만은 파편 · 인접 beat와 병합 (2026-07-27: 20→8, 세분화 요청)
+SUBDIVIDE_SEC = 30.0    # 이 초과는 재분해 시도 (2026-07-27: 45→30, 73s 두 인물 붙어있던 케이스 fix)
 SHOT_SNAP_SEC = 3.0     # beat 경계 ±3s 안 shot boundary 있으면 스냅
 
 HOOK_KEYS = ["반전", "감정고조", "돌직구", "질문", "정보성", "웃음", "갈등", "공감", "기타"]
@@ -118,6 +117,164 @@ def _snap_end(t: float, shots: list[float]) -> float:
     return _snap_start(t, shots)
 
 
+# ── word-boundary snap (2026-07-27) ─────────────────────────────────────────────
+# STT word.start/word.end로 beat 경계를 정확한 발화 완결 지점에 스냅한다.
+# 이유: 모델이 반환하는 beat.end가 대사 완결 시각을 못 맞추고 1-2초 더 가서 다음 발화 시작을
+# 잘라오는 문제. word tolerance 안이면 정확한 word 경계로 당김.
+
+WORD_SNAP_TOLERANCE_SEC = 2.5  # 이 범위 밖 word는 무시 (억지 스냅 방지)
+
+
+def _flatten_words(transcript: list[dict] | None) -> list[dict]:
+    if not transcript:
+        return []
+    flat: list[dict] = []
+    for seg in transcript:
+        for w in (seg.get("words") or []):
+            try:
+                st = float(w.get("start", 0)); en = float(w.get("end", 0))
+            except (TypeError, ValueError):
+                continue
+            if en > st:
+                flat.append({"start": st, "end": en})
+        # words 없으면 seg 자체를 하나의 word로 처리 (fallback)
+        if not (seg.get("words") or []):
+            try:
+                st = float(seg.get("start", 0)); en = float(seg.get("end", 0))
+            except (TypeError, ValueError):
+                continue
+            if en > st:
+                flat.append({"start": st, "end": en})
+    return flat
+
+
+def _snap_to_word_start(t: float, transcript: list[dict] | None) -> float | None:
+    """t 근처에서 가장 가까운 word.start를 반환. tolerance 밖이면 None (원값 유지 유도)."""
+    words = _flatten_words(transcript)
+    if not words:
+        return None
+    best = None
+    best_d = WORD_SNAP_TOLERANCE_SEC + 1
+    for w in words:
+        d = abs(w["start"] - t)
+        if d < best_d and d <= WORD_SNAP_TOLERANCE_SEC:
+            best, best_d = w["start"], d
+        if w["start"] > t + WORD_SNAP_TOLERANCE_SEC:
+            break
+    return best
+
+
+def _snap_to_word_end(t: float, transcript: list[dict] | None) -> float | None:
+    """t 근처에서 가장 가까운 word.end (문장 완결 지점)를 반환. tolerance 밖이면 None.
+    beat.end가 대사 종결 뒤 1-2초 더 가는 문제 fix용."""
+    words = _flatten_words(transcript)
+    if not words:
+        return None
+    best = None
+    best_d = WORD_SNAP_TOLERANCE_SEC + 1
+    for w in words:
+        d = abs(w["end"] - t)
+        if d < best_d and d <= WORD_SNAP_TOLERANCE_SEC:
+            best, best_d = w["end"], d
+        if w["start"] > t + WORD_SNAP_TOLERANCE_SEC:
+            break
+    return best
+
+
+# ── speaker monologue snap (2026-07-27) ─────────────────────────────────────────
+# 같은 화자가 연속 발화 중이면 그 monologue 끝까지 확장. beat이 monologue 중간에서 잘리는
+# 사용자 지적 fix. speaker 필드 없는 세그는 스킵.
+
+SPEAKER_MERGE_GAP_SEC = 1.5      # 같은 화자 세그 사이 이 미만 gap이면 같은 monologue로 취급
+SPEAKER_EXTEND_MAX_SEC = 8.0     # monologue 확장 최대 폭 — 원 beat 경계에서 이 이상 벗어나지 않음
+
+
+def _extend_end_to_speaker_block(t: float, transcript: list[dict] | None) -> float:
+    """beat.end가 어떤 세그 안이거나 직후라면, 그 세그의 화자가 곧바로 이어 말하는 한
+    monologue block 끝까지 t를 확장. 다른 화자가 시작하거나 SPEAKER_MERGE_GAP_SEC 초과
+    침묵 지나면 멈춤. 최대 SPEAKER_EXTEND_MAX_SEC 초까지만 확장 (긴 monologue 통째 삼킴 방지)."""
+    if not transcript:
+        return t
+    segs = sorted(
+        (s for s in transcript if isinstance(s.get("start"), (int, float))
+         and isinstance(s.get("end"), (int, float))),
+        key=lambda s: float(s["start"]),
+    )
+    if not segs:
+        return t
+    cur = None
+    cur_idx = -1
+    for i, s in enumerate(segs):
+        st = float(s["start"]); en = float(s["end"])
+        if st <= t <= en + 0.5:
+            cur = s; cur_idx = i
+        elif st > t:
+            break
+    if cur is None:
+        return t
+    sp = (cur.get("speaker") or "").strip()
+    if not sp:
+        return t
+    new_end = float(cur["end"])
+    for j in range(cur_idx + 1, len(segs)):
+        nxt = segs[j]
+        nxt_sp = (nxt.get("speaker") or "").strip()
+        try:
+            nxt_st = float(nxt["start"]); nxt_en = float(nxt["end"])
+        except (TypeError, ValueError):
+            break
+        if nxt_st - new_end > SPEAKER_MERGE_GAP_SEC:
+            break
+        if nxt_sp != sp:
+            break
+        if nxt_en - t > SPEAKER_EXTEND_MAX_SEC:
+            break  # 상한 초과 · 여기서 종결
+        new_end = nxt_en
+    return max(t, new_end)
+
+
+def _extend_start_to_speaker_block(t: float, transcript: list[dict] | None) -> float:
+    """대칭 — beat.start가 monologue 중간이면 그 화자 발화 시작으로 앞당김 (최대 EXTEND_MAX 내)."""
+    if not transcript:
+        return t
+    segs = sorted(
+        (s for s in transcript if isinstance(s.get("start"), (int, float))
+         and isinstance(s.get("end"), (int, float))),
+        key=lambda s: float(s["start"]),
+    )
+    if not segs:
+        return t
+    cur = None
+    cur_idx = -1
+    for i, s in enumerate(segs):
+        st = float(s["start"]); en = float(s["end"])
+        if st - 0.5 <= t <= en:
+            cur = s; cur_idx = i
+        elif st > t + 0.5:
+            break
+    if cur is None:
+        return t
+    sp = (cur.get("speaker") or "").strip()
+    if not sp:
+        return t
+    new_start = float(cur["start"])
+    for j in range(cur_idx - 1, -1, -1):
+        prv = segs[j]
+        prv_sp = (prv.get("speaker") or "").strip()
+        try:
+            prv_st = float(prv["start"]); prv_en = float(prv["end"])
+        except (TypeError, ValueError):
+            break
+        if new_start - prv_en > SPEAKER_MERGE_GAP_SEC:
+            break
+        if prv_sp != sp:
+            break
+        if t - prv_st > SPEAKER_EXTEND_MAX_SEC:
+            break
+        new_start = prv_st
+    return min(t, new_start)
+
+
 def _build_prompt(segment_meta: dict, lines: list[str], shots_in: list[float],
                   shot_types_in: list[dict] | None = None) -> tuple[str, str]:
     """단일 narrative segment(또는 5분 청크)에 대해 beat 정의 프롬프트."""
@@ -141,44 +298,63 @@ def _build_prompt(segment_meta: dict, lines: list[str], shots_in: list[float],
     else:
         st_block = "  (분류 데이터 없음)"
 
-    system = f"""너는 한국 예능·방송 편집자다. 아래 구간을 **"그대로 잘라 써도 이상하지 않은 최소
-편집 완결 단위(beat)"** 여러 개로 분할한다.
+    system = f"""너는 한국 예능·방송 편집자다. 아래 구간을 **"소주제 단위의 짧은 편집 완결 단위(beat)"**
+로 잘게 분할한다.
 
 **beat 정의**:
-- 하나의 완결된 흐름 = 시작(새 신·화제·발화) → 전개 → 마무리(대사 종결·리액션·다음 신 직전).
-- 예: "민경 자기소개 + 다른 출연자 반응 + 인터뷰룸 회상" · "게임 라운드 1 · 시작~결과 발표".
-- 이 beat를 통째로 잘라 SNS·클립·하이라이트에 배치해도 자연스러워야 함.
+- 하나의 소주제·한 화자 발화·한 인터뷰 컷·한 리액션 단위. 8~30초 목표.
+- **묶지 마라** — 아래처럼 소주제별로 각각 별개 beat로 분리:
+    · 원 신 발화 A (예: "원균 한의사 자기소개 · 20초")
+    · 다른 출연자 리액션 (예: "모두 놀란다 · 8초")
+    · 인터뷰룸 컷 A (예: "지연이 첫인상 회상 · 15초")
+    · 인터뷰룸 컷 B (예: "민경이 한의사에 대한 호감 · 12초")
+    · 이어지는 원 신 (예: "원균이 세부 설명 · 18초")
+  → 위 5개를 각각 하나의 beat. 하나의 큰 beat로 묶지 말 것.
 
-**⚠️ 한국 예능 편집 문법 (필수 규칙)**:
-- 한국 예능은 **현장 원 신 + 인서트 인터뷰룸 컷 + 리액션 컷**이 교차 편집됨.
-- 하나의 사건(예: "원규 한의사 반전 공개")은 다음 요소로 구성:
-    a) 현장 반전 순간 (원 신)
-    b) 다른 출연자들의 놀란 리액션 (원 신)
-    c) 인터뷰룸에서 회상·소감 (인서트 인터뷰)
-    d) 이어지는 원 신 대화·해설
-- **위 a~d 전체를 하나의 beat로 묶어라**. 사건 하나에 인터뷰가 껴 있어도 나누지 마라.
-- 다음 beat로 넘어가는 지점은 **주제·화제·코너가 완전히 바뀌는 지점**만.
-- shot type 정보 참고: 🎤 인터뷰룸 컷 앞뒤가 같은 주제 원 신이면 하나의 beat.
-- 인터뷰룸-only 구간이 길게 이어지면 (같은 주제로) 별도 beat로 분리 가능.
+**⚠️ 세분화 규칙 (엄격 · 반드시 준수)**:
+- **화자가 바뀌면 무조건 새 beat**. 같은 화자여도 주제/화제가 바뀌면 새 beat.
+- **shot type이 바뀌면 새 beat** (현장 → 인터뷰룸 전환은 반드시 beat 경계).
+- **인터뷰룸 컷은 각각 별개 beat** — 여러 인터뷰가 붙어 나와도 화자·주제 다르면 분리.
+- **한 사람 자기소개는 그 사람 발화만 하나 beat** (다른 사람 반응은 별개 beat).
+- 8초 미만은 파편이라 인접과 묶되, 되도록 8~30초 목표.
+- **30초 초과 beat 금지** — 넘으면 반드시 화제·화자 전환점에서 잘라라. 예능은 컷이 빠르다.
+- 60초 넘어가면 심각한 문제 — 여러 소주제·화자가 섞였다는 증거.
+
+**🚨 익명 라벨 규칙**:
+- 입력 자막에 "[발화자 1]", "[발화자 3]" 같은 익명 라벨이 붙어 있으면 그건 STT 화자분리 임시 ID일 뿐.
+- title·summary에 "발화자 N"을 **절대로 노출 금지**. "한 출연자", "그", "누군가"로 표현.
+- 예: "발화자 1 소개" 나쁨 → "첫 출연자 자기소개" 좋음.
 
 **경계 조건**:
-- **최소 20초** — 그 미만은 파편이라 안 됨. 짧으면 인접 흐름과 묶어라.
-- **최대 없음** — 하나의 코너·긴 대화신이 5~10분이면 그대로 하나의 beat.
-- 시작은 **새 주제 첫 발화** (이전 대사 여운 이어지면 그 여운부터).
-- 끝은 **주제 마무리 + 마지막 리액션·인터뷰까지** (반응·회상 컷 있으면 포함).
-- 가능하면 shot boundary(장면 전환점) 근처에서 시작·끝.
+- 시작은 **새 화자 첫 발화** 또는 **shot boundary 근처**.
+- 끝은 **그 발화 종결** 또는 **다음 shot 직전**.
+- 가능하면 shot boundary(장면 전환점)에서 시작·끝.
+
+**🚨 커버리지 규칙 (필수)**:
+- **자막이 있는 모든 시간은 반드시 어떤 beat 안에** 있어야 한다. 자막 있는 구간을 beat 없이
+  건너뛰지 마라. 리액션·짧은 감탄사·인터뷰룸 짧은 컷도 다 beat에 넣어라.
+- 인접 beat 사이 gap(자막 있는데 beat 없는 시각)이 3초를 넘으면 안 됨.
+- 짧은 리액션 여러 개가 붙어 있으면 하나의 "리액션 묶음" beat로 묶어라 (8초는 넘겨야).
+- 자기소개 발화 뒤 즉시 나오는 리액션·평가는 자기소개 beat과 별개의 "리액션 beat"로 반드시 만들어라.
 
 **hook 카테고리** (반드시 다음 중 하나): 반전 / 감정고조 / 돌직구 / 질문 / 정보성 / 웃음 / 갈등 / 공감 / 기타
 
 **반환 형식** (JSON, 다른 문장 없이):
 {{"beats":[
-  {{"start":90.0,"end":220.0,"title":"원규 한의사 반전 공개 + 리액션 + 인터뷰",
-    "summary":"원규가 직업을 한의사라고 공개하자 모두 놀란 반응. 인터뷰룸에서 원규가 반전을 노렸다고 회상. 이어 상세 설명.",
-    "characters":["원규","지연","민경"],"hook":"반전","is_complete":true}}
+  {{"start":90.0,"end":110.0,"title":"원규 한의사 자기소개",
+    "summary":"원규가 자신이 7년차 한의사라고 밝힌다. 근골격계 환자 위주로 진료.",
+    "characters":["원규"],"hook":"반전","is_complete":true}},
+  {{"start":110.0,"end":118.0,"title":"모두 원규 직업에 놀란 리액션",
+    "summary":"한의사라는 말에 진짜? 상상도 못했다 반응.",
+    "characters":["지연","민경"],"hook":"감정고조","is_complete":true}},
+  {{"start":118.0,"end":132.0,"title":"지연 인터뷰룸 · 원규 첫인상 회상",
+    "summary":"지연이 인터뷰룸에서 원규 지적으로 보였다고 회상.",
+    "characters":["지연"],"hook":"공감","is_complete":true}}
 ]}}
 
 **시간 필드는 초 단위 숫자만**. "1:30" 같은 콜론 문자열 절대 금지.
 반환 beat들의 시각은 **주어진 구간 안에서만** ({seg_start:.1f}s ~ {seg_end:.1f}s).
+목표 beat 개수: 이 구간이 M초라면 대략 **M/20 ~ M/10 개** (촘촘히).
 """
 
     prompt = f"""=== 구간 메타 ===
@@ -294,7 +470,11 @@ def _subdivide_large_beat(client, beat: dict, transcript: list[dict],
     if len(lines) < 4:  # 대사 너무 적으면 재분해 의미 없음
         return [beat]
     system, prompt = _build_prompt(seg_meta, lines, shots_in, shot_types_in)
-    system += "\n\n**주의: 이 구간은 이미 하나의 beat로 정의됐지만 길이가 5분 초과라 소주제가 여러 개 있는지 재분해한다. 여전히 하나의 흐름이면 1개만 반환.**"
+    system += (
+        f"\n\n**⚠️ 이 구간({beat['end']-beat['start']:.0f}s)은 이미 하나의 beat로 정의됐지만 소주제가 "
+        "여러 개일 가능성이 높다. 반드시 2개 이상으로 분해하라. 특히 화자·인물이 바뀌는 지점에서 "
+        "반드시 자른다. 한 사람의 자기소개는 그 사람 발화만 하나 beat. 다른 사람 언급 시작하면 새 beat."
+    )
     try:
         resp = call_with_retry(lambda: client.models.generate_content(
             model=MODEL,
@@ -431,11 +611,23 @@ def build_beats(
             if on_progress:
                 on_progress(i + 1, len(futures))
 
-    # 정렬 · shot boundary 스냅 · id 부여
+    # 정렬 · **word 경계 + 화자 monologue** 스냅 · id 부여.
+    # 2026-07-27: (1) beat.end가 대사 끝난 뒤 1-2초 더 가서 다음 발화 잘라오는 문제 word 스냅으로 fix.
+    #             (2) 같은 화자 monologue 중간에서 잘리는 문제 → speaker block 끝까지 확장.
     all_beats.sort(key=lambda b: b["start"])
     for b in all_beats:
-        b["start"] = round(_snap_start(b["start"], shots), 1)
-        b["end"] = round(_snap_end(b["end"], shots), 1)
+        snapped_start = _snap_to_word_start(b["start"], transcript)
+        snapped_end = _snap_to_word_end(b["end"], transcript)
+        # word 스냅이 없으면 (words 데이터 없거나 tolerance 밖) shot 스냅으로 폴백
+        if snapped_start is None:
+            snapped_start = _snap_start(b["start"], shots)
+        if snapped_end is None:
+            snapped_end = _snap_end(b["end"], shots)
+        # 같은 화자 monologue 중간이면 그 화자 발화 끝까지 확장 (사용자 지적 · 2026-07-27).
+        snapped_start = _extend_start_to_speaker_block(snapped_start, transcript)
+        snapped_end = _extend_end_to_speaker_block(snapped_end, transcript)
+        b["start"] = round(snapped_start, 3)
+        b["end"] = round(snapped_end, 3)
         if duration > 0:
             b["end"] = min(b["end"], duration)
         if b["end"] <= b["start"]:
@@ -450,9 +642,132 @@ def build_beats(
     # 최종 짧은 beat 병합 (전체 리스트 단위)
     all_beats = _merge_small_beats(all_beats)
 
+    # 2026-07-27 gap fill: 자막 있는데 beat 없는 구간(>=8s)을 자동 beat로 채운다.
+    # AI가 리액션·인터뷰 짧은 컷을 놓치는 케이스 방지 (실측: 스페인 음식점 얘기 후 리액션 46s
+    # gap이 통째로 skip → shorts에서 정보 손실).
+    all_beats = _fill_dialogue_gaps(all_beats, transcript, duration)
+
+    # 2026-07-28 안전망: 45s 초과 beat을 speaker 전환점에서 강제 분할 (model이 큰 beat 반환할
+    # 때 최후 방어). 화자 정보 없거나 전환점 없으면 원본 유지.
+    all_beats = _force_split_large_beats(all_beats, transcript, max_beat_sec=45.0)
+
     # id 부여
     for i, b in enumerate(all_beats):
         b["id"] = i
 
     print(f"   beat {len(all_beats)}개 (평균 {sum(b['end']-b['start'] for b in all_beats)/max(1,len(all_beats)):.0f}s)")
     return {"beats": all_beats}
+
+
+def _force_split_large_beats(beats: list[dict], transcript: list[dict],
+                             max_beat_sec: float = 45.0) -> list[dict]:
+    """max_beat_sec 초과 beat을 speaker 전환점에서 잘라 여러 개로 분할.
+    speaker 정보 없거나 전환점 없으면 원본 유지 (안전).
+    2026-07-28 사용자 지적: 모델이 185s 짜리 beat 반환하는 케이스 fallback fix."""
+    if not beats or not transcript:
+        return beats
+    out: list[dict] = []
+    for b in beats:
+        try:
+            st = float(b["start"]); en = float(b["end"])
+        except (KeyError, TypeError, ValueError):
+            out.append(b); continue
+        if en - st <= max_beat_sec:
+            out.append(b); continue
+        # 이 beat 안 speaker 전환점 찾기
+        in_range = [
+            s for s in transcript
+            if isinstance(s.get("start"), (int, float)) and float(s["start"]) >= st
+            and isinstance(s.get("end"), (int, float)) and float(s["end"]) <= en + 0.1
+        ]
+        boundaries: list[float] = []
+        prev_sp = None
+        for s in in_range:
+            sp = (s.get("speaker") or "").strip()
+            if prev_sp is not None and sp and sp != prev_sp:
+                boundaries.append(float(s["start"]))
+            prev_sp = sp or prev_sp
+        # 최소 MIN_BEAT_SEC 이상 되게 boundary 필터링
+        useful = [x for x in boundaries if x - st >= MIN_BEAT_SEC and en - x >= MIN_BEAT_SEC]
+        if not useful:
+            out.append(b); continue
+        # 균등 분할 목적: 45s 넘는 만큼 여러 조각. useful 중 가장 균등에 가까운 것부터.
+        cuts = [st] + sorted(set(useful)) + [en]
+        pieces: list[dict] = []
+        for i in range(len(cuts) - 1):
+            p_st = cuts[i]; p_en = cuts[i + 1]
+            if p_en - p_st < MIN_BEAT_SEC:
+                continue
+            pieces.append({
+                **{k: v for k, v in b.items() if k not in ("start", "end", "id")},
+                "start": round(p_st, 3),
+                "end": round(p_en, 3),
+                "title": (b.get("title") or "") + f" (part {len(pieces)+1})",
+                "auto_split": True,
+            })
+        if len(pieces) >= 2:
+            print(f"   [beats] 큰 beat {en-st:.0f}s → {len(pieces)}조각 강제 분할 (화자 전환점 {len(useful)}개)")
+            out.extend(pieces)
+        else:
+            out.append(b)
+    return out
+
+
+def _fill_dialogue_gaps(beats: list[dict], transcript: list[dict],
+                        duration: float, min_gap_sec: float = 8.0) -> list[dict]:
+    """인접 beat 사이 자막 있는 gap(>=min_gap_sec)을 fallback beat로 채운다.
+    자막이 없는 gap은 그대로 (침묵·BGM 구간)."""
+    if not beats or not transcript:
+        return beats
+    beats_sorted = sorted(beats, key=lambda b: b["start"])
+    filled: list[dict] = []
+    prev_end = 0.0
+    for b in beats_sorted:
+        gap_start = prev_end
+        gap_end = float(b["start"])
+        if gap_end - gap_start >= min_gap_sec:
+            filler = _make_gap_beat(transcript, gap_start, gap_end)
+            if filler:
+                filled.append(filler)
+        filled.append(b)
+        prev_end = float(b["end"])
+    # 마지막 beat 이후 tail gap
+    if duration - prev_end >= min_gap_sec:
+        filler = _make_gap_beat(transcript, prev_end, duration)
+        if filler:
+            filled.append(filler)
+    return filled
+
+
+def _make_gap_beat(transcript: list[dict], lo: float, hi: float) -> dict | None:
+    """gap 구간 [lo, hi]에서 자막이 있으면 fallback beat 생성. 없으면 None."""
+    dlg: list[str] = []
+    st_actual: float | None = None
+    en_actual: float | None = None
+    for t in transcript:
+        try:
+            ts = float(t.get("start", 0)); te = float(t.get("end", 0))
+        except (TypeError, ValueError):
+            continue
+        if te <= lo or ts >= hi:
+            continue
+        txt = (t.get("text") or "").strip()
+        if not txt:
+            continue
+        dlg.append(txt)
+        if st_actual is None:
+            st_actual = max(lo, ts)
+        en_actual = min(hi, te)
+    if not dlg or st_actual is None or en_actual is None or en_actual - st_actual < 3.0:
+        return None
+    joined = " ".join(dlg)
+    return {
+        "start": round(st_actual, 1),
+        "end": round(en_actual, 1),
+        "title": f"[자동] {joined[:30]}",
+        "summary": joined[:200],
+        "characters": [],
+        "hook": "기타",
+        "is_complete": True,
+        "auto_fill": True,
+    }
