@@ -2507,21 +2507,21 @@ app.post("/api/thumbnail-refs/import-youtube", async (c) => {
   const program = String(body?.program || "").trim();
   const max = Math.min(20, Math.max(1, Number(body?.max) || 6));
   if (!channelId) return c.json({ error: "channelId required" }, 400);
-  // youtube_videos entity 에서 조회 (sync 결과)
+  // channel_videos 테이블에서 상위 뷰 조회 (sync 결과)
   const { rows } = await getPool().query(
-    `SELECT id, data FROM entities WHERE kind = 'youtube_video' AND data->>'channelId' = $1
-     ORDER BY COALESCE((data->>'viewCount')::bigint, 0) DESC LIMIT $2`,
+    `SELECT videoid AS "videoId", title, thumbnail, viewcount AS "viewCount"
+       FROM channel_videos WHERE channelid = $1 AND thumbnail IS NOT NULL
+       ORDER BY viewcount DESC NULLS LAST LIMIT $2`,
     [channelId, max]
   );
   if (!rows.length) return c.json({ error: "no synced videos for channel", channelId }, 404);
   const entries = await readThumbManifest();
   const usedIds = new Set(entries.map((e: any) => e.id));
   const added: any[] = [];
-  for (const r of rows) {
-    const v = typeof r.data === "string" ? JSON.parse(r.data) : r.data;
-    const thumbUrl = v.thumbnail || v.thumbnailUrl;
+  for (const v of rows) {
+    const thumbUrl = String(v.thumbnail || "");
     if (!thumbUrl) continue;
-    let id = `yt_${v.videoId || r.id}`.replace(/[^\w.-]/g, "_");
+    let id = `yt_${v.videoId}`.replace(/[^\w.-]/g, "_");
     let n = 1;
     while (usedIds.has(id)) { id = `yt_${v.videoId}_${n++}`; }
     try {
