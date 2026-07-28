@@ -49,23 +49,41 @@ PLAN_SYSTEM = """너는 한국 방송사 유튜브 썸네일 배분 기획자다
 
 주어진 것:
 - 하나의 shorts segment (하이라이트 구간)
-- 여러 reference 썸네일 (실제 방송사 완성작 · 각각 다른 구도)
-- 등록 인물 목록 (썸네일 사용 가능)
+- 여러 cleaned template 이미지 (슬롯 라벨: 위 제목·아래 메인·인용·배지·로고 · 인물 실루엣)
+- 각 template 의 메타 (person_count·composition·mood·description)
+- 등록 인물 목록
 
-너의 일: 이 shorts 를 표현할 variant **N개**를 짜라. 각 variant 는:
-- reference_id: 위 후보 중 하나 (variant 마다 다른 reference 선호 · 다양성)
-- featured_cast: 등록 목록에서만 · reference 인물 수와 근접
-- caption: 이 shorts 를 대표할 **하단 메인 카피 한 문장**
-  · 원본 reference 자막은 통째 교체됨 (원본 문장 재사용 X)
-  · 핵심 + 어그로 · 감상형 X · 이모지 X
-  · 10~18자 · 정보 충분 (5자 이하 X)
-  · 실제 shorts 대사·순간 근거
+너의 일: 이 shorts 를 표현할 variant **N개**를 짜라. 각 variant:
+- reference_id: 후보 중 하나 (variant 마다 다른 reference 선호)
+- featured_cast: 등록 목록에서만 · reference person_count 와 근접
+- captions: **슬롯별 텍스트 dict** · reference 이미지에서 보이는 슬롯만 채움
+  · main: 하단 메인 카피 (반드시 · 사건+어그로 · 10~18자)
+  · sub: 메인 위 부제 (선택 · 맥락 5~10자)
+  · quote: 인용문 (선택 · 인물 대사 5~15자)
+  · badge: 상단 배지 (선택 · 감탄 2~5자)
+  · reference 에 해당 슬롯 없으면 그 필드 생략
+- reasoning: 왜 이 reference 를 이 shorts 에 골랐는지 (1~2문장 · 시각/톤 매칭 근거)
 
-variant 간 다양성:
-- 서로 다른 reference · 서로 다른 각도의 caption (사건 명시 / 인용 / 질문 등)
-- featured_cast 조합 다르게 가능
+원칙:
+- 이미지를 시각으로 판단 · description 만 믿지 마
+- reference person_count 매칭 (2인 → cast 2명 · 3인 → cast 3명 · 불일치 시 감점)
+- reference mood 와 shorts 톤 정합 (충격/웃음/감정)
+- variant 3개는 서로 다른 reference 선호 (다양성)
+- 자막 원칙: 감상형 X · 이모지 X · 원본 문장 재사용 X · 실제 shorts 대사·순간 근거
+- 슬롯 있으면 채우는 게 좋음 (텍스트 계층으로 정보 밀도↑)
 
-출력 JSON: {"hook_summary": "...", "variants": [{reference_id, featured_cast, caption}, ...]}
+출력 JSON:
+{
+  "hook_summary": "이 shorts 의 원핵훅 · 한 문장",
+  "variants": [
+    {
+      "reference_id": "yt_XXX",
+      "featured_cast": ["민경", "백현"],
+      "captions": {"main": "...", "sub": "...", "quote": "...", "badge": "..."},
+      "reasoning": "이 template 은 2인 대비 리액션 · shorts 의 충격 반전과 정합"
+    }
+  ]
+}
 """
 
 
@@ -84,23 +102,19 @@ def _plan_variants(shorts_meta: dict, references: list[dict],
         for t in shorts_meta["transcript_sample"][:12]:
             lines.append(f"    · {t}")
     lines.append("")
-    lines.append("[reference 후보]")
-    for r in references:
+    lines.append("[reference 후보 · 아래 이미지들과 짝지어 봄]")
+    for i, r in enumerate(references):
         meta_parts = []
         if r.get("person_count"): meta_parts.append(f"{r['person_count']}인")
         if r.get("composition"):  meta_parts.append(r["composition"])
         if r.get("mood"):         meta_parts.append(r["mood"])
         meta = " · ".join(meta_parts)
-        lines.append(f"  - {r['id']}: {meta} · {r.get('description','')[:80]}")
+        cleaned_tag = " [cleaned]" if r.get("cleaned") else ""
+        lines.append(f"  [{i}] {r['id']}{cleaned_tag}: {meta} · {r.get('description','')[:80]}")
     lines.append("")
     lines.append(f"[등록 인물] {', '.join(available_cast) if available_cast else '(없음)'}")
     lines.append("")
     lines.append(f"variant **{n}개** 짜라.")
-    lines.append("")
-    lines.append("**reference 선택 원칙**:")
-    lines.append("- reference person_count 와 featured_cast 배열 길이 매칭 (2인 reference → cast 2명)")
-    lines.append("- reference mood 와 shorts 톤 정합 (충격 shorts → 충격 reference)")
-    lines.append("- variant 마다 다른 reference (다양성)")
 
     schema = {
         "type": "OBJECT",
@@ -113,9 +127,18 @@ def _plan_variants(shorts_meta: dict, references: list[dict],
                     "properties": {
                         "reference_id": {"type": "STRING", "enum": [r["id"] for r in references]},
                         "featured_cast": {"type": "ARRAY", "items": {"type": "STRING"}},
-                        "caption": {"type": "STRING"},
+                        "captions": {
+                            "type": "OBJECT",
+                            "properties": {
+                                "main":  {"type": "STRING"},
+                                "sub":   {"type": "STRING"},
+                                "quote": {"type": "STRING"},
+                                "badge": {"type": "STRING"},
+                            },
+                        },
+                        "reasoning": {"type": "STRING"},
                     },
-                    "required": ["reference_id", "featured_cast", "caption"],
+                    "required": ["reference_id", "featured_cast", "captions"],
                 },
             },
         },
@@ -124,9 +147,25 @@ def _plan_variants(shorts_meta: dict, references: list[dict],
     client = genai.Client(vertexai=True,
                           project=project or os.environ.get("GOOGLE_CLOUD_PROJECT", "step-d"),
                           location=LOCATION)
+
+    # 이미지 첨부 · Planner 가 시각으로 template 판단
+    parts: list = [types.Part.from_text(text="\n".join(lines))]
+    for i, r in enumerate(references):
+        p = r.get("path")
+        if not p:
+            continue
+        try:
+            ext = str(p).rsplit(".", 1)[-1].lower()
+            mime = "image/png" if ext == "png" else "image/jpeg"
+            img_bytes = pathlib.Path(p).read_bytes()
+            parts.append(types.Part.from_text(text=f"[{i}] {r['id']}:"))
+            parts.append(types.Part.from_bytes(data=img_bytes, mime_type=mime))
+        except Exception as e:
+            print(f"[planner] skip {r['id']} · {e}")
+
     resp = client.models.generate_content(
         model=MODEL,
-        contents=[types.Content(role="user", parts=[types.Part.from_text(text="\n".join(lines))])],
+        contents=[types.Content(role="user", parts=parts)],
         config=types.GenerateContentConfig(
             system_instruction=PLAN_SYSTEM,
             response_mime_type="application/json",
@@ -339,9 +378,15 @@ def run_pipeline(
                         photos.append(pp); resolved.append(nm); break
         if not photos:
             print(f"  [{vid}] fail · no cast photos", file=sys.stderr); return vid, None
+        # captions dict (신규) 또는 caption str (legacy)
+        captions_dict = plan.get("captions")
+        legacy_caption = plan.get("caption", "")
         try:
-            img = SW.swap_thumbnail(reference=ref["path"], cast_photos=photos,
-                                     cast_names=resolved, caption=plan.get("caption", ""))
+            img = SW.swap_thumbnail(
+                reference=ref["path"], cast_photos=photos, cast_names=resolved,
+                caption=legacy_caption,
+                captions=captions_dict,
+            )
         except Exception as e:
             print(f"  [{vid}] fail · {str(e)[:200]}", file=sys.stderr); return vid, None
         return vid, img

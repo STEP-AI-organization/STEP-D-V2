@@ -39,15 +39,17 @@ def _mime(p: pathlib.Path) -> str:
 def swap_thumbnail(
     reference: pathlib.Path,
     cast_photos: list[pathlib.Path],
-    caption: str,
+    caption: str = "",
     cast_names: Optional[list[str]] = None,
+    captions: Optional[dict] = None,  # 신규 · {main, sub, quote, badge} 슬롯별
     project: Optional[str] = None,
 ) -> Optional[bytes]:
     """reference 썸네일에 castPhoto 얼굴 + 새 caption 교체.
 
     - reference: 실제 방송사 썸네일 (템플릿 역할)
     - cast_photos: 얼굴 교체용 이미지들 (2~4장)
-    - caption: 새 자막 문장 (기존 자막 위치 유지 · 문장만 교체)
+    - caption (legacy): 단일 자막 문장
+    - captions (신규): {main, sub, quote, badge} · cleaned template 슬롯별
     """
     cast_names = cast_names or []
     who = " · ".join(cast_names) if cast_names else f"{len(cast_photos)}명"
@@ -55,6 +57,14 @@ def swap_thumbnail(
     # cleaned template 여부에 따라 프롬프트 다르게
     is_cleaned = "cleaned" in str(reference).lower() or reference.name.endswith("_clean.png")
     if is_cleaned:
+        # captions dict 있으면 슬롯별 · 없으면 legacy caption 을 main 으로
+        cap = captions if isinstance(captions, dict) else {"main": caption}
+        slot_lines = []
+        for k in ["main", "sub", "quote", "badge"]:
+            v = (cap.get(k) or "").strip()
+            if v:
+                slot_lines.append(f"   · '{k}' 슬롯 → \"{v}\"")
+        slot_text = "\n".join(slot_lines) if slot_lines else f"   · 메인 슬롯 → \"{caption}\""
         prompt = (
             f"이 이미지는 슬롯 라벨이 있는 **template** 이다.\n"
             f"슬롯 안 텍스트/실루엣을 다음으로 정확히 교체:\n\n"
@@ -62,11 +72,12 @@ def swap_thumbnail(
             f"   - 회색 사람 실루엣 자리에 첨부 인물 얼굴로 교체\n"
             f"   - 첨부 인물: {who}\n"
             f"   - **얼굴 identity 100% 유지** · 자세·크기·위치·의상은 실루엣 그대로\n\n"
-            f"**2) 자막 슬롯 라벨 → 실제 문장**\n"
-            f"   - '아래 메인' / '위 제목' / '인용' / '배지' / '로고' 등 라벨을 아래 문장으로 통합·교체:\n"
-            f"   - **자막: \"{caption}\"**\n"
+            f"**2) 슬롯 라벨 → 실제 자막 (슬롯별 매핑)**\n"
+            f"{slot_text}\n"
+            f"   - 슬롯 매칭: '아래 메인'→main · '아래 부제'→sub · '인용'→quote · '배지'→badge\n"
             f"   - 폰트/색/pill 배경/위치는 원본 슬롯 스타일 그대로\n"
-            f"   - **원본 라벨 문구('아래 메인' 등) 한 글자도 남기지 마**\n"
+            f"   - **원본 라벨 문구('아래 메인' '인용' 등) 한 글자도 남기지 마**\n"
+            f"   - 채우지 않는 슬롯 (위 목록에 없는 슬롯) 은 라벨 문구 지우고 비워두거나 제거\n"
             f"   - 오타 X · 이모지 X · 한글 정확\n\n"
             f"**절대 유지**: 배경·색 톤·장식(하트/도형)·pill 배경·프레임 비율."
         )
