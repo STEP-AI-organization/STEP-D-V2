@@ -1,8 +1,8 @@
 # 썸네일 엔진 계획 — 사람이 만든 것 같은 쇼츠/클립 썸네일 자동 생성
 
-> 작성 2026-07-26. **계획만** · 아직 구현 X.
-> 목표: 영상 프레임 하나 자르는 게 아니라, **인물 누끼 + 배경 + 큰 자막 카피**를 결합해
-> 방송사 편집팀이 만든 것 같은 클릭베이트 썸네일을 자동 생성.
+> 작성 2026-07-26. 이 문서는 초안(계획 시점)입니다.
+> **최신 정본**: [`thumbnail-engine-consolidated.md`](thumbnail-engine-consolidated.md) (2026-07-28)
+> — 오늘 세션 진행 상황 (Planner CoT · hybrid composition · style 학습) 반영 · MVP1/2/3 재정리.
 
 관련: [`step-d-master-build-plan.md`](step-d-master-build-plan.md) §7(편집기) · `core/faces.py`(얼굴) ·
 `apps/server/src/index.ts`의 `selectThumbnail`(현행: 단일 프레임)
