@@ -2,31 +2,78 @@
 
 사용자 원칙 (2026-07-28):
 "실제 프로그램인데 사람들 얼굴이 너무 변형되는 이슈"
-"인물 누끼 따는거 이제 폰에서도 완벽하게 되는데 · 잘해봐"
+"인물 누끼 따는거 이제 폰에서도 완벽하게 · 잘해봐"
 "누끼 딸 때는 자막 없는 프레임 해야 함 · 자막이 같이 딸려옴"
+"캔바 같은 거만 해도 잘 되던데 · 뭐 상용 API 쓰던가"
 
-접근:
-1. castPhoto 는 등록된 스튜디오 포트레이트 (자막 X · 배경 clean)
-2. rembg (birefnet-portrait) 으로 배경 세그 · RGBA 컷아웃
-3. 지정 position/size 로 배경 이미지 위에 합성 (feather 필요 X · 진짜 세그니까)
+세그 우선순위:
+1. REMOVEBG_API_KEY 환경변수 있으면 → remove.bg API (상용 · 품질 최고)
+2. 없으면 → rembg birefnet-portrait (로컬 폴백)
 """
 from __future__ import annotations
 
 import io
+import os
 import pathlib
 from typing import Optional
 
 from PIL import Image
 
-# rembg lazy import (설치 안 되어 있을 수도)
-_SESSION = None
-def _get_session():
-    global _SESSION
-    if _SESSION is None:
+REMOVEBG_URL = "https://api.remove.bg/v1.0/removebg"
+
+_LOCAL_SESSION = None
+def _get_local_session():
+    global _LOCAL_SESSION
+    if _LOCAL_SESSION is None:
         from rembg import new_session
-        # birefnet-portrait: 인물 포트레이트 최상위 세그 품질
-        _SESSION = new_session("birefnet-portrait")
-    return _SESSION
+        _LOCAL_SESSION = new_session("birefnet-portrait")
+    return _LOCAL_SESSION
+
+
+def _cutout_removebg(img_path: pathlib.Path) -> Image.Image:
+    """remove.bg API 로 배경 제거 · RGBA."""
+    import urllib.request, urllib.error
+    api_key = os.environ.get("REMOVEBG_API_KEY", "").strip()
+    if not api_key:
+        raise RuntimeError("REMOVEBG_API_KEY 없음")
+    # multipart/form-data 수동 구성
+    import uuid
+    boundary = "----stepd" + uuid.uuid4().hex
+    lines = [
+        f"--{boundary}",
+        'Content-Disposition: form-data; name="image_file"; filename="in.jpg"',
+        "Content-Type: application/octet-stream",
+        "",
+    ]
+    body_prefix = "\r\n".join(lines).encode("utf-8") + b"\r\n"
+    body_middle = img_path.read_bytes()
+    body_suffix = (
+        f"\r\n--{boundary}\r\n"
+        f'Content-Disposition: form-data; name="size"\r\n\r\nauto\r\n'
+        f"--{boundary}\r\n"
+        f'Content-Disposition: form-data; name="type"\r\n\r\nperson\r\n'
+        f"--{boundary}\r\n"
+        f'Content-Disposition: form-data; name="format"\r\n\r\npng\r\n'
+        f"--{boundary}--\r\n"
+    ).encode("utf-8")
+    body = body_prefix + body_middle + body_suffix
+    req = urllib.request.Request(REMOVEBG_URL, data=body, method="POST", headers={
+        "X-Api-Key": api_key,
+        "Content-Type": f"multipart/form-data; boundary={boundary}",
+    })
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            data = r.read()
+    except urllib.error.HTTPError as e:
+        raise RuntimeError(f"remove.bg HTTP {e.code} · {e.read()[:200]!r}") from e
+    return Image.open(io.BytesIO(data)).convert("RGBA")
+
+
+def _cutout_local(img_path: pathlib.Path) -> Image.Image:
+    """rembg 로컬 세그 · RGBA."""
+    from rembg import remove
+    out = remove(img_path.read_bytes(), session=_get_local_session())
+    return Image.open(io.BytesIO(out)).convert("RGBA")
 
 
 # 9 슬롯 앵커 (caption_overlay 와 동일 좌표계)
@@ -47,11 +94,14 @@ PERSON_SIZE_RATIO = {"S": 0.45, "M": 0.60, "L": 0.75, "XL": 0.95}
 
 
 def cutout_person(img_path: pathlib.Path) -> Image.Image:
-    """rembg 로 배경 제거 · RGBA 반환 (인물만 남기고 alpha)."""
-    from rembg import remove
-    src_bytes = img_path.read_bytes()
-    out_bytes = remove(src_bytes, session=_get_session())
-    return Image.open(io.BytesIO(out_bytes)).convert("RGBA")
+    """배경 제거 → RGBA · remove.bg 우선 · 로컬 폴백."""
+    if os.environ.get("REMOVEBG_API_KEY", "").strip():
+        try:
+            return _cutout_removebg(img_path)
+        except Exception as e:
+            import sys as _sys
+            print(f"[cutout] remove.bg fail · fallback local · {str(e)[:150]}", file=_sys.stderr)
+    return _cutout_local(img_path)
 
 
 def _crop_to_content(rgba: Image.Image) -> Image.Image:
