@@ -1,21 +1,17 @@
-"""썸네일 7단계 파이프라인 (사용자 구조 2026-07-27):
+"""썸네일 파이프라인 · swap 기반 (2026-07-28 확정 방향).
 
-②클립 생성 (이미 있음 · shorts)
-   ↓
-③클립 분석 (대사·씬·narrative 슬라이싱)
-   ↓
-④썸네일 기획 AI (Planner · caption·preset·layout)
-   ↓
-⑤대표 프레임 추출 (얼굴 큰 shot + 감정 절정)
-   ↓
-⑥이미지 생성/합성 (nano banana · variant N개 병렬)
-   ↓
-⑦CTR 점수 예측 (Gemini vision · 각 variant 평가)
-   ↓
-Best Thumbnail
+사용자 지시:
+"이런 템플릿 EDIT 하는 방향 썸네일 생성을 바꾸자"
 
-실행:
-  python -m core.thumbnail.pipeline --media-dir X --variants 3
+흐름 (각 shorts 마다):
+  ① 컨텍스트 로드 (shorts_context.json or narrative 첫 segment)
+  ② Reference pool 로드 (assets/thumbnail-reference/*.png|jpg)
+  ③ Planner (mini): 이 shorts 에 최적 reference N개 + 각 caption + featured_cast
+  ④ 병렬 swap (gemini-3-pro-image · face+text edit) · N variant
+  ⑤ CTR 채점 · Best 자동
+  ⑥ multi_session.json (서버 규격)
+
+기존 composition 접근 (bg gen + castPhoto 세그 합성) 은 pipeline_compose.py 로 보존.
 """
 from __future__ import annotations
 
@@ -27,313 +23,263 @@ import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
-from . import planner as PL
-from . import nano_banana as NB
+from google import genai
+from google.genai import types
+
+from . import swap as SW
 from . import ctr_predictor as CTR
-from . import caption_overlay as OV
 from . import person_compositor as PC
-from . import templates as TP
+from .planner import load_shorts_slice
+
+REF_DIR = pathlib.Path(__file__).resolve().parents[2] / "assets" / "thumbnail-reference"
+MODEL = "gemini-2.5-flash"
+LOCATION = "asia-northeast3"
 
 
-def _expand_template(plan_v: dict) -> dict:
-    """template_id + slots → person_layouts / captions / background 로 확장.
+PLAN_SYSTEM = """너는 한국 방송사 유튜브 썸네일 배분 기획자다.
 
-    Planner 가 template 기반으로 뽑았으면 정규화된 필드로 변환.
-    template 없이 legacy 필드만 있으면 그대로 통과.
-    """
-    tid = plan_v.get("template_id")
-    if not tid:
-        return plan_v
-    tpl = TP.get(tid)
-    if not tpl:
-        return plan_v
+주어진 것:
+- 하나의 shorts segment (하이라이트 구간)
+- 여러 reference 썸네일 (실제 방송사 완성작 · 각각 다른 구도)
+- 등록 인물 목록 (썸네일 사용 가능)
 
-    person_slots = plan_v.get("person_slots") or {}
-    caption_slots = plan_v.get("caption_slots") or {}
+너의 일: 이 shorts 를 표현할 variant **N개**를 짜라. 각 variant 는:
+- reference_id: 위 후보 중 하나 (variant 마다 다른 reference 선호 · 다양성)
+- featured_cast: 등록 목록에서만 · reference 인물 수와 근접
+- caption: 이 shorts 를 대표할 **하단 메인 카피 한 문장**
+  · 원본 reference 자막은 통째 교체됨 (원본 문장 재사용 X)
+  · 핵심 + 어그로 · 감상형 X · 이모지 X
+  · 10~18자 · 정보 충분 (5자 이하 X)
+  · 실제 shorts 대사·순간 근거
 
-    # person_layouts 생성 · xywh 있으면 그대로 · 없으면 position/size
-    person_layouts = []
-    featured_cast = []
-    for zone in tpl["person_zones"]:
-        nm = person_slots.get(zone["id"])
-        if not nm:
+variant 간 다양성:
+- 서로 다른 reference · 서로 다른 각도의 caption (사건 명시 / 인용 / 질문 등)
+- featured_cast 조합 다르게 가능
+
+출력 JSON: {"hook_summary": "...", "variants": [{reference_id, featured_cast, caption}, ...]}
+"""
+
+
+def _plan_variants(shorts_meta: dict, references: list[dict],
+                    available_cast: list[str], n: int,
+                    project: str | None = None) -> tuple[str, list[dict]]:
+    lines = [f"[이 shorts]"]
+    lines.append(f"  [{shorts_meta.get('start',0):.0f}-{shorts_meta.get('end',0):.0f}s] title={shorts_meta.get('title','')}")
+    lines.append(f"  summary: {(shorts_meta.get('summary') or '')[:250]}")
+    if shorts_meta.get("key_moments"):
+        lines.append("  핵심 순간:")
+        for k in shorts_meta["key_moments"][:6]:
+            lines.append(f"    · {k}")
+    if shorts_meta.get("transcript_sample"):
+        lines.append("  실제 대사:")
+        for t in shorts_meta["transcript_sample"][:12]:
+            lines.append(f"    · {t}")
+    lines.append("")
+    lines.append("[reference 후보]")
+    for r in references:
+        lines.append(f"  - {r['id']}: {r.get('description','')}")
+    lines.append("")
+    lines.append(f"[등록 인물] {', '.join(available_cast) if available_cast else '(없음)'}")
+    lines.append("")
+    lines.append(f"variant **{n}개** 짜라.")
+
+    schema = {
+        "type": "OBJECT",
+        "properties": {
+            "hook_summary": {"type": "STRING"},
+            "variants": {
+                "type": "ARRAY",
+                "items": {
+                    "type": "OBJECT",
+                    "properties": {
+                        "reference_id": {"type": "STRING", "enum": [r["id"] for r in references]},
+                        "featured_cast": {"type": "ARRAY", "items": {"type": "STRING"}},
+                        "caption": {"type": "STRING"},
+                    },
+                    "required": ["reference_id", "featured_cast", "caption"],
+                },
+            },
+        },
+        "required": ["hook_summary", "variants"],
+    }
+    client = genai.Client(vertexai=True,
+                          project=project or os.environ.get("GOOGLE_CLOUD_PROJECT", "step-d"),
+                          location=LOCATION)
+    resp = client.models.generate_content(
+        model=MODEL,
+        contents=[types.Content(role="user", parts=[types.Part.from_text(text="\n".join(lines))])],
+        config=types.GenerateContentConfig(
+            system_instruction=PLAN_SYSTEM,
+            response_mime_type="application/json",
+            response_schema=schema,
+            temperature=0.9,
+            max_output_tokens=4096,
+        ),
+    )
+    if not resp.text:
+        return "", []
+    try:
+        data = json.loads(resp.text)
+        return data.get("hook_summary", ""), (data.get("variants") or [])[:n]
+    except Exception:
+        return "", []
+
+
+def _load_references() -> list[dict]:
+    if not REF_DIR.exists():
+        return []
+    refs: list[dict] = []
+    style = {}
+    sp = REF_DIR / "style_profile.json"
+    if sp.exists():
+        try:
+            style = json.loads(sp.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+    for p in sorted(REF_DIR.glob("*")):
+        if p.suffix.lower() not in {".png", ".jpg", ".jpeg", ".webp"}:
             continue
-        pl: dict = {"name": nm, "z_index": zone.get("z_index", 0)}
-        if zone.get("xywh"):
-            pl["xywh"] = zone["xywh"]
-        if zone.get("position"): pl["position"] = zone["position"]
-        if zone.get("size"):     pl["size"] = zone["size"]
-        person_layouts.append(pl)
-        featured_cast.append(nm)
-
-    # captions 생성 · xywh 있으면 그대로
-    captions = []
-    for zone in tpl["caption_zones"]:
-        text = caption_slots.get(zone["id"])
-        if not text:
-            continue
-        cap: dict = {"text": text, "role": zone["role"]}
-        if zone.get("xywh"):
-            cap["xywh"] = zone["xywh"]
-        if zone.get("position"): cap["position"] = zone["position"]
-        if zone.get("size"):     cap["size"] = zone["size"]
-        captions.append(cap)
-
-    # background 지시 · template + Planner 힌트 결합
-    bg_hint = tpl["background"].get("nano_hint", "")
-    if plan_v.get("background_hint"):
-        bg_hint = f"{bg_hint} · {plan_v['background_hint']}"
-
-    # 확장된 dict 리턴 (legacy 필드 채우기)
-    out = dict(plan_v)
-    out["featured_cast"] = featured_cast
-    out["person_layouts"] = person_layouts
-    out["captions"] = captions
-    out["background"] = bg_hint
-    out["layout"] = f"[{tid}] {tpl['description']}"
-    out["_template"] = tid
-    return out
+        refs.append({"id": p.stem, "path": p, "description": style.get(p.stem, "")})
+    return refs
 
 
 def run_pipeline(
     media_dir: pathlib.Path,
     out_dir: pathlib.Path,
     n_variants: int = 3,
-    shorts: dict | None = None,   # {"start", "end", ...} 지정 X 면 narrative 첫 segment
+    shorts: dict | None = None,
 ) -> dict:
-    """7단계 실행 → Best 썸네일 반환."""
+    """swap 기반 파이프라인 · variant N개 · multi_session.json 호환 결과."""
     out_dir.mkdir(parents=True, exist_ok=True)
     t0 = time.time()
     log: dict = {"stages": {}, "took": {}}
 
-    # ─── ③ 클립 분석 ────────────────────────────────────────────
+    # ─── ① 컨텍스트 ─────────────────────────
     t = time.time()
-    pc_path = media_dir / "program_context.json"
-    pc = json.loads(pc_path.read_text(encoding="utf-8")) if pc_path.exists() else {}
-    shorts_ctx = {
-        "title": pc.get("title", "쇼츠"),
-        "description": "",
-        "cast_names": pc.get("cast", []),
-    }
-    # narrative 첫 segment 를 shorts로 (편의)
     if not shorts:
-        nar = json.loads((media_dir / "narrative.json").read_text(encoding="utf-8")) \
-            if (media_dir / "narrative.json").exists() else {}
+        # narrative 첫 segment 를 shorts 로
+        nar = _safe_load(media_dir / "narrative.json", {})
         if isinstance(nar, dict) and nar.get("segments"):
             s0 = nar["segments"][0]
-            shorts = {"start": s0.get("start", 0), "end": s0.get("end", 180)}
-            shorts_ctx["title"] = s0.get("title", shorts_ctx["title"])
-            shorts_ctx["description"] = s0.get("summary", "")
-    shorts_slice = PL.load_shorts_slice(media_dir, shorts) if shorts else None
-    log["stages"]["3_clip_analysis"] = {
-        "shorts_range": [shorts.get("start"), shorts.get("end")] if shorts else None,
-        "transcript_lines": len(shorts_slice.get("transcript_lines", [])) if shorts_slice else 0,
-        "key_moments": len(shorts_slice.get("key_moments", [])) if shorts_slice else 0,
-    }
-    log["took"]["3_clip_analysis"] = round(time.time() - t, 2)
+            shorts = {"start": s0.get("start", 0), "end": s0.get("end", 180),
+                      "title": s0.get("title", ""), "summary": s0.get("summary", "")}
+    if not shorts:
+        return {"status": "no_shorts", "log": log}
+    shorts_slice = load_shorts_slice(media_dir, shorts) or {}
+    shorts_meta = dict(shorts)
+    shorts_meta["key_moments"] = shorts_slice.get("key_moments") or []
+    shorts_meta["transcript_sample"] = (shorts_slice.get("transcript_lines") or [])[:12]
+    log["stages"]["1_context"] = {"start": shorts.get("start"), "end": shorts.get("end"),
+                                   "title": shorts.get("title", "")}
+    log["took"]["1_context"] = round(time.time() - t, 2)
 
-    # ─── ④ 썸네일 기획 AI (Planner · variant N 세트) ─────────
-    # 각 variant 마다 (background/layout/caption) 다르게. AI 에 넘길 필드 오직 이 3개.
+    # ─── ② Reference pool ───────────────────
     t = time.time()
-    shorts_ctx_with_shorts = dict(shorts_ctx); shorts_ctx_with_shorts["shorts"] = shorts
-    variant_plans = PL.generate_variant_prompts(
-        media_dir=media_dir,
-        n=n_variants,
-        shorts_context=shorts_ctx_with_shorts,
-    )
-    log["stages"]["4_planner"] = {
-        "requested": n_variants,
-        "returned": len(variant_plans),
-        "variants": variant_plans,
-    }
-    log["took"]["4_planner"] = round(time.time() - t, 2)
-    if not variant_plans:
-        return {"status": "planner_failed", "log": log}
+    references = _load_references()
+    log["stages"]["2_references"] = {"count": len(references),
+                                       "ids": [r["id"] for r in references]}
+    log["took"]["2_references"] = round(time.time() - t, 2)
+    if not references:
+        return {"status": "no_references", "log": log}
 
-    # ─── ⑤ 대표 프레임 추출 ─────────────────────────────────────
-    t = time.time()
+    # 등록 인물
     cast_dir = media_dir / "cast_photos"
-    cast_photos = sorted(cast_dir.glob("*")) if cast_dir.exists() else []
-    shot_dir = media_dir / "shot_frames"
-    all_frames = sorted(shot_dir.glob("shot_*.jpg")) if shot_dir.exists() else []
-    # 얼굴 큰 프레임 우선 · faces.json 활용
-    picked_frames = _pick_top_frames(media_dir, all_frames, top_k=5)
-    log["stages"]["5_frames"] = {
-        "cast_photos": len(cast_photos),
-        "total_frames": len(all_frames),
-        "picked": [p.stem for p in picked_frames],
-    }
-    log["took"]["5_frames"] = round(time.time() - t, 2)
+    available_cast: list[str] = []
+    if cast_dir.exists():
+        exts = {".jpg", ".jpeg", ".png", ".webp"}
+        available_cast = sorted({p.stem for p in cast_dir.iterdir() if p.suffix.lower() in exts})
 
-    # ─── ⑥ 이미지 생성 (variant N개 병렬 · 각각 다른 plan + 다른 프레임) ─
-    # 사용자 원칙: nano banana 에 (배경/배치/제목) + 프레임 하나 · 그 외 X
+    # ─── ③ Planner ──────────────────────────
     t = time.time()
-    if not picked_frames:
-        return {"status": "no_frames", "log": log}
+    hook, plans = _plan_variants(shorts_meta, references, available_cast, n_variants)
+    print(f"[pipeline] hook: {hook}")
+    print(f"[pipeline] variants: {len(plans)}")
+    for i, p in enumerate(plans):
+        print(f"  v{i+1}: ref={p.get('reference_id')} · cast={p.get('featured_cast')} · caption={p.get('caption')}")
+    if not plans:
+        # 폴백 · round-robin references
+        plans = [{
+            "reference_id": references[i % len(references)]["id"],
+            "featured_cast": available_cast[:2],
+            "caption": (shorts.get("title") or "")[:18],
+        } for i in range(n_variants)]
+    log["stages"]["3_planner"] = {"hook_summary": hook, "variants": plans}
+    log["took"]["3_planner"] = round(time.time() - t, 2)
 
+    # ─── ④ 병렬 swap ────────────────────────
+    t = time.time()
+    ref_by_id = {r["id"]: r for r in references}
     variant_images: dict[str, bytes] = {}
     variant_paths: dict[str, str] = {}
 
-    cast_dir = media_dir / "cast_photos"
-
-    def _resolve_cast_photos(names: list[str]) -> tuple[list[pathlib.Path], list[str]]:
-        """이름 리스트 → 인물 소스 경로. 우선순위:
-        1. faces.json 의 full_frame 에서 상반신 자동 crop (자막 배제 · derived_cast/)
-           → 실 방송 상황 · 얼굴 identity 100% + 상반신 포함
-        2. 등록된 cast_photos/{name}.{ext} 폴백
-        """
+    def _do(vid: str, plan: dict) -> tuple[str, bytes | None]:
+        ref = ref_by_id.get(plan.get("reference_id"))
+        if not ref:
+            print(f"  [{vid}] fail · unknown reference", file=sys.stderr); return vid, None
+        # 인물 사진 조회 (derived_cast 우선)
+        names = plan.get("featured_cast") or []
         photos: list[pathlib.Path] = []
-        found: list[str] = []
-        for nm in names or []:
-            # (1) faces.json 기반 자동 상반신
-            derived = PC.derive_person_source(nm, media_dir)
-            if derived and derived.exists():
-                photos.append(derived); found.append(nm)
-                continue
-            # (2) 등록 castPhoto 폴백
+        resolved: list[str] = []
+        for nm in names:
+            d = PC.derive_person_source(nm, media_dir)
+            if d and d.exists():
+                photos.append(d); resolved.append(nm); continue
             if cast_dir.exists():
                 for ext in ("jpg", "jpeg", "png", "webp"):
-                    p = cast_dir / f"{nm}.{ext}"
-                    if p.exists():
-                        photos.append(p); found.append(nm); break
-        return photos, found
-
-    def _gen_one(vid: str, plan_v: dict, frame: pathlib.Path) -> tuple[str, bytes | None]:
+                    pp = cast_dir / f"{nm}.{ext}"
+                    if pp.exists():
+                        photos.append(pp); resolved.append(nm); break
+        if not photos:
+            print(f"  [{vid}] fail · no cast photos", file=sys.stderr); return vid, None
         try:
-            # (0) template 이 있으면 person_layouts/captions/background 자동 확장
-            plan_v = _expand_template(plan_v)
-            # (a) 계획된 인물 사진 조회
-            featured = plan_v.get("featured_cast", []) or []
-            cast_photos, cast_names_found = _resolve_cast_photos(featured)
-            # {name: path} 매핑 (compositor 용)
-            cast_map: dict[str, pathlib.Path] = dict(zip(cast_names_found, cast_photos))
-            # captions 정규화
-            captions = plan_v.get("captions") or []
-            if not captions and plan_v.get("caption"):
-                captions = [{
-                    "text": plan_v["caption"], "role": "main",
-                    "position": plan_v.get("caption_position", "bottom-left"),
-                    "size": plan_v.get("caption_size", "L"),
-                }]
-            main_pos = "bottom-left"
-            for c in captions:
-                if c.get("role") == "main":
-                    main_pos = c.get("position", main_pos); break
-
-            # person_layouts (신규 · 합성용) — 없으면 auto-fallback
-            person_layouts = plan_v.get("person_layouts") or []
-            if not person_layouts and cast_names_found:
-                # 기본: 첫 인물 middle-center L · 두번째 middle-right M · 세번째 middle-left S
-                defaults = [("middle-center", "L"), ("middle-right", "M"), ("middle-left", "S")]
-                person_layouts = [
-                    {"name": nm, "position": defaults[i % len(defaults)][0],
-                     "size": defaults[i % len(defaults)][1], "z_index": i}
-                    for i, nm in enumerate(cast_names_found)
-                ]
-
-            tmpl_tag = plan_v.get("_template", "-")
-            print(f"  [{vid}] template={tmpl_tag} · resolved={cast_names_found} · "
-                  f"persons={[(pl.get('name'), pl.get('position'), pl.get('size')) for pl in person_layouts]} · "
-                  f"captions={[(c.get('role'), c.get('text')[:20]) for c in captions]}")
-
-            # (b) 배경 생성 (hybrid · 인물 없는 blur 배경)
-            img = NB.generate_thumbnail(
-                background=plan_v.get("background", "원본 프레임 blur 처리"),
-                layout=plan_v.get("layout", ""),
-                caption_position=main_pos,
-                frame=frame,
-                cast_photos=[],  # hybrid 에서는 castPhoto 넘기지 않음
-                cast_names=[],
-                mode="hybrid",
-            )
-            if not img:
-                return vid, None
-            # (c) castPhoto 세그 + 배경 위 합성 (얼굴 identity 100%)
-            if person_layouts and cast_map:
-                try:
-                    img = PC.composite_persons(bg_bytes=img,
-                                                person_layouts=person_layouts,
-                                                cast_photo_paths=cast_map)
-                except Exception as e:
-                    print(f"  [{vid}] compositor fail · {str(e)[:150]}", file=sys.stderr)
-            # (d) 자막 계층 오버레이
-            img = OV.render_captions(img_bytes=img, captions=captions)
-            return vid, img
+            img = SW.swap_thumbnail(reference=ref["path"], cast_photos=photos,
+                                     cast_names=resolved, caption=plan.get("caption", ""))
         except Exception as e:
-            print(f"[gen {vid}] fail: {str(e)[:200]}", file=sys.stderr)
-            return vid, None
+            print(f"  [{vid}] fail · {str(e)[:200]}", file=sys.stderr); return vid, None
+        return vid, img
 
-    # 각 variant 는 다른 plan · 다른 프레임 (부족하면 순환)
-    with ThreadPoolExecutor(max_workers=n_variants) as ex:
-        futs = [ex.submit(_gen_one, f"v{i+1}", variant_plans[i],
-                          picked_frames[i % len(picked_frames)])
-                for i in range(n_variants)]
+    with ThreadPoolExecutor(max_workers=max(1, min(3, len(plans)))) as ex:
+        futs = [ex.submit(_do, f"v{i+1}", p) for i, p in enumerate(plans)]
         for f in as_completed(futs):
-            vid, img_bytes = f.result()
-            if img_bytes:
+            vid, img = f.result()
+            if img:
                 dest = out_dir / f"{vid}.png"
-                dest.write_bytes(img_bytes)
-                variant_images[vid] = img_bytes
+                dest.write_bytes(img)
+                variant_images[vid] = img
                 variant_paths[vid] = str(dest)
                 print(f"  [ok] {vid} → {dest.name}")
-    log["stages"]["6_generation"] = {
-        "requested": n_variants, "succeeded": len(variant_images),
-        "paths": variant_paths,
-    }
-    log["took"]["6_generation"] = round(time.time() - t, 2)
+
+    log["stages"]["4_swap"] = {"requested": len(plans), "succeeded": len(variant_images),
+                                 "paths": variant_paths}
+    log["took"]["4_swap"] = round(time.time() - t, 2)
     if not variant_images:
-        return {"status": "generation_failed", "log": log}
+        return {"status": "swap_failed", "log": log}
 
-    # ─── ⑦ CTR 점수 예측 · Best 선택 ────────────────────────
+    # ─── ⑤ CTR + Best ───────────────────────
     t = time.time()
-    scores = CTR.score_variants(variant_images)
+    scores = CTR.score_variants(variant_images) or []
     best_id = CTR.pick_best(scores)
-    log["stages"]["7_ctr"] = {"scores": scores, "best": best_id}
-    log["took"]["7_ctr"] = round(time.time() - t, 2)
-
-    # Best 이미지를 복사
+    log["stages"]["5_ctr"] = {"scores": scores, "best": best_id}
+    log["took"]["5_ctr"] = round(time.time() - t, 2)
+    best_path = None
     if best_id and best_id in variant_paths:
-        best_src = pathlib.Path(variant_paths[best_id])
         best_dst = out_dir / f"BEST_{best_id}.png"
-        best_dst.write_bytes(best_src.read_bytes())
-        log["best_path"] = str(best_dst)
-
+        best_dst.write_bytes(pathlib.Path(variant_paths[best_id]).read_bytes())
+        best_path = str(best_dst)
+    log["best_path"] = best_path
     log["total_took"] = round(time.time() - t0, 2)
     (out_dir / "pipeline_log.json").write_text(
         json.dumps(log, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
 
     return {"status": "completed", "log": log,
-            "best": log.get("best_path"), "variants": variant_paths, "scores": scores}
+            "best": best_path, "variants": variant_paths, "scores": scores}
 
 
-def _pick_top_frames(media_dir: pathlib.Path,
-                     all_frames: list[pathlib.Path], top_k: int = 5) -> list[pathlib.Path]:
-    """얼굴 큰 프레임 top-K. faces.json 활용."""
-    if not all_frames:
-        return []
-    faces_p = media_dir / "faces.json"
-    if not faces_p.exists():
-        return all_frames[:top_k]
+def _safe_load(p: pathlib.Path, default):
     try:
-        fd = json.loads(faces_p.read_text(encoding="utf-8"))
-        # faces.json에 detections 없으면 · 그냥 앞 top_k
-        detections = fd.get("detections", []) if isinstance(fd, dict) else []
-        if not detections:
-            return all_frames[:top_k]
-        # 프레임별 얼굴 크기 합계
-        from collections import defaultdict
-        scores: dict[str, float] = defaultdict(float)
-        for d in detections:
-            fname = d.get("frame") or d.get("file") or ""
-            fname = pathlib.Path(fname).name
-            bb = d.get("bbox") or d.get("xyxy") or [0, 0, 0, 0]
-            area = max(0, bb[2] - bb[0]) * max(0, bb[3] - bb[1])
-            scores[fname] += area
-        # 정렬
-        picked = sorted(all_frames, key=lambda p: -scores.get(p.name, 0))
-        return picked[:top_k]
+        return json.loads(p.read_text(encoding="utf-8")) if p.exists() else default
     except Exception:
-        return all_frames[:top_k]
+        return default
 
 
 def main() -> int:
@@ -352,12 +298,11 @@ def main() -> int:
     print(f"[pipeline] variants = {args.variants}\n")
 
     result = run_pipeline(media_dir=media, out_dir=out, n_variants=args.variants)
-    print("\n=== 결과 ===")
-    print(f"status: {result['status']}")
+    print(f"\n=== 결과 ===\nstatus: {result['status']}")
     if result.get("scores"):
-        print("CTR scores:")
+        print("CTR:")
         for s in result["scores"]:
-            print(f"  {s.get('variant'):>3s} · total {s.get('total')} · {s.get('reason','')[:60]}")
+            print(f"  {s.get('variant'):>3s} · {s.get('total')} · {s.get('reason','')[:60]}")
     print(f"BEST: {result.get('best')}")
     return 0 if result["status"] == "completed" else 2
 
