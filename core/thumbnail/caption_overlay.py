@@ -100,6 +100,18 @@ def render_caption(
     }])
 
 
+import re
+# 이모지 제거 (사용자 지시 2026-07-28: "썸네일에 이모지 쓰지 마")
+_EMOJI_RE = re.compile(
+    "[\U0001F000-\U0001FFFF\U00002600-\U000027BF\U0001F300-\U0001F5FF"
+    "\U0001F600-\U0001F64F\U0001F680-\U0001F6FF\U0001F900-\U0001F9FF"
+    "✀-➿☀-⛿]", flags=re.UNICODE)
+
+
+def _strip_emoji(text: str) -> str:
+    return _EMOJI_RE.sub("", text).strip()
+
+
 def _render_one(img: Image.Image, cap: dict) -> None:
     """캡션 하나 렌더 (in-place · RGBA 이미지 위에).
 
@@ -107,7 +119,7 @@ def _render_one(img: Image.Image, cap: dict) -> None:
     - xywh: [x, y, w, h] 정규화 박스 (HTML 디자이너 출력) · 이 박스 안에 맞춤
     - position (9슬롯) + size (S/M/L/XL): legacy 앵커
     """
-    text = (cap.get("text") or "").strip()
+    text = _strip_emoji((cap.get("text") or "").strip())
     if not text:
         return
     role = cap.get("role", "main")
