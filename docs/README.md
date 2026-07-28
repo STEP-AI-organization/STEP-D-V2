@@ -54,14 +54,15 @@
 |---|---|
 | [content-model.md](reference/content-model.md) | **콘텐츠 모델 정본** — 롱폼 → 클립 → 숏폼·하이라이트 계층, beat·UI 원칙 |
 | [glossary.md](reference/glossary.md) | 용어집 — SMR `clipType` 등 기존 코드값 참고 |
-| [data-model.md](reference/data-model.md) | DB 스키마 종합 — schema.sql + **코드 런타임 생성 테이블** + 변경 절차 |
-| [api-reference.md](reference/api-reference.md) | 서버 HTTP API 전 라우트 (~40개) ↔ 프론트 함수 매핑 |
+| [data-model.md](reference/data-model.md) | DB 스키마 종합 — schema.sql + 런타임 안전망 + **migrations/** + 변경 절차 |
+| [api-reference.md](reference/api-reference.md) | 서버 HTTP API 전 라우트(일반 API + admin Lab + match.*) ↔ 프론트 함수 매핑 |
 | [core-pipeline-reference.md](reference/core-pipeline-reference.md) | core/ 파이썬 파이프라인 모듈·출력 스키마·디버깅·admin Lab |
+| [patent-new-figures-14-17-technical-brief.md](reference/patent-new-figures-14-17-technical-brief.md) | 변리사 회신용 신규 도면(도 14~17) 기술 설명 — 서사 앵커·역매칭·체크포인트·레이어 썸네일 |
 
 ## research/ · prototypes/ · archive/
 
-- [research/object-detection-research.md](research/object-detection-research.md) — 객체인식·비전 기술 선정 조사
-- [research/highlight-model-feasibility.md](research/highlight-model-feasibility.md) — 하이라이트 품질 개선 실현가능성 조사 (100만 구독 채널 데이터 활용)
+- [archive/object-detection-research.md](archive/object-detection-research.md) — 객체인식·비전 기술 선정 조사 (아카이브)
+- [archive/highlight-model-feasibility.md](archive/highlight-model-feasibility.md) — 하이라이트 품질 개선 실현가능성 조사 · 100만 구독 채널 데이터 활용 (아카이브, 결론은 plans/에 반영됨)
 - prototypes/ — [editor-prototype.html](prototypes/editor-prototype.html) · [program-home-prototype.html](prototypes/program-home-prototype.html) (UI 목업, 코드 아님)
 - archive/ — 발명신고서·기술소개서·방향기획서 원본 (역사 기록)
 

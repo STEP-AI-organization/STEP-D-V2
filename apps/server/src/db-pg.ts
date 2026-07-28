@@ -1393,7 +1393,7 @@ export async function deleteCastMember(castId: string): Promise<void> {
  * Upsert (not DELETE+INSERT) so an operator's `confirmed`/`rejected` decision SURVIVES a
  * re-analysis — the pipeline may only overwrite the machine-derived columns. This is the
  * label-loss trap the feasibility study flags for recommendations
- * (docs/research/highlight-model-feasibility.md §6-2), avoided here from the start.
+ * (docs/archive/highlight-model-feasibility.md §6-2), avoided here from the start.
  * People no longer detected are left in place (their status is still the operator's).
  */
 export async function saveEpisodeCast(

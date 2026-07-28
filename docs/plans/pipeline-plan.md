@@ -1,6 +1,6 @@
 # STEP-D AI 파이프라인 구현 계획
 
-> 상위 확장: [context-engine-plan.md](context-engine-plan.md) — 인물·서사 컨텍스트 엔진(CX 트랙). 객체인식 기술 선정: [../research/object-detection-research.md](../research/object-detection-research.md)
+> 상위 확장: [context-engine-plan.md](context-engine-plan.md) — 인물·서사 컨텍스트 엔진(CX 트랙). 객체인식 기술 선정: [../archive/object-detection-research.md](../archive/object-detection-research.md)
 
 > 2026-07-14 작성 · 2026-07-16 실측 대조 갱신. 발명신고서(구성 A~J)를 실제 제품으로 구현하기 위한 빌드/오픈소스/API 결정.
 > 전제: AI는 **관리형 API 위주**(GPU 자체 운영 없음), 현 Cloud Run + Cloud SQL + GCS 구조 유지.
@@ -15,7 +15,7 @@
 | 작업 큐 = **pg-boss** (MIT) | **자체 구현 `apps/server/src/queue.ts`** — Postgres `job_queue` 테이블(코드가 런타임 생성), `FOR UPDATE SKIP LOCKED` 클레임, dedupeKey 부분 유니크 인덱스(in-flight 중복 방지), 지수 백오프(30초→최대 30분, maxAttempts 5). pg-boss는 도입되지 않았다. 운영 상세: [../ops/worker-queue.md](../ops/worker-queue.md) |
 | STT = **Clova Speech** 1차 | **Gemini가 관리형 기본** — `core/asr.py`, `STT_PROVIDER=gemini` 기본 / `whisper`(로컬 GPU faster-whisper) 2-provider 어댑터. 관리형 Google STT가 한국어 고유명사를 뭉개는("정우성"→"정구속") 품질 문제가 실측돼 Gemini로 확정(Vertex asia-northeast3 서울). Clova는 코드에 없다 |
 | 신규 구현은 **apps/server(TS)** | AI 파이프라인은 **파이썬 `core/` 패키지**(analyze·asr·refine·scenes·vision·names·recommend)로 구현됨. 워커의 `content-pipeline.ts`가 `python -m core.analyze`를 스폰한다 |
-| `buildRecommendations()` 휴리스틱을 AP2에서 교체 | 교체가 아니라 **死코드화** — `pipeline.ts`에 정의만 남고 어디서도 호출되지 않는다(타 파일은 `newId`만 import). 실추천은 `core/recommend.py`(장면 타임라인 → Gemini 단일 추론) 결과를 `content-pipeline.ts`의 `writeRecommendationsFromShorts`가 회차 추천 보드에 기록 |
+| `buildRecommendations()` 휴리스틱을 AP2에서 교체 | 교체가 아니라 **완전 제거** — 死코드로 잔존 후 2026-07-28 파일에서 삭제. `pipeline.ts`는 `newId`만 export. 실추천은 `core/recommend.py`(장면 타임라인 → Gemini 단일 추론) 결과를 `content-pipeline.ts`의 `writeRecommendationsFromShorts`가 회차 추천 보드에 기록 |
 | 렌더/변환은 **Cloud Run Jobs**(또는 별도 워커 서비스)로 분리 | **상시 GCE 워커 VM**(`stepd-worker`, e2-small, GPU 없음)으로 분리 — `worker.ts` 폴링 루프가 잡을 처리하고 Cloud Run은 enqueue만 한다. '별도 워커' 예상은 적중, Cloud Run Jobs는 아님 |
 
 **테이블명 매핑 각주** — 본문이 제안한 정규 테이블은 실제 스키마에서 다음으로 대체됐다:
@@ -69,7 +69,7 @@
 |------|-----------|-------------------|----|
 | A 수집·변환 | MXF/파일/URL → 리먹스 분기 + 프록시 | 파일 업로드(+GCS 직접 resumable) + ffprobe, 자체 job_queue 작업 큐 가동 | 프록시 생성, 리먹스 분기, URL 임포트 신규 (작업 큐는 완료) |
 | B STT 1회-공유 | 단어 타임스탬프 STT → 전 단계 공유 | `core/asr.py` Gemini STT 가동(발화 단위) — 전사는 content_analysis JSON으로 후속 단계에 공유 | 단어 타임스탬프는 로컬 whisper 모드만. transcript 정규 테이블 없음 |
-| C 훅 사전 후보 | 한국어 훅 사전 + 로컬 점수 | 훅 사전 없음. 실추천은 `core/recommend.py`(Gemini 추론)가 대행 — `buildRecommendations()` 휴리스틱은 死코드 | 훅 사전(로컬 점수) 전부 신규 (레거시 apps/api 유사 코드는 이식 안 됨) |
+| C 훅 사전 후보 | 한국어 훅 사전 + 로컬 점수 | 훅 사전 없음. 실추천은 `core/recommend.py`(Gemini 추론)가 대행 — `buildRecommendations()` 휴리스틱은 제거됨(2026-07-28) | 훅 사전(로컬 점수) 전부 신규 (레거시 apps/api 유사 코드는 이식 안 됨) |
 | D 경계 스냅 | 종결어미·발화 경계 스냅 | 없음 (`core/refine.py`는 자막 정제이지 경계 스냅 아님) | 전부 신규 — 기본 STT가 발화 단위라 '단어 스냅' 전제 재검토 필요(구성 D 주석) |
 | E 융합 평가 | 상위 20개 × 7프레임 비전 평가, 0.70/0.30 | 부분 구현: `core/scenes.py`(장면 분할+프레임) + `core/vision.py`(장면별 대표 프레임 시각 채점) + `core/recommend.py`(융합 추론) | 0.70/0.30 가중 공식·후보 상한 계단·채널 적합 계수 미구현 |
 | F 렌더링 | 9:16 리프레이밍 + 자막 번인 + 템플릿 | `trimEncode` 단순 트림 | 리프레이밍/자막/템플릿/render revision 신규 |
@@ -229,7 +229,7 @@
 ## 마일스톤 (AP = AI Pipeline)
 
 - **AP1 — 파이프라인 골격** (선행): ~~pg-boss~~ 작업 큐 도입, 업로드→프록시 생성→분석→렌더 잡 체인, 리먹스 분기, GCS↔/tmp 수명 관리(OOM 방지).
-- **AP2 — 진짜 추천**: ~~Clova~~ STT 연동 + transcript 저장, 훅 사전 C + 경계 스냅 D. `buildRecommendations()` 교체. **프로그램·채널 프로파일 스키마와 하드 제약 필터를 이때부터 포함** (나중에 붙이면 데이터 모델 재작업). ← 가장 먼저 체감 가치가 생기는 지점
+- **AP2 — 진짜 추천**: ~~Clova~~ STT 연동 + transcript 저장, 훅 사전 C + 경계 스냅 D. `buildRecommendations()` 교체(2026-07-28 최종 제거). **프로그램·채널 프로파일 스키마와 하드 제약 필터를 이때부터 포함** (나중에 붙이면 데이터 모델 재작업). ← 가장 먼저 체감 가치가 생기는 지점
 - **AP3 — 융합 평가 + 렌더링**: Gemini 비전 평가 E + 채널 적합 계수 랭킹(후보×채널 매트릭스, 추천 보드 채널 탭), 9:16 블러 배경 + ASS 자막 번인 + 템플릿 F(채널별 렌더 프리셋), 썸네일 스코어링 G.
 - **AP4 — 배포 실동작**: YouTube 실업로드, 스케줄러, 제목/메타 생성 I(프로그램·채널 프로파일 반영), Meta 앱 심사 착수. **채널 분석 수집(1~3단계)도 여기서 시작** — 데이터는 빨리 쌓을수록 좋고, 수집 자체는 기존 인프라로 가벼움.
 - **AP5 — 차별화 완성**: PPL 리포트 H, 화자 추적 리프레이밍, 댓글 요약, 채널 분석 진단·프로파일 갱신·A/B 루프(4~6단계), 트렌드 분석 모듈 T(수집·역분석·주간 리포트 → 콜드오픈 옵션 등 제작 반영), SMR 어댑터.

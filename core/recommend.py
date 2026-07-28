@@ -392,7 +392,7 @@ def apply_learned_rerank(
 ) -> list[dict]:
     """RESERVED — the learned re-ranking layer. Currently a no-op by design.
 
-    This is the seat the feasibility study (docs/research/highlight-model-feasibility.md §5-1)
+    This is the seat the feasibility study (docs/archive/highlight-model-feasibility.md §5-1)
     reserves for a trained scorer (LightGBM over the tabular features already persisted in
     `content_analysis.data`): `final = appeal × program_fit × channel_fit × learned`. It sits
     at THIS layer — after Gemini's judgment, alongside apply_profile_fit/apply_channel_fit —
@@ -2465,120 +2465,6 @@ def expand_and_pick_variations(
     return result
 
 
-def _expand_and_pick_variations_UNUSED_(
-    client, scenarios: list[dict], narrative: dict | None, transcript: list[dict],
-    genre: str, k: int = 2,
-    profile: dict | None = None, cast_registry: list[dict] | None = None,
-) -> list[dict]:
-    """[DEPRECATED · 2026-07-23] 단일 통합 콜 버전. 빈 응답 이슈로 시나리오별 분해로 교체.
-    폴백/디버그용으로만 남김. 사용 금지."""
-    if not scenarios:
-        return []
-    pack = _pack(genre)
-    system = f"""너는 {pack['label']} 콘텐츠의 숏폼 편집자다. 앞 단계에서 정의된 시나리오 목록을 받았다.
-**각 시나리오마다 서로 다른 {k}개의 컷 변형을 제안**하고, 그중 **best 1개를 선정**하라.
-
-**변형(variation)이란**: 같은 스토리를 다르게 자르는 방식들.
-- 예: variation 0 = 짧게 핵심만 (30~45s), variation 1 = setup 포함 (45~75s), variation 2 = 완결·여운까지 (75~120s)
-- 각자 setup_start_sec / payoff_moment_sec / payoff_end_sec 다르게.
-- 실제 자막 타임스탬프를 근거로. 시나리오 approx_start/end는 참고만.
-- **완결성 우선**: 스토리가 잘리면 실패. 60초 넘어도 완결이 우선. 180초는 넘지 마라.
-
-**3축 스코어** (각 변형마다):
-- hook_strength: 첫 2~3초 시선강탈 강도 (0=평범, 5=명확, 8=강함, 10=꺾이는 오프닝)
-- payoff: 결정타 임팩트 (0=평이, 5=제대로 터짐, 8=예상 초과, 10=바이럴 확실)
-- completeness: 앞뒤 맥락·완결성 (0=문맥 없음, 5=완결된 장면, 8=편집자 컷, 10=그대로 발행 가능)
-세 축 다 8+ 몰아주지 마라 — 대부분 축마다 편차가 있다.
-
-**best_variation_index**: 그 시나리오의 {k}개 변형 중 최고. 근거는 완결성·훅·payoff 균형.
-
-**필드 (per scenario)**:
-- scenario_id: 원 시나리오 id
-- variations: {k}개 변형 리스트 (각각 variation_index 0..{k-1}, setup/payoff/end, 3축, why_this_cut)
-- best_variation_index: 이 시나리오의 best 컷 (0..{k-1})
-- best_reason: 왜 이걸 best로 골랐는지 한 문장
-"""
-    if profile:
-        system += _profile_block(profile)
-    if cast_registry:
-        system += _cast_block(cast_registry, transcript)
-
-    # 시나리오 목록 + 서사 근거 (각 시나리오 지역만) 컨텍스트
-    contents_parts = []
-    for s in scenarios:
-        try:
-            sid = int(s.get("id", -1))
-            core = float(s.get("core_moment_sec", 0))
-            ast = float(s.get("approx_start_sec", 0))
-            aen = float(s.get("approx_end_sec", 0))
-        except (TypeError, ValueError):
-            continue
-        # 시나리오 지역 자막 발췌 (setup~end 앞뒤 20s 여유)
-        lo = max(0.0, ast - 20)
-        hi = aen + 20
-        segs = []
-        for t in transcript or []:
-            try:
-                tst, ten = float(t.get("start", 0)), float(t.get("end", 0))
-            except (TypeError, ValueError):
-                continue
-            if ten <= lo or tst >= hi:
-                continue
-            txt = (t.get("text") or "").strip()
-            if not txt:
-                continue
-            sp = (t.get("speaker") or "").strip()
-            prefix = f"[{_mmss(tst)}]" + (f" [{sp}]" if sp else "")
-            segs.append(f"{prefix} {txt[:120]}")
-        block = [
-            f"\n=== 시나리오 {sid}: {s.get('story_title', '')} ===",
-            f"  주제: {s.get('story_synopsis', '')}",
-            f"  대략: {_mmss(ast)}~{_mmss(aen)} · 클라이맥스 {_mmss(core)}",
-            f"  hook: {s.get('hook', '-')} · 인물: {','.join(s.get('characters') or [])[:40]}",
-            f"  이 시나리오 지역 자막 ({_mmss(lo)}~{_mmss(hi)}):",
-        ]
-        block.extend(f"    {s}" for s in segs)
-        contents_parts.append("\n".join(block))
-
-    # AENA 원칙 (2026-07-23): nested array + required 조합이 Vertex Gemini에서 빈 응답 유발
-    # 관찰됨 (Phase B 시나리오 0개 반환). response_schema 제거, 프롬프트 예시 + 파서로 복구.
-    example_hint = (
-        '\n\n반환 형식 (JSON, 다른 문장 없이):\n'
-        '{"scenarios":[{"scenario_id":0,"variations":[' +
-        ','.join(
-            '{"variation_index":' + str(i) +
-            ',"setup_start_sec":100.0,"payoff_moment_sec":140.0,"payoff_end_sec":170.0,' +
-            '"hook_strength":7,"payoff":8,"completeness":7,"why_this_cut":"..."}'
-            for i in range(k)
-        ) +
-        '],"best_variation_index":1,"best_reason":"..."}]}'
-    )
-    try:
-        resp = call_with_retry(lambda: client.models.generate_content(
-            model=MODEL,
-            contents=f"각 시나리오마다 {k}개 컷 변형을 제안하고 best 1개를 선정하라.\n"
-                    + "\n".join(contents_parts) + example_hint,
-            config=types.GenerateContentConfig(
-                system_instruction=system,
-                temperature=0,
-                response_mime_type="application/json",
-                # response_schema 제거 (nested required가 빈 응답 유발)
-                max_output_tokens=8192,
-            ),
-        ))
-        raw = resp.text or ""
-        # 진단용 앞부분 로그
-        if not raw.strip() or raw.strip() == "{}":
-            print(f"   (Phase B raw 응답 이상: '{raw[:200]}')")
-        result = _parse_variations_json(raw)
-    except Exception as e:
-        print(f"   (Phase B 변형 실패: {str(e)[:120]})")
-        return []
-    total_var = sum(len(r.get("variations", [])) for r in result)
-    print(f"   Phase B: 시나리오 {len(result)} · 총 변형 {total_var} · best 선정 완료")
-    return result
-
-
 def _parse_variations_json(raw: str) -> list[dict]:
     """Phase B raw JSON 응답 → scenarios 리스트. partial 잘림 복구."""
     if not raw:
@@ -2826,6 +2712,47 @@ def propose_shorts_beat_only(
                 break
         return " ".join(acc)[:max_chars]
 
+    # 시청자 지목 timestamp → 겹치는 beat 마킹 (2026-07-28).
+    # profile.viewer_signals.explicit_timestamps (comment_signal 이 정규식 파싱) 의 각 초 값이
+    # beat [start, end] 안에 있으면 그 beat 를 ⭐VIEWER 로 표시한다. Gemini 프롬프트에서
+    # "starred 최소 1개 반드시 포함" 규칙과 함께 시청자 반응이 강한 구간을 shorts 에 강제한다.
+    # timestamps 없거나 겹치는 beat 없으면 starred_map 이 비어 규칙 블록 자체가 생략됨.
+    starred_map: dict[int, list[tuple[str, int]]] = {}
+    vs = (profile or {}).get("viewer_signals") if isinstance(profile, dict) else None
+    if isinstance(vs, dict):
+        ets = vs.get("explicit_timestamps") or []
+        parsed_ts: list[tuple[str, int, int]] = []  # (mmss, seconds, likes)
+        for t in ets:
+            if not isinstance(t, dict):
+                continue
+            mmss = str(t.get("mmss") or "").strip()
+            try:
+                likes = int(t.get("likes") or 0)
+            except (TypeError, ValueError):
+                likes = 0
+            # "H:MM:SS" 또는 "M:SS" 모두 지원. 콜론으로 분리 후 초 환산.
+            parts = mmss.split(":")
+            try:
+                if len(parts) == 3:
+                    secs = int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2])
+                elif len(parts) == 2:
+                    secs = int(parts[0]) * 60 + int(parts[1])
+                else:
+                    continue
+            except ValueError:
+                continue
+            if secs > 0:
+                parsed_ts.append((mmss, secs, likes))
+        if parsed_ts:
+            for i, b in enumerate(beats):
+                try:
+                    bs = float(b.get("start", 0)); be = float(b.get("end", 0))
+                except (TypeError, ValueError):
+                    continue
+                hits = [(m, l) for (m, s, l) in parsed_ts if bs <= s <= be]
+                if hits:
+                    starred_map[i] = hits
+
     lines = ["=== 사용 가능 beat (id, 시각, hook, 인물, 제목 / 요약 / 실제 대사) ==="]
     for i, b in enumerate(beats):
         st = float(b.get("start", 0)); en = float(b.get("end", 0))
@@ -2835,7 +2762,13 @@ def propose_shorts_beat_only(
         title = (b.get("title") or "").strip()[:60]
         summary = (b.get("summary") or "").strip()[:200]
         dialogue = _beat_dialogue(b)
-        lines.append(f"[b{i}] {_mmss(st)}~{_mmss(en)} ({dur:.0f}s) · {hook} · {chars or '-'} · \"{title}\"")
+        star_tag = ""
+        if i in starred_map:
+            hits = starred_map[i]
+            total_likes = sum(l for _, l in hits)
+            times = " ".join(m for m, _ in hits)
+            star_tag = f"⭐VIEWER({times} · {total_likes}❤) "
+        lines.append(f"[b{i}] {star_tag}{_mmss(st)}~{_mmss(en)} ({dur:.0f}s) · {hook} · {chars or '-'} · \"{title}\"")
         if summary:
             lines.append(f"      요약: {summary}")
         if dialogue:
@@ -2925,6 +2858,29 @@ def propose_shorts_beat_only(
 """
     if profile:
         system += _profile_block(profile)
+    # ⭐VIEWER starred beat 강제 규칙 (2026-07-28). 위에서 explicit_timestamps 와 beat 겹침을
+    # 판정해 starred_map 을 채워둠. 표시된 beat 가 하나라도 있을 때만 규칙 블록을 붙여
+    # 시나리오 시뮬레이션이 왜곡되지 않게 (viewer_signals 없는 케이스 = 기존 동작 유지).
+    if starred_map:
+        starred_ids = sorted(starred_map.keys())
+        ranked = sorted(
+            starred_map.items(),
+            key=lambda kv: sum(l for _, l in kv[1]),
+            reverse=True,
+        )
+        ranked_hint = ", ".join(
+            f"b{i}({sum(l for _, l in hits)}❤)" for i, hits in ranked[:5]
+        )
+        system += (
+            "\n\n**🚨 시청자 지목 beat 규칙 (⭐VIEWER 표시 · 매우 중요)**:\n"
+            "- 위 beat 목록에서 ⭐VIEWER 표시된 것은 이 영상의 실제 시청자가 원본 유튜브 댓글에서\n"
+            "  좋아요 상위로 지목한 시간대다. 편집자가 놓치기 쉬운 시청자 반응 신호.\n"
+            "- **starred beat 중 최소 1개는 반드시 shorts 중 하나의 조합에 포함되어야 한다.**\n"
+            f"- 여러 개면 좋아요 총합 높은 순으로 우선 반영: {ranked_hint}.\n"
+            "- 규칙과 위 자기소개 커버리지 규칙이 충돌하면 자기소개를 먼저 확보하고, 남는 n에서\n"
+            "  starred 를 채워라. 다만 shorts 중 하나에는 반드시 포함되어야 한다는 조건은 유지.\n"
+            f"- 감지된 starred beat 총 {len(starred_ids)}개 · id: {starred_ids}\n"
+        )
     if cast_registry:
         system += _cast_block(cast_registry, transcript)
     # 프로그램 컨텍스트(시놉시스·톤·분위기)를 힌트로 주입 — title이 그 프로그램 결에 맞게 나오도록.

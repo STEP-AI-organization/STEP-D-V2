@@ -1,17 +1,17 @@
 # @stepd/server HTTP API 레퍼런스
 
-> 실측: 2026-07-16 · `apps/server/src/index.ts` 기준 — 라우트 추가 시 이 문서도 갱신.
+> 실측: 2026-07-28 · `apps/server/src/index.ts` 기준 — 라우트 추가 시 이 문서도 갱신.
 > 프론트 대응 함수는 `apps/web/src/lib/data/api.ts` 기준. 데이터 구조는 [data-model.md](data-model.md),
 > 큐·워커 동작은 [../ops/worker-queue.md](../ops/worker-queue.md) 참고.
 
 ## 공통 사항
 
-- 등록 라우트는 총 **39개** (OAuth 콜백 경로 2종은 동일 핸들러). 영역별:
-  헬스·상태 2 · 콘텐츠 8 · 추천·클립·배포 6 · YouTube OAuth·채널 6 · YouTube 분석·트렌드 8 ·
-  큐·파이프라인 3 · admin 2 · Lab 4.
+- 등록 라우트는 영역별로 관리한다: 헬스·상태 · 콘텐츠 · 추천/클립/배포 · YouTube OAuth/채널/분석 ·
+  큐/파이프라인 · admin · Lab 검수 · Lab `match.*`.
 - 모든 라우트는 `apps/server/src/index.ts` 한 파일에 등록된다 (작업 규칙: 분리 금지).
-- `/api/*`에 CORS 허용 (origin 반사, credentials 없음). 라우트 자체 인증은 없다 —
-  프로덕션 접근 제어는 인프라 레벨(Cloud Run) 몫.
+- `/api/*`에 CORS 허용 (origin 반사, credentials 없음). 대부분 라우트 자체 인증은 없고,
+  프로덕션 접근 제어는 인프라 레벨(Cloud Run) 몫이다. 예외로 Lab 매칭 쓰기(`POST/DELETE /api/lab/match*`)는
+  `LAB_WRITE_TOKEN`과 `x-lab-token` 헤더를 요구한다.
 - 프론트의 `API_BASE`는 `NEXT_PUBLIC_API_URL`(없으면 `/api`). 스트림·썸네일 URL은
   `mediaUrl()` 헬퍼가 `API_BASE`를 붙여 조립한다.
 - DB 초기화는 서버 기동과 비동기 — 기동 직후에는 `/health`의 `ok`가 `false`일 수 있다.
@@ -153,6 +153,28 @@
 | `GET /api/lab/video` | 원본 영상 스트리밍 (Range 지원) | `pipeline_output.json`의 `video` 파일 |
 | `GET /lab` | admin Lab 프론트 HTML 로컬 서빙 | 프로덕션에서는 admin이 Vercel에 별도 배포 |
 
+### Lab — 숏폼 ↔ 롱폼 매칭 / LEARN
+
+채널의 기존 숏폼 백카탈로그를 원본 롱폼 구간에 역매칭하고, 고성과 구간 규칙을 학습하기 위한 운영 API다.
+쓰기 라우트는 모두 `LAB_WRITE_TOKEN`이 서버에 있어야 하고, 요청 헤더 `x-lab-token` 값이 일치해야 한다.
+
+| 메서드·경로 | 역할 | 요청/응답 요점 |
+|---|---|---|
+| `GET /api/lab/match/channels` | 매칭 가능한 YouTube 채널 목록 | 토큰 제외, `{ channelId, channelName, subscribers }[]` |
+| `GET /api/lab/match/videos/:channelId` | 채널별 숏폼·롱폼·기존 매핑 일괄 조회 | `durationSec <= 180` 또는 `isShort`를 숏폼으로 분류 |
+| `POST /api/lab/match` | 수동 매칭 저장/upsert | `{ shortVideoId, channelId, longVideoId, segStart, segEnd, note? }` → `short_source_map`, source=`manual` |
+| `POST /api/lab/match/auto` | 선택 숏폼들의 자동 오디오 정렬 큐잉 | `{ channelId, longVideoId, shortVideoIds[], delayMs? }` → `match.align` |
+| `DELETE /api/lab/match/:shortVideoId` | 숏폼 매핑 삭제 | → `{ ok, removed }` |
+| `GET /api/lab/match/auto-bulk/preview/:channelId` | 채널 일괄 자동 매칭 계획 미리보기 | 제목 토큰/게시일 기반 롱폼 후보 그룹, 쓰기 토큰 불필요 |
+| `POST /api/lab/match/auto-bulk` | 한 채널의 자동 매칭 잡 일괄 큐잉 | `{ channelId, limit?, staggerMs? }` → `match.align` 여러 건 |
+| `POST /api/lab/match/auto-bulk/all` | 여러 채널 또는 전체 채널 자동 매칭 큐잉 | `{ channelIds?, limitPerChannel?, staggerMs? }` |
+| `GET /api/lab/match/overview` | 전 채널 매칭 현황 | shorts/matched/auto/remaining + `match.align` job 상태 |
+| `GET /api/lab/match/status/:channelId` | 한 채널의 매칭 진행 상태 | pending/running/done/failed, matched/auto/confirmed/described |
+| `POST /api/lab/match/segment` | 매칭 구간 설명 생성 큐잉 | `{ channelId, limitLongforms? }` → `match.segment`, segTranscript/segSummary/segEmotion/segHook 채움 |
+| `GET /api/lab/match/export/:channelId` | LEARN 데이터셋 내보내기 | 같은 시기 채널 중앙값 대비 성과 tier(`high/mid/low`) 포함 |
+| `POST /api/lab/match/learn` | 채널 포인트 프로파일 학습 큐잉 | `{ channelId }` → `match.learn`, `youtube_channels.pointProfile` 저장 |
+| `GET /api/lab/match/profile/:channelId` | 학습된 채널 프로파일 조회 | `{ profile, at }` 또는 `{ profile: null, at: null }` |
+
 ## 프론트 연동 방식 (참고)
 
 - 실제 서버 통신은 전부 `apps/web/src/lib/data/api.ts`의 REST 함수들이다. 새 라우트를
@@ -161,8 +183,6 @@
   로드한다. 실패하면 **빈 상태로 남는다** — 목 데이터 폴백은 제거됐다 (store.tsx 주석:
   "server unreachable — leave the store empty (no mock fallback)"). 연결 여부는
   `serverConnected` 플래그로 UI에 노출된다.
-- `repository.ts`의 `apiRepository`는 여전히 throw 스텁이며 런타임에서 쓰이지 않는다 —
-  실서버 연동은 이미 `api.ts` 경로로 동작 중이다.
 
 ## 오류 응답 규약
 

@@ -132,10 +132,10 @@ AI: Vertex Gemini(gemini-2.5-flash) — 서울(asia-northeast3) 리전 고정 (�
   - YouTube: OAuth(analytics/publish 스코프 분리)·채널동기화·애널리틱스(일별 포함)·트렌드·댓글·파이프라인 트리거 — 전부 실제 구글 API.
   - 운영: `/api/queue/stats`, `POST /api/admin/reset`(엔티티·미디어·분석 전체 초기화), `POST /api/admin/queue/purge`(video.* 백로그 정리 + `content.analyze` 재기동), `/api/lab/*`(로컬-데브 shim).
 - **유일한 실질 스텁:** `POST /api/distributions/publish`(+`/retry`) — clip.distributions에 채널·상태·예약일만 기록하고 **실제 업로드 없음**.
-- **죽은 코드:** `src/db.ts`·`src/storage.ts`(구 node:sqlite 프로토타입 — live 코드는 `db-pg.ts`+`storage-gcs.ts`만 사용), `src/pipeline.ts::buildRecommendations()`(휴리스틱 제거 후 어디서도 import 안 됨 — `pipeline.ts`에서 살아있는 건 `newId`뿐), 웹 `apps/web/src/lib/data/repository.ts`의 **`apiRepository` 스텁**(SPFN RPC 통합 계획 폐기 — 실 서버 연동은 `api.ts` REST로 이미 가동).
+- **정리 완료 (2026-07-28):** 구 프로토타입/스텁 잔재를 모두 제거했다 — `src/db.ts`·`src/storage.ts`(구 node:sqlite), `src/pipeline.ts::buildRecommendations()`(휴리스틱), 웹 `apps/web/src/lib/data/repository.ts`의 `apiRepository` 스텁(SPFN RPC 통합 폐기), core `ocr.py`·`prefilter.py`(구 frames 단계). `pipeline.ts`는 이제 `newId` 헬퍼만 export.
 
 ### 3.2 추천 = AI 쇼츠 단일 경로 (✅ 2026-07-16 조인 완료 — 구 "두 갈래 병존" 해소)
-- **휴리스틱 추천 폐지.** 업로드는 추천 0건으로 시작한다(커밋 b566fbc "더미 추천 제거" — `buildEpisodeAndMedia`가 `recommendations: []` 반환). 구 균등분할 `buildRecommendations()`는 死코드로만 잔존.
+- **휴리스틱 추천 폐지.** 업로드는 추천 0건으로 시작한다(커밋 b566fbc "더미 추천 제거" — `buildEpisodeAndMedia`가 `recommendations: []` 반환). 구 균등분할 `buildRecommendations()`는 死코드 잔존 후 2026-07-28에 최종 제거.
 - **AI 쇼츠 → 추천 보드 직결.** `content.analyze` 완료 시 `content-pipeline.ts::writeRecommendationsFromShorts()`(content-pipeline.ts:98)가 `analysis.shorts`를 `recommendation` 엔티티로 변환해 회차 보드에 **멱등 기록**(기존 추천 DELETE 후 rank 역순 prepend — 재실행 시 교체, 커밋 5197193). rank 1 → appeal 5로 매핑돼 보드 최상단. 회차 `pipeline` 상태도 워커가 실반영(`recommend/done`, 실패 시 `error` — 커밋 a148f38).
 - **즉 `adopt`가 자르는 대상 = 진짜 AI 추천.** 남은 갭은 채택 즉시 렌더(§2.4 위반)의 이연뿐 → **착수점 #1(§11)**.
 
@@ -188,7 +188,7 @@ AI: Vertex Gemini(gemini-2.5-flash) — 서울(asia-northeast3) 리전 고정 (�
 | 형태소 | Kiwi(`kiwi-nlp`) | LGPL-3, WASM npm |
 | 이미지 리사이즈 | sharp | Apache-2 |
 
-### 4.3 객체탐지/OCR/비전 ([`../research/object-detection-research.md`](../research/object-detection-research.md) 결론)
+### 4.3 객체탐지/OCR/비전 ([`../archive/object-detection-research.md`](../archive/object-detection-research.md) 결론)
 - **PPL(H):** 1차 Gemini 멀티모달(E 인프라 공유, 추가비용 0) → 보강 **Video Intelligence Logo Recognition**(10만+ 브랜드, 구간 타임스탬프) → 장기 Grounding DINO(Apache) 자체호스팅.
 - **리프레이밍(F)·썸네일(G)·얼굴:** **MediaPipe**(Apache, CPU) + 라플라시안 선명도. 추적 **ByteTrack**(MIT).
 - **OCR(이름자막):** **PaddleOCR**(Apache) 또는 Gemini — 방송 이름자막이 인물 식별 최강 앵커.
@@ -370,7 +370,7 @@ AI: Vertex Gemini(gemini-2.5-flash) — 서울(asia-northeast3) 리전 고정 (�
 
 **✅ 완료 (2026-07-16) — 구 착수점 #1 "콘텐츠 트랙 (A)/(B) 조인":** 계획했던 4단계 중 1~3이 작성 당일 그대로 구현됐다.
 ①`content_analysis.data.shorts` → `recommendation` 머지 = `content-pipeline.ts::writeRecommendationsFromShorts()`(멱등 교체, 커밋 5197193)
-②휴리스틱 = placeholder 강등이 아니라 **아예 제거**(커밋 b566fbc, `buildRecommendations()` 死코드화)
+②휴리스틱 = placeholder 강등이 아니라 **아예 제거**(커밋 b566fbc, `buildRecommendations()` 死코드화 → 2026-07-28 파일에서 완전 제거)
 ③프론트 소비 = `api.ts:57 getMediaAnalysis()` + 회차 분석 탭 실데이터(커밋 4c93313). 남은 ④(adopt 무렌더)가 새 #1로 승격.
 
 **🎯 다음 착수점 #1 — `adopt` 무렌더 구간-결정으로 재정의 (§2.4, AP2→AP3 다리):**
@@ -380,7 +380,7 @@ AI: Vertex Gemini(gemini-2.5-flash) — 서울(asia-northeast3) 리전 고정 (�
 
 **🎯 다음 착수점 #3 — transcript 단일 원천 확립 (B, AP2):** STT 스택 확정(§12) → `transcript` 테이블(단어/문장 PTS) 신설 → C/D/H/I가 전부 이 테이블만 읽게. Gemini STT는 word-level이 없으므로 word 필요 로직은 whisper 경로 or Clova 확정 필요.
 
-**부차 갭:** 프레임 GCS 호스팅(현 temp 폐기) / admin Lab을 로컬 파일→DB(`/api/media/:id/analysis`) 전환 / 죽은 코드 제거(`db.ts`·`storage.ts`·`pipeline.ts::buildRecommendations`·웹 `repository.ts` `apiRepository` 스텁) / `schema.sql`에 런타임 생성 3테이블 반영(§9) / **`apps/api` 레거시 폐기 여부 결정(미결정 — §10·§12 R13)**. ※core stale 문서(`README`·`bridge.ts`·`WHISPERX_GUIDE`)는 9d76484에서 삭제로 해소됨.
+**부차 갭:** 프레임 GCS 호스팅(현 temp 폐기) / admin Lab을 로컬 파일→DB(`/api/media/:id/analysis`) 전환 / `schema.sql`에 런타임 생성 3테이블 반영(§9) / **`apps/api` 레거시 폐기 여부 결정(미결정 — §10·§12 R13)**. ※죽은 코드(`db.ts`·`storage.ts`·`pipeline.ts::buildRecommendations`·`repository.ts` `apiRepository` 스텁)와 core stale 파일(`README`·`bridge.ts`·`WHISPERX_GUIDE`·`ocr.py`·`prefilter.py`)은 이후 정리로 해소됨.
 
 ---
 
@@ -419,7 +419,7 @@ AI: Vertex Gemini(gemini-2.5-flash) — 서울(asia-northeast3) 리전 고정 (�
 > ⚠️ 작성 시점(2026-07-16) 경로 기준의 **역사 기록**. 이후 같은 날 `docs/`가 `ops/`·`plans/`·`reference/`·`research/`·`prototypes/`·`archive/`로 재편됐고, `step-d-ux-plan`·`integration-map`·`backend-notes`·`deploy/INFRA`·`deploy/runbook`은 삭제, `core/{README,WHISPERX_GUIDE}.md`는 9d76484에서 삭제됐다(§0 참고).
 
 - **루트/제품:** `CLAUDE.md`, `README.md`, `admin/README.md`, `docs/STEPD-방향기획서.docx/pdf`(마스터), `apps/docs/{product-vision,architecture,feature-status,competitor-analysis,dev-guide}.md`
-- **파이프라인/AI:** `docs/{pipeline-plan,pipeline-current,content-pipeline-prod,context-engine-plan,worker-queue,object-detection-research,opencut-integration-plan}.md`, `core/{README,WHISPERX_GUIDE}.md`
+- **파이프라인/AI:** `docs/{pipeline-plan,pipeline-current,content-pipeline-prod,context-engine-plan,worker-queue,opencut-integration-plan}.md`, `docs/archive/object-detection-research.md`, `core/{README,WHISPERX_GUIDE}.md`
 - **UX/배포필드:** `docs/{step-d-ux-plan,publish-fields-ux-plan,integration-map,backend-notes,glossary}.md`
 - **인프라:** `docs/{infra,deploy,local-dev,vercel-ops,youtube-channel-analytics-guide}.md`, `deploy/{INFRA,runbook}.md`(폐기)
 - **설정:** `cloudbuild.yaml`, `pnpm-workspace.yaml`, `docker-compose*.yml`(폐기), `Caddyfile`(폐기), `deploy.ps1`/`dev.ps1`
@@ -429,12 +429,12 @@ AI: Vertex Gemini(gemini-2.5-flash) — 서울(asia-northeast3) 리전 고정 (�
 | 역할 | 경로 |
 |------|------|
 | 서버 진입점(라우트) | `apps/server/src/index.ts` |
-| ID 생성 헬퍼(`newId`) + 死코드 `buildRecommendations` | `apps/server/src/pipeline.ts` |
+| ID 생성 헬퍼(`newId`) | `apps/server/src/pipeline.ts` |
 | core 호출부 | `apps/server/src/content-pipeline.ts` |
 | 큐·워커·채널 | `apps/server/src/{queue,worker,channel-pipeline}.ts` |
 | DB(정본) | `apps/server/src/db-pg.ts` · `apps/server/schema.sql` |
 | AI 오케스트레이터(정본) | `core/analyze.py` (+asr/refine/scenes/vision/names/recommend) |
-| 죽은 코드(제거 대상) | `apps/server/src/{db,storage}.ts`, `apps/server/src/pipeline.ts::buildRecommendations`, `apps/web/src/lib/data/repository.ts`의 `apiRepository` 스텁(SPFN 통합 폐기) — ※구 core stale 파일(`bridge.ts`·`pipeline.py`·`README.md`)은 9d76484에서 삭제 완료 |
+| 죽은 코드(정리 완료 2026-07-28) | `apps/server/src/{db,storage}.ts`, `apps/server/src/pipeline.ts::buildRecommendations`, `apps/web/src/lib/data/repository.ts`의 `apiRepository` 스텁, `apps/web/src/components/edit-cast-dialog.tsx`, `core/{ocr,prefilter}.py` 전부 제거. 구 core stale 파일(`bridge.ts`·`pipeline.py`·`README.md`)은 9d76484에서 삭제 완료 |
 | 프론트 데이터층 | `apps/web/src/lib/data/{store.tsx,api.ts,repository.ts,mock.ts}` |
 | 편집기 골격 | `apps/web/src/components/editor/`, `../prototypes/editor-prototype.html` |
 | 배포 스크립트(정본) | `deploy/{deploy-server,deploy-web}.ps1`, `deploy/{worker-vm,worker-pipeline-setup}.sh` |

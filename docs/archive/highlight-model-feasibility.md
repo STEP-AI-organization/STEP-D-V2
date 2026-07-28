@@ -312,4 +312,4 @@ def apply_learned_rerank(shorts, scene_index, model, channel_ctx=None) -> shorts
 - YouTube 성과 수집: `apps/server/src/youtube.ts`(`fetchVideoAnalytics` :544, 리텐션 :556·585)
 - 저장 스키마: `apps/server/src/db-pg.ts`(`video_retention` :166, `content_analysis` :220) · `docs/reference/data-model.md`
 - 수집 운영/쿼터/게시 심사: `docs/ops/youtube-channel-analytics-guide.md`
-- 인접 조사(검출/임베딩): `docs/research/object-detection-research.md`
+- 인접 조사(검출/임베딩): `docs/archive/object-detection-research.md`

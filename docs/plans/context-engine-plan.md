@@ -4,8 +4,8 @@
 > 않은 설계이며, 이미 코드가 존재하는 부분에만 **[진척 2026-07-16]** 마커를 붙였다 (마커 없는 항목 = 미착수).
 > [pipeline-plan.md](pipeline-plan.md)의 상위 확장이고, 실행 순서·게이트는
 > [step-d-master-build-plan.md](step-d-master-build-plan.md) §5(CX)가 정본. 얼굴 식별 기술 선정 근거는
-> [../research/object-detection-research.md](../research/object-detection-research.md)의
-> "CX 인물 확정 식별 스택" 참조.
+> [../archive/object-detection-research.md](../archive/object-detection-research.md)의
+> "CX 인물 확정 식별 스택" 참조 (아카이브).
 >
 > B2B 전제(이미 활성화된 채널·프로그램을 가진 방송사)에서 나오는
 > 결정적 이점: **출연자 정보와 회차·배포 데이터가 처음부터 존재**한다. 이를 축으로 영상 이해를
@@ -141,7 +141,7 @@
 5. **무시 목록**: 스태프·제작진·반복 행인은 "무시" 처리하면 이후 회차에서 다시 묻지 않음 (임베딩 유지).
 
 이 루프 덕에 CX-0에서 출연자 정보를 못 채운 프로그램도 1~2화 분석이면 캐스트가 자동 구축되고, 시즌 중반 투입 인물도 등장 회차에 즉시 포착된다. — 웹 정보에 의존하는 경쟁 도구가 흉내 낼 수 없는 부분.
-- 얼굴 식별 기술 (상세 조사·다중 신호 융합 표·PoC 게이트는 [../research/object-detection-research.md](../research/object-detection-research.md)의 "CX 인물 확정 식별 스택" 참조):
+- 얼굴 식별 기술 (상세 조사·다중 신호 융합 표·PoC 게이트는 [../archive/object-detection-research.md](../archive/object-detection-research.md)의 "CX 인물 확정 식별 스택" 참조):
   - **1차 (관리형): Gemini 멀티모달** — 등록된 대표 얼굴들을 레퍼런스로 프롬프트에 넣고 프레임 속 인물 매칭. 출연자 15명 수준의 닫힌 후보군이라 정확도 유리 (오픈셋이 아니라 "이 15명 중 누구" 문제).
   - **2차 (물량 증가 시): 얼굴 임베딩 + pgvector**(Cloud SQL 확장) 검색으로 전환. ⚠️ InsightFace 등 유명 모델은 코드 MIT여도 **모델 가중치가 비상업**인 경우가 많음 — 도입 시점에 라이선스 재조사 필수.
 - ⚠️ 법무: 얼굴 인식은 개인정보(민감정보) 처리 — 방송사와의 계약에 출연자 초상 데이터 처리 근거 명시 필요. B2B라 방송사가 출연 계약상 권리를 보유하는 구조를 활용.

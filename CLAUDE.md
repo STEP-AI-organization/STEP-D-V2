@@ -54,8 +54,7 @@ Hono 단일 진입점(index.ts, **~1270줄, 라우트 ~40개**) + 별도 워커 
 | `src/seed.ts` | **의도적으로 전부 빈 배열** — 프로덕션은 데모 콘텐츠 없이 시작 |
 | `schema.sql` | 테이블 정의 — 단 **job_queue·content_analysis·channel_analytics는 여기 없고 코드가 런타임 생성** (queue.ts·db-pg.ts). 상세: [docs/reference/data-model.md](docs/reference/data-model.md) |
 
-죽은 코드 주의: `src/db.ts`(구 sqlite)·`src/storage.ts`·`src/pipeline.ts`의 `buildRecommendations()`(구 휴리스틱)는
-어디서도 import되지 않는 잔존물이다. 실제 추천은 core/ AI 파이프라인이 만든다.
+`src/pipeline.ts`는 이제 `newId` 헬퍼만 export한다(구 sqlite `db.ts`·`storage.ts`, 휴리스틱 `buildRecommendations()`는 정리 완료). 실제 추천은 core/ AI 파이프라인이 만든다.
 
 **워커 잡 5종** (worker.ts handle 스위치): `channel.analyze`(채널 동기화+분석, 완료 후 영상별 fan-out) ·
 `video.analyze`(영상 애널리틱스+리텐션) · `video.hotwatch`(신규 업로드 48h 시간별 스냅샷, 자기 재큐) ·

@@ -35,7 +35,7 @@ Next.js 16 (App Router) · React 19 · TypeScript · **Tailwind v4** · base-ui 
 |------|------|
 | `src/lib/data/store.tsx` | 전역 상태 + 모든 뮤테이션 핸들러 (`useAppData()`) |
 | `src/lib/data/api.ts` | 서버(@stepd/server) HTTP 클라이언트 + 타입 |
-| `src/lib/data/repository.ts` | 목 폴백 seam. `apiRepository`는 폐기된 SPFN 통합 스텁(미호출) — 실 연동은 `api.ts`. |
+| `src/lib/data/repository.ts` | 목 폴백 seam (`mockRepository`/`activeRepository`) — 실 서버 연동은 `api.ts`. |
 | `src/lib/data/mock.ts` | 목 시드 데이터 |
 | `src/lib/types.ts` | 도메인 타입 (Program·Episode·Recommendation·Clip·JobEvent) |
 | `src/lib/nav.ts` | 사이드바 8개 메뉴 정의 (`NAV`, 역할별 필터) |
