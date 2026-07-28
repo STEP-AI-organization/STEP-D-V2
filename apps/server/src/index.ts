@@ -2235,7 +2235,7 @@ async function renderClipMedia(opts: {
 // ── thumbnail template refs (Web UI CRUD · 2026-07-28) ─────────────────────────
 // Templates are broadcaster-quality reference thumbnails · used by swap pipeline.
 // Storage: local `assets/thumbnail-reference/` (기존 · manifest.json 자동 sync).
-const REPO_ROOT = path.resolve(__dirname, "..", "..", "..");
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const THUMB_REF_DIR = path.join(REPO_ROOT, "assets", "thumbnail-reference");
 const THUMB_MANIFEST = path.join(THUMB_REF_DIR, "manifest.json");
 function readThumbManifest(): any[] {
