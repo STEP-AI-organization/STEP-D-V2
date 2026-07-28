@@ -16,6 +16,7 @@ from google import genai
 from google.genai import types
 
 from .presets import PRESETS, prompt_summary as presets_prompt_summary, get_preset
+from .templates import TEMPLATES, list_templates_summary
 
 MODEL = "gemini-2.5-flash"
 DEFAULT_LOCATION = "us-central1"
@@ -759,12 +760,20 @@ def generate_variant_prompts(
     lines.append("\n[등록된 인물 (썸네일 사용 가능)]")
     if available_cast:
         lines.append(f"  {', '.join(available_cast)}")
-        lines.append(f"  → featured_cast 는 반드시 이 {len(available_cast)}명 중에서만 선택 · 그 외 이름 절대 X")
+        lines.append(f"  → 슬롯 채움은 반드시 이 {len(available_cast)}명 중에서만 선택 · 그 외 이름 절대 X")
     else:
-        lines.append("  (등록 없음 · featured_cast 는 빈 배열 [] 로)")
-    lines.append(f"\n위 쇼츠 기준 · 먼저 hook_summary 한 문장 · 그 다음 서로 다른 각도의 variant **{n}개**.")
+        lines.append("  (등록 없음)")
+
+    lines.append("\n" + list_templates_summary())
+    lines.append("")
+    lines.append(f"위 쇼츠 기준 · 먼저 hook_summary 한 문장 · 그 다음 서로 다른 template 의 variant **{n}개**.")
+    lines.append("각 variant 는:")
+    lines.append("  1. template_id 하나 선택 (T1/T2/T3/T4)")
+    lines.append("  2. person_slots: 그 템플릿의 person_zone 각 id 에 등록 인물 이름 매핑")
+    lines.append("  3. caption_slots: 그 템플릿의 caption_zone 각 id 에 텍스트 매핑 (max_chars 준수)")
+    lines.append("position/size 는 template 이 결정 · Planner 는 정하지 않음.")
     lines.append("hook_summary = 이 쇼츠의 '해보' 못 한 문장 (시청자가 왜 클릭할까).")
-    lines.append("variant 는 hook 을 다른 각도로 시각화 (인물 감정 / 상황·환경 / 인용·대사 등).")
+    lines.append("variant 다양성: 서로 다른 template 조합 (예: v1=T1 클로즈업, v2=T2 대립, v3=T3 명대사).")
     prompt_user = "\n".join(lines)
 
     POSITIONS = [
@@ -772,6 +781,7 @@ def generate_variant_prompts(
         "middle-left", "middle-center", "middle-right",
         "bottom-left", "bottom-center", "bottom-right",
     ]
+    template_ids = list(TEMPLATES.keys())
     schema = {
         "type": "OBJECT",
         "properties": {
@@ -784,47 +794,39 @@ def generate_variant_prompts(
                 "items": {
                     "type": "OBJECT",
                     "properties": {
-                        "background": {"type": "STRING"},
-                        "layout": {"type": "STRING"},
-                        "featured_cast": {
-                            "type": "ARRAY",
-                            "items": {"type": "STRING"},
-                            "description": "썸네일 주인공 인물 이름 (1~3명 · 등록 목록에서만)",
-                        },
-                        "person_layouts": {
-                            "type": "ARRAY",
-                            "description": ("featured_cast 각 인물의 배치 · {name, position(9슬롯), size(S/M/L/XL), z_index}. "
-                                            "size = 배경 이미지 높이 대비 인물 높이 (L=75%). "
-                                            "position: main person 은 middle-* / bottom-* 지배적. "
-                                            "여러 명이면 서로 다른 position + z_index."),
-                            "items": {
-                                "type": "OBJECT",
-                                "properties": {
-                                    "name": {"type": "STRING"},
-                                    "position": {"type": "STRING", "enum": POSITIONS},
-                                    "size": {"type": "STRING", "enum": ["S", "M", "L", "XL"]},
-                                    "z_index": {"type": "INTEGER"},
-                                },
-                                "required": ["name", "position", "size"],
+                        "template_id": {"type": "STRING", "enum": template_ids,
+                                         "description": "선택한 템플릿 · position/size 는 이 템플릿이 결정"},
+                        "person_slots": {
+                            "type": "OBJECT",
+                            "description": ("템플릿의 person_zone id → 등록 인물 이름 매핑. "
+                                            "예: T1 = {\"hero\": \"민경\"} · T2 = {\"left\": \"민경\", \"right\": \"백현\"}. "
+                                            "이름은 반드시 등록 목록에서만."),
+                            "properties": {
+                                "hero":    {"type": "STRING"},
+                                "left":    {"type": "STRING"},
+                                "right":   {"type": "STRING"},
+                                "reactor": {"type": "STRING"},
+                                "cause":   {"type": "STRING"},
                             },
                         },
-                        "captions": {
-                            "type": "ARRAY",
-                            "description": "자막 계층 (1~4개 · 참고 4단 위계)",
-                            "items": {
-                                "type": "OBJECT",
-                                "properties": {
-                                    "text": {"type": "STRING"},
-                                    "role": {"type": "STRING",
-                                             "enum": ["main", "quote", "badge", "subtitle"]},
-                                    "position": {"type": "STRING", "enum": POSITIONS},
-                                    "size": {"type": "STRING", "enum": ["S", "M", "L", "XL"]},
-                                },
-                                "required": ["text", "role", "position", "size"],
+                        "caption_slots": {
+                            "type": "OBJECT",
+                            "description": ("템플릿의 caption_zone id → 텍스트 매핑. "
+                                            "예: T1 = {\"cap_main\": \"결국 터졌다\", \"cap_sub\": \"모두 놀란 순간\"}. "
+                                            "max_chars 준수. 자막 텍스트는 shorts 대사·순간에서 근거."),
+                            "properties": {
+                                "cap_main":  {"type": "STRING"},
+                                "cap_sub":   {"type": "STRING"},
+                                "cap_quote": {"type": "STRING"},
+                                "cap_badge": {"type": "STRING"},
                             },
+                        },
+                        "background_hint": {
+                            "type": "STRING",
+                            "description": "(선택) 배경 처리 추가 지시 · template.background.nano_hint 를 보완",
                         },
                     },
-                    "required": ["background", "layout", "featured_cast", "captions"],
+                    "required": ["template_id", "person_slots", "caption_slots"],
                 },
             },
         },
@@ -871,8 +873,8 @@ def generate_variant_prompts(
                 system_instruction=VARIANT_SYSTEM,
                 response_mime_type="application/json",
                 response_schema=schema,
-                temperature=1.2,
-                max_output_tokens=8192,
+                temperature=1.0,
+                max_output_tokens=16384,
             ),
         )
     except Exception as e:
@@ -903,6 +905,10 @@ def generate_variant_prompts(
         return []
 
     def _has_text(v: dict) -> bool:
+        # 신규 template 방식: caption_slots dict 안에 텍스트 하나라도
+        if v.get("caption_slots") and any((v["caption_slots"] or {}).values()):
+            return True
+        # 구 방식: captions 배열
         if v.get("captions") and any((c or {}).get("text") for c in v["captions"]):
             return True
         return bool(v.get("caption"))

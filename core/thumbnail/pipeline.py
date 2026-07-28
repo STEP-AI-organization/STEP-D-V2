@@ -32,6 +32,67 @@ from . import nano_banana as NB
 from . import ctr_predictor as CTR
 from . import caption_overlay as OV
 from . import person_compositor as PC
+from . import templates as TP
+
+
+def _expand_template(plan_v: dict) -> dict:
+    """template_id + slots → person_layouts / captions / background 로 확장.
+
+    Planner 가 template 기반으로 뽑았으면 정규화된 필드로 변환.
+    template 없이 legacy 필드만 있으면 그대로 통과.
+    """
+    tid = plan_v.get("template_id")
+    if not tid:
+        return plan_v
+    tpl = TP.get(tid)
+    if not tpl:
+        return plan_v
+
+    person_slots = plan_v.get("person_slots") or {}
+    caption_slots = plan_v.get("caption_slots") or {}
+
+    # person_layouts 생성
+    person_layouts = []
+    featured_cast = []
+    for zone in tpl["person_zones"]:
+        nm = person_slots.get(zone["id"])
+        if not nm:
+            continue
+        person_layouts.append({
+            "name": nm,
+            "position": zone["position"],
+            "size": zone["size"],
+            "z_index": zone.get("z_index", 0),
+        })
+        featured_cast.append(nm)
+
+    # captions 생성
+    captions = []
+    for zone in tpl["caption_zones"]:
+        text = caption_slots.get(zone["id"])
+        if not text:
+            continue
+        captions.append({
+            "text": text,
+            "role": zone["role"],
+            "position": zone["position"],
+            "size": zone["size"],
+        })
+
+    # background 지시 · template + Planner 힌트 결합
+    bg_hint = tpl["background"].get("nano_hint", "")
+    if plan_v.get("background_hint"):
+        bg_hint = f"{bg_hint} · {plan_v['background_hint']}"
+
+    # 확장된 dict 리턴 (legacy 필드 채우기)
+    out = dict(plan_v)
+    out["featured_cast"] = featured_cast
+    out["person_layouts"] = person_layouts
+    out["captions"] = captions
+    out["background"] = bg_hint
+    out["layout"] = f"[{tid}] {tpl['description']}"
+    out["_template"] = tid
+    return out
 
 
 def run_pipeline(
@@ -139,6 +200,8 @@ def run_pipeline(
 
     def _gen_one(vid: str, plan_v: dict, frame: pathlib.Path) -> tuple[str, bytes | None]:
         try:
+            # (0) template 이 있으면 person_layouts/captions/background 자동 확장
+            plan_v = _expand_template(plan_v)
             # (a) 계획된 인물 사진 조회
             featured = plan_v.get("featured_cast", []) or []
             cast_photos, cast_names_found = _resolve_cast_photos(featured)
@@ -168,9 +231,10 @@ def run_pipeline(
                     for i, nm in enumerate(cast_names_found)
                 ]
 
-            print(f"  [{vid}] featured_cast={featured} · resolved={cast_names_found} · "
+            tmpl_tag = plan_v.get("_template", "-")
+            print(f"  [{vid}] template={tmpl_tag} · resolved={cast_names_found} · "
                   f"persons={[(pl.get('name'), pl.get('position'), pl.get('size')) for pl in person_layouts]} · "
-                  f"captions={[c.get('role') for c in captions]}")
+                  f"captions={[(c.get('role'), c.get('text')[:20]) for c in captions]}")
 
             # (b) 배경 생성 (hybrid · 인물 없는 blur 배경)
             img = NB.generate_thumbnail(
