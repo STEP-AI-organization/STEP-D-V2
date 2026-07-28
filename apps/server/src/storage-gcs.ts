@@ -141,6 +141,16 @@ export async function fileExists(objectPath: string): Promise<boolean> {
   return fs.existsSync(path.join(DEV_STORAGE, objectPath));
 }
 
+/** Read a small object into memory. Analysis metadata JSON only — never use for video assets. */
+export async function readFile(objectPath: string): Promise<Buffer> {
+  const b = getBucket();
+  if (b) {
+    const [contents] = await b.file(objectPath).download();
+    return contents;
+  }
+  return fs.promises.readFile(path.join(DEV_STORAGE, objectPath));
+}
+
 /**
  * Returns a ReadableStream for the file.
  * For GCS: returns a web ReadableStream (supports range).

@@ -115,6 +115,12 @@ function ProgramCard({ program, eps, recs, clips }: { program: Program; eps: Epi
         </div>
 
         <div className="flex shrink-0 items-center gap-1.5">
+          <Link
+            href={`/programs/${program.id}/highlights`}
+            className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-input px-3 text-xs font-semibold text-secondary-foreground hover:border-foreground/25 hover:text-foreground"
+          >
+            <Sparkles className="size-3.5" /> 하이라이트
+          </Link>
           <EditProgramButton program={program} />
           <UploadVideoButton programId={program.id} />
           <DeleteProgramButton program={program} episodeCount={eps.length} />

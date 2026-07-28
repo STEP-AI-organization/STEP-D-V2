@@ -47,6 +47,7 @@ import {
   adoptRec,
   exportClip as exportClipApi,
   rejectRec,
+  selectRecommendationThumbnail as selectRecommendationThumbnailApi,
   publishClips,
   retryDist,
   saveClipEditor as saveClipEditorApi,
@@ -147,7 +148,7 @@ interface AppData extends AppState {
   /** Persist the editor's decision blob on a clip (metadata only, no render). */
   saveClipEditor: (clipId: string, editorState: EditorState) => Promise<void>;
   rejectRecommendation: (id: string, reason: string) => void;
-  selectThumbnail: (recId: string, thumbId: string) => void;
+  selectThumbnail: (recId: string, thumbId: string) => Promise<void>;
   publishClip: (clipId: string, channels: DistributionChannel[], opts?: PublishOpts) => void;
   bulkPublish: (clipIds: string[], channels: DistributionChannel[], opts?: PublishOpts) => void;
   /** Publish selected clips to a SINGLE channel independently (Readiness model). */
@@ -522,14 +523,31 @@ export function AppDataProvider({
       });
   }, []);
 
-  const selectThumbnail = useCallback((recId: string, thumbId: string) => {
+  const selectThumbnail = useCallback(async (recId: string, thumbId: string): Promise<void> => {
     mutationEpochRef.current++;
+    let previous: Recommendation | undefined;
     setState((prev) => ({
       ...prev,
-      recommendations: prev.recommendations.map((r) =>
-        r.id === recId ? { ...r, selectedThumbnailId: thumbId } : r,
-      ),
+      recommendations: prev.recommendations.map((r) => {
+        if (r.id !== recId) return r;
+        previous = r;
+        return {
+          ...r,
+          selectedThumbnailId: thumbId,
+          thumbnails: r.thumbnails?.map((thumbnail) => ({ ...thumbnail, chosen: thumbnail.id === thumbId })),
+        };
+      }),
     }));
+    if (!previous || !connectedRef.current) return;
+    try {
+      await selectRecommendationThumbnailApi(recId, thumbId);
+    } catch (error) {
+      setState((prev) => ({
+        ...prev,
+        recommendations: prev.recommendations.map((r) => r.id === recId ? previous! : r),
+      }));
+      throw error;
+    }
   }, []);
 
   const fireServerPublish = useCallback(

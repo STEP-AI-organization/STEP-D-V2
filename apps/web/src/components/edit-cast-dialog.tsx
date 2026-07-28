@@ -7,7 +7,7 @@ import { useToast } from "@/components/ui/toast";
 import type { Program } from "@/lib/types";
 
 /** Header/inline button that opens a cast editor for one program.
- *  cast는 refine speaker 라벨링·recommend 프롬프트에 primary source로 들어감 — 다음 재분석부터 반영. */
+ *  cast는 자막 고유명사 보정과 운영자의 화자 이름 지정 후보로 사용한다. */
 export function EditCastButton({ program }: { program: Program }) {
   const [open, setOpen] = useState(false);
   const cast = program.cast ?? [];
@@ -18,7 +18,7 @@ export function EditCastButton({ program }: { program: Program }) {
         size="sm"
         variant="outline"
         onClick={() => setOpen(true)}
-        title="이 프로그램의 출연자 명단 편집 — refine이 이 이름으로 speaker 라벨링"
+        title="이 프로그램의 출연자 명단 편집 — 자막 이름 보정·화자 이름 지정 후보"
         style={empty ? { color: "var(--color-status-warn)", borderColor: "var(--color-status-warn)" } : undefined}
       >
         출연자 <span className="mono ml-0.5 tabular-nums">{cast.length}</span>
@@ -83,11 +83,11 @@ function EditCastDialog({ program, onClose }: { program: Program; onClose: () =>
         </div>
         <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-auto p-5">
           <div className="rounded-md border border-brand/25 bg-brand/5 px-3 py-2.5">
-            <div className="mb-1 text-[11.5px] font-bold text-brand">refine speaker 라벨링의 primary source</div>
+            <div className="mb-1 text-[11.5px] font-bold text-brand">자막 이름 보정 · 화자 이름 지정 후보</div>
             <div className="text-[11.5px] leading-relaxed text-muted-foreground">
               한 명씩 이름 입력 · Enter로 추가 · 각 항목 옆 ✕로 삭제. 저장은 자동 (변경 즉시 서버 반영).
-              STT 오인식(예: 옥순→옥수)은 이 명단 기준으로 자동 정규화 시도. 명단에 없는 인물은
-              M1/F1... fallback으로 남음.
+              STT 오인식(예: 옥순→옥수)은 이 명단 기준으로 자동 정규화 시도. 화자는 자동 실명화하지 않으며,
+              분석 화면에서 발화자 1·2에 이 명단 중 이름을 직접 지정합니다.
             </div>
           </div>
 

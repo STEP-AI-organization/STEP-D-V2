@@ -46,6 +46,9 @@ SCHEMA = {
     },
     "required": ["person_count", "mood", "composition", "description"],
 }
+# 사용자 수동 태그 (Vision 이 자동 채우지 않는 · 나중에 UI/CLI 로 편집)
+# - program: 프로그램 id (예: "환승연애4") · 비었으면 global
+# - custom_tags: 사용자 태그 배열
 
 
 def _client(project: str | None = None) -> genai.Client:
@@ -109,8 +112,14 @@ def main() -> int:
             updated.append({"id": rid, "path": str(p.relative_to(REF_DIR.parent)),
                             "_analyzed": False, "error": "vision_empty"})
             continue
+        # 기존 사용자 태그 (program·custom_tags) 는 유지
+        preserved = {}
+        if rid in existing:
+            for k in ("program", "custom_tags", "user_note"):
+                if existing[rid].get(k) is not None:
+                    preserved[k] = existing[rid][k]
         entry = {"id": rid, "path": str(p.relative_to(REF_DIR.parent)),
-                 "_analyzed": True, **meta}
+                 "_analyzed": True, **meta, **preserved}
         updated.append(entry)
         print(f"OK · {meta.get('composition')} · {meta.get('person_count')}인 · {meta.get('mood')}")
 

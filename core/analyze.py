@@ -105,12 +105,12 @@ def _prepare_checkpoints(
     # RECOMMEND_VER: recommend 프롬프트/로직이 바뀌면 이 문자열을 올려 기존 shorts.json 캐시를
     # 무효화. 2026-07-23g: narrative-first 트리 구조 (시나리오×변형×best) + 길이 제한 완화
     # (60→120초 · 완결성 우선 · 하드실링 180초).
-    RECOMMEND_VER = "2026-07-28-program-tone-v2"  # 프로그램 톤 예시 강화 (감정 어휘 · 나쁜/좋은 예)
+    RECOMMEND_VER = "2026-07-28-aggro-tone"  # title 톤: 담백→어그로/클릭베이트 (사용자 방향 전환)
     REFINE_VER = "2026-07-27-speaker-preserve"  # get_segments가 speaker 필드 보존하도록 fix (drop 방지)
     FACES_VER = "2026-07-27-object-only"   # 얼굴 클러스터만 생성 · 이름 자동 매핑 금지
     SHOTS_VER = "2026-07-24a"   # shot boundary detection: ffmpeg scene, fps=1, thr=0.55
     SCENE_TYPE_VER = "2026-07-24a"  # shot 프레임 → Vision batch: interview/on_scene/other
-    BEATS_VER = "2026-07-28-force-split-45s"   # + 45s 초과 beat 화자 전환점 강제 분할 + 익명라벨 금지 프롬프트
+    BEATS_VER = "2026-07-28-gap-split-speaker"   # gap-fill을 화자 전환점에서 세분화 (auto beat 통째 담기 방지)
     STT_VER = "2026-07-27-word-normalize"  # + word.end 침묵 삼킴 clip + duration 이상치 cap (drift fix)
     STT_PROVIDER_ENV = (os.environ.get("STT_PROVIDER") or "gemini").lower()
     RECOMMEND_MODE = os.environ.get("RECOMMEND_MODE") or "narrative_first"

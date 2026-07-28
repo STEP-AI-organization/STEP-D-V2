@@ -369,58 +369,10 @@ def build_face_index(
             f_cnt += 1
             cluster_to_label[c_id] = f"F{f_cnt}"
 
-    # 세그먼트 → speaker 라벨 덮어쓰기. 여러 얼굴 있으면 bbox area 큰 쪽 채택.
-    # refine.py가 이미 실명을 붙인 세그(공인·아이돌·등록 cast) 은 절대 덮어쓰지 않고,
-    # 그 실명을 클러스터→이름 auto-mapping seed로만 씀.
+    # 얼굴 인식은 클러스터·대표 프레임만 만든다. 얼굴이 화면에 보인다고 말한 사람이라는
+    # 보장은 없으므로 transcript.speaker를 덮어쓰거나 이름을 자동 매핑하지 않는다.
     labeled = 0
-    auto_map_votes: dict[str, dict[str, int]] = {}  # {"M2": {"김수현": 4, "정숙": 1}}
-    for i in range(n):
-        faces = per_seg_faces[i]
-        if not faces:
-            continue
-        candidates: list[tuple[str, float]] = []
-        for j, f in enumerate(faces):
-            # 해당 face의 클러스터 라벨 조회 — flat_ref/labels로 역참조
-            for k, (si, fj) in enumerate(flat_ref):
-                if si == i and fj == j:
-                    lbl = int(cluster_labels[k])
-                    if lbl in cluster_to_label:
-                        candidates.append((cluster_to_label[lbl], f["area"]))
-                    break
-        if not candidates:
-            continue
-        # area 합산해서 가장 크게 나온 클러스터 라벨 채택 (얼굴 관점의 speaker 후보)
-        score: dict[str, float] = {}
-        for lb, ar in candidates:
-            score[lb] = score.get(lb, 0.0) + ar
-        best_cluster = max(score.items(), key=lambda x: x[1])[0]
-
-        existing = refined[i].get("speaker") or ""
-        if existing and not _is_fallback_speaker(existing):
-            # 실명 세그 — refine이 이미 확신한 이름이라 유지. 대신 클러스터→이름 vote 기록.
-            votes = auto_map_votes.setdefault(best_cluster, {})
-            votes[existing] = votes.get(existing, 0) + 1
-        else:
-            refined[i]["speaker"] = best_cluster
-            labeled += 1
-
-    # 다수결 auto-mapping: 각 클러스터가 세그 3회+ 60%+ 우세로 특정 실명과 붙었다면 확정.
-    # 확정된 매핑은 (a) faces.json.mapping 초깃값으로 (b) 다른 폴백 세그에 확산 적용.
     auto_mapping: dict[str, str] = {}
-    for cluster_lbl, votes in auto_map_votes.items():
-        total = sum(votes.values())
-        top_name, top_count = max(votes.items(), key=lambda x: x[1])
-        if top_count >= 3 and top_count / total >= 0.6:
-            auto_mapping[cluster_lbl] = top_name
-
-    if auto_mapping:
-        propagated = 0
-        for i in range(n):
-            sp = refined[i].get("speaker") or ""
-            if sp in auto_mapping:
-                refined[i]["speaker"] = auto_mapping[sp]
-                propagated += 1
-        print(f"[faces] auto-mapping 확정 {len(auto_mapping)}개 · 폴백 세그 {propagated}개에 실명 확산")
 
     # 대표 프레임 저장. 각 클러스터당 (a) 얼굴 크롭 상위 3장 + (b) 전체 프레임(캡션 감지용) 10장.
     # 2026-07-23 사용자 방향: 방송 자막 "이름 : 대사" 캡션을 Vision이 잡으려면 full frame 필요.
@@ -483,45 +435,13 @@ def build_face_index(
             "full_frame_segs": full_seg_ids,      # 각 full_frame의 seg_i (STT 컨텍스트용)
         }
 
-    # ── 사용자 등록 캐스트 사진 → 클러스터 매칭 (2026-07-24) ─────────────────────
-    # 사용자가 프로그램 상세 페이지에서 인물 사진을 올렸으면 그 사진 embedding으로 클러스터에
-    # 직접 이름을 붙인다. 다수결 auto-mapping / Vision LLM 매칭보다 근거가 강력해서 우선순위 top —
-    # 겹치는 클러스터는 사진 매칭이 override. 사진 없거나 얼굴 검출 실패면 no-op.
+    # 이름 연결은 프론트의 운영자 지정으로만 한다. 등록 사진도 자동 이름 매핑에는 사용하지 않는다.
     photo_mapping: dict[str, str] = {}
-    if cast_photos_dir:
-        try:
-            cast_embs = load_cast_photo_embeddings(cast_photos_dir)
-            if cast_embs:
-                photo_mapping = match_clusters_by_photos(
-                    faces_json={},  # 이 시점엔 아직 안 만들어짐 — dummy
-                    per_seg_faces=per_seg_faces,
-                    flat_ref=flat_ref,
-                    cluster_labels=cluster_labels,
-                    cluster_to_label=cluster_to_label,
-                    cast_photo_embs=cast_embs,
-                )
-                if photo_mapping:
-                    # 사진 매칭이 우세: 다수결과 병합하되 사진 매칭 결과가 이깁니다.
-                    for lbl, nm in photo_mapping.items():
-                        auto_mapping[lbl] = nm
-                    # 사진 매칭이 확정한 라벨은 refined에서도 다시 확산 (다수결 자리에 없었을 수 있음).
-                    propagated_photo = 0
-                    for i in range(n):
-                        sp = refined[i].get("speaker") or ""
-                        if sp in photo_mapping:
-                            refined[i]["speaker"] = photo_mapping[sp]
-                            propagated_photo += 1
-                    print(f"[faces·photo] 확산 {propagated_photo}개 세그먼트")
-        except Exception as e:
-            print(f"[faces·photo] 사진 매칭 실패 (스킵): {str(e)[:120]}")
-            import traceback
-            traceback.print_exc()
 
     faces_json = {
         "clusters": clusters_meta,
-        # mapping 초깃값 = auto-mapping (공인/등록 cast는 refine이 이미 확신했고, 그걸 클러스터에
-        # 다수결로 붙였음) + 사진 매칭(사용자 등록 인물 사진). 사용자 UI에서 확인·수정 가능.
-        "mapping": dict(auto_mapping),
+        # 이름은 비워 둔다. 운영자가 프론트에서 익명 화자·얼굴 클러스터에 직접 지정한다.
+        "mapping": {},
         "labeled_segments": labeled,
         "auto_mapped_clusters": len(auto_mapping),
         "photo_mapped_clusters": len(photo_mapping),

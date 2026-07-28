@@ -52,7 +52,8 @@
 
 | 문서 | 내용 |
 |---|---|
-| [glossary.md](reference/glossary.md) | 용어집 — 쇼츠/클립/하이라이트 정의, SMR clipType 코드 |
+| [content-model.md](reference/content-model.md) | **콘텐츠 모델 정본** — 롱폼 → 클립 → 숏폼·하이라이트 계층, beat·UI 원칙 |
+| [glossary.md](reference/glossary.md) | 용어집 — SMR `clipType` 등 기존 코드값 참고 |
 | [data-model.md](reference/data-model.md) | DB 스키마 종합 — schema.sql + **코드 런타임 생성 테이블** + 변경 절차 |
 | [api-reference.md](reference/api-reference.md) | 서버 HTTP API 전 라우트 (~40개) ↔ 프론트 함수 매핑 |
 | [core-pipeline-reference.md](reference/core-pipeline-reference.md) | core/ 파이썬 파이프라인 모듈·출력 스키마·디버깅·admin Lab |

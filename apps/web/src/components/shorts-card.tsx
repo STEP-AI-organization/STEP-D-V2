@@ -19,10 +19,12 @@ import { Button } from "@/components/ui/button";
 import { useAppData } from "@/lib/data/store";
 import { useToast } from "@/components/ui/toast";
 import { useVideoSeek } from "./episode/seek-context";
-import { frameUrl, type AnalysisShort } from "@/lib/data/api";
+import { frameUrl, mediaUrl, type AnalysisShort } from "@/lib/data/api";
 import type { Recommendation } from "@/lib/types";
 import { formatTimecode } from "@/lib/utils";
 import { cn } from "@/lib/utils";
+
+import { ThumbnailPicker } from "./thumbnail-picker";
 
 /** 매칭 관용 시간창 — recFromShort()가 0.1초 이내로 그대로 옮기지만
  *  간혹 라운딩·재분석 후 변형이 있어 넉넉히 잡음. */
@@ -49,7 +51,7 @@ export function ShortsCard({
   apiBase: string;
 }) {
   const router = useRouter();
-  const { adoptRecommendation, rejectRecommendation, recsForEpisode } = useAppData();
+  const { adoptRecommendation, rejectRecommendation, recsForEpisode, selectThumbnail } = useAppData();
   const { toast } = useToast();
   const seek = useVideoSeek();
   const [busy, setBusy] = useState<null | "adopt" | "edit">(null);
@@ -117,15 +119,28 @@ export function ShortsCard({
         className="group relative block aspect-video w-full overflow-hidden bg-black/40"
         title={`▶ ${formatTimecode(short.start)}–${formatTimecode(short.end)} 구간 재생 (end에서 자동 정지)`}
       >
-        <img
-          src={src}
-          alt=""
-          loading="lazy"
-          className="absolute inset-0 size-full object-cover opacity-90 transition group-hover:opacity-100 group-hover:scale-[1.02]"
-          onError={(e) => {
-            (e.currentTarget as HTMLImageElement).style.opacity = "0";
-          }}
-        />
+        {rec?.thumbnails && rec.thumbnails.length > 0 ? (() => {
+          // 선택된 썸네일 혹은 첫번째 썸네일 사용
+          const activeThumb = rec.thumbnails.find(t => t.id === rec.selectedThumbnailId) || rec.thumbnails.find(t => t.chosen) || rec.thumbnails[0];
+          return (
+            <img
+              src={mediaUrl(activeThumb.urls["16:9"] ?? activeThumb.urls["9:16"])}
+              alt=""
+              loading="lazy"
+              className="absolute inset-0 size-full object-cover opacity-90 transition group-hover:opacity-100 group-hover:scale-[1.02]"
+            />
+          );
+        })() : (
+          <img
+            src={src}
+            alt=""
+            loading="lazy"
+            className="absolute inset-0 size-full object-cover opacity-90 transition group-hover:opacity-100 group-hover:scale-[1.02]"
+            onError={(e) => {
+              (e.currentTarget as HTMLImageElement).style.opacity = "0";
+            }}
+          />
+        )}
         {/* 클립·하이라이트: 상단 방송 자막(원본에 인코딩) 시각적 마스킹.
             정중앙 프레임 사용에도 남는 경우가 있어 CSS 그라디언트로 덮음. */}
         {shortType !== "shortform" && (
@@ -197,6 +212,27 @@ export function ShortsCard({
               </Badge>
             ))}
           </div>
+        )}
+
+        {/* 썸네일 변형 Picker (추천 보드 등록 후 생성된 경우) */}
+        {rec?.thumbnails && rec.thumbnails.length > 0 && (
+          <ThumbnailPicker
+            thumbnails={rec.thumbnails}
+            apiBase={apiBase}
+            chosenId={
+              rec.selectedThumbnailId ||
+              rec.thumbnails.find(t => t.chosen)?.id ||
+              rec.thumbnails[0].id
+            }
+            onChoose={async (id) => {
+              try {
+                await selectThumbnail(rec.id, id);
+                toast({ title: "썸네일 선택됨", description: "선택이 저장되었습니다. 클립 생성 시 반영됩니다.", tone: "done" });
+              } catch (err) {
+                toast({ title: "썸네일 선택 실패", description: err instanceof Error ? err.message : String(err), tone: "error" });
+              }
+            }}
+          />
         )}
 
         {/* 액션 영역 — 상태에 따라 셋 중 하나 */}

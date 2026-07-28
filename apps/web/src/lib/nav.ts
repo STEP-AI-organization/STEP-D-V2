@@ -7,11 +7,11 @@ import {
   Activity,
   BarChart3,
   Clapperboard,
+  Image as ImageIcon,
   Inbox,
   LayoutGrid,
   Send,
   Settings,
-  Sparkles,
   TrendingUp,
 } from "lucide-react";
 
@@ -35,6 +35,7 @@ export const NAV: NavItem[] = [
   { href: "/analytics", label: "성과", icon: BarChart3, roles: ["admin", "superadmin"] },
   { href: "/channels", label: "채널 트렌드", icon: TrendingUp, roles: ["admin", "superadmin"] },
   { href: "/publish-channels", label: "배포채널", icon: Settings, roles: ["admin", "superadmin"] },
+  { href: "/thumbnail-templates", label: "썸네일 템플릿", icon: ImageIcon, roles: ["admin", "superadmin"] },
   { href: "/ops", label: "운영·진단", icon: Activity, roles: ["superadmin"] },
 ];
 

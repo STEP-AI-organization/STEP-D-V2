@@ -727,23 +727,29 @@ def _fill_dialogue_gaps(beats: list[dict], transcript: list[dict],
         gap_end = float(b["start"])
         if gap_end - gap_start >= min_gap_sec:
             filler = _make_gap_beat(transcript, gap_start, gap_end)
-            if filler:
+            if isinstance(filler, list):
+                filled.extend(filler)
+            elif filler:
                 filled.append(filler)
         filled.append(b)
         prev_end = float(b["end"])
     # 마지막 beat 이후 tail gap
     if duration - prev_end >= min_gap_sec:
         filler = _make_gap_beat(transcript, prev_end, duration)
-        if filler:
+        if isinstance(filler, list):
+            filled.extend(filler)
+        elif filler:
             filled.append(filler)
     return filled
 
 
-def _make_gap_beat(transcript: list[dict], lo: float, hi: float) -> dict | None:
-    """gap 구간 [lo, hi]에서 자막이 있으면 fallback beat 생성. 없으면 None."""
-    dlg: list[str] = []
-    st_actual: float | None = None
-    en_actual: float | None = None
+def _make_gap_beat(transcript: list[dict], lo: float, hi: float) -> dict | list[dict] | None:
+    """gap 구간 [lo, hi]에서 자막이 있으면 fallback beat(들) 생성. 없으면 None.
+    2026-07-28: 화자 전환점에서 여러 beat로 나눈다 (이전엔 통째 하나 · 원균 여운 + 지아 예상
+    놀이가 한 beat에 담겨 shorts title이 payoff만 반영하는 문제).
+    """
+    # 이 gap 안의 자막 세그 수집 (시간순)
+    in_range: list[dict] = []
     for t in transcript:
         try:
             ts = float(t.get("start", 0)); te = float(t.get("end", 0))
@@ -751,23 +757,45 @@ def _make_gap_beat(transcript: list[dict], lo: float, hi: float) -> dict | None:
             continue
         if te <= lo or ts >= hi:
             continue
-        txt = (t.get("text") or "").strip()
-        if not txt:
+        if not (t.get("text") or "").strip():
             continue
-        dlg.append(txt)
-        if st_actual is None:
-            st_actual = max(lo, ts)
-        en_actual = min(hi, te)
-    if not dlg or st_actual is None or en_actual is None or en_actual - st_actual < 3.0:
+        in_range.append(t)
+    if not in_range:
         return None
-    joined = " ".join(dlg)
-    return {
-        "start": round(st_actual, 1),
-        "end": round(en_actual, 1),
-        "title": f"[자동] {joined[:30]}",
-        "summary": joined[:200],
-        "characters": [],
-        "hook": "기타",
-        "is_complete": True,
-        "auto_fill": True,
-    }
+
+    # 화자 전환·큰 침묵(2s+) 기준으로 chunk 나누기
+    chunks: list[list[dict]] = [[in_range[0]]]
+    for prev, cur in zip(in_range, in_range[1:]):
+        prev_sp = (prev.get("speaker") or "").strip()
+        cur_sp = (cur.get("speaker") or "").strip()
+        gap = float(cur.get("start", 0)) - float(prev.get("end", 0))
+        if (prev_sp and cur_sp and prev_sp != cur_sp) or gap > 2.0:
+            chunks.append([cur])
+        else:
+            chunks[-1].append(cur)
+
+    # 각 chunk를 beat로 변환. 짧은(3s 미만) 것은 인접에 병합.
+    def _mk(chunk: list[dict]) -> dict | None:
+        st = max(lo, float(chunk[0].get("start", 0)))
+        en = min(hi, float(chunk[-1].get("end", 0)))
+        if en - st < 3.0:
+            return None
+        joined = " ".join((c.get("text") or "").strip() for c in chunk)
+        speakers = list({(c.get("speaker") or "").strip() for c in chunk if (c.get("speaker") or "").strip()})
+        return {
+            "start": round(st, 1), "end": round(en, 1),
+            "title": f"[자동] {joined[:30]}",
+            "summary": joined[:200],
+            "characters": speakers,
+            "hook": "기타",
+            "is_complete": True,
+            "auto_fill": True,
+        }
+    beats: list[dict] = []
+    for c in chunks:
+        b = _mk(c)
+        if b:
+            beats.append(b)
+    if not beats:
+        return None
+    return beats if len(beats) > 1 else beats[0]

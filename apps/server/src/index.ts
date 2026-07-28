@@ -2232,6 +2232,172 @@ async function renderClipMedia(opts: {
   }
 }
 
+// ── thumbnail template refs (Web UI CRUD · 2026-07-28) ─────────────────────────
+// Templates are broadcaster-quality reference thumbnails · used by swap pipeline.
+// Storage: local `assets/thumbnail-reference/` (기존 · manifest.json 자동 sync).
+const REPO_ROOT = path.resolve(__dirname, "..", "..", "..");
+const THUMB_REF_DIR = path.join(REPO_ROOT, "assets", "thumbnail-reference");
+const THUMB_MANIFEST = path.join(THUMB_REF_DIR, "manifest.json");
+function readThumbManifest(): any[] {
+  try {
+    if (!fs.existsSync(THUMB_MANIFEST)) return [];
+    return JSON.parse(fs.readFileSync(THUMB_MANIFEST, "utf-8")) as any[];
+  } catch { return []; }
+}
+function writeThumbManifest(entries: any[]) {
+  fs.mkdirSync(THUMB_REF_DIR, { recursive: true });
+  fs.writeFileSync(THUMB_MANIFEST, JSON.stringify(entries, null, 2), "utf-8");
+}
+
+// GET · 모든 template metadata
+app.get("/api/thumbnail-refs", async (c) => {
+  const items = readThumbManifest();
+  return c.json({ items });
+});
+
+// GET · template 이미지 파일 (파일 이름 sanitize)
+app.get("/api/thumbnail-refs/:id/image", async (c) => {
+  const id = c.req.param("id").replace(/[^\w.-]/g, "");
+  const entries = readThumbManifest();
+  const entry = entries.find((e: any) => e.id === id);
+  if (!entry) return c.json({ error: "not found" }, 404);
+  const p = path.join(REPO_ROOT, String(entry.path || ""));
+  if (!fs.existsSync(p)) return c.json({ error: "file missing" }, 404);
+  const ext = path.extname(p).slice(1).toLowerCase();
+  const mime = ext === "png" ? "image/png" : ext === "webp" ? "image/webp" : "image/jpeg";
+  const buf = fs.readFileSync(p);
+  return new Response(buf, { headers: { "content-type": mime } });
+});
+
+// POST · 이미지 업로드 (multipart) · manifest 에 entry 추가 (Vision 분석은 별도 스크립트)
+app.post("/api/thumbnail-refs", async (c) => {
+  const form = await c.req.formData().catch(() => null);
+  if (!form) return c.json({ error: "multipart required" }, 400);
+  const file = form.get("file");
+  const idHint = String(form.get("id") || "").trim();
+  const program = String(form.get("program") || "").trim();
+  if (!(file instanceof File)) return c.json({ error: "file required" }, 400);
+  const ext = (file.name.split(".").pop() || "png").toLowerCase();
+  if (!["png", "jpg", "jpeg", "webp"].includes(ext)) {
+    return c.json({ error: "unsupported ext" }, 400);
+  }
+  // id: 사용자 지정 or 자동
+  fs.mkdirSync(THUMB_REF_DIR, { recursive: true });
+  const entries = readThumbManifest();
+  const usedIds = new Set(entries.map((e: any) => e.id));
+  let id = idHint || `ref_${String(Date.now()).slice(-8)}`;
+  id = id.replace(/[^\w.-]/g, "_");
+  let n = 1;
+  while (usedIds.has(id)) { id = `${idHint || "ref"}_${n++}`; }
+  const fname = `${id}.${ext}`;
+  const buf = Buffer.from(await file.arrayBuffer());
+  fs.writeFileSync(path.join(THUMB_REF_DIR, fname), buf);
+  const entry = {
+    id, path: `assets/thumbnail-reference/${fname}`,
+    _analyzed: false, program, custom_tags: [],
+    uploaded_at: new Date().toISOString(),
+  };
+  entries.push(entry);
+  writeThumbManifest(entries);
+  return c.json({ item: entry });
+});
+
+// PATCH · metadata 편집 (program·custom_tags·user_note 등)
+app.patch("/api/thumbnail-refs/:id", async (c) => {
+  const id = c.req.param("id");
+  const entries = readThumbManifest();
+  const idx = entries.findIndex((e: any) => e.id === id);
+  if (idx < 0) return c.json({ error: "not found" }, 404);
+  const body = await c.req.json<any>().catch(() => ({}));
+  const patch: any = {};
+  for (const k of ["program", "custom_tags", "user_note", "person_count", "mood", "composition"]) {
+    if (k in body) patch[k] = body[k];
+  }
+  entries[idx] = { ...entries[idx], ...patch };
+  writeThumbManifest(entries);
+  return c.json({ item: entries[idx] });
+});
+
+// DELETE · manifest 삭제 + 파일 삭제
+app.delete("/api/thumbnail-refs/:id", async (c) => {
+  const id = c.req.param("id");
+  const entries = readThumbManifest();
+  const entry = entries.find((e: any) => e.id === id);
+  if (!entry) return c.json({ error: "not found" }, 404);
+  const p = path.join(REPO_ROOT, String(entry.path || ""));
+  try { if (fs.existsSync(p)) fs.unlinkSync(p); } catch {}
+  writeThumbManifest(entries.filter((e: any) => e.id !== id));
+  return c.json({ ok: true });
+});
+
+// POST · Vision 자동 분석 (기존 entry · 새 업로드 후 · manifest _analyzed=false → true)
+app.post("/api/thumbnail-refs/:id/analyze", async (c) => {
+  const id = c.req.param("id").replace(/[^\w.-]/g, "");
+  const entries = readThumbManifest();
+  const entry = entries.find((e: any) => e.id === id);
+  if (!entry) return c.json({ error: "not found" }, 404);
+  // Python 스크립트 호출
+  const scriptPath = path.join(REPO_ROOT, "scripts", "thumbnail_reference_manifest.py");
+  const python = process.env.CORE_PYTHON || "python";
+  const { spawn } = await import("node:child_process");
+  await new Promise<void>((resolve, reject) => {
+    const proc = spawn(python, [scriptPath], {
+      cwd: REPO_ROOT, env: { ...process.env, PYTHONIOENCODING: "utf-8" },
+    });
+    let stderr = "";
+    proc.stderr.on("data", (d) => { stderr += d.toString(); });
+    proc.on("close", (code) => code === 0 ? resolve() : reject(new Error(`analyze exit ${code}: ${stderr.slice(-500)}`)));
+    proc.on("error", reject);
+  }).catch((e) => c.json({ error: String(e) }, 500));
+  const updated = readThumbManifest().find((e: any) => e.id === id);
+  return c.json({ item: updated });
+});
+
+// POST · YouTube 채널 이미 sync 된 영상 중 상위 뷰 썸네일 자동 수집 → refs 로 추가
+// 전제: 해당 채널이 이미 sync 완료 · entities table 에 youtube_video 저장됨
+app.post("/api/thumbnail-refs/import-youtube", async (c) => {
+  const body = await c.req.json<{ channelId?: string; program?: string; max?: number }>()
+    .catch(() => ({} as any));
+  const channelId = String(body?.channelId || "").trim();
+  const program = String(body?.program || "").trim();
+  const max = Math.min(20, Math.max(1, Number(body?.max) || 6));
+  if (!channelId) return c.json({ error: "channelId required" }, 400);
+  // youtube_videos entity 에서 조회 (sync 결과)
+  const { rows } = await getPool().query(
+    `SELECT id, data FROM entities WHERE kind = 'youtube_video' AND data->>'channelId' = $1
+     ORDER BY COALESCE((data->>'viewCount')::bigint, 0) DESC LIMIT $2`,
+    [channelId, max]
+  );
+  if (!rows.length) return c.json({ error: "no synced videos for channel", channelId }, 404);
+  const entries = readThumbManifest();
+  const usedIds = new Set(entries.map((e: any) => e.id));
+  const added: any[] = [];
+  for (const r of rows) {
+    const v = typeof r.data === "string" ? JSON.parse(r.data) : r.data;
+    const thumbUrl = v.thumbnail || v.thumbnailUrl;
+    if (!thumbUrl) continue;
+    let id = `yt_${v.videoId || r.id}`.replace(/[^\w.-]/g, "_");
+    let n = 1;
+    while (usedIds.has(id)) { id = `yt_${v.videoId}_${n++}`; }
+    try {
+      const buf = Buffer.from(await (await fetch(thumbUrl)).arrayBuffer());
+      const fname = `${id}.jpg`;
+      fs.writeFileSync(path.join(THUMB_REF_DIR, fname), buf);
+      const entry = {
+        id, path: `assets/thumbnail-reference/${fname}`,
+        _analyzed: false, program, custom_tags: ["youtube"],
+        source: { videoId: v.videoId, title: v.title, viewCount: v.viewCount },
+        uploaded_at: new Date().toISOString(),
+      };
+      entries.push(entry); usedIds.add(id); added.push(entry);
+    } catch (e) {
+      console.error("[thumb-import]", id, e);
+    }
+  }
+  writeThumbManifest(entries);
+  return c.json({ added: added.length, items: added });
+});
+
 // ── select generated thumbnail ─────────────────────────────────────────────────
 // Exactly one variant is marked chosen so later adoption has a stable, persisted decision.
 app.patch("/api/recommendations/:id/thumbnail", async (c) => {

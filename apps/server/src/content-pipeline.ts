@@ -181,9 +181,9 @@ function runAnalyze(
     // Python native crash 시 close event 처리 도중 워커까지 kill되던 이슈 대응.
     // stdin 읽기 안 함(ignore) + stdout/stderr는 pipe 로 별도 처리 후 unref.
     if (typeof proc.unref === "function") proc.unref();
-    if (proc.stdin && typeof proc.stdin.unref === "function") proc.stdin.unref();
-    if (proc.stdout && typeof proc.stdout.unref === "function") proc.stdout.unref();
-    if (proc.stderr && typeof proc.stderr.unref === "function") proc.stderr.unref();
+    if (proc.stdin && typeof (proc.stdin as any).unref === "function") (proc.stdin as any).unref();
+    if (proc.stdout && typeof (proc.stdout as any).unref === "function") (proc.stdout as any).unref();
+    if (proc.stderr && typeof (proc.stderr as any).unref === "function") (proc.stderr as any).unref();
     // stderr는 로그로만 사용 (워커 프로세스에 영향 없게)
     if (proc.stderr) {
       const errRl = readline.createInterface({ input: proc.stderr });
@@ -501,9 +501,164 @@ async function writeRecommendationsFromShorts(
     client.release();
   }
   return sorted.length;
-}
+  }
 
-/** Reflect pipeline progress on the episode so the UI shows real status, not a guess. */
+  /**
+   * 썸네일 생성 스테이지 (Phase 1+2+3 분리: Planner → Generator → Compositor).
+   * analysis.json이 이미 있고 shorts[]가 확정된 시점에서 호출된다.
+   * 각 shorts(추천)당 1~3개 variant 썸네일 생성 → GCS 업로드 → recommendation.data.thumbnails[] 갱신.
+   */
+  async function runThumbnailGeneration(
+    mediaId: string,
+    episodeId: string,
+    shorts: Short[],
+    workDir: string,
+  ): Promise<void> {
+    const path = await import("node:path");
+    const fs = await import("node:fs");
+    const { uploadFile } = await import("./storage-gcs.ts");
+    const { getPool, putEntity } = await import("./db-pg.ts");
+
+    // workDir 안에 썸네일 출력 폴더
+    const thumbOutDir = path.join(workDir, "thumbnails");
+    fs.mkdirSync(thumbOutDir, { recursive: true });
+
+    // shorts_context.json 생성 (planner가 읽음)
+    const shortsContextPath = path.join(workDir, "shorts_context.json");
+    // analysis.json에서 shorts 정보 추출
+    const analysisPath = path.join(workDir, "analysis.json");
+    let analysis: any = {};
+    if (fs.existsSync(analysisPath)) {
+      analysis = JSON.parse(fs.readFileSync(analysisPath, "utf-8"));
+    }
+
+    // program_context.json이 있으면 그것 사용, 없으면 최소 컨텍스트 구성
+    let programInfo = analysis.program || {};
+    if (!programInfo.title) {
+      // program_context.json에서 로드 시도
+      const pcPath = path.join(workDir, "program_context.json");
+      if (fs.existsSync(pcPath)) {
+        programInfo = JSON.parse(fs.readFileSync(pcPath, "utf-8"));
+      }
+    }
+
+    for (const short of shorts) {
+      const shortId = `s${short.rank ?? 1}`;
+      const variantCount = 3; // 각 shorts당 3개 variant
+
+      // shorts_context 구성 (planner용)
+      const shortsCtx = {
+        title: short.title || "쇼츠",
+        description: short.reason || "",
+        cast_names: programInfo.cast || [],
+        program: programInfo,
+      };
+      fs.writeFileSync(shortsContextPath, JSON.stringify(shortsCtx), "utf-8");
+
+      // 썸네일 세션 실행 (Planner → Generator → Compositor 다종 생성)
+      // python -m core.thumbnail --media-dir <workDir> --out <thumbOutDir>/<shortId> --multi 3
+      const shortThumbOutDir = path.join(thumbOutDir, shortId);
+      fs.mkdirSync(shortThumbOutDir, { recursive: true });
+
+      const args = ["-m", "core.thumbnail", "--media-dir", workDir, "--out", shortThumbOutDir, "--multi", String(variantCount)];
+      const isWindows = process.platform === "win32";
+
+      console.log(`[thumbnail] Spawning: ${CORE_PYTHON} ${args.join(" ")}`);
+
+      const child = spawn(CORE_PYTHON, args, {
+        cwd: REPO_ROOT,
+        env: {
+          ...process.env,
+          PYTHONPATH: "",
+          PYTHONIOENCODING: "utf-8",
+          PYTHONUTF8: "1",
+        },
+        stdio: ["ignore", "pipe", "pipe"],
+        detached: isWindows,
+        windowsHide: true,
+      });
+
+      let stdout = "";
+      child.stdout.on("data", (d) => { stdout += String(d); });
+      let stderr = "";
+      child.stderr.on("data", (d) => { stderr += String(d); });
+
+      await new Promise<void>((resolve, reject) => {
+        child.on("close", (code) => {
+          if (code === 0) resolve();
+          else reject(new Error(`core.thumbnail exited ${code}: ${stderr.slice(-800)}`));
+        });
+        child.on("error", reject);
+      });
+
+      // 파이썬 실행 결과 분석 (multi_session.json)
+      const multiLogPath = path.join(shortThumbOutDir, "multi_session.json");
+      if (!fs.existsSync(multiLogPath)) {
+        console.warn(`[thumbnail] ${mediaId}/${shortId} failed: no multi_session.json output`);
+        continue;
+      }
+
+      const results = JSON.parse(fs.readFileSync(multiLogPath, "utf-8")) as any[];
+
+      for (const result of results) {
+        if (result.status !== "completed" || !result.exported_paths) {
+          console.warn(`[thumbnail] ${mediaId}/${shortId} variant failed: ${result.error}`);
+          continue;
+        }
+
+        const variantId = result.variant_id || `v${result.exported_paths["16:9"]?.match(/_v(\d+)_/)?.[1] || 1}`;
+
+        // GCS 업로드: analysis/{mediaId}/thumbnails/{shortId}/{variantId}_{ratio}.png
+        const uploaded: Record<string, string> = {};
+        for (const [ratio, localPath] of Object.entries(result.exported_paths as Record<string, string>)) {
+          const ratioStr = ratio.replace(":", "x");
+          const gcsPath = `analysis/${mediaId}/thumbnails/${shortId}/${variantId}_${ratioStr}.png`;
+          try {
+            await uploadFile(gcsPath, localPath);
+            uploaded[ratio] = gcsPath;
+            console.log(`[thumbnail] ${mediaId}: uploaded ${ratio} → ${gcsPath}`);
+          } catch (e) {
+            console.error(`[thumbnail] ${mediaId}: upload failed for ${ratio}`, e);
+          }
+        }
+
+        // recommendation 엔티티의 thumbnails 필드 업데이트
+        const { rows } = await getPool().query(
+          `SELECT id, data FROM entities WHERE kind = 'recommendation' AND data->>'episodeId' = $1 AND (data->>'startTime')::float8 = $2`,
+          [episodeId, Number(short.start) || 0]
+        );
+        if (rows.length > 0) {
+          const rec = rows[0];
+          const recData = typeof rec.data === "string" ? JSON.parse(rec.data) : rec.data;
+          const thumbnails = Array.isArray(recData.thumbnails) ? recData.thumbnails : [];
+          const existingIndex = thumbnails.findIndex((thumbnail: any) => thumbnail?.id === variantId);
+          const thumbnail = {
+            id: variantId,
+            urls: uploaded,
+            aspect_ratios: Object.keys(uploaded),
+            frame_source_sec: Number(short.start) + 0.5,
+            caption_text: short.title || "",
+            caption_tone: "기본",
+            layout_preset: "variety",
+            person_bbox_used: result.plan?.person?.face_bbox_canvas || [],
+            generated_at: Date.now(),
+            // The first successful generated variant is the default selection.
+            chosen: thumbnails.length === 0,
+          };
+          if (existingIndex >= 0) thumbnails[existingIndex] = { ...thumbnails[existingIndex], ...thumbnail, chosen: Boolean(thumbnails[existingIndex]?.chosen) };
+          else thumbnails.push(thumbnail);
+          const selectedThumbnailId = recData.selectedThumbnailId && thumbnails.some((item: any) => item.id === recData.selectedThumbnailId)
+            ? recData.selectedThumbnailId
+            : thumbnails.find((item: any) => item.chosen)?.id ?? thumbnails[0]?.id;
+          recData.selectedThumbnailId = selectedThumbnailId;
+          recData.thumbnails = thumbnails.map((item: any) => ({ ...item, chosen: item.id === selectedThumbnailId }));
+          await putEntity("recommendation", rec.id, recData);
+        }
+      }
+    }
+  }
+
+  /** Reflect pipeline progress on the episode so the UI shows real status, not a guess. */
 async function setEpisodePipeline(episodeId: string, pipeline: Record<string, unknown>): Promise<void> {
   const ep = await getEntity<Record<string, unknown>>("episode", episodeId);
   if (ep) await putEntity("episode", episodeId, { ...ep, pipeline });
@@ -852,21 +1007,30 @@ export async function runContentAnalyze(mediaId: string, fast = false): Promise<
 
     const shorts: Short[] = Array.isArray(analysis?.shorts) ? analysis.shorts : [];
     // Surface the AI shorts on the episode's recommendation board (the product payoff).
-    let wrote = 0;
-    if (media.episodeId && shorts.length) {
-      try {
-        wrote = await writeRecommendationsFromShorts(media.episodeId, shorts, media.durationSec ?? 0);
-      } catch (e) {
-        console.error(`[worker] content.analyze ${mediaId}: failed to write recommendations`, e);
-      }
-    }
-    console.log(
-      `[worker] content.analyze ${mediaId}: ${analysis?.scenes?.length ?? 0} scenes, ` +
-      `${shorts.length} shorts, ${wrote} recs, ${castRows} cast, genre=${analysis?.genre ?? "-"}, ` +
-      `frames=${stored ? stored.frames : "not-stored"}`,
-    );
+        let wrote = 0;
+        if (media.episodeId && shorts.length) {
+          try {
+            wrote = await writeRecommendationsFromShorts(media.episodeId, shorts, media.durationSec ?? 0);
+          } catch (e) {
+            console.error(`[worker] content.analyze ${mediaId}: failed to write recommendations`, e);
+          }
+        }
+        console.log(
+          `[worker] content.analyze ${mediaId}: ${analysis?.scenes?.length ?? 0} scenes, ` +
+          `${shorts.length} shorts, ${wrote} recs, ${castRows} cast, genre=${analysis?.genre ?? "-"}, ` +
+          `frames=${stored ? stored.frames : "not-stored"}`,
+        );
 
-    if (media.episodeId) {
+        // ── NEW: Thumbnail generation stage (TS → Python 호출) ──
+        if (media.episodeId && shorts.length) {
+          try {
+            await runThumbnailGeneration(mediaId, media.episodeId, shorts, work);
+          } catch (e) {
+            console.error(`[worker] content.analyze ${mediaId}: thumbnail generation failed`, e);
+          }
+        }
+
+        if (media.episodeId) {
       await setEpisodePipeline(media.episodeId, {
         stage: "recommend",
         stageStatus: "done",

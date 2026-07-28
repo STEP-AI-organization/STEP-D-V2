@@ -1,0 +1,1873 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{font-family:'Pretendard',-apple-system,sans-serif;background:#0a0a0a;color:#eceef2;-webkit-font-smoothing:antialiased;overflow:hidden}
+  a{color:#8b93ff;text-decoration:none}
+  a:hover{color:#a7adff}
+  ::-webkit-scrollbar{width:10px;height:10px}
+  ::-webkit-scrollbar-thumb{background:#333333;border-radius:6px;border:2px solid #0a0a0a}
+  ::-webkit-scrollbar-track{background:transparent}
+  .mono{font-family:'JetBrains Mono',monospace}
+  .grotesk{font-family:'Space Grotesk',sans-serif}
+  @keyframes rpulse{0%,100%{opacity:.45}50%{opacity:1}}
+  @keyframes rfade{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+</style>
+</helmet>
+<div style="display:flex;height:100vh;width:100vw;font-size:14px">
+
+  <!-- ============ SIDEBAR ============ -->
+  <aside style="width:230px;flex:none;background:#131313;border-right:1px solid #232323;display:flex;flex-direction:column;padding:16px 12px">
+    <div style="display:flex;align-items:center;gap:10px;padding:6px 8px 18px">
+      <div style="width:30px;height:30px;border-radius:9px;background:linear-gradient(135deg,#8b93ff,#5a63e6);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:15px;color:#fff" class="grotesk">D</div>
+      <div><div style="font-weight:700;letter-spacing:-.3px;font-size:15px" class="grotesk">STEP D</div><div style="font-size:10.5px;color:#707070;margin-top:1px">Media Production OS</div></div>
+    </div>
+
+    <nav style="display:flex;flex-direction:column;gap:2px">
+      <sc-for list="{{ nav }}" as="item" hint-placeholder-count="8">
+        <button onClick="{{ item.go }}" style-hover="background:#1e1e1e;color:#eceef2" style="{{ item.style }}">
+          <span style="width:16px;display:flex;color:{{ item.icoColor }}">{{ item.iconEl }}</span>
+          <span style="flex:1;text-align:left">{{ item.label }}</span>
+          <sc-if value="{{ item.badge }}" hint-placeholder-val="{{ true }}"><span style="{{ item.badgeStyle }}">{{ item.badge }}</span></sc-if>
+        </button>
+      </sc-for>
+    </nav>
+
+    <div style="margin-top:auto;border:1px solid #232323;border-radius:11px;padding:12px">
+      <div style="font-size:11px;color:#707070;margin-bottom:8px;font-weight:600">이번 주 처리량</div>
+      <div style="display:flex;align-items:baseline;gap:6px"><span class="grotesk" style="font-size:22px;font-weight:700;color:#eceef2">18min</span><span style="font-size:11px;color:#707070">/ 원본당 검수</span></div>
+      <div style="font-size:11px;color:#34d399;margin-top:3px;font-weight:600">▾ 2시간 → 20분 이하</div>
+    </div>
+
+    <div style="display:flex;align-items:center;gap:10px;padding:10px 6px 2px;margin-top:10px;border-top:1px solid #232323">
+      <div style="width:28px;height:28px;border-radius:50%;background:#232323;display:flex;align-items:center;justify-content:center;font-weight:600;font-size:12px;color:#a6a6a6">운</div>
+      <div style="flex:1"><div style="font-size:12.5px;font-weight:600">김운영</div><div style="font-size:10.5px;color:#707070">STEP D · admin</div></div>
+    </div>
+  </aside>
+
+  <!-- ============ MAIN ============ -->
+  <main style="flex:1;min-width:0;display:flex;flex-direction:column;background:#0a0a0a">
+
+    <header style="height:54px;flex:none;border-bottom:1px solid #232323;display:flex;align-items:center;padding:0 22px;gap:14px">
+      <div style="display:flex;align-items:center;gap:8px;font-size:13px;color:#9a9a9a">
+        <span>{{ crumbRoot }}</span>
+        <sc-if value="{{ crumbLeaf }}" hint-placeholder-val="{{ true }}"><span style="color:#3a3a3a">/</span><span style="color:#eceef2;font-weight:600">{{ crumbLeaf }}</span></sc-if>
+      </div>
+      <div style="flex:1"></div>
+      <div style="display:flex;align-items:center;gap:8px;font-size:12px;color:#9a9a9a;background:#161616;border:1px solid #232323;border-radius:999px;padding:6px 12px">
+        <span style="width:7px;height:7px;border-radius:50%;background:#34d399"></span>분석 워커 4대 · 큐 2
+      </div>
+      <button onClick="{{ openUpload }}" style-hover="background:#5a63e6" style="display:flex;align-items:center;gap:7px;background:#6b74f0;border:none;color:#fff;font-weight:600;font-size:13px;border-radius:9px;padding:8px 15px;cursor:pointer;font-family:inherit">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M12 5v14M5 12h14"/></svg>원본 업로드
+      </button>
+    </header>
+
+    <div style="flex:1;min-height:0;overflow:auto">
+
+      <!-- ========= LIBRARY ========= -->
+      <sc-if value="{{ isLibrary }}" hint-placeholder-val="{{ true }}">
+      <div style="padding:26px 30px;max-width:1320px;animation:rfade .3s ease">
+        <div style="color:#8b93ff;font-size:13.5px;font-weight:600;margin-bottom:7px">소스 영상 라이브러리</div>
+        <h1 class="grotesk" style="font-size:25px;font-weight:700;letter-spacing:-.5px;margin-bottom:8px">콘텐츠</h1>
+        <p style="color:#9a9a9a;font-size:13px;margin-bottom:22px">원본을 올리면 AI가 <b style="color:#eceef2">영상의 모든 정보를 시간축 데이터로 구조화</b>합니다. 영상을 누르면 검수 워크스페이스가 열려요.</p>
+
+        <div style="display:flex;align-items:center;gap:9px;margin-bottom:22px">
+          <span style="font-size:12px;color:#707070;font-weight:600">프로그램</span>
+          <select value="{{ programSel.value }}" onChange="{{ programSel.change }}" style="background:#161616;border:1px solid #2b2b2b;color:#e5e5e5;font-size:12.5px;font-weight:600;border-radius:9px;padding:8px 12px;cursor:pointer;font-family:inherit;min-width:200px">
+            <sc-for list="{{ programSel.options }}" as="o" hint-placeholder-count="5"><option value="{{ o.v }}">{{ o.label }}</option></sc-for>
+          </select>
+        </div>
+
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px">
+          <sc-for list="{{ videos }}" as="v" hint-placeholder-count="6">
+            <button onClick="{{ v.open }}" style-hover="border-color:#3a3a3a;transform:translateY(-2px)" style="text-align:left;background:#161616;border:1px solid #262626;border-radius:14px;overflow:hidden;cursor:pointer;font-family:inherit;color:inherit;transition:transform .12s,border-color .12s;{{ v.dim }}">
+              <div style="position:relative;width:100%;aspect-ratio:16/9;background:{{ v.thumb }}">
+                <span style="position:absolute;top:9px;left:9px;font-size:10.5px;font-weight:600;border-radius:999px;padding:3px 9px;color:#fff;background:rgba(0,0,0,.45);backdrop-filter:blur(4px)">{{ v.prog }}</span>
+                <span style="{{ v.statusStyle }}">{{ v.statusLabel }}</span>
+                <span class="mono" style="position:absolute;bottom:9px;right:9px;font-size:11px;font-weight:600;border-radius:5px;padding:2px 7px;color:#fff;background:rgba(0,0,0,.6)">{{ v.dur }}</span>
+                <div style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:46px;height:46px;border-radius:50%;background:rgba(10,11,15,.5);backdrop-filter:blur(3px);display:flex;align-items:center;justify-content:center;border:1px solid rgba(255,255,255,.28)">
+                  <svg width="18" height="18" viewBox="0 0 24 24" fill="#fff" style="margin-left:2px"><path d="M8 5v14l11-7z"/></svg>
+                </div>
+              </div>
+              <div style="padding:13px 15px 15px">
+                <div style="font-size:15px;font-weight:700;letter-spacing:-.3px">{{ v.ep }} <span style="color:#707070;font-weight:500;font-size:12.5px">· {{ v.prog }}</span></div>
+                <div style="font-size:11.5px;color:#707070;margin-top:3px">업로드 {{ v.uploaded }}</div>
+                <sc-if value="{{ v.ok }}" hint-placeholder-val="{{ true }}">
+                <div style="display:flex;gap:12px;margin-top:13px;padding-top:12px;border-top:1px solid #232323">
+                  <div><div class="grotesk" style="font-size:17px;font-weight:700;color:#eceef2">{{ v.shorts }}</div><div style="font-size:10px;color:#707070;margin-top:1px">쇼츠 후보</div></div>
+                  <div><div class="grotesk" style="font-size:17px;font-weight:700;color:#eceef2">{{ v.ppl }}</div><div style="font-size:10px;color:#707070;margin-top:1px">PPL 노출</div></div>
+                  <div><div class="grotesk" style="font-size:17px;font-weight:700;color:#eceef2">{{ v.issues }}</div><div style="font-size:10px;color:#707070;margin-top:1px">QC 이슈</div></div>
+                  <div style="margin-left:auto;align-self:center;color:#8b93ff;font-size:12px;font-weight:600;display:flex;align-items:center;gap:3px">검수<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M5 12h14M13 6l6 6-6 6"/></svg></div>
+                </div>
+                </sc-if>
+                <sc-if value="{{ v.analyzing }}" hint-placeholder-val="{{ true }}">
+                <div style="margin-top:13px;padding-top:12px;border-top:1px solid #232323;font-size:11.5px;color:#fbbf24;font-weight:600">AI 분석 진행 중 {{ v.pct }}% · 완료 후 데이터가 채워져요</div>
+                </sc-if>
+                <sc-if value="{{ v.failed }}" hint-placeholder-val="{{ true }}">
+                <div style="margin-top:13px;padding-top:12px;border-top:1px solid #232323;font-size:11.5px;color:#ff6b78;font-weight:600">분석 실패 · 오디오 트랙 없음 — 재업로드 필요</div>
+                </sc-if>
+              </div>
+            </button>
+          </sc-for>
+        </div>
+      </div>
+      </sc-if>
+
+      <!-- ========= REVIEW WORKSPACE ========= -->
+      <sc-if value="{{ isReview }}" hint-placeholder-val="{{ true }}">
+      <div style="padding:18px 24px 26px;animation:rfade .3s ease">
+        <button onClick="{{ back }}" style-hover="color:#eceef2" style="display:inline-flex;align-items:center;gap:4px;background:none;border:none;color:#707070;font-size:12px;cursor:pointer;font-family:inherit;margin-bottom:10px">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M15 6l-6 6 6 6"/></svg>콘텐츠
+        </button>
+        <div style="display:flex;align-items:flex-end;gap:14px;margin-bottom:16px">
+          <div>
+            <h1 class="grotesk" style="font-size:22px;font-weight:700;letter-spacing:-.4px">{{ epTitle }}</h1>
+            <div style="font-size:12px;color:#707070;margin-top:3px">{{ epSub }}</div>
+          </div>
+          <span style="flex:1"></span>
+          <span style="font-size:12px;font-weight:600;color:#8b93ff;background:rgba(139,147,255,.12);border:1px solid rgba(139,147,255,.28);border-radius:999px;padding:5px 12px">추천 검토 단계</span>
+        </div>
+
+        <!-- pipeline strip -->
+        <div style="display:flex;align-items:center;gap:0;margin-bottom:20px;background:#161616;border:1px solid #232323;border-radius:12px;padding:14px 18px;overflow-x:auto">
+          <sc-for list="{{ pipeline }}" as="st" hint-placeholder-count="8">
+            <div style="display:flex;align-items:center;flex:none">
+              <div style="display:flex;flex-direction:column;align-items:center;gap:6px;min-width:52px">
+                <div style="width:26px;height:26px;border-radius:50%;display:flex;align-items:center;justify-content:center;{{ st.dotStyle }}">
+                  <span>{{ st.markEl }}</span>
+                </div>
+                <span style="font-size:11px;font-weight:600;{{ st.labelStyle }}">{{ st.label }}</span>
+              </div>
+              <sc-if value="{{ st.connector }}" hint-placeholder-val="{{ true }}"><div style="width:26px;height:2px;background:{{ st.lineColor }};margin:0 2px 20px"></div></sc-if>
+            </div>
+          </sc-for>
+        </div>
+
+        <!-- tabs -->
+        <div style="display:flex;gap:2px;border-bottom:1px solid #232323;margin-bottom:18px">
+          <sc-for list="{{ tabs }}" as="tb" hint-placeholder-count="4">
+            <button onClick="{{ tb.go }}" style="{{ tb.style }}">{{ tb.label }}<sc-if value="{{ tb.count }}" hint-placeholder-val="{{ true }}"><span style="{{ tb.countStyle }}">{{ tb.count }}</span></sc-if></button>
+          </sc-for>
+        </div>
+
+        <!-- ===== TIMELINE TAB (hero) ===== -->
+        <sc-if value="{{ tabTimeline }}" hint-placeholder-val="{{ true }}">
+        <div style="display:grid;grid-template-columns:1fr 340px;gap:18px;align-items:start">
+          <!-- LEFT: player + timeline -->
+          <div style="min-width:0">
+            <div style="position:relative;aspect-ratio:16/9;background:#000;border-radius:12px;overflow:hidden;border:1px solid #232323;display:flex;align-items:center;justify-content:center">
+              <div style="position:absolute;inset:0;background:radial-gradient(120% 90% at 30% 20%,#191d26,#050609)"></div>
+              <div style="position:absolute;top:12px;left:14px;font-size:11px;color:#cfcfcf;background:rgba(0,0,0,.4);backdrop-filter:blur(4px);border-radius:6px;padding:3px 8px;font-weight:600">원본 프록시 스트림</div>
+              <div style="position:relative;width:56px;height:56px;border-radius:50%;background:rgba(139,147,255,.18);backdrop-filter:blur(6px);display:flex;align-items:center;justify-content:center;border:1px solid rgba(139,147,255,.4)">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="#c3c8ff" style="margin-left:3px"><path d="M8 5v14l11-7z"/></svg>
+              </div>
+              <div class="mono" style="position:absolute;bottom:12px;left:14px;right:14px;display:flex;justify-content:space-between;font-size:13px;color:#e5e5e5"><span>{{ playLabel }}</span><span style="color:#9a9a9a">{{ totalLabel }}</span></div>
+            </div>
+
+            <!-- lane filter -->
+            <div style="display:flex;align-items:center;gap:9px;margin:16px 0 10px;flex-wrap:wrap">
+              <span style="font-size:12px;color:#9a9a9a">AI가 이 원본을 <b style="color:#eceef2">시간축 데이터</b>로 구조화했어요 —</span>
+              <div style="display:flex;gap:6px;flex-wrap:wrap">
+                <sc-for list="{{ laneChips }}" as="lc" hint-placeholder-count="5">
+                  <button onClick="{{ lc.toggle }}" style="{{ lc.style }}"><span style="width:8px;height:8px;border-radius:2px;background:{{ lc.color }};display:inline-block;{{ lc.dot }}"></span>{{ lc.label }} {{ lc.count }}</button>
+                </sc-for>
+              </div>
+            </div>
+
+            <!-- timeline -->
+            <div style="background:#161616;border:1px solid #232323;border-radius:12px;padding:14px 16px 16px">
+              <!-- ruler -->
+              <div style="display:grid;grid-template-columns:96px 1fr;gap:10px;margin-bottom:8px">
+                <div></div>
+                <div class="mono" style="position:relative;height:14px;color:#6b6b6b;font-size:10px">
+                  <sc-for list="{{ ticks }}" as="tk" hint-placeholder-count="6"><span style="position:absolute;left:{{ tk.left }};transform:translateX(-50%)">{{ tk.label }}</span></sc-for>
+                </div>
+              </div>
+              <!-- lanes -->
+              <div style="display:flex;flex-direction:column;gap:7px">
+                <sc-for list="{{ lanesView }}" as="lane" hint-placeholder-count="5">
+                  <div style="display:grid;grid-template-columns:96px 1fr;gap:10px;align-items:center">
+                    <div style="display:flex;align-items:center;gap:6px;min-width:0"><span style="width:8px;height:8px;border-radius:2px;background:{{ lane.color }};flex:none"></span><span style="font-size:11px;font-weight:600;color:#a6a6a6;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ lane.label }}</span></div>
+                    <div style="position:relative;height:26px;background:#0e0e0e;border:1px solid #222222;border-radius:6px">
+                      <div style="position:absolute;top:-2px;bottom:-2px;width:2px;background:#eceef2;left:{{ playPct }};z-index:3"></div>
+                      <sc-for list="{{ lane.items }}" as="it" hint-placeholder-count="4">
+                        <button onClick="{{ it.click }}" title="{{ it.title }}" style="{{ it.style }}">{{ it.badge }}</button>
+                      </sc-for>
+                    </div>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+          </div>
+
+          <!-- RIGHT: inspector -->
+          <div style="position:sticky;top:0">
+            <sc-if value="{{ hasSel }}" hint-placeholder-val="{{ true }}">
+            <div style="background:#161616;border:1px solid #262626;border-radius:14px;overflow:hidden;animation:rfade .2s ease">
+              <div style="height:4px;background:{{ sel.color }}"></div>
+              <div style="padding:16px">
+                <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px">
+                  <span style="font-size:11px;font-weight:700;color:{{ sel.color }};background:{{ sel.tint }};border:1px solid {{ sel.line }};border-radius:6px;padding:3px 9px">{{ sel.laneLabel }}</span>
+                  <span class="mono" style="font-size:11.5px;color:#9a9a9a">{{ sel.range }}</span>
+                  <span style="flex:1"></span>
+                  <button onClick="{{ clearSel }}" style-hover="color:#eceef2" style="background:none;border:none;color:#707070;cursor:pointer;font-family:inherit;font-size:16px;line-height:1">✕</button>
+                </div>
+                <div style="font-size:16px;font-weight:700;letter-spacing:-.3px;line-height:1.4;margin-bottom:6px">{{ sel.title }}</div>
+                <div style="font-size:12.5px;color:#9a9a9a;line-height:1.55;margin-bottom:14px">{{ sel.desc }}</div>
+
+                <sc-for list="{{ sel.facts }}" as="f" hint-placeholder-count="3">
+                  <div style="display:flex;justify-content:space-between;gap:10px;padding:8px 0;border-top:1px solid #232323;font-size:12.5px"><span style="color:#707070">{{ f.k }}</span><span style="color:#e5e5e5;font-weight:600">{{ f.v }}</span></div>
+                </sc-for>
+
+                <div style="display:flex;gap:8px;margin-top:15px">
+                  <button onClick="{{ sel.primaryAct }}" style="{{ sel.primaryStyle }}">{{ sel.primaryLabel }}</button>
+                  <button onClick="{{ sel.secondaryAct }}" style-hover="border-color:#3a3a3a;color:#cfcfcf" style="background:transparent;border:1px solid #333333;color:#9a9a9a;font-size:12.5px;font-weight:600;border-radius:9px;padding:9px 14px;cursor:pointer;font-family:inherit;white-space:nowrap">{{ sel.secondaryLabel }}</button>
+                </div>
+              </div>
+            </div>
+            </sc-if>
+
+            <sc-if value="{{ noSel }}" hint-placeholder-val="{{ true }}">
+            <div style="background:#161616;border:1px solid #262626;border-radius:14px;padding:16px">
+              <div style="font-size:13px;font-weight:700;margin-bottom:4px">구조화된 데이터 요약</div>
+              <div style="font-size:12px;color:#707070;line-height:1.5;margin-bottom:14px">타임라인의 블록을 누르면 상세와 처리 액션이 여기에 나와요.</div>
+              <sc-for list="{{ summary }}" as="sm" hint-placeholder-count="5">
+                <div style="display:flex;align-items:center;gap:10px;padding:10px 0;border-top:1px solid #232323">
+                  <span style="width:9px;height:9px;border-radius:3px;background:{{ sm.color }};flex:none"></span>
+                  <span style="flex:1;font-size:12.5px;color:#cfcfcf">{{ sm.label }}</span>
+                  <span class="grotesk" style="font-size:15px;font-weight:700;color:#eceef2">{{ sm.value }}</span>
+                </div>
+              </sc-for>
+              <div style="margin-top:14px;padding:12px;background:#121212;border:1px solid #232323;border-radius:10px">
+                <div style="font-size:11px;color:#707070;margin-bottom:4px">검수 절감 (누적)</div>
+                <div style="display:flex;align-items:baseline;gap:6px"><span class="grotesk" style="font-size:20px;font-weight:700;color:#34d399">1h 42m</span><span style="font-size:11px;color:#707070">→ 이 원본 검수 18분</span></div>
+              </div>
+            </div>
+            </sc-if>
+          </div>
+        </div>
+        </sc-if>
+
+        <!-- ===== CLIPS TAB ===== -->
+        <sc-if value="{{ tabClips }}" hint-placeholder-val="{{ true }}">
+        <div style="max-width:860px">
+          <div style="display:flex;align-items:center;gap:10px;background:rgba(139,147,255,.08);border:1px solid rgba(139,147,255,.25);border-radius:10px;padding:10px 13px;margin-bottom:14px">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#a7adff" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 8v5M12 16h.01"/></svg>
+            <span style="font-size:12.5px;color:#c3c8ff">프리뷰는 근사치예요. <b>확정·익스포트</b> 시 목적지 프리셋(9:16 / 자막 번인)으로 서버가 1회 렌더합니다.</span>
+          </div>
+          <sc-if value="{{ hasClips }}" hint-placeholder-val="{{ true }}">
+          <div style="display:flex;flex-direction:column;gap:10px">
+            <sc-for list="{{ clipList }}" as="c" hint-placeholder-count="2">
+              <div style="display:flex;gap:14px;background:#161616;border:1px solid #262626;border-radius:12px;padding:13px 15px;align-items:center">
+                <div style="width:58px;height:103px;flex:none;border-radius:7px;background:{{ c.thumb }};position:relative"><div class="mono" style="position:absolute;bottom:5px;left:0;right:0;text-align:center;font-size:9px;color:#e6e9ef">9:16</div></div>
+                <div style="flex:1;min-width:0">
+                  <div style="display:flex;align-items:center;gap:8px;margin-bottom:5px"><span style="{{ c.stateStyle }}">{{ c.state }}</span><span class="mono" style="font-size:11px;color:#707070">{{ c.range }}</span></div>
+                  <div style="font-size:14px;font-weight:700;letter-spacing:-.3px;margin-bottom:4px">{{ c.title }}</div>
+                  <div style="font-size:12px;color:#9a9a9a">{{ c.sub }}</div>
+                </div>
+                <div style="display:flex;flex-direction:column;gap:7px;flex:none">
+                  <button onClick="{{ c.openEditor }}" style-hover="border-color:#3a3a3a;color:#eceef2" style="background:#1e1e1e;border:1px solid #2b2b2b;color:#cfcfcf;font-size:12.5px;font-weight:600;border-radius:8px;padding:7px 15px;cursor:pointer;font-family:inherit">편집기</button>
+                  <button onClick="{{ c.confirm }}" style="{{ c.confirmStyle }}">{{ c.confirmLabel }}</button>
+                </div>
+              </div>
+            </sc-for>
+          </div>
+          </sc-if>
+          <sc-if value="{{ noClips }}" hint-placeholder-val="{{ true }}">
+          <div style="text-align:center;padding:50px;color:#707070"><div style="font-size:14px;margin-bottom:6px">아직 채택한 클립이 없어요</div><button onClick="{{ gotoTimeline }}" style-hover="color:#a7adff" style="background:none;border:none;color:#8b93ff;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit">타임라인에서 쇼츠 후보 채택하기 →</button></div>
+          </sc-if>
+        </div>
+        </sc-if>
+
+        <!-- ===== PPL REPORT TAB ===== -->
+        <sc-if value="{{ tabPpl }}" hint-placeholder-val="{{ true }}">
+        <div style="max-width:900px">
+          <div style="display:flex;align-items:center;gap:14px;margin-bottom:16px;flex-wrap:wrap">
+            <div style="background:#161616;border:1px solid #262626;border-radius:12px;padding:12px 18px"><div style="font-size:11px;color:#707070;margin-bottom:3px">총 노출 시간</div><div class="grotesk" style="font-size:22px;font-weight:700;color:#f5a524">{{ pplTotal }}초</div></div>
+            <div style="background:#161616;border:1px solid #262626;border-radius:12px;padding:12px 18px"><div style="font-size:11px;color:#707070;margin-bottom:3px">감지 브랜드</div><div class="grotesk" style="font-size:22px;font-weight:700">{{ pplCount }}</div></div>
+            <span style="flex:1"></span>
+            <button onClick="{{ exportCsv }}" style-hover="border-color:#3a3a3a;color:#eceef2" style="display:flex;align-items:center;gap:7px;background:#1e1e1e;border:1px solid #2b2b2b;color:#cfcfcf;font-size:12.5px;font-weight:600;border-radius:9px;padding:9px 15px;cursor:pointer;font-family:inherit"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>CSV 내보내기</button>
+          </div>
+          <div style="border:1px solid #262626;border-radius:12px;overflow-x:auto">
+            <div style="display:grid;grid-template-columns:minmax(140px,1.4fr) 88px 96px minmax(110px,1fr) 88px;min-width:min-content;background:#161616;border-bottom:1px solid #262626;font-size:11px;font-weight:700;color:#9a9a9a">
+              <div style="padding:11px 14px">브랜드 / 제품</div><div style="padding:11px 8px;text-align:center;border-left:1px solid #232323">노출(초)</div><div style="padding:11px 8px;text-align:center;border-left:1px solid #232323">신호</div><div style="padding:11px 8px;border-left:1px solid #232323">구간</div><div style="padding:11px 8px;text-align:center;border-left:1px solid #232323">리포트</div>
+            </div>
+            <sc-for list="{{ pplRows }}" as="row" hint-placeholder-count="4">
+              <div style="display:grid;grid-template-columns:minmax(140px,1.4fr) 88px 96px minmax(110px,1fr) 88px;min-width:min-content;border-bottom:1px solid #1f1f1f;align-items:center;{{ row.dim }}">
+                <div style="padding:11px 14px;font-size:13px;font-weight:600">{{ row.brand }}</div>
+                <div class="grotesk" style="padding:11px 8px;text-align:center;border-left:1px solid #1f1f1f;font-size:15px;font-weight:700;color:#f5a524">{{ row.exp }}</div>
+                <div style="padding:11px 8px;text-align:center;border-left:1px solid #1f1f1f;font-size:11px;color:#cfcfcf">{{ row.signal }}</div>
+                <div class="mono" style="padding:11px 8px;border-left:1px solid #1f1f1f;font-size:11px;color:#9a9a9a">{{ row.range }}</div>
+                <div style="padding:11px 8px;text-align:center;border-left:1px solid #1f1f1f"><button onClick="{{ row.toggle }}" style="{{ row.toggleStyle }}">{{ row.toggleLabel }}</button></div>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+        </sc-if>
+
+        <!-- ===== PERFORMANCE TAB ===== -->
+        <sc-if value="{{ tabPerf }}" hint-placeholder-val="{{ true }}">
+        <div style="max-width:900px;display:flex;flex-direction:column;gap:16px">
+          <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px">
+            <sc-for list="{{ perfClips }}" as="pc" hint-placeholder-count="3">
+              <div style="background:#161616;border:1px solid #262626;border-radius:12px;padding:14px 15px">
+                <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px"><span style="width:7px;height:7px;border-radius:50%;background:#f87171"></span><span style="font-size:12.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ pc.title }}</span></div>
+                <div style="display:flex;gap:14px">
+                  <div><div class="grotesk" style="font-size:19px;font-weight:700">{{ pc.views }}</div><div style="font-size:10px;color:#707070;margin-top:1px">조회수</div></div>
+                  <div><div class="grotesk" style="font-size:19px;font-weight:700">{{ pc.likes }}</div><div style="font-size:10px;color:#707070;margin-top:1px">좋아요</div></div>
+                  <div><div class="grotesk" style="font-size:19px;font-weight:700">{{ pc.comments }}</div><div style="font-size:10px;color:#707070;margin-top:1px">댓글</div></div>
+                </div>
+                <div style="margin-top:11px;font-size:11px;color:#707070">{{ pc.channel }} · {{ pc.ago }}</div>
+              </div>
+            </sc-for>
+          </div>
+          <div style="background:#161616;border:1px solid #262626;border-radius:12px;padding:16px 18px">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#8b93ff" stroke-width="2"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg><span style="font-size:13px;font-weight:700">댓글 AI 요약</span><span style="font-size:11px;color:#707070">· 게시 클립 322개 댓글</span></div>
+            <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
+              <span style="font-size:11px;font-weight:600;color:#34d399;background:rgba(52,211,153,.1);border:1px solid rgba(52,211,153,.28);border-radius:999px;padding:3px 10px">긍정 78%</span>
+              <span style="font-size:11px;font-weight:600;color:#fbbf24;background:rgba(251,191,36,.1);border:1px solid rgba(251,191,36,.28);border-radius:999px;padding:3px 10px">중립 15%</span>
+              <span style="font-size:11px;font-weight:600;color:#f87171;background:rgba(248,113,113,.1);border:1px solid rgba(248,113,113,.28);border-radius:999px;padding:3px 10px">부정 7%</span>
+            </div>
+            <div style="font-size:12.5px;color:#cfcfcf;line-height:1.65">시청자들은 <b style="color:#eceef2">영숙의 고백 장면</b>에 압도적으로 반응했고, "영숙 답장 언제 나옴?"처럼 <b style="color:#eceef2">다음 전개를 기대하는 댓글</b>이 많아요. 자막 가독성 호평이 반복되며, 일부는 <b style="color:#eceef2">풀버전 링크</b>를 요청합니다.</div>
+          </div>
+        </div>
+        </sc-if>
+
+      </div>
+      </sc-if>
+
+      <!-- ========= DASHBOARD ========= -->
+      <sc-if value="{{ isDashboard }}" hint-placeholder-val="{{ true }}">
+      <div style="padding:26px 30px;max-width:1320px;animation:rfade .3s ease">
+        <div style="color:#8b93ff;font-size:13.5px;font-weight:600;margin-bottom:7px">이번 주 미디어 운영</div>
+        <h1 class="grotesk" style="font-size:25px;font-weight:700;letter-spacing:-.5px;margin-bottom:20px">대시보드</h1>
+
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:14px;margin-bottom:20px">
+          <sc-for list="{{ dashKpi }}" as="k" hint-placeholder-count="4">
+            <div style="background:#161616;border:1px solid #262626;border-radius:14px;padding:16px 18px">
+              <div style="font-size:11.5px;color:#707070;margin-bottom:9px;font-weight:600">{{ k.label }}</div>
+              <div style="display:flex;align-items:baseline;gap:4px"><span class="grotesk" style="font-size:30px;font-weight:700;color:{{ k.color }};letter-spacing:-.5px">{{ k.value }}</span><span style="font-size:14px;color:#9a9a9a;font-weight:600">{{ k.unit }}</span></div>
+              <div style="font-size:11.5px;font-weight:600;margin-top:7px;color:{{ k.dc }}">{{ k.delta }}</div>
+            </div>
+          </sc-for>
+        </div>
+
+        <div style="display:grid;grid-template-columns:1fr 340px;gap:18px;align-items:start">
+          <div style="background:#161616;border:1px solid #262626;border-radius:14px;padding:18px 20px">
+            <div style="display:flex;align-items:center;margin-bottom:14px"><span style="font-size:14px;font-weight:700">검수 대기</span><span style="flex:1"></span><button onClick="{{ gotoLibrary }}" style-hover="color:#a7adff" style="background:none;border:none;color:#8b93ff;font-size:12.5px;font-weight:600;cursor:pointer;font-family:inherit">전체 콘텐츠 →</button></div>
+            <div style="display:flex;flex-direction:column;gap:10px">
+              <sc-for list="{{ dashReview }}" as="r" hint-placeholder-count="2">
+                <button onClick="{{ r.open }}" style-hover="border-color:#3a3a3a" style="display:flex;gap:13px;align-items:center;text-align:left;background:#121212;border:1px solid #232323;border-radius:11px;padding:11px 12px;cursor:pointer;font-family:inherit;color:inherit;transition:border-color .12s">
+                  <div style="width:78px;height:44px;flex:none;border-radius:7px;background:{{ r.thumb }}"></div>
+                  <div style="flex:1;min-width:0">
+                    <div style="font-size:13.5px;font-weight:700;letter-spacing:-.3px">{{ r.prog }} · {{ r.ep }}</div>
+                    <div style="font-size:11.5px;color:#707070;margin-top:2px">원본 {{ r.dur }} · 쇼츠 {{ r.shorts }} · QC {{ r.issues }} · {{ r.uploaded }}</div>
+                  </div>
+                  <span style="font-size:10.5px;font-weight:700;border-radius:999px;padding:3px 9px;color:{{ r.statusColor }};background:{{ r.statusBg }};flex:none">{{ r.statusLabel }}</span>
+                </button>
+              </sc-for>
+            </div>
+          </div>
+
+          <div style="display:flex;flex-direction:column;gap:16px">
+            <div style="background:#161616;border:1px solid #262626;border-radius:14px;padding:16px 18px">
+              <div style="font-size:13px;font-weight:700;margin-bottom:13px">처리 큐</div>
+              <sc-for list="{{ dashQueue }}" as="q" hint-placeholder-count="2">
+                <div style="margin-bottom:12px">
+                  <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:5px"><span style="color:#cfcfcf;font-weight:600">{{ q.label }}</span><span class="mono" style="color:#9a9a9a">{{ q.stage }} {{ q.pct }}%</span></div>
+                  <div style="height:6px;background:#0e0e0e;border-radius:99px;overflow:hidden"><div style="height:100%;width:{{ q.pct }}%;background:{{ q.color }};border-radius:99px"></div></div>
+                </div>
+              </sc-for>
+              <div style="font-size:11.5px;color:#707070;margin-top:2px">분석 워커 4대 가동 · 유휴 1대</div>
+            </div>
+            <div style="background:#161616;border:1px solid #262626;border-radius:14px;padding:16px 18px">
+              <div style="font-size:13px;font-weight:700;margin-bottom:11px">확인 필요</div>
+              <div style="display:flex;flex-direction:column;gap:2px">
+                <sc-for list="{{ dashAlerts }}" as="a" hint-placeholder-count="3">
+                  <button onClick="{{ a.go }}" style-hover="background:#1e1e1e" style="display:flex;gap:10px;align-items:flex-start;text-align:left;background:none;border:none;border-radius:9px;padding:9px 8px;cursor:pointer;font-family:inherit;color:inherit">
+                    <span style="width:8px;height:8px;border-radius:50%;background:{{ a.c }};margin-top:4px;flex:none"></span>
+                    <span><span style="font-size:12.5px;font-weight:600;display:block">{{ a.t }}</span><span style="font-size:11px;color:#707070">{{ a.s }}</span></span>
+                  </button>
+                </sc-for>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      </sc-if>
+
+      <!-- ========= PROGRAMS ========= -->
+      <sc-if value="{{ isPrograms }}" hint-placeholder-val="{{ true }}">
+      <div style="padding:26px 30px;max-width:1080px;animation:rfade .3s ease">
+        <div style="display:flex;align-items:flex-end;gap:14px;margin-bottom:20px;flex-wrap:wrap">
+          <div>
+            <div style="color:#8b93ff;font-size:13.5px;font-weight:600;margin-bottom:7px">프로그램 → 회차</div>
+            <h1 class="grotesk" style="font-size:25px;font-weight:700;letter-spacing:-.5px">프로그램</h1>
+            <p style="color:#9a9a9a;font-size:13px;margin-top:6px">프로그램을 먼저 등록한 뒤 원본을 업로드하면 회차·추천이 생성돼요.</p>
+          </div>
+          <span style="flex:1"></span>
+          <button onClick="{{ newProgram }}" style-hover="background:#5a63e6" style="display:flex;align-items:center;gap:7px;background:#6b74f0;border:none;color:#fff;font-weight:600;font-size:13px;border-radius:9px;padding:9px 16px;cursor:pointer;font-family:inherit"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M12 5v14M5 12h14"/></svg>새 프로그램</button>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:12px">
+          <sc-for list="{{ progCards }}" as="p" hint-placeholder-count="4">
+            <div style="display:flex;align-items:center;gap:16px;background:#161616;border:1px solid #262626;border-radius:14px;padding:16px 18px;flex-wrap:wrap">
+              <div style="width:52px;height:68px;flex:none;border-radius:10px;background:linear-gradient(160deg,rgba(139,147,255,.2),rgba(139,147,255,.05));border:1px solid #262626;display:flex;align-items:center;justify-content:center;font-size:26px">{{ p.face }}</div>
+              <div style="flex:1;min-width:180px">
+                <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap"><span style="font-size:16px;font-weight:700;letter-spacing:-.3px">{{ p.title }}</span><span style="font-size:11px;font-weight:600;color:#9a9a9a;background:#0e0e0e;border:1px solid #2b2b2b;border-radius:6px;padding:2px 8px">{{ p.section }}</span><span style="font-size:11px;font-weight:600;color:#9a9a9a;background:#0e0e0e;border:1px solid #2b2b2b;border-radius:6px;padding:2px 8px">{{ p.age }}</span></div>
+                <div style="font-size:12px;color:#707070;margin-top:5px">회차 {{ p.eps }} · 쇼츠 {{ p.shorts }} · {{ p.cast }}</div>
+                <div style="margin-top:9px"><span style="{{ p.smrStyle }}">{{ p.smrLabel }}</span></div>
+              </div>
+              <div style="display:flex;gap:8px;flex:none">
+                <button onClick="{{ p.open }}" style-hover="border-color:#3a3a3a;color:#e5e5e5" style="background:#1e1e1e;border:1px solid #2b2b2b;color:#cfcfcf;font-size:12.5px;font-weight:600;border-radius:9px;padding:9px 15px;cursor:pointer;font-family:inherit">회차 보기</button>
+                <button onClick="{{ p.upload }}" style-hover="background:#5a63e6" style="display:flex;align-items:center;gap:6px;background:#6b74f0;border:none;color:#fff;font-size:12.5px;font-weight:600;border-radius:9px;padding:9px 15px;cursor:pointer;font-family:inherit"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 3v12M8 11l4-4 4 4M4 19h16"/></svg>업로드</button>
+              </div>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+      </sc-if>
+
+      <!-- ========= GLOBAL CLIPS ========= -->
+      <sc-if value="{{ isClips }}" hint-placeholder-val="{{ true }}">
+      <div style="padding:26px 30px;max-width:1320px;animation:rfade .3s ease">
+        <div style="color:#8b93ff;font-size:13.5px;font-weight:600;margin-bottom:7px">전체 프로그램</div>
+        <h1 class="grotesk" style="font-size:25px;font-weight:700;letter-spacing:-.5px;margin-bottom:8px">클립</h1>
+        <p style="color:#9a9a9a;font-size:13px;margin-bottom:20px">채택한 쇼츠 후보가 초안 → 확정(서버 1회 렌더) → 게시 상태로 흐릅니다.</p>
+        <div style="display:flex;gap:7px;margin-bottom:20px">
+          <sc-for list="{{ clipsFilters }}" as="f" hint-placeholder-count="4"><button onClick="{{ f.pick }}" style="{{ f.style }}">{{ f.label }}</button></sc-for>
+        </div>
+        <sc-if value="{{ hasGClips }}" hint-placeholder-val="{{ true }}">
+        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:16px">
+          <sc-for list="{{ gClips }}" as="c" hint-placeholder-count="6">
+            <div style="background:#161616;border:1px solid #262626;border-radius:14px;overflow:hidden;display:flex;flex-direction:column">
+              <div style="position:relative;aspect-ratio:9/16;max-height:230px;background:{{ c.thumb }}">
+                <span style="position:absolute;top:9px;left:9px;{{ c.stateStyle }}">{{ c.stateLabel }}</span>
+                <sc-if value="{{ c.hasViews }}" hint-placeholder-val="{{ true }}"><span class="mono" style="position:absolute;bottom:9px;left:9px;font-size:11px;font-weight:600;color:#fff;background:rgba(0,0,0,.55);border-radius:5px;padding:2px 7px">▶ {{ c.views }}</span></sc-if>
+              </div>
+              <div style="padding:12px 13px 13px;flex:1;display:flex;flex-direction:column">
+                <div style="font-size:13px;font-weight:700;letter-spacing:-.3px;line-height:1.35;text-wrap:pretty">{{ c.title }}</div>
+                <div style="font-size:11px;color:#707070;margin-top:5px">{{ c.prog }} · <span class="mono">{{ c.range }}</span></div>
+                <div style="display:flex;gap:7px;margin-top:12px">
+                  <button onClick="{{ c.edit }}" style-hover="border-color:#3a3a3a;color:#eceef2" style="flex:1;background:#1e1e1e;border:1px solid #2b2b2b;color:#cfcfcf;font-size:12px;font-weight:600;border-radius:8px;padding:8px;cursor:pointer;font-family:inherit">편집</button>
+                  <button onClick="{{ c.distribute }}" style-hover="background:#5a63e6" style="flex:1;background:#6b74f0;border:none;color:#fff;font-size:12px;font-weight:600;border-radius:8px;padding:8px;cursor:pointer;font-family:inherit">배포</button>
+                </div>
+              </div>
+            </div>
+          </sc-for>
+        </div>
+        </sc-if>
+      </div>
+      </sc-if>
+
+      <!-- ========= DISTRIBUTION ========= -->
+      <sc-if value="{{ isDist }}" hint-placeholder-val="{{ true }}">
+      <div style="padding:26px 30px;max-width:1160px;animation:rfade .3s ease">
+        <div style="color:#8b93ff;font-size:13.5px;font-weight:600;margin-bottom:7px">멀티채널 배포</div>
+        <h1 class="grotesk" style="font-size:25px;font-weight:700;letter-spacing:-.5px;margin-bottom:20px">배포현황</h1>
+        <div style="display:flex;gap:12px;margin-bottom:20px;flex-wrap:wrap">
+          <sc-for list="{{ distSummary }}" as="s" hint-placeholder-count="4">
+            <div style="background:#161616;border:1px solid #262626;border-radius:12px;padding:12px 20px;display:flex;align-items:center;gap:10px">
+              <span style="width:9px;height:9px;border-radius:50%;background:{{ s.color }}"></span>
+              <span class="grotesk" style="font-size:22px;font-weight:700;color:{{ s.color }}">{{ s.v }}</span>
+              <span style="font-size:12px;color:#9a9a9a">{{ s.l }}</span>
+            </div>
+          </sc-for>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:10px">
+          <sc-for list="{{ distRows }}" as="r" hint-placeholder-count="4">
+            <div style="display:flex;align-items:center;gap:14px;background:#161616;border:1px solid #262626;border-radius:12px;padding:13px 16px;flex-wrap:wrap">
+              <div style="flex:1;min-width:180px">
+                <div style="font-size:14px;font-weight:700;letter-spacing:-.3px">{{ r.clip }}</div>
+                <div style="font-size:11.5px;color:#707070;margin-top:2px">{{ r.prog }} · {{ r.when }}</div>
+              </div>
+              <div style="display:flex;gap:8px;flex-wrap:wrap">
+                <sc-for list="{{ r.chips }}" as="ch" hint-placeholder-count="3">
+                  <button onClick="{{ ch.click }}" style="{{ ch.style }};border:none;cursor:pointer;font-family:inherit"><span style="opacity:.8">{{ ch.name }}</span><span style="font-weight:700">{{ ch.label }}</span></button>
+                </sc-for>
+              </div>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+      </sc-if>
+
+      <!-- ========= ANALYTICS ========= -->
+      <sc-if value="{{ isAnalytics }}" hint-placeholder-val="{{ true }}">
+      <div style="padding:26px 30px;max-width:1160px;animation:rfade .3s ease">
+        <div style="color:#8b93ff;font-size:13.5px;font-weight:600;margin-bottom:7px">게시 클립 성과</div>
+        <h1 class="grotesk" style="font-size:25px;font-weight:700;letter-spacing:-.5px;margin-bottom:20px">성과</h1>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px;margin-bottom:18px">
+          <sc-for list="{{ analyticsKpi }}" as="k" hint-placeholder-count="4">
+            <div style="background:#161616;border:1px solid #262626;border-radius:14px;padding:16px 18px">
+              <div style="font-size:11.5px;color:#707070;margin-bottom:9px;font-weight:600">{{ k.label }}</div>
+              <div class="grotesk" style="font-size:28px;font-weight:700;letter-spacing:-.5px">{{ k.value }}</div>
+              <div style="font-size:11.5px;font-weight:600;margin-top:6px;color:{{ k.dc }}">{{ k.delta }}</div>
+            </div>
+          </sc-for>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:18px;align-items:start">
+          <div style="background:#161616;border:1px solid #262626;border-radius:14px;padding:18px 20px">
+            <div style="font-size:13px;font-weight:700;margin-bottom:16px">일별 조회수 · 최근 7일</div>
+            <div style="display:flex;align-items:flex-end;gap:10px;height:150px">
+              <sc-for list="{{ analyticsBars }}" as="b" hint-placeholder-count="7">
+                <div style="flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100%;gap:7px">
+                  <span class="mono" style="font-size:10px;color:#9a9a9a">{{ b.val }}</span>
+                  <div style="width:100%;height:{{ b.h }};min-height:4px;background:{{ b.color }};border-radius:5px 5px 0 0"></div>
+                  <span style="font-size:11px;color:#707070">{{ b.day }}</span>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+          <div style="background:#161616;border:1px solid #262626;border-radius:14px;padding:18px 20px">
+            <div style="font-size:13px;font-weight:700;margin-bottom:12px">상위 클립</div>
+            <div style="display:flex;flex-direction:column">
+              <sc-for list="{{ topClips }}" as="t" hint-placeholder-count="5">
+                <div style="display:flex;align-items:center;gap:12px;padding:9px 0;border-top:1px solid #232323">
+                  <span class="grotesk" style="font-size:14px;font-weight:700;color:#8b93ff;width:18px">{{ t.rank }}</span>
+                  <div style="flex:1;min-width:0"><div style="font-size:12.5px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ t.title }}</div><div style="font-size:10.5px;color:#707070">{{ t.prog }}</div></div>
+                  <div style="text-align:right"><div class="grotesk" style="font-size:14px;font-weight:700">{{ t.views }}</div><div style="font-size:10px;color:#707070">지속 {{ t.rate }} · 참여 {{ t.eng }}</div></div>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+        </div>
+      </div>
+      </sc-if>
+
+      <!-- ========= CHANNEL TRENDS ========= -->
+      <sc-if value="{{ isTrends }}" hint-placeholder-val="{{ true }}">
+      <div style="padding:26px 30px;max-width:1080px;animation:rfade .3s ease">
+        <div style="color:#8b93ff;font-size:13.5px;font-weight:600;margin-bottom:7px">YouTube 채널 분석</div>
+        <h1 class="grotesk" style="font-size:25px;font-weight:700;letter-spacing:-.5px;margin-bottom:4px">채널 트렌드</h1>
+        <p style="color:#9a9a9a;font-size:13px;margin-bottom:18px">채널별 조회수 추세·수익·영상 성과를 봅니다.</p>
+
+        <div style="display:flex;align-items:center;gap:9px;margin-bottom:18px;flex-wrap:wrap">
+          <span style="font-size:12px;color:#707070;font-weight:600">채널</span>
+          <select value="{{ trendChSel.value }}" onChange="{{ trendChSel.change }}" style="background:#161616;border:1px solid #2b2b2b;color:#e5e5e5;font-size:12.5px;font-weight:600;border-radius:9px;padding:8px 12px;cursor:pointer;font-family:inherit;min-width:240px">
+            <sc-for list="{{ trendChSel.options }}" as="o" hint-placeholder-count="3"><option value="{{ o.v }}">{{ o.label }}</option></sc-for>
+          </select>
+          <span style="flex:1"></span>
+          <button style-hover="opacity:.9" style="display:flex;align-items:center;gap:6px;background:#6b74f0;border:none;color:#fff;font-weight:600;font-size:12.5px;border-radius:8px;padding:8px 14px;cursor:pointer;font-family:inherit"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 2v6h-6M3 12a9 9 0 0 1 15-6.7L21 8M3 22v-6h6M21 12a9 9 0 0 1-15 6.7L3 16"/></svg>YouTube 동기화</button>
+        </div>
+
+        <!-- KPI tiles -->
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:16px">
+          <sc-for list="{{ trendKpi }}" as="k" hint-placeholder-count="4">
+            <div style="background:#161616;border:1px solid #262626;border-radius:13px;padding:15px 16px">
+              <div style="font-size:11.5px;color:#707070;margin-bottom:8px;font-weight:600">{{ k.label }}</div>
+              <div class="grotesk" style="font-size:24px;font-weight:700;letter-spacing:-.3px;color:{{ k.tone }}">{{ k.value }}</div>
+              <div style="font-size:11px;color:#707070;margin-top:5px">{{ k.sub }}</div>
+            </div>
+          </sc-for>
+        </div>
+
+        <!-- revenue -->
+        <div style="background:rgba(52,211,153,.05);border:1px solid rgba(52,211,153,.3);border-radius:14px;padding:16px 18px;margin-bottom:16px">
+          <div style="display:flex;align-items:center;gap:7px;font-size:13px;font-weight:700;color:#34d399;margin-bottom:10px"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x=2 y=5 width=20 height=14 rx=2/><path d="M2 10h20"/></svg>수익 대시보드 (예상)</div>
+          <sc-if value="{{ trendRev.monet }}" hint-placeholder-val="{{ true }}">
+            <div style="display:flex;align-items:baseline;gap:8px;flex-wrap:wrap"><span class="grotesk" style="font-size:26px;font-weight:700;color:#34d399">{{ trendRev.rev }}</span><span style="font-size:11.5px;color:#707070">최근 90일 채널 예상 수익</span></div>
+            <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:12px">
+              <div style="background:#141414;border:1px solid #232323;border-radius:10px;padding:11px 13px"><div style="font-size:10.5px;color:#707070">RPM (1천뷰당)</div><div class="grotesk" style="font-size:16px;font-weight:700;margin-top:3px">{{ trendRev.rpm }}</div></div>
+              <div style="background:#141414;border:1px solid #232323;border-radius:10px;padding:11px 13px"><div style="font-size:10.5px;color:#707070">일 평균 수익</div><div class="grotesk" style="font-size:16px;font-weight:700;margin-top:3px">{{ trendRev.dayAvg }}</div></div>
+              <div style="background:#141414;border:1px solid #232323;border-radius:10px;padding:11px 13px"><div style="font-size:10.5px;color:#707070">기간 조회수</div><div class="grotesk" style="font-size:16px;font-weight:700;margin-top:3px">{{ trendRev.views }}</div></div>
+            </div>
+          </sc-if>
+          <sc-if value="{{ trendRev.notMonet }}" hint-placeholder-val="{{ false }}"><div style="font-size:12px;color:#9a9a9a;line-height:1.6">이 채널은 <b style="color:#e5e5e5">수익화(YPP) 전</b>이거나 수익을 <b style="color:#e5e5e5">콘텐츠 소유자(MCN·방송사)가 관리</b>해, 크리에이터 권한으로는 수익이 조회되지 않습니다.</div></sc-if>
+        </div>
+
+        <!-- daily views trend -->
+        <div style="background:#161616;border:1px solid #262626;border-radius:14px;padding:16px 18px;margin-bottom:16px">
+          <div style="display:flex;align-items:center;gap:7px;font-size:13px;font-weight:700;margin-bottom:14px"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#5e9bff" stroke-width="2"><path d="M3 3v18h18M7 14l4-4 3 3 5-6"/></svg>일별 조회수 추세 (90일)<span style="font-size:11px;font-weight:400;color:#707070">· YouTube 실제 일별 조회수</span></div>
+          <div style="height:180px">
+            <svg width="100%" height="100%" viewBox="0 0 300 100" preserveAspectRatio="none" style="display:block">
+              <polygon points="{{ trendArea }}" fill="rgba(94,155,255,.12)"></polygon>
+              <polyline points="{{ trendLine }}" fill="none" stroke="#5e9bff" stroke-width="1.5" vector-effect="non-scaling-stroke" stroke-linejoin="round"></polyline>
+            </svg>
+          </div>
+        </div>
+
+        <!-- video list -->
+        <div style="background:#161616;border:1px solid #262626;border-radius:14px;overflow:hidden">
+          <div style="display:flex;align-items:center;gap:10px;border-bottom:1px solid #232323;padding:12px 16px;flex-wrap:wrap">
+            <span style="font-size:13px;font-weight:700">영상</span>
+            <span style="flex:1"></span>
+            <div style="display:flex;gap:2px;background:#0e0e0e;border:1px solid #232323;border-radius:9px;padding:3px"><sc-for list="{{ trendKindTabs }}" as="t" hint-placeholder-count="3"><button onClick="{{ t.pick }}" style="{{ t.style }}">{{ t.label }}<span class="mono" style="font-size:10px;opacity:.7">{{ t.count }}</span></button></sc-for></div>
+            <div style="display:flex;gap:2px;background:#0e0e0e;border:1px solid #232323;border-radius:9px;padding:3px"><sc-for list="{{ trendSortTabs }}" as="t" hint-placeholder-count="3"><button onClick="{{ t.pick }}" style="{{ t.style }}">{{ t.label }}</button></sc-for></div>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:8px;padding:12px">
+            <sc-for list="{{ trendVideos }}" as="v" hint-placeholder-count="4">
+              <button onClick="{{ v.pick }}" style="{{ v.style }}">
+                <div style="position:relative;width:88px;height:50px;flex:none;border-radius:6px;background:{{ v.thumb }}"><sc-if value="{{ v.short }}" hint-placeholder-val="{{ true }}"><span style="position:absolute;bottom:3px;right:3px;font-size:8.5px;font-weight:700;color:#fff;background:rgba(0,0,0,.7);border-radius:3px;padding:1px 4px">쇼츠</span></sc-if></div>
+                <div style="flex:1;min-width:0">
+                  <div style="font-size:12px;font-weight:600;line-height:1.35;text-wrap:pretty;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">{{ v.title }}</div>
+                  <div style="display:flex;gap:9px;margin-top:4px;font-size:10.5px;color:#707070"><span>▶ {{ v.views }}</span><span>♥ {{ v.likes }}</span><span>💬 {{ v.comments }}</span></div>
+                  <div style="font-size:10px;color:#5a5a5a;margin-top:2px">{{ v.date }}</div>
+                </div>
+              </button>
+            </sc-for>
+          </div>
+        </div>
+
+        <!-- video detail -->
+        <sc-if value="{{ hasTrendDetail }}" hint-placeholder-val="{{ true }}">
+        <div style="background:#161616;border:1px solid #262626;border-radius:14px;padding:16px 18px;margin-top:16px;animation:rfade .2s ease">
+          <div style="display:flex;align-items:flex-start;gap:10px;margin-bottom:14px">
+            <div><div style="font-size:14px;font-weight:700;letter-spacing:-.2px">{{ trendDetail.title }}</div><div style="font-size:11.5px;color:#707070;margin-top:2px">{{ trendDetail.meta }}</div></div>
+            <span style="flex:1"></span>
+            <button onClick="{{ trendDetail.close }}" style-hover="color:#e5e5e5" style="background:none;border:none;color:#707070;font-size:12px;cursor:pointer;font-family:inherit">닫기</button>
+          </div>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;margin-bottom:16px">
+            <sc-for list="{{ trendDetail.eng }}" as="e" hint-placeholder-count="4">
+              <div style="background:#141414;border:1px solid #232323;border-radius:10px;padding:11px 13px"><div style="font-size:10.5px;color:#707070">{{ e.label }}</div><div class="grotesk" style="font-size:17px;font-weight:700;margin-top:3px;color:{{ e.tone }}">{{ e.value }}</div></div>
+            </sc-for>
+          </div>
+          <div style="font-size:11.5px;font-weight:700;color:#9a9a9a;margin-bottom:10px">유입 경로</div>
+          <div style="display:flex;flex-direction:column;gap:7px;margin-bottom:16px">
+            <sc-for list="{{ trendDetail.traffic }}" as="t" hint-placeholder-count="5">
+              <div style="display:flex;align-items:center;gap:10px"><span style="width:78px;flex:none;font-size:11px;color:#9a9a9a">{{ t.s }}</span><div style="flex:1;height:12px;background:#0e0e0e;border-radius:4px;overflow:hidden"><div style="height:100%;width:{{ t.w }};background:#5e9bff;border-radius:4px"></div></div><span class="mono" style="width:34px;text-align:right;font-size:11px;color:#cfcfcf">{{ t.v }}</span></div>
+            </sc-for>
+          </div>
+          <div style="font-size:11.5px;font-weight:700;color:#9a9a9a;margin-bottom:10px">댓글 · 좋아요순</div>
+          <div style="display:flex;flex-direction:column;gap:8px">
+            <sc-for list="{{ trendDetail.comments }}" as="cm" hint-placeholder-count="3">
+              <div style="background:#141414;border:1px solid #232323;border-radius:9px;padding:9px 12px"><div style="display:flex;align-items:center;gap:8px;font-size:11px;color:#707070;margin-bottom:3px"><span style="font-weight:600;color:#e5e5e5">{{ cm.a }}</span><span>♥ {{ cm.likes }}</span></div><div style="font-size:12px;color:#cfcfcf;line-height:1.4">{{ cm.text }}</div></div>
+            </sc-for>
+          </div>
+        </div>
+        </sc-if>
+      </div>
+      </sc-if>
+
+      <!-- ========= PUBLISH CHANNELS (B2B) ========= -->
+      <sc-if value="{{ isChannels }}" hint-placeholder-val="{{ true }}">
+      <div style="padding:26px 30px;max-width:1160px;animation:rfade .3s ease">
+        <div style="display:flex;align-items:flex-end;gap:14px;margin-bottom:20px;flex-wrap:wrap">
+          <div>
+            <div style="color:#8b93ff;font-size:13.5px;font-weight:600;margin-bottom:7px">연동 채널 관리 · {{ channelTotal }}개 연결</div>
+            <h1 class="grotesk" style="font-size:25px;font-weight:700;letter-spacing:-.5px">배포채널</h1>
+            <p style="color:#9a9a9a;font-size:13px;margin-top:6px">플랫폼별로 여러 계정을 등록하고, 각 채널에 프로그램을 매핑해 배포처를 관리해요.</p>
+          </div>
+          <span style="flex:1"></span>
+          <button onClick="{{ registerChannel }}" style-hover="background:#5a63e6" style="display:flex;align-items:center;gap:7px;background:#6b74f0;border:none;color:#fff;font-weight:600;font-size:13px;border-radius:9px;padding:9px 16px;cursor:pointer;font-family:inherit">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M12 5v14M5 12h14"/></svg>채널 등록
+          </button>
+        </div>
+
+        <div style="display:flex;flex-direction:column;gap:20px;margin-bottom:26px">
+          <sc-for list="{{ channelGroups }}" as="g" hint-placeholder-count="3">
+            <div>
+              <div style="display:flex;align-items:center;gap:9px;margin-bottom:11px">
+                <span style="width:11px;height:11px;border-radius:3px;background:{{ g.color }}"></span>
+                <span style="font-size:15px;font-weight:700;letter-spacing:-.3px">{{ g.name }}</span>
+                <span style="font-size:11.5px;color:#707070;font-weight:600">{{ g.total }}개 계정</span>
+              </div>
+              <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:12px">
+                <sc-for list="{{ g.accts }}" as="a" hint-placeholder-count="2">
+                  <div style="background:#161616;border:1px solid #262626;border-radius:13px;padding:15px 16px">
+                    <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+                      <span style="font-size:13.5px;font-weight:700;letter-spacing:-.2px">{{ a.handle }}</span>
+                      <span style="flex:1"></span><span style="{{ a.stateStyle }}">{{ a.state }}</span>
+                    </div>
+                    <div style="font-size:11.5px;color:#9a9a9a"><span class="grotesk" style="font-size:14px;font-weight:700;color:#eceef2">{{ a.count }}</span> {{ a.metric }}</div>
+                    <div style="margin-top:11px;padding-top:11px;border-top:1px solid #232323;font-size:11px;color:#707070">담당 프로그램</div>
+                    <div style="font-size:12px;color:#cfcfcf;margin-top:3px;font-weight:600">{{ a.progs }}</div>
+                    <button onClick="{{ a.act }}" style-hover="border-color:#3a3a3a;color:#eceef2" style="margin-top:12px;width:100%;background:#1e1e1e;border:1px solid #2b2b2b;color:#cfcfcf;font-size:12px;font-weight:600;border-radius:8px;padding:8px;cursor:pointer;font-family:inherit">{{ a.actLabel }}</button>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+          </sc-for>
+        </div>
+
+        <div style="font-size:14px;font-weight:700;margin-bottom:12px">익스포트 프리셋</div>
+        <div style="border:1px solid #262626;border-radius:12px;overflow:hidden">
+          <sc-for list="{{ exportPresets }}" as="p" hint-placeholder-count="3">
+            <div style="display:flex;align-items:center;gap:12px;padding:13px 16px;border-bottom:1px solid #1f1f1f;background:#161616">
+              <span style="width:8px;height:8px;border-radius:50%;background:#8b93ff"></span>
+              <span style="font-size:13px;font-weight:600;flex:1">{{ p.name }}</span>
+              <span class="mono" style="font-size:11.5px;color:#9a9a9a">{{ p.spec }}</span>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+      </sc-if>
+
+      <!-- ========= OPS ========= -->
+      <sc-if value="{{ isOps }}" hint-placeholder-val="{{ true }}">
+      <div style="padding:26px 30px;max-width:1000px;animation:rfade .3s ease">
+        <div style="color:#8b93ff;font-size:13.5px;font-weight:600;margin-bottom:7px">파이프라인 상태</div>
+        <h1 class="grotesk" style="font-size:25px;font-weight:700;letter-spacing:-.5px;margin-bottom:20px">운영·진단</h1>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:16px">
+          <sc-for list="{{ opsWorkers }}" as="w" hint-placeholder-count="4">
+            <div style="background:#161616;border:1px solid #262626;border-radius:12px;padding:14px 16px">
+              <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px"><span style="{{ w.dot }}"></span><span style="font-size:13px;font-weight:700">{{ w.name }}</span><span style="flex:1"></span><span class="mono" style="font-size:11px;color:#9a9a9a">{{ w.loadPct }}</span></div>
+              <div style="font-size:11.5px;color:#9a9a9a;margin-bottom:9px">{{ w.job }}</div>
+              <div style="height:6px;background:#0e0e0e;border-radius:99px;overflow:hidden"><div style="height:100%;width:{{ w.loadPct }};background:{{ w.barColor }};border-radius:99px"></div></div>
+            </div>
+          </sc-for>
+        </div>
+        <div style="font-size:14px;font-weight:700;margin-bottom:12px">최근 작업</div>
+        <div style="border:1px solid #262626;border-radius:12px;overflow:hidden">
+          <div style="display:grid;grid-template-columns:100px 1fr 90px 80px;background:#161616;border-bottom:1px solid #262626;font-size:11px;font-weight:700;color:#9a9a9a">
+            <div style="padding:11px 14px">작업</div><div style="padding:11px 8px">대상</div><div style="padding:11px 8px;text-align:right">소요</div><div style="padding:11px 14px;text-align:right">상태</div>
+          </div>
+          <sc-for list="{{ opsJobs }}" as="j" hint-placeholder-count="6">
+            <div style="display:grid;grid-template-columns:100px 1fr 90px 80px;border-bottom:1px solid #1f1f1f;align-items:center;background:#161616">
+              <div style="padding:11px 14px;font-size:12.5px;font-weight:600">{{ j.job }}</div>
+              <div style="padding:11px 8px;font-size:12px;color:#cfcfcf">{{ j.target }}</div>
+              <div class="mono" style="padding:11px 8px;text-align:right;font-size:11.5px;color:#9a9a9a">{{ j.dur }}</div>
+              <div style="padding:11px 14px;display:flex;align-items:center;gap:6px;justify-content:flex-end"><span style="{{ j.dot }}"></span><span style="{{ j.stStyle }}">{{ j.label }}</span></div>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+      </sc-if>
+
+    </div>
+  </main>
+
+  <!-- ===== UPLOAD MODAL ===== -->
+  <sc-if value="{{ uploadView.open }}" hint-placeholder-val="{{ true }}">
+  <div onClick="{{ uploadView.close }}" style="position:fixed;inset:0;z-index:78;background:rgba(5,6,9,.72);backdrop-filter:blur(6px);display:flex;align-items:center;justify-content:center;padding:30px;animation:rfade .18s ease">
+    <div onClick="{{ stopEv }}" style="width:100%;max-width:460px;background:#131313;border:1px solid #2b2b2b;border-radius:16px;box-shadow:0 24px 60px rgba(0,0,0,.5);overflow:hidden">
+      <div style="display:flex;align-items:center;gap:10px;padding:16px 20px;border-bottom:1px solid #232323">
+        <div style="font-size:15px;font-weight:700;letter-spacing:-.3px" class="grotesk">원본 업로드</div>
+        <span style="flex:1"></span>
+        <button onClick="{{ uploadView.close }}" style-hover="color:#e5e5e5" style="background:none;border:none;color:#707070;cursor:pointer;font-family:inherit;font-size:18px;line-height:1">✕</button>
+      </div>
+      <div style="padding:20px;display:flex;flex-direction:column;gap:16px">
+        <div style="display:flex;gap:4px;background:#0e0e0e;border:1px solid #232323;border-radius:9px;padding:4px">
+          <button onClick="{{ uploadView.setFile }}" style="{{ uploadView.fileTabStyle }}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12M8 11l4 4 4-4M4 19h16"/></svg>파일 업로드</button>
+          <button onClick="{{ uploadView.setYt }}" style="{{ uploadView.ytTabStyle }}"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x=2 y=5 width=20 height=14 rx=4/><path d="M10 9l5 3-5 3z"/></svg>유튜브 링크</button>
+        </div>
+        <div>
+          <div style="font-size:11.5px;font-weight:600;color:#9a9a9a;margin-bottom:7px">프로그램</div>
+          <select value="{{ uploadView.progValue }}" onChange="{{ uploadView.setProg }}" style="width:100%;background:#0a0a0a;border:1px solid #2b2b2b;color:#e5e5e5;font-size:13px;border-radius:9px;padding:10px 12px;cursor:pointer;font-family:inherit">
+            <sc-for list="{{ uploadView.progOptions }}" as="o" hint-placeholder-count="4"><option value="{{ o.v }}">{{ o.label }}</option></sc-for>
+          </select>
+        </div>
+        <sc-if value="{{ uploadView.isFile }}" hint-placeholder-val="{{ true }}">
+          <div style="display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;border:2px dashed #2b2b2b;border-radius:12px;padding:28px 16px;text-align:center">
+            <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#707070" stroke-width="1.8"><rect x=2 y=4 width=20 height=16 rx=2/><path d="M10 9l5 3-5 3z"/></svg>
+            <div style="font-size:13px;color:#9a9a9a">영상 파일을 끌어다 놓거나 <span style="color:#8b93ff;font-weight:600">클릭해서 선택</span><div style="font-size:11px;color:#5a5a5a;margin-top:2px">mp4 · mov · webm · 길이 제한 없음</div></div>
+          </div>
+          <div><div style="font-size:11.5px;font-weight:600;color:#9a9a9a;margin-bottom:7px">제목</div><input placeholder="비우면 파일명 사용" style="width:100%;background:#0a0a0a;border:1px solid #2b2b2b;color:#e5e5e5;font-size:13px;border-radius:9px;padding:10px 12px;font-family:inherit;outline:none"></div>
+        </sc-if>
+        <sc-if value="{{ uploadView.isYt }}" hint-placeholder-val="{{ true }}">
+          <div><div style="font-size:11.5px;font-weight:600;color:#9a9a9a;margin-bottom:7px">YouTube URL</div><input placeholder="https://www.youtube.com/watch?v=…" style="width:100%;background:#0a0a0a;border:1px solid #2b2b2b;color:#e5e5e5;font-size:13px;border-radius:9px;padding:10px 12px;font-family:inherit;outline:none"></div>
+          <div style="display:flex;gap:8px;background:#0e0e0e;border:1px solid #232323;border-radius:9px;padding:10px 12px"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#8b93ff" stroke-width="2" style="flex:none;margin-top:1px"><circle cx=12 cy=12 r=10/><path d="M12 8v5M12 16h.01"/></svg><span style="font-size:11.5px;color:#c3c8ff;line-height:1.5">영상은 Worker에서 다운로드된 뒤 자동으로 AI 분석이 시작돼요.</span></div>
+        </sc-if>
+        <button onClick="{{ uploadView.submit }}" style-hover="background:#5a63e6" style="width:100%;background:#6b74f0;border:none;color:#fff;font-weight:600;font-size:13px;border-radius:9px;padding:11px;cursor:pointer;font-family:inherit">업로드</button>
+      </div>
+    </div>
+  </div>
+  </sc-if>
+
+  <!-- ===== NEW PROGRAM MODAL ===== -->
+  <sc-if value="{{ newProgView.open }}" hint-placeholder-val="{{ true }}">
+  <div onClick="{{ newProgView.close }}" style="position:fixed;inset:0;z-index:78;background:rgba(5,6,9,.72);backdrop-filter:blur(6px);display:flex;align-items:center;justify-content:center;padding:30px;animation:rfade .18s ease">
+    <div onClick="{{ stopEv }}" style="width:100%;max-width:500px;max-height:90vh;overflow:auto;background:#131313;border:1px solid #2b2b2b;border-radius:16px;box-shadow:0 24px 60px rgba(0,0,0,.5)">
+      <div style="display:flex;align-items:center;gap:10px;padding:16px 20px;border-bottom:1px solid #232323;position:sticky;top:0;background:#131313;z-index:2">
+        <div style="font-size:15px;font-weight:700;letter-spacing:-.3px" class="grotesk">새 프로그램</div>
+        <span style="flex:1"></span>
+        <button onClick="{{ newProgView.close }}" style-hover="color:#e5e5e5" style="background:none;border:none;color:#707070;cursor:pointer;font-family:inherit;font-size:18px;line-height:1">✕</button>
+      </div>
+      <div style="padding:20px;display:flex;flex-direction:column;gap:16px">
+        <div><div style="font-size:11.5px;font-weight:600;color:#9a9a9a;margin-bottom:7px">프로그램 제목</div><input placeholder="예: 전지적 참견 시점" style="width:100%;background:#0a0a0a;border:1px solid #2b2b2b;color:#e5e5e5;font-size:13px;border-radius:9px;padding:10px 12px;font-family:inherit;outline:none"></div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <div><div style="font-size:11.5px;font-weight:600;color:#9a9a9a;margin-bottom:7px">장르</div><select style="width:100%;background:#0a0a0a;border:1px solid #2b2b2b;color:#e5e5e5;font-size:13px;border-radius:9px;padding:10px 12px;cursor:pointer;font-family:inherit"><sc-for list="{{ newProgView.sections }}" as="o" hint-placeholder-count="11"><option value="{{ o.v }}">{{ o.label }}</option></sc-for></select></div>
+          <div><div style="font-size:11.5px;font-weight:600;color:#9a9a9a;margin-bottom:7px">시청 등급</div><select style="width:100%;background:#0a0a0a;border:1px solid #2b2b2b;color:#e5e5e5;font-size:13px;border-radius:9px;padding:10px 12px;cursor:pointer;font-family:inherit"><sc-for list="{{ newProgView.ages }}" as="o" hint-placeholder-count="5"><option value="{{ o.v }}">{{ o.label }}</option></sc-for></select></div>
+        </div>
+        <div><div style="font-size:11.5px;font-weight:600;color:#9a9a9a;margin-bottom:7px">출연자 <span style="color:#5a5a5a;font-weight:400">· 쉼표로 구분 · 선택</span></div><input placeholder="이영자, 홍현희" style="width:100%;background:#0a0a0a;border:1px solid #2b2b2b;color:#e5e5e5;font-size:13px;border-radius:9px;padding:10px 12px;font-family:inherit;outline:none"></div>
+        <div style="border-top:1px solid #232323;padding-top:16px">
+          <div style="font-size:11px;font-weight:700;color:#9a9a9a;letter-spacing:.3px">SMR 피드 정보</div>
+          <p style="font-size:11px;color:#5a5a5a;margin-top:3px;margin-bottom:14px">네이버 SMR 배포에 필요 · 비워도 프로그램은 생성돼요.</p>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px">
+            <div><div style="font-size:11.5px;font-weight:600;color:#9a9a9a;margin-bottom:7px">프로그램 코드</div><input placeholder="jamsi" style="width:100%;background:#0a0a0a;border:1px solid #2b2b2b;color:#e5e5e5;font-size:13px;border-radius:9px;padding:10px 12px;font-family:inherit;outline:none"></div>
+            <div><div style="font-size:11.5px;font-weight:600;color:#9a9a9a;margin-bottom:7px">카테고리 <span style="color:#5a5a5a;font-weight:400">· SMR 코드</span></div><select style="width:100%;background:#0a0a0a;border:1px solid #2b2b2b;color:#e5e5e5;font-size:13px;border-radius:9px;padding:10px 12px;cursor:pointer;font-family:inherit"><option value="">선택 안 함</option><sc-for list="{{ newProgView.cats }}" as="c" hint-placeholder-count="3"><option value="{{ c }}">{{ c }}</option></sc-for></select></div>
+          </div>
+          <div><div style="font-size:11.5px;font-weight:600;color:#9a9a9a;margin-bottom:7px">편성 요일</div><div style="display:flex;gap:6px"><sc-for list="{{ newProgView.weekdays }}" as="w" hint-placeholder-count="7"><button onClick="{{ w.toggle }}" style="{{ w.style }}">{{ w.label }}</button></sc-for></div></div>
+        </div>
+      </div>
+      <div style="display:flex;justify-content:flex-end;gap:8px;padding:14px 20px;border-top:1px solid #232323">
+        <button onClick="{{ newProgView.close }}" style-hover="border-color:#3a3a3a;color:#e5e5e5" style="background:none;border:1px solid #2b2b2b;color:#9a9a9a;font-size:12.5px;font-weight:600;border-radius:9px;padding:9px 15px;cursor:pointer;font-family:inherit">취소</button>
+        <button onClick="{{ newProgView.submit }}" style-hover="background:#5a63e6" style="display:flex;align-items:center;gap:6px;background:#6b74f0;border:none;color:#fff;font-size:12.5px;font-weight:600;border-radius:9px;padding:9px 16px;cursor:pointer;font-family:inherit"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><path d="M12 5v14M5 12h14"/></svg>만들기</button>
+      </div>
+    </div>
+  </div>
+  </sc-if>
+
+  <!-- ===== DISTRIBUTE MODAL ===== -->
+  <sc-if value="{{ distributeView.open }}" hint-placeholder-val="{{ true }}">
+  <div onClick="{{ distributeView.close }}" style="position:fixed;inset:0;z-index:76;background:rgba(5,6,9,.72);backdrop-filter:blur(6px);display:flex;align-items:center;justify-content:center;padding:30px;animation:rfade .18s ease">
+    <div onClick="{{ stopEv }}" style="width:100%;max-width:480px;background:#131313;border:1px solid #2b2b2b;border-radius:16px;box-shadow:0 24px 60px rgba(0,0,0,.5);overflow:hidden">
+      <div style="display:flex;align-items:center;gap:10px;padding:16px 20px;border-bottom:1px solid #232323">
+        <sc-if value="{{ distributeView.step2 }}" hint-placeholder-val="{{ true }}"><button onClick="{{ distributeView.backStep }}" style-hover="color:#eceef2" style="background:none;border:none;color:#707070;cursor:pointer;font-family:inherit;display:flex"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M15 6l-6 6 6 6"/></svg></button></sc-if>
+        <div><div style="font-size:15px;font-weight:700;letter-spacing:-.3px" class="grotesk">배포</div><div style="font-size:11.5px;color:#707070;margin-top:1px">{{ distributeView.clip }}</div></div>
+        <span style="flex:1"></span>
+        <button onClick="{{ distributeView.close }}" style-hover="color:#eceef2" style="background:none;border:none;color:#707070;cursor:pointer;font-family:inherit;font-size:18px;line-height:1">✕</button>
+      </div>
+
+      <!-- step 1: platform -->
+      <sc-if value="{{ distributeView.step1 }}" hint-placeholder-val="{{ true }}">
+      <div style="padding:20px">
+        <div style="font-size:12.5px;color:#9a9a9a;margin-bottom:16px">어느 플랫폼에 배포할까요?</div>
+        <div style="display:flex;flex-direction:column;gap:9px">
+          <sc-for list="{{ distributeView.platforms }}" as="p" hint-placeholder-count="3">
+            <button onClick="{{ p.pick }}" style-hover="border-color:#3a3a3a;background:#1e1e1e" style="display:flex;align-items:center;gap:13px;text-align:left;background:#161616;border:1px solid #262626;border-radius:11px;padding:14px 15px;cursor:pointer;font-family:inherit;color:inherit;transition:border-color .12s,background .12s">
+              <span style="width:12px;height:12px;border-radius:3px;background:{{ p.color }};flex:none"></span>
+              <span style="flex:1;font-size:14px;font-weight:700">{{ p.name }}</span>
+              <span style="font-size:11.5px;color:#707070">{{ p.count }}개 채널</span>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#5a5a5a" stroke-width="2.2"><path d="M9 6l6 6-6 6"/></svg>
+            </button>
+          </sc-for>
+        </div>
+      </div>
+      </sc-if>
+
+      <!-- step 2: pick channels -->
+      <sc-if value="{{ distributeView.step2 }}" hint-placeholder-val="{{ true }}">
+      <div style="padding:20px">
+        <div style="display:flex;align-items:center;gap:9px;margin-bottom:14px"><span style="width:12px;height:12px;border-radius:3px;background:{{ distributeView.platColor }}"></span><span style="font-size:14px;font-weight:700">{{ distributeView.platName }} 채널 선택</span></div>
+        <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:18px">
+          <sc-for list="{{ distributeView.channels }}" as="ch" hint-placeholder-count="3">
+            <button onClick="{{ ch.toggle }}" style="{{ ch.style }}">
+              <span style="{{ ch.boxStyle }}"><sc-if value="{{ ch.sel }}" hint-placeholder-val="{{ true }}"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="3"><path d="M20 6L9 17l-5-5"/></svg></sc-if></span>
+              <span style="flex:1"><span style="font-size:13.5px;font-weight:700;display:block">{{ ch.handle }}</span><span style="font-size:11px;color:#707070">{{ ch.progs }} · {{ ch.count }}</span></span>
+            </button>
+          </sc-for>
+        </div>
+        <button onClick="{{ distributeView.confirm }}" style="{{ distributeView.confirmStyle }}">{{ distributeView.selCount }}개 채널에 배포 예약</button>
+      </div>
+      </sc-if>
+    </div>
+  </div>
+  </sc-if>
+
+  <!-- ===== REGISTER CHANNEL MODAL ===== -->
+  <sc-if value="{{ registerView.open }}" hint-placeholder-val="{{ true }}">
+  <div onClick="{{ registerView.close }}" style="position:fixed;inset:0;z-index:75;background:rgba(5,6,9,.72);backdrop-filter:blur(6px);display:flex;align-items:center;justify-content:center;padding:30px;animation:rfade .18s ease">
+    <div onClick="{{ stopEv }}" style="width:100%;max-width:460px;background:#131313;border:1px solid #2b2b2b;border-radius:16px;box-shadow:0 24px 60px rgba(0,0,0,.5);overflow:hidden">
+      <div style="display:flex;align-items:center;gap:10px;padding:16px 20px;border-bottom:1px solid #232323">
+        <sc-if value="{{ registerView.step2 }}" hint-placeholder-val="{{ true }}"><button onClick="{{ registerView.backStep }}" style-hover="color:#eceef2" style="background:none;border:none;color:#707070;cursor:pointer;font-family:inherit;display:flex"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M15 6l-6 6 6 6"/></svg></button></sc-if>
+        <div style="font-size:15px;font-weight:700;letter-spacing:-.3px" class="grotesk">채널 등록</div>
+        <span style="flex:1"></span>
+        <button onClick="{{ registerView.close }}" style-hover="color:#eceef2" style="background:none;border:none;color:#707070;cursor:pointer;font-family:inherit;font-size:18px;line-height:1">✕</button>
+      </div>
+
+      <!-- step 1: choose platform -->
+      <sc-if value="{{ registerView.step1 }}" hint-placeholder-val="{{ true }}">
+      <div style="padding:20px">
+        <div style="font-size:12.5px;color:#9a9a9a;margin-bottom:16px">어떤 플랫폼의 계정을 추가할까요?</div>
+        <div style="display:flex;flex-direction:column;gap:9px">
+          <sc-for list="{{ registerView.platforms }}" as="p" hint-placeholder-count="3">
+            <button onClick="{{ p.pick }}" style-hover="border-color:#3a3a3a;background:#1e1e1e" style="display:flex;align-items:center;gap:13px;text-align:left;background:#161616;border:1px solid #262626;border-radius:11px;padding:14px 15px;cursor:pointer;font-family:inherit;color:inherit;transition:border-color .12s,background .12s">
+              <span style="width:12px;height:12px;border-radius:3px;background:{{ p.color }};flex:none"></span>
+              <span style="flex:1"><span style="font-size:14px;font-weight:700;display:block">{{ p.name }}</span><span style="font-size:11.5px;color:#707070">{{ p.desc }}</span></span>
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#5a5a5a" stroke-width="2.2"><path d="M9 6l6 6-6 6"/></svg>
+            </button>
+          </sc-for>
+        </div>
+      </div>
+      </sc-if>
+
+      <!-- step 2: connect account -->
+      <sc-if value="{{ registerView.step2 }}" hint-placeholder-val="{{ true }}">
+      <div style="padding:20px">
+        <div style="display:flex;align-items:center;gap:9px;margin-bottom:16px"><span style="width:12px;height:12px;border-radius:3px;background:{{ registerView.platColor }}"></span><span style="font-size:14px;font-weight:700">{{ registerView.platName }} 계정 연결</span></div>
+        <div style="font-size:11.5px;color:#9a9a9a;margin-bottom:6px;font-weight:600">계정 핸들</div>
+        <div style="background:#161616;border:1px solid #2b2b2b;border-radius:9px;padding:11px 13px;font-size:13px;color:#9a9a9a;margin-bottom:14px">@channel_handle</div>
+        <div style="display:flex;align-items:center;gap:9px;background:#121212;border:1px solid #232323;border-radius:10px;padding:12px 13px;margin-bottom:18px">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#8b93ff" stroke-width="2"><path d="M12 2v6M12 22v-6M2 12h6M22 12h-6"/></svg>
+          <span style="font-size:11.5px;color:#c3c8ff;line-height:1.45">{{ registerView.platName }} 계정으로 로그인해 게시 권한을 승인하면 연결이 완료돼요.</span>
+        </div>
+        <button onClick="{{ registerView.connect }}" style-hover="background:#5a63e6" style="width:100%;background:#6b74f0;border:none;color:#fff;font-weight:600;font-size:13px;border-radius:9px;padding:11px;cursor:pointer;font-family:inherit">{{ registerView.platName }} 계정으로 연결</button>
+      </div>
+      </sc-if>
+    </div>
+  </div>
+  </sc-if>
+
+  <!-- ===== CAPCUT-STYLE EDITOR (full-screen overlay) ===== -->
+  <sc-if value="{{ isEditor }}" hint-placeholder-val="{{ true }}">
+  <div style="position:fixed;inset:0;z-index:80;background:#08090c;display:flex;flex-direction:column;animation:rfade .18s ease">
+    <!-- menu bar -->
+    <div style="height:44px;flex:none;border-bottom:1px solid #222222;display:flex;align-items:center;gap:12px;padding:0 14px;background:#0a0a0a">
+      <button onClick="{{ editor.back }}" style-hover="color:#eceef2" style="display:inline-flex;align-items:center;gap:4px;background:none;border:none;color:#9a9a9a;font-size:12.5px;cursor:pointer;font-family:inherit"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M15 6l-6 6 6 6"/></svg></button>
+      <div style="display:flex;align-items:center;gap:8px"><div style="width:22px;height:22px;border-radius:6px;background:linear-gradient(135deg,#8b93ff,#5a63e6);display:flex;align-items:center;justify-content:center;font-weight:700;font-size:12px;color:#fff" class="grotesk">D</div><span style="font-size:12.5px;font-weight:700;color:#cfcfcf">STEP D 편집기</span></div>
+      <div style="display:flex;align-items:center;gap:3px;font-size:12px;color:#9a9a9a;background:#161616;border:1px solid #2b2b2b;border-radius:7px;padding:4px 9px;cursor:default">메뉴<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg></div>
+      <span style="flex:1"></span>
+      <div style="font-size:12.5px;font-weight:600;color:#cfcfcf">{{ editor.title }} <span class="mono" style="color:#6b6b6b;font-weight:400">· {{ editor.range }}</span></div>
+      <span style="flex:1"></span>
+      <span style="font-size:11px;font-weight:600;color:#9a9a9a;background:#161616;border:1px solid #2b2b2b;border-radius:7px;padding:4px 9px">9:16 · 1080p</span>
+      <button onClick="{{ editor.exportClip }}" style-hover="background:#5a63e6" style="display:flex;align-items:center;gap:6px;background:#6b74f0;border:none;color:#fff;font-weight:600;font-size:12.5px;border-radius:8px;padding:7px 14px;cursor:pointer;font-family:inherit"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12M8 11l4 4 4-4M4 19h16"/></svg>내보내기</button>
+    </div>
+
+    <!-- horizontal tool tabs -->
+    <div style="height:58px;flex:none;border-bottom:1px solid #222222;background:#0a0a0a;display:flex;align-items:stretch;gap:2px;padding:0 10px;overflow-x:auto">
+      <sc-for list="{{ editor.tools }}" as="t" hint-placeholder-count="7">
+        <button onClick="{{ t.pick }}" style="{{ t.style }}"><span>{{ t.iconEl }}</span>{{ t.label }}</button>
+      </sc-for>
+    </div>
+
+    <!-- body -->
+    <div style="flex:1;min-height:0;display:flex">
+      <!-- left tool content panel -->
+      <div style="width:300px;flex:none;background:#0a0a0a;border-right:1px solid #222222;overflow:auto;padding:16px 16px">
+        <div style="font-size:13.5px;font-weight:700;margin-bottom:14px">{{ editor.toolTitle }}</div>
+        <sc-if value="{{ editor.isCaptions }}" hint-placeholder-val="{{ true }}">
+          <div style="display:flex;align-items:center;gap:8px;background:rgba(139,147,255,.08);border:1px solid rgba(139,147,255,.25);border-radius:9px;padding:9px 11px;margin-bottom:13px">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#a7adff" stroke-width="2"><path d="M12 2v4M12 18v4M2 12h4M18 12h4"/></svg>
+            <span style="font-size:11.5px;color:#c3c8ff">AI가 음성을 자막으로 변환했어요. 클립을 눌러 편집하세요.</span>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:8px">
+            <sc-for list="{{ editor.captions }}" as="c" hint-placeholder-count="3">
+              <div onClick="{{ c.select }}" style="{{ c.style }}"><div class="mono" style="font-size:10px;color:#707070;margin-bottom:4px">{{ c.time }}</div><div style="font-size:12.5px;color:#e5e5e5;line-height:1.4">{{ c.text }}</div></div>
+            </sc-for>
+          </div>
+          <button onClick="{{ editor.addCaption }}" style-hover="border-color:#3a3a3a;color:#eceef2" style="margin-top:12px;width:100%;background:#161616;border:1px solid #2b2b2b;color:#9a9a9a;font-size:12px;font-weight:600;border-radius:8px;padding:9px;cursor:pointer;font-family:inherit">+ 자막 추가</button>
+        </sc-if>
+        <div style="display:flex;flex-direction:column;gap:16px">
+          <sc-for list="{{ editor.controls }}" as="c" hint-placeholder-count="4">
+            <div>
+              <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px"><span style="font-size:12px;font-weight:600;color:#cfcfcf">{{ c.label }}</span><sc-if value="{{ c.disp }}" hint-placeholder-val="{{ true }}"><span class="mono" style="font-size:11px;color:#9a9a9a">{{ c.disp }}</span></sc-if></div>
+              <sc-if value="{{ c.isSlider }}" hint-placeholder-val="{{ true }}"><div onClick="{{ c.set }}" style="height:6px;background:#1e1e1e;border-radius:99px;position:relative;cursor:pointer"><div style="position:absolute;left:0;top:0;bottom:0;width:{{ c.fill }};background:#6b74f0;border-radius:99px"></div><div style="position:absolute;top:50%;transform:translate(-50%,-50%);left:{{ c.fill }};width:14px;height:14px;border-radius:50%;background:#fff;box-shadow:0 1px 4px rgba(0,0,0,.4)"></div></div></sc-if>
+              <sc-if value="{{ c.isChips }}" hint-placeholder-val="{{ true }}"><div style="display:flex;gap:7px;flex-wrap:wrap"><sc-for list="{{ c.opts }}" as="o" hint-placeholder-count="3"><button onClick="{{ o.pick }}" style="{{ o.style }}">{{ o.label }}</button></sc-for></div></sc-if>
+              <sc-if value="{{ c.isColor }}" hint-placeholder-val="{{ true }}"><div style="display:flex;gap:9px"><sc-for list="{{ c.colors }}" as="o" hint-placeholder-count="4"><button onClick="{{ o.pick }}" style="{{ o.style }}"></button></sc-for></div></sc-if>
+              <sc-if value="{{ c.isText }}" hint-placeholder-val="{{ true }}"><div style="background:#161616;border:1px solid #2b2b2b;border-radius:8px;padding:10px 12px;font-size:12.5px;color:#9a9a9a">{{ c.val }}</div></sc-if>
+              <sc-if value="{{ c.isToggle }}" hint-placeholder-val="{{ true }}"><div onClick="{{ c.toggle }}" style="{{ c.track }}"><div style="{{ c.knob }}"></div></div></sc-if>
+              <sc-if value="{{ c.isPreset }}" hint-placeholder-val="{{ true }}"><div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px"><sc-for list="{{ c.tiles }}" as="o" hint-placeholder-count="6"><div onClick="{{ o.pick }}" style="aspect-ratio:1;border-radius:9px;background:{{ o.bg }};cursor:pointer;border:1px solid #2b2b2b"></div></sc-for></div></sc-if>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+
+      <!-- center player -->
+      <div style="flex:1;min-width:0;display:flex;flex-direction:column;background:#0d0d0d">
+        <div style="height:34px;flex:none;border-bottom:1px solid #222222;display:flex;align-items:center;padding:0 14px;font-size:12px;font-weight:600;color:#9a9a9a">플레이어 · 타임라인 01</div>
+        <div style="flex:1;min-height:0;display:flex;align-items:center;justify-content:center;padding:24px">
+          <div style="position:relative;height:100%;max-height:420px;min-height:210px;aspect-ratio:{{ editor.ratio }};background:{{ editor.thumb }};border-radius:6px;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,.5);container-type:inline-size">
+            <div style="position:absolute;inset:0;background:radial-gradient(120% 90% at 30% 15%,rgba(255,255,255,.06),rgba(0,0,0,.35))"></div>
+            <div style="position:absolute;left:6%;right:6%;bottom:14%;text-align:center;font-size:clamp(11px,8cqw,20px);font-weight:800;color:#fff;line-height:1.25;text-shadow:0 2px 0 #000,0 0 10px rgba(0,0,0,.7);letter-spacing:-.3px">{{ editor.caption }}</div>
+            <div style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:52px;height:52px;border-radius:50%;background:rgba(11,12,15,.4);backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center;border:1px solid rgba(255,255,255,.3)"><svg width="18" height="18" viewBox="0 0 24 24" fill="#fff" style="margin-left:2px"><path d="M8 5v14l11-7z"/></svg></div>
+          </div>
+        </div>
+        <!-- transport -->
+        <div style="height:44px;flex:none;border-top:1px solid #222222;display:flex;align-items:center;gap:14px;padding:0 16px;background:#0a0a0a">
+          <span class="mono" style="font-size:12px;color:#cfcfcf">{{ editor.timeLabel }} <span style="color:#5a5a5a">/ {{ editor.totalLabel }}</span></span>
+          <span style="flex:1"></span>
+          <button onClick="{{ editor.togglePlay }}" style-hover="background:#5a63e6" style="width:30px;height:30px;border-radius:50%;background:#6b74f0;border:none;color:#fff;display:flex;align-items:center;justify-content:center;cursor:pointer">{{ editor.playIconEl }}</button>
+          <span style="flex:1"></span>
+          <div style="display:flex;align-items:center;gap:12px;color:#707070">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><rect x=3 y=3 width=18 height=18 rx=2/></svg>
+            <span style="font-size:11px;font-weight:700;border:1px solid #333333;border-radius:5px;padding:2px 6px">9:16</span>
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9"><path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M8 21H5a2 2 0 0 1-2-2v-3M16 21h3a2 2 0 0 0 2-2v-3"/></svg>
+          </div>
+        </div>
+      </div>
+
+      <!-- right 세부 정보 properties -->
+      <div style="width:262px;flex:none;background:#0a0a0a;border-left:1px solid #222222;overflow:auto;padding:16px 16px">
+        <div style="display:flex;gap:3px;background:#121212;border:1px solid #232323;border-radius:9px;padding:3px;margin-bottom:18px">
+          <sc-for list="{{ editor.propTabs }}" as="t" hint-placeholder-count="3"><button style="{{ t.style }}">{{ t.label }}</button></sc-for>
+        </div>
+        <div style="font-size:12px;font-weight:700;color:#9a9a9a;margin-bottom:14px">세부 정보</div>
+        <div style="display:flex;flex-direction:column;gap:16px">
+          <sc-for list="{{ editor.propSliders }}" as="p" hint-placeholder-count="4">
+            <div>
+              <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px"><span style="font-size:12px;font-weight:600;color:#cfcfcf">{{ p.label }}</span><span class="mono" style="font-size:11px;color:#9a9a9a">{{ p.disp }}</span></div>
+              <div onClick="{{ p.set }}" style="height:6px;background:#1e1e1e;border-radius:99px;position:relative;cursor:pointer"><div style="position:absolute;left:0;top:0;bottom:0;width:{{ p.fill }};background:#6b74f0;border-radius:99px"></div><div style="position:absolute;top:50%;transform:translate(-50%,-50%);left:{{ p.fill }};width:14px;height:14px;border-radius:50%;background:#fff;box-shadow:0 1px 4px rgba(0,0,0,.4)"></div></div>
+            </div>
+          </sc-for>
+          <div style="border-top:1px solid #1f1f1f;padding-top:14px;font-size:11.5px;color:#707070;line-height:1.5">좌측 도구로 편집 요소를 추가하면 여기에서 세부 속성을 조정할 수 있어요.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- bottom timeline -->
+    <div style="height:214px;flex:none;border-top:1px solid #222222;background:#0a0a0a;display:flex;flex-direction:column">
+      <!-- toolbar -->
+      <div style="height:44px;flex:none;display:flex;align-items:center;gap:2px;padding:0 14px;border-bottom:1px solid #1f1f1f">
+        <button style-hover="background:#1e1e1e" style="display:flex;align-items:center;justify-content:center;width:30px;height:30px;background:none;border:none;color:#cfcfcf;border-radius:7px;cursor:pointer"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg></button>
+        <button style-hover="background:#1e1e1e" style="display:flex;align-items:center;justify-content:center;width:30px;height:30px;background:#1e1e1e;border:none;color:#cfcfcf;border-radius:7px;cursor:pointer"><svg width="15" height="15" viewBox="0 0 24 24" fill="currentColor"><path d="M4 2l14 8-6 1.5L15 18l-2 1-3-6-4 4z"/></svg></button>
+        <div style="width:1px;height:18px;background:#2b2b2b;margin:0 5px"></div>
+        <button style-hover="background:#1e1e1e" style="display:flex;align-items:center;justify-content:center;width:30px;height:30px;background:none;border:none;color:#9a9a9a;border-radius:7px;cursor:pointer"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 14L4 9l5-5M4 9h11a5 5 0 0 1 0 10h-3"/></svg></button>
+        <button style-hover="background:#1e1e1e" style="display:flex;align-items:center;justify-content:center;width:30px;height:30px;background:none;border:none;color:#9a9a9a;border-radius:7px;cursor:pointer"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 14l5-5-5-5M20 9H9a5 5 0 0 0 0 10h3"/></svg></button>
+        <div style="width:1px;height:18px;background:#2b2b2b;margin:0 5px"></div>
+        <button onClick="{{ editor.split }}" style-hover="background:#1e1e1e" style="display:flex;align-items:center;gap:6px;background:none;border:none;color:#cfcfcf;font-size:12px;font-weight:600;border-radius:7px;padding:6px 10px;cursor:pointer;font-family:inherit"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v18M6 8l-3 4 3 4M18 8l3 4-3 4"/></svg>분할</button>
+        <button onClick="{{ editor.del }}" style-hover="background:#1e1e1e" style="display:flex;align-items:center;gap:6px;background:none;border:none;color:#cfcfcf;font-size:12px;font-weight:600;border-radius:7px;padding:6px 10px;cursor:pointer;font-family:inherit"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 7h16M9 7V5h6v2M6 7l1 13h10l1-13"/></svg>삭제</button>
+        <button style-hover="background:#1e1e1e" style="display:flex;align-items:center;gap:6px;background:none;border:none;color:#cfcfcf;font-size:12px;font-weight:600;border-radius:7px;padding:6px 10px;cursor:pointer;font-family:inherit"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 3l-2 6h5l-4 12"/></svg>속도</button>
+        <span style="flex:1"></span>
+        <button onClick="{{ editor.zoomOut }}" style-hover="color:#cfcfcf" style="background:none;border:none;color:#707070;cursor:pointer;display:flex;padding:4px"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14"/></svg></button>
+        <div onClick="{{ editor.setZoom }}" style="width:96px;height:5px;background:#1e1e1e;border-radius:99px;position:relative;cursor:pointer"><div style="position:absolute;left:0;top:0;bottom:0;width:{{ editor.zoomFill }};background:#3a4050;border-radius:99px"></div><div style="position:absolute;top:50%;left:{{ editor.zoomFill }};transform:translate(-50%,-50%);width:12px;height:12px;border-radius:50%;background:#cfcfcf"></div></div>
+        <button onClick="{{ editor.zoomIn }}" style-hover="color:#cfcfcf" style="background:none;border:none;color:#707070;cursor:pointer;display:flex;padding:4px"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 5v14M5 12h14"/></svg></button>
+      </div>
+      <!-- tracks -->
+      <div style="flex:1;min-height:0;overflow:auto;padding:10px 16px;position:relative">
+        <div style="position:relative;width:{{ editor.zoomWidth }};min-width:100%">
+          <!-- ruler (click to seek) -->
+          <div onClick="{{ editor.seek }}" class="mono" style="position:relative;height:16px;color:#6b6b6b;font-size:9.5px;margin-bottom:6px;cursor:pointer">
+            <sc-for list="{{ editor.ticks }}" as="tk" hint-placeholder-count="6"><span style="position:absolute;left:{{ tk.left }};transform:translateX(-50%)">{{ tk.label }}</span></sc-for>
+          </div>
+          <!-- playhead -->
+          <div style="position:absolute;top:10px;bottom:0;left:{{ editor.playPct }};width:2px;background:#eceef2;z-index:5;pointer-events:none"><div style="position:absolute;top:-1px;left:-4px;width:10px;height:10px;border-radius:2px;background:#eceef2"></div></div>
+          <!-- video track -->
+          <div style="position:relative;height:46px;margin-bottom:6px;border:1px solid #8b7cf6;border-radius:8px;overflow:hidden">
+            <div style="display:flex;gap:2px;height:100%"><sc-for list="{{ editor.cells }}" as="c" hint-placeholder-count="8"><div style="flex:1;background:{{ c.bg }}"></div></sc-for></div>
+            <sc-for list="{{ editor.cutMarks }}" as="m" hint-placeholder-count="0"><div style="position:absolute;top:0;bottom:0;left:{{ m.left }};width:2px;background:#fbbf24;box-shadow:0 0 0 1px rgba(0,0,0,.4)"></div></sc-for>
+          </div>
+          <!-- caption track -->
+          <div style="position:relative;height:26px;margin-bottom:6px">
+            <sc-for list="{{ editor.capBlocks }}" as="b" hint-placeholder-count="3"><div onClick="{{ b.select }}" style="{{ b.style }}">{{ b.short }}</div></sc-for>
+          </div>
+          <!-- audio track -->
+          <div style="height:34px;background:rgba(52,211,153,.08);border:1px solid rgba(52,211,153,.3);border-radius:6px;display:flex;align-items:center;gap:1px;padding:0 6px;overflow:hidden">
+            <sc-for list="{{ editor.waves }}" as="w" hint-placeholder-count="40"><div style="flex:1;height:{{ w.h }};min-width:1px;background:#34d399;border-radius:1px;opacity:.7"></div></sc-for>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  </sc-if>
+
+  <!-- ===== DERIVATION MODAL ===== -->
+  <sc-if value="{{ hasDeriv }}" hint-placeholder-val="{{ true }}">
+  <div onClick="{{ closeDeriv }}" style="position:fixed;inset:0;z-index:70;background:rgba(5,6,9,.72);backdrop-filter:blur(6px);display:flex;align-items:center;justify-content:center;padding:30px;animation:rfade .18s ease">
+    <div onClick="{{ stopEv }}" style="width:100%;max-width:1000px;max-height:90vh;overflow:auto;background:#131313;border:1px solid #2b2b2b;border-radius:18px;box-shadow:0 30px 80px rgba(0,0,0,.6)">
+      <div style="display:flex;align-items:center;gap:14px;padding:18px 22px;border-bottom:1px solid #232323;position:sticky;top:0;background:#131313;z-index:2">
+        <div>
+          <div style="font-size:16px;font-weight:700;letter-spacing:-.3px" class="grotesk">{{ deriv.title }}</div>
+          <div style="font-size:11.5px;color:#707070;margin-top:2px">{{ deriv.sub }}</div>
+        </div>
+        <span style="flex:1"></span>
+        <button onClick="{{ deriv.enter }}" style-hover="background:#5a63e6" style="background:#6b74f0;border:none;color:#fff;font-weight:600;font-size:12.5px;border-radius:9px;padding:9px 15px;cursor:pointer;font-family:inherit">검수 워크스페이스 열기 →</button>
+        <button onClick="{{ closeDeriv }}" style-hover="color:#eceef2" style="background:none;border:none;color:#707070;cursor:pointer;font-family:inherit;font-size:20px;line-height:1">✕</button>
+      </div>
+
+      <div style="padding:22px">
+        <div style="font-size:12px;color:#9a9a9a;margin-bottom:16px">하나의 원본이 AI를 거쳐 <b style="color:#eceef2">4가지 파생물</b>로 구조화돼요. 카드를 눌러 각 파생 결과를 확인하세요.</div>
+
+        <!-- derivation branch -->
+        <div style="display:flex;gap:0;align-items:stretch;margin-bottom:20px">
+          <!-- source -->
+          <div style="width:216px;flex:none;display:flex;flex-direction:column;justify-content:center">
+            <div style="position:relative;aspect-ratio:16/9;border-radius:12px;background:{{ deriv.sourceThumb }};border:1px solid #333333;overflow:hidden">
+              <span style="position:absolute;top:8px;left:8px;font-size:10px;font-weight:700;color:#fff;background:rgba(0,0,0,.5);border-radius:6px;padding:3px 8px">원본 영상</span>
+              <span class="mono" style="position:absolute;bottom:8px;right:8px;font-size:10.5px;font-weight:600;color:#fff;background:rgba(0,0,0,.6);border-radius:5px;padding:2px 6px">{{ deriv.dur }}</span>
+              <div style="position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);width:40px;height:40px;border-radius:50%;background:rgba(10,11,15,.5);display:flex;align-items:center;justify-content:center;border:1px solid rgba(255,255,255,.28)"><svg width="15" height="15" viewBox="0 0 24 24" fill="#fff" style="margin-left:2px"><path d="M8 5v14l11-7z"/></svg></div>
+            </div>
+          </div>
+          <!-- connector -->
+          <div style="width:54px;flex:none">
+            <svg width="100%" height="100%" viewBox="0 0 100 100" preserveAspectRatio="none" style="display:block">
+              <g stroke="#3a3a3a" stroke-width="1.4" fill="none" vector-effect="non-scaling-stroke">
+                <path d="M0 50 H45" vector-effect="non-scaling-stroke"/>
+                <path d="M45 12.5 V87.5" vector-effect="non-scaling-stroke"/>
+                <path d="M45 12.5 H100" vector-effect="non-scaling-stroke"/>
+                <path d="M45 37.5 H100" vector-effect="non-scaling-stroke"/>
+                <path d="M45 62.5 H100" vector-effect="non-scaling-stroke"/>
+                <path d="M45 87.5 H100" vector-effect="non-scaling-stroke"/>
+              </g>
+            </svg>
+          </div>
+          <!-- categories -->
+          <div style="flex:1;display:flex;flex-direction:column;gap:8px">
+            <sc-for list="{{ deriv.cats }}" as="c" hint-placeholder-count="4">
+              <button onClick="{{ c.pick }}" style="{{ c.style }}">
+                <span style="{{ c.dotStyle }}"><span style="width:12px;height:12px;border-radius:3px;background:{{ c.color }}"></span></span>
+                <span style="flex:1"><span style="font-size:13.5px;font-weight:700;display:block">{{ c.label }}</span><span style="font-size:11px;color:#707070">{{ c.sub }}</span></span>
+                <span style="{{ c.numStyle }}">{{ c.countLabel }}</span>
+              </button>
+            </sc-for>
+          </div>
+        </div>
+
+        <!-- selected category detail -->
+        <div style="border-top:1px solid #232323;padding-top:18px">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px"><span style="width:10px;height:10px;border-radius:3px;background:{{ deriv.selColor }}"></span><span style="font-size:14px;font-weight:700">{{ deriv.selLabel }}</span></div>
+
+          <sc-if value="{{ deriv.showThumbs }}" hint-placeholder-val="{{ true }}">
+          <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:12px">
+            <sc-for list="{{ deriv.thumbItems }}" as="t" hint-placeholder-count="6">
+              <button onClick="{{ t.open }}" style-hover="border-color:#8b7cf6;transform:translateY(-2px)" style="text-align:left;padding:0;background:#161616;border:1px solid #262626;border-radius:11px;overflow:hidden;cursor:pointer;font-family:inherit;color:inherit;transition:transform .12s,border-color .12s">
+                <div style="position:relative;aspect-ratio:{{ t.ratio }};background:{{ t.thumb }}">
+                  <span style="position:absolute;top:6px;left:6px;font-size:9.5px;font-weight:800;color:#0a0a0a;background:{{ t.color }};border-radius:5px;padding:1px 6px;z-index:2">{{ t.tag }}</span>
+                  <div style-hover="opacity:1" style="position:absolute;inset:0;opacity:0;transition:opacity .15s;background:linear-gradient(180deg,rgba(11,12,15,.15),rgba(11,12,15,.7));display:flex;flex-direction:column;align-items:center;justify-content:center;gap:7px">
+                    <span style="width:38px;height:38px;border-radius:50%;background:rgba(139,124,246,.32);border:1px solid rgba(199,193,255,.6);display:flex;align-items:center;justify-content:center"><svg width="15" height="15" viewBox="0 0 24 24" fill="#fff" style="margin-left:2px"><path d="M8 5v14l11-7z"/></svg></span>
+                    <span style="font-size:10px;font-weight:700;color:#e6e4ff;letter-spacing:.2px">미리보기 · 편집</span>
+                  </div>
+                </div>
+                <div style="padding:9px 10px 10px"><div style="font-size:11.5px;font-weight:600;line-height:1.35;text-wrap:pretty">{{ t.title }}</div><div class="mono" style="font-size:10px;color:#707070;margin-top:3px">{{ t.range }}</div></div>
+              </button>
+            </sc-for>
+          </div>
+          </sc-if>
+
+          <sc-if value="{{ deriv.showBrands }}" hint-placeholder-val="{{ true }}">
+          <div style="display:flex;flex-direction:column;gap:8px">
+            <sc-for list="{{ deriv.brandItems }}" as="b" hint-placeholder-count="4">
+              <div style="display:flex;align-items:center;gap:12px;background:#161616;border:1px solid #262626;border-radius:10px;padding:11px 14px">
+                <span style="width:9px;height:9px;border-radius:50%;background:#f5a524"></span>
+                <span style="flex:1;font-size:13px;font-weight:600">{{ b.brand }}</span>
+                <span style="font-size:11px;color:#9a9a9a">{{ b.signal }}</span>
+                <span class="grotesk" style="font-size:15px;font-weight:700;color:#f5a524">{{ b.exp }}</span>
+              </div>
+            </sc-for>
+          </div>
+          </sc-if>
+
+          <sc-if value="{{ deriv.showAnalysis }}" hint-placeholder-val="{{ true }}">
+          <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px">
+            <sc-for list="{{ deriv.analysisItems }}" as="a" hint-placeholder-count="6">
+              <div style="display:flex;justify-content:space-between;align-items:center;background:#161616;border:1px solid #262626;border-radius:10px;padding:12px 15px">
+                <span style="font-size:12.5px;color:#9a9a9a">{{ a.k }}</span>
+                <span class="grotesk" style="font-size:14px;font-weight:700;color:#5e9bff">{{ a.v }}</span>
+              </div>
+            </sc-for>
+          </div>
+          </sc-if>
+        </div>
+      </div>
+    </div>
+  </div>
+  </sc-if>
+
+  <!-- toast -->
+  <sc-if value="{{ toast }}" hint-placeholder-val="{{ true }}">
+  <div style="position:fixed;bottom:24px;left:50%;transform:translateX(-50%);background:#1a1e26;border:1px solid #333333;color:#eceef2;font-size:13px;font-weight:600;border-radius:10px;padding:11px 18px;box-shadow:0 12px 30px rgba(0,0,0,.35);z-index:60;animation:rfade .2s ease;display:flex;align-items:center;gap:9px">
+    <span style="width:8px;height:8px;border-radius:50%;background:#8b93ff"></span>{{ toast }}
+  </div>
+  </sc-if>
+
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  state = {
+    screen:'library', tab:'timeline', lib:'전체', video:null, clipFilter:'전체',
+    derivVideo:null, derivCat:'shorts', editorClip:null, editorTool:'captions', editorPlaying:false,
+    editorTime:0, editorCap:0, editorZoom:1, editorChips:{}, editorToggles:{}, editorColors:{}, editorSliders:{}, editorCuts:[],
+    registerOpen:false, registerPlat:null,
+    distClip:null, distPlat:null, distSel:{},
+    trendCh:'c1', trendKind:'all', trendSort:'recent', trendVideo:null,
+    uploadOpen:false, uploadMode:'file', uploadProg:'p1', newProgOpen:false, newProgDays:{},
+    lanesOff:{}, sel:null, adopted:{}, cut:{}, resolved:{}, pplOut:{}, clipRender:{},
+    playhead:612, toast:null,
+  };
+
+  TOTAL = 4350;
+  THUMBS = ['linear-gradient(160deg,#2b2620,#17140f)','linear-gradient(160deg,#26253a,#15141d)','linear-gradient(160deg,#1f2b28,#131917)','linear-gradient(160deg,#2b2226,#171215)','linear-gradient(160deg,#222b34,#13181e)'];
+
+  VIDEOS = [
+    {id:'v1', prog:'솔로천국 시즌4', ep:'8화', dur:'72:30', uploaded:'2시간 전', thumb:1, ok:true, primary:true, shorts:8, ppl:4, issues:4, status:{l:'추천 검토 대기',c:'#8b93ff',bg:'rgba(139,147,255,.15)'}},
+    {id:'v4', prog:'환승로그', ep:'5화', dur:'54:08', uploaded:'5시간 전', thumb:3, ok:true, shorts:9, ppl:3, issues:2, status:{l:'확정 대기',c:'#fbbf24',bg:'rgba(251,191,36,.14)'}},
+    {id:'v7', prog:'심야 다큐', ep:'2화', dur:'48:15', uploaded:'20분 전', thumb:4, ok:false, analyzing:true, pct:62, status:{l:'분석 중 62%',c:'#fbbf24',bg:'rgba(251,191,36,.14)'}},
+    {id:'v6', prog:'심야 다큐', ep:'3화', dur:'—', uploaded:'12분 전', thumb:4, ok:false, failed:true, status:{l:'분석 실패',c:'#ff6b78',bg:'rgba(248,113,113,.14)'}},
+    {id:'v2', prog:'솔로천국 시즌4', ep:'7화', dur:'70:12', uploaded:'어제', thumb:1, ok:true, shorts:8, ppl:5, issues:3, status:{l:'배포 완료',c:'#34d399',bg:'rgba(52,211,153,.13)'}},
+    {id:'v8', prog:'트롯 대잔치', ep:'12화', dur:'88:50', uploaded:'1일 전', thumb:2, ok:true, shorts:11, ppl:6, issues:5, status:{l:'배포 완료',c:'#34d399',bg:'rgba(52,211,153,.13)'}},
+    {id:'v3', prog:'솔로천국 시즌4', ep:'6화', dur:'68:40', uploaded:'3일 전', thumb:1, ok:true, shorts:7, ppl:4, issues:3, status:{l:'배포 완료',c:'#34d399',bg:'rgba(52,211,153,.13)'}},
+    {id:'v9', prog:'트롯 대잔치', ep:'11화', dur:'85:30', uploaded:'6일 전', thumb:2, ok:true, shorts:10, ppl:5, issues:4, status:{l:'배포 완료',c:'#34d399',bg:'rgba(52,211,153,.13)'}},
+  ];
+  PROGRAMS = ['전체','솔로천국 시즌4','환승로그','심야 다큐','트롯 대잔치'];
+
+  LANES = [
+    {key:'shorts',  label:'쇼츠 후보', color:'#8b7cf6'},
+    {key:'ppl',     label:'PPL·브랜드', color:'#f5a524'},
+    {key:'silence', label:'무음 구간', color:'#7f8a9c'},
+    {key:'issue',   label:'개인정보·QC', color:'#ff6b78'},
+    {key:'audio',   label:'음량 피크', color:'#ff9f4c'},
+  ];
+  ITEMS = [
+    // shorts
+    {id:'s1',lane:'shorts',t0:305,t1:332,title:'오프닝 자기소개 중 빵 터진 순간',rank:4,score:84,hook:'"제 이름은요, 사실 어제 급하게…"'},
+    {id:'s2',lane:'shorts',t0:612,t1:657,title:'"나 진짜 오빠 없으면 안 될 것 같아" — 영숙 폭탄 고백',rank:1,score:94,hook:'회차 최고 화제 구간'},
+    {id:'s3',lane:'shorts',t0:1840,t1:1878,title:'삼각관계 정면돌파 — 광수의 3초 정적',rank:2,score:91,hook:'정적 임팩트'},
+    {id:'s4',lane:'shorts',t0:2470,t1:2523,title:'새 남자 등장에 술렁 — 첫 등장 슬로우',rank:3,score:88,hook:'등장 이벤트'},
+    {id:'s5',lane:'shorts',t0:3120,t1:3162,title:'데이트권 쟁탈 — 반전 결과 발표',rank:5,score:82,hook:'긴장 고조'},
+    {id:'s6',lane:'shorts',t0:4010,t1:4052,title:'밤샘 대화, 눈물 클로즈업',rank:6,score:79,hook:'감정 피크'},
+    // ppl
+    {id:'p1',lane:'ppl',t0:300,t1:345,title:'의류 브랜드 로고',signal:'로고',exp:45,brand:'브랜드 A (의류)'},
+    {id:'p2',lane:'ppl',t0:1450,t1:1485,title:'카페 브랜드 음성 언급',signal:'음성',exp:35,brand:'브랜드 B (카페)'},
+    {id:'p3',lane:'ppl',t0:3092,t1:3128,title:'스마트폰 제품 클로즈업',signal:'로고+음성',exp:36,brand:'브랜드 C (전자)'},
+    {id:'p4',lane:'ppl',t0:3820,t1:3842,title:'음료 브랜드 음성 언급',signal:'음성',exp:22,brand:'브랜드 D (음료)'},
+    // silence
+    {id:'sl1',lane:'silence',t0:432,t1:439,title:'무음 구간 7초',save:7,level:'긴'},
+    {id:'sl2',lane:'silence',t0:2120,t1:2125,title:'무음 구간 5초',save:5,level:'중'},
+    {id:'sl3',lane:'silence',t0:3483,t1:3492,title:'무음 구간 9초',save:9,level:'긴'},
+    // issue (point)
+    {id:'i1',lane:'issue',t0:344,t1:356,title:'개인정보 노출 의심 — 전화번호 자막',kind:'개인정보'},
+    {id:'i2',lane:'issue',t0:2415,t1:2427,title:'경쟁사 로고 노출',kind:'경쟁사'},
+    {id:'i3',lane:'issue',t0:1210,t1:1222,title:'얼굴 미동의 출연자 노출 가능성',kind:'초상권'},
+    {id:'i4',lane:'issue',t0:3650,t1:3662,title:'상표권 텍스트 노출',kind:'상표'},
+    // audio (point)
+    {id:'a1',lane:'audio',t0:662,t1:674,title:'음량 피크 경고 (클리핑)'},
+    {id:'a2',lane:'audio',t0:1850,t1:1862,title:'급격한 음량 변화'},
+  ];
+
+  fmt(s){const m=Math.floor(s/60),x=Math.floor(s%60);return m+':'+String(x).padStart(2,'0');}
+  flash(m){this.setState({toast:m});clearTimeout(this._t);this._t=setTimeout(()=>this.setState({toast:null}),2200);}
+  componentWillUnmount(){clearTimeout(this._t);if(this._pt)clearInterval(this._pt);}
+
+  pickVideo(id){
+    const v=this.VIDEOS.find(x=>x.id===id); if(!v)return;
+    if(!v.ok){this.flash(v.failed?'분석 실패 — 재업로드 필요':'분석 진행 중… 완료 후 열려요');return;}
+    this.setState({video:v,screen:'review',tab:'timeline',sel:null,playhead:612});
+  }
+  openDeriv(id){
+    const v=this.VIDEOS.find(x=>x.id===id); if(!v)return;
+    if(!v.ok){this.flash(v.failed?'분석 실패 — 재업로드 필요':'분석 진행 중… 완료 후 열려요');return;}
+    this.setState({derivVideo:id,derivCat:'shorts'});
+  }
+  openEditor(clip){
+    if(this._pt){clearInterval(this._pt);this._pt=null;}
+    this.setState({screen:'editor',derivVideo:null,editorTool:'captions',editorPlaying:false,editorClip:clip,
+      editorTime:0,editorCap:0,editorZoom:1,editorChips:{},editorToggles:{},editorColors:{},editorSliders:{},editorCuts:[]});
+  }
+  closeEditor(){
+    if(this._pt){clearInterval(this._pt);this._pt=null;}
+    this.setState({editorPlaying:false});
+  }
+  togglePlay(){
+    const dur=(this.state.editorClip&&this.state.editorClip.durSec)||38;
+    if(this._pt){clearInterval(this._pt);this._pt=null;this.setState({editorPlaying:false});return;}
+    if(this.state.editorTime>=dur)this.setState({editorTime:0});
+    this.setState({editorPlaying:true});
+    this._pt=setInterval(()=>{
+      this.setState(s=>{
+        const t=s.editorTime+0.1;
+        if(t>=dur){clearInterval(this._pt);this._pt=null;return{editorTime:dur,editorPlaying:false};}
+        return{editorTime:t};
+      });
+    },100);
+  }
+  seek(e){
+    const dur=(this.state.editorClip&&this.state.editorClip.durSec)||38;
+    const r=e.currentTarget.getBoundingClientRect();
+    const p=Math.max(0,Math.min(1,(e.clientX-r.left)/r.width));
+    this.setState({editorTime:p*dur});
+  }
+  setSlider(key,e){
+    const r=e.currentTarget.getBoundingClientRect();
+    const p=Math.max(0,Math.min(1,(e.clientX-r.left)/r.width));
+    this.setState(s=>({editorSliders:{...s.editorSliders,[key]:Math.round(p*100)}}));
+  }
+  setZoom(e){
+    const r=e.currentTarget.getBoundingClientRect();
+    const p=Math.max(0,Math.min(1,(e.clientX-r.left)/r.width));
+    this.setState({editorZoom:0.5+p*2.5});
+  }
+  bumpZoom(d){this.setState(s=>({editorZoom:Math.max(0.5,Math.min(3,s.editorZoom+d))}));}
+  openUpload(progId){this.setState({uploadOpen:true,uploadMode:'file',uploadProg:progId||'p1'});}
+  back(){this.setState({screen:'library'});}
+
+  renderVals(){
+    const S=this.state;
+    const laneColor=(k)=>this.LANES.find(l=>l.key===k).color;
+    const laneLabel=(k)=>this.LANES.find(l=>l.key===k).label;
+    const ic=(html)=>React.createElement('span',{style:{display:'inline-flex',lineHeight:0},dangerouslySetInnerHTML:{__html:html}});
+
+    // nav
+    const navDef=[
+      {key:'dashboard',label:'대시보드',ico:'<svg width=16 height=16 viewBox="0 0 24 24" fill=none stroke=currentColor stroke-width=2><rect x=3 y=3 width=7 height=7 rx=1.5/><rect x=14 y=3 width=7 height=7 rx=1.5/><rect x=3 y=14 width=7 height=7 rx=1.5/><rect x=14 y=14 width=7 height=7 rx=1.5/></svg>',screen:'dashboard'},
+      {key:'programs',label:'프로그램',ico:'<svg width=16 height=16 viewBox="0 0 24 24" fill=none stroke=currentColor stroke-width=2><path d="M2 7l4-4h5l3 3h8v13a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2z"/></svg>',screen:'programs'},
+      {key:'library',label:'콘텐츠',ico:'<svg width=16 height=16 viewBox="0 0 24 24" fill=none stroke=currentColor stroke-width=2><rect x=2 y=4 width=20 height=16 rx=2/><path d="M10 9l5 3-5 3z"/></svg>',screen:'library',screens:['library','review'],badge:'8'},
+      {key:'clips',label:'클립',ico:'<svg width=16 height=16 viewBox="0 0 24 24" fill=none stroke=currentColor stroke-width=2><rect x=3 y=3 width=18 height=18 rx=2/><path d="M7 3v18M17 3v18"/></svg>',screen:'clips'},
+      {key:'dist',label:'배포현황',ico:'<svg width=16 height=16 viewBox="0 0 24 24" fill=none stroke=currentColor stroke-width=2><path d="M22 2 11 13M22 2l-7 20-4-9-9-4z"/></svg>',screen:'dist'},
+      {key:'analytics',label:'성과',ico:'<svg width=16 height=16 viewBox="0 0 24 24" fill=none stroke=currentColor stroke-width=2><path d="M3 3v18h18M7 14l4-4 3 3 5-6"/></svg>',screen:'analytics'},
+      {key:'trends',label:'채널 트렌드',ico:'<svg width=16 height=16 viewBox="0 0 24 24" fill=none stroke=currentColor stroke-width=2><path d="M3 17l6-6 4 4 8-8"/></svg>',screen:'trends'},
+      {key:'publish',label:'배포채널',ico:'<svg width=16 height=16 viewBox="0 0 24 24" fill=none stroke=currentColor stroke-width=2><circle cx=12 cy=12 r=3/><path d="M19 12a7 7 0 0 0-.1-1l2-1.6-2-3.4-2.4 1a7 7 0 0 0-1.7-1L14.5 2h-5l-.4 2.6a7 7 0 0 0-1.7 1l-2.4-1-2 3.4 2 1.6a7 7 0 0 0 0 2l-2 1.6 2 3.4 2.4-1a7 7 0 0 0 1.7 1l.4 2.6h5l.4-2.6a7 7 0 0 0 1.7-1l2.4 1 2-3.4-2-1.6a7 7 0 0 0 .1-1z"/></svg>',screen:'channels'},
+      {key:'ops',label:'운영·진단',ico:'<svg width=16 height=16 viewBox="0 0 24 24" fill=none stroke=currentColor stroke-width=2><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>',screen:'ops'},
+    ];
+    const nav=navDef.map(n=>{
+      const scr=n.screens||[n.screen];
+      const active=scr.includes(S.screen);
+      const base='display:flex;align-items:center;gap:11px;width:100%;border:none;border-radius:9px;padding:8px 10px;font-size:13.5px;cursor:pointer;font-family:inherit;transition:background .12s;';
+      return {label:n.label,icon:n.ico,iconEl:ic(n.ico),
+        icoColor:active?'#8b93ff':'#707070',
+        style:active?base+'background:rgba(139,147,255,.1);color:#eceef2;font-weight:600':base+'background:none;color:#a6a6a6',
+        badge:active&&n.badge?n.badge:null,badgeStyle:'background:#6b74f0;color:#fff;font-size:11px;font-weight:700;border-radius:6px;padding:1px 7px',
+        go:()=>this.setState({screen:n.screen,sel:null})};
+    });
+
+    // library
+    const programs=this.PROGRAMS.map(p=>({label:p,pick:()=>this.setState({lib:p}),
+      style:'font-size:12.5px;font-weight:600;border-radius:999px;padding:6px 13px;cursor:pointer;font-family:inherit;'+(S.lib===p?'background:rgba(139,147,255,.12);border:1px solid rgba(139,147,255,.3);color:#c3c8ff':'background:#161616;border:1px solid #2b2b2b;color:#9a9a9a')}));
+    const programSel={value:S.lib,change:(e)=>this.setState({lib:e.target.value}),options:this.PROGRAMS.map(p=>({v:p,label:p==='전체'?'전체 프로그램':p}))};
+    const videos=this.VIDEOS.filter(v=>S.lib==='전체'||v.prog===S.lib).map(v=>({
+      ep:v.ep,prog:v.prog,dur:v.dur,uploaded:v.uploaded,thumb:this.THUMBS[v.thumb],
+      statusLabel:v.status.l,statusStyle:'position:absolute;top:9px;right:9px;font-size:10.5px;font-weight:700;border-radius:999px;padding:3px 9px;color:'+v.status.c+';background:'+v.status.bg+';backdrop-filter:blur(4px)',
+      dim:v.ok?'':'opacity:.62',ok:v.ok,analyzing:!!v.analyzing,failed:!!v.failed,pct:v.pct,
+      shorts:v.shorts,ppl:v.ppl,issues:v.issues,open:()=>this.openDeriv(v.id)}));
+
+    // ---- review ----
+    const v=S.video||this.VIDEOS[0];
+    const playPct=(S.playhead/this.TOTAL*100)+'%';
+
+    // pipeline
+    const PSTAGES=[['source','소스','done'],['merge','병합','done'],['split','분할','done'],['analyze','분석','done'],['recommend','추천','current'],['edit','편집','idle'],['encode','인코딩','idle'],['publish','배포','idle']];
+    const pipeline=PSTAGES.map((s,i)=>{
+      const st=s[2];
+      const dotStyle=st==='done'?'background:rgba(52,211,153,.15);border:1px solid rgba(52,211,153,.4);color:#34d399':st==='current'?'background:#6b74f0;color:#fff':'background:#161616;border:1px solid #2b2b2b;color:#5a5a5a';
+      const mark=st==='done'?'<svg width=13 height=13 viewBox="0 0 24 24" fill=none stroke=currentColor stroke-width=3><path d="M20 6L9 17l-5-5"/></svg>':'<span style="font-size:11px;font-weight:700">'+(i+1)+'</span>';
+      return {label:s[1],mark,markEl:ic(mark),dotStyle,
+        labelStyle:st==='idle'?'color:#5a5a5a':st==='current'?'color:#c3c8ff':'color:#a6a6a6',
+        connector:i<PSTAGES.length-1, lineColor:st==='done'?'rgba(52,211,153,.4)':'#2b2b2b'};
+    });
+
+    // tabs
+    const adoptedN=this.ITEMS.filter(x=>x.lane==='shorts'&&S.adopted[x.id]).length;
+    const tabsDef=[{key:'timeline',label:'타임라인'},{key:'clips',label:'클립',count:adoptedN||null},{key:'ppl',label:'PPL 리포트'},{key:'perf',label:'성과'}];
+    const tabs=tabsDef.map(t=>{const a=S.tab===t.key;return{label:t.label,count:t.count,
+      countStyle:'margin-left:6px;font-size:11px;font-weight:700;border-radius:6px;padding:1px 7px;'+(a?'background:#6b74f0;color:#fff':'background:#232323;color:#9a9a9a'),
+      style:'background:none;border:none;border-bottom:2px solid '+(a?'#8b93ff':'transparent')+';color:'+(a?'#eceef2':'#9a9a9a')+';font-weight:'+(a?'700':'500')+';font-size:13.5px;padding:12px 14px 11px;cursor:pointer;font-family:inherit',
+      go:()=>this.setState({tab:t.key,sel:null})};});
+
+    // ticks
+    const ticks=[0,900,1800,2700,3600,4350].map(t=>({left:(t/this.TOTAL*100)+'%',label:this.fmt(t)}));
+
+    // lane chips
+    const laneChips=this.LANES.map(l=>{
+      const cnt=this.ITEMS.filter(x=>x.lane===l.key).length; const off=S.lanesOff[l.key];
+      return {label:l.label,count:cnt,color:l.color,dot:off?'opacity:.3':'',
+        toggle:()=>this.setState(s=>({lanesOff:{...s.lanesOff,[l.key]:!s.lanesOff[l.key]}})),
+        style:'display:flex;align-items:center;gap:6px;font-size:11.5px;font-weight:600;border-radius:999px;padding:5px 11px;cursor:pointer;font-family:inherit;'+(off?'background:#121212;border:1px solid #232323;color:#5a5a5a':'background:#161616;border:1px solid #2b2b2b;color:#cfcfcf')};
+    });
+
+    // lanes view
+    const lanesView=this.LANES.filter(l=>!S.lanesOff[l.key]).map(l=>{
+      const items=this.ITEMS.filter(x=>x.lane===l.key).map(x=>{
+        const left=(x.t0/this.TOTAL*100), w=Math.max((x.t1-x.t0)/this.TOTAL*100,1.4);
+        const done=(l.key==='shorts'&&S.adopted[x.id])||(l.key==='silence'&&S.cut[x.id])||((l.key==='issue'||l.key==='audio')&&S.resolved[x.id]);
+        const point=l.key==='issue'||l.key==='audio';
+        const isSel=S.sel===x.id;
+        const bg=done?'#333333':l.color;
+        const minW=point?'9px':l.key==='shorts'?'20px':'16px';
+        return {badge:l.key==='shorts'?String(x.rank):(done?'✓':''),title:x.title,
+          click:()=>this.setState({sel:x.id,playhead:x.t0}),
+          style:'position:absolute;top:3px;bottom:3px;left:'+left+'%;width:'+(point?'9px':w+'%')+';min-width:'+minW+';border-radius:4px;border:'+(isSel?'2px solid #fff':'1px solid rgba(0,0,0,.35)')+';background:'+bg+';color:#0a0a0a;font-size:9.5px;font-weight:800;display:flex;align-items:center;justify-content:center;cursor:pointer;z-index:'+(isSel?4:2)+';'+(done?'opacity:.5':'')+(isSel?';box-shadow:0 0 0 2px rgba(255,255,255,.25)':'')};
+      });
+      return {label:l.label,color:l.color,items};
+    });
+
+    // inspector
+    let sel=null;
+    const item=this.ITEMS.find(x=>x.id===S.sel);
+    if(item){
+      const col=laneColor(item.lane);
+      const base={color:col,tint:col.replace(')',',.13)').replace('#','rgba(')||'rgba(0,0,0,.1)'};
+      const hex2rgba=(h,a)=>{const n=parseInt(h.slice(1),16);return 'rgba('+((n>>16)&255)+','+((n>>8)&255)+','+(n&255)+','+a+')';};
+      const range=this.fmt(item.t0)+' – '+this.fmt(item.t1)+' · '+(item.t1-item.t0)+'초';
+      let facts=[], primaryLabel='', primaryAct=()=>{}, secondaryLabel='구간 재생', secondaryAct=()=>this.setState({playhead:item.t0}), desc='';
+      const done=(item.lane==='shorts'&&S.adopted[item.id])||(item.lane==='silence'&&S.cut[item.id])||((item.lane==='issue'||item.lane==='audio')&&S.resolved[item.id]);
+      if(item.lane==='shorts'){
+        desc=item.hook; facts=[{k:'AI 스코어',v:item.score},{k:'추천 순위',v:'#'+item.rank},{k:'경계',v:'종결어미 스냅 ✓'}];
+        primaryLabel=done?'채택됨 ✓':'쇼츠로 채택'; primaryAct=()=>{if(done)return;this.setState(s=>({adopted:{...s.adopted,[item.id]:true},clipRender:{...s.clipRender,[item.id]:'draft'}}));this.flash('채택 · 클립 초안 생성 (무렌더)');};
+      } else if(item.lane==='ppl'){
+        const out=S.pplOut[item.id];
+        desc=item.brand+' — 비전·음성 이중 신호로 감지된 노출 구간이에요.'; facts=[{k:'브랜드',v:item.brand},{k:'노출 시간',v:item.exp+'초'},{k:'신호',v:item.signal}];
+        primaryLabel=out?'리포트에 포함하기':'리포트에서 제외'; primaryAct=()=>{this.setState(s=>({pplOut:{...s.pplOut,[item.id]:!s.pplOut[item.id]}}));this.flash(out?'PPL 리포트에 포함':'PPL 리포트에서 제외');};
+        secondaryLabel='어필리에이트 링크'; secondaryAct=()=>this.flash('어필리에이트 링크 입력 (데모)');
+      } else if(item.lane==='silence'){
+        desc='발화가 없는 구간이에요. 컷을 적용하면 최종 길이가 줄어들어요.'; facts=[{k:'무음 길이',v:item.save+'초'},{k:'분류',v:item.level},{k:'컷 시 절약',v:item.save+'초'}];
+        primaryLabel=done?'컷 적용됨 ✓':'무음 컷 적용'; primaryAct=()=>{if(done)return;this.setState(s=>({cut:{...s.cut,[item.id]:true}}));this.flash(item.save+'초 무음 컷 적용');};
+      } else if(item.lane==='issue'){
+        desc={개인정보:'개인정보가 노출됐을 수 있어요. 블러를 제안합니다.',경쟁사:'경쟁사 로고가 감지됐어요. 마스킹을 제안합니다.',초상권:'미동의 출연자 얼굴일 수 있어요. 블러를 검토하세요.',상표:'상표권 텍스트가 노출됐어요. 마스킹을 검토하세요.'}[item.kind];
+        facts=[{k:'유형',v:item.kind},{k:'위치',v:this.fmt(item.t0)},{k:'권장',v:item.kind==='경쟁사'||item.kind==='상표'?'마스킹':'블러'}];
+        primaryLabel=done?'처리됨 ✓':(item.kind==='경쟁사'||item.kind==='상표'?'마스킹 제안 적용':'블러 제안 적용'); primaryAct=()=>{if(done)return;this.setState(s=>({resolved:{...s.resolved,[item.id]:true}}));this.flash('편집 제안으로 등록');};
+        secondaryLabel='무시'; secondaryAct=()=>{this.setState(s=>({resolved:{...s.resolved,[item.id]:true}}));this.flash('무시 처리');};
+      } else {
+        desc='오디오 이상 구간이에요. 노멀라이즈를 제안합니다.'; facts=[{k:'유형',v:'음량 피크'},{k:'위치',v:this.fmt(item.t0)}];
+        primaryLabel=done?'처리됨 ✓':'노멀라이즈 제안'; primaryAct=()=>{if(done)return;this.setState(s=>({resolved:{...s.resolved,[item.id]:true}}));this.flash('오디오 노멀라이즈 제안 등록');};
+        secondaryLabel='무시'; secondaryAct=()=>{this.setState(s=>({resolved:{...s.resolved,[item.id]:true}}));this.flash('무시 처리');};
+      }
+      sel={color:col,tint:hex2rgba(col,.13),line:hex2rgba(col,.32),laneLabel:laneLabel(item.lane),range,title:item.title,desc,facts,
+        primaryLabel,primaryAct,secondaryLabel,secondaryAct,
+        primaryStyle:'flex:1;background:'+(done?'#1a1e26':col)+';border:none;color:'+(done?'#9a9a9a':'#0a0a0a')+';font-size:12.5px;font-weight:700;border-radius:9px;padding:9px 14px;cursor:pointer;font-family:inherit'};
+    }
+
+    // summary
+    const summary=this.LANES.map(l=>({label:l.label,color:l.color,value:this.ITEMS.filter(x=>x.lane===l.key).length}));
+
+    // clips
+    const adopted=this.ITEMS.filter(x=>x.lane==='shorts'&&S.adopted[x.id]);
+    const clipList=adopted.map(x=>{const r=S.clipRender[x.id]==='rendered';return{
+      title:x.title,range:this.fmt(x.t0)+'–'+this.fmt(x.t1),thumb:this.THUMBS[1],
+      state:r?'확정 · 렌더됨':'초안',stateStyle:r?'font-size:11px;font-weight:700;color:#0a0a0a;background:#34d399;border-radius:5px;padding:2px 8px':'font-size:11px;font-weight:700;color:#c3c8ff;background:rgba(139,147,255,.14);border:1px solid rgba(139,147,255,.3);border-radius:5px;padding:2px 8px',
+      sub:r?'YouTube Shorts 프리셋 · 자막 번인 완료':'세로 크롭·자막 근사 프리뷰',
+      openEditor:()=>this.flash('편집기 v2 (데모 범위 밖)'),
+      confirmLabel:r?'완료':'확정·익스포트',confirmStyle:r?'background:#1e1e1e;border:1px solid #2b2b2b;color:#707070;font-size:12.5px;font-weight:600;border-radius:8px;padding:7px 15px;cursor:default;font-family:inherit':'background:#6b74f0;border:none;color:#fff;font-size:12.5px;font-weight:700;border-radius:8px;padding:7px 15px;cursor:pointer;font-family:inherit',
+      confirm:()=>{if(r)return;this.setState(s=>({clipRender:{...s.clipRender,[x.id]:'rendered'}}));this.flash('서버 렌더 1회 실행 → 확정 클립');}};});
+
+    // ppl rows
+    const pplItems=this.ITEMS.filter(x=>x.lane==='ppl');
+    const pplRows=pplItems.map(x=>{const out=S.pplOut[x.id];return{
+      brand:x.brand,exp:x.exp,signal:x.signal,range:this.fmt(x.t0)+'–'+this.fmt(x.t1),dim:out?'opacity:.45':'',
+      toggle:()=>this.setState(s=>({pplOut:{...s.pplOut,[x.id]:!s.pplOut[x.id]}})),
+      toggleLabel:out?'제외됨':'포함',toggleStyle:'font-size:11px;font-weight:700;border-radius:6px;padding:4px 10px;cursor:pointer;font-family:inherit;'+(out?'background:#161616;border:1px solid #2b2b2b;color:#707070':'background:rgba(245,165,36,.12);border:1px solid rgba(245,165,36,.3);color:#f5a524')};});
+    const pplTotal=pplItems.filter(x=>!S.pplOut[x.id]).reduce((a,x)=>a+x.exp,0);
+    const pplCount=pplItems.filter(x=>!S.pplOut[x.id]).length;
+
+    const perfClips=[
+      {title:'영숙 폭탄 고백',views:'182K',likes:'14.2K',comments:'1.1K',channel:'쇼츠 채널',ago:'3일 전'},
+      {title:'광수 3초 정적',views:'96K',likes:'7.8K',comments:'620',channel:'쇼츠 채널',ago:'3일 전'},
+      {title:'오프닝 빵터짐',views:'54K',likes:'4.1K',comments:'310',channel:'클립 채널',ago:'2일 전'},
+    ];
+
+    // ============ DASHBOARD ============
+    const dashKpi=[
+      {label:'이번 주 원본 처리',value:'23',unit:'건',delta:'▴ 지난주 +6',dc:'#34d399',color:'#eceef2'},
+      {label:'원본당 평균 검수',value:'18',unit:'분',delta:'▾ 2시간 → 20분↓',dc:'#34d399',color:'#8b93ff'},
+      {label:'이번 주 배포 클립',value:'147',unit:'개',delta:'▴ +31',dc:'#34d399',color:'#eceef2'},
+      {label:'배포 클립 총 조회',value:'2.4',unit:'M',delta:'▴ +18%',dc:'#34d399',color:'#eceef2'},
+    ];
+    const dashReview=this.VIDEOS.filter(x=>x.ok&&(x.status.l.includes('검토')||x.status.l.includes('확정'))).map(x=>({
+      ep:x.ep,prog:x.prog,thumb:this.THUMBS[x.thumb],dur:x.dur,uploaded:x.uploaded,
+      shorts:x.shorts,issues:x.issues,statusLabel:x.status.l,statusColor:x.status.c,statusBg:x.status.bg,
+      open:()=>this.pickVideo(x.id)}));
+    const dashQueue=[
+      {label:'심야 다큐 · 2화',stage:'분석',pct:62,color:'#fbbf24'},
+      {label:'트롯 대잔치 · 13화',stage:'분할',pct:28,color:'#8b93ff'},
+    ];
+    const dashAlerts=[
+      {t:'개인정보 노출 의심 4건',s:'솔로천국 S4·8화 검수 대기',c:'#ff6b78',go:()=>this.pickVideo('v1')},
+      {t:'분석 실패 1건',s:'심야 다큐·3화 — 오디오 트랙 없음',c:'#ff6b78',go:()=>this.setState({screen:'library'})},
+      {t:'확정 대기 클립 9개',s:'환승로그·5화 익스포트 전',c:'#fbbf24',go:()=>this.pickVideo('v4')},
+    ];
+
+    // ============ GLOBAL CLIPS ============
+    const CLIPS=[
+      {title:'"오빠 없으면 안 돼" 영숙 폭탄 고백',prog:'솔로천국 S4·8화',range:'10:12–10:57',state:'published',th:1,views:'182K'},
+      {title:'트롯 고음 하이라이트 — 소름 3단 고음',prog:'트롯 대잔치·12화',range:'22:10–22:38',state:'published',th:1,views:'240K'},
+      {title:'환승 첫 재회 — 8초 정적',prog:'환승로그·5화',range:'12:03–12:41',state:'published',th:2,views:'77K'},
+      {title:'광수의 3초 정적 — 삼각관계 정면돌파',prog:'솔로천국 S4·8화',range:'30:40–31:18',state:'confirmed',th:0},
+      {title:'심야 인터뷰 눈물 클로즈업',prog:'심야 다큐·2화',range:'18:20–18:52',state:'confirmed',th:3},
+      {title:'오프닝 자기소개 빵터짐',prog:'솔로천국 S4·8화',range:'05:05–05:32',state:'draft',th:0},
+      {title:'새 남자 등장 슬로우모션',prog:'솔로천국 S4·8화',range:'41:10–42:03',state:'draft',th:0},
+      {title:'데이트권 쟁탈 반전 결과',prog:'솔로천국 S4·8화',range:'52:00–52:42',state:'draft',th:0},
+    ];
+    const CLIPST={published:{l:'게시됨',c:'#34d399',bg:'rgba(52,211,153,.13)',ln:'rgba(52,211,153,.3)'},confirmed:{l:'확정',c:'#8b93ff',bg:'rgba(139,147,255,.13)',ln:'rgba(139,147,255,.3)'},draft:{l:'초안',c:'#fbbf24',bg:'rgba(251,191,36,.12)',ln:'rgba(251,191,36,.3)'}};
+    const clipFilters=['전체','초안','확정','게시됨'];
+    const cfMap={'초안':'draft','확정':'confirmed','게시됨':'published'};
+    const clipsFilters=clipFilters.map(f=>({label:f,pick:()=>this.setState({clipFilter:f}),
+      style:'font-size:12.5px;font-weight:600;border-radius:999px;padding:6px 13px;cursor:pointer;font-family:inherit;'+(S.clipFilter===f?'background:rgba(139,147,255,.12);border:1px solid rgba(139,147,255,.3);color:#c3c8ff':'background:#161616;border:1px solid #2b2b2b;color:#9a9a9a')}));
+    const gClips=CLIPS.filter(c=>S.clipFilter==='전체'||c.state===cfMap[S.clipFilter]).map(c=>{const t=CLIPST[c.state];return{
+      title:c.title,prog:c.prog,range:c.range,thumb:this.THUMBS[c.th],hasViews:!!c.views,views:c.views,
+      stateLabel:t.l,stateStyle:'font-size:10.5px;font-weight:700;color:'+t.c+';background:'+t.bg+';border:1px solid '+t.ln+';border-radius:999px;padding:2px 9px',
+      edit:()=>this.openEditor({title:c.title,range:c.range,thumb:this.THUMBS[c.th],ratio:'9/16',durSec:38,srcId:null}),
+      distribute:()=>this.setState({distClip:c.title,distPlat:null,distSel:{}})};});
+
+    // ============ DISTRIBUTION ============
+    const DSTAT={published:{l:'게시',c:'#34d399',bg:'rgba(52,211,153,.14)'},scheduled:{l:'예약',c:'#fbbf24',bg:'rgba(251,191,36,.14)'},failed:{l:'실패',c:'#ff6b78',bg:'rgba(248,113,113,.14)'},queued:{l:'대기',c:'#9a9a9a',bg:'rgba(138,146,160,.12)'}};
+    const distRows=[
+      {clip:'영숙 폭탄 고백',prog:'솔로천국 S4·8화',when:'3일 전 게시',ch:[['SMR','published'],['YouTube','published'],['Meta','published']]},
+      {clip:'트롯 고음 하이라이트',prog:'트롯 대잔치·12화',when:'3일 전 게시',ch:[['SMR','published'],['YouTube','published'],['Meta','failed']]},
+      {clip:'환승 첫 재회',prog:'환승로그·5화',when:'오늘 20:00 예약',ch:[['SMR','scheduled'],['YouTube','scheduled'],['Meta','queued']]},
+      {clip:'광수 3초 정적',prog:'솔로천국 S4·8화',when:'내일 12:00 예약',ch:[['SMR','scheduled'],['YouTube','queued'],['Meta','queued']]},
+      {clip:'심야 인터뷰 눈물',prog:'심야 다큐·2화',when:'미예약',ch:[['SMR','queued'],['YouTube','queued'],['Meta','queued']]},
+    ].map(r=>({clip:r.clip,prog:r.prog,when:r.when,
+      chips:r.ch.map(([n,s])=>({name:n,label:DSTAT[s].l,retry:s==='failed',
+        style:'display:flex;align-items:center;gap:5px;font-size:11px;font-weight:600;border-radius:7px;padding:4px 9px;color:'+DSTAT[s].c+';background:'+DSTAT[s].bg,
+        click:()=>this.flash(s==='failed'?n+' 재게시 시도 (데모)':n+' — '+DSTAT[s].l)}))}));
+    const distSummary=[{l:'게시 완료',v:6,c:'#34d399'},{l:'예약',v:5,c:'#fbbf24'},{l:'실패',v:1,c:'#ff6b78'},{l:'대기',v:7,c:'#9a9a9a'}];
+
+    // ============ ANALYTICS ============
+    const days=['월','화','수','목','금','토','일'];
+    const dayViews=[86,120,64,150,240,182,96];
+    const maxV=Math.max(...dayViews);
+    const analyticsBars=days.map((d,i)=>({day:d,val:dayViews[i]+'K',h:(dayViews[i]/maxV*100)+'%',
+      color:dayViews[i]===maxV?'#8b93ff':'#3a4050'}));
+    const analyticsKpi=[
+      {label:'총 조회수 (게시 클립)',value:'2.4M',delta:'▴ +18% WoW',dc:'#34d399'},
+      {label:'평균 시청 지속률',value:'71%',delta:'▴ +4pt',dc:'#34d399'},
+      {label:'평균 참여율',value:'9.2%',delta:'▴ +1.1pt',dc:'#34d399'},
+      {label:'구독 전환',value:'1.8K',delta:'▴ +260',dc:'#34d399'},
+    ];
+    const topClips=[
+      {rank:1,title:'트롯 고음 하이라이트',prog:'트롯 대잔치·12화',views:'240K',rate:'82%',eng:'11.4%'},
+      {rank:2,title:'영숙 폭탄 고백',prog:'솔로천국 S4·8화',views:'182K',rate:'78%',eng:'9.8%'},
+      {rank:3,title:'환승 첫 재회',prog:'환승로그·5화',views:'77K',rate:'69%',eng:'7.2%'},
+      {rank:4,title:'광수 3초 정적',prog:'솔로천국 S4·8화',views:'96K',rate:'74%',eng:'8.1%'},
+      {rank:5,title:'오프닝 빵터짐',prog:'솔로천국 S4·8화',views:'54K',rate:'63%',eng:'5.9%'},
+    ];
+
+    // ============ CHANNEL TRENDS (YouTube 채널 분석) ============
+    const YTCH=[
+      {id:'c1',name:'솔로천국 공식',handle:'@soletv_shorts'},
+      {id:'c2',name:'트롯 대잔치',handle:'@trot_daejanchi'},
+      {id:'c3',name:'STEP D 클립',handle:'@stepd_clips'},
+    ];
+    const CHDATA={
+      c1:{views:'182만',growth:'+18%',gTone:'#34d399',watch:'2.4천시간',subs:'+1.8천',sTone:'#34d399',
+        rev:'₩312만',rpm:'₩1,714',dayAvg:'₩34만',monet:true,seed:[42,55,48,60,72,65,80,74,88,96,90,110,120,105,132,150,140,168,182,160,175,190,205,182,196,220,210,235,240,222],
+        vids:[
+          {t:'"오빠 없으면 안 돼" 영숙 폭탄 고백',v:'182K',l:'14.2K',c:'1.1K',d:'3일 전',short:true},
+          {t:'광수의 3초 정적 — 삼각관계 정면돌파',v:'96K',l:'7.8K',c:'620',d:'3일 전',short:true},
+          {t:'8화 하이라이트 — 새 남자 등장',v:'54K',l:'4.1K',c:'310',d:'5일 전',short:false},
+          {t:'오프닝 자기소개 빵터짐',v:'48K',l:'3.6K',c:'280',d:'6일 전',short:true},
+          {t:'7화 풀 리캡',v:'32K',l:'2.1K',c:'190',d:'8일 전',short:false},
+          {t:'데이트권 쟁탈 반전',v:'71K',l:'5.9K',c:'440',d:'9일 전',short:true},
+        ]},
+      c2:{views:'420만',growth:'+31%',gTone:'#34d399',watch:'5.1천시간',subs:'+3.2천',sTone:'#34d399',
+        rev:'₩720만',rpm:'₩1,714',dayAvg:'₩80만',monet:true,seed:[120,140,135,160,180,175,210,230,220,260,300,290,340,360,350,400,420,390,440,470,455,500,540,510,560,600,580,640,660,620],
+        vids:[
+          {t:'트롯 고음 하이라이트 — 소름 3단 고음',v:'240K',l:'21K',c:'2.4K',d:'2일 전',short:true},
+          {t:'12화 무대 풀버전',v:'180K',l:'12K',c:'980',d:'4일 전',short:false},
+          {t:'심사위원 리액션 모음',v:'132K',l:'9.8K',c:'760',d:'5일 전',short:true},
+          {t:'앵콜 무대 클립',v:'98K',l:'7.1K',c:'520',d:'7일 전',short:true},
+        ]},
+      c3:{views:'96만',growth:'신규',gTone:'#5e9bff',watch:'1.1천시간',subs:'+620',sTone:'#34d399',
+        rev:'₩0',rpm:'—',dayAvg:'—',monet:false,seed:[4,6,8,7,12,18,15,22,30,28,40,55,48,70,96,88,120,110,140,132,160,155,180,168,190,175,205,196,220,210],
+        vids:[
+          {t:'환승 첫 재회 — 8초 정적',v:'77K',l:'6.2K',c:'510',d:'6일 전',short:true},
+          {t:'심야 인터뷰 눈물 클로즈업',v:'41K',l:'3.1K',c:'240',d:'9일 전',short:false},
+          {t:'클립 모음 vol.2',v:'22K',l:'1.4K',c:'110',d:'12일 전',short:true},
+        ]},
+    };
+    const chId=S.trendCh; const CH=CHDATA[chId];
+    const trendChSel={value:chId,change:(e)=>this.setState({trendCh:e.target.value,trendVideo:null,trendKind:'all',trendSort:'recent'}),
+      options:YTCH.map(c=>({v:c.id,label:c.name+' · '+c.handle}))};
+    const trendChannels=YTCH.map(c=>({id:c.id,label:c.name+' · '+c.handle,on:c.id===chId,
+      pick:()=>this.setState({trendCh:c.id,trendVideo:null,trendKind:'all',trendSort:'recent'}),
+      style:'font-size:12.5px;font-weight:600;border-radius:8px;padding:7px 13px;cursor:pointer;font-family:inherit;'+(c.id===chId?'background:rgba(139,147,255,.12);border:1px solid rgba(139,147,255,.35);color:#c3c8ff':'background:#161616;border:1px solid #2b2b2b;color:#9a9a9a')}));
+    const trendKpi=[
+      {label:'최근 90일 조회수',value:CH.views,sub:'YouTube 일별 합계',tone:'#5e9bff'},
+      {label:'성장률',value:CH.growth,sub:'이전 90일 대비',tone:CH.gTone},
+      {label:'시청 시간',value:CH.watch,sub:'최근 90일',tone:'#e5e5e5'},
+      {label:'순 구독자',value:CH.subs,sub:'최근 90일',tone:CH.sTone},
+    ];
+    const trendRev={monet:CH.monet,notMonet:!CH.monet,rev:CH.rev,rpm:CH.rpm,dayAvg:CH.dayAvg,views:CH.views};
+    // sparkline path
+    const sd=CH.seed, mx=Math.max(...sd), mn=Math.min(...sd);
+    const pts=sd.map((y,i)=>{const px=(i/(sd.length-1))*300; const py=90-((y-mn)/(mx-mn||1))*78-6; return px.toFixed(1)+','+py.toFixed(1);});
+    const trendLine=pts.join(' ');
+    const trendArea='0,96 '+trendLine+' 300,96';
+    // video list
+    const kinds=[['all','전체'],['regular','일반영상'],['shorts','쇼츠']];
+    const kindCount={all:CH.vids.length,shorts:CH.vids.filter(v=>v.short).length,regular:CH.vids.filter(v=>!v.short).length};
+    const trendKindTabs=kinds.map(([k,l])=>({label:l,count:kindCount[k],on:S.trendKind===k,
+      pick:()=>this.setState({trendKind:k}),
+      style:'display:flex;align-items:center;gap:5px;font-size:12px;font-weight:600;border-radius:7px;padding:6px 11px;cursor:pointer;font-family:inherit;border:none;'+(S.trendKind===k?'background:#232323;color:#e5e5e5':'background:none;color:#9a9a9a')}));
+    const sorts=[['recent','최신순'],['views','조회수순'],['comments','댓글순']];
+    const trendSortTabs=sorts.map(([k,l])=>({label:l,on:S.trendSort===k,pick:()=>this.setState({trendSort:k}),
+      style:'font-size:12px;font-weight:600;border-radius:7px;padding:6px 11px;cursor:pointer;font-family:inherit;border:none;'+(S.trendSort===k?'background:#232323;color:#e5e5e5':'background:none;color:#9a9a9a')}));
+    const numV=s=>parseFloat(s)*(s.includes('K')?1000:s.includes('만')?10000:1);
+    let vlist=CH.vids.filter(v=>S.trendKind==='all'||(S.trendKind==='shorts'?v.short:!v.short));
+    if(S.trendSort==='views')vlist=[...vlist].sort((a,b)=>numV(b.v)-numV(a.v));
+    else if(S.trendSort==='comments')vlist=[...vlist].sort((a,b)=>numV(b.c)-numV(a.c));
+    const trendVideos=vlist.map((v,i)=>{const on=S.trendVideo===v.t;return{title:v.t,views:v.v,likes:v.l,comments:v.c,date:v.d,short:v.short,
+      thumb:this.THUMBS[i%this.THUMBS.length],
+      pick:()=>this.setState({trendVideo:v.t}),
+      style:'display:flex;gap:10px;text-align:left;border-radius:10px;padding:9px;cursor:pointer;font-family:inherit;color:inherit;transition:background .12s,border-color .12s;border:1px solid '+(on?'rgba(139,147,255,.5)':'#232323')+';background:'+(on?'rgba(139,147,255,.06)':'#161616')};});
+    const selV=CH.vids.find(v=>v.t===S.trendVideo);
+    let trendDetail=null;
+    if(selV){
+      trendDetail={title:selV.t,meta:'조회수 '+selV.v+' · 좋아요 '+selV.l+' · 댓글 '+selV.c,
+        eng:[{label:'평균 시청 시간',value:selV.short?'0:22':'2:47'},{label:'평균 시청률',value:selV.short?'71%':'48%',tone:selV.short?'#34d399':'#5e9bff'},{label:'공유',value:selV.short?'1.2K':'340'},{label:'구독 전환',value:'+'+(selV.short?'820':'190'),tone:'#34d399'}],
+        traffic:[{s:'Shorts 피드',v:82},{s:'YouTube 검색',v:46},{s:'추천 영상',v:38},{s:'구독 피드',v:22},{s:'외부 링크',v:9}].map(t=>({s:t.s,w:(t.v/82*100)+'%',v:t.v+'K'})),
+        comments:[{a:'시청자A',likes:'1.2K',text:'영숙 답장 언제 나옴? 다음화 기다리다 지침 ㅋㅋ'},{a:'시청자B',likes:'640',text:'자막 진짜 깔끔하다 몰입도 미쳤음'},{a:'시청자C',likes:'318',text:'풀버전 링크 어디서 봄?'}],
+        close:()=>this.setState({trendVideo:null})};
+    }
+
+    // ============ PUBLISH CHANNELS (B2B — 다수 프로그램·다수 채널) ============
+    const PLATFORMS=[
+      {key:'smr',name:'네이버 SMR',c:'#34d399',metric:'배급 채널'},
+      {key:'youtube',name:'YouTube',c:'#ff6b78',metric:'구독'},
+      {key:'meta',name:'Meta Reels',c:'#5e9bff',metric:'팔로워'},
+    ];
+    const CHANNELS=[
+      {plat:'smr',handle:'솔로천국 시즌4',count:'제휴',progs:['솔로천국 시즌4'],ok:true},
+      {plat:'smr',handle:'트롯 대잔치',count:'제휴',progs:['트롯 대잔치'],ok:true},
+      {plat:'smr',handle:'환승로그',count:'제휴',progs:['환승로그'],ok:true},
+      {plat:'youtube',handle:'@soletv_shorts',count:'128K',progs:['솔로천국 시즌4'],ok:true},
+      {plat:'youtube',handle:'@trot_daejanchi',count:'312K',progs:['트롯 대잔치'],ok:true},
+      {plat:'youtube',handle:'@stepd_clips',count:'54K',progs:['솔로천국 시즌4','환승로그'],ok:true},
+      {plat:'youtube',handle:'@simya_docu',count:'22K',progs:['심야 다큐'],ok:false},
+      {plat:'meta',handle:'@sole.tv',count:'54K',progs:['솔로천국 시즌4'],ok:true},
+      {plat:'meta',handle:'@stepd.reels',count:'38K',progs:['환승로그','심야 다큐'],ok:false},
+    ];
+    const channelGroups=PLATFORMS.map(p=>{
+      const list=CHANNELS.filter(c=>c.plat===p.key);
+      return {name:p.name,color:p.c,metric:p.metric,total:list.length,
+        add:()=>this.flash(p.name+' 계정 연결 (OAuth 데모)'),
+        accts:list.map(c=>({handle:c.handle,count:c.count,metric:p.metric,progs:c.progs.join(', '),color:p.c,
+          state:c.ok?'연결됨':'토큰 만료',
+          stateStyle:'font-size:10.5px;font-weight:700;color:'+(c.ok?'#34d399':'#fbbf24')+';background:'+(c.ok?'rgba(52,211,153,.12)':'rgba(251,191,36,.12)')+';border-radius:999px;padding:3px 9px',
+          act:()=>this.flash(c.ok?c.handle+' 관리 — 프로그램 매핑·프리셋 (데모)':c.handle+' 재인증 (데모)'),
+          actLabel:c.ok?'관리':'재인증'}))};
+    });
+    const channelTotal=CHANNELS.length;
+
+    // register-channel modal (플랫폼 분기 → 선택 → 추가)
+    const platMeta={smr:{name:'네이버 SMR',c:'#34d399',desc:'제휴 배급 (드라마·예능)'},youtube:{name:'YouTube',c:'#ff6b78',desc:'쇼츠·롱폼 채널'},meta:{name:'Meta Reels',c:'#5e9bff',desc:'인스타·페이스북 릴스'}};
+    const regPlatforms=PLATFORMS.map(p=>({key:p.key,name:platMeta[p.key].name,desc:platMeta[p.key].desc,color:platMeta[p.key].c,
+      pick:()=>this.setState({registerPlat:p.key})}));
+    const rp=S.registerPlat?platMeta[S.registerPlat]:null;
+    const registerView={open:S.registerOpen,step1:!S.registerPlat,step2:!!S.registerPlat,platforms:regPlatforms,
+      platName:rp?rp.name:'',platColor:rp?rp.c:'#6b74f0',
+      close:()=>this.setState({registerOpen:false,registerPlat:null}),
+      backStep:()=>this.setState({registerPlat:null}),
+      connect:()=>{this.setState({registerOpen:false,registerPlat:null});this.flash((rp?rp.name:'')+' 계정 연결됨 (OAuth 데모)');}};
+
+    // distribute modal (클립 → 플랫폼 → 채널 선택)
+    const dvPlats=PLATFORMS.map(p=>({key:p.key,name:platMeta[p.key].name,color:platMeta[p.key].c,
+      count:CHANNELS.filter(c=>c.plat===p.key).length,pick:()=>this.setState({distPlat:p.key})}));
+    const dp=S.distPlat?platMeta[S.distPlat]:null;
+    const dChannels=S.distPlat?CHANNELS.filter(c=>c.plat===S.distPlat).map(c=>{const on=!!S.distSel[c.handle];return{
+      handle:c.handle,progs:c.progs.join(', '),count:c.count,sel:on,color:dp.c,
+      toggle:()=>this.setState(s=>({distSel:{...s.distSel,[c.handle]:!s.distSel[c.handle]}})),
+      style:'display:flex;align-items:center;gap:12px;text-align:left;width:100%;border-radius:11px;padding:12px 14px;cursor:pointer;font-family:inherit;color:inherit;transition:border-color .12s;border:1px solid '+(on?'#6b74f0':'#262626')+';background:'+(on?'rgba(107,116,240,.08)':'#161616'),
+      boxStyle:'width:20px;height:20px;flex:none;border-radius:6px;display:flex;align-items:center;justify-content:center;border:1px solid '+(on?'#6b74f0':'#333333')+';background:'+(on?'#6b74f0':'transparent')};}):[];
+    const distSelCount=Object.values(S.distSel).filter(Boolean).length;
+    const distributeView={open:!!S.distClip,clip:S.distClip,step1:!S.distPlat,step2:!!S.distPlat,
+      platforms:dvPlats,platName:dp?dp.name:'',platColor:dp?dp.c:'#6b74f0',channels:dChannels,
+      selCount:distSelCount,canConfirm:distSelCount>0,
+      confirmStyle:'width:100%;border:none;color:#fff;font-weight:600;font-size:13px;border-radius:9px;padding:11px;font-family:inherit;'+(distSelCount>0?'background:#6b74f0;cursor:pointer':'background:#2b2b2b;color:#707070;cursor:default'),
+      close:()=>this.setState({distClip:null,distPlat:null,distSel:{}}),
+      backStep:()=>this.setState({distPlat:null}),
+      confirm:()=>{if(distSelCount<1)return;this.setState({distClip:null,distPlat:null,distSel:{}});this.flash(distSelCount+'개 채널에 배포 예약됨');}};
+    const exportPresets=[
+      {name:'YouTube Shorts 기본',spec:'9:16 크롭 · H.264 · 자막 번인 · 1080p'},
+      {name:'Meta Reels',spec:'9:16 레터박스 · H.264 · 자막 번인 · 1080p'},
+      {name:'네이버 SMR 납품',spec:'16:9 · H.264 · 무자막 · 1080p'},
+    ];
+
+    // ============ OPS ============
+    const opsWorkers=[
+      {name:'분석 워커 #1',job:'심야 다큐·2화 분석',load:62,state:'busy'},
+      {name:'분석 워커 #2',job:'트롯 대잔치·13화 분할',load:28,state:'busy'},
+      {name:'분석 워커 #3',job:'유휴',load:0,state:'idle'},
+      {name:'인코딩 워커 #1',job:'환승로그·5화 렌더',load:44,state:'busy'},
+    ].map(w=>({name:w.name,job:w.job,loadPct:w.load+'%',
+      dot:'width:8px;height:8px;border-radius:50%;background:'+(w.state==='busy'?'#34d399':'#5a5a5a'),
+      barColor:w.load>70?'#ff6b78':w.load>0?'#8b93ff':'#2b2b2b'}));
+    const OJST={done:{l:'완료',c:'#34d399'},run:{l:'실행중',c:'#8b93ff'},fail:{l:'실패',c:'#ff6b78'},queue:{l:'대기',c:'#9a9a9a'}};
+    const opsJobs=[
+      {job:'분석',target:'심야 다큐·2화',dur:'04:12',st:'run'},
+      {job:'분할',target:'트롯 대잔치·13화',dur:'01:38',st:'run'},
+      {job:'인코딩',target:'환승로그·5화 (9클립)',dur:'02:20',st:'run'},
+      {job:'분석',target:'심야 다큐·3화',dur:'—',st:'fail'},
+      {job:'병합',target:'솔로천국 S4·8화',dur:'00:52',st:'done'},
+      {job:'분석',target:'솔로천국 S4·8화',dur:'06:04',st:'done'},
+      {job:'인코딩',target:'솔로천국 S4·8화 (8클립)',dur:'03:11',st:'done'},
+    ].map(j=>({job:j.job,target:j.target,dur:j.dur,label:OJST[j.st].l,
+      stStyle:'font-size:11px;font-weight:700;color:'+OJST[j.st].c,
+      dot:'width:7px;height:7px;border-radius:50%;flex:none;background:'+OJST[j.st].c+(j.st==='run'?';animation:rpulse 1.6s infinite':'')}));
+
+    // ============ DERIVATION MODAL (원본 → 파생) ============
+    const rgba=(h,a)=>{const n=parseInt(h.slice(1),16);return 'rgba('+((n>>16)&255)+','+((n>>8)&255)+','+(n&255)+','+a+')';};
+    let deriv=null;
+    if(S.derivVideo){
+      const dv=this.VIDEOS.find(x=>x.id===S.derivVideo);
+      if(dv){
+        const parse=s=>{const [m,x]=s.split(':').map(Number);return m*60+(x||0);};
+        const durS=dv.dur.includes(':')?parse(dv.dur):3600;
+        const hl=Math.max(2,Math.round(dv.shorts/3));
+        const catMeta={
+          shorts:{label:'쇼츠 클립',color:'#8b7cf6',count:dv.shorts,sub:'세로 9:16 후보'},
+          highlight:{label:'하이라이트',color:'#2dd4bf',count:hl,sub:'가로 명장면 편집'},
+          ppl:{label:'PPL 노출',color:'#f5a524',count:dv.ppl,sub:'브랜드 감지·집계'},
+          analysis:{label:'영상 분석',color:'#5e9bff',count:null,sub:'AI 구조화 리포트'},
+        };
+        const cat=S.derivCat;
+        const cats=['shorts','highlight','ppl','analysis'].map(k=>{const m=catMeta[k];const on=cat===k;return{
+          key:k,label:m.label,color:m.color,countLabel:m.count!=null?m.count+'개':'리포트',sub:m.sub,
+          pick:()=>this.setState({derivCat:k}),
+          dotStyle:'width:34px;height:34px;border-radius:10px;flex:none;display:flex;align-items:center;justify-content:center;background:'+rgba(m.color,.16)+';border:1px solid '+rgba(m.color,on?.7:.35),
+          numStyle:'font-family:Space Grotesk,sans-serif;font-size:15px;font-weight:700;color:'+m.color,
+          style:'display:flex;align-items:center;gap:12px;text-align:left;width:100%;border-radius:12px;padding:11px 13px;cursor:pointer;font-family:inherit;transition:border-color .12s,background .12s;'+(on?'background:'+rgba(m.color,.1)+';border:1px solid '+rgba(m.color,.5):'background:#161616;border:1px solid #262626')};
+        });
+        let thumbItems=[],brandItems=[],analysisItems=[];
+        const showThumbs=cat==='shorts'||cat==='highlight', showBrands=cat==='ppl', showAnalysis=cat==='analysis';
+        if(showThumbs){
+          const n=Math.min(catMeta[cat].count,8);
+          const pool=cat==='shorts'
+            ? ['폭탄 고백 순간','3초 정적 임팩트','오프닝 빵터짐','새 등장 슬로우','반전 결과 발표','눈물 클로즈업','밤샘 대화 컷','고음 하이라이트']
+            : ['감정 하이라이트','명장면 편집','베스트 리액션','엔딩 하이라이트','메인 이벤트 요약'];
+          thumbItems=Array.from({length:n}).map((_,i)=>{
+            const durSec=cat==='shorts'?38:96;
+            const t0=Math.round(durS*(i+1)/(n+1)),t1=t0+durSec;
+            const it={title:pool[i%pool.length],range:this.fmt(t0)+'–'+this.fmt(t1),thumb:this.THUMBS[dv.thumb],
+              ratio:cat==='shorts'?'9/16':'16/9',tag:cat==='shorts'?'#'+(i+1):'HL',color:catMeta[cat].color,
+              durSec,srcId:dv.id};
+            it.open=()=>this.openEditor(it);
+            return it;
+          });
+        } else if(showBrands){
+          const brands=['브랜드 A · 의류','브랜드 B · 카페','브랜드 C · 전자','브랜드 D · 음료','브랜드 E · 뷰티','브랜드 F · 식품'];
+          const exps=[45,35,36,22,18,15];
+          brandItems=Array.from({length:dv.ppl}).map((_,i)=>({brand:brands[i%brands.length],exp:exps[i%exps.length]+'초',signal:i%3===0?'로고+음성':i%2?'음성':'로고'}));
+        } else {
+          analysisItems=[{k:'씬 분할',v:'42 씬'},{k:'무음 구간',v:'3곳 · 21초'},{k:'개인정보·QC 이슈',v:dv.issues+'건'},{k:'음량 피크',v:'2곳'},{k:'자막 인식 정확도',v:'98.2%'},{k:'화자 분리',v:'4명'}];
+        }
+        deriv={title:dv.prog+' · '+dv.ep,sub:'원본 '+dv.dur+' · 1080p · 업로드 '+dv.uploaded,
+          sourceThumb:this.THUMBS[dv.thumb],dur:dv.dur,cats,
+          selColor:catMeta[cat].color,selLabel:catMeta[cat].label,
+          showThumbs,showBrands,showAnalysis,thumbItems,brandItems,analysisItems,
+          enter:()=>{this.setState({derivVideo:null});this.pickVideo(dv.id);}};
+      }
+    }
+
+    // ============ CAPCUT-STYLE EDITOR ============
+    let editor=null;
+    if(S.editorClip){
+      const ec=S.editorClip;
+      const dur=ec.durSec||38;
+      const toolsDef=[
+        ['media','미디어','<svg width=19 height=19 viewBox="0 0 24 24" fill=none stroke=currentColor stroke-width=1.9><rect x=3 y=4 width=18 height=14 rx=2/><path d="M9 9l4 3-4 3z"/></svg>'],
+        ['audio','오디오','<svg width=19 height=19 viewBox="0 0 24 24" fill=none stroke=currentColor stroke-width=1.9><path d="M9 18V6l10-2v12"/><circle cx=6 cy=18 r=3/><circle cx=16 cy=16 r=3/></svg>'],
+        ['text','텍스트','<svg width=19 height=19 viewBox="0 0 24 24" fill=none stroke=currentColor stroke-width=1.9><path d="M4 6V4h16v2M9 20h6M12 4v16"/></svg>'],
+        ['captions','자막','<svg width=19 height=19 viewBox="0 0 24 24" fill=none stroke=currentColor stroke-width=1.9><rect x=3 y=5 width=18 height=14 rx=2/><path d="M7 11h4M7 14h7M14 11h3"/></svg>'],
+        ['sticker','스티커','<svg width=19 height=19 viewBox="0 0 24 24" fill=none stroke=currentColor stroke-width=1.9><path d="M15 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h9l7-7V5a2 2 0 0 0-2-2z"/><path d="M14 21v-5a2 2 0 0 1 2-2h5"/></svg>'],
+        ['effect','효과','<svg width=19 height=19 viewBox="0 0 24 24" fill=none stroke=currentColor stroke-width=1.9><path d="M12 3l2 5 5 2-5 2-2 5-2-5-5-2 5-2z"/></svg>'],
+        ['filter','필터','<svg width=19 height=19 viewBox="0 0 24 24" fill=none stroke=currentColor stroke-width=1.9><circle cx=9 cy=9 r=6/><circle cx=15 cy=15 r=6/></svg>'],
+      ];
+      const tools=toolsDef.map(t=>{const on=S.editorTool===t[0];return{key:t[0],label:t[1],icon:t[2],iconEl:ic(t[2]),
+        pick:()=>this.setState({editorTool:t[0]}),
+        style:'display:flex;flex-direction:column;align-items:center;gap:5px;min-width:60px;flex:none;border:none;background:none;border-bottom:2px solid '+(on?'#6b74f0':'transparent')+';padding:9px 8px 8px;cursor:pointer;font-family:inherit;font-size:11px;font-weight:600;color:'+(on?'#c7c1ff':'#9a9a9a')+';transition:color .12s'};
+      });
+      const ctrlDef={
+        media:[{t:'chips',label:'화면 맞춤',opts:['채우기','맞춤','원본']},{t:'slider',label:'배율',v:112,max:200,disp:'112%'},{t:'slider',label:'회전',v:0,max:360,disp:'0°'},{t:'toggle',label:'손떨림 보정',on:true}],
+        audio:[{t:'slider',label:'볼륨',v:100,max:150,disp:'100%'},{t:'slider',label:'페이드 인',v:20,max:100,disp:'0.4s'},{t:'slider',label:'페이드 아웃',v:35,max:100,disp:'0.7s'},{t:'toggle',label:'배경 소음 제거',on:true}],
+        text:[{t:'text',label:'텍스트',val:'제목을 입력하세요'},{t:'chips',label:'폰트',opts:['Pretendard','고딕','명조']},{t:'slider',label:'크기',v:53,max:120,disp:'64px'},{t:'color',label:'색상',colors:['#ffffff','#8b7cf6','#f5a524','#ff6b78']}],
+        sticker:[{t:'chips',label:'카테고리',opts:['인기','예능','감정','화살표']},{t:'preset',label:'스티커'}],
+        effect:[{t:'chips',label:'분류',opts:['트렌드','줌','글리치','빛샘']},{t:'preset',label:'효과'}],
+        filter:[{t:'chips',label:'톤',opts:['원본','시네마','비비드','필름']},{t:'preset',label:'필터'},{t:'slider',label:'강도',v:70,max:100,disp:'70%'}],
+      };
+      const buildCtrls=(list)=>list.map(c=>{
+        const key=S.editorTool+':'+c.label;
+        const o={isText:c.t==='text',isSlider:c.t==='slider',isChips:c.t==='chips',isColor:c.t==='color',isToggle:c.t==='toggle',isPreset:c.t==='preset',label:c.label,disp:c.disp,val:c.val};
+        if(c.t==='slider'){const fv=S.editorSliders[key]!=null?S.editorSliders[key]:(c.v/c.max*100);o.fill=fv+'%';o.set=(e)=>this.setSlider(key,e);}
+        if(c.t==='chips'){const sel=S.editorChips[key]!=null?S.editorChips[key]:0;o.opts=c.opts.map((x,i)=>({label:x,pick:()=>this.setState(s=>({editorChips:{...s.editorChips,[key]:i}})),style:'font-size:11.5px;font-weight:600;border-radius:7px;padding:6px 12px;cursor:pointer;font-family:inherit;border:none;'+(i===sel?'background:#6b74f0;color:#fff':'background:#1e1e1e;color:#9a9a9a')}));}
+        if(c.t==='color'){const sel=S.editorColors[key]!=null?S.editorColors[key]:0;o.colors=c.colors.map((x,i)=>({c:x,pick:()=>this.setState(s=>({editorColors:{...s.editorColors,[key]:i}})),style:'width:26px;height:26px;border-radius:7px;cursor:pointer;background:'+x+';border:'+(i===sel?'2px solid #8b93ff':'1px solid #333333')}));}
+        if(c.t==='preset')o.tiles=['linear-gradient(135deg,#8b7cf6,#5a63e6)','linear-gradient(135deg,#2dd4bf,#0e7490)','linear-gradient(135deg,#f5a524,#b45309)','linear-gradient(135deg,#ff6b78,#9f1239)','linear-gradient(135deg,#5e9bff,#1e3a8a)','linear-gradient(135deg,#a78bfa,#6d28d9)'].map((g,i)=>({bg:g,pick:()=>this.flash(c.label+' 프리셋 '+(i+1)+' 적용')}));
+        if(c.t==='toggle'){const on=S.editorToggles[key]!=null?S.editorToggles[key]:c.on;o.toggle=()=>this.setState(s=>({editorToggles:{...s.editorToggles,[key]:!(s.editorToggles[key]!=null?s.editorToggles[key]:c.on)}}));o.track='width:38px;height:22px;border-radius:99px;flex:none;position:relative;cursor:pointer;transition:background .15s;background:'+(on?'#6b74f0':'#333333');o.knob='position:absolute;top:3px;'+(on?'right:3px':'left:3px')+';width:16px;height:16px;border-radius:50%;background:#fff;transition:all .15s';}
+        return o;
+      });
+      const controls=buildCtrls(ctrlDef[S.editorTool]||[]);
+      const capData=[
+        {time:'00:00',t0:0,t1:5,text:'"나 진짜 오빠 없으면 안 될 것 같아"',short:'"오빠 없으면…"'},
+        {time:'00:04',t0:5,t1:9,text:'— 영숙, 눈물 고백',short:'눈물 고백'},
+        {time:'00:09',t0:9,t1:dur,text:'과연 오빠의 선택은?',short:'선택은?'},
+      ];
+      const capSel=Math.min(S.editorCap,capData.length-1);
+      const captions=capData.map((c,i)=>{const on=i===capSel;return{time:c.time,text:c.text,
+        select:()=>this.setState({editorCap:i,editorTime:c.t0}),
+        style:'border:1px solid '+(on?'#8b93ff':'#262626')+';background:'+(on?'rgba(139,147,255,.1)':'#161616')+';border-radius:9px;padding:10px 12px;cursor:pointer;transition:border-color .12s,background .12s'};});
+      const capBlocks=capData.map((c,i)=>{const on=i===capSel;return{short:c.short,
+        select:()=>this.setState({editorCap:i,editorTime:c.t0}),
+        style:'position:absolute;top:0;bottom:0;left:'+(c.t0/dur*100)+'%;width:'+((c.t1-c.t0)/dur*100)+'%;background:rgba(94,155,255,'+(on?'.34':'.2')+');border:1px solid '+(on?'#93c0ff':'#5e9bff')+';border-radius:6px;display:flex;align-items:center;padding:0 8px;font-size:10px;color:#cfe0ff;font-weight:600;overflow:hidden;white-space:nowrap;cursor:pointer'};});
+      const waves=Array.from({length:70}).map((_,i)=>({h:(24+Math.abs(Math.sin(i*0.7)*Math.cos(i*0.3))*68)+'%'}));
+      const cells=Array.from({length:8}).map(()=>({bg:ec.thumb}));
+      const cutMarks=S.editorCuts.map(t=>({left:(t/dur*100)+'%'}));
+      const nTicks=6;
+      const ticks=Array.from({length:nTicks}).map((_,i)=>({label:this.fmt(Math.round(dur*i/(nTicks-1))),left:(i/(nTicks-1)*100)+'%'}));
+      const toolTitle={media:'미디어',audio:'오디오',text:'텍스트',captions:'자막',sticker:'스티커',effect:'효과',filter:'필터'}[S.editorTool];
+      const propDef=[{label:'재생 속도',def:40,fmt:v=>(0.5+v/100*1.5).toFixed(1)+'x'},{label:'불투명도',def:100,fmt:v=>Math.round(v)+'%'},{label:'배율',def:56,fmt:v=>Math.round(50+v*1.5)+'%'},{label:'회전',def:0,fmt:v=>Math.round(v/100*360)+'°'}];
+      editor={title:ec.title,range:ec.range,thumb:ec.thumb,ratio:ec.ratio,vertical:ec.ratio==='9/16',
+        tools,controls,toolTitle,isCaptions:S.editorTool==='captions',captions,capBlocks,waves,cells,cutMarks,ticks,
+        caption:capData[capSel].text,
+        zoomWidth:(S.editorZoom*100)+'%',zoomFill:((S.editorZoom-0.5)/2.5*100)+'%',
+        setZoom:(e)=>this.setZoom(e),zoomIn:()=>this.bumpZoom(0.25),zoomOut:()=>this.bumpZoom(-0.25),
+        playPct:(S.editorTime/dur*100)+'%',timeLabel:this.fmt(S.editorTime),
+        seek:(e)=>this.seek(e),
+        propTabs:[{label:'기본',on:true},{label:'애니메이션',on:false},{label:'속도',on:false}].map(t=>({label:t.label,
+          style:'flex:1;border:none;font-family:inherit;font-size:12px;font-weight:600;padding:8px;cursor:pointer;border-radius:7px;'+(t.on?'background:#1e1e1e;color:#eceef2':'background:none;color:#9a9a9a')})),
+        propSliders:propDef.map(p=>{const key='prop:'+p.label;const v=S.editorSliders[key]!=null?S.editorSliders[key]:p.def;return{label:p.label,disp:p.fmt(v),fill:v+'%',set:(e)=>this.setSlider(key,e)};}),
+        playing:S.editorPlaying,playIcon:S.editorPlaying?'<svg width=18 height=18 viewBox="0 0 24 24" fill=currentColor><rect x=6 y=5 width=4 height=14/><rect x=14 y=5 width=4 height=14/></svg>':'<svg width=18 height=18 viewBox="0 0 24 24" fill=currentColor><path d="M8 5v14l11-7z"/></svg>',
+        playIconEl:ic(S.editorPlaying?'<svg width=18 height=18 viewBox="0 0 24 24" fill=currentColor><rect x=6 y=5 width=4 height=14/><rect x=14 y=5 width=4 height=14/></svg>':'<svg width=18 height=18 viewBox="0 0 24 24" fill=currentColor><path d="M8 5v14l11-7z"/></svg>'),
+        totalLabel:this.fmt(dur),
+        togglePlay:()=>this.togglePlay(),
+        addCaption:()=>this.flash('자막 클립 추가 (데모)'),
+        split:()=>{this.setState(s=>({editorCuts:[...s.editorCuts,s.editorTime]}));this.flash(this.fmt(S.editorTime)+' 지점 분할');},
+        del:()=>{if(S.editorCuts.length){this.setState(s=>({editorCuts:s.editorCuts.slice(0,-1)}));this.flash('마지막 분할 제거');}else this.flash('선택 항목 없음');},
+        exportClip:()=>this.flash('서버 렌더 1회 → 9:16 자막 번인 익스포트'),
+        back:()=>{this.closeEditor();this.setState({screen:'library',editorClip:null,derivVideo:ec.srcId,derivCat:'shorts'});}};
+    }
+
+    // ============ PROGRAMS (프로그램 등록·관리) ============
+    const SECTION_EMOJI={'예능':'🎬','드라마/영화':'🎭','뮤직':'🎵','시사':'📰','교양':'📚','라이프':'🌿','스포츠':'⚽','게임':'🎮','어린이':'🧸','뉴스':'📡','애니':'✨'};
+    const PROGDATA=[
+      {id:'p1',title:'솔로천국 시즌4',section:'예능',age:15,cast:['영숙','광수','영자'],eps:8,shorts:64,smrReady:true},
+      {id:'p2',title:'환승로그',section:'예능',age:15,cast:['지훈','수아'],eps:5,shorts:24,smrReady:false,missing:['프로그램 코드','편성 요일']},
+      {id:'p3',title:'심야 다큐',section:'교양',age:12,cast:[],eps:3,shorts:9,smrReady:false,missing:['출연자','편성 요일']},
+      {id:'p4',title:'트롯 대잔치',section:'뮤직',age:0,cast:['현숙','영탁'],eps:12,shorts:120,smrReady:true},
+    ];
+    const ageLabel=(a)=>a===0?'전체':a+'세';
+    const progCards=PROGDATA.map(p=>({
+      face:SECTION_EMOJI[p.section]||p.title.charAt(0),title:p.title,section:p.section,age:ageLabel(p.age),
+      eps:p.eps,shorts:p.shorts,cast:p.cast.length?('출연 '+p.cast.slice(0,3).join(', ')+(p.cast.length>3?' 외':'')):'출연 미등록',
+      smrReady:p.smrReady,smrLabel:p.smrReady?'SMR 피드 준비 완료':'SMR 피드 '+(p.missing?p.missing.length:1)+'개 미충족',
+      smrStyle:'display:inline-flex;align-items:center;gap:5px;font-size:11px;font-weight:700;border-radius:999px;padding:3px 10px;'+(p.smrReady?'color:#34d399;background:rgba(52,211,153,.12)':'color:#fbbf24;background:rgba(251,191,36,.12)'),
+      open:()=>this.setState({screen:'library',lib:p.title}),
+      upload:()=>this.openUpload(p.id)}));
+    const newProgram=()=>this.setState({newProgOpen:true,newProgDays:{}});
+
+    // upload modal
+    const upProg=PROGDATA.find(p=>p.id===S.uploadProg)||PROGDATA[0];
+    const uploadView={open:S.uploadOpen,mode:S.uploadMode,isFile:S.uploadMode==='file',isYt:S.uploadMode==='youtube',
+      progOptions:PROGDATA.map(p=>({v:p.id,label:p.title})),progValue:S.uploadProg,
+      setProg:(e)=>this.setState({uploadProg:e.target.value}),
+      setFile:()=>this.setState({uploadMode:'file'}),setYt:()=>this.setState({uploadMode:'youtube'}),
+      fileTabStyle:'flex:1;display:flex;align-items:center;justify-content:center;gap:6px;border:none;border-radius:7px;padding:8px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;'+(S.uploadMode==='file'?'background:#0a0a0a;color:#e5e5e5':'background:none;color:#9a9a9a'),
+      ytTabStyle:'flex:1;display:flex;align-items:center;justify-content:center;gap:6px;border:none;border-radius:7px;padding:8px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;'+(S.uploadMode==='youtube'?'background:#0a0a0a;color:#e5e5e5':'background:none;color:#9a9a9a'),
+      close:()=>this.setState({uploadOpen:false}),
+      submit:()=>{this.setState({uploadOpen:false});this.flash(upProg.title+' · 업로드 시작 → AI 분석 대기열');}};
+
+    // new-program modal
+    const SECTIONS=['드라마/영화','예능','뮤직','시사','교양','라이프','스포츠','게임','어린이','뉴스','애니'];
+    const AGES=[0,7,12,15,19];
+    const WEEK=['월','화','수','목','금','토','일'];
+    const newProgView={open:S.newProgOpen,
+      sections:SECTIONS.map(s=>({v:s,label:s})),ages:AGES.map(a=>({v:a,label:ageLabel(a)})),cats:['01','02','03'],
+      weekdays:WEEK.map((w,i)=>({label:w,on:!!S.newProgDays[i],toggle:()=>this.setState(st=>({newProgDays:{...st.newProgDays,[i]:!st.newProgDays[i]}})),
+        style:'width:34px;height:34px;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;'+(S.newProgDays[i]?'border:1px solid #6b74f0;background:#6b74f0;color:#fff':'border:1px solid #2b2b2b;background:none;color:#9a9a9a')})),
+      close:()=>this.setState({newProgOpen:false}),
+      submit:()=>{this.setState({newProgOpen:false});this.flash('프로그램 생성됨 (데모)');}};
+
+    const crumbMap={dashboard:'대시보드',programs:'프로그램',library:'콘텐츠',review:'콘텐츠',clips:'클립',dist:'배포현황',analytics:'성과',trends:'채널 트렌드',channels:'배포채널',ops:'운영·진단'};
+
+    return {
+      nav, crumbRoot:crumbMap[S.screen]||'콘텐츠', crumbLeaf:S.screen==='review'?(v.prog+' · '+v.ep):null,
+      isLibrary:S.screen==='library', isReview:S.screen==='review',
+      isDashboard:S.screen==='dashboard', isClips:S.screen==='clips', isDist:S.screen==='dist',
+      isAnalytics:S.screen==='analytics', isTrends:S.screen==='trends', isChannels:S.screen==='channels', isOps:S.screen==='ops',
+      isPrograms:S.screen==='programs', progCards, newProgram, uploadView, newProgView,
+      openUpload:()=>this.openUpload(),
+      dashKpi, dashReview, dashQueue, dashAlerts, gotoLibrary:()=>this.setState({screen:'library'}),
+      clipsFilters, gClips, hasGClips:gClips.length>0,
+      distRows, distSummary,
+      programSel, trendChSel,
+      analyticsBars, analyticsKpi, topClips,
+      trendChannels, trendKpi, trendRev, trendLine, trendArea, trendKindTabs, trendSortTabs, trendVideos, hasTrendVideos:trendVideos.length>0, trendDetail, hasTrendDetail:!!trendDetail,
+      channelGroups, channelTotal, exportPresets, registerChannel:()=>this.setState({registerOpen:true,registerPlat:null}), registerView, distributeView,
+      opsWorkers, opsJobs,
+      hasDeriv:!!deriv, deriv, closeDeriv:()=>this.setState({derivVideo:null}), stopEv:(e)=>e.stopPropagation(),
+      isEditor:S.screen==='editor', editor,
+      programs, videos, back:()=>this.back(),
+      epTitle:v.prog+' · '+v.ep, epSub:'원본 '+v.dur+' · 1080p · 업로드 '+v.uploaded,
+      pipeline, tabs, tabTimeline:S.tab==='timeline', tabClips:S.tab==='clips', tabPpl:S.tab==='ppl', tabPerf:S.tab==='perf',
+      playLabel:this.fmt(S.playhead), totalLabel:this.fmt(this.TOTAL), playPct,
+      ticks, laneChips, lanesView,
+      hasSel:!!sel, noSel:!sel, sel, clearSel:()=>this.setState({sel:null}), summary,
+      hasClips:clipList.length>0, noClips:clipList.length===0, clipList, gotoTimeline:()=>this.setState({tab:'timeline'}),
+      pplRows, pplTotal, pplCount, exportCsv:()=>this.flash('PPL 리포트 CSV 내보내기 (UTF-8 BOM)'),
+      perfClips,
+      toast:S.toast,
+    };
+  }
+}
+</script>
+</body>
+</html>

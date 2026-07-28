@@ -138,11 +138,28 @@ export interface Recommendation {
   editNote?: string;
   status: "pending" | "adopted" | "rejected";
   rejectReason?: string;
+  /** Chosen thumbnail candidate label, carried from the adopted recommendation. */
+  thumbnailLabel?: string;
+  /** Generated multi-layer thumbnails from AI session (v1, v2, v3 variants) */
+  thumbnails?: ThumbnailVariant[];
   /** Lineage: set once adopted → clip. */
   adoptedClipId?: string;
 }
 
-// ── Clip (finished asset) ────────────────────────────────────────────────────────
+export interface ThumbnailVariant {
+  id: string;              // "s1_v1"
+  urls: Record<string, string>; // {"16:9": "analysis/..._16x9.png", "9:16": "..."}
+  aspect_ratios: string[];
+  frame_source_sec: number;
+  caption_text: string;
+  caption_tone: string;
+  layout_preset: string;
+  person_bbox_used: number[];
+  generated_at: number;
+  chosen: boolean;
+}
+
+// ── Clip (Finalized media output) ────────────────────────────────────────────────
 /**
  * Destinations that have a render preset (frame + hard length cap) — mirrors the server's
  * RENDER_PRESETS keys, which in turn mirror core/channels.py CHANNEL_PRESETS.

@@ -46,7 +46,7 @@ REFINE_WORKERS = int(os.environ.get("REFINE_WORKERS") or 4)
 
 SYSTEM = """너는 한국어 예능/방송 자막 정제 전문가다.
 입력은 자동 음성 인식(STT) 결과로, 번호가 매겨진 자막 줄들이다.
-각 줄을 시청자가 읽기 좋은 자막으로 다듬고, 발화자(speaker)를 라벨링한다.
+각 줄을 시청자가 읽기 좋은 자막으로 다듬는다. 발화자(speaker)는 절대 추론·변경하지 않는다.
 
 정제(cleanup):
 - 맞춤법·띄어쓰기·오타 교정 (예: "됬어"→"됐어", "어떻해"→"어떡해", "않되"→"안 돼")
@@ -67,23 +67,10 @@ SYSTEM = """너는 한국어 예능/방송 자막 정제 전문가다.
 - **웃음소리는 삭제**: "ㅋㅋㅋ", "하하하" 단독은 빈 문자열.
 - 의도: 이후 서사·쇼츠 추천 파이프라인에 노이즈 안 주기 위함.
 
-발화자 라벨(speaker) — 문맥으로 추정:
-- 자막에서 상대를 부르는 이름/호칭, 자기 소개, 이전 대사의 반응 대상 등을 단서로 삼는다.
-- 확신할 때만 실명/별명을 채운다 (예: "이영자", "김수현", "아이유").
-- 유명 연예인·아이돌·MC·정치인·스포츠 선수 등 공인은 자막 맥락과 세계지식으로 확실히 알아본다면
-  주저 말고 실명을 붙여라. M1/F1 폴백은 자막으로도 특정 안 되는 **일반인·비공인·게스트**용이다.
-- 확신 못 하면 anonymous 라벨: 남성이면 "M1", "M2"…, 여성이면 "F1", "F2"…, 성별도 불명이면 "?"
-- 같은 배치 안에서는 같은 발화자에게 같은 라벨을 일관되게 부여한다.
-- 나레이션/자막해설/OFF 음성은 "NARR".
-
-호칭 기반 대사 문맥 추론 (2026-07-23 강화 · 사용자 방향):
-- **호칭 패턴 감지**: 이전 대사에서 "지연아", "지연씨", "지연이", "지연 님" 같은 호칭이 나오면
-  다음 대사의 speaker 후보 = "지연" (그 이름 붙이는 사람 아님 · 그 이름 불린 사람이 다음 발화).
-- **자기소개**: "저는 은규입니다", "제 이름은 민경이에요" → 그 발화의 speaker = 은규/민경.
-- **응답 관계**: "지연아 어떻게 생각해?" → 다음 대사가 답변이면 그 speaker = 지연.
-- **명단 밖 이름이라도** 대사에서 호칭·자기소개로 명확하면 실명을 붙여라 (cast_registry 있으면
-  거기 이름 우선, 없으면 대사에서 나온 이름 그대로).
-- 이 추론이 성공하면 anonymous(M1/F1) 대신 실명 · 같은 인물이 여러 세그에 걸치면 라벨 유지.
+발화자 라벨(speaker):
+- 입력에 있는 "발화자 1", "발화자 2" 같은 익명 라벨은 시스템이 보존한다.
+- 이름·별명·성별·나레이션 여부를 추론하거나 JSON에 speaker 필드를 출력하지 마라.
+- 사람 이름은 자막 텍스트에 실제로 말한 경우만 유지하며, 라벨로 승격하지 마라.
 
 엄격한 규칙:
 - 번호(n)는 절대 바꾸지 마라. 입력한 모든 번호를 그대로 출력한다.
@@ -91,7 +78,7 @@ SYSTEM = """너는 한국어 예능/방송 자막 정제 전문가다.
 - 원래 발화의 뜻을 바꾸지 마라.
 
 Return ONLY a valid JSON array. Do not add prose, markdown, or code fences. Example:
-[{"n":1,"text":"정제된 대사","speaker":"M1"},{"n":2,"text":"다음 대사","speaker":"F1"}]"""
+[{"n":1,"text":"정제된 대사"},{"n":2,"text":"다음 대사"}]"""
 
 
 def _parse_json_array_recover(raw: str) -> list[dict]:
@@ -215,15 +202,12 @@ def refine_segments(
     cast_registry: list[dict] | None = None,
     program_context: dict | None = None,
 ) -> list[dict]:
-    """Return segments with cleaned `text` + `speaker` label, same length/order/timestamps.
+    """Return segments with cleaned `text`, preserving input speaker labels and timestamps.
 
     배치들은 서로 독립이라 ThreadPoolExecutor로 병렬 호출. Gemini 모델 자체가 배치별 stateless.
     각 스레드는 자기 배치의 슬라이스 [i:i+BATCH]에만 write하므로 lock 불필요.
 
-    cast_registry (사용자가 프로그램에 사전등록한 출연자 명단, primary source of truth)가 있으면
-    speaker 라벨을 이 목록에서 매칭. 목록에 없는 인물처럼 보이면 M1/F1... fallback 유지 —
-    사용자가 나중에 검토·추가할 수 있도록. STT 오인식(옥순→옥수, 정순→정선 등)까지 문맥으로
-    복구할 것을 프롬프트에서 지시.
+    cast_registry는 자막의 고유명사 오인식 보정에만 참고하며, speaker 실명 추론에는 사용하지 않는다.
 
     program_context (프로그램 상세에서 사용자 입력) — 시놉시스·분위기 태그·크레딧 등을 문맥으로
     주면 밈·용어·인물 관계 정규화가 정확해진다. content-pipeline이 프로그램 엔티티에서 수집."""
@@ -258,11 +242,9 @@ def refine_segments(
     if cast_names:
         joined = ", ".join(cast_names)
         system += (
-            "\n\n등록된 출연자 명단(primary — speaker는 이 이름 중 하나를 우선 사용):\n"
+            "\n\n등록된 출연자 명단(자막의 이름 오인식 보정용이며 speaker 라벨에는 사용 금지):\n"
             f"{joined}\n"
-            "- STT 오인식 주의: 이 명단의 이름과 발음이 비슷하면 명단 이름으로 정규화 (예: 옥수→옥순, 정선→정순).\n"
-            "- 대사에서 서로 부르는 호칭(예: 'XX 님', 'OO아,')이 명단에 있으면 그 답변자가 그 인물일 가능성 높음.\n"
-            "- 명단에 없는데 확실히 다른 사람이 등장한 것 같으면 M1/M2/F1/F2... 유지 (사용자 검토용 flag)."
+            "- STT 오인식으로 이름 발음이 비슷하면 명단 이름으로 정규화할 수 있다 (예: 옥수→옥순, 정선→정순)."
         )
 
     total_batches = (len(segments) + BATCH - 1) // BATCH
@@ -307,9 +289,7 @@ def refine_segments(
                 row = by_n.get(n)
                 if row:
                     refined[i + j]["text"] = _apply_glossary((row.get("text") or "").strip(), glossary)
-                    sp = (row.get("speaker") or "").strip()
-                    if sp:
-                        refined[i + j]["speaker"] = sp
+
             with print_lock:
                 done_counter["n"] += 1
                 print(f"   refined batch {done_counter['n']}/{total_batches} (segments {i}..{i + len(batch) - 1})")

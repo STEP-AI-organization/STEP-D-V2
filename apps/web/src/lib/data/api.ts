@@ -79,7 +79,7 @@ export interface AnalysisTranscriptSegment {
   end?: number;
   text?: string;
   appealScore?: number;
-  /** refine이 붙인 화자 라벨 — 실명("김수현") or M1/F1 폴백. faces 매핑 저장 시 rename. */
+  /** STT 화자분리의 익명 라벨(발화자 1, 발화자 2 …). 운영자가 프론트에서 이름을 지정할 수 있다. */
   speaker?: string;
 }
 export interface NarrativeSegment {
@@ -621,6 +621,19 @@ function uploadVideoMultipart(
 // `clip` is absent when the rec was already adopted (server returns just the clipId).
 export async function adoptRec(recId: string): Promise<{ clipId: string; clip?: unknown }> {
   return json(await fetch(`${API_BASE}/recommendations/${recId}/adopt`, { method: "POST" }));
+}
+
+/** Persist the single thumbnail variant selected for a recommendation. */
+export async function selectRecommendationThumbnail(recId: string, variantId: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/recommendations/${recId}/thumbnail`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ variantId }),
+  });
+  if (!res.ok) {
+    const body = (await res.json().catch(() => null)) as { error?: string; message?: string } | null;
+    throw new Error(body?.message ?? body?.error ?? `${res.status} ${res.statusText}`);
+  }
 }
 
 /**

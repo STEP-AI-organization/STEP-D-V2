@@ -158,6 +158,8 @@ def _load_references() -> list[dict]:
                     "style_tags": m.get("style_tags", []),
                     "caption_style": m.get("caption_style", ""),
                     "description": m.get("description", ""),
+                    "program": m.get("program", ""),           # 프로그램 필터용
+                    "custom_tags": m.get("custom_tags", []),   # 사용자 태그
                 })
             if refs:
                 return refs
@@ -202,10 +204,22 @@ def run_pipeline(
                                    "title": shorts.get("title", "")}
     log["took"]["1_context"] = round(time.time() - t, 2)
 
-    # ─── ② Reference pool ───────────────────
+    # ─── ② Reference pool ─── 프로그램 필터 우선 ─────
     t = time.time()
-    references = _load_references()
-    log["stages"]["2_references"] = {"count": len(references),
+    all_refs = _load_references()
+    # 프로그램 컨텍스트 (workdir program_context.json)
+    program_ctx = _safe_load(media_dir / "program_context.json", {})
+    program_id = (program_ctx.get("title") if isinstance(program_ctx, dict) else "") or ""
+    # program 태그 매칭 우선 · 매칭 X 이면 전체
+    if program_id:
+        matched = [r for r in all_refs if (r.get("program") or "") == program_id]
+        references = matched or all_refs
+        filter_note = f"program='{program_id}' matched {len(matched)}/{len(all_refs)}"
+    else:
+        references = all_refs
+        filter_note = "no program filter (global pool)"
+    log["stages"]["2_references"] = {"count": len(references), "total": len(all_refs),
+                                       "filter": filter_note,
                                        "ids": [r["id"] for r in references]}
     log["took"]["2_references"] = round(time.time() - t, 2)
     if not references:
@@ -232,6 +246,29 @@ def run_pipeline(
             "featured_cast": available_cast[:2],
             "caption": (shorts.get("title") or "")[:18],
         } for i in range(n_variants)]
+
+    # ─── ③.5 cast count vs person_count fallback ───
+    # cast 부족하면 · person_count 작은 reference 로 downgrade
+    ref_by_id_pre = {r["id"]: r for r in references}
+    for i, plan in enumerate(plans):
+        ref = ref_by_id_pre.get(plan.get("reference_id"))
+        if not ref:
+            continue
+        need = int(ref.get("person_count") or 0)
+        have = len(plan.get("featured_cast") or [])
+        if need > 0 and have > 0 and have < need:
+            # 더 작은 person_count reference 찾기
+            candidates = sorted(
+                [r for r in references if int(r.get("person_count") or 0) <= have],
+                key=lambda r: -int(r.get("person_count") or 0))
+            if candidates:
+                new_ref = candidates[0]
+                print(f"  [fallback v{i+1}] cast {have} < ref person {need} → {ref['id']} → {new_ref['id']} (person {new_ref.get('person_count')})")
+                plan["reference_id"] = new_ref["id"]
+                plan["_fallback_from"] = ref["id"]
+        elif need > 0 and have > need:
+            # 초과분 잘라내기 (선택)
+            plan["featured_cast"] = (plan.get("featured_cast") or [])[:need]
     log["stages"]["3_planner"] = {"hook_summary": hook, "variants": plans}
     log["took"]["3_planner"] = round(time.time() - t, 2)
 
