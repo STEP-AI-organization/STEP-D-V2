@@ -110,7 +110,7 @@ def _prepare_checkpoints(
     FACES_VER = "2026-07-29-sample-10s"    # 샘플 간격 3s→10s (573→~250 · wall time 620s→~270s)
     SHOTS_VER = "2026-07-24a"   # shot boundary detection: ffmpeg scene, fps=1, thr=0.55
     SCENE_TYPE_VER = "2026-07-24a"  # shot 프레임 → Vision batch: interview/on_scene/other
-    BEATS_VER = "2026-07-28-gap-split-speaker"   # gap-fill을 화자 전환점에서 세분화 (auto beat 통째 담기 방지)
+    BEATS_VER = "2026-07-29-speaker-split-v2"   # + speaker-aware merge (다중화자 병합 방지)
     STT_VER = "2026-07-27-word-normalize"  # + word.end 침묵 삼킴 clip + duration 이상치 cap (drift fix)
     VIEWER_SIGNALS_VER = "2026-07-28-init"  # 댓글→viewer_signals 초기 버전. Gemini 프롬프트 변경 시 상향.
     STT_PROVIDER_ENV = (os.environ.get("STT_PROVIDER") or "gemini").lower()

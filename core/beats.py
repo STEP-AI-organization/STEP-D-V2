@@ -422,10 +422,33 @@ def _parse_beats_response(raw: str, seg_start: float, seg_end: float) -> list[di
     return cleaned
 
 
-def _merge_small_beats(beats: list[dict]) -> list[dict]:
-    """MIN_BEAT_SEC 미만은 인접 beat와 병합. summary/characters 합치기."""
+def _merge_small_beats(beats: list[dict], transcript: list[dict] | None = None) -> list[dict]:
+    """MIN_BEAT_SEC 미만은 인접 beat와 병합. summary/characters 합치기.
+    2026-07-29 speaker-aware: transcript 있으면 · 인접 beat 과 dominant speaker 가 다르면 병합 안 함
+    (다중 화자 beat 생성 방지). auto_split_speaker=True 마킹된 조각은 특히 보호.
+    """
     if not beats:
         return []
+
+    def _dominant_speaker(b: dict) -> str | None:
+        if not transcript:
+            return None
+        counts: dict[str, float] = {}
+        for u in transcript:
+            try:
+                us = float(u.get("start", 0)); ue = float(u.get("end", 0))
+            except (TypeError, ValueError):
+                continue
+            if ue <= b["start"] or us >= b["end"]:
+                continue
+            sp = (u.get("speaker") or "").strip()
+            if not sp:
+                continue
+            counts[sp] = counts.get(sp, 0) + (ue - us)
+        if not counts:
+            return None
+        return max(counts.items(), key=lambda kv: kv[1])[0]
+
     beats = sorted(beats, key=lambda b: b["start"])
     out: list[dict] = []
     for b in beats:
@@ -433,27 +456,41 @@ def _merge_small_beats(beats: list[dict]) -> list[dict]:
         if length >= MIN_BEAT_SEC:
             out.append(b)
             continue
-        # 짧음 → 앞 beat와 병합 (있으면), 아니면 다음 beat와 병합 대기
+        # 짧음 → 앞 beat와 병합. 단 speaker 다르면 스킵 (mixed beat 생성 방지).
         if out:
             prev = out[-1]
-            prev["end"] = max(prev["end"], b["end"])
-            prev["summary"] = (prev["summary"] + " · " + b["summary"]).strip(" ·")
-            for c in b["characters"]:
-                if c not in prev["characters"]:
-                    prev["characters"].append(c)
+            prev_sp = _dominant_speaker(prev)
+            cur_sp = _dominant_speaker(b)
+            can_merge = (
+                not transcript
+                or prev_sp is None or cur_sp is None
+                or prev_sp == cur_sp
+            )
+            if can_merge:
+                prev["end"] = max(prev["end"], b["end"])
+                prev["summary"] = (prev["summary"] + " · " + b["summary"]).strip(" ·")
+                for c in b["characters"]:
+                    if c not in prev["characters"]:
+                        prev["characters"].append(c)
+            else:
+                # speaker 다르면 병합 안 함 · 짧은 조각 그대로 유지 (recommend 가 조합 시 활용)
+                out.append(b)
         else:
             out.append(b)  # 첫 beat면 일단 넣고 다음 반복에서 뒤와 병합될 수 있음
-    # 뒤 병합 통과 후에도 짧은 첫 beat가 남을 수 있음 · 두 번째 beat와 병합
+    # 뒤 병합 통과 후에도 짧은 첫 beat가 남을 수 있음 · 두 번째 beat와 병합 (speaker 체크)
     if len(out) >= 2 and (out[0]["end"] - out[0]["start"]) < MIN_BEAT_SEC:
         first, second = out[0], out[1]
-        merged = {
-            "start": first["start"], "end": second["end"],
-            "title": second["title"],
-            "summary": (first["summary"] + " · " + second["summary"]).strip(" ·"),
-            "characters": list(dict.fromkeys(first["characters"] + second["characters"])),
-            "hook": second["hook"], "is_complete": True,
-        }
-        out = [merged] + out[2:]
+        first_sp = _dominant_speaker(first)
+        second_sp = _dominant_speaker(second)
+        if not transcript or first_sp is None or second_sp is None or first_sp == second_sp:
+            merged = {
+                "start": first["start"], "end": second["end"],
+                "title": second["title"],
+                "summary": (first["summary"] + " · " + second["summary"]).strip(" ·"),
+                "characters": list(dict.fromkeys(first["characters"] + second["characters"])),
+                "hook": second["hook"], "is_complete": True,
+            }
+            out = [merged] + out[2:]
     return out
 
 
@@ -539,7 +576,7 @@ def _process_segment(client, seg: dict, transcript: list[dict],
             "characters": seg.get("characters", []),
             "hook": "기타", "is_complete": True,
         }]
-    beats = _merge_small_beats(beats)
+    beats = _merge_small_beats(beats, transcript)
     # 재분해: SUBDIVIDE_SEC 초과 beat
     expanded: list[dict] = []
     for b in beats:
@@ -640,7 +677,7 @@ def build_beats(
             all_beats[i]["end"] = all_beats[i]["start"] + MIN_BEAT_SEC
 
     # 최종 짧은 beat 병합 (전체 리스트 단위)
-    all_beats = _merge_small_beats(all_beats)
+    all_beats = _merge_small_beats(all_beats, transcript)
 
     # 2026-07-27 gap fill: 자막 있는데 beat 없는 구간(>=8s)을 자동 beat로 채운다.
     # AI가 리액션·인터뷰 짧은 컷을 놓치는 케이스 방지 (실측: 스페인 음식점 얘기 후 리액션 46s
@@ -650,6 +687,13 @@ def build_beats(
     # 2026-07-28 안전망: 45s 초과 beat을 speaker 전환점에서 강제 분할 (model이 큰 beat 반환할
     # 때 최후 방어). 화자 정보 없거나 전환점 없으면 원본 유지.
     all_beats = _force_split_large_beats(all_beats, transcript, max_beat_sec=45.0)
+
+    # 2026-07-29 화자 전환 강제 split: beat 안에 speaker 전환이 있으면 크기 무관 split.
+    # 사용자 지적 (b26): 발화자 2 짧은 리액션 3s + 발화자 1 13s 가 한 beat 에 섞임. 화자 원칙 위반.
+    # min_beat_sec=3.0 (기본보다 낮게) 로 잔 리액션도 분리 · 조각이 인접 beat 과 same speaker 면 merge.
+    all_beats = _split_beats_on_speaker_change(all_beats, transcript, min_piece_sec=3.0)
+    # 다시 짧은 beat 병합 (split 후 잔조각 처리)
+    all_beats = _merge_small_beats(all_beats, transcript)
 
     # id 부여
     for i, b in enumerate(all_beats):
@@ -710,6 +754,68 @@ def _force_split_large_beats(beats: list[dict], transcript: list[dict],
             out.extend(pieces)
         else:
             out.append(b)
+    return out
+
+
+def _split_beats_on_speaker_change(beats: list[dict], transcript: list[dict],
+                                   min_piece_sec: float = 3.0) -> list[dict]:
+    """Beat 안에 speaker 전환이 있으면 그 지점에서 무조건 split. force_split 보다 엄격 (크기 무관).
+    사용자 지적 (2026-07-29 · b26): AI 가 화자 원칙 무시하고 여러 화자 담음. 후처리 강제.
+    min_piece_sec 미만 조각은 유지 하되 · _merge_small_beats 가 다음 단계에서 인접에 병합.
+    """
+    if not beats or not transcript:
+        return beats
+    out: list[dict] = []
+    n_split = 0
+    for b in beats:
+        try:
+            st = float(b["start"]); en = float(b["end"])
+        except (KeyError, TypeError, ValueError):
+            out.append(b); continue
+        # 이 beat 안 utterance 수집 (시간순)
+        in_range: list[tuple[float, float, str]] = []
+        for u in transcript:
+            try:
+                us = float(u.get("start", 0)); ue = float(u.get("end", 0))
+            except (TypeError, ValueError):
+                continue
+            if ue <= st or us >= en:
+                continue
+            sp = (u.get("speaker") or "").strip()
+            in_range.append((us, ue, sp))
+        in_range.sort(key=lambda x: x[0])
+        # 화자 전환점 (previous → current 가 다른 speaker) · 시작 시각 = 새 speaker 첫 발화 시작
+        boundaries: list[float] = []
+        prev_sp = None
+        for us, ue, sp in in_range:
+            if prev_sp is not None and sp and sp != prev_sp:
+                boundaries.append(us)
+            if sp:
+                prev_sp = sp
+        # min_piece_sec 만큼 앞뒤 여유 있는 경계만 유효
+        useful = [x for x in boundaries if x - st >= min_piece_sec and en - x >= min_piece_sec]
+        if not useful:
+            out.append(b); continue
+        cuts = [st] + sorted(set(useful)) + [en]
+        pieces: list[dict] = []
+        for i in range(len(cuts) - 1):
+            p_st = cuts[i]; p_en = cuts[i + 1]
+            if p_en - p_st < 1.0:  # 완전 파편 (<1s) 은 제외
+                continue
+            pieces.append({
+                **{k: v for k, v in b.items() if k not in ("start", "end", "id")},
+                "start": round(p_st, 3),
+                "end": round(p_en, 3),
+                "title": (b.get("title") or "") + f" (spk-part {len(pieces)+1})",
+                "auto_split_speaker": True,
+            })
+        if len(pieces) >= 2:
+            n_split += 1
+            out.extend(pieces)
+        else:
+            out.append(b)
+    if n_split:
+        print(f"   [beats] 화자 전환 split: {n_split} beat 분할")
     return out
 
 
