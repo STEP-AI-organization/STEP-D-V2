@@ -107,7 +107,7 @@ def _prepare_checkpoints(
     # (60→120초 · 완결성 우선 · 하드실링 180초).
     RECOMMEND_VER = "2026-07-28-aggro-tone"  # title 톤: 담백→어그로/클릭베이트 (사용자 방향 전환)
     REFINE_VER = "2026-07-27-speaker-preserve"  # get_segments가 speaker 필드 보존하도록 fix (drop 방지)
-    FACES_VER = "2026-07-27-object-only"   # 얼굴 클러스터만 생성 · 이름 자동 매핑 금지
+    FACES_VER = "2026-07-29-sample-10s"    # 샘플 간격 3s→10s (573→~250 · wall time 620s→~270s)
     SHOTS_VER = "2026-07-24a"   # shot boundary detection: ffmpeg scene, fps=1, thr=0.55
     SCENE_TYPE_VER = "2026-07-24a"  # shot 프레임 → Vision batch: interview/on_scene/other
     BEATS_VER = "2026-07-28-gap-split-speaker"   # gap-fill을 화자 전환점에서 세분화 (auto beat 통째 담기 방지)
@@ -261,6 +261,31 @@ def analyze(
     timed("stt", ts)
     _progress("stt", 30, f"음성 인식 완료 · {len(segments)} 세그먼트")
 
+    # ── faces 병렬 시작 (2026-07-29 최적화) ────────────────────────────────
+    # 옛 파이프라인: STT → refine → faces (10m 완전 직렬). faces는 세그의 start/end 타이밍만
+    # 쓰고 (텍스트 X · speaker 라벨 X · refined 를 mutate 하지도 않음), stt segments 는 refined 와
+    # 동일한 timing 을 가진다. 따라서 STT 끝나면 즉시 faces 를 백그라운드로 돌리고 refine 과
+    # 병렬 실행. 원래 faces 자리에서 join. 절감 wall time 5-8m.
+    # cast_photos_dir 는 out_dir/cast_photos (서버가 프로그램 castPhotos 를 파일로 풀어놓음).
+    faces_future: Future | None = None
+    faces_executor: ThreadPoolExecutor | None = None
+    _faces_cached = _load_json(out_dir / "faces.json")
+    if not (isinstance(_faces_cached, dict) and _faces_cached.get("clusters") is not None) and not fast:
+        try:
+            from .faces import build_face_index
+            _cast_photos_dir = out_dir / "cast_photos"
+            faces_executor = ThreadPoolExecutor(max_workers=1)
+            # on_progress 안 넘김 (refine 진행률과 UI 충돌 방지)
+            faces_future = faces_executor.submit(
+                build_face_index, video_path, segments, out_dir,
+                None,  # on_progress
+                _cast_photos_dir if _cast_photos_dir.exists() else None,
+            )
+            step(f"[병렬] 얼굴 검출·클러스터링 백그라운드 시작 ({len(segments)} 세그)")
+        except Exception as e:
+            step(f"  (faces 병렬 시작 실패, 순차 폴백: {str(e)[:70]})")
+            faces_future = None
+
     # ── 시청자 신호 (2026-07-28) — 이 롱폼 원본의 상위 좋아요 댓글에서 뽑은 반응.
     # content-pipeline이 out_dir/comments.json 으로 넘겨준다 (from-youtube 경로 · sourceVideoId
     # 있을 때만). build_viewer_signals 는 timestamp 정규식 파싱 + Gemini 1회 요약으로
@@ -315,6 +340,7 @@ def analyze(
             "video": str(video_path), "duration": duration, "genre": rec.get("genre"),
             "transcript": segments, "scenes": scenes, "cast": [], "timeline": [],
             "narrative": {}, "shorts": shorts, "fast": True,
+            "viewer_signals": (profile or {}).get("viewer_signals"),
             "took_sec": round(time.time() - t0, 1), "stage_sec": stage_took,
         }
         _save_json(out_dir / "analysis.json", result)
@@ -335,12 +361,9 @@ def analyze(
     timed("refine", ts)
     _progress("refine", 38, "자막 정제 완료")
 
-    # 2.5) 얼굴 검출·클러스터링 (2026-07-22 신설).
-    # 각 세그먼트 중간 프레임에서 얼굴 검출 → 임베딩 → HDBSCAN 무감독 클러스터링 →
-    # 클러스터별 M1/F1/M2/F2 라벨을 refined[].speaker에 덮어씀. 배치 독립성 문제(refine의
-    # per-batch M1이 서로 다른 사람) 자동 해결 — 클러스터링은 전역이므로 M1은 항상 같은 얼굴.
-    # 사용자가 UI에서 "M2=정숙" 매핑 저장하면 rename만으로 끝남 (apply_mapping).
-    # 실패해도 파이프라인 계속 (refined는 텍스트 기반 speaker 유지).
+    # 2.5) 얼굴 검출·클러스터링 (2026-07-22 신설 · 2026-07-29 STT 후 병렬).
+    # 백그라운드 시작한 faces_future 가 있으면 여기서 join. 없으면 캐시 재사용 또는 실패 처리.
+    # faces 는 세그 start/end 만 쓰고 refined 를 mutate 하지 않으므로 refine 과 병렬 안전.
     ts = time.time()
     faces = _load_json(out_dir / "faces.json")
     if faces and isinstance(faces, dict) and faces.get("clusters") is not None:
@@ -352,20 +375,36 @@ def analyze(
             _save_json(out_dir / "refined.json", refined)
         except Exception as e:
             step(f"  (매핑 적용 스킵: {str(e)[:70]})")
+    elif faces_future is not None:
+        _progress("faces", 55, "얼굴 검출 병렬 결과 대기")
+        step("얼굴 검출·클러스터링 (병렬 join)…")
+        try:
+            _returned_refined, faces = faces_future.result()
+            # apply_mapping 은 mapping 이 있을 때만 refined mutate. build_face_index 는 mapping 을
+            # 비워서 반환하므로 (line 444) refined 는 실질 그대로. 저장은 스킵 (변경 없음).
+            _save_json(out_dir / "faces.json", faces)
+            step(f"  클러스터 {len(faces.get('clusters', {}))}개 · 라벨링 {faces.get('labeled_segments', 0)}/{len(refined)} 세그먼트")
+        except Exception as e:
+            step(f"  (얼굴 클러스터링 실패: {str(e)[:120]})")
+            import traceback
+            traceback.print_exc()
+            faces = None
+        finally:
+            if faces_executor is not None:
+                faces_executor.shutdown(wait=False)
     else:
+        # 병렬 시작 실패 폴백 — 순차 실행
         try:
             from .faces import build_face_index
-            _progress("faces", 40, "얼굴 검출·클러스터링 중")
+            _progress("faces", 40, "얼굴 검출·클러스터링 중 (순차)")
             step("얼굴 검출·클러스터링…")
-            # 사용자가 등록한 캐스트 사진 폴더 (있으면 클러스터 매칭에 사용). 서버가 work/cast_photos/에
-            # 프로그램 상세 페이지의 castPhotos data URL들을 파일로 풀어놓는다. 없으면 no-op.
             _cast_photos_dir = out_dir / "cast_photos"
             refined, faces = build_face_index(
                 video_path, refined, out_dir,
                 on_progress=lambda done, total: _progress("faces", 40 + 12 * done / max(1, total), f"얼굴 검출 {done}/{total} 프레임"),
                 cast_photos_dir=_cast_photos_dir if _cast_photos_dir.exists() else None,
             )
-            _save_json(out_dir / "refined.json", refined)  # speaker 라벨 덮어써졌으므로 재저장
+            _save_json(out_dir / "refined.json", refined)
             _save_json(out_dir / "faces.json", faces)
             step(f"  클러스터 {len(faces.get('clusters', {}))}개 · 라벨링 {faces.get('labeled_segments', 0)}/{len(refined)} 세그먼트")
         except Exception as e:
@@ -677,6 +716,9 @@ def analyze(
         "narrative": narrative,
         "shorts": shorts,
         "ppl": ppl or {},
+        # viewer_signals — from-youtube 경로에서만 존재 (comments.json 있는 케이스). Lab 이 별도
+        # GCS 파일 read 없이 analysis blob 한 번으로 시청자 목소리에 접근할 수 있게 함께 저장.
+        "viewer_signals": (profile or {}).get("viewer_signals"),
         "took_sec": round(time.time() - t0, 1),
         "stage_sec": stage_took,
     }

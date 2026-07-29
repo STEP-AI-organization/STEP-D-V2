@@ -230,9 +230,10 @@ def build_face_index(
 
     # 최소 샘플 간격 — 짧은 대사 세그가 몰리면(예능 리액션 컷) 프레임 수 폭증.
     # 같은 사람이 같은 컷에서 여러 프레임 잡혀도 클러스터링은 centroid로 수렴 → 결과 거의 동일.
-    # 3s 하한이면 대사 세그가 1-2s 몰려도 최대 절반은 스킵되어 총 프레임 수 30-50% 절감.
-    # 스킵된 세그는 speaker 라벨링에 못 참여하지만, refined는 이후에 인접 세그의 speaker를 상속.
-    _MIN_SAMPLE_INTERVAL_SEC = 3.0
+    # 3s → 10s (2026-07-29): 573 샘플/45분(1.08s/샘플 · 620s) → ~250 샘플 목표. 5 클러스터 뽑는 데
+    # 250 이상이면 안정 (min_cluster_size=8 · 페어 502→220 대략). face detect wall time 620s→270s
+    # 예상 (5-6m 절감). 세밀한 클러스터가 필요하면 FACES_MIN_SAMPLE_INTERVAL_SEC 로 낮춤.
+    _MIN_SAMPLE_INTERVAL_SEC = float(os.environ.get("FACES_MIN_SAMPLE_INTERVAL_SEC") or 10.0)
     last_sampled_ts: float = -1.0e9
     sampled = 0
     skipped_interval = 0
