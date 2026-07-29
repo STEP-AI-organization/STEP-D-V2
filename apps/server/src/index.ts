@@ -2621,6 +2621,9 @@ app.post("/api/recommendations/:id/adopt", async (c) => {
     episodeId: rec.episodeId,
     programTitle: episode?.programTitle ?? "",
     title: rec.title,
+    // 두 줄 제목 (2026-07-29): recommend 가 뽑은 AI setup/payoff 를 editor 초기 오버레이로 전달.
+    titleLine1: rec.titleLine1,
+    titleLine2: rec.titleLine2,
     clipType: rec.kind === "short" ? "T6" : "TZ",
     targetAge: episode?.targetAge ?? 0,
     aspectRatio: rec.kind === "short" ? "9:16-crop-main" : "16:9",
@@ -4563,6 +4566,90 @@ app.get("/api/lab/match/export/:channelId", async (c) => {
   const tally = { high: 0, mid: 0, low: 0 } as Record<string, number>;
   for (const p of pairs) tally[p.performance.tier]++;
   return c.json({ channelId, channelName: ch.channelName, count: pairs.length, tally, pairs });
+});
+
+/**
+ * 시청자 목소리 (viewer_signals) 조회 — Lab VideosTab 위젯용 (2026-07-28).
+ *
+ * :videoId 는 YouTube videoId (예: jn3KztGtJ8Y). from-youtube 경로로 임포트된 롱폼이면
+ * episode.sourceVideoId 에 이 값이 남아있고, 그 episode 의 media 에 대한 content_analysis.data
+ * 안에 viewer_signals + shorts 가 저장돼 있다 (analyze.py 가 Part B 에서 함께 저장).
+ *
+ * 반환: { videoId, mediaId, viewer_signals, shorts, coverage } 또는 { videoId, error }.
+ *   coverage: 각 explicit_timestamp 별로 "이 초를 포함하는 short 가 있는지" 판정한 배열.
+ *   튜닝 사이클용 — 미커버 timestamp 가 많으면 propose_shorts_beat_only 규칙이 약하다는 신호.
+ */
+app.get("/api/lab/videos/:videoId/viewer-signals", async (c) => {
+  const videoId = c.req.param("videoId");
+  if (!videoId) return c.json({ error: "videoId required" }, 400);
+
+  // episode.sourceVideoId 로 임포트된 케이스만 대상. entities 는 JSONB 라 data->>'sourceVideoId' 로 조회.
+  const { rows: epRows } = await getPool().query<{ id: string }>(
+    "SELECT id FROM entities WHERE kind = 'episode' AND data->>'sourceVideoId' = $1 LIMIT 1",
+    [videoId],
+  );
+  if (!epRows[0]) {
+    return c.json({ videoId, viewer_signals: null, shorts: [], coverage: [], reason: "episode not found (외부 URL 이거나 임포트 전)" });
+  }
+  const episodeId = epRows[0].id;
+
+  const { rows: mediaRows } = await getPool().query<{ id: string }>(
+    "SELECT id FROM media WHERE episodeId = $1 ORDER BY createdAt DESC LIMIT 1",
+    [episodeId],
+  );
+  if (!mediaRows[0]) {
+    return c.json({ videoId, viewer_signals: null, shorts: [], coverage: [], reason: "media not found" });
+  }
+  const mediaId = mediaRows[0].id;
+
+  const ca = await getContentAnalysis(mediaId);
+  if (!ca || !ca.data) {
+    return c.json({ videoId, mediaId, viewer_signals: null, shorts: [], coverage: [], reason: "analysis pending" });
+  }
+  const data = ca.data as { viewer_signals?: unknown; shorts?: unknown };
+  const vs = (data.viewer_signals && typeof data.viewer_signals === "object")
+    ? data.viewer_signals as Record<string, unknown>
+    : null;
+  const shortsRaw = Array.isArray(data.shorts) ? data.shorts : [];
+  const shorts = shortsRaw.map((s: any) => ({
+    start: Number(s?.start) || 0,
+    end: Number(s?.end) || 0,
+    title: String(s?.title || ""),
+    rank: typeof s?.rank === "number" ? s.rank : null,
+  })).filter((s) => s.end > s.start);
+
+  // coverage: viewer_signals.explicit_timestamps 각각이 shorts 어느 하나의 [start,end] 안에
+  // 들어가는지 판정. UI 가 미커버 timestamp 를 ⚠ 로 표시해 규칙 강도 튜닝 시그널로 쓴다.
+  const coverage: { mmss: string; likes: number; secs: number; covered: boolean; byShortRank: number | null }[] = [];
+  const ets = Array.isArray(vs?.explicit_timestamps) ? vs!.explicit_timestamps as any[] : [];
+  for (const t of ets) {
+    const mmss = String(t?.mmss || "");
+    const parts = mmss.split(":").map((x) => Number(x));
+    let secs = 0;
+    if (parts.length === 3 && parts.every(Number.isFinite)) {
+      secs = parts[0] * 3600 + parts[1] * 60 + parts[2];
+    } else if (parts.length === 2 && parts.every(Number.isFinite)) {
+      secs = parts[0] * 60 + parts[1];
+    } else {
+      continue;
+    }
+    const hit = shorts.find((s) => s.start <= secs && secs <= s.end);
+    coverage.push({
+      mmss,
+      likes: Number(t?.likes) || 0,
+      secs,
+      covered: Boolean(hit),
+      byShortRank: hit?.rank ?? null,
+    });
+  }
+
+  return c.json({
+    videoId,
+    mediaId,
+    viewer_signals: vs,
+    shorts,
+    coverage,
+  });
 });
 
 /**

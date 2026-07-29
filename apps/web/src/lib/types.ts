@@ -116,6 +116,11 @@ export interface Recommendation {
   episodeId: string;
   kind: RecommendationKind;
   title: string;
+  /** 두 줄 제목 (2026-07-29): AI 가 setup/payoff 로 분리해 라인당 최대 15자.
+   *  라인1 = 상단 흰색 setup (오해·질문) · 라인2 = 하단 파란색 payoff (반전·정답).
+   *  editor 초기 오버레이 렌더에 사용. 없으면 title 한 줄 폴백. */
+  titleLine1?: string;
+  titleLine2?: string;
   /** 처음 제목 생성 단계에서 뽑힌 대체 제목 후보들 (기본 title 포함/미포함 무관).
    *  에디터의 '제목 후보' 탭이 이 배열을 후보 리스트로 표시한다. 비어 있으면 title 하나만. */
   titleCandidates?: string[];
@@ -182,6 +187,9 @@ export interface Clip {
   episodeId: string;
   programTitle: string;
   title: string;
+  /** 두 줄 제목 (2026-07-29): editor 오버레이 · 라인1 흰색 setup · 라인2 파란색 payoff. */
+  titleLine1?: string;
+  titleLine2?: string;
   clipType: ClipType;
   clipCategory?: ClipCategory;
   targetAge: TargetAge;

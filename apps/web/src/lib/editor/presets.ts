@@ -456,16 +456,26 @@ export function makeInitialEditorState(
   masterDurationSec: number,
   trimIn = 0,
   trimOut?: number,
+  titleLine1?: string,  // 2026-07-29: 두 줄 제목 (AI가 line1/line2 생성한 경우)
+  titleLine2?: string,
 ): EditorState {
   const dur = Math.max(1, masterDurationSec);
   const inAbs = Math.max(0, Math.min(trimIn, dur - 0.1));
   const outAbs = Math.min(dur, Math.max(inAbs + 0.1, trimOut ?? dur));
+  // 두 줄 title 있으면 · 라인1(흰색) + 라인2(파란색 · 고정) 로 초기화.
+  // 없으면 · 기존처럼 title 단일 라인.
+  const initialLines = (titleLine1 && titleLine2)
+    ? [
+        { id: "t1", text: titleLine1, size: 30, color: "#FFFFFF" },
+        { id: "t2", text: titleLine2, size: 30, color: "#3B82F6" },  // Tailwind blue-500
+      ]
+    : [{ id: "t1", text: title, size: 30, color: "#FFFFFF" }];
   return {
     templateId: "stacked_channel",
     aspect: "9:16",
     bg: "#0E0E12",
     accent: "#FFD400",
-    titleLines: [{ id: "t1", text: title, size: 30, color: "#FFFFFF" }],
+    titleLines: initialLines,
     titleAlign: "center",
     titleX: 50,
     titleY: 8,

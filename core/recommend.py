@@ -2985,7 +2985,10 @@ _SHORTS_FROM_BEATS_SCHEMA = {
                 "type": "OBJECT",
                 "properties": {
                     "beat_ids": {"type": "ARRAY", "items": {"type": "INTEGER"}},
-                    "title": {"type": "STRING"},
+                    "title": {"type": "STRING"},  # 폴백 · 한 줄 전체
+                    "title_line1": {"type": "STRING"},  # 상단 · 상황·주어 (기본 톤 · 흰색/검정)
+                    "title_line2": {"type": "STRING"},  # 하단 · 핵심 폭로·반전 (컬러 강조)
+                    "title_line2_color": {"type": "STRING"},  # blue|red|yellow|green (기본 blue)
                     "hook": {"type": "STRING"},
                     "tags": {"type": "ARRAY", "items": {"type": "STRING"}},
                     "why": {"type": "STRING"},
@@ -3193,9 +3196,40 @@ def propose_shorts_beat_only(
 
 **hook**: 반전 / 감정고조 / 돌직구 / 질문 / 정보성 / 웃음 / 갈등 / 공감 / 기타 중 하나.
 
+**⭐ 두 줄 제목 (요즘 쇼츠 표준 스타일) ⭐**:
+title 은 폴백용 한 줄 · **title_line1 + title_line2** 를 필수로 뽑는다. 렌더 시 2줄 표시 · line2 는
+컬러 (노랑·파랑·빨강) 로 강조된다.
+
+**🚨 길이 제한 (엄격 · 반드시 준수) 🚨**:
+- **title_line1: 최대 12자 (한글 기준)** · 짧을수록 좋음. 목표 8-10자.
+- **title_line2: 최대 12자** · 목표 8-11자.
+- **shorts 화면 좁아서 15자 넘어가면 잘림.** 20자 절대 X.
+- 인용문·조사·군더더기 삭제. 짧고 강한 단어만.
+
+**title_line1** (상단 · 흰색 톤다운): **오해·질문·기대** — 짧게
+    예: "헬스장 사장인 줄?" (9자) · "개그맨인 줄 알았지" (10자) · "10년차 배우?" (7자)
+**title_line2** (하단 · 컬러 강조): **반전·정답·핵심**
+    예: "7년차 한의사의 반전" (10자) · "삐끼 최홍만도 홀렸다" (11자) · "예술고 강사로 리셋" (10자)
+**title_line2_color**: 기본 "yellow" · "red" (충격·폭로) · "blue" (진지 정보) · "green" (긍정)
+
+**두 줄 title 좋은 예 (짧고 강함)**:
+- "헬스장 사장인 줄?" (9자) / "7년차 한의사의 반전" (10자) - yellow
+- "개그맨인 줄 알았지" (10자) / "삐끼 최홍만도 홀렸다" (11자) - yellow
+- "10년 연기 끝" (7자) / "예술고 강사 인생 2막" (11자) - blue
+- "저 지금도 못 잊어" (9자) / "믿기 힘든 실화" (8자) - red
+
+**나쁜 예 (너무 김 · 절대 X)**:
+- "예술고에서 친구들을 가르치는 그녀의 정체는?" (21자 ❌)
+- "모두를 놀라게 한 그녀의 직업은 현대무용수!" (20자 ❌)
+- "패션 브랜드 직원, 그녀의 패션 센스 비결은?" (22자 ❌)
+
+title (폴백) 은 두 줄 합쳐 한 줄로 자연스럽게.
+
 **반환 형식** (JSON):
 {{"shorts":[
-  {{"beat_ids":[3,4], "title":"원균 한의사 반전 공개", "hook":"반전", "tags":["직업공개","한의사"],
+  {{"beat_ids":[3,4], "title":"헬스장 사장인 줄? 7년 차 한의사의 반전",
+    "title_line1":"헬스장 사장인 줄?", "title_line2":"7년 차 한의사의 반전", "title_line2_color":"yellow",
+    "hook":"반전", "tags":["직업공개","한의사"],
     "why":"b3에서 원균이 한의사 자기소개, b4에서 다른 출연자 놀란 리액션. 완결 흐름."}}
 ]}}
 """
@@ -3296,6 +3330,25 @@ def propose_shorts_beat_only(
         # 서버측 duration 상·하한 없음 (2026-07-27 사용자 방향): AI 프롬프트에서 40~90s 목표만
         # 느슨하게 지시하고 결정은 AI에 맡김. 하드 컷은 뒤집혀 있거나(end<=start) invalid ids만.
         title = (s.get("title") or "").strip() or (picked_beats[0].get("title") or "무제")
+        # 두 줄 제목 (2026-07-29 사용자 요구): 라인1=setup 라인2=payoff · 라인2 컬러 강조.
+        # 예: "헬스장 사장인 줄?" / "7년 차 한의사의 반전" (yellow)
+        # 하드 컷: 라인당 최대 15자 · 넘으면 잘라냄 (LLM 이 프롬프트 무시하고 길게 뽑을 때 안전망).
+        _MAX_LINE_LEN = 15
+        title_line1 = (s.get("title_line1") or "").strip()
+        title_line2 = (s.get("title_line2") or "").strip()
+        if len(title_line1) > _MAX_LINE_LEN:
+            title_line1 = title_line1[:_MAX_LINE_LEN].rstrip(" ,·.-") + "…"
+        if len(title_line2) > _MAX_LINE_LEN:
+            title_line2 = title_line2[:_MAX_LINE_LEN].rstrip(" ,·.-") + "…"
+        # 컬러 고정: 파란색 (2026-07-29 사용자 요구 · AI 판단 불필요)
+        title_line2_color = "blue"
+        # 폴백: line1/2 없으면 title 로 자동 분할 (·|?|! 기준)
+        if not (title_line1 and title_line2) and title:
+            import re as _re_t
+            m = _re_t.match(r"^(.+?[?!])\s+(.+)$", title)
+            if m:
+                title_line1 = title_line1 or m.group(1).strip()
+                title_line2 = title_line2 or m.group(2).strip()
         hook = (s.get("hook") or picked_beats[0].get("hook") or "기타").strip()
         tags = [str(t).strip() for t in (s.get("tags") or []) if str(t).strip()]
         # characters: 조합된 beats의 union
@@ -3314,6 +3367,9 @@ def propose_shorts_beat_only(
             "start": sf_start,
             "end": sf_end,
             "title": title,
+            "title_line1": title_line1,
+            "title_line2": title_line2,
+            "title_line2_color": title_line2_color,
             "reason": reason[:400],
             "story_synopsis": reason[:400],
             "why": (s.get("why") or "").strip()[:200],

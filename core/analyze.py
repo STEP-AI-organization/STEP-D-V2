@@ -105,7 +105,7 @@ def _prepare_checkpoints(
     # RECOMMEND_VER: recommend 프롬프트/로직이 바뀌면 이 문자열을 올려 기존 shorts.json 캐시를
     # 무효화. 2026-07-23g: narrative-first 트리 구조 (시나리오×변형×best) + 길이 제한 완화
     # (60→120초 · 완결성 우선 · 하드실링 180초).
-    RECOMMEND_VER = "2026-07-29-semantic-closure-v8"  # + 한국 예능 문법 (현장+인터뷰룸 세트) 강조
+    RECOMMEND_VER = "2026-07-29-two-line-title-short"  # + 길이 강제 (라인당 최대 12자 · 목표 8-10자)
     REFINE_VER = "2026-07-27-speaker-preserve"  # get_segments가 speaker 필드 보존하도록 fix (drop 방지)
     FACES_VER = "2026-07-29-sample-10s"    # 샘플 간격 3s→10s (573→~250 · wall time 620s→~270s)
     SHOTS_VER = "2026-07-24a"   # shot boundary detection: ffmpeg scene, fps=1, thr=0.55
