@@ -2583,6 +2583,337 @@ def _refine_story_boundary(
     return round(start, 1), round(end, 1)
 
 
+# semantic closure QA · 맥락 완결 판정 ─────────────────────────────────────────
+
+_SEMANTIC_CLOSURE_SCHEMA = {
+    "type": "OBJECT",
+    "properties": {
+        "complete": {"type": "BOOLEAN"},
+        "extend_to_sec": {"type": "NUMBER"},
+        "should_discard": {"type": "BOOLEAN"},
+        "extend_confidence": {"type": "INTEGER"},  # 0-10 · extend 필요성 확신도 (7↑만 실행)
+        "extend_payoff_quote": {"type": "STRING"},  # extend 시 새로 담기는 payoff 실제 인용
+        "reason": {"type": "STRING"},
+    },
+    "required": ["complete"],
+}
+
+
+def _dialogue_slice(transcript: list[dict] | None, lo: float, hi: float,
+                    max_chars: int = 500) -> str:
+    """transcript 에서 [lo, hi] 범위 대사만 speaker 포함 텍스트."""
+    if not transcript:
+        return ""
+    out = []
+    used = 0
+    for t in transcript:
+        try:
+            ts = float(t.get("start", 0)); te = float(t.get("end", 0))
+        except (TypeError, ValueError):
+            continue
+        if te <= lo or ts >= hi:
+            continue
+        speaker = (t.get("speaker") or "").strip() or "?"
+        text = (t.get("text") or "").strip()
+        if not text:
+            continue
+        line = f"[{int(ts//60)}:{int(ts%60):02d}] {speaker}: {text}"
+        if used + len(line) > max_chars:
+            break
+        out.append(line)
+        used += len(line)
+    return "\n".join(out)
+
+
+def _extract_frame_jpeg(video_path: str, t_sec: float, max_side: int = 640) -> bytes | None:
+    """t 시점 프레임 1장을 JPEG bytes 로. cv2 사용. 실패 시 None.
+    max_side 로 최대 변 리사이즈 (기본 640) · 이미지 토큰 아낌 · closure 판정엔 저해상 충분.
+    """
+    try:
+        import cv2
+        cap = cv2.VideoCapture(str(video_path))
+        if not cap.isOpened():
+            return None
+        cap.set(cv2.CAP_PROP_POS_MSEC, max(0.0, float(t_sec)) * 1000.0)
+        ok, frame = cap.read()
+        cap.release()
+        if not ok or frame is None:
+            return None
+        h, w = frame.shape[:2]
+        if max(h, w) > max_side:
+            scale = max_side / float(max(h, w))
+            frame = cv2.resize(frame, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
+        ok, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 78])
+        if not ok:
+            return None
+        return bytes(buf)
+    except Exception:
+        return None
+
+
+def _semantic_closure_one(client, short: dict, transcript: list[dict] | None,
+                          duration: float, video_path: str | None = None) -> tuple[dict, str]:
+    """단일 shorts 의 end 지점 semantic closure 판정. Gemini 1 콜 (multimodal).
+    텍스트: 마지막 15s 대사 + 뒤 15s 컨텍스트. 이미지: end · +3s · +10s 3장.
+    프레임을 봐야 리액션·표정·씬 전환을 판단 가능 (텍스트만으론 부족).
+    반환: (수정된 shorts, action_log). action: 'keep'·'extend +Xs'·'discard'·'err'.
+    """
+    start = float(short.get("start", 0))
+    end = float(short.get("end", 0))
+    if end <= start:
+        return short, "invalid"
+    tail_lo = max(start, end - 15)
+    next_hi = end + 15
+    if duration > 0:
+        next_hi = min(next_hi, duration)
+    tail_dialogue = _dialogue_slice(transcript, tail_lo, end, max_chars=500)
+    next_dialogue = _dialogue_slice(transcript, end, next_hi, max_chars=500)
+    if not tail_dialogue.strip():
+        return short, "no-tail"
+
+    system = (
+        "너는 한국 예능·방송 편집 전문가다. shorts clip 이 지정 시점에 끝난다.\n"
+        "**기본 편향: 유지 (conservative)**. 확장은 확실한 근거 있을 때만.\n\n"
+        "**입력**: 대사 (마지막 15s + 뒤 15s 컨텍스트) + 프레임 3장 (end · +3s · +10s).\n\n"
+        "**⭐ 한국 예능 문법 (매우 중요) ⭐**:\n"
+        "한국 예능은 [현장 씬] + [인터뷰룸 반응/코멘트] 가 세트로 편집된다.\n"
+        "- 현장에서 사건 발생 → 다른 씬(인터뷰룸)에서 출연자·패널이 그 사건에 대해 리액션·해설·뒷얘기.\n"
+        "- 프레임에 인터뷰룸(배경 바뀜 · 정면 카메라 · 자막 하단 위치) 이 뒤 15초에 있으면 · 그 인터뷰까지 담아야 완결.\n"
+        "- 인터뷰의 첫 대사가 '아 그때…' · '진짜 웃긴 게…' · '저는 그때 이런 생각을…' 등 회고·해설 시작이면 강한 확장 신호.\n"
+        "- 인터뷰 대사가 짧게 (5-10s) 완결되면 그 utterance.end 까지 확장. 인터뷰가 길게 다른 topic 로 이어지면 첫 완결 문장까지만.\n\n"
+        "**판정 순서**:\n"
+        "1. 먼저 '이미 완결됐나?' 판단. Clip 마지막 대사에 punchline·결론·감정 표현·정답·반전 있으면 → complete=true, extend X.\n"
+        "   예시 완결 신호: 반전 직업 공개('한의사예요' '강사예요'), 갈등 해소 대사, 감정 절정, 카타르시스 대사, 결정적 폭로.\n"
+        "   ✅ '반전 직업 공개' 자체가 clip 의 주제라면 · 뒤 리액션 필요 없음. 시청자는 정보 얻고 끝.\n"
+        "   ⚠️ 단, 예능이면 위 완결 신호 뒤 인터뷰 리액션 (다른 씬 · 정면 카메라) 이 오면 그것까지 포함이 표준.\n\n"
+        "2. 미완결이라 판단되면 · 뒤 15초에 진짜 payoff (**대사로 인용 가능한** 새 정보·새 감정·새 반전·인터뷰 리액션) 있나?\n"
+        "   있으면: extend_to_sec = 그 지점, extend_payoff_quote = 실제 대사 인용, extend_confidence 8-10\n"
+        "   없으면 (뒤 대사 = 그냥 이어지는 대화·중복 리액션·다른 topic 시작): 확장 X, complete=false·should_discard=true 이거나 그냥 유지\n\n"
+        "**엄격 룰**:\n"
+        "- '리액션 지속' · '분위기 이어짐' 은 확장 사유 아님 (단, 다른 씬의 명시 인터뷰 코멘트는 예외 · 위 예능 문법 참조).\n"
+        "- End 프레임에 인물이 웃거나 정색하거나 '아하' 표정 = 이미 감정 완결. **뒤 인터뷰 없으면** 확장 X.\n"
+        "- Title 이 담은 정보가 이미 clip 내에서 나왔으면 · 완결. 확장 X (인터뷰 리액션 예외).\n"
+        "- +10s 프레임에 새 씬·새 인물·다른 topic → 확장 절대 X (단, 뒤 프레임이 인터뷰룸 = 확장 OK).\n"
+        "- extend_confidence < 7 이면 실제 실행 안 됨 (파이프라인 필터). 확실할 때만 8-10 부여."
+    )
+    text_body = (
+        f"## Clip 마지막 15초 대사 (t={tail_lo:.0f}s ~ {end:.0f}s)\n{tail_dialogue}\n\n"
+        f"## 뒤 15초 대사 (t={end:.0f}s ~ {next_hi:.0f}s)\n{next_dialogue or '(없음 또는 영상 끝)'}\n\n"
+        f"## Clip 제목 (참고): {short.get('title','')}\n\n"
+        f"위 대사 + 아래 프레임 3장 (end · +3s · +10s) 종합해 판정하라."
+    )
+    # 이미지 3장 추출 (video 있으면). 실패해도 텍스트로 진행.
+    parts: list = [types.Part.from_text(text=text_body)]
+    if video_path:
+        for label, t in (("end", end), ("+3s", end + 3), ("+10s", end + 10)):
+            if duration > 0 and t > duration:
+                continue
+            img = _extract_frame_jpeg(video_path, t)
+            if img:
+                parts.append(types.Part.from_text(text=f"[프레임 {label} @ t={t:.1f}s]"))
+                parts.append(types.Part.from_bytes(data=img, mime_type="image/jpeg"))
+    try:
+        resp = call_with_retry(lambda: client.models.generate_content(
+            model=MODEL,
+            contents=parts,
+            config=types.GenerateContentConfig(
+                system_instruction=system,
+                temperature=0.2,
+                response_mime_type="application/json",
+                response_schema=_SEMANTIC_CLOSURE_SCHEMA,
+                max_output_tokens=512,
+                thinking_config=types.ThinkingConfig(thinking_budget=0),
+            ),
+        ))
+        data = json.loads(resp.text or "{}")
+    except Exception as e:
+        return short, f"err: {str(e)[:60]}"
+
+    if data.get("should_discard"):
+        short = dict(short)
+        short["_discard_reason"] = f"semantic incomplete: {(data.get('reason') or '')[:60]}"
+        return short, "discard"
+    ext = data.get("extend_to_sec")
+    conf = data.get("extend_confidence") or 0
+    payoff_quote = (data.get("extend_payoff_quote") or "").strip()
+    # 기본 게이트: conf≥7 · payoff_quote 있음 · extend 범위 내
+    if not (isinstance(ext, (int, float)) and ext > end and ext <= end + 20 and conf >= 7 and payoff_quote):
+        return short, "keep"
+    llm_proposed_end = round(float(ext), 1)
+    if llm_proposed_end <= end:
+        return short, "keep"
+
+    # GUARD A + timestamp snap: payoff_quote 를 STT 에서 실 위치 찾아 그 utterance.end 로 스냅.
+    # LLM 의 extend_to_sec 은 대략 값 · STT sentence boundary 무시하고 임의 시각 (예: 문장 도중)
+    # 반환하는 관찰. 실 대사 위치로 스냅하면 sentence 완결 지점에 정확히 컷.
+    import re as _re
+    def _norm(s: str) -> str:
+        return _re.sub(r'[\s.,?!…"\'()\[\]!?~-]+', '', s.strip())
+    quote_norm = _norm(payoff_quote)
+    quote_key = quote_norm[:min(10, max(3, len(quote_norm) // 2))] if quote_norm else ""
+    if not quote_key:
+        return short, "keep (guard-A · quote empty)"
+    # LLM 제안 시각 + 3s tolerance 안에서 quote 매칭되는 utterance 찾기 (마지막 매칭)
+    tolerance = 3.0
+    search_hi = min(llm_proposed_end + tolerance, end + 20)
+    if duration > 0:
+        search_hi = min(search_hi, duration)
+    match_utt_end = None
+    for t in (transcript or []):
+        try:
+            ts = float(t.get("start", 0)); te = float(t.get("end", 0))
+        except (TypeError, ValueError):
+            continue
+        if te <= end or ts >= search_hi:
+            continue
+        txt_norm = _norm(t.get("text", ""))
+        if quote_key in txt_norm:
+            match_utt_end = te  # 마지막 매칭 계속 갱신 (multi-utterance quote 대응)
+    if match_utt_end is None:
+        return short, f"keep (guard-A · quote '{payoff_quote[:20]}' STT 에 실 존재 X)"
+    # 연속 발화 확장: 같은 화자가 이어서 같은 맥락으로 얘기하면 그 utterance 까지 포함.
+    # gap <= 1.5s = 실질적 continuous speech. 화자 바뀌거나 긴 침묵이면 stop.
+    # 사용자 요구 (2026-07-29): "한 사람 동일 맥락 발화 이어지면 그 다음 대사까지".
+    matched_utt = None
+    for u in (transcript or []):
+        try:
+            te = float(u.get("end", 0))
+        except (TypeError, ValueError):
+            continue
+        if abs(te - match_utt_end) < 0.5:
+            matched_utt = u
+            break
+    if matched_utt is not None:
+        matched_speaker = (matched_utt.get("speaker") or "").strip()
+        current_end = match_utt_end
+        hard_cap = min(end + 20, (duration or 0) or end + 20)
+        for u in (transcript or []):
+            try:
+                us = float(u.get("start", 0)); ue = float(u.get("end", 0))
+            except (TypeError, ValueError):
+                continue
+            if ue <= current_end + 0.3:
+                continue
+            if us > hard_cap:
+                break
+            sp = (u.get("speaker") or "").strip()
+            gap = us - current_end
+            # 같은 화자 + 짧은 gap = continuous speech · 계속 확장
+            if matched_speaker and sp == matched_speaker and gap <= 1.5 and ue <= hard_cap:
+                current_end = ue
+            else:
+                break
+        match_utt_end = current_end
+    # 스냅된 new_end 사용 (LLM 값 아닌 실 utterance boundary + 연속발화 확장)
+    new_end = round(match_utt_end, 1)
+    if duration > 0:
+        new_end = min(new_end, duration)
+    if new_end <= end:
+        return short, "keep"
+
+    # GUARD B: 확장이 speaker 전환 지점을 크게 넘어가면 거부 (새 topic 위험).
+    # 화자 바뀐 뒤 2초 이상 새 화자 turn 이 이어지면 다음 인물 소개·다른 주제로 볼 확률 높음.
+    # 짧은 reaction (질문→답변, 셋업→리액션) 은 <2s 이므로 허용.
+    last_speaker_before_end = None
+    for t in (transcript or []):
+        try:
+            te = float(t.get("end", 0))
+        except (TypeError, ValueError):
+            continue
+        if te <= end:
+            sp = (t.get("speaker") or "").strip()
+            if sp:
+                last_speaker_before_end = sp
+        elif te > end + 0.5:
+            break
+    first_switch_ts = None
+    for t in (transcript or []):
+        try:
+            ts = float(t.get("start", 0))
+        except (TypeError, ValueError):
+            continue
+        if ts <= end:
+            continue
+        if ts > new_end + 2.0:
+            break
+        sp = (t.get("speaker") or "").strip()
+        if sp and last_speaker_before_end and sp != last_speaker_before_end:
+            first_switch_ts = ts
+            break
+    # guard-B 임계 4s: Q→A · 짧은 답변·리액션은 허용 (예: "정답! 미대." 3.5s).
+    # 새 speaker turn 이 4s+ 이어지면 다음 인물 소개·다른 주제로 간주 · 거부.
+    if first_switch_ts is not None and (new_end - first_switch_ts) > 4.0:
+        return short, f"keep (guard-B · speaker switch @ {first_switch_ts:.1f}s · 확장 {new_end - first_switch_ts:.1f}s 새 turn 침범)"
+
+    # 모두 통과 · 확장 승인. 확장 metadata 를 shorts dict 에 저장 (HTML 리뷰·감사용).
+    short = dict(short)
+    orig_end = end
+    short["end"] = new_end
+    short["_semantic_extend"] = {
+        "delta_sec": round(new_end - orig_end, 1),
+        "original_end": round(orig_end, 1),
+        "confidence": conf,
+        "payoff_quote": payoff_quote,
+    }
+    return short, f"extend +{new_end - end:.1f}s (conf={conf} · '{payoff_quote[:25]}')"
+
+
+def refine_boundaries_semantic(
+    client, shorts: list[dict], transcript: list[dict] | None, duration: float,
+    video_path: str | None = None,
+    on_progress: Optional[Callable[[int, int], None]] = None,
+) -> list[dict]:
+    """각 shorts end 가 서사 완결됐는지 Gemini 로 판정 · end 조정 or 폐기.
+    기존 boundary snap 4단계 (문장·발화·shot·침묵) 뒤 semantic closure QA 로 추가.
+    2026-07-29 사용자 지적: '문장 시작·끝보다 맥락 완결이 핵심 · 음성뿐 아니라 프레임 봐야'.
+    video_path 있으면 end · +3s · +10s 프레임 3장을 Gemini 에 첨부 (multimodal).
+    미완결은 최대 +20s 확장 · 확장해도 안 되면 폐기.
+    """
+    if not shorts or not transcript:
+        return shorts
+    total = len(shorts)
+    if on_progress:
+        on_progress(0, total)
+    results: list[dict | None] = [None] * total
+    logs: list[str] = [""] * total
+    from concurrent.futures import as_completed
+    with ThreadPoolExecutor(max_workers=4) as ex:
+        futures = {
+            ex.submit(_semantic_closure_one, client, s, transcript, duration, video_path): i
+            for i, s in enumerate(shorts)
+        }
+        done_count = 0
+        for fu in as_completed(futures):
+            i = futures[fu]
+            try:
+                r, log = fu.result()
+                results[i] = r
+                logs[i] = log
+            except Exception as e:
+                results[i] = shorts[i]
+                logs[i] = f"err: {str(e)[:60]}"
+            done_count += 1
+            if on_progress:
+                on_progress(done_count, total)
+    kept: list[dict] = []
+    n_extend = n_keep = n_discard = 0
+    for i, s in enumerate(results):
+        if s is None:
+            kept.append(shorts[i]); n_keep += 1; continue
+        if s.get("_discard_reason"):
+            n_discard += 1
+            print(f"   (semantic 폐기 #{i}: {s.get('_discard_reason','')[:80]})")
+            continue
+        if logs[i].startswith("extend"):
+            n_extend += 1
+            print(f"   (semantic {logs[i]} #{i}: {str(s.get('title',''))[:30]})")
+        elif logs[i] == "keep":
+            n_keep += 1
+        kept.append(s)
+    print(f"   semantic closure QA: 유지 {n_keep} · 확장 {n_extend} · 폐기 {n_discard}")
+    return kept
+
+
 # 엔트리 · recommend_narrative_first ────────────────────────────────────────
 
 def recommend_narrative_first(
@@ -2776,6 +3107,18 @@ def propose_shorts_beat_only(
 
     system = f"""너는 {pack['label']} SNS 쇼츠(YouTube Shorts/IG Reels/TikTok) 편집자다.
 편집자가 이미 정돈한 **beat 목록**만 보고 쇼츠 {n}개를 선정한다.
+
+**⭐ 한국 예능·방송의 편집 표준 문법 (매우 중요) ⭐**:
+한국 예능·방송 편집의 정석은 [**현장 씬 (사건 발생)**] + [**인터뷰룸/자막 리액션 (해설·감상·뒷얘기)**]
+이 반드시 **한 세트**로 묶이는 구조다. 이건 시청자 몰입·이해·감정 완결의 핵심.
+
+- 자기소개·폭로·리액션 shorts 는 절대 **현장만** 또는 **인터뷰만** 으로 뽑지 마.
+- 반드시 (a) 현장 발화·사건 beat + (b) 그 뒤 인터뷰룸(다른 씬·정면 카메라·상단 자막) 에서 출연자가
+  그 사건에 대해 회고·해설·감정 표현하는 beat 을 **함께** 묶어라.
+- 인터뷰 beat 판별 힌트: shot_types 에 'interview' 표시, 다른 화자 등장하지 않고 정면 카메라 단독,
+  대사가 "저는 그때…" · "진짜 웃긴 게…" · "저 지금도 생각해도…" 등 회고형.
+- 인터뷰 없이 현장만이면 · 시청자는 "그래서?" 하고 이탈. 인터뷰 없이 인터뷰만이면 · 문맥 이해 불가.
+- 예능 shorts 이상적 구조: [30-40s 현장] + [10-20s 인터뷰 리액션] = 40-60s 완결.
 
 이 장르 터지는 기준:
 {pack['guidance']}
@@ -3127,6 +3470,16 @@ def _recommend_narrative_first_impl(
         shorts = propose_shorts_beat_only(
             client, beats, transcript, genre, n, cast_registry, profile,
         )
+        # semantic closure QA (2026-07-29 · 사용자 지적).
+        # 기존 룰 기반 boundary snap 은 문장·발화·shot·침묵 4가지만 봄. 진짜 필요한 것은
+        # "여기서 끊어도 안 어색한가" · 프레임까지 봐야 리액션·표정·씬전환 판단 가능.
+        # 각 shorts 병렬 · Gemini multimodal 1콜 · end 조정 or 폐기.
+        if shorts and transcript:
+            print("   semantic closure QA (프레임+대사 · 병렬)...")
+            shorts = refine_boundaries_semantic(
+                client, shorts, transcript, duration,
+                video_path=video_path,
+            )
         if on_progress:
             on_progress(3, 3)
         def type_order_new(s: dict) -> int:
