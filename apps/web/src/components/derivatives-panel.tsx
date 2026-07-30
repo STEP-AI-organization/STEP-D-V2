@@ -44,8 +44,8 @@ import { useMediaAnalysisPoll } from "@/lib/data/use-media-analysis";
 import { useToast } from "@/components/ui/toast";
 import {
   ASPECT_RATIOS,
+  channelLabel,
   CLIP_TYPES,
-  DISTRIBUTION_CHANNELS,
 } from "@/lib/constants";
 import { cn, formatDuration, formatTimecode } from "@/lib/utils";
 
@@ -816,7 +816,7 @@ function DistributeTab({
                 key={d.channel}
                 tone={d.status === "failed" ? "error" : d.status === "published" ? "done" : "warn"}
               >
-                {DISTRIBUTION_CHANNELS[d.channel]} · {d.status === "failed" ? "실패" : d.status === "published" ? "게시" : "예약"}
+                {channelLabel(d.channel)} · {d.status === "failed" ? "실패" : d.status === "published" ? "게시" : "예약"}
               </StatusBadge>
             ))}
             <Button size="xs" variant="outline" className="ml-auto" onClick={() => onPublish(clip.id)}>

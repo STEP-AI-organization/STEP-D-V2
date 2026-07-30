@@ -23,7 +23,6 @@ import type {
   Clip,
   Connections,
   Episode,
-  MetaPlatform,
   Program,
   ProgramSmrConfig,
 } from "@/lib/types";
@@ -57,8 +56,6 @@ export interface PublishInputs {
   /** SMR / scheduled public datetime (reserve string). Empty ⇒ not set. */
   reserveDate?: string;
   scheduled?: boolean;
-  /** Meta target surfaces. */
-  platforms?: MetaPlatform[];
 }
 
 export interface EvalContext {
@@ -240,63 +237,54 @@ function youtubeChecks(ctx: EvalContext): RequirementCheck[] {
   ];
 }
 
-function metaChecks(ctx: EvalContext): RequirementCheck[] {
-  const { clip, connections, inputs } = ctx;
-  const platforms = inputs.platforms ?? [];
-  const igSelected = platforms.includes("instagram");
-  return [
-    {
-      key: "meta-account",
-      label: "계정 연결",
-      met: connections.meta,
-      detail: connections.meta ? "연결됨" : "Meta 페이지 미연결",
-      scope: "account",
-      fix: { label: "계정 연결", href: "/publish-channels" },
-    },
-    {
-      key: "meta-platforms",
-      label: "배포 플랫폼",
-      met: platforms.length > 0,
-      detail: platforms.length > 0 ? platforms.map(platformLabel).join(", ") : "IG/FB 중 최소 1개",
-      scope: "publish",
-    },
-    {
-      key: "meta-ig-link",
-      label: "인스타그램 연결",
-      met: !igSelected || connections.metaInstagram,
-      detail: !igSelected
-        ? "IG 미선택"
-        : connections.metaInstagram
-          ? "연결됨"
-          : "IG 비즈니스 계정 연결 필요",
-      scope: "account",
-      fix: { label: "계정 연결", href: "/publish-channels" },
-    },
-    {
-      key: "meta-vertical",
-      label: "세로 영상(IG)",
-      met: !igSelected || isVertical(clip.aspectRatio),
-      detail: !igSelected
-        ? "IG 미선택"
-        : isVertical(clip.aspectRatio)
-          ? "세로 비율"
-          : `가로(${clip.aspectRatio}) — IG Reels 불가`,
-      scope: "clip",
-    },
-    {
-      key: "meta-file",
-      label: "인코딩 완료",
-      met: isEncoded(clip),
-      detail: isEncoded(clip) ? "완료" : "편집·인코딩 필요",
-      scope: "clip",
-    },
-  ];
+/** 소셜 채널(Instagram · Facebook · TikTok) 공용 체크 팩토리. 백엔드 미배선 상태라
+ *  실제 발행은 안 되고 UI에서 "준비 중" 배지·계정 미연결 안내만 뜬다.
+ *  vertical=true면 세로 비율(9:16*) 필수(IG Reels · TikTok). Facebook은 세로가 권장이지만
+ *  가로도 허용해서 vertical=false. */
+function socialStubChecks(
+  keyPrefix: string,
+  label: string,
+  connected: boolean,
+  vertical: boolean,
+): (ctx: EvalContext) => RequirementCheck[] {
+  return (ctx) => {
+    const { clip } = ctx;
+    const checks: RequirementCheck[] = [
+      {
+        key: `${keyPrefix}-account`,
+        label: "계정 연결",
+        met: connected,
+        detail: connected ? "연결됨" : `${label} 연결 준비 중(백엔드 미배선)`,
+        scope: "account",
+        fix: { label: "계정 연결", href: "/publish-channels" },
+      },
+      {
+        key: `${keyPrefix}-file`,
+        label: "인코딩 완료",
+        met: isEncoded(clip),
+        detail: isEncoded(clip) ? "완료" : "편집·인코딩 필요",
+        scope: "clip",
+      },
+    ];
+    if (vertical) {
+      checks.push({
+        key: `${keyPrefix}-vertical`,
+        label: "세로 영상",
+        met: isVertical(clip.aspectRatio),
+        detail: isVertical(clip.aspectRatio) ? "세로 비율" : `가로(${clip.aspectRatio}) — ${label}는 세로 필수`,
+        scope: "clip",
+      });
+    }
+    return checks;
+  };
 }
 
 const EVALUATORS: Record<DistributionChannel, (ctx: EvalContext) => RequirementCheck[]> = {
   smr: smrChecks,
   youtube: youtubeChecks,
-  meta: metaChecks,
+  instagram: (ctx) => socialStubChecks("ig", "Instagram", ctx.connections.instagram, true)(ctx),
+  facebook: (ctx) => socialStubChecks("fb", "Facebook", ctx.connections.facebook, false)(ctx),
+  tiktok: (ctx) => socialStubChecks("tt", "TikTok", ctx.connections.tiktok, true)(ctx),
 };
 
 /** Evaluate one channel's readiness for a clip. */
@@ -314,9 +302,11 @@ export function evaluateChannels(
   ctx: EvalContext,
 ): Record<DistributionChannel, ChannelReadiness> {
   return {
-    smr: evaluateChannel("smr", ctx),
-    youtube: evaluateChannel("youtube", ctx),
-    meta: evaluateChannel("meta", ctx),
+    youtube:   evaluateChannel("youtube", ctx),
+    instagram: evaluateChannel("instagram", ctx),
+    facebook:  evaluateChannel("facebook", ctx),
+    tiktok:    evaluateChannel("tiktok", ctx),
+    smr:       evaluateChannel("smr", ctx),
   };
 }
 
@@ -338,11 +328,6 @@ export function isStructurallyReady(channel: DistributionChannel, ctx: EvalConte
   return structuralBlockers(channel, ctx).length === 0;
 }
 
-// ── labels ─────────────────────────────────────────────────────────────────────
-
-export function platformLabel(p: MetaPlatform): string {
-  return p === "instagram" ? "Instagram" : "Facebook";
-}
 
 /** Tone for a channel's readiness summary. */
 export function readinessTone(r: ChannelReadiness): StatusTone {

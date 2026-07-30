@@ -8,7 +8,7 @@
 import type { Clip, Connections, Episode, JobEvent, Program, Recommendation } from "@/lib/types";
 
 /** Account-level channel connections (set once). SMR needs none (internal feed). */
-export const connections: Connections = { youtube: true, meta: true, metaInstagram: true };
+export const connections: Connections = { youtube: true, instagram: false, facebook: false, tiktok: false };
 
 export const programs: Program[] = [
   { id: "p1", title: "전지적 참견 시점", section: "예능", targetAge: 12, cast: ["이영자", "홍현희"], episodeCount: 5, status: "active",
@@ -152,7 +152,8 @@ export const clips: Clip[] = [
     distributions: [
       { channel: "smr", status: "published", reserveDate: "20260704193000" },
       { channel: "youtube", status: "published", reserveDate: "20260704200000", externalId: "yt_hangout_c6" },
-      { channel: "meta", status: "published", reserveDate: "20260704210000", platforms: ["instagram", "facebook"] },
+      { channel: "instagram", status: "published", reserveDate: "20260704210000" },
+      { channel: "facebook", status: "published", reserveDate: "20260704210000" },
     ] },
   { id: "c7", episodeId: "e7", programTitle: "놀면 뭐하니?", title: "44화 8분 요약", clipType: "TZ", clipCategory: "02", targetAge: 12,
     aspectRatio: "16:9", durationSec: 486, thumbnailLabel: "오프닝",
@@ -210,7 +211,7 @@ export const clips: Clip[] = [
     distributions: [
       { channel: "smr", status: "published", reserveDate: "20260621230000" },
       { channel: "youtube", status: "published", reserveDate: "20260622000000", externalId: "yt_jch_c14" },
-      { channel: "meta", status: "published", reserveDate: "20260622013000", platforms: ["instagram"] },
+      { channel: "instagram", status: "published", reserveDate: "20260622013000" },
     ] },
 ];
 

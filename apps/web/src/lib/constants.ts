@@ -98,12 +98,31 @@ export const PIPELINE_STATUS_TONE: Record<string, StatusTone> = {
 };
 
 // ── Distribution channels ───────────────────────────────────────────────────────
+// label = 짧은 표시명 · icon = /channel-icons/*.png 정적 자산 · status = 백엔드 실제 연동
+// 여부(implemented=OAuth+실배포, planned=UI만 · SMR/신규 소셜은 아직 스텁).
+// 새 채널 추가 시: 1) 여기 항목 하나 · 2) apps/web/public/channel-icons/<id>.png · 3) 서버
+// /api/distributions/publish 스위치. UI는 이 맵을 순회해 자동으로 카드가 늘어난다.
 export const DISTRIBUTION_CHANNELS = {
-  smr: "네이버 SMR",
-  youtube: "YouTube",
-  meta: "Meta Reels",
+  youtube:   { label: "YouTube",   icon: "/channel-icons/youtube.png",   status: "implemented" },
+  instagram: { label: "Instagram", icon: "/channel-icons/instagram.png", status: "planned" },
+  facebook:  { label: "Facebook",  icon: "/channel-icons/facebook.png",  status: "planned" },
+  tiktok:    { label: "TikTok",    icon: "/channel-icons/tiktok.png",    status: "planned" },
+  smr:       { label: "네이버 SMR", icon: null,                            status: "planned" },
 } as const;
 export type DistributionChannel = keyof typeof DISTRIBUTION_CHANNELS;
+export interface DistributionChannelMeta {
+  label: string;
+  icon: string | null;
+  status: "implemented" | "planned";
+}
+
+/** 알려지지 않은 channel id(예: 옛 'meta' 값)를 안전하게 라벨링. undefined 반환 안 함. */
+export function channelLabel(id: string): string {
+  return (DISTRIBUTION_CHANNELS as Record<string, DistributionChannelMeta>)[id]?.label ?? id;
+}
+export function channelMeta(id: string): DistributionChannelMeta | undefined {
+  return (DISTRIBUTION_CHANNELS as Record<string, DistributionChannelMeta>)[id];
+}
 
 // ── Recommendation kinds ────────────────────────────────────────────────────────
 export const RECOMMENDATION_KINDS = {

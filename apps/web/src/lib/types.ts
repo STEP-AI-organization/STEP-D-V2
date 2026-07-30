@@ -229,18 +229,16 @@ export interface Clip {
 }
 
 // ── Account connections (channel-level, set once) ────────────────────────────────
-/** Whether each push-channel account is connected. SMR is an internal feed (no OAuth). */
+/** Whether each push-channel account is connected. SMR is an internal feed (no OAuth).
+ *  YouTube만 실제 OAuth 배선 됨 — 나머지는 UI 슬롯만 있고 백엔드 미구현(false 유지). */
 export interface Connections {
-  /** YouTube channel OAuth connected. */
   youtube: boolean;
-  /** Meta page connected. */
-  meta: boolean;
-  /** Instagram Business account linked to the Meta page (required for IG Reels). */
-  metaInstagram: boolean;
+  instagram: boolean;
+  facebook: boolean;
+  tiktok: boolean;
 }
 
 // ── Distribution (per-channel state) ─────────────────────────────────────────────
-export type MetaPlatform = "instagram" | "facebook";
 
 export interface DistributionState {
   channel: DistributionChannel;
@@ -248,8 +246,6 @@ export interface DistributionState {
   status: "none" | "pending" | "scheduled" | "published" | "failed";
   reserveDate?: string; // KST, honest scheduling (plan §7.5)
   error?: string;
-  /** Channel-specific metadata captured at publish (mirrors STEPD distributions.metadata jsonb). */
-  platforms?: MetaPlatform[]; // Meta: which surfaces were published
   /** External ref on the channel — YouTube videoId / Meta post id (→ dist.metadata.youtubeVideoId). */
   externalId?: string;
   /** YouTube: the connected channel this clip was (or is being) uploaded to. */
@@ -354,4 +350,35 @@ export interface SyncResponse {
   inserted: number;
   updated: number;
   snapshotCount: number;
+}
+
+// ── YouTube 트렌드 (mostPopular chart) ────────────────────────────────────────
+export interface TrendingVideo {
+  videoId: string;
+  title: string;
+  description: string;
+  channelId: string;
+  channelTitle: string;
+  publishedAt: string;
+  durationSec: number;
+  thumbnail: string | null;
+  viewCount: number;
+  likeCount: number;
+  commentCount: number;
+  categoryId: string;
+  tags: string[];
+}
+
+export interface VideoCategory {
+  id: string;
+  title: string;
+  assignable: boolean;
+}
+
+export interface TrendingResponse {
+  regionCode: string;
+  categoryId: string;
+  count: number;
+  videos: TrendingVideo[];
+  fetchedAt: number;
 }

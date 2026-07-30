@@ -18,21 +18,20 @@ import { StatusBadge } from "@/components/ui/status-badge";
 import { useAppData } from "@/lib/data/store";
 import { useToast } from "@/components/ui/toast";
 import {
+  channelLabel,
   DISTRIBUTION_CHANNELS,
   type DistributionChannel,
 } from "@/lib/constants";
 import {
   evaluateChannel,
-  platformLabel,
   type EvalContext,
   type PublishInputs,
   type RequirementCheck,
 } from "@/lib/publish/requirements";
 import { fromDatetimeLocal, humanReserve, nowReserve } from "@/lib/reserve-date";
-import type { Clip, MetaPlatform } from "@/lib/types";
+import type { Clip } from "@/lib/types";
 
-const CHANNELS: DistributionChannel[] = ["smr", "youtube", "meta"];
-const META_PLATFORMS: MetaPlatform[] = ["instagram", "facebook"];
+const CHANNELS: DistributionChannel[] = Object.keys(DISTRIBUTION_CHANNELS) as DistributionChannel[];
 
 /**
  * Readiness publish surface (docs/plans/publish-fields-ux-plan.md §5.2).
@@ -125,9 +124,6 @@ function ChannelCard({ channel, targets }: { channel: DistributionChannel; targe
   const { toast } = useToast();
   const [mode, setMode] = useState<Mode>("immediate");
   const [when, setWhen] = useState("");
-  const [platforms, setPlatforms] = useState<Set<MetaPlatform>>(
-    () => new Set<MetaPlatform>(["instagram", "facebook"]),
-  );
 
   const resolvedReserve = mode === "immediate" ? nowReserve() : when ? fromDatetimeLocal(when) : undefined;
 
@@ -136,9 +132,8 @@ function ChannelCard({ channel, targets }: { channel: DistributionChannel; targe
       // SMR always carries a public datetime (honest scheduling); others only when scheduled.
       reserveDate: channel === "smr" ? resolvedReserve : mode === "scheduled" ? resolvedReserve : undefined,
       scheduled: mode === "scheduled",
-      platforms: channel === "meta" ? [...platforms] : undefined,
     }),
-    [channel, resolvedReserve, mode, platforms],
+    [channel, resolvedReserve, mode],
   );
 
   // Per-clip readiness + current channel status.
@@ -182,10 +177,9 @@ function ChannelCard({ channel, targets }: { channel: DistributionChannel; targe
       {
         reserveDate: inputs.reserveDate,
         scheduled: mode === "scheduled",
-        platforms: channel === "meta" ? [...platforms] : undefined,
       },
     );
-    const label = DISTRIBUTION_CHANNELS[channel];
+    const label = channelLabel(channel);
     const skipped = total - readyRows.length;
     toast({
       title: mode === "scheduled" ? `${label} 예약 완료` : `${label} 배포 요청됨`,
@@ -205,7 +199,7 @@ function ChannelCard({ channel, targets }: { channel: DistributionChannel; targe
       {/* header */}
       <div className="flex items-center justify-between gap-2 border-b border-border px-3 py-2.5">
         <div className="flex items-center gap-2">
-          <span className="text-sm font-semibold">{DISTRIBUTION_CHANNELS[channel]}</span>
+          <span className="text-sm font-semibold">{channelLabel(channel)}</span>
           {allReady ? (
             <StatusBadge tone="done">준비 완료</StatusBadge>
           ) : someReady ? (
@@ -225,40 +219,6 @@ function ChannelCard({ channel, targets }: { channel: DistributionChannel; targe
       <div className="space-y-3 p-3">
         {/* checklist */}
         <Checklist channel={channel} checks={checks} />
-
-        {/* channel-specific inputs */}
-        {channel === "meta" && (
-          <div>
-            <div className="mb-1.5 text-[11px] font-semibold text-muted-foreground">배포 플랫폼</div>
-            <div className="flex gap-2">
-              {META_PLATFORMS.map((p) => {
-                const on = platforms.has(p);
-                return (
-                  <button
-                    key={p}
-                    onClick={() =>
-                      setPlatforms((prev) => {
-                        const next = new Set(prev);
-                        if (next.has(p)) next.delete(p);
-                        else next.add(p);
-                        return next;
-                      })
-                    }
-                    className={cn(
-                      "rounded-md border px-3 py-1.5 text-xs font-medium transition-colors",
-                      on
-                        ? "border-primary bg-primary/10 text-primary"
-                        : "border-border text-muted-foreground hover:bg-accent",
-                    )}
-                    aria-pressed={on}
-                  >
-                    {platformLabel(p)}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        )}
 
         <ScheduleControl
           channel={channel}

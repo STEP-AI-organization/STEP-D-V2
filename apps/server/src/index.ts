@@ -90,10 +90,13 @@ import {
   syncChannelVideos,
   classifyShorts,
   fetchChannelAnalytics,
+  fetchPopularVideos,
+  fetchVideoCategories,
   withAccessToken,
   refreshChannelToken,
   TokenRevokedError,
   type PersistTokens,
+  type YouTubeAuth,
 } from "./youtube.ts";
 import { SHORTS_PROBE_MAX_PER_SYNC, SHORTS_PROBE_CONCURRENCY } from "./config.ts";
 import { runChannelPipeline, runDueChannels } from "./channel-pipeline.ts";
@@ -3780,6 +3783,70 @@ app.get("/api/youtube/trends/video/:videoId", async (c) => {
   }));
 
   return c.json({ video, trend });
+});
+
+// ── YouTube trending (public mostPopular chart) ──────────────────────────────
+//
+// "지금 유튜브에서 뜨는 영상" — 우리 채널 시계열이 아니라 국가별 인기 급상승. 편집자
+// 아이디어/트렌드 참고용. 인증은 API key 우선 · 없으면 아무 등록 채널의 accessToken.
+
+async function getPublicYouTubeAuth(): Promise<YouTubeAuth | null> {
+  const apiKey = process.env.YOUTUBE_API_KEY;
+  if (apiKey) return { apiKey };
+  if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET) return null;
+  const channels = await listYouTubeChannels();
+  const ch = channels.find((c) => c.refreshToken);
+  if (!ch) return null;
+  try {
+    const token = await withAccessToken(
+      GOOGLE_CLIENT_ID,
+      GOOGLE_CLIENT_SECRET,
+      ch,
+      persistTokensFor(ch),
+      async (t) => t,
+    );
+    return { accessToken: token };
+  } catch {
+    return null;
+  }
+}
+
+app.get("/api/youtube/popular", async (c) => {
+  const regionCode = (c.req.query("regionCode") || "KR").toUpperCase();
+  const categoryId = c.req.query("categoryId") || "";
+  const maxResults = Math.min(50, Math.max(1, Number(c.req.query("maxResults") ?? 50)));
+
+  const auth = await getPublicYouTubeAuth();
+  if (!auth) {
+    return c.json(
+      { error: "no_auth", message: "YOUTUBE_API_KEY env 또는 최소 1개 등록된 채널이 필요합니다." },
+      400,
+    );
+  }
+  try {
+    const videos = await fetchPopularVideos(auth, {
+      regionCode,
+      videoCategoryId: categoryId || undefined,
+      maxResults,
+    });
+    return c.json({ regionCode, categoryId, count: videos.length, videos, fetchedAt: Date.now() });
+  } catch (err: any) {
+    console.error("[popular]", err);
+    return c.json({ error: err?.message ?? "unknown" }, err?.status ?? 500);
+  }
+});
+
+app.get("/api/youtube/video-categories", async (c) => {
+  const regionCode = (c.req.query("regionCode") || "KR").toUpperCase();
+  const auth = await getPublicYouTubeAuth();
+  if (!auth) return c.json({ error: "no_auth" }, 400);
+  try {
+    const categories = await fetchVideoCategories(auth, { regionCode });
+    return c.json({ regionCode, categories });
+  } catch (err: any) {
+    console.error("[video-categories]", err);
+    return c.json({ error: err?.message ?? "unknown" }, err?.status ?? 500);
+  }
 });
 
 /**

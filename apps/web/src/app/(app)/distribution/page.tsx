@@ -11,7 +11,7 @@ import { PublishDialog } from "@/components/publish-dialog";
 import { ExportExcelButton } from "@/components/export-excel-button";
 import { useAppData } from "@/lib/data/store";
 import { useToast } from "@/components/ui/toast";
-import { DISTRIBUTION_CHANNELS, type DistributionChannel, type StatusTone } from "@/lib/constants";
+import { channelLabel, DISTRIBUTION_CHANNELS, type DistributionChannel, type StatusTone } from "@/lib/constants";
 import { humanReserve, nextWeekdayReserve, WEEKDAYS } from "@/lib/reserve-date";
 import { structuralBlockers, type EvalContext } from "@/lib/publish/requirements";
 import type { Clip, DistributionState } from "@/lib/types";
@@ -40,7 +40,7 @@ export default function DistributionPage() {
 
   function retry(clipId: string, channel: DistributionChannel) {
     retryDistribution(clipId, channel);
-    toast({ title: "재시도 요청됨", description: `${DISTRIBUTION_CHANNELS[channel]} 재배포를 시작했습니다.`, tone: "progress" });
+    toast({ title: "재시도 요청됨", description: `${channelLabel(channel)} 재배포를 시작했습니다.`, tone: "progress" });
   }
 
   /** Structural blockers for a channel (excludes publish-time inputs) — matrix hint. */
@@ -116,7 +116,7 @@ export default function DistributionPage() {
               <TH className="w-10" />
               <TH>클립</TH>
               {CHANNELS.map((ch) => (
-                <TH key={ch}>{DISTRIBUTION_CHANNELS[ch]}</TH>
+                <TH key={ch}>{channelLabel(ch)}</TH>
               ))}
               <TH />
             </tr>
@@ -249,7 +249,7 @@ export default function DistributionPage() {
                     }
                     className={`rounded-md border px-2 py-1 text-xs ${tplChannels.has(ch) ? "border-primary bg-primary/10" : "border-border text-muted-foreground"}`}
                   >
-                    {DISTRIBUTION_CHANNELS[ch]}
+                    {channelLabel(ch)}
                   </button>
                 ))}
               </div>
@@ -270,7 +270,7 @@ export default function DistributionPage() {
                 <li key={`${clip.id}-${dist.channel}`} className="flex items-center justify-between gap-2 text-sm">
                   <span className="truncate">{clip.title}</span>
                   <span className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
-                    <StatusBadge tone="warn">{DISTRIBUTION_CHANNELS[dist.channel]}</StatusBadge>
+                    <StatusBadge tone="warn">{channelLabel(dist.channel)}</StatusBadge>
                     <span className="tabular-nums">{humanReserve(dist.reserveDate)}</span>
                   </span>
                 </li>

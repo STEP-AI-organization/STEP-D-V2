@@ -8,11 +8,17 @@ import { StatusBadge } from "@/components/ui/status-badge";
 import { ExportExcelButton } from "@/components/export-excel-button";
 import { LineageTrail } from "@/components/lineage-trail";
 import { useAppData } from "@/lib/data/store";
-import { DISTRIBUTION_CHANNELS, type DistributionChannel } from "@/lib/constants";
+import { channelLabel, DISTRIBUTION_CHANNELS, type DistributionChannel } from "@/lib/constants";
 
 // Illustrative per-channel view estimates. Real figures wire in at M6 (STEPD distributions
 // currently has no performance columns — see plan §7.6).
-const MOCK_VIEWS: Record<DistributionChannel, number> = { smr: 82000, youtube: 124000, meta: 45000 };
+const MOCK_VIEWS: Record<DistributionChannel, number> = {
+  youtube: 124000,
+  instagram: 25000,
+  facebook: 20000,
+  tiktok: 40000,
+  smr: 82000,
+};
 
 export default function AnalyticsPage() {
   const { recommendations, clips } = useAppData();
@@ -147,7 +153,7 @@ export default function AnalyticsPage() {
             <tbody>
               {channels.map((c) => (
                 <tr key={c.ch} className="border-t border-border">
-                  <td className="py-2.5">{DISTRIBUTION_CHANNELS[c.ch]}</td>
+                  <td className="py-2.5">{channelLabel(c.ch)}</td>
                   <td className="py-2.5 text-right tabular-nums">{c.published}</td>
                   <td className="py-2.5 text-right tabular-nums text-muted-foreground">
                     {c.estViews > 0 ? `~${(c.estViews / 10000).toFixed(1)}만` : "—"}

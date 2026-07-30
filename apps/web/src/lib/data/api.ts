@@ -4,7 +4,7 @@
  * standalone — this module is only used once a live server is detected.
  */
 import type { DistributionChannel } from "@/lib/constants";
-import type { MetaPlatform, Program, RenderChannel } from "@/lib/types";
+import type { Program, RenderChannel } from "@/lib/types";
 import type { EditorState } from "@/lib/editor/presets";
 
 export const API_BASE =
@@ -22,7 +22,7 @@ export interface ServerState {
   recommendations: unknown[];
   clips: unknown[];
   jobs: unknown[];
-  connections: { youtube: boolean; meta: boolean; metaInstagram: boolean };
+  connections: { youtube: boolean; instagram: boolean; facebook: boolean; tiktok: boolean };
   media: unknown[];
 }
 
@@ -680,7 +680,7 @@ export async function rejectRec(recId: string, reason: string): Promise<void> {
 export async function publishClips(
   clipIds: string[],
   channel: DistributionChannel,
-  opts: { reserveDate?: string; scheduled?: boolean; platforms?: MetaPlatform[] },
+  opts: { reserveDate?: string; scheduled?: boolean },
 ): Promise<void> {
   const res = await fetch(`${API_BASE}/distributions/publish`, {
     method: "POST",
@@ -835,6 +835,8 @@ import type {
   DailyTrend,
   VideoTrend,
   SyncResponse,
+  TrendingResponse,
+  VideoCategory,
 } from "@/lib/types";
 
 export async function syncChannelVideos(channelId: string): Promise<SyncResponse> {
@@ -866,6 +868,26 @@ export async function fetchChannelTrends(channelId: string, days = 30): Promise<
 export async function fetchVideoTrend(videoId: string, days = 30): Promise<VideoTrend> {
   const res = await fetch(`${API_BASE}/youtube/trends/video/${videoId}?days=${days}`);
   return json<VideoTrend>(res);
+}
+
+// ── YouTube 트렌드 (mostPopular chart) — 편집자용 아이디어 참고 ────────────────
+
+export async function fetchTrendingVideos(
+  regionCode = "KR",
+  categoryId = "",
+  maxResults = 50,
+): Promise<TrendingResponse> {
+  const params = new URLSearchParams({ regionCode, maxResults: String(maxResults) });
+  if (categoryId) params.set("categoryId", categoryId);
+  const res = await fetch(`${API_BASE}/youtube/popular?${params}`);
+  return json<TrendingResponse>(res);
+}
+
+export async function fetchVideoCategories(
+  regionCode = "KR",
+): Promise<{ regionCode: string; categories: VideoCategory[] }> {
+  const res = await fetch(`${API_BASE}/youtube/video-categories?regionCode=${regionCode}`);
+  return json(res);
 }
 
 export interface VideoAnalyticsSummary {

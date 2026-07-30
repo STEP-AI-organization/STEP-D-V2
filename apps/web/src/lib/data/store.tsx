@@ -27,7 +27,6 @@ import type {
   InboxItem,
   JobEvent,
   MediaAsset,
-  MetaPlatform,
   RenderChannel,
   Program,
   Recommendation,
@@ -63,7 +62,7 @@ interface AppState {
   connections: Connections;
 }
 
-const NO_CONNECTIONS: Connections = { youtube: false, meta: false, metaInstagram: false };
+const NO_CONNECTIONS: Connections = { youtube: false, instagram: false, facebook: false, tiktok: false };
 
 /** Empty starting state — screens show nothing/skeleton until /api/state loads, instead
  *  of flashing mock seed data for a moment on every refresh. */
@@ -181,8 +180,6 @@ interface AppData extends AppState {
 export interface PublishOpts {
   reserveDate?: string;
   scheduled?: boolean;
-  /** Meta target surfaces, persisted onto the distribution state. */
-  platforms?: MetaPlatform[];
 }
 
 /** Pure: apply a publish to the matching clips' channel states. */
@@ -201,7 +198,6 @@ function applyPublish(
         status: (opts?.scheduled ? "scheduled" : "published") as "scheduled" | "published",
         reserveDate: opts?.reserveDate,
         error: undefined,
-        ...(channel === "meta" && opts?.platforms ? { platforms: opts.platforms } : {}),
       };
       const existing = next.find((d) => d.channel === channel);
       if (existing) Object.assign(existing, value);
@@ -557,7 +553,6 @@ export function AppDataProvider({
         void publishClips(clipIds, channel, {
           reserveDate: opts?.reserveDate,
           scheduled: opts?.scheduled,
-          platforms: opts?.platforms,
         }).catch((err: unknown) => {
           const message = err instanceof Error ? err.message : String(err);
           const ids = new Set(clipIds);

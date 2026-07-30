@@ -675,3 +675,141 @@ export async function fetchVideoComments(
     };
   });
 }
+
+// ── Trending / mostPopular chart (public data) ────────────────────────────────
+//
+// videos.list?chart=mostPopular 은 공개 데이터이므로 API key 만으로도 조회 가능.
+// 없으면 아무 OAuth accessToken 이라도 통과 (채널 소유권 무관). API key 우선.
+
+export interface TrendingVideoItem {
+  videoId: string;
+  title: string;
+  description: string;
+  channelId: string;
+  channelTitle: string;
+  publishedAt: string;
+  durationSec: number;
+  thumbnail: string | null;
+  viewCount: number;
+  likeCount: number;
+  commentCount: number;
+  categoryId: string;
+  tags: string[];
+}
+
+export interface VideoCategoryItem {
+  id: string;
+  title: string;
+  assignable: boolean;
+}
+
+export interface YouTubeAuth {
+  /** API key — preferred for public reads (no user quota). */
+  apiKey?: string;
+  /** OAuth access token fallback — burns the linked channel's quota. */
+  accessToken?: string;
+}
+
+function authHeaders(auth: YouTubeAuth): Record<string, string> {
+  if (!auth.apiKey && auth.accessToken) return { Authorization: `Bearer ${auth.accessToken}` };
+  return {};
+}
+
+function applyAuthQuery(params: URLSearchParams, auth: YouTubeAuth): void {
+  if (auth.apiKey) params.set("key", auth.apiKey);
+}
+
+/**
+ * "지금 유튜브에서 뜨는 영상" — chart=mostPopular 를 국가 (+선택 카테고리) 로 조회.
+ * 응답 최대 50개 (API 한계). 편집자 아이디어/트렌드 참고용.
+ */
+export async function fetchPopularVideos(
+  auth: YouTubeAuth,
+  opts: { regionCode: string; videoCategoryId?: string; maxResults?: number },
+): Promise<TrendingVideoItem[]> {
+  const params = new URLSearchParams({
+    part: "snippet,statistics,contentDetails",
+    chart: "mostPopular",
+    regionCode: opts.regionCode,
+    maxResults: String(Math.min(50, Math.max(1, opts.maxResults ?? 50))),
+  });
+  if (opts.videoCategoryId) params.set("videoCategoryId", opts.videoCategoryId);
+  applyAuthQuery(params, auth);
+  const res = await fetch(`https://www.googleapis.com/youtube/v3/videos?${params}`, {
+    headers: authHeaders(auth),
+  });
+  if (!res.ok) {
+    throw new YouTubeApiError(res.status, `Popular videos failed (${res.status}): ${await res.text()}`);
+  }
+  const data = (await res.json()) as {
+    items?: {
+      id: string;
+      snippet?: {
+        title?: string;
+        description?: string;
+        channelId?: string;
+        channelTitle?: string;
+        publishedAt?: string;
+        categoryId?: string;
+        tags?: string[];
+        thumbnails?: {
+          maxres?: { url: string };
+          high?: { url: string };
+          medium?: { url: string };
+          default?: { url: string };
+        };
+      };
+      statistics?: { viewCount?: string; likeCount?: string; commentCount?: string };
+      contentDetails?: { duration?: string };
+    }[];
+  };
+  return (data.items ?? []).map((item) => {
+    const t = item.snippet?.thumbnails;
+    return {
+      videoId: item.id,
+      title: item.snippet?.title ?? "",
+      description: item.snippet?.description ?? "",
+      channelId: item.snippet?.channelId ?? "",
+      channelTitle: item.snippet?.channelTitle ?? "",
+      publishedAt: item.snippet?.publishedAt ?? "",
+      durationSec: parseIsoDuration(item.contentDetails?.duration ?? "PT0S"),
+      thumbnail: t?.maxres?.url ?? t?.high?.url ?? t?.medium?.url ?? t?.default?.url ?? null,
+      viewCount: Number(item.statistics?.viewCount ?? 0),
+      likeCount: Number(item.statistics?.likeCount ?? 0),
+      commentCount: Number(item.statistics?.commentCount ?? 0),
+      categoryId: item.snippet?.categoryId ?? "",
+      tags: item.snippet?.tags ?? [],
+    };
+  });
+}
+
+/**
+ * 지역별 assignable 카테고리 목록 — 트렌딩 필터 드롭다운 소스.
+ * 카테고리 ID 는 전역 고정이지만 assignable 여부는 지역마다 다르다.
+ */
+export async function fetchVideoCategories(
+  auth: YouTubeAuth,
+  opts: { regionCode: string },
+): Promise<VideoCategoryItem[]> {
+  const params = new URLSearchParams({
+    part: "snippet",
+    regionCode: opts.regionCode,
+  });
+  applyAuthQuery(params, auth);
+  const res = await fetch(`https://www.googleapis.com/youtube/v3/videoCategories?${params}`, {
+    headers: authHeaders(auth),
+  });
+  if (!res.ok) {
+    throw new YouTubeApiError(res.status, `Video categories failed (${res.status}): ${await res.text()}`);
+  }
+  const data = (await res.json()) as {
+    items?: { id: string; snippet?: { title?: string; assignable?: boolean } }[];
+  };
+  return (data.items ?? [])
+    .filter((it) => it.snippet?.assignable !== false)
+    .map((it) => ({
+      id: it.id,
+      title: it.snippet?.title ?? "",
+      assignable: it.snippet?.assignable ?? false,
+    }));
+}

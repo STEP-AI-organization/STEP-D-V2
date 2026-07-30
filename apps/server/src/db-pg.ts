@@ -351,9 +351,18 @@ export async function markRecommendationRejected(recId: string, reason: string):
 
 // ── connections ────────────────────────────────────────────────────────────────
 
-export async function getConnections(): Promise<{ youtube: boolean; meta: boolean; metaInstagram: boolean }> {
+export async function getConnections(): Promise<{ youtube: boolean; instagram: boolean; facebook: boolean; tiktok: boolean }> {
   const { rows } = await pool.query("SELECT value FROM kv WHERE key = $1", ["connections"]);
-  return rows[0] ? JSON.parse(rows[0].value) : seed.connections;
+  const fallback = { youtube: false, instagram: false, facebook: false, tiktok: false };
+  if (!rows[0]) return fallback;
+  // 옛 저장분(meta/metaInstagram)은 새 스키마로 정규화. 없는 키는 false, 남는 키는 무시.
+  const raw = JSON.parse(rows[0].value) as Record<string, unknown>;
+  return {
+    youtube:   raw.youtube === true,
+    instagram: raw.instagram === true,
+    facebook:  raw.facebook === true,
+    tiktok:    raw.tiktok === true,
+  };
 }
 
 // ── youtube channels ───────────────────────────────────────────────────────────

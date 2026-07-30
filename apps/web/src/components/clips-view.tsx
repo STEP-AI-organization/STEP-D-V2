@@ -13,8 +13,8 @@ import { useAppData } from "@/lib/data/store";
 import { useSavedViews } from "@/lib/use-saved-views";
 import {
   ASPECT_RATIOS,
+  channelLabel,
   CLIP_TYPES,
-  DISTRIBUTION_CHANNELS,
   targetAgeLabel,
   type ClipType,
   type StatusTone,
@@ -197,7 +197,7 @@ export function ClipsView({ initial }: { initial: Filters }) {
                         key={d.channel}
                         tone={d.status === "failed" ? "error" : d.status === "published" ? "done" : "warn"}
                       >
-                        {DISTRIBUTION_CHANNELS[d.channel]}
+                        {channelLabel(d.channel)}
                       </StatusBadge>
                     ))}
                   </div>

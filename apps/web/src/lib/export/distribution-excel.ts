@@ -16,8 +16,8 @@
 
 import type ExcelJSNS from "exceljs";
 import {
+  channelLabel,
   CLIP_TYPES,
-  DISTRIBUTION_CHANNELS,
   type DistributionChannel,
 } from "@/lib/constants";
 import type { Clip, DistributionState, Episode, Program } from "@/lib/types";
@@ -29,7 +29,13 @@ export interface ExportData {
 }
 
 /** Rough per-channel view estimate (matches the analytics screen). Real figures wire in at M6. */
-const EST_VIEWS: Record<DistributionChannel, number> = { smr: 82000, youtube: 124000, meta: 45000 };
+const EST_VIEWS: Record<DistributionChannel, number> = {
+  youtube: 124000,
+  instagram: 25000,
+  facebook: 20000,
+  tiktok: 40000,
+  smr: 82000,
+};
 
 const DIST_STATUS_LABEL: Record<string, string> = {
   published: "게시됨",
@@ -156,7 +162,7 @@ function addDistributionRecordsSheet(
         episode: episode?.episodeNumber ?? "",
         clipType: clipTypeLabel(clip.clipType),
         title: clip.title,
-        channel: DISTRIBUTION_CHANNELS[dist.channel],
+        channel: channelLabel(dist.channel),
         status: DIST_STATUS_LABEL[dist.status] ?? dist.status,
         url: dist.channel === "youtube" && dist.externalId ? youtubeUrl(dist.externalId) : "",
         estViews: dist.status === "published" ? EST_VIEWS[dist.channel] : "",

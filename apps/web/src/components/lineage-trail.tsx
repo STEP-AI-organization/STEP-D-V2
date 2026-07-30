@@ -3,7 +3,7 @@
 import { ArrowRight } from "lucide-react";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { useAppData } from "@/lib/data/store";
-import { DISTRIBUTION_CHANNELS } from "@/lib/constants";
+import { channelLabel } from "@/lib/constants";
 import type { Clip, Recommendation } from "@/lib/types";
 
 /** Recommendation → Clip → Distribution lineage trail (plan §7.6 / pain B3).
@@ -25,7 +25,7 @@ export function LineageTrail({ rec }: { rec: Recommendation }) {
               key={d.channel}
               tone={d.status === "failed" ? "error" : d.status === "published" ? "done" : "warn"}
             >
-              {DISTRIBUTION_CHANNELS[d.channel]}
+              {channelLabel(d.channel)}
             </StatusBadge>
           ))}
         </span>
