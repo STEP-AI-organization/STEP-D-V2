@@ -3385,6 +3385,46 @@ title (폴백) 은 두 줄 합쳐 한 줄로 자연스럽게.
     return shorts
 
 
+def _enforce_beat_alignment(shorts: list[dict], beats: list[dict],
+                             tol_sec: float = 0.5) -> list[dict]:
+    """계획서 5번 · beat 밖 자유 timestamp 금지.
+
+    각 short 의 start/end 를 가장 가까운 beat 경계로 스냅 (tol_sec 이내).
+    beat_ids 재계산 · short 이 span 하는 beat id 리스트. beat 하나에도 걸치지 않는
+    short 는 drop (경계 완전 밖).
+    """
+    if not beats:
+        return shorts
+    edges = sorted({round(float(b["start"]), 3) for b in beats} |
+                    {round(float(b["end"]), 3) for b in beats})
+    id_by_start = {round(float(b["start"]), 3): b.get("id") for b in beats}
+    id_by_end = {round(float(b["end"]), 3): b.get("id") for b in beats}
+
+    def _snap(t: float) -> float:
+        best = min(edges, key=lambda e: abs(e - t)) if edges else t
+        return best if abs(best - t) <= tol_sec else t
+
+    out: list[dict] = []
+    for s in shorts:
+        try:
+            st = float(s.get("start")); en = float(s.get("end"))
+        except (TypeError, ValueError):
+            continue
+        st2 = _snap(st); en2 = _snap(en)
+        if en2 <= st2:
+            continue
+        # 이 span 이 걸치는 beats
+        covered = [b for b in beats if float(b["end"]) > st2 and float(b["start"]) < en2]
+        if not covered:
+            continue  # beat 밖 · drop
+        s["start"] = round(st2, 3)
+        s["end"] = round(en2, 3)
+        s["beat_ids"] = [b.get("id") for b in covered]
+        s["beat_aligned"] = True
+        out.append(s)
+    return out
+
+
 def _build_from_beats(
     scenarios: list[dict], beats: list[dict], transcript: list[dict] | None,
     duration: float, genre: str, profile: dict | None,
@@ -3526,6 +3566,11 @@ def _recommend_narrative_first_impl(
         shorts = propose_shorts_beat_only(
             client, beats, transcript, genre, n, cast_registry, profile,
         )
+        # 계획서 5번 · beat 밖 자유 timestamp 금지. propose 산출을 강제 스냅.
+        before = len(shorts)
+        shorts = _enforce_beat_alignment(shorts, beats, tol_sec=0.5)
+        if before != len(shorts):
+            print(f"   beat alignment: {before}→{len(shorts)} (beat 밖 drop)")
         # semantic closure QA (2026-07-29 · 사용자 지적).
         # 기존 룰 기반 boundary snap 은 문장·발화·shot·침묵 4가지만 봄. 진짜 필요한 것은
         # "여기서 끊어도 안 어색한가" · 프레임까지 봐야 리액션·표정·씬전환 판단 가능.
@@ -3536,6 +3581,8 @@ def _recommend_narrative_first_impl(
                 client, shorts, transcript, duration,
                 video_path=video_path,
             )
+            # QA 가 end 조정한 뒤 다시 beat 경계로 재스냅 (자유 timestamp 방지)
+            shorts = _enforce_beat_alignment(shorts, beats, tol_sec=1.0)
         if on_progress:
             on_progress(3, 3)
         def type_order_new(s: dict) -> int:

@@ -51,7 +51,7 @@ const WORK_ROOT = path.join(os.tmpdir(), "stepd-content");
 const WORK_DIR_TTL_MS = 48 * 60 * 60 * 1000;
 
 /** Stage outputs core/analyze.py checkpoints into the work dir (upload order). */
-const CHECKPOINT_FILES = ["analysis.json", "scenes.json", "cast.json", "timeline.json", "narrative.json", "shorts.json", "refined.json", "faces.json", "ppl.json", "stt.json", "manifest.json", "comments.json", "viewer_signals.json", "beats.json", "shots.json", "scene_type.json"];
+const CHECKPOINT_FILES = ["analysis.json", "scenes.json", "cast.json", "timeline.json", "narrative.json", "shorts.json", "refined.json", "faces.json", "ppl.json", "stt.json", "manifest.json", "comments.json", "viewer_signals.json", "beats.json", "boundaries.json", "shots.json", "scene_type.json"];
 
 /**
  * Watchdog: kill the python child after this long with NO stdout output. A hung Vertex

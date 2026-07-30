@@ -45,9 +45,11 @@ from .recommend import recommend, recommend_narrative_first
 from .narrative import build_narrative
 from .shots import detect_shots
 from .scene_type import classify_shot_types
-from .beats import build_beats
+from .beats import build_beats, build_beats_from_boundaries
+from .boundaries import load_boundaries, dedup_boundaries
+from .beat_annot import annotate_beats
 
-CHECKPOINTS = ("stt.json", "refined.json", "faces.json", "ppl.json", "scenes.json", "cast.json", "timeline.json", "narrative.json", "shots.json", "scene_type.json", "beats.json", "viewer_signals.json", "shorts.json", "analysis.json")
+CHECKPOINTS = ("stt.json", "refined.json", "faces.json", "ppl.json", "scenes.json", "cast.json", "timeline.json", "narrative.json", "shots.json", "boundaries.json", "scene_type.json", "beats.json", "viewer_signals.json", "shorts.json", "analysis.json")
 
 
 # ── checkpoint plumbing ─────────────────────────────────────────────────────────
@@ -634,7 +636,9 @@ def analyze(
             _save_json(out_dir / "scene_type.json", scene_type_data)
     timed("scene_type", ts)
 
-    # 4h) beats — AI-정돈 편집 최소 완결 단위. narrative + STT + shots + shot_types 종합.
+    # 4h) beats — GEBD 경계 우선 · 없으면 기존 build_beats (narrative+STT+shots) 폴백.
+    # v1 (2026-07-30 · docs/plans/gebd-beat-pipeline): boundaries.json 이 있으면 그걸
+    # 1차 시간 단위로 채택. LLM 자유 시각 생성은 폴백으로만.
     ts = time.time()
     beats_data = _load_json(out_dir / "beats.json")
     if isinstance(beats_data, dict) and isinstance(beats_data.get("beats"), list) and beats_data["beats"]:
@@ -642,14 +646,26 @@ def analyze(
     else:
         _progress("beats", 84, "편집 단위(beat) 생성")
         try:
-            beats_data = build_beats(
-                narrative if isinstance(narrative, dict) else None,
-                refined,
-                (shots_data or {}).get("shots") or [],
-                float(scenes[-1]["end"]) if scenes else (float(refined[-1]["end"]) if refined else 0.0),
-                shot_types=(scene_type_data or {}).get("shot_types") or [],
-                on_progress=lambda done, total: _progress("beats", 84 + 1 * done / max(1, total), f"beat 생성 {done}/{total}"),
-            )
+            duration_for_beats = float(scenes[-1]["end"]) if scenes else (float(refined[-1]["end"]) if refined else 0.0)
+            gebd_boundaries = load_boundaries(out_dir / "boundaries.json")
+            if gebd_boundaries:
+                # GEBD 우선 경로
+                gebd_boundaries = dedup_boundaries(gebd_boundaries, duration=duration_for_beats)
+                step(f"beat — GEBD boundary {len(gebd_boundaries)}개 기반 생성")
+                beats_data = build_beats_from_boundaries(
+                    gebd_boundaries, refined, duration_for_beats,
+                )
+            else:
+                # 기존 폴백
+                step("beat — GEBD boundary 없음 · 기존 narrative/STT 폴백")
+                beats_data = build_beats(
+                    narrative if isinstance(narrative, dict) else None,
+                    refined,
+                    (shots_data or {}).get("shots") or [],
+                    duration_for_beats,
+                    shot_types=(scene_type_data or {}).get("shot_types") or [],
+                    on_progress=lambda done, total: _progress("beats", 84 + 1 * done / max(1, total), f"beat 생성 {done}/{total}"),
+                )
             _save_json(out_dir / "beats.json", beats_data)
             step(f"beat — {len(beats_data.get('beats') or [])}개 생성")
         except Exception as e:
@@ -659,6 +675,32 @@ def analyze(
             beats_data = {"beats": []}
             _save_json(out_dir / "beats.json", beats_data)
     timed("beats", ts)
+
+    # 4i) beat annotate — 각 beat 프레임 3장 + STT + program_context → Gemini →
+    # title/summary/scene_summary/hook/characters_visible. 계획서 GEBD-beat 3번.
+    # 이미 title 이 채워진 beat 는 skip (재개 지원).
+    ts = time.time()
+    beats_list = (beats_data or {}).get("beats") or []
+    already_annotated = sum(1 for b in beats_list if (b.get("title") or "").strip())
+    if beats_list and already_annotated < len(beats_list):
+        _progress("beat_annot", 85, f"beat 서사 캡션 · Vision × {len(beats_list) - already_annotated}")
+        try:
+            annotate_beats(
+                beats_list,
+                video_path=str(video_path),
+                out_dir=out_dir,
+                program_context=program_context,
+                workers=int(os.environ.get("BEAT_ANNOT_WORKERS") or 4),
+                on_progress=lambda done, total: _progress("beat_annot", 85 + 1 * done / max(1, total), f"beat annotate {done}/{total}"),
+            )
+            beats_data["beats"] = beats_list
+            _save_json(out_dir / "beats.json", beats_data)
+            step(f"beat annotate — 완료")
+        except Exception as e:
+            step(f"  (beat annotate 실패 · title/summary 없이 진행: {str(e)[:70]})")
+    elif beats_list:
+        step(f"beat annotate — 체크포인트 재사용 ({already_annotated}/{len(beats_list)})")
+    timed("beat_annot", ts)
 
     # 5) shorts recommendation (two-phase, genre-aware) ---------------------------
     ts = time.time()

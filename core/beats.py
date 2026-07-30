@@ -905,3 +905,182 @@ def _make_gap_beat(transcript: list[dict], lo: float, hi: float) -> dict | list[
     if not beats:
         return None
     return beats if len(beats) > 1 else beats[0]
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# v2 (2026-07-30): GEBD 경계 기반 beat 생성.
+# LLM 자유 시각 뽑기 → GEBD boundary window 로 대체.
+# 후처리 (word/speaker 스냅, 화자 전환 split, gap fill) 은 기존 것 재사용.
+# 계획서: docs/plans (GEBD 경계 기반 Beat 분석) · v1 은 boundaries.json 입력 받기.
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _continuity_gate_speaker(t: float, transcript: list[dict], tol: float = 0.5) -> bool:
+    """True 면 이 시각 앞뒤가 **같은 화자의 연속 발화** 안 (경계로 안 쓰는 게 안전).
+
+    tol 이내에 화자 전환 없고, t 를 포함하는 발화가 있으면 True.
+    계획서 3번 (STT 기반 후처리) · 같은 화자 연속 발화 안 boundary 억제.
+    """
+    if not transcript:
+        return False
+    containing = None
+    for s in transcript:
+        try:
+            st = float(s.get("start", 0)); en = float(s.get("end", 0))
+        except (TypeError, ValueError):
+            continue
+        if st <= t <= en:
+            containing = s
+            break
+    if not containing:
+        return False
+    sp = (containing.get("speaker") or "").strip()
+    if not sp:
+        return False
+    # 앞뒤 인접 발화 화자 비교
+    prev_sp = next_sp = None
+    for s in transcript:
+        try:
+            st = float(s.get("start", 0)); en = float(s.get("end", 0))
+        except (TypeError, ValueError):
+            continue
+        if en <= t and (t - en) <= tol:
+            prev_sp = (s.get("speaker") or "").strip()
+        elif st >= t and (st - t) <= tol:
+            next_sp = (s.get("speaker") or "").strip()
+            break
+    # 앞뒤 모두 같은 화자면 continuity → gate ON
+    if prev_sp and next_sp and prev_sp == sp and next_sp == sp:
+        return True
+    return False
+
+
+def build_beats_from_boundaries(
+    boundaries: list[dict],
+    transcript: list[dict],
+    duration: float,
+    program_context: dict | None = None,
+    min_beat_sec: float = 6.0,
+    include_grades: tuple[str, ...] = ("hard", "soft"),
+    apply_continuity_gate: bool = True,
+) -> dict:
+    """GEBD boundary 리스트 → beat 리스트.
+
+    입력:
+      boundaries: [{t, kind, score, source}] (core/boundaries.py 로 로드 · dedup 된 것 권장)
+      transcript: refined STT segments
+      duration:   원 영상 duration (초)
+
+    출력: {"beats": [{id, start, end, duration, transcript, characters, boundary, is_complete, ...}]}
+
+    후처리:
+      1) boundaries.to_windows() 로 [start, end] 조각 생성 (min_beat_sec 미만은 병합)
+      2) 각 window 를 word/speaker 스냅으로 STT 문장 경계에 정렬
+      3) 화자 전환점 강제 split (기존 헬퍼)
+      4) 짧은 조각 병합 · 대사 gap fill (기존)
+      5) transcript slice + boundary 소스 붙여서 beat 객체 완성
+
+    title/summary/scene_summary/hook 은 여기서 채우지 않음 (annotate stage 몫).
+    """
+    from .boundaries import to_windows, dedup_boundaries  # 로컬 import (순환 방지)
+
+    if duration <= 0:
+        return {"beats": []}
+
+    # dedup + grade 부여 (score 있으면). 계획서 1번 · noise 자동 제거.
+    graded = dedup_boundaries(boundaries or [], duration=duration)
+    # continuity gate: 같은 화자 연속 발화 안 boundary 는 등급 강등 (soft만 · hard 는 유지)
+    if apply_continuity_gate and transcript:
+        for b in graded:
+            if b.get("grade") == "soft" and _continuity_gate_speaker(float(b["t"]), transcript):
+                b["grade"] = "noise"
+
+    windows = to_windows(graded, duration, min_beat_sec=min_beat_sec,
+                          include_grades=include_grades)
+    if not windows:
+        return {"beats": []}
+
+    # 로그: 등급별 통계 (계획서 · 로그 강화)
+    counts = {"hard": 0, "soft": 0, "noise": 0}
+    for b in graded:
+        counts[b.get("grade", "soft")] = counts.get(b.get("grade", "soft"), 0) + 1
+    print(f"   boundary 등급 hard={counts['hard']} soft={counts['soft']} noise={counts['noise']} · windows={len(windows)}")
+
+    beats: list[dict] = []
+    for w in windows:
+        st = float(w["start"]); en = float(w["end"])
+
+        # word/speaker 스냅 (기존 헬퍼)
+        snap_st = _snap_to_word_start(st, transcript)
+        snap_en = _snap_to_word_end(en, transcript)
+        if snap_st is None:
+            snap_st = st
+        if snap_en is None:
+            snap_en = en
+        # 화자 monologue 중간이면 그 화자 발화 끝까지 확장
+        snap_st = _extend_start_to_speaker_block(snap_st, transcript)
+        snap_en = _extend_end_to_speaker_block(snap_en, transcript)
+
+        if snap_en <= snap_st:
+            snap_en = snap_st + min_beat_sec
+        if snap_en > duration:
+            snap_en = duration
+
+        beats.append({
+            "start": round(snap_st, 3),
+            "end": round(snap_en, 3),
+            "duration": round(snap_en - snap_st, 3),
+            "title": "",
+            "summary": "",
+            "transcript": "",  # 아래에서 채움
+            "characters": [],
+            "hook": "",
+            "scene_summary": "",
+            "boundary": {
+                "start_source": w.get("start_source", "gebd"),
+                "end_source": w.get("end_source", "gebd"),
+                "start_kind": w.get("start_kind", "unknown"),
+                "end_kind": w.get("end_kind", "unknown"),
+                "start_frame": "",
+                "end_frame": "",
+            },
+            "is_complete": True,
+        })
+
+    # 후처리: 겹침 방지
+    for i in range(1, len(beats)):
+        if beats[i]["start"] < beats[i - 1]["end"]:
+            beats[i]["start"] = beats[i - 1]["end"]
+        if beats[i]["end"] <= beats[i]["start"]:
+            beats[i]["end"] = beats[i]["start"] + min_beat_sec
+
+    # 짧은 조각 병합 · gap fill · 화자 전환 split (기존 로직 그대로)
+    beats = _merge_small_beats(beats, transcript)
+    beats = _fill_dialogue_gaps(beats, transcript, duration)
+    beats = _split_beats_on_speaker_change(beats, transcript, min_piece_sec=3.0)
+    beats = _merge_small_beats(beats, transcript)
+
+    # transcript slice · dominant speaker 채우기 · id 부여
+    for i, b in enumerate(beats):
+        st = float(b["start"]); en = float(b["end"])
+        lines = _segments_in_range(transcript, st, en, max_lines=80)
+        b["transcript"] = "\n".join(lines)
+        # dominant speaker(s)
+        speakers: dict[str, float] = {}
+        for t in transcript or []:
+            try:
+                tst = float(t.get("start", 0)); ten = float(t.get("end", 0))
+            except (TypeError, ValueError):
+                continue
+            if ten <= st or tst >= en:
+                continue
+            sp = (t.get("speaker") or "").strip()
+            if not sp:
+                continue
+            overlap = max(0.0, min(ten, en) - max(tst, st))
+            speakers[sp] = speakers.get(sp, 0.0) + overlap
+        if speakers:
+            b["characters"] = [s for s, _ in sorted(speakers.items(), key=lambda x: -x[1])][:6]
+        b["id"] = i
+
+    print(f"   beat {len(beats)}개 (평균 {sum(b['end']-b['start'] for b in beats)/max(1,len(beats)):.0f}s · GEBD 기반)")
+    return {"beats": beats, "source": "gebd_boundaries"}
