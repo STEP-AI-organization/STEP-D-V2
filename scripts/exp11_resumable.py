@@ -73,7 +73,7 @@ def extract_one(lid, title, comments):
 댓글:
 {chr(10).join(lines)}"""
     r = client.models.generate_content(
-        model="gemini-2.5-flash", contents=prompt,
+        model=MODEL, contents=prompt,
         config=types.GenerateContentConfig(response_mime_type="application/json", response_schema=SCHEMA, temperature=0.0),
     )
     data = json.loads(r.text)

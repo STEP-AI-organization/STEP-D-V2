@@ -25,7 +25,7 @@ core/.venv310/Scripts/python -m core.analyze <video> --out <dir> [--shorts N]
 | 6. 쇼츠 추천 | `recommend.py` | 장면별 분석 타임라인(화면분석+대사+인물+시각점수)을 Gemini 추론 1콜에 넣어 훅→펀치라인 완결 구간 선정. 15~60초 권장 | 장면 → `shorts` 배열 |
 
 각 단계 모듈의 Gemini 설정 공통값: `GOOGLE_CLOUD_PROJECT`(기본 `step-d`) / `VERTEX_LOCATION`(기본
-`asia-northeast3`, 서울 — 음성·프레임은 개인정보라 국내 처리) / `GEMINI_MODEL`(기본 `gemini-2.5-flash`).
+`asia-northeast3`, 서울 — 음성·프레임은 개인정보라 국내 처리) / `GEMINI_MODEL`(기본 `gemini-3.1-flash`).
 
 ## 2. 출력 스키마 — `analysis.json`
 
@@ -61,7 +61,7 @@ core/.venv310/Scripts/python -m core.analyze <video> --out <dir> [--shorts N]
 `asr.py`의 `transcribe()` 뒤에 provider 2개가 같은 형태(`{segments, language}`)로 교체 가능하다.
 
 **`gemini` (기본, 프로덕션)** — 관리형·GPU 불필요. Vertex AI `asia-northeast3`(서울)에서
-`gemini-2.5-flash`로 전사. ffmpeg으로 16kHz mono WAV 추출 후 90초 창(`STT_WINDOW_SEC`)으로 잘라
+`gemini-3.1-flash`로 전사. ffmpeg으로 16kHz mono WAV 추출 후 90초 창(`STT_WINDOW_SEC`)으로 잘라
 6병렬(`STT_WORKERS`) 호출 — 창 단위라 타임스탬프가 정확하고 JSON 출력이 토큰 예산 안에 든다.
 출력 넘침(truncation) 시 창을 반으로 쪼개 2단계까지 재시도. `thinking_budget=0`으로 출력 예산 전부를
 JSON에 사용. 모델은 `GEMINI_STT_MODEL`로 별도 오버라이드 가능.

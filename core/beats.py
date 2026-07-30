@@ -41,7 +41,7 @@ from .retry import call_with_retry
 
 PROJECT = os.environ.get("GOOGLE_CLOUD_PROJECT") or "step-d"
 LOCATION = os.environ.get("VERTEX_LOCATION") or "asia-northeast3"
-MODEL = os.environ.get("GEMINI_MODEL") or "gemini-2.5-flash"
+from .models import BEATS as MODEL
 
 MIN_BEAT_SEC = 8.0      # 이 미만은 파편 · 인접 beat와 병합 (2026-07-27: 20→8, 세분화 요청)
 SUBDIVIDE_SEC = 30.0    # 이 초과는 재분해 시도 (2026-07-27: 45→30, 73s 두 인물 붙어있던 케이스 fix)

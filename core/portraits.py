@@ -36,7 +36,7 @@ from google.genai import types
 
 PROJECT = os.environ.get("GOOGLE_CLOUD_PROJECT") or "step-d"
 LOCATION = os.environ.get("VERTEX_LOCATION") or "asia-northeast3"
-MODEL = os.environ.get("GEMINI_MODEL") or "gemini-2.5-flash"
+from .models import PORTRAITS as MODEL
 MAX_PORTRAITS = int(os.environ.get("PORTRAITS_MAX") or 12)
 
 PROMPT = """이 이미지는 한국어 방송의 한 장면이고, 화면 속 인물 중 "{name}"{role_hint}이(가) 등장한다.

@@ -45,9 +45,9 @@ from .retry import call_with_retry
 PROJECT = os.environ.get("GOOGLE_CLOUD_PROJECT") or "step-d"
 # Seoul: frames carry identifiable Korean people (biometric/sensitive data), so keep
 # them in-country to avoid a cross-border transfer with no PIPA basis. Vertex serves
-# gemini-2.5-flash here.
+# gemini-3.1-flash here.
 LOCATION = os.environ.get("VERTEX_LOCATION") or "asia-northeast3"
-MODEL = os.environ.get("GEMINI_MODEL") or "gemini-2.5-flash"
+from .models import VISION as MODEL
 WORKERS = 6  # concurrent Vertex calls — enough to be quick, gentle on quota
 SAVE_EVERY = 20  # scenes between checkpoint saves (bounds re-work after a crash)
 # A frame that fails this many times is treated as deterministically un-analyzable

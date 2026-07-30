@@ -639,7 +639,7 @@ def vision_auto_map_clusters(
 
     project = os.environ.get("GOOGLE_CLOUD_PROJECT") or "step-d"
     location = os.environ.get("VERTEX_LOCATION") or "asia-northeast3"
-    model = os.environ.get("GEMINI_MODEL") or "gemini-2.5-flash"
+    from .models import FACES as model  # 중앙 관리
     client = genai.Client(vertexai=True, project=project, location=location)
 
     # cast 있으면 "반드시 명단 중 하나" 강제 · 없으면 caption/celebrity 자유 판정

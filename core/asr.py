@@ -41,7 +41,7 @@ _FALLBACK_ON = STT_FALLBACK not in ("off", "none", "0", "false", "")
 # Gemini provider config (Vertex AI, Seoul — audio is personal data, keep it in-country)
 GEMINI_PROJECT = os.environ.get("GOOGLE_CLOUD_PROJECT") or "step-d"
 GEMINI_LOCATION = os.environ.get("VERTEX_LOCATION") or "asia-northeast3"
-GEMINI_MODEL = os.environ.get("GEMINI_STT_MODEL") or os.environ.get("GEMINI_MODEL") or "gemini-2.5-flash"
+from .models import STT as GEMINI_MODEL
 # Transcribe in windows so timestamps stay accurate AND each call's JSON output stays
 # within the token budget (dense speech in a long window overflows and truncates).
 STT_WINDOW_SEC = int(os.environ.get("STT_WINDOW_SEC") or 90)

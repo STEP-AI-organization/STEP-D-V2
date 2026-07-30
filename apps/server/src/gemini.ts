@@ -13,10 +13,10 @@
  */
 import fs from "node:fs";
 import { GoogleAuth } from "google-auth-library";
+import { TEXT as MODEL } from "./models.ts";
 
 const PROJECT = process.env.GOOGLE_CLOUD_PROJECT || "step-d";
 const LOCATION = process.env.VERTEX_LOCATION || "asia-northeast3";
-const MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
 
 // GOOGLE_APPLICATION_CREDENTIALS가 존재하지 않는 파일을 가리키면(과거 gcp-keys/ 삭제 등의 흔한
 // 로컬 상태) google-auth-library가 ENOENT를 던지고 ADC(gcloud auth application-default)

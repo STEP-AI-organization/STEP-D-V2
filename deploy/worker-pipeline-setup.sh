@@ -66,7 +66,7 @@ echo "==> Smoke test: Vertex reachable via the VM service account (ADC, no key)"
 from google import genai
 from google.genai import types
 c = genai.Client(vertexai=True, project="step-d", location="asia-northeast3")
-r = c.models.generate_content(model="gemini-2.5-flash", contents="'ok'만 답해",
+r = c.models.generate_content(model="gemini-3.1-flash", contents="'ok'만 답해",
     config=types.GenerateContentConfig(max_output_tokens=50,
         thinking_config=types.ThinkingConfig(thinking_budget=0)))
 print("   Vertex OK ->", (r.text or "").strip()[:10])

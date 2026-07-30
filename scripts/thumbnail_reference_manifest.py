@@ -18,7 +18,10 @@ from google.genai import types
 
 REF_DIR = pathlib.Path(__file__).resolve().parents[1] / "assets" / "thumbnail-reference"
 MANIFEST = REF_DIR / "manifest.json"
-MODEL = "gemini-2.5-flash"
+try:
+    from core.models import TEXT as MODEL
+except ImportError:
+    MODEL = "gemini-3.1-flash"
 LOCATION = "asia-northeast3"
 
 SYSTEM = """너는 한국 방송사 유튜브 썸네일 큐레이터다.

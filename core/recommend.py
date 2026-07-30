@@ -46,7 +46,7 @@ from .shots import detect_shots, nearest_shot
 
 PROJECT = os.environ.get("GOOGLE_CLOUD_PROJECT") or "step-d"
 LOCATION = os.environ.get("VERTEX_LOCATION") or "asia-northeast3"
-MODEL = os.environ.get("GEMINI_MODEL") or "gemini-2.5-flash"
+from .models import RECOMMEND as MODEL
 
 WORKERS = 4          # parallel Phase-1 chunk calls
 CHUNK_SCENES = 80    # max scenes per Phase-1 chunk (keeps the prompt fully attended)

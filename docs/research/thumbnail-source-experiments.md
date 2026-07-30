@@ -5,7 +5,7 @@
 
 ## 세팅
 
-- 모델: `gemini-2.5-flash-image` (Vertex us-central1 · asia-northeast3 없음)
+- 모델: `gemini-3.1-flash-image` (Vertex us-central1 · asia-northeast3 없음)
 - 호출: `generate_content(response_modalities=['IMAGE','TEXT'])`
 - 재활용 소스 (우리 파이프라인 산출물):
   - `program_context.json` → title/section/mood/synopsis/cast

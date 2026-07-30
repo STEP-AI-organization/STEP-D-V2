@@ -84,7 +84,7 @@ job_queue (Cloud SQL : stepd-db, PostgreSQL 16)   ← FOR UPDATE SKIP LOCKED · 
       → channel_videos · video_stats · channel_analytics · video_analytics · video_retention · video_comments
 
 스토리지: GCS(stepd-media) = 원본·썸네일·클립  |  Cloud SQL = 엔티티·지표·큐
-AI: Vertex Gemini(gemini-2.5-flash) — 서울(asia-northeast3) 리전 고정 (개인정보 데이터 레지던시)
+AI: Vertex Gemini(gemini-3.1-flash) — 서울(asia-northeast3) 리전 고정 (개인정보 데이터 레지던시)
 ```
 
 **왜 Cloud Run이 아니라 워커 VM인가:** Cloud Run은 응답 종료 시 CPU throttle + 요청 600초 제한 → 백그라운드 분석/대형 채널 백필이 잘림. 그래서 Run은 enqueue만, 실행은 타임아웃·throttle 없는 상시 VM. 스케일아웃 = 워커 프로세스/VM 추가(SKIP LOCKED가 중복 픽업 방지).

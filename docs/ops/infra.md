@@ -95,7 +95,7 @@
 - `step-d-landing` — 랜딩 영상. `step-d_cloudbuild` — Cloud Build 산출.
 
 ### 5. AI — Vertex AI (Gemini)
-- 모델 기본 `gemini-2.5-flash` (`GEMINI_MODEL`로 override).
+- 모델 기본 `gemini-3.1-flash` (`GEMINI_MODEL`로 override).
 - **리전 `asia-northeast3`(서울)** — 얼굴 프레임·오디오·자막이 개인정보라 국내 처리(데이터레지던시).
   ⚠️ 서울엔 Google **Speech-to-Text v2 Chirp가 없음** → STT는 Gemini 오디오 사용(아래).
 - 인증: ADC(로컬) / VM SA(워커). API 키 없음.

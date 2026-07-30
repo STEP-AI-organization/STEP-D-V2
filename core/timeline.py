@@ -34,7 +34,7 @@ from .retry import call_with_retry
 
 PROJECT = os.environ.get("GOOGLE_CLOUD_PROJECT") or "step-d"
 LOCATION = os.environ.get("VERTEX_LOCATION") or "asia-northeast3"
-MODEL = os.environ.get("GEMINI_MODEL") or "gemini-2.5-flash"
+from .models import TIMELINE as MODEL
 
 BLOCKS_PER_CALL = 8      # 블록 여러 개를 한 Gemini 호출에 배칭
 MAX_SCENE_LINES = 40     # 블록당 모델에 보내는 장면 라인 상한 (초과 시 균등 샘플링)

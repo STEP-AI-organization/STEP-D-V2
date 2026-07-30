@@ -32,7 +32,7 @@ from google.genai import types
 
 PROJECT = os.environ.get("GOOGLE_CLOUD_PROJECT") or "step-d"
 LOCATION = os.environ.get("VERTEX_LOCATION") or "asia-northeast3"
-MODEL = os.environ.get("GEMINI_MODEL") or "gemini-2.5-flash"
+from .models import NAMES as MODEL
 WORKERS = 6
 
 PROMPT = """이 예능/방송 프레임에 '화면에 박힌(번인된)' 텍스트를 추출하라. 자막 방송의 편집 텍스트다.

@@ -259,7 +259,7 @@ export_thumbnail() → 최종 composite · GCS 업로드 · variant DB write
 
 **Function calling multi-turn 세션** (JSON 단일 응답 아님):
 
-- Model: `gemini-2.5-flash` (function calling + vision · Vertex asia-northeast3)
+- Model: `gemini-3.1-flash` (function calling + vision · Vertex asia-northeast3)
 - Tools: §2.3 도구 세트 전부 JSON schema로 declare (Vertex `tools=[Tool(function_declarations=[...])]`)
 - 시스템 프롬프트: "너는 방송사 편집팀의 썸네일 디자이너다. 아래 도구들을 순차 호출해 완성해라. 마지막은 export_thumbnail." + [[title-prompt-yeneung-caption-tone]] 인용
 - 첫 turn user 메시지: 쇼츠 컨텍스트 요약
@@ -269,7 +269,7 @@ export_thumbnail() → 최종 composite · GCS 업로드 · variant DB write
 
 **AI 이미지 생성 도구** (`generate_background`):
 - Model 선택 우선순위:
-  1. `gemini-2.5-flash-image` (nano banana · 저비용 · 빠름) — Vertex/AI Studio 지원 확인 후
+  1. `gemini-3.1-flash-image` (nano banana · 저비용 · 빠름) — Vertex/AI Studio 지원 확인 후
   2. `imagen-4.0-generate-preview` (Vertex Imagen) — 상용 · 고품질 · 폴백
   3. Vertex 못 쓰면 Pillow blur 원본 자동 폴백
 - Prompt 강제 접두: "photo · 16:9 · cinematic · 사람 없음 · text 없음"
@@ -485,7 +485,7 @@ Phase 1 착수 전 확인 필요:
 
 ### 12.1 Vertex Gemini function calling 스펙
 
-- Model: `gemini-2.5-flash` (Vision + function calling · Vertex asia-northeast3)
+- Model: `gemini-3.1-flash` (Vision + function calling · Vertex asia-northeast3)
 - Config:
   - `tools=[Tool(function_declarations=<§12.2 도구 세트>)]`
   - `tool_config={"function_calling_config":{"mode":"AUTO"}}`
@@ -736,7 +736,7 @@ export_thumbnail()
 
 **시스템이 Vertex image gen에 보내는 실제 요청**:
 ```
-model: gemini-2.5-flash-image
+model: gemini-3.1-flash-image
 contents:
   - role: user
     parts:

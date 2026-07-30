@@ -38,7 +38,7 @@ from .retry import call_with_retry
 
 PROJECT = os.environ.get("GOOGLE_CLOUD_PROJECT") or "step-d"
 LOCATION = os.environ.get("VERTEX_LOCATION") or "asia-northeast3"
-MODEL = os.environ.get("GEMINI_MODEL") or "gemini-2.5-flash"
+from .models import COMMENT_SIGNAL as MODEL
 
 MAX_COMMENTS = 100        # Gemini 프롬프트에 담는 상한 (likeCount DESC 기준 상위)
 MAX_TS_PER_COMMENT = 3    # 한 댓글에서 뽑는 타임스탬프 최대 개수

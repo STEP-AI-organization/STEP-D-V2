@@ -64,7 +64,7 @@ client = genai.Client(vertexai=True, project="step-d", location="asia-northeast3
 print(f"[RUN] {lid} ({len(top)} comments) …", flush=True)
 try:
     r = client.models.generate_content(
-        model="gemini-2.5-flash", contents=prompt,
+        model=MODEL, contents=prompt,
         config=types.GenerateContentConfig(response_mime_type="application/json", response_schema=SCHEMA, temperature=0.0),
     )
     data = json.loads(r.text)

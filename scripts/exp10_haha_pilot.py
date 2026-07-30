@@ -120,7 +120,7 @@ for lid, comments in comments_by_long.items():
 {chr(10).join(lines)}
 """
     r = client.models.generate_content(
-        model="gemini-2.5-flash",
+        model=MODEL,
         contents=prompt,
         config=types.GenerateContentConfig(
             response_mime_type="application/json",

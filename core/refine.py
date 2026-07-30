@@ -39,7 +39,7 @@ from .retry import call_with_retry
 PROJECT = os.environ.get("GOOGLE_CLOUD_PROJECT") or "step-d"
 # Seoul — transcripts can carry personal info; keep processing in-country (data residency).
 LOCATION = os.environ.get("VERTEX_LOCATION") or "asia-northeast3"
-MODEL = os.environ.get("GEMINI_MODEL") or "gemini-2.5-flash"
+from .models import REFINE as MODEL
 BATCH = int(os.environ.get("REFINE_BATCH") or 80)  # segments per Gemini call. 40→80 (2026-07-29): 호출 수 반토막, wall time 2-3m 절감. 40 이 필요하면 env 로 원복.
 # 배치 병렬 워커 수. Gemini Vertex는 몇 개까지 잘 소화(STT_WORKERS와 유사). 너무 크면 429.
 REFINE_WORKERS = int(os.environ.get("REFINE_WORKERS") or 4)

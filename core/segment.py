@@ -28,7 +28,7 @@ from .retry import call_with_retry
 PROJECT = os.environ.get("GOOGLE_CLOUD_PROJECT") or "step-d"
 # 프레임·음성은 개인정보(생체 포함)라 서울 리전 고정 — vision.py와 같은 이유.
 LOCATION = os.environ.get("VERTEX_LOCATION") or "asia-northeast3"
-MODEL = os.environ.get("SEGMENT_MODEL") or "gemini-2.5-flash"
+from .models import SEGMENT as MODEL
 N_FRAMES = 3
 
 _SCHEMA = {

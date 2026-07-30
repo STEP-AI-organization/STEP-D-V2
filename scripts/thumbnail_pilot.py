@@ -28,7 +28,10 @@ from typing import Optional
 from google import genai
 from google.genai import types
 
-MODEL = "gemini-2.5-flash-image"
+try:
+    from core.models import IMAGE_FLASH as MODEL
+except ImportError:
+    MODEL = "gemini-3.1-flash-image"
 LOCATION = "us-central1"       # asia-northeast3 이미지 모델 없음 (실측 완료)
 PROJECT = os.environ.get("GOOGLE_CLOUD_PROJECT", "step-d")
 OUT_ROOT = pathlib.Path("logs/thumbnail-pilot")

@@ -28,7 +28,7 @@ from .point_profile import analyze as stat_analyze
 
 PROJECT = os.environ.get("GOOGLE_CLOUD_PROJECT") or "step-d"
 LOCATION = os.environ.get("VERTEX_LOCATION") or "asia-northeast3"
-MODEL = os.environ.get("GEMINI_MODEL") or "gemini-2.5-flash"
+from .models import LEARN_PROFILE as MODEL
 
 _SCHEMA = {
     "type": "OBJECT",

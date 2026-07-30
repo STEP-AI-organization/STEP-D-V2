@@ -19,7 +19,7 @@ from PIL import Image
 from google import genai
 from google.genai import types
 
-IMAGE_MODEL = "gemini-2.5-flash-image"
+IMAGE_MODEL = "gemini-3.1-flash-image"
 IMAGE_LOCATION = "us-central1"   # asia-northeast3 에 이미지 모델 없음 (실측 완료)
 
 

@@ -165,7 +165,7 @@ Grep 결과 **recommend에 전달되지 않고 있는 이미-계산된 산출물
 
 ## 5. Gemini 콜 분해
 
-`core/*.py` grep 결과 모든 스테이지가 `gemini-2.5-flash` 사용.
+`core/*.py` grep 결과 모든 스테이지가 `gemini-3.1-flash` 사용.
 
 108분 영상 청문회 콜 카운트 추정:
 

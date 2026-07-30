@@ -15,7 +15,10 @@ import sys
 from google import genai
 from google.genai import types
 
-MODEL = "gemini-2.5-flash"
+try:
+    from core.models import TEXT as MODEL
+except ImportError:
+    MODEL = "gemini-3.1-flash"
 LOCATION = "asia-northeast3"
 
 REF_DIR = pathlib.Path(__file__).resolve().parents[1] / "assets" / "thumbnail-reference"

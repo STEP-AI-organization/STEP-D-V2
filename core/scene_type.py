@@ -34,7 +34,7 @@ from .retry import call_with_retry
 
 PROJECT = os.environ.get("GOOGLE_CLOUD_PROJECT") or "step-d"
 LOCATION = os.environ.get("VERTEX_LOCATION") or "asia-northeast3"
-MODEL = os.environ.get("GEMINI_MODEL") or "gemini-2.5-flash"
+from .models import SCENE_TYPE as MODEL
 
 MIN_SHOT_SEC = 2.0        # 이 미만 shot은 대표 프레임 뽑을 만한 정보 X · 병합
 BATCH_SIZE = 20           # Vision 콜당 shot 이미지 수

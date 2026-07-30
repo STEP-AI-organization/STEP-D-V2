@@ -37,7 +37,7 @@ from .retry import call_with_retry
 
 PROJECT = os.environ.get("GOOGLE_CLOUD_PROJECT") or "step-d"
 LOCATION = os.environ.get("VERTEX_LOCATION") or "asia-northeast3"
-MODEL = os.environ.get("GEMINI_MODEL") or "gemini-2.5-flash"
+from .models import NARRATIVE as MODEL
 
 BLOCKS_PER_CALL = 5        # 구간별 분석: 블록 5개씩 배칭
 FALLBACK_BLOCK_MIN = 5     # timeline 없을 때 refined로 합성하는 블록 크기(분)

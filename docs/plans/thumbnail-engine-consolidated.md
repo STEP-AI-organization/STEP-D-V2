@@ -244,5 +244,5 @@ layer JSON 저장 · 텍스트/위치/배경 프레임 교체 · preset 재적�
 
 ### Image Generation
 - [Gemini image generation](https://ai.google.dev/gemini-api/docs/image-generation)
-  - 2026-07 확인: `gemini-3-pro-image` (현재 사용) · `gemini-3.1-flash-image` · `gemini-3.1-flash-image-preview` · `gemini-3.1-flash-lite-image` · `gemini-2.5-flash-image`
+  - 2026-07 확인: `gemini-3-pro-image` (현재 사용) · `gemini-3.1-flash-image` · `gemini-3.1-flash-image-preview` · `gemini-3.1-flash-lite-image` · `gemini-3.1-flash-image`
   - **STEP D 는 배경만 gen** (인물은 castPhoto 세그 · 얼굴 identity 100%)

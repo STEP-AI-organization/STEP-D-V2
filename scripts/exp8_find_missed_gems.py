@@ -97,7 +97,7 @@ def call_gemini_judge(client, program_context: str, pick: dict) -> dict:
 
 JSON만: {{"score": 4, "reason": "..."}}"""
     resp = client.models.generate_content(
-        model="gemini-2.5-flash",
+        model=MODEL,
         contents=prompt,
         config=types.GenerateContentConfig(
             temperature=0,

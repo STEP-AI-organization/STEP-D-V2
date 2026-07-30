@@ -35,7 +35,7 @@ from .retry import call_with_retry
 
 PROJECT = os.environ.get("GOOGLE_CLOUD_PROJECT") or "step-d"
 LOCATION = os.environ.get("VERTEX_LOCATION") or "asia-northeast3"
-MODEL = os.environ.get("GEMINI_MODEL") or "gemini-2.5-flash"
+from .models import AUTOFILL as MODEL
 
 # 자동 채울 필드 정의 (출연자·SMR·프로그램 코드 제외).
 TARGET_FIELDS = [
