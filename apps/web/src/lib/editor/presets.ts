@@ -358,7 +358,7 @@ export const BG_SWATCHES = ["#0E0E12", "#10162B", "#FBF3E4", "#FFFFFF"];
 // ── 채널 뱃지 프리셋 ────────────────────────────────────────────────────────────
 // 자주 쓰는 조합을 이름으로 묶는다. 클릭 시 layout·shape·아이콘/라벨 크기가 모두 세팅.
 // 프리셋 선택 후에도 슬라이더로 개별 크기 override 가능 (프리셋은 시작점일 뿐).
-export type ChannelBadgeTemplate = "circle_inline" | "logo_stack" | "news_bar" | "minimal_text";
+export type ChannelBadgeTemplate = "circle_inline" | "logo_stack";
 export interface ChannelBadgePreset {
   id: ChannelBadgeTemplate;
   label: string;
@@ -383,18 +383,27 @@ export const CHANNEL_BADGE_PRESETS: ChannelBadgePreset[] = [
     hint: "아이콘 위·이름 아래 · 프로그램 로고형",
     patch: { channelLayout: "vertical", channelIconShape: "rounded", channelIconSize: 48, channelLabelSize: 16 },
   },
-  {
-    id: "news_bar",
-    label: "뉴스 바",
-    hint: "사각 로고 옆 이름 · 뉴스·시사 스타일",
-    patch: { channelLayout: "horizontal", channelIconShape: "square", channelIconSize: 32, channelLabelSize: 16 },
-  },
-  {
-    id: "minimal_text",
-    label: "텍스트 위주",
-    hint: "이름 크게 · 아이콘 작게",
-    patch: { channelLayout: "horizontal", channelIconShape: "circle", channelIconSize: 18, channelLabelSize: 18 },
-  },
+];
+
+// ── 기본 채널 아이콘 프리셋 ─────────────────────────────────────────────────────
+// 각 플랫폼 공식 favicon(각 도메인이 직접 서빙)을 apps/web/public/channel-icons/*.png
+// 로 정적 배포. 클릭 시 state.channelIconDataUrl에 해당 파일 경로가 세팅되고, <img src>는
+// data URL / URL path 둘 다 그대로 로드한다.
+export interface ChannelIconPreset {
+  id: string;
+  label: string;
+  /** 정적 파일 경로 또는 data URL. state.channelIconDataUrl에 그대로 세팅된다. */
+  src: string;
+}
+export const CHANNEL_ICON_PRESETS: ChannelIconPreset[] = [
+  { id: "soop", label: "SOOP", src: "/channel-icons/soop.png" },
+  { id: "youtube", label: "YouTube", src: "/channel-icons/youtube.png" },
+  { id: "chzzk", label: "치지직", src: "/channel-icons/chzzk.png" },
+  { id: "kbs", label: "KBS", src: "/channel-icons/kbs.png" },
+  { id: "mbc", label: "MBC", src: "/channel-icons/mbc.png" },
+  { id: "sbs", label: "SBS", src: "/channel-icons/sbs.png" },
+  { id: "jtbc", label: "JTBC", src: "/channel-icons/jtbc.png" },
+  { id: "tvn", label: "tvN", src: "/channel-icons/tvn.png" },
 ];
 
 export const ELEMENT_DEFAULTS: Record<ElementType, string> = {

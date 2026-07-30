@@ -1,4 +1,4 @@
-"""Gemini 2.5 flash image 어댑터 (배경 · 인물 이미지 생성).
+"""OpenAI gpt-image-2 어댑터 (배경 · 인물 이미지 생성) — 2026-07-30 Gemini→OpenAI 전환.
 
 - generate_background: Layer 0 배경 (사람 없음 · 텍스트 없음 · §13)
 - generate_person_thumbnail: Layer 2 인물 (castPhoto reference · 얼굴 identity 유지 강제)
@@ -10,30 +10,10 @@
 """
 from __future__ import annotations
 
-import io
-import os
-import pathlib
 from typing import Optional
 
-from PIL import Image
-from google import genai
-from google.genai import types
-
-IMAGE_MODEL = "gemini-3.1-flash-image"
-IMAGE_LOCATION = "us-central1"   # asia-northeast3 에 이미지 모델 없음 (실측 완료)
-
-
-def _client(project: Optional[str] = None) -> genai.Client:
-    project = project or os.environ.get("GOOGLE_CLOUD_PROJECT", "step-d")
-    return genai.Client(vertexai=True, project=project, location=IMAGE_LOCATION)
-
-
-def _extract_image(resp) -> Optional[bytes]:
-    for c in resp.candidates or []:
-        for p in (c.content.parts or []):
-            if getattr(p, "inline_data", None) and p.inline_data.data:
-                return p.inline_data.data
-    return None
+from ..models import IMAGE_FLASH as IMAGE_MODEL
+from ..openai_client import edit as openai_edit, generate as openai_generate
 
 
 BACKGROUND_SYSTEM = """목표: 아래 참고 이미지들의 실제 장소·인테리어·조명을 그대로 유지한 배경 (16:9).
@@ -52,18 +32,16 @@ BACKGROUND_SYSTEM = """목표: 아래 참고 이미지들의 실제 장소·인�
 - 색 톤 채도 미세 조정
 """
 
+
 def generate_background(
     prompt: str,
     style: str = "cinematic",
     palette_hint: Optional[list[str]] = None,
-    context_frames: Optional[list[bytes]] = None,   # 원본 프레임 (인물 shot + 배경 shot)
+    context_frames: Optional[list[bytes]] = None,
     synopsis: Optional[str] = None,
     program_info: Optional[str] = None,
 ) -> Optional[bytes]:
     """§13 default: 프레임 2장 + 시놉시스만 · 인물 사진 안 첨부."""
-    parts: list = []
-    for fb in (context_frames or []):
-        parts.append(types.Part.from_bytes(data=fb, mime_type="image/jpeg"))
     body = BACKGROUND_SYSTEM
     if program_info:
         body += f"\n[프로그램] {program_info}"
@@ -72,15 +50,13 @@ def generate_background(
     body += f"\n\n[요청]\n{prompt}\nstyle: {style}"
     if palette_hint:
         body += f"\npalette hint: {', '.join(palette_hint)}"
-    parts.append(body)
 
-    client = _client()
-    r = client.models.generate_content(
-        model=IMAGE_MODEL,
-        contents=parts,
-        config=types.GenerateContentConfig(response_modalities=["IMAGE", "TEXT"]),
-    )
-    return _extract_image(r)
+    if context_frames:
+        # 참고 프레임 있으면 edit (image reference 활용)
+        return openai_edit(images=list(context_frames), prompt=body,
+                           model=IMAGE_MODEL, size="1536x1024")
+    # 없으면 순수 텍스트 to 이미지
+    return openai_generate(prompt=body, model=IMAGE_MODEL, size="1536x1024")
 
 
 PERSON_SYSTEM = """목표: 참고 사진의 인물을 그대로 사용해서 썸네일용 인물 이미지 생성.
@@ -99,8 +75,9 @@ PERSON_SYSTEM = """목표: 참고 사진의 인물을 그대로 사용해서 썸
 - 옷 색은 참고 사진 유지 (옷 자체를 바꾸지는 마)
 """
 
+
 def generate_person_thumbnail(
-    cast_photo: bytes,                    # castPhotos/<name>.jpg 원본 bytes
+    cast_photo: bytes,
     style_prompt: str = "정면 · 자연스러운 미소 · 시네마틱 조명 · 상반신 · 배경 투명",
     program_info: Optional[str] = None,
 ) -> Optional[bytes]:
@@ -113,14 +90,5 @@ def generate_person_thumbnail(
         "다시 강조: 얼굴은 위 참고 사진의 사람과 정확히 같아야 한다. "
         "얼굴 특징을 바꾸면 안 된다. 다른 얼굴로 대체하지 마라."
     )
-    parts = [
-        types.Part.from_bytes(data=cast_photo, mime_type="image/jpeg"),
-        body,
-    ]
-    client = _client()
-    r = client.models.generate_content(
-        model=IMAGE_MODEL,
-        contents=parts,
-        config=types.GenerateContentConfig(response_modalities=["IMAGE", "TEXT"]),
-    )
-    return _extract_image(r)
+    return openai_edit(images=[cast_photo], prompt=body,
+                       model=IMAGE_MODEL, size="1024x1024")

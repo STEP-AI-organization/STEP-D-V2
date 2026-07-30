@@ -31,7 +31,7 @@ from google.genai import types
 try:
     from core.models import IMAGE_FLASH as MODEL
 except ImportError:
-    MODEL = "gemini-3.1-flash-image"
+    MODEL = "gpt-image-2"  # 2026-07-30 Gemini→OpenAI 전환. pilot 은 실측 스크립트이므로 별도 리팩터 필요 시 openai_client 사용.
 LOCATION = "us-central1"       # asia-northeast3 이미지 모델 없음 (실측 완료)
 PROJECT = os.environ.get("GOOGLE_CLOUD_PROJECT", "step-d")
 OUT_ROOT = pathlib.Path("logs/thumbnail-pilot")

@@ -43,8 +43,10 @@ EVAL_TOPIC: str = os.environ.get("GEMINI_EVAL_TOPIC_MODEL") or TEXT
 PORTRAITS: str = os.environ.get("GEMINI_PORTRAITS_MODEL") or TEXT
 
 # ────────────────────────────────────────────────────────────
-# Image 생성 모델 · thumbnail 파이프라인 · 별도 라인.
-# FLASH 는 빠르고 저렴 · PRO 는 고품질 (템플릿 사전 가공 등에 사용).
+# Image 생성 모델 · thumbnail 파이프라인 · OpenAI (2026-07-30 전환).
+# 사용자 방향: Gemini image → OpenAI 최신 gpt-image-2.
+# FLASH · PRO 모두 gpt-image-2 사용 (필요 시 stage 별 오버라이드).
+# ⚠️ Gemini SDK 아닌 OpenAI SDK 사용 · OPENAI_API_KEY env var 필요.
 # ────────────────────────────────────────────────────────────
-IMAGE_FLASH: str = os.environ.get("GEMINI_IMAGE_MODEL") or "gemini-3.1-flash-image"
-IMAGE_PRO: str = os.environ.get("GEMINI_IMAGE_PRO_MODEL") or "gemini-3-pro-image"
+IMAGE_FLASH: str = os.environ.get("OPENAI_IMAGE_MODEL") or "gpt-image-2"
+IMAGE_PRO: str = os.environ.get("OPENAI_IMAGE_PRO_MODEL") or "gpt-image-2"

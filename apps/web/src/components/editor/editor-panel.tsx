@@ -23,6 +23,7 @@ import {
   BG_SWATCHES,
   CAPTION_STYLES,
   CHANNEL_BADGE_PRESETS,
+  CHANNEL_ICON_PRESETS,
   COLOR_SWATCHES,
   DEFAULT_FILTERS,
   ELEMENT_DEFAULTS,
@@ -351,6 +352,27 @@ function ChannelTab({ state, update }: { state: EditorState; update: Update }) {
           maxBytes={256 * 1024}
           hint="정사각형 이미지 · 최대 256KB"
         />
+        <div className="mt-2 grid grid-cols-4 gap-1.5">
+          {CHANNEL_ICON_PRESETS.map((p) => {
+            const active = state.channelIconDataUrl === p.src;
+            return (
+              <button
+                key={p.id}
+                onClick={() => update({ channelIconDataUrl: p.src })}
+                title={p.label}
+                className={cn(
+                  "flex flex-col items-center gap-1 rounded-md border p-1.5 transition-colors",
+                  active ? "border-zinc-400 bg-zinc-800" : "border-zinc-800 hover:bg-zinc-800/50",
+                )}
+              >
+                <img src={p.src} alt={p.label} className="size-8 rounded-full object-cover" draggable={false} />
+                <span className="w-full truncate text-center text-[9px] leading-tight text-zinc-400">
+                  {p.label}
+                </span>
+              </button>
+            );
+          })}
+        </div>
       </div>
       <div>
         <Label>뱃지 스타일</Label>

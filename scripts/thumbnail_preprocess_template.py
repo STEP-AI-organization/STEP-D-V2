@@ -19,17 +19,15 @@
 from __future__ import annotations
 
 import json
-import os
 import pathlib
 import sys
 
-from google import genai
-from google.genai import types
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+from core.openai_client import edit as openai_edit
+from core.models import IMAGE_PRO as MODEL
 
 REF_DIR = pathlib.Path(__file__).resolve().parents[1] / "assets" / "thumbnail-reference"
 MANIFEST = REF_DIR / "manifest.json"
-MODEL = "gemini-3-pro-image"
-LOCATION = "global"
 
 PROMPT = (
     "이 방송사 유튜브 썸네일을 **어떤 프로그램에도 재사용 가능한 슬롯 template** 로 가공하라.\n"
@@ -59,36 +57,16 @@ PROMPT = (
 )
 
 
-def _client(project: str | None = None) -> genai.Client:
-    return genai.Client(vertexai=True,
-                         project=project or os.environ.get("GOOGLE_CLOUD_PROJECT", "step-d"),
-                         location=LOCATION)
-
-
 def preprocess_one(src_path: pathlib.Path, out_path: pathlib.Path,
                     project: str | None = None) -> bool:
-    ext = src_path.suffix[1:].lower() or "jpeg"
-    mime = f"image/{'jpeg' if ext == 'jpg' else ext}"
-    client = _client(project)
-    try:
-        cfg = types.GenerateContentConfig(
-            response_modalities=["IMAGE", "TEXT"],
-            image_config=types.ImageConfig(aspect_ratio="16:9"),
-        )
-    except Exception:
-        cfg = types.GenerateContentConfig(response_modalities=["IMAGE", "TEXT"])
-    parts = [
-        types.Part.from_bytes(data=src_path.read_bytes(), mime_type=mime),
-        types.Part.from_text(text=PROMPT),
-    ]
-    resp = client.models.generate_content(model=MODEL, contents=parts, config=cfg)
-    for c in resp.candidates or []:
-        for p in (c.content.parts or []):
-            if getattr(p, "inline_data", None) and p.inline_data.data:
-                out_path.parent.mkdir(parents=True, exist_ok=True)
-                out_path.write_bytes(p.inline_data.data)
-                return True
-    return False
+    """원본 방송사 썸네일 → 슬롯 라벨 template · OpenAI images.edit (2026-07-30 전환)."""
+    img_bytes = openai_edit(images=[src_path.read_bytes()], prompt=PROMPT,
+                             model=MODEL, size="1536x1024")
+    if not img_bytes:
+        return False
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_bytes(img_bytes)
+    return True
 
 
 def main() -> int:

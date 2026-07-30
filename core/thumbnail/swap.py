@@ -15,20 +15,11 @@
 from __future__ import annotations
 
 import mimetypes
-import os
 import pathlib
 from typing import Optional
 
-from google import genai
-from google.genai import types
-
-MODEL = "gemini-3-pro-image"
-LOCATION = "global"
-
-
-def _client(project: Optional[str] = None) -> genai.Client:
-    project = project or os.environ.get("GOOGLE_CLOUD_PROJECT", "step-d")
-    return genai.Client(vertexai=True, project=project, location=LOCATION)
+from ..models import IMAGE_PRO as MODEL
+from ..openai_client import edit as openai_edit
 
 
 def _mime(p: pathlib.Path) -> str:
@@ -100,31 +91,14 @@ def swap_thumbnail(
             f"**절대 변경**: 원본 인물 얼굴 · 원본 자막 문장."
         )
 
-    client = _client(project)
-    try:
-        cfg = types.GenerateContentConfig(
-            response_modalities=["IMAGE", "TEXT"],
-            image_config=types.ImageConfig(aspect_ratio="16:9"),
-        )
-    except Exception:
-        cfg = types.GenerateContentConfig(response_modalities=["IMAGE", "TEXT"])
-
-    parts: list = [
-        types.Part.from_bytes(data=reference.read_bytes(), mime_type=_mime(reference)),
-    ]
+    # 2026-07-30 OpenAI 전환: reference 썸네일 + castPhoto 여러 장 → images.edit
+    images: list[bytes] = [reference.read_bytes()]
     for cp in cast_photos:
         try:
-            parts.append(types.Part.from_bytes(data=cp.read_bytes(), mime_type=_mime(cp)))
+            images.append(cp.read_bytes())
         except Exception:
             pass
-    parts.append(types.Part.from_text(text=prompt))
-
-    resp = client.models.generate_content(model=MODEL, contents=parts, config=cfg)
-    for c in resp.candidates or []:
-        for p in (c.content.parts or []):
-            if getattr(p, "inline_data", None) and p.inline_data.data:
-                return p.inline_data.data
-    return None
+    return openai_edit(images=images, prompt=prompt, model=MODEL, size="1536x1024")
 
 
 if __name__ == "__main__":

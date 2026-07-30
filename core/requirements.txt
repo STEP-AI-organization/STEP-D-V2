@@ -6,6 +6,10 @@
 # Gemini on Vertex AI. Auth via ADC (gcloud auth application-default login), no API key.
 google-genai>=1.0.0
 
+# 썸네일 이미지 생성만 OpenAI gpt-image-2 사용 (2026-07-30 Gemini→OpenAI 전환).
+# 나머지 텍스트/비전은 여전히 Gemini. OPENAI_API_KEY env var 필수.
+openai>=1.50.0
+
 # Scene segmentation (scenes.py) — shot-change detection + frame extraction.
 # opencv also powers the algorithmic scene pre-filter (prefilter.py): Haar face count +
 # Canny caption-band density, to send only the top-N frames to Gemini Vision.
