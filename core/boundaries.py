@@ -185,6 +185,47 @@ def to_windows(
     return windows
 
 
+def build_fallback_boundaries(
+    shots: list[float] | None,
+    transcript: list[dict] | None,
+    duration: float,
+    min_stt_gap_sec: float = 2.0,
+) -> list[dict]:
+    """GEBD boundaries.json 없을 때 fallback (계획서 Assumptions).
+
+    입력:
+      shots: ffmpeg shot boundary 초 리스트 (kind='shot')
+      transcript: refined STT segments · 발화 gap ≥ min_stt_gap_sec 지점을 kind='event'
+      duration: 영상 duration
+    출력: dedup·grade 채워진 boundaries (모두 grade='hard' · fallback 자체가 이미 안전 필터)
+    """
+    out: list[dict] = []
+    for t in (shots or []):
+        try:
+            tt = float(t)
+        except (TypeError, ValueError):
+            continue
+        if 0 < tt < duration:
+            out.append({"t": tt, "kind": "shot", "score": 1.0,
+                         "source": "shots_fallback", "grade": "hard"})
+    # STT gap (발화 사이 침묵 지점)
+    if transcript:
+        prev_end = None
+        for s in transcript:
+            try:
+                st = float(s.get("start", 0)); en = float(s.get("end", 0))
+            except (TypeError, ValueError):
+                continue
+            if prev_end is not None and (st - prev_end) >= min_stt_gap_sec:
+                gap_mid = (prev_end + st) / 2
+                if 0 < gap_mid < duration:
+                    out.append({"t": round(gap_mid, 3), "kind": "event", "score": 0.8,
+                                  "source": "stt_gap_fallback", "grade": "hard"})
+            prev_end = en if en > 0 else prev_end
+    out.sort(key=lambda b: b["t"])
+    return dedup_boundaries(out, duration=duration)
+
+
 def save_boundaries(path: str | Path, boundaries: list[dict],
                      source: str = "gebd", model: str = "",
                      time_unit: float = 1.0) -> None:

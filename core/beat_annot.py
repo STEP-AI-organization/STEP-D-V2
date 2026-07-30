@@ -166,12 +166,19 @@ def _annotate_one(idx: int, beat: dict, video: Path, out_dir: Path,
             pass
     parts.append(types.Part.from_text(text=_build_prompt(beat, program_ctx_str)))
 
-    cfg = types.GenerateContentConfig(
+    # Gemini 2.5+ 는 thinking tokens 도 max_output_tokens 에 포함 · 1024 는 thinking 에 다 소진.
+    # (1) max_output_tokens 대폭 증가 · (2) thinking 끔 (schema JSON 이라 reasoning 불필요).
+    cfg_kwargs = dict(
         response_mime_type="application/json",
         response_schema=SCHEMA,
         temperature=0.2,
-        max_output_tokens=1024,
+        max_output_tokens=4096,
     )
+    try:
+        cfg_kwargs["thinking_config"] = types.ThinkingConfig(thinking_budget=0)
+    except Exception:
+        pass  # 옛 SDK 는 ThinkingConfig 없음 · 무시
+    cfg = types.GenerateContentConfig(**cfg_kwargs)
     t0 = time.time()
     try:
         resp = _client().models.generate_content(model=MODEL, contents=parts, config=cfg)
@@ -184,15 +191,27 @@ def _annotate_one(idx: int, beat: dict, video: Path, out_dir: Path,
 
     text = (resp.text or "").strip()
     data: dict = {}
+    parse_err = ""
     try:
         data = json.loads(text) if text else {}
-    except Exception:
-        s, e = text.find("{"), text.rfind("}")
-        if s >= 0 and e > s:
+    except Exception as e:
+        parse_err = f"json: {e}"
+        s, e2 = text.find("{"), text.rfind("}")
+        if s >= 0 and e2 > s:
             try:
-                data = json.loads(text[s:e + 1])
-            except Exception:
-                pass
+                data = json.loads(text[s:e2 + 1])
+                parse_err = ""
+            except Exception as e3:
+                parse_err = f"brace: {e3}"
+
+    err = ""
+    if not data:
+        try:
+            cand = (resp.candidates or [None])[0] if resp.candidates else None
+            fr = getattr(cand, "finish_reason", None)
+        except Exception:
+            fr = None
+        err = f"empty/unparsed · finish={fr} · raw_len={len(text)} · parse={parse_err} · head={text[:120]!r}"
 
     return {
         "idx": idx,
@@ -201,6 +220,7 @@ def _annotate_one(idx: int, beat: dict, video: Path, out_dir: Path,
                     "mid": p_mid.name if ok_m else None,
                     "end": p_end.name if ok_e else None},
         "annot": data,
+        "error": err,
     }
 
 
@@ -261,6 +281,8 @@ def annotate_beats(
                 r = {"idx": i, "error": str(e)[:150]}
             done += 1
             b = beats[i]
+            if r.get("error"):
+                print(f"     [!] beat #{i} annot 실패: {r['error']}")
             frames = r.get("frames") or {}
             bd = b.setdefault("boundary", {})
             if frames.get("start"):

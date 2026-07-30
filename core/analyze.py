@@ -45,8 +45,8 @@ from .recommend import recommend, recommend_narrative_first
 from .narrative import build_narrative
 from .shots import detect_shots
 from .scene_type import classify_shot_types
-from .beats import build_beats, build_beats_from_boundaries
-from .boundaries import load_boundaries, dedup_boundaries
+from .beats import build_beats_from_boundaries
+from .boundaries import load_boundaries, dedup_boundaries, build_fallback_boundaries, save_boundaries
 from .beat_annot import annotate_beats
 
 CHECKPOINTS = ("stt.json", "refined.json", "faces.json", "ppl.json", "scenes.json", "cast.json", "timeline.json", "narrative.json", "shots.json", "boundaries.json", "scene_type.json", "beats.json", "viewer_signals.json", "shorts.json", "analysis.json")
@@ -272,7 +272,10 @@ def analyze(
     faces_future: Future | None = None
     faces_executor: ThreadPoolExecutor | None = None
     _faces_cached = _load_json(out_dir / "faces.json")
-    if not (isinstance(_faces_cached, dict) and _faces_cached.get("clusters") is not None) and not fast:
+    # 2026-07-30 사용자 방향: 기본 skip · 나중에 살릴 수 있게 삭제 X.
+    # RUN_FACES=1 env 또는 --faces 인자 지정 시에만 실행 (insightface 무거움 · 8-15분).
+    _run_faces = (os.environ.get("RUN_FACES") == "1") or ("--faces" in sys.argv)
+    if _run_faces and not (isinstance(_faces_cached, dict) and _faces_cached.get("clusters") is not None) and not fast:
         try:
             from .faces import build_face_index
             _cast_photos_dir = out_dir / "cast_photos"
@@ -287,6 +290,8 @@ def analyze(
         except Exception as e:
             step(f"  (faces 병렬 시작 실패, 순차 폴백: {str(e)[:70]})")
             faces_future = None
+    elif not _run_faces:
+        step("faces — 기본 skip (RUN_FACES=1 또는 --faces 로 활성화)")
 
     # ── 시청자 신호 (2026-07-28) — 이 롱폼 원본의 상위 좋아요 댓글에서 뽑은 반응.
     # content-pipeline이 out_dir/comments.json 으로 넘겨준다 (from-youtube 경로 · sourceVideoId
@@ -636,9 +641,9 @@ def analyze(
             _save_json(out_dir / "scene_type.json", scene_type_data)
     timed("scene_type", ts)
 
-    # 4h) beats — GEBD 경계 우선 · 없으면 기존 build_beats (narrative+STT+shots) 폴백.
-    # v1 (2026-07-30 · docs/plans/gebd-beat-pipeline): boundaries.json 이 있으면 그걸
-    # 1차 시간 단위로 채택. LLM 자유 시각 생성은 폴백으로만.
+    # 4h) beats — GEBD boundary 기반 완전 교체 (2026-07-30 v2 · 사용자 방향).
+    # boundaries.json 있으면 GEBD · 없으면 shots+STT gap 으로 fallback boundaries 자동 생성.
+    # 옛 build_beats (narrative-LLM 자유 시각) 는 더 이상 안 부름 · 완전 교체.
     ts = time.time()
     beats_data = _load_json(out_dir / "beats.json")
     if isinstance(beats_data, dict) and isinstance(beats_data.get("beats"), list) and beats_data["beats"]:
@@ -649,23 +654,22 @@ def analyze(
             duration_for_beats = float(scenes[-1]["end"]) if scenes else (float(refined[-1]["end"]) if refined else 0.0)
             gebd_boundaries = load_boundaries(out_dir / "boundaries.json")
             if gebd_boundaries:
-                # GEBD 우선 경로
                 gebd_boundaries = dedup_boundaries(gebd_boundaries, duration=duration_for_beats)
-                step(f"beat — GEBD boundary {len(gebd_boundaries)}개 기반 생성")
-                beats_data = build_beats_from_boundaries(
-                    gebd_boundaries, refined, duration_for_beats,
-                )
+                step(f"beat — GEBD boundary {len(gebd_boundaries)}개 기반")
             else:
-                # 기존 폴백
-                step("beat — GEBD boundary 없음 · 기존 narrative/STT 폴백")
-                beats_data = build_beats(
-                    narrative if isinstance(narrative, dict) else None,
-                    refined,
+                # 워커 (Cloud Run · GPU-free) 는 GEBD 못 돌림 → shots + STT gap 자동 fallback.
+                fallback = build_fallback_boundaries(
                     (shots_data or {}).get("shots") or [],
-                    duration_for_beats,
-                    shot_types=(scene_type_data or {}).get("shot_types") or [],
-                    on_progress=lambda done, total: _progress("beats", 84 + 1 * done / max(1, total), f"beat 생성 {done}/{total}"),
+                    refined, duration_for_beats,
                 )
+                # workdir 에도 저장 (재개 시 재계산 불필요 · GCS 업로드 자동)
+                save_boundaries(out_dir / "boundaries.json", fallback,
+                                 source="shots+stt_gap", model="fallback", time_unit=1.0)
+                gebd_boundaries = fallback
+                step(f"beat — GEBD 없음 · shots+STT gap fallback {len(fallback)}개")
+            beats_data = build_beats_from_boundaries(
+                gebd_boundaries, refined, duration_for_beats,
+            )
             _save_json(out_dir / "beats.json", beats_data)
             step(f"beat — {len(beats_data.get('beats') or [])}개 생성")
         except Exception as e:
