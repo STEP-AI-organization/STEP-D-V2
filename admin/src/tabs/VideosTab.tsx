@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { fetchMatchExport, fetchOverview, type LearnPair, type OverviewChannel } from "../api";
+import {
+  fetchMatchExport, fetchOverview, fetchViewerSignals,
+  type LearnPair, type OverviewChannel, type ViewerSignalsResponse,
+} from "../api";
 import { fmtDur, fmtLong, nfmt } from "../util";
 
 /**
@@ -88,6 +91,107 @@ function ShortRow({ p }: { p: LearnPair }) {
   );
 }
 
+/** 시청자 목소리 카드 — content_analysis 완료된 롱폼에 대해 comment_signal 결과 렌더.
+ *  카드가 open 될 때 lazy fetch (미열림 상태로는 API 호출 안 함). */
+function ViewerVoiceCard({ videoId }: { videoId: string }) {
+  const [data, setData] = useState<ViewerSignalsResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setErr(null);
+    fetchViewerSignals(videoId)
+      .then((r) => { if (!cancelled) setData(r); })
+      .catch((e) => { if (!cancelled) setErr((e as Error).message); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [videoId]);
+
+  if (loading) {
+    return <div className="vt-viewer loading">시청자 반응 로딩 중…</div>;
+  }
+  if (err) {
+    return <div className="vt-viewer err">시청자 반응 로드 실패: {err}</div>;
+  }
+  if (!data) return null;
+
+  const vs = data.viewer_signals;
+  if (!vs) {
+    return (
+      <div className="vt-viewer empty">
+        🗣️ 시청자 목소리 <span className="vt-viewer-empty-note">— {data.reason || "댓글 분석 없음"}</span>
+      </div>
+    );
+  }
+
+  const moments = vs.top_moments ?? [];
+  const demands = vs.top_demands ?? [];
+  const covered = data.coverage.filter((c) => c.covered).length;
+  const total = data.coverage.length;
+
+  return (
+    <div className="vt-viewer">
+      <div className="vt-viewer-head">
+        <b>🗣️ 시청자 목소리</b>
+        {vs.dominant_emotion && (
+          <span className="vt-viewer-emotion">감정 · {vs.dominant_emotion}</span>
+        )}
+        {total > 0 && (
+          <span className={`vt-viewer-cov ${covered === total ? "full" : covered > 0 ? "partial" : "none"}`}>
+            시청자 지목 시간 커버 {covered}/{total}
+          </span>
+        )}
+      </div>
+      {moments.length > 0 && (
+        <div className="vt-viewer-block">
+          <div className="vt-viewer-label">지목 순간 (❤ 순)</div>
+          <ul className="vt-viewer-list">
+            {moments.slice(0, 4).map(([text, likes], i) => (
+              <li key={i}>
+                <span className="vt-viewer-likes">{nfmt(likes)}❤</span>
+                <span className="vt-viewer-text">{text}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {data.coverage.length > 0 && (
+        <div className="vt-viewer-block">
+          <div className="vt-viewer-label">시청자 명시 시간</div>
+          <div className="vt-viewer-ts">
+            {data.coverage.map((c, i) => (
+              <span
+                key={i}
+                className={`vt-viewer-chip ${c.covered ? "cov" : "miss"}`}
+                title={c.covered
+                  ? `쇼츠 #${c.byShortRank ?? "?"} 커버 (${c.likes}❤)`
+                  : `미커버 · ${c.likes}❤ · 규칙 강화 필요`}
+              >
+                {c.covered ? "✓" : "⚠"} {c.mmss} <em>{c.likes}❤</em>
+              </span>
+            ))}
+          </div>
+        </div>
+      )}
+      {demands.length > 0 && (
+        <div className="vt-viewer-block">
+          <div className="vt-viewer-label">시청자 요청</div>
+          <ul className="vt-viewer-list">
+            {demands.slice(0, 3).map(([text, likes], i) => (
+              <li key={i}>
+                <span className="vt-viewer-likes">{nfmt(likes)}❤</span>
+                <span className="vt-viewer-text">{text}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function VideoCard({ g }: { g: VideoGroup }) {
   const [open, setOpen] = useState(false);
   return (
@@ -118,6 +222,7 @@ function VideoCard({ g }: { g: VideoGroup }) {
       </button>
       {open && (
         <div className="vt-shorts">
+          <ViewerVoiceCard videoId={g.longVideoId} />
           {g.pairs.map((p) => (
             <ShortRow key={p.pair_id} p={p} />
           ))}

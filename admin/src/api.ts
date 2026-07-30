@@ -165,3 +165,34 @@ export interface OverviewChannel {
 }
 export const fetchOverview = () =>
   req<{ channels: OverviewChannel[] }>("/api/lab/match/overview").then((r) => r.channels);
+
+// ── viewer_signals (시청자 댓글 반응) ────────────────────────────────────────────
+// 2026-07-28. from-youtube 로 임포트된 롱폼의 원본 유튜브 댓글에서 comment_signal.py 가
+// 뽑은 top_moments / dominant_emotion / top_demands / explicit_timestamps. content_analysis
+// 완료된 media 만 값이 있음 (미완이면 viewer_signals: null · reason 필드로 이유 표시).
+export interface ViewerSignals {
+  top_moments?: [string, number][];  // [텍스트, 좋아요]
+  explicit_timestamps?: { mmss: string; likes: number }[];
+  dominant_emotion?: string;
+  top_demands?: [string, number][];
+}
+
+export interface ViewerCoverage {
+  mmss: string;
+  likes: number;
+  secs: number;
+  covered: boolean;
+  byShortRank: number | null;
+}
+
+export interface ViewerSignalsResponse {
+  videoId: string;
+  mediaId?: string;
+  viewer_signals: ViewerSignals | null;
+  shorts: { start: number; end: number; title: string; rank: number | null }[];
+  coverage: ViewerCoverage[];
+  reason?: string;
+}
+
+export const fetchViewerSignals = (videoId: string) =>
+  req<ViewerSignalsResponse>(`/api/lab/videos/${encodeURIComponent(videoId)}/viewer-signals`);

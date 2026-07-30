@@ -253,3 +253,38 @@ video { width: 100%; border-radius: 10px; background: #000; }
 .vt-desc { margin-top: 8px; border-top: 1px dashed var(--border); padding-top: 8px; }
 .vt-scene { font-size: 12px; color: var(--mut); margin: 0 0 4px; line-height: 1.5; }
 .vt-script { font-size: 12px; color: var(--text); margin: 0; line-height: 1.5; opacity: .85; }
+
+/* 시청자 목소리 (2026-07-28) — VideosTab 카드 안. viewer_signals + shorts coverage. */
+.vt-viewer { background: linear-gradient(180deg, #1a1a24 0%, var(--panel2) 100%);
+             border: 1px solid #2a2a3a; border-radius: 9px; padding: 10px 12px;
+             display: flex; flex-direction: column; gap: 8px; }
+.vt-viewer.loading { color: var(--mut2); font-size: 12px; padding: 12px; text-align: center; }
+.vt-viewer.err { color: var(--bad); font-size: 12px; padding: 10px 12px; }
+.vt-viewer.empty { color: var(--mut); font-size: 12px; padding: 10px 12px;
+                   background: var(--panel2); border-color: var(--border); }
+.vt-viewer-empty-note { color: var(--mut2); margin-left: 6px; font-weight: normal; }
+.vt-viewer-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+                  font-size: 12px; color: var(--text); }
+.vt-viewer-head b { color: var(--accent); font-size: 13px; }
+.vt-viewer-emotion { color: var(--warn); background: #2a2410; padding: 2px 8px; border-radius: 6px;
+                     font-weight: 600; font-size: 11px; }
+.vt-viewer-cov { font-size: 11px; padding: 2px 8px; border-radius: 6px; font-weight: 600;
+                 margin-left: auto; }
+.vt-viewer-cov.full { background: #10281a; color: var(--good); }
+.vt-viewer-cov.partial { background: #2a2410; color: var(--warn); }
+.vt-viewer-cov.none { background: #2a1616; color: var(--bad); }
+.vt-viewer-block { display: flex; flex-direction: column; gap: 4px; }
+.vt-viewer-label { font-size: 10px; color: var(--mut2); text-transform: uppercase;
+                   letter-spacing: 0.5px; font-weight: 700; }
+.vt-viewer-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }
+.vt-viewer-list li { display: flex; gap: 8px; align-items: baseline; font-size: 12px; color: var(--text); }
+.vt-viewer-likes { color: var(--mut); font-variant-numeric: tabular-nums;
+                   min-width: 48px; text-align: right; flex-shrink: 0; font-size: 11px; }
+.vt-viewer-text { color: var(--text); line-height: 1.45; }
+.vt-viewer-ts { display: flex; flex-wrap: wrap; gap: 4px; }
+.vt-viewer-chip { font-size: 11px; padding: 2px 7px; border-radius: 6px;
+                  border: 1px solid var(--border); font-variant-numeric: tabular-nums;
+                  display: inline-flex; gap: 4px; align-items: center; }
+.vt-viewer-chip em { color: var(--mut2); font-style: normal; font-size: 10px; }
+.vt-viewer-chip.cov { background: #10281a; color: var(--good); border-color: #1a3a24; }
+.vt-viewer-chip.miss { background: #2a1a10; color: var(--warn); border-color: #4a3018; }
