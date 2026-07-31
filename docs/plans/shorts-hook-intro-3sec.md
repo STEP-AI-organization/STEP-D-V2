@@ -2,6 +2,19 @@
 
 2026-07-31 · 사용자 지시: "쇼츠 안에서 나오는 장면으로 3초 메이킹 및 어그로 · 쇼츠에 들어와서 사용자가 바로 이탈하지 않게 잡아주기 위함".
 
+## 상태 (2026-07-31 · 프로토타입 완성 · 파이프라인 배선 미완)
+
+- **완성**: `tmp/gebd/scripts/` 프로토타입 3종 · 로컬 검증 완료
+  - `pick_hook_beat.py` — 각 shorts 의 beat_ids 중 · **첫 beat 제외** 후 · Gemini 별도 콜로 여성 시청자 잡을 강한 hook beat 하나 선택. shorts.json 에 `hook_beat_id` 추가.
+  - `render_shorts.py` — 9:16 1080x1920 세로 · preroll(hook_beat 첫 3초) + cross-dissolve 0.25s + body(원본 shorts) concat · 상단 pad 에 title 두 줄 · 하단 blur bg.
+  - `shorts_viewer.py` — 렌더된 mp4 embed 하는 HTML 뷰어.
+- **미완 · 배선 필요** (다음 세션):
+  - `pick_hook_beat` 로직을 `core/recommend.py` 의 `propose_shorts_beat_only` 안에 통합 (별도 콜 하나 추가 · hook_beat_id 를 스키마 필드로) · 파이프라인 자동 실행되도록.
+  - 렌더 스텝을 워커 파이프라인에 배선 (또는 편집자 승인 후 서버 렌더).
+  - Web UI · shorts 카드에 hook_intro_caption / hook_beat_id 미리보기·편집.
+
+## 목적
+
 ## 목적
 
 Shorts/Reels 는 **첫 3초 = retention 결정적**. 스크롤 정지·시청 유지의 관문.

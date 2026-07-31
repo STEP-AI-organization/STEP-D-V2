@@ -576,6 +576,11 @@ _CANDIDATE_FIELDS = {
     # Primary hook category (반전/감정고조/돌직구/질문/정보성/웃음/갈등/공감/기타) — used with
     # the program profile's hookWeights to compute a program-fit multiplier.
     "hook": {"type": "STRING"},
+    # 2026-07-31 · 쇼츠 첫 3초 hook intro (docs/plans/shorts-hook-intro-3sec.md).
+    # 목적: retention · 스크롤 정지 · 이탈 방지. Phase 1/2 · _SHORTS_FROM_BEATS_SCHEMA 다 공통.
+    "hook_quote": {"type": "STRING"},       # 실 대사 원문 인용 (STT 그대로 · 30자 이내)
+    "hook_time_sec": {"type": "NUMBER"},    # hook 대사 시각 (쇼츠 시작 상대 · 첫 5초 이내 권장)
+    "hook_intro_caption": {"type": "STRING"},  # 어그로 편집자막 (20자 · "충격 고백!" 톤)
 }
 
 
@@ -730,6 +735,15 @@ p=payoff, c=completeness — 각 0-10)은 Phase 1에서 매긴 근거값이다.
 - 3축을 다시 채점하라 (병합·재판단 반영). Phase 1 값과 달라도 된다 — 이번 시야는 전체 영상이다.
 - 각 항목: rank(1=최고), start, end, title, reason, hook_strength/payoff/completeness,
   scene_from/scene_to, tags, hook(반전/감정고조/돌직구/질문/정보성/웃음/갈등/공감/기타 중 하나).
+
+**⭐ 첫 3초 Hook Intro (필수 · retention · docs/plans/shorts-hook-intro-3sec.md) ⭐**
+쇼츠에 들어와서 시청자가 바로 이탈하지 않게 · 3필드:
+- hook_quote: 이 쇼츠 안 대사 중 · 첫 3초 attention 사로잡을 원문 한 문장 (STT 그대로 · 30자 이내 · 지어내지 마)
+  · 우선: 인용문·폭로·직업공개·반전 > 질문·리액션 > 웃음·감정 폭발
+- hook_time_sec: 그 대사가 나오는 시각 (초 · 쇼츠 start 기준 상대 · 첫 5초 이내 권장)
+- hook_intro_caption: 그 대사를 · 스크롤 멈추게 만들 어그로 편집자막으로 다듬음 (20자 이내)
+  · 톤: 어그로·궁금증·충격 · 예 "충격 고백!" "이거 진짜야?" "설마?"
+  · 금지: 담백한 요약 · 이유 안 주는 텍스트
 
 {_AXES_PROMPT}"""
     resp = call_with_retry(lambda: client.models.generate_content(
@@ -3416,6 +3430,11 @@ title (폴백) 은 두 줄 합쳐 한 줄로 자연스럽게.
             "appeal": _appeal_from_axes(derived) or 3,
             "score100": _axes_score(derived),
             "hook": hook,
+            # 2026-07-31 · 쇼츠 첫 3초 hook intro (docs/plans/shorts-hook-intro-3sec.md).
+            # Gemini 응답 필드를 그대로 흘려보냄. 없으면 빈 값 · 나중에 편집자가 채움.
+            "hook_quote": (s.get("hook_quote") or "").strip()[:60],
+            "hook_time_sec": (float(s["hook_time_sec"]) if isinstance(s.get("hook_time_sec"), (int, float)) else None),
+            "hook_intro_caption": (s.get("hook_intro_caption") or "").strip()[:40],
             "tags": tags,
             "characters": chars_set,
             "beat_ids": ids,
