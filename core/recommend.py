@@ -2990,6 +2990,11 @@ _SHORTS_FROM_BEATS_SCHEMA = {
                     "title_line2": {"type": "STRING"},  # 하단 · 핵심 폭로·반전 (컬러 강조)
                     "title_line2_color": {"type": "STRING"},  # blue|red|yellow|green (기본 blue)
                     "hook": {"type": "STRING"},
+                    # 2026-07-31 · 쇼츠 첫 3초 hook intro (docs/plans/shorts-hook-intro-3sec.md).
+                    # 목적: retention · 스크롤 정지 · 시청자 이탈 방지. 3필드:
+                    "hook_quote": {"type": "STRING"},  # 실 대사 인용 (STT 원문 · 30자 이내 · 검증 가능)
+                    "hook_time_sec": {"type": "NUMBER"},  # hook 대사 시각 (초 · 쇼츠 시작 상대)
+                    "hook_intro_caption": {"type": "STRING"},  # 어그로 편집자막 (20자 · '충격 고백!' '이거 진짜?' 톤)
                     "tags": {"type": "ARRAY", "items": {"type": "STRING"}},
                     "why": {"type": "STRING"},
                 },
@@ -3225,11 +3230,24 @@ title 은 폴백용 한 줄 · **title_line1 + title_line2** 를 필수로 뽑�
 
 title (폴백) 은 두 줄 합쳐 한 줄로 자연스럽게.
 
+**⭐ 첫 3초 Hook Intro (docs/plans/shorts-hook-intro-3sec.md) ⭐**:
+쇼츠에 들어와서 시청자가 바로 이탈하지 않게 · 첫 3초 attention 을 사로잡을 hook 3필드:
+
+- **hook_quote**: 이 쇼츠 안 대사 중 · 가장 임팩트 있는 한 문장 원문 그대로 (STT 그대로 · 30자 이내)
+    · 반드시 실제로 쇼츠 시간 범위 안 대사 중에서 · 지어내지 마
+    · 우선순위: 인용문·폭로·직업공개·반전 > 질문·리액션 > 웃음·감정 폭발
+- **hook_time_sec**: 그 대사가 나오는 시각 (초 · 쇼츠 시작 기준 상대 시각 · 첫 5초 이내 권장)
+- **hook_intro_caption**: 그 대사를 · 시청자가 스크롤 멈추게 만들 어그로 편집자막으로 다듬은 것 (20자 이내)
+    · 톤: 어그로·궁금증·충격 · 예 "충격 고백!" "이거 진짜야?" "설마?" "잠깐만!"
+    · 금지: 담백한 요약 · 시청자에게 이유를 안 주는 텍스트
+
 **반환 형식** (JSON):
 {{"shorts":[
   {{"beat_ids":[3,4], "title":"헬스장 사장인 줄? 7년 차 한의사의 반전",
     "title_line1":"헬스장 사장인 줄?", "title_line2":"7년 차 한의사의 반전", "title_line2_color":"yellow",
-    "hook":"반전", "tags":["직업공개","한의사"],
+    "hook":"반전",
+    "hook_quote":"저 사실 한의사예요", "hook_time_sec":2.4, "hook_intro_caption":"충격 고백!",
+    "tags":["직업공개","한의사"],
     "why":"b3에서 원균이 한의사 자기소개, b4에서 다른 출연자 놀란 리액션. 완결 흐름."}}
 ]}}
 """
