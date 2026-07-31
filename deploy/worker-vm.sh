@@ -11,8 +11,11 @@
 # Idempotent: safe to re-run to pick up new code.
 set -euo pipefail
 
-REGION="${REGION:-us-central1}"
-SQL_INSTANCE="${SQL_INSTANCE:-step-d:us-central1:stepd-db}"
+REGION="${REGION:-asia-northeast3}"
+SQL_INSTANCE="${SQL_INSTANCE:-step-d:asia-northeast3:stepd-db}"
+# On-demand VM 자동 종료 임계 (초). pending 잡 == 0 이 이 시간 지속되면 shutdown.
+# Cloud Scheduler wake 라우트가 필요할 때 다시 부팅. 0 으로 두면 상시 모드.
+IDLE_SHUTDOWN_SEC="${IDLE_SHUTDOWN_SEC:-600}"
 # Repo moved orgs 2026-07-16 (STEP-AI-official → STEP-AI-organization); the old default silently
 # broke fresh provisioning. Matches `git remote -v`.
 REPO_URL="${REPO_URL:-https://github.com/STEP-AI-organization/STEP-D-V2.git}"
@@ -119,8 +122,72 @@ sudo systemctl disable --now stepd-worker.service 2>/dev/null || true
 sudo systemctl enable stepd-worker-youtube.service stepd-worker-content.service
 sudo systemctl restart stepd-worker-youtube.service stepd-worker-content.service
 
+
+# On-demand 모드 (IDLE_SHUTDOWN_SEC > 0) · pending 잡 == 0 이 지속되면 VM shutdown.
+# Cloud Scheduler → /api/admin/worker-vm/wake → gcloud compute instances start 로 재부팅.
+# gebd.detect 는 별 VM (GPU · deploy/gebd-vm.sh) · content/youtube 잡만 감시.
+if [ "${IDLE_SHUTDOWN_SEC}" != "0" ]; then
+  echo "==> Auto-shutdown daemon (idle ${IDLE_SHUTDOWN_SEC}s)"
+  sudo tee /usr/local/bin/worker-idle-shutdown.sh >/dev/null <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+IDLE=${IDLE_SHUTDOWN_SEC:-600}
+COUNT_FILE=/var/tmp/worker-idle-count
+touch "$COUNT_FILE"
+while true; do
+  # content · youtube 잡 (GEBD 는 별 VM 이라 제외). status pending or running 있으면 idle 아님.
+  PENDING=$(psql -h 127.0.0.1 -U stepd -d stepd -tAc \
+    "SELECT COUNT(*) FROM job_queue
+     WHERE type IN ('content.analyze','youtube.download','video.analyze','channel.analyze',
+                    'video.comments','video.hotwatch','distribution.publish',
+                    'match.align','match.segment','match.learn')
+     AND status IN ('pending','running')" 2>/dev/null || echo -1)
+  if [ "$PENDING" = "0" ]; then
+    NOW=$(date +%s)
+    IDLE_SINCE=$(cat "$COUNT_FILE" 2>/dev/null || echo "$NOW")
+    if [ -z "$IDLE_SINCE" ] || [ "$IDLE_SINCE" = "0" ]; then
+      echo "$NOW" > "$COUNT_FILE"
+    else
+      DIFF=$((NOW - IDLE_SINCE))
+      if [ "$DIFF" -ge "$IDLE" ]; then
+        logger -t worker-idle "shutdown after ${DIFF}s idle (threshold ${IDLE}s)"
+        /sbin/shutdown -h now
+        exit 0
+      fi
+    fi
+  else
+    echo "0" > "$COUNT_FILE"
+  fi
+  sleep 60
+done
+EOF
+  sudo chmod +x /usr/local/bin/worker-idle-shutdown.sh
+
+  sudo tee /etc/systemd/system/worker-idle-shutdown.service >/dev/null <<EOF
+[Unit]
+Description=stepd-worker VM auto-shutdown daemon (idle >${IDLE_SHUTDOWN_SEC}s)
+After=cloud-sql-proxy.service
+Requires=cloud-sql-proxy.service
+
+[Service]
+Environment=IDLE_SHUTDOWN_SEC=${IDLE_SHUTDOWN_SEC}
+ExecStart=/usr/local/bin/worker-idle-shutdown.sh
+Restart=always
+RestartSec=30
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+EOF
+  sudo systemctl daemon-reload
+  sudo systemctl enable --now worker-idle-shutdown.service
+fi
+
 echo
 echo "==> Done. Two worker lanes running on this VM."
-echo "    youtube logs:  sudo journalctl -u stepd-worker-youtube -f"
-echo "    content logs:  sudo journalctl -u stepd-worker-content -f"
-echo "    status:        sudo systemctl status 'stepd-worker-*'"
+echo "    youtube logs:      sudo journalctl -u stepd-worker-youtube -f"
+echo "    content logs:      sudo journalctl -u stepd-worker-content -f"
+echo "    idle daemon logs:  sudo journalctl -u worker-idle-shutdown -f"
+echo "    status:            sudo systemctl status 'stepd-worker-*'"
+echo "    idle shutdown:     ${IDLE_SHUTDOWN_SEC}s (0 이면 상시 모드)"

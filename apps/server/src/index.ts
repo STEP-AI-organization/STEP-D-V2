@@ -3585,6 +3585,47 @@ app.post("/api/youtube/pipeline/run/:channelId", async (c) => {
 /** Queue depth — the quickest way to tell whether the worker VM is alive. */
 app.get("/api/queue/stats", async (c) => c.json(await queueStats()));
 
+/**
+ * On-demand VM 부팅 · Cloud Scheduler 가 매 3분 호출.
+ * pending content/youtube 잡 있으면 stepd-worker VM start (idempotent · 이미 RUNNING 이면 no-op).
+ * GEBD 잡은 별 VM (stepd-gebd · deploy/gebd-vm.sh · 별 라우트) 이라 여기서 제외.
+ *
+ * 인증: Cloud Scheduler OIDC 또는 admin token 헤더 (Cloud Run IAM 으로 게이팅).
+ * 필요 IAM: Cloud Run SA 에 roles/compute.instanceAdmin.v1 부여 (VM start 권한).
+ *
+ * docs/plans/gce-worker-restore.md 참조.
+ */
+app.post("/api/admin/worker-vm/wake", async (c) => {
+  const zone = process.env.WORKER_VM_ZONE || "asia-northeast3-c";
+  const instance = process.env.WORKER_VM_NAME || "stepd-worker";
+  const stats = await queueStats();
+  // queueStats 는 type 별 pending count 를 반환한다고 가정 · 모든 content/youtube 계열 합산
+  // GEBD 는 다른 VM 이라 제외.
+  const excludedTypes = new Set(["gebd.detect"]);
+  let pending = 0;
+  const perType = (stats as any)?.pending_by_type || {};
+  if (perType && typeof perType === "object") {
+    for (const [t, n] of Object.entries(perType)) {
+      if (!excludedTypes.has(t)) pending += Number(n) || 0;
+    }
+  } else {
+    // fallback: 전체 pending 을 그대로 (gebd 는 나중에 별 VM 자체 트리거로 커버)
+    pending = Number((stats as any)?.pending ?? 0);
+  }
+  if (pending === 0) {
+    return c.json({ waked: false, reason: "no pending jobs", pending });
+  }
+  const { spawnSync } = await import("node:child_process");
+  const r = spawnSync("gcloud", [
+    "compute", "instances", "start", instance,
+    "--zone", zone, "--async",
+  ], { encoding: "utf8" });
+  if (r.status !== 0) {
+    return c.json({ waked: false, error: (r.stderr || r.stdout || "").slice(0, 400), pending }, 500);
+  }
+  return c.json({ waked: true, instance, zone, pending });
+});
+
 // ── ops/diagnostics: raw queue + per-media analysis (superadmin dashboard /ops) ──
 /** Individual jobs, newest activity first — the live view of what the worker is doing. */
 app.get("/api/admin/jobs", async (c) => {
