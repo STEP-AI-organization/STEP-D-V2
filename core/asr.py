@@ -32,10 +32,11 @@ from typing import Optional
 
 from .retry import call_with_retry, is_transient
 
-STT_PROVIDER = (os.environ.get("STT_PROVIDER") or "gemini").lower()
-# Auto-fallback to faster-whisper when the primary (Gemini) yields nothing. On by default;
-# STT_FALLBACK=off|none|0 disables it (then a Gemini failure just means no transcript).
-STT_FALLBACK = (os.environ.get("STT_FALLBACK") or "whisper").lower()
+STT_PROVIDER = (os.environ.get("STT_PROVIDER") or "soniox").lower()
+# 2026-07-31: Soniox v5 async 를 default 로 전환 (STT + speaker diarize 정확도·비용 최적).
+# STT_FALLBACK 은 default off — 로컬 whisper 경로 죽임 (GPU 미보유 워커에서도 동일 스택).
+# Soniox 아웃티지 대응이 필요하면 STT_FALLBACK=whisper 로 명시 켜기 (레거시 경로).
+STT_FALLBACK = (os.environ.get("STT_FALLBACK") or "off").lower()
 _FALLBACK_ON = STT_FALLBACK not in ("off", "none", "0", "false", "")
 
 # Gemini provider config (Vertex AI, Seoul — audio is personal data, keep it in-country)

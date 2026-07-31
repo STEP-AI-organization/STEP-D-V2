@@ -369,6 +369,36 @@ def analyze(
     timed("refine", ts)
     _progress("refine", 38, "자막 정제 완료")
 
+    # 2.4) chyron per-seg + Layer 1 STT 후처리 (2026-07-31 신설 · 확정 스택).
+    # 각 refined 세그의 시작 프레임을 Gemini Vision 으로 살펴 화면 이름 태그를 읽고,
+    # speaker 라벨(SPEAKER_XX / 발화자 N / '') 를 실명으로 rewrite. 이어서 짧은 세그 흡수·
+    # (empty) 인접 계승·접속사 계승. audio-only diarize 한계 (여성 유사 톤·짧은 리액션) 를
+    # 화면 신호로 정정 · false split/merge 자동 해소. env RUN_CHYRON_PER_SEG=0 로 스킵.
+    if os.environ.get("RUN_CHYRON_PER_SEG", "1") != "0":
+        ts = time.time()
+        try:
+            from .chyron_scan import scan_per_seg
+            _progress("chyron", 38, "화면 이름 태그 세그별 스캔")
+            step("chyron per-seg (화면 이름 태그 → speaker 실명 rewrite)…")
+            refined, ps_stats = scan_per_seg(video_path, refined, workers=6, prefer_start=True)
+            step(f"  {ps_stats.get('assigned', 0)}/{ps_stats.get('scanned', 0)} 세그에 실명 부여 · "
+                 f"unique={ps_stats.get('unique_names', 0)}")
+            _save_json(out_dir / "refined.json", refined)
+        except Exception as e:
+            step(f"  (chyron per-seg 스킵: {str(e)[:120]})")
+        timed("chyron_per_seg", ts)
+
+    if os.environ.get("RUN_SPEAKER_POSTPROC", "1") != "0":
+        ts = time.time()
+        try:
+            from .speaker_postproc import postprocess as _sp_postproc
+            refined, pp_stats = _sp_postproc(refined)
+            step(f"  speaker 후처리 (짧은 흡수·empty 계승·접속사): {pp_stats}")
+            _save_json(out_dir / "refined.json", refined)
+        except Exception as e:
+            step(f"  (speaker 후처리 스킵: {str(e)[:120]})")
+        timed("speaker_postproc", ts)
+
     # 2.5) 얼굴 검출·클러스터링 (2026-07-22 신설 · 2026-07-29 STT 후 병렬).
     # 백그라운드 시작한 faces_future 가 있으면 여기서 join. 없으면 캐시 재사용 또는 실패 처리.
     # faces 는 세그 start/end 만 쓰고 refined 를 mutate 하지 않으므로 refine 과 병렬 안전.
@@ -752,7 +782,11 @@ def analyze(
         if _swaps:
             step(f"  짧은 발화 상속 · {_swaps} seg 병합")
 
-        # (b) 익명 라벨 → S1/S2/... 로 정규화 · 등장 순서 기준
+        # (b) 익명 라벨 → S1/S2/... 로 정규화 · 등장 순서 기준.
+        # 2026-07-31: chyron per-seg 스테이지가 이미 실명(한글) 부여했으면 speaker_name 유지.
+        # 실명 판정 = 한글 2자 이상. anon 라벨(SPEAKER_XX / 발화자 N / '') 만 S 라벨 부여.
+        import re as _re
+        _KOREAN_NAME = _re.compile(r"^[가-힯]{2,}$")
         _id_map: dict[str, str] = {}
         for seg in refined:
             sp = (seg.get("speaker") or "").strip()
@@ -763,12 +797,13 @@ def analyze(
             if sp not in _id_map:
                 _id_map[sp] = f"S{len(_id_map) + 1}"
             seg["speaker_id"] = _id_map[sp]
-            seg["speaker_name"] = ""  # v1 미확정 · 편집자 승인 후 채움
-        # beats.characters 도 S 라벨로 갱신 (있으면)
+            # 실명 (한글 이름) 이면 그대로 speaker_name 유지 · 아니면 미확정
+            seg["speaker_name"] = sp if _KOREAN_NAME.match(sp) else ""
+        # beats.characters 도 S 라벨로 갱신 · 실명은 speaker_names 에 유지
         for b in beats_list or []:
             chars = b.get("characters") or []
             b["speaker_ids"] = [_id_map.get(c, c) for c in chars if c]
-            b["speaker_names"] = []  # v1 미확정
+            b["speaker_names"] = [c for c in chars if c and _KOREAN_NAME.match(c)]
         _save_json(out_dir / "refined.json", refined)
         if beats_list:
             _save_json(out_dir / "beats.json", beats_data)

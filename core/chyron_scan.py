@@ -113,12 +113,13 @@ def _strip_particle(name: str) -> str:
 def _detect_names(client, config, image_bytes: bytes) -> list[str]:
     global _first_err_logged
     from google.genai import types
+    from .retry import call_with_retry
     try:
-        resp = client.models.generate_content(
+        resp = call_with_retry(lambda: client.models.generate_content(
             model=MODEL,
             contents=[types.Part.from_bytes(data=image_bytes, mime_type="image/jpeg"), PROMPT],
             config=config,
-        )
+        ))
         data = json.loads(resp.text or "{}")
         raw_names = [str(n).strip() for n in (data.get("names") or []) if isinstance(n, str) and n.strip()]
         # 조사·존칭 잘라내기 (예 "민경은" → "민경") · 대사 오탐 정리
@@ -412,11 +413,12 @@ def scan_per_seg(video_path: str, segments: list[dict], *,
             "- 대사 자체를 이름으로 넣지 마라."
         )
         try:
-            resp = client.models.generate_content(
+            from .retry import call_with_retry
+            resp = call_with_retry(lambda: client.models.generate_content(
                 model=MODEL,
                 contents=[types.Part.from_bytes(data=frame.read_bytes(), mime_type="image/jpeg"), prompt],
                 config=config,
-            )
+            ))
             data = json.loads(resp.text or "{}")
             name = str(data.get("name") or "").strip()
             name = _strip_particle(name)
