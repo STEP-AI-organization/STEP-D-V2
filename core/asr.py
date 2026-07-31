@@ -79,10 +79,18 @@ def transcribe(
     on_progress(done, total) fires per completed window (gemini provider only).
 
     STT_PROVIDER 옵션:
-      - "whisper": faster-whisper 단독
-      - "hybrid" : Gemini text + whisper timestamp 병렬 (2026-07-24 신규 · 정확한 시각)
-      - 기본     : Gemini 단독 + 실패 시 whisper fallback
+      - "whisperx": faster-whisper + WAV2VEC2 word align + PyAnnote 3.1 diarize (권장 · .venv310)
+      - "whisper" : faster-whisper 단독 (word_timestamps=True)
+      - "hybrid"  : Gemini text + whisper timestamp 병렬
+      - 기본      : Gemini 단독 + 실패 시 whisper fallback
     """
+    if STT_PROVIDER == "soniox":
+        return _transcribe_soniox(audio_path, language)
+    if STT_PROVIDER == "whisperx":
+        return _transcribe_whisperx(
+            audio_path, language, model_name, device, compute_type, beam_size,
+            expected_speakers=expected_speakers,
+        )
     if STT_PROVIDER == "whisper":
         r = _transcribe_whisper(audio_path, language, model_name, device, compute_type, beam_size)
         return _apply_vad_postprocess(audio_path, r, expected_speakers=expected_speakers)
@@ -299,31 +307,37 @@ def _transcribe_gemini(audio_or_video: str, language: str, on_progress=None) -> 
 
 # ── Provider: faster-whisper (local GPU) ────────────────────────────────────────
 
+def _preload_cuda_dlls():
+    """Windows에서 CTranslate2/faster-whisper가 cuDNN 8을 찾도록 미리 CDLL 로드.
+    add_dll_directory·PATH 모두 무시하는 CTranslate2 특성 대응 · site-packages의
+    nvidia/cudnn/bin, nvidia/cublas/bin DLL을 ctypes.CDLL로 preload한다."""
+    if os.name != "nt":
+        return
+    try:
+        import ctypes, importlib
+        for pkg_name in ("nvidia.cudnn", "nvidia.cublas"):
+            try:
+                pkg = importlib.import_module(pkg_name)
+                bin_dir = os.path.join(os.path.dirname(pkg.__file__), "bin")
+                if not os.path.isdir(bin_dir):
+                    continue
+                for fn in os.listdir(bin_dir):
+                    if fn.endswith(".dll"):
+                        try:
+                            ctypes.CDLL(os.path.join(bin_dir, fn))
+                        except OSError:
+                            pass  # dependency 순서 이슈 · 뒤에서 다시 시도됨
+            except Exception:
+                continue
+    except Exception:
+        pass
+
+
 def _transcribe_whisper(
     audio_path: str, language: str, model_name: str, device: str, compute_type: str, beam_size: int,
 ) -> dict:
-    # CTranslate2가 cuDNN 8을 요구 · Windows에선 자체 DLL 검색이 site-packages를 못 봐서
-    # cudnn_ops_infer64_8.dll not found로 die. add_dll_directory·PATH 다 무시 · ctypes로
-    # 미리 명시 로드하면 프로세스 DLL cache에 붙어 이후 CTranslate2가 찾음.
-    if os.name == "nt" and device == "cuda":
-        try:
-            import ctypes, importlib
-            for pkg_name in ("nvidia.cudnn", "nvidia.cublas"):
-                try:
-                    pkg = importlib.import_module(pkg_name)
-                    bin_dir = os.path.join(os.path.dirname(pkg.__file__), "bin")
-                    if not os.path.isdir(bin_dir):
-                        continue
-                    for fn in os.listdir(bin_dir):
-                        if fn.endswith(".dll"):
-                            try:
-                                ctypes.CDLL(os.path.join(bin_dir, fn))
-                            except OSError:
-                                pass  # dependency 순서 이슈 · 뒤에서 다시 시도됨
-                except Exception:
-                    continue
-        except Exception:
-            pass
+    if device == "cuda":
+        _preload_cuda_dlls()
 
     from faster_whisper import WhisperModel  # lazy: not installed on the GPU-less worker
 
@@ -370,6 +384,364 @@ def _transcribe_whisper(
         "language": info.language,
         "language_probability": info.language_probability,
     }
+
+
+# ── Provider: WhisperX (STT + word-align + PyAnnote 3.1 diarize) ────────────────
+#
+# 2026-07-31 배선 — 사용자 지시("우리 WHISPERX쓰는데 · 코드배선 진행").
+# ECAPA embedding + KMeans 클러스터링(_diarize_audio)의 화자분리 정확도 부족 문제를
+# WhisperX 표준 파이프라인(PyAnnote 3.1)으로 대체. word-level alignment도 함께 얻는다.
+#
+# 사용법:
+#   1) STT_PROVIDER=whisperx (env)
+#   2) HF_TOKEN=hf_... (env) · pyannote/speaker-diarization-3.1 · segmentation-3.0 gate accept 필수
+#   3) python 실행은 `core/.venv310/Scripts/python.exe` (Python 3.10 · whisperx 설치 완료)
+#
+# HF_TOKEN 없으면 STT+align만 수행하고 speaker는 비워둔다 (후속 Phase 1 S1/S2 정규화가
+# 빈 speaker를 하나의 화자로 취급해 진행 · pipeline 은 죽지 않음).
+
+def _transcribe_whisperx(
+    audio_path: str,
+    language: str = "ko",
+    model_name: str = "large-v3",
+    device: str = "cuda",
+    compute_type: str = "float16",
+    beam_size: int = 5,
+    expected_speakers: int | None = None,
+) -> dict:
+    """WhisperX pipeline: transcribe → word alignment → diarization.
+
+    반환 shape는 기존 STT 계약과 동일:
+        {"segments": [{start,end,text,words,speaker,align_source}], "language": "ko"}
+
+    speaker 값은 "SPEAKER_00"/"SPEAKER_01"/... (PyAnnote 라벨 · analyze.py Phase 1이
+    S1/S2로 정규화). diarize 스킵 시 speaker=""로 남김.
+    """
+    # PyTorch 2.6부터 torch.load의 weights_only 기본값이 True로 바뀌면서 pyannote
+    # checkpoint(omegaconf.ListConfig 포함) 로드가 UnpicklingError로 실패한다. HF에서
+    # 우리가 gate-accept한 공식 pyannote 모델만 쓰므로 안전 · monkey-patch로 우회.
+    import torch as _torch
+    if not getattr(_torch.load, "_stepd_patched", False):
+        _orig_torch_load = _torch.load
+        def _patched_torch_load(*a, **kw):
+            # 호출자가 weights_only=True를 명시해도 override (pyannote/lightning은
+            # 이 값을 강제로 넣어 우리 setdefault를 무력화한다). pyannote 공식 checkpoint만
+            # 다루는 신뢰된 경로.
+            kw["weights_only"] = False
+            return _orig_torch_load(*a, **kw)
+        _patched_torch_load._stepd_patched = True
+        _torch.load = _patched_torch_load
+
+    try:
+        import whisperx  # lazy · 설치 안 됐으면 즉시 에러 (fallback X · 사용자가 명시적으로 켰을 때만)
+    except Exception as e:
+        raise RuntimeError(
+            f"whisperx 미설치: {e}. `core/.venv310/Scripts/python.exe`로 실행 중인지 확인."
+        )
+
+    import torch
+    if device == "cuda" and not torch.cuda.is_available():
+        print("   [whisperx] CUDA 없음 → CPU int8 폴백")
+        device = "cpu"
+        compute_type = "int8"
+    elif device != "cuda" and compute_type == "float16":
+        compute_type = "int8"  # CPU는 float16 미지원
+
+    # Windows CTranslate2 cuDNN 8 검색 실패 방지 (faster-whisper와 동일 이슈)
+    if device == "cuda":
+        _preload_cuda_dlls()
+
+    # WhisperX는 numpy array를 원함 (내부 sr=16000)
+    audio = whisperx.load_audio(audio_path)
+
+    # 1) STT (faster-whisper backend · WhisperX 래퍼)
+    asr_options = {
+        "beam_size": beam_size,
+        "condition_on_previous_text": False,   # phrase-repeat loops 방지
+        "hallucination_silence_threshold": 2.0,
+        "no_repeat_ngram_size": 3,
+    }
+    try:
+        stt_model = whisperx.load_model(
+            model_name, device=device, compute_type=compute_type,
+            language=language, asr_options=asr_options,
+        )
+    except Exception as e:
+        # GPU 실패 (cuDNN 등) → CPU int8 폴백
+        if device == "cuda":
+            print(f"   [whisperx] GPU 로드 실패 ({str(e)[:80]}) → CPU int8 폴백")
+            device = "cpu"; compute_type = "int8"
+            stt_model = whisperx.load_model(
+                model_name, device=device, compute_type=compute_type,
+                language=language, asr_options=asr_options,
+            )
+        else:
+            raise
+
+    result = stt_model.transcribe(audio, batch_size=16, language=language)
+    print(f"   [whisperx] STT 완료 · {len(result.get('segments', []))} 세그")
+    del stt_model
+    if device == "cuda":
+        torch.cuda.empty_cache()
+
+    # 2) Word-level alignment (WAV2VEC2 for ko)
+    try:
+        align_model, align_meta = whisperx.load_align_model(
+            language_code=language, device=device,
+        )
+        result = whisperx.align(
+            result["segments"], align_model, align_meta, audio, device,
+            return_char_alignments=False,
+        )
+        del align_model
+        if device == "cuda":
+            torch.cuda.empty_cache()
+        print(f"   [whisperx] word align 완료")
+    except Exception as e:
+        print(f"   [whisperx] align 실패 ({str(e)[:120]}) · segment-level만 사용")
+
+    # 3) Diarization (PyAnnote 3.1 · HF_TOKEN 필요)
+    hf_token = os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+    if hf_token:
+        try:
+            from whisperx.diarize import DiarizationPipeline  # top-level 미노출 (3.4.x)
+            diarize_model = DiarizationPipeline(
+                use_auth_token=hf_token, device=device,
+            )
+            kwargs: dict = {}
+            if expected_speakers and expected_speakers >= 2:
+                # tight bound — loose(±2)로 두면 짧은 clip에서 화자 수 잘못 추정.
+                # cast 등록 인원이 정답이라 가정 · +1 만 여유(host/narrator 커버).
+                kwargs["min_speakers"] = expected_speakers
+                kwargs["max_speakers"] = expected_speakers + 1
+            diarize_df = diarize_model(audio, **kwargs)
+            result = whisperx.assign_word_speakers(diarize_df, result)
+            try:
+                n_spk = len(set(diarize_df["speaker"])) if hasattr(diarize_df, "__getitem__") else 0
+            except Exception:
+                n_spk = 0
+            print(f"   [whisperx] diarize 완료 · {n_spk}명")
+        except Exception as e:
+            print(f"   [whisperx] diarize 실패 ({str(e)[:150]}) · speaker 없이 진행")
+    else:
+        print("   [whisperx] HF_TOKEN 없음 · diarize 스킵 (STT+align만)")
+
+    # 4) 기존 STT 계약 shape으로 변환
+    segments = []
+    for seg in result.get("segments", []):
+        words = []
+        for w in (seg.get("words") or []):
+            try:
+                words.append({
+                    "word": w.get("word") or w.get("text") or "",
+                    "start": float(w.get("start", 0)) if w.get("start") is not None else 0.0,
+                    "end": float(w.get("end", 0)) if w.get("end") is not None else 0.0,
+                    "probability": float(w.get("score", 1.0)) if w.get("score") is not None else 1.0,
+                    "speaker": w.get("speaker") or "",
+                })
+            except (TypeError, ValueError):
+                continue
+        try:
+            st = float(seg.get("start", 0)); en = float(seg.get("end", 0))
+        except (TypeError, ValueError):
+            continue
+        segments.append({
+            "start": round(st, 3),
+            "end": round(en, 3),
+            "text": (seg.get("text") or "").strip(),
+            "words": words,
+            "speaker": seg.get("speaker") or "",  # "SPEAKER_00"/... or ""
+            "align_source": "whisperx",
+        })
+
+    # 5) PyAnnote diarize 실패 시(HF gate 미승인 등) ECAPA로 폴백해서 최소한
+    #    "다른 사람은 구분" 을 보장. speaker 필드가 전부 비어있을 때만 실행.
+    #    (사용자 조건: 최소한 다른 사람인지는 인식돼야 이름을 붙일 수 있음)
+    if segments and all(not s.get("speaker") for s in segments):
+        try:
+            turns = _diarize_audio(audio_path, segments, expected_speakers=expected_speakers)
+            if turns:
+                # turns는 이미 각 segment 인덱스별 speaker(발화자 N)를 부여한 결과
+                # (segments 순서 유지 · _diarize_audio가 순서 보존). 다시 병합.
+                seg_map = {(round(t["start"], 3), round(t["end"], 3)): t["speaker"] for t in turns}
+                assigned = 0
+                for s in segments:
+                    key = (round(s["start"], 3), round(s["end"], 3))
+                    if key in seg_map:
+                        s["speaker"] = seg_map[key]
+                        assigned += 1
+                print(f"   [whisperx] ECAPA 폴백 diarize 완료 · {assigned}/{len(segments)} 세그에 speaker 부여")
+        except Exception as e:
+            print(f"   [whisperx] ECAPA 폴백 실패 ({str(e)[:120]}) · speaker 비워둠")
+
+    return {"segments": segments, "language": language}
+
+
+# ── Provider: Soniox (async cloud STT + diarization) ───────────────────────────
+#
+# 2026-07-31 배선 — 사용자 지시. 상용 클라우드 STT · 한국어 지원 + 화자분리.
+# env: SONIOX_API_KEY (Bearer token). 파일 업로드 → 비동기 전사 → 폴링 → 결과.
+# Async API doc: https://soniox.com/docs/stt/async_transcription
+#
+# 결과 shape을 기존 STT 계약으로 매핑:
+#   Soniox tokens (word-level): [{text, start_ms, end_ms, speaker, confidence}]
+#   → segments: 같은 speaker 연속 word 를 하나의 utterance 로 뭉침 (긴 gap>1s 도 분할)
+
+_SONIOX_BASE = "https://api.soniox.com"
+_SONIOX_MODEL = os.environ.get("SONIOX_MODEL") or "stt-async-v5"
+_SONIOX_POLL_SEC = 2.0
+_SONIOX_TIMEOUT_SEC = 900  # 15분 대기 상한
+
+
+def _transcribe_soniox(audio_path: str, language: str = "ko") -> dict:
+    import requests
+    import time as _time
+
+    api_key = os.environ.get("SONIOX_API_KEY")
+    if not api_key:
+        raise RuntimeError("SONIOX_API_KEY 환경변수 미설정")
+
+    headers = {"Authorization": f"Bearer {api_key}"}
+
+    # 1) 파일 업로드
+    print("   [soniox] 업로드 시작...")
+    with open(audio_path, "rb") as f:
+        r = requests.post(
+            f"{_SONIOX_BASE}/v1/files",
+            headers=headers,
+            files={"file": (Path(audio_path).name, f)},
+            timeout=300,
+        )
+    r.raise_for_status()
+    file_id = r.json().get("id")
+    if not file_id:
+        raise RuntimeError(f"Soniox upload 응답 이상: {r.text[:200]}")
+    print(f"   [soniox] 업로드 완료 · file_id={file_id[:8]}...")
+
+    # 2) 전사 요청 (diarization 켬)
+    body = {
+        "file_id": file_id,
+        "model": _SONIOX_MODEL,
+        "language_hints": [language] if language else [],
+        "enable_speaker_diarization": True,
+        "enable_language_identification": False,
+    }
+    r = requests.post(
+        f"{_SONIOX_BASE}/v1/transcriptions",
+        headers={**headers, "Content-Type": "application/json"},
+        json=body,
+        timeout=60,
+    )
+    r.raise_for_status()
+    tx_id = r.json().get("id")
+    if not tx_id:
+        raise RuntimeError(f"Soniox transcription 생성 실패: {r.text[:200]}")
+    print(f"   [soniox] 전사 요청 완료 · tx_id={tx_id[:8]}... · 폴링")
+
+    # 3) 상태 폴링
+    started = _time.time()
+    while True:
+        if _time.time() - started > _SONIOX_TIMEOUT_SEC:
+            raise TimeoutError("Soniox 폴링 15분 초과")
+        r = requests.get(
+            f"{_SONIOX_BASE}/v1/transcriptions/{tx_id}", headers=headers, timeout=30,
+        )
+        r.raise_for_status()
+        status = r.json().get("status")
+        if status == "completed":
+            break
+        if status == "error":
+            raise RuntimeError(f"Soniox 전사 실패: {r.json().get('error_message', '?')}")
+        _time.sleep(_SONIOX_POLL_SEC)
+
+    # 4) 결과 (transcript with tokens)
+    r = requests.get(
+        f"{_SONIOX_BASE}/v1/transcriptions/{tx_id}/transcript",
+        headers=headers, timeout=60,
+    )
+    r.raise_for_status()
+    tokens = r.json().get("tokens") or []
+    print(f"   [soniox] 결과 완료 · {len(tokens)} tokens")
+
+    # 5) tokens → segments
+    #    Soniox tokens는 syllable-level이지만 word boundary를 leading space로 표시한다.
+    #    즉 [" 지금", " 이", " 자리에서"] 형태 · 그대로 이어붙여야 원래 문장 나옴.
+    #    Flush 조건: (a) speaker 변경, (b) gap>GAP_HARD, (c) 종결어미 hit + 다음 token gap>TERM_GAP.
+    segments: list[dict] = []
+    cur_words: list[dict] = []
+    cur_spk: str = ""
+    GAP_HARD = 0.8       # 이 이상 침묵이면 무조건 문장 종료
+    TERM_GAP = 0.3       # 종결어미 뒤 자연 pause 최소
+    END_PUNCTS = (".", "?", "!", "…")
+    END_SUFFIXES = (
+        "다", "요", "죠", "까", "야", "네", "군", "구나", "니",
+        "거야", "거지", "거죠", "잖아", "잖아요", "라고", "래", "래요",
+        "습니다", "습니까", "겠다", "겠어", "겠어요",
+    )
+
+    def _is_terminal(text: str) -> bool:
+        t = text.strip()
+        if not t:
+            return False
+        if t[-1] in END_PUNCTS:
+            return True
+        for suf in END_SUFFIXES:
+            if t.endswith(suf):
+                return True
+        return False
+
+    def _flush():
+        if not cur_words:
+            return
+        # Soniox 원본 그대로 이어붙임 (leading space 로 word boundary 이미 표시됨)
+        text = "".join(w.get("word") or "" for w in cur_words).strip()
+        segments.append({
+            "start": round(cur_words[0]["start"], 3),
+            "end": round(cur_words[-1]["end"], 3),
+            "text": text,
+            "words": [dict(w) for w in cur_words],
+            "speaker": cur_spk,
+            "align_source": "soniox",
+        })
+
+    for i, tok in enumerate(tokens):
+        try:
+            st = float(tok.get("start_ms", 0)) / 1000.0
+            en = float(tok.get("end_ms", 0)) / 1000.0
+        except (TypeError, ValueError):
+            continue
+        text = tok.get("text") or ""
+        spk_raw = tok.get("speaker")
+        spk = f"SPEAKER_{int(spk_raw):02d}" if isinstance(spk_raw, (int, float)) else (str(spk_raw or "").strip())
+        if cur_words:
+            gap = st - cur_words[-1]["end"]
+            # speaker 바뀜 or 큰 침묵 → 무조건 flush
+            if spk != cur_spk or gap > GAP_HARD:
+                _flush()
+                cur_words = []
+        if not cur_words:
+            cur_spk = spk
+        cur_words.append({
+            "word": text,
+            "start": st,
+            "end": en,
+            "probability": float(tok.get("confidence", 1.0)) if tok.get("confidence") is not None else 1.0,
+            "speaker": spk,
+        })
+        # 종결어미 + 다음 token 과 gap>=TERM_GAP 일 때만 문장 종료 (aggressive 방지)
+        if _is_terminal(text):
+            next_st = None
+            if i + 1 < len(tokens):
+                try:
+                    next_st = float(tokens[i + 1].get("start_ms", 0)) / 1000.0
+                except (TypeError, ValueError):
+                    next_st = None
+            if next_st is None or (next_st - en) >= TERM_GAP:
+                _flush()
+                cur_words = []
+    _flush()
+
+    return {"segments": segments, "language": language}
 
 
 # ── Silero VAD: 음성 구간 사전 필터 (2026-07-25) ────────────────────────────────
@@ -543,7 +915,10 @@ def _get_ecapa_classifier():
             _fetch.link_with_strategy = _copy_only
         except Exception:
             pass
-        from speechbrain.inference.speaker import EncoderClassifier
+        try:
+            from speechbrain.inference.speaker import EncoderClassifier  # sb 1.x
+        except ImportError:
+            from speechbrain.pretrained import EncoderClassifier  # sb 0.5.x (pyannote 3.1 호환용 다운그레이드)
         import torch
         run_opts = {"device": "cuda"} if torch.cuda.is_available() else None
         classifier = EncoderClassifier.from_hparams(
@@ -599,10 +974,10 @@ def _diarize_audio(audio_path: str, segments: list[dict] | None = None,
         device = "cuda" if torch.cuda.is_available() else "cpu"
         waveform = waveform.to(device)
 
-        # embedding · min 1.0s (짧으면 노이즈)
+        # embedding · min 0.5s (예능 짧은 발화 커버율 up · 이보다 짧으면 embedding 노이즈)
         embeddings: list[np.ndarray] = []
         seg_indices: list[int] = []
-        MIN_DUR = 1.0
+        MIN_DUR = 0.5
         for i, seg in enumerate(segments):
             try:
                 st = float(seg.get("start", 0)); en = float(seg.get("end", st + 1))

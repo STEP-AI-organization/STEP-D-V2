@@ -18,7 +18,7 @@ import os
 # Default 텍스트/추론 모델 · 모든 stage 의 기본값.
 # ENV: GEMINI_MODEL 로 전역 오버라이드 가능.
 # ────────────────────────────────────────────────────────────
-TEXT: str = os.environ.get("GEMINI_MODEL") or "gemini-3.1-flash"
+TEXT: str = os.environ.get("GEMINI_MODEL") or "gemini-2.5-flash"
 
 # ────────────────────────────────────────────────────────────
 # Stage 별 오버라이드 (없으면 TEXT 재사용).
