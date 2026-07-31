@@ -3282,6 +3282,27 @@ title (폴백) 은 두 줄 합쳐 한 줄로 자연스럽게.
         )
 
     prompt = "\n".join(lines) + f"\n\n=== 뽑을 쇼츠 수: {n}개 ==="
+
+    # 사용자 지시 (2026-07-31 · "AI에게 어떻게 정보를 주는지 나한테 주라"):
+    # RECOMMEND_DEBUG_DUMP=<path> env 있으면 system + user prompt 를 파일에 저장.
+    _dump_path = os.environ.get("RECOMMEND_DEBUG_DUMP")
+    if _dump_path:
+        try:
+            from pathlib import Path as _P
+            _P(_dump_path).parent.mkdir(parents=True, exist_ok=True)
+            _dump = (
+                f"# recommend LLM · propose_shorts_beat_only\n"
+                f"# model={MODEL} · beats={len(beats)} · n={n} · genre={genre}\n\n"
+                f"=" * 80 + "\n[SYSTEM INSTRUCTION]\n" + "=" * 80 + "\n"
+                + system
+                + "\n\n" + "=" * 80 + "\n[USER PROMPT]\n" + "=" * 80 + "\n"
+                + prompt
+            )
+            _P(_dump_path).write_text(_dump, encoding="utf-8")
+            print(f"   [debug] recommend prompt dump → {_dump_path}")
+        except Exception as _e:
+            print(f"   [debug] prompt dump 실패: {_e}")
+
     try:
         resp = call_with_retry(lambda: client.models.generate_content(
             model=MODEL,
@@ -3383,6 +3404,78 @@ title (폴백) 은 두 줄 합쳐 한 줄로 자연스럽게.
             "source": "beat_only",
         })
     return shorts
+
+
+def _dedup_beat_overlap(shorts: list[dict], beats: list[dict]) -> list[dict]:
+    """같은 beat 를 여러 shorts 에서 재사용 금지 (사용자 방향 2026-07-31: "beat 잘 못 합침").
+
+    앞선 shorts 가 이미 쓴 beat_id 는 뒤 shorts 에서 제거 → 남은 beat 로 재구성.
+    남은 beat 가 0개면 그 short drop. beat_ids 정리 후 start/end 도 재계산.
+    """
+    if not shorts or not beats:
+        return shorts
+    beat_by_id = {b.get("id"): b for b in beats}
+    used: set = set()
+    out: list[dict] = []
+    for s in shorts:
+        ids = list(s.get("beat_ids") or [])
+        kept = [bid for bid in ids if bid not in used and bid in beat_by_id]
+        if not kept:
+            continue
+        used.update(kept)
+        # start/end 재계산 (kept 첫/마지막 beat)
+        sorted_kept = sorted(kept, key=lambda bid: float(beat_by_id[bid].get("start", 0)))
+        first = beat_by_id[sorted_kept[0]]
+        last = beat_by_id[sorted_kept[-1]]
+        s["beat_ids"] = sorted_kept
+        s["start"] = float(first.get("start", 0))
+        s["end"] = float(last.get("end", 0))
+        s["_beat_dedup"] = True
+        out.append(s)
+    return out
+
+
+def _enforce_shortform_length(shorts: list[dict], beats: list[dict],
+                                max_sec: float = 90.0) -> list[dict]:
+    """shortform type 은 총 duration ≤ max_sec (기본 90s). 초과 시 뒷 beat drop.
+
+    남은 beat 가 0 이 되면 그 short drop.
+    clip · highlight 는 스킵 (해당 type 별도 길이 정책).
+    """
+    if not shorts or not beats:
+        return shorts
+    beat_by_id = {b.get("id"): b for b in beats}
+    out: list[dict] = []
+    for s in shorts:
+        if s.get("type") != "shortform":
+            out.append(s); continue
+        ids = list(s.get("beat_ids") or [])
+        if not ids:
+            out.append(s); continue
+        sorted_ids = sorted(ids, key=lambda bid: float((beat_by_id.get(bid) or {}).get("start", 0)))
+        first = beat_by_id.get(sorted_ids[0])
+        if not first:
+            continue
+        st = float(first.get("start", 0))
+        kept = [sorted_ids[0]]
+        cur_end = float(first.get("end", 0))
+        for bid in sorted_ids[1:]:
+            b = beat_by_id.get(bid)
+            if not b:
+                continue
+            new_end = float(b.get("end", 0))
+            if (new_end - st) <= max_sec:
+                kept.append(bid); cur_end = new_end
+            else:
+                break
+        if not kept:
+            continue
+        s["beat_ids"] = kept
+        s["start"] = st
+        s["end"] = cur_end
+        s["_length_capped"] = True
+        out.append(s)
+    return out
 
 
 def _enforce_beat_alignment(shorts: list[dict], beats: list[dict],

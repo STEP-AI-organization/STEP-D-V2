@@ -164,7 +164,18 @@ def _annotate_one(idx: int, beat: dict, video: Path, out_dir: Path,
             parts.append(types.Part.from_bytes(data=p.read_bytes(), mime_type="image/jpeg"))
         except Exception:
             pass
-    parts.append(types.Part.from_text(text=_build_prompt(beat, program_ctx_str)))
+    prompt_text = _build_prompt(beat, program_ctx_str)
+    # RECOMMEND_DEBUG_DUMP · beat_annot 프롬프트도 첫 beat 만 파일에 dump (참고용)
+    _dump_dir = os.environ.get("BEAT_ANNOT_DEBUG_DUMP")
+    if _dump_dir:
+        try:
+            from pathlib import Path as _P
+            _p = _P(_dump_dir) / f"beat_annot_prompt_b{idx:03d}.txt"
+            _p.parent.mkdir(parents=True, exist_ok=True)
+            _p.write_text(f"# beat_annot · beat #{idx}\n# frames: {[p.name for p, ok in frames_available]}\n\n{prompt_text}", encoding="utf-8")
+        except Exception:
+            pass
+    parts.append(types.Part.from_text(text=prompt_text))
 
     # Gemini 2.5+ 는 thinking tokens 도 max_output_tokens 에 포함 · 1024 는 thinking 에 다 소진.
     # (1) max_output_tokens 대폭 증가 · (2) thinking 끔 (schema JSON 이라 reasoning 불필요).

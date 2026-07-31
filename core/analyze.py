@@ -48,7 +48,7 @@ from .scene_type import classify_shot_types
 from .beats import build_beats_from_boundaries
 from .boundaries import load_boundaries, dedup_boundaries, build_fallback_boundaries, save_boundaries
 from .beat_annot import annotate_beats
-from .speaker_rename import build_speaker_mapping, apply_speaker_mapping, assign_speakers_from_captions
+from .speaker_rename import build_speaker_mapping, apply_speaker_mapping, assign_speakers_from_captions, refresh_beat_dominant_speakers
 
 CHECKPOINTS = ("stt.json", "refined.json", "faces.json", "ppl.json", "scenes.json", "cast.json", "timeline.json", "narrative.json", "shots.json", "boundaries.json", "scene_type.json", "beats.json", "viewer_signals.json", "shorts.json", "analysis.json")
 
@@ -707,33 +707,82 @@ def analyze(
         step(f"beat annotate — 체크포인트 재사용 ({already_annotated}/{len(beats_list)})")
     timed("beat_annot", ts)
 
-    # 4j) speaker rename — 화면 자막(chyron) 감지 실명으로 STT 화자N rewrite.
-    # 사용자 방향 (2026-07-31): "화자2 → 유식(고유명사) 교체돼서 다음 분석·다음 서비스 반영".
-    # beat_annot 이 뽑은 characters_visible (Vision 감지 실명) 과 characters (dominant STT speaker)
-    # 짝을 vote count · 등록 인물(cast_registry) 매칭되는 것만 확정 · refined/narrative/beats in-place.
+    # 4j) speaker identity (2026-07-31 재설계 · docs 참조):
+    # - speaker_id (익명 · S1/S2) 항상 채움 · speaker_name (실명) 은 근거 확실할 때만 · v1 은 미확정 유지
+    # - 옛 자동 rename (chyron→cast_registry 전역 치환) 은 정확도 이슈로 제거 · SPEAKER_RENAME env 도 폐기
+    # - speaker_identity_map.json 뼈대 저장 (근거·신뢰도·미확정 사유) · v2 에서 자동 확정 로직 채움
     ts = time.time()
-    if beats_list:
-        # Path A: STT diarization 이 speaker 라벨을 남긴 경우 · dominant(STT) ↔ visible(자막) vote
-        mapping, flagged = build_speaker_mapping(beats_list, cast_registry)
-        if mapping:
-            step(f"speaker rename (dominant vote) — {len(mapping)}개: {mapping}")
-            counts = apply_speaker_mapping(mapping, refined, narrative, beats_list)
-            _save_json(out_dir / "refined.json", refined)
-            if isinstance(narrative, dict):
-                _save_json(out_dir / "narrative.json", narrative)
+    if refined:
+        # (a) 짧은 발화 상속: duration < 2s 이고 앞뒤 speaker 가 같으면 상속 (계획서 원칙 ·
+        # 화자 전환 직후 튀는 short seg 안정화). 앞뒤 다르면 · 긴 쪽 우선.
+        _MIN_STABLE_SEC = 2.0
+        _swaps = 0
+        for i, seg in enumerate(refined):
+            try:
+                dur = float(seg.get("end", 0)) - float(seg.get("start", 0))
+            except (TypeError, ValueError):
+                continue
+            if dur >= _MIN_STABLE_SEC:
+                continue
+            cur = (seg.get("speaker") or "").strip()
+            if not cur:
+                continue
+            prev = (refined[i - 1].get("speaker") or "").strip() if i > 0 else ""
+            nxt = (refined[i + 1].get("speaker") or "").strip() if i + 1 < len(refined) else ""
+            new_sp = cur
+            if prev and nxt and prev == nxt and prev != cur:
+                new_sp = prev  # 샌드위치: 앞뒤 같은 화자 · 상속
+            elif prev == cur or nxt == cur:
+                pass  # 이미 인접과 일치 · 유지
+            elif prev and (not nxt or prev):
+                # 앞뒤 중 존재하는 쪽. 둘 다 있으면 duration 긴 쪽.
+                candidates = []
+                if prev:
+                    p_dur = float(refined[i - 1].get("end", 0)) - float(refined[i - 1].get("start", 0))
+                    candidates.append((prev, p_dur))
+                if nxt:
+                    n_dur = float(refined[i + 1].get("end", 0)) - float(refined[i + 1].get("start", 0))
+                    candidates.append((nxt, n_dur))
+                candidates.sort(key=lambda x: -x[1])
+                if candidates and candidates[0][1] >= _MIN_STABLE_SEC:
+                    new_sp = candidates[0][0]
+            if new_sp != cur:
+                seg["speaker"] = new_sp
+                _swaps += 1
+        if _swaps:
+            step(f"  짧은 발화 상속 · {_swaps} seg 병합")
+
+        # (b) 익명 라벨 → S1/S2/... 로 정규화 · 등장 순서 기준
+        _id_map: dict[str, str] = {}
+        for seg in refined:
+            sp = (seg.get("speaker") or "").strip()
+            if not sp:
+                seg["speaker_id"] = ""
+                seg["speaker_name"] = ""
+                continue
+            if sp not in _id_map:
+                _id_map[sp] = f"S{len(_id_map) + 1}"
+            seg["speaker_id"] = _id_map[sp]
+            seg["speaker_name"] = ""  # v1 미확정 · 편집자 승인 후 채움
+        # beats.characters 도 S 라벨로 갱신 (있으면)
+        for b in beats_list or []:
+            chars = b.get("characters") or []
+            b["speaker_ids"] = [_id_map.get(c, c) for c in chars if c]
+            b["speaker_names"] = []  # v1 미확정
+        _save_json(out_dir / "refined.json", refined)
+        if beats_list:
             _save_json(out_dir / "beats.json", beats_data)
-            step(f"  refined {counts['refined']} seg · narrative {counts['narrative_chars']} · beats {counts['beats_chars']}")
-        # Path B: STT speaker 다 empty · 자막 실명으로 강제 부여 (Silero VAD 실패·diarization 스킵)
-        empty_speakers = sum(1 for s in (refined or []) if not (s.get("speaker") or "").strip())
-        if empty_speakers > len(refined) * 0.5 if refined else False:
-            n_assigned = assign_speakers_from_captions(beats_list, refined, cast_registry)
-            if n_assigned:
-                step(f"speaker rename (caption assign) — refined {n_assigned}/{len(refined)} seg 부여")
-                _save_json(out_dir / "refined.json", refined)
-        if not mapping:
-            step("speaker rename (dominant) — 매핑 후보 없음")
-        if flagged:
-            step(f"  (자막 감지 · cast 미등록: {flagged[:5]}{'...' if len(flagged)>5 else ''} · 사용자 검토용)")
+        # identity map 뼈대
+        identity_map = {
+            "version": 1,
+            "speakers": [
+                {"speaker_id": sid, "raw_label": raw, "name": "", "confidence": 0.0,
+                 "evidence": [], "status": "unconfirmed"}
+                for raw, sid in _id_map.items()
+            ],
+        }
+        _save_json(out_dir / "speaker_identity_map.json", identity_map)
+        step(f"speaker identity — {len(_id_map)}명 익명 (S1~S{len(_id_map)}) · 실명 미확정 (편집자 검수 후 확정)")
     timed("speaker_rename", ts)
 
     # 5) shorts recommendation (two-phase, genre-aware) ---------------------------

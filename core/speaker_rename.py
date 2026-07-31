@@ -128,14 +128,20 @@ def assign_speakers_from_captions(
         if en <= st:
             continue
         visible = b.get("characters_visible") or []
-        # cast_registry 매칭 첫 번째
-        name = None
-        for v in visible:
-            if isinstance(v, str) and _in_registry(v.strip(), cast_registry):
-                name = v.strip(); break
-        if not name:
+        # cast_registry 매칭 이름들 (익명 라벨 제외)
+        matched = [v.strip() for v in visible
+                     if isinstance(v, str) and _in_registry(v.strip(), cast_registry)]
+        # dedup 순서 유지
+        seen = set(); matched_uniq = []
+        for m in matched:
+            if m not in seen:
+                seen.add(m); matched_uniq.append(m)
+        # **정확도 우선**: 1명 확정일 때만 그 beat 전체 utterance 에 부여.
+        # 2명 이상이면 어느 utterance 가 누구 발화인지 판별 불가 → skip (empty 유지 · 사용자 검토용).
+        # (사용자 지적 2026-07-31: "발화자 좀 이상하게 들어가네" · 여러 visible 중 첫 매칭만 억지로 부여했던 문제)
+        if len(matched_uniq) != 1:
             continue
-        # 이 beat 구간 안 refined utterance 에 speaker 부여
+        name = matched_uniq[0]
         for seg in refined:
             try:
                 sst = float(seg.get("start", 0)); sen = float(seg.get("end", 0))
@@ -143,11 +149,49 @@ def assign_speakers_from_captions(
                 continue
             if sen <= st or sst >= en:
                 continue
-            # 이미 실명 붙어있으면 유지 (덮어쓰지 X)
             existing = (seg.get("speaker") or "").strip()
             if existing and _in_registry(existing, cast_registry):
-                continue
+                continue  # 이미 실명 있으면 유지
             seg["speaker"] = name; n += 1
+    return n
+
+
+def refresh_beat_dominant_speakers(
+    beats: list[dict],
+    refined: list[dict],
+) -> int:
+    """rename 으로 refined.speaker 가 실명으로 갱신된 후 · beat.characters (dominant speaker
+    리스트) 재계산. beat 안 각 화자 발화 overlap 합산 · 비중 큰 순 상위 6명.
+    반환: 갱신된 beat 개수.
+    """
+    if not beats or not refined:
+        return 0
+    n = 0
+    for b in beats:
+        try:
+            bs = float(b.get("start", 0)); be = float(b.get("end", 0))
+        except (TypeError, ValueError):
+            continue
+        if be <= bs:
+            continue
+        speakers: dict[str, float] = {}
+        for t in refined:
+            try:
+                ts = float(t.get("start", 0)); te = float(t.get("end", 0))
+            except (TypeError, ValueError):
+                continue
+            if te <= bs or ts >= be:
+                continue
+            sp = (t.get("speaker") or "").strip()
+            if not sp:
+                continue
+            overlap = max(0.0, min(te, be) - max(ts, bs))
+            speakers[sp] = speakers.get(sp, 0.0) + overlap
+        if speakers:
+            new_chars = [s for s, _ in sorted(speakers.items(), key=lambda x: -x[1])][:6]
+            if b.get("characters") != new_chars:
+                b["characters"] = new_chars
+                n += 1
     return n
 
 

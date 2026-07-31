@@ -914,6 +914,41 @@ def _make_gap_beat(transcript: list[dict], lo: float, hi: float) -> dict | list[
 # 계획서: docs/plans (GEBD 경계 기반 Beat 분석) · v1 은 boundaries.json 입력 받기.
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _snap_start_to_utterance(t: float, transcript: list[dict] | None) -> float:
+    """t 시각이 STT utterance 중간에 있으면 그 utterance.start 로 앞당김 (대사 처음부터 시작).
+
+    사용자 방향 (2026-07-31): "beat.start 시각에 대사가 있으면 그 대사 시작으로 당김".
+    word timing 없을 때 utterance-level 폴백. word snap 실패 시 이 함수 호출.
+    """
+    if not transcript:
+        return t
+    for u in transcript:
+        try:
+            us = float(u.get("start", 0)); ue = float(u.get("end", 0))
+        except (TypeError, ValueError):
+            continue
+        if us < t < ue and (u.get("text") or "").strip():
+            return us
+    return t
+
+
+def _snap_end_to_utterance(t: float, transcript: list[dict] | None) -> float:
+    """t 시각이 STT utterance 중간에 있으면 그 utterance.end 로 뒤로 늘림 (말 끝까지 들리게).
+
+    사용자 방향: "말 끊기는 거 방지를 위해 그 대사까지 늘림". word snap 폴백.
+    """
+    if not transcript:
+        return t
+    for u in transcript:
+        try:
+            us = float(u.get("start", 0)); ue = float(u.get("end", 0))
+        except (TypeError, ValueError):
+            continue
+        if us < t < ue and (u.get("text") or "").strip():
+            return ue
+    return t
+
+
 def _continuity_gate_speaker(t: float, transcript: list[dict], tol: float = 0.5) -> bool:
     """True 면 이 시각 앞뒤가 **같은 화자의 연속 발화** 안 (경계로 안 쓰는 게 안전).
 
@@ -1009,13 +1044,14 @@ def build_beats_from_boundaries(
     for w in windows:
         st = float(w["start"]); en = float(w["end"])
 
-        # word/speaker 스냅 (기존 헬퍼)
+        # word/speaker 스냅 (기존 헬퍼) — words 데이터 있을 때만 유효
         snap_st = _snap_to_word_start(st, transcript)
         snap_en = _snap_to_word_end(en, transcript)
+        # words 없으면 (VAD 실패 등) utterance-level 폴백 · 대사 중간 끊김 방지 (2026-07-31)
         if snap_st is None:
-            snap_st = st
+            snap_st = _snap_start_to_utterance(st, transcript)
         if snap_en is None:
-            snap_en = en
+            snap_en = _snap_end_to_utterance(en, transcript)
         # 화자 monologue 중간이면 그 화자 발화 끝까지 확장
         snap_st = _extend_start_to_speaker_block(snap_st, transcript)
         snap_en = _extend_end_to_speaker_block(snap_en, transcript)
