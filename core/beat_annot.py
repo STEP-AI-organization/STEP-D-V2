@@ -105,7 +105,8 @@ def _build_prompt(beat: dict, program_ctx_str: str) -> str:
         body += f"\n[Beat 안 발화]\n{stt[:1200]}\n"
     body += (
         "\n[요청]\n"
-        "이 beat (프레임 3장 = start/mid/end + 위 대사 + 프로그램 배경) 를 종합해 아래 스키마로 JSON.\n"
+        "이 beat (프레임 + 위 대사 + 프로그램 배경) 를 종합해 아래 스키마로 JSON.\n"
+        "(env BEAT_ANNOT_FRAMES=3 일 때만 start/mid/end 3장 · default 1장 = mid 만)\n"
         "\n"
         "**프레임 안 그래픽 자막(화면 위 CG · chyron · 하단바 · 팝업)을 최우선 근거로 활용**하라.\n"
         "예능 화면 자막은 편집자가 이미 그 순간의 훅·핵심을 정리해둔 신호. 대사·비주얼과 충돌하면\n"
@@ -125,7 +126,7 @@ def _build_prompt(beat: dict, program_ctx_str: str) -> str:
         "  · 프로그램 정보의 '등록 인물' 이나 화면 자막/명찰에서 이름이 확인되면 **실명 사용** (예: '원규')\n"
         "  · 확실치 않으면 익명 라벨 (예: '여성 참가자 1', '남성 게스트')\n"
         "  · 자막에 직업·직책 표기가 있으면 그 신호도 반영 (예: '한의사 원규')\n"
-        "- on_screen_captions: 프레임 3장에서 읽힌 그래픽 자막 원문 배열 (오탈자 없이 · 없으면 빈 배열)\n"
+        "- on_screen_captions: 프레임에서 읽힌 그래픽 자막 원문 배열 (오탈자 없이 · 없으면 빈 배열)\n"
         "\n"
         "정지 관찰형 caption 절대 금지 · 프로그램 서사 프레임 + 화면 자막 신호로."
     )
@@ -139,7 +140,10 @@ def _annotate_one(idx: int, beat: dict, video: Path, out_dir: Path,
     if dur < 0.6:
         return {"idx": idx, "error": f"beat too short: {dur:.2f}s"}
 
-    # 프레임 3장 추출
+    # 프레임 추출 (default: mid 1장만 · env BEAT_ANNOT_FRAMES=3 로 start+mid+end 3장).
+    # 2026-07-31: chyron per-seg 스택으로 앞단이 실명·화면자막 확보 · beat_annot 은 요약만
+    # 필요 · 프레임 1장으로 Vision 비용 3→1 (58% 절감).
+    n_frames = int(os.environ.get("BEAT_ANNOT_FRAMES", "1"))
     fdir = out_dir / "beat_frames"
     fdir.mkdir(exist_ok=True)
     name = f"beat_{idx:04d}"
@@ -150,9 +154,15 @@ def _annotate_one(idx: int, beat: dict, video: Path, out_dir: Path,
     p_mid = fdir / f"{name}_mid.jpg"
     p_end = fdir / f"{name}_end.jpg"
 
-    ok_s = _ffmpeg_frame(video, t_start, p_start)
-    ok_m = _ffmpeg_frame(video, t_mid, p_mid)
-    ok_e = _ffmpeg_frame(video, t_end, p_end)
+    if n_frames >= 3:
+        ok_s = _ffmpeg_frame(video, t_start, p_start)
+        ok_m = _ffmpeg_frame(video, t_mid, p_mid)
+        ok_e = _ffmpeg_frame(video, t_end, p_end)
+    else:
+        # 1장 모드 (default): mid 만 · start/end 는 파일 없음 (None 처리)
+        ok_s = False
+        ok_m = _ffmpeg_frame(video, t_mid, p_mid)
+        ok_e = False
 
     frames_available = [(p, ok) for p, ok in [(p_start, ok_s), (p_mid, ok_m), (p_end, ok_e)] if ok]
     if not frames_available:

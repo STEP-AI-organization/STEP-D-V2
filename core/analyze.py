@@ -357,10 +357,20 @@ def analyze(
         return result
 
     # 2) refine ----------------------------------------------------------------
+    # 2026-07-31 축소: Soniox v5 STT 정확도 up · Gemini refine (오탈자 정정) 대부분 불필요.
+    # RUN_REFINE=off (default when STT_PROVIDER=soniox) · segments 그대로 refined 로 사용.
+    # 필요 시 RUN_REFINE=on 명시 · gemini/whisper STT 경우엔 여전히 필요.
     ts = time.time()
     refined = _load_json(out_dir / "refined.json")
+    _stt_provider_env = (os.environ.get("STT_PROVIDER") or "soniox").lower()
+    _run_refine = (os.environ.get("RUN_REFINE") or "auto").lower()
+    _should_refine = (_run_refine == "on") or (_run_refine == "auto" and _stt_provider_env != "soniox")
     if refined:
         step(f"자막 정제 — 체크포인트 재사용 ({len(refined)} 세그먼트)")
+    elif not _should_refine:
+        step(f"자막 정제 — 스킵 (STT_PROVIDER={_stt_provider_env} · RUN_REFINE={_run_refine})")
+        refined = segments  # raw STT 그대로 사용 (Soniox 는 이미 정확)
+        _save_json(out_dir / "refined.json", refined)
     else:
         step("자막 정제…")
         _progress("refine", 31, "자막 정제 중")
