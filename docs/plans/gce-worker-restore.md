@@ -1,35 +1,53 @@
-# GCE Spot VM 워커 부활 — 로컬 pm2 → 클라우드 잡 처리 확장
+# GCE Spot VM 워커 부활 — On-demand (큐 트리거로 부팅·shutdown)
 
-2026-07-31 · 사용자 지시 "이제 잡을 클라우드에서도 처리하게끔". 로컬 pm2 워커만으로 부족·
-장기 운영 관점에서 클라우드 워커 필요. 기존 GCE `stepd-worker` VM 이 폐기된 상태에서
-Spot n1-standard-4 로 재기동.
+2026-07-31 · 사용자 지시 "이제 잡을 클라우드에서도 처리하게끔" · "상시로 하지말고 큐 들어올때 키고 끄고".
+
+로컬 pm2 워커만으로 부족·장기 운영 관점에서 클라우드 워커 필요. 상시 실행 대신
+**Cloud Scheduler cron 이 큐 상태 감시 · pending 잡 있을 때만 VM start · idle X분 후
+auto-shutdown**. GEBD 계획 ([[production-gpu-10usd-plan]]) 과 동일 패턴 · content lane
+도 이 방식 적용.
 
 ## 현 상태 (조사 결과)
 
 | 항목 | 상태 |
 |---|---|
-| `stepd-worker` VM | ❌ 삭제됨 (`gcloud compute instances describe` NOT_FOUND) |
-| `stepd-worker` SA | ❌ 없음 (`stepd-deployer` 만 존재) |
+| `stepd-worker` VM | ❌ 삭제됨 |
+| `stepd-worker` SA | ❌ 없음 |
 | `deploy/worker-vm.sh` | ✅ 존재 · REGION default us-central1 (asia-northeast3 override 필요) |
 | `deploy/worker-env.sh` | ✅ 존재 · Secret Manager 로 secrets 로드 |
-| `deploy/deploy-server.ps1` | 로컬 pm2 만 · VM SSH 재시작 로직 없음 (문서상 "TERMINATED" 이후 삭제됨) |
-| Cloud SQL | `step-d:asia-northeast3:stepd-db` (worker-vm.sh default us-central1 과 불일치) |
+| `deploy/deploy-server.ps1` | 로컬 pm2 만 · VM 관련 로직 없음 |
+| Cloud SQL | `step-d:asia-northeast3:stepd-db` |
 
-## 사용자 페르소나·니즈
+## 비용 예상 (On-demand)
 
-- **주 사용자**: 방송사·MCN 편집자 (실 트래픽)
-- **니즈**:
-  - 로컬 컴 · 개발자 부재 시 잡 처리 정지 위험 방지
-  - 장기 · 여러 방송사 확장 시 로컬 자원 한계
-  - 클라우드 워커가 primary · 로컬은 backup
+30분 회차 · 하루 3-5개 실행 가정:
 
-## 목표 · 트레이드오프
+| 항목 | 계산 | 월 |
+|---|---|---|
+| n1-standard-4 Spot | 하루 60분 실행 · 시간당 $0.048 | ~$1.5 |
+| pd-standard 30GB | 상시 (VM STOPPED 여도 디스크 요금) | ~$1.2 |
+| 네트워크·CloudSQL Proxy | 소량 | ~$0.3 |
+| **합계** | | **~$3/월** |
 
-- **A. Cloud 전용** (로컬 pm2 폐지) — 단일 소스 · 명확 · 로컬 backup 없음
-- **B. Cloud + 로컬 병렬** — 부하 분산 · dual 관리 복잡 · queue 는 이미 `FOR UPDATE SKIP LOCKED` 로 안전
-- **C. Cloud 만 · 로컬 pm2 dev 용** — 개발자 로컬은 개발 검증 전용 · production 은 Cloud
+상시 실행 시 ~$25/월 대비 88% 절감. GEBD VM (~$6-10) 과 합쳐도 총 $10-13/월 예산 이내.
 
-**권고 C** — production 은 Cloud 워커 primary · 로컬은 dev/디버그.
+## 아키텍처
+
+```
+    Cloud Run (API)
+         ↓ enqueue content.analyze
+    Cloud SQL job_queue
+         ↓
+    Cloud Scheduler (매 3분)
+         ↓
+    POST /api/admin/worker-vm/wake
+         ↓ pending>0 확인
+    gcloud compute instances start stepd-worker
+         ↓ startup-script → worker-vm.sh 자동 재실행
+    stepd-worker-content lane 픽업 · 처리
+         ↓ idle 10분 지속
+    /usr/local/bin/worker-idle-shutdown.sh → shutdown -h now
+```
 
 ## 배포 로드맵
 
@@ -52,20 +70,77 @@ for role in \
 done
 ```
 
-- `cloudsql.client`: CloudSQL Auth Proxy 로 Postgres 접근
-- `secretmanager.secretAccessor`: `worker-env.sh` 가 secrets 로드
-- `storage.objectAdmin`: GCS 미디어·산출물 read/write
-- `artifactregistry.reader`: Docker 이미지 pull (썸네일 등 · GEBD 는 별개 SA)
-- `aiplatform.user`: Vertex Gemini 호출
+Cloud Run SA (`stepd-server`) 에도 · `compute.instanceAdmin.v1` 추가 (wake 라우트가 VM start 호출).
 
-### Step 2: worker-vm.sh · worker-env.sh 지역 조정
+### Step 2: `deploy/worker-vm.sh` on-demand 확장
 
-- `deploy/worker-vm.sh` line 14-15:
-  - `REGION="${REGION:-asia-northeast3}"`
-  - `SQL_INSTANCE="${SQL_INSTANCE:-step-d:asia-northeast3:stepd-db}"`
-- `deploy/worker-env.sh` — 이미 override 있으면 default 만 조정
+기존 worker-vm.sh (content + youtube 2 lane) 유지 · auto-shutdown daemon 만 추가:
 
-### Step 3: VM 생성 · Spot · asia-northeast3
+```bash
+# 기존 systemctl enable stepd-worker-* 후 추가
+sudo tee /usr/local/bin/worker-idle-shutdown.sh >/dev/null <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+IDLE=${IDLE_SHUTDOWN_SEC:-600}
+COUNT_FILE=/var/tmp/worker-idle-count
+touch "$COUNT_FILE"
+while true; do
+  # pending content.* / youtube.* 잡 조회 (gebd 는 별 VM 이라 제외)
+  PENDING=$(psql -h 127.0.0.1 -U stepd -d stepd -tAc \
+    "SELECT COUNT(*) FROM job_queue
+     WHERE type IN ('content.analyze','youtube.download','video.analyze','channel.analyze',
+                    'video.comments','video.hotwatch','distribution.publish',
+                    'match.align','match.segment','match.learn')
+     AND status IN ('pending','running')" 2>/dev/null || echo -1)
+  if [ "$PENDING" = "0" ]; then
+    NOW=$(date +%s)
+    IDLE_SINCE=$(cat "$COUNT_FILE" 2>/dev/null || echo "$NOW")
+    if [ -z "$IDLE_SINCE" ] || [ "$IDLE_SINCE" = "0" ]; then
+      echo "$NOW" > "$COUNT_FILE"
+    else
+      DIFF=$((NOW - IDLE_SINCE))
+      if [ "$DIFF" -ge "$IDLE" ]; then
+        logger -t worker-idle "shutdown after ${DIFF}s idle (threshold ${IDLE}s)"
+        /sbin/shutdown -h now
+        exit 0
+      fi
+    fi
+  else
+    echo "0" > "$COUNT_FILE"
+  fi
+  sleep 60
+done
+EOF
+sudo chmod +x /usr/local/bin/worker-idle-shutdown.sh
+
+sudo tee /etc/systemd/system/worker-idle-shutdown.service >/dev/null <<EOF
+[Unit]
+Description=stepd-worker VM auto-shutdown daemon (idle >${IDLE_SHUTDOWN_SEC}s)
+After=cloud-sql-proxy.service
+
+[Service]
+Environment=IDLE_SHUTDOWN_SEC=${IDLE_SHUTDOWN_SEC:-600}
+ExecStart=/usr/local/bin/worker-idle-shutdown.sh
+Restart=always
+RestartSec=30
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+sudo systemctl enable --now worker-idle-shutdown.service
+```
+
+또한 REGION/SQL_INSTANCE default 를 asia-northeast3 으로 (line 14-15):
+
+```bash
+REGION="${REGION:-asia-northeast3}"
+SQL_INSTANCE="${SQL_INSTANCE:-step-d:asia-northeast3:stepd-db}"
+```
+
+### Step 3: VM 생성 (Spot · asia-northeast3)
 
 ```bash
 gcloud compute instances create stepd-worker \
@@ -78,70 +153,80 @@ gcloud compute instances create stepd-worker \
   --image-family=debian-12 --image-project=debian-cloud \
   --service-account=stepd-worker@step-d.iam.gserviceaccount.com \
   --scopes=cloud-platform \
-  --metadata-from-file=startup-script=deploy/worker-vm.sh \
+  --metadata-from-file=startup-script=deploy/worker-startup.sh \
   --tags=stepd-worker
 ```
 
-**주의**: Spot 선점 시 STOP · 재부팅 후 startup-script 재실행. queue.ts 는 crash-safe.
+`deploy/worker-startup.sh` (신규 · GEBD startup-script 와 유사):
+- `git reset --hard origin/main`
+- `bash deploy/worker-vm.sh` (idempotent · systemd 유닛 재적용)
 
-**월 비용 예상**:
-- n1-standard-4 Spot asia-northeast3: ~$1.2/월 (30h 기준) · 상시 실행 시 ~$25/월
-- 로컬 pm2 를 대체하려면 상시 · $25/월 · 예산 확인 필요
-- 대안: on-demand VM · content 잡 큐 있을 때만 부팅 (GEBD 계획 [[production-gpu-10usd-plan]] 참조)
+### Step 4: 서버 wake 라우트 (`apps/server/src/index.ts`)
 
-### Step 4: 검증
+```typescript
+// POST /api/admin/worker-vm/wake — Cloud Scheduler 가 매 3분 호출
+app.post("/api/admin/worker-vm/wake", async (c) => {
+  // 관리자 토큰 검증 (Cloud Scheduler OIDC or 헤더)
+  const stats = await queueStats();
+  const pending = (stats.content_pending ?? 0) + (stats.youtube_pending ?? 0);
+  if (pending === 0) return c.json({ waked: false, reason: "no pending" });
 
+  // gcloud compute instances start stepd-worker
+  // (Cloud Run SA 에 compute.instanceAdmin.v1 필요)
+  const { execSync } = await import("node:child_process");
+  try {
+    execSync(`gcloud compute instances start stepd-worker --zone=asia-northeast3-c`, { stdio: "inherit" });
+    return c.json({ waked: true, pending });
+  } catch (e) {
+    // 이미 RUNNING 이면 무해 (return code 0)
+    return c.json({ waked: false, reason: String(e).slice(0, 200) });
+  }
+});
+```
+
+Cloud Scheduler cron:
 ```bash
-# 부팅 로그
-gcloud compute instances get-serial-port-output stepd-worker --zone=asia-northeast3-c
-
-# SSH 접근
-gcloud compute ssh stepd-worker --zone=asia-northeast3-c
-
-# 워커 서비스 확인
-sudo systemctl status 'stepd-worker-*'
-sudo journalctl -u stepd-worker-content -f
+gcloud scheduler jobs create http worker-vm-wake \
+  --location=asia-northeast3 \
+  --schedule="*/3 * * * *" \
+  --uri="https://stepd-server-<hash>.a.run.app/api/admin/worker-vm/wake" \
+  --http-method=POST \
+  --oidc-service-account-email=stepd-scheduler@step-d.iam.gserviceaccount.com
 ```
 
-- content lane · youtube lane 각 running 확인
-- CloudSQL Proxy 연결 확인 (`sudo journalctl -u cloud-sql-proxy -f`)
-- 큐에 test 잡 삽입 · 픽업 확인
+### Step 5: 검증
 
-### Step 5: deploy-server.ps1 확장
-
-- `-Only vm` 옵션 · VM SSH 로 `git pull && systemctl restart` 만
-- 로컬 pm2 재시작과 동시 · 코드 배포 시 양쪽 모두 최신 반영
-
-```powershell
-# deploy-server.ps1 안 신설:
-if ($Only -eq "vm" -or $Only -eq "all") {
-    gcloud compute ssh stepd-worker --zone=asia-northeast3-c \
-      --command="cd /opt/stepd && git pull origin main && sudo systemctl restart 'stepd-worker-*'"
-}
-```
+1. **VM 부팅 로그**: `gcloud compute instances get-serial-port-output stepd-worker --zone=asia-northeast3-c`
+2. **워커 서비스**: `sudo systemctl status 'stepd-worker-*'` · content · youtube 모두 running
+3. **idle daemon**: `sudo journalctl -u worker-idle-shutdown -f` · pending 조회 로그
+4. **자동 shutdown**: pending == 0 이 10분 지속 후 · VM status TERMINATED 로
+5. **wake 라우트**: pending > 0 만들고 · Cloud Scheduler 강제 실행 → VM RUNNING 전이
+6. **큐 픽업**: test 잡 삽입 · journalctl 로 lane 이 claim 확인
 
 ### Step 6: 로컬 pm2 → dev-only 전환 (선택)
 
-- 로컬 pm2 는 `WORKER_JOBS=dev` (신규 lane · empty · 실제 잡 안 담)
-- 개발자가 수동 트리거 시에만 사용
-- production 은 Cloud VM primary
+Cloud VM 이 primary 확정 후:
+- 로컬 pm2 는 개발자 디버그용 (`WORKER_JOBS=dev` 신규 lane · 실제 잡 안 담)
+- production 트래픽은 Cloud VM 만 처리
+- deploy-server.ps1 · `-Only vm` 옵션 확장 (`gcloud compute ssh + git pull + systemctl restart`)
 
-## Verification
+## Verification (배포 후 1주)
 
-1. **VM 부팅 · 상태**: `gcloud compute instances describe stepd-worker --format='value(status)'` = RUNNING
-2. **잡 픽업**: 큐에 dummy jobs 넣고 · journalctl 로 lane 이 claim 확인
-3. **소스 최신**: `ssh -c "git -C /opt/stepd log --oneline -1"` = 로컬 main 과 동일
-4. **비용**: 1주 후 GCP Billing · Compute Engine SKU · 예산 이내
+1. GCP Billing "Compute Engine" SKU · 예상: 주당 $0.5-1
+2. VM RUNNING 시간 · Cloud Monitoring · 하루 40-60분 이내
+3. content.analyze 잡 · 회당 처리 시간 · 큐 인·완료 timestamp 로 계산
+4. Cloud Scheduler wake 호출 · pending>0 일 때만 VM start (idempotent · 이미 RUNNING 이면 no-op)
 
 ## Out of Scope (다음 세션들)
 
-- GEBD 전용 T4 GPU VM · [[production-gpu-10usd-plan]] Step 5 참조 (별도 인스턴스)
-- Cloud Run Job 방식 (배치 잡 · 세션·리소스 별개)
-- 다중 방송사 확장 시 워커 lane 병렬 (WORKER_JOBS=content-1 · content-2 등)
-- GKE 마이그레이션 (overkill · 현 규모엔 불필요)
+- GEBD 전용 T4 GPU VM · [[production-gpu-10usd-plan]] Step 5 참조 (별도 인스턴스 · 같은 on-demand 패턴)
+- 다중 방송사 확장 시 · Cloud Run 실 워커 병렬 (Cloud Run Job 방식)
+- 다중 방송사 3~5곳 이상 시 · 상시 실행이 오히려 저렴할 수 있음 (트래픽 임계값 재검토)
+- Cloud Scheduler 실패 대비 backup (Cloud Functions on-timer 등)
 
 ## 관련 문서·메모리
 
-- [[stt-diarize-chyron-stack]] · [[production-gpu-10usd-plan]] · [[deploy-noninteractive-gcloud]]
+- [[stt-diarize-chyron-stack]] · [[production-gpu-10usd-plan]]
+- [[deploy-noninteractive-gcloud]] · [[deploy-ps1-bom-required]]
 - `deploy/worker-vm.sh` · `deploy/worker-env.sh` · `deploy/deploy-server.ps1`
 - `apps/server/src/worker.ts` · `apps/server/src/queue.ts`
