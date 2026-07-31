@@ -81,19 +81,23 @@ const TICK_INTERVAL_MS = 15 * 60 * 1000;
  * heavy content.analyze (STT/vision, minutes) no longer blocks the flood of light video.*
  * jobs, and vice versa. Unset / "all" keeps the legacy single worker that drains everything.
  */
-const JOB_LANES: Record<"content" | "youtube", JobType[]> = {
+const JOB_LANES: Record<"content" | "youtube" | "gebd", JobType[]> = {
   // match.align도 content 레인 — 파이썬·ffmpeg로 오디오를 돌리는 무거운 잡이라
   // YouTube API 레인(짧고 쿼터 위주)에 섞으면 그쪽을 막는다.
   content: ["content.analyze", "youtube.download", "match.align", "match.segment", "match.learn"],
   youtube: ["channel.analyze", "video.analyze", "video.hotwatch", "video.comments", "distribution.publish"],
+  // gebd 는 GPU T4 spot VM 전용 lane. content lane 이 이 잡을 claim 하면 GPU 없는 곳에서
+  // Docker mmaction2 를 못 돌린다. 그래서 별도 프로세스 (WORKER_JOBS=gebd) 로만 픽업.
+  gebd: ["gebd.detect"],
 };
 const WORKER_JOBS = (process.env.WORKER_JOBS ?? "all").trim().toLowerCase();
 const CLAIM_TYPES: JobType[] | undefined =
   WORKER_JOBS === "content" ? JOB_LANES.content
   : WORKER_JOBS === "youtube" ? JOB_LANES.youtube
+  : WORKER_JOBS === "gebd" ? JOB_LANES.gebd
   : undefined; // "all" → claim every type
-/** The channel sweep enqueues YouTube work, so a content-only worker must not run it. */
-const RUNS_SWEEP = WORKER_JOBS !== "content";
+/** The channel sweep enqueues YouTube work, so content/gebd-only workers must not run it. */
+const RUNS_SWEEP = WORKER_JOBS !== "content" && WORKER_JOBS !== "gebd";
 
 let stopping = false;
 
@@ -156,8 +160,69 @@ async function handle(job: Job): Promise<FollowUp | void> {
     case "match.align": return handleMatchAlign(job);
     case "match.segment": return handleMatchSegment(job);
     case "match.learn": return handleMatchLearn(job);
+    case "gebd.detect": return handleGebdDetect(job);
     default:
       throw new Error(`unknown job type: ${(job as Job).type}`);
+  }
+}
+
+/**
+ * GEBD 장면 경계 탐지 · GPU T4 spot VM lane (WORKER_JOBS=gebd) 에서만 픽업.
+ * payload: { mediaId, videoGcsPath, workdirGcsPrefix }
+ *   1. videoGcsPath 를 /tmp 에 다운로드
+ *   2. GEBD Docker 컨테이너 실행 (mmaction2 + CUDA · nvidia-container-toolkit)
+ *   3. boundaries.json 결과를 workdirGcsPrefix/boundaries.json 에 업로드
+ *   4. content.analyze 재개 트리거 (dedupeKey 로 재큐)
+ * VM 은 idle 10분 후 auto-shutdown (deploy/gebd-vm.sh 참고).
+ */
+async function handleGebdDetect(job: Job): Promise<void> {
+  const { spawnSync } = await import("node:child_process");
+  const fs = await import("node:fs/promises");
+  const path = await import("node:path");
+  const os = await import("node:os");
+
+  const mediaId = String(job.payload.mediaId ?? "");
+  const videoGcs = String(job.payload.videoGcsPath ?? "");
+  const workdirPrefix = String(job.payload.workdirGcsPrefix ?? "");
+  if (!mediaId || !videoGcs || !workdirPrefix) {
+    throw new Error("gebd.detect requires payload.mediaId, videoGcsPath, workdirGcsPrefix");
+  }
+
+  const image = process.env.GEBD_IMAGE || "asia-northeast3-docker.pkg.dev/step-d/stepd/gebd-mmaction2:latest";
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), `gebd-${mediaId}-`));
+  try {
+    // 1) 미디어 다운 (gsutil)
+    const localMp4 = path.join(tmpDir, "source.mp4");
+    const dl = spawnSync("gsutil", ["cp", videoGcs, localMp4], { encoding: "utf8" });
+    if (dl.status !== 0) throw new Error(`gsutil cp 실패: ${dl.stderr?.slice(0, 300)}`);
+
+    // 2) GEBD Docker 실행 (컨테이너가 /workspace/input 에서 mp4 읽어 /workspace/output/boundaries.json 생성)
+    const outDir = path.join(tmpDir, "out");
+    await fs.mkdir(outDir, { recursive: true });
+    const dockerArgs = [
+      "run", "--rm", "--gpus", "all",
+      "-v", `${tmpDir}:/workspace/input:ro`,
+      "-v", `${outDir}:/workspace/output`,
+      image,
+    ];
+    const dk = spawnSync("docker", dockerArgs, { encoding: "utf8", timeout: 20 * 60 * 1000 });
+    if (dk.status !== 0) throw new Error(`docker run 실패 (exit ${dk.status}): ${(dk.stderr || "").slice(0, 500)}`);
+
+    // 3) boundaries.json GCS 업로드
+    const boundariesLocal = path.join(outDir, "boundaries.json");
+    const boundariesRemote = `${workdirPrefix.replace(/\/$/, "")}/boundaries.json`;
+    const up = spawnSync("gsutil", ["cp", boundariesLocal, boundariesRemote], { encoding: "utf8" });
+    if (up.status !== 0) throw new Error(`gsutil cp (upload) 실패: ${up.stderr?.slice(0, 300)}`);
+
+    // 4) content.analyze 재개 · dedupeKey 새로 (직전 것과 다르게) 해서 다시 큐잉
+    await enqueue(
+      "content.analyze",
+      { mediaId, resumedFromGebd: true },
+      { dedupeKey: `content.analyze:${mediaId}:post-gebd:${Date.now()}` },
+    );
+    console.log(`[worker/gebd] ${mediaId} boundaries.json → ${boundariesRemote} · content.analyze 재개 큐잉`);
+  } finally {
+    try { await fs.rm(tmpDir, { recursive: true, force: true }); } catch { /* ignore */ }
   }
 }
 

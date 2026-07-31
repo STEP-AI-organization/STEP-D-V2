@@ -28,7 +28,11 @@ export type JobType =
   // Lab: 채널 매칭 데이터에서 고성과 규칙을 학습해 채널 프로파일 저장.
   | "match.learn"
   // Distribution: resumable-upload a rendered clip to a connected YouTube channel.
-  | "distribution.publish";
+  | "distribution.publish"
+  // GEBD: 장면 경계 탐지 (mmaction2). content.analyze 가 boundaries 필요 구간에 enqueue
+  // → GEBD 전용 T4 GPU VM 이 픽업 → boundaries.json GCS 업로드 → content.analyze 재개.
+  // 별도 lane (WORKER_JOBS=gebd) · 다른 워커는 이 잡을 claim 하지 않는다.
+  | "gebd.detect";
 
 export type JobStatus = "pending" | "running" | "done" | "failed";
 
