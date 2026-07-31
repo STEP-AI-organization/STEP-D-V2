@@ -48,6 +48,7 @@ from .scene_type import classify_shot_types
 from .beats import build_beats_from_boundaries
 from .boundaries import load_boundaries, dedup_boundaries, build_fallback_boundaries, save_boundaries
 from .beat_annot import annotate_beats
+from .speaker_rename import build_speaker_mapping, apply_speaker_mapping, assign_speakers_from_captions
 
 CHECKPOINTS = ("stt.json", "refined.json", "faces.json", "ppl.json", "scenes.json", "cast.json", "timeline.json", "narrative.json", "shots.json", "boundaries.json", "scene_type.json", "beats.json", "viewer_signals.json", "shorts.json", "analysis.json")
 
@@ -706,6 +707,35 @@ def analyze(
         step(f"beat annotate — 체크포인트 재사용 ({already_annotated}/{len(beats_list)})")
     timed("beat_annot", ts)
 
+    # 4j) speaker rename — 화면 자막(chyron) 감지 실명으로 STT 화자N rewrite.
+    # 사용자 방향 (2026-07-31): "화자2 → 유식(고유명사) 교체돼서 다음 분석·다음 서비스 반영".
+    # beat_annot 이 뽑은 characters_visible (Vision 감지 실명) 과 characters (dominant STT speaker)
+    # 짝을 vote count · 등록 인물(cast_registry) 매칭되는 것만 확정 · refined/narrative/beats in-place.
+    ts = time.time()
+    if beats_list:
+        # Path A: STT diarization 이 speaker 라벨을 남긴 경우 · dominant(STT) ↔ visible(자막) vote
+        mapping, flagged = build_speaker_mapping(beats_list, cast_registry)
+        if mapping:
+            step(f"speaker rename (dominant vote) — {len(mapping)}개: {mapping}")
+            counts = apply_speaker_mapping(mapping, refined, narrative, beats_list)
+            _save_json(out_dir / "refined.json", refined)
+            if isinstance(narrative, dict):
+                _save_json(out_dir / "narrative.json", narrative)
+            _save_json(out_dir / "beats.json", beats_data)
+            step(f"  refined {counts['refined']} seg · narrative {counts['narrative_chars']} · beats {counts['beats_chars']}")
+        # Path B: STT speaker 다 empty · 자막 실명으로 강제 부여 (Silero VAD 실패·diarization 스킵)
+        empty_speakers = sum(1 for s in (refined or []) if not (s.get("speaker") or "").strip())
+        if empty_speakers > len(refined) * 0.5 if refined else False:
+            n_assigned = assign_speakers_from_captions(beats_list, refined, cast_registry)
+            if n_assigned:
+                step(f"speaker rename (caption assign) — refined {n_assigned}/{len(refined)} seg 부여")
+                _save_json(out_dir / "refined.json", refined)
+        if not mapping:
+            step("speaker rename (dominant) — 매핑 후보 없음")
+        if flagged:
+            step(f"  (자막 감지 · cast 미등록: {flagged[:5]}{'...' if len(flagged)>5 else ''} · 사용자 검토용)")
+    timed("speaker_rename", ts)
+
     # 5) shorts recommendation (two-phase, genre-aware) ---------------------------
     ts = time.time()
     rec = _load_json(out_dir / "shorts.json")
@@ -801,10 +831,20 @@ def main() -> None:
 
     # Optional cast registry (--cast <registry.json>) → on-screen name captions get
     # normalized onto registered people; without it every name stays a candidate.
+    # 2026-07-31: --cast 명시 없어도 workdir/cast_registry.json 자동 로드 (speaker_rename 이 필요).
     cast_registry = None
     if "--cast" in sys.argv:
         from .cast import load_registry
         cast_registry = load_registry(sys.argv[sys.argv.index("--cast") + 1])
+    else:
+        _auto_cast = out_dir / "cast_registry.json"
+        if _auto_cast.exists():
+            try:
+                from .cast import load_registry
+                cast_registry = load_registry(str(_auto_cast))
+                print(f"[cast] workdir cast_registry.json 자동 로드 · {len(cast_registry or [])}명")
+            except Exception as e:
+                print(f"[cast] 자동 로드 실패, 무시: {str(e)[:80]}")
 
     # Optional destination filter (--channels a,b) → per-channel fit matrix. Default: all.
     channels = None
