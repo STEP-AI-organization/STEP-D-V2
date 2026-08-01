@@ -1480,6 +1480,186 @@ export async function setEpisodeCastStatus(
   return rows[0] as EpisodeCastRow | undefined;
 }
 
+// ── search segments (자연어 검색엔진 · pgvector) ────────────────────────────────
+// core/index_segments.py 산출(segments.json)을 적재하고, /api/search가 조회한다.
+// 필터는 컬럼(WHERE), 의미검색은 벡터(코사인), 키워드는 pg_trgm — 필터 먼저 좁히고 랭킹.
+
+export interface SearchSegmentRow {
+  segment_id: string;
+  media_id: string;
+  genre?: string | null;
+  source_beat?: number | null;
+  start: number;
+  end: number;
+  duration?: number | null;
+  characters?: string[];
+  speakers?: string[];
+  scene_type?: string | null;
+  hook?: string | null;
+  highlight_score?: number | null;
+  is_short?: boolean;
+  rights?: Record<string, unknown> | null;
+  scope?: { scope_type?: string | null; scope_id?: string | null; episode?: string | null; aired_at?: string | null } | null;
+  dialogue?: string | null;
+  chyron?: string | null;
+  summary?: string | null;
+  emb_dialogue?: number[] | null;
+  emb_summary?: number[] | null;
+}
+
+/** pgvector 리터럴: number[] → '[0.1,0.2,...]' (없으면 null). */
+function toVector(v: number[] | null | undefined): string | null {
+  return v && v.length ? `[${v.join(",")}]` : null;
+}
+
+/**
+ * 한 미디어의 검색 세그먼트를 통째로 교체 적재(DELETE + INSERT). 재분석 시 idempotent.
+ * segments = core/index_segments.py 의 segments 배열(임베딩 포함).
+ */
+export async function upsertSearchSegments(mediaId: string, segments: SearchSegmentRow[]): Promise<number> {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query("DELETE FROM search_segments WHERE media_id = $1", [mediaId]);
+    for (const s of segments) {
+      const scope = s.scope ?? {};
+      await client.query(
+        `INSERT INTO search_segments
+           (segment_id, media_id, program_id, genre, scope_type, scope_id, episode, aired_at,
+            start_sec, end_sec, duration_sec, characters, speakers, scene_type, hook,
+            highlight_score, is_short, rights, dialogue, chyron, summary, emb_dialogue, emb_summary)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb,$13::jsonb,$14,$15,
+                 $16,$17,$18::jsonb,$19,$20,$21,$22::vector,$23::vector)
+         ON CONFLICT (segment_id) DO UPDATE SET
+           media_id=EXCLUDED.media_id, program_id=EXCLUDED.program_id, genre=EXCLUDED.genre,
+           scope_type=EXCLUDED.scope_type, scope_id=EXCLUDED.scope_id, episode=EXCLUDED.episode,
+           aired_at=EXCLUDED.aired_at, start_sec=EXCLUDED.start_sec, end_sec=EXCLUDED.end_sec,
+           duration_sec=EXCLUDED.duration_sec, characters=EXCLUDED.characters, speakers=EXCLUDED.speakers,
+           scene_type=EXCLUDED.scene_type, hook=EXCLUDED.hook, highlight_score=EXCLUDED.highlight_score,
+           is_short=EXCLUDED.is_short, rights=EXCLUDED.rights, dialogue=EXCLUDED.dialogue,
+           chyron=EXCLUDED.chyron, summary=EXCLUDED.summary, emb_dialogue=EXCLUDED.emb_dialogue,
+           emb_summary=EXCLUDED.emb_summary`,
+        [
+          s.segment_id, mediaId, (s as { program_id?: string }).program_id ?? null, s.genre ?? null,
+          scope.scope_type ?? null, scope.scope_id ?? null, scope.episode ?? null, scope.aired_at ?? null,
+          s.start, s.end, s.duration ?? (s.end - s.start),
+          JSON.stringify(s.characters ?? []), JSON.stringify(s.speakers ?? []),
+          s.scene_type ?? null, s.hook ?? null, s.highlight_score ?? null, s.is_short ?? false,
+          JSON.stringify(s.rights ?? {}), s.dialogue ?? null, s.chyron ?? null, s.summary ?? null,
+          toVector(s.emb_dialogue), toVector(s.emb_summary),
+        ],
+      );
+    }
+    await client.query("COMMIT");
+    return segments.length;
+  } catch (e) {
+    await client.query("ROLLBACK");
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
+export interface SearchQuery {
+  queryText?: string;          // 키워드 축 (trgm) — 원문
+  queryVec?: number[] | null;  // 의미 축 (코사인) — 임베딩된 쿼리
+  // 메타데이터 필터
+  programId?: string;
+  genre?: string;
+  scopeType?: string;
+  scopeId?: string;
+  episode?: string;
+  airedFrom?: string;          // YYYY-MM-DD
+  airedTo?: string;
+  characters?: string[];       // 전부 포함(AND)
+  sceneType?: string;
+  isShort?: boolean;
+  // 권리
+  allowSpoiler?: boolean;      // 기본 false → 스포일러 제외
+  topK?: number;
+}
+
+export interface SearchHit {
+  segmentId: string;
+  mediaId: string;
+  start: number;
+  end: number;
+  duration: number | null;
+  characters: string[];
+  sceneType: string | null;
+  isShort: boolean;
+  highlightScore: number | null;
+  summary: string | null;
+  dialogue: string | null;
+  rights: Record<string, unknown>;
+  score: number;
+  lex: number;
+  vec: number;
+}
+
+/**
+ * 메타데이터 필터 → 하이브리드 랭킹(trgm 키워드 + 벡터 코사인, 가중합) → 권리·스포일러 필터.
+ * queryVec 없으면 키워드 축만으로 랭킹(임베딩 미가용 폴백).
+ */
+export async function searchSegments(q: SearchQuery): Promise<SearchHit[]> {
+  const where: string[] = [];
+  const params: unknown[] = [];
+  const p = (v: unknown): string => { params.push(v); return `$${params.length}`; };
+
+  if (q.programId) where.push(`program_id = ${p(q.programId)}`);
+  if (q.genre) where.push(`genre = ${p(q.genre)}`);
+  if (q.scopeType) where.push(`scope_type = ${p(q.scopeType)}`);
+  if (q.scopeId) where.push(`scope_id = ${p(q.scopeId)}`);
+  if (q.episode) where.push(`episode = ${p(q.episode)}`);
+  if (q.airedFrom) where.push(`aired_at >= ${p(q.airedFrom)}`);
+  if (q.airedTo) where.push(`aired_at <= ${p(q.airedTo)}`);
+  if (q.sceneType) where.push(`scene_type = ${p(q.sceneType)}`);
+  if (typeof q.isShort === "boolean") where.push(`is_short = ${p(q.isShort)}`);
+  if (q.characters && q.characters.length) {
+    where.push(`characters @> ${p(JSON.stringify(q.characters))}::jsonb`);
+  }
+  // 권리·스포일러: 스포일러 기본 제외 · 출연자 사용불가 제외 (NULL=미확인은 통과)
+  if (!q.allowSpoiler) where.push(`(rights->>'spoiler') IS DISTINCT FROM 'true'`);
+  where.push(`(rights->>'cast_ok') IS DISTINCT FROM 'false'`);
+
+  const vec = toVector(q.queryVec);
+  const lexExpr = q.queryText ? `similarity(search_text, ${p(q.queryText)})` : `0`;
+  const vecExpr = vec
+    ? `GREATEST(1 - (emb_dialogue <=> ${p(vec)}::vector), 1 - (emb_summary <=> ${p(vec)}::vector))`
+    : `0`;
+  // 가중합 하이브리드. 둘 다 0..1 스케일이라 단순 합이 성립.
+  const scoreExpr = `(0.5 * ${lexExpr} + 0.5 * ${vecExpr})`;
+  const topK = Math.max(1, Math.min(q.topK ?? 20, 100));
+
+  const sql = `
+    SELECT segment_id, media_id, start_sec, end_sec, duration_sec, characters,
+           scene_type, is_short, highlight_score, summary, dialogue, rights,
+           ${lexExpr} AS lex, ${vecExpr} AS vec, ${scoreExpr} AS score
+      FROM search_segments
+      ${where.length ? "WHERE " + where.join(" AND ") : ""}
+     ORDER BY score DESC, highlight_score DESC NULLS LAST
+     LIMIT ${topK}`;
+
+  const { rows } = await pool.query(sql, params);
+  return rows.map((r: Record<string, unknown>): SearchHit => ({
+    segmentId: r.segment_id as string,
+    mediaId: r.media_id as string,
+    start: Number(r.start_sec),
+    end: Number(r.end_sec),
+    duration: r.duration_sec == null ? null : Number(r.duration_sec),
+    characters: (r.characters as string[]) ?? [],
+    sceneType: (r.scene_type as string) ?? null,
+    isShort: Boolean(r.is_short),
+    highlightScore: r.highlight_score == null ? null : Number(r.highlight_score),
+    summary: (r.summary as string) ?? null,
+    dialogue: (r.dialogue as string) ?? null,
+    rights: (r.rights as Record<string, unknown>) ?? {},
+    score: Number(r.score),
+    lex: Number(r.lex),
+    vec: Number(r.vec),
+  }));
+}
+
 // ── cleanup ────────────────────────────────────────────────────────────────────
 
 export async function closeDb(): Promise<void> {

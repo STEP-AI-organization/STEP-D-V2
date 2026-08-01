@@ -9,9 +9,11 @@ STEP D Core — 텍스트 임베딩 백엔드
   local   (오프라인 폴백) — 문자 bigram 해시 임베더. **의미 품질 보장 아님.**
           GCP 자격증명 없이 검색 배관(필터·하이브리드·주석)을 검증하기 위한 것.
 
-선택: 환경변수 `EMBED_BACKEND` (vertex|local). 미지정이면 vertex 시도, import/호출
-실패 시 local 폴백(경고 1회). 차원(DIM)은 백엔드 무관 고정 — 쿼리와 문서가 같은 공간에
-있어야 코사인이 성립하므로, 한 인덱스 안에서 백엔드를 섞지 말 것.
+선택: 환경변수 `EMBED_BACKEND` (vertex|local). 미지정이면 vertex.
+⚠️ vertex 실패 시 **local로 폴백하지 않는다** — 인덱스에 local 벡터를 섞으면 쿼리(vertex)
+임베딩과 다른 공간이라 코사인이 깨진다. 실패한 임베딩은 **None**(→ 저장 시 NULL)으로 두고,
+검색은 키워드 축(pg_trgm)만으로 폴백한다. local은 오프라인 셀프테스트에서만 명시적으로 쓴다.
+차원(DIM)은 백엔드 무관 고정.
 
 task_type: 문서는 RETRIEVAL_DOCUMENT, 쿼리는 RETRIEVAL_QUERY (비대칭 검색 최적화).
 """
@@ -95,30 +97,32 @@ def _resolve_backend() -> str:
     return "vertex"  # 기본 — 실패 시 embed_texts가 local로 폴백
 
 
-def embed_texts(texts: list[str], *, is_query: bool = False) -> list[list[float]]:
-    """텍스트 배열 → 벡터 배열 (DIM 차원, L2 정규화). 빈 문자열은 영벡터."""
+def embed_texts(texts: list[str], *, is_query: bool = False) -> list[list[float] | None]:
+    """텍스트 배열 → 벡터 배열 (DIM 차원). 빈 문자열·실패는 None (→ 저장 시 NULL).
+    ⚠️ vertex 실패해도 local로 폴백하지 않는다 (인덱스 오염 방지)."""
     if not texts:
         return []
     backend = _resolve_backend()
     task_type = "RETRIEVAL_QUERY" if is_query else "RETRIEVAL_DOCUMENT"
+    nonempty = [i for i, t in enumerate(texts) if (t or "").strip()]
 
-    if backend == "vertex":
-        try:
-            # 빈 문자열은 Vertex가 거부 → 자리표시 후 영벡터로 되돌림
-            idx = [i for i, t in enumerate(texts) if (t or "").strip()]
-            out: list[list[float]] = [[0.0] * DIM for _ in texts]
-            if idx:
-                vecs = _vertex_embed([texts[i] for i in idx], task_type)
-                for j, i in enumerate(idx):
-                    out[i] = vecs[j]
-            return out
-        except Exception as e:  # 자격증명 없음·SDK 없음·호출 실패 → local 폴백
-            _warn_once(f"vertex 임베딩 실패 → local 폴백 ({str(e)[:120]})")
+    if backend == "local":
+        return [_local_embed(t) if (t or "").strip() else None for t in texts]
 
-    return [_local_embed(t) if (t or "").strip() else [0.0] * DIM for t in texts]
+    # vertex — 실패하면 전부 None (키워드 축으로 폴백)
+    out: list[list[float] | None] = [None] * len(texts)
+    if not nonempty:
+        return out
+    try:
+        vecs = _vertex_embed([texts[i] for i in nonempty], task_type)
+        for j, i in enumerate(nonempty):
+            out[i] = vecs[j]
+    except Exception as e:  # 자격증명 없음·SDK 없음·호출 실패
+        _warn_once(f"vertex 임베딩 실패 → 임베딩 None, 키워드 축만 사용 ({str(e)[:120]})")
+    return out
 
 
-def embed_one(text: str, *, is_query: bool = False) -> list[float]:
+def embed_one(text: str, *, is_query: bool = False) -> list[float] | None:
     return embed_texts([text], is_query=is_query)[0]
 
 

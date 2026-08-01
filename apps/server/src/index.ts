@@ -70,11 +70,15 @@ import {
   deleteShortSourceMap,
   getChannelPointProfile,
   getPool,
+  searchSegments,
   type MediaRow,
   type YouTubeChannel,
   type ChannelVideo,
+  type SearchHit,
+  type SearchQuery,
 } from "./db-pg.ts";
 import { hasFfmpeg, probe, captureThumbnail, trimEncode, remuxFaststart, renderShort } from "./ffmpeg.ts";
+import { embedQuery } from "./search-embed.ts";
 import { newId } from "./pipeline.ts";
 import {
   normalizeProfile,
@@ -150,6 +154,75 @@ app.get("/health", async (c) => {
 
 // ── full state (web InitialData + media) ──────────────────────────────────────
 app.get("/api/state", async (c) => c.json(await getState()));
+
+// ── 자연어 영상 검색 (search_segments · pgvector) ──────────────────────────────
+// 필터(프로그램·스코프·회차·방영일·인물·장면유형)는 파라미터로, 의미검색은 q로.
+// q → pg_trgm 키워드 + Vertex 쿼리 임베딩 코사인 하이브리드. 권리·스포일러는 SQL에서
+// 걸러지고, 남은 상태(음원·PPL·미확인)는 카드에 주석으로 붙는다.
+// NOTE: q를 {인물·스코프·회차} 필터로 쪼개는 LLM 쿼리 파서는 다음 슬라이스 — 지금은
+//       구조 필터를 명시 파라미터로 받는다. core/search.py의 룰 파서가 그 참조 구현.
+function annotateRights(rights: Record<string, unknown>): Record<string, string> {
+  const n: Record<string, string> = {};
+  if (rights.spoiler === true) n.spoiler = "⚠️ 스포일러";
+  if (rights.cast_ok == null) n.cast_ok = "출연자 권리 확인필요";
+  if (rights.music_cleared === false) n.music_cleared = "⚠️ 음원 미클리어";
+  else if (rights.music_cleared == null) n.music_cleared = "음원 확인필요";
+  if (rights.ppl === true) n.ppl = "협찬/PPL 구간";
+  return n;
+}
+
+app.get("/api/search", async (c) => {
+  const q = (c.req.query("q") || "").trim();
+  const characters = (c.req.query("character") || "").split(",").map((s) => s.trim()).filter(Boolean);
+  const isShortParam = c.req.query("is_short");
+  const query: SearchQuery = {
+    queryText: q || undefined,
+    programId: c.req.query("program") || undefined,
+    genre: c.req.query("genre") || undefined,
+    scopeType: c.req.query("scope_type") || undefined,
+    scopeId: c.req.query("scope_id") || undefined,
+    episode: c.req.query("episode") || undefined,
+    airedFrom: c.req.query("aired_from") || undefined,
+    airedTo: c.req.query("aired_to") || undefined,
+    characters: characters.length ? characters : undefined,
+    sceneType: c.req.query("scene_type") || undefined,
+    isShort: isShortParam == null ? undefined : (isShortParam === "true" || isShortParam === "1"),
+    allowSpoiler: c.req.query("allow_spoiler") === "true",
+    topK: c.req.query("top_k") ? Number(c.req.query("top_k")) : 20,
+  };
+  // 의미 축 — 쿼리 임베딩 (실패하면 null → 키워드 축만으로 랭킹)
+  query.queryVec = q ? await embedQuery(q) : null;
+
+  let hits: SearchHit[];
+  try {
+    hits = await searchSegments(query);
+  } catch (e) {
+    // search_segments 테이블 미존재(마이그레이션 미적용) 등
+    return c.json({ error: e instanceof Error ? e.message : String(e), results: [] }, 500);
+  }
+  return c.json({
+    query: q,
+    embedded: query.queryVec != null,
+    count: hits.length,
+    results: hits.map((h) => ({
+      segmentId: h.segmentId,
+      mediaId: h.mediaId,
+      start: h.start,
+      end: h.end,
+      duration: h.duration,
+      characters: h.characters,
+      sceneType: h.sceneType,
+      isShort: h.isShort,
+      highlightScore: h.highlightScore,
+      summary: h.summary,
+      dialogue: h.dialogue,
+      rightsStatus: annotateRights(h.rights),
+      score: h.score,
+      lex: h.lex,
+      vec: h.vec,
+    })),
+  });
+});
 
 // ── create a program (content root — must exist before any upload) ──
 app.post("/api/programs", async (c) => {
