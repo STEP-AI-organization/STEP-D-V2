@@ -187,8 +187,19 @@ def _dedup(*lists: list[str]) -> list[str]:
 
 
 # ── 메인 ─────────────────────────────────────────────────────────────────────
+def _fill_embeddings(segments: list[dict]) -> None:
+    """emb_dialogue·emb_summary를 채운다 (core.embed 백엔드). 대사·요약을 각각
+    별도 벡터로 — 한 세그먼트에 벡터 하나만 두면 대사·장소·감정이 뭉개진다(설계 §2.1)."""
+    from .embed import embed_texts
+    dia = embed_texts([s.get("dialogue") or "" for s in segments])
+    summ = embed_texts([s.get("summary") or "" for s in segments])
+    for s, d, m in zip(segments, dia, summ):
+        s["emb_dialogue"] = d
+        s["emb_summary"] = m
+
+
 def build_segments(workdir: str | Path, media_id: str = "",
-                   genre: str = "") -> dict:
+                   genre: str = "", embed: bool = False) -> dict:
     wd = Path(workdir)
     beats = _as_list(_load(wd / "beats.json"), "beats")
     if not beats:
@@ -250,6 +261,9 @@ def build_segments(workdir: str | Path, media_id: str = "",
             "emb_summary": None,
         })
 
+    if embed and segments:
+        _fill_embeddings(segments)
+
     return {"media_id": media_id, "genre": genre, "count": len(segments),
             "segments": segments}
 
@@ -260,6 +274,7 @@ def _main(argv: list[str]) -> int:
         return 2
     workdir = argv[0]
     media_id, genre, out = "", "", ""
+    embed = False
     i = 1
     while i < len(argv):
         a = argv[i]
@@ -269,10 +284,12 @@ def _main(argv: list[str]) -> int:
             genre = argv[i + 1]; i += 2
         elif a == "--out" and i + 1 < len(argv):
             out = argv[i + 1]; i += 2
+        elif a == "--embed":
+            embed = True; i += 1
         else:
             i += 1
 
-    result = build_segments(workdir, media_id=media_id, genre=genre)
+    result = build_segments(workdir, media_id=media_id, genre=genre, embed=embed)
     out_path = Path(out) if out else Path(workdir) / "segments.json"
     out_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"[index_segments] {result['count']} 세그먼트 → {out_path}")
