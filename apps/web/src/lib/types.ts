@@ -195,6 +195,11 @@ export interface Clip {
   /** 두 줄 제목 (2026-07-29): editor 오버레이 · 라인1 흰색 setup · 라인2 파란색 payoff. */
   titleLine1?: string;
   titleLine2?: string;
+  /** 첫 3초 hook intro (2026-08-02 · docs/plans/shorts-hook-intro-3sec.md) — adopt 시 rec 에서 승계.
+   *  에디터 "첫 3초 훅" 토글(editorState.hookOn) ON + hookTimeSec 있을 때 /export 가 프리롤로 붙인다. */
+  hookQuote?: string;
+  hookTimeSec?: number;
+  hookIntroCaption?: string;
   clipType: ClipType;
   clipCategory?: ClipCategory;
   targetAge: TargetAge;

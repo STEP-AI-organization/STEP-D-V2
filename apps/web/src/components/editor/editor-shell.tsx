@@ -249,7 +249,13 @@ export function EditorShell({ clipId }: { clipId: string }) {
       setCapped(res.capped);
       // The render can take minutes — confirm it actually finished, not just that the
       // button reset. capped is surfaced separately by the banner below.
-      toast({ title: "렌더 완료", description: "클립이 확정·인코딩되었습니다.", tone: "done" });
+      toast({
+        title: "렌더 완료",
+        description: res.hookPreroll
+          ? "클립이 확정·인코딩되었습니다. 첫 3초 훅 프리롤이 적용됐습니다."
+          : "클립이 확정·인코딩되었습니다.",
+        tone: "done",
+      });
     } catch (e) {
       toast({
         title: "렌더 실패",
@@ -606,6 +612,8 @@ export function EditorShell({ clipId }: { clipId: string }) {
           onTogglePlay={togglePlay}
           // AI 추천 구간 — 타임라인 위에 하이라이트 밴드로 표시(트림과 별개).
           recWindow={previewingMaster ? { start: recStart, end: recEnd } : undefined}
+          // "첫 3초 훅" 토글의 실제 렌더 가능 여부 — clip 에 hook 시각이 있어야 프리롤이 붙는다.
+          hookAvailable={typeof clip?.hookTimeSec === "number"}
         />
         <button
           onClick={addTrack}

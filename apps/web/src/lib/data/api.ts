@@ -660,6 +660,8 @@ export async function exportClip(
   cached?: boolean;
   preset?: string | null;
   capped?: { maxSec: number; requestedSec: number } | null;
+  /** 첫 3초 hook 프리롤이 이 렌더에 적용됐는지 ("첫 3초 훅" 토글 ON + hookTimeSec 존재). */
+  hookPreroll?: boolean;
 }> {
   return json(
     await fetch(`${API_BASE}/clips/${clipId}/export`, {

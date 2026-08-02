@@ -68,6 +68,7 @@ export function EditorTimeline({
   tracks,
   onTogglePlay,
   recWindow,
+  hookAvailable,
 }: {
   state: EditorState;
   update: Update;
@@ -80,6 +81,9 @@ export function EditorTimeline({
   /** AI 추천 창(마스터 절대 초) — 있으면 트랙 상단에 얇은 하이라이트 밴드로 표시하고
    *  트림 IN/OUT의 "추천 원위치로" 스냅 대상이 된다. 트림 자체는 사용자 자유. */
   recWindow?: { start: number; end: number };
+  /** clip 에 hookTimeSec 이 있어 "첫 3초 훅" 프리롤을 실제로 렌더할 수 있는지. false 면 토글을
+   *  켜도 렌더가 no-op 이라 · 토글에 안내 툴팁을 띄운다. */
+  hookAvailable?: boolean;
 }) {
   const [playing, setPlaying] = useState(false);
   const [t, setT] = useState(0);
@@ -472,7 +476,17 @@ export function EditorTimeline({
             <Gauge className="size-3.5" /> {state.speed}×
           </button>
           <HookToggle icon={TrendingUp} label="속도 램핑" on={rampMode} onClick={() => setRampMode((v) => !v)} />
-          <HookToggle icon={Sparkles} label="첫 3초 훅" on={state.hookOn} onClick={() => update({ hookOn: !state.hookOn })} />
+          <HookToggle
+            icon={Sparkles}
+            label="첫 3초 훅"
+            on={state.hookOn}
+            onClick={() => update({ hookOn: !state.hookOn })}
+            title={
+              hookAvailable === false
+                ? "이 클립엔 AI hook 시각(hook_time_sec)이 없어 프리롤이 렌더되지 않습니다."
+                : "ON 시 렌더(확정)할 때 hook 구간 첫 3초를 프리롤로 앞에 붙입니다 (이탈 방지)."
+            }
+          />
           <HookToggle icon={Volume2} label="무음 제거" on={state.silenceCut} onClick={() => update({ silenceCut: !state.silenceCut })} />
         </div>
       </div>
@@ -872,15 +886,18 @@ function HookToggle({
   label,
   on,
   onClick,
+  title,
 }: {
   icon: typeof Sparkles;
   label: string;
   on: boolean;
   onClick: () => void;
+  title?: string;
 }) {
   return (
     <button
       onClick={onClick}
+      title={title}
       className={cn(
         "inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs transition-colors",
         on ? "border-emerald-500/60 bg-emerald-500/15 text-emerald-300" : "border-zinc-700 text-zinc-400 hover:bg-zinc-800",

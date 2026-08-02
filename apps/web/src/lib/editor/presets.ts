@@ -500,7 +500,10 @@ export function makeInitialEditorState(
     trimOut: outAbs,
     tracks: [makeMainTrack(inAbs, outAbs, dur)],
     speed: 1,
-    hookOn: true,
+    // "첫 3초 훅" 프리롤 — opt-in(기본 OFF). ON 시 /export 가 hook 구간을 프리롤로 붙인다
+    // (docs/plans/shorts-hook-intro-3sec.md · Phase 3). 실제 배선 전엔 no-op 이었어 기본 ON 이었지만
+    // 배선 후엔 배포물을 바꾸므로 편집자가 명시적으로 켜도록 OFF 로 둔다.
+    hookOn: false,
     silenceCut: false,
     // Gemini STT가 발화 시작을 살짝 앞서 marking하는 경향 관찰 — 자막이 영상보다 먼저 뜸.
     // 기본값 0ms로 뒤로 밀어 다수 케이스 커버. 필요 시 하단 timeline UI에서 ±100ms 조정.
