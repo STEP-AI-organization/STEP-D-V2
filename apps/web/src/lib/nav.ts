@@ -11,6 +11,7 @@ import {
   Image as ImageIcon,
   Inbox,
   LayoutGrid,
+  Search,
   Send,
   Settings,
   TrendingUp,
@@ -30,6 +31,7 @@ export interface NavItem {
 
 export const NAV: NavItem[] = [
   { href: "/", label: "대시보드", icon: Inbox, badgeKey: "inbox" },
+  { href: "/search", label: "구간 검색", icon: Search },
   { href: "/programs", label: "콘텐츠", icon: LayoutGrid },
   { href: "/clips", label: "클립", icon: Clapperboard },
   { href: "/distribution", label: "배포현황", icon: Send, badgeKey: "distributionFailed" },

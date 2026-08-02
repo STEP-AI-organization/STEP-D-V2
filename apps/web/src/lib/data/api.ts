@@ -1026,3 +1026,79 @@ export interface OpsMediaRow {
 export async function fetchOpsMediaAnalysis(): Promise<{ media: OpsMediaRow[] }> {
   return json<{ media: OpsMediaRow[] }>(await fetch(`${API_BASE}/admin/media-analysis`, { cache: "no-store" }));
 }
+
+// ── 자연어 영상 검색 (search_segments · pgvector) ──────────────────────────────
+/** 검색 결과 카드 하나 = 잘라서 바로 쓸 수 있는 구간(beat). */
+export interface SearchResultCard {
+  segmentId: string;
+  mediaId: string;
+  start: number;
+  end: number;
+  duration: number | null;
+  characters: string[];
+  sceneType: string | null;
+  isShort: boolean;
+  highlightScore: number | null;
+  summary: string | null;
+  dialogue: string | null;
+  /** 권리·스포일러 상태 주석 (키→사람이 읽는 문구). 비면 이슈 없음. */
+  rightsStatus: Record<string, string>;
+  score: number;
+  lex: number;
+  vec: number;
+}
+
+/** 서버가 쿼리를 어떻게 필터로 쪼갰는지 (투명성). */
+export interface SearchParsed {
+  characters: string[];
+  sceneType?: string;
+  isShort?: boolean;
+  airedFrom?: string;
+  airedTo?: string;
+  semantic: string;
+  charactersUsed: string[];
+}
+
+export interface SearchResponse {
+  query: string;
+  parsed: SearchParsed;
+  /** 의미 축(임베딩)이 실제로 걸렸는지. false면 키워드 축만으로 랭킹. */
+  embedded: boolean;
+  count: number;
+  results: SearchResultCard[];
+}
+
+export interface SearchParams {
+  q: string;
+  program?: string;
+  genre?: string;
+  scopeType?: string;
+  scopeId?: string;
+  episode?: string;
+  character?: string;        // 콤마 구분
+  sceneType?: string;
+  isShort?: boolean;
+  airedFrom?: string;
+  airedTo?: string;
+  allowSpoiler?: boolean;
+  topK?: number;
+}
+
+/** 자연어 쿼리로 검색. 필터는 파라미터, q는 LLM 파서가 필터+의미로 쪼갠다. */
+export async function searchSegments(params: SearchParams, signal?: AbortSignal): Promise<SearchResponse> {
+  const qs = new URLSearchParams();
+  qs.set("q", params.q);
+  if (params.program) qs.set("program", params.program);
+  if (params.genre) qs.set("genre", params.genre);
+  if (params.scopeType) qs.set("scope_type", params.scopeType);
+  if (params.scopeId) qs.set("scope_id", params.scopeId);
+  if (params.episode) qs.set("episode", params.episode);
+  if (params.character) qs.set("character", params.character);
+  if (params.sceneType) qs.set("scene_type", params.sceneType);
+  if (params.isShort != null) qs.set("is_short", String(params.isShort));
+  if (params.airedFrom) qs.set("aired_from", params.airedFrom);
+  if (params.airedTo) qs.set("aired_to", params.airedTo);
+  if (params.allowSpoiler) qs.set("allow_spoiler", "true");
+  if (params.topK) qs.set("top_k", String(params.topK));
+  return json<SearchResponse>(await fetch(`${API_BASE}/search?${qs}`, { signal, cache: "no-store" }));
+}
