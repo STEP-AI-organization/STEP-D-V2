@@ -1660,6 +1660,21 @@ export async function searchSegments(q: SearchQuery): Promise<SearchHit[]> {
   }));
 }
 
+/**
+ * 인덱싱된 세그먼트에서 등장 인물 이름 사전을 뽑는다 (쿼리 파서 roster). programId 주면
+ * 그 프로그램으로 한정 — "영철"을 (스코프, 역할명)으로 좁히는 데 쓴다.
+ */
+export async function listKnownCharacters(programId?: string): Promise<string[]> {
+  const { rows } = await pool.query(
+    `SELECT DISTINCT jsonb_array_elements_text(characters) AS name
+       FROM search_segments
+      WHERE ($1::text IS NULL OR program_id = $1)
+      LIMIT 500`,
+    [programId ?? null],
+  );
+  return rows.map((r: { name: string }) => r.name).filter(Boolean);
+}
+
 // ── cleanup ────────────────────────────────────────────────────────────────────
 
 export async function closeDb(): Promise<void> {

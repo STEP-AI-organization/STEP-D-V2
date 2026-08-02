@@ -71,6 +71,7 @@ import {
   getChannelPointProfile,
   getPool,
   searchSegments,
+  listKnownCharacters,
   type MediaRow,
   type YouTubeChannel,
   type ChannelVideo,
@@ -79,6 +80,7 @@ import {
 } from "./db-pg.ts";
 import { hasFfmpeg, probe, captureThumbnail, trimEncode, remuxFaststart, renderShort } from "./ffmpeg.ts";
 import { embedQuery } from "./search-embed.ts";
+import { parseQuery } from "./search-parse.ts";
 import { newId } from "./pipeline.ts";
 import {
   normalizeProfile,
@@ -173,25 +175,35 @@ function annotateRights(rights: Record<string, unknown>): Record<string, string>
 
 app.get("/api/search", async (c) => {
   const q = (c.req.query("q") || "").trim();
-  const characters = (c.req.query("character") || "").split(",").map((s) => s.trim()).filter(Boolean);
+  const programId = c.req.query("program") || undefined;
+  const explicitChars = (c.req.query("character") || "").split(",").map((s) => s.trim()).filter(Boolean);
   const isShortParam = c.req.query("is_short");
+  const explicitIsShort = isShortParam == null ? undefined : (isShortParam === "true" || isShortParam === "1");
+
+  // LLM 쿼리 파서 — q를 {인물·장면유형·방영기간·쇼츠·semantic}로 분해. 명시 파라미터가 우선.
+  // 인물 후보(roster)는 프로그램 세그먼트에서 뽑아 환각을 막는다. 실패 시 룰 폴백.
+  const roster = await listKnownCharacters(programId).catch(() => [] as string[]);
+  const parsed = q ? await parseQuery(q, { roster }) : { characters: [], semantic: "" };
+  const mergedChars = explicitChars.length ? explicitChars : parsed.characters;
+  const searchText = (parsed.semantic || q) || undefined;
+
   const query: SearchQuery = {
-    queryText: q || undefined,
-    programId: c.req.query("program") || undefined,
+    queryText: searchText,
+    programId,
     genre: c.req.query("genre") || undefined,
     scopeType: c.req.query("scope_type") || undefined,
     scopeId: c.req.query("scope_id") || undefined,
     episode: c.req.query("episode") || undefined,
-    airedFrom: c.req.query("aired_from") || undefined,
-    airedTo: c.req.query("aired_to") || undefined,
-    characters: characters.length ? characters : undefined,
-    sceneType: c.req.query("scene_type") || undefined,
-    isShort: isShortParam == null ? undefined : (isShortParam === "true" || isShortParam === "1"),
+    airedFrom: c.req.query("aired_from") || parsed.airedFrom || undefined,
+    airedTo: c.req.query("aired_to") || parsed.airedTo || undefined,
+    characters: mergedChars.length ? mergedChars : undefined,
+    sceneType: c.req.query("scene_type") || parsed.sceneType || undefined,
+    isShort: explicitIsShort ?? parsed.isShort,
     allowSpoiler: c.req.query("allow_spoiler") === "true",
     topK: c.req.query("top_k") ? Number(c.req.query("top_k")) : 20,
   };
-  // 의미 축 — 쿼리 임베딩 (실패하면 null → 키워드 축만으로 랭킹)
-  query.queryVec = q ? await embedQuery(q) : null;
+  // 의미 축 — 파싱된 semantic을 임베딩 (실패하면 null → 키워드 축만으로 랭킹)
+  query.queryVec = searchText ? await embedQuery(searchText) : null;
 
   let hits: SearchHit[];
   try {
@@ -202,6 +214,7 @@ app.get("/api/search", async (c) => {
   }
   return c.json({
     query: q,
+    parsed: { ...parsed, charactersUsed: query.characters ?? [] },
     embedded: query.queryVec != null,
     count: hits.length,
     results: hits.map((h) => ({

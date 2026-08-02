@@ -1067,14 +1067,39 @@ export async function runContentAnalyze(mediaId: string, fast = false): Promise<
     // 검색 세그먼트를 pgvector(search_segments)에 적재 — core.analyze가 workdir에 남긴
     // segments.json(=beat 재조립 + 임베딩)을 읽어 upsert. 검색은 이걸로 굴러간다.
     // 추가 연산 0(인덱싱은 analyze 안에서 이미 끝남) · 실패해도 분석 성립(non-fatal).
+    // 적재 직전 서버 쪽 실메타데이터를 주입한다: program_id·회차·방영일(episode 엔티티 조인)
+    // + rights.ppl(파이프라인 PPL 검출과 구간 오버랩). 이게 있어야 "그 프로 작년 편" 필터가
+    // 실제로 동작한다(설계 §4 — 방송사 쿼리는 semantic보다 필터).
     try {
       const segPath = path.join(work, "segments.json");
       if (fs.existsSync(segPath)) {
         const segDoc = JSON.parse(fs.readFileSync(segPath, "utf-8")) as { segments?: SearchSegmentRow[] };
         const segs = Array.isArray(segDoc?.segments) ? segDoc.segments : [];
         if (segs.length) {
+          // episode → program_id·회차·방영일
+          const ep = media.episodeId ? await getEntity<{ programId?: string; episodeNumber?: number; broadDate?: string }>("episode", media.episodeId) : undefined;
+          // PPL 구간 (분석 산출)
+          const pplIntervals: Array<{ start: number; end: number }> = Array.isArray(analysis?.ppl?.detections)
+            ? analysis.ppl.detections
+                .filter((d: { start?: number; end?: number }) => typeof d.start === "number" && typeof d.end === "number")
+                .map((d: { start: number; end: number }) => ({ start: d.start, end: d.end }))
+            : [];
+          const overlapsPpl = (s: number, e: number) => pplIntervals.some((iv) => Math.min(e, iv.end) - Math.max(s, iv.start) > 0);
+
+          for (const seg of segs) {
+            (seg as { program_id?: string | null }).program_id = ep?.programId ?? null;
+            seg.scope = {
+              ...(seg.scope ?? {}),
+              episode: ep?.episodeNumber != null ? String(ep.episodeNumber) : (seg.scope?.episode ?? null),
+              aired_at: ep?.broadDate ?? seg.scope?.aired_at ?? null,
+            };
+            if (overlapsPpl(seg.start, seg.end)) {
+              seg.rights = { ...(seg.rights ?? {}), ppl: true };
+            }
+          }
           const n = await upsertSearchSegments(mediaId, segs);
-          console.log(`[worker] content.analyze ${mediaId}: 검색 세그먼트 ${n}개 적재 (search_segments)`);
+          const pplN = segs.filter((s) => (s.rights as { ppl?: boolean })?.ppl).length;
+          console.log(`[worker] content.analyze ${mediaId}: 검색 세그먼트 ${n}개 적재 (program=${ep?.programId ?? "-"} ep=${ep?.episodeNumber ?? "-"} ppl구간=${pplN})`);
         }
       }
     } catch (e) {
