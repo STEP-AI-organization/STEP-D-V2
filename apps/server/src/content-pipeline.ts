@@ -51,7 +51,7 @@ const WORK_ROOT = path.join(os.tmpdir(), "stepd-content");
 const WORK_DIR_TTL_MS = 48 * 60 * 60 * 1000;
 
 /** Stage outputs core/analyze.py checkpoints into the work dir (upload order). */
-const CHECKPOINT_FILES = ["analysis.json", "scenes.json", "cast.json", "timeline.json", "narrative.json", "shorts.json", "refined.json", "faces.json", "ppl.json", "stt.json", "manifest.json", "comments.json", "viewer_signals.json", "beats.json", "boundaries.json", "shots.json", "scene_type.json"];
+const CHECKPOINT_FILES = ["analysis.json", "scenes.json", "cast.json", "timeline.json", "narrative.json", "shorts.json", "refined.json", "faces.json", "ppl.json", "stt.json", "manifest.json", "comments.json", "viewer_signals.json", "beats.json", "boundaries.json", "shots.json", "scene_type.json", "segments.json"];
 
 /**
  * Watchdog: kill the python child after this long with NO stdout output. A hung Vertex
@@ -717,6 +717,98 @@ async function setEpisodePipeline(episodeId: string, pipeline: Record<string, un
   if (ep) await putEntity("episode", episodeId, { ...ep, pipeline });
 }
 
+// ── 검색 세그먼트 적재 (공유) ────────────────────────────────────────────────
+/** index_segments가 뽑을 수 있게 GCS에서 받아야 하는 체크포인트 (없으면 스킵 · beats 필수). */
+const INDEX_INPUT_FILES = ["beats.json", "refined.json", "narrative.json", "scene_type.json", "cast.json", "shorts.json", "chyron.json", "ppl.json"];
+
+/**
+ * segments.json 배열에 서버 쪽 실메타데이터(program_id·회차·방영일 + rights.ppl)를 주입하고
+ * pgvector에 적재. content.analyze(신규 분석)와 content.index(백필)가 공유한다.
+ */
+export async function enrichAndUpsertSearchSegments(
+  mediaId: string,
+  episodeId: string | null,
+  segments: SearchSegmentRow[],
+  pplDetections?: Array<{ start?: number; end?: number }>,
+): Promise<number> {
+  if (!segments.length) return 0;
+  const ep = episodeId
+    ? await getEntity<{ programId?: string; episodeNumber?: number; broadDate?: string }>("episode", episodeId)
+    : undefined;
+  const pplIntervals = (Array.isArray(pplDetections) ? pplDetections : [])
+    .filter((d) => typeof d.start === "number" && typeof d.end === "number")
+    .map((d) => ({ start: d.start as number, end: d.end as number }));
+  const overlapsPpl = (s: number, e: number) => pplIntervals.some((iv) => Math.min(e, iv.end) - Math.max(s, iv.start) > 0);
+
+  for (const seg of segments) {
+    (seg as { program_id?: string | null }).program_id = ep?.programId ?? null;
+    seg.scope = {
+      ...(seg.scope ?? {}),
+      episode: ep?.episodeNumber != null ? String(ep.episodeNumber) : (seg.scope?.episode ?? null),
+      aired_at: ep?.broadDate ?? seg.scope?.aired_at ?? null,
+    };
+    if (overlapsPpl(seg.start, seg.end)) seg.rights = { ...(seg.rights ?? {}), ppl: true };
+  }
+  return upsertSearchSegments(mediaId, segments);
+}
+
+/** CORE_PYTHON으로 index_segments 실행 (임베딩 포함). workdir에 segments.json을 남긴다. */
+function runIndexSegments(workdir: string, mediaId: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const proc = spawn(CORE_PYTHON, ["-u", "-m", "core.index_segments", workdir, "--media", mediaId, "--embed"], {
+      cwd: REPO_ROOT,
+      env: {
+        ...process.env,
+        GOOGLE_CLOUD_PROJECT: process.env.GOOGLE_CLOUD_PROJECT || "step-d",
+        VERTEX_LOCATION: process.env.VERTEX_LOCATION || "asia-northeast3",
+      },
+    });
+    let err = "";
+    proc.stderr?.on("data", (b) => { err += String(b).slice(0, 2000); });
+    proc.on("error", reject);
+    proc.on("close", (code) => (code === 0 ? resolve() : reject(new Error(`index_segments exited ${code}: ${err.slice(-500)}`))));
+  });
+}
+
+/**
+ * content.index (백필) — 이미 분석된 미디어를 **재분석 없이** 재인덱싱한다. GCS에 보존된
+ * 체크포인트(beats 등)만 받아 index_segments(임베딩) → search_segments 적재. 기존 회차를
+ * 검색에 태우는 값싼 경로 — 마이그레이션 적용 후 실데이터 테스트를 여는 열쇠.
+ */
+export async function runContentIndex(mediaId: string): Promise<void> {
+  const media = await getMedia(mediaId);
+  if (!media) throw new Error(`media not found: ${mediaId}`);
+  const { readFile, fileExists } = await import("./storage-gcs.ts");
+  const base = `analysis/${mediaId}`;
+  const tmp = path.join(WORK_ROOT, `index_${mediaId.replace(/[^a-zA-Z0-9_-]/g, "_")}`);
+  fs.mkdirSync(tmp, { recursive: true });
+  try {
+    let got = 0;
+    for (const name of INDEX_INPUT_FILES) {
+      try {
+        if (await fileExists(`${base}/${name}`)) {
+          fs.writeFileSync(path.join(tmp, name), await readFile(`${base}/${name}`));
+          got++;
+        }
+      } catch { /* 개별 파일 누락은 스킵 */ }
+    }
+    if (!fs.existsSync(path.join(tmp, "beats.json"))) {
+      // 구 파이프라인 분석분 — beats 없음. 재시도로 큐를 소모하지 않게 조용히 스킵(재분석 필요).
+      console.warn(`[worker] content.index ${mediaId}: beats.json 없음 — 스킵(재분석 필요)`);
+      return;
+    }
+    await runIndexSegments(tmp, mediaId);
+    const segDoc = JSON.parse(fs.readFileSync(path.join(tmp, "segments.json"), "utf-8")) as { segments?: SearchSegmentRow[] };
+    const segs = Array.isArray(segDoc?.segments) ? segDoc.segments : [];
+    let ppl: Array<{ start?: number; end?: number }> = [];
+    try { ppl = (JSON.parse(fs.readFileSync(path.join(tmp, "ppl.json"), "utf-8"))?.detections) ?? []; } catch { /* ppl 없을 수 있음 */ }
+    const n = await enrichAndUpsertSearchSegments(mediaId, media.episodeId, segs, ppl);
+    console.log(`[worker] content.index ${mediaId}: ${n}개 재적재 (backfill · GCS 체크포인트 ${got}개)`);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
 /**
  * Upload the run's artifacts (stage outputs + scene frames) to storage under
  * analysis/{mediaId}/ so they outlive the work dir. Returns the object-path base,
@@ -1076,30 +1168,8 @@ export async function runContentAnalyze(mediaId: string, fast = false): Promise<
         const segDoc = JSON.parse(fs.readFileSync(segPath, "utf-8")) as { segments?: SearchSegmentRow[] };
         const segs = Array.isArray(segDoc?.segments) ? segDoc.segments : [];
         if (segs.length) {
-          // episode → program_id·회차·방영일
-          const ep = media.episodeId ? await getEntity<{ programId?: string; episodeNumber?: number; broadDate?: string }>("episode", media.episodeId) : undefined;
-          // PPL 구간 (분석 산출)
-          const pplIntervals: Array<{ start: number; end: number }> = Array.isArray(analysis?.ppl?.detections)
-            ? analysis.ppl.detections
-                .filter((d: { start?: number; end?: number }) => typeof d.start === "number" && typeof d.end === "number")
-                .map((d: { start: number; end: number }) => ({ start: d.start, end: d.end }))
-            : [];
-          const overlapsPpl = (s: number, e: number) => pplIntervals.some((iv) => Math.min(e, iv.end) - Math.max(s, iv.start) > 0);
-
-          for (const seg of segs) {
-            (seg as { program_id?: string | null }).program_id = ep?.programId ?? null;
-            seg.scope = {
-              ...(seg.scope ?? {}),
-              episode: ep?.episodeNumber != null ? String(ep.episodeNumber) : (seg.scope?.episode ?? null),
-              aired_at: ep?.broadDate ?? seg.scope?.aired_at ?? null,
-            };
-            if (overlapsPpl(seg.start, seg.end)) {
-              seg.rights = { ...(seg.rights ?? {}), ppl: true };
-            }
-          }
-          const n = await upsertSearchSegments(mediaId, segs);
-          const pplN = segs.filter((s) => (s.rights as { ppl?: boolean })?.ppl).length;
-          console.log(`[worker] content.analyze ${mediaId}: 검색 세그먼트 ${n}개 적재 (program=${ep?.programId ?? "-"} ep=${ep?.episodeNumber ?? "-"} ppl구간=${pplN})`);
+          const n = await enrichAndUpsertSearchSegments(mediaId, media.episodeId, segs, analysis?.ppl?.detections);
+          console.log(`[worker] content.analyze ${mediaId}: 검색 세그먼트 ${n}개 적재`);
         }
       }
     } catch (e) {

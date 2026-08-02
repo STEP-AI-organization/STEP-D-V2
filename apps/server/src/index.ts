@@ -874,6 +874,27 @@ app.post("/api/admin/queue/purge", async (c) => {
   });
 });
 
+// ── admin: 검색 인덱스 백필 — 기존 분석분을 재분석 없이 재인덱싱(content.index) ──
+// body: { mediaId?: string }. 있으면 그 미디어만, 없으면 master 전체. GCS 체크포인트에서
+// 인덱싱만 다시 돌려 search_segments를 채운다(마이그레이션 0009 적용 후 실데이터 테스트용).
+app.post("/api/admin/search/backfill", async (c) => {
+  const body = await c.req.json().catch(() => ({}) as Record<string, unknown>);
+  const one = typeof body.mediaId === "string" ? body.mediaId : undefined;
+  let targets: { id: string }[];
+  if (one) {
+    targets = [{ id: one }];
+  } else {
+    const masters = await getPool().query("SELECT id FROM media WHERE role = 'master'");
+    targets = masters.rows as { id: string }[];
+  }
+  let queued = 0;
+  for (const m of targets) {
+    const id = await enqueue("content.index", { mediaId: m.id }, { dedupeKey: `content.index:${m.id}` });
+    if (id) queued++;
+  }
+  return c.json({ ok: true, targets: targets.length, queued });
+});
+
 // ── admin: remux an existing master to progressive mp4 in place (for files uploaded
 //    before the ingest remux, or to re-fix a fragmented upload). ──
 app.post("/api/admin/remux/:id", async (c) => {

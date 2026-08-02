@@ -19,6 +19,8 @@ export type JobType =
   // Content pipeline (uploaded episodes): STT → refine → scenes → vision → shorts.
   // Distinct from the video.* YouTube-analytics jobs above.
   | "content.analyze"
+  // Search backfill: 기존 분석분을 재분석 없이 GCS 체크포인트로 재인덱싱(search_segments).
+  | "content.index"
   // Ingest: yt-dlp a YouTube URL on the worker VM → GCS → content.analyze.
   | "youtube.download"
   // Lab: 선택한 숏폼들이 롱폼의 어느 구간에서 나왔는지 오디오 정렬로 추적.

@@ -45,7 +45,7 @@ import { probe, captureThumbnail } from "./ffmpeg.ts";
 import { uploadFile, uploadPath, thumbPath } from "./storage-gcs.ts";
 import { initQueue, claimJob, completeJob, failJob, requeueStale, heartbeatJob, enqueue, lastDoneJobAt, queueStats, type Job, type JobType } from "./queue.ts";
 import { runChannelPipeline } from "./channel-pipeline.ts";
-import { runContentAnalyze, newestMtimeMs } from "./content-pipeline.ts";
+import { runContentAnalyze, runContentIndex, newestMtimeMs } from "./content-pipeline.ts";
 import {
   withAccessToken,
   fetchVideoAnalytics,
@@ -84,7 +84,7 @@ const TICK_INTERVAL_MS = 15 * 60 * 1000;
 const JOB_LANES: Record<"content" | "youtube" | "gebd", JobType[]> = {
   // match.align도 content 레인 — 파이썬·ffmpeg로 오디오를 돌리는 무거운 잡이라
   // YouTube API 레인(짧고 쿼터 위주)에 섞으면 그쪽을 막는다.
-  content: ["content.analyze", "youtube.download", "match.align", "match.segment", "match.learn"],
+  content: ["content.analyze", "content.index", "youtube.download", "match.align", "match.segment", "match.learn"],
   youtube: ["channel.analyze", "video.analyze", "video.hotwatch", "video.comments", "distribution.publish"],
   // gebd 는 GPU T4 spot VM 전용 lane. content lane 이 이 잡을 claim 하면 GPU 없는 곳에서
   // Docker mmaction2 를 못 돌린다. 그래서 별도 프로세스 (WORKER_JOBS=gebd) 로만 픽업.
@@ -156,6 +156,7 @@ async function handle(job: Job): Promise<FollowUp | void> {
     case "video.comments":  return handleVideoComments(job);
     case "distribution.publish": return handleDistributionPublish(job);
     case "content.analyze": { await runContentAnalyze(String(job.payload.mediaId ?? ""), Boolean(job.payload.fast)); return; }
+    case "content.index":   { await runContentIndex(String(job.payload.mediaId ?? "")); return; }
     case "youtube.download": return handleYoutubeDownload(job);
     case "match.align": return handleMatchAlign(job);
     case "match.segment": return handleMatchSegment(job);
