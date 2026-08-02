@@ -67,6 +67,11 @@ export interface AnalysisShort {
   appeal?: number;
   /** 훅 카테고리 — "웃음"·"반전"·"감정고조"·"돌직구"·"질문"·"정보성"·"갈등"·"공감"·"기타". */
   hook?: string;
+  /** 쇼츠 첫 3초 hook intro (2026-07-31 · docs/plans/shorts-hook-intro-3sec.md) — 이탈 방지.
+   *  core/recommend.py propose_shorts_beat_only 가 채운다. 카드가 미리보기로 표시. */
+  hook_quote?: string;        // 실 대사 원문 인용 (STT 그대로 · 30자 이내)
+  hook_time_sec?: number | null; // hook 대사 시각 (쇼츠 시작 상대 · 초)
+  hook_intro_caption?: string; // 어그로 편집자막 (20자 · "충격 고백!" 톤)
   /** 방송 실무 3-type (2026-07-23~): shortform(40~60s SNS) / clip(1~5분 SMR·재편집) / highlight(5~10분 회차 요약). */
   type?: "shortform" | "clip" | "highlight";
   /** highlight 전용 — 여러 시나리오를 시간순으로 이어붙인 편집 세그먼트 리스트. */

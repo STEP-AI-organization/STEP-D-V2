@@ -132,6 +132,11 @@ export interface Recommendation {
   hookStrength?: number;
   payoff?: number;
   completeness?: number;
+  /** 쇼츠 첫 3초 hook intro (2026-07-31 · docs/plans/shorts-hook-intro-3sec.md) — 이탈 방지.
+   *  core가 채우고, 카드/에디터에서 미리보기·편집. 옛 회차·미생성은 없음. */
+  hookQuote?: string;        // 실 대사 원문 인용 (STT 그대로)
+  hookTimeSec?: number;      // hook 대사 시각 (쇼츠 시작 상대 · 초)
+  hookIntroCaption?: string; // 어그로 편집자막 ("충격 고백!" 톤)
   startTime: number; // seconds into master
   endTime: number;
   thumbnailUrl?: string;

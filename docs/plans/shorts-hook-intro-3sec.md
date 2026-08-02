@@ -8,10 +8,16 @@
   - `pick_hook_beat.py` — 각 shorts 의 beat_ids 중 · **첫 beat 제외** 후 · Gemini 별도 콜로 여성 시청자 잡을 강한 hook beat 하나 선택. shorts.json 에 `hook_beat_id` 추가.
   - `render_shorts.py` — 9:16 1080x1920 세로 · preroll(hook_beat 첫 3초) + cross-dissolve 0.25s + body(원본 shorts) concat · 상단 pad 에 title 두 줄 · 하단 blur bg.
   - `shorts_viewer.py` — 렌더된 mp4 embed 하는 HTML 뷰어.
+- **완료 · Phase 2 배선** (2026-08-02):
+  - `hook_quote` / `hook_time_sec` / `hook_intro_caption` (Phase 1 · core 생성) 을 소비 측까지 end-to-end 배선:
+    - `apps/server/src/content-pipeline.ts` — `Short` 타입 + `recFromShort()` 가 추천 엔티티로 `hookQuote`/`hookTimeSec`/`hookIntroCaption` 전달.
+    - `apps/web/src/lib/data/api.ts` — `AnalysisShort` 에 3필드 노출 (`/api/media/:id/analysis`).
+    - `apps/web/src/lib/types.ts` — `Recommendation` 에 3필드.
+    - `apps/web/src/components/shorts-card.tsx` — 카드에 "첫 3초 훅" 프리뷰 (어그로 자막 + 실 대사 + 상대 시각 마커).
 - **미완 · 배선 필요** (다음 세션):
   - `pick_hook_beat` 로직을 `core/recommend.py` 의 `propose_shorts_beat_only` 안에 통합 (별도 콜 하나 추가 · hook_beat_id 를 스키마 필드로) · 파이프라인 자동 실행되도록.
-  - 렌더 스텝을 워커 파이프라인에 배선 (또는 편집자 승인 후 서버 렌더).
-  - Web UI · shorts 카드에 hook_intro_caption / hook_beat_id 미리보기·편집.
+  - 렌더 스텝을 워커 파이프라인에 배선 (또는 편집자 승인 후 서버 렌더) — Phase 3 (α).
+  - shorts 카드에서 hook_intro_caption 을 편집자가 직접 수정하는 편집 UI (현재는 표시 전용).
 
 ## 목적
 
