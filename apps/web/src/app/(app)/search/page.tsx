@@ -1,9 +1,9 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { Search, Loader2, Scissors, Clapperboard, Sparkles } from "lucide-react";
 
-import { searchSegments, type SearchResponse, type SearchResultCard } from "@/lib/data/api";
+import { searchSegments, logSearchEvent, type SearchResponse, type SearchResultCard } from "@/lib/data/api";
 import { PageHeader } from "@/components/ui/page-header";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -31,10 +31,16 @@ function rightsBadgeClass(text: string): string {
     : "border-border bg-muted text-muted-foreground";
 }
 
-function ResultCard({ r }: { r: SearchResultCard }) {
+function ResultCard({ r, onOpen }: { r: SearchResultCard; onOpen: () => void }) {
   const rights = Object.entries(r.rightsStatus ?? {});
   return (
-    <Card className="p-4">
+    <Card
+      className="cursor-pointer p-4 transition-colors hover:border-foreground/25"
+      role="button"
+      tabIndex={0}
+      onClick={onOpen}
+      onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onOpen(); } }}
+    >
       <div className="flex items-start justify-between gap-3">
         <div className="flex flex-wrap items-center gap-2">
           <span className="font-mono text-sm font-semibold text-foreground">
@@ -90,6 +96,19 @@ export default function SearchPage() {
   const [loading, setLoading] = useState(false);
   const [res, setRes] = useState<SearchResponse | null>(null);
   const [searched, setSearched] = useState(false);
+  // 이미 클릭 로그를 남긴 (queryId:segmentId) — 세션당 후보 1회만 기록.
+  const clickedRef = useRef<Set<string>>(new Set());
+
+  const openResult = useCallback((r: SearchResultCard, rank: number) => {
+    if (res?.queryId) {
+      const key = `${res.queryId}:${r.segmentId}`;
+      if (!clickedRef.current.has(key)) {
+        clickedRef.current.add(key);
+        logSearchEvent({ event: "click", queryId: res.queryId, segmentId: r.segmentId, rank });
+      }
+    }
+    // TODO: 구간→에디터/클립 진입 배선(에디터 라우트 준비되면). 지금은 선택 신호만 기록.
+  }, [res?.queryId]);
 
   const run = useCallback(async () => {
     const query = q.trim();
@@ -199,8 +218,8 @@ export default function SearchPage() {
         <>
           <div className="mb-2 text-xs text-muted-foreground">{res.count}개 구간</div>
           <div className="grid gap-2.5">
-            {res.results.map((r) => (
-              <ResultCard key={r.segmentId} r={r} />
+            {res.results.map((r, i) => (
+              <ResultCard key={r.segmentId} r={r} onOpen={() => openResult(r, i + 1)} />
             ))}
           </div>
         </>

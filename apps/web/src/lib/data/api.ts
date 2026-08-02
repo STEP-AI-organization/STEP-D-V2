@@ -1061,6 +1061,8 @@ export interface SearchParsed {
 
 export interface SearchResponse {
   query: string;
+  /** 이 검색 세션 키. 클릭·반출·경계조정 로그를 이 id로 묶는다(§8). */
+  queryId: string;
   parsed: SearchParsed;
   /** 의미 축(임베딩)이 실제로 걸렸는지. false면 키워드 축만으로 랭킹. */
   embedded: boolean;
@@ -1101,4 +1103,24 @@ export async function searchSegments(params: SearchParams, signal?: AbortSignal)
   if (params.allowSpoiler) qs.set("allow_spoiler", "true");
   if (params.topK) qs.set("top_k", String(params.topK));
   return json<SearchResponse>(await fetch(`${API_BASE}/search?${qs}`, { signal, cache: "no-store" }));
+}
+
+/** 선택 로그(§8) — 클릭·반출·경계조정을 queryId로 묶어 서버에 남긴다. best-effort(실패 무시). */
+export type SearchEventKind = "click" | "export" | "boundary_adjust";
+export function logSearchEvent(payload: {
+  event: SearchEventKind;
+  queryId: string;
+  segmentId: string;
+  rank?: number;
+  start?: number;
+  end?: number;
+  before?: { start?: number; end?: number };
+  after?: { start?: number; end?: number };
+}): void {
+  void fetch(`${API_BASE}/search/event`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(payload),
+    keepalive: true, // 페이지 이탈(클립으로 이동) 중에도 전송 보장
+  }).catch(() => {});
 }

@@ -1675,6 +1675,49 @@ export async function listKnownCharacters(programId?: string): Promise<string[]>
   return rows.map((r: { name: string }) => r.name).filter(Boolean);
 }
 
+// ── 검색 로그 (§8 — core/search_log.py의 프로덕션 테이블판) ──────────────────────
+
+export type SearchEventKind = "search" | "click" | "export" | "boundary_adjust";
+
+export interface SearchEvent {
+  event: SearchEventKind;
+  queryId: string;
+  actor?: string;
+  role?: string;
+  segmentId?: string;
+  rank?: number;
+  query?: string;
+  data?: Record<string, unknown>;
+}
+
+export async function insertSearchEvent(e: SearchEvent): Promise<void> {
+  await pool.query(
+    `INSERT INTO search_events (event, query_id, actor, role, segment_id, rank, query, data)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8::jsonb)`,
+    [
+      e.event, e.queryId, e.actor ?? null, e.role ?? null,
+      e.segmentId ?? null, e.rank ?? null, e.query ?? null,
+      JSON.stringify(e.data ?? {}),
+    ],
+  );
+}
+
+/** LEARN 데이터셋 반출용 원시 이벤트 (최신순). 특정 세션만 보려면 queryId 지정. */
+export async function listSearchEvents(
+  opts: { queryId?: string; limit?: number } = {},
+): Promise<Array<Record<string, unknown>>> {
+  const limit = Math.min(Math.max(opts.limit ?? 500, 1), 5000);
+  const { rows } = await pool.query(
+    `SELECT id, event, query_id, ts, actor, role, segment_id, rank, query, data
+       FROM search_events
+      WHERE ($1::text IS NULL OR query_id = $1)
+      ORDER BY id DESC
+      LIMIT ${limit}`,
+    [opts.queryId ?? null],
+  );
+  return rows;
+}
+
 // ── cleanup ────────────────────────────────────────────────────────────────────
 
 export async function closeDb(): Promise<void> {

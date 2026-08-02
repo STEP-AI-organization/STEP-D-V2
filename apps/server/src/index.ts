@@ -72,6 +72,9 @@ import {
   getPool,
   searchSegments,
   listKnownCharacters,
+  insertSearchEvent,
+  listSearchEvents,
+  type SearchEvent,
   type MediaRow,
   type YouTubeChannel,
   type ChannelVideo,
@@ -212,8 +215,31 @@ app.get("/api/search", async (c) => {
     // search_segments 테이블 미존재(마이그레이션 미적용) 등
     return c.json({ error: e instanceof Error ? e.message : String(e), results: [] }, 500);
   }
+
+  // 검색 로그(§8) — 노출 후보를 순위와 함께 남긴다(클릭/반출/경계조정이 이 queryId로 묶임).
+  // 로그 실패가 검색을 막지 않게 best-effort. 빈 쿼리(초기 로드)는 남기지 않는다.
+  const queryId = crypto.randomUUID();
+  if (q) {
+    void insertSearchEvent({
+      event: "search",
+      queryId,
+      actor: c.req.query("actor") || undefined,
+      role: c.req.query("role") || undefined,
+      query: q,
+      data: {
+        parsed: { ...parsed, charactersUsed: query.characters ?? [] },
+        embedded: query.queryVec != null,
+        result_count: hits.length,
+        candidates: hits.map((h, i) => ({
+          rank: i + 1, segment_id: h.segmentId, score: h.score, lex: h.lex, vec: h.vec,
+        })),
+      },
+    }).catch((e) => console.warn("[search] 로그 실패:", e instanceof Error ? e.message : e));
+  }
+
   return c.json({
     query: q,
+    queryId,
     parsed: { ...parsed, charactersUsed: query.characters ?? [] },
     embedded: query.queryVec != null,
     count: hits.length,
@@ -235,6 +261,62 @@ app.get("/api/search", async (c) => {
       vec: h.vec,
     })),
   });
+});
+
+// ── 검색 선택 로그(§8) — click·export·boundary_adjust ──
+// /api/search가 준 queryId로 묶는다. boundary_adjust(경계 before→after)가 컷 학습의 핵심 신호.
+app.post("/api/search/event", async (c) => {
+  const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>;
+  const event = String(body.event || "");
+  if (event !== "click" && event !== "export" && event !== "boundary_adjust") {
+    return c.json({ error: "event must be click|export|boundary_adjust" }, 400);
+  }
+  const queryId = typeof body.queryId === "string" ? body.queryId.trim() : "";
+  const segmentId = typeof body.segmentId === "string" ? body.segmentId.trim() : "";
+  if (!queryId || !segmentId) return c.json({ error: "queryId·segmentId required" }, 400);
+
+  const actor = typeof body.actor === "string" ? body.actor : undefined;
+  const role = typeof body.role === "string" ? body.role : undefined;
+  const num = (v: unknown): number | undefined =>
+    typeof v === "number" && Number.isFinite(v) ? v : undefined;
+
+  const data: Record<string, unknown> = {};
+  let rank: number | undefined;
+  if (event === "click") {
+    rank = num(body.rank);
+  } else if (event === "export") {
+    data.start = num(body.start) ?? null;
+    data.end = num(body.end) ?? null;
+  } else {
+    // boundary_adjust — before/after {start,end} + delta(컷 지점 지도신호)
+    const before = (body.before || {}) as Record<string, unknown>;
+    const after = (body.after || {}) as Record<string, unknown>;
+    const bS = num(before.start), bE = num(before.end);
+    const aS = num(after.start), aE = num(after.end);
+    data.before = { start: bS ?? null, end: bE ?? null };
+    data.after = { start: aS ?? null, end: aE ?? null };
+    data.delta_start = bS != null && aS != null ? Math.round((aS - bS) * 1000) / 1000 : null;
+    data.delta_end = bE != null && aE != null ? Math.round((aE - bE) * 1000) / 1000 : null;
+  }
+
+  try {
+    await insertSearchEvent({ event, queryId, actor, role, segmentId, rank, data } as SearchEvent);
+  } catch (e) {
+    return c.json({ error: e instanceof Error ? e.message : String(e) }, 500);
+  }
+  return c.json({ ok: true });
+});
+
+// LEARN 데이터셋 반출 — 원시 검색 이벤트 (무인증 읽기, Lab 분석용).
+app.get("/api/search/events", async (c) => {
+  const queryId = c.req.query("query_id") || undefined;
+  const limit = c.req.query("limit") ? Number(c.req.query("limit")) : undefined;
+  try {
+    const events = await listSearchEvents({ queryId, limit });
+    return c.json({ count: events.length, events });
+  } catch (e) {
+    return c.json({ error: e instanceof Error ? e.message : String(e), events: [] }, 500);
+  }
 });
 
 // ── create a program (content root — must exist before any upload) ──
