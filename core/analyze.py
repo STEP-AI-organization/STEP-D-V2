@@ -50,7 +50,7 @@ from .boundaries import load_boundaries, dedup_boundaries, build_fallback_bounda
 from .beat_annot import annotate_beats
 from .speaker_rename import build_speaker_mapping, apply_speaker_mapping, assign_speakers_from_captions, refresh_beat_dominant_speakers
 
-CHECKPOINTS = ("stt.json", "refined.json", "faces.json", "ppl.json", "scenes.json", "cast.json", "timeline.json", "narrative.json", "shots.json", "boundaries.json", "scene_type.json", "beats.json", "viewer_signals.json", "shorts.json", "analysis.json")
+CHECKPOINTS = ("stt.json", "refined.json", "faces.json", "ppl.json", "scenes.json", "cast.json", "timeline.json", "narrative.json", "shots.json", "boundaries.json", "scene_type.json", "beats.json", "viewer_signals.json", "shorts.json", "analysis.json", "segments.json")
 
 
 # ── checkpoint plumbing ─────────────────────────────────────────────────────────
@@ -191,6 +191,7 @@ def analyze(
     channels: list[str] | None = None,
     fast: bool = False,
     program_context: dict | None = None,
+    media_id: str = "",
 ) -> dict:
     """Run all stages (skipping checkpointed ones). Returns the analysis dict.
     `cast_registry` (프로그램 출연자 목록) normalizes on-screen name captions into a
@@ -894,6 +895,26 @@ def analyze(
     }
     _save_json(out_dir / "analysis.json", result)
     step(f"완료 → {out_dir / 'analysis.json'}")
+
+    # 7) 검색 세그먼트 인덱싱 — beats 등 산출을 검색 레코드로 재조립(+임베딩). content-pipeline이
+    #    segments.json 을 읽어 pgvector(search_segments)에 적재한다. best-effort — 실패해도
+    #    분석 결과는 성립(검색만 비게 됨). 임베딩 실패(Vertex 불가)는 embed 내부에서 None 처리.
+    try:
+        from .index_segments import build_segments
+        _existing = _load_json(out_dir / "segments.json")
+        _has_emb = isinstance(_existing, dict) and any(
+            s.get("emb_dialogue") for s in (_existing.get("segments") or []))
+        if resume and _has_emb:
+            step(f"검색 인덱스 — 체크포인트 재사용 ({_existing.get('count')} 세그먼트)")
+        else:
+            step("검색 세그먼트 인덱싱…")
+            seg_result = build_segments(out_dir, media_id=media_id,
+                                        genre=rec.get("genre") or genre, embed=True)
+            _save_json(out_dir / "segments.json", seg_result)
+            step(f"  {seg_result['count']} 검색 세그먼트 → segments.json")
+    except Exception as e:
+        step(f"검색 인덱싱 실패(무시): {str(e)[:120]}")
+
     _progress("done", 100, "분석 완료")
     # 완료 마커 — 워커가 이걸 감지 즉시 DB write 시작. python close 이벤트 대기 안 함
     # (Windows에서 native library cleanup crash로 subprocess exit code non-zero 되어
@@ -914,6 +935,7 @@ def main() -> None:
     genre = sys.argv[sys.argv.index("--genre") + 1] if "--genre" in sys.argv else "auto"
     resume = "--no-resume" not in sys.argv
     fast = "--fast" in sys.argv  # 자막만으로 빠른 추천 (시각 분석 스킵, ~10배 빠름)
+    media_id = sys.argv[sys.argv.index("--media") + 1] if "--media" in sys.argv else out_dir.name
 
     # Optional program understanding profile (--profile <path.json>) → program-fit prior.
     profile = None
@@ -958,7 +980,7 @@ def main() -> None:
 
     result = analyze(video, out_dir, shorts_n=n, genre=genre, resume=resume, profile=profile,
                      cast_registry=cast_registry, channels=channels, fast=fast,
-                     program_context=program_context)
+                     program_context=program_context, media_id=media_id)
     cast = result.get("cast") or {}
     print(f"\n=== 요약 ===")
     print(f"  {len(result['transcript'])} 자막 · {len(result['scenes'])} 장면 · {len(result['shorts'])} 쇼츠 · "
