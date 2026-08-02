@@ -118,6 +118,8 @@ function toProgram(p: Partial<Program>): Program {
  */
 export interface ExportResult {
   capped: { maxSec: number; requestedSec: number } | null;
+  /** 첫 3초 hook 프리롤이 적용됐는지 — export 후 토스트로 편집자에게 알림. */
+  hookPreroll?: boolean;
 }
 
 interface AppData extends AppState {
@@ -469,7 +471,7 @@ export function AppDataProvider({
     // revision hash, then returns the rendered (status:"ready") clip. `channel` picks the
     // destination render preset (F3); omitted = 원본 유지 (the clip's own aspect, no cap).
     if (connectedRef.current) {
-      const { clip, capped } = await exportClipApi(clipId, channel);
+      const { clip, capped, hookPreroll } = await exportClipApi(clipId, channel);
       mutationEpochRef.current++;
       setState((prev) => ({
         ...prev,
@@ -477,7 +479,7 @@ export function AppDataProvider({
       }));
       // Handed back so the caller can tell the operator the deliverable is shorter than the
       // segment they picked — a cap must never pass silently.
-      return { capped: capped ?? null };
+      return { capped: capped ?? null, hookPreroll: !!hookPreroll };
     }
     // MOCK: simulate the encode → ready transition so the flow works standalone.
     setState((prev) => ({

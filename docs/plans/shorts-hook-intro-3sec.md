@@ -8,10 +8,29 @@
   - `pick_hook_beat.py` — 각 shorts 의 beat_ids 중 · **첫 beat 제외** 후 · Gemini 별도 콜로 여성 시청자 잡을 강한 hook beat 하나 선택. shorts.json 에 `hook_beat_id` 추가.
   - `render_shorts.py` — 9:16 1080x1920 세로 · preroll(hook_beat 첫 3초) + cross-dissolve 0.25s + body(원본 shorts) concat · 상단 pad 에 title 두 줄 · 하단 blur bg.
   - `shorts_viewer.py` — 렌더된 mp4 embed 하는 HTML 뷰어.
-- **미완 · 배선 필요** (다음 세션):
-  - `pick_hook_beat` 로직을 `core/recommend.py` 의 `propose_shorts_beat_only` 안에 통합 (별도 콜 하나 추가 · hook_beat_id 를 스키마 필드로) · 파이프라인 자동 실행되도록.
-  - 렌더 스텝을 워커 파이프라인에 배선 (또는 편집자 승인 후 서버 렌더).
-  - Web UI · shorts 카드에 hook_intro_caption / hook_beat_id 미리보기·편집.
+- **완료 · Phase 2 배선** (2026-08-02):
+  - `hook_quote` / `hook_time_sec` / `hook_intro_caption` (Phase 1 · core 생성) 을 소비 측까지 end-to-end 배선:
+    - `apps/server/src/content-pipeline.ts` — `Short` 타입 + `recFromShort()` 가 추천 엔티티로 `hookQuote`/`hookTimeSec`/`hookIntroCaption` 전달.
+    - `apps/web/src/lib/data/api.ts` — `AnalysisShort` 에 3필드 노출 (`/api/media/:id/analysis`).
+    - `apps/web/src/lib/types.ts` — `Recommendation` 에 3필드.
+    - `apps/web/src/components/shorts-card.tsx` — 카드에 "첫 3초 훅" 프리뷰 (어그로 자막 + 실 대사 + 상대 시각 마커).
+- **완료 · Phase 3 프리롤 렌더 배선** (2026-08-02):
+  - 편집자 승인(export) 후 서버 렌더 경로에 첫 3초 hook 프리롤 배선. 트리거 = 에디터 "첫 3초 훅"
+    토글(editorState.hookOn · opt-in 기본 OFF) + clip.hookTimeSec 존재. 시각 소스 = hook_time_sec.
+    - `apps/server/src/ffmpeg.ts` — `renderShort` 에 `hookPreroll` 옵션 + 2입력 xfade 분기
+      (`renderShortWithPreroll`): 프리롤(punch-in 전체화면 + 살짝 그레이드) → 본문 cross-dissolve.
+      프로토타입 `tmp/gebd/scripts/render_shorts.py` 검증 로직 기반. 본문 자막·타이틀·속도·그레이드는
+      기존과 동일하게 본문 프레임에만 번인.
+    - `apps/server/src/index.ts` — adopt 가 hookQuote/hookTimeSec/hookIntroCaption 을 clip 으로 승계 ·
+      `/clips/:id/export` 가 hookOn+hookTimeSec 로 프리롤 구간([start+hook_time_sec, +3s], 세그먼트
+      클램프) 계산 · revision 해시에 포함(토글 변경 시 재렌더) · `renderClipMedia`→`renderShort` 전달.
+    - 웹: `hookOn` 기본 OFF(opt-in) · Clip 타입 3필드 · export 응답 `hookPreroll` → 렌더 완료 토스트 ·
+      타임라인 토글 툴팁(hook 시각 없으면 no-op 안내).
+- **미완 · 다음 세션**:
+  - `pick_hook_beat` 로직을 `core/recommend.py` 에 통합 (별도 Gemini 콜로 강한 hook_beat_id 선택 —
+    현재는 메인 콜의 hook_time_sec 사용). 정확도 향상 옵션.
+  - shorts 카드에서 hook_intro_caption 을 편집자가 직접 수정하는 편집 UI (현재는 표시 전용).
+  - 프리롤에 hook_intro_caption 자막 overlay(현재는 자막 없는 순수 hook clip · 2026-07-31 사용자 지시).
 
 ## 목적
 

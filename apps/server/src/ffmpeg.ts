@@ -158,7 +158,104 @@ export type RenderShortOpts = {
   bgType?: "solid" | "blur" | "image";
   /** bgType='solid'일 때의 letterbox 색 (예: "#0E0E12"). */
   bgColor?: string;
+  /** 첫 3초 hook 프리롤 (2026-08-02 · docs/plans/shorts-hook-intro-3sec.md · Phase 3/α).
+   *  설정 시 · 본문 앞에 hook 구간의 짧은 클립을 punch-in(전체화면 커버 + 살짝 그레이드)으로
+   *  붙이고 cross-dissolve 로 본문에 이어붙인다. 이탈 방지용 attention retention.
+   *  프리롤은 자막·타이틀 없이 순수 hook clip (본문 오버레이는 본문 프레임에만 번인). */
+  hookPreroll?: {
+    /** hook 대사가 시작하는 마스터 절대 초. (본문 start + hook_time_sec, 캘러가 클램프) */
+    startTime: number;
+    /** 프리롤 길이(초). 기본 3. */
+    durationSec: number;
+    /** 오디오 크로스페이드 포함 여부 (마스터에 오디오 있을 때만 true). */
+    hasAudio?: boolean;
+  } | null;
 };
+
+/** 프리롤→본문 cross-dissolve 길이(초). 프로토타입(render_shorts.py) 검증값. */
+const HOOK_XFADE_SEC = 0.25;
+
+/**
+ * renderShort 의 hook-preroll 분기 — 2입력 xfade.
+ *   입력0 = 프리롤(hook 구간) · 입력1 = 본문(원 세그먼트).
+ * 본문은 기존 renderShort 와 동일한 커버/그레이드/자막/속도 처리를 거친 뒤,
+ * 프리롤(punch-in 전체화면 + 살짝 채도·대비 강조)과 cross-dissolve 로 이어붙는다.
+ * xfade 는 두 입력의 fps 가 같아야 하므로 두 스트림 모두 fps=30 으로 정규화한다(쇼츠 표준).
+ */
+function renderShortWithPreroll(opts: RenderShortOpts & { hookPreroll: NonNullable<RenderShortOpts["hookPreroll"]> }): Promise<void> {
+  const { inputPath, startTime, endTime, outputPath, width: W, height: H, assPath, videoFilters, audioFilter } = opts;
+  const bodyDur = endTime - startTime;
+  if (bodyDur <= 0) return Promise.reject(new Error("Invalid render duration"));
+  const speed = opts.speed && opts.speed > 0 ? opts.speed : 1;
+  const pre = opts.hookPreroll;
+  const preDur = Math.max(0.5, pre.durationSec);
+  const preStart = Math.max(0, pre.startTime);
+  const preEnd = preStart + preDur;
+
+  const bgMode = opts.bgType === "solid" || opts.bgType === "image" ? "solid" : "blur";
+  const solidColor = normalizeHexColor(opts.bgColor, "#0E0E12");
+
+  // ── 본문(입력1) 체인 — 기존 renderShort 와 동일 구성, 입력 라벨만 [1:v] ──
+  let vf: string;
+  if (bgMode === "solid") {
+    const colorHex = `0x${solidColor.slice(1)}`;
+    vf =
+      `color=c=${colorHex}:s=${W}x${H}:d=${(bodyDur / speed).toFixed(3)}[bbg];` +
+      `[1:v]scale=${W}:${H}:force_original_aspect_ratio=decrease[bfg];` +
+      `[bbg][bfg]overlay=(W-w)/2:(H-h)/2:shortest=1[bc0]`;
+  } else {
+    vf =
+      `[1:v]split=2[ba0][bb0];` +
+      `[ba0]scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},boxblur=20:1[bbg];` +
+      `[bb0]scale=${W}:${H}:force_original_aspect_ratio=decrease[bfg];` +
+      `[bbg][bfg]overlay=(W-w)/2:(H-h)/2[bc0]`;
+  }
+  let last = "[bc0]";
+  if (videoFilters) { vf += `;${last}${videoFilters}[bcg]`; last = "[bcg]"; }
+  if (assPath) {
+    const esc = assPath.replace(/\\/g, "\\\\").replace(/:/g, "\\:").replace(/'/g, "\\'");
+    vf += `;${last}ass='${esc}'[bca]`; last = "[bca]";
+  }
+  if (speed !== 1) { vf += `;${last}setpts=PTS/${speed}[bcs]`; last = "[bcs]"; }
+  // 본문 fps/sar 정규화 (xfade 호환).
+  vf += `;${last}fps=30,setsar=1[bodyv]`;
+
+  // ── 프리롤(입력0) — punch-in 전체화면 커버 + 살짝 채도·대비 강조 ──
+  vf +=
+    `;[0:v]scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},` +
+    `eq=saturation=1.20:contrast=1.05,fps=30,setsar=1[prev]`;
+
+  // ── xfade: 프리롤 → 본문 (offset = preDur - transition) ──
+  const xfadeOffset = Math.max(0, preDur - HOOK_XFADE_SEC).toFixed(3);
+  vf += `;[prev][bodyv]xfade=transition=fade:duration=${HOOK_XFADE_SEC}:offset=${xfadeOffset}[v]`;
+
+  const withAudio = pre.hasAudio === true;
+  if (withAudio) {
+    // 본문 오디오에 volume/atempo(속도) 적용 후 · 프리롤 오디오와 크로스페이드.
+    vf += `;[1:a]${audioFilter ? audioFilter : "anull"}[ba];[0:a]anull[pa]`;
+    vf += `;[pa][ba]acrossfade=d=${HOOK_XFADE_SEC}[a]`;
+  }
+
+  const args = [
+    "-y",
+    "-ss", String(preStart), "-to", String(preEnd), "-i", inputPath,
+    "-ss", String(startTime), "-to", String(endTime), "-i", inputPath,
+    "-filter_complex", vf,
+    "-map", "[v]",
+    ...(withAudio ? ["-map", "[a]"] : []),
+    "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p",
+    "-c:a", "aac", "-movflags", "+faststart",
+    outputPath,
+  ];
+
+  return new Promise((resolve, reject) => {
+    execFile("ffmpeg", args, { timeout: 300_000 }, (err) => {
+      if (err) return reject(err);
+      if (!fs.existsSync(outputPath)) return reject(new Error("Preroll render output not produced"));
+      resolve();
+    });
+  });
+}
 
 /**
  * Render construct F (plan §2.4 — the single expensive render). Reframes the trimmed
@@ -167,6 +264,11 @@ export type RenderShortOpts = {
  * pass. `inputPath` may be a local path or an https signed URL (range-seek via -ss).
  */
 export function renderShort(opts: RenderShortOpts): Promise<void> {
+  // 첫 3초 hook 프리롤이 요청되면 · 2입력 xfade 경로로 분기(본문 처리 로직은 renderShortWithPreroll
+  // 안에서 동일하게 재현). 아래 단일 입력 경로는 프리롤 없을 때 그대로 유지(무회귀).
+  if (opts.hookPreroll && opts.hookPreroll.durationSec > 0) {
+    return renderShortWithPreroll(opts as RenderShortOpts & { hookPreroll: NonNullable<RenderShortOpts["hookPreroll"]> });
+  }
   const { inputPath, startTime, endTime, outputPath, width: W, height: H, assPath, videoFilters, audioFilter } = opts;
   const duration = endTime - startTime;
   if (duration <= 0) return Promise.reject(new Error("Invalid render duration"));

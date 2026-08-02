@@ -282,6 +282,11 @@ type Short = {
   hook_strength?: number; payoff?: number; completeness?: number;
   /** 3축 가중합 0-100 (hook 0.40·payoff 0.35·completeness 0.25). 프론트 메인 스코어. */
   score100?: number;
+  /** 쇼츠 첫 3초 hook intro (2026-07-31 · docs/plans/shorts-hook-intro-3sec.md).
+   *  core/recommend.py propose_shorts_beat_only 가 채운다. 이탈 방지용 attention retention. */
+  hook_quote?: string;         // 실 대사 원문 인용 (STT 그대로 · 30자 이내)
+  hook_time_sec?: number | null; // hook 대사 시각 (쇼츠 시작 상대 · 첫 5초 이내 권장)
+  hook_intro_caption?: string; // 어그로 편집자막 (20자 · "충격 고백!" 톤)
   /** 처음 제목 생성 단계(_retitle_final_windows)에서 뽑힌 대체 제목 후보들.
    *  기본 title을 포함할 수도 있고 아닐 수도 있음 — 프론트는 dedupe 처리. */
   title_candidates?: string[];
@@ -324,6 +329,14 @@ function recFromShort(episodeId: string, s: Short) {
     hookStrength: typeof s.hook_strength === "number" ? s.hook_strength : undefined,
     payoff: typeof s.payoff === "number" ? s.payoff : undefined,
     completeness: typeof s.completeness === "number" ? s.completeness : undefined,
+    // 쇼츠 첫 3초 hook intro (2026-07-31). core가 채운 값을 rec 엔티티로 흘려보내 카드·에디터가
+    // 미리보기·편집할 수 있게 한다. 비어 있으면 undefined (옛 회차/미생성 안전).
+    hookQuote: typeof s.hook_quote === "string" && s.hook_quote.trim() ? s.hook_quote.trim() : undefined,
+    hookTimeSec: typeof s.hook_time_sec === "number" ? s.hook_time_sec : undefined,
+    hookIntroCaption:
+      typeof s.hook_intro_caption === "string" && s.hook_intro_caption.trim()
+        ? s.hook_intro_caption.trim()
+        : undefined,
     startTime: start,
     endTime: end,
     editNote: s.reason || "",

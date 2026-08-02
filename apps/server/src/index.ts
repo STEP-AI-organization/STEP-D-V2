@@ -2251,6 +2251,8 @@ async function renderClipMedia(opts: {
   editorState?: any;
   aspect?: string;
   captions?: Caption[];
+  /** 첫 3초 hook 프리롤 (편집자가 "첫 3초 훅" 토글 ON + clip.hookTimeSec 있을 때만). */
+  hookPreroll?: { startTime: number; durationSec: number; hasAudio?: boolean } | null;
 }): Promise<
   | { clipMediaId: string; clipStored: string; thumbStored: string | null;
       cmeta: { durationSec: number; width: number; height: number; codec: string; hasAudio: boolean } }
@@ -2289,10 +2291,11 @@ async function renderClipMedia(opts: {
   // via HTTP range (-ss before -i) — only the requested segment is fetched, so a multi-hour
   // master never lands in Cloud Run's RAM.
   const srcPath = useGcs() ? await signedReadUrl(masterObjPath) : master.path;
+  const hookPreroll = opts.hookPreroll && opts.hookPreroll.durationSec > 0 ? opts.hookPreroll : null;
   try {
-    if (!ass && !videoFilters && !audioFilter && speed === 1 && aspect === "16:9") {
+    if (!ass && !videoFilters && !audioFilter && speed === 1 && aspect === "16:9" && !hookPreroll) {
       // Fast path only when there's genuinely nothing to bake (no overlays, no grade, no
-      // volume change, no speed change, native 16:9). Any edit routes through renderShort.
+      // volume change, no speed change, native 16:9, no hook preroll). Any edit routes through renderShort.
       await trimEncode(srcPath, startTime, endTime, tmpPath);
     } else {
       // 배경 채우기 방식 — 에디터에서 지정한 bgType(solid/blur/image). image는 아직 렌더 파이프라인
@@ -2305,6 +2308,7 @@ async function renderClipMedia(opts: {
         inputPath: srcPath, startTime, endTime, outputPath: tmpPath, width: W, height: H,
         assPath: ass ? assTmp : null, videoFilters, audioFilter, speed,
         bgType, bgColor,
+        hookPreroll,
       });
     }
     const cmeta = await probe(tmpPath).catch(() => ({
@@ -2713,6 +2717,11 @@ app.post("/api/recommendations/:id/adopt", async (c) => {
     // 두 줄 제목 (2026-07-29): recommend 가 뽑은 AI setup/payoff 를 editor 초기 오버레이로 전달.
     titleLine1: rec.titleLine1,
     titleLine2: rec.titleLine2,
+    // 첫 3초 hook intro (2026-08-02 · docs/plans/shorts-hook-intro-3sec.md). 에디터의 "첫 3초 훅"
+    // 토글(editorState.hookOn)이 켜지면 /export 가 hookTimeSec 지점을 프리롤로 붙인다. 없으면 미동작.
+    hookQuote: rec.hookQuote,
+    hookTimeSec: rec.hookTimeSec,
+    hookIntroCaption: rec.hookIntroCaption,
     clipType: rec.kind === "short" ? "T6" : "TZ",
     targetAge: episode?.targetAge ?? 0,
     aspectRatio: rec.kind === "short" ? "9:16-crop-main" : "16:9",
@@ -3217,9 +3226,14 @@ app.post("/api/clips/:id/export", async (c) => {
   const transcript = resolved.segments;
   const captionsFp = { n: transcript.length, u: resolved.updatedAt };
 
+  // 첫 3초 hook 프리롤 요청 여부 — 에디터 "첫 3초 훅" 토글(editorState.hookOn) ON + clip 에
+  // hookTimeSec 이 있을 때만. 토글/시각이 바뀌면 revision 이 달라져 캐시가 자동 무효화되도록 해시에 포함.
+  const hookPrerollReq =
+    (clip.editorState as any)?.hookOn === true && typeof clip.hookTimeSec === "number";
+
   const revision = crypto
     .createHash("sha256")
-    .update(JSON.stringify({ start, end, aspectRatio: clip.aspectRatio, editorState: clip.editorState ?? null, captionsFp, preset: preset?.key ?? null }))
+    .update(JSON.stringify({ start, end, aspectRatio: clip.aspectRatio, editorState: clip.editorState ?? null, captionsFp, preset: preset?.key ?? null, hookPreroll: hookPrerollReq ? { t: clip.hookTimeSec } : null }))
     .digest("hex")
     .slice(0, 16);
 
@@ -3250,7 +3264,7 @@ app.post("/api/clips/:id/export", async (c) => {
 
   // Cache hit: identical decisions already rendered — don't re-encode.
   if (clip.rendered && clip.renderRevision === revision && clip.mediaId) {
-    return c.json({ clipId, clip, cached: true, preset: preset?.key ?? null, capped });
+    return c.json({ clipId, clip, cached: true, preset: preset?.key ?? null, capped, hookPreroll: hookPrerollReq });
   }
 
   const allMedia = await listMedia();
@@ -3289,10 +3303,25 @@ app.post("/api/clips/:id/export", async (c) => {
   // Spoken subtitles that fall inside the render window, rebased to 0.
   const captions = windowCaptions(transcript, snappedStart, snappedEnd);
 
+  // 첫 3초 hook 프리롤 구간 계산 — hook 대사 절대 시각(= clip.startTime + hookTimeSec)에서 최대 3초.
+  // 세그먼트([snappedStart, snappedEnd]) 안으로 클램프하고, 세그먼트가 3초보다 짧으면 그만큼 줄인다.
+  // hookTimeSec 은 clip.startTime(=start) 기준 상대이므로 절대 = start + hookTimeSec.
+  let hookPreroll: { startTime: number; durationSec: number; hasAudio?: boolean } | null = null;
+  if (hookPrerollReq) {
+    const HOOK_MAX = 3.0;
+    const hookAbs = start + Math.max(0, Number(clip.hookTimeSec));
+    const preStart = Math.min(Math.max(snappedStart, hookAbs), Math.max(snappedStart, snappedEnd - 0.5));
+    const preDur = Math.min(HOOK_MAX, Math.max(0.5, snappedEnd - preStart));
+    if (preDur >= 0.5) {
+      hookPreroll = { startTime: preStart, durationSec: Number(preDur.toFixed(3)), hasAudio: master.hasAudio === 1 };
+    }
+  }
+
   const rendered = await renderClipMedia({
     master, episodeId: clip.episodeId,
     startTime: snappedStart, endTime: snappedEnd,
     title: clip.title, editorState: es, aspect, captions,
+    hookPreroll,
   });
   if (!rendered) return c.json({ error: "render failed" }, 500);
 
@@ -3313,7 +3342,7 @@ app.post("/api/clips/:id/export", async (c) => {
     renderPreset: preset?.key ?? null,
   };
   await putEntity("clip", clipId, next);
-  return c.json({ clipId, clip: next, preset: preset?.key ?? null, capped });
+  return c.json({ clipId, clip: next, preset: preset?.key ?? null, capped, hookPreroll: !!hookPreroll });
 });
 
 // ── YouTube OAuth & channel management ────────────────────────────────────────

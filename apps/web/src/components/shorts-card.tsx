@@ -12,7 +12,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Play, Check, Pencil, Loader2 } from "lucide-react";
+import { Play, Check, Pencil, Loader2, Zap } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -189,6 +189,35 @@ export function ShortsCard({
         <div className="line-clamp-2 text-[12.5px] font-semibold leading-snug">
           {short.title || "제목 없음"}
         </div>
+        {/* 첫 3초 Hook Intro (docs/plans/shorts-hook-intro-3sec.md) — 이탈 방지 attention retention.
+            core가 채운 hook_intro_caption(어그로 자막)을 프리뷰. hook_quote(실 대사)는 근거로 병기,
+            hook_time_sec는 쇼츠 시작 기준 상대 시각 마커. 하나라도 있어야 표시(옛 회차 자동 생략). */}
+        {(short.hook_intro_caption || short.hook_quote) && (
+          <div className="rounded-md bg-status-warn/10 px-2 py-1.5">
+            <div className="flex items-center gap-1">
+              <Zap className="size-3 shrink-0 fill-status-warn text-status-warn" />
+              <span className="text-[9px] font-bold uppercase tracking-wide text-status-warn/80">
+                첫 3초 훅
+              </span>
+              {typeof short.hook_time_sec === "number" && (
+                <span
+                  className="ml-auto shrink-0 text-[9.5px] font-semibold tabular-nums text-status-warn/70"
+                  title="쇼츠 시작 기준 hook 대사 시각"
+                >
+                  +{short.hook_time_sec.toFixed(1)}s
+                </span>
+              )}
+            </div>
+            <div className="mt-0.5 line-clamp-1 text-[11.5px] font-bold text-status-warn">
+              {short.hook_intro_caption || short.hook_quote}
+            </div>
+            {short.hook_intro_caption && short.hook_quote && (
+              <p className="mt-0.5 line-clamp-1 text-[10px] italic text-muted-foreground" title={short.hook_quote}>
+                “{short.hook_quote}”
+              </p>
+            )}
+          </div>
+        )}
         {/* 3축 분해 — 스코어의 근거. 축이 있어야만 표시(옛 회차는 자동 생략). */}
         {(typeof short.hook_strength === "number" ||
           typeof short.payoff === "number" ||
