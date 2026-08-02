@@ -198,24 +198,76 @@ def _fill_embeddings(segments: list[dict]) -> None:
         s["emb_summary"] = m
 
 
+# 자막 fallback (beats.json 없는 구 분석분 백필용)
+FALLBACK_MIN_SEC = 15.0   # 이 미만 창은 다음 발화와 계속 병합
+FALLBACK_MAX_SEC = 45.0   # 이 초과면 무조건 끊음
+FALLBACK_GAP_SEC = 1.5    # 이 이상 무음이면 (최소 길이 충족 시) 끊음
+
+
+def _beats_from_transcript(refined: list) -> list[dict]:
+    """beats.json이 없을 때 자막을 ~30초 창으로 묶어 세그먼트를 합성한다(백필 fallback).
+    무음(gap)·최대 길이에서 끊고, 화자를 characters로. 진짜 beat(편집 완결단위)보다 거칠지만
+    기존 회차를 검색에 태우는 데는 충분하다."""
+    groups: list[dict] = []
+    cur: dict | None = None
+    for u in refined:
+        st, en = _f(u.get("start")), _f(u.get("end"))
+        if en <= st:
+            continue
+        text = (u.get("text") or "").strip()
+        spk = (u.get("speaker") or "").strip()
+        if cur is None:
+            cur = {"start": st, "end": en, "speakers": []}
+        else:
+            gap = st - cur["end"]
+            length = en - cur["start"]
+            long_enough = (cur["end"] - cur["start"]) >= FALLBACK_MIN_SEC
+            if (gap > FALLBACK_GAP_SEC and long_enough) or length > FALLBACK_MAX_SEC:
+                groups.append(cur)
+                cur = {"start": st, "end": en, "speakers": []}
+            else:
+                cur["end"] = en
+        if spk and spk not in cur["speakers"]:
+            cur["speakers"].append(spk)
+        _ = text
+    if cur is not None:
+        groups.append(cur)
+    return [{"id": i, "start": g["start"], "end": g["end"], "title": "", "summary": "",
+             "characters": g["speakers"], "hook": "", "is_complete": True}
+            for i, g in enumerate(groups)]
+
+
 def build_segments(workdir: str | Path, media_id: str = "",
                    genre: str = "", embed: bool = False) -> dict:
     wd = Path(workdir)
-    beats = _as_list(_load(wd / "beats.json"), "beats")
-    if not beats:
-        return {"media_id": media_id, "genre": genre, "count": 0, "segments": [],
-                "note": "beats.json 없음 — 검색 세그먼트를 만들 수 없다 (beat이 검색 단위)"}
+    # analysis.json = content_analysis 블롭. 개별 체크포인트가 없는 구 분석분의 fallback 소스.
+    analysis = _load(wd / "analysis.json")
+    adict = analysis if isinstance(analysis, dict) else {}
 
-    refined = _as_list(_load(wd / "refined.json"), "segments", "refined")
-    narrative = _load(wd / "narrative.json")
+    refined = _as_list(_load(wd / "refined.json"), "segments", "refined") \
+        or _as_list(adict.get("transcript"), "segments", "refined")
+    narrative = _load(wd / "narrative.json") or adict.get("narrative")
     nsegs = _as_list(narrative, "segments") if narrative else []
     scene_labels = _as_list(_load(wd / "scene_type.json"), "labels", "segments")
-    cast = _as_list(_load(wd / "cast.json"), "people")
+    cast = _as_list(_load(wd / "cast.json"), "people") or _as_list(adict.get("cast"), "people")
     chyron = _as_list(_load(wd / "chyron.json"), "hits")
-    shorts_obj = _load(wd / "shorts.json")
+    shorts_obj = _load(wd / "shorts.json") or adict
     shorts = _as_list(shorts_obj, "shorts")
-    if not genre and isinstance(shorts_obj, dict):
-        genre = str(shorts_obj.get("genre") or "")
+    if not genre:
+        if isinstance(shorts_obj, dict) and shorts_obj.get("genre"):
+            genre = str(shorts_obj.get("genre"))
+        elif adict.get("genre"):
+            genre = str(adict.get("genre"))
+
+    # 검색 단위 = beat. 없으면(구 분석분) 자막으로 합성.
+    beats = _as_list(_load(wd / "beats.json"), "beats")
+    source = "beats"
+    if not beats:
+        beats = _beats_from_transcript(refined)
+        source = "transcript_fallback"
+    if not beats:
+        return {"media_id": media_id, "genre": genre, "count": 0, "segments": [],
+                "note": "beats·자막 모두 없음 — 검색 세그먼트를 만들 수 없다"}
 
     segments: list[dict] = []
     for beat in beats:
@@ -264,8 +316,8 @@ def build_segments(workdir: str | Path, media_id: str = "",
     if embed and segments:
         _fill_embeddings(segments)
 
-    return {"media_id": media_id, "genre": genre, "count": len(segments),
-            "segments": segments}
+    return {"media_id": media_id, "genre": genre, "source": source,
+            "count": len(segments), "segments": segments}
 
 
 def _main(argv: list[str]) -> int:

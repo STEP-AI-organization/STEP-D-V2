@@ -719,7 +719,8 @@ async function setEpisodePipeline(episodeId: string, pipeline: Record<string, un
 
 // ── 검색 세그먼트 적재 (공유) ────────────────────────────────────────────────
 /** index_segments가 뽑을 수 있게 GCS에서 받아야 하는 체크포인트 (없으면 스킵 · beats 필수). */
-const INDEX_INPUT_FILES = ["beats.json", "refined.json", "narrative.json", "scene_type.json", "cast.json", "shorts.json", "chyron.json", "ppl.json"];
+// analysis.json = content_analysis 블롭 fallback (beats 없는 구 분석분도 인덱싱되게).
+const INDEX_INPUT_FILES = ["beats.json", "refined.json", "narrative.json", "scene_type.json", "cast.json", "shorts.json", "chyron.json", "ppl.json", "analysis.json"];
 
 /**
  * segments.json 배열에 서버 쪽 실메타데이터(program_id·회차·방영일 + rights.ppl)를 주입하고
@@ -792,9 +793,10 @@ export async function runContentIndex(mediaId: string): Promise<void> {
         }
       } catch { /* 개별 파일 누락은 스킵 */ }
     }
-    if (!fs.existsSync(path.join(tmp, "beats.json"))) {
-      // 구 파이프라인 분석분 — beats 없음. 재시도로 큐를 소모하지 않게 조용히 스킵(재분석 필요).
-      console.warn(`[worker] content.index ${mediaId}: beats.json 없음 — 스킵(재분석 필요)`);
+    // beats.json이 있으면 진짜 beat 단위, 없으면 index_segments가 analysis.json의 자막으로
+    // 세그먼트를 합성한다(fallback). 둘 다 없으면 인덱싱할 게 없어 스킵.
+    if (!fs.existsSync(path.join(tmp, "beats.json")) && !fs.existsSync(path.join(tmp, "analysis.json"))) {
+      console.warn(`[worker] content.index ${mediaId}: beats·analysis 모두 없음 — 스킵`);
       return;
     }
     await runIndexSegments(tmp, mediaId);
