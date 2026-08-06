@@ -350,6 +350,11 @@ def scan_per_seg(video_path: str, segments: list[dict], *,
                 False: 세그 mid
 
     반환: (수정된 segments (speaker 필드에 이름 부여), stats)
+
+    stats["hits"] = [{time, names, seg, start, end}] — Vision 이 실제로 이름을 읽어낸 지점.
+    speaker 필드에만 융합해 버리면 "화면 자막이 근거"라는 사실이 사라져 검색 인덱서가
+    화자 라벨(S1/S2 익명 포함)과 구분할 수 없다. 원 감지를 그대로 남겨 caller 가
+    chyron.json 으로 덤프한다 (core.index_segments 가 characters 근거로 읽는다).
     """
     if not segments:
         return segments, {"scanned": 0, "assigned": 0}
@@ -435,10 +440,36 @@ def scan_per_seg(video_path: str, segments: list[dict], *,
             except Exception:
                 pass
 
-    print(f"[chyron-seg] {len(segments)} 세그 · Vision 병렬(workers={workers})")
-    from concurrent.futures import ThreadPoolExecutor
+    # 진행률 로그 + 콜당 하드 timeout · 워치독 stall 오판(60분 무응답 kill) 방어.
+    # PROGRESS_EVERY 세그마다 stdout 한 줄 · 실제 hang 여부·완료 페이스를 즉시 판정 가능.
+    # CALL_TIMEOUT_SEC 초과분은 미부여로 처리 · 전체 스텝이 무한 대기 빠지지 않게.
+    import time as _time
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    PROGRESS_EVERY = 50
+    CALL_TIMEOUT_SEC = 60.0
+    total = len(segments)
+    print(f"[chyron-seg] {total} 세그 · Vision 병렬(workers={workers}) · timeout={CALL_TIMEOUT_SEC:.0f}s/call", flush=True)
+    results: list[tuple[int, str]] = []
+    done = 0
+    timeouts = 0
+    t0 = _time.time()
     with ThreadPoolExecutor(max_workers=workers) as ex:
-        results = list(ex.map(_detect_seg_name, list(enumerate(segments))))
+        fut_to_idx = {ex.submit(_detect_seg_name, (i, s)): i for i, s in enumerate(segments)}
+        for fut in as_completed(fut_to_idx):
+            i = fut_to_idx[fut]
+            try:
+                results.append(fut.result(timeout=CALL_TIMEOUT_SEC))
+            except Exception:
+                timeouts += 1
+                results.append((i, ""))
+            done += 1
+            if done % PROGRESS_EVERY == 0 or done == total:
+                elapsed = _time.time() - t0
+                rate = done / max(elapsed, 0.001)
+                eta = (total - done) / max(rate, 0.001)
+                print(f"[chyron-seg] {done}/{total} · elapsed={elapsed:.0f}s · eta={eta:.0f}s · timeouts={timeouts}", flush=True)
+    # index 순서로 정렬 (as_completed 는 순서 무관)
+    results.sort(key=lambda x: x[0])
 
     try:
         tmpdir.rmdir()
@@ -480,13 +511,26 @@ def scan_per_seg(video_path: str, segments: list[dict], *,
 
     out = [dict(s) for s in segments]
     assigned = 0
+    hits: list[dict] = []
     for i, name in cleaned_results:
         if name:
             final = canon.get(name, name)
             out[i]["speaker"] = final
             assigned += 1
+            # 감지 지점 = 실제로 Vision 에 먹인 프레임 시각 (_detect_seg_name 과 같은 식).
+            try:
+                st = float(segments[i].get("start", 0)); en = float(segments[i].get("end", 0))
+            except (TypeError, ValueError):
+                continue
+            hits.append({
+                "time": round(st + 0.3 if prefer_start else (st + en) / 2.0, 3),
+                "names": [final],
+                "seg": i,
+                "start": round(st, 3),
+                "end": round(en, 3),
+            })
     return out, {"scanned": len(segments), "assigned": assigned,
-                  "unique_names": len(set(canon.values()))}
+                 "unique_names": len(set(canon.values())), "hits": hits}
 
 
 def apply_names_per_seg(segments: list[dict], hits: list[dict], pad_sec: float = 2.0) -> int:

@@ -15,7 +15,8 @@ STEP D Core — 검색 세그먼트 인덱서 (search segment indexer)
   narrative.json   블록별 서사 요약 → beat 요약 비면 보충
   scene_type.json  shot별 장면유형 (interview/on_scene/other) → scene_type 필터
   cast.json        인물 등장 구간 → characters 보강 (얼굴/화자 근거)
-  chyron.json      자막 CG 이름 감지 [{time, names}] → characters·chyron 텍스트
+  chyron.json      화면 이름 태그 감지 [{time, names}] → characters·chyron 텍스트
+                   (chyron per-seg 스테이지가 씀 · RUN_CHYRON_PER_SEG=0 이면 없음)
   shorts.json      쇼츠 추천 → is_short 플래그 · highlight_score 보정
 
 출력: segments.json = { media_id, genre, count, segments: [ <세그먼트 레코드> ] }
@@ -28,6 +29,7 @@ Run:
 from __future__ import annotations
 
 import json
+import re
 import sys
 from pathlib import Path
 from typing import Optional
@@ -186,6 +188,29 @@ def _dedup(*lists: list[str]) -> list[str]:
     return out
 
 
+# 익명 화자 라벨 — 인물 필터에 들어가면 안 된다 (S1, SPEAKER_00, 발화자 3, 화자2 …).
+_ANON_LABEL = re.compile(r"^(?:S\d+|SPEAKER[_\s]?\d+|발화자\s*\d*|화자\s*\d*|Speaker\s*\d*)$", re.I)
+# 실명 후보 — 한글 2자 이상(공백·가운뎃점 허용). analyze_stages 의 _KOREAN_NAME 과 같은 기준.
+_REAL_NAME = re.compile(r"^[가-힯][가-힯\s·]{1,}$")
+
+
+def _real_names(labels: list[str]) -> list[str]:
+    """화자 라벨 중 실명으로 볼 수 있는 것만. 익명 라벨(S1·SPEAKER_00·발화자 N)은 버린다.
+
+    chyron per-seg 가 화면 이름 태그로 speaker 를 실명 rewrite 하는데, 그 결과가 speakers
+    에만 남고 characters 에 못 오르면 검색 인물 필터(characters @> [...])와 쿼리 파서
+    roster 가 그 이름을 영영 못 본다. 여기서 끌어올린다.
+    """
+    out: list[str] = []
+    for lb in (labels or []):
+        n = str(lb).strip()
+        if not n or _ANON_LABEL.match(n) or not _REAL_NAME.match(n):
+            continue
+        if n not in out:
+            out.append(n)
+    return out
+
+
 # ── 메인 ─────────────────────────────────────────────────────────────────────
 def _fill_embeddings(segments: list[dict]) -> None:
     """emb_dialogue·emb_summary를 채운다 (core.embed 백엔드). 대사·요약을 각각
@@ -226,9 +251,12 @@ def build_segments(workdir: str | Path, media_id: str = "",
 
         dialogue, speakers = _dialogue_slice(refined, start, end)
         chyron_names = _chyron_in_window(chyron, start, end)
+        # 인물 = beat 판정 + cast 등장구간 + 화면자막 이름 + 실명 화자.
+        # 마지막 항이 없으면 chyron 이 실명을 찾아도 인물 필터가 못 쓴다(speakers 는 필터 대상 아님).
         characters = _dedup(beat.get("characters"),
                             _cast_in_window(cast, start, end),
-                            chyron_names)
+                            chyron_names,
+                            _real_names(speakers))
         summary = (beat.get("summary") or "").strip() or _narrative_summary_at(nsegs, start, end)
         is_short, appeal = _short_overlap(shorts, start, end)
 

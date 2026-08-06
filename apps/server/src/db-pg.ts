@@ -4,6 +4,7 @@
  *
  * Same domain graph + media/youtube schema as the SQLite prototype.
  */
+import { randomUUID } from "node:crypto";
 import pg from "pg";
 import { seed } from "./seed.ts";
 
@@ -224,6 +225,42 @@ async function migrate(): Promise<void> {
       error      TEXT,
       createdAt  BIGINT NOT NULL,
       updatedAt  BIGINT NOT NULL
+    );
+  `);
+  // Meta (Facebook + Instagram) connected accounts.
+  // 1 row per Facebook Page. Long-lived Page access token is non-expiring so we don't
+  // track refresh — but a token can be revoked; status flips to 'disconnected' then.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS meta_accounts (
+      publicId               TEXT PRIMARY KEY,
+      pageId                 TEXT NOT NULL UNIQUE,
+      pageName               TEXT NOT NULL,
+      pageProfilePictureUrl  TEXT,
+      pageAccessToken        TEXT NOT NULL,
+      igUserId               TEXT,
+      igUsername             TEXT,
+      igProfilePictureUrl    TEXT,
+      status                 TEXT NOT NULL DEFAULT 'active',
+      connectedAt            BIGINT NOT NULL
+    );
+  `);
+  // TikTok Content Posting API. accessToken ~24h, refreshToken ~365d — worker
+  // needs to refresh before upload. openId is stable per (user, app).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS tiktok_accounts (
+      publicId          TEXT PRIMARY KEY,
+      openId            TEXT NOT NULL UNIQUE,
+      unionId           TEXT,
+      displayName       TEXT NOT NULL,
+      username          TEXT,
+      avatarUrl         TEXT,
+      accessToken       TEXT NOT NULL,
+      refreshToken      TEXT NOT NULL,
+      expiresAt         BIGINT NOT NULL,
+      refreshExpiresAt  BIGINT NOT NULL,
+      scope             TEXT NOT NULL DEFAULT '',
+      status            TEXT NOT NULL DEFAULT 'active',
+      connectedAt       BIGINT NOT NULL
     );
   `);
 }
@@ -497,6 +534,120 @@ export async function upsertYouTubeChannel(ch: YouTubeChannel): Promise<void> {
 
 export async function deleteYouTubeChannel(channelId: string): Promise<void> {
   await pool.query("DELETE FROM youtube_channels WHERE channelId = $1", [channelId]);
+}
+
+// ── Meta (Facebook + Instagram) accounts ───────────────────────────────────────
+
+export interface MetaAccount {
+  publicId: string;
+  pageId: string;
+  pageName: string;
+  pageProfilePictureUrl: string | null;
+  pageAccessToken: string;
+  igUserId: string | null;
+  igUsername: string | null;
+  igProfilePictureUrl: string | null;
+  status: string;
+  connectedAt: number;
+}
+
+const META_COLS = `publicid AS "publicId", pageid AS "pageId", pagename AS "pageName",
+  pageprofilepictureurl AS "pageProfilePictureUrl", pageaccesstoken AS "pageAccessToken",
+  iguserid AS "igUserId", igusername AS "igUsername", igprofilepictureurl AS "igProfilePictureUrl",
+  status, connectedat AS "connectedAt"`;
+
+export async function listMetaAccounts(): Promise<MetaAccount[]> {
+  const { rows } = await pool.query(
+    `SELECT ${META_COLS} FROM meta_accounts ORDER BY connectedAt DESC`,
+  );
+  return rows as MetaAccount[];
+}
+
+export async function getMetaAccountByPageId(pageId: string): Promise<MetaAccount | undefined> {
+  const { rows } = await pool.query(
+    `SELECT ${META_COLS} FROM meta_accounts WHERE pageId = $1`,
+    [pageId],
+  );
+  return rows[0] as MetaAccount | undefined;
+}
+
+export async function upsertMetaAccount(a: MetaAccount): Promise<void> {
+  await pool.query(
+    `INSERT INTO meta_accounts (publicId, pageId, pageName, pageProfilePictureUrl,
+       pageAccessToken, igUserId, igUsername, igProfilePictureUrl, status, connectedAt)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+     ON CONFLICT (pageId) DO UPDATE SET
+       pageName              = EXCLUDED.pageName,
+       pageProfilePictureUrl = EXCLUDED.pageProfilePictureUrl,
+       pageAccessToken       = EXCLUDED.pageAccessToken,
+       igUserId              = EXCLUDED.igUserId,
+       igUsername            = EXCLUDED.igUsername,
+       igProfilePictureUrl   = EXCLUDED.igProfilePictureUrl,
+       status                = EXCLUDED.status`,
+    [a.publicId, a.pageId, a.pageName, a.pageProfilePictureUrl, a.pageAccessToken,
+     a.igUserId, a.igUsername, a.igProfilePictureUrl, a.status, a.connectedAt],
+  );
+}
+
+export async function deleteMetaAccount(publicId: string): Promise<void> {
+  await pool.query("DELETE FROM meta_accounts WHERE publicId = $1", [publicId]);
+}
+
+// ── TikTok accounts ────────────────────────────────────────────────────────────
+
+export interface TikTokAccount {
+  publicId: string;
+  openId: string;
+  unionId: string | null;
+  displayName: string;
+  username: string | null;
+  avatarUrl: string | null;
+  accessToken: string;
+  refreshToken: string;
+  expiresAt: number;
+  refreshExpiresAt: number;
+  scope: string;
+  status: string;
+  connectedAt: number;
+}
+
+const TIKTOK_COLS = `publicid AS "publicId", openid AS "openId", unionid AS "unionId",
+  displayname AS "displayName", username, avatarurl AS "avatarUrl",
+  accesstoken AS "accessToken", refreshtoken AS "refreshToken",
+  expiresat AS "expiresAt", refreshexpiresat AS "refreshExpiresAt",
+  scope, status, connectedat AS "connectedAt"`;
+
+export async function listTikTokAccounts(): Promise<TikTokAccount[]> {
+  const { rows } = await pool.query(
+    `SELECT ${TIKTOK_COLS} FROM tiktok_accounts ORDER BY connectedAt DESC`,
+  );
+  return rows as TikTokAccount[];
+}
+
+export async function upsertTikTokAccount(a: TikTokAccount): Promise<void> {
+  await pool.query(
+    `INSERT INTO tiktok_accounts (publicId, openId, unionId, displayName, username, avatarUrl,
+       accessToken, refreshToken, expiresAt, refreshExpiresAt, scope, status, connectedAt)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+     ON CONFLICT (openId) DO UPDATE SET
+       unionId          = EXCLUDED.unionId,
+       displayName      = EXCLUDED.displayName,
+       username         = EXCLUDED.username,
+       avatarUrl        = EXCLUDED.avatarUrl,
+       accessToken      = EXCLUDED.accessToken,
+       refreshToken     = EXCLUDED.refreshToken,
+       expiresAt        = EXCLUDED.expiresAt,
+       refreshExpiresAt = EXCLUDED.refreshExpiresAt,
+       scope            = EXCLUDED.scope,
+       status           = EXCLUDED.status`,
+    [a.publicId, a.openId, a.unionId, a.displayName, a.username, a.avatarUrl,
+     a.accessToken, a.refreshToken, a.expiresAt, a.refreshExpiresAt, a.scope,
+     a.status, a.connectedAt],
+  );
+}
+
+export async function deleteTikTokAccount(publicId: string): Promise<void> {
+  await pool.query("DELETE FROM tiktok_accounts WHERE publicId = $1", [publicId]);
 }
 
 /**
@@ -1673,6 +1824,89 @@ export async function listKnownCharacters(programId?: string): Promise<string[]>
     [programId ?? null],
   );
   return rows.map((r: { name: string }) => r.name).filter(Boolean);
+}
+
+// ── 검색 로그 (search_events · core/search_log.py §8 스키마) ────────────────────
+// 검색·클릭·반출·경계조정 4종. 특히 boundary_adjust(AI 제안 경계 → 사람이 옮긴 경계)가
+// 컷 지점 학습의 지도 신호다. **기록 실패가 본 기능을 절대 막으면 안 된다** — 호출부는
+// 전부 void 로 fire-and-forget 하고, 여기서 삼킨다.
+
+export type SearchEventKind = "search" | "click" | "export" | "boundary_adjust";
+
+export interface SearchEvent {
+  event: SearchEventKind;
+  queryId?: string | null;
+  source?: "search" | "editor";
+  userId?: string;
+  role?: string;
+  // search
+  query?: string;
+  parsed?: unknown;
+  candidates?: unknown;
+  resultCount?: number;
+  // click / export / boundary_adjust
+  segmentId?: string | null;
+  mediaId?: string | null;
+  clipId?: string | null;
+  rank?: number | null;
+  start?: number | null;
+  end?: number | null;
+  // boundary_adjust
+  before?: { start?: number | null; end?: number | null } | null;
+  after?: { start?: number | null; end?: number | null } | null;
+}
+
+/** UUID hex — core/search_log.py:new_query_id 와 같은 형태(하이픈 없는 32자). */
+export function newQueryId(): string {
+  return randomUUID().replace(/-/g, "");
+}
+
+function delta(a: number | null | undefined, b: number | null | undefined): number | null {
+  if (typeof a !== "number" || typeof b !== "number" || !Number.isFinite(a) || !Number.isFinite(b)) return null;
+  return Number((b - a).toFixed(3));
+}
+
+/**
+ * 이벤트 1건 기록. 실패는 삼킨다(로그만) — 로그 테이블 하나 때문에 검색·저장이 죽으면
+ * 얻는 것보다 잃는 게 크다. 마이그레이션 미적용 환경에서도 그냥 조용히 지나간다.
+ */
+export async function logSearchEvent(ev: SearchEvent): Promise<void> {
+  try {
+    await pool.query(
+      `INSERT INTO search_events
+         (event, query_id, source, user_id, role, query, parsed, candidates, result_count,
+          segment_id, media_id, clip_id, rank, start_sec, end_sec,
+          before_start, before_end, after_start, after_end, delta_start, delta_end)
+       VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8::jsonb,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)`,
+      [
+        ev.event, ev.queryId ?? null, ev.source ?? null, ev.userId ?? "", ev.role ?? "",
+        ev.query ?? null,
+        ev.parsed === undefined ? null : JSON.stringify(ev.parsed),
+        ev.candidates === undefined ? null : JSON.stringify(ev.candidates),
+        ev.resultCount ?? null,
+        ev.segmentId ?? null, ev.mediaId ?? null, ev.clipId ?? null, ev.rank ?? null,
+        ev.start ?? null, ev.end ?? null,
+        ev.before?.start ?? null, ev.before?.end ?? null,
+        ev.after?.start ?? null, ev.after?.end ?? null,
+        delta(ev.before?.start, ev.after?.start), delta(ev.before?.end, ev.after?.end),
+      ],
+    );
+  } catch (e) {
+    console.warn(`[search-log] ${ev.event} 기록 실패(무시): ${e instanceof Error ? e.message : String(e)}`);
+  }
+}
+
+/** 로그 열람 — 평가·학습 추출용. event 미지정 시 전체. */
+export async function listSearchEvents(opts: { event?: SearchEventKind; limit?: number } = {}): Promise<Record<string, unknown>[]> {
+  const limit = Math.max(1, Math.min(opts.limit ?? 200, 2000));
+  const { rows } = await pool.query(
+    `SELECT * FROM search_events
+      WHERE ($1::text IS NULL OR event = $1)
+      ORDER BY ts DESC
+      LIMIT ${limit}`,
+    [opts.event ?? null],
+  );
+  return rows;
 }
 
 // ── cleanup ────────────────────────────────────────────────────────────────────

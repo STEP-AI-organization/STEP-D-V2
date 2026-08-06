@@ -6,9 +6,68 @@ STEP D Core — Vertex Gemini 일시 오류 재시도 헬퍼
 데이터 손실이 영구화된다 — 그래서 core의 Gemini 호출은 이 헬퍼로 감싼다.
 비일시(스키마/안전차단/JSON 절단 등) 오류는 즉시 다시 던진다.
 """
+import os
 import random
 import threading
 import time
+
+# ── Usage accounting (2026-08-06) ──────────────────────────────────────────────
+# 회당 실비 관측용. 모든 Gemini 응답의 usage_metadata 를 프로세스 로컬 누적.
+# analyze.py 완료 시점에 dump 하면 회당 정확한 in/out 토큰 · 콜수 · 대략 원 산출 가능.
+# 임계치는 대략치 (2026-08-06 asia-northeast3 flash 기준 · 실제 청구서와 다를 수 있음).
+_USAGE_LOCK = threading.Lock()
+USAGE: dict = {"calls": 0, "in_tokens": 0, "out_tokens": 0, "by_model": {}}
+
+# 대략 요율 · KRW per 1M tokens · Gemini 2.5 flash (asia-northeast3). 실측 후 갱신.
+_PRICE_KRW_PER_1M = {
+    "gemini-2.5-flash": {"in": 100, "out": 400},
+    "gemini-2.5-flash-lite": {"in": 40, "out": 160},
+    "gemini-2.5-pro": {"in": 1600, "out": 6400},
+    "gemini-3-pro-image": {"in": 5000, "out": 20000},  # nano banana 대략
+}
+
+
+def _record_usage(resp):
+    """genai 응답 객체에서 usage_metadata 를 뽑아 누적. resp 형태가 다양해 방어적 파싱."""
+    try:
+        um = getattr(resp, "usage_metadata", None)
+        if um is None:
+            return
+        pin = int(getattr(um, "prompt_token_count", 0) or 0)
+        pout = int(getattr(um, "candidates_token_count", 0) or 0)
+        model = str(getattr(resp, "model_version", "") or getattr(resp, "model", "") or "unknown")
+        with _USAGE_LOCK:
+            USAGE["calls"] += 1
+            USAGE["in_tokens"] += pin
+            USAGE["out_tokens"] += pout
+            m = USAGE["by_model"].setdefault(model, {"calls": 0, "in": 0, "out": 0})
+            m["calls"] += 1; m["in"] += pin; m["out"] += pout
+    except Exception:
+        pass
+
+
+def usage_summary() -> dict:
+    """지금까지 이 프로세스 누적. analyze.py 마지막에 print 하면 회당 실비."""
+    with _USAGE_LOCK:
+        snap = {
+            "calls": USAGE["calls"],
+            "in_tokens": USAGE["in_tokens"],
+            "out_tokens": USAGE["out_tokens"],
+            "by_model": {k: dict(v) for k, v in USAGE["by_model"].items()},
+        }
+    total_krw = 0.0
+    for model, v in snap["by_model"].items():
+        base = model.split("-")
+        # 매치되는 요율 찾기 (버전 suffix 무시)
+        rate = None
+        for key, r in _PRICE_KRW_PER_1M.items():
+            if model.startswith(key):
+                rate = r; break
+        if rate is None:
+            continue
+        total_krw += v["in"] / 1_000_000 * rate["in"] + v["out"] / 1_000_000 * rate["out"]
+    snap["est_krw"] = round(total_krw, 2)
+    return snap
 
 # 예외 메시지/타입명에 이 표식이 있으면 일시(transient) 오류로 본다.
 _TRANSIENT_MARKERS = (
@@ -59,7 +118,9 @@ def call_with_retry(fn, *, attempts: int = 4, base_delay: float = 2.0, timeout: 
     관찰됨(대용량 프레임·긴 prompt) → 600s(10분)로 상향. 여전히 hang은 잘라내되 정상 처리는 살림."""
     for i in range(attempts):
         try:
-            return _call_with_timeout(fn, timeout)
+            resp = _call_with_timeout(fn, timeout)
+            _record_usage(resp)
+            return resp
         except Exception as e:
             if not is_transient(e) or i >= attempts - 1:
                 raise

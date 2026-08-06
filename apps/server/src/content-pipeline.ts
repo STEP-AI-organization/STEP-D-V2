@@ -38,6 +38,7 @@ import {
 import type { TranscriptSegment, SearchSegmentRow } from "./db-pg.ts";
 import { toCoreRegistry, timelineToRows } from "./cast.ts";
 import { createReadStream, parseObjectPath, uploadFile } from "./storage-gcs.ts";
+import { enqueue } from "./queue.ts";
 import { newId } from "./pipeline.ts";
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
@@ -891,6 +892,28 @@ export async function runContentAnalyze(mediaId: string, fast = false): Promise<
       await downloadToTemp(media.path, videoPath);
     }
 
+    // GEBD 자동 트리거 (2026-08-06 · 장면전환 모델을 워커에 배선).
+    // 조건: AUTO_GEBD=1 · GCS_BUCKET 세팅 (gebd.detect 는 gsutil+Docker+GPU 전제 = GEBD VM) ·
+    // boundaries.json 미존재. GEBD 잡이 별도로 완주하면 content.analyze 를 새 dedupeKey 로 재큐 →
+    // 재개 시 boundaries.json 를 소비해 정밀 beats/shorts. 지금 실행은 fallback 로 완주 (blocking 안 함).
+    // 로컬 워커는 gsutil/Docker 없으므로 자동 skip.
+    if (process.env.AUTO_GEBD === "1" && process.env.GCS_BUCKET) {
+      try {
+        const boundariesLocal = path.join(work, "boundaries.json");
+        if (!fs.existsSync(boundariesLocal)) {
+          const workdirGcsPrefix = `analysis/${mediaId}`;
+          const gebdId = await enqueue(
+            "gebd.detect",
+            { mediaId, videoGcsPath: media.path, workdirGcsPrefix },
+            { dedupeKey: `gebd.detect:${mediaId}` },
+          );
+          if (gebdId) console.log(`[worker] content.analyze ${mediaId}: gebd.detect 큐잉 (${gebdId}) — 완주 후 재분석 예정`);
+        }
+      } catch (e) {
+        console.warn(`[worker] content.analyze ${mediaId}: gebd 큐잉 실패 (무시)`, e);
+      }
+    }
+
     // Mirror pipeline progress onto the episode (throttled — every line is a DB write).
     let lastPct = -10;
     let lastWrite = 0;
@@ -1154,8 +1177,11 @@ export async function runContentAnalyze(mediaId: string, fast = false): Promise<
           `frames=${stored ? stored.frames : "not-stored"}`,
         );
 
-        // ── NEW: Thumbnail generation stage (TS → Python 호출) ──
-        if (media.episodeId && shorts.length) {
+        // Thumbnail generation은 auto 하지 않는다 (2026-08-06). 회당 ₩500 낭비.
+        // 편집자가 필요 시점에 별도 트리거로 생성 (POST /api/clips/:id/thumbnail 등).
+        // 채택 안 된 shorts 는 어차피 썸네일 자원 낭비 · on-demand 가 정답.
+        // env AUTO_THUMBNAIL=1 로 강제 활성화 가능 (프로파일링 시).
+        if (process.env.AUTO_THUMBNAIL === "1" && media.episodeId && shorts.length) {
           try {
             await runThumbnailGeneration(mediaId, media.episodeId, shorts, work);
           } catch (e) {

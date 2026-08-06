@@ -33,6 +33,14 @@ import {
   updateYouTubeTokens,
   markYouTubeChannelRevoked,
   deleteYouTubeChannel,
+  listMetaAccounts,
+  upsertMetaAccount,
+  deleteMetaAccount,
+  type MetaAccount,
+  listTikTokAccounts,
+  upsertTikTokAccount,
+  deleteTikTokAccount,
+  type TikTokAccount,
   listChannelVideos,
   upsertChannelVideo,
   getChannelVideoByVideoId,
@@ -72,11 +80,15 @@ import {
   getPool,
   searchSegments,
   listKnownCharacters,
+  logSearchEvent,
+  listSearchEvents,
+  newQueryId,
   type MediaRow,
   type YouTubeChannel,
   type ChannelVideo,
   type SearchHit,
   type SearchQuery,
+  type SearchEventKind,
 } from "./db-pg.ts";
 import { hasFfmpeg, probe, captureThumbnail, trimEncode, remuxFaststart, renderShort } from "./ffmpeg.ts";
 import { embedQuery } from "./search-embed.ts";
@@ -212,8 +224,28 @@ app.get("/api/search", async (c) => {
     // search_segments 테이블 미존재(마이그레이션 미적용) 등
     return c.json({ error: e instanceof Error ? e.message : String(e), results: [] }, 500);
   }
+
+  // 검색 로그 — 노출 후보를 순위와 함께 남긴다(Recall 평가 · 이후 click/export 조인).
+  // queryId 를 응답에 실어야 클라이언트가 후속 이벤트를 같은 쿼리에 묶을 수 있다.
+  // await 하지 않는다 — 로그 지연이 검색 응답을 붙잡으면 안 된다.
+  const queryId = newQueryId();
+  void logSearchEvent({
+    event: "search",
+    queryId,
+    source: "search",
+    userId: c.req.header("x-user") ?? "",
+    role: c.req.header("x-role") ?? "",
+    query: q,
+    parsed: { ...parsed, charactersUsed: query.characters ?? [], embedded: query.queryVec != null },
+    candidates: hits.map((h, i) => ({
+      rank: i + 1, segment_id: h.segmentId, score: h.score, lex: h.lex, vec: h.vec,
+    })),
+    resultCount: hits.length,
+  });
+
   return c.json({
     query: q,
+    queryId,
     parsed: { ...parsed, charactersUsed: query.characters ?? [] },
     embedded: query.queryVec != null,
     count: hits.length,
@@ -235,6 +267,52 @@ app.get("/api/search", async (c) => {
       vec: h.vec,
     })),
   });
+});
+
+// ── 검색 로그 수집 (click · export · boundary_adjust) ─────────────────────────
+// search 이벤트는 /api/search 가 스스로 남긴다. 여기는 클라이언트가 그 뒤에 일어난 일을
+// 같은 queryId 로 이어 붙이는 입구. 반환은 항상 202 — 로그가 UI 흐름을 막으면 안 된다.
+const LOG_EVENTS: SearchEventKind[] = ["click", "export", "boundary_adjust"];
+
+app.post("/api/search/log", async (c) => {
+  const b = await c.req.json<Record<string, unknown>>().catch(() => ({}) as Record<string, unknown>);
+  const event = String(b.event ?? "") as SearchEventKind;
+  if (!LOG_EVENTS.includes(event)) {
+    return c.json({ error: `event must be one of ${LOG_EVENTS.join("|")}` }, 400);
+  }
+  const num = (v: unknown): number | null =>
+    typeof v === "number" && Number.isFinite(v) ? v : null;
+  const bounds = (v: unknown) => {
+    const o = (v ?? {}) as Record<string, unknown>;
+    return { start: num(o.start), end: num(o.end) };
+  };
+  void logSearchEvent({
+    event,
+    queryId: typeof b.queryId === "string" ? b.queryId : null,
+    source: "search",
+    userId: c.req.header("x-user") ?? "",
+    role: c.req.header("x-role") ?? "",
+    segmentId: typeof b.segmentId === "string" ? b.segmentId : null,
+    mediaId: typeof b.mediaId === "string" ? b.mediaId : null,
+    clipId: typeof b.clipId === "string" ? b.clipId : null,
+    rank: num(b.rank),
+    start: num(b.start),
+    end: num(b.end),
+    before: b.before ? bounds(b.before) : null,
+    after: b.after ? bounds(b.after) : null,
+  });
+  return c.json({ ok: true }, 202);
+});
+
+// 로그 열람 — 평가·학습 추출용(운영 진단). 기본은 boundary_adjust 없이 전체 최신순.
+app.get("/api/search/log", async (c) => {
+  const ev = c.req.query("event") as SearchEventKind | undefined;
+  const limit = c.req.query("limit") ? Number(c.req.query("limit")) : undefined;
+  try {
+    return c.json({ events: await listSearchEvents({ event: ev, limit }) });
+  } catch (e) {
+    return c.json({ error: e instanceof Error ? e.message : String(e), events: [] }, 500);
+  }
 });
 
 // ── create a program (content root — must exist before any upload) ──
@@ -3001,7 +3079,33 @@ app.patch("/api/clips/:id/editor", async (c) => {
     patch.editorState = body.editorState;
   }
 
+  // 경계 조정 로그 — AI 가 제안한 [start,end] 를 사람이 어디로 옮겼나. 컷 지점 학습의
+  // 지도 신호(core/search_log.py:6)라 실제로 값이 바뀐 저장만 남긴다. 채택 직후 clip 의
+  // startTime/endTime 은 추천 원본이므로, 이 클립의 **첫 이벤트 before = AI 제안**이다.
+  const beforeStart = Number(clip.startTime ?? NaN);
+  const beforeEnd = Number(clip.endTime ?? NaN);
+  const afterStart = Number(patch.startTime ?? clip.startTime ?? NaN);
+  const afterEnd = Number(patch.endTime ?? clip.endTime ?? NaN);
+  const moved =
+    Number.isFinite(beforeStart) && Number.isFinite(afterStart) &&
+    (Math.abs(afterStart - beforeStart) > 0.01 || Math.abs(afterEnd - beforeEnd) > 0.01);
   await putEntity("clip", clipId, patch);
+
+  // 저장이 실제로 성공한 뒤에만 남긴다 — 안 일어난 조정을 학습 데이터에 넣으면 안 된다.
+  if (moved) {
+    void logSearchEvent({
+      event: "boundary_adjust",
+      source: "editor",
+      userId: c.req.header("x-user") ?? "",
+      role: c.req.header("x-role") ?? "",
+      clipId,
+      mediaId: typeof clip.sourceMediaId === "string" ? clip.sourceMediaId : null,
+      segmentId: typeof clip.sourceRecommendationId === "string" ? clip.sourceRecommendationId : null,
+      before: { start: beforeStart, end: beforeEnd },
+      after: { start: afterStart, end: afterEnd },
+    });
+  }
+
   return c.json({ ok: true, clipId });
 });
 
@@ -3529,6 +3633,308 @@ const oauthCallback = async (c: Context) => {
 // (and the legacy client config) keep working.
 app.get(OAUTH_CALLBACK_PATH, oauthCallback);
 app.get("/api/youtube/callback", oauthCallback);
+
+// ── Meta (Facebook + Instagram) OAuth ─────────────────────────────────────────
+// One connect flow covers both — Facebook Page owner grants us the Page + its
+// linked Instagram Business account. 1 DB row per Page, long-lived Page token.
+// Redirect URI MUST match what's registered in developers.facebook.com > App > Login.
+const META_APP_ID = process.env.META_APP_ID ?? "";
+const META_APP_SECRET = process.env.META_APP_SECRET ?? "";
+const META_GRAPH_VERSION = "v21.0";
+const META_OAUTH_DIALOG = `https://www.facebook.com/${META_GRAPH_VERSION}/dialog/oauth`;
+const META_GRAPH_BASE = `https://graph.facebook.com/${META_GRAPH_VERSION}`;
+const META_CALLBACK_PATH = "/api/meta/oauth/callback";
+const META_SCOPES = [
+  "pages_show_list",
+  "pages_read_engagement",
+  "pages_manage_posts",
+  "instagram_basic",
+  "instagram_content_publish",
+  "business_management",
+].join(",");
+
+function metaRedirectUri(): string {
+  // Prod: web (stepd.stepai.kr) proxies /api/proxy/* → server, so the callback
+  // Meta redirects the browser to is a web URL, not the Cloud Run URL. Register
+  // exactly this in developers.facebook.com > App > Login > Valid OAuth Redirect URIs.
+  // Override with META_REDIRECT_URI if the domain ever changes.
+  const explicit = process.env.META_REDIRECT_URI;
+  if (explicit) return explicit;
+  if (process.env.NODE_ENV === "production") {
+    return `https://stepd.stepai.kr/api/proxy${META_CALLBACK_PATH}`;
+  }
+  return `${process.env.PUBLIC_URL ?? `http://localhost:${PORT}`}${META_CALLBACK_PATH}`;
+}
+
+app.get("/api/meta/auth", (c) => {
+  if (!META_APP_ID) return c.json({ error: "META_APP_ID not configured" }, 500);
+  const returnTo = safeReturn(c.req.query("return"));
+  const rerequest = c.req.query("rerequest") === "1";
+  const state = Buffer.from(JSON.stringify({ return: returnTo })).toString("base64");
+  const params = new URLSearchParams({
+    client_id: META_APP_ID,
+    redirect_uri: metaRedirectUri(),
+    response_type: "code",
+    scope: META_SCOPES,
+    state,
+  });
+  if (rerequest) params.set("auth_type", "rerequest");
+  return c.redirect(`${META_OAUTH_DIALOG}?${params}`);
+});
+
+const metaOauthCallback = async (c: Context) => {
+  const code = c.req.query("code");
+  const error = c.req.query("error");
+  let returnTo = "/publish-channels";
+  try {
+    const st = JSON.parse(Buffer.from(c.req.query("state") ?? "", "base64").toString("utf8"));
+    returnTo = safeReturn(st?.return);
+  } catch {}
+
+  if (error) return c.redirect(`${returnTo}?meta_error=access_denied`);
+  if (!code) return c.json({ error: "missing code" }, 400);
+  if (!META_APP_ID || !META_APP_SECRET) return c.json({ error: "Meta OAuth not configured" }, 500);
+
+  try {
+    // 1. code → short-lived user token
+    const tokenParams = new URLSearchParams({
+      client_id: META_APP_ID,
+      client_secret: META_APP_SECRET,
+      redirect_uri: metaRedirectUri(),
+      code,
+    });
+    const tokenRes = await fetch(`${META_GRAPH_BASE}/oauth/access_token?${tokenParams}`);
+    if (!tokenRes.ok) throw new Error(`token exchange failed: ${await tokenRes.text()}`);
+    const tokenData = (await tokenRes.json()) as { access_token: string };
+
+    // 2. short-lived → long-lived user token (~60 days)
+    const exchangeParams = new URLSearchParams({
+      grant_type: "fb_exchange_token",
+      client_id: META_APP_ID,
+      client_secret: META_APP_SECRET,
+      fb_exchange_token: tokenData.access_token,
+    });
+    const longRes = await fetch(`${META_GRAPH_BASE}/oauth/access_token?${exchangeParams}`);
+    if (!longRes.ok) throw new Error(`long-lived exchange failed: ${await longRes.text()}`);
+    const userToken = ((await longRes.json()) as { access_token: string }).access_token;
+
+    // 3. /me/accounts — Pages + linked IG Business accounts (Page tokens here are long-lived)
+    const accountsParams = new URLSearchParams({
+      access_token: userToken,
+      fields:
+        "id,name,access_token,picture{data{url}},instagram_business_account{id,username,profile_picture_url}",
+      limit: "100",
+    });
+    const accountsRes = await fetch(`${META_GRAPH_BASE}/me/accounts?${accountsParams}`);
+    if (!accountsRes.ok) throw new Error(`/me/accounts failed: ${await accountsRes.text()}`);
+    const accountsData = (await accountsRes.json()) as {
+      data: Array<{
+        id: string;
+        name: string;
+        access_token: string;
+        picture?: { data?: { url?: string } };
+        instagram_business_account?: {
+          id: string;
+          username?: string;
+          profile_picture_url?: string;
+        };
+      }>;
+    };
+
+    const now = Date.now();
+    let saved = 0;
+    for (const page of accountsData.data ?? []) {
+      const account: MetaAccount = {
+        publicId: crypto.randomUUID(),
+        pageId: page.id,
+        pageName: page.name,
+        pageProfilePictureUrl: page.picture?.data?.url ?? null,
+        pageAccessToken: page.access_token,
+        igUserId: page.instagram_business_account?.id ?? null,
+        igUsername: page.instagram_business_account?.username ?? null,
+        igProfilePictureUrl: page.instagram_business_account?.profile_picture_url ?? null,
+        status: "active",
+        connectedAt: now,
+      };
+      // upsert by pageId — publicId only used on first insert
+      await upsertMetaAccount(account);
+      saved += 1;
+    }
+
+    return c.redirect(`${returnTo}?meta_success=1&meta_count=${saved}`);
+  } catch (err: any) {
+    console.error("[meta/oauth]", err);
+    return c.redirect(`${returnTo}?meta_error=${encodeURIComponent(err.message ?? "unknown")}`);
+  }
+};
+app.get(META_CALLBACK_PATH, metaOauthCallback);
+
+app.get("/api/meta/accounts", async (c) => {
+  const accounts = await listMetaAccounts();
+  return c.json({
+    accounts: accounts.map((a) => ({
+      publicId: a.publicId,
+      pageId: a.pageId,
+      pageName: a.pageName,
+      pageProfilePictureUrl: a.pageProfilePictureUrl,
+      igUserId: a.igUserId,
+      igUsername: a.igUsername,
+      igProfilePictureUrl: a.igProfilePictureUrl,
+      status: a.status,
+      connectedAt: a.connectedAt,
+    })),
+  });
+});
+
+app.delete("/api/meta/accounts/:publicId", async (c) => {
+  await deleteMetaAccount(c.req.param("publicId"));
+  return c.json({ ok: true });
+});
+
+// ── TikTok OAuth (Content Posting API) ────────────────────────────────────────
+// Access token ~24h, refresh token ~365d. Worker must refresh before upload.
+// Register in developers.tiktok.com > App > Login Kit + Content Posting API.
+const TIKTOK_CLIENT_KEY = process.env.TIKTOK_CLIENT_KEY ?? "";
+const TIKTOK_CLIENT_SECRET = process.env.TIKTOK_CLIENT_SECRET ?? "";
+const TIKTOK_AUTH_URL = "https://www.tiktok.com/v2/auth/authorize/";
+const TIKTOK_TOKEN_URL = "https://open.tiktokapis.com/v2/oauth/token/";
+const TIKTOK_USER_INFO_URL = "https://open.tiktokapis.com/v2/user/info/";
+const TIKTOK_CALLBACK_PATH = "/api/tiktok/oauth/callback";
+const TIKTOK_SCOPES = ["user.info.basic", "video.upload", "video.publish"].join(",");
+
+function tiktokRedirectUri(): string {
+  const explicit = process.env.TIKTOK_REDIRECT_URI;
+  if (explicit) return explicit;
+  if (process.env.NODE_ENV === "production") {
+    return `https://stepd.stepai.kr/api/proxy${TIKTOK_CALLBACK_PATH}`;
+  }
+  return `${process.env.PUBLIC_URL ?? `http://localhost:${PORT}`}${TIKTOK_CALLBACK_PATH}`;
+}
+
+app.get("/api/tiktok/auth", (c) => {
+  if (!TIKTOK_CLIENT_KEY) return c.json({ error: "TIKTOK_CLIENT_KEY not configured" }, 500);
+  const returnTo = safeReturn(c.req.query("return"));
+  const state = Buffer.from(JSON.stringify({ return: returnTo, nonce: crypto.randomUUID() })).toString("base64url");
+  const params = new URLSearchParams({
+    client_key: TIKTOK_CLIENT_KEY,
+    redirect_uri: tiktokRedirectUri(),
+    response_type: "code",
+    scope: TIKTOK_SCOPES,
+    state,
+  });
+  return c.redirect(`${TIKTOK_AUTH_URL}?${params}`);
+});
+
+const tiktokOauthCallback = async (c: Context) => {
+  const code = c.req.query("code");
+  const error = c.req.query("error");
+  let returnTo = "/publish-channels";
+  try {
+    const st = JSON.parse(Buffer.from(c.req.query("state") ?? "", "base64url").toString("utf8"));
+    returnTo = safeReturn(st?.return);
+  } catch {}
+
+  if (error) return c.redirect(`${returnTo}?tiktok_error=${encodeURIComponent(error)}`);
+  if (!code) return c.json({ error: "missing code" }, 400);
+  if (!TIKTOK_CLIENT_KEY || !TIKTOK_CLIENT_SECRET) {
+    return c.json({ error: "TikTok OAuth not configured" }, 500);
+  }
+
+  try {
+    // 1. code → access + refresh token
+    const tokenBody = new URLSearchParams({
+      client_key: TIKTOK_CLIENT_KEY,
+      client_secret: TIKTOK_CLIENT_SECRET,
+      code,
+      grant_type: "authorization_code",
+      redirect_uri: tiktokRedirectUri(),
+    });
+    const tokenRes = await fetch(TIKTOK_TOKEN_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: tokenBody,
+    });
+    if (!tokenRes.ok) throw new Error(`token exchange failed: ${await tokenRes.text()}`);
+    const tokenData = (await tokenRes.json()) as {
+      access_token: string;
+      refresh_token: string;
+      expires_in: number;
+      refresh_expires_in: number;
+      open_id: string;
+      scope: string;
+      error?: string;
+      error_description?: string;
+    };
+    if (tokenData.error) throw new Error(`${tokenData.error}: ${tokenData.error_description ?? ""}`);
+
+    // 2. /v2/user/info/ — display_name + avatar + username
+    const userRes = await fetch(
+      `${TIKTOK_USER_INFO_URL}?fields=open_id,union_id,avatar_url,display_name,username`,
+      { headers: { Authorization: `Bearer ${tokenData.access_token}` } },
+    );
+    if (!userRes.ok) throw new Error(`/user/info failed: ${await userRes.text()}`);
+    const userData = (await userRes.json()) as {
+      data?: {
+        user?: {
+          open_id: string;
+          union_id?: string;
+          avatar_url?: string;
+          display_name?: string;
+          username?: string;
+        };
+      };
+    };
+    const user = userData.data?.user;
+    if (!user) throw new Error("user info missing");
+
+    const now = Date.now();
+    const account: TikTokAccount = {
+      publicId: crypto.randomUUID(),
+      openId: user.open_id ?? tokenData.open_id,
+      unionId: user.union_id ?? null,
+      displayName: user.display_name ?? "TikTok User",
+      username: user.username ?? null,
+      avatarUrl: user.avatar_url ?? null,
+      accessToken: tokenData.access_token,
+      refreshToken: tokenData.refresh_token,
+      expiresAt: now + tokenData.expires_in * 1000,
+      refreshExpiresAt: now + tokenData.refresh_expires_in * 1000,
+      scope: tokenData.scope ?? "",
+      status: "active",
+      connectedAt: now,
+    };
+    await upsertTikTokAccount(account);
+
+    return c.redirect(`${returnTo}?tiktok_success=1&tiktok_name=${encodeURIComponent(account.displayName)}`);
+  } catch (err: any) {
+    console.error("[tiktok/oauth]", err);
+    return c.redirect(`${returnTo}?tiktok_error=${encodeURIComponent(err.message ?? "unknown")}`);
+  }
+};
+app.get(TIKTOK_CALLBACK_PATH, tiktokOauthCallback);
+
+app.get("/api/tiktok/accounts", async (c) => {
+  const accounts = await listTikTokAccounts();
+  return c.json({
+    accounts: accounts.map((a) => ({
+      publicId: a.publicId,
+      openId: a.openId,
+      displayName: a.displayName,
+      username: a.username,
+      avatarUrl: a.avatarUrl,
+      scope: a.scope,
+      status: a.status,
+      connectedAt: a.connectedAt,
+      expiresAt: a.expiresAt,
+      refreshExpiresAt: a.refreshExpiresAt,
+    })),
+  });
+});
+
+app.delete("/api/tiktok/accounts/:publicId", async (c) => {
+  await deleteTikTokAccount(c.req.param("publicId"));
+  return c.json({ ok: true });
+});
 
 app.get("/api/youtube/channels", async (c) => {
   const channels = (await listYouTubeChannels()).map((ch: YouTubeChannel) => ({

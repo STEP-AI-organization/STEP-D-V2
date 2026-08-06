@@ -91,20 +91,28 @@ export async function initQueue(): Promise<void> {
 }
 
 /** Returns the job id, or null when an identical job is already in flight. */
+// 재시도 폭탄 방지: 무거운/비싼 잡은 낮게 상한. 일반 잡은 기존 5 유지.
+// 2026-08-06 로컬 실측에서 content.analyze 가 chyron 트랩으로 두 번 자동 재실행 →
+// PPL 이 두 번 돌아 회당 ~₩60 낭비. 이런 케이스는 사람 개입이 정답.
+const MAX_ATTEMPTS_BY_TYPE: Partial<Record<JobType, number>> = {
+  "content.analyze": 2,
+};
+
 export async function enqueue(
   type: JobType,
   payload: Record<string, unknown>,
-  opts: { dedupeKey?: string; delayMs?: number } = {},
+  opts: { dedupeKey?: string; delayMs?: number; maxAttempts?: number } = {},
 ): Promise<string | null> {
   const now = Date.now();
   const id = `job_${now.toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+  const maxAttempts = opts.maxAttempts ?? MAX_ATTEMPTS_BY_TYPE[type] ?? 5;
 
   const { rows } = await getPool().query(
-    `INSERT INTO job_queue (id, type, payload, status, runAfter, dedupeKey, createdAt, updatedAt)
-     VALUES ($1, $2, $3::jsonb, 'pending', $4, $5, $6, $6)
+    `INSERT INTO job_queue (id, type, payload, status, runAfter, dedupeKey, maxAttempts, createdAt, updatedAt)
+     VALUES ($1, $2, $3::jsonb, 'pending', $4, $5, $6, $7, $7)
      ON CONFLICT DO NOTHING
      RETURNING id`,
-    [id, type, JSON.stringify(payload), now + (opts.delayMs ?? 0), opts.dedupeKey ?? null, now],
+    [id, type, JSON.stringify(payload), now + (opts.delayMs ?? 0), opts.dedupeKey ?? null, maxAttempts, now],
   );
   return rows[0]?.id ?? null;
 }

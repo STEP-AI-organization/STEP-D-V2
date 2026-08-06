@@ -1,0 +1,137 @@
+"""core.analyze 의 체크포인트·진행률·지문 유틸.
+
+2026-08-06 분리 · analyze.py 1019줄 정리 1단계. `analyze()` 본체·스테이지 함수는 아직
+analyze.py 안에 있고, 이 파일은 상태 없는 유틸만 담는다. `docs/plans/analyze-py-split-plan.md`
+의 안정 브랜치 리팩터를 이 파일 하나로 시작 · 스테이지 이동은 별도 단계.
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import shutil
+import sys
+from pathlib import Path
+
+
+CHECKPOINTS = (
+    "stt.json", "refined.json", "faces.json", "ppl.json", "scenes.json",
+    "cast.json", "timeline.json", "narrative.json", "shots.json",
+    "boundaries.json", "scene_type.json", "beats.json", "viewer_signals.json",
+    "shorts.json", "analysis.json", "segments.json",
+)
+
+
+def save_json(path: Path, obj) -> None:
+    """Atomic write — a crash mid-write must not leave a truncated checkpoint."""
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(obj, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def load_json(path: Path):
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def fingerprint(*parts) -> str:
+    """Stable short hash of the params a stage's output depends on."""
+    raw = json.dumps(parts, ensure_ascii=False, sort_keys=True, default=str)
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
+
+
+def prepare_checkpoints(
+    out_dir: Path,
+    video_path: str,
+    resume: bool,
+    *,
+    genre: str = "auto",
+    shorts_n: int = 5,
+    profile: dict | None = None,
+    channels: list[str] | None = None,
+    cast_registry: list[dict] | None = None,
+) -> None:
+    """Keep checkpoints only if they belong to THIS video AND were produced with the same
+    params. Two independent invalidations:
+
+    1. Video identity — if the source video differs, wipe everything. A transient stat()
+       failure must NOT count as "different video": we only wipe on a *known* mismatch
+       (name differs, or both sizes are known and differ), never on an unknown size.
+    2. Params — genre/profile/channels/cast changing between runs must not silently return
+       a stale cast/shorts timeline. Each param-dependent checkpoint carries a fingerprint;
+       only the ones whose params changed are dropped, so the expensive STT/scene/frame work
+       is preserved.
+    """
+    manifest_path = out_dir / "manifest.json"
+    try:
+        video_size = Path(video_path).stat().st_size
+    except OSError:
+        video_size = None  # unknown — do NOT treat as a mismatch
+    video_name = Path(video_path).name
+    # Per-stage param fingerprints. STT는 영상만 의존, scenes(5분 청크)도 refined 의존.
+    # refine·recommend는 cast_registry를 프롬프트에 넣으므로 cast 바뀌면 재실행.
+    RECOMMEND_VER = "2026-07-29-two-line-title-short"
+    REFINE_VER = "2026-07-27-speaker-preserve"
+    FACES_VER = "2026-07-29-sample-10s"
+    SHOTS_VER = "2026-07-24a"
+    SCENE_TYPE_VER = "2026-07-24a"
+    BEATS_VER = "2026-07-29-speaker-split-v2"
+    STT_VER = "2026-07-27-word-normalize"
+    VIEWER_SIGNALS_VER = "2026-07-28-init"
+    STT_PROVIDER_ENV = (os.environ.get("STT_PROVIDER") or "gemini").lower()
+    RECOMMEND_MODE = os.environ.get("RECOMMEND_MODE") or "narrative_first"
+    _comments_path = out_dir / "comments.json"
+    _comments_hash = ""
+    if _comments_path.exists():
+        try:
+            _comments_hash = hashlib.sha1(_comments_path.read_bytes()).hexdigest()[:16]
+        except OSError:
+            pass
+    params = {
+        "stt.json": fingerprint(STT_VER, STT_PROVIDER_ENV),
+        "refined.json": fingerprint(cast_registry, REFINE_VER, STT_VER, STT_PROVIDER_ENV),
+        "faces.json": fingerprint(cast_registry, FACES_VER),
+        "cast.json": fingerprint(cast_registry, REFINE_VER, STT_VER),
+        "narrative.json": fingerprint(cast_registry, REFINE_VER, STT_VER),
+        "shots.json": fingerprint(SHOTS_VER),
+        "scene_type.json": fingerprint(SCENE_TYPE_VER, SHOTS_VER),
+        "beats.json": fingerprint(BEATS_VER, REFINE_VER, SHOTS_VER, SCENE_TYPE_VER, STT_VER),
+        "viewer_signals.json": fingerprint(VIEWER_SIGNALS_VER, _comments_hash),
+        "shorts.json": fingerprint(genre, shorts_n, profile, channels, cast_registry, RECOMMEND_VER, RECOMMEND_MODE, REFINE_VER, FACES_VER, BEATS_VER, STT_VER, _comments_hash),
+        "analysis.json": fingerprint(genre, shorts_n, profile, channels, cast_registry, RECOMMEND_VER, RECOMMEND_MODE, REFINE_VER, FACES_VER, BEATS_VER, STT_VER, _comments_hash),
+    }
+    manifest = {"video_name": video_name, "video_size": video_size, "params": params}
+
+    prior = load_json(manifest_path) or {}
+    prior_name = prior.get("video_name")
+    prior_size = prior.get("video_size")
+    video_changed = (
+        prior_name is not None
+        and (prior_name != video_name
+             or (prior_size is not None and video_size is not None and prior_size != video_size))
+    )
+
+    if not resume or video_changed:
+        if video_changed:
+            print("체크포인트가 다른 영상의 것 — 초기화")
+        for name in CHECKPOINTS:
+            (out_dir / name).unlink(missing_ok=True)
+        shutil.rmtree(out_dir / "scene_frames", ignore_errors=True)
+    else:
+        prior_params = prior.get("params", {})
+        for name, fp in params.items():
+            if prior_params.get(name) != fp:
+                if (out_dir / name).exists():
+                    print(f"파라미터 변경 — {name} 재생성")
+                (out_dir / name).unlink(missing_ok=True)
+    save_json(manifest_path, manifest)
+
+
+def progress(stage: str, pct: float, note: str = "") -> None:
+    """Worker parses @@PROGRESS lines. Single write (not print) — progress fires from
+    thread-pool callbacks, and an interleaved half-line would corrupt the marker."""
+    payload = json.dumps({"stage": stage, "pct": round(pct), "note": note}, ensure_ascii=False)
+    sys.stdout.write(f"@@PROGRESS {payload}\n")
+    sys.stdout.flush()

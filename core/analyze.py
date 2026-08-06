@@ -23,10 +23,8 @@ Run:
     python -m core.analyze <video> --out <dir> [--shorts N] [--genre auto|variety|…] [--no-resume]
     python -m core.analyze core/TpQgkCs0TzE.mp4          # writes analysis.json next to it
 """
-import hashlib
 import json
 import os
-import shutil
 import sys
 import time
 from concurrent.futures import ThreadPoolExecutor, Future
@@ -38,144 +36,20 @@ for _s in (sys.stdout, sys.stderr):
     except (AttributeError, ValueError):
         pass
 
-from .asr import transcribe, get_segments
-from .refine import refine_segments
-from .scenes import scenes_from_transcript, scenes_from_duration_chunks
-from .recommend import recommend, recommend_narrative_first
-from .narrative import build_narrative
-from .shots import detect_shots
-from .scene_type import classify_shot_types
-from .beats import build_beats_from_boundaries
-from .boundaries import load_boundaries, dedup_boundaries, build_fallback_boundaries, save_boundaries
-from .beat_annot import annotate_beats
-from .speaker_rename import build_speaker_mapping, apply_speaker_mapping, assign_speakers_from_captions, refresh_beat_dominant_speakers
-
-CHECKPOINTS = ("stt.json", "refined.json", "faces.json", "ppl.json", "scenes.json", "cast.json", "timeline.json", "narrative.json", "shots.json", "boundaries.json", "scene_type.json", "beats.json", "viewer_signals.json", "shorts.json", "analysis.json", "segments.json")
-
-
-# ── checkpoint plumbing ─────────────────────────────────────────────────────────
-
-def _save_json(path: Path, obj) -> None:
-    """Atomic write — a crash mid-write must not leave a truncated checkpoint."""
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(obj, ensure_ascii=False, indent=2), encoding="utf-8")
-    os.replace(tmp, path)
-
-
-def _load_json(path: Path):
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return None
-
-
-def _fingerprint(*parts) -> str:
-    """Stable short hash of the params a stage's output depends on."""
-    raw = json.dumps(parts, ensure_ascii=False, sort_keys=True, default=str)
-    return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:16]
-
-
-def _prepare_checkpoints(
-    out_dir: Path,
-    video_path: str,
-    resume: bool,
-    *,
-    genre: str = "auto",
-    shorts_n: int = 5,
-    profile: dict | None = None,
-    channels: list[str] | None = None,
-    cast_registry: list[dict] | None = None,
-) -> None:
-    """Keep checkpoints only if they belong to THIS video AND were produced with the same
-    params. Two independent invalidations:
-
-    1. Video identity — if the source video differs, wipe everything. A transient stat()
-       failure must NOT count as "different video": we only wipe on a *known* mismatch
-       (name differs, or both sizes are known and differ), never on an unknown size.
-    2. Params — genre/profile/channels/cast changing between runs must not silently return
-       a stale cast/shorts timeline. Each param-dependent checkpoint carries a fingerprint;
-       only the ones whose params changed are dropped, so the expensive STT/scene/frame work
-       is preserved.
-    """
-    manifest_path = out_dir / "manifest.json"
-    try:
-        video_size = Path(video_path).stat().st_size
-    except OSError:
-        video_size = None  # unknown — do NOT treat as a mismatch
-    video_name = Path(video_path).name
-    # Per-stage param fingerprints. STT는 영상만 의존, scenes(5분 청크)도 refined 의존.
-    # refine·recommend는 cast_registry를 프롬프트에 넣으므로 cast 바뀌면 재실행.
-    # RECOMMEND_VER: recommend 프롬프트/로직이 바뀌면 이 문자열을 올려 기존 shorts.json 캐시를
-    # 무효화. 2026-07-23g: narrative-first 트리 구조 (시나리오×변형×best) + 길이 제한 완화
-    # (60→120초 · 완결성 우선 · 하드실링 180초).
-    RECOMMEND_VER = "2026-07-29-two-line-title-short"  # + 길이 강제 (라인당 최대 12자 · 목표 8-10자)
-    REFINE_VER = "2026-07-27-speaker-preserve"  # get_segments가 speaker 필드 보존하도록 fix (drop 방지)
-    FACES_VER = "2026-07-29-sample-10s"    # 샘플 간격 3s→10s (573→~250 · wall time 620s→~270s)
-    SHOTS_VER = "2026-07-24a"   # shot boundary detection: ffmpeg scene, fps=1, thr=0.55
-    SCENE_TYPE_VER = "2026-07-24a"  # shot 프레임 → Vision batch: interview/on_scene/other
-    BEATS_VER = "2026-07-29-speaker-split-v2"   # + speaker-aware merge (다중화자 병합 방지)
-    STT_VER = "2026-07-27-word-normalize"  # + word.end 침묵 삼킴 clip + duration 이상치 cap (drift fix)
-    VIEWER_SIGNALS_VER = "2026-07-28-init"  # 댓글→viewer_signals 초기 버전. Gemini 프롬프트 변경 시 상향.
-    STT_PROVIDER_ENV = (os.environ.get("STT_PROVIDER") or "gemini").lower()
-    RECOMMEND_MODE = os.environ.get("RECOMMEND_MODE") or "narrative_first"
-    # 댓글 파일이 바뀌면 viewer_signals·shorts 를 재생성해야 하므로 내용 해시를 지문에 포함.
-    # 없으면 빈 문자열 — 있다가 사라진 케이스도 감지되어 캐시가 무효화된다.
-    _comments_path = out_dir / "comments.json"
-    _comments_hash = ""
-    if _comments_path.exists():
-        try:
-            _comments_hash = hashlib.sha1(_comments_path.read_bytes()).hexdigest()[:16]
-        except OSError:
-            pass
-    params = {
-        "stt.json": _fingerprint(STT_VER, STT_PROVIDER_ENV),
-        "refined.json": _fingerprint(cast_registry, REFINE_VER, STT_VER, STT_PROVIDER_ENV),
-        "faces.json": _fingerprint(cast_registry, FACES_VER),
-        "cast.json": _fingerprint(cast_registry, REFINE_VER, STT_VER),
-        "narrative.json": _fingerprint(cast_registry, REFINE_VER, STT_VER),
-        "shots.json": _fingerprint(SHOTS_VER),
-        "scene_type.json": _fingerprint(SCENE_TYPE_VER, SHOTS_VER),
-        "beats.json": _fingerprint(BEATS_VER, REFINE_VER, SHOTS_VER, SCENE_TYPE_VER, STT_VER),
-        "viewer_signals.json": _fingerprint(VIEWER_SIGNALS_VER, _comments_hash),
-        "shorts.json": _fingerprint(genre, shorts_n, profile, channels, cast_registry, RECOMMEND_VER, RECOMMEND_MODE, REFINE_VER, FACES_VER, BEATS_VER, STT_VER, _comments_hash),
-        "analysis.json": _fingerprint(genre, shorts_n, profile, channels, cast_registry, RECOMMEND_VER, RECOMMEND_MODE, REFINE_VER, FACES_VER, BEATS_VER, STT_VER, _comments_hash),
-    }
-    manifest = {"video_name": video_name, "video_size": video_size, "params": params}
-
-    prior = _load_json(manifest_path) or {}
-    prior_name = prior.get("video_name")
-    prior_size = prior.get("video_size")
-    video_changed = (
-        prior_name is not None
-        and (prior_name != video_name
-             or (prior_size is not None and video_size is not None and prior_size != video_size))
-    )
-
-    if not resume or video_changed:
-        if video_changed:
-            print("체크포인트가 다른 영상의 것 — 초기화")
-        for name in CHECKPOINTS:
-            (out_dir / name).unlink(missing_ok=True)
-        shutil.rmtree(out_dir / "scene_frames", ignore_errors=True)
-    else:
-        # Same video, resuming — drop only the checkpoints whose params changed.
-        prior_params = prior.get("params", {})
-        for name, fp in params.items():
-            if prior_params.get(name) != fp:
-                if (out_dir / name).exists():
-                    print(f"파라미터 변경 — {name} 재생성")
-                (out_dir / name).unlink(missing_ok=True)
-    _save_json(manifest_path, manifest)
-
-
-# ── progress reporting (worker parses @@PROGRESS lines) ─────────────────────────
-
-def _progress(stage: str, pct: float, note: str = "") -> None:
-    payload = json.dumps({"stage": stage, "pct": round(pct), "note": note}, ensure_ascii=False)
-    # Single write (not print) — progress fires from thread-pool callbacks, and an
-    # interleaved half-line would corrupt the marker the worker greps for.
-    sys.stdout.write(f"@@PROGRESS {payload}\n")
-    sys.stdout.flush()
+from .analyze_utils import (
+    save_json as _save_json,
+    load_json as _load_json,
+    prepare_checkpoints as _prepare_checkpoints,
+    progress as _progress,
+)
+# 스테이지 함수는 전부 analyze_stages 로. 여기는 orchestrator 만.
+from .analyze_stages import (
+    run_fast_mode, load_viewer_signals, index_search_segments, dump_usage,
+    run_stt, run_refine, run_chyron_per_seg, run_speaker_postproc,
+    join_ppl, run_scenes, run_cast_timeline, run_timeline, run_narrative,
+    run_shot_boundary, run_scene_type, run_beats, run_beat_annot,
+    run_speaker_identity, run_recommend,
+)
 
 
 # ── pipeline ────────────────────────────────────────────────────────────────────
@@ -242,28 +116,11 @@ def analyze(
             step(f"  (PPL 병렬 시작 실패, 순차 폴백: {str(e)[:70]})")
             ppl_future = None
 
-    # 1) STT ------------------------------------------------------------------
-    _progress("stt", 3, "음성 인식 준비")
-    ts = time.time()
-    stt = _load_json(out_dir / "stt.json")
-    if stt and "segments" in stt:
-        step(f"STT — 체크포인트 재사용 ({len(stt['segments'])} 세그먼트)")
-    else:
-        step("STT (관리형)…")
-        # cast_registry 있으면 화자분리 KMeans의 n_clusters 힌트로 사용 (실측 정확도↑).
-        _expected_speakers = None
-        if isinstance(cast_registry, list) and cast_registry:
-            _expected_speakers = len(cast_registry)
-        stt = transcribe(
-            video_path, language="ko",
-            expected_speakers=_expected_speakers,
-            on_progress=lambda done, total: _progress("stt", 3 + 27 * done / max(1, total), f"음성 인식 {done}/{total} 윈도우"),
-        )
-        _save_json(out_dir / "stt.json", stt)
-    segments = get_segments(stt)
-    step(f"  {len(segments)} 세그먼트")
-    timed("stt", ts)
-    _progress("stt", 30, f"음성 인식 완료 · {len(segments)} 세그먼트")
+    # 1) STT — analyze_stages.run_stt 로 이동
+    stt, segments = run_stt(
+        video_path=video_path, out_dir=out_dir, cast_registry=cast_registry,
+        step=step, timed=timed,
+    )
 
     # ── faces 병렬 시작 (2026-07-29 최적화) ────────────────────────────────
     # 옛 파이프라인: STT → refine → faces (10m 완전 직렬). faces는 세그의 start/end 타이밍만
@@ -295,120 +152,37 @@ def analyze(
     elif not _run_faces:
         step("faces — 기본 skip (RUN_FACES=1 또는 --faces 로 활성화)")
 
-    # ── 시청자 신호 (2026-07-28) — 이 롱폼 원본의 상위 좋아요 댓글에서 뽑은 반응.
-    # content-pipeline이 out_dir/comments.json 으로 넘겨준다 (from-youtube 경로 · sourceVideoId
-    # 있을 때만). build_viewer_signals 는 timestamp 정규식 파싱 + Gemini 1회 요약으로
-    # top_moments·dominant_emotion·top_demands·explicit_timestamps 를 dict 로 만든다.
-    # 그걸 profile 에 병합하면 recommend._profile_block 이 이미 있는 로직으로 프롬프트에
-    # 녹여 픽에 반영한다. comments.json 없거나 실패해도 파이프라인은 원상태로 계속 진행.
-    viewer_signals_path = out_dir / "comments.json"
-    if viewer_signals_path.exists():
-        ts = time.time()
-        vs = _load_json(out_dir / "viewer_signals.json")
-        if isinstance(vs, dict) and (vs.get("top_moments") or vs.get("explicit_timestamps") or vs.get("dominant_emotion")):
-            step(f"시청자 신호 — 체크포인트 재사용 (moments {len(vs.get('top_moments') or [])})")
-        else:
-            try:
-                from .comment_signal import build_viewer_signals
-                comments = _load_json(viewer_signals_path) or []
-                dur = float(segments[-1].get("end") or 0) if segments else None
-                step(f"시청자 신호 생성 (댓글 {len(comments)}개)…")
-                vs = build_viewer_signals(comments, duration_sec=dur)
-                _save_json(out_dir / "viewer_signals.json", vs)
-                step(f"  moments {len(vs.get('top_moments') or [])}"
-                     f" · timestamps {len(vs.get('explicit_timestamps') or [])}"
-                     f" · emotion '{vs.get('dominant_emotion') or '-'}'")
-            except Exception as e:
-                step(f"  (viewer_signals 생성 스킵: {str(e)[:80]})")
-                vs = None
-        timed("viewer_signals", ts)
-        # profile 오염 방지 위해 얕은 복사 후 병합.
-        if isinstance(vs, dict) and (vs.get("top_moments") or vs.get("explicit_timestamps") or vs.get("dominant_emotion")):
-            profile = dict(profile or {})
-            profile["viewer_signals"] = vs
+    # 시청자 신호 (comments.json → viewer_signals → profile 병합). load_viewer_signals 로 이동.
+    profile = load_viewer_signals(
+        out_dir=out_dir, segments=segments, profile=profile,
+        step=step, timed=timed,
+    )
 
-    # ── 빠른 모드 (fast) — 자막만으로 바로 추천. 시각 장면감지·프레임·비전·정제·서사를 스킵해
-    # 긴 영상 분석 시간의 최대 74%(장면감지+프레임)를 절감한다. 대사 기반 콘텐츠에 적합.
-    # fast=False(기본)면 이 블록을 건너뛰고 기존 풀 파이프라인이 그대로 돈다 — 아무것도 안 바뀐다.
+    # 빠른 모드 (fast) — 자막만으로 바로 추천. 시각·서사·비전 스킵. run_fast_mode 로 이동.
     if fast:
-        step("빠른 모드 — 자막 세그먼트로 추천 (시각 분석 스킵)")
-        scenes = scenes_from_transcript(segments)
-        step(f"  {len(scenes)} 자막 장면")
-        _progress("recommend", 50, "쇼츠 추천 중 (빠른 모드)")
-        ts = time.time()
-        rec = recommend(
-            scenes, n=shorts_n, genre=genre, profile=profile, channels=channels,
-            transcript=segments, cast_registry=cast_registry,
-            program_context=program_context,
-            on_progress=lambda done, total: _progress("recommend", 50 + 45 * done / max(1, total), f"후보 추출 {done}/{total} 구간"),
+        return run_fast_mode(
+            video_path=video_path, out_dir=out_dir, segments=segments,
+            shorts_n=shorts_n, genre=genre, profile=profile, channels=channels,
+            cast_registry=cast_registry, program_context=program_context,
+            t0=t0, stage_took=stage_took, step=step, timed=timed,
         )
-        timed("recommend", ts)
-        shorts = rec["shorts"]
-        duration = scenes[-1]["end"] if scenes else (segments[-1]["end"] if segments else 0)
-        result = {
-            "video": str(video_path), "duration": duration, "genre": rec.get("genre"),
-            "transcript": segments, "scenes": scenes, "cast": [], "timeline": [],
-            "narrative": {}, "shorts": shorts, "fast": True,
-            "viewer_signals": (profile or {}).get("viewer_signals"),
-            "took_sec": round(time.time() - t0, 1), "stage_sec": stage_took,
-        }
-        _save_json(out_dir / "analysis.json", result)
-        step(f"완료 (빠른 모드) — {len(shorts)} 쇼츠 · {result['took_sec']}s")
-        _progress("done", 100, "분석 완료 (빠른 모드)")
-        return result
 
-    # 2) refine ----------------------------------------------------------------
-    # 2026-07-31 축소: Soniox v5 STT 정확도 up · Gemini refine (오탈자 정정) 대부분 불필요.
-    # RUN_REFINE=off (default when STT_PROVIDER=soniox) · segments 그대로 refined 로 사용.
-    # 필요 시 RUN_REFINE=on 명시 · gemini/whisper STT 경우엔 여전히 필요.
-    ts = time.time()
-    refined = _load_json(out_dir / "refined.json")
-    _stt_provider_env = (os.environ.get("STT_PROVIDER") or "soniox").lower()
-    _run_refine = (os.environ.get("RUN_REFINE") or "auto").lower()
-    _should_refine = (_run_refine == "on") or (_run_refine == "auto" and _stt_provider_env != "soniox")
-    if refined:
-        step(f"자막 정제 — 체크포인트 재사용 ({len(refined)} 세그먼트)")
-    elif not _should_refine:
-        step(f"자막 정제 — 스킵 (STT_PROVIDER={_stt_provider_env} · RUN_REFINE={_run_refine})")
-        refined = segments  # raw STT 그대로 사용 (Soniox 는 이미 정확)
-        _save_json(out_dir / "refined.json", refined)
-    else:
-        step("자막 정제…")
-        _progress("refine", 31, "자막 정제 중")
-        refined = refine_segments(segments, cast_registry=cast_registry, program_context=program_context)
-        _save_json(out_dir / "refined.json", refined)
-    timed("refine", ts)
-    _progress("refine", 38, "자막 정제 완료")
+    # 2) refine — analyze_stages.run_refine 로 이동
+    refined = run_refine(
+        segments=segments, out_dir=out_dir, cast_registry=cast_registry,
+        program_context=program_context, step=step, timed=timed,
+    )
 
-    # 2.4) chyron per-seg + Layer 1 STT 후처리 (2026-07-31 신설 · 확정 스택).
-    # 각 refined 세그의 시작 프레임을 Gemini Vision 으로 살펴 화면 이름 태그를 읽고,
-    # speaker 라벨(SPEAKER_XX / 발화자 N / '') 를 실명으로 rewrite. 이어서 짧은 세그 흡수·
-    # (empty) 인접 계승·접속사 계승. audio-only diarize 한계 (여성 유사 톤·짧은 리액션) 를
-    # 화면 신호로 정정 · false split/merge 자동 해소. env RUN_CHYRON_PER_SEG=0 로 스킵.
-    if os.environ.get("RUN_CHYRON_PER_SEG", "1") != "0":
-        ts = time.time()
-        try:
-            from .chyron_scan import scan_per_seg
-            _progress("chyron", 38, "화면 이름 태그 세그별 스캔")
-            step("chyron per-seg (화면 이름 태그 → speaker 실명 rewrite)…")
-            refined, ps_stats = scan_per_seg(video_path, refined, workers=6, prefer_start=True)
-            step(f"  {ps_stats.get('assigned', 0)}/{ps_stats.get('scanned', 0)} 세그에 실명 부여 · "
-                 f"unique={ps_stats.get('unique_names', 0)}")
-            _save_json(out_dir / "refined.json", refined)
-        except Exception as e:
-            step(f"  (chyron per-seg 스킵: {str(e)[:120]})")
-        timed("chyron_per_seg", ts)
+    # 2.4) chyron per-seg — analyze_stages.run_chyron_per_seg 로 이동
+    refined = run_chyron_per_seg(
+        video_path=video_path, refined=refined, out_dir=out_dir,
+        step=step, timed=timed,
+    )
 
-    if os.environ.get("RUN_SPEAKER_POSTPROC", "1") != "0":
-        ts = time.time()
-        try:
-            from .speaker_postproc import postprocess as _sp_postproc
-            refined, pp_stats = _sp_postproc(refined)
-            step(f"  speaker 후처리 (짧은 흡수·empty 계승·접속사): {pp_stats}")
-            _save_json(out_dir / "refined.json", refined)
-        except Exception as e:
-            step(f"  (speaker 후처리 스킵: {str(e)[:120]})")
-        timed("speaker_postproc", ts)
+    # 2.5) speaker 후처리 — analyze_stages.run_speaker_postproc 로 이동
+    refined = run_speaker_postproc(
+        refined=refined, out_dir=out_dir, step=step, timed=timed,
+    )
 
     # 2.5) 얼굴 검출·클러스터링 (2026-07-22 신설 · 2026-07-29 STT 후 병렬).
     # 백그라운드 시작한 faces_future 가 있으면 여기서 join. 없으면 캐시 재사용 또는 실패 처리.
@@ -486,393 +260,70 @@ def analyze(
     timed("faces", ts)
     _progress("faces", 60, "얼굴 처리 완료")
 
-    # 2.7) PPL·브랜드 검출 (2026-07-22 신규 · 2026-07-23 A1: STT부터 병렬 백그라운드).
-    # 위에서 백그라운드로 시작한 ppl_future가 있으면 여기서 join. 없으면 캐시/폴백/스킵.
-    ts = time.time()
-    if ppl_future is not None:
-        _progress("ppl", 53, "PPL 병렬 결과 대기 중")
-        step("PPL·브랜드 검출 (병렬 join)…")
-        try:
-            ppl = ppl_future.result()
-            _save_json(out_dir / "ppl.json", ppl)
-            step(f"  검출 구간 {len(ppl.get('detections', []))}개 · 브랜드 {len(ppl.get('brand_summary', {}))}종")
-        except Exception as e:
-            step(f"  (PPL 검출 스킵: {str(e)[:120]})")
-            import traceback
-            traceback.print_exc()
-            ppl = None
-        finally:
-            if ppl_executor is not None:
-                ppl_executor.shutdown(wait=False)
-    else:
-        ppl = _load_json(out_dir / "ppl.json")
-        if ppl and isinstance(ppl, dict) and ppl.get("detections") is not None:
-            step(f"PPL 검출 — 체크포인트 재사용 ({len(ppl['detections'])} 구간 · {len(ppl.get('brand_summary', {}))} 브랜드)")
-    timed("ppl", ts)
-    _progress("ppl", 60, "PPL 검출 완료")
+    # 2.7) PPL join — analyze_stages.join_ppl 로 이동
+    ppl = join_ppl(
+        ppl_future=ppl_future, ppl_executor=ppl_executor,
+        out_dir=out_dir, step=step, timed=timed,
+    )
 
-    # 3) 5분 청크 분할 — 옛 AI-driven 씬 분할 + frames 스테이지 삭제 (2026-07-22).
-    # 청크는 (a) 다음 단계들의 병렬 유닛(예정), (b) 요약·상세 단위. 쇼츠 recommend는 청크 경계
-    # 무시하고 자유 start/end로 뽑으므로 청크가 30초 하이라이트를 갈라도 무방. ±5초 padding으로
-    # 발화 중간 절단은 완화됨.
-    ts = time.time()
-    scenes = _load_json(out_dir / "scenes.json")
-    if scenes:
-        step(f"청크 분할 — 체크포인트 재사용 ({len(scenes)} 청크)")
-    else:
-        # 장르별 청크 크기 — 예능 180s(코너 단위), 드라마 300s(서사 아크 단위).
-        # genre 인자가 chunks/shots/faces 파라미터 결정하는 단일 진실 소스.
-        step(f"청크 분할 (genre={genre})…")
-        _progress("scenes", 40, "청크 분할 중")
-        scenes = scenes_from_duration_chunks(refined, genre=genre)
-        _save_json(out_dir / "scenes.json", scenes)
-    step(f"  {len(scenes)} 청크")
-    timed("scenes", ts)
-    _progress("scenes", 50, f"청크 분할 완료 · {len(scenes)} 청크")
+    # 3) scenes 청크 분할 → analyze_stages.run_scenes
+    scenes = run_scenes(refined=refined, out_dir=out_dir, genre=genre, step=step, timed=timed)
 
-    # 4) cast timeline (+ portraits merged in same stage) --------------------------
-    # 옛 파이프라인은 cast(75%) → portraits(79%)를 별도 스테이지로 굴렸음. 이제 한 스텝으로
-    # 합침. cast.py가 scenes[].on_screen_names에 의존했었지만, frames 스테이지 삭제로 그 필드가
-    # 사라짐 → 지금은 정보 부족 시 empty cast로 fall through. Phase C에서 refined[].speaker 라벨
-    # 기반으로 재작성 + 화자 불명 씬만 on-demand vision(1~2 프레임)으로 보강.
-    ts = time.time()
-    cast = _load_json(out_dir / "cast.json")
-    if cast and isinstance(cast, dict) and cast.get("people") is not None and cast.get("portraitsGenerated"):
-        step(f"출연자 타임라인·포트레이트 — 체크포인트 재사용 ({len(cast['people'])}명)")
-    else:
-        try:
-            from .cast import build_cast_timeline
-            _progress("cast", 55, "출연자 타임라인 구성")
-            cast = build_cast_timeline(scenes, cast_registry or [])
-            step(f"  캐스트 확정 {cast.get('matchedCount', 0)}명 · 후보 {cast.get('candidateCount', 0)}명")
-            _save_json(out_dir / "cast.json", cast)
-            # 포트레이트는 people이 있을 때만. 실패해도 cast 자체는 살아있음.
-            if isinstance(cast, dict) and cast.get("people"):
-                try:
-                    from .portraits import build_portraits
-                    _progress("cast", 65, "출연진 포트레이트 생성")
-                    cast = build_portraits(
-                        cast, scenes, out_dir,
-                        on_progress=lambda done, total: _progress("cast", 65 + 5 * done / max(1, total), f"포트레이트 {done}/{total}"),
-                    )
-                    _save_json(out_dir / "cast.json", cast)
-                    made = sum(1 for p in cast["people"] if p.get("thumbnail"))
-                    step(f"  포트레이트 {made}명 생성")
-                except Exception as e:
-                    step(f"  (포트레이트 건너뜀: {str(e)[:70]})")
-        except Exception as e:
-            step(f"  (캐스트 타임라인 건너뜀: {str(e)[:70]})")
-            cast = None
-    timed("cast", ts)
+    # 4) cast + portraits → analyze_stages.run_cast_timeline
+    cast = run_cast_timeline(
+        scenes=scenes, out_dir=out_dir, cast_registry=cast_registry,
+        step=step, timed=timed,
+    )
 
-    # 4d) timeline blocks — N분 단위 구간 요약 (scenes만 의존, 실패해도 파이프라인 계속)
-    ts = time.time()
-    timeline = _load_json(out_dir / "timeline.json")
-    if isinstance(timeline, dict) and timeline.get("blocks"):
-        step(f"타임라인 — 체크포인트 재사용 ({len(timeline['blocks'])} 블록)")
-    else:
-        try:
-            from .timeline import build_timeline
-            _progress("timeline", 76, "구간 요약 생성")
-            timeline = build_timeline(
-                scenes,
-                on_progress=lambda done, total: _progress("timeline", 76 + 3 * done / max(1, total), f"구간 요약 {done}/{total} 배치"),
-            )
-            _save_json(out_dir / "timeline.json", timeline)
-            step(f"타임라인 — {len(timeline['blocks'])} 블록 ({timeline['block_minutes']}분 단위)")
-        except Exception as e:
-            step(f"  (타임라인 건너뜀: {str(e)[:70]})")
-            timeline = None
-    timed("timeline", ts)
+    # 4d) timeline blocks — 2026-08-06 제거. UI 소비처 0 · narrative 도 scenes+refined 로 충분.
+    # run_timeline 함수는 analyze_stages 에 남겨둠 (다시 살릴 수 있게).
+    timeline = None
 
-    # 4e) narrative summary — 전체 서사 요약 + 구간별/인물/갈등 분석 (timeline 없어도 refined만으로 동작)
-    # (portraits는 cast 스테이지에 병합됨 — 위 참조)
-    ts = time.time()
-    narrative = _load_json(out_dir / "narrative.json")
-    # A completed checkpoint has at least one non-empty output. Requiring full_summary AND
-    # segments both truthy re-ran the whole (expensive) stage on every resume whenever the
-    # summary came back empty (Gemini block) or the episode had no timeline blocks (segments
-    # legitimately []). Only a fully-empty result (every Gemini call failed) is worth retrying.
-    if isinstance(narrative, dict) and (
-        narrative.get("full_summary")
-        or narrative.get("segments")
-        or narrative.get("characters")
-        or narrative.get("key_conflicts")
-    ):
-        step(f"서사 요약 — 체크포인트 재사용 ({len(narrative.get('segments') or [])} 구간)")
-    else:
-        try:
-            _progress("narrative", 82, "서사 요약 생성")
-            narrative = build_narrative(
-                refined, scenes, cast, timeline,
-                on_progress=lambda done, total: _progress("narrative", 82 + 3 * done / max(1, total), f"서사 요약 {done}/{total} 배치"),
-                cast_registry=cast_registry,
-                program_context=program_context,
-            )
-            _save_json(out_dir / "narrative.json", narrative)
-            step(f"서사 요약 — {len(narrative.get('segments', []))} 구간 · 갈등 {len(narrative.get('key_conflicts', []))}건")
-        except Exception as e:
-            step(f"  (서사 요약 건너뜀: {str(e)[:70]})")
-            import traceback
-            traceback.print_exc()
-            narrative = None
-    timed("narrative", ts)
+    # 4e) narrative → analyze_stages.run_narrative
+    narrative = run_narrative(
+        refined=refined, scenes=scenes, cast=cast, timeline=timeline, out_dir=out_dir,
+        cast_registry=cast_registry, program_context=program_context, step=step, timed=timed,
+    )
 
-    # 4f) shot boundary detection — 프레임 diff 기반 시각적 전환점. narrative.segments 창만 스캔.
-    ts = time.time()
-    shots_data = _load_json(out_dir / "shots.json")
-    if isinstance(shots_data, dict) and isinstance(shots_data.get("shots"), list):
-        step(f"shot boundary — 체크포인트 재사용 ({len(shots_data['shots'])}개)")
-    else:
-        _progress("shots", 83, "shot boundary 감지")
-        windows: list[tuple[float, float]] = []
-        if isinstance(narrative, dict) and isinstance(narrative.get("segments"), list):
-            for s in narrative["segments"]:
-                try:
-                    st = float(s.get("start", 0)); en = float(s.get("end", 0))
-                    if en > st:
-                        windows.append((st, en))
-                except (TypeError, ValueError):
-                    continue
-        if not windows and refined:
-            # narrative 없으면 전체
-            try:
-                total = float(refined[-1].get("end", 0))
-                if total > 0:
-                    windows = [(0.0, total)]
-            except (TypeError, ValueError, IndexError):
-                pass
-        # threshold는 detect_shots가 genre에서 결정(variety 0.55·drama 0.35). shots.json에는
-        # 실제 사용된 임계를 기록해 재분석 재현성 확보.
-        try:
-            shots_list = detect_shots(str(video_path), windows, fps=1, genre=genre) if windows else []
-            # detect_shots가 사용한 실제 threshold — 로깅/체크포인트용으로 재계산.
-            from .shots import _SHOT_THRESHOLD_BY_GENRE, _DEFAULT_SHOT_THRESHOLD
-            used_th = _SHOT_THRESHOLD_BY_GENRE.get(genre or "", _DEFAULT_SHOT_THRESHOLD)
-            shots_data = {"shots": shots_list, "windows": len(windows), "threshold": used_th, "fps": 1, "genre": genre}
-            _save_json(out_dir / "shots.json", shots_data)
-            step(f"shot boundary — {len(shots_list)}개 (창 {len(windows)}개, threshold={used_th}, genre={genre})")
-        except Exception as e:
-            step(f"  (shot boundary 실패 · 빈 리스트로 진행: {str(e)[:70]})")
-            shots_data = {"shots": [], "windows": 0, "threshold": 0.55, "fps": 1}
-            _save_json(out_dir / "shots.json", shots_data)
-    timed("shots", ts)
+    # 4f) shot boundary → analyze_stages.run_shot_boundary (ffmpeg scene 필터 · narrative.segments 창만)
+    shots_data = run_shot_boundary(
+        video_path=video_path, refined=refined, narrative=narrative,
+        out_dir=out_dir, genre=genre, step=step, timed=timed,
+    )
 
-    # 4g) scene_type — shot별 대표 프레임 → Gemini Vision batch로 interview/on_scene/other 분류.
-    # 한국 예능은 현장 원 신 + 인서트 인터뷰룸이 교차 편집 · STT만으론 구별 불가 · 프레임 필수.
-    ts = time.time()
-    scene_type_data = _load_json(out_dir / "scene_type.json")
-    if isinstance(scene_type_data, dict) and isinstance(scene_type_data.get("shot_types"), list):
-        step(f"scene_type — 체크포인트 재사용 ({len(scene_type_data['shot_types'])} shot)")
-    else:
-        _progress("scene_type", 83, "shot 유형 분류 (interview/on_scene)")
-        try:
-            duration_for_st = float(scenes[-1]["end"]) if scenes else (float(refined[-1]["end"]) if refined else 0.0)
-            shot_types = classify_shot_types(
-                str(video_path),
-                (shots_data or {}).get("shots") or [],
-                duration_for_st,
-                out_dir / "shot_frames",
-            )
-            scene_type_data = {"shot_types": shot_types}
-            _save_json(out_dir / "scene_type.json", scene_type_data)
-            step(f"scene_type — {len(shot_types)} shot 분류 완료")
-        except Exception as e:
-            step(f"  (scene_type 실패 · 빈 리스트로 진행: {str(e)[:70]})")
-            scene_type_data = {"shot_types": []}
-            _save_json(out_dir / "scene_type.json", scene_type_data)
-    timed("scene_type", ts)
+    # 4g) scene_type → analyze_stages.run_scene_type (shot 대표 프레임 → Vision 분류)
+    scene_type_data = run_scene_type(
+        video_path=video_path, shots_data=shots_data, scenes=scenes,
+        refined=refined, out_dir=out_dir, step=step, timed=timed,
+    )
 
-    # 4h) beats — GEBD boundary 기반 완전 교체 (2026-07-30 v2 · 사용자 방향).
-    # boundaries.json 있으면 GEBD · 없으면 shots+STT gap 으로 fallback boundaries 자동 생성.
-    # 옛 build_beats (narrative-LLM 자유 시각) 는 더 이상 안 부름 · 완전 교체.
-    ts = time.time()
-    beats_data = _load_json(out_dir / "beats.json")
-    if isinstance(beats_data, dict) and isinstance(beats_data.get("beats"), list) and beats_data["beats"]:
-        step(f"beat — 체크포인트 재사용 ({len(beats_data['beats'])}개)")
-    else:
-        _progress("beats", 84, "편집 단위(beat) 생성")
-        try:
-            duration_for_beats = float(scenes[-1]["end"]) if scenes else (float(refined[-1]["end"]) if refined else 0.0)
-            gebd_boundaries = load_boundaries(out_dir / "boundaries.json")
-            if gebd_boundaries:
-                gebd_boundaries = dedup_boundaries(gebd_boundaries, duration=duration_for_beats)
-                step(f"beat — GEBD boundary {len(gebd_boundaries)}개 기반")
-            else:
-                # 워커 (Cloud Run · GPU-free) 는 GEBD 못 돌림 → shots + STT gap 자동 fallback.
-                fallback = build_fallback_boundaries(
-                    (shots_data or {}).get("shots") or [],
-                    refined, duration_for_beats,
-                )
-                # workdir 에도 저장 (재개 시 재계산 불필요 · GCS 업로드 자동)
-                save_boundaries(out_dir / "boundaries.json", fallback,
-                                 source="shots+stt_gap", model="fallback", time_unit=1.0)
-                gebd_boundaries = fallback
-                step(f"beat — GEBD 없음 · shots+STT gap fallback {len(fallback)}개")
-            beats_data = build_beats_from_boundaries(
-                gebd_boundaries, refined, duration_for_beats,
-            )
-            _save_json(out_dir / "beats.json", beats_data)
-            step(f"beat — {len(beats_data.get('beats') or [])}개 생성")
-        except Exception as e:
-            step(f"  (beat 생성 실패 · 빈 리스트로 진행: {str(e)[:70]})")
-            import traceback
-            traceback.print_exc()
-            beats_data = {"beats": []}
-            _save_json(out_dir / "beats.json", beats_data)
-    timed("beats", ts)
+    # 4h) beats → analyze_stages.run_beats (GEBD or shots+STT gap fallback)
+    beats_data = run_beats(
+        scenes=scenes, refined=refined, shots_data=shots_data,
+        out_dir=out_dir, step=step, timed=timed,
+    )
 
-    # 4i) beat annotate — 각 beat 프레임 3장 + STT + program_context → Gemini →
-    # title/summary/scene_summary/hook/characters_visible. 계획서 GEBD-beat 3번.
-    # 이미 title 이 채워진 beat 는 skip (재개 지원).
-    ts = time.time()
-    beats_list = (beats_data or {}).get("beats") or []
-    already_annotated = sum(1 for b in beats_list if (b.get("title") or "").strip())
-    if beats_list and already_annotated < len(beats_list):
-        _progress("beat_annot", 85, f"beat 서사 캡션 · Vision × {len(beats_list) - already_annotated}")
-        try:
-            annotate_beats(
-                beats_list,
-                video_path=str(video_path),
-                out_dir=out_dir,
-                program_context=program_context,
-                workers=int(os.environ.get("BEAT_ANNOT_WORKERS") or 4),
-                on_progress=lambda done, total: _progress("beat_annot", 85 + 1 * done / max(1, total), f"beat annotate {done}/{total}"),
-            )
-            beats_data["beats"] = beats_list
-            _save_json(out_dir / "beats.json", beats_data)
-            step(f"beat annotate — 완료")
-        except Exception as e:
-            step(f"  (beat annotate 실패 · title/summary 없이 진행: {str(e)[:70]})")
-    elif beats_list:
-        step(f"beat annotate — 체크포인트 재사용 ({already_annotated}/{len(beats_list)})")
-    timed("beat_annot", ts)
+    # 4i) beat annotate → analyze_stages.run_beat_annot
+    beats_data = run_beat_annot(
+        beats_data=beats_data, video_path=video_path, out_dir=out_dir,
+        program_context=program_context, step=step, timed=timed,
+    )
 
-    # 4j) speaker identity (2026-07-31 재설계 · docs 참조):
-    # - speaker_id (익명 · S1/S2) 항상 채움 · speaker_name (실명) 은 근거 확실할 때만 · v1 은 미확정 유지
-    # - 옛 자동 rename (chyron→cast_registry 전역 치환) 은 정확도 이슈로 제거 · SPEAKER_RENAME env 도 폐기
-    # - speaker_identity_map.json 뼈대 저장 (근거·신뢰도·미확정 사유) · v2 에서 자동 확정 로직 채움
-    ts = time.time()
-    if refined:
-        # (a) 짧은 발화 상속: duration < 2s 이고 앞뒤 speaker 가 같으면 상속 (계획서 원칙 ·
-        # 화자 전환 직후 튀는 short seg 안정화). 앞뒤 다르면 · 긴 쪽 우선.
-        _MIN_STABLE_SEC = 2.0
-        _swaps = 0
-        for i, seg in enumerate(refined):
-            try:
-                dur = float(seg.get("end", 0)) - float(seg.get("start", 0))
-            except (TypeError, ValueError):
-                continue
-            if dur >= _MIN_STABLE_SEC:
-                continue
-            cur = (seg.get("speaker") or "").strip()
-            if not cur:
-                continue
-            prev = (refined[i - 1].get("speaker") or "").strip() if i > 0 else ""
-            nxt = (refined[i + 1].get("speaker") or "").strip() if i + 1 < len(refined) else ""
-            new_sp = cur
-            if prev and nxt and prev == nxt and prev != cur:
-                new_sp = prev  # 샌드위치: 앞뒤 같은 화자 · 상속
-            elif prev == cur or nxt == cur:
-                pass  # 이미 인접과 일치 · 유지
-            elif prev and (not nxt or prev):
-                # 앞뒤 중 존재하는 쪽. 둘 다 있으면 duration 긴 쪽.
-                candidates = []
-                if prev:
-                    p_dur = float(refined[i - 1].get("end", 0)) - float(refined[i - 1].get("start", 0))
-                    candidates.append((prev, p_dur))
-                if nxt:
-                    n_dur = float(refined[i + 1].get("end", 0)) - float(refined[i + 1].get("start", 0))
-                    candidates.append((nxt, n_dur))
-                candidates.sort(key=lambda x: -x[1])
-                if candidates and candidates[0][1] >= _MIN_STABLE_SEC:
-                    new_sp = candidates[0][0]
-            if new_sp != cur:
-                seg["speaker"] = new_sp
-                _swaps += 1
-        if _swaps:
-            step(f"  짧은 발화 상속 · {_swaps} seg 병합")
+    # 4j) speaker identity → analyze_stages.run_speaker_identity (refined/beats_data in-place mutate)
+    run_speaker_identity(
+        refined=refined, beats_data=beats_data, out_dir=out_dir,
+        step=step, timed=timed,
+    )
 
-        # (b) 익명 라벨 → S1/S2/... 로 정규화 · 등장 순서 기준.
-        # 2026-07-31: chyron per-seg 스테이지가 이미 실명(한글) 부여했으면 speaker_name 유지.
-        # 실명 판정 = 한글 2자 이상. anon 라벨(SPEAKER_XX / 발화자 N / '') 만 S 라벨 부여.
-        import re as _re
-        _KOREAN_NAME = _re.compile(r"^[가-힯]{2,}$")
-        _id_map: dict[str, str] = {}
-        for seg in refined:
-            sp = (seg.get("speaker") or "").strip()
-            if not sp:
-                seg["speaker_id"] = ""
-                seg["speaker_name"] = ""
-                continue
-            if sp not in _id_map:
-                _id_map[sp] = f"S{len(_id_map) + 1}"
-            seg["speaker_id"] = _id_map[sp]
-            # 실명 (한글 이름) 이면 그대로 speaker_name 유지 · 아니면 미확정
-            seg["speaker_name"] = sp if _KOREAN_NAME.match(sp) else ""
-        # beats.characters 도 S 라벨로 갱신 · 실명은 speaker_names 에 유지
-        for b in beats_list or []:
-            chars = b.get("characters") or []
-            b["speaker_ids"] = [_id_map.get(c, c) for c in chars if c]
-            b["speaker_names"] = [c for c in chars if c and _KOREAN_NAME.match(c)]
-        _save_json(out_dir / "refined.json", refined)
-        if beats_list:
-            _save_json(out_dir / "beats.json", beats_data)
-        # identity map 뼈대
-        identity_map = {
-            "version": 1,
-            "speakers": [
-                {"speaker_id": sid, "raw_label": raw, "name": "", "confidence": 0.0,
-                 "evidence": [], "status": "unconfirmed"}
-                for raw, sid in _id_map.items()
-            ],
-        }
-        _save_json(out_dir / "speaker_identity_map.json", identity_map)
-        step(f"speaker identity — {len(_id_map)}명 익명 (S1~S{len(_id_map)}) · 실명 미확정 (편집자 검수 후 확정)")
-    timed("speaker_rename", ts)
-
-    # 5) shorts recommendation (two-phase, genre-aware) ---------------------------
-    ts = time.time()
-    rec = _load_json(out_dir / "shorts.json")
-    # An EMPTY shorts checkpoint is not a valid "done" — regenerate it. Otherwise a single
-    # empty pick (old bug) would be reused on every resume and the board would stay at 0
-    # forever. recommend() now guarantees a non-empty result, so this only re-runs the
-    # genuinely-empty leftovers.
-    if not (isinstance(rec, dict) and isinstance(rec.get("shorts"), list) and rec.get("shorts")):
-        step("쇼츠 추천…")
-        _progress("recommend", 85, "쇼츠 추천 중")
-        # 2026-07-23: RECOMMEND_MODE로 두 파이프라인 스위칭. 기본 narrative_first (신규 · top-down).
-        # chunk_scan은 폴백/호환 유지. cast_people은 항상 빈 배열이라 어느 쪽에도 안 넘김.
-        mode = os.environ.get("RECOMMEND_MODE") or "narrative_first"
-        if mode == "narrative_first":
-            rec = recommend_narrative_first(
-                scenes, n=shorts_n, genre=genre, profile=profile, channels=channels,
-                transcript=refined, cast_registry=cast_registry,
-                narrative=narrative if isinstance(narrative, dict) else None,
-                faces=faces if isinstance(faces, dict) else None,
-                ppl_detections=(ppl or {}).get("detections") if isinstance(ppl, dict) else None,
-                video_path=str(video_path),
-                program_context=program_context,
-                beats=(beats_data or {}).get("beats") or [],
-                on_progress=lambda done, total: _progress("recommend", 85 + 10 * done / max(1, total), f"쇼츠 pool·선정 {done}/{total}"),
-            )
-        else:
-            rec = recommend(
-                scenes, n=shorts_n, genre=genre, profile=profile, channels=channels,
-                transcript=refined, cast_registry=cast_registry,
-                narrative_segments=(narrative or {}).get("segments") if isinstance(narrative, dict) else None,
-                key_conflicts=(narrative or {}).get("key_conflicts") if isinstance(narrative, dict) else None,
-                ppl_detections=(ppl or {}).get("detections") if isinstance(ppl, dict) else None,
-                program_context=program_context,
-                on_progress=lambda done, total: _progress("recommend", 85 + 10 * done / max(1, total), f"후보 추출 {done}/{total} 구간"),
-            )
-        _save_json(out_dir / "shorts.json", rec)
-    else:
-        step(f"쇼츠 추천 — 체크포인트 재사용 ({len(rec['shorts'])}개)")
+    # 5) shorts recommend → analyze_stages.run_recommend
+    rec = run_recommend(
+        scenes=scenes, refined=refined, cast_registry=cast_registry,
+        narrative=narrative, faces=faces, ppl=ppl, beats_data=beats_data,
+        profile=profile, channels=channels, video_path=video_path,
+        program_context=program_context, shorts_n=shorts_n, genre=genre,
+        out_dir=out_dir, step=step, timed=timed,
+    )
     shorts = rec["shorts"]
-    step(f"  {len(shorts)} 쇼츠 (장르: {rec.get('genre')})")
-    timed("recommend", ts)
-    _progress("recommend", 95, f"쇼츠 추천 완료 · {len(shorts)}개")
 
     # 6) final result --------------------------------------------------------------
     duration = scenes[-1]["end"] if scenes else (refined[-1]["end"] if refined else 0)
@@ -896,24 +347,14 @@ def analyze(
     _save_json(out_dir / "analysis.json", result)
     step(f"완료 → {out_dir / 'analysis.json'}")
 
-    # 7) 검색 세그먼트 인덱싱 — beats 등 산출을 검색 레코드로 재조립(+임베딩). content-pipeline이
-    #    segments.json 을 읽어 pgvector(search_segments)에 적재한다. best-effort — 실패해도
-    #    분석 결과는 성립(검색만 비게 됨). 임베딩 실패(Vertex 불가)는 embed 내부에서 None 처리.
-    try:
-        from .index_segments import build_segments
-        _existing = _load_json(out_dir / "segments.json")
-        _has_emb = isinstance(_existing, dict) and any(
-            s.get("emb_dialogue") for s in (_existing.get("segments") or []))
-        if resume and _has_emb:
-            step(f"검색 인덱스 — 체크포인트 재사용 ({_existing.get('count')} 세그먼트)")
-        else:
-            step("검색 세그먼트 인덱싱…")
-            seg_result = build_segments(out_dir, media_id=media_id,
-                                        genre=rec.get("genre") or genre, embed=True)
-            _save_json(out_dir / "segments.json", seg_result)
-            step(f"  {seg_result['count']} 검색 세그먼트 → segments.json")
-    except Exception as e:
-        step(f"검색 인덱싱 실패(무시): {str(e)[:120]}")
+    # 검색 세그먼트 인덱싱 → segments.json. analyze_stages.index_search_segments 로 이동.
+    index_search_segments(
+        out_dir=out_dir, media_id=media_id,
+        genre=rec.get("genre") or genre, resume=resume, step=step,
+    )
+
+    # Gemini usage 실측 dump. analyze_stages.dump_usage 로 이동.
+    dump_usage(out_dir=out_dir, step=step)
 
     _progress("done", 100, "분석 완료")
     # 완료 마커 — 워커가 이걸 감지 즉시 DB write 시작. python close 이벤트 대기 안 함
@@ -924,73 +365,8 @@ def analyze(
     return result
 
 
-def main() -> None:
-    if len(sys.argv) < 2:
-        print("Usage: python -m core.analyze <video> [--out <dir>] [--shorts N] [--genre auto|variety|talk|drama|sports|news|music|documentary] [--profile <profile.json>] [--cast <registry.json>] [--channels youtube_shorts,instagram_reels,smr] [--no-resume] [--fast]")
-        sys.exit(1)
-
-    video = sys.argv[1]
-    out_dir = Path(sys.argv[sys.argv.index("--out") + 1]) if "--out" in sys.argv else Path(video).parent
-    n = int(sys.argv[sys.argv.index("--shorts") + 1]) if "--shorts" in sys.argv else 5
-    genre = sys.argv[sys.argv.index("--genre") + 1] if "--genre" in sys.argv else "auto"
-    resume = "--no-resume" not in sys.argv
-    fast = "--fast" in sys.argv  # 자막만으로 빠른 추천 (시각 분석 스킵, ~10배 빠름)
-    media_id = sys.argv[sys.argv.index("--media") + 1] if "--media" in sys.argv else out_dir.name
-
-    # Optional program understanding profile (--profile <path.json>) → program-fit prior.
-    profile = None
-    if "--profile" in sys.argv:
-        try:
-            profile = json.loads(Path(sys.argv[sys.argv.index("--profile") + 1]).read_text(encoding="utf-8"))
-        except Exception as e:
-            print(f"   (프로파일 로드 실패, 무시: {str(e)[:80]})")
-
-    # Optional cast registry (--cast <registry.json>) → on-screen name captions get
-    # normalized onto registered people; without it every name stays a candidate.
-    # 2026-07-31: --cast 명시 없어도 workdir/cast_registry.json 자동 로드 (speaker_rename 이 필요).
-    cast_registry = None
-    if "--cast" in sys.argv:
-        from .cast import load_registry
-        cast_registry = load_registry(sys.argv[sys.argv.index("--cast") + 1])
-    else:
-        _auto_cast = out_dir / "cast_registry.json"
-        if _auto_cast.exists():
-            try:
-                from .cast import load_registry
-                cast_registry = load_registry(str(_auto_cast))
-                print(f"[cast] workdir cast_registry.json 자동 로드 · {len(cast_registry or [])}명")
-            except Exception as e:
-                print(f"[cast] 자동 로드 실패, 무시: {str(e)[:80]}")
-
-    # Optional destination filter (--channels a,b) → per-channel fit matrix. Default: all.
-    channels = None
-    if "--channels" in sys.argv:
-        channels = [c.strip() for c in sys.argv[sys.argv.index("--channels") + 1].split(",") if c.strip()]
-
-    # Optional program context (--program-context <path.json>) — 사용자가 프로그램 상세 페이지
-    # 에서 입력한 시놉시스·태그·크레딧·방영정보 등. recommend/retitle 프롬프트에 배경으로 주입.
-    program_context = None
-    if "--program-context" in sys.argv:
-        try:
-            program_context = json.loads(
-                Path(sys.argv[sys.argv.index("--program-context") + 1]).read_text(encoding="utf-8")
-            )
-        except Exception as e:
-            print(f"   (프로그램 컨텍스트 로드 실패, 무시: {str(e)[:80]})")
-
-    result = analyze(video, out_dir, shorts_n=n, genre=genre, resume=resume, profile=profile,
-                     cast_registry=cast_registry, channels=channels, fast=fast,
-                     program_context=program_context, media_id=media_id)
-    cast = result.get("cast") or {}
-    print(f"\n=== 요약 ===")
-    print(f"  {len(result['transcript'])} 자막 · {len(result['scenes'])} 장면 · {len(result['shorts'])} 쇼츠 · "
-          f"출연자 {cast.get('matchedCount', 0)}확정/{cast.get('candidateCount', 0)}후보 · "
-          f"장르 {result['genre']} · {result['took_sec']}초")
-    for s in sorted(result["shorts"], key=lambda x: x.get("rank", 99))[:5]:
-        print(f"  #{s.get('rank')} [{int(s['start']//60)}:{int(s['start']%60):02d}] appeal {s.get('appeal')} 『{s.get('title','')}』")
-
-
 if __name__ == "__main__":
+    from .analyze_cli import main
     # Native library (InsightFace ONNX/DirectML) teardown 에서 Windows access violation
     # (0xC0000005 = -1073741819) 이 관찰됨 — 정상 완료 후에도 exit code non-zero가 되어
     # 워커가 결과를 무시하고 DB write 스킵. main() 정상 반환 즉시 os._exit(0)로 native
