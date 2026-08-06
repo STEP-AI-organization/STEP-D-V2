@@ -116,6 +116,8 @@ def main() -> int:
     ap.add_argument("media_id")
     ap.add_argument("--compose", action="store_true", help="실제 이미지 합성 (유료)")
     ap.add_argument("--candidates", type=int, default=1, help="합성 후보 장수")
+    ap.add_argument("--generative", action="store_true",
+                    help="생성 모델로 합성 (얼굴이 재생성되어 변형된다 · 기본은 결정론 붙여넣기)")
     args = ap.parse_args()
 
     load_env(ROOT / "apps" / "server" / ".env")
@@ -251,11 +253,23 @@ def main() -> int:
         print("   ! 에셋이 빠졌다 — 합성하면 모델이 지어낸다. 중단.")
         return 1
 
+    tpl_path = ROOT / template["imagePath"]
+    bg_path = pathlib.Path(bg_picks[0]["path"])
+    person_paths = [pathlib.Path(people[b["slotId"]][0]["path"]) for b in briefs]
+
+    if not args.generative:
+        # 기본 경로: 생성 모델을 쓰지 않는다 — 얼굴 픽셀을 그대로 붙인다.
+        from core.thumbnail.paste import build
+        img = build(template, bg_path, person_paths, template_image=tpl_path)
+        dest = out / "pasted_1.png"
+        img.save(dest)
+        print(f"   결정론 합성: {dest}  (얼굴 원본 그대로)")
+        return 0
+
     from core.thumbnail.compose import compose
-    tpl_bytes = (ROOT / template["imagePath"]).read_bytes()
-    bg_bytes = pathlib.Path(bg_picks[0]["path"]).read_bytes()
-    person_bytes = [pathlib.Path(people[b["slotId"]][0]["path"]).read_bytes()
-                    for b in briefs]
+    tpl_bytes = tpl_path.read_bytes()
+    bg_bytes = bg_path.read_bytes()
+    person_bytes = [p.read_bytes() for p in person_paths]
     for n in range(args.candidates):
         img = compose(
             template_image=tpl_bytes, background_image=bg_bytes,

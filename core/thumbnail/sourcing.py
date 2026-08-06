@@ -235,6 +235,10 @@ def find_people(
     cast_embeddings = cast_embeddings or {}
     result: dict[str, list[PersonPick]] = {}
     used: set[str] = set()
+    # 같은 사람이 두 슬롯을 채우면 안 된다. 파일 경로만 보면 1.5초 뒤 프레임의
+    # 동일 인물이 통과하므로, 얼굴 임베딩으로 같은 사람인지 본다.
+    taken_embeddings: list[list[float]] = []
+    SAME_PERSON = 0.5   # 코사인 이상이면 동일 인물로 간주
 
     for brief in briefs:
         slot_id = brief.get("slotId") or "person_1"
@@ -243,6 +247,11 @@ def find_people(
         for c in candidates:
             path = str(c.get("path") or "")
             if not path or path in used:
+                continue
+            cemb = (c.get("face") or {}).get("embedding")
+            if cemb is not None and any(
+                _cosine(list(cemb), t) > SAME_PERSON for t in taken_embeddings
+            ):
                 continue
             bd = score_person(c, brief, emb)
             picks.append({
@@ -254,6 +263,10 @@ def find_people(
         picks = picks[:top_per_slot]
         if picks:
             used.add(picks[0]["path"])   # 1순위만 점유 — 차순위는 다른 슬롯도 검토 가능
+            chosen = next((c for c in candidates if str(c.get("path")) == picks[0]["path"]), None)
+            cemb = (chosen or {}).get("face", {}).get("embedding") if chosen else None
+            if cemb is not None:
+                taken_embeddings.append(list(cemb))
         result[slot_id] = picks
     return result
 
