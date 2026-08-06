@@ -1,0 +1,218 @@
+"""기획 조건 → 실제 에셋 찾기 (배경 프레임 · 인물 사진).
+
+사용자 지시 (2026-08-06): "이거를 알아서 찾는 것도 우리 엔진이 할 일."
+
+plan.py 가 "어떤 배경/누구를"을 규정하면, 여기서 분석 산출물(faces.json ·
+프레임 목록 · cast timeline)을 뒤져 **실제 파일**을 고른다.
+
+점수는 전부 결정론이다. 같은 영상·같은 기획이면 같은 프레임이 나와야 한다 —
+LLM 에 고르게 하면 매번 달라져서 "이 썸네일이 왜 이렇게 됐는지"를 추적할 수 없다.
+LLM 은 plan.py 에서 문구를 쓰는 데까지만 개입한다.
+
+기대 입력 (기존 파이프라인 산출물 형태):
+    frames  : [{"path": ..., "sec": 12.5, "faces": [...], "sharpness": 0.0~1.0,
+                "hasCaption": bool, "hasLogo": bool}]
+    faces   : faces.py 형식 detections — {"bbox":[x1,y1,x2,y2], "area":..,
+              "det_score":.., "embedding":[...], "gender":".."}
+없는 필드는 그 축을 0점 처리한다 (있는 정보로만 판단하고, 없는 걸 지어내지 않는다).
+"""
+from __future__ import annotations
+
+from typing import Any, Optional, TypedDict
+
+from core.thumbnail.plan import BackgroundBrief, PersonBrief
+
+# ── 배경 프레임 가중치 ────────────────────────────────────────────────────────
+BG_W_CLEAN = 35.0      # 기존 자막·로고가 없을 것 (가장 중요 — 지우는 비용이 크다)
+BG_W_SHARP = 20.0      # 선명도
+BG_W_ROOM = 20.0       # 기획이 요구한 여백과 맞는가
+BG_W_TIME = 15.0       # 기획이 지목한 시점과 가까운가
+BG_W_NO_FACE = 10.0    # 배경이므로 큰 얼굴이 없는 편이 낫다
+
+# ── 인물 사진 가중치 ──────────────────────────────────────────────────────────
+P_W_IDENTITY = 40.0    # 기획이 지목한 인물인가
+P_W_SIZE = 20.0        # 얼굴이 충분히 큰가 (작으면 확대 시 뭉갠다)
+P_W_QUALITY = 20.0     # 검출 신뢰도 · 선명도
+P_W_FACING = 20.0      # 슬롯이 요구하는 시선 방향
+
+
+class BackgroundPick(TypedDict):
+    path: str
+    sec: Optional[float]
+    score: float
+    breakdown: dict[str, float]
+
+
+class PersonPick(TypedDict):
+    slotId: str
+    path: str
+    sec: Optional[float]
+    castName: str
+    score: float
+    breakdown: dict[str, float]
+
+
+def _face_area_ratio(frame: dict[str, Any]) -> float:
+    """프레임에서 가장 큰 얼굴이 차지하는 면적 비율 0~1. 정보 없으면 0."""
+    faces = frame.get("faces") or []
+    w = float(frame.get("width") or 0) or 0.0
+    h = float(frame.get("height") or 0) or 0.0
+    if not faces or w <= 0 or h <= 0:
+        return 0.0
+    best = 0.0
+    for f in faces:
+        area = f.get("area")
+        if area is None:
+            bb = f.get("bbox") or []
+            if len(bb) == 4:
+                area = max(0.0, (bb[2] - bb[0]) * (bb[3] - bb[1]))
+        if area:
+            best = max(best, float(area) / (w * h))
+    return min(best, 1.0)
+
+
+def score_background(frame: dict[str, Any], brief: BackgroundBrief) -> BackgroundPick:
+    clean = BG_W_CLEAN
+    if frame.get("hasCaption"):
+        clean -= BG_W_CLEAN * 0.6
+    if frame.get("hasLogo"):
+        clean -= BG_W_CLEAN * 0.4
+    clean = max(clean, 0.0)
+
+    sharp = BG_W_SHARP * float(frame.get("sharpness") or 0.0)
+
+    # 기획이 원한 여백(busyness) 과의 거리. 얼굴 면적을 '차 있음'의 대리 지표로 쓴다.
+    want = brief.get("busyness")
+    if want is None:
+        room = 0.0
+    else:
+        room = BG_W_ROOM * (1.0 - abs(float(want) - _face_area_ratio(frame)))
+
+    at = brief.get("atSec")
+    sec = frame.get("sec")
+    if at is None or sec is None:
+        time_score = 0.0
+    else:
+        # 30초 벗어나면 0. 기획이 지목한 장면에서 멀어지면 다른 장면이다.
+        time_score = BG_W_TIME * max(0.0, 1.0 - abs(float(sec) - float(at)) / 30.0)
+
+    no_face = BG_W_NO_FACE * (1.0 - _face_area_ratio(frame))
+
+    breakdown = {
+        "clean": round(clean, 2), "sharpness": round(sharp, 2),
+        "room": round(room, 2), "time": round(time_score, 2),
+        "noBigFace": round(no_face, 2),
+    }
+    return {
+        "path": str(frame.get("path") or ""),
+        "sec": frame.get("sec"),
+        "score": round(sum(breakdown.values()), 2),
+        "breakdown": breakdown,
+    }
+
+
+def find_background(
+    frames: list[dict[str, Any]],
+    brief: BackgroundBrief,
+    top: int = 5,
+) -> list[BackgroundPick]:
+    """기획의 배경 조건에 맞는 프레임 후보. 상위 top개."""
+    picks = [score_background(f, brief) for f in frames if f.get("path")]
+    picks.sort(key=lambda p: p["score"], reverse=True)
+    return picks[:top]
+
+
+def _cosine(a: list[float], b: list[float]) -> float:
+    if not a or not b or len(a) != len(b):
+        return 0.0
+    # faces.py 가 L2 정규화된 embedding 을 넣으므로 내적이 곧 코사인이다.
+    return sum(x * y for x, y in zip(a, b))
+
+
+def score_person(
+    candidate: dict[str, Any],
+    brief: PersonBrief,
+    cast_embedding: Optional[list[float]] = None,
+) -> dict[str, float]:
+    """candidate: {"path","sec","face":{...},"castName","facing","frameArea"}"""
+    face = candidate.get("face") or {}
+
+    # 정체성: cast 임베딩이 있으면 그걸로, 없으면 이름 일치로 판정한다.
+    want_name = (brief.get("castName") or "").strip()
+    if cast_embedding and face.get("embedding"):
+        sim = _cosine(face["embedding"], cast_embedding)
+        identity = P_W_IDENTITY * max(0.0, min(sim, 1.0))
+    elif want_name:
+        identity = P_W_IDENTITY if (candidate.get("castName") or "").strip() == want_name else 0.0
+    else:
+        identity = 0.0   # 기획이 인물을 특정 안 했으면 이 축은 판단 불가
+
+    area = candidate.get("frameArea")
+    size = P_W_SIZE * min(float(area), 1.0) / 0.25 if area else 0.0
+    size = min(size, P_W_SIZE)      # 프레임의 25% 이상이면 만점
+
+    det = float(face.get("det_score") or 0.0)
+    sharp = float(candidate.get("sharpness") or 0.0)
+    quality = P_W_QUALITY * (det * 0.6 + sharp * 0.4)
+
+    want_facing = brief.get("facing")
+    have_facing = candidate.get("facing")
+    if want_facing in (None, "center") or not have_facing:
+        facing = 0.0
+    else:
+        facing = P_W_FACING if have_facing == want_facing else 0.0
+
+    return {
+        "identity": round(identity, 2), "size": round(size, 2),
+        "quality": round(quality, 2), "facing": round(facing, 2),
+    }
+
+
+def find_people(
+    candidates: list[dict[str, Any]],
+    briefs: list[PersonBrief],
+    cast_embeddings: Optional[dict[str, list[float]]] = None,
+    top_per_slot: int = 3,
+) -> dict[str, list[PersonPick]]:
+    """슬롯별 인물 후보. 같은 프레임이 두 슬롯을 동시에 채우지 않도록 배제한다."""
+    cast_embeddings = cast_embeddings or {}
+    result: dict[str, list[PersonPick]] = {}
+    used: set[str] = set()
+
+    for brief in briefs:
+        slot_id = brief.get("slotId") or "person_1"
+        emb = cast_embeddings.get((brief.get("castName") or "").strip())
+        picks: list[PersonPick] = []
+        for c in candidates:
+            path = str(c.get("path") or "")
+            if not path or path in used:
+                continue
+            bd = score_person(c, brief, emb)
+            picks.append({
+                "slotId": slot_id, "path": path, "sec": c.get("sec"),
+                "castName": (c.get("castName") or "").strip(),
+                "score": round(sum(bd.values()), 2), "breakdown": bd,
+            })
+        picks.sort(key=lambda p: p["score"], reverse=True)
+        picks = picks[:top_per_slot]
+        if picks:
+            used.add(picks[0]["path"])   # 1순위만 점유 — 차순위는 다른 슬롯도 검토 가능
+        result[slot_id] = picks
+    return result
+
+
+def missing_assets(
+    background: list[BackgroundPick],
+    people: dict[str, list[PersonPick]],
+    briefs: list[PersonBrief],
+) -> list[str]:
+    """합성을 걸기 전에 빠진 것을 알린다. 없는 채로 생성하면 모델이 지어낸다."""
+    gaps: list[str] = []
+    if not background:
+        gaps.append("배경 프레임 후보 없음")
+    for b in briefs:
+        slot = b.get("slotId") or "person_1"
+        if not people.get(slot):
+            name = b.get("castName") or "미상"
+            gaps.append(f"{slot}({name}) 인물 후보 없음")
+    return gaps

@@ -1,0 +1,72 @@
+[
+  {
+    "templateId": "dialogue_facing_001",
+    "category": "dialogue_conflict",
+    "aspectRatio": "16:9",
+    "personCount": 2,
+    "moods": [
+      "긴장",
+      "대립",
+      "반전",
+      "충격"
+    ],
+    "personSlots": [
+      {
+        "id": "person_1",
+        "bbox": [
+          0.062,
+          0.104,
+          0.435,
+          0.455
+        ],
+        "facing": "right",
+        "crop": "upper_body",
+        "zIndex": 20
+      },
+      {
+        "id": "person_2",
+        "bbox": [
+          0.506,
+          0.071,
+          0.437,
+          0.488
+        ],
+        "facing": "left",
+        "crop": "upper_body",
+        "zIndex": 20
+      }
+    ],
+    "textSlots": [
+      {
+        "id": "title_1",
+        "bbox": [
+          0.044,
+          0.593,
+          0.913,
+          0.091
+        ],
+        "maxLines": 1,
+        "maxCharacters": 20
+      },
+      {
+        "id": "title_2",
+        "bbox": [
+          0.036,
+          0.698,
+          0.928,
+          0.286
+        ],
+        "maxLines": 2,
+        "maxCharacters": 24
+      }
+    ],
+    "backgroundStyle": {
+      "blur": 2,
+      "brightness": -10,
+      "saturation": 0.85,
+      "vignette": 0.18
+    },
+    "imagePath": "assets/thumbnail-structure/dialogue_facing_001.png",
+    "sourceRef": "user-supplied 2026-08-06"
+  }
+]
