@@ -3789,7 +3789,9 @@ const TIKTOK_AUTH_URL = "https://www.tiktok.com/v2/auth/authorize/";
 const TIKTOK_TOKEN_URL = "https://open.tiktokapis.com/v2/oauth/token/";
 const TIKTOK_USER_INFO_URL = "https://open.tiktokapis.com/v2/user/info/";
 const TIKTOK_CALLBACK_PATH = "/api/tiktok/oauth/callback";
-const TIKTOK_SCOPES = ["user.info.basic", "video.upload", "video.publish"].join(",");
+// 승인된 scope 만 요청한다 — 미승인 scope 를 섞으면 인증 화면에서 통째로 거부된다.
+// video.upload / video.publish 는 Content Posting API 구현 + 심사 통과 후 여기에 추가할 것.
+const TIKTOK_SCOPES = ["user.info.basic"].join(",");
 
 function tiktokRedirectUri(): string {
   const explicit = process.env.TIKTOK_REDIRECT_URI;
