@@ -140,8 +140,7 @@ def main() -> int:
                     help="저장된 plan.json 재사용 (임계값 비교 시 기획을 고정)")
     ap.add_argument("--min-face", type=float, default=0.03,
                     help="인물 후보 최소 얼굴 면적 비율 (기본 0.03)")
-    ap.add_argument("--generative", action="store_true",
-                    help="생성 모델로 합성 (얼굴이 재생성되어 변형된다 · 기본은 결정론 붙여넣기)")
+    ap.add_argument("--program", default="", help="프로그램명 (프롬프트에 들어감)")
     args = ap.parse_args()
 
     load_env(ROOT / "apps" / "server" / ".env")
@@ -186,12 +185,14 @@ def main() -> int:
 
     # ── 2) 템플릿 매칭 ─────────────────────────────────────────────────────
     print("\n[2/5] 템플릿 매칭")
+    # 템플릿은 이제 생성 입력으로 안 들어간다 — 이미지로 넣으면 모델이 회색
+    # 실루엣과 라벨을 해석하느라 힘을 뺀다. 인물 수·제목 줄수 참고용으로만 남긴다.
     ranked = rank(to_match_context(plan), load_registry())
-    if not ranked:
-        print("   ! 맞는 템플릿 없음 — 중단"); return 1
     for r in ranked:
         print(f"   {r['templateId']:<24} {r['score']:>6} {r['breakdown']}")
-    template = get_template(ranked[0]["templateId"])
+    template = get_template(ranked[0]["templateId"]) if ranked else None
+    if not ranked:
+        print("   맞는 템플릿 없음 — 생성에는 영향 없음")
 
     # ── 3) 배경 프레임 검색 ────────────────────────────────────────────────
     print("\n[3/5] 배경 프레임 검색")
@@ -311,44 +312,35 @@ def main() -> int:
         {"template": ranked[0], "background": bg_picks, "people": people, "gaps": gaps},
         ensure_ascii=False, indent=2), encoding="utf-8")
 
-    # ── 5) 합성 ────────────────────────────────────────────────────────────
+    # ── 5) 생성 ────────────────────────────────────────────────────────────
     print("\n[5/5] 합성")
     if not args.compose:
         print("   --compose 없음 → 여기서 멈춤 (이미지 생성 비용 없음)")
         print(f"   결과: {out}")
         return 0
     if gaps:
-        print("   ! 에셋이 빠졌다 — 합성하면 모델이 지어낸다. 중단.")
+        print("   ! 에셋이 빠졌다 — 없는 채로 생성하면 모델이 지어낸다. 중단.")
         return 1
 
-    tpl_path = ROOT / template["imagePath"]
-    bg_path = pathlib.Path(bg_picks[0]["path"])
+    from core.thumbnail.simple_gen import build_prompt, generate
+
+    bg_path = pathlib.Path(bg_picks[0]["path"]) if bg_picks else None
     person_paths = [pathlib.Path(people[b["slotId"]][0]["path"]) for b in briefs]
 
-    if not args.generative:
-        # 기본 경로: 생성 모델을 쓰지 않는다 — 얼굴 픽셀을 그대로 붙인다.
-        from core.thumbnail.paste import build
-        img = build(template, bg_path, person_paths, template_image=tpl_path)
-        dest = out / "pasted_1.png"
-        img.save(dest)
-        print(f"   결정론 합성: {dest}  (얼굴 원본 그대로)")
-        return 0
+    prompt = build_prompt(plan, args.program, with_background=bg_path is not None)
+    print(f"   프롬프트: {prompt}")
+    print(f"   입력: 인물 {len(person_paths)}장"
+          + (f" + 배경 {bg_path.name}" if bg_path else " (배경 없음 — 모델이 지어냄)"))
 
-    from core.thumbnail.compose import compose
-    tpl_bytes = tpl_path.read_bytes()
-    bg_bytes = bg_path.read_bytes()
-    person_bytes = [p.read_bytes() for p in person_paths]
-    for n in range(args.candidates):
-        img = compose(
-            template_image=tpl_bytes, background_image=bg_bytes,
-            person_images=person_bytes,
-            summary=plan.get("concept") or "", mood=", ".join(plan.get("mood") or []),
-        )
-        if not img:
-            print(f"   후보 {n + 1}: 생성 실패"); continue
-        dest = out / f"composed_{n + 1}.png"
+    imgs = generate(person_paths, plan, background_path=bg_path,
+                    program_title=args.program, n=args.candidates)
+    if not imgs:
+        print("   ! 생성 실패")
+        return 1
+    for k, img in enumerate(imgs, 1):
+        dest = out / f"thumb_{k}.png"
         dest.write_bytes(img)
-        print(f"   후보 {n + 1}: {dest}")
+        print(f"   후보 {k}: {dest}")
     return 0
 
 
