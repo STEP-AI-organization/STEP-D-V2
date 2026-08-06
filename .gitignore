@@ -41,6 +41,9 @@ package-lock.json
 
 .vercel
 .env*
+# 예시 파일은 추적한다 (값 없음 · 어떤 변수가 있는지 문서 역할)
+!.env.example
+!**/.env.example
 apps/web/src/vendor/opencut-src/
 
 # NCC 바우처 결과보고 (컴플라이언스: 리포와 물리 분리 유지)
