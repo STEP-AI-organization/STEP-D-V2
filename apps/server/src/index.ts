@@ -3858,9 +3858,11 @@ const tiktokOauthCallback = async (c: Context) => {
     };
     if (tokenData.error) throw new Error(`${tokenData.error}: ${tokenData.error_description ?? ""}`);
 
-    // 2. /v2/user/info/ — display_name + avatar + username
+    // 2. /v2/user/info/ — user.info.basic 로 읽을 수 있는 필드만 요청한다.
+    // username 은 user.info.profile scope 가 있어야 하고, 섞어 보내면 응답 전체가
+    // scope_not_authorized 로 실패한다 (일부만 빠지는 게 아니다).
     const userRes = await fetch(
-      `${TIKTOK_USER_INFO_URL}?fields=open_id,union_id,avatar_url,display_name,username`,
+      `${TIKTOK_USER_INFO_URL}?fields=open_id,union_id,avatar_url,display_name`,
       { headers: { Authorization: `Bearer ${tokenData.access_token}` } },
     );
     if (!userRes.ok) throw new Error(`/user/info failed: ${await userRes.text()}`);
