@@ -57,6 +57,34 @@ def caption_score(path: str | pathlib.Path, band: tuple[float, float] = (0.45, 0
     return float(min(max((ratio - 3.0) / 5.0, 0.0), 1.0))
 
 
+def caption_band(path: str | pathlib.Path,
+                 band: tuple[float, float] = (0.45, 0.98)) -> tuple[float, float] | None:
+    """자막 띠의 세로 범위를 정규화 y (top, bottom) 로 돌려준다. 없으면 None.
+
+    자막이 있다고 프레임을 통째로 버리는 건 낭비다 — 예능은 클로즈업일수록
+    자막이 붙으므로, 버리면 정작 쓸 만한 큰 얼굴이 다 날아간다.
+    띠 위치를 알면 그 위에서 잘라내면 된다.
+    """
+    import numpy as np
+    from PIL import Image
+
+    im = Image.open(path).convert("L")
+    a = np.asarray(im).astype(np.float32)
+    h, w = a.shape
+    if h < 32 or w < 32:
+        return None
+
+    edge = (np.abs(np.diff(a, axis=1)) > 40).astype(np.float32)
+    row = edge.mean(axis=1)
+    base = float(np.median(row)) + 1e-6
+
+    y0, y1 = int(h * band[0]), int(h * band[1])
+    hot = [y for y in range(y0, min(y1, row.shape[0])) if row[y] > base * 3.0]
+    if len(hot) < h * 0.01:      # 너무 얇으면 자막이 아니라 잡음
+        return None
+    return (min(hot) / h, max(hot) / h)
+
+
 def has_caption(path: str | pathlib.Path, threshold: float = 0.35) -> bool:
     return caption_score(path) >= threshold
 

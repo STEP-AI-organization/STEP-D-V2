@@ -68,6 +68,11 @@ def frame_meta(path: pathlib.Path, sec: float, logo_windows: list[tuple[float, f
     }
 
 
+CROP_SIDE = 0.9    # 얼굴 폭 대비 좌우 여유
+CROP_UP = 0.7      # 머리 위 여유
+CROP_DOWN = 1.8    # 턱 아래 (자막 밴드를 피하는 값)
+
+
 def detect_person_candidates(frames: list[dict], out_dir: pathlib.Path) -> list[dict]:
     """프레임에서 얼굴을 찾아 상반신 crop 을 만든다.
 
@@ -78,6 +83,8 @@ def detect_person_candidates(frames: list[dict], out_dir: pathlib.Path) -> list[
     import cv2
     from core.faces import _get_app, _detect
 
+    from core.thumbnail.caption_detect import caption_band
+
     out_dir.mkdir(parents=True, exist_ok=True)
     _get_app()
     cands: list[dict] = []
@@ -86,12 +93,22 @@ def detect_person_candidates(frames: list[dict], out_dir: pathlib.Path) -> list[
         if img is None:
             continue
         h, w = img.shape[:2]
+        # 자막이 있어도 프레임을 버리지 않는다 — 띠 위에서 잘라 피한다.
+        band = caption_band(fr["path"])
+        cap_top = int(band[0] * h) if band else h
         for i, d in enumerate(_detect(img)):
             x1, y1, x2, y2 = d["bbox"]
             fw, fh = x2 - x1, y2 - y1
-            # 상반신: 얼굴 기준 좌우 1.2배·위 0.8배·아래 3.2배
-            cx0 = max(0, int(x1 - fw * 1.2)); cx1 = min(w, int(x2 + fw * 1.2))
-            cy0 = max(0, int(y1 - fh * 0.8)); cy1 = min(h, int(y2 + fh * 3.2))
+            # 상반신 crop. 아래로 3.2배까지 잡으면 한국 예능 자막 밴드(가슴~배)가
+            # 항상 포함되어, 얼굴이 멀쩡한 큰 클로즈업이 자막 필터에서 통째로 탈락한다.
+            # 1.8배로 좁히면 자막을 대부분 피하면서 슬롯을 채우기엔 충분하다.
+            cx0 = max(0, int(x1 - fw * CROP_SIDE)); cx1 = min(w, int(x2 + fw * CROP_SIDE))
+            cy0 = max(0, int(y1 - fh * CROP_UP))
+            cy1 = min(h, int(y2 + fh * CROP_DOWN))
+            if cap_top < cy1:
+                # 자막 띠 위 8px 여유를 두고 자른다. 턱 아래가 조금이라도 남아야
+                # 인물로 보이므로, 얼굴 하단보다 위로는 올라가지 않는다.
+                cy1 = max(int(y2 + fh * 0.15), cap_top - 8)
             crop = img[cy0:cy1, cx0:cx1]
             if crop.size == 0:
                 continue
@@ -119,6 +136,8 @@ def main() -> int:
     ap.add_argument("media_id")
     ap.add_argument("--compose", action="store_true", help="실제 이미지 합성 (유료)")
     ap.add_argument("--candidates", type=int, default=1, help="합성 후보 장수")
+    ap.add_argument("--reuse-plan", action="store_true",
+                    help="저장된 plan.json 재사용 (임계값 비교 시 기획을 고정)")
     ap.add_argument("--min-face", type=float, default=0.03,
                     help="인물 후보 최소 얼굴 면적 비율 (기본 0.03)")
     ap.add_argument("--generative", action="store_true",
@@ -144,10 +163,15 @@ def main() -> int:
     cast_names = [c.get("name") for c in characters if isinstance(c, dict) and c.get("name")]
 
     # ── 1) 기획 ────────────────────────────────────────────────────────────
-    print("[1/5] 썸네일 기획 (Gemini)")
-    plan = build_plan(summary=summary[:6000], cast_names=cast_names)
-    (out / "plan.json").write_text(
-        json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
+    plan_path = out / "plan.json"
+    if args.reuse_plan and plan_path.exists():
+        print("[1/5] 썸네일 기획 (저장본 재사용 — Gemini 호출 없음)")
+        plan = json.loads(plan_path.read_text(encoding="utf-8"))
+    else:
+        print("[1/5] 썸네일 기획 (Gemini)")
+        plan = build_plan(summary=summary[:6000], cast_names=cast_names)
+        plan_path.write_text(
+            json.dumps(plan, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"   concept : {plan.get('concept')}")
     print(f"   hook    : {plan.get('hook')}")
     print(f"   제목1   : {plan.get('title1')}")
@@ -227,19 +251,11 @@ def main() -> int:
         # 회차 전체를 훑지 않는다 — 기획이 원한 장면 안에서만 본다.
         print("   faces.json 없음 → 검색 프레임에서 직접 검출")
         person_cands = detect_person_candidates(frames, out / "people")
-        # 인물 crop 에 자막이 박혀 있으면 누끼로 안 빠진다 — 후보에서 뺀다.
+        # crop 단계에서 자막 띠를 피해 잘랐으므로, 여기서는 그래도 남은 것만 뺀다.
         from core.thumbnail.caption_detect import caption_score
-        kept = []
-        for c in person_cands:
-            cs = caption_score(c["path"])
-            c["captionScore"] = round(cs, 3)
-            if cs < 0.35:
-                kept.append(c)
-        if len(kept) >= len(briefs):
-            print(f"   자막 필터: {len(person_cands)} → {len(kept)}명")
-            person_cands = kept
-        else:
-            print(f"   ! 자막 없는 인물이 {len(kept)}명뿐 — 필터 미적용")
+        kept = [c for c in person_cands if caption_score(c["path"]) < 0.5]
+        print(f"   자막 잔존 배제: {len(person_cands)} → {len(kept)}명")
+        person_cands = kept
         for c in person_cands[:6]:
             print(f"   {pathlib.Path(c['path']).name:<26} area={c['frameArea']:.3f} "
                   f"det={c['face']['det_score']:.2f} g={c.get('gender')} facing={c.get('facing')}")
