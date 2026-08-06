@@ -68,6 +68,49 @@ def frame_meta(path: pathlib.Path, sec: float, logo_windows: list[tuple[float, f
     }
 
 
+def detect_person_candidates(frames: list[dict], out_dir: pathlib.Path) -> list[dict]:
+    """프레임에서 얼굴을 찾아 상반신 crop 을 만든다.
+
+    등록 cast 가 없으면 이름을 확정할 수 없다 — 성별·크기·시선만 채우고
+    castName 은 비워 둔다. 여기서 이름을 추측하면 잘못된 인물이 조용히 들어간다.
+    """
+    os.environ.setdefault("FACES_ALLOW_CPU", "1")
+    import cv2
+    from core.faces import _get_app, _detect
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    _get_app()
+    cands: list[dict] = []
+    for fr in frames:
+        img = cv2.imread(fr["path"])
+        if img is None:
+            continue
+        h, w = img.shape[:2]
+        for i, d in enumerate(_detect(img)):
+            x1, y1, x2, y2 = d["bbox"]
+            fw, fh = x2 - x1, y2 - y1
+            # 상반신: 얼굴 기준 좌우 1.2배·위 0.8배·아래 3.2배
+            cx0 = max(0, int(x1 - fw * 1.2)); cx1 = min(w, int(x2 + fw * 1.2))
+            cy0 = max(0, int(y1 - fh * 0.8)); cy1 = min(h, int(y2 + fh * 3.2))
+            crop = img[cy0:cy1, cx0:cx1]
+            if crop.size == 0:
+                continue
+            dest = out_dir / f"p_{fr['sec']:.1f}_{i}.png"
+            cv2.imwrite(str(dest), crop)
+            face_cx = (x1 + x2) / 2 / w
+            cands.append({
+                "path": str(dest), "sec": fr["sec"], "castName": "",
+                "gender": d.get("gender"),
+                # 화면 왼쪽에 있으면 보통 오른쪽을 본다 (마주보는 구도의 통상 배치)
+                "facing": "right" if face_cx < 0.5 else "left",
+                "frameArea": float(d["area"]) / (w * h),
+                "sharpness": fr.get("sharpness") or 0.0,
+                "face": {"det_score": float(d["det_score"]), "embedding": d.get("embedding")},
+            })
+    cands.sort(key=lambda c: -c["frameArea"])
+    return cands
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("media_id")
@@ -80,7 +123,8 @@ def main() -> int:
     from core.thumbnail.plan import build_plan, to_match_context
     from core.thumbnail.match import rank
     from core.thumbnail.structure import load_registry, get_template
-    from core.thumbnail.sourcing import find_background, find_people, missing_assets
+    from core.thumbnail.sourcing import (find_background, find_people, missing_assets,
+                                        search_windows, sample_secs)
 
     adir = STORAGE / "analysis" / args.media_id
     video = STORAGE / "uploads" / f"{args.media_id}.mp4"
@@ -123,15 +167,23 @@ def main() -> int:
     ppl = json.loads((adir / "ppl.json").read_text(encoding="utf-8"))
     logo_windows = [(d.get("start", 0.0), d.get("end", 0.0))
                     for d in (ppl.get("detections") or [])]
-    at = bg.get("atSec") or 0.0
-    offsets = [-6, -3, -1.5, 0, 1.5, 3, 6]
+    # 시간축을 훑지 않는다 — 기획 문장을 구간 검색엔진에 던져 장면을 찾는다.
+    query = bg.get("scene") or plan.get("concept") or ""
+    windows = search_windows(query, media_id=args.media_id, limit=8)
+    print(f'   검색: "{query[:40]}" → 구간 {len(windows)}개')
+    for w in windows[:3]:
+        print(f"   {w['start']:8.1f}s vec={w['vec']:.3f} | {w['summary'][:46]}")
+    secs = sample_secs(windows, per_window=2)
+    if not secs:
+        at = bg.get("atSec") or 0.0
+        secs = [max(0.0, float(at) + off) for off in (-3, 0, 3)]
+        print("   ! 검색 결과 없음 — 기획 지목 시점으로 폴백")
     frames = []
-    for i, off in enumerate(offsets):
-        sec = max(0.0, float(at) + off)
+    for i, sec in enumerate(secs[:14]):
         dest = out / "frames" / f"f_{i:02d}_{sec:.1f}.jpg"
         if extract_frame(video, sec, dest):
             frames.append(frame_meta(dest, sec, logo_windows))
-    print(f"   후보 {len(frames)}장 추출 (기획 지목 {at}s 주변)")
+    print(f"   후보 {len(frames)}장 추출")
     bg_picks = find_background(frames, bg, top=3)
     for p in bg_picks:
         print(f"   {pathlib.Path(p['path']).name:<22} {p['score']:>6} {p['breakdown']}")
@@ -144,7 +196,6 @@ def main() -> int:
     if faces_p.exists():
         faces = json.loads(faces_p.read_text(encoding="utf-8"))
         print(f"   faces.json 사용 (detections {len(faces)})")
-        # 형식이 파이프라인 버전마다 달라 여기서 최소 필드만 뽑는다.
         for f in (faces if isinstance(faces, list) else faces.get("detections") or []):
             person_cands.append({
                 "path": f.get("crop") or f.get("path") or "",
@@ -154,6 +205,28 @@ def main() -> int:
                 "face": {"det_score": f.get("det_score") or 0.0,
                          "embedding": f.get("embedding")},
             })
+    else:
+        # faces 스테이지 산출물이 없으면, 검색이 찾아준 프레임에서 직접 검출한다.
+        # 회차 전체를 훑지 않는다 — 기획이 원한 장면 안에서만 본다.
+        print("   faces.json 없음 → 검색 프레임에서 직접 검출")
+        person_cands = detect_person_candidates(frames, out / "people")
+        for c in person_cands[:6]:
+            print(f"   {pathlib.Path(c['path']).name:<26} area={c['frameArea']:.3f} "
+                  f"det={c['face']['det_score']:.2f} g={c.get('gender')} facing={c.get('facing')}")
+
+    # 배경과 인물이 다른 장면에서 나오면 의상·조명이 어긋나 합성이 티가 난다.
+    # 선택된 배경 프레임과 같은 장면(±12초) 안의 인물만 후보로 둔다.
+    if person_cands and bg_picks:
+        anchor = bg_picks[0]["sec"] or 0.0
+        same_scene = [c for c in person_cands
+                      if c.get("sec") is not None and abs(c["sec"] - anchor) <= 12.0]
+        if len(same_scene) >= len(briefs):
+            print(f"   장면 일치 필터: {len(person_cands)} → {len(same_scene)}명 "
+                  f"(배경 {anchor:.1f}s 기준 ±12s)")
+            person_cands = same_scene
+        else:
+            print(f"   ! 배경 장면({anchor:.1f}s) 안에 인물이 {len(same_scene)}명뿐 "
+                  f"— 장면 일치를 포기하고 전체 후보 사용 (의상·조명 불일치 위험)")
     people = find_people(person_cands, briefs) if person_cands else {}
     gaps = missing_assets(bg_picks, people, briefs)
     if not person_cands:

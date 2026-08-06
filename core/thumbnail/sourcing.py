@@ -122,6 +122,63 @@ def find_background(
     return picks[:top]
 
 
+def search_windows(
+    query: str,
+    media_id: str = "",
+    limit: int = 8,
+    api_base: Optional[str] = None,
+    timeout: float = 30.0,
+) -> list[dict[str, Any]]:
+    """구간 검색엔진에 기획 문장을 던져 후보 시간창을 받는다.
+
+    사용자 지시 (2026-08-06): "영상 검색엔진을 이용."
+    시간축을 훑는 대신 여기서 받은 구간에서만 프레임을 뽑는다 — 기획이 원한
+    "장면"을 의미로 찾는 것이 목적이고, 초 단위 추측은 그 다음 문제다.
+
+    ⚠️ search_segments 의 emb_* 가 NULL 이면 벡터 축이 0 이 되어 키워드 검색으로
+    조용히 격하된다. scripts/backfill_segment_embeddings.py 로 먼저 확인할 것.
+    """
+    import json
+    import os
+    import urllib.parse
+    import urllib.request
+
+    base = api_base or os.environ.get("STEPD_API_BASE") or "http://localhost:4100/api"
+    url = f"{base}/search?q={urllib.parse.quote(query)}&limit={limit}"
+    with urllib.request.urlopen(url, timeout=timeout) as r:
+        data = json.load(r)
+
+    out: list[dict[str, Any]] = []
+    for hit in data.get("results") or []:
+        if media_id and hit.get("mediaId") != media_id:
+            continue
+        out.append({
+            "segmentId": hit.get("segmentId"),
+            "start": float(hit.get("start") or 0.0),
+            "end": float(hit.get("end") or 0.0),
+            "score": float(hit.get("score") or 0.0),
+            "vec": float(hit.get("vec") or 0.0),
+            "characters": hit.get("characters") or [],
+            "summary": hit.get("summary") or "",
+        })
+    return out
+
+
+def sample_secs(windows: list[dict[str, Any]], per_window: int = 3) -> list[float]:
+    """검색이 준 구간 안에서 프레임 시각을 고른다. 경계는 컷 전환이라 피한다."""
+    secs: list[float] = []
+    for w in windows:
+        s, e = w["start"], w["end"]
+        if e <= s:
+            secs.append(round(s, 2))
+            continue
+        span = e - s
+        for i in range(per_window):
+            # 구간을 per_window+1 등분한 내부 지점 — 시작·끝 프레임은 안 쓴다.
+            secs.append(round(s + span * (i + 1) / (per_window + 1), 2))
+    return secs
+
+
 def _cosine(a: list[float], b: list[float]) -> float:
     if not a or not b or len(a) != len(b):
         return 0.0
