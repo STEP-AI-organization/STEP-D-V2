@@ -41,10 +41,25 @@ import { createReadStream, parseObjectPath, uploadFile } from "./storage-gcs.ts"
 import { enqueue } from "./queue.ts";
 import { newId } from "./pipeline.ts";
 
-const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
-const CORE_PYTHON =
+export const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+
+/**
+ * core/ 파이썬 인터프리터. env 없이도 리포의 venv 를 찾아가므로 CORE_PYTHON 은 선택이다
+ * — venv 위치가 다를 때만 지정한다. 맨 "python" 으로 폴백하면 시스템 파이썬이 잡혀
+ * 의존성 없이 죽으므로 폴백하지 않는다.
+ */
+export const CORE_PYTHON =
   process.env.CORE_PYTHON ||
-  path.join(REPO_ROOT, "core", ".venv310", "Scripts", "python.exe");
+  path.join(
+    REPO_ROOT, "core", ".venv310",
+    process.platform === "win32" ? "Scripts" : "bin",
+    process.platform === "win32" ? "python.exe" : "python",
+  );
+
+/** core/ 소스 위치. CORE_DIR 로 덮어쓸 수 있다. */
+export const CORE_DIR = process.env.CORE_DIR
+  ? path.resolve(process.env.CORE_DIR)
+  : path.join(REPO_ROOT, "core");
 
 /** Stable per-media work dirs live here so a retry can resume from checkpoints. */
 const WORK_ROOT = path.join(os.tmpdir(), "stepd-content");

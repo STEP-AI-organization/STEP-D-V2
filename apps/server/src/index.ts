@@ -103,7 +103,7 @@ import {
 import { normalizeCastInput } from "./cast.ts";
 import { youtubeUploadEnabled, UPLOAD_DISABLED_CODE, UPLOAD_DISABLED_MESSAGE } from "./upload-gate.ts";
 import { geminiGenerate, parseJsonLoose } from "./gemini.ts";
-import { syncProgramFromFacesForMedia } from "./content-pipeline.ts";
+import { syncProgramFromFacesForMedia, CORE_PYTHON, CORE_DIR, REPO_ROOT } from "./content-pipeline.ts";
 import {
   syncChannelVideos,
   classifyShorts,
@@ -419,7 +419,6 @@ app.post("/api/programs/:id/sync-from-analysis", async (c) => {
 // ── autofill program metadata via Gemini + google_search grounding ──
 // 프로그램 제목만으로 웹 검색·팩트체크로 나머지 필드 자동 채움 (2단계: 검색·수집 → 팩트체크).
 // 출연자·SMR은 채우지 않음. 결과는 저장하지 않고 반환만 — 사용자가 UI에서 확인 후 저장.
-const AUTOFILL_REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 app.post("/api/programs/:id/autofill", async (c) => {
   const id = c.req.param("id");
   const program = await getEntity<Record<string, unknown>>("program", id);
@@ -427,10 +426,7 @@ app.post("/api/programs/:id/autofill", async (c) => {
   const title = typeof program.title === "string" ? program.title.trim() : "";
   if (!title) return c.json({ error: "program title empty" }, 400);
 
-  const CORE_PYTHON =
-    process.env.CORE_PYTHON ||
-    path.join(AUTOFILL_REPO_ROOT, "core", ".venv310", "Scripts", "python.exe");
-  const cwd = AUTOFILL_REPO_ROOT;
+  const cwd = REPO_ROOT;
 
   const result: unknown = await new Promise((resolve, reject) => {
     const proc = spawn(CORE_PYTHON, ["-X", "utf8", "-m", "core.autofill_program", "--mode", "questions", title], {
@@ -481,9 +477,6 @@ app.post("/api/programs/:id/autofill/chat", async (c) => {
   const draft = (body.draft && typeof body.draft === "object") ? body.draft : {};
   const sources = Array.isArray(body.sources) ? body.sources : [];
 
-  const CORE_PYTHON =
-    process.env.CORE_PYTHON ||
-    path.join(AUTOFILL_REPO_ROOT, "core", ".venv310", "Scripts", "python.exe");
 
   const result: unknown = await new Promise((resolve, reject) => {
     const args = [
@@ -494,7 +487,7 @@ app.post("/api/programs/:id/autofill/chat", async (c) => {
       "--sources", JSON.stringify(sources),
     ];
     const proc = spawn(CORE_PYTHON, args, {
-      cwd: AUTOFILL_REPO_ROOT, env: process.env, stdio: ["ignore", "pipe", "pipe"],
+      cwd: REPO_ROOT, env: process.env, stdio: ["ignore", "pipe", "pipe"],
     });
     let out = "", err = "";
     proc.stdout.on("data", (b) => { out += b.toString(); });
@@ -2424,7 +2417,6 @@ async function renderClipMedia(opts: {
 //   Production (GCS mode): templates/thumbnail/{id}.{ext} + templates/thumbnail/manifest.json
 //   Local dev: assets/thumbnail-reference/{id}.{ext} + manifest.json (기존)
 // Cloud Run 컨테이너는 재시작 시 로컬 fs 유실 · GCS 우선.
-const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const THUMB_REF_DIR = path.join(REPO_ROOT, "assets", "thumbnail-reference");
 const THUMB_MANIFEST = path.join(THUMB_REF_DIR, "manifest.json");
 const THUMB_GCS_PREFIX = "templates/thumbnail";
@@ -2599,14 +2591,13 @@ app.post("/api/thumbnail-refs/batch/:action", async (c) => {
     ? "thumbnail_reference_manifest.py"
     : "thumbnail_preprocess_template.py";
   const scriptPath = path.join(REPO_ROOT, "scripts", scriptName);
-  const python = process.env.CORE_PYTHON || "python";
   const { spawn } = await import("node:child_process");
   const results: any[] = [];
   for (const target of targets) {
     try {
       await new Promise<void>((resolve, reject) => {
         const args = action === "analyze" ? [scriptPath] : [scriptPath, target.id];
-        const proc = spawn(python, args, {
+        const proc = spawn(CORE_PYTHON, args, {
           cwd: REPO_ROOT, env: { ...process.env, PYTHONIOENCODING: "utf-8" },
         });
         let stderr = "";
@@ -2636,11 +2627,10 @@ app.post("/api/thumbnail-refs/:id/preprocess", async (c) => {
     }, 501);
   }
   const scriptPath = path.join(REPO_ROOT, "scripts", "thumbnail_preprocess_template.py");
-  const python = process.env.CORE_PYTHON || "python";
   const { spawn } = await import("node:child_process");
   try {
     await new Promise<void>((resolve, reject) => {
-      const proc = spawn(python, [scriptPath, id, "--force"], {
+      const proc = spawn(CORE_PYTHON, [scriptPath, id, "--force"], {
         cwd: REPO_ROOT, env: { ...process.env, PYTHONIOENCODING: "utf-8" },
       });
       let stderr = "";
@@ -2669,10 +2659,9 @@ app.post("/api/thumbnail-refs/:id/analyze", async (c) => {
   }
   // Python 스크립트 호출
   const scriptPath = path.join(REPO_ROOT, "scripts", "thumbnail_reference_manifest.py");
-  const python = process.env.CORE_PYTHON || "python";
   const { spawn } = await import("node:child_process");
   await new Promise<void>((resolve, reject) => {
-    const proc = spawn(python, [scriptPath], {
+    const proc = spawn(CORE_PYTHON, [scriptPath], {
       cwd: REPO_ROOT, env: { ...process.env, PYTHONIOENCODING: "utf-8" },
     });
     let stderr = "";
@@ -4469,9 +4458,6 @@ app.delete("/api/youtube/videos/:videoId", async (c) => {
 // Reads pipeline analysis from GCS (production) or local core/ (dev).
 import { Storage } from "@google-cloud/storage";
 
-const LAB_CORE_DIR = process.env.CORE_DIR
-  ? path.resolve(process.env.CORE_DIR)
-  : path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../core");
 const ADMIN_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../admin");
 const GCS_BUCKET = process.env.GCS_BUCKET;
 
@@ -4524,7 +4510,7 @@ async function labReadJson(localName: string, gcsName: string): Promise<unknown 
   }
   // Local dev fallback
   try {
-    return JSON.parse(fs.readFileSync(path.join(LAB_CORE_DIR, localName), "utf-8"));
+    return JSON.parse(fs.readFileSync(path.join(CORE_DIR, localName), "utf-8"));
   } catch (e) {
     if (!mediaId) console.warn(`labReadJson(local) no GCS mediaId, local ${localName}:`, e);
     return null;
@@ -4586,8 +4572,8 @@ app.get("/api/lab/portraits/:name", async (c) => {
     }
   }
   // Local fallback
-  const file = path.join(LAB_CORE_DIR, "scene_frames", name);
-  if (!file.startsWith(path.join(LAB_CORE_DIR, "scene_frames")) || !fs.existsSync(file)) {
+  const file = path.join(CORE_DIR, "scene_frames", name);
+  if (!file.startsWith(path.join(CORE_DIR, "scene_frames")) || !fs.existsSync(file)) {
     return c.json({ error: "not found" }, 404);
   }
   return new Response(fs.readFileSync(file), {
@@ -4611,8 +4597,8 @@ app.get("/api/lab/frames/:name", async (c) => {
     }
   }
   // Local fallback
-  const file = path.join(LAB_CORE_DIR, "scene_frames", name);
-  if (!file.startsWith(path.join(LAB_CORE_DIR, "scene_frames")) || !fs.existsSync(file)) {
+  const file = path.join(CORE_DIR, "scene_frames", name);
+  if (!file.startsWith(path.join(CORE_DIR, "scene_frames")) || !fs.existsSync(file)) {
     return c.json({ error: "not found" }, 404);
   }
   return new Response(fs.readFileSync(file), {
@@ -4657,7 +4643,7 @@ app.get("/api/lab/video/:mediaId", async (c) => {
   const pipe = ((await labReadJson("pipeline_output.json", "analysis.json")) as any) || {};
   const name = pipe?.video ? path.basename(pipe.video) : null;
   if (!name) return c.json({ error: "no video" }, 404);
-  const file = path.join(LAB_CORE_DIR, name);
+  const file = path.join(CORE_DIR, name);
   if (!fs.existsSync(file)) return c.json({ error: "not found" }, 404);
 
   const size = fs.statSync(file).size;
