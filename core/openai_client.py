@@ -70,10 +70,16 @@ def edit(
     model: str = "gpt-image-2",
     size: str = "1536x1024",
     n: int = 1,
+    mask: Optional[bytes] = None,
 ) -> Optional[bytes]:
     """이미지 편집 · 여러 참고 이미지 + 프롬프트 → 새 이미지.
     - reference thumbnail + castPhoto 여러 장 → swap
     - 원본 프레임 + preprocess prompt → cleaned template
+
+    mask: 첫 번째 이미지에 적용되는 편집 범위. **투명한 곳만 모델이 다시 그리고,
+    불투명한 곳은 원본 픽셀이 그대로 남는다.** 프롬프트로 "얼굴을 바꾸지 마라"고
+    쓰는 것과 근본이 다르다 — 모델은 매 픽셀을 새로 만들기 때문에 부탁으로는
+    아이덴티티를 못 지킨다. 얼굴을 지키려면 여기서 가려야 한다.
     """
     client = _client()
     # OpenAI SDK 는 file-like objects 필요 (BytesIO 로 감싸기)
@@ -82,11 +88,17 @@ def edit(
         bio = io.BytesIO(b)
         bio.name = f"image_{i}.png"  # SDK 가 name 속성 필요 (MIME 판정)
         files.append(bio)
+    kwargs = {}
+    if mask is not None:
+        mbio = io.BytesIO(mask)
+        mbio.name = "mask.png"
+        kwargs["mask"] = mbio
     resp = client.images.edit(
         model=model,
         image=files if len(files) > 1 else files[0],
         prompt=prompt,
         size=size,
         n=n,
+        **kwargs,
     )
     return _decode(resp)
