@@ -98,6 +98,9 @@ def detect_person_candidates(frames: list[dict], out_dir: pathlib.Path) -> list[
             dest = out_dir / f"p_{fr['sec']:.1f}_{i}.png"
             cv2.imwrite(str(dest), crop)
             face_cx = (x1 + x2) / 2 / w
+            # 배경 채점의 noBigFace 축이 쓰는 값 — 여기서 안 채우면 항상 만점이 나온다.
+            fr.setdefault("faces", []).append(
+                {"bbox": [x1, y1, x2, y2], "area": float(d["area"])})
             cands.append({
                 "path": str(dest), "sec": fr["sec"], "castName": "",
                 "gender": d.get("gender"),
@@ -189,9 +192,7 @@ def main() -> int:
     annotate_captions(frames)
     n_cap = sum(1 for f in frames if f.get("hasCaption"))
     print(f"   후보 {len(frames)}장 추출 · 화면자막 검출 {n_cap}장 (감점 대상)")
-    bg_picks = find_background(frames, bg, top=3)
-    for p in bg_picks:
-        print(f"   {pathlib.Path(p['path']).name:<22} {p['score']:>6} {p['breakdown']}")
+    # 배경 선택은 인물 확정 뒤로 미룬다 — 아래 [3/5] 참고.
 
     # ── 4) 인물 후보 ───────────────────────────────────────────────────────
     print("\n[4/5] 인물 후보")
@@ -232,20 +233,23 @@ def main() -> int:
             print(f"   {pathlib.Path(c['path']).name:<26} area={c['frameArea']:.3f} "
                   f"det={c['face']['det_score']:.2f} g={c.get('gender')} facing={c.get('facing')}")
 
-    # 배경과 인물이 다른 장면에서 나오면 의상·조명이 어긋나 합성이 티가 난다.
-    # 선택된 배경 프레임과 같은 장면(±12초) 안의 인물만 후보로 둔다.
-    if person_cands and bg_picks:
-        anchor = bg_picks[0]["sec"] or 0.0
-        same_scene = [c for c in person_cands
-                      if c.get("sec") is not None and abs(c["sec"] - anchor) <= 12.0]
-        if len(same_scene) >= len(briefs):
-            print(f"   장면 일치 필터: {len(person_cands)} → {len(same_scene)}명 "
-                  f"(배경 {anchor:.1f}s 기준 ±12s)")
-            person_cands = same_scene
-        else:
-            print(f"   ! 배경 장면({anchor:.1f}s) 안에 인물이 {len(same_scene)}명뿐 "
-                  f"— 장면 일치를 포기하고 전체 후보 사용 (의상·조명 불일치 위험)")
     people = find_people(person_cands, briefs) if person_cands else {}
+
+    # ── 3) 배경 프레임 선택 (인물 확정 후) ─────────────────────────────────
+    # 인물 crop 을 뜬 프레임을 배경으로 쓰면, 배경에 이미 있는 그 사람 위에
+    # 같은 사람을 다시 붙이게 된다 — 밝기·크기가 어긋나 사각형처럼 보인다.
+    print("\n[3/5] 배경 프레임 선택")
+    person_secs = {p[0]["sec"] for p in people.values() if p and p[0].get("sec") is not None}
+    usable = [f for f in frames if f.get("sec") not in person_secs]
+    if not usable:
+        usable = frames
+        print("   ! 인물 소스 아닌 프레임이 없다 — 겹침을 감수하고 전체 사용")
+    else:
+        print(f"   인물 소스 프레임 제외: {len(frames)} → {len(usable)}장")
+    bg_picks = find_background(usable, bg, top=3)
+    for p in bg_picks:
+        print(f"   {pathlib.Path(p['path']).name:<22} {p['score']:>6} {p['breakdown']}")
+
     gaps = missing_assets(bg_picks, people, briefs)
     if not person_cands:
         print("   ! faces.json 없음 — 인물 후보를 만들 수 없다.")
