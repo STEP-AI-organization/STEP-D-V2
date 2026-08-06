@@ -15,6 +15,7 @@ import {
   Send,
   Settings,
   TrendingUp,
+  Wallet,
 } from "lucide-react";
 
 export type Role = "user" | "admin" | "superadmin";
@@ -35,6 +36,7 @@ export const NAV: NavItem[] = [
   { href: "/programs", label: "콘텐츠", icon: LayoutGrid },
   { href: "/clips", label: "클립", icon: Clapperboard },
   { href: "/distribution", label: "배포현황", icon: Send, badgeKey: "distributionFailed" },
+  { href: "/business", label: "사업운영", icon: Wallet, roles: ["admin", "superadmin"] },
   { href: "/analytics", label: "성과", icon: BarChart3, roles: ["admin", "superadmin"] },
   { href: "/channels", label: "채널 트렌드", icon: TrendingUp, roles: ["admin", "superadmin"] },
   { href: "/trends", label: "유튜브 트렌드", icon: Flame, roles: ["admin", "superadmin"] },

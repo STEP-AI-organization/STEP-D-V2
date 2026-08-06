@@ -144,7 +144,30 @@ export default function PrivacyPage() {
       </section>
 
       <section>
-        <h2>8. 문의</h2>
+        <h2>8. 다른 플랫폼 연동 — Meta(Facebook / Instagram) 및 TikTok</h2>
+        <p>
+          이용자가 Facebook Page, Instagram Business, 또는 TikTok 계정을 연결한 경우, 회사는 다음 데이터에
+          접근합니다.
+        </p>
+        <ul>
+          <li>
+            <strong>Meta</strong> — 이용자가 관리하는 Facebook Page 목록·프로필, 각 Page에 연결된 Instagram
+            Business 계정의 사용자명·프로필 사진, 그리고 이용자가 앱 안에서 명시적으로 승인한 콘텐츠의 게시.
+          </li>
+          <li>
+            <strong>TikTok</strong> — 계정의 open_id, 표시명, 사용자명, 프로필 사진, 그리고 이용자가 앱 안에서
+            명시적으로 승인한 콘텐츠의 업로드.
+          </li>
+        </ul>
+        <p>
+          두 플랫폼 모두 액세스 토큰과 위 프로필 정보만 서버에 보관합니다. 이용자의 게시물 콘텐츠 자체(원본
+          업로드)는 회사가 제3자에게 공유하지 않으며, 자세한 삭제 절차는{" "}
+          <a href="/data-deletion">사용자 데이터 삭제 안내</a> 페이지를 참고하십시오.
+        </p>
+      </section>
+
+      <section>
+        <h2>9. 문의</h2>
         <p>
           본 방침에 관한 문의는 <a href="mailto:hkj@stepai.kr">hkj@stepai.kr</a> 로 연락해 주십시오.
         </p>

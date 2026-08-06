@@ -787,6 +787,74 @@ export async function deleteYouTubeChannel(channelId: string): Promise<void> {
   }
 }
 
+// ── Meta (Facebook + Instagram) accounts ───────────────────────────────────────
+
+export interface MetaAccountInfo {
+  publicId: string;
+  pageId: string;
+  pageName: string;
+  pageProfilePictureUrl: string | null;
+  igUserId: string | null;
+  igUsername: string | null;
+  igProfilePictureUrl: string | null;
+  status: string;
+  connectedAt: number;
+}
+
+export async function fetchMetaAccounts(): Promise<MetaAccountInfo[]> {
+  const res = await fetch(`${API_BASE}/meta/accounts`);
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  const data = (await res.json()) as { accounts: MetaAccountInfo[] };
+  return data.accounts;
+}
+
+export function getMetaAuthUrl(returnTo?: string, rerequest = false): string {
+  const params = new URLSearchParams();
+  if (returnTo) params.set("return", returnTo);
+  if (rerequest) params.set("rerequest", "1");
+  const qs = params.toString();
+  return `${API_BASE}/meta/auth${qs ? `?${qs}` : ""}`;
+}
+
+export async function deleteMetaAccount(publicId: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/meta/accounts/${publicId}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+}
+
+// ── TikTok accounts ────────────────────────────────────────────────────────────
+
+export interface TikTokAccountInfo {
+  publicId: string;
+  openId: string;
+  displayName: string;
+  username: string | null;
+  avatarUrl: string | null;
+  scope: string;
+  status: string;
+  connectedAt: number;
+  expiresAt: number;
+  refreshExpiresAt: number;
+}
+
+export async function fetchTikTokAccounts(): Promise<TikTokAccountInfo[]> {
+  const res = await fetch(`${API_BASE}/tiktok/accounts`);
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  const data = (await res.json()) as { accounts: TikTokAccountInfo[] };
+  return data.accounts;
+}
+
+export function getTikTokAuthUrl(returnTo?: string): string {
+  const params = new URLSearchParams();
+  if (returnTo) params.set("return", returnTo);
+  const qs = params.toString();
+  return `${API_BASE}/tiktok/auth${qs ? `?${qs}` : ""}`;
+}
+
+export async function deleteTikTokAccount(publicId: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/tiktok/accounts/${publicId}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+}
+
 /**
  * Ask the worker to (re)analyze a channel now. Returns immediately — the run happens
  * in the background. `queued: false` means a run for this channel is already in flight.
@@ -1068,6 +1136,8 @@ export interface SearchParsed {
 
 export interface SearchResponse {
   query: string;
+  /** 이 검색의 로그 키. 이후 click/export 이벤트를 같은 쿼리에 묶는다. */
+  queryId?: string;
   parsed: SearchParsed;
   /** 의미 축(임베딩)이 실제로 걸렸는지. false면 키워드 축만으로 랭킹. */
   embedded: boolean;
@@ -1108,4 +1178,32 @@ export async function searchSegments(params: SearchParams, signal?: AbortSignal)
   if (params.allowSpoiler) qs.set("allow_spoiler", "true");
   if (params.topK) qs.set("top_k", String(params.topK));
   return json<SearchResponse>(await fetch(`${API_BASE}/search?${qs}`, { signal, cache: "no-store" }));
+}
+
+// ── 검색 로그 (search_events) ──────────────────────────────────────────────────
+// 어떤 결과를 실제로 골랐는지 / 경계를 얼마나 밀었는지가 랭킹·컷지점 학습의 지도 신호다.
+// search 이벤트는 서버가 스스로 남기므로 여기선 그 이후 행동만 보낸다.
+
+export interface SearchLogEvent {
+  event: "click" | "export" | "boundary_adjust";
+  /** searchSegments 응답의 queryId — 없으면 로그가 쿼리에 묶이지 않는다. */
+  queryId?: string;
+  segmentId?: string;
+  mediaId?: string;
+  clipId?: string;
+  rank?: number;
+  start?: number;
+  end?: number;
+  before?: { start?: number; end?: number };
+  after?: { start?: number; end?: number };
+}
+
+/** fire-and-forget. 실패해도 UI 흐름을 막지 않는다 — 로그는 부가정보다. */
+export function logSearchEvent(ev: SearchLogEvent): void {
+  void fetch(`${API_BASE}/search/log`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(ev),
+    keepalive: true,
+  }).catch(() => {});
 }

@@ -3,7 +3,13 @@
 import { useCallback, useState } from "react";
 import { Search, Loader2, Scissors, Clapperboard, Sparkles } from "lucide-react";
 
-import { searchSegments, type SearchResponse, type SearchResultCard } from "@/lib/data/api";
+import {
+  searchSegments,
+  logSearchEvent,
+  getStreamUrl,
+  type SearchResponse,
+  type SearchResultCard,
+} from "@/lib/data/api";
 import { PageHeader } from "@/components/ui/page-header";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -31,8 +37,33 @@ function rightsBadgeClass(text: string): string {
     : "border-border bg-muted text-muted-foreground";
 }
 
-function ResultCard({ r }: { r: SearchResultCard }) {
+/**
+ * 결과 카드. "구간 보기"는 재생과 동시에 **클릭 로그**를 남긴다 — 어떤 쿼리에서 몇 위를
+ * 실제로 골랐는지가 랭킹 학습의 지도 신호다(core/search_log.py §8).
+ */
+function ResultCard({ r, rank, queryId }: { r: SearchResultCard; rank: number; queryId?: string }) {
   const rights = Object.entries(r.rightsStatus ?? {});
+  const { toast: push } = useToast();
+
+  const open = useCallback(async () => {
+    logSearchEvent({
+      event: "click",
+      queryId,
+      segmentId: r.segmentId,
+      mediaId: r.mediaId,
+      rank,
+      start: r.start,
+      end: r.end,
+    });
+    try {
+      const url = await getStreamUrl(r.mediaId);
+      // #t=start,end — 브라우저 미디어 프래그먼트. 구간만 재생된다.
+      window.open(`${url}#t=${r.start.toFixed(2)},${r.end.toFixed(2)}`, "_blank", "noopener");
+    } catch (e) {
+      push({ tone: "error", title: "재생 실패", description: e instanceof Error ? e.message : String(e) });
+    }
+  }, [r, rank, queryId, push]);
+
   return (
     <Card className="p-4">
       <div className="flex items-start justify-between gap-3">
@@ -50,9 +81,12 @@ function ResultCard({ r }: { r: SearchResultCard }) {
           )}
           {r.sceneType && <Badge variant="secondary">{SCENE_LABEL[r.sceneType] ?? r.sceneType}</Badge>}
         </div>
-        <span className="shrink-0 font-mono text-[11px] text-muted-foreground" title={`bm25 ${r.lex.toFixed(2)} · cos ${r.vec.toFixed(3)}`}>
-          {r.score.toFixed(4)}
-        </span>
+        <div className="flex shrink-0 items-center gap-2">
+          <Button variant="ghost" size="sm" onClick={open}>구간 보기</Button>
+          <span className="font-mono text-[11px] text-muted-foreground" title={`bm25 ${r.lex.toFixed(2)} · cos ${r.vec.toFixed(3)}`}>
+            {r.score.toFixed(4)}
+          </span>
+        </div>
       </div>
 
       {r.characters?.length > 0 && (
@@ -199,8 +233,8 @@ export default function SearchPage() {
         <>
           <div className="mb-2 text-xs text-muted-foreground">{res.count}개 구간</div>
           <div className="grid gap-2.5">
-            {res.results.map((r) => (
-              <ResultCard key={r.segmentId} r={r} />
+            {res.results.map((r, i) => (
+              <ResultCard key={r.segmentId} r={r} rank={i + 1} queryId={res.queryId} />
             ))}
           </div>
         </>

@@ -7,8 +7,18 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { Youtube } from "lucide-react";
 import { useEffect, useState } from "react";
-import type { YouTubeChannelInfo } from "@/lib/data/api";
-import { fetchYouTubeChannels, getYouTubeAuthUrl, deleteYouTubeChannel } from "@/lib/data/api";
+import type { YouTubeChannelInfo, MetaAccountInfo, TikTokAccountInfo } from "@/lib/data/api";
+import {
+  fetchYouTubeChannels,
+  getYouTubeAuthUrl,
+  deleteYouTubeChannel,
+  fetchMetaAccounts,
+  getMetaAuthUrl,
+  deleteMetaAccount,
+  fetchTikTokAccounts,
+  getTikTokAuthUrl,
+  deleteTikTokAccount,
+} from "@/lib/data/api";
 import { ChannelAnalysis } from "@/components/channel-analysis";
 import { DISTRIBUTION_CHANNELS, type DistributionChannel } from "@/lib/constants";
 
@@ -26,16 +36,16 @@ const CHANNEL_INFO: Record<DistributionChannel, { desc: string; note?: string }>
     desc: "OAuth로 채널 연결. 분석·수익은 '분석·수익 연결', 배포는 '업로드 채널' 옵션.",
   },
   instagram: {
-    desc: "Meta Business 계정으로 인스타그램 비즈니스 계정 연결 (Reels 배포용).",
-    note: "백엔드 배선 준비 중",
+    desc: "Meta 통합 연결 — Facebook Page + 연결된 Instagram Business 한 번에.",
+    note: "아래 '페이스북 · 인스타그램' 카드에서 연결",
   },
   facebook: {
-    desc: "Meta Business 계정으로 Facebook 페이지 연결.",
-    note: "백엔드 배선 준비 중",
+    desc: "Meta 통합 연결 — Facebook Page + 연결된 Instagram Business 한 번에.",
+    note: "아래 '페이스북 · 인스타그램' 카드에서 연결",
   },
   tiktok: {
-    desc: "TikTok for Business로 계정 연결 (Content Posting API).",
-    note: "백엔드 배선 준비 중",
+    desc: "TikTok Login Kit + Content Posting API 로 계정 연결.",
+    note: "아래 'TikTok' 카드에서 연결",
   },
   smr: {
     desc: "네이버 SMR은 내부 피드 배포 방식으로, 별도 OAuth 연결이 없습니다.",
@@ -45,36 +55,75 @@ const CHANNEL_INFO: Record<DistributionChannel, { desc: string; note?: string }>
 
 export default function PublishChannelsPage() {
   const [channels, setChannels] = useState<YouTubeChannelInfo[]>([]);
+  const [metaAccounts, setMetaAccounts] = useState<MetaAccountInfo[]>([]);
+  const [tiktokAccounts, setTiktokAccounts] = useState<TikTokAccountInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [banner, setBanner] = useState<string | null>(null);
 
-  const loadChannels = async () => {
+  const loadAll = async () => {
     try {
-      const chs = await fetchYouTubeChannels();
+      const [chs, ma, tt] = await Promise.all([
+        fetchYouTubeChannels().catch(() => [] as YouTubeChannelInfo[]),
+        fetchMetaAccounts().catch(() => [] as MetaAccountInfo[]),
+        fetchTikTokAccounts().catch(() => [] as TikTokAccountInfo[]),
+      ]);
       setChannels(chs);
-    } catch {
-      // Server offline — ignore
+      setMetaAccounts(ma);
+      setTiktokAccounts(tt);
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    loadChannels();
+    loadAll();
 
-    // We come back here after the OAuth round trip (return=/publish-channels). Show the result,
-    // then strip the params so a refresh doesn't repeat the banner. Reading
-    // location.search directly avoids the <Suspense> that useSearchParams would force.
+    // Both YouTube and Meta callbacks land here (return=/publish-channels). Show the banner,
+    // then strip the params so a refresh doesn't repeat it. Reading location.search directly
+    // avoids the <Suspense> that useSearchParams would force.
     const params = new URLSearchParams(window.location.search);
     if (params.get("success")) {
       setBanner(`"${params.get("channelName") ?? "채널"}" 연결 완료 · 분석을 시작했습니다`);
     } else if (params.get("error")) {
       setBanner(`채널 연결 실패: ${decodeURIComponent(params.get("error")!)}`);
+    } else if (params.get("meta_success")) {
+      const n = params.get("meta_count") ?? "0";
+      setBanner(`Meta 연결 완료 · ${n}개 페이지 저장됨`);
+    } else if (params.get("meta_error")) {
+      setBanner(`Meta 연결 실패: ${decodeURIComponent(params.get("meta_error")!)}`);
+    } else if (params.get("tiktok_success")) {
+      setBanner(`TikTok 연결 완료 · "${decodeURIComponent(params.get("tiktok_name") ?? "")}"`);
+    } else if (params.get("tiktok_error")) {
+      setBanner(`TikTok 연결 실패: ${decodeURIComponent(params.get("tiktok_error")!)}`);
     }
-    if (params.get("success") || params.get("error")) {
+    if (
+      params.get("success") || params.get("error") ||
+      params.get("meta_success") || params.get("meta_error") ||
+      params.get("tiktok_success") || params.get("tiktok_error")
+    ) {
       window.history.replaceState(null, "", "/publish-channels");
     }
   }, []);
+
+  const handleDeleteMeta = async (publicId: string) => {
+    if (!confirm("이 Meta 페이지 연결을 해제하시겠습니까?")) return;
+    try {
+      await deleteMetaAccount(publicId);
+      setMetaAccounts((prev) => prev.filter((a) => a.publicId !== publicId));
+    } catch {
+      alert("삭제에 실패했습니다.");
+    }
+  };
+
+  const handleDeleteTiktok = async (publicId: string) => {
+    if (!confirm("이 TikTok 계정 연결을 해제하시겠습니까?")) return;
+    try {
+      await deleteTikTokAccount(publicId);
+      setTiktokAccounts((prev) => prev.filter((a) => a.publicId !== publicId));
+    } catch {
+      alert("삭제에 실패했습니다.");
+    }
+  };
 
   const handleDelete = async (channelId: string) => {
     if (!confirm("이 YouTube 채널 연결을 해제하시겠습니까?")) return;
@@ -182,6 +231,169 @@ export default function PublishChannelsPage() {
             );
           })}
         </div>
+      </section>
+
+      {/* Meta: Facebook Page + Instagram Business (한 번 연결로 둘 다) */}
+      <section className="mb-10">
+        <div className="mb-3 flex items-center gap-2">
+          <h2 className="text-sm font-semibold text-muted-foreground">페이스북 · 인스타그램 연결</h2>
+          <span className="text-[11px] text-muted-foreground/70">
+            (Facebook Page 소유자로 로그인 · 연결된 Instagram Business 계정이 자동으로 함께 저장됨)
+          </span>
+        </div>
+
+        <Card className="p-4 mb-3">
+          <div className="flex items-center justify-between gap-3">
+            <div className="text-sm text-muted-foreground">
+              Facebook Page + 연결된 Instagram Business 계정을 한 번의 OAuth 로 등록합니다.
+              같은 Meta 계정을 다시 클릭하면 최신 Page 목록으로 새로고침됩니다.
+            </div>
+            <div className="flex gap-2 shrink-0">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  window.location.href = getMetaAuthUrl("/publish-channels", true);
+                }}
+              >
+                권한 재요청
+              </Button>
+              <Button
+                size="sm"
+                onClick={() => {
+                  window.location.href = getMetaAuthUrl("/publish-channels");
+                }}
+              >
+                + Meta 계정 연결
+              </Button>
+            </div>
+          </div>
+        </Card>
+
+        {metaAccounts.length === 0 ? (
+          <Card className="p-6">
+            <div className="text-sm text-muted-foreground">
+              연결된 Meta 페이지가 없습니다. 위 "+ Meta 계정 연결" 을 누르면
+              관리하는 모든 Facebook Page 와 연결된 Instagram Business 계정이 저장됩니다.
+            </div>
+          </Card>
+        ) : (
+          <div className="grid gap-3">
+            {metaAccounts.map((a) => (
+              <Card key={a.publicId} className="p-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    {a.pageProfilePictureUrl ? (
+                      <img
+                        src={a.pageProfilePictureUrl}
+                        alt={a.pageName}
+                        className="size-10 rounded-full"
+                      />
+                    ) : (
+                      <div className="flex size-10 items-center justify-center rounded-full bg-muted text-sm text-muted-foreground">
+                        {a.pageName.charAt(0)}
+                      </div>
+                    )}
+                    <div>
+                      <div className="text-sm font-medium text-foreground">{a.pageName}</div>
+                      <div className="text-xs text-muted-foreground">
+                        FB Page ID {a.pageId}
+                        {a.igUsername
+                          ? ` · IG @${a.igUsername}`
+                          : " · IG 미연결 (Page 설정에서 연결 필요)"}
+                        {a.connectedAt &&
+                          ` · ${new Date(Number(a.connectedAt)).toLocaleDateString("ko-KR")} 연결`}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <StatusBadge tone={a.status === "active" ? "done" : "warn"}>
+                      {a.status === "active" ? "활성" : a.status}
+                    </StatusBadge>
+                    <button
+                      onClick={() => handleDeleteMeta(a.publicId)}
+                      className="rounded-md px-2 py-1 text-xs text-muted-foreground transition hover:text-status-error"
+                    >
+                      삭제
+                    </button>
+                  </div>
+                </div>
+              </Card>
+            ))}
+          </div>
+        )}
+      </section>
+
+      {/* TikTok: Login Kit + Content Posting API */}
+      <section className="mb-10">
+        <div className="mb-3 flex items-center gap-2">
+          <h2 className="text-sm font-semibold text-muted-foreground">TikTok 연결 계정</h2>
+          <span className="text-[11px] text-muted-foreground/70">
+            (access token ~24h · refresh token ~365d · 업로드 전 자동 갱신)
+          </span>
+        </div>
+
+        <Card className="p-4 mb-3">
+          <div className="flex items-center justify-between gap-3">
+            <div className="text-sm text-muted-foreground">
+              TikTok Login Kit 로 계정을 연결합니다. Content Posting API 권한이 함께 요청됩니다.
+            </div>
+            <Button
+              size="sm"
+              onClick={() => {
+                window.location.href = getTikTokAuthUrl("/publish-channels");
+              }}
+            >
+              + TikTok 계정 연결
+            </Button>
+          </div>
+        </Card>
+
+        {tiktokAccounts.length === 0 ? (
+          <Card className="p-6">
+            <div className="text-sm text-muted-foreground">
+              연결된 TikTok 계정이 없습니다. 위 "+ TikTok 계정 연결" 버튼으로 붙이세요.
+            </div>
+          </Card>
+        ) : (
+          <div className="grid gap-3">
+            {tiktokAccounts.map((a) => (
+              <Card key={a.publicId} className="p-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    {a.avatarUrl ? (
+                      <img src={a.avatarUrl} alt={a.displayName} className="size-10 rounded-full" />
+                    ) : (
+                      <div className="flex size-10 items-center justify-center rounded-full bg-muted text-sm text-muted-foreground">
+                        {a.displayName.charAt(0)}
+                      </div>
+                    )}
+                    <div>
+                      <div className="text-sm font-medium text-foreground">{a.displayName}</div>
+                      <div className="text-xs text-muted-foreground">
+                        {a.username ? `@${a.username} · ` : ""}
+                        open_id {a.openId.slice(0, 8)}…
+                        {a.connectedAt &&
+                          ` · ${new Date(Number(a.connectedAt)).toLocaleDateString("ko-KR")} 연결`}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <StatusBadge tone={a.status === "active" ? "done" : "warn"}>
+                      {a.status === "active" ? "활성" : a.status}
+                    </StatusBadge>
+                    <button
+                      onClick={() => handleDeleteTiktok(a.publicId)}
+                      className="rounded-md px-2 py-1 text-xs text-muted-foreground transition hover:text-status-error"
+                    >
+                      삭제
+                    </button>
+                  </div>
+                </div>
+              </Card>
+            ))}
+          </div>
+        )}
       </section>
 
       {/* YouTube: 연결된 채널 상세 목록 */}
