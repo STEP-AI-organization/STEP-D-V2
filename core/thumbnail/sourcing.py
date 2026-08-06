@@ -225,14 +225,24 @@ def score_person(
     }
 
 
+# 얼굴이 이 비율보다 작으면 후보에서 뺀다. 작은 얼굴은 슬롯 크기로 확대하는 순간
+# 뭉개져서, 점수가 아무리 높아도 쓸 수 없다 — 순위 문제가 아니라 자격 문제다.
+MIN_FACE_AREA = 0.03
+
+
 def find_people(
     candidates: list[dict[str, Any]],
     briefs: list[PersonBrief],
     cast_embeddings: Optional[dict[str, list[float]]] = None,
     top_per_slot: int = 3,
+    min_face_area: float = MIN_FACE_AREA,
 ) -> dict[str, list[PersonPick]]:
     """슬롯별 인물 후보. 같은 프레임이 두 슬롯을 동시에 채우지 않도록 배제한다."""
     cast_embeddings = cast_embeddings or {}
+    # 자격 미달(너무 작은 얼굴)은 순위에 올리기 전에 잘라낸다.
+    if min_face_area > 0:
+        candidates = [c for c in candidates
+                      if float(c.get("frameArea") or 0.0) >= min_face_area]
     result: dict[str, list[PersonPick]] = {}
     used: set[str] = set()
     # 같은 사람이 두 슬롯을 채우면 안 된다. 파일 경로만 보면 1.5초 뒤 프레임의

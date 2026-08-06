@@ -119,6 +119,8 @@ def main() -> int:
     ap.add_argument("media_id")
     ap.add_argument("--compose", action="store_true", help="실제 이미지 합성 (유료)")
     ap.add_argument("--candidates", type=int, default=1, help="합성 후보 장수")
+    ap.add_argument("--min-face", type=float, default=0.03,
+                    help="인물 후보 최소 얼굴 면적 비율 (기본 0.03)")
     ap.add_argument("--generative", action="store_true",
                     help="생성 모델로 합성 (얼굴이 재생성되어 변형된다 · 기본은 결정론 붙여넣기)")
     args = ap.parse_args()
@@ -178,16 +180,25 @@ def main() -> int:
     print(f'   검색: "{query[:40]}" → 구간 {len(windows)}개')
     for w in windows[:3]:
         print(f"   {w['start']:8.1f}s vec={w['vec']:.3f} | {w['summary'][:46]}")
-    secs = sample_secs(windows, per_window=2)
-    if not secs:
+    def collect(per_window: int, limit: int, seen: set) -> list:
+        ws = windows if limit <= 8 else search_windows(query, media_id=args.media_id, limit=limit)
+        got = []
+        for sec in sample_secs(ws, per_window=per_window):
+            if sec in seen:
+                continue
+            seen.add(sec)
+            dest = out / "frames" / f"f_{len(seen):03d}_{sec:.1f}.jpg"
+            if extract_frame(video, sec, dest):
+                got.append(frame_meta(dest, sec, logo_windows))
+        return got
+
+    if not windows:
         at = bg.get("atSec") or 0.0
-        secs = [max(0.0, float(at) + off) for off in (-3, 0, 3)]
         print("   ! 검색 결과 없음 — 기획 지목 시점으로 폴백")
-    frames = []
-    for i, sec in enumerate(secs[:14]):
-        dest = out / "frames" / f"f_{i:02d}_{sec:.1f}.jpg"
-        if extract_frame(video, sec, dest):
-            frames.append(frame_meta(dest, sec, logo_windows))
+        windows = [{"start": max(0.0, float(at) - 3), "end": float(at) + 3}]
+
+    seen_secs: set = set()
+    frames = collect(2, 8, seen_secs)
     from core.thumbnail.caption_detect import annotate as annotate_captions
     annotate_captions(frames)
     n_cap = sum(1 for f in frames if f.get("hasCaption"))
@@ -233,7 +244,28 @@ def main() -> int:
             print(f"   {pathlib.Path(c['path']).name:<26} area={c['frameArea']:.3f} "
                   f"det={c['face']['det_score']:.2f} g={c.get('gender')} facing={c.get('facing')}")
 
-    people = find_people(person_cands, briefs) if person_cands else {}
+    def qualified(cands):
+        return [c for c in cands if float(c.get("frameArea") or 0) >= args.min_face]
+
+    # 자격(얼굴 크기)을 통과한 인원이 슬롯 수보다 적으면 후보를 넓혀 다시 뽑는다.
+    # 한 번에 끝내면 "좋은 게 없을 때 나쁜 것 중 1등"을 고르게 된다.
+    for per_window, limit in ((4, 16), (6, 24)):
+        if len(qualified(person_cands)) >= len(briefs):
+            break
+        more = collect(per_window, limit, seen_secs)
+        if not more:
+            break
+        annotate_captions(more)
+        extra = detect_person_candidates(more, out / "people")
+        extra = [c for c in extra if caption_score(c["path"]) < 0.35]
+        frames.extend(more)
+        person_cands.extend(extra)
+        print(f"   후보 확장 (per_window={per_window}): 프레임 +{len(more)} · 인물 +{len(extra)}")
+
+    n_ok = len(qualified(person_cands))
+    print(f"   얼굴 크기 하한 {args.min_face:.3f}: {len(person_cands)}명 중 {n_ok}명 통과")
+    people = (find_people(person_cands, briefs, min_face_area=args.min_face)
+              if person_cands else {})
 
     # ── 3) 배경 프레임 선택 (인물 확정 후) ─────────────────────────────────
     # 인물 crop 을 뜬 프레임을 배경으로 쓰면, 배경에 이미 있는 그 사람 위에
