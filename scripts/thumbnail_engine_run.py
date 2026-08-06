@@ -185,7 +185,10 @@ def main() -> int:
         dest = out / "frames" / f"f_{i:02d}_{sec:.1f}.jpg"
         if extract_frame(video, sec, dest):
             frames.append(frame_meta(dest, sec, logo_windows))
-    print(f"   후보 {len(frames)}장 추출")
+    from core.thumbnail.caption_detect import annotate as annotate_captions
+    annotate_captions(frames)
+    n_cap = sum(1 for f in frames if f.get("hasCaption"))
+    print(f"   후보 {len(frames)}장 추출 · 화면자막 검출 {n_cap}장 (감점 대상)")
     bg_picks = find_background(frames, bg, top=3)
     for p in bg_picks:
         print(f"   {pathlib.Path(p['path']).name:<22} {p['score']:>6} {p['breakdown']}")
@@ -212,6 +215,19 @@ def main() -> int:
         # 회차 전체를 훑지 않는다 — 기획이 원한 장면 안에서만 본다.
         print("   faces.json 없음 → 검색 프레임에서 직접 검출")
         person_cands = detect_person_candidates(frames, out / "people")
+        # 인물 crop 에 자막이 박혀 있으면 누끼로 안 빠진다 — 후보에서 뺀다.
+        from core.thumbnail.caption_detect import caption_score
+        kept = []
+        for c in person_cands:
+            cs = caption_score(c["path"])
+            c["captionScore"] = round(cs, 3)
+            if cs < 0.35:
+                kept.append(c)
+        if len(kept) >= len(briefs):
+            print(f"   자막 필터: {len(person_cands)} → {len(kept)}명")
+            person_cands = kept
+        else:
+            print(f"   ! 자막 없는 인물이 {len(kept)}명뿐 — 필터 미적용")
         for c in person_cands[:6]:
             print(f"   {pathlib.Path(c['path']).name:<26} area={c['frameArea']:.3f} "
                   f"det={c['face']['det_score']:.2f} g={c.get('gender')} facing={c.get('facing')}")
