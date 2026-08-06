@@ -1118,5 +1118,9 @@ def build_beats_from_boundaries(
             b["characters"] = [s for s, _ in sorted(speakers.items(), key=lambda x: -x[1])][:6]
         b["id"] = i
 
-    print(f"   beat {len(beats)}개 (평균 {sum(b['end']-b['start'] for b in beats)/max(1,len(beats)):.0f}s · GEBD 기반)")
+    # ⚠️ "GEBD 기반"이라고 못 박으면 안 된다 — 이 함수는 GEBD 산출물이든 shots+STT gap
+    # fallback 이든 같은 boundary 리스트를 받는다. 실측(2026-08-06) 두 회차 모두 fallback
+    # 이었는데 로그만 "GEBD 기반"이라 학습모델이 도는 줄 알았다. 근거를 그대로 찍는다.
+    _src = (boundaries[0].get("source") if boundaries and isinstance(boundaries[0], dict) else None) or "unknown"
+    print(f"   beat {len(beats)}개 (평균 {sum(b['end']-b['start'] for b in beats)/max(1,len(beats)):.0f}s · boundary source={_src})")
     return {"beats": beats, "source": "gebd_boundaries"}

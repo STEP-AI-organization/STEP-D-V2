@@ -33,6 +33,7 @@ from google.genai import types
 PROJECT = os.environ.get("GOOGLE_CLOUD_PROJECT") or "step-d"
 LOCATION = os.environ.get("VERTEX_LOCATION") or "asia-northeast3"
 from .models import NAMES as MODEL
+from .retry import call_with_retry
 WORKERS = 6
 
 PROMPT = """이 예능/방송 프레임에 '화면에 박힌(번인된)' 텍스트를 추출하라. 자막 방송의 편집 텍스트다.
@@ -52,7 +53,8 @@ SCHEMA = {
 
 def extract_frame(client, frame_path: Path) -> dict:
     img = frame_path.read_bytes()
-    resp = client.models.generate_content(
+    # call_with_retry 로 감싼다 — usage 집계가 그 안에만 있다(직접 호출 시 비용 누락).
+    resp = call_with_retry(lambda: client.models.generate_content(
         model=MODEL,
         contents=[types.Part.from_bytes(data=img, mime_type="image/jpeg"), PROMPT],
         config=types.GenerateContentConfig(
@@ -60,7 +62,7 @@ def extract_frame(client, frame_path: Path) -> dict:
             response_mime_type="application/json",
             response_schema=SCHEMA,
         ),
-    )
+    ))
     return json.loads(resp.text)
 
 

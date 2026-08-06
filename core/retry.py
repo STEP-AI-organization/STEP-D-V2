@@ -5,6 +5,13 @@ STEP D Core — Vertex Gemini 일시 오류 재시도 헬퍼
 단계별 체크포인트로 재개되는 구조라, 일시 오류로 조용히 비운 결과가 저장되면 그
 데이터 손실이 영구화된다 — 그래서 core의 Gemini 호출은 이 헬퍼로 감싼다.
 비일시(스키마/안전차단/JSON 절단 등) 오류는 즉시 다시 던진다.
+
+⚠️ **core 의 모든 Gemini 호출은 예외 없이 `call_with_retry` 로 감쌀 것.**
+재시도 때문만이 아니다 — **usage 집계(`_record_usage`)가 이 함수 안에만 있어서**, 직접
+`client.models.generate_content(...)` 를 부르면 그 비용이 `usage.json` 에서 통째로 빠진다.
+2026-08-06 실측: `beat_annot`(회당 최대 소비처 · 58.6분 드라마 239콜)이 안 감싸여 있어
+usage.json 이 35콜 ₩27 만 보고했다 — 실제의 극히 일부. 비용을 계기로 관리하려면 이 규칙이
+깨지면 안 된다.
 """
 import os
 import random

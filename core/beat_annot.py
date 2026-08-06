@@ -36,6 +36,7 @@ from google import genai
 from google.genai import types
 
 from .models import TEXT as MODEL
+from .retry import call_with_retry
 
 PROJECT = os.environ.get("GOOGLE_CLOUD_PROJECT") or "step-d"
 LOCATION = os.environ.get("VERTEX_LOCATION") or "asia-northeast3"
@@ -202,7 +203,12 @@ def _annotate_one(idx: int, beat: dict, video: Path, out_dir: Path,
     cfg = types.GenerateContentConfig(**cfg_kwargs)
     t0 = time.time()
     try:
-        resp = _client().models.generate_content(model=MODEL, contents=parts, config=cfg)
+        # call_with_retry 필수 — (1) usage 집계가 여기 안에만 있어서 직접 호출하면 비용이
+        # 계기에서 통째로 빠진다. beat_annot 은 회당 최대 콜 소비처(58.6분 드라마 = 239콜)라
+        # 누락 시 usage.json 이 실제의 극히 일부만 보고한다(2026-08-06 실측: 35콜로 보고).
+        # (2) 429/503 재시도도 같이 붙어 일시 오류로 beat 하나를 통째로 잃지 않는다.
+        resp = call_with_retry(
+            lambda: _client().models.generate_content(model=MODEL, contents=parts, config=cfg))
     except Exception as e:
         return {"idx": idx, "error": f"gemini: {str(e)[:150]}",
                  "frames": {"start": p_start.name if ok_s else None,

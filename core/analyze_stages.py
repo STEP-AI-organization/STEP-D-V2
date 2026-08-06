@@ -100,6 +100,7 @@ def run_chyron_per_seg(
     out_dir: Path,
     step: Callable[[str], None],
     timed: Callable[[str, float], None],
+    cast_registry: list[dict] | None = None,
 ) -> list:
     """chyron per-seg + speaker 실명 rewrite. env RUN_CHYRON_PER_SEG=0 로 스킵.
     실패해도 refined 원상태 유지."""
@@ -111,9 +112,24 @@ def run_chyron_per_seg(
         from .chyron_scan import scan_per_seg
         progress("chyron", 38, "화면 이름 태그 세그별 스캔")
         step("chyron per-seg (화면 이름 태그 → speaker 실명 rewrite)…")
-        refined, ps_stats = scan_per_seg(video_path, refined, workers=6, prefer_start=True)
+        # roster = 프로그램 cast 사전등록 이름 **+ aliases**. 있으면 1회 등장이라도 실명으로
+        # 인정한다 (등록이 primary · 빈도 휴리스틱은 등록이 없을 때의 보루).
+        # aliases 를 빼면 안 된다 — 드라마는 배역명/본명/별명이 갈리고 화면 태그가 그중
+        # 어느 쪽으로 뜰지 모른다. cast.load_registry 가 이미 aliases 를 파싱해 둔다.
+        roster: list[str] = []
+        for c in (cast_registry or []):
+            if not isinstance(c, dict):
+                continue
+            for n in [c.get("name"), *(c.get("aliases") or [])]:
+                n = str(n or "").strip()
+                if n and n not in roster:
+                    roster.append(n)
+        refined, ps_stats = scan_per_seg(video_path, refined, workers=6, prefer_start=True,
+                                         roster=roster or None)
         step(f"  {ps_stats.get('assigned', 0)}/{ps_stats.get('scanned', 0)} 세그에 실명 부여 · "
-             f"unique={ps_stats.get('unique_names', 0)}")
+             f"unique={ps_stats.get('unique_names', 0)} · roster={len(roster)}")
+        if ps_stats.get("dropped_low_vote"):
+            step(f"  저빈도 컷(상황자막 오탐 추정): {ps_stats['dropped_low_vote']}")
         save_json(out_dir / "refined.json", refined)
         # 원 감지를 chyron.json 으로 남긴다 — core.index_segments 가 읽어 characters 근거로
         # 쓴다(검색 인물 필터). speaker 필드에만 두면 익명 화자 라벨과 구분이 안 된다.
@@ -124,6 +140,58 @@ def run_chyron_per_seg(
         step(f"  (chyron per-seg 스킵: {str(e)[:120]})")
     timed("chyron_per_seg", ts)
     return refined
+
+
+def run_detect_genre(
+    *,
+    refined: list,
+    genre: str,
+    out_dir: Path,
+    step: Callable[[str], None],
+    timed: Callable[[str, float], None],
+) -> str:
+    """`--genre auto` 일 때만 도는 **폴백**. 정답 경로는 사람이 지정한 `program.pipelineGenre` 다.
+
+    ⚠️ **장르는 사람 몫이다** (2026-08-06 방침). 프로그램당 1회 선택이고 운영자가 확실히 아는데,
+    LLM 추측이 틀리면 청크 크기·shot 임계가 통째로 어긋나 하류 전체가 조용히 망가진다.
+    `content-pipeline.ts` 가 `pipelineGenre` 를 넘기면 이 함수는 그대로 통과한다 — 그게 정상 경로고,
+    여기 도달했다는 건 **프로그램에 장르가 미지정이라는 뜻**이라 UI 에서 채우는 게 근본 해결이다.
+
+    왜 (폴백이라도) 여기냐: shot 임계값(shots.py `_SHOT_THRESHOLD_BY_GENRE`)과 청크 크기
+    (scenes.py `_CHUNK_SEC_BY_GENRE`)가 장르로 갈리는데, 기존에는 `detect_genre` 가
+    recommend(스테이지 18)에서야 돌아서 그 앞 스테이지들은 `"auto"` 를 받았다.
+    `"auto"` 는 두 dict 어디에도 없어서 `.get()` 폴백이 걸린다:
+
+        shot threshold → 항상 0.55  (드라마용 0.35 미도달 → 씬 컷을 못 잡음)
+        scene chunk    → 항상 300s  (예능용 180s 미도달 → 코너 여러 개가 한 청크에 뭉개짐)
+
+    **드라마·예능 둘 다 틀린 값으로 돌고 있었다** — 정확히 우리가 특화하려는 두 장르다.
+
+    비용: Gemini flash 1콜(thinking_budget=0 · 대사 50줄). 뒤에서 어차피 나가던 콜을
+    앞으로 옮기는 것이고, recommend 는 확정된 장르를 받으면 자기 감지를 건너뛴다
+    (`recommend.py:3685` 의 `genre == "auto"` 가드) → **순증 0, 실질 콜 1회 감소.**
+
+    입력이 scenes 가 아니라 refined 인 이유: scenes 는 genre 로 잘리므로 순환이다.
+    `detect_genre` 는 `text` 키만 필수로 쓰고 나머지(vision·on_screen)는 없으면 빈 값으로
+    처리한다 — 대사만으로도 드라마/예능 판별은 된다(극중 대사 vs 리액션·패널 코멘트).
+    """
+    if genre and genre != "auto":
+        return genre
+    ts = time.time()
+    resolved = genre
+    try:
+        from google import genai
+        from .recommend import detect_genre, PROJECT, LOCATION
+        progress("genre", 39, "장르 자동 감지")
+        client = genai.Client(vertexai=True, project=PROJECT, location=LOCATION)
+        resolved = detect_genre(client, refined)
+        step(f"장르 미지정 → 자동판정 폴백 '{resolved}' "
+             f"(⚠️ 프로그램에 장르를 지정하면 추측 없이 정확해집니다)")
+        save_json(out_dir / "genre.json", {"genre": resolved, "source": "auto_fallback"})
+    except Exception as e:
+        step(f"  (장르 감지 스킵 → auto 유지: {str(e)[:100]})")
+    timed("detect_genre", ts)
+    return resolved
 
 
 def run_speaker_postproc(
@@ -485,9 +553,17 @@ def run_shot_boundary(
         shots_list = detect_shots(str(video_path), windows, fps=1, genre=genre) if windows else []
         from .shots import _SHOT_THRESHOLD_BY_GENRE, _DEFAULT_SHOT_THRESHOLD
         used_th = _SHOT_THRESHOLD_BY_GENRE.get(genre or "", _DEFAULT_SHOT_THRESHOLD)
-        shots_data = {"shots": shots_list, "windows": len(windows), "threshold": used_th, "fps": 1, "genre": genre}
+        # windows_sec = **실제 스캔한 구간**. 이게 없으면 스캔 밖 구간의 "컷 0개"를
+        # "컷 없음"으로 오독하게 된다(core.signals 의 cut_rate 가 거짓 0이 됨).
+        # 실측(m_981d7c08): 창 7개만 스캔해 beat 74%가 미스캔이었다. (2026-08-06)
+        covered = round(sum(e - s for s, e in windows), 1)
+        shots_data = {"shots": shots_list, "windows": len(windows),
+                      "windows_sec": [[round(s, 2), round(e, 2)] for s, e in windows],
+                      "covered_sec": covered,
+                      "threshold": used_th, "fps": 1, "genre": genre}
         save_json(out_dir / "shots.json", shots_data)
-        step(f"shot boundary — {len(shots_list)}개 (창 {len(windows)}개, threshold={used_th}, genre={genre})")
+        step(f"shot boundary — {len(shots_list)}개 (창 {len(windows)}개 · {covered:.0f}s 스캔, "
+             f"threshold={used_th}, genre={genre})")
     except Exception as e:
         step(f"  (shot boundary 실패 · 빈 리스트로 진행: {str(e)[:70]})")
         shots_data = {"shots": [], "windows": 0, "threshold": 0.55, "fps": 1}
@@ -547,7 +623,7 @@ def run_beats(
 ) -> dict:
     """GEBD boundary (있으면) · 없으면 shots+STT gap fallback → beats."""
     from .beats import build_beats_from_boundaries
-    from .boundaries import load_boundaries, dedup_boundaries, build_fallback_boundaries, save_boundaries
+    from .boundaries import load_boundaries, dedup_boundaries, build_fallback_boundaries, save_boundaries, merge_boundaries
 
     ts = time.time()
     beats_data = load_json(out_dir / "beats.json")
@@ -561,8 +637,38 @@ def run_beats(
         duration_for_beats = float(scenes[-1]["end"]) if scenes else (float(refined[-1]["end"]) if refined else 0.0)
         gebd_boundaries = load_boundaries(out_dir / "boundaries.json")
         if gebd_boundaries:
-            gebd_boundaries = dedup_boundaries(gebd_boundaries, duration=duration_for_beats)
-            step(f"beat — GEBD boundary {len(gebd_boundaries)}개 기반")
+            import os as _os
+            _from_model = any(str(b.get("source", "")).startswith("gebd") for b in gebd_boundaries)
+            # ffmpeg 컷 병합은 **옵트인**(`GEBD_MERGE_SHOTS=1`). 기본은 GEBD 단독이다.
+            #
+            # 2026-08-06 실측으로 고른 기본값이다. 학습 스키마의 주 타깃은
+            # `Change due to cut ∪ Change of action` 이라 병합이 이론상 맞아 보이지만,
+            # 실제로 재보니 **beat 을 크게 잡고 싶다는 목적에는 GEBD 단독이 낫다**:
+            #
+            #   경계 소스            beat 수  평균   p50    max     분포
+            #   fallback(346)         239    30.3   18.2  137.6   심한 치우침
+            #   GEBD∪ffmpeg(296)      218    41.0   40.1   71.5   중간
+            #   GEBD 단독(132)        182    63.2   63.1   75.1   ← 가장 균일
+            #
+            # GEBD 단독이 p90 70.6·max 75.1 로 가장 고르고, 최종 쇼츠 길이는 어느 쪽이든
+            # 중앙 41~42초로 같다(beat 은 출력 길이가 아니라 조립 단위다).
+            # 컷까지 필요하면 GEBD_MERGE_SHOTS=1, 크기는 min_beat_sec 로 따로 조절할 것.
+            if _from_model and _os.environ.get("GEBD_MERGE_SHOTS") == "1":
+                _before = len(gebd_boundaries)
+                gebd_boundaries = merge_boundaries(
+                    gebd_boundaries, (shots_data or {}).get("shots") or [], duration_for_beats)
+                step(f"boundary 병합(GEBD_MERGE_SHOTS=1) — GEBD {_before}개 + ffmpeg 컷 "
+                     f"{len((shots_data or {}).get('shots') or [])}개 → {len(gebd_boundaries)}개")
+            else:
+                gebd_boundaries = dedup_boundaries(gebd_boundaries, duration=duration_for_beats)
+            # ⚠️ 파일이 있다고 GEBD 가 아니다 — 직전 실행의 **fallback 산출물**도 여기 저장된다.
+            # "GEBD boundary N개 기반"이라고 못 박으면 학습모델이 도는 줄 오해한다(실측 2회 오인).
+            # source 를 그대로 찍어 근거를 드러낸다. `gebd*` 면 진짜 모델, 아니면 fallback 재사용.
+            _srcs = {b.get("source") for b in gebd_boundaries if isinstance(b, dict)}
+            _src = "/".join(sorted(s for s in _srcs if s)) or "unknown"
+            _is_model = any(str(s).startswith("gebd") for s in _srcs if s)
+            step(f"beat — boundary {len(gebd_boundaries)}개 재사용 · source={_src}"
+                 f"{' (학습모델)' if _is_model else ' (fallback 산출물)'}")
         else:
             fallback = build_fallback_boundaries(
                 (shots_data or {}).get("shots") or [], refined, duration_for_beats,
@@ -581,6 +687,65 @@ def run_beats(
         beats_data = {"beats": []}
         save_json(out_dir / "beats.json", beats_data)
     timed("beats", ts)
+    return beats_data
+
+
+def run_beat_signals(
+    *,
+    video_path: str,
+    beats_data: dict,
+    refined: list,
+    shots_data: dict,
+    out_dir: Path,
+    step: Callable[[str], None],
+    timed: Callable[[str, float], None],
+) -> dict:
+    """beat 단위 저수준 신호(오디오·컷·대사) → signals.json + beats.json 병합.
+
+    **비용 API ₩0** — ffmpeg 오디오 1패스 + 이미 메모리에 있는 shots·refined 산술.
+    실측(m_981d7c08 · 32분): 4.5초.
+
+    왜 필요한가: 이게 없으면 하이라이트 판정에 LLM 감 말고 근거가 없다.
+    `index_segments._highlight_score` 가 순환 정의(LLM 이 고른 것만 점수 높음)로 남는다.
+    상세는 `core/signals.py` 도크스트링.
+    """
+    ts = time.time()
+    beats_list = (beats_data or {}).get("beats") or []
+    if not beats_list:
+        return beats_data
+    existing = load_json(out_dir / "signals.json")
+    if isinstance(existing, dict) and existing.get("signals"):
+        sig = existing
+        step(f"beat signals — 체크포인트 재사용 ({len(sig['signals'])}개)")
+    else:
+        try:
+            from .signals import beat_signals
+            progress("signals", 86, "저수준 신호(오디오·컷·대사)")
+            sig = beat_signals(
+                str(video_path), beats_list, refined,
+                (shots_data or {}).get("shots") or [],
+                (shots_data or {}).get("windows_sec"),
+            )
+            save_json(out_dir / "signals.json", sig)
+            st = sig["stats"]
+            # 미스캔 0 과 "판정 불가"를 구분해서 찍는다 — 구버전 shots.json(windows_sec 없음)
+            # 에서 "미스캔 0"이라고 하면 cut_rate 를 믿어도 된다고 오독하게 된다.
+            cut_note = (f"cut 미스캔 {st['cut_rate_unscanned']}" if st["shot_windows_known"]
+                        else "cut 스캔범위 미상(구버전 shots.json)")
+            step(f"beat signals — {st['beats']}개 (audio={st['audio']} · {cut_note})")
+        except Exception as e:
+            step(f"  (beat signals 스킵: {str(e)[:100]})")
+            timed("beat_signals", ts)
+            return beats_data
+
+    # beats.json 에 병합 — index_segments 가 beat 에서 바로 읽어 세그먼트 레코드에 싣는다.
+    table = sig.get("signals") or {}
+    for b in beats_list:
+        s = table.get(str(b.get("id")))
+        if s:
+            b["signals"] = s
+    save_json(out_dir / "beats.json", beats_data)
+    timed("beat_signals", ts)
     return beats_data
 
 

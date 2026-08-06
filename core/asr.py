@@ -66,6 +66,47 @@ def extract_audio(video_path: str, output_path: Optional[str] = None) -> str:
     return output_path
 
 
+# 업로드형 STT(Soniox 등)에 넘길 압축 오디오. 16kHz mono = 음성인식 표준 대역이라
+# 64kbps 면 사실상 투명하다. 실측(58.6분 드라마): mp4 1026MB → mp3 26.8MB.
+_UPLOAD_AUDIO_KBPS = "64"
+_VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v", ".ts", ".mpg", ".mpeg", ".wmv", ".flv"}
+
+
+def extract_audio_for_upload(src: str) -> tuple[str, bool]:
+    """업로드용 16kHz mono MP3 경로를 만든다. 반환 (경로, 임시파일이라 지워도 되는지).
+
+    **영상을 그대로 올리면 안 된다.** Soniox `/v1/files` 는 큰 파일을 400 으로 거절한다 —
+    실측(2026-08-06): 58.6분 드라마 mp4 **1026MB → 400**, 같은 내용 mp3 26.8MB → 201.
+    (30초 샘플 1MB 는 201 이라 인증·포맷이 아니라 순수 크기 문제였다.)
+    STT 는 오디오만 있으면 되므로 영상을 올릴 이유가 애초에 없다 — 업로드 시간도 11s→4s.
+
+    이미 오디오 파일이면 그대로 쓴다(재인코딩은 손실만 추가).
+    ffmpeg 실패 시 원본 경로를 그대로 돌려준다 — STT 를 아예 못 하게 만들진 않는다.
+    """
+    p = Path(src)
+    if p.suffix.lower() not in _VIDEO_EXTS:
+        return src, False
+    fd, out = tempfile.mkstemp(prefix="stt_", suffix=".mp3")
+    os.close(fd)
+    try:
+        subprocess.run(
+            ["ffmpeg", "-y", "-v", "error", "-i", src,
+             "-vn", "-ac", "1", "-ar", "16000", "-b:a", _UPLOAD_AUDIO_KBPS + "k", out],
+            check=True,
+        )
+        mb_in = p.stat().st_size / 1048576
+        mb_out = Path(out).stat().st_size / 1048576
+        print(f"   [stt] 업로드용 오디오 추출 · {mb_in:.0f}MB → {mb_out:.1f}MB")
+        return out, True
+    except Exception as e:
+        print(f"   [stt] 오디오 추출 실패, 원본 사용 (업로드 거절될 수 있음): {str(e)[:100]}")
+        try:
+            os.unlink(out)
+        except OSError:
+            pass
+        return src, False
+
+
 def transcribe(
     audio_path: str,
     language: str = "ko",
@@ -604,19 +645,30 @@ def _transcribe_soniox(audio_path: str, language: str = "ko") -> dict:
 
     headers = {"Authorization": f"Bearer {api_key}"}
 
-    # 1) 파일 업로드
+    # 1) 파일 업로드 — **영상이 아니라 압축 오디오를 올린다** (extract_audio_for_upload 참고).
+    #    영상 그대로 올리면 크기 때문에 400 이 난다.
+    upload_path, is_tmp = extract_audio_for_upload(audio_path)
     print("   [soniox] 업로드 시작...")
-    with open(audio_path, "rb") as f:
-        r = requests.post(
-            f"{_SONIOX_BASE}/v1/files",
-            headers=headers,
-            files={"file": (Path(audio_path).name, f)},
-            timeout=300,
-        )
-    r.raise_for_status()
-    file_id = r.json().get("id")
-    if not file_id:
-        raise RuntimeError(f"Soniox upload 응답 이상: {r.text[:200]}")
+    try:
+        with open(upload_path, "rb") as f:
+            r = requests.post(
+                f"{_SONIOX_BASE}/v1/files",
+                headers=headers,
+                files={"file": (Path(upload_path).name, f)},
+                timeout=900,
+            )
+        if r.status_code >= 400:
+            # 본문에 실제 사유가 들어온다 — 숨기면 크기·포맷·쿼터를 구분할 수 없다.
+            raise RuntimeError(f"Soniox upload {r.status_code}: {r.text[:300]}")
+        file_id = r.json().get("id")
+        if not file_id:
+            raise RuntimeError(f"Soniox upload 응답 이상: {r.text[:200]}")
+    finally:
+        if is_tmp:
+            try:
+                os.unlink(upload_path)
+            except OSError:
+                pass
     print(f"   [soniox] 업로드 완료 · file_id={file_id[:8]}...")
 
     # 2) 전사 요청 (diarization 켬)

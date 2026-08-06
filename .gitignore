@@ -55,3 +55,17 @@ STEP-D_일정표*.xlsx
 /local-scratch/
 /logs/
 /eval/
+
+# 로컬 실험 작업장 — 분석 산출물·영상·모델 가중치가 쌓인다 (2026-08-06 기준 2.5GB).
+# 규칙에 없어서 통째로 커밋될 뻔했다.
+/tmp/
+
+# AI 모델 가중치 — 절대 커밋 금지. GEBD 가중치 하나가 1.6GB, 도커 이미지 tar 는 26.9GB다.
+# 배선·경로는 deploy/gebd/README.md 참고. 파일 자체는 리포 밖에 두고 심볼릭/경로로 참조한다.
+*.pt
+*.pth
+*.pkl
+*.onnx
+*.safetensors
+*.tar
+/models/

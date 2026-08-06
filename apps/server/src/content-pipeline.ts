@@ -67,7 +67,9 @@ const WORK_ROOT = path.join(os.tmpdir(), "stepd-content");
 const WORK_DIR_TTL_MS = 48 * 60 * 60 * 1000;
 
 /** Stage outputs core/analyze.py checkpoints into the work dir (upload order). */
-const CHECKPOINT_FILES = ["analysis.json", "scenes.json", "cast.json", "timeline.json", "narrative.json", "shorts.json", "refined.json", "faces.json", "ppl.json", "stt.json", "manifest.json", "comments.json", "viewer_signals.json", "beats.json", "boundaries.json", "shots.json", "scene_type.json"];
+// 워커가 GCS 로 왕복시키는 체크포인트. 여기 빠지면 재실행 때 그 스테이지를 다시 돈다 —
+// chyron.json 은 재생성이 회당 ₩150 이라 특히 중요. (signals/genre 는 ₩0 이지만 일관성 위해 포함)
+const CHECKPOINT_FILES = ["analysis.json", "scenes.json", "cast.json", "timeline.json", "narrative.json", "shorts.json", "refined.json", "faces.json", "ppl.json", "stt.json", "manifest.json", "comments.json", "viewer_signals.json", "beats.json", "boundaries.json", "shots.json", "scene_type.json", "signals.json", "genre.json", "chyron.json"];
 
 /**
  * Watchdog: kill the python child after this long with NO stdout output. A hung Vertex
@@ -294,8 +296,11 @@ function runAnalyze(
 type Short = {
   rank?: number; appeal?: number; start?: number; end?: number;
   title?: string; reason?: string; tags?: string[];
-  /** 3축 직교 스코어(각 0-10, 2026-07-23~). hook_strength·payoff·completeness — appeal은 이 셋에서 산출. */
+  /** 3축 직교 스코어(각 0-10, 2026-07-23~). ⚠️ 2026-08-06 이후 회차는 **비어 있다** —
+   *  LLM 점수는 실행마다 달라져 A/B 판정이 불가능해서 결정론 스코어로 교체했다. score_parts 참고. */
   hook_strength?: number; payoff?: number; completeness?: number;
+  /** score100 의 근거 (2026-08-06~). signal·hook·length·closure 각 0-1 + has_signals. */
+  score_parts?: Record<string, number | boolean>;
   /** 3축 가중합 0-100 (hook 0.40·payoff 0.35·completeness 0.25). 프론트 메인 스코어. */
   score100?: number;
   /** 쇼츠 첫 3초 hook intro (2026-07-31 · docs/plans/shorts-hook-intro-3sec.md).
@@ -345,6 +350,9 @@ function recFromShort(episodeId: string, s: Short) {
     hookStrength: typeof s.hook_strength === "number" ? s.hook_strength : undefined,
     payoff: typeof s.payoff === "number" ? s.payoff : undefined,
     completeness: typeof s.completeness === "number" ? s.completeness : undefined,
+    // score100 근거 (2026-08-06~). 이게 없으면 카드가 "왜 이 점수인지" 를 못 보여준다 —
+    // 3축을 걷어낸 자리를 대체한다.
+    scoreParts: s.score_parts && typeof s.score_parts === "object" ? s.score_parts : undefined,
     // 쇼츠 첫 3초 hook intro (2026-07-31). core가 채운 값을 rec 엔티티로 흘려보내 카드·에디터가
     // 미리보기·편집할 수 있게 한다. 비어 있으면 undefined (옛 회차/미생성 안전).
     hookQuote: typeof s.hook_quote === "string" && s.hook_quote.trim() ? s.hook_quote.trim() : undefined,

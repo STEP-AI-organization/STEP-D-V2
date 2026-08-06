@@ -93,7 +93,12 @@ export function ShortsCard({
     toast({ title: "반려", description: "이 후보를 반려 처리했습니다.", tone: "warn" });
   }
 
-  // score100(신규 3축 가중합)이 있으면 그걸 우선, 없으면 legacy appeal(1-5)에서 (a-1)*25로 역산.
+  // score100 근거 (2026-08-06~ 결정론 4축). 옛 회차는 없어서 아래 LLM 3축으로 폴백.
+  // AnalysisShort 는 core 원본 스키마(snake_case)다 — Recommendation 의 camelCase 와 다르다.
+  const scoreParts =
+    short.score_parts && typeof short.score_parts === "object" ? short.score_parts : undefined;
+
+  // score100 이 있으면 그걸 우선, 없으면 legacy appeal(1-5)에서 (a-1)*25로 역산.
   // 이렇게 두면 아직 재분석 안 된 옛 회차도 카드가 깨지지 않고, 정밀 재분석 후엔 자동으로 score100 반영.
   const score =
     typeof short.score100 === "number"
@@ -159,7 +164,13 @@ export function ShortsCard({
               className={cn("rounded px-1.5 py-0.5 text-[10px] font-bold tabular-nums", scoreTone)}
               title={
                 typeof short.score100 === "number"
-                  ? `3축 가중합 · hook 0.40·payoff 0.35·완결성 0.25`
+                  ? scoreParts
+                    // 2026-08-06~ 결정론 스코어. 근거를 그대로 보여준다 — 어느 축이
+                    // 점수를 끌었는지 못 보면 편집자가 판단을 검증할 수 없다.
+                    ? `신호 ${fmtPart(scoreParts.signal)} · 훅 ${fmtPart(scoreParts.hook)}`
+                      + ` · 길이 ${fmtPart(scoreParts.length)} · 끝맺음 ${fmtPart(scoreParts.closure)}`
+                      + `\n(가중치 0.40·0.25·0.20·0.15 · LLM 점수 아님)`
+                    : `결정론 스코어 (근거 없음 — 재분석 필요)`
                   : `legacy appeal ${short.appeal} → score ${score} 근사`
               }
             >
@@ -218,15 +229,25 @@ export function ShortsCard({
             )}
           </div>
         )}
-        {/* 3축 분해 — 스코어의 근거. 축이 있어야만 표시(옛 회차는 자동 생략). */}
-        {(typeof short.hook_strength === "number" ||
-          typeof short.payoff === "number" ||
-          typeof short.completeness === "number") && (
+        {/* 스코어 분해 — 근거. 2026-08-06~ 는 결정론 4축(score_parts), 그 이전 회차는 LLM 3축.
+            둘 다 없으면(옛 회차) 자동 생략. */}
+        {scoreParts ? (
           <div className="flex flex-wrap gap-1 text-[10px] tabular-nums">
-            <AxisChip label="훅" value={short.hook_strength} />
-            <AxisChip label="터짐" value={short.payoff} />
-            <AxisChip label="완결" value={short.completeness} />
+            <AxisChip label="신호" value={pct10(scoreParts.signal)} />
+            <AxisChip label="훅" value={pct10(scoreParts.hook)} />
+            <AxisChip label="길이" value={pct10(scoreParts.length)} />
+            <AxisChip label="끝맺음" value={pct10(scoreParts.closure)} />
           </div>
+        ) : (
+          (typeof short.hook_strength === "number" ||
+            typeof short.payoff === "number" ||
+            typeof short.completeness === "number") && (
+            <div className="flex flex-wrap gap-1 text-[10px] tabular-nums">
+              <AxisChip label="훅" value={short.hook_strength} />
+              <AxisChip label="터짐" value={short.payoff} />
+              <AxisChip label="완결" value={short.completeness} />
+            </div>
+          )
         )}
         {short.reason && (
           <p className="line-clamp-2 text-[10.5px] leading-relaxed text-muted-foreground">
@@ -333,6 +354,16 @@ function formatDurationMS(sec: number): string {
 }
 
 /** 3축 단일 값 표시(0-10). 값이 클수록 강조. 없으면 렌더 안 함. */
+/** score_parts 의 0-1 값 → 0-10 (AxisChip 이 10점 척도라 맞춘다). 숫자가 아니면 undefined. */
+function pct10(v: unknown): number | undefined {
+  return typeof v === "number" ? Math.round(v * 10) : undefined;
+}
+
+/** 툴팁용 0-1 → "0.69" 표기. 숫자가 아니면 "-". */
+function fmtPart(v: unknown): string {
+  return typeof v === "number" ? v.toFixed(2) : "-";
+}
+
 function AxisChip({ label, value }: { label: string; value: number | undefined }) {
   if (typeof value !== "number") return null;
   const tone =

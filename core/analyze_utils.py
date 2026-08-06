@@ -19,6 +19,8 @@ CHECKPOINTS = (
     "cast.json", "timeline.json", "narrative.json", "shots.json",
     "boundaries.json", "scene_type.json", "beats.json", "viewer_signals.json",
     "shorts.json", "analysis.json", "segments.json",
+    # 2026-08-06 추가 — 빠져 있으면 "다른 영상" 초기화 때 살아남아 오염된다
+    "signals.json", "genre.json", "chyron.json",
 )
 
 
@@ -72,12 +74,15 @@ def prepare_checkpoints(
     video_name = Path(video_path).name
     # Per-stage param fingerprints. STT는 영상만 의존, scenes(5분 청크)도 refined 의존.
     # refine·recommend는 cast_registry를 프롬프트에 넣으므로 cast 바뀌면 재실행.
-    RECOMMEND_VER = "2026-07-29-two-line-title-short"
+    # 2026-08-06: score100 을 LLM 3축 → _deterministic_score(signal·hook·length·closure) 로 교체.
+    # 코드만 바꾸면 지문이 그대로라 shorts.json 이 재사용돼 변경이 반영되지 않는다 — 그래서 올린다.
+    RECOMMEND_VER = "2026-08-06-deterministic-score"
     REFINE_VER = "2026-07-27-speaker-preserve"
     FACES_VER = "2026-07-29-sample-10s"
     SHOTS_VER = "2026-07-24a"
     SCENE_TYPE_VER = "2026-07-24a"
     BEATS_VER = "2026-07-29-speaker-split-v2"
+    SIGNALS_VER = "2026-08-06-init"
     STT_VER = "2026-07-27-word-normalize"
     VIEWER_SIGNALS_VER = "2026-07-28-init"
     STT_PROVIDER_ENV = (os.environ.get("STT_PROVIDER") or "gemini").lower()
@@ -89,6 +94,22 @@ def prepare_checkpoints(
             _comments_hash = hashlib.sha1(_comments_path.read_bytes()).hexdigest()[:16]
         except OSError:
             pass
+    # boundaries.json 해시 — **GEBD 배선의 핵심**.
+    # GEBD(gebd.detect)는 fallback 실행이 끝난 뒤 boundaries.json 을 새로 얹고 content.analyze 를
+    # 재큐한다. 그런데 beats.json 지문에 boundaries 가 없으면 재실행이 **fallback beats 를 그대로
+    # 재사용**해서 GEBD 결과가 영영 소비되지 않는다(2026-08-06 발견). 해시를 넣어 boundaries 가
+    # 바뀔 때만 beats·signals·shorts 를 다시 만든다 — STT·refine·narrative 는 그대로 보존되므로
+    # 재실행 비용은 ₩270(STT) 이 아니라 beats 이후만 든다.
+    #
+    # 주의: 첫 실행은 지문 계산 시점에 boundaries.json 이 없어 ""로 잡히고, 실행 중 fallback 이
+    # 파일을 쓴다. 그래서 **바로 다음 재실행 1회는 beats 를 한 번 더 만든다**(그 뒤로는 안정).
+    _boundaries_path = out_dir / "boundaries.json"
+    _boundaries_hash = ""
+    if _boundaries_path.exists():
+        try:
+            _boundaries_hash = hashlib.sha1(_boundaries_path.read_bytes()).hexdigest()[:16]
+        except OSError:
+            pass
     params = {
         "stt.json": fingerprint(STT_VER, STT_PROVIDER_ENV),
         "refined.json": fingerprint(cast_registry, REFINE_VER, STT_VER, STT_PROVIDER_ENV),
@@ -97,10 +118,12 @@ def prepare_checkpoints(
         "narrative.json": fingerprint(cast_registry, REFINE_VER, STT_VER),
         "shots.json": fingerprint(SHOTS_VER),
         "scene_type.json": fingerprint(SCENE_TYPE_VER, SHOTS_VER),
-        "beats.json": fingerprint(BEATS_VER, REFINE_VER, SHOTS_VER, SCENE_TYPE_VER, STT_VER),
+        "beats.json": fingerprint(BEATS_VER, REFINE_VER, SHOTS_VER, SCENE_TYPE_VER, STT_VER, _boundaries_hash),
+        # signals 는 beat 구간에 매달린 값이라 beats 가 바뀌면 통째로 무효다 (beat id 가 달라진다).
+        "signals.json": fingerprint(SIGNALS_VER, BEATS_VER, SHOTS_VER, STT_VER, _boundaries_hash),
         "viewer_signals.json": fingerprint(VIEWER_SIGNALS_VER, _comments_hash),
-        "shorts.json": fingerprint(genre, shorts_n, profile, channels, cast_registry, RECOMMEND_VER, RECOMMEND_MODE, REFINE_VER, FACES_VER, BEATS_VER, STT_VER, _comments_hash),
-        "analysis.json": fingerprint(genre, shorts_n, profile, channels, cast_registry, RECOMMEND_VER, RECOMMEND_MODE, REFINE_VER, FACES_VER, BEATS_VER, STT_VER, _comments_hash),
+        "shorts.json": fingerprint(genre, shorts_n, profile, channels, cast_registry, RECOMMEND_VER, RECOMMEND_MODE, REFINE_VER, FACES_VER, BEATS_VER, STT_VER, _comments_hash, _boundaries_hash),
+        "analysis.json": fingerprint(genre, shorts_n, profile, channels, cast_registry, RECOMMEND_VER, RECOMMEND_MODE, REFINE_VER, FACES_VER, BEATS_VER, STT_VER, _comments_hash, _boundaries_hash),
     }
     manifest = {"video_name": video_name, "video_size": video_size, "params": params}
 

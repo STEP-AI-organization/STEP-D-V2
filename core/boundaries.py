@@ -185,6 +185,40 @@ def to_windows(
     return windows
 
 
+def build_shot_boundaries(shots: list[float] | None, duration: float) -> list[dict]:
+    """ffmpeg shot boundary 초 리스트 → boundary 레코드 (kind='shot').
+
+    GEBD 와 **병합**하기 위해 fallback 에서 컷 부분만 떼어낸 것이다.
+    학습 스키마가 밝히듯 모델의 주 타깃은 `Change due to cut ∪ Change of action` 인데,
+    GEBD 산출은 event 쪽에 치우쳐 컷이 성기다(실측 2026-08-06 · 58.6분 드라마:
+    GEBD 132개 vs ffmpeg shots 178개, 겹침 47개뿐). GEBD 만 쓰면 컷을 잃어 beat 이
+    통째로 길어진다(p50 18s → 63s · 60초 초과 71%). 그래서 합집합이 맞다.
+    """
+    out: list[dict] = []
+    for t in (shots or []):
+        try:
+            tt = float(t)
+        except (TypeError, ValueError):
+            continue
+        if 0 < tt < duration:
+            out.append({"t": tt, "kind": "shot", "score": 1.0,
+                        "source": "shots_ffmpeg", "grade": "hard"})
+    out.sort(key=lambda b: b["t"])
+    return out
+
+
+def merge_boundaries(gebd: list[dict], shots: list[float] | None,
+                     duration: float) -> list[dict]:
+    """GEBD(change_event) ∪ ffmpeg shots(change_shot) 병합 · dedup.
+
+    dedup_boundaries 가 MIN_DEDUP_GAP_SEC 이내 인접 경계를 score 큰 쪽으로 병합하므로,
+    같은 지점을 둘 다 잡았으면 하나로 접힌다. ffmpeg 컷은 score=1.0 이라 우선 살아남는다
+    — 컷은 실제로 확실한 경계라 이게 맞다.
+    """
+    return dedup_boundaries(list(gebd or []) + build_shot_boundaries(shots, duration),
+                            duration=duration)
+
+
 def build_fallback_boundaries(
     shots: list[float] | None,
     transcript: list[dict] | None,

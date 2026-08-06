@@ -126,12 +126,15 @@ export interface Recommendation {
   titleCandidates?: string[];
   /** 1–5 legacy compressed appeal (higher = surfaced first). 2026-07-23~는 score100/3축이 진짜 스코어. */
   appeal: number;
-  /** 3축 가중합 0-100 — 2026-07-23~ 신규. hook 0.40·payoff 0.35·완결 0.25. */
+  /** 0-100 메인 스코어. 2026-08-06~ **결정론 계산**(signal 0.40·hook 0.25·length 0.20·closure 0.15).
+   *  그 이전 회차는 LLM 3축 가중합이었다. */
   score100?: number;
-  /** 3축 각 축 0-10 — score100의 근거. 옛 회차는 없을 수 있음. */
+  /** ⚠️ LLM 3축 (2026-07-23~08-06). 이후 회차는 **없다** — LLM 점수는 실행마다 달라져 제거됨. */
   hookStrength?: number;
   payoff?: number;
   completeness?: number;
+  /** score100 근거 (2026-08-06~). signal·hook·length·closure 각 0-1. 3축을 대체한다. */
+  scoreParts?: Record<string, number | boolean>;
   /** 쇼츠 첫 3초 hook intro (2026-07-31 · docs/plans/shorts-hook-intro-3sec.md) — 이탈 방지.
    *  core가 채우고, 카드/에디터에서 미리보기·편집. 옛 회차·미생성은 없음. */
   hookQuote?: string;        // 실 대사 원문 인용 (STT 그대로)

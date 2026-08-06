@@ -588,6 +588,137 @@ _CANDIDATE_FIELDS = {
 _AXIS_WEIGHTS = {"hook_strength": 0.40, "payoff": 0.35, "completeness": 0.25}
 
 
+# ── 결정론 스코어 (2026-08-06) ────────────────────────────────────────────────
+# **LLM 에게 점수를 묻지 않는다.** 같은 입력이면 항상 같은 값이 나와야 A/B·회귀 판정이
+# 성립한다(사용자 2026-08-06: "llm에게 선택의영역을주면안돼 / 맨날결과가바뀌어그러면").
+# 재료는 전부 결정론적이다:
+#   signals   core.signals 산출 (오디오 백분위·순간상승·대사밀도·컷속도) — LLM 무관
+#   hook      beat_annot 의 **카테고리 라벨** (0-10 점수가 아니라 분류라 상대적으로 안정)
+#   길이      쇼츠 적정 길이 곡선
+#   완결성    beat 의 is_complete
+_SCORE_W = {"signal": 0.40, "hook": 0.25, "length": 0.20, "closure": 0.15}
+
+# 끝맺음 여유 — 쇼츠 끝 뒤에 침묵이 얼마나 있나. 이 값이 0이면 다음 발화가 곧바로 이어지는
+# 지점에서 끊긴 것이라 "말허리 자른" 느낌이 난다.
+#
+# ⚠️ 원래 이 자리는 `complete`(beat.is_complete) 였는데 **beats.py:1082 가 True 를 하드코딩**해서
+# 두 회차 239/239·241/241 전부 1.00 — 가중치 0.15 가 통째로 상수였다(죽은 축).
+# 대체 후보를 구현 **전에** 실측해서 골랐다 (2026-08-06):
+#   · 발화 중간 자름(straddle): 드라마 0/19 · 예능 0/20 → **죽은 신호**. beat 이 이미 STT 단어
+#     경계에 스냅돼 있어 자를 수가 없다
+#   · 끝 문장 종결형: 드라마 19/19(변별 0) · 예능 17/20 → 약함
+#   · **끝 뒤 침묵: 0.00~32.70초로 실제 변동** ← 유일하게 살아있음
+# 이름도 `complete` 가 아니라 `closure` 로 바꾼다 — 재는 게 "완결성"이 아니라 "끝맺음 여유"다.
+_CLOSURE_FULL_SEC = 0.8  # 이만큼 침묵이면 만점
+
+
+def _closure_fit(transcript: list[dict] | None, end: float) -> float:
+    """끝 뒤 침묵 기반 끝맺음 점수 0..1. transcript 없으면 중립 0.5."""
+    if not transcript:
+        return 0.5
+    gaps = []
+    for u in transcript:
+        try:
+            us = float(u.get("start"))
+        except (TypeError, ValueError):
+            continue
+        if us >= end - 0.05:
+            gaps.append(us - end)
+    if not gaps:
+        return 1.0  # 뒤에 발화가 없다 = 영상 끝 = 끊길 게 없다
+    return round(max(0.0, min(1.0, min(gaps) / _CLOSURE_FULL_SEC)), 4)
+
+# hook 카테고리 가중 — index_segments._HOOK_BASE 와 같은 서열을 쓴다(두 곳이 어긋나면
+# 검색 점수와 추천 점수가 다른 말을 하게 된다).
+_HOOK_W = {
+    "반전": 1.00, "감정고조": 0.92, "돌직구": 0.92, "갈등": 0.92,
+    "웃음": 0.84, "질문": 0.67, "공감": 0.67, "정보성": 0.50, "정보": 0.50,
+    "기타": 0.34, "": 0.34,
+}
+
+# 쇼츠 적정 길이 — 이 구간이 1.0, 밖으로 갈수록 선형 감쇠.
+_LEN_OK = (25.0, 90.0)
+_LEN_FLOOR = 0.35
+
+
+def _length_fit(sec: float) -> float:
+    """길이 적합도 0..1. 25~90초 = 1.0, 짧거나 길수록 감쇠(하한 0.35)."""
+    lo, hi = _LEN_OK
+    if lo <= sec <= hi:
+        return 1.0
+    if sec < lo:
+        return max(_LEN_FLOOR, sec / lo)
+    return max(_LEN_FLOOR, hi / sec)
+
+
+def beat_signal_percentiles(beats: list[dict]) -> dict:
+    """beat id → 신호 백분위(0..1). 회차 내 상대값이라 회차 간 마스터링 차이를 흡수한다.
+
+    반환이 결정론적이려면 입력 순서에 의존하면 안 되므로 (값, id) 로 정렬한다.
+    """
+    keys = ("audio_pct", "audio_delta", "dialogue_density", "cut_rate")
+    # ⚠️ 동점 tie-break 를 **리스트 인덱스로 하면 안 된다** — 같은 beat 집합이라도 순서가
+    # 다르면 백분위가 달라져 점수가 흔들린다(실측: 셔플 후 score100 불일치). beat id 로
+    # 깨야 입력 순서와 무관하게 같은 값이 나온다. 결정론이 이 함수의 존재 이유다.
+    def _bid(b: dict):
+        v = b.get("id")
+        return (0, int(v)) if isinstance(v, (int, float)) else (1, str(v))
+
+    per_key: dict[str, dict] = {}
+    for k in keys:
+        pairs = [(b, (b.get("signals") or {}).get(k)) for b in beats]
+        have = [(b, float(v)) for b, v in pairs if isinstance(v, (int, float))]
+        ranks: dict = {}
+        if have:
+            order = sorted(have, key=lambda bv: (bv[1], _bid(bv[0])))
+            n = len(order)
+            for r, (b, _v) in enumerate(order):
+                ranks[b.get("id")] = (r / max(1, n - 1)) if n > 1 else 0.5
+        per_key[k] = ranks
+    out: dict = {}
+    for b in beats:
+        i = b.get("id")
+        got = [per_key[k][i] for k in keys if i in per_key[k]]
+        out[i] = round(sum(got) / len(got), 4) if got else None
+    return out
+
+
+def _deterministic_score(picked_beats: list[dict], sec: float, hook: str,
+                         sig_pct: dict, transcript: list[dict] | None = None,
+                         end: float | None = None) -> tuple[float, dict]:
+    """쇼츠 하나의 score100(0-100)과 근거 내역. **LLM 응답을 일절 쓰지 않는다.**"""
+    sigs = [sig_pct.get(b.get("id")) for b in picked_beats]
+    sigs = [s for s in sigs if isinstance(s, (int, float))]
+    signal = sum(sigs) / len(sigs) if sigs else 0.5  # 신호 없으면 중립
+    hook_w = _HOOK_W.get((hook or "").strip(), _HOOK_W["기타"])
+    length = _length_fit(sec)
+    closure = _closure_fit(transcript, end) if end is not None else 0.5
+
+    raw = (_SCORE_W["signal"] * signal + _SCORE_W["hook"] * hook_w
+           + _SCORE_W["length"] * length + _SCORE_W["closure"] * closure)
+    parts = {"signal": round(signal, 4), "hook": hook_w,
+             "length": round(length, 4), "closure": round(closure, 4),
+             "has_signals": bool(sigs)}
+    return round(max(0.0, min(1.0, raw)) * 100.0, 1), parts
+
+
+def _appeal_from_score100(score100: float) -> int:
+    """0-100 → 1-5 (UI 호환). 결정론."""
+    return max(1, min(5, int(score100 // 20) + 1))
+
+
+def _axis_val(src: dict, key: str, default: int) -> int:
+    """LLM 응답에서 3축 값 하나를 안전하게 꺼낸다. 없거나 0-10 밖이면 default.
+
+    default 는 **하드코딩 복귀가 아니라 방어값**이다 — 2026-08-06 이전에는 응답을 아예
+    안 받고 7/7/8 을 박아서 모든 후보의 score100 이 동일했고 _AXIS_WEIGHTS 가 죽어 있었다.
+    """
+    v = src.get(key)
+    if isinstance(v, (int, float)) and 0 <= float(v) <= 10:
+        return int(round(float(v)))
+    return default
+
+
 def _axes_score(cand: dict) -> float:
     """3축 가중합 (0-100). 축이 없거나 잘못 나오면 legacy appeal(1-5)에서 역산."""
     hs = cand.get("hook_strength"); pf = cand.get("payoff"); cp = cand.get("completeness")
@@ -3011,6 +3142,11 @@ _SHORTS_FROM_BEATS_SCHEMA = {
                     "hook_intro_caption": {"type": "STRING"},  # 어그로 편집자막 (20자 · '충격 고백!' '이거 진짜?' 톤)
                     "tags": {"type": "ARRAY", "items": {"type": "STRING"}},
                     "why": {"type": "STRING"},
+                    # ⚠️ 3축 점수(hook_strength/payoff/completeness)를 **여기 넣지 말 것.**
+                    # 2026-08-06 당일 추가했다가 같은 날 철회 — LLM 점수는 같은 입력에도 실행마다
+                    # 달라져서 A/B·회귀 판정이 불가능해진다("맨날 결과가 바뀌어").
+                    # score100·순위는 _deterministic_score 가 signals·hook·길이·완결성으로 계산한다.
+                    # LLM 은 조합 제안·제목·훅자막 생성까지만.
                 },
                 "required": ["beat_ids", "title", "hook"],
             },
@@ -3264,6 +3400,9 @@ title (폴백) 은 두 줄 합쳐 한 줄로 자연스럽게.
     "tags":["직업공개","한의사"],
     "why":"b3에서 원균이 한의사 자기소개, b4에서 다른 출연자 놀란 리액션. 완결 흐름."}}
 ]}}
+
+※ 점수·순위는 매기지 마라. 그건 파이프라인이 신호로 계산한다. 너는 **어떤 beat 를 묶을지와
+  제목·훅 자막**만 정하면 된다.
 """
     if profile:
         system += _profile_block(profile)
@@ -3357,6 +3496,11 @@ title (폴백) 은 두 줄 합쳐 한 줄로 자연스럽게.
     print(f"   beat-only: {len(picked)}개 쇼츠 (요청 {n}, beats {len(beats)}개)")
 
     # 검증 + 조립
+    # 신호 백분위는 **회차 전체 beat 기준**이라 루프 밖에서 한 번만 계산한다.
+    _sig_pct = beat_signal_percentiles(beats)
+    if not any(v is not None for v in _sig_pct.values()):
+        print("   (경고: beats 에 signals 없음 — score100 의 신호 축이 중립 0.5 로 고정된다. "
+              "run_beat_signals 가 beats.json 에 병합했는지 확인)")
     shorts: list[dict] = []
     seen_combos: set = set()
     for idx, s in enumerate(picked):
@@ -3414,7 +3558,12 @@ title (폴백) 은 두 줄 합쳐 한 줄로 자연스럽게.
         # summary: 각 beat summary를 이어붙여 근거로 명시 (grounded)
         reason = " · ".join((pb.get("summary") or "").strip() for pb in picked_beats if pb.get("summary"))
 
-        derived = {"hook_strength": 7, "payoff": 7, "completeness": 8}
+        # score100 은 **결정론**으로 계산한다 (2026-08-06). LLM 에게 점수를 물으면 같은
+        # 입력에도 실행마다 달라져 A/B·회귀 판정이 불가능해진다. 예전 7/7/8 하드코딩은
+        # 모든 쇼츠가 72.5 로 동일해 변별력이 아예 없었고, 그 사이 단계인 LLM 3축은
+        # 재현성을 잃는다 — 둘 다 답이 아니라서 신호 기반으로 간다.
+        _score100, _score_parts = _deterministic_score(
+            picked_beats, sf_end - sf_start, hook, _sig_pct, transcript, sf_end)
         shorts.append({
             "type": "shortform",
             "start": sf_start,
@@ -3426,9 +3575,9 @@ title (폴백) 은 두 줄 합쳐 한 줄로 자연스럽게.
             "reason": reason[:400],
             "story_synopsis": reason[:400],
             "why": (s.get("why") or "").strip()[:200],
-            "hook_strength": 7, "payoff": 7, "completeness": 8,
-            "appeal": _appeal_from_axes(derived) or 3,
-            "score100": _axes_score(derived),
+            "appeal": _appeal_from_score100(_score100),
+            "score100": _score100,
+            "score_parts": _score_parts,  # 근거 — 점수만 있으면 왜 그런지 못 따진다
             "hook": hook,
             # 2026-07-31 · 쇼츠 첫 3초 hook intro (docs/plans/shorts-hook-intro-3sec.md).
             # Gemini 응답 필드를 그대로 흘려보냄. 없으면 빈 값 · 나중에 편집자가 채움.
@@ -3580,14 +3729,22 @@ def _build_from_beats(
         # 길이 상·하한이나 core 기준 재단을 절대 적용하지 않고 원래 경계를 그대로 보존한다.
         sf_start, sf_end = float(beat["start"]), float(beat["end"])
         if sf_end > sf_start:
-            derived = {"hook_strength": 7, "payoff": 7, "completeness": 8}
+            # ⚠️ 이 경로(narrative_first 시나리오→beat 매칭)는 **3축 소스가 없다** —
+            # _SCENARIOS_SCHEMA 에 축이 없어서다. 그래서 여기 score100 은 여전히 변별력이 없다.
+            # 기본 경로는 propose_shorts_beat_only(축 있음)이므로 우선순위를 낮춰 둔다.
+            # _axis_val 로 읽어두니 나중에 스키마에 축을 추가하면 코드 변경 없이 살아난다.
+            derived = {
+                "hook_strength": _axis_val(sc, "hook_strength", 7),
+                "payoff": _axis_val(sc, "payoff", 7),
+                "completeness": _axis_val(sc, "completeness", 8),
+            }
             shorts.append({
                 "type": "shortform",
                 "start": sf_start, "end": sf_end,
                 "title": (sc.get("story_title") or "").strip() or "무제",
                 "reason": (sc.get("story_synopsis") or beat.get("summary") or "").strip(),
                 "story_synopsis": (sc.get("story_synopsis") or "").strip(),
-                "hook_strength": 7, "payoff": 7, "completeness": 8,
+                **derived,
                 "appeal": _appeal_from_axes(derived) or 3,
                 "score100": _axes_score(derived),
                 "hook": (sc.get("hook") or beat.get("hook") or "기타").strip(),
@@ -3605,14 +3762,19 @@ def _build_from_beats(
         if clip_length < 60.0:
             # beat이 60초 미만이면 clip으로는 부적합 (숏폼만 만들고 clip 스킵)
             continue
-        derived = {"hook_strength": 7, "payoff": 7, "completeness": 8}
+        # 위와 같음 — 이 경로는 3축 소스 없음(중립값). _axis_val 로 전방호환만 걸어둔다.
+        derived = {
+            "hook_strength": _axis_val(sc, "hook_strength", 7),
+            "payoff": _axis_val(sc, "payoff", 7),
+            "completeness": _axis_val(sc, "completeness", 8),
+        }
         shorts.append({
             "type": "clip",
             "start": beat["start"], "end": beat["end"],
             "title": (beat.get("title") or sc.get("story_title") or "").strip() or "무제",
             "reason": (beat.get("summary") or sc.get("story_synopsis") or "").strip(),
             "story_synopsis": (beat.get("summary") or "").strip(),
-            "hook_strength": 7, "payoff": 7, "completeness": 8,
+            **derived,
             "appeal": _appeal_from_axes(derived) or 3,
             "score100": _axes_score(derived),
             "hook": (beat.get("hook") or "기타").strip(),
@@ -3717,7 +3879,7 @@ def _recommend_narrative_first_impl(
             on_progress(3, 3)
         def type_order_new(s: dict) -> int:
             return {"shortform": 0, "clip": 1, "highlight": 2}.get(s.get("type", ""), 9)
-        shorts.sort(key=lambda s: (type_order_new(s), -s.get("score100", 0), -s.get("hook_strength", 0)))
+        shorts.sort(key=lambda s: (type_order_new(s), -s.get("score100", 0), float(s.get("start", 0))))
         type_rank_counter: dict = {}
         for s in shorts:
             t = s.get("type", "unknown")
@@ -3951,7 +4113,7 @@ def _recommend_narrative_first_impl(
     # rank 부여: 타입별 내림차순 그룹핑 (숏폼 rank 1~N, 클립 rank 1~N, 하이라이트 rank 1)
     def type_order(s: dict) -> int:
         return {"shortform": 0, "clip": 1, "highlight": 2}.get(s.get("type", ""), 9)
-    shorts.sort(key=lambda s: (type_order(s), -s.get("score100", 0), -s.get("hook_strength", 0)))
+    shorts.sort(key=lambda s: (type_order(s), -s.get("score100", 0), float(s.get("start", 0))))
     # 타입별 rank
     type_rank_counter: dict = {}
     for s in shorts:

@@ -1,0 +1,69 @@
+# 자연어 구간 검색 평가셋 — 한 줄 = 한 쿼리 (JSONL)
+# 절차·유형 정의·지표: docs/research/search-evalset.md
+# 실행: python -m core.eval_search --api http://localhost:8080/api --evalset docs/research/data/search-evalset.jsonl
+#
+# 회차: m_981d7c08 · "나는 솔로" · 예능 · 32분 · 298 beats  (2026-08-06 초안)
+#
+# ⚠️ gold_status="draft" = **인덱스의 beat 경계에서 뽑은 초안**이다. 문서 §3-4가 경고한 그대로
+#    이 상태로는 "경계 오차" 지표가 의미 없다(자기 자신과 비교하게 됨). 영상을 보고 사람이
+#    구간을 확정한 뒤 "confirmed" 로 바꿀 것. core.eval_search 는 draft 를 경계오차 집계에서
+#    제외하지만 hit 판정에는 쓴다 — 확정 전에도 Recall·MRR 은 잴 수 있다.
+#
+# 회차 1개라 45개다(문서 목표 64는 회차 3~5개 기준). 회차를 늘릴 때 이 파일에 append.
+#
+# ── quote (15) · trgm 키워드 축 · 원문 어미를 변형해 통짜 매칭 회피 ──────────────
+{"id": "q001", "type": "quote", "query": "내 다리가 내 의지로 움직이는 게 아니라는 말", "media_id": "m_981d7c08", "gold": [{"start": 57, "end": 67}], "gold_status": "draft", "note": "원문 '이거 내 다리가 지금 내 의지로 / 움직이는 게 아니거든'"}
+{"id": "q002", "type": "quote", "query": "남자답고 책임감도 강하다고 하는 데", "media_id": "m_981d7c08", "gold": [{"start": 138, "end": 147}], "gold_status": "draft", "note": "원문 '진짜 남자다운 사람 같아 / 책임감도 강하고'"}
+{"id": "q003", "type": "quote", "query": "깨볶깨볶 안 하고 싶다는 부분", "media_id": "m_981d7c08", "gold": [{"start": 376, "end": 404}], "gold_status": "draft", "note": "'깨볶깨볶'은 이 회차 고유 표현 — trgm 이 못 잡으면 토크나이저 문제"}
+{"id": "q004", "type": "quote", "query": "굳이 그렇게까지 의리를 지킨다고", "media_id": "m_981d7c08", "gold": [{"start": 441, "end": 457}], "gold_status": "draft"}
+{"id": "q005", "type": "quote", "query": "로또 꽝이라고 허무하지는 않다는 얘기", "media_id": "m_981d7c08", "gold": [{"start": 620, "end": 636}], "gold_status": "draft"}
+{"id": "q006", "type": "quote", "query": "고기는 많이 안 뒤집는 게 좋다", "media_id": "m_981d7c08", "gold": [{"start": 751, "end": 767}], "gold_status": "draft"}
+{"id": "q007", "type": "quote", "query": "왜 저 아저씨가 날 혼내지", "media_id": "m_981d7c08", "gold": [{"start": 919, "end": 935}], "gold_status": "draft"}
+{"id": "q008", "type": "quote", "query": "멈춰 있던 심장을 다시 요동치게 해줘서 고맙다는 말", "media_id": "m_981d7c08", "gold": [{"start": 1218, "end": 1257}], "gold_status": "draft", "note": "beat 188·189 연속 — 같은 대사가 두 번 나옴. 둘 다 정답으로 합쳐 둠"}
+{"id": "q009", "type": "quote", "query": "손잡고 솔로나라에서 탈출하자", "media_id": "m_981d7c08", "gold": [{"start": 1390, "end": 1403}], "gold_status": "draft"}
+{"id": "q010", "type": "quote", "query": "주저하신다면 저도 옆에서 주저하고 있겠다", "media_id": "m_981d7c08", "gold": [{"start": 1539, "end": 1549}], "gold_status": "draft"}
+{"id": "q011", "type": "quote", "query": "짠 거 안 좋아하는데 진짜 안 짜다고 하는 데", "media_id": "m_981d7c08", "gold": [{"start": 1094, "end": 1133}], "gold_status": "draft"}
+{"id": "q012", "type": "quote", "query": "시간이 부족해서라는 말은 안 통할 것 같다", "media_id": "m_981d7c08", "gold": [{"start": 1583, "end": 1594}], "gold_status": "draft"}
+{"id": "q013", "type": "quote", "query": "옥순한테 까이고 영숙한테 까이고", "media_id": "m_981d7c08", "gold": [{"start": 543, "end": 554}], "gold_status": "draft"}
+{"id": "q014", "type": "quote", "query": "동공이 지진 나고 있어", "media_id": "m_981d7c08", "gold": [{"start": 1307, "end": 1317}], "gold_status": "draft"}
+{"id": "q015", "type": "quote", "query": "찡얼대는 것도 없고 생색도 안 낸다", "media_id": "m_981d7c08", "gold": [{"start": 1080, "end": 1091}], "gold_status": "draft"}
+# ── person (6) · characters 필터 축 ────────────────────────────────────────────
+# ⚠️ 현재 이 회차의 characters 는 **전부 비어 있다** (cast_registry 0명 + chyron 미실행).
+#    실명은 summary 텍스트에만 있어 trgm 으로 우연히 걸릴 수는 있다. 그 우연을 구분하려고
+#    detail 의 parsed.characters 를 같이 본다 — 파서가 인물로 인식했는지가 진짜 지표.
+{"id": "p001", "type": "person", "query": "영철이 나오는 장면", "media_id": "m_981d7c08", "gold": [{"start": 80, "end": 99}, {"start": 147, "end": 165}], "gold_status": "draft"}
+{"id": "p002", "type": "person", "query": "옥순이 나오는 부분", "media_id": "m_981d7c08", "gold": [{"start": 1080, "end": 1091}, {"start": 1094, "end": 1133}], "gold_status": "draft"}
+{"id": "p003", "type": "person", "query": "영식이 나오는 데", "media_id": "m_981d7c08", "gold": [{"start": 1594, "end": 1609}, {"start": 1797, "end": 1816}], "gold_status": "draft"}
+{"id": "p004", "type": "person", "query": "광수 나오는 구간", "media_id": "m_981d7c08", "gold": [{"start": 1173, "end": 1185}], "gold_status": "draft"}
+{"id": "p005", "type": "person", "query": "정숙 얘기 나오는 부분", "media_id": "m_981d7c08", "gold": [{"start": 976, "end": 1009}, {"start": 1009, "end": 1019}], "gold_status": "draft"}
+{"id": "p006", "type": "person", "query": "영자 언급되는 구간", "media_id": "m_981d7c08", "gold": [{"start": 80, "end": 99}, {"start": 266, "end": 276}], "gold_status": "draft"}
+# ── person_action (4) · 필터 + action_tags(미구현) ─────────────────────────────
+# 전부 실패가 예상된다. **그게 목적이다** — action_tags 도입 전 baseline.
+{"id": "pa001", "type": "person_action", "query": "영철이 미련 있다고 말하는 부분", "media_id": "m_981d7c08", "gold": [{"start": 80, "end": 99}], "gold_status": "draft"}
+{"id": "pa002", "type": "person_action", "query": "옥순이 만든 음식 먹는 장면", "media_id": "m_981d7c08", "gold": [{"start": 1094, "end": 1133}], "gold_status": "draft"}
+{"id": "pa003", "type": "person_action", "query": "영식이 영숙한테 사과하는 부분", "media_id": "m_981d7c08", "gold": [{"start": 1594, "end": 1609}, {"start": 1797, "end": 1816}], "gold_status": "draft"}
+{"id": "pa004", "type": "person_action", "query": "영철이 성격 차이 후회한다고 하는 데", "media_id": "m_981d7c08", "gold": [{"start": 339, "end": 371}], "gold_status": "draft"}
+# ── situation (15) · 벡터 축 · 자막에 그 단어가 없는 표현으로 ──────────────────
+{"id": "s001", "type": "situation", "query": "고백받고 우는 장면", "media_id": "m_981d7c08", "gold": [{"start": 1227, "end": 1257}], "gold_status": "draft"}
+{"id": "s002", "type": "situation", "query": "헤어지고 후련하다면서도 속상해하는 부분", "media_id": "m_981d7c08", "gold": [{"start": 293, "end": 310}], "gold_status": "draft"}
+{"id": "s003", "type": "situation", "query": "음식 맛있다고 극찬하는 장면", "media_id": "m_981d7c08", "gold": [{"start": 1094, "end": 1133}], "gold_status": "draft"}
+{"id": "s004", "type": "situation", "query": "아이 있는 사람과 만나는 게 부담된다는 대화", "media_id": "m_981d7c08", "gold": [{"start": 935, "end": 947}, {"start": 949, "end": 974}], "gold_status": "draft"}
+{"id": "s005", "type": "situation", "query": "외모 얘기 꺼냈다가 분위기 싸해지는 부분", "media_id": "m_981d7c08", "gold": [{"start": 1852, "end": 1862}], "gold_status": "draft", "note": "자막 '분노의 콧바람 풀가동' — '싸하다'는 어디에도 없음. 순수 벡터 쿼리"}
+{"id": "s006", "type": "situation", "query": "아직 마음이 남았다고 털어놓는 부분", "media_id": "m_981d7c08", "gold": [{"start": 80, "end": 99}], "gold_status": "draft"}
+{"id": "s007", "type": "situation", "query": "한 사람만 바라본 걸 후회한다고 말하는 데", "media_id": "m_981d7c08", "gold": [{"start": 339, "end": 371}], "gold_status": "draft"}
+{"id": "s008", "type": "situation", "query": "차선책 취급받는 것 같아 마음을 못 열겠다는 고백", "media_id": "m_981d7c08", "gold": [{"start": 543, "end": 554}], "gold_status": "draft"}
+{"id": "s009", "type": "situation", "query": "선물이 겹쳐서 당황하는 장면", "media_id": "m_981d7c08", "gold": [{"start": 1270, "end": 1282}], "gold_status": "draft"}
+{"id": "s010", "type": "situation", "query": "확신을 주는 사람을 찾는다고 말하는 부분", "media_id": "m_981d7c08", "gold": [{"start": 1446, "end": 1466}], "gold_status": "draft"}
+{"id": "s011", "type": "situation", "query": "케이크 선물하며 마음 표현하는 장면", "media_id": "m_981d7c08", "gold": [{"start": 1712, "end": 1723}, {"start": 1732, "end": 1747}], "gold_status": "draft"}
+{"id": "s012", "type": "situation", "query": "사과하려고 상대를 불러내는 장면", "media_id": "m_981d7c08", "gold": [{"start": 1594, "end": 1609}, {"start": 1659, "end": 1673}], "gold_status": "draft"}
+{"id": "s013", "type": "situation", "query": "설렘이 없었다고 솔직하게 말하는 부분", "media_id": "m_981d7c08", "gold": [{"start": 376, "end": 404}], "gold_status": "draft"}
+{"id": "s014", "type": "situation", "query": "패널들이 출연자 성격을 분석하는 장면", "media_id": "m_981d7c08", "gold": [{"start": 266, "end": 276}], "gold_status": "draft"}
+{"id": "s015", "type": "situation", "query": "첫인상으로 찍었던 사람이 다른 데 갔다고 아쉬워하는 부분", "media_id": "m_981d7c08", "gold": [{"start": 1327, "end": 1337}], "gold_status": "draft"}
+# ── visual (5) · 현재 어떤 채널로도 안 잡힌다 (시각 임베딩·OCR 없음) ───────────
+# Recall 0 이 나와도 버그가 아니다. §5 실사용 로그의 시각 쿼리 비중과 대조해서
+# 시각 임베딩 도입 여부를 판단하기 위한 자리다.
+{"id": "v001", "type": "visual", "query": "난간에 기대서 이야기하는 장면", "media_id": "m_981d7c08", "gold": [{"start": 1218, "end": 1227}], "gold_status": "draft"}
+{"id": "v002", "type": "visual", "query": "꽃다발 들고 있는 장면", "media_id": "m_981d7c08", "gold": [{"start": 1270, "end": 1282}], "gold_status": "draft"}
+{"id": "v003", "type": "visual", "query": "카페에서 음식 놓고 마주 앉아 있는 장면", "media_id": "m_981d7c08", "gold": [{"start": 441, "end": 457}], "gold_status": "draft"}
+{"id": "v004", "type": "visual", "query": "초콜릿 케이크 건네는 장면", "media_id": "m_981d7c08", "gold": [{"start": 1732, "end": 1747}], "gold_status": "draft"}
+{"id": "v005", "type": "visual", "query": "차 세워둔 데로 걸어가는 장면", "media_id": "m_981d7c08", "gold": [{"start": 699, "end": 712}], "gold_status": "draft"}

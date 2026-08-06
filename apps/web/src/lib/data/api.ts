@@ -57,12 +57,14 @@ export interface AnalysisShort {
   end: number;
   reason?: string;
   tags?: string[];
-  /** 3축 직교 스코어(각 0-10). 2026-07-23~ 신규. hook_strength=시선강탈·payoff=결정타·completeness=완결성. */
+  /** ⚠️ LLM 3축 (2026-07-23~08-06). 이후 회차는 **없다** — LLM 점수는 실행마다 달라져 제거. */
   hook_strength?: number;
   payoff?: number;
   completeness?: number;
-  /** 3축 가중합 0-100 (weights: hook 0.40 · payoff 0.35 · completeness 0.25). 프론트 메인 스코어. */
+  /** 0-100 메인 스코어. 2026-08-06~ 결정론 계산(signal·hook·length·closure). */
   score100?: number;
+  /** score100 근거 (2026-08-06~). 3축을 대체한다. */
+  score_parts?: Record<string, number | boolean>;
   /** 1~5 legacy compressed appeal. UI 호환용 — 신규 카드는 score100/3축을 우선 표시. */
   appeal?: number;
   /** 훅 카테고리 — "웃음"·"반전"·"감정고조"·"돌직구"·"질문"·"정보성"·"갈등"·"공감"·"기타". */

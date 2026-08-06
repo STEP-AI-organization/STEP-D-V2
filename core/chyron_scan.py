@@ -13,6 +13,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import re
 import subprocess
 import tempfile
 from collections import Counter, defaultdict
@@ -339,8 +340,19 @@ def apply_speaker_mapping(segments: list[dict], mapping: dict[str, str]) -> int:
     return n
 
 
+def _split_multi_name(name: str) -> list[str]:
+    """'영수  정숙' 처럼 화면에 두 명이 나란히 뜬 태그를 분리한다.
+
+    실측(m_981d7c08): Vision 이 두 이름을 공백 2개로 이어 한 문자열로 돌려줬다. 그대로 두면
+    존재하지 않는 인물 '영수  정숙' 이 검색 인물 필터에 등록된다.
+    """
+    parts = [p.strip() for p in re.split(r"\s{2,}|[·,/]", name or "") if p.strip()]
+    return parts if len(parts) > 1 else ([name.strip()] if (name or "").strip() else [])
+
+
 def scan_per_seg(video_path: str, segments: list[dict], *,
-                 workers: int = 6, prefer_start: bool = True) -> tuple[list[dict], dict]:
+                 workers: int = 6, prefer_start: bool = True,
+                 min_votes: int = 2, roster: list[str] | None = None) -> tuple[list[dict], dict]:
     """각 STT 세그의 (start 또는 mid) 프레임 1장을 뽑아 Vision 이 그 세그의 화자 이름을 판정.
 
     Sample interval 방식 대신 · 세그마다 자체 프레임 · 그 세그 대사도 프롬프트에 첨부해서
@@ -355,6 +367,19 @@ def scan_per_seg(video_path: str, segments: list[dict], *,
     speaker 필드에만 융합해 버리면 "화면 자막이 근거"라는 사실이 사라져 검색 인덱서가
     화자 라벨(S1/S2 익명 포함)과 구분할 수 없다. 원 감지를 그대로 남겨 caller 가
     chyron.json 으로 덤프한다 (core.index_segments 가 characters 근거로 읽는다).
+
+    min_votes — 회차 전체에서 **이 횟수 미만 등장한 이름은 버린다** (기본 2).
+    프롬프트가 "상황자막 제외"라고 지시해도 뚫린다. 실측(m_981d7c08 · 662 세그):
+
+        영철 13 · 옥순 5 · 순자 3 · 정숙 3 · 경수 2  ← 실제 출연자
+        영수␣␣정숙 1 · 갸웃 1 · 해탈 1              ← 다중이름 · 상황자막(노이즈)
+
+    빈도 2에서 정확히 갈렸다. `characters` 는 **검색 인물 필터축**이라 오염되면 필터 자체가
+    무의미해지므로, 재현율보다 정밀도를 택한다. 버려진 세그의 speaker 는 원 라벨(익명)로
+    남으니 정보가 사라지는 게 아니라 "모른다"로 정직해지는 것뿐이다.
+
+    roster — 프로그램 cast 사전등록 이름. **여기 있으면 1회 등장이라도 통과**시킨다.
+    등록이 있으면 빈도 휴리스틱이 필요 없다는 게 원래 설계(cast registry primary)다.
     """
     if not segments:
         return segments, {"scanned": 0, "assigned": 0}
@@ -383,10 +408,14 @@ def scan_per_seg(video_path: str, segments: list[dict], *,
     def _extract_at(t: float, idx: int) -> _Path | None:
         out = tmpdir / f"s_{idx:06d}.jpg"
         try:
+            # ⚠️ -ss 는 반드시 -i **앞**. 뒤에 두면 출력 시킹이라 ffmpeg 가 0초부터 전부
+            # 디코드한다 — 실측(2026-08-06, 32분 mp4, t=1800s): **83.2초 → 0.149초 (558배)**.
+            # 프레임은 바이트 단위로 동일(정확도 손실 없음). 세그마다 부르는 코드라 이 한 줄이
+            # chyron 스테이지 전체 시간을 지배했다. beat_annot._ffmpeg_frame 은 원래 맞게 돼 있다.
             subprocess.run(
                 ["ffmpeg", "-y", "-v", "error",
-                 "-i", video_path,
                  "-ss", f"{max(0.0, t):.2f}",
+                 "-i", video_path,
                  "-frames:v", "1",
                  "-vf", "scale=iw-mod(iw\\,2):ih-mod(ih\\,2),format=yuvj420p",
                  "-f", "image2", "-update", "1",
@@ -476,21 +505,21 @@ def scan_per_seg(video_path: str, segments: list[dict], *,
     except Exception:
         pass
 
-    # 후처리 1: 한글 자모/음절만 유지 (예 "PE우진" → "우진")
-    import re
+    # 후처리 1: 한글 자모/음절만 유지 (예 "PE우진" → "우진") + 다중 이름 분리
     KOREAN_ONLY = re.compile(r"[^가-힯ᄀ-ᇿ㄰-㆏\s·]")
-    cleaned_results = []
+    cleaned_results: list[tuple[int, list[str]]] = []
     for i, name in results:
         if not name:
-            cleaned_results.append((i, ""))
+            cleaned_results.append((i, []))
             continue
         n = KOREAN_ONLY.sub("", name).strip()
-        n = _strip_particle(n)
-        cleaned_results.append((i, n))
+        # 분리를 정리 **뒤**에 한다 — 라틴문자를 먼저 걷어내야 구분자가 드러난다
+        parts = [_strip_particle(p) for p in _split_multi_name(n)]
+        cleaned_results.append((i, [p for p in parts if p]))
 
     # 후처리 2: 편집거리 1 이내 유사 이름 통합 (낮은 vote → 높은 vote 로)
     from collections import Counter as _Counter
-    name_counts: _Counter = _Counter(n for _, n in cleaned_results if n)
+    name_counts: _Counter = _Counter(n for _, names in cleaned_results for n in names)
     canon: dict[str, str] = {}
     canon_list: list[str] = []
     for n, c in sorted(name_counts.items(), key=lambda x: (-x[1], x[0])):
@@ -509,28 +538,46 @@ def scan_per_seg(video_path: str, segments: list[dict], *,
     if alias_map:
         print(f"   [chyron-seg] 유사 이름 통합: {alias_map}")
 
+    # 후처리 3: 저빈도 컷 — 상황자막 오탐 제거. roster 등록 이름은 빈도와 무관하게 통과.
+    canon_counts: _Counter = _Counter()
+    for n, c in name_counts.items():
+        canon_counts[canon.get(n, n)] += c
+    roster_set = {str(r).strip() for r in (roster or []) if str(r).strip()}
+    accepted = {n for n, c in canon_counts.items() if c >= min_votes or n in roster_set}
+    dropped = {n: c for n, c in canon_counts.items() if n not in accepted}
+    if dropped:
+        print(f"   [chyron-seg] 저빈도 컷(min_votes={min_votes} · 상황자막 오탐 추정): {dropped}")
+
     out = [dict(s) for s in segments]
     assigned = 0
     hits: list[dict] = []
-    for i, name in cleaned_results:
-        if name:
-            final = canon.get(name, name)
-            out[i]["speaker"] = final
+    for i, names in cleaned_results:
+        finals: list[str] = []
+        for n in names:
+            c = canon.get(n, n)
+            if c in accepted and c not in finals:
+                finals.append(c)
+        if not finals:
+            continue
+        # speaker 는 이름이 정확히 1개일 때만 덮어쓴다 — 두 명이 함께 뜬 태그로는
+        # 그 세그의 화자를 단정할 수 없다(apply_names_per_seg 와 같은 원칙).
+        if len(finals) == 1:
+            out[i]["speaker"] = finals[0]
             assigned += 1
-            # 감지 지점 = 실제로 Vision 에 먹인 프레임 시각 (_detect_seg_name 과 같은 식).
-            try:
-                st = float(segments[i].get("start", 0)); en = float(segments[i].get("end", 0))
-            except (TypeError, ValueError):
-                continue
-            hits.append({
-                "time": round(st + 0.3 if prefer_start else (st + en) / 2.0, 3),
-                "names": [final],
-                "seg": i,
-                "start": round(st, 3),
-                "end": round(en, 3),
-            })
+        try:
+            st = float(segments[i].get("start", 0)); en = float(segments[i].get("end", 0))
+        except (TypeError, ValueError):
+            continue
+        # 감지 지점 = 실제로 Vision 에 먹인 프레임 시각 (_detect_seg_name 과 같은 식).
+        hits.append({
+            "time": round(st + 0.3 if prefer_start else (st + en) / 2.0, 3),
+            "names": finals,
+            "seg": i,
+            "start": round(st, 3),
+            "end": round(en, 3),
+        })
     return out, {"scanned": len(segments), "assigned": assigned,
-                 "unique_names": len(set(canon.values())), "hits": hits}
+                 "unique_names": len(accepted), "dropped_low_vote": dropped, "hits": hits}
 
 
 def apply_names_per_seg(segments: list[dict], hits: list[dict], pad_sec: float = 2.0) -> int:

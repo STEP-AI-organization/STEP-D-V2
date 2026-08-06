@@ -45,9 +45,9 @@ from .analyze_utils import (
 # 스테이지 함수는 전부 analyze_stages 로. 여기는 orchestrator 만.
 from .analyze_stages import (
     run_fast_mode, load_viewer_signals, index_search_segments, dump_usage,
-    run_stt, run_refine, run_chyron_per_seg, run_speaker_postproc,
+    run_stt, run_refine, run_chyron_per_seg, run_speaker_postproc, run_detect_genre,
     join_ppl, run_scenes, run_cast_timeline, run_timeline, run_narrative,
-    run_shot_boundary, run_scene_type, run_beats, run_beat_annot,
+    run_shot_boundary, run_scene_type, run_beats, run_beat_signals, run_beat_annot,
     run_speaker_identity, run_recommend,
 )
 
@@ -91,10 +91,17 @@ def analyze(
     # PPL은 video만 참조하고 refined는 안 씀. 순차로 STT→refine→faces 뒤에 돌리는 대신 STT와
     # 동시에 백그라운드 스레드로 시작해 wall clock을 압축한다. 원래 PPL 자리에서 join.
     # duration은 cv2로 직접 산정 (refined 대기 불필요). 캐시 있으면 스킵.
+    # PPL(간접광고 검출) — **2026-08-06 기본 off.** 검출이 과다·부정확해 실효가 없는데
+    # (사용자 판단) 파이프라인 시간의 절반 이상을 먹는다(축구 109분에서 3787초 전례,
+    # docs/research/pipeline-optimization-findings.md). 되살리려면 RUN_PPL=1.
+    # 코드는 그대로 두므로 스위치 하나로 복귀 가능하다.
     ppl_future: Future | None = None
     ppl_executor: ThreadPoolExecutor | None = None
+    _ppl_on = os.environ.get("RUN_PPL", "0") == "1"
     _ppl_cached = _load_json(out_dir / "ppl.json")
-    if not (isinstance(_ppl_cached, dict) and _ppl_cached.get("detections") is not None) and not fast:
+    if not _ppl_on:
+        step("PPL 스킵 (RUN_PPL=1 로 활성화)")
+    elif not (isinstance(_ppl_cached, dict) and _ppl_cached.get("detections") is not None) and not fast:
         try:
             from .ppl import build_ppl_index
             import cv2
@@ -176,7 +183,7 @@ def analyze(
     # 2.4) chyron per-seg — analyze_stages.run_chyron_per_seg 로 이동
     refined = run_chyron_per_seg(
         video_path=video_path, refined=refined, out_dir=out_dir,
-        step=step, timed=timed,
+        step=step, timed=timed, cast_registry=cast_registry,
     )
 
     # 2.5) speaker 후처리 — analyze_stages.run_speaker_postproc 로 이동
@@ -266,6 +273,14 @@ def analyze(
         out_dir=out_dir, step=step, timed=timed,
     )
 
+    # 2.9) 장르 확정 — **scenes·shots 앞에서** 해야 한다. 이 두 스테이지가 장르로 파라미터가
+    #      갈리는데(청크 180s/300s · shot 임계 0.55/0.35), 예전엔 recommend(스테이지 18)에서야
+    #      감지해서 앞 스테이지들이 "auto" 를 받아 폴백값으로 돌았다 — 드라마·예능 둘 다 틀린 값.
+    #      비용 순증 0 (뒤에서 나가던 콜을 앞으로 옮김 · recommend 는 확정 장르 받으면 스킵).
+    genre = run_detect_genre(
+        refined=refined, genre=genre, out_dir=out_dir, step=step, timed=timed,
+    )
+
     # 3) scenes 청크 분할 → analyze_stages.run_scenes
     scenes = run_scenes(refined=refined, out_dir=out_dir, genre=genre, step=step, timed=timed)
 
@@ -301,6 +316,14 @@ def analyze(
     beats_data = run_beats(
         scenes=scenes, refined=refined, shots_data=shots_data,
         out_dir=out_dir, step=step, timed=timed,
+    )
+
+    # 4h-2) beat 저수준 신호 → analyze_stages.run_beat_signals
+    #       API ₩0 (ffmpeg 오디오 1패스 · 실측 4.5초/32분). beat_annot 앞에 둔다 — 신호가
+    #       beats.json 에 먼저 실려야 이후 단계·인덱서가 같은 파일에서 읽는다.
+    beats_data = run_beat_signals(
+        video_path=video_path, beats_data=beats_data, refined=refined,
+        shots_data=shots_data, out_dir=out_dir, step=step, timed=timed,
     )
 
     # 4i) beat annotate → analyze_stages.run_beat_annot

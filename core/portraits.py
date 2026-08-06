@@ -37,6 +37,7 @@ from google.genai import types
 PROJECT = os.environ.get("GOOGLE_CLOUD_PROJECT") or "step-d"
 LOCATION = os.environ.get("VERTEX_LOCATION") or "asia-northeast3"
 from .models import PORTRAITS as MODEL
+from .retry import call_with_retry
 MAX_PORTRAITS = int(os.environ.get("PORTRAITS_MAX") or 12)
 
 PROMPT = """이 이미지는 한국어 방송의 한 장면이고, 화면 속 인물 중 "{name}"{role_hint}이(가) 등장한다.
@@ -106,7 +107,8 @@ def _dialogue_context(person: dict, by_index: dict, max_lines: int = 8) -> str:
 def _describe(client, frame_path: Path, person: dict, dialogues: str) -> str:
     role = person.get("role") or ""
     prompt = PROMPT.format(name=person.get("name", ""), role_hint=f"({role})" if role else "", dialogues=dialogues)
-    resp = client.models.generate_content(
+    # call_with_retry 로 감싼다 — usage 집계가 그 안에만 있다(직접 호출 시 비용 누락).
+    resp = call_with_retry(lambda: client.models.generate_content(
         model=MODEL,
         contents=[
             types.Part.from_bytes(data=frame_path.read_bytes(), mime_type="image/jpeg"),
@@ -119,7 +121,7 @@ def _describe(client, frame_path: Path, person: dict, dialogues: str) -> str:
             max_output_tokens=1024,
             thinking_config=types.ThinkingConfig(thinking_budget=0),
         ),
-    )
+    ))
     return str(json.loads(resp.text or "{}").get("description", "")).strip()
 
 

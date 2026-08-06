@@ -60,10 +60,15 @@ def _f(x: Any, default: float = 0.0) -> float:
 def score_one(results: list[dict], case: dict, min_iou: float = 0.5) -> dict:
     """쿼리 1건 채점. results = /api/search 의 results (순위 순).
 
-    반환: {hit_rank(1부터·미스면 None), iou, edge_start, edge_end, candidates}
+    반환: {hit_rank(1부터·미스면 None), iou, edge_start, edge_end, candidates, gold_status}
+
+    `gold_status="draft"`(인덱스 beat 경계에서 뽑은 초안)는 **경계 오차 집계에서 빠진다**
+    — 인덱스가 만든 경계를 인덱스와 비교하면 항상 0이 나와 지표가 거짓말을 한다.
+    hit 판정에는 그대로 쓰므로 확정 전에도 Recall·MRR 은 잴 수 있다.
     """
     gold = [(_f(g.get("start")), _f(g.get("end"))) for g in (case.get("gold") or [])]
     want_media = case.get("media_id") or ""
+    gstatus = case.get("gold_status") or "confirmed"
     for rank, r in enumerate(results, start=1):
         # media 가 지정된 평가건은 같은 회차 안에서만 정답으로 친다. 다른 회차의 비슷한
         # 구간을 맞혔다고 성공으로 세면 "그 장면을 찾았다"는 주장이 성립하지 않는다.
@@ -82,9 +87,10 @@ def score_one(results: list[dict], case: dict, min_iou: float = 0.5) -> dict:
                 "edge_start": round(abs(span[0] - best_g[0]), 2),
                 "edge_end": round(abs(span[1] - best_g[1]), 2),
                 "candidates": len(results),
+                "gold_status": gstatus,
             }
     return {"hit_rank": None, "iou": 0.0, "edge_start": None, "edge_end": None,
-            "candidates": len(results)}
+            "candidates": len(results), "gold_status": gstatus}
 
 
 def aggregate(scored: list[dict], n_list=(1, 5, 10)) -> dict:
@@ -96,8 +102,13 @@ def aggregate(scored: list[dict], n_list=(1, 5, 10)) -> dict:
             sum(1 for s in scored if s["hit_rank"] and s["hit_rank"] <= n) / total, 3)
     out["mrr"] = round(
         sum(1.0 / s["hit_rank"] for s in scored if s["hit_rank"]) / total, 3)
-    edges = [e for s in scored for e in (s["edge_start"], s["edge_end"]) if e is not None]
+    # 경계 오차는 **확정 gold 만** — draft(인덱스 beat 경계 복사본)를 섞으면 항상 0이 나온다
+    edges = [e for s in scored if s.get("gold_status") != "draft"
+             for e in (s["edge_start"], s["edge_end"]) if e is not None]
     out["edge_error_median_sec"] = round(statistics.median(edges), 2) if edges else None
+    n_draft = sum(1 for s in scored if s.get("gold_status") == "draft")
+    if n_draft:
+        out["gold_draft"] = n_draft  # 경계오차 미집계 건수 — 있으면 gold 확정이 남았다는 뜻
     # 후보 0건 = 필터가 다 걷어냈다는 뜻. 랭킹을 고쳐도 안 낫는 부류라 따로 센다.
     out["zero_candidate"] = round(sum(1 for s in scored if s["candidates"] == 0) / total, 3)
     return out
@@ -172,6 +183,8 @@ def _print_summary(res: dict) -> None:
     print(f"\n== 전체 ({o['queries']} 쿼리) ==")
     print(f"  recall@1={o['recall@1']}  recall@10={o['recall@10']}  MRR={o['mrr']}")
     print(f"  경계오차 중앙값={o['edge_error_median_sec']}s  후보0건={o['zero_candidate']}")
+    if o.get("gold_draft"):
+        print(f"  ⚠️ gold 초안 {o['gold_draft']}건 — 경계오차 미집계 (영상 보고 confirmed 로 확정할 것)")
     print("\n== 유형별 ==")
     print(f"  {'type':<16}{'n':>4}{'R@1':>7}{'R@10':>7}{'MRR':>7}{'후보0':>7}")
     for t, m in res["by_type"].items():
