@@ -93,7 +93,27 @@ command -v node >/dev/null || {
 
 # ── 5. 시크릿 ───────────────────────────────────────────────────────────────
 sec() { gcloud secrets versions access latest --secret="$1" --project="$PROJECT" 2>/dev/null; }
-export DATABASE_URL="$(sec stepd-db-url)"
+
+# ⚠️ **`stepd-db-url` 을 쓰면 안 된다.** 그건 Cloud Run 전용으로 유닉스 소켓
+# (`/cloudsql/step-d:us-central1:stepd-db/.s.PGSQL.5432`) 을 가리키는데, GCE VM 에는 그 경로가
+# 없어서 `ENOENT connect` 로 죽는다(실측). VM 은 **Cloud SQL Auth Proxy + TCP** 로 붙는다 —
+# 그 형식이 `stepd-worker-db-url`(127.0.0.1:5432) 이다.
+if ! pgrep -f cloud-sql-proxy >/dev/null 2>&1; then
+  echo "[gebd-vm] Cloud SQL Auth Proxy 기동"
+  if [ ! -x /usr/local/bin/cloud-sql-proxy ]; then
+    curl -fsSL -o /usr/local/bin/cloud-sql-proxy \
+      "https://storage.googleapis.com/cloud-sql-connectors/cloud-sql-proxy/v2.14.0/cloud-sql-proxy.linux.amd64" \
+      && chmod +x /usr/local/bin/cloud-sql-proxy
+  fi
+  nohup /usr/local/bin/cloud-sql-proxy --port 5432 \
+    "${PROJECT}:${REGION}:stepd-db" > /var/log/cloud-sql-proxy.log 2>&1 &
+  for i in $(seq 1 30); do
+    (echo > /dev/tcp/127.0.0.1/5432) >/dev/null 2>&1 && break
+    sleep 2
+  done
+fi
+
+export DATABASE_URL="$(sec stepd-worker-db-url)"
 export GOOGLE_CLIENT_ID="$(sec stepd-google-client-id)"
 export GOOGLE_CLIENT_SECRET="$(sec stepd-google-client-secret)"
 export GCS_BUCKET=stepd-media
