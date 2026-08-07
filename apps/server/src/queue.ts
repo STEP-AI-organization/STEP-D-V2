@@ -29,6 +29,10 @@ export type JobType =
   | "match.learn"
   // Distribution: resumable-upload a rendered clip to a connected YouTube channel.
   | "distribution.publish"
+  // 썸네일: 프로그램 채널의 기존 썸네일을 모아 스타일 프로파일을 만든다 (프로그램당 1회성).
+  | "thumbnail.style"
+  // 썸네일: 회차 1건 → 후보 N장. 인물은 사람이 등록한 사진에서만 가져온다.
+  | "thumbnail.generate"
   // GEBD: 장면 경계 탐지 (mmaction2). content.analyze 가 boundaries 필요 구간에 enqueue
   // → GEBD 전용 T4 GPU VM 이 픽업 → boundaries.json GCS 업로드 → content.analyze 재개.
   // 별도 lane (WORKER_JOBS=gebd) · 다른 워커는 이 잡을 claim 하지 않는다.
@@ -96,6 +100,10 @@ export async function initQueue(): Promise<void> {
 // PPL 이 두 번 돌아 회당 ~₩60 낭비. 이런 케이스는 사람 개입이 정답.
 const MAX_ATTEMPTS_BY_TYPE: Partial<Record<JobType, number>> = {
   "content.analyze": 2,
+  // 이미지 생성은 호출당 과금이라 재시도를 아낀다. 실패는 대개 입력 문제(인물 미등록)라
+  // 반복해도 같은 결과다 — 사람이 고쳐야 한다.
+  "thumbnail.generate": 2,
+  "thumbnail.style": 2,
 };
 
 export async function enqueue(

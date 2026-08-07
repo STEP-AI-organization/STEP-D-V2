@@ -23,8 +23,10 @@ from typing import Any, Optional, TypedDict
 from core.thumbnail.plan import BackgroundBrief, PersonBrief
 
 # ── 배경 프레임 가중치 ────────────────────────────────────────────────────────
-BG_W_CLEAN = 35.0      # 기존 자막·로고가 없을 것 (가장 중요 — 지우는 비용이 크다)
-BG_W_SHARP = 20.0      # 선명도
+# 자막·로고는 생성 모델이 지운다 (2026-08-07 확인) — 감점 축을 없앴다.
+# 미리 걸러내면 정작 쓸 만한 프레임(클로즈업일수록 자막이 붙는다)이 다 날아간다.
+BG_W_CLEAN = 0.0
+BG_W_SHARP = 40.0      # 선명도 (자막 축을 없앤 만큼 여기로)
 BG_W_ROOM = 20.0       # 기획이 요구한 여백과 맞는가
 BG_W_TIME = 15.0       # 기획이 지목한 시점과 가까운가
 BG_W_NO_FACE = 10.0    # 배경이므로 큰 얼굴이 없는 편이 낫다
@@ -72,12 +74,7 @@ def _face_area_ratio(frame: dict[str, Any]) -> float:
 
 
 def score_background(frame: dict[str, Any], brief: BackgroundBrief) -> BackgroundPick:
-    clean = BG_W_CLEAN
-    if frame.get("hasCaption"):
-        clean -= BG_W_CLEAN * 0.6
-    if frame.get("hasLogo"):
-        clean -= BG_W_CLEAN * 0.4
-    clean = max(clean, 0.0)
+    clean = 0.0
 
     sharp = BG_W_SHARP * float(frame.get("sharpness") or 0.0)
 
@@ -225,14 +222,24 @@ def score_person(
     }
 
 
+# 얼굴이 이 비율보다 작으면 후보에서 뺀다. 작은 얼굴은 슬롯 크기로 확대하는 순간
+# 뭉개져서, 점수가 아무리 높아도 쓸 수 없다 — 순위 문제가 아니라 자격 문제다.
+MIN_FACE_AREA = 0.03
+
+
 def find_people(
     candidates: list[dict[str, Any]],
     briefs: list[PersonBrief],
     cast_embeddings: Optional[dict[str, list[float]]] = None,
     top_per_slot: int = 3,
+    min_face_area: float = MIN_FACE_AREA,
 ) -> dict[str, list[PersonPick]]:
     """슬롯별 인물 후보. 같은 프레임이 두 슬롯을 동시에 채우지 않도록 배제한다."""
     cast_embeddings = cast_embeddings or {}
+    # 자격 미달(너무 작은 얼굴)은 순위에 올리기 전에 잘라낸다.
+    if min_face_area > 0:
+        candidates = [c for c in candidates
+                      if float(c.get("frameArea") or 0.0) >= min_face_area]
     result: dict[str, list[PersonPick]] = {}
     used: set[str] = set()
     # 같은 사람이 두 슬롯을 채우면 안 된다. 파일 경로만 보면 1.5초 뒤 프레임의

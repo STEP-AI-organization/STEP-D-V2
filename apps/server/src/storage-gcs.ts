@@ -248,3 +248,27 @@ export function parseObjectPath(storedPath: string): string {
 export function useGcs(): boolean {
   return Boolean(BUCKET);
 }
+
+/**
+ * prefix 아래 오브젝트 경로 목록. GCS·로컬 모두 같은 형태(prefix 포함 상대경로)로 돌려준다.
+ * 썸네일 에셋(스타일 프로파일·출연자 사진)을 워커 디스크로 내려받을 때 쓴다.
+ */
+export async function listPrefix(prefix: string): Promise<string[]> {
+  const b = getBucket();
+  if (b) {
+    const [files] = await b.getFiles({ prefix });
+    return files.map((f) => f.name).filter((n) => !n.endsWith("/"));
+  }
+  const root = path.join(DEV_STORAGE, prefix);
+  if (!fs.existsSync(root)) return [];
+  const out: string[] = [];
+  const walk = (dir: string) => {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) walk(full);
+      else out.push(path.relative(DEV_STORAGE, full).split(path.sep).join("/"));
+    }
+  };
+  walk(root);
+  return out;
+}
