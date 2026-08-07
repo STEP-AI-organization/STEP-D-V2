@@ -52,7 +52,7 @@ export default function LandingPage() {
       <nav>
         <div className="wrap nav-in">
           <div className="logo">
-            <span className="mark">D</span>STEP D
+            <img className="mark" src="/brand/stepd-icon-192.png" alt="" aria-hidden />STEP D
           </div>
           <div className="nav-links">
             <a href="#problem">문제</a>
@@ -673,7 +673,7 @@ export default function LandingPage() {
           <div className="foot">
             <div>
               <div className="logo">
-                <span className="mark">D</span>STEP D
+                <img className="mark" src="/brand/stepd-icon-192.png" alt="" aria-hidden />STEP D
               </div>
               <p>한국 미디어를 위한 AI 영상 운영·생성 자동화 SaaS. &lsquo;K-콘텐츠를 만드는 공장&rsquo;을 제공합니다.</p>
             </div>
