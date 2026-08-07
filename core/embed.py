@@ -31,6 +31,8 @@ LOCATION = os.environ.get("VERTEX_LOCATION") or "asia-northeast3"
 _VERTEX_MODEL = os.environ.get("EMBED_MODEL") or "text-multilingual-embedding-002"
 
 _BACKEND = (os.environ.get("EMBED_BACKEND") or "").strip().lower()
+# Vertex 예측 1회당 instance 상한. 문서상 250 이고 초과하면 400 이다 — 여유를 둔다.
+_VERTEX_BATCH = max(1, int(os.environ.get("EMBED_BATCH") or 200))
 _warned = False
 
 
@@ -114,7 +116,15 @@ def embed_texts(texts: list[str], *, is_query: bool = False) -> list[list[float]
     if not nonempty:
         return out
     try:
-        vecs = _vertex_embed([texts[i] for i in nonempty], task_type)
+        # ⚠️ Vertex 는 **요청당 250 instance** 가 상한이다. 한 번에 다 보내면
+        # `400 INVALID_ARGUMENT: 250 instance(s) is allowed per prediction` 로 죽고,
+        # 그러면 이 함수가 **전부 None** 을 돌려줘 의미검색이 통째로 비어 버린다.
+        # 실측 2026-08-07: beat 이 182 → 413 개가 되자 389건을 한 번에 보내 이 경로를 탔다
+        # (182개 시절엔 250 미만이라 드러나지 않았다).
+        picked = [texts[i] for i in nonempty]
+        vecs: list[list[float] | None] = []
+        for k in range(0, len(picked), _VERTEX_BATCH):
+            vecs.extend(_vertex_embed(picked[k:k + _VERTEX_BATCH], task_type))
         for j, i in enumerate(nonempty):
             out[i] = vecs[j]
     except Exception as e:  # 자격증명 없음·SDK 없음·호출 실패

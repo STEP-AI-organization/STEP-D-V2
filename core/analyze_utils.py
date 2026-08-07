@@ -83,6 +83,7 @@ def prepare_checkpoints(
     SCENE_TYPE_VER = "2026-07-24a"
     BEATS_VER = "2026-07-29-speaker-split-v2"
     SIGNALS_VER = "2026-08-06-init"
+    INDEX_VER = "2026-08-07-init"   # segments.json (검색 인덱스) 재조립 로직 버전
     STT_VER = "2026-07-27-word-normalize"
     VIEWER_SIGNALS_VER = "2026-07-28-init"
     STT_PROVIDER_ENV = (os.environ.get("STT_PROVIDER") or "gemini").lower()
@@ -122,6 +123,13 @@ def prepare_checkpoints(
         # signals 는 beat 구간에 매달린 값이라 beats 가 바뀌면 통째로 무효다 (beat id 가 달라진다).
         "signals.json": fingerprint(SIGNALS_VER, BEATS_VER, SHOTS_VER, STT_VER, _boundaries_hash),
         "viewer_signals.json": fingerprint(VIEWER_SIGNALS_VER, _comments_hash),
+        # ⚠️ segments.json 은 CHECKPOINTS 에는 있었지만 여기 params 에 **없었다**.
+        # 무효화 루프가 params.items() 만 돌기 때문에 이 파일은 **한 번 만들어지면 영영
+        # 갱신되지 않았다.** 2026-08-07 실측: 경계 교체로 beats 가 182 → 413 개가 됐는데
+        # segments.json 은 182개(beat 0~181 참조)로 남아, 검색 인덱스가 존재하지도 않는
+        # beat 을 가리켰다. 검색이 이 리포의 목적물인데 그게 통째로 낡아 있었다.
+        "segments.json": fingerprint(genre, INDEX_VER, BEATS_VER, SIGNALS_VER,
+                                     SCENE_TYPE_VER, REFINE_VER, STT_VER, _boundaries_hash),
         "shorts.json": fingerprint(genre, shorts_n, profile, channels, cast_registry, RECOMMEND_VER, RECOMMEND_MODE, REFINE_VER, FACES_VER, BEATS_VER, STT_VER, _comments_hash, _boundaries_hash),
         "analysis.json": fingerprint(genre, shorts_n, profile, channels, cast_registry, RECOMMEND_VER, RECOMMEND_MODE, REFINE_VER, FACES_VER, BEATS_VER, STT_VER, _comments_hash, _boundaries_hash),
     }

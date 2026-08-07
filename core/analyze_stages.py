@@ -324,9 +324,18 @@ def index_search_segments(
         _existing = load_json(out_dir / "segments.json")
         _has_emb = isinstance(_existing, dict) and any(
             s.get("emb_dialogue") for s in (_existing.get("segments") or []))
-        if resume and _has_emb:
+        # ⚠️ 임베딩 유무만 보면 안 된다 — beats 가 바뀌어도 "재사용"해 버린다.
+        # segments 는 beat 단위 레코드이므로 beat 개수가 다르면 통째로 낡은 것이다
+        # (2026-08-07: beats 413개인데 segments 는 182개로 남아 있었다).
+        _beats = load_json(out_dir / "beats.json") or {}
+        _n_beats = len(_beats.get("beats") or [])
+        _stale = _n_beats > 0 and int(_existing.get("count") or 0) != _n_beats \
+            if isinstance(_existing, dict) else False
+        if resume and _has_emb and not _stale:
             step(f"검색 인덱스 — 체크포인트 재사용 ({_existing.get('count')} 세그먼트)")
             return
+        if _stale:
+            step(f"검색 인덱스 — beats {_n_beats}개 ≠ segments {_existing.get('count')}개 → 재생성")
         step("검색 세그먼트 인덱싱…")
         seg_result = build_segments(out_dir, media_id=media_id, genre=genre, embed=True)
         save_json(out_dir / "segments.json", seg_result)
