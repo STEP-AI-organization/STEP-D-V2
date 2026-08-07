@@ -764,7 +764,19 @@ async function persistArtifacts(work: string, mediaId: string): Promise<{ base: 
   try {
     for (const name of CHECKPOINT_FILES) {
       const local = path.join(work, name);
-      if (fs.existsSync(local)) await uploadFile(`${base}/${name}`, local);
+      if (!fs.existsSync(local)) continue;
+      // ⚠️ fallback 이 만든 boundaries.json 을 올리면 **GEBD 결과를 덮어쓴다.**
+      // 순서가 이렇게 된다: ①content.analyze 가 fallback 으로 완주 ②gebd.detect 가 정밀
+      // boundaries.json 을 GCS 에 올림 ③재분석이 다시 fallback 을 만들어 **②를 덮음**.
+      // 실측(2026-08-07): 재분석 로그가 `source=shots_fallback` 이었다 — GPU 를 돌린 게 헛일이 된다.
+      // GEBD 산출물(source="gebd")만 올린다. fallback 은 어차피 매 실행 재생성되므로 손해가 없다.
+      if (name === "boundaries.json") {
+        try {
+          const src = JSON.parse(fs.readFileSync(local, "utf8"))?.source;
+          if (src !== "gebd") continue;
+        } catch { continue; }
+      }
+      await uploadFile(`${base}/${name}`, local);
     }
     const framesDir = path.join(work, "scene_frames");
     let frames: string[] = [];
