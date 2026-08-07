@@ -257,10 +257,12 @@ python scripts/make_review_viewer.py <workdir> <video> [out.html]
 | 검색 인덱싱 (임베딩 227×2) | 29초 | (위에 포함) |
 | **합계** | **~22분** | **₩154** |
 
-`STT_PROVIDER=soniox` 를 쓰면 STT 가 API 로 가서 **+₩270** 이 붙는다.
+`STT_PROVIDER=soniox` 를 쓰면 STT 가 API 로 가서 **+₩135** 이 붙는다
+($0.10/시간 · 화자분리 포함 · 2026-08-07 공식가 확인. 58.6분 = $0.098).
 `usage.json` 이 회당 실측을 남긴다 (캐시 토큰 포함).
 
-> 이전 문서의 "회당 ~₩620" 은 Soniox STT + chyron on 기준. 위는 whisper 로컬 + chyron off 기준이다.
+> 이전 문서의 "회당 ~₩620" 은 Soniox STT(당시 ₩270 로 **과대추정**) + chyron on 기준.
+> 실제 Soniox 는 ₩135 이므로 그 수치도 ~₩485 로 내려간다. 위는 whisper 로컬 + chyron off 기준.
 
 ---
 
