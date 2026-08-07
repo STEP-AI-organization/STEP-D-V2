@@ -1207,3 +1207,85 @@ export function logSearchEvent(ev: SearchLogEvent): void {
     keepalive: true,
   }).catch(() => {});
 }
+
+// ── 썸네일 엔진 (프로그램 단위) ────────────────────────────────────────────────
+// 스타일 프로파일과 출연자 사진은 프로그램마다 한 번 준비하면 이후 회차에 자동 적용된다.
+
+export interface ThumbnailStyleProfile {
+  programId: string;
+  title: string;
+  /** 빈도·중앙값 집계. 키마다 [값, 횟수] 배열. */
+  aggregate: Record<string, unknown> | null;
+  /** 생성 프롬프트에 실제로 들어가는 한국어 문장. */
+  prompt: string;
+}
+
+/** 없으면 null — 아직 학습 안 한 프로그램이다. */
+export async function fetchThumbnailStyle(programId: string): Promise<ThumbnailStyleProfile | null> {
+  const res = await fetch(`${API_BASE}/programs/${programId}/thumbnail-style`);
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`스타일 조회 실패 (${res.status})`);
+  return (await res.json()) as ThumbnailStyleProfile;
+}
+
+/** sourceUrl 은 재생목록 URL 을 권장 — 채널 전체는 프로그램이 섞여 톤이 뭉개진다. */
+export async function trainThumbnailStyle(
+  programId: string,
+  sourceUrl: string,
+  opts: { limit?: number; sample?: number } = {},
+): Promise<{ ok: boolean; jobId?: string }> {
+  const res = await fetch(`${API_BASE}/programs/${programId}/thumbnail-style`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ sourceUrl, ...opts }),
+  });
+  if (!res.ok) throw new Error(((await res.json()) as any)?.message ?? "학습 요청 실패");
+  return (await res.json()) as { ok: boolean; jobId?: string };
+}
+
+export interface CastPhotoEntry {
+  name: string;
+  photos: number;
+}
+
+export async function fetchCastPhotos(programId: string): Promise<CastPhotoEntry[]> {
+  const res = await fetch(`${API_BASE}/programs/${programId}/cast-photos`);
+  if (!res.ok) return [];
+  return ((await res.json()) as { cast: CastPhotoEntry[] }).cast ?? [];
+}
+
+export async function uploadCastPhoto(
+  programId: string,
+  name: string,
+  file: File,
+): Promise<void> {
+  const form = new FormData();
+  form.append("name", name);
+  form.append("file", file);
+  const res = await fetch(`${API_BASE}/programs/${programId}/cast-photos`, {
+    method: "POST",
+    body: form,
+  });
+  if (!res.ok) throw new Error(((await res.json()) as any)?.message ?? "업로드 실패");
+}
+
+export async function deleteCastPhotos(programId: string, name: string): Promise<void> {
+  await fetch(`${API_BASE}/programs/${programId}/cast-photos/${encodeURIComponent(name)}`, {
+    method: "DELETE",
+  });
+}
+
+/** 회차 → 썸네일 후보 생성 (워커 잡). 인물 미등록이면 잡이 실패로 남는다. */
+export async function generateThumbnail(
+  mediaId: string,
+  programId: string,
+  candidates = 3,
+): Promise<{ ok: boolean; jobId?: string }> {
+  const res = await fetch(`${API_BASE}/media/${mediaId}/thumbnail`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ programId, candidates }),
+  });
+  if (!res.ok) throw new Error(((await res.json()) as any)?.message ?? "썸네일 생성 요청 실패");
+  return (await res.json()) as { ok: boolean; jobId?: string };
+}
