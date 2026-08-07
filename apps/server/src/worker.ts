@@ -208,7 +208,11 @@ async function handleGebdDetect(job: Job): Promise<void> {
     throw new Error("gebd.detect requires payload.mediaId, videoGcsPath, workdirGcsPrefix");
   }
 
-  const image = process.env.GEBD_IMAGE || "asia-northeast3-docker.pkg.dev/step-d/stepd/gebd-mmaction2:latest";
+  // 기본값은 **로컬에 tar 로 로드한 원본 이미지**다. 예전 기본값
+  // (`asia-northeast3-docker.pkg.dev/step-d/stepd/gebd-mmaction2`)은 **존재하지 않는 저장소**를
+  // 가리켰다 — AR 에는 stepd-api·stepd-server 뿐이고 `stepd` 저장소가 없다(2026-08-07 확인).
+  // 클라우드 GPU 로 옮길 땐 이 env 로 AR 경로를 넘길 것.
+  const image = process.env.GEBD_IMAGE || "event-boundary-detection:latest";
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), `gebd-${mediaId}-`));
   try {
     // 1) 미디어 다운 (gsutil)
@@ -216,16 +220,60 @@ async function handleGebdDetect(job: Job): Promise<void> {
     const dl = spawnSync("gsutil", ["cp", videoGcs, localMp4], { encoding: "utf8" });
     if (dl.status !== 0) throw new Error(`gsutil cp 실패: ${dl.stderr?.slice(0, 300)}`);
 
-    // 2) GEBD Docker 실행 (컨테이너가 /workspace/input 에서 mp4 읽어 /workspace/output/boundaries.json 생성)
-    const outDir = path.join(tmpDir, "out");
+    // 2) GEBD Docker 실행.
+    //
+    // ⚠️ 2026-08-07 수정. 예전 코드는 `/workspace/input` · `/workspace/output` 을 마운트하고
+    // **커맨드 없이** 이미지를 띄웠다 — 이미지에 그런 ENTRYPOINT 가 없어서 GPU 가 있어도
+    // 무조건 실패했다(상상된 인터페이스에 맞춰 쓰여 있었다).
+    //
+    // 실제 계약(deploy/gebd/scripts/run_long_v3.sh):
+    //   /gebd/input/source.mp4   원본
+    //   /gebd/models/*.pt        가중치 (1.58GB · 이미지에 안 굽는다)
+    //   /gebd/scripts /gebd/cla /gebd/prepare   리포에서 스테이징
+    //   /gebd/out/boundaries.json                산출
+    //   env VIDEO · CHUNK_SEC · CORES
+    //
+    // CHUNK_SEC=300 · CORES=1 은 실측으로 정한 값이다. 바꾸면 깨진다 —
+    // 300 은 FEATURE_LEN 과 같아 0 패딩이 없고, CORES>1 은 parmap 이 산출물을 날린다.
+    const stage = path.join(tmpDir, "stage");
+    const outDir = path.join(stage, "out");
     await fs.mkdir(outDir, { recursive: true });
+    await fs.mkdir(path.join(stage, "input"), { recursive: true });
+    await fs.mkdir(path.join(stage, "models"), { recursive: true });
+    await fs.rename(localMp4, path.join(stage, "input", "source.mp4"));
+
+    // 리포의 GEBD 자산(스크립트·cla·prepare)을 스테이징. prepare/module.py 의 1초 세그먼트
+    // 수정이 여기 있다 — 빠지면 0.3행/초가 나와 경계 시각이 통째로 어긋난다.
+    const assetsRoot = process.env.GEBD_ASSETS
+      || path.resolve(process.cwd(), "..", "..", "deploy", "gebd");
+    for (const d of ["scripts", "cla", "prepare"]) {
+      await fs.cp(path.join(assetsRoot, d), path.join(stage, d), { recursive: true });
+    }
+
+    // 가중치: 로컬 경로(GEBD_MODEL) 우선, 없으면 GCS(GEBD_MODEL_GCS)에서 받는다.
+    const modelLocal = process.env.GEBD_MODEL;
+    const modelGcs = process.env.GEBD_MODEL_GCS;
+    const modelDest = path.join(stage, "models", "model_cla_f_0_s_-1_7728.pt");
+    if (modelLocal) {
+      await fs.cp(modelLocal, modelDest);
+    } else if (modelGcs) {
+      const mg = spawnSync("gsutil", ["cp", modelGcs, modelDest], { encoding: "utf8" });
+      if (mg.status !== 0) throw new Error(`가중치 다운로드 실패: ${mg.stderr?.slice(0, 300)}`);
+    } else {
+      throw new Error("GEBD_MODEL 또는 GEBD_MODEL_GCS 가 필요하다 (가중치 1.58GB · 이미지에 없음)");
+    }
+
     const dockerArgs = [
       "run", "--rm", "--gpus", "all",
-      "-v", `${tmpDir}:/workspace/input:ro`,
-      "-v", `${outDir}:/workspace/output`,
+      "-v", `${stage}:/gebd`,
+      "-e", "VIDEO=/gebd/input/source.mp4",
+      "-e", `CHUNK_SEC=${process.env.GEBD_CHUNK_SEC || "300"}`,
+      "-e", `CORES=${process.env.GEBD_CORES || "1"}`,
       image,
+      "bash", "/gebd/scripts/run_long_v3.sh",
     ];
-    const dk = spawnSync("docker", dockerArgs, { encoding: "utf8", timeout: 20 * 60 * 1000 });
+    // 실측 58.6분 회차 = 10.7분. 90~120분 회차 + 이미지 pull 을 감안해 45분.
+    const dk = spawnSync("docker", dockerArgs, { encoding: "utf8", timeout: 45 * 60 * 1000 });
     if (dk.status !== 0) throw new Error(`docker run 실패 (exit ${dk.status}): ${(dk.stderr || "").slice(0, 500)}`);
 
     // 3) boundaries.json GCS 업로드
