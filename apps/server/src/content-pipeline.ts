@@ -37,7 +37,7 @@ import {
 } from "./db-pg.ts";
 import type { TranscriptSegment, SearchSegmentRow } from "./db-pg.ts";
 import { toCoreRegistry, timelineToRows } from "./cast.ts";
-import { createReadStream, parseObjectPath, uploadFile } from "./storage-gcs.ts";
+import { createReadStream, parseObjectPath, readFile, uploadFile, useGcs } from "./storage-gcs.ts";
 import { enqueue } from "./queue.ts";
 import { newId } from "./pipeline.ts";
 
@@ -899,6 +899,33 @@ export async function runContentAnalyze(mediaId: string, fast = false): Promise<
   sweepStaleWorkDirs();
   const work = workDirFor(mediaId);
   fs.mkdirSync(work, { recursive: true });
+
+  // ── GCS → workdir 체크포인트 복원 (2026-08-07 신설) ────────────────────────
+  //
+  // ⚠️ 이게 없으면 **Cloud Run Jobs 에서 파이프라인이 성립하지 않는다.**
+  // CHECKPOINT_FILES 는 여태 **업로드에만** 쓰였다. 옛 워커는 GCE VM 이라 workdir 가 디스크에
+  // 남아서 문제가 없었는데, Cloud Run Job 은 실행마다 **새 컨테이너**라 workdir 가 늘 비어 있다.
+  // 그래서 실측으로 세 가지가 깨졌다:
+  //   1. gebd.detect 가 올린 boundaries.json 이 안 내려와 **GEBD 결과가 영영 소비되지 않음**
+  //   2. AUTO_GEBD 가 "boundaries.json 없음"을 매번 보고 gebd.detect 를 **무한 재큐**
+  //   3. stt.json 이 없으니 재시도마다 **STT 를 다시 구매** (회차당 ₩135)
+  // 지문(manifest.json)은 같이 복원돼야 의미가 있다 — 없으면 전 단계가 재생성된다.
+  if (useGcs()) {
+    let restored = 0;
+    await Promise.all(
+      CHECKPOINT_FILES.map(async (name) => {
+        const local = path.join(work, name);
+        if (fs.existsSync(local)) return;            // 이번 실행이 이미 만든 것은 건드리지 않는다
+        try {
+          const buf = await readFile(`analysis/${mediaId}/${name}`);
+          fs.writeFileSync(local, buf);
+          restored++;
+        } catch { /* 없으면 그만 — 첫 분석이면 정상이다 */ }
+      }),
+    );
+    if (restored) console.log(`[worker] content.analyze ${mediaId}: 체크포인트 ${restored}개 GCS 복원`);
+  }
+
   const videoPath = path.join(work, `source${path.extname(media.filename) || ".mp4"}`);
 
   // Hoisted so the catch can drain in-flight progress writes before writing the error
