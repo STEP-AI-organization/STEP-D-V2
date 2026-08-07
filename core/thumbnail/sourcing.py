@@ -23,8 +23,10 @@ from typing import Any, Optional, TypedDict
 from core.thumbnail.plan import BackgroundBrief, PersonBrief
 
 # ── 배경 프레임 가중치 ────────────────────────────────────────────────────────
-BG_W_CLEAN = 35.0      # 기존 자막·로고가 없을 것 (가장 중요 — 지우는 비용이 크다)
-BG_W_SHARP = 20.0      # 선명도
+# 자막·로고는 생성 모델이 지운다 (2026-08-07 확인) — 감점 축을 없앴다.
+# 미리 걸러내면 정작 쓸 만한 프레임(클로즈업일수록 자막이 붙는다)이 다 날아간다.
+BG_W_CLEAN = 0.0
+BG_W_SHARP = 40.0      # 선명도 (자막 축을 없앤 만큼 여기로)
 BG_W_ROOM = 20.0       # 기획이 요구한 여백과 맞는가
 BG_W_TIME = 15.0       # 기획이 지목한 시점과 가까운가
 BG_W_NO_FACE = 10.0    # 배경이므로 큰 얼굴이 없는 편이 낫다
@@ -72,12 +74,7 @@ def _face_area_ratio(frame: dict[str, Any]) -> float:
 
 
 def score_background(frame: dict[str, Any], brief: BackgroundBrief) -> BackgroundPick:
-    clean = BG_W_CLEAN
-    if frame.get("hasCaption"):
-        clean -= BG_W_CLEAN * 0.6
-    if frame.get("hasLogo"):
-        clean -= BG_W_CLEAN * 0.4
-    clean = max(clean, 0.0)
+    clean = 0.0
 
     sharp = BG_W_SHARP * float(frame.get("sharpness") or 0.0)
 

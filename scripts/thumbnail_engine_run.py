@@ -67,7 +67,6 @@ def frame_meta(path: pathlib.Path, sec: float, logo_windows: list[tuple[float, f
         "path": str(path), "sec": sec,
         "sharpness": round(float(min(lap.var() / 2000.0, 1.0)), 3),
         "hasLogo": any(s <= sec <= e for s, e in logo_windows),
-        "hasCaption": False,          # caption_detect 가 아래에서 채운다
         "width": w, "height": h, "faces": [],
     }
 
@@ -84,7 +83,6 @@ def main() -> int:
 
     load_env(ROOT / "apps" / "server" / ".env")
 
-    from core.thumbnail.caption_detect import annotate as annotate_captions
     from core.thumbnail.cast_registry import how_to_register, resolve_plan_people
     from core.thumbnail.plan import build_plan
     from core.thumbnail.sourcing import find_background, sample_secs, search_windows
@@ -157,9 +155,7 @@ def main() -> int:
         dest = out / "frames" / f"f_{i:02d}_{sec:.1f}.jpg"
         if extract_frame(video, sec, dest):
             frames.append(frame_meta(dest, sec, logo_windows))
-    annotate_captions(frames)
-    n_cap = sum(1 for f in frames if f.get("hasCaption"))
-    print(f"   후보 {len(frames)}장 · 화면자막 {n_cap}장 (감점)")
+    print(f"   후보 {len(frames)}장")
 
     bg_picks = find_background(frames, bg, top=3)
     for pk in bg_picks:
