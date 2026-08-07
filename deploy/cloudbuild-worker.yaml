@@ -1,0 +1,37 @@
+# 워커 이미지 **빌드·푸시만** 하는 Cloud Build 설정.
+#
+# ⚠️ 루트 `cloudbuild.yaml` 을 쓰면 안 된다 — 그건 마지막 스텝에서 `gcloud run deploy` 로
+# **프로덕션 stepd-server 를 재배포**한다. 워커 잡만 올리려는데 서버까지 건드릴 이유가 없다.
+#
+# 태그도 `:latest` 를 안 건드린다. `:latest` 를 밀면 다음번 서버 배포가 조용히 이 이미지를
+# 집어가서, 워커 때문에 넣은 변경이 서버에 섞여 나간다.
+#
+# 사용:
+#   gcloud builds submit --config=deploy/cloudbuild-worker.yaml \
+#     --substitutions=_TAG=worker-$(date +%s) --project=step-d .
+substitutions:
+  _TAG: worker-latest
+  _REPO: us-central1-docker.pkg.dev/step-d/stepd-server/stepd-server
+  # 경량 잡 lane 은 서버 Dockerfile 로 충분하다 (core/ 불필요).
+  # content.analyze 를 돌리려면 _DOCKERFILE=apps/server/Dockerfile.worker (core/ + python 포함).
+  _DOCKERFILE: apps/server/Dockerfile
+
+steps:
+  - name: gcr.io/cloud-builders/docker
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        docker build -f ${_DOCKERFILE} -t ${_REPO}:${_TAG} .
+  - name: gcr.io/cloud-builders/docker
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        docker push ${_REPO}:${_TAG}
+
+options:
+  machineType: E2_HIGHCPU_8
+  logging: CLOUD_LOGGING_ONLY
+
+timeout: 1200s

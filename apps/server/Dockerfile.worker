@@ -1,0 +1,65 @@
+# STEP-D 워커 이미지 — Cloud Run Jobs 용.
+#
+# 서버 이미지(`apps/server/Dockerfile`)에 **core/ 파이썬 파이프라인**을 얹은 것.
+# 왜 따로 두는가: `content.analyze` 는 `python -m core.analyze` 를 스폰하므로 core/ 와
+# 파이썬 의존성이 필요한데, 그걸 서버 이미지에 넣으면 **API 서버까지 ~500MB 무거워지고**
+# 콜드 스타트가 느려진다. 서버는 core/ 를 실행하지 않는다.
+#
+# ⚠️ GPU 는 없다. 그래서 이 이미지에서는:
+#   · `STT_PROVIDER=soniox` 여야 한다 (hybrid/whisper 는 torch+CUDA 필요 · 회차당 +₩270)
+#   · `RUN_FACES` 는 꺼진 채로 둔다 (InSightFace = GPU)
+#   · `gebd.detect` 는 이 lane 에서 안 돈다 (WORKER_JOBS 로 분리)
+#
+# 빌드: gcloud builds submit --config=deploy/cloudbuild-worker.yaml \
+#         --substitutions=_TAG=…,_DOCKERFILE=apps/server/Dockerfile.worker .
+
+FROM node:22-bookworm-slim AS base
+
+# ffmpeg — core/ 가 프레임·오디오 추출에 쓴다. fonts-noto-cjk 는 자막 번인용.
+# python3-venv 는 아래 venv 생성에 필요하다 (slim 이미지엔 없다).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg \
+    fonts-noto-cjk \
+    fontconfig \
+    python3 \
+    python3-venv \
+    python3-dev \
+    make \
+    g++ \
+  && rm -rf /var/lib/apt/lists/*
+
+ENV PNPM_HOME=/pnpm
+ENV PATH="$PNPM_HOME:$PATH"
+RUN npm install -g pnpm@latest
+
+# ── node deps (캐시) ─────────────────────────────────────────────────────────
+FROM base AS deps
+WORKDIR /app/apps/server
+COPY apps/server/package.json ./
+RUN pnpm install --no-frozen-lockfile --ignore-scripts && pnpm rebuild esbuild
+
+# ── python deps (캐시) ───────────────────────────────────────────────────────
+# requirements.txt 만 먼저 복사해 레이어를 캐시한다 — core/ 소스가 바뀌어도 재설치 안 하도록.
+FROM base AS pydeps
+COPY core/requirements.txt /tmp/requirements.txt
+RUN python3 -m venv /opt/corevenv \
+ && /opt/corevenv/bin/pip install --no-cache-dir --upgrade pip \
+ && /opt/corevenv/bin/pip install --no-cache-dir -r /tmp/requirements.txt
+
+# ── runtime ─────────────────────────────────────────────────────────────────
+FROM base AS runtime
+WORKDIR /app
+COPY package.json ./
+COPY apps/server apps/server
+COPY core core
+COPY --from=deps /app/apps/server/node_modules /app/apps/server/node_modules
+COPY --from=pydeps /opt/corevenv /opt/corevenv
+
+ENV NODE_ENV=production
+# content-pipeline.ts 가 이 값으로 파이썬을 스폰한다. 지정 안 하면 리포 안 venv 를 찾다가
+# 없으면 시스템 파이썬으로 폴백해 의존성 없이 죽는다.
+ENV CORE_PYTHON=/opt/corevenv/bin/python
+ENV CORE_DIR=/app
+
+WORKDIR /app/apps/server
+CMD ["npx", "tsx", "src/worker.ts", "--drain"]

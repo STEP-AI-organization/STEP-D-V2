@@ -30,6 +30,10 @@ opencv-python>=4.8
 # YouTube download (downloader.py)
 yt-dlp>=2024.0
 
+# Soniox STT (asr.py:_transcribe_soniox) 가 requests 를 직접 쓴다. 지금까지는 yt-dlp/openai 에
+# 묻어 들어와 우연히 동작했다 — 명시한다 (2026-08-07).
+requests>=2.31
+
 # ffmpeg/ffprobe must be on PATH (system install), used for audio/frame extraction.
 
 # ── Thumbnail engine (core/thumbnail.py · Phase 1+, docs/plans/thumbnail-engine-plan.md) ─────

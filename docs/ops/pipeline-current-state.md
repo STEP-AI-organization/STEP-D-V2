@@ -158,7 +158,8 @@ C. SJNET      추론 → boundaries.json
 | `CORES` | **1** | parmap 병렬이 산출물을 통째로 날린다 (실측 12청크 19분에 feature 0개) |
 | feature 밀도 | **1.00 행/초** | 미달하면 경계 시각이 어긋난다 (`run_long_v3.sh` 가 0.8 미만이면 경고) |
 
-**실측 (드라마 58.6분):** Stage A 277초 · Stage B 324초(29.5초/청크) · Stage C 43초 · 합 **371초** · **₩0**(로컬 GPU)
+**실측 (드라마 58.6분):** Stage A 277초 · Stage B 324초(29.5초/청크) · Stage C 43초 · 콜드 합 **644초(10.7분)** · **₩0**(로컬 GPU)
+(청크가 이미 있으면 Stage A 가 1초로 끝나 합 371초)
 
 **검증:** 최근접 실제 컷까지 중앙 0.84초(무작위 1.17초) · score 구간별 적중률 단조 증가(35%→58%)
 → `GRADE_HARD_SCORE=0.35`·`GRADE_SOFT_SCORE=0.18` **그대로 둔다.**
@@ -250,11 +251,11 @@ python scripts/make_review_viewer.py <workdir> <video> [out.html]
 
 | 단계 | 시간 | API 비용 |
 |---|---|---|
-| GEBD 경계 (로컬 GPU) | 371초 | **₩0** |
+| GEBD 경계 (로컬 GPU · 콜드) | 644초 | **₩0** |
 | STT (whisper large-v3 · CUDA) | 351초 | **₩0** (로컬) |
 | 본 파이프라인 (refine→beats→annot→recommend) | 318초 | ₩154 |
 | 검색 인덱싱 (임베딩 227×2) | 29초 | (위에 포함) |
-| **합계** | **~18분** | **₩154** |
+| **합계** | **~22분** | **₩154** |
 
 `STT_PROVIDER=soniox` 를 쓰면 STT 가 API 로 가서 **+₩270** 이 붙는다.
 `usage.json` 이 회당 실측을 남긴다 (캐시 토큰 포함).

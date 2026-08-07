@@ -93,6 +93,21 @@ const JOB_LANES: Record<"content" | "youtube" | "gebd", JobType[]> = {
   // Docker mmaction2 를 못 돌린다. 그래서 별도 프로세스 (WORKER_JOBS=gebd) 로만 픽업.
   gebd: ["gebd.detect"],
 };
+/**
+ * Drain mode — Cloud Run Jobs 용. 큐가 빌 때까지 처리하고 **종료**한다.
+ *
+ * 기본(상시) 모드는 5초 폴링 무한루프라 프로세스가 계속 떠 있어야 하고, 그게 idle 과금의
+ * 유일한 이유다. 실측(프로덕션 job_queue 8만 건)에서 잡의 99.98%는 YouTube API 대기라
+ * CPU 를 거의 안 쓴다 — 상시 프로세스를 둘 이유가 폴링뿐이다.
+ * drain 모드에서는 Cloud Scheduler 가 주기적으로 Job 을 깨우고, 처리할 게 없으면 즉시 끝난다.
+ *
+ * DRAIN_MAX_MS 를 넘기면 **새 잡을 claim 하지 않는다**(진행 중인 건 끝까지 간다).
+ * Cloud Run Job 타임아웃에 걸려 잡 도중에 죽는 걸 피하려는 것 — 남은 건 다음 실행이 가져간다.
+ */
+const DRAIN_MODE = process.argv.includes("--drain")
+  || (process.env.WORKER_MODE ?? "").trim().toLowerCase() === "drain";
+const DRAIN_MAX_MS = Number(process.env.DRAIN_MAX_MS ?? 50 * 60 * 1000);
+
 const WORKER_JOBS = (process.env.WORKER_JOBS ?? "all").trim().toLowerCase();
 const CLAIM_TYPES: JobType[] | undefined =
   WORKER_JOBS === "content" ? JOB_LANES.content
@@ -1144,20 +1159,33 @@ async function sweepDueChannels(): Promise<void> {
 }
 
 async function loop(): Promise<void> {
+  const startedAt = Date.now();
+  let drained = 0;
   while (!stopping) {
+    // drain 모드는 예산 시간이 지나면 **새 잡을 안 집는다**. 남은 건 다음 실행이 가져간다.
+    if (DRAIN_MODE && Date.now() - startedAt > DRAIN_MAX_MS) {
+      console.log(`[worker] drain 예산(${Math.round(DRAIN_MAX_MS / 60000)}분) 초과 — ${drained}건 처리 후 종료`);
+      return;
+    }
     let job: Job | null = null;
     try {
       job = await claimJob(CLAIM_TYPES);
     } catch (err) {
       console.error("[worker] claim failed", err);
+      if (DRAIN_MODE) return;   // 큐 접근 자체가 실패 — 다음 실행에 맡긴다
       await sleep(IDLE_POLL_MS);
       continue;
     }
 
     if (!job) {
+      if (DRAIN_MODE) {
+        console.log(`[worker] 큐 비었음 — ${drained}건 처리 후 종료`);
+        return;
+      }
       await sleep(IDLE_POLL_MS);
       continue;
     }
+    drained++;
 
     // Keep the lock fresh while the job runs, so requeueStale (30-min sweep) never hands a
     // still-executing long job (content.analyze) to a second worker. 5-min cadence, well
@@ -1252,7 +1280,9 @@ async function main(): Promise<void> {
   console.log("[worker] queue:", JSON.stringify(await queueStats()));
 
   if (RUNS_SWEEP) await sweepDueChannels();
-  const tick = setInterval(() => {
+  // drain 모드는 Scheduler 가 주기적으로 깨우므로 내부 타이머가 필요 없다.
+  // (setInterval 을 걸면 Node 이벤트 루프가 살아 있어 잡을 다 처리하고도 안 끝난다.)
+  const tick = DRAIN_MODE ? null : setInterval(() => {
     if (RUNS_SWEEP) void sweepDueChannels().catch((err) => console.error("[worker] sweep failed", err));
     void requeueStale().catch((err) => console.error("[worker] requeue failed", err));
   }, TICK_INTERVAL_MS);
@@ -1261,13 +1291,14 @@ async function main(): Promise<void> {
   const shutdown = (sig: string) => {
     console.log(`[worker] ${sig} — finishing current job then exiting`);
     stopping = true;
-    clearInterval(tick);
+    if (tick) clearInterval(tick);
   };
   process.on("SIGTERM", () => shutdown("SIGTERM"));
   process.on("SIGINT", () => shutdown("SIGINT"));
 
   console.log(
-    `[worker] lane=${WORKER_JOBS} · claims=${CLAIM_TYPES ? CLAIM_TYPES.join(",") : "all"} · sweep=${RUNS_SWEEP} — polling for jobs`,
+    `[worker] lane=${WORKER_JOBS} · claims=${CLAIM_TYPES ? CLAIM_TYPES.join(",") : "all"} · sweep=${RUNS_SWEEP}`
+    + (DRAIN_MODE ? ` · mode=drain (큐 비면 종료 · 예산 ${Math.round(DRAIN_MAX_MS / 60000)}분)` : " — polling for jobs"),
   );
   await loop();
   console.log("[worker] stopped");
