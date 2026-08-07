@@ -204,3 +204,62 @@ pull 시간이 회차당 수 분 붙는다. → **부트 디스크에 이미지�
 - `docs/ops/pipeline-current-state.md` — 파이프라인 실제 상태
 - `deploy/gebd/README.md` — GEBD 실행·제약
 - `docs/ops/infra.md` — 인프라 SSOT
+
+---
+
+## 7. 실제 배선 결과 (2026-08-07 실행)
+
+### 올라간 것
+
+| 리소스 | 설정 | 검증 |
+|---|---|---|
+| `stepd-worker-youtube` (Cloud Run Job) | 1 vCPU · 2Gi · `WORKER_JOBS=youtube` · drain | ✅ 잡 9건 처리 · 수익 집계 · exit 0 |
+| `stepd-worker-content` (Cloud Run Job) | 4 vCPU · 8Gi · `WORKER_JOBS=content` · `STT_PROVIDER=soniox` | ✅ 부팅·DB·drain · exit 0 |
+| `stepd-worker-youtube-tick` (Scheduler) | `*/15 * * * *` Asia/Seoul | ✅ 발화 확인 |
+| `stepd-worker-content-tick` (Scheduler) | `*/15 * * * *` Asia/Seoul | 생성됨 |
+| `stepd-soniox-api-key` (Secret) | — | ✅ content Job 에 주입 |
+| 이미지 `:worker-*` / `:content-*` | AR `stepd-server` 저장소 | `:latest` 미변경 |
+
+### 클라우드 환경 실측 검증 (임시 Job `stepd-pytest`, 실행 후 삭제)
+
+```
+[1] python venv          Python 3.11.2
+[2] core.analyze import  OK
+[3] 의존성               genai/cv2/requests/scenedetect/PIL OK
+[4] ffmpeg               5.1.9-0+deb12u1
+[5] soniox 경로          _transcribe_soniox: True
+[6] Vertex ADC           OK (실제 generate_content 성공)
+```
+
+### 메모리 8Gi 근거
+
+워크디렉토리 산출물은 **52MB** 로 작다(회차 1건 실측). 문제는 `content-pipeline.ts:65` 가
+`os.tmpdir()` 아래에 작업하는데 **Cloud Run 의 `/tmp` 는 tmpfs(RAM)** 라, 원본 영상
+**1.08GB** 가 통째로 메모리를 먹는다는 것이다. 8Gi 는 60분 회차 기준이고,
+**90~120분 회차(영상 2~3GB)는 16Gi 가 필요할 수 있다 — 첫 실행에서 실측할 것.**
+
+### 비용 (실측 기반)
+
+| 항목 | 월 |
+|---|---|
+| youtube Job (15분 × 1vCPU·2Gi · 대부분 빈 큐) | ~$0.6 |
+| content Job (15분 폴링 · 빈 큐 ~20초) | ~$1.85 |
+| content 실제 처리 (12건 × ~30분 · 4vCPU·8Gi) | ~$1.5 |
+| Scheduler 2개 | 무료 (3개까지) |
+| **인프라 소계** | **~$4 (₩5,500)** |
+| **STT Soniox 전환** | **회차당 +₩270 → 월 +₩3,240** |
+
+**STT 전환 비용이 인프라비보다 크다.** 회차당 API 가 ₩154 → ~₩424 가 된다.
+
+### 더 줄일 수 있는 것 (안 함)
+
+content Job 의 15분 폴링(~$1.85/월)은 **서버가 `enqueue("content.analyze")` 직후 Job 을
+직접 트리거**하면 거의 0이 된다. 지연도 사라진다(지금은 최대 15분). 다만 `stepd-server`
+프로덕션 재배포가 필요해 이번엔 안 했다. 다음 서버 배포 때 같이 넣는 게 맞다.
+
+### 아직 로컬에 남은 것
+
+- **`gebd.detect`** — GPU 쿼터(`GPUS_ALL_REGIONS=0`)가 막혀 있다. 파이프라인을 막지 않으므로
+  (fallback 경계로 돌고, `boundaries.json` 을 나중에 얹으면 beats 이후만 재생성) 뒤로 미룰 수 있다.
+- **로컬 워커(pm2)** — 클라우드가 안정화될 때까지 병행. 큐가 `FOR UPDATE SKIP LOCKED` 라
+  둘이 동시에 떠 있어도 잡이 중복 처리되지는 않는다. 내릴 시점은 별도 판단.
