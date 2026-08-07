@@ -689,6 +689,12 @@ export default function LandingPage() {
               <a href="#">채용</a>
             </div>
             <div className="col">
+              <h5>약관</h5>
+              <Link href="/privacy">개인정보처리방침</Link>
+              <Link href="/terms">서비스 이용약관</Link>
+              <Link href="/data-deletion">데이터 삭제 요청</Link>
+            </div>
+            <div className="col">
               <h5>문의</h5>
               <a href="#">데모 신청</a>
               <a href="#">도입 상담</a>
