@@ -1,0 +1,517 @@
+{
+  "program": "나는솔로",
+  "aggregate": {
+    "sampleSize": 20,
+    "personCount": [
+      [
+        "2",
+        10
+      ],
+      [
+        "1",
+        7
+      ],
+      [
+        "3",
+        2
+      ]
+    ],
+    "captionLines": [
+      [
+        "2",
+        18
+      ],
+      [
+        "1",
+        1
+      ],
+      [
+        "3",
+        1
+      ]
+    ],
+    "captionPosition": [
+      [
+        "bottom-left",
+        20
+      ]
+    ],
+    "captionMaxChars": 10.5,
+    "captionColors": [
+      [
+        "white",
+        20
+      ],
+      [
+        "blue",
+        7
+      ],
+      [
+        "green",
+        3
+      ],
+      [
+        "pink",
+        3
+      ],
+      [
+        "yellow",
+        2
+      ]
+    ],
+    "highlightStyle": [
+      [
+        "키워드만 다른 색",
+        7
+      ],
+      [
+        "없음",
+        5
+      ]
+    ],
+    "borderRate": 0.95,
+    "borderDesc": [
+      [
+        "파스텔 그라디언트 프레임",
+        16
+      ],
+      [
+        "상단과 좌우에 녹색 프레임",
+        1
+      ]
+    ],
+    "logoRate": 1.0,
+    "logoPosition": [
+      [
+        "top-right",
+        14
+      ],
+      [
+        "top-left",
+        6
+      ]
+    ],
+    "background": [
+      [
+        "실내 스튜디오",
+        13
+      ],
+      [
+        "야외 자연 배경",
+        2
+      ],
+      [
+        "실내 서재 또는 스튜디오",
+        1
+      ]
+    ],
+    "tone": [
+      [
+        "밝고 화사함",
+        13
+      ],
+      [
+        "차분하고 진지함",
+        3
+      ],
+      [
+        "밝고 희망찬",
+        1
+      ]
+    ],
+    "personLayout": [
+      [
+        "가로로 나란히",
+        15
+      ],
+      [
+        "클로즈업",
+        3
+      ],
+      [
+        "단독샷",
+        1
+      ]
+    ]
+  },
+  "rows": [
+    {
+      "person_count": 2,
+      "caption_lines": 2,
+      "caption_position": "bottom-left",
+      "caption_max_chars": 6,
+      "caption_colors": [
+        "white"
+      ],
+      "highlight_style": "없음",
+      "has_border": true,
+      "border_desc": "파스텔 그라디언트 프레임",
+      "has_logo": true,
+      "logo_position": "top-right",
+      "background": "실내 스튜디오",
+      "tone": "밝고 화사함",
+      "person_layout": "가로로 나란히",
+      "_file": "-AEPI8UyWtU.jpg"
+    },
+    {
+      "person_count": 2,
+      "caption_lines": 2,
+      "caption_position": "bottom-left",
+      "caption_max_chars": 15,
+      "caption_colors": [
+        "white",
+        "green"
+      ],
+      "highlight_style": "전체 자막에 테두리 및 그림자 효과",
+      "has_border": true,
+      "border_desc": "상단과 좌우에 녹색 프레임",
+      "has_logo": true,
+      "logo_position": "top-right",
+      "background": "실내 서재 또는 스튜디오",
+      "tone": "차분하고 진지함",
+      "person_layout": "가로로 나란히",
+      "_file": "-vodE12bFB0.jpg"
+    },
+    {
+      "person_count": 1,
+      "caption_lines": 2,
+      "caption_position": "bottom-left",
+      "caption_max_chars": 10,
+      "caption_colors": [
+        "white",
+        "pink",
+        "orange"
+      ],
+      "highlight_style": "아래 줄 전체 그라디언트",
+      "has_border": true,
+      "border_desc": "파스텔 그라디언트 프레임",
+      "has_logo": true,
+      "logo_position": "top-right",
+      "background": "야외 자연 배경",
+      "tone": "밝고 희망찬",
+      "person_layout": "단독샷",
+      "_file": "0pz4j7lrQK4.jpg"
+    },
+    {
+      "person_count": 1,
+      "caption_lines": 2,
+      "caption_position": "bottom-left",
+      "caption_max_chars": 10,
+      "caption_colors": [
+        "white",
+        "purple"
+      ],
+      "highlight_style": "아래 줄 전체 다른 색",
+      "has_border": true,
+      "border_desc": "파스텔 그라디언트 프레임",
+      "has_logo": true,
+      "logo_position": "top-right",
+      "background": "야외 잔디밭",
+      "tone": "밝고 즐거움",
+      "person_layout": "클로즈업",
+      "_file": "2aLxRT6n2Z4.jpg"
+    },
+    {
+      "person_count": 2,
+      "caption_lines": 2,
+      "caption_position": "bottom-left",
+      "caption_max_chars": 7,
+      "caption_colors": [
+        "white",
+        "blue"
+      ],
+      "highlight_style": "키워드만 다른 색",
+      "has_border": true,
+      "border_desc": "파스텔 그라디언트 프레임",
+      "has_logo": true,
+      "logo_position": "top-left",
+      "background": "실내 스튜디오",
+      "tone": "밝고 화사함",
+      "person_layout": "가로로 나란히",
+      "_file": "4luMMeUmkMA.jpg"
+    },
+    {
+      "person_count": 3,
+      "caption_lines": 2,
+      "caption_position": "bottom-left",
+      "caption_max_chars": 11,
+      "caption_colors": [
+        "white",
+        "blue",
+        "yellow"
+      ],
+      "highlight_style": "키워드만 다른 색",
+      "has_border": true,
+      "border_desc": "파스텔 그라디언트 프레임",
+      "has_logo": true,
+      "logo_position": "top-left",
+      "background": "실내 스튜디오",
+      "tone": "밝고 화사함",
+      "person_layout": "가로로 나란히",
+      "_file": "5kUhEg8Vxg0.jpg"
+    },
+    {
+      "person_count": 1,
+      "caption_lines": 2,
+      "caption_position": "bottom-left",
+      "caption_max_chars": 9,
+      "caption_colors": [
+        "white",
+        "blue"
+      ],
+      "highlight_style": "첫 줄만 다른 색",
+      "has_border": true,
+      "border_desc": "파스텔 그라디언트 프레임",
+      "has_logo": true,
+      "logo_position": "top-left",
+      "background": "야외 (나무 배경)",
+      "tone": "차분하고 희망적임",
+      "person_layout": "단독 클로즈업",
+      "_file": "6CjEd_hXmh8.jpg"
+    },
+    {
+      "person_count": 2,
+      "caption_lines": 2,
+      "caption_position": "bottom-left",
+      "caption_max_chars": 12,
+      "caption_colors": [
+        "white",
+        "lime"
+      ],
+      "highlight_style": "키워드만 다른 색",
+      "has_border": true,
+      "border_desc": "녹색 프레임",
+      "has_logo": true,
+      "logo_position": "top-right",
+      "background": "실내 스튜디오",
+      "tone": "차분하고 진지함",
+      "person_layout": "가로로 나란히",
+      "_file": "6dnJFQohBx0.jpg"
+    },
+    {
+      "person_count": 1,
+      "caption_lines": 2,
+      "caption_position": "bottom-left",
+      "caption_max_chars": 15,
+      "caption_colors": [
+        "white",
+        "green"
+      ],
+      "highlight_style": "전체 자막에 테두리 및 그림자 효과, 일부 단어 강조",
+      "has_border": false,
+      "border_desc": "",
+      "has_logo": true,
+      "logo_position": "top-right",
+      "background": "실내 스튜디오와 인터뷰 자료",
+      "tone": "진지하고 해명하는 분위기",
+      "person_layout": "클로즈업",
+      "_file": "6JmHCk2Wa5s.jpg"
+    },
+    {
+      "person_count": 2,
+      "caption_lines": 2,
+      "caption_position": "bottom-left",
+      "caption_max_chars": 10,
+      "caption_colors": [
+        "white",
+        "blue"
+      ],
+      "highlight_style": "첫 줄 전체 다른 색",
+      "has_border": true,
+      "border_desc": "파스텔 그라디언트 프레임",
+      "has_logo": true,
+      "logo_position": "top-left",
+      "background": "실내 스튜디오",
+      "tone": "밝고 화사함",
+      "person_layout": "가로로 나란히",
+      "_file": "7Ww1ntXRUo4.jpg"
+    },
+    {
+      "person_count": 2,
+      "caption_lines": 2,
+      "caption_position": "bottom-left",
+      "caption_max_chars": 13,
+      "caption_colors": [
+        "white",
+        "pink"
+      ],
+      "highlight_style": "테두리 색으로 강조",
+      "has_border": true,
+      "border_desc": "파스텔 그라디언트 프레임",
+      "has_logo": true,
+      "logo_position": "top-right",
+      "background": "실내 스튜디오",
+      "tone": "밝고 화사함",
+      "person_layout": "가로로 나란히",
+      "_file": "9dxc3ALyjeo.jpg"
+    },
+    {
+      "person_count": 2,
+      "caption_lines": 2,
+      "caption_position": "bottom-left",
+      "caption_max_chars": 14,
+      "caption_colors": [
+        "white",
+        "blue"
+      ],
+      "highlight_style": "키워드만 다른 색",
+      "has_border": true,
+      "border_desc": "파스텔 그라디언트 프레임",
+      "has_logo": true,
+      "logo_position": "top-left",
+      "background": "실내 스튜디오",
+      "tone": "밝고 화사함",
+      "person_layout": "가로로 나란히",
+      "_file": "9iefe2Mrnts.jpg"
+    },
+    {
+      "person_count": 2,
+      "caption_lines": 2,
+      "caption_position": "bottom-left",
+      "caption_max_chars": 10,
+      "caption_colors": [
+        "white",
+        "blue"
+      ],
+      "highlight_style": "키워드만 다른 색",
+      "has_border": true,
+      "border_desc": "파스텔 그라디언트 프레임",
+      "has_logo": true,
+      "logo_position": "top-left",
+      "background": "실내 스튜디오",
+      "tone": "밝고 화사함",
+      "person_layout": "가로로 나란히",
+      "_file": "bqwusawmCNQ.jpg"
+    },
+    {
+      "person_count": 11,
+      "caption_lines": 1,
+      "caption_position": "bottom-left",
+      "caption_max_chars": 14,
+      "caption_colors": [
+        "white"
+      ],
+      "highlight_style": "없음",
+      "has_border": true,
+      "border_desc": "파스텔 그라디언트 프레임",
+      "has_logo": true,
+      "logo_position": "top-right",
+      "background": "실내 스튜디오",
+      "tone": "밝고 화사함",
+      "person_layout": "가로로 나란히",
+      "_file": "BXHIr6ePoO8.jpg"
+    },
+    {
+      "person_count": 1,
+      "caption_lines": 2,
+      "caption_position": "bottom-left",
+      "caption_max_chars": 9,
+      "caption_colors": [
+        "white"
+      ],
+      "highlight_style": "없음",
+      "has_border": true,
+      "border_desc": "파스텔 그라디언트 프레임",
+      "has_logo": true,
+      "logo_position": "top-right",
+      "background": "실내 스튜디오",
+      "tone": "밝고 화사함",
+      "person_layout": "가로로 나란히",
+      "_file": "cDxL8cNoqM0.jpg"
+    },
+    {
+      "person_count": 2,
+      "caption_lines": 2,
+      "caption_position": "bottom-left",
+      "caption_max_chars": 13,
+      "caption_colors": [
+        "white"
+      ],
+      "highlight_style": "없음",
+      "has_border": true,
+      "border_desc": "파스텔 그라디언트 프레임",
+      "has_logo": true,
+      "logo_position": "top-right",
+      "background": "실내 스튜디오",
+      "tone": "밝고 화사함",
+      "person_layout": "가로로 나란히",
+      "_file": "CnRhTnfgV9s.jpg"
+    },
+    {
+      "person_count": 1,
+      "caption_lines": 2,
+      "caption_position": "bottom-left",
+      "caption_max_chars": 10,
+      "caption_colors": [
+        "white"
+      ],
+      "highlight_style": "없음",
+      "has_border": true,
+      "border_desc": "파스텔 그라디언트 프레임",
+      "has_logo": true,
+      "logo_position": "top-right",
+      "background": "실내 스튜디오",
+      "tone": "밝고 화사함",
+      "person_layout": "가로로 나란히",
+      "_file": "D-Um1-yrPGA.jpg"
+    },
+    {
+      "person_count": 1,
+      "caption_lines": 2,
+      "caption_position": "bottom-left",
+      "caption_max_chars": 12,
+      "caption_colors": [
+        "white",
+        "pink",
+        "green"
+      ],
+      "highlight_style": "키워드만 다른 색",
+      "has_border": true,
+      "border_desc": "파스텔 그라디언트 프레임",
+      "has_logo": true,
+      "logo_position": "top-right",
+      "background": "야외 자연 배경",
+      "tone": "차분하고 진지함",
+      "person_layout": "클로즈업",
+      "_file": "eL37U1Rzrw8.jpg"
+    },
+    {
+      "person_count": 2,
+      "caption_lines": 2,
+      "caption_position": "bottom-left",
+      "caption_max_chars": 12,
+      "caption_colors": [
+        "white",
+        "yellow"
+      ],
+      "highlight_style": "키워드만 다른 색",
+      "has_border": true,
+      "border_desc": "노란색 프레임",
+      "has_logo": true,
+      "logo_position": "top-right",
+      "background": "실내 스튜디오",
+      "tone": "밝고 화사함",
+      "person_layout": "가로로 나란히",
+      "_file": "g5fAPiCdwwA.jpg"
+    },
+    {
+      "person_count": 3,
+      "caption_lines": 3,
+      "caption_position": "bottom-left",
+      "caption_max_chars": 9,
+      "caption_colors": [
+        "white",
+        "blue"
+      ],
+      "highlight_style": "마지막 줄만 다른 색",
+      "has_border": true,
+      "border_desc": "파스텔 그라디언트 프레임",
+      "has_logo": true,
+      "logo_position": "top-right",
+      "background": "야외 (꽃 배경)",
+      "tone": "밝고 화사함",
+      "person_layout": "가로로 나란히",
+      "_file": "G9aX2RG9-YI.jpg"
+    }
+  ]
+}
