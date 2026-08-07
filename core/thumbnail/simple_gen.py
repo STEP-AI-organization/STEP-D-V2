@@ -20,9 +20,6 @@ import pathlib
 from typing import Any, Optional
 
 
-STYLE_ROOT = pathlib.Path(__file__).resolve().parents[2] / "assets" / "thumbnail-style"
-
-
 def load_style(program: str) -> tuple[str, list[pathlib.Path]]:
     """프로그램 스타일 블록 + 참고 썸네일 경로.
 
@@ -32,7 +29,9 @@ def load_style(program: str) -> tuple[str, list[pathlib.Path]]:
     """
     import json
 
-    d = STYLE_ROOT / (program or "")
+    from core.thumbnail.paths import style_dir
+
+    d = style_dir(program)
     block_p = d / "style_prompt.txt"
     if not block_p.exists():
         return "", []

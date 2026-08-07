@@ -23,12 +23,13 @@ from __future__ import annotations
 import pathlib
 from typing import Optional
 
-CAST_ROOT = pathlib.Path(__file__).resolve().parents[2] / "assets" / "cast"
 IMAGE_EXT = {".jpg", ".jpeg", ".png", ".webp"}
 
 
 def registry_dir(program: str) -> pathlib.Path:
-    return CAST_ROOT / (program or "")
+    """program 은 프로그램 ID. 루트는 env 로 바뀐다 (paths.assets_root)."""
+    from core.thumbnail.paths import cast_dir
+    return cast_dir(program)
 
 
 def list_registered(program: str) -> dict[str, list[pathlib.Path]]:
