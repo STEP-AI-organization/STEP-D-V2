@@ -30,3 +30,14 @@ storage/
 *.zip
 *.docx
 gcp-keys/
+
+# 실험·분석 산출물 (2026-08-07 추가). .gcloudignore 가 있으면 .gitignore 는 **무시**되므로
+# /tmp/ 를 여기 다시 적어야 한다 — 안 그러면 빌드 컨텍스트가 GB 단위로 불어난다
+# (실측: 이게 빠져서 1.9GB 를 업로드했다).
+tmp/
+logs/
+바우처_결과보고_2026/
+*.tar
+*.pt
+*.pth
+*.pkl
