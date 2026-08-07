@@ -141,7 +141,7 @@ https://console.cloud.google.com/iam-admin/iam?project=step-d
 3. **다른 리전 시도.** us-central1 이 혼잡하면 us-west1·us-east1 이 열리기도 한다.
    단 GCS egress 를 감수해야 한다.
 4. **외부 GPU 로 우회.** RunPod 등은 쿼터가 없다 (월 ~₩2,000~5,500 추정).
-   `docs/plans/cloud-migration-model-and-worker.md` 참조.
+   `docs/plans/active/cloud-migration-model-and-worker.md` 참조.
 5. **그냥 로컬 GPU 유지.** GEBD 는 파이프라인을 막지 않는다 — 없으면 fallback 경계로 완주하고,
    나중에 `boundaries.json` 을 GCS 에 얹으면 beats 이후만 재생성된다. **서두를 이유가 없다.**
 
@@ -155,4 +155,4 @@ https://console.cloud.google.com/iam-admin/iam?project=step-d
 4. GPU VM 생성 + idle STOP 스크립트
 5. content Job 에 `AUTO_GEBD=1`, gebd 워커에 `GEBD_IMAGE`·`GEBD_MODEL_GCS` 설정
 
-상세: `docs/plans/cloud-migration-model-and-worker.md` §5
+상세: `docs/plans/active/cloud-migration-model-and-worker.md` §5

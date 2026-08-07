@@ -709,7 +709,7 @@
   - `results/exp11_viewer_profile.json` — 머신 소비용 JSON
   - `results/exp11_viewer_voice.md` — 채널 오너 소비용 자연어 요약
   - `results/exp11_per_long/` — 롱폼별 원본 추출 (재현·재학습)
-  - `docs/plans/viewer-signal-integration-design.md` — 실서비스 통합 설계 (Phase 1~4)
+  - `docs/plans/done/viewer-signal-integration-design.md` — 실서비스 통합 설계 (Phase 1~4)
 - **다음**:
   - `apps/server`에 `channel.viewer_profile.learn` 잡 신규 배선 (Phase 1)
   - Lab에 "시청자 목소리" 위젯 (Phase 2, 오너 가치)

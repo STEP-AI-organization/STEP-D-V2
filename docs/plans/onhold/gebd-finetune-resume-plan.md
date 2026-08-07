@@ -207,7 +207,7 @@ docker run --gpus all -v <dir>:/train -v <models>:/models \
 2. **리버스샷 억제** — beat 조립에서 `kind='shot'` 만인 경계를 약하게 취급.
    지금은 리버스샷마다 beat 이 끊겨 대화가 조각난다
 3. **`min_beat_sec` 조절** — 큰 beat 을 원하면 6→20~45. 실측표는
-   `docs/plans/search-highlight-replan-2026-08-06.md` 참고
+   `docs/plans/active/search-highlight-replan-2026-08-06.md` 참고
 
 ---
 
@@ -216,5 +216,5 @@ docker run --gpus all -v <dir>:/train -v <models>:/models \
 - `deploy/gebd/README.md` — 파일 위치·실행·제약 (실무 진입점)
 - `docs/research/data/gebd/eb5cd1_verdicts.json` — 판정 132개 원본
 - `docs/research/data/gebd/master_2026-06-18_eb5cd1.labeled.json` — NIA 스키마 annotation
-- `docs/plans/scene-boundary-model-wire.md` — 워커 배선·재실행 이중지출 방지
+- `docs/plans/done/scene-boundary-model-wire.md` — 워커 배선·재실행 이중지출 방지
 - `Downloads/비디오 전환 경계 추론 데이터/STEPD_학습데이터_스키마_및_생성가이드.md` — 학습 스키마 원본

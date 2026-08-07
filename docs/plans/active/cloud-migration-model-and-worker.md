@@ -2,7 +2,7 @@
 
 > 2026-08-07. 사용자: "이제 슬슬 클라우드에 워커까지 다 올릴 계획임. 모델도 올려야 할 거고."
 >
-> `docs/plans/worker-cloud-migration.md`(같은 날 작성)가 **워커** 이전의 비용·선택지를 다룬다.
+> `docs/plans/active/worker-cloud-migration.md`(같은 날 작성)가 **워커** 이전의 비용·선택지를 다룬다.
 > 이 문서는 그 위에 **(1) 실제 GCP 계정 상태 점검 (2) GEBD 모델 이전** 을 더한다.
 > 실측 결과 앞 문서의 전제 몇 개가 사실과 다르다 — §1·§4 참조.
 
@@ -200,7 +200,7 @@ pull 시간이 회차당 수 분 붙는다. → **부트 디스크에 이미지�
 
 ## 관련
 
-- `docs/plans/worker-cloud-migration.md` — 워커 이전 비용·선택지 (§1 전제 일부 정정 필요)
+- `docs/plans/active/worker-cloud-migration.md` — 워커 이전 비용·선택지 (§1 전제 일부 정정 필요)
 - `docs/ops/pipeline-current-state.md` — 파이프라인 실제 상태
 - `deploy/gebd/README.md` — GEBD 실행·제약
 - `docs/ops/infra.md` — 인프라 SSOT

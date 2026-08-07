@@ -267,4 +267,4 @@ bash deploy/gebd/run-local.sh <영상.mp4> tmp/gebd-test 300 1
 
 - `deploy/gebd/README.md` — GEBD 실행·제약·버그 이력
 - `docs/ops/gpu-quota-request.md` — 쿼터 승인되면 클라우드로 이전
-- `docs/plans/cloud-migration-model-and-worker.md` — 전체 이전 계획
+- `docs/plans/active/cloud-migration-model-and-worker.md` — 전체 이전 계획

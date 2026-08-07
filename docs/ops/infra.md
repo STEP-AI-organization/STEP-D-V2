@@ -1,6 +1,10 @@
 # STEP-D 인프라 (실서비스)
 
-> 전체 인프라의 단일 진실 소스. **바뀌면 여기 갱신한다.** 최종: 2026-07-16.
+> 전체 인프라의 단일 진실 소스. **바뀌면 여기 갱신한다.** 최종: **2026-08-07**.
+>
+> ⚠️ **2026-08-07 전면 개편.** 워커가 GCE VM → **Cloud Run Jobs** 로 옮겨졌고,
+> GEBD(화면전환 모델)용 **GPU VM** 이 새로 생겼다. 이전 판이 기술하던 `stepd-worker` VM 은
+> **존재하지 않는다**(조회 결과 GCE 인스턴스 0개였다).
 > 레거시 주의: 구 시스템(shorts-vm/shorts-pg) 문서는 폐기·삭제됐고, 리포에 남은 `apps/api`
 > (구 Python FastAPI)는 레거시 잔존물 — 현 서버(`apps/server`)는 이를 전혀 사용하지 않는다.
 
@@ -27,11 +31,18 @@
    └───────────────┬─────────────────────────┘
                    │ claim (FOR UPDATE SKIP LOCKED)
                    ▼
-   ┌─────────────────────────────────────────┐
-   │  워커 VM: stepd-worker (e2-small, GPU 없음)│
-   │  Node 워커 + Python 콘텐츠 파이프라인       │
-   │   → YouTube API / Vertex Gemini            │
-   └─────────────────────────────────────────┘
+   ┌──────────────────────────────────────────────────────┐
+   │  Cloud Run Jobs  (상시 프로세스 없음 · drain 모드)      │
+   │   stepd-worker-youtube  1vCPU/2Gi  경량 잡 99.98%      │
+   │   stepd-worker-content  4vCPU/8Gi  core/ 파이프라인     │
+   │  ← Cloud Scheduler 가 15분마다 깨움. 큐 비면 즉시 종료   │
+   └───────────────┬──────────────────────────────────────┘
+                   │ gebd.detect (GPU 필요분만)
+                   ▼
+   ┌──────────────────────────────────────────────────────┐
+   │  GCE: stepd-gebd-vm (us-central1-b · g2-standard-8+L4) │
+   │  GEBD 화면전환 모델 · 잡 없으면 스스로 shutdown          │
+   └──────────────────────────────────────────────────────┘
         │                         │
         ▼                         ▼
    GCS: stepd-media          Vertex AI (Gemini)
@@ -58,22 +69,46 @@
 - 빌드 설정 정본은 **루트 `cloudbuild.yaml`**(docker 빌드, `apps/server/Dockerfile`) — `deploy-server.ps1:101`이 이걸 submit 한다. `apps/server/cloudbuild.yaml`(buildpacks 빌드)도 공존하지만 배포 경로에서 안 쓴다.
 - **자동배포 안 됨** — 두 cloudbuild.yaml 헤더의 "Triggered by GitHub push" 주석은 낡은 서술이고 GitHub 트리거는 없다. 실제 운영은 `deploy-server.ps1`의 수동 `gcloud builds submit`이 정본.
 
-### 2. 워커 VM — `stepd-worker`
-- `e2-small` (2 vCPU / 2GB), zone `us-central1-a`, Ubuntu 24.04, 부트디스크 20GB.
-- **GPU 없음** — 파이프라인이 전부 관리형(Gemini)이라 불필요.
-- 서비스계정 `stepd-deployer`: `roles/aiplatform.user`(Vertex) · `roles/cloudsql.client` · `roles/secretmanager.secretAccessor`.
-- 코드: `/opt/stepd` (git clone, origin/main pull). systemd 서비스 `stepd-worker`(Node) + `cloud-sql-proxy`.
-- DB 접속: cloud-sql-proxy(`127.0.0.1:5432`) 경유. 시크릿 `stepd-worker-db-url`(Cloud Run과 값 다름 — 소켓 vs TCP).
-- Python 파이프라인: `/opt/stepd/core/.venv` (deploy/worker-pipeline-setup.sh), `CORE_PYTHON`으로 워커에 주입.
-- 프로비저닝: `deploy/worker-vm.sh`(Node) → `deploy/worker-pipeline-setup.sh`(Python).
-- **`/etc/stepd/worker.env` = `deploy/worker-env.sh`가 단일 진실 소스.** 워커 변수를 추가하려면
-  거기에 `add_var`/`add_secret` 한 줄만 넣으면 된다 (worker-vm.sh는 이 스크립트를 호출할 뿐,
-  값을 따로 갖고 있지 않다). 비파괴·멱등 — 빠진 변수만 추가하고 기존 값은 건드리지 않는다.
-  `deploy-server.ps1`이 매 배포마다 실행하므로 정합이 자동으로 유지된다. 수동 실행:
-  `bash /opt/stepd/deploy/worker-env.sh` → 변경 시 `sudo systemctl restart stepd-worker-youtube stepd-worker-content`.
-  🔒 이 스크립트는 `YOUTUBE_UPLOAD_ENABLED`를 **절대 쓰지 않는다** ([youtube-upload-gate.md](youtube-upload-gate.md)).
-- 이력: `worker-vm.sh`의 `REPO_URL` 기본값이 구 리포(`STEP-AI-official`)를 가리켜 신규 프로비저닝이
-  깨지던 문제는 2026-07-17에 `STEP-AI-organization`으로 정정됐다(변경 이력 2026-07-16 리포 이전 참고).
+### 2. 워커 — **Cloud Run Jobs** (2026-08-07 이전 완료)
+
+예전 `stepd-worker` GCE VM 은 **없다.** 상시 프로세스를 둘 이유가 폴링 하나뿐이었고
+(잡의 99.98%가 YouTube API 대기), idle 과금만 났다. `worker.ts` 에 **drain 모드**를 넣어
+큐가 비면 종료하도록 바꾸고 Cloud Run Jobs 로 옮겼다.
+
+| Job | 스펙 | lane | 비고 |
+|---|---|---|---|
+| `stepd-worker-youtube` | 1 vCPU · 2Gi | `channel.analyze`·`video.*`·`distribution.publish` | 서버 이미지 그대로 (core/ 불필요) |
+| `stepd-worker-content` | 4 vCPU · 8Gi | `content.analyze`·`youtube.download`·`match.*` | **`Dockerfile.worker`** — core/ + 파이썬 venv 포함 |
+
+- **트리거**: Cloud Scheduler `*/15 * * * *` (Asia/Seoul) → Run Admin API `:run`.
+  `stepd-worker-youtube-tick` · `stepd-worker-content-tick`.
+- **drain 모드**: `WORKER_MODE=drain`. 큐가 비면 exit 0 → **idle 과금 0.**
+  `DRAIN_MAX_MS`(기본 50분) 초과 시 새 잡을 안 집는다(진행 중인 건 끝까지) — Job 타임아웃에
+  걸려 잡 도중에 죽는 걸 막는다.
+- **STT**: content Job 은 GPU 가 없으므로 **`STT_PROVIDER=soniox`** 여야 한다
+  ($0.10/시간 · 회차당 약 ₩135). `hybrid`/`whisper` 는 CUDA 가 필요하다.
+- ⚠️ **`/tmp` 가 tmpfs(RAM)** 다. 원본 영상 1GB 가 통째로 메모리를 먹어 8Gi 로 잡았다.
+  90~120분 회차(2~3GB)는 16Gi 검토 필요.
+- 시크릿: `stepd-db-url`(소켓) · `stepd-google-client-id/secret` · `stepd-jwt-secret` ·
+  `stepd-public-url` · **`stepd-soniox-api-key`**(2026-08-07 신설).
+
+### 2-1. GEBD GPU VM — `stepd-gebd-vm`
+
+화면전환 모델(TSN + SJNET)은 CUDA 가 필수라 이것만 GPU 로 남는다.
+CPU 전용 실행은 9.45초 만에 실패한다(mmaction2 가 CUDA 요구).
+
+- `g2-standard-8` + **NVIDIA L4** · zone **`us-central1-b`** · 부팅디스크 100GB pd-balanced.
+  T4 를 먼저 시도했으나 us-central1 4개 존 전부 STOCKOUT 이었다.
+- 이미지: `us-central1-docker.pkg.dev/step-d/stepd/gebd-mmaction2:latest` (**13.8GB** ·
+  원본 53.9GB 를 `devel`→`runtime` 베이스로 슬리밍). 가중치 1.58GB 는 이미지에 안 굽고
+  `gs://stepd-media/models/gebd/` 에서 받는다.
+- **부팅 = 처리 = 자체 종료.** `deploy/gebd/vm-startup.sh` 가 잡을 소진하고 유휴 10분이면
+  `shutdown -h now`. 실측 18분 가동 후 `guestTerminate` 확인.
+- 🔒 **`--max-run-duration=3600s --instance-termination-action=STOP`** — 스크립트가 죽어도
+  GCE 가 1시간이면 강제 정지시킨다. **상시 가동은 월 $533 이라 유휴 종료 실패의 손해가 245배다.**
+- 병목은 GPU 가 아니라 **CPU 측 비디오 디코딩**이다(실측 GPU 9~23% · CPU 285%) —
+  비싼 GPU 를 살 이유가 없다.
+- 아직 `AUTO_GEBD=1` 은 안 켰다. 켜도 **VM 을 깨우는 배선이 없어** 잡만 쌓인다.
 
 ### 3. Cloud SQL — `stepd-db`
 - PostgreSQL 16. 인스턴스 연결명 `step-d:us-central1:stepd-db`.
@@ -157,15 +192,29 @@ Postgres 기반. `FOR UPDATE SKIP LOCKED` claim, dedupeKey, 지수백오프.
 
 ## 배포
 
-| 대상 | 방법 |
-|---|---|
-| 프론트(Vercel) | `.\deploy\deploy-web.ps1` (또는 main 푸시) |
-| 백엔드(Cloud Run + 워커) | `.\deploy\deploy-server.ps1` |
-| 워커만 (코드 갱신·재시작) | 루트 `.\deploy-worker.ps1` — SSH → `git reset --hard origin/main` → 재시작 (`deploy-server.ps1 -Only worker`와 같은 일) |
-| 워커 파이썬 환경(1회) | `deploy/worker-pipeline-setup.sh` + `CORE_PYTHON` env |
+**`deploy/cloud.sh` 하나로 한다.** 손으로 gcloud 를 치지 말 것 — 아래 실수가 반복됐다.
 
-- Cloud Build 업로드는 `.gcloudignore`로 venv/미디어 제외(안 하면 5.2GB).
-- 상세: [deploy.md](deploy.md).
+```bash
+bash deploy/cloud.sh status     # 현황만 (서비스·Jobs·Scheduler·GEBD VM·큐)
+bash deploy/cloud.sh server     # Cloud Run 서비스
+bash deploy/cloud.sh worker     # 워커 이미지 2종 + Jobs 갱신
+bash deploy/cloud.sh gebd       # GEBD 이미지 → AR
+bash deploy/cloud.sh migrate    # DB 마이그레이션
+bash deploy/cloud.sh all        # server + worker + migrate
+```
+
+| 함정 | 스크립트의 처리 |
+|---|---|
+| 루트 `cloudbuild.yaml` 이 마지막에 **서버를 재배포**한다 | 워커는 `cloudbuild-worker.yaml`(빌드·푸시만) |
+| 이미지를 밀어도 **Cloud Run Job 은 안 바뀐다** | `jobs update --image` 동반 |
+| `:latest` 를 밀면 다음 서버 배포에 섞인다 | 워커는 시각 태그만 |
+| `gcloud builds submit` 은 **작업 트리를 그대로** 올린다 | 미커밋 변경 경고 |
+| **마이그레이션은 자동이 아니다** | Cloud Run Job 으로 Cloud SQL 접속 |
+| `.gcloudignore` 가 있으면 `.gitignore` 는 **무시**된다 | `tmp/` 등을 명시 (안 하면 컨텍스트 1.9GB) |
+
+웹(Vercel)은 별도: `deploy/deploy-web.ps1` — **커밋 author 가 `contact@stepai.kr`** 여야 한다.
+
+Claude Code 스킬: `.claude/skills/deploy/SKILL.md`
 
 ## 로컬 개발
 
@@ -174,6 +223,16 @@ Postgres 기반. `FOR UPDATE SKIP LOCKED` claim, dedupeKey, 지수백오프.
 ---
 
 ## 변경 이력
+
+### 2026-08-07 — 워커 클라우드 이전 + GEBD GPU
+- 워커: GCE VM(`stepd-worker`) → **Cloud Run Jobs 2종** + Scheduler 15분. 상시 프로세스 제거
+- GEBD: GPU 쿼터 승인(`GPUS_ALL_REGIONS=1`) → **`stepd-gebd-vm`**(L4) 신설.
+  이미지 53.9GB → **13.8GB** 슬리밍, AR `stepd` 저장소 신설
+- DB: 마이그레이션 `0009`·`0010` 적용(`search_segments`·`search_events` 가 없었다).
+  job_queue 81,199행 + 파생 데이터 146,050행 정리 — **채널 연결만 보존**
+- 배포: `deploy/cloud.sh` + `/deploy` 스킬로 통합
+- 시크릿 `stepd-soniox-api-key` 신설 (클라우드 STT 는 Soniox)
+
 
 - **2026-07-16 (리포 이전 + 채널 트렌드 재설계)**: GitHub 리포를 `STEP-AI-official/STEP-D-V2`
   → **`STEP-AI-organization/STEP-D-V2`**로 이전(origin 변경 + Vercel 프로젝트 Git 재연결).

@@ -242,7 +242,7 @@ python -m core.eval_search \
 
 ## 관련
 
-- `docs/plans/search-highlight-replan-2026-08-06.md` §P1-3 — 이 문서의 상위 계획
+- `docs/plans/active/search-highlight-replan-2026-08-06.md` §P1-3 — 이 문서의 상위 계획
 - `core/evaluate.py` — 쇼츠 쪽 대응물(Hit@N·IoU·경계오차). 지표 정의를 여기서 빌려왔다
 - `core/search_log.py` — 로그 스키마 원본(오프라인 JSONL). 프로덕션 테이블은 `0010_search-log.cjs`
-- `docs/plans/auto-cast-and-action-tags.md` — `person_action` 유형이 살아나려면 필요한 것
+- `docs/plans/active/auto-cast-and-action-tags.md` — `person_action` 유형이 살아나려면 필요한 것

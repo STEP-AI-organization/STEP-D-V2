@@ -1,6 +1,6 @@
 # STEP D 파이프라인 · 실제 상태 (2026-08-07 갱신)
 
-이 문서는 **코드 실측 기준**이다. `docs/plans/step-d-master-build-plan.md` 는 설계 정본이지만 낡았다.
+이 문서는 **코드 실측 기준**이다. `docs/plans/active/step-d-master-build-plan.md` 는 설계 정본이지만 낡았다.
 지금 실제로 뭐가 도는지는 여기가 정본.
 
 > **2026-08-07 대규모 정정.** GEBD 배선에 버그 5개가 겹쳐 **경계 시각이 통째로 어긋나 있었다**
@@ -184,7 +184,7 @@ GEBD 배선 버그 5개가 겹쳐 **경계 256개가 각 60초 청크의 앞 11.
 - "모델 score 가 씬경계와 **역상관**" → 올바른 경계에서는 **정비례**
 - "`GRADE_HARD=0.35` 가 무의미" → **바꿀 필요 없음**
 - 라벨 132개 (`docs/research/data/gebd/`) → JSON 에 `INVALID` 표시. 재라벨링 필요
-- 파인튜닝 정당화 근거 전체 → `docs/plans/gebd-finetune-resume-plan.md` 머리말 참조
+- 파인튜닝 정당화 근거 전체 → `docs/plans/onhold/gebd-finetune-resume-plan.md` 머리말 참조
 
 **교훈:** 모델이 "도메인 밖이라 성능이 낮다"고 결론내기 전에 **입력 텐서의 실제 모양부터** 확인할 것.
 
@@ -288,7 +288,7 @@ python scripts/make_review_viewer.py <workdir> <video> [out.html]
 ## 관련
 
 - `deploy/gebd/README.md` — GEBD 실행·제약·버그 이력 (§3 필독)
-- `docs/plans/gebd-finetune-resume-plan.md` — 파인튜닝 보류·재개 (머리말에 무효 경고)
-- `docs/plans/auto-cast-and-action-tags.md` — 검색 강화
-- `docs/plans/scene-boundary-model-wire.md` — GEBD 워커 배선
-- `docs/plans/step-d-master-build-plan.md` — 설계 정본 (일부 낡음)
+- `docs/plans/onhold/gebd-finetune-resume-plan.md` — 파인튜닝 보류·재개 (머리말에 무효 경고)
+- `docs/plans/active/auto-cast-and-action-tags.md` — 검색 강화
+- `docs/plans/done/scene-boundary-model-wire.md` — GEBD 워커 배선
+- `docs/plans/active/step-d-master-build-plan.md` — 설계 정본 (일부 낡음)

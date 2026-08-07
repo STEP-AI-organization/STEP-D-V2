@@ -103,7 +103,7 @@ recommendation → selectedThumbnailId → clip.thumbnailUrl → exported media 
 - worker VM 설치 스크립트 반영
 
 ### 5.7 문서 최신화
-`docs/plans/thumbnail-engine-plan.md` "미구현" 톤 · 실제로는 상당 부분 구현됨 → 이 문서로 대체 or 갱신.
+`docs/archive/plans-2026-07/thumbnail-engine-plan.md` "미구현" 톤 · 실제로는 상당 부분 구현됨 → 이 문서로 대체 or 갱신.
 
 ## 6. 현실적인 방송사형 파이프라인 (정본)
 

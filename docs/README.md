@@ -1,6 +1,6 @@
 # STEP-D 문서 지도
 
-> 2026-07-16 재편. **폴더가 문서의 성격을 말한다**: `ops/`는 지금 사실(현황·운영), `plans/`는 미래 계획,
+> 2026-08-07 재편. **폴더가 문서의 성격을 말한다**: `ops/`는 지금 사실(현황·운영), `plans/`는 계획(`active/` 진행중 · `done/` 구현완료 · `onhold/` 보류),
 > `reference/`는 사전처럼 찾아보는 레퍼런스, `research/`는 기술 조사, `archive/`는 역사 기록(따라하지 말 것).
 
 ## 읽는 순서
@@ -12,41 +12,47 @@
 4. [reference/data-model.md](reference/data-model.md) + [reference/api-reference.md](reference/api-reference.md)
 
 **운영자 (배포·장애 대응)**
-1. [ops/deploy.md](ops/deploy.md) — 배포 런북
-2. [ops/runbook.md](ops/runbook.md) — 증상별 장애 대응 + 시크릿 로테이션
-3. [ops/worker-queue.md](ops/worker-queue.md) — 큐·워커 구조와 점검 커맨드
+1. **`bash deploy/cloud.sh status`** — 지금 뭐가 떠 있나 (배포는 `server|worker|gebd|migrate|all`)
+2. [ops/infra.md](ops/infra.md) §배포 — 함정 모음
+3. [ops/runbook.md](ops/runbook.md) — 증상별 장애 대응 + 시크릿 로테이션
+4. [ops/worker-queue.md](ops/worker-queue.md) — 큐·워커 구조와 점검 커맨드
 
 **기획·설계 (다음에 뭘 만들까)**
-1. [plans/step-d-master-build-plan.md](plans/step-d-master-build-plan.md) — **종합 빌드 플랜 (정본)**
-2. 세부 트랙: [plans/pipeline-plan.md](plans/pipeline-plan.md) · [plans/context-engine-plan.md](plans/context-engine-plan.md)
+1. [plans/active/step-d-master-build-plan.md](plans/active/step-d-master-build-plan.md) — **종합 빌드 플랜 (정본)**
+2. [plans/active/broadcast-station-expansion-goal.md](plans/active/broadcast-station-expansion-goal.md) — 방송국 전사 확장 목표
+3. [plans/active/](plans/active/) — 진행 중 9건 · [plans/onhold/](plans/onhold/) — 보류 8건
 
 ## ops/ — 현황·운영 (지금 프로덕션에서 사실인 것)
 
 | 문서 | 내용 |
 |---|---|
-| [infra.md](ops/infra.md) | 인프라 SSOT — GCP(Cloud Run·워커 VM·Cloud SQL·GCS·Vertex)·Vercel·시크릿 |
+| [infra.md](ops/infra.md) | **인프라 SSOT** — Cloud Run 서비스·**Cloud Run Jobs**·**GEBD GPU VM**·Cloud SQL·GCS·Vertex·Vercel·시크릿 |
+| [pipeline-current-state.md](ops/pipeline-current-state.md) | **파이프라인 실제 상태** — 스테이지 22개·비용·사각지대 (코드 실측 기준) |
+| [gebd-worker-setup.md](ops/gebd-worker-setup.md) | 여유 PC 를 GEBD 워커로 붙이기 (GPU 클라우드 대안) |
+| [gpu-quota-request.md](ops/gpu-quota-request.md) | GPU 쿼터 상향 신청 절차 |
 | [deploy.md](ops/deploy.md) | 배포 런북 — 서버/워커/웹 배포 스크립트와 검증·롤백 |
 | [runbook.md](ops/runbook.md) | 장애 대응 — 증상별 진단·조치, 시크릿 로테이션 |
 | [local-dev.md](ops/local-dev.md) | 로컬 개발 — dev.ps1 (웹+서버+Docker Postgres), core/ 로컬 실행 |
 | [worker-queue.md](ops/worker-queue.md) | 잡 큐(job_queue)·워커 VM 아키텍처 — 잡 5종, 신뢰성 설계 |
-| [pipeline-current.md](ops/pipeline-current.md) | 파이프라인 현재 동작 — 데이터 수집 계층 + AI 콘텐츠 분석(content.analyze) 배선 + 2026-07-16 인시던트 부록 |
 | [migrations.md](ops/migrations.md) | DB 마이그레이션(node-pg-migrate) — 버전 체계·baseline·작성 규칙 |
 | [youtube-upload-gate.md](ops/youtube-upload-gate.md) | YouTube 실업로드 게이트(`YOUTUBE_UPLOAD_ENABLED`) — 기본 OFF, env로만 온오프 |
 | [vercel-ops.md](ops/vercel-ops.md) | Vercel 운영 — 환경변수 계약, CLI 레시피, 함정 모음 |
 | [youtube-channel-analytics-guide.md](ops/youtube-channel-analytics-guide.md) | YouTube OAuth·채널분석 — 구현 현황과 남은 항목(심사·토큰 암호화) |
 
-## plans/ — 계획 (미래; 헤더의 상태 배너와 '계획 vs 실제' 표를 먼저 볼 것)
+## plans/ — 계획 (폴더가 상태를 말한다)
 
-| 문서 | 내용 |
-|---|---|
-| [step-d-master-build-plan.md](plans/step-d-master-build-plan.md) | **종합 빌드 플랜 (정본)** — 아키텍처·로드맵·갭·착수점 |
-| [pipeline-plan.md](plans/pipeline-plan.md) | AI 파이프라인 청사진 (발명신고서 구성 A~J) |
-| [shorts-engine-research-report.md](plans/shorts-engine-research-report.md) | **쇼츠 엔진 연구보고서 (종합·자세)** — 배경·방법론·Exp 1-4·실패 F1-7·결론·재현법. 보고서/IR용 정본 |
-| [shorts-engine-성과보고-2026-07-21.md](plans/shorts-engine-성과보고-2026-07-21.md) | 쇼츠 엔진 성과보고 (읽기용 짧은 요약) — 아침 확인용 진입점 |
-| [shorts-engine-experiments-2026-07-21.md](plans/shorts-engine-experiments-2026-07-21.md) | 쇼츠 엔진 실증 실험 **상세 로그** — 인프라·측정 방법론·다중 홀드아웃 A/B·폐기 실험·로드맵 (성과보고의 근거) |
-| [shorts-engine-experiment-log.md](plans/shorts-engine-experiment-log.md) | 쇼츠 엔진 **실험 연대기(로그)** — 방법론 진화 시간순 기록(IoU→Topic 등). 새 실험은 여기 append (보고서용) |
-| [context-engine-plan.md](plans/context-engine-plan.md) | 인물·서사 컨텍스트 엔진(CX 트랙) 설계 |
-| [ui-source-dependency-visualization.md](plans/ui-source-dependency-visualization.md) | UI 기획 — 원본→쇼츠 의존성 시각화 (원본→분석→추천→쇼츠→배포 추적) |
+| 폴더 | 뜻 | 개수 |
+|---|---|---|
+| **[active/](plans/active/)** | 진행 중이거나 곧 할 것 | 9 |
+| [done/](plans/done/) | 구현 완료 — 현황은 `ops/` 문서가 정본 | 9 |
+| [onhold/](plans/onhold/) | 보류 (예산·자원 대기) | 8 |
+| [../archive/plans-2026-07/](archive/plans-2026-07/) | 역사 기록 — **따라하지 말 것** | 7 |
+
+**진입점**
+- [active/step-d-master-build-plan.md](plans/active/step-d-master-build-plan.md) — 종합 빌드 플랜 (정본)
+- [active/cloud-migration-model-and-worker.md](plans/active/cloud-migration-model-and-worker.md) — 클라우드 이전 (2026-08-07 실행분 포함)
+- [active/search-highlight-replan-2026-08-06.md](plans/active/search-highlight-replan-2026-08-06.md) — 검색·하이라이트
+- [onhold/gebd-finetune-resume-plan.md](plans/onhold/gebd-finetune-resume-plan.md) — GEBD 파인튜닝 (⚠️ §1 근거 무효 · 재측정 필요)
 
 ## reference/ — 레퍼런스
 
