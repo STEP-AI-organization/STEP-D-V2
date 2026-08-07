@@ -1,0 +1,83 @@
+# GEBD 슬림 이미지 — 클라우드(Artifact Registry) 배포용.
+#
+# `Dockerfile`(devel 베이스)과 **같은 스택**이지만 런타임 베이스를 써서 크기를 줄인다.
+# 원본 tar 이미지는 53.9GB, devel 자체 빌드는 26.6GB 였다. 클라우드에서는 이 크기가
+# 그대로 비용(AR 저장 + 부팅마다 pull 시간)이 된다.
+#
+# 왜 runtime 으로 내려도 되나:
+#   · mmcv-full 을 **prebuilt wheel** 로 받는다 → nvcc/컴파일러가 필요 없다
+#   · mmaction2 0.24.1 은 사실상 순수 파이썬 (CUDA 확장 없음)
+#   · 실제로 필요한 건 CUDA **런타임** 라이브러리뿐이다
+# 혹시 소스 빌드가 필요한 패키지가 걸리면 build-essential 만 임시로 깔고 지운다.
+#
+# ⚠️ 버전은 그대로 고정이다. `torch==1.8.1+cu111` 위에서만 도는 mmcv 1.x / mmaction2 0.x
+#    조합이고, 올리면 `tools/misc/clip_feature_extraction.py` 와 TSN config 가 사라진다.
+#
+# 빌드:  docker build -t stepd-gebd-slim:latest -f deploy/gebd/Dockerfile.slim deploy/gebd
+# 비교:  docker images | grep -E "event-boundary|stepd-gebd"
+
+FROM pytorch/pytorch:1.8.1-cuda11.1-cudnn8-runtime
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    PYTHONUNBUFFERED=1
+
+# apt 키 만료 회피 — 이 베이스는 2021년이라 CUDA 저장소 키가 죽어 있다.
+# build-essential 은 일부 패키지 소스 빌드용으로 깔았다가 마지막에 지운다.
+RUN rm -f /etc/apt/sources.list.d/cuda.list /etc/apt/sources.list.d/nvidia-ml.list && \
+    apt-get update && apt-get install -y --no-install-recommends \
+        git ffmpeg libsm6 libxext6 libgl1-mesa-glx wget ca-certificates \
+        build-essential && \
+    rm -rf /var/lib/apt/lists/*
+
+RUN pip install --no-cache-dir \
+      mmcv-full==1.3.18 \
+      -f https://download.openmmlab.com/mmcv/dist/cu111/torch1.8.0/index.html
+
+# ⚠️ numpy 를 1.23.x 로 고정한다. mmaction2 0.24.1 이 `np.int` 를 쓰는데 numpy 1.24 에서
+# 제거됐다 — 그대로 두면 feature 추출이 `AttributeError: module 'numpy' has no attribute 'int'`
+# 로 죽고, extract_feature.py 가 그 에러를 삼켜서 **feature 0개인데 조용히 성공처럼 보인다.**
+# (원본 devel 이미지는 numpy 1.23.4 였다 — runtime 베이스가 1.24.4 라 여기서만 터졌다)
+RUN pip install --no-cache-dir "numpy==1.23.4"
+
+RUN pip install --no-cache-dir \
+      pandas parmap tqdm ipywidgets decord einops \
+      "opencv-python-headless==4.6.0.66" \
+      "numpy==1.23.4"
+
+WORKDIR /root/workspace
+RUN git clone --depth 1 --branch v0.24.1 https://github.com/open-mmlab/mmaction2.git && \
+    cd mmaction2 && pip install --no-cache-dir -r requirements/build.txt && \
+    pip install --no-cache-dir -v -e . && \
+    rm -rf /root/workspace/mmaction2/.git
+
+# ⚠️ opencv 를 원본(4.6.0)에 맞춘다. **mmaction2 설치 뒤에** 해야 한다 —
+# mmaction2 의 requirements 가 `opencv-python`·`opencv-contrib-python` 을 무핀으로 끌어와
+# 5.0.0.93 을 올려버린다(2021년 스택에 메이저 2단계 위). 앞에서 핀을 걸어도 여기서 덮인다.
+# 실측: 원본 이미지는 cv2 4.6.0 · 슬림 무핀은 5.0.0 이었고 경계 개수가 어긋났다.
+RUN pip install --no-cache-dir --force-reinstall \
+      "opencv-python==4.6.0.66" "opencv-contrib-python==4.6.0.66" \
+      "opencv-python-headless==4.6.0.66" "numpy==1.23.4"
+
+# TSN 체크포인트를 미리 받아 둔다 — 런타임 네트워크 없이도 돌고, 청크마다 재다운로드 안 한다
+RUN mkdir -p /root/.cache/torch/hub/checkpoints && \
+    wget -q -O /root/.cache/torch/hub/checkpoints/tsn_r50_320p_1x1x3_100e_kinetics400_rgb_20200702-cc665e2a.pth \
+      https://download.openmmlab.com/mmaction/recognition/tsn/tsn_r50_320p_1x1x3_100e_kinetics400_rgb/tsn_r50_320p_1x1x3_100e_kinetics400_rgb_20200702-cc665e2a.pth
+
+COPY prepare/ /root/workspace/prepare/
+COPY cla/     /root/workspace/cla/
+
+# ⚠️ conda 의 ffmpeg 를 지운다. runtime 베이스에는 `/opt/conda/bin/ffmpeg`(4.3)가 들어 있고
+# PATH 에서 apt 의 `/usr/bin/ffmpeg` 보다 앞선다. 그런데 **conda 빌드에는 libx264 가 없어서**
+# Stage A 의 `-c:v libx264 -preset ultrafast` 가 `Unrecognized option 'preset'` 으로 죽는다.
+# (devel 베이스 원본 이미지는 conda ffmpeg 가 없어서 이 문제가 안 났다 — 실측으로 찾음)
+RUN rm -f /opt/conda/bin/ffmpeg /opt/conda/bin/ffprobe
+
+# 컴파일러·캐시 정리 — 여기서 수백 MB 가 빠진다
+RUN apt-get purge -y build-essential && apt-get autoremove -y && \
+    rm -rf /var/lib/apt/lists/* /root/.cache/pip && \
+    find /opt/conda -name "*.a" -delete && \
+    find /opt/conda -name "__pycache__" -type d -prune -exec rm -rf {} + 2>/dev/null || true
+
+# 가중치·스크립트·입출력은 런타임에 -v 로 /gebd 에 마운트한다 (가중치 1.58GB)
+WORKDIR /root/workspace/prepare
+CMD ["bash"]

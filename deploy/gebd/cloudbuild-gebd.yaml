@@ -1,0 +1,34 @@
+# GEBD 슬림 이미지를 **클라우드에서 빌드**해 Artifact Registry 로 밀어넣는다.
+#
+# 왜 Cloud Build 인가: 이미지가 13.8GB 라 로컬에서 push 하면 가정용 회선으로 1시간 넘게 걸린다.
+# 여기서는 빌드 컨텍스트(deploy/gebd · ~100KB)만 올리고 빌드·push 는 GCP 안에서 일어난다.
+#
+# 사용:
+#   gcloud builds submit --config=deploy/gebd/cloudbuild-gebd.yaml \
+#     --project=step-d deploy/gebd
+substitutions:
+  _TAG: latest
+  _REPO: us-central1-docker.pkg.dev/step-d/stepd/gebd-mmaction2
+
+steps:
+  - name: gcr.io/cloud-builders/docker
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        docker build -f Dockerfile.slim -t ${_REPO}:${_TAG} .
+  - name: gcr.io/cloud-builders/docker
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        docker push ${_REPO}:${_TAG}
+
+options:
+  machineType: E2_HIGHCPU_8
+  # 13.8GB 이미지 + 4GB 베이스 pull — 기본 100GB 로는 빠듯할 수 있다
+  diskSizeGb: 200
+  logging: CLOUD_LOGGING_ONLY
+
+# 베이스 pull + conda/pip 설치 + mmaction2 clone 까지 여유있게
+timeout: 3600s
