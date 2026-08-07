@@ -5,7 +5,8 @@
 worker.ts 가 `python -m core.thumbnail.cli ...` 로 스폰한다. content.analyze 와
 같은 방식 — 서버는 잡을 큐잉만 하고, 무거운 일(수집·Vision·이미지 생성)은 워커에서 돈다.
 
-  style     채널 썸네일 수집 → 스타일 프로파일 (프로그램 1회성)
+  playlists 채널의 재생목록 목록 (프로그램별로 어느 재생목록인지 고르기 위함)
+  style     재생목록/채널 썸네일 수집 → 스타일 프로파일 (프로그램 1회성)
   generate  회차 1건 → 썸네일 후보 N장
 
 결과는 stdout 마지막 줄에 `@@RESULT {json}` 으로 낸다. 워커가 그 줄만 파싱한다.
@@ -22,15 +23,24 @@ def _emit(payload: dict) -> None:
     print("@@RESULT " + json.dumps(payload, ensure_ascii=False))
 
 
+def cmd_playlists(args) -> int:
+    """채널 → 재생목록 목록. 큰 채널은 프로그램·기수를 재생목록으로 나눠 담는다."""
+    from core.thumbnail.style import list_playlists
+
+    items = list_playlists(args.channel_url, limit=args.limit)
+    _emit({"ok": True, "playlists": items})
+    return 0
+
+
 def cmd_style(args) -> int:
-    """채널 URL → 썸네일 수집 → 프로파일. 프로그램마다 1회, 갱신 시 재실행."""
+    """재생목록(권장)/채널 URL → 썸네일 수집 → 프로파일. 프로그램마다 1회."""
     from core.thumbnail.paths import style_dir, write_program_meta
     from core.thumbnail.style import build_profile, collect_thumbnails
 
-    write_program_meta(args.program_id, args.title or "", args.channel_url)
+    write_program_meta(args.program_id, args.title or "", args.source_url)
     d = style_dir(args.program_id)
 
-    n_saved = collect_thumbnails(args.channel_url, d, limit=args.limit)
+    n_saved = collect_thumbnails(args.source_url, d, limit=args.limit)
     if not n_saved:
         _emit({"ok": False, "error": "썸네일을 한 장도 못 받았다 (채널 URL 확인)"})
         return 1
@@ -66,9 +76,14 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="core.thumbnail.cli")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
-    s = sub.add_parser("style", help="채널 썸네일 수집 + 스타일 프로파일")
+    pl = sub.add_parser("playlists", help="채널의 재생목록 목록")
+    pl.add_argument("--channel-url", required=True)
+    pl.add_argument("--limit", type=int, default=50)
+    pl.set_defaults(func=cmd_playlists)
+
+    s = sub.add_parser("style", help="재생목록/채널 썸네일 수집 + 스타일 프로파일")
     s.add_argument("--program-id", required=True)
-    s.add_argument("--channel-url", required=True)
+    s.add_argument("--source-url", required=True, help="재생목록 URL 권장 (채널도 가능)")
     s.add_argument("--title", default="")
     s.add_argument("--limit", type=int, default=50, help="수집 장수")
     s.add_argument("--sample", type=int, default=20, help="Vision 분석 장수")
