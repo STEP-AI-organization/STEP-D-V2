@@ -53,13 +53,14 @@ export function Sidebar() {
         )}
       >
         <Link href="/" className="flex items-center gap-2.5 px-2 pb-[18px] pt-1.5" aria-label="홈으로">
-          <span
-            className="grotesk flex size-[30px] items-center justify-center rounded-[9px] text-[15px] font-bold text-white"
-            style={{ background: "linear-gradient(135deg,#8b93ff,#5a63e6)" }}
+          <img
+            src="/brand/stepd-icon-192.png"
+            alt=""
+            width={30}
+            height={30}
+            className="size-[30px] shrink-0 rounded-[9px] border border-border"
             aria-hidden
-          >
-            D
-          </span>
+          />
           <span className="min-w-0">
             <span className="grotesk block text-[15px] font-bold leading-none tracking-tight">
               STEP D

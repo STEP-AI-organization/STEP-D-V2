@@ -15,6 +15,8 @@ const LOCAL_DUMMY =
 export const metadata: Metadata = {
   title: "STEP D — 스튜디오",
   description: "STEP D 콘텐츠 제작·배포 스튜디오",
+  // 아이콘은 파일 컨벤션(app/favicon.ico · app/icon.svg · app/apple-icon.png)으로
+  // 모든 페이지에 자동 주입된다 — 앱 심사(TikTok/Meta)의 favicon 요건.
 };
 
 // Resolve theme before first paint to avoid a flash of the wrong theme.

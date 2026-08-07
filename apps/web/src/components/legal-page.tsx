@@ -19,10 +19,19 @@ export function LegalPage({
     <div className="min-h-screen bg-zinc-950 text-zinc-300">
       <div className="mx-auto max-w-3xl px-6 py-16">
         <header className="mb-12 border-b border-zinc-800 pb-8">
-          <Link href="/" className="text-sm text-zinc-500 hover:text-zinc-300 transition">
-            STEP D
+          {/* App icon must be visible at the top of the legal pages — required by
+              the TikTok / Google app review checklists. */}
+          <Link href="/" className="flex items-center gap-3 text-zinc-400 hover:text-zinc-200 transition">
+            <img
+              src="/brand/stepd-icon-192.png"
+              alt="STEP D 앱 아이콘"
+              width={44}
+              height={44}
+              className="h-11 w-11 rounded-xl border border-zinc-700"
+            />
+            <span className="text-lg font-bold text-white">STEP D</span>
           </Link>
-          <h1 className="mt-3 text-3xl font-bold text-white">{title}</h1>
+          <h1 className="mt-5 text-3xl font-bold text-white">{title}</h1>
           <p className="mt-2 text-sm text-zinc-500">최종 수정일: {updated}</p>
         </header>
 

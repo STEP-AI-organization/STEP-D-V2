@@ -36,7 +36,8 @@ html { scroll-behavior: smooth; }
 .stepd-landing nav{position:sticky;top:0;z-index:50;background:rgba(255,255,255,.8);backdrop-filter:blur(14px);border-bottom:1px solid var(--line)}
 .stepd-landing .nav-in{display:flex;align-items:center;justify-content:space-between;height:66px}
 .stepd-landing .logo{display:flex;align-items:center;gap:10px;font-weight:800;font-size:20px;letter-spacing:-.5px}
-.stepd-landing .logo .mark{width:30px;height:30px;border-radius:8px;background:var(--grad);display:grid;place-items:center;font-size:15px;color:#fff;font-weight:900}
+/* .mark 는 이제 앱 아이콘 이미지다 (구 그라디언트 "D" 배지 대체) */
+.stepd-landing .logo .mark{width:30px;height:30px;border-radius:8px;object-fit:cover;flex:none;display:block}
 .stepd-landing .nav-links{display:flex;gap:30px;align-items:center}
 .stepd-landing .nav-links a{color:var(--mut);font-size:15px;font-weight:500;transition:.2s}
 .stepd-landing .nav-links a:hover{color:var(--txt)}
