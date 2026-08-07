@@ -40,15 +40,24 @@ def _resize(x, n):
 
 
 def _load_feat(path):
+    """(패딩된 [300,D] 특징, 패딩 전 실제 행 수) 를 반환.
+
+    ⚠️ 실제 행 수를 반드시 같이 돌려줘야 한다. 예전에는 이걸 버리고
+    `scale = dur / FEATURE_LEN` 로 시간을 매핑했는데, 짧은 청크는 대부분이 0 패딩이라
+    **경계 시각이 청크 앞쪽으로 압축**됐다(실측: 60초 청크 17.7행 → 256개 경계가 전부
+    각 분의 앞 11.4초에 몰림 · 타임라인 81% 탐지 불가).
+    """
     feat = np.array(pickle.load(open(path, "rb")))
     if feat.shape[1] != FEATURE_DIM:
         raise ValueError(f"dim mismatch: {feat.shape}")
-    if feat.shape[0] > FEATURE_LEN:
+    n_real = int(feat.shape[0])
+    if n_real > FEATURE_LEN:
         feat = _resize(feat, FEATURE_LEN)
-    elif feat.shape[0] < FEATURE_LEN:
-        pad = np.zeros((FEATURE_LEN - feat.shape[0], feat.shape[1]))
+        n_real = FEATURE_LEN
+    elif n_real < FEATURE_LEN:
+        pad = np.zeros((FEATURE_LEN - n_real, feat.shape[1]))
         feat = np.concatenate([feat, pad], axis=0)
-    return feat
+    return feat, n_real
 
 
 def main():
@@ -92,7 +101,7 @@ def main():
     total_infer = 0.0
     for idx, pkl, dur in entries:
         try:
-            feat = _load_feat(pkl)
+            feat, n_real = _load_feat(pkl)
         except Exception as e:
             print(f"  #{idx} feat FAIL: {e}"); continue
         feat_t = torch.from_numpy(feat).float().unsqueeze(0).to(device)
@@ -108,26 +117,41 @@ def main():
             hits = torch.nonzero(peak).cpu().numpy().flatten()
         infer_sec = time.time() - t1
         total_infer += infer_sec
-        scale = dur / FEATURE_LEN
+        # ⚠️ 나누는 값은 FEATURE_LEN(300) 이 아니라 **패딩 전 실제 행 수** 다.
+        # 300 으로 나누면 0 패딩 구간까지 영상 길이에 포함시키는 셈이라
+        # 경계가 청크 앞쪽으로 압축된다.
+        scale = dur / max(1, n_real)
         # score 추출: sigmoid(pred1) 그대로 저장 (peak position 만)
         p_np = p.squeeze().cpu().numpy()
         bs_scored = []
+        n_pad_drop = 0
         for j in hits.tolist():
+            # 0 패딩 구간(j >= n_real)의 peak 는 내용이 없는 자리의 허깨비다 — 버린다.
+            if j >= n_real:
+                n_pad_drop += 1
+                continue
             t_real = round(float(j) * scale + scale / 2, 3)
+            if t_real > dur:
+                continue
             score = float(p_np[j])
             bs_scored.append({"t": t_real, "score": round(score, 4), "kind": "unknown", "source": "gebd"})
         # dedup 같은 시각
+        # ⚠️ 여기서 `k` 를 쓰면 안 된다 — 위 가우시안 커널 반폭 `k` 를 덮어써서
+        # 다음 청크의 conv1d padding 이 "마지막 경계 시각"으로 오염된다.
         seen = set(); bs_uniq = []
         for b in sorted(bs_scored, key=lambda x: x["t"]):
-            k = round(b["t"], 2)
-            if k in seen:
+            key = round(b["t"], 2)
+            if key in seen:
                 continue
-            seen.add(k); bs_uniq.append(b)
+            seen.add(key); bs_uniq.append(b)
         Path(out_dir / f"c{idx}.json").write_text(
             json.dumps({
                 "video_duration_sec": dur,
                 "feature_len": FEATURE_LEN,
+                "feature_rows_real": n_real,          # 패딩 전 실제 행 수
+                "rows_per_sec": round(n_real / max(1e-6, dur), 3),
                 "scale_sec_per_step": round(scale, 4),
+                "padding_peaks_dropped": n_pad_drop,
                 "num_boundaries": len(bs_uniq),
                 "boundaries_sec": [b["t"] for b in bs_uniq],  # 하위호환
                 "boundaries": bs_uniq,  # 신규 · score 포함
@@ -135,7 +159,8 @@ def main():
             }, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
-        print(f"  #{idx:3d} · {len(bs_uniq):3d} boundaries · {infer_sec:.2f}s")
+        print(f"  #{idx:3d} · {len(bs_uniq):3d} boundaries · rows {n_real}/{FEATURE_LEN} "
+              f"({n_real/max(1e-6,dur):.2f}/s) · scale {scale:.3f}s · pad버림 {n_pad_drop} · {infer_sec:.2f}s")
     print(f"[batch] done · total infer {total_infer:.2f}s · avg {total_infer/max(1,len(entries)):.2f}s/chunk")
 
 

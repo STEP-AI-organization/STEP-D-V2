@@ -37,7 +37,7 @@ mkdir -p ~/stepd-models/gebd
 cp "$HOME/Downloads/비디오 전환 경계 추론 데이터/2.학습모델파일/model_cla_f_0_s_-1_7728.pt" ~/stepd-models/gebd/
 
 # 3) 실행 — 영상 1개 → boundaries.json
-bash deploy/gebd/run-local.sh <video.mp4> <out_dir> [CHUNK_SEC=60] [CORES=2]
+bash deploy/gebd/run-local.sh <video.mp4> <out_dir> [CHUNK_SEC=300] [CORES=2]
 ```
 
 산출물을 분석 워크디렉토리에 넣으면 다음 `core.analyze` 가 자동으로 쓴다:
@@ -61,17 +61,40 @@ cp <out_dir>/boundaries.json tmp/<workdir>/boundaries.json
 
 | 제약 | 값 | 이유 |
 |---|---|---|
-| `CHUNK_SEC` | **60** | 참조구현이 5분 하드코드 — 더 길면 뒤가 잘린다 |
+| `CHUNK_SEC` | **300** | `FEATURE_LEN=300` × 1행/초 = 정확히 300행 → **0 패딩**. 모델 학습 입력과 동일 |
 | `CORES` | **2** (RTX 3060 Ti) | 4는 VRAM 91%로 렉 |
 | 코덱 | **h264** | AV1 은 못 읽는다 → 먼저 변환 |
 | 학습샘플 길이 | 최대 300초 | `FEATURE_LEN=300`·`TIME_UNIT=1` 코드 고정 |
+| feature 밀도 | **1.00 행/초** | 미달하면 경계 시각이 어긋난다 (아래 참조) |
+
+### ⚠️ 2026-08-07 · 경계 시각이 통째로 어긋나 있던 버그 (수정됨)
+
+이 조합을 다시 깨뜨리지 않도록 남긴다. 세 버그가 겹쳐 **256개 경계 전부가 각 60초 청크의
+앞 11.4초에 몰려 있었다 — 타임라인의 81% 가 탐지 불가**였다.
+
+1. `prepare/module.py` 의 `video_segmentation` 이 `ffmpeg -c copy -segment_time 1` 을 썼다.
+   스트림 복사는 **키프레임에서만** 자를 수 있어 "1초 세그먼트"가 실제로는 3.4초였다
+   (실측 **0.3 행/초**). SJNET 은 `TIME_UNIT=1`, 즉 1행=1초로 학습됐다.
+   → `-g 1 -keyint_min 1 -sc_threshold 0` 재인코딩으로 1초를 강제한다.
+2. `infer_batch.py` 가 `scale = dur / FEATURE_LEN` 으로 시간을 매핑했다. 300행 중 실제는
+   ~18행이고 282행이 0 패딩인데 패딩까지 영상 길이로 나눈 셈이라 **16.7배 압축**됐다.
+   → `scale = dur / n_real` (패딩 전 행 수) + `j >= n_real` peak 는 버린다.
+3. `infer_batch.py` 에서 `k` 가 가우시안 커널 반폭과 dedup 키로 **중복 사용**돼,
+   두 번째 청크부터 `conv1d` padding 이 "마지막 경계 시각"으로 오염됐다.
+
+**검증(5분 클립):** 1.00 행/초 · 300/300행 · 패딩 0 · 경계 7.5~275.5초 전 구간 분포 ·
+최근접 실제 컷까지 **중앙 0.445초**(1초 양자화의 하한이 0.5초다) · 무작위 대비 +14~31%p.
+
+`run_long_v3.sh` 가 매 실행마다 행/초를 찍고 **0.8 미만이면 경고**한다. 그 경고가 보이면
+`prepare/module.py` 가 컨테이너에 안 실려 회귀한 것이다 (래퍼들이 `prepare/` 를 스테이징한다).
 
 ---
 
 ## 4. 파이프라인 3단
 
 ```
-A. ffmpeg     영상 → 60초 청크 (stream copy)          빠름
+A. ffmpeg     영상 → 300초 청크 (stream copy)         빠름
+A'. module.py  청크 → **1초 세그먼트 재인코딩** (256p)  1행/초 보장
 B. mmaction2  TSN clip feature 추출                    GPU · 이미지가 필요한 이유
 C. SJNET      cla/ 로 boundary 추론 → boundaries.json  모델 가중치
 ```

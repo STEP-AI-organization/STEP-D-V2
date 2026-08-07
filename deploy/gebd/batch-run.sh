@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # GEBD 배치 처리 — 영상 폴더 전체를 순차로 boundaries.json 까지.
 #
-# 사용: bash deploy/gebd/batch-run.sh <video_dir> <out_root> [CHUNK_SEC=60] [CORES=2]
+# 사용: bash deploy/gebd/batch-run.sh <video_dir> <out_root> [CHUNK_SEC=300] [CORES=1]
 #
 # **재개 가능**하다. 각 단계 산출물이 있으면 건너뛴다:
 #   chunks_flat/c*.mp4      Stage A (ffmpeg · CPU)
@@ -12,8 +12,8 @@ set -u
 
 VDIR="${1:?사용: batch-run.sh <video_dir> <out_root> [CHUNK_SEC] [CORES]}"
 OUT="${2:?출력 루트를 지정하세요}"
-CHUNK_SEC="${3:-60}"
-CORES="${4:-2}"
+CHUNK_SEC="${3:-300}"
+CORES="${4:-1}"
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 MODEL="${GEBD_MODEL:-$HOME/stepd-models/gebd/model_cla_f_0_s_-1_7728.pt}"
@@ -52,6 +52,8 @@ for f in "$VDIR"/*.mp4; do
   mkdir -p "$stage/models" "$stage/out"
   cp -r "$REPO/deploy/gebd/scripts" "$stage/scripts"
   cp -r "$REPO/deploy/gebd/cla" "$stage/cla"
+  # prepare/ 필수 — module.py 의 1초 세그먼트 수정이 여기 있다 (없으면 0.3행/초).
+  cp -r "$REPO/deploy/gebd/prepare" "$stage/prepare"
   cp "$MODEL" "$stage/models/"
 
   sw="$(cd "$stage" && pwd -W 2>/dev/null || echo "$stage")"
