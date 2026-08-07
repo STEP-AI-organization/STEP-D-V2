@@ -70,6 +70,9 @@ def build_prompt(
     if with_background:
         # 스타일 참고 이미지가 뒤에 붙으면 배경은 더 이상 '마지막' 이 아니다.
         lines.append(f"배경은 {n + 1}번째 사진의 장소를 살려줘.")
+    # 프레임에 구워진 방송 자막·로고는 모델이 지운다 (2026-08-07 확인).
+    # 그래서 자막 낀 프레임을 미리 걸러내지 않는다 — 후보만 줄어든다.
+    lines.append("사진에 원래 있던 자막·로고·워터마크는 지워줘.")
 
     t1 = (plan.get("title1") or "").strip()
     t2 = (plan.get("title2") or "").strip()
