@@ -86,16 +86,88 @@ def _ffmpeg_frame(video: Path, t_sec: float, out: Path, width: int = 640) -> boo
         return False
 
 
-def _build_prompt(beat: dict, program_ctx_str: str) -> str:
+CTX_RECENT = int(os.environ.get("BEAT_ANNOT_CTX_RECENT") or 12)   # 요약까지 붙일 최근 beat 수
+CTX_MAX = int(os.environ.get("BEAT_ANNOT_CTX_MAX") or 400)        # 제목만이라도 붙일 최대 beat 수
+
+
+def _mmss(sec: float) -> str:
+    try:
+        s = float(sec)
+    except (TypeError, ValueError):
+        return "0:00"
+    return f"{int(s // 60)}:{int(s % 60):02d}"
+
+
+def build_prior_context(beats: list[dict], upto: int) -> str:
+    """0 ~ upto-1 번 beat 의 확정 결과를 누적 맥락 문자열로 만든다 (도미노).
+
+    사용자 요청 (2026-08-07): "한 프레임만 평가하다 보니 맥락이 이어지지 않음.
+    도미노 쌓아올리듯 앞 프레임 맥락을 계속 쌓자 (프롬프트 캐시 활용)."
+
+    프롬프트 배치가 중요하다 — 이 블록은 [프로그램 정보] 바로 뒤, **beat 별 내용 앞**에
+    온다. 그래야 연속한 호출들이 같은 접두를 공유해 프롬프트 캐시가 걸린다.
+    (뒤에 두면 매 호출 접두가 달라져 캐시가 통째로 빗나간다.)
+
+    무한 증식은 막는다: 오래된 것은 제목만, 최근 것만 요약까지.
+
+    ⚠️ "최근 N개" 를 upto 기준 슬라이딩 창으로 잡으면 **캐시가 죽는다** — 창이 한 칸 밀릴
+    때마다 앞쪽 줄에서 요약이 떨어져 나가 접두가 통째로 바뀐다. 실측: 청크 60↔64 공통
+    접두가 50%(≈600토큰)까지 떨어져 Gemini 암묵 캐시 최소치(~1024토큰)에 미달했다.
+    그래서 **CTX_RECENT 블록 경계에 정렬**한다 — 한 블록 안에서는 접두가 append-only 라
+    캐시가 유지되고, 블록이 넘어갈 때만 한 번 끊긴다.
+    """
+    if upto <= 0:
+        return ""
+    lo = max(0, upto - CTX_MAX)
+    # 상세(요약 포함) 구간 시작을 블록 경계에 고정 → 블록 안에서는 접두가 안 변한다
+    detail_from = ((upto - 1) // CTX_RECENT) * CTX_RECENT if CTX_RECENT > 0 else upto
+    lines: list[str] = []
+    for i in range(lo, upto):
+        b = beats[i]
+        t = (b.get("title") or "").strip()
+        if not t:
+            continue
+        head = f"b{i} {_mmss(b.get('start') or 0)} {t}"
+        if i >= detail_from:
+            s = (b.get("summary") or "").strip()
+            who = " · ".join((b.get("characters_visible") or b.get("characters") or [])[:3])
+            if s:
+                head += f" — {s[:160]}"
+            if who:
+                head += f" [{who}]"
+        lines.append(head)
+    if not lines:
+        return ""
+    return "[지금까지의 흐름 — 앞 beat 들의 확정 결과]\n" + "\n".join(lines) + "\n"
+
+
+def build_prompt_head(program_ctx_str: str, prior_ctx: str = "") -> str:
+    """**호출 간 동일한** 부분만 모은 프롬프트 앞머리 = 프롬프트 캐시의 접두.
+
+    ⚠️ 이게 요청의 **맨 앞** 파트여야 한다. 예전에는 이미지 파트를 먼저 넣었는데,
+    그러면 호출마다 접두(=서로 다른 프레임)가 달라져 **캐시가 한 번도 안 걸린다.**
+    순서는 [head 텍스트] → [이미지] → [beat 별 꼬리 텍스트].
+    """
+    body = ""
+    if program_ctx_str:
+        body += f"[프로그램 정보]\n{program_ctx_str}\n\n"
+    if prior_ctx:
+        body += prior_ctx + "\n"
+    return body
+
+
+def _build_prompt(beat: dict, program_ctx_str: str = "", prior_ctx: str = "") -> str:
+    """head + tail 합본. 디버그 dump 용 (실제 호출은 둘을 나눠 보낸다)."""
+    return build_prompt_head(program_ctx_str, prior_ctx) + build_prompt_tail(beat, bool(prior_ctx))
+
+
+def build_prompt_tail(beat: dict, has_prior: bool = False) -> str:
     st = float(beat["start"]); en = float(beat["end"])
     dur = en - st
     stt = (beat.get("transcript") or "").strip()
     chars = beat.get("characters") or []
     src_kind = (beat.get("boundary", {}) or {}).get("start_kind", "unknown")
-    body = ""
-    if program_ctx_str:
-        body += f"[프로그램 정보]\n{program_ctx_str}\n\n"
-    body += (
+    body = (
         f"[Beat 정보]\n"
         f"- 시각: {st:.1f}s → {en:.1f}s (총 {dur:.1f}s)\n"
         f"- 경계 유형: {src_kind}\n"
@@ -131,11 +203,22 @@ def _build_prompt(beat: dict, program_ctx_str: str) -> str:
         "\n"
         "정지 관찰형 caption 절대 금지 · 프로그램 서사 프레임 + 화면 자막 신호로."
     )
+    if has_prior:
+        body += (
+            "\n\n[맥락 이어붙이기 — 중요]\n"
+            "위 '지금까지의 흐름' 은 같은 회차의 **앞 장면들**이다. 이 beat 을 그 흐름의 다음 칸으로 읽어라.\n"
+            "- 인물: 앞에서 쓴 라벨을 **그대로** 쓴다. 같은 사람을 새 라벨로 부르지 말 것\n"
+            "  (앞에 '여성 참가자 1' 이 있으면 계속 '여성 참가자 1'). 이름이 새로 확인되면 그때만 실명으로 바꾼다\n"
+            "- 상황: 앞에서 시작된 사건·갈등·목표가 이 beat 에서 어떻게 되는지로 서술한다\n"
+            "  (예: '앞서 신고를 미뤘던 인물이 결국 직접 현장으로 향한다')\n"
+            "- 반복 금지: 앞 beat 과 똑같은 title/summary 를 다시 쓰지 말 것. 이 beat 에서 **새로 일어난 것**만\n"
+            "- 단 프레임과 대사가 흐름과 어긋나면 **눈앞의 프레임·대사를 우선**한다 (장면이 바뀐 것일 수 있다)"
+        )
     return body
 
 
 def _annotate_one(idx: int, beat: dict, video: Path, out_dir: Path,
-                   program_ctx_str: str) -> dict:
+                   program_ctx_str: str, prior_ctx: str = "") -> dict:
     st = float(beat["start"]); en = float(beat["end"])
     dur = en - st
     if dur < 0.6:
@@ -169,13 +252,21 @@ def _annotate_one(idx: int, beat: dict, video: Path, out_dir: Path,
     if not frames_available:
         return {"idx": idx, "error": "no frames extracted"}
 
+    # ⚠️ 파트 순서가 프롬프트 캐시를 좌우한다: [안정 헤드 텍스트] → [이미지] → [beat 별 꼬리].
+    # 예전에는 이미지를 **맨 앞**에 넣어서, 호출마다 접두가 서로 다른 프레임으로 시작했다
+    # → 공통 접두가 0바이트라 캐시가 한 번도 안 걸렸다. 헤드(프로그램 정보 + 누적 맥락)는
+    # 한 청크 안에서 완전히 동일하고 다음 청크에선 몇 줄만 늘어나므로 접두 재사용이 된다.
+    head = build_prompt_head(program_ctx_str, prior_ctx)
+    tail = build_prompt_tail(beat, bool(prior_ctx))
     parts: list = []
+    if head:
+        parts.append(types.Part.from_text(text=head))
     for p, _ in frames_available:
         try:
             parts.append(types.Part.from_bytes(data=p.read_bytes(), mime_type="image/jpeg"))
         except Exception:
             pass
-    prompt_text = _build_prompt(beat, program_ctx_str)
+    prompt_text = head + tail
     # RECOMMEND_DEBUG_DUMP · beat_annot 프롬프트도 첫 beat 만 파일에 dump (참고용)
     _dump_dir = os.environ.get("BEAT_ANNOT_DEBUG_DUMP")
     if _dump_dir:
@@ -186,7 +277,7 @@ def _annotate_one(idx: int, beat: dict, video: Path, out_dir: Path,
             _p.write_text(f"# beat_annot · beat #{idx}\n# frames: {[p.name for p, ok in frames_available]}\n\n{prompt_text}", encoding="utf-8")
         except Exception:
             pass
-    parts.append(types.Part.from_text(text=prompt_text))
+    parts.append(types.Part.from_text(text=tail))
 
     # Gemini 2.5+ 는 thinking tokens 도 max_output_tokens 에 포함 · 1024 는 thinking 에 다 소진.
     # (1) max_output_tokens 대폭 증가 · (2) thinking 끔 (schema JSON 이라 reasoning 불필요).
@@ -295,17 +386,39 @@ def annotate_beats(
     except Exception:
         pass
 
-    print(f"   beat annotate: {len(beats)} beats · workers={workers}")
+    # ── 도미노 맥락 누적 (2026-08-07) ─────────────────────────────────────────
+    # 예전에는 전 beat 을 한 번에 병렬로 던져서 서로를 전혀 몰랐다. 그래서 같은 인물이
+    # beat 마다 다른 라벨이 되고, 앞에서 시작된 사건이 이어지지 않았다.
+    #
+    # 완전 순차로 바꾸면 맥락은 완벽하지만 병렬을 다 잃는다(실측 4배 느림). 그래서
+    # **청크 단위 순차 + 청크 안 병렬**: 청크 N 은 청크 0..N-1 의 확정 결과를 본다.
+    # 맥락 지연은 최대 (chunk-1) beat 이고 병렬은 그대로 유지된다.
+    #
+    # 프롬프트 캐시: 누적 맥락은 프롬프트 **앞쪽**(프로그램 정보 바로 뒤)에 있고 한 청크
+    # 안에서는 동일하다 → 같은 접두를 공유해 캐시가 걸리고, 다음 청크는 그 접두에 몇 줄만
+    # 덧붙는다. 맥락을 뒤에 두면 매 호출 접두가 달라져 캐시가 통째로 빗나간다.
+    chunk = max(1, workers)
+    use_ctx = (os.environ.get("BEAT_ANNOT_CTX") or "1") != "0"
+    print(f"   beat annotate: {len(beats)} beats · workers={workers} · "
+          f"맥락누적 {'ON' if use_ctx else 'OFF'} (청크 {chunk})")
     ok = 0
-    with ThreadPoolExecutor(max_workers=max(1, workers)) as ex:
-        futs = {ex.submit(_annotate_one, i, b, video, out, pc_str): i for i, b in enumerate(beats)}
-        done = 0
-        for fut in as_completed(futs):
-            i = futs[fut]
-            try:
-                r = fut.result()
-            except Exception as e:
-                r = {"idx": i, "error": str(e)[:150]}
+    done = 0
+    for c0 in range(0, len(beats), chunk):
+        idxs = list(range(c0, min(c0 + chunk, len(beats))))
+        prior = build_prior_context(beats, c0) if use_ctx else ""
+        with ThreadPoolExecutor(max_workers=max(1, workers)) as ex:
+            futs = {ex.submit(_annotate_one, i, beats[i], video, out, pc_str, prior): i
+                    for i in idxs}
+            results = {}
+            for fut in as_completed(futs):
+                i = futs[fut]
+                try:
+                    results[i] = fut.result()
+                except Exception as e:
+                    results[i] = {"idx": i, "error": str(e)[:150]}
+        # 청크 안에서는 **원래 순서대로** 반영해야 다음 청크 맥락이 시간순으로 쌓인다
+        for i in idxs:
+            r = results.get(i) or {"idx": i, "error": "no result"}
             done += 1
             b = beats[i]
             if r.get("error"):

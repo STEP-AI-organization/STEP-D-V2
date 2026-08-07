@@ -81,7 +81,7 @@ def prepare_checkpoints(
     FACES_VER = "2026-07-29-sample-10s"
     SHOTS_VER = "2026-07-24a"
     SCENE_TYPE_VER = "2026-07-24a"
-    BEATS_VER = "2026-07-29-speaker-split-v2"
+    BEATS_VER = "2026-08-07-min6-domino"   # 6초 하한 강제 + beat_annot 맥락 누적
     SIGNALS_VER = "2026-08-06-init"
     INDEX_VER = "2026-08-07-init"   # segments.json (검색 인덱스) 재조립 로직 버전
     STT_VER = "2026-07-27-word-normalize"

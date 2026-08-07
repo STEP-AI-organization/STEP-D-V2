@@ -44,6 +44,10 @@ LOCATION = os.environ.get("VERTEX_LOCATION") or "asia-northeast3"
 from .models import BEATS as MODEL
 
 MIN_BEAT_SEC = 8.0      # 이 미만은 파편 · 인접 beat와 병합 (2026-07-27: 20→8, 세분화 요청)
+# 위 병합은 speaker-aware 라서 "화자 다르면 안 붙임" 예외가 있다. 그 예외가 화자 분할과
+# 맞물려 1초짜리 beat 까지 살아남았다(실측 52%). 아래는 **예외 없는 하한** — 편집 단위로
+# 쓸 수 없는 길이는 화자 순수성보다 우선해 없앤다. (사용자 요청 2026-08-07)
+HARD_MIN_BEAT_SEC = float(os.environ.get("MIN_BEAT_SEC") or 6.0)
 SUBDIVIDE_SEC = 30.0    # 이 초과는 재분해 시도 (2026-07-27: 45→30, 73s 두 인물 붙어있던 케이스 fix)
 SHOT_SNAP_SEC = 3.0     # beat 경계 ±3s 안 shot boundary 있으면 스냅
 
@@ -494,6 +498,56 @@ def _merge_small_beats(beats: list[dict], transcript: list[dict] | None = None) 
     return out
 
 
+def _enforce_min_beat_sec(beats: list[dict], min_sec: float = HARD_MIN_BEAT_SEC) -> list[dict]:
+    """min_sec 미만 beat 을 **화자와 무관하게** 인접에 병합한다. 마지막 안전장치.
+
+    사용자 요청 (2026-08-07): "너무 짧은 거 있음. 최소 6초 필터는 걸자."
+
+    `_merge_small_beats` 는 speaker-aware 라서 "인접과 dominant speaker 가 다르면 병합 안 함"
+    이다. 그런데 `_split_beats_on_speaker_change` 는 **화자가 바뀌는 지점을 골라** 자르므로
+    조각은 정의상 이웃과 화자가 다르다 → 둘이 서로 싸워 **아무것도 병합되지 않았다.**
+    실측(드라마 58.6분): 413 beat 중 215개(52%)가 6초 미만, 최소 1.0초.
+
+    여기서는 화자 규칙보다 하한을 우선한다 — 1초짜리 beat 은 화자가 순수해도 편집 단위로
+    못 쓴다. 짧은 쪽을 **더 짧은 이웃** 에 붙여 길이 편차를 키우지 않는다.
+    """
+    if not beats:
+        return []
+    out = [dict(b) for b in sorted(beats, key=lambda x: float(x["start"]))]
+    merged_n = 0
+    changed = True
+    while changed and len(out) > 1:
+        changed = False
+        for i, b in enumerate(out):
+            if float(b["end"]) - float(b["start"]) >= min_sec:
+                continue
+            prev_b = out[i - 1] if i > 0 else None
+            next_b = out[i + 1] if i + 1 < len(out) else None
+            if prev_b is None and next_b is None:
+                continue
+            # 더 짧은 이웃에 붙인다 (긴 beat 을 더 길게 만들지 않음)
+            def _len(x):
+                return float(x["end"]) - float(x["start"]) if x else float("inf")
+            tgt_i = i - 1 if _len(prev_b) <= _len(next_b) else i + 1
+            tgt = out[tgt_i]
+            tgt["start"] = min(float(tgt["start"]), float(b["start"]))
+            tgt["end"] = max(float(tgt["end"]), float(b["end"]))
+            tgt["summary"] = ((tgt.get("summary") or "") + " · " + (b.get("summary") or "")).strip(" ·")
+            for c in (b.get("characters") or []):
+                if c not in (tgt.get("characters") or []):
+                    tgt.setdefault("characters", []).append(c)
+            # 화자 순수성이 깨졌음을 남긴다 — 뒤 단계·검수에서 구분할 수 있게
+            if b.get("auto_split_speaker") or tgt.get("auto_split_speaker"):
+                tgt["speaker_mixed"] = True
+            out.pop(i)
+            merged_n += 1
+            changed = True
+            break
+    if merged_n:
+        print(f"   [beats] 최소 {min_sec:g}초 강제: {merged_n}개 조각 병합 → {len(out)}개")
+    return out
+
+
 def _subdivide_large_beat(client, beat: dict, transcript: list[dict],
                           shots: list[float], shot_types: list[dict] | None = None) -> list[dict]:
     """SUBDIVIDE_SEC 초과 beat 재분해 시도. 실패하면 원 beat 유지."""
@@ -691,9 +745,11 @@ def build_beats(
     # 2026-07-29 화자 전환 강제 split: beat 안에 speaker 전환이 있으면 크기 무관 split.
     # 사용자 지적 (b26): 발화자 2 짧은 리액션 3s + 발화자 1 13s 가 한 beat 에 섞임. 화자 원칙 위반.
     # min_beat_sec=3.0 (기본보다 낮게) 로 잔 리액션도 분리 · 조각이 인접 beat 과 same speaker 면 merge.
-    all_beats = _split_beats_on_speaker_change(all_beats, transcript, min_piece_sec=3.0)
+    all_beats = _split_beats_on_speaker_change(all_beats, transcript)
     # 다시 짧은 beat 병합 (split 후 잔조각 처리)
     all_beats = _merge_small_beats(all_beats, transcript)
+    # 마지막 안전장치 — 화자 규칙 예외로 살아남은 파편까지 하한 강제
+    all_beats = _enforce_min_beat_sec(all_beats)
 
     # id 부여
     for i, b in enumerate(all_beats):
@@ -758,10 +814,17 @@ def _force_split_large_beats(beats: list[dict], transcript: list[dict],
 
 
 def _split_beats_on_speaker_change(beats: list[dict], transcript: list[dict],
-                                   min_piece_sec: float = 3.0) -> list[dict]:
-    """Beat 안에 speaker 전환이 있으면 그 지점에서 무조건 split. force_split 보다 엄격 (크기 무관).
-    사용자 지적 (2026-07-29 · b26): AI 가 화자 원칙 무시하고 여러 화자 담음. 후처리 강제.
-    min_piece_sec 미만 조각은 유지 하되 · _merge_small_beats 가 다음 단계에서 인접에 병합.
+                                   min_piece_sec: float = MIN_BEAT_SEC) -> list[dict]:
+    """Beat 안에 speaker 전환이 있으면 그 지점에서 split. 단 **양쪽 조각이 모두
+    min_piece_sec 이상일 때만** 자른다.
+
+    사용자 지적 (2026-07-29 · b26): AI 가 화자 원칙 무시하고 여러 화자 담음 → 후처리 강제.
+
+    ⚠️ min_piece_sec 기본값이 3.0 이던 시절, 이 함수와 `_merge_small_beats` 가 서로 싸웠다.
+    여기서 **화자가 바뀌는 지점을 골라** 자르니 조각은 정의상 이웃과 dominant speaker 가
+    다르고, `_merge_small_beats` 는 "화자 다르면 병합 안 함" 이라 **영영 병합되지 않았다.**
+    실측 2026-08-07(드라마): 413 beat 중 215개(52%)가 6초 미만이고 최소 1.0초였다 —
+    그중 210개가 이 분할 산물이다. 기본값을 MIN_BEAT_SEC 으로 올려 애초에 안 만든다.
     """
     if not beats or not transcript:
         return beats
@@ -1092,8 +1155,10 @@ def build_beats_from_boundaries(
     # 짧은 조각 병합 · gap fill · 화자 전환 split (기존 로직 그대로)
     beats = _merge_small_beats(beats, transcript)
     beats = _fill_dialogue_gaps(beats, transcript, duration)
-    beats = _split_beats_on_speaker_change(beats, transcript, min_piece_sec=3.0)
+    beats = _split_beats_on_speaker_change(beats, transcript)
     beats = _merge_small_beats(beats, transcript)
+    # 마지막 안전장치 — 화자 규칙 예외로 살아남은 파편까지 하한 강제
+    beats = _enforce_min_beat_sec(beats)
 
     # transcript slice · dominant speaker 채우기 · id 부여
     for i, b in enumerate(beats):

@@ -42,13 +42,21 @@ def _record_usage(resp):
             return
         pin = int(getattr(um, "prompt_token_count", 0) or 0)
         pout = int(getattr(um, "candidates_token_count", 0) or 0)
+        # 프롬프트 캐시 적중분. 이걸 안 세면 "캐시 활용" 이 검증 불가한 주장으로 남는다
+        # (2026-08-07: beat_annot 맥락 누적을 넣고도 캐시가 걸렸는지 확인할 수가 없었다).
+        # 캐시된 토큰은 요금이 크게 싸므로 비용 추정에도 필요하다.
+        pcache = int(getattr(um, "cached_content_token_count", 0) or 0)
         model = str(getattr(resp, "model_version", "") or getattr(resp, "model", "") or "unknown")
         with _USAGE_LOCK:
             USAGE["calls"] += 1
             USAGE["in_tokens"] += pin
             USAGE["out_tokens"] += pout
-            m = USAGE["by_model"].setdefault(model, {"calls": 0, "in": 0, "out": 0})
+            USAGE["cached_tokens"] = USAGE.get("cached_tokens", 0) + pcache
+            if pcache:
+                USAGE["cached_calls"] = USAGE.get("cached_calls", 0) + 1
+            m = USAGE["by_model"].setdefault(model, {"calls": 0, "in": 0, "out": 0, "cached": 0})
             m["calls"] += 1; m["in"] += pin; m["out"] += pout
+            m["cached"] = m.get("cached", 0) + pcache
     except Exception:
         pass
 
@@ -60,6 +68,8 @@ def usage_summary() -> dict:
             "calls": USAGE["calls"],
             "in_tokens": USAGE["in_tokens"],
             "out_tokens": USAGE["out_tokens"],
+            "cached_tokens": USAGE.get("cached_tokens", 0),
+            "cached_calls": USAGE.get("cached_calls", 0),
             "by_model": {k: dict(v) for k, v in USAGE["by_model"].items()},
         }
     total_krw = 0.0
