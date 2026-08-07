@@ -4097,6 +4097,93 @@ app.post("/api/youtube/pipeline/run/:channelId", async (c) => {
 });
 
 /** Queue depth — the quickest way to tell whether the worker VM is alive. */
+/** 썸네일 에셋 루트 — core/thumbnail/paths.py 와 같은 규칙을 따른다. */
+function thumbAssetsDir(kind: "thumbnail-style" | "cast", programId: string): string {
+  const explicit = process.env.THUMB_ASSETS_DIR;
+  const storage = process.env.STEPD_STORAGE_DIR;
+  const root = explicit
+    ? explicit
+    : storage
+      ? path.join(storage, "thumbnail-assets")
+      : path.join(REPO_ROOT, "assets");
+  return path.join(root, kind, programId || "_default");
+}
+
+// ── 썸네일 엔진 ───────────────────────────────────────────────────────────────
+// 서버는 잡을 큐잉만 한다 (content.analyze 와 동일). 수집·Vision·이미지 생성은 워커.
+// 스타일 프로파일과 출연자 등록부는 프로그램 단위 — assets 루트는 워커 env 로 정한다.
+
+/** 프로그램 채널 URL → 스타일 프로파일 생성/갱신. 프로그램당 1회성. */
+app.post("/api/programs/:id/thumbnail-style", async (c) => {
+  const programId = c.req.param("id");
+  const body = await c.req.json<{ channelUrl?: string; limit?: number; sample?: number }>()
+    .catch(() => null);
+  const channelUrl = (body?.channelUrl ?? "").trim();
+  if (!channelUrl) {
+    return c.json({ error: "bad_request", message: "channelUrl 이 필요합니다." }, 400);
+  }
+  const program = await getEntity<any>("program", programId);
+  if (!program) return c.json({ error: "program_not_found" }, 404);
+
+  const jobId = await enqueue("thumbnail.style", {
+    programId, channelUrl, title: program.title ?? "",
+    limit: body?.limit ?? 50, sample: body?.sample ?? 20,
+  }, { dedupeKey: `thumbnail.style:${programId}` });
+  return c.json({ ok: true, jobId });
+});
+
+/** 저장된 스타일 프로파일 조회. 없으면 404 — 먼저 학습을 돌려야 한다. */
+app.get("/api/programs/:id/thumbnail-style", async (c) => {
+  const dir = thumbAssetsDir("thumbnail-style", c.req.param("id"));
+  const profile = path.join(dir, "style_profile.json");
+  if (!fs.existsSync(profile)) {
+    return c.json({ error: "not_trained", message: "이 프로그램의 스타일 프로파일이 없습니다." }, 404);
+  }
+  const data = JSON.parse(fs.readFileSync(profile, "utf-8"));
+  const promptPath = path.join(dir, "style_prompt.txt");
+  return c.json({
+    programId: c.req.param("id"),
+    title: data.title ?? "",
+    aggregate: data.aggregate ?? null,
+    prompt: fs.existsSync(promptPath) ? fs.readFileSync(promptPath, "utf-8") : "",
+  });
+});
+
+/** 이 프로그램에 등록된 출연자 목록. 등록은 사람이 파일로 한다(자동 판정 없음). */
+app.get("/api/programs/:id/cast-photos", (c) => {
+  const dir = thumbAssetsDir("cast", c.req.param("id"));
+  if (!fs.existsSync(dir)) return c.json({ cast: [], dir });
+  const cast = fs.readdirSync(dir, { withFileTypes: true })
+    .filter((d) => d.isDirectory())
+    .map((d) => ({
+      name: d.name,
+      photos: fs.readdirSync(path.join(dir, d.name))
+        .filter((f) => /\.(jpe?g|png|webp)$/i.test(f)).length,
+    }));
+  return c.json({ cast, dir });
+});
+
+/** 회차 → 썸네일 후보 생성. 인물이 등록 안 됐으면 워커가 실패로 남긴다. */
+app.post("/api/media/:id/thumbnail", async (c) => {
+  const mediaId = c.req.param("id");
+  const body = await c.req.json<{ programId?: string; candidates?: number }>()
+    .catch(() => null);
+  const media = await getMedia(mediaId);
+  if (!media) return c.json({ error: "media_not_found" }, 404);
+
+  const programId = (body?.programId ?? (media as any).programId ?? "").trim();
+  if (!programId) {
+    return c.json({ error: "bad_request", message: "programId 가 필요합니다." }, 400);
+  }
+  const program = await getEntity<any>("program", programId);
+
+  const jobId = await enqueue("thumbnail.generate", {
+    mediaId, programId, title: program?.title ?? "",
+    candidates: body?.candidates ?? 3,
+  }, { dedupeKey: `thumbnail.generate:${mediaId}` });
+  return c.json({ ok: true, jobId });
+});
+
 app.get("/api/queue/stats", async (c) => c.json(await queueStats()));
 
 /**

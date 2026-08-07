@@ -161,6 +161,8 @@ async function handle(job: Job): Promise<FollowUp | void> {
     case "match.segment": return handleMatchSegment(job);
     case "match.learn": return handleMatchLearn(job);
     case "gebd.detect": return handleGebdDetect(job);
+    case "thumbnail.style": return handleThumbnailStyle(job);
+    case "thumbnail.generate": return handleThumbnailGenerate(job);
     default:
       throw new Error(`unknown job type: ${(job as Job).type}`);
   }
@@ -631,6 +633,83 @@ function runAlign(longPath: string, shortPaths: string[]): Promise<AlignOut[]> {
       }
     });
   });
+}
+
+
+// ── 썸네일 엔진 ───────────────────────────────────────────────────────────────
+// core/thumbnail 이 실제 일을 한다. 여기서는 스폰과 결과 파싱만.
+// 결과는 stdout 마지막의 `@@RESULT {json}` 한 줄로 온다.
+
+function runThumbnailCli(args: string[]): Promise<Record<string, unknown>> {
+  return new Promise((resolve, reject) => {
+    const proc = spawn(CORE_PYTHON_BIN, ["-X", "utf8", "-m", "core.thumbnail.cli", ...args], {
+      cwd: CORE_REPO_ROOT,
+      env: { ...process.env, PYTHONPATH: "", PYTHONIOENCODING: "utf-8", PYTHONUTF8: "1" },
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let out = "";
+    let errText = "";
+    proc.stdout.on("data", (d) => { const t = String(d); out += t; process.stdout.write(t); });
+    proc.stderr.on("data", (d) => (errText += String(d)));
+    proc.on("error", reject);
+    proc.on("close", (code) => {
+      const line = out.split("\n").reverse().find((l) => l.trim().startsWith("@@RESULT "));
+      if (!line) {
+        return reject(new Error(`thumbnail cli 결과 없음 (exit ${code}): ${errText.slice(-300)}`));
+      }
+      try {
+        resolve(JSON.parse(line.slice("@@RESULT ".length)) as Record<string, unknown>);
+      } catch (e) {
+        reject(new Error(`thumbnail cli 출력 파싱 실패: ${String(e)}`));
+      }
+    });
+  });
+}
+
+/** 프로그램 채널의 기존 썸네일 → 스타일 프로파일. 프로그램당 1회성(갱신 시 재실행). */
+async function handleThumbnailStyle(job: Job): Promise<void> {
+  const programId = String(job.payload.programId ?? "");
+  const channelUrl = String(job.payload.channelUrl ?? "");
+  if (!programId || !channelUrl) throw new Error("programId·channelUrl 필요");
+
+  const result = await runThumbnailCli([
+    "style",
+    "--program-id", programId,
+    "--channel-url", channelUrl,
+    "--title", String(job.payload.title ?? ""),
+    "--limit", String(job.payload.limit ?? 50),
+    "--sample", String(job.payload.sample ?? 20),
+  ]);
+  if (!result.ok) throw new Error(String(result.error ?? "style 실패"));
+  console.log(`[worker] thumbnail.style ${programId}`, JSON.stringify(result));
+}
+
+/** 회차 1건 → 썸네일 후보. 인물 미등록이면 실패로 남긴다(재시도해도 같다). */
+async function handleThumbnailGenerate(job: Job): Promise<void> {
+  const mediaId = String(job.payload.mediaId ?? "");
+  const programId = String(job.payload.programId ?? "");
+  if (!mediaId || !programId) throw new Error("mediaId·programId 필요");
+
+  const storage = process.env.STEPD_STORAGE_DIR || path.join(CORE_REPO_ROOT, "tmp", "local-storage");
+  const analysisDir = path.join(storage, "analysis", mediaId);
+  const video = path.join(storage, "uploads", `${mediaId}.mp4`);
+  const outDir = path.join(storage, "thumbnails", mediaId);
+
+  const result = await runThumbnailCli([
+    "generate",
+    "--media-id", mediaId,
+    "--program-id", programId,
+    "--title", String(job.payload.title ?? ""),
+    "--analysis-dir", analysisDir,
+    "--video", fs.existsSync(video) ? video : "",
+    "--out", outDir,
+    "--candidates", String(job.payload.candidates ?? 3),
+  ]);
+  if (!result.ok) {
+    // 인물 미등록은 사람이 고쳐야 하는 것 — 메시지를 그대로 남긴다.
+    throw new Error(`${result.error}${result.missing ? ` (${(result.missing as string[]).join(", ")})` : ""}`);
+  }
+  console.log(`[worker] thumbnail.generate ${mediaId}`, JSON.stringify(result));
 }
 
 async function handleMatchAlign(job: Job): Promise<void> {
