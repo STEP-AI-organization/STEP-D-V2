@@ -14,7 +14,11 @@ import {
   UserRound,
   X,
 } from "lucide-react";
-import { autofillProgram, syncProgramFromAnalysis, type AutofillProgramResult } from "@/lib/data/api";
+import {
+  autofillProgram, syncProgramFromAnalysis, type AutofillProgramResult,
+  fetchThumbnailStyle, trainThumbnailStyle, fetchCastPhotos, uploadCastPhoto,
+  deleteCastPhotos, type ThumbnailStyleProfile, type CastPhotoEntry,
+} from "@/lib/data/api";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -666,6 +670,9 @@ function ProgramDetailInner({
         )}
       </Card>
 
+      {/* 썸네일 엔진 — 프로그램마다 한 번 준비하면 이후 회차에 자동 적용된다 */}
+      <ThumbnailEngineCard programId={program.id} />
+
       {/* SMR 피드 */}
       <Card title="SMR 피드 정보" hint="네이버 SMR 배포에 필요한 프로그램 레벨 메타.">
         <div className="grid gap-3 md:grid-cols-2">
@@ -1006,5 +1013,169 @@ function AutofillQuestionsDialog({
         </div>
       </div>
     </div>
+  );
+}
+
+
+/**
+ * 썸네일 엔진 준비 — 스타일 학습 + 출연자 등록.
+ *
+ * 둘 다 프로그램당 1회성이고, 이후 회차 썸네일 생성이 이걸 자동으로 물어간다.
+ * 출연자는 사람이 등록한다 — 얼굴 자동 판정을 넣으면 틀렸을 때 조용히 지나간다.
+ */
+function ThumbnailEngineCard({ programId }: { programId: string }) {
+  const { toast } = useToast();
+  const [style, setStyle] = useState<ThumbnailStyleProfile | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [sourceUrl, setSourceUrl] = useState("");
+  const [training, setTraining] = useState(false);
+  const [cast, setCast] = useState<CastPhotoEntry[]>([]);
+  const [castName, setCastName] = useState("");
+
+  useEffect(() => {
+    let alive = true;
+    void (async () => {
+      const [s, c] = await Promise.all([
+        fetchThumbnailStyle(programId).catch(() => null),
+        fetchCastPhotos(programId).catch(() => []),
+      ]);
+      if (!alive) return;
+      setStyle(s);
+      setCast(c);
+      setLoading(false);
+    })();
+    return () => { alive = false; };
+  }, [programId]);
+
+  async function onTrain() {
+    const url = sourceUrl.trim();
+    if (!url) { toast({ title: "재생목록 URL을 넣어주세요", tone: "error" }); return; }
+    setTraining(true);
+    try {
+      await trainThumbnailStyle(programId, url);
+      toast({ title: "스타일 학습을 시작했습니다", description: "수집·분석에 몇 분 걸립니다." });
+    } catch (e) {
+      toast({ title: "학습 요청 실패", description: String(e), tone: "error" });
+    } finally {
+      setTraining(false);
+    }
+  }
+
+  async function onUpload(name: string, file: File) {
+    try {
+      await uploadCastPhoto(programId, name, file);
+      setCast(await fetchCastPhotos(programId));
+      toast({ title: `${name} 사진을 등록했습니다` });
+    } catch (e) {
+      toast({ title: "업로드 실패", description: String(e), tone: "error" });
+    }
+  }
+
+  const agg = (style?.aggregate ?? {}) as Record<string, any>;
+  const first = (k: string) => (Array.isArray(agg[k]) && agg[k][0] ? String(agg[k][0][0]) : "");
+
+  return (
+    <Card
+      title="썸네일 엔진"
+      hint="프로그램마다 한 번 준비하면 이후 회차 썸네일에 자동 적용됩니다."
+    >
+      <div className="grid gap-5">
+        <div>
+          <div className="mb-2 text-xs font-medium text-muted-foreground">채널 스타일</div>
+          {loading ? (
+            <div className="text-sm text-muted-foreground">불러오는 중…</div>
+          ) : style ? (
+            <div className="rounded-lg border border-border bg-muted/20 p-3 text-sm">
+              <div className="mb-1 flex items-center gap-2">
+                <Badge>학습됨</Badge>
+                <span className="text-xs text-muted-foreground">
+                  {String(agg.sampleSize ?? "?")}장 분석
+                </span>
+              </div>
+              <div className="text-xs text-muted-foreground">
+                자막 {first("captionPosition")} {first("captionLines")}줄 ·{" "}
+                {first("borderDesc") || "테두리 없음"} · 로고 {first("logoPosition")} ·{" "}
+                {first("tone")}
+              </div>
+              <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">{style.prompt}</p>
+            </div>
+          ) : (
+            <div className="text-sm text-muted-foreground">아직 학습하지 않았습니다.</div>
+          )}
+
+          <div className="mt-3 flex gap-2">
+            <input
+              value={sourceUrl}
+              onChange={(e) => setSourceUrl(e.target.value)}
+              placeholder="https://www.youtube.com/playlist?list=..."
+              className={cn(inputCls, "flex-1")}
+            />
+            <Button onClick={onTrain} disabled={training}>
+              {training ? "요청 중…" : style ? "다시 학습" : "스타일 학습"}
+            </Button>
+          </div>
+          <div className="mt-1 text-[11px] text-muted-foreground">
+            재생목록 URL을 권합니다. 채널 전체는 다른 프로그램이 섞여 톤이 뭉개집니다.
+          </div>
+        </div>
+
+        <div>
+          <div className="mb-2 text-xs font-medium text-muted-foreground">
+            출연자 사진 · 썸네일에 들어갈 인물
+          </div>
+          {cast.length === 0 ? (
+            <div className="text-sm text-muted-foreground">
+              등록된 출연자가 없습니다. 등록하지 않으면 썸네일 생성이 중단됩니다.
+            </div>
+          ) : (
+            <div className="flex flex-wrap gap-2">
+              {cast.map((c) => (
+                <span key={c.name}
+                  className="inline-flex items-center gap-2 rounded-full border border-border px-3 py-1 text-xs">
+                  {c.name}
+                  <span className="text-muted-foreground">{c.photos}장</span>
+                  <button
+                    onClick={async () => {
+                      await deleteCastPhotos(programId, c.name);
+                      setCast(await fetchCastPhotos(programId));
+                    }}
+                    className="text-muted-foreground hover:text-status-error"
+                    aria-label={`${c.name} 삭제`}
+                  >×</button>
+                </span>
+              ))}
+            </div>
+          )}
+
+          <div className="mt-3 flex gap-2">
+            <input
+              value={castName}
+              onChange={(e) => setCastName(e.target.value)}
+              placeholder="출연자 이름 (기획에 쓰이는 이름과 같게)"
+              className={cn(inputCls, "flex-1")}
+            />
+            <label className={cn(
+              "inline-flex cursor-pointer items-center rounded-md border border-border px-3 py-2 text-sm",
+              !castName.trim() && "pointer-events-none opacity-50",
+            )}>
+              사진 추가
+              <input
+                type="file"
+                accept="image/jpeg,image/png,image/webp"
+                className="hidden"
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f && castName.trim()) void onUpload(castName.trim(), f);
+                  e.target.value = "";
+                }}
+              />
+            </label>
+          </div>
+          <div className="mt-1 text-[11px] text-muted-foreground">
+            1인당 1~3장 · 얼굴이 크게 나온 사진. 이름은 폴더명이자 매칭 키입니다.
+          </div>
+        </div>
+      </div>
+    </Card>
   );
 }
