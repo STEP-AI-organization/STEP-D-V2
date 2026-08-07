@@ -4221,6 +4221,62 @@ app.get("/api/queue/stats", async (c) => c.json(await queueStats()));
  *
  * docs/plans/gce-worker-restore.md 참조.
  */
+/**
+ * GEBD GPU VM 깨우기 — `gebd.detect` 가 큐에 있으면 `stepd-gebd-vm` 을 START 한다.
+ *
+ * VM 은 잡을 다 처리하면 **스스로 종료**한다(`deploy/gebd/vm-startup.sh`). 그래서 반대로
+ * "잡이 생겼을 때 켜 주는" 쪽이 필요하다. Cloud Scheduler 가 주기적으로 이걸 때린다.
+ *
+ * ⚠️ 아래 `/api/admin/worker-vm/wake` 는 쓸 수 없다 — 존재하지 않는 `stepd-worker` VM 을
+ * 대상으로 하고, `gebd.detect` 를 **제외**하며(정반대다), `gcloud` CLI 를 스폰하는데
+ * Cloud Run 이미지에는 gcloud 가 없다. 여기서는 **Compute REST API** 를 직접 부른다.
+ */
+app.post("/api/admin/gebd-vm/wake", async (c) => {
+  const project = process.env.GOOGLE_CLOUD_PROJECT || "step-d";
+  const zone = process.env.GEBD_VM_ZONE || "us-central1-b";
+  const instance = process.env.GEBD_VM_NAME || "stepd-gebd-vm";
+
+  // 대기 중인 gebd.detect 가 있는지 — 없으면 켜지 않는다 (VM 이 켜지면 시간당 과금이다).
+  const { rows } = await getPool().query(
+    `SELECT COUNT(*)::int AS n FROM job_queue
+      WHERE type = 'gebd.detect' AND status IN ('pending','running')`,
+  );
+  const pending = Number((rows[0] as { n: number } | undefined)?.n ?? 0);
+  if (pending === 0) return c.json({ waked: false, reason: "no pending gebd.detect", pending });
+
+  // Cloud Run 의 메타데이터 서버에서 액세스 토큰 (SA 는 이미 compute 권한을 가진다)
+  const tokRes = await fetch(
+    "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token",
+    { headers: { "Metadata-Flavor": "Google" } },
+  ).catch(() => null);
+  if (!tokRes?.ok) return c.json({ waked: false, error: "metadata token 실패", pending }, 500);
+  const { access_token: token } = (await tokRes.json()) as { access_token: string };
+
+  const base = `https://compute.googleapis.com/compute/v1/projects/${project}/zones/${zone}/instances/${instance}`;
+  const cur = await fetch(base, { headers: { Authorization: `Bearer ${token}` } });
+  if (!cur.ok) {
+    return c.json({ waked: false, error: `instance 조회 실패 ${cur.status}`, pending }, 500);
+  }
+  const status = ((await cur.json()) as { status?: string }).status;
+  // RUNNING/STAGING 이면 이미 일하는 중 — 중복 start 는 409 를 부른다.
+  if (status && status !== "TERMINATED" && status !== "SUSPENDED") {
+    return c.json({ waked: false, reason: `already ${status}`, pending, status });
+  }
+
+  const start = await fetch(`${base}/start`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Length": "0" },
+  });
+  if (!start.ok) {
+    return c.json(
+      { waked: false, error: `start 실패 ${start.status}: ${(await start.text()).slice(0, 200)}`, pending },
+      500,
+    );
+  }
+  console.log(`[gebd-vm] ${instance} START (대기 ${pending}건)`);
+  return c.json({ waked: true, instance, zone, pending });
+});
+
 app.post("/api/admin/worker-vm/wake", async (c) => {
   const zone = process.env.WORKER_VM_ZONE || "asia-northeast3-c";
   const instance = process.env.WORKER_VM_NAME || "stepd-worker";
