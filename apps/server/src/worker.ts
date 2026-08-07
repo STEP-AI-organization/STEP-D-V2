@@ -198,6 +198,7 @@ async function handle(job: Job): Promise<FollowUp | void> {
 async function handleGebdDetect(job: Job): Promise<void> {
   const { spawnSync } = await import("node:child_process");
   const fs = await import("node:fs/promises");
+  const fs2 = await import("node:fs");
   const path = await import("node:path");
   const os = await import("node:os");
 
@@ -215,10 +216,18 @@ async function handleGebdDetect(job: Job): Promise<void> {
   const image = process.env.GEBD_IMAGE || "event-boundary-detection:latest";
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), `gebd-${mediaId}-`));
   try {
-    // 1) 미디어 다운 (gsutil)
+    // 1) 미디어 다운.
+    //
+    // ⚠️ payload 의 경로는 **버킷 상대 경로**다 (`uploads/m_xxx.mp4` · storage-gcs.ts:uploadPath).
+    // `gs://` 접두사가 없어서 그대로 넘기면 gsutil 이 **로컬 파일로 해석**해 실패한다.
+    // 실측(2026-08-07): 이 때문에 gebd.detect 가 한 번도 성공하지 못했다.
+    // `gcloud storage` 를 쓴다 — gsutil 은 번들 파이썬을 못 찾는 환경이 있다(로컬 실측).
+    const bucket = process.env.GCS_BUCKET || "stepd-media";
+    const asGsUrl = (p: string) => (p.startsWith("gs://") ? p : `gs://${bucket}/${p.replace(/^\/+/, "")}`);
+
     const localMp4 = path.join(tmpDir, "source.mp4");
-    const dl = spawnSync("gsutil", ["cp", videoGcs, localMp4], { encoding: "utf8" });
-    if (dl.status !== 0) throw new Error(`gsutil cp 실패: ${dl.stderr?.slice(0, 300)}`);
+    const dl = spawnSync("gcloud", ["storage", "cp", asGsUrl(videoGcs), localMp4], { encoding: "utf8" });
+    if (dl.status !== 0) throw new Error(`영상 다운로드 실패: ${(dl.stderr || dl.stdout || "").slice(0, 300)}`);
 
     // 2) GEBD Docker 실행.
     //
@@ -278,9 +287,13 @@ async function handleGebdDetect(job: Job): Promise<void> {
 
     // 3) boundaries.json GCS 업로드
     const boundariesLocal = path.join(outDir, "boundaries.json");
-    const boundariesRemote = `${workdirPrefix.replace(/\/$/, "")}/boundaries.json`;
-    const up = spawnSync("gsutil", ["cp", boundariesLocal, boundariesRemote], { encoding: "utf8" });
-    if (up.status !== 0) throw new Error(`gsutil cp (upload) 실패: ${up.stderr?.slice(0, 300)}`);
+    // 여기도 버킷 상대 경로(`analysis/{mediaId}`)라 gs:// 로 만들어야 한다.
+    const boundariesRemote = asGsUrl(`${workdirPrefix.replace(/\/$/, "")}/boundaries.json`);
+    if (!fs2.existsSync(boundariesLocal)) {
+      throw new Error("boundaries.json 이 생성되지 않았다 — 컨테이너 로그 확인");
+    }
+    const up = spawnSync("gcloud", ["storage", "cp", boundariesLocal, boundariesRemote], { encoding: "utf8" });
+    if (up.status !== 0) throw new Error(`업로드 실패: ${(up.stderr || up.stdout || "").slice(0, 300)}`);
 
     // 4) content.analyze 재개 · dedupeKey 새로 (직전 것과 다르게) 해서 다시 큐잉
     await enqueue(
