@@ -146,10 +146,33 @@ def prepare_checkpoints(
         prior_params = prior.get("params", {})
         for name, fp in params.items():
             if prior_params.get(name) != fp:
-                if (out_dir / name).exists():
-                    print(f"파라미터 변경 — {name} 재생성")
-                (out_dir / name).unlink(missing_ok=True)
+                src = out_dir / name
+                if src.exists():
+                    print(f"파라미터 변경 — {name} 재생성 (이전본은 .invalidated/ 로 보관)")
+                    _archive_checkpoint(out_dir, src)
+                else:
+                    src.unlink(missing_ok=True)
     save_json(manifest_path, manifest)
+
+
+def _archive_checkpoint(out_dir: Path, src: Path) -> None:
+    """무효해진 체크포인트를 **지우지 말고** out_dir/.invalidated/ 로 옮긴다.
+
+    2026-08-07: 지문이 어긋나면 곧바로 unlink 했는데, 그 뒤 단계가 크래시하면
+    되살릴 방법이 없다. 실제로 `STT_PROVIDER` 를 안 넘긴 채 실행해서 stt.json ·
+    refined.json 이 지워졌고, 바로 다음 줄에서 "SONIOX_API_KEY 미설정" 으로 죽어
+    ₩270 짜리 STT 를 다시 사야 했다. 재생성은 어차피 덮어쓰므로 보관해도 지장 없다.
+    """
+    dest_dir = out_dir / ".invalidated"
+    try:
+        dest_dir.mkdir(exist_ok=True)
+        dest = dest_dir / src.name
+        if dest.exists():
+            dest.unlink()
+        src.replace(dest)
+    except OSError:
+        # 보관에 실패해도 파이프라인은 진행해야 한다 (원래 동작으로 폴백)
+        src.unlink(missing_ok=True)
 
 
 def progress(stage: str, pct: float, note: str = "") -> None:
