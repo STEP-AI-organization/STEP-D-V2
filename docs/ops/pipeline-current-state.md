@@ -262,6 +262,9 @@ python scripts/make_review_viewer.py <workdir> <video> [out.html]
 `usage.json` 이 회당 실측을 남긴다 (캐시 토큰 포함).
 
 > 이전 문서의 "회당 ~₩620" 은 Soniox STT(당시 ₩270 로 **과대추정**) + chyron on 기준.
+>
+> **인프라 비용은 [infra.md §월 비용](infra.md) 이 정본이다** (2026-08-07 실측 단가).
+> 요약: 고정 ₩51,000 + 회차당 ₩774 → 월 12회차 기준 **≈ ₩63,700**.
 > 실제 Soniox 는 ₩135 이므로 그 수치도 ~₩485 로 내려간다. 위는 whisper 로컬 + chyron off 기준.
 
 ---

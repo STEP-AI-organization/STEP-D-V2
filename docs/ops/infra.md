@@ -111,8 +111,28 @@ CPU 전용 실행은 9.45초 만에 실패한다(mmaction2 가 CUDA 요구).
 - 아직 `AUTO_GEBD=1` 은 안 켰다. 켜도 **VM 을 깨우는 배선이 없어** 잡만 쌓인다.
 
 ### 3. Cloud SQL — `stepd-db`
-- PostgreSQL 16. 인스턴스 연결명 `step-d:us-central1:stepd-db`.
-- 접속: Cloud Run=유닉스 소켓, 워커=cloud-sql-proxy TCP, 로컬=도커 PG 별도(`stepd-pg`).
+- PostgreSQL 16. 인스턴스 연결명 `step-d:us-central1:stepd-db`. Zonal · 디스크 10GB PD_SSD.
+- **tier `db-g1-small` (공유코어 · 1.7GB)** — 2026-08-07 에 `db-custom-1-4096` 에서 내렸다.
+  월 **$50.59 → $25.55** (절감 $25.04 ≈ ₩34,500 · 인프라비의 37%).
+
+  | | 이전 (1vCPU·4GB) | 현재 (g1-small·1.7GB) |
+  |---|---|---|
+  | 메모리 실사용 | 1.53GB (38%) | **0.70GB (41%)** |
+  | CPU | 평균 9.0% | 평균 9.8% · 최대 17.3% |
+
+  Postgres 는 **데이터가 아니라 인스턴스 크기에 맞춰** 버퍼를 잡는다(`shared_buffers` ≈ RAM 25%).
+  4GB 에서 1.53GB 를 쓰던 게 1.7GB 로 내리자 0.70GB 가 됐다 — 데이터를 지워서가 아니다.
+  **여유 59%.**
+
+  > ⚠️ 공유코어는 **SLA 가 없다**(Google 은 개발/테스트 등급으로 안내). 실사용자가 없는
+  > 지금 단계라 택했다. **영업 시작해서 트래픽이 붙으면 되돌릴 것** — 명령 한 줄 + 재시작 2~5분:
+  > `gcloud sql instances patch stepd-db --project=step-d --tier=db-custom-1-4096`
+  > 판단 기준: 모니터링에서 **CPU 가 지속 50% 초과**면 올린다 (공유코어는 버스트 크레딧이라
+  > 지속 부하에서 스로틀된다).
+
+- 접속: Cloud Run·Cloud Run Jobs = 유닉스 소켓(`--set-cloudsql-instances`),
+  외부(개발 PC) = **Cloud SQL Auth Proxy**, 로컬 개발 = 도커 PG 별도(`stepd-pg`).
+  ⚠️ 로컬 `.env` 의 `DATABASE_URL` 은 `localhost:5432`(도커 PG)라 **프로덕션이 아니다.**
 - 주요 테이블: `entities`(program/episode/…), `media`, `youtube_channels`, `channel_videos`,
   `video_stats`, `channel_analytics`, `job_queue`, `content_analysis`(콘텐츠 파이프라인 결과).
 - ⚠️ 함정1(키): Postgres가 따옴표 없는 식별자를 소문자로 접음 → `SELECT *`는 소문자 키. camelCase는
@@ -222,6 +242,60 @@ Claude Code 스킬: `.claude/skills/deploy/SKILL.md`
 
 ---
 
+## 월 비용 (2026-08-07 실측 단가 기준)
+
+단가는 **GCP Billing API 직접 조회**(us-central1). 추정이 아니다 — 다만 실제 청구서 대조는 아직이다.
+
+```
+T4 GPU        $0.350000/시간      N1 vCPU   $0.031611/시간
+L4 GPU        $0.560040/시간      N1 RAM    $0.004237/GiB·시간
+G2 코어       $0.026238/시간      SQL vCPU  $0.041300/시간
+Balanced PD   $0.100000/GiB·월    SQL RAM   $0.007000/GiB·시간
+```
+
+### 고정비 — 아무것도 안 돌려도 나감
+
+| 항목 | 월 |
+|---|---|
+| Cloud SQL `db-g1-small` | **₩35,300** ($25.55) |
+| GEBD VM 부팅디스크 100GB pd-balanced (정지 중에도 과금) | ₩13,800 |
+| AR 이미지 13.8GB | ₩1,900 |
+| GCS (미디어 + 가중치 1.58GB) | ₩50 |
+| Cloud Run 서비스 2개 (min-instances 0) | ₩0 |
+| Cloud Scheduler 2개 (3개까지 무료) | ₩0 |
+| **소계** | **≈ ₩51,000** |
+
+### 사용량비
+
+| 항목 | 회차당 |
+|---|---|
+| GEBD VM ($0.868/시간 × ~18분) | ₩360 |
+| content Job (4vCPU·8Gi × ~30분) | ₩125 |
+| Soniox STT ($0.10/시간 · 화자분리 포함) | ₩135 |
+| Gemini API (usage.json 실측) | ₩154 |
+| **합계** | **≈ ₩774** |
+
+폴링(회차 수 무관): Job 2개 × 15분 주기 ≈ **월 ₩3,400**.
+
+### 월 총액
+
+| 회차/월 | 합계 |
+|---|---|
+| **12건** | **≈ ₩63,700** |
+| 30건 | ≈ ₩77,600 |
+| 100건 | ≈ ₩131,700 |
+
+> **GPU 는 거의 안 켜서 싸다.** 상시 가동이면 GEBD VM 만 월 $533(₩735,000)이다 —
+> 유휴 자동 종료가 245배를 가른다. 그래서 `--max-run-duration` 하드 안전장치를 같이 건다.
+
+### 더 줄일 여지
+
+| 방법 | 절감/월 | 대가 |
+|---|---|---|
+| content Job 폴링 제거 (서버가 enqueue 시 직접 트리거) | ₩2,500 | 서버 재배포 · 최대 15분 지연도 사라짐 |
+| Spot VM (`PREEMPTIBLE_CPUS` 쿼터 추가 신청) | GPU분 60~91% | 선점 가능 (재시도 안전) |
+| VM 을 매번 삭제/재생성 | ₩13,800 | 회차마다 13.8GB 재pull |
+
 ## 변경 이력
 
 ### 2026-08-07 — 워커 클라우드 이전 + GEBD GPU
@@ -232,6 +306,8 @@ Claude Code 스킬: `.claude/skills/deploy/SKILL.md`
   job_queue 81,199행 + 파생 데이터 146,050행 정리 — **채널 연결만 보존**
 - 배포: `deploy/cloud.sh` + `/deploy` 스킬로 통합
 - 시크릿 `stepd-soniox-api-key` 신설 (클라우드 STT 는 Soniox)
+- **Cloud SQL `db-custom-1-4096` → `db-g1-small`** (실측 CPU 9% · 메모리 여유 확인 후).
+  월 ₩69,800 → ₩35,300. 인프라 총액 ₩99,800 → **₩63,700 (37% 절감)**
 
 
 - **2026-07-16 (리포 이전 + 채널 트렌드 재설계)**: GitHub 리포를 `STEP-AI-official/STEP-D-V2`
