@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
-import { ChevronLeft, FileVideo, Loader2, Trash2 } from "lucide-react";
+import { ChevronLeft, FileVideo, Image as ImageIcon, Loader2, Trash2 } from "lucide-react";
 import { EmptyState } from "@/components/ui/empty-state";
 import { PipelineStrip } from "@/components/pipeline-strip";
 import { SourcePanel } from "@/components/source-panel";
@@ -12,6 +12,7 @@ import { SeekProvider } from "@/components/episode/seek-context";
 import { useToast } from "@/components/ui/toast";
 import { useAppData } from "@/lib/data/store";
 import { targetAgeLabel } from "@/lib/constants";
+import { generateThumbnail } from "@/lib/data/api";
 
 /**
  * Episode detail — 상하 스택 레이아웃.
@@ -25,11 +26,34 @@ export function EpisodeDetail({
   episodeId: string;
   initialTab?: string;
 }) {
-  const { getEpisode, deleteEpisode, loading } = useAppData();
+  const { getEpisode, deleteEpisode, mediaForEpisode, loading } = useAppData();
   const { toast } = useToast();
   const router = useRouter();
   const [deleting, setDeleting] = useState(false);
+  const [thumbBusy, setThumbBusy] = useState(false);
   const episode = getEpisode(episodeId);
+  // 썸네일은 롱폼(회차) 단위다 — 숏폼에는 붙이지 않는다.
+  const master = mediaForEpisode(episodeId, "master");
+
+  async function runThumbnail() {
+    if (!episode || !master) return;
+    setThumbBusy(true);
+    try {
+      await generateThumbnail(master.id, episode.programId, 3);
+      toast({
+        title: "썸네일 생성을 요청했습니다",
+        description: "후보 3장 · 몇 분 걸립니다. 출연자가 등록돼 있어야 합니다.",
+      });
+    } catch (err) {
+      toast({
+        title: "썸네일 요청 실패",
+        description: err instanceof Error ? err.message : String(err),
+        tone: "error",
+      });
+    } finally {
+      setThumbBusy(false);
+    }
+  }
 
   async function runDelete() {
     if (!episode) return;
@@ -103,6 +127,18 @@ export function EpisodeDetail({
         </div>
         <div className="flex shrink-0 items-center gap-2">
           <PipelineStrip pipeline={episode.pipeline} />
+          {master && (
+            <button
+              type="button"
+              onClick={runThumbnail}
+              disabled={thumbBusy}
+              title="이 회차의 썸네일 후보를 생성합니다 (프로그램 스타일·등록 출연자 사용)"
+              className="inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-xs text-muted-foreground hover:text-foreground disabled:opacity-50"
+            >
+              {thumbBusy ? <Loader2 className="size-3.5 animate-spin" /> : <ImageIcon className="size-3.5" />}
+              썸네일
+            </button>
+          )}
           <button
             type="button"
             onClick={runDelete}
