@@ -42,6 +42,9 @@ import {
   type YouTubeChannel,
 } from "./db-pg.ts";
 import { probe, captureThumbnail } from "./ffmpeg.ts";
+import {
+  prepareProgramAssets, publishStyleProfile, publishThumbnails, tempAssetRoot,
+} from "./thumbnail-assets.ts";
 import { uploadFile, uploadPath, thumbPath } from "./storage-gcs.ts";
 import { initQueue, claimJob, completeJob, failJob, requeueStale, heartbeatJob, enqueue, lastDoneJobAt, queueStats, type Job, type JobType } from "./queue.ts";
 import { runChannelPipeline } from "./channel-pipeline.ts";
@@ -640,11 +643,14 @@ function runAlign(longPath: string, shortPaths: string[]): Promise<AlignOut[]> {
 // core/thumbnail 이 실제 일을 한다. 여기서는 스폰과 결과 파싱만.
 // 결과는 stdout 마지막의 `@@RESULT {json}` 한 줄로 온다.
 
-function runThumbnailCli(args: string[]): Promise<Record<string, unknown>> {
+function runThumbnailCli(
+  args: string[],
+  extraEnv: Record<string, string> = {},
+): Promise<Record<string, unknown>> {
   return new Promise((resolve, reject) => {
     const proc = spawn(CORE_PYTHON_BIN, ["-X", "utf8", "-m", "core.thumbnail.cli", ...args], {
       cwd: CORE_REPO_ROOT,
-      env: { ...process.env, PYTHONPATH: "", PYTHONIOENCODING: "utf-8", PYTHONUTF8: "1" },
+      env: { ...process.env, ...extraEnv, PYTHONPATH: "", PYTHONIOENCODING: "utf-8", PYTHONUTF8: "1" },
       stdio: ["ignore", "pipe", "pipe"],
     });
     let out = "";
@@ -669,19 +675,28 @@ function runThumbnailCli(args: string[]): Promise<Record<string, unknown>> {
 /** 프로그램 채널의 기존 썸네일 → 스타일 프로파일. 프로그램당 1회성(갱신 시 재실행). */
 async function handleThumbnailStyle(job: Job): Promise<void> {
   const programId = String(job.payload.programId ?? "");
-  const channelUrl = String(job.payload.channelUrl ?? "");
-  if (!programId || !channelUrl) throw new Error("programId·channelUrl 필요");
+  // 재생목록 URL 을 권한다 — 큰 채널은 프로그램·기수가 재생목록으로 나뉘어 있고,
+  // 채널 전체로 학습하면 여러 프로그램 톤이 뭉개진다.
+  const sourceUrl = String(job.payload.sourceUrl ?? job.payload.channelUrl ?? "");
+  if (!programId || !sourceUrl) throw new Error("programId·sourceUrl 필요");
 
+  // 산출물을 임시 루트에 쓰고 스토리지로 올린다 — 워커 디스크는 재시작하면 사라진다.
+  const root = tempAssetRoot(`style-${programId}-${Date.now()}`);
   const result = await runThumbnailCli([
     "style",
     "--program-id", programId,
-    "--channel-url", channelUrl,
+    "--source-url", sourceUrl,
     "--title", String(job.payload.title ?? ""),
     "--limit", String(job.payload.limit ?? 50),
     "--sample", String(job.payload.sample ?? 20),
-  ]);
+  ], { THUMB_ASSETS_DIR: root });
   if (!result.ok) throw new Error(String(result.error ?? "style 실패"));
-  console.log(`[worker] thumbnail.style ${programId}`, JSON.stringify(result));
+
+  const localStyleDir = path.join(root, "thumbnail-style", programId);
+  const uploaded = await publishStyleProfile(programId, localStyleDir);
+  fs.rmSync(root, { recursive: true, force: true });
+  console.log(`[worker] thumbnail.style ${programId} · 업로드 ${uploaded}개`,
+    JSON.stringify(result));
 }
 
 /** 회차 1건 → 썸네일 후보. 인물 미등록이면 실패로 남긴다(재시도해도 같다). */
@@ -693,23 +708,37 @@ async function handleThumbnailGenerate(job: Job): Promise<void> {
   const storage = process.env.STEPD_STORAGE_DIR || path.join(CORE_REPO_ROOT, "tmp", "local-storage");
   const analysisDir = path.join(storage, "analysis", mediaId);
   const video = path.join(storage, "uploads", `${mediaId}.mp4`);
-  const outDir = path.join(storage, "thumbnails", mediaId);
+  const outDir = path.join(os.tmpdir(), "stepd-thumb-out", mediaId);
 
-  const result = await runThumbnailCli([
-    "generate",
-    "--media-id", mediaId,
-    "--program-id", programId,
-    "--title", String(job.payload.title ?? ""),
-    "--analysis-dir", analysisDir,
-    "--video", fs.existsSync(video) ? video : "",
-    "--out", outDir,
-    "--candidates", String(job.payload.candidates ?? 3),
-  ]);
-  if (!result.ok) {
-    // 인물 미등록은 사람이 고쳐야 하는 것 — 메시지를 그대로 남긴다.
-    throw new Error(`${result.error}${result.missing ? ` (${(result.missing as string[]).join(", ")})` : ""}`);
+  // 이 프로그램의 스타일 프로파일·출연자 사진만 내려받는다 (회차마다 전체를 뒤지지 않게).
+  const assets = await prepareProgramAssets(programId, `gen-${mediaId}-${Date.now()}`);
+  if (!assets.castFiles) {
+    fs.rmSync(assets.root, { recursive: true, force: true });
+    throw new Error(`cast_not_registered: ${programId} 에 등록된 출연자 사진이 없습니다`);
   }
-  console.log(`[worker] thumbnail.generate ${mediaId}`, JSON.stringify(result));
+
+  try {
+    const result = await runThumbnailCli([
+      "generate",
+      "--media-id", mediaId,
+      "--program-id", programId,
+      "--title", String(job.payload.title ?? ""),
+      "--analysis-dir", analysisDir,
+      "--video", fs.existsSync(video) ? video : "",
+      "--out", outDir,
+      "--candidates", String(job.payload.candidates ?? 3),
+    ], { THUMB_ASSETS_DIR: assets.root });
+    if (!result.ok) {
+      // 인물 미등록은 사람이 고쳐야 하는 것 — 메시지를 그대로 남긴다.
+      throw new Error(`${result.error}${result.missing ? ` (${(result.missing as string[]).join(", ")})` : ""}`);
+    }
+    const stored = await publishThumbnails(mediaId, (result.files as string[]) ?? []);
+    console.log(`[worker] thumbnail.generate ${mediaId} · 후보 ${stored.length}장`,
+      JSON.stringify({ ...result, stored }));
+  } finally {
+    fs.rmSync(assets.root, { recursive: true, force: true });
+    fs.rmSync(outDir, { recursive: true, force: true });
+  }
 }
 
 async function handleMatchAlign(job: Job): Promise<void> {

@@ -39,13 +39,46 @@ SYSTEM = """너는 한국 방송사 유튜브 썸네일 아트디렉터다.
 
 # ── 수집 ──────────────────────────────────────────────────────────────────────
 
-def collect_thumbnails(channel_url: str, out_dir: pathlib.Path, limit: int = 50) -> int:
-    """채널 → 썸네일 이미지. yt-dlp 라 YOUTUBE_API_KEY·쿼터가 필요 없다."""
+def list_playlists(channel_url: str, limit: int = 50) -> list[dict[str, Any]]:
+    """채널의 재생목록 목록.
+
+    큰 채널은 프로그램·기수를 재생목록으로 나눠 담는다. 채널 전체로 학습하면
+    여러 프로그램 톤이 뭉개지므로, 재생목록 단위로 고르게 한다.
+    """
+    url = channel_url.rstrip("/")
+    if "/playlists" not in url and "list=" not in url:
+        url = url.split("/videos")[0] + "/playlists"
+    r = subprocess.run(
+        ["yt-dlp", "--flat-playlist", "--playlist-end", str(limit), "-J", url],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+    )
+    if r.returncode != 0:
+        raise RuntimeError(f"yt-dlp 실패: {(r.stderr or '')[-300:]}")
+    out = []
+    for e in (json.loads(r.stdout).get("entries") or []):
+        pid = e.get("id")
+        if not pid:
+            continue
+        out.append({
+            "playlistId": pid,
+            "title": e.get("title") or "",
+            "url": e.get("url") or f"https://www.youtube.com/playlist?list={pid}",
+            "videoCount": e.get("playlist_count"),
+        })
+    return out
+
+
+def collect_thumbnails(source_url: str, out_dir: pathlib.Path, limit: int = 50) -> int:
+    """재생목록 또는 채널 → 썸네일 이미지.
+
+    **재생목록 URL 을 권한다.** 채널 전체는 프로그램이 섞여 스타일이 뭉개진다.
+    yt-dlp 라 YOUTUBE_API_KEY·쿼터가 필요 없고, 둘 다 같은 방식으로 처리된다.
+    """
     img_dir = out_dir / "thumbs"
     img_dir.mkdir(parents=True, exist_ok=True)
 
     r = subprocess.run(
-        ["yt-dlp", "--flat-playlist", "--playlist-end", str(limit), "-J", channel_url],
+        ["yt-dlp", "--flat-playlist", "--playlist-end", str(limit), "-J", source_url],
         capture_output=True, text=True, encoding="utf-8", errors="replace",
     )
     if r.returncode != 0:
@@ -62,7 +95,7 @@ def collect_thumbnails(channel_url: str, out_dir: pathlib.Path, limit: int = 50)
             saved.append({"videoId": vid, "title": e.get("title") or ""})
 
     (out_dir / "videos.json").write_text(
-        json.dumps({"channel": channel_url, "videos": saved},
+        json.dumps({"source": source_url, "videos": saved},
                    ensure_ascii=False, indent=2), encoding="utf-8")
     return len(saved)
 
