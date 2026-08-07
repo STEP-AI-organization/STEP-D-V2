@@ -1,0 +1,543 @@
+{
+ "video": "master_2026-06-18_eb5cd1.mp4",
+ "boundaries_source": "gebd (model_cla_f_0_s_-1_7728.pt)",
+ "labeled_by": "claude-opus-5 · 프레임 4장(±1.0/±0.4s)+대사 대조",
+ "labeled_at": "2026-08-06",
+ "schema": {
+  "cut": "씬전환 컷 (change_shot ∪ change_event)",
+  "samescene": "같은 씬 컷 · 리버스샷 (change_shot 만)",
+  "action": "컷 없는 행동전환 (change_event 만)",
+  "no": "오탐",
+  "hold": "보류"
+ },
+ "labels": {
+  "0": {
+   "verdict": "no",
+   "note": "고지/자막화면"
+  },
+  "1": {
+   "verdict": "cut",
+   "note": ""
+  },
+  "2": {
+   "verdict": "cut",
+   "note": ""
+  },
+  "3": {
+   "verdict": "samescene",
+   "note": ""
+  },
+  "4": {
+   "verdict": "samescene",
+   "note": ""
+  },
+  "5": {
+   "verdict": "no",
+   "note": "같은 앵글"
+  },
+  "6": {
+   "verdict": "cut",
+   "note": ""
+  },
+  "7": {
+   "verdict": "cut",
+   "note": ""
+  },
+  "8": {
+   "verdict": "hold",
+   "note": "너무 어두워 판단 불가"
+  },
+  "9": {
+   "verdict": "no",
+   "note": "정지화면"
+  },
+  "10": {
+   "verdict": "samescene",
+   "note": ""
+  },
+  "11": {
+   "verdict": "hold",
+   "note": "앞 프레임 판독 불가"
+  },
+  "12": {
+   "verdict": "samescene",
+   "note": ""
+  },
+  "13": {
+   "verdict": "no",
+   "note": "같은 앵글"
+  },
+  "14": {
+   "verdict": "cut",
+   "note": ""
+  },
+  "15": {
+   "verdict": "cut",
+   "note": ""
+  },
+  "16": {
+   "verdict": "cut",
+   "note": ""
+  },
+  "17": {
+   "verdict": "cut",
+   "note": "모델 누락(score 0.165 noise 처리)"
+  },
+  "18": {
+   "verdict": "no",
+   "note": "같은 앵글"
+  },
+  "19": {
+   "verdict": "cut",
+   "note": ""
+  },
+  "20": {
+   "verdict": "cut",
+   "note": ""
+  },
+  "21": {
+   "verdict": "cut",
+   "note": ""
+  },
+  "22": {
+   "verdict": "no",
+   "note": "같은 앵글"
+  },
+  "23": {
+   "verdict": "samescene",
+   "note": ""
+  },
+  "24": {
+   "verdict": "samescene",
+   "note": ""
+  },
+  "25": {
+   "verdict": "samescene",
+   "note": "리버스샷·모델은 noise 처리"
+  },
+  "26": {
+   "verdict": "cut",
+   "note": ""
+  },
+  "27": {
+   "verdict": "samescene",
+   "note": "인서트 컷(휴대폰)"
+  },
+  "28": {
+   "verdict": "samescene",
+   "note": ""
+  },
+  "29": {
+   "verdict": "samescene",
+   "note": ""
+  },
+  "30": {
+   "verdict": "cut",
+   "note": ""
+  },
+  "31": {
+   "verdict": "samescene",
+   "note": "같은 장소 연속 이동"
+  },
+  "32": {
+   "verdict": "no",
+   "note": "카메라 움직임(액션)"
+  },
+  "33": {
+   "verdict": "samescene",
+   "note": ""
+  },
+  "34": {
+   "verdict": "cut",
+   "note": "모델 누락(score 0.0 noise)"
+  },
+  "35": {
+   "verdict": "samescene",
+   "note": ""
+  },
+  "36": {
+   "verdict": "cut",
+   "note": ""
+  },
+  "37": {
+   "verdict": "samescene",
+   "note": ""
+  },
+  "38": {
+   "verdict": "cut",
+   "note": "모델 누락(score 0.0 noise)"
+  },
+  "39": {
+   "verdict": "samescene",
+   "note": ""
+  },
+  "40": {
+   "verdict": "no",
+   "note": "카메라 움직임(액션)"
+  },
+  "41": {
+   "verdict": "samescene",
+   "note": "모델은 noise 처리"
+  },
+  "42": {
+   "verdict": "samescene",
+   "note": "문틈 리버스샷"
+  },
+  "43": {
+   "verdict": "samescene",
+   "note": "문틈 리버스샷"
+  },
+  "44": {
+   "verdict": "cut",
+   "note": ""
+  },
+  "45": {
+   "verdict": "no",
+   "note": "카메라 움직임(액션)"
+  },
+  "46": {
+   "verdict": "cut",
+   "note": ""
+  },
+  "47": {
+   "verdict": "samescene",
+   "note": ""
+  },
+  "48": {
+   "verdict": "samescene",
+   "note": "교차편집 인서트"
+  },
+  "49": {
+   "verdict": "no",
+   "note": "카메라 움직임(액션)"
+  },
+  "50": {
+   "verdict": "cut",
+   "note": ""
+  },
+  "51": {
+   "verdict": "samescene",
+   "note": ""
+  },
+  "52": {
+   "verdict": "samescene",
+   "note": ""
+  },
+  "53": {
+   "verdict": "no",
+   "note": "카메라 움직임(액션)"
+  },
+  "54": {
+   "verdict": "samescene",
+   "note": ""
+  },
+  "55": {
+   "verdict": "cut",
+   "note": ""
+  },
+  "56": {
+   "verdict": "no",
+   "note": "같은 앵글"
+  },
+  "57": {
+   "verdict": "no",
+   "note": "카메라 움직임(액션)"
+  },
+  "58": {
+   "verdict": "samescene",
+   "note": "인서트 컷"
+  },
+  "59": {
+   "verdict": "samescene",
+   "note": ""
+  },
+  "60": {
+   "verdict": "samescene",
+   "note": ""
+  },
+  "61": {
+   "verdict": "no",
+   "note": "같은 앵글"
+  },
+  "62": {
+   "verdict": "samescene",
+   "note": ""
+  },
+  "63": {
+   "verdict": "samescene",
+   "note": "리버스샷"
+  },
+  "64": {
+   "verdict": "samescene",
+   "note": "리버스샷"
+  },
+  "65": {
+   "verdict": "samescene",
+   "note": "리버스샷·모델은 noise"
+  },
+  "66": {
+   "verdict": "samescene",
+   "note": ""
+  },
+  "67": {
+   "verdict": "samescene",
+   "note": ""
+  },
+  "68": {
+   "verdict": "samescene",
+   "note": ""
+  },
+  "69": {
+   "verdict": "samescene",
+   "note": ""
+  },
+  "70": {
+   "verdict": "no",
+   "note": "같은 앵글"
+  },
+  "71": {
+   "verdict": "no",
+   "note": "같은 앵글"
+  },
+  "72": {
+   "verdict": "samescene",
+   "note": ""
+  },
+  "73": {
+   "verdict": "no",
+   "note": "같은 앵글"
+  },
+  "74": {
+   "verdict": "samescene",
+   "note": "리버스샷"
+  },
+  "75": {
+   "verdict": "samescene",
+   "note": "리버스샷"
+  },
+  "76": {
+   "verdict": "samescene",
+   "note": "모델은 noise"
+  },
+  "77": {
+   "verdict": "no",
+   "note": "같은 앵글"
+  },
+  "78": {
+   "verdict": "samescene",
+   "note": ""
+  },
+  "79": {
+   "verdict": "no",
+   "note": "같은 앵글"
+  },
+  "80": {
+   "verdict": "samescene",
+   "note": ""
+  },
+  "81": {
+   "verdict": "samescene",
+   "note": ""
+  },
+  "82": {
+   "verdict": "samescene",
+   "note": ""
+  },
+  "83": {
+   "verdict": "cut",
+   "note": ""
+  },
+  "84": {
+   "verdict": "no",
+   "note": "같은 앵글·score 0.92 고신뢰 오탐"
+  },
+  "85": {
+   "verdict": "samescene",
+   "note": ""
+  },
+  "86": {
+   "verdict": "no",
+   "note": "같은 앵글·score 0.85 고신뢰 오탐"
+  },
+  "87": {
+   "verdict": "no",
+   "note": "같은 앵글·score 0.87 고신뢰 오탐"
+  },
+  "88": {
+   "verdict": "no",
+   "note": "같은 앵글"
+  },
+  "89": {
+   "verdict": "no",
+   "note": "같은 앵글"
+  },
+  "90": {
+   "verdict": "no",
+   "note": "같은 앵글"
+  },
+  "91": {
+   "verdict": "samescene",
+   "note": ""
+  },
+  "92": {
+   "verdict": "samescene",
+   "note": "리버스샷·모델은 noise"
+  },
+  "93": {
+   "verdict": "samescene",
+   "note": "리버스샷"
+  },
+  "94": {
+   "verdict": "no",
+   "note": "같은 앵글"
+  },
+  "95": {
+   "verdict": "no",
+   "note": "같은 앵글"
+  },
+  "96": {
+   "verdict": "no",
+   "note": "같은 앵글·score 0.86 고신뢰 오탐"
+  },
+  "97": {
+   "verdict": "no",
+   "note": "같은 앵글·score 0.94 고신뢰 오탐"
+  },
+  "98": {
+   "verdict": "cut",
+   "note": ""
+  },
+  "99": {
+   "verdict": "samescene",
+   "note": ""
+  },
+  "100": {
+   "verdict": "samescene",
+   "note": "리버스샷"
+  },
+  "101": {
+   "verdict": "samescene",
+   "note": ""
+  },
+  "102": {
+   "verdict": "samescene",
+   "note": "모델은 noise"
+  },
+  "103": {
+   "verdict": "cut",
+   "note": ""
+  },
+  "104": {
+   "verdict": "samescene",
+   "note": ""
+  },
+  "105": {
+   "verdict": "cut",
+   "note": "모델 누락(score 0.02 noise)"
+  },
+  "106": {
+   "verdict": "samescene",
+   "note": ""
+  },
+  "107": {
+   "verdict": "no",
+   "note": "같은 앵글"
+  },
+  "108": {
+   "verdict": "samescene",
+   "note": "리버스샷"
+  },
+  "109": {
+   "verdict": "cut",
+   "note": ""
+  },
+  "110": {
+   "verdict": "samescene",
+   "note": "리버스샷"
+  },
+  "111": {
+   "verdict": "samescene",
+   "note": "리버스샷"
+  },
+  "112": {
+   "verdict": "no",
+   "note": "같은 앵글"
+  },
+  "113": {
+   "verdict": "no",
+   "note": "같은 앵글"
+  },
+  "114": {
+   "verdict": "samescene",
+   "note": "모델은 noise"
+  },
+  "115": {
+   "verdict": "no",
+   "note": "카메라 움직임(액션)"
+  },
+  "116": {
+   "verdict": "samescene",
+   "note": ""
+  },
+  "117": {
+   "verdict": "no",
+   "note": "같은 앵글"
+  },
+  "118": {
+   "verdict": "no",
+   "note": "같은 앵글"
+  },
+  "119": {
+   "verdict": "samescene",
+   "note": ""
+  },
+  "120": {
+   "verdict": "samescene",
+   "note": ""
+  },
+  "121": {
+   "verdict": "samescene",
+   "note": ""
+  },
+  "122": {
+   "verdict": "samescene",
+   "note": ""
+  },
+  "123": {
+   "verdict": "samescene",
+   "note": ""
+  },
+  "124": {
+   "verdict": "cut",
+   "note": ""
+  },
+  "125": {
+   "verdict": "no",
+   "note": "같은 앵글"
+  },
+  "126": {
+   "verdict": "samescene",
+   "note": "리버스샷"
+  },
+  "127": {
+   "verdict": "samescene",
+   "note": "인서트 컷"
+  },
+  "128": {
+   "verdict": "samescene",
+   "note": "리버스샷"
+  },
+  "129": {
+   "verdict": "cut",
+   "note": "모델 과소평가(soft 0.18)"
+  },
+  "130": {
+   "verdict": "no",
+   "note": "같은 앵글"
+  },
+  "131": {
+   "verdict": "no",
+   "note": "크레딧/협찬 자막"
+  }
+ }
+}

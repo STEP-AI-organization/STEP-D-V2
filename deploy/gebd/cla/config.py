@@ -31,7 +31,12 @@ WHOLE_LOSS_COEF = 0.3
 
 AUX_LOSS_COEF = 0.5   
 
-BATCH_SIZE = 8
+# STEP-D 추가 (2026-08-06): 배치·워커를 env 로 조절.
+# 원본 8은 다중 GPU 전제다. SJNET 은 pairwise_minus_l2_distance 로 [B,300,300,D] 텐서를
+# 만들어서 VRAM 을 배치에 비례해 크게 먹는다 — RTX 3060 Ti(8GB) 에서 batch 8 은 OOM.
+# 배치를 줄이면 gradient noise 가 늘지만, 파인튜닝은 LR 이 낮아 상대적으로 덜 민감하다.
+import os as _os
+BATCH_SIZE = int(_os.environ.get("GEBD_BATCH") or 8)
 LEARNING_RATE = 1e-4
 DROP_RATE = 0.2
 
@@ -46,7 +51,7 @@ GOAL_SCORE = 0.815 # Train ends when validation score gets here
 #PATIENCE = 15 # Patience for early stopping
 PATIENCE = 20 # Patience for early stopping
 
-NUM_WORKERS = 4
+NUM_WORKERS = int(_os.environ.get("GEBD_WORKERS") or 4)
 
 
 if __name__ == '__main__':

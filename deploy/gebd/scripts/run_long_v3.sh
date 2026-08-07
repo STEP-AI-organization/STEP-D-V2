@@ -32,7 +32,17 @@ for ((i=0; i<N; i++)); do
   START=$((i * CHUNK_SEC))
   CHUNK="$CHUNKS_DIR/$(printf 'c%03d' $i).mp4"
   if [ ! -f "$CHUNK" ]; then
-    ffmpeg -y -v error -ss "$START" -t "$CHUNK_SEC" -i "$VIDEO" -c copy -an "$CHUNK"
+    # ⚠️ `-write_tmcd 0` 이 핵심이다. 일부 마스터 파일에 타임코드 스트림(tmcd)이 있는데
+    # (실측: clean_* 계열), 그대로 두면 prepare/module.py 의 video_segmentation 이
+    # `-map 0` 으로 전 스트림을 복사하려다 "Could not write header ... Invalid argument"
+    # 로 죽는다. 그러면 그 함수가 **영상 경로를 리스트 경로로 반환**하고, 이어지는
+    # delete_temporary_file 의 `rm {video_list}` 가 **청크 자체를 지운다**
+    # → feature 0개 → boundaries 0개인데 파일은 생성돼 조용히 성공처럼 보인다.
+    #
+    # `-map 0:v:0` 이나 `-dn` 만으로는 부족하다 — mp4 muxer 가 타임코드 트랙을 **다시 쓴다**.
+    # 실측: `-map 0:v:0 -dn` → "video data" (여전히 실패) · `-write_tmcd 0` → "video" (성공)
+    ffmpeg -y -v error -ss "$START" -t "$CHUNK_SEC" -i "$VIDEO" \
+           -map 0:v:0 -dn -write_tmcd 0 -c copy "$CHUNK"
   fi
 done
 T_CUT=$(python -c "print(f'{$(date +%s.%N) - ${T_CUT_S}:.2f}')")

@@ -30,6 +30,13 @@ def paddingFeature(inputData, newSize):
 def pickle2numpy(path):
     with open(path, 'rb') as f:
         data = pickle.load(f)
+    # STEP-D 추가 (2026-08-06): numpy 버전 교차 호환.
+    # 이 컨테이너는 torch 1.8.1 시대라 numpy 1.x 인데, 호스트에서 만든 feature 는
+    # numpy 2.x 로 pickle 돼 `numpy._core` 를 참조한다 → 여기서 ModuleNotFoundError.
+    # 그래서 build-dataset.py 는 배열 대신 {bytes, shape, dtype} 딕셔너리로 저장한다.
+    # (list 로 저장하면 호환은 되지만 파일이 5배 커진다.)
+    if isinstance(data, dict) and '__ndarray__' in data:
+        return np.frombuffer(data['__ndarray__'], dtype=np.dtype(data['dtype'])).reshape(data['shape'])
     return np.array(data)
 
 def load_feature(path):

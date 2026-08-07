@@ -80,9 +80,38 @@ if __name__ == '__main__':
     os.mkdir(os.path.join(MODEL_SAVE_PATH, 'prob_results'))
     os.mkdir(os.path.join(MODEL_SAVE_PATH, 'models'))
 
+    # ── 파인튜닝 (STEP-D 추가 · 2026-08-06) ─────────────────────────────────────
+    # 원본은 항상 밑바닥부터 학습한다(`SJNET()` 새로 생성). 그러면 수천 샘플이 필요하다.
+    # 기존 체크포인트(F1 0.7728 · GOAL 0.815 미달로 early stop)에서 출발하면 수백 샘플로
+    # 도메인 적응이 된다 — 우리가 라벨링할 수 있는 규모가 그 정도다.
+    #
+    #   GEBD_FINETUNE=<model.pt>   이 가중치에서 출발 (미설정이면 기존대로 scratch)
+    #   GEBD_FT_LR=<float>         파인튜닝 학습률 (기본 LEARNING_RATE/10 = 1e-5)
+    #
+    # 낮은 LR 이 중요하다. 원 LR(1e-4) 로 적은 데이터를 돌리면 기존 지식이 무너진다
+    # (catastrophic forgetting) — 오히려 처음부터 학습한 것만 못해진다.
+    _FT_CKPT = os.environ.get("GEBD_FINETUNE")
+    _FT_LR = float(os.environ.get("GEBD_FT_LR") or (LEARNING_RATE / 10))
+
     #for fold in range(5):
     for fold in range(1):
-        network = nn.DataParallel(SJNET()).to(device)
+        if _FT_CKPT:
+            print(f"[finetune] 체크포인트 로드: {_FT_CKPT}")
+            _loaded = torch.load(_FT_CKPT, map_location=device)
+            # 체크포인트는 torch.save(network) 로 저장된 **전체 객체**다.
+            # ⚠️ 저장 당시 DataParallel 의 device_ids 가 그대로 박혀 있다. 다중 GPU 장비에서
+            # 학습된 가중치를 GPU 1장에서 로드하면 `CUDA error: invalid device ordinal` 이 난다.
+            # 그래서 **속을 꺼내 이 장비의 GPU 수로 다시 감싼다.**
+            _inner = _loaded.module if isinstance(_loaded, nn.DataParallel) else _loaded
+            _ids = list(range(torch.cuda.device_count())) or None
+            network = nn.DataParallel(_inner, device_ids=_ids).to(device)
+            print(f"[finetune] device_ids={_ids} (가용 GPU {torch.cuda.device_count()}장)")
+            # optimizer 는 SJNET 안에 있다(network.py:278). 새 LR 로 다시 만든다 —
+            # 로드된 optimizer state 를 그대로 쓰면 원 LR(1e-4)로 돌아 지식이 무너진다.
+            network.module.opt = torch.optim.AdamW(network.module.parameters(), lr=_FT_LR)
+            print(f"[finetune] LR {LEARNING_RATE} → {_FT_LR}")
+        else:
+            network = nn.DataParallel(SJNET()).to(device)
 
         fold_done_flag = False
         test_threshold = TEST_THRESHOLD
