@@ -79,13 +79,21 @@ fi
 
 # ── 4. 리포 (worker.ts + deploy/gebd 자산) ───────────────────────────────────
 if [ ! -d "$REPO_DIR/.git" ]; then
-  echo "[gebd-vm] 리포 클론"
+  echo "[gebd-vm] 리포 클론 ($REPO_BRANCH)"
   git clone --depth 1 --branch "$REPO_BRANCH" "$REPO_URL" "$REPO_DIR" || {
     echo "[gebd-vm] ⚠️ 클론 실패 — repo-url 메타데이터 확인"; exit 1; }
 else
-  git -C "$REPO_DIR" fetch --depth 1 origin "$REPO_BRANCH" && \
-  git -C "$REPO_DIR" reset --hard "origin/$REPO_BRANCH"
+  # ⚠️ `reset --hard origin/$BRANCH` 를 쓰면 안 된다. shallow clone(`--depth 1 --branch X`)은
+  # 다른 브랜치의 원격 추적 ref 를 갖고 있지 않아서, repo-branch 메타데이터를 바꾸면
+  # `unknown revision origin/main` 으로 실패한다. `&&` 체인이 끊기고 낡은 코드로 계속 돈다
+  # (실측 2026-08-08: 이것 때문에 VM 이 24분간 켜져 있으면서 잡을 하나도 claim 하지 않았다).
+  # FETCH_HEAD 를 쓰면 브랜치를 바꿔도 확실히 최신을 집는다.
+  echo "[gebd-vm] 리포 갱신 ($REPO_BRANCH)"
+  git -C "$REPO_DIR" fetch --depth 1 origin "$REPO_BRANCH" \
+    && git -C "$REPO_DIR" checkout -B "$REPO_BRANCH" FETCH_HEAD \
+    || echo "[gebd-vm] ⚠️ 리포 갱신 실패 — 기존 체크아웃으로 진행"
 fi
+echo "[gebd-vm] HEAD: $(git -C "$REPO_DIR" rev-parse --short HEAD 2>/dev/null) $(git -C "$REPO_DIR" log -1 --format=%s 2>/dev/null | cut -c1-50)"
 
 command -v node >/dev/null || {
   curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && apt-get install -y nodejs; }
@@ -135,7 +143,11 @@ while [ "$IDLE" -lt "$IDLE_SHUTDOWN_MIN" ]; do
   cd "$REPO_DIR/apps/server"
   BEFORE=$(date +%s)
   npx tsx src/worker.ts --drain
+  RC=$?
   ELAPSED=$(( $(date +%s) - BEFORE ))
+  # 워커가 즉시 죽으면(의존성·DB·env 문제) 조용히 유휴로 세다 종료해 버린다 —
+  # 그럼 "잡을 하나도 안 집었다"는 사실이 로그에 안 남는다. 명시적으로 찍는다.
+  [ "$RC" -ne 0 ] && echo "[gebd-vm] ⚠️ 워커 비정상 종료 (exit $RC · ${ELAPSED}s)"
   if [ "$ELAPSED" -lt 30 ]; then
     IDLE=$((IDLE + 1))
     echo "[gebd-vm] 처리할 잡 없음 (${IDLE}/${IDLE_SHUTDOWN_MIN}분)"
