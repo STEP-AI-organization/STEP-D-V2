@@ -1269,6 +1269,15 @@ async function loop(): Promise<void> {
         .catch((err) => console.error("[worker] heartbeat failed", err));
     }, 5 * 60 * 1000);
     if (typeof beat.unref === "function") beat.unref();
+    // ⚠️ 이벤트 루프 앵커 — **절대 unref 하지 말 것.**
+    // content-pipeline 은 python 자식과 stdout/stderr 파이프를 전부 unref 한다(Windows 에서
+    // 자식 native crash 가 워커까지 kill 하던 문제 대응). drain 모드에는 폴링 setInterval 도
+    // 없고(=null) 위 heartbeat 도 unref 다. 그래서 잡이 도는 동안 루프를 붙잡는 참조가 pg 풀
+    // 소켓밖에 안 남는데, DB 무활동 구간(58분 회차의 STT 처럼 한 스테이지가 수 분간 조용한
+    // 경우)이 오면 풀이 유휴로 닫히면서 이벤트 루프가 비고 **Node 가 exit(0) 으로 조용히
+    // 끝난다.** 컨테이너는 '성공'으로 사라지고 잡은 running 인 채 남아 재시도만 반복한다.
+    // (실측 2026-08-08: 컨테이너 시작 44~46초 만에 종료 · 에러 로그 0줄 · succeededCount=1)
+    const keepAlive = setInterval(() => {}, 30_000);
     try {
       const followUp = await handle(job);
       clearInterval(beat);
@@ -1300,6 +1309,8 @@ async function loop(): Promise<void> {
       console.error(`[worker] job ${job.id} (${job.type}) failed:`, message);
       // failJob decides retry-with-backoff vs. dead — the worker never loops hot.
       await failJob(job.id, message);
+    } finally {
+      clearInterval(keepAlive);
     }
   }
 }
