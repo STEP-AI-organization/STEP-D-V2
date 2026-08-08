@@ -692,9 +692,17 @@ def _transcribe_soniox(audio_path: str, language: str = "ko") -> dict:
     print(f"   [soniox] 전사 요청 완료 · tx_id={tx_id[:8]}... · 폴링")
 
     # 3) 상태 폴링
+    #
+    # ⚠️ 진행 로그를 반드시 낼 것. 60분 회차는 전사에 수 분이 걸리는데, 예전에는 이 구간이
+    # **완전 무출력**이라 (1) 운영자가 멈춘 건지 도는 건지 알 수 없고 (2) 워커의 stall 감시가
+    # 오판할 수 있고 (3) 컨테이너가 죽었을 때 python 이 살아 있었는지조차 사후 판별이 안 됐다.
+    # 2026-08-08 실측: Cloud Run Job 이 폴링 시작 9초 뒤 조용히 종료했는데, 로그가 없어서
+    # python 이 죽은 건지 컨테이너가 죽은 건지 구분할 수 없었다.
     started = _time.time()
+    _last_beat = 0.0
     while True:
-        if _time.time() - started > _SONIOX_TIMEOUT_SEC:
+        elapsed = _time.time() - started
+        if elapsed > _SONIOX_TIMEOUT_SEC:
             raise TimeoutError("Soniox 폴링 15분 초과")
         r = requests.get(
             f"{_SONIOX_BASE}/v1/transcriptions/{tx_id}", headers=headers, timeout=30,
@@ -702,9 +710,13 @@ def _transcribe_soniox(audio_path: str, language: str = "ko") -> dict:
         r.raise_for_status()
         status = r.json().get("status")
         if status == "completed":
+            print(f"   [soniox] 전사 완료 · {elapsed:.0f}초 소요", flush=True)
             break
         if status == "error":
             raise RuntimeError(f"Soniox 전사 실패: {r.json().get('error_message', '?')}")
+        if elapsed - _last_beat >= 15:
+            _last_beat = elapsed
+            print(f"   [soniox] 폴링 중 · {elapsed:.0f}초 · status={status}", flush=True)
         _time.sleep(_SONIOX_POLL_SEC)
 
     # 4) 결과 (transcript with tokens)
