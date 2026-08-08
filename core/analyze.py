@@ -222,6 +222,11 @@ def analyze(
         finally:
             if faces_executor is not None:
                 faces_executor.shutdown(wait=False)
+    elif not _run_faces:
+        # 위(159행)에서 "기본 skip" 을 이미 찍었다. 아래 순차 폴백으로 새면 RUN_FACES 게이트가
+        # 무의미해지고, insightface/onnxruntime 이 없는 워커 이미지에서 매 회차 ModuleNotFoundError
+        # 트레이스백만 남긴다 (실측 2026-08-08 · 잡은 안 죽지만 로그가 오염된다).
+        faces = None
     else:
         # 병렬 시작 실패 폴백 — 순차 실행
         try:
