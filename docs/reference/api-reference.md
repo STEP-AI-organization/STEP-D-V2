@@ -1,13 +1,14 @@
 # @stepd/server HTTP API 레퍼런스
 
-> 실측: 2026-07-28 · `apps/server/src/index.ts` 기준 — 라우트 추가 시 이 문서도 갱신.
+> 실측: **2026-08-08 · 라우트 118개** · `apps/server/src/index.ts` 기준 — 라우트 추가 시 이 문서도 갱신.
 > 프론트 대응 함수는 `apps/web/src/lib/data/api.ts` 기준. 데이터 구조는 [data-model.md](data-model.md),
 > 큐·워커 동작은 [../ops/worker-queue.md](../ops/worker-queue.md) 참고.
 
 ## 공통 사항
 
-- 등록 라우트는 영역별로 관리한다: 헬스·상태 · 콘텐츠 · 추천/클립/배포 · YouTube OAuth/채널/분석 ·
-  큐/파이프라인 · admin · Lab 검수 · Lab `match.*`.
+- 등록 라우트는 영역별로 관리한다: 헬스·상태 · **검색** · 콘텐츠(프로그램·업로드·미디어) · 캐스트 ·
+  **썸네일 레퍼런스/스타일** · 추천/클립/배포 · YouTube OAuth/채널/분석 · **Meta·TikTok OAuth** ·
+  큐/파이프라인 · admin(운영·진단·파괴적) · Lab 검수 · Lab `match.*`.
 - 모든 라우트는 `apps/server/src/index.ts` 한 파일에 등록된다 (작업 규칙: 분리 금지).
 - `/api/*`에 CORS 허용 (origin 반사, credentials 없음). 대부분 라우트 자체 인증은 없고,
   프로덕션 접근 제어는 인프라 레벨(Cloud Run) 몫이다. 예외로 Lab 매칭 쓰기(`POST/DELETE /api/lab/match*`)는
@@ -20,14 +21,42 @@
 
 | 메서드·경로 | 역할 | 요청/응답 요점 | 프론트 함수 |
 |---|---|---|---|
-| `GET /health` | 서버 생존 + DB/ffmpeg 준비 여부 | → `{ ok: dbReady, ffmpeg }` | (웹 미사용) |
+| `GET /health` | 서버 생존 + DB/ffmpeg 준비 + **실업로드 게이트 상태** | → `{ ok: dbReady, ffmpeg, youtubeUpload }`. `youtubeUpload`는 비밀이 아니라 게이트 상태 — 배포된 리비전이 송출 불가임을 가장 빨리 확인하는 수단이고, 웹이 publish 액션을 숨기는 근거다 | (웹 미사용) |
 | `GET /api/state` | 웹 InitialData 전체 (엔티티 + 미디어) | → `{ programs, episodes, recommendations, clips, jobs, connections, media }` | `fetchState` |
+
+## 검색 — 자연어 영상 검색 (`search_segments` · pgvector)
+
+제품의 목적물. 회차당 200여 개 세그먼트를 인덱싱해 두고 자연어로 질의한다.
+**하이브리드** — `q`를 pg_trgm 키워드 축과 Vertex 쿼리 임베딩(768d) 코사인 축으로 동시에 때린다.
+임베딩 실패 시 `embedded:false`로 **키워드 단독 폴백** (한국어는 키워드 매칭이 강해 검색이 성립).
+
+**LLM 쿼리 파서**가 `q`를 `{인물·장면유형·방영기간·쇼츠·semantic}`으로 분해한다. 인물 후보(roster)는
+해당 프로그램 세그먼트에서 뽑아 넘겨 **환각을 막고**, 파싱 실패 시 룰 폴백한다.
+**명시 쿼리 파라미터가 파서 결과보다 우선한다.**
+
+| 메서드·경로 | 역할 | 요청/응답 요점 | 프론트 함수 |
+|---|---|---|---|
+| `GET /api/search` | 세그먼트 검색 | 쿼리 `q` · 필터 `program, scope_type, scope_id, episode, aired_from, aired_to, character(쉼표구분), scene_type, is_short, allow_spoiler, top_k`(기본 20) → `{ query, queryId, parsed:{…, charactersUsed, embedded}, results:[{ rank, segment_id, score, lex, vec, rightsStatus, … }] }`. 실패 시 500 `{ error, results: [] }` | `searchSegments` |
+| `POST /api/search/log` | 검색 이벤트 로깅 (평가·학습 신호) | → 202 `{ ok:true }`. 허용 외 `event`면 400 | `logSearchEvent` |
+| `GET /api/search/log` | 로그 열람 — 평가·학습 추출용(운영 진단) | 쿼리 `event, limit`. 기본은 `boundary_adjust` 제외 전체 최신순 → `{ events }` | (웹 미사용) |
+
+**권리·스포일러는 SQL에서 걸러진다.** 걸러지지 않고 남은 상태는 카드 주석(`rightsStatus`)으로 붙는다 —
+`spoiler`(⚠️ 스포일러) · `cast_ok`(출연자 권리 확인필요) · `music_cleared`(⚠️ 음원 미클리어 / 확인필요) ·
+`ppl`(협찬/PPL 구간). `allow_spoiler=true`를 명시해야 스포일러 구간이 결과에 들어온다.
 
 ## 콘텐츠 — 프로그램 · 업로드 · 미디어
 
 | 메서드·경로 | 역할 | 요청/응답 요점 | 프론트 함수 |
 |---|---|---|---|
 | `POST /api/programs` | 프로그램 생성 (업로드 전 필수 콘텐츠 루트) | `{ title(필수), section, targetAge, cast, programCode, category, weekdays }` → `{ program }`. SMR 필드는 `smr` 블롭으로 저장 | `createProgram` |
+| `GET /api/programs/:id` | 프로그램 1개 (이해 프로필 포함) | → `{ program }` / 404 | (`fetchState`로 대체) |
+| `PATCH /api/programs/:id` | 부분 병합 수정 — **body에 있는 필드만** 바뀐다 | `{ title, section, targetAge, cast, castPhotos, category, weekdays, programCode, moods, pipelineGenre, posterImageDataUrl }` → `{ program }` | `updateProgram` |
+| `POST /api/programs/:id/autofill` | 제목만으로 나머지 필드 자동 채움 (Gemini + google_search 그라운딩, 2단계: 검색·수집 → 팩트체크) | → `{ draft }`. **저장하지 않는다** — 사용자가 UI에서 확인 후 저장. 출연자·SMR은 안 채움. 실패 502 | `autofillProgram` |
+| `POST /api/programs/:id/autofill/chat` | 대화형 자동 채움 (stateless · history 전체를 클라이언트가 전송) | `{ history, draft, sources }` → `{ message, action, draft }`. **[사용 안 함 · 참고용]** | (웹 미사용) |
+| `POST /api/programs/profile/generate` | 이해 프로필 생성 — `mode: direct`(프로그램명/장르/설명) · `websearch`(프로그램명→웹검색+sources) · `planning`(기획정보) | `{ mode, input(필수) }` → `{ mode, profile }`. 정규화만 하고 저장은 안 한다 · 실패 502 | (웹 미사용) |
+| `PATCH /api/programs/:id/profile` | 이해 프로필 설정/교체 | `{ profile }` → `{ program }` | (웹 미사용) |
+| `POST /api/programs/:id/sync-from-analysis` | 얼굴 분석 → program 수동 sync | `{ mediaId? }`(생략 시 최근 분석 media 자동 선택) → `{ mediaId, workDirExists, addedNames, addedPhotos }`. 워커 python이 native cleanup crash로 자동 sync에 도달 못 한 경우의 **우회 트리거** | `syncProgramFromAnalysis` |
+| `POST /api/media/from-youtube` | YouTube URL → 다운로드 잡 큐잉 → 회차·미디어 생성 | `{ url(필수), programId, title, fast }` → `{ ok, queued, … }`. URL 부적합 400 | `importYoutubeVideo` |
 | `POST /api/media/upload-init` | 대용량 업로드 1단계: GCS resumable 세션 발급 | `{ programId, filename, contentType }` → `{ mode:"resumable", mediaId, objectPath, sessionUrl }`. **GCS 미설정(로컬)이면 `mode:"multipart"`** — 클라이언트가 `/upload`로 폴백 | `uploadVideo` |
 | `POST /api/media/finalize` | 대용량 업로드 2단계: GCS에 올라간 파일로 회차·마스터 미디어 생성 + `content.analyze` 인큐 | `{ mediaId, objectPath(필수), programId, title, filename, contentType, size }` → `{ media, episode, recommendations:[] }`. GCS 모드 전용. probe/썸네일은 서명 URL로 range-read | `uploadVideo` |
 | `POST /api/media/upload` | (레거시) multipart 단일 요청 업로드 — 로컬 dev용 | FormData `file(필수), programId, title` → finalize와 동일 응답. Cloud Run ~32 MB 요청 캡 대상 | `uploadVideo` (로컬 폴백) |
@@ -35,6 +64,29 @@
 | `GET /api/media/:id/thumb` | 썸네일 JPEG | 200 / 404 | `mediaUrl`로 URL 조립 |
 | `GET /api/media/:id/analysis` | AI 콘텐츠 분석 결과 (STT·씬·쇼츠) | → `{ status: pending\|done\|failed, data, error }`, 없으면 404 `{status:"none"}`. `data`에 `genre`(감지 장르)·`framesBase`(프레임 저장 경로) 추가, 실패 시엔 완료된 단계까지의 부분 결과(`data.partial=true` + transcript/scenes)가 담길 수 있다 | `getMediaAnalysis` |
 | `GET /api/media/:id/analysis/frames/:name` | 워커가 영구 저장한 씬 대표 프레임 JPEG | `:name`은 `scene_NNNN.jpg` 형식만 허용. 저장 위치 `analysis/{mediaId}/scene_frames/`. 프레임 저장 이전 분석이면 404 | (직접 URL 조립) |
+| `GET /api/media/:id/stream-url` | **서명 재생 URL** — 브라우저가 `<video src>`에 걸면 GCS에서 바로 스트리밍 | → `{ url, direct:true }`. 바이트 경로에 프록시·리다이렉트가 없어서 이게 미디어 서빙의 신뢰 경로다. 로컬 모드면 `{ url:"/media/…" }` | `getStreamUrl` |
+| `GET /api/media/:id/frame` | 임의 시각 정지 프레임 (쇼츠·씬 카드 미리보기) | 쿼리 `t`(초, 소수 2자리로 반올림해 캐시 키) → JPEG. 캐시 히트면 즉시, 미스면 ffmpeg `-ss t -vframes 1`로 뽑아 `analysis/{id}/frames/{t}.jpg`에 저장 후 서빙. ffmpeg 없으면 503 | `frameUrl` |
+| `POST /api/media/:id/analyze` | **분석 재실행** (실패한 런에서 운영자가 복구) | `{ fast? }` → `{ ok, queued }`. 체크포인트에서 재개하므로 **끝나지 않은 단계만 다시 과금**된다 | `reanalyzeMedia` |
+| `GET /api/media/:id/transcript` | 자막 (공유 STT 저장소 — 캡션·프레이밍·하이라이트가 여기서 읽는다) | → `{ mediaId, source, updatedAt, segments }` / 404 `{ status:"none" }`. 정규 transcript 테이블 우선, 구식 행은 analysis 블롭 폴백 | (직접 호출) |
+| `DELETE /api/media/:id` | 미디어 삭제 | → `{ ok, mediaId }` / 404 | (웹 미사용) |
+| `DELETE /api/episodes/:id` | 회차 삭제 (딸린 미디어 동반) | → `{ ok, episodeId, mediaDeleted }` | `deleteEpisode` |
+| `DELETE /api/programs/:id` | 프로그램 삭제 (회차·미디어 캐스케이드) | → `{ ok, programId, episodesDeleted, mediaDeleted }` | `deleteProgram` |
+
+### 부가 산출물 — 얼굴 · PPL
+
+`analysis.json`에도 들어가지만, **분석이 안 끝나도 부분 결과를 폴링**할 수 있게 별도 라우트로 뺐다.
+`:id`는 media id 형식 검증(400), 파일명은 경로탈출 가드를 통과해야 한다.
+
+| 메서드·경로 | 역할 | 요청/응답 요점 | 프론트 함수 |
+|---|---|---|---|
+| `GET /api/media/:id/faces` | `faces.json` — 얼굴 클러스터 메타(라벨·카운트·성별·대표 크롭 경로·매핑) | → `{ clusters, … }` | `getMediaFaces` |
+| `GET /api/media/:id/analysis/faces/:name` | 얼굴 클러스터 대표 크롭 JPEG | `:name`은 `M1_0.jpg` / `F2_2.jpg` 형식(성별 M\|F + 클러스터 번호 + 대표 인덱스)만 | `faceCropUrl` |
+| `PATCH /api/media/:id/faces/mapping` | **익명 화자/얼굴 클러스터에 이름 지정.** 자동 추론 없음 — 운영자가 등록 cast를 고르거나 직접 입력한 이름만 `faces.json.mapping`에 보존 | `{ mapping(객체, 필수) }` → `{ ok, mapping, refined_rewritten, narrative_rewritten, shorts_rewritten, db_content_analysis_updated, db_recommendations_renamed }` — 이름을 바꾸면 **산출물 전체를 되짚어 rewrite** 한다 | `patchMediaFacesMapping` |
+| `GET /api/media/:id/ppl` | `ppl.json` — PPL·브랜드 검출 타임라인(구간·브랜드·카테고리·대표 프레임·요약) | → `{ detections, brand_summary }` | `getMediaPpl` |
+| `GET /api/media/:id/analysis/ppl_frames/:name` | PPL 구간 대표 프레임 JPEG | `:name`은 브랜드 sanitize + zero-pad 인덱스 (`CJ_00012.jpg`) | `pplFrameUrl` |
+
+> ⚠️ **PPL·faces는 파이프라인 기본 off** (`RUN_PPL=1` / `RUN_FACES=1`로만 켜진다).
+> 끈 상태로 분석한 회차는 이 라우트들이 빈 결과를 돌려준다 — "버그"가 아니라 스위치다.
 
 ## 캐스트 — 출연자 레지스트리 · 회차 등장 타임라인
 
@@ -73,14 +125,48 @@
 구간은 워커의 `content.analyze` 잡이 채운다 ([../ops/pipeline-current.md](../ops/pipeline-current.md)).
 청크 전송·재개 로직은 `api.ts`의 `uploadResumable()` 참고.
 
+## 썸네일 — 레퍼런스 · 스타일 프로파일 · 생성
+
+썸네일은 **사진 몇 장 + 한국어 한 줄 + 채널 스타일 프로파일**로 만든다. 레퍼런스 이미지를 모아
+Vision으로 분석하고, 프로그램별 스타일 프로파일을 학습해 생성 프롬프트에 얹는 구조다.
+
+| 메서드·경로 | 역할 | 요청/응답 요점 | 프론트 함수 |
+|---|---|---|---|
+| `GET /api/thumbnail-refs` | 레퍼런스 메타데이터 전체 | → `{ items }` | (직접 호출) |
+| `GET /api/thumbnail-refs/:id/image` | 레퍼런스 이미지 (GCS or local) | 쿼리 `variant` | (직접 URL) |
+| `POST /api/thumbnail-refs` | 이미지 업로드 (multipart) — GCS(prod) / local(dev) | `file`(필수) → `{ item }`. multipart 아니면 400, 확장자 미지원 400 | (직접 호출) |
+| `PATCH /api/thumbnail-refs/:id` | 메타데이터 편집 (`program`·`custom_tags`·`user_note` 등) | → `{ item }` | (직접 호출) |
+| `DELETE /api/thumbnail-refs/:id` | manifest + 파일 삭제 (GCS + local) | → `{ ok }` | (직접 호출) |
+| `POST /api/thumbnail-refs/:id/analyze` | Vision 자동 분석 (manifest `_analyzed=false → true`) | → `{ item }`. **Cloud Run에서는 501** — 로컬 워커에서 `python scripts/thumbnail_reference_manifest.py` | (직접 호출) |
+| `POST /api/thumbnail-refs/:id/preprocess` | 사전 가공 (텍스트→슬롯 라벨 · 얼굴→실루엣) | → `{ item }`. **Cloud Run에서는 501** — 로컬 워커에서 `python scripts/thumbnail_preprocess_template.py <id>` | (직접 호출) |
+| `POST /api/thumbnail-refs/batch/:action` | 미분석/미가공 항목 일괄 처리 (`analyze` \| `preprocess`) | → `{ ok, processed, results }` | (직접 호출) |
+| `POST /api/thumbnail-refs/import-youtube` | 이미 sync된 채널 영상 중 **상위 뷰 썸네일 자동 수집** → refs 추가 | `{ channelId(필수) }` → `{ added, items }`. 전제: 채널 sync 완료 · `entities`에 `youtube_video` 저장됨. 미sync면 404 | (직접 호출) |
+| `POST /api/programs/:id/thumbnail-style` | 프로그램 스타일 프로파일 **학습** (프로그램당 1회성 — 톤이 바뀌면 재실행) | `{ sourceUrl(필수) }` → `{ ok, jobId }`(`thumbnail.style` 잡). **재생목록 URL을 권한다** — 큰 채널은 프로그램·기수를 재생목록으로 나눠 담아서, 채널 전체로 학습하면 여러 프로그램 톤이 섞인다 | `trainThumbnailStyle` |
+| `GET /api/programs/:id/thumbnail-style` | 학습된 스타일 프로파일 조회 | → `{ programId, title, aggregate, prompt }`. 없으면 404 `not_trained` (먼저 학습을 돌려야 한다) | `fetchThumbnailStyle` |
+| `POST /api/media/:id/thumbnail` | 회차 → 썸네일 후보 생성 | `{ programId(필수) }` → `{ ok, jobId }`(`thumbnail.generate` 잡). **인물이 등록 안 됐으면 워커가 실패로 남긴다** | `generateThumbnail` |
+
+### 출연자 사진 — 사람이 등록한다
+
+얼굴 identity를 지키려면 AI 재생성이 아니라 **등록된 실제 사진**을 써야 한다. 자동 판정은 없다.
+
+| 메서드·경로 | 역할 | 요청/응답 요점 | 프론트 함수 |
+|---|---|---|---|
+| `GET /api/programs/:id/cast-photos` | 등록된 출연자 목록 + 사진 수 | → `{ cast: [{ name, photos }] }` | `fetchCastPhotos` |
+| `POST /api/programs/:id/cast-photos` | 사진 등록 (multipart `name` + `file`) | → `{ ok, name, path, bytes }`. 이름에 경로 문자 금지 400 · jpg·png·webp만 400 | `uploadCastPhoto` |
+| `DELETE /api/programs/:id/cast-photos/:name` | 출연자 사진 삭제 | → `{ ok }` | `deleteCastPhotos` |
+
 ## 추천 · 클립 · 배포
 
 | 메서드·경로 | 역할 | 요청/응답 요점 | 프론트 함수 |
 |---|---|---|---|
 | `POST /api/recommendations/:id/adopt` | 추천 채택 → ffmpeg 트림·인코딩으로 실제 클립 생성 | → `{ clipId, clip }`. 마스터 미디어+ffmpeg 있으면 실 인코딩(GCS는 서명 URL로 구간만 fetch), 없으면 메타데이터만 | `adoptRec` |
 | `POST /api/recommendations/:id/reject` | 추천 거절 | `{ reason }` (기본 "기타") → `{ ok }` | `rejectRec` |
-| `POST /api/distributions/publish` | ⚠️ **스텁 — 상태 기록만, 실송출 없음.** 클립 엔티티의 `distributions` 배열과 `status:"published"`만 갱신 | `{ clipIds, channel, reserveDate?, scheduled?, platforms? }` → `{ ok }`. `scheduled:true`면 상태 `scheduled`. `channel:"meta"`일 때만 `platforms` 저장 | `publishClips` |
-| `POST /api/distributions/retry` | 실패 배포 재시도 (역시 상태만 `published`로) | `{ clipId, channel }` → `{ ok }` | `retryDist` |
+| `PATCH /api/recommendations/:id/thumbnail` | 생성된 썸네일 변형 중 하나를 선택 | `{ variantId(필수) }` → `{ recommendation }`. **정확히 하나만** chosen으로 마킹돼서, 이후 채택이 안정적·영속적인 결정을 갖는다 | `selectRecommendationThumbnail` |
+| `POST /api/clips/:id/export` | **클립 렌더 — ffmpeg가 결과물을 굽는 유일한 지점** | `{ channel? }` → `{ clipId, clip, cached, preset, capped, hookPreroll }`. 운영자 결정(segment + aspect + editorState)의 **render-revision 해시로 캐시**돼서, 같은 결정을 재확인하면 재인코딩 없이 기존 렌더를 돌려준다(멱등) | `exportClip` |
+| `POST /api/clips/:id/regenerate-titles` | 제목 후보 재생성 — 사용자 추가 지시 반영 | `{ prompt }`(예: "더 자극적으로", "이모지 넣지 마") → 후보 4~5개. **저장하지 않는다**(에디터 세션 로컬). 클립에 자막 없으면 409 | `regenerateTitles` |
+| `POST /api/clips/:id/generate-metadata` | 업로드용 title/description/tags를 자막 근거로 생성 | → 메타데이터 객체. **저장 X** — 프론트가 `state.uploadMeta`에 얹는다. 자막 없으면 409 | `generateUploadMetadata` |
+| `POST /api/distributions/publish` | 배포 요청 | `{ clipIds(배열, 필수), channel(필수), reserveDate?, scheduled?, platforms? }` → `{ ok }` · 누락 400 `bad_request`. **`channel:"youtube"`는 실업로드 잡(`distribution.publish`)을 큐잉한다.** 게이트 OFF면 **어떤 부작용도 내기 전에** 409 `{ error:"upload_disabled" }` — distribution 상태를 손대지 않는다. 업로드할 채널이 없으면 409 `no_publish_channel`. Meta·SMR은 여전히 상태 기록만 | `publishClips` |
+| `POST /api/distributions/retry` | 실패 배포 재시도 | `{ clipId, channel }` → `{ ok }` | `retryDist` |
 | `PATCH /api/clips/:id/link-video` | 클립 ↔ 게시된 YouTube videoId 수동 연결 (성과 조인) | `{ videoId }` (null/""면 해제) → `{ ok, clipId, publishedVideoId, videoKnown }` | (웹 미사용) |
 | `PATCH /api/clips/:id/editor` | 에디터 결정 블롭(EditorState) 저장 — 메타데이터만, 렌더 없음 | `{ editorState(필수, 객체) }` → `{ ok, clipId }` | `saveClipEditor` |
 
@@ -89,7 +175,7 @@
 | 메서드·경로 | 역할 | 요청/응답 요점 | 프론트 함수 |
 |---|---|---|---|
 | `GET /api/youtube/auth` | Google OAuth 동의 화면으로 리다이렉트 | 쿼리 `mode=analytics\|publish`(기본 analytics), `channel`(채널 URL 메모), `return`(완료 후 이동할 same-site 경로, 기본 `/register`) | `getYouTubeAuthUrl` (URL 조립) |
-| `GET /api/youtube/oauth/callback` | OAuth 콜백: 토큰 교환 → 채널 upsert → 인라인 채널 분석 + `channel.analyze` 인큐 → `return`으로 리다이렉트 | GCP에 등록된 경로. `GET /api/youtube/callback`은 동일 핸들러(레거시 링크 호환) | (브라우저 리다이렉트) |
+| `GET /api/youtube/callback` | OAuth 콜백: 토큰 교환 → 채널 upsert → 인라인 채널 분석 + `channel.analyze` 인큐 → `return`으로 리다이렉트 | GCP에 등록된 경로 | (브라우저 리다이렉트) |
 | `GET /api/youtube/channels` | 연동 채널 목록 | → `{ channels: [{ channelId, channelName, subscribers, status, lastSyncedAt, lastAnalyzedAt, hasMonetaryScope, lastError, … }] }` | `fetchYouTubeChannels` |
 | `DELETE /api/youtube/channels/:channelId` | 채널 연동 해제 | → `{ ok }` | `deleteYouTubeChannel` |
 | `POST /api/youtube/refresh` | 액세스 토큰 강제 갱신 | `{ channelId }` → `{ ok, expiresAt }`. 리프레시 토큰 무효 시 **409 `revoked`** + 채널 상태 `revoked` | (웹 미사용) |
@@ -111,7 +197,10 @@
 | `GET /api/youtube/trends/:channelId` | 채널 조회수 트렌드 + 요약 | 쿼리 `days`(1~90, 기본 30) → `{ trend, summary }` | `fetchChannelTrends` |
 | `GET /api/youtube/trends/video/:videoId` | 영상 1개의 일별 조회/좋아요/댓글 추이 (스냅샷 기반) | → `{ video, trend }` | `fetchVideoTrend` |
 | `GET /api/youtube/videos/:videoId/analytics` | 영상 1개 종합 지표 (video.analyze/comments 잡 결과, 자체 DB) | → `{ video, summary, trafficSources, demographics, retention, comments, fetchedAt }`. 빈 섹션 = 잡 미실행 또는 데이터 없음 | `fetchVideoAnalytics` |
+| `POST /api/youtube/videos/:videoId/comments/refresh` | **영상 1개 댓글 온디맨드 수집** (나이 무관) | → `{ queued:true, jobId, alreadyPending }`. 스케줄 fan-out은 `FRESH_VIDEO_WINDOW_MS` 이내 업로드만 `video.comments`를 큐잉해서, 오래된 영상은 **운영자가 여기서 요청해야만** 댓글이 붙는다. 큐잉만 함(Cloud Run은 YouTube를 부르지 않는다) — 결과는 `/analytics`로 폴링. dedupeKey가 연타를 흡수 | `refreshVideoComments` |
 | `DELETE /api/youtube/videos/:videoId` | 추적 영상 삭제 | → `{ ok }` | `deleteTrackedVideo` |
+| `GET /api/youtube/popular` | 지역·카테고리별 인기 영상 (트렌드 탐색) | 쿼리 `regionCode, categoryId, maxResults` → `{ regionCode, categoryId, count, videos, fetchedAt }`. `YOUTUBE_API_KEY` 또는 등록 채널 최소 1개 필요 — 없으면 `no_auth` | `fetchTrendingVideos` |
+| `GET /api/youtube/video-categories` | 지역별 영상 카테고리 목록 | 쿼리 `regionCode` → `{ regionCode, categories }` · `no_auth` 400 | `fetchVideoCategories` |
 
 동작 세부:
 
@@ -122,6 +211,22 @@
   판별 결과는 영상별로 캐시된다 (`shortsPending`이 남은 미판별 수).
 - OAuth 콜백은 가벼운 채널 분석(`runChannelPipeline`)을 응답 전에 **인라인 실행**하고,
   무거운 영상별 분석은 `channel.analyze` 잡으로 워커에 넘긴다.
+
+## Meta · TikTok — OAuth 계정 연결
+
+배포처 계정 연결까지만 구현돼 있다. **실제 송출은 아직 없다** (YouTube만 실업로드 경로가 있고 그마저 게이트 OFF).
+
+| 메서드·경로 | 역할 | 요청/응답 요점 | 프론트 함수 |
+|---|---|---|---|
+| `GET /api/meta/auth` | Meta OAuth — 동의 화면 리다이렉트 **겸 콜백** (`code` 유무로 분기) | 쿼리 `return`(완료 후 이동 경로) · 콜백 시 `code, state, error, rerequest`. `META_APP_ID` 미설정 500 · `code` 누락 400 | `getMetaAuthUrl` |
+| `GET /api/meta/accounts` | 연결된 Meta 계정 목록 | → `{ accounts }` | `fetchMetaAccounts` |
+| `DELETE /api/meta/accounts/:publicId` | 계정 연결 해제 | → `{ ok }` | `deleteMetaAccount` |
+| `GET /api/tiktok/auth` | TikTok OAuth — 동의 화면 리다이렉트 겸 콜백 | 쿼리 `return` · 콜백 `code, state, error`. `TIKTOK_CLIENT_KEY` 미설정 500 | `getTikTokAuthUrl` |
+| `GET /api/tiktok/accounts` | 연결된 TikTok 계정 목록 | → `{ accounts }` | `fetchTikTokAccounts` |
+| `DELETE /api/tiktok/accounts/:publicId` | 계정 연결 해제 | → `{ ok }` | `deleteTikTokAccount` |
+
+> TikTok 연동 3대 함정: 미승인 앱은 **sandbox 자격증명**을 써야 하고, `username` 필드를 스코프에
+> 넣으면 스코프 전체가 깨지며, 시크릿은 v1=prod / v2=sandbox로 갈린다.
 
 ## 큐 · 파이프라인 트리거
 
@@ -140,6 +245,21 @@
 | `POST /api/admin/reset` | 콘텐츠 전체 삭제 (프로그램·회차·추천·클립 + media 행 + GCS/로컬 파일). **복구 불가** | `{ confirm: "RESET" }` (필수) → `{ ok, deletedMedia }` | (웹 미사용 — curl 운영) |
 | `POST /api/admin/queue/purge` | 큐 정리: `video.*` 백로그 삭제 + 좀비 `content.analyze` 제거 + 생존 잡 리셋 + 마스터별 분석 잡 보장 인큐 | `{ confirm: "PURGE" }` (필수) → `{ ok, deletedVideoJobs, deletedZombieContentJobs, resetContentJobs, reQueuedContentJobs }` | (웹 미사용 — curl 운영) |
 
+## admin — 운영 · 진단 · VM 기동
+
+`confirm` 없이 호출되지만 프로덕션 접근 제어는 Cloud Run IAM 몫이다.
+
+| 메서드·경로 | 역할 | 요청/응답 요점 | 프론트 함수 |
+|---|---|---|---|
+| `GET /api/admin/jobs` | 개별 잡 목록 (최근 활동 순) + 큐 통계 — **워커가 지금 뭘 하는지의 라이브 뷰** | 쿼리 `limit` → `{ jobs, stats }` | `fetchOpsJobs` |
+| `GET /api/admin/media-analysis` | 업로드 영상별 요약: 분석 상태 + 씬/쇼츠/캐스트 수 + 장르 + 에러 + 회차 pipeline 단계·진행률 | → `{ media: rows }`. 마스터 미디어당 1행 — "각 업로드에서 뭐가 나왔고 뭐가 깨졌나" 테이블. 드릴다운은 `GET /api/media/:id/analysis` | `fetchOpsMediaAnalysis` |
+| `POST /api/admin/remux/:id` | 기존 마스터를 progressive mp4로 **제자리 remux** | → `{ ok, size }`. ingest remux 이전에 올라온 파일이나 fragmented 업로드를 재교정할 때. ffmpeg+GCS 필수(400) | (웹 미사용) |
+| `POST /api/admin/worker-vm/wake` | pending 잡 있으면 워커 VM start (멱등 — 이미 RUNNING이면 no-op) | → `{ waked, instance, zone, pending }` / `{ waked:false, reason:"no pending jobs" }`. **Cloud Scheduler가 주기 호출** | (웹 미사용) |
+| `POST /api/admin/gebd-vm/wake` | pending `gebd.detect` 있으면 GEBD GPU VM start | → `{ waked, … }` / `{ waked:false, reason:"no pending gebd.detect", pending }`. 이미 실행 중이면 `already <status>`. metadata 토큰 → Compute REST `/start` | (웹 미사용) |
+
+> 두 wake 라우트 모두 **Cloud Run SA에 `roles/compute.instanceAdmin.v1`** 이 있어야 동작한다.
+> 인증은 Cloud Scheduler OIDC(= Cloud Run IAM 게이팅)로 건다.
+
 ## Lab — admin 검수 도구 전용
 
 레포 루트 `core/`(파이썬 파이프라인)의 **로컬 산출물**을 admin Lab 프론트(`admin/index.html`)에
@@ -150,8 +270,11 @@
 |---|---|---|
 | `GET /api/lab/data` | 검수 페이로드 일괄 | `pipeline_output.json`·`refined_segments.json`·`scenes.json`·`shorts.json` 합본 → `{ video, video_name, stats, raw, refined, scenes, shorts }` |
 | `GET /api/lab/frames/:name` | 씬 대표 프레임 JPEG | `core/scene_frames/<name>` (경로탈출 가드) |
-| `GET /api/lab/video` | 원본 영상 스트리밍 (Range 지원) | `pipeline_output.json`의 `video` 파일 |
+| `GET /api/lab/portraits/:name` | 출연자 초상 이미지 (GCS or local) | `portrait_영철.jpg` 또는 그냥 `영철.jpg` 둘 다 받는다 |
+| `GET /api/lab/video/:mediaId` | 원본 영상 스트리밍 (**HTTP Range 지원** — `<video>` 시킹이 되게) | 없으면 404 `no video` |
+| `GET /api/lab/videos/:videoId/viewer-signals` | **시청자 목소리**(`viewer_signals`) 조회 — Lab VideosTab 위젯 | `:videoId`는 YouTube videoId. `from-youtube`로 임포트된 롱폼이면 `episode.sourceVideoId`에 남아 있고, 그 media의 `content_analysis.data`에 `viewer_signals` + `shorts`가 저장돼 있다 → `{ videoId, mediaId, viewer_signals, shorts, coverage }`. 미임포트/미분석이면 `{ …, reason }` |
 | `GET /lab` | admin Lab 프론트 HTML 로컬 서빙 | 프로덕션에서는 admin이 Vercel에 별도 배포 |
+| `GET /assets/:name` | 빌드된 Lab SPA의 정적 에셋 | Vite가 루트 절대 경로(`/assets/…`)로 뽑기 때문에 `/lab`도 같은 루트에서 서빙해야 한다. `basename()`으로 `dist/assets` 밖 조회를 막는다 |
 
 ### Lab — 숏폼 ↔ 롱폼 매칭 / LEARN
 
@@ -191,16 +314,30 @@
   `videoId is required`, `editorState is required`, admin `confirm` 불일치 등).
 - **404** — 엔티티/미디어/채널/영상 없음. `GET /api/media/:id/analysis`는 404 body가
   `{ status: "none" }`.
-- **409** 두 종류 (YouTube 계열):
+- **409** 네 종류:
   - `{ error: "revoked" }` — 리프레시 토큰 무효. 채널 상태를 `revoked`로 바꾸고 재연동 요구.
     발생 지점: `refresh` · `analytics/:channelId` · `sync/:channelId`.
   - `{ error: "channel_needs_reconsent" }` — 스코프 분리 이전에 연동돼 `yt-analytics.readonly`가
     없는 채널. `/register`에서 재연동 필요. 발생 지점: `analytics/:channelId`.
+  - `{ error: "upload_disabled" }` — **실업로드 게이트 OFF** (`YOUTUBE_UPLOAD_ENABLED` 미설정).
+    부작용을 내기 전에 거절하므로 **아무 상태도 바뀌지 않는다.** 발생 지점: `distributions/publish`.
+  - `{ error: "no_publish_channel" }` — 업로드할 YouTube 채널이 연결돼 있지 않음.
+  - (그 밖에 클립에 자막이 없어 제목·메타 생성이 불가할 때도 409를 쓴다.)
 - **416** — `stream`의 Range 시작점이 파일 크기를 벗어난 경우 (`Content-Range: bytes */<size>`).
 - **500** — OAuth env 미설정(`OAuth not configured`), 외부 API·인코딩 실패 등.
+- **501** — 해당 환경에서 미지원. `thumbnail-refs/:id/analyze`·`/preprocess`가 **Cloud Run에서**
+  501을 준다 (로컬 워커 스크립트로 돌려야 한다 · `hint`에 명령이 담겨 온다).
+- **502** — 외부 LLM 호출 실패 (`autofill failed` · `profile generation failed` · `no titles generated`).
+- **503** — ffmpeg 없음 (`GET /api/media/:id/frame`).
 
 ## 웹 미사용 라우트 요약
 
-`api.ts`에 대응 함수가 없는 라우트: `/health`, `/api/admin/*`, `PATCH /api/clips/:id/link-video`,
+`api.ts`에 대응 함수가 없는 라우트: `/health`, `PATCH /api/clips/:id/link-video`,
 `POST /api/youtube/refresh`, `POST /api/youtube/pipeline/run`, `GET /api/queue/stats`,
-OAuth 콜백 2종, `/lab`·`/api/lab/*`. 운영 curl·Cloud Scheduler·admin Lab이 소비자다.
+`GET /api/search/log`, 프로그램 이해 프로필 2종(생성·설정),
+`POST /api/programs/:id/autofill/chat`(사용 안 함), `DELETE /api/media/:id`,
+파괴적 admin(`reset`·`queue/purge`)·`admin/remux/:id`·wake 2종, OAuth 콜백,
+`/lab`·`/assets/*`·`/api/lab/*`. 운영 curl·Cloud Scheduler·admin Lab이 소비자다.
+
+> `admin/jobs`·`admin/media-analysis`는 예외 — 슈퍼어드민 대시보드(`/ops`)가
+> `fetchOpsJobs`·`fetchOpsMediaAnalysis`로 쓴다.
