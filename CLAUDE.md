@@ -1,6 +1,6 @@
 # STEP-D — Claude 컨텍스트
 
-> 2026-07-16 실측 기준 갱신. 이 리포는 구 STEPD(Python FastAPI + VM)가 아니다.
+> 2026-08-08 실측 기준 갱신. 이 리포는 구 STEPD(Python FastAPI + VM)가 아니다.
 > 구 코드는 `apps/api/`에 레거시로만 남아 있고, 새 작업은 `apps/web` + `apps/server` + `core/`에서 한다.
 
 ## 제품 개요
@@ -9,14 +9,17 @@
 생성**하고, 운영자가 채택하면 트림·인코딩된 클립이 되어 편집 → 멀티채널 배포 → 성과 추적으로 이어진다.
 
 ```
-업로드(GCS resumable) → content.analyze 잡 큐잉 → [워커 VM] python -m core.analyze
-  (STT→자막정제→장면분할→프레임분석[시각채점+이름OCR 통합 1호출]→쇼츠추천[장르 자동감지·후보→합성 2단계], Vertex Gemini)
+업로드(GCS resumable) → content.analyze 잡 큐잉 → [Cloud Run Job] python -m core.analyze
+  STT(Soniox+화자분리) → shot boundary → scene_type → [GEBD GPU VM] 장면경계 → beat 생성(최소 6초)
+    → beat annotate(Vision·맥락누적) → 쇼츠 추천(beat-only) → 검색 세그먼트 인덱싱(pgvector)
   · 단계별 체크포인트 — 실패/재시도 시 완료된 단계부터 재개 · @@PROGRESS로 UI에 단계별 진행률
-    → content_analysis 저장(+프레임·산출물 GCS analysis/{mediaId}/ 영구 보존) + 회차 추천 보드에 AI 추천 기록
+    → content_analysis + search_segments 저장 (산출물 GCS analysis/{mediaId}/ 영구 보존)
       → [사람] 채택/거절 → ffmpeg 트림·인코딩 → 클립 → 편집 → 배포(YouTube/Meta/SMR) → 성과
 ```
+**실측(2026-08-08 · 58.6분 회차):** 964초 · 약 ₩285 · 자막 925 / 장면 12 / beat 245 / 쇼츠 20 /
+검색 세그먼트 204. 장르·캐스트는 **사람이 미리 지정**해야 정확하다(미지정 시 자동판정 폴백).
 
-문서 진입점: [docs/README.md](docs/README.md) · 종합 계획: [docs/plans/step-d-master-build-plan.md](docs/plans/step-d-master-build-plan.md)
+문서 진입점: [docs/README.md](docs/README.md) · 종합 계획: [docs/plans/active/step-d-master-build-plan.md](docs/plans/active/step-d-master-build-plan.md)
 
 ---
 
@@ -25,12 +28,15 @@
 ```
 apps/web/      Next.js 16 (App Router) + React 19 + Tailwind v4 + base-ui  → Vercel (stepd.stepai.kr)
 apps/server/   Hono + PostgreSQL(Cloud SQL) + GCS + ffmpeg                 → Cloud Run (stepd-server)
-               + src/worker.ts = 별도 워커 프로세스                          → GCE VM (stepd-worker)
-core/          Python AI 파이프라인 (analyze·asr·refine·scenes·vision·names·recommend)
+               + src/worker.ts = 별도 워커 프로세스 → Cloud Run Jobs (stepd-worker-content
+                 / stepd-worker-youtube, drain 모드) + GEBD 전용 GPU T4 spot VM
+core/          Python AI 파이프라인 (analyze·asr·boundaries·beats·beat_annot·chyron·recommend·
+               index_segments). analyze.py 는 analyze_cli/stages/utils 로 분리됨
 admin/         STEP D Lab — Vite+React SPA. 분석 결과 검수 + 숏폼↔롱폼 매칭
                → Vercel 독립 배포(stepd-lab). 서버 /lab은 dist/ 서빙(로컬 편의, 빌드 필요)
 apps/api/      ⚠️ 레거시 (구 STEPD, Python FastAPI). 미사용 — 새 코드 금지. 제거 여부 미결정.
-deploy/        배포 스크립트 (deploy-server.ps1 · deploy-web.ps1) + worker-vm.sh 프로비저닝
+deploy/        cloud.sh(표준 배포: status|server|worker|gebd|migrate|all) · deploy-web.ps1(Vercel)
+               · gebd/(Dockerfile.slim · vm-startup.sh · run_long_v3.sh) · worker-vm.sh
 docs/          ops(현황·운영) / plans(계획) / reference / research / prototypes / archive
 ```
 
@@ -38,46 +44,89 @@ docs/          ops(현황·운영) / plans(계획) / reference / research / prot
 
 ## 백엔드 — apps/server
 
-Hono 단일 진입점(index.ts, **~1270줄, 라우트 ~40개**) + 별도 워커 프로세스 구조.
+Hono 단일 진입점(index.ts, **~5500줄, 라우트 118개**) + 별도 워커 프로세스 구조.
+(2026-08-08 실측 갱신)
 
 | 파일 | 역할 |
 |------|------|
 | `src/index.ts` | 모든 HTTP 라우트. 여기 한 파일에 유지. **Cloud Run은 잡을 큐잉만 한다.** |
-| `src/worker.ts` | **워커 프로세스 진입점** (GCE VM에서 tsx로 상시 실행). 15분 sweep + 잡 폴링 |
-| `src/queue.ts` | Postgres job_queue (FOR UPDATE SKIP LOCKED · dedupeKey · 지수 백오프) |
+| `src/worker.ts` | **워커 프로세스 진입점.** 잡 13종 · 레인 3개 · drain 모드 (아래 참조) |
+| `src/queue.ts` | Postgres job_queue (FOR UPDATE SKIP LOCKED · dedupeKey · 지수 백오프 · 5분 하트비트) |
 | `src/channel-pipeline.ts` | channel.analyze — 업로드 동기화 + 채널 애널리틱스/일별 수익 백필 |
 | `src/content-pipeline.ts` | content.analyze — `python -m core.analyze` 스폰, 진행률 파싱(@@PROGRESS→episode.pipeline), 결과+프레임 영구 저장, 추천 배선. 미디어별 고정 작업 디렉토리로 재시도 시 체크포인트 재개 |
 | `src/db-pg.ts` | PostgreSQL 전부. 엔티티=JSONB(`entities`) + 미디어/YouTube 정규 테이블 |
 | `src/youtube.ts` | YouTube Data/Analytics API, 토큰 리프레시(invalid_grant→revoked), 쇼츠 분류 |
 | `src/storage-gcs.ts` | GCS 어댑터 + resumable 업로드 세션 (GCS_BUCKET 없으면 로컬 폴백) |
 | `src/ffmpeg.ts` | `hasFfmpeg` / `probe` / `captureThumbnail` / `trimEncode` |
+| `src/search-embed.ts` | 검색 **쿼리** 임베딩 (Vertex `text-multilingual-embedding-002` · 768d). 실패 시 null → 키워드축 폴백 |
+| `src/search-parse.ts` | 자연어 질의 → 구조화 필터 (인물·장면·기간) |
+| `src/upload-gate.ts` | **YouTube 실업로드 게이트** — 기본 OFF. 오타·빈값·미설정은 전부 OFF |
+| `src/gemini.ts` · `cast.ts` · `profile.ts` · `thumbnail-assets.ts` | Gemini 호출 · 캐스트 · 프로그램 프로필 · 썸네일 레퍼런스 |
 | `src/seed.ts` | **의도적으로 전부 빈 배열** — 프로덕션은 데모 콘텐츠 없이 시작 |
-| `schema.sql` | 테이블 정의 — 단 **job_queue·content_analysis·channel_analytics는 여기 없고 코드가 런타임 생성** (queue.ts·db-pg.ts). 상세: [docs/reference/data-model.md](docs/reference/data-model.md) |
+| `schema.sql` | 테이블 정의 — 단 **job_queue·content_analysis·channel_analytics·search_segments·meta_accounts·tiktok_accounts는 여기 없고 코드가 런타임 생성** (queue.ts·db-pg.ts). 상세: [docs/reference/data-model.md](docs/reference/data-model.md) |
 
 `src/pipeline.ts`는 이제 `newId` 헬퍼만 export한다(구 sqlite `db.ts`·`storage.ts`, 휴리스틱 `buildRecommendations()`는 정리 완료). 실제 추천은 core/ AI 파이프라인이 만든다.
 
-**워커 잡 5종** (worker.ts handle 스위치): `channel.analyze`(채널 동기화+분석, 완료 후 영상별 fan-out) ·
-`video.analyze`(영상 애널리틱스+리텐션) · `video.hotwatch`(신규 업로드 48h 시간별 스냅샷, 자기 재큐) ·
-`video.comments`(상위 댓글) · `content.analyze`(AI 콘텐츠 분석).
+### 워커 — 잡 13종 · 레인 3개 · drain 모드
 
-**⚠️ 배포(publish)는 아직 스텁이다.** `POST /api/distributions/publish`는 클립의 distributions 상태만
-기록한다(실제 송출 없음). 반면 YouTube OAuth·채널/영상 애널리틱스·수익 수집은 실제로 동작한다.
+프로세스 하나가 다 처리하지 않는다. `WORKER_JOBS` 로 **레인을 갈라** 서로 굶기지 않게 한다.
 
-**주요 라우트** (전체 목록: [docs/reference/api-reference.md](docs/reference/api-reference.md))
 ```
-GET  /health · /api/state
+content : content.analyze · youtube.download · match.align · match.segment · match.learn
+          → 파이썬·ffmpeg 무거운 잡. Cloud Run Job `stepd-worker-content`
+youtube : channel.analyze · video.analyze · video.hotwatch · video.comments · distribution.publish
+          → 짧고 API 쿼터 위주. Cloud Run Job `stepd-worker-youtube`
+gebd    : gebd.detect
+          → GPU T4 spot VM 전용. GPU 없는 데서 claim 하면 Docker mmaction2 를 못 돌린다
+thumbnail.style · thumbnail.generate 는 레인 미지정(=all) 워커가 집는다
+```
+
+**drain 모드(`WORKER_MODE=drain`)가 비용 구조의 핵심.** 상시 5초 폴링 대신 Cloud Scheduler 가
+Job 을 깨우고 → **큐가 비면 종료** → idle 과금 0. `DRAIN_MAX_MS`(기본 50분)를 넘기면 새 잡을
+claim 하지 않고 진행 중인 것만 마친다(Job 타임아웃 중간 사망 회피).
+
+> ⚠️ **drain 모드에는 이벤트 루프 앵커가 필수다.** content-pipeline 은 python 자식과
+> stdout/stderr 파이프를 전부 `unref()` 한다(Windows 크래시 전파 차단). drain 은 폴링
+> setInterval 도 없어서, 앵커가 없으면 DB 무활동 구간(STT 등)에 루프가 비어 **Node 가
+> `exit(0)` 으로 조용히 죽는다** — Cloud Run 은 '성공' 으로 기록하고 잡은 running 인 채 남는다.
+> (실측 2026-08-08: 58분 회차가 매번 컨테이너 시작 44초 만에 종료.) `worker.ts` `loop()` 의
+> `keepAlive` 를 절대 unref 하지 말 것.
+
+**⚠️ YouTube 실업로드는 구현 완료 · 기본 OFF.** `upload-gate.ts` 3중 방어 —
+`YOUTUBE_UPLOAD_ENABLED` 가 명시적 truthy 일 때만 ON, 라우트 409 · 워커 차단 · 업로드 직전
+`assertUploadEnabled()`. 잘못된 env 의 실패 모드가 "업로드 안 됨"이지 "실수로 업로드됨"이
+아니게 방향을 잡아뒀다. **Meta·SMR 송출은 여전히 상태 기록만(스텁).**
+
+### 검색 — 제품의 목적물
+
+회차당 200여 개 세그먼트를 `search_segments` 에 적재한다. **컬럼이 곧 질의축이다:**
+`start/end/duration · characters · speakers · scene_type · hook · highlight_score · is_short ·
+rights · dialogue · chyron · summary · emb_dialogue vector(768) · emb_summary vector(768)`
+
+**비대칭 하이브리드** — 인덱싱은 `core/index_segments.py`(RETRIEVAL_DOCUMENT), 쿼리는
+`search-embed.ts`(RETRIEVAL_QUERY). Vertex 실패 시 **키워드축(pg_trgm) 단독 폴백** — 한국어는
+키워드 매칭이 강해서 벡터 없이도 검색이 성립한다.
+
+**주요 라우트** — 총 118개 (전체: [docs/reference/api-reference.md](docs/reference/api-reference.md))
+```
+GET  /health · /api/state · /api/search        # 검색 = 하이브리드(벡터+키워드)
 POST /api/media/upload-init → finalize   # 브라우저→GCS 직접 resumable 업로드 (대용량 표준 경로)
-POST /api/media/upload                   # 소용량 직접 업로드
-GET  /api/media/:id/stream · /thumb · /analysis
+POST /api/media/upload · /api/media/from-youtube
+GET  /api/media/:id/stream · /thumb · /frame · /analysis · /transcript
+POST /api/media/:id/analyze              # → content.analyze 큐잉
+GET/POST /api/programs/:id/cast          # 캐스트 사전등록 (인물 라벨링의 primary)
+POST /api/programs/:id/autofill · /profile/generate · /thumbnail-style
+GET/POST/PATCH/DELETE /api/thumbnail-refs/*      # 썸네일 레퍼런스 13개 라우트
 POST /api/recommendations/:id/adopt · /reject
-POST /api/distributions/publish · /retry # (스텁) 상태 기록만
-PATCH /api/clips/:id/editor · /link-video
-GET/POST /api/youtube/*                  # auth(mode=analytics|publish) · oauth/callback · channels ·
-                                         # analytics/:id(/daily) · sync · videos · trends · pipeline/run
-GET  /api/queue/stats · POST /api/admin/reset · /api/admin/queue/purge
-GET  /lab · /api/lab/*                   # admin Lab (읽기 무인증)
-POST /api/lab/match · DELETE /api/lab/match/:id   # 숏폼↔롱폼 매칭 — LAB_WRITE_TOKEN 필요
-GET  /api/lab/match/videos/:channelId · /match/export/:channelId  # 매칭 대상·LEARN 데이터셋
+POST /api/clips/:id/export · /generate-metadata · /regenerate-titles
+POST /api/distributions/publish · /retry # YouTube 실업로드(게이트 OFF) · Meta/SMR 은 상태 기록만
+GET/POST /api/youtube/*                  # auth(mode=analytics|publish) · callback · channels ·
+                                         # analytics/:id(/daily) · sync · videos · trends · comments
+GET  /api/meta/auth · /api/tiktok/auth   # Meta·TikTok OAuth + 계정 연결
+GET  /api/queue/stats · /api/admin/jobs · /api/admin/media-analysis
+POST /api/admin/reset · /queue/purge · /gebd-vm/wake · /worker-vm/wake
+GET  /lab · /api/lab/*                   # admin Lab 20개 라우트 (읽기 무인증)
+POST /api/lab/match · /match/auto-bulk · DELETE /api/lab/match/:id   # LAB_WRITE_TOKEN 필요
 ```
 
 **환경변수** (실제 코드가 읽는 것)
@@ -88,9 +137,21 @@ GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET / PUBLIC_URL       YouTube OAuth
 PORT                  Cloud Run 주입(8080). cloudbuild에서 직접 설정 금지 — 예약 변수
 LAB_WRITE_TOKEN       Lab 매칭 쓰기 가드 (Secret Manager: stepd-lab-write-token). 없으면 쓰기 503
 CORE_DIR / CORE_PYTHON                    core/ 파이프라인 위치·파이썬 (워커)
-STT_PROVIDER          기본 gemini (whisper=로컬 GPU 경로, 프로덕션 아님)
+STT_PROVIDER          프로덕션 soniox (SONIOX_API_KEY 필요) · gemini · whisper(로컬 GPU)
 GOOGLE_CLOUD_PROJECT(기본 step-d) / VERTEX_LOCATION(기본 asia-northeast3)   Vertex Gemini
+EMBED_MODEL / EMBED_DIM                   검색 임베딩 (기본 text-multilingual-embedding-002 · 768)
+WORKER_JOBS           content | youtube | gebd | all(기본)   ← 레인 선택
+WORKER_MODE           drain 이면 큐 비는 즉시 종료 / DRAIN_MAX_MS(기본 50분)
+YOUTUBE_UPLOAD_ENABLED   실업로드 게이트. 미설정·오타·빈값 = OFF
+GEBD_IMAGE / GEBD_MODEL / GEBD_ASSETS / GEBD_CHUNK_SEC(300) / GEBD_CORES(1)   GPU VM
+GEBD_VM_NAME / GEBD_VM_ZONE · WORKER_VM_NAME / WORKER_VM_ZONE   /admin/*-vm/wake 대상
+META_APP_ID / META_APP_SECRET / META_REDIRECT_URI                Meta OAuth
+TIKTOK_CLIENT_KEY / TIKTOK_CLIENT_SECRET / TIKTOK_REDIRECT_URI   TikTok OAuth
+AUTO_GEBD / AUTO_THUMBNAIL                분석 완료 후 후속 잡 자동 큐잉 스위치
 ```
+core/ 쪽 스위치(파이썬): `RUN_FACES`·`RUN_PPL`·`RUN_REFINE`·`RUN_CHYRON_PER_SEG`·`MIN_BEAT_SEC`·
+`BEAT_ANNOT_WORKERS`·`BEAT_ANNOT_CTX_RECENT`·`GEMINI_*_MODEL`(단계별 모델 오버라이드).
+**faces·PPL 은 기본 off** — 되살릴 때만 켠다(코드 삭제 금지).
 
 **ffmpeg은 로컬 파일만 읽는다.** GCS 모드에선 `/tmp`로 먼저 내려받아야 하고, Cloud Run의 `/tmp`는
 **RAM(tmpfs)** 이므로 작업 후 반드시 지울 것 — 안 지우면 업로드마다 메모리가 쌓여 OOM 난다.
@@ -116,11 +177,13 @@ GOOGLE_CLOUD_PROJECT(기본 step-d) / VERTEX_LOCATION(기본 asia-northeast3)   
 
 상세 런북: [docs/ops/deploy.md](docs/ops/deploy.md) · 인프라 SSOT: [docs/ops/infra.md](docs/ops/infra.md)
 
-- **서버+워커**: `.\deploy\deploy-server.ps1` — 타입체크 → push → `gcloud builds submit`(루트
-  cloudbuild.yaml, ffmpeg 포함 이미지) → Cloud Run 배포 → 워커 VM SSH 재시작 → 검증.
-- **워커만**: 루트 `.\deploy-worker.ps1` (VM에서 `git reset --hard origin/main` + systemd 재시작).
+- **표준 경로 — `bash deploy/cloud.sh <target>`** (`status`|`server`|`worker`|`gebd`|`migrate`|`all`).
+  비대화형 Bash + deployer SA 로 돌아서 PowerShell stderr 오탐·재인증 함정을 피한다.
+  `/deploy` 스킬(`.claude/skills/deploy/`)이 같은 스크립트를 감싼다.
 - **웹**: `.\deploy\deploy-web.ps1` — Vercel. **커밋 author가 contact@stepai.kr이어야 배포됨**
   (Vercel git-author 차단, 스크립트가 강제). 프로덕션 = https://stepd.stepai.kr
+- 구 경로(`deploy-server.ps1` / `deploy-worker.ps1`)는 남아 있지만 워커 VM 상시 운영 전제라
+  현재 배치(Cloud Run Jobs)와 맞지 않는다 — `cloud.sh` 를 쓸 것.
 
 ---
 
@@ -140,5 +203,5 @@ GOOGLE_CLOUD_PROJECT(기본 step-d) / VERTEX_LOCATION(기본 asia-northeast3)   
 
 - [docs/README.md](docs/README.md) — **문서 전체 지도 (여기부터)**: 현황(ops) vs 계획(plans) 구분
 - [docs/ops/infra.md](docs/ops/infra.md) — 인프라 단일 진실 소스 (GCP·Vercel·큐·시크릿)
-- [docs/plans/step-d-master-build-plan.md](docs/plans/step-d-master-build-plan.md) — 종합 빌드 플랜 (정본)
+- [docs/plans/active/step-d-master-build-plan.md](docs/plans/active/step-d-master-build-plan.md) — 종합 빌드 플랜 (정본)
 - [docs/reference/api-reference.md](docs/reference/api-reference.md) · [docs/reference/data-model.md](docs/reference/data-model.md)
