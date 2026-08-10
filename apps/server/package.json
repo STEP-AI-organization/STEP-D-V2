@@ -9,6 +9,8 @@
     "start": "tsx --env-file .env src/index.ts",
     "build": "tsc --noEmit",
     "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test \"src/**/*.test.ts\"",
+    "test:watch": "node --import tsx --test --watch \"src/**/*.test.ts\"",
     "worker": "node --unhandled-rejections=warn --import tsx --env-file-if-exists=.env src/worker.ts",
     "worker:prod": "node --unhandled-rejections=warn --import tsx --env-file-if-exists=.env.worker src/worker.ts",
     "migrate": "node-pg-migrate --envPath .env --migrations-dir migrations --migrations-table pgmigrations --ignore-pattern \"(?!\\d{4}_.*\\.cjs$).*\"",

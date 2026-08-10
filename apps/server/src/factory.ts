@@ -36,9 +36,17 @@ export function dailyCap(): number {
   return Number.isFinite(n) && n > 0 ? n : 5;
 }
 
-/** private 업로드 후 공개 전환까지 유예(ms). 이 사이엔 URL 이 있어도 남이 못 본다. */
+/**
+ * private 업로드 후 공개 전환까지 유예(ms). 이 사이엔 URL 이 있어도 남이 못 본다.
+ *
+ * ⚠️ 빈 문자열을 그냥 Number() 에 넣으면 0 이 되어 **유예가 사라진다**(즉시 공개).
+ * 안전장치가 조용히 없어지는 방향이라, 빈값·공백은 미설정과 같게 기본값으로 되돌린다.
+ * 명시적인 "0" 은 그대로 존중한다 — 유예 없음은 의도할 수 있는 선택이다.
+ */
 export function publicizeDelayMs(): number {
-  const n = Number(process.env.FACTORY_PUBLICIZE_DELAY_MIN);
+  const raw = String(process.env.FACTORY_PUBLICIZE_DELAY_MIN ?? "").trim();
+  if (raw === "") return 10 * 60_000;
+  const n = Number(raw);
   return (Number.isFinite(n) && n >= 0 ? n : 10) * 60_000;
 }
 
