@@ -5,6 +5,7 @@
   "buildCommand": "pnpm build",
   "outputDirectory": "dist",
   "rewrites": [
-    { "source": "/api/lab/:path*", "destination": "https://stepd.stepai.kr/api/proxy/api/lab/:path*" }
+    { "source": "/api/:path*", "destination": "https://stepd.stepai.kr/api/proxy/api/:path*" },
+    { "source": "/((?!api/).*)", "destination": "/index.html" }
   ]
 }

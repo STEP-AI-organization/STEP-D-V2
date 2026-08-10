@@ -32,8 +32,9 @@ apps/server/   Hono + PostgreSQL(Cloud SQL) + GCS + ffmpeg                 → C
                  / stepd-worker-youtube, drain 모드) + GEBD 전용 GPU T4 spot VM
 core/          Python AI 파이프라인 (analyze·asr·boundaries·beats·beat_annot·chyron·recommend·
                index_segments). analyze.py 는 analyze_cli/stages/utils 로 분리됨
-admin/         STEP D Lab — Vite+React SPA. 분석 결과 검수 + 숏폼↔롱폼 매칭
-               → Vercel 독립 배포(stepd-lab). 서버 /lab은 dist/ 서빙(로컬 편의, 빌드 필요)
+admin/         STEP D Admin — 플랫폼 관리 콘솔 (Vite+React SPA). 테넌트·사용자·잡·감사
+               → Vercel 독립 배포 · admin.stepd.stepai.kr · superadmin 세션 필수
+               (구 STEP D Lab 은 2026-08-10 제거 — /api/lab/* 라우트도 함께 삭제)
 apps/api/      ⚠️ 레거시 (구 STEPD, Python FastAPI). 미사용 — 새 코드 금지. 제거 여부 미결정.
 deploy/        cloud.sh(표준 배포: status|server|worker|gebd|migrate|all) · deploy-web.ps1(Vercel)
                · gebd/(Dockerfile.slim · vm-startup.sh · run_long_v3.sh) · worker-vm.sh

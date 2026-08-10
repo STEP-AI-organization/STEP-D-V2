@@ -1,198 +1,87 @@
-import type { LabChannel, LabData, LabMatchData, LabSourceMap } from "./types";
-
-// Same-origin by default: served by apps/server at /lab locally, and proxied by Vercel
-// (vercel.json rewrites /api/lab/* → Cloud Run) in production. `?api=` overrides for
-// cross-origin dev against a remote server.
-export const API = new URLSearchParams(location.search).get("api") || "";
-
 /**
- * Write token for the mapping endpoints. /api/lab/* is publicly reachable and has no auth,
- * so writes carry a shared secret the server holds in LAB_WRITE_TOKEN.
- *
- * Baked in at build time (VITE_LAB_TOKEN) so the operator never types it. Note what this
- * does and doesn't buy: it stops drive-by/automated writes, but anyone who can LOAD this
- * page can read the token out of the bundle — the page itself must be gated by Vercel
- * Deployment Protection for that to matter. localStorage still wins if set, so a build
- * without the env var can be unblocked by hand.
+ * 서버 호출. 경로는 항상 상대경로다 — 프로덕션은 vercel rewrite, 개발은 vite proxy 가
+ * 같은 오리진처럼 보이게 해준다(세션이 HttpOnly 쿠키라 오리진이 갈리면 로그인이 안 된다).
  */
-const TOKEN_KEY = "stepd-lab-token";
-const BUILT_IN_TOKEN = (import.meta.env.VITE_LAB_TOKEN as string | undefined) ?? "";
-export const getToken = () => localStorage.getItem(TOKEN_KEY) || BUILT_IN_TOKEN;
-export const setToken = (t: string) => localStorage.setItem(TOKEN_KEY, t.trim());
 
-async function req<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(API + path, init);
-  if (!res.ok) {
-    const body = (await res.json().catch(() => null)) as { error?: string; message?: string } | null;
-    throw new Error(body?.message ?? body?.error ?? `${res.status} ${res.statusText}`);
+export class ApiError extends Error {
+  constructor(public status: number, message: string) {
+    super(message);
   }
-  return (await res.json()) as T;
 }
 
-function writeInit(method: string, body?: unknown): RequestInit {
-  return {
-    method,
-    headers: {
-      "Content-Type": "application/json",
-      "x-lab-token": getToken(),
-    },
-    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
-  };
+async function call<T>(path: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(path, {
+    ...init,
+    credentials: "include",
+    headers: { "content-type": "application/json", ...(init?.headers ?? {}) },
+  });
+  const text = await res.text();
+  const body = text ? (JSON.parse(text) as any) : {};
+  if (!res.ok) throw new ApiError(res.status, body.message ?? body.error ?? `HTTP ${res.status}`);
+  return body as T;
 }
 
-export const fetchLabData = () => req<LabData>("/api/lab/data");
+const get = <T>(p: string) => call<T>(p);
+const post = <T>(p: string, body?: unknown) =>
+  call<T>(p, { method: "POST", body: JSON.stringify(body ?? {}) });
+const patch = <T>(p: string, body?: unknown) =>
+  call<T>(p, { method: "PATCH", body: JSON.stringify(body ?? {}) });
 
-export const fetchMatchChannels = () =>
-  req<{ channels: LabChannel[] }>("/api/lab/match/channels").then((r) => r.channels);
+// ── 타입 ───────────────────────────────────────────────────────────────────────
 
-export const fetchMatchData = (channelId: string) =>
-  req<LabMatchData>(`/api/lab/match/videos/${encodeURIComponent(channelId)}`);
-
-export const saveMatch = (m: {
-  shortVideoId: string;
-  channelId: string;
-  longVideoId: string;
-  segStart: number;
-  segEnd: number;
-  note?: string;
-}) => req<{ ok: true; map: LabSourceMap }>("/api/lab/match", writeInit("POST", m));
-
-/** 선택한 숏폼들의 구간을 오디오 정렬로 자동 추적 (워커 잡 큐잉 — 결과는 재조회로 확인). */
-export const autoAlign = (m: { channelId: string; longVideoId: string; shortVideoIds: string[] }) =>
-  req<{ queued: boolean; alreadyPending: boolean; count: number }>(
-    "/api/lab/match/auto",
-    writeInit("POST", m),
-  );
-
-export interface BulkPreview {
-  channelId: string;
-  channelName: string;
-  longforms: number;
-  shorts: number;
-  keywordGroups: number;
-  plan: { longVideoId: string; longTitle: string; keywordHits: number; shortVideoIds: string[] }[];
+export interface Me {
+  id: string; email: string; name: string; role: string; tenantId: string;
+}
+export interface Tenant {
+  id: string; name: string; kind: string; status: string;
+  billingEmail: string | null; createdAt: number;
+  userCount: number; mediaCount: number; mediaSec: number;
+}
+export interface AdminUser {
+  id: string; tenantId: string; email: string; name: string; role: string;
+  status: string; createdAt: number; lastLoginAt: number | null;
+}
+export interface AdminJob {
+  id: string; type: string; status: string; attempts: number;
+  tenantId: string; error: string | null; createdAt: number; updatedAt: number;
+}
+export interface AuditEntry {
+  id: number; actorEmail: string; action: string; targetTenant: string | null;
+  targetId: string | null; reason: string | null; detail: Record<string, unknown>;
+  ip: string | null; at: number;
+}
+export interface Overview {
+  tenants: number; users: number;
+  jobs: Record<string, number>;
+  media: { count: number; minutes: number };
 }
 
-/** 채널 전체 자동 매칭 계획 미리보기 (큐잉하지 않음). */
-export const previewBulk = (channelId: string, limit = 100) =>
-  req<BulkPreview>(`/api/lab/match/auto-bulk/preview/${encodeURIComponent(channelId)}?limit=${limit}`);
+// ── 호출 ───────────────────────────────────────────────────────────────────────
 
-export const runBulk = (channelId: string, limit = 100) =>
-  req<{ ok: true; queued: number; deduped: number; shorts: number; etaMinutes: number }>(
-    "/api/lab/match/auto-bulk",
-    writeInit("POST", { channelId, limit }),
-  );
+export const api = {
+  me: () => get<{ user: Me | null; authRequired: boolean }>("/api/auth/me"),
+  login: (email: string, password: string) => post<{ user: Me }>("/api/auth/login", { email, password }),
+  logout: () => post<{ ok: true }>("/api/auth/logout"),
 
-/** 연동된 모든 채널을 한 번에 (channelIds 생략 시 전체). */
-export const runBulkAll = (limitPerChannel = 100) =>
-  req<{
-    ok: true; channels: number; queued: number; etaMinutes: number;
-    results: { channelName: string; queued: number; shorts: number }[];
-  }>("/api/lab/match/auto-bulk/all", writeInit("POST", { limitPerChannel }));
+  overview: () => get<Overview>("/api/superadmin/overview"),
+  tenants: () => get<{ tenants: Tenant[] }>("/api/superadmin/tenants"),
+  createTenant: (t: { id?: string; name: string; kind: string; billingEmail?: string }) =>
+    post<{ id: string }>("/api/superadmin/tenants", t),
+  updateTenant: (id: string, patchBody: { status?: string; name?: string; reason?: string }) =>
+    patch<{ ok: true }>(`/api/superadmin/tenants/${encodeURIComponent(id)}`, patchBody),
 
-export interface MatchStatus {
-  jobs: { pending: number; running: number; done: number; failed: number };
-  matched: number;
-  auto: number;
-  confirmed: number;
-  described?: number;
-}
-export const fetchMatchStatus = (channelId: string) =>
-  req<MatchStatus>(`/api/lab/match/status/${encodeURIComponent(channelId)}`);
+  users: (tenant?: string, reason?: string) => {
+    const q = new URLSearchParams();
+    if (tenant) q.set("tenant", tenant);
+    if (reason) q.set("reason", reason);
+    return get<{ users: AdminUser[] }>(`/api/superadmin/users${q.size ? `?${q}` : ""}`);
+  },
+  setUserStatus: (id: string, status: "active" | "suspended", reason?: string) =>
+    post<{ ok: true }>(`/api/superadmin/users/${encodeURIComponent(id)}/status`, { status, reason }),
+  invite: (tenantId: string, email: string, role: string, reason?: string) =>
+    post<{ inviteId: string; token: string; expiresAt: number }>(
+      `/api/superadmin/tenants/${encodeURIComponent(tenantId)}/invite`, { email, role, reason }),
 
-/** 매칭 구간의 자막·장면요약 채우기 (LEARN 입력 완성) 트리거. */
-export const runSegment = (channelId: string) =>
-  req<{ ok: true; queued: boolean; missing: number; longforms?: number }>(
-    "/api/lab/match/segment",
-    writeInit("POST", { channelId }),
-  );
-
-/** 채널 규칙 학습 트리거 (매칭·설명 데이터 → 고성과 규칙 → 채널 프로파일). */
-export const runLearn = (channelId: string) =>
-  req<{ ok: true; queued: boolean; alreadyPending: boolean }>(
-    "/api/lab/match/learn",
-    writeInit("POST", { channelId }),
-  );
-
-export interface LearnedProfile {
-  ready?: boolean;
-  confidence?: number;
-  channel?: string;
-  winning_patterns?: { pattern: string; why?: string; evidence?: string[] }[];
-  avoid_patterns?: string[];
-  optimal_length_sec?: { min: number; max: number };
-  title_rules?: string[];
-  sample?: { high: number; low: number; described: number };
-  message?: string;
-}
-export const fetchLearnedProfile = (channelId: string) =>
-  req<{ profile: LearnedProfile | null; at: number | null }>(
-    `/api/lab/match/profile/${encodeURIComponent(channelId)}`,
-  );
-
-export const deleteMatch = (shortVideoId: string) =>
-  req<{ ok: true }>(`/api/lab/match/${encodeURIComponent(shortVideoId)}`, writeInit("DELETE"));
-
-export interface LearnPair {
-  pair_id: string;
-  short: { videoId: string; title: string | null; publishedAt: string | null; views: number; durationSec: number };
-  performance: { baseline_median_views: number; ratio: number; tier: "high" | "mid" | "low" };
-  source: {
-    longVideoId: string; title: string | null; durationSec: number;
-    segStart: number; segEnd: number; segLenSec: number;
-    transcript_slice: string | null; scene_summary: string | null;
-    emotion: string | null; hook: string | null;
-  };
-  note: string | null;
-}
-
-/** LEARN 입력 미리보기/내보내기 — 매칭된 쌍 + 채널 기준 상대 성과 티어. */
-export const fetchMatchExport = (channelId: string) =>
-  req<{ channelId: string; channelName: string; count: number; tally: Record<string, number>; pairs: LearnPair[] }>(
-    `/api/lab/match/export/${encodeURIComponent(channelId)}`,
-  );
-
-export interface OverviewChannel {
-  channelId: string;
-  channelName: string;
-  subscribers: number;
-  longs: number;
-  shorts: number;
-  matched: number;
-  auto: number;
-  remaining: number;
-  jobs: { pending: number; running: number; done: number; failed: number };
-}
-export const fetchOverview = () =>
-  req<{ channels: OverviewChannel[] }>("/api/lab/match/overview").then((r) => r.channels);
-
-// ── viewer_signals (시청자 댓글 반응) ────────────────────────────────────────────
-// 2026-07-28. from-youtube 로 임포트된 롱폼의 원본 유튜브 댓글에서 comment_signal.py 가
-// 뽑은 top_moments / dominant_emotion / top_demands / explicit_timestamps. content_analysis
-// 완료된 media 만 값이 있음 (미완이면 viewer_signals: null · reason 필드로 이유 표시).
-export interface ViewerSignals {
-  top_moments?: [string, number][];  // [텍스트, 좋아요]
-  explicit_timestamps?: { mmss: string; likes: number }[];
-  dominant_emotion?: string;
-  top_demands?: [string, number][];
-}
-
-export interface ViewerCoverage {
-  mmss: string;
-  likes: number;
-  secs: number;
-  covered: boolean;
-  byShortRank: number | null;
-}
-
-export interface ViewerSignalsResponse {
-  videoId: string;
-  mediaId?: string;
-  viewer_signals: ViewerSignals | null;
-  shorts: { start: number; end: number; title: string; rank: number | null }[];
-  coverage: ViewerCoverage[];
-  reason?: string;
-}
-
-export const fetchViewerSignals = (videoId: string) =>
-  req<ViewerSignalsResponse>(`/api/lab/videos/${encodeURIComponent(videoId)}/viewer-signals`);
+  jobs: () => get<{ jobs: AdminJob[] }>("/api/superadmin/jobs"),
+  audit: () => get<{ entries: AuditEntry[] }>("/api/superadmin/audit"),
+};
