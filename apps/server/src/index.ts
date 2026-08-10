@@ -160,6 +160,7 @@ import {
   readEpisodeNumber,
   readTrack,
 } from "./episode-intake.ts";
+import { dispatchPublish } from "./publish-dispatch.ts";
 import {
   ISSUE_KINDS,
   canResolve,
@@ -3273,13 +3274,12 @@ app.post("/api/distributions/publish", async (c) => {
     return c.json({ error: "bad_request", message: "clipIds(배열)와 channel이 필요합니다." }, 400);
   }
 
-  const skipped: string[] = [];
-
-  // ── YouTube: real resumable upload, off-loaded to the worker ──
+  // ── 관문 하나 (FLOWS F3 강제①) ─────────────────────────────────────────
+  // 게이트·렌더 판정, 상태 기록, 큐 투입이 전부 publish-dispatch 안에서 일어난다.
+  // 여기서 직접 enqueue 하지 않는다 — 그러면 경로가 둘이 되고, 나중에 하나만 고치게 된다.
   if (b.channel === "youtube") {
-    // Gate (1/3): refuse before ANY side effect — no distribution status touched, nothing
-    // queued. A rejected request must leave the board exactly as it found it, so the operator
-    // never sees a clip sitting in 'pending' for an upload that was never going to happen.
+    // 실업로드 킬스위치 (게이트와 별개 축). 부작용 전에 거부해서, 나가지 않을 업로드 때문에
+    // 클립이 'pending' 으로 남는 일이 없게 한다.
     if (!youtubeUploadEnabled()) {
       console.warn(`[publish] blocked: YouTube 실업로드 비활성 (clips=${b.clipIds?.length ?? 0})`);
       return c.json({ error: UPLOAD_DISABLED_CODE, message: UPLOAD_DISABLED_MESSAGE }, 409);
@@ -3291,48 +3291,23 @@ app.post("/api/distributions/publish", async (c) => {
         message: "업로드 권한(게시 모드)으로 연결된 YouTube 채널이 없거나, 여러 채널 중 대상을 지정해야 합니다.",
       }, 409);
     }
-    const queued: string[] = [];
-    for (const clipId of b.clipIds) {
-      const clip = await getEntity<any>("clip", clipId);
-      if (!clip) continue;
-      if (!isClipRendered(clip)) { skipped.push(clipId); continue; }
-      // Mark the distribution in-flight, then hand the heavy upload to the worker. The
-      // worker flips 'pending'→'published'/'scheduled'/'failed' and records the videoId.
-      const distributions = upsertDistribution(clip.distributions, "youtube", {
-        status: "pending", youtubeChannelId: target.channelId, error: undefined,
-        ...(b.reserveDate ? { reserveDate: b.reserveDate } : {}),
-      });
-      await putEntity("clip", clipId, { ...clip, distributions });
-      await enqueue("distribution.publish", {
-        clipId,
-        channelId: target.channelId,
-        privacy: b.privacy,
-        // Honest scheduling: a reserveDate only takes effect if it parses to a future instant.
-        publishAt: b.scheduled ? b.reserveDate : undefined,
-      }, { dedupeKey: `distribution.publish:${clipId}` });
-      queued.push(clipId);
-    }
-    return c.json({ ok: true, queued, ...(skipped.length ? { skipped } : {}) });
+    const outcome = await dispatchPublish({
+      clipIds: b.clipIds, channel: "youtube",
+      scheduled: b.scheduled, reserveDate: b.reserveDate, privacy: b.privacy,
+      youtubeChannelId: target.channelId,
+      actor: readActor(c.req.header("x-actor")) || "unknown",
+      origin: "manual",
+    });
+    return c.json({ ok: true, ...outcome });
   }
 
-  // ── Meta / SMR: still a status-only stub (real push not implemented) ──
-  const status = b.scheduled ? "scheduled" : "published";
-  for (const clipId of b.clipIds) {
-    const clip = await getEntity<any>("clip", clipId);
-    if (!clip) continue;
-    if (!isClipRendered(clip)) { skipped.push(clipId); continue; }
-    const value: any = { status, reserveDate: b.reserveDate, error: undefined };
-    if (b.channel === "meta" && b.platforms) value.platforms = b.platforms;
-    const distributions = upsertDistribution(clip.distributions, b.channel, value);
-    // A scheduled (future) distribution must not flip the clip itself to published —
-    // every board/filter reads clip.status, and "scheduled" lives on the distribution.
-    await putEntity("clip", clipId, {
-      ...clip,
-      ...(b.scheduled ? {} : { status: "published" }),
-      distributions,
-    });
-  }
-  return c.json({ ok: true, ...(skipped.length ? { skipped } : {}) });
+  const outcome = await dispatchPublish({
+    clipIds: b.clipIds, channel: b.channel,
+    scheduled: b.scheduled, reserveDate: b.reserveDate, platforms: b.platforms,
+    actor: readActor(c.req.header("x-actor")) || "unknown",
+    origin: "manual",
+  });
+  return c.json({ ok: true, ...outcome });
 });
 
 // ── retry a failed distribution ───────────────────────────────────────────────
@@ -3344,10 +3319,9 @@ app.post("/api/distributions/retry", async (c) => {
   const clip = await getEntity<any>("clip", b.clipId);
   if (!clip) return c.json({ error: "clip not found" }, 404);
 
-  // YouTube: re-run the real upload. Reuse the channel captured at first publish; fall back
-  // to the sole publish channel if the record is missing.
+  // 재시도도 같은 관문을 지난다 — 안 그러면 /retry 가 게이트를 우회하는 뒷문이 된다.
+  // **자동 재시도가 아니다.** 사람이 로그 행의 버튼을 눌러야 여기 온다(F4-4 ⊘).
   if (b.channel === "youtube") {
-    // Same gate on the retry path — otherwise /retry is a trivial bypass of /publish.
     if (!youtubeUploadEnabled()) {
       console.warn(`[publish/retry] blocked: YouTube 실업로드 비활성 (clip=${b.clipId})`);
       return c.json({ error: UPLOAD_DISABLED_CODE, message: UPLOAD_DISABLED_MESSAGE }, 409);
@@ -3357,22 +3331,22 @@ app.post("/api/distributions/retry", async (c) => {
     if (!target) {
       return c.json({ error: "no_publish_channel", message: "재시도할 YouTube 채널을 찾을 수 없습니다." }, 409);
     }
-    const distributions = upsertDistribution(clip.distributions, "youtube", {
-      status: "pending", youtubeChannelId: target.channelId, error: undefined,
+    const outcome = await dispatchPublish({
+      clipIds: [b.clipId], channel: "youtube",
+      reserveDate: prev?.reserveDate,
+      youtubeChannelId: target.channelId,
+      actor: readActor(c.req.header("x-actor")) || "unknown",
+      origin: "retry",
     });
-    await putEntity("clip", b.clipId, { ...clip, distributions });
-    await enqueue("distribution.publish", {
-      clipId: b.clipId, channelId: target.channelId,
-      publishAt: prev?.reserveDate,
-    }, { dedupeKey: `distribution.publish:${b.clipId}` });
-    return c.json({ ok: true, queued: true });
+    return c.json({ ok: true, ...outcome });
   }
 
-  const distributions = (clip.distributions ?? []).map((d: any) =>
-    d.channel === b.channel ? { ...d, status: "published", error: undefined } : d,
-  );
-  await putEntity("clip", b.clipId, { ...clip, distributions });
-  return c.json({ ok: true });
+  const outcome = await dispatchPublish({
+    clipIds: [b.clipId], channel: b.channel,
+    actor: readActor(c.req.header("x-actor")) || "unknown",
+    origin: "retry",
+  });
+  return c.json({ ok: true, ...outcome });
 });
 
 // ── link a clip to the YouTube video it was published as ──────────────────────

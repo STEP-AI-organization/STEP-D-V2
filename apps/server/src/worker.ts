@@ -40,7 +40,9 @@ import {
   listShortSourceMaps,
   setChannelPointProfile,
   type YouTubeChannel,
+  appendGateAudit,
 } from "./db-pg.ts";
+import { clipGate } from "./publish-dispatch.ts";
 import { probe, captureThumbnail } from "./ffmpeg.ts";
 import {
   prepareProgramAssets, publishStyleProfile, publishThumbnails, tempAssetRoot,
@@ -1179,10 +1181,47 @@ function futurePublishAt(raw: unknown): string | null {
   return new Date(t).toISOString();
 }
 
+/**
+ * 배포 잡 실행 — 큐를 소비하는 쪽.
+ *
+ * **던지지 않는다.** 실패는 전부 배포 상태에 사유로 남기고 정상 종료한다.
+ * 던지면 큐가 지수 백오프로 최대 5회 자동 재시도하는데, F4-4 는 그걸 금지한다(⊘) —
+ * 업로드가 실제로 시작된 뒤 재시도되면 중복 게시가 난다. 재시도는 사람이 누른다.
+ */
 async function handleDistributionPublish(job: Job): Promise<void> {
+  try {
+    await runDistributionPublish(job);
+  } catch (err) {
+    const clipId = String(job.payload.clipId ?? "");
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[worker] distribution.publish ${clipId} 실패(재시도 안 함):`, err);
+    if (clipId) await markDistributionFailed(clipId, "youtube", msg).catch(() => {});
+    // 여기서 throw 하지 않는 것이 요점이다. 자동 재시도 금지(F4-4 ⊘).
+  }
+}
+
+async function runDistributionPublish(job: Job): Promise<void> {
   const clipId = String(job.payload.clipId ?? "");
   const channelId = String(job.payload.channelId ?? "");
-  if (!clipId || !channelId) throw new Error("distribution.publish requires clipId + channelId");
+  if (!clipId || !channelId) {
+    console.error("[worker] distribution.publish: clipId/channelId 누락 — 버림");
+    return;
+  }
+
+  // 게이트 (강제 지점 · 마지막 방어선). 큐에 앉아 있는 동안 권리 이슈가 새로 등록될 수 있다.
+  // 관문에서 통과했더라도 **올리기 직전에 다시 본다** — 통과 시점과 업로드 시점 사이가
+  // 몇 분에서 몇 시간까지 벌어지기 때문이다.
+  const gate = await clipGate(clipId);
+  if (!gate.allowed) {
+    console.warn(`[worker] distribution.publish ${clipId}: 게이트 미통과 — ${gate.reason}`);
+    await markDistributionFailed(clipId, "youtube", gate.reason).catch(() => {});
+    await appendGateAudit({
+      subjectType: "clip", subjectId: clipId, action: "publish.blocked",
+      fromState: gate.state, toState: "blocked", actor: "worker",
+      basis: `업로드 직전 재확인 · ${gate.reason}`,
+    }).catch(() => {});
+    return;
+  }
 
   // Gate (2/3): stop before reading the clip, the token, or a single byte of video. This is
   // what catches jobs the route never vetted — ones queued while uploads were enabled and

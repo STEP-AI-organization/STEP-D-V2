@@ -20,6 +20,7 @@
  *   4. private 업로드   → 유예 후 공개 전환 (factory.publicize). 되돌리기 = 전환 취소
  */
 import { getEntity, putEntity, listEntities, listMedia, commitAdoption } from "./db-pg.ts";
+import { dispatchPublish } from "./publish-dispatch.ts";
 import { newId } from "./pipeline.ts";
 import { enqueue } from "./queue.ts";
 
@@ -294,15 +295,27 @@ export async function advance(factoryJobId: string): Promise<{ job: FactoryJob; 
         .filter(Boolean);
       if (channelIds.length === 0) return await fail("YouTube 타깃이 없다 (현재 YouTube 만 실송출)");
 
+      // **자동 배포도 게이트를 건너뛰지 않는다** (F6 Invariant · FLOWS.md:142).
+      // 예전엔 여기서 큐에 직접 넣어서, 라우트에 게이트를 붙여도 이 경로에는 안 걸렸다.
+      // 이제 사람이 누르는 배포와 같은 관문(dispatchPublish)을 지난다.
+      const gateBlocked: string[] = [];
       for (const channelId of channelIds) {
-        for (const clipId of job.clipIds) {
-          await enqueue("distribution.publish", {
-            clipId,
-            channelId,
-            // 기본은 private — 유예 뒤 공개로 바꾼다. 잘못 나갔을 때 되돌릴 시간을 번다.
-            privacy: job.policy.publishPublic ? "public" : "private",
-          }, { dedupeKey: `distribution.publish:${clipId}:${channelId}` });
-        }
+        const outcome = await dispatchPublish({
+          clipIds: job.clipIds,
+          channel: "youtube",
+          youtubeChannelId: channelId,
+          // 기본은 private — 유예 뒤 공개로 바꾼다. 잘못 나갔을 때 되돌릴 시간을 번다.
+          privacy: job.policy.publishPublic ? "public" : "private",
+          actor: `factory:${job.id}`,
+          origin: "factory",
+        });
+        for (const s of outcome.skipped) gateBlocked.push(`${s.clipId}: ${s.reason}`);
+      }
+
+      // 게이트에 막힌 게 있으면 조용히 넘어가지 않는다 — 로그에 사유를 남긴다.
+      // (사람이 확정하면 다시 잡히게 하는 보류 큐 재진입은 S4)
+      if (gateBlocked.length > 0) {
+        console.warn(`[factory] ${job.id}: 게이트 미통과 ${gateBlocked.length}건 — ${gateBlocked.join(" · ")}`);
       }
       job = await save({ ...job, state: job.policy.publishPublic ? "done" : "publicizing" });
       if (job.state === "done") return { job, retryInMs: null };

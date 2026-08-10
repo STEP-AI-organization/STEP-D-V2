@@ -158,19 +158,46 @@ describe("관문 우회 불가 (F3 Invariant · FLOWS.md:73)", () => {
   /**
    * ⚠️ 이 테스트가 이 파일의 존재 이유다.
    *
-   * 지금 큐에 넣는 지점이 3곳(index.ts 2곳 · factory.ts 1곳)이라 **의도적으로 todo 다.**
-   * S2 에서 네 경로를 publish-guard 경유로 모은 뒤 `todo` 를 떼고 진짜 assert 로 바꾼다.
-   * 그때까지도 이 테스트는 실행되어 현재 위반 지점을 출력으로 계속 보여준다.
+   * "게이트를 통과하지 않은 미디어는 **어떤 경로로도** 게시되지 않는다"(FLOWS.md:73)는
+   * 순수 함수 테스트로 증명할 수 없다 — 새 경로가 하나 생기면 그만이기 때문이다.
+   * 소스 전체를 스캔해 **큐에 넣는 파일이 하나뿐**임을 강제하는 형태로만 고정된다.
+   *
+   * 2026-08-10 S2 에서 4경로(publish 라우트 · retry 라우트 · factory · 워커)를
+   * publish-dispatch 하나로 모은 뒤 todo 를 뗐다.
    */
-  it("배포 큐 진입점은 한 곳뿐이어야 한다", { todo: "S2 에서 4개 경로를 관문으로 수렴시킨 뒤 해제" }, () => {
+  it("배포 큐 진입점은 한 파일뿐이어야 한다", () => {
     const files = fs.readdirSync(SRC).filter((f) => f.endsWith(".ts") && !f.endsWith(".test.ts"));
     const hits: string[] = [];
     for (const f of files) {
       const src = fs.readFileSync(path.join(SRC, f), "utf-8");
-      src.split("\n").forEach((line, i) => {
+      src.split(/\r?\n/).forEach((line, i) => {
+        // 주석에 적힌 설명은 세지 않는다 — 규칙을 문서화한 줄까지 위반으로 잡히면
+        // 규칙을 설명하지 못하게 된다.
+        if (/^\s*(\*|\/\/)/.test(line)) return;
         if (/enqueue\(\s*["']distribution\.publish["']/.test(line)) hits.push(`${f}:${i + 1}`);
       });
     }
-    assert.deepEqual(hits, ["publish-guard.ts"], `배포 큐 진입점이 여러 곳이다: ${hits.join(" · ")}`);
+    const filesWithHits = [...new Set(hits.map((h) => h.split(":")[0]))];
+    assert.deepEqual(
+      filesWithHits,
+      ["publish-dispatch.ts"],
+      `배포 큐 진입점이 여러 곳이다: ${hits.join(" · ")}`,
+    );
+  });
+
+  /**
+   * 관문을 지나야만 큐에 들어간다는 것과, 관문이 **게이트를 본다**는 것은 다른 명제다.
+   * 후자가 빠지면 관문은 통로일 뿐이다.
+   */
+  it("관문이 게이트 판정을 읽는다", () => {
+    const src = fs.readFileSync(path.join(SRC, "publish-dispatch.ts"), "utf-8");
+    assert.match(src, /evaluateGate|clipGate/, "publish-dispatch 가 게이트를 조회하지 않는다");
+    assert.match(src, /screenForPublish/, "publish-dispatch 가 순수 판정을 쓰지 않는다");
+  });
+
+  /** 업로드 직전 재확인 — 큐에 앉아 있는 동안 이슈가 새로 등록될 수 있다. */
+  it("워커가 업로드 직전에 게이트를 다시 본다", () => {
+    const src = fs.readFileSync(path.join(SRC, "worker.ts"), "utf-8");
+    assert.match(src, /clipGate\(/, "워커에 업로드 직전 게이트 재확인이 없다");
   });
 });

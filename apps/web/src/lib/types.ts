@@ -283,8 +283,14 @@ export interface Connections {
 
 export interface DistributionState {
   channel: DistributionChannel;
-  /** "pending" = upload queued/in-flight on the worker; resolves to published/scheduled/failed. */
-  status: "none" | "pending" | "scheduled" | "published" | "failed";
+  /**
+   * "pending" = 워커 큐에 들어감(업로드 중) → published/scheduled/failed 로 풀린다.
+   *
+   * **"recorded" 는 게시가 아니다** (F4 Invariant · FLOWS.md:92). Meta·TikTok·SMR 은
+   * 파일이 올라가지 않는다 — 우리 쪽 기록만 남고 실제 게시는 담당자가 해당 앱에서 직접 한다.
+   * 그래서 published 와 같은 톤·같은 문구로 그리면 안 된다.
+   */
+  status: "none" | "pending" | "scheduled" | "published" | "recorded" | "failed";
   reserveDate?: string; // KST, honest scheduling (plan §7.5)
   error?: string;
   /** External ref on the channel — YouTube videoId / Meta post id (→ dist.metadata.youtubeVideoId). */

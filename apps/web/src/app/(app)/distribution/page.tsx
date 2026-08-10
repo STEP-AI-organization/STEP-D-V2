@@ -22,6 +22,8 @@ const DIST_TONE: Record<DistributionState["status"], StatusTone> = {
   pending: "progress",
   scheduled: "warn",
   published: "done",
+  // 기록됨은 게시가 아니다 — 초록(done) 을 주지 않는다(F4 Invariant).
+  recorded: "idle",
   failed: "error",
 };
 const DIST_LABEL: Record<DistributionState["status"], string> = {
@@ -29,6 +31,7 @@ const DIST_LABEL: Record<DistributionState["status"], string> = {
   pending: "업로드 중",
   scheduled: "예약됨",
   published: "게시됨",
+  recorded: "기록됨 · 앱에서 직접 게시",
   failed: "실패",
 };
 
