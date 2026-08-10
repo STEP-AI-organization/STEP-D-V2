@@ -7,7 +7,9 @@
  */
 import { serve } from "@hono/node-server";
 import { Hono, type Context } from "hono";
+import { HTTPException } from "hono/http-exception";
 import { cors } from "hono/cors";
+import { runWithTenant, DEFAULT_TENANT_ID, type TenantContext } from "./tenant.ts";
 import { logger } from "hono/logger";
 import fs from "node:fs";
 import path from "node:path";
@@ -36,6 +38,11 @@ import {
   appendGateAudit,
   listGateAudit,
   type GateSubjectType,
+  listChannelRules,
+  getChannelRule,
+  upsertChannelRule,
+  deleteChannelRule,
+  type ChannelRuleRow,
   listMedia,
   getMedia,
   insertMedia,
@@ -162,6 +169,13 @@ import {
 } from "./episode-intake.ts";
 import { dispatchPublish } from "./publish-dispatch.ts";
 import {
+  CHANNEL_ROLES,
+  defaultRuleFor,
+  eligibility,
+  isChannelRole,
+  type ChannelRule,
+} from "./channel-rules.ts";
+import {
   ISSUE_KINDS,
   canResolve,
   evaluateGate,
@@ -204,6 +218,28 @@ console.log(`[stepd-server] storage mode: ${useGcs() ? "GCS" : "local"}`);
 const app = new Hono();
 app.use("*", logger());
 app.use("/api/*", cors({ origin: (o) => o ?? "*", credentials: false }));
+
+// ── 테넌트 컨텍스트 ────────────────────────────────────────────────────────────
+// 모든 요청을 테넌트 스코프 안에서 처리한다. 이 미들웨어가 없으면 db-pg 의 풀 프록시가
+// 스코프를 못 찾아 던지므로(fail-closed), **누락이 조용한 유출이 아니라 500 으로 드러난다.**
+//
+// 지금 테넌트를 정하는 경로는 하나뿐이다 — 웹/사내 호출 = 기본 테넌트.
+// 외부 방송사용 API 키(ak_*) 해석은 과금 4단계에서 여기에 붙는다
+// (docs/plans/active/billing-portone-plan.md §3·§7).
+async function resolveTenant(c: Context): Promise<TenantContext> {
+  const auth = c.req.header("authorization") ?? "";
+  if (/^Bearer\s+stepd_/i.test(auth)) {
+    // 키 테이블(api_keys)이 아직 없다. 있는 척 통과시키면 그 키가 기본 테넌트 데이터를
+    // 전부 보게 되므로, 구현 전까지는 명시적으로 거절한다.
+    throw new HTTPException(501, { message: "external api keys not enabled yet" });
+  }
+  return { scope: DEFAULT_TENANT_ID, via: "web" };
+}
+
+app.use("*", async (c, next) => {
+  const ctx = await resolveTenant(c);
+  return runWithTenant(ctx, () => next());
+});
 
 // ── health ──────────────────────────────────────────────────────────────────
 app.get("/health", async (c) => {
@@ -2910,6 +2946,94 @@ async function gateFor(subjectType: GateSubjectType, subjectId: string): Promise
   ]);
   return evaluateGate({ judged, issues: issues.map(toIssue) });
 }
+
+// ── 채널별 업로드 규칙 (FLOWS F4-2 · README §10) ────────────────────────────────
+
+app.get("/api/channel-rules", async (c) => {
+  return c.json({ rules: await listChannelRules(), roles: CHANNEL_ROLES });
+});
+
+/** 규칙 저장 — 없으면 역할 기본값에서 시작한다. */
+app.put("/api/channel-rules/:platform/:accountId", async (c) => {
+  const platform = c.req.param("platform");
+  const accountId = c.req.param("accountId");
+  const body = await c.req.json().catch(() => ({}) as Record<string, unknown>);
+
+  const role = isChannelRole(body.role) ? body.role : "main";
+  const base = defaultRuleFor(role, platform);
+  const existing = await getChannelRule(platform, accountId);
+
+  const num = (v: unknown, fallback: number | null): number | null => {
+    if (v === null) return null;
+    const n = typeof v === "number" ? v : Number(v);
+    return Number.isFinite(n) && n > 0 ? Math.round(n) : fallback;
+  };
+  const str = (v: unknown, fallback: string): string => (typeof v === "string" ? v.trim() : fallback);
+
+  const row: ChannelRuleRow = {
+    platform,
+    accountId,
+    label: str(body.label, existing?.label ?? accountId),
+    role,
+    maxSec: "maxSec" in body ? num(body.maxSec, existing?.maxSec ?? base.maxSec) : (existing?.maxSec ?? base.maxSec),
+    aspect: ["9:16", "16:9", "any"].includes(String(body.aspect)) ? String(body.aspect) : (existing?.aspect ?? base.aspect),
+    titlePrefix: str(body.titlePrefix, existing?.titlePrefix ?? base.titlePrefix),
+    hashtagTemplate: str(body.hashtagTemplate, existing?.hashtagTemplate ?? base.hashtagTemplate),
+    tonePreset: str(body.tonePreset, existing?.tonePreset ?? base.tonePreset),
+    privacy: ["public", "unlisted", "private"].includes(String(body.privacy))
+      ? String(body.privacy)
+      : (existing?.privacy ?? base.privacy),
+    scheduleWindow: str(body.scheduleWindow, existing?.scheduleWindow ?? base.scheduleWindow),
+    enabled: typeof body.enabled === "boolean" ? body.enabled : (existing?.enabled ?? true),
+  };
+  await upsertChannelRule(row);
+  return c.json({ rule: row });
+});
+
+app.delete("/api/channel-rules/:platform/:accountId", async (c) => {
+  const ok = await deleteChannelRule(c.req.param("platform"), c.req.param("accountId"));
+  return c.json({ ok });
+});
+
+/**
+ * 배포 모달용 — 이 미디어들을 각 채널에 보낼 수 있는지 (F4-2).
+ *
+ * 판정을 서버가 하는 이유: 화면이 자기 나름대로 계산하면 규칙이 두 벌이 되고,
+ * 한쪽만 고치는 순간 "고를 수 있는데 실패하는" 채널이 생긴다.
+ */
+app.post("/api/channel-rules/eligibility", async (c) => {
+  const body = await c.req.json().catch(() => ({}) as Record<string, unknown>);
+  const rawIds: unknown[] = Array.isArray(body.clipIds) ? body.clipIds : [];
+  const clipIds = rawIds.filter((x): x is string => typeof x === "string");
+
+  const rules = await listChannelRules();
+  const medias: { id: string; durationSec: number; aspectRatio?: string | null; rendered?: boolean }[] = [];
+  for (const id of clipIds) {
+    const clip = await getEntity<any>("clip", id);
+    if (!clip) continue;
+    medias.push({
+      id, durationSec: Number(clip.durationSec ?? 0),
+      aspectRatio: clip.aspectRatio, rendered: clip.rendered !== false,
+    });
+  }
+
+  const out: Record<string, { ok: boolean; reason: string; code: string; blockedClipIds: string[] }> = {};
+  for (const r of rules) {
+    const rule = r as unknown as ChannelRule;
+    const blocked = medias.map((m) => ({ m, why: eligibility(rule, m) })).filter((x) => !x.why.ok);
+    const key = `${r.platform}:${r.accountId}`;
+    out[key] = blocked.length === 0
+      ? { ok: true, reason: "", code: "", blockedClipIds: [] }
+      : {
+          ok: false,
+          // 여러 건이 막히면 첫 사유를 대표로 쓰고 건수를 붙인다.
+          reason: blocked.length === 1 ? blocked[0].why.reason : `${blocked[0].why.reason} (외 ${blocked.length - 1}건)`,
+          code: blocked[0].why.code,
+          blockedClipIds: blocked.map((b) => b.m.id),
+        };
+  }
+  return c.json({ rules, eligibility: out });
+});
 
 app.get("/api/gate/:subjectType/:subjectId", async (c) => {
   const subjectType = readSubjectType(c.req.param("subjectType"));

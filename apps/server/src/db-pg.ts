@@ -7,6 +7,7 @@
 import { randomUUID } from "node:crypto";
 import pg from "pg";
 import { seed } from "./seed.ts";
+import { ALL_TENANTS, DEFAULT_TENANT_ID, currentScope, runAsSystem, runWithTenant } from "./tenant.ts";
 
 const { Pool } = pg;
 
@@ -30,22 +31,111 @@ export interface MediaRow {
   createdAt: number;
 }
 
+/**
+ * 두 개의 풀 핸들이 있다.
+ *   rawPool   — 테넌트 스코프가 **붙지 않는** 진짜 풀. 스키마 부트스트랩·테넌트 해석 등
+ *               컨텍스트가 정해지기 전에 돌아야 하는 코드만 쓴다.
+ *   pool      — 위를 감싼 프록시. 쿼리마다 커넥션에 `app.tenant_id` 를 심는다.
+ *               RLS 정책(migrations/0014)이 그 값으로 행을 걸러낸다.
+ *
+ * 이 파일의 나머지 코드와 index.ts 는 전부 `pool` 을 쓴다 — 즉 SQL 을 한 줄도 안 고쳐도
+ * 격리가 걸린다. 반대로 말하면 **rawPool 을 쓰는 순간 격리가 사라지므로** 새로 쓰지 말 것.
+ */
+let rawPool: pg.Pool;
 let pool: pg.Pool;
 
 export function getPool(): pg.Pool {
   return pool;
 }
 
+/** 스코프 없는 풀. 테넌트 해석·마이그레이션 전용. 일반 조회에 쓰면 격리가 깨진다. */
+export function getRawPool(): pg.Pool {
+  return rawPool;
+}
+
+const SET_SCOPE = "SELECT set_config('app.tenant_id', $1, false)";
+
+/** 현재 컨텍스트의 스코프를 RLS 가 읽는 문자열로. 컨텍스트가 없으면 currentScope()가 던진다. */
+function scopeValue(): string {
+  const s = currentScope();
+  return s === ALL_TENANTS ? "*" : s;
+}
+
+/**
+ * 커넥션을 빌릴 때마다 스코프를 심는다. `SET LOCAL` 이 아니라 세션 단위 set_config 인 이유:
+ * 트랜잭션을 새로 열지 않아도 되어 라운드트립이 하나 줄고, **모든 체크아웃이 예외 없이
+ * 값을 덮어쓰므로** 이전 요청의 값이 남아 보일 수 있는 창이 없다.
+ */
+function makeScopedPool(target: pg.Pool): pg.Pool {
+  return new Proxy(target, {
+    get(t, prop, recv) {
+      if (prop === "query") {
+        return async (...args: unknown[]) => {
+          const scope = scopeValue();
+          const client = await t.connect();
+          try {
+            await client.query(SET_SCOPE, [scope]);
+            return await (client.query as (...a: unknown[]) => Promise<unknown>)(...args);
+          } finally {
+            client.release();
+          }
+        };
+      }
+      if (prop === "connect") {
+        return async () => {
+          const scope = scopeValue();
+          const client = await t.connect();
+          try {
+            await client.query(SET_SCOPE, [scope]);
+          } catch (e) {
+            client.release();
+            throw e;
+          }
+          return client;
+        };
+      }
+      const v = Reflect.get(t, prop, recv);
+      return typeof v === "function" ? v.bind(t) : v;
+    },
+  });
+}
+
+/**
+ * RLS 가 실제로 걸리는지 확인한다. BYPASSRLS 속성이 있는 역할(로컬 슈퍼유저 등)로 접속하면
+ * 정책이 **조용히 무시된다** — 격리가 없는 채로 멀쩡히 도는 게 최악이라 기동 시 잡는다.
+ * 로컬(localhost DSN)은 경고만, 그 외에는 기동을 거부한다. 의도적으로 넘기려면 ALLOW_RLS_BYPASS=1.
+ */
+async function assertRlsEnforced(): Promise<void> {
+  const { rows } = await rawPool.query(
+    "SELECT rolbypassrls, rolsuper FROM pg_roles WHERE rolname = current_user",
+  );
+  const bypass = rows[0]?.rolbypassrls === true || rows[0]?.rolsuper === true;
+  if (!bypass) return;
+
+  const dsn = process.env.DATABASE_URL ?? "";
+  const isLocal = /@(localhost|127\.0\.0\.1)[:/]/.test(dsn) || dsn === "";
+  const msg =
+    "DB 접속 역할에 BYPASSRLS/SUPERUSER 가 있어 테넌트 격리(RLS)가 적용되지 않는다. " +
+    "격리 없는 상태로 도는 것이 가장 위험하므로 기동을 멈춘다. " +
+    "격리 전용 역할로 접속하거나, 의도한 상황이면 ALLOW_RLS_BYPASS=1 을 설정할 것.";
+  if (process.env.ALLOW_RLS_BYPASS === "1" || isLocal) {
+    console.warn(`[tenant] ⚠️  ${msg}`);
+    return;
+  }
+  throw new Error(msg);
+}
+
 export async function initDb(): Promise<void> {
-  pool = new Pool({
+  rawPool = new Pool({
     connectionString: process.env.DATABASE_URL,
     max: 10,
     idleTimeoutMillis: 30_000,
     connectionTimeoutMillis: 10_000,
   });
+  pool = makeScopedPool(rawPool);
 
   // Test connection
-  const client = await pool.connect();
+  const client = await rawPool.connect();
   try {
     await client.query("SELECT 1");
   } finally {
@@ -53,6 +143,7 @@ export async function initDb(): Promise<void> {
   }
 
   await migrate();
+  await assertRlsEnforced();
   await seedIfEmpty();
 }
 
@@ -62,6 +153,8 @@ export async function initDb(): Promise<void> {
 // This block stays only as a safety net; both are IF NOT EXISTS and coexist.
 // See docs/ops/migrations.md.
 async function migrate(): Promise<void> {
+  // 스키마 부트스트랩은 테넌트 컨텍스트 밖에서 돈다 — 스코프 없는 풀을 쓴다.
+  const pool = rawPool;
   await pool.query(`
     CREATE TABLE IF NOT EXISTS entities (
       kind TEXT NOT NULL,
@@ -265,7 +358,16 @@ async function migrate(): Promise<void> {
   `);
 }
 
-async function seedIfEmpty(): Promise<void> {
+/**
+ * 기동 시점이라 컨텍스트가 없다. 시드는 **기본 테넌트 것**이므로 그 스코프를 명시해서 돈다
+ * (스코프 없이 INSERT 하면 tenant_id DEFAULT 가 NULL 이 되어 NOT NULL 위반으로 죽는다).
+ * seed.ts 는 의도적으로 전부 빈 배열이라 실제로 들어가는 건 kv 한 줄뿐이다.
+ */
+function seedIfEmpty(): Promise<void> {
+  return runWithTenant({ scope: DEFAULT_TENANT_ID, via: "system" }, seedIfEmptyInner);
+}
+
+async function seedIfEmptyInner(): Promise<void> {
   const { rows } = await pool.query("SELECT COUNT(*)::int AS n FROM entities");
   if (rows[0].n > 0) return;
 
@@ -500,6 +602,20 @@ export async function markChannelRun(
 export async function listYouTubeChannels(): Promise<YouTubeChannel[]> {
   const { rows } = await pool.query(`SELECT id, channelid AS "channelId", channelname AS "channelName", channelurl AS "channelUrl", thumbnail, subscribers, refreshtoken AS "refreshToken", accesstoken AS "accessToken", expiresat AS "expiresAt", scope, email, status, connectedat AS "connectedAt", lastsyncedat AS "lastSyncedAt", lastanalyzedat AS "lastAnalyzedAt", lasterror AS "lastError" FROM youtube_channels ORDER BY connectedAt DESC`);
   return rows as unknown as YouTubeChannel[];
+}
+
+/**
+ * 스케줄러 전용 — **전 테넌트**의 살아 있는 채널을 (채널, 소유 테넌트) 쌍으로 훑는다.
+ * 스윕은 테넌트를 가리지 않는 게 목적이지만, 그 결과로 만드는 잡은 **각 채널 소유자의 것**이라
+ * tenantId 를 같이 돌려줘야 한다. 이걸 안 돌려주면 잡이 무소속으로 만들어져 FK 에서 죽는다.
+ */
+export function listChannelsForSweep(): Promise<{ channelId: string; tenantId: string; status: string }[]> {
+  return runAsSystem(async () => {
+    const { rows } = await pool.query(
+      `SELECT channelid AS "channelId", tenant_id AS "tenantId", status FROM youtube_channels`,
+    );
+    return rows as { channelId: string; tenantId: string; status: string }[];
+  });
 }
 
 export async function getYouTubeChannelByChannelId(channelId: string): Promise<YouTubeChannel | undefined> {
@@ -2103,6 +2219,64 @@ export async function listGateAudit(
     [subjectType, subjectId],
   );
   return rows;
+}
+
+// ── 채널별 업로드 규칙 (migrations/0015 · FLOWS F4-2) ───────────────────────────
+
+export interface ChannelRuleRow {
+  platform: string;
+  accountId: string;
+  label: string;
+  role: string;
+  maxSec: number | null;
+  aspect: string;
+  titlePrefix: string;
+  hashtagTemplate: string;
+  tonePreset: string;
+  privacy: string;
+  scheduleWindow: string;
+  enabled: boolean;
+}
+
+const RULE_COLS = `platform, account_id AS "accountId", label, role, max_sec AS "maxSec",
+  aspect, title_prefix AS "titlePrefix", hashtag_template AS "hashtagTemplate",
+  tone_preset AS "tonePreset", privacy, schedule_window AS "scheduleWindow", enabled`;
+
+export async function listChannelRules(): Promise<ChannelRuleRow[]> {
+  const { rows } = await pool.query<ChannelRuleRow>(
+    `SELECT ${RULE_COLS} FROM channel_rule ORDER BY platform, label, account_id`,
+  );
+  return rows;
+}
+
+export async function getChannelRule(platform: string, accountId: string): Promise<ChannelRuleRow | null> {
+  const { rows } = await pool.query<ChannelRuleRow>(
+    `SELECT ${RULE_COLS} FROM channel_rule WHERE platform = $1 AND account_id = $2`,
+    [platform, accountId],
+  );
+  return rows[0] ?? null;
+}
+
+export async function upsertChannelRule(r: ChannelRuleRow): Promise<void> {
+  await pool.query(
+    `INSERT INTO channel_rule
+       (platform, account_id, label, role, max_sec, aspect, title_prefix, hashtag_template,
+        tone_preset, privacy, schedule_window, enabled, updated_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12, now())
+     ON CONFLICT (platform, account_id) DO UPDATE SET
+       label = $3, role = $4, max_sec = $5, aspect = $6, title_prefix = $7,
+       hashtag_template = $8, tone_preset = $9, privacy = $10, schedule_window = $11,
+       enabled = $12, updated_at = now()`,
+    [
+      r.platform, r.accountId, r.label, r.role, r.maxSec, r.aspect, r.titlePrefix,
+      r.hashtagTemplate, r.tonePreset, r.privacy, r.scheduleWindow, r.enabled,
+    ],
+  );
+}
+
+export async function deleteChannelRule(platform: string, accountId: string): Promise<boolean> {
+  const r = await pool.query(`DELETE FROM channel_rule WHERE platform = $1 AND account_id = $2`, [platform, accountId]);
+  return (r.rowCount ?? 0) > 0;
 }
 
 // ── cleanup ────────────────────────────────────────────────────────────────────

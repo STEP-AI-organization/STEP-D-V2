@@ -680,6 +680,73 @@ export async function adoptRec(recId: string): Promise<{ clipId: string; clip?: 
   return json(await fetch(`${API_BASE}/recommendations/${recId}/adopt`, { method: "POST" }));
 }
 
+// ── 채널별 업로드 규칙 (FLOWS F4-2 · 서버 migrations/0015) ──────────────────────
+//
+// 판정은 서버가 한다. 화면이 자기 나름대로 계산하면 규칙이 두 벌이 되고, 한쪽만 고치는
+// 순간 "고를 수 있는데 실패하는" 채널이 생긴다.
+
+export type ChannelRole = "main" | "sub" | "shorts_only" | "affiliate";
+
+export interface ChannelRule {
+  platform: string;
+  accountId: string;
+  label: string;
+  role: ChannelRole;
+  maxSec: number | null;
+  aspect: "9:16" | "16:9" | "any";
+  titlePrefix: string;
+  hashtagTemplate: string;
+  tonePreset: string;
+  privacy: "public" | "unlisted" | "private";
+  scheduleWindow: string;
+  enabled: boolean;
+}
+
+export interface ChannelEligibility {
+  ok: boolean;
+  reason: string;
+  code: string;
+  blockedClipIds: string[];
+}
+
+export async function fetchChannelRules(): Promise<ChannelRule[]> {
+  const r = await json<{ rules: ChannelRule[] }>(
+    await fetch(`${API_BASE}/channel-rules`, { cache: "no-store" }),
+  );
+  return r.rules;
+}
+
+export async function saveChannelRule(rule: ChannelRule): Promise<ChannelRule> {
+  const r = await json<{ rule: ChannelRule }>(
+    await fetch(`${API_BASE}/channel-rules/${rule.platform}/${encodeURIComponent(rule.accountId)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(rule),
+    }),
+  );
+  return r.rule;
+}
+
+export async function deleteChannelRule(platform: string, accountId: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/channel-rules/${platform}/${encodeURIComponent(accountId)}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+}
+
+/** 배포 모달용 — 이 미디어들을 각 채널에 보낼 수 있는지. 키는 `platform:accountId`. */
+export async function fetchChannelEligibility(
+  clipIds: string[],
+): Promise<{ rules: ChannelRule[]; eligibility: Record<string, ChannelEligibility> }> {
+  return json(
+    await fetch(`${API_BASE}/channel-rules/eligibility`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ clipIds }),
+    }),
+  );
+}
+
 // ── 게이트: 권리·심의 (FLOWS F3 · 서버 migrations/0012) ─────────────────────────
 //
 // 게이트 상태는 저장돼 있지 않다 — 서버가 매번 계산해서 준다. 화면은 받은 값을 그리기만
