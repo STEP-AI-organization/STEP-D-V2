@@ -9,20 +9,44 @@ import { useAppData } from "@/lib/data/store";
 import { useToast } from "@/components/ui/toast";
 
 /** Header action: open the real-video upload dialog (needs the backend). */
-export function UploadVideoButton({ programId, variant = "outline" }: { programId?: string; variant?: "outline" | "default" } = {}) {
+export function UploadVideoButton({
+  programId,
+  variant = "outline",
+  className,
+  label,
+}: {
+  programId?: string;
+  variant?: "outline" | "default";
+  /** sd-* 재설계 화면용 — 넘기면 프리미티브 Button 대신 이 클래스로 그린다. */
+  className?: string;
+  label?: string;
+} = {}) {
   const { serverConnected } = useAppData();
   const [open, setOpen] = useState(false);
+  const title = serverConnected ? "실제 영상 업로드" : "백엔드 서버가 필요합니다 (pnpm dev:server)";
   return (
     <>
-      <Button
-        size="sm"
-        variant={variant}
-        onClick={() => setOpen(true)}
-        disabled={!serverConnected}
-        title={serverConnected ? "실제 영상 업로드" : "백엔드 서버가 필요합니다 (pnpm dev:server)"}
-      >
-        <Upload /> 영상 업로드
-      </Button>
+      {className ? (
+        <button
+          type="button"
+          className={className}
+          onClick={() => setOpen(true)}
+          disabled={!serverConnected}
+          title={title}
+        >
+          {label ?? "영상 업로드"}
+        </button>
+      ) : (
+        <Button
+          size="sm"
+          variant={variant}
+          onClick={() => setOpen(true)}
+          disabled={!serverConnected}
+          title={title}
+        >
+          <Upload /> {label ?? "영상 업로드"}
+        </Button>
+      )}
       {open && <UploadDialog onClose={() => setOpen(false)} defaultProgramId={programId} />}
     </>
   );

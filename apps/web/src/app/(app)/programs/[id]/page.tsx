@@ -1,1181 +1,489 @@
 "use client";
 
+/**
+ * U3 · 프로그램 홈 (README §3 · FLOWS F10).
+ *
+ * 상태마다 다른 화면이다 — 방영 중은 진행 중인 회차로 들어가는 곳,
+ * 종영은 아카이브를 뒤지는 곳, 편성 예정은 아직 아무것도 없다고 말해 주는 곳.
+ * 셋을 한 화면에 뭉뚱그리면 "왜 할 일이 없지"에서 막힌다.
+ *
+ * 프로그램 정보 편집(포스터·출연자 사진·SMR·썸네일 스타일)은 /programs/:id/settings 로
+ * 옮겼다. 홈은 읽는 화면이다.
+ */
 import Link from "next/link";
-import { useParams, useRouter } from "next/navigation";
-import { useEffect, useMemo, useState } from "react";
-import {
-  ArrowLeft,
-  Camera,
-  Loader2,
-  Plus,
-  Save,
-  Sparkles,
-  Trash2,
-  UserRound,
-  X,
-} from "lucide-react";
-import {
-  autofillProgram, syncProgramFromAnalysis, type AutofillProgramResult,
-  fetchThumbnailStyle, trainThumbnailStyle, fetchCastPhotos, uploadCastPhoto,
-  deleteCastPhotos, type ThumbnailStyleProfile, type CastPhotoEntry,
-} from "@/lib/data/api";
-import { cn } from "@/lib/utils";
-import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
-import { StatusBadge } from "@/components/ui/status-badge";
-import { useToast } from "@/components/ui/toast";
+import { useParams } from "next/navigation";
+import { useMemo } from "react";
+
+import { UploadVideoButton } from "@/components/upload-video-dialog";
+import { PIPELINE_STAGE_LABELS } from "@/lib/constants";
 import { useAppData } from "@/lib/data/store";
-import { TARGET_AGES, targetAgeLabel, type TargetAge } from "@/lib/constants";
-import { WEEKDAYS } from "@/lib/reserve-date";
-import { programSmrChecks } from "@/lib/publish/requirements";
-import type { Program } from "@/lib/types";
+import {
+  PROGRAM_STATUS_LABEL,
+  normalizeProgramStatus,
+  rightsWindowOf,
+} from "@/lib/programs";
+import type { Clip, Episode, Program, ProgramStatus } from "@/lib/types";
+import { cn } from "@/lib/utils";
 
-const SECTIONS = ["드라마/영화", "예능", "뮤직", "시사", "교양", "라이프", "스포츠", "게임", "어린이", "뉴스", "애니"];
-const SMR_CATEGORIES = ["01", "02", "03"];
-const CODE_RE = /^[a-z0-9]+$/;
+const STATUS_TAG: Record<ProgramStatus, string> = {
+  airing: "sd-tag sd-tag--airing",
+  ended: "sd-tag sd-tag--ended",
+  upcoming: "sd-tag sd-tag--upcoming",
+};
 
-/** 이미지 파일을 data URL로. 사이즈 상한 초과 시 alert 후 reject. */
-async function fileToDataUrl(file: File, maxBytes: number): Promise<string | null> {
-  if (file.size > maxBytes) {
-    alert(`파일이 너무 큽니다 (${Math.round(file.size / 1024)} KB > ${Math.round(maxBytes / 1024)} KB).`);
-    return null;
-  }
-  return new Promise((resolve, reject) => {
-    const r = new FileReader();
-    r.onerror = () => reject(r.error ?? new Error("read failed"));
-    r.onload = () => resolve(String(r.result));
-    r.readAsDataURL(file);
-  });
-}
+const TRACK_LABEL: Record<string, string> = { variety: "예능 트랙", drama: "드라마 트랙" };
 
-const inputCls =
-  "h-9 w-full rounded-md border border-border bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring";
-const textareaCls =
-  "w-full rounded-md border border-border bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring";
-
-export default function ProgramDetailPage() {
+export default function ProgramHomePage() {
   const params = useParams<{ id: string }>();
-  const router = useRouter();
-  const { programs, episodes, updateProgram, deleteProgram, loading } = useAppData();
-  const { toast } = useToast();
-  const program = programs.find((p) => p.id === params.id);
-  const programEpisodes = useMemo(
-    () => (program ? episodes.filter((e) => e.programId === program.id) : []),
-    [program, episodes],
+  const id = params?.id ?? "";
+  const { programs, episodes, clips, loading } = useAppData();
+
+  const program = programs.find((p) => p.id === id);
+
+  const eps = useMemo(
+    () =>
+      episodes
+        .filter((e) => e.programId === id)
+        .slice()
+        .sort((a, b) => b.episodeNumber - a.episodeNumber),
+    [episodes, id],
+  );
+  const epIds = useMemo(() => new Set(eps.map((e) => e.id)), [eps]);
+  const programClips = useMemo(
+    () => clips.filter((c) => epIds.has(c.episodeId)),
+    [clips, epIds],
   );
 
-  if (loading && !program) {
-    return <div className="p-8 text-sm text-muted-foreground">불러오는 중…</div>;
-  }
   if (!program) {
     return (
-      <div className="p-8">
-        <div className="text-sm text-muted-foreground">프로그램을 찾을 수 없어요.</div>
-        <Link href="/programs" className="mt-2 inline-flex items-center gap-1 text-sm text-primary hover:underline">
-          <ArrowLeft className="size-4" /> 프로그램 목록
-        </Link>
+      <div className="sd-card mx-auto max-w-[640px] p-6">
+        <h2 className="sd-serif mb-2 text-[16px] font-semibold" style={{ color: "var(--sd-fg)" }}>
+          {loading ? "프로그램을 불러오는 중입니다…" : "프로그램을 찾을 수 없습니다"}
+        </h2>
+        {!loading && (
+          <p className="text-[12px]" style={{ color: "var(--sd-mut)" }}>
+            삭제됐거나 주소가 잘못됐습니다.{" "}
+            <Link href="/programs" className="underline" style={{ color: "var(--sd-accent)" }}>
+              프로그램 목록으로
+            </Link>
+          </p>
+        )}
       </div>
     );
   }
-  return (
-    <ProgramDetailInner
-      program={program}
-      episodeCount={programEpisodes.length}
-      onSave={updateProgram}
-      onDelete={deleteProgram}
-      onDone={() => router.push("/programs")}
-      onOpenToast={toast}
-    />
-  );
-}
 
-type ToastFn = ReturnType<typeof useToast>["toast"];
-
-function ProgramDetailInner({
-  program,
-  episodeCount,
-  onSave,
-  onDelete,
-  onDone,
-  onOpenToast,
-}: {
-  program: Program;
-  episodeCount: number;
-  onSave: ReturnType<typeof useAppData>["updateProgram"];
-  onDelete: ReturnType<typeof useAppData>["deleteProgram"];
-  onDone: () => void;
-  onOpenToast: ToastFn;
-}) {
-  // ── 편집 상태 (로컬) — 저장 버튼 눌러야 서버 반영. 새로고침 시 서버 값으로 리셋. ──
-  const [title, setTitle] = useState(program.title);
-  const [section, setSection] = useState(program.section || SECTIONS[0]);
-  const [targetAge, setTargetAge] = useState<TargetAge>(program.targetAge);
-  const [synopsis, setSynopsis] = useState(program.synopsis ?? "");
-  const [broadcaster, setBroadcaster] = useState(program.broadcaster ?? "");
-  const [schedule, setSchedule] = useState(program.schedule ?? "");
-  const [firstAiredDate, setFirstAiredDate] = useState(program.firstAiredDate ?? "");
-  const [currentInfo, setCurrentInfo] = useState(program.currentInfo ?? "");
-  const [director, setDirector] = useState(program.director ?? "");
-  const [spinoff, setSpinoff] = useState(program.spinoff ?? "");
-  const [awards, setAwards] = useState(program.awards ?? "");
-  const [moods, setMoods] = useState<string[]>(program.moods ?? []);
-  const [newMood, setNewMood] = useState("");
-  const [cast, setCast] = useState<string[]>(program.cast ?? []);
-  const [newName, setNewName] = useState("");
-  const [castPhotos, setCastPhotos] = useState<Record<string, string>>(program.castPhotos ?? {});
-  const [posterImageDataUrl, setPosterImageDataUrl] = useState(program.posterImageDataUrl ?? "");
-  const [programCode, setProgramCode] = useState(program.smr?.programCode ?? "");
-  const [category, setCategory] = useState(program.smr?.category ?? "");
-  const [weekdays, setWeekdays] = useState<number[]>(program.smr?.weekdays ?? []);
-  const [busy, setBusy] = useState(false);
-  // AI 자동 채움 결과 (마지막 실행 · 근거 URL 노출용 · 페이지 새로고침 시 사라짐)
-  const [autofilling, setAutofilling] = useState(false);
-  const [lastAutofill, setLastAutofill] = useState<AutofillProgramResult | null>(null);
-  const [autofillApplied, setAutofillApplied] = useState<string[]>([]);
-  // 얼굴 분석 → program 수동 sync
-  const [syncing, setSyncing] = useState(false);
-  const [deleting, setDeleting] = useState(false);
-
-  async function runDelete() {
-    const msg =
-      episodeCount > 0
-        ? `프로그램 "${program.title}"과 회차 ${episodeCount}개(그리고 미디어·추천·클립·GCS 파일 전부)를 완전히 삭제합니다. 되돌릴 수 없습니다.`
-        : `프로그램 "${program.title}"을 완전히 삭제합니다. 되돌릴 수 없습니다.`;
-    if (!confirm(msg)) return;
-    setDeleting(true);
-    try {
-      await onDelete(program.id);
-      onOpenToast({ title: "삭제됨", description: program.title, tone: "done" });
-      onDone();
-    } catch (err) {
-      onOpenToast({
-        title: "삭제 실패",
-        description: err instanceof Error ? err.message : String(err),
-        tone: "error",
-      });
-      setDeleting(false);
-    }
-  }
-
-  // 다른 세션·서버가 program을 업데이트하면 그대로 반영 (사용자가 편집 중이면 조심 — 초기값만 세팅).
-  const hydratedRef = useHydratedRef(program.id);
-  useEffect(() => {
-    if (hydratedRef.current) return;
-    hydratedRef.current = true;
-    setTitle(program.title);
-    setSection(program.section || SECTIONS[0]);
-    setTargetAge(program.targetAge);
-    setSynopsis(program.synopsis ?? "");
-    setBroadcaster(program.broadcaster ?? "");
-    setSchedule(program.schedule ?? "");
-    setFirstAiredDate(program.firstAiredDate ?? "");
-    setCurrentInfo(program.currentInfo ?? "");
-    setDirector(program.director ?? "");
-    setSpinoff(program.spinoff ?? "");
-    setAwards(program.awards ?? "");
-    setMoods(program.moods ?? []);
-    setCast(program.cast ?? []);
-    setCastPhotos(program.castPhotos ?? {});
-    setPosterImageDataUrl(program.posterImageDataUrl ?? "");
-    setProgramCode(program.smr?.programCode ?? "");
-    setCategory(program.smr?.category ?? "");
-    setWeekdays(program.smr?.weekdays ?? []);
-  }, [
-    program.id, program.title, program.section, program.targetAge,
-    program.synopsis, program.broadcaster, program.schedule, program.firstAiredDate,
-    program.currentInfo, program.director, program.spinoff, program.awards,
-    program.moods, program.cast, program.castPhotos, program.posterImageDataUrl,
-    program.smr?.programCode, program.smr?.category, program.smr?.weekdays,
-    hydratedRef,
-  ]);
-
-  const codeError = programCode.length > 0 && !CODE_RE.test(programCode);
-  const titleError = !title.trim();
-  const canSave = !titleError && !codeError && !busy;
-
-  function toggleDay(i: number) {
-    setWeekdays((prev) => (prev.includes(i) ? prev.filter((d) => d !== i) : [...prev, i].sort((a, b) => a - b)));
-  }
-  function addMood() {
-    const v = newMood.trim();
-    if (!v || moods.includes(v)) return;
-    setMoods([...moods, v]);
-    setNewMood("");
-  }
-  function addCast() {
-    const v = newName.trim();
-    if (!v) return;
-    if (cast.includes(v)) {
-      onOpenToast({ title: "이미 등록됨", description: `${v} 은(는) 이미 명단에 있음`, tone: "warn" });
-      return;
-    }
-    setCast([...cast, v]);
-    setNewName("");
-    setTimeout(() => document.getElementById("new-cast-input")?.focus(), 0);
-  }
-  function removeCast(name: string) {
-    setCast(cast.filter((c) => c !== name));
-    // 해당 인물의 사진 매핑도 함께 제거
-    if (castPhotos[name]) {
-      const { [name]: _drop, ...rest } = castPhotos;
-      setCastPhotos(rest);
-    }
-  }
-  async function setCastPhoto(name: string, file: File) {
-    const dataUrl = await fileToDataUrl(file, 256 * 1024);
-    if (!dataUrl) return;
-    setCastPhotos({ ...castPhotos, [name]: dataUrl });
-  }
-  function removeCastPhoto(name: string) {
-    const { [name]: _drop, ...rest } = castPhotos;
-    setCastPhotos(rest);
-  }
-  async function setPoster(file: File) {
-    const dataUrl = await fileToDataUrl(file, 1024 * 1024);
-    if (!dataUrl) return;
-    setPosterImageDataUrl(dataUrl);
-  }
-
-  async function runSyncFromAnalysis() {
-    setSyncing(true);
-    try {
-      const r = await syncProgramFromAnalysis(program.id);
-      if (!r.workDirExists) {
-        onOpenToast({ title: "분석 데이터 없음",
-          description: "이 프로그램의 최근 분석 작업 폴더가 삭제됐거나 아직 없음. 회차 분석부터 실행하세요.",
-          tone: "warn" });
-        return;
-      }
-      const added = r.addedNames.length + r.addedPhotos.length;
-      onOpenToast({
-        title: added ? `동기화 완료 · ${added}건 반영` : "동기화 완료 · 새로 반영할 것 없음",
-        description: [
-          r.addedNames.length ? `이름 +${r.addedNames.length}: ${r.addedNames.join(",")}` : "",
-          r.addedPhotos.length ? `사진 +${r.addedPhotos.length}: ${r.addedPhotos.join(",")}` : "",
-        ].filter(Boolean).join(" · ") || "이미 최신 상태",
-        tone: added ? "done" : "warn",
-      });
-      // 페이지 재로드로 최신 program 반영 (또는 useAppData refresh)
-      if (added) setTimeout(() => window.location.reload(), 800);
-    } catch (err) {
-      onOpenToast({ title: "동기화 실패",
-        description: err instanceof Error ? err.message : String(err), tone: "error" });
-    } finally {
-      setSyncing(false);
-    }
-  }
-
-  async function runAutofill() {
-    if (!title.trim()) {
-      onOpenToast({ title: "제목이 필요합니다", description: "먼저 프로그램 제목을 입력하세요", tone: "warn" });
-      return;
-    }
-    setAutofilling(true);
-    setLastAutofill(null);
-    setAutofillApplied([]);
-    try {
-      const result = await autofillProgram(program.id);
-      setLastAutofill(result);
-      // 질문 있으면 Dialog 열어 사용자 답 받고, 없으면 바로 draft 병합.
-      if (result.questions && result.questions.length > 0) {
-        // Dialog는 별도 컴포넌트에서 처리 (state로만 열림)
-      } else {
-        applyAutofill(result.draft, {});
-      }
-    } catch (err) {
-      onOpenToast({
-        title: "자동 채움 실패",
-        description: err instanceof Error ? err.message : String(err),
-        tone: "error",
-      });
-    } finally {
-      setAutofilling(false);
-    }
-  }
-
-  /** draft(팩트체크 통과) + answers(사용자가 dropped 필드에 준 답) 병합해서 state에 적용.
-   *  빈 필드만 채움 — 사용자가 이미 편집한 값은 그대로. */
-  function applyAutofill(
-    draft: AutofillProgramResult["draft"],
-    answers: Record<string, string>,
-  ) {
-    const applied: string[] = [];
-    const val = (field: string): string => {
-      const a = (answers[field] || "").trim();
-      if (a) return a;
-      const d = draft[field as keyof typeof draft];
-      return typeof d === "string" ? d.trim() : "";
-    };
-    const draftSection = draft.section;
-    if (draftSection && !program.section && typeof draftSection === "string") {
-      setSection(draftSection); applied.push("장르");
-    }
-    if (val("synopsis") && !synopsis.trim()) { setSynopsis(val("synopsis")); applied.push("시놉시스"); }
-    if (val("broadcaster") && !broadcaster.trim()) { setBroadcaster(val("broadcaster")); applied.push("방송채널"); }
-    if (val("schedule") && !schedule.trim()) { setSchedule(val("schedule")); applied.push("편성"); }
-    if (val("firstAiredDate") && !firstAiredDate.trim()) { setFirstAiredDate(val("firstAiredDate")); applied.push("첫 방송"); }
-    if (val("currentInfo") && !currentInfo.trim()) { setCurrentInfo(val("currentInfo")); applied.push("현재 진행"); }
-    if (val("director") && !director.trim()) { setDirector(val("director")); applied.push("연출"); }
-    if (val("spinoff") && !spinoff.trim()) { setSpinoff(val("spinoff")); applied.push("스핀오프"); }
-    if (val("awards") && !awards.trim()) { setAwards(val("awards")); applied.push("수상"); }
-    // moods는 배열 · answers[moods]는 쉼표 구분 문자열로 받음
-    const moodsAns = (answers.moods || "").split(",").map((s) => s.trim()).filter(Boolean);
-    const moodsFromDraft = Array.isArray(draft.moods) ? draft.moods : [];
-    const moodsFinal = moodsAns.length > 0 ? moodsAns : moodsFromDraft;
-    if (moodsFinal.length > 0 && moods.length === 0) { setMoods(moodsFinal); applied.push("분위기 태그"); }
-
-    setAutofillApplied(applied);
-    onOpenToast({
-      title: applied.length ? `${applied.length}개 필드 채움` : "채울 필드 없음",
-      description: applied.length ? applied.join(" · ") + " · 확인 후 저장" : "이미 다 채워져 있거나 근거 없음",
-      tone: applied.length ? "done" : "warn",
-    });
-  }
-
-  async function save() {
-    if (!canSave) return;
-    setBusy(true);
-    try {
-      await onSave(program.id, {
-        title: title.trim(),
-        section,
-        targetAge,
-        cast,
-        synopsis: synopsis.trim(),
-        broadcaster: broadcaster.trim(),
-        schedule: schedule.trim(),
-        firstAiredDate: firstAiredDate.trim(),
-        currentInfo: currentInfo.trim(),
-        director: director.trim(),
-        spinoff: spinoff.trim(),
-        awards: awards.trim(),
-        moods,
-        posterImageDataUrl,
-        castPhotos,
-        programCode: programCode.trim(),
-        category,
-        weekdays,
-      });
-      onOpenToast({ title: "저장됨", description: title.trim(), tone: "done" });
-    } catch (err) {
-      onOpenToast({
-        title: "저장 실패",
-        description: err instanceof Error ? err.message : String(err),
-        tone: "error",
-      });
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  const smrChecks = programSmrChecks(program);
-  const smrMissing = smrChecks.filter((c) => !c.met).length;
+  const status = normalizeProgramStatus(program.status);
+  const today = new Date();
+  const rights = rightsWindowOf(program, today);
+  const published = programClips.filter((c) =>
+    (c.distributions ?? []).some((d) => d.status === "published"),
+  ).length;
 
   return (
-    <div className="mx-auto max-w-5xl space-y-6 pb-24">
-      {/* 상단 액션 바 */}
-      <div className="sticky top-0 z-20 -mx-6 flex items-center gap-3 border-b border-border bg-background/95 px-6 py-3 backdrop-blur">
-        <Link href="/programs" className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
-          <ArrowLeft className="size-4" /> 프로그램
-        </Link>
-        <span className="min-w-0 flex-1 truncate text-sm font-medium">{title || "(제목 없음)"}</span>
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={runAutofill}
-          disabled={autofilling || busy || !title.trim()}
-          title="Gemini 웹 검색 + 팩트체크로 빈 필드 채움 (출연자·SMR 제외)"
-        >
-          {autofilling ? <Loader2 className="animate-spin" /> : <Sparkles />}
-          {autofilling ? "검색·팩트체크…" : "AI 자동 채움"}
-        </Button>
-        <Button
-          size="sm"
-          variant="outline"
-          onClick={runDelete}
-          disabled={deleting || busy}
-          className="text-status-error hover:bg-status-error/10"
-          title={episodeCount > 0 ? `이 프로그램과 회차 ${episodeCount}개(추천·클립·GCS 파일 포함) 완전 삭제` : "이 프로그램을 완전 삭제"}
-        >
-          {deleting ? <Loader2 className="animate-spin" /> : <Trash2 />}
-          {deleting ? "삭제 중…" : "삭제"}
-        </Button>
-        <Button size="sm" variant="outline" onClick={onDone} disabled={busy || deleting}>
-          닫기
-        </Button>
-        <Button size="sm" onClick={save} disabled={!canSave || deleting}>
-          {busy ? <Loader2 className="animate-spin" /> : <Save />}
-          저장
-        </Button>
+    <div className="mx-auto flex max-w-[1240px] flex-col gap-[22px]">
+      {/* ── 헤더 ─────────────────────────────────────────────────────────────── */}
+      <div className="flex flex-wrap items-start gap-4">
+        <div className="sd-ph size-[88px] shrink-0 overflow-hidden rounded-full">
+          {program.posterImageDataUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={program.posterImageDataUrl} alt="" className="size-full object-cover" />
+          ) : (
+            <span className="text-center leading-tight">
+              프로그램
+              <br />
+              로고
+            </span>
+          )}
+        </div>
+
+        <div className="flex min-w-[280px] flex-1 flex-col gap-[7px]">
+          <div className="flex flex-wrap items-center gap-[9px]">
+            <h2
+              className="sd-serif text-[24px] font-semibold"
+              style={{ color: "var(--sd-fg)", letterSpacing: "-.02em" }}
+            >
+              {program.title}
+            </h2>
+            <span className={STATUS_TAG[status]}>{PROGRAM_STATUS_LABEL[status]}</span>
+          </div>
+
+          <div className="text-[12.5px]" style={{ color: "var(--sd-mut)" }}>
+            {scheduleLine(program, status) || "편성 정보가 등록되지 않았습니다"}
+          </div>
+
+          <div className="flex flex-wrap gap-1.5">
+            <span className="sd-tag">
+              {program.pipelineGenre ? TRACK_LABEL[program.pipelineGenre] : "분석 트랙 미지정"}
+            </span>
+            <span className="sd-tag">{program.section}</span>
+            <span className="sd-tag">출연자 {program.cast?.length ?? 0}명 등록</span>
+            <span className="sd-tag">담당 {program.owner?.trim() || "미배정"}</span>
+            {rights && (
+              <span className={cn("sd-tag", rights.expiring && "sd-tag--danger")}>{rights.text}</span>
+            )}
+          </div>
+        </div>
+
+        <div className="flex shrink-0 items-center gap-2">
+          <Link href={`/programs/${program.id}/settings`} className="sd-btn">
+            프로그램 설정
+          </Link>
+        </div>
+
+        {/* 편성 예정은 셀 숫자가 없다 — 0 세 개를 보여주면 "고장"으로 읽힌다. */}
+        {status !== "upcoming" && (
+          <div className="sd-card flex w-[300px] shrink-0">
+            <Metric label="회차" value={Math.max(program.episodeCount, eps.length)} divider />
+            <Metric label="미디어" value={programClips.length} divider />
+            <Metric label="배포됨" value={published} />
+          </div>
+        )}
       </div>
 
-      {/* 자동 채움 질문 Dialog — questions 있을 때 */}
-      {lastAutofill && lastAutofill.questions.length > 0 && autofillApplied.length === 0 && (
-        <AutofillQuestionsDialog
-          title={title}
-          result={lastAutofill}
-          onCancel={() => setLastAutofill(null)}
-          onSubmit={(answers) => applyAutofill(lastAutofill.draft, answers)}
-        />
-      )}
+      {/* ── 상태별 분기 ──────────────────────────────────────────────────────── */}
+      {status === "airing" && <AiringBar programId={program.id} episodes={eps} />}
+      {status === "ended" && <EndedBar program={program} rightsText={rights?.text} expiring={rights?.expiring} />}
+      {status === "upcoming" && <UpcomingEmpty programId={program.id} />}
 
-      {/* 마지막 자동 채움 결과 · 근거 URL 노출 */}
-      {lastAutofill && autofillApplied.length > 0 && (
-        <section className="rounded-lg border border-border bg-muted/20 px-4 py-3">
-          <div className="flex items-center justify-between">
-            <div className="text-xs font-semibold text-muted-foreground">
-              AI 자동 채움 결과 · 적용 {autofillApplied.length}개
-              {lastAutofill.dropped.length > 0 && ` · 근거 없어 제외 ${lastAutofill.dropped.length}개`}
+      {/* ── 회차 ─────────────────────────────────────────────────────────────── */}
+      {status !== "upcoming" && (
+        <section className="flex flex-col gap-2.5">
+          <SectionHead
+            title="회차"
+            right={
+              <>
+                <Link href={`/analyze?program=${program.id}`} className="sd-btn">
+                  전체 보기
+                </Link>
+                <UploadVideoButton
+                  programId={program.id}
+                  className="sd-btn sd-btn-primary"
+                  label="회차 영상 업로드"
+                />
+              </>
+            }
+          />
+          {eps.length > 0 ? (
+            <div className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(220px,1fr))]">
+              {eps.slice(0, 8).map((e) => (
+                <EpisodeCard key={e.id} episode={e} />
+              ))}
             </div>
-            <button
-              onClick={() => { setLastAutofill(null); setAutofillApplied([]); }}
-              className="text-muted-foreground hover:text-foreground"
-              title="닫기"
-            >
-              <X className="size-3.5" />
-            </button>
-          </div>
-          {autofillApplied.length > 0 && (
-            <div className="mt-1.5 text-[11px] text-muted-foreground">
-              적용: {autofillApplied.join(" · ")}
-            </div>
-          )}
-          {lastAutofill.dropped.length > 0 && (
-            <div className="mt-1 text-[11px] text-muted-foreground/80">
-              제외: {lastAutofill.dropped.join(" · ")}
-            </div>
-          )}
-          {lastAutofill.sources.length > 0 && (
-            <div className="mt-2">
-              <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground/80">근거</div>
-              <ul className="mt-1 space-y-0.5">
-                {lastAutofill.sources.map((s, i) => (
-                  <li key={i} className="text-[11px]">
-                    <a
-                      href={s.url}
-                      target="_blank"
-                      rel="noreferrer noopener"
-                      className="text-primary hover:underline"
-                      title={s.url}
-                    >
-                      {s.title || s.url}
-                    </a>
-                  </li>
-                ))}
-              </ul>
-            </div>
+          ) : (
+            <Placeholder>
+              아직 회차 원본이 없습니다 — ‘회차 영상 업로드’로 시작하세요
+            </Placeholder>
           )}
         </section>
       )}
 
-      {/* 히어로 — 포스터 + 타이틀 */}
-      <section className="grid gap-6 lg:grid-cols-[220px_1fr]">
-        <PosterUpload
-          value={posterImageDataUrl}
-          onChange={setPoster}
-          onClear={() => setPosterImageDataUrl("")}
-        />
-        <div className="min-w-0 space-y-3">
-          <div>
-            <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">제목</div>
-            <input
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              placeholder="예: 나는 SOLO"
-              className={cn(inputCls, "h-12 text-xl font-semibold", titleError && "border-status-error focus-visible:ring-status-error")}
-            />
-            {titleError && <div className="mt-1 text-[11px] text-status-error">제목은 비울 수 없습니다.</div>}
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <Badge variant="muted">{section}</Badge>
-            <Badge variant="muted">{targetAgeLabel(targetAge)}</Badge>
-            <Badge variant="muted">회차 {episodeCount}</Badge>
-            {smrMissing === 0 ? (
-              <StatusBadge tone="done">SMR 피드 준비 완료</StatusBadge>
-            ) : (
-              <StatusBadge tone="warn">SMR {smrMissing}개 미충족</StatusBadge>
-            )}
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="장르">
-              <select value={section} onChange={(e) => setSection(e.target.value)} className={inputCls}>
-                {SECTIONS.map((s) => (
-                  <option key={s} value={s}>{s}</option>
-                ))}
-              </select>
-            </Field>
-            <Field label="시청 등급">
-              <select
-                value={targetAge}
-                onChange={(e) => setTargetAge(Number(e.target.value) as TargetAge)}
-                className={inputCls}
-              >
-                {TARGET_AGES.map((a) => (
-                  <option key={a} value={a}>{targetAgeLabel(a)}</option>
-                ))}
-              </select>
-            </Field>
-          </div>
-          {moods.length > 0 && (
-            <div className="flex flex-wrap gap-1.5">
-              {moods.map((m) => (
-                <span key={m} className="rounded-full border border-border bg-muted/40 px-2 py-0.5 text-[11px] text-muted-foreground">
-                  #{m}
-                </span>
-              ))}
-            </div>
-          )}
-        </div>
-      </section>
-
-      {/* 소개 */}
-      <Card title="소개" hint="한두 문단 프로그램 시놉시스">
-        <textarea
-          value={synopsis}
-          onChange={(e) => setSynopsis(e.target.value)}
-          rows={5}
-          placeholder="예: 결혼을 간절히 원하는 솔로 남녀들이 모여 사랑을 찾기 위해 고군분투하는 극사실주의 데이팅 프로그램."
-          className={textareaCls}
-        />
-      </Card>
-
-      {/* 방영 정보 */}
-      <Card title="방영 정보" hint="채널·편성·첫 방송·현재 진행">
-        <div className="grid gap-3 md:grid-cols-2">
-          <Field label="방송 채널">
-            <input value={broadcaster} onChange={(e) => setBroadcaster(e.target.value)} placeholder="예: ENA · SBS플러스" className={inputCls} />
-          </Field>
-          <Field label="편성">
-            <input value={schedule} onChange={(e) => setSchedule(e.target.value)} placeholder="예: 수 밤 10:30" className={inputCls} />
-          </Field>
-          <Field label="첫 방송">
-            <input value={firstAiredDate} onChange={(e) => setFirstAiredDate(e.target.value)} placeholder="예: 2021.07.14" className={inputCls} />
-          </Field>
-          <Field label="현재 진행">
-            <input value={currentInfo} onChange={(e) => setCurrentInfo(e.target.value)} placeholder="예: 25기 · 191회~" className={inputCls} />
-          </Field>
-        </div>
-      </Card>
-
-      {/* 크레딧 */}
-      <Card title="크레딧">
-        <div className="space-y-3">
-          <Field label="연출">
-            <input value={director} onChange={(e) => setDirector(e.target.value)} placeholder="예: 남규홍" className={inputCls} />
-          </Field>
-          <div className="grid gap-3 md:grid-cols-2">
-            <Field label="스핀오프">
-              <input value={spinoff} onChange={(e) => setSpinoff(e.target.value)} placeholder="예: 나는 SOLO, 그 후 사랑은 계속된다" className={inputCls} />
-            </Field>
-            <Field label="수상">
-              <input value={awards} onChange={(e) => setAwards(e.target.value)} placeholder="예: 2024 퍼스트브랜드 대상" className={inputCls} />
-            </Field>
-          </div>
-        </div>
-      </Card>
-
-      {/* 분위기 태그 */}
-      <Card title="분위기 태그" hint="프로그램을 대표하는 키워드. Enter로 추가.">
-        <div className="flex gap-2">
-          <input
-            value={newMood}
-            onChange={(e) => setNewMood(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                e.preventDefault();
-                addMood();
-              }
-            }}
-            placeholder="예: 극사실주의"
-            className={inputCls}
+      {/* ── 미디어 ───────────────────────────────────────────────────────────── */}
+      {status !== "upcoming" && (
+        <section className="flex flex-col gap-2.5">
+          <SectionHead
+            title="미디어"
+            hint="추천 구간에서 채택한 것만 여기 올라옵니다"
+            right={
+              <Link href="/media" className="sd-btn">
+                미디어에서 보기
+              </Link>
+            }
           />
-          <Button size="sm" variant="outline" onClick={addMood} disabled={!newMood.trim()}>
-            <Plus /> 추가
-          </Button>
-        </div>
-        {moods.length > 0 && (
-          <div className="mt-2 flex flex-wrap gap-1.5">
-            {moods.map((m) => (
-              <span
-                key={m}
-                className="inline-flex items-center gap-1 rounded-full border border-border bg-muted/40 px-2.5 py-0.5 text-xs"
-              >
-                #{m}
-                <button
-                  onClick={() => setMoods(moods.filter((x) => x !== m))}
-                  className="text-muted-foreground hover:text-status-warn"
-                  title="삭제"
-                >
-                  <X className="size-3" />
-                </button>
-              </span>
-            ))}
-          </div>
-        )}
-      </Card>
-
-      {/* 출연진 */}
-      <Card
-        title="출연진"
-        hint="인물별 사진 · 이름. refine speaker 라벨링·recommend 프롬프트의 primary source. 다음 재분석부터 반영."
-      >
-        <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-          <div className="flex flex-1 gap-2">
-            <input
-              id="new-cast-input"
-              value={newName}
-              onChange={(e) => setNewName(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  e.preventDefault();
-                  addCast();
-                }
-              }}
-              placeholder="예: 은규"
-              className={inputCls}
-            />
-            <Button size="sm" onClick={addCast} disabled={!newName.trim()}>
-              <Plus /> 추가
-            </Button>
-          </div>
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={runSyncFromAnalysis}
-            disabled={syncing}
-            title="최근 분석의 얼굴 클러스터 → 이름·사진 반영 (사진 비어있는 인물만 자동 채움)"
-          >
-            {syncing ? <Loader2 className="animate-spin" /> : <UserRound />}
-            {syncing ? "동기화…" : "얼굴 분석 → 사진 반영"}
-          </Button>
-        </div>
-
-        {cast.length === 0 ? (
-          <div className="mt-3 rounded-md border border-dashed border-border px-3 py-6 text-center text-xs text-muted-foreground">
-            아직 등록된 출연자가 없어요. 위에 이름을 입력하고 Enter.
-          </div>
-        ) : (
-          <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
-            {cast.map((name) => (
-              <CastCard
-                key={name}
-                name={name}
-                photoDataUrl={castPhotos[name]}
-                onPickPhoto={(file) => setCastPhoto(name, file)}
-                onClearPhoto={() => removeCastPhoto(name)}
-                onRemove={() => removeCast(name)}
-              />
-            ))}
-          </div>
-        )}
-      </Card>
-
-      {/* 썸네일 엔진 — 프로그램마다 한 번 준비하면 이후 회차에 자동 적용된다 */}
-      <ThumbnailEngineCard programId={program.id} />
-
-      {/* SMR 피드 */}
-      <Card title="SMR 피드 정보" hint="네이버 SMR 배포에 필요한 프로그램 레벨 메타.">
-        <div className="grid gap-3 md:grid-cols-2">
-          <Field label="프로그램 코드" hint="영문 소문자·숫자">
-            <input
-              value={programCode}
-              onChange={(e) => setProgramCode(e.target.value)}
-              placeholder="jamsi"
-              className={cn(inputCls, codeError && "border-status-error focus-visible:ring-status-error")}
-            />
-            {codeError && <div className="mt-1 text-[11px] text-status-error">영문 소문자·숫자만 사용할 수 있습니다.</div>}
-          </Field>
-          <Field label="카테고리" hint="SMR 코드">
-            <select value={category} onChange={(e) => setCategory(e.target.value)} className={inputCls}>
-              <option value="">선택 안 함</option>
-              {SMR_CATEGORIES.map((c) => (
-                <option key={c} value={c}>{c}</option>
+          {programClips.length > 0 ? (
+            <div className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(180px,1fr))]">
+              {programClips.slice(0, 10).map((c) => (
+                <MediaCard key={c.id} clip={c} />
               ))}
-            </select>
-          </Field>
-        </div>
-        <Field label="편성 요일" hint="방송 요일 선택">
-          <div className="flex gap-1.5">
-            {WEEKDAYS.map((w, i) => {
-              const on = weekdays.includes(i);
-              return (
-                <button
-                  key={w}
-                  type="button"
-                  onClick={() => toggleDay(i)}
-                  className={cn(
-                    "size-9 rounded-md border text-sm font-medium transition-colors",
-                    on
-                      ? "border-primary bg-primary text-primary-foreground"
-                      : "border-border text-muted-foreground hover:bg-accent/40",
-                  )}
-                >
-                  {w}
-                </button>
-              );
-            })}
-          </div>
-        </Field>
-      </Card>
-
-      {/* 하단 저장 바 (스크롤 편의) */}
-      <div className="flex items-center justify-end gap-2 border-t border-border pt-4">
-        <Button variant="outline" size="sm" onClick={onDone} disabled={busy}>
-          닫기
-        </Button>
-        <Button size="sm" onClick={save} disabled={!canSave}>
-          {busy ? <Loader2 className="animate-spin" /> : <Save />}
-          저장
-        </Button>
-      </div>
-    </div>
-  );
-}
-
-/** program.id가 바뀔 때 hydration을 다시 트리거하기 위한 ref helper. */
-function useHydratedRef(programId: string) {
-  const [ref] = useState<{ current: boolean }>({ current: false });
-  useEffect(() => {
-    ref.current = false;
-  }, [programId, ref]);
-  return ref;
-}
-
-function Card({ title, hint, children }: { title: string; hint?: string; children: React.ReactNode }) {
-  return (
-    <section className="rounded-xl border border-border bg-card p-5">
-      <div className="mb-4">
-        <h3 className="text-sm font-semibold">{title}</h3>
-        {hint && <p className="mt-0.5 text-[11px] text-muted-foreground">{hint}</p>}
-      </div>
-      {children}
-    </section>
-  );
-}
-
-function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
-  return (
-    <div>
-      <div className="mb-1.5 flex items-baseline gap-2">
-        <span className="text-xs font-semibold text-muted-foreground">{label}</span>
-        {hint && <span className="text-[11px] text-muted-foreground/70">{hint}</span>}
-      </div>
-      {children}
-    </div>
-  );
-}
-
-function PosterUpload({
-  value,
-  onChange,
-  onClear,
-}: {
-  value: string;
-  onChange: (file: File) => void;
-  onClear: () => void;
-}) {
-  return (
-    <div className="space-y-2">
-      <label
-        className={cn(
-          "group relative flex aspect-[2/3] w-full cursor-pointer items-center justify-center overflow-hidden rounded-xl border border-border bg-linear-to-br from-primary/20 to-primary/5 transition-colors hover:border-primary/50",
-          !value && "bg-muted",
-        )}
-      >
-        {value ? (
-          <>
-            <img src={value} alt="포스터" className="size-full object-cover" />
-            <div className="absolute inset-0 flex items-center justify-center bg-black/40 opacity-0 transition-opacity group-hover:opacity-100">
-              <span className="inline-flex items-center gap-1.5 rounded-md bg-black/60 px-3 py-1.5 text-xs font-medium text-white">
-                <Camera className="size-4" /> 다시 선택
-              </span>
             </div>
-          </>
-        ) : (
-          <div className="flex flex-col items-center gap-2 text-center">
-            <Camera className="size-8 text-muted-foreground" />
-            <div className="text-xs text-muted-foreground">
-              <div className="font-semibold text-foreground">포스터 업로드</div>
-              <div className="mt-0.5 text-[10px]">2:3 비율 · 최대 1MB</div>
-            </div>
-          </div>
-        )}
-        <input
-          type="file"
-          accept="image/*"
-          className="hidden"
-          onChange={(e) => {
-            const f = e.currentTarget.files?.[0];
-            e.currentTarget.value = "";
-            if (f) onChange(f);
-          }}
-        />
-      </label>
-      {value && (
-        <button
-          type="button"
-          onClick={onClear}
-          className="w-full text-[11px] text-muted-foreground hover:text-status-warn"
-        >
-          포스터 제거
-        </button>
+          ) : (
+            <Placeholder>
+              {eps.length === 0
+                ? "회차 원본이 올라가면 분석 후 추천 구간이 생깁니다"
+                : "채택한 구간이 아직 없습니다 — 영상 분석에서 구간을 채택하면 여기 나타납니다"}
+            </Placeholder>
+          )}
+        </section>
       )}
-    </div>
-  );
-}
 
-function CastCard({
-  name,
-  photoDataUrl,
-  onPickPhoto,
-  onClearPhoto,
-  onRemove,
-}: {
-  name: string;
-  photoDataUrl?: string;
-  onPickPhoto: (file: File) => void;
-  onClearPhoto: () => void;
-  onRemove: () => void;
-}) {
-  return (
-    <div className="flex flex-col items-center gap-2 rounded-xl border border-border bg-muted/20 p-3">
-      <label className="group relative flex aspect-[3/4] w-24 cursor-pointer items-center justify-center overflow-hidden rounded-md border border-border bg-muted transition-colors hover:border-primary/50">
-        {photoDataUrl ? (
-          <img src={photoDataUrl} alt={name} className="size-full object-cover" />
-        ) : (
-          <UserRound className="size-10 text-muted-foreground" />
-        )}
-        <div className="absolute inset-0 flex items-center justify-center bg-black/50 opacity-0 transition-opacity group-hover:opacity-100">
-          <Camera className="size-5 text-white" />
-        </div>
-        <input
-          type="file"
-          accept="image/*"
-          className="hidden"
-          onChange={(e) => {
-            const f = e.currentTarget.files?.[0];
-            e.currentTarget.value = "";
-            if (f) onPickPhoto(f);
-          }}
+      {/* ── 출연자 ───────────────────────────────────────────────────────────── */}
+      <section className="flex flex-col gap-2.5">
+        <SectionHead
+          title="출연자"
+          hint="사람이 등록한 명단이 기준입니다 — 자동 인식은 참고용 표시만 합니다"
+          right={
+            <Link href={`/programs/${program.id}/settings`} className="sd-btn">
+              출연자 관리
+            </Link>
+          }
         />
-      </label>
-      <div className="text-center">
-        <div className="text-sm font-semibold">{name}</div>
-        <div className="mt-0.5 text-[10px] text-muted-foreground">최대 256KB</div>
-      </div>
-      <div className="flex items-center gap-1.5">
-        {photoDataUrl && (
-          <button
-            onClick={onClearPhoto}
-            className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
-            title="사진 제거"
-          >
-            <X className="size-3.5" />
-          </button>
+        {(program.cast?.length ?? 0) > 0 ? (
+          <div className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(96px,1fr))]">
+            {program.cast!.map((name) => (
+              <div key={name} className="flex flex-col items-center gap-1.5">
+                <div className="sd-ph size-[64px] overflow-hidden rounded-full">
+                  {program.castPhotos?.[name] ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={program.castPhotos[name]} alt="" className="size-full object-cover" />
+                  ) : (
+                    <span className="text-[10px]">사진 없음</span>
+                  )}
+                </div>
+                <span className="truncate text-[11px]" style={{ color: "var(--sd-fg)" }}>
+                  {name}
+                </span>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <Placeholder>등록된 출연자가 없습니다 — 프로그램 설정에서 등록하세요</Placeholder>
         )}
-        <button
-          onClick={onRemove}
-          className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-status-warn"
-          title="출연자 삭제"
-        >
-          <Trash2 className="size-3.5" />
-        </button>
+      </section>
+    </div>
+  );
+}
+
+// ── 조각들 ───────────────────────────────────────────────────────────────────────
+
+function Metric({ label, value, divider }: { label: string; value: number; divider?: boolean }) {
+  return (
+    <div
+      className="flex-1 px-3 py-[11px]"
+      style={divider ? { borderRight: "1px solid var(--sd-divider)" } : undefined}
+    >
+      <div className="sd-eb" style={{ color: "var(--sd-label)" }}>
+        {label}
+      </div>
+      <div className="sd-mono text-[20px]" style={{ color: "var(--sd-fg)" }}>
+        {value}
       </div>
     </div>
   );
 }
 
-/** 자동 채움 결과 · 확인 필요한 필드 질문 Dialog.
- *  각 질문에 대해 suggestion 라디오 or "기타(직접 입력)" · 답 제출 → onSubmit(answers). */
-function AutofillQuestionsDialog({
+function SectionHead({
   title,
-  result,
-  onCancel,
-  onSubmit,
+  hint,
+  right,
 }: {
   title: string;
-  result: AutofillProgramResult;
-  onCancel: () => void;
-  onSubmit: (answers: Record<string, string>) => void;
+  hint?: string;
+  right?: React.ReactNode;
 }) {
-  // 각 field별로 { picked: string | '__other__' | '__skip__', otherText: string }
-  const [state, setState] = useState<Record<string, { picked: string; otherText: string }>>(() => {
-    const init: Record<string, { picked: string; otherText: string }> = {};
-    for (const q of result.questions) init[q.field] = { picked: "__skip__", otherText: "" };
-    return init;
-  });
+  return (
+    <div className="flex flex-wrap items-center gap-3">
+      <div className="min-w-0">
+        <h3 className="sd-serif text-[16px] font-semibold" style={{ color: "var(--sd-fg)" }}>
+          {title}
+        </h3>
+        {hint && (
+          <p className="text-[11px]" style={{ color: "var(--sd-mut)" }}>
+            {hint}
+          </p>
+        )}
+      </div>
+      {right && <div className="ml-auto flex items-center gap-2">{right}</div>}
+    </div>
+  );
+}
 
-  function submit() {
-    const answers: Record<string, string> = {};
-    for (const q of result.questions) {
-      const s = state[q.field];
-      if (!s || s.picked === "__skip__") continue;
-      if (s.picked === "__other__") {
-        const t = s.otherText.trim();
-        if (t) answers[q.field] = t;
-      } else {
-        answers[q.field] = s.picked;
-      }
-    }
-    onSubmit(answers);
+function Placeholder({ children }: { children: React.ReactNode }) {
+  return (
+    <div
+      className="sd-ph grid min-h-[120px] place-items-center rounded-[6px] px-6 text-center"
+      style={{ border: "1px dashed var(--sd-border)" }}
+    >
+      {children}
+    </div>
+  );
+}
+
+/**
+ * 방영 중 — 지금 분석이 도는 회차로 바로 들어가는 줄.
+ * ⚠️ 진행률은 서버가 준 값 그대로다. 클라이언트 타이머로 채우지 않는다(F2 ⊘).
+ */
+function AiringBar({ programId, episodes }: { programId: string; episodes: Episode[] }) {
+  const running = episodes.find((e) => e.pipeline?.stageStatus === "progress");
+  const target = running ?? episodes[0];
+
+  if (!target) {
+    return (
+      <div className="sd-card flex flex-wrap items-center gap-3 px-3 py-2.5">
+        <span className="sd-tag sd-tag--airing">진행 중</span>
+        <span className="flex-1 text-[12.5px]" style={{ color: "var(--sd-fg)" }}>
+          아직 올라온 회차가 없습니다.
+        </span>
+      </div>
+    );
   }
 
+  const pct = running ? Math.min(97, Math.round(running.pipeline?.progress ?? 0)) : null;
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onCancel} aria-hidden />
-      <div className="relative flex max-h-[92vh] w-full max-w-xl flex-col rounded-2xl border border-input bg-popover shadow-2xl">
-        <div className="flex items-center justify-between border-b border-border px-4 py-3">
-          <div>
-            <h2 className="text-sm font-semibold">AI 자동 채움 · 확인 필요</h2>
-            <p className="mt-0.5 text-[11px] text-muted-foreground">
-              {title} · 확인된 필드 {Object.keys(result.draft).length}개 · 확인 필요 {result.questions.length}개
-            </p>
+    <div className="sd-card flex flex-wrap items-center gap-3 px-3 py-2.5">
+      <span className="sd-tag sd-tag--airing">진행 중</span>
+      <span className="min-w-[200px] flex-1 text-[12.5px]" style={{ color: "var(--sd-fg)" }}>
+        회차 {target.episodeNumber}{" "}
+        {running ? (
+          <>
+            {PIPELINE_STAGE_LABELS[running.pipeline.stage]} 중 ·{" "}
+            <span className="sd-mono" style={{ color: "var(--sd-mut)" }}>
+              {running.pipeline.note ?? "진행 중"}
+            </span>
+          </>
+        ) : (
+          <span style={{ color: "var(--sd-mut)" }}>· 대기 중인 작업 없음</span>
+        )}
+      </span>
+      {pct !== null && (
+        <>
+          <div className="sd-progress w-[130px]">
+            <span style={{ width: `${pct}%` }} />
           </div>
-          <button onClick={onCancel} className="text-muted-foreground hover:text-foreground">
-            <X className="size-4" />
-          </button>
-        </div>
+          <span
+            className="sd-mono w-[34px] text-right text-[11px]"
+            style={{ color: "var(--sd-mut)" }}
+          >
+            {pct}%
+          </span>
+        </>
+      )}
+      <Link href={`/analyze?program=${programId}&episode=${target.id}`} className="sd-btn">
+        회차 열기
+      </Link>
+    </div>
+  );
+}
 
-        <div className="space-y-4 overflow-y-auto p-4">
-          {result.questions.map((q) => {
-            const s = state[q.field] || { picked: "__skip__", otherText: "" };
-            return (
-              <div key={q.field} className="space-y-2 rounded-md border border-border bg-muted/20 p-3">
-                <div className="text-sm font-semibold">{q.question}</div>
-                <div className="space-y-1.5">
-                  {q.suggestions.map((sg) => (
-                    <label key={sg} className="flex items-center gap-2 text-xs">
-                      <input
-                        type="radio"
-                        name={`ans-${q.field}`}
-                        checked={s.picked === sg}
-                        onChange={() => setState((p) => ({ ...p, [q.field]: { picked: sg, otherText: "" } }))}
-                      />
-                      <span>{sg}</span>
-                    </label>
-                  ))}
-                  {q.allowOther && (
-                    <label className="flex items-start gap-2 text-xs">
-                      <input
-                        type="radio"
-                        name={`ans-${q.field}`}
-                        checked={s.picked === "__other__"}
-                        onChange={() => setState((p) => ({ ...p, [q.field]: { picked: "__other__", otherText: p[q.field]?.otherText || "" } }))}
-                      />
-                      <div className="flex-1">
-                        <span>기타 (직접 입력)</span>
-                        {s.picked === "__other__" && (
-                          <input
-                            autoFocus
-                            value={s.otherText}
-                            onChange={(e) => setState((p) => ({ ...p, [q.field]: { picked: "__other__", otherText: e.target.value } }))}
-                            placeholder="답변 입력"
-                            className={cn(inputCls, "mt-1")}
-                          />
-                        )}
-                      </div>
-                    </label>
-                  )}
-                  <label className="flex items-center gap-2 text-xs text-muted-foreground">
-                    <input
-                      type="radio"
-                      name={`ans-${q.field}`}
-                      checked={s.picked === "__skip__"}
-                      onChange={() => setState((p) => ({ ...p, [q.field]: { picked: "__skip__", otherText: "" } }))}
-                    />
-                    <span>모름 / 건너뛰기</span>
-                  </label>
-                </div>
-              </div>
-            );
-          })}
-          {result.sources.length > 0 && (
-            <div className="rounded-md border border-border bg-muted/10 p-3">
-              <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-                검색 근거 · {result.sources.length}개
-              </div>
-              <ul className="space-y-0.5">
-                {result.sources.map((s, i) => (
-                  <li key={i} className="text-[11px]">
-                    <a href={s.url} target="_blank" rel="noreferrer noopener" className="text-primary hover:underline" title={s.url}>
-                      {s.title || s.url}
-                    </a>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-        </div>
+/**
+ * 종영 — 새 회차가 안 들어온다. 아카이브 재활용이 유일한 경로다.
+ * 검색으로 찾은 구간에서 클립을 만드는 건 막지 않는다(2026-08-10 확정).
+ */
+function EndedBar({
+  program,
+  rightsText,
+  expiring,
+}: {
+  program: Program;
+  rightsText?: string;
+  expiring?: boolean;
+}) {
+  return (
+    <div className="sd-card flex flex-wrap items-center gap-3 px-3 py-2.5">
+      <span className="sd-tag sd-tag--ended">종영</span>
+      <span className="min-w-[240px] flex-1 text-[12.5px]" style={{ color: "var(--sd-fg)" }}>
+        {program.endedDate ? `${program.endedDate} 종영 — ` : ""}
+        새 회차가 들어오지 않습니다. 기존 회차 재활용과 권리 만료일만 관리합니다.
+      </span>
+      {rightsText && (
+        <span className={cn("sd-tag", expiring && "sd-tag--danger")}>{rightsText}</span>
+      )}
+      <Link href={`/search?program=${program.id}`} className="sd-btn">
+        아카이브에서 장면 찾기
+      </Link>
+    </div>
+  );
+}
 
-        <div className="flex items-center justify-end gap-2 border-t border-border px-4 py-3">
-          <Button variant="outline" size="sm" onClick={onCancel}>취소</Button>
-          <Button size="sm" onClick={submit}>답변 반영</Button>
-        </div>
+/** 편성 예정 — 첫 방송 전. 회차도 지표도 없는 게 정상이라고 말해 준다. */
+function UpcomingEmpty({ programId }: { programId: string }) {
+  return (
+    <div className="sd-card flex flex-col items-center gap-2.5 p-10">
+      <div className="sd-ph size-[44px] rounded-full" />
+      <div className="sd-serif text-[14px] font-semibold" style={{ color: "var(--sd-fg)" }}>
+        첫 방송 전 · 분석할 회차가 없습니다
+      </div>
+      <p
+        className="max-w-[440px] text-center text-[12px] leading-relaxed"
+        style={{ color: "var(--sd-mut)" }}
+      >
+        파일럿이나 선공개 영상이 있다면 지금 올려 두면 됩니다. 업로드는 분석 대기열에
+        들어가고, 권리 정보는 분석이 끝난 뒤 사람이 등록합니다.
+      </p>
+      <div className="flex gap-2">
+        <Link href="/programs" className="sd-btn">
+          프로그램 목록으로
+        </Link>
+        <UploadVideoButton
+          programId={programId}
+          className="sd-btn sd-btn-primary"
+          label="파일럿 영상 업로드"
+        />
       </div>
     </div>
   );
 }
 
-
-/**
- * 썸네일 엔진 준비 — 스타일 학습 + 출연자 등록.
- *
- * 둘 다 프로그램당 1회성이고, 이후 회차 썸네일 생성이 이걸 자동으로 물어간다.
- * 출연자는 사람이 등록한다 — 얼굴 자동 판정을 넣으면 틀렸을 때 조용히 지나간다.
- */
-function ThumbnailEngineCard({ programId }: { programId: string }) {
-  const { toast } = useToast();
-  const [style, setStyle] = useState<ThumbnailStyleProfile | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [sourceUrl, setSourceUrl] = useState("");
-  const [training, setTraining] = useState(false);
-  const [cast, setCast] = useState<CastPhotoEntry[]>([]);
-  const [castName, setCastName] = useState("");
-
-  useEffect(() => {
-    let alive = true;
-    void (async () => {
-      const [s, c] = await Promise.all([
-        fetchThumbnailStyle(programId).catch(() => null),
-        fetchCastPhotos(programId).catch(() => []),
-      ]);
-      if (!alive) return;
-      setStyle(s);
-      setCast(c);
-      setLoading(false);
-    })();
-    return () => { alive = false; };
-  }, [programId]);
-
-  async function onTrain() {
-    const url = sourceUrl.trim();
-    if (!url) { toast({ title: "재생목록 URL을 넣어주세요", tone: "error" }); return; }
-    setTraining(true);
-    try {
-      await trainThumbnailStyle(programId, url);
-      toast({ title: "스타일 학습을 시작했습니다", description: "수집·분석에 몇 분 걸립니다." });
-    } catch (e) {
-      toast({ title: "학습 요청 실패", description: String(e), tone: "error" });
-    } finally {
-      setTraining(false);
-    }
-  }
-
-  async function onUpload(name: string, file: File) {
-    try {
-      await uploadCastPhoto(programId, name, file);
-      setCast(await fetchCastPhotos(programId));
-      toast({ title: `${name} 사진을 등록했습니다` });
-    } catch (e) {
-      toast({ title: "업로드 실패", description: String(e), tone: "error" });
-    }
-  }
-
-  const agg = (style?.aggregate ?? {}) as Record<string, any>;
-  const first = (k: string) => (Array.isArray(agg[k]) && agg[k][0] ? String(agg[k][0][0]) : "");
+function EpisodeCard({ episode }: { episode: Episode }) {
+  const p = episode.pipeline;
+  const tone =
+    p?.stageStatus === "error" ? "sd-tag sd-tag--danger" : p?.stageStatus === "progress"
+      ? "sd-tag sd-tag--upcoming"
+      : "sd-tag";
 
   return (
-    <Card
-      title="썸네일 엔진"
-      hint="프로그램마다 한 번 준비하면 이후 회차 썸네일에 자동 적용됩니다."
-    >
-      <div className="grid gap-5">
-        <div>
-          <div className="mb-2 text-xs font-medium text-muted-foreground">채널 스타일</div>
-          {loading ? (
-            <div className="text-sm text-muted-foreground">불러오는 중…</div>
-          ) : style ? (
-            <div className="rounded-lg border border-border bg-muted/20 p-3 text-sm">
-              <div className="mb-1 flex items-center gap-2">
-                <Badge>학습됨</Badge>
-                <span className="text-xs text-muted-foreground">
-                  {String(agg.sampleSize ?? "?")}장 분석
-                </span>
-              </div>
-              <div className="text-xs text-muted-foreground">
-                자막 {first("captionPosition")} {first("captionLines")}줄 ·{" "}
-                {first("borderDesc") || "테두리 없음"} · 로고 {first("logoPosition")} ·{" "}
-                {first("tone")}
-              </div>
-              <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">{style.prompt}</p>
-            </div>
-          ) : (
-            <div className="text-sm text-muted-foreground">아직 학습하지 않았습니다.</div>
-          )}
-
-          <div className="mt-3 flex gap-2">
-            <input
-              value={sourceUrl}
-              onChange={(e) => setSourceUrl(e.target.value)}
-              placeholder="https://www.youtube.com/playlist?list=..."
-              className={cn(inputCls, "flex-1")}
-            />
-            <Button onClick={onTrain} disabled={training}>
-              {training ? "요청 중…" : style ? "다시 학습" : "스타일 학습"}
-            </Button>
-          </div>
-          <div className="mt-1 text-[11px] text-muted-foreground">
-            재생목록 URL을 권합니다. 채널 전체는 다른 프로그램이 섞여 톤이 뭉개집니다.
-          </div>
+    <Link href={`/episodes/${episode.id}`} className="sd-card flex flex-col overflow-hidden">
+      <div className="sd-ph h-[92px]" style={{ borderBottom: "1px solid var(--sd-border)" }}>
+        회차 썸네일
+      </div>
+      <div className="flex flex-col gap-1.5 px-2.5 py-2.5">
+        <div className="text-[12.5px] font-semibold" style={{ color: "var(--sd-fg)" }}>
+          회차 {episode.episodeNumber}
         </div>
-
-        <div>
-          <div className="mb-2 text-xs font-medium text-muted-foreground">
-            출연자 사진 · 썸네일에 들어갈 인물
-          </div>
-          {cast.length === 0 ? (
-            <div className="text-sm text-muted-foreground">
-              등록된 출연자가 없습니다. 등록하지 않으면 썸네일 생성이 중단됩니다.
-            </div>
-          ) : (
-            <div className="flex flex-wrap gap-2">
-              {cast.map((c) => (
-                <span key={c.name}
-                  className="inline-flex items-center gap-2 rounded-full border border-border px-3 py-1 text-xs">
-                  {c.name}
-                  <span className="text-muted-foreground">{c.photos}장</span>
-                  <button
-                    onClick={async () => {
-                      await deleteCastPhotos(programId, c.name);
-                      setCast(await fetchCastPhotos(programId));
-                    }}
-                    className="text-muted-foreground hover:text-status-error"
-                    aria-label={`${c.name} 삭제`}
-                  >×</button>
-                </span>
-              ))}
-            </div>
-          )}
-
-          <div className="mt-3 flex gap-2">
-            <input
-              value={castName}
-              onChange={(e) => setCastName(e.target.value)}
-              placeholder="출연자 이름 (기획에 쓰이는 이름과 같게)"
-              className={cn(inputCls, "flex-1")}
-            />
-            <label className={cn(
-              "inline-flex cursor-pointer items-center rounded-md border border-border px-3 py-2 text-sm",
-              !castName.trim() && "pointer-events-none opacity-50",
-            )}>
-              사진 추가
-              <input
-                type="file"
-                accept="image/jpeg,image/png,image/webp"
-                className="hidden"
-                onChange={(e) => {
-                  const f = e.target.files?.[0];
-                  if (f && castName.trim()) void onUpload(castName.trim(), f);
-                  e.target.value = "";
-                }}
-              />
-            </label>
-          </div>
-          <div className="mt-1 text-[11px] text-muted-foreground">
-            1인당 1~3장 · 얼굴이 크게 나온 사진. 이름은 폴더명이자 매칭 키입니다.
-          </div>
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className={tone}>{stageLabel(episode)}</span>
+        </div>
+        <div className="sd-mono text-[10.5px]" style={{ color: "var(--sd-mut)" }}>
+          {episode.broadDate || "방영일 미등록"}
         </div>
       </div>
-    </Card>
+    </Link>
   );
+}
+
+function stageLabel(e: Episode): string {
+  const p = e.pipeline;
+  if (!p) return "분석 대기";
+  const label = PIPELINE_STAGE_LABELS[p.stage] ?? p.stage;
+  if (p.stageStatus === "progress") return `${label} 중`;
+  if (p.stageStatus === "error") return `${label} 실패`;
+  if (p.stageStatus === "idle") return "분석 대기";
+  return label;
+}
+
+function MediaCard({ clip }: { clip: Clip }) {
+  const shortForm = clip.aspectRatio?.startsWith("9:16");
+  return (
+    <Link href={`/editor/${clip.id}`} className="sd-card flex flex-col overflow-hidden">
+      <div className="sd-ph h-[100px]" style={{ borderBottom: "1px solid var(--sd-border)" }}>
+        {clip.thumbnailUrl ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={clip.thumbnailUrl} alt="" className="size-full object-cover" />
+        ) : (
+          "미디어 썸네일"
+        )}
+      </div>
+      <div className="flex flex-col gap-1.5 px-2.5 py-2.5">
+        <div className="line-clamp-2 text-[11.5px] leading-snug" style={{ color: "var(--sd-fg)" }}>
+          {clip.title}
+        </div>
+        <div className="flex flex-wrap gap-1">
+          <span className="sd-tag">{shortForm ? "숏폼" : "클립"}</span>
+          <span className="sd-tag sd-mono">{Math.round(clip.durationSec)}초</span>
+        </div>
+      </div>
+    </Link>
+  );
+}
+
+/** 헤더 아래 편성 한 줄 — 상태에 따라 쓸모 있는 정보가 다르다. */
+function scheduleLine(program: Program, status: ProgramStatus): string {
+  const parts: string[] = [];
+  if (status === "ended" && program.endedDate) parts.push(`${program.endedDate} 종영`);
+  else if (status === "upcoming" && program.firstAiredDate) {
+    parts.push(`${program.firstAiredDate} 첫 방송 예정`);
+  } else if (program.schedule) parts.push(program.schedule);
+
+  if (program.broadcaster) parts.push(program.broadcaster);
+  if (status === "airing" && program.currentInfo) parts.push(program.currentInfo);
+  return parts.join(" · ");
 }
