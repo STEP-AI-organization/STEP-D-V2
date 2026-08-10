@@ -4,9 +4,8 @@
  * 용도는 하나다: **쇼츠 오버레이 템플릿을 PNG 로 꺼내오는 것.**
  * 캔바 autofill 은 텍스트·이미지 필드만 채우므로 영상은 못 꽂는다 — 합성은 우리 ffmpeg 몫이다.
  *
- * ⚠️ 무료 플랜은 `transparent_background: true` 를 거부한다. 그래서 템플릿 배경을
- * 마젠타(#FF00FF)로 깔고 일반 PNG 로 받은 뒤 ffmpeg `colorkey` 로 뚫는다.
- * 투명 PNG 를 쓰려고 하지 말 것 — 유료 플랜에서만 되고, 실패 모드가 "흰 배경이 클립을 전부 덮음"이다.
+ * 이 계정은 Pro 라 `transparent_background: true` 가 된다(2026-08-10 실측). 무료 플랜이면
+ * 거부되므로, 계정이 바뀌면 배경을 마젠타(#FF00FF)로 깔고 ffmpeg `colorkey` 로 뚫는 우회가 필요하다.
  *
  * 계정은 우리 것 하나뿐이라 토큰 테이블도 단일 행(id='default')이다.
  */
@@ -19,8 +18,22 @@ const AUTHORIZE_URL = "https://www.canva.com/api/oauth/authorize";
 const TOKEN_URL = "https://api.canva.com/rest/v1/oauth/token";
 const API_BASE = "https://api.canva.com/rest/v1";
 
-/** 템플릿을 PNG 로 꺼내오는 데 필요한 최소 스코프. 더 달라고 하지 말 것. */
-const SCOPES = ["design:meta:read", "design:content:read", "asset:read"].join(" ");
+/**
+ * 필요한 스코프. **캔바 개발자 콘솔의 Scopes 탭과 정확히 일치해야 한다** —
+ * 콘솔에서 안 켠 스코프를 여기서 요청하면 동의 화면이 거부되고, 반대로 여기서 빠뜨리면
+ * 런타임에 `missing_scope` 로 죽는다.
+ * brandtemplate:* 는 autofill(템플릿 텍스트를 API 로 채우기)용이다.
+ */
+const SCOPES = [
+  "design:meta:read",
+  "design:content:read",
+  "design:content:write", // autofill 이 만든 디자인을 쓰려면 필요
+  "asset:read",
+  "brandtemplate:meta:read",
+  "brandtemplate:content:read",
+  "folder:read", // 템플릿을 폴더로 관리한다 — 폴더 안 디자인만 가져온다
+  "asset:write", // 우리가 만든 프레임 PNG 를 캔바로 올린다
+].join(" ");
 
 const CLIENT_ID = process.env.CANVA_CLIENT_ID ?? "";
 const CLIENT_SECRET = process.env.CANVA_CLIENT_SECRET ?? "";
@@ -229,16 +242,17 @@ interface ExportJob {
  */
 export async function exportDesignPng(
   designId: string,
-  opts: { page?: number; width?: number; height?: number; timeoutMs?: number } = {},
+  opts: { page?: number; width?: number; height?: number; timeoutMs?: number; transparent?: boolean } = {},
 ): Promise<string> {
-  const { page = 1, width = 1080, height = 1920, timeoutMs = 120_000 } = opts;
+  const { page = 1, width = 1080, height = 1920, timeoutMs = 120_000, transparent = true } = opts;
 
   const started = await api<ExportJob>("/exports", {
     method: "POST",
     body: JSON.stringify({
       design_id: designId,
-      // transparent_background 는 넣지 않는다 — 무료 플랜에서 전체 요청이 거부된다.
-      format: { type: "png", pages: [page], width, height, lossless: true },
+      // 오버레이로 쓰려면 투명이 기본이다. 무료 플랜 계정에서는 이 필드 때문에 전체 요청이 거부된다.
+      format: { type: "png", pages: [page], width, height, lossless: true,
+                transparent_background: transparent },
     }),
   });
 
@@ -255,4 +269,163 @@ export async function exportDesignPng(
   }
   // 다운로드 URL 은 만료된다(수십 분). 받은 즉시 GCS 로 넘길 것.
   return job.urls[0];
+}
+
+// ── Brand templates + Autofill (템플릿 텍스트를 API 로 채우기) ──────────────────
+
+export interface BrandTemplate {
+  id: string;
+  title?: string;
+  thumbnail?: { url: string };
+}
+
+export async function listBrandTemplates(): Promise<BrandTemplate[]> {
+  const r = await api<{ items?: BrandTemplate[] }>("/brand-templates");
+  return r.items ?? [];
+}
+
+/** 템플릿이 노출하는 autofill 필드 스키마. 비어 있으면 그 템플릿은 autofill 불가. */
+export async function brandTemplateDataset(templateId: string): Promise<Record<string, unknown>> {
+  const r = await api<{ dataset?: Record<string, unknown> }>(
+    `/brand-templates/${templateId}/dataset`,
+  );
+  return r.dataset ?? {};
+}
+
+interface AutofillJob {
+  job: {
+    id: string;
+    status: "in_progress" | "success" | "failed";
+    result?: { design?: { id: string; url?: string } };
+    error?: { message?: string };
+  };
+}
+
+/**
+ * 템플릿 필드를 채워 새 디자인을 만든다. `data` 는 필드명 → 값:
+ *   { title: { type: "text", text: "오늘의 하이라이트" } }
+ * export 와 마찬가지로 비동기 잡이라 폴링한다. 반환값은 새 디자인 id —
+ * 그대로 `exportDesignPng()` 에 넘기면 PNG 가 나온다.
+ */
+export async function autofillDesign(
+  templateId: string,
+  data: Record<string, unknown>,
+  timeoutMs = 120_000,
+): Promise<string> {
+  const started = await api<AutofillJob>("/autofills", {
+    method: "POST",
+    body: JSON.stringify({ brand_template_id: templateId, data }),
+  });
+  const deadline = Date.now() + timeoutMs;
+  let job = started.job;
+  while (job.status === "in_progress") {
+    if (Date.now() > deadline) throw new Error(`Canva autofill timed out (job ${job.id})`);
+    await new Promise((r) => setTimeout(r, 2000));
+    job = (await api<AutofillJob>(`/autofills/${job.id}`)).job;
+  }
+  const designId = job.result?.design?.id;
+  if (job.status !== "success" || !designId) {
+    throw new Error(`Canva autofill failed: ${job.error?.message ?? job.status}`);
+  }
+  return designId;
+}
+
+// ── 폴더 ──────────────────────────────────────────────────────────────────────
+
+export interface CanvaFolder {
+  id: string;
+  name?: string;
+}
+
+interface FolderItem {
+  type: string;
+  folder?: CanvaFolder;
+  design?: CanvaDesign;
+}
+
+/** 루트 아래 폴더 목록. 템플릿 폴더를 이름으로 찾을 때 쓴다. */
+export async function listCanvaFolders(parent = "root"): Promise<CanvaFolder[]> {
+  const r = await api<{ items?: FolderItem[] }>(
+    `/folders/${parent}/items?item_types=folder`,
+  );
+  return (r.items ?? []).map((i) => i.folder).filter((f): f is CanvaFolder => !!f);
+}
+
+/** 폴더 안 디자인만. 템플릿은 여기 담긴 것만 쓴다(리스트 전체를 훑지 않는다). */
+export async function listDesignsInFolder(folderId: string): Promise<CanvaDesign[]> {
+  const r = await api<{ items?: FolderItem[] }>(
+    `/folders/${folderId}/items?item_types=design`,
+  );
+  return (r.items ?? []).map((i) => i.design).filter((d): d is CanvaDesign => !!d);
+}
+
+// ── 업로드 (우리 PNG → 캔바) ───────────────────────────────────────────────────
+
+interface AssetUploadJob {
+  job: { id: string; status: "in_progress" | "success" | "failed";
+         asset?: { id: string }; error?: { message?: string } };
+}
+
+/**
+ * 로컬 PNG 바이트를 캔바 에셋으로 올린다.
+ *
+ * MCP 의 upload-asset-from-url 과 달리 **공개 URL 이 필요 없다** — 바이너리를 직접 보낸다.
+ * 내부 소재를 인터넷에 노출하지 않아도 된다는 뜻이라, 업로드는 반드시 이 경로로 할 것.
+ * 이름은 헤더에 base64url 로 싣는다(한글 파일명이 헤더에서 깨지는 걸 피한다).
+ */
+export async function uploadAssetPng(
+  bytes: Buffer,
+  name: string,
+  timeoutMs = 120_000,
+): Promise<string> {
+  const token = await canvaAccessToken();
+  // 헤더 값은 JSON 문자열 그대로다. 통째로 base64 하면 "Invalid upload metadata header".
+  // 안쪽 name_base64 만 base64url 이다 — 한글 이름이 헤더에서 깨지는 걸 피하려는 장치.
+  const meta = JSON.stringify({ name_base64: Buffer.from(name, "utf-8").toString("base64url") });
+  const res = await fetch(`${API_BASE}/asset-uploads`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/octet-stream",
+      "Asset-Upload-Metadata": meta,
+    },
+    body: new Uint8Array(bytes),
+  });
+  if (!res.ok) throw new Error(`Canva asset upload failed (${res.status}): ${await res.text()}`);
+
+  let job = ((await res.json()) as AssetUploadJob).job;
+  const deadline = Date.now() + timeoutMs;
+  while (job.status === "in_progress") {
+    if (Date.now() > deadline) throw new Error(`Canva asset upload timed out (job ${job.id})`);
+    await new Promise((r) => setTimeout(r, 2000));
+    job = (await api<AssetUploadJob>(`/asset-uploads/${job.id}`)).job;
+  }
+  const assetId = job.asset?.id;
+  if (job.status !== "success" || !assetId) {
+    throw new Error(`Canva asset upload failed: ${job.error?.message ?? job.status}`);
+  }
+  return assetId;
+}
+
+/**
+ * 에셋 하나를 얹은 새 디자인을 만든다. 반환값은 디자인 id.
+ *
+ * ⚠️ 결과는 **납작한 이미지 한 장**이다. 캔바가 PNG 를 레이어로 되돌리지는 못한다 —
+ * 캔바에서 텍스트를 다시 편집하려면 그 위에 텍스트 요소를 새로 얹어야 한다.
+ */
+export async function createDesignFromAsset(
+  assetId: string,
+  title: string,
+  width = 1080,
+  height = 1920,
+): Promise<string> {
+  const r = await api<{ design: { id: string } }>("/designs", {
+    method: "POST",
+    body: JSON.stringify({
+      design_type: { type: "custom", width, height },
+      asset_id: assetId,
+      title,
+    }),
+  });
+  return r.design.id;
 }

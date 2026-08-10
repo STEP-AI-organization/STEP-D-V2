@@ -190,7 +190,8 @@ export async function advance(factoryJobId: string): Promise<{ job: FactoryJob; 
         return { job, retryInMs: 60_000 };
       }
       if (!job.mediaId) {
-        return await fail("sourceUrl 로 미디어를 찾지 못했다 — from-youtube 로 먼저 등록해야 한다");
+        return await fail(
+          "sourceUrl 로 미디어를 찾지 못했다 — POST /api/factory/videos 로 먼저 등록할 것");
       }
       job = await save({ ...job, state: "ingesting" });
       return { job, retryInMs: 30_000 };
