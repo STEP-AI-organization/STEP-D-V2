@@ -18,6 +18,7 @@ import { fileURLToPath } from "node:url";
 import {
   initDb,
   listYouTubeChannels,
+  listChannelsForSweep,
   getYouTubeChannelByChannelId,
   markYouTubeChannelRevoked,
   updateYouTubeTokens,
@@ -49,6 +50,7 @@ import {
 } from "./thumbnail-assets.ts";
 import { uploadFile, uploadPath, thumbPath } from "./storage-gcs.ts";
 import { initQueue, claimJob, completeJob, failJob, requeueStale, heartbeatJob, enqueue, lastDoneJobAt, queueStats, type Job, type JobType } from "./queue.ts";
+import { runWithTenant, runAsSystem, DEFAULT_TENANT_ID } from "./tenant.ts";
 import { runChannelPipeline } from "./channel-pipeline.ts";
 import { runContentAnalyze, newestMtimeMs } from "./content-pipeline.ts";
 import {
@@ -1302,14 +1304,18 @@ async function runDistributionPublish(job: Job): Promise<void> {
 
 /** Enqueue every live channel. Dedupe keeps a slow channel from stacking up jobs. */
 async function sweepDueChannels(): Promise<void> {
-  const channels = await listYouTubeChannels();
+  // 스윕은 전 테넌트를 훑지만(listChannelsForSweep 이 시스템 스코프), **잡은 채널 소유자의
+  // 테넌트로 만든다** — 시스템 스코프인 채로 enqueue 하면 무소속 잡이 되어 FK 에서 죽는다.
+  const channels = await listChannelsForSweep();
   let queued = 0;
 
   for (const ch of channels) {
     if (ch.status === "revoked") continue;
-    const id = await enqueue("channel.analyze", { channelId: ch.channelId }, {
-      dedupeKey: `channel.analyze:${ch.channelId}`,
-    });
+    const id = await runWithTenant({ scope: ch.tenantId, via: "system" }, () =>
+      enqueue("channel.analyze", { channelId: ch.channelId }, {
+        dedupeKey: `channel.analyze:${ch.channelId}`,
+      }),
+    );
     if (id) queued++;
   }
 
@@ -1345,6 +1351,15 @@ async function loop(): Promise<void> {
     }
     drained++;
 
+    // 잡은 시스템 스코프로 집었지만(누구 것인지 모른 채 집으므로), **실행은 그 잡의 테넌트로**
+    // 한다. 이 안에서 일어나는 모든 DB 접근·타이머(heartbeat)·자식 프로세스 콜백이 같은
+    // 컨텍스트를 물려받아, 핸들러가 남의 테넌트 데이터를 건드릴 방법이 없어진다.
+    await runWithTenant({ scope: job.tenantId || DEFAULT_TENANT_ID, via: "job" }, () => runJob(job!));
+  }
+}
+
+async function runJob(job: Job): Promise<void> {
+  {
     // Keep the lock fresh while the job runs, so requeueStale (30-min sweep) never hands a
     // still-executing long job (content.analyze) to a second worker. 5-min cadence, well
     // under the 30-min stale window. Track the lock value we own so heartbeatJob's guard can
@@ -1400,7 +1415,7 @@ async function loop(): Promise<void> {
         if (channelId) await markChannelRevoked(channelId).catch(() => {});
         console.error(`[worker] job ${job.id} (${job.type}): token revoked — channel ${channelId} parked`);
         await completeJob(job.id);
-        continue;
+        return;   // (루프에서 runJob 으로 분리되며 continue → return)
       }
       const message = String(err?.message ?? err);
       console.error(`[worker] job ${job.id} (${job.type}) failed:`, message);
@@ -1446,7 +1461,8 @@ async function main(): Promise<void> {
   const recovered = await requeueStale();
   if (recovered) console.log(`[worker] requeued ${recovered} stale job(s)`);
 
-  console.log("[worker] queue:", JSON.stringify(await queueStats()));
+  // 부팅 로그의 큐 요약은 운영 지표라 전 테넌트 합계로 본다.
+  console.log("[worker] queue:", JSON.stringify(await runAsSystem(queueStats)));
 
   if (RUNS_SWEEP) await sweepDueChannels();
   // drain 모드는 Scheduler 가 주기적으로 깨우므로 내부 타이머가 필요 없다.

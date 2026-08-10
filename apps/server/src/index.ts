@@ -15,7 +15,17 @@ import {
   SESSION_COOKIE,
   authRequired,
   acceptInvite,
+  canManageWorkspace,
+  countActiveOwners,
   createInvite,
+  getMember,
+  getWorkspace,
+  isWorkspaceOwner,
+  listMembers,
+  listPendingInvites,
+  renameWorkspace,
+  revokeInvite,
+  updateMember,
   createSession,
   destroyAllSessions,
   destroySession,
@@ -446,18 +456,153 @@ app.post("/api/auth/password", async (c) => {
   return c.json({ ok: true });
 });
 
-// 초대 — owner/admin 만. 초대 링크의 토큰은 **응답에 딱 한 번** 나간다(메일 발송은 아직 없음).
-app.post("/api/auth/invites", async (c) => {
+// ── 워크스페이스 (= 테넌트 = 방송사 하나) ─────────────────────────────────────
+// 방송사마다 직원이 여러 명이고 같은 자료를 함께 본다. 그래서 계정은 **워크스페이스에
+// 소속**되고, 워크스페이스 안의 owner/admin 이 동료를 초대한다. 초대받은 admin 은 또
+// 초대할 수 있어서, 우리가 매번 개입하지 않아도 조직이 스스로 늘어난다.
+//
+// 여기 라우트는 전부 **자기 워크스페이스만** 대상으로 한다 — tenantId 를 요청에서 받지 않고
+// 세션에서 꺼낸다. 남의 워크스페이스를 건드리는 경로는 superadmin 콘솔뿐이고, 그쪽은 사유와
+// 감사 기록을 요구한다.
+
+/** 워크스페이스 관리 권한(owner·admin·superadmin) 확인. */
+function requireManager(c: Context<AppEnv>): User {
   const user = requireUser(c);
-  if (user.role !== "owner" && user.role !== "admin") {
-    return c.json({ error: "forbidden", message: "초대는 owner/admin 만 가능합니다." }, 403);
+  if (!canManageWorkspace(user.role)) {
+    throw new HTTPException(403, { message: "워크스페이스 관리는 owner/admin 만 가능합니다." });
   }
+  return user;
+}
+
+app.get("/api/workspace", async (c) => {
+  const user = requireUser(c);
+  const ws = await getWorkspace(user.tenantId);
+  if (!ws) return c.json({ error: "not_found" }, 404);
+  const members = await listMembers(user.tenantId);
+  return c.json({
+    workspace: ws,
+    memberCount: members.filter((m) => m.status === "active").length,
+    myRole: user.role,
+    canManage: canManageWorkspace(user.role),
+  });
+});
+
+app.patch("/api/workspace", async (c) => {
+  const user = requireUser(c);
+  if (!isWorkspaceOwner(user.role)) {
+    return c.json({ error: "forbidden", message: "워크스페이스 이름 변경은 owner 만 가능합니다." }, 403);
+  }
+  const { name } = await c.req.json<{ name?: string }>().catch(() => ({}) as any);
+  const trimmed = String(name ?? "").trim();
+  if (!trimmed) return c.json({ error: "name_required" }, 400);
+  if (trimmed.length > 60) return c.json({ error: "name_too_long" }, 400);
+  await renameWorkspace(user.tenantId, trimmed);
+  return c.json({ ok: true, name: trimmed });
+});
+
+/** 멤버 목록 — 워크스페이스 안에서는 누구나 동료가 누구인지 볼 수 있다(집단 작업이므로). */
+app.get("/api/workspace/members", async (c) => {
+  const user = requireUser(c);
+  const members = await listMembers(user.tenantId);
+  return c.json({
+    members: members.map((m) => ({
+      id: m.id, email: m.email, name: m.name, role: m.role, status: m.status,
+      createdAt: m.createdAt, lastLoginAt: m.lastLoginAt, isMe: m.id === user.id,
+    })),
+  });
+});
+
+/**
+ * 역할 변경 / 정지. 지켜야 할 선이 셋이다:
+ *   · 자기 자신은 못 바꾼다 — 실수로 스스로 권한을 잃고 갇히는 사고를 막는다.
+ *   · admin 은 owner 를 못 건드린다 — 아랫사람이 윗사람을 정지시킬 수 있으면 위계가 무의미해진다.
+ *   · **마지막 owner 는 강등도 정지도 안 된다** — 주인 없는 워크스페이스는 아무도 초대를 못 해
+ *     남은 사람이 갇힌다.
+ */
+app.patch("/api/workspace/members/:id", async (c) => {
+  const user = requireManager(c);
+  const targetId = c.req.param("id");
+  const { role, status } = await c.req.json<{ role?: string; status?: string }>().catch(() => ({}) as any);
+
+  if (targetId === user.id) {
+    return c.json({ error: "cannot_change_self", message: "자기 자신의 권한은 바꿀 수 없습니다." }, 400);
+  }
+  if (role && !["owner", "admin", "member"].includes(role)) return c.json({ error: "invalid_role" }, 400);
+  if (status && !["active", "suspended"].includes(status)) return c.json({ error: "invalid_status" }, 400);
+  if (!role && !status) return c.json({ error: "nothing_to_update" }, 400);
+
+  const target = await getMember(user.tenantId, targetId);
+  if (!target) return c.json({ error: "not_found" }, 404);
+
+  if (isWorkspaceOwner(target.role) && !isWorkspaceOwner(user.role)) {
+    return c.json({ error: "forbidden", message: "admin 은 owner 를 변경할 수 없습니다." }, 403);
+  }
+  if (role === "owner" && !isWorkspaceOwner(user.role)) {
+    return c.json({ error: "forbidden", message: "owner 승격은 owner 만 할 수 있습니다." }, 403);
+  }
+
+  const losesOwner = isWorkspaceOwner(target.role)
+    && ((role && role !== "owner") || status === "suspended");
+  if (losesOwner && (await countActiveOwners(user.tenantId)) <= 1) {
+    return c.json({
+      error: "last_owner",
+      message: "마지막 owner 입니다. 다른 사람을 owner 로 올린 뒤에 변경하세요.",
+    }, 400);
+  }
+
+  await updateMember(user.tenantId, targetId, { role: role as any, status });
+  // 정지는 세션까지 끊어야 실제로 막힌다 — 안 그러면 이미 열려 있는 창은 계속 돈다.
+  if (status === "suspended") await destroyAllSessions(targetId);
+  return c.json({ ok: true });
+});
+
+/** 대기 중인 초대 — 누가 아직 안 들어왔는지 보여야 중복 초대를 안 한다. */
+app.get("/api/workspace/invites", async (c) => {
+  const user = requireManager(c);
+  return c.json({ invites: await listPendingInvites(user.tenantId) });
+});
+
+/**
+ * 동료 초대. 토큰은 **응답에 딱 한 번** 나간다(메일 발송은 아직 없으므로 직접 전달).
+ * 초대할 수 있는 역할은 자기 이하로 제한한다 — admin 이 owner 를 만들어 자기 위를 세우지 못하게.
+ */
+app.post("/api/workspace/invites", async (c) => {
+  const user = requireManager(c);
+  const { email, role } = await c.req.json<{ email?: string; role?: string }>().catch(() => ({}) as any);
+  if (!email) return c.json({ error: "email_required" }, 400);
+  const wanted = role ?? "member";
+  if (!["owner", "admin", "member"].includes(wanted)) return c.json({ error: "invalid_role" }, 400);
+  if (wanted === "owner" && !isWorkspaceOwner(user.role)) {
+    return c.json({ error: "forbidden", message: "owner 초대는 owner 만 가능합니다." }, 403);
+  }
+  try {
+    const inv = await createInvite({
+      tenantId: user.tenantId,          // 자기 워크스페이스로만 초대할 수 있다
+      email,
+      role: wanted as "owner" | "admin" | "member",
+      invitedBy: user.id,
+    });
+    return c.json({ inviteId: inv.id, token: inv.token, expiresAt: inv.expiresAt });
+  } catch (e: any) {
+    return c.json({ error: "invite_failed", message: String(e?.message ?? e) }, 400);
+  }
+});
+
+app.delete("/api/workspace/invites/:id", async (c) => {
+  const user = requireManager(c);
+  const ok = await revokeInvite(user.tenantId, c.req.param("id"));
+  return ok ? c.json({ ok: true }) : c.json({ error: "not_found" }, 404);
+});
+
+// 구 경로. 워크스페이스 초대로 이름이 바뀌었지만 이미 쓰던 곳이 있을 수 있어 남겨 둔다.
+app.post("/api/auth/invites", async (c) => {
+  const user = requireManager(c);
   const { email, role } = await c.req.json<{ email?: string; role?: string }>().catch(() => ({}) as any);
   if (!email) return c.json({ error: "email_required" }, 400);
   if (role && !["admin", "member"].includes(role)) return c.json({ error: "invalid_role" }, 400);
   try {
     const inv = await createInvite({
-      tenantId: user.tenantId,          // 자기 테넌트로만 초대할 수 있다
+      tenantId: user.tenantId,
       email,
       role: (role as "admin" | "member") ?? "member",
       invitedBy: user.id,

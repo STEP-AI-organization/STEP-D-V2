@@ -9,7 +9,8 @@
  * Claiming uses FOR UPDATE SKIP LOCKED: two workers can never take the same job, so
  * scaling out is just starting another process.
  */
-import { getPool } from "./db-pg.ts";
+import { getPool, getRawPool } from "./db-pg.ts";
+import { runAsSystem } from "./tenant.ts";
 
 export type JobType =
   | "channel.analyze"
@@ -57,6 +58,11 @@ export interface Job {
   error: string | null;
   createdAt: number;
   updatedAt: number;
+  /**
+   * 이 잡이 누구의 일인가. 워커는 잡을 **시스템 스코프로 집은 뒤** 이 값으로 컨텍스트를
+   * 세우고 핸들러를 돌린다 — 그래야 핸들러 안의 모든 DB 접근이 그 테넌트로 제한된다.
+   */
+  tenantId: string;
 }
 
 /** A job stuck in `running` this long is assumed to be a crashed worker. */
@@ -68,7 +74,8 @@ const MAX_BACKOFF_MS = 30 * 60 * 1000;
 // only — new schema changes go in NEW numbered migrations, not here. Both are IF NOT
 // EXISTS and coexist. See docs/ops/migrations.md.
 export async function initQueue(): Promise<void> {
-  const pool = getPool();
+  // 기동 시 스키마 부트스트랩 — 테넌트 컨텍스트 밖이라 스코프 없는 풀을 쓴다.
+  const pool = getRawPool();
   await pool.query(`
     CREATE TABLE IF NOT EXISTS job_queue (
       id          TEXT PRIMARY KEY,
@@ -134,7 +141,13 @@ export async function enqueue(
  * Take the next due job. SKIP LOCKED means concurrent workers step over each other's
  * rows instead of blocking, so this is safe to call from many processes at once.
  */
-export async function claimJob(types?: JobType[]): Promise<Job | null> {
+export function claimJob(types?: JobType[]): Promise<Job | null> {
+  // 큐 픽업은 **전 테넌트 횡단이 본래 목적**이다 — 워커는 다음 잡이 누구 것인지 모른 채 집는다.
+  // 그래서 시스템 스코프로 돌리고, 집은 뒤 job.tenantId 로 컨텍스트를 세운다(worker.ts).
+  return runAsSystem(() => claimJobInner(types));
+}
+
+async function claimJobInner(types?: JobType[]): Promise<Job | null> {
   const now = Date.now();
   // Optional lane filter: a worker claims ONLY its job types, so content and YouTube work
   // drain on separate processes without starving each other (SKIP LOCKED keeps them from
@@ -157,7 +170,8 @@ export async function claimJob(types?: JobType[]): Promise<Job | null> {
      RETURNING id, type, payload, status, attempts,
                maxattempts AS "maxAttempts", runafter AS "runAfter",
                lockedat AS "lockedAt", error,
-               createdat AS "createdAt", updatedat AS "updatedAt"`,
+               createdat AS "createdAt", updatedat AS "updatedAt",
+               tenant_id AS "tenantId"`,
     params,
   );
   return (rows[0] as Job | undefined) ?? null;
@@ -231,7 +245,12 @@ export async function failJob(id: string, error: string): Promise<void> {
  * attempts are spent goes to 'failed' instead of 'pending', or a job that OOM-kills the
  * worker would crash-loop forever (claimJob's attempts filter is the second half of this).
  */
-export async function requeueStale(): Promise<number> {
+export function requeueStale(): Promise<number> {
+  // 죽은 워커 회수 — 테넌트를 가리지 않는 운영 작업.
+  return runAsSystem(requeueStaleInner);
+}
+
+async function requeueStaleInner(): Promise<number> {
   const now = Date.now();
   const { rowCount } = await getPool().query(
     `UPDATE job_queue SET

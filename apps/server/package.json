@@ -19,6 +19,8 @@
     "migrate:redo": "pnpm migrate redo",
     "migrate:create": "node scripts/create-migration.mjs",
     "migrate:status": "node --env-file-if-exists=.env scripts/migrate-status.mjs",
+    "user:create": "node --import tsx --env-file .env scripts/create-user.mts",
+    "tenants:report": "node --import tsx --env-file .env scripts/tenant-report.mts",
     "canva:sync": "node --import tsx --env-file .env scripts/sync-canva-templates.mts",
     "canva:push": "node --import tsx --env-file .env scripts/push-canva-template.mts"
   },
