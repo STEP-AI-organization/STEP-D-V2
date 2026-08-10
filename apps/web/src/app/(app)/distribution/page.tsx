@@ -1,289 +1,184 @@
 "use client";
 
+/**
+ * U8 · 배포 (README §7 · FLOWS F4).
+ *
+ * 무엇이 어디로 언제 나갔는지의 기록. 두 가지를 특히 지킨다:
+ *
+ *  - **`기록됨`을 `게시됨`처럼 보여주지 않는다** (F4 Invariant). Meta·TikTok·SMR 은
+ *    파일이 올라가지 않는다 — 색도 문구도 분리한다.
+ *  - **실패는 자동 재시도하지 않는다** (F4-4 ⊘). 사람이 이 화면의 버튼을 눌러야 다시 간다.
+ *    중복 게시 위험 때문이다.
+ */
+import Link from "next/link";
 import { useMemo, useState } from "react";
-import { CalendarClock } from "lucide-react";
-import { PageHeader } from "@/components/ui/page-header";
-import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
-import { StatusBadge } from "@/components/ui/status-badge";
-import { Table, THead, TBody, TR, TH, TD } from "@/components/ui/table";
-import { PublishDialog } from "@/components/publish-dialog";
-import { ExportExcelButton } from "@/components/export-excel-button";
-import { useAppData } from "@/lib/data/store";
-import { useToast } from "@/components/ui/toast";
-import { channelLabel, DISTRIBUTION_CHANNELS, type DistributionChannel, type StatusTone } from "@/lib/constants";
-import { humanReserve, nextWeekdayReserve, WEEKDAYS } from "@/lib/reserve-date";
-import { structuralBlockers, type EvalContext } from "@/lib/publish/requirements";
-import type { Clip, DistributionState } from "@/lib/types";
 
-const CHANNELS = Object.keys(DISTRIBUTION_CHANNELS) as DistributionChannel[];
+import { StatusBadge } from "@/components/ui/status-badge";
+import { useToast } from "@/components/ui/toast";
+import { useAppData } from "@/lib/data/store";
+import { fmtTime } from "@/lib/gate-ui";
+import type { Clip, DistributionState } from "@/lib/types";
+import type { StatusTone } from "@/lib/constants";
+import { cn } from "@/lib/utils";
+
 const DIST_TONE: Record<DistributionState["status"], StatusTone> = {
   none: "idle",
   pending: "progress",
   scheduled: "warn",
   published: "done",
-  // 기록됨은 게시가 아니다 — 초록(done) 을 주지 않는다(F4 Invariant).
+  // 기록됨은 게시가 아니다 — 초록(done)을 주지 않는다.
   recorded: "idle",
   failed: "error",
 };
+
 const DIST_LABEL: Record<DistributionState["status"], string> = {
   none: "—",
   pending: "업로드 중",
   scheduled: "예약됨",
   published: "게시됨",
-  recorded: "기록됨 · 앱에서 직접 게시",
+  recorded: "기록됨",
   failed: "실패",
 };
 
+type Row = {
+  clip: Clip;
+  dist: DistributionState;
+  programTitle: string;
+  episodeNumber?: number;
+};
+
 export default function DistributionPage() {
-  const { clips, retryDistribution, bulkPublish, getEpisode, getProgram, connections, loading } = useAppData();
+  const { clips, episodes, programs, retryDistribution, loading } = useAppData();
   const { toast } = useToast();
-  const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [dialogClips, setDialogClips] = useState<string[] | null>(null);
+  const [channel, setChannel] = useState<string>("all");
 
-  function retry(clipId: string, channel: DistributionChannel) {
-    retryDistribution(clipId, channel);
-    toast({ title: "재시도 요청됨", description: `${channelLabel(channel)} 재배포를 시작했습니다.`, tone: "progress" });
-  }
+  const rows: Row[] = useMemo(() => {
+    const out: Row[] = [];
+    for (const clip of clips) {
+      const ep = episodes.find((e) => e.id === clip.episodeId);
+      const programTitle = programs.find((p) => p.id === ep?.programId)?.title ?? "";
+      for (const dist of clip.distributions ?? []) {
+        if (dist.status === "none") continue;
+        out.push({ clip, dist, programTitle, episodeNumber: ep?.episodeNumber });
+      }
+    }
+    return out;
+  }, [clips, episodes, programs]);
 
-  /** Structural blockers for a channel (excludes publish-time inputs) — matrix hint. */
-  function blockersFor(clip: Clip, channel: DistributionChannel) {
-    const episode = getEpisode(clip.episodeId);
-    const program = episode ? getProgram(episode.programId) : undefined;
-    const ctx: EvalContext = { clip, episode, program, connections, inputs: {} };
-    return structuralBlockers(channel, ctx);
-  }
+  const channels = useMemo(() => [...new Set(rows.map((r) => r.dist.channel))], [rows]);
+  const shown = channel === "all" ? rows : rows.filter((r) => r.dist.channel === channel);
 
-  // weekly template
-  const [weekday, setWeekday] = useState(3); // 수
-  const [time, setTime] = useState("19:00");
-  const [tplChannels, setTplChannels] = useState<Set<DistributionChannel>>(new Set(["smr", "youtube"]));
-
-  const scheduled = useMemo(
-    () =>
-      clips.flatMap((c) =>
-        c.distributions
-          .filter((d) => d.status === "scheduled")
-          .map((d) => ({ clip: c, dist: d })),
-      ),
-    [clips],
-  );
-
-  function toggleSel(id: string) {
-    setSelected((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  }
-
-  function applyWeekly() {
-    const readyIds = clips.filter((c) => c.status !== "published").map((c) => c.id);
-    const targetIds = readyIds.length ? readyIds : clips.map((c) => c.id);
-    const [hh, mm] = time.split(":").map(Number);
-    const reserveDate = nextWeekdayReserve(weekday, hh, mm);
-    bulkPublish(targetIds, [...tplChannels], { reserveDate, scheduled: true });
-    toast({
-      title: "일괄 예약 완료",
-      description: `${targetIds.length}개 클립 · 매주 ${WEEKDAYS[weekday]} ${time} · ${tplChannels.size}개 채널`,
-      tone: "warn",
-    });
-  }
+  const counts = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const r of rows) m.set(r.dist.status, (m.get(r.dist.status) ?? 0) + 1);
+    return m;
+  }, [rows]);
 
   return (
-    <>
-      <PageHeader
-        eyebrow="멀티채널 배포"
-        title="배포현황"
-        description="클립 × 채널 현황. 채널마다 필수 요건을 확인하고 준비된 채널부터 개별 발행합니다. 실패는 그 자리에서 재시도합니다."
-        actions={
-          <>
-            <ExportExcelButton />
-            <Button
-              size="sm"
-              disabled={selected.size === 0}
-              onClick={() => setDialogClips([...selected])}
+    <div className="mx-auto flex max-w-[1240px] flex-col gap-[14px]">
+      <div className="flex flex-wrap items-center gap-[9px]">
+        <div className="flex flex-wrap gap-[3px]">
+          <button
+            type="button"
+            className={cn("sd-btn", channel === "all" && "sd-btn--on")}
+            onClick={() => setChannel("all")}
+          >
+            전체
+            <span className="sd-mono ml-1.5 text-[10.5px]" style={{ opacity: 0.7 }}>{rows.length}</span>
+          </button>
+          {channels.map((ch) => (
+            <button
+              key={ch}
+              type="button"
+              className={cn("sd-btn", channel === ch && "sd-btn--on")}
+              onClick={() => setChannel(ch)}
             >
-              채널별 배포 {selected.size > 0 && `(${selected.size})`}
-            </Button>
-          </>
-        }
-      />
+              {ch}
+              <span className="sd-mono ml-1.5 text-[10.5px]" style={{ opacity: 0.7 }}>
+                {rows.filter((r) => r.dist.channel === ch).length}
+              </span>
+            </button>
+          ))}
+        </div>
 
-      {/* matrix */}
-      <Card className="overflow-hidden p-0">
-        <Table>
-          <THead>
-            <tr>
-              <TH className="w-10" />
-              <TH>클립</TH>
-              {CHANNELS.map((ch) => (
-                <TH key={ch}>{channelLabel(ch)}</TH>
-              ))}
-              <TH />
-            </tr>
-          </THead>
-          <TBody>
-            {clips.map((clip) => {
-              const isSel = selected.has(clip.id);
-              return (
-                <TR key={clip.id} interactive className={isSel ? "bg-primary/[0.04]" : undefined}>
-                  <TD>
-                    <input
-                      type="checkbox"
-                      className="size-4 cursor-pointer"
-                      checked={isSel}
-                      onChange={() => toggleSel(clip.id)}
-                      aria-label={`${clip.title} 선택`}
-                    />
-                  </TD>
-                  <TD>
-                    <div className="font-medium">{clip.title}</div>
-                    <div className="text-xs text-muted-foreground">{clip.programTitle}</div>
-                  </TD>
-                  {CHANNELS.map((ch) => {
-                    const d = clip.distributions.find((x) => x.channel === ch);
-                    const status = d?.status ?? "none";
-                    return (
-                      <TD key={ch}>
-                        {status === "none" ? (
-                          (() => {
-                            const blockers = blockersFor(clip, ch);
-                            return blockers.length === 0 ? (
-                              <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground">
-                                <span className="size-1.5 rounded-full bg-status-done/70" aria-hidden />
-                                준비됨
-                              </span>
-                            ) : (
-                              <span
-                                className="inline-flex items-center gap-1 text-[11px] text-status-warn"
-                                title={blockers.map((b) => b.label).join(", ")}
-                              >
-                                <span className="size-1.5 rounded-full bg-status-warn" aria-hidden />
-                                {blockers.length}개 필요
-                              </span>
-                            );
-                          })()
-                        ) : (
-                          <div className="flex flex-col items-start gap-1">
-                            <StatusBadge tone={DIST_TONE[status]}>{DIST_LABEL[status]}</StatusBadge>
-                            {d?.reserveDate && (
-                              <span className="text-[11px] tabular-nums text-muted-foreground">
-                                {humanReserve(d.reserveDate)}
-                              </span>
-                            )}
-                            {d?.error && <span className="text-[11px] text-status-error">{d.error}</span>}
-                            {status === "failed" && (
-                              <Button size="xs" variant="outline" onClick={() => retry(clip.id, ch)}>
-                                재시도
-                              </Button>
-                            )}
-                          </div>
-                        )}
-                      </TD>
-                    );
-                  })}
-                  <TD numeric>
-                    <Button size="xs" variant="outline" onClick={() => setDialogClips([clip.id])}>
-                      배포
-                    </Button>
-                  </TD>
-                </TR>
-              );
-            })}
-            {clips.length === 0 && (
-              <tr>
-                <td
-                  colSpan={CHANNELS.length + 3}
-                  className="px-4 py-12 text-center text-sm text-muted-foreground"
-                >
-                  {loading ? "클립을 불러오는 중…" : "배포할 클립이 없습니다. 회차에서 추천을 채택해 클립을 만드세요."}
-                </td>
-              </tr>
-            )}
-          </TBody>
-        </Table>
-      </Card>
-
-      {/* scheduler */}
-      <div className="mt-6 grid gap-4 lg:grid-cols-2">
-        <Card className="p-4">
-          <h3 className="mb-3 flex items-center gap-1.5 text-sm font-semibold">
-            <CalendarClock className="size-4" /> 주간 일괄 예약 템플릿
-          </h3>
-          <div className="space-y-3 text-sm">
-            <div className="flex items-center gap-2">
-              <span className="w-12 text-xs text-muted-foreground">요일</span>
-              <div className="flex gap-1">
-                {WEEKDAYS.map((w, i) => (
-                  <button
-                    key={w}
-                    onClick={() => setWeekday(i)}
-                    className={`size-7 rounded-md border text-xs ${weekday === i ? "border-primary bg-primary/10" : "border-border text-muted-foreground"}`}
-                  >
-                    {w}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="w-12 text-xs text-muted-foreground">시각</span>
-              <input
-                type="time"
-                value={time}
-                onChange={(e) => setTime(e.target.value)}
-                className="rounded-md border border-border bg-background px-2 py-1 text-sm"
-              />
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="w-12 text-xs text-muted-foreground">채널</span>
-              <div className="flex gap-1.5">
-                {CHANNELS.map((ch) => (
-                  <button
-                    key={ch}
-                    onClick={() =>
-                      setTplChannels((prev) => {
-                        const next = new Set(prev);
-                        if (next.has(ch)) next.delete(ch);
-                        else next.add(ch);
-                        return next;
-                      })
-                    }
-                    className={`rounded-md border px-2 py-1 text-xs ${tplChannels.has(ch) ? "border-primary bg-primary/10" : "border-border text-muted-foreground"}`}
-                  >
-                    {channelLabel(ch)}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <Button size="sm" onClick={applyWeekly} disabled={tplChannels.size === 0}>
-              준비된 클립 일괄 예약 (매주 {WEEKDAYS[weekday]} {time})
-            </Button>
-          </div>
-        </Card>
-
-        <Card className="p-4">
-          <h3 className="mb-3 text-sm font-semibold">예약 현황 ({scheduled.length})</h3>
-          {scheduled.length === 0 ? (
-            <p className="text-sm text-muted-foreground">예약된 배포가 없습니다.</p>
-          ) : (
-            <ul className="space-y-1.5">
-              {scheduled.map(({ clip, dist }) => (
-                <li key={`${clip.id}-${dist.channel}`} className="flex items-center justify-between gap-2 text-sm">
-                  <span className="truncate">{clip.title}</span>
-                  <span className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
-                    <StatusBadge tone="warn">{channelLabel(dist.channel)}</StatusBadge>
-                    <span className="tabular-nums">{humanReserve(dist.reserveDate)}</span>
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
-        </Card>
+        <span className="sd-mono ml-auto text-[11px]" style={{ color: "var(--sd-mut)" }}>
+          게시됨 {counts.get("published") ?? 0} · 기록됨 {counts.get("recorded") ?? 0} ·{" "}
+          예약 {counts.get("scheduled") ?? 0} · 실패 {counts.get("failed") ?? 0}
+        </span>
       </div>
 
-      {dialogClips && <PublishDialog clipIds={dialogClips} onClose={() => setDialogClips(null)} />}
-    </>
+      {/* 기록됨의 의미를 화면에 한 번 못박는다 — 태그만으로는 오해가 남는다. */}
+      {(counts.get("recorded") ?? 0) > 0 && (
+        <div
+          className="rounded-[4px] px-3 py-2 text-[11.5px] leading-relaxed"
+          style={{ border: "1px solid var(--sd-border)", background: "var(--sd-card-sub)", color: "var(--sd-mut)" }}
+        >
+          <b style={{ color: "var(--sd-fg)" }}>기록됨</b>은 게시가 아닙니다. Instagram·Facebook·TikTok·SMR 은
+          파일이 올라가지 않고 우리 쪽 기록만 남습니다 — 실제 게시는 담당자가 해당 앱에서 직접 해야 합니다.
+        </div>
+      )}
+
+      {shown.length === 0 ? (
+        <div
+          className="sd-ph grid min-h-[160px] place-items-center rounded-[6px] px-6 text-center"
+          style={{ border: "1px dashed var(--sd-border)" }}
+        >
+          {loading ? "불러오는 중…" : "배포 기록이 없습니다 — 미디어 화면에서 배포하면 여기 쌓입니다"}
+        </div>
+      ) : (
+        <div className="flex flex-col gap-1.5">
+          {shown.map((r, i) => (
+            <div key={`${r.clip.id}-${r.dist.channel}-${i}`} className="sd-card flex flex-wrap items-center gap-3 px-3 py-2.5">
+              <div className="min-w-[240px] flex-1">
+                <div className="truncate text-[12.5px] font-medium" style={{ color: "var(--sd-fg)" }}>
+                  {r.clip.title}
+                </div>
+                <div className="sd-mono truncate text-[10.5px]" style={{ color: "var(--sd-mut)" }}>
+                  {r.programTitle}
+                  {r.episodeNumber != null ? ` · 회차 ${r.episodeNumber}` : ""} · {fmtTime(r.clip.durationSec)}
+                </div>
+              </div>
+
+              <span className="sd-tag">{r.dist.channel}</span>
+              {r.dist.reserveDate && (
+                <span className="sd-tag sd-mono">{r.dist.reserveDate}</span>
+              )}
+              <StatusBadge tone={DIST_TONE[r.dist.status]}>{DIST_LABEL[r.dist.status]}</StatusBadge>
+
+              {r.dist.status === "failed" && (
+                <div className="flex items-center gap-2">
+                  <span className="max-w-[280px] truncate text-[11px]" style={{ color: "var(--sd-danger-strong)" }}>
+                    {r.dist.error ?? "사유 없음"}
+                  </span>
+                  {/* 자동 재시도 없음 — 사람이 누른다 (F4-4 ⊘). */}
+                  <button
+                    type="button"
+                    className="sd-btn"
+                    onClick={() => {
+                      retryDistribution(r.clip.id, r.dist.channel);
+                      toast({ title: "재시도를 요청했습니다", description: "자동 재시도는 없습니다 — 결과를 확인하세요.", tone: "progress" });
+                    }}
+                  >
+                    재시도
+                  </button>
+                </div>
+              )}
+
+              {r.dist.externalId && r.dist.channel === "youtube" && (
+                <a
+                  href={`https://www.youtube.com/watch?v=${r.dist.externalId}`}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="sd-btn"
+                >
+                  영상 열기
+                </a>
+              )}
+              <Link href={`/editor/${r.clip.id}`} className="sd-btn">편집</Link>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
   );
 }

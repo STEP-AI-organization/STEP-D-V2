@@ -15,6 +15,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { IssuePanel } from "@/components/gate/issue-panel";
+import { PublishDialog } from "@/components/publish/publish-dialog";
 import { useToast } from "@/components/ui/toast";
 import { useSession } from "@/lib/auth";
 import { roleOf } from "@/lib/roles";
@@ -42,7 +43,7 @@ export default function MediaPage() {
   const [issues, setIssues] = useState<Record<string, RightsIssue[]>>({});
   const [gateError, setGateError] = useState<string | null>(null);
   const [openIssues, setOpenIssues] = useState<string | null>(null);
-  const [publishing, setPublishing] = useState(false);
+  const [publishTarget, setPublishTarget] = useState<string[] | null>(null);
 
   const clipIds = useMemo(() => clips.map((c) => c.id), [clips]);
   const idsKey = clipIds.join(",");
@@ -87,30 +88,20 @@ export default function MediaPage() {
     });
   }
 
-  async function publish() {
-    if (selectedRows.length === 0) return;
+  /**
+   * 배포 모달을 연다. 여기서 바로 보내지 않는 이유: 채널마다 규칙이 다르고(F4-2),
+   * 어느 채널로 보낼지와 예약 여부를 고르는 게 배포의 절반이다.
+   */
+  function openPublish() {
     if (!role.publish) {
       toast({ title: "배포 권한이 없습니다", description: "CP·PD 만 배포할 수 있습니다.", tone: "error" });
       return;
     }
-    setPublishing(true);
-    try {
-      // 서버가 다시 판정한다 — 화면의 통과 여부는 참고일 뿐이다.
-      const { publishClips } = await import("@/lib/data/api");
-      const res = await publishClips(selectedRows.map((c) => c.id), "youtube");
-      const notice = (res as { notice?: string }).notice;
-      toast({
-        title: "배포 요청을 보냈습니다",
-        description: notice || "결과를 배포 화면에서 확인하세요.",
-        tone: notice && notice.includes("제외") ? "warn" : "done",
-      });
-      setSelected(new Set());
-      await loadGates();
-    } catch (err) {
-      toast({ title: "배포 실패", description: err instanceof Error ? err.message : String(err), tone: "error" });
-    } finally {
-      setPublishing(false);
-    }
+    // 게이트에 막힌 건은 애초에 모달로 넘기지 않는다 — 서버가 또 거를 거지만,
+    // 고를 수 없는 것을 목록에 넣으면 사용자는 뭘 고른 건지 헷갈린다.
+    const passing = selectedRows.filter((c) => gates[c.id]?.allowed).map((c) => c.id);
+    if (passing.length === 0) return;
+    setPublishTarget(passing);
   }
 
   return (
@@ -213,13 +204,21 @@ export default function MediaPage() {
           <button
             type="button"
             className="sd-btn sd-btn-primary"
-            disabled={publishing || passing === 0}
+            disabled={passing === 0}
             title={passing === 0 ? "게이트를 통과한 건이 없습니다" : undefined}
-            onClick={publish}
+            onClick={openPublish}
           >
-            {publishing ? "보내는 중…" : `배포 (${passing}건)`}
+            배포 ({passing}건)
           </button>
         </div>
+      )}
+
+      {publishTarget && (
+        <PublishDialog
+          clipIds={publishTarget}
+          onClose={() => setPublishTarget(null)}
+          onDone={async () => { setSelected(new Set()); await loadGates(); }}
+        />
       )}
     </div>
   );
