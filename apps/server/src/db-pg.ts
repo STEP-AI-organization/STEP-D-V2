@@ -1909,6 +1909,202 @@ export async function listSearchEvents(opts: { event?: SearchEventKind; limit?: 
   return rows;
 }
 
+// ── 게이트: 권리·심의 이슈 · 판정 · 감사 로그 (migrations/0012, FLOWS F3) ────────
+//
+// 게이트 **상태는 저장하지 않는다.** 진실은 아래 행들이고 판정은 gate.ts 가 매번 계산한다.
+// 캐시 필드를 두면 그걸 덮어써서 통과시킬 수 있고, 그 순간 "어떤 경로로도"가 깨진다.
+
+export type GateSubjectType = "episode" | "recommendation" | "clip";
+
+export interface RightsIssueRow {
+  id: string;
+  subjectType: GateSubjectType;
+  subjectId: string;
+  kind: string;
+  resolution: string;
+  bandStart: number | null;
+  bandEnd: number | null;
+  note: string;
+  actor: string;
+  createdAt: string;
+  resolvedAt: string | null;
+  resolvedBy: string | null;
+  resolutionNote: string | null;
+  inheritedFrom: string | null;
+}
+
+const ISSUE_COLS = `id, subject_type AS "subjectType", subject_id AS "subjectId", kind,
+  resolution, band_start AS "bandStart", band_end AS "bandEnd", note, actor,
+  created_at AS "createdAt", resolved_at AS "resolvedAt", resolved_by AS "resolvedBy",
+  resolution_note AS "resolutionNote", inherited_from AS "inheritedFrom"`;
+
+export async function listRightsIssues(
+  subjectType: GateSubjectType,
+  subjectId: string,
+): Promise<RightsIssueRow[]> {
+  const { rows } = await pool.query<RightsIssueRow>(
+    `SELECT ${ISSUE_COLS} FROM rights_issue
+      WHERE subject_type = $1 AND subject_id = $2 ORDER BY created_at`,
+    [subjectType, subjectId],
+  );
+  return rows;
+}
+
+/** 여러 대상의 이슈를 한 번에 — 미디어 목록이 N+1 로 돌지 않게. */
+export async function listRightsIssuesFor(
+  subjectType: GateSubjectType,
+  subjectIds: string[],
+): Promise<Map<string, RightsIssueRow[]>> {
+  const out = new Map<string, RightsIssueRow[]>();
+  if (subjectIds.length === 0) return out;
+  const { rows } = await pool.query<RightsIssueRow>(
+    `SELECT ${ISSUE_COLS} FROM rights_issue
+      WHERE subject_type = $1 AND subject_id = ANY($2::text[]) ORDER BY created_at`,
+    [subjectType, subjectIds],
+  );
+  for (const r of rows) {
+    const list = out.get(r.subjectId);
+    if (list) list.push(r);
+    else out.set(r.subjectId, [r]);
+  }
+  return out;
+}
+
+export async function getRightsIssue(id: string): Promise<RightsIssueRow | null> {
+  const { rows } = await pool.query<RightsIssueRow>(
+    `SELECT ${ISSUE_COLS} FROM rights_issue WHERE id = $1`,
+    [id],
+  );
+  return rows[0] ?? null;
+}
+
+export async function insertRightsIssue(row: {
+  id: string;
+  subjectType: GateSubjectType;
+  subjectId: string;
+  kind: string;
+  resolution: string;
+  bandStart?: number | null;
+  bandEnd?: number | null;
+  note?: string;
+  actor: string;
+  inheritedFrom?: string | null;
+}): Promise<void> {
+  await pool.query(
+    `INSERT INTO rights_issue
+       (id, subject_type, subject_id, kind, resolution, band_start, band_end, note, actor, inherited_from)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+    [
+      row.id, row.subjectType, row.subjectId, row.kind, row.resolution,
+      row.bandStart ?? null, row.bandEnd ?? null, row.note ?? "", row.actor,
+      row.inheritedFrom ?? null,
+    ],
+  );
+}
+
+/** 해제/재개 — 이전 상태를 돌려준다(감사 로그의 from_state 로 쓰인다). */
+export async function updateRightsIssueResolution(
+  id: string,
+  next: { resolution: string; actor: string; resolutionNote: string },
+): Promise<string | null> {
+  // 이전 값은 CTE 로 먼저 붙잡는다. RETURNING 안에서 같은 테이블을 다시 읽는 방식은
+  // 스냅샷 규칙에 기대는 미묘한 코드라, 감사 로그의 from_state 를 거기에 맡기지 않는다.
+  const { rows } = await pool.query<{ prev: string | null }>(
+    `WITH prev AS (SELECT resolution FROM rights_issue WHERE id = $1)
+     UPDATE rights_issue
+        SET resolution = $2,
+            resolution_note = $4,
+            resolved_at = CASE WHEN $2 = 'resolved' THEN now() ELSE NULL END,
+            resolved_by = CASE WHEN $2 = 'resolved' THEN $3 ELSE NULL END
+      WHERE id = $1
+      RETURNING (SELECT resolution FROM prev) AS prev`,
+    [id, next.resolution, next.actor, next.resolutionNote],
+  );
+  return rows[0]?.prev ?? null;
+}
+
+export async function deleteRightsIssue(id: string): Promise<boolean> {
+  const r = await pool.query(`DELETE FROM rights_issue WHERE id = $1`, [id]);
+  return (r.rowCount ?? 0) > 0;
+}
+
+/** "이슈 없음"이라는 명시적 판정 (F2 Invariant — 미판정과 구분). */
+export async function putRightsJudgement(
+  subjectType: GateSubjectType,
+  subjectId: string,
+  actor: string,
+  note = "",
+): Promise<void> {
+  await pool.query(
+    `INSERT INTO rights_judgement (subject_type, subject_id, actor, note)
+     VALUES ($1,$2,$3,$4)
+     ON CONFLICT (subject_type, subject_id)
+       DO UPDATE SET actor = $3, note = $4, judged_at = now()`,
+    [subjectType, subjectId, actor, note],
+  );
+}
+
+export async function isJudged(subjectType: GateSubjectType, subjectId: string): Promise<boolean> {
+  const { rows } = await pool.query(
+    `SELECT 1 FROM rights_judgement WHERE subject_type = $1 AND subject_id = $2`,
+    [subjectType, subjectId],
+  );
+  return rows.length > 0;
+}
+
+export async function judgedSet(
+  subjectType: GateSubjectType,
+  subjectIds: string[],
+): Promise<Set<string>> {
+  if (subjectIds.length === 0) return new Set();
+  const { rows } = await pool.query<{ subject_id: string }>(
+    `SELECT subject_id FROM rights_judgement
+      WHERE subject_type = $1 AND subject_id = ANY($2::text[])`,
+    [subjectType, subjectIds],
+  );
+  return new Set(rows.map((r) => r.subject_id));
+}
+
+/**
+ * 감사 로그 — 누가·언제·무엇을 근거로 (FLOWS.md:74).
+ *
+ * ⚠️ 실패를 삼키지 않는다. 다른 로그(search_events)는 실패해도 무시하지만, 감사 로그가
+ * 조용히 빠지면 "기록에 없으니 안 한 일"이 되어 버린다. 기록이 안 되면 그 작업도 실패시킨다.
+ */
+export async function appendGateAudit(ev: {
+  subjectType: GateSubjectType;
+  subjectId: string;
+  action: string;
+  fromState?: string | null;
+  toState?: string | null;
+  actor: string;
+  basis?: string;
+  issueId?: string | null;
+}): Promise<void> {
+  await pool.query(
+    `INSERT INTO gate_audit
+       (subject_type, subject_id, action, from_state, to_state, actor, basis, issue_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+    [
+      ev.subjectType, ev.subjectId, ev.action, ev.fromState ?? null, ev.toState ?? null,
+      ev.actor, ev.basis ?? "", ev.issueId ?? null,
+    ],
+  );
+}
+
+export async function listGateAudit(
+  subjectType: GateSubjectType,
+  subjectId: string,
+  limit = 100,
+): Promise<Record<string, unknown>[]> {
+  const { rows } = await pool.query(
+    `SELECT * FROM gate_audit WHERE subject_type = $1 AND subject_id = $2
+      ORDER BY at DESC LIMIT ${Math.max(1, Math.min(limit, 500))}`,
+    [subjectType, subjectId],
+  );
+  return rows;
+}
+
 // ── cleanup ────────────────────────────────────────────────────────────────────
 
 export async function closeDb(): Promise<void> {

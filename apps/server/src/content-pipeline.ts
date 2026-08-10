@@ -1191,12 +1191,17 @@ export async function runContentAnalyze(mediaId: string, fast = false): Promise<
               episode: ep?.episodeNumber != null ? String(ep.episodeNumber) : (seg.scope?.episode ?? null),
               aired_at: ep?.broadDate ?? seg.scope?.aired_at ?? null,
             };
+            // ⚠️ 여기서 seg.rights.ppl 을 자동으로 써 넣던 코드를 뺐다 (FLOWS F3 — 자동 판정 없음).
+            // 파이프라인이 찾은 PPL 구간은 **검색 힌트**일 뿐 권리 판정이 아니다. 이걸 권리
+            // 필드에 쓰면 "시스템이 등록한 이슈"가 생기고, 사람이 등록하지 않은 것이 게이트를
+            // 움직이게 된다. 권리 이슈는 rights_issue 테이블에만, 사람이 등록할 때만 생긴다.
+            // 검출 결과는 아래 ppl_hint 로 남겨 검수 화면이 "여기 볼 만함"을 안내하는 데만 쓴다.
             if (overlapsPpl(seg.start, seg.end)) {
-              seg.rights = { ...(seg.rights ?? {}), ppl: true };
+              seg.rights = { ...(seg.rights ?? {}), ppl_hint: true };
             }
           }
           const n = await upsertSearchSegments(mediaId, segs);
-          const pplN = segs.filter((s) => (s.rights as { ppl?: boolean })?.ppl).length;
+          const pplN = segs.filter((s) => (s.rights as { ppl_hint?: boolean })?.ppl_hint).length;
           console.log(`[worker] content.analyze ${mediaId}: 검색 세그먼트 ${n}개 적재 (program=${ep?.programId ?? "-"} ep=${ep?.episodeNumber ?? "-"} ppl구간=${pplN})`);
         }
       }

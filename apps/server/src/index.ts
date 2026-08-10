@@ -23,6 +23,19 @@ import {
   prependEntity,
   commitAdoption,
   markRecommendationRejected,
+  // 게이트 (migrations/0012 · FLOWS F3)
+  listRightsIssues,
+  listRightsIssuesFor,
+  getRightsIssue,
+  insertRightsIssue,
+  updateRightsIssueResolution,
+  deleteRightsIssue,
+  putRightsJudgement,
+  isJudged,
+  judgedSet,
+  appendGateAudit,
+  listGateAudit,
+  type GateSubjectType,
   listMedia,
   getMedia,
   insertMedia,
@@ -147,6 +160,16 @@ import {
   readEpisodeNumber,
   readTrack,
 } from "./episode-intake.ts";
+import {
+  ISSUE_KINDS,
+  canResolve,
+  evaluateGate,
+  inheritedIssues,
+  isIssueKind,
+  isResolution,
+  type GateResult,
+  type Issue,
+} from "./gate.ts";
 import { listShortsTemplates, getShortsTemplate, toPercent } from "./shorts-template.ts";
 import {
   CANVA_CALLBACK_PATH, canvaConfigured, canvaConnected, canvaAuthUrl,
@@ -203,7 +226,9 @@ function annotateRights(rights: Record<string, unknown>): Record<string, string>
   if (rights.cast_ok == null) n.cast_ok = "출연자 권리 확인필요";
   if (rights.music_cleared === false) n.music_cleared = "⚠️ 음원 미클리어";
   else if (rights.music_cleared == null) n.music_cleared = "음원 확인필요";
-  if (rights.ppl === true) n.ppl = "협찬/PPL 구간";
+  // ppl_hint 는 파이프라인이 찾은 **힌트**다 — 권리 판정이 아니다(F3 자동 판정 없음).
+  // 문구도 판정처럼 읽히지 않게 쓴다. 구 데이터의 ppl 도 같은 취급.
+  if (rights.ppl_hint === true || rights.ppl === true) n.ppl = "PPL 가능성 — 검수 필요";
   return n;
 }
 
@@ -2845,6 +2870,181 @@ app.post("/api/thumbnail-refs/import-youtube", async (c) => {
   return c.json({ added: added.length, items: added });
 });
 
+// ── 게이트: 권리·심의 이슈 (FLOWS F3) ──────────────────────────────────────────
+//
+// **자동 판정이 없다.** 여기 있는 라우트는 전부 사람이 누르는 것이고, 그래서 전부
+// actor(누가)를 요구한다. actor 가 비면 400 이다 — "시스템이 등록했다"는 이슈는
+// 존재하면 안 되기 때문이다.
+//
+// ⚠️ actor 는 지금 클라이언트가 보내는 이름이다. 서버 인증은 S3 에서 붙는다.
+// 그때까지 감사 로그의 actor 는 "자칭"이라는 걸 전제로 읽어야 한다.
+
+const SUBJECT_TYPES = ["episode", "recommendation", "clip"] as const;
+
+function readSubjectType(v: unknown): GateSubjectType | null {
+  return (SUBJECT_TYPES as readonly string[]).includes(String(v)) ? (v as GateSubjectType) : null;
+}
+
+function readActor(v: unknown): string {
+  return typeof v === "string" ? v.trim() : "";
+}
+
+/** DB 행 → gate.ts 가 보는 모양. */
+function toIssue(r: { id: string; kind: string; resolution: string; bandStart: number | null; bandEnd: number | null; note: string }): Issue {
+  return {
+    id: r.id,
+    kind: r.kind,
+    resolution: r.resolution,
+    bandStart: r.bandStart,
+    bandEnd: r.bandEnd,
+    note: r.note,
+  };
+}
+
+/** 한 대상의 게이트를 계산한다. 저장된 상태를 읽는 게 아니라 매번 계산이다. */
+async function gateFor(subjectType: GateSubjectType, subjectId: string): Promise<GateResult> {
+  const [issues, judged] = await Promise.all([
+    listRightsIssues(subjectType, subjectId),
+    isJudged(subjectType, subjectId),
+  ]);
+  return evaluateGate({ judged, issues: issues.map(toIssue) });
+}
+
+app.get("/api/gate/:subjectType/:subjectId", async (c) => {
+  const subjectType = readSubjectType(c.req.param("subjectType"));
+  if (!subjectType) return c.json({ error: "invalid subjectType" }, 400);
+  const subjectId = c.req.param("subjectId");
+  const [gate, issues, judged] = await Promise.all([
+    gateFor(subjectType, subjectId),
+    listRightsIssues(subjectType, subjectId),
+    isJudged(subjectType, subjectId),
+  ]);
+  return c.json({ gate, issues, judged });
+});
+
+app.get("/api/rights-issues", async (c) => {
+  const subjectType = readSubjectType(c.req.query("subjectType"));
+  const subjectId = c.req.query("subjectId") ?? "";
+  if (!subjectType || !subjectId) return c.json({ error: "subjectType and subjectId required" }, 400);
+  return c.json({ issues: await listRightsIssues(subjectType, subjectId) });
+});
+
+app.post("/api/rights-issues", async (c) => {
+  const body = await c.req.json().catch(() => ({}) as Record<string, unknown>);
+  const subjectType = readSubjectType(body.subjectType);
+  const subjectId = typeof body.subjectId === "string" ? body.subjectId.trim() : "";
+  const actor = readActor(body.actor);
+  if (!subjectType || !subjectId) return c.json({ error: "subjectType and subjectId required" }, 400);
+  // 등록자가 없는 이슈는 만들지 않는다 — 자동 판정과 구분이 안 된다.
+  if (!actor) return c.json({ error: "actor required — 이슈는 사람이 등록합니다" }, 400);
+  if (!isIssueKind(body.kind)) {
+    return c.json({ error: "invalid kind", allowed: ISSUE_KINDS }, 400);
+  }
+  const resolution = isResolution(body.resolution) ? body.resolution : "open";
+  if (resolution === "resolved") {
+    // 처음부터 해제 상태로 만드는 건 "등록 없이 통과"와 같다.
+    return c.json({ error: "새 이슈를 resolved 로 만들 수 없습니다" }, 400);
+  }
+
+  const bandStart = typeof body.bandStart === "number" ? body.bandStart : null;
+  const bandEnd = typeof body.bandEnd === "number" ? body.bandEnd : null;
+  if ((bandStart === null) !== (bandEnd === null)) {
+    return c.json({ error: "bandStart 와 bandEnd 는 함께 있어야 합니다" }, 400);
+  }
+  if (bandStart !== null && bandEnd !== null && bandEnd <= bandStart) {
+    return c.json({ error: "bandEnd 는 bandStart 보다 커야 합니다" }, 400);
+  }
+
+  const id = newId("ri");
+  await insertRightsIssue({
+    id, subjectType, subjectId,
+    kind: body.kind, resolution, bandStart, bandEnd,
+    note: typeof body.note === "string" ? body.note.trim() : "",
+    actor,
+  });
+  await appendGateAudit({
+    subjectType, subjectId, action: "issue.create",
+    toState: resolution, actor,
+    basis: typeof body.note === "string" ? body.note.trim() : "",
+    issueId: id,
+  });
+  return c.json({ issue: await getRightsIssue(id), gate: await gateFor(subjectType, subjectId) });
+});
+
+app.patch("/api/rights-issues/:id", async (c) => {
+  const id = c.req.param("id");
+  const existing = await getRightsIssue(id);
+  if (!existing) return c.json({ error: "issue not found" }, 404);
+
+  const body = await c.req.json().catch(() => ({}) as Record<string, unknown>);
+  const actor = readActor(body.actor);
+  if (!actor) return c.json({ error: "actor required — 해제도 사람이 합니다" }, 400);
+  if (!isResolution(body.resolution)) return c.json({ error: "invalid resolution" }, 400);
+
+  const resolutionNote = typeof body.resolutionNote === "string" ? body.resolutionNote : "";
+  if (body.resolution === "resolved") {
+    // "블러 처리 완료" 같은 조치 확인이 있어야 통과로 바뀐다 (FLOWS.md:61).
+    const check = canResolve(toIssue(existing), resolutionNote);
+    if (!check.ok) return c.json({ error: check.reason }, 400);
+  }
+
+  const prev = await updateRightsIssueResolution(id, {
+    resolution: body.resolution,
+    actor,
+    resolutionNote: resolutionNote.trim(),
+  });
+  await appendGateAudit({
+    subjectType: existing.subjectType, subjectId: existing.subjectId,
+    action: body.resolution === "resolved" ? "issue.resolve" : "issue.reopen",
+    fromState: prev, toState: body.resolution, actor,
+    basis: resolutionNote.trim(), issueId: id,
+  });
+  return c.json({
+    issue: await getRightsIssue(id),
+    gate: await gateFor(existing.subjectType, existing.subjectId),
+  });
+});
+
+app.delete("/api/rights-issues/:id", async (c) => {
+  const id = c.req.param("id");
+  const existing = await getRightsIssue(id);
+  if (!existing) return c.json({ error: "issue not found" }, 404);
+  const actor = readActor(c.req.query("actor"));
+  if (!actor) return c.json({ error: "actor required" }, 400);
+
+  // 삭제 기록을 먼저 남긴다 — 지운 뒤 기록에 실패하면 흔적 없이 사라진다.
+  await appendGateAudit({
+    subjectType: existing.subjectType, subjectId: existing.subjectId,
+    action: "issue.delete", fromState: existing.resolution, actor,
+    basis: `${existing.kind} · ${existing.note}`, issueId: id,
+  });
+  await deleteRightsIssue(id);
+  return c.json({ ok: true, gate: await gateFor(existing.subjectType, existing.subjectId) });
+});
+
+/** "이슈 없음" 판정 — 이것도 사람의 판단이다(F2 Invariant). */
+app.post("/api/rights-judgement", async (c) => {
+  const body = await c.req.json().catch(() => ({}) as Record<string, unknown>);
+  const subjectType = readSubjectType(body.subjectType);
+  const subjectId = typeof body.subjectId === "string" ? body.subjectId.trim() : "";
+  const actor = readActor(body.actor);
+  if (!subjectType || !subjectId) return c.json({ error: "subjectType and subjectId required" }, 400);
+  if (!actor) return c.json({ error: "actor required" }, 400);
+
+  const note = typeof body.note === "string" ? body.note.trim() : "";
+  await putRightsJudgement(subjectType, subjectId, actor, note);
+  await appendGateAudit({
+    subjectType, subjectId, action: "judge", toState: "judged", actor, basis: note,
+  });
+  return c.json({ gate: await gateFor(subjectType, subjectId) });
+});
+
+app.get("/api/gate-audit/:subjectType/:subjectId", async (c) => {
+  const subjectType = readSubjectType(c.req.param("subjectType"));
+  if (!subjectType) return c.json({ error: "invalid subjectType" }, 400);
+  return c.json({ events: await listGateAudit(subjectType, c.req.param("subjectId")) });
+});
+
 // ── select generated thumbnail ─────────────────────────────────────────────────
 // Exactly one variant is marked chosen so later adoption has a stable, persisted decision.
 app.patch("/api/recommendations/:id/thumbnail", async (c) => {
@@ -2936,8 +3136,74 @@ app.post("/api/recommendations/:id/adopt", async (c) => {
     const latest = await getEntity<any>("recommendation", recId);
     return c.json({ clipId: latest?.adoptedClipId });
   }
-  return c.json({ clipId, clip });
+
+  await inheritGateToClip({
+    clipId,
+    episodeId: rec.episodeId,
+    recommendationId: recId,
+    segment: { start: rec.startTime, end: rec.endTime },
+  });
+
+  return c.json({ clipId, clip, gate: await gateFor("clip", clipId) });
 });
+
+/**
+ * 채택 시 권리·심의 이슈를 미디어로 승계한다 (F2-4 · F2 Invariant).
+ *
+ * "이슈가 승계되지 않은 미디어는 존재할 수 없다." 원본(회차·추천 구간)에 달린 이슈 중
+ * 잘라낸 구간과 겹치는 것만 내려온다. 회차 전체에 걸린 이슈(밴드 없음)는 무조건 따라온다.
+ *
+ * **판정도 함께 내려온다.** 회차가 "이슈 없음"으로 판정돼 있으면 거기서 잘라낸 미디어도
+ * 판정된 것으로 본다 — 안 그러면 채택할 때마다 모든 미디어가 검수 대기로 되돌아가고,
+ * 사람이 같은 판단을 회차당 수십 번 반복해야 한다.
+ *
+ * 승계 실패는 삼키지 않는다. 이슈 없이 만들어진 미디어는 게이트를 잘못 통과할 수 있다.
+ */
+async function inheritGateToClip(opts: {
+  clipId: string;
+  episodeId: string;
+  recommendationId: string;
+  segment: { start: number; end: number };
+}): Promise<void> {
+  const [epIssues, recIssues, epJudged, recJudged] = await Promise.all([
+    listRightsIssues("episode", opts.episodeId),
+    listRightsIssues("recommendation", opts.recommendationId),
+    isJudged("episode", opts.episodeId),
+    isJudged("recommendation", opts.recommendationId),
+  ]);
+
+  const source = [...epIssues, ...recIssues].map((r) => ({ ...toIssue(r), _row: r }));
+  const carried = inheritedIssues(opts.segment, source) as (Issue & { _row: typeof epIssues[number] })[];
+
+  for (const issue of carried) {
+    const row = issue._row;
+    await insertRightsIssue({
+      id: newId("ri"),
+      subjectType: "clip",
+      subjectId: opts.clipId,
+      kind: row.kind,
+      resolution: row.resolution,
+      bandStart: row.bandStart,
+      bandEnd: row.bandEnd,
+      note: row.note,
+      actor: row.actor,
+      inheritedFrom: row.id,
+    });
+  }
+
+  if (epJudged || recJudged) {
+    await putRightsJudgement("clip", opts.clipId, "승계", `${opts.recommendationId} 채택 시 판정 승계`);
+  }
+
+  await appendGateAudit({
+    subjectType: "clip",
+    subjectId: opts.clipId,
+    action: "inherit",
+    toState: carried.length > 0 ? "issues" : epJudged || recJudged ? "judged" : "unjudged",
+    actor: "system",
+    basis: `채택 승계 — 이슈 ${carried.length}건 · 판정 ${epJudged || recJudged ? "있음" : "없음"}`,
+  });
+}
 
 // ── reject recommendation ─────────────────────────────────────────────────────
 app.post("/api/recommendations/:id/reject", async (c) => {
