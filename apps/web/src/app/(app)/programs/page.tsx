@@ -1,307 +1,292 @@
 "use client";
 
+/**
+ * U2 · 프로그램 목록 (README §2 · FLOWS F10).
+ *
+ * 30개 이상 프로그램을 굴리는 화면이라 필터가 카드보다 먼저 온다.
+ * 필터 라벨의 개수는 **다른 필터를 적용한 뒤 남는 개수**다 — 규칙은 lib/programs.ts 에 있고
+ * 여기서는 그리기만 한다.
+ */
 import Link from "next/link";
-import { ChevronRight, Film, LayoutGrid, Trash2, Loader2 } from "lucide-react";
-import { PageHeader } from "@/components/ui/page-header";
-import { Card } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { StatusBadge } from "@/components/ui/status-badge";
-import { EmptyState } from "@/components/ui/empty-state";
-import { Skeleton } from "@/components/ui/skeleton";
-import { PipelineStrip } from "@/components/pipeline-strip";
-import { useToast } from "@/components/ui/toast";
-import { useAppData } from "@/lib/data/store";
-import { PIPELINE_STAGE_LABELS, targetAgeLabel } from "@/lib/constants";
-import { programSmrChecks } from "@/lib/publish/requirements";
-import { UploadVideoButton } from "@/components/upload-video-dialog";
-import { NewProgramButton } from "@/components/new-program-dialog";
-import { EditProgramButton, EditProgramDialogMount } from "@/components/edit-program-dialog";
-import { useState } from "react";
-import type { Program, Episode, Recommendation, Clip } from "@/lib/types";
-import { Sparkles, Clapperboard } from "lucide-react";
+import { useMemo, useState } from "react";
 
-/** Poster face — a genre emoji, falling back to the title's first character. */
-const SECTION_EMOJI: Record<string, string> = {
-  예능: "🎬",
-  "드라마/영화": "🎭",
-  뮤직: "🎵",
-  시사: "📰",
-  교양: "📚",
-  라이프: "🌿",
-  스포츠: "⚽",
-  게임: "🎮",
-  어린이: "🧸",
-  뉴스: "📡",
-  애니: "✨",
+import { NewProgramButton } from "@/components/new-program-dialog";
+import { useSession } from "@/lib/auth";
+import { useAppData } from "@/lib/data/store";
+import {
+  ALL,
+  EMPTY_PROGRAM_FILTERS,
+  PROGRAM_STATUSES,
+  PROGRAM_STATUS_LABEL,
+  filterPrograms,
+  normalizeProgramStatus,
+  residualCounts,
+  rightsWindowOf,
+  sectionsOf,
+  statusNoteFor,
+  type ProgramFilters,
+} from "@/lib/programs";
+import type { Episode, Program, ProgramStatus } from "@/lib/types";
+import { cn } from "@/lib/utils";
+
+const STATUS_TAG: Record<ProgramStatus, string> = {
+  airing: "sd-tag sd-tag--airing",
+  ended: "sd-tag sd-tag--ended",
+  upcoming: "sd-tag sd-tag--upcoming",
 };
 
+const TRACK_LABEL: Record<string, string> = { variety: "예능 트랙", drama: "드라마 트랙" };
+
 export default function ProgramsPage() {
-  const { programs, episodes, recommendations, clips, loading } = useAppData();
+  const { programs, episodes, loading } = useAppData();
+  const me = useSession().user.name;
+  const [f, setF] = useState<ProgramFilters>(EMPTY_PROGRAM_FILTERS);
+
+  // 오늘 날짜는 카드가 그려질 때만 쓰인다. 스토어가 빈 상태로 시작하므로(프리렌더 시 카드 0개)
+  // 서버·클라이언트 렌더가 갈라질 일이 없다.
+  const today = useMemo(() => new Date(), []);
+
+  const sections = useMemo(() => sectionsOf(programs), [programs]);
+  const counts = useMemo(() => residualCounts(programs, f, me), [programs, f, me]);
+  const visible = useMemo(() => filterPrograms(programs, f, me), [programs, f, me]);
+
+  const epsByProgram = useMemo(() => {
+    const m = new Map<string, Episode[]>();
+    for (const e of episodes) {
+      const list = m.get(e.programId);
+      if (list) list.push(e);
+      else m.set(e.programId, [e]);
+    }
+    return m;
+  }, [episodes]);
+
+  const note = statusNoteFor(f.status);
+  const set = (patch: Partial<ProgramFilters>) => setF((prev) => ({ ...prev, ...patch }));
 
   return (
-    <>
-      <PageHeader
-        eyebrow="프로그램 → 회차"
-        title="콘텐츠"
-        description="프로그램 → 회차. 각 회차의 파이프라인 진행 상태를 한눈에 보고, 클릭해 진행 허브로 이동합니다."
-        actions={
-          <>
-            <UploadVideoButton />
-            <NewProgramButton />
-          </>
-        }
-      />
-
-      {loading && programs.length === 0 ? (
-        <div className="space-y-3">
-          {[0, 1, 2].map((i) => (
-            <Skeleton key={i} className="h-24 w-full rounded-xl" />
-          ))}
-        </div>
-      ) : programs.length === 0 ? (
-        <EmptyState
-          icon={LayoutGrid}
-          title="아직 프로그램이 없습니다"
-          description="프로그램을 먼저 만든 뒤 영상을 업로드하면 회차와 추천이 생성됩니다."
-          action={<NewProgramButton />}
+    <div className="mx-auto flex max-w-[1240px] flex-col gap-[14px]">
+      {/* ── 필터 줄 ─────────────────────────────────────────────────────────── */}
+      <div className="flex flex-wrap items-center gap-[9px]">
+        <input
+          className="sd-input w-[250px]"
+          value={f.q}
+          onChange={(e) => set({ q: e.target.value })}
+          placeholder="프로그램명 · 담당 PD로 찾기"
+          aria-label="프로그램 검색"
         />
-      ) : (
-        <div className="space-y-5">
-          {programs.map((program) => (
-            <ProgramCard
-              key={program.id}
-              program={program}
-              eps={episodes.filter((e) => e.programId === program.id)}
-              recs={recommendations}
-              clips={clips}
+
+        <div className="flex flex-wrap gap-[3px]">
+          <FilterChip
+            label="전체"
+            count={counts.status[ALL]}
+            on={f.status === ALL}
+            onClick={() => set({ status: ALL })}
+          />
+          {PROGRAM_STATUSES.map((s) => (
+            <FilterChip
+              key={s}
+              label={PROGRAM_STATUS_LABEL[s]}
+              count={counts.status[s]}
+              on={f.status === s}
+              onClick={() => set({ status: s })}
             />
           ))}
         </div>
+
+        <span className="h-[18px] w-px" style={{ background: "var(--sd-border)" }} aria-hidden />
+
+        <div className="flex flex-wrap gap-[3px]">
+          <FilterChip
+            label="전 섹션"
+            count={counts.section[ALL]}
+            on={f.section === ALL}
+            onClick={() => set({ section: ALL })}
+          />
+          {sections.map((s) => (
+            <FilterChip
+              key={s}
+              label={s}
+              count={counts.section[s] ?? 0}
+              on={f.section === s}
+              onClick={() => set({ section: s })}
+            />
+          ))}
+        </div>
+
+        <FilterChip
+          label="내 담당만"
+          count={counts.mine}
+          on={f.mineOnly}
+          onClick={() => set({ mineOnly: !f.mineOnly })}
+        />
+
+        <div className="ml-auto flex items-center gap-2">
+          <span className="sd-mono text-[11px]" style={{ color: "var(--sd-mut)" }}>
+            {summaryOf(visible)}
+          </span>
+          <NewProgramButton className="sd-btn" />
+        </div>
+      </div>
+
+      {/* 좁힌 상태가 왜 비어 있는지 — 안 적으면 고장으로 읽힌다. */}
+      {note && (
+        <div
+          className="sd-card px-[13px] py-[10px] text-[11.5px]"
+          style={{ background: "var(--sd-card-sub)", color: "var(--sd-fg)" }}
+        >
+          {note}
+        </div>
       )}
-    </>
+
+      {/* ── 카드 그리드 ─────────────────────────────────────────────────────── */}
+      {visible.length > 0 ? (
+        <div className="grid gap-4 [grid-template-columns:repeat(auto-fill,minmax(266px,1fr))]">
+          {visible.map((p) => (
+            <ProgramCard key={p.id} program={p} episodes={epsByProgram.get(p.id) ?? []} today={today} />
+          ))}
+        </div>
+      ) : (
+        <div
+          className="sd-ph grid h-[180px] place-items-center rounded-[6px] px-6 text-center"
+          style={{ border: "1px dashed var(--sd-border)" }}
+        >
+          {emptyCopy({ loading, total: programs.length })}
+        </div>
+      )}
+    </div>
   );
 }
 
-function ProgramCard({ program, eps, recs, clips }: { program: Program; eps: Episode[]; recs: Recommendation[]; clips: Clip[] }) {
-  const face = SECTION_EMOJI[program.section] ?? program.title.trim().charAt(0) ?? "🎞️";
-
-  return (
-    <Card className="overflow-hidden">
-      {/* ── header ── */}
-      <div className="flex items-start gap-4 p-4">
-        <div className="flex aspect-3/4 w-14 shrink-0 items-center justify-center rounded-lg bg-linear-to-br from-primary/20 to-primary/5 text-2xl ring-1 ring-inset ring-border">
-          {face}
-        </div>
-
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <h2 className="text-base font-semibold">{program.title}</h2>
-            <Badge variant="muted">{program.section}</Badge>
-            <Badge variant="muted">{targetAgeLabel(program.targetAge)}</Badge>
-          </div>
-          <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
-            <span>회차 {eps.length}</span>
-            {program.cast && program.cast.length > 0 && (
-              <span>
-                출연 {program.cast.slice(0, 3).join(", ")}
-                {program.cast.length > 3 ? " 외" : ""}
-              </span>
-            )}
-          </div>
-          <div className="mt-2">
-            <SmrFeedReadiness program={program} />
-          </div>
-        </div>
-
-        <div className="flex shrink-0 items-center gap-1.5">
-          <Link
-            href={`/programs/${program.id}/highlights`}
-            className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-input px-3 text-xs font-semibold text-secondary-foreground hover:border-foreground/25 hover:text-foreground"
-          >
-            <Sparkles className="size-3.5" /> 하이라이트
-          </Link>
-          <EditProgramButton program={program} />
-          <UploadVideoButton programId={program.id} />
-          <DeleteProgramButton program={program} episodeCount={eps.length} />
-        </div>
-      </div>
-
-      {/* ── episodes / empty ── */}
-      <div className="border-t border-border bg-muted/20 p-3">
-        {eps.length === 0 ? (
-          <div className="flex flex-col items-center gap-2 px-4 py-8 text-center">
-            <span className="flex size-10 items-center justify-center rounded-full bg-muted text-muted-foreground">
-              <Film className="size-5" />
-            </span>
-            <div className="text-sm font-medium">아직 회차가 없어요</div>
-            <p className="max-w-xs text-xs text-muted-foreground">
-              영상을 업로드하면 첫 회차와 추천 구간이 자동으로 생성됩니다.
-            </p>
-            <div className="mt-1">
-              <UploadVideoButton programId={program.id} variant="default" />
-            </div>
-          </div>
-        ) : (
-          <div className="space-y-2">
-            {eps.map((ep) => {
-              // Pending only — matches the sidebar badge (store badgeCounts), the inbox
-              // "채택 대기 추천" count, and the episode detail 추천 tab. A processed
-              // recommendation is no longer something to act on.
-              const epPendingRecs = recs.filter(
-                (r) => r.episodeId === ep.id && r.status === "pending",
-              );
-              const epClips = clips.filter((c) => c.episodeId === ep.id);
-              return (
-              <div key={ep.id} className="relative">
-                <Link href={`/episodes/${ep.id}`} className="block">
-                <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-border bg-card p-3 pr-11 transition-colors hover:bg-accent/40">
-                  <div className="min-w-40">
-                    <div className="text-sm font-semibold">{ep.episodeNumber}화</div>
-                    <div className="text-xs text-muted-foreground">방송 {ep.broadDate}</div>
-                  </div>
-                  <PipelineStrip pipeline={ep.pipeline} />
-                  <div className="flex items-center gap-2">
-                    {epPendingRecs.length > 0 && (
-                      <div
-                        title="채택 대기 추천"
-                        className="flex items-center gap-0.5 rounded-full bg-status-warn/10 px-2 py-0.5 text-[11px] font-medium text-status-warn"
-                      >
-                        <Sparkles className="size-3" /> {epPendingRecs.length}
-                      </div>
-                    )}
-                    {epClips.length > 0 && (
-                      <div
-                        title="클립"
-                        className="flex items-center gap-0.5 rounded-full bg-status-done/10 px-2 py-0.5 text-[11px] font-medium text-status-done"
-                      >
-                        <Clapperboard className="size-3" /> {epClips.length}
-                      </div>
-                    )}
-                    <StatusBadge tone={ep.pipeline.stageStatus}>
-                      {ep.pipeline.blockedReason ?? PIPELINE_STAGE_LABELS[ep.pipeline.stage]}
-                    </StatusBadge>
-                    <ChevronRight className="size-4 text-muted-foreground" />
-                  </div>
-                </div>
-              </Link>
-                <DeleteEpisodeButton episode={ep} />
-              </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
-    </Card>
-  );
-}
-
-/** Program card delete button — 삭제 성공 시 store가 알아서 목록에서 빼준다. */
-function DeleteProgramButton({ program, episodeCount }: { program: Program; episodeCount: number }) {
-  const { deleteProgram } = useAppData();
-  const { toast } = useToast();
-  const [busy, setBusy] = useState(false);
-
-  async function run() {
-    const msg =
-      episodeCount > 0
-        ? `프로그램 "${program.title}"과 회차 ${episodeCount}개(미디어·추천·클립·GCS 파일 전부)를 완전히 삭제합니다. 되돌릴 수 없습니다.`
-        : `프로그램 "${program.title}"을 완전히 삭제합니다. 되돌릴 수 없습니다.`;
-    if (!confirm(msg)) return;
-    setBusy(true);
-    try {
-      await deleteProgram(program.id);
-      toast({ title: "프로그램 삭제됨", description: program.title, tone: "done" });
-    } catch (err) {
-      toast({ title: "삭제 실패", description: err instanceof Error ? err.message : String(err), tone: "error" });
-      setBusy(false);
-    }
-  }
-
-  return (
-    <Button
-      size="sm"
-      variant="outline"
-      onClick={run}
-      disabled={busy}
-      title="이 프로그램과 회차 전부 완전 삭제"
-      className="text-status-error hover:bg-status-error/10"
-    >
-      {busy ? <Loader2 className="animate-spin" /> : <Trash2 />}
-    </Button>
-  );
-}
-
-/** Episode row delete — Link 위에 절대 위치. e.stopPropagation 대신 button을 Link 밖으로 뺐다. */
-function DeleteEpisodeButton({ episode }: { episode: Episode }) {
-  const { deleteEpisode } = useAppData();
-  const { toast } = useToast();
-  const [busy, setBusy] = useState(false);
-
-  async function run() {
-    const label = episode.episodeNumber != null ? `${episode.episodeNumber}화` : "이 회차";
-    if (!confirm(`${label}과 관련 미디어·추천·클립·GCS 파일을 완전히 삭제합니다. 되돌릴 수 없습니다.`)) return;
-    setBusy(true);
-    try {
-      await deleteEpisode(episode.id);
-      toast({ title: "회차 삭제됨", description: label, tone: "done" });
-    } catch (err) {
-      toast({ title: "삭제 실패", description: err instanceof Error ? err.message : String(err), tone: "error" });
-      setBusy(false);
-    }
-  }
-
+/** 필터 칩 — 라벨 + 남는 개수. 0건은 흐리게 두되 누를 수는 있게 둔다(왜 0인지 보여야 하므로). */
+function FilterChip({
+  label,
+  count,
+  on,
+  onClick,
+}: {
+  label: string;
+  count: number;
+  on: boolean;
+  onClick: () => void;
+}) {
   return (
     <button
       type="button"
-      onClick={run}
-      disabled={busy}
-      title="이 회차 완전 삭제"
-      className="absolute right-2 top-1/2 -translate-y-1/2 rounded-md p-1.5 text-status-error opacity-70 hover:bg-status-error/10 hover:opacity-100 disabled:opacity-40"
+      onClick={onClick}
+      aria-pressed={on}
+      className={cn("sd-btn", on && "sd-btn--on")}
+      style={!on && count === 0 ? { opacity: 0.5 } : undefined}
     >
-      {busy ? <Loader2 className="size-4 animate-spin" /> : <Trash2 className="size-4" />}
+      {label}
+      <span className="sd-mono ml-1.5 text-[10.5px]" style={{ opacity: 0.7 }}>
+        {count}
+      </span>
     </button>
   );
 }
 
-/** Program-level SMR feed readiness — the "프로그램 준비" step split out of per-clip publish.
- *  미충족일 땐 pill 자체가 편집 다이얼로그 진입점(SMR 섹션으로 스크롤). */
-function SmrFeedReadiness({ program }: { program: Program }) {
-  const checks = programSmrChecks(program);
-  const missing = checks.filter((c) => !c.met);
-  if (missing.length === 0) {
-    return <StatusBadge tone="done">SMR 피드 준비 완료</StatusBadge>;
-  }
+function ProgramCard({
+  program,
+  episodes,
+  today,
+}: {
+  program: Program;
+  episodes: Episode[];
+  today: Date;
+}) {
+  const status = normalizeProgramStatus(program.status);
+  const rights = rightsWindowOf(program, today);
+  const track = program.pipelineGenre ? TRACK_LABEL[program.pipelineGenre] : "분석 트랙 미지정";
+
   return (
-    <SmrUnmetLink program={program} missingLabels={missing.map((m) => m.label)} count={missing.length} />
+    <Link
+      href={`/programs/${program.id}`}
+      className="sd-card flex flex-col overflow-hidden transition-shadow"
+    >
+      <div
+        className="sd-ph h-[180px]"
+        style={{ borderBottom: "1px solid var(--sd-border)" }}
+      >
+        {program.posterImageDataUrl ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={program.posterImageDataUrl}
+            alt=""
+            className="size-full object-cover"
+          />
+        ) : (
+          "포스터 이미지"
+        )}
+      </div>
+
+      <div className="flex flex-col gap-1.5 px-3 py-[11px]">
+        <div className="text-[13px] font-semibold" style={{ color: "var(--sd-fg)" }}>
+          {program.title}
+        </div>
+
+        <div className="flex flex-wrap gap-[5px]">
+          <span className={STATUS_TAG[status]}>{PROGRAM_STATUS_LABEL[status]}</span>
+          <span className="sd-tag">{program.section}</span>
+          <span className="sd-tag">{track}</span>
+        </div>
+
+        <div className="text-[10.5px]" style={{ color: "var(--sd-mut)" }}>
+          담당 {program.owner?.trim() || "미배정"}
+        </div>
+
+        {rights && (
+          <span className={cn("sd-tag w-fit", rights.expiring && "sd-tag--danger")}>{rights.text}</span>
+        )}
+
+        <div className="sd-mono text-[10.5px]" style={{ color: "var(--sd-mut)" }}>
+          {cardMeta(program, episodes, status)}
+        </div>
+      </div>
+    </Link>
   );
 }
 
-function SmrUnmetLink({
-  program,
-  missingLabels,
-  count,
-}: {
-  program: Program;
-  missingLabels: string[];
-  count: number;
-}) {
-  // SmrFeedReadiness는 서버-사이드 렌더 대비 훅 사용을 피해야 해서 별도 클라이언트 컴포넌트로 분리.
-  const [open, setOpen] = useState(false);
-  return (
-    <>
-      <button
-        type="button"
-        onClick={() => setOpen(true)}
-        title={`미충족: ${missingLabels.join(", ")} · 클릭해 편집`}
-        className="inline-flex items-center gap-1 rounded-full border border-status-warn/25 bg-status-warn/10 px-2 py-0.5 text-xs font-medium text-status-warn transition hover:border-status-warn/50 hover:bg-status-warn/15"
-      >
-        <span className="relative flex size-1.5 items-center justify-center" aria-hidden>
-          <span className="relative size-1.5 rounded-full bg-current" />
-        </span>
-        <span>SMR 피드 {count}개 미충족 · 편집</span>
-      </button>
-      {open && <EditProgramDialogMount program={program} scrollTo="smr" onClose={() => setOpen(false)} />}
-    </>
-  );
+/**
+ * 상태마다 다른 메타 한 줄 (F10).
+ * 편성 예정은 **첫 방송 전이라 회차를 숨긴다** — 파일럿만 따로 센다.
+ */
+function cardMeta(program: Program, episodes: Episode[], status: ProgramStatus): string {
+  if (status === "upcoming") {
+    return episodes.length > 0 ? `파일럿 ${episodes.length}회 보유 · 분석 대기` : "첫 방송 전 · 회차 없음";
+  }
+
+  const count = Math.max(program.episodeCount, episodes.length);
+  const latest = latestBroadDate(episodes);
+
+  if (status === "ended") {
+    const end = program.endedDate?.slice(5) ?? latest;
+    return `회차 ${count}${end ? ` · 종영 ${end}` : ""}`;
+  }
+
+  const running = episodes.filter((e) => e.pipeline?.stageStatus === "progress").length;
+  if (running > 0) return `회차 ${count} · 분석 중 ${running}건`;
+  return `회차 ${count}${latest ? ` · 최근 회차 ${latest}` : ""}`;
+}
+
+/** 가장 최근 방영일을 MM-DD 로. 방영일이 없으면 빈 문자열. */
+function latestBroadDate(episodes: Episode[]): string {
+  let max = "";
+  for (const e of episodes) if (e.broadDate && e.broadDate > max) max = e.broadDate;
+  return max ? max.slice(5) : "";
+}
+
+function summaryOf(visible: Program[]): string {
+  const by = (s: ProgramStatus) =>
+    visible.filter((p) => normalizeProgramStatus(p.status) === s).length;
+  return `${visible.length}개 · 방영 중 ${by("airing")} · 종영 ${by("ended")} · 편성 예정 ${by("upcoming")}`;
+}
+
+/**
+ * 빈 화면의 이유를 나눠 적는다 — "필터가 좁아서"와 "아직 아무것도 없어서"는 다른 문제다.
+ * 서버 미연결은 사이드바 하단 표시가 담당한다.
+ */
+function emptyCopy({ loading, total }: { loading: boolean; total: number }): string {
+  if (loading && total === 0) return "프로그램을 불러오는 중입니다…";
+  if (total === 0) return "등록된 프로그램이 없습니다 — 오른쪽 위 ‘＋ 새 프로그램’으로 시작하세요";
+  return "조건에 맞는 프로그램이 없습니다";
 }

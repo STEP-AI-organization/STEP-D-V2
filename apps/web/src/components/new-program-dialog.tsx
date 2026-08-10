@@ -17,13 +17,20 @@ const SMR_CATEGORIES = ["01", "02", "03"];
 const CODE_RE = /^[a-z0-9]+$/;
 
 /** Header action on /programs: create the content root a program needs before any upload. */
-export function NewProgramButton() {
+export function NewProgramButton({ className }: { className?: string } = {}) {
   const [open, setOpen] = useState(false);
   return (
     <>
-      <Button size="sm" onClick={() => setOpen(true)}>
-        ＋ 새 프로그램
-      </Button>
+      {className ? (
+        // 재설계 화면(sd-*)에서 쓰는 형태 — 다이얼로그는 그대로 재사용한다.
+        <button type="button" className={className} onClick={() => setOpen(true)}>
+          ＋ 새 프로그램
+        </button>
+      ) : (
+        <Button size="sm" onClick={() => setOpen(true)}>
+          ＋ 새 프로그램
+        </Button>
+      )}
       {open && <NewProgramDialog onClose={() => setOpen(false)} />}
     </>
   );

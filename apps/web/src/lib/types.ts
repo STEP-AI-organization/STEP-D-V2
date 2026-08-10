@@ -19,6 +19,14 @@ import type {
 } from "./constants";
 
 // ── Content hierarchy: Program → Episode → (Clip | Media) ────────────────────────
+
+/**
+ * 프로그램 편성 상태 (FLOWS F10) — 카드 내용이 상태마다 다르다.
+ * 방영 중은 진행 바, 종영은 종영일·마지막 배포일(클립 생성 단계 없음),
+ * 편성 예정은 첫 방송 전까지 회차를 숨긴다.
+ */
+export type ProgramStatus = "airing" | "ended" | "upcoming";
+
 export interface Program {
   id: string;
   title: string;
@@ -26,7 +34,27 @@ export interface Program {
   targetAge: TargetAge;
   cast?: string[];
   episodeCount: number;
-  status: "active" | "archived";
+  /**
+   * 편성 상태 — 사람이 지정한다(자동 판정 없음, 2026-08-10 확정).
+   * 결방·시즌 종료 같은 현실은 날짜로 못 잡는다.
+   *
+   * `"active"`/`"archived"` 는 구버전 저장값이다. 마이그레이션 대신 읽을 때
+   * `normalizeProgramStatus()` 로 좁힌다 — 프로그램은 JSONB 엔티티라 스키마 변경이 없고,
+   * 운영자가 셀렉트를 한 번 건드리면 새 값으로 덮인다.
+   */
+  status: ProgramStatus | "active" | "archived";
+  /** 담당 PD 이름. "내 담당만" 필터가 이 값과 현재 사용자 이름을 비교한다. */
+  owner?: string;
+  /** 종영일 (ISO date, 예: "2026-03-24"). 상태가 ended 일 때만 의미 있다. */
+  endedDate?: string;
+  /**
+   * 디지털 권리 만료일 (ISO date). 임박하면 프로그램 카드·대시보드에 경고 톤으로 뜬다(F3).
+   * ⚠️ 이 날짜가 지나도 시스템이 배포를 자동 차단하지 않는다 — 게이트는 사람이 등록한
+   * 이슈로만 걸린다(F3 "자동 판정 없음"). 여기서 하는 일은 경고까지다.
+   */
+  rightsUntil?: string;
+  /** 권리 관련 자유 메모 (예: "해외 배포 불가 · 국내만", "재계약 확인"). */
+  rightsNote?: string;
   /** SMR feed-level requirements — set once per program (plan §3, §5.1③). */
   smr?: ProgramSmrConfig;
   /** 파이프라인 분기 축(2026-07-24~). section("예능") 표시와 별개로 코어 파이프라인이 어떤

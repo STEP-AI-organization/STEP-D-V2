@@ -335,6 +335,34 @@
 .sd-progress { height: 6px; background: #eae7e1; border-radius: 3px; overflow: hidden; }
 .sd-progress > span { display: block; height: 100%; background: var(--sd-accent); transition: width .5s ease; }
 
+/* 태그 — 상태·섹션·권리 윈도우. 톤이 의미를 나른다(F4: 기록됨을 게시됨처럼 보이면 안 됨). */
+.sd-tag {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 2px 6px; border: 1px solid var(--sd-border); border-radius: 3px;
+  background: var(--sd-card-sub); font-size: 10.5px; line-height: 1.5;
+  color: var(--sd-fg); white-space: nowrap;
+}
+.sd-tag--airing { border-color: #c3d3c6; background: #f0f5f1; }
+.sd-tag--ended { border-color: var(--sd-border); background: #f5f3ef; color: var(--sd-mut); }
+.sd-tag--upcoming { border-color: var(--sd-accent-border); background: var(--sd-accent-bg); }
+.sd-tag--danger {
+  border-color: var(--sd-danger-border); background: var(--sd-danger-bg); color: var(--sd-danger-strong);
+}
+
+/* 입력 */
+.sd-input {
+  height: 32px; padding: 0 11px; border: 1px solid #cbc8c1; border-radius: 4px;
+  font-size: 12.5px; background: #fff; color: var(--sd-fg);
+}
+.sd-input:focus { outline: none; border-color: var(--sd-accent); box-shadow: 0 0 0 3px var(--sd-accent-bg); }
+.sd-input::placeholder { color: var(--sd-idle); }
+
+/* 켜진 필터 버튼 */
+.sd-btn--on {
+  background: var(--sd-accent-bg); border-color: var(--sd-accent-border); color: var(--sd-accent);
+}
+.sd-btn--on:hover { background: var(--sd-accent-bg); border-color: var(--sd-accent-ring); }
+
 /* 모달 등장 (FLOWS.md:187) */
 @keyframes sd-fade-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 .sd-modal { animation: sd-fade-in .16s ease; border-radius: 8px; box-shadow: 0 18px 50px rgba(0,0,0,.28); }

@@ -552,10 +552,19 @@ app.patch("/api/programs/:id", async (c) => {
     if (g === "variety" || g === "drama") next.pipelineGenre = g;
     else delete next.pipelineGenre;
   }
+  // 편성 상태 — 사람이 지정한다(FLOWS F10 · 자동 판정 없음). 구값 active/archived 도 그대로
+  // 받아 둔다: 아직 안 고친 프로그램이 PATCH 될 때 상태가 날아가면 안 된다.
+  if (typeof body.status === "string") {
+    const s = body.status.trim();
+    if (["airing", "ended", "upcoming", "active", "archived"].includes(s)) next.status = s;
+  }
   // ── TV/OTT 프로그램 정보 필드 (모두 optional). 빈 문자열 = 필드 삭제, 문자열이면 저장. ──
   const strFields = [
     "synopsis", "broadcaster", "schedule", "firstAiredDate", "currentInfo",
     "director", "spinoff", "awards",
+    // 담당 PD ("내 담당만" 필터의 비교 대상) · 권리 윈도우(만료일 + 자유 메모) · 종영일.
+    // ⚠️ rightsUntil 은 경고용이다 — 지나도 배포를 자동 차단하지 않는다(F3 "자동 판정 없음").
+    "owner", "rightsUntil", "rightsNote", "endedDate",
   ] as const;
   for (const k of strFields) {
     const v = body[k];

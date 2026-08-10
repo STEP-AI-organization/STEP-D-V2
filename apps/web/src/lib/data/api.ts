@@ -4,7 +4,7 @@
  * standalone — this module is only used once a live server is detected.
  */
 import type { DistributionChannel } from "@/lib/constants";
-import type { Program, RenderChannel } from "@/lib/types";
+import type { Program, ProgramStatus, RenderChannel } from "@/lib/types";
 import type { EditorState } from "@/lib/editor/presets";
 
 export const API_BASE =
@@ -300,6 +300,17 @@ export interface CreateProgramInput {
   moods?: string[];
   posterImageDataUrl?: string;
   castPhotos?: Record<string, string>;
+  // ── 편성 상태 · 담당 · 권리 윈도우 (FLOWS F10 · 2026-08-10) ──────────────
+  /** 방영 중/종영/편성 예정. 사람이 지정한다 — 날짜로 자동 판정하지 않는다. */
+  status?: ProgramStatus;
+  /** 담당 PD 이름. "내 담당만" 필터가 이 값을 본다. */
+  owner?: string;
+  /** 디지털 권리 만료일 (YYYY-MM-DD). 임박하면 카드가 경고 톤이 된다 — 차단은 아니다. */
+  rightsUntil?: string;
+  /** 권리 자유 메모 (예: "해외 배포 불가 · 국내만"). */
+  rightsNote?: string;
+  /** 종영일 (YYYY-MM-DD). */
+  endedDate?: string;
 }
 
 /** Create a program (content root). Required before any episode/upload can exist. */

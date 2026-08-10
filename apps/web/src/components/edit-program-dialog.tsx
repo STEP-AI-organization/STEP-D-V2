@@ -8,6 +8,12 @@ import { Button, buttonVariants } from "@/components/ui/button";
 import { useAppData } from "@/lib/data/store";
 import { useToast } from "@/components/ui/toast";
 import { TARGET_AGES, targetAgeLabel, type TargetAge } from "@/lib/constants";
+import {
+  PROGRAM_STATUSES,
+  PROGRAM_STATUS_LABEL,
+  normalizeProgramStatus,
+} from "@/lib/programs";
+import type { ProgramStatus } from "@/lib/types";
 import { WEEKDAYS } from "@/lib/reserve-date";
 import type { Program } from "@/lib/types";
 
@@ -96,6 +102,12 @@ function EditProgramDialog({
   const [pipelineGenre, setPipelineGenre] = useState<"" | "variety" | "drama">(
     program.pipelineGenre ?? "",
   );
+  // ── 편성 상태 · 담당 · 권리 윈도우 (FLOWS F10) ──
+  const [status, setStatus] = useState<ProgramStatus>(normalizeProgramStatus(program.status));
+  const [owner, setOwner] = useState(program.owner ?? "");
+  const [rightsUntil, setRightsUntil] = useState(program.rightsUntil ?? "");
+  const [rightsNote, setRightsNote] = useState(program.rightsNote ?? "");
+  const [endedDate, setEndedDate] = useState(program.endedDate ?? "");
   // ── 소개·방영·크레딧 ──
   const [synopsis, setSynopsis] = useState(program.synopsis ?? "");
   const [broadcaster, setBroadcaster] = useState(program.broadcaster ?? "");
@@ -159,6 +171,12 @@ function EditProgramDialog({
         section,
         targetAge,
         pipelineGenre: pipelineGenre || undefined,
+        status,
+        owner: owner.trim(),
+        rightsUntil: rightsUntil.trim(),
+        rightsNote: rightsNote.trim(),
+        // 종영일은 종영 상태에서만 의미가 있다 — 상태를 되돌리면 같이 지운다.
+        endedDate: status === "ended" ? endedDate.trim() : "",
         cast,
         synopsis: synopsis.trim(),
         broadcaster: broadcaster.trim(),
@@ -304,6 +322,67 @@ function EditProgramDialog({
                 />
               </Field>
             </div>
+          </div>
+
+          {/* ── 편성 상태 · 담당 · 권리 (FLOWS F10) ── */}
+          <div className="space-y-3">
+            <SectionHeader
+              label="편성 · 담당 · 권리"
+              hint="상태는 사람이 지정합니다 — 결방·시즌 종료는 날짜로 판정되지 않습니다."
+            />
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="편성 상태">
+                <select
+                  value={status}
+                  onChange={(e) => setStatus(e.target.value as ProgramStatus)}
+                  className={inputCls}
+                >
+                  {PROGRAM_STATUSES.map((s) => (
+                    <option key={s} value={s}>{PROGRAM_STATUS_LABEL[s]}</option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="담당 PD" hint="프로그램 목록의 ‘내 담당만’ 기준">
+                <input
+                  value={owner}
+                  onChange={(e) => setOwner(e.target.value)}
+                  placeholder="예: 김선우 PD"
+                  className={inputCls}
+                />
+              </Field>
+            </div>
+            {status === "ended" && (
+              <Field label="종영일">
+                <input
+                  type="date"
+                  value={endedDate}
+                  onChange={(e) => setEndedDate(e.target.value)}
+                  className={inputCls}
+                />
+              </Field>
+            )}
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="디지털 권리 만료일" hint="임박하면 카드가 경고 톤">
+                <input
+                  type="date"
+                  value={rightsUntil}
+                  onChange={(e) => setRightsUntil(e.target.value)}
+                  className={inputCls}
+                />
+              </Field>
+              <Field label="권리 메모">
+                <input
+                  value={rightsNote}
+                  onChange={(e) => setRightsNote(e.target.value)}
+                  placeholder="예: 해외 배포 불가 · 국내만"
+                  className={inputCls}
+                />
+              </Field>
+            </div>
+            <p className="text-[11px] leading-relaxed text-muted-foreground/70">
+              만료일이 지나도 배포가 자동으로 막히지는 않습니다. 게이트는 사람이 등록한
+              권리·심의 이슈로만 걸립니다 — 여기 값은 경고 표시까지입니다.
+            </p>
           </div>
 
           {/* ── 크레딧 ── */}
