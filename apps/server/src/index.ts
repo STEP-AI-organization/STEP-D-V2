@@ -4219,9 +4219,55 @@ app.post("/api/media/:id/thumbnail", async (c) => {
 // 소비자는 AENA(사내). 소스 영상 하나 → 분석·쇼츠·클립·YouTube 배포까지 자동 완주.
 // 서버는 잡을 만들기만 하고, 진행은 factory.orchestrate 상태기계가 워커에서 굴린다.
 // 계획·결정 근거: docs/plans/active/factory-api-plan.md
+//
+// **외부 서버가 부른다.** Cloud Run 이 allow-unauthenticated 라 IAM 이 막아주지 않으므로
+// 이 라우트들이 스스로 인증해야 한다. 남이 이 엔드포인트를 찾으면 우리 YouTube 채널에
+// 영상을 올릴 수 있다 — Lab 쓰기 토큰과 같은 방식으로 막는다.
+
+const FACTORY_API_KEY = process.env.FACTORY_API_KEY ?? "";
+/** 키 미설정 = 열림이 아니라 닫힘. env 실수의 실패 방향을 '안 됨' 쪽으로 둔다. */
+function factoryAuthDenied(c: Context) {
+  if (!FACTORY_API_KEY) {
+    return c.json({
+      error: "factory_key_unset",
+      message: "FACTORY_API_KEY 가 서버에 설정되지 않아 Factory API 가 닫혀 있습니다.",
+    }, 503);
+  }
+  const given = c.req.header("x-factory-key") ?? "";
+  // 길이가 다르면 어차피 다르다. 같은 길이일 때만 상수시간 비교로 타이밍 누출을 줄인다.
+  const ok = given.length === FACTORY_API_KEY.length &&
+    crypto.timingSafeEqual(Buffer.from(given), Buffer.from(FACTORY_API_KEY));
+  if (!ok) return c.json({ error: "unauthorized", message: "x-factory-key 가 올바르지 않습니다." }, 401);
+  return null;
+}
+
+/** 브라우저에서 직접 부르는 경우 대비. 서버간 호출이면 안 쓰인다. */
+const FACTORY_ALLOWED_ORIGIN = process.env.FACTORY_ALLOWED_ORIGIN ?? "";
+app.options("/api/factory/*", (c) => {
+  if (!FACTORY_ALLOWED_ORIGIN) return c.body(null, 204);
+  return c.body(null, 204, {
+    "Access-Control-Allow-Origin": FACTORY_ALLOWED_ORIGIN,
+    "Access-Control-Allow-Headers": "content-type,x-factory-key",
+    "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
+    "Access-Control-Max-Age": "3600",
+  });
+});
+
+/**
+ * 시간당 ingest 상한. 남용 방지가 아니라 **사고 방지**다 — 붙이는 쪽 루프 버그로
+ * 같은 영상이 수백 번 들어오면 API 비용과 채널이 같이 망가진다.
+ */
+async function ingestRateExceeded(): Promise<boolean> {
+  const limit = Number(process.env.FACTORY_HOURLY_LIMIT) || 20;
+  const since = Date.now() - 60 * 60 * 1000;
+  const jobs = await listEntities<any>("factoryJob");
+  return jobs.filter((j) => (j.createdAt ?? 0) >= since).length >= limit;
+}
 
 /** 진입. 즉시 202 로 jobId 만 준다 — 완주까지 수십 분 걸리므로 붙잡지 않는다. */
 app.post("/api/factory/ingest", async (c) => {
+  const denied = factoryAuthDenied(c);
+  if (denied) return denied;
   // 킬 스위치. 잘못된 env 의 실패 모드가 "안 돌아감"이지 "실수로 배포됨"이 아니게.
   if (!factoryEnabled()) {
     return c.json({
@@ -4258,6 +4304,12 @@ app.post("/api/factory/ingest", async (c) => {
   if (!(await getEntity("program", programId))) {
     return c.json({ error: "program_not_found" }, 404);
   }
+  if (await ingestRateExceeded()) {
+    return c.json({
+      error: "rate_limited",
+      message: "시간당 ingest 상한에 걸렸습니다 (FACTORY_HOURLY_LIMIT).",
+    }, 429);
+  }
 
   // 같은 요청이 두 번 와도 재작업하지 않는다 — 이중 배포가 가장 비싼 사고다.
   const key = (b?.idempotencyKey ?? "").trim();
@@ -4278,6 +4330,8 @@ app.post("/api/factory/ingest", async (c) => {
  * "왜 내 채널이 안 보이지"에서 막힌다.
  */
 app.get("/api/factory/targets", async (c) => {
+  const denied = factoryAuthDenied(c);
+  if (denied) return denied;
   const channels = await listYouTubeChannels();
   return c.json({
     targets: channels.map((ch) => {
@@ -4299,6 +4353,8 @@ app.get("/api/factory/targets", async (c) => {
 
 /** 폴링용 상태 조회. 웹훅은 후순위 — 내부 소비자라 폴링으로 시작한다. */
 app.get("/api/factory/jobs/:id", async (c) => {
+  const denied = factoryAuthDenied(c);
+  if (denied) return denied;
   const job = await getEntity<any>("factoryJob", c.req.param("id"));
   if (!job) return c.json({ error: "not_found" }, 404);
 
