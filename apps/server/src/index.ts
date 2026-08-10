@@ -139,6 +139,10 @@ import {
 } from "./storage-gcs.ts";
 import { castPrefix, stylePrefix } from "./thumbnail-assets.ts";
 import {
+  CANVA_CALLBACK_PATH, canvaConfigured, canvaConnected, canvaAuthUrl,
+  canvaExchangeCode, disconnectCanva, listCanvaDesigns,
+} from "./canva.ts";
+import {
   createJob as createFactoryJob,
   findByIdempotencyKey as findFactoryJobByKey,
   validateTargets as validateFactoryTargets,
@@ -4119,6 +4123,45 @@ app.post("/api/youtube/refresh", async (c) => {
   }
 });
 
+// ── Canva OAuth (쇼츠 오버레이 템플릿 export) ──────────────────────────────────
+
+app.get("/api/canva/auth", async (c) => {
+  if (!canvaConfigured()) return c.json({ error: "canva_not_configured" }, 500);
+  return c.redirect(await canvaAuthUrl());
+});
+
+app.get(CANVA_CALLBACK_PATH, async (c) => {
+  const code = c.req.query("code");
+  const state = c.req.query("state");
+  const err = c.req.query("error");
+  if (err) return c.redirect(`/publish-channels?canva=${encodeURIComponent(err)}`);
+  if (!code || !state) return c.json({ error: "missing code or state" }, 400);
+  try {
+    await canvaExchangeCode(code, state);
+    return c.redirect("/publish-channels?canva=connected");
+  } catch (e: any) {
+    console.error("[canva/oauth/callback]", e);
+    return c.redirect(`/publish-channels?canva=${encodeURIComponent(e.message ?? "failed")}`);
+  }
+});
+
+app.get("/api/canva/status", async (c) =>
+  c.json({ configured: canvaConfigured(), connected: await canvaConnected() }));
+
+app.delete("/api/canva/connection", async (c) => {
+  await disconnectCanva();
+  return c.json({ ok: true });
+});
+
+app.get("/api/canva/designs", async (c) => {
+  try {
+    return c.json({ designs: await listCanvaDesigns() });
+  } catch (e: any) {
+    if (e.message === "canva_not_connected") return c.json({ error: "canva_not_connected" }, 409);
+    return c.json({ error: e.message }, 502);
+  }
+});
+
 // ── YouTube Analytics (channel analysis) ─────────────────────────────────
 
 /** YYYY-MM-DD, `days` ago (Analytics API only accepts this format). */
@@ -4482,6 +4525,75 @@ app.get("/api/factory/targets", async (c) => {
           : "업로드 권한 없음 (게시 모드로 재연결 필요)",
       };
     }),
+  });
+});
+
+/**
+ * 내부용 공장 실행 — 우리 앱 화면에서 회차 하나를 공장에 태운다.
+ *
+ * 외부용(`/api/factory/ingest`)과 달리 **x-factory-key 를 요구하지 않는다.** 그 키를
+ * 브라우저에 내려보내면 유출되고, 유출되면 남이 우리 채널에 영상을 올릴 수 있다.
+ * 외부 키는 서버-대-서버(AENA) 전용으로 남긴다.
+ *
+ * 킬 스위치·상한·타깃 검증은 외부 경로와 똑같이 통과해야 한다 — 내부라고 느슨해지면
+ * 사고는 내부에서 난다.
+ */
+app.post("/api/media/:id/factory-run", async (c) => {
+  if (!factoryEnabled()) {
+    return c.json({ error: "factory_disabled", message: "FACTORY_ENABLED 가 꺼져 있습니다." }, 503);
+  }
+  const mediaId = c.req.param("id");
+  const media = await getMedia(mediaId);
+  if (!media) return c.json({ error: "media_not_found" }, 404);
+
+  const b = await c.req.json<{ targets?: string[]; policy?: Record<string, unknown> }>()
+    .catch(() => null);
+  const targets = Array.isArray(b?.targets) ? b!.targets.filter(Boolean) : [];
+  if (targets.length === 0) {
+    return c.json({ error: "bad_request", message: "배포할 채널을 하나 이상 선택해 주세요." }, 400);
+  }
+  const problems = await validateFactoryTargets(targets);
+  if (problems.length) {
+    return c.json({ error: "invalid_target", message: "배포 대상 채널을 확인해 주세요.", problems }, 400);
+  }
+
+  const episode = (media as any).episodeId
+    ? await getEntity<any>("episode", (media as any).episodeId) : null;
+  const programId = episode?.programId ?? "";
+  if (!programId) {
+    return c.json({ error: "program_not_found", message: "이 회차의 프로그램을 찾을 수 없습니다." }, 404);
+  }
+
+  // 같은 회차를 두 번 누르면 기존 잡을 그대로 돌려준다 — 이중 배포가 가장 비싼 사고다.
+  const key = `internal:${mediaId}`;
+  const existing = await findFactoryJobByKey(key);
+  if (existing) return c.json({ jobId: existing.id, status: existing.state, reused: true }, 202);
+
+  const job = await createFactoryJob({
+    sourceUrl: (media as any).storedPath ?? mediaId,
+    programId, targets,
+    policy: (b?.policy ?? {}) as any,
+    idempotencyKey: key,
+  });
+  return c.json({ jobId: job.id, status: job.state }, 202);
+});
+
+/** 이 회차의 공장 실행 상태 (내부용 폴링). 없으면 null. */
+app.get("/api/media/:id/factory-run", async (c) => {
+  const job = await findFactoryJobByKey(`internal:${c.req.param("id")}`);
+  if (!job) return c.json({ job: null });
+  const clips = await Promise.all(
+    (job.clipIds ?? []).map((id: string) => getEntity<any>("clip", id)));
+  return c.json({
+    job: {
+      jobId: job.id, status: job.state, note: job.note ?? null, error: job.error ?? null,
+      dryRun: Boolean(job.policy?.dryRun), updatedAt: job.updatedAt,
+      clips: clips.filter(Boolean).map((cl: any) => ({
+        clipId: cl.id, title: cl.title, rendered: Boolean(cl.rendered),
+        distributions: (cl.distributions ?? []).map((d: any) => ({
+          channel: d.channel, status: d.status, externalId: d.externalId ?? null })),
+      })),
+    },
   });
 });
 
