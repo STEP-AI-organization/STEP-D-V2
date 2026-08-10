@@ -16,6 +16,7 @@ import {
   RotateCcw,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { frameOverlaySrc, type FrameTemplate } from "@/lib/data/api";
 import { Button } from "@/components/ui/button";
 import { ImageCropButton } from "@/components/editor/image-crop";
 import {
@@ -27,7 +28,6 @@ import {
   COLOR_SWATCHES,
   DEFAULT_FILTERS,
   ELEMENT_DEFAULTS,
-  TEMPLATE_PRESETS,
   defaultElementSize,
   sampleKeyframes,
   type AspectKey,
@@ -66,6 +66,7 @@ export function EditorPanel({
   state,
   update,
   applyTpl,
+  frames = [],
   kfSel,
   setKfSel,
   currentTime = 0,
@@ -74,6 +75,8 @@ export function EditorPanel({
   state: EditorState;
   update: Update;
   applyTpl: (id: EditorState["templateId"]) => void;
+  /** 서버에서 받은 프레임 템플릿 목록. 비어 있으면 "서버 미연결" 안내를 띄운다. */
+  frames?: FrameTemplate[];
   kfSel?: KfSelection;
   setKfSel?: (s: KfSelection) => void;
   /** Segment-relative playhead seconds ("add keyframe at current time"). */
@@ -123,7 +126,7 @@ export function EditorPanel({
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-3">
         {tab === "text" && <TextTab state={state} update={update} kf={kf} />}
         {tab === "channel" && <ChannelTab state={state} update={update} />}
-        {tab === "layout" && <LayoutTab state={state} update={update} applyTpl={applyTpl} />}
+        {tab === "layout" && <LayoutTab state={state} update={update} applyTpl={applyTpl} frames={frames} />}
         {tab === "captions" && <CaptionsTab state={state} update={update} />}
         {tab === "elements" && <ElementsTab state={state} update={update} kf={kf} />}
         {tab === "filters" && <FiltersTab state={state} update={update} />}
@@ -494,26 +497,37 @@ function ChannelTab({ state, update }: { state: EditorState; update: Update }) {
   );
 }
 
-function LayoutTab({ state, update, applyTpl }: { state: EditorState; update: Update; applyTpl: (id: EditorState["templateId"]) => void }) {
+function LayoutTab({ state, update, applyTpl, frames = [] }: { state: EditorState; update: Update; applyTpl: (id: EditorState["templateId"]) => void; frames?: FrameTemplate[] }) {
   return (
     <>
       <div>
-        <Label>템플릿 프리셋</Label>
-        <div className="space-y-1.5">
-          {TEMPLATE_PRESETS.map((p) => (
-            <button
-              key={p.id}
-              onClick={() => applyTpl(p.id)}
-              className={cn(
-                "w-full rounded-md border p-2 text-left transition-colors",
-                state.templateId === p.id ? "border-zinc-400 bg-zinc-800" : "border-zinc-700 hover:bg-zinc-800/50",
-              )}
-            >
-              <div className="text-sm font-medium text-white">{p.label}</div>
-              <div className="text-[11px] text-zinc-400">{p.hint}</div>
-            </button>
-          ))}
-        </div>
+        <Label>프레임 템플릿</Label>
+        {frames.length === 0 ? (
+          // 빈 목록은 "템플릿 없음"이 아니라 대개 "서버 미연결"이다 — 구분해서 알려준다.
+          <div className="rounded-md border border-zinc-700 p-2 text-[11px] text-zinc-400">
+            템플릿을 불러오지 못했습니다. 서버 연결과 <code>assets/shorts-template/</code> 을 확인하세요.
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 gap-1.5">
+            {frames.map((f) => (
+              <button
+                key={f.name}
+                onClick={() => applyTpl(f.name)}
+                title={f.title}
+                className={cn(
+                  "overflow-hidden rounded-md border text-left transition-colors",
+                  state.templateId === f.name ? "border-zinc-300 bg-zinc-800" : "border-zinc-700 hover:bg-zinc-800/50",
+                )}
+              >
+                {/* 프레임 자체를 썸네일로 쓴다 — 별도 미리보기 이미지를 만들 필요가 없다 */}
+                <div className="relative aspect-[9/16] bg-zinc-900">
+                  <img src={frameOverlaySrc(f)} alt="" className="absolute inset-0 size-full object-contain" />
+                </div>
+                <div className="truncate px-1.5 py-1 text-[11px] text-white">{f.name}</div>
+              </button>
+            ))}
+          </div>
+        )}
       </div>
       <div>
         <Label>종횡비</Label>

@@ -1,0 +1,53 @@
+{
+  "name": "mz-routine",
+  "source": "canva",
+  "canva_design_id": "DAHR3WfZbxQ",
+  "size": [
+    1080,
+    1920
+  ],
+  "video": {
+    "x": 0,
+    "y": 656,
+    "w": 1080,
+    "h": 608
+  },
+  "bands": [
+    {
+      "x": 0,
+      "y": 0,
+      "w": 1080,
+      "h": 656,
+      "color": "black"
+    },
+    {
+      "x": 0,
+      "y": 1264,
+      "w": 1080,
+      "h": 656,
+      "color": "black"
+    }
+  ],
+  "text": [
+    {
+      "slot": "title1",
+      "y": 150,
+      "size": 76,
+      "color": "#ffffff"
+    },
+    {
+      "slot": "title2",
+      "y": 255,
+      "size": 92,
+      "color": "#ffd93a"
+    },
+    {
+      "slot": "cta",
+      "y": 1660,
+      "size": 54,
+      "color": "#ff4444"
+    }
+  ],
+  "overlay_regions": [],
+  "_note": "영상은 16:9 원본 그대로(1080x608) y656 에 붙이고 위아래는 검은 띠. blur 여백 없음. 텍스트는 상단 띠 안."
+}

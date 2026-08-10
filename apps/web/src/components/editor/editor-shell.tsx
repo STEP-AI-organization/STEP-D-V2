@@ -5,7 +5,7 @@ import Link from "next/link";
 import { ArrowLeft, Save, Send, Info, Check, Sparkles, Film, Plus, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen } from "lucide-react";
 import { useAppData } from "@/lib/data/store";
 import { useToast } from "@/components/ui/toast";
-import { getStreamUrl, getMediaAnalysis, generateUploadMetadata, API_BASE, type AnalysisTranscriptSegment, type AnalysisScene } from "@/lib/data/api";
+import { getStreamUrl, getMediaAnalysis, generateUploadMetadata, API_BASE, type AnalysisTranscriptSegment, type AnalysisScene , fetchShortsTemplates, type FrameTemplate } from "@/lib/data/api";
 import {
   applyTemplate,
   ensureTracks,
@@ -296,6 +296,15 @@ export function EditorShell({ clipId }: { clipId: string }) {
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [undo, redo, canUndo, canRedo]);
+  // 프레임 템플릿 — 서버 assets/shorts-template 이 진실의 출처다. 실패해도 편집은 되어야
+  // 하므로 빈 배열로 두고 프레임 없이 굴린다.
+  const [frames, setFrames] = useState<FrameTemplate[]>([]);
+  useEffect(() => { fetchShortsTemplates().then(setFrames).catch(() => setFrames([])); }, []);
+  const frame = useMemo(
+    () => frames.find((f) => f.name === state.templateId) ?? null,
+    [frames, state.templateId],
+  );
+
   const applyTpl = (id: EditorState["templateId"]) => setState((s) => applyTemplate(s, id));
 
   // 제목만 갈아끼우는 경로 — '제목 후보' 탭에서 클릭할 때 사용. trim은 건드리지 않는다.
@@ -550,6 +559,7 @@ export function EditorShell({ clipId }: { clipId: string }) {
         {/* 중앙: 프리뷰 (확장 가능) */}
         <div className="flex min-w-0 flex-1 items-center justify-center overflow-auto bg-zinc-900 p-4 sm:p-6">
           <EditorPreview
+            frame={frame}
             state={state}
             update={update}
             videoUrl={videoUrl}

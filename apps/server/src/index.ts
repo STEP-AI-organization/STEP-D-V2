@@ -138,6 +138,7 @@ import {
   listPrefix,
 } from "./storage-gcs.ts";
 import { castPrefix, stylePrefix } from "./thumbnail-assets.ts";
+import { listShortsTemplates, getShortsTemplate, toPercent } from "./shorts-template.ts";
 import {
   CANVA_CALLBACK_PATH, canvaConfigured, canvaConnected, canvaAuthUrl,
   canvaExchangeCode, disconnectCanva, listCanvaDesigns,
@@ -2387,10 +2388,18 @@ async function renderClipMedia(opts: {
         ? editorState.bgType
         : "blur") as "solid" | "blur" | "image";
       const bgColor = typeof editorState?.bg === "string" ? editorState.bg : undefined;
+      // 프레임 템플릿 — editorState.templateId 가 assets/shorts-template 의 디렉토리 이름이다.
+      // 목록에 없으면(구 프리셋 id 등) null 이라 기존 blur/solid 경로로 떨어진다.
+      const tpl = typeof editorState?.templateId === "string"
+        ? getShortsTemplate(editorState.templateId)
+        : null;
+      const frame = tpl
+        ? { overlayPath: tpl.overlayPath, video: tpl.video, bands: tpl.bands, overlayRegions: tpl.overlayRegions }
+        : null;
       await renderShort({
         inputPath: srcPath, startTime, endTime, outputPath: tmpPath, width: W, height: H,
         assPath: ass ? assTmp : null, videoFilters, audioFilter, speed,
-        bgType, bgColor,
+        bgType, bgColor, frame,
         hookPreroll,
       });
     }
@@ -4211,6 +4220,24 @@ app.post("/api/youtube/refresh", async (c) => {
     }
     return c.json({ error: err.message }, 500);
   }
+});
+
+// ── 쇼츠 프레임 템플릿 (편집기·렌더 공용 기하) ────────────────────────────────
+
+app.get("/api/shorts-templates", (c) =>
+  c.json({ templates: listShortsTemplates().map(toPercent) }));
+
+app.get("/api/shorts-templates/:name/overlay.png", (c) => {
+  const t = getShortsTemplate(c.req.param("name"));
+  if (!t) return c.json({ error: "template_not_found" }, 404);
+  const buf = fs.readFileSync(t.overlayPath);
+  return new Response(new Uint8Array(buf), {
+    headers: {
+      "Content-Type": "image/png",
+      // 프레임은 canva:sync 로만 바뀐다 — 편집기가 매 렌더마다 다시 받지 않게 캐시.
+      "Cache-Control": "public, max-age=300",
+    },
+  });
 });
 
 // ── Canva OAuth (쇼츠 오버레이 템플릿 export) ──────────────────────────────────
