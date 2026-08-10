@@ -680,6 +680,106 @@ export async function adoptRec(recId: string): Promise<{ clipId: string; clip?: 
   return json(await fetch(`${API_BASE}/recommendations/${recId}/adopt`, { method: "POST" }));
 }
 
+// ── 에셋 (FLOWS F8 · 서버 migrations/0016) ──────────────────────────────────────
+//
+// ⊘ 이름 변경 없음 · ⊘ 되돌리기 없음. 그래서 rename 함수가 없고, 삭제 전에 dryRun 으로
+//   무엇이 함께 지워지는지 세어 본다.
+
+export type AssetKind = "image" | "video" | "audio" | "font" | "other";
+export type AssetSort = "recent" | "name" | "size";
+
+export interface AssetFolder { path: string; parent: string; name: string }
+export interface AssetFile {
+  id: string; folder: string; name: string; kind: AssetKind;
+  mime: string; size: number; storagePath: string; createdAt: string;
+}
+
+export async function fetchAssets(folder: string): Promise<{
+  folder: string; folders: AssetFolder[]; files: AssetFile[];
+}> {
+  return json(await fetch(`${API_BASE}/assets?folder=${encodeURIComponent(folder)}`, { cache: "no-store" }));
+}
+
+export async function createAssetFolder(parent: string, name: string): Promise<AssetFolder> {
+  const res = await fetch(`${API_BASE}/assets/folders`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ parent, name }),
+  });
+  if (!res.ok) {
+    const b = (await res.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(b?.error ?? `${res.status}`);
+  }
+  return (await res.json()).folder;
+}
+
+export async function moveAssetFolder(from: string, to: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/assets/folders/move`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ from, to }),
+  });
+  if (!res.ok) {
+    const b = (await res.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(b?.error ?? `${res.status}`);
+  }
+}
+
+/** 폴더 삭제. dryRun 이면 지우지 않고 개수만 돌려준다 — 확인 문구가 숫자를 말해야 한다. */
+export async function deleteAssetFolder(
+  path: string,
+  dryRun = false,
+): Promise<{ folders: number; files: number }> {
+  const res = await fetch(
+    `${API_BASE}/assets/folders?path=${encodeURIComponent(path)}${dryRun ? "&dryRun=true" : ""}`,
+    { method: "DELETE" },
+  );
+  if (!res.ok) {
+    const b = (await res.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(b?.error ?? `${res.status}`);
+  }
+  return res.json();
+}
+
+export async function uploadAsset(folder: string, file: File): Promise<AssetFile> {
+  const form = new FormData();
+  form.append("file", file);
+  form.append("folder", folder);
+  const res = await fetch(`${API_BASE}/assets/upload`, { method: "POST", body: form });
+  if (!res.ok) {
+    const b = (await res.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(b?.error ?? `${res.status}`);
+  }
+  return (await res.json()).file;
+}
+
+export async function moveAssets(ids: string[], folder: string): Promise<number> {
+  const res = await fetch(`${API_BASE}/assets/move`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ids, folder }),
+  });
+  if (!res.ok) {
+    const b = (await res.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(b?.error ?? `${res.status}`);
+  }
+  return (await res.json()).moved;
+}
+
+export async function deleteAssets(ids: string[]): Promise<number> {
+  const res = await fetch(`${API_BASE}/assets`, {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ids }),
+  });
+  if (!res.ok) throw new Error(`${res.status}`);
+  return (await res.json()).deleted;
+}
+
+export function assetRawUrl(id: string): string {
+  return `${API_BASE}/assets/${id}/raw`;
+}
+
 // ── 채널별 업로드 규칙 (FLOWS F4-2 · 서버 migrations/0015) ──────────────────────
 //
 // 판정은 서버가 한다. 화면이 자기 나름대로 계산하면 규칙이 두 벌이 되고, 한쪽만 고치는

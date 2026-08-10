@@ -9,7 +9,23 @@ import { serve } from "@hono/node-server";
 import { Hono, type Context } from "hono";
 import { HTTPException } from "hono/http-exception";
 import { cors } from "hono/cors";
+import { getCookie, setCookie, deleteCookie } from "hono/cookie";
 import { runWithTenant, DEFAULT_TENANT_ID, type TenantContext } from "./tenant.ts";
+import {
+  SESSION_COOKIE,
+  authRequired,
+  acceptInvite,
+  createInvite,
+  createSession,
+  destroyAllSessions,
+  destroySession,
+  findUserByEmail,
+  passwordProblem,
+  resolveSession,
+  setPassword,
+  verifyPassword,
+  type User,
+} from "./auth.ts";
 import { logger } from "hono/logger";
 import fs from "node:fs";
 import path from "node:path";
@@ -38,6 +54,17 @@ import {
   appendGateAudit,
   listGateAudit,
   type GateSubjectType,
+  listAssetFolders,
+  insertAssetFolder,
+  assetFolderExists,
+  listAssetSubtree,
+  moveAssetFolder,
+  deleteAssetFolderTree,
+  listAssetFiles,
+  getAssetFile,
+  insertAssetFile,
+  moveAssetFiles,
+  deleteAssetFiles,
   listChannelRules,
   getChannelRule,
   upsertChannelRule,
@@ -98,6 +125,7 @@ import {
   deleteShortSourceMap,
   getChannelPointProfile,
   getPool,
+  getRawPool,
   searchSegments,
   listKnownCharacters,
   logSearchEvent,
@@ -169,6 +197,15 @@ import {
 } from "./episode-intake.ts";
 import { dispatchPublish } from "./publish-dispatch.ts";
 import {
+  ROOT as ASSET_ROOT,
+  canMoveFolder,
+  childPath,
+  kindOf,
+  normalizeFolderPath,
+  parentOf,
+  validateName,
+} from "./asset-path.ts";
+import {
   CHANNEL_ROLES,
   defaultRuleFor,
   eligibility,
@@ -211,11 +248,15 @@ console.log(`[stepd-server] ffmpeg available: ${FFMPEG}`);
 // Init DB in background — don't block server startup
 initDb()
   .then(() => initQueue())
+  .then(() => assertAuthPosture())
   .then(() => { dbReady = true; console.log("[stepd-server] database + queue ready"); })
   .catch((err) => console.error("[stepd-server] database init failed (server still running):", err));
 console.log(`[stepd-server] storage mode: ${useGcs() ? "GCS" : "local"}`);
 
-const app = new Hono();
+/** 요청 스코프 변수. 미들웨어가 세션을 풀어 넣고, 라우트가 c.get("user") 로 읽는다. */
+type AppEnv = { Variables: { user?: User } };
+
+const app = new Hono<AppEnv>();
 app.use("*", logger());
 app.use("/api/*", cors({ origin: (o) => o ?? "*", credentials: false }));
 
@@ -226,26 +267,197 @@ app.use("/api/*", cors({ origin: (o) => o ?? "*", credentials: false }));
 // 지금 테넌트를 정하는 경로는 하나뿐이다 — 웹/사내 호출 = 기본 테넌트.
 // 외부 방송사용 API 키(ak_*) 해석은 과금 4단계에서 여기에 붙는다
 // (docs/plans/active/billing-portone-plan.md §3·§7).
-async function resolveTenant(c: Context): Promise<TenantContext> {
+/**
+ * 세션 없이도 통과해야 하는 경로.
+ *   · /health          — 로드밸런서·모니터링
+ *   · /api/auth/*      — 로그인 자체 (닭과 달걀)
+ *   · OAuth 콜백       — 외부 서비스가 리다이렉트로 부른다. 쿠키가 붙는다는 보장이 없다
+ *   · /lab             — 읽기 무인증 (기존 동작 유지 · 쓰기는 LAB_WRITE_TOKEN 이 따로 막는다)
+ * 이 목록은 **짧게 유지한다.** 여기 들어간 경로는 인증을 켜도 안 막힌다.
+ */
+const PUBLIC_PATHS: RegExp[] = [
+  /^\/health$/,
+  /^\/api\/auth\//,
+  /^\/api\/(youtube|meta|tiktok|canva)\/oauth\/callback/,
+  /^\/lab/,
+];
+
+function isPublicPath(path: string): boolean {
+  return PUBLIC_PATHS.some((re) => re.test(path));
+}
+
+/**
+ * 요청 → 테넌트. 세 경로가 있다.
+ *   1. 세션 쿠키       → 그 사용자의 테넌트 (정상 경로)
+ *   2. 외부 API 키     → 아직 없음. 있는 척 통과시키면 그 키가 기본 테넌트를 전부 보게 되므로 501
+ *   3. 인증 없음       → AUTH_REQUIRED 가 켜져 있으면 401, 아니면 기본 테넌트로 폴백
+ *
+ * 3번의 폴백은 **테넌트가 t_default 하나뿐인 동안에만 안전하다.** 웹에 로그인 화면이 아직
+ * 없어서 지금 이걸 막으면 제품이 멈춘다. 전제가 깨지는 순간(외부 테넌트 생성)은 기동 시
+ * assertAuthPosture() 가 잡는다 — 사람이 기억하는 데 기대지 않는다.
+ */
+async function resolveTenant(c: Context<AppEnv>): Promise<TenantContext> {
   const auth = c.req.header("authorization") ?? "";
   if (/^Bearer\s+stepd_/i.test(auth)) {
-    // 키 테이블(api_keys)이 아직 없다. 있는 척 통과시키면 그 키가 기본 테넌트 데이터를
-    // 전부 보게 되므로, 구현 전까지는 명시적으로 거절한다.
     throw new HTTPException(501, { message: "external api keys not enabled yet" });
+  }
+
+  const user = await resolveSession(getCookie(c, SESSION_COOKIE)).catch(() => null);
+  if (user) {
+    c.set("user", user);
+    return { scope: user.tenantId, via: "web" };
+  }
+
+  if (authRequired() && !isPublicPath(new URL(c.req.url).pathname)) {
+    throw new HTTPException(401, { message: "login required" });
   }
   return { scope: DEFAULT_TENANT_ID, via: "web" };
 }
 
 app.use("*", async (c, next) => {
+  // 인증 자세가 어긋난 상태(외부 테넌트가 있는데 AUTH_REQUIRED 가 꺼짐)면 아무것도 서빙하지
+  // 않는다. 조용히 도는 것이 곧 유출이라, 실패 방향을 "안 뜸"으로 잡는다.
+  if (authPostureError && !/^\/health$/.test(new URL(c.req.url).pathname)) {
+    return c.json({ error: "auth_misconfigured", message: authPostureError }, 503);
+  }
   const ctx = await resolveTenant(c);
   return runWithTenant(ctx, () => next());
 });
+
+/**
+ * 기동 시 1회 점검: 테넌트가 둘 이상인데 인증이 꺼져 있으면 모든 요청이 기본 테넌트로
+ * 해석된다 = 격리가 있으나 마나다. 그 조합을 허용하지 않는다.
+ */
+let authPostureError: string | null = null;
+
+async function assertAuthPosture(): Promise<void> {
+  if (authRequired()) return;
+  const { rows } = await getRawPool().query("SELECT COUNT(*)::int AS n FROM tenants");
+  const n = rows[0]?.n ?? 1;
+  if (n > 1) {
+    authPostureError =
+      `테넌트가 ${n}개인데 AUTH_REQUIRED 가 꺼져 있다 — 모든 요청이 ${DEFAULT_TENANT_ID} 로 ` +
+      "해석되어 테넌트 격리가 무의미해진다. AUTH_REQUIRED=1 로 켜거나, 추가 테넌트를 정리할 것.";
+    console.error(`[auth] ${authPostureError}`);
+  }
+}
 
 // ── health ──────────────────────────────────────────────────────────────────
 app.get("/health", async (c) => {
   // `youtubeUpload` is the gate's state, not a secret — it's the fastest way to confirm a
   // deployed revision can't publish (and lets the web hide the publish action).
   return c.json({ ok: dbReady, ffmpeg: FFMPEG, youtubeUpload: youtubeUploadEnabled() });
+});
+
+// ── 로그인 (이메일+비밀번호 · 초대제) ─────────────────────────────────────────
+// 화면은 apps/web 개편 후에 붙인다. 여기서는 API 만 완성해 둔다.
+
+/** 쿠키 옵션 — HttpOnly 라 JS 가 못 읽고, Lax 라 크로스사이트 POST 에 안 실린다. */
+function sessionCookieOpts(expiresAt: number) {
+  return {
+    httpOnly: true,
+    secure: (process.env.PUBLIC_URL ?? "").startsWith("https://"),
+    sameSite: "Lax" as const,
+    path: "/",
+    expires: new Date(expiresAt),
+  };
+}
+
+/** 인증이 필요한 라우트에서 현재 사용자. 없으면 401 을 던진다. */
+function requireUser(c: Context<AppEnv>): User {
+  const user = c.get("user");
+  if (!user) throw new HTTPException(401, { message: "login required" });
+  return user;
+}
+
+app.post("/api/auth/login", async (c) => {
+  const { email, password } = await c.req.json<{ email?: string; password?: string }>().catch(() => ({}) as any);
+  if (!email || !password) return c.json({ error: "email_and_password_required" }, 400);
+
+  const user = await findUserByEmail(email);
+  // 계정이 없어도 **해시 대조를 수행한 것과 같은 시간**을 쓰도록 더미 검증을 돌린다.
+  // 응답 시간 차이로 "이 이메일은 가입돼 있다"를 알아내는 계정 열거를 막는다.
+  const ok = user
+    ? await verifyPassword(password, user.passwordHash)
+    : await verifyPassword(password, "scrypt$32768$8$1$AAAAAAAAAAAAAAAAAAAAAA$AAAA").then(() => false);
+  if (!user || !ok || user.status !== "active") {
+    return c.json({ error: "invalid_credentials" }, 401);
+  }
+
+  const { token, expiresAt } = await createSession(user, {
+    userAgent: c.req.header("user-agent"),
+    ip: c.req.header("x-forwarded-for")?.split(",")[0]?.trim(),
+  });
+  setCookie(c, SESSION_COOKIE, token, sessionCookieOpts(expiresAt));
+  return c.json({ user: { id: user.id, email: user.email, name: user.name, role: user.role, tenantId: user.tenantId } });
+});
+
+app.post("/api/auth/logout", async (c) => {
+  await destroySession(getCookie(c, SESSION_COOKIE));
+  deleteCookie(c, SESSION_COOKIE, { path: "/" });
+  return c.json({ ok: true });
+});
+
+app.get("/api/auth/me", (c) => {
+  const user = c.get("user") as User | undefined;
+  if (!user) return c.json({ user: null, authRequired: authRequired() });
+  return c.json({
+    user: { id: user.id, email: user.email, name: user.name, role: user.role, tenantId: user.tenantId },
+    authRequired: authRequired(),
+  });
+});
+
+app.post("/api/auth/password", async (c) => {
+  const user = requireUser(c);
+  const { current, next } = await c.req.json<{ current?: string; next?: string }>().catch(() => ({}) as any);
+  if (!current || !next) return c.json({ error: "current_and_next_required" }, 400);
+  const full = await findUserByEmail(user.email);
+  if (!full || !(await verifyPassword(current, full.passwordHash))) {
+    return c.json({ error: "invalid_credentials" }, 401);
+  }
+  const problem = passwordProblem(next);
+  if (problem) return c.json({ error: "weak_password", message: problem }, 400);
+  await setPassword(user.id, next);
+  // 비밀번호를 바꿨다는 건 대개 "다른 데서 쓰고 있을지 모른다"는 뜻이다 — 다른 세션은 끊는다.
+  await destroyAllSessions(user.id, getCookie(c, SESSION_COOKIE));
+  return c.json({ ok: true });
+});
+
+// 초대 — owner/admin 만. 초대 링크의 토큰은 **응답에 딱 한 번** 나간다(메일 발송은 아직 없음).
+app.post("/api/auth/invites", async (c) => {
+  const user = requireUser(c);
+  if (user.role !== "owner" && user.role !== "admin") {
+    return c.json({ error: "forbidden", message: "초대는 owner/admin 만 가능합니다." }, 403);
+  }
+  const { email, role } = await c.req.json<{ email?: string; role?: string }>().catch(() => ({}) as any);
+  if (!email) return c.json({ error: "email_required" }, 400);
+  if (role && !["admin", "member"].includes(role)) return c.json({ error: "invalid_role" }, 400);
+  try {
+    const inv = await createInvite({
+      tenantId: user.tenantId,          // 자기 테넌트로만 초대할 수 있다
+      email,
+      role: (role as "admin" | "member") ?? "member",
+      invitedBy: user.id,
+    });
+    return c.json({ inviteId: inv.id, token: inv.token, expiresAt: inv.expiresAt });
+  } catch (e: any) {
+    return c.json({ error: "invite_failed", message: String(e?.message ?? e) }, 400);
+  }
+});
+
+app.post("/api/auth/accept-invite", async (c) => {
+  const { token, password, name } = await c.req
+    .json<{ token?: string; password?: string; name?: string }>()
+    .catch(() => ({}) as any);
+  if (!token || !password) return c.json({ error: "token_and_password_required" }, 400);
+  try {
+    const user = await acceptInvite(token, { password, name });
+    const sess = await createSession(user, { userAgent: c.req.header("user-agent") });
+    setCookie(c, SESSION_COOKIE, sess.token, sessionCookieOpts(sess.expiresAt));
+    return c.json({ user: { id: user.id, email: user.email, name: user.name, role: user.role, tenantId: user.tenantId } });
+  } catch (e: any) {
+    return c.json({ error: "accept_failed", message: String(e?.message ?? e) }, 400);
+  }
 });
 
 // ── full state (web InitialData + media) ──────────────────────────────────────
@@ -2946,6 +3158,141 @@ async function gateFor(subjectType: GateSubjectType, subjectId: string): Promise
   ]);
   return evaluateGate({ judged, issues: issues.map(toIssue) });
 }
+
+// ── 에셋 (FLOWS F8 · README §6) ─────────────────────────────────────────────────
+//
+// ⊘ 이름 변경 없음 — 에셋은 이름으로 참조된다. 이름을 바꾸면 그 참조가 전부 끊기고
+//   되돌릴 수도 없다. 그래서 라우트 자체를 두지 않는다(asset-path.test.ts 가 감시).
+// ⊘ 되돌리기 없음 — 그래서 삭제는 확인을 받고(화면), 이동은 미리 검증한다(여기).
+
+app.get("/api/assets", async (c) => {
+  const folder = normalizeFolderPath(c.req.query("folder") ?? ASSET_ROOT);
+  if (!folder) return c.json({ error: "invalid folder path" }, 400);
+  const [folders, files] = await Promise.all([listAssetFolders(), listAssetFiles(folder)]);
+  return c.json({ folder, folders, files });
+});
+
+app.post("/api/assets/folders", async (c) => {
+  const body = await c.req.json().catch(() => ({}) as Record<string, unknown>);
+  const parent = normalizeFolderPath(body.parent ?? ASSET_ROOT);
+  if (!parent) return c.json({ error: "invalid parent path" }, 400);
+  const check = validateName(body.name);
+  if (!check.ok) return c.json({ error: check.reason }, 400);
+
+  const name = String(body.name).trim();
+  const path = childPath(parent, name);
+  if (await assetFolderExists(path)) return c.json({ error: "같은 이름의 폴더가 이미 있습니다." }, 409);
+  await insertAssetFolder(path, parent, name);
+  return c.json({ folder: { path, parent, name } });
+});
+
+app.post("/api/assets/folders/move", async (c) => {
+  const body = await c.req.json().catch(() => ({}) as Record<string, unknown>);
+  const from = normalizeFolderPath(body.from);
+  const to = normalizeFolderPath(body.to);
+  if (!from || !to) return c.json({ error: "invalid path" }, 400);
+
+  // 되돌리기가 없으므로 여기서 막는다 — 자기 하위로 옮긴 폴더는 트리에서 사라진다.
+  const check = canMoveFolder(from, to);
+  if (!check.ok) return c.json({ error: check.reason }, 400);
+  if (!(await assetFolderExists(to))) return c.json({ error: "옮길 위치가 없습니다." }, 404);
+
+  await moveAssetFolder(from, to);
+  return c.json({ ok: true });
+});
+
+app.delete("/api/assets/folders", async (c) => {
+  const folder = normalizeFolderPath(c.req.query("path"));
+  if (!folder || folder === ASSET_ROOT) return c.json({ error: "invalid path" }, 400);
+
+  // 무엇이 함께 지워지는지 세어서 돌려준다 — 확인 문구가 숫자를 말할 수 있어야 한다.
+  const tree = await listAssetSubtree(folder);
+  if (c.req.query("dryRun") === "true") {
+    return c.json({ folders: tree.folders.length, files: tree.files.length });
+  }
+  const removed = await deleteAssetFiles(tree.files.map((f) => f.id));
+  for (const f of removed) {
+    await deleteFile(f.storagePath).catch((e) => console.warn("[assets] 파일 삭제 실패(무시):", e));
+  }
+  await deleteAssetFolderTree(folder);
+  return c.json({ ok: true, folders: tree.folders.length, files: removed.length });
+});
+
+app.post("/api/assets/upload", async (c) => {
+  const body = await c.req.parseBody();
+  const file = body["file"];
+  if (typeof file === "string" || typeof file === "boolean" || !(file as any)?.arrayBuffer) {
+    return c.json({ error: "file field required" }, 400);
+  }
+  const folder = normalizeFolderPath(body["folder"] ?? ASSET_ROOT);
+  if (!folder) return c.json({ error: "invalid folder path" }, 400);
+  if (!(await assetFolderExists(folder))) return c.json({ error: "폴더가 없습니다." }, 404);
+
+  const f = file as File;
+  const check = validateName(f.name);
+  if (!check.ok) return c.json({ error: check.reason }, 400);
+
+  const id = newId("as");
+  const ext = path.extname(f.name) || "";
+  const objectPath = `assets/${id}${ext}`;
+  const buffer = Buffer.from(await f.arrayBuffer());
+  const storedPath = await writeFile(objectPath, buffer);
+
+  try {
+    await insertAssetFile({
+      id, folder, name: f.name.trim(),
+      kind: kindOf(f.type || f.name),
+      mime: f.type || "application/octet-stream",
+      size: buffer.length,
+      storagePath: storedPath,
+    });
+  } catch (err) {
+    // 행이 안 들어갔으면 올라간 바이트도 지운다 — 아무도 못 보는 파일이 요금만 먹는다.
+    await deleteFile(storedPath).catch(() => {});
+    if (isUniqueViolation(err)) return c.json({ error: "같은 이름의 파일이 이미 있습니다." }, 409);
+    throw err;
+  }
+  return c.json({ file: await getAssetFile(id) });
+});
+
+app.get("/api/assets/:id/raw", async (c) => {
+  const row = await getAssetFile(c.req.param("id"));
+  if (!row) return c.json({ error: "asset not found" }, 404);
+  const objectPath = parseObjectPath(row.storagePath);
+  if (!(await fileExists(objectPath))) return c.json({ error: "파일이 스토리지에 없습니다." }, 404);
+  const buf = await readFile(objectPath);
+  return new Response(new Uint8Array(buf), {
+    headers: { "Content-Type": row.mime || "application/octet-stream", "Cache-Control": "private, max-age=300" },
+  });
+});
+
+app.post("/api/assets/move", async (c) => {
+  const body = await c.req.json().catch(() => ({}) as Record<string, unknown>);
+  const rawIds: unknown[] = Array.isArray(body.ids) ? body.ids : [];
+  const ids = rawIds.filter((x): x is string => typeof x === "string");
+  const folder = normalizeFolderPath(body.folder);
+  if (!folder) return c.json({ error: "invalid folder path" }, 400);
+  if (!(await assetFolderExists(folder))) return c.json({ error: "옮길 폴더가 없습니다." }, 404);
+  try {
+    return c.json({ moved: await moveAssetFiles(ids, folder) });
+  } catch (err) {
+    if (isUniqueViolation(err)) {
+      return c.json({ error: "옮길 폴더에 같은 이름의 파일이 있습니다." }, 409);
+    }
+    throw err;
+  }
+});
+
+app.delete("/api/assets", async (c) => {
+  const body = await c.req.json().catch(() => ({}) as Record<string, unknown>);
+  const rawIds: unknown[] = Array.isArray(body.ids) ? body.ids : [];
+  const ids = rawIds.filter((x): x is string => typeof x === "string");
+  const removed = await deleteAssetFiles(ids);
+  for (const f of removed) {
+    await deleteFile(f.storagePath).catch((e) => console.warn("[assets] 파일 삭제 실패(무시):", e));
+  }
+  return c.json({ deleted: removed.length });
+});
 
 // ── 채널별 업로드 규칙 (FLOWS F4-2 · README §10) ────────────────────────────────
 

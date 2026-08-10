@@ -114,15 +114,14 @@ async function assertRlsEnforced(): Promise<void> {
 
   const dsn = process.env.DATABASE_URL ?? "";
   const isLocal = /@(localhost|127\.0\.0\.1)[:/]/.test(dsn) || dsn === "";
-  const msg =
+  const cause =
     "DB 접속 역할에 BYPASSRLS/SUPERUSER 가 있어 테넌트 격리(RLS)가 적용되지 않는다. " +
-    "격리 없는 상태로 도는 것이 가장 위험하므로 기동을 멈춘다. " +
-    "격리 전용 역할로 접속하거나, 의도한 상황이면 ALLOW_RLS_BYPASS=1 을 설정할 것.";
+    "격리 전용 역할로 접속할 것.";
   if (process.env.ALLOW_RLS_BYPASS === "1" || isLocal) {
-    console.warn(`[tenant] ⚠️  ${msg}`);
+    console.warn(`[tenant] ⚠️  ${cause} (로컬/명시적 허용이라 경고만 하고 계속한다 — 이 상태에서는 격리가 없다)`);
     return;
   }
-  throw new Error(msg);
+  throw new Error(`${cause} 격리 없이 도는 것이 가장 위험하므로 기동을 멈춘다. 의도한 상황이면 ALLOW_RLS_BYPASS=1.`);
 }
 
 export async function initDb(): Promise<void> {
@@ -2277,6 +2276,127 @@ export async function upsertChannelRule(r: ChannelRuleRow): Promise<void> {
 export async function deleteChannelRule(platform: string, accountId: string): Promise<boolean> {
   const r = await pool.query(`DELETE FROM channel_rule WHERE platform = $1 AND account_id = $2`, [platform, accountId]);
   return (r.rowCount ?? 0) > 0;
+}
+
+// ── 에셋: 폴더 · 파일 (migrations/0016 · FLOWS F8) ──────────────────────────────
+
+export interface AssetFolderRow { path: string; parent: string; name: string; createdAt: string }
+export interface AssetFileRow {
+  id: string; folder: string; name: string; kind: string;
+  mime: string; size: number; storagePath: string; createdAt: string;
+}
+
+export async function listAssetFolders(): Promise<AssetFolderRow[]> {
+  const { rows } = await pool.query<AssetFolderRow>(
+    `SELECT path, parent, name, created_at AS "createdAt" FROM asset_folder ORDER BY path`,
+  );
+  return rows;
+}
+
+export async function insertAssetFolder(path: string, parent: string, name: string): Promise<void> {
+  await pool.query(
+    `INSERT INTO asset_folder (path, parent, name) VALUES ($1,$2,$3) ON CONFLICT (path) DO NOTHING`,
+    [path, parent, name],
+  );
+}
+
+export async function assetFolderExists(path: string): Promise<boolean> {
+  if (path === "/") return true; // 루트는 행이 없어도 늘 존재한다
+  const { rows } = await pool.query(`SELECT 1 FROM asset_folder WHERE path = $1`, [path]);
+  return rows.length > 0;
+}
+
+/** 폴더와 그 하위 전부. 삭제·이동이 트리 단위로 일어나기 때문에 필요하다. */
+export async function listAssetSubtree(path: string): Promise<{ folders: string[]; files: AssetFileRow[] }> {
+  const like = path === "/" ? "/%" : `${path}/%`;
+  const { rows: f } = await pool.query<{ path: string }>(
+    `SELECT path FROM asset_folder WHERE path = $1 OR path LIKE $2 ORDER BY path`,
+    [path, like],
+  );
+  const { rows: files } = await pool.query<AssetFileRow>(
+    `SELECT id, folder, name, kind, mime, size::bigint AS size, storage_path AS "storagePath",
+            created_at AS "createdAt"
+       FROM asset_file WHERE folder = $1 OR folder LIKE $2`,
+    [path, like],
+  );
+  return { folders: f.map((r) => r.path), files };
+}
+
+export async function moveAssetFolder(from: string, to: string): Promise<void> {
+  const name = from.slice(from.lastIndexOf("/") + 1);
+  const newPath = to === "/" ? `/${name}` : `${to}/${name}`;
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    // 하위 경로를 통째로 갈아 끼운다. 한 트랜잭션이어야 트리가 반쯤 끊긴 상태가 안 생긴다.
+    await client.query(
+      `UPDATE asset_folder
+          SET path = $3 || substring(path from length($1) + 1),
+              parent = CASE WHEN path = $1 THEN $2 ELSE $3 || substring(parent from length($1) + 1) END
+        WHERE path = $1 OR path LIKE $1 || '/%'`,
+      [from, to, newPath],
+    );
+    await client.query(
+      `UPDATE asset_file SET folder = $2 || substring(folder from length($1) + 1)
+        WHERE folder = $1 OR folder LIKE $1 || '/%'`,
+      [from, newPath],
+    );
+    await client.query("COMMIT");
+  } catch (e) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
+export async function deleteAssetFolderTree(path: string): Promise<void> {
+  await pool.query(`DELETE FROM asset_folder WHERE path = $1 OR path LIKE $1 || '/%'`, [path]);
+}
+
+export async function listAssetFiles(folder: string): Promise<AssetFileRow[]> {
+  const { rows } = await pool.query<AssetFileRow>(
+    `SELECT id, folder, name, kind, mime, size::bigint AS size, storage_path AS "storagePath",
+            created_at AS "createdAt"
+       FROM asset_file WHERE folder = $1 ORDER BY created_at DESC`,
+    [folder],
+  );
+  return rows;
+}
+
+export async function getAssetFile(id: string): Promise<AssetFileRow | null> {
+  const { rows } = await pool.query<AssetFileRow>(
+    `SELECT id, folder, name, kind, mime, size::bigint AS size, storage_path AS "storagePath",
+            created_at AS "createdAt"
+       FROM asset_file WHERE id = $1`,
+    [id],
+  );
+  return rows[0] ?? null;
+}
+
+export async function insertAssetFile(r: Omit<AssetFileRow, "createdAt">): Promise<void> {
+  await pool.query(
+    `INSERT INTO asset_file (id, folder, name, kind, mime, size, storage_path)
+     VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+    [r.id, r.folder, r.name, r.kind, r.mime, r.size, r.storagePath],
+  );
+}
+
+export async function moveAssetFiles(ids: string[], folder: string): Promise<number> {
+  if (ids.length === 0) return 0;
+  const r = await pool.query(`UPDATE asset_file SET folder = $2 WHERE id = ANY($1::text[])`, [ids, folder]);
+  return r.rowCount ?? 0;
+}
+
+export async function deleteAssetFiles(ids: string[]): Promise<AssetFileRow[]> {
+  if (ids.length === 0) return [];
+  const { rows } = await pool.query<AssetFileRow>(
+    `DELETE FROM asset_file WHERE id = ANY($1::text[])
+     RETURNING id, folder, name, kind, mime, size::bigint AS size,
+               storage_path AS "storagePath", created_at AS "createdAt"`,
+    [ids],
+  );
+  return rows;
 }
 
 // ── cleanup ────────────────────────────────────────────────────────────────────
