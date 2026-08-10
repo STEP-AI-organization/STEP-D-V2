@@ -87,6 +87,26 @@ x-factory-key: ...
 
 ---
 
+## 1-3) 영상 등록
+
+`ingest` 는 **이미 등록된 미디어**만 받는다(재현 가능한 소스만 다루기 위해).
+새 영상은 여기로 먼저 넣는다.
+
+```http
+POST /api/factory/videos
+x-factory-key: ...
+{ "url": "https://www.youtube.com/watch?v=...", "programId": "p_xxx", "title": "177화" }
+```
+```json
+{ "mediaId": "m_xxx", "episodeId": "e_xxx", "sourceVideoId": "abc123", "status": "downloading" }
+```
+
+- 같은 URL 을 다시 넣으면 **기존 미디어를 재사용**한다 (`reused:true`). 분석은 회당 ₩600 대라
+  중복 등록이 곧 비용이다
+- 다운로드는 워커가 한다. 등록 직후 `ingest` 를 불러도 되고, 공장이 다운로드 완료를 기다린다
+
+---
+
 ## 2) 인제스트 (진입)
 
 ```http
@@ -196,9 +216,38 @@ x-factory-key: ...
 
 ---
 
+## 4) 성과 조회
+
+```http
+GET /api/factory/jobs/f_abc123/performance
+x-factory-key: ...
+```
+```json
+{
+  "jobId": "f_abc123", "status": "done",
+  "items": [
+    { "clipId": "c_1", "title": "…", "videoId": "abc123",
+      "channelId": "UCxxx", "status": "published",
+      "url": "https://www.youtube.com/watch?v=abc123",
+      "hasMetrics": true, "fetchedAt": 1786…,
+      "metrics": { "views": 1234, "estimatedMinutesWatched": 567, "likes": 89 },
+      "trafficSources": [{ "source": "SHORTS", "views": 900, "estimatedMinutesWatched": 300 }] }
+  ]
+}
+```
+
+- `metrics` 는 YouTube Analytics **원본 키를 그대로** 둔다. 우리가 이름을 바꾸면
+  붙이는 쪽이 YouTube 문서와 대조를 못 한다
+- **업로드 직후엔 `hasMetrics:false` 가 정상이다.** 지표는 `video.analyze` 잡이
+  채널 동기화 주기에 맞춰 채운다 — 이걸 실패로 읽지 말 것
+
+---
+
 ## 연동 순서 (권장)
 
+0. `POST /api/factory/channels/connect-url` 로 채널 연결 (게시 모드여야 배포 가능)
 1. `GET /api/factory/targets` 로 배포 가능한 채널 확인
+1.5 `POST /api/factory/videos` 로 영상 등록 → `mediaId`
 2. `policy.dryRun=true` 로 한 편 넣고 `clips` 가 렌더까지 되는지 확인 (**업로드 안 됨**)
 3. 결과가 납득되면 `dryRun` 을 빼고 실제 배포
 4. `publishPublic` 은 기본값(false) 유지 권장 — private 로 올라가고 유예 뒤 공개된다.

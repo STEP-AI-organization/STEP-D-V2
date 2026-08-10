@@ -3623,6 +3623,96 @@ app.post("/api/factory/channels/connect-url", async (c) => {
 });
 
 /**
+ * 영상 등록 — YouTube URL 하나로 미디어·회차를 만든다.
+ *
+ * ingest 는 **이미 등록된 미디어**만 받는다(재현 가능한 소스만 다루기 위해). 그래서
+ * 붙이는 쪽이 새 영상을 넣으려면 먼저 여기를 부른다. 반환된 mediaId 를 ingest 의
+ * sourceUrl 대신 쓰거나, 같은 URL 로 ingest 하면 이 미디어가 재사용된다.
+ */
+app.post("/api/factory/videos", async (c) => {
+  const denied = factoryAuthDenied(c);
+  if (denied) return denied;
+
+  const b = await c.req.json<{ url?: string; programId?: string; title?: string }>()
+    .catch(() => null);
+  const url = (b?.url ?? "").trim();
+  const programId = (b?.programId ?? "").trim();
+  if (!YOUTUBE_URL_RE.test(url)) {
+    return c.json({ error: "bad_request", message: "유효한 YouTube URL 이 아닙니다." }, 400);
+  }
+  const program = await getEntity<{ id: string; title: string; targetAge: number }>(
+    "program", programId);
+  if (!program) return c.json({ error: "program_not_found" }, 404);
+
+  // 같은 영상을 두 번 넣지 않는다 — 분석은 회당 ₩600 대다.
+  const dup = (await listMedia()).find((m: any) => m.storedPath === `youtube:${url}`);
+  if (dup) {
+    return c.json({ mediaId: (dup as any).id, episodeId: (dup as any).episodeId, reused: true });
+  }
+
+  const mediaId = newId("m");
+  const vid = url.match(/(?:v=|shorts\/|live\/|youtu\.be\/)([\w-]{6,})/)?.[1] ?? null;
+  const result = await buildEpisodeAndMedia({
+    mediaId, programId, program,
+    storedPath: `youtube:${url}`,
+    filename: `${mediaId}.mp4`,
+    title: (b?.title ?? "").trim() || "YouTube 영상",
+    mime: "video/mp4",
+    size: 0,
+    meta: { durationSec: 0, width: 0, height: 0, codec: "", hasAudio: false },
+    thumbPath: null,
+    pendingIngestNote: "YouTube 영상 다운로드 대기 중…",
+  });
+  await enqueue("youtube.download", { mediaId, url, programId },
+    { dedupeKey: `youtube.download:${mediaId}` });
+
+  return c.json({
+    mediaId, episodeId: result.episode?.id ?? null,
+    sourceVideoId: vid, status: "downloading",
+  }, 202);
+});
+
+/**
+ * 성과 조회 — 공장이 올린 영상들의 지표.
+ *
+ * 지표는 `video.analyze` 잡이 채운다(채널 동기화 주기). **업로드 직후엔 비어 있는 게
+ * 정상**이고, 그걸 "실패"로 읽지 않도록 `hasMetrics` 를 함께 내려준다.
+ */
+app.get("/api/factory/jobs/:id/performance", async (c) => {
+  const denied = factoryAuthDenied(c);
+  if (denied) return denied;
+
+  const job = await getEntity<any>("factoryJob", c.req.param("id"));
+  if (!job) return c.json({ error: "not_found" }, 404);
+
+  const clips = await Promise.all(
+    (job.clipIds ?? []).map((id: string) => getEntity<any>("clip", id)));
+
+  const items = [];
+  for (const clip of clips.filter(Boolean) as any[]) {
+    for (const d of (clip.distributions ?? [])) {
+      if (d.channel !== "youtube" || !d.externalId) continue;
+      const a = await getVideoAnalytics(d.externalId);
+      items.push({
+        clipId: clip.id,
+        title: clip.title,
+        videoId: d.externalId,
+        channelId: d.youtubeChannelId ?? null,
+        status: d.status,
+        url: `https://www.youtube.com/watch?v=${d.externalId}`,
+        hasMetrics: Boolean(a),
+        fetchedAt: a?.fetchedAt ?? null,
+        // summary 는 YouTube Analytics 원본 키를 그대로 둔다 — 우리가 이름을 바꾸면
+        // 붙이는 쪽이 YouTube 문서와 대조를 못 한다.
+        metrics: a?.summary ?? null,
+        trafficSources: a?.trafficSources ?? null,
+      });
+    }
+  }
+  return c.json({ jobId: job.id, status: job.state, items });
+});
+
+/**
  * refresh token 직접 등록 (붙이는 쪽이 이미 토큰을 갖고 있을 때).
  *
  * ⚠️ **우리 GOOGLE_CLIENT_ID 로 발급된 토큰만 동작한다.** 다른 OAuth 클라이언트로 받은
@@ -4145,8 +4235,15 @@ app.get(CANVA_CALLBACK_PATH, async (c) => {
   }
 });
 
-app.get("/api/canva/status", async (c) =>
-  c.json({ configured: canvaConfigured(), connected: await canvaConnected() }));
+// DB 가 죽어도 `configured` 는 답한다 — env 설정 문제와 DB 장애를 화면에서 구분해야 한다.
+app.get("/api/canva/status", async (c) => {
+  const configured = canvaConfigured();
+  try {
+    return c.json({ configured, connected: await canvaConnected() });
+  } catch (e: any) {
+    return c.json({ configured, connected: false, error: `db_unavailable: ${e.message}` }, 200);
+  }
+});
 
 app.delete("/api/canva/connection", async (c) => {
   await disconnectCanva();
