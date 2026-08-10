@@ -115,6 +115,8 @@ import {
   TokenRevokedError,
   type PersistTokens,
   type YouTubeAuth,
+  scopeCanPublish,
+  YT_PUBLISH_SCOPE,
 } from "./youtube.ts";
 import { SHORTS_PROBE_MAX_PER_SYNC, SHORTS_PROBE_CONCURRENCY } from "./config.ts";
 import { runChannelPipeline, runDueChannels } from "./channel-pipeline.ts";
@@ -2877,7 +2879,8 @@ function upsertDistribution(distributions: any[], channel: string, value: Record
 }
 
 /** The upload grant is the plain youtube scope; readonly (analytics) can't upload. */
-const YT_UPLOAD_SCOPE = "https://www.googleapis.com/auth/youtube";
+// 스코프 판정은 youtube.ts 한 곳에서 — 문자열을 두 벌 두면 어긋난다(2026-08-10 사고).
+const YT_UPLOAD_SCOPE = YT_PUBLISH_SCOPE;
 
 /**
  * Resolve the connected channel we upload to. A channel can publish only if its consent
@@ -3769,10 +3772,10 @@ app.post("/api/factory/channels", async (c) => {
     return c.json({ error: "refresh_failed", message: String(e).slice(0, 200) }, 502);
   }
 
-  if (!scope.includes("youtube.upload")) {
+  if (!scopeCanPublish(scope)) {
     return c.json({
       error: "scope_insufficient",
-      message: "업로드 권한이 없는 토큰입니다 (youtube.upload 필요).",
+      message: `업로드 권한이 없는 토큰입니다 (${YT_PUBLISH_SCOPE} 필요).`,
       scope,
     }, 400);
   }
@@ -4636,9 +4639,8 @@ app.get("/api/factory/targets", async (c) => {
   const channels = await listYouTubeChannels();
   return c.json({
     targets: channels.map((ch) => {
-      const scope = String((ch as any).scope ?? "");
       const live = ch.status !== "revoked" && Boolean(ch.refreshToken);
-      const canPublish = live && scope.includes("youtube.upload");
+      const canPublish = live && scopeCanPublish((ch as any).scope);
       return {
         target: `youtube:${ch.channelId}`,
         channelId: ch.channelId,
