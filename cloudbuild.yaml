@@ -41,13 +41,14 @@ steps:
           --concurrency=10 \
           --min-instances=0 \
           --max-instances=5 \
-          --set-env-vars=NODE_ENV=production,GCS_BUCKET=$_GCS_BUCKET \
+          --set-env-vars=NODE_ENV=production,GCS_BUCKET=$_GCS_BUCKET,FACTORY_ENABLED=1 \
           --set-secrets=DATABASE_URL=stepd-db-url:latest \
           --set-secrets=GOOGLE_CLIENT_ID=stepd-google-client-id:latest \
           --set-secrets=GOOGLE_CLIENT_SECRET=stepd-google-client-secret:latest \
           --set-secrets=JWT_SECRET=stepd-jwt-secret:latest \
           --set-secrets=PUBLIC_URL=stepd-public-url:latest \
           --set-secrets=LAB_WRITE_TOKEN=stepd-lab-write-token:latest \
+          --set-secrets=FACTORY_API_KEY=stepd-factory-api-key:latest \
           --set-secrets=TIKTOK_CLIENT_KEY=stepd-tiktok-client-key:latest \
           --set-secrets=TIKTOK_CLIENT_SECRET=stepd-tiktok-client-secret:latest \
           --add-cloudsql-instances=$_CLOUD_SQL_INSTANCE \

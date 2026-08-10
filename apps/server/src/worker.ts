@@ -55,6 +55,7 @@ import {
   fetchVideosBatch,
   fetchVideoComments,
   uploadVideoResumable,
+  updateVideoPrivacy,
   TokenRevokedError,
   type PersistTokens,
 } from "./youtube.ts";
@@ -88,7 +89,10 @@ const JOB_LANES: Record<"content" | "youtube" | "gebd", JobType[]> = {
   // match.align도 content 레인 — 파이썬·ffmpeg로 오디오를 돌리는 무거운 잡이라
   // YouTube API 레인(짧고 쿼터 위주)에 섞으면 그쪽을 막는다.
   content: ["content.analyze", "youtube.download", "match.align", "match.segment", "match.learn"],
-  youtube: ["channel.analyze", "video.analyze", "video.hotwatch", "video.comments", "distribution.publish"],
+  // factory.* 도 youtube 레인 — 상태기계 한 걸음은 DB 몇 번 읽고 재큐하는 게 전부라
+  // 짧고, 배포(distribution.publish)와 같은 레인에 있어야 순서가 자연스럽다.
+  youtube: ["channel.analyze", "video.analyze", "video.hotwatch", "video.comments",
+            "distribution.publish", "factory.orchestrate", "factory.publicize"],
   // gebd 는 GPU T4 spot VM 전용 lane. content lane 이 이 잡을 claim 하면 GPU 없는 곳에서
   // Docker mmaction2 를 못 돌린다. 그래서 별도 프로세스 (WORKER_JOBS=gebd) 로만 픽업.
   gebd: ["gebd.detect"],
@@ -179,6 +183,8 @@ async function handle(job: Job): Promise<FollowUp | void> {
     case "match.segment": return handleMatchSegment(job);
     case "match.learn": return handleMatchLearn(job);
     case "gebd.detect": return handleGebdDetect(job);
+    case "factory.orchestrate": return handleFactoryOrchestrate(job);
+    case "factory.publicize": return handleFactoryPublicize(job);
     case "thumbnail.style": return handleThumbnailStyle(job);
     case "thumbnail.generate": return handleThumbnailGenerate(job);
     default:
@@ -749,6 +755,64 @@ function runThumbnailCli(
 }
 
 /** 프로그램 채널의 기존 썸네일 → 스타일 프로파일. 프로그램당 1회성(갱신 시 재실행). */
+
+// ── 콘텐츠 공장 ───────────────────────────────────────────────────────────────
+// 상태기계 한 걸음 전진 후 재큐. 16분짜리 분석을 기다리며 워커를 붙잡지 않는다.
+
+async function handleFactoryOrchestrate(job: Job): Promise<void> {
+  const factoryJobId = String(job.payload.factoryJobId ?? "");
+  if (!factoryJobId) throw new Error("factoryJobId 필요");
+
+  const { advance } = await import("./factory.ts");
+  const { job: fj, retryInMs } = await advance(factoryJobId);
+  console.log(`[worker] factory.orchestrate ${factoryJobId} → ${fj.state}` +
+    (fj.note ? ` (${fj.note})` : "") + (fj.error ? ` ERROR ${fj.error}` : ""));
+
+  if (retryInMs !== null) {
+    await enqueue("factory.orchestrate", { factoryJobId },
+      { dedupeKey: `factory.orchestrate:${factoryJobId}:${fj.state}:${Date.now()}`,
+        delayMs: retryInMs });
+  }
+}
+
+/** 채널 토큰을 얻어 공개 범위를 바꾼다. distribution.publish 가 쓰는 경로와 같은 방식. */
+async function setYoutubePrivacy(
+  channelId: string | undefined,
+  videoId: string,
+  privacy: "public" | "unlisted" | "private",
+): Promise<void> {
+  if (!channelId) throw new Error("youtubeChannelId 없음 — 어느 채널 토큰을 쓸지 알 수 없다");
+  const ch = await loadActiveChannel(channelId);
+  if (!ch) throw new Error(`채널 ${channelId} 토큰 없음/철회됨`);
+  await withChannelToken(ch, (token) => updateVideoPrivacy(token, videoId, privacy));
+}
+
+/** private 로 올린 영상을 공개로 전환. 이 잡이 돌기 전에 취소하면 되돌린 것이 된다. */
+async function handleFactoryPublicize(job: Job): Promise<void> {
+  const factoryJobId = String(job.payload.factoryJobId ?? "");
+  const { getEntity, putEntity } = await import("./db-pg.ts");
+  const fj = await getEntity<any>("factoryJob", factoryJobId);
+  if (!fj) throw new Error(`factoryJob ${factoryJobId} 없음`);
+
+  let switched = 0;
+  for (const clipId of (fj.clipIds ?? [])) {
+    const clip = await getEntity<any>("clip", clipId);
+    const dist = (clip?.distributions ?? []).find((d: any) => d.channel === "youtube");
+    if (!clip || !dist?.externalId) continue;
+    try {
+      await setYoutubePrivacy(dist.youtubeChannelId, dist.externalId, "public");
+      switched += 1;
+    } catch (e) {
+      console.warn(`[factory] 공개 전환 실패 ${clipId}: ${String(e).slice(0, 160)}`);
+    }
+  }
+  await putEntity("factoryJob", factoryJobId, {
+    ...fj, state: "done", note: `공개 전환 ${switched}/${(fj.clipIds ?? []).length}`,
+    updatedAt: Date.now(),
+  });
+  console.log(`[worker] factory.publicize ${factoryJobId} · ${switched}건 공개`);
+}
+
 async function handleThumbnailStyle(job: Job): Promise<void> {
   const programId = String(job.payload.programId ?? "");
   // 재생목록 URL 을 권한다 — 큰 채널은 프로그램·기수가 재생목록으로 나뉘어 있고,

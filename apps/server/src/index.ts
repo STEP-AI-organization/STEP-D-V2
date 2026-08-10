@@ -138,6 +138,16 @@ import {
   listPrefix,
 } from "./storage-gcs.ts";
 import { castPrefix, stylePrefix } from "./thumbnail-assets.ts";
+import {
+  CANVA_CALLBACK_PATH, canvaConfigured, canvaConnected, canvaAuthUrl,
+  canvaExchangeCode, disconnectCanva, listCanvaDesigns,
+} from "./canva.ts";
+import {
+  createJob as createFactoryJob,
+  findByIdempotencyKey as findFactoryJobByKey,
+  validateTargets as validateFactoryTargets,
+  factoryEnabled,
+} from "./factory.ts";
 
 // A stray async error (e.g. a GCS stream 'error' after the response started, or a background
 // promise rejecting) must not kill the whole Cloud Run instance mid-request — same guard the
@@ -3555,6 +3565,26 @@ function safeReturn(path: string | undefined): string {
   return "/register";
 }
 
+/**
+ * 외부(AENA 등) 로 돌려보낼 복귀 URL. **allowlist 에 있는 오리진만** 허용한다.
+ *
+ * 리프레시 토큰을 받으려면 채널 주인이 우리 OAuth 화면을 거쳐야 하고, 끝나면 붙이는 쪽
+ * 화면으로 돌아가야 한다. 여기를 열어두면 오픈 리다이렉트가 되므로 오리진을 못박는다.
+ * FACTORY_RETURN_ORIGINS="https://aena.example,https://x.example"
+ */
+function safeExternalReturn(url: string | undefined): string | null {
+  if (!url) return null;
+  const allowed = (process.env.FACTORY_RETURN_ORIGINS ?? "")
+    .split(",").map((s) => s.trim()).filter(Boolean);
+  if (allowed.length === 0) return null;
+  try {
+    const u = new URL(url);
+    return allowed.includes(u.origin) ? u.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
 app.get("/api/youtube/auth", (c) => {
   if (!GOOGLE_CLIENT_ID) return c.json({ error: "GOOGLE_CLIENT_ID not configured" }, 500);
   const channelUrl = c.req.query("channel") ?? "";
@@ -3562,6 +3592,114 @@ app.get("/api/youtube/auth", (c) => {
   const returnTo = safeReturn(c.req.query("return"));
   const state = Buffer.from(JSON.stringify({ channel: channelUrl, mode, return: returnTo })).toString("base64");
   return c.redirect(googleAuthUrl(state, mode));
+});
+
+/**
+ * 외부 연동용 채널 연결 URL 발급.
+ *
+ * 붙이는 쪽이 이 URL 을 채널 주인에게 열어주면, 동의 후 우리가 refresh token 을 저장하고
+ * `returnUrl` 로 돌려보낸다. **토큰을 우리가 직접 발급받는 유일한 안전한 경로다** —
+ * 남이 만든 refresh token 은 우리 client_id 로 발급된 게 아니면 갱신이 안 된다.
+ */
+app.post("/api/factory/channels/connect-url", async (c) => {
+  const denied = factoryAuthDenied(c);
+  if (denied) return denied;
+  if (!GOOGLE_CLIENT_ID) return c.json({ error: "oauth_not_configured" }, 500);
+
+  const b = await c.req.json<{ returnUrl?: string; channelUrl?: string }>().catch(() => null);
+  const extReturn = safeExternalReturn(b?.returnUrl);
+  if (b?.returnUrl && !extReturn) {
+    return c.json({
+      error: "return_url_not_allowed",
+      message: "FACTORY_RETURN_ORIGINS 에 등록된 오리진만 복귀 주소로 쓸 수 있습니다.",
+    }, 400);
+  }
+  // publish 모드여야 업로드 스코프가 붙는다. analytics 로 연결하면 배포에 못 쓴다.
+  const state = Buffer.from(JSON.stringify({
+    channel: b?.channelUrl ?? "", mode: "publish", return: "/register",
+    ...(extReturn ? { extReturn } : {}),
+  })).toString("base64");
+  return c.json({ url: googleAuthUrl(state, "publish") });
+});
+
+/**
+ * refresh token 직접 등록 (붙이는 쪽이 이미 토큰을 갖고 있을 때).
+ *
+ * ⚠️ **우리 GOOGLE_CLIENT_ID 로 발급된 토큰만 동작한다.** 다른 OAuth 클라이언트로 받은
+ * refresh token 은 우리 client_secret 으로 갱신이 안 된다. 그래서 저장 전에 **실제로 한 번
+ * 갱신해 보고** 실패하면 거절한다 — 나중에 배포 시점에 알면 이미 늦다.
+ */
+app.post("/api/factory/channels", async (c) => {
+  const denied = factoryAuthDenied(c);
+  if (denied) return denied;
+  if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET) {
+    return c.json({ error: "oauth_not_configured" }, 500);
+  }
+  const b = await c.req.json<{ refreshToken?: string; channelUrl?: string }>().catch(() => null);
+  const refreshToken = (b?.refreshToken ?? "").trim();
+  if (!refreshToken) {
+    return c.json({ error: "bad_request", message: "refreshToken 이 필요합니다." }, 400);
+  }
+
+  let accessToken: string;
+  let scope = "";
+  let expiresIn = 3600;
+  try {
+    const res = await fetch("https://oauth2.googleapis.com/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        client_id: GOOGLE_CLIENT_ID,
+        client_secret: GOOGLE_CLIENT_SECRET,
+        refresh_token: refreshToken,
+        grant_type: "refresh_token",
+      }),
+    });
+    if (!res.ok) {
+      return c.json({
+        error: "refresh_token_invalid",
+        message: "이 refresh token 으로 갱신할 수 없습니다. 우리 OAuth 클라이언트로 발급된 토큰이어야 합니다 — /api/factory/channels/connect-url 로 연결해 주세요.",
+        detail: (await res.text()).slice(0, 200),
+      }, 400);
+    }
+    const t = await res.json() as { access_token: string; scope?: string; expires_in?: number };
+    accessToken = t.access_token;
+    scope = t.scope ?? "";
+    expiresIn = t.expires_in ?? 3600;
+  } catch (e) {
+    return c.json({ error: "refresh_failed", message: String(e).slice(0, 200) }, 502);
+  }
+
+  if (!scope.includes("youtube.upload")) {
+    return c.json({
+      error: "scope_insufficient",
+      message: "업로드 권한이 없는 토큰입니다 (youtube.upload 필요).",
+      scope,
+    }, 400);
+  }
+
+  const info = await fetchYtChannelInfo(accessToken);
+  await upsertYouTubeChannel({
+    id: info.channelId,
+    channelId: info.channelId,
+    channelName: info.channelName,
+    channelUrl: b?.channelUrl ?? null,
+    thumbnail: info.thumbnail,
+    subscribers: info.subscribers,
+    refreshToken,
+    accessToken,
+    expiresAt: Date.now() + expiresIn * 1000,
+    scope,
+    email: null,
+    status: "active",
+    connectedAt: Date.now(),
+  });
+  return c.json({
+    ok: true,
+    target: `youtube:${info.channelId}`,
+    channelId: info.channelId,
+    name: info.channelName,
+  });
 });
 
 const oauthCallback = async (c: Context) => {
@@ -3613,6 +3751,12 @@ const oauthCallback = async (c: Context) => {
     });
 
     const params = new URLSearchParams({ success: "1", channelId: channel.channelId, channelName: channel.channelName });
+    // 외부에서 시작한 연결이면 그쪽 화면으로 돌려보낸다 (allowlist 통과분만).
+    const ext = safeExternalReturn((st as any).extReturn);
+    if (ext) {
+      const sep = ext.includes("?") ? "&" : "?";
+      return c.redirect(`${ext}${sep}${params}`);
+    }
     return c.redirect(`${returnTo}?${params}`);
   } catch (err: any) {
     console.error("[oauth/callback]", err);
@@ -3979,6 +4123,45 @@ app.post("/api/youtube/refresh", async (c) => {
   }
 });
 
+// ── Canva OAuth (쇼츠 오버레이 템플릿 export) ──────────────────────────────────
+
+app.get("/api/canva/auth", async (c) => {
+  if (!canvaConfigured()) return c.json({ error: "canva_not_configured" }, 500);
+  return c.redirect(await canvaAuthUrl());
+});
+
+app.get(CANVA_CALLBACK_PATH, async (c) => {
+  const code = c.req.query("code");
+  const state = c.req.query("state");
+  const err = c.req.query("error");
+  if (err) return c.redirect(`/publish-channels?canva=${encodeURIComponent(err)}`);
+  if (!code || !state) return c.json({ error: "missing code or state" }, 400);
+  try {
+    await canvaExchangeCode(code, state);
+    return c.redirect("/publish-channels?canva=connected");
+  } catch (e: any) {
+    console.error("[canva/oauth/callback]", e);
+    return c.redirect(`/publish-channels?canva=${encodeURIComponent(e.message ?? "failed")}`);
+  }
+});
+
+app.get("/api/canva/status", async (c) =>
+  c.json({ configured: canvaConfigured(), connected: await canvaConnected() }));
+
+app.delete("/api/canva/connection", async (c) => {
+  await disconnectCanva();
+  return c.json({ ok: true });
+});
+
+app.get("/api/canva/designs", async (c) => {
+  try {
+    return c.json({ designs: await listCanvaDesigns() });
+  } catch (e: any) {
+    if (e.message === "canva_not_connected") return c.json({ error: "canva_not_connected" }, 409);
+    return c.json({ error: e.message }, 502);
+  }
+});
+
 // ── YouTube Analytics (channel analysis) ─────────────────────────────────
 
 /** YYYY-MM-DD, `days` ago (Analytics API only accepts this format). */
@@ -4207,6 +4390,242 @@ app.post("/api/media/:id/thumbnail", async (c) => {
     candidates: body?.candidates ?? 3,
   }, { dedupeKey: `thumbnail.generate:${mediaId}` });
   return c.json({ ok: true, jobId });
+});
+
+// ── 콘텐츠 공장 (Factory API) ─────────────────────────────────────────────────
+// 소비자는 AENA(사내). 소스 영상 하나 → 분석·쇼츠·클립·YouTube 배포까지 자동 완주.
+// 서버는 잡을 만들기만 하고, 진행은 factory.orchestrate 상태기계가 워커에서 굴린다.
+// 계획·결정 근거: docs/plans/active/factory-api-plan.md
+//
+// **외부 서버가 부른다.** Cloud Run 이 allow-unauthenticated 라 IAM 이 막아주지 않으므로
+// 이 라우트들이 스스로 인증해야 한다. 남이 이 엔드포인트를 찾으면 우리 YouTube 채널에
+// 영상을 올릴 수 있다 — Lab 쓰기 토큰과 같은 방식으로 막는다.
+
+const FACTORY_API_KEY = process.env.FACTORY_API_KEY ?? "";
+/** 키 미설정 = 열림이 아니라 닫힘. env 실수의 실패 방향을 '안 됨' 쪽으로 둔다. */
+function factoryAuthDenied(c: Context) {
+  if (!FACTORY_API_KEY) {
+    return c.json({
+      error: "factory_key_unset",
+      message: "FACTORY_API_KEY 가 서버에 설정되지 않아 Factory API 가 닫혀 있습니다.",
+    }, 503);
+  }
+  const given = c.req.header("x-factory-key") ?? "";
+  // 길이가 다르면 어차피 다르다. 같은 길이일 때만 상수시간 비교로 타이밍 누출을 줄인다.
+  const ok = given.length === FACTORY_API_KEY.length &&
+    crypto.timingSafeEqual(Buffer.from(given), Buffer.from(FACTORY_API_KEY));
+  if (!ok) return c.json({ error: "unauthorized", message: "x-factory-key 가 올바르지 않습니다." }, 401);
+  return null;
+}
+
+/** 브라우저에서 직접 부르는 경우 대비. 서버간 호출이면 안 쓰인다. */
+const FACTORY_ALLOWED_ORIGIN = process.env.FACTORY_ALLOWED_ORIGIN ?? "";
+app.options("/api/factory/*", (c) => {
+  if (!FACTORY_ALLOWED_ORIGIN) return c.body(null, 204);
+  return c.body(null, 204, {
+    "Access-Control-Allow-Origin": FACTORY_ALLOWED_ORIGIN,
+    "Access-Control-Allow-Headers": "content-type,x-factory-key",
+    "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
+    "Access-Control-Max-Age": "3600",
+  });
+});
+
+/**
+ * 시간당 ingest 상한. 남용 방지가 아니라 **사고 방지**다 — 붙이는 쪽 루프 버그로
+ * 같은 영상이 수백 번 들어오면 API 비용과 채널이 같이 망가진다.
+ */
+async function ingestRateExceeded(): Promise<boolean> {
+  const limit = Number(process.env.FACTORY_HOURLY_LIMIT) || 20;
+  const since = Date.now() - 60 * 60 * 1000;
+  const jobs = await listEntities<any>("factoryJob");
+  return jobs.filter((j) => (j.createdAt ?? 0) >= since).length >= limit;
+}
+
+/** 진입. 즉시 202 로 jobId 만 준다 — 완주까지 수십 분 걸리므로 붙잡지 않는다. */
+app.post("/api/factory/ingest", async (c) => {
+  const denied = factoryAuthDenied(c);
+  if (denied) return denied;
+  // 킬 스위치. 잘못된 env 의 실패 모드가 "안 돌아감"이지 "실수로 배포됨"이 아니게.
+  if (!factoryEnabled()) {
+    return c.json({
+      error: "factory_disabled",
+      message: "FACTORY_ENABLED 가 켜져 있지 않습니다.",
+    }, 503);
+  }
+
+  const b = await c.req.json<{
+    sourceUrl?: string; programId?: string; targets?: string[];
+    policy?: Record<string, unknown>; idempotencyKey?: string;
+  }>().catch(() => null);
+
+  const sourceUrl = (b?.sourceUrl ?? "").trim();
+  const programId = (b?.programId ?? "").trim();
+  const targets = Array.isArray(b?.targets) ? b!.targets.filter(Boolean) : [];
+  if (!sourceUrl || !programId || targets.length === 0) {
+    return c.json({
+      error: "bad_request",
+      message: "sourceUrl · programId · targets 가 필요합니다.",
+    }, 400);
+  }
+  // **지정한 채널로만 나간다.** 여기서 검증하지 않으면 배포 시점에 워커가 잡을 조용히
+  // 버리고(채널 없음 → 경고 후 drop) 공장은 "배포됨"으로 끝난다. 그게 가장 나쁜 실패다.
+  // 미지원 채널·미연동·권한 없음을 전부 여기서 거절한다.
+  const targetProblems = await validateFactoryTargets(targets);
+  if (targetProblems.length) {
+    return c.json({
+      error: "invalid_target",
+      message: "배포 대상 채널을 확인해 주세요.",
+      problems: targetProblems,
+    }, 400);
+  }
+  if (!(await getEntity("program", programId))) {
+    return c.json({ error: "program_not_found" }, 404);
+  }
+  if (await ingestRateExceeded()) {
+    return c.json({
+      error: "rate_limited",
+      message: "시간당 ingest 상한에 걸렸습니다 (FACTORY_HOURLY_LIMIT).",
+    }, 429);
+  }
+
+  // 같은 요청이 두 번 와도 재작업하지 않는다 — 이중 배포가 가장 비싼 사고다.
+  const key = (b?.idempotencyKey ?? "").trim();
+  const existing = key ? await findFactoryJobByKey(key) : undefined;
+  if (existing) return c.json({ jobId: existing.id, status: existing.state, reused: true }, 202);
+
+  const job = await createFactoryJob({
+    sourceUrl, programId, targets,
+    policy: (b?.policy ?? {}) as any,
+    idempotencyKey: key || undefined,
+  });
+  return c.json({ jobId: job.id, status: job.state }, 202);
+});
+
+/**
+ * 지정 가능한 배포 대상 목록. AENA 가 targets 에 무엇을 넣을 수 있는지 알려면 필요하다.
+ * 업로드 권한이 없는 채널은 `canPublish:false` 로 함께 보여준다 — 목록에서 빼버리면
+ * "왜 내 채널이 안 보이지"에서 막힌다.
+ */
+app.get("/api/factory/targets", async (c) => {
+  const denied = factoryAuthDenied(c);
+  if (denied) return denied;
+  const channels = await listYouTubeChannels();
+  return c.json({
+    targets: channels.map((ch) => {
+      const scope = String((ch as any).scope ?? "");
+      const live = ch.status !== "revoked" && Boolean(ch.refreshToken);
+      const canPublish = live && scope.includes("youtube.upload");
+      return {
+        target: `youtube:${ch.channelId}`,
+        channelId: ch.channelId,
+        name: ch.channelName,
+        canPublish,
+        reason: canPublish ? null
+          : !live ? "연결 끊김 (재인증 필요)"
+          : "업로드 권한 없음 (게시 모드로 재연결 필요)",
+      };
+    }),
+  });
+});
+
+/**
+ * 내부용 공장 실행 — 우리 앱 화면에서 회차 하나를 공장에 태운다.
+ *
+ * 외부용(`/api/factory/ingest`)과 달리 **x-factory-key 를 요구하지 않는다.** 그 키를
+ * 브라우저에 내려보내면 유출되고, 유출되면 남이 우리 채널에 영상을 올릴 수 있다.
+ * 외부 키는 서버-대-서버(AENA) 전용으로 남긴다.
+ *
+ * 킬 스위치·상한·타깃 검증은 외부 경로와 똑같이 통과해야 한다 — 내부라고 느슨해지면
+ * 사고는 내부에서 난다.
+ */
+app.post("/api/media/:id/factory-run", async (c) => {
+  if (!factoryEnabled()) {
+    return c.json({ error: "factory_disabled", message: "FACTORY_ENABLED 가 꺼져 있습니다." }, 503);
+  }
+  const mediaId = c.req.param("id");
+  const media = await getMedia(mediaId);
+  if (!media) return c.json({ error: "media_not_found" }, 404);
+
+  const b = await c.req.json<{ targets?: string[]; policy?: Record<string, unknown> }>()
+    .catch(() => null);
+  const targets = Array.isArray(b?.targets) ? b!.targets.filter(Boolean) : [];
+  if (targets.length === 0) {
+    return c.json({ error: "bad_request", message: "배포할 채널을 하나 이상 선택해 주세요." }, 400);
+  }
+  const problems = await validateFactoryTargets(targets);
+  if (problems.length) {
+    return c.json({ error: "invalid_target", message: "배포 대상 채널을 확인해 주세요.", problems }, 400);
+  }
+
+  const episode = (media as any).episodeId
+    ? await getEntity<any>("episode", (media as any).episodeId) : null;
+  const programId = episode?.programId ?? "";
+  if (!programId) {
+    return c.json({ error: "program_not_found", message: "이 회차의 프로그램을 찾을 수 없습니다." }, 404);
+  }
+
+  // 같은 회차를 두 번 누르면 기존 잡을 그대로 돌려준다 — 이중 배포가 가장 비싼 사고다.
+  const key = `internal:${mediaId}`;
+  const existing = await findFactoryJobByKey(key);
+  if (existing) return c.json({ jobId: existing.id, status: existing.state, reused: true }, 202);
+
+  const job = await createFactoryJob({
+    sourceUrl: (media as any).storedPath ?? mediaId,
+    programId, targets,
+    policy: (b?.policy ?? {}) as any,
+    idempotencyKey: key,
+  });
+  return c.json({ jobId: job.id, status: job.state }, 202);
+});
+
+/** 이 회차의 공장 실행 상태 (내부용 폴링). 없으면 null. */
+app.get("/api/media/:id/factory-run", async (c) => {
+  const job = await findFactoryJobByKey(`internal:${c.req.param("id")}`);
+  if (!job) return c.json({ job: null });
+  const clips = await Promise.all(
+    (job.clipIds ?? []).map((id: string) => getEntity<any>("clip", id)));
+  return c.json({
+    job: {
+      jobId: job.id, status: job.state, note: job.note ?? null, error: job.error ?? null,
+      dryRun: Boolean(job.policy?.dryRun), updatedAt: job.updatedAt,
+      clips: clips.filter(Boolean).map((cl: any) => ({
+        clipId: cl.id, title: cl.title, rendered: Boolean(cl.rendered),
+        distributions: (cl.distributions ?? []).map((d: any) => ({
+          channel: d.channel, status: d.status, externalId: d.externalId ?? null })),
+      })),
+    },
+  });
+});
+
+/** 폴링용 상태 조회. 웹훅은 후순위 — 내부 소비자라 폴링으로 시작한다. */
+app.get("/api/factory/jobs/:id", async (c) => {
+  const denied = factoryAuthDenied(c);
+  if (denied) return denied;
+  const job = await getEntity<any>("factoryJob", c.req.param("id"));
+  if (!job) return c.json({ error: "not_found" }, 404);
+
+  const clips = await Promise.all(
+    (job.clipIds ?? []).map((id: string) => getEntity<any>("clip", id)));
+  return c.json({
+    jobId: job.id,
+    status: job.state,
+    programId: job.programId,
+    mediaId: job.mediaId ?? null,
+    note: job.note ?? null,
+    error: job.error ?? null,
+    dryRun: Boolean(job.policy?.dryRun),
+    clips: clips.filter(Boolean).map((cl: any) => ({
+      clipId: cl.id,
+      title: cl.title,
+      durationSec: cl.durationSec,
+      rendered: Boolean(cl.rendered),
+      distributions: (cl.distributions ?? []).map((d: any) => ({
+        channel: d.channel, status: d.status, externalId: d.externalId ?? null,
+      })),
+    })),
+    createdAt: job.createdAt,
+    updatedAt: job.updatedAt,
+  });
 });
 
 app.get("/api/queue/stats", async (c) => c.json(await queueStats()));

@@ -2,8 +2,8 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
-import { ChevronLeft, FileVideo, Image as ImageIcon, Loader2, Trash2 } from "lucide-react";
+import { useEffect, useState } from "react";
+import { ChevronLeft, FactoryIcon, FileVideo, Image as ImageIcon, Loader2, Trash2 } from "lucide-react";
 import { EmptyState } from "@/components/ui/empty-state";
 import { PipelineStrip } from "@/components/pipeline-strip";
 import { SourcePanel } from "@/components/source-panel";
@@ -12,7 +12,10 @@ import { SeekProvider } from "@/components/episode/seek-context";
 import { useToast } from "@/components/ui/toast";
 import { useAppData } from "@/lib/data/store";
 import { targetAgeLabel } from "@/lib/constants";
-import { generateThumbnail } from "@/lib/data/api";
+import {
+  generateThumbnail, runFactory, fetchFactoryRun, fetchYouTubeChannels,
+  type FactoryRunStatus, type YouTubeChannelInfo,
+} from "@/lib/data/api";
 
 /**
  * Episode detail — 상하 스택 레이아웃.
@@ -139,6 +142,7 @@ export function EpisodeDetail({
               썸네일
             </button>
           )}
+          {master && <FactoryButton mediaId={master.id} />}
           <button
             type="button"
             onClick={runDelete}
@@ -167,5 +171,133 @@ export function EpisodeDetail({
         </div>
       </SeekProvider>
     </>
+  );
+}
+
+
+/**
+ * 공장 실행 — 이 회차를 분석부터 배포까지 자동으로 완주시킨다.
+ *
+ * 채널을 **명시적으로 골라야** 실행된다. "연결된 채널이 하나뿐이니 거기로" 같은 추측을
+ * 화면에서도 하지 않는다 — 잘못된 채널 배포는 되돌리기 어렵다.
+ * 처음 여는 사람을 위해 드라이런이 기본 ON 이다.
+ */
+function FactoryButton({ mediaId }: { mediaId: string }) {
+  const { toast } = useToast();
+  const [open, setOpen] = useState(false);
+  const [channels, setChannels] = useState<YouTubeChannelInfo[]>([]);
+  const [picked, setPicked] = useState<string[]>([]);
+  const [dryRun, setDryRun] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [run, setRun] = useState<FactoryRunStatus | null>(null);
+
+  useEffect(() => {
+    void fetchFactoryRun(mediaId).then(setRun).catch(() => {});
+  }, [mediaId]);
+
+  useEffect(() => {
+    if (!open) return;
+    void fetchYouTubeChannels().then(setChannels).catch(() => setChannels([]));
+  }, [open]);
+
+  // 진행 중이면 폴링. 끝난 뒤에는 멈춘다 — 화면을 열어둔 채로 두는 경우가 많다.
+  useEffect(() => {
+    if (!run || ["done", "failed", "hold"].includes(run.status)) return;
+    const t = setInterval(() => { void fetchFactoryRun(mediaId).then(setRun).catch(() => {}); }, 20_000);
+    return () => clearInterval(t);
+  }, [mediaId, run?.status]);
+
+  async function start() {
+    if (picked.length === 0) {
+      toast({ title: "배포할 채널을 선택해 주세요", tone: "error" });
+      return;
+    }
+    setBusy(true);
+    try {
+      const r = await runFactory(mediaId, picked, { dryRun });
+      toast({
+        title: r.reused ? "이미 실행 중인 작업이 있습니다" : "공장 실행을 시작했습니다",
+        description: dryRun
+          ? "드라이런 — 클립까지만 만들고 업로드하지 않습니다."
+          : "분석부터 업로드까지 자동 진행됩니다.",
+      });
+      setOpen(false);
+      setRun(await fetchFactoryRun(mediaId));
+    } catch (e) {
+      toast({ title: "실행 실패", description: e instanceof Error ? e.message : String(e), tone: "error" });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const running = run && !["done", "failed", "hold"].includes(run.status);
+
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        title="이 회차를 분석부터 배포까지 자동 완주시킵니다"
+        className="inline-flex items-center gap-1.5 rounded-md border border-border px-2.5 py-1.5 text-xs text-muted-foreground hover:text-foreground"
+      >
+        {running ? <Loader2 className="size-3.5 animate-spin" /> : <FactoryIcon className="size-3.5" />}
+        {running ? `공장 · ${run!.status}` : "공장"}
+      </button>
+
+      {open && (
+        <div className="absolute right-0 z-20 mt-2 w-80 rounded-xl border border-border bg-card p-4 shadow-lg">
+          <div className="mb-2 text-xs font-medium">배포할 채널</div>
+          {channels.length === 0 ? (
+            <div className="text-xs text-muted-foreground">연결된 채널이 없습니다.</div>
+          ) : (
+            <div className="grid gap-1">
+              {channels.map((ch) => (
+                <label key={ch.channelId} className="flex items-center gap-2 text-xs">
+                  <input
+                    type="checkbox"
+                    checked={picked.includes(`youtube:${ch.channelId}`)}
+                    onChange={(e) => setPicked((prev) => e.target.checked
+                      ? [...prev, `youtube:${ch.channelId}`]
+                      : prev.filter((t) => t !== `youtube:${ch.channelId}`))}
+                  />
+                  <span className="truncate">{ch.channelName}</span>
+                  {ch.status === "revoked" && (
+                    <span className="text-status-error">연결 끊김</span>
+                  )}
+                </label>
+              ))}
+            </div>
+          )}
+
+          <label className="mt-3 flex items-center gap-2 text-xs">
+            <input type="checkbox" checked={dryRun} onChange={(e) => setDryRun(e.target.checked)} />
+            드라이런 (클립까지만 · 업로드 안 함)
+          </label>
+          {!dryRun && (
+            <div className="mt-1 text-[11px] text-status-warning">
+              실제로 업로드됩니다. 비공개로 올라간 뒤 유예 시간이 지나면 공개로 바뀝니다.
+            </div>
+          )}
+
+          <div className="mt-3 flex justify-end gap-2">
+            <button type="button" onClick={() => setOpen(false)}
+              className="rounded-md px-2.5 py-1.5 text-xs text-muted-foreground">취소</button>
+            <button type="button" onClick={start} disabled={busy}
+              className="rounded-md bg-primary px-3 py-1.5 text-xs text-primary-foreground disabled:opacity-50">
+              {busy ? "요청 중…" : "실행"}
+            </button>
+          </div>
+
+          {run && (
+            <div className="mt-3 border-t border-border pt-2 text-[11px] text-muted-foreground">
+              <div>상태: {run.status}{run.dryRun ? " (드라이런)" : ""}</div>
+              {run.note && <div>{run.note}</div>}
+              {run.error && <div className="text-status-error">{run.error}</div>}
+              {run.clips.length > 0 && <div>클립 {run.clips.length}개</div>}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
   );
 }

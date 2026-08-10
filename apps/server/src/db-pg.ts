@@ -10,7 +10,7 @@ import { seed } from "./seed.ts";
 
 const { Pool } = pg;
 
-export type EntityKind = "program" | "episode" | "recommendation" | "clip" | "job";
+export type EntityKind = "program" | "episode" | "recommendation" | "clip" | "job" | "factoryJob";
 
 export interface MediaRow {
   id: string;

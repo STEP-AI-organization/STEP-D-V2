@@ -1291,3 +1291,51 @@ export async function generateThumbnail(
   if (!res.ok) throw new Error(((await res.json()) as any)?.message ?? "썸네일 생성 요청 실패");
   return (await res.json()) as { ok: boolean; jobId?: string };
 }
+
+// ── 콘텐츠 공장 (내부용) ──────────────────────────────────────────────────────
+// 외부용 /api/factory/* 는 x-factory-key 를 요구한다. 그 키를 브라우저에 내려보내면
+// 유출되고, 유출되면 남이 우리 채널에 영상을 올릴 수 있다 — 화면은 내부 라우트를 쓴다.
+
+export interface FactoryRunClip {
+  clipId: string;
+  title: string;
+  rendered: boolean;
+  distributions: { channel: string; status: string; externalId: string | null }[];
+}
+
+export interface FactoryRunStatus {
+  jobId: string;
+  status: string;
+  note: string | null;
+  error: string | null;
+  dryRun: boolean;
+  updatedAt: number;
+  clips: FactoryRunClip[];
+}
+
+/** 회차 하나를 공장에 태운다. targets = ["youtube:UC..."] */
+export async function runFactory(
+  mediaId: string,
+  targets: string[],
+  policy: { dryRun?: boolean; maxShorts?: number; publishPublic?: boolean } = {},
+): Promise<{ jobId: string; status: string; reused?: boolean }> {
+  const res = await fetch(`${API_BASE}/media/${mediaId}/factory-run`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ targets, policy }),
+  });
+  const body = (await res.json().catch(() => null)) as any;
+  if (!res.ok) {
+    // 채널별 사유(problems)가 있으면 그걸 그대로 보여줘야 운영자가 고칠 수 있다.
+    const detail = Array.isArray(body?.problems) ? ` — ${body.problems.join(" / ")}` : "";
+    throw new Error((body?.message ?? `${res.status}`) + detail);
+  }
+  return body;
+}
+
+/** 이 회차의 공장 실행 상태. 실행한 적 없으면 null. */
+export async function fetchFactoryRun(mediaId: string): Promise<FactoryRunStatus | null> {
+  const res = await fetch(`${API_BASE}/media/${mediaId}/factory-run`);
+  if (!res.ok) return null;
+  return ((await res.json()) as { job: FactoryRunStatus | null }).job;
+}
