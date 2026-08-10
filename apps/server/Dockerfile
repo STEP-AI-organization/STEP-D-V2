@@ -33,6 +33,9 @@ WORKDIR /app
 # Copy all monorepo files needed (no node_modules, handled separately)
 COPY package.json ./
 COPY apps/server apps/server
+# 쇼츠 프레임 템플릿 — shorts-template.ts 가 /app/assets/shorts-template 에서 읽는다.
+# 빼먹으면 편집기 템플릿 목록이 프로덕션에서만 빈 배열이 된다(로컬은 멀쩡해서 안 보인다).
+COPY assets/shorts-template assets/shorts-template
 # Overwrite server node_modules from deps layer
 COPY --from=deps /app/apps/server/node_modules /app/apps/server/node_modules
 

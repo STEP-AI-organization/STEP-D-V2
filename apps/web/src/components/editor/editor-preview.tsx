@@ -4,7 +4,7 @@ import { useRef, useState, type CSSProperties, type Ref } from "react";
 import { Heart, MessageCircle, Send } from "lucide-react";
 import { ASPECTS, defaultElementSize, filterCss, overlayVisibleAt, sampleKeyframes, type CaptionStyle, type EditorState } from "@/lib/editor/presets";
 import { Movable, SnapGuides, InlineText, type Guides } from "@/components/editor/editor-overlay";
-import { frameUrl } from "@/lib/data/api";
+import { frameUrl, frameOverlaySrc, type FrameTemplate } from "@/lib/data/api";
 import { cn } from "@/lib/utils";
 
 /**
@@ -70,6 +70,7 @@ export function EditorPreview({
   posterMediaId,
   posterApiBase,
   posterTime,
+  frame,
 }: {
   state: EditorState;
   update: (patch: Partial<EditorState>) => void;
@@ -93,6 +94,8 @@ export function EditorPreview({
   posterMediaId?: string;
   posterApiBase?: string;
   posterTime?: number;
+  /** 선택된 프레임 템플릿 기하(%). 없으면 프레임 없이 기존 동작. */
+  frame?: FrameTemplate | null;
 }) {
   const poster =
     posterMediaId && posterApiBase != null ? frameUrl(posterApiBase, posterMediaId, posterTime ?? 0) : undefined;
@@ -265,9 +268,50 @@ export function EditorPreview({
                 });
               }}
               onClick={onTogglePlay}
-              className="absolute inset-0 size-full cursor-pointer object-contain"
-              style={{ filter: videoFilter }}
+              className={cn(
+                "absolute cursor-pointer",
+                // 프레임 템플릿이 붙으면 영역을 꽉 채운다(cover) — export 의 cover 와 같아야
+                // 미리보기와 결과물이 어긋나지 않는다. 프레임이 없으면 기존 contain 동작.
+                frame ? "object-cover" : "inset-0 size-full object-contain",
+              )}
+              style={
+                frame
+                  ? {
+                      filter: videoFilter,
+                      left: `${frame.video.x}%`, top: `${frame.video.y}%`,
+                      width: `${frame.video.w}%`, height: `${frame.video.h}%`,
+                    }
+                  : { filter: videoFilter }
+              }
             />
+            {/* 프레임 레이어 — 서버 meta.json 기하 그대로. 순서는 export 와 동일하게
+                bands(non-over) → overlay 조각 → over bands. 순서가 어긋나면 미리보기에서
+                로고가 지워지거나 캔바 글자가 되살아난다. */}
+            {frame && (
+              <div className="pointer-events-none absolute inset-0">
+                {frame.bands.filter((b) => !b.over).map((b, i) => (
+                  <div key={`b${i}`} className="absolute"
+                    style={{ left: `${b.x}%`, top: `${b.y}%`, width: `${b.w}%`, height: `${b.h}%`, background: b.color }} />
+                ))}
+                {frame.overlayRegions.map((r, i) => (
+                  <div key={`r${i}`} className="absolute overflow-hidden"
+                    style={{ left: `${r.x}%`, top: `${r.y}%`, width: `${r.w}%`, height: `${r.h}%` }}>
+                    {/* 전체 프레임 이미지를 스테이지 크기로 깔고 이 사각형만 보이게 자른다 */}
+                    <img src={frameOverlaySrc(frame)} alt="" draggable={false}
+                      style={{
+                        position: "absolute",
+                        width: `${(100 / r.w) * 100}%`, height: `${(100 / r.h) * 100}%`,
+                        left: `${(-r.x / r.w) * 100}%`, top: `${(-r.y / r.h) * 100}%`,
+                        maxWidth: "none",
+                      }} />
+                  </div>
+                ))}
+                {frame.bands.filter((b) => b.over).map((b, i) => (
+                  <div key={`o${i}`} className="absolute"
+                    style={{ left: `${b.x}%`, top: `${b.y}%`, width: `${b.w}%`, height: `${b.h}%`, background: b.color }} />
+                ))}
+              </div>
+            )}
           </>
         ) : (
           <div className="absolute inset-0 flex items-center justify-center bg-gradient-to-br from-zinc-700 to-zinc-900 text-[11px] text-zinc-400">

@@ -110,8 +110,8 @@ export async function validateTargets(targets: string[]): Promise<string[]> {
     if ((ch as any).status === "revoked" || !(ch as any).refreshToken) {
       problems.push(`${t}: 연결이 끊겼습니다 (재인증 필요)`); continue;
     }
-    const scope = String((ch as any).scope ?? "");
-    if (!scope.includes("youtube.upload")) {
+    const { scopeCanPublish } = await import("./youtube.ts");
+    if (!scopeCanPublish((ch as any).scope)) {
       problems.push(`${t}: 업로드 권한 없음 (분석 전용으로 연결됨 — 게시 모드로 재연결 필요)`);
     }
   }

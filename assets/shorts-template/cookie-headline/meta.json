@@ -1,0 +1,29 @@
+{
+  "name": "cookie-headline",
+  "source": "canva",
+  "canva_design_id": "DAHR2853DDs",
+  "canva_title": "화이트와 노란색 헤드라인 바탕의 쿠키 만들기 소개 유튜브 쇼츠",
+  "size": [1080, 1920],
+
+  "video": { "x": 0, "y": 640, "w": 1080, "h": 608 },
+
+  "bands": [
+    { "x": 0, "y": 234,  "w": 1080, "h": 406, "color": "white" },
+    { "x": 0, "y": 1248, "w": 1080, "h": 672, "color": "white" },
+    { "x": 250, "y": 116, "w": 560, "h": 80, "color": "#f6ce62", "over": true }
+  ],
+
+  "overlay_regions": [
+    { "x": 0,   "y": 0,    "w": 1080, "h": 234 },
+    { "x": 690, "y": 1560, "w": 390,  "h": 230 }
+  ],
+
+  "text": [
+    { "slot": "brand",   "y": 122,  "size": 52, "color": "#3d2b16" },
+    { "slot": "title",   "y": 275,  "size": 58, "color": "#1a1a1a" },
+    { "slot": "meta",    "y": 378,  "size": 34, "color": "#8a8a90" },
+    { "slot": "caption", "y": 1330, "size": 48, "color": "#1a1a1a" }
+  ],
+
+  "_note": "픽셀 실측 — 헤더 0~233(#f6ce62) · 제목 273~329 · 메타 375~406 · 로고 1567~1780. 헤더 검색바 안 '달콤쇼츠' 는 over 밴드로 덮고 brand 슬롯을 그 자리에 그린다. video 는 16:9 정확히 맞춰 blur 여백 없음."
+}

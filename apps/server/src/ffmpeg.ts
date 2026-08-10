@@ -158,6 +158,15 @@ export type RenderShortOpts = {
   bgType?: "solid" | "blur" | "image";
   /** bgType='solid'일 때의 letterbox 색 (예: "#0E0E12"). */
   bgColor?: string;
+  /** 프레임 템플릿 기하 (assets/shorts-template/<name>/meta.json).
+   *  주면 배경 blur/solid 대신 **프레임 합성 경로**를 탄다: 검정 바탕 → 영상 사각형(cover)
+   *  → bands → overlay.png 조각 → over bands. 편집기 미리보기와 같은 순서여야 한다. */
+  frame?: {
+    overlayPath: string;
+    video: { x: number; y: number; w: number; h: number; fit?: "cover" | "contain" };
+    bands: { x: number; y: number; w: number; h: number; color?: string; over?: boolean }[];
+    overlayRegions: { x: number; y: number; w: number; h: number }[];
+  } | null;
   /** 첫 3초 hook 프리롤 (2026-08-02 · docs/plans/shorts-hook-intro-3sec.md · Phase 3/α).
    *  설정 시 · 본문 앞에 hook 구간의 짧은 클립을 punch-in(전체화면 커버 + 살짝 그레이드)으로
    *  붙이고 cross-dissolve 로 본문에 이어붙인다. 이탈 방지용 attention retention.
@@ -283,7 +292,32 @@ export function renderShort(opts: RenderShortOpts): Promise<void> {
   const bgMode = opts.bgType === "solid" || opts.bgType === "image" ? "solid" : "blur";
   const solidColor = normalizeHexColor(opts.bgColor, "#0E0E12");
   let vf: string;
-  if (bgMode === "solid") {
+  const fr = opts.frame;
+  if (fr) {
+    // 프레임 경로. drawbox 는 필터 인자 순서가 x,y,w,h 라 meta.json 을 그대로 옮기면 된다.
+    const boxes = (over: boolean) =>
+      fr.bands.filter((b) => !!b.over === over)
+        .map((b) => `drawbox=x=${b.x}:y=${b.y}:w=${b.w}:h=${b.h}:color=${b.color ?? "black"}:t=fill`)
+        .join(",");
+    const v = fr.video;
+    const fit = v.fit === "contain"
+      ? `scale=${v.w}:${v.h}:force_original_aspect_ratio=decrease,pad=${v.w}:${v.h}:(ow-iw)/2:(oh-ih)/2:black`
+      : `scale=${v.w}:${v.h}:force_original_aspect_ratio=increase,crop=${v.w}:${v.h}`;
+    // ⚠️ color 에 d= 를 빼면 무한 입력이라 인코딩이 안 끝난다.
+    vf = `color=c=black:s=${W}x${H}:d=${outDur.toFixed(3)}[base];` +
+         `[0:v]${fit},setsar=1[fgv];` +
+         `[base][fgv]overlay=${v.x}:${v.y}:shortest=1[comp0]`;
+    const under = boxes(false);
+    vf += under ? `;[comp0]${under}[comp1]` : `;[comp0]copy[comp1]`;
+    let cur = "comp1";
+    fr.overlayRegions.forEach((r, i) => {
+      vf += `;[1:v]crop=${r.w}:${r.h}:${r.x}:${r.y}[frg${i}]`;
+      vf += `;[${cur}][frg${i}]overlay=${r.x}:${r.y}[fov${i}]`;
+      cur = `fov${i}`;
+    });
+    const overBoxes = boxes(true);
+    vf += overBoxes ? `;[${cur}]${overBoxes}[v0]` : `;[${cur}]copy[v0]`;
+  } else if (bgMode === "solid") {
     // fit-to-frame foreground를 [W×H] 단색 캔버스에 오버레이. color 필터는 지속 프레임 만들고,
     // -shortest 없이 -t로 컷하므로 무한 스트림도 안전. 색은 0xRRGGBB 형식.
     const colorHex = `0x${solidColor.slice(1)}`;
@@ -323,6 +357,8 @@ export function renderShort(opts: RenderShortOpts): Promise<void> {
     "-y",
     "-ss", String(startTime),
     "-i", inputPath,
+    // 프레임 PNG 는 입력 1번 — filtergraph 의 [1:v] 와 짝이 맞아야 한다.
+    ...(fr ? ["-i", fr.overlayPath] : []),
     "-t", String(outDur),
     "-filter_complex", vf,
     "-map", last,

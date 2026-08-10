@@ -1,0 +1,19 @@
+{
+  "name": "fullbleed-title",
+  "source": "canva",
+  "canva_design_id": "DAHR3c9NPv4",
+  "canva_title": "전면형 제목 2줄",
+  "size": [1080, 1920],
+
+  "video": { "x": 0, "y": 0, "w": 1080, "h": 1920 },
+
+  "bands": [],
+  "overlay_regions": [],
+
+  "text": [
+    { "slot": "title1", "y": 190, "size": 100, "color": "#5c4a3d", "borderw": 6, "bordercolor": "white" },
+    { "slot": "title2", "y": 360, "size": 100, "color": "#22c8e8", "borderw": 6, "bordercolor": "white" }
+  ],
+
+  "_note": "전면형 — 영상이 화면 전체. overlay.png 의 배경사진은 자리표시용이라 쓰지 않는다(overlay_regions=[]). 띠가 없어 글자에 흰 테두리 필수."
+}

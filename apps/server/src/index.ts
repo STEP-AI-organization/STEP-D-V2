@@ -115,6 +115,8 @@ import {
   TokenRevokedError,
   type PersistTokens,
   type YouTubeAuth,
+  scopeCanPublish,
+  YT_PUBLISH_SCOPE,
 } from "./youtube.ts";
 import { SHORTS_PROBE_MAX_PER_SYNC, SHORTS_PROBE_CONCURRENCY } from "./config.ts";
 import { runChannelPipeline, runDueChannels } from "./channel-pipeline.ts";
@@ -138,6 +140,7 @@ import {
   listPrefix,
 } from "./storage-gcs.ts";
 import { castPrefix, stylePrefix } from "./thumbnail-assets.ts";
+import { listShortsTemplates, getShortsTemplate, toPercent } from "./shorts-template.ts";
 import {
   CANVA_CALLBACK_PATH, canvaConfigured, canvaConnected, canvaAuthUrl,
   canvaExchangeCode, disconnectCanva, listCanvaDesigns,
@@ -2387,10 +2390,18 @@ async function renderClipMedia(opts: {
         ? editorState.bgType
         : "blur") as "solid" | "blur" | "image";
       const bgColor = typeof editorState?.bg === "string" ? editorState.bg : undefined;
+      // 프레임 템플릿 — editorState.templateId 가 assets/shorts-template 의 디렉토리 이름이다.
+      // 목록에 없으면(구 프리셋 id 등) null 이라 기존 blur/solid 경로로 떨어진다.
+      const tpl = typeof editorState?.templateId === "string"
+        ? getShortsTemplate(editorState.templateId)
+        : null;
+      const frame = tpl
+        ? { overlayPath: tpl.overlayPath, video: tpl.video, bands: tpl.bands, overlayRegions: tpl.overlayRegions }
+        : null;
       await renderShort({
         inputPath: srcPath, startTime, endTime, outputPath: tmpPath, width: W, height: H,
         assPath: ass ? assTmp : null, videoFilters, audioFilter, speed,
-        bgType, bgColor,
+        bgType, bgColor, frame,
         hookPreroll,
       });
     }
@@ -2868,7 +2879,8 @@ function upsertDistribution(distributions: any[], channel: string, value: Record
 }
 
 /** The upload grant is the plain youtube scope; readonly (analytics) can't upload. */
-const YT_UPLOAD_SCOPE = "https://www.googleapis.com/auth/youtube";
+// 스코프 판정은 youtube.ts 한 곳에서 — 문자열을 두 벌 두면 어긋난다(2026-08-10 사고).
+const YT_UPLOAD_SCOPE = YT_PUBLISH_SCOPE;
 
 /**
  * Resolve the connected channel we upload to. A channel can publish only if its consent
@@ -3760,10 +3772,10 @@ app.post("/api/factory/channels", async (c) => {
     return c.json({ error: "refresh_failed", message: String(e).slice(0, 200) }, 502);
   }
 
-  if (!scope.includes("youtube.upload")) {
+  if (!scopeCanPublish(scope)) {
     return c.json({
       error: "scope_insufficient",
-      message: "업로드 권한이 없는 토큰입니다 (youtube.upload 필요).",
+      message: `업로드 권한이 없는 토큰입니다 (${YT_PUBLISH_SCOPE} 필요).`,
       scope,
     }, 400);
   }
@@ -4213,6 +4225,24 @@ app.post("/api/youtube/refresh", async (c) => {
   }
 });
 
+// ── 쇼츠 프레임 템플릿 (편집기·렌더 공용 기하) ────────────────────────────────
+
+app.get("/api/shorts-templates", (c) =>
+  c.json({ templates: listShortsTemplates().map(toPercent) }));
+
+app.get("/api/shorts-templates/:name/overlay.png", (c) => {
+  const t = getShortsTemplate(c.req.param("name"));
+  if (!t) return c.json({ error: "template_not_found" }, 404);
+  const buf = fs.readFileSync(t.overlayPath);
+  return new Response(new Uint8Array(buf), {
+    headers: {
+      "Content-Type": "image/png",
+      // 프레임은 canva:sync 로만 바뀐다 — 편집기가 매 렌더마다 다시 받지 않게 캐시.
+      "Cache-Control": "public, max-age=300",
+    },
+  });
+});
+
 // ── Canva OAuth (쇼츠 오버레이 템플릿 export) ──────────────────────────────────
 
 app.get("/api/canva/auth", async (c) => {
@@ -4609,9 +4639,8 @@ app.get("/api/factory/targets", async (c) => {
   const channels = await listYouTubeChannels();
   return c.json({
     targets: channels.map((ch) => {
-      const scope = String((ch as any).scope ?? "");
       const live = ch.status !== "revoked" && Boolean(ch.refreshToken);
-      const canPublish = live && scope.includes("youtube.upload");
+      const canPublish = live && scopeCanPublish((ch as any).scope);
       return {
         target: `youtube:${ch.channelId}`,
         channelId: ch.channelId,

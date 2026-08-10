@@ -843,3 +843,17 @@ export async function updateVideoPrivacy(
       `videos.update 실패 (${res.status}): ${(await res.text()).slice(0, 200)}`);
   }
 }
+
+
+/**
+ * 이 채널이 업로드까지 할 수 있는가 — **동의 스코프 판정의 단일 진실**.
+ *
+ * publish 모드가 실제로 받는 건 `.../auth/youtube`(+force-ssl, memberships)이고
+ * `youtube.upload` 는 **받지 않는다.** 문자열을 각자 하드코딩하면 "재연동했는데도
+ * 권한 없음"이 난다(2026-08-10 실제로 발생). 판정은 여기 한 곳에서만 한다.
+ */
+export const YT_PUBLISH_SCOPE = "https://www.googleapis.com/auth/youtube";
+
+export function scopeCanPublish(scope: string | null | undefined): boolean {
+  return (scope ?? "").split(" ").includes(YT_PUBLISH_SCOPE);
+}

@@ -8,12 +8,13 @@
  */
 
 export type AspectKey = "9:16" | "16:9" | "1:1" | "4:5";
-export type TemplateId =
-  | "stacked_channel"
-  | "full_bleed"
-  | "caption_card"
-  | "news_bar"
-  | "comment_hook";
+/**
+ * 프레임 템플릿 디렉토리 이름 (`assets/shorts-template/<name>`).
+ * 예전 하드코딩 5종("stacked_channel" 등)은 캔바 프레임으로 대체됐다. 문자열로 열어둬야
+ * 캔바에서 템플릿을 추가할 때 웹 코드를 안 고친다 — 목록은 서버가 준다.
+ * 저장된 구 클립의 값이 그대로 남아 있을 수 있는데, 목록에 없으면 프레임 없이 렌더된다.
+ */
+export type TemplateId = string;
 export type CaptionStyle =
   | "korean_pop"    // 예능 팝 (기본, 두꺼운 검은 스트로크)
   | "clean"         // 미니멀 (얇은 그림자)
@@ -420,7 +421,7 @@ export interface TemplatePreset {
   patch: Partial<EditorState>;
 }
 
-/** 5 genre-tuned one-click layouts (StepD parity). Each repositions all layers. */
+/** @deprecated 캔바 프레임 템플릿으로 대체됨. 구 클립의 templateId 하위호환용으로만 남긴다. */
 export const TEMPLATE_PRESETS: TemplatePreset[] = [
   {
     id: "stacked_channel",
@@ -626,8 +627,15 @@ export function ensureTracks(state: EditorState, durationSec: number, segmentSta
   };
 }
 
+/**
+ * 프레임 템플릿 선택. 프레임은 **기하만** 바꾸므로 여기서는 id 와 캔버스 기본값만 손댄다 —
+ * 제목·자막 레이어는 사용자가 잡아둔 위치를 유지한다(템플릿 바꿀 때마다 초기화되면 못 쓴다).
+ * 실제 띠·영상 사각형·프레임 그래픽은 서버가 주는 meta.json 기하로 미리보기·export 가 그린다.
+ */
 export function applyTemplate(state: EditorState, id: TemplateId): EditorState {
-  const preset = TEMPLATE_PRESETS.find((p) => p.id === id);
-  if (!preset) return state;
-  return { ...state, templateId: id, ...preset.patch };
+  const legacy = TEMPLATE_PRESETS.find((p) => p.id === id);
+  // 구 프리셋 id 로 저장된 클립을 열었을 때만 예전 패치를 적용한다(하위호환).
+  return legacy
+    ? { ...state, templateId: id, ...legacy.patch }
+    : { ...state, templateId: id, aspect: "9:16", bgType: "solid", bg: "#000000" };
 }

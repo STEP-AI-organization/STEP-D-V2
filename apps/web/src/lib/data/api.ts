@@ -1339,3 +1339,40 @@ export async function fetchFactoryRun(mediaId: string): Promise<FactoryRunStatus
   if (!res.ok) return null;
   return ((await res.json()) as { job: FactoryRunStatus | null }).job;
 }
+
+// ── 쇼츠 프레임 템플릿 ─────────────────────────────────────────────────────────
+
+export interface FrameRect { x: number; y: number; w: number; h: number }
+export interface FrameBand extends FrameRect { color: string; over: boolean }
+export interface FrameTextSlot {
+  slot: string;
+  x: number;
+  align: "center" | "left";
+  y: number;
+  size: number;
+  color: string;
+  borderw: number;
+  bordercolor: string;
+}
+/** 좌표는 전부 **%** 다 — 편집기 캔버스와 export 가 같은 기준을 쓰게 서버에서 변환해 내려준다. */
+export interface FrameTemplate {
+  name: string;
+  title: string;
+  size: [number, number];
+  video: FrameRect & { fit: "cover" | "contain" };
+  bands: FrameBand[];
+  overlayRegions: FrameRect[];
+  text: FrameTextSlot[];
+  overlayUrl: string;
+}
+
+export async function fetchShortsTemplates(): Promise<FrameTemplate[]> {
+  const res = await fetch(`${API_BASE}/shorts-templates`, { cache: "no-store" });
+  if (!res.ok) return [];
+  return ((await res.json()) as { templates: FrameTemplate[] }).templates ?? [];
+}
+
+/** overlayUrl 은 서버 상대경로라 프록시 베이스를 붙여야 브라우저가 받을 수 있다. */
+export function frameOverlaySrc(t: FrameTemplate): string {
+  return t.overlayUrl.startsWith("http") ? t.overlayUrl : `${API_BASE}${t.overlayUrl.replace(/^\/api/, "")}`;
+}

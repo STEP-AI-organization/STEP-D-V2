@@ -1,0 +1,59 @@
+{
+  "name": "sns-card",
+  "source": "local",
+  "canva_design_id": "DAHR3u1h5ec",
+  "size": [
+    1080,
+    1920
+  ],
+  "video": {
+    "x": 60,
+    "y": 560,
+    "w": 960,
+    "h": 740
+  },
+  "bands": [],
+  "overlay_regions": [
+    {
+      "x": 0,
+      "y": 0,
+      "w": 1080,
+      "h": 1920
+    }
+  ],
+  "text": [
+    {
+      "slot": "channel",
+      "x": 240,
+      "y": 150,
+      "size": 54,
+      "color": "#111111"
+    },
+    {
+      "slot": "handle",
+      "x": 240,
+      "y": 215,
+      "size": 38,
+      "color": "#8a8a90"
+    },
+    {
+      "slot": "title1",
+      "y": 330,
+      "size": 68,
+      "color": "#ffd93a"
+    },
+    {
+      "slot": "title2",
+      "y": 420,
+      "size": 68,
+      "color": "#ffd93a"
+    },
+    {
+      "slot": "caption",
+      "y": 1330,
+      "size": 52,
+      "color": "#111111"
+    }
+  ],
+  "_note": "영상 자리는 overlay.png 에 알파 0 으로 뚫려 있다. overlay_regions 는 전체 캔버스 — 구멍 밖은 전부 PNG 가 덮는다."
+}
