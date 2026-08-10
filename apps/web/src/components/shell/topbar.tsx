@@ -5,12 +5,15 @@
  * 좌측 화면 제목(세리프 17px) + 부제(11.5px, 말줄임), 우측 "주간 리포트".
  */
 import { usePathname } from "next/navigation";
+import { useState } from "react";
 
+import { WeeklyReportDialog } from "@/components/report/weekly-report-dialog";
 import { screenMetaFor } from "@/lib/nav";
 
 export function Topbar({ breadcrumb }: { breadcrumb?: React.ReactNode }) {
   const pathname = usePathname();
   const meta = screenMetaFor(pathname);
+  const [reportOpen, setReportOpen] = useState(false);
 
   return (
     <header
@@ -29,7 +32,10 @@ export function Topbar({ breadcrumb }: { breadcrumb?: React.ReactNode }) {
       </div>
 
       {/* 주간 리포트는 자동 발송이 없다 — 사람이 눌러서 만든다 (README §15). */}
-      <button type="button" className="sd-btn shrink-0">주간 리포트</button>
+      <button type="button" className="sd-btn shrink-0" onClick={() => setReportOpen(true)}>
+        주간 리포트
+      </button>
+      {reportOpen && <WeeklyReportDialog onClose={() => setReportOpen(false)} />}
     </header>
   );
 }
