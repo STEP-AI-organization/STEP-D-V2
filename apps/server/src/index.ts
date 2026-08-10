@@ -141,6 +141,12 @@ import {
 } from "./storage-gcs.ts";
 import { castPrefix, stylePrefix } from "./thumbnail-assets.ts";
 import { isClipRendered, upsertDistribution } from "./publish-guard.ts";
+import {
+  initialPipeline,
+  isoDateOrToday,
+  readEpisodeNumber,
+  readTrack,
+} from "./episode-intake.ts";
 import { listShortsTemplates, getShortsTemplate, toPercent } from "./shorts-template.ts";
 import {
   CANVA_CALLBACK_PATH, canvaConfigured, canvaConnected, canvaAuthUrl,
@@ -1453,10 +1459,45 @@ app.get("/api/media/:id/transcript", async (c) => {
 // Shared tail of the upload flow: create the episode, master media row, heuristic
 // recommendations, and enqueue content analysis. Both the legacy multipart upload and
 // the direct-to-GCS finalize path funnel through here so the two stay in lockstep.
+/**
+ * 같은 프로그램에 같은 회차 번호 (FLOWS F1 ⊘). 라우트에서 409 로 바꾼다.
+ * 진짜 보증은 유일 인덱스(migrations/0011)다 — check-then-insert 는 동시 요청을 못 막는다.
+ */
+class DuplicateEpisodeError extends Error {
+  constructor(readonly programId: string, readonly episodeNumber: number) {
+    super(`episode ${episodeNumber} already exists in program ${programId}`);
+    this.name = "DuplicateEpisodeError";
+  }
+}
+
+/** Postgres unique_violation (23505). */
+function isUniqueViolation(err: unknown): boolean {
+  return typeof err === "object" && err !== null && (err as { code?: string }).code === "23505";
+}
+
+/** 회차 번호가 이미 쓰였는지 — 업로드 시작 전에 막아 준다(GB 를 올린 뒤 409 는 잔인하다). */
+async function episodeNumberTaken(programId: string, episodeNumber: number): Promise<boolean> {
+  const { rows } = await getPool().query<{ n: string }>(
+    `SELECT 1 AS n FROM entities
+      WHERE kind = 'episode' AND data->>'programId' = $1 AND data->>'episodeNumber' = $2
+      LIMIT 1`,
+    [programId, String(episodeNumber)],
+  );
+  return rows.length > 0;
+}
+
 async function buildEpisodeAndMedia(opts: {
   mediaId: string;
   programId: string;
   program: { id: string; title: string; targetAge: number };
+  /** 사람이 입력한 회차 번호(F1 필수). 없으면 MAX+1. */
+  episodeNumber?: number;
+  /** 방영일 YYYY-MM-DD. 없으면 오늘. */
+  broadDate?: string;
+  /** 분석 트랙(F1 필수) — 프로그램 기본값을 덮는다. */
+  track?: "variety" | "drama";
+  /** 자막을 같이 올렸는지. false 면 음성 인식으로 대체한다는 뜻. */
+  hasSubtitle?: boolean;
   storedPath: string;
   filename: string;
   title: string;
@@ -1474,31 +1515,42 @@ async function buildEpisodeAndMedia(opts: {
 }) {
   const { mediaId, programId, program, storedPath, filename, title, mime, size, meta } = opts;
 
-  // MAX straight from the DB (not a getState snapshot carried across awaits) so two
-  // near-simultaneous uploads to the same program rarely mint the same episodeNumber.
-  const { rows: epRows } = await getPool().query<{ m: number }>(
-    `SELECT COALESCE(MAX((data->>'episodeNumber')::int), 0) AS m
-       FROM entities WHERE kind = 'episode' AND data->>'programId' = $1`,
-    [programId],
-  );
-  const nextEpNum = Number(epRows[0]?.m ?? 0) + 1;
+  // 사람이 회차 번호를 넣었으면 그걸 쓴다(F1 필수 3개 중 하나). 안 넣었으면 MAX+1 —
+  // MAX 는 getState 스냅샷이 아니라 DB 에서 바로 읽는다(await 를 건너뛴 값이면 두 업로드가
+  // 같은 번호를 받는다).
+  let epNum = opts.episodeNumber;
+  if (!epNum || !Number.isInteger(epNum) || epNum < 1) {
+    const { rows: epRows } = await getPool().query<{ m: number }>(
+      `SELECT COALESCE(MAX((data->>'episodeNumber')::int), 0) AS m
+         FROM entities WHERE kind = 'episode' AND data->>'programId' = $1`,
+      [programId],
+    );
+    epNum = Number(epRows[0]?.m ?? 0) + 1;
+  }
+
   const episodeId = newId("e");
-  const today = new Date();
-  const broadDate = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+  const broadDate = isoDateOrToday(opts.broadDate);
   const episode = {
     id: episodeId,
     programId,
     programTitle: program.title,
-    episodeNumber: nextEpNum,
+    episodeNumber: epNum,
     broadDate,
     targetAge: program.targetAge,
-    // Truthful status: the AI content pipeline is enqueued, not done. The worker flips
-    // this to recommend/done once shorts land (content-pipeline.ts).
-    pipeline: opts.pendingIngestNote
-      ? { stage: "analyze", stageStatus: "progress", note: opts.pendingIngestNote, progress: 5 }
-      : { stage: "analyze", stageStatus: "progress", note: "AI 장면 분석 중…", progress: 30 },
+    // 분석 트랙 — 사람이 고른 값이 있으면 프로그램 기본값을 덮는다(F1).
+    ...(opts.track ? { pipelineGenre: opts.track } : {}),
+    // 자막을 같이 올렸는지 — 없으면 파이프라인이 음성 인식으로 대체한다.
+    ...(opts.hasSubtitle === false ? { subtitleProvided: false } : {}),
+    // F1 Invariant: 업로드 완료 ≠ 분석 완료 — 규칙과 그 이유는 episode-intake.ts 에.
+    pipeline: initialPipeline(opts.pendingIngestNote),
   };
-  await prependEntity("episode", episodeId, episode);
+  try {
+    await prependEntity("episode", episodeId, episode);
+  } catch (err) {
+    // 유일 인덱스(migrations/0011)가 잡은 중복. 라우트가 409 로 바꾼다.
+    if (isUniqueViolation(err)) throw new DuplicateEpisodeError(programId, epNum);
+    throw err;
+  }
 
   const row: MediaRow = {
     id: mediaId,
@@ -1546,6 +1598,17 @@ app.post("/api/media/upload-init", async (c) => {
     typeof body.programId === "string" && body.programId ? String(body.programId) : "p1";
   const program = await getEntity<{ id: string; title: string; targetAge: number }>("program", programId);
   if (!program) return c.json({ error: "program not found" }, 400);
+
+  // F1 ⊘ — 같은 프로그램·같은 회차 번호로 재업로드 금지. 여기서 먼저 막는다:
+  // 몇 GB 를 다 올린 뒤 finalize 에서 409 를 주면 사용자는 업로드 시간을 통째로 잃는다.
+  // (진짜 보증은 finalize 의 유일 인덱스다 — 이건 빨리 알려 주는 용도)
+  const wantedEpNum = readEpisodeNumber(body.episodeNumber);
+  if (wantedEpNum !== undefined && (await episodeNumberTaken(programId, wantedEpNum))) {
+    return c.json(
+      { error: "duplicate episode", episodeNumber: wantedEpNum, programId },
+      409,
+    );
+  }
 
   const filename =
     typeof body.filename === "string" && body.filename ? String(body.filename) : "video.mp4";
@@ -1673,12 +1736,23 @@ app.post("/api/media/finalize", async (c) => {
     }
   }
 
-  const result = await buildEpisodeAndMedia({
-    mediaId, programId, program, storedPath,
-    filename, title, mime, size, meta, thumbPath: thumbStored,
-    fast: body.fast === true,
-  });
-  return c.json(result);
+  try {
+    const result = await buildEpisodeAndMedia({
+      mediaId, programId, program, storedPath,
+      filename, title, mime, size, meta, thumbPath: thumbStored,
+      fast: body.fast === true,
+      episodeNumber: readEpisodeNumber(body.episodeNumber),
+      broadDate: typeof body.broadDate === "string" ? body.broadDate : undefined,
+      track: readTrack(body.track),
+      hasSubtitle: body.hasSubtitle !== false,
+    });
+    return c.json(result);
+  } catch (err) {
+    if (err instanceof DuplicateEpisodeError) {
+      return c.json({ error: "duplicate episode", episodeNumber: err.episodeNumber, programId }, 409);
+    }
+    throw err;
+  }
 });
 
 app.post("/api/media/upload", async (c) => {
@@ -1723,13 +1797,24 @@ app.post("/api/media/upload", async (c) => {
   }
 
   const title = typeof body["title"] === "string" && body["title"] ? String(body["title"]) : file.name;
-  const result = await buildEpisodeAndMedia({
-    mediaId, programId, program, storedPath,
-    filename: file.name, title, mime: file.type || "video/mp4", size: file.size,
-    meta, thumbPath: thumbStored,
-    fast: body["fast"] === "true",
-  });
-  return c.json(result);
+  try {
+    const result = await buildEpisodeAndMedia({
+      mediaId, programId, program, storedPath,
+      filename: file.name, title, mime: file.type || "video/mp4", size: file.size,
+      meta, thumbPath: thumbStored,
+      fast: body["fast"] === "true",
+      episodeNumber: readEpisodeNumber(body["episodeNumber"]),
+      broadDate: typeof body["broadDate"] === "string" ? body["broadDate"] : undefined,
+      track: readTrack(body["track"]),
+      hasSubtitle: body["hasSubtitle"] !== "false",
+    });
+    return c.json(result);
+  } catch (err) {
+    if (err instanceof DuplicateEpisodeError) {
+      return c.json({ error: "duplicate episode", episodeNumber: err.episodeNumber, programId }, 409);
+    }
+    throw err;
+  }
 });
 
 // ── YouTube URL import: episode + placeholder media now, download on the worker VM ──

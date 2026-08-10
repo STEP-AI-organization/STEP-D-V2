@@ -439,50 +439,84 @@ const CHUNK_RETRIES = 4;
  * On local dev (no GCS) the server replies mode:"multipart" and we fall back to the
  * old single-request upload, which is fine for the small files used there.
  */
+export interface UploadVideoOptions {
+  title?: string;
+  onProgress?: (pct: number) => void;
+  /** true = 빠른 분석(자막만, 시각 분석 스킵). 기본 false=정밀. content.analyze 잡 페이로드로 전달. */
+  fast?: boolean;
+  /** 회차 번호 (F1 필수 입력). 생략하면 서버가 MAX+1 로 매긴다. */
+  episodeNumber?: number;
+  /** 방영일 YYYY-MM-DD (F1 기본값 = 오늘). */
+  broadDate?: string;
+  /** 분석 트랙 (F1 필수 입력) — 프로그램 기본값을 덮는다. */
+  track?: "variety" | "drama";
+  /** 자막 동시 업로드 여부. false 면 음성 인식으로 대체한다. */
+  hasSubtitle?: boolean;
+}
+
+/** 같은 프로그램·같은 회차 번호 (서버 409 · FLOWS F1 ⊘). */
+export class DuplicateEpisodeError extends Error {
+  constructor(readonly episodeNumber: number) {
+    super(`회차 ${episodeNumber} 은(는) 이미 이 프로그램에 있습니다.`);
+    this.name = "DuplicateEpisodeError";
+  }
+}
+
 export async function uploadVideo(
   file: File,
   programId: string,
-  title?: string,
-  onProgress?: (pct: number) => void,
-  /** true = 빠른 분석(자막만, 시각 분석 스킵). 기본 false=정밀. content.analyze 잡 페이로드로 전달. */
-  fast?: boolean,
+  opts: UploadVideoOptions = {},
 ): Promise<UploadResult> {
+  const { title, onProgress, fast, episodeNumber, broadDate, track, hasSubtitle } = opts;
+  const meta = {
+    programId,
+    title,
+    ...(episodeNumber !== undefined ? { episodeNumber } : {}),
+    ...(broadDate ? { broadDate } : {}),
+    ...(track ? { track } : {}),
+    ...(hasSubtitle === false ? { hasSubtitle: false } : {}),
+  };
+
+  const initRes = await fetch(`${API_BASE}/media/upload-init`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      filename: file.name,
+      contentType: file.type || "video/mp4",
+      ...meta,
+    }),
+  });
+  // 업로드를 시작하기 전에 걸러 준다 — 몇 GB 를 올린 뒤 중복이라고 하면 시간을 통째로 잃는다.
+  if (initRes.status === 409 && episodeNumber !== undefined) {
+    throw new DuplicateEpisodeError(episodeNumber);
+  }
   const init = await json<
     | { mode: "resumable"; mediaId: string; objectPath: string; sessionUrl: string }
     | { mode: "multipart"; mediaId: string; objectPath: string }
-  >(
-    await fetch(`${API_BASE}/media/upload-init`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        filename: file.name,
-        contentType: file.type || "video/mp4",
-        programId,
-        title,
-      }),
-    }),
-  );
+  >(initRes);
 
-  if (init.mode === "multipart") return uploadVideoMultipart(file, programId, title, onProgress, fast);
+  if (init.mode === "multipart") return uploadVideoMultipart(file, programId, opts);
 
   await uploadResumable(init.sessionUrl, file, onProgress);
 
-  return json<UploadResult>(
-    await fetch(`${API_BASE}/media/finalize`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        mediaId: init.mediaId,
-        objectPath: init.objectPath,
-        programId,
-        title,
-        filename: file.name,
-        contentType: file.type || "video/mp4",
-        size: file.size,
-        ...(fast ? { fast: true } : {}),
-      }),
+  const finalRes = await fetch(`${API_BASE}/media/finalize`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      mediaId: init.mediaId,
+      objectPath: init.objectPath,
+      filename: file.name,
+      contentType: file.type || "video/mp4",
+      size: file.size,
+      ...(fast ? { fast: true } : {}),
+      ...meta,
     }),
-  );
+  });
+  // 업로드 도중에 다른 사람이 같은 번호를 먼저 만들었을 때 — 유일 인덱스가 잡는다.
+  if (finalRes.status === 409 && episodeNumber !== undefined) {
+    throw new DuplicateEpisodeError(episodeNumber);
+  }
+  return json<UploadResult>(finalRes);
 }
 
 /**
@@ -612,16 +646,19 @@ function parseRangeEnd(range: string | null): number | null {
 function uploadVideoMultipart(
   file: File,
   programId: string,
-  title: string | undefined,
-  onProgress?: (pct: number) => void,
-  fast?: boolean,
+  opts: UploadVideoOptions,
 ): Promise<UploadResult> {
+  const { title, onProgress, fast, episodeNumber, broadDate, track, hasSubtitle } = opts;
   return new Promise((resolve, reject) => {
     const form = new FormData();
     form.append("file", file);
     form.append("programId", programId);
     if (title) form.append("title", title);
     if (fast) form.append("fast", "true");
+    if (episodeNumber !== undefined) form.append("episodeNumber", String(episodeNumber));
+    if (broadDate) form.append("broadDate", broadDate);
+    if (track) form.append("track", track);
+    if (hasSubtitle === false) form.append("hasSubtitle", "false");
     const xhr = new XMLHttpRequest();
     xhr.open("POST", `${API_BASE}/media/upload`);
     xhr.upload.onprogress = (e) => {
@@ -629,7 +666,9 @@ function uploadVideoMultipart(
     };
     xhr.onload = () => {
       if (xhr.status >= 200 && xhr.status < 300) resolve(JSON.parse(xhr.responseText));
-      else reject(new Error(`upload failed: ${xhr.status} ${xhr.responseText}`));
+      else if (xhr.status === 409 && episodeNumber !== undefined) {
+        reject(new DuplicateEpisodeError(episodeNumber));
+      } else reject(new Error(`upload failed: ${xhr.status} ${xhr.responseText}`));
     };
     xhr.onerror = () => reject(new Error("upload network error"));
     xhr.send(form);

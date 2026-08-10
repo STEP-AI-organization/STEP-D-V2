@@ -43,6 +43,7 @@ import {
   deleteProgram as apiDeleteProgram,
   deleteEpisode as apiDeleteEpisode,
   type UpdateProgramInput,
+  type UploadVideoOptions,
   adoptRec,
   exportClip as exportClipApi,
   rejectRec,
@@ -157,7 +158,7 @@ interface AppData extends AppState {
   retryDistribution: (clipId: string, channel: DistributionChannel) => void;
   /** Upload a real video → creates an episode + recommendations. Returns episodeId.
    *  `fast=true` → 자막만 · 시각 분석 스킵 (빠른 분석 모드). 기본 false = 정밀 분석. */
-  uploadVideo: (file: File, programId: string, title?: string, onProgress?: (pct: number) => void, fast?: boolean) => Promise<string>;
+  uploadVideo: (file: File, programId: string, opts?: UploadVideoOptions) => Promise<string>;
   /** Queue a YouTube URL import — the worker downloads then analyzes. Returns episodeId. */
   importYoutube: (url: string, programId: string, title?: string, fast?: boolean) => Promise<string>;
   /** Create a program (content root). Returns the new programId. */
@@ -377,9 +378,16 @@ export function AppDataProvider({
     const nextDelay = () => {
       if (!connectedRef.current) return 15_000;
       const s = stateRef.current;
+      // `분석 대기`(idle + analyze)도 활성으로 친다 — 워커가 잡을 집는 순간을 보려면
+      // 그 전부터 폴링이 돌고 있어야 한다. 업로드 직후 회차가 여기 들어오므로
+      // 이걸 빼면 "분석 대기"에서 화면이 멈춘 것처럼 보인다.
       const active =
         s.jobs.some((j) => j.status === "running") ||
-        s.episodes.some((e) => e.pipeline?.stageStatus === "progress");
+        s.episodes.some(
+          (e) =>
+            e.pipeline?.stageStatus === "progress" ||
+            (e.pipeline?.stageStatus === "idle" && e.pipeline?.stage === "analyze"),
+        );
       return active ? 8_000 : 45_000;
     };
     const tick = async () => {
@@ -653,9 +661,9 @@ export function AppDataProvider({
   }, []);
 
   const uploadVideo = useCallback(
-    async (file: File, programId: string, title?: string, onProgress?: (pct: number) => void, fast?: boolean): Promise<string> => {
+    async (file: File, programId: string, opts: UploadVideoOptions = {}): Promise<string> => {
       if (!connectedRef.current) throw new Error("영상 업로드는 백엔드 서버가 필요합니다 (pnpm dev:server).");
-      const res = await apiUploadVideo(file, programId, title, onProgress, fast);
+      const res = await apiUploadVideo(file, programId, opts);
       await refresh();
       return res.episode.id;
     },
