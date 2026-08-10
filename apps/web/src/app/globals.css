@@ -348,6 +348,9 @@
 .sd-tag--danger {
   border-color: var(--sd-danger-border); background: var(--sd-danger-bg); color: var(--sd-danger-strong);
 }
+.sd-tag--warn {
+  border-color: var(--sd-warn-border); background: var(--sd-warn-bg); color: var(--sd-warn);
+}
 
 /* 입력 */
 .sd-input {

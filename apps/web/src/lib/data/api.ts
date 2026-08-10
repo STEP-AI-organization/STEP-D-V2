@@ -680,6 +680,130 @@ export async function adoptRec(recId: string): Promise<{ clipId: string; clip?: 
   return json(await fetch(`${API_BASE}/recommendations/${recId}/adopt`, { method: "POST" }));
 }
 
+// ── 게이트: 권리·심의 (FLOWS F3 · 서버 migrations/0012) ─────────────────────────
+//
+// 게이트 상태는 저장돼 있지 않다 — 서버가 매번 계산해서 준다. 화면은 받은 값을 그리기만
+// 하고, 자기 나름대로 "통과일 것 같다"를 만들지 않는다.
+
+export type GateSubjectType = "episode" | "recommendation" | "clip";
+export type GateState = "pass" | "rights_hold" | "conditional" | "review_pending" | "blocked";
+export type IssueKind = "music" | "portrait" | "ppl" | "cast_hold" | "brand_blur" | "vod_window";
+export type IssueResolution = "open" | "conditional" | "resolved" | "blocked";
+
+export interface GateResult {
+  state: GateState;
+  label: string;
+  allowed: boolean;
+  reason: string;
+  blocking: { id: string; kind: string; resolution: string }[];
+}
+
+export interface RightsIssue {
+  id: string;
+  subjectType: GateSubjectType;
+  subjectId: string;
+  kind: IssueKind | string;
+  resolution: IssueResolution | string;
+  bandStart: number | null;
+  bandEnd: number | null;
+  note: string;
+  actor: string;
+  createdAt: string;
+  resolvedAt: string | null;
+  resolvedBy: string | null;
+  resolutionNote: string | null;
+  inheritedFrom: string | null;
+}
+
+export async function fetchGate(
+  subjectType: GateSubjectType,
+  subjectId: string,
+): Promise<{ gate: GateResult; issues: RightsIssue[]; judged: boolean }> {
+  return json(await fetch(`${API_BASE}/gate/${subjectType}/${subjectId}`, { cache: "no-store" }));
+}
+
+export async function fetchRightsIssues(
+  subjectType: GateSubjectType,
+  subjectId: string,
+): Promise<RightsIssue[]> {
+  const r = await json<{ issues: RightsIssue[] }>(
+    await fetch(`${API_BASE}/rights-issues?subjectType=${subjectType}&subjectId=${encodeURIComponent(subjectId)}`, {
+      cache: "no-store",
+    }),
+  );
+  return r.issues;
+}
+
+/** 이슈 등록 — **사람만.** actor 없이 부르면 서버가 400 을 준다. */
+export async function createRightsIssue(input: {
+  subjectType: GateSubjectType;
+  subjectId: string;
+  kind: IssueKind;
+  resolution: "open" | "conditional" | "blocked";
+  bandStart?: number;
+  bandEnd?: number;
+  note: string;
+  actor: string;
+}): Promise<{ issue: RightsIssue; gate: GateResult }> {
+  return json(
+    await fetch(`${API_BASE}/rights-issues`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input),
+    }),
+  );
+}
+
+/** 해제/재개. resolved 로 바꿀 땐 근거 문장이 필수다(서버가 막는다). */
+export async function updateRightsIssue(
+  id: string,
+  input: { resolution: IssueResolution; resolutionNote: string; actor: string },
+): Promise<{ issue: RightsIssue; gate: GateResult }> {
+  const res = await fetch(`${API_BASE}/rights-issues/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) {
+    const body = (await res.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(body?.error ?? `${res.status} ${res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function deleteRightsIssue(id: string, actor: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/rights-issues/${id}?actor=${encodeURIComponent(actor)}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+}
+
+/** "이슈 없음" 판정 — 이것도 사람의 판단이다(F2 Invariant: 미판정과 구분). */
+export async function judgeNoIssues(
+  subjectType: GateSubjectType,
+  subjectId: string,
+  actor: string,
+  note = "",
+): Promise<{ gate: GateResult }> {
+  return json(
+    await fetch(`${API_BASE}/rights-judgement`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ subjectType, subjectId, actor, note }),
+    }),
+  );
+}
+
+export async function fetchGateAudit(
+  subjectType: GateSubjectType,
+  subjectId: string,
+): Promise<Record<string, unknown>[]> {
+  const r = await json<{ events: Record<string, unknown>[] }>(
+    await fetch(`${API_BASE}/gate-audit/${subjectType}/${encodeURIComponent(subjectId)}`, { cache: "no-store" }),
+  );
+  return r.events;
+}
+
 /** Persist the single thumbnail variant selected for a recommendation. */
 export async function selectRecommendationThumbnail(recId: string, variantId: string): Promise<void> {
   const res = await fetch(`${API_BASE}/recommendations/${recId}/thumbnail`, {
