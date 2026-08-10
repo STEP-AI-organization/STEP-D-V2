@@ -680,6 +680,44 @@ export async function adoptRec(recId: string): Promise<{ clipId: string; clip?: 
   return json(await fetch(`${API_BASE}/recommendations/${recId}/adopt`, { method: "POST" }));
 }
 
+// ── 썸네일 생성 (FLOWS F7) ──────────────────────────────────────────────────────
+//
+// 결과는 스토리지에 남는다 — 화면을 떠나도, 잡이 끝난 뒤에도. 그래서 완료 알림이 없고
+// 대신 **언제든 다시 조회된다**(F7-5).
+
+export interface ThumbnailCandidateFile { id: string; name: string; url: string }
+
+export async function generateThumbnails(
+  mediaId: string,
+  input: { programId: string; prompt?: string; aspect?: "16:9" | "9:16"; candidates?: number },
+): Promise<{ jobId: string }> {
+  const res = await fetch(`${API_BASE}/media/${mediaId}/thumbnail`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) {
+    const b = (await res.json().catch(() => null)) as { message?: string; error?: string } | null;
+    throw new Error(b?.message ?? b?.error ?? `${res.status}`);
+  }
+  return res.json();
+}
+
+export async function fetchThumbnailCandidates(
+  mediaId: string,
+): Promise<{ candidates: ThumbnailCandidateFile[]; selected: string | null }> {
+  return json(await fetch(`${API_BASE}/media/${mediaId}/thumbnails`, { cache: "no-store" }));
+}
+
+export async function selectThumbnailCandidate(mediaId: string, path: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/media/${mediaId}/thumbnails/select`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ path }),
+  });
+  if (!res.ok) throw new Error(`${res.status}`);
+}
+
 // ── 에셋 (FLOWS F8 · 서버 migrations/0016) ──────────────────────────────────────
 //
 // ⊘ 이름 변경 없음 · ⊘ 되돌리기 없음. 그래서 rename 함수가 없고, 삭제 전에 dryRun 으로

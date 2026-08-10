@@ -65,6 +65,7 @@ import {
   insertAssetFile,
   moveAssetFiles,
   deleteAssetFiles,
+  updateMediaThumb,
   listChannelRules,
   getChannelRule,
   upsertChannelRule,
@@ -187,7 +188,7 @@ import {
   deletePrefix,
   listPrefix,
 } from "./storage-gcs.ts";
-import { castPrefix, stylePrefix } from "./thumbnail-assets.ts";
+import { castPrefix, stylePrefix, thumbnailPrefix } from "./thumbnail-assets.ts";
 import { isClipRendered, upsertDistribution } from "./publish-guard.ts";
 import {
   initialPipeline,
@@ -5343,6 +5344,60 @@ app.post("/api/media/:id/thumbnail", async (c) => {
     candidates: body?.candidates ?? 3,
   }, { dedupeKey: `thumbnail.generate:${mediaId}` });
   return c.json({ ok: true, jobId });
+});
+
+/**
+ * 생성된 썸네일 후보 목록 (F7-3).
+ *
+ * 워커가 만든 결과는 스토리지에 남는다 — 화면을 떠나도, 잡이 끝난 뒤에도. F7-5 가
+ * "완료 알림이 따로 없다 · 다른 화면으로 가도 결과는 미디어에 남는다"라고 한 게 이것이다.
+ * 그래서 알림을 만들지 않고 **언제든 다시 조회되게** 둔다.
+ */
+app.get("/api/media/:id/thumbnails", async (c) => {
+  const mediaId = c.req.param("id");
+  const media = await getMedia(mediaId);
+  if (!media) return c.json({ error: "media_not_found" }, 404);
+
+  const paths = await listPrefix(`${thumbnailPrefix(mediaId)}/`);
+  const candidates = paths
+    .filter((p) => /\.(png|jpe?g|webp)$/i.test(p))
+    .sort()
+    .map((p) => ({ id: p, name: p.slice(p.lastIndexOf("/") + 1), url: `/api/media/${mediaId}/thumbnails/raw?path=${encodeURIComponent(p)}` }));
+
+  return c.json({ candidates, selected: (media as any).thumbPath ?? null });
+});
+
+app.get("/api/media/:id/thumbnails/raw", async (c) => {
+  const mediaId = c.req.param("id");
+  const objectPath = c.req.query("path") ?? "";
+  // 이 미디어의 썸네일 폴더 밖은 못 읽는다 — 경로를 쿼리로 받으므로 반드시 가둔다.
+  if (!objectPath.startsWith(`${thumbnailPrefix(mediaId)}/`) || objectPath.includes("..")) {
+    return c.json({ error: "path not allowed" }, 400);
+  }
+  if (!(await fileExists(objectPath))) return c.json({ error: "not found" }, 404);
+  const buf = await readFile(objectPath);
+  const ext = objectPath.slice(objectPath.lastIndexOf(".") + 1).toLowerCase();
+  const mime = ext === "png" ? "image/png" : ext === "webp" ? "image/webp" : "image/jpeg";
+  return new Response(new Uint8Array(buf), {
+    headers: { "Content-Type": mime, "Cache-Control": "private, max-age=600" },
+  });
+});
+
+/** 후보 하나를 이 미디어의 대표 썸네일로 지정 (F7-3). */
+app.post("/api/media/:id/thumbnails/select", async (c) => {
+  const mediaId = c.req.param("id");
+  const media = await getMedia(mediaId);
+  if (!media) return c.json({ error: "media_not_found" }, 404);
+
+  const body = await c.req.json().catch(() => ({}) as Record<string, unknown>);
+  const objectPath = typeof body.path === "string" ? body.path : "";
+  if (!objectPath.startsWith(`${thumbnailPrefix(mediaId)}/`) || objectPath.includes("..")) {
+    return c.json({ error: "path not allowed" }, 400);
+  }
+  if (!(await fileExists(objectPath))) return c.json({ error: "not found" }, 404);
+
+  await updateMediaThumb(mediaId, objectPath);
+  return c.json({ ok: true, selected: objectPath });
 });
 
 // ── 콘텐츠 공장 (Factory API) ─────────────────────────────────────────────────
