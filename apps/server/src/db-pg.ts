@@ -2399,6 +2399,112 @@ export async function deleteAssetFiles(ids: string[]): Promise<AssetFileRow[]> {
   return rows;
 }
 
+// ── 자동 배포: 규칙 · 실행 로그 · 보류 큐 (migrations/0019 · FLOWS F6) ──────────
+
+export interface AutomationRuleRow {
+  id: string; programId: string; platform: string; accountId: string;
+  mediaKind: string; criterion: string; gatePolicy: string; window: string; enabled: boolean;
+}
+
+const RULE_SEL = `id, program_id AS "programId", platform, account_id AS "accountId",
+  media_kind AS "mediaKind", criterion, gate_policy AS "gatePolicy",
+  time_window AS "window", enabled`;
+
+export async function listAutomationRules(): Promise<AutomationRuleRow[]> {
+  const { rows } = await pool.query<AutomationRuleRow>(
+    `SELECT ${RULE_SEL} FROM automation_rule ORDER BY created_at DESC`,
+  );
+  return rows;
+}
+
+export async function upsertAutomationRule(r: AutomationRuleRow): Promise<void> {
+  await pool.query(
+    `INSERT INTO automation_rule
+       (id, program_id, platform, account_id, media_kind, criterion, gate_policy, time_window, enabled)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+     ON CONFLICT (program_id, platform, account_id) DO UPDATE SET
+       media_kind = $5, criterion = $6, gate_policy = $7, time_window = $8, enabled = $9`,
+    [r.id, r.programId, r.platform, r.accountId, r.mediaKind, r.criterion, r.gatePolicy, r.window, r.enabled],
+  );
+}
+
+export async function deleteAutomationRule(id: string): Promise<boolean> {
+  const r = await pool.query(`DELETE FROM automation_rule WHERE id = $1`, [id]);
+  return (r.rowCount ?? 0) > 0;
+}
+
+/** 자동 실행 전용 로그 — 사람이 누른 배포와 섞지 않는다(F6). */
+export async function appendRuleRun(ev: {
+  ruleId?: string | null; clipId?: string | null; result: string; detail?: string;
+}): Promise<void> {
+  await pool.query(
+    `INSERT INTO rule_run (rule_id, clip_id, result, detail) VALUES ($1,$2,$3,$4)`,
+    [ev.ruleId ?? null, ev.clipId ?? null, ev.result, ev.detail ?? ""],
+  );
+}
+
+export async function listRuleRuns(limit = 100): Promise<Record<string, unknown>[]> {
+  const { rows } = await pool.query(
+    `SELECT id, at, rule_id AS "ruleId", clip_id AS "clipId", result, detail
+       FROM rule_run ORDER BY at DESC LIMIT ${Math.max(1, Math.min(limit, 500))}`,
+  );
+  return rows;
+}
+
+/** 보류 — 행이 남아 있는 동안은 게이트가 열려도 자동이 밀어내지 않는다(F6 Invariant). */
+export async function holdClip(ruleId: string, clipId: string, reason: string): Promise<void> {
+  await pool.query(
+    `INSERT INTO rule_hold (rule_id, clip_id, reason) VALUES ($1,$2,$3)
+     ON CONFLICT (rule_id, clip_id) DO UPDATE SET reason = $3`,
+    [ruleId, clipId, reason],
+  );
+}
+
+/** 사람이 확정 — 이게 있어야 다음 순방에 다시 잡힌다. */
+export async function releaseHold(ruleId: string, clipId: string, actor: string): Promise<boolean> {
+  const r = await pool.query(
+    `UPDATE rule_hold SET released_by = $3, released_at = now()
+      WHERE rule_id = $1 AND clip_id = $2 AND released_at IS NULL`,
+    [ruleId, clipId, actor],
+  );
+  return (r.rowCount ?? 0) > 0;
+}
+
+export async function openHolds(ruleId?: string): Promise<{ ruleId: string; clipId: string; reason: string; heldAt: string }[]> {
+  const { rows } = await pool.query<{ ruleId: string; clipId: string; reason: string; heldAt: string }>(
+    `SELECT rule_id AS "ruleId", clip_id AS "clipId", reason, held_at AS "heldAt"
+       FROM rule_hold
+      WHERE released_at IS NULL AND ($1::text IS NULL OR rule_id = $1)
+      ORDER BY held_at DESC`,
+    [ruleId ?? null],
+  );
+  return rows;
+}
+
+/** 이 클립이 이 규칙에서 아직 사람 확정을 기다리는가. */
+export async function isHeldAwaitingHuman(ruleId: string, clipId: string): Promise<boolean> {
+  const { rows } = await pool.query(
+    `SELECT 1 FROM rule_hold WHERE rule_id = $1 AND clip_id = $2 AND released_at IS NULL`,
+    [ruleId, clipId],
+  );
+  return rows.length > 0;
+}
+
+export async function getAutomationSetting(key: string): Promise<string | null> {
+  const { rows } = await pool.query<{ value: string }>(
+    `SELECT value FROM automation_setting WHERE key = $1`, [key],
+  );
+  return rows[0]?.value ?? null;
+}
+
+export async function setAutomationSetting(key: string, value: string): Promise<void> {
+  await pool.query(
+    `INSERT INTO automation_setting (key, value) VALUES ($1,$2)
+     ON CONFLICT (key) DO UPDATE SET value = $2`,
+    [key, value],
+  );
+}
+
 // ── cleanup ────────────────────────────────────────────────────────────────────
 
 export async function closeDb(): Promise<void> {

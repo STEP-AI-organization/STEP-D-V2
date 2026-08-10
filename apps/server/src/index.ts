@@ -26,6 +26,7 @@ import {
   verifyPassword,
   type User,
 } from "./auth.ts";
+import { audit, clientIp, requireReason, requireSuperadmin } from "./admin.ts";
 import { logger } from "hono/logger";
 import fs from "node:fs";
 import path from "node:path";
@@ -66,6 +67,15 @@ import {
   moveAssetFiles,
   deleteAssetFiles,
   updateMediaThumb,
+  listAutomationRules,
+  upsertAutomationRule,
+  deleteAutomationRule,
+  appendRuleRun,
+  listRuleRuns,
+  releaseHold,
+  openHolds,
+  getAutomationSetting,
+  setAutomationSetting,
   listChannelRules,
   getChannelRule,
   upsertChannelRule,
@@ -207,6 +217,18 @@ import {
   validateName,
 } from "./asset-path.ts";
 import {
+  RULE_CRITERIA,
+  RULE_MEDIA_KINDS,
+  GATE_POLICIES,
+  RULE_DELETED_NOTICE,
+  initialRuleState,
+  isGatePolicy,
+  isRuleCriterion,
+  isRuleMediaKind,
+  planCycle,
+  ruleCreatedNotice,
+} from "./automation.ts";
+import {
   CHANNEL_ROLES,
   defaultRuleFor,
   eligibility,
@@ -273,14 +295,14 @@ app.use("/api/*", cors({ origin: (o) => o ?? "*", credentials: false }));
  *   · /health          — 로드밸런서·모니터링
  *   · /api/auth/*      — 로그인 자체 (닭과 달걀)
  *   · OAuth 콜백       — 외부 서비스가 리다이렉트로 부른다. 쿠키가 붙는다는 보장이 없다
- *   · /lab             — 읽기 무인증 (기존 동작 유지 · 쓰기는 LAB_WRITE_TOKEN 이 따로 막는다)
+ * (구 `/lab` 예외는 Lab 제거와 함께 사라졌다 — 관리 콘솔은 admin.stepd.stepai.kr 이고
+ *  세션 인증을 정상적으로 거친다.)
  * 이 목록은 **짧게 유지한다.** 여기 들어간 경로는 인증을 켜도 안 막힌다.
  */
 const PUBLIC_PATHS: RegExp[] = [
   /^\/health$/,
   /^\/api\/auth\//,
   /^\/api\/(youtube|meta|tiktok|canva)\/oauth\/callback/,
-  /^\/lab/,
 ];
 
 function isPublicPath(path: string): boolean {
@@ -459,6 +481,162 @@ app.post("/api/auth/accept-invite", async (c) => {
   } catch (e: any) {
     return c.json({ error: "accept_failed", message: String(e?.message ?? e) }, 400);
   }
+});
+
+// ── 플랫폼 관리자 API (admin.stepd.stepai.kr) ─────────────────────────────────
+// 격리를 합법적으로 우회하는 유일한 경로다. 세 가지가 항상 같이 간다:
+//   superadmin 세션 확인 → 사유 강제(남의 테넌트일 때) → 감사 기록 후 실행.
+// 감사 기록이 실패하면 요청도 실패한다(admin.ts audit 참조).
+
+/** 전 테넌트 요약 — 관리 콘솔 첫 화면. */
+app.get("/api/superadmin/overview", async (c) => {
+  const actor = requireSuperadmin(c);
+  await audit(actor, { action: "overview.view" }, clientIp(c));
+  const p = getRawPool();
+  const [tenants, users, jobs, media] = await Promise.all([
+    p.query(`SELECT COUNT(*)::int AS n FROM tenants`),
+    p.query(`SELECT COUNT(*)::int AS n FROM users WHERE status = 'active'`),
+    p.query(`SELECT status, COUNT(*)::int AS n FROM job_queue GROUP BY status`),
+    p.query(`SELECT COUNT(*)::int AS n, COALESCE(SUM(durationSec), 0)::float AS sec FROM media`),
+  ]);
+  const jobStats: Record<string, number> = { pending: 0, running: 0, done: 0, failed: 0 };
+  for (const r of jobs.rows as { status: string; n: number }[]) jobStats[r.status] = r.n;
+  return c.json({
+    tenants: tenants.rows[0].n,
+    users: users.rows[0].n,
+    jobs: jobStats,
+    media: { count: media.rows[0].n, minutes: Math.round(media.rows[0].sec / 60) },
+  });
+});
+
+/** 테넌트 목록 + 테넌트별 규모. 과금 화면의 원형이기도 하다(분 단위 사용량). */
+app.get("/api/superadmin/tenants", async (c) => {
+  const actor = requireSuperadmin(c);
+  await audit(actor, { action: "tenant.list" }, clientIp(c));
+  const { rows } = await getRawPool().query(`
+    SELECT t.id, t.name, t.kind, t.status, t.billing_email AS "billingEmail", t.created_at AS "createdAt",
+           (SELECT COUNT(*)::int FROM users u WHERE u.tenant_id = t.id AND u.status = 'active') AS "userCount",
+           (SELECT COUNT(*)::int FROM media m WHERE m.tenant_id = t.id) AS "mediaCount",
+           (SELECT COALESCE(SUM(m.durationSec), 0)::float FROM media m WHERE m.tenant_id = t.id) AS "mediaSec"
+      FROM tenants t ORDER BY t.created_at DESC`);
+  return c.json({ tenants: rows });
+});
+
+app.post("/api/superadmin/tenants", async (c) => {
+  const actor = requireSuperadmin(c);
+  const body = await c.req.json<{ id?: string; name?: string; kind?: string; billingEmail?: string }>().catch(() => ({}) as any);
+  const name = String(body.name ?? "").trim();
+  if (!name) return c.json({ error: "name_required" }, 400);
+  // id 는 사람이 읽는 값이라 직접 받되, 형식은 좁게 잡는다(경로·SQL 어디에 실려도 안전하게).
+  const id = String(body.id ?? "").trim() || `t_${name.toLowerCase().replace(/[^a-z0-9]+/g, "_").slice(0, 20)}`;
+  if (!/^t_[a-z0-9_]{1,40}$/.test(id)) {
+    return c.json({ error: "invalid_id", message: "id 는 t_ 로 시작하는 소문자·숫자·밑줄이어야 합니다." }, 400);
+  }
+  const kind = ["web", "api", "internal"].includes(String(body.kind)) ? String(body.kind) : "api";
+  await audit(actor, { action: "tenant.create", targetTenant: id, detail: { name, kind } }, clientIp(c));
+  try {
+    await getRawPool().query(
+      `INSERT INTO tenants (id, name, kind, billing_email) VALUES ($1,$2,$3,$4)`,
+      [id, name, kind, body.billingEmail ?? null],
+    );
+  } catch (e: any) {
+    if (e?.code === "23505") return c.json({ error: "duplicate_id" }, 409);
+    throw e;
+  }
+  // 테넌트가 둘 이상이 되는 순간 인증 없이 도는 건 위험하다 — 즉시 자세를 다시 점검한다.
+  await assertAuthPosture();
+  return c.json({ id, authPostureError });
+});
+
+app.patch("/api/superadmin/tenants/:id", async (c) => {
+  const actor = requireSuperadmin(c);
+  const id = c.req.param("id");
+  const body = await c.req.json<{ status?: string; name?: string; billingEmail?: string; reason?: string }>().catch(() => ({}) as any);
+  const reason = requireReason(actor, id, body.reason);
+  if (body.status && !["active", "suspended", "closed"].includes(body.status)) {
+    return c.json({ error: "invalid_status" }, 400);
+  }
+  await audit(actor, { action: "tenant.update", targetTenant: id, reason, detail: { ...body, reason: undefined } }, clientIp(c));
+  const { rowCount } = await getRawPool().query(
+    `UPDATE tenants SET status = COALESCE($2, status), name = COALESCE($3, name),
+            billing_email = COALESCE($4, billing_email) WHERE id = $1`,
+    [id, body.status ?? null, body.name ?? null, body.billingEmail ?? null],
+  );
+  if (!rowCount) return c.json({ error: "not_found" }, 404);
+  return c.json({ ok: true });
+});
+
+/** 사용자 목록. tenant 파라미터로 좁힐 수 있고, 남의 테넌트를 볼 때는 사유가 필요하다. */
+app.get("/api/superadmin/users", async (c) => {
+  const actor = requireSuperadmin(c);
+  const tenant = c.req.query("tenant") ?? null;
+  const reason = requireReason(actor, tenant, c.req.query("reason"));
+  await audit(actor, { action: "user.list", targetTenant: tenant, reason }, clientIp(c));
+  const { rows } = await getRawPool().query(
+    `SELECT id, tenant_id AS "tenantId", email, name, role, status,
+            created_at AS "createdAt", last_login_at AS "lastLoginAt"
+       FROM users ${tenant ? "WHERE tenant_id = $1" : ""} ORDER BY created_at DESC LIMIT 500`,
+    tenant ? [tenant] : [],
+  );
+  return c.json({ users: rows });
+});
+
+/** 계정 정지/해제. 정지는 세션까지 끊어야 실제로 막힌다 — 안 그러면 이미 로그인한 창은 계속 돈다. */
+app.post("/api/superadmin/users/:id/status", async (c) => {
+  const actor = requireSuperadmin(c);
+  const id = c.req.param("id");
+  const body = await c.req.json<{ status?: string; reason?: string }>().catch(() => ({}) as any);
+  if (!["active", "suspended"].includes(String(body.status))) return c.json({ error: "invalid_status" }, 400);
+  if (id === actor.id) return c.json({ error: "cannot_change_self" }, 400);
+
+  const { rows } = await getRawPool().query(`SELECT tenant_id AS "tenantId" FROM users WHERE id = $1`, [id]);
+  if (!rows[0]) return c.json({ error: "not_found" }, 404);
+  const reason = requireReason(actor, rows[0].tenantId, body.reason);
+  await audit(actor, { action: `user.${body.status}`, targetTenant: rows[0].tenantId, targetId: id, reason }, clientIp(c));
+
+  await getRawPool().query(`UPDATE users SET status = $2 WHERE id = $1`, [id, body.status]);
+  if (body.status === "suspended") await destroyAllSessions(id);
+  return c.json({ ok: true });
+});
+
+/** 테넌트에 사람을 초대한다. 토큰은 이 응답에 한 번만 나온다(메일 발송은 아직 없음). */
+app.post("/api/superadmin/tenants/:id/invite", async (c) => {
+  const actor = requireSuperadmin(c);
+  const tenantId = c.req.param("id");
+  const body = await c.req.json<{ email?: string; role?: string; reason?: string }>().catch(() => ({}) as any);
+  if (!body.email) return c.json({ error: "email_required" }, 400);
+  const role = ["owner", "admin", "member"].includes(String(body.role)) ? (body.role as "owner" | "admin" | "member") : "owner";
+  const reason = requireReason(actor, tenantId, body.reason);
+  await audit(actor, { action: "user.invite", targetTenant: tenantId, reason, detail: { email: body.email, role } }, clientIp(c));
+  try {
+    const inv = await createInvite({ tenantId, email: body.email, role, invitedBy: actor.id });
+    return c.json({ inviteId: inv.id, token: inv.token, expiresAt: inv.expiresAt });
+  } catch (e: any) {
+    return c.json({ error: "invite_failed", message: String(e?.message ?? e) }, 400);
+  }
+});
+
+/** 전 테넌트 잡 — 운영 현황. 잡 payload 에 남의 콘텐츠 식별자가 들어 있어 열람도 감사한다. */
+app.get("/api/superadmin/jobs", async (c) => {
+  const actor = requireSuperadmin(c);
+  await audit(actor, { action: "job.list" }, clientIp(c));
+  const { rows } = await getRawPool().query(
+    `SELECT id, type, status, attempts, tenant_id AS "tenantId", error,
+            createdat AS "createdAt", updatedat AS "updatedAt"
+       FROM job_queue ORDER BY updatedAt DESC LIMIT 200`,
+  );
+  return c.json({ jobs: rows });
+});
+
+/** 감사 로그. superadmin 이 서로를 볼 수 있어야 견제가 성립한다. */
+app.get("/api/superadmin/audit", async (c) => {
+  requireSuperadmin(c);   // 감사 로그 열람 자체는 감사하지 않는다 — 무한 증식만 만든다
+  const { rows } = await getRawPool().query(
+    `SELECT id, actor_email AS "actorEmail", action, target_tenant AS "targetTenant",
+            target_id AS "targetId", reason, detail, ip, at
+       FROM admin_audit ORDER BY at DESC LIMIT 300`,
+  );
+  return c.json({ entries: rows });
 });
 
 // ── full state (web InitialData + media) ──────────────────────────────────────
@@ -3159,6 +3337,99 @@ async function gateFor(subjectType: GateSubjectType, subjectId: string): Promise
   ]);
   return evaluateGate({ judged, issues: issues.map(toIssue) });
 }
+
+// ── 자동 배포 (FLOWS F6 · README §12) ───────────────────────────────────────────
+//
+// **규칙이 없으면 아무것도 하지 않는다.** 전체 자동 실행 같은 기본 동작이 없다 —
+// 이건 편의가 아니라 안전장치다. 판정은 automation.ts(순수)가 하고 여기는 배선이다.
+
+const PAUSE_KEY = "automation.paused";
+
+app.get("/api/automation", async (c) => {
+  const [rules, runs, holds, paused] = await Promise.all([
+    listAutomationRules(),
+    listRuleRuns(50),
+    openHolds(),
+    getAutomationSetting(PAUSE_KEY),
+  ]);
+  const plan = planCycle({ paused: paused === "true", rules: rules as any });
+  return c.json({
+    rules, runs, holds,
+    paused: paused === "true",
+    idleReason: plan.idleReason,
+    options: { mediaKinds: RULE_MEDIA_KINDS, criteria: RULE_CRITERIA, gatePolicies: GATE_POLICIES },
+  });
+});
+
+app.post("/api/automation/rules", async (c) => {
+  const body = await c.req.json().catch(() => ({}) as Record<string, unknown>);
+  const programId = typeof body.programId === "string" ? body.programId.trim() : "";
+  const platform = typeof body.platform === "string" ? body.platform.trim() : "";
+  const accountId = typeof body.accountId === "string" ? body.accountId.trim() : "";
+  if (!programId || !platform || !accountId) {
+    return c.json({ error: "programId · platform · accountId 가 필요합니다." }, 400);
+  }
+  if (!isRuleMediaKind(body.mediaKind)) return c.json({ error: "invalid mediaKind" }, 400);
+  if (!isRuleCriterion(body.criterion)) return c.json({ error: "invalid criterion" }, 400);
+  if (!isGatePolicy(body.gatePolicy)) return c.json({ error: "invalid gatePolicy" }, 400);
+
+  const row = {
+    id: typeof body.id === "string" && body.id ? body.id : newId("ar"),
+    programId, platform, accountId,
+    mediaKind: body.mediaKind, criterion: body.criterion, gatePolicy: body.gatePolicy,
+    window: typeof body.window === "string" ? body.window.trim() || "수시" : "수시",
+    enabled: body.enabled !== false,
+  };
+  await upsertAutomationRule(row);
+  return c.json({
+    rule: row,
+    state: initialRuleState(platform, row.enabled),
+    // ⚑ 기록만 하는 채널은 만들 때 그 사실을 말해야 한다(F6).
+    notice: ruleCreatedNotice(platform),
+  });
+});
+
+app.delete("/api/automation/rules/:id", async (c) => {
+  const ok = await deleteAutomationRule(c.req.param("id"));
+  // ⚑ 이미 게시된 건은 내려가지 않는다(F6).
+  return c.json({ ok, notice: RULE_DELETED_NOTICE });
+});
+
+/**
+ * 전역 일시정지 (F6 전역 토글).
+ * 일시정지는 **새 회차를 잡지 않는 것**이지 진행 중인 걸 죽이는 게 아니다.
+ */
+app.post("/api/automation/pause", async (c) => {
+  const body = await c.req.json().catch(() => ({}) as Record<string, unknown>);
+  const paused = body.paused !== false;
+  await setAutomationSetting(PAUSE_KEY, paused ? "true" : "false");
+  return c.json({
+    paused,
+    notice: paused
+      ? "새 회차는 잡지 않습니다 — 이미 대기열에 들어간 건은 그대로 나갑니다."
+      : "다음 순방부터 재개합니다.",
+  });
+});
+
+/**
+ * 보류 해제 — **사람이 확정하는 지점** (F6 Invariant · V15).
+ *
+ * 게이트가 열렸다고 자동이 저절로 다시 밀어내지 않는다. 여기를 눌러야 다음 순방에 다시 잡힌다.
+ */
+app.post("/api/automation/holds/release", async (c) => {
+  const body = await c.req.json().catch(() => ({}) as Record<string, unknown>);
+  const ruleId = typeof body.ruleId === "string" ? body.ruleId : "";
+  const clipId = typeof body.clipId === "string" ? body.clipId : "";
+  const actor = typeof body.actor === "string" ? body.actor.trim() : "";
+  if (!ruleId || !clipId) return c.json({ error: "ruleId · clipId 가 필요합니다." }, 400);
+  if (!actor) return c.json({ error: "actor required — 보류 해제는 사람이 합니다." }, 400);
+
+  const ok = await releaseHold(ruleId, clipId, actor);
+  if (ok) {
+    await appendRuleRun({ ruleId, clipId, result: "skipped", detail: `보류 해제 · ${actor}` });
+  }
+  return c.json({ ok, notice: ok ? "확정했습니다 — 다음 순방에 다시 잡힙니다." : "이미 해제된 건입니다." });
+});
 
 // ── 에셋 (FLOWS F8 · README §6) ─────────────────────────────────────────────────
 //
@@ -6051,860 +6322,6 @@ app.delete("/api/youtube/videos/:videoId", async (c) => {
   await deleteChannelVideo(c.req.param("videoId"));
   return c.json({ ok: true });
 });
-
-// ── Lab (실험 admin) ──────────────────────────────────────────────────────────
-// Reads pipeline analysis from GCS (production) or local core/ (dev).
-import { Storage } from "@google-cloud/storage";
-
-const ADMIN_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../../admin");
-const GCS_BUCKET = process.env.GCS_BUCKET;
-
-/** Latest analysis media ID from GCS, or null (local dev). */
-// Short TTL, not a permanent memo: a new analysis lands in the bucket while the server runs,
-// so caching the first lookup forever would pin Lab to a stale (or, if the bucket was empty
-// at boot, permanently null) media id until restart. Re-list at most once per TTL window.
-let _cachedMediaId: string | null | undefined = undefined;
-let _cachedMediaAt = 0;
-const LATEST_ANALYSIS_TTL_MS = 60 * 1000;
-async function latestAnalysisId(): Promise<string | null> {
-  if (!GCS_BUCKET) return null;
-  if (_cachedMediaId !== undefined && Date.now() - _cachedMediaAt < LATEST_ANALYSIS_TTL_MS) {
-    return _cachedMediaId;
-  }
-  try {
-    const storage = new Storage();
-    const [files] = await storage.bucket(GCS_BUCKET).getFiles({
-      prefix: "analysis/",
-    });
-    const dirs = new Set<string>();
-    for (const f of files) {
-      // Extract the subdirectory name (e.g., "m_7135cabb" from "analysis/m_7135cabb/...")
-      const parts = f.name.split("/");
-      if (parts.length >= 2 && parts[1]) dirs.add(parts[1]);
-    }
-    _cachedMediaId = dirs.size ? [...dirs].sort().pop()! : null;
-    _cachedMediaAt = Date.now();
-  } catch (e) {
-    console.warn("latestAnalysisId failed:", e);
-    // Don't cache the failure long — a transient GCS error shouldn't blank Lab for a full
-    // TTL. Return null now but leave the timestamp stale so the next call re-lists.
-    return _cachedMediaId ?? null;
-  }
-  return _cachedMediaId;
-}
-
-/** Read a JSON file from lab analysis (GCS or local fallback). */
-async function labReadJson(localName: string, gcsName: string): Promise<unknown | null> {
-  const mediaId = await latestAnalysisId();
-  if (mediaId && GCS_BUCKET) {
-    try {
-      const storage = new Storage();
-      const [data] = await storage.bucket(GCS_BUCKET).file(`analysis/${mediaId}/${gcsName}`).download();
-      return JSON.parse(data.toString("utf-8"));
-    } catch (e) {
-      console.warn(`labReadJson(GCS) failed for ${mediaId}/${gcsName}:`, e);
-      /* fall through to local */
-    }
-  }
-  // Local dev fallback
-  try {
-    return JSON.parse(fs.readFileSync(path.join(CORE_DIR, localName), "utf-8"));
-  } catch (e) {
-    if (!mediaId) console.warn(`labReadJson(local) no GCS mediaId, local ${localName}:`, e);
-    return null;
-  }
-}
-
-/** Combined lab payload: video + stats + raw/refined transcript + scenes. */
-app.get("/api/lab/data", async (c) => {
-  const pipe = ((await labReadJson("pipeline_output.json", "analysis.json")) as any) || {};
-  const refined = ((await labReadJson("refined_segments.json", "refined.json")) as any[]) || [];
-  const scenes = ((await labReadJson("scenes.json", "scenes.json")) as any[]) || [];
-  const shortsRaw = (await labReadJson("shorts.json", "shorts.json")) as any;
-  const shorts: any[] = Array.isArray(shortsRaw) ? shortsRaw : (shortsRaw?.shorts ?? []);
-  // cast.json: {registrySize, people:[...]} (enriched with thumbnail/description by core.portraits)
-  const cast = (await labReadJson("cast.json", "cast.json")) as any;
-  // timeline.json: {block_minutes, blocks:[...]} from core.timeline
-  const timeline = (await labReadJson("timeline.json", "timeline.json")) as any;
-  // analysis.json uses "transcript" (GCS); pipeline_output.json uses "segments" (local dev)
-  const raw = pipe.segments || pipe.transcript || [];
-  const videoName = pipe.video ? path.basename(pipe.video) : null;
-  const mediaId = await latestAnalysisId();
-  const talk = scenes.filter((s) => s?.has_dialogue).length;
-  return c.json({
-    video: videoName && mediaId ? `/api/lab/video/${mediaId}` : null,
-    video_name: videoName,
-    stats: {
-      duration: pipe.duration ?? null,
-      segments: raw.length,
-      refined: refined.length,
-      scenes: scenes.length,
-      scenes_dialogue: talk,
-      scenes_silent: scenes.length - talk,
-      shorts: shorts.length,
-    },
-    raw,
-    refined,
-    scenes,
-    shorts,
-    cast: cast ?? null,
-    timeline: timeline ?? null,
-  });
-});
-
-/** Cast portrait image by name (GCS or local). Accepts "portrait_영철.jpg" or bare "영철.jpg". */
-app.get("/api/lab/portraits/:name", async (c) => {
-  let name = path.basename(c.req.param("name"));
-  if (!name.startsWith("portrait_")) name = `portrait_${name}`;
-  if (!name.endsWith(".jpg")) name = `${name}.jpg`;
-  const mediaId = await latestAnalysisId();
-  if (mediaId && GCS_BUCKET) {
-    try {
-      const storage = new Storage();
-      const [data] = await storage.bucket(GCS_BUCKET).file(`analysis/${mediaId}/scene_frames/${name}`).download();
-      return new Response(data, {
-        headers: { "Content-Type": "image/jpeg", "Cache-Control": "max-age=3600" },
-      });
-    } catch {
-      /* fall through */
-    }
-  }
-  // Local fallback
-  const file = path.join(CORE_DIR, "scene_frames", name);
-  if (!file.startsWith(path.join(CORE_DIR, "scene_frames")) || !fs.existsSync(file)) {
-    return c.json({ error: "not found" }, 404);
-  }
-  return new Response(fs.readFileSync(file), {
-    headers: { "Content-Type": "image/jpeg", "Cache-Control": "max-age=3600" },
-  });
-});
-
-/** Scene frame by name (GCS or local). */
-app.get("/api/lab/frames/:name", async (c) => {
-  const name = path.basename(c.req.param("name"));
-  const mediaId = await latestAnalysisId();
-  if (mediaId && GCS_BUCKET) {
-    try {
-      const storage = new Storage();
-      const [data] = await storage.bucket(GCS_BUCKET).file(`analysis/${mediaId}/scene_frames/${name}`).download();
-      return new Response(data, {
-        headers: { "Content-Type": "image/jpeg", "Cache-Control": "max-age=3600" },
-      });
-    } catch {
-      /* fall through */
-    }
-  }
-  // Local fallback
-  const file = path.join(CORE_DIR, "scene_frames", name);
-  if (!file.startsWith(path.join(CORE_DIR, "scene_frames")) || !fs.existsSync(file)) {
-    return c.json({ error: "not found" }, 404);
-  }
-  return new Response(fs.readFileSync(file), {
-    headers: { "Content-Type": "image/jpeg", "Cache-Control": "max-age=3600" },
-  });
-});
-
-/** Source video with HTTP range support (so <video> seeking works). */
-app.get("/api/lab/video/:mediaId", async (c) => {
-  const mediaId = c.req.param("mediaId");
-  const videoPath = `uploads/${mediaId}.mp4`;
-  if (GCS_BUCKET) {
-    const storage = new Storage();
-    const bucket = storage.bucket(GCS_BUCKET);
-    const file = bucket.file(videoPath);
-    const [exists] = await file.exists();
-    if (!exists) return c.json({ error: "not found" }, 404);
-    const [meta] = await file.getMetadata();
-    const size = Number(meta.size);
-    const range = c.req.header("range");
-    if (range) {
-      const m = /bytes=(\d*)-(\d*)/.exec(range);
-      const start = m && m[1] ? parseInt(m[1], 10) : 0;
-      const end = m && m[2] ? parseInt(m[2], 10) : size - 1;
-      const stream = file.createReadStream({ start, end });
-      return new Response(Readable.toWeb(stream) as ReadableStream, {
-        status: 206,
-        headers: {
-          "Content-Range": `bytes ${start}-${end}/${size}`,
-          "Accept-Ranges": "bytes",
-          "Content-Length": String(end - start + 1),
-          "Content-Type": "video/mp4",
-        },
-      });
-    }
-    const stream = file.createReadStream();
-    return new Response(Readable.toWeb(stream) as ReadableStream, {
-      headers: { "Content-Length": String(size), "Content-Type": "video/mp4", "Accept-Ranges": "bytes" },
-    });
-  }
-  // Local fallback
-  const pipe = ((await labReadJson("pipeline_output.json", "analysis.json")) as any) || {};
-  const name = pipe?.video ? path.basename(pipe.video) : null;
-  if (!name) return c.json({ error: "no video" }, 404);
-  const file = path.join(CORE_DIR, name);
-  if (!fs.existsSync(file)) return c.json({ error: "not found" }, 404);
-
-  const size = fs.statSync(file).size;
-  const range = c.req.header("range");
-  if (range) {
-    const m = /bytes=(\d*)-(\d*)/.exec(range);
-    const start = m && m[1] ? parseInt(m[1], 10) : 0;
-    const end = m && m[2] ? parseInt(m[2], 10) : size - 1;
-    return new Response(Readable.toWeb(fs.createReadStream(file, { start, end })) as ReadableStream, {
-      status: 206,
-      headers: {
-        "Content-Range": `bytes ${start}-${end}/${size}`,
-        "Accept-Ranges": "bytes",
-        "Content-Length": String(end - start + 1),
-        "Content-Type": "video/mp4",
-      },
-    });
-  }
-  return new Response(Readable.toWeb(fs.createReadStream(file)) as ReadableStream, {
-    headers: { "Content-Length": String(size), "Content-Type": "video/mp4", "Accept-Ranges": "bytes" },
-  });
-});
-
-// ── Lab: 숏폼 ↔ 롱폼 매칭 ─────────────────────────────────────────────────────
-//
-// A channel's existing shorts carry no record of which longform segment they came from
-// (channel_videos has no parent column, and nothing derives one). An operator supplies the
-// link here; the result is the training input for channel point-profile learning.
-//
-// ⚠️ These are the FIRST write endpoints under /api/lab/*. Everything under /api/* is
-// publicly reachable and has no auth, so writes are gated by a shared secret. Reads stay
-// open, matching the rest of the Lab.
-const LAB_WRITE_TOKEN = process.env.LAB_WRITE_TOKEN ?? "";
-
-/** Returns an error Response when the caller may not write, else null. */
-function labWriteDenied(c: Context) {
-  if (!LAB_WRITE_TOKEN) {
-    return c.json(
-      { error: "lab_write_disabled", message: "LAB_WRITE_TOKEN이 서버에 설정되지 않아 쓰기가 비활성입니다." },
-      503,
-    );
-  }
-  if (c.req.header("x-lab-token") !== LAB_WRITE_TOKEN) {
-    return c.json({ error: "unauthorized", message: "Lab 쓰기 토큰이 올바르지 않습니다." }, 401);
-  }
-  return null;
-}
-
-/** Channels available for matching (name + subscriber count only — no tokens). */
-app.get("/api/lab/match/channels", async (c) => {
-  const channels = await listYouTubeChannels();
-  return c.json({
-    channels: channels.map((ch) => ({
-      channelId: ch.channelId,
-      channelName: ch.channelName,
-      subscribers: ch.subscribers,
-    })),
-  });
-});
-
-/**
- * Everything the matching screen needs for one channel: its shorts, its candidate source
- * longforms, and the mappings made so far.
- *
- * `isShort = false` is ambiguous (it also means "not yet classified" — shortCheckedAt is
- * NULL), so duration is used as the tiebreaker: a ≤3min upload is treated as a short.
- */
-app.get("/api/lab/match/videos/:channelId", async (c) => {
-  const channelId = c.req.param("channelId");
-  const ch = await getYouTubeChannelByChannelId(channelId);
-  if (!ch) return c.json({ error: "channel not found" }, 404);
-
-  const videos = await listChannelVideos(channelId);
-  // node-pg hands back BIGINT columns as strings — coerce so the client can do math.
-  const norm = (v: ChannelVideo) => ({
-    videoId: v.videoId,
-    title: v.title,
-    publishedAt: v.publishedAt,
-    durationSec: Number(v.durationSec) || 0,
-    thumbnail: v.thumbnail,
-    viewCount: Number(v.viewCount) || 0,
-    likeCount: Number(v.likeCount) || 0,
-    commentCount: Number(v.commentCount) || 0,
-    isShort: Boolean(v.isShort),
-  });
-  const isShortish = (v: ChannelVideo) => Boolean(v.isShort) || (Number(v.durationSec) || 0) <= 180;
-
-  return c.json({
-    channelId,
-    channelName: ch.channelName,
-    shorts: videos.filter(isShortish).map(norm),
-    longs: videos.filter((v) => !isShortish(v)).map(norm),
-    maps: await listShortSourceMaps(channelId),
-  });
-});
-
-/** Create/replace one mapping. */
-app.post("/api/lab/match", async (c) => {
-  const denied = labWriteDenied(c);
-  if (denied) return denied;
-
-  const b = await c.req.json<{
-    shortVideoId?: string; channelId?: string; longVideoId?: string;
-    segStart?: number; segEnd?: number; note?: string;
-  }>().catch(() => null);
-  if (!b?.shortVideoId || !b.channelId || !b.longVideoId) {
-    return c.json({ error: "bad_request", message: "shortVideoId, channelId, longVideoId가 필요합니다." }, 400);
-  }
-  const segStart = Number(b.segStart);
-  const segEnd = Number(b.segEnd);
-  if (!isFinite(segStart) || !isFinite(segEnd) || segStart < 0 || segEnd <= segStart) {
-    return c.json({ error: "bad_request", message: "구간이 올바르지 않습니다 (끝 > 시작)." }, 400);
-  }
-  // Both ids must be real uploads on this channel — a typo'd id would silently produce a
-  // pair that can never be resolved back to a video.
-  const [shortV, longV] = await Promise.all([
-    getChannelVideoByVideoId(b.shortVideoId),
-    getChannelVideoByVideoId(b.longVideoId),
-  ]);
-  if (!shortV || shortV.channelId !== b.channelId) {
-    return c.json({ error: "bad_request", message: "숏폼이 이 채널에 없습니다." }, 400);
-  }
-  if (!longV || longV.channelId !== b.channelId) {
-    return c.json({ error: "bad_request", message: "롱폼이 이 채널에 없습니다." }, 400);
-  }
-  const dur = Number(longV.durationSec) || 0;
-  if (dur > 0 && segStart >= dur) {
-    return c.json({ error: "bad_request", message: `시작(${segStart}s)이 롱폼 길이(${dur}s)를 넘습니다.` }, 400);
-  }
-
-  const map = await upsertShortSourceMap({
-    shortVideoId: b.shortVideoId,
-    channelId: b.channelId,
-    longVideoId: b.longVideoId,
-    segStart,
-    segEnd: dur > 0 ? Math.min(segEnd, dur) : segEnd,
-    note: b.note?.trim() || null,
-  });
-  return c.json({ ok: true, map });
-});
-
-/**
- * 선택한 숏폼들의 구간을 오디오 정렬로 자동 추적하도록 워커에 요청한다.
- * Cloud Run은 큐잉만 한다 (다운로드·정렬은 VM에서 수 분 걸린다). 결과는 클라이언트가
- * /match/videos 를 다시 불러 확인한다 — source='auto' 로 들어온다.
- */
-app.post("/api/lab/match/auto", async (c) => {
-  const denied = labWriteDenied(c);
-  if (denied) return denied;
-
-  const b = await c.req.json<{
-    channelId?: string; longVideoId?: string; shortVideoIds?: string[]; delayMs?: number;
-  }>().catch(() => null);
-  const shortIds = Array.isArray(b?.shortVideoIds) ? b!.shortVideoIds.filter(Boolean) : [];
-  if (!b?.channelId || !b.longVideoId || !shortIds.length) {
-    return c.json({ error: "bad_request", message: "channelId, longVideoId, shortVideoIds[]가 필요합니다." }, 400);
-  }
-  const long = await getChannelVideoByVideoId(b.longVideoId);
-  if (!long || long.channelId !== b.channelId) {
-    return c.json({ error: "bad_request", message: "롱폼이 이 채널에 없습니다." }, 400);
-  }
-  // delayMs: 대량 백필용 시차. match.align은 content.analyze와 같은 레인이라, 수십~수백 건을
-  // 한꺼번에 넣으면 그 뒤에 들어온 업로드 분석이 몇 시간 밀린다(큐는 runAfter 순). 잡마다
-  // 시차를 두면 그 사이로 업로드가 먼저 잡힌다. 상한 24h — 그 이상은 실수일 가능성이 높다.
-  const delayMs = Math.min(Math.max(Number(b.delayMs) || 0, 0), 24 * 60 * 60 * 1000);
-  // 한 잡이 롱폼 오디오를 한 번만 받아 재사용하므로 롱폼 단위로 dedupe.
-  const jobId = await enqueue(
-    "match.align",
-    { channelId: b.channelId, longVideoId: b.longVideoId, shortVideoIds: shortIds },
-    { dedupeKey: `match.align:${b.longVideoId}`, delayMs },
-  );
-  return c.json({ queued: true, jobId, alreadyPending: jobId == null, count: shortIds.length, delayMs });
-});
-
-app.delete("/api/lab/match/:shortVideoId", async (c) => {
-  const denied = labWriteDenied(c);
-  if (denied) return denied;
-  const removed = await deleteShortSourceMap(c.req.param("shortVideoId"));
-  return c.json({ ok: true, removed });
-});
-
-// ── 채널 일괄 자동 매칭 ────────────────────────────────────────────────────────
-//
-// 미매칭 숏폼마다 "어느 롱폼에서 나왔을까"를 추정해 롱폼 단위로 묶고 match.align을 건다.
-// 추정이 틀려도 손해가 없다 — 오디오 정렬이 일치도 0.8 미만을 거부하므로, 잘못된 짝은
-// 저장되지 않고 "걸러진 건수"로만 남는다. 그래서 넓게 넣고 정렬이 판정하게 둔다.
-
-/** 제목에서 의미 토큰 추출 (한글 2자+ / 영문 3자+). 해시태그·상투어는 버린다. */
-const TITLE_STOPWORDS = new Set([
-  "쇼츠", "하하", "영상", "공개", "이번", "우리", "eng", "sub", "shorts", "feat", "with", "the",
-]);
-function titleTokens(title: string): Set<string> {
-  const cleaned = title.replace(/#\S+/g, " ");
-  const out = new Set<string>();
-  for (const m of cleaned.matchAll(/[가-힣]{2,}|[A-Za-z]{3,}/g)) {
-    const w = m[0].toLowerCase();
-    if (!TITLE_STOPWORDS.has(w)) out.add(w);
-  }
-  return out;
-}
-
-const BULK_MAX_DAYS = 180;      // 숏폼은 롱폼 게시 후 이 기간 안에 나온다고 본다
-const BULK_MIN_LONG_SEC = 240;  // 4분 미만은 원본 롱폼으로 보지 않는다
-const BULK_MAX_SHORTS_PER_JOB = 14;
-
-/**
- * 채널의 미매칭 숏폼을 롱폼별로 묶은 계획을 만든다. queue=false면 계획만 돌려준다(미리보기).
- * 점수 = 제목 키워드 겹침(가중 10) − 게시일 간격(가중 0.02), 무겹침은 −6 페널티.
- */
-async function planBulkMatch(channelId: string, limitLongforms: number) {
-  const videos = await listChannelVideos(channelId);
-  const isShortish = (v: ChannelVideo) => Boolean(v.isShort) || (Number(v.durationSec) || 0) <= 180;
-  const maps = await listShortSourceMaps(channelId);
-  const already = new Set(maps.map((m) => m.shortVideoId));
-
-  const longs = videos.filter((v) => !isShortish(v) && (Number(v.durationSec) || 0) >= BULK_MIN_LONG_SEC);
-  const shorts = videos.filter(
-    (v) => isShortish(v) && !already.has(v.videoId) && (Number(v.durationSec) || 0) >= 8,
-  );
-  const longTok = new Map(longs.map((l) => [l.videoId, titleTokens(l.title)]));
-
-  const groups = new Map<string, { long: ChannelVideo; shorts: ChannelVideo[]; keywordHits: number }>();
-  for (const s of shorts) {
-    const st = titleTokens(s.title);
-    const sp = Date.parse(s.publishedAt);
-    let best: { score: number; long: ChannelVideo; overlap: number } | null = null;
-    for (const l of longs) {
-      const gapDays = (sp - Date.parse(l.publishedAt)) / 86_400_000;
-      if (!(gapDays >= 0 && gapDays <= BULK_MAX_DAYS)) continue;
-      let overlap = 0;
-      for (const w of longTok.get(l.videoId)!) if (st.has(w)) overlap++;
-      const score = overlap * 10 - gapDays * 0.02 - (overlap === 0 ? 6 : 0);
-      if (!best || score > best.score) best = { score, long: l, overlap };
-    }
-    if (!best) continue;
-    const g = groups.get(best.long.videoId) ?? { long: best.long, shorts: [], keywordHits: 0 };
-    g.shorts.push(s);
-    if (best.overlap > 0) g.keywordHits++;
-    groups.set(best.long.videoId, g);
-  }
-
-  // 키워드가 겹친 그룹부터 — 적중률이 높아 먼저 처리될수록 데이터가 빨리 쌓인다.
-  return [...groups.values()]
-    .sort((a, b) => b.keywordHits - a.keywordHits || b.shorts.length - a.shorts.length)
-    .slice(0, limitLongforms)
-    .map((g) => ({
-      longVideoId: g.long.videoId,
-      longTitle: g.long.title,
-      publishedAt: g.long.publishedAt,
-      durationSec: Number(g.long.durationSec) || 0,
-      keywordHits: g.keywordHits,
-      shortVideoIds: g.shorts.slice(0, BULK_MAX_SHORTS_PER_JOB).map((s) => s.videoId),
-    }));
-}
-
-/** 계획 미리보기 (쓰기 아님 — 토큰 불필요). */
-app.get("/api/lab/match/auto-bulk/preview/:channelId", async (c) => {
-  const channelId = c.req.param("channelId");
-  const ch = await getYouTubeChannelByChannelId(channelId);
-  if (!ch) return c.json({ error: "channel not found" }, 404);
-  const limit = Math.min(Math.max(Number(c.req.query("limit")) || 100, 1), 300);
-  const plan = await planBulkMatch(channelId, limit);
-  return c.json({
-    channelId,
-    channelName: ch.channelName,
-    longforms: plan.length,
-    shorts: plan.reduce((n, g) => n + g.shortVideoIds.length, 0),
-    keywordGroups: plan.filter((g) => g.keywordHits > 0).length,
-    plan: plan.slice(0, 60),
-  });
-});
-
-/** 계획대로 큐잉. 잡마다 시차를 둬 업로드 분석(같은 레인)이 밀리지 않게 한다. */
-app.post("/api/lab/match/auto-bulk", async (c) => {
-  const denied = labWriteDenied(c);
-  if (denied) return denied;
-  const b = await c.req.json<{ channelId?: string; limit?: number; staggerMs?: number }>().catch(() => null);
-  if (!b?.channelId) return c.json({ error: "bad_request", message: "channelId가 필요합니다." }, 400);
-  const ch = await getYouTubeChannelByChannelId(b.channelId);
-  if (!ch) return c.json({ error: "channel not found" }, 404);
-
-  const limit = Math.min(Math.max(Number(b.limit) || 100, 1), 300);
-  const stagger = Math.min(Math.max(Number(b.staggerMs) || 240_000, 0), 30 * 60_000);
-  const plan = await planBulkMatch(b.channelId, limit);
-
-  let queued = 0;
-  let deduped = 0;
-  for (let i = 0; i < plan.length; i++) {
-    const g = plan[i];
-    const id = await enqueue(
-      "match.align",
-      { channelId: b.channelId, longVideoId: g.longVideoId, shortVideoIds: g.shortVideoIds },
-      { dedupeKey: `match.align:${g.longVideoId}`, delayMs: i * stagger },
-    );
-    if (id) queued++;
-    else deduped++; // 이미 대기/실행 중인 롱폼 — 정상
-  }
-  return c.json({
-    ok: true,
-    queued,
-    deduped,
-    shorts: plan.reduce((n, g) => n + g.shortVideoIds.length, 0),
-    etaMinutes: Math.round((plan.length * stagger) / 60_000),
-  });
-});
-
-/**
- * 여러 채널을 한 번에. 채널을 넘기지 않으면 연동된 전 채널이 대상이다.
- * 시차는 채널을 가로질러 누적한다 — 채널마다 0부터 시작하면 결국 동시에 몰린다.
- */
-app.post("/api/lab/match/auto-bulk/all", async (c) => {
-  const denied = labWriteDenied(c);
-  if (denied) return denied;
-  const b = await c.req.json<{ channelIds?: string[]; limitPerChannel?: number; staggerMs?: number }>()
-    .catch(() => null);
-
-  const all = await listYouTubeChannels();
-  const targets = b?.channelIds?.length
-    ? all.filter((ch) => b.channelIds!.includes(ch.channelId))
-    : all;
-  if (!targets.length) return c.json({ error: "bad_request", message: "대상 채널이 없습니다." }, 400);
-
-  const limit = Math.min(Math.max(Number(b?.limitPerChannel) || 100, 1), 300);
-  const stagger = Math.min(Math.max(Number(b?.staggerMs) || 240_000, 0), 30 * 60_000);
-
-  let slot = 0; // 채널을 가로지르는 전역 시차 슬롯
-  const results: { channelId: string; channelName: string; queued: number; deduped: number; shorts: number }[] = [];
-  for (const ch of targets) {
-    const plan = await planBulkMatch(ch.channelId, limit);
-    let queued = 0;
-    let deduped = 0;
-    for (const g of plan) {
-      const id = await enqueue(
-        "match.align",
-        { channelId: ch.channelId, longVideoId: g.longVideoId, shortVideoIds: g.shortVideoIds },
-        { dedupeKey: `match.align:${g.longVideoId}`, delayMs: slot * stagger },
-      );
-      if (id) { queued++; slot++; } else deduped++;
-    }
-    results.push({
-      channelId: ch.channelId,
-      channelName: ch.channelName,
-      queued,
-      deduped,
-      shorts: plan.reduce((n, g) => n + g.shortVideoIds.length, 0),
-    });
-  }
-  const totalQueued = results.reduce((n, r) => n + r.queued, 0);
-  return c.json({
-    ok: true,
-    channels: results.length,
-    queued: totalQueued,
-    etaMinutes: Math.round((totalQueued * stagger) / 60_000),
-    results,
-  });
-});
-
-/**
- * 전 채널 현황 한 장 — 어디를 더 돌려야 하는지 보이게 한다.
- * 채널마다 숏폼 총계·매칭·미확인(auto)·남은 수와 그 채널의 잡 상태를 함께 준다.
- */
-app.get("/api/lab/match/overview", async (c) => {
-  const channels = await listYouTubeChannels();
-  const { rows: jobRows } = await getPool().query<{ channelid: string; status: string; n: number }>(
-    `SELECT payload->>'channelId' AS channelid, status, COUNT(*)::int AS n
-       FROM job_queue WHERE type = 'match.align'
-      GROUP BY 1, 2`,
-  );
-
-  const out = [];
-  for (const ch of channels) {
-    const videos = await listChannelVideos(ch.channelId);
-    const isShortish = (v: ChannelVideo) => Boolean(v.isShort) || (Number(v.durationSec) || 0) <= 180;
-    const shorts = videos.filter(isShortish);
-    const longs = videos.filter((v) => !isShortish(v));
-    const maps = await listShortSourceMaps(ch.channelId);
-    const jobs = { pending: 0, running: 0, done: 0, failed: 0 } as Record<string, number>;
-    for (const r of jobRows) if (r.channelid === ch.channelId) jobs[r.status] = Number(r.n);
-    out.push({
-      channelId: ch.channelId,
-      channelName: ch.channelName,
-      subscribers: Number(ch.subscribers) || 0,
-      longs: longs.length,
-      shorts: shorts.length,
-      matched: maps.length,
-      auto: maps.filter((m) => m.source === "auto" && !m.confirmedAt).length,
-      remaining: Math.max(0, shorts.length - maps.length),
-      jobs,
-    });
-  }
-  out.sort((a, b) => b.matched - a.matched || b.shorts - a.shorts);
-  return c.json({ channels: out });
-});
-
-/**
- * 매칭된 구간의 자막·장면요약을 채운다(LEARN 입력 완성).
- * 롱폼 단위로 묶어 처리하므로 잡 하나가 여러 구간을 커버한다.
- */
-app.post("/api/lab/match/segment", async (c) => {
-  const denied = labWriteDenied(c);
-  if (denied) return denied;
-  const b = await c.req.json<{ channelId?: string; limitLongforms?: number }>().catch(() => null);
-  if (!b?.channelId) return c.json({ error: "bad_request", message: "channelId가 필요합니다." }, 400);
-
-  const missing = await listSourceMapsMissingSegment(b.channelId);
-  if (!missing.length) return c.json({ ok: true, queued: false, missing: 0, message: "채울 구간이 없습니다." });
-
-  const jobId = await enqueue(
-    "match.segment",
-    { channelId: b.channelId, limitLongforms: Math.min(Math.max(Number(b.limitLongforms) || 3, 1), 10) },
-    { dedupeKey: `match.segment:${b.channelId}` },
-  );
-  return c.json({
-    ok: true,
-    queued: jobId != null,
-    alreadyPending: jobId == null,
-    missing: missing.length,
-    longforms: new Set(missing.map((m) => m.longVideoId)).size,
-  });
-});
-
-/** 채널 규칙 학습 트리거 — 매칭·설명 데이터에서 고성과 규칙을 뽑아 채널 프로파일로 저장. */
-app.post("/api/lab/match/learn", async (c) => {
-  const denied = labWriteDenied(c);
-  if (denied) return denied;
-  const b = await c.req.json<{ channelId?: string }>().catch(() => null);
-  if (!b?.channelId) return c.json({ error: "bad_request", message: "channelId가 필요합니다." }, 400);
-  const jobId = await enqueue("match.learn", { channelId: b.channelId },
-    { dedupeKey: `match.learn:${b.channelId}` });
-  return c.json({ ok: true, queued: jobId != null, alreadyPending: jobId == null });
-});
-
-/** 학습된 채널 프로파일 조회 (규칙·confidence 확인용). */
-app.get("/api/lab/match/profile/:channelId", async (c) => {
-  const cp = await getChannelPointProfile(c.req.param("channelId"));
-  if (!cp?.profile) return c.json({ profile: null, at: null });
-  return c.json(cp);
-});
-
-/** 진행 상황 — Lab이 폴링해 보여준다. */
-app.get("/api/lab/match/status/:channelId", async (c) => {
-  const channelId = c.req.param("channelId");
-  const { rows } = await getPool().query<{ status: string; n: number }>(
-    `SELECT status, COUNT(*)::int AS n FROM job_queue
-      WHERE type = 'match.align' AND payload->>'channelId' = $1
-      GROUP BY status`,
-    [channelId],
-  );
-  const by: Record<string, number> = {};
-  for (const r of rows) by[r.status] = Number(r.n);
-  const maps = await listShortSourceMaps(channelId);
-  return c.json({
-    channelId,
-    jobs: { pending: by.pending ?? 0, running: by.running ?? 0, done: by.done ?? 0, failed: by.failed ?? 0 },
-    matched: maps.length,
-    auto: maps.filter((m) => m.source === "auto").length,
-    confirmed: maps.filter((m) => m.confirmedAt).length,
-    described: maps.filter((m) => m.segSummary).length,
-  });
-});
-
-/**
- * The LEARN dataset for one channel: every mapped pair, with an AGE-NORMALIZED performance
- * tier instead of raw views.
- *
- * Absolute view counts are forbidden as a performance signal (docs/plans/pipeline-plan.md):
- * a 3-year-old short and last month's are not comparable — raw views mostly measure age.
- * So each short is scored against the median of the channel's shorts published within a
- * ±90-day window of it, and tiered on that ratio.
- */
-app.get("/api/lab/match/export/:channelId", async (c) => {
-  const channelId = c.req.param("channelId");
-  const ch = await getYouTubeChannelByChannelId(channelId);
-  if (!ch) return c.json({ error: "channel not found" }, 404);
-
-  const videos = await listChannelVideos(channelId);
-  const byId = new Map(videos.map((v) => [v.videoId, v]));
-  const maps = await listShortSourceMaps(channelId);
-
-  const WINDOW_MS = 90 * 24 * 60 * 60 * 1000;
-  const shorts = videos.filter((v) => Boolean(v.isShort) || (Number(v.durationSec) || 0) <= 180);
-  const median = (xs: number[]) => {
-    if (!xs.length) return 0;
-    const s = [...xs].sort((a, b) => a - b);
-    const m = Math.floor(s.length / 2);
-    return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
-  };
-  /** Median views of same-era shorts — the baseline this short is judged against. */
-  const baselineFor = (publishedAt: string): number => {
-    const t = Date.parse(publishedAt);
-    const peers = shorts
-      .filter((v) => Math.abs(Date.parse(v.publishedAt) - t) <= WINDOW_MS)
-      .map((v) => Number(v.viewCount) || 0);
-    return median(peers.length >= 3 ? peers : shorts.map((v) => Number(v.viewCount) || 0));
-  };
-
-  const pairs = maps.map((m) => {
-    const s = byId.get(m.shortVideoId);
-    const l = byId.get(m.longVideoId);
-    const views = Number(s?.viewCount) || 0;
-    const baseline = s ? baselineFor(s.publishedAt) : 0;
-    const ratio = baseline > 0 ? views / baseline : 0;
-    return {
-      pair_id: m.shortVideoId,
-      short: {
-        videoId: m.shortVideoId,
-        title: s?.title ?? null,
-        publishedAt: s?.publishedAt ?? null,
-        views,
-        durationSec: Number(s?.durationSec) || 0,
-      },
-      // Age-fair performance: multiple of the same-era channel median.
-      performance: {
-        baseline_median_views: Math.round(baseline),
-        ratio: Number(ratio.toFixed(3)),
-        tier: ratio >= 2 ? "high" : ratio >= 0.7 ? "mid" : "low",
-      },
-      source: {
-        longVideoId: m.longVideoId,
-        title: l?.title ?? null,
-        durationSec: Number(l?.durationSec) || 0,
-        segStart: m.segStart,
-        segEnd: m.segEnd,
-        segLenSec: Number((m.segEnd - m.segStart).toFixed(2)),
-        // core/segment.py(match.segment 잡)가 채운다. 비어 있으면 아직 미처리.
-        transcript_slice: m.segTranscript,
-        scene_summary: m.segSummary,
-        emotion: m.segEmotion,
-        hook: m.segHook,
-      },
-      note: m.note,
-    };
-  });
-
-  const tally = { high: 0, mid: 0, low: 0 } as Record<string, number>;
-  for (const p of pairs) tally[p.performance.tier]++;
-  return c.json({ channelId, channelName: ch.channelName, count: pairs.length, tally, pairs });
-});
-
-/**
- * 시청자 목소리 (viewer_signals) 조회 — Lab VideosTab 위젯용 (2026-07-28).
- *
- * :videoId 는 YouTube videoId (예: jn3KztGtJ8Y). from-youtube 경로로 임포트된 롱폼이면
- * episode.sourceVideoId 에 이 값이 남아있고, 그 episode 의 media 에 대한 content_analysis.data
- * 안에 viewer_signals + shorts 가 저장돼 있다 (analyze.py 가 Part B 에서 함께 저장).
- *
- * 반환: { videoId, mediaId, viewer_signals, shorts, coverage } 또는 { videoId, error }.
- *   coverage: 각 explicit_timestamp 별로 "이 초를 포함하는 short 가 있는지" 판정한 배열.
- *   튜닝 사이클용 — 미커버 timestamp 가 많으면 propose_shorts_beat_only 규칙이 약하다는 신호.
- */
-app.get("/api/lab/videos/:videoId/viewer-signals", async (c) => {
-  const videoId = c.req.param("videoId");
-  if (!videoId) return c.json({ error: "videoId required" }, 400);
-
-  // episode.sourceVideoId 로 임포트된 케이스만 대상. entities 는 JSONB 라 data->>'sourceVideoId' 로 조회.
-  const { rows: epRows } = await getPool().query<{ id: string }>(
-    "SELECT id FROM entities WHERE kind = 'episode' AND data->>'sourceVideoId' = $1 LIMIT 1",
-    [videoId],
-  );
-  if (!epRows[0]) {
-    return c.json({ videoId, viewer_signals: null, shorts: [], coverage: [], reason: "episode not found (외부 URL 이거나 임포트 전)" });
-  }
-  const episodeId = epRows[0].id;
-
-  const { rows: mediaRows } = await getPool().query<{ id: string }>(
-    "SELECT id FROM media WHERE episodeId = $1 ORDER BY createdAt DESC LIMIT 1",
-    [episodeId],
-  );
-  if (!mediaRows[0]) {
-    return c.json({ videoId, viewer_signals: null, shorts: [], coverage: [], reason: "media not found" });
-  }
-  const mediaId = mediaRows[0].id;
-
-  const ca = await getContentAnalysis(mediaId);
-  if (!ca || !ca.data) {
-    return c.json({ videoId, mediaId, viewer_signals: null, shorts: [], coverage: [], reason: "analysis pending" });
-  }
-  const data = ca.data as { viewer_signals?: unknown; shorts?: unknown };
-  const vs = (data.viewer_signals && typeof data.viewer_signals === "object")
-    ? data.viewer_signals as Record<string, unknown>
-    : null;
-  const shortsRaw = Array.isArray(data.shorts) ? data.shorts : [];
-  const shorts = shortsRaw.map((s: any) => ({
-    start: Number(s?.start) || 0,
-    end: Number(s?.end) || 0,
-    title: String(s?.title || ""),
-    rank: typeof s?.rank === "number" ? s.rank : null,
-  })).filter((s) => s.end > s.start);
-
-  // coverage: viewer_signals.explicit_timestamps 각각이 shorts 어느 하나의 [start,end] 안에
-  // 들어가는지 판정. UI 가 미커버 timestamp 를 ⚠ 로 표시해 규칙 강도 튜닝 시그널로 쓴다.
-  const coverage: { mmss: string; likes: number; secs: number; covered: boolean; byShortRank: number | null }[] = [];
-  const ets = Array.isArray(vs?.explicit_timestamps) ? vs!.explicit_timestamps as any[] : [];
-  for (const t of ets) {
-    const mmss = String(t?.mmss || "");
-    const parts = mmss.split(":").map((x) => Number(x));
-    let secs = 0;
-    if (parts.length === 3 && parts.every(Number.isFinite)) {
-      secs = parts[0] * 3600 + parts[1] * 60 + parts[2];
-    } else if (parts.length === 2 && parts.every(Number.isFinite)) {
-      secs = parts[0] * 60 + parts[1];
-    } else {
-      continue;
-    }
-    const hit = shorts.find((s) => s.start <= secs && secs <= s.end);
-    coverage.push({
-      mmss,
-      likes: Number(t?.likes) || 0,
-      secs,
-      covered: Boolean(hit),
-      byShortRank: hit?.rank ?? null,
-    });
-  }
-
-  return c.json({
-    videoId,
-    mediaId,
-    viewer_signals: vs,
-    shorts,
-    coverage,
-  });
-});
-
-/**
- * Serve the admin frontend locally (in prod it deploys to Vercel separately).
- * The Lab is a Vite+React SPA now, so this serves the build output — run
- * `pnpm --filter @stepd/admin build` first. Falls back to a clear message, not a 404 page,
- * because "no dist" is a missing build step rather than a broken route.
- */
-app.get("/lab", (c) => {
-  try {
-    return c.html(fs.readFileSync(path.join(ADMIN_DIR, "dist", "index.html"), "utf-8"));
-  } catch {
-    return c.text(
-      "admin이 아직 빌드되지 않았습니다. `pnpm --filter @stepd/admin build` 후 다시 열거나, 개발 중이면 `pnpm --filter @stepd/admin dev`(:4200)를 쓰세요.",
-      503,
-    );
-  }
-});
-
-/**
- * Static assets for the built Lab SPA. Vite emits root-absolute `/assets/…` URLs (base "/"),
- * which is what the Vercel deployment needs, so the local /lab route has to serve them from
- * the same root path. basename() keeps the lookup inside dist/assets.
- */
-app.get("/assets/:name", (c) => {
-  const name = path.basename(c.req.param("name"));
-  const file = path.join(ADMIN_DIR, "dist", "assets", name);
-  try {
-    const body = fs.readFileSync(file);
-    const type = name.endsWith(".css")
-      ? "text/css"
-      : name.endsWith(".js")
-        ? "text/javascript"
-        : name.endsWith(".map")
-          ? "application/json"
-          : "application/octet-stream";
-    return new Response(new Uint8Array(body), { headers: { "Content-Type": type } });
-  } catch {
-    return c.text("not found", 404);
-  }
-});
-
 // ── start ─────────────────────────────────────────────────────────────────────
 serve({ fetch: app.fetch, port: PORT }, (info) => {
   console.log(`[stepd-server] listening on http://localhost:${info.port}`);

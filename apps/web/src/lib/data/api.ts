@@ -680,6 +680,88 @@ export async function adoptRec(recId: string): Promise<{ clipId: string; clip?: 
   return json(await fetch(`${API_BASE}/recommendations/${recId}/adopt`, { method: "POST" }));
 }
 
+// ── 자동 배포 (FLOWS F6 · 서버 migrations/0019) ──────────────────────────────────
+
+export type RuleMediaKind = "short" | "clip" | "both";
+export type RuleCriterion = "score80" | "score85" | "top3";
+export type GatePolicy = "approve_first" | "hold_on_issue";
+
+export interface AutomationRule {
+  id: string;
+  programId: string;
+  platform: string;
+  accountId: string;
+  mediaKind: RuleMediaKind;
+  criterion: RuleCriterion;
+  gatePolicy: GatePolicy;
+  window: string;
+  enabled: boolean;
+}
+
+export interface RuleRun {
+  id: number; at: string; ruleId: string | null; clipId: string | null;
+  result: string; detail: string;
+}
+
+export interface RuleHold { ruleId: string; clipId: string; reason: string; heldAt: string }
+
+export async function fetchAutomation(): Promise<{
+  rules: AutomationRule[];
+  runs: RuleRun[];
+  holds: RuleHold[];
+  paused: boolean;
+  idleReason: string;
+}> {
+  return json(await fetch(`${API_BASE}/automation`, { cache: "no-store" }));
+}
+
+export async function saveAutomationRule(
+  rule: Omit<AutomationRule, "id"> & { id?: string },
+): Promise<{ rule: AutomationRule; notice: string }> {
+  const res = await fetch(`${API_BASE}/automation/rules`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(rule),
+  });
+  if (!res.ok) {
+    const b = (await res.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(b?.error ?? `${res.status}`);
+  }
+  return res.json();
+}
+
+export async function deleteAutomationRule(id: string): Promise<{ notice: string }> {
+  const res = await fetch(`${API_BASE}/automation/rules/${id}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(`${res.status}`);
+  return res.json();
+}
+
+export async function setAutomationPaused(paused: boolean): Promise<{ notice: string }> {
+  const res = await fetch(`${API_BASE}/automation/pause`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ paused }),
+  });
+  if (!res.ok) throw new Error(`${res.status}`);
+  return res.json();
+}
+
+/** 보류 해제 — 사람이 확정하는 지점(F6 Invariant). */
+export async function releaseAutomationHold(
+  ruleId: string, clipId: string, actor: string,
+): Promise<{ ok: boolean; notice: string }> {
+  const res = await fetch(`${API_BASE}/automation/holds/release`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ruleId, clipId, actor }),
+  });
+  if (!res.ok) {
+    const b = (await res.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(b?.error ?? `${res.status}`);
+  }
+  return res.json();
+}
+
 // ── 썸네일 생성 (FLOWS F7) ──────────────────────────────────────────────────────
 //
 // 결과는 스토리지에 남는다 — 화면을 떠나도, 잡이 끝난 뒤에도. 그래서 완료 알림이 없고
