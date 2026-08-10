@@ -2923,6 +2923,36 @@ app.get("/api/gate/:subjectType/:subjectId", async (c) => {
   return c.json({ gate, issues, judged });
 });
 
+/**
+ * 여러 대상의 게이트를 한 번에 (미디어 목록용).
+ *
+ * 목록에서 대상마다 /api/gate 를 부르면 N+1 이 된다 — 100건짜리 목록이 100번 왕복하고,
+ * 그러면 화면은 "느려서" 게이트 표시를 생략하고 싶어진다. 생략된 게이트가 곧 사고다.
+ */
+app.post("/api/gate/batch", async (c) => {
+  const body = await c.req.json().catch(() => ({}) as Record<string, unknown>);
+  const subjectType = readSubjectType(body.subjectType);
+  const rawIds: unknown[] = Array.isArray(body.subjectIds) ? body.subjectIds : [];
+  const ids = rawIds.filter((x): x is string => typeof x === "string");
+  if (!subjectType) return c.json({ error: "invalid subjectType" }, 400);
+  if (ids.length === 0) return c.json({ gates: {}, issues: {} });
+  if (ids.length > 500) return c.json({ error: "too many ids (max 500)" }, 400);
+
+  const [issueMap, judged] = await Promise.all([
+    listRightsIssuesFor(subjectType, ids),
+    judgedSet(subjectType, ids),
+  ]);
+
+  const gates: Record<string, GateResult> = {};
+  const issues: Record<string, unknown[]> = {};
+  for (const id of ids) {
+    const rows = issueMap.get(id) ?? [];
+    gates[id] = evaluateGate({ judged: judged.has(id), issues: rows.map(toIssue) });
+    issues[id] = rows;
+  }
+  return c.json({ gates, issues });
+});
+
 app.get("/api/rights-issues", async (c) => {
   const subjectType = readSubjectType(c.req.query("subjectType"));
   const subjectId = c.req.query("subjectId") ?? "";

@@ -1,9 +1,319 @@
-import { ScreenStub } from "@/components/shell/screen-stub";
+"use client";
 
 /**
- * 미디어 — 재설계 화면 (README §). 셸·라우팅만 세운 상태이고 본문은 U6 에서 채운다.
- * 빈 화면을 그냥 두면 "서버 미연결"과 구분이 안 되므로, 무엇이 올 자리인지 명시한다.
+ * U6 · 미디어 (README §5 · FLOWS F3 강제 지점 ①).
+ *
+ * 채택(＋)한 것만 여기 올라온다 — 추천 구간은 미디어가 아니다.
+ * 이 화면의 배포 버튼이 게이트의 첫 번째 강제 지점이다.
+ *
+ * 지키는 것:
+ *  - 게이트 미통과가 선택에 섞이면 **통과 건만 진행하고 제외 건수를 알린다.**
+ *    ⊘ 조용히 제외 금지 · ⊘ 전체 실패 처리 금지 (FLOWS.md:70)
+ *  - 판정은 서버가 한다. 화면은 서버가 준 상태를 그리고, 못 읽으면 통과로 그리지 않는다.
  */
-export default function Page() {
-  return <ScreenStub title="미디어" plan="게이트 필터 · 이슈 요약 · 하단 액션바(통과 건수) · 검수 요청/배포" pr="U6" />;
+import Link from "next/link";
+import { useCallback, useEffect, useMemo, useState } from "react";
+
+import { IssuePanel } from "@/components/gate/issue-panel";
+import { useToast } from "@/components/ui/toast";
+import { useSession } from "@/lib/auth";
+import { roleOf } from "@/lib/roles";
+import { fetchGateBatch, type GateResult, type GateState, type RightsIssue } from "@/lib/data/api";
+import { useAppData } from "@/lib/data/store";
+import { GATE_LABEL, GATE_TAG, ISSUE_KIND_LABEL, fmtTime } from "@/lib/gate-ui";
+import type { Clip } from "@/lib/types";
+import { cn } from "@/lib/utils";
+
+type KindFilter = "all" | "short" | "clip";
+type GateFilter = "all" | GateState;
+
+const GATE_FILTERS: GateFilter[] = ["all", "pass", "review_pending", "rights_hold", "conditional", "blocked"];
+
+export default function MediaPage() {
+  const { clips, episodes, programs, loading } = useAppData();
+  const { toast } = useToast();
+  const session = useSession();
+  const role = roleOf(session.user.role);
+
+  const [kind, setKind] = useState<KindFilter>("all");
+  const [gateFilter, setGateFilter] = useState<GateFilter>("all");
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [gates, setGates] = useState<Record<string, GateResult>>({});
+  const [issues, setIssues] = useState<Record<string, RightsIssue[]>>({});
+  const [gateError, setGateError] = useState<string | null>(null);
+  const [openIssues, setOpenIssues] = useState<string | null>(null);
+  const [publishing, setPublishing] = useState(false);
+
+  const clipIds = useMemo(() => clips.map((c) => c.id), [clips]);
+  const idsKey = clipIds.join(",");
+
+  const loadGates = useCallback(async () => {
+    if (clipIds.length === 0) { setGates({}); setIssues({}); return; }
+    try {
+      const r = await fetchGateBatch("clip", clipIds);
+      setGates(r.gates);
+      setIssues(r.issues);
+      setGateError(null);
+    } catch (err) {
+      // 못 읽으면 비워 두고 사유를 띄운다. 빈 게이트는 아래에서 "확인 불가"로 그려진다.
+      setGates({});
+      setGateError(err instanceof Error ? err.message : String(err));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [idsKey]);
+
+  useEffect(() => { void loadGates(); }, [loadGates]);
+
+  const rows = useMemo(() => {
+    return clips.filter((c) => {
+      const isShort = c.aspectRatio?.startsWith("9:16");
+      if (kind === "short" && !isShort) return false;
+      if (kind === "clip" && isShort) return false;
+      if (gateFilter !== "all" && (gates[c.id]?.state ?? "review_pending") !== gateFilter) return false;
+      return true;
+    });
+  }, [clips, kind, gateFilter, gates]);
+
+  const selectedRows = rows.filter((c) => selected.has(c.id));
+  const passing = selectedRows.filter((c) => gates[c.id]?.allowed).length;
+  const held = selectedRows.length - passing;
+
+  function toggle(id: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  async function publish() {
+    if (selectedRows.length === 0) return;
+    if (!role.publish) {
+      toast({ title: "배포 권한이 없습니다", description: "CP·PD 만 배포할 수 있습니다.", tone: "error" });
+      return;
+    }
+    setPublishing(true);
+    try {
+      // 서버가 다시 판정한다 — 화면의 통과 여부는 참고일 뿐이다.
+      const { publishClips } = await import("@/lib/data/api");
+      const res = await publishClips(selectedRows.map((c) => c.id), "youtube");
+      const notice = (res as { notice?: string }).notice;
+      toast({
+        title: "배포 요청을 보냈습니다",
+        description: notice || "결과를 배포 화면에서 확인하세요.",
+        tone: notice && notice.includes("제외") ? "warn" : "done",
+      });
+      setSelected(new Set());
+      await loadGates();
+    } catch (err) {
+      toast({ title: "배포 실패", description: err instanceof Error ? err.message : String(err), tone: "error" });
+    } finally {
+      setPublishing(false);
+    }
+  }
+
+  return (
+    <div className="mx-auto flex max-w-[1240px] flex-col gap-[14px] pb-24">
+      {/* 필터 */}
+      <div className="flex flex-wrap items-center gap-[9px]">
+        <div className="flex gap-[3px]">
+          {([["all", "전체"], ["short", "숏폼"], ["clip", "클립"]] as const).map(([k, label]) => (
+            <button
+              key={k}
+              type="button"
+              className={cn("sd-btn", kind === k && "sd-btn--on")}
+              onClick={() => setKind(k)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <span className="h-[18px] w-px" style={{ background: "var(--sd-border)" }} aria-hidden />
+        <div className="flex flex-wrap gap-[3px]">
+          {GATE_FILTERS.map((g) => (
+            <button
+              key={g}
+              type="button"
+              className={cn("sd-btn", gateFilter === g && "sd-btn--on")}
+              onClick={() => setGateFilter(g)}
+            >
+              {g === "all" ? "게이트 전체" : GATE_LABEL[g]}
+              <span className="sd-mono ml-1.5 text-[10.5px]" style={{ opacity: 0.7 }}>
+                {g === "all"
+                  ? clips.length
+                  : clips.filter((c) => (gates[c.id]?.state ?? "review_pending") === g).length}
+              </span>
+            </button>
+          ))}
+        </div>
+        <span className="sd-mono ml-auto text-[11px]" style={{ color: "var(--sd-mut)" }}>
+          {rows.length}건
+        </span>
+      </div>
+
+      {gateError && (
+        <div
+          className="rounded-[4px] px-3 py-2 text-[11.5px]"
+          style={{ border: "1px solid var(--sd-danger-border)", background: "var(--sd-danger-bg)", color: "var(--sd-danger-strong)" }}
+        >
+          게이트를 불러오지 못했습니다 ({gateError}) — 통과 여부를 알 수 없어 전부 미통과로 다룹니다.
+        </div>
+      )}
+
+      {/* 목록 */}
+      {rows.length === 0 ? (
+        <div
+          className="sd-ph grid min-h-[160px] place-items-center rounded-[6px] px-6 text-center"
+          style={{ border: "1px dashed var(--sd-border)" }}
+        >
+          {loading
+            ? "불러오는 중…"
+            : clips.length === 0
+              ? "미디어가 없습니다 — 영상 분석에서 추천 구간을 채택(＋)하면 여기 올라옵니다"
+              : "조건에 맞는 미디어가 없습니다"}
+        </div>
+      ) : (
+        <div className="flex flex-col gap-1.5">
+          {rows.map((c) => (
+            <MediaRow
+              key={c.id}
+              clip={c}
+              gate={gates[c.id]}
+              issues={issues[c.id] ?? []}
+              checked={selected.has(c.id)}
+              onToggle={() => toggle(c.id)}
+              onOpenIssues={() => setOpenIssues(openIssues === c.id ? null : c.id)}
+              issuesOpen={openIssues === c.id}
+              onGateChanged={loadGates}
+              programTitle={
+                programs.find((p) => p.id === episodes.find((e) => e.id === c.episodeId)?.programId)?.title ?? ""
+              }
+              episodeNumber={episodes.find((e) => e.id === c.episodeId)?.episodeNumber}
+            />
+          ))}
+        </div>
+      )}
+
+      {/* 하단 액션 바 — 선택이 있을 때만 */}
+      {selectedRows.length > 0 && (
+        <div
+          className="fixed inset-x-0 bottom-0 z-30 flex flex-wrap items-center gap-3 px-5 py-3"
+          style={{ background: "#fff", borderTop: "1px solid var(--sd-border)", paddingLeft: 226 }}
+        >
+          <span className="text-[12.5px]" style={{ color: "var(--sd-fg)" }}>
+            {selectedRows.length}건 선택 · <b>게이트 통과 {passing}건</b>
+            {held > 0 && (
+              <span style={{ color: "var(--sd-danger-strong)" }}> · 미통과 {held}건은 제외됩니다</span>
+            )}
+          </span>
+          <button type="button" className="sd-btn ml-auto" onClick={() => setSelected(new Set())}>
+            선택 해제
+          </button>
+          <button
+            type="button"
+            className="sd-btn sd-btn-primary"
+            disabled={publishing || passing === 0}
+            title={passing === 0 ? "게이트를 통과한 건이 없습니다" : undefined}
+            onClick={publish}
+          >
+            {publishing ? "보내는 중…" : `배포 (${passing}건)`}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function MediaRow({
+  clip,
+  gate,
+  issues,
+  checked,
+  onToggle,
+  onOpenIssues,
+  issuesOpen,
+  onGateChanged,
+  programTitle,
+  episodeNumber,
+}: {
+  clip: Clip;
+  gate?: GateResult;
+  issues: RightsIssue[];
+  checked: boolean;
+  onToggle: () => void;
+  onOpenIssues: () => void;
+  issuesOpen: boolean;
+  onGateChanged: () => void | Promise<void>;
+  programTitle: string;
+  episodeNumber?: number;
+}) {
+  const state: GateState = gate?.state ?? "review_pending";
+  const live = issues.filter((i) => i.resolution !== "resolved");
+  const isShort = clip.aspectRatio?.startsWith("9:16");
+
+  return (
+    <div className="sd-card flex flex-col">
+      <div className="flex items-center gap-3 px-3 py-2.5">
+        <input type="checkbox" checked={checked} onChange={onToggle} aria-label="선택" />
+
+        <div className="sd-ph h-[44px] w-[78px] shrink-0 overflow-hidden rounded-[3px]">
+          {clip.thumbnailUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={clip.thumbnailUrl} alt="" className="size-full object-cover" />
+          ) : (
+            <span className="text-[9px]">썸네일</span>
+          )}
+        </div>
+
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-[12.5px] font-medium" style={{ color: "var(--sd-fg)" }}>
+            {clip.title}
+          </div>
+          <div className="sd-mono truncate text-[10.5px]" style={{ color: "var(--sd-mut)" }}>
+            {programTitle}
+            {episodeNumber != null ? ` · 회차 ${episodeNumber}` : ""} · {fmtTime(clip.durationSec)} ·{" "}
+            {isShort ? "9:16" : "16:9"}
+            {clip.rendered ? "" : " · 렌더 전"}
+          </div>
+        </div>
+
+        <div className="flex shrink-0 flex-col items-end gap-1">
+          <span className={GATE_TAG[state]}>{gate ? gate.label : "확인 불가"}</span>
+          {live.length > 0 && (
+            <span className="truncate text-[10.5px]" style={{ color: "var(--sd-mut)", maxWidth: 220 }}>
+              {[...new Set(live.map((i) => ISSUE_KIND_LABEL[i.kind as keyof typeof ISSUE_KIND_LABEL] ?? i.kind))]
+                .slice(0, 3)
+                .join(", ")}
+              {live.length > 3 ? ` 외 ${live.length - 3}` : ""}
+            </span>
+          )}
+        </div>
+
+        <div className="flex shrink-0 gap-2">
+          <button type="button" className="sd-btn" onClick={onOpenIssues}>
+            검수 {issuesOpen ? "닫기" : `(${live.length})`}
+          </button>
+          <Link href={`/editor/${clip.id}`} className="sd-btn">편집</Link>
+        </div>
+      </div>
+
+      {issuesOpen && (
+        <div className="px-3 pb-3">
+          <IssuePanel
+            subjectType="clip"
+            subjectId={clip.id}
+            title="이 미디어의 권리·심의"
+            hint="채택 시 승계된 이슈가 여기 보입니다. 해제하면 게이트가 열립니다."
+            bandDefault={
+              clip.startTime != null && clip.endTime != null
+                ? { start: clip.startTime, end: clip.endTime }
+                : undefined
+            }
+            onGateChange={() => void onGateChanged()}
+          />
+        </div>
+      )}
+    </div>
+  );
 }

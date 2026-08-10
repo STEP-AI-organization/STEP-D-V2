@@ -67,3 +67,8 @@ export function blockedCopy(reason: BlockedReason): { title: string; body: strin
         body: "업로드 전용으로 연결된 채널이라 지표를 수집하지 않습니다. 데이터가 0 인 것과 다릅니다.",
       };
 }
+
+/** 역할 키 → 권한. 모르는 값은 가장 좁은 권한(vendor)으로 떨어뜨린다 — 모르면 못 하게. */
+export function roleOf(key: Role | string | undefined): RoleCapability {
+  return ROLES[(key ?? "") as Role] ?? ROLES.vendor;
+}

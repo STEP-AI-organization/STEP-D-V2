@@ -722,6 +722,24 @@ export async function fetchGate(
   return json(await fetch(`${API_BASE}/gate/${subjectType}/${subjectId}`, { cache: "no-store" }));
 }
 
+/**
+ * 여러 대상의 게이트를 한 번에 — 목록 화면용.
+ * 대상마다 따로 부르면 N+1 이 되고, 느려지면 게이트 표시를 생략하고 싶어진다.
+ */
+export async function fetchGateBatch(
+  subjectType: GateSubjectType,
+  subjectIds: string[],
+): Promise<{ gates: Record<string, GateResult>; issues: Record<string, RightsIssue[]> }> {
+  if (subjectIds.length === 0) return { gates: {}, issues: {} };
+  return json(
+    await fetch(`${API_BASE}/gate/batch`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ subjectType, subjectIds }),
+    }),
+  );
+}
+
 export async function fetchRightsIssues(
   subjectType: GateSubjectType,
   subjectId: string,
@@ -860,11 +878,22 @@ export async function rejectRec(recId: string, reason: string): Promise<void> {
   }
 }
 
+/**
+ * 배포 결과 — **제외된 건을 반드시 받는다** (FLOWS.md:70 ⊘ 조용히 제외 금지).
+ * 서버가 게이트로 다시 판정하므로, 화면이 통과라고 본 것도 여기서 빠질 수 있다.
+ */
+export interface PublishOutcome {
+  queued: string[];
+  recorded: string[];
+  skipped: { clipId: string; code: string; reason: string }[];
+  notice: string;
+}
+
 export async function publishClips(
   clipIds: string[],
   channel: DistributionChannel,
-  opts: { reserveDate?: string; scheduled?: boolean },
-): Promise<void> {
+  opts: { reserveDate?: string; scheduled?: boolean } = {},
+): Promise<PublishOutcome> {
   const res = await fetch(`${API_BASE}/distributions/publish`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -874,6 +903,13 @@ export async function publishClips(
     const body = (await res.json().catch(() => null)) as { error?: string; message?: string } | null;
     throw new Error(body?.message ?? body?.error ?? `${res.status} ${res.statusText}`);
   }
+  const body = (await res.json().catch(() => null)) as Partial<PublishOutcome> | null;
+  return {
+    queued: body?.queued ?? [],
+    recorded: body?.recorded ?? [],
+    skipped: body?.skipped ?? [],
+    notice: body?.notice ?? "",
+  };
 }
 
 export async function retryDist(clipId: string, channel: DistributionChannel): Promise<void> {
