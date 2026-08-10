@@ -1,127 +1,107 @@
 "use client";
 
-import { useEffect, useState } from "react";
+/**
+ * 사이드바 (README §0).
+ *
+ * 확정 수치를 그대로 지킨다 — width 206px · 배경 #f6f7fa · 우측 보더 #e2e5ee ·
+ * padding 14px 10px · 항목 7px 10px / radius 4px / 12.5px · 활성 #1f4fd8 배경에 흰 글씨.
+ * 하단에 연결 상태(7px 녹색 점 + 8초 폴링).
+ */
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { cn } from "@/lib/utils";
-import { navForRole } from "@/lib/nav";
-import { useAppData } from "@/lib/data/store";
-import { useSession } from "@/lib/auth";
+import { useEffect, useState } from "react";
 
-function isActive(pathname: string, href: string): boolean {
-  if (href === "/") return pathname === "/";
-  return pathname === href || pathname.startsWith(href + "/");
-}
+import { NAV_GROUPS } from "@/lib/nav";
+import { cn } from "@/lib/utils";
+
+const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "/api/proxy/api";
 
 export function Sidebar() {
   const pathname = usePathname();
-  const { badgeCounts } = useAppData();
-  const { user } = useSession();
-  const items = navForRole(user.role);
-  const [mobileOpen, setMobileOpen] = useState(false);
-
-  // Off-canvas drawer on narrow viewports: the topbar hamburger dispatches
-  // "toggle-sidebar" (same lightweight event pattern as the command palette).
-  useEffect(() => {
-    function onToggle() {
-      setMobileOpen((v) => !v);
-    }
-    window.addEventListener("toggle-sidebar", onToggle);
-    return () => window.removeEventListener("toggle-sidebar", onToggle);
-  }, []);
-
-  // Close the drawer whenever the route changes.
-  useEffect(() => {
-    setMobileOpen(false);
-  }, [pathname]);
 
   return (
-    <>
-      {/* backdrop — mobile only, when open */}
-      {mobileOpen && (
-        <div
-          className="fixed inset-0 z-30 bg-black/40 backdrop-blur-sm lg:hidden"
-          onClick={() => setMobileOpen(false)}
+    <aside
+      className="fixed inset-y-0 left-0 z-30 flex w-[206px] flex-col border-r"
+      style={{ background: "var(--sd-sidebar-bg)", borderColor: "var(--sd-sidebar-border)", padding: "14px 10px" }}
+    >
+      <Link href="/dashboard" className="mb-3 flex items-center gap-2 px-2">
+        <span
+          className="grid size-[18px] place-items-center rounded-[4px] text-[11px] font-bold text-white"
+          style={{ background: "var(--sd-accent)" }}
           aria-hidden
-        />
-      )}
+        >
+          D
+        </span>
+        <span className="sd-serif text-[13px] font-semibold" style={{ color: "var(--sd-fg)" }}>
+          STEP-D
+        </span>
+      </Link>
 
-      <aside
-        className={cn(
-          "fixed inset-y-0 left-0 z-40 flex w-[230px] flex-col border-r border-border bg-panel px-3 py-4 transition-transform duration-200 lg:translate-x-0",
-          mobileOpen ? "translate-x-0 shadow-xl lg:shadow-none" : "-translate-x-full",
-        )}
-      >
-        <Link href="/" className="flex items-center gap-2.5 px-2 pb-[18px] pt-1.5" aria-label="홈으로">
-          <img
-            src="/brand/stepd-icon-192.png"
-            alt=""
-            width={30}
-            height={30}
-            className="size-[30px] shrink-0 rounded-[9px] border border-border"
-            aria-hidden
-          />
-          <span className="min-w-0">
-            <span className="grotesk block text-[15px] font-bold leading-none tracking-tight">
-              STEP D
-            </span>
-            <span className="mt-1 block text-[10.5px] text-muted-foreground/80">
-              Media Production OS
-            </span>
-          </span>
-        </Link>
+      <nav className="flex-1 overflow-y-auto">
+        {NAV_GROUPS.map((group, gi) => (
+          <div key={group.label ?? `g${gi}`} className={gi > 0 ? "mt-4" : undefined}>
+            {group.label && (
+              <div className="sd-eb px-2 pb-1.5" style={{ color: "var(--sd-label)" }}>
+                {group.label}
+              </div>
+            )}
+            <ul className="flex flex-col gap-0.5">
+              {group.items.map((item) => {
+                const active = pathname === item.href || pathname.startsWith(`${item.href}/`);
+                const Icon = item.icon;
+                return (
+                  <li key={item.href}>
+                    <Link
+                      href={item.href}
+                      aria-current={active ? "page" : undefined}
+                      className={cn("sd-nav-item", active && "sd-nav-item--active")}
+                    >
+                      <Icon className="size-[13px] shrink-0" aria-hidden />
+                      <span className="truncate">{item.label}</span>
+                    </Link>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        ))}
+      </nav>
 
-        <nav className="flex flex-1 flex-col gap-0.5">
-          {items.map((item) => {
-            const active = isActive(pathname, item.href);
-            const badge = item.badgeKey ? badgeCounts[item.badgeKey] : 0;
-            const Icon = item.icon;
-            return (
-              <Link
-                key={item.href}
-                href={item.href}
-                aria-current={active ? "page" : undefined}
-                className={cn(
-                  "group flex items-center gap-[11px] rounded-[9px] px-2.5 py-2 text-[13.5px] transition-colors",
-                  active
-                    ? "bg-brand/10 font-semibold text-foreground"
-                    : "font-medium text-[#a6a6a6] hover:bg-accent hover:text-foreground",
-                )}
-              >
-                <Icon className={cn("size-4 shrink-0", active ? "text-brand" : "text-[#707070]")} />
-                <span className="flex-1">{item.label}</span>
-                {badge > 0 && (
-                  <span
-                    className={cn(
-                      "min-w-5 rounded-md px-1.5 py-0.5 text-center text-[11px] font-bold tabular-nums",
-                      item.badgeKey === "distributionFailed"
-                        ? "bg-status-error/15 text-status-error"
-                        : "bg-primary text-primary-foreground",
-                    )}
-                  >
-                    {badge}
-                  </span>
-                )}
-              </Link>
-            );
-          })}
-        </nav>
+      <ConnectionStatus />
+    </aside>
+  );
+}
 
-        <div className="mt-2 flex items-center gap-2.5 border-t border-border px-1.5 pb-0.5 pt-2.5">
-          <span
-            className="flex size-7 shrink-0 items-center justify-center rounded-full bg-secondary text-xs font-semibold text-muted-foreground"
-            aria-hidden
-          >
-            {user.name.slice(0, 1)}
-          </span>
-          <span className="min-w-0 flex-1">
-            <span className="block truncate text-[12.5px] font-semibold text-foreground">
-              {user.name}
-            </span>
-            <span className="block text-[10.5px] text-muted-foreground">STEP D · {user.role}</span>
-          </span>
-        </div>
-      </aside>
-    </>
+/**
+ * 연결 상태 — 8초 폴링 (FLOWS.md:190).
+ * 끊긴 걸 조용히 두지 않는다. 빈 화면이 "데이터 없음"인지 "서버 미연결"인지
+ * 여기서 구분된다.
+ */
+function ConnectionStatus() {
+  const [ok, setOk] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    const ping = async () => {
+      try {
+        const res = await fetch(`${API_BASE}/state`, { cache: "no-store" });
+        if (alive) setOk(res.ok);
+      } catch {
+        if (alive) setOk(false);
+      }
+    };
+    void ping();
+    const t = setInterval(ping, 8000);
+    return () => { alive = false; clearInterval(t); };
+  }, []);
+
+  const label = ok === null ? "연결 확인 중…" : ok ? "서버 연결됨 · 8초 폴링" : "서버 미연결";
+  const color = ok === null ? "var(--sd-idle)" : ok ? "var(--sd-ok)" : "var(--sd-danger)";
+
+  return (
+    <div className="mt-3 flex items-center gap-1.5 px-2 pt-2" style={{ borderTop: "1px solid var(--sd-sidebar-border)" }}>
+      <span className="size-[7px] shrink-0 rounded-full" style={{ background: color }} aria-hidden />
+      <span className="truncate text-[10.5px]" style={{ color: "var(--sd-mut)" }}>{label}</span>
+    </div>
   );
 }

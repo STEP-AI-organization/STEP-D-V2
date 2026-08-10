@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Search, CornerDownLeft } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { NAV } from "@/lib/nav";
+import { ALL_NAV_ITEMS as NAV } from "@/lib/nav";
 import { useAppData } from "@/lib/data/store";
 
 interface Command {

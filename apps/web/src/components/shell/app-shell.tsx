@@ -1,8 +1,10 @@
 import { Sidebar } from "@/components/shell/sidebar";
 import { Topbar } from "@/components/shell/topbar";
-import { ConnectionBanner } from "@/components/shell/connection-banner";
 
-/** App chrome: fixed sidebar + sticky topbar + scrollable content region. */
+/**
+ * 앱 셸 (README §0) — 좌측 고정 사이드바 206px + 상단바 54px + 스크롤 본문 padding 20px.
+ * 본문 배경은 앱 바깥 배경(#eceae5) 위에 화면별 max-width 로 얹힌다.
+ */
 export function AppShell({
   children,
   breadcrumb,
@@ -11,21 +13,21 @@ export function AppShell({
   breadcrumb?: React.ReactNode;
 }) {
   return (
-    <div className="min-h-screen">
+    <div className="min-h-screen" style={{ background: "var(--sd-app-bg)" }}>
       <Sidebar />
-      <div className="lg:pl-57.5">
+      <div className="pl-[206px]">
         <Topbar breadcrumb={breadcrumb} />
-        <ConnectionBanner />
-        <main className="mx-auto max-w-[1400px] px-4 py-6 sm:px-6 lg:px-7.5 lg:py-6.5">
-          {children}
-        </main>
-        {/* Legal links must be reachable from the site root without opening a menu
-            or signing in — required by the TikTok app review checklist. */}
-        <footer className="mx-auto flex max-w-[1400px] flex-wrap items-center gap-x-5 gap-y-2 border-t border-border px-4 py-5 text-xs text-muted-foreground sm:px-6 lg:px-7.5">
+        <main className="p-5">{children}</main>
+
+        {/* 법적 링크는 로그인·메뉴 없이 루트에서 닿아야 한다 (TikTok 앱 심사 체크리스트). */}
+        <footer
+          className="flex flex-wrap items-center gap-x-5 gap-y-2 px-5 py-5 text-[10.5px]"
+          style={{ borderTop: "1px solid var(--sd-border)", color: "var(--sd-mut)" }}
+        >
           <span>© 2026 STEP AI Inc.</span>
-          <a href="/privacy" className="hover:text-foreground">개인정보처리방침</a>
-          <a href="/terms" className="hover:text-foreground">서비스 이용약관</a>
-          <a href="/data-deletion" className="hover:text-foreground">데이터 삭제 요청</a>
+          <a href="/privacy" className="hover:underline">개인정보처리방침</a>
+          <a href="/terms" className="hover:underline">서비스 이용약관</a>
+          <a href="/data-deletion" className="hover:underline">데이터 삭제 요청</a>
         </footer>
       </div>
     </div>

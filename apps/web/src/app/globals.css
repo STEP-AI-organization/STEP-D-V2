@@ -239,3 +239,102 @@
 .tabular-nums {
   font-variant-numeric: tabular-nums;
 }
+
+/* ──────────────────────────────────────────────────────────────────────────
+   STEP-D 재설계 디자인 토큰 (design_handoff_stepd/README.md "Design Tokens")
+   확정본이라 값을 바꾸지 않는다. 기존 Tailwind 토큰과 공존시키고, 새 화면은
+   이 sd-* 를 쓴다 — 화면을 하나씩 교체하는 동안 옛 화면이 깨지지 않게.
+   ────────────────────────────────────────────────────────────────────────── */
+:root {
+  --sd-accent: #1f4fd8;
+  --sd-accent-hover: #1a43b8;
+  --sd-accent-ring: #9db4f5;
+  --sd-accent-bg: #edf2ff;
+  --sd-accent-border: #bfcffa;
+
+  --sd-fg: #1f1e1c;
+  --sd-mut: #8b877f;
+  --sd-label: #8a8880;
+
+  --sd-card: #ffffff;
+  --sd-card-sub: #faf9f7;
+  --sd-border: #e4e2dc;
+  --sd-divider: #f2f0eb;
+
+  --sd-sidebar-bg: #f6f7fa;
+  --sd-sidebar-border: #e2e5ee;
+  --sd-app-bg: #eceae5;
+
+  --sd-ok: #1c7a52;
+  --sd-warn: #96690c;
+  --sd-warn-bg: #fdf6e5;
+  --sd-warn-border: #e8cf95;
+  --sd-danger: #b03328;
+  --sd-danger-bg: #fdf0ed;
+  --sd-danger-border: #f0b5ab;
+  --sd-danger-strong: #8f2f24;
+  --sd-idle: #9c988f;
+  --sd-chart: #4b74d8;
+
+  --sd-serif: "Noto Serif KR", ui-serif, Georgia, serif;
+  --sd-mono: ui-monospace, "JetBrains Mono", Menlo, monospace;
+}
+
+/* 14px 이상 제목에만 세리프를 쓴다 (README 타이포). */
+.sd-serif { font-family: var(--sd-serif); }
+.sd-mono { font-family: var(--sd-mono); font-variant-numeric: tabular-nums; }
+
+/* 오버라인 라벨 */
+.sd-eb {
+  font-family: var(--sd-mono);
+  font-weight: 600;
+  font-size: 9.5px;
+  letter-spacing: .09em;
+  text-transform: uppercase;
+}
+
+/* 사이드바 항목 */
+.sd-nav-item {
+  display: flex; align-items: center; gap: 7px;
+  padding: 7px 10px; border-radius: 4px;
+  font-size: 12.5px; color: #5c5951;
+  transition: background .15s, color .15s;
+}
+.sd-nav-item:hover { background: var(--sd-accent-bg); color: var(--sd-accent); }
+.sd-nav-item--active { background: var(--sd-accent); color: #fff; }
+.sd-nav-item--active:hover { background: var(--sd-accent); color: #fff; }
+
+/* 버튼 프리미티브 */
+.sd-btn {
+  background: #fff; border: 1px solid #cbc8c1; border-radius: 4px;
+  padding: 6px 11px; font-size: 11.5px; color: var(--sd-fg);
+  transition: background .15s, border-color .15s;
+}
+.sd-btn:hover { background: #f7f6f3; border-color: #b3afa7; }
+.sd-btn:disabled { opacity: .45; cursor: not-allowed; }
+.sd-btn-primary {
+  background: var(--sd-accent); border-color: var(--sd-accent); color: #fff;
+}
+.sd-btn-primary:hover { background: var(--sd-accent-hover); border-color: var(--sd-accent-hover); }
+
+/* 카드 */
+.sd-card {
+  background: var(--sd-card); border: 1px solid var(--sd-border);
+  border-radius: 6px;
+}
+.sd-card:hover { box-shadow: 0 2px 10px rgba(31,79,216,.10); }
+
+/* 플레이스홀더 — 외부 이미지가 없다. 썸네일 자리는 전부 이 스트라이프다. */
+.sd-ph {
+  background: repeating-linear-gradient(45deg, #f3f1ec 0 6px, #eae7e1 6px 12px);
+  color: #9c988f; font-size: 10.5px;
+  display: grid; place-items: center;
+}
+
+/* 진행 바 */
+.sd-progress { height: 6px; background: #eae7e1; border-radius: 3px; overflow: hidden; }
+.sd-progress > span { display: block; height: 100%; background: var(--sd-accent); transition: width .5s ease; }
+
+/* 모달 등장 (FLOWS.md:187) */
+@keyframes sd-fade-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+.sd-modal { animation: sd-fade-in .16s ease; border-radius: 8px; box-shadow: 0 18px 50px rgba(0,0,0,.28); }
