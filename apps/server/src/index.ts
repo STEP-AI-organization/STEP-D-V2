@@ -3561,6 +3561,26 @@ function safeReturn(path: string | undefined): string {
   return "/register";
 }
 
+/**
+ * 외부(AENA 등) 로 돌려보낼 복귀 URL. **allowlist 에 있는 오리진만** 허용한다.
+ *
+ * 리프레시 토큰을 받으려면 채널 주인이 우리 OAuth 화면을 거쳐야 하고, 끝나면 붙이는 쪽
+ * 화면으로 돌아가야 한다. 여기를 열어두면 오픈 리다이렉트가 되므로 오리진을 못박는다.
+ * FACTORY_RETURN_ORIGINS="https://aena.example,https://x.example"
+ */
+function safeExternalReturn(url: string | undefined): string | null {
+  if (!url) return null;
+  const allowed = (process.env.FACTORY_RETURN_ORIGINS ?? "")
+    .split(",").map((s) => s.trim()).filter(Boolean);
+  if (allowed.length === 0) return null;
+  try {
+    const u = new URL(url);
+    return allowed.includes(u.origin) ? u.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
 app.get("/api/youtube/auth", (c) => {
   if (!GOOGLE_CLIENT_ID) return c.json({ error: "GOOGLE_CLIENT_ID not configured" }, 500);
   const channelUrl = c.req.query("channel") ?? "";
@@ -3568,6 +3588,114 @@ app.get("/api/youtube/auth", (c) => {
   const returnTo = safeReturn(c.req.query("return"));
   const state = Buffer.from(JSON.stringify({ channel: channelUrl, mode, return: returnTo })).toString("base64");
   return c.redirect(googleAuthUrl(state, mode));
+});
+
+/**
+ * 외부 연동용 채널 연결 URL 발급.
+ *
+ * 붙이는 쪽이 이 URL 을 채널 주인에게 열어주면, 동의 후 우리가 refresh token 을 저장하고
+ * `returnUrl` 로 돌려보낸다. **토큰을 우리가 직접 발급받는 유일한 안전한 경로다** —
+ * 남이 만든 refresh token 은 우리 client_id 로 발급된 게 아니면 갱신이 안 된다.
+ */
+app.post("/api/factory/channels/connect-url", async (c) => {
+  const denied = factoryAuthDenied(c);
+  if (denied) return denied;
+  if (!GOOGLE_CLIENT_ID) return c.json({ error: "oauth_not_configured" }, 500);
+
+  const b = await c.req.json<{ returnUrl?: string; channelUrl?: string }>().catch(() => null);
+  const extReturn = safeExternalReturn(b?.returnUrl);
+  if (b?.returnUrl && !extReturn) {
+    return c.json({
+      error: "return_url_not_allowed",
+      message: "FACTORY_RETURN_ORIGINS 에 등록된 오리진만 복귀 주소로 쓸 수 있습니다.",
+    }, 400);
+  }
+  // publish 모드여야 업로드 스코프가 붙는다. analytics 로 연결하면 배포에 못 쓴다.
+  const state = Buffer.from(JSON.stringify({
+    channel: b?.channelUrl ?? "", mode: "publish", return: "/register",
+    ...(extReturn ? { extReturn } : {}),
+  })).toString("base64");
+  return c.json({ url: googleAuthUrl(state, "publish") });
+});
+
+/**
+ * refresh token 직접 등록 (붙이는 쪽이 이미 토큰을 갖고 있을 때).
+ *
+ * ⚠️ **우리 GOOGLE_CLIENT_ID 로 발급된 토큰만 동작한다.** 다른 OAuth 클라이언트로 받은
+ * refresh token 은 우리 client_secret 으로 갱신이 안 된다. 그래서 저장 전에 **실제로 한 번
+ * 갱신해 보고** 실패하면 거절한다 — 나중에 배포 시점에 알면 이미 늦다.
+ */
+app.post("/api/factory/channels", async (c) => {
+  const denied = factoryAuthDenied(c);
+  if (denied) return denied;
+  if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET) {
+    return c.json({ error: "oauth_not_configured" }, 500);
+  }
+  const b = await c.req.json<{ refreshToken?: string; channelUrl?: string }>().catch(() => null);
+  const refreshToken = (b?.refreshToken ?? "").trim();
+  if (!refreshToken) {
+    return c.json({ error: "bad_request", message: "refreshToken 이 필요합니다." }, 400);
+  }
+
+  let accessToken: string;
+  let scope = "";
+  let expiresIn = 3600;
+  try {
+    const res = await fetch("https://oauth2.googleapis.com/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        client_id: GOOGLE_CLIENT_ID,
+        client_secret: GOOGLE_CLIENT_SECRET,
+        refresh_token: refreshToken,
+        grant_type: "refresh_token",
+      }),
+    });
+    if (!res.ok) {
+      return c.json({
+        error: "refresh_token_invalid",
+        message: "이 refresh token 으로 갱신할 수 없습니다. 우리 OAuth 클라이언트로 발급된 토큰이어야 합니다 — /api/factory/channels/connect-url 로 연결해 주세요.",
+        detail: (await res.text()).slice(0, 200),
+      }, 400);
+    }
+    const t = await res.json() as { access_token: string; scope?: string; expires_in?: number };
+    accessToken = t.access_token;
+    scope = t.scope ?? "";
+    expiresIn = t.expires_in ?? 3600;
+  } catch (e) {
+    return c.json({ error: "refresh_failed", message: String(e).slice(0, 200) }, 502);
+  }
+
+  if (!scope.includes("youtube.upload")) {
+    return c.json({
+      error: "scope_insufficient",
+      message: "업로드 권한이 없는 토큰입니다 (youtube.upload 필요).",
+      scope,
+    }, 400);
+  }
+
+  const info = await fetchYtChannelInfo(accessToken);
+  await upsertYouTubeChannel({
+    id: info.channelId,
+    channelId: info.channelId,
+    channelName: info.channelName,
+    channelUrl: b?.channelUrl ?? null,
+    thumbnail: info.thumbnail,
+    subscribers: info.subscribers,
+    refreshToken,
+    accessToken,
+    expiresAt: Date.now() + expiresIn * 1000,
+    scope,
+    email: null,
+    status: "active",
+    connectedAt: Date.now(),
+  });
+  return c.json({
+    ok: true,
+    target: `youtube:${info.channelId}`,
+    channelId: info.channelId,
+    name: info.channelName,
+  });
 });
 
 const oauthCallback = async (c: Context) => {
@@ -3619,6 +3747,12 @@ const oauthCallback = async (c: Context) => {
     });
 
     const params = new URLSearchParams({ success: "1", channelId: channel.channelId, channelName: channel.channelName });
+    // 외부에서 시작한 연결이면 그쪽 화면으로 돌려보낸다 (allowlist 통과분만).
+    const ext = safeExternalReturn((st as any).extReturn);
+    if (ext) {
+      const sep = ext.includes("?") ? "&" : "?";
+      return c.redirect(`${ext}${sep}${params}`);
+    }
     return c.redirect(`${returnTo}?${params}`);
   } catch (err: any) {
     console.error("[oauth/callback]", err);

@@ -48,6 +48,7 @@ steps:
           --set-secrets=JWT_SECRET=stepd-jwt-secret:latest \
           --set-secrets=PUBLIC_URL=stepd-public-url:latest \
           --set-secrets=LAB_WRITE_TOKEN=stepd-lab-write-token:latest \
+          --set-secrets=FACTORY_API_KEY=stepd-factory-api-key:latest \
           --set-secrets=TIKTOK_CLIENT_KEY=stepd-tiktok-client-key:latest \
           --set-secrets=TIKTOK_CLIENT_SECRET=stepd-tiktok-client-secret:latest \
           --add-cloudsql-instances=$_CLOUD_SQL_INSTANCE \

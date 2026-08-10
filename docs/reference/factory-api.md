@@ -46,6 +46,47 @@ x-factory-key: ...
 
 ---
 
+## 1-2) 채널 연결 — 리프레시 토큰 확보
+
+배포하려면 그 채널의 **refresh token** 이 우리 쪽에 있어야 한다. 두 경로가 있다.
+
+### (권장) 연결 URL 발급 → 채널 주인이 동의
+
+```http
+POST /api/factory/channels/connect-url
+x-factory-key: ...
+{ "returnUrl": "https://aena.example/channels/connected" }
+```
+```json
+{ "url": "https://accounts.google.com/o/oauth2/v2/auth?..." }
+```
+
+이 URL 을 채널 주인에게 열어주면 → 동의 → 우리가 refresh token 을 저장 → `returnUrl` 로
+`?success=1&channelId=UC...&channelName=...` 를 붙여 돌려보낸다.
+
+`returnUrl` 은 **`FACTORY_RETURN_ORIGINS` 에 등록된 오리진만** 허용한다(오픈 리다이렉트 방지).
+미등록이면 `400 return_url_not_allowed`.
+
+### (대안) refresh token 직접 등록
+
+```http
+POST /api/factory/channels
+x-factory-key: ...
+{ "refreshToken": "1//0g..." }
+```
+
+> ⚠️ **우리 `GOOGLE_CLIENT_ID` 로 발급된 토큰만 동작한다.** 다른 OAuth 클라이언트로 받은
+> refresh token 은 우리 client_secret 으로 갱신할 수 없다. 그래서 저장 전에 실제로 한 번
+> 갱신해 보고, 실패하면 `400 refresh_token_invalid` 로 거절한다. 업로드 스코프가 없으면
+> `400 scope_insufficient`.
+
+성공하면 바로 `targets` 에 쓸 수 있다:
+```json
+{ "ok": true, "target": "youtube:UCxxx", "channelId": "UCxxx", "name": "채널A" }
+```
+
+---
+
 ## 2) 인제스트 (진입)
 
 ```http
@@ -175,6 +216,7 @@ x-factory-key: ...
 | `FACTORY_HOURLY_LIMIT` | 20 | 시간당 ingest 상한 |
 | `FACTORY_PUBLICIZE_DELAY_MIN` | 10 | private → public 전환 유예(분) |
 | `FACTORY_ALLOWED_ORIGIN` | — | 브라우저에서 직접 부를 때만 필요 (CORS) |
+| `FACTORY_RETURN_ORIGINS` | — | 채널 연결 후 돌아갈 외부 오리진 allowlist (쉼표 구분) |
 | `INTERNAL_API_BASE` | `PUBLIC_URL` | 워커가 렌더 라우트를 부를 주소 |
 
 관련: [../plans/active/factory-api-plan.md](../plans/active/factory-api-plan.md)
