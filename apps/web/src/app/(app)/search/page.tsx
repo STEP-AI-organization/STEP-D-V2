@@ -1,250 +1,227 @@
 "use client";
 
-import { useCallback, useState } from "react";
-import { Search, Loader2, Scissors, Clapperboard, Sparkles } from "lucide-react";
-
-import {
-  searchSegments,
-  logSearchEvent,
-  getStreamUrl,
-  type SearchResponse,
-  type SearchResultCard,
-} from "@/lib/data/api";
-import { PageHeader } from "@/components/ui/page-header";
-import { Card } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { EmptyState } from "@/components/ui/empty-state";
-import { Badge } from "@/components/ui/badge";
-import { useToast } from "@/components/ui/toast";
-
-const SCENE_OPTIONS: { value: string; label: string }[] = [
-  { value: "", label: "전체 장면" },
-  { value: "interview", label: "인터뷰" },
-  { value: "on_scene", label: "현장" },
-];
-
-const SCENE_LABEL: Record<string, string> = { interview: "인터뷰", on_scene: "현장" };
-
-function mmss(sec: number): string {
-  const s = Math.max(0, Math.floor(sec));
-  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
-}
-
-/** 권리 주석 배지 — ⚠️ 로 시작하면 경고 톤, 그 외(확인필요)는 muted. */
-function rightsBadgeClass(text: string): string {
-  return text.startsWith("⚠️")
-    ? "border-amber-500/30 bg-amber-500/10 text-amber-600 dark:text-amber-400"
-    : "border-border bg-muted text-muted-foreground";
-}
-
 /**
- * 결과 카드. "구간 보기"는 재생과 동시에 **클릭 로그**를 남긴다 — 어떤 쿼리에서 몇 위를
- * 실제로 골랐는지가 랭킹 학습의 지도 신호다(core/search_log.py §8).
+ * U15 · 영상 검색 (README §9 · FLOWS F9).
+ *
+ * 이 제품의 목적물은 영상 DB 다 — 쇼츠는 그 위의 질의 하나다.
+ * 자연어 질의 + 날짜 필터 → 구간 카드(회차·시각·근거).
+ *
+ * 권리 배지는 **게이트 어휘로 통일**한다. 검색 결과의 `rightsStatus` 는 파이프라인이 붙인
+ * 힌트지 판정이 아니다 — "확인 필요"라고 적고, 통과 여부를 말하지 않는다.
+ * 게이트는 미디어가 된 뒤에 사람이 등록한 이슈로만 걸린다(F3).
  */
-function ResultCard({ r, rank, queryId }: { r: SearchResultCard; rank: number; queryId?: string }) {
-  const rights = Object.entries(r.rightsStatus ?? {});
-  const { toast: push } = useToast();
+import Link from "next/link";
+import { useCallback, useEffect, useRef, useState } from "react";
 
-  const open = useCallback(async () => {
-    logSearchEvent({
-      event: "click",
-      queryId,
-      segmentId: r.segmentId,
-      mediaId: r.mediaId,
-      rank,
-      start: r.start,
-      end: r.end,
-    });
-    try {
-      const url = await getStreamUrl(r.mediaId);
-      // #t=start,end — 브라우저 미디어 프래그먼트. 구간만 재생된다.
-      window.open(`${url}#t=${r.start.toFixed(2)},${r.end.toFixed(2)}`, "_blank", "noopener");
-    } catch (e) {
-      push({ tone: "error", title: "재생 실패", description: e instanceof Error ? e.message : String(e) });
-    }
-  }, [r, rank, queryId, push]);
-
-  return (
-    <Card className="p-4">
-      <div className="flex items-start justify-between gap-3">
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="font-mono text-sm font-semibold text-foreground">
-            {mmss(r.start)}–{mmss(r.end)}
-          </span>
-          {r.duration != null && (
-            <span className="text-xs text-muted-foreground">{Math.round(r.duration)}초</span>
-          )}
-          {r.isShort && (
-            <Badge variant="accent" className="gap-1">
-              <Scissors className="size-3" /> 쇼츠
-            </Badge>
-          )}
-          {r.sceneType && <Badge variant="secondary">{SCENE_LABEL[r.sceneType] ?? r.sceneType}</Badge>}
-        </div>
-        <div className="flex shrink-0 items-center gap-2">
-          <Button variant="ghost" size="sm" onClick={open}>구간 보기</Button>
-          <span className="font-mono text-[11px] text-muted-foreground" title={`bm25 ${r.lex.toFixed(2)} · cos ${r.vec.toFixed(3)}`}>
-            {r.score.toFixed(4)}
-          </span>
-        </div>
-      </div>
-
-      {r.characters?.length > 0 && (
-        <div className="mt-2 flex flex-wrap gap-1.5">
-          {r.characters.map((c) => (
-            <Badge key={c} variant="outline">{c}</Badge>
-          ))}
-        </div>
-      )}
-
-      {r.summary && <p className="mt-2 text-sm leading-relaxed text-foreground">{r.summary}</p>}
-      {r.dialogue && (
-        <p className="mt-1.5 line-clamp-2 text-[13px] leading-relaxed text-muted-foreground">“{r.dialogue}”</p>
-      )}
-
-      {rights.length > 0 && (
-        <div className="mt-3 flex flex-wrap gap-1.5 border-t border-border pt-3">
-          {rights.map(([k, v]) => (
-            <span key={k} className={`inline-flex items-center rounded-md border px-2 py-0.5 text-[11px] font-medium ${rightsBadgeClass(v)}`}>
-              {v}
-            </span>
-          ))}
-        </div>
-      )}
-    </Card>
-  );
-}
+import { useAppData } from "@/lib/data/store";
+import { searchSegments, type SearchResponse, type SearchResultCard } from "@/lib/data/api";
+import { fmtTime } from "@/lib/gate-ui";
+import { cn } from "@/lib/utils";
 
 export default function SearchPage() {
-  const { toast: push } = useToast();
+  const { programs, media } = useAppData();
+
   const [q, setQ] = useState("");
-  const [sceneType, setSceneType] = useState("");
-  const [onlyShorts, setOnlyShorts] = useState(false);
-  const [allowSpoiler, setAllowSpoiler] = useState(false);
-  const [loading, setLoading] = useState(false);
+  const [programId, setProgramId] = useState("");
+  const [from, setFrom] = useState("");
+  const [to, setTo] = useState("");
+  const [onlyShorts, setOnlyShorts] = useState<boolean | null>(null);
   const [res, setRes] = useState<SearchResponse | null>(null);
-  const [searched, setSearched] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
 
   const run = useCallback(async () => {
     const query = q.trim();
     if (!query) return;
-    setLoading(true);
-    setSearched(true);
+    abortRef.current?.abort();
+    const ac = new AbortController();
+    abortRef.current = ac;
+    setBusy(true);
     try {
-      const r = await searchSegments({
-        q: query,
-        sceneType: sceneType || undefined,
-        isShort: onlyShorts ? true : undefined,
-        allowSpoiler,
-        topK: 30,
-      });
+      const r = await searchSegments(
+        {
+          q: query,
+          program: programId || undefined,
+          airedFrom: from || undefined,
+          airedTo: to || undefined,
+          ...(onlyShorts != null ? { isShort: onlyShorts } : {}),
+          topK: 30,
+        },
+        ac.signal,
+      );
       setRes(r);
-    } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e);
+      setError(null);
+    } catch (err) {
+      if ((err as Error)?.name === "AbortError") return;
       setRes(null);
-      push({ tone: "error", title: "검색 실패", description: msg });
+      setError(err instanceof Error ? err.message : String(err));
     } finally {
-      setLoading(false);
+      setBusy(false);
     }
-  }, [q, sceneType, onlyShorts, allowSpoiler, push]);
+  }, [q, programId, from, to, onlyShorts]);
 
-  const parsed = res?.parsed;
+  useEffect(() => () => abortRef.current?.abort(), []);
 
   return (
-    <div>
-      <PageHeader
-        eyebrow="영상 검색"
-        title="구간 검색"
-        description="자연어로 원하는 순간을 찾는다 — 잘라서 바로 쓸 수 있는 구간(beat) 단위. 인물·장면유형·방영일 필터는 쿼리에서 자동으로 뽑고, 못 쓰는 구간(스포일러·권리)은 걸러진다."
-      />
+    <div className="mx-auto flex max-w-[1240px] flex-col gap-[14px]">
+      {/* ── 질의 ─────────────────────────────────────────────────────────── */}
+      <div className="flex flex-wrap items-center gap-[9px]">
+        <input
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+          onKeyDown={(e) => { if (e.key === "Enter") void run(); }}
+          placeholder="찾고 싶은 장면을 문장으로 (예: 지난달 방송에서 출연자가 정색하며 판을 뒤집는 순간)"
+          className="sd-input min-w-[320px] flex-1"
+          aria-label="검색어"
+        />
+        <button type="button" className="sd-btn sd-btn-primary" disabled={busy || !q.trim()} onClick={run}>
+          {busy ? "찾는 중…" : "검색"}
+        </button>
+      </div>
 
-      {/* 검색 바 */}
-      <Card className="mb-3 p-3">
-        <div className="flex flex-col gap-3">
-          <div className="flex items-center gap-2">
-            <div className="relative flex-1">
-              <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-              <input
-                value={q}
-                onChange={(e) => setQ(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter") run(); }}
-                placeholder="예: 23기 영철 인터뷰 · 작년쯤 나온 요리 대결 · A랑 B 싸우는 씬"
-                className="h-10 w-full rounded-lg border border-border bg-background pl-9 pr-3 text-sm outline-none focus:border-foreground/25"
-              />
-            </div>
-            <Button onClick={run} disabled={loading || !q.trim()}>
-              {loading ? <Loader2 className="size-4 animate-spin" /> : <Search className="size-4" />}
-              검색
-            </Button>
-          </div>
+      <div className="flex flex-wrap items-center gap-[9px]">
+        <select value={programId} onChange={(e) => setProgramId(e.target.value)} className="sd-input">
+          <option value="">전 프로그램</option>
+          {programs.map((p) => <option key={p.id} value={p.id}>{p.title}</option>)}
+        </select>
 
-          <div className="flex flex-wrap items-center gap-3">
-            <select
-              value={sceneType}
-              onChange={(e) => setSceneType(e.target.value)}
-              className="h-8 rounded-md border border-border bg-background px-2 text-sm"
+        <label className="flex items-center gap-1.5 text-[11.5px]" style={{ color: "var(--sd-mut)" }}>
+          방영일
+          <input type="date" value={from} onChange={(e) => setFrom(e.target.value)} className="sd-input" />
+          <span>–</span>
+          <input type="date" value={to} onChange={(e) => setTo(e.target.value)} className="sd-input" />
+        </label>
+
+        <div className="flex gap-[3px]">
+          {([[null, "전체"], [true, "숏폼"], [false, "롱폼"]] as const).map(([v, label]) => (
+            <button
+              key={String(v)}
+              type="button"
+              className={cn("sd-btn", onlyShorts === v && "sd-btn--on")}
+              onClick={() => setOnlyShorts(v)}
             >
-              {SCENE_OPTIONS.map((o) => (
-                <option key={o.value} value={o.value}>{o.label}</option>
-              ))}
-            </select>
-            <label className="flex items-center gap-1.5 text-sm text-muted-foreground">
-              <input type="checkbox" checked={onlyShorts} onChange={(e) => setOnlyShorts(e.target.checked)} />
-              쇼츠로 터진 구간만
-            </label>
-            <label className="flex items-center gap-1.5 text-sm text-muted-foreground">
-              <input type="checkbox" checked={allowSpoiler} onChange={(e) => setAllowSpoiler(e.target.checked)} />
-              스포일러 포함
-            </label>
-          </div>
+              {label}
+            </button>
+          ))}
         </div>
-      </Card>
 
-      {/* 파싱 결과 (투명성) */}
-      {parsed && (
-        <div className="mb-3 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-          <Sparkles className="size-3.5 text-brand" />
-          <span>파싱:</span>
-          {parsed.charactersUsed.length > 0 && (
-            <span>인물 <b className="text-foreground">{parsed.charactersUsed.join(", ")}</b></span>
+        {res && (
+          <span className="sd-mono ml-auto text-[11px]" style={{ color: "var(--sd-mut)" }}>
+            {res.count}건 · {res.embedded ? "의미+키워드" : "키워드 단독"}
+          </span>
+        )}
+      </div>
+
+      {/* 서버가 질의를 어떻게 쪼갰는지 — 결과가 이상할 때 여기부터 본다 */}
+      {res && (res.parsed.characters.length > 0 || res.parsed.sceneType || res.parsed.airedFrom) && (
+        <div
+          className="rounded-[4px] px-3 py-2 text-[11px]"
+          style={{ border: "1px solid var(--sd-border)", background: "var(--sd-card-sub)", color: "var(--sd-mut)" }}
+        >
+          질의 해석 —{" "}
+          {res.parsed.characters.length > 0 && <>인물 {res.parsed.characters.join(", ")} · </>}
+          {res.parsed.sceneType && <>장면 {res.parsed.sceneType} · </>}
+          {res.parsed.airedFrom && <>기간 {res.parsed.airedFrom}~{res.parsed.airedTo ?? ""} · </>}
+          의미 “{res.parsed.semantic || q}”
+          {!res.embedded && (
+            <> · <b style={{ color: "var(--sd-warn)" }}>임베딩 실패로 키워드만 사용했습니다</b></>
           )}
-          {parsed.sceneType && <span>장면 <b className="text-foreground">{SCENE_LABEL[parsed.sceneType] ?? parsed.sceneType}</b></span>}
-          {(parsed.airedFrom || parsed.airedTo) && (
-            <span>방영 <b className="text-foreground">{parsed.airedFrom ?? "…"}~{parsed.airedTo ?? "…"}</b></span>
-          )}
-          {parsed.isShort && <span className="text-foreground">쇼츠</span>}
-          {parsed.semantic && <span>의미 “<span className="text-foreground">{parsed.semantic}</span>”</span>}
-          <span className="ml-auto">{res.embedded ? "의미검색 ON" : "키워드만"}</span>
         </div>
       )}
 
-      {/* 결과 */}
-      {!searched ? (
-        <EmptyState
-          icon={Search}
-          title="찾을 순간을 입력하세요"
-          description="방송사 실무자 쿼리는 대개 필터 — 프로그램·회차·방영일·출연자. 그 위에 상황·대사를 얹으면 의미검색이 순위를 매깁니다."
-        />
-      ) : loading ? (
-        <div className="flex items-center justify-center gap-2 py-16 text-sm text-muted-foreground">
-          <Loader2 className="size-4 animate-spin" /> 검색 중…
+      {error && (
+        <div
+          className="rounded-[4px] px-3 py-2 text-[11.5px]"
+          style={{ border: "1px solid var(--sd-danger-border)", background: "var(--sd-danger-bg)", color: "var(--sd-danger-strong)" }}
+        >
+          검색에 실패했습니다 ({error}).
         </div>
-      ) : res && res.results.length > 0 ? (
-        <>
-          <div className="mb-2 text-xs text-muted-foreground">{res.count}개 구간</div>
-          <div className="grid gap-2.5">
-            {res.results.map((r, i) => (
-              <ResultCard key={r.segmentId} r={r} rank={i + 1} queryId={res.queryId} />
-            ))}
-          </div>
-        </>
+      )}
+
+      {/* ── 결과 ─────────────────────────────────────────────────────────── */}
+      {!res ? (
+        <div
+          className="sd-ph grid min-h-[200px] place-items-center rounded-[6px] px-6 text-center"
+          style={{ border: "1px dashed var(--sd-border)" }}
+        >
+          분석이 끝난 회차의 구간을 문장으로 찾습니다 — 종영작 아카이브도 여기서 뒤집니다
+        </div>
+      ) : res.results.length === 0 ? (
+        <div
+          className="sd-ph grid min-h-[160px] place-items-center rounded-[6px] px-6 text-center"
+          style={{ border: "1px dashed var(--sd-border)" }}
+        >
+          조건에 맞는 구간이 없습니다 — 기간이나 프로그램을 넓혀 보세요
+        </div>
       ) : (
-        <EmptyState
-          icon={Clapperboard}
-          title="결과 없음"
-          description="필터가 너무 좁거나 아직 인덱싱된 구간이 없을 수 있습니다. 스포일러 포함을 켜거나 장면유형을 넓혀보세요."
-        />
+        <div className="flex flex-col gap-1.5">
+          {res.results.map((r) => (
+            <ResultCard
+              key={r.segmentId}
+              hit={r}
+              episodeLabel={mediaLabel(media, r.mediaId)}
+            />
+          ))}
+        </div>
       )}
+    </div>
+  );
+}
+
+function mediaLabel(media: { id: string; title?: string }[], mediaId: string): string {
+  return media.find((m) => m.id === mediaId)?.title ?? mediaId;
+}
+
+function ResultCard({ hit, episodeLabel }: { hit: SearchResultCard; episodeLabel: string }) {
+  // 파이프라인이 붙인 권리 주석은 **판정이 아니다.** 게이트 어휘로 "확인 필요"까지만 말한다.
+  const rights = Object.values(hit.rightsStatus ?? {});
+
+  return (
+    <div className="sd-card flex flex-col gap-1.5 px-3 py-2.5">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="sd-mono text-[11.5px]" style={{ color: "var(--sd-fg)" }}>
+          {fmtTime(hit.start)} – {fmtTime(hit.end)}
+        </span>
+        <span className="sd-tag sd-mono">{Math.round(hit.duration ?? hit.end - hit.start)}초</span>
+        {hit.sceneType && <span className="sd-tag">{hit.sceneType}</span>}
+        {hit.isShort && <span className="sd-tag">숏폼</span>}
+        {hit.characters.length > 0 && <span className="sd-tag">{hit.characters.join(", ")}</span>}
+        <span className="sd-mono ml-auto text-[10.5px]" style={{ color: "var(--sd-mut)" }}>
+          적합도 {(hit.score * 100).toFixed(0)}
+          {hit.highlightScore != null && ` · 하이라이트 ${hit.highlightScore}`}
+        </span>
+      </div>
+
+      <div className="truncate text-[10.5px]" style={{ color: "var(--sd-mut)" }}>{episodeLabel}</div>
+
+      {hit.summary && (
+        <div className="text-[12.5px] leading-snug" style={{ color: "var(--sd-fg)" }}>{hit.summary}</div>
+      )}
+      {hit.dialogue && (
+        <div className="line-clamp-2 text-[11.5px] leading-snug" style={{ color: "var(--sd-mut)" }}>
+          “{hit.dialogue}”
+        </div>
+      )}
+
+      <div className="flex flex-wrap items-center gap-2">
+        {rights.length > 0 && (
+          <>
+            {rights.map((label, i) => (
+              <span key={i} className="sd-tag sd-tag--warn">{label}</span>
+            ))}
+            <span className="text-[10px]" style={{ color: "var(--sd-mut)" }}>
+              — 파이프라인이 붙인 참고 표시입니다. 실제 게이트는 미디어로 만든 뒤 사람이 등록한 이슈로 걸립니다.
+            </span>
+          </>
+        )}
+        <Link
+          href={`/media?media=${hit.mediaId}&t=${Math.floor(hit.start)}`}
+          className="sd-btn ml-auto"
+        >
+          미디어에서 열기
+        </Link>
+      </div>
     </div>
   );
 }
