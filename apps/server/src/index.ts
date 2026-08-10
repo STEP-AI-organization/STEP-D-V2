@@ -138,6 +138,11 @@ import {
   listPrefix,
 } from "./storage-gcs.ts";
 import { castPrefix, stylePrefix } from "./thumbnail-assets.ts";
+import {
+  createJob as createFactoryJob,
+  findByIdempotencyKey as findFactoryJobByKey,
+  factoryEnabled,
+} from "./factory.ts";
 
 // A stray async error (e.g. a GCS stream 'error' after the response started, or a background
 // promise rejecting) must not kill the whole Cloud Run instance mid-request — same guard the
@@ -4207,6 +4212,90 @@ app.post("/api/media/:id/thumbnail", async (c) => {
     candidates: body?.candidates ?? 3,
   }, { dedupeKey: `thumbnail.generate:${mediaId}` });
   return c.json({ ok: true, jobId });
+});
+
+// ── 콘텐츠 공장 (Factory API) ─────────────────────────────────────────────────
+// 소비자는 AENA(사내). 소스 영상 하나 → 분석·쇼츠·클립·YouTube 배포까지 자동 완주.
+// 서버는 잡을 만들기만 하고, 진행은 factory.orchestrate 상태기계가 워커에서 굴린다.
+// 계획·결정 근거: docs/plans/active/factory-api-plan.md
+
+/** 진입. 즉시 202 로 jobId 만 준다 — 완주까지 수십 분 걸리므로 붙잡지 않는다. */
+app.post("/api/factory/ingest", async (c) => {
+  // 킬 스위치. 잘못된 env 의 실패 모드가 "안 돌아감"이지 "실수로 배포됨"이 아니게.
+  if (!factoryEnabled()) {
+    return c.json({
+      error: "factory_disabled",
+      message: "FACTORY_ENABLED 가 켜져 있지 않습니다.",
+    }, 503);
+  }
+
+  const b = await c.req.json<{
+    sourceUrl?: string; programId?: string; targets?: string[];
+    policy?: Record<string, unknown>; idempotencyKey?: string;
+  }>().catch(() => null);
+
+  const sourceUrl = (b?.sourceUrl ?? "").trim();
+  const programId = (b?.programId ?? "").trim();
+  const targets = Array.isArray(b?.targets) ? b!.targets.filter(Boolean) : [];
+  if (!sourceUrl || !programId || targets.length === 0) {
+    return c.json({
+      error: "bad_request",
+      message: "sourceUrl · programId · targets 가 필요합니다.",
+    }, 400);
+  }
+  // 지금 실제로 송출되는 채널은 YouTube 뿐. 나머지를 조용히 무시하면 "배포됐다"고
+  // 착각하게 되므로 여기서 거절한다.
+  const unsupported = targets.filter((t) => !t.startsWith("youtube:"));
+  if (unsupported.length) {
+    return c.json({
+      error: "unsupported_target",
+      message: `현재 YouTube 만 실송출합니다: ${unsupported.join(", ")}`,
+    }, 400);
+  }
+  if (!(await getEntity("program", programId))) {
+    return c.json({ error: "program_not_found" }, 404);
+  }
+
+  // 같은 요청이 두 번 와도 재작업하지 않는다 — 이중 배포가 가장 비싼 사고다.
+  const key = (b?.idempotencyKey ?? "").trim();
+  const existing = key ? await findFactoryJobByKey(key) : undefined;
+  if (existing) return c.json({ jobId: existing.id, status: existing.state, reused: true }, 202);
+
+  const job = await createFactoryJob({
+    sourceUrl, programId, targets,
+    policy: (b?.policy ?? {}) as any,
+    idempotencyKey: key || undefined,
+  });
+  return c.json({ jobId: job.id, status: job.state }, 202);
+});
+
+/** 폴링용 상태 조회. 웹훅은 후순위 — 내부 소비자라 폴링으로 시작한다. */
+app.get("/api/factory/jobs/:id", async (c) => {
+  const job = await getEntity<any>("factoryJob", c.req.param("id"));
+  if (!job) return c.json({ error: "not_found" }, 404);
+
+  const clips = await Promise.all(
+    (job.clipIds ?? []).map((id: string) => getEntity<any>("clip", id)));
+  return c.json({
+    jobId: job.id,
+    status: job.state,
+    programId: job.programId,
+    mediaId: job.mediaId ?? null,
+    note: job.note ?? null,
+    error: job.error ?? null,
+    dryRun: Boolean(job.policy?.dryRun),
+    clips: clips.filter(Boolean).map((cl: any) => ({
+      clipId: cl.id,
+      title: cl.title,
+      durationSec: cl.durationSec,
+      rendered: Boolean(cl.rendered),
+      distributions: (cl.distributions ?? []).map((d: any) => ({
+        channel: d.channel, status: d.status, externalId: d.externalId ?? null,
+      })),
+    })),
+    createdAt: job.createdAt,
+    updatedAt: job.updatedAt,
+  });
 });
 
 app.get("/api/queue/stats", async (c) => c.json(await queueStats()));

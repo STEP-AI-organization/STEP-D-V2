@@ -29,6 +29,11 @@ export type JobType =
   | "match.learn"
   // Distribution: resumable-upload a rendered clip to a connected YouTube channel.
   | "distribution.publish"
+  // 콘텐츠 공장: 소스 영상 하나 → 분석·채택·렌더·배포까지 완주시키는 상태기계.
+  // 한 걸음 전진하고 재큐한다 — 16분짜리 분석을 기다리며 워커를 붙잡지 않기 위해.
+  | "factory.orchestrate"
+  // 공장: private 로 올린 영상을 유예 후 공개로 전환 (되돌릴 시간을 벌기 위한 장치).
+  | "factory.publicize"
   // 썸네일: 프로그램 채널의 기존 썸네일을 모아 스타일 프로파일을 만든다 (프로그램당 1회성).
   | "thumbnail.style"
   // 썸네일: 회차 1건 → 후보 N장. 인물은 사람이 등록한 사진에서만 가져온다.

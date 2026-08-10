@@ -813,3 +813,33 @@ export async function fetchVideoCategories(
       assignable: it.snippet?.assignable ?? false,
     }));
 }
+
+
+/**
+ * 이미 올라간 영상의 공개 범위 변경 (videos.update · part=status).
+ *
+ * 콘텐츠 공장이 쓴다 — private 로 올리고 유예 뒤 public 으로 바꾼다. 그 유예가
+ * "잘못 나갔을 때 되돌릴 시간"이다. 되돌리기 = 전환 잡을 취소하는 것.
+ * status 파트만 보내면 나머지(제목·설명)는 서버가 유지한다.
+ */
+export async function updateVideoPrivacy(
+  accessToken: string,
+  videoId: string,
+  privacyStatus: "public" | "unlisted" | "private",
+): Promise<void> {
+  const res = await fetch(
+    "https://www.googleapis.com/youtube/v3/videos?part=status",
+    {
+      method: "PUT",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ id: videoId, status: { privacyStatus } }),
+    },
+  );
+  if (!res.ok) {
+    throw new YouTubeApiError(res.status,
+      `videos.update 실패 (${res.status}): ${(await res.text()).slice(0, 200)}`);
+  }
+}
