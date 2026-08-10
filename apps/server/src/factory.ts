@@ -91,6 +91,33 @@ async function save(job: FactoryJob): Promise<FactoryJob> {
   return next;
 }
 
+/**
+ * 지정된 타깃이 실제로 배포 가능한 채널인지 검증한다.
+ *
+ * ingest 시점에 걸러야 한다 — 배포 시점에 알면 워커가 잡을 조용히 버리고(loadActiveChannel
+ * 이 null 이면 경고만 남기고 drop) 공장은 "배포됨"으로 끝나 버린다. 그게 가장 나쁜 실패다.
+ */
+export async function validateTargets(targets: string[]): Promise<string[]> {
+  const { listYouTubeChannels } = await import("./db-pg.ts");
+  const channels = await listYouTubeChannels();
+  const problems: string[] = [];
+
+  for (const t of targets) {
+    if (!t.startsWith("youtube:")) { problems.push(`${t}: YouTube 만 실송출합니다`); continue; }
+    const id = t.slice("youtube:".length).trim();
+    const ch = channels.find((c: any) => c.channelId === id);
+    if (!ch) { problems.push(`${t}: 연동되지 않은 채널`); continue; }
+    if ((ch as any).status === "revoked" || !(ch as any).refreshToken) {
+      problems.push(`${t}: 연결이 끊겼습니다 (재인증 필요)`); continue;
+    }
+    const scope = String((ch as any).scope ?? "");
+    if (!scope.includes("youtube.upload")) {
+      problems.push(`${t}: 업로드 권한 없음 (분석 전용으로 연결됨 — 게시 모드로 재연결 필요)`);
+    }
+  }
+  return problems;
+}
+
 /** 같은 요청이 두 번 오면 기존 잡을 돌려준다 — 재작업도 이중 배포도 하지 않는다. */
 export async function findByIdempotencyKey(key: string): Promise<FactoryJob | undefined> {
   if (!key) return undefined;
@@ -250,17 +277,23 @@ export async function advance(factoryJobId: string): Promise<{ job: FactoryJob; 
 
     // ── 배포 (YouTube 전용) ──────────────────────────────────────────────────
     case "publishing": {
-      const yt = job.targets.find((t) => t.startsWith("youtube:"));
-      if (!yt) return await fail("YouTube 타깃이 없다 (현재 YouTube 만 실송출)");
-      const channelId = yt.slice("youtube:".length);
+      // **지정한 채널로만 나간다.** 여기서 채널을 추론하거나 폴백하지 않는다 —
+      // "하나뿐이니 거기로" 같은 추측이 잘못된 채널 배포를 만든다.
+      const channelIds = job.targets
+        .filter((t) => t.startsWith("youtube:"))
+        .map((t) => t.slice("youtube:".length).trim())
+        .filter(Boolean);
+      if (channelIds.length === 0) return await fail("YouTube 타깃이 없다 (현재 YouTube 만 실송출)");
 
-      for (const clipId of job.clipIds) {
-        await enqueue("distribution.publish", {
-          clipId,
-          channelId,
-          // 기본은 private — 유예 뒤 공개로 바꾼다. 잘못 나갔을 때 되돌릴 시간을 번다.
-          privacy: job.policy.publishPublic ? "public" : "private",
-        }, { dedupeKey: `distribution.publish:${clipId}` });
+      for (const channelId of channelIds) {
+        for (const clipId of job.clipIds) {
+          await enqueue("distribution.publish", {
+            clipId,
+            channelId,
+            // 기본은 private — 유예 뒤 공개로 바꾼다. 잘못 나갔을 때 되돌릴 시간을 번다.
+            privacy: job.policy.publishPublic ? "public" : "private",
+          }, { dedupeKey: `distribution.publish:${clipId}:${channelId}` });
+        }
       }
       job = await save({ ...job, state: job.policy.publishPublic ? "done" : "publicizing" });
       if (job.state === "done") return { job, retryInMs: null };

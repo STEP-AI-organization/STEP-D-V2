@@ -141,6 +141,7 @@ import { castPrefix, stylePrefix } from "./thumbnail-assets.ts";
 import {
   createJob as createFactoryJob,
   findByIdempotencyKey as findFactoryJobByKey,
+  validateTargets as validateFactoryTargets,
   factoryEnabled,
 } from "./factory.ts";
 
@@ -4243,13 +4244,15 @@ app.post("/api/factory/ingest", async (c) => {
       message: "sourceUrl · programId · targets 가 필요합니다.",
     }, 400);
   }
-  // 지금 실제로 송출되는 채널은 YouTube 뿐. 나머지를 조용히 무시하면 "배포됐다"고
-  // 착각하게 되므로 여기서 거절한다.
-  const unsupported = targets.filter((t) => !t.startsWith("youtube:"));
-  if (unsupported.length) {
+  // **지정한 채널로만 나간다.** 여기서 검증하지 않으면 배포 시점에 워커가 잡을 조용히
+  // 버리고(채널 없음 → 경고 후 drop) 공장은 "배포됨"으로 끝난다. 그게 가장 나쁜 실패다.
+  // 미지원 채널·미연동·권한 없음을 전부 여기서 거절한다.
+  const targetProblems = await validateFactoryTargets(targets);
+  if (targetProblems.length) {
     return c.json({
-      error: "unsupported_target",
-      message: `현재 YouTube 만 실송출합니다: ${unsupported.join(", ")}`,
+      error: "invalid_target",
+      message: "배포 대상 채널을 확인해 주세요.",
+      problems: targetProblems,
     }, 400);
   }
   if (!(await getEntity("program", programId))) {
@@ -4267,6 +4270,31 @@ app.post("/api/factory/ingest", async (c) => {
     idempotencyKey: key || undefined,
   });
   return c.json({ jobId: job.id, status: job.state }, 202);
+});
+
+/**
+ * 지정 가능한 배포 대상 목록. AENA 가 targets 에 무엇을 넣을 수 있는지 알려면 필요하다.
+ * 업로드 권한이 없는 채널은 `canPublish:false` 로 함께 보여준다 — 목록에서 빼버리면
+ * "왜 내 채널이 안 보이지"에서 막힌다.
+ */
+app.get("/api/factory/targets", async (c) => {
+  const channels = await listYouTubeChannels();
+  return c.json({
+    targets: channels.map((ch) => {
+      const scope = String((ch as any).scope ?? "");
+      const live = ch.status !== "revoked" && Boolean(ch.refreshToken);
+      const canPublish = live && scope.includes("youtube.upload");
+      return {
+        target: `youtube:${ch.channelId}`,
+        channelId: ch.channelId,
+        name: ch.channelName,
+        canPublish,
+        reason: canPublish ? null
+          : !live ? "연결 끊김 (재인증 필요)"
+          : "업로드 권한 없음 (게시 모드로 재연결 필요)",
+      };
+    }),
+  });
 });
 
 /** 폴링용 상태 조회. 웹훅은 후순위 — 내부 소비자라 폴링으로 시작한다. */
