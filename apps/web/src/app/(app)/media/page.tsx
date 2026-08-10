@@ -22,6 +22,7 @@ import { roleOf } from "@/lib/roles";
 import { fetchGateBatch, type GateResult, type GateState, type RightsIssue } from "@/lib/data/api";
 import { useAppData } from "@/lib/data/store";
 import { GATE_LABEL, GATE_TAG, ISSUE_KIND_LABEL, fmtTime } from "@/lib/gate-ui";
+import { clipThumbSrc } from "@/lib/media-url";
 import type { Clip } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -248,6 +249,7 @@ function MediaRow({
   episodeNumber?: number;
 }) {
   const state: GateState = gate?.state ?? "review_pending";
+  const thumb = clipThumbSrc(clip);
   const live = issues.filter((i) => i.resolution !== "resolved");
   const isShort = clip.aspectRatio?.startsWith("9:16");
 
@@ -257,9 +259,9 @@ function MediaRow({
         <input type="checkbox" checked={checked} onChange={onToggle} aria-label="선택" />
 
         <div className="sd-ph h-[44px] w-[78px] shrink-0 overflow-hidden rounded-[3px]">
-          {clip.thumbnailUrl ? (
+          {thumb ? (
             // eslint-disable-next-line @next/next/no-img-element
-            <img src={clip.thumbnailUrl} alt="" className="size-full object-cover" />
+            <img src={thumb} alt="" loading="lazy" className="size-full object-cover" />
           ) : (
             <span className="text-[9px]">썸네일</span>
           )}

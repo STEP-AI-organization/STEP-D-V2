@@ -16,6 +16,7 @@ import { useMemo } from "react";
 
 import { UploadVideoButton } from "@/components/upload-video-dialog";
 import { PIPELINE_STAGE_LABELS } from "@/lib/constants";
+import { clipThumbSrc, mediaThumbSrc } from "@/lib/media-url";
 import { useAppData } from "@/lib/data/store";
 import {
   PROGRAM_STATUS_LABEL,
@@ -36,7 +37,7 @@ const TRACK_LABEL: Record<string, string> = { variety: "예능 트랙", drama: "
 export default function ProgramHomePage() {
   const params = useParams<{ id: string }>();
   const id = params?.id ?? "";
-  const { programs, episodes, clips, loading } = useAppData();
+  const { programs, episodes, clips, media, loading } = useAppData();
 
   const program = programs.find((p) => p.id === id);
 
@@ -166,7 +167,11 @@ export default function ProgramHomePage() {
           {eps.length > 0 ? (
             <div className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(220px,1fr))]">
               {eps.slice(0, 8).map((e) => (
-                <EpisodeCard key={e.id} episode={e} />
+                <EpisodeCard
+                  key={e.id}
+                  episode={e}
+                  thumbMediaId={media.find((m) => m.episodeId === e.id && m.role === "master")?.id}
+                />
               ))}
             </div>
           ) : (
@@ -413,7 +418,8 @@ function UpcomingEmpty({ programId }: { programId: string }) {
   );
 }
 
-function EpisodeCard({ episode }: { episode: Episode }) {
+function EpisodeCard({ episode, thumbMediaId }: { episode: Episode; thumbMediaId?: string }) {
+  const thumb = mediaThumbSrc(thumbMediaId);
   const p = episode.pipeline;
   const tone =
     p?.stageStatus === "error" ? "sd-tag sd-tag--danger" : p?.stageStatus === "progress"
@@ -423,7 +429,12 @@ function EpisodeCard({ episode }: { episode: Episode }) {
   return (
     <Link href={`/episodes/${episode.id}`} className="sd-card flex flex-col overflow-hidden">
       <div className="sd-ph h-[92px]" style={{ borderBottom: "1px solid var(--sd-border)" }}>
-        회차 썸네일
+        {thumb ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={thumb} alt="" loading="lazy" className="size-full object-cover" />
+        ) : (
+          "회차 썸네일"
+        )}
       </div>
       <div className="flex flex-col gap-1.5 px-2.5 py-2.5">
         <div className="text-[12.5px] font-semibold" style={{ color: "var(--sd-fg)" }}>
@@ -452,12 +463,13 @@ function stageLabel(e: Episode): string {
 
 function MediaCard({ clip }: { clip: Clip }) {
   const shortForm = clip.aspectRatio?.startsWith("9:16");
+  const thumb = clipThumbSrc(clip);
   return (
     <Link href={`/editor/${clip.id}`} className="sd-card flex flex-col overflow-hidden">
       <div className="sd-ph h-[100px]" style={{ borderBottom: "1px solid var(--sd-border)" }}>
-        {clip.thumbnailUrl ? (
+        {thumb ? (
           // eslint-disable-next-line @next/next/no-img-element
-          <img src={clip.thumbnailUrl} alt="" className="size-full object-cover" />
+          <img src={thumb} alt="" loading="lazy" className="size-full object-cover" />
         ) : (
           "미디어 썸네일"
         )}

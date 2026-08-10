@@ -217,7 +217,12 @@ function EpisodeAnalysis({
     <>
       {/* 원본 플레이어 + 회차 상태 */}
       <div className="sd-card overflow-hidden">
-        <div style={{ borderBottom: "1px solid var(--sd-border)", background: "#000" }}>
+        {/* 16:9 프레임을 폭에 맞춰 잡는다. 프로토타입의 266px 는 목업 자리 높이였지
+            실제 영상의 제약이 아니다 — 고정 높이로 두면 넓은 화면에서 위아래 검은 띠만 커진다. */}
+        <div
+          className="relative w-full"
+          style={{ aspectRatio: "16 / 9", maxHeight: "58vh", background: "#000", borderBottom: "1px solid var(--sd-border)" }}
+        >
           {videoSrc ? (
             <video
               ref={videoRef}
@@ -225,10 +230,11 @@ function EpisodeAnalysis({
               src={videoSrc}
               controls
               playsInline
-              className="mx-auto max-h-[266px] w-full object-contain"
+              preload="metadata"
+              className="absolute inset-0 size-full object-contain"
             />
           ) : (
-            <div className="sd-ph h-[266px]">
+            <div className="sd-ph absolute inset-0 grid place-items-center text-center">
               {master ? (videoError ?? "원본을 불러오는 중…") : "이 회차의 원본 파일이 없습니다"}
             </div>
           )}

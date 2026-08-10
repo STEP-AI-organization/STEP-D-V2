@@ -22,6 +22,7 @@ import {
 } from "@/lib/data/api";
 import { useAppData } from "@/lib/data/store";
 import { fmtTime } from "@/lib/gate-ui";
+import { clipThumbSrc } from "@/lib/media-url";
 import type { Clip } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -136,9 +137,9 @@ export default function ThumbnailsPage() {
                   style={on ? { outline: "2px solid var(--sd-accent)", outlineOffset: -1 } : undefined}
                 >
                   <div className="sd-ph h-[112px]" style={{ borderBottom: "1px solid var(--sd-border)" }}>
-                    {c.thumbnailUrl ? (
+                    {clipThumbSrc(c) ? (
                       // eslint-disable-next-line @next/next/no-img-element
-                      <img src={c.thumbnailUrl} alt="" className="size-full object-cover" />
+                      <img src={clipThumbSrc(c)} alt="" loading="lazy" className="size-full object-cover" />
                     ) : (
                       "썸네일 없음"
                     )}
