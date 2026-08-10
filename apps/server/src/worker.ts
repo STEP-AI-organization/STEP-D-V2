@@ -61,6 +61,7 @@ import {
 } from "./youtube.ts";
 import { createReadStream, parseObjectPath, fileExists } from "./storage-gcs.ts";
 import { youtubeUploadEnabled, UPLOAD_DISABLED_MESSAGE } from "./upload-gate.ts";
+import { upsertDistribution } from "./publish-guard.ts";
 import {
   FRESH_VIDEO_WINDOW_MS,
   VIDEO_ANALYZE_FRESH_INTERVAL_MS,
@@ -1160,14 +1161,7 @@ async function streamToBuffer(web: ReadableStream): Promise<Buffer> {
   return Buffer.concat(chunks);
 }
 
-/** Upsert one channel's entry in a clip's distributions array (mutating a fresh copy). */
-function upsertDistribution(distributions: any[], channel: string, value: Record<string, unknown>): any[] {
-  const next = (distributions ?? []).map((d: any) => ({ ...d }));
-  const existing = next.find((d: any) => d.channel === channel);
-  if (existing) Object.assign(existing, value);
-  else next.push({ channel, ...value });
-  return next;
-}
+// upsertDistribution 은 publish-guard.ts 로 이동 (index.ts 와 두 벌이었다).
 
 /** Re-read the clip (avoid clobbering concurrent edits) and mark its youtube dist failed. */
 async function markDistributionFailed(clipId: string, channel: string, error: string): Promise<void> {

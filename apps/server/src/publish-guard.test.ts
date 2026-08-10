@@ -1,0 +1,176 @@
+/**
+ * 배포 관문 — 불변식 고정 (FLOWS F3 강제 · F4).
+ *
+ * 이 파일의 마지막 테스트(아키텍처 테스트)가 이 작업 전체의 핵심이다.
+ * "어떤 경로로도 게시되지 않는다"(FLOWS.md:73)는 순수 함수 테스트로는 증명할 수 없다 —
+ * 새 경로가 하나 생기면 그만이기 때문이다. 소스 전체를 스캔해 **큐에 넣는 지점이
+ * 한 곳뿐**임을 강제하는 형태로만 고정된다.
+ */
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { describe, it } from "node:test";
+
+import {
+  channelPublishMode,
+  distributionStatusFor,
+  isClipRendered,
+  screenForPublish,
+  upsertDistribution,
+} from "./publish-guard.ts";
+
+const SRC = path.dirname(fileURLToPath(import.meta.url));
+const PASS = () => ({ allowed: true, reason: "" });
+
+describe("채널 모드 — 올리는 채널과 기록만 하는 채널 (FLOWS.md:86-87)", () => {
+  it("YouTube 만 실업로드다", () => {
+    assert.equal(channelPublishMode("youtube"), "upload");
+  });
+
+  it("나머지는 전부 기록만 — 새 채널이 추가돼도 기본이 record 여야 한다", () => {
+    for (const ch of ["instagram", "facebook", "tiktok", "smr", "threads", "새채널"]) {
+      assert.equal(channelPublishMode(ch), "record", `${ch} 는 record`);
+    }
+  });
+});
+
+describe("'기록됨'을 '게시됨'처럼 보여주지 않는다 (F4 Invariant · FLOWS.md:92)", () => {
+  it("record 모드는 예약 여부와 무관하게 recorded 다", () => {
+    assert.equal(distributionStatusFor("record", false), "recorded");
+    assert.equal(distributionStatusFor("record", true), "recorded");
+  });
+
+  it("published 는 어떤 조합에서도 초기 상태로 나오지 않는다", () => {
+    // 실제 업로드가 끝난 뒤에만 워커가 published 를 쓴다. 진입 시점엔 절대 아니다.
+    for (const mode of ["upload", "record"] as const) {
+      for (const scheduled of [true, false]) {
+        assert.notEqual(distributionStatusFor(mode, scheduled), "published",
+          `${mode}/${scheduled} 가 published 를 만들면 안 된다`);
+      }
+    }
+  });
+
+  it("record 모드에서는 published·pending·scheduled 가 절대 나오지 않는다", () => {
+    for (const scheduled of [true, false]) {
+      const s = distributionStatusFor("record", scheduled);
+      assert.ok(!["published", "pending", "scheduled"].includes(s), `record → ${s}`);
+    }
+  });
+});
+
+describe("렌더 판정", () => {
+  it("렌더·미디어·게시 중 하나라도 있으면 배포 가능", () => {
+    assert.equal(isClipRendered({ rendered: true }), true);
+    assert.equal(isClipRendered({ mediaId: "m_1" }), true);
+    assert.equal(isClipRendered({ status: "published" }), true);
+  });
+
+  it("채택만 한 클립은 배포 대상이 아니다", () => {
+    assert.equal(isClipRendered({ status: "editing" }), false);
+    assert.equal(isClipRendered({}), false);
+  });
+});
+
+describe("distributions upsert", () => {
+  it("원본을 변형하지 않는다", () => {
+    const before = [{ channel: "youtube", status: "pending" }];
+    const after = upsertDistribution(before, "youtube", { status: "published" });
+    assert.equal(before[0].status, "pending", "원본이 바뀌면 동시 편집이 서로를 덮어쓴다");
+    assert.equal(after[0].status, "published");
+  });
+
+  it("없는 채널은 추가한다", () => {
+    const after = upsertDistribution([], "instagram", { status: "recorded" });
+    assert.deepEqual(after, [{ channel: "instagram", status: "recorded" }]);
+  });
+});
+
+describe("선별 — 조용한 제외도, 전체 실패도 금지 (FLOWS.md:69)", () => {
+  const clips = [
+    { id: "c_ok", rendered: true },
+    { id: "c_raw", status: "editing" },
+    { id: "c_blocked", rendered: true },
+  ];
+
+  it("통과 건만 진행하고 나머지는 사유와 함께 반환한다", () => {
+    const r = screenForPublish(clips, {
+      channel: "youtube",
+      gateOf: (id) => id === "c_blocked"
+        ? { allowed: false, reason: "권리 홀드 — 음원 미확인" }
+        : PASS(),
+    });
+    assert.deepEqual(r.queue, ["c_ok"]);
+    assert.equal(r.skipped.length, 2);
+  });
+
+  it("⊘ 전체 실패 처리 금지 — 한 건이 막혀도 나머지는 나간다", () => {
+    const r = screenForPublish(clips, {
+      channel: "youtube",
+      gateOf: (id) => id === "c_blocked" ? { allowed: false, reason: "차단" } : PASS(),
+    });
+    assert.ok(r.queue.length >= 1, "막힌 건 때문에 전체가 죽으면 안 된다");
+  });
+
+  it("⊘ 조용한 제외 금지 — 제외된 건은 전부 사유 문자열을 갖는다", () => {
+    const r = screenForPublish(clips, {
+      channel: "youtube",
+      gateOf: (id) => id === "c_blocked" ? { allowed: false, reason: "권리 홀드" } : PASS(),
+    });
+    for (const s of r.skipped) {
+      assert.ok(s.reason.trim().length > 0, `${s.clipId} 에 사유가 없다`);
+      assert.ok(s.code, `${s.clipId} 에 사유 코드가 없다`);
+    }
+  });
+
+  it("던지지 않는다 — 전부 막혀도 예외가 아니라 빈 queue 다", () => {
+    const r = screenForPublish(clips, {
+      channel: "youtube", gateOf: () => ({ allowed: false, reason: "전부 차단" }),
+    });
+    assert.deepEqual(r.queue, []);
+    assert.equal(r.skipped.length, 3);
+  });
+
+  it("게이트가 막은 것과 렌더가 안 된 것을 코드로 구분한다", () => {
+    const r = screenForPublish(clips, {
+      channel: "youtube",
+      gateOf: (id) => id === "c_blocked" ? { allowed: false, reason: "권리" } : PASS(),
+    });
+    assert.equal(r.skipped.find((s) => s.clipId === "c_raw")?.code, "not_rendered");
+    assert.equal(r.skipped.find((s) => s.clipId === "c_blocked")?.code, "gate_blocked");
+  });
+});
+
+describe("관문 우회 불가 (F3 Invariant · FLOWS.md:73)", () => {
+  it("screenForPublish 에 우회 인자가 없다 — 관리자도 통과시킬 자리가 없다", () => {
+    // 시그니처가 (clips, ctx) 두 개다. role·force·override 를 받을 자리를 만들지 않는다.
+    assert.equal(screenForPublish.length, 2);
+  });
+
+  it("모듈이 force/override/bypass/admin 류를 export 하지 않는다", () => {
+    const src = fs.readFileSync(path.join(SRC, "publish-guard.ts"), "utf-8");
+    const offenders = [...src.matchAll(/export\s+(?:function|const|let|class)\s+(\w+)/g)]
+      .map((m) => m[1])
+      .filter((n) => /force|override|bypass|admin|skipGate/i.test(n));
+    assert.deepEqual(offenders, [], `우회 API 가 생겼다: ${offenders.join(", ")}`);
+  });
+
+  /**
+   * ⚠️ 이 테스트가 이 파일의 존재 이유다.
+   *
+   * 지금 큐에 넣는 지점이 3곳(index.ts 2곳 · factory.ts 1곳)이라 **의도적으로 todo 다.**
+   * S2 에서 네 경로를 publish-guard 경유로 모은 뒤 `todo` 를 떼고 진짜 assert 로 바꾼다.
+   * 그때까지도 이 테스트는 실행되어 현재 위반 지점을 출력으로 계속 보여준다.
+   */
+  it("배포 큐 진입점은 한 곳뿐이어야 한다", { todo: "S2 에서 4개 경로를 관문으로 수렴시킨 뒤 해제" }, () => {
+    const files = fs.readdirSync(SRC).filter((f) => f.endsWith(".ts") && !f.endsWith(".test.ts"));
+    const hits: string[] = [];
+    for (const f of files) {
+      const src = fs.readFileSync(path.join(SRC, f), "utf-8");
+      src.split("\n").forEach((line, i) => {
+        if (/enqueue\(\s*["']distribution\.publish["']/.test(line)) hits.push(`${f}:${i + 1}`);
+      });
+    }
+    assert.deepEqual(hits, ["publish-guard.ts"], `배포 큐 진입점이 여러 곳이다: ${hits.join(" · ")}`);
+  });
+});

@@ -140,6 +140,7 @@ import {
   listPrefix,
 } from "./storage-gcs.ts";
 import { castPrefix, stylePrefix } from "./thumbnail-assets.ts";
+import { isClipRendered, upsertDistribution } from "./publish-guard.ts";
 import { listShortsTemplates, getShortsTemplate, toPercent } from "./shorts-template.ts";
 import {
   CANVA_CALLBACK_PATH, canvaConfigured, canvaConnected, canvaAuthUrl,
@@ -2865,18 +2866,8 @@ app.post("/api/recommendations/:id/reject", async (c) => {
 // A clip is renderable-shipped once it has the single export render (mediaId) or is already
 // live (plan §2.4: distribution consumes the final render, never a draft). Un-rendered adopts
 // are skipped and reported so the caller can prompt export.
-function isClipRendered(clip: any): boolean {
-  return clip.rendered === true || Boolean(clip.mediaId) || clip.status === "published";
-}
-
-/** Upsert one channel's entry in a clip's distributions array (returns a fresh copy). */
-function upsertDistribution(distributions: any[], channel: string, value: Record<string, unknown>): any[] {
-  const next = (distributions ?? []).map((d: any) => ({ ...d }));
-  const existing = next.find((d: any) => d.channel === channel);
-  if (existing) Object.assign(existing, value);
-  else next.push({ channel, ...value });
-  return next;
-}
+// isClipRendered · upsertDistribution 은 publish-guard.ts 로 이동했다 —
+// 배포 판정이 index.ts·worker.ts·factory.ts 로 갈려 있으면 게이트가 새어 나간다.
 
 /** The upload grant is the plain youtube scope; readonly (analytics) can't upload. */
 // 스코프 판정은 youtube.ts 한 곳에서 — 문자열을 두 벌 두면 어긋난다(2026-08-10 사고).
