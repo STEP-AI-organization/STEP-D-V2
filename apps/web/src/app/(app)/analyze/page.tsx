@@ -15,13 +15,14 @@
  */
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Suspense, useEffect, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { UploadVideoButton } from "@/components/upload-video-dialog";
 import { useToast } from "@/components/ui/toast";
 import { useSession } from "@/lib/auth";
 import {
   fetchGate,
+  getStreamUrl,
   type GateResult,
   type RightsIssue,
 } from "@/lib/data/api";
@@ -174,6 +175,35 @@ function EpisodeAnalysis({
   ended: boolean;
   programId: string;
 }) {
+  const { mediaForEpisode } = useAppData();
+  const master = mediaForEpisode(episode.id, "master");
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const [videoSrc, setVideoSrc] = useState<string>();
+  const [videoError, setVideoError] = useState<string | null>(null);
+
+  // 재생 URL 은 서버가 준다 — 프로덕션은 짧은 수명의 GCS 서명 URL 이라
+  // <video> 가 스토리지에서 바로 받는다(바이트가 서버를 안 거친다).
+  useEffect(() => {
+    setVideoSrc(undefined);
+    setVideoError(null);
+    if (!master) return;
+    let alive = true;
+    getStreamUrl(master.id)
+      .then((u) => { if (alive) setVideoSrc(u); })
+      // 못 불러오면 조용히 빈 화면을 두지 않는다 — 왜 안 나오는지 적는다.
+      .catch((err) => { if (alive) setVideoError(`원본을 불러오지 못했습니다 (${err instanceof Error ? err.message : String(err)})`); });
+    return () => { alive = false; };
+  }, [master?.id, master]);
+
+  /** 구간 클릭 → 그 지점으로 이동하고 재생. 검증 흐름의 척추다. */
+  const seekTo = useCallback((sec: number) => {
+    const v = videoRef.current;
+    if (!v) return;
+    v.currentTime = Math.max(0, sec);
+    void v.play().catch(() => {});
+    v.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }, []);
+
   const analyzing = episode.pipeline?.stageStatus === "progress";
   const waiting = episode.pipeline?.stageStatus === "idle";
 
@@ -185,10 +215,23 @@ function EpisodeAnalysis({
 
   return (
     <>
-      {/* 원본 자리 + 회차 상태 */}
+      {/* 원본 플레이어 + 회차 상태 */}
       <div className="sd-card overflow-hidden">
-        <div className="sd-ph h-[266px]" style={{ borderBottom: "1px solid var(--sd-border)" }}>
-          원본 플레이어
+        <div style={{ borderBottom: "1px solid var(--sd-border)", background: "#000" }}>
+          {videoSrc ? (
+            <video
+              ref={videoRef}
+              key={videoSrc}
+              src={videoSrc}
+              controls
+              playsInline
+              className="mx-auto max-h-[266px] w-full object-contain"
+            />
+          ) : (
+            <div className="sd-ph h-[266px]">
+              {master ? (videoError ?? "원본을 불러오는 중…") : "이 회차의 원본 파일이 없습니다"}
+            </div>
+          )}
         </div>
         <div className="flex flex-wrap items-center gap-3 px-3 py-2.5">
           <span className="sd-serif text-[15px] font-semibold" style={{ color: "var(--sd-fg)" }}>
@@ -259,7 +302,7 @@ function EpisodeAnalysis({
             </span>
           </div>
           {recs.map((r) => (
-            <RecommendationRow key={r.id} rec={r} episodeId={episode.id} />
+            <RecommendationRow key={r.id} rec={r} episodeId={episode.id} onSeek={seekTo} />
           ))}
         </section>
       )}
@@ -279,7 +322,15 @@ function Metric({ label, value, divider }: { label: string; value: number; divid
   );
 }
 
-function RecommendationRow({ rec, episodeId }: { rec: Recommendation; episodeId: string }) {
+function RecommendationRow({
+  rec,
+  episodeId,
+  onSeek,
+}: {
+  rec: Recommendation;
+  episodeId: string;
+  onSeek: (sec: number) => void;
+}) {
   const { adoptRecommendation, rejectRecommendation } = useAppData();
   const { toast } = useToast();
   const actor = useSession().user.name;
@@ -338,9 +389,16 @@ function RecommendationRow({ rec, episodeId }: { rec: Recommendation; episodeId:
   return (
     <div className="sd-card flex flex-col gap-2 px-3 py-2.5">
       <div className="flex flex-wrap items-center gap-2">
-        <span className="sd-mono text-[11.5px]" style={{ color: "var(--sd-fg)" }}>
+        {/* 시각을 누르면 위 플레이어가 그 지점으로 간다 */}
+        <button
+          type="button"
+          onClick={() => onSeek(rec.startTime)}
+          className="sd-mono text-[11.5px] underline-offset-2 hover:underline"
+          style={{ color: "var(--sd-accent)" }}
+          title="이 지점부터 재생"
+        >
           {fmtTime(rec.startTime)} – {fmtTime(rec.endTime)}
-        </span>
+        </button>
         <span className="sd-tag sd-mono">{Math.round(rec.endTime - rec.startTime)}초</span>
         {typeof rec.score100 === "number" && (
           <span className="sd-tag sd-mono">점수 {rec.score100}</span>
