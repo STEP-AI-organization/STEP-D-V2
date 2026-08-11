@@ -16,9 +16,11 @@ import { useToast } from "@/components/ui/toast";
 import {
   deleteChannelRule,
   fetchChannelRules,
+  fetchYouTubeChannels,
   saveChannelRule,
   type ChannelRole,
   type ChannelRule,
+  type YouTubeChannelInfo,
 } from "@/lib/data/api";
 import { cn } from "@/lib/utils";
 
@@ -40,6 +42,9 @@ const PLATFORMS = [
 export default function ChannelsPage() {
   const { toast } = useToast();
   const [rules, setRules] = useState<ChannelRule[]>([]);
+  // **연결된 계정**과 **업로드 규칙**은 다른 것이다. 규칙만 보여주면 계정을 10개 연결해 두고도
+  // "채널이 없다"고 보인다 — 실제로 그렇게 됐다(2026-08-11).
+  const [accounts, setAccounts] = useState<YouTubeChannelInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
@@ -47,7 +52,12 @@ export default function ChannelsPage() {
 
   const load = useCallback(async () => {
     try {
-      setRules(await fetchChannelRules());
+      const [r, a] = await Promise.all([
+        fetchChannelRules(),
+        fetchYouTubeChannels().catch(() => [] as YouTubeChannelInfo[]),
+      ]);
+      setRules(r);
+      setAccounts(a);
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -98,6 +108,87 @@ export default function ChannelsPage() {
           onSaved={async () => { setAdding(false); await load(); }}
         />
       )}
+
+      {/* ── 연결된 계정 ─────────────────────────────────────────────────── */}
+      <section className="flex flex-col gap-2">
+        <div className="flex items-baseline gap-2">
+          <h3 className="sd-serif text-[16px] font-semibold" style={{ color: "var(--sd-fg)" }}>
+            연결된 계정
+          </h3>
+          <span className="text-[11px]" style={{ color: "var(--sd-mut)" }}>
+            OAuth 로 연결된 채널입니다. 여기에 <b>업로드 규칙</b>을 붙여야 배포 모달에서 고를 수 있습니다.
+          </span>
+        </div>
+
+        {accounts.length === 0 ? (
+          <div
+            className="sd-ph grid min-h-[80px] place-items-center rounded-[6px] px-6 text-center"
+            style={{ border: "1px dashed var(--sd-border)" }}
+          >
+            연결된 채널이 없습니다 —{" "}
+            <Link href="/publish-channels" className="ml-1 underline" style={{ color: "var(--sd-accent)" }}>
+              배포채널 연동
+            </Link>
+            에서 연결하세요
+          </div>
+        ) : (
+          <div className="grid gap-2 [grid-template-columns:repeat(auto-fill,minmax(280px,1fr))]">
+            {accounts.map((a) => {
+              const rule = rules.find((r) => r.platform === "youtube" && r.accountId === a.channelId);
+              return (
+                <div key={a.channelId} className="sd-card flex items-center gap-2.5 p-2.5">
+                  <span
+                    className="grid size-[26px] shrink-0 place-items-center rounded-full text-[11px] font-semibold text-white"
+                    style={{ background: "var(--sd-accent)" }}
+                    aria-hidden
+                  >
+                    {a.channelName?.[0] ?? "?"}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-[12px]" style={{ color: "var(--sd-fg)" }}>{a.channelName}</div>
+                    <div className="sd-mono truncate text-[10px]" style={{ color: "var(--sd-mut)" }}>
+                      {a.channelId}
+                    </div>
+                  </div>
+                  {rule ? (
+                    <span className="sd-tag sd-tag--airing shrink-0">규칙 있음</span>
+                  ) : (
+                    // 규칙이 없으면 이 계정으로는 배포할 수 없다 — 그 사실과 해결 버튼을 같이 준다.
+                    <button
+                      type="button"
+                      className="sd-btn shrink-0"
+                      onClick={async () => {
+                        try {
+                          await saveChannelRule({
+                            platform: "youtube",
+                            accountId: a.channelId,
+                            label: a.channelName || a.channelId,
+                            role: "main",
+                            maxSec: null,
+                            aspect: "any",
+                            titlePrefix: "",
+                            hashtagTemplate: "",
+                            tonePreset: "기본",
+                            privacy: "public",
+                            scheduleWindow: "",
+                            enabled: true,
+                          });
+                          toast({ title: "규칙을 만들었습니다", description: `${a.channelName} — 아래에서 세부 규칙을 정하세요.`, tone: "done" });
+                          await load();
+                        } catch (err) {
+                          toast({ title: "규칙 생성 실패", description: err instanceof Error ? err.message : String(err), tone: "error" });
+                        }
+                      }}
+                    >
+                      ＋ 규칙 만들기
+                    </button>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </section>
 
       {rules.length === 0 && !loading && !adding ? (
         <div
