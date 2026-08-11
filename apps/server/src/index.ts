@@ -10,7 +10,9 @@ import { Hono, type Context } from "hono";
 import { HTTPException } from "hono/http-exception";
 import { cors } from "hono/cors";
 import { getCookie, setCookie, deleteCookie } from "hono/cookie";
-import { runWithTenant, DEFAULT_TENANT_ID, type TenantContext } from "./tenant.ts";
+import {
+  runWithTenant, runAsSystem, currentTenantId, DEFAULT_TENANT_ID, type TenantContext,
+} from "./tenant.ts";
 import {
   SESSION_COOKIE,
   authRequired,
@@ -86,6 +88,12 @@ import {
   openHolds,
   getAutomationSetting,
   setAutomationSetting,
+  creditBalance,
+  addCreditEntry,
+  listCreditLedger,
+  createTopup,
+  getTopup,
+  markTopupPaid,
   listChannelRules,
   getChannelRule,
   upsertChannelRule,
@@ -218,6 +226,10 @@ import {
 } from "./episode-intake.ts";
 import { dispatchPublish } from "./publish-dispatch.ts";
 import { opsCapabilityOf } from "./ops-role.ts";
+import {
+  CREDIT_UNIT_LABEL, buildTopup, creditPriceKrw, settleTopup, topupDedupeKey, topupPaymentId,
+} from "./credits.ts";
+import { getPayment, verifyWebhook } from "./portone.ts";
 import { commitAndInherit } from "./adopt.ts";
 import { runAutomationCycle } from "./automation-cycle.ts";
 import {
@@ -316,6 +328,8 @@ const PUBLIC_PATHS: RegExp[] = [
   /^\/health$/,
   /^\/api\/auth\//,
   /^\/api\/(youtube|meta|tiktok|canva)\/oauth\/callback/,
+  // 포트원 웹훅 — 세션이 없다. 대신 **서명으로 인증**한다(verifyWebhook).
+  /^\/api\/billing\/portone\/webhook$/,
 ];
 
 function isPublicPath(path: string): boolean {
@@ -3719,6 +3733,127 @@ app.delete("/api/assets", async (c) => {
     await deleteFile(f.storagePath).catch((e) => console.warn("[assets] 파일 삭제 실패(무시):", e));
   }
   return c.json({ deleted: removed.length });
+});
+
+// ── 크레딧 (선불 · 일반결제) ────────────────────────────────────────────────────
+//
+// 크레딧 1개 = 분석 1분. 결제는 포트원 결제창(일반결제)으로 하고, **확정은 웹훅으로만** 한다 —
+// 브라우저가 "성공했다"고 말하는 것만 믿고 크레딧을 올리면 조작 한 번에 공짜가 된다.
+
+app.get("/api/credits", async (c) => {
+  const [balance, ledger] = await Promise.all([creditBalance(), listCreditLedger(50)]);
+  return c.json({
+    balance,
+    unit: CREDIT_UNIT_LABEL,
+    priceKrw: creditPriceKrw(),
+    ledger,
+  });
+});
+
+/**
+ * 충전 주문 생성. **결제창을 띄우기 전에** 우리가 먼저 만든다 —
+ * paymentId 를 우리가 정해야 멱등이 성립하고, 결제 결과를 대조할 기준이 생긴다.
+ *
+ * 금액은 서버가 계산한다. 클라이언트가 보낸 금액을 쓰면 1원에 10만 크레딧을 산다.
+ */
+app.post("/api/credits/topup", async (c) => {
+  const body = await c.req.json().catch(() => ({}) as Record<string, unknown>);
+  const check = buildTopup(body.credits);
+  if (!check.ok) return c.json({ error: "bad_request", message: check.reason }, 400);
+
+  const paymentId = topupPaymentId(currentTenantId(), crypto.randomUUID().replace(/-/g, "").slice(0, 12));
+  const actor = readActor(body.actor) || "unknown";
+  await createTopup({
+    paymentId, credits: check.credits, amountKrw: check.amountKrw,
+    status: "pending", requestedBy: actor,
+  });
+
+  // 브라우저 SDK 에 그대로 넘길 값들. storeId·channelKey 는 공개해도 되는 식별자다
+  // (결제 실행 권한은 API Secret 에 있고 그건 서버에만 있다).
+  return c.json({
+    paymentId,
+    credits: check.credits,
+    amountKrw: check.amountKrw,
+    storeId: String(process.env.PORTONE_STORE_ID ?? ""),
+    channelKey: String(process.env.PORTONE_CHANNEL_KEY ?? ""),
+    orderName: `STEP-D 크레딧 ${check.credits}개`,
+  });
+});
+
+/**
+ * 포트원 웹훅 — **크레딧이 실제로 올라가는 유일한 지점.**
+ *
+ * 순서가 중요하다:
+ *   1. 서명 검증 (위조 웹훅으로 크레딧이 올라가면 되돌릴 수 없다)
+ *   2. 포트원에 **직접 조회** (웹훅 본문의 금액도 믿지 않는다)
+ *   3. 우리 주문과 대조 (금액·상태가 맞아야)
+ *   4. 원장 기록 (dedupeKey 로 재전송 방어)
+ *
+ * 이 라우트는 세션이 없다 — PUBLIC_PATHS 에 들어 있어야 하고, 테넌트는 주문에서 찾는다.
+ */
+app.post("/api/billing/portone/webhook", async (c) => {
+  const raw = await c.req.text();
+  const verdict = verifyWebhook(
+    raw,
+    {
+      id: c.req.header("webhook-id") ?? null,
+      timestamp: c.req.header("webhook-timestamp") ?? null,
+      signature: c.req.header("webhook-signature") ?? null,
+    },
+    String(process.env.PORTONE_WEBHOOK_SECRET ?? ""),
+  );
+  if (!verdict.ok) {
+    console.warn(`[billing] 웹훅 검증 실패: ${verdict.reason}`);
+    // 사유를 본문에 싣지 않는다 — 검증을 뚫으려는 쪽에 힌트를 주지 않는다.
+    return c.json({ error: "invalid_signature" }, 401);
+  }
+
+  const body = JSON.parse(raw || "{}") as { data?: { paymentId?: string }; type?: string };
+  const paymentId = String(body.data?.paymentId ?? "");
+  if (!paymentId) return c.json({ ok: true, note: "paymentId 없음 — 무시" });
+
+  // 테넌트를 주문에서 찾는다. 웹훅에는 세션이 없으므로 시스템 스코프로 한 번 읽고,
+  // 그 뒤 작업은 그 테넌트 컨텍스트 안에서 한다.
+  const owner = await runAsSystem(async () => {
+    const { rows } = await getRawPool().query(
+      `SELECT tenant_id FROM credit_topup WHERE payment_id = $1`, [paymentId],
+    );
+    return rows[0]?.tenant_id as string | undefined;
+  });
+  if (!owner) return c.json({ ok: true, note: "우리 주문이 아님 — 무시" });
+
+  return runWithTenant({ scope: owner, via: "system" }, async () => {
+    const order = await getTopup(paymentId);
+    let payment: { status?: string; amountTotal?: number } | null = null;
+    try {
+      const p = (await getPayment(paymentId)) as any;
+      payment = { status: p?.status, amountTotal: p?.amount?.total };
+    } catch (e) {
+      console.error(`[billing] 결제 조회 실패 ${paymentId}`, e);
+    }
+
+    const settle = settleTopup({ order, payment });
+    if (!settle.credit) {
+      console.warn(`[billing] 충전 보류 ${paymentId}: ${settle.reason}`);
+      // 실패로 확정하지 않는다 — 조회 실패였을 수 있고, 포트원이 재전송한다.
+      return c.json({ ok: true, credited: false, reason: settle.reason });
+    }
+
+    const claimed = await markTopupPaid(paymentId, "paid");
+    if (!claimed) return c.json({ ok: true, credited: false, reason: "이미 처리됨" });
+
+    await addCreditEntry({
+      delta: settle.credits,
+      reason: "topup",
+      paymentId,
+      amountKrw: order?.amountKrw ?? null,
+      note: `포트원 결제 ${paymentId}`,
+      actor: "portone-webhook",
+      dedupeKey: topupDedupeKey(paymentId),
+    });
+    console.log(`[billing] 충전 완료 ${paymentId} · +${settle.credits} 크레딧`);
+    return c.json({ ok: true, credited: true, credits: settle.credits });
+  });
 });
 
 // ── 채널별 업로드 규칙 (FLOWS F4-2 · README §10) ────────────────────────────────

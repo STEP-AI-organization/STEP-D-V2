@@ -2572,6 +2572,84 @@ export async function activePlan(): Promise<PlanRow | null> {
   return rows[0] ?? null;
 }
 
+// ── 크레딧 원장 (migrations/0024) ───────────────────────────────────────────────
+
+/** 잔액 = 원장 합계. **캐시하지 않는다** — 어긋난 잔액은 조용히 틀린 채로 굴러간다. */
+export async function creditBalance(): Promise<number> {
+  const { rows } = await pool.query<{ total: string | null }>(
+    `SELECT COALESCE(SUM(delta), 0)::text AS total FROM credit_ledger`,
+  );
+  return Number(rows[0]?.total ?? 0) || 0;
+}
+
+export interface CreditEntryInput {
+  delta: number;
+  reason: string;
+  mediaId?: string | null;
+  paymentId?: string | null;
+  amountKrw?: number | null;
+  note?: string;
+  actor?: string;
+  dedupeKey: string;
+}
+
+/**
+ * 원장 기록. **멱등** — 같은 dedupeKey 는 두 번 쌓이지 않는다.
+ * @returns 새로 기록됐으면 true, 이미 있으면 false.
+ */
+export async function addCreditEntry(e: CreditEntryInput): Promise<boolean> {
+  const { rows } = await pool.query(
+    `INSERT INTO credit_ledger (delta, reason, media_id, payment_id, amount_krw, note, actor, dedupe_key)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+     ON CONFLICT (dedupe_key) DO NOTHING
+     RETURNING id`,
+    [Math.trunc(e.delta), e.reason, e.mediaId ?? null, e.paymentId ?? null,
+     e.amountKrw ?? null, e.note ?? "", e.actor ?? "", e.dedupeKey],
+  );
+  return rows.length > 0;
+}
+
+export async function listCreditLedger(limit = 100): Promise<Record<string, unknown>[]> {
+  const { rows } = await pool.query(
+    `SELECT id, delta, reason, media_id AS "mediaId", payment_id AS "paymentId",
+            amount_krw AS "amountKrw", note, actor, occurred_at AS "occurredAt"
+       FROM credit_ledger ORDER BY occurred_at DESC LIMIT ${Math.max(1, Math.min(limit, 500))}`,
+  );
+  return rows;
+}
+
+export interface TopupRow {
+  paymentId: string; credits: number; amountKrw: number; status: string; requestedBy: string;
+}
+
+export async function createTopup(r: TopupRow): Promise<void> {
+  await pool.query(
+    `INSERT INTO credit_topup (payment_id, tenant_id, credits, amount_krw, status, requested_by)
+     VALUES ($1, current_setting('app.tenant_id', true), $2, $3, 'pending', $4)`,
+    [r.paymentId, r.credits, r.amountKrw, r.requestedBy],
+  );
+}
+
+export async function getTopup(paymentId: string): Promise<TopupRow | null> {
+  const { rows } = await pool.query<TopupRow>(
+    `SELECT payment_id AS "paymentId", credits, amount_krw AS "amountKrw", status,
+            requested_by AS "requestedBy"
+       FROM credit_topup WHERE payment_id = $1`,
+    [paymentId],
+  );
+  return rows[0] ?? null;
+}
+
+/** 결제 확정. 이미 paid 면 false — 웹훅이 여러 번 와도 한 번만 처리된다. */
+export async function markTopupPaid(paymentId: string, status: "paid" | "failed"): Promise<boolean> {
+  const r = await pool.query(
+    `UPDATE credit_topup SET status = $2, settled_at = now()
+      WHERE payment_id = $1 AND status = 'pending'`,
+    [paymentId, status],
+  );
+  return (r.rowCount ?? 0) > 0;
+}
+
 // ── cleanup ────────────────────────────────────────────────────────────────────
 
 export async function closeDb(): Promise<void> {
