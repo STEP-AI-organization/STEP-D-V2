@@ -428,12 +428,26 @@ export async function uploadToNaver(input: NaverUploadInput): Promise<NaverUploa
     await submit.waitFor({ state: "visible", timeout });
     // 필수값이 채워질 때까지 저장 버튼이 disabled 다. click 은 enabled 를 기다리지만,
     // 명시적으로 확인해 두면 실패 원인이 "비활성" 인지 "눌렀는데 안 됨" 인지 갈린다.
+    const cnt = await submit.count().catch(() => 0);
     const enabled = await submit.isEnabled().catch(() => false);
+    const box = await submit.boundingBox().catch(() => null);
+    console.log(`[naver] 저장 버튼 — count=${cnt} enabled=${enabled} box=${JSON.stringify(box)}`);
+
     await submit.click({ timeout: 30_000 }).catch((e) => {
-      console.error(`[naver] 저장 클릭 실패(enabled=${enabled}):`, e.message);
+      console.error("[naver] 저장 클릭 실패:", e.message);
     });
-    await page.waitForTimeout(3_000);
-    // 저장 직후 화면 — 확인 모달/토스트가 뜨는지 본다.
+    await page.waitForTimeout(4_000);
+
+    // 일반 클릭이 안 먹는 실행이 있다(버튼은 활성인데 모달이 그대로). React 핸들러가
+    // 포인터 이벤트를 못 받는 경우라, DOM 에서 직접 click() 을 때려 폴백한다.
+    const stillOpen = await page.locator('[role="dialog"]')
+      .filter({ hasText: "동영상 상세 정보" }).count().catch(() => 0);
+    if (stillOpen) {
+      console.log("[naver] 저장 후에도 상세 모달 잔존 — JS click 폴백 시도");
+      await submit.evaluate((el) => (el as unknown as { click(): void }).click()).catch((e) =>
+        console.error("[naver] JS click 실패:", e.message));
+      await page.waitForTimeout(4_000);
+    }
     await shot(page, artifactDir, `after-submit-${Date.now()}`);
 
     // 성공 판정: 업로드 페이지를 벗어나면 성공으로 본다. 토스트 문구는 개편마다 바뀌어 못 믿는다.
