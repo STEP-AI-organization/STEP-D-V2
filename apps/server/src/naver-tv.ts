@@ -44,25 +44,41 @@ export const NAVER_TARGETS = {
   clip: {
     label: "네이버 클립",
     channel: "naverclip",
-    // 클립 크리에이터 스튜디오 — 세로(9:16) 숏폼 전용.
-    // 목록(/web/contents/clips)이 아니라 **업로드 페이지로 직행**한다. 목록에서 시작하면
-    // "업로드 버튼 찾기 → 모달 대기" 단계가 붙고, 그 단계가 개편에 제일 잘 깨진다.
     uploadUrl: "https://clipcreators.naver.com/web/upload",
     /** 업로드가 끝나면 목록으로 돌아간다 — 성공 판정에 쓴다. */
     doneUrlHint: "/web/contents",
+    //
+    // 2026-08-11 실측 (naver:probe clip <영상>). **2단계 구조다:**
+    //   1단계 /web/upload  파일 드롭만 (숨은 input[type=file] + "파일 선택" 버튼)
+    //   2단계 파일 투입 후  같은 URL 에서 메타데이터 폼이 렌더됨
+    //
+    // ⚠️ 클립에는 **제목 필드가 없다.** 설명(300자) 하나뿐이다 — YouTube 처럼
+    //    title/description 을 나눠 넣을 수 없다. 우리 clip.title 을 설명 맨 앞에 넣는다.
+    // ⚠️ 필수: 설명 · 커버 선택 · 카테고리(1차/2차). 카테고리는 사람이 정해야 한다.
+    //
+    // 클래스 해시(__bU_8J 등)는 배포마다 바뀌므로 접두사 매칭(^=)을 쓴다.
     sel: {
       fileInput: 'input[type="file"]',
-      title: 'input[placeholder*="제목"], textarea[placeholder*="제목"]',
-      description: 'textarea[placeholder*="설명"], textarea[placeholder*="내용"]',
-      tags: 'input[placeholder*="태그"], input[placeholder*="해시"]',
-      submit: 'button:has-text("등록"), button:has-text("업로드"), button:has-text("발행"), button[type="submit"]',
+      // 클립엔 제목 입력이 없다 — description 과 같은 요소를 가리켜 둔다(호출부 분기 최소화).
+      title: 'textarea[class^="ClipDetailForm_textarea"], textarea[placeholder*="경험을 기록"]',
+      description: 'textarea[class^="ClipDetailForm_textarea"], textarea[placeholder*="경험을 기록"]',
+      tags: 'button[class^="ClipDetailForm_tagBtn"]',
+      submit: 'button:has-text("등록")',
     },
+    /** 발행 대신 임시저장 — 자동화 검증 단계에서 실제 공개를 피한다. */
+    draftButton: 'button:has-text("임시저장")',
+    /** 클립은 제목이 없다 — 호출부가 title 을 설명에 합쳐야 한다. */
+    noTitleField: true,
+    filePickButton: 'button:has-text("파일 선택")',
   },
 } as const;
 
 export type NaverTarget = keyof typeof NAVER_TARGETS;
 
 /** 로그인 여부 판정 — 스튜디오에 들어갔을 때 로그인 화면으로 튕기면 세션 만료다. */
+/** 클립 설명 최대 길이(실측 카운터 0/300). 넘기면 입력이 잘린다. */
+export const DESC_MAX = 300;
+
 const LOGGED_OUT_HINT = 'form[name="frmNIDLogin"], input#id';
 
 export interface NaverUploadInput {
@@ -76,6 +92,8 @@ export interface NaverUploadInput {
   artifactDir?: string;
   /** true 면 브라우저 창을 띄운다(로컬 디버깅). 워커에서는 false. */
   headful?: boolean;
+  /** true 면 "등록" 대신 "임시저장" 을 누른다 — 공개 없이 파이프라인을 검증할 때. */
+  draftOnly?: boolean;
   timeoutMs?: number;
 }
 
@@ -146,20 +164,53 @@ export async function uploadToNaver(input: NaverUploadInput): Promise<NaverUploa
       throw new NaverSessionExpiredError();
     }
 
-    await page.locator(SEL.fileInput).first().setInputFiles(input.videoPath);
-    await page.locator(SEL.title).first().fill(input.title);
-    if (input.description) {
-      await page.locator(SEL.description).first().fill(input.description).catch(() => {});
+    // 파일 투입. 숨은 input 에 setInputFiles 로 직접 넣으면 SPA 가 change 이벤트를 못 받아
+    // **조용히 1단계에 머무는** 경우가 있다(2026-08-11 실측 · 재현 불규칙). "파일 선택" 버튼을
+    // 눌러 filechooser 로 넣는 쪽이 확실하고, 버튼이 없으면 input 직접 주입으로 폴백한다.
+    const pickBtn = (T as { filePickButton?: string }).filePickButton;
+    let attached = false;
+    if (pickBtn) {
+      try {
+        const [chooser] = await Promise.all([
+          page.waitForEvent("filechooser", { timeout: 15_000 }),
+          page.locator(pickBtn).first().click(),
+        ]);
+        await chooser.setFiles(input.videoPath);
+        attached = true;
+      } catch { /* 폴백으로 넘어간다 */ }
     }
+    if (!attached) await page.locator(SEL.fileInput).first().setInputFiles(input.videoPath);
+
+    // 파일을 넣어야 메타데이터 폼이 렌더된다(클립은 같은 URL 에서 2단계로 전환). 업로드
+    // 진행률이 도는 동안 DOM 이 계속 바뀌므로, 폼이 실제로 나타날 때까지 기다린다.
+    await page.locator(SEL.description).first().waitFor({ state: "visible", timeout }).catch(() => {});
+
+    if ((T as { noTitleField?: boolean }).noTitleField) {
+      // 클립엔 제목 칸이 없다 — 설명 하나(300자)가 전부다.
+      // 배포 시점에 사람이 설명을 넣었으면 **그것만** 쓴다. 제목을 앞에 덧붙이면 300자를
+      // 잡아먹고 사람이 쓴 문구가 뒤에서 잘린다. 설명이 비었을 때만 제목으로 채운다.
+      const body = (input.description?.trim() || input.title || "").slice(0, DESC_MAX);
+      if (!body) return { ok: false, error: "설명이 비어 있습니다 — 네이버 클립은 설명이 필수입니다" };
+      await page.locator(SEL.description).first().fill(body);
+    } else {
+      await page.locator(SEL.title).first().fill(input.title);
+      if (input.description) {
+        await page.locator(SEL.description).first().fill(input.description).catch(() => {});
+      }
+    }
+    // 태그: 클립은 자유 입력이 아니라 **고정 버튼 목록**(장소·쇼핑·게임 …)이라 임의 문자열을
+    // 넣을 수 없다. 우리 tags 와 겹치는 버튼만 눌러준다.
     if (input.tags?.length) {
-      const t = page.locator(SEL.tags).first();
-      if (await t.isVisible().catch(() => false)) {
-        for (const tag of input.tags.slice(0, 10)) { await t.fill(tag); await t.press("Enter"); }
+      for (const tag of input.tags.slice(0, 5)) {
+        const btn = page.locator(SEL.tags).filter({ hasText: tag }).first();
+        if (await btn.isVisible().catch(() => false)) await btn.click().catch(() => {});
       }
     }
 
     // 업로드 완료까지는 파일 크기에 비례해 오래 걸린다. 제출 버튼이 활성화될 때까지 기다린다.
-    const submit = page.locator(SEL.submit).first();
+    const draftSel = (T as { draftButton?: string }).draftButton;
+    const submitSel = input.draftOnly && draftSel ? draftSel : SEL.submit;
+    const submit = page.locator(submitSel).first();
     await submit.waitFor({ state: "visible", timeout });
     await submit.click();
 

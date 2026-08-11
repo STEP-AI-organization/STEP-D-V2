@@ -1296,12 +1296,22 @@ async function handleNaverPublish(job: Job): Promise<void> {
     const localPath = path.join(tmpDir, `${clipId}.mp4`);
     try {
       await pipeline(createReadStream(objPath), fs.createWriteStream(localPath));
+      // 설명·태그는 **배포 시점에 사람이 넣은 값이 우선**이다. 클립은 제목 칸이 없고 설명
+      // 300자가 전부라, 분석이 만든 synopsis 를 그대로 쓰면 잘리거나 어색하다.
+      // 페이로드에 없을 때만 클립 메타로 폴백한다.
+      const description = typeof job.payload.description === "string"
+        ? job.payload.description
+        : (clip.synopsis ?? "");
+      const tags = Array.isArray(job.payload.tags)
+        ? (job.payload.tags as unknown[]).map(String)
+        : (Array.isArray(clip.tags) ? clip.tags : undefined);
+
       const r = await uploadToNaver({
         target,
         videoPath: localPath,
         title: clip.title ?? "무제 클립",
-        description: clip.synopsis ?? "",
-        tags: Array.isArray(clip.tags) ? clip.tags : undefined,
+        description,
+        tags,
         artifactDir: path.join(os.homedir(), ".stepd", "naver-artifacts"),
       });
       if (!r.ok) {

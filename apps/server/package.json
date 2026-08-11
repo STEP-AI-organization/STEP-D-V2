@@ -23,7 +23,9 @@
     "tenants:report": "node --import tsx --env-file .env scripts/tenant-report.mts",
     "canva:sync": "node --import tsx --env-file .env scripts/sync-canva-templates.mts",
     "canva:push": "node --import tsx --env-file .env scripts/push-canva-template.mts",
-    "naver:login": "node --import tsx --env-file-if-exists=.env scripts/naver-login.mts"
+    "naver:login": "node --import tsx --env-file-if-exists=.env scripts/naver-login.mts",
+    "naver:probe": "node --import tsx --env-file-if-exists=.env scripts/naver-probe.mts",
+    "naver:categories": "node --import tsx --env-file-if-exists=.env scripts/naver-categories.mts"
   },
   "dependencies": {
     "@google-cloud/storage": "^7.15.0",
