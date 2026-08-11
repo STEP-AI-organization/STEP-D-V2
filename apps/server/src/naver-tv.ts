@@ -54,7 +54,9 @@ export const NAVER_TARGETS = {
       description: '[role="dialog"] textarea',
       tags: 'input[placeholder*="태그 입력"]',
       // 실측: 상세 패널 하단은 "취소 / 저장" 이다.
-      submit: 'button:has-text("저장")',
+      // ⚠️ 반드시 상세 모달 **안으로 한정**할 것. 페이지 전역에서 첫 "저장" 을 잡으면
+      //    다른 버튼을 눌러 모달이 그대로 남는다.
+      submit: '[role="dialog"]:has-text("동영상 상세 정보") button:has-text("저장")',
     },
     filePickButton: 'button:has-text("파일 선택")',
   },
@@ -170,10 +172,13 @@ async function pickCategory(
   page: Page,
   cat?: { primary: string; secondary: string },
 ): Promise<void> {
+  // ⚠️ `:visible` 이 핵심이다. 1차를 고른 뒤에도 **1차 목록이 DOM 에 남아 있어서**,
+  // 그냥 first() 를 쓰면 숨겨진 1차의 "엔터" 를 눌러 2차가 빈 채로 남는다(실측 — 증상이
+  // "저장 버튼이 계속 비활성" 이라 원인이 안 보인다).
   // hasText 는 부분일치라 "엔터" 가 "엔터테인먼트" 에도 걸린다 — 정확히 일치시킨다.
+  const OPTS = '[class*="Option"]:visible, [role="option"]:visible';
   const opt = (text: string) =>
-    page.locator('[class*="Option"], [role="option"]')
-      .filter({ hasText: new RegExp(`^\s*${text}\s*$`) }).first();
+    page.locator(OPTS).filter({ hasText: new RegExp(`^\s*${text}\s*$`) }).first();
 
   // 트리거 잡는 법이 사이트마다 다르다:
   //  - 클립: `[class*="dropdownWrap"]` 두 개 (순서 0=1차, 1=2차)
@@ -190,7 +195,15 @@ async function pickCategory(
   for (const [i, value] of [[0, want.primary], [1, want.secondary]] as const) {
     await trigger(i).click({ timeout: 20_000 }).catch(() => {});
     await page.waitForTimeout(700);
-    await opt(value).click({ timeout: 15_000 }).catch(() => {});
+
+    // 정확히 같은 항목을 먼저 찾고, 없으면 **첫 항목**으로 간다.
+    // TV 와 클립은 2차 목록이 다르다: 클립의 "엔터/엔터" 가 TV 에는 없어서 2차가 빈 채로
+    // 남고 저장 버튼이 계속 비활성이었다(실측 — 증상이 "저장이 안 눌림" 이라 원인이 안 보인다).
+    const exact = opt(value);
+    const target = (await exact.count().catch(() => 0))
+      ? exact
+      : page.locator(OPTS).first();
+    await target.click({ timeout: 15_000 }).catch(() => {});
     await page.waitForTimeout(800);
   }
 }
@@ -400,9 +413,12 @@ export async function uploadToNaver(input: NaverUploadInput): Promise<NaverUploa
     // TV: 공개 여부(필수)를 안 고르면 저장 버튼이 비활성이라 눌러도 아무 일이 없다.
     const vis = (T as { visibilityRadio?: { public: string } }).visibilityRadio;
     if (vis) {
+      // ⚠️ "비공개" 안에도 "공개" 가 들어 있다. has-text 는 부분일치라 정확일치로 잡아야
+      //    엉뚱한 라디오를 누른다(그러면 필수값 미충족으로 저장이 계속 비활성이다).
       const label = input.publishAt ? "공개 예약" : "공개";
-      await page.locator(`[role="dialog"] label:has-text("${label}")`).first()
-        .click({ timeout: 15_000 }).catch(() => {});
+      await page.locator('[role="dialog"] label')
+        .filter({ hasText: new RegExp(`^\s*${label}\s*$`) })
+        .first().click({ timeout: 15_000 }).catch(() => {});
       await page.waitForTimeout(600);
     }
 
@@ -410,17 +426,41 @@ export async function uploadToNaver(input: NaverUploadInput): Promise<NaverUploa
     const submitSel = input.draftOnly && draftSel ? draftSel : SEL.submit;
     const submit = page.locator(submitSel).first();
     await submit.waitFor({ state: "visible", timeout });
-    await submit.click();
+    // 필수값이 채워질 때까지 저장 버튼이 disabled 다. click 은 enabled 를 기다리지만,
+    // 명시적으로 확인해 두면 실패 원인이 "비활성" 인지 "눌렀는데 안 됨" 인지 갈린다.
+    const enabled = await submit.isEnabled().catch(() => false);
+    await submit.click({ timeout: 30_000 }).catch((e) => {
+      console.error(`[naver] 저장 클릭 실패(enabled=${enabled}):`, e.message);
+    });
+    await page.waitForTimeout(3_000);
+    // 저장 직후 화면 — 확인 모달/토스트가 뜨는지 본다.
+    await shot(page, artifactDir, `after-submit-${Date.now()}`);
 
     // 성공 판정: 업로드 페이지를 벗어나면 성공으로 본다. 토스트 문구는 개편마다 바뀌어 못 믿는다.
     if ((T as { doneBy?: string }).doneBy === "dialogClosed") {
-      // 모달이 사라져야 저장된 것이다. 남아 있으면 필수값 미충족이거나 저장이 막힌 것 —
-      // 성공으로 넘기면 목록에 "초안" 으로만 남는다(실측: 그렇게 4건이 쌓였다).
-      const closed = await page.locator('[role="dialog"]')
-        .first().waitFor({ state: "detached", timeout }).then(() => true).catch(() => false);
-      if (!closed) {
+      // ⚠️ `[role="dialog"]` 만으로 잡으면 안 된다. 업로드 진행 패널("파일 업로드 완료 (1/1)")도
+      //    같은 role 이라 **계속 떠 있고**, 그걸 상세 모달로 착각하면 판정이 전부 틀어진다.
+      //    상세 모달은 제목이 "동영상 상세 정보" 다 — 그걸로 정확히 겨냥한다.
+      const detail = page.locator('[role="dialog"]').filter({ hasText: "동영상 상세 정보" });
+      const gone = await detail.first()
+        .waitFor({ state: "detached", timeout: 90_000 }).then(() => true).catch(() => false);
+
+      // 저장되면 "영상을 인코딩하고 있습니다 … 등록되었으나 …" 안내가 뜬다. 있으면 닫아준다.
+      const notice = page.locator('[role="dialog"]').filter({ hasText: /등록되었|인코딩하고 있습니다/ });
+      const sawNotice = await notice.first().waitFor({ state: "visible", timeout: 10_000 })
+        .then(() => true).catch(() => false);
+      if (sawNotice) {
+        await page.locator('[role="dialog"] button:has-text("확인")').first()
+          .click({ timeout: 5_000 }).catch(() => {});
+        await page.waitForTimeout(800);
+      }
+
+      if (!gone && !sawNotice) {
+        const inner = (await detail.first().innerText().catch(() => ""))
+          .split(String.fromCharCode(10)).map((x) => x.trim()).filter(Boolean).join(" | ").slice(0, 400);
         const p = await shot(page, artifactDir, `submit-stuck-${Date.now()}`);
-        return { ok: false, error: "저장 후에도 상세 모달이 닫히지 않았습니다 — 필수값 미충족일 수 있습니다", screenshotPath: p };
+        console.error("[naver] 상세 모달이 안 닫혔다 —", inner || "(내용 없음)");
+        return { ok: false, error: `저장 완료를 확인하지 못했습니다 — ${inner || "상세 모달 잔존"}`, screenshotPath: p };
       }
       return { ok: true, url: page.url() };
     }
