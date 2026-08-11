@@ -6,7 +6,7 @@
  * 계정은 초대로만 생긴다(가입 폼이 없다). 토큰이 없거나 만료면 **왜 안 되는지** 말한다 —
  * "실패했습니다"만 띄우면 초대한 쪽에 다시 물어볼 수도 없다.
  */
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { Suspense, useState } from "react";
 
 import { acceptInvite } from "@/lib/data/api";
@@ -20,7 +20,6 @@ export default function InvitePage() {
 }
 
 function InviteInner() {
-  const router = useRouter();
   const token = useSearchParams().get("token") ?? "";
 
   const [name, setName] = useState("");
@@ -39,8 +38,8 @@ function InviteInner() {
     setError(null);
     try {
       await acceptInvite(token, { password, name: name.trim() || undefined });
-      router.replace("/dashboard");
-      router.refresh();
+      // 로그인과 같은 이유로 전체 리로드 (SessionProvider 재실행).
+      window.location.assign("/dashboard");
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
       setBusy(false);

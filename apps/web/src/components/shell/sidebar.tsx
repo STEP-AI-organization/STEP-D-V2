@@ -182,8 +182,9 @@ function CurrentUser() {
         style={{ color: "var(--sd-mut)" }}
         onClick={async () => {
           await logout();
-          router.replace("/login");
-          router.refresh();
+          // 전체 리로드 — 안 그러면 SessionProvider 가 여전히 로그인 상태를 들고 있어
+          // 화면이 그대로 보인다(데이터는 401 이라 비지만, 로그아웃된 것처럼 안 보인다).
+          window.location.assign("/login");
         }}
       >
         로그아웃

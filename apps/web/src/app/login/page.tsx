@@ -9,7 +9,7 @@
  * 계정 열거를 막는 게 서버 쪽 설계다(없는 이메일에도 더미 해시 대조로 같은 시간을 쓴다).
  * 화면도 같은 태도를 지킨다 — "없는 계정입니다"와 "비밀번호가 틀렸습니다"를 **구분하지 않는다.**
  */
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { Suspense, useState } from "react";
 
 import { login } from "@/lib/data/api";
@@ -23,7 +23,6 @@ export default function LoginPage() {
 }
 
 function LoginInner() {
-  const router = useRouter();
   const params = useSearchParams();
   const next = params.get("next") || "/dashboard";
 
@@ -39,9 +38,11 @@ function LoginInner() {
     setError(null);
     try {
       await login(email.trim(), password);
-      // replace 로 보낸다 — 뒤로가기로 로그인 화면에 돌아오면 이미 로그인된 채라 혼란스럽다.
-      router.replace(next.startsWith("/") ? next : "/dashboard");
-      router.refresh();
+      // **전체 리로드로 보낸다.** SessionProvider 는 루트 레이아웃에 있어 클라이언트 라우팅으로는
+      // 언마운트되지 않고, 그러면 /auth/me 를 다시 안 읽어 세션이 빈 채로 남는다 →
+      // AuthGuard 가 다시 로그인으로 보내 무한 루프가 된다(2026-08-11 실제로 겪음).
+      // router.refresh() 는 서버 컴포넌트만 갱신하고 클라이언트 상태는 그대로 둔다.
+      window.location.assign(next.startsWith("/") ? next : "/dashboard");
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
       setBusy(false);
