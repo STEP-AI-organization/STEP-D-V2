@@ -19,7 +19,7 @@
  */
 import crypto from "node:crypto";
 import { promisify } from "node:util";
-import { getRawPool } from "./db-pg.ts";
+import { getRawPool, type Queryable } from "./db-pg.ts";
 
 const scrypt = promisify(crypto.scrypt) as (
   password: string | Buffer,
@@ -305,19 +305,24 @@ export async function destroyTenantSessions(tenantId: string): Promise<number> {
 
 const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
+/**
+ * `db` 를 주면 그 연결에서 실행한다 — 회사 개설처럼 **초대까지 한 트랜잭션**으로 묶어야
+ * 하는 경우에 쓴다(초대가 실패하면 회사도 안 만들어져야 한다). 안 주면 평소대로 풀에서.
+ */
 export async function createInvite(input: {
   tenantId: string;
   email: string;
   role?: Role;
   invitedBy?: string;
-}): Promise<{ token: string; expiresAt: number; id: string }> {
+}, db?: Queryable): Promise<{ token: string; expiresAt: number; id: string }> {
+  // 중복 검사는 커밋된 데이터만 보면 되므로 풀로 읽어도 된다.
   const existing = await findUserByEmail(input.email);
   if (existing) throw new Error("이미 계정이 있는 이메일입니다.");
   const { raw, hash } = newToken("inv");
   const now = Date.now();
   const expiresAt = now + INVITE_TTL_MS;
   const id = `inv_${crypto.randomBytes(9).toString("base64url")}`;
-  await getRawPool().query(
+  await (db ?? getRawPool()).query(
     `INSERT INTO invites (id, tenant_id, email, role, token_hash, invited_by, created_at, expires_at)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
     [id, input.tenantId, input.email.trim(), input.role ?? "member", hash, input.invitedBy ?? null, now, expiresAt],

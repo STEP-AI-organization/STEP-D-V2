@@ -65,8 +65,23 @@ export const api = {
 
   overview: () => get<Overview>("/api/superadmin/overview"),
   tenants: () => get<{ tenants: Tenant[] }>("/api/superadmin/tenants"),
-  createTenant: (t: { id?: string; name: string; kind: string; billingEmail?: string }) =>
-    post<{ id: string }>("/api/superadmin/tenants", t),
+  /**
+   * 회사 개설. 서버가 회사 + 첫 owner 초대 + 초기 크레딧을 **한 트랜잭션**으로 처리한다.
+   * `ownerEmail` 은 필수 — 들어갈 사람 없이 회사만 만들면 아무도 못 쓴다.
+   * `inviteToken`·`inviteUrl` 은 **응답에서 한 번만** 나온다(서버가 평문을 저장하지 않는다).
+   */
+  createTenant: (t: {
+    id?: string; name: string; kind: string;
+    ownerEmail: string; billingEmail?: string; initialCredits?: number;
+  }) =>
+    post<{
+      id: string;
+      ownerEmail: string;
+      initialCredits: number;
+      inviteToken: string;
+      inviteExpiresAt: number;
+      inviteUrl: string | null;
+    }>("/api/superadmin/tenants", t),
   // sessionsRevoked — 정지·종료로 끊은 세션 수. 정지가 실제로 먹었는지 화면이 보여줄 근거다.
   updateTenant: (id: string, patchBody: { status?: string; name?: string; reason?: string }) =>
     patch<{ ok: true; sessionsRevoked?: number }>(`/api/superadmin/tenants/${encodeURIComponent(id)}`, patchBody),

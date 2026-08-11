@@ -41,6 +41,7 @@ import {
   type User,
 } from "./auth.ts";
 import { audit, clientIp, requireReason, requireSuperadmin } from "./admin.ts";
+import { grantDedupeKey, inviteLink, planOnboarding } from "./onboarding.ts";
 import { logger } from "hono/logger";
 import fs from "node:fs";
 import path from "node:path";
@@ -157,6 +158,7 @@ import {
   getChannelPointProfile,
   getPool,
   getRawPool,
+  withRawTransaction,
   searchSegments,
   listKnownCharacters,
   logSearchEvent,
@@ -703,30 +705,69 @@ app.get("/api/superadmin/tenants", async (c) => {
   return c.json({ tenants: rows });
 });
 
+/**
+ * 회사 개설 — 회사 + 첫 owner 초대 + 초기 크레딧을 **한 트랜잭션**으로 (다회사 2단계).
+ *
+ * 예전엔 회사 만들기와 초대가 따로였다. 초대가 실패하면 **아무도 들어갈 수 없는 회사**가
+ * 남는데, 목록에선 그냥 "사용자 0명"으로 보여서 운영자가 사고를 알아채지 못했다.
+ * 이제 셋 중 하나라도 실패하면 전부 롤백된다.
+ */
 app.post("/api/superadmin/tenants", async (c) => {
   const actor = requireSuperadmin(c);
-  const body = await c.req.json<{ id?: string; name?: string; kind?: string; billingEmail?: string }>().catch(() => ({}) as any);
-  const name = String(body.name ?? "").trim();
-  if (!name) return c.json({ error: "name_required" }, 400);
-  // id 는 사람이 읽는 값이라 직접 받되, 형식은 좁게 잡는다(경로·SQL 어디에 실려도 안전하게).
-  const id = String(body.id ?? "").trim() || `t_${name.toLowerCase().replace(/[^a-z0-9]+/g, "_").slice(0, 20)}`;
-  if (!/^t_[a-z0-9_]{1,40}$/.test(id)) {
-    return c.json({ error: "invalid_id", message: "id 는 t_ 로 시작하는 소문자·숫자·밑줄이어야 합니다." }, 400);
-  }
-  const kind = ["web", "api", "internal"].includes(String(body.kind)) ? String(body.kind) : "api";
-  await audit(actor, { action: "tenant.create", targetTenant: id, detail: { name, kind } }, clientIp(c));
+  const body = await c.req.json<Record<string, unknown>>().catch(() => ({}) as Record<string, unknown>);
+
+  // 한글 이름은 슬러그가 통째로 비어서 예전엔 전부 `t__` 로 충돌했다 — nonce 로 대체한다.
+  const checked = planOnboarding(body, crypto.randomBytes(5).toString("hex"));
+  if (!checked.ok) return c.json({ error: checked.error, message: checked.message }, 400);
+  const plan = checked.plan;
+
+  await audit(
+    actor,
+    {
+      action: "tenant.create",
+      targetTenant: plan.id,
+      detail: { name: plan.name, kind: plan.kind, ownerEmail: plan.ownerEmail, initialCredits: plan.initialCredits },
+    },
+    clientIp(c),
+  );
+
+  let invite: { token: string; expiresAt: number; id: string };
   try {
-    await getRawPool().query(
-      `INSERT INTO tenants (id, name, kind, billing_email) VALUES ($1,$2,$3,$4)`,
-      [id, name, kind, body.billingEmail ?? null],
-    );
+    invite = await withRawTransaction(async (db) => {
+      await db.query(`INSERT INTO tenants (id, name, kind, billing_email) VALUES ($1,$2,$3,$4)`, [
+        plan.id, plan.name, plan.kind, plan.billingEmail,
+      ]);
+      // 초기 크레딧은 무상 지급(grant)이다 — 결제 원장(topup)과 섞이면 매출이 부풀어 보인다.
+      if (plan.initialCredits > 0) {
+        await db.query(
+          `INSERT INTO credit_ledger (tenant_id, delta, reason, note, actor, dedupe_key)
+           VALUES ($1,$2,'grant',$3,$4,$5) ON CONFLICT (dedupe_key) DO NOTHING`,
+          [plan.id, plan.initialCredits, "개설 지급", actor.email, grantDedupeKey(plan.id)],
+        );
+      }
+      return createInvite(
+        { tenantId: plan.id, email: plan.ownerEmail, role: "owner", invitedBy: actor.id },
+        db,
+      );
+    });
   } catch (e: any) {
-    if (e?.code === "23505") return c.json({ error: "duplicate_id" }, 409);
-    throw e;
+    if (e?.code === "23505") return c.json({ error: "duplicate_id", message: `이미 있는 회사 id 입니다: ${plan.id}` }, 409);
+    // 초대 실패(이미 계정이 있는 이메일 등)도 여기로 온다 — 회사는 만들어지지 않았다.
+    return c.json({ error: "create_failed", message: String(e?.message ?? e) }, 400);
   }
+
   // 테넌트가 둘 이상이 되는 순간 인증 없이 도는 건 위험하다 — 즉시 자세를 다시 점검한다.
   await assertAuthPosture();
-  return c.json({ id, authPostureError });
+  return c.json({
+    id: plan.id,
+    ownerEmail: plan.ownerEmail,
+    initialCredits: plan.initialCredits,
+    inviteToken: invite.token,
+    inviteExpiresAt: invite.expiresAt,
+    // 운영자가 그대로 복사해 보낼 수 있는 링크. PUBLIC_URL 이 없으면 null(가짜 링크는 안 만든다).
+    inviteUrl: inviteLink(process.env.PUBLIC_URL, invite.token),
+    authPostureError,
+  });
 });
 
 app.patch("/api/superadmin/tenants/:id", async (c) => {

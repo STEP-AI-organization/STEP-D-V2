@@ -53,6 +53,36 @@ export function getRawPool(): pg.Pool {
   return rawPool;
 }
 
+/**
+ * 최소한의 질의 인터페이스. Pool 과 PoolClient 가 둘 다 만족하므로, 같은 함수를
+ * "풀에서 알아서" 와 "이 트랜잭션 안에서" 두 방식으로 쓸 수 있다.
+ */
+export interface Queryable {
+  query(text: string, values?: unknown[]): Promise<{ rows: any[]; rowCount: number | null }>;
+}
+
+/**
+ * 스코프 없는 트랜잭션. **여러 테넌트에 걸친 쓰기**(회사 개설 = tenants + invites +
+ * credit_ledger)에 쓴다 — 그런 쓰기는 애초에 한 테넌트 컨텍스트 안에서 표현할 수 없다.
+ *
+ * 콜백이 던지면 ROLLBACK 한다. 회사 개설이 중간에 깨져서 **아무도 못 들어가는 회사**가
+ * 남는 걸 막는 게 이 함수의 존재 이유다.
+ */
+export async function withRawTransaction<T>(fn: (db: Queryable) => Promise<T>): Promise<T> {
+  const client = await rawPool.connect();
+  try {
+    await client.query("BEGIN");
+    const out = await fn(client);
+    await client.query("COMMIT");
+    return out;
+  } catch (e) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw e;
+  } finally {
+    client.release();
+  }
+}
+
 const SET_SCOPE = "SELECT set_config('app.tenant_id', $1, false)";
 
 /** 현재 컨텍스트의 스코프를 RLS 가 읽는 문자열로. 컨텍스트가 없으면 currentScope()가 던진다. */

@@ -144,19 +144,38 @@ function InviteForm({ tenant, onClose }: { tenant: Tenant; onClose: () => void }
   );
 }
 
+/**
+ * 회사 개설 — 회사 + 첫 관리자 초대 + 초기 크레딧을 한 번에 보낸다.
+ *
+ * **첫 관리자 이메일이 필수다.** 예전엔 회사만 먼저 만들고 초대는 따로였는데, 초대를
+ * 빼먹거나 실패하면 아무도 못 들어가는 회사가 목록에 남았다. 서버가 셋을 한 트랜잭션으로
+ * 처리하므로 여기서 한 번에 받는다.
+ */
 function CreateForm({ onDone }: { onDone: () => void }) {
   const [name, setName] = useState("");
   const [id, setId] = useState("");
   const [kind, setKind] = useState("api");
+  const [ownerEmail, setOwnerEmail] = useState("");
+  const [billingEmail, setBillingEmail] = useState("");
+  const [initialCredits, setInitialCredits] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // 개설 결과. 초대 링크는 **이 화면에서만** 볼 수 있다 — 토큰은 다시 못 얻는다.
+  const [made, setMade] = useState<Awaited<ReturnType<typeof api.createTenant>> | null>(null);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     setBusy(true); setErr(null);
     try {
-      await api.createTenant({ name, id: id || undefined, kind });
-      onDone();
+      const r = await api.createTenant({
+        name,
+        id: id || undefined,
+        kind,
+        ownerEmail,
+        billingEmail: billingEmail || undefined,
+        initialCredits: initialCredits ? Number(initialCredits) : undefined,
+      });
+      setMade(r);
     } catch (e) {
       setErr(String(e));
     } finally {
@@ -164,20 +183,76 @@ function CreateForm({ onDone }: { onDone: () => void }) {
     }
   }
 
+  // 만들어진 뒤에는 폼 대신 초대 링크를 보여준다. 여기서 닫으면 링크를 다시 못 본다.
+  if (made) {
+    const link = made.inviteUrl ?? "";
+    return (
+      <div style={{ padding: "14px 16px", borderBottom: "1px solid var(--line)" }}>
+        <p style={{ marginTop: 0 }}>
+          <strong>{made.id}</strong> 개설 완료 — {made.ownerEmail} 을(를) owner 로 초대했습니다
+          {made.initialCredits > 0 && ` · 크레딧 ${made.initialCredits}개 지급`}.
+        </p>
+        <p className="muted" style={{ fontSize: 12 }}>
+          아래 링크를 담당자에게 보내세요. <strong>이 창을 닫으면 다시 볼 수 없습니다</strong>
+          (토큰은 저장하지 않습니다).
+        </p>
+        {link ? (
+          <div className="row">
+            <input readOnly value={link} onFocus={(e) => e.currentTarget.select()} style={{ flex: 1 }} />
+            <button type="button" onClick={() => void navigator.clipboard?.writeText(link)}>복사</button>
+          </div>
+        ) : (
+          // 서버에 PUBLIC_URL 이 없으면 링크를 못 만든다 — 가짜 링크 대신 토큰을 준다.
+          <div className="row">
+            <input readOnly value={made.inviteToken} onFocus={(e) => e.currentTarget.select()} style={{ flex: 1 }} />
+            <span className="muted" style={{ fontSize: 12 }}>서버 PUBLIC_URL 미설정 — 토큰만 표시</span>
+          </div>
+        )}
+        <div className="row" style={{ marginTop: 10 }}>
+          <button className="primary" type="button" onClick={onDone}>확인했습니다 · 닫기</button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <form onSubmit={submit} style={{ padding: "14px 16px", borderBottom: "1px solid var(--line)" }}>
       <div className="row">
-        <input placeholder="이름 (예: KBS)" value={name} onChange={(e) => setName(e.target.value)} required />
-        <input placeholder="id (비우면 자동, t_ 로 시작)" value={id} onChange={(e) => setId(e.target.value)} />
+        <input placeholder="회사 이름 (예: 한국방송)" value={name} onChange={(e) => setName(e.target.value)} required />
+        <input placeholder="id (비우면 자동)" value={id} onChange={(e) => setId(e.target.value)} />
         <select value={kind} onChange={(e) => setKind(e.target.value)}>
           <option value="api">api — 외부 API 고객</option>
           <option value="web">web — 자체 웹서비스 고객</option>
           <option value="internal">internal — 사내</option>
         </select>
-        <button className="primary" disabled={busy}>만들기</button>
+      </div>
+      <div className="row" style={{ marginTop: 8 }}>
+        <input
+          type="email"
+          placeholder="첫 관리자 이메일 (필수)"
+          value={ownerEmail}
+          onChange={(e) => setOwnerEmail(e.target.value)}
+          required
+        />
+        <input
+          type="email"
+          placeholder="청구 이메일 (선택)"
+          value={billingEmail}
+          onChange={(e) => setBillingEmail(e.target.value)}
+        />
+        <input
+          inputMode="numeric"
+          placeholder="초기 크레딧 (1개 = 1분)"
+          value={initialCredits}
+          onChange={(e) => setInitialCredits(e.target.value.replace(/\D/g, ""))}
+        />
+        <button className="primary" disabled={busy}>{busy ? "만드는 중…" : "만들기"}</button>
       </div>
       {err && <div className="err">{err}</div>}
-      <p className="muted" style={{ fontSize: 12, marginBottom: 0 }}>
+      <p className="muted" style={{ fontSize: 12, marginBottom: 0, marginTop: 10 }}>
+        첫 관리자를 owner 로 초대하고 초대 링크를 돌려줍니다. 셋 중 하나라도 실패하면 회사도
+        만들어지지 않습니다.
+        <br />
         ⚠️ 테넌트가 둘 이상이 되면 <code>AUTH_REQUIRED=1</code> 없이는 서버가 모든 요청을 503 으로 막습니다
         — 인증이 꺼진 채로는 모든 요청이 기본 테넌트로 해석되어 격리가 무의미해지기 때문입니다.
       </p>
