@@ -44,6 +44,10 @@ import {
 import { audit, clientIp, requireReason, requireSuperadmin } from "./admin.ts";
 import { grantDedupeKey, nextTenantId, planOnboarding } from "./onboarding.ts";
 import {
+  billingConfig, cardBlockReason, cardLabel, cardTopupPaymentId, checkCustomer,
+  issueIdFor, verifyCharge,
+} from "./billing-card.ts";
+import {
   API_SCOPES, bearerKey, checkRoute, generateKey, hashKey, keyBlockReason, keyPrefix,
   shouldTouchLastUsed,
 } from "./api-keys.ts";
@@ -102,6 +106,9 @@ import {
   createTopup,
   getTopup,
   markTopupPaid,
+  getBillingCard,
+  saveBillingCard,
+  revokeBillingCard,
   listChannelRules,
   getChannelRule,
   upsertChannelRule,
@@ -243,7 +250,7 @@ import {
   manualDedupeKey, planManualCredit, settleTopup, topupDedupeKey, topupPaymentId,
 } from "./credits.ts";
 import { billableMinutes, portoneConfigured } from "./billing.ts";
-import { getPayment, verifyWebhook } from "./portone.ts";
+import { chargeWithBillingKey, getPayment, verifyWebhook } from "./portone.ts";
 import { commitAndInherit } from "./adopt.ts";
 import { runAutomationCycle } from "./automation-cycle.ts";
 import {
@@ -4256,6 +4263,120 @@ app.delete("/api/assets", async (c) => {
 //
 // 크레딧 1개 = 분석 1분. 결제는 포트원 결제창(일반결제)으로 하고, **확정은 웹훅으로만** 한다 —
 // 브라우저가 "성공했다"고 말하는 것만 믿고 크레딧을 올리면 조작 한 번에 공짜가 된다.
+
+// ── 저장 카드(빌링키) ─────────────────────────────────────────────────────────
+// 매번 카드를 다시 넣지 않고 버튼 한 번으로 충전한다.
+// 카드 번호는 브라우저 → 포트원으로 직접 가고 우리 서버엔 오지 않는다. 우리가 받는 건
+// 빌링키 문자열뿐이지만, 그게 곧 "이 카드로 긁을 권한"이라 회사 스코프 안에서만 다룬다.
+
+/** 카드 등록 준비 — 브라우저 SDK 에 넘길 값. 설정·필수정보가 없으면 창을 아예 안 띄운다. */
+app.post("/api/billing/card/prepare", async (c) => {
+  const cfg = billingConfig();
+  if (!cfg.ok) return c.json({ error: "billing_unconfigured", message: cfg.message }, 503);
+
+  const body = await c.req.json<Record<string, unknown>>().catch(() => ({}) as Record<string, unknown>);
+  const who = checkCustomer(body);
+  if (!who.ok) return c.json({ error: "customer_required", message: who.message, missing: who.missing }, 400);
+
+  const tenantId = currentTenantId();
+  const issueId = issueIdFor(tenantId, crypto.randomBytes(6).toString("hex"));
+  return c.json({
+    storeId: cfg.config.storeId,
+    channelKey: cfg.config.channelKey,
+    // KG이니시스는 CARD 고정 · issueId/issueName 필수.
+    billingKeyMethod: "CARD",
+    issueId,
+    issueName: "STEP-D 크레딧 결제수단",
+    customer: who.customer,
+  });
+});
+
+/** 발급된 빌링키 저장. 회사당 한 장 — 다시 등록하면 덮어쓴다. */
+app.post("/api/billing/card", async (c) => {
+  const body = await c.req.json<Record<string, unknown>>().catch(() => ({}) as Record<string, unknown>);
+  const billingKey = String(body.billingKey ?? "").trim();
+  if (!billingKey) return c.json({ error: "billing_key_required" }, 400);
+  const actor = c.get("user")?.email ?? "unknown";
+  const card = await saveBillingCard({
+    billingKey,
+    cardBrand: String(body.cardBrand ?? "").trim() || null,
+    cardLast4: String(body.cardLast4 ?? "").replace(/\D/g, "").slice(-4) || null,
+    issuedBy: actor,
+  });
+  return c.json({ ok: true, card: { label: cardLabel(card.cardBrand, card.cardLast4), createdAt: card.createdAt } });
+});
+
+app.get("/api/billing/card", async (c) => {
+  const card = await getBillingCard();
+  const cfg = billingConfig();
+  return c.json({
+    // 빌링키 자체는 절대 내보내지 않는다 — 화면이 알 필요가 없다.
+    registered: Boolean(card?.billingKey && !card.revokedAt),
+    label: card ? cardLabel(card.cardBrand, card.cardLast4) : null,
+    createdAt: card?.createdAt ?? null,
+    available: cfg.ok,
+    unavailableReason: cfg.ok ? null : cfg.message,
+  });
+});
+
+app.delete("/api/billing/card", async (c) => {
+  await revokeBillingCard();
+  return c.json({ ok: true });
+});
+
+/**
+ * 저장 카드로 충전. **서버가 직접 긁는다** — 결제창이 없다.
+ *
+ * 금액은 서버가 계산한다(클라이언트가 보낸 금액을 쓰면 1원에 10만 크레딧을 산다).
+ * 승인 응답을 대조한 뒤에만 원장에 올린다 — 웹훅 경로와 같은 원칙이다.
+ */
+app.post("/api/credits/topup/card", async (c) => {
+  const body = await c.req.json<Record<string, unknown>>().catch(() => ({}) as Record<string, unknown>);
+  const check = buildTopup(body.credits);
+  if (!check.ok) return c.json({ error: "bad_request", message: check.reason }, 400);
+
+  const card = await getBillingCard();
+  const blocked = cardBlockReason(card);
+  if (blocked) return c.json({ error: "no_card", message: blocked }, 409);
+
+  const tenantId = currentTenantId();
+  const paymentId = cardTopupPaymentId(tenantId, crypto.randomBytes(6).toString("hex"));
+  const actor = c.get("user")?.email ?? "unknown";
+  // 주문을 먼저 만든다 — 승인 응답을 못 받아도 "긁혔을 수 있는 건"이 기록으로 남는다.
+  await createTopup({ paymentId, credits: check.credits, amountKrw: check.amountKrw, status: "pending", requestedBy: actor });
+
+  let response: unknown;
+  try {
+    response = await chargeWithBillingKey({
+      paymentId,
+      billingKey: card!.billingKey!,
+      orderName: `STEP-D 크레딧 ${check.credits}개`,
+      amountKrw: check.amountKrw,
+    });
+  } catch (e: any) {
+    await markTopupPaid(paymentId, "failed");
+    return c.json({ error: "charge_failed", message: String(e?.message ?? e) }, 402);
+  }
+
+  const verdict = verifyCharge({ response, expectedKrw: check.amountKrw });
+  if (!verdict.ok) {
+    await markTopupPaid(paymentId, "failed");
+    return c.json({ error: "charge_mismatch", message: verdict.message }, 409);
+  }
+
+  await markTopupPaid(paymentId, "paid");
+  await addCreditEntry({
+    delta: check.credits,
+    reason: "topup",
+    paymentId,
+    amountKrw: check.amountKrw,
+    note: "저장 카드 결제",
+    actor,
+    dedupeKey: topupDedupeKey(paymentId),
+  });
+  const balance = await creditBalance();
+  return c.json({ ok: true, paymentId, credits: check.credits, amountKrw: check.amountKrw, balance });
+});
 
 app.get("/api/credits", async (c) => {
   const [balance, ledger] = await Promise.all([creditBalance(), listCreditLedger(50)]);

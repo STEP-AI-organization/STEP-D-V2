@@ -2782,6 +2782,58 @@ export interface TopupRow {
   paymentId: string; credits: number; amountKrw: number; status: string; requestedBy: string;
 }
 
+// ── 저장 카드(빌링키) ─────────────────────────────────────────────────────────
+// RLS 표(0029)라 **스코프 있는 풀**(pool)로 쓴다. rawPool 로 만지면 0행이 나온다.
+
+export interface BillingCardRow {
+  billingKey: string | null;
+  cardBrand: string | null;
+  cardLast4: string | null;
+  createdAt: string;
+  revokedAt: string | null;
+}
+
+export async function getBillingCard(): Promise<BillingCardRow | null> {
+  const { rows } = await pool.query(
+    `SELECT billing_key AS "billingKey", card_brand AS "cardBrand", card_last4 AS "cardLast4",
+            created_at AS "createdAt", revoked_at AS "revokedAt"
+       FROM billing_card WHERE tenant_id = current_setting('app.tenant_id', true)`,
+  );
+  return (rows[0] as BillingCardRow | undefined) ?? null;
+}
+
+/**
+ * 회사당 한 장 — 다시 등록하면 덮어쓴다.
+ * 재등록은 `revoked_at` 을 비워야 한다. 안 그러면 해지 표시가 남아 새 카드가 죽은 채로 저장된다.
+ */
+export async function saveBillingCard(input: {
+  billingKey: string;
+  cardBrand: string | null;
+  cardLast4: string | null;
+  issuedBy: string;
+}): Promise<BillingCardRow> {
+  const { rows } = await pool.query(
+    `INSERT INTO billing_card (tenant_id, billing_key, card_brand, card_last4, issued_by)
+     VALUES (current_setting('app.tenant_id', true), $1, $2, $3, $4)
+     ON CONFLICT (tenant_id) DO UPDATE SET
+       billing_key = EXCLUDED.billing_key, card_brand = EXCLUDED.card_brand,
+       card_last4  = EXCLUDED.card_last4,  issued_by  = EXCLUDED.issued_by,
+       created_at  = now(), revoked_at = NULL
+     RETURNING billing_key AS "billingKey", card_brand AS "cardBrand", card_last4 AS "cardLast4",
+               created_at AS "createdAt", revoked_at AS "revokedAt"`,
+    [input.billingKey, input.cardBrand, input.cardLast4, input.issuedBy],
+  );
+  return rows[0] as BillingCardRow;
+}
+
+/** 해지 — 행은 남기고 **빌링키 문자열은 비운다.** 해지된 권한을 들고 있을 이유가 없다. */
+export async function revokeBillingCard(): Promise<void> {
+  await pool.query(
+    `UPDATE billing_card SET billing_key = NULL, revoked_at = now()
+      WHERE tenant_id = current_setting('app.tenant_id', true) AND revoked_at IS NULL`,
+  );
+}
+
 export async function createTopup(r: TopupRow): Promise<void> {
   await pool.query(
     `INSERT INTO credit_topup (payment_id, tenant_id, credits, amount_krw, status, requested_by)
