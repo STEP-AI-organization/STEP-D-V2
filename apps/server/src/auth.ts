@@ -44,7 +44,13 @@ export interface User {
   tenantId: string;
   email: string;
   name: string;
+  /** 워크스페이스 관리 권한 — 사람 초대·채널 연결·결제. */
   role: Role;
+  /**
+   * 방송 업무 권한 (editor|cp|pd|vendor · FLOWS F9) — 배포·승인·수익·범위.
+   * `role` 과 **다른 질문에 답한다.** 판정은 ops-role.ts 가 한다(모르는 값 → vendor).
+   */
+  opsRole?: string;
   status: string;
 }
 
@@ -105,7 +111,9 @@ const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 // ── 사용자 ─────────────────────────────────────────────────────────────────────
 
-const USER_COLS = `id, tenant_id AS "tenantId", email, name, role, status`;
+// ops_role 은 **워크스페이스 역할과 다른 축**이다(ops-role.ts 참조).
+// 여기 한 줄에 넣어 두면 findUserByEmail·createUser·resolveSession 이 전부 같이 읽는다.
+const USER_COLS = `id, tenant_id AS "tenantId", email, name, role, status, ops_role AS "opsRole"`;
 
 export async function findUserByEmail(email: string): Promise<(User & { passwordHash: string }) | null> {
   const { rows } = await getRawPool().query(

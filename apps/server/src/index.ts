@@ -217,6 +217,7 @@ import {
   readTrack,
 } from "./episode-intake.ts";
 import { dispatchPublish } from "./publish-dispatch.ts";
+import { opsCapabilityOf } from "./ops-role.ts";
 import {
   ROOT as ASSET_ROOT,
   canMoveFolder,
@@ -435,7 +436,14 @@ app.get("/api/auth/me", (c) => {
   const user = c.get("user") as User | undefined;
   if (!user) return c.json({ user: null, authRequired: authRequired() });
   return c.json({
-    user: { id: user.id, email: user.email, name: user.name, role: user.role, tenantId: user.tenantId },
+    user: {
+      id: user.id, email: user.email, name: user.name,
+      // 두 축을 함께 준다 — 화면이 관리 권한(role)과 방송 권한(opsRole)을 구분해서 쓴다.
+      role: user.role,
+      opsRole: opsCapabilityOf(user.opsRole).key,
+      capabilities: opsCapabilityOf(user.opsRole),
+      tenantId: user.tenantId,
+    },
     authRequired: authRequired(),
   });
 });
