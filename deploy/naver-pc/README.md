@@ -15,6 +15,12 @@
 
 운영 상세는 [docs/ops/naver-publish.md](../../docs/ops/naver-publish.md).
 
+> 이 문서는 리포 안에 있다. 윈도우2 에서 **먼저 클론하고 열어도 된다** — 2단계를 1단계보다
+> 먼저 해도 무방하다.
+> ```powershell
+> git clone https://github.com/STEP-AI-organization/STEP-D-V2.git $env:USERPROFILE\STEPD-repo
+> ```
+
 ---
 
 ## 0. 준비물
@@ -74,7 +80,7 @@ ipconfig | Select-String IPv4        # 같은 LAN 이면 이 주소를 쓴다
 ## 2. 리포 + 의존성
 
 ```powershell
-git clone <repo-url> $env:USERPROFILE\STEPD-repo
+git clone https://github.com/STEP-AI-organization/STEP-D-V2.git $env:USERPROFILE\STEPD-repo
 cd $env:USERPROFILE\STEPD-repo
 pnpm install
 npx playwright install chromium          # ~150MB
