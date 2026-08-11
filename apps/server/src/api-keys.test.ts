@@ -239,7 +239,8 @@ describe("배선 — 키 경로가 같은 출구를 지나는가", () => {
     assert.notEqual(route, "", "발급 라우트를 찾지 못했다");
     // INSERT 한 문장만 떼어 본다 — 라우트 전체를 보면 응답의 `key: raw`(평문을 한 번
     // 돌려주는 정상 동작)까지 걸려서 검사가 의미를 잃는다.
-    const insert = /`INSERT INTO api_keys[\s\S]*?\n\s*\);/.exec(route)?.[0] ?? "";
+    // 닫는 괄호 개수는 호출 형태에 따라 다르다(`pool.query(...)` vs `asSystem((db) => db.query(...))`).
+    const insert = /`INSERT INTO api_keys[\s\S]*?\n\s*\)+;/.exec(route)?.[0] ?? "";
     assert.notEqual(insert, "", "api_keys INSERT 를 찾지 못했다");
     assert.match(insert, /hashKey\(raw\)/, "해시가 아니라 평문을 넣고 있다");
     // 파라미터 배열에 맨 `raw` 가 섞이면 평문이 그대로 저장된다.

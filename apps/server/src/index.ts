@@ -161,6 +161,7 @@ import {
   deleteShortSourceMap,
   getChannelPointProfile,
   getPool,
+  asSystem,
   getRawPool,
   lookupApiKey,
   touchApiKey,
@@ -698,11 +699,13 @@ app.get("/api/superadmin/overview", async (c) => {
   const actor = requireSuperadmin(c);
   await audit(actor, { action: "overview.view" }, clientIp(c));
   const p = getRawPool();
+  // tenants·users 는 RLS 대상이 아니라 rawPool 로 읽는다. job_queue·media 는 RLS 표라
+  // 시스템 스코프가 필요하다 — rawPool 로 읽으면 0 이 나온다(또는 커넥션에 남은 남의 스코프).
   const [tenants, users, jobs, media] = await Promise.all([
     p.query(`SELECT COUNT(*)::int AS n FROM tenants`),
     p.query(`SELECT COUNT(*)::int AS n FROM users WHERE status = 'active'`),
-    p.query(`SELECT status, COUNT(*)::int AS n FROM job_queue GROUP BY status`),
-    p.query(`SELECT COUNT(*)::int AS n, COALESCE(SUM(durationSec), 0)::float AS sec FROM media`),
+    asSystem((db) => db.query(`SELECT status, COUNT(*)::int AS n FROM job_queue GROUP BY status`)),
+    asSystem((db) => db.query(`SELECT COUNT(*)::int AS n, COALESCE(SUM(durationSec), 0)::float AS sec FROM media`)),
   ]);
   const jobStats: Record<string, number> = { pending: 0, running: 0, done: 0, failed: 0 };
   for (const r of jobs.rows as { status: string; n: number }[]) jobStats[r.status] = r.n;
@@ -718,13 +721,38 @@ app.get("/api/superadmin/overview", async (c) => {
 app.get("/api/superadmin/tenants", async (c) => {
   const actor = requireSuperadmin(c);
   await audit(actor, { action: "tenant.list" }, clientIp(c));
-  const { rows } = await getRawPool().query(`
-    SELECT t.id, t.name, t.kind, t.status, t.billing_email AS "billingEmail", t.created_at AS "createdAt",
-           (SELECT COUNT(*)::int FROM users u WHERE u.tenant_id = t.id AND u.status = 'active') AS "userCount",
-           (SELECT COUNT(*)::int FROM media m WHERE m.tenant_id = t.id) AS "mediaCount",
-           (SELECT COALESCE(SUM(m.durationSec), 0)::float FROM media m WHERE m.tenant_id = t.id) AS "mediaSec"
-      FROM tenants t ORDER BY t.created_at DESC`);
-  return c.json({ tenants: rows });
+  // media·credit_ledger 는 RLS 표다 — tenants·users 와 한 쿼리로 조인하면 rawPool 로는
+  // 0 이 나오므로, 회사 기본정보(비 RLS)와 규모·잔액(RLS)을 나눠 읽고 코드에서 합친다.
+  const [base, scale] = await Promise.all([
+    getRawPool().query(`
+      SELECT t.id, t.name, t.kind, t.status, t.billing_email AS "billingEmail", t.created_at AS "createdAt",
+             (SELECT COUNT(*)::int FROM users u WHERE u.tenant_id = t.id AND u.status = 'active') AS "userCount",
+             (SELECT MAX(u.last_login_at) FROM users u WHERE u.tenant_id = t.id) AS "lastLoginAt"
+        FROM tenants t ORDER BY t.created_at DESC`),
+    asSystem(async (db) => {
+      const [media, credits] = await Promise.all([
+        db.query(`SELECT tenant_id AS "tenantId", COUNT(*)::int AS "mediaCount",
+                         COALESCE(SUM(durationSec), 0)::float AS "mediaSec"
+                    FROM media GROUP BY tenant_id`),
+        db.query(`SELECT tenant_id AS "tenantId",
+                         COALESCE(SUM(delta), 0)::int AS credits,
+                         COALESCE(SUM(CASE WHEN delta < 0 AND occurred_at >= date_trunc('month', now())
+                                           THEN -delta ELSE 0 END), 0)::int AS "usedThisMonth"
+                    FROM credit_ledger GROUP BY tenant_id`),
+      ]);
+      return { media: media.rows, credits: credits.rows };
+    }),
+  ]);
+  const byMedia = new Map(scale.media.map((r: any) => [r.tenantId, r]));
+  const byCredit = new Map(scale.credits.map((r: any) => [r.tenantId, r]));
+  const tenants = base.rows.map((t: any) => ({
+    ...t,
+    mediaCount: byMedia.get(t.id)?.mediaCount ?? 0,
+    mediaSec: byMedia.get(t.id)?.mediaSec ?? 0,
+    credits: byCredit.get(t.id)?.credits ?? 0,
+    usedThisMonth: byCredit.get(t.id)?.usedThisMonth ?? 0,
+  }));
+  return c.json({ tenants });
 });
 
 /**
@@ -871,11 +899,11 @@ app.post("/api/superadmin/tenants/:id/invite", async (c) => {
 app.get("/api/superadmin/jobs", async (c) => {
   const actor = requireSuperadmin(c);
   await audit(actor, { action: "job.list" }, clientIp(c));
-  const { rows } = await getRawPool().query(
+  const { rows } = await asSystem((db) => db.query(
     `SELECT id, type, status, attempts, tenant_id AS "tenantId", error,
             createdat AS "createdAt", updatedat AS "updatedAt"
        FROM job_queue ORDER BY updatedAt DESC LIMIT 200`,
-  );
+  ));
   return c.json({ jobs: rows });
 });
 
@@ -887,12 +915,13 @@ app.get("/api/superadmin/tenants/:id/api-keys", async (c) => {
   const actor = requireSuperadmin(c);
   const tenantId = c.req.param("id");
   await audit(actor, { action: "apikey.list", targetTenant: tenantId }, clientIp(c));
-  const { rows } = await getRawPool().query(
+  // api_keys 는 RLS 표라 rawPool 로 읽으면 0행이 나온다 — 시스템 스코프로 읽는다.
+  const { rows } = await asSystem((db) => db.query(
     `SELECT id, name, prefix, scopes, last_used_at AS "lastUsedAt",
             revoked_at AS "revokedAt", created_at AS "createdAt"
        FROM api_keys WHERE tenant_id = $1 ORDER BY created_at DESC`,
     [tenantId],
-  );
+  ));
   return c.json({ keys: rows, scopes: API_SCOPES });
 });
 
@@ -920,11 +949,11 @@ app.post("/api/superadmin/tenants/:id/api-keys", async (c) => {
     clientIp(c),
   );
   try {
-    await getRawPool().query(
+    await asSystem((db) => db.query(
       `INSERT INTO api_keys (id, tenant_id, name, key_hash, prefix, scopes)
        VALUES ($1,$2,$3,$4,$5,$6)`,
       [id, tenantId, String(body.name ?? "").trim() || null, hashKey(raw), keyPrefix(raw), scopes],
-    );
+    ));
   } catch (e: any) {
     if (e?.code === "23503") return c.json({ error: "tenant_not_found" }, 404);
     throw e;
@@ -938,7 +967,8 @@ app.post("/api/superadmin/api-keys/:keyId/revoke", async (c) => {
   const keyId = c.req.param("keyId");
   const body = await c.req.json<{ reason?: string }>().catch(() => ({}) as any);
   // 어느 회사 키인지 먼저 알아야 사유 강제 판정이 선다.
-  const { rows } = await getRawPool().query(`SELECT tenant_id AS "tenantId" FROM api_keys WHERE id = $1`, [keyId]);
+  const { rows } = await asSystem((db) =>
+    db.query(`SELECT tenant_id AS "tenantId" FROM api_keys WHERE id = $1`, [keyId]));
   if (!rows[0]) return c.json({ error: "not_found" }, 404);
   const reason = requireReason(actor, rows[0].tenantId, body.reason);
   await audit(
@@ -947,10 +977,10 @@ app.post("/api/superadmin/api-keys/:keyId/revoke", async (c) => {
     clientIp(c),
   );
   // 행을 지우지 않고 revoked_at 을 찍는다 — 누가 언제 발급하고 폐기했는지가 남아야 한다.
-  const { rowCount } = await getRawPool().query(
+  const { rowCount } = await asSystem((db) => db.query(
     "UPDATE api_keys SET revoked_at = now() WHERE id = $1 AND revoked_at IS NULL",
     [keyId],
-  );
+  ));
   return c.json({ ok: true, alreadyRevoked: rowCount === 0 });
 });
 
@@ -4021,8 +4051,12 @@ app.post("/api/billing/portone/webhook", async (c) => {
 
   // 테넌트를 주문에서 찾는다. 웹훅에는 세션이 없으므로 시스템 스코프로 한 번 읽고,
   // 그 뒤 작업은 그 테넌트 컨텍스트 안에서 한다.
-  const owner = await runAsSystem(async () => {
-    const { rows } = await getRawPool().query(
+  // ⚠️ 예전엔 runAsSystem 안에서 getRawPool() 을 썼는데, rawPool 은 app.tenant_id 를
+  // 세우지 않으므로 **시스템 스코프가 무시됐다.** credit_topup 은 RLS 표라 결과가
+  // "0행" 이거나 "커넥션에 남아 있던 남의 스코프" 였다 — 결제가 조용히 무시되거나
+  // 엉뚱한 회사로 붙을 수 있는 자리였다.
+  const owner = await asSystem(async (db) => {
+    const { rows } = await db.query(
       `SELECT tenant_id FROM credit_topup WHERE payment_id = $1`, [paymentId],
     );
     return rows[0]?.tenant_id as string | undefined;

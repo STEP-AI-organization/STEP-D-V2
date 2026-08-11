@@ -54,28 +54,45 @@ export function getRawPool(): pg.Pool {
 }
 
 /**
- * API 키 조회 — **테넌트 컨텍스트를 정하는 단계**라 스코프 없는 풀로 읽는다.
- * auth.ts 의 세션 조회와 같은 이유다(그 파일 상단 주석 참조): 지금 이 요청이 누구 것인지를
- * 정하는 중이라 아직 스코프가 없다. 조회 조건이 곧 열쇠(sha256)라 스코프 없이도 남의 것이
- * 안 나온다. 소속 회사 상태를 같이 읽어서 **정지된 회사의 키가 살아남지 않게** 한다.
+ * API 키 조회 — **테넌트 컨텍스트를 정하는 단계**다. 지금 이 요청이 누구 것인지를 정하는
+ * 중이라 아직 스코프가 없고, 조회 조건이 곧 열쇠(sha256)라 스코프 없이도 남의 것이 안 나온다.
+ *
+ * ⚠️ **그래도 `rawPool` 을 쓰면 안 된다.** `api_keys` 는 RLS 대상이라(0023),
+ * `app.tenant_id` 가 안 세워진 연결에서는 정책이 NULL 로 평가돼 **한 행도 안 나온다** —
+ * 조용히 "모든 키가 무효"가 된다. auth.ts 가 rawPool 을 쓸 수 있는 건 users/sessions 가
+ * RLS 대상이 **아니기** 때문이지 "컨텍스트 이전이라서"가 아니다. 그래서 여기는
+ * 시스템 스코프('*')로 명시해서 읽는다 — queue.ts 의 claimJob 과 같은 이유·같은 방식.
  */
 export async function lookupApiKey(keyHash: string): Promise<{
   id: string; tenantId: string; scopes: string[];
   revokedAt: Date | null; lastUsedAt: Date | null; tenantStatus: string | null;
 } | null> {
-  const { rows } = await rawPool.query(
-    `SELECT k.id, k.tenant_id AS "tenantId", k.scopes, k.revoked_at AS "revokedAt",
-            k.last_used_at AS "lastUsedAt", t.status AS "tenantStatus"
-       FROM api_keys k LEFT JOIN tenants t ON t.id = k.tenant_id
-      WHERE k.key_hash = $1`,
-    [keyHash],
-  );
-  return rows[0] ?? null;
+  return runAsSystem(async () => {
+    const { rows } = await pool.query(
+      `SELECT k.id, k.tenant_id AS "tenantId", k.scopes, k.revoked_at AS "revokedAt",
+              k.last_used_at AS "lastUsedAt", t.status AS "tenantStatus"
+         FROM api_keys k LEFT JOIN tenants t ON t.id = k.tenant_id
+        WHERE k.key_hash = $1`,
+      [keyHash],
+    );
+    return rows[0] ?? null;
+  });
 }
 
 /** 마지막 사용 시각. 안 쓰는 키를 회수할 근거가 된다 — 실패해도 요청을 막지 않는다. */
 export async function touchApiKey(id: string): Promise<void> {
-  await rawPool.query("UPDATE api_keys SET last_used_at = now() WHERE id = $1", [id]).catch(() => {});
+  await runAsSystem(() =>
+    pool.query("UPDATE api_keys SET last_used_at = now() WHERE id = $1", [id]),
+  ).catch(() => {});
+}
+
+/**
+ * 어드민(superadmin)이 **남의 회사** RLS 표를 읽고 쓸 때 쓰는 통로.
+ * 시스템 스코프('*')는 정책이 명시적으로 허용하는 값이다 — 우회가 아니라 정문이다.
+ * `getRawPool()` 로 대신하면 RLS 표에서 0행이 나와 **조용히 빈 화면**이 된다.
+ */
+export function asSystem<T>(fn: (db: Queryable) => Promise<T>): Promise<T> {
+  return runAsSystem(() => fn(pool));
 }
 
 /**
@@ -108,6 +125,17 @@ export async function withRawTransaction<T>(fn: (db: Queryable) => Promise<T>): 
   }
 }
 
+/**
+ * ⚠️ 세 번째 인자가 `false` = **세션 레벨**이라 이 값은 커넥션이 풀로 반환된 뒤에도 남는다.
+ * 그리고 `makeScopedPool` 은 rawPool 을 감싼 프록시라 **두 풀이 커넥션을 공유한다.**
+ *
+ * 그래서 `getRawPool()` 로 RLS 표를 만지면 결과가 결정적이지 않다 — 새 커넥션이면 0행,
+ * 앞서 스코프 쿼리가 썼던 커넥션이면 **그때 남은 스코프**로 읽힌다. 실제로 포트원 웹훅이
+ * 그 덕에 "우연히" 동작하고 있었다(2026-08-11 발견).
+ *
+ * 규칙은 하나다: **RLS 표는 절대 rawPool 로 만지지 않는다.** 전 회사를 가로질러야 하면
+ * `asSystem()` 을 쓴다. rls-access.test.ts 가 이걸 소스에서 검사한다.
+ */
 const SET_SCOPE = "SELECT set_config('app.tenant_id', $1, false)";
 
 /** 현재 컨텍스트의 스코프를 RLS 가 읽는 문자열로. 컨텍스트가 없으면 currentScope()가 던진다. */
