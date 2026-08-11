@@ -22,7 +22,8 @@
     "user:create": "node --import tsx --env-file .env scripts/create-user.mts",
     "tenants:report": "node --import tsx --env-file .env scripts/tenant-report.mts",
     "canva:sync": "node --import tsx --env-file .env scripts/sync-canva-templates.mts",
-    "canva:push": "node --import tsx --env-file .env scripts/push-canva-template.mts"
+    "canva:push": "node --import tsx --env-file .env scripts/push-canva-template.mts",
+    "naver:login": "node --import tsx --env-file-if-exists=.env scripts/naver-login.mts"
   },
   "dependencies": {
     "@google-cloud/storage": "^7.15.0",
@@ -36,6 +37,7 @@
     "@types/node": "^24",
     "@types/pg": "^8.20.0",
     "node-pg-migrate": "^7.9.1",
+    "playwright": "^1.62.1",
     "typescript": "^5"
   }
 }

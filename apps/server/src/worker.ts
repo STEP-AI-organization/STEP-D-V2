@@ -66,7 +66,11 @@ import {
   type PersistTokens,
 } from "./youtube.ts";
 import { createReadStream, parseObjectPath, fileExists } from "./storage-gcs.ts";
+import { pipeline } from "node:stream/promises";
 import { youtubeUploadEnabled, UPLOAD_DISABLED_MESSAGE } from "./upload-gate.ts";
+import { naverUploadEnabled, NAVER_DISABLED_MESSAGE } from "./naver-gate.ts";
+import { hasNaverSession } from "./naver-session.ts";
+import { uploadToNaver, NAVER_TARGETS, type NaverTarget } from "./naver-tv.ts";
 import { upsertDistribution } from "./publish-guard.ts";
 import {
   FRESH_VIDEO_WINDOW_MS,
@@ -92,7 +96,7 @@ const TICK_INTERVAL_MS = 15 * 60 * 1000;
  * heavy content.analyze (STT/vision, minutes) no longer blocks the flood of light video.*
  * jobs, and vice versa. Unset / "all" keeps the legacy single worker that drains everything.
  */
-const JOB_LANES: Record<"content" | "youtube" | "gebd", JobType[]> = {
+const JOB_LANES: Record<"content" | "youtube" | "gebd" | "naver", JobType[]> = {
   // match.align도 content 레인 — 파이썬·ffmpeg로 오디오를 돌리는 무거운 잡이라
   // YouTube API 레인(짧고 쿼터 위주)에 섞으면 그쪽을 막는다.
   content: ["content.analyze", "youtube.download", "match.align", "match.segment", "match.learn"],
@@ -103,6 +107,11 @@ const JOB_LANES: Record<"content" | "youtube" | "gebd", JobType[]> = {
   youtube: ["channel.analyze", "video.analyze", "video.hotwatch", "video.comments",
             "distribution.publish", "factory.orchestrate", "factory.publicize",
             "automation.cycle"],
+  // naver 는 **사무실 상시 PC 전용 lane**. 네이버는 공개 업로드 API 가 없어 브라우저
+  // 자동화가 유일한데, 해외 데이터센터 IP(Cloud Run) 로 로그인하면 캡차·2차인증에 막힌다.
+  // 그래서 한국 가정/사무실 IP 의 놀고 있는 PC 한 대에서만 이 레인을 돌린다.
+  // 세션(storageState)도 그 PC 로컬에만 둔다 — 쿠키를 클라우드로 올리지 않는다.
+  naver: ["naver.publish"],
   // gebd 는 GPU T4 spot VM 전용 lane. content lane 이 이 잡을 claim 하면 GPU 없는 곳에서
   // Docker mmaction2 를 못 돌린다. 그래서 별도 프로세스 (WORKER_JOBS=gebd) 로만 픽업.
   gebd: ["gebd.detect"],
@@ -127,9 +136,12 @@ const CLAIM_TYPES: JobType[] | undefined =
   WORKER_JOBS === "content" ? JOB_LANES.content
   : WORKER_JOBS === "youtube" ? JOB_LANES.youtube
   : WORKER_JOBS === "gebd" ? JOB_LANES.gebd
+  : WORKER_JOBS === "naver" ? JOB_LANES.naver
   : undefined; // "all" → claim every type
 /** The channel sweep enqueues YouTube work, so content/gebd-only workers must not run it. */
-const RUNS_SWEEP = WORKER_JOBS !== "content" && WORKER_JOBS !== "gebd";
+// naver 워커도 sweep 을 돌리지 않는다 — 사무실 PC 한 대일 뿐이고, sweep 은
+// youtube 레인이 책임진다. 두 곳에서 돌면 같은 잡을 두 번 되살린다.
+const RUNS_SWEEP = WORKER_JOBS !== "content" && WORKER_JOBS !== "gebd" && WORKER_JOBS !== "naver";
 
 let stopping = false;
 
@@ -187,6 +199,7 @@ async function handle(job: Job): Promise<FollowUp | void> {
     case "video.hotwatch":  return handleVideoHotwatch(job);
     case "video.comments":  return handleVideoComments(job);
     case "distribution.publish": return handleDistributionPublish(job);
+    case "naver.publish": return handleNaverPublish(job);
     case "content.analyze": { await runContentAnalyze(String(job.payload.mediaId ?? ""), Boolean(job.payload.fast)); return; }
     case "youtube.download": return handleYoutubeDownload(job);
     case "match.align": return handleMatchAlign(job);
@@ -1236,6 +1249,80 @@ function futurePublishAt(raw: unknown): string | null {
  * 던지면 큐가 지수 백오프로 최대 5회 자동 재시도하는데, F4-4 는 그걸 금지한다(⊘) —
  * 업로드가 실제로 시작된 뒤 재시도되면 중복 게시가 난다. 재시도는 사람이 누른다.
  */
+
+// ── naver.publish — 네이버 TV 업로드 (브라우저 자동화 · 사무실 PC 전용 레인) ─────────
+//
+// 이 잡은 `WORKER_JOBS=naver` 로 뜬 워커만 집는다. Cloud Run 에서 집으면 Playwright 도,
+// 한국 IP 도 없어서 100% 실패한다.
+//
+// distribution.publish 와 마찬가지로 **자동 재시도를 하지 않는다.** 브라우저 자동화 실패는
+// 대개 DOM 개편·세션 만료라서 재시도해도 같은 결과고, 계정 잠금 위험만 키운다.
+async function handleNaverPublish(job: Job): Promise<void> {
+  const clipId = String(job.payload.clipId ?? "");
+  if (!clipId) { console.error("[worker] naver.publish: clipId 누락 — 버림"); return; }
+  // target 미지정은 tv 로 본다(기존 페이로드 호환). 오타는 조용히 tv 로 넘기지 말고 버린다 —
+  // "클립에 올린 줄 알았는데 TV 에 올라간" 실패가 제일 나쁘다.
+  const rawTarget = String(job.payload.target ?? "tv");
+  if (!(rawTarget in NAVER_TARGETS)) {
+    console.error(`[worker] naver.publish: 알 수 없는 target '${rawTarget}' — 버림`);
+    return;
+  }
+  const target = rawTarget as NaverTarget;
+  const channel = NAVER_TARGETS[target].channel;
+
+  const fail = async (msg: string) => {
+    console.error(`[worker] naver.publish ${clipId} (${channel}) 실패:`, msg);
+    await markDistributionFailed(clipId, channel, msg).catch(() => {});
+  };
+
+  try {
+    // 게이트는 업로드 직전에도 다시 본다(naver-tv.ts). 여기서는 빨리 걸러 잡을 낭비하지 않는다.
+    if (!naverUploadEnabled()) return void (await fail(NAVER_DISABLED_MESSAGE));
+    if (!hasNaverSession()) {
+      return void (await fail("네이버 세션이 없습니다 — 워커 PC 에서 `pnpm --filter @stepd/server naver:login` 실행"));
+    }
+
+    const clip = await getEntity<any>("clip", clipId);
+    if (!clip) { console.warn(`[worker] naver.publish: clip ${clipId} 없음 — 버림`); return; }
+    if (!clip.mediaId) return void (await fail("클립이 아직 렌더되지 않았습니다 (익스포트 필요)"));
+    const media = await getMedia(clip.mediaId);
+    if (!media) return void (await fail("렌더된 영상 파일을 찾을 수 없습니다"));
+
+    const objPath = parseObjectPath(media.path);
+    if (!(await fileExists(objPath))) return void (await fail("스토리지에 영상 파일이 없습니다"));
+
+    // Playwright 는 **로컬 파일 경로**만 받는다 — GCS 스트림을 그대로 못 넘긴다.
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "stepd-naver-"));
+    const localPath = path.join(tmpDir, `${clipId}.mp4`);
+    try {
+      await pipeline(createReadStream(objPath), fs.createWriteStream(localPath));
+      const r = await uploadToNaver({
+        target,
+        videoPath: localPath,
+        title: clip.title ?? "무제 클립",
+        description: clip.synopsis ?? "",
+        tags: Array.isArray(clip.tags) ? clip.tags : undefined,
+        artifactDir: path.join(os.homedir(), ".stepd", "naver-artifacts"),
+      });
+      if (!r.ok) {
+        return void (await fail(`${r.error ?? "업로드 실패"}${r.screenshotPath ? ` (스크린샷: ${r.screenshotPath})` : ""}`));
+      }
+      const fresh = (await getEntity<any>("clip", clipId)) ?? clip;
+      await putEntity("clip", clipId, {
+        ...fresh,
+        distributions: upsertDistribution(fresh.distributions, channel,
+          { status: "published", url: r.url ?? null, publishedAt: Date.now() }),
+      });
+      console.log(`[worker] naver.publish ${clipId} (${channel}) 완료 → ${r.url ?? "(URL 미확인)"}`);
+    } finally {
+      // 클립 영상은 수백 MB 다. 남기면 워커 PC 디스크가 찬다.
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  } catch (err) {
+    await fail(err instanceof Error ? err.message : String(err));
+  }
+}
+
 async function handleDistributionPublish(job: Job): Promise<void> {
   try {
     await runDistributionPublish(job);
