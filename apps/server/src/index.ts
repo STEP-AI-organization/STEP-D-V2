@@ -849,7 +849,10 @@ app.patch("/api/superadmin/tenants/:id", async (c) => {
 app.get("/api/superadmin/users", async (c) => {
   const actor = requireSuperadmin(c);
   const tenant = c.req.query("tenant") ?? null;
-  const reason = requireReason(actor, tenant, c.req.query("reason"));
+  // 읽기에는 사유를 요구하지 않는다 (2026-08-11 결정 · docs/plans/admin-multi-tenant-plan.md).
+  // 운영자가 조회할 때마다 사유를 적어야 하면 지원이 안 굴러간다. 대신 **누가 무엇을 봤는지는
+  // 반드시 남긴다** — 다 볼 수 있게 열어 준 만큼 견제는 기록으로 한다. 쓰기는 여전히 사유 강제.
+  const reason = c.req.query("reason") ?? null;
   await audit(actor, { action: "user.list", targetTenant: tenant, reason }, clientIp(c));
   const { rows } = await getRawPool().query(
     `SELECT id, tenant_id AS "tenantId", email, name, role, status,
@@ -898,11 +901,14 @@ app.post("/api/superadmin/tenants/:id/invite", async (c) => {
 /** 전 테넌트 잡 — 운영 현황. 잡 payload 에 남의 콘텐츠 식별자가 들어 있어 열람도 감사한다. */
 app.get("/api/superadmin/jobs", async (c) => {
   const actor = requireSuperadmin(c);
-  await audit(actor, { action: "job.list" }, clientIp(c));
+  const tenant = c.req.query("tenant") ?? null;
+  await audit(actor, { action: "job.list", targetTenant: tenant }, clientIp(c));
   const { rows } = await asSystem((db) => db.query(
     `SELECT id, type, status, attempts, tenant_id AS "tenantId", error,
             createdat AS "createdAt", updatedat AS "updatedAt"
-       FROM job_queue ORDER BY updatedAt DESC LIMIT 200`,
+       FROM job_queue ${tenant ? "WHERE tenant_id = $1" : ""}
+      ORDER BY updatedAt DESC LIMIT 200`,
+    tenant ? [tenant] : [],
   ));
   return c.json({ jobs: rows });
 });
@@ -987,10 +993,24 @@ app.post("/api/superadmin/api-keys/:keyId/revoke", async (c) => {
 /** 감사 로그. superadmin 이 서로를 볼 수 있어야 견제가 성립한다. */
 app.get("/api/superadmin/audit", async (c) => {
   requireSuperadmin(c);   // 감사 로그 열람 자체는 감사하지 않는다 — 무한 증식만 만든다
+  const tenant = c.req.query("tenant") ?? null;
+  const q = (c.req.query("q") ?? "").trim();
+  // 전체 목록만 있으면 "누가 우리 회사를 봤나"를 찾을 수가 없다. 운영자가 다 볼 수 있게
+  // 열어 준 만큼 **되짚을 수 있어야** 견제가 성립한다.
+  const where: string[] = [];
+  const args: unknown[] = [];
+  if (tenant) { args.push(tenant); where.push(`target_tenant = $${args.length}`); }
+  if (q) {
+    args.push(`%${q}%`);
+    where.push(`(actor_email ILIKE $${args.length} OR action ILIKE $${args.length}
+                 OR target_id ILIKE $${args.length} OR reason ILIKE $${args.length})`);
+  }
   const { rows } = await getRawPool().query(
     `SELECT id, actor_email AS "actorEmail", action, target_tenant AS "targetTenant",
             target_id AS "targetId", reason, detail, ip, at
-       FROM admin_audit ORDER BY at DESC LIMIT 300`,
+       FROM admin_audit ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
+      ORDER BY at DESC LIMIT 300`,
+    args,
   );
   return c.json({ entries: rows });
 });

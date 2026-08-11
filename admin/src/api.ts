@@ -117,6 +117,14 @@ export const api = {
     post<{ ok: true; alreadyRevoked: boolean }>(
       `/api/superadmin/api-keys/${encodeURIComponent(keyId)}/revoke`, { reason }),
 
-  jobs: () => get<{ jobs: AdminJob[] }>("/api/superadmin/jobs"),
-  audit: () => get<{ entries: AuditEntry[] }>("/api/superadmin/audit"),
+  jobs: (tenant?: string) =>
+    get<{ jobs: AdminJob[] }>(
+      `/api/superadmin/jobs${tenant ? `?tenant=${encodeURIComponent(tenant)}` : ""}`),
+  // 감사 로그는 300건 상한이라 필터 없이는 "누가 우리 회사를 봤나" 를 못 찾는다.
+  audit: (opts: { tenant?: string; q?: string } = {}) => {
+    const qs = new URLSearchParams();
+    if (opts.tenant) qs.set("tenant", opts.tenant);
+    if (opts.q) qs.set("q", opts.q);
+    return get<{ entries: AuditEntry[] }>(`/api/superadmin/audit${qs.size ? `?${qs}` : ""}`);
+  },
 };
