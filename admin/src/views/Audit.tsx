@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { api } from "../api";
 import { Panel, State, useLoad, when } from "./common";
+import { TenantName } from "./tenant-name";
 
 export function Audit() {
   // 300건 상한이라 목록만으로는 되짚을 수가 없다. 운영자가 다 볼 수 있게 열어 준 만큼
@@ -51,7 +52,7 @@ export function Audit() {
                     <td className="muted">{when(e.at)}</td>
                     <td>{e.actorEmail}</td>
                     <td><span className="tag">{e.action}</span></td>
-                    <td>{e.targetTenant ? <code>{e.targetTenant}</code> : <span className="muted">—</span>}</td>
+                    <td><TenantName id={e.targetTenant} /></td>
                     <td className="muted">{e.targetId ?? "—"}</td>
                     <td className="wrap">{e.reason ?? <span className="muted">—</span>}</td>
                     <td className="muted">{e.ip ?? "—"}</td>

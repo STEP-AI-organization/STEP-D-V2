@@ -14,8 +14,26 @@
 export const TENANT_KINDS = ["internal", "web", "api"] as const;
 export type TenantKind = (typeof TENANT_KINDS)[number];
 
-/** `t_` + 소문자·숫자·밑줄. 경로에도 SQL 에도 실리는 값이라 좁게 잡는다. */
-export const TENANT_ID_RE = /^t_[a-z0-9_]{1,40}$/;
+/**
+ * 회사 id — **그냥 순번**이다. `1` · `2` · `3` …
+ *
+ * 사람에게 의미 있는 건 **이름**이지 id 가 아니다. 예전엔 `t_` + 이름 슬러그로 만들었는데,
+ * 한글 이름은 슬러그가 통째로 비어서 `t_a3f9c2b1e0` 같은 난수가 됐다. 그걸 보고 "id 를
+ * 읽히게 만들자"로 갔던 게 방향이 틀렸다 — **id 가 로그에 보이는 게 문제면 로그에 이름을
+ * 보여주면 된다.** id 는 내부 키로 두고, 화면이 이름을 해석한다(admin 의 tenantName).
+ *
+ * 그래서 사람이 id 를 정할 일이 없다. 형식 검사는 남긴다 — 기존 `t_default` 와, 혹시
+ * 손으로 넣을 값이 URL·SQL 에 안전한지만 본다.
+ */
+export const TENANT_ID_RE = /^[a-z0-9][a-z0-9_-]{0,39}$/;
+
+/**
+ * 쓸 수 없는 id. `*` 는 시스템 스코프 문자열이고(tenant.ts ALL_TENANTS), 나머지는 로그에서
+ * "특별한 뜻"으로 읽힐 값들이라 회사 이름으로 쓰면 나중에 반드시 헷갈린다.
+ */
+export const RESERVED_TENANT_IDS = new Set([
+  "all", "any", "none", "null", "system", "default", "admin", "api", "www", "internal",
+]);
 
 /**
  * 신규 회사에 얹을 수 있는 무상 크레딧 상한. 1 크레딧 = 분석 1분이라
@@ -24,25 +42,28 @@ export const TENANT_ID_RE = /^t_[a-z0-9_]{1,40}$/;
 export const MAX_INITIAL_CREDITS = 100_000;
 
 /**
- * 회사 이름 → 테넌트 id.
+ * 다음 회사 id — 지금까지 쓰인 숫자 id 중 가장 큰 값 + 1.
  *
- * ⚠️ **한글 이름을 반드시 처리해야 한다.** 예전 코드는
- * `t_${name.toLowerCase().replace(/[^a-z0-9]+/g, "_").slice(0,20)}` 였는데,
- * 한글은 `[^a-z0-9]` 에 전부 걸려서 "한국방송"·"문화방송"·"스텝에이아이"가 **모두 `t__`** 가
- * 됐다. 형식 검사(`t__` 는 통과한다)도 못 잡아서, 첫 회사만 만들어지고 **두 번째 한글 회사부터
- * 전부 `duplicate_id` 409** 였다. 방송사 이름은 대개 한글이라 사실상 못 쓰는 상태였다.
+ * 순수 함수라 DB 를 모른다. 호출부가 **같은 트랜잭션 안에서** 현재 목록을 읽어 넘긴다.
+ * 두 개가 동시에 만들어져도 PK 가 유일성을 지키므로, 최악이 "409 뜨고 다시 누름"이지
+ * "같은 번호가 둘 생김"이 아니다.
  *
- * 슬러그가 비면 `nonce` 로 대체한다. nonce 를 인자로 받는 이유는 이 함수를 난수 없이
- * 테스트하기 위해서다.
+ * 숫자가 아닌 기존 id(`t_default`)는 무시한다 — 섞여 있어도 상관없다.
+ *
+ * ## 왜 이름에서 만들지 않는가
+ * 예전엔 `t_${이름 슬러그}` 였는데 한글은 `[^a-z0-9]` 에 전부 걸려서 "한국방송"·"문화방송"이
+ * **모두 `t__`** 가 됐고, 두 번째 한글 회사부터 `duplicate_id` 409 였다. 그걸 난수로 때우면
+ * (`t_a3f9c2b1e0`) 충돌은 없지만 사람이 못 읽는 값이 영구히 박힌다.
+ *
+ * **id 를 읽히게 만드는 게 답이 아니다.** id 가 로그에 보이는 게 불편했던 거라면 로그가
+ * 이름을 보여주면 된다(admin 의 `tenantName`). id 는 내부 키로 두고 순번만 준다.
  */
-export function deriveTenantId(name: string, nonce: string): string {
-  const slug = String(name)
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "_")
-    .replace(/^_+|_+$/g, "")
-    .slice(0, 20)
-    .replace(/_+$/g, "");
-  return slug ? `t_${slug}` : `t_${nonce}`;
+export function nextTenantId(existingIds: readonly string[]): string {
+  let max = 0;
+  for (const id of existingIds) {
+    if (/^\d+$/.test(String(id))) max = Math.max(max, Number(id));
+  }
+  return String(max + 1);
 }
 
 /** 모르는 값은 가장 좁은 쪽(api)으로 떨어뜨린다 — internal 은 사내용이라 실수로 붙으면 안 된다. */
@@ -67,7 +88,8 @@ export function looksLikeEmail(v: unknown): boolean {
 }
 
 export interface OnboardPlan {
-  id: string;
+  /** 사람이 주지 않으면 null — 라우트가 트랜잭션 안에서 순번을 매긴다. */
+  id: string | null;
   name: string;
   kind: TenantKind;
   billingEmail: string | null;
@@ -92,7 +114,6 @@ export function planOnboarding(
     ownerEmail?: unknown;
     initialCredits?: unknown;
   },
-  nonce: string,
 ): OnboardCheck {
   const name = String(input.name ?? "").trim();
   if (!name) return { ok: false, error: "name_required", message: "회사 이름이 필요합니다." };
@@ -116,19 +137,20 @@ export function planOnboarding(
     return { ok: false, error: "invalid_billing_email", message: `청구 이메일 형식이 아닙니다: ${billingEmail}` };
   }
 
-  const id = String(input.id ?? "").trim() || deriveTenantId(name, nonce);
-  if (!TENANT_ID_RE.test(id)) {
-    return {
-      ok: false,
-      error: "invalid_id",
-      message: "id 는 t_ 로 시작하는 소문자·숫자·밑줄이어야 합니다.",
-    };
+  // id 는 보통 안 받는다 — 라우트가 순번을 매긴다. 손으로 준 경우에만 형식을 본다
+  // (마이그레이션·픽스처용 경로다. 화면에는 입력란이 없다).
+  const given = String(input.id ?? "").trim();
+  if (given && !TENANT_ID_RE.test(given)) {
+    return { ok: false, error: "invalid_id", message: "id 는 소문자·숫자·밑줄·하이픈만 됩니다." };
+  }
+  if (given && RESERVED_TENANT_IDS.has(given)) {
+    return { ok: false, error: "reserved_id", message: `쓸 수 없는 id 입니다: ${given}` };
   }
 
   return {
     ok: true,
     plan: {
-      id,
+      id: given || null,
       name,
       kind: normalizeKind(input.kind),
       billingEmail: billingEmail || null,

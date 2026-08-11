@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { api } from "../api";
 import { Panel, State, StatusTag, useLoad } from "./common";
+import { TenantName } from "./tenant-name";
 
 /**
  * 결제 로그 — 전 회사의 크레딧 충전 주문.
@@ -64,7 +65,7 @@ export function Payments() {
                 {rows.map((p) => (
                   <tr key={p.paymentId}>
                     <td className="muted">{fmt(p.createdAt)}</td>
-                    <td><code>{p.tenantId}</code></td>
+                    <td><TenantName id={p.tenantId} /></td>
                     <td className="num">{p.credits.toLocaleString("ko-KR")}</td>
                     <td className="num">₩{p.amountKrw.toLocaleString("ko-KR")}</td>
                     <td><StatusTag status={p.status === "paid" ? "done" : p.status} /></td>

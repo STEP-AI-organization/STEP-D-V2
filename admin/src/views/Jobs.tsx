@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { api } from "../api";
 import { Panel, State, StatusTag, useLoad, when } from "./common";
+import { TenantName } from "./tenant-name";
 
 export function Jobs() {
   // 회사 필터. 200건 상한이라 회사가 늘면 특정 회사 잡이 목록 밖으로 밀려난다 —
@@ -42,7 +43,7 @@ export function Jobs() {
                     <td>{j.type}</td>
                     <td><StatusTag status={j.status} /></td>
                     <td className="num">{j.attempts}</td>
-                    <td><code>{j.tenantId}</code></td>
+                    <td><TenantName id={j.tenantId} /></td>
                     <td className="muted">{when(j.updatedAt)}</td>
                     <td className="wrap muted">{j.error ?? "—"}</td>
                   </tr>

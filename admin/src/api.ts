@@ -39,15 +39,15 @@ export interface Tenant {
   /** 잔여 크레딧(1개 = 분석 1분) · 이번 달 사용 · 마지막 로그인. 회사가 살아 있는지 보는 축. */
   credits: number; usedThisMonth: number; lastLoginAt: number | null;
 }
-export interface Payment {
-  paymentId: string; tenantId: string; credits: number; amountKrw: number;
-  status: string; requestedBy: string; createdAt: string; settledAt: string | null;
-}
-export interface LedgerRow {
-  id: number; delta: number; reason: string; mediaId: string | null;
-  paymentId: string | null; amountKrw: number | null; note: string;
-  actor: string; occurredAt: string;
-}
+export interface Payment {
+  paymentId: string; tenantId: string; credits: number; amountKrw: number;
+  status: string; requestedBy: string; createdAt: string; settledAt: string | null;
+}
+export interface LedgerRow {
+  id: number; delta: number; reason: string; mediaId: string | null;
+  paymentId: string | null; amountKrw: number | null; note: string;
+  actor: string; occurredAt: string;
+}
 export interface ApiKey {
   id: string; name: string | null; prefix: string; scopes: string[];
   lastUsedAt: string | null; revokedAt: string | null; createdAt: string;
@@ -85,12 +85,14 @@ export const api = {
    * `ownerEmail` 은 필수 — 들어갈 사람 없이 회사만 만들면 아무도 못 쓴다.
    * `inviteToken`·`inviteUrl` 은 **응답에서 한 번만** 나온다(서버가 평문을 저장하지 않는다).
    */
+  // id 는 보내지 않는다 — 서버가 순번을 매긴다. 사람에게 의미 있는 건 이름이다.
   createTenant: (t: {
-    id?: string; name: string; kind: string;
+    name: string; kind: string;
     ownerEmail: string; billingEmail?: string; initialCredits?: number;
   }) =>
     post<{
       id: string;
+      name: string;
       ownerEmail: string;
       initialCredits: number;
       inviteToken: string;

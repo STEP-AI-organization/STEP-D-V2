@@ -14,6 +14,7 @@ import { Tenants } from "./views/Tenants";
 import { Users } from "./views/Users";
 import { Jobs } from "./views/Jobs";
 import { Payments } from "./views/Payments";
+import { TenantNames } from "./views/tenant-name";
 import { Audit } from "./views/Audit";
 
 type Tab = "overview" | "tenants" | "users" | "payments" | "jobs" | "audit";
@@ -62,6 +63,9 @@ export default function App() {
   }
 
   return (
+    // 회사 id → 이름을 한 번만 받아 전 화면이 공유한다. 표에 `1`·`t_default` 가 아니라
+    // 회사 이름이 보여야 어느 회사 일인지 알 수 있다.
+    <TenantNames>
     <div className="shell">
       <nav className="side">
         <div className="brand">STEP D<small>ADMIN CONSOLE</small></div>
@@ -87,6 +91,7 @@ export default function App() {
         {tab === "audit" && <Audit />}
       </main>
     </div>
+    </TenantNames>
   );
 }
 

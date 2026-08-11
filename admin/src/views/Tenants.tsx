@@ -389,7 +389,6 @@ function ApiKeysPanel({ tenant }: { tenant: Tenant }) {
  */
 function CreateForm({ onDone }: { onDone: () => void }) {
   const [name, setName] = useState("");
-  const [id, setId] = useState("");
   const [kind, setKind] = useState("api");
   const [ownerEmail, setOwnerEmail] = useState("");
   const [billingEmail, setBillingEmail] = useState("");
@@ -405,7 +404,6 @@ function CreateForm({ onDone }: { onDone: () => void }) {
     try {
       const r = await api.createTenant({
         name,
-        id: id || undefined,
         kind,
         ownerEmail,
         billingEmail: billingEmail || undefined,
@@ -425,7 +423,7 @@ function CreateForm({ onDone }: { onDone: () => void }) {
     return (
       <div style={{ padding: "14px 16px", borderBottom: "1px solid var(--line)" }}>
         <p style={{ marginTop: 0 }}>
-          <strong>{made.id}</strong> 개설 완료 — {made.ownerEmail} 을(를) owner 로 초대했습니다
+          <strong>{made.name}</strong>(#{made.id}) 개설 완료 — {made.ownerEmail} 을(를) owner 로 초대했습니다
           {made.initialCredits > 0 && ` · 크레딧 ${made.initialCredits}개 지급`}.
         </p>
         <p className="muted" style={{ fontSize: 12 }}>
@@ -454,8 +452,8 @@ function CreateForm({ onDone }: { onDone: () => void }) {
   return (
     <form onSubmit={submit} style={{ padding: "14px 16px", borderBottom: "1px solid var(--line)" }}>
       <div className="row">
+        {/* id 입력란은 없다 — 서버가 순번(1, 2, 3…)을 매긴다. 사람에게 의미 있는 건 이름이다. */}
         <input placeholder="회사 이름 (예: 한국방송)" value={name} onChange={(e) => setName(e.target.value)} required />
-        <input placeholder="id (비우면 자동)" value={id} onChange={(e) => setId(e.target.value)} />
         <select value={kind} onChange={(e) => setKind(e.target.value)}>
           <option value="api">api — 외부 API 고객</option>
           <option value="web">web — 자체 웹서비스 고객</option>

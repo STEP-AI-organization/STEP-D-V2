@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { api, type AdminUser } from "../api";
 import { Panel, State, StatusTag, useLoad, when } from "./common";
+import { TenantName } from "./tenant-name";
 
 export function Users() {
   const [tenant, setTenant] = useState("");
@@ -72,7 +73,7 @@ function Row({ u, onChanged }: { u: AdminUser; onChanged: () => void }) {
     <tr>
       <td>{u.email}</td>
       <td>{u.name || <span className="muted">—</span>}</td>
-      <td><code>{u.tenantId}</code></td>
+      <td><TenantName id={u.tenantId} /></td>
       <td><span className={`tag${u.role === "superadmin" ? " warn" : ""}`}>{u.role}</span></td>
       <td><StatusTag status={u.status} /></td>
       <td className="muted">{when(u.lastLoginAt)}</td>

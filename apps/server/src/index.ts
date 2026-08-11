@@ -41,7 +41,7 @@ import {
   type User,
 } from "./auth.ts";
 import { audit, clientIp, requireReason, requireSuperadmin } from "./admin.ts";
-import { grantDedupeKey, inviteLink, planOnboarding } from "./onboarding.ts";
+import { grantDedupeKey, inviteLink, nextTenantId, planOnboarding } from "./onboarding.ts";
 import {
   API_SCOPES, bearerKey, checkRoute, generateKey, hashKey, keyBlockReason, keyPrefix,
   normalizeScopes, shouldTouchLastUsed,
@@ -766,50 +766,63 @@ app.post("/api/superadmin/tenants", async (c) => {
   const actor = requireSuperadmin(c);
   const body = await c.req.json<Record<string, unknown>>().catch(() => ({}) as Record<string, unknown>);
 
-  // 한글 이름은 슬러그가 통째로 비어서 예전엔 전부 `t__` 로 충돌했다 — nonce 로 대체한다.
-  const checked = planOnboarding(body, crypto.randomBytes(5).toString("hex"));
+  const checked = planOnboarding(body);
   if (!checked.ok) return c.json({ error: checked.error, message: checked.message }, 400);
   const plan = checked.plan;
 
-  await audit(
-    actor,
-    {
-      action: "tenant.create",
-      targetTenant: plan.id,
-      detail: { name: plan.name, kind: plan.kind, ownerEmail: plan.ownerEmail, initialCredits: plan.initialCredits },
-    },
-    clientIp(c),
-  );
-
-  let invite: { token: string; expiresAt: number; id: string };
+  let made: { id: string; invite: { token: string; expiresAt: number; id: string } };
   try {
-    invite = await withRawTransaction(async (db) => {
+    made = await withRawTransaction(async (db) => {
+      // id 는 여기서 정한다 — **트랜잭션 안에서** 읽고 써야 두 개가 동시에 만들어져도
+      // 같은 번호가 둘 생기지 않는다(최악이 PK 충돌 409, 조용한 중복이 아니다).
+      let id = plan.id;
+      if (!id) {
+        const { rows } = await db.query(`SELECT id FROM tenants`);
+        id = nextTenantId(rows.map((r: { id: string }) => r.id));
+      }
       await db.query(`INSERT INTO tenants (id, name, kind, billing_email) VALUES ($1,$2,$3,$4)`, [
-        plan.id, plan.name, plan.kind, plan.billingEmail,
+        id, plan.name, plan.kind, plan.billingEmail,
       ]);
       // 초기 크레딧은 무상 지급(grant)이다 — 결제 원장(topup)과 섞이면 매출이 부풀어 보인다.
       if (plan.initialCredits > 0) {
         await db.query(
           `INSERT INTO credit_ledger (tenant_id, delta, reason, note, actor, dedupe_key)
            VALUES ($1,$2,'grant',$3,$4,$5) ON CONFLICT (dedupe_key) DO NOTHING`,
-          [plan.id, plan.initialCredits, "개설 지급", actor.email, grantDedupeKey(plan.id)],
+          [id, plan.initialCredits, "개설 지급", actor.email, grantDedupeKey(id)],
         );
       }
-      return createInvite(
-        { tenantId: plan.id, email: plan.ownerEmail, role: "owner", invitedBy: actor.id },
+      const invite = await createInvite(
+        { tenantId: id, email: plan.ownerEmail, role: "owner", invitedBy: actor.id },
         db,
       );
+      return { id, invite };
     });
   } catch (e: any) {
-    if (e?.code === "23505") return c.json({ error: "duplicate_id", message: `이미 있는 회사 id 입니다: ${plan.id}` }, 409);
+    if (e?.code === "23505") {
+      return c.json({ error: "duplicate_id", message: "같은 순간에 다른 회사가 만들어졌습니다 — 다시 시도해 주세요." }, 409);
+    }
     // 초대 실패(이미 계정이 있는 이메일 등)도 여기로 온다 — 회사는 만들어지지 않았다.
     return c.json({ error: "create_failed", message: String(e?.message ?? e) }, 400);
   }
+  const invite = made.invite;
+
+  // 감사는 **만들어진 뒤**에 남긴다 — id 가 트랜잭션 안에서 정해지므로, 앞에 두면
+  // 기록에 남는 대상이 null 이 된다.
+  await audit(
+    actor,
+    {
+      action: "tenant.create",
+      targetTenant: made.id,
+      detail: { name: plan.name, kind: plan.kind, ownerEmail: plan.ownerEmail, initialCredits: plan.initialCredits },
+    },
+    clientIp(c),
+  );
 
   // 테넌트가 둘 이상이 되는 순간 인증 없이 도는 건 위험하다 — 즉시 자세를 다시 점검한다.
   await assertAuthPosture();
   return c.json({
-    id: plan.id,
+    id: made.id,
+    name: plan.name,
     ownerEmail: plan.ownerEmail,
     initialCredits: plan.initialCredits,
     inviteToken: invite.token,
