@@ -26,6 +26,7 @@ import {
   type YouTubeChannelInfo,
 } from "@/lib/data/api";
 import { useAppData } from "@/lib/data/store";
+import { useGateSummary } from "@/lib/gate-summary";
 import { GATE_LABEL } from "@/lib/gate-ui";
 import { normalizeProgramStatus, rightsWindowOf } from "@/lib/programs";
 import { blockedCopy, revenueDisplay, roleOf } from "@/lib/roles";
@@ -39,24 +40,13 @@ export default function DashboardPage() {
   const role = session.user.role;
   const caps = roleOf(role);
 
-  const [gates, setGates] = useState<Record<string, GateResult>>({});
+  // 게이트는 사이드바 배지와 **같은 값**을 쓴다 — 화면마다 따로 세면 숫자가 갈리고,
+  // 그러면 사용자는 어느 쪽을 믿어야 할지 모른다.
+  const gateSummary = useGateSummary();
+
   const [channels, setChannels] = useState<YouTubeChannelInfo[]>([]);
   const [revenue, setRevenue] = useState<Record<string, number>>({});
   const [revenueError, setRevenueError] = useState<string | null>(null);
-
-  const clipIds = useMemo(() => clips.map((c) => c.id), [clips]);
-  const idsKey = clipIds.join(",");
-
-  // 게이트 요약 — 목록과 같은 배치 조회를 쓴다(판정은 서버가 한다).
-  useEffect(() => {
-    if (clipIds.length === 0) { setGates({}); return; }
-    let alive = true;
-    void fetchGateBatch("clip", clipIds)
-      .then((r) => { if (alive) setGates(r.gates); })
-      .catch(() => { if (alive) setGates({}); });
-    return () => { alive = false; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [idsKey]);
 
   useEffect(() => {
     let alive = true;
@@ -92,8 +82,7 @@ export default function DashboardPage() {
   useEffect(() => { void loadRevenue(); }, [loadRevenue]);
 
   // ── 게이트 요약 ──────────────────────────────────────────────────────────
-  const gateCount = (s: GateState) =>
-    clips.filter((c) => (gates[c.id]?.state ?? "review_pending") === s).length;
+  const gateCount = (s: GateState) => gateSummary.counts[s] ?? 0;
 
   const today = new Date();
   const expiringPrograms = programs.filter((p) => {
