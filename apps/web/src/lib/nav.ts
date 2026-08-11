@@ -101,10 +101,12 @@ export const SCREEN_META: Record<string, { title: string; subtitle: string }> = 
   "/program-analytics": { title: "프로그램 분석", subtitle: "프로그램 단위 성과" },
   "/channel-analytics": { title: "채널 분석", subtitle: "채널 단위 성과" },
   "/thumbnails": { title: "썸네일 생성", subtitle: "대상 선택 → 프롬프트 → 3안 중 대표 지정" },
-  "/trends": { title: "유튜브 트렌드", subtitle: "지금 뜨는 영상 — 기획 참고 (옛 화면)" },
-  "/thumbnail-templates": { title: "썸네일 레퍼런스", subtitle: "채널 스타일 학습용 참고 이미지 (옛 화면)" },
-  "/business": { title: "사업 운영", subtitle: "계약·정산 관리 (옛 화면)" },
-  "/ops": { title: "운영 진단", subtitle: "잡 큐·분석 상태 점검 (옛 화면)" },
+  // 아래 넷은 화면 안에서 제목을 또 그리던 것들이라(구 PageHeader) 부제를 그쪽 설명으로
+  // 옮겨 왔다 — 상단바가 한 번만 그린다. 제목 표기도 여기로 단일화한다.
+  "/trends": { title: "유튜브 트렌드", subtitle: "국가·카테고리별 인기 급상승 영상 — 기획 참고용" },
+  "/thumbnail-templates": { title: "썸네일 레퍼런스", subtitle: "swap 파이프라인이 쓸 방송사 완성작 · 드래그 업로드 · 태그 편집" },
+  "/business": { title: "사업 운영", subtitle: "추천·클립·배포 결과를 프로그램/IP 단위로 — 부서 공유 · 편성 신호 · 승인 리스크" },
+  "/ops": { title: "운영 진단", subtitle: "큐가 어떻게 도는지 · 업로드 영상에서 뭐가 나오고 뭐가 깨지는지" },
   "/clips": { title: "클립", subtitle: "구 클립 목록 — 미디어 화면으로 대체됨" },
   "/analytics": { title: "성과 (구)", subtitle: "구 성과 화면 — 성과·프로그램/채널 분석으로 대체됨" },
   "/automation": { title: "자동 배포", subtitle: "규칙 기반 순방 · 게이트를 건너뛰지 않음" },

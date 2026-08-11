@@ -1,6 +1,6 @@
 "use client";
 
-import { PageHeader } from "@/components/ui/page-header";
+import { PageActions } from "@/components/shell/page-actions";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -151,15 +151,9 @@ export default function PublishChannelsPage() {
   const ids = Object.keys(DISTRIBUTION_CHANNELS) as DistributionChannel[];
 
   return (
-    <>
-      <PageHeader
-        eyebrow="연동 채널 관리"
-        title="배포채널"
-        description="콘텐츠를 배포할 플랫폼별 계정을 연결합니다. YouTube만 실제 배포 가능, 나머지는 준비 중."
-      />
-
+    <div className="mx-auto max-w-[1240px]">
       {banner && (
-        <div className="mb-6 rounded-xl border border-border bg-muted/50 px-4 py-3 text-sm text-foreground">
+        <div className="mb-4 rounded-md border border-border bg-muted px-4 py-3 text-sm text-foreground">
           {banner}
         </div>
       )}
@@ -498,6 +492,6 @@ export default function PublishChannelsPage() {
           onSaved={loadRules}
         />
       )}
-    </>
+    </div>
   );
 }

@@ -11,7 +11,6 @@ import {
   Sparkles,
   Trash2,
 } from "lucide-react";
-import { PageHeader } from "@/components/ui/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -68,17 +67,23 @@ export function HighlightsView({ programId }: { programId: string }) {
   }
 
   return (
-    <>
-      <PageHeader
-        eyebrow={program ? `${program.title} · 클립 조합` : "콘텐츠 · 클립 조합"}
-        title="하이라이트"
-        description="확정 클립을 골라 흐름을 구성하는 편성 화면입니다. 저장·렌더·배포는 다음 단계에서 연결합니다."
-        actions={
-          <Badge variant="accent" className="gap-1.5 px-2.5 py-1">
-            <Sparkles className="size-3.5" /> UI 선구축
-          </Badge>
-        }
-      />
+    <div className="mx-auto max-w-[1240px]">
+      {/* 프로그램 상세 하위 화면이라 상단바(SCREEN_META)가 제목을 모른다 — 회차 상세와
+          같은 방식으로 여기서 직접 단다. 목록형 화면들은 반대로 상단바에 맡긴다. */}
+      <div className="mb-5 flex items-start justify-between gap-4">
+        <div className="min-w-0">
+          <div className="text-eyebrow mb-1.5">
+            {program ? `${program.title} · 클립 조합` : "콘텐츠 · 클립 조합"}
+          </div>
+          <h1 className="text-page-title">하이라이트</h1>
+          <p className="mt-2 max-w-2xl text-[13px] leading-relaxed text-muted-foreground">
+            확정 클립을 골라 흐름을 구성하는 편성 화면입니다. 저장·렌더·배포는 다음 단계에서 연결합니다.
+          </p>
+        </div>
+        <Badge variant="accent" className="shrink-0 gap-1.5 px-2.5 py-1">
+          <Sparkles className="size-3.5" /> UI 선구축
+        </Badge>
+      </div>
 
       <Card className="mb-4 border-brand/20 bg-brand/[0.035]">
         <CardContent className="flex gap-3 p-3.5 text-[12px] leading-relaxed text-muted-foreground">
@@ -209,6 +214,6 @@ export function HighlightsView({ programId }: { programId: string }) {
           </CardContent>
         </Card>
       </div>
-    </>
+    </div>
   );
 }

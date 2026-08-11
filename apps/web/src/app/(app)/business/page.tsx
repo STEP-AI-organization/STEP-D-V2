@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 import { ExportExcelButton } from "@/components/export-excel-button";
 import { EmptyState } from "@/components/ui/empty-state";
-import { PageHeader } from "@/components/ui/page-header";
+import { PageActions } from "@/components/shell/page-actions";
 import { Card } from "@/components/ui/card";
 import { SectionHeading } from "@/components/ui/section-heading";
 import { StatTile } from "@/components/ui/stat-tile";
@@ -180,13 +180,10 @@ export default function BusinessPage() {
     .slice(0, 5);
 
   return (
-    <>
-      <PageHeader
-        eyebrow="광고영업 · 편성 · 경영기획"
-        title="사업운영"
-        description="현재 서버 상태의 추천·클립·배포 결과만 프로그램/IP 단위로 묶어 부서 공유, 편성 신호, 승인 리스크를 확인합니다."
-        actions={<ExportExcelButton />}
-      />
+    <div className="mx-auto max-w-[1240px]">
+      <PageActions>
+        <ExportExcelButton />
+      </PageActions>
 
       <div className="mb-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <StatTile
@@ -444,7 +441,7 @@ export default function BusinessPage() {
           href="/distribution"
         />
       </div>
-    </>
+    </div>
   );
 }
 

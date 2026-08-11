@@ -6,15 +6,19 @@
 @custom-variant dark (&:is(.dark *));
 
 /*
-  Design tokens — STEPD v2 (polish pass).
+  Design tokens — 옛 프리미티브(components/ui/*)용.
 
-  Base stays achromatic (neutral surfaces); a single calm indigo carries the
-  brand accent and appears ONLY on primary actions, active nav, links, focus
-  rings, and selection states. Status hues (green/blue/amber/red/neutral) are
-  reserved for pipeline & distribution semantics and are kept low-chroma.
-  Light surfaces layer canvas → card → popover for subtle depth; dark mode
-  lifts cards above the canvas by lightness (shadows read poorly on black).
-  All foreground/background pairs target WCAG AA.
+  ⚠️ 2026-08-11: 이 팔레트는 **아래쪽 sd-* 확정 팔레트를 따라간다.** 원래는 무채색
+  표면 + 인디고(235°) 였는데, 재설계가 종이톤(#eceae5) + #1f4fd8 로 확정되면서
+  두 팔레트가 한 화면에 같이 보이면 색이 대놓고 어긋났다.
+
+  아직 옛 프리미티브를 쓰는 화면(도구 그룹 — 트렌드·썸네일 레퍼런스·사업 운영·
+  운영 진단, 그리고 배포 채널)이 1,300줄쯤 남아 있는데, 그걸 다 고쳐 쓰는 대신
+  **변수 값만 sd-* 로 돌린다.** 여백·타이포까지 같아지진 않지만 색·모서리는 맞는다.
+  화면을 sd-* 로 옮길 때마다 여기 의존이 줄고, 다 옮기면 이 블록은 지운다.
+
+  값을 고칠 일이 생기면 여기가 아니라 sd-* 를 먼저 보고 그쪽에 맞출 것.
+  다크 테마(.dark)는 sd-* 에 대응이 없어 손대지 않았다 — 옛 값 그대로다.
 */
 :root {
   /* Font stacks — Pretendard body, Space Grotesk display (.grotesk), JetBrains
@@ -25,41 +29,48 @@
     Consolas, monospace;
   --font-display: "Space Grotesk", var(--font-sans);
 
-  --background: 0 0% 98%;
-  --foreground: 0 0% 9%;
-  --card: 0 0% 100%;
-  --card-foreground: 0 0% 9%;
+  /* 아래 값은 전부 sd-* 확정 팔레트의 hex 를 HSL 로 환산한 것이다 — 두 팔레트가
+     같은 색을 다른 표기로 가리킬 뿐이라, 옛 화면과 새 화면이 나란히 있어도 색이
+     어긋나지 않는다. 원본 hex 를 주석에 남겨 다음 사람이 대조할 수 있게 한다. */
+  --background: 43 16% 91%; /* --sd-app-bg #eceae5 */
+  --foreground: 40 5% 12%; /* --sd-fg #1f1e1c */
+  --card: 0 0% 100%; /* --sd-card #ffffff */
+  --card-foreground: 40 5% 12%;
   --popover: 0 0% 100%;
-  --popover-foreground: 0 0% 9%;
+  --popover-foreground: 40 5% 12%;
 
-  /* Brand accent — indigo (calm, professional). Used sparingly.
-     `--primary` fills buttons/active states; `--brand` is the lighter link/label
-     tone (Review OS #8b93ff) used for eyebrows, links, active nav icons. */
-  --primary: 235 82% 63%;
+  /* Brand accent. 새 팔레트는 --sd-accent 하나로 버튼·링크·포커스를 다 쓴다.
+     옛 시스템의 `--brand`(더 밝은 링크 톤)는 분리할 이유가 없어 같은 값을 준다. */
+  --primary: 224 75% 48%; /* --sd-accent #1f4fd8 */
   --primary-foreground: 0 0% 100%;
-  --brand: 235 82% 60%;
+  --brand: 224 75% 48%;
 
-  --secondary: 0 0% 96.1%;
-  --secondary-foreground: 0 0% 9%;
-  --muted: 0 0% 96.1%;
-  --muted-foreground: 0 0% 42%;
-  --accent: 0 0% 95.5%;
-  --accent-foreground: 0 0% 9%;
-  --destructive: 0 72% 51%;
+  /* secondary·muted·accent 를 모두 --sd-card-sub 로 맞춘다. 새 디자인은 표면을
+     흰 카드 / 살짝 눌린 웰 두 단계로만 쓰므로, 세 토큰을 굳이 갈라 놓으면
+     옛 화면에만 없는 층이 생겨서 톤이 어긋난다. */
+  --secondary: 40 23% 98%; /* --sd-card-sub #faf9f7 */
+  --secondary-foreground: 40 5% 12%;
+  --muted: 40 23% 98%;
+  --muted-foreground: 40 5% 52%; /* --sd-mut #8b877f */
+  --accent: 40 23% 98%;
+  --accent-foreground: 40 5% 12%;
+  --destructive: 5 63% 42%; /* --sd-danger #b03328 */
   --destructive-foreground: 0 0% 100%;
-  --border: 0 0% 90%;
-  --input: 0 0% 88%;
-  --ring: 235 82% 63%;
-  --radius: 0.75rem;
+  --border: 45 13% 88%; /* --sd-border #e4e2dc */
+  --input: 43 12% 84%; /* 폼 컨트롤은 카드 테두리보다 한 단계 진하게 (.sd-btn #cbc8c1 과 같은 계열) */
+  --ring: 224 75% 48%;
+  /* .sd-card 6px / .sd-btn 4px 에 맞춘다. 12px 였을 때 옛 화면만 유독 동글어서
+     같은 페이지에 두면 바로 티가 났다. lg=6 · md=4 · sm=2 로 떨어진다. */
+  --radius: 0.375rem;
 
   /* Status palette — pipeline / distribution state legibility (design principle §9).
      Single source of truth; consumed via StatusBadge / PipelineStrip.
      idle=neutral · progress=blue · done=green · warn=amber · error=red. */
-  --status-idle: 0 0% 45%;
-  --status-progress: 217 85% 53%;
-  --status-done: 142 55% 32%;
-  --status-warn: 30 75% 38%;
-  --status-error: 0 72% 51%;
+  --status-idle: 41 6% 59%; /* --sd-idle #9c988f */
+  --status-progress: 223 64% 57%; /* --sd-chart #4b74d8 — primary 보다 밝게 둬서 "진행 중"이 "확정"과 구분된다 */
+  --status-done: 155 63% 29%; /* --sd-ok #1c7a52 */
+  --status-warn: 40 85% 32%; /* --sd-warn #96690c */
+  --status-error: 5 63% 42%; /* --sd-danger #b03328 */
 }
 
 .dark {
@@ -203,8 +214,9 @@
 
 /*
   Typographic scale — operator tool: clear hierarchy, generous line-height for
-  Korean. Applied via shared components (PageHeader, SectionHeading, CardTitle)
-  so headings/section-labels/body never drift.
+  Korean. Applied via shared components (SectionHeading, CardTitle) so
+  section-labels/body never drift. 화면 제목은 이제 상단바가 그린다
+  (shell/topbar.tsx) — `.text-page-title` 은 셸 밖에서 제목을 다는 회차 상세만 쓴다.
 */
 @layer components {
   /* Display type — Space Grotesk drives page titles and big numerics, matching

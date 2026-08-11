@@ -5,7 +5,7 @@ import { Flame, RefreshCw, Loader2, Eye, ThumbsUp, MessageCircle } from "lucide-
 
 import { fetchTrendingVideos, fetchVideoCategories } from "@/lib/data/api";
 import type { TrendingVideo, VideoCategory } from "@/lib/types";
-import { PageHeader } from "@/components/ui/page-header";
+import { PageActions } from "@/components/shell/page-actions";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -94,18 +94,13 @@ export default function TrendsPage() {
   const now = useMemo(() => Date.now(), [fetchedAt]);
 
   return (
-    <div>
-      <PageHeader
-        eyebrow="유튜브 참고"
-        title="지금 유튜브에서 뜨는"
-        description="Data API mostPopular chart · 국가·카테고리별 인기 급상승 영상 (편집자 아이디어 참고용)"
-        actions={
-          <Button variant="secondary" onClick={refresh} disabled={loading}>
-            {loading ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
-            새로고침
-          </Button>
-        }
-      />
+    <div className="mx-auto max-w-[1240px]">
+      <PageActions>
+        <Button variant="secondary" onClick={refresh} disabled={loading}>
+          {loading ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
+          새로고침
+        </Button>
+      </PageActions>
 
       <Card className="mb-4 flex flex-wrap items-center gap-3 p-3">
         <div className="flex items-center gap-2">

@@ -3,7 +3,7 @@
 import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { Activity, RefreshCw, Pause, Play } from "lucide-react";
-import { PageHeader } from "@/components/ui/page-header";
+import { PageActions } from "@/components/shell/page-actions";
 import { Card } from "@/components/ui/card";
 import { StatTile } from "@/components/ui/stat-tile";
 import { StatusBadge } from "@/components/ui/status-badge";
@@ -94,33 +94,26 @@ export default function OpsPage() {
   const s = jobs?.stats;
 
   return (
-    <>
-      <PageHeader
-        eyebrow="파이프라인 상태"
-        title="운영 · 진단"
-        description="큐가 어떻게 도는지, 업로드 영상에서 뭐가 나오고 뭐가 깨지는지 — 로우레벨로 봅니다."
-        actions={
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => setAuto((v) => !v)}
-              className="flex h-9 items-center gap-1.5 rounded-md border border-border px-2.5 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
-              title={auto ? "자동 새로고침 끄기" : "자동 새로고침 켜기"}
-            >
-              {auto ? <Pause className="size-3.5" /> : <Play className="size-3.5" />}
-              {auto ? "자동 5s" : "수동"}
-            </button>
-            <button
-              type="button"
-              onClick={load}
-              disabled={refreshing}
-              className="flex h-9 items-center gap-1.5 rounded-md border border-border px-2.5 text-sm transition-colors hover:bg-accent disabled:opacity-60"
-            >
-              <RefreshCw className={refreshing ? "size-3.5 animate-spin" : "size-3.5"} /> 새로고침
-            </button>
-          </div>
-        }
-      />
+    <div className="mx-auto max-w-[1240px]">
+      <PageActions>
+        <button
+          type="button"
+          onClick={() => setAuto((v) => !v)}
+          className="flex h-9 items-center gap-1.5 rounded-md border border-border px-2.5 text-sm text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          title={auto ? "자동 새로고침 끄기" : "자동 새로고침 켜기"}
+        >
+          {auto ? <Pause className="size-3.5" /> : <Play className="size-3.5" />}
+          {auto ? "자동 5s" : "수동"}
+        </button>
+        <button
+          type="button"
+          onClick={load}
+          disabled={refreshing}
+          className="flex h-9 items-center gap-1.5 rounded-md border border-border px-2.5 text-sm transition-colors hover:bg-accent disabled:opacity-60"
+        >
+          <RefreshCw className={refreshing ? "size-3.5 animate-spin" : "size-3.5"} /> 새로고침
+        </button>
+      </PageActions>
 
       {err && (
         <div className="mb-4 rounded-md border border-status-error/30 bg-status-error/10 px-4 py-2.5 text-sm text-foreground">
@@ -290,6 +283,6 @@ export default function OpsPage() {
           </TBody>
         </Table>
       </Card>
-    </>
+    </div>
   );
 }
