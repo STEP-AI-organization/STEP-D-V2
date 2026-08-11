@@ -29,7 +29,7 @@ function InviteInner() {
   const [busy, setBusy] = useState(false);
 
   const mismatch = confirm.length > 0 && password !== confirm;
-  const canSubmit = Boolean(token) && password.length >= 8 && !mismatch && !busy;
+  const canSubmit = Boolean(token) && Boolean(password) && !mismatch && !busy;
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -80,7 +80,6 @@ function InviteInner() {
             className="sd-input w-full"
             required
           />
-          <span className="mt-1 block text-[10.5px]" style={{ color: "var(--sd-mut)" }}>8자 이상</span>
         </label>
 
         <label className="mb-3 block">

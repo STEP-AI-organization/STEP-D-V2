@@ -48,18 +48,20 @@ describe("비밀번호 해시", () => {
   });
 });
 
-describe("비밀번호 최소 요건", () => {
-  it("12자 미만은 거부", () => {
-    assert.ok(passwordProblem("short"));
-    assert.ok(passwordProblem("12345678901"));
+describe("비밀번호 입력", () => {
+  it("빈 값만 거부", () => {
+    assert.ok(passwordProblem(""));
+    assert.equal(passwordProblem("short"), null);
+    assert.equal(passwordProblem("12345678901"), null);
   });
 
-  it("12자 이상이면 문자종류는 안 따진다", () => {
+  it("길이·문자 종류는 따지지 않는다", () => {
+    assert.equal(passwordProblem("a"), null);
     assert.equal(passwordProblem("123456789012"), null);
     assert.equal(passwordProblem("아주 긴 한국어 비밀번호"), null);
   });
 
-  it("비정상적으로 긴 입력은 거부 — 해시 비용 폭탄 방지", () => {
-    assert.ok(passwordProblem("a".repeat(201)));
+  it("긴 입력도 통과한다", () => {
+    assert.equal(passwordProblem("a".repeat(201)), null);
   });
 });

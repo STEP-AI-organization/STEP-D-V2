@@ -86,12 +86,11 @@ export async function verifyPassword(password: string, stored: string): Promise<
 }
 
 /**
- * 최소 요건. 길이가 복잡도보다 강하다는 게 정설이라 **12자 이상**만 강제하고 문자종류는 안 따진다
- * (특수문자 강제는 사용자를 `Password1!` 같은 예측 가능한 패턴으로 몬다).
+ * 비밀번호 정책은 두지 않는다. B2B 운영자가 계정을 직접 발급하는 흐름이라
+ * 길이·문자 종류를 강제하지 않고, 비어 있는 값만 막는다.
  */
 export function passwordProblem(password: string): string | null {
-  if (password.length < 12) return "비밀번호는 12자 이상이어야 합니다.";
-  if (password.length > 200) return "비밀번호가 너무 깁니다.";
+  if (password.length === 0) return "비밀번호를 입력해 주세요.";
   return null;
 }
 
