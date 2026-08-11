@@ -36,6 +36,12 @@ export interface Tenant {
   id: string; name: string; kind: string; status: string;
   billingEmail: string | null; createdAt: number;
   userCount: number; mediaCount: number; mediaSec: number;
+  /** 잔여 크레딧(1개 = 분석 1분) · 이번 달 사용 · 마지막 로그인. 회사가 살아 있는지 보는 축. */
+  credits: number; usedThisMonth: number; lastLoginAt: number | null;
+}
+export interface ApiKey {
+  id: string; name: string | null; prefix: string; scopes: string[];
+  lastUsedAt: string | null; revokedAt: string | null; createdAt: string;
 }
 export interface AdminUser {
   id: string; tenantId: string; email: string; name: string; role: string;
@@ -97,6 +103,19 @@ export const api = {
   invite: (tenantId: string, email: string, role: string, reason?: string) =>
     post<{ inviteId: string; token: string; expiresAt: number }>(
       `/api/superadmin/tenants/${encodeURIComponent(tenantId)}/invite`, { email, role, reason }),
+
+  // ── 회사별 API 키 ──
+  // 고객사 **시스템**이 우리를 호출하는 열쇠다. 평문은 발급 응답에 한 번만 나오고
+  // 서버가 저장하지 않으므로, 목록에서는 접두(stepd_live_ab12)만 보인다.
+  apiKeys: (tenantId: string) =>
+    get<{ keys: ApiKey[]; scopes: string[] }>(
+      `/api/superadmin/tenants/${encodeURIComponent(tenantId)}/api-keys`),
+  createApiKey: (tenantId: string, body: { name?: string; scopes: string[]; reason?: string }) =>
+    post<{ id: string; key: string; prefix: string; scopes: string[] }>(
+      `/api/superadmin/tenants/${encodeURIComponent(tenantId)}/api-keys`, body),
+  revokeApiKey: (keyId: string, reason?: string) =>
+    post<{ ok: true; alreadyRevoked: boolean }>(
+      `/api/superadmin/api-keys/${encodeURIComponent(keyId)}/revoke`, { reason }),
 
   jobs: () => get<{ jobs: AdminJob[] }>("/api/superadmin/jobs"),
   audit: () => get<{ entries: AuditEntry[] }>("/api/superadmin/audit"),

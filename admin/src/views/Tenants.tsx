@@ -28,7 +28,9 @@ export function Tenants() {
                 <tr>
                   <th>id</th><th>이름</th><th>종류</th><th>상태</th>
                   <th className="num">사용자</th><th className="num">미디어</th><th className="num">분</th>
-                  <th>생성</th><th></th>
+                  {/* 크레딧은 선불이라 **잔액이 0이면 그 회사는 분석을 못 한다** — 상태만큼 중요한 값이다. */}
+                  <th className="num">잔여</th><th className="num">이번 달</th>
+                  <th>마지막 로그인</th><th></th>
                 </tr>
               </thead>
               <tbody>
@@ -44,7 +46,8 @@ export function Tenants() {
 
 function Row({ t, onChanged }: { t: Tenant; onChanged: () => void }) {
   const [busy, setBusy] = useState(false);
-  const [invite, setInvite] = useState(false);
+  /** 행 아래에 펼쳐지는 패널. 한 번에 하나만 — 여러 개가 열리면 어느 회사 것인지 헷갈린다. */
+  const [open, setOpen] = useState<"invite" | "keys" | null>(null);
 
   async function toggle() {
     const next = t.status === "active" ? "suspended" : "active";
@@ -77,19 +80,29 @@ function Row({ t, onChanged }: { t: Tenant; onChanged: () => void }) {
         <td className="num">{t.userCount}</td>
         <td className="num">{t.mediaCount}</td>
         <td className="num">{Math.round(t.mediaSec / 60).toLocaleString("ko-KR")}</td>
-        <td className="muted">{when(t.createdAt)}</td>
+        {/* 잔액 0 = 분석 정지 상태다. 눈에 띄게 표시한다. */}
+        <td className="num" style={t.credits <= 0 ? { color: "var(--danger, #d66)" } : undefined}>
+          {t.credits.toLocaleString("ko-KR")}
+        </td>
+        <td className="num muted">{t.usedThisMonth.toLocaleString("ko-KR")}</td>
+        <td className="muted">{t.lastLoginAt ? when(t.lastLoginAt) : "없음"}</td>
         <td>
           <div className="row">
-            <button onClick={() => setInvite((v) => !v)}>초대</button>
+            <button onClick={() => setOpen((v) => (v === "invite" ? null : "invite"))}>초대</button>
+            <button onClick={() => setOpen((v) => (v === "keys" ? null : "keys"))}>API 키</button>
             <button className={t.status === "active" ? "danger" : ""} disabled={busy} onClick={toggle}>
               {t.status === "active" ? "정지" : "활성화"}
             </button>
           </div>
         </td>
       </tr>
-      {invite && (
+      {open && (
         <tr>
-          <td colSpan={9} className="wrap"><InviteForm tenant={t} onClose={() => setInvite(false)} /></td>
+          <td colSpan={11} className="wrap">
+            {open === "invite"
+              ? <InviteForm tenant={t} onClose={() => setOpen(null)} />
+              : <ApiKeysPanel tenant={t} />}
+          </td>
         </tr>
       )}
     </>
@@ -141,6 +154,127 @@ function InviteForm({ tenant, onClose }: { tenant: Tenant; onClose: () => void }
         </>
       )}
     </form>
+  );
+}
+
+/**
+ * 회사별 API 키 — 고객사 **시스템**이 우리를 호출하는 열쇠.
+ *
+ * 사람이 쓰는 로그인과 다르다. 사람은 stepd.stepai.kr 에서 자기 워크스페이스를 보고,
+ * 여기서 만든 키는 그 회사의 서버가 업로드·분석·검색을 직접 부를 때 쓴다.
+ *
+ * **평문은 발급 직후 한 번만 보인다.** 서버가 sha256 만 저장하기 때문에 다시 못 얻는다 —
+ * 잃어버리면 폐기하고 새로 발급하는 수밖에 없다.
+ */
+function ApiKeysPanel({ tenant }: { tenant: Tenant }) {
+  const { data, error, busy, reload } = useLoad(() => api.apiKeys(tenant.id), [tenant.id]);
+  const [name, setName] = useState("");
+  const [scopes, setScopes] = useState<string[]>([]);
+  const [reason, setReason] = useState("");
+  const [issued, setIssued] = useState<{ key: string; prefix: string } | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [working, setWorking] = useState(false);
+
+  const available = data?.scopes ?? [];
+
+  async function create(e: React.FormEvent) {
+    e.preventDefault();
+    setWorking(true); setErr(null);
+    try {
+      const r = await api.createApiKey(tenant.id, { name: name || undefined, scopes, reason });
+      setIssued({ key: r.key, prefix: r.prefix });
+      setName(""); setScopes([]);
+      await reload();
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  async function revoke(id: string) {
+    const why = window.prompt("이 키를 폐기합니다. 사유(4자 이상):");
+    if (!why) return;
+    try {
+      await api.revokeApiKey(id, why);
+      await reload();
+    } catch (e) {
+      alert(String(e));
+    }
+  }
+
+  return (
+    <div>
+      <p className="muted" style={{ marginTop: 0, fontSize: 12 }}>
+        <strong>{tenant.name}</strong> 의 시스템이 우리 API 를 호출할 때 쓰는 키입니다.
+        사람 계정과는 별개이고, 허용한 권한의 정해진 경로만 부를 수 있습니다.
+      </p>
+
+      {issued && (
+        <div style={{ margin: "8px 0" }}>
+          <p className="muted" style={{ marginBottom: 4, fontSize: 12 }}>
+            아래 키는 <strong>지금 한 번만</strong> 보입니다. 서버는 해시만 저장하므로 다시 볼 수 없습니다.
+          </p>
+          <div className="row">
+            <input readOnly value={issued.key} onFocus={(e) => e.currentTarget.select()} style={{ flex: 1 }} />
+            <button type="button" onClick={() => void navigator.clipboard?.writeText(issued.key)}>복사</button>
+            <button type="button" onClick={() => setIssued(null)}>확인</button>
+          </div>
+        </div>
+      )}
+
+      <form onSubmit={create}>
+        <div className="row">
+          <input placeholder="키 이름 (예: 사내 업로드 서버)" value={name} onChange={(e) => setName(e.target.value)} />
+          <input placeholder="사유 (4자 이상)" value={reason} onChange={(e) => setReason(e.target.value)} />
+          <button className="primary" disabled={working || scopes.length === 0}>키 발급</button>
+        </div>
+        <div className="row" style={{ marginTop: 6 }}>
+          {available.map((s) => (
+            <label key={s} style={{ fontSize: 12, display: "flex", gap: 4, alignItems: "center" }}>
+              <input
+                type="checkbox"
+                checked={scopes.includes(s)}
+                onChange={(e) =>
+                  setScopes((prev) => (e.target.checked ? [...prev, s] : prev.filter((x) => x !== s)))
+                }
+              />
+              <code>{s}</code>
+            </label>
+          ))}
+          {scopes.length === 0 && (
+            // 권한 없는 키는 아무것도 못 한다 — 서버도 400 으로 막지만, 누르기 전에 알려준다.
+            <span className="muted" style={{ fontSize: 12 }}>권한을 하나 이상 고르세요</span>
+          )}
+        </div>
+        {err && <div className="err">{err}</div>}
+      </form>
+
+      <State busy={busy} error={error} empty={!data?.keys.length}>
+        <div className="tablewrap" style={{ marginTop: 8 }}>
+          <table>
+            <thead>
+              <tr><th>접두</th><th>이름</th><th>권한</th><th>마지막 사용</th><th>상태</th><th></th></tr>
+            </thead>
+            <tbody>
+              {data?.keys.map((k) => (
+                <tr key={k.id}>
+                  <td><code>{k.prefix}…</code></td>
+                  <td>{k.name ?? "—"}</td>
+                  <td className="muted" style={{ fontSize: 12 }}>{k.scopes.join(" · ")}</td>
+                  {/* 안 쓰는 키를 회수할 근거. "없음"이면 발급만 하고 한 번도 안 쓴 키다. */}
+                  <td className="muted">{k.lastUsedAt ? when(Date.parse(k.lastUsedAt)) : "없음"}</td>
+                  <td>{k.revokedAt ? <span className="tag">폐기됨</span> : <StatusTag status="active" />}</td>
+                  <td>
+                    {!k.revokedAt && <button className="danger" onClick={() => revoke(k.id)}>폐기</button>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </State>
+    </div>
   );
 }
 
