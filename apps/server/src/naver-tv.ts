@@ -120,6 +120,8 @@ export interface NaverUploadInput {
   /** 등록 예약 — 이 시각에 자동 등록된다. 미지정이면 즉시 등록.
    *  **워커 PC 로컬시각(KST) 기준**으로 입력한다: 네이버 폼이 로컬시각을 받는다. */
   publishAt?: number;
+  /** 어느 네이버 계정으로 올릴지(불투명 세션 키). 미지정이면 레거시 단일 세션. */
+  accountKey?: string;
   /** 네이버 클립 필수 — 1차/2차 카테고리. 프로그램별로 사람이 미리 정해둔다.
    *  자동 판정하지 않는다: 틀린 분류로 발행되면 되돌리기가 번거롭다. */
   category?: { primary: string; secondary: string };
@@ -142,8 +144,11 @@ export class NaverSessionExpiredError extends Error {
 }
 
 /** 저장된 세션으로 브라우저 컨텍스트를 연다. 세션이 없으면 던진다(업로드 시도 금지). */
-export async function openNaverContext(headful = false): Promise<{ browser: Browser; ctx: BrowserContext }> {
-  const state = loadNaverSession();
+export async function openNaverContext(
+  headful = false,
+  accountKey?: string,
+): Promise<{ browser: Browser; ctx: BrowserContext }> {
+  const state = loadNaverSession(accountKey);
   if (!state) throw new NaverSessionExpiredError();
   const browser = await chromium.launch({ headless: !headful });
   const ctx = await browser.newContext({
@@ -319,7 +324,7 @@ export async function uploadToNaver(input: NaverUploadInput): Promise<NaverUploa
   const artifactDir = input.artifactDir ?? path.join(os.tmpdir(), "stepd-naver");
   const timeout = input.timeoutMs ?? 10 * 60_000;
 
-  const { browser, ctx } = await openNaverContext(input.headful);
+  const { browser, ctx } = await openNaverContext(input.headful, input.accountKey);
   const page = await ctx.newPage();
   page.setDefaultTimeout(60_000);
   try {
@@ -505,7 +510,10 @@ export async function uploadToNaver(input: NaverUploadInput): Promise<NaverUploa
  * 최초 1회 수동 로그인 — 브라우저를 띄우고 **사람이** 아이디/비번/2차인증을 넣는다.
  * 로그인이 끝나면 storageState 를 저장한다. 자격증명은 코드가 절대 만지지 않는다.
  */
-export async function interactiveNaverLogin(waitMs = 5 * 60_000): Promise<void> {
+export async function interactiveNaverLogin(
+  waitMs = 5 * 60_000,
+  accountKey?: string,
+): Promise<void> {
   const browser = await chromium.launch({ headless: false });
   const ctx = await browser.newContext({ locale: "ko-KR", timezoneId: "Asia/Seoul" });
   const page = await ctx.newPage();
@@ -518,7 +526,7 @@ export async function interactiveNaverLogin(waitMs = 5 * 60_000): Promise<void> 
   for (const t of Object.values(NAVER_TARGETS)) {
     await page.goto(t.uploadUrl, { waitUntil: "domcontentloaded" }).catch(() => {});
   }
-  saveNaverSession(await ctx.storageState());
+  saveNaverSession(await ctx.storageState(), accountKey);
   console.log("세션 저장 완료.");
   await ctx.close();
   await browser.close();

@@ -10,7 +10,15 @@
 import { interactiveNaverLogin } from "../src/naver-tv.ts";
 import { naverSessionPath } from "../src/naver-session.ts";
 
-await interactiveNaverLogin();
-console.log(`저장 위치: ${naverSessionPath()}`);
+// 고객사가 여럿이면 계정마다 세션이 따로다:
+//   pnpm --filter @stepd/server naver:login --account <accountKey>
+// accountKey 는 우리가 발급한 불투명 키다(네이버 아이디가 아니다).
+const i = process.argv.indexOf("--account");
+const accountKey = i >= 0 ? process.argv[i + 1] : undefined;
+if (i >= 0 && !accountKey) { console.error("--account 뒤에 키가 필요하다"); process.exit(1); }
+
+await interactiveNaverLogin(5 * 60_000, accountKey);
+console.log(`계정: ${accountKey ?? "(레거시 단일 세션)"}`);
+console.log(`저장 위치: ${naverSessionPath(accountKey)}`);
 console.log("⚠️ 이 파일은 로그인 쿠키다. 커밋·복사·전송 금지.");
 process.exit(0);

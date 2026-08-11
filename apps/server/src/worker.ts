@@ -70,6 +70,7 @@ import { pipeline } from "node:stream/promises";
 import { youtubeUploadEnabled, UPLOAD_DISABLED_MESSAGE } from "./upload-gate.ts";
 import { naverUploadEnabled, NAVER_DISABLED_MESSAGE } from "./naver-gate.ts";
 import { hasNaverSession } from "./naver-session.ts";
+import { getNaverAccount, markNaverAccount } from "./db-pg.ts";
 import { uploadToNaver, NAVER_TARGETS, type NaverTarget } from "./naver-tv.ts";
 import { prepareWorkPath, cleanupWorkFile, sweepStaleWorkFiles } from "./naver-workdir.ts";
 import { upsertDistribution } from "./publish-guard.ts";
@@ -1285,12 +1286,33 @@ async function handleNaverPublish(job: Job): Promise<void> {
   try {
     // 게이트는 업로드 직전에도 다시 본다(naver-tv.ts). 여기서는 빨리 걸러 잡을 낭비하지 않는다.
     if (!naverUploadEnabled()) return void (await fail(NAVER_DISABLED_MESSAGE));
-    if (!hasNaverSession()) {
-      return void (await fail("네이버 세션이 없습니다 — 워커 PC 에서 `pnpm --filter @stepd/server naver:login` 실행"));
-    }
-
     const clip = await getEntity<any>("clip", clipId);
     if (!clip) { console.warn(`[worker] naver.publish: clip ${clipId} 없음 — 버림`); return; }
+
+    // 어느 네이버 계정으로 올릴지. B2B 다계정에서 **이 검증이 제일 중요하다** —
+    // A사 클립이 B사 채널에 올라가는 사고를 막는다. 계정 미지정이면 레거시 단일 세션.
+    const accountId = typeof job.payload.naverAccountId === "string" ? job.payload.naverAccountId : "";
+    let accountKey: string | undefined;
+    if (accountId) {
+      const acct = await getNaverAccount(accountId);
+      if (!acct) return void (await fail(`네이버 계정 ${accountId} 없음`));
+      if (acct.status === "disabled") return void (await fail(`네이버 계정 '${acct.label}' 이 비활성입니다`));
+      // 잡의 테넌트와 계정의 테넌트가 다르면 **절대** 올리지 않는다. RLS 가 이미 막지만,
+      // 워커에는 시스템 스코프로 도는 구간이 있어 여기서 한 번 더 본다.
+      const jobTenant = job.tenantId || DEFAULT_TENANT_ID;
+      if (acct.tenantId !== jobTenant) {
+        return void (await fail(
+          `테넌트 불일치 — 잡(${jobTenant}) vs 계정(${acct.tenantId}). 다른 고객사 채널에 올릴 뻔했습니다`));
+      }
+      if (!hasNaverSession(acct.accountKey)) {
+        await markNaverAccount(acct.id, { status: "session_expired" }).catch(() => {});
+        return void (await fail(
+          `'${acct.label}' 세션 없음 — 워커 PC 에서 \`naver:login --account ${acct.accountKey}\` 실행`));
+      }
+      accountKey = acct.accountKey;
+    } else if (!hasNaverSession()) {
+      return void (await fail("네이버 세션이 없습니다 — 워커 PC 에서 `naver:login` 실행"));
+    }
     if (!clip.mediaId) return void (await fail("클립이 아직 렌더되지 않았습니다 (익스포트 필요)"));
     const media = await getMedia(clip.mediaId);
     if (!media) return void (await fail("렌더된 영상 파일을 찾을 수 없습니다"));
@@ -1334,6 +1356,7 @@ async function handleNaverPublish(job: Job): Promise<void> {
 
       const r = await uploadToNaver({
         target,
+        accountKey,
         videoPath: localPath,
         publishAt,
         title: clip.title ?? "무제 클립",
@@ -1351,6 +1374,7 @@ async function handleNaverPublish(job: Job): Promise<void> {
         distributions: upsertDistribution(fresh.distributions, channel,
           { status: "published", url: r.url ?? null, publishedAt: Date.now() }),
       });
+      if (accountId) await markNaverAccount(accountId, { lastPublishAt: Date.now(), status: "active" }).catch(() => {});
       console.log(`[worker] naver.publish ${clipId} (${channel}) 완료 → ${r.url ?? "(URL 미확인)"}`);
     } finally {
       // 클립 영상은 수백 MB 다. 성공·실패 무관하게 지운다 — GCS 에 원본이 있으니 언제든

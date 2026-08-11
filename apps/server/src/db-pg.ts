@@ -54,6 +54,31 @@ export function getRawPool(): pg.Pool {
 }
 
 /**
+ * API 키 조회 — **테넌트 컨텍스트를 정하는 단계**라 스코프 없는 풀로 읽는다.
+ * auth.ts 의 세션 조회와 같은 이유다(그 파일 상단 주석 참조): 지금 이 요청이 누구 것인지를
+ * 정하는 중이라 아직 스코프가 없다. 조회 조건이 곧 열쇠(sha256)라 스코프 없이도 남의 것이
+ * 안 나온다. 소속 회사 상태를 같이 읽어서 **정지된 회사의 키가 살아남지 않게** 한다.
+ */
+export async function lookupApiKey(keyHash: string): Promise<{
+  id: string; tenantId: string; scopes: string[];
+  revokedAt: Date | null; lastUsedAt: Date | null; tenantStatus: string | null;
+} | null> {
+  const { rows } = await rawPool.query(
+    `SELECT k.id, k.tenant_id AS "tenantId", k.scopes, k.revoked_at AS "revokedAt",
+            k.last_used_at AS "lastUsedAt", t.status AS "tenantStatus"
+       FROM api_keys k LEFT JOIN tenants t ON t.id = k.tenant_id
+      WHERE k.key_hash = $1`,
+    [keyHash],
+  );
+  return rows[0] ?? null;
+}
+
+/** 마지막 사용 시각. 안 쓰는 키를 회수할 근거가 된다 — 실패해도 요청을 막지 않는다. */
+export async function touchApiKey(id: string): Promise<void> {
+  await rawPool.query("UPDATE api_keys SET last_used_at = now() WHERE id = $1", [id]).catch(() => {});
+}
+
+/**
  * 최소한의 질의 인터페이스. Pool 과 PoolClient 가 둘 다 만족하므로, 같은 함수를
  * "풀에서 알아서" 와 "이 트랜잭션 안에서" 두 방식으로 쓸 수 있다.
  */
@@ -736,6 +761,68 @@ export async function upsertMetaAccount(a: MetaAccount): Promise<void> {
 
 export async function deleteMetaAccount(publicId: string): Promise<void> {
   await pool.query("DELETE FROM meta_accounts WHERE publicId = $1", [publicId]);
+}
+
+// ── 네이버 계정 (B2B 다계정) ───────────────────────────────────────────────────
+//
+// **자격증명을 담지 않는다.** 로그인 세션(쿠키)은 워커 PC 로컬 파일에만 있고, 여기는
+// "누구 것이고, 어느 세션 키를 쓰고, 살아있나" 만 안다. accountKey 는 불투명 키다 —
+// 네이버 아이디를 경로·로그·DB 에 박지 않는다.
+
+export interface NaverAccount {
+  id: string;
+  tenantId: string;
+  label: string;
+  accountKey: string;
+  target: "clip" | "tv" | "both";
+  status: "active" | "session_expired" | "disabled";
+  lastLoginAt: number | null;
+  lastPublishAt: number | null;
+  createdAt: number;
+}
+
+const NAVER_ACCOUNT_COLS = `id, tenant_id AS "tenantId", label, account_key AS "accountKey",
+  target, status, last_login_at AS "lastLoginAt", last_publish_at AS "lastPublishAt",
+  created_at AS "createdAt"`;
+
+export async function listNaverAccounts(): Promise<NaverAccount[]> {
+  const { rows } = await pool.query(
+    `SELECT ${NAVER_ACCOUNT_COLS} FROM naver_account ORDER BY created_at DESC`);
+  return rows as NaverAccount[];
+}
+
+/**
+ * 계정 하나. **RLS 가 걸려 있어 다른 테넌트 것은 애초에 안 보인다** — 그래도 호출부는
+ * 클립의 테넌트와 대조해야 한다(워커는 시스템 스코프로 도는 구간이 있다).
+ */
+export async function getNaverAccount(id: string): Promise<NaverAccount | undefined> {
+  const { rows } = await pool.query(
+    `SELECT ${NAVER_ACCOUNT_COLS} FROM naver_account WHERE id = $1`, [id]);
+  return rows[0] as NaverAccount | undefined;
+}
+
+export async function upsertNaverAccount(a: Omit<NaverAccount, "tenantId">): Promise<void> {
+  await pool.query(
+    `INSERT INTO naver_account (id, label, account_key, target, status,
+       last_login_at, last_publish_at, created_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+     ON CONFLICT (id) DO UPDATE SET
+       label = EXCLUDED.label, target = EXCLUDED.target, status = EXCLUDED.status,
+       last_login_at = EXCLUDED.last_login_at, last_publish_at = EXCLUDED.last_publish_at`,
+    [a.id, a.label, a.accountKey, a.target, a.status,
+     a.lastLoginAt, a.lastPublishAt, a.createdAt]);
+}
+
+export async function markNaverAccount(
+  id: string, patch: { status?: NaverAccount["status"]; lastPublishAt?: number; lastLoginAt?: number },
+): Promise<void> {
+  await pool.query(
+    `UPDATE naver_account SET
+       status          = COALESCE($2, status),
+       last_publish_at = COALESCE($3, last_publish_at),
+       last_login_at   = COALESCE($4, last_login_at)
+     WHERE id = $1`,
+    [id, patch.status ?? null, patch.lastPublishAt ?? null, patch.lastLoginAt ?? null]);
 }
 
 // ── TikTok accounts ────────────────────────────────────────────────────────────
