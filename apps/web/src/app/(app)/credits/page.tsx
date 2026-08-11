@@ -39,6 +39,11 @@ export default function CreditsPage() {
   // **PG 가 구매자 이메일을 필수로 요구한다**(이니시스 V2 일반결제). 세션에 있으면 채우고,
   // 없으면 사람이 입력한다 — 지금은 로그인이 강제되지 않아 세션 이메일이 빌 수 있다.
   const [email, setEmail] = useState("");
+  // 이니시스는 휴대폰번호도 필수다. 하이픈은 넣어도 되지만 우리가 지워서 보낸다.
+  const [phone, setPhone] = useState("");
+  // **이름도 필수다** (PC·모바일 공통). 세션에 있으면 채우되, 없으면 사람이 넣는다 —
+  // 세션 이름에만 기대면 로그인 없는 지금 빈 값으로 나가 결제창이 안 뜬다.
+  const [buyerName, setBuyerName] = useState("");
   const [busy, setBusy] = useState(false);
   const [awaiting, setAwaiting] = useState<string | null>(null);
 
@@ -53,14 +58,21 @@ export default function CreditsPage() {
 
   useEffect(() => { void load(); }, [load]);
   useEffect(() => { if (session.user.email) setEmail(session.user.email); }, [session.user.email]);
+  useEffect(() => { if (session.user.name) setBuyerName(session.user.name); }, [session.user.name]);
 
   const price = state?.priceKrw ?? null;
   const amount = price != null ? credits * price : null;
 
   const emailOk = /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email.trim());
+  const phoneDigits = phone.replace(/\D/g, "");
+  const phoneOk = /^01\d{8,9}$/.test(phoneDigits);
+  const nameOk = buyerName.trim().length >= 2;
+  // KG이니시스 PC 일반결제 필수 3종: fullName · email · phoneNumber (공식 문서 확인, 2026-08-11).
+  // 모바일은 email·phone 이 선택이지만, 어느 기기로 열든 되게 셋 다 받는다.
+  const canPay = emailOk && phoneOk && nameOk;
 
   async function topup() {
-    if (busy || credits <= 0 || !emailOk) return;
+    if (busy || credits <= 0 || !canPay) return;
     setBusy(true);
     try {
       // 1) 서버가 주문을 만든다 — paymentId 와 금액이 여기서 확정된다.
@@ -77,7 +89,11 @@ export default function CreditsPage() {
         currency: "CURRENCY_KRW",
         payMethod: "CARD",
         // 이니시스 V2 일반결제는 구매자 이메일이 **필수**다. 빠지면 결제창 호출 자체가 실패한다.
-        customer: { email: email.trim(), ...(actor ? { fullName: actor } : {}) },
+        customer: {
+          fullName: buyerName.trim(),
+          email: email.trim(),
+          phoneNumber: phoneDigits,
+        },
       });
 
       if (res?.code) {
@@ -182,14 +198,39 @@ export default function CreditsPage() {
 
             <div className="flex flex-wrap items-center gap-2">
               <input
+                value={buyerName}
+                onChange={(e) => setBuyerName(e.target.value)}
+                placeholder="구매자 이름 (필수)"
+                className="sd-input w-[140px]"
+                aria-label="구매자 이름"
+              />
+              <input
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="영수증 받을 이메일 (필수)"
-                className="sd-input min-w-[220px] flex-1"
+                className="sd-input min-w-[200px] flex-1"
                 aria-label="구매자 이메일"
               />
+              <input
+                type="tel"
+                value={phone}
+                onChange={(e) => setPhone(e.target.value)}
+                placeholder="휴대폰번호 (필수)"
+                className="sd-input w-[160px]"
+                aria-label="구매자 휴대폰번호"
+              />
             </div>
+            {/* PG 가 요구하는 항목이라 여기서 막는다 — 결제창까지 가서 알게 하지 않는다. */}
+            {(buyerName || email || phone) && !canPay && (
+              <p className="text-[10.5px]" style={{ color: "var(--sd-danger-strong)" }}>
+                {!nameOk
+                  ? "구매자 이름을 입력하세요."
+                  : !emailOk
+                    ? "이메일 형식을 확인하세요."
+                    : "휴대폰번호를 확인하세요 (01012345678)."}
+              </p>
+            )}
 
             <div className="flex flex-wrap items-center gap-2">
               <input
@@ -209,8 +250,8 @@ export default function CreditsPage() {
               <button
                 type="button"
                 className="sd-btn sd-btn-primary ml-auto"
-                disabled={busy || credits <= 0 || !emailOk}
-                title={emailOk ? undefined : "구매자 이메일이 필요합니다 (PG 필수 항목)"}
+                disabled={busy || credits <= 0 || !canPay}
+                title={canPay ? undefined : "KG이니시스는 이름·이메일·휴대폰번호가 모두 필요합니다"}
                 onClick={topup}
               >
                 {busy ? "진행 중…" : "결제하기"}
