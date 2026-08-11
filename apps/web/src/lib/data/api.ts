@@ -746,6 +746,13 @@ export async function setAutomationPaused(paused: boolean): Promise<{ notice: st
   return res.json();
 }
 
+/** 순방을 지금 한 번 돈다 — 현재 워크스페이스 규칙만 평가한다. */
+export async function runAutomationNow(): Promise<{
+  rulesEvaluated: number; adopted: number; published: number; held: number; idleReason: string;
+}> {
+  return json(await fetch(`${API_BASE}/automation/run`, { method: "POST", credentials: "include" }));
+}
+
 /** 보류 해제 — 사람이 확정하는 지점(F6 Invariant). */
 export async function releaseAutomationHold(
   ruleId: string, clipId: string, actor: string,

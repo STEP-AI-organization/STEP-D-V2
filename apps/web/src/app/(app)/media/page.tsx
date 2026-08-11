@@ -20,6 +20,7 @@ import { useToast } from "@/components/ui/toast";
 import { useSession } from "@/lib/auth";
 import { roleOf } from "@/lib/roles";
 import { fetchGateBatch, type GateResult, type GateState, type RightsIssue } from "@/lib/data/api";
+import { useGateSummary } from "@/lib/gate-summary";
 import { useAppData } from "@/lib/data/store";
 import { GATE_LABEL, GATE_TAG, ISSUE_KIND_LABEL, fmtTime } from "@/lib/gate-ui";
 import { clipThumbSrc } from "@/lib/media-url";
@@ -40,31 +41,16 @@ export default function MediaPage() {
   const [kind, setKind] = useState<KindFilter>("all");
   const [gateFilter, setGateFilter] = useState<GateFilter>("all");
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const [gates, setGates] = useState<Record<string, GateResult>>({});
-  const [issues, setIssues] = useState<Record<string, RightsIssue[]>>({});
-  const [gateError, setGateError] = useState<string | null>(null);
   const [openIssues, setOpenIssues] = useState<string | null>(null);
   const [publishTarget, setPublishTarget] = useState<string[] | null>(null);
 
-  const clipIds = useMemo(() => clips.map((c) => c.id), [clips]);
-  const idsKey = clipIds.join(",");
-
-  const loadGates = useCallback(async () => {
-    if (clipIds.length === 0) { setGates({}); setIssues({}); return; }
-    try {
-      const r = await fetchGateBatch("clip", clipIds);
-      setGates(r.gates);
-      setIssues(r.issues);
-      setGateError(null);
-    } catch (err) {
-      // 못 읽으면 비워 두고 사유를 띄운다. 빈 게이트는 아래에서 "확인 불가"로 그려진다.
-      setGates({});
-      setGateError(err instanceof Error ? err.message : String(err));
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [idsKey]);
-
-  useEffect(() => { void loadGates(); }, [loadGates]);
+  // 사이드바 배지·대시보드와 **같은 값**을 쓴다. 화면마다 따로 조회하면 같은 요청이
+  // 여러 번 나가고, 무엇보다 숫자가 갈린다 — 어느 쪽을 믿어야 할지 모르게 된다.
+  const gateSummary = useGateSummary();
+  const gates = gateSummary.gates;
+  const issues = gateSummary.issues;
+  const gateError = gateSummary.error;
+  const loadGates = gateSummary.refresh;
 
   const rows = useMemo(() => {
     return clips.filter((c) => {

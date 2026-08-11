@@ -219,6 +219,7 @@ import {
 import { dispatchPublish } from "./publish-dispatch.ts";
 import { opsCapabilityOf } from "./ops-role.ts";
 import { commitAndInherit } from "./adopt.ts";
+import { runAutomationCycle } from "./automation-cycle.ts";
 import {
   ROOT as ASSET_ROOT,
   canMoveFolder,
@@ -3965,6 +3966,16 @@ app.post("/api/rights-judgement", async (c) => {
     subjectType, subjectId, action: "judge", toState: "judged", actor, basis: note,
   });
   return c.json({ gate: await gateFor(subjectType, subjectId) });
+});
+
+/**
+ * 순방을 지금 한 번 돈다 — 규칙을 만들고 결과를 바로 보고 싶을 때.
+ *
+ * **현재 워크스페이스 것만** 평가한다. 요청 컨텍스트가 이미 이 테넌트로 세워져 있고,
+ * 순방은 RLS 안에서 돌기 때문에 남의 채널·프로그램이 보이지 않는다.
+ */
+app.post("/api/automation/run", async (c) => {
+  return c.json(await runAutomationCycle());
 });
 
 app.get("/api/gate-audit/:subjectType/:subjectId", async (c) => {

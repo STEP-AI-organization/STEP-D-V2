@@ -11,12 +11,14 @@
  */
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 
-import { fetchGateBatch, type GateResult, type GateState } from "@/lib/data/api";
+import { fetchGateBatch, type GateResult, type GateState, type RightsIssue } from "@/lib/data/api";
 import { useAppData } from "@/lib/data/store";
 
 export interface GateSummary {
   /** clipId → 게이트. 비어 있으면 아직 못 읽었거나 클립이 없다. */
   gates: Record<string, GateResult>;
+  /** clipId → 이슈 목록. 목록 화면의 "이슈 요약"이 이걸 쓴다. */
+  issues: Record<string, RightsIssue[]>;
   /** 상태별 건수. 못 읽었으면 전부 0 이고 `error` 가 채워진다. */
   counts: Record<GateState, number>;
   /** 사람이 손봐야 하는 총 건수 — 사이드바 배지. */
@@ -31,6 +33,7 @@ const EMPTY_COUNTS: Record<GateState, number> = {
 
 const GateSummaryContext = createContext<GateSummary>({
   gates: {},
+  issues: {},
   counts: EMPTY_COUNTS,
   needsAttention: 0,
   error: null,
@@ -43,20 +46,23 @@ const POLL_MS = 60_000;
 export function GateSummaryProvider({ children }: { children: ReactNode }) {
   const { clips } = useAppData();
   const [gates, setGates] = useState<Record<string, GateResult>>({});
+  const [issues, setIssues] = useState<Record<string, RightsIssue[]>>({});
   const [error, setError] = useState<string | null>(null);
 
   const clipIds = useMemo(() => clips.map((c) => c.id), [clips]);
   const idsKey = clipIds.join(",");
 
   const refresh = useCallback(async () => {
-    if (clipIds.length === 0) { setGates({}); setError(null); return; }
+    if (clipIds.length === 0) { setGates({}); setIssues({}); setError(null); return; }
     try {
       const r = await fetchGateBatch("clip", clipIds);
       setGates(r.gates);
+      setIssues(r.issues);
       setError(null);
     } catch (err) {
       // 못 읽으면 0 으로 보여주지 않는다 — "처리할 게 없다"로 읽히면 안 된다.
       setGates({});
+      setIssues({});
       setError(err instanceof Error ? err.message : String(err));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -77,8 +83,8 @@ export function GateSummaryProvider({ children }: { children: ReactNode }) {
     }
     const needsAttention =
       counts.rights_hold + counts.conditional + counts.review_pending + counts.blocked;
-    return { gates, counts, needsAttention, error, refresh };
-  }, [gates, clipIds, error, refresh]);
+    return { gates, issues, counts, needsAttention, error, refresh };
+  }, [gates, issues, clipIds, error, refresh]);
 
   return <GateSummaryContext.Provider value={value}>{children}</GateSummaryContext.Provider>;
 }

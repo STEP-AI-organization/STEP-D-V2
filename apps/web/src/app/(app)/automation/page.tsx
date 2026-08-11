@@ -18,6 +18,7 @@ import {
   deleteAutomationRule,
   fetchAutomation,
   releaseAutomationHold,
+  runAutomationNow,
   saveAutomationRule,
   setAutomationPaused,
   type AutomationRule,
@@ -93,6 +94,23 @@ export default function AutomationPage() {
     }
   }
 
+  /** 규칙을 만들고 10분을 기다리지 않아도 결과를 본다. */
+  async function runNow() {
+    try {
+      const r = await runAutomationNow();
+      toast({
+        title: "순방을 돌렸습니다",
+        description:
+          r.idleReason ||
+          `규칙 ${r.rulesEvaluated}개 · 미디어 ${r.adopted} · 게시 ${r.published} · 보류 ${r.held}`,
+        tone: r.held > 0 ? "warn" : "done",
+      });
+      await load();
+    } catch (err) {
+      toast({ title: "순방 실패", description: err instanceof Error ? err.message : String(err), tone: "error" });
+    }
+  }
+
   async function release(h: RuleHold) {
     try {
       const r = await releaseAutomationHold(h.ruleId, h.clipId, actor);
@@ -120,7 +138,10 @@ export default function AutomationPage() {
         <span className="text-[11.5px]" style={{ color: "var(--sd-mut)" }}>
           {idleReason || `규칙 ${rules.filter((r) => r.enabled).length}개가 순방마다 평가됩니다`}
         </span>
-        <button type="button" className="sd-btn ml-auto" onClick={togglePause}>
+        <button type="button" className="sd-btn ml-auto" onClick={runNow}>
+          지금 한 바퀴
+        </button>
+        <button type="button" className="sd-btn" onClick={togglePause}>
           {paused ? "재시작" : "일시정지"}
         </button>
         <button type="button" className="sd-btn sd-btn-primary" onClick={() => setAdding(true)}>
