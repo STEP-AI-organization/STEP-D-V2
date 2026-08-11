@@ -6,7 +6,7 @@ import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { Youtube } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { YouTubeChannelInfo, MetaAccountInfo, TikTokAccountInfo } from "@/lib/data/api";
 import {
   fetchYouTubeChannels,
@@ -18,7 +18,9 @@ import {
   fetchTikTokAccounts,
   getTikTokAuthUrl,
   deleteTikTokAccount,
+  fetchChannelRules,
 } from "@/lib/data/api";
+import { ChannelRuleDialog } from "@/components/publish/channel-rule-dialog";
 import { ChannelAnalysis } from "@/components/channel-analysis";
 import { DISTRIBUTION_CHANNELS, type DistributionChannel } from "@/lib/constants";
 
@@ -55,6 +57,17 @@ const CHANNEL_INFO: Record<DistributionChannel, { desc: string; note?: string }>
 
 export default function PublishChannelsPage() {
   const [channels, setChannels] = useState<YouTubeChannelInfo[]>([]);
+  // 배포 규칙이 붙은 채널 — 연결돼 있어도 규칙이 없으면 배포가 안 된다.
+  const [ruledIds, setRuledIds] = useState<Set<string>>(new Set());
+  const [ruleFor, setRuleFor] = useState<{ id: string; name: string } | null>(null);
+
+  const loadRules = useCallback(async () => {
+    try {
+      const rules = await fetchChannelRules();
+      setRuledIds(new Set(rules.filter((r) => r.platform === "youtube").map((r) => r.accountId)));
+    } catch { /* 규칙을 못 읽어도 연결 목록은 보여야 한다 */ }
+  }, []);
+  useEffect(() => { void loadRules(); }, [loadRules]);
   const [metaAccounts, setMetaAccounts] = useState<MetaAccountInfo[]>([]);
   const [tiktokAccounts, setTiktokAccounts] = useState<TikTokAccountInfo[]>([]);
   const [loading, setLoading] = useState(true);
@@ -443,6 +456,23 @@ export default function PublishChannelsPage() {
                     >
                       {ch.status === "active" ? "활성" : ch.status === "revoked" ? "재연결 필요" : "오류"}
                     </StatusBadge>
+                    {/* 연결과 규칙은 다른 것이다 — 규칙이 없으면 배포 모달에 이 채널이 안 뜬다.
+                        그래서 상태를 여기서 바로 보여주고, 여기서 바로 만들게 한다. */}
+                    {ruledIds.has(ch.channelId) ? (
+                      <span className="rounded-md border border-border px-2 py-1 text-[11px] text-muted-foreground">
+                        배포 규칙 있음
+                      </span>
+                    ) : (
+                      <span className="rounded-md border border-status-warn/40 bg-status-warn/10 px-2 py-1 text-[11px] text-status-warn">
+                        배포 규칙 없음
+                      </span>
+                    )}
+                    <button
+                      onClick={() => setRuleFor({ id: ch.channelId, name: ch.channelName })}
+                      className="rounded-md border border-border px-2 py-1 text-xs text-foreground transition hover:bg-accent/40"
+                    >
+                      배포 규칙
+                    </button>
                     <button
                       onClick={() => handleDelete(ch.channelId)}
                       className="rounded-md px-2 py-1 text-xs text-muted-foreground transition hover:text-status-error"
@@ -458,6 +488,16 @@ export default function PublishChannelsPage() {
           </div>
         )}
       </section>
+
+      {ruleFor && (
+        <ChannelRuleDialog
+          platform="youtube"
+          accountId={ruleFor.id}
+          accountLabel={ruleFor.name}
+          onClose={() => setRuleFor(null)}
+          onSaved={loadRules}
+        />
+      )}
     </>
   );
 }
