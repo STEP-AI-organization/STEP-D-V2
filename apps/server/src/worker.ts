@@ -1306,12 +1306,20 @@ async function handleNaverPublish(job: Job): Promise<void> {
         ? (job.payload.tags as unknown[]).map(String)
         : (Array.isArray(clip.tags) ? clip.tags : undefined);
 
+      // 카테고리는 페이로드 → 프로그램 설정 순으로 본다. 자동 판정하지 않는다
+      // (틀린 분류로 발행되면 되돌리기가 번거롭다 — 사람이 프로그램별로 한 번 정한다).
+      const pc = (job.payload.category ?? {}) as { primary?: string; secondary?: string };
+      const category = pc.primary && pc.secondary
+        ? { primary: String(pc.primary), secondary: String(pc.secondary) }
+        : undefined;
+
       const r = await uploadToNaver({
         target,
         videoPath: localPath,
         title: clip.title ?? "무제 클립",
         description,
         tags,
+        category,
         artifactDir: path.join(os.homedir(), ".stepd", "naver-artifacts"),
       });
       if (!r.ok) {

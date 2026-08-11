@@ -76,8 +76,9 @@ export const NAVER_TARGETS = {
 export type NaverTarget = keyof typeof NAVER_TARGETS;
 
 /** 로그인 여부 판정 — 스튜디오에 들어갔을 때 로그인 화면으로 튕기면 세션 만료다. */
-/** 클립 설명 최대 길이(실측 카운터 0/300). 넘기면 입력이 잘린다. */
+/** 클립 설명 길이(실측 2026-08-11). 최소 10자 미만이면 등록 자체가 막힌다. */
 export const DESC_MAX = 300;
+export const DESC_MIN = 10;
 
 const LOGGED_OUT_HINT = 'form[name="frmNIDLogin"], input#id';
 
@@ -94,6 +95,9 @@ export interface NaverUploadInput {
   headful?: boolean;
   /** true 면 "등록" 대신 "임시저장" 을 누른다 — 공개 없이 파이프라인을 검증할 때. */
   draftOnly?: boolean;
+  /** 네이버 클립 필수 — 1차/2차 카테고리. 프로그램별로 사람이 미리 정해둔다.
+   *  자동 판정하지 않는다: 틀린 분류로 발행되면 되돌리기가 번거롭다. */
+  category?: { primary: string; secondary: string };
   timeoutMs?: number;
 }
 
@@ -124,6 +128,29 @@ export async function openNaverContext(headful = false): Promise<{ browser: Brow
     viewport: { width: 1440, height: 900 },
   });
   return { browser, ctx };
+}
+
+/**
+ * 1차/2차 카테고리 선택. 둘 다 **필수**다(2026-08-11 실측 — 2차까지 안 고르면 등록 불가).
+ *
+ * 트리거를 문구로 잡으면 안 된다: 선택하고 나면 버튼 라벨이 "1차 카테고리" → 고른 값으로
+ * 바뀐다. 그래서 dropdownWrap 순서(0=1차, 1=2차)로 잡는다. 옵션은 role=option 이 아니라
+ * class*="Option" 이다 — li 로 폴백하면 사이드바 메뉴를 긁는다.
+ */
+async function pickCategory(page: Page, primary: string, secondary: string): Promise<void> {
+  const wraps = page.locator('[class*="dropdownWrap"]');
+  const opt = (text: string) =>
+    page.locator('[class*="Option"]').filter({ hasText: text }).first();
+
+  await wraps.nth(0).locator("button").first().click();
+  await page.waitForTimeout(600);
+  await opt(primary).click();
+  await page.waitForTimeout(800);
+
+  await wraps.nth(1).locator("button").first().click();
+  await page.waitForTimeout(600);
+  await opt(secondary).click();
+  await page.waitForTimeout(400);
 }
 
 async function shot(page: Page, dir: string, name: string): Promise<string> {
@@ -190,8 +217,18 @@ export async function uploadToNaver(input: NaverUploadInput): Promise<NaverUploa
       // 배포 시점에 사람이 설명을 넣었으면 **그것만** 쓴다. 제목을 앞에 덧붙이면 300자를
       // 잡아먹고 사람이 쓴 문구가 뒤에서 잘린다. 설명이 비었을 때만 제목으로 채운다.
       const body = (input.description?.trim() || input.title || "").slice(0, DESC_MAX);
-      if (!body) return { ok: false, error: "설명이 비어 있습니다 — 네이버 클립은 설명이 필수입니다" };
+      // 실측: 설명은 필수이고 **최소 10자**다. 짧으면 등록이 막히는데 명확한 에러가 없어
+      // 원인을 못 찾는다 — 올리기 전에 여기서 거른다.
+      if (body.length < DESC_MIN) {
+        return { ok: false, error: `설명이 ${DESC_MIN}자 미만입니다(현재 ${body.length}자)` };
+      }
       await page.locator(SEL.description).first().fill(body);
+
+      // 카테고리 1차/2차도 필수. 없으면 등록을 눌러봐야 실패하므로 여기서 멈춘다.
+      if (!input.category?.primary || !input.category?.secondary) {
+        return { ok: false, error: "카테고리(1차/2차) 미지정 — 프로그램별로 미리 등록해야 합니다" };
+      }
+      await pickCategory(page, input.category.primary, input.category.secondary);
     } else {
       await page.locator(SEL.title).first().fill(input.title);
       if (input.description) {
