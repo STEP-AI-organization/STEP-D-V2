@@ -44,6 +44,31 @@ pm2 logs stepd-naver-worker        # 워커 로그
 > ⚠️ **코드가 최신이어도 프로세스가 옛날이면 소용없다.** 2026-08-11 에 5일간 구버전으로
 > 돌던 워커가 잡을 가로채 계속 실패시켰다 — self-update 가 재시작까지 하는 이유다.
 
+### 즉시 반영 (Tailscale)
+
+폴링은 최대 10분 지연된다. 배포 직후 바로 반영하려면 테일넷으로 찔러준다:
+
+```powershell
+.\deploy
+aver-pc\push-update.ps1 -TailscaleHost <워커PC이름>
+```
+
+Tailscale 이라 NAT·포트포워딩·고정IP 가 필요 없다. **워커 PC 1회 준비:**
+
+```powershell
+# 1) Tailscale 설치 후 테일넷 로그인
+# 2) OpenSSH Server 켜기 (Windows 기능)
+Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0
+Set-Service sshd -StartupType Automatic; Start-Service sshd
+
+# 3) 배포 머신의 공개키를 등록
+#    ⚠️ 관리자 계정은 ~/.ssh/authorized_keys 가 아니라 아래 파일을 쓴다(Windows 특유)
+#    C:\ProgramData\sshdministrators_authorized_keys
+```
+
+> ⚠️ **폴링을 없애지 말 것.** push 는 빠른 경로일 뿐 **보장 경로가 아니다** — PC 가 꺼져
+> 있거나 SSH 가 막히면 실패한다. 그때는 스케줄러가 나중에 따라잡는다. 둘 다 있어야 한다.
+
 ## 2-b. 수동 실행 (디버깅용)
 
 ```bash
