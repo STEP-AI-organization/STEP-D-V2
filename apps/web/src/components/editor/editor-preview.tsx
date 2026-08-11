@@ -62,9 +62,6 @@ export function EditorPreview({
   onDuration,
   onTogglePlay,
   caption,
-  captionWords,
-  captionActiveIdx = -1,
-  captionKeyIdx,
   hasTranscript,
   currentTime,
   posterMediaId,
@@ -80,12 +77,6 @@ export function EditorPreview({
   onTogglePlay?: () => void;
   /** Real STT caption under the playhead (from the master transcript). */
   caption?: string;
-  /** Per-word split of the active caption for word-by-word highlight (mirrors the render). */
-  captionWords?: { word: string; start: number; end: number }[];
-  /** Index of the currently-spoken word in captionWords (-1 = none). */
-  captionActiveIdx?: number;
-  /** Keyword (content-word) indices to emphasize with the keyword colour. */
-  captionKeyIdx?: Set<number>;
   /** Whether a transcript is loaded — false ⇒ show the sample placeholder instead. */
   hasTranscript?: boolean;
   /** Segment-relative playhead seconds — drives keyframe interpolation. */

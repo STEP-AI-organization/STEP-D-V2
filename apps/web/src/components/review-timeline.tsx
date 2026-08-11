@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { cn, formatTimecode } from "@/lib/utils";
+import { formatTimecode } from "@/lib/utils";
 import { Card } from "@/components/ui/card";
 
 export type TimelineBlock = {
@@ -18,8 +18,6 @@ export type TimelineLane = {
   /** Lane accent (hex) — drives dot, block fill, and inspector chrome. */
   color: string;
   blocks: TimelineBlock[];
-  /** Placeholder blocks with no real data source yet — rendered dashed + tagged. */
-  sample?: boolean;
 };
 
 /**
@@ -27,9 +25,9 @@ export type TimelineLane = {
  *
  * Blocks are selectable and seek the player, but no processing action (채택·컷·
  * 리포트) is wired: this scaffolds the prototype's timeline look ahead of the
- * segment pipeline that will feed it. Lanes fed real analysis data render solid;
- * lanes without a data source (e.g. PPL) render dashed and tagged "샘플" so a
- * placeholder never reads as a real detection.
+ * segment pipeline that will feed it. **Every block here is a real detection** —
+ * the caller drops lanes that have no data instead of filling them with samples
+ * (a placeholder that seeks the player reads as a real detection).
  */
 export function ReviewTimeline({
   durationSec,
@@ -78,7 +76,6 @@ export function ReviewTimeline({
               <span className="truncate text-[11px] font-semibold text-muted-foreground">
                 {lane.label}
               </span>
-              {lane.sample && <span className="text-[9px] text-muted-foreground/60">샘플</span>}
             </div>
             <div className="relative h-[26px] rounded-md border border-border bg-elevated">
               <div
@@ -97,10 +94,7 @@ export function ReviewTimeline({
                       setSel({ lane, block: b });
                       onSeek?.(b.start);
                     }}
-                    className={cn(
-                      "absolute bottom-0.5 top-0.5 rounded-[3px] border transition-[background-color,filter] hover:brightness-125",
-                      lane.sample && "border-dashed opacity-70",
-                    )}
+                    className="absolute bottom-0.5 top-0.5 rounded-[3px] border transition-[background-color,filter] hover:brightness-125"
                     style={{
                       left: pct(b.start),
                       width: `max(6px, ${((b.end - b.start) / durationSec) * 100}%)`,
@@ -132,9 +126,6 @@ export function ReviewTimeline({
             <span className="mono text-[11px] text-muted-foreground">
               {formatTimecode(sel.block.start)}–{formatTimecode(sel.block.end)}
             </span>
-            {sel.lane.sample && (
-              <span className="text-[10px] text-muted-foreground/70">샘플 미리보기</span>
-            )}
             <button
               type="button"
               onClick={() => setSel(null)}

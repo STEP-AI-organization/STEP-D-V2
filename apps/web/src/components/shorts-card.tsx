@@ -19,7 +19,7 @@ import { Button } from "@/components/ui/button";
 import { useAppData } from "@/lib/data/store";
 import { useToast } from "@/components/ui/toast";
 import { useVideoSeek } from "./episode/seek-context";
-import { frameUrl, mediaUrl, type AnalysisShort } from "@/lib/data/api";
+import { frameUrl, mediaUrl, rejectRec, type AnalysisShort } from "@/lib/data/api";
 import type { Recommendation } from "@/lib/types";
 import { formatTimecode } from "@/lib/utils";
 import { cn } from "@/lib/utils";
@@ -37,6 +37,10 @@ const HOOK_CATEGORIES: ReadonlySet<string> = new Set([
   "반전", "감정고조", "돌직구", "질문", "정보성", "웃음", "갈등", "공감", "기타",
 ]);
 
+/** 하이라이트(다구간) 채택을 막는 사유 — 서버가 segments 를 rec 으로 옮기지 않아
+ *  채택하면 start~end 전 구간이 통째로 클립이 된다. */
+const MULTI_SEGMENT_REASON = "다구간 편집 미지원 — 채택하면 처음~끝이 한 덩어리 클립이 됩니다";
+
 export function ShortsCard({
   short,
   index,
@@ -51,18 +55,20 @@ export function ShortsCard({
   apiBase: string;
 }) {
   const router = useRouter();
-  const { adoptRecommendation, rejectRecommendation, recsForEpisode, selectThumbnail } = useAppData();
+  const { adoptRecommendation, recsForEpisode, selectThumbnail, refresh } = useAppData();
   const { toast } = useToast();
   const seek = useVideoSeek();
-  const [busy, setBusy] = useState<null | "adopt" | "edit">(null);
+  const [busy, setBusy] = useState<null | "adopt" | "edit" | "reject">(null);
 
   const rec = matchRec(recsForEpisode(episodeId), short);
   const status = rec?.status ?? "unregistered";
   const duration = Math.max(0, (short.end ?? 0) - (short.start ?? 0));
+  // 다구간 하이라이트는 채택 결과가 후보와 달라진다 → 버튼을 잠그고 사유를 적는다.
+  const multiSegment = short.type === "highlight" && (short.segments?.length ?? 0) > 1;
   // 썸네일 프레임 시점 — 클립은 시작·앞 부분에 방송의 "예고 자막"(원본에 인코딩)이 계속
   // 남아있는 경우가 많음. 클립은 **정중앙 프레임** 사용 (안내 자막 대부분 지나감).
   // 숏폼은 훅이 시작에 있어야 하므로 시작 유지.
-  const shortType = (short as any).type;
+  const shortType = short.type;
   const thumbTime =
     shortType === "shortform"
       ? short.start
@@ -87,10 +93,20 @@ export function ShortsCard({
     }
   }
 
-  function doReject() {
-    if (!rec) return;
-    rejectRecommendation(rec.id, "품질 낮음");
-    toast({ title: "반려", description: "이 후보를 반려 처리했습니다.", tone: "warn" });
+  // store.rejectRecommendation 은 fire-and-forget 이라 실패해도 알릴 길이 없다 —
+  // 여기서 직접 await 하고, 상태는 refresh 로 서버 진실에 맞춘다.
+  async function doReject() {
+    if (!rec || busy) return;
+    setBusy("reject");
+    try {
+      await rejectRec(rec.id, "품질 낮음");
+      await refresh();
+      toast({ title: "반려", description: "이 후보를 반려 처리했습니다.", tone: "warn" });
+    } catch (err) {
+      toast({ title: "반려 실패", description: err instanceof Error ? err.message : String(err), tone: "error" });
+    } finally {
+      setBusy(null);
+    }
   }
 
   // score100 근거 (2026-08-06~ 결정론 4축). 옛 회차는 없어서 아래 LLM 3축으로 폴백.
@@ -288,36 +304,45 @@ export function ShortsCard({
         {/* 액션 영역 — 상태에 따라 셋 중 하나 */}
         <div className="mt-1">
           {status === "pending" && rec && (
-            <div className="flex gap-1">
-              <Button
-                size="xs"
-                variant="outline"
-                className="flex-1"
-                onClick={() => doAdopt(false)}
-                disabled={!!busy}
-              >
-                {busy === "adopt" ? <Loader2 className="size-3 animate-spin" /> : <Check className="size-3" />}
-                채택
-              </Button>
-              <Button
-                size="xs"
-                className="flex-1"
-                onClick={() => doAdopt(true)}
-                disabled={!!busy}
-              >
-                {busy === "edit" ? <Loader2 className="size-3 animate-spin" /> : <Pencil className="size-3" />}
-                채택+편집
-              </Button>
-              <Button
-                size="xs"
-                variant="ghost"
-                className="px-1.5"
-                onClick={doReject}
-                disabled={!!busy}
-                title="반려"
-              >
-                ✕
-              </Button>
+            <div className="flex flex-col gap-1">
+              <div className="flex gap-1">
+                <Button
+                  size="xs"
+                  variant="outline"
+                  className="flex-1"
+                  onClick={() => doAdopt(false)}
+                  disabled={!!busy || multiSegment}
+                  title={multiSegment ? MULTI_SEGMENT_REASON : undefined}
+                >
+                  {busy === "adopt" ? <Loader2 className="size-3 animate-spin" /> : <Check className="size-3" />}
+                  채택
+                </Button>
+                <Button
+                  size="xs"
+                  className="flex-1"
+                  onClick={() => doAdopt(true)}
+                  disabled={!!busy || multiSegment}
+                  title={multiSegment ? MULTI_SEGMENT_REASON : undefined}
+                >
+                  {busy === "edit" ? <Loader2 className="size-3 animate-spin" /> : <Pencil className="size-3" />}
+                  채택+편집
+                </Button>
+                <Button
+                  size="xs"
+                  variant="ghost"
+                  className="px-1.5"
+                  onClick={doReject}
+                  disabled={!!busy}
+                  title="반려"
+                >
+                  {busy === "reject" ? <Loader2 className="size-3 animate-spin" /> : "✕"}
+                </Button>
+              </div>
+              {multiSegment && (
+                <p className="text-[10px] leading-relaxed text-muted-foreground">
+                  {short.segments?.length}개 구간 · {MULTI_SEGMENT_REASON}
+                </p>
+              )}
             </div>
           )}
           {status === "adopted" && rec?.adoptedClipId && (

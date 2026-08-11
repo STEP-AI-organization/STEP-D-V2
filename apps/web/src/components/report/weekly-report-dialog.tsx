@@ -13,17 +13,25 @@ import { useMemo, useState } from "react";
 
 import { useToast } from "@/components/ui/toast";
 import { useSession } from "@/lib/auth";
+import { channelLabel } from "@/lib/constants";
 import { useAppData } from "@/lib/data/store";
 import { normalizeProgramStatus } from "@/lib/programs";
 import { roleOf } from "@/lib/roles";
 import { cn } from "@/lib/utils";
 
-type Scope = "all" | "mine" | "channel";
+/**
+ * "채널별" 범위는 없앴다. 집계 코드가 없어 '전사'와 결과가 완전히 같았고, 전사 권한이 없는
+ * 역할에게도 열려 있어 범위 제한을 그대로 우회했다.
+ */
+type Scope = "all" | "mine";
 
+/**
+ * 이 화면이 실제로 셀 수 있는 섹션만 남긴다. '권리'는 store 에 집계할 데이터 자체가 없어서
+ * 뺐다 — 체크만 되고 요약에 아무것도 안 나오는 칸이었다.
+ */
 const SECTIONS = [
   { key: "performance", label: "성과", needsRevenue: true },
   { key: "production", label: "생산", needsRevenue: false },
-  { key: "rights", label: "권리", needsRevenue: false },
   { key: "channels", label: "채널", needsRevenue: false },
 ] as const;
 
@@ -53,6 +61,18 @@ export function WeeklyReportDialog({ onClose }: { onClose: () => void }) {
     (c.distributions ?? []).some((d) => d.status === "published"),
   ).length;
 
+  // 채널 섹션의 근거. "recorded" 는 게시가 아니므로 세지 않는다(F4 Invariant).
+  const channelCounts = new Map<string, number>();
+  for (const c of scopedClips) {
+    for (const d of c.distributions ?? []) {
+      if (d.status === "published") channelCounts.set(d.channel, (channelCounts.get(d.channel) ?? 0) + 1);
+    }
+  }
+  const channelLine = [...channelCounts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .map(([ch, n]) => `${channelLabel(ch)} ${n}`)
+    .join(" · ");
+
   function toggle(k: SectionKey) {
     setPicked((prev) => {
       const next = new Set(prev);
@@ -62,12 +82,30 @@ export function WeeklyReportDialog({ onClose }: { onClose: () => void }) {
     });
   }
 
+  /** 고른 섹션만 문장으로 만든다 — 체크박스가 결과를 바꾸지 않으면 고르는 의미가 없다. */
+  function sectionLines(): string[] {
+    const lines: string[] = [];
+    if (picked.has("performance") && caps.revenue) {
+      lines.push(`성과 — 미디어 ${scopedClips.length}건 중 게시 ${publishedCount}건`);
+    }
+    if (picked.has("production")) {
+      lines.push(`생산 — 회차 ${scopedEpisodes.length} · 미디어 ${scopedClips.length}`);
+    }
+    if (picked.has("channels")) {
+      lines.push(`채널 — ${channelLine || "게시된 채널 없음"}`);
+    }
+    return lines;
+  }
+
+  const lines = sectionLines();
+
   function generate() {
     // 리포트 산출은 아직 서버에 없다. 있는 척하지 않고, 지금 화면이 아는 숫자만
     // 요약해서 보여준다 — 없는 파일을 "생성했습니다"라고 말하는 게 최악이다.
+    if (lines.length === 0) return;
     toast({
-      title: "요약을 만들었습니다",
-      description: `${inScope.length}개 프로그램 · 회차 ${scopedEpisodes.length} · 미디어 ${scopedClips.length} · 게시 ${publishedCount}`,
+      title: `${inScope.length}개 프로그램 요약`,
+      description: lines.join(" / "),
       tone: "done",
     });
     onClose();
@@ -90,7 +128,7 @@ export function WeeklyReportDialog({ onClose }: { onClose: () => void }) {
           <div>
             <div className="mb-1 text-[11.5px] font-semibold" style={{ color: "var(--sd-fg)" }}>범위</div>
             <div className="flex flex-wrap gap-[3px]">
-              {([["all", "전사"], ["mine", "내 담당"], ["channel", "채널별"]] as const).map(([k, label]) => {
+              {([["all", "전사"], ["mine", "내 담당"]] as const).map(([k, label]) => {
                 // vendor·pd 는 전사 범위를 못 본다(F9 scope).
                 const blocked = k === "all" && caps.scope !== "all";
                 return (
@@ -156,13 +194,22 @@ export function WeeklyReportDialog({ onClose }: { onClose: () => void }) {
 
           <p className="text-[11px] leading-relaxed" style={{ color: "var(--sd-mut)" }}>
             <b style={{ color: "var(--sd-fg)" }}>자동 발송은 없습니다.</b> 누를 때만 만들어집니다.
-            리포트 파일 생성·전송은 아직 서버에 없어서, 지금은 위 요약만 보여줍니다.
+            리포트 <b style={{ color: "var(--sd-fg)" }}>파일 생성·전송은 아직 서버에 없어서</b>, 고른 섹션을
+            토스트 요약으로만 보여줍니다.
           </p>
         </div>
 
         <div className="flex items-center justify-end gap-2 px-4 py-3" style={{ borderTop: "1px solid var(--sd-border)" }}>
           <button type="button" className="sd-btn" onClick={onClose}>닫기</button>
-          <button type="button" className="sd-btn sd-btn-primary" onClick={generate}>요약 만들기</button>
+          <button
+            type="button"
+            className="sd-btn sd-btn-primary"
+            disabled={lines.length === 0}
+            title={lines.length === 0 ? "섹션을 하나 이상 고르세요" : undefined}
+            onClick={generate}
+          >
+            요약 만들기
+          </button>
         </div>
       </div>
     </div>

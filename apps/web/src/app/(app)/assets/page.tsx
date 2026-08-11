@@ -183,10 +183,13 @@ export default function AssetsPage() {
               })
             }
             onDelete={removeFolder}
-            onMoveHere={async (from) => {
+            onMoveHere={async (from, to) => {
+              // 이동 대상은 **드롭된 노드**다. 선택 중인 폴더(folder)를 쓰면 엉뚱한 곳으로 옮겨지고,
+              // 되돌리기가 없는 화면이라 복구가 안 된다.
               try {
-                await moveAssetFolder(from, folder);
+                await moveAssetFolder(from, to);
                 await load();
+                toast({ title: "폴더를 옮겼습니다", description: to, tone: "done" });
               } catch (err) {
                 toast({ title: "폴더 이동 실패", description: err instanceof Error ? err.message : String(err), tone: "error" });
               }
@@ -318,7 +321,7 @@ function FolderNode({
   onSelect: (p: string) => void;
   onToggle: (p: string) => void;
   onDelete: (p: string) => void | Promise<void>;
-  onMoveHere: (from: string) => void | Promise<void>;
+  onMoveHere: (from: string, to: string) => void | Promise<void>;
 }) {
   const kids = childrenOf(path);
   const open = expanded.has(path);
@@ -333,8 +336,10 @@ function FolderNode({
         onDragStart={(e) => e.dataTransfer.setData("text/folder", path)}
         onDragOver={(e) => { if (e.dataTransfer.types.includes("text/folder")) e.preventDefault(); }}
         onDrop={(e) => {
+          // 버블링을 끊는다 — 중첩 노드에 떨어뜨리면 조상 노드까지 같은 드롭을 받는다.
+          e.stopPropagation();
           const from = e.dataTransfer.getData("text/folder");
-          if (from && from !== path) void onMoveHere(from);
+          if (from && from !== path) void onMoveHere(from, path);
         }}
       >
         <button

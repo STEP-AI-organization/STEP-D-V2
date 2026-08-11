@@ -60,6 +60,8 @@ export default function TrendsPage() {
   const [loading, setLoading] = useState(false);
   const [fetchedAt, setFetchedAt] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // 카테고리 호출만 실패하면 셀렉트가 사유 없이 비활성으로 남는다 — 사유를 보관해 옆에 적는다.
+  const [categoryError, setCategoryError] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -85,9 +87,22 @@ export default function TrendsPage() {
   useEffect(() => {
     let mounted = true;
     setCategoryId("");
+    setCategoryError(null);
     fetchVideoCategories(region)
       .then((r) => { if (mounted) setCategories(r.categories ?? []); })
-      .catch(() => { if (mounted) setCategories([]); });
+      .catch((e: unknown) => {
+        if (!mounted) return;
+        setCategories([]);
+        const msg = e instanceof Error ? e.message : String(e);
+        // api.ts 의 json() 은 body 를 안 읽고 `${status} ${statusText}` 만 던진다 —
+        // 서버가 주는 {"error":"no_auth"} 는 메시지에 안 들어온다. 그 라우트에서 400 은
+        // no_auth 전용이므로(index.ts:6817, 그 외 오류는 err.status ?? 500) status 로 판정한다.
+        setCategoryError(
+          msg.startsWith("400")
+            ? "YOUTUBE_API_KEY 또는 연결 채널이 필요합니다"
+            : `카테고리를 불러오지 못했습니다 (${msg})`,
+        );
+      });
     return () => { mounted = false; };
   }, [region]);
 
@@ -122,12 +137,16 @@ export default function TrendsPage() {
             onChange={(e) => setCategoryId(e.target.value)}
             className="h-8 rounded-md border border-border bg-background px-2 text-sm"
             disabled={!categories.length}
+            title={categoryError ?? undefined}
           >
             <option value="">전체</option>
             {categories.map((c) => (
               <option key={c.id} value={c.id}>{c.title}</option>
             ))}
           </select>
+          {categoryError && (
+            <span className="text-[11px] text-status-warn">{categoryError}</span>
+          )}
         </div>
         {fetchedAt && (
           <span className="ml-auto text-xs text-muted-foreground">
@@ -139,10 +158,12 @@ export default function TrendsPage() {
       {loading && !videos.length ? (
         <EmptyState icon={Loader2} title="불러오는 중…" />
       ) : error ? (
+        /* 위 카테고리 분기와 같은 이유 — 에러 메시지엔 status 만 들어온다.
+           /api/youtube/popular 의 400 도 no_auth 전용이다(index.ts:6795-6800). */
         <EmptyState
           icon={Flame}
           title="트렌드를 가져올 수 없습니다"
-          description={error.includes("no_auth")
+          description={error.startsWith("400")
             ? "서버에 YOUTUBE_API_KEY env 가 없고 등록된 YouTube 채널도 없습니다. 채널을 하나 연결하거나 API key를 설정해 주세요."
             : error}
         />

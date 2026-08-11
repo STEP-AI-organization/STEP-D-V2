@@ -28,7 +28,12 @@ import { useAppData } from "@/lib/data/store";
 import { TARGET_AGES, targetAgeLabel, type TargetAge } from "@/lib/constants";
 import { WEEKDAYS } from "@/lib/reserve-date";
 import { programSmrChecks } from "@/lib/publish/requirements";
-import type { Program } from "@/lib/types";
+import {
+  PROGRAM_STATUSES,
+  PROGRAM_STATUS_LABEL,
+  normalizeProgramStatus,
+} from "@/lib/programs";
+import type { Program, ProgramStatus } from "@/lib/types";
 
 const SECTIONS = ["드라마/영화", "예능", "뮤직", "시사", "교양", "라이프", "스포츠", "게임", "어린이", "뉴스", "애니"];
 const SMR_CATEGORIES = ["01", "02", "03"];
@@ -110,6 +115,16 @@ function ProgramDetailInner({
   const [title, setTitle] = useState(program.title);
   const [section, setSection] = useState(program.section || SECTIONS[0]);
   const [targetAge, setTargetAge] = useState<TargetAge>(program.targetAge);
+  // 편성 상태·담당·권리·파이프라인 트랙 — 목록 필터(종영·편성 예정·내 담당만)와
+  // 홈 배지(분석 트랙·권리 만료)가 전부 이 값들을 읽는다. 여기가 유일한 입력 경로다.
+  const [status, setStatus] = useState<ProgramStatus>(normalizeProgramStatus(program.status));
+  const [owner, setOwner] = useState(program.owner ?? "");
+  const [pipelineGenre, setPipelineGenre] = useState<"" | "variety" | "drama">(
+    program.pipelineGenre ?? "",
+  );
+  const [rightsUntil, setRightsUntil] = useState(program.rightsUntil ?? "");
+  const [rightsNote, setRightsNote] = useState(program.rightsNote ?? "");
+  const [endedDate, setEndedDate] = useState(program.endedDate ?? "");
   const [synopsis, setSynopsis] = useState(program.synopsis ?? "");
   const [broadcaster, setBroadcaster] = useState(program.broadcaster ?? "");
   const [schedule, setSchedule] = useState(program.schedule ?? "");
@@ -132,6 +147,8 @@ function ProgramDetailInner({
   const [autofilling, setAutofilling] = useState(false);
   const [lastAutofill, setLastAutofill] = useState<AutofillProgramResult | null>(null);
   const [autofillApplied, setAutofillApplied] = useState<string[]>([]);
+  // 질문 다이얼로그를 닫는 기준. applied 개수로 판단하면 "적용 0개"일 때 영영 안 닫힌다.
+  const [autofillResolved, setAutofillResolved] = useState(false);
   // 얼굴 분석 → program 수동 sync
   const [syncing, setSyncing] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -165,6 +182,12 @@ function ProgramDetailInner({
     setTitle(program.title);
     setSection(program.section || SECTIONS[0]);
     setTargetAge(program.targetAge);
+    setStatus(normalizeProgramStatus(program.status));
+    setOwner(program.owner ?? "");
+    setPipelineGenre(program.pipelineGenre ?? "");
+    setRightsUntil(program.rightsUntil ?? "");
+    setRightsNote(program.rightsNote ?? "");
+    setEndedDate(program.endedDate ?? "");
     setSynopsis(program.synopsis ?? "");
     setBroadcaster(program.broadcaster ?? "");
     setSchedule(program.schedule ?? "");
@@ -182,6 +205,8 @@ function ProgramDetailInner({
     setWeekdays(program.smr?.weekdays ?? []);
   }, [
     program.id, program.title, program.section, program.targetAge,
+    program.status, program.owner, program.pipelineGenre,
+    program.rightsUntil, program.rightsNote, program.endedDate,
     program.synopsis, program.broadcaster, program.schedule, program.firstAiredDate,
     program.currentInfo, program.director, program.spinoff, program.awards,
     program.moods, program.cast, program.castPhotos, program.posterImageDataUrl,
@@ -273,6 +298,7 @@ function ProgramDetailInner({
     setAutofilling(true);
     setLastAutofill(null);
     setAutofillApplied([]);
+    setAutofillResolved(false);
     try {
       const result = await autofillProgram(program.id);
       setLastAutofill(result);
@@ -306,9 +332,11 @@ function ProgramDetailInner({
       const d = draft[field as keyof typeof draft];
       return typeof d === "string" ? d.trim() : "";
     };
-    const draftSection = draft.section;
-    if (draftSection && !program.section && typeof draftSection === "string") {
-      setSection(draftSection); applied.push("장르");
+    // 장르는 사람 몫이다 — 비어 있을 때만 채운다(다른 필드와 같은 규칙).
+    // 서버는 프로그램 생성 시 section 을 "예능"으로 채우므로, 그 기본값은 자동 채움이 덮지 않는다.
+    const s = val("section");
+    if (s && SECTIONS.includes(s) && !program.section) {
+      setSection(s); applied.push("장르");
     }
     if (val("synopsis") && !synopsis.trim()) { setSynopsis(val("synopsis")); applied.push("시놉시스"); }
     if (val("broadcaster") && !broadcaster.trim()) { setBroadcaster(val("broadcaster")); applied.push("방송채널"); }
@@ -325,6 +353,7 @@ function ProgramDetailInner({
     if (moodsFinal.length > 0 && moods.length === 0) { setMoods(moodsFinal); applied.push("분위기 태그"); }
 
     setAutofillApplied(applied);
+    setAutofillResolved(true);
     onOpenToast({
       title: applied.length ? `${applied.length}개 필드 채움` : "채울 필드 없음",
       description: applied.length ? applied.join(" · ") + " · 확인 후 저장" : "이미 다 채워져 있거나 근거 없음",
@@ -340,6 +369,15 @@ function ProgramDetailInner({
         title: title.trim(),
         section,
         targetAge,
+        status,
+        owner: owner.trim(),
+        // ""(자동 판정)도 그대로 보낸다 — 서버 PATCH 가 variety/drama 이외의 문자열을 받으면
+        // pipelineGenre 필드를 삭제한다(= 자동 판정 복귀). 다른 문자열 필드와 같은 시맨틱.
+        pipelineGenre,
+        rightsUntil: rightsUntil.trim(),
+        rightsNote: rightsNote.trim(),
+        // 종영일은 종영 상태에서만 의미가 있다 — 상태를 되돌리면 같이 지운다.
+        endedDate: status === "ended" ? endedDate.trim() : "",
         cast,
         synopsis: synopsis.trim(),
         broadcaster: broadcaster.trim(),
@@ -413,25 +451,26 @@ function ProgramDetailInner({
       </div>
 
       {/* 자동 채움 질문 Dialog — questions 있을 때 */}
-      {lastAutofill && lastAutofill.questions.length > 0 && autofillApplied.length === 0 && (
+      {lastAutofill && lastAutofill.questions.length > 0 && !autofillResolved && (
         <AutofillQuestionsDialog
           title={title}
           result={lastAutofill}
-          onCancel={() => setLastAutofill(null)}
+          onCancel={() => { setLastAutofill(null); setAutofillResolved(false); }}
           onSubmit={(answers) => applyAutofill(lastAutofill.draft, answers)}
         />
       )}
 
       {/* 마지막 자동 채움 결과 · 근거 URL 노출 */}
-      {lastAutofill && autofillApplied.length > 0 && (
+      {lastAutofill && autofillResolved && (
         <section className="rounded-lg border border-border bg-muted/20 px-4 py-3">
           <div className="flex items-center justify-between">
             <div className="text-xs font-semibold text-muted-foreground">
               AI 자동 채움 결과 · 적용 {autofillApplied.length}개
+              {autofillApplied.length === 0 && " (이미 채워진 필드는 덮어쓰지 않습니다)"}
               {lastAutofill.dropped.length > 0 && ` · 근거 없어 제외 ${lastAutofill.dropped.length}개`}
             </div>
             <button
-              onClick={() => { setLastAutofill(null); setAutofillApplied([]); }}
+              onClick={() => { setLastAutofill(null); setAutofillApplied([]); setAutofillResolved(false); }}
               className="text-muted-foreground hover:text-foreground"
               title="닫기"
             >
@@ -560,6 +599,86 @@ function ProgramDetailInner({
         </div>
       </Card>
 
+      {/* 편성 · 담당 · 권리 — 목록 필터와 홈 배지가 읽는 값들. 사람이 지정한다(자동 판정 없음). */}
+      <Card
+        title="편성 · 담당 · 권리"
+        hint="프로그램 목록의 상태·‘내 담당만’ 필터와 홈의 트랙·권리 배지가 이 값을 그대로 읽습니다."
+      >
+        <div className="grid gap-3 md:grid-cols-2">
+          <Field label="편성 상태" hint="결방·시즌 종료는 날짜로 판정되지 않습니다">
+            <select
+              value={status}
+              onChange={(e) => setStatus(e.target.value as ProgramStatus)}
+              className={inputCls}
+            >
+              {PROGRAM_STATUSES.map((s) => (
+                <option key={s} value={s}>{PROGRAM_STATUS_LABEL[s]}</option>
+              ))}
+            </select>
+          </Field>
+          <Field label="담당 PD" hint="목록의 ‘내 담당만’ 비교 대상">
+            <input
+              value={owner}
+              onChange={(e) => setOwner(e.target.value)}
+              placeholder="예: 김선우 PD"
+              className={inputCls}
+            />
+          </Field>
+        </div>
+
+        {status === "ended" && (
+          <div className="mt-3">
+            <Field label="종영일">
+              <input
+                type="date"
+                value={endedDate}
+                onChange={(e) => setEndedDate(e.target.value)}
+                className={inputCls}
+              />
+            </Field>
+          </div>
+        )}
+
+        <div className="mt-3">
+          <Field
+            label="파이프라인 트랙"
+            hint="씬 청크 크기·shot 임계·recommend 프롬프트 팩 결정 (예능: 코너 단위 · 드라마: 서사 단위)"
+          >
+            <select
+              value={pipelineGenre}
+              onChange={(e) => setPipelineGenre(e.target.value as "" | "variety" | "drama")}
+              className={inputCls}
+            >
+              <option value="">자동 판정 (AI가 결정)</option>
+              <option value="variety">예능 (variety)</option>
+              <option value="drama">드라마 (drama)</option>
+            </select>
+          </Field>
+        </div>
+
+        <div className="mt-3 grid gap-3 md:grid-cols-2">
+          <Field label="디지털 권리 만료일" hint="만료 30일 전부터 카드가 경고 톤">
+            <input
+              type="date"
+              value={rightsUntil}
+              onChange={(e) => setRightsUntil(e.target.value)}
+              className={inputCls}
+            />
+          </Field>
+          <Field label="권리 메모">
+            <input
+              value={rightsNote}
+              onChange={(e) => setRightsNote(e.target.value)}
+              placeholder="예: 해외 배포 불가 · 국내만"
+              className={inputCls}
+            />
+          </Field>
+        </div>
+        <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground/70">
+          만료일이 지나도 배포가 자동으로 막히지는 않습니다 — 여기 값은 경고 표시까지입니다.
+        </p>
+      </Card>
+
       {/* 크레딧 */}
       <Card title="크레딧">
         <div className="space-y-3">
@@ -674,7 +793,7 @@ function ProgramDetailInner({
       </Card>
 
       {/* 썸네일 엔진 — 프로그램마다 한 번 준비하면 이후 회차에 자동 적용된다 */}
-      <ThumbnailEngineCard programId={program.id} />
+      <ThumbnailEngineCard programId={program.id} programCast={cast} />
 
       {/* SMR 피드 */}
       <Card title="SMR 피드 정보" hint="네이버 SMR 배포에 필요한 프로그램 레벨 메타.">
@@ -1025,8 +1144,18 @@ function AutofillQuestionsDialog({
  *
  * 둘 다 프로그램당 1회성이고, 이후 회차 썸네일 생성이 이걸 자동으로 물어간다.
  * 출연자는 사람이 등록한다 — 얼굴 자동 판정을 넣으면 틀렸을 때 조용히 지나간다.
+ *
+ * ⚠️ 위 '출연진' 카드와 저장소가 다르다. 출연진 = program 엔티티의 castPhotos(분석 프롬프트용),
+ * 여기 = GCS cast 폴더(썸네일 합성용 원본). 서버에 둘을 잇는 코드가 없어서 한쪽에 올려도
+ * 다른 쪽은 비어 있다 — 화면에서 그렇게 말해 준다(programCast 로 명단만 참고 표시).
  */
-function ThumbnailEngineCard({ programId }: { programId: string }) {
+function ThumbnailEngineCard({
+  programId,
+  programCast,
+}: {
+  programId: string;
+  programCast: string[];
+}) {
   const { toast } = useToast();
   const [style, setStyle] = useState<ThumbnailStyleProfile | null>(null);
   const [loading, setLoading] = useState(true);
@@ -1071,6 +1200,23 @@ function ThumbnailEngineCard({ programId }: { programId: string }) {
       toast({ title: `${name} 사진을 등록했습니다` });
     } catch (e) {
       toast({ title: "업로드 실패", description: String(e), tone: "error" });
+    }
+  }
+
+  // ⚠️ api.ts deleteCastPhotos 는 !res.ok 를 던지지 않는다(현재 다른 패키지 소유).
+  // 그래서 목록 재조회 결과로 실제 삭제 여부를 확인한 뒤에만 "삭제됨"이라고 말한다.
+  async function onDeleteCast(name: string) {
+    try {
+      await deleteCastPhotos(programId, name);
+      const next = await fetchCastPhotos(programId);
+      setCast(next);
+      if (next.some((c) => c.name === name)) {
+        toast({ title: "삭제되지 않았습니다", description: `${name} 폴더가 그대로 남아 있습니다`, tone: "error" });
+        return;
+      }
+      toast({ title: `${name} 사진을 삭제했습니다`, tone: "done" });
+    } catch (e) {
+      toast({ title: "삭제 실패", description: String(e), tone: "error" });
     }
   }
 
@@ -1126,9 +1272,14 @@ function ThumbnailEngineCard({ programId }: { programId: string }) {
           <div className="mb-2 text-xs font-medium text-muted-foreground">
             출연자 사진 · 썸네일에 들어갈 인물
           </div>
+          <div className="mb-2 text-[11px] leading-relaxed text-muted-foreground/80">
+            위 ‘출연진’ 카드와는 <b>별개의 저장소</b>입니다 — 저기는 분석용 이름·사진,
+            여기는 썸네일 합성용 원본 사진입니다. 한쪽에 올려도 다른 쪽에는 반영되지 않습니다.
+            {programCast.length > 0 && ` (출연진 명단 ${programCast.length}명: ${programCast.join(", ")})`}
+          </div>
           {cast.length === 0 ? (
             <div className="text-sm text-muted-foreground">
-              등록된 출연자가 없습니다. 등록하지 않으면 썸네일 생성이 중단됩니다.
+              썸네일용으로 등록된 사진이 없습니다. 등록하지 않으면 썸네일 생성이 중단됩니다.
             </div>
           ) : (
             <div className="flex flex-wrap gap-2">
@@ -1138,10 +1289,7 @@ function ThumbnailEngineCard({ programId }: { programId: string }) {
                   {c.name}
                   <span className="text-muted-foreground">{c.photos}장</span>
                   <button
-                    onClick={async () => {
-                      await deleteCastPhotos(programId, c.name);
-                      setCast(await fetchCastPhotos(programId));
-                    }}
+                    onClick={() => void onDeleteCast(c.name)}
                     className="text-muted-foreground hover:text-status-error"
                     aria-label={`${c.name} 삭제`}
                   >×</button>

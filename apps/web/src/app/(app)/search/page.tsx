@@ -30,10 +30,13 @@ export default function SearchPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  // 한 번이라도 검색했는지 — 첫 진입에 빈 질의로 쏘지 않기 위한 가드.
+  const searchedRef = useRef(false);
 
   const run = useCallback(async () => {
     const query = q.trim();
     if (!query) return;
+    searchedRef.current = true;
     abortRef.current?.abort();
     const ac = new AbortController();
     abortRef.current = ac;
@@ -62,6 +65,20 @@ export default function SearchPage() {
   }, [q, programId, from, to, onlyShorts]);
 
   useEffect(() => () => abortRef.current?.abort(), []);
+
+  // 칩·프로그램·방영일을 바꾸면 곧바로 다시 질의한다. 선택 상태만 켜지고 결과가 이전
+  // 질의 그대로면 "적용됐다"는 거짓 피드백이 된다. run 을 deps 에 넣으면 타자마다
+  // 재질의하므로 최신 run 은 ref 로 읽는다.
+  // (ref 갱신은 렌더 중이 아니라 이펙트에서 — 렌더 중 ref 쓰기는 lint error 다.
+  //  이 이펙트가 아래 재질의 이펙트보다 먼저 선언돼 있어야 최신 run 이 보인다.)
+  const runRef = useRef(run);
+  useEffect(() => {
+    runRef.current = run;
+  });
+  useEffect(() => {
+    if (!searchedRef.current) return;
+    void runRef.current();
+  }, [programId, from, to, onlyShorts]);
 
   return (
     <div className="mx-auto flex max-w-[1240px] flex-col gap-[14px]">
@@ -156,24 +173,32 @@ export default function SearchPage() {
         </div>
       ) : (
         <div className="flex flex-col gap-1.5">
-          {res.results.map((r) => (
-            <ResultCard
-              key={r.segmentId}
-              hit={r}
-              episodeLabel={mediaLabel(media, r.mediaId)}
-            />
-          ))}
+          {res.results.map((r) => {
+            const m = media.find((x) => x.id === r.mediaId);
+            return (
+              <ResultCard
+                key={r.segmentId}
+                hit={r}
+                episodeLabel={m?.title ?? r.mediaId}
+                episodeId={m?.episodeId ?? null}
+              />
+            );
+          })}
         </div>
       )}
     </div>
   );
 }
 
-function mediaLabel(media: { id: string; title?: string }[], mediaId: string): string {
-  return media.find((m) => m.id === mediaId)?.title ?? mediaId;
-}
-
-function ResultCard({ hit, episodeLabel }: { hit: SearchResultCard; episodeLabel: string }) {
+function ResultCard({
+  hit,
+  episodeLabel,
+  episodeId,
+}: {
+  hit: SearchResultCard;
+  episodeLabel: string;
+  episodeId: string | null;
+}) {
   // 파이프라인이 붙인 권리 주석은 **판정이 아니다.** 게이트 어휘로 "확인 필요"까지만 말한다.
   const rights = Object.values(hit.rightsStatus ?? {});
 
@@ -215,12 +240,21 @@ function ResultCard({ hit, episodeLabel }: { hit: SearchResultCard; episodeLabel
             </span>
           </>
         )}
-        <Link
-          href={`/media?media=${hit.mediaId}&t=${Math.floor(hit.start)}`}
-          className="sd-btn ml-auto"
-        >
-          미디어에서 열기
-        </Link>
+        {/* /media 는 채택된 클립 목록이라 검색 히트(원본 구간)를 못 연다 — 원본이 있는 회차로 보낸다. */}
+        {episodeId ? (
+          <Link href={`/episodes/${episodeId}?tab=analyze`} className="sd-btn ml-auto">
+            회차에서 열기
+          </Link>
+        ) : (
+          <button
+            type="button"
+            className="sd-btn ml-auto"
+            disabled
+            title="이 구간의 원본 영상이 회차에 연결돼 있지 않습니다"
+          >
+            회차에서 열기
+          </button>
+        )}
       </div>
     </div>
   );

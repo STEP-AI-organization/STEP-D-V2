@@ -21,11 +21,13 @@ import { StatusBadge } from "@/components/ui/status-badge";
 import { EmptyState } from "@/components/ui/empty-state";
 import { NarrativeView } from "./narrative-view";
 import { CastView } from "./cast-view";
-import { PublishDialog } from "@/components/publish-dialog";
+// 배포 판정은 서버(채널 규칙 + 게이트)가 한다 — 구 클라 판정 모달은 게이트를 무시해
+// "배포됨"으로 오인시켰다. /media 화면과 같은 모달을 쓴다.
+import { PublishDialog } from "@/components/publish/publish-dialog";
 import { ShortsCard } from "./shorts-card";
 import { PplView } from "./ppl-view";
 import { useVideoSeek } from "./episode/seek-context";
-import type { MediaAsset } from "@/lib/types";
+import type { DistributionState, MediaAsset } from "@/lib/types";
 import { useAppData } from "@/lib/data/store";
 import {
   type AnalysisScene,
@@ -46,6 +48,7 @@ import {
   ASPECT_RATIOS,
   channelLabel,
   CLIP_TYPES,
+  type StatusTone,
 } from "@/lib/constants";
 import { cn, formatDuration, formatTimecode } from "@/lib/utils";
 
@@ -148,7 +151,11 @@ export function DerivativesPanel({
       </div>
 
       {publishClipId && (
-        <PublishDialog clipIds={[publishClipId]} onClose={() => setPublishClipId(null)} />
+        <PublishDialog
+          clipIds={[publishClipId]}
+          onClose={() => setPublishClipId(null)}
+          onDone={async () => { await app.refresh?.(); }}
+        />
       )}
     </div>
   );
@@ -193,10 +200,12 @@ function RecommendTab({
   const groups: { key: string; label: string; badge: string; items: AnalysisShort[] }[] = [
     { key: "shortform", label: "숏폼", badge: "40~60초 · SNS 배포", items: [] },
     { key: "clip", label: "클립", badge: "1~10분 · SMR·재편집·코너/세션", items: [] },
-    { key: "highlight", label: "하이라이트", badge: "여러 영상 종합 (준비 중)", items: [] },
+    // 하이라이트는 60분+ 회차의 대주제 큐레이션(다구간)이다. 서버 채택이 다구간을 못 이어붙여
+    // start~end 한 덩어리로 잘리므로, 그 제약을 뱃지에 그대로 적는다.
+    { key: "highlight", label: "하이라이트", badge: "60분+ 회차 대주제 큐레이션 · 다구간 편집 미지원", items: [] },
   ];
   for (const s of shorts) {
-    const t = (s as any).type || "shortform";
+    const t = s.type || "shortform";
     const g = groups.find((x) => x.key === t) ?? groups[0];
     g.items.push(s);
   }
@@ -414,8 +423,14 @@ function AnalyzeTab({ episodeId }: { episodeId: string }) {
     if (!master || retrying) return;
     setRetrying(fast ? "fast" : "full");
     try {
-      await reanalyzeMedia(master.id, fast);
-      toast({ title: `${fast ? "빠른" : "정밀"} 재분석 시작`, description: "AI 분석을 다시 큐에 넣었습니다. 진행률은 위 파이프라인에서 확인하세요.", tone: "progress" });
+      // queued=false = 이미 큐/실행 중인 잡이 있어 새로 안 들어간 것 (dedupeKey). 진행 중 잡은
+      // 옛 cast·프로파일로 돌고 있으므로 "시작됨"으로 뭉뚱그리면 사용자가 결과를 오해한다.
+      const r = await reanalyzeMedia(master.id, fast);
+      if (r.queued === false) {
+        toast({ title: "이미 재분석이 진행 중", description: "새로 큐잉되지 않았습니다 — 진행 중인 분석은 이전 설정 기준입니다. 끝난 뒤 다시 눌러주세요.", tone: "warn" });
+      } else {
+        toast({ title: `${fast ? "빠른" : "정밀"} 재분석 시작`, description: "AI 분석을 다시 큐에 넣었습니다. 진행률은 위 파이프라인에서 확인하세요.", tone: "progress" });
+      }
     } catch (e) {
       toast({ title: "재분석 요청 실패", description: e instanceof Error ? e.message : "다시 시도해 주세요.", tone: "error" });
     } finally {
@@ -791,6 +806,27 @@ function ScenesView({ scenes }: { scenes: AnalysisScene[] }) {
   );
 }
 
+// 배포 상태 6종을 그대로 보여준다 — /distribution 화면(DIST_LABEL·DIST_TONE)과 같은 기준.
+// recorded 는 게시가 아니다(우리 쪽 기록만 남고 파일은 안 올라간다) → done 톤 금지.
+// pending 을 "예약"으로 뭉뚱그리면 아무 데도 안 올라간 클립을 예약 완료로 오인한다.
+const DIST_TONE: Record<DistributionState["status"], StatusTone> = {
+  none: "idle",
+  pending: "progress",
+  scheduled: "warn",
+  published: "done",
+  recorded: "idle",
+  failed: "error",
+};
+
+const DIST_LABEL: Record<DistributionState["status"], string> = {
+  none: "—",
+  pending: "업로드 중",
+  scheduled: "예약됨",
+  published: "게시됨",
+  recorded: "기록됨",
+  failed: "실패",
+};
+
 function DistributeTab({
   clips,
   onPublish,
@@ -812,11 +848,8 @@ function DistributeTab({
               <span className="text-[11px] text-muted-foreground">미배포</span>
             )}
             {clip.distributions.map((d) => (
-              <StatusBadge
-                key={d.channel}
-                tone={d.status === "failed" ? "error" : d.status === "published" ? "done" : "warn"}
-              >
-                {channelLabel(d.channel)} · {d.status === "failed" ? "실패" : d.status === "published" ? "게시" : "예약"}
+              <StatusBadge key={d.channel} tone={DIST_TONE[d.status] ?? "idle"}>
+                {channelLabel(d.channel)} · {DIST_LABEL[d.status] ?? d.status}
               </StatusBadge>
             ))}
             <Button size="xs" variant="outline" className="ml-auto" onClick={() => onPublish(clip.id)}>

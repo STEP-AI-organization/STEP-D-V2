@@ -1,13 +1,12 @@
 /**
- * STEP-D — mock fallback seam.
+ * STEP-D — 로컬 더미 시드.
  *
- * 실서버 연동은 lib/data/api.ts(REST) + store.tsx의 fetchState() 폴백 구조로 이루어진다.
- * 여기 mockRepository는 서버 미연결 시 store가 쓰는 목 시드 소스로만 살아 있다.
+ * 실서버 연동은 lib/data/api.ts(REST) + store.tsx 의 fetchState() 가 전부 담당한다.
+ * 여기 남은 건 `app/layout.tsx` 의 LOCAL_DUMMY 분기가 쓰는 시드 하나뿐이다 —
+ * 폐기된 SPFN 통합 스텁(StepDRepository/mockRepository/activeRepository)은 제거했다.
  */
 
 import type { Clip, Connections, Episode, JobEvent, Program, Recommendation } from "@/lib/types";
-import type { DistributionChannel } from "@/lib/constants";
-import type { PublishOpts } from "@/lib/data/store";
 import * as seed from "./mock";
 
 export interface InitialData {
@@ -30,33 +29,3 @@ export function seedInitialData(): InitialData {
     connections: { ...seed.connections },
   };
 }
-
-export interface StepDRepository {
-  /** Load the initial dataset. Real impl fans out across several RPC list calls. */
-  loadInitial(): Promise<InitialData>;
-  /** Adopt a recommendation → export+register chain. Returns the created clip id. */
-  adopt(recId: string): Promise<{ clipId: string }>;
-  reject(recId: string, reason: string): Promise<void>;
-  publish(
-    clipIds: string[],
-    channels: DistributionChannel[],
-    opts?: PublishOpts,
-  ): Promise<void>;
-  retry(clipId: string, channel: DistributionChannel): Promise<void>;
-  /** Subscribe to live job progress (SSE). Returns an unsubscribe fn. */
-  subscribeJobs(onEvent: (job: JobEvent) => void): () => void;
-}
-
-/** In-memory implementation (current). Mutations are handled optimistically in the store,
- *  so the mock's mutation methods are trivial resolves — they exist to satisfy the contract. */
-export const mockRepository: StepDRepository = {
-  loadInitial: async () => seedInitialData(),
-  adopt: async () => ({ clipId: "mock" }),
-  reject: async () => {},
-  publish: async () => {},
-  retry: async () => {},
-  subscribeJobs: () => () => {},
-};
-
-/** The repository the store uses as the mock fallback (실서버 연동은 api.ts 경유). */
-export const activeRepository: StepDRepository = mockRepository;

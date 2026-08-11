@@ -14,6 +14,7 @@
  *  - 권리 정보는 이 단계에서 절대 만들어지지 않는다(Invariant) — 그래서 고지 문구가 필수다.
  */
 import { useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { AlertTriangle, Film, Info, Loader2, Upload, Youtube } from "lucide-react";
 
@@ -101,7 +102,6 @@ export function UploadDialog({
   // **미지정 프로그램은 비워 두고 사람이 고르게 한다** — 여기서 짐작하면 잘못된 트랙으로 분석이 돈다.
   const [track, setTrack] = useState<"" | "variety" | "drama">("");
   const [broadDate, setBroadDate] = useState(todayISO());
-  const [withSubtitle, setWithSubtitle] = useState(true);
   const [title, setTitle] = useState("");
   const [url, setUrl] = useState("");
 
@@ -110,6 +110,8 @@ export function UploadDialog({
   const [speed, setSpeed] = useState(0);
   const [dragOver, setDragOver] = useState(false);
   const [dupError, setDupError] = useState<string | null>(null);
+  // "백그라운드로 계속"을 눌렀는지. 눌렀으면 완료 시 화면을 빼앗지 않는다(보던 곳에 머문다).
+  const backgrounded = useRef(false);
   const inputRef = useRef<HTMLInputElement>(null);
   const sampleRef = useRef<{ t: number; bytes: number } | null>(null);
 
@@ -160,7 +162,8 @@ export function UploadDialog({
         episodeNumber: epNum,
         broadDate,
         track: track as "variety" | "drama",
-        hasSubtitle: withSubtitle,
+        // 자막 첨부가 없으므로 항상 STT 경로다(서버 기본값과 같다).
+        hasSubtitle: true,
       }),
     );
 
@@ -168,14 +171,23 @@ export function UploadDialog({
       const episodeId = await job;
       toast({
         title: `회차 ${epNum} 원본이 올라갔습니다`,
-        description: "분석 대기열에 들어갔고, 권리 정보는 분석이 끝난 뒤 등록합니다.",
+        description: backgrounded.current
+          ? "분석 대기열에 들어갔습니다. 회차 목록에서 확인하세요."
+          : "분석 대기열에 들어갔고, 권리 정보는 분석이 끝난 뒤 등록합니다.",
         tone: "done",
       });
       onClose();
-      router.push(`/episodes/${episodeId}`);
+      // 백그라운드로 돌린 사용자는 다른 일을 하고 있다 — 예고 없이 화면을 옮기지 않는다.
+      if (!backgrounded.current) router.push(`/episodes/${episodeId}`);
     } catch (err) {
       if (err instanceof DuplicateEpisodeError) {
         setDupError(`회차 ${epNum} 은(는) 이 프로그램에 이미 있습니다. 다른 번호를 쓰세요.`);
+        // 모달이 이미 닫혔으면(백그라운드 전환) 위 state 는 아무 데도 안 보인다 — 토스트로도 알린다.
+        toast({
+          title: "업로드 실패 — 회차 번호 중복",
+          description: `회차 ${epNum} 은(는) 이 프로그램에 이미 있습니다. 다른 번호로 다시 올려야 합니다.`,
+          tone: "error",
+        });
       } else {
         toast({
           title: "업로드 실패",
@@ -192,6 +204,7 @@ export function UploadDialog({
    * 완료 토스트는 이 클로저가 책임진다(ToastProvider 는 앱 최상단이라 살아 있다).
    */
   function continueInBackground() {
+    backgrounded.current = true;
     toast({
       title: "백그라운드에서 업로드 중",
       description: `회차 ${epNum} · 창을 닫아도 계속됩니다. 페이지를 새로고침하면 중단됩니다.`,
@@ -234,11 +247,12 @@ export function UploadDialog({
   const missing = useMemo(() => {
     if (mode !== "file") return [];
     const m: string[] = [];
+    if (!programId) m.push("프로그램");
     if (!file) m.push("파일");
     if (!(Number.isInteger(epNum) && epNum >= 1)) m.push("회차 번호");
     if (track === "") m.push("분석 트랙");
     return m;
-  }, [mode, file, epNum, track]);
+  }, [mode, file, epNum, track, programId]);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -297,6 +311,14 @@ export function UploadDialog({
               ))}
             </select>
           </L>
+
+          {/* 프로그램이 없으면 무엇을 채워도 업로드가 안 된다 — 막힌 이유와 갈 곳을 먼저 말한다. */}
+          {programs.length === 0 && (
+            <Notice tone="warn">
+              업로드하려면 프로그램이 먼저 있어야 합니다.{" "}
+              <Link href="/programs" className="underline">프로그램 만들기</Link>
+            </Notice>
+          )}
 
           {mode === "youtube" ? (
             <>
@@ -443,21 +465,11 @@ export function UploadDialog({
                 />
               </L>
 
-              {/* 자막 — 지금은 항상 음성 인식이다. 켜고 끄는 시늉을 하지 않는다. */}
-              <label className="flex items-start gap-2 text-[11.5px]" style={{ color: "var(--sd-mut)" }}>
-                <input
-                  type="checkbox"
-                  checked={withSubtitle}
-                  onChange={(e) => setWithSubtitle(e.target.checked)}
-                  disabled
-                  className="mt-0.5"
-                />
-                <span>
-                  자막 동시 업로드 —{" "}
-                  <b style={{ color: "var(--sd-warn)" }}>아직 배선 전입니다.</b> 자막 파일 유무와 관계없이
-                  음성 인식(STT)으로 대본을 만듭니다.
-                </span>
-              </label>
+              {/* 자막 — 지금은 항상 음성 인식이다. 끌 수 없는 체크박스를 두지 않고 사실만 적는다. */}
+              <Notice>
+                <b style={{ color: "var(--sd-fg)" }}>자막 파일은 아직 받지 않습니다.</b> 자막 유무와 관계없이
+                음성 인식(STT)으로 대본을 만듭니다.
+              </Notice>
 
               {/* F1 고지 — 둘 다 필수 문구다. */}
               <Notice tone="warn">

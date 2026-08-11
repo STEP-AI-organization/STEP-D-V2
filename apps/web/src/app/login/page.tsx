@@ -9,6 +9,7 @@
  * 계정 열거를 막는 게 서버 쪽 설계다(없는 이메일에도 더미 해시 대조로 같은 시간을 쓴다).
  * 화면도 같은 태도를 지킨다 — "없는 계정입니다"와 "비밀번호가 틀렸습니다"를 **구분하지 않는다.**
  */
+import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useState } from "react";
 
@@ -119,6 +120,10 @@ function LoginInner() {
 
         <p className="mt-3 text-[11px] leading-relaxed" style={{ color: "var(--sd-mut)" }}>
           계정은 초대로만 만들어집니다. 초대 메일의 링크로 들어오면 비밀번호를 정할 수 있습니다.
+        </p>
+        {/* /landing 은 앱 안에서 들어갈 데가 한 곳도 없었다 — 로그인 화면을 입구로 둔다. */}
+        <p className="mt-2 text-[11px]" style={{ color: "var(--sd-mut)" }}>
+          <Link href="/landing" className="underline">서비스 소개 보기</Link>
         </p>
       </form>
     </div>

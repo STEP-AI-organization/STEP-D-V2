@@ -48,9 +48,11 @@ import {
   exportClip as exportClipApi,
   rejectRec,
   selectRecommendationThumbnail as selectRecommendationThumbnailApi,
-  publishClips,
   retryDist,
   saveClipEditor as saveClipEditorApi,
+  fetchYouTubeChannels,
+  fetchMetaAccounts,
+  fetchTikTokAccounts,
 } from "@/lib/data/api";
 import type { EditorState } from "@/lib/editor/presets";
 
@@ -77,9 +79,11 @@ const EMPTY_STATE: AppState = {
 };
 
 /**
- * The server sends `connections` as lineage edges ({from,to,type}) — a different
- * concept that collides on the same key with our channel-connection flags. Take the
- * object shape when it is one, otherwise treat every channel as unconnected.
+ * 서버 getConnections(db-pg.ts) 는 kv 'connections' 를 읽어
+ * {youtube,instagram,facebook,tiktok} 불리언으로 정규화해 보낸다. 그런데 그 kv 에 쓰는
+ * 라우트가 서버에 하나도 없어서(빈 시드가 그대로 남는다) 값은 **항상 전부 false** 다 —
+ * 실제 연결 여부는 계정 목록으로 판정한다(아래 accountConnections).
+ * 여기서는 객체 모양일 때만 받고, 아니면 전부 미연결로 본다.
  */
 function toConnections(value: unknown): Connections {
   if (value && typeof value === "object" && !Array.isArray(value) && "youtube" in value) {
@@ -136,7 +140,6 @@ interface AppData extends AppState {
   // selectors
   getEpisode: (id: string) => Episode | undefined;
   getProgram: (id: string) => Program | undefined;
-  getClip: (id: string) => Clip | undefined;
   recsForEpisode: (episodeId: string) => Recommendation[];
   clipsForEpisode: (episodeId: string) => Clip[];
   mediaForEpisode: (episodeId: string, role?: string) => MediaAsset | undefined;
@@ -149,13 +152,11 @@ interface AppData extends AppState {
   exportClip: (clipId: string, channel?: RenderChannel) => Promise<ExportResult>;
   /** Persist the editor's decision blob on a clip (metadata only, no render). */
   saveClipEditor: (clipId: string, editorState: EditorState) => Promise<void>;
-  rejectRecommendation: (id: string, reason: string) => void;
+  /** 실패하면 낙관적 반려를 되돌린 뒤 **reject 한다** — 호출부가 사유를 사용자에게 보일 수 있게. */
+  rejectRecommendation: (id: string, reason: string) => Promise<void>;
   selectThumbnail: (recId: string, thumbId: string) => Promise<void>;
-  publishClip: (clipId: string, channels: DistributionChannel[], opts?: PublishOpts) => void;
-  bulkPublish: (clipIds: string[], channels: DistributionChannel[], opts?: PublishOpts) => void;
-  /** Publish selected clips to a SINGLE channel independently (Readiness model). */
-  publishToChannel: (clipIds: string[], channel: DistributionChannel, opts?: PublishOpts) => void;
-  retryDistribution: (clipId: string, channel: DistributionChannel) => void;
+  /** 재시도 요청. 실패 시 상태를 failed 로 되돌리고 reject 한다. */
+  retryDistribution: (clipId: string, channel: DistributionChannel) => Promise<void>;
   /** Upload a real video → creates an episode + recommendations. Returns episodeId.
    *  `fast=true` → 자막만 · 시각 분석 스킵 (빠른 분석 모드). 기본 false = 정밀 분석. */
   uploadVideo: (file: File, programId: string, opts?: UploadVideoOptions) => Promise<string>;
@@ -180,35 +181,11 @@ interface AppData extends AppState {
   refresh: () => Promise<void>;
 }
 
-export interface PublishOpts {
-  reserveDate?: string;
-  scheduled?: boolean;
-}
-
-/** Pure: apply a publish to the matching clips' channel states. */
-function applyPublish(
-  clips: Clip[],
-  ids: Set<string>,
-  channels: DistributionChannel[],
-  opts?: PublishOpts,
-): Clip[] {
-  return clips.map((clip) => {
-    if (!ids.has(clip.id)) return clip;
-    const next = (clip.distributions ?? []).map((d) => ({ ...d }));
-    for (const channel of channels) {
-      const value = {
-        channel,
-        status: (opts?.scheduled ? "scheduled" : "published") as "scheduled" | "published",
-        reserveDate: opts?.reserveDate,
-        error: undefined,
-      };
-      const existing = next.find((d) => d.channel === channel);
-      if (existing) Object.assign(existing, value);
-      else next.push(value);
-    }
-    return { ...clip, status: "published" as const, distributions: next };
-  });
-}
+// 게시(publish) 낙관적 갱신 헬퍼(applyPublish·fireServerPublish·publishToChannel·PublishOpts)는
+// 삭제했다(2026-08-11) — 소비처가 0 이다. 현재 배포 다이얼로그(components/publish/publish-dialog.tsx)는
+// store 를 거치지 않고 api.publishClips 를 직접 부른 뒤 refresh 로 서버 상태를 다시 읽는다.
+// 되살릴 때는 서버 규칙(publish-guard: YouTube 만 실제 업로드 → pending/scheduled,
+// Meta·TikTok·SMR 은 recorded)을 그대로 반영할 것 — 클립 자체를 published 로 올리면 거짓말이 된다.
 
 const AppDataContext = createContext<AppData | null>(null);
 
@@ -362,6 +339,38 @@ export function AppDataProvider({
     };
   }, [applyServerState]);
 
+  // ── 채널 연결 여부 (배포 준비 체크의 근거) ──────────────────────────────────────
+  // /api/state 의 connections 는 kv 'connections' 를 그대로 실어 보내는데, 서버에 그 kv 를
+  // 쓰는 라우트가 없어 항상 전부 false 다 — 그걸 그대로 믿으면 "채널 연결" 체크가 영원히
+  // 통과하지 못한다. 실제 연결은 계정 목록(YouTube·Meta·TikTok)으로 판정한다.
+  // 조회 실패는 false 로 둔다(fail-closed) — 연결됐다고 잘못 말하는 쪽이 더 나쁘다.
+  // ⚠️ 현재 이 값을 읽는 화면이 없다(lib/publish/requirements.evaluateChannel 배선 대기).
+  const [accountConnections, setAccountConnections] = useState<Connections | null>(null);
+  useEffect(() => {
+    if (!serverConnected) {
+      setAccountConnections(null);
+      return;
+    }
+    let alive = true;
+    (async () => {
+      const [youtube, meta, tiktok] = await Promise.all([
+        fetchYouTubeChannels().catch(() => []),
+        fetchMetaAccounts().catch(() => []),
+        fetchTikTokAccounts().catch(() => []),
+      ]);
+      if (!alive) return;
+      setAccountConnections({
+        youtube: youtube.some((c) => c.status === "active"),
+        instagram: meta.some((a) => a.status === "active" && !!a.igUserId),
+        facebook: meta.some((a) => a.status === "active"),
+        tiktok: tiktok.some((a) => a.status === "active"),
+      });
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [serverConnected]);
+
   // ── adaptive /api/state polling ────────────────────────────────────────────────
   // The content pipeline runs for minutes on the worker and reports progress via
   // episode.pipeline, but a one-shot mount fetch leaves the dashboard/회차 진행률 frozen
@@ -505,7 +514,7 @@ export function AppDataProvider({
     return { capped: null };
   }, []);
 
-  const rejectRecommendation = useCallback((id: string, reason: string) => {
+  const rejectRecommendation = useCallback(async (id: string, reason: string): Promise<void> => {
     mutationEpochRef.current++;
     let prevRec: Recommendation | undefined;
     setState((prev) => {
@@ -517,16 +526,19 @@ export function AppDataProvider({
         ),
       };
     });
-    if (connectedRef.current)
-      void rejectRec(id, reason).catch(() => {
-        // Roll back the optimistic reject so the board doesn't lie about server state.
-        setState((prev) => ({
-          ...prev,
-          recommendations: prev.recommendations.map((r) =>
-            r.id === id && prevRec ? prevRec : r,
-          ),
-        }));
-      });
+    if (!connectedRef.current) return;
+    try {
+      await rejectRec(id, reason);
+    } catch (error) {
+      // Roll back the optimistic reject so the board doesn't lie about server state.
+      setState((prev) => ({
+        ...prev,
+        recommendations: prev.recommendations.map((r) =>
+          r.id === id && prevRec ? prevRec : r,
+        ),
+      }));
+      throw error;
+    }
   }, []);
 
   const selectThumbnail = useCallback(async (recId: string, thumbId: string): Promise<void> => {
@@ -556,63 +568,7 @@ export function AppDataProvider({
     }
   }, []);
 
-  const fireServerPublish = useCallback(
-    (clipIds: string[], channels: DistributionChannel[], opts?: PublishOpts) => {
-      if (!connectedRef.current) return;
-      for (const channel of channels) {
-        void publishClips(clipIds, channel, {
-          reserveDate: opts?.reserveDate,
-          scheduled: opts?.scheduled,
-        }).catch((err: unknown) => {
-          const message = err instanceof Error ? err.message : String(err);
-          const ids = new Set(clipIds);
-          setState((prev) => ({
-            ...prev,
-            clips: prev.clips.map((clip) =>
-              ids.has(clip.id)
-                ? {
-                    ...clip,
-                    distributions: (clip.distributions ?? []).map((d) =>
-                      d.channel === channel ? { ...d, status: "failed" as const, error: message } : d,
-                    ),
-                  }
-                : clip,
-            ),
-          }));
-        });
-      }
-    },
-    [],
-  );
-
-  const publishClip = useCallback(
-    (clipId: string, channels: DistributionChannel[], opts?: PublishOpts) => {
-      mutationEpochRef.current++;
-      setState((prev) => ({ ...prev, clips: applyPublish(prev.clips, new Set([clipId]), channels, opts) }));
-      fireServerPublish([clipId], channels, opts);
-    },
-    [fireServerPublish],
-  );
-
-  const bulkPublish = useCallback(
-    (clipIds: string[], channels: DistributionChannel[], opts?: PublishOpts) => {
-      mutationEpochRef.current++;
-      setState((prev) => ({ ...prev, clips: applyPublish(prev.clips, new Set(clipIds), channels, opts) }));
-      fireServerPublish(clipIds, channels, opts);
-    },
-    [fireServerPublish],
-  );
-
-  const publishToChannel = useCallback(
-    (clipIds: string[], channel: DistributionChannel, opts?: PublishOpts) => {
-      mutationEpochRef.current++;
-      setState((prev) => ({ ...prev, clips: applyPublish(prev.clips, new Set(clipIds), [channel], opts) }));
-      fireServerPublish(clipIds, [channel], opts);
-    },
-    [fireServerPublish],
-  );
-
-  const retryDistribution = useCallback((clipId: string, channel: DistributionChannel) => {
+  const retryDistribution = useCallback(async (clipId: string, channel: DistributionChannel): Promise<void> => {
     mutationEpochRef.current++;
     // Optimistic: mark ONLY this clip's channel in-flight (pending) — retry queues an
     // upload, it doesn't instantly publish. The /api/state poll reconciles to the real
@@ -641,8 +597,12 @@ export function AppDataProvider({
       };
     });
     if (connectedRef.current) {
-      void retryDist(clipId, channel).catch(() => {
+      try {
+        await retryDist(clipId, channel);
+      } catch (error) {
         // Roll back so the board reflects reality instead of a phantom success.
+        // 사유는 서버 메시지를 그대로 남긴다 — "재시도 요청 실패"만으론 원인을 알 수 없다.
+        const message = error instanceof Error ? error.message : String(error);
         setState((prev) => ({
           ...prev,
           clips: prev.clips.map((clip) =>
@@ -650,13 +610,14 @@ export function AppDataProvider({
               ? {
                   ...clip,
                   distributions: (clip.distributions ?? []).map((d) =>
-                    d.channel === channel ? { ...d, status: "failed", error: "재시도 요청 실패" } : d,
+                    d.channel === channel ? { ...d, status: "failed", error: message } : d,
                   ),
                 }
               : clip,
           ),
         }));
-      });
+        throw error;
+      }
     }
   }, []);
 
@@ -809,6 +770,8 @@ export function AppDataProvider({
     const inbox = deriveInbox(state);
     return {
       ...state,
+      // 계정 목록에서 판정한 값이 있으면 그게 진실이다 (state.connections 는 계보 엣지).
+      connections: accountConnections ?? state.connections,
       media,
       apiBase: API_BASE,
       serverConnected,
@@ -817,7 +780,6 @@ export function AppDataProvider({
       badgeCounts: deriveBadges(state, inbox),
       getEpisode: (id) => state.episodes.find((e) => e.id === id),
       getProgram: (id) => state.programs.find((p) => p.id === id),
-      getClip: (id) => state.clips.find((c) => c.id === id),
       recsForEpisode: (episodeId) => state.recommendations.filter((r) => r.episodeId === episodeId),
       clipsForEpisode: (episodeId) => state.clips.filter((c) => c.episodeId === episodeId),
       mediaForEpisode: (episodeId, role = "master") =>
@@ -827,9 +789,6 @@ export function AppDataProvider({
       saveClipEditor,
       rejectRecommendation,
       selectThumbnail,
-      publishClip,
-      bulkPublish,
-      publishToChannel,
       retryDistribution,
       uploadVideo,
       importYoutube,
@@ -841,6 +800,7 @@ export function AppDataProvider({
     };
   }, [
     state,
+    accountConnections,
     media,
     serverConnected,
     loading,
@@ -849,9 +809,6 @@ export function AppDataProvider({
     saveClipEditor,
     rejectRecommendation,
     selectThumbnail,
-    publishClip,
-    bulkPublish,
-    publishToChannel,
     retryDistribution,
     uploadVideo,
     importYoutube,

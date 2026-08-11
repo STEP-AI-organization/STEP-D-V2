@@ -115,6 +115,13 @@ export default function OpsPage() {
         </button>
       </PageActions>
 
+      {/* 조치 버튼이 없는 게 의도다 — 기대치를 화면에서 먼저 맞춘다.
+          운영 콘솔(admin SPA)에도 큐·VM 조치 UI 는 없다 — 서버 라우트로만 존재한다. */}
+      <p className="mb-4 text-xs text-muted-foreground">
+        읽기 전용 진단입니다 — 큐 비우기·VM 기동 같은 조치 UI 는 아직 없습니다. 서버 API
+        (POST /api/admin/queue/purge · /api/admin/gebd-vm/wake)로만 가능합니다.
+      </p>
+
       {err && (
         <div className="mb-4 rounded-md border border-status-error/30 bg-status-error/10 px-4 py-2.5 text-sm text-foreground">
           {err}

@@ -42,7 +42,9 @@ export function PplView({
         icon={ShoppingBag}
         compact
         title="검출된 PPL·브랜드 없음"
-        description={ppl?.note ?? "정밀 재분석 후 재확인 · 노출된 로고/제품이 없거나 확신 부족"}
+        // PPL 검출은 파이프라인에서 기본 비활성(RUN_PPL=0)이라 재분석해도 결과가 달라지지
+        // 않는다 — "정밀 재분석 후 재확인" 은 되지 않는 행동을 시키는 문구라 걷어냈다.
+        description={ppl?.note ?? "PPL 검출은 현재 비활성(RUN_PPL=0)입니다 — 재분석해도 결과가 달라지지 않습니다"}
       />
     );
   }

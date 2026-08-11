@@ -20,6 +20,7 @@ interface RefItem {
   composition?: string;
   program?: string;
   custom_tags?: string[];
+  user_note?: string;
   description?: string;
   caption_style?: string;
   uploaded_at?: string;
@@ -32,13 +33,62 @@ async function api<T = any>(path: string, init?: RequestInit): Promise<T> {
   return r.json();
 }
 
+/** 배치 라우트는 개별 실패를 삼키고 항상 200 을 준다 — results 를 직접 세야 진실이 나온다. */
+interface BatchResult {
+  processed: number;
+  note?: string;
+  results?: { id: string; ok: boolean; error?: string }[];
+}
+
+function errMessage(e: unknown): string {
+  return e instanceof Error ? e.message : String(e);
+}
+
+/** Vision 분석·사전 가공은 파이썬 스크립트라 GCS(Cloud Run) 모드에서는 서버가 501 을 준다. */
+const LOCAL_ONLY_HINT = "이 서버에서는 실행할 수 없습니다 (501) — 로컬 워커에서만 됩니다";
+
 export default function ThumbnailTemplatesPage() {
   const { toast: push } = useToast();
   const [items, setItems] = useState<RefItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [editing, setEditing] = useState<RefItem | null>(null);
+  // 가공본을 보고 있는 카드들. 서버는 ?variant=cleaned 로 이미 열어 뒀는데 화면이 안 불렀다.
+  const [cleanedOn, setCleanedOn] = useState<Set<string>>(new Set());
+  // 서버가 GCS 모드면 Vision 분석·사전 가공 스크립트를 못 돌린다(501). 응답 전에는 모드를
+  // 알 방법이 없어서, 한 번 501 을 받으면 관련 버튼을 잠가 헛클릭을 막는다.
+  const [localOnly, setLocalOnly] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+
+  const failMessage = useCallback((e: unknown) => {
+    const msg = errMessage(e);
+    if (msg.startsWith("501")) setLocalOnly(true);
+    return msg;
+  }, []);
+
+  /** 배치는 전건 실패도 200 으로 돌아온다 — 성공/실패를 갈라서 말한다. */
+  const reportBatch = useCallback((label: string, r: BatchResult) => {
+    const results = r.results ?? [];
+    if (!results.length) {
+      push({ tone: "idle", title: `전체 ${label}: 대상 없음`, description: r.note });
+      return;
+    }
+    const failed = results.filter((x) => !x.ok);
+    const firstError = failed[0]?.error ?? "";
+    if (failed.length === results.length) {
+      push({ tone: "error", title: `전체 ${label} 실패 (${failed.length}건)`, description: firstError });
+      return;
+    }
+    if (failed.length) {
+      push({
+        tone: "warn",
+        title: `전체 ${label}: 성공 ${results.length - failed.length} · 실패 ${failed.length}`,
+        description: firstError,
+      });
+      return;
+    }
+    push({ tone: "done", title: `전체 ${label}: ${results.length}개 처리` });
+  }, [push]);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -96,8 +146,8 @@ export default function ThumbnailTemplatesPage() {
       await api(`/thumbnail-refs/${id}/analyze`, { method: "POST" });
       push({ tone: "done", title: `분석 완료: ${id}` });
       refresh();
-    } catch (e: any) {
-      push({ tone: "error", title: "분석 실패", description: String(e?.message || e) });
+    } catch (e) {
+      push({ tone: "error", title: "분석 실패", description: failMessage(e) });
     } finally {
       setBusyId(null);
     }
@@ -109,8 +159,8 @@ export default function ThumbnailTemplatesPage() {
       await api(`/thumbnail-refs/${id}/preprocess`, { method: "POST" });
       push({ tone: "done", title: `사전 가공 완료: ${id}` });
       refresh();
-    } catch (e: any) {
-      push({ tone: "error", title: "가공 실패", description: String(e?.message || e) });
+    } catch (e) {
+      push({ tone: "error", title: "가공 실패", description: failMessage(e) });
     } finally {
       setBusyId(null);
     }
@@ -138,28 +188,29 @@ export default function ThumbnailTemplatesPage() {
   return (
     <div className="mx-auto max-w-[1240px] space-y-4">
       <PageActions>
-        <Button variant="outline" onClick={async () => {
-          if (!confirm("모든 미분석 template Vision 분석 (수십 초/개 소요)?")) return;
+        <Button variant="outline" disabled={localOnly} title={localOnly ? LOCAL_ONLY_HINT : undefined}
+                onClick={async () => {
+          // 서버가 analyze 는 한 번만 돌린다(스크립트 자체가 전체 스캔) — 라벨도 그렇게 적었다.
+          if (!confirm("미분석 template 을 스캔해 Vision 분석 (수십 초 소요)?")) return;
           try {
-            const r = await api<{ processed: number }>("/thumbnail-refs/batch/analyze",
-              { method: "POST" });
-            push({ tone: "done", title: `전체 분석: ${r.processed}개 처리` });
+            const r = await api<BatchResult>("/thumbnail-refs/batch/analyze", { method: "POST" });
+            reportBatch("분석", r);
             refresh();
-          } catch (e: any) {
-            push({ tone: "error", title: "분석 실패", description: String(e?.message || e) });
+          } catch (e) {
+            push({ tone: "error", title: "분석 실패", description: failMessage(e) });
           }
         }}>
-          <Sparkles className="w-4 h-4 mr-2" /> 전체 분석
+          <Sparkles className="w-4 h-4 mr-2" /> 전체 분석 (1회 스캔)
         </Button>
-        <Button variant="outline" onClick={async () => {
+        <Button variant="outline" disabled={localOnly} title={localOnly ? LOCAL_ONLY_HINT : undefined}
+                onClick={async () => {
           if (!confirm("모든 미가공 template 사전 가공 (수십 초/개 소요)?")) return;
           try {
-            const r = await api<{ processed: number }>("/thumbnail-refs/batch/preprocess",
-              { method: "POST" });
-            push({ tone: "done", title: `전체 가공: ${r.processed}개 처리` });
+            const r = await api<BatchResult>("/thumbnail-refs/batch/preprocess", { method: "POST" });
+            reportBatch("가공", r);
             refresh();
-          } catch (e: any) {
-            push({ tone: "error", title: "가공 실패", description: String(e?.message || e) });
+          } catch (e) {
+            push({ tone: "error", title: "가공 실패", description: failMessage(e) });
           }
         }}>
           <Sparkles className="w-4 h-4 mr-2" /> 전체 가공
@@ -188,6 +239,15 @@ export default function ThumbnailTemplatesPage() {
       <input ref={fileRef} type="file" accept="image/png,image/jpeg,image/webp" multiple
              className="hidden" onChange={(e) => onUpload(e.target.files)} />
 
+      {localOnly && (
+        <div className="rounded-md border border-status-warn/40 bg-muted px-3 py-2 text-xs text-muted-foreground">
+          이 서버는 Vision 분석·사전 가공을 실행할 수 없습니다(501). 업로드·태그 편집·삭제는 그대로 됩니다.
+          분석·가공은 서로 다른 스크립트라 로컬 워커에서 각각 돌려야 합니다 —
+          분석: <span className="font-mono">python scripts/thumbnail_reference_manifest.py</span>{" "}
+          (전체 스캔 · 인자 없음) · 가공: <span className="font-mono">python scripts/thumbnail_preprocess_template.py &lt;id&gt;</span>
+        </div>
+      )}
+
       <div
         onDragOver={(e) => e.preventDefault()}
         onDrop={onDrop}
@@ -206,7 +266,7 @@ export default function ThumbnailTemplatesPage() {
               <Card key={item.id} className="p-3 space-y-2">
                 <div className="aspect-video bg-muted rounded overflow-hidden">
                   <img
-                    src={`${API_BASE}/thumbnail-refs/${item.id}/image`}
+                    src={`${API_BASE}/thumbnail-refs/${item.id}/image${cleanedOn.has(item.id) ? "?variant=cleaned" : ""}`}
                     alt={item.id}
                     className="w-full h-full object-cover"
                   />
@@ -230,21 +290,27 @@ export default function ThumbnailTemplatesPage() {
                 {item.description && (
                   <div className="text-xs text-muted-foreground line-clamp-2">{item.description}</div>
                 )}
+                {item.user_note && (
+                  <div className="text-xs text-muted-foreground line-clamp-1" title={item.user_note}>
+                    메모 · {item.user_note}
+                  </div>
+                )}
                 <div className="flex gap-1">
                   <Button size="sm" variant="outline" className="flex-1"
                           onClick={() => setEditing(item)}>편집</Button>
                   {!item._analyzed && (
-                    <Button size="sm" variant="outline" disabled={busyId === item.id}
-                            onClick={() => onAnalyze(item.id)} title="Vision 분석">
+                    <Button size="sm" variant="outline" disabled={busyId === item.id || localOnly}
+                            onClick={() => onAnalyze(item.id)}
+                            title={localOnly ? LOCAL_ONLY_HINT : "Vision 분석"}>
                       {busyId === item.id
                         ? <Loader2 className="w-3 h-3 animate-spin" />
                         : <Sparkles className="w-3 h-3" />}
                     </Button>
                   )}
                   <Button size="sm" variant={item.cleaned_path ? "outline" : "default"}
-                          disabled={busyId === item.id}
+                          disabled={busyId === item.id || localOnly}
                           onClick={() => onPreprocess(item.id)}
-                          title="사전 가공 (텍스트→슬롯 라벨·얼굴→실루엣)">
+                          title={localOnly ? LOCAL_ONLY_HINT : "사전 가공 (텍스트→슬롯 라벨·얼굴→실루엣)"}>
                     {busyId === item.id
                       ? <Loader2 className="w-3 h-3 animate-spin" />
                       : <span className="text-[10px]">{item.cleaned_path ? "재가공" : "가공"}</span>}
@@ -256,7 +322,15 @@ export default function ThumbnailTemplatesPage() {
                   </Button>
                 </div>
                 {item.cleaned_path && (
-                  <div className="text-[10px] text-emerald-500">✓ cleaned template</div>
+                  <button type="button"
+                          className="text-[10px] text-emerald-500 underline underline-offset-2"
+                          onClick={() => setCleanedOn((prev) => {
+                            const next = new Set(prev);
+                            if (next.has(item.id)) next.delete(item.id); else next.add(item.id);
+                            return next;
+                          })}>
+                    ✓ cleaned template — {cleanedOn.has(item.id) ? "원본 보기" : "가공본 보기"}
+                  </button>
                 )}
               </Card>
             ))}
@@ -279,17 +353,25 @@ function EditDialog({ item, onClose, onSave, busy }: {
 }) {
   const [program, setProgram] = useState(item.program || "");
   const [tags, setTags] = useState((item.custom_tags || []).join(", "));
-  const [note, setNote] = useState((item as any).user_note || "");
+  const [note, setNote] = useState(item.user_note || "");
+  // 가공본이 있으면 그쪽을 먼저 보여준다 — 가공 결과를 사람이 볼 데가 여기밖에 없다.
+  const [showCleaned, setShowCleaned] = useState(Boolean(item.cleaned_path));
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
          onClick={onClose}>
       <Card className="max-w-md w-full p-6 space-y-4" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center gap-3">
-          <img src={`${API_BASE}/thumbnail-refs/${item.id}/image`}
+          <img src={`${API_BASE}/thumbnail-refs/${item.id}/image${showCleaned && item.cleaned_path ? "?variant=cleaned" : ""}`}
                className="w-24 h-14 object-cover rounded" alt="" />
           <div>
             <div className="font-mono text-sm">{item.id}</div>
             {item.description && <div className="text-xs text-muted-foreground">{item.description}</div>}
+            {item.cleaned_path && (
+              <button type="button" className="text-xs text-emerald-500 underline underline-offset-2"
+                      onClick={() => setShowCleaned((v) => !v)}>
+                {showCleaned ? "원본 보기" : "가공본 보기"}
+              </button>
+            )}
           </div>
         </div>
         <div>
@@ -311,10 +393,11 @@ function EditDialog({ item, onClose, onSave, busy }: {
         </div>
         <div className="flex justify-end gap-2">
           <Button variant="outline" onClick={onClose} disabled={busy}>취소</Button>
+          {/* 빈 문자열도 그대로 보낸다 — 조건부로 빼면 메모를 지워도 서버 값이 살아남는다. */}
           <Button disabled={busy} onClick={() => onSave({
             program: program.trim(),
             custom_tags: tags.split(",").map((s) => s.trim()).filter(Boolean),
-            ...(note ? { user_note: note } as any : {}),
+            user_note: note,
           })}>
             {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : "저장"}
           </Button>

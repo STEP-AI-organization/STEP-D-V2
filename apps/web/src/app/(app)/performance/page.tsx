@@ -3,14 +3,17 @@
 /**
  * U14 · 성과 (README §8 · FLOWS F9).
  *
- * 채널을 고르면 그 채널 지표. 못 보는 채널은 카드 대신 **사유 화면**이 뜨는데,
- * 문구가 유형별로 달라야 한다:
+ * 채널을 고르면 그 채널 지표.
  *
- *  - 권한 없음      → "이 채널의 지표 접근 권한이 없습니다"
- *  - 업로드 전용    → "구조적으로 데이터가 존재하지 않습니다"
+ *  - 업로드 전용 채널 → 카드 대신 **사유 화면**("구조적으로 데이터가 존재하지 않습니다").
+ *  - 수익 권한 없음   → 화면은 그대로 열리고 **수익 값만 "비공개"** 다. 화면을 통째로 막으면
+ *    조회수·시청시간까지 못 보게 되고, "메뉴가 아니라 값이 가려진다"는 roles.ts 원칙과 어긋난다.
+ *    단, 가리는 건 **요청 단계**에서 한다 — estimatedRevenue 를 metrics 에서 빼서 애초에
+ *    브라우저로 내려오지 않게 한다. 서버(/api/youtube/analytics/:channelId)에는 역할 검사가
+ *    없으므로, UI 에서만 가리면 네트워크 응답에 실수치가 그대로 남는다.
  *
- * 이 둘을 같은 문장으로 뭉개면 사용자는 권한을 요청해야 할지, 애초에 없는 걸 기다리는
- * 중인지 모른다. **0 으로 렌더하는 건 더 나쁘다** — 없는 것과 0 은 다르다(F9 ⊘).
+ * **0 으로 렌더하는 건 더 나쁘다** — 없는 것과 0 은 다르다(F9 ⊘). 그래서 지표가 없으면 "—".
+ * 지표 창은 서버 기본값(90일)이 아니라 화면 라벨과 같은 창을 명시해서 조회한다.
  */
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -27,6 +30,20 @@ import { cn } from "@/lib/utils";
 
 const WON = (n: number) => `₩${Math.round(n).toLocaleString("ko-KR")}`;
 const NUM = (n: number) => Math.round(n).toLocaleString("ko-KR");
+
+/** 지표 집계 창. 카드 라벨과 **같은 숫자**여야 한다 — 라벨만 28일이고 조회는 90일이면 거짓말이다. */
+const WINDOW_DAYS = 28;
+
+/** 로컬 날짜 기준 YYYY-MM-DD. toISOString 은 UTC 라 KST 새벽에 하루가 밀린다. */
+const isoDate = (d: Date) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+
+function windowOf(days: number): { start: string; end: string } {
+  const end = new Date();
+  const start = new Date(end);
+  start.setDate(start.getDate() - (days - 1));
+  return { start: isoDate(start), end: isoDate(end) };
+}
 
 export default function PerformancePage() {
   const session = useSession();
@@ -53,21 +70,35 @@ export default function PerformancePage() {
 
   const channel = channels.find((c) => c.channelId === picked) ?? null;
 
-  /** 이 채널을 왜 못 보는가. null 이면 볼 수 있다. */
-  const blocked: "no_permission" | "upload_only" | null = useMemo(() => {
+  /**
+   * 이 채널을 왜 못 보는가. null 이면 볼 수 있다.
+   *
+   * 수익 권한이 없다고 **화면 전체를 막지 않는다** — 조회수·시청시간은 그대로 보이고
+   * 수익만 "비공개"다(대시보드와 같은 표기). 그 대신 load() 가 estimatedRevenue 를
+   * 아예 요청하지 않아서, 가리는 일이 화면이 아니라 요청에서 끝난다.
+   * 업로드 전용(수익 범위 미동의)은 **데이터가 존재하지 않는 것**이라 성격이 다르다.
+   */
+  const blocked: "upload_only" | null = useMemo(() => {
     if (!channel) return null;
-    // 업로드 전용(수익 범위 미동의)은 **데이터가 존재하지 않는 것**이지 권한 문제가 아니다.
-    if (!channel.hasMonetaryScope) return "upload_only";
-    if (!caps.revenue) return "no_permission";
-    return null;
-  }, [channel, caps.revenue]);
+    return channel.hasMonetaryScope ? null : "upload_only";
+  }, [channel]);
 
   const load = useCallback(async () => {
     if (!channel || blocked) { setData(null); return; }
     setBusy(true);
     try {
+      // 서버는 start/end 를 안 주면 90일, dimensions 를 안 주면 day 로 채운다 —
+      // rows 가 하루 1행이라 rows[0] 만 읽으면 구간 첫날 하루치가 된다. 창을 명시하고 합산한다.
+      const win = windowOf(WINDOW_DAYS);
+      // 수익 열람 권한이 없으면 estimatedRevenue 를 **요청하지 않는다** — 서버는 역할을
+      // 보지 않으므로, 요청하면 응답에 실수치가 담겨 브라우저까지 내려온다.
+      const metrics = caps.revenue
+        ? "views,estimatedMinutesWatched,estimatedRevenue"
+        : "views,estimatedMinutesWatched";
       setData(await fetchChannelAnalytics(channel.channelId, {
-        metrics: "views,estimatedMinutesWatched,estimatedRevenue",
+        start: win.start,
+        end: win.end,
+        metrics,
       }));
       setLoadErr(null);
     } catch (err) {
@@ -76,16 +107,31 @@ export default function PerformancePage() {
     } finally {
       setBusy(false);
     }
-  }, [channel, blocked]);
+  }, [channel, blocked, caps.revenue]);
 
   useEffect(() => { void load(); }, [load]);
 
-  const row = data?.rows?.[0] ?? {};
-  const pick = (needle: string) => {
-    const key = data?.columns?.find((c) => c.toLowerCase().includes(needle));
-    return key ? Number(row[key] ?? 0) || 0 : 0;
+  /**
+   * 구간 합계. **데이터가 없으면 0 이 아니라 null(= 알 수 없음)** 이다 (F9 ⊘).
+   *
+   * columnHeaders 는 결과가 없어도 그대로 오고 rows 만 `[]` 다 — 그때 `reduce(…, 0)` 를
+   * 태우면 "0" 이 실측치처럼 찍힌다. rows 가 비면 null 로 떨어뜨린다.
+   */
+  const pick = (needle: string): number | null => {
+    if (!data) return null;
+    const key = data.columns?.find((c) => c.toLowerCase().includes(needle));
+    if (!key) return null;
+    const rows = data.rows ?? [];
+    if (rows.length === 0) return null;
+    return rows.reduce((sum, r) => sum + (Number(r[key]) || 0), 0);
   };
-  const revenue = revenueDisplay(role, pick("revenue"), WON);
+  const fmt = (n: number | null) => (n === null ? "—" : NUM(n));
+  const viewsAmount = pick("views");
+  const watchAmount = pick("minuteswatched");
+  const revenueAmount = pick("revenue");
+  // 마스킹이 "모름"보다 우선한다 — 권한 없는 사람에게는 데이터 유무조차 알릴 필요가 없다.
+  const revenue = revenueDisplay(role, revenueAmount ?? 0, WON);
+  const revenueText = revenue.masked ? revenue.text : revenueAmount === null ? "—" : revenue.text;
 
   return (
     <div className="mx-auto flex max-w-[1240px] flex-col gap-[14px]">
@@ -125,20 +171,18 @@ export default function PerformancePage() {
           <p className="max-w-[440px] text-[12px] leading-relaxed" style={{ color: "var(--sd-mut)" }}>
             {blockedCopy(blocked).body}
           </p>
-          {blocked === "upload_only" ? (
-            <Link href="/publish-channels" className="sd-btn">채널 연결 다시 보기</Link>
-          ) : (
-            <span className="text-[11px]" style={{ color: "var(--sd-mut)" }}>
-              현재 역할: {roleOf(role).label}
-            </span>
-          )}
+          <Link href="/publish-channels" className="sd-btn">채널 연결 다시 보기</Link>
         </div>
       ) : channel ? (
         <>
           <div className="flex flex-wrap gap-[14px]">
-            <Stat label="조회수" value={NUM(pick("views"))} />
-            <Stat label="시청 시간(분)" value={NUM(pick("minuteswatched"))} />
-            <Stat label="수익" value={revenue.text} muted={revenue.masked} />
+            <Stat label={`조회수 (최근 ${WINDOW_DAYS}일)`} value={fmt(viewsAmount)} muted={viewsAmount === null} />
+            <Stat label={`시청 시간(분) (최근 ${WINDOW_DAYS}일)`} value={fmt(watchAmount)} muted={watchAmount === null} />
+            <Stat
+              label={`수익 (최근 ${WINDOW_DAYS}일)`}
+              value={revenueText}
+              muted={revenue.masked || revenueAmount === null}
+            />
           </div>
 
           {busy && (
@@ -146,15 +190,21 @@ export default function PerformancePage() {
           )}
           {loadErr && (
             <div
-              className="rounded-[4px] px-3 py-2 text-[11.5px]"
+              className="flex flex-wrap items-center gap-2 rounded-[4px] px-3 py-2 text-[11.5px]"
               style={{ border: "1px solid var(--sd-danger-border)", background: "var(--sd-danger-bg)", color: "var(--sd-danger-strong)" }}
             >
-              지표를 불러오지 못했습니다 ({loadErr}) — 0 이 아니라 <b>알 수 없음</b>입니다.
+              <span>지표를 불러오지 못했습니다 ({loadErr}) — 0 이 아니라 <b>알 수 없음</b>입니다.</span>
+              {/* 이 화면 지표는 YouTube Analytics 를 매번 라이브로 읽는다(저장·수집 단계가 없다).
+                  그래서 실패했을 때 할 수 있는 건 '동기화'가 아니라 **다시 조회** 뿐이다. */}
+              <button type="button" className="sd-btn" onClick={() => void load()} disabled={busy}>
+                {busy ? "조회 중…" : "다시 조회"}
+              </button>
             </div>
           )}
-          {!busy && !loadErr && !data && (
+          {!busy && !loadErr && data && viewsAmount === null && (
+            /* 조회는 성공했는데 구간에 행이 없는 경우 — "0" 이 아니라 "없음"이라고 적는다. */
             <p className="text-[11.5px]" style={{ color: "var(--sd-mut)" }}>
-              아직 수집된 지표가 없습니다. 채널 동기화 후 다시 확인하세요.
+              최근 {WINDOW_DAYS}일 구간에 집계된 행이 없습니다 (조회 자체는 성공했습니다).
             </p>
           )}
 

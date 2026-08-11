@@ -48,7 +48,7 @@ type Row = {
 };
 
 export default function DistributionPage() {
-  const { clips, episodes, programs, retryDistribution, loading } = useAppData();
+  const { clips, episodes, programs, retryDistribution, loading, serverConnected } = useAppData();
   const { toast } = useToast();
   const [channel, setChannel] = useState<string>("all");
 
@@ -154,9 +154,32 @@ export default function DistributionPage() {
                   <button
                     type="button"
                     className="sd-btn"
-                    onClick={() => {
-                      retryDistribution(r.clip.id, r.dist.channel);
-                      toast({ title: "재시도를 요청했습니다", description: "자동 재시도는 없습니다 — 결과를 확인하세요.", tone: "progress" });
+                    onClick={async () => {
+                      // 미연결이면 store 가 요청 자체를 보내지 않는다 — 성공 토스트를 띄우면 거짓말이 된다.
+                      if (!serverConnected) {
+                        toast({
+                          title: "서버 미연결 — 재시도를 보내지 못했습니다",
+                          description: "서버 연결이 회복된 뒤 다시 눌러 주세요.",
+                          tone: "error",
+                        });
+                        return;
+                      }
+                      // store 는 실패 시 롤백 후 다시 던진다 — 여기서 안 받으면 unhandled rejection.
+                      try {
+                        await retryDistribution(r.clip.id, r.dist.channel);
+                      } catch (error) {
+                        toast({
+                          title: "재시도 요청 실패",
+                          description: error instanceof Error ? error.message : "다시 시도해 주세요.",
+                          tone: "error",
+                        });
+                        return;
+                      }
+                      toast({
+                        title: "재시도를 요청했습니다",
+                        description: "자동 재시도는 없습니다 — 실패하면 이 줄의 사유가 갱신됩니다.",
+                        tone: "progress",
+                      });
                     }}
                   >
                     재시도

@@ -6,7 +6,10 @@
  * 좌: 대상 미디어 그리드(라디오, **숏폼 제외**) · 우 400px: 프롬프트 + 비율 + 결과 3안.
  *
  * 지키는 것:
- *  - 대상·프롬프트 **둘 다** 있어야 생성 버튼이 눌린다(F7-2).
+ *  - 대상이 있어야 생성 버튼이 눌린다(F7-2).
+ *    프롬프트·비율은 **서버가 아직 읽지 않는다**(POST /api/media/:id/thumbnail 은 programId·
+ *    candidates 만 본다) — 그래서 입력을 필수로 걸지 않고 비활성 + 사유로 표기한다.
+ *    필수로 걸면 "내가 쓴 문장이 반영됐다"고 믿게 된다.
  *  - 대상을 바꾸면 이전 결과는 초기화된다(F7-4).
  *  - **완료 알림이 없다.** 다른 화면으로 가도 결과는 미디어에 남는다 — 그 점을 문구로
  *    명시한다(F7-5). 알림을 만들면 "알림을 놓치면 결과도 사라진다"고 오해하게 된다.
@@ -67,7 +70,7 @@ export default function ThumbnailsPage() {
     void loadCandidates(target);
   }, [targetId, target, loadCandidates]);
 
-  const canGenerate = Boolean(target) && prompt.trim().length > 0 && !busy;
+  const canGenerate = Boolean(target) && !busy;
 
   async function generate() {
     if (!target || !canGenerate) return;
@@ -82,8 +85,10 @@ export default function ThumbnailsPage() {
     try {
       await generateThumbnails(mediaId, { programId, prompt: prompt.trim(), aspect, candidates: 3 });
       toast({
-        title: "생성을 시작했습니다",
-        description: "완료 알림은 없습니다 — 다른 화면으로 가도 결과는 이 미디어에 남습니다.",
+        title: "생성을 요청했습니다",
+        // 서버가 같은 미디어의 진행 중 잡을 dedupe 로 삼킨다(요청은 200 이지만 새 잡이 안 뜬다).
+        // 그래서 "시작했습니다"라고 단정하지 않는다.
+        description: "이미 생성 중이면 이 요청은 무시됩니다. 완료 알림은 없습니다 — 결과는 이 미디어에 남습니다.",
         tone: "progress",
       });
     } catch (err) {
@@ -170,22 +175,32 @@ export default function ThumbnailsPage() {
           )}
 
           <div>
-            <div className="mb-1 text-[11.5px] font-semibold" style={{ color: "var(--sd-fg)" }}>프롬프트</div>
+            <div className="mb-1 flex items-baseline gap-1.5">
+              <span className="text-[11.5px] font-semibold" style={{ color: "var(--sd-mut)" }}>프롬프트</span>
+              <span className="text-[10.5px]" style={{ color: "var(--sd-mut)" }}>배선 전 — 입력해도 반영되지 않습니다</span>
+            </div>
             <textarea
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
-              placeholder="어떤 썸네일이었으면 하는지 한국어 한 줄 (예: 출연자가 정색하는 순간, 큰 자막 '이게 말이 돼?')"
+              disabled
+              placeholder="아직 서버가 프롬프트를 받지 않습니다 — 프로그램 스타일 프로파일과 등록 출연자 사진으로만 생성됩니다."
+              title="서버가 아직 프롬프트를 받지 않습니다"
               className="sd-input h-[92px] w-full resize-none py-2 leading-relaxed"
             />
           </div>
 
           <div>
-            <div className="mb-1 text-[11.5px] font-semibold" style={{ color: "var(--sd-fg)" }}>비율</div>
+            <div className="mb-1 flex items-baseline gap-1.5">
+              <span className="text-[11.5px] font-semibold" style={{ color: "var(--sd-mut)" }}>비율</span>
+              <span className="text-[10.5px]" style={{ color: "var(--sd-mut)" }}>현재 16:9 만 생성됩니다</span>
+            </div>
             <div className="flex gap-[3px]">
               {(["16:9", "9:16"] as const).map((a) => (
                 <button
                   key={a}
                   type="button"
+                  disabled
+                  title="비율 선택은 아직 서버로 전달되지 않습니다"
                   className={cn("sd-btn", aspect === a && "sd-btn--on")}
                   onClick={() => setAspect(a)}
                 >
@@ -200,16 +215,16 @@ export default function ThumbnailsPage() {
             className="rounded-[4px] px-2.5 py-2 text-[11px] leading-relaxed"
             style={{ border: "1px solid var(--sd-border)", background: "var(--sd-card-sub)", color: "var(--sd-mut)" }}
           >
-            생성에는 몇 분이 걸립니다. <b style={{ color: "var(--sd-fg)" }}>완료 알림은 없습니다</b> —
+            생성에는 몇 분이 걸립니다. <b style={{ color: "var(--sd-fg)" }}>완료 알림도, 실패 알림도 없습니다</b> —
             다른 화면으로 가도 결과는 이 미디어에 남아 있고, 이 화면에서 다시 볼 수 있습니다.
-            출연자 사진이 등록돼 있지 않으면 생성이 실패합니다.
+            출연자 사진이 등록돼 있지 않으면 생성이 실패하는데, 그 경우 몇 분 뒤에도 결과가 비어 있습니다.
           </p>
 
           <button
             type="button"
             className="sd-btn sd-btn-primary"
             disabled={!canGenerate}
-            title={!target ? "대상을 고르세요" : prompt.trim() ? undefined : "프롬프트를 입력하세요"}
+            title={!target ? "대상을 고르세요" : undefined}
             onClick={generate}
           >
             {busy ? "요청 중…" : "썸네일 생성"}

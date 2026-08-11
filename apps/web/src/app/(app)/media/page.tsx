@@ -12,7 +12,8 @@
  *  - 판정은 서버가 한다. 화면은 서버가 준 상태를 그리고, 못 읽으면 통과로 그리지 않는다.
  */
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
+import { Suspense, useEffect, useMemo, useState } from "react";
 
 import { IssuePanel } from "@/components/gate/issue-panel";
 import { PublishDialog } from "@/components/publish/publish-dialog";
@@ -32,17 +33,46 @@ type GateFilter = "all" | GateState;
 
 const GATE_FILTERS: GateFilter[] = ["all", "pass", "review_pending", "rights_hold", "conditional", "blocked"];
 
+function isGateFilter(v: string | null): v is GateFilter {
+  return v != null && (GATE_FILTERS as string[]).includes(v);
+}
+
+// useSearchParams 를 쓰므로 Suspense 가 필요하다 (없으면 프리렌더가 깨진다).
 export default function MediaPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="sd-ph grid min-h-[160px] place-items-center rounded-[6px] px-6 text-center">
+          불러오는 중…
+        </div>
+      }
+    >
+      <MediaView />
+    </Suspense>
+  );
+}
+
+function MediaView() {
   const { clips, episodes, programs, loading } = useAppData();
   const { toast } = useToast();
   const session = useSession();
   const role = roleOf(session.user.role);
 
+  // 다른 화면이 `/media?gate=rights_hold` 로 보낸다 — 쿼리를 무시하면 링크가 거짓말이 된다.
+  const searchParams = useSearchParams();
+  const gateParam = searchParams.get("gate");
+
   const [kind, setKind] = useState<KindFilter>("all");
-  const [gateFilter, setGateFilter] = useState<GateFilter>("all");
+  const [gateFilter, setGateFilter] = useState<GateFilter>(isGateFilter(gateParam) ? gateParam : "all");
+
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [openIssues, setOpenIssues] = useState<string | null>(null);
   const [publishTarget, setPublishTarget] = useState<string[] | null>(null);
+
+  // 화면이 떠 있는 상태에서 다른 링크로 들어와도 필터가 따라오게 한다.
+  useEffect(() => {
+    if (isGateFilter(gateParam)) setGateFilter(gateParam);
+  }, [gateParam]);
 
   // 사이드바 배지·대시보드와 **같은 값**을 쓴다. 화면마다 따로 조회하면 같은 요청이
   // 여러 번 나가고, 무엇보다 숫자가 갈린다 — 어느 쪽을 믿어야 할지 모르게 된다.
@@ -52,15 +82,21 @@ export default function MediaPage() {
   const gateError = gateSummary.error;
   const loadGates = gateSummary.refresh;
 
-  const rows = useMemo(() => {
+  // 게이트 칩의 건수는 **종류 필터를 적용한 뒤** 세야 한다 — 같은 줄 오른쪽 총계와
+  // 모집단이 다르면 어느 숫자를 믿어야 할지 모르게 된다.
+  const kindRows = useMemo(() => {
     return clips.filter((c) => {
       const isShort = c.aspectRatio?.startsWith("9:16");
       if (kind === "short" && !isShort) return false;
       if (kind === "clip" && isShort) return false;
-      if (gateFilter !== "all" && (gates[c.id]?.state ?? "review_pending") !== gateFilter) return false;
       return true;
     });
-  }, [clips, kind, gateFilter, gates]);
+  }, [clips, kind]);
+
+  const rows = useMemo(() => {
+    if (gateFilter === "all") return kindRows;
+    return kindRows.filter((c) => (gates[c.id]?.state ?? "review_pending") === gateFilter);
+  }, [kindRows, gateFilter, gates]);
 
   const selectedRows = rows.filter((c) => selected.has(c.id));
   const passing = selectedRows.filter((c) => gates[c.id]?.allowed).length;
@@ -119,8 +155,8 @@ export default function MediaPage() {
               {g === "all" ? "게이트 전체" : GATE_LABEL[g]}
               <span className="sd-mono ml-1.5 text-[10.5px]" style={{ opacity: 0.7 }}>
                 {g === "all"
-                  ? clips.length
-                  : clips.filter((c) => (gates[c.id]?.state ?? "review_pending") === g).length}
+                  ? kindRows.length
+                  : kindRows.filter((c) => (gates[c.id]?.state ?? "review_pending") === g).length}
               </span>
             </button>
           ))}

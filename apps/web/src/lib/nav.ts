@@ -32,6 +32,11 @@ export interface NavItem {
   icon: LucideIcon;
   /** 배지 숫자를 붙일 자리 (미처리 건수 등). */
   badgeKey?: "gateHold" | "distributionFailed";
+  /**
+   * 화면이 아직 스텁이다(무엇이 올 자리인지만 알려준다). 클릭은 막지 않는다 —
+   * 스텁 화면이 스스로 예정임을 밝히고 있어서, 여기서는 **누르기 전에** 알려주는 게 목적이다.
+   */
+  soon?: boolean;
 }
 
 export interface NavGroup {
@@ -59,8 +64,8 @@ export const NAV_GROUPS: NavGroup[] = [
   {
     label: "분석",
     items: [
-      { href: "/program-analytics", label: "프로그램 분석", icon: Activity },
-      { href: "/channel-analytics", label: "채널 분석", icon: TrendingUp },
+      { href: "/program-analytics", label: "프로그램 분석", icon: Activity, soon: true },
+      { href: "/channel-analytics", label: "채널 분석", icon: TrendingUp, soon: true },
     ],
   },
   {
@@ -107,6 +112,10 @@ export const SCREEN_META: Record<string, { title: string; subtitle: string }> = 
   "/thumbnail-templates": { title: "썸네일 레퍼런스", subtitle: "swap 파이프라인이 쓸 방송사 완성작 · 드래그 업로드 · 태그 편집" },
   "/business": { title: "사업 운영", subtitle: "추천·클립·배포 결과를 프로그램/IP 단위로 — 부서 공유 · 편성 신호 · 승인 리스크" },
   "/ops": { title: "운영 진단", subtitle: "큐가 어떻게 도는지 · 업로드 영상에서 뭐가 나오고 뭐가 깨지는지" },
+  // 사이드바에 없는 화면도 여기 있어야 한다 — 빠지면 상단바가 "STEP-D" 로 폴백해서
+  // 어느 화면인지 제목이 알려주지 못한다(/episodes/:id 는 prefix 매칭으로 걸린다).
+  "/episodes": { title: "회차", subtitle: "원본 · 추천 구간 · 파이프라인 진행" },
+  "/credits": { title: "크레딧", subtitle: "잔액 · 충전 · 사용 내역" },
   "/clips": { title: "클립", subtitle: "구 클립 목록 — 미디어 화면으로 대체됨" },
   "/analytics": { title: "성과 (구)", subtitle: "구 성과 화면 — 성과·프로그램/채널 분석으로 대체됨" },
   "/automation": { title: "자동 배포", subtitle: "규칙 기반 순방 · 게이트를 건너뛰지 않음" },

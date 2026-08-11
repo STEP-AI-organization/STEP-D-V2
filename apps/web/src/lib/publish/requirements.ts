@@ -10,13 +10,22 @@
  *  - SMR is rendered from clip/episode/program columns → those must be complete,
  *    plus program-level feed metadata (set once per program).
  *  - YouTube/Meta are per-item pushes → account connection + a few per-publish fields.
+ *
+ * ⚠️ 현재 실제 소비자는 `programSmrChecks` 하나뿐이다
+ * (programs/[id]/settings/page.tsx — 미충족 개수 표시). 구형 publish-dialog 가 사라지면서
+ * 아래 채널별 판정 블록(smrChecks·youtubeChecks·socialStubChecks·CHANNEL_EVAL·evaluateChannel
+ * 과 hasThumbnail/isVertical/isEncoded)은 호출자가 0 이다.
+ *
+ * 존치 사유: 배포 가능 여부의 최종 판정은 서버(/api/channel-rules/eligibility + 업로드 게이트)가
+ * 하지만, 서버는 "무엇이 왜 빠졌는지"를 채널별 체크리스트로 돌려주지 않는다. 클라 체크리스트를
+ * 다시 붙일 때 재사용할 명세로 남긴다. 새로 판정 UI 를 붙일 때는 서버 응답을 우선하고 이 모듈은
+ * 보조 설명용으로만 쓸 것 — 두 판정이 갈리면 서버가 맞다.
  */
 
 import {
   CLIP_TYPES,
   TARGET_AGES,
   type DistributionChannel,
-  type StatusTone,
 } from "@/lib/constants";
 import { WEEKDAYS } from "@/lib/reserve-date";
 import type {
@@ -95,7 +104,9 @@ function weekdaysLabel(weekdays?: number[]): string {
 /** SMR feed requirements that live on the PROGRAM, not the clip (plan §5.1③). */
 export function programSmrChecks(program?: Program): RequirementCheck[] {
   const smr: ProgramSmrConfig = program?.smr ?? {};
-  const fix = { label: "프로그램 설정", href: "/programs" };
+  // 목록(/programs)이 아니라 실제 입력이 있는 화면으로 보낸다.
+  // (현재 이 fix 링크를 렌더하는 소비자는 없다 — settings 화면은 미충족 개수만 센다.)
+  const fix = { label: "프로그램 설정", href: program ? `/programs/${program.id}/settings` : "/programs" };
   const codeOk = Boolean(smr.programCode && /^[a-z0-9]+$/.test(smr.programCode));
   return [
     {
@@ -128,26 +139,15 @@ export function programSmrChecks(program?: Program): RequirementCheck[] {
     },
     {
       key: "smr-program-poster",
+      // smr.posterReady 는 세터가 어디에도 없어 영구 false 였다 — 실제로 저장되는 필드로 판정한다.
       label: "포스터 이미지",
-      met: Boolean(smr.posterReady),
-      detail: smr.posterReady ? "등록됨" : "미등록",
+      met: Boolean(program?.posterImageDataUrl),
+      detail: program?.posterImageDataUrl ? "등록됨" : "미등록",
       scope: "program",
       fix,
     },
-    {
-      key: "smr-program-thumb",
-      label: "프로그램 썸네일",
-      met: Boolean(smr.thumbnailReady),
-      detail: smr.thumbnailReady ? "등록됨" : "미등록",
-      scope: "program",
-      fix,
-    },
+    // "프로그램 썸네일" 체크는 제거했다 — 저장 필드도 등록 UI도 없어 충족 자체가 불가능했다.
   ];
-}
-
-/** True when every program-level SMR requirement is met. */
-export function isProgramSmrReady(program?: Program): boolean {
-  return programSmrChecks(program).every((c) => c.met);
 }
 
 // ── per-channel evaluation ─────────────────────────────────────────────────────
@@ -297,39 +297,6 @@ export function evaluateChannel(
   return { channel, ready: missing.length === 0, checks, missing };
 }
 
-/** Evaluate all channels for a clip. */
-export function evaluateChannels(
-  ctx: EvalContext,
-): Record<DistributionChannel, ChannelReadiness> {
-  return {
-    youtube:   evaluateChannel("youtube", ctx),
-    instagram: evaluateChannel("instagram", ctx),
-    facebook:  evaluateChannel("facebook", ctx),
-    tiktok:    evaluateChannel("tiktok", ctx),
-    smr:       evaluateChannel("smr", ctx),
-  };
-}
-
-/**
- * Blockers a publish-time input CAN'T fix (excludes scope 'publish' like
- * reserveDate / platform selection). Drives at-a-glance matrix hints: "structurally
- * publishable now, just open the dialog" vs "needs setup first".
- */
-export function structuralBlockers(
-  channel: DistributionChannel,
-  ctx: EvalContext,
-): RequirementCheck[] {
-  return evaluateChannel(channel, ctx).checks.filter(
-    (c) => !c.met && !c.optional && c.scope !== "publish",
-  );
-}
-
-export function isStructurallyReady(channel: DistributionChannel, ctx: EvalContext): boolean {
-  return structuralBlockers(channel, ctx).length === 0;
-}
-
-
-/** Tone for a channel's readiness summary. */
-export function readinessTone(r: ChannelReadiness): StatusTone {
-  return r.ready ? "done" : "warn";
-}
+// evaluateChannels·structuralBlockers·isStructurallyReady·readinessTone 은 호출자가 하나도
+// 없어 삭제했다(2026-08-11). 필요해지면 evaluateChannel 위에서 다시 조립하면 된다.
+// (evaluateChannel 이하도 지금은 호출자 0 이다 — 삭제하지 않고 남긴 이유는 파일 상단 주석 참고.)

@@ -49,6 +49,11 @@ export function ChannelRuleDialog({
   const { toast } = useToast();
   const [busy, setBusy] = useState(false);
   const [touched, setTouched] = useState(false);
+  // 저장은 전체 upsert 다 — 기존 규칙을 못 읽은 채 저장하면 기본값으로 초기화된다.
+  // 그래서 로드가 끝나기 전/실패했을 때는 저장을 막는다.
+  const [loadState, setLoadState] = useState<"loading" | "ready" | "error">("loading");
+  const [loadErr, setLoadErr] = useState<string | null>(null);
+  const [reloadKey, setReloadKey] = useState(0);
   const [r, setR] = useState<ChannelRule>({
     platform,
     accountId,
@@ -67,14 +72,22 @@ export function ChannelRuleDialog({
   // 이미 규칙이 있으면 그 값으로 연다 — 새로 만드는 줄 알고 덮어쓰면 안 된다.
   useEffect(() => {
     let alive = true;
+    setLoadState("loading");
     void fetchChannelRules()
       .then((all) => {
+        if (!alive) return;
         const found = all.find((x) => x.platform === platform && x.accountId === accountId);
-        if (alive && found) setR(found);
+        if (found) setR(found);
+        setLoadErr(null);
+        setLoadState("ready");
       })
-      .catch(() => {});
+      .catch((err) => {
+        if (!alive) return;
+        setLoadErr(err instanceof Error ? err.message : String(err));
+        setLoadState("error");
+      });
     return () => { alive = false; };
-  }, [platform, accountId]);
+  }, [platform, accountId, reloadKey]);
 
   const set = (patch: Partial<ChannelRule>) => setR((prev) => ({ ...prev, ...patch }));
 
@@ -115,6 +128,20 @@ export function ChannelRuleDialog({
           <p className="mt-0.5 text-[11px]" style={{ color: "var(--sd-mut)" }}>
             이 채널로 보낼 때 적용할 조건입니다. <b>규칙이 없으면 배포 모달에 이 채널이 뜨지 않습니다.</b>
           </p>
+          {loadState === "error" && (
+            <div
+              className="mt-2 flex flex-wrap items-center gap-2 rounded-[4px] px-2.5 py-2 text-[11px]"
+              style={{ border: "1px solid var(--sd-danger-border)", background: "var(--sd-danger-bg)", color: "var(--sd-danger-strong)" }}
+            >
+              <span>
+                기존 규칙을 불러오지 못했습니다 ({loadErr}) — 기본값으로 덮어쓰는 것을 막기 위해 <b>저장을 막았습니다.</b>{" "}
+                다시 불러오기를 눌러 주세요.
+              </span>
+              <button type="button" className="sd-btn ml-auto" onClick={() => setReloadKey((k) => k + 1)}>
+                다시 불러오기
+              </button>
+            </div>
+          )}
         </div>
 
         <div className="flex-1 space-y-3 overflow-y-auto p-4">
@@ -194,8 +221,20 @@ export function ChannelRuleDialog({
 
         <div className="flex items-center justify-end gap-2 px-4 py-3" style={{ borderTop: "1px solid var(--sd-border)" }}>
           <button type="button" className="sd-btn" onClick={onClose} disabled={busy}>취소</button>
-          <button type="button" className="sd-btn sd-btn-primary" onClick={save} disabled={busy}>
-            {busy ? "저장 중…" : "저장"}
+          <button
+            type="button"
+            className="sd-btn sd-btn-primary"
+            onClick={save}
+            disabled={busy || loadState !== "ready"}
+            title={
+              loadState === "error"
+                ? "기존 규칙을 읽지 못해 저장을 막았습니다 — 다시 불러오기를 누르세요"
+                : loadState === "loading"
+                  ? "기존 규칙을 불러오는 중입니다"
+                  : undefined
+            }
+          >
+            {busy ? "저장 중…" : loadState === "loading" ? "불러오는 중…" : "저장"}
           </button>
         </div>
       </div>

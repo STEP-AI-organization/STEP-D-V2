@@ -144,7 +144,6 @@ function AnalyzeInner() {
             recs={recs}
             clipCount={clips.filter((c) => c.episodeId === episode.id).length}
             ended={ended}
-            programId={programId}
           />
         )}
       </div>
@@ -159,6 +158,8 @@ function stageLabel(e: Episode): string {
   if (p.stageStatus === "progress") return `${label} 중`;
   if (p.stageStatus === "error") return `${label} 실패`;
   if (p.stageStatus === "idle") return "분석 대기";
+  // warn = 서버가 잡을 아예 큐잉하지 않은 상태(크레딧 부족 등). "완료"로 떨어지면 안 된다.
+  if (p.stageStatus === "warn") return "분석 보류";
   return "분석 완료";
 }
 
@@ -167,13 +168,11 @@ function EpisodeAnalysis({
   recs,
   clipCount,
   ended,
-  programId,
 }: {
   episode: Episode;
   recs: Recommendation[];
   clipCount: number;
   ended: boolean;
-  programId: string;
 }) {
   const { mediaForEpisode } = useAppData();
   const master = mediaForEpisode(episode.id, "master");
@@ -206,6 +205,8 @@ function EpisodeAnalysis({
 
   const analyzing = episode.pipeline?.stageStatus === "progress";
   const waiting = episode.pipeline?.stageStatus === "idle";
+  // 서버가 분석 잡을 넣지 않은 상태(크레딧 부족 등) — 진행 중도 완료도 아니다.
+  const blocked = episode.pipeline?.stageStatus === "warn";
 
   // F2-2 ⊘ — 클라이언트는 97%를 넘기지 않는다. 100%는 서버가 완료를 알릴 때만.
   const pct = Math.min(97, Math.round(episode.pipeline?.progress ?? 0));
@@ -243,7 +244,13 @@ function EpisodeAnalysis({
           <span className="sd-serif text-[15px] font-semibold" style={{ color: "var(--sd-fg)" }}>
             회차 {episode.episodeNumber}
           </span>
-          <span className={cn("sd-tag", analyzing && "sd-tag--upcoming", waiting && "sd-tag")}>
+          <span
+            className={cn(
+              "sd-tag",
+              analyzing && "sd-tag--upcoming",
+              blocked && "sd-tag--warn",
+            )}
+          >
             {stageLabel(episode)}
           </span>
           {(analyzing || waiting) && (
@@ -254,16 +261,32 @@ function EpisodeAnalysis({
               <span className="sd-mono text-[11px]" style={{ color: "var(--sd-mut)" }}>
                 {waiting ? "대기" : `${pct}%`}
               </span>
-              <span className="text-[11.5px]" style={{ color: "var(--sd-mut)" }}>
-                {episode.pipeline?.note ?? ""}
-              </span>
             </>
+          )}
+          {/* note 는 보류 상태에서도 보여야 한다 — 왜 안 도는지가 거기 적혀 있다. */}
+          {(analyzing || waiting || blocked) && episode.pipeline?.note && (
+            <span className="text-[11.5px]" style={{ color: "var(--sd-mut)" }}>
+              {episode.pipeline.note}
+            </span>
           )}
           <Link href={`/episodes/${episode.id}`} className="sd-btn ml-auto">
             회차 상세
           </Link>
         </div>
       </div>
+
+      {episode.pipeline?.blockedReason && (
+        <div
+          className="rounded-[6px] px-3 py-2.5 text-[12.5px]"
+          style={{
+            color: "var(--sd-warn)",
+            background: "var(--sd-warn-bg)",
+            border: "1px solid var(--sd-warn-border)",
+          }}
+        >
+          ⚠ {episode.pipeline.blockedReason}
+        </div>
+      )}
 
       {/* 분석 결과 요약 */}
       <div className="sd-card flex">
@@ -284,18 +307,23 @@ function EpisodeAnalysis({
       {ended ? (
         <div className="sd-card px-3 py-2.5 text-[12.5px]" style={{ color: "var(--sd-fg)" }}>
           종영 프로그램입니다 — 새 회차 분석에서 클립을 만들지 않습니다.{" "}
-          <Link href={`/search?program=${programId}`} className="underline" style={{ color: "var(--sd-accent)" }}>
+          {/* 검색 화면은 아직 쿼리스트링 필터를 읽지 않는다 — ?program= 을 붙이면
+              프로그램이 걸린 것처럼 보여서 뺐다. 검색창에서 직접 골라야 한다. */}
+          <Link href="/search" className="underline" style={{ color: "var(--sd-accent)" }}>
             아카이브에서 장면 찾기
-          </Link>
+          </Link>{" "}
+          <span style={{ color: "var(--sd-mut)" }}>(검색 화면에서 프로그램을 다시 골라야 합니다)</span>
         </div>
       ) : recs.length === 0 ? (
         <div
           className="sd-ph grid min-h-[140px] place-items-center rounded-[6px] px-6 text-center"
           style={{ border: "1px dashed var(--sd-border)" }}
         >
-          {analyzing || waiting
-            ? "분석이 끝나면 추천 구간이 여기 나타납니다"
-            : "추천 구간이 없습니다 — 분석 결과가 비어 있습니다"}
+          {blocked
+            ? (episode.pipeline?.note ?? "분석이 보류됐습니다 — 위 사유를 해결하면 시작됩니다")
+            : analyzing || waiting
+              ? "분석이 끝나면 추천 구간이 여기 나타납니다"
+              : "추천 구간이 없습니다 — 분석 결과가 비어 있습니다"}
         </div>
       ) : (
         <section className="flex flex-col gap-2.5">
@@ -342,12 +370,15 @@ function RecommendationRow({
   const actor = useSession().user.name;
 
   const [busy, setBusy] = useState(false);
-  const [gate, setGate] = useState<{ gate: GateResult; issues: RightsIssue[] } | null>(null);
+  // undefined = 아직 조회 중 · null = 조회 실패. 둘을 같은 값으로 두면 첫 페인트마다
+  // 모든 행에 "게이트 확인 불가" 가 떠서 진짜 실패와 구분이 안 된다.
+  const [gate, setGate] = useState<{ gate: GateResult; issues: RightsIssue[] } | undefined | null>(undefined);
   const [open, setOpen] = useState(false);
 
   // 이 구간에 걸린 이슈 — 회차 전체 이슈 중 겹치는 것 + 구간에 직접 등록된 것.
   useEffect(() => {
     let alive = true;
+    setGate(undefined);
     void (async () => {
       try {
         const [ep, own] = await Promise.all([
@@ -392,6 +423,27 @@ function RecommendationRow({
     }
   }
 
+  /**
+   * 보류. store 의 rejectRecommendation 은 낙관적 갱신 · 폴링 경합 가드(mutationEpoch) ·
+   * 실패 시 롤백까지 다 하고, 실패는 다시 던진다. 예전 호출부가 그 rejection 을 잡지 않아
+   * 실패해도 아무 말이 없었을 뿐이다 — 여기서 await + catch 로 사유를 토스트로 올린다.
+   */
+  async function reject() {
+    setBusy(true);
+    try {
+      await rejectRecommendation(rec.id, "보류");
+      toast({
+        title: "보류했습니다",
+        description: "이 구간은 미디어가 되지 않습니다 — 목록에는 남습니다.",
+        tone: "done",
+      });
+    } catch (err) {
+      toast({ title: "보류 실패", description: err instanceof Error ? err.message : String(err), tone: "error" });
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <div className="sd-card flex flex-col gap-2 px-3 py-2.5">
       <div className="flex flex-wrap items-center gap-2">
@@ -428,8 +480,13 @@ function RecommendationRow({
 
       <div className="flex flex-wrap items-center gap-2">
         {gate && <span className={GATE_TAG[gate.gate.state]}>{gate.gate.label}</span>}
+        {gate === undefined && (
+          <span className="sd-tag" style={{ color: "var(--sd-mut)" }}>게이트 확인 중…</span>
+        )}
         {gate === null && (
-          <span className="sd-tag">게이트 확인 불가</span>
+          <span className="sd-tag sd-tag--warn" title="권리·심의 게이트를 읽지 못했습니다">
+            게이트 확인 불가
+          </span>
         )}
         <button type="button" className="sd-btn" onClick={() => setOpen((v) => !v)}>
           권리·심의 {open ? "닫기" : `(${gate?.issues.length ?? 0})`}
@@ -450,7 +507,7 @@ function RecommendationRow({
                 type="button"
                 className="sd-btn"
                 disabled={busy}
-                onClick={() => rejectRecommendation(rec.id, "보류")}
+                onClick={reject}
               >
                 보류
               </button>

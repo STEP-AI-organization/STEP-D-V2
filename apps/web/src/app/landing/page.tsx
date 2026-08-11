@@ -4,12 +4,12 @@ import Link from "next/link";
 import { useMemo, useState } from "react";
 import "./landing.css";
 
-/** 콘솔(현재 우리 서비스) 경로. '들어가기' 버튼이 이리로 이동한다. */
+/** 콘솔(현재 우리 서비스) 경로. '들어가기' 버튼이 이리로 이동한다.
+ *  외부 크리에이터가 자기 채널을 등록하고 무료 분석을 받는 self-serve 진입점이다. */
 const APP_URL = "/register";
 
-/** 소개영상 URL. API가 비공개 GCS 객체를 읽어 같은 출처로 스트리밍한다. */
-const LANDING_VIDEO_URL =
-  "/api/landing/video";
+/** 도입 문의는 아직 폼이 없다. 메일로 받는다 — 눌러도 안 되는 버튼을 두지 않는다. */
+const CONTACT_MAILTO = "mailto:contact@stepai.kr?subject=STEP%20D%20%EB%8F%84%EC%9E%85%20%EC%83%81%EB%8B%B4";
 
 // 천 단위 콤마 (SSR/CSR 동일 결과 보장용 — toLocaleString 하이드레이션 불일치 회피)
 const comma = (n: number) => String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
@@ -94,19 +94,23 @@ export default function LandingPage() {
               <span className="dot" style={{ background: "#FEBC2E" }}></span>
               <span className="dot" style={{ background: "#28C840" }}></span>
               <span style={{ marginLeft: 12, fontSize: 12, color: "var(--mut2)" }}>
-                STEP D 실제 운영 화면
+                STEP D 소개 영상 (준비 중)
               </span>
             </div>
-            <div className="mock-body" style={{ padding: 0, display: "block" }}>
-              <video
-                controls
-                playsInline
-                preload="metadata"
-                style={{ width: "100%", display: "block", borderRadius: "0 0 12px 12px", background: "#000" }}
-                src={LANDING_VIDEO_URL}
-              >
-                브라우저가 영상을 지원하지 않습니다.
-              </video>
+            {/* 소개영상은 아직 없다(서버에 /api/landing/video 라우트가 없다). 재생 안 되는
+                검은 플레이어 대신 준비 중이라고 적는다. */}
+            <div
+              className="mock-body"
+              style={{
+                padding: "48px 24px",
+                display: "block",
+                textAlign: "center",
+                borderRadius: "0 0 12px 12px",
+                color: "var(--mut2)",
+                fontSize: 13,
+              }}
+            >
+              소개 영상은 준비 중입니다. 위 &lsquo;서비스 둘러보기&rsquo;에서 실제 화면 흐름을 보실 수 있습니다.
             </div>
           </div>
         </div>
@@ -659,8 +663,8 @@ export default function LandingPage() {
               <Link href={APP_URL} className="btn btn-p">
                 들어가기 →
               </Link>
-              <a href="#" className="btn btn-g">
-                도입 상담 신청
+              <a href={CONTACT_MAILTO} className="btn btn-g">
+                도입 상담 신청 (메일)
               </a>
             </div>
           </div>
@@ -681,12 +685,16 @@ export default function LandingPage() {
               <h5>제품</h5>
               <a href="#features">핵심 기능</a>
               <a href="#how">작동 방식</a>
+              <Link href={APP_URL}>내 채널 무료 분석</Link>
             </div>
+            {/* 회사·문의는 아직 페이지가 없다. 목적지 없는 링크 대신 메일로 받거나 글자만 남긴다. */}
             <div className="col">
               <h5>회사</h5>
-              <a href="#">㈜스텝에이아이</a>
-              <a href="#">파트너십</a>
-              <a href="#">채용</a>
+              <span style={{ display: "block", fontSize: 14, color: "var(--mut)", marginBottom: 9 }}>
+                ㈜스텝에이아이
+              </span>
+              <a href="mailto:contact@stepai.kr?subject=STEP%20D%20%ED%8C%8C%ED%8A%B8%EB%84%88%EC%8B%AD">파트너십 문의</a>
+              <a href="mailto:contact@stepai.kr?subject=STEP%20D%20%EC%B1%84%EC%9A%A9">채용 문의</a>
             </div>
             <div className="col">
               <h5>약관</h5>
@@ -696,8 +704,8 @@ export default function LandingPage() {
             </div>
             <div className="col">
               <h5>문의</h5>
-              <a href="#">데모 신청</a>
-              <a href="#">도입 상담</a>
+              <a href="mailto:contact@stepai.kr?subject=STEP%20D%20%EB%8D%B0%EB%AA%A8%20%EC%8B%A0%EC%B2%AD">데모 신청</a>
+              <a href={CONTACT_MAILTO}>도입 상담</a>
               <a href="mailto:contact@stepai.kr">contact@stepai.kr</a>
             </div>
           </div>

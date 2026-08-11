@@ -16,12 +16,15 @@ type AiTab = "analysis" | "titles";
 export function EditorAiPanel({
   clipId,
   scenes,
+  scenesState = "loading",
   sourceRec,
   currentTitle,
   onApplyTitle,
 }: {
   clipId: string;
   scenes?: AnalysisScene[];
+  /** 분석 로딩·실패·미분석·정상을 구분한다 — 전부 undefined 로 합치면 영구 로딩처럼 보인다. */
+  scenesState?: "loading" | "error" | "empty" | "ready";
   sourceRec?: Recommendation;
   currentTitle: string;
   onApplyTitle: (title: string) => void;
@@ -95,8 +98,19 @@ export function EditorAiPanel({
 
       <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto p-2">
         {tab === "analysis" && analysisScenes.length === 0 && (
-          <div className="p-3 text-center text-xs text-zinc-500">
-            {scenes === undefined ? "분석 결과 불러오는 중…" : "분석 결과 없음"}
+          <div
+            className={cn(
+              "p-3 text-center text-xs",
+              scenesState === "error" ? "text-amber-400" : "text-zinc-500",
+            )}
+          >
+            {scenesState === "loading"
+              ? "분석 결과 불러오는 중…"
+              : scenesState === "error"
+                ? "분석 결과를 불러오지 못했습니다 — 서버 연결을 확인하세요."
+                : scenesState === "empty"
+                  ? "아직 분석되지 않았습니다 — 회차 화면에서 분석을 실행하세요."
+                  : "표시할 장면이 없습니다 (대사·시각 신호 있는 장면만 표시)."}
           </div>
         )}
         {tab === "analysis" &&

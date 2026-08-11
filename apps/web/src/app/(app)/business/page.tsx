@@ -87,9 +87,9 @@ export default function BusinessPage() {
         programRecommendations.length > 0
           ? Math.round(programRecommendations.reduce((sum, rec) => sum + recScore(rec), 0) / programRecommendations.length)
           : 0;
-      const brandReviewCount = programRecommendations.filter((rec) => (rec.brands?.length ?? 0) > 0).length;
+      // 브랜드 노출 확인은 뺐다 — 서버가 추천에 brands 를 채우지 않아 항상 0 이었다.
       const ageReviewCount = programClips.filter((clip) => clip.targetAge === 19).length;
-      const riskCount = failedDestinations + brandReviewCount + ageReviewCount;
+      const riskCount = failedDestinations + ageReviewCount;
 
       return {
         program,
@@ -159,15 +159,6 @@ export default function BusinessPage() {
         title: clip.title,
         detail: "19세 등급 클립 · 광고/플랫폼 적합성 확인",
         href: `/episodes/${clip.episodeId}?tab=clips`,
-      })),
-    ...recommendations
-      .filter((rec) => rec.status === "pending" && (rec.brands?.length ?? 0) > 0)
-      .map((rec) => ({
-        id: `${rec.id}-brand`,
-        tone: "warn" as const,
-        title: rec.title,
-        detail: `브랜드 노출 확인 · ${rec.brands?.join(", ")}`,
-        href: `/episodes/${rec.episodeId}?tab=recommend`,
       })),
   ].slice(0, 8);
 
@@ -434,11 +425,12 @@ export default function BusinessPage() {
           body={`공유 가능 IP ${shareablePrograms}개`}
           href="/performance"
         />
+        {/* 권리·심의 게이트는 배포 로그(/distribution)가 아니라 미디어 화면에 있다. */}
         <DepartmentTile
           icon={ShieldAlert}
           title="법무/심의"
-          body={`확인 항목 ${riskItems.length}개`}
-          href="/distribution"
+          body="권리 보류 미디어 검수"
+          href="/media?gate=rights_hold"
         />
       </div>
     </div>

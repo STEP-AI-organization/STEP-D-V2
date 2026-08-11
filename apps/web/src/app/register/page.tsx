@@ -45,7 +45,9 @@ function RegisterFlow() {
   // Read the OAuth callback result once (the server redirects back here).
   useEffect(() => {
     // Design preview — no OAuth/polling needed. `?preview=analyzing` or `?preview=done`.
-    const preview = searchParams.get("preview");
+    // 개발 빌드에서만. /register 는 무인증 공개 라우트라, 프로덕션에 남기면 아무나 URL 로
+    // 가짜 분석 결과(구독 123만 등)를 진짜처럼 띄울 수 있다.
+    const preview = process.env.NODE_ENV === "production" ? null : searchParams.get("preview");
     if (preview === "analyzing" || preview === "done") {
       setChannelName("샘플 크리에이터");
       setSubscribers(1_234_000);

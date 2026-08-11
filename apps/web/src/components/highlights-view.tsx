@@ -164,6 +164,11 @@ export function HighlightsView({ programId }: { programId: string }) {
               </div>
               <Badge variant={selected.length ? "accent" : "muted"}>{selected.length}개 클립</Badge>
             </div>
+            {/* 저장 잡이 없어서 구성은 브라우저 메모리에만 있다 — 미리 말해 두지 않으면
+                새로고침 한 번에 날아간 걸 고장으로 읽는다. */}
+            <CardDescription className="mt-2 text-[11px] text-status-warn">
+              이 구성은 저장되지 않습니다 — 새로고침하면 초기화됩니다.
+            </CardDescription>
           </CardHeader>
           <CardContent className="p-0">
             {selected.length > 0 ? (

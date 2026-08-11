@@ -153,9 +153,11 @@ export interface CaptionWord { word: string; start: number; end: number }
 
 /**
  * Approximate per-word timings from a caption's text + [start,end] when STT gave none.
- * MUST match the server's synthesizeWords (apps/server/src/index.ts) so the preview's
- * word-by-word highlight lands exactly where the render burns it. Syllable-weighted
- * (Korean: 1 글자 ≈ 1 음절); single-token captions gain nothing and return [].
+ * Syllable-weighted (Korean: 1 글자 ≈ 1 음절); single-token captions gain nothing and return [].
+ *
+ * ⚠️ 현재 호출자 0 — 에디터 프리뷰의 단어별 하이라이트를 걷어내면서(2026-07-24, 한국 방송은
+ * word-by-word 를 쓰지 않는다) 짝이던 프리뷰가 사라졌다. **서버 synthesizeWords 와 동기화할
+ * 의무가 있는 미러가 아니다** — 프리뷰 하이라이트를 되살릴 때 그때 다시 맞추면 된다.
  */
 export function synthesizeCaptionWords(text: string, start: number, end: number): CaptionWord[] {
   const tokens = text.split(/\s+/).filter(Boolean);
@@ -173,7 +175,8 @@ export function synthesizeCaptionWords(text: string, start: number, end: number)
   return out;
 }
 
-/** Keyword (content-word) indices to colour-emphasize — mirror of the server's pickKeywordIdx. */
+/** Keyword (content-word) indices to colour-emphasize.
+ *  ⚠️ 위 synthesizeCaptionWords 와 같은 이유로 현재 호출자 0 — 동기화 대상 아님. */
 export function pickKeywordIdx(tokens: string[]): Set<number> {
   const scored = tokens
     .map((t, i) => ({ i, len: [...t.replace(/[^\p{L}\p{N}]/gu, "")].length }))

@@ -63,6 +63,20 @@ export function Sidebar() {
                     >
                       <Icon className="size-[13px] shrink-0" aria-hidden />
                       <span className="truncate">{item.label}</span>
+                      {/* 눌러 보고 나서 "빈 화면이네" 를 알게 하지 않는다 — 미리 말해 준다. */}
+                      {item.soon && (
+                        <span
+                          className="ml-auto shrink-0 rounded-[3px] px-1 text-[9.5px]"
+                          title="화면 준비 중 — 무엇이 올 자리인지만 표시됩니다"
+                          style={
+                            active
+                              ? { background: "rgba(255,255,255,.22)", color: "#fff" }
+                              : { background: "var(--sd-card-sub)", color: "var(--sd-mut)" }
+                          }
+                        >
+                          예정
+                        </span>
+                      )}
                       <NavBadge badgeKey={item.badgeKey} active={active} />
                     </Link>
                   </li>
@@ -106,18 +120,20 @@ function CreditBalance() {
   }, []);
 
   // 못 읽으면 0 이라고 하지 않는다 — "잔액 없음"으로 오해하면 충전을 안 해도 될 때 하게 된다.
-  if (balance === null) return null;
-
-  const low = balance < 60; // 1시간 미만
+  // 다만 **링크까지 같이 숨기면 안 된다** — /credits 로 가는 유일한 진입점이라
+  // 잔액 조회가 실패한 순간 충전 화면 자체가 앱에서 사라진다. 값만 "—" 로 둔다.
+  const low = balance !== null && balance < 60; // 1시간 미만
   return (
     <Link
       href="/credits"
       className="mt-3 flex items-center gap-1.5 px-2 py-1 text-[10.5px]"
       style={{ color: low ? "var(--sd-danger-strong)" : "var(--sd-mut)" }}
-      title="크레딧 1개 = 분석 1분"
+      title={balance === null ? "잔액을 읽지 못했습니다 — 크레딧 화면에서 확인하세요" : "크레딧 1개 = 분석 1분"}
     >
       <span>크레딧</span>
-      <span className="sd-mono ml-auto">{balance.toLocaleString("ko-KR")}</span>
+      <span className="sd-mono ml-auto">
+        {balance === null ? "—" : balance.toLocaleString("ko-KR")}
+      </span>
     </Link>
   );
 }

@@ -40,12 +40,14 @@ export function CommandPalette() {
       keywords: `${ep.programTitle} ${ep.episodeNumber ?? ""} 회차 episode`,
       run: () => router.push(`/episodes/${ep.id}`),
     }));
+    // 어느 클립을 골라도 /clips 로 보내던 자리. /clips 는 "미디어로 옮겨졌습니다" 안내
+    // 카드 한 장뿐이라 N 건이 전부 같은 화면으로 떨어졌다 — 클립 id 를 쓰는 곳으로 보낸다.
     const clipCmds: Command[] = clips.map((clip) => ({
       id: `clip-${clip.id}`,
       label: clip.title,
       group: "클립",
       keywords: `${clip.title} ${clip.programTitle}`,
-      run: () => router.push(`/clips`),
+      run: () => router.push(`/editor/${clip.id}`),
     }));
     const actions: Command[] = [
       {

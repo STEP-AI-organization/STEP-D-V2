@@ -19,6 +19,7 @@ export function SourcePanel({ episodeId }: { episodeId: string }) {
   const { mediaForEpisode, recommendations } = useAppData();
   const master = mediaForEpisode(episodeId, "master");
   const [videoSrc, setVideoSrc] = useState<string>();
+  const [videoError, setVideoError] = useState<string | null>(null);
   const { analysis, loading } = useMediaAnalysisPoll(master?.id);
   const [currentTime, setCurrentTime] = useState(0);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -36,9 +37,15 @@ export function SourcePanel({ episodeId }: { episodeId: string }) {
   useEffect(() => {
     if (!master) return;
     let cancelled = false;
+    setVideoSrc(undefined);
+    setVideoError(null);
     getStreamUrl(master.id)
       .then((u) => { if (!cancelled) setVideoSrc(u); })
-      .catch(() => {});
+      // 못 불러오면 검은 사각형만 남기지 않는다 — 왜 안 나오는지 적는다(analyze 화면과 같은 처리).
+      .catch((err) => {
+        if (!cancelled)
+          setVideoError(`원본을 불러오지 못했습니다 (${err instanceof Error ? err.message : String(err)})`);
+      });
     return () => { cancelled = true; };
   }, [master?.id]);
 
@@ -81,9 +88,9 @@ export function SourcePanel({ episodeId }: { episodeId: string }) {
     return markersFromAnalysis(analysis?.data?.shorts ?? []);
   }, [recommendations, episodeId, analysis?.data?.shorts]);
 
-  // Multi-lane highlight timeline (visual layer). 쇼츠/분석/PPL use real analysis
-  // segments when present; lanes with no data source fall back to clearly-tagged
-  // 샘플 blocks so the highlight visual always renders (see ReviewTimeline).
+  // Multi-lane highlight timeline (visual layer). **실제 분석 산출물이 있는 레인만** 그린다.
+  // 예전엔 데이터가 없으면 '샘플' 블록으로 트랙을 채웠는데, 그 블록도 클릭·seek 가 되는 탓에
+  // 존재하지 않는 PPL·쇼츠 구간이 조작 가능한 UI 로 남았다(PPL 은 RUN_PPL=0 이라 상시 빈 레인).
   const timelineLanes: TimelineLane[] = useMemo(() => {
     const scenes = analysis?.data?.scenes ?? [];
     const pplDetections = analysis?.data?.ppl?.detections ?? [];
@@ -118,45 +125,15 @@ export function SourcePanel({ episodeId }: { episodeId: string }) {
       sub: d.category || undefined,
     }));
 
-    const sample = (prefix: string, title: string, spans: [number, number][]): TimelineBlock[] =>
-      spans.map(([a, b], i) => ({
-        id: `${prefix}${i}`,
-        start: durationSec * a,
-        end: durationSec * b,
-        title,
-        sub: "샘플 데이터",
-      }));
-
-    return [
-      shortsBlocks.length
-        ? { key: "shorts", label: "쇼츠 후보", color: "#8b7cf6", blocks: shortsBlocks }
-        : {
-            key: "shorts",
-            label: "쇼츠 후보",
-            color: "#8b7cf6",
-            sample: true,
-            blocks: sample("sh", "쇼츠 후보 구간", [[0.07, 0.12], [0.34, 0.4], [0.66, 0.72]]),
-          },
-      pplBlocks.length
-        ? { key: "ppl", label: "PPL·브랜드", color: "#f5a524", blocks: pplBlocks }
-        : {
-            key: "ppl",
-            label: "PPL·브랜드",
-            color: "#f5a524",
-            sample: true,
-            blocks: sample("ppl", "브랜드 노출 구간", [[0.09, 0.11], [0.41, 0.44], [0.77, 0.79]]),
-          },
-      sceneBlocks.length
-        ? { key: "analysis", label: "분석 구간", color: "#5e9bff", blocks: sceneBlocks }
-        : {
-            key: "analysis",
-            label: "분석 구간",
-            color: "#5e9bff",
-            sample: true,
-            blocks: sample("an", "분석 구간", [[0, 0.18], [0.18, 0.35], [0.35, 0.55], [0.55, 0.78], [0.78, 1]]),
-          },
-    ];
-  }, [allMarkers, analysis?.data?.scenes, analysis?.data?.ppl?.detections, durationSec]);
+    const lanes: TimelineLane[] = [];
+    if (shortsBlocks.length)
+      lanes.push({ key: "shorts", label: "쇼츠 후보", color: "#8b7cf6", blocks: shortsBlocks });
+    if (pplBlocks.length)
+      lanes.push({ key: "ppl", label: "PPL·브랜드", color: "#f5a524", blocks: pplBlocks });
+    if (sceneBlocks.length)
+      lanes.push({ key: "analysis", label: "분석 구간", color: "#5e9bff", blocks: sceneBlocks });
+    return lanes;
+  }, [allMarkers, analysis?.data?.scenes, analysis?.data?.ppl?.detections]);
 
   if (!master) {
     return (
@@ -175,15 +152,21 @@ export function SourcePanel({ episodeId }: { episodeId: string }) {
           <FileVideo className="size-4" /> {master.filename}
         </div>
         <div className="bg-black">
-          <video
-            ref={videoRef}
-            key={videoSrc}
-            src={videoSrc}
-            controls
-            playsInline
-            onTimeUpdate={onTimeUpdate}
-            className="mx-auto max-h-[50vh] w-full object-contain"
-          />
+          {videoSrc ? (
+            <video
+              ref={videoRef}
+              key={videoSrc}
+              src={videoSrc}
+              controls
+              playsInline
+              onTimeUpdate={onTimeUpdate}
+              className="mx-auto max-h-[50vh] w-full object-contain"
+            />
+          ) : (
+            <div className="grid min-h-40 place-items-center px-6 py-10 text-center text-xs text-muted-foreground">
+              {videoError ?? "원본을 불러오는 중…"}
+            </div>
+          )}
         </div>
         {/* Video metadata */}
         <div className="flex flex-wrap gap-x-6 gap-y-1 px-4 py-2 text-xs text-muted-foreground">
@@ -203,8 +186,8 @@ export function SourcePanel({ episodeId }: { episodeId: string }) {
       )}
 
       {/* Multi-lane highlight timeline (쇼츠 / PPL / 분석) — visual layer; needs a
-          duration to scale the tracks to. */}
-      {durationSec > 0 && (
+          duration to scale the tracks to. 검출이 하나도 없으면 아예 그리지 않는다. */}
+      {durationSec > 0 && timelineLanes.length > 0 && (
         <ReviewTimeline
           durationSec={durationSec}
           currentTime={currentTime}
@@ -213,25 +196,13 @@ export function SourcePanel({ episodeId }: { episodeId: string }) {
         />
       )}
 
-      {/* Quick stats */}
+      {/* Quick stats — Vision 점수 칩은 뺐다: 현재 파이프라인(run_scenes)은 vision_score 를
+          산출하지 않아 항상 "—" 였다. 근거 없는 지표 자리를 남기지 않는다. */}
       {analysis?.data && (
-        <div className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-4">
+        <div className="grid grid-cols-3 gap-2 text-xs">
           <StatChip label="쇼츠 추천" value={(analysis.data.shorts ?? []).length} tone="warn" />
           <StatChip label="장면" value={(analysis.data.scenes ?? []).length} tone="muted" />
           <StatChip label="자막" value={(analysis.data.transcript ?? []).length} tone="muted" />
-          <StatChip
-            label="Vision 점수"
-            value={
-              (() => {
-                const scenes = analysis.data.scenes ?? [];
-                const scored = scenes.filter((s) => s.vision_score != null);
-                if (!scored.length) return "—";
-                const avg = Math.round(scored.reduce((a, s) => a + (s.vision_score ?? 0), 0) / scored.length);
-                return avg.toString();
-              })()
-            }
-            tone="done"
-          />
         </div>
       )}
     </div>

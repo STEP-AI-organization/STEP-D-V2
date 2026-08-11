@@ -10,8 +10,6 @@ import {
   applyTemplate,
   ensureTracks,
   makeInitialEditorState,
-  synthesizeCaptionWords,
-  pickKeywordIdx,
   type EditorState,
   type EditorTrack,
   type KfSelection,
@@ -60,11 +58,25 @@ export function EditorShell({ clipId }: { clipId: string }) {
   const [videoUrl, setVideoUrl] = useState<string>();
   useEffect(() => {
     let cancelled = false;
-    if (mediaId) getStreamUrl(mediaId).then((u) => !cancelled && setVideoUrl(u)).catch(() => {});
+    // 스트림 URL 실패를 삼키면 회색 플레이스홀더만 남아 "영상 없는 클립"처럼 보이고,
+    // 그 상태로 편집·확정까지 진행된다 — 사유를 띄운다.
+    if (mediaId)
+      getStreamUrl(mediaId)
+        .then((u) => !cancelled && setVideoUrl(u))
+        .catch((e) => {
+          if (cancelled) return;
+          setVideoUrl(undefined);
+          toast({
+            title: "영상을 불러오지 못했습니다",
+            description: e instanceof Error ? e.message : "스트림 주소를 가져오지 못했습니다. 새로고침 후 다시 시도해 주세요.",
+            tone: "error",
+          });
+        });
     else setVideoUrl(undefined);
     return () => {
       cancelled = true;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mediaId]);
 
   // Real STT transcript for the master (spoken-subtitle preview). Only when previewing the
@@ -73,23 +85,30 @@ export function EditorShell({ clipId }: { clipId: string }) {
   // Real analysis scenes for the AI panel "분석" tab — always fetched when we have a
   // transcript media id (independent of previewingMaster; scenes are metadata, not overlay).
   const [scenes, setScenes] = useState<AnalysisScene[] | undefined>();
+  // 로딩·실패·미분석이 전부 undefined 로 뭉개져 영구 "불러오는 중…"처럼 보였다 — 상태를 분리한다.
+  const [scenesState, setScenesState] = useState<"loading" | "error" | "empty" | "ready">("loading");
   useEffect(() => {
     let alive = true;
     if (transcriptMediaId) {
+      setScenesState("loading");
       getMediaAnalysis(transcriptMediaId)
         .then((a) => {
           if (!alive) return;
-          setScenes(Array.isArray(a.data?.scenes) ? a.data!.scenes : undefined);
+          const list = Array.isArray(a.data?.scenes) ? a.data!.scenes : undefined;
+          setScenes(list);
+          setScenesState(list && list.length > 0 ? "ready" : "empty");
           // 마스터 미리보기일 때만 자막 오버레이 (확정 클립은 이미 번인)
           setTranscript(previewingMaster && Array.isArray(a.data?.transcript) ? a.data!.transcript : undefined);
         })
         .catch(() => {
           if (!alive) return;
           setScenes(undefined);
+          setScenesState("error");
           setTranscript(undefined);
         });
     } else {
       setScenes(undefined);
+      setScenesState("empty");
       setTranscript(undefined);
     }
     return () => {
@@ -368,18 +387,16 @@ export function EditorShell({ clipId }: { clipId: string }) {
   //   offsetMs는 사용자 수동 fine-tune만 (기본 0). drift·chunk 보정 로직 다 제거.
   //   전제: master 재생 시 videoTime = 원본 절대 시각 · transcript.start = 실제 발화 시각.
   //   sync 어긋나면 원인은 STT/refine 시각 정확도(코어) 이슈 → 파이프라인 쪽에서 fix.
-  const captionData = useMemo(() => {
+  // 한국 방송은 word-by-word 하이라이트 안 씀 (2026-07-24) — 세그먼트 텍스트 하나만 넘긴다.
+  const captionText = useMemo(() => {
     if (!transcript) return undefined;
     const t = videoTime + (state.offsetMs || 0) / 1000; // master-absolute seconds
     const seg = transcript.find(
       (s) => Number(s.start ?? 0) <= t && t < Number(s.end ?? Number(s.start ?? 0) + 3),
     );
     const text = (seg?.text ?? "").trim();
-    if (!seg || !text) return undefined;
-    // 한국 방송은 word-by-word 하이라이트 안 씀. words 계산·keyword pick 제거 (2026-07-24).
-    return { text, words: [] as { word: string; start: number; end: number }[], activeIdx: -1, keyIdx: new Set<number>() };
+    return seg && text ? text : undefined;
   }, [transcript, videoTime, state.offsetMs]);
-  const captionText = captionData?.text;
 
   const togglePlay = useCallback(() => {
     const v = videoEl;
@@ -473,6 +490,33 @@ export function EditorShell({ clipId }: { clipId: string }) {
         <span className="min-w-0 flex-1 truncate text-sm font-medium">{title}</span>
 
         <div className="flex shrink-0 items-center gap-2">
+          {/* 배포처 선택 — 길이 상한 배너가 "배포처를 바꾸세요"라고 안내하는데 정작 바꿀 UI 가
+              프론트 어디에도 없었다. 여기서 고른 값이 exportClip(channel)로 그대로 간다. */}
+          <select
+            value={channel}
+            onChange={(e) => {
+              const next = e.target.value as RenderChannel | "";
+              channelPickedRef.current = true;
+              setChannel(next);
+              setCapped(null);
+              // "원본 유지"로 되돌릴 때 종횡비도 함께 되돌린다. 위 force-sync 이펙트는
+              // preset 이 null 이면 아무것도 안 해서, 직전 프리셋 프레임이 그대로 남는다
+              // (서버는 editorState.aspect 를 clip.aspectRatio 보다 우선한다).
+              // 사용자가 레이아웃 탭에서 직접 고른 종횡비는 건드리지 않는다.
+              if (!next && !aspectOverrideRef.current) {
+                update({ aspect: clip?.aspectRatio === "16:9" ? "16:9" : "9:16" });
+              }
+            }}
+            title="렌더 프리셋 — 종횡비와 길이 상한이 달라집니다"
+            className="hidden rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-sm text-zinc-200 outline-none hover:bg-zinc-800 sm:block"
+          >
+            <option value="">원본 유지</option>
+            {(Object.keys(RENDER_CHANNELS) as RenderChannel[]).map((k) => (
+              <option key={k} value={k}>
+                {RENDER_CHANNELS[k].label}
+              </option>
+            ))}
+          </select>
           <MetadataButton clipId={clipId} state={state} update={update} />
           <button
             onClick={save}
@@ -488,7 +532,7 @@ export function EditorShell({ clipId }: { clipId: string }) {
             title={
               preset
                 ? `${preset.label} 프리셋으로 렌더합니다 — ${preset.aspect}, 최대 ${preset.maxSec}초 (렌더는 여기서 단 한 번 — plan §2.4)`
-                : "클립 원본 비율로 구간 전체를 렌더합니다 (렌더는 여기서 단 한 번 — plan §2.4)"
+                : `현재 종횡비(${state.aspect})로 구간 전체를 렌더합니다 — 길이 상한 없음 (렌더는 여기서 단 한 번 — plan §2.4)`
             }
             className="inline-flex items-center gap-1.5 rounded-md border border-zinc-700 px-3 py-1.5 text-sm text-zinc-200 hover:bg-zinc-800 disabled:opacity-60"
           >
@@ -516,7 +560,7 @@ export function EditorShell({ clipId }: { clipId: string }) {
           <Info className="mt-0.5 size-4 shrink-0" />
           <span>
             {preset?.label ?? "선택한 배포처"}의 길이 상한 {capped.maxSec}초에 맞춰 잘렸습니다 — 고른 구간은{" "}
-            {capped.requestedSec.toFixed(1)}초입니다. 전체를 살리려면 배포처를 바꾸거나 “원본 유지”로 렌더하세요.
+            {capped.requestedSec.toFixed(1)}초입니다. 전체를 살리려면 상단 배포처 선택을 바꾸거나 “원본 유지”로 다시 렌더하세요.
           </span>
         </div>
       )}
@@ -539,6 +583,7 @@ export function EditorShell({ clipId }: { clipId: string }) {
             <EditorAiPanel
               clipId={clipId}
               scenes={scenes}
+              scenesState={scenesState}
               sourceRec={sourceRec}
               currentTitle={state.titleLines[0]?.text ?? ""}
               onApplyTitle={applyTitle}
@@ -568,9 +613,6 @@ export function EditorShell({ clipId }: { clipId: string }) {
             onDuration={handleDuration}
             onTogglePlay={togglePlay}
             caption={captionText}
-            captionWords={captionData?.words}
-            captionActiveIdx={captionData?.activeIdx ?? -1}
-            captionKeyIdx={captionData?.keyIdx}
             hasTranscript={!!transcript}
             currentTime={videoTime}
             posterMediaId={mediaId}
@@ -594,7 +636,20 @@ export function EditorShell({ clipId }: { clipId: string }) {
               </button>
               <span>속성</span>
             </div>
-            <EditorPanel state={state} update={panelUpdate} applyTpl={applyTpl} kfSel={kfSel} setKfSel={setKfSel} />
+            {/* frames·currentTime·onSeek 은 패널이 이미 받는 prop 인데 안 넘겨서 죽어 있었다 —
+                프레임 템플릿 목록·"현재 시간에 키프레임 추가"·키프레임 탐색이 여기에 달려 있다. */}
+            <EditorPanel
+              state={state}
+              update={panelUpdate}
+              applyTpl={applyTpl}
+              frames={frames}
+              kfSel={kfSel}
+              setKfSel={setKfSel}
+              currentTime={videoTime}
+              onSeek={(sec) => {
+                if (videoEl) videoEl.currentTime = sec;
+              }}
+            />
           </aside>
         ) : (
           <div className="hidden w-10 shrink-0 flex-col items-center border-l border-zinc-800 bg-zinc-950 py-2 md:flex">
@@ -626,12 +681,17 @@ export function EditorShell({ clipId }: { clipId: string }) {
           // "첫 3초 훅" 토글의 실제 렌더 가능 여부 — clip 에 hook 시각이 있어야 프리롤이 붙는다.
           hookAvailable={typeof clip?.hookTimeSec === "number"}
         />
+        {/* 서버 렌더는 tracks[0] 만 합성한다(renderClipMedia·export). 추가 트랙은 저장은 되지만
+            결과물에 절대 나오지 않아, 될 것처럼 보이지 않게 비활성 + 사유를 붙였다. */}
         <button
           onClick={addTrack}
-          className="mt-2 inline-flex items-center gap-1 rounded-md border border-dashed border-zinc-700 px-2 py-1 text-xs text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
+          disabled
+          title="다중 트랙 렌더 미지원 — 서버가 첫 번째 트랙만 합성합니다."
+          className="mt-2 inline-flex items-center gap-1 rounded-md border border-dashed border-zinc-700 px-2 py-1 text-xs text-zinc-400 disabled:cursor-not-allowed disabled:opacity-50"
         >
           <Plus className="size-3.5" /> 트랙 추가
         </button>
+        <span className="ml-2 text-[11px] text-zinc-600">다중 트랙 렌더 준비 중</span>
       </footer>
     </div>
   );
@@ -747,8 +807,10 @@ function MetadataButton({
               </div>
             )}
 
-            <div className="mt-3 border-t border-zinc-800 pt-2 text-[11px] text-zinc-500">
-              배포 시 여기 값이 YouTube 업로드 필드로 전송됩니다.
+            {/* 실제 업로드 페이로드는 worker.ts 가 clip.title/synopsis/tags 로 만든다 —
+                uploadMeta 는 아직 어디서도 읽히지 않으므로 "전송됩니다"는 사실이 아니었다. */}
+            <div className="mt-3 border-t border-zinc-800 pt-2 text-[11px] text-amber-400/80">
+              현재 업로드는 클립의 제목·시놉시스·태그를 사용합니다 — 여기서 편집한 값은 아직 배포에 반영되지 않습니다(배선 준비 중).
             </div>
           </div>
         </>

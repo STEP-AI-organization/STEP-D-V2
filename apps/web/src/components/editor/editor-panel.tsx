@@ -18,7 +18,6 @@ import {
 import { cn } from "@/lib/utils";
 import { frameOverlaySrc, type FrameTemplate } from "@/lib/data/api";
 import { Button } from "@/components/ui/button";
-import { ImageCropButton } from "@/components/editor/image-crop";
 import {
   ASPECTS,
   BG_SWATCHES,
@@ -138,6 +137,18 @@ export function EditorPanel({
 // ── shared bits ──────────────────────────────────────────────────────────────
 function Label({ children }: { children: React.ReactNode }) {
   return <div className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-zinc-500">{children}</div>;
+}
+/** 프리뷰에는 그려지지만 서버 렌더가 읽지 않는 항목 표기 — 미리보기와 결과물이 다르다는 사실을
+ *  컨트롤 옆에 붙여 둔다(기능은 유지, 오해만 제거). */
+function PreviewOnly({ reason }: { reason: string }) {
+  return (
+    <span
+      title={reason}
+      className="ml-1.5 rounded bg-amber-500/15 px-1 py-px text-[9px] font-medium normal-case tracking-normal text-amber-300"
+    >
+      미리보기 전용
+    </span>
+  );
 }
 function Toggle({ on, onChange, label }: { on: boolean; onChange: () => void; label: string }) {
   return (
@@ -346,8 +357,17 @@ function ChannelTab({ state, update }: { state: EditorState; update: Update }) {
         <Label>채널명</Label>
         <input value={state.channelName} onChange={(e) => update({ channelName: e.target.value })} className={field} />
       </div>
+      {/* 서버 번인(index.ts buildEditorAss)은 "▶ 채널명" 한 줄 + 세로 위치만 굽는다.
+          아이콘·뱃지·크기·부가 줄은 ASS 로 표현할 수 없어 결과물에 안 나온다. */}
+      <div className="rounded-md border border-dashed border-zinc-700 p-2 text-[11px] text-zinc-400">
+        결과물에 실제로 구워지는 값은 <b>채널 표시 · 채널명 · 세로 위치</b>뿐입니다. 아래 아이콘·뱃지·크기·부가
+        줄은 미리보기에만 적용됩니다.
+      </div>
       <div>
-        <Label>채널 아이콘</Label>
+        <Label>
+          채널 아이콘
+          <PreviewOnly reason="아이콘 합성은 렌더 미지원 — 결과물에는 채널명 텍스트만 들어갑니다." />
+        </Label>
         <ImagePickField
           value={state.channelIconDataUrl}
           onChange={(dataUrl) => update({ channelIconDataUrl: dataUrl })}
@@ -378,7 +398,10 @@ function ChannelTab({ state, update }: { state: EditorState; update: Update }) {
         </div>
       </div>
       <div>
-        <Label>뱃지 스타일</Label>
+        <Label>
+          뱃지 스타일
+          <PreviewOnly reason="뱃지 레이아웃·모양은 렌더 미지원 — 결과물에는 채널명 텍스트만 들어갑니다." />
+        </Label>
         <div className="grid grid-cols-2 gap-1.5">
           {CHANNEL_BADGE_PRESETS.map((p) => {
             const active = state.channelBadgeTemplate === p.id;
@@ -399,7 +422,10 @@ function ChannelTab({ state, update }: { state: EditorState; update: Update }) {
         </div>
       </div>
       <div>
-        <Label>아이콘 크기 {state.channelIconSize ?? 24}px</Label>
+        <Label>
+          아이콘 크기 {state.channelIconSize ?? 24}px
+          <PreviewOnly reason="아이콘 자체가 렌더에 없으므로 크기도 결과물에 반영되지 않습니다." />
+        </Label>
         <input
           type="range"
           min={12}
@@ -410,7 +436,10 @@ function ChannelTab({ state, update }: { state: EditorState; update: Update }) {
         />
       </div>
       <div>
-        <Label>글자 크기 {state.channelLabelSize ?? 14}px</Label>
+        <Label>
+          글자 크기 {state.channelLabelSize ?? 14}px
+          <PreviewOnly reason="렌더는 기준 14px 고정(index.ts) — 이 값은 미리보기에만 적용됩니다." />
+        </Label>
         <input
           type="range"
           min={10}
@@ -421,7 +450,10 @@ function ChannelTab({ state, update }: { state: EditorState; update: Update }) {
         />
       </div>
       <div>
-        <Label>부가 줄</Label>
+        <Label>
+          부가 줄
+          <PreviewOnly reason="렌더는 채널명 한 줄만 굽습니다 — 부가 줄은 결과물에서 빠집니다." />
+        </Label>
         <div className="space-y-2">
           {(state.channelExtraLines ?? []).map((line) => {
             const size = line.size ?? Math.round((state.channelLabelSize ?? 14) * 0.75);
@@ -547,18 +579,22 @@ function LayoutTab({ state, update, applyTpl, frames = [] }: { state: EditorStat
         <Label>배경 채우기</Label>
         <div className="grid grid-cols-3 gap-1">
           {[
-            { k: "solid" as const, label: "단색" },
-            { k: "blur" as const, label: "영상 블러" },
-            { k: "image" as const, label: "이미지" },
+            { k: "solid" as const, label: "단색", disabled: false },
+            { k: "blur" as const, label: "영상 블러", disabled: false },
+            // ffmpeg.ts 가 image 를 solid 로 강등한다(렌더 파이프라인 미지원) — 고를 수 없게 막는다.
+            { k: "image" as const, label: "이미지", disabled: true },
           ].map((o) => {
             const active = (state.bgType ?? "solid") === o.k;
             return (
               <button
                 key={o.k}
                 onClick={() => update({ bgType: o.k })}
+                disabled={o.disabled}
+                title={o.disabled ? "이미지 배경은 렌더 미지원 — 단색으로 렌더됩니다." : undefined}
                 className={cn(
                   "rounded-md border py-1.5 text-xs",
                   active ? "border-zinc-400 bg-zinc-800 text-white" : "border-zinc-700 text-zinc-400",
+                  o.disabled && "cursor-not-allowed opacity-45",
                 )}
               >
                 {o.label}
@@ -566,43 +602,23 @@ function LayoutTab({ state, update, applyTpl, frames = [] }: { state: EditorStat
             );
           })}
         </div>
-        {/* solid: 단색 스와치 · image: 업로드 필드 · blur: 옵션 없음(원본 그대로) */}
+        {/* solid: 단색 스와치 · blur: 옵션 없음(원본 그대로) */}
         {(state.bgType ?? "solid") === "solid" && (
           <div className="mt-2">
             <Swatches colors={BG_SWATCHES} value={state.bg} onPick={(c) => update({ bg: c })} />
           </div>
         )}
+        {/* 예전에 이미지 배경을 고른 상태만 여기로 온다 — 업로드·크롭 UI 는 렌더가 무시하는 데다
+            2MB base64 가 editorState 저장 본문에 그대로 실려서 아예 띄우지 않는다. */}
         {state.bgType === "image" && (
-          <div className="mt-2 space-y-2">
-            <ImagePickField
-              value={state.bgImageDataUrl}
-              onChange={(dataUrl) => update({ bgImageDataUrl: dataUrl, bgImageCrop: undefined })}
-              onClear={() => update({ bgImageDataUrl: undefined, bgImageCrop: undefined })}
-              maxBytes={2 * 1024 * 1024}
-              hint="영상 뒤 배경 · 최대 2MB"
-            />
-            {state.bgImageDataUrl && (
-              <div className="flex items-center gap-2">
-                <ImageCropButton
-                  src={state.bgImageDataUrl}
-                  targetAspect={ASPECTS[state.aspect].ratio}
-                  value={state.bgImageCrop}
-                  onChange={(v) => update({ bgImageCrop: v })}
-                  label={state.bgImageCrop ? "영역 다시 선택" : "영역 선택"}
-                />
-                {state.bgImageCrop && (
-                  <button
-                    onClick={() => update({ bgImageCrop: undefined })}
-                    className="rounded-md border border-zinc-700 px-2 py-1 text-[11px] text-zinc-400 hover:bg-zinc-800"
-                  >
-                    영역 초기화
-                  </button>
-                )}
-                <span className="text-[11px] text-zinc-500">
-                  종횡비 {state.aspect} 고정
-                </span>
-              </div>
-            )}
+          <div className="mt-2 flex flex-wrap items-center gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 p-2 text-[11px] text-amber-200">
+            <span>이미지 배경은 렌더 미지원이라 단색으로 렌더됩니다.</span>
+            <button
+              onClick={() => update({ bgType: "solid", bgImageDataUrl: undefined, bgImageCrop: undefined })}
+              className="rounded-md border border-amber-400/40 px-2 py-0.5 text-amber-100 hover:bg-amber-500/20"
+            >
+              단색으로 전환
+            </button>
           </div>
         )}
       </div>
@@ -631,8 +647,10 @@ function CaptionsTab({ state, update }: { state: EditorState; update: Update }) 
         <Label>키워드 색</Label>
         <Swatches colors={COLOR_SWATCHES} value={state.keywordColor ?? state.highlightColor} onPick={(c) => update({ keywordColor: c })} />
       </div>
+      {/* 단어별 색은 서버 렌더(buildEditorAss)만 굽는다 — 프리뷰는 세그먼트 통째로 그린다. */}
       <div className="rounded-md border border-dashed border-zinc-700 p-2 text-[11px] text-zinc-400">
-        자막은 STT(말자막)로 단어별로 켜집니다 — 말하는 단어는 <b>강조 색</b>, 핵심 단어는 <b>키워드 색</b>으로 표시됩니다. 원본에 자막이 있으면 자동으로 건너뜁니다.
+        자막은 STT(말자막) 기준으로, 확정(렌더) 결과물에서 말하는 단어는 <b>강조 색</b>, 핵심 단어는{" "}
+        <b>키워드 색</b>으로 구워집니다. <b>미리보기에서는 단어별 색 강조가 표시되지 않습니다.</b>
       </div>
     </>
   );

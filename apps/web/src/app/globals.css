@@ -78,14 +78,16 @@
      Canvas #0a0a0a · cards #161616 · panels/modals #131313 · borders #262626/#232323
      · text #eceef2 · muted #9a9a9a/#707070. Committed dark surfaces, no shadows —
      depth reads via lightness + borders. ─────────────────────────────────────── */
-  --background: 0 0% 4%; /* #0a0a0a canvas */
+  /* 중성 그레이 대신 브랜드 인디고(hue 232)를 낮은 채도로 섞은 블루-틴티드 뉴트럴.
+     명도는 기존 스케일(4 / 8.5 / 7.5 / 5.5%) 그대로라 대비·깊이는 유지된다. */
+  --background: 232 24% 5%; /* 캔버스 — 구 #0a0a0a */
   --foreground: 220 16% 94%; /* #eceef2 */
-  --card: 0 0% 8.5%; /* #161616 content cards */
+  --card: 232 18% 10%; /* 콘텐츠 카드 — 구 #161616 */
   --card-foreground: 220 16% 94%;
-  --popover: 0 0% 7.5%; /* #131313 modals / menus */
+  --popover: 232 20% 9%; /* 모달 / 메뉴 — 구 #131313 */
   --popover-foreground: 220 16% 94%;
-  --panel: 0 0% 7.5%; /* #131313 sidebar / modal chrome */
-  --elevated: 0 0% 5.5%; /* #0e0e0e inset tracks / wells */
+  --panel: 232 20% 9%; /* 사이드바 / 모달 크롬 */
+  --elevated: 232 22% 7%; /* inset 트랙 / well */
 
   /* Two indigos: #6b74f0 fills primary buttons & active pips (white text);
      #8b93ff (--brand) carries links, eyebrows, active-nav icons on the near-black
@@ -94,16 +96,16 @@
   --primary-foreground: 0 0% 100%;
   --brand: 234 100% 77%; /* #8b93ff */
 
-  --secondary: 0 0% 12%; /* #1e1e1e secondary buttons / hover fills */
-  --secondary-foreground: 0 0% 81%; /* #cfcfcf */
-  --muted: 0 0% 5.5%; /* #0e0e0e wells */
-  --muted-foreground: 0 0% 60%; /* #9a9a9a */
-  --accent: 0 0% 12%; /* #1e1e1e hover surface */
+  --secondary: 232 16% 14%; /* secondary 버튼 / hover fill */
+  --secondary-foreground: 225 12% 82%;
+  --muted: 232 22% 7%; /* well */
+  --muted-foreground: 225 10% 62%;
+  --accent: 232 16% 14%; /* hover surface */
   --accent-foreground: 220 16% 94%;
   --destructive: 353 100% 71%; /* #ff6b78 */
   --destructive-foreground: 0 0% 100%;
-  --border: 0 0% 15%; /* #262626 card borders */
-  --input: 0 0% 17%; /* #2b2b2b form controls */
+  --border: 232 15% 18%; /* 카드 보더 */
+  --input: 232 15% 21%; /* 폼 컨트롤 */
   --ring: 235 82% 68%;
 
   /* Pipeline / distribution semantics — prototype hues.

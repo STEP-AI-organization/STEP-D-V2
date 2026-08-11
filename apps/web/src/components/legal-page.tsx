@@ -21,7 +21,9 @@ export function LegalPage({
         <header className="mb-12 border-b border-zinc-800 pb-8">
           {/* App icon must be visible at the top of the legal pages — required by
               the TikTok / Google app review checklists. */}
-          <Link href="/" className="flex items-center gap-3 text-zinc-400 hover:text-zinc-200 transition">
+          {/* "/" 는 대시보드로 리다이렉트돼 AuthGuard 가 로그인으로 튕긴다 — 이 페이지들은
+              로그인 없이 도달할 수 있어야 하므로 공개 랜딩으로 보낸다. */}
+          <Link href="/landing" className="flex items-center gap-3 text-zinc-400 hover:text-zinc-200 transition">
             <img
               src="/brand/stepd-icon-192.png"
               alt="STEP D 앱 아이콘"

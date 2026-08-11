@@ -15,11 +15,7 @@
  */
 
 import type ExcelJSNS from "exceljs";
-import {
-  channelLabel,
-  CLIP_TYPES,
-  type DistributionChannel,
-} from "@/lib/constants";
+import { channelLabel, CLIP_TYPES } from "@/lib/constants";
 import type { Clip, DistributionState, Episode, Program } from "@/lib/types";
 
 export interface ExportData {
@@ -28,33 +24,55 @@ export interface ExportData {
   clips: Clip[];
 }
 
-/** Rough per-channel view estimate (matches the analytics screen). Real figures wire in at M6. */
-const EST_VIEWS: Record<DistributionChannel, number> = {
-  youtube: 124000,
-  instagram: 25000,
-  facebook: 20000,
-  tiktok: 40000,
-  smr: 82000,
-};
-
+/**
+ * 상태 라벨.
+ *
+ * `recorded` 를 빠뜨리면 Meta·TikTok·SMR 건이 영문 'recorded' 로 찍혀서, **실제 게시**와
+ * **상태 기록만 한 것**의 구분이 내보낸 파일에서 사라진다. 라벨에 그 차이를 적어 둔다.
+ */
 const DIST_STATUS_LABEL: Record<string, string> = {
   published: "게시됨",
+  recorded: "기록됨(실업로드 아님)",
   scheduled: "예약됨",
   pending: "업로드 중",
   failed: "실패",
   none: "—",
 };
 
-/** Parse a v2 reserve string "YYYYMMDDHHmmss" → Date (mirrors reports.ts parseReserveDate). */
+/**
+ * 예약 시각 문자열 → Date.
+ *
+ * 형식이 두 가지다. 실제로 저장되는 값은 배포 모달의 `<input type="datetime-local">` 그대로인
+ * `"2026-08-11T10:00"`(초가 붙으면 19자)이고, 서버·워커는 이 문자열을 가공 없이 넘긴다.
+ * `"YYYYMMDDHHmmss"` 14자리는 구 STEPD(reports.ts) 유산이라 옛 데이터에만 남아 있다.
+ * **14자리만 받던 시절엔 이 열이 프로덕션에서 늘 빈칸이었다** — 둘 다 받는다.
+ */
 export function parseReserveDate(reserveDate: string | null | undefined): Date | null {
-  if (!reserveDate || reserveDate.length !== 14) return null;
-  const y = Number(reserveDate.slice(0, 4));
-  const mo = Number(reserveDate.slice(4, 6)) - 1;
-  const d = Number(reserveDate.slice(6, 8));
-  const h = Number(reserveDate.slice(8, 10));
-  const mi = Number(reserveDate.slice(10, 12));
-  const s = Number(reserveDate.slice(12, 14));
-  return new Date(y, mo, d, h, mi, s);
+  if (!reserveDate) return null;
+
+  if (/^\d{14}$/.test(reserveDate)) {
+    const y = Number(reserveDate.slice(0, 4));
+    const mo = Number(reserveDate.slice(4, 6)) - 1;
+    const d = Number(reserveDate.slice(6, 8));
+    const h = Number(reserveDate.slice(8, 10));
+    const mi = Number(reserveDate.slice(10, 12));
+    const s = Number(reserveDate.slice(12, 14));
+    return new Date(y, mo, d, h, mi, s);
+  }
+
+  // datetime-local 은 타임존이 없는 로컬 시각이다. new Date("...T10:00") 는 브라우저마다
+  // UTC 로 읽는 경우가 있어 직접 분해한다.
+  const m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/.exec(reserveDate);
+  if (!m) return null;
+  const dt = new Date(
+    Number(m[1]),
+    Number(m[2]) - 1,
+    Number(m[3]),
+    Number(m[4]),
+    Number(m[5]),
+    Number(m[6] ?? 0),
+  );
+  return Number.isNaN(dt.getTime()) ? null : dt;
 }
 
 function clipTypeLabel(clipType: string): string {
@@ -127,8 +145,9 @@ function addYoutubeMetadataSheets(
 
 /**
  * v2 extension — all-channel distribution records (clip × channel × status ×
- * 공개일시 × 성과). Same column DNA/formatting as the STEPD sheet, widened to the
- * full channel matrix the operator works across.
+ * 공개일시). Same column DNA/formatting as the STEPD sheet, widened to the
+ * full channel matrix the operator works across. 성과(조회수) 컬럼은 없다 —
+ * 실 지표 배선 전까지는 비워 두는 것보다 컬럼 자체가 없는 편이 오해가 적다.
  */
 function addDistributionRecordsSheet(
   workbook: ExcelJSNS.Workbook,
@@ -145,7 +164,9 @@ function addDistributionRecordsSheet(
     { header: "채널", key: "channel", width: 12 },
     { header: "상태", key: "status", width: 10 },
     { header: "URL", key: "url", width: 30 },
-    { header: "예상조회수", key: "estViews", width: 12 },
+    // 조회수 컬럼은 뺐다 — 채널별 하드코딩 상수를 "예상조회수" 로 내보내면 모든 YouTube 행이
+    // 같은 값으로 찍혀서 파일만 보는 사람에게는 실측치처럼 유통된다. 실제 지표를
+    // /api/youtube/analytics 에서 채우게 되면 그때 되살린다.
     { header: "내용", key: "synopsis", width: 44 },
   ];
   sheet.getRow(1).font = { bold: true };
@@ -165,11 +186,9 @@ function addDistributionRecordsSheet(
         channel: channelLabel(dist.channel),
         status: DIST_STATUS_LABEL[dist.status] ?? dist.status,
         url: dist.channel === "youtube" && dist.externalId ? youtubeUrl(dist.externalId) : "",
-        estViews: dist.status === "published" ? EST_VIEWS[dist.channel] : "",
         synopsis: clip.synopsis ?? "",
       });
       if (publishedAt) row.getCell("publishedAt").numFmt = "yyyy-mm-dd hh:mm";
-      row.getCell("estViews").numFmt = "#,##0";
       rowCount += 1;
     }
   }

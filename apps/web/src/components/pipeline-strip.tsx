@@ -9,9 +9,31 @@ import type { EpisodePipeline } from "@/lib/types";
  * check, the current stage fills with the brand indigo, later stages stay muted
  * — joined by connector lines that light up once a stage is done. Answers
  * "이 회차 지금 어디까지?" at a glance.
+ *
+ * **서버가 실제로 기록하는 단계만 그린다.** PIPELINE_STAGES 8개 중 서버 writer 가 쓰는
+ * 값은 analyze·recommend 뿐이고(store 폴백이 source), merge·split·edit·encode·publish 는
+ * 아무도 쓰지 않는다 — 다 그리면 병합·분할이 저절로 체크되고 배포까지 끝난 회차도
+ * 편집·인코딩·배포가 영원히 미완으로 남아 상태를 거짓말한다.
  */
+const STRIP_STAGES: PipelineStage[] = PIPELINE_STAGES.filter(
+  (s) => s === "source" || s === "analyze" || s === "recommend",
+);
+
+/**
+ * 스트립에 없는 stage(merge·split·edit·encode·publish)를 가장 가까운 스트립 단계로 접는다.
+ * 폴백이 없으면 indexOf 가 -1 이라 모든 단계가 todo(빈 동그라미)로 그려져 진행도 0인 것처럼
+ * 거짓말한다 — 서버는 지금 analyze·recommend 만 쓰지만 로컬 더미 시드는 edit/encode/publish 를 쓴다.
+ */
+function stripIndexOf(stage: PipelineStage): number {
+  const idx = STRIP_STAGES.indexOf(stage);
+  if (idx >= 0) return idx;
+  // 추천 이후 단계는 스트립을 다 지난 것으로, 소스 주변 단계는 소스로 접는다.
+  if (stage === "edit" || stage === "encode" || stage === "publish") return STRIP_STAGES.length - 1;
+  return 0;
+}
+
 export function PipelineStrip({ pipeline }: { pipeline: EpisodePipeline }) {
-  const currentIdx = PIPELINE_STAGES.indexOf(pipeline.stage);
+  const currentIdx = stripIndexOf(pipeline.stage);
 
   function stateOf(idx: number): "done" | "current" | "todo" {
     if (idx < currentIdx) return "done";
@@ -21,7 +43,7 @@ export function PipelineStrip({ pipeline }: { pipeline: EpisodePipeline }) {
 
   return (
     <div className="flex items-center overflow-x-auto">
-      {PIPELINE_STAGES.map((stage: PipelineStage, idx) => {
+      {STRIP_STAGES.map((stage: PipelineStage, idx) => {
         const state = stateOf(idx);
         return (
           <div key={stage} className="flex flex-none items-center">
@@ -49,7 +71,7 @@ export function PipelineStrip({ pipeline }: { pipeline: EpisodePipeline }) {
                 {PIPELINE_STAGE_LABELS[stage]}
               </span>
             </div>
-            {idx < PIPELINE_STAGES.length - 1 && (
+            {idx < STRIP_STAGES.length - 1 && (
               <span
                 aria-hidden
                 className={cn(

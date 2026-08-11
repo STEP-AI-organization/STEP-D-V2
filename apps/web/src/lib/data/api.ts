@@ -254,6 +254,50 @@ export async function fetchEpisodeCast(mediaId: string): Promise<EpisodeCastResp
   return res.json();
 }
 
+export type EpisodeCastStatus = "confirmed" | "rejected" | "candidate" | "matched";
+
+/** 서버가 400/404 로 돌려주는 사유를 그대로 화면까지 올린다 — 인물 판단은 사람 몫이라 실패를 삼키면 안 된다. */
+async function castJson<T>(res: Response): Promise<T> {
+  if (!res.ok) {
+    const body = (await res.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(body?.error ?? `${res.status} ${res.statusText}`);
+  }
+  return (await res.json()) as T;
+}
+
+/** 인물 확정/제외 — 파이프라인은 후보를 제안만 하고, confirmed 로 가는 유일한 경로가 이 라우트다. */
+export async function setEpisodeCastStatus(
+  mediaId: string,
+  name: string,
+  status: EpisodeCastStatus,
+  castId?: string,
+): Promise<EpisodeCastPerson> {
+  const r = await castJson<{ person: EpisodeCastPerson }>(
+    await fetch(`${API_BASE}/media/${mediaId}/cast/${encodeURIComponent(name)}/status`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status, ...(castId ? { castId } : {}) }),
+    }),
+  );
+  return r.person;
+}
+
+/** 후보를 프로그램 명단에 등록 + 이 회차 확정까지 한 번에 (다음 회차부터 자동 매칭). */
+export async function registerEpisodeCast(
+  mediaId: string,
+  name: string,
+  input?: { name?: string; role?: string; aliases?: string[] },
+): Promise<EpisodeCastPerson> {
+  const r = await castJson<{ person: EpisodeCastPerson }>(
+    await fetch(`${API_BASE}/media/${mediaId}/cast/${encodeURIComponent(name)}/register`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input ?? {}),
+    }),
+  );
+  return r.person;
+}
+
 /** Re-run the AI content pipeline for a media (operator recovery from a failed analysis).
  *  cast/profile 등이 바뀌면 fingerprint에서 걸러 필요한 스테이지만 재실행됨. fast=true면 정밀 스테이지 스킵. */
 export async function reanalyzeMedia(mediaId: string, fast = false): Promise<{ ok: boolean; queued: boolean }> {
@@ -282,8 +326,9 @@ export interface CreateProgramInput {
   section?: string;
   targetAge?: number;
   cast?: string[];
-  /** 파이프라인 분기 축(variety|drama). 미설정이면 워커가 auto 판정. */
-  pipelineGenre?: "variety" | "drama";
+  /** 파이프라인 분기 축(variety|drama). 미설정이면 워커가 auto 판정.
+   *  ""를 보내면 서버가 필드를 삭제한다(= 지정 해제 → auto 판정으로 복귀). */
+  pipelineGenre?: "variety" | "drama" | "";
   /** SMR feed metadata (program-level). */
   programCode?: string;
   category?: string;
@@ -1146,18 +1191,6 @@ export async function fetchGateBatch(
       body: JSON.stringify({ subjectType, subjectIds }),
     }),
   );
-}
-
-export async function fetchRightsIssues(
-  subjectType: GateSubjectType,
-  subjectId: string,
-): Promise<RightsIssue[]> {
-  const r = await json<{ issues: RightsIssue[] }>(
-    await fetch(`${API_BASE}/rights-issues?subjectType=${subjectType}&subjectId=${encodeURIComponent(subjectId)}`, {
-      cache: "no-store",
-    }),
-  );
-  return r.issues;
 }
 
 /** 이슈 등록 — **사람만.** actor 없이 부르면 서버가 400 을 준다. */

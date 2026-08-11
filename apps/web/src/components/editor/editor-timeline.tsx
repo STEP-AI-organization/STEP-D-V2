@@ -28,6 +28,10 @@ const MAX_ZOOM = 8; // 800%
 // place transition zones on the seam between adjacent track lanes.
 const LANE_H = 40;
 const LANE_GAP = 4;
+// 분할(Ctrl+B)은 오른쪽 조각을 새 트랙으로 보내는데, 서버 렌더는 tracks[0] 만 합성한다 —
+// 즉 지금 분할하면 뒷부분이 결과물에서 조용히 사라진다. renderShort 가 다중 트랙을
+// 합성하게 되면 다시 true 로 되돌린다 (기능 삭제 아님).
+const SPLIT_ENABLED: boolean = false;
 
 const clampSpeed = (v: number) => Math.min(SPEED_MAX, Math.max(SPEED_MIN, v));
 // Log2 mapping so 1× sits mid-lane: lane top = 4×, bottom = 0.25×.
@@ -391,6 +395,7 @@ export function EditorTimeline({
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (!SPLIT_ENABLED) return;
       if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== "b") return;
       const tgt = e.target as HTMLElement | null;
       if (tgt && (tgt.tagName === "INPUT" || tgt.tagName === "TEXTAREA" || tgt.isContentEditable)) return;
@@ -464,7 +469,7 @@ export function EditorTimeline({
           컷 길이 {formatTimecode(trimmedLen)}
         </span>
         <span className={cn("hidden text-[11px] md:inline", rampMode ? "text-amber-400" : "text-zinc-600")}>
-          {rampMode ? "클릭: 속도 키프레임 추가 · 드래그↕: 속도 · 우클릭: 삭제" : "휠: 줌 · Ctrl+B: 분할"}
+          {rampMode ? "클릭: 속도 키프레임 추가 · 드래그↕: 속도 · 우클릭: 삭제" : "휠: 줌 · Shift+휠: 좌우 이동"}
         </span>
 
         <div className="ml-auto flex items-center gap-2">
@@ -475,7 +480,16 @@ export function EditorTimeline({
           >
             <Gauge className="size-3.5" /> {state.speed}×
           </button>
-          <HookToggle icon={TrendingUp} label="속도 램핑" on={rampMode} onClick={() => setRampMode((v) => !v)} />
+          {/* 서버 uniformSpeed()는 speedPoints 가 하나라도 있으면 배속을 1× 로 강제한다 —
+              램핑은 렌더에 안 들어갈 뿐 아니라 고른 기본 배속까지 무효화한다. */}
+          <HookToggle
+            icon={TrendingUp}
+            label="속도 램핑"
+            on={rampMode}
+            onClick={() => setRampMode((v) => !v)}
+            disabled
+            title="가변속 렌더 미지원 — 기본 배속만 결과물에 반영됩니다."
+          />
           <HookToggle
             icon={Sparkles}
             label="첫 3초 훅"
@@ -487,7 +501,15 @@ export function EditorTimeline({
                 : "ON 시 렌더(확정)할 때 hook 구간 첫 3초를 프리롤로 앞에 붙입니다 (이탈 방지)."
             }
           />
-          <HookToggle icon={Volume2} label="무음 제거" on={state.silenceCut} onClick={() => update({ silenceCut: !state.silenceCut })} />
+          {/* silenceCut 을 읽는 서버 코드가 없다 — 켜두면 저장까지 되어 '적용됨'처럼 보였다. */}
+          <HookToggle
+            icon={Volume2}
+            label="무음 제거"
+            on={state.silenceCut}
+            onClick={() => update({ silenceCut: !state.silenceCut })}
+            disabled
+            title="무음 제거 렌더 미지원 — 준비 중입니다."
+          />
         </div>
       </div>
 
@@ -707,8 +729,9 @@ export function EditorTimeline({
                   );
                 })}
               </div>
-              {/* transition zones — on the seam between adjacent lanes, at the incoming
-                  track's start. Click: cut ⇄ crossfade · Shift+drag: crossfade duration. */}
+              {/* transition zones — on the seam between adjacent lanes, at the incoming track's
+                  start. 현재는 표시 전용(비활성): index.ts 에 track.transition 을 읽는 코드가
+                  없어 컷/크로스페이드 선택이 결과물에 반영되지 않는다. */}
               {trackList.map((tr, i) => {
                 if (i === 0) return null;
                 const transition = tr.transition ?? { type: "cut" as const, duration: 0 };
@@ -729,11 +752,12 @@ export function EditorTimeline({
                         setXfDrag({ trackId: tr.id, startX: e.clientX, startDur: transition.duration });
                       }
                     }}
+                    disabled
                     className={cn(
-                      "absolute z-30 flex -translate-y-1/2 items-center justify-center overflow-hidden whitespace-nowrap rounded border text-[9px] font-bold",
+                      "absolute z-30 flex -translate-y-1/2 cursor-not-allowed items-center justify-center overflow-hidden whitespace-nowrap rounded border text-[9px] font-bold opacity-50",
                       isXf
                         ? "border-fuchsia-400/80 text-fuchsia-100"
-                        : "-translate-x-1/2 border-zinc-600 bg-zinc-900 text-zinc-400 hover:border-fuchsia-400 hover:text-fuchsia-300",
+                        : "-translate-x-1/2 border-zinc-600 bg-zinc-900 text-zinc-400",
                     )}
                     style={
                       isXf
@@ -748,7 +772,7 @@ export function EditorTimeline({
                           }
                         : { left: pct(tr.trimIn), top: centerY, height: 16, width: 16 }
                     }
-                    title={isXf ? "크로스페이드 — 클릭: 컷으로 · Shift+드래그: 길이 조절" : "컷 전환 — 클릭: 크로스페이드"}
+                    title="전환(크로스페이드) 렌더 미지원 — 서버가 트랙 간 합성을 아직 안 합니다."
                   >
                     {isXf ? `XF ${transition.duration.toFixed(1)}s` : "‖"}
                   </button>
@@ -836,8 +860,12 @@ export function EditorTimeline({
           />
         </label>
 
+        {/* 번인 자막은 원본 STT 절대 시각을 그대로 쓴다(index.ts windowCaptions·buildEditorAss) —
+            offsetMs 는 아직 렌더에 안 들어가므로 미리보기 전용임을 라벨에 박아둔다. */}
         <div className="ml-auto flex items-center gap-1">
-          <span>싱크</span>
+          <span title="자막 미리보기 타이밍만 조정합니다 — 확정(렌더) 결과물에는 반영되지 않습니다.">
+            싱크 <span className="text-zinc-600">(미리보기 전용)</span>
+          </span>
           <button onClick={() => update({ offsetMs: state.offsetMs - 100 })}
             title="큰 스텝 -100ms"
             className="rounded border border-zinc-700 px-1.5 py-0.5 hover:bg-zinc-800">
@@ -887,20 +915,25 @@ function HookToggle({
   on,
   onClick,
   title,
+  disabled,
 }: {
   icon: typeof Sparkles;
   label: string;
   on: boolean;
   onClick: () => void;
   title?: string;
+  /** 렌더가 읽지 않는 토글은 켜지지 않게 막고 사유를 title 로 붙인다. */
+  disabled?: boolean;
 }) {
   return (
     <button
       onClick={onClick}
       title={title}
+      disabled={disabled}
       className={cn(
         "inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs transition-colors",
         on ? "border-emerald-500/60 bg-emerald-500/15 text-emerald-300" : "border-zinc-700 text-zinc-400 hover:bg-zinc-800",
+        disabled && "cursor-not-allowed opacity-45 hover:bg-transparent",
       )}
     >
       <Icon className="size-3.5" /> {label}

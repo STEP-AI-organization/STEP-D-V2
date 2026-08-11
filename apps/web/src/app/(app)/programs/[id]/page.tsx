@@ -11,10 +11,11 @@
  * 옮겼다. 홈은 읽는 화면이다.
  */
 import Link from "next/link";
-import { useParams } from "next/navigation";
-import { useMemo } from "react";
+import { useParams, useRouter } from "next/navigation";
+import { useMemo, useState } from "react";
 
 import { UploadVideoButton } from "@/components/upload-video-dialog";
+import { useToast } from "@/components/ui/toast";
 import { PIPELINE_STAGE_LABELS } from "@/lib/constants";
 import { clipThumbSrc, mediaThumbSrc } from "@/lib/media-url";
 import { useAppData } from "@/lib/data/store";
@@ -37,7 +38,10 @@ const TRACK_LABEL: Record<string, string> = { variety: "예능 트랙", drama: "
 export default function ProgramHomePage() {
   const params = useParams<{ id: string }>();
   const id = params?.id ?? "";
-  const { programs, episodes, clips, media, loading } = useAppData();
+  const { programs, episodes, clips, media, loading, deleteProgram } = useAppData();
+  const router = useRouter();
+  const { toast } = useToast();
+  const [deleting, setDeleting] = useState(false);
 
   const program = programs.find((p) => p.id === id);
 
@@ -79,6 +83,37 @@ export default function ProgramHomePage() {
   const published = programClips.filter((c) =>
     (c.distributions ?? []).some((d) => d.status === "published"),
   ).length;
+
+  // 되돌릴 수 없는 작업이라 confirm 한 번으로 끝내지 않는다 — 회차가 있으면 무엇이 함께
+  // 지워지는지(미디어·추천·클립·GCS 파일) 먼저 알리고, 프로그램명을 그대로 입력해야 실행된다.
+  async function runDelete() {
+    if (!program) return;
+    const epCount = Math.max(program.episodeCount, eps.length);
+    const scope =
+      epCount > 0
+        ? `회차 ${epCount}개와 그에 딸린 미디어·추천·클립·GCS 파일이 전부 함께 삭제됩니다.`
+        : "이 프로그램에는 등록된 회차가 없습니다.";
+    if (!confirm(`프로그램 "${program.title}"을 삭제합니다.\n\n${scope}\n\n되돌릴 수 없습니다. 계속할까요?`)) return;
+    const typed = prompt(`확인을 위해 프로그램 이름을 그대로 입력하세요:\n\n${program.title}`);
+    if (typed === null) return;
+    if (typed.trim() !== program.title.trim()) {
+      toast({ title: "삭제 취소됨", description: "입력한 이름이 프로그램 이름과 다릅니다", tone: "warn" });
+      return;
+    }
+    setDeleting(true);
+    try {
+      await deleteProgram(program.id);
+      toast({ title: "프로그램 삭제됨", description: program.title, tone: "done" });
+      router.push("/programs");
+    } catch (err) {
+      toast({
+        title: "삭제 실패",
+        description: err instanceof Error ? err.message : String(err),
+        tone: "error",
+      });
+      setDeleting(false);
+    }
+  }
 
   return (
     <div className="mx-auto flex max-w-[1240px] flex-col gap-[22px]">
@@ -129,6 +164,16 @@ export default function ProgramHomePage() {
           <Link href={`/programs/${program.id}/settings`} className="sd-btn">
             프로그램 설정
           </Link>
+          <button
+            type="button"
+            onClick={runDelete}
+            disabled={deleting}
+            className="sd-btn"
+            style={{ color: "var(--sd-danger-strong)", borderColor: "var(--sd-danger-border)" }}
+            title="이 프로그램과 하위 회차·클립을 완전히 삭제 (되돌릴 수 없음)"
+          >
+            {deleting ? "삭제 중…" : "프로그램 삭제"}
+          </button>
         </div>
 
         {/* 편성 예정은 셀 숫자가 없다 — 0 세 개를 보여주면 "고장"으로 읽힌다. */}
@@ -382,7 +427,9 @@ function EndedBar({
       {rightsText && (
         <span className={cn("sd-tag", expiring && "sd-tag--danger")}>{rightsText}</span>
       )}
-      <Link href={`/search?program=${program.id}`} className="sd-btn">
+      {/* 검색 화면은 쿼리스트링을 읽지 않는다 — ?program= 을 붙이면 걸린 것처럼 보이지만
+          실제로는 '전 프로그램'으로 뜬다. 파라미터를 읽게 되면 그때 다시 붙인다. */}
+      <Link href="/search" className="sd-btn" title="검색 화면에서 프로그램을 직접 선택하세요">
         아카이브에서 장면 찾기
       </Link>
     </div>

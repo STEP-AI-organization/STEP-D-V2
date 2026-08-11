@@ -218,9 +218,14 @@ export default function ChannelsPage() {
                   onEdit={() => setEditing(editing === `${r.platform}:${r.accountId}` ? null : `${r.platform}:${r.accountId}`)}
                   onSaved={async () => { setEditing(null); await load(); }}
                   onDeleted={async () => {
-                    await deleteChannelRule(r.platform, r.accountId);
-                    toast({ title: "규칙을 지웠습니다", description: `${r.label} — 계정 연결은 그대로입니다.`, tone: "done" });
-                    await load();
+                    try {
+                      await deleteChannelRule(r.platform, r.accountId);
+                      toast({ title: "규칙을 지웠습니다", description: `${r.label} — 계정 연결은 그대로입니다.`, tone: "done" });
+                    } catch (err) {
+                      toast({ title: "규칙 삭제 실패", description: err instanceof Error ? err.message : String(err), tone: "error" });
+                    } finally {
+                      await load();
+                    }
                   }}
                 />
               ))}

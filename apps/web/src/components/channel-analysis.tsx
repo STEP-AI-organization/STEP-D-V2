@@ -11,16 +11,29 @@ import { fetchChannelDaily, type ChannelDailyRow } from "@/lib/data/api";
  */
 export function ChannelAnalysis({ channelId }: { channelId: string }) {
   const [rows, setRows] = useState<ChannelDailyRow[] | null>(null);
+  // 실패를 빈 배열로 뭉개면 "데이터 없음"과 구분이 안 된다 — 사유를 따로 들고 있는다.
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    fetchChannelDaily(channelId, 90).then(setRows).catch(() => setRows([]));
+    setError(null);
+    fetchChannelDaily(channelId, 90)
+      .then(setRows)
+      .catch((e: unknown) => {
+        setRows([]);
+        setError(e instanceof Error ? e.message : String(e));
+      });
   }, [channelId]);
 
   const summary = rows && rows.length > 0 ? summarize(rows) : null;
 
   return (
     <div className="mt-3 border-t border-border pt-3">
-      {summary ? (
+      {error ? (
+        <span className="flex items-center gap-1.5 text-xs text-status-error">
+          <BarChart3 className="w-3.5 h-3.5" />
+          분석 데이터를 불러오지 못했습니다 ({error})
+        </span>
+      ) : summary ? (
         <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs">
           <Metric label="조회수(90일)" value={fmt(summary.views)} />
           <Metric label="시청시간(시간)" value={fmt(Math.round(summary.watchMinutes / 60))} />

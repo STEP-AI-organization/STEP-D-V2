@@ -1,8 +1,6 @@
 "use client";
 
-import { useState } from "react";
-import { Check, Edit2, Play } from "lucide-react";
-import { Button } from "@/components/ui/button";
+import { Check } from "lucide-react";
 import { cn } from "@/lib/utils";
 import type { ThumbnailVariant } from "@/lib/types";
 
@@ -11,13 +9,11 @@ export function ThumbnailPicker({
   apiBase,
   chosenId,
   onChoose,
-  onEdit,
 }: {
   thumbnails?: ThumbnailVariant[];
   apiBase: string;
   chosenId?: string;
   onChoose: (id: string) => void;
-  onEdit?: (id: string) => void;
 }) {
   if (!thumbnails || thumbnails.length === 0) {
     return (
@@ -61,22 +57,12 @@ export function ThumbnailPicker({
                 )}
               </div>
               
-              {/* 메타데이터 오버레이 (호버 시 표시) */}
+              {/* 메타데이터 오버레이 (호버 시 표시). 편집 버튼은 핸들러를 넘기는 곳이 없어 제거함.
+                  layout_preset·caption_tone 배지도 뺐다 — 생산자가 전 variant 에 같은 상수를
+                  박아 넣어(variety·기본) 선택 근거로 오해된다. */}
               <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/60 opacity-0 transition-opacity group-hover:opacity-100">
-                <div className="text-[10px] text-white font-bold mb-1 px-1 text-center truncate w-full">
+                <div className="text-[10px] text-white font-bold px-1 text-center truncate w-full">
                   {t.caption_text}
-                </div>
-                <div className="flex gap-1">
-                  {onEdit && (
-                    <Button 
-                      size="xs" 
-                      variant="outline" 
-                      className="h-6 px-2 text-[10px] bg-black/40 border-white/20 text-white hover:bg-black/80"
-                      onClick={(e) => { e.stopPropagation(); onEdit(t.id); }}
-                    >
-                      <Edit2 className="size-3 mr-1" /> 편집
-                    </Button>
-                  )}
                 </div>
               </div>
 
@@ -85,10 +71,6 @@ export function ThumbnailPicker({
                   <Check className="size-3" strokeWidth={3} />
                 </div>
               )}
-              
-              <div className="absolute bottom-1 left-1 rounded bg-black/70 px-1 py-0.5 text-[8px] font-bold text-white uppercase">
-                {t.layout_preset} · {t.caption_tone}
-              </div>
             </div>
           );
         })}

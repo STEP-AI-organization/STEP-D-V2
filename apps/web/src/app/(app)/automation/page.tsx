@@ -10,6 +10,7 @@
  * 눌러야** 다음 순방에 다시 잡힌다. 이슈를 해제해서 게이트가 열려도 자동이 저절로
  * 밀어내지 않는다.
  */
+import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
 import { useToast } from "@/components/ui/toast";
@@ -17,11 +18,13 @@ import { useSession } from "@/lib/auth";
 import {
   deleteAutomationRule,
   fetchAutomation,
+  fetchChannelRules,
   releaseAutomationHold,
   runAutomationNow,
   saveAutomationRule,
   setAutomationPaused,
   type AutomationRule,
+  type ChannelRule,
   type GatePolicy,
   type RuleCriterion,
   type RuleHold,
@@ -255,8 +258,18 @@ export default function AutomationPage() {
                       type="button"
                       className="sd-btn"
                       onClick={async () => {
-                        await saveAutomationRule({ ...r, enabled: !r.enabled });
-                        await load();
+                        try {
+                          await saveAutomationRule({ ...r, enabled: !r.enabled });
+                          toast({
+                            title: r.enabled ? "규칙을 멈췄습니다" : "규칙을 재개했습니다",
+                            description: program?.title ?? r.programId,
+                            tone: "done",
+                          });
+                        } catch (err) {
+                          toast({ title: "변경 실패", description: err instanceof Error ? err.message : String(err), tone: "error" });
+                        } finally {
+                          await load();
+                        }
                       }}
                     >
                       {r.enabled ? "멈춤" : "재개"}
@@ -266,9 +279,14 @@ export default function AutomationPage() {
                       className="sd-btn"
                       onClick={async () => {
                         if (!window.confirm("이 규칙을 지웁니다. 이미 게시된 영상은 내려가지 않습니다. 계속할까요?")) return;
-                        const res = await deleteAutomationRule(r.id);
-                        toast({ title: "규칙을 지웠습니다", description: res.notice, tone: "done" });
-                        await load();
+                        try {
+                          const res = await deleteAutomationRule(r.id);
+                          toast({ title: "규칙을 지웠습니다", description: res.notice, tone: "done" });
+                        } catch (err) {
+                          toast({ title: "삭제 실패", description: err instanceof Error ? err.message : String(err), tone: "error" });
+                        } finally {
+                          await load();
+                        }
                       }}
                     >
                       삭제
@@ -347,6 +365,30 @@ function RuleForm({
   const [win, setWin] = useState("방영 익일 10시");
   const [busy, setBusy] = useState(false);
 
+  // 계정 ID 를 자유 입력으로 두면 오타 하나로 규칙이 "실행 중" 배지를 달고 영원히 아무것도
+  // 안 한다(순방이 채널 규칙을 못 찾으면 skipped 로만 남는다). 실재하는 규칙에서만 고르게 한다.
+  const [channelRules, setChannelRules] = useState<ChannelRule[] | null>(null);
+  const [rulesErr, setRulesErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    void fetchChannelRules()
+      .then((rs) => { if (alive) { setChannelRules(rs); setRulesErr(null); } })
+      .catch((err) => {
+        if (!alive) return;
+        setChannelRules([]);
+        setRulesErr(err instanceof Error ? err.message : String(err));
+      });
+    return () => { alive = false; };
+  }, []);
+
+  useEffect(() => {
+    // 플랫폼을 바꾸면 그 플랫폼에 없는 계정이 남아 있으면 안 된다.
+    const list = (channelRules ?? []).filter((r) => r.platform === platform);
+    setAccountId((prev) => (list.some((r) => r.accountId === prev) ? prev : list[0]?.accountId ?? ""));
+  }, [platform, channelRules]);
+
+  const platformRules = (channelRules ?? []).filter((r) => r.platform === platform);
   const upload = platform === "youtube";
 
   async function save() {
@@ -385,12 +427,34 @@ function RuleForm({
         </select>
       </div>
 
-      <input
-        value={accountId}
-        onChange={(e) => setAccountId(e.target.value)}
-        placeholder="채널 계정 ID (배포 채널 화면의 규칙과 같은 값)"
-        className="sd-input w-full"
-      />
+      <div>
+        <select
+          value={accountId}
+          onChange={(e) => setAccountId(e.target.value)}
+          className="sd-input w-full"
+          disabled={platformRules.length === 0}
+        >
+          {platformRules.length === 0 ? (
+            <option value="">
+              {channelRules === null ? "채널 규칙 불러오는 중…" : "이 플랫폼의 채널 규칙이 없습니다"}
+            </option>
+          ) : (
+            platformRules.map((r) => (
+              <option key={r.accountId} value={r.accountId}>
+                {r.label} · {r.accountId}
+              </option>
+            ))
+          )}
+        </select>
+        {channelRules !== null && platformRules.length === 0 && (
+          <p className="mt-1 text-[10.5px]" style={{ color: "var(--sd-warn)" }}>
+            {rulesErr
+              ? `채널 규칙을 불러오지 못했습니다 (${rulesErr}) — `
+              : "자동 배포는 채널 규칙이 있어야 돌아갑니다 — "}
+            <Link href="/channels" className="underline">배포 규칙</Link> 화면에서 이 플랫폼의 규칙을 먼저 만드세요.
+          </p>
+        )}
+      </div>
 
       <div className="grid grid-cols-2 gap-2">
         <select value={mediaKind} onChange={(e) => setMediaKind(e.target.value as RuleMediaKind)} className="sd-input">
