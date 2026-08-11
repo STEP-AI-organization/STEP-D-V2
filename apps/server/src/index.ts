@@ -48,6 +48,7 @@ import {
   issueIdFor, verifyCharge,
 } from "./billing-card.ts";
 import { buildInvoice, issuerInfo, monthRange, parseMonth } from "./invoice.ts";
+import { checkProfile, incompleteFields } from "./business.ts";
 import {
   API_SCOPES, bearerKey, checkRoute, generateKey, hashKey, keyBlockReason, keyPrefix,
   shouldTouchLastUsed,
@@ -110,6 +111,8 @@ import {
   getBillingCard,
   saveBillingCard,
   revokeBillingCard,
+  getBusinessProfile,
+  saveBusinessProfile,
   listChannelRules,
   getChannelRule,
   upsertChannelRule,
@@ -1228,15 +1231,45 @@ app.get("/api/superadmin/tenants/:id/invoice", async (c) => {
   ));
 
   const issuer = issuerInfo();
+  const profile = await asSystem((db) => getBusinessProfile(db, tenantId));
   const invoice = buildInvoice({ tenantId, monthKey: month.key, payments });
   return c.json({
     invoice,
-    customer: tenantRows[0],
+    // 문서에 찍히는 건 등기상 **상호**다 — 화면에서 부르는 이름과 다를 수 있다.
+    customer: { ...tenantRows[0], profile, incomplete: incompleteFields(profile) },
     issuer: issuer.issuer,
     // 없는 값을 지어내지 않는다 — 빠진 항목을 그대로 알려주고 화면이 경고한다.
     issuerMissing: issuer.ok ? [] : issuer.missing,
     note: "세금계산서가 아닙니다 (거래명세서).",
   });
+});
+
+/** 회사 사업자정보 — 거래명세서의 "공급받는 자". */
+app.get("/api/superadmin/tenants/:id/business", async (c) => {
+  const actor = requireSuperadmin(c);
+  const tenantId = c.req.param("id");
+  await audit(actor, { action: "business.view", targetTenant: tenantId }, clientIp(c));
+  const profile = await asSystem((db) => getBusinessProfile(db, tenantId));
+  return c.json({ profile, incomplete: incompleteFields(profile) });
+});
+
+app.put("/api/superadmin/tenants/:id/business", async (c) => {
+  const actor = requireSuperadmin(c);
+  const tenantId = c.req.param("id");
+  const body = await c.req.json<Record<string, unknown>>().catch(() => ({}) as Record<string, unknown>);
+  const reason = requireReason(actor, tenantId, body.reason);
+
+  const checked = checkProfile(body);
+  if (!checked.ok) return c.json({ error: "bad_request", field: checked.field, message: checked.message }, 400);
+
+  await audit(
+    actor,
+    { action: "business.update", targetTenant: tenantId, reason, detail: { bizNo: checked.profile.bizNo } },
+    clientIp(c),
+  );
+  const saved = await asSystem((db) =>
+    saveBusinessProfile(db, tenantId, { ...checked.profile, updatedBy: actor.email }));
+  return c.json({ ok: true, profile: saved, incomplete: incompleteFields(saved) });
 });
 
 /** 인보이스를 뽑을 수 있는 달 — 결제가 있는 달만. 빈 달을 고르게 두면 빈 문서가 나온다. */

@@ -40,6 +40,11 @@ export interface Tenant {
   /** 잔여 크레딧(1개 = 분석 1분) · 이번 달 사용 · 마지막 로그인. 회사가 살아 있는지 보는 축. */
   credits: number; usedThisMonth: number; lastLoginAt: number | null;
 }
+export interface BusinessProfile {
+  bizName: string; bizNo: string; ceoName: string; address: string;
+  bizType: string; bizItem: string; contactEmail: string; contactPhone: string;
+  updatedBy: string; updatedAt: string;
+}
 export interface Payment {
   paymentId: string; tenantId: string; credits: number; amountKrw: number;
   status: string; requestedBy: string; createdAt: string; settledAt: string | null;
@@ -156,6 +161,15 @@ export const api = {
     post<{ ok: true; alreadyRevoked: boolean }>(
       `/api/superadmin/api-keys/${encodeURIComponent(keyId)}/revoke`, { reason }),
 
+  // ── 회사 사업자정보 (거래명세서의 "공급받는 자") ──
+  business: (tenantId: string) =>
+    get<{ profile: BusinessProfile | null; incomplete: string[] }>(
+      `/api/superadmin/tenants/${encodeURIComponent(tenantId)}/business`),
+  saveBusiness: (tenantId: string, body: Partial<BusinessProfile> & { reason?: string }) =>
+    call<{ ok: true; profile: BusinessProfile; incomplete: string[] }>(
+      `/api/superadmin/tenants/${encodeURIComponent(tenantId)}/business`,
+      { method: "PUT", body: JSON.stringify(body) }),
+
   // ── 인보이스(거래명세서) ──
   // 세금계산서가 아니다 — 그건 별도 발행 서비스가 필요하다.
   invoiceMonths: (tenantId: string) =>
@@ -168,7 +182,7 @@ export const api = {
         supplyKrw: number; vatKrw: number; totalKrw: number;
         lines: Array<{ paymentId: string; date: string; desc: string; credits: number; amountKrw: number }>;
       };
-      customer: { id: string; name: string; billingEmail: string | null };
+      customer: { id: string; name: string; billingEmail: string | null; profile: BusinessProfile | null; incomplete: string[] };
       issuer: { name: string; bizNo: string; address: string; contact: string };
       issuerMissing: string[];
       note: string;

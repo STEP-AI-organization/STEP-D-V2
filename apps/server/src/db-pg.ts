@@ -2782,6 +2782,50 @@ export interface TopupRow {
   paymentId: string; credits: number; amountKrw: number; status: string; requestedBy: string;
 }
 
+// ── 회사 사업자정보 ───────────────────────────────────────────────────────────
+// RLS 표(0030). 어드민이 **남의 회사** 것을 읽고 쓰므로 호출부가 asSystem 으로 감싼다.
+
+export interface BusinessProfileRow {
+  bizName: string; bizNo: string; ceoName: string; address: string;
+  bizType: string; bizItem: string; contactEmail: string; contactPhone: string;
+  updatedBy: string; updatedAt: string;
+}
+
+const BIZ_COLS = `biz_name AS "bizName", biz_no AS "bizNo", ceo_name AS "ceoName",
+                  address, biz_type AS "bizType", biz_item AS "bizItem",
+                  contact_email AS "contactEmail", contact_phone AS "contactPhone",
+                  updated_by AS "updatedBy", updated_at AS "updatedAt"`;
+
+export async function getBusinessProfile(db: Queryable, tenantId: string): Promise<BusinessProfileRow | null> {
+  const { rows } = await db.query(
+    `SELECT ${BIZ_COLS} FROM business_profile WHERE tenant_id = $1`,
+    [tenantId],
+  );
+  return (rows[0] as BusinessProfileRow | undefined) ?? null;
+}
+
+export async function saveBusinessProfile(
+  db: Queryable,
+  tenantId: string,
+  p: Omit<BusinessProfileRow, "updatedAt"> ,
+): Promise<BusinessProfileRow> {
+  const { rows } = await db.query(
+    `INSERT INTO business_profile
+       (tenant_id, biz_name, biz_no, ceo_name, address, biz_type, biz_item,
+        contact_email, contact_phone, updated_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+     ON CONFLICT (tenant_id) DO UPDATE SET
+       biz_name = EXCLUDED.biz_name, biz_no = EXCLUDED.biz_no, ceo_name = EXCLUDED.ceo_name,
+       address = EXCLUDED.address, biz_type = EXCLUDED.biz_type, biz_item = EXCLUDED.biz_item,
+       contact_email = EXCLUDED.contact_email, contact_phone = EXCLUDED.contact_phone,
+       updated_by = EXCLUDED.updated_by, updated_at = now()
+     RETURNING ${BIZ_COLS}`,
+    [tenantId, p.bizName, p.bizNo, p.ceoName, p.address, p.bizType, p.bizItem,
+     p.contactEmail, p.contactPhone, p.updatedBy],
+  );
+  return rows[0] as BusinessProfileRow;
+}
+
 // ── 저장 카드(빌링키) ─────────────────────────────────────────────────────────
 // RLS 표(0029)라 **스코프 있는 풀**(pool)로 쓴다. rawPool 로 만지면 0행이 나온다.
 

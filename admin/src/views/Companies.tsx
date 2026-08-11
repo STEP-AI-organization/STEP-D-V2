@@ -2,6 +2,7 @@ import { useState } from "react";
 import { api, type AdminUser, type ApiKey, type CompanyDetail, type Tenant } from "../api";
 import { Panel, State, StatusTag, useLoad, when } from "./common";
 import { Invoice } from "./Invoice";
+import { BusinessProfileForm } from "./BusinessProfile";
 
 export function Companies({ onOpen }: { onOpen: (id: string) => void }) {
   const { data, error, busy, reload } = useLoad(() => api.tenants());
@@ -110,6 +111,7 @@ function Billing({ tenantId, payments }: { tenantId: string; payments: CompanyDe
   const credits = useLoad(() => api.credits(tenantId), [tenantId]);
   return <>
     <Panel title="크레딧 원장"><State busy={credits.busy} error={credits.error}>{credits.data && <><div className="cards"><Metric k="현재 잔액" v={number(credits.data.balance)} bad={credits.data.balance <= 0} /></div><CreditAdjust tenantId={tenantId} onChanged={credits.reload} /><div className="tablewrap"><table><thead><tr><th>시각</th><th className="num">증감</th><th>유형</th><th>메모</th><th>처리자</th></tr></thead><tbody>{credits.data.entries.map((row) => <tr key={row.id}><td className="muted">{new Date(row.occurredAt).toLocaleString("ko-KR")}</td><td className="num" style={row.delta < 0 ? { color: "var(--bad)" } : undefined}>{row.delta > 0 ? "+" : ""}{number(row.delta)}</td><td>{row.reason}</td><td className="wrap">{row.note || "—"}</td><td>{row.actor || "—"}</td></tr>)}</tbody></table></div></>}</State></Panel>
+    <BusinessProfileForm tenantId={tenantId} />
     <Invoice tenantId={tenantId} />
     <Panel title="최근 결제"><div className="tablewrap"><table><thead><tr><th>시각</th><th className="num">크레딧</th><th className="num">금액</th><th>상태</th></tr></thead><tbody>{payments.map((row) => <tr key={row.paymentId}><td>{new Date(row.createdAt).toLocaleString("ko-KR")}</td><td className="num">{number(row.credits)}</td><td className="num">₩{number(row.amountKrw)}</td><td><StatusTag status={row.status === "paid" ? "done" : row.status} /></td></tr>)}</tbody></table></div></Panel>
   </>;

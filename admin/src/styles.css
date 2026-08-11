@@ -154,8 +154,17 @@ button.danger { color: var(--bad); }
   .shell, .main { display: block; padding: 0; background: #fff; }
   .panel { border: 0; box-shadow: none; }
   /* 패널 머리글("인보이스")은 종이에 필요 없다 — 문서에 이미 제목이 있다. */
-  .panel > header { display: none; }
+  .panel-head { display: none; }
   body { background: #fff; color: #000; }
   table { page-break-inside: auto; }
   tr { page-break-inside: avoid; }
 }
+
+/* 사업자정보 폼 — 칸이 여덟이라 두 줄짜리 세로 나열은 스크롤이 길어진다. */
+.biz-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+.biz-field { display: flex; flex-direction: column; gap: 4px; }
+.biz-field > span { font-size: 12px; color: var(--muted); }
+.biz-field > span em { color: var(--bad); font-style: normal; }
+.biz-field small { font-size: 11px; }
+/* 서버가 어느 칸이 문제인지 알려주면 그 칸을 표시한다 — "저장 실패"만 띄우면 어디를 고칠지 모른다. */
+.biz-field input[data-bad] { border-color: var(--bad); }

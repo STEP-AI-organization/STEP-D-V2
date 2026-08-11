@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { api } from "../api";
+import { formatBizNo } from "./biz-format";
 import { Panel, State, useLoad } from "./common";
 
 /**
@@ -43,6 +44,13 @@ export function Invoice({ tenantId }: { tenantId: string }) {
       <State busy={months.busy || doc.busy} error={months.error || doc.error} empty={!months.data?.months.length}>
         {doc.data && (
           <div className="invoice">
+            {doc.data.customer.incomplete.length > 0 && (
+              // 막지는 않는다 — 거래명세서는 나갈 수 있다. 다만 뭐가 빠졌는지 말해준다.
+              <p className="err no-print">
+                공급받는 자 정보가 덜 채워졌습니다: <strong>{doc.data.customer.incomplete.join(" · ")}</strong>
+                {" "}— 회사 → 사업자정보에서 채우면 문서에 찍힙니다.
+              </p>
+            )}
             {doc.data.issuerMissing.length > 0 && (
               // 없는 값을 지어내지 않는다. 대신 무엇을 채워야 하는지 말한다.
               <p className="err no-print">
@@ -74,8 +82,28 @@ export function Invoice({ tenantId }: { tenantId: string }) {
               </section>
               <section>
                 <h3>공급받는 자</h3>
-                <div>{doc.data.customer.name}</div>
-                <div className="muted">{doc.data.customer.billingEmail || "청구 이메일 미설정"}</div>
+                {/* 문서에는 등기상 **상호**가 들어간다 — 화면에서 부르는 이름과 다를 수 있다. */}
+                <div>{doc.data.customer.profile?.bizName || doc.data.customer.name}</div>
+                <div className="muted">
+                  {doc.data.customer.profile?.bizNo
+                    ? formatBizNo(doc.data.customer.profile.bizNo)
+                    : "사업자등록번호 미설정"}
+                </div>
+                {doc.data.customer.profile?.ceoName && (
+                  <div className="muted">대표 {doc.data.customer.profile.ceoName}</div>
+                )}
+                {doc.data.customer.profile?.address && (
+                  <div className="muted">{doc.data.customer.profile.address}</div>
+                )}
+                {(doc.data.customer.profile?.bizType || doc.data.customer.profile?.bizItem) && (
+                  <div className="muted">
+                    {[doc.data.customer.profile?.bizType, doc.data.customer.profile?.bizItem]
+                      .filter(Boolean).join(" · ")}
+                  </div>
+                )}
+                <div className="muted">
+                  {doc.data.customer.profile?.contactEmail || doc.data.customer.billingEmail || "담당자 이메일 미설정"}
+                </div>
               </section>
             </div>
 
