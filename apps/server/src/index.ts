@@ -42,6 +42,10 @@ import {
 } from "./auth.ts";
 import { audit, clientIp, requireReason, requireSuperadmin } from "./admin.ts";
 import { grantDedupeKey, inviteLink, planOnboarding } from "./onboarding.ts";
+import {
+  API_SCOPES, bearerKey, checkRoute, generateKey, hashKey, keyBlockReason, keyPrefix,
+  normalizeScopes, shouldTouchLastUsed,
+} from "./api-keys.ts";
 import { logger } from "hono/logger";
 import fs from "node:fs";
 import path from "node:path";
@@ -158,6 +162,8 @@ import {
   getChannelPointProfile,
   getPool,
   getRawPool,
+  lookupApiKey,
+  touchApiKey,
   withRawTransaction,
   searchSegments,
   listKnownCharacters,
@@ -277,6 +283,8 @@ import {
   type Issue,
 } from "./gate.ts";
 import { listShortsTemplates, getShortsTemplate, toPercent } from "./shorts-template.ts";
+import { listNaverAccounts, getNaverAccount, upsertNaverAccount, markNaverAccount } from "./db-pg.ts";
+import { naverSessionPath } from "./naver-session.ts";
 import {
   CANVA_CALLBACK_PATH, canvaConfigured, canvaConnected, canvaAuthUrl,
   canvaExchangeCode, disconnectCanva, listCanvaDesigns,
@@ -344,18 +352,32 @@ function isPublicPath(path: string): boolean {
 
 /**
  * 요청 → 테넌트. 세 경로가 있다.
- *   1. 세션 쿠키       → 그 사용자의 테넌트 (정상 경로)
- *   2. 외부 API 키     → 아직 없음. 있는 척 통과시키면 그 키가 기본 테넌트를 전부 보게 되므로 501
+ *   1. 외부 API 키     → 그 키가 속한 회사 (고객사 시스템)
+ *   2. 세션 쿠키       → 그 사용자의 테넌트 (사람이 화면에서)
  *   3. 인증 없음       → AUTH_REQUIRED 가 켜져 있으면 401, 아니면 기본 테넌트로 폴백
  *
- * 3번의 폴백은 **테넌트가 t_default 하나뿐인 동안에만 안전하다.** 웹에 로그인 화면이 아직
- * 없어서 지금 이걸 막으면 제품이 멈춘다. 전제가 깨지는 순간(외부 테넌트 생성)은 기동 시
- * assertAuthPosture() 가 잡는다 — 사람이 기억하는 데 기대지 않는다.
+ * **셋 다 같은 출구를 지난다** — 여기서 정한 scope 로 `runWithTenant` 가 돌고, 그 안의 모든
+ * DB 접근은 RLS 가 막는다. 키 경로가 별도 필터를 갖기 시작하면 격리가 두 벌이 되고
+ * 한 벌은 반드시 샌다. 여기서 하는 일은 "누구 것인가"를 정하는 것까지다.
+ *
+ * 3번의 폴백은 **테넌트가 t_default 하나뿐인 동안에만 안전하다.** 전제가 깨지는 순간은
+ * 기동 시 assertAuthPosture() 가 잡는다 — 사람이 기억하는 데 기대지 않는다.
  */
 async function resolveTenant(c: Context<AppEnv>): Promise<TenantContext> {
-  const auth = c.req.header("authorization") ?? "";
-  if (/^Bearer\s+stepd_/i.test(auth)) {
-    throw new HTTPException(501, { message: "external api keys not enabled yet" });
+  const rawKey = bearerKey(c.req.header("authorization"));
+  if (rawKey) {
+    const row = await lookupApiKey(hashKey(rawKey));
+    const blocked = keyBlockReason(row);
+    // 왜 막혔는지 말한다 — "401" 만 주면 고객사가 키를 다시 발급받아도 같은 벽을 만난다.
+    if (blocked || !row) throw new HTTPException(401, { message: blocked ?? "알 수 없는 API 키입니다." });
+
+    // 라우트 화이트리스트. 세션용 라우트 118개를 키에 통째로 열지 않는다.
+    const verdict = checkRoute(c.req.method, new URL(c.req.url).pathname, row.scopes);
+    if (!verdict.ok) throw new HTTPException(403, { message: verdict.reason });
+
+    // 안 쓰는 키를 회수할 근거. 매 요청 쓰기는 과해서 분 단위로 던다.
+    if (shouldTouchLastUsed(row.lastUsedAt, Date.now())) void touchApiKey(row.id);
+    return { scope: row.tenantId, via: "api-key", apiKeyId: row.id };
   }
 
   const user = await resolveSession(getCookie(c, SESSION_COOKIE)).catch(() => null);
@@ -855,6 +877,81 @@ app.get("/api/superadmin/jobs", async (c) => {
        FROM job_queue ORDER BY updatedAt DESC LIMIT 200`,
   );
   return c.json({ jobs: rows });
+});
+
+// ── 회사별 API 키 (다회사 3단계) ──────────────────────────────────────────────
+// 평문은 **발급 응답에 한 번만** 나간다. DB 엔 sha256 과 접두만 둔다 — 저장하면
+// DB 유출이 곧 남의 채널에 영상을 올릴 수 있는 권한이 된다.
+
+app.get("/api/superadmin/tenants/:id/api-keys", async (c) => {
+  const actor = requireSuperadmin(c);
+  const tenantId = c.req.param("id");
+  await audit(actor, { action: "apikey.list", targetTenant: tenantId }, clientIp(c));
+  const { rows } = await getRawPool().query(
+    `SELECT id, name, prefix, scopes, last_used_at AS "lastUsedAt",
+            revoked_at AS "revokedAt", created_at AS "createdAt"
+       FROM api_keys WHERE tenant_id = $1 ORDER BY created_at DESC`,
+    [tenantId],
+  );
+  return c.json({ keys: rows, scopes: API_SCOPES });
+});
+
+app.post("/api/superadmin/tenants/:id/api-keys", async (c) => {
+  const actor = requireSuperadmin(c);
+  const tenantId = c.req.param("id");
+  const body = await c.req.json<{ name?: string; scopes?: unknown; reason?: string }>().catch(() => ({}) as any);
+  const reason = requireReason(actor, tenantId, body.reason);
+
+  // 모르는 스코프는 버린다. 다 버려서 비면 **키를 만들지 않는다** — 아무것도 못 하는 키를
+  // 쥐여 주면 고객사는 그게 권한 문제인지 장애인지 구분하지 못한다.
+  const scopes = normalizeScopes(body.scopes);
+  if (scopes.length === 0) {
+    return c.json(
+      { error: "scopes_required", message: `허용할 권한을 하나 이상 고르세요: ${API_SCOPES.join(", ")}` },
+      400,
+    );
+  }
+
+  const raw = generateKey(true);
+  const id = `ak_${crypto.randomBytes(9).toString("base64url")}`;
+  await audit(
+    actor,
+    { action: "apikey.create", targetTenant: tenantId, targetId: id, reason, detail: { scopes, name: body.name ?? "" } },
+    clientIp(c),
+  );
+  try {
+    await getRawPool().query(
+      `INSERT INTO api_keys (id, tenant_id, name, key_hash, prefix, scopes)
+       VALUES ($1,$2,$3,$4,$5,$6)`,
+      [id, tenantId, String(body.name ?? "").trim() || null, hashKey(raw), keyPrefix(raw), scopes],
+    );
+  } catch (e: any) {
+    if (e?.code === "23503") return c.json({ error: "tenant_not_found" }, 404);
+    throw e;
+  }
+  // ⚠️ `key` 는 이 응답에만 있다. 다시 얻을 수 없다.
+  return c.json({ id, key: raw, prefix: keyPrefix(raw), scopes });
+});
+
+app.post("/api/superadmin/api-keys/:keyId/revoke", async (c) => {
+  const actor = requireSuperadmin(c);
+  const keyId = c.req.param("keyId");
+  const body = await c.req.json<{ reason?: string }>().catch(() => ({}) as any);
+  // 어느 회사 키인지 먼저 알아야 사유 강제 판정이 선다.
+  const { rows } = await getRawPool().query(`SELECT tenant_id AS "tenantId" FROM api_keys WHERE id = $1`, [keyId]);
+  if (!rows[0]) return c.json({ error: "not_found" }, 404);
+  const reason = requireReason(actor, rows[0].tenantId, body.reason);
+  await audit(
+    actor,
+    { action: "apikey.revoke", targetTenant: rows[0].tenantId, targetId: keyId, reason },
+    clientIp(c),
+  );
+  // 행을 지우지 않고 revoked_at 을 찍는다 — 누가 언제 발급하고 폐기했는지가 남아야 한다.
+  const { rowCount } = await getRawPool().query(
+    "UPDATE api_keys SET revoked_at = now() WHERE id = $1 AND revoked_at IS NULL",
+    [keyId],
+  );
+  return c.json({ ok: true, alreadyRevoked: rowCount === 0 });
 });
 
 /** 감사 로그. superadmin 이 서로를 볼 수 있어야 견제가 성립한다. */
@@ -5684,6 +5781,67 @@ app.post("/api/youtube/refresh", async (c) => {
     }
     return c.json({ error: err.message }, 500);
   }
+});
+
+// ── 네이버 계정 (B2B 다계정) ──────────────────────────────────────────────────
+//
+// 여기서 하는 건 **등록·조회뿐**이다. 실제 로그인은 워커 PC 에서 사람이 브라우저로
+// 한다(`naver:login --account <key>`) — 서버는 네이버 자격증명을 받지도 저장하지도 않는다.
+// 그래서 이 API 는 "어느 고객사의 어떤 채널을 쓸 것인가" 라는 **메타만** 다룬다.
+
+app.get("/api/naver/accounts", async (c) => {
+  const accounts = await listNaverAccounts();
+  return c.json({
+    accounts: accounts.map((a) => ({
+      id: a.id, label: a.label, accountKey: a.accountKey,
+      target: a.target, status: a.status,
+      lastLoginAt: a.lastLoginAt, lastPublishAt: a.lastPublishAt,
+      // 워커 PC 에서 실행할 명령을 그대로 준다 — 운영자가 옮겨 적다 틀리지 않게.
+      loginCommand: `pnpm --filter @stepd/server naver:login --account ${a.accountKey}`,
+    })),
+  });
+});
+
+app.post("/api/naver/accounts", async (c) => {
+  const b = await c.req.json<{ label?: string; target?: string }>().catch(() => null);
+  const label = b?.label?.trim();
+  if (!label) return c.json({ error: "label required" }, 400);
+  const target = ["clip", "tv", "both"].includes(String(b?.target)) ? String(b?.target) : "both";
+
+  // accountKey 는 **우리가 발급하는 불투명 키**다. 네이버 아이디를 받지 않는다 —
+  // 파일 경로·로그·DB 에 고객사 계정 아이디가 박히면 안 된다.
+  const id = `nva_${crypto.randomUUID().replace(/-/g, "").slice(0, 12)}`;
+  const accountKey = id;
+  await upsertNaverAccount({
+    id, label, accountKey, target: target as "clip" | "tv" | "both",
+    status: "session_expired",   // 로그인 전이라 아직 못 쓴다 — active 로 시작하면 거짓말이다
+    lastLoginAt: null, lastPublishAt: null, createdAt: Date.now(),
+  });
+  return c.json({
+    id, accountKey, label, target, status: "session_expired",
+    loginCommand: `pnpm --filter @stepd/server naver:login --account ${accountKey}`,
+    hint: "워커 PC 에서 위 명령을 실행해 로그인해야 발행이 가능합니다.",
+  });
+});
+
+app.patch("/api/naver/accounts/:id", async (c) => {
+  const id = c.req.param("id");
+  const acct = await getNaverAccount(id);
+  if (!acct) return c.json({ error: "not_found" }, 404);
+  const b = await c.req.json<{ status?: string }>().catch(() => null);
+  const status = ["active", "session_expired", "disabled"].includes(String(b?.status))
+    ? (String(b?.status) as "active" | "session_expired" | "disabled") : undefined;
+  if (!status) return c.json({ error: "status required" }, 400);
+  await markNaverAccount(id, { status });
+  return c.json({ ok: true, id, status });
+});
+
+/** 워커 PC 에서만 의미 있는 진단 — 이 머신에 그 계정 세션 파일이 있는가. */
+app.get("/api/naver/accounts/:id/session", async (c) => {
+  const acct = await getNaverAccount(c.req.param("id"));
+  if (!acct) return c.json({ error: "not_found" }, 404);
+  const p = naverSessionPath(acct.accountKey);
+  return c.json({ id: acct.id, accountKey: acct.accountKey, present: fs.existsSync(p) });
 });
 
 // ── 쇼츠 프레임 템플릿 (편집기·렌더 공용 기하) ────────────────────────────────

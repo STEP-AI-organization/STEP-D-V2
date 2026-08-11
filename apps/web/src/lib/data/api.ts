@@ -1994,3 +1994,53 @@ export async function fetchShortsTemplates(): Promise<FrameTemplate[]> {
 export function frameOverlaySrc(t: FrameTemplate): string {
   return t.overlayUrl.startsWith("http") ? t.overlayUrl : `${API_BASE}${t.overlayUrl.replace(/^\/api/, "")}`;
 }
+
+// ── 네이버 계정 (B2B 다계정) ───────────────────────────────────────────────────
+//
+// 서버는 네이버 자격증명을 **받지도 저장하지도 않는다.** 여기서 하는 건 "어느 고객사의
+// 어떤 채널을 쓸 것인가" 라는 메타 등록뿐이고, 실제 로그인은 워커 PC 에서 사람이
+// 브라우저로 한다(`loginCommand` 를 그대로 실행). 그래서 등록 직후 상태는
+// `session_expired` 다 — 아직 발행할 수 없다는 뜻이고, active 로 시작하면 거짓말이다.
+
+export type NaverAccountStatus = "active" | "session_expired" | "disabled";
+
+export interface NaverAccount {
+  id: string;
+  label: string;
+  accountKey: string;
+  target: "clip" | "tv" | "both";
+  status: NaverAccountStatus;
+  lastLoginAt: number | null;
+  lastPublishAt: number | null;
+  /** 워커 PC 에서 그대로 실행할 로그인 명령. 옮겨 적다 틀리지 않게 서버가 만들어 준다. */
+  loginCommand: string;
+}
+
+export async function fetchNaverAccounts(): Promise<NaverAccount[]> {
+  const res = await fetch(`${API_BASE}/naver/accounts`, { cache: "no-store" });
+  if (!res.ok) return [];
+  return ((await res.json()) as { accounts: NaverAccount[] }).accounts ?? [];
+}
+
+export async function createNaverAccount(
+  label: string,
+  target: NaverAccount["target"] = "both",
+): Promise<NaverAccount & { hint: string }> {
+  const res = await fetch(`${API_BASE}/naver/accounts`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ label, target }),
+  });
+  const body = await res.json().catch(() => null);
+  if (!res.ok) throw new Error((body as { error?: string })?.error ?? `${res.status}`);
+  return body as NaverAccount & { hint: string };
+}
+
+export async function setNaverAccountStatus(id: string, status: NaverAccountStatus): Promise<void> {
+  const res = await fetch(`${API_BASE}/naver/accounts/${id}`, {
+    method: "PATCH",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ status }),
+  });
+  if (!res.ok) throw new Error(`${res.status}`);
+}

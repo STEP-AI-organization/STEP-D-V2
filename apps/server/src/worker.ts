@@ -1376,6 +1376,15 @@ async function handleNaverPublish(job: Job): Promise<void> {
       });
       if (accountId) await markNaverAccount(accountId, { lastPublishAt: Date.now(), status: "active" }).catch(() => {});
       console.log(`[worker] naver.publish ${clipId} (${channel}) 완료 → ${r.url ?? "(URL 미확인)"}`);
+
+      // 발행 사이에 최소 간격. 짧은 시간에 몰아넣으면 네이버가 불안정해진다
+      // (2026-08-11 실측: 30분에 10여 건 올리자 파일 투입이 조용히 실패하기 시작).
+      // 정확한 한도는 모른다 — 아는 건 "몰아넣으면 깨진다" 뿐이라 보수적으로 잡는다.
+      const gap = Number(process.env.NAVER_MIN_GAP_MS ?? 60_000);
+      if (gap > 0) {
+        console.log(`[worker] 다음 네이버 잡까지 ${Math.round(gap / 1000)}초 대기`);
+        await sleep(gap);
+      }
     } finally {
       // 클립 영상은 수백 MB 다. 성공·실패 무관하게 지운다 — GCS 에 원본이 있으니 언제든
       // 다시 받을 수 있고, 남기면 워커 PC 디스크가 금방 찬다. 폴더는 남긴다.
