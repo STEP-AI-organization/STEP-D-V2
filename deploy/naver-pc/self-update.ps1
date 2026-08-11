@@ -54,8 +54,19 @@ git reset --hard "origin/$Branch" --quiet
 if ($LASTEXITCODE -ne 0) { Say "reset 실패 — 중단"; exit 1 }
 
 Say "의존성 동기화"
-pnpm install --frozen-lockfile 2>&1 | Out-Null
-if ($LASTEXITCODE -ne 0) { Say "pnpm install 실패 — 워커는 재시작하지 않는다(구버전 유지가 낫다)"; exit 1 }
+$pnpmOut = (pnpm install --frozen-lockfile 2>&1) -join "`n"
+if ($LASTEXITCODE -ne 0) {
+  # pnpm 은 "빌드 스크립트를 안 돌렸다"는 **경고**로도 exit 1 을 낸다(ERR_PNPM_IGNORED_BUILDS).
+  # 설치 자체는 끝난 상태라 이걸 실패로 보면 워커가 영원히 갱신되지 않는다.
+  # 다른 에러까지 뭉뚱그려 무시하지 않으려고, 이 마커가 있을 때만 통과시킨다.
+  if ($pnpmOut -match "ERR_PNPM_IGNORED_BUILDS") {
+    Say "pnpm: 빌드 스크립트 미승인 경고 — 설치는 완료. 계속 진행"
+  } else {
+    Say "pnpm install 실패 — 워커는 재시작하지 않는다(구버전 유지가 낫다)"
+    Say ($pnpmOut -split "`n" | Select-Object -Last 5 | Out-String)
+    exit 1
+  }
+}
 
 # Playwright 브라우저는 버전이 올라갈 수 있다. 이미 있으면 즉시 끝난다.
 npx playwright install chromium 2>&1 | Out-Null
