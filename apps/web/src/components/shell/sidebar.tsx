@@ -8,10 +8,13 @@
  * 하단에 연결 상태(7px 녹색 점 + 8초 폴링).
  */
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
+import { useSession } from "@/lib/auth";
+import { logout } from "@/lib/data/api";
 import { NAV_GROUPS } from "@/lib/nav";
+import { roleOf } from "@/lib/roles";
 import { cn } from "@/lib/utils";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "/api/proxy/api";
@@ -67,8 +70,44 @@ export function Sidebar() {
         ))}
       </nav>
 
+      <CurrentUser />
       <ConnectionStatus />
     </aside>
+  );
+}
+
+/**
+ * 현재 사용자 — 이름과 **운영 역할**을 보여준다.
+ *
+ * 역할을 안 보여주면 "왜 배포 버튼이 없지"에서 막힌다. 워크스페이스 역할이 아니라
+ * 방송 업무 역할을 띄우는 게 맞다 — 화면의 권한이 그걸로 정해지기 때문이다.
+ */
+function CurrentUser() {
+  const session = useSession();
+  const router = useRouter();
+  if (!session.user.email) return null;
+
+  return (
+    <div className="mt-3 flex items-center gap-1.5 px-2">
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-[11px]" style={{ color: "var(--sd-fg)" }}>{session.user.name}</div>
+        <div className="truncate text-[10px]" style={{ color: "var(--sd-mut)" }}>
+          {roleOf(session.user.role).label}
+        </div>
+      </div>
+      <button
+        type="button"
+        className="shrink-0 text-[10.5px] underline-offset-2 hover:underline"
+        style={{ color: "var(--sd-mut)" }}
+        onClick={async () => {
+          await logout();
+          router.replace("/login");
+          router.refresh();
+        }}
+      >
+        로그아웃
+      </button>
+    </div>
   );
 }
 

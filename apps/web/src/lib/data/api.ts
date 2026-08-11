@@ -967,6 +967,71 @@ export async function fetchChannelEligibility(
   );
 }
 
+// ── 로그인 (세션 쿠키 · HttpOnly) ──────────────────────────────────────────────
+//
+// 쿠키는 서버가 Set-Cookie 로 심고 JS 는 못 읽는다(HttpOnly). 그래서 모든 호출에
+// `credentials: "include"` 가 필요하다 — 빼먹으면 로그인은 되는데 다음 요청이 익명이 된다.
+
+export interface AuthUser {
+  id: string;
+  email: string;
+  name: string;
+  /** 워크스페이스 관리 역할. */
+  role: string;
+  /** 방송 업무 역할 (FLOWS F9). */
+  opsRole?: string;
+  tenantId: string;
+}
+
+export async function login(email: string, password: string): Promise<AuthUser> {
+  const res = await fetch(`${API_BASE}/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({ email, password }),
+  });
+  if (!res.ok) {
+    const b = (await res.json().catch(() => null)) as { error?: string } | null;
+    // 계정 존재 여부를 흘리지 않는다 — 서버가 그러라고 더미 해시까지 돌린다.
+    throw new Error(b?.error === "invalid_credentials" ? "이메일 또는 비밀번호가 올바르지 않습니다." : (b?.error ?? `${res.status}`));
+  }
+  return (await res.json()).user;
+}
+
+export async function logout(): Promise<void> {
+  await fetch(`${API_BASE}/auth/logout`, { method: "POST", credentials: "include" }).catch(() => {});
+}
+
+export async function acceptInvite(
+  token: string,
+  input: { password: string; name?: string },
+): Promise<AuthUser> {
+  const res = await fetch(`${API_BASE}/auth/accept-invite`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({ token, ...input }),
+  });
+  if (!res.ok) {
+    const b = (await res.json().catch(() => null)) as { message?: string; error?: string } | null;
+    throw new Error(b?.message ?? b?.error ?? `${res.status}`);
+  }
+  return (await res.json()).user;
+}
+
+export async function changePassword(current: string, next: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/auth/password`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({ current, next }),
+  });
+  if (!res.ok) {
+    const b = (await res.json().catch(() => null)) as { message?: string; error?: string } | null;
+    throw new Error(b?.message ?? b?.error ?? `${res.status}`);
+  }
+}
+
 // ── 게이트: 권리·심의 (FLOWS F3 · 서버 migrations/0012) ─────────────────────────
 //
 // 게이트 상태는 저장돼 있지 않다 — 서버가 매번 계산해서 준다. 화면은 받은 값을 그리기만
