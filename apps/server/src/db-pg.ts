@@ -2505,6 +2505,73 @@ export async function setAutomationSetting(key: string, value: string): Promise<
   );
 }
 
+// ── 과금 원장 (migrations/0023 · billing-portone-plan.md) ──────────────────────
+
+export interface UsageEventInput {
+  kind: string;
+  quantity: number;
+  mediaId?: string | null;
+  jobId?: string | null;
+  costKrw?: number | null;
+  source?: "web" | "api";
+  dedupeKey: string;
+}
+
+/**
+ * 사용량 기록. **멱등하다** — 같은 dedupeKey 는 두 번 쌓이지 않는다.
+ * 워커 재시도가 곧 중복 청구가 되면 안 되기 때문이다.
+ *
+ * @returns 새로 기록됐으면 true, 이미 있으면 false.
+ */
+export async function recordUsage(ev: UsageEventInput): Promise<boolean> {
+  const { rows } = await pool.query(
+    `INSERT INTO usage_events (kind, quantity, media_id, job_id, cost_krw, source, dedupe_key)
+     VALUES ($1,$2,$3,$4,$5,$6,$7)
+     ON CONFLICT (dedupe_key) DO NOTHING
+     RETURNING id`,
+    [ev.kind, ev.quantity, ev.mediaId ?? null, ev.jobId ?? null, ev.costKrw ?? null,
+     ev.source ?? "web", ev.dedupeKey],
+  );
+  return rows.length > 0;
+}
+
+/** 이번 기간에 쓴 양 — 쿼터 판정 입력. */
+export async function usedQuantity(kind: string, since: Date): Promise<number> {
+  const { rows } = await pool.query<{ total: string | null }>(
+    `SELECT COALESCE(SUM(quantity), 0)::text AS total
+       FROM usage_events WHERE kind = $1 AND occurred_at >= $2`,
+    [kind, since],
+  );
+  return Number(rows[0]?.total ?? 0) || 0;
+}
+
+/** 최근 사용 내역 — 화면·원가 확인용. */
+export async function listUsage(limit = 100): Promise<Record<string, unknown>[]> {
+  const { rows } = await pool.query(
+    `SELECT id, kind, quantity, media_id AS "mediaId", cost_krw AS "costKrw",
+            source, occurred_at AS "occurredAt"
+       FROM usage_events ORDER BY occurred_at DESC LIMIT ${Math.max(1, Math.min(limit, 500))}`,
+  );
+  return rows;
+}
+
+export interface PlanRow {
+  id: string; displayName: string; monthlyKrw: number;
+  includedMin: number; overageKrwPerMin: number | null;
+}
+
+/** 현재 테넌트의 활성 요금제. 없으면 null — 호출부가 0 으로 때우면 안 된다. */
+export async function activePlan(): Promise<PlanRow | null> {
+  const { rows } = await pool.query<PlanRow>(
+    `SELECT p.id, p.display_name AS "displayName", p.monthly_krw AS "monthlyKrw",
+            p.included_min AS "includedMin", p.overage_krw_per_min AS "overageKrwPerMin"
+       FROM subscriptions s JOIN plans p ON p.id = s.plan_id
+      WHERE s.status IN ('trialing','active')
+      ORDER BY s.period_end DESC LIMIT 1`,
+  );
+  return rows[0] ?? null;
+}
+
 // ── cleanup ────────────────────────────────────────────────────────────────────
 
 export async function closeDb(): Promise<void> {

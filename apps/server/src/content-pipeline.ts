@@ -34,8 +34,10 @@ import {
   getMedia, saveContentAnalysis, saveTranscript, saveEpisodeCast, listProgramCast,
   getChannelPointProfile, listVideoComments,
   getPool, getEntity, putEntity, upsertSearchSegments,
+  recordUsage,
 } from "./db-pg.ts";
 import type { TranscriptSegment, SearchSegmentRow } from "./db-pg.ts";
+import { billableMinutes, estimatedCostKrw, usageDedupeKey } from "./billing.ts";
 import { toCoreRegistry, timelineToRows } from "./cast.ts";
 import { createReadStream, parseObjectPath, readFile, uploadFile, useGcs } from "./storage-gcs.ts";
 import { enqueue } from "./queue.ts";
@@ -1263,6 +1265,25 @@ export async function runContentAnalyze(mediaId: string, fast = false): Promise<
         note: wrote ? `AI 쇼츠 추천 ${wrote}건` : "분석 완료 · 추천 없음",
         progress: 100,
       }).catch((e) => console.error("[worker] failed to update episode pipeline", e));
+    }
+
+    // 사용량 기록 — 결제가 꺼져 있어도 남긴다. **원가 가시화는 결제와 독립적인 가치**다
+    // (billing-portone-plan.md 3단계). dedupeKey 로 멱등이라 워커가 재시도해도 한 번만 쌓인다.
+    // 실패해도 분석을 되돌리지 않는다 — 이미 원가는 썼고, 기록 실패로 결과를 버리는 게 더 나쁘다.
+    try {
+      const minutes = billableMinutes(media.durationSec ?? 0);
+      if (minutes > 0) {
+        await recordUsage({
+          kind: "analyze_minutes",
+          quantity: minutes,
+          mediaId,
+          costKrw: estimatedCostKrw(minutes),
+          source: "web",
+          dedupeKey: usageDedupeKey("analyze_minutes", mediaId),
+        });
+      }
+    } catch (e) {
+      console.error(`[worker] content.analyze ${mediaId}: 사용량 기록 실패(분석은 정상)`, e);
     }
 
     // Success — the work dir (video + frames + checkpoints) has served its purpose.
