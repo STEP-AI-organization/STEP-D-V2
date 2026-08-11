@@ -14,7 +14,7 @@ import { useEffect, useState } from "react";
 import { useSession } from "@/lib/auth";
 import { useAppData } from "@/lib/data/store";
 import { useGateSummary } from "@/lib/gate-summary";
-import { logout } from "@/lib/data/api";
+import { fetchCredits, logout } from "@/lib/data/api";
 import { NAV_GROUPS } from "@/lib/nav";
 import { roleOf } from "@/lib/roles";
 import { cn } from "@/lib/utils";
@@ -73,9 +73,46 @@ export function Sidebar() {
         ))}
       </nav>
 
+      <CreditBalance />
       <CurrentUser />
       <ConnectionStatus />
     </aside>
+  );
+}
+
+/**
+ * 크레딧 잔액 — 분석을 시작하기 **전에** 보여야 하는 숫자다.
+ * 다 쓰고 나서 알면 이미 늦다(분석 한 번이 몇십 분이다).
+ */
+function CreditBalance() {
+  const [balance, setBalance] = useState<number | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    const read = () => {
+      void fetchCredits()
+        .then((c) => { if (alive) setBalance(c.balance); })
+        .catch(() => { if (alive) setBalance(null); });
+    };
+    read();
+    const t = setInterval(read, 60_000);
+    return () => { alive = false; clearInterval(t); };
+  }, []);
+
+  // 못 읽으면 0 이라고 하지 않는다 — "잔액 없음"으로 오해하면 충전을 안 해도 될 때 하게 된다.
+  if (balance === null) return null;
+
+  const low = balance < 60; // 1시간 미만
+  return (
+    <Link
+      href="/credits"
+      className="mt-3 flex items-center gap-1.5 px-2 py-1 text-[10.5px]"
+      style={{ color: low ? "var(--sd-danger-strong)" : "var(--sd-mut)" }}
+      title="크레딧 1개 = 분석 1분"
+    >
+      <span>크레딧</span>
+      <span className="sd-mono ml-auto">{balance.toLocaleString("ko-KR")}</span>
+    </Link>
   );
 }
 

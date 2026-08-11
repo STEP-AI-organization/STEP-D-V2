@@ -1039,6 +1039,52 @@ export async function changePassword(current: string, next: string): Promise<voi
   }
 }
 
+// ── 크레딧 (선불 · 포트원 일반결제) ─────────────────────────────────────────────
+//
+// 크레딧 1개 = 분석 1분. **결제 성공을 브라우저가 판단하지 않는다** — 결제창이 성공을
+// 돌려줘도 크레딧은 서버가 웹훅으로 확정한다. 화면은 잔액을 다시 조회해 확인할 뿐이다.
+
+export interface CreditLedgerRow {
+  id: number; delta: number; reason: string;
+  mediaId: string | null; paymentId: string | null; amountKrw: number | null;
+  note: string; actor: string; occurredAt: string;
+}
+
+export interface CreditState {
+  balance: number;
+  unit: string;
+  priceKrw: number | null;
+  ledger: CreditLedgerRow[];
+}
+
+export async function fetchCredits(): Promise<CreditState> {
+  return json(await fetch(`${API_BASE}/credits`, { cache: "no-store", credentials: "include" }));
+}
+
+export interface TopupOrder {
+  paymentId: string;
+  credits: number;
+  amountKrw: number;
+  storeId: string;
+  channelKey: string;
+  orderName: string;
+}
+
+/** 충전 주문 생성 — **결제창을 띄우기 전에** 서버가 금액을 확정한다. */
+export async function createTopupOrder(credits: number, actor: string): Promise<TopupOrder> {
+  const res = await fetch(`${API_BASE}/credits/topup`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({ credits, actor }),
+  });
+  if (!res.ok) {
+    const b = (await res.json().catch(() => null)) as { message?: string; error?: string } | null;
+    throw new Error(b?.message ?? b?.error ?? `${res.status}`);
+  }
+  return res.json();
+}
+
 // ── 게이트: 권리·심의 (FLOWS F3 · 서버 migrations/0012) ─────────────────────────
 //
 // 게이트 상태는 저장돼 있지 않다 — 서버가 매번 계산해서 준다. 화면은 받은 값을 그리기만
