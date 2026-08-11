@@ -1313,9 +1313,14 @@ async function handleNaverPublish(job: Job): Promise<void> {
         ? { primary: String(pc.primary), secondary: String(pc.secondary) }
         : undefined;
 
+      // 등록 예약 — 과거 시각은 무시한다(네이버가 거부하고, 무시하면 즉시 등록된다).
+      const rawAt = Number(job.payload.publishAt ?? 0);
+      const publishAt = Number.isFinite(rawAt) && rawAt > Date.now() ? rawAt : undefined;
+
       const r = await uploadToNaver({
         target,
         videoPath: localPath,
+        publishAt,
         title: clip.title ?? "무제 클립",
         description,
         tags,

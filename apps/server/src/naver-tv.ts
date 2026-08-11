@@ -95,6 +95,9 @@ export interface NaverUploadInput {
   headful?: boolean;
   /** true 면 "등록" 대신 "임시저장" 을 누른다 — 공개 없이 파이프라인을 검증할 때. */
   draftOnly?: boolean;
+  /** 등록 예약 — 이 시각에 자동 등록된다. 미지정이면 즉시 등록.
+   *  **워커 PC 로컬시각(KST) 기준**으로 입력한다: 네이버 폼이 로컬시각을 받는다. */
+  publishAt?: number;
   /** 네이버 클립 필수 — 1차/2차 카테고리. 프로그램별로 사람이 미리 정해둔다.
    *  자동 판정하지 않는다: 틀린 분류로 발행되면 되돌리기가 번거롭다. */
   category?: { primary: string; secondary: string };
@@ -137,20 +140,70 @@ export async function openNaverContext(headful = false): Promise<{ browser: Brow
  * 바뀐다. 그래서 dropdownWrap 순서(0=1차, 1=2차)로 잡는다. 옵션은 role=option 이 아니라
  * class*="Option" 이다 — li 로 폴백하면 사이드바 메뉴를 긁는다.
  */
-async function pickCategory(page: Page, primary: string, secondary: string): Promise<void> {
+/**
+ * 카테고리 기본값. 프로그램별 사전등록이 붙기 전까지 임시로 쓴다
+ * (2026-08-11 사용자 지시 — 1차·2차 모두 "엔터").
+ */
+export const DEFAULT_CATEGORY = { primary: "엔터", secondary: "엔터" } as const;
+
+async function pickCategory(
+  page: Page,
+  cat?: { primary: string; secondary: string },
+): Promise<void> {
   const wraps = page.locator('[class*="dropdownWrap"]');
+  // hasText 는 부분일치라 "엔터" 가 "엔터테인먼트" 에도 걸린다 — 정확히 일치시킨다.
   const opt = (text: string) =>
-    page.locator('[class*="Option"]').filter({ hasText: text }).first();
+    page.locator('[class*="Option"]')
+      .filter({ hasText: new RegExp(`^\s*${text}\s*$`) }).first();
 
-  await wraps.nth(0).locator("button").first().click();
-  await page.waitForTimeout(600);
-  await opt(primary).click();
-  await page.waitForTimeout(800);
+  const want = cat ?? DEFAULT_CATEGORY;
+  for (const [i, value] of [[0, want.primary], [1, want.secondary]] as const) {
+    await wraps.nth(i).locator("button").first().click();
+    await page.waitForTimeout(600);
+    await opt(value).click();
+    await page.waitForTimeout(700);
+  }
+}
 
-  await wraps.nth(1).locator("button").first().click();
+/**
+ * 등록 예약 설정 (공개 설정 → "등록 예약" 체크 + 날짜/시/분).
+ *
+ * ⚠️ 컨트롤 타입 미검증이다. 화면상 chevron 이 붙은 걸로 보아 네이티브 <select> 가 아니라
+ * 카테고리와 같은 커스텀 드롭다운일 가능성이 크다 — 그래서 selectOption 을 먼저 시도하고
+ * 실패하면 클릭+옵션선택으로 폴백한다. 실패해도 던지지 않는다: 예약이 안 걸리면 **즉시
+ * 등록**되므로, 조용히 지나가면 의도치 않게 바로 공개된다. 그래서 호출부가 결과를 본다.
+ */
+async function setSchedule(page: Page, when: Date): Promise<boolean> {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const ymd = `${when.getFullYear()}.${pad(when.getMonth() + 1)}.${pad(when.getDate())}`;
+  const hh = pad(when.getHours());
+  const mm = pad(when.getMinutes());
+
+  // 체크박스는 라벨 문구로 잡는다. "비공개 예약" 과 헷갈리지 않게 정확히 일치시킨다.
+  try {
+    const target = page.getByRole("checkbox", { name: "등록 예약" }).first();
+    if (!(await target.isChecked().catch(() => false))) await target.check({ timeout: 10_000 });
+  } catch {
+    await page.locator('label:has-text("등록 예약")').first().click().catch(() => {});
+  }
   await page.waitForTimeout(600);
-  await opt(secondary).click();
-  await page.waitForTimeout(400);
+
+  const setOne = async (value: string, index: number): Promise<boolean> => {
+    // 1) 네이티브 select 우선
+    const sel = page.locator('select').nth(index);
+    if (await sel.count().then((c) => c > index).catch(() => false)) {
+      if (await sel.selectOption({ label: value }).then(() => true).catch(() => false)) return true;
+    }
+    // 2) 커스텀 드롭다운 폴백 — 카테고리와 같은 패턴
+    const trigger = page.locator('[class*="Select"], [class*="dropdown"]').nth(index);
+    await trigger.click().catch(() => {});
+    await page.waitForTimeout(400);
+    const opt = page.locator('[class*="Option"]').filter({ hasText: value }).first();
+    return opt.click({ timeout: 5_000 }).then(() => true).catch(() => false);
+  };
+
+  const ok = [await setOne(ymd, 0), await setOne(hh, 1), await setOne(mm, 2)];
+  return ok.every(Boolean);
 }
 
 async function shot(page: Page, dir: string, name: string): Promise<string> {
@@ -224,11 +277,18 @@ export async function uploadToNaver(input: NaverUploadInput): Promise<NaverUploa
       }
       await page.locator(SEL.description).first().fill(body);
 
-      // 카테고리 1차/2차도 필수. 없으면 등록을 눌러봐야 실패하므로 여기서 멈춘다.
-      if (!input.category?.primary || !input.category?.secondary) {
-        return { ok: false, error: "카테고리(1차/2차) 미지정 — 프로그램별로 미리 등록해야 합니다" };
+      // 카테고리 1차/2차는 필수다. 지정값이 없으면 DEFAULT_CATEGORY("엔터"/"엔터")로 간다.
+      await pickCategory(page, input.category);
+
+      // 등록 예약. 실패하면 **즉시 등록**되어 버리므로 그냥 넘어가지 않고 중단한다 —
+      // "예약한 줄 알았는데 바로 공개된" 실패가 제일 나쁘다.
+      if (input.publishAt) {
+        const when = new Date(input.publishAt);
+        if (!(await setSchedule(page, when))) {
+          const p = await shot(page, artifactDir, `schedule-fail-${Date.now()}`);
+          return { ok: false, error: "등록 예약 설정 실패 — 즉시 공개를 막기 위해 중단했습니다", screenshotPath: p };
+        }
       }
-      await pickCategory(page, input.category.primary, input.category.secondary);
     } else {
       await page.locator(SEL.title).first().fill(input.title);
       if (input.description) {

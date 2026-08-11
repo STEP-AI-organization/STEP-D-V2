@@ -23,7 +23,7 @@ WORKER_JOBS=naver NAVER_UPLOAD_ENABLED=1 pnpm --filter @stepd/server worker
 `DATABASE_URL` 은 Cloud SQL 을 봐야 같은 `job_queue` 를 집는다.
 세션은 `~/.stepd/naver-storage-state.json` — **머신 밖으로 내보내지 않는다**(쿠키 그 자체).
 
-잡 페이로드: `{ clipId, target: "tv" | "clip", description, tags?, category: { primary, secondary } }`
+잡 페이로드: `{ clipId, target: "tv" | "clip", description, tags?, category?, publishAt? }`
 (클립은 description·category 가 **필수** — 없으면 워커가 올리기 전에 실패시킨다)
 
 ## 게이트
@@ -55,7 +55,15 @@ WORKER_JOBS=naver NAVER_UPLOAD_ENABLED=1 pnpm --filter @stepd/server worker
 (2026-08-11 확인). 자동화할 필요 없다.
 
 카테고리 트리거는 **문구로 잡으면 안 된다** — 선택 후 라벨이 고른 값으로 바뀐다.
-`[class*="dropdownWrap"]` 순서(0=1차, 1=2차)로 잡는다.
+`[class*="dropdownWrap"]` 순서(0=1차, 1=2차)로 잡는다. 옵션 매칭은 정확일치(`^…$`)로 —
+`hasText` 는 부분일치라 "엔터" 가 "엔터테인먼트" 에도 걸린다.
+
+기본 카테고리는 **1차·2차 모두 "엔터"** (`DEFAULT_CATEGORY`). 프로그램별 사전등록이
+붙기 전까지의 임시값이다.
+
+**등록 예약**(`publishAt`)은 공개 설정의 "등록 예약" 체크 + 날짜/시/분이다.
+설정에 실패하면 **즉시 등록**되어 버리므로 그냥 넘어가지 않고 업로드를 중단한다 —
+"예약한 줄 알았는데 바로 공개된" 실패가 제일 나쁘다.
 
 ## 함정 (전부 실제로 당한 것)
 
