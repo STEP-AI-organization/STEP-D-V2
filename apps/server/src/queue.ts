@@ -158,6 +158,25 @@ async function claimJobInner(types?: JobType[]): Promise<Job | null> {
   // ever touching the same row). No filter → claim any type (single-worker fallback).
   const laneFilter = types && types.length ? "AND type = ANY($2::text[])" : "";
   const params: unknown[] = types && types.length ? [now, types] : [now];
+
+  // 정지된 회사의 잡은 집지 않는다 (0단계 · 회사 정지 실효화).
+  //
+  // 여기가 **모든 잡이 반드시 지나는 유일한 길목**이라 큐잉 경로가 몇 개든 상관없이 막힌다.
+  // 큐잉 시점 차단만으로는 이미 큐에 들어와 있던 잡을 못 막는데, 정지는 보통 잡이 쌓인
+  // 뒤에 걸린다.
+  //
+  // 실패하는 게 아니라 **건너뛴다** — 회사가 다시 active 가 되면 그대로 이어서 돈다.
+  //
+  // ⚠️ `NOT EXISTS (… AND status <> 'active')` 지, `EXISTS (… AND status = 'active')` 가
+  // 아니다. 시스템 스코프 잡은 tenant_id 가 '*' 라 tenants 에 행이 없다 — 후자로 쓰면
+  // **시스템 잡이 전부 영영 안 돈다.** 여기서는 "모르면 통과"가 맞고, 모르는 tenant_id 로
+  // 잡을 넣는 경로는 시스템 자신뿐이다.
+  const suspendedFilter = `
+        AND NOT EXISTS (
+          SELECT 1 FROM tenants t
+           WHERE t.id = job_queue.tenant_id AND t.status <> 'active'
+        )`;
+
   const { rows } = await getPool().query(
     `UPDATE job_queue SET
        status    = 'running',
@@ -166,7 +185,7 @@ async function claimJobInner(types?: JobType[]): Promise<Job | null> {
        updatedAt = $1
      WHERE id = (
        SELECT id FROM job_queue
-        WHERE status = 'pending' AND runAfter <= $1 AND attempts < maxAttempts ${laneFilter}
+        WHERE status = 'pending' AND runAfter <= $1 AND attempts < maxAttempts ${laneFilter}${suspendedFilter}
         ORDER BY runAfter ASC, createdAt ASC
         FOR UPDATE SKIP LOCKED
         LIMIT 1

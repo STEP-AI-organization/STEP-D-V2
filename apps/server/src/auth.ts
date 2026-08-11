@@ -115,12 +115,23 @@ const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 // 여기 한 줄에 넣어 두면 findUserByEmail·createUser·resolveSession 이 전부 같이 읽는다.
 const USER_COLS = `id, tenant_id AS "tenantId", email, name, role, status, ops_role AS "opsRole"`;
 
-export async function findUserByEmail(email: string): Promise<(User & { passwordHash: string }) | null> {
+/**
+ * 로그인 대조용 조회. **소속 회사 상태까지 같이 읽는다** — 로그인 시점에 회사가 정지됐는지
+ * 봐야 하는데, 여기서 안 읽으면 라우트가 쿼리를 한 번 더 쏘게 된다.
+ * 회사 행이 없어도 사용자는 나와야 하므로 LEFT JOIN 이다(판정은 workspaceBlockReason 이 한다).
+ */
+export async function findUserByEmail(
+  email: string,
+): Promise<(User & { passwordHash: string; tenantStatus: string | null }) | null> {
   const { rows } = await getRawPool().query(
-    `SELECT ${USER_COLS}, password_hash AS "passwordHash" FROM users WHERE LOWER(email) = LOWER($1)`,
+    `SELECT u.id, u.tenant_id AS "tenantId", u.email, u.name, u.role, u.status,
+            u.ops_role AS "opsRole", u.password_hash AS "passwordHash",
+            t.status AS "tenantStatus"
+       FROM users u LEFT JOIN tenants t ON t.id = u.tenant_id
+      WHERE LOWER(u.email) = LOWER($1)`,
     [email],
   );
-  return (rows[0] as (User & { passwordHash: string }) | undefined) ?? null;
+  return (rows[0] as (User & { passwordHash: string; tenantStatus: string | null }) | undefined) ?? null;
 }
 
 /**
@@ -135,6 +146,32 @@ export function canManageWorkspace(role: Role): boolean {
 /** 워크스페이스의 주인 급 — 역할 변경·owner 승격은 여기까지만 허용한다. */
 export function isWorkspaceOwner(role: Role): boolean {
   return role === "owner" || role === "superadmin";
+}
+
+/**
+ * 회사(워크스페이스)가 살아 있는가 — 막아야 하면 사유 문자열, 아니면 null.
+ *
+ * **미납·계약종료를 실제로 막는 지점이다.** 2026-08-11 이전에는 어드민의 정지 버튼이
+ * `tenants.status` 행 하나만 바꾸고 끝이었다. 세션 검증도 로그인도 잡 큐도 그 값을 보지
+ * 않아서, 정지된 회사 사람들이 아무 일 없이 계속 썼다. 버튼이 있는데 안 먹는 건
+ * 없느니만 못하다.
+ *
+ * **superadmin 은 예외다.** 플랫폼 역할이라 테넌트를 가로지르고(이 파일 상단 Role 주석),
+ * 자기 소속 워크스페이스가 정지되면 어드민 콘솔에 못 들어가서 **되돌릴 방법이 DB 직접
+ * 접속밖에 없는 잠김**이 된다. 정지를 푸는 사람이 정지에 걸리면 안 된다.
+ *
+ * 테넌트 행을 못 찾으면(null) 막는다 — 모르면 막는 쪽이 안전하다. FK 가 있어서 정상
+ * 경로에선 안 생기지만, 손으로 고친 행이나 미래에 추가될 상태값이 조용히 통과하면 곤란하다.
+ */
+export function workspaceBlockReason(
+  tenantStatus: string | null | undefined,
+  role: string | null | undefined,
+): string | null {
+  if (role === "superadmin") return null;
+  if (tenantStatus === "active") return null;
+  if (tenantStatus === "suspended") return "워크스페이스가 정지되었습니다. 담당자에게 문의해 주세요.";
+  if (tenantStatus === "closed") return "종료된 워크스페이스입니다.";
+  return "워크스페이스 상태를 확인할 수 없습니다.";
 }
 
 export async function createUser(input: {
@@ -201,13 +238,21 @@ export async function resolveSession(token: string | undefined): Promise<User | 
     // ops_role 을 빼먹으면 세션이 undefined 를 주고, "모르면 가장 좁은 권한"이 걸려
     // **모든 로그인 사용자가 vendor 가 된다.** 판정은 옳은데 입력이 없던 사고.
     `SELECT u.id, u.tenant_id AS "tenantId", u.email, u.name, u.role, u.status,
-            u.ops_role AS "opsRole", s.last_seen_at AS "lastSeenAt"
-       FROM sessions s JOIN users u ON u.id = s.user_id
+            u.ops_role AS "opsRole", s.last_seen_at AS "lastSeenAt",
+            t.status AS "tenantStatus"
+       FROM sessions s
+       JOIN users u ON u.id = s.user_id
+       LEFT JOIN tenants t ON t.id = u.tenant_id
       WHERE s.token_hash = $1 AND s.expires_at > $2`,
     [sha256(token), now],
   );
-  const row = rows[0] as (User & { lastSeenAt: number }) | undefined;
+  const row = rows[0] as (User & { lastSeenAt: number; tenantStatus: string | null }) | undefined;
   if (!row || row.status !== "active") return null;
+  // 회사가 정지되면 이미 로그인해 있던 사람도 여기서 끊긴다. 세션 파기(destroyTenantSessions)
+  // 와 겹쳐 보이지만 둘 다 필요하다 — 파기는 정지 "시점"에 한 번, 이 검사는 그 뒤에 만들어진
+  // 세션과 파기가 놓친 것까지 잡는 상시 그물이다. index.ts 의 app.use("*") 가 이 결과로
+  // 401 을 내므로, 정지된 회사는 잡 큐잉을 포함해 **모든 요청**이 막힌다.
+  if (workspaceBlockReason(row.tenantStatus, row.role)) return null;
   if (now - Number(row.lastSeenAt) > 24 * 60 * 60 * 1000) {
     await getRawPool()
       .query("UPDATE sessions SET last_seen_at = $2 WHERE token_hash = $1", [sha256(token), now])
@@ -236,6 +281,24 @@ export async function destroyAllSessions(userId: string, exceptToken?: string): 
   } else {
     await getRawPool().query("DELETE FROM sessions WHERE user_id = $1", [userId]);
   }
+}
+
+/**
+ * 회사를 정지·종료할 때 그 회사 사람들을 즉시 끊는다. 끊은 세션 수를 돌려준다.
+ *
+ * 사용자 정지는 예전부터 `destroyAllSessions` 로 세션을 끊었는데 **회사 정지만 안 끊고
+ * 있었다** — 상태 행만 바꾸니 이미 로그인한 사람은 그대로 쓰고 있었다.
+ *
+ * superadmin 세션은 남긴다. workspaceBlockReason 의 예외와 같은 이유로, 정지를 되돌릴
+ * 사람까지 끊으면 잠긴다.
+ */
+export async function destroyTenantSessions(tenantId: string): Promise<number> {
+  const { rowCount } = await getRawPool().query(
+    `DELETE FROM sessions s USING users u
+      WHERE u.id = s.user_id AND s.tenant_id = $1 AND u.role <> 'superadmin'`,
+    [tenantId],
+  );
+  return rowCount ?? 0;
 }
 
 // ── 초대 ───────────────────────────────────────────────────────────────────────

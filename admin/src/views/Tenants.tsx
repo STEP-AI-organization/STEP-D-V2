@@ -53,7 +53,12 @@ function Row({ t, onChanged }: { t: Tenant; onChanged: () => void }) {
     if (!reason) return;
     setBusy(true);
     try {
-      await api.updateTenant(t.id, { status: next, reason });
+      const r = await api.updateTenant(t.id, { status: next, reason });
+      // 정지가 **실제로 끊었는지**를 숫자로 보여준다. 예전엔 상태 행만 바뀌고 로그인해 있던
+      // 사람은 그대로 쓰고 있었는데, 화면상으로는 구분이 안 됐다.
+      if (next === "suspended") {
+        alert(`${t.name} 정지 — 진행 중이던 세션 ${r.sessionsRevoked ?? 0}개를 끊었습니다.`);
+      }
       onChanged();
     } catch (e) {
       alert(String(e));

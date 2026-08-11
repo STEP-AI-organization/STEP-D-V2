@@ -67,8 +67,9 @@ export const api = {
   tenants: () => get<{ tenants: Tenant[] }>("/api/superadmin/tenants"),
   createTenant: (t: { id?: string; name: string; kind: string; billingEmail?: string }) =>
     post<{ id: string }>("/api/superadmin/tenants", t),
+  // sessionsRevoked — 정지·종료로 끊은 세션 수. 정지가 실제로 먹었는지 화면이 보여줄 근거다.
   updateTenant: (id: string, patchBody: { status?: string; name?: string; reason?: string }) =>
-    patch<{ ok: true }>(`/api/superadmin/tenants/${encodeURIComponent(id)}`, patchBody),
+    patch<{ ok: true; sessionsRevoked?: number }>(`/api/superadmin/tenants/${encodeURIComponent(id)}`, patchBody),
 
   users: (tenant?: string, reason?: string) => {
     const q = new URLSearchParams();

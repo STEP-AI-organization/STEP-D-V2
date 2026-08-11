@@ -998,9 +998,12 @@ export async function login(email: string, password: string): Promise<AuthUser> 
     body: JSON.stringify({ email, password }),
   });
   if (!res.ok) {
-    const b = (await res.json().catch(() => null)) as { error?: string } | null;
+    const b = (await res.json().catch(() => null)) as { error?: string; message?: string } | null;
     // 계정 존재 여부를 흘리지 않는다 — 서버가 그러라고 더미 해시까지 돌린다.
-    throw new Error(b?.error === "invalid_credentials" ? "이메일 또는 비밀번호가 올바르지 않습니다." : (b?.error ?? `${res.status}`));
+    if (b?.error === "invalid_credentials") throw new Error("이메일 또는 비밀번호가 올바르지 않습니다.");
+    // 회사 정지(403)처럼 **사용자가 할 일이 다른** 실패는 서버가 사람 말로 사유를 준다.
+    // 이걸 버리고 error 코드만 띄우면 화면에 "workspace_blocked" 가 그대로 뜬다.
+    throw new Error(b?.message ?? b?.error ?? `${res.status}`);
   }
   return (await res.json()).user;
 }

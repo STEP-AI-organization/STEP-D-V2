@@ -31,11 +31,13 @@ import {
   createSession,
   destroyAllSessions,
   destroySession,
+  destroyTenantSessions,
   findUserByEmail,
   passwordProblem,
   resolveSession,
   setPassword,
   verifyPassword,
+  workspaceBlockReason,
   type User,
 } from "./auth.ts";
 import { audit, clientIp, requireReason, requireSuperadmin } from "./admin.ts";
@@ -436,6 +438,14 @@ app.post("/api/auth/login", async (c) => {
     return c.json({ error: "invalid_credentials" }, 401);
   }
 
+  // 회사 정지는 자격증명 문제가 아니다. 401 로 뭉뚱그리면 사용자는 비밀번호가 틀린 줄 알고
+  // 계속 다시 친다 — 할 일이 "문의"인지 "재입력"인지 구분해 줘야 한다.
+  // 비밀번호가 맞은 뒤에만 알려주므로 계정 열거로는 새지 않는다.
+  const workspaceBlocked = workspaceBlockReason(user.tenantStatus, user.role);
+  if (workspaceBlocked) {
+    return c.json({ error: "workspace_blocked", message: workspaceBlocked }, 403);
+  }
+
   const { token, expiresAt } = await createSession(user, {
     userAgent: c.req.header("user-agent"),
     ip: c.req.header("x-forwarded-for")?.split(",")[0]?.trim(),
@@ -734,7 +744,14 @@ app.patch("/api/superadmin/tenants/:id", async (c) => {
     [id, body.status ?? null, body.name ?? null, body.billingEmail ?? null],
   );
   if (!rowCount) return c.json({ error: "not_found" }, 404);
-  return c.json({ ok: true });
+  // 상태만 바꾸고 끝내면 이미 로그인해 있는 사람들은 계속 쓴다. 사용자 정지는 예전부터
+  // 세션을 끊었는데(아래 users/:id/status) 회사 정지만 안 끊고 있었다 — 정지 버튼이
+  // 아무것도 안 막던 이유. 몇 개를 끊었는지 돌려줘서 화면이 "정말 끊겼는지" 보여줄 수 있게 한다.
+  let sessionsRevoked = 0;
+  if (body.status === "suspended" || body.status === "closed") {
+    sessionsRevoked = await destroyTenantSessions(id);
+  }
+  return c.json({ ok: true, sessionsRevoked });
 });
 
 /** 사용자 목록. tenant 파라미터로 좁힐 수 있고, 남의 테넌트를 볼 때는 사유가 필요하다. */
