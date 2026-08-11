@@ -491,12 +491,27 @@ export async function getEntity<T = unknown>(kind: EntityKind, id: string): Prom
   return rows[0]?.data as T | undefined;
 }
 
+/**
+ * 이관 기간 이중 쓰기 — entities 에 쓰면 정규 테이블에도 반영한다.
+ *
+ * 호출부가 124곳이고 index.ts 만 60곳인데 그 파일은 지금 재작성 중이다. 거기를 동시에
+ * 고치면 충돌이 확정이라, 저장 계층 한 곳에서 미러링한다. 라우트는 나중에 파일 단위로
+ * 옮기면 되고, 다 옮긴 뒤 이 배선과 entities 를 함께 지운다.
+ * (domain.ts 의 mirrorEntity 참고. 순환 import 를 피하려 동적 import 를 쓴다.)
+ */
+async function mirrorToDomain(kind: EntityKind, id: string, data: unknown): Promise<void> {
+  if (kind !== "program" && kind !== "episode" && kind !== "clip" && kind !== "recommendation") return;
+  const { mirrorEntity } = await import("./domain.ts");
+  await mirrorEntity(kind, id, data);
+}
+
 export async function putEntity(kind: EntityKind, id: string, data: unknown, ord = 0): Promise<void> {
   await pool.query(
     `INSERT INTO entities (kind, id, data, ord) VALUES ($1, $2, $3::jsonb, $4)
      ON CONFLICT (kind, id) DO UPDATE SET data = $3::jsonb`,
     [kind, id, JSON.stringify(data), ord],
   );
+  await mirrorToDomain(kind, id, data);
 }
 
 export async function prependEntity(kind: EntityKind, id: string, data: unknown): Promise<void> {
