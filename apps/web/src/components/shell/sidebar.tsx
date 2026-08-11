@@ -96,7 +96,13 @@ function CreditBalance() {
     };
     read();
     const t = setInterval(read, 60_000);
-    return () => { alive = false; clearInterval(t); };
+    // 충전 직후 60초를 기다리게 하지 않는다 — 크레딧 화면이 이 이벤트를 쏜다.
+    window.addEventListener("stepd:credits-changed", read);
+    return () => {
+      alive = false;
+      clearInterval(t);
+      window.removeEventListener("stepd:credits-changed", read);
+    };
   }, []);
 
   // 못 읽으면 0 이라고 하지 않는다 — "잔액 없음"으로 오해하면 충전을 안 해도 될 때 하게 된다.

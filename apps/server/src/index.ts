@@ -227,8 +227,10 @@ import {
 import { dispatchPublish } from "./publish-dispatch.ts";
 import { opsCapabilityOf } from "./ops-role.ts";
 import {
-  CREDIT_UNIT_LABEL, buildTopup, creditPriceKrw, settleTopup, topupDedupeKey, topupPaymentId,
+  CREDIT_UNIT_LABEL, buildTopup, checkCredits, creditPriceKrw, settleTopup,
+  topupDedupeKey, topupPaymentId,
 } from "./credits.ts";
+import { billableMinutes } from "./billing.ts";
 import { getPayment, verifyWebhook } from "./portone.ts";
 import { commitAndInherit } from "./adopt.ts";
 import { runAutomationCycle } from "./automation-cycle.ts";
@@ -1758,12 +1760,34 @@ app.get("/api/media/:id/analysis", async (c) => {
 // ── re-run the AI content pipeline for one media (operator recovery from a failed run) ──
 // A failed analysis was a dead-end in the UI — nothing let the operator re-kick it. Resumes
 // from checkpoints, so a re-run only pays for the stages that never finished.
+/**
+ * 분석을 시작해도 되는가 — **크레딧 게이트** (billing 계획 3단계).
+ *
+ * 시작 **전에** 본다. 58분짜리를 다 돌리고 나서 잔액이 없다고 하면 원가(₩285)는 이미 나갔다.
+ * 러닝타임을 모르면(프로브 실패 등) 막지 않는다 — 분석 자체를 못 하게 만드는 것보다 낫고,
+ * 차감은 끝난 뒤 실제 길이로 한다.
+ *
+ * @returns 막아야 하면 사유, 통과면 null.
+ */
+async function creditBlockReason(durationSec: number): Promise<string | null> {
+  const need = billableMinutes(durationSec ?? 0);
+  if (need <= 0) return null;
+  const verdict = checkCredits({ balance: await creditBalance(), needMinutes: need });
+  return verdict.allow ? null : verdict.reason;
+}
+
 app.post("/api/media/:id/analyze", async (c) => {
   const mediaId = c.req.param("id");
   const body = await c.req.json().catch(() => ({}) as Record<string, unknown>);
   const fast = body.fast === true;
   const media = await getMedia(mediaId);
   if (!media) return c.json({ error: "media not found" }, 404);
+
+  // 402 — 결제가 필요하다는 뜻의 상태코드다. 400 으로 주면 클라이언트가 "잘못된 요청"으로
+  // 읽어 충전 안내를 못 띄운다.
+  const blocked = await creditBlockReason(media.durationSec ?? 0);
+  if (blocked) return c.json({ error: "insufficient_credits", message: blocked }, 402);
+
   await markContentAnalysisPending(mediaId);
   const jobId = await enqueue(
     "content.analyze",
@@ -2196,15 +2220,30 @@ async function buildEpisodeAndMedia(opts: {
   // No heuristic placeholder recommendations — real segments come from the AI content
   // pipeline (content.analyze) on the worker. Uploads start with an empty recommend board.
   if (!opts.pendingIngestNote) {
-    try {
-      await markContentAnalysisPending(mediaId);
-      await enqueue(
-        "content.analyze",
-        { mediaId, ...(opts.fast ? { fast: true } : {}) },
-        { dedupeKey: `content.analyze:${mediaId}` },
-      );
-    } catch (err) {
-      console.error("[upload] failed to enqueue content.analyze", err);
+    // 크레딧이 모자라면 **분석 잡을 넣지 않는다.** 업로드 자체는 성공으로 둔다 —
+    // 파일은 이미 올라갔고, 충전 후 회차 화면에서 분석을 다시 시작하면 된다.
+    const blocked = await creditBlockReason(meta.durationSec ?? 0);
+    if (blocked) {
+      console.warn(`[upload] ${mediaId}: 크레딧 부족으로 분석 보류 — ${blocked}`);
+      await putEntity("episode", episodeId, {
+        ...episode,
+        pipeline: {
+          stage: "analyze", stageStatus: "warn", progress: 0,
+          note: "크레딧 부족 — 충전 후 분석을 시작하세요",
+          blockedReason: blocked,
+        },
+      }).catch(() => {});
+    } else {
+      try {
+        await markContentAnalysisPending(mediaId);
+        await enqueue(
+          "content.analyze",
+          { mediaId, ...(opts.fast ? { fast: true } : {}) },
+          { dedupeKey: `content.analyze:${mediaId}` },
+        );
+      } catch (err) {
+        console.error("[upload] failed to enqueue content.analyze", err);
+      }
     }
   }
 
@@ -3835,6 +3874,22 @@ app.post("/api/billing/portone/webhook", async (c) => {
       // 조회가 실패하면 크레딧을 올리지 않는다. 포트원이 웹훅을 재전송하므로
       // 일시적 오류면 다음 번에 성공한다 — 여기서 성공으로 치는 게 최악이다.
       console.error(`[billing] 결제 조회 실패 ${paymentId}`, e);
+    }
+
+      // 취소·실패 이벤트는 **기록만** 한다. 환불 정책상 크레딧을 자동으로 빼지 않지만,
+    // 포트원엔 "취소됨"인데 우리 원장엔 흔적이 없으면 나중에 정산이 안 맞을 때
+    // 원인을 못 찾는다. 잔액을 건드리지 않으므로 delta 0 으로 남긴다.
+    if (/Cancelled|Canceled|Failed/i.test(String(body.type ?? ""))) {
+      await addCreditEntry({
+        delta: 0,
+        reason: "adjust",
+        paymentId,
+        note: `PG 이벤트 ${body.type} — 정책상 크레딧은 회수하지 않음`,
+        actor: "portone-webhook",
+        dedupeKey: `pgevent:${paymentId}:${body.type}`,
+      }).catch((e) => console.error("[billing] 취소 기록 실패", e));
+      console.warn(`[billing] ${body.type} 수신 ${paymentId} — 기록만 함(크레딧 유지)`);
+      return c.json({ ok: true, credited: false, reason: "취소/실패 이벤트 — 기록만" });
     }
 
     const settle = settleTopup({ order, payment });

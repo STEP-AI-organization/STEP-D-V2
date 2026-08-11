@@ -198,8 +198,10 @@ export async function resolveSession(token: string | undefined): Promise<User | 
   if (!token) return null;
   const now = Date.now();
   const { rows } = await getRawPool().query(
+    // ops_role 을 빼먹으면 세션이 undefined 를 주고, "모르면 가장 좁은 권한"이 걸려
+    // **모든 로그인 사용자가 vendor 가 된다.** 판정은 옳은데 입력이 없던 사고.
     `SELECT u.id, u.tenant_id AS "tenantId", u.email, u.name, u.role, u.status,
-            s.last_seen_at AS "lastSeenAt"
+            u.ops_role AS "opsRole", s.last_seen_at AS "lastSeenAt"
        FROM sessions s JOIN users u ON u.id = s.user_id
       WHERE s.token_hash = $1 AND s.expires_at > $2`,
     [sha256(token), now],

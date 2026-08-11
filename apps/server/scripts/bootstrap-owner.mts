@@ -24,8 +24,11 @@ async function readPassword(): Promise<string> {
 }
 
 async function main() {
-  const email = process.argv[2];
-  const name = process.argv[3] ?? "";
+  const args = process.argv.slice(2).filter((a) => a !== "--allow-weak");
+  // 운영자가 명시적으로 택할 때만. 첫 계정은 워크스페이스 전체 권한을 가지므로 기본은 막는다.
+  const allowWeak = process.argv.includes("--allow-weak");
+  const email = args[0];
+  const name = args[1] ?? "";
   if (!email || !email.includes("@")) {
     console.error("사용법: printf '%s' '비밀번호' | npx tsx scripts/bootstrap-owner.mts <이메일> [이름]");
     process.exit(1);
@@ -63,9 +66,12 @@ async function main() {
       name,
       password,
       role: "owner",
-      // 부트스트랩이라 길이 검사를 건너뛸 수 있게 열려 있지만, 켜지 않는다 —
-      // 첫 계정이 제일 강해야 한다(워크스페이스 전체 권한을 갖는다).
+      allowWeakPassword: allowWeak,
     });
+    if (allowWeak) {
+      console.warn("⚠️  --allow-weak: 비밀번호 길이 검사를 건너뛰었다. 이 계정은 워크스페이스");
+      console.warn("    전체 권한(초대·채널 연결·결제)을 가진다 — 되도록 빨리 바꿀 것.");
+    }
 
     // ops_role 은 0022 의 UPDATE 로 owner→cp 가 되지만, 그건 이미 있던 행만 대상이다.
     // 새로 만든 첫 계정에도 같은 규칙을 적용한다(운영 역할 = 방송 업무 권한).

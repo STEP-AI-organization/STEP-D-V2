@@ -127,6 +127,8 @@ export default function CreditsPage() {
         setState(next);
         if (next.ledger.some((l) => l.paymentId === paymentId)) {
           setAwaiting(null);
+          // 사이드바 잔액도 즉시 따라오게 한다.
+          window.dispatchEvent(new Event("stepd:credits-changed"));
           toast({ title: "충전 완료", description: `${credits} 크레딧이 들어왔습니다.`, tone: "done" });
           return;
         }
