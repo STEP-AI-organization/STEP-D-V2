@@ -21,7 +21,30 @@ pnpm --filter @stepd/server naver:login                # 브라우저가 뜬다 
 
 로그인 후 네이버 TV·클립 두 사이트를 한 번씩 방문해 양쪽 도메인 쿠키를 함께 담는다.
 
-## 2. 상시 실행
+## 2. 설치 — 한 번만 (그 뒤로는 자동)
+
+```powershell
+.\deploy
+aver-pc\install.ps1
+```
+
+pm2 로 워커를 등록하고, **10분마다 origin/main 을 당겨 재시작**하는 작업을 스케줄러에 건다.
+이후 **배포는 `main` 에 push 하는 것으로 끝난다** — 이 PC 는 알아서 따라온다.
+
+왜 SSH 로 밀지 않는가: 사무실 PC 는 NAT 뒤라 포트포워딩·고정IP·키 관리가 전부 유지보수
+부담이 된다. **당겨오는 쪽이 설정할 게 없다.** 변경이 없으면 재시작도 하지 않으므로
+발행 중인 잡이 끊기지 않는다.
+
+```
+pm2 status stepd-naver-worker      # 상태
+pm2 logs stepd-naver-worker        # 워커 로그
+~/.stepd/self-update.log           # 갱신 로그
+```
+
+> ⚠️ **코드가 최신이어도 프로세스가 옛날이면 소용없다.** 2026-08-11 에 5일간 구버전으로
+> 돌던 워커가 잡을 가로채 계속 실패시켰다 — self-update 가 재시작까지 하는 이유다.
+
+## 2-b. 수동 실행 (디버깅용)
 
 ```bash
 NAVER_UPLOAD_ENABLED=1 pnpm --filter @stepd/server worker:naver
