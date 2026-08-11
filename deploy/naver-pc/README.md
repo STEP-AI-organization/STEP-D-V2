@@ -1,6 +1,13 @@
-# 네이버 워커 PC 셋업
+# 윈도우2 (네이버 워커) 셋업
 
-이 PC 는 **네이버 TV·클립 발행만** 담당한다. 다른 잡은 집지 않는다.
+> **머신 호칭** — 문서·대화에서 "이 컴/저 컴" 대신 아래를 쓴다.
+>
+> | 이름 | 정체 | Tailscale |
+> |---|---|---|
+> | **윈도우1** | 개발·배포 PC (배포는 여기서 나간다) | `desktop-c5bdabc` / `100.85.157.120` |
+> | **윈도우2** | **이 문서의 대상** — 네이버 워커 전용 | 아래 1단계에서 등록 |
+
+윈도우2 는 **네이버 TV·클립 발행만** 담당한다. 다른 잡은 집지 않는다.
 
 왜 클라우드가 아닌가: 네이버는 공개 업로드 API 가 없어 브라우저 자동화가 유일한데,
 해외 데이터센터 IP(Cloud Run)로 로그인하면 캡차·2차인증에 막힌다. 그래서 **한국 IP 의
@@ -12,7 +19,7 @@
 
 ## 0. 준비물
 
-- Windows 10/11, **절전·최대절전 끔** (잠들면 잡을 못 집는다)
+- Windows 10/11 (윈도우2), **절전·최대절전 끔** (잠들면 잡을 못 집는다)
 - Node ≥22 · pnpm · git
 - 네이버 계정 (발행할 채널의 주인)
 - GCP 서비스 계정 키 2종 — Cloud SQL 접속용(`roles/cloudsql.client`),
@@ -36,7 +43,7 @@ Set-Service sshd -StartupType Automatic
 Start-Service sshd
 ```
 
-배포 머신(`desktop-c5bdabc`)의 공개키를 등록한다.
+윈도우1(`desktop-c5bdabc`)의 공개키를 등록한다.
 
 ```
 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKh3WFBK1kFd1mwQF9m+lbJ1hX4Gw1vJCWmf62MuRYDu hkj@stepai.kr
@@ -57,7 +64,7 @@ icacls $f /inheritance:r /grant "Administrators:F" /grant "SYSTEM:F"
 tailscale status      # 이 PC 이름과 100.x 주소
 hostname
 ```
-→ **호스트명을 배포 담당에게 알려줄 것.**
+→ **호스트명을 알려줄 것.** 윈도우1 에서 이 이름으로 원격 갱신을 찌른다.
 
 ---
 
@@ -104,7 +111,12 @@ NAVER_UPLOAD_ENABLED=1
 
 ```powershell
 pnpm --filter @stepd/server naver:login
+# 고객사 계정이 여럿이면: naver:login --account <accountKey>
 ```
+
+⚠️ **이때만 브라우저 창이 뜬다.** 워커는 headless 로 돌아 창이 안 뜬다 — 윈도우2 를
+누가 쓰고 있어도 방해되지 않는다. 로그인은 윈도우2 앞에 있거나 원격데스크톱(Tailscale
+위로 RDP)이 필요하다. SSH 로는 GUI 를 못 띄운다.
 
 브라우저가 뜨면 **2차인증까지** 끝낸다. 코드는 아이디·비밀번호를 만지지 않는다.
 끝나면 `~/.stepd/naver-storage-state.json` 에 세션이 저장된다.
@@ -122,8 +134,8 @@ pnpm --filter @stepd/server naver:login
 ```
 
 pm2 로 워커를 등록하고, **10분마다 origin/main 을 당겨 재시작**하는 작업을 스케줄러에 건다.
-이후 **배포는 `main` 에 push 하는 것으로 끝난다** — 이 PC 는 알아서 따라온다.
-배포 담당이 급하면 Tailscale 로 즉시 갱신을 찔러줄 수도 있다(`push-update.ps1`).
+이후 **배포는 `main` 에 push 하는 것으로 끝난다** — 윈도우2 는 알아서 따라온다.
+급하면 윈도우1 에서 Tailscale 로 즉시 갱신을 찌를 수도 있다(`push-update.ps1`).
 
 ---
 
@@ -158,6 +170,6 @@ pnpm --filter @stepd/server naver:e2e-seed <세로영상.mp4>
 ## 알아둘 것
 
 - **코드가 최신이어도 프로세스가 옛날이면 소용없다.** self-update 가 재시작까지 하는 이유다.
-- **페이싱이 아직 없다.** 짧은 시간에 여러 건을 몰아넣으면 네이버가 불안정해진다.
-  초기엔 몇 건씩 넣어보며 한도를 재는 게 안전하다.
+- **발행 사이에 60초 간격**이 들어간다(`NAVER_MIN_GAP_MS`). 짧은 시간에 몰아넣으면
+  네이버가 불안정해져서 보수적으로 잡았다. 정확한 한도는 아직 모른다.
 - **약관 리스크는 사업 판단이다.** 본인 계정·본인 콘텐츠라도 자동화 도구는 제한될 수 있다.

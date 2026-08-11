@@ -3,12 +3,15 @@
 > 2026-08-11 실측. 코드는 `apps/server/src/naver-tv.ts` · `naver-session.ts` ·
 > `naver-gate.ts` · `naver-workdir.ts`. 작업 지침은 스킬 `/naver-publish`.
 
+> **머신 호칭** — 윈도우1 = 개발·배포 PC(`desktop-c5bdabc`), **윈도우2 = 네이버 워커 전용 PC**.
+> 아래에서 "워커 PC" 는 전부 윈도우2 를 가리킨다.
+
 네이버는 **공개 업로드 API 가 없다.** 파트너 계약(SMR) 경로가 열리기 전까지 Playwright
-브라우저 자동화가 유일하다. 그래서 다른 잡과 달리 **클라우드가 아니라 사무실 PC 한 대**에서
+브라우저 자동화가 유일하다. 그래서 다른 잡과 달리 **클라우드가 아니라 윈도우2 한 대**에서
 돈다 — 해외 데이터센터 IP(Cloud Run us-central1)로 로그인하면 캡차·2차인증에 막힌다.
 GEBD 를 GPU VM 전용 레인으로 뺀 것과 같은 구조다.
 
-## 1. 워커 PC 세팅 (한 번)
+## 1. 윈도우2 세팅 (한 번)
 
 > **그 PC 에서 따라갈 순서는 [deploy/naver-pc/README.md](../../deploy/naver-pc/README.md)
 > 하나에 정리돼 있다.** 클론 후 그것만 보면 된다. 아래는 요약.
