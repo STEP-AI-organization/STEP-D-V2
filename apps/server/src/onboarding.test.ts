@@ -162,7 +162,7 @@ describe("배선 — 한 트랜잭션인가", () => {
     const tx = /withRawTransaction\(async \(db\) => \{[\s\S]*?\n {4}\}\);/.exec(r)?.[0] ?? "";
     assert.notEqual(tx, "", "트랜잭션 블록을 찾지 못했다");
     assert.match(tx, /INSERT INTO tenants/, "회사 INSERT 가 트랜잭션 밖에 있다");
-    assert.match(tx, /createInvite\(/, "초대가 트랜잭션 밖에 있으면 실패해도 회사가 남는다");
+    assert.match(tx, /createUser\(/, "첫 담당자 계정이 트랜잭션 밖에 있으면 회사만 남는다");
     assert.match(tx, /credit_ledger/, "초기 크레딧이 트랜잭션 밖에 있다");
   });
 
@@ -170,7 +170,7 @@ describe("배선 — 한 트랜잭션인가", () => {
     // createInvite 에 db 를 안 넘기면 풀에서 별도 연결로 돌아 **롤백에 안 걸린다** —
     // 트랜잭션을 열어 놓고도 초대만 살아남는 최악의 모양이 된다.
     const tx = /withRawTransaction\(async \(db\) => \{[\s\S]*?\n {4}\}\);/.exec(route())?.[0] ?? "";
-    assert.match(tx, /createInvite\([\s\S]*?\bdb\b[\s\S]*?\)/, "createInvite 가 트랜잭션 연결을 안 쓴다");
+    assert.match(tx, /createUser\([\s\S]*?\bdb\b[\s\S]*?\)/, "createUser 가 트랜잭션 연결을 안 쓴다");
   });
 
   it("id 를 트랜잭션 안에서 매긴다", () => {

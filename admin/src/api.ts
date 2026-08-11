@@ -26,6 +26,7 @@ const post = <T>(p: string, body?: unknown) =>
   call<T>(p, { method: "POST", body: JSON.stringify(body ?? {}) });
 const patch = <T>(p: string, body?: unknown) =>
   call<T>(p, { method: "PATCH", body: JSON.stringify(body ?? {}) });
+const del = <T>(p: string) => call<T>(p, { method: "DELETE" });
 
 // ── 타입 ───────────────────────────────────────────────────────────────────────
 
@@ -70,6 +71,24 @@ export interface Overview {
   jobs: Record<string, number>;
   media: { count: number; minutes: number };
 }
+export interface CompanyDetail {
+  tenant: Pick<Tenant, "id" | "name" | "kind" | "status" | "billingEmail" | "createdAt">;
+  members: AdminUser[];
+  summary: {
+    members: number; mediaCount: number; mediaMinutes: number; credits: number;
+    usedThisMonth: number; channels: number; failedJobs: number;
+    performance: { views: number; minutesWatched: number; netSubscribers: number; revenue: number };
+  };
+  jobs: Omit<AdminJob, "tenantId" | "createdAt">[];
+  payments: Omit<Payment, "tenantId">[];
+  audit: Array<Pick<AuditEntry, "id" | "actorEmail" | "action" | "targetId" | "reason" | "detail" | "at">>;
+}
+export interface Performance {
+  from: string;
+  summary: { views: number; minutesWatched: number; netSubscribers: number; revenue: number };
+  channels: Array<{ channelId: string; channelName: string; status: string; views: number; minutesWatched: number; netSubscribers: number; revenue: number }>;
+  daily: Array<{ day: string; views: number }>;
+}
 
 // ── 호출 ───────────────────────────────────────────────────────────────────────
 
@@ -87,17 +106,19 @@ export const api = {
    */
   // id 는 보내지 않는다 — 서버가 순번을 매긴다. 사람에게 의미 있는 건 이름이다.
   createTenant: (t: {
-    name: string; kind: string;
-    ownerEmail: string; billingEmail?: string; initialCredits?: number;
+    name: string; kind: string; ownerEmail: string; ownerName?: string; ownerPassword?: string;
+    billingEmail?: string; initialCredits?: number;
   }) =>
     post<{
       id: string;
       name: string;
       ownerEmail: string;
       initialCredits: number;
-      inviteToken: string;
-      inviteExpiresAt: number;
-      inviteUrl: string | null;
+      owner: AdminUser;
+      temporaryPassword: string;
+      /** Legacy inline company form is no longer rendered; retained while its file is retired. */
+      inviteToken?: string;
+      inviteUrl?: string | null;
     }>("/api/superadmin/tenants", t),
   // sessionsRevoked — 정지·종료로 끊은 세션 수. 정지가 실제로 먹었는지 화면이 보여줄 근거다.
   updateTenant: (id: string, patchBody: { status?: string; name?: string; reason?: string }) =>
@@ -114,6 +135,13 @@ export const api = {
   invite: (tenantId: string, email: string, role: string, reason?: string) =>
     post<{ inviteId: string; token: string; expiresAt: number }>(
       `/api/superadmin/tenants/${encodeURIComponent(tenantId)}/invite`, { email, role, reason }),
+  company: (tenantId: string) => get<CompanyDetail>(`/api/superadmin/tenants/${encodeURIComponent(tenantId)}/detail`),
+  performance: (tenantId: string) => get<Performance>(`/api/superadmin/tenants/${encodeURIComponent(tenantId)}/performance`),
+  createMember: (tenantId: string, body: { email: string; name?: string; role: string; password?: string }) =>
+    post<{ member: AdminUser; temporaryPassword: string }>(`/api/superadmin/tenants/${encodeURIComponent(tenantId)}/members`, body),
+  resetMemberPassword: (id: string, password?: string) =>
+    post<{ ok: true; temporaryPassword: string }>(`/api/superadmin/users/${encodeURIComponent(id)}/password`, { password }),
+  deleteMember: (id: string) => del<{ ok: true }>(`/api/superadmin/users/${encodeURIComponent(id)}`),
 
   // ── 회사별 API 키 ──
   // 고객사 **시스템**이 우리를 호출하는 열쇠다. 평문은 발급 응답에 한 번만 나오고
@@ -121,7 +149,7 @@ export const api = {
   apiKeys: (tenantId: string) =>
     get<{ keys: ApiKey[]; scopes: string[] }>(
       `/api/superadmin/tenants/${encodeURIComponent(tenantId)}/api-keys`),
-  createApiKey: (tenantId: string, body: { name?: string; scopes: string[]; reason?: string }) =>
+  createApiKey: (tenantId: string, body: { name?: string; scopes?: string[]; reason?: string }) =>
     post<{ id: string; key: string; prefix: string; scopes: string[] }>(
       `/api/superadmin/tenants/${encodeURIComponent(tenantId)}/api-keys`, body),
   revokeApiKey: (keyId: string, reason?: string) =>
@@ -142,6 +170,8 @@ export const api = {
   jobs: (tenant?: string) =>
     get<{ jobs: AdminJob[] }>(
       `/api/superadmin/jobs${tenant ? `?tenant=${encodeURIComponent(tenant)}` : ""}`),
+  retryJob: (id: string) => post<{ ok: true }>(`/api/superadmin/jobs/${encodeURIComponent(id)}/retry`),
+  removeJob: (id: string) => del<{ ok: true }>(`/api/superadmin/jobs/${encodeURIComponent(id)}`),
   // 감사 로그는 300건 상한이라 필터 없이는 "누가 우리 회사를 봤나" 를 못 찾는다.
   audit: (opts: { tenant?: string; q?: string } = {}) => {
     const qs = new URLSearchParams();

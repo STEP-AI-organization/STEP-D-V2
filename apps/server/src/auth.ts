@@ -185,12 +185,12 @@ export async function createUser(input: {
    * API 경로에서는 절대 쓰지 않는다(약한 비밀번호가 조용히 들어오는 문이 되면 안 된다).
    */
   allowWeakPassword?: boolean;
-}): Promise<User> {
+}, db?: Queryable): Promise<User> {
   const problem = input.allowWeakPassword ? null : passwordProblem(input.password);
   if (problem) throw new Error(problem);
   const id = `u_${crypto.randomBytes(9).toString("base64url")}`;
   const hash = await hashPassword(input.password);
-  const { rows } = await getRawPool().query(
+  const { rows } = await (db ?? getRawPool()).query(
     `INSERT INTO users (id, tenant_id, email, name, password_hash, role, created_at)
      VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING ${USER_COLS}`,
     [id, input.tenantId, input.email.trim(), input.name ?? "", hash, input.role ?? "member", Date.now()],

@@ -19,6 +19,7 @@ import {
   acceptInvite,
   canManageWorkspace,
   countActiveOwners,
+  createUser,
   createInvite,
   getMember,
   getWorkspace,
@@ -41,10 +42,10 @@ import {
   type User,
 } from "./auth.ts";
 import { audit, clientIp, requireReason, requireSuperadmin } from "./admin.ts";
-import { grantDedupeKey, inviteLink, nextTenantId, planOnboarding } from "./onboarding.ts";
+import { grantDedupeKey, nextTenantId, planOnboarding } from "./onboarding.ts";
 import {
   API_SCOPES, bearerKey, checkRoute, generateKey, hashKey, keyBlockReason, keyPrefix,
-  normalizeScopes, shouldTouchLastUsed,
+  shouldTouchLastUsed,
 } from "./api-keys.ts";
 import { logger } from "hono/logger";
 import fs from "node:fs";
@@ -770,7 +771,9 @@ app.post("/api/superadmin/tenants", async (c) => {
   if (!checked.ok) return c.json({ error: checked.error, message: checked.message }, 400);
   const plan = checked.plan;
 
-  let made: { id: string; invite: { token: string; expiresAt: number; id: string } };
+  const ownerName = String(body.ownerName ?? "").trim();
+  const ownerPassword = String(body.ownerPassword ?? "").trim() || crypto.randomBytes(12).toString("base64url");
+  let made: { id: string; owner: User };
   try {
     made = await withRawTransaction(async (db) => {
       // id 는 여기서 정한다 — **트랜잭션 안에서** 읽고 써야 두 개가 동시에 만들어져도
@@ -791,11 +794,10 @@ app.post("/api/superadmin/tenants", async (c) => {
           [id, plan.initialCredits, "개설 지급", actor.email, grantDedupeKey(id)],
         );
       }
-      const invite = await createInvite(
-        { tenantId: id, email: plan.ownerEmail, role: "owner", invitedBy: actor.id },
-        db,
-      );
-      return { id, invite };
+      const owner = await createUser({
+        tenantId: id, email: plan.ownerEmail, name: ownerName, password: ownerPassword, role: "owner",
+      }, db);
+      return { id, owner };
     });
   } catch (e: any) {
     if (e?.code === "23505") {
@@ -804,8 +806,6 @@ app.post("/api/superadmin/tenants", async (c) => {
     // 초대 실패(이미 계정이 있는 이메일 등)도 여기로 온다 — 회사는 만들어지지 않았다.
     return c.json({ error: "create_failed", message: String(e?.message ?? e) }, 400);
   }
-  const invite = made.invite;
-
   // 감사는 **만들어진 뒤**에 남긴다 — id 가 트랜잭션 안에서 정해지므로, 앞에 두면
   // 기록에 남는 대상이 null 이 된다.
   await audit(
@@ -813,7 +813,7 @@ app.post("/api/superadmin/tenants", async (c) => {
     {
       action: "tenant.create",
       targetTenant: made.id,
-      detail: { name: plan.name, kind: plan.kind, ownerEmail: plan.ownerEmail, initialCredits: plan.initialCredits },
+      detail: { name: plan.name, kind: plan.kind, ownerEmail: plan.ownerEmail, ownerName, initialCredits: plan.initialCredits },
     },
     clientIp(c),
   );
@@ -825,10 +825,9 @@ app.post("/api/superadmin/tenants", async (c) => {
     name: plan.name,
     ownerEmail: plan.ownerEmail,
     initialCredits: plan.initialCredits,
-    inviteToken: invite.token,
-    inviteExpiresAt: invite.expiresAt,
+    owner: made.owner,
+    temporaryPassword: ownerPassword,
     // 운영자가 그대로 복사해 보낼 수 있는 링크. PUBLIC_URL 이 없으면 null(가짜 링크는 안 만든다).
-    inviteUrl: inviteLink(process.env.PUBLIC_URL, invite.token),
     authPostureError,
   });
 });
@@ -862,11 +861,11 @@ app.patch("/api/superadmin/tenants/:id", async (c) => {
 app.get("/api/superadmin/users", async (c) => {
   const actor = requireSuperadmin(c);
   const tenant = c.req.query("tenant") ?? null;
+  const reason = c.req.query("reason") ?? null;
+  await audit(actor, { action: "user.list", targetTenant: tenant, reason }, clientIp(c));
   // 읽기에는 사유를 요구하지 않는다 (2026-08-11 결정 · docs/plans/admin-multi-tenant-plan.md).
   // 운영자가 조회할 때마다 사유를 적어야 하면 지원이 안 굴러간다. 대신 **누가 무엇을 봤는지는
   // 반드시 남긴다** — 다 볼 수 있게 열어 준 만큼 견제는 기록으로 한다. 쓰기는 여전히 사유 강제.
-  const reason = c.req.query("reason") ?? null;
-  await audit(actor, { action: "user.list", targetTenant: tenant, reason }, clientIp(c));
   const { rows } = await getRawPool().query(
     `SELECT id, tenant_id AS "tenantId", email, name, role, status,
             created_at AS "createdAt", last_login_at AS "lastLoginAt"
@@ -912,6 +911,182 @@ app.post("/api/superadmin/tenants/:id/invite", async (c) => {
 });
 
 /** 전 테넌트 잡 — 운영 현황. 잡 payload 에 남의 콘텐츠 식별자가 들어 있어 열람도 감사한다. */
+/** A company-first admin payload. It keeps related operational decisions in one place. */
+app.get("/api/superadmin/tenants/:id/detail", async (c) => {
+  const actor = requireSuperadmin(c);
+  const tenantId = c.req.param("id");
+  await audit(actor, { action: "tenant.detail.view", targetTenant: tenantId }, clientIp(c));
+  const from = new Date(Date.now() - 29 * 86_400_000).toISOString().slice(0, 10);
+  const [tenantResult, membersResult, scoped] = await Promise.all([
+    getRawPool().query(
+      `SELECT id, name, kind, status, billing_email AS "billingEmail", created_at AS "createdAt"
+         FROM tenants WHERE id = $1`, [tenantId]),
+    getRawPool().query(
+      `SELECT id, email, name, role, status, created_at AS "createdAt", last_login_at AS "lastLoginAt"
+         FROM users WHERE tenant_id = $1 ORDER BY created_at ASC`, [tenantId]),
+    asSystem(async (db) => {
+      const [credits, media, channels, jobs, payments, activity] = await Promise.all([
+        db.query(`SELECT COALESCE(SUM(delta), 0)::int AS balance,
+                         COALESCE(SUM(CASE WHEN delta < 0 AND occurred_at >= date_trunc('month', now()) THEN -delta ELSE 0 END), 0)::int AS "usedThisMonth"
+                    FROM credit_ledger WHERE tenant_id = $1`, [tenantId]),
+        db.query(`SELECT COUNT(*)::int AS count, COALESCE(SUM(durationSec), 0)::float AS seconds
+                    FROM media WHERE tenant_id = $1`, [tenantId]),
+        db.query(`SELECT COUNT(*)::int AS count FROM youtube_channels WHERE tenant_id = $1`, [tenantId]),
+        db.query(`SELECT id, type, status, attempts, error, updatedat AS "updatedAt"
+                    FROM job_queue WHERE tenant_id = $1 AND status IN ('failed', 'pending', 'running')
+                   ORDER BY updatedat DESC LIMIT 20`, [tenantId]),
+        db.query(`SELECT payment_id AS "paymentId", credits, amount_krw AS "amountKrw", status,
+                         requested_by AS "requestedBy", created_at AS "createdAt", settled_at AS "settledAt"
+                    FROM credit_topup WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT 10`, [tenantId]),
+        db.query(`SELECT COALESCE(SUM(ca.views), 0)::bigint AS views,
+                         COALESCE(SUM(ca.estimatedMinutesWatched), 0)::bigint AS "minutesWatched",
+                         COALESCE(SUM(ca.subscribersGained - ca.subscribersLost), 0)::bigint AS "netSubscribers",
+                         COALESCE(SUM(ca.estimatedRevenue), 0)::float8 AS revenue
+                    FROM channel_analytics ca JOIN youtube_channels yc ON yc.channelid = ca.channelid
+                   WHERE yc.tenant_id = $1 AND ca.day >= $2`, [tenantId, from]),
+      ]);
+      return { credits: credits.rows[0], media: media.rows[0], channels: channels.rows[0], jobs: jobs.rows, payments: payments.rows, activity: activity.rows[0] };
+    }),
+  ]);
+  const tenant = tenantResult.rows[0];
+  if (!tenant) return c.json({ error: "not_found" }, 404);
+  const { rows: auditRows } = await getRawPool().query(
+    `SELECT id, actor_email AS "actorEmail", action, target_id AS "targetId", reason, detail, at
+       FROM admin_audit WHERE target_tenant = $1 AND action NOT LIKE '%.list' AND action NOT LIKE '%.view'
+      ORDER BY at DESC LIMIT 50`, [tenantId]);
+  return c.json({
+    tenant,
+    members: membersResult.rows,
+    summary: {
+      members: membersResult.rows.filter((row: any) => row.status === "active").length,
+      mediaCount: Number(scoped.media?.count ?? 0),
+      mediaMinutes: Math.round(Number(scoped.media?.seconds ?? 0) / 60),
+      credits: Number(scoped.credits?.balance ?? 0),
+      usedThisMonth: Number(scoped.credits?.usedThisMonth ?? 0),
+      channels: Number(scoped.channels?.count ?? 0),
+      failedJobs: scoped.jobs.filter((job: any) => job.status === "failed").length,
+      performance: scoped.activity,
+    },
+    jobs: scoped.jobs,
+    payments: scoped.payments,
+    audit: auditRows,
+  });
+});
+
+app.get("/api/superadmin/tenants/:id/performance", async (c) => {
+  const actor = requireSuperadmin(c);
+  const tenantId = c.req.param("id");
+  await audit(actor, { action: "tenant.performance.view", targetTenant: tenantId }, clientIp(c));
+  const from = new Date(Date.now() - 29 * 86_400_000).toISOString().slice(0, 10);
+  const { summary, channels, daily } = await asSystem(async (db) => {
+    const [summaryResult, channelResult, dailyResult] = await Promise.all([
+      db.query(`SELECT COALESCE(SUM(ca.views), 0)::bigint AS views,
+                       COALESCE(SUM(ca.estimatedMinutesWatched), 0)::bigint AS "minutesWatched",
+                       COALESCE(SUM(ca.subscribersGained - ca.subscribersLost), 0)::bigint AS "netSubscribers",
+                       COALESCE(SUM(ca.estimatedRevenue), 0)::float8 AS revenue
+                  FROM channel_analytics ca JOIN youtube_channels yc ON yc.channelid = ca.channelid
+                 WHERE yc.tenant_id = $1 AND ca.day >= $2`, [tenantId, from]),
+      db.query(`SELECT yc.channelid AS "channelId", yc.channelname AS "channelName", yc.status,
+                       COALESCE(SUM(ca.views), 0)::bigint AS views,
+                       COALESCE(SUM(ca.estimatedMinutesWatched), 0)::bigint AS "minutesWatched",
+                       COALESCE(SUM(ca.subscribersGained - ca.subscribersLost), 0)::bigint AS "netSubscribers",
+                       COALESCE(SUM(ca.estimatedRevenue), 0)::float8 AS revenue
+                  FROM youtube_channels yc LEFT JOIN channel_analytics ca ON ca.channelid = yc.channelid AND ca.day >= $2
+                 WHERE yc.tenant_id = $1
+                 GROUP BY yc.channelid, yc.channelname, yc.status ORDER BY views DESC`, [tenantId, from]),
+      db.query(`SELECT ca.day, COALESCE(SUM(ca.views), 0)::bigint AS views
+                  FROM channel_analytics ca JOIN youtube_channels yc ON yc.channelid = ca.channelid
+                 WHERE yc.tenant_id = $1 AND ca.day >= $2 GROUP BY ca.day ORDER BY ca.day ASC`, [tenantId, from]),
+    ]);
+    return { summary: summaryResult.rows[0], channels: channelResult.rows, daily: dailyResult.rows };
+  });
+  return c.json({ from, summary, channels, daily });
+});
+
+app.post("/api/superadmin/tenants/:id/members", async (c) => {
+  const actor = requireSuperadmin(c);
+  const tenantId = c.req.param("id");
+  const reason = requireReason(actor, tenantId, "admin_member_manage");
+  const body = await c.req.json<{ email?: string; name?: string; role?: string; password?: string }>()
+    .catch(() => ({} as { email?: string; name?: string; role?: string; password?: string }));
+  const email = String(body.email ?? "").trim();
+  if (!email) return c.json({ error: "email_required" }, 400);
+  const role = ["owner", "admin", "member"].includes(String(body.role)) ? body.role as "owner" | "admin" | "member" : "member";
+  const password = String(body.password ?? "").trim() || crypto.randomBytes(12).toString("base64url");
+  try {
+    const member = await createUser({ tenantId, email, name: String(body.name ?? "").trim(), role, password });
+    await audit(actor, { action: "member.create", targetTenant: tenantId, targetId: member.id, reason, detail: { email: member.email, name: member.name, role } }, clientIp(c));
+    return c.json({ member, temporaryPassword: password }, 201);
+  } catch (error: any) {
+    return c.json({ error: "member_create_failed", message: String(error?.message ?? error) }, 400);
+  }
+});
+
+app.post("/api/superadmin/users/:id/password", async (c) => {
+  const actor = requireSuperadmin(c);
+  const id = c.req.param("id");
+  const body = await c.req.json<{ password?: string }>().catch(() => ({} as { password?: string }));
+  const { rows } = await getRawPool().query(`SELECT tenant_id AS "tenantId", email FROM users WHERE id = $1`, [id]);
+  if (!rows[0]) return c.json({ error: "not_found" }, 404);
+  const reason = requireReason(actor, rows[0].tenantId, "admin_password_reset");
+  const password = String(body.password ?? "").trim() || crypto.randomBytes(12).toString("base64url");
+  try {
+    await setPassword(id, password);
+    await destroyAllSessions(id);
+    await audit(actor, { action: "member.password_reset", targetTenant: rows[0].tenantId, targetId: id, reason, detail: { email: rows[0].email } }, clientIp(c));
+    return c.json({ ok: true, temporaryPassword: password });
+  } catch (error: any) {
+    return c.json({ error: "password_reset_failed", message: String(error?.message ?? error) }, 400);
+  }
+});
+
+app.delete("/api/superadmin/users/:id", async (c) => {
+  const actor = requireSuperadmin(c);
+  const id = c.req.param("id");
+  if (id === actor.id) return c.json({ error: "cannot_delete_self" }, 400);
+  const { rows } = await getRawPool().query(`SELECT tenant_id AS "tenantId", email, role, status FROM users WHERE id = $1`, [id]);
+  const member = rows[0] as { tenantId: string; email: string; role: string; status: string } | undefined;
+  if (!member) return c.json({ error: "not_found" }, 404);
+  const reason = requireReason(actor, member.tenantId, "admin_member_delete");
+  if (member.role === "superadmin") return c.json({ error: "cannot_delete_superadmin" }, 400);
+  if (member.status === "active" && member.role === "owner" && await countActiveOwners(member.tenantId) <= 1) {
+    return c.json({ error: "last_owner" }, 400);
+  }
+  await audit(actor, { action: "member.delete", targetTenant: member.tenantId, targetId: id, reason, detail: { email: member.email, role: member.role } }, clientIp(c));
+  await withRawTransaction(async (db) => {
+    await db.query("DELETE FROM sessions WHERE user_id = $1", [id]);
+    await db.query("DELETE FROM users WHERE id = $1", [id]);
+  });
+  return c.json({ ok: true });
+});
+
+app.post("/api/superadmin/jobs/:id/retry", async (c) => {
+  const actor = requireSuperadmin(c);
+  const id = c.req.param("id");
+  const now = Date.now();
+  const { rows } = await asSystem((db) => db.query(`SELECT tenant_id AS "tenantId", type FROM job_queue WHERE id = $1`, [id]));
+  if (!rows[0]) return c.json({ error: "not_found" }, 404);
+  const reason = requireReason(actor, rows[0].tenantId, "admin_job_retry");
+  const changed = await asSystem((db) => db.query(
+    `UPDATE job_queue SET status = 'pending', attempts = 0, error = NULL, lockedat = NULL, runafter = $2, updatedat = $2
+      WHERE id = $1 AND status = 'failed'`, [id, now]));
+  if (!changed.rowCount) return c.json({ error: "not_retryable" }, 409);
+  await audit(actor, { action: "job.retry", targetTenant: rows[0].tenantId, targetId: id, reason, detail: { type: rows[0].type } }, clientIp(c));
+  return c.json({ ok: true });
+});
+
+app.delete("/api/superadmin/jobs/:id", async (c) => {
+  const actor = requireSuperadmin(c);
+  const id = c.req.param("id");
+  const { rows } = await asSystem((db) => db.query(`SELECT tenant_id AS "tenantId", type, status FROM job_queue WHERE id = $1`, [id]));
+  if (!rows[0]) return c.json({ error: "not_found" }, 404);
+  const reason = requireReason(actor, rows[0].tenantId, "admin_job_remove");
+  const deleted = await asSystem((db) => db.query(`DELETE FROM job_queue WHERE id = $1 AND status IN ('pending', 'failed')`, [id]));
+  if (!deleted.rowCount) return c.json({ error: "cannot_remove_running" }, 409);
+  await audit(actor, { action: "job.remove", targetTenant: rows[0].tenantId, targetId: id, reason, detail: { type: rows[0].type, status: rows[0].status } }, clientIp(c));
+  return c.json({ ok: true });
+});
+
 app.get("/api/superadmin/jobs", async (c) => {
   const actor = requireSuperadmin(c);
   const tenant = c.req.query("tenant") ?? null;
@@ -947,12 +1122,13 @@ app.get("/api/superadmin/tenants/:id/api-keys", async (c) => {
 app.post("/api/superadmin/tenants/:id/api-keys", async (c) => {
   const actor = requireSuperadmin(c);
   const tenantId = c.req.param("id");
-  const body = await c.req.json<{ name?: string; scopes?: unknown; reason?: string }>().catch(() => ({}) as any);
+  const body = await c.req.json<{ name?: string; reason?: string }>().catch(() => ({}) as any);
   const reason = requireReason(actor, tenantId, body.reason);
 
   // 모르는 스코프는 버린다. 다 버려서 비면 **키를 만들지 않는다** — 아무것도 못 하는 키를
   // 쥐여 주면 고객사는 그게 권한 문제인지 장애인지 구분하지 못한다.
-  const scopes = normalizeScopes(body.scopes);
+  // A named customer key always receives the standard customer API surface.
+  const scopes = [...API_SCOPES];
   if (scopes.length === 0) {
     return c.json(
       { error: "scopes_required", message: `허용할 권한을 하나 이상 고르세요: ${API_SCOPES.join(", ")}` },

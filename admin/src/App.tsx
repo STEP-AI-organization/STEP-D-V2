@@ -10,12 +10,9 @@
 import { useCallback, useEffect, useState } from "react";
 import { api, ApiError, type Me } from "./api";
 import { Overview } from "./views/Overview";
-import { Tenants } from "./views/Tenants";
-import { Users } from "./views/Users";
-import { Jobs } from "./views/Jobs";
-import { Payments } from "./views/Payments";
+import { Companies, CompanyPage } from "./views/Companies";
+import { Operations } from "./views/Operations";
 import { TenantNames } from "./views/tenant-name";
-import { Audit } from "./views/Audit";
 
 type Tab = "overview" | "tenants" | "users" | "payments" | "jobs" | "audit";
 
@@ -32,6 +29,7 @@ export default function App() {
   const [me, setMe] = useState<Me | null>(null);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<Tab>("overview");
+  const [companyId, setCompanyId] = useState<string | null>(() => companyFromHash());
 
   const refreshMe = useCallback(async () => {
     try {
@@ -43,6 +41,14 @@ export default function App() {
   }, []);
 
   useEffect(() => { void refreshMe(); }, [refreshMe]);
+  useEffect(() => {
+    const sync = () => setCompanyId(companyFromHash());
+    window.addEventListener("hashchange", sync);
+    return () => window.removeEventListener("hashchange", sync);
+  }, []);
+
+  const openCompany = (id: string) => { window.location.hash = `company/${encodeURIComponent(id)}`; };
+  const closeCompany = () => { window.location.hash = ""; setCompanyId(null); };
 
   if (loading) return <div className="empty">불러오는 중…</div>;
   if (!me) return <Login onDone={refreshMe} />;
@@ -69,7 +75,7 @@ export default function App() {
     <div className="shell">
       <nav className="side">
         <div className="brand">STEP D<small>ADMIN CONSOLE</small></div>
-        {TABS.map((t) => (
+        {TABS.filter((t) => t.id === "overview" || t.id === "tenants" || t.id === "jobs").map((t) => (
           <button key={t.id} className="nav" data-active={tab === t.id} onClick={() => setTab(t.id)}>
             {t.label}
           </button>
@@ -83,16 +89,20 @@ export default function App() {
         </div>
       </nav>
       <main className="main">
-        {tab === "overview" && <Overview />}
-        {tab === "tenants" && <Tenants />}
-        {tab === "users" && <Users />}
-        {tab === "payments" && <Payments />}
-        {tab === "jobs" && <Jobs />}
-        {tab === "audit" && <Audit />}
+        {companyId ? <CompanyPage tenantId={companyId} onClose={closeCompany} /> : <>
+          {tab === "overview" && <Overview />}
+          {tab === "tenants" && <Companies onOpen={openCompany} />}
+          {tab === "jobs" && <Operations />}
+        </>}
       </main>
     </div>
     </TenantNames>
   );
+}
+
+function companyFromHash(): string | null {
+  const match = /^#company\/([^/]+)$/.exec(window.location.hash);
+  return match ? decodeURIComponent(match[1]) : null;
 }
 
 function Login({ onDone }: { onDone: () => void }) {
