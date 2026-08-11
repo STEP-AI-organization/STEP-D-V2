@@ -457,7 +457,8 @@ export function EditorShell({ clipId }: { clipId: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [togglePlay, videoTime, duration, state.trimIn, state.trimOut]);
 
-  const backHref = clip ? `/episodes/${clip.episodeId}?tab=clips` : "/clips";
+  // 클립 목록은 미디어 화면으로 합쳐졌다 — 회차를 모를 때 여기로 보낸다.
+  const backHref = clip ? `/episodes/${clip.episodeId}?tab=clips` : "/media";
 
   return (
     <div className="flex h-screen flex-col bg-zinc-950 text-zinc-100">

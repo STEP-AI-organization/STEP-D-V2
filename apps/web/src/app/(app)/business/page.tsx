@@ -435,7 +435,7 @@ export default function BusinessPage() {
           icon={Briefcase}
           title="광고영업"
           body={`공유 가능 IP ${shareablePrograms}개`}
-          href="/analytics"
+          href="/performance"
         />
         <DepartmentTile
           icon={ShieldAlert}

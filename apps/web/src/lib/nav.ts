@@ -70,6 +70,20 @@ export const NAV_GROUPS: NavGroup[] = [
       { href: "/automation", label: "자동 배포", icon: Workflow },
     ],
   },
+  /**
+   * FLOWS 재설계 밖의 화면들. **지우지 않고 남긴다** — 재설계가 대체하지 못한 일을
+   * 실제로 하고 있고(트렌드 조사·큐 진단·사업 관리), 숨기면 "있는데 못 찾는" 상태가 된다.
+   * 옛 디자인 그대로라 그룹을 나눠 그 사실이 드러나게 뒀다.
+   */
+  {
+    label: "도구",
+    items: [
+      { href: "/trends", label: "유튜브 트렌드", icon: TrendingUp },
+      { href: "/thumbnail-templates", label: "썸네일 레퍼런스", icon: ImageIcon },
+      { href: "/business", label: "사업 운영", icon: Boxes },
+      { href: "/ops", label: "운영 진단", icon: Activity },
+    ],
+  },
 ];
 
 /** 상단바 제목·부제 (README §0 — 세리프 17px 제목 + 11.5px 부제). */
@@ -87,6 +101,12 @@ export const SCREEN_META: Record<string, { title: string; subtitle: string }> = 
   "/program-analytics": { title: "프로그램 분석", subtitle: "프로그램 단위 성과" },
   "/channel-analytics": { title: "채널 분석", subtitle: "채널 단위 성과" },
   "/thumbnails": { title: "썸네일 생성", subtitle: "대상 선택 → 프롬프트 → 3안 중 대표 지정" },
+  "/trends": { title: "유튜브 트렌드", subtitle: "지금 뜨는 영상 — 기획 참고 (옛 화면)" },
+  "/thumbnail-templates": { title: "썸네일 레퍼런스", subtitle: "채널 스타일 학습용 참고 이미지 (옛 화면)" },
+  "/business": { title: "사업 운영", subtitle: "계약·정산 관리 (옛 화면)" },
+  "/ops": { title: "운영 진단", subtitle: "잡 큐·분석 상태 점검 (옛 화면)" },
+  "/clips": { title: "클립", subtitle: "구 클립 목록 — 미디어 화면으로 대체됨" },
+  "/analytics": { title: "성과 (구)", subtitle: "구 성과 화면 — 성과·프로그램/채널 분석으로 대체됨" },
   "/automation": { title: "자동 배포", subtitle: "규칙 기반 순방 · 게이트를 건너뛰지 않음" },
 };
 
