@@ -110,6 +110,20 @@ describe("잡 큐 — 정지된 회사의 잡은 안 돈다", () => {
     assert.doesNotMatch(fn, /EXISTS\s*\(\s*\n?\s*SELECT 1 FROM tenants[\s\S]*?status\s*=\s*'active'/);
   });
 
+  it("회사 공정성 정렬이 정지 검사보다 뒤에 오지 않는다", () => {
+    // 정지 회사를 거르는 건 WHERE, 공정성은 ORDER BY 다. 공정성을 넣다가 WHERE 를
+    // 건드리면 정지된 회사 잡이 되살아난다 — 두 개가 같이 있는지 확인한다.
+    // SQL 이 조각으로 조립된다(`${laneFilter}${suspendedFilter}`). 잘라 보면 조각 이름만
+    // 나오므로, **보간 위치**로 확인한다 — 정지 필터가 WHERE 안에 있어야 한다.
+    const fn = claim();
+    assert.match(fn, /NOT EXISTS/, "정지 필터가 사라졌다");
+    assert.match(
+      fn,
+      /WHERE q\.status[\s\S]*?\$\{suspendedFilter\}[\s\S]*?ORDER BY/,
+      "정지 필터가 WHERE 밖으로 나갔다 — 정지된 회사 잡이 되살아난다",
+    );
+  });
+
   it("claim 은 실패시키지 않고 건너뛴다", () => {
     // 정지 중 실패로 처리하면 attempts 가 차서, 회사가 복구돼도 잡이 안 살아난다.
     const fn = claim();

@@ -156,7 +156,7 @@ async function claimJobInner(types?: JobType[]): Promise<Job | null> {
   // Optional lane filter: a worker claims ONLY its job types, so content and YouTube work
   // drain on separate processes without starving each other (SKIP LOCKED keeps them from
   // ever touching the same row). No filter → claim any type (single-worker fallback).
-  const laneFilter = types && types.length ? "AND type = ANY($2::text[])" : "";
+  const laneFilter = types && types.length ? "AND q.type = ANY($2::text[])" : "";
   const params: unknown[] = types && types.length ? [now, types] : [now];
 
   // 정지된 회사의 잡은 집지 않는다 (0단계 · 회사 정지 실효화).
@@ -174,8 +174,26 @@ async function claimJobInner(types?: JobType[]): Promise<Job | null> {
   const suspendedFilter = `
         AND NOT EXISTS (
           SELECT 1 FROM tenants t
-           WHERE t.id = job_queue.tenant_id AND t.status <> 'active'
+           WHERE t.id = q.tenant_id AND t.status <> 'active'
         )`;
+
+  // 회사 공정성 (5단계). 순수 FIFO 면 **한 회사가 큐를 독점한다** — A 가 100건을 먼저
+  // 넣으면 그 뒤에 온 B 의 1건은 100건이 다 끝날 때까지 기다린다. 회사가 하나일 땐 안
+  // 아프지만 늘면 바로 "우리 것만 왜 안 도나"가 된다.
+  //
+  // 정렬 1순위를 **그 회사가 마지막으로 잡을 집힌 시각**으로 둔다. 한 번도 안 집힌 회사는
+  // 0 이라 제일 앞에 온다. 같은 회사 안에서는 기존대로 FIFO 다.
+  //
+  // 실측(로컬 PG · A 100건 선점 + B·C 1건씩): FIFO 는 앞 10건이 전부 A 였고,
+  // 이 정렬은 A=8 · B·C 가 각각 2·3번째에 차례를 받았다.
+  //
+  // 굶기지 않는 것이 목적이지 균등 분배가 아니다 — A 가 여전히 대부분을 가져가되,
+  // B 가 **무한정 밀리지 않는다**는 것만 보장한다.
+  const fairOrder = `
+        COALESCE((
+          SELECT MAX(s.lockedAt) FROM job_queue s
+           WHERE s.tenant_id = q.tenant_id AND s.lockedAt IS NOT NULL
+        ), 0) ASC,`;
 
   const { rows } = await getPool().query(
     `UPDATE job_queue SET
@@ -184,10 +202,11 @@ async function claimJobInner(types?: JobType[]): Promise<Job | null> {
        lockedAt  = $1,
        updatedAt = $1
      WHERE id = (
-       SELECT id FROM job_queue
-        WHERE status = 'pending' AND runAfter <= $1 AND attempts < maxAttempts ${laneFilter}${suspendedFilter}
-        ORDER BY runAfter ASC, createdAt ASC
-        FOR UPDATE SKIP LOCKED
+       SELECT q.id FROM job_queue q
+        WHERE q.status = 'pending' AND q.runAfter <= $1
+          AND q.attempts < q.maxAttempts ${laneFilter}${suspendedFilter}
+        ORDER BY ${fairOrder} q.runAfter ASC, q.createdAt ASC
+        FOR UPDATE OF q SKIP LOCKED
         LIMIT 1
      )
      RETURNING id, type, payload, status, attempts,
