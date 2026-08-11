@@ -35,8 +35,12 @@ export const NAVER_TARGETS = {
     // 2026-08-11 실측: tv.naver.com/studio 에는 업로드 폼이 없다. 루트로 들어가면
     // **자기 채널 대시보드로 자동 리다이렉트**되므로 채널ID를 몰라도 된다.
     uploadUrl: "https://creator.tv.naver.com/",
-    /** 파일을 넣으면 콘텐츠 목록(/content/video)으로 이동하고 상세 패널이 뜬다. */
-    doneUrlHint: "/content/video",
+    // ⚠️ URL 로 성공을 판정하면 안 된다. 파일을 넣는 순간 이미 /content/video 로 이동해
+    //    있어서, 저장을 누르지 않아도 URL 조건이 통과한다(실측: ok=true 인데 목록은 전부
+    //    "초안" 이었다). TV 는 **상세 모달이 닫혔는가**로 본다.
+    doneBy: "dialogClosed",
+    /** 공개 여부가 필수라 안 고르면 "저장" 이 비활성이다. */
+    visibilityRadio: { public: '[role="dialog"] label:has-text("공개")' },
     /** 진입 시 공지 모달이 떠 dimmed 레이어가 클릭을 전부 막는다 — 먼저 닫아야 한다. */
     closeDialogFirst: true,
     /** 대시보드의 "동영상 업로드" 를 눌러야 파일 input 이 살아난다. */
@@ -44,10 +48,13 @@ export const NAVER_TARGETS = {
     sel: {
       fileInput: 'input[type="file"]',
       // 클립과 달리 **제목이 따로 있다**(0/120). 설명은 0/3,000.
-      title: 'input[placeholder*="제목을 입력"]',
-      description: 'textarea[placeholder*="설명"], textarea',
+      // ⚠️ 제목 input 에는 placeholder 가 없다 — "제목을 입력해 주세요."는 입력창 **아래**
+      //    빨간 안내문이다. placeholder 로 잡으면 영원히 못 찾는다(실측).
+      title: '[role="dialog"] input[class*="InputText_input_text"]',
+      description: '[role="dialog"] textarea',
       tags: 'input[placeholder*="태그 입력"]',
-      submit: 'button:has-text("저장"), button:has-text("등록"), button:has-text("완료")',
+      // 실측: 상세 패널 하단은 "취소 / 저장" 이다.
+      submit: 'button:has-text("저장")',
     },
     filePickButton: 'button:has-text("파일 선택")',
   },
@@ -163,18 +170,28 @@ async function pickCategory(
   page: Page,
   cat?: { primary: string; secondary: string },
 ): Promise<void> {
-  const wraps = page.locator('[class*="dropdownWrap"]');
   // hasText 는 부분일치라 "엔터" 가 "엔터테인먼트" 에도 걸린다 — 정확히 일치시킨다.
   const opt = (text: string) =>
-    page.locator('[class*="Option"]')
+    page.locator('[class*="Option"], [role="option"]')
       .filter({ hasText: new RegExp(`^\s*${text}\s*$`) }).first();
+
+  // 트리거 잡는 법이 사이트마다 다르다:
+  //  - 클립: `[class*="dropdownWrap"]` 두 개 (순서 0=1차, 1=2차)
+  //  - TV  : 모달 안 버튼 라벨이 "1차 카테고리"/"2차 카테고리"
+  // 선택 후 라벨이 고른 값으로 바뀌므로, 각 단계마다 그때그때 다시 찾는다.
+  const wraps = page.locator('[class*="dropdownWrap"]');
+  const useWraps = (await wraps.count().catch(() => 0)) >= 2;
+  const trigger = (i: 0 | 1) =>
+    useWraps
+      ? wraps.nth(i).locator("button").first()
+      : page.locator(`button:has-text("${i === 0 ? "1차" : "2차"} 카테고리")`).first();
 
   const want = cat ?? DEFAULT_CATEGORY;
   for (const [i, value] of [[0, want.primary], [1, want.secondary]] as const) {
-    await wraps.nth(i).locator("button").first().click();
-    await page.waitForTimeout(600);
-    await opt(value).click();
+    await trigger(i).click({ timeout: 20_000 }).catch(() => {});
     await page.waitForTimeout(700);
+    await opt(value).click({ timeout: 15_000 }).catch(() => {});
+    await page.waitForTimeout(800);
   }
 }
 
@@ -351,9 +368,6 @@ export async function uploadToNaver(input: NaverUploadInput): Promise<NaverUploa
       }
       await page.locator(SEL.description).first().fill(body);
 
-      // 카테고리 1차/2차는 필수다. 지정값이 없으면 DEFAULT_CATEGORY("엔터"/"엔터")로 간다.
-      await pickCategory(page, input.category);
-
       // 등록 예약. 실패하면 **즉시 등록**되어 버리므로 그냥 넘어가지 않고 중단한다 —
       // "예약한 줄 알았는데 바로 공개된" 실패가 제일 나쁘다.
       if (input.publishAt) {
@@ -369,6 +383,10 @@ export async function uploadToNaver(input: NaverUploadInput): Promise<NaverUploa
         await page.locator(SEL.description).first().fill(input.description).catch(() => {});
       }
     }
+    // 카테고리 1차/2차는 **TV·클립 둘 다 필수**다(2026-08-11 실측).
+    // 지정값이 없으면 DEFAULT_CATEGORY("엔터"/"엔터")로 간다.
+    await pickCategory(page, input.category);
+
     // 태그: 클립은 자유 입력이 아니라 **고정 버튼 목록**(장소·쇼핑·게임 …)이라 임의 문자열을
     // 넣을 수 없다. 우리 tags 와 겹치는 버튼만 눌러준다.
     if (input.tags?.length) {
@@ -379,6 +397,15 @@ export async function uploadToNaver(input: NaverUploadInput): Promise<NaverUploa
     }
 
     // 업로드 완료까지는 파일 크기에 비례해 오래 걸린다. 제출 버튼이 활성화될 때까지 기다린다.
+    // TV: 공개 여부(필수)를 안 고르면 저장 버튼이 비활성이라 눌러도 아무 일이 없다.
+    const vis = (T as { visibilityRadio?: { public: string } }).visibilityRadio;
+    if (vis) {
+      const label = input.publishAt ? "공개 예약" : "공개";
+      await page.locator(`[role="dialog"] label:has-text("${label}")`).first()
+        .click({ timeout: 15_000 }).catch(() => {});
+      await page.waitForTimeout(600);
+    }
+
     const draftSel = (T as { draftButton?: string }).draftButton;
     const submitSel = input.draftOnly && draftSel ? draftSel : SEL.submit;
     const submit = page.locator(submitSel).first();
@@ -386,6 +413,17 @@ export async function uploadToNaver(input: NaverUploadInput): Promise<NaverUploa
     await submit.click();
 
     // 성공 판정: 업로드 페이지를 벗어나면 성공으로 본다. 토스트 문구는 개편마다 바뀌어 못 믿는다.
+    if ((T as { doneBy?: string }).doneBy === "dialogClosed") {
+      // 모달이 사라져야 저장된 것이다. 남아 있으면 필수값 미충족이거나 저장이 막힌 것 —
+      // 성공으로 넘기면 목록에 "초안" 으로만 남는다(실측: 그렇게 4건이 쌓였다).
+      const closed = await page.locator('[role="dialog"]')
+        .first().waitFor({ state: "detached", timeout }).then(() => true).catch(() => false);
+      if (!closed) {
+        const p = await shot(page, artifactDir, `submit-stuck-${Date.now()}`);
+        return { ok: false, error: "저장 후에도 상세 모달이 닫히지 않았습니다 — 필수값 미충족일 수 있습니다", screenshotPath: p };
+      }
+      return { ok: true, url: page.url() };
+    }
     const done = (T as { doneUrlHint?: string }).doneUrlHint;
     await page.waitForURL(
       (u) => {
