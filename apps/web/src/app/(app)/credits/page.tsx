@@ -30,11 +30,15 @@ const WON = (n: number) => `₩${n.toLocaleString("ko-KR")}`;
 
 export default function CreditsPage() {
   const { toast } = useToast();
-  const actor = useSession().user.name;
+  const session = useSession();
+  const actor = session.user.name;
 
   const [state, setState] = useState<CreditState | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [credits, setCredits] = useState(600);
+  // **PG 가 구매자 이메일을 필수로 요구한다**(이니시스 V2 일반결제). 세션에 있으면 채우고,
+  // 없으면 사람이 입력한다 — 지금은 로그인이 강제되지 않아 세션 이메일이 빌 수 있다.
+  const [email, setEmail] = useState("");
   const [busy, setBusy] = useState(false);
   const [awaiting, setAwaiting] = useState<string | null>(null);
 
@@ -48,12 +52,15 @@ export default function CreditsPage() {
   }, []);
 
   useEffect(() => { void load(); }, [load]);
+  useEffect(() => { if (session.user.email) setEmail(session.user.email); }, [session.user.email]);
 
   const price = state?.priceKrw ?? null;
   const amount = price != null ? credits * price : null;
 
+  const emailOk = /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email.trim());
+
   async function topup() {
-    if (busy || credits <= 0) return;
+    if (busy || credits <= 0 || !emailOk) return;
     setBusy(true);
     try {
       // 1) 서버가 주문을 만든다 — paymentId 와 금액이 여기서 확정된다.
@@ -69,6 +76,8 @@ export default function CreditsPage() {
         totalAmount: order.amountKrw,
         currency: "CURRENCY_KRW",
         payMethod: "CARD",
+        // 이니시스 V2 일반결제는 구매자 이메일이 **필수**다. 빠지면 결제창 호출 자체가 실패한다.
+        customer: { email: email.trim(), ...(actor ? { fullName: actor } : {}) },
       });
 
       if (res?.code) {
@@ -173,6 +182,17 @@ export default function CreditsPage() {
 
             <div className="flex flex-wrap items-center gap-2">
               <input
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="영수증 받을 이메일 (필수)"
+                className="sd-input min-w-[220px] flex-1"
+                aria-label="구매자 이메일"
+              />
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <input
                 value={credits}
                 onChange={(e) => setCredits(Number(e.target.value.replace(/\D/g, "")) || 0)}
                 inputMode="numeric"
@@ -189,7 +209,8 @@ export default function CreditsPage() {
               <button
                 type="button"
                 className="sd-btn sd-btn-primary ml-auto"
-                disabled={busy || credits <= 0}
+                disabled={busy || credits <= 0 || !emailOk}
+                title={emailOk ? undefined : "구매자 이메일이 필요합니다 (PG 필수 항목)"}
                 onClick={topup}
               >
                 {busy ? "진행 중…" : "결제하기"}
