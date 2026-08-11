@@ -27,14 +27,16 @@
 
 ---
 
-## 1. 원격 접속 (Tailscale + SSH)
+## 1. 원격 접속 (SSH)
 
-배포할 때 이 PC 를 자동으로 갱신하기 위한 통로다. NAT 뒤라도 포트포워딩이 필요 없다.
+윈도우1 이 배포 직후 윈도우2 를 갱신하기 위한 통로다.
 
-```powershell
-winget install tailscale.tailscale
-tailscale up          # 브라우저 로그인 — 회사 테일넷과 같은 계정으로
-```
+**같은 LAN 이면 이것만 하면 된다** — 내부 IP·호스트명으로 바로 닿는다.
+Tailscale 은 **윈도우2 가 다른 망에 있거나 재택에서 붙어야 할 때만** 필요하다
+(그때는 `winget install tailscale.tailscale` → `tailscale up`).
+
+> LAN 으로 갈 거면 **DHCP 고정 할당**을 걸어두는 편이 낫다. IP 가 바뀌면 자동 갱신이
+> 조용히 실패한다 — 폴링이 백스톱이라 치명적이진 않지만 원인 찾기가 번거롭다.
 
 ```powershell
 # OpenSSH Server
@@ -61,10 +63,11 @@ icacls $f /inheritance:r /grant "Administrators:F" /grant "SYSTEM:F"
 
 확인:
 ```powershell
-tailscale status      # 이 PC 이름과 100.x 주소
 hostname
+ipconfig | Select-String IPv4        # 같은 LAN 이면 이 주소를 쓴다
+# tailscale status                   # Tailscale 을 쓸 때만
 ```
-→ **호스트명을 알려줄 것.** 윈도우1 에서 이 이름으로 원격 갱신을 찌른다.
+→ **호스트명(또는 내부 IP)을 알려줄 것.** 윈도우1 에서 이걸로 원격 갱신을 찌른다.
 
 ---
 
