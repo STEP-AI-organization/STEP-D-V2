@@ -213,7 +213,13 @@ export async function resolveSession(token: string | undefined): Promise<User | 
       .query("UPDATE sessions SET last_seen_at = $2 WHERE token_hash = $1", [sha256(token), now])
       .catch(() => {});
   }
-  return { id: row.id, tenantId: row.tenantId, email: row.email, name: row.name, role: row.role, status: row.status };
+  // 필드를 하나씩 골라 담는다 — lastSeenAt 같은 내부 값이 세션 객체로 새지 않게.
+  // ⚠️ 그래서 **새 필드를 User 에 추가하면 여기도 같이 고쳐야 한다.** ops_role 을 SELECT 에만
+  // 넣고 여기를 빼먹어서, 로그인한 모든 사용자가 vendor 로 떨어졌다(2026-08-11).
+  return {
+    id: row.id, tenantId: row.tenantId, email: row.email, name: row.name,
+    role: row.role, opsRole: row.opsRole, status: row.status,
+  };
 }
 
 export async function destroySession(token: string | undefined): Promise<void> {

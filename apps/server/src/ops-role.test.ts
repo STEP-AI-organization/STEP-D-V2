@@ -82,6 +82,25 @@ describe("F9 권한 표", () => {
   });
 });
 
+describe("세션이 운영 역할을 실제로 실어 나른다", () => {
+  // 2026-08-11: SELECT 에는 ops_role 을 넣었는데 **return 문에서 빠뜨려서** 로그인한
+  // 모든 사용자가 vendor 로 떨어졌다. 판정은 옳은데 입력이 없던 사고 —
+  // "모르면 가장 좁은 권한"이 안전장치로 동작한 덕에 권한 초과는 아니었지만,
+  // 운영자가 자기 화면에서 배포 버튼을 못 보는 상태로 굳었다.
+  const src = () => fs.readFileSync(path.resolve(SRC, "auth.ts"), "utf-8");
+
+  it("resolveSession 이 ops_role 을 조회한다", () => {
+    assert.match(src(), /ops_role\s+AS\s+"opsRole"/, "SELECT 에 ops_role 이 없다");
+  });
+
+  it("resolveSession 이 opsRole 을 반환 객체에 담는다", () => {
+    // 필드를 하나씩 골라 담는 구조라 SELECT 만 고치면 조용히 누락된다.
+    const fn = new RegExp("export async function resolveSession[\\s\\S]*?\\n}").exec(src())?.[0] ?? "";
+    assert.notEqual(fn, "", "resolveSession 을 찾지 못했다");
+    assert.match(fn, /opsRole:\s*row\.opsRole/, "반환 객체에 opsRole 이 빠졌다");
+  });
+});
+
 describe("화면과 서버가 같은 표를 쓴다", () => {
   it("apps/web 의 roles.ts 와 권한 값이 일치한다", () => {
     // 두 벌이 되면 화면은 버튼을 열어 주는데 서버가 막는(또는 그 반대) 상태가 된다.
