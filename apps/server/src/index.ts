@@ -3810,6 +3810,9 @@ app.post("/api/billing/portone/webhook", async (c) => {
 
   const body = JSON.parse(raw || "{}") as { data?: { paymentId?: string }; type?: string };
   const paymentId = String(body.data?.paymentId ?? "");
+  // 어떤 이벤트가 왔는지 남긴다 — 결제 성공/실패/취소를 로그에서 구분할 수 있어야
+  // "웹훅은 왔는데 왜 충전이 안 됐나"를 되짚을 수 있다.
+  console.log(`[billing] 웹훅 수신 type=${body.type ?? "?"} paymentId=${paymentId || "-"}`);
   if (!paymentId) return c.json({ ok: true, note: "paymentId 없음 — 무시" });
 
   // 테넌트를 주문에서 찾는다. 웹훅에는 세션이 없으므로 시스템 스코프로 한 번 읽고,
@@ -3829,6 +3832,8 @@ app.post("/api/billing/portone/webhook", async (c) => {
       const p = (await getPayment(paymentId)) as any;
       payment = { status: p?.status, amountTotal: p?.amount?.total };
     } catch (e) {
+      // 조회가 실패하면 크레딧을 올리지 않는다. 포트원이 웹훅을 재전송하므로
+      // 일시적 오류면 다음 번에 성공한다 — 여기서 성공으로 치는 게 최악이다.
       console.error(`[billing] 결제 조회 실패 ${paymentId}`, e);
     }
 

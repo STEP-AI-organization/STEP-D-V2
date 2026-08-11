@@ -87,8 +87,17 @@ export async function chargeWithBillingKey(input: BillingKeyChargeInput): Promis
   });
 }
 
+/**
+ * 결제 단건 조회.
+ *
+ * **storeId 를 반드시 붙인다.** 안 붙이면 상점이 여럿인 계정에서 404 가 난다
+ * (문서상 404 원인 중 하나가 "storeId 가 접근 권한 없는 상점"). 실제로 이것 때문에
+ * 웹훅이 도착해도 조회가 404 로 떨어져 충전이 보류됐다.
+ */
 export async function getPayment(paymentId: string): Promise<unknown> {
-  return call("GET", `/payments/${encodeURIComponent(paymentId)}`);
+  const storeId = String(process.env.PORTONE_STORE_ID ?? "").trim();
+  const qs = storeId ? `?storeId=${encodeURIComponent(storeId)}` : "";
+  return call("GET", `/payments/${encodeURIComponent(paymentId)}${qs}`);
 }
 
 /**
