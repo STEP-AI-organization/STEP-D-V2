@@ -156,6 +156,24 @@ export const api = {
     post<{ ok: true; alreadyRevoked: boolean }>(
       `/api/superadmin/api-keys/${encodeURIComponent(keyId)}/revoke`, { reason }),
 
+  // ── 인보이스(거래명세서) ──
+  // 세금계산서가 아니다 — 그건 별도 발행 서비스가 필요하다.
+  invoiceMonths: (tenantId: string) =>
+    get<{ months: Array<{ month: string; paid: number; totalKrw: number }> }>(
+      `/api/superadmin/tenants/${encodeURIComponent(tenantId)}/invoice-months`),
+  invoice: (tenantId: string, month: string) =>
+    get<{
+      invoice: {
+        number: string; monthKey: string; credits: number;
+        supplyKrw: number; vatKrw: number; totalKrw: number;
+        lines: Array<{ paymentId: string; date: string; desc: string; credits: number; amountKrw: number }>;
+      };
+      customer: { id: string; name: string; billingEmail: string | null };
+      issuer: { name: string; bizNo: string; address: string; contact: string };
+      issuerMissing: string[];
+      note: string;
+    }>(`/api/superadmin/tenants/${encodeURIComponent(tenantId)}/invoice?month=${encodeURIComponent(month)}`),
+
   // ── 결제 · 크레딧 ──
   payments: (tenant?: string) =>
     get<{ payments: Payment[] }>(

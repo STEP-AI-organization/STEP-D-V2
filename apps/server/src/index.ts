@@ -47,6 +47,7 @@ import {
   billingConfig, cardBlockReason, cardLabel, cardTopupPaymentId, checkCustomer,
   issueIdFor, verifyCharge,
 } from "./billing-card.ts";
+import { buildInvoice, issuerInfo, monthRange, parseMonth } from "./invoice.ts";
 import {
   API_SCOPES, bearerKey, checkRoute, generateKey, hashKey, keyBlockReason, keyPrefix,
   shouldTouchLastUsed,
@@ -1194,6 +1195,68 @@ app.post("/api/superadmin/api-keys/:keyId/revoke", async (c) => {
  * `pending` 이 오래 남아 있으면 **결제창까지 갔다가 안 된 건**이다. 그게 몇 건인지 보이는 게
  * 이 화면의 목적이라, 성공한 것만 보여주지 않는다.
  */
+/**
+ * 인보이스(거래명세서) — 회사·월 단위.
+ *
+ * ⚠️ **세금계산서가 아니다.** 전자세금계산서는 국세청 신고가 필요한 법정 증빙이라 별도
+ * 발행 서비스(팝빌·바로빌 등)를 붙여야 한다. 여기서 주는 건 우리 데이터로 만든 명세다.
+ *
+ * 금액은 원장이 아니라 **결제**에서 온다 — 원장에는 무상 지급(grant)·정정(adjust)이
+ * 섞여 있고, 그걸 청구서에 얹으면 받지도 않은 돈을 청구하는 게 된다.
+ */
+app.get("/api/superadmin/tenants/:id/invoice", async (c) => {
+  const actor = requireSuperadmin(c);
+  const tenantId = c.req.param("id");
+  const month = parseMonth(c.req.query("month"));
+  if (!month) return c.json({ error: "bad_month", message: "month 는 YYYY-MM 형식이어야 합니다." }, 400);
+  await audit(actor, { action: "invoice.view", targetTenant: tenantId, detail: { month: month.key } }, clientIp(c));
+
+  const range = monthRange(month.year, month.month);
+  const { rows: tenantRows } = await getRawPool().query(
+    `SELECT id, name, billing_email AS "billingEmail" FROM tenants WHERE id = $1`,
+    [tenantId],
+  );
+  if (!tenantRows[0]) return c.json({ error: "not_found" }, 404);
+
+  const { rows: payments } = await asSystem((db) => db.query(
+    `SELECT payment_id AS "paymentId", credits, amount_krw AS "amountKrw", status,
+            created_at AS "createdAt", settled_at AS "settledAt"
+       FROM credit_topup
+      WHERE tenant_id = $1 AND created_at >= $2::date AND created_at < $3::date
+      ORDER BY created_at ASC`,
+    [tenantId, range.from, range.to],
+  ));
+
+  const issuer = issuerInfo();
+  const invoice = buildInvoice({ tenantId, monthKey: month.key, payments });
+  return c.json({
+    invoice,
+    customer: tenantRows[0],
+    issuer: issuer.issuer,
+    // 없는 값을 지어내지 않는다 — 빠진 항목을 그대로 알려주고 화면이 경고한다.
+    issuerMissing: issuer.ok ? [] : issuer.missing,
+    note: "세금계산서가 아닙니다 (거래명세서).",
+  });
+});
+
+/** 인보이스를 뽑을 수 있는 달 — 결제가 있는 달만. 빈 달을 고르게 두면 빈 문서가 나온다. */
+app.get("/api/superadmin/tenants/:id/invoice-months", async (c) => {
+  const actor = requireSuperadmin(c);
+  // 결제 금액이 실린 목록이라 열람도 남긴다. 인보이스 화면을 열면 이 라우트와
+  // /invoice 가 각각 한 줄씩 남지만, **기록이 빠진 라우트를 만드는 것보다 낫다.**
+  await audit(actor, { action: "invoice.months", targetTenant: c.req.param("id") }, clientIp(c));
+  const { rows } = await asSystem((db) => db.query(
+    `SELECT to_char(created_at, 'YYYY-MM') AS month,
+            COUNT(*) FILTER (WHERE status = 'paid')::int AS paid,
+            COALESCE(SUM(amount_krw) FILTER (WHERE status = 'paid'), 0)::int AS "totalKrw"
+       FROM credit_topup WHERE tenant_id = $1
+      GROUP BY 1 HAVING COUNT(*) FILTER (WHERE status = 'paid') > 0
+      ORDER BY 1 DESC LIMIT 36`,
+    [c.req.param("id")],
+  ));
+  return c.json({ months: rows });
+});
+
 app.get("/api/superadmin/payments", async (c) => {
   const actor = requireSuperadmin(c);
   const tenant = c.req.query("tenant") ?? null;

@@ -131,3 +131,31 @@ button.danger { color: var(--bad); }
 .event:last-child { border-bottom: 0; }
 .event span, .event p { color: var(--muted); margin: 0; font-size: 12px; }
 @media (max-width: 700px) { .side { width: 150px; } .main { padding: 18px 14px 40px; } .event { grid-template-columns: 1fr; gap: 2px; } }
+
+/* ── 인보이스(거래명세서) ─────────────────────────────────────────────────────
+   PDF 는 서버에서 만들지 않는다. 브라우저 인쇄(Ctrl+P → PDF 저장)로 충분하고,
+   PDF 라이브러리를 넣으면 한글 폰트 임베딩부터 새 문제가 줄줄이 딸려온다.
+   대신 인쇄용 규칙을 둬서 화면 크롬(사이드바·탭·버튼)이 종이에 안 찍히게 한다. */
+.invoice { padding: 4px 16px 16px; }
+.invoice-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; padding: 8px 0 16px; border-bottom: 2px solid var(--line); }
+.invoice-head h2 { margin: 6px 0 2px; font-size: 20px; }
+.invoice-head p { margin: 0; font-size: 11px; }
+.invoice-no { text-align: right; font-size: 12px; }
+.invoice-parties { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; padding: 16px 0; }
+.invoice-parties h3 { margin: 0 0 6px; font-size: 12px; color: var(--muted); font-weight: 600; }
+.invoice-parties div { font-size: 13px; }
+.invoice-total { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; padding: 14px 0 0; font-size: 13px; }
+.invoice-total .grand { font-size: 17px; font-weight: 700; border-top: 2px solid var(--line); padding-top: 8px; margin-top: 4px; min-width: 220px; display: flex; justify-content: space-between; }
+.invoice-total .grand span { font-weight: 600; }
+
+@media print {
+  /* 종이에는 문서만. 인쇄를 누른 화면이 무엇이든 인보이스만 나온다. */
+  .side, .tabs, .no-print, button, input, select { display: none !important; }
+  .shell, .main { display: block; padding: 0; background: #fff; }
+  .panel { border: 0; box-shadow: none; }
+  /* 패널 머리글("인보이스")은 종이에 필요 없다 — 문서에 이미 제목이 있다. */
+  .panel > header { display: none; }
+  body { background: #fff; color: #000; }
+  table { page-break-inside: auto; }
+  tr { page-break-inside: avoid; }
+}
