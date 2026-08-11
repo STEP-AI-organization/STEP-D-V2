@@ -22,10 +22,6 @@ export interface LedgerEntry {
   reason: string;
 }
 
-/** 원장 합계 = 잔액. 정수만 다룬다(분 단위라 소수가 나올 일이 없다). */
-export function balanceOf(entries: LedgerEntry[]): number {
-  return entries.reduce((sum, e) => sum + (Number.isFinite(e.delta) ? Math.trunc(e.delta) : 0), 0);
-}
 
 export type CreditVerdict =
   | { allow: true; reason: ""; remainingAfter: number }

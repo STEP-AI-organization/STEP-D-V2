@@ -4,6 +4,13 @@
  *
  * PG: **포트원(PortOne) 중계 + KG이니시스**(2026-08-11 계약 완료).
  *
+ * ⚠️ **`plans` · `subscriptions` · `invoices` 는 쓰지 않는다** (2026-08-11 결정 ·
+ * docs/plans/admin-multi-tenant-plan.md). 과금은 **크레딧 선불 하나**로 통일했고,
+ * 월정액+초과분(계약형) 경로는 만들지 않는다. 표를 지우지 않는 이유는 계약형이 필요해질 때
+ * 스키마를 다시 설계하는 비용이 더 크기 때문이고, 코드(billing.ts 의 checkQuota·
+ * buildInvoice 등)는 "있는 줄 알고" 배선하는 걸 막으려고 지웠다 — git 이력에 있다.
+ * 실제로 도는 표: `credit_ledger` · `credit_topup`(0024) · `usage_events`(기록 전용) · `api_keys`.
+ *
  * **정산 근거라서 런타임 암묵 생성이 아니라 마이그레이션에 명시한다.** 이 리포는 일부
  * 테이블을 코드가 런타임에 만들지만(queue.ts·db-pg.ts), 돈이 걸린 표는 그러면 안 된다 —
  * "언제 어떤 모양이었는지"를 되짚을 수 없다.

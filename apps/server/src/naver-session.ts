@@ -21,14 +21,33 @@ import path from "node:path";
  * 세션 파일 경로. 기본값은 사용자 홈 아래 — 리포·스토리지 디렉토리와 떨어뜨려서
  * 실수로 커밋되거나 GCS 동기화에 쓸려 올라가지 않게 한다.
  */
-export function naverSessionPath(): string {
-  const override = process.env.NAVER_SESSION_PATH?.trim();
-  if (override) return path.resolve(override);
-  return path.join(os.homedir(), ".stepd", "naver-storage-state.json");
+export function naverSessionRoot(): string {
+  const override = process.env.NAVER_SESSION_DIR?.trim();
+  return override ? path.resolve(override) : path.join(os.homedir(), ".stepd", "naver");
 }
 
-export function saveNaverSession(state: unknown): void {
-  const p = naverSessionPath();
+/**
+ * 계정별 세션 파일 경로.
+ *
+ * `accountKey` 는 **불투명 키**다 — 네이버 아이디를 쓰지 않는다. 파일 경로·로그에
+ * 고객사 계정 아이디가 박히면 안 된다.
+ *
+ * accountKey 를 안 주면 단일 계정 시절의 레거시 경로를 쓴다(하위호환).
+ */
+export function naverSessionPath(accountKey?: string): string {
+  const legacy = process.env.NAVER_SESSION_PATH?.trim();
+  if (!accountKey) {
+    return legacy ? path.resolve(legacy)
+      : path.join(os.homedir(), ".stepd", "naver-storage-state.json");
+  }
+  if (!/^[a-zA-Z0-9._-]+$/.test(accountKey)) {
+    throw new Error(`잘못된 accountKey: ${accountKey}`);   // 경로 조작 방지
+  }
+  return path.join(naverSessionRoot(), accountKey, "storage-state.json");
+}
+
+export function saveNaverSession(state: unknown, accountKey?: string): void {
+  const p = naverSessionPath(accountKey);
   fs.mkdirSync(path.dirname(p), { recursive: true });
   fs.writeFileSync(p, JSON.stringify(state), "utf-8");
   // POSIX 에서만 의미 있다. Windows 는 무시되지만 실패해도 무해.
@@ -36,9 +55,9 @@ export function saveNaverSession(state: unknown): void {
 }
 
 /** 저장된 세션. 없으면 null — 호출부는 "로그인 필요" 로 처리하고 업로드를 시도하지 말 것. */
-export function loadNaverSession(): unknown | null {
+export function loadNaverSession(accountKey?: string): unknown | null {
   try {
-    const p = naverSessionPath();
+    const p = naverSessionPath(accountKey);
     if (!fs.existsSync(p)) return null;
     return JSON.parse(fs.readFileSync(p, "utf-8"));
   } catch {
@@ -47,14 +66,23 @@ export function loadNaverSession(): unknown | null {
   }
 }
 
-export function hasNaverSession(): boolean {
-  return loadNaverSession() !== null;
+export function hasNaverSession(accountKey?: string): boolean {
+  return loadNaverSession(accountKey) !== null;
+}
+
+/** 이 PC 에 세션이 있는 계정 키 목록 — 만료 점검·운영 화면용. */
+export function listNaverSessionKeys(): string[] {
+  const root = naverSessionRoot();
+  if (!fs.existsSync(root)) return [];
+  return fs.readdirSync(root, { withFileTypes: true })
+    .filter((e) => e.isDirectory() && fs.existsSync(path.join(root, e.name, "storage-state.json")))
+    .map((e) => e.name);
 }
 
 /** 세션 나이(일). 만료 임박을 운영자에게 알릴 때 쓴다. 없으면 null. */
-export function naverSessionAgeDays(): number | null {
+export function naverSessionAgeDays(accountKey?: string): number | null {
   try {
-    const st = fs.statSync(naverSessionPath());
+    const st = fs.statSync(naverSessionPath(accountKey));
     return (Date.now() - st.mtimeMs) / 86_400_000;
   } catch {
     return null;

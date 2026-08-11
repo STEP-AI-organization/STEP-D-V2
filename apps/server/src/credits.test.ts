@@ -11,7 +11,6 @@ import { describe, it } from "node:test";
 
 import {
   MAX_TOPUP_CREDITS,
-  balanceOf,
   buildTopup,
   checkCredits,
   creditPriceKrw,
@@ -24,27 +23,9 @@ import {
 } from "./credits.ts";
 
 describe("잔액은 원장 합계다", () => {
-  it("충전 + · 사용 −", () => {
-    assert.equal(balanceOf([{ delta: 600, reason: "topup" }, { delta: -59, reason: "usage" }]), 541);
-  });
 
-  it("정정은 반대 부호 행으로 들어온다", () => {
-    assert.equal(
-      balanceOf([{ delta: 100, reason: "topup" }, { delta: -100, reason: "adjust" }]),
-      0,
-    );
-  });
 
-  it("빈 원장은 0", () => {
-    assert.equal(balanceOf([]), 0);
-  });
 
-  it("이상한 값이 잔액을 오염시키지 않는다", () => {
-    assert.equal(
-      balanceOf([{ delta: 10, reason: "t" }, { delta: NaN, reason: "x" }, { delta: 1.9, reason: "y" }]),
-      11,
-    );
-  });
 });
 
 describe("모자라면 시작하지 않는다", () => {

@@ -234,7 +234,7 @@ import {
   CREDIT_UNIT_LABEL, buildTopup, checkCredits, creditPriceKrw, settleTopup,
   topupDedupeKey, topupPaymentId,
 } from "./credits.ts";
-import { billableMinutes } from "./billing.ts";
+import { billableMinutes, portoneConfigured } from "./billing.ts";
 import { getPayment, verifyWebhook } from "./portone.ts";
 import { commitAndInherit } from "./adopt.ts";
 import { runAutomationCycle } from "./automation-cycle.ts";
@@ -3857,6 +3857,16 @@ app.post("/api/credits/topup", async (c) => {
   const body = await c.req.json().catch(() => ({}) as Record<string, unknown>);
   const check = buildTopup(body.credits);
   if (!check.ok) return c.json({ error: "bad_request", message: check.reason }, 400);
+
+  // 설정이 빠졌으면 **여기서** 막는다. 예전엔 그냥 통과시켜서 `storeId: ""` 가 브라우저
+  // SDK 로 나갔고, 사용자는 결제창에서 원인 모를 실패만 봤다. 뭐가 없는지 이름을 말해준다.
+  const pg = portoneConfigured();
+  if (!pg.ok) {
+    return c.json(
+      { error: "billing_unconfigured", message: `결제 설정이 없습니다: ${pg.missing.join(", ")}` },
+      503,
+    );
+  }
 
   const paymentId = topupPaymentId(currentTenantId(), crypto.randomUUID().replace(/-/g, "").slice(0, 12));
   const actor = readActor(body.actor) || "unknown";
