@@ -16,7 +16,7 @@ export function Audit() {
           <div className="tablewrap">
             <table>
               <thead>
-                <tr><th>시각</th><th>행위자</th><th>동작</th><th>대상 테넌트</th><th>대상</th><th>사유</th><th>IP</th></tr>
+                <tr><th>시각</th><th>행위자</th><th>동작</th><th>대상 회사</th><th>대상</th><th>사유</th><th>IP</th></tr>
               </thead>
               <tbody>
                 {data?.entries.map((e) => (

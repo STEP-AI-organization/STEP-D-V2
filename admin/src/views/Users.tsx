@@ -16,7 +16,7 @@ export function Users() {
     <>
       <h1>사용자</h1>
       <p className="sub">
-        모든 테넌트의 계정. 특정 테넌트로 좁혀 볼 때는 <strong>사유</strong>가 필요하고, 그 열람은
+        모든 회사의 계정. 특정 회사로 좁혀 볼 때는 <strong>사유</strong>가 필요하고, 그 열람은
         감사 로그에 남습니다.
       </p>
 
@@ -25,10 +25,10 @@ export function Users() {
         actions={
           <div className="row">
             <select value={tenant} onChange={(e) => setTenant(e.target.value)}>
-              <option value="">전체 테넌트</option>
+              <option value="">회사 전체</option>
               {tenants.data?.tenants.map((t) => <option key={t.id} value={t.id}>{t.name} ({t.id})</option>)}
             </select>
-            <input placeholder="사유 (다른 테넌트 조회 시)" value={reason} onChange={(e) => setReason(e.target.value)} />
+            <input placeholder="사유 (다른 회사 조회 시)" value={reason} onChange={(e) => setReason(e.target.value)} />
             <button onClick={() => setApplied({ tenant, reason })}>조회</button>
           </div>
         }
@@ -37,7 +37,7 @@ export function Users() {
           <div className="tablewrap">
             <table>
               <thead>
-                <tr><th>이메일</th><th>이름</th><th>테넌트</th><th>역할</th><th>상태</th><th>마지막 로그인</th><th>생성</th><th></th></tr>
+                <tr><th>이메일</th><th>이름</th><th>회사</th><th>역할</th><th>상태</th><th>마지막 로그인</th><th>생성</th><th></th></tr>
               </thead>
               <tbody>
                 {data?.users.map((u) => <Row key={u.id} u={u} onChanged={reload} />)}

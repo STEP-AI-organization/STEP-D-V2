@@ -7,12 +7,12 @@ export function Overview() {
   return (
     <>
       <h1>개요</h1>
-      <p className="sub">플랫폼 전체 현황. 이 숫자들은 전 테넌트 합계입니다.</p>
+      <p className="sub">플랫폼 전체 현황. 이 숫자들은 모든 회사의 합계입니다.</p>
       <State busy={busy} error={error}>
         {data && (
           <>
             <div className="cards">
-              <Card k="테넌트" v={data.tenants} />
+              <Card k="회사" v={data.tenants} />
               <Card k="활성 사용자" v={data.users} />
               <Card k="미디어" v={data.media.count} />
               <Card k="분석된 영상(분)" v={data.media.minutes} />

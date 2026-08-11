@@ -7,13 +7,13 @@ export function Jobs() {
   return (
     <>
       <h1>잡</h1>
-      <p className="sub">전 테넌트 큐. 최근 활동순 200건.</p>
+      <p className="sub">전체 회사의 큐. 최근 활동순 200건.</p>
       <Panel title="job_queue" actions={<button onClick={reload}>새로고침</button>}>
         <State busy={busy} error={error} empty={!data?.jobs.length}>
           <div className="tablewrap">
             <table>
               <thead>
-                <tr><th>타입</th><th>상태</th><th className="num">시도</th><th>테넌트</th><th>갱신</th><th>오류</th></tr>
+                <tr><th>타입</th><th>상태</th><th className="num">시도</th><th>회사</th><th>갱신</th><th>오류</th></tr>
               </thead>
               <tbody>
                 {data?.jobs.map((j) => (

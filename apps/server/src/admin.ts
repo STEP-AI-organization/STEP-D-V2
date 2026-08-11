@@ -83,7 +83,7 @@ export function requireReason(actor: User, targetTenant: string | null | undefin
   const r = typeof reason === "string" ? reason.trim() : "";
   if (r.length < 4) {
     throw new HTTPException(400, {
-      message: "다른 테넌트의 데이터를 열람·변경하려면 사유(reason, 4자 이상)가 필요합니다.",
+      message: "다른 회사의 데이터를 열람·변경하려면 사유(reason, 4자 이상)가 필요합니다.",
     });
   }
   return r;

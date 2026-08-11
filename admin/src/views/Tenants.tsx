@@ -8,16 +8,16 @@ export function Tenants() {
 
   return (
     <>
-      <h1>테넌트</h1>
+      <h1>회사</h1>
       <p className="sub">
-        테넌트 = 데이터 소유·과금의 단위(방송사 하나). 여기서 만든 테넌트에 사람을 초대하면
-        그 사람은 <strong>자기 테넌트 데이터만</strong> 보게 됩니다.
+        회사 = 데이터 소유·과금의 단위(방송사 하나). 여기서 만든 회사에 사람을 초대하면
+        그 사람은 <strong>자기 회사 데이터만</strong> 보게 됩니다.
       </p>
 
       <Panel
         title="목록"
         actions={<button className="primary" onClick={() => setCreating((v) => !v)}>
-          {creating ? "닫기" : "새 테넌트"}
+          {creating ? "닫기" : "회사 추가"}
         </button>}
       >
         {creating && <CreateForm onDone={() => { setCreating(false); void reload(); }} />}
@@ -48,7 +48,7 @@ function Row({ t, onChanged }: { t: Tenant; onChanged: () => void }) {
 
   async function toggle() {
     const next = t.status === "active" ? "suspended" : "active";
-    // 남의 테넌트를 바꾸는 호출이라 서버가 사유를 요구한다 — 화면에서도 그걸 그대로 받는다.
+    // 남의 회사를 바꾸는 호출이라 서버가 사유를 요구한다 — 화면에서도 그걸 그대로 받는다.
     const reason = window.prompt(`${t.name} 을(를) ${next} 로 바꿉니다. 사유(4자 이상):`);
     if (!reason) return;
     setBusy(true);
@@ -253,8 +253,8 @@ function CreateForm({ onDone }: { onDone: () => void }) {
         첫 관리자를 owner 로 초대하고 초대 링크를 돌려줍니다. 셋 중 하나라도 실패하면 회사도
         만들어지지 않습니다.
         <br />
-        ⚠️ 테넌트가 둘 이상이 되면 <code>AUTH_REQUIRED=1</code> 없이는 서버가 모든 요청을 503 으로 막습니다
-        — 인증이 꺼진 채로는 모든 요청이 기본 테넌트로 해석되어 격리가 무의미해지기 때문입니다.
+        ⚠️ 회사가 둘 이상이 되면 <code>AUTH_REQUIRED=1</code> 없이는 서버가 모든 요청을 503 으로 막습니다
+        — 인증이 꺼진 채로는 모든 요청이 기본 회사로 해석되어 격리가 무의미해지기 때문입니다.
       </p>
     </form>
   );

@@ -2,7 +2,7 @@
  * STEP D Admin — 플랫폼 관리 콘솔.
  *
  * 대상은 **우리(운영사)**다. 방송사 운영자가 쓰는 화면은 apps/web 이고, 여기는 그 위층 —
- * 테넌트를 만들고, 사람을 초대하고, 잡을 들여다보고, 누가 무엇을 열람했는지 확인한다.
+ * 회사를 만들고, 사람을 초대하고, 잡을 들여다보고, 누가 무엇을 열람했는지 확인한다.
  *
  * 화면 전체가 superadmin 세션 뒤에 있다. 서버가 403 을 주면 그대로 막는다 — 프런트에서
  * 권한을 판단해 숨기는 것은 편의일 뿐이고, 실제 경계는 서버(admin.ts)다.
@@ -19,7 +19,7 @@ type Tab = "overview" | "tenants" | "users" | "jobs" | "audit";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "overview", label: "개요" },
-  { id: "tenants", label: "테넌트" },
+  { id: "tenants", label: "회사" },
   { id: "users", label: "사용자" },
   { id: "jobs", label: "잡" },
   { id: "audit", label: "감사 로그" },

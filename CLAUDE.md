@@ -32,7 +32,7 @@ apps/server/   Hono + PostgreSQL(Cloud SQL) + GCS + ffmpeg                 → C
                  / stepd-worker-youtube, drain 모드) + GEBD 전용 GPU T4 spot VM
 core/          Python AI 파이프라인 (analyze·asr·boundaries·beats·beat_annot·chyron·recommend·
                index_segments). analyze.py 는 analyze_cli/stages/utils 로 분리됨
-admin/         STEP D Admin — 플랫폼 관리 콘솔 (Vite+React SPA). 테넌트·사용자·잡·감사
+admin/         STEP D Admin — 플랫폼 관리 콘솔 (Vite+React SPA). 회사·사용자·잡·감사
                → Vercel 독립 배포 · admin.stepd.stepai.kr · superadmin 세션 필수
                (구 STEP D Lab 은 2026-08-10 제거 — /api/lab/* 라우트도 함께 삭제)
 apps/api/      ⚠️ 레거시 (구 STEPD, Python FastAPI). 미사용 — 새 코드 금지. 제거 여부 미결정.
@@ -195,6 +195,20 @@ core/ 쪽 스위치(파이썬): `RUN_FACES`·`RUN_PPL`·`RUN_REFINE`·`RUN_CHYRO
   현재 배치(Cloud Run Jobs)와 맞지 않는다 — `cloud.sh` 를 쓸 것.
 
 ---
+
+## 용어 — 사용자에게 보이는 글에서 "테넌트"라고 쓰지 않는다
+
+같은 실체(`tenants` 행 하나)를 **보는 자리에 따라 다르게 부른다.** 개발자 말이 화면에
+그대로 나가면 운영자도 고객사도 그게 뭔지 모른다.
+
+| 자리 | 쓰는 말 | 왜 |
+|------|---------|-----|
+| 어드민 콘솔 (`admin/`) | **회사** | STEPAI 운영자가 여러 고객사를 관리하는 자리 |
+| 제품 화면 (`apps/web`) · 오류 메시지 | **워크스페이스** | 사용자는 자기 것 **안에** 있다 |
+| 코드 식별자 · DB · 기술 주석 | `tenantId` · `tenants` · "테넌트 RLS" | 그대로 둔다 — 리네임은 위험만 크고 얻는 게 없다 |
+
+어드민은 **STEPAI 운영자 전용**이다(superadmin 세션 필수). 고객사는 여기 안 들어온다 —
+고객사 사람은 `stepd.stepai.kr`, 고객사 **시스템**은 API 키로 붙는다.
 
 ## 작업 규칙
 
