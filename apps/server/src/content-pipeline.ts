@@ -35,9 +35,11 @@ import {
   getChannelPointProfile, listVideoComments,
   getPool, getEntity, putEntity, upsertSearchSegments,
   recordUsage,
+  addCreditEntry,
 } from "./db-pg.ts";
 import type { TranscriptSegment, SearchSegmentRow } from "./db-pg.ts";
 import { billableMinutes, estimatedCostKrw, usageDedupeKey } from "./billing.ts";
+import { usageDedupeKey as creditUsageKey } from "./credits.ts";
 import { toCoreRegistry, timelineToRows } from "./cast.ts";
 import { createReadStream, parseObjectPath, readFile, uploadFile, useGcs } from "./storage-gcs.ts";
 import { enqueue } from "./queue.ts";
@@ -1280,6 +1282,19 @@ export async function runContentAnalyze(mediaId: string, fast = false): Promise<
           costKrw: estimatedCostKrw(minutes),
           source: "web",
           dedupeKey: usageDedupeKey("analyze_minutes", mediaId),
+        });
+
+        // **크레딧 차감.** 이게 빠지면 잔액이 올라가기만 하고 절대 안 내려가 의미가 없어진다.
+        // 원장(credit_ledger)이 과금의 진실이고 usage_events 는 운영 상세다 — 둘 다 남긴다.
+        // 잔액이 모자라도 여기서는 그냥 마이너스로 간다: 이미 분석이 끝났고 원가는 나갔다.
+        // 시작을 막는 건 큐잉 시점의 402 게이트가 할 일이다(결제 검증 후 배선).
+        await addCreditEntry({
+          delta: -minutes,
+          reason: "usage",
+          mediaId,
+          note: `분석 ${minutes}분`,
+          actor: "system",
+          dedupeKey: creditUsageKey(mediaId),
         });
       }
     } catch (e) {

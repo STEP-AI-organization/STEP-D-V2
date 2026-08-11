@@ -6,6 +6,10 @@ substitutions:
   _SERVICE_NAME: stepd-server
   _GCS_BUCKET: stepd-media
   _CLOUD_SQL_INSTANCE: step-d:us-central1:stepd-db
+  # 크레딧 단가(원). 비밀이 아니라 평문 env 다.
+  # 임시값: 비용 약 ₩1,200/시간 × 1.4 ÷ 60분 = 크레딧당 ₩28 (실측 마진 보고 재결정)
+  # ⚠️ 비우면 서버가 결제창을 아예 안 띄운다 — 0원 결제나 임의 단가보다 "안 됨"이 낫다.
+  _CREDIT_PRICE_KRW: "28"
 
 steps:
   - name: gcr.io/cloud-builders/docker
@@ -41,7 +45,7 @@ steps:
           --concurrency=10 \
           --min-instances=0 \
           --max-instances=5 \
-          --set-env-vars=NODE_ENV=production,GCS_BUCKET=$_GCS_BUCKET,FACTORY_ENABLED=1 \
+          --set-env-vars=NODE_ENV=production,GCS_BUCKET=$_GCS_BUCKET,FACTORY_ENABLED=1,CREDIT_PRICE_KRW=$_CREDIT_PRICE_KRW \
           --set-secrets=DATABASE_URL=stepd-db-url:latest \
           --set-secrets=GOOGLE_CLIENT_ID=stepd-google-client-id:latest \
           --set-secrets=GOOGLE_CLIENT_SECRET=stepd-google-client-secret:latest \
@@ -51,6 +55,10 @@ steps:
           --set-secrets=FACTORY_API_KEY=stepd-factory-api-key:latest \
           --set-secrets=TIKTOK_CLIENT_KEY=stepd-tiktok-client-key:latest \
           --set-secrets=TIKTOK_CLIENT_SECRET=stepd-tiktok-client-secret:latest \
+          --set-secrets=PORTONE_API_SECRET=stepd-portone-api-secret:latest \
+          --set-secrets=PORTONE_STORE_ID=stepd-portone-store-id:latest \
+          --set-secrets=PORTONE_CHANNEL_KEY=stepd-portone-channel-key:latest \
+          --set-secrets=PORTONE_WEBHOOK_SECRET=stepd-portone-webhook-secret:latest \
           --add-cloudsql-instances=$_CLOUD_SQL_INSTANCE \
           --service-account=stepd-deployer@$PROJECT_ID.iam.gserviceaccount.com
 
