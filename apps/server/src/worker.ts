@@ -71,6 +71,7 @@ import { youtubeUploadEnabled, UPLOAD_DISABLED_MESSAGE } from "./upload-gate.ts"
 import { naverUploadEnabled, NAVER_DISABLED_MESSAGE } from "./naver-gate.ts";
 import { hasNaverSession } from "./naver-session.ts";
 import { uploadToNaver, NAVER_TARGETS, type NaverTarget } from "./naver-tv.ts";
+import { prepareWorkPath, cleanupWorkFile, sweepStaleWorkFiles } from "./naver-workdir.ts";
 import { upsertDistribution } from "./publish-guard.ts";
 import {
   FRESH_VIDEO_WINDOW_MS,
@@ -1292,8 +1293,16 @@ async function handleNaverPublish(job: Job): Promise<void> {
     if (!(await fileExists(objPath))) return void (await fail("스토리지에 영상 파일이 없습니다"));
 
     // Playwright 는 **로컬 파일 경로**만 받는다 — GCS 스트림을 그대로 못 넘긴다.
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "stepd-naver-"));
-    const localPath = path.join(tmpDir, `${clipId}.mp4`);
+    // 임시폴더에 랜덤 이름으로 던지면 회차가 쌓일 때 뭐가 뭔지 알 수 없어서,
+    // 회사/프로그램/회차로 갈라 둔다. 자세한 규칙은 naver-workdir.ts.
+    const episode = clip.episodeId ? await getEntity<any>("episode", clip.episodeId) : null;
+    const program = episode?.programId ? await getEntity<any>("program", episode.programId) : null;
+    const { file: localPath } = prepareWorkPath({
+      workspace: program?.tenantName ?? program?.broadcaster ?? episode?.tenantName,
+      program: program?.title ?? program?.name,
+      episode: episode?.title ?? episode?.episodeNo,
+      clipId,
+    });
     try {
       await pipeline(createReadStream(objPath), fs.createWriteStream(localPath));
       // 설명·태그는 **배포 시점에 사람이 넣은 값이 우선**이다. 클립은 제목 칸이 없고 설명
@@ -1338,8 +1347,9 @@ async function handleNaverPublish(job: Job): Promise<void> {
       });
       console.log(`[worker] naver.publish ${clipId} (${channel}) 완료 → ${r.url ?? "(URL 미확인)"}`);
     } finally {
-      // 클립 영상은 수백 MB 다. 남기면 워커 PC 디스크가 찬다.
-      fs.rmSync(tmpDir, { recursive: true, force: true });
+      // 클립 영상은 수백 MB 다. 성공·실패 무관하게 지운다 — GCS 에 원본이 있으니 언제든
+      // 다시 받을 수 있고, 남기면 워커 PC 디스크가 금방 찬다. 폴더는 남긴다.
+      cleanupWorkFile(localPath);
     }
   } catch (err) {
     await fail(err instanceof Error ? err.message : String(err));
@@ -1661,6 +1671,13 @@ async function main(): Promise<void> {
     `[worker] lane=${WORKER_JOBS} · claims=${CLAIM_TYPES ? CLAIM_TYPES.join(",") : "all"} · sweep=${RUNS_SWEEP}`
     + (DRAIN_MODE ? ` · mode=drain (큐 비면 종료 · 예산 ${Math.round(DRAIN_MAX_MS / 60000)}분)` : " — polling for jobs"),
   );
+  // naver 레인은 로컬 작업 폴더에 mp4 를 내려받는다. 잡이 중간에 죽으면 파일이 남으므로
+  // 기동 시 한 번 훑는다(3일 지난 것). 다른 레인은 이 폴더를 안 쓴다.
+  if (WORKER_JOBS === "naver") {
+    const swept = sweepStaleWorkFiles();
+    if (swept) console.log(`[worker] naver 작업폴더 정리 — 오래된 mp4 ${swept}개 삭제`);
+  }
+
   await loop();
   console.log("[worker] stopped");
   process.exit(0);

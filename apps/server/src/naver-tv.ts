@@ -45,8 +45,11 @@ export const NAVER_TARGETS = {
     label: "네이버 클립",
     channel: "naverclip",
     uploadUrl: "https://clipcreators.naver.com/web/upload",
-    /** 업로드가 끝나면 목록으로 돌아간다 — 성공 판정에 쓴다. */
-    doneUrlHint: "/web/contents",
+    /** 업로드가 끝나면 업로드 페이지를 벗어난다. 목적지는 상황에 따라 다르다 —
+     *  예약 발행은 `/web/draft/<id>`, 즉시 발행은 목록. 그래서 특정 경로를 기다리지 않고
+     *  "업로드 페이지를 벗어났는가" 로 본다(2026-08-11 실측: /web/contents 를 기다렸다가
+     *  10분 타임아웃 났다 — 실제 작업은 40초였다). */
+    doneUrlHint: "",
     //
     // 2026-08-11 실측 (naver:probe clip <영상>). **2단계 구조다:**
     //   1단계 /web/upload  파일 드롭만 (숨은 input[type=file] + "파일 선택" 버튼)
@@ -179,31 +182,75 @@ async function setSchedule(page: Page, when: Date): Promise<boolean> {
   const hh = pad(when.getHours());
   const mm = pad(when.getMinutes());
 
-  // 체크박스는 라벨 문구로 잡는다. "비공개 예약" 과 헷갈리지 않게 정확히 일치시킨다.
+  // 1) "등록 예약" 체크 (실측: 체크 자체는 잘 먹는다)
   try {
-    const target = page.getByRole("checkbox", { name: "등록 예약" }).first();
-    if (!(await target.isChecked().catch(() => false))) await target.check({ timeout: 10_000 });
+    const box = page.getByRole("checkbox", { name: "등록 예약" }).first();
+    if (!(await box.isChecked().catch(() => false))) await box.check({ timeout: 10_000 });
   } catch {
     await page.locator('label:has-text("등록 예약")').first().click().catch(() => {});
   }
-  await page.waitForTimeout(600);
+  await page.waitForTimeout(700);
 
-  const setOne = async (value: string, index: number): Promise<boolean> => {
-    // 1) 네이티브 select 우선
-    const sel = page.locator('select').nth(index);
-    if (await sel.count().then((c) => c > index).catch(() => false)) {
-      if (await sel.selectOption({ label: value }).then(() => true).catch(() => false)) return true;
-    }
-    // 2) 커스텀 드롭다운 폴백 — 카테고리와 같은 패턴
-    const trigger = page.locator('[class*="Select"], [class*="dropdown"]').nth(index);
+  // 2) 날짜/시/분. ⚠️ 위치로 잡으면 안 된다 — `[class*="dropdown"]` nth(0) 은 **카테고리**
+  //    드롭다운이라 실측에서 예약 대신 카테고리 목록이 열렸다. 현재 표시값의 패턴으로 잡는다:
+  //    날짜는 YYYY.MM.DD, 시·분은 두 자리 숫자(DOM 순서로 시 → 분).
+  const CTL = 'button, [role="combobox"]';
+  const dateCtl = page.locator(CTL).filter({ hasText: /^\s*\d{4}\.\d{2}\.\d{2}\s*$/ }).first();
+  const twoDigit = page.locator(CTL).filter({ hasText: /^\s*\d{2}\s*$/ });
+
+  /**
+   * 드롭다운을 열어 값을 고른다. 정확히 같은 항목이 없으면 **가장 가까운 숫자**로 간다 —
+   * 분(minute)은 10분 단위 같은 눈금만 제공해서 임의 시각(:23)은 목록에 없다.
+   */
+  const choose = async (trigger: ReturnType<typeof page.locator>, value: string) => {
+    if (!(await trigger.count().then((c) => c > 0).catch(() => false))) return false;
     await trigger.click().catch(() => {});
+    await page.waitForTimeout(600);
+
+    const opts = page.locator('[class*="Option"], [role="option"], li');
+    const texts = (await opts.allTextContents().catch(() => [] as string[]))
+      .map((t) => t.trim()).filter(Boolean);
+    if (!texts.length) { await page.keyboard.press("Escape").catch(() => {}); return false; }
+
+    let pick = texts.find((t) => t === value);
+    if (!pick && /^\d+$/.test(value)) {
+      const want = Number(value);
+      const nums = texts.filter((t) => /^\d+$/.test(t));
+      if (nums.length) {
+        pick = nums.reduce((best, t) =>
+          Math.abs(Number(t) - want) < Math.abs(Number(best) - want) ? t : best, nums[0]);
+      }
+    }
+    if (!pick) { await page.keyboard.press("Escape").catch(() => {}); return false; }
+
+    const ok = await opts.filter({ hasText: new RegExp("^\s*" + pick.replace(/\./g, "\.") + "\s*$") })
+      .first().click({ timeout: 5000 }).then(() => true).catch(() => false);
     await page.waitForTimeout(400);
-    const opt = page.locator('[class*="Option"]').filter({ hasText: value }).first();
-    return opt.click({ timeout: 5_000 }).then(() => true).catch(() => false);
+    return ok;
   };
 
-  const ok = [await setOne(ymd, 0), await setOne(hh, 1), await setOne(mm, 2)];
-  return ok.every(Boolean);
+  await choose(dateCtl, ymd);
+  await choose(twoDigit.nth(0), hh);
+  await choose(twoDigit.nth(1), mm);
+
+  // ⚠️ 클릭 성공 여부로 판정하면 안 된다. 이미 원하는 값이면 목록을 안 눌러도 되므로
+  //    클릭은 false 인데 상태는 맞는 경우가 생긴다(실측: 날짜가 오늘이라 그랬다).
+  //    **최종 표시값을 읽어서** 판정한다.
+  const shown = async (loc: ReturnType<typeof page.locator>) =>
+    (await loc.first().textContent().catch(() => ""))?.trim() ?? "";
+  const gotDate = await shown(dateCtl);
+  const gotHour = await shown(twoDigit.nth(0));
+  const gotMin = await shown(twoDigit.nth(1));
+
+  // 분은 눈금 단위라 정확히 못 맞출 수 있다 — 목표보다 이르지만 않으면 통과로 본다.
+  const okDate = gotDate === ymd;
+  const okHour = gotHour === hh;
+  const okMin = /^\d+$/.test(gotMin) && Number(gotMin) >= Number(mm) - 30;
+  if (!(okDate && okHour && okMin)) {
+    console.error(`[naver] 예약 설정 확인 실패 — 원함 ${ymd} ${hh}:${mm} / 화면 ${gotDate} ${gotHour}:${gotMin}`);
+    return false;
+  }
+  return true;
 }
 
 async function shot(page: Page, dir: string, name: string): Promise<string> {
@@ -314,7 +361,10 @@ export async function uploadToNaver(input: NaverUploadInput): Promise<NaverUploa
     // 성공 판정: 업로드 페이지를 벗어나면 성공으로 본다. 토스트 문구는 개편마다 바뀌어 못 믿는다.
     const done = (T as { doneUrlHint?: string }).doneUrlHint;
     await page.waitForURL(
-      (u) => (done ? u.toString().includes(done) : u.toString() !== T.uploadUrl),
+      (u) => {
+        const s = u.toString();
+        return done ? s.includes(done) : (s !== T.uploadUrl && !s.startsWith(T.uploadUrl));
+      },
       { timeout },
     ).catch(() => {});
     const url = page.url();
