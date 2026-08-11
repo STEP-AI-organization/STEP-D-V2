@@ -10,6 +10,9 @@ GEBD 를 GPU VM 전용 레인으로 뺀 것과 같은 구조다.
 
 ## 1. 워커 PC 세팅 (한 번)
 
+> **그 PC 에서 따라갈 순서는 [deploy/naver-pc/README.md](../../deploy/naver-pc/README.md)
+> 하나에 정리돼 있다.** 클론 후 그것만 보면 된다. 아래는 요약.
+
 ```bash
 npx playwright install chromium                        # ~150MB
 pnpm --filter @stepd/server naver:login                # 브라우저가 뜬다 → 사람이 로그인

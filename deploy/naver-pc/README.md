@@ -1,0 +1,163 @@
+# 네이버 워커 PC 셋업
+
+이 PC 는 **네이버 TV·클립 발행만** 담당한다. 다른 잡은 집지 않는다.
+
+왜 클라우드가 아닌가: 네이버는 공개 업로드 API 가 없어 브라우저 자동화가 유일한데,
+해외 데이터센터 IP(Cloud Run)로 로그인하면 캡차·2차인증에 막힌다. 그래서 **한국 IP 의
+상시 PC 한 대**가 필요하다. GEBD 를 GPU VM 전용 레인으로 뺀 것과 같은 구조다.
+
+운영 상세는 [docs/ops/naver-publish.md](../../docs/ops/naver-publish.md).
+
+---
+
+## 0. 준비물
+
+- Windows 10/11, **절전·최대절전 끔** (잠들면 잡을 못 집는다)
+- Node ≥22 · pnpm · git
+- 네이버 계정 (발행할 채널의 주인)
+- GCP 서비스 계정 키 2종 — Cloud SQL 접속용(`roles/cloudsql.client`),
+  GCS 읽기용. **리포 안에 두지 말 것.**
+
+---
+
+## 1. 원격 접속 (Tailscale + SSH)
+
+배포할 때 이 PC 를 자동으로 갱신하기 위한 통로다. NAT 뒤라도 포트포워딩이 필요 없다.
+
+```powershell
+winget install tailscale.tailscale
+tailscale up          # 브라우저 로그인 — 회사 테일넷과 같은 계정으로
+```
+
+```powershell
+# OpenSSH Server
+Add-WindowsCapability -Online -Name OpenSSH.Server~~~~0.0.1.0
+Set-Service sshd -StartupType Automatic
+Start-Service sshd
+```
+
+배포 머신(`desktop-c5bdabc`)의 공개키를 등록한다.
+
+```
+ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKh3WFBK1kFd1mwQF9m+lbJ1hX4Gw1vJCWmf62MuRYDu hkj@stepai.kr
+```
+
+> ⚠️ **관리자 계정은 `~/.ssh/authorized_keys` 를 읽지 않는다.** Windows 특유의 함정으로,
+> `C:\ProgramData\ssh\administrators_authorized_keys` 를 써야 한다. 권한도 잠가야
+> sshd 가 파일을 무시하지 않는다.
+
+```powershell
+$f = "C:\ProgramData\ssh\administrators_authorized_keys"
+Add-Content -Path $f -Value "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIKh3WFBK1kFd1mwQF9m+lbJ1hX4Gw1vJCWmf62MuRYDu hkj@stepai.kr" -Encoding utf8
+icacls $f /inheritance:r /grant "Administrators:F" /grant "SYSTEM:F"
+```
+
+확인:
+```powershell
+tailscale status      # 이 PC 이름과 100.x 주소
+hostname
+```
+→ **호스트명을 배포 담당에게 알려줄 것.**
+
+---
+
+## 2. 리포 + 의존성
+
+```powershell
+git clone <repo-url> $env:USERPROFILE\STEPD-repo
+cd $env:USERPROFILE\STEPD-repo
+pnpm install
+npx playwright install chromium          # ~150MB
+```
+
+---
+
+## 3. Cloud SQL 접속
+
+프로덕션 큐(`job_queue`)를 봐야 하므로 **Cloud SQL Auth Proxy** 를 상시 띄운다.
+
+```powershell
+cloud-sql-proxy step-d:us-central1:stepd-db --port 5432
+```
+
+프록시도 워커와 함께 항상 떠 있어야 한다 — pm2 로 같이 등록해두는 편이 안전하다.
+
+---
+
+## 4. `apps/server/.env`
+
+```
+DATABASE_URL=postgresql://<user>:<pw>@localhost:5432/stepd
+GCS_BUCKET=stepd-media
+GOOGLE_APPLICATION_CREDENTIALS=<GCS 읽기 키 경로>
+NAVER_UPLOAD_ENABLED=1
+```
+
+- `WORKER_JOBS` 는 **넣지 않는다.** `worker:naver` 런처가 레인을 코드로 고정한다.
+- `NAVER_UPLOAD_ENABLED` 가 없으면 업로드가 **안 된다**(게이트 기본 OFF). 의도된 방향이다 —
+  잘못된 env 의 실패 모드는 "업로드 안 됨" 이어야지 "실수로 업로드됨" 이면 안 된다.
+- `.env` 는 `.gitignore` 대상이다. 커밋 전 `git status` 확인.
+
+---
+
+## 5. 네이버 로그인 (사람이 직접, 1회)
+
+```powershell
+pnpm --filter @stepd/server naver:login
+```
+
+브라우저가 뜨면 **2차인증까지** 끝낸다. 코드는 아이디·비밀번호를 만지지 않는다.
+끝나면 `~/.stepd/naver-storage-state.json` 에 세션이 저장된다.
+
+> ⚠️ 이 파일은 **로그인 쿠키 그 자체다.** 커밋·복사·전송 금지, 클라우드에 올리지 않는다.
+
+세션은 언젠가 만료된다. 잡이 `네이버 세션이 만료됐습니다` 로 실패하면 이 명령을 다시 돌린다.
+
+---
+
+## 6. 설치 (한 번)
+
+```powershell
+.\deploy\naver-pc\install.ps1
+```
+
+pm2 로 워커를 등록하고, **10분마다 origin/main 을 당겨 재시작**하는 작업을 스케줄러에 건다.
+이후 **배포는 `main` 에 push 하는 것으로 끝난다** — 이 PC 는 알아서 따라온다.
+배포 담당이 급하면 Tailscale 로 즉시 갱신을 찔러줄 수도 있다(`push-update.ps1`).
+
+---
+
+## 7. 확인
+
+```powershell
+pm2 status stepd-naver-worker            # running 이어야 한다
+pm2 logs stepd-naver-worker              # lane=naver 로 떠야 한다
+Get-Content $env:USERPROFILE\.stepd\self-update.log -Tail 20
+```
+
+발행까지 실제로 돌려보려면(로컬 DB 가 아니라 프로덕션 큐를 쓰므로 주의):
+
+```powershell
+pnpm --filter @stepd/server naver:e2e-seed <세로영상.mp4>
+```
+로그에 `naver.publish … 완료 → https://clipcreators.naver.com/…` 가 뜨면 정상이다.
+
+---
+
+## 문제 해결
+
+| 증상 | 원인·조치 |
+|---|---|
+| 잡이 안 잡힌다 (큐는 pending 인데 "큐 비었음") | **다른 워커 프로세스 확인.** 구버전 코드로 도는 워커가 가로챈다. 2026-08-11 에 5일 묵은 워커 때문에 실제로 겪었다 |
+| `네이버 세션이 만료됐습니다` | `naver:login` 재실행 |
+| `설명이 10자 미만입니다` | 클립은 설명 10자 이상이 필수 |
+| `저장 완료를 확인하지 못했습니다` | `~/.stepd/naver-artifacts/` 스크린샷 확인. 네이버 DOM 개편이면 셀렉터 수정 필요 |
+| SSH 가 비밀번호를 묻는다 | 관리자 계정인데 `administrators_authorized_keys` 에 안 넣었거나 권한을 안 잠갔다 |
+| 배포했는데 반영이 안 된다 | `self-update.log` 확인. `pnpm install` 이 실패하면 워커를 **일부러** 재시작하지 않는다(반쪽 갱신보다 구버전 유지가 낫다) |
+
+## 알아둘 것
+
+- **코드가 최신이어도 프로세스가 옛날이면 소용없다.** self-update 가 재시작까지 하는 이유다.
+- **페이싱이 아직 없다.** 짧은 시간에 여러 건을 몰아넣으면 네이버가 불안정해진다.
+  초기엔 몇 건씩 넣어보며 한도를 재는 게 안전하다.
+- **약관 리스크는 사업 판단이다.** 본인 계정·본인 콘텐츠라도 자동화 도구는 제한될 수 있다.
