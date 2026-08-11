@@ -32,14 +32,24 @@ export const NAVER_TARGETS = {
   tv: {
     label: "네이버 TV",
     channel: "navertv",
-    uploadUrl: "https://tv.naver.com/studio/upload",
+    // 2026-08-11 실측: tv.naver.com/studio 에는 업로드 폼이 없다. 루트로 들어가면
+    // **자기 채널 대시보드로 자동 리다이렉트**되므로 채널ID를 몰라도 된다.
+    uploadUrl: "https://creator.tv.naver.com/",
+    /** 파일을 넣으면 콘텐츠 목록(/content/video)으로 이동하고 상세 패널이 뜬다. */
+    doneUrlHint: "/content/video",
+    /** 진입 시 공지 모달이 떠 dimmed 레이어가 클릭을 전부 막는다 — 먼저 닫아야 한다. */
+    closeDialogFirst: true,
+    /** 대시보드의 "동영상 업로드" 를 눌러야 파일 input 이 살아난다. */
+    openUploadButton: 'button:has-text("동영상 업로드")',
     sel: {
       fileInput: 'input[type="file"]',
-      title: 'input[name="title"], input[placeholder*="제목"]',
-      description: 'textarea[name="description"], textarea[placeholder*="설명"]',
-      tags: 'input[placeholder*="태그"]',
-      submit: 'button[type="submit"], button:has-text("등록"), button:has-text("업로드")',
+      // 클립과 달리 **제목이 따로 있다**(0/120). 설명은 0/3,000.
+      title: 'input[placeholder*="제목을 입력"]',
+      description: 'textarea[placeholder*="설명"], textarea',
+      tags: 'input[placeholder*="태그 입력"]',
+      submit: 'button:has-text("저장"), button:has-text("등록"), button:has-text("완료")',
     },
+    filePickButton: 'button:has-text("파일 선택")',
   },
   clip: {
     label: "네이버 클립",
@@ -284,6 +294,23 @@ export async function uploadToNaver(input: NaverUploadInput): Promise<NaverUploa
   page.setDefaultTimeout(60_000);
   try {
     await page.goto(T.uploadUrl, { waitUntil: "domcontentloaded" });
+
+    // 네이버 TV: 진입 시 공지 모달이 떠 dimmed 레이어가 클릭을 전부 막는다(2026-08-11 실측).
+    if ((T as { closeDialogFirst?: boolean }).closeDialogFirst) {
+      for (let i = 0; i < 3; i++) {
+        if (!(await page.locator('[role="dialog"]').count().catch(() => 0))) break;
+        const ok = await page.locator('[role="dialog"] button:has-text("닫기"), [role="dialog"] button[aria-label="닫기"]')
+          .first().click({ timeout: 5_000 }).then(() => true).catch(() => false);
+        if (!ok) await page.keyboard.press("Escape").catch(() => {});
+        await page.waitForTimeout(1_000);
+      }
+    }
+    // 대시보드에서 "동영상 업로드" 를 눌러야 파일 input 이 살아난다.
+    const openBtn = (T as { openUploadButton?: string }).openUploadButton;
+    if (openBtn) {
+      await page.locator(openBtn).first().click({ timeout: 20_000 }).catch(() => {});
+      await page.waitForTimeout(1_500);
+    }
 
     // 세션 만료면 로그인 폼으로 튕긴다. 여기서 자동 로그인을 시도하지 않는다 —
     // 캡차·2차인증은 사람이 뚫어야 하고, 자동 시도는 계정 잠금만 부른다.
