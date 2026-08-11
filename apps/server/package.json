@@ -25,7 +25,8 @@
     "canva:push": "node --import tsx --env-file .env scripts/push-canva-template.mts",
     "naver:login": "node --import tsx --env-file-if-exists=.env scripts/naver-login.mts",
     "naver:probe": "node --import tsx --env-file-if-exists=.env scripts/naver-probe.mts",
-    "naver:categories": "node --import tsx --env-file-if-exists=.env scripts/naver-categories.mts"
+    "naver:categories": "node --import tsx --env-file-if-exists=.env scripts/naver-categories.mts",
+    "naver:e2e-seed": "node --import tsx --env-file .env scripts/naver-e2e-seed.mts"
   },
   "dependencies": {
     "@google-cloud/storage": "^7.15.0",

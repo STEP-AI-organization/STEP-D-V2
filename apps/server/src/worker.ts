@@ -133,12 +133,18 @@ const DRAIN_MODE = process.argv.includes("--drain")
 const DRAIN_MAX_MS = Number(process.env.DRAIN_MAX_MS ?? 50 * 60 * 1000);
 
 const WORKER_JOBS = (process.env.WORKER_JOBS ?? "all").trim().toLowerCase();
+/** 머신 전용 레인(gebd·naver)을 제외한 전체 타입 — "all" 워커가 집는 범위. */
+const ALL_LANE_TYPES: JobType[] = [...JOB_LANES.content, ...JOB_LANES.youtube,
+  "thumbnail.style", "thumbnail.generate"];
 const CLAIM_TYPES: JobType[] | undefined =
   WORKER_JOBS === "content" ? JOB_LANES.content
   : WORKER_JOBS === "youtube" ? JOB_LANES.youtube
   : WORKER_JOBS === "gebd" ? JOB_LANES.gebd
   : WORKER_JOBS === "naver" ? JOB_LANES.naver
-  : undefined; // "all" → claim every type
+  // "all" 은 **머신 전용 레인을 빼고** 전부 집는다. gebd 는 GPU 가, naver 는 Playwright·
+  // 한국 IP·로그인 세션이 있는 PC 가 필요해서, 아무 워커나 집으면 100% 실패한다.
+  // (실측 2026-08-11: all 워커가 naver.publish 를 집어가 재시도만 쌓았다.)
+  : ALL_LANE_TYPES;
 /** The channel sweep enqueues YouTube work, so content/gebd-only workers must not run it. */
 // naver 워커도 sweep 을 돌리지 않는다 — 사무실 PC 한 대일 뿐이고, sweep 은
 // youtube 레인이 책임진다. 두 곳에서 돌면 같은 잡을 두 번 되살린다.
