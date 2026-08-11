@@ -17,7 +17,7 @@ description: 네이버 TV·클립 업로드 — 공개 API 가 없어 Playwright
 ```bash
 npx playwright install chromium                      # 1회 (~150MB)
 pnpm --filter @stepd/server naver:login              # 사람이 로그인 (2차인증 포함)
-WORKER_JOBS=naver NAVER_UPLOAD_ENABLED=1 pnpm --filter @stepd/server worker
+NAVER_UPLOAD_ENABLED=1 pnpm --filter @stepd/server worker:naver   # 레인 고정 런처
 ```
 
 `DATABASE_URL` 은 Cloud SQL 을 봐야 같은 `job_queue` 를 집는다.
@@ -137,7 +137,7 @@ creator.tv.naver.com/  →  자기 채널 대시보드로 자동 리다이렉트
 
 ```bash
 pnpm --filter @stepd/server naver:e2e-seed <영상경로>   # 로컬 DB 에 클립 심고 잡 큐잉
-WORKER_JOBS=naver NAVER_UPLOAD_ENABLED=1 WORKER_MODE=drain pnpm --filter @stepd/server worker
+NAVER_UPLOAD_ENABLED=1 WORKER_MODE=drain pnpm --filter @stepd/server worker:naver
 ```
 
 확인된 전 구간: 큐 claim → 스토리지에서 다운로드 → 회사/프로그램/회차 폴더 →

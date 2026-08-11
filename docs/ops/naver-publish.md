@@ -24,12 +24,16 @@ pnpm --filter @stepd/server naver:login                # 브라우저가 뜬다 
 ## 2. 상시 실행
 
 ```bash
-WORKER_JOBS=naver NAVER_UPLOAD_ENABLED=1 pnpm --filter @stepd/server worker
+NAVER_UPLOAD_ENABLED=1 pnpm --filter @stepd/server worker:naver
 ```
+
+`worker:naver` 는 **레인을 코드에 못 박은 전용 런처**다(`scripts/worker-naver.mts`).
+`WORKER_JOBS` 를 env 로 잘못 넣어도 뒤집히지 않는다 — 이 PC 가 실수로 "all" 워커가 되어
+남의 레인 잡을 집어 실패시키는 사고를 원천 차단한다.
 
 | 환경변수 | |
 |---|---|
-| `WORKER_JOBS=naver` | 이 레인만 집는다. **필수** |
+| ~~`WORKER_JOBS`~~ | **불필요.** `worker:naver` 가 naver 로 고정한다 |
 | `NAVER_UPLOAD_ENABLED` | 실업로드 게이트. 기본 OFF — 명시적 truthy 일 때만 ON |
 | `DATABASE_URL` | Cloud SQL 을 봐야 같은 `job_queue` 를 집는다 |
 | `NAVER_WORK_DIR` | 작업 폴더 (기본 `~/.stepd/naver-work`) |
