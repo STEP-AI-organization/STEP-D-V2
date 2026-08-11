@@ -51,7 +51,7 @@ Hono 단일 진입점(index.ts, **~5500줄, 라우트 118개**) + 별도 워커 
 | 파일 | 역할 |
 |------|------|
 | `src/index.ts` | 모든 HTTP 라우트. 여기 한 파일에 유지. **Cloud Run은 잡을 큐잉만 한다.** |
-| `src/worker.ts` | **워커 프로세스 진입점.** 잡 13종 · 레인 3개 · drain 모드 (아래 참조) |
+| `src/worker.ts` | **워커 프로세스 진입점.** 잡 14종 · 레인 4개 · drain 모드 (아래 참조) |
 | `src/queue.ts` | Postgres job_queue (FOR UPDATE SKIP LOCKED · dedupeKey · 지수 백오프 · 5분 하트비트) |
 | `src/channel-pipeline.ts` | channel.analyze — 업로드 동기화 + 채널 애널리틱스/일별 수익 백필 |
 | `src/content-pipeline.ts` | content.analyze — `python -m core.analyze` 스폰, 진행률 파싱(@@PROGRESS→episode.pipeline), 결과+프레임 영구 저장, 추천 배선. 미디어별 고정 작업 디렉토리로 재시도 시 체크포인트 재개 |
@@ -68,7 +68,7 @@ Hono 단일 진입점(index.ts, **~5500줄, 라우트 118개**) + 별도 워커 
 
 `src/pipeline.ts`는 이제 `newId` 헬퍼만 export한다(구 sqlite `db.ts`·`storage.ts`, 휴리스틱 `buildRecommendations()`는 정리 완료). 실제 추천은 core/ AI 파이프라인이 만든다.
 
-### 워커 — 잡 13종 · 레인 3개 · drain 모드
+### 워커 — 잡 14종 · 레인 4개 · drain 모드
 
 프로세스 하나가 다 처리하지 않는다. `WORKER_JOBS` 로 **레인을 갈라** 서로 굶기지 않게 한다.
 
@@ -79,8 +79,16 @@ youtube : channel.analyze · video.analyze · video.hotwatch · video.comments �
           → 짧고 API 쿼터 위주. Cloud Run Job `stepd-worker-youtube`
 gebd    : gebd.detect
           → GPU T4 spot VM 전용. GPU 없는 데서 claim 하면 Docker mmaction2 를 못 돌린다
+naver   : naver.publish
+          → 사무실 상시 PC 전용. 네이버는 공개 업로드 API 가 없어 Playwright 자동화인데,
+            해외 데이터센터 IP 로 로그인하면 캡차·2차인증에 막힌다 → 한국 IP 필요
 thumbnail.style · thumbnail.generate 는 레인 미지정(=all) 워커가 집는다
 ```
+
+⚠️ **`all` 워커는 머신 전용 레인(gebd·naver)을 집지 않는다**(`ALL_LANE_TYPES`). 예전엔
+집어가서 `unknown job type`·GPU 없음으로 실패시키고 재시도만 쌓았다 — 증상이 "잡은 조용히
+실패하는데 정작 전용 워커는 큐가 비어 보임" 이라 원인을 찾기 어렵다. 잡이 안 잡히면
+**다른 워커 프로세스가 떠 있는지부터 확인할 것.**
 
 **drain 모드(`WORKER_MODE=drain`)가 비용 구조의 핵심.** 상시 5초 폴링 대신 Cloud Scheduler 가
 Job 을 깨우고 → **큐가 비면 종료** → idle 과금 0. `DRAIN_MAX_MS`(기본 50분)를 넘기면 새 잡을

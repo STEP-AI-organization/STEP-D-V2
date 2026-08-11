@@ -36,6 +36,7 @@
 | [worker-queue.md](ops/worker-queue.md) | 잡 큐(job_queue)·워커 VM 아키텍처 — 잡 5종, 신뢰성 설계 |
 | [migrations.md](ops/migrations.md) | DB 마이그레이션(node-pg-migrate) — 버전 체계·baseline·작성 규칙 |
 | [youtube-upload-gate.md](ops/youtube-upload-gate.md) | YouTube 실업로드 게이트(`YOUTUBE_UPLOAD_ENABLED`) — 기본 OFF, env로만 온오프 |
+| [naver-publish.md](ops/naver-publish.md) | **네이버 TV·클립 발행** — 공개 API 가 없어 Playwright 자동화. 사무실 PC 전용 레인·세션·게이트·실측 수치 |
 | [vercel-ops.md](ops/vercel-ops.md) | Vercel 운영 — 환경변수 계약, CLI 레시피, 함정 모음 |
 | [youtube-channel-analytics-guide.md](ops/youtube-channel-analytics-guide.md) | YouTube OAuth·채널분석 — 구현 현황과 남은 항목(심사·토큰 암호화) |
 

@@ -133,6 +133,29 @@ creator.tv.naver.com/  →  자기 채널 대시보드로 자동 리다이렉트
   **문자열로 넘길 것.**
 - 콘솔 출력의 한글이 깨져 보이는 건 CP949 표시 문제다. 결과는 JSON 파일로 받아 확인한다.
 
+## 큐 경유 E2E (2026-08-11 완주)
+
+```bash
+pnpm --filter @stepd/server naver:e2e-seed <영상경로>   # 로컬 DB 에 클립 심고 잡 큐잉
+WORKER_JOBS=naver NAVER_UPLOAD_ENABLED=1 WORKER_MODE=drain pnpm --filter @stepd/server worker
+```
+
+확인된 전 구간: 큐 claim → 스토리지에서 다운로드 → 회사/프로그램/회차 폴더 →
+발행(예약) → `clip.distributions` 기록 → mp4 삭제. 재시도 없이 1회 성공.
+
+```
+잡            status: done · attempts: 1
+distributions [{ channel:"naverclip", status:"published", url:"…/web/draft/339076" }]
+작업 폴더      ~/.stepd/naver-work/STEP AI/나는 SOLO/16기 3회/   (mp4 0개 · 폴더만 잔존)
+```
+
+> ⚠️ **`all` 워커가 이 잡을 집으면 안 된다.** `naver.publish` 는 Playwright·한국 IP·
+> 로그인 세션이 있는 PC 에서만 돈다. 예전엔 `WORKER_JOBS` 미지정 워커가 집어가
+> `unknown job type` 으로 실패시키고 재시도만 쌓았다 — **증상이 "잡은 조용히 실패하는데
+> 정작 naver 워커는 큐가 비어 보임"** 이라 원인을 찾기 어렵다. 지금은 `ALL_LANE_TYPES`
+> 로 gebd·naver 를 제외한다. 구버전 코드로 도는 워커가 남아 있으면 같은 증상이 재현되니
+> **잡이 안 잡히면 먼저 다른 워커 프로세스가 떠 있는지 확인할 것.**
+
 ## 로컬 작업 폴더
 
 Playwright 는 **로컬 파일 경로**만 받으므로 GCS 에서 한 번 내려받는다. 임시폴더에 랜덤
@@ -182,4 +205,5 @@ pnpm --filter @stepd/server naver:categories <영상경로>    # 카테고리 1�
 - 2차 카테고리 전체 목록 미추출(파일 투입 불안정). 1차 40개만 확인 — 쓸 1차의 2차만
   사람이 확인해 프로그램 설정에 넣으면 된다
 - 네이버 TV(`tv` 타깃) 셀렉터는 **미검증** — 클립만 실측했다
-- 페이싱(잡 간 간격) 미구현 — 실측 40초/건이지만 네이버 스로틀 한도는 아직 모른다
+- 페이싱(잡 간 간격) 미구현 — 실측 클립 40초·TV 26초/건이지만 네이버 스로틀 한도는 모른다
+- 프로그램별 카테고리 사전등록 미구현 — 지금은 DEFAULT_CATEGORY("엔터"/"엔터")
