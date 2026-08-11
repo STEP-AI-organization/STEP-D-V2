@@ -42,6 +42,7 @@ import {
   setChannelPointProfile,
   type YouTubeChannel,
   appendGateAudit,
+  getRawPool,
 } from "./db-pg.ts";
 import { clipGate } from "./publish-dispatch.ts";
 import { probe, captureThumbnail } from "./ffmpeg.ts";
@@ -51,6 +52,7 @@ import {
 import { uploadFile, uploadPath, thumbPath } from "./storage-gcs.ts";
 import { initQueue, claimJob, completeJob, failJob, requeueStale, heartbeatJob, enqueue, lastDoneJobAt, queueStats, type Job, type JobType } from "./queue.ts";
 import { runWithTenant, runAsSystem, DEFAULT_TENANT_ID } from "./tenant.ts";
+import { runAutomationCycle } from "./automation-cycle.ts";
 import { runChannelPipeline } from "./channel-pipeline.ts";
 import { runContentAnalyze, newestMtimeMs } from "./content-pipeline.ts";
 import {
@@ -96,8 +98,11 @@ const JOB_LANES: Record<"content" | "youtube" | "gebd", JobType[]> = {
   content: ["content.analyze", "youtube.download", "match.align", "match.segment", "match.learn"],
   // factory.* 도 youtube 레인 — 상태기계 한 걸음은 DB 몇 번 읽고 재큐하는 게 전부라
   // 짧고, 배포(distribution.publish)와 같은 레인에 있어야 순서가 자연스럽다.
+  // automation.cycle 도 youtube 레인 — 순방 한 바퀴는 DB 를 훑고 dispatchPublish 를 부르는
+  // 게 전부라 짧고, 그 결과가 distribution.publish 로 이어지므로 같은 레인이 자연스럽다.
   youtube: ["channel.analyze", "video.analyze", "video.hotwatch", "video.comments",
-            "distribution.publish", "factory.orchestrate", "factory.publicize"],
+            "distribution.publish", "factory.orchestrate", "factory.publicize",
+            "automation.cycle"],
   // gebd 는 GPU T4 spot VM 전용 lane. content lane 이 이 잡을 claim 하면 GPU 없는 곳에서
   // Docker mmaction2 를 못 돌린다. 그래서 별도 프로세스 (WORKER_JOBS=gebd) 로만 픽업.
   gebd: ["gebd.detect"],
@@ -188,6 +193,7 @@ async function handle(job: Job): Promise<FollowUp | void> {
     case "match.segment": return handleMatchSegment(job);
     case "match.learn": return handleMatchLearn(job);
     case "gebd.detect": return handleGebdDetect(job);
+    case "automation.cycle": return handleAutomationCycle(job);
     case "factory.orchestrate": return handleFactoryOrchestrate(job);
     case "factory.publicize": return handleFactoryPublicize(job);
     case "thumbnail.style": return handleThumbnailStyle(job);
@@ -764,6 +770,46 @@ function runThumbnailCli(
 // ── 콘텐츠 공장 ───────────────────────────────────────────────────────────────
 // 상태기계 한 걸음 전진 후 재큐. 16분짜리 분석을 기다리며 워커를 붙잡지 않는다.
 
+/**
+ * 자동 배포 순방 — 한 테넌트분. 워커가 이미 `job.tenantId` 로 컨텍스트를 세운 뒤 부르므로
+ * 여기서 읽는 규칙·프로그램·채널은 전부 그 워크스페이스 것뿐이다(RLS).
+ *
+ * 던지지 않는다 — 순방이 실패해서 큐 백오프를 타면 같은 회차를 반복 평가하게 된다.
+ * 다음 순방에 다시 보면 되는 일이다.
+ */
+async function handleAutomationCycle(job: Job): Promise<void> {
+  try {
+    const report = await runAutomationCycle();
+    if (report.rulesEvaluated > 0 || report.idleReason) {
+      console.log(`[worker] automation.cycle ${job.tenantId}:`, JSON.stringify(report));
+    }
+  } catch (e) {
+    console.error(`[worker] automation.cycle ${job.tenantId} 실패(다음 순방에 재시도):`, e);
+  }
+}
+
+/**
+ * 순방 팬아웃 — **여기만 시스템 스코프다.** 테넌트 목록을 읽고, 각 테넌트의 컨텍스트
+ * *안에서* 잡을 넣는다. 잡 행의 tenant_id 가 그때 정해지고, 워커가 그걸로 다시 컨텍스트를
+ * 세운다. 순방 자체를 시스템 스코프로 돌리면 A 의 규칙이 B 의 채널을 볼 수 있다.
+ */
+export async function fanOutAutomationCycles(): Promise<number> {
+  const tenants = await runAsSystem(async () => {
+    const { rows } = await getRawPool().query("SELECT id FROM tenants");
+    return rows.map((r: { id: string }) => r.id);
+  });
+
+  let n = 0;
+  for (const tenantId of tenants) {
+    // dedupeKey 로 같은 테넌트의 순방이 겹쳐 쌓이지 않게 한다.
+    const id = await runWithTenant({ scope: tenantId, via: "system" }, () =>
+      enqueue("automation.cycle", {}, { dedupeKey: `automation.cycle:${tenantId}`, maxAttempts: 1 }),
+    );
+    if (id) n += 1;
+  }
+  return n;
+}
+
 async function handleFactoryOrchestrate(job: Job): Promise<void> {
   const factoryJobId = String(job.payload.factoryJobId ?? "");
   if (!factoryJobId) throw new Error("factoryJobId 필요");
@@ -1322,10 +1368,30 @@ async function sweepDueChannels(): Promise<void> {
   if (queued) console.log(`[worker] sweep queued ${queued}/${channels.length} channels`);
 }
 
+/**
+ * 순방 주기. 기본 10분 — 회차 하나가 분석되는 데 수십 분이 걸리므로 더 자주 돌 이유가 없고,
+ * 매 순방이 규칙 수만큼 DB 를 훑는다. 0 이면 워커가 순방을 만들지 않는다
+ * (Cloud Scheduler 로만 돌리고 싶을 때).
+ */
+const CYCLE_EVERY_MS = Number(process.env.AUTOMATION_CYCLE_MS ?? 10 * 60 * 1000);
+
 async function loop(): Promise<void> {
   const startedAt = Date.now();
   let drained = 0;
+  let lastFanOut = 0;
   while (!stopping) {
+    // 순방 팬아웃 — 테넌트마다 잡을 하나씩 넣는다. dedupeKey 로 겹쳐 쌓이지 않는다.
+    // drain 모드에서는 만들지 않는다: 큐를 비우고 끝나야 하는데 스스로 일을 늘리면 안 끝난다.
+    // 순방 잡은 youtube 레인이 집는다 — 그 레인을 안 도는 워커가 만들면 아무도 안 집는다.
+    if (RUNS_SWEEP && !DRAIN_MODE && CYCLE_EVERY_MS > 0 && Date.now() - lastFanOut > CYCLE_EVERY_MS) {
+      lastFanOut = Date.now();
+      try {
+        const n = await fanOutAutomationCycles();
+        if (n > 0) console.log(`[worker] 자동 배포 순방 ${n}개 테넌트 큐잉`);
+      } catch (err) {
+        console.error("[worker] 순방 팬아웃 실패(다음 주기에 재시도)", err);
+      }
+    }
     // drain 모드는 예산 시간이 지나면 **새 잡을 안 집는다**. 남은 건 다음 실행이 가져간다.
     if (DRAIN_MODE && Date.now() - startedAt > DRAIN_MAX_MS) {
       console.log(`[worker] drain 예산(${Math.round(DRAIN_MAX_MS / 60000)}분) 초과 — ${drained}건 처리 후 종료`);

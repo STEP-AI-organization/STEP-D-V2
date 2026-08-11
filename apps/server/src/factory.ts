@@ -19,7 +19,8 @@
  *   3. 일일 상한        프로그램당 하루 N개 (기본 5) — 같은 영상 20번 올라가는 사고 방지
  *   4. private 업로드   → 유예 후 공개 전환 (factory.publicize). 되돌리기 = 전환 취소
  */
-import { getEntity, putEntity, listEntities, listMedia, commitAdoption } from "./db-pg.ts";
+import { getEntity, putEntity, listEntities, listMedia } from "./db-pg.ts";
+import { commitAndInherit } from "./adopt.ts";
 import { dispatchPublish } from "./publish-dispatch.ts";
 import { newId } from "./pipeline.ts";
 import { enqueue } from "./queue.ts";
@@ -370,8 +371,9 @@ async function adoptRecommendation(rec: any, job: FactoryJob): Promise<string | 
     factoryJobId: job.id,
   };
 
-  const ok = await commitAdoption(clipId, clip, rec.id,
-    { ...rec, status: "adopted", adoptedClipId: clipId });
+  // 채택 커밋 + **이슈 승계**는 adopt.ts 하나로 모았다. 예전엔 이 경로가 승계를 안 해서
+  // 공장이 만든 미디어에는 회차 이슈가 안 붙었다(F2 Invariant 위반).
+  const ok = await commitAndInherit(clipId, clip, rec.id, rec);
   if (!ok) return null;
 
   return clipId;

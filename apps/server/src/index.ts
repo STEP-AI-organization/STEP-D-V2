@@ -218,6 +218,7 @@ import {
 } from "./episode-intake.ts";
 import { dispatchPublish } from "./publish-dispatch.ts";
 import { opsCapabilityOf } from "./ops-role.ts";
+import { commitAndInherit } from "./adopt.ts";
 import {
   ROOT as ASSET_ROOT,
   canMoveFolder,
@@ -4058,79 +4059,14 @@ app.post("/api/recommendations/:id/adopt", async (c) => {
   // Atomic: clip insert + rec flip commit together, so a crash can't orphan a clip and
   // let a retry mint a second one. commitAdoption's own pending-guard closes the race the
   // route-level check above can't (two concurrent adopts both reading 'pending').
-  const committed = await commitAdoption(clipId, clip, recId, { ...rec, status: "adopted", adoptedClipId: clipId });
+  // 채택 커밋 + 이슈 승계는 adopt.ts 하나로 모았다 — 경로가 둘이면 한쪽만 고치게 된다.
+  const committed = await commitAndInherit(clipId, clip, recId, rec);
   if (!committed) {
     const latest = await getEntity<any>("recommendation", recId);
     return c.json({ clipId: latest?.adoptedClipId });
   }
-
-  await inheritGateToClip({
-    clipId,
-    episodeId: rec.episodeId,
-    recommendationId: recId,
-    segment: { start: rec.startTime, end: rec.endTime },
-  });
-
   return c.json({ clipId, clip, gate: await gateFor("clip", clipId) });
 });
-
-/**
- * 채택 시 권리·심의 이슈를 미디어로 승계한다 (F2-4 · F2 Invariant).
- *
- * "이슈가 승계되지 않은 미디어는 존재할 수 없다." 원본(회차·추천 구간)에 달린 이슈 중
- * 잘라낸 구간과 겹치는 것만 내려온다. 회차 전체에 걸린 이슈(밴드 없음)는 무조건 따라온다.
- *
- * **판정도 함께 내려온다.** 회차가 "이슈 없음"으로 판정돼 있으면 거기서 잘라낸 미디어도
- * 판정된 것으로 본다 — 안 그러면 채택할 때마다 모든 미디어가 검수 대기로 되돌아가고,
- * 사람이 같은 판단을 회차당 수십 번 반복해야 한다.
- *
- * 승계 실패는 삼키지 않는다. 이슈 없이 만들어진 미디어는 게이트를 잘못 통과할 수 있다.
- */
-async function inheritGateToClip(opts: {
-  clipId: string;
-  episodeId: string;
-  recommendationId: string;
-  segment: { start: number; end: number };
-}): Promise<void> {
-  const [epIssues, recIssues, epJudged, recJudged] = await Promise.all([
-    listRightsIssues("episode", opts.episodeId),
-    listRightsIssues("recommendation", opts.recommendationId),
-    isJudged("episode", opts.episodeId),
-    isJudged("recommendation", opts.recommendationId),
-  ]);
-
-  const source = [...epIssues, ...recIssues].map((r) => ({ ...toIssue(r), _row: r }));
-  const carried = inheritedIssues(opts.segment, source) as (Issue & { _row: typeof epIssues[number] })[];
-
-  for (const issue of carried) {
-    const row = issue._row;
-    await insertRightsIssue({
-      id: newId("ri"),
-      subjectType: "clip",
-      subjectId: opts.clipId,
-      kind: row.kind,
-      resolution: row.resolution,
-      bandStart: row.bandStart,
-      bandEnd: row.bandEnd,
-      note: row.note,
-      actor: row.actor,
-      inheritedFrom: row.id,
-    });
-  }
-
-  if (epJudged || recJudged) {
-    await putRightsJudgement("clip", opts.clipId, "승계", `${opts.recommendationId} 채택 시 판정 승계`);
-  }
-
-  await appendGateAudit({
-    subjectType: "clip",
-    subjectId: opts.clipId,
-    action: "inherit",
-    toState: carried.length > 0 ? "issues" : epJudged || recJudged ? "judged" : "unjudged",
-    actor: "system",
-    basis: `채택 승계 — 이슈 ${carried.length}건 · 판정 ${epJudged || recJudged ? "있음" : "없음"}`,
-  });
-}
 
 // ── reject recommendation ─────────────────────────────────────────────────────
 app.post("/api/recommendations/:id/reject", async (c) => {

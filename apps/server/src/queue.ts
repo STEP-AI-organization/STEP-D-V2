@@ -32,6 +32,8 @@ export type JobType =
   | "distribution.publish"
   // 콘텐츠 공장: 소스 영상 하나 → 분석·채택·렌더·배포까지 완주시키는 상태기계.
   // 한 걸음 전진하고 재큐한다 — 16분짜리 분석을 기다리며 워커를 붙잡지 않기 위해.
+  // 자동 배포 순방 — **테넌트별로** 하나씩 돈다(격리가 곧 잡 분리다).
+  | "automation.cycle"
   | "factory.orchestrate"
   // 공장: private 로 올린 영상을 유예 후 공개로 전환 (되돌릴 시간을 벌기 위한 장치).
   | "factory.publicize"
