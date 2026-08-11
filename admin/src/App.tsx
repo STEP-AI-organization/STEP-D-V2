@@ -13,14 +13,16 @@ import { Overview } from "./views/Overview";
 import { Tenants } from "./views/Tenants";
 import { Users } from "./views/Users";
 import { Jobs } from "./views/Jobs";
+import { Payments } from "./views/Payments";
 import { Audit } from "./views/Audit";
 
-type Tab = "overview" | "tenants" | "users" | "jobs" | "audit";
+type Tab = "overview" | "tenants" | "users" | "payments" | "jobs" | "audit";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "overview", label: "개요" },
   { id: "tenants", label: "회사" },
   { id: "users", label: "사용자" },
+  { id: "payments", label: "결제" },
   { id: "jobs", label: "잡" },
   { id: "audit", label: "감사 로그" },
 ];
@@ -80,6 +82,7 @@ export default function App() {
         {tab === "overview" && <Overview />}
         {tab === "tenants" && <Tenants />}
         {tab === "users" && <Users />}
+        {tab === "payments" && <Payments />}
         {tab === "jobs" && <Jobs />}
         {tab === "audit" && <Audit />}
       </main>

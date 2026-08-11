@@ -238,8 +238,8 @@ import {
 import { dispatchPublish } from "./publish-dispatch.ts";
 import { opsCapabilityOf } from "./ops-role.ts";
 import {
-  CREDIT_UNIT_LABEL, buildTopup, checkCredits, creditPriceKrw, settleTopup,
-  topupDedupeKey, topupPaymentId,
+  CREDIT_UNIT_LABEL, MANUAL_REASONS, buildTopup, checkCredits, creditPriceKrw,
+  manualDedupeKey, planManualCredit, settleTopup, topupDedupeKey, topupPaymentId,
 } from "./credits.ts";
 import { billableMinutes, portoneConfigured } from "./billing.ts";
 import { getPayment, verifyWebhook } from "./portone.ts";
@@ -988,6 +988,90 @@ app.post("/api/superadmin/api-keys/:keyId/revoke", async (c) => {
     [keyId],
   ));
   return c.json({ ok: true, alreadyRevoked: rowCount === 0 });
+});
+
+// ── 결제 · 크레딧 (4단계) ─────────────────────────────────────────────────────
+
+/**
+ * 결제 로그 — 전 회사의 충전 주문. `credit_topup` 이 곧 결제 이력이다.
+ *
+ * `pending` 이 오래 남아 있으면 **결제창까지 갔다가 안 된 건**이다. 그게 몇 건인지 보이는 게
+ * 이 화면의 목적이라, 성공한 것만 보여주지 않는다.
+ */
+app.get("/api/superadmin/payments", async (c) => {
+  const actor = requireSuperadmin(c);
+  const tenant = c.req.query("tenant") ?? null;
+  await audit(actor, { action: "payment.list", targetTenant: tenant }, clientIp(c));
+  const { rows } = await asSystem((db) => db.query(
+    `SELECT payment_id AS "paymentId", tenant_id AS "tenantId", credits,
+            amount_krw AS "amountKrw", status, requested_by AS "requestedBy",
+            created_at AS "createdAt", settled_at AS "settledAt"
+       FROM credit_topup ${tenant ? "WHERE tenant_id = $1" : ""}
+      ORDER BY created_at DESC LIMIT 300`,
+    tenant ? [tenant] : [],
+  ));
+  return c.json({ payments: rows });
+});
+
+/** 한 회사의 크레딧 원장 + 잔액. 잔액은 **원장 합계**다 — 따로 저장하지 않는다. */
+app.get("/api/superadmin/tenants/:id/credits", async (c) => {
+  const actor = requireSuperadmin(c);
+  const tenantId = c.req.param("id");
+  await audit(actor, { action: "credit.list", targetTenant: tenantId }, clientIp(c));
+  const { entries, balance } = await asSystem(async (db) => {
+    const [led, bal] = await Promise.all([
+      db.query(
+        `SELECT id, delta, reason, media_id AS "mediaId", payment_id AS "paymentId",
+                amount_krw AS "amountKrw", note, actor, occurred_at AS "occurredAt"
+           FROM credit_ledger WHERE tenant_id = $1 ORDER BY occurred_at DESC LIMIT 200`,
+        [tenantId],
+      ),
+      db.query(`SELECT COALESCE(SUM(delta), 0)::int AS n FROM credit_ledger WHERE tenant_id = $1`, [tenantId]),
+    ]);
+    return { entries: led.rows, balance: bal.rows[0]?.n ?? 0 };
+  });
+  return c.json({ entries, balance, reasons: MANUAL_REASONS, unit: CREDIT_UNIT_LABEL });
+});
+
+/**
+ * 운영자 수동 조정 — 무상 지급·정정·환불분 회수.
+ *
+ * **원장은 append-only 다**(0024 트리거). 정정도 반대 부호 행을 쌓는 것이지 지우는 게 아니라,
+ * 잘못 넣으면 기록이 영구히 남는다. 그래서 사유(감사용) + 메모(원장에 남는 설명)를 둘 다 받는다.
+ */
+app.post("/api/superadmin/tenants/:id/credits", async (c) => {
+  const actor = requireSuperadmin(c);
+  const tenantId = c.req.param("id");
+  const body = await c.req.json<Record<string, unknown>>().catch(() => ({}) as Record<string, unknown>);
+  const reason = requireReason(actor, tenantId, body.reason);
+
+  const checked = planManualCredit({ delta: body.delta, reason: body.kind, note: body.note });
+  if (!checked.ok) return c.json({ error: "bad_request", message: checked.message }, 400);
+
+  const dedupeKey = manualDedupeKey(tenantId, crypto.randomBytes(8).toString("hex"));
+  await audit(
+    actor,
+    {
+      action: "credit.adjust",
+      targetTenant: tenantId,
+      reason,
+      detail: { delta: checked.delta, kind: checked.reason, note: checked.note },
+    },
+    clientIp(c),
+  );
+  const balance = await asSystem(async (db) => {
+    await db.query(
+      `INSERT INTO credit_ledger (tenant_id, delta, reason, note, actor, dedupe_key)
+       VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (dedupe_key) DO NOTHING`,
+      [tenantId, checked.delta, checked.reason, checked.note, actor.email, dedupeKey],
+    );
+    const { rows } = await db.query(
+      `SELECT COALESCE(SUM(delta), 0)::int AS n FROM credit_ledger WHERE tenant_id = $1`,
+      [tenantId],
+    );
+    return rows[0]?.n ?? 0;
+  });
+  return c.json({ ok: true, delta: checked.delta, balance });
 });
 
 /** 감사 로그. superadmin 이 서로를 볼 수 있어야 견제가 성립한다. */

@@ -47,7 +47,7 @@ export function Tenants() {
 function Row({ t, onChanged }: { t: Tenant; onChanged: () => void }) {
   const [busy, setBusy] = useState(false);
   /** 행 아래에 펼쳐지는 패널. 한 번에 하나만 — 여러 개가 열리면 어느 회사 것인지 헷갈린다. */
-  const [open, setOpen] = useState<"invite" | "keys" | null>(null);
+  const [open, setOpen] = useState<"invite" | "keys" | "credits" | null>(null);
 
   async function toggle() {
     const next = t.status === "active" ? "suspended" : "active";
@@ -90,6 +90,7 @@ function Row({ t, onChanged }: { t: Tenant; onChanged: () => void }) {
           <div className="row">
             <button onClick={() => setOpen((v) => (v === "invite" ? null : "invite"))}>초대</button>
             <button onClick={() => setOpen((v) => (v === "keys" ? null : "keys"))}>API 키</button>
+            <button onClick={() => setOpen((v) => (v === "credits" ? null : "credits"))}>크레딧</button>
             <button className={t.status === "active" ? "danger" : ""} disabled={busy} onClick={toggle}>
               {t.status === "active" ? "정지" : "활성화"}
             </button>
@@ -99,9 +100,9 @@ function Row({ t, onChanged }: { t: Tenant; onChanged: () => void }) {
       {open && (
         <tr>
           <td colSpan={11} className="wrap">
-            {open === "invite"
-              ? <InviteForm tenant={t} onClose={() => setOpen(null)} />
-              : <ApiKeysPanel tenant={t} />}
+            {open === "invite" ? <InviteForm tenant={t} onClose={() => setOpen(null)} />
+              : open === "keys" ? <ApiKeysPanel tenant={t} />
+              : <CreditsPanel tenant={t} />}
           </td>
         </tr>
       )}
@@ -154,6 +155,107 @@ function InviteForm({ tenant, onClose }: { tenant: Tenant; onClose: () => void }
         </>
       )}
     </form>
+  );
+}
+
+/**
+ * 회사 크레딧 — 원장 + 수동 조정.
+ *
+ * **원장은 지울 수 없다**(append-only 트리거). 정정도 반대 부호 행을 하나 더 쌓는 것이라,
+ * 잘못 넣으면 기록이 영구히 남는다. 그래서 넣기 전에 **변경 후 잔액을 미리 보여준다** —
+ * 부호를 반대로 넣는 실수가 제일 흔하다.
+ */
+function CreditsPanel({ tenant }: { tenant: Tenant }) {
+  const { data, error, busy, reload } = useLoad(() => api.credits(tenant.id), [tenant.id]);
+  const [delta, setDelta] = useState("");
+  const [kind, setKind] = useState("grant");
+  const [note, setNote] = useState("");
+  const [reason, setReason] = useState("");
+  const [err, setErr] = useState<string | null>(null);
+  const [working, setWorking] = useState(false);
+
+  const balance = data?.balance ?? 0;
+  const n = Number(delta);
+  const preview = Number.isFinite(n) && delta.trim() !== "" ? balance + Math.trunc(n) : null;
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (preview === null) return;
+    if (!window.confirm(`${tenant.name}: ${balance.toLocaleString("ko-KR")} → ${preview.toLocaleString("ko-KR")} 크레딧. 진행할까요?\n\n원장은 되돌릴 수 없습니다.`)) return;
+    setWorking(true); setErr(null);
+    try {
+      await api.adjustCredits(tenant.id, { delta: Math.trunc(n), kind, note, reason });
+      setDelta(""); setNote("");
+      await reload();
+    } catch (e) {
+      setErr(String(e));
+    } finally {
+      setWorking(false);
+    }
+  }
+
+  return (
+    <div>
+      <p className="muted" style={{ marginTop: 0, fontSize: 12 }}>
+        {data?.unit ?? "크레딧 1개 = 분석 1분"} · 현재 잔액{" "}
+        <strong style={{ color: balance <= 0 ? "var(--danger, #d66)" : undefined }}>
+          {balance.toLocaleString("ko-KR")}
+        </strong>
+        {balance <= 0 && " — 이 회사는 지금 분석을 시작할 수 없습니다."}
+      </p>
+
+      <form onSubmit={submit}>
+        <div className="row">
+          <input
+            placeholder="증감 (예: 600 · -60)"
+            value={delta}
+            onChange={(e) => setDelta(e.target.value.replace(/[^\d-]/g, ""))}
+            inputMode="numeric"
+          />
+          <select value={kind} onChange={(e) => setKind(e.target.value)}>
+            {/* topup 은 없다 — 실결제가 붙은 행이라 손으로 쓰면 매출이 부풀어 보인다. */}
+            <option value="grant">grant — 무상 지급</option>
+            <option value="adjust">adjust — 정정</option>
+            <option value="refund">refund — 환불분 회수</option>
+          </select>
+          <input placeholder="메모 (원장에 남습니다 · 4자 이상)" value={note} onChange={(e) => setNote(e.target.value)} />
+          <input placeholder="사유 (감사용 · 4자 이상)" value={reason} onChange={(e) => setReason(e.target.value)} />
+          <button className="primary" disabled={working || preview === null || note.trim().length < 4}>
+            적용
+          </button>
+        </div>
+        {preview !== null && (
+          <p className="muted" style={{ fontSize: 12, margin: "6px 0 0" }}>
+            적용 후: <strong>{balance.toLocaleString("ko-KR")} → {preview.toLocaleString("ko-KR")}</strong>
+            {preview < 0 && " (음수 — 받을 돈이 있다는 뜻으로 남습니다)"}
+          </p>
+        )}
+        {err && <div className="err">{err}</div>}
+      </form>
+
+      <State busy={busy} error={error} empty={!data?.entries.length}>
+        <div className="tablewrap" style={{ marginTop: 8 }}>
+          <table>
+            <thead>
+              <tr><th>시각</th><th className="num">증감</th><th>종류</th><th>메모</th><th>처리자</th></tr>
+            </thead>
+            <tbody>
+              {data?.entries.map((e) => (
+                <tr key={e.id}>
+                  <td className="muted">{new Date(e.occurredAt).toLocaleString("ko-KR")}</td>
+                  <td className="num" style={{ color: e.delta < 0 ? "var(--danger, #d66)" : undefined }}>
+                    {e.delta > 0 ? "+" : ""}{e.delta.toLocaleString("ko-KR")}
+                  </td>
+                  <td><span className="tag">{e.reason}</span></td>
+                  <td className="wrap muted">{e.note || (e.mediaId ? e.mediaId : "—")}</td>
+                  <td className="muted">{e.actor || "—"}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </State>
+    </div>
   );
 }
 

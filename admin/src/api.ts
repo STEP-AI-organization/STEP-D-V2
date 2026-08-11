@@ -39,6 +39,15 @@ export interface Tenant {
   /** 잔여 크레딧(1개 = 분석 1분) · 이번 달 사용 · 마지막 로그인. 회사가 살아 있는지 보는 축. */
   credits: number; usedThisMonth: number; lastLoginAt: number | null;
 }
+export interface Payment {
+  paymentId: string; tenantId: string; credits: number; amountKrw: number;
+  status: string; requestedBy: string; createdAt: string; settledAt: string | null;
+}
+export interface LedgerRow {
+  id: number; delta: number; reason: string; mediaId: string | null;
+  paymentId: string | null; amountKrw: number | null; note: string;
+  actor: string; occurredAt: string;
+}
 export interface ApiKey {
   id: string; name: string | null; prefix: string; scopes: string[];
   lastUsedAt: string | null; revokedAt: string | null; createdAt: string;
@@ -116,6 +125,17 @@ export const api = {
   revokeApiKey: (keyId: string, reason?: string) =>
     post<{ ok: true; alreadyRevoked: boolean }>(
       `/api/superadmin/api-keys/${encodeURIComponent(keyId)}/revoke`, { reason }),
+
+  // ── 결제 · 크레딧 ──
+  payments: (tenant?: string) =>
+    get<{ payments: Payment[] }>(
+      `/api/superadmin/payments${tenant ? `?tenant=${encodeURIComponent(tenant)}` : ""}`),
+  credits: (tenantId: string) =>
+    get<{ entries: LedgerRow[]; balance: number; reasons: string[]; unit: string }>(
+      `/api/superadmin/tenants/${encodeURIComponent(tenantId)}/credits`),
+  adjustCredits: (tenantId: string, body: { delta: number; kind: string; note: string; reason?: string }) =>
+    post<{ ok: true; delta: number; balance: number }>(
+      `/api/superadmin/tenants/${encodeURIComponent(tenantId)}/credits`, body),
 
   jobs: (tenant?: string) =>
     get<{ jobs: AdminJob[] }>(

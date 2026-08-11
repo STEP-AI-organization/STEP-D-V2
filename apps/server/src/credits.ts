@@ -89,6 +89,63 @@ export type TopupCheck =
   | { ok: false; reason: string };
 
 /** 한 번에 살 수 있는 상한 — 오타로 0 이 하나 더 붙는 사고를 막는다. */
+// ── 운영자 수동 조정 ──────────────────────────────────────────────────────────
+
+/**
+ * 운영자가 손으로 넣을 수 있는 사유. **`topup` 과 `usage` 는 여기 없다** —
+ * `topup` 은 실결제가 붙은 행이라 손으로 쓰면 매출이 부풀고, `usage` 는 파이프라인이
+ * 실제로 원가를 쓴 기록이라 손으로 쓰면 원가 집계가 어긋난다.
+ */
+export const MANUAL_REASONS = ["grant", "adjust", "refund"] as const;
+export type ManualReason = (typeof MANUAL_REASONS)[number];
+
+/** 한 번에 움직일 수 있는 한도. 0 을 하나 더 붙이는 실수를 여기서 막는다. */
+export const MAX_MANUAL_DELTA = 100_000;
+
+export type ManualCheck =
+  | { ok: true; delta: number; reason: ManualReason; note: string }
+  | { ok: false; message: string };
+
+/**
+ * 수동 크레딧 조정 판정.
+ *
+ * **원장은 append-only 라 되돌릴 수 없다**(0024 트리거가 UPDATE/DELETE 를 막는다).
+ * 정정도 반대 부호 행을 하나 더 쌓는 것이지 지우는 게 아니다. 그래서 잘못 넣으면
+ * 기록이 영구히 남는다 — 넣기 전에 여기서 최대한 거른다.
+ *
+ * 잔액이 음수로 내려가는 것은 **막지 않는다.** 이미 쓴 분석을 없던 일로 만들 수는 없고,
+ * 음수 잔액은 "받을 돈이 있다"는 사실 그대로다. 0 으로 눌러 버리면 그 사실이 사라진다.
+ */
+export function planManualCredit(input: {
+  delta: unknown;
+  reason: unknown;
+  note: unknown;
+}): ManualCheck {
+  const n = typeof input.delta === "number" ? input.delta : Number(String(input.delta ?? "").trim());
+  if (!Number.isFinite(n) || Math.trunc(n) === 0) {
+    return { ok: false, message: "변경할 크레딧 수를 입력하세요 (음수는 차감)." };
+  }
+  const delta = Math.trunc(n);
+  if (Math.abs(delta) > MAX_MANUAL_DELTA) {
+    return { ok: false, message: `한 번에 ${MAX_MANUAL_DELTA.toLocaleString("ko-KR")}개까지만 조정할 수 있습니다.` };
+  }
+  const reason = String(input.reason ?? "").trim() as ManualReason;
+  if (!(MANUAL_REASONS as readonly string[]).includes(reason)) {
+    return { ok: false, message: `사유 종류는 ${MANUAL_REASONS.join(" · ")} 중 하나여야 합니다.` };
+  }
+  const note = String(input.note ?? "").trim();
+  if (note.length < 4) {
+    // 6개월 뒤에 이 행을 보고 "왜 넣었지" 가 되면 원장이 있으나 마나다.
+    return { ok: false, message: "메모를 4자 이상 적어 주세요 — 원장은 지울 수 없어서 설명이 같이 남아야 합니다." };
+  }
+  return { ok: true, delta, reason, note: note.slice(0, 300) };
+}
+
+/** 수동 조정 행의 dedupe 키. 같은 nonce 로 두 번 눌러도 한 번만 쌓인다. */
+export function manualDedupeKey(tenantId: string, nonce: string): string {
+  return `manual:${tenantId}:${nonce}`;
+}
+
 export const MAX_TOPUP_CREDITS = 100_000;
 
 /**
