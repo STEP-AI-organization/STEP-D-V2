@@ -274,12 +274,8 @@ export default function PublishChannelsPage() {
             배포 규칙 목록을 불러오지 못했습니다 ({rulesErr}) — 아래 규칙 배지는 확인 불가입니다.
           </span>
         )}
-        <Link
-          href="/channels"
-          className="rounded-md border border-border px-2.5 py-1.5 text-xs text-foreground transition hover:bg-accent/40"
-        >
-          배포 규칙 전체 보기
-        </Link>
+        {/* 배포 규칙 목록 화면(/channels)은 제거됨 (2026-08-12 사용자 결정 — 규칙은 선택
+            사항이고, 필요한 규칙 편집은 각 채널 행의 "배포 규칙" 버튼으로 충분하다). */}
       </PageActions>
 
       {/* 플랫폼 개요 그리드 — 모든 채널을 한눈에. YouTube·Meta(FB/IG)·TikTok 은 여기서 바로

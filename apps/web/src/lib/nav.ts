@@ -103,7 +103,6 @@ export const SCREEN_META: Record<string, { title: string; subtitle: string }> = 
   "/performance": { title: "성과", subtitle: "채널별 지표 · 권한 없는 채널은 사유 표시" },
   "/search": { title: "영상 검색", subtitle: "자연어 질의로 구간 찾기" },
   "/publish-channels": { title: "배포 채널", subtitle: "채널 연결 · 채널별 배포 규칙" },
-  "/channels": { title: "배포 규칙", subtitle: "채널별 업로드 규칙 한눈에 보기" },
   "/program-analytics": { title: "프로그램 분석", subtitle: "프로그램 단위 성과" },
   "/channel-analytics": { title: "채널 분석", subtitle: "채널 단위 성과" },
   "/thumbnails": { title: "썸네일 생성", subtitle: "대상 선택 → 프롬프트 → 3안 중 대표 지정" },

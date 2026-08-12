@@ -2618,7 +2618,8 @@ export async function upsertChannelRule(r: ChannelRuleRow): Promise<void> {
        (platform, account_id, label, role, max_sec, aspect, title_prefix, hashtag_template,
         tone_preset, privacy, schedule_window, enabled, updated_at)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12, now())
-     ON CONFLICT (platform, account_id) DO UPDATE SET
+     -- 0021 이후 PK = (tenant_id, platform, account_id) — 옛 대상이면 "no unique constraint" 로 죽는다
+     ON CONFLICT (tenant_id, platform, account_id) DO UPDATE SET
        label = $3, role = $4, max_sec = $5, aspect = $6, title_prefix = $7,
        hashtag_template = $8, tone_preset = $9, privacy = $10, schedule_window = $11,
        enabled = $12, updated_at = now()`,
@@ -2789,7 +2790,7 @@ export async function upsertAutomationRule(r: AutomationRuleRow): Promise<void> 
        (id, program_id, platform, account_id, media_kind, criterion, gate_policy, time_window, enabled,
         template_id, layout, program_ids, channels, daily_quota, active_start, active_end)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12::jsonb,$13::jsonb,$14,$15,$16)
-     ON CONFLICT (program_id, platform, account_id) DO UPDATE SET
+     ON CONFLICT (tenant_id, program_id, platform, account_id) DO UPDATE SET
        media_kind = $5, criterion = $6, gate_policy = $7, time_window = $8, enabled = $9,
        template_id = $10, layout = $11::jsonb, program_ids = $12::jsonb, channels = $13::jsonb,
        daily_quota = $14, active_start = $15, active_end = $16`,
