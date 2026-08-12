@@ -856,6 +856,26 @@ export async function upsertNaverAccount(a: Omit<NaverAccount, "tenantId">): Pro
      a.lastLoginAt, a.lastPublishAt, a.createdAt]);
 }
 
+/** 암호화된 세션을 저장한다. blob 은 절대 로그·응답에 싣지 않는다. */
+export async function setNaverSessionBlob(id: string, blob: string): Promise<void> {
+  await pool.query(
+    `UPDATE naver_account SET session_blob = $2, session_updated_at = $3, status = 'active'
+      WHERE id = $1`, [id, blob, Date.now()]);
+}
+
+/** 워커가 세션을 받아갈 때만 쓴다. */
+export async function getNaverSessionBlob(id: string): Promise<string | null> {
+  const { rows } = await pool.query(
+    `SELECT session_blob FROM naver_account WHERE id = $1`, [id]);
+  return (rows[0]?.session_blob as string | undefined) ?? null;
+}
+
+export async function clearNaverSessionBlob(id: string): Promise<void> {
+  await pool.query(
+    `UPDATE naver_account SET session_blob = NULL, session_updated_at = NULL,
+       status = 'session_expired' WHERE id = $1`, [id]);
+}
+
 export async function markNaverAccount(
   id: string, patch: { status?: NaverAccount["status"]; lastPublishAt?: number; lastLoginAt?: number },
 ): Promise<void> {

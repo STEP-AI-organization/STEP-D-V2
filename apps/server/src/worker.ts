@@ -69,8 +69,9 @@ import { createReadStream, parseObjectPath, fileExists } from "./storage-gcs.ts"
 import { pipeline } from "node:stream/promises";
 import { youtubeUploadEnabled, UPLOAD_DISABLED_MESSAGE } from "./upload-gate.ts";
 import { naverUploadEnabled, NAVER_DISABLED_MESSAGE } from "./naver-gate.ts";
-import { hasNaverSession } from "./naver-session.ts";
-import { getNaverAccount, markNaverAccount } from "./db-pg.ts";
+import { hasNaverSession, materializeNaverSession } from "./naver-session.ts";
+import { getNaverAccount, markNaverAccount, getNaverSessionBlob } from "./db-pg.ts";
+import { openSession } from "./naver-session-store.ts";
 import { uploadToNaver, NAVER_TARGETS, type NaverTarget } from "./naver-tv.ts";
 import { prepareWorkPath, cleanupWorkFile, sweepStaleWorkFiles } from "./naver-workdir.ts";
 import { upsertDistribution } from "./publish-guard.ts";
@@ -1305,9 +1306,18 @@ async function handleNaverPublish(job: Job): Promise<void> {
           `테넌트 불일치 — 잡(${jobTenant}) vs 계정(${acct.tenantId}). 다른 고객사 채널에 올릴 뻔했습니다`));
       }
       if (!hasNaverSession(acct.accountKey)) {
-        await markNaverAccount(acct.id, { status: "session_expired" }).catch(() => {});
-        return void (await fail(
-          `'${acct.label}' 세션 없음 — 워커 PC 에서 \`naver:login --account ${acct.accountKey}\` 실행`));
+        // 이 머신에 없으면 서버 보관본을 받아 푼다 — 운영자가 웹에서 로그인해 올린 것.
+        // 이 경로가 있어야 워커 PC 앞에 가지 않아도 새 계정이 돌아간다.
+        const state = openSession(await getNaverSessionBlob(acct.id));
+        if (state) {
+          materializeNaverSession(acct.accountKey, state);
+          console.log(`[worker] '${acct.label}' 세션을 서버에서 받아왔다`);
+        } else {
+          await markNaverAccount(acct.id, { status: "session_expired" }).catch(() => {});
+          return void (await fail(
+            `'${acct.label}' 세션 없음 — 웹에서 로그인해 세션을 등록하거나, 워커 PC 에서 ` +
+            `\`naver:login --account ${acct.accountKey}\` 를 실행하세요`));
+        }
       }
       accountKey = acct.accountKey;
     } else if (!hasNaverSession()) {

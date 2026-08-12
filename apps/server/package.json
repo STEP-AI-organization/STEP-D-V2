@@ -27,7 +27,8 @@
     "naver:probe": "node --import tsx --env-file-if-exists=.env scripts/naver-probe.mts",
     "naver:categories": "node --import tsx --env-file-if-exists=.env scripts/naver-categories.mts",
     "naver:e2e-seed": "node --import tsx --env-file .env scripts/naver-e2e-seed.mts",
-    "worker:naver": "node --unhandled-rejections=warn --import tsx --env-file-if-exists=.env scripts/worker-naver.mts"
+    "worker:naver": "node --unhandled-rejections=warn --import tsx --env-file-if-exists=.env scripts/worker-naver.mts",
+    "naver:login:upload": "node --import tsx --env-file-if-exists=.env scripts/naver-login-upload.mts"
   },
   "dependencies": {
     "@google-cloud/storage": "^7.15.0",

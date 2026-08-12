@@ -298,6 +298,8 @@ import {
 import { listShortsTemplates, getShortsTemplate, toPercent } from "./shorts-template.ts";
 import { listNaverAccounts, getNaverAccount, upsertNaverAccount, markNaverAccount } from "./db-pg.ts";
 import { naverSessionPath } from "./naver-session.ts";
+import { sealSession, sessionStoreReady, looksLikeStorageState } from "./naver-session-store.ts";
+import { setNaverSessionBlob, clearNaverSessionBlob } from "./db-pg.ts";
 import {
   CANVA_CALLBACK_PATH, canvaConfigured, canvaConnected, canvaAuthUrl,
   canvaExchangeCode, disconnectCanva, listCanvaDesigns,
@@ -6386,6 +6388,41 @@ app.patch("/api/naver/accounts/:id", async (c) => {
   if (!status) return c.json({ error: "status required" }, 400);
   await markNaverAccount(id, { status });
   return c.json({ ok: true, id, status });
+});
+
+/**
+ * 세션 등록 — 운영자가 로그인해서 얻은 storageState 를 올린다.
+ *
+ * 사용자 관점에서는 **로그인 한 번이면 끝**이다: 계정 추가 → 로그인 → 여기로 세션이 올라오면
+ * 워커가 어느 머신에서든 받아 쓴다. 윈도우2 앞에 갈 필요가 없어진다.
+ *
+ * ⚠️ 세션 쿠키는 그 계정의 전체 권한이다. 반드시 암호화해서 저장하고(NAVER_SESSION_KEY),
+ *    키가 없으면 **거부한다** — 평문으로 조용히 저장되는 것보다 못 받는 게 낫다.
+ */
+app.put("/api/naver/accounts/:id/session", async (c) => {
+  const acct = await getNaverAccount(c.req.param("id"));
+  if (!acct) return c.json({ error: "not_found" }, 404);
+  if (!sessionStoreReady()) {
+    return c.json({
+      error: "session_key_missing",
+      message: "NAVER_SESSION_KEY 가 설정되지 않아 세션을 저장할 수 없습니다(평문 저장은 하지 않습니다).",
+    }, 503);
+  }
+  const body = await c.req.json<{ storageState?: unknown }>().catch(() => null);
+  const state = body?.storageState;
+  if (!looksLikeStorageState(state)) {
+    return c.json({ error: "invalid_storage_state", message: "cookies 배열이 있는 storageState JSON 이어야 합니다." }, 400);
+  }
+  await setNaverSessionBlob(acct.id, sealSession(state));
+  // 값은 절대 되돌려주지 않는다. 있다/없다만.
+  return c.json({ ok: true, id: acct.id, status: "active", sessionUpdatedAt: Date.now() });
+});
+
+app.delete("/api/naver/accounts/:id/session", async (c) => {
+  const acct = await getNaverAccount(c.req.param("id"));
+  if (!acct) return c.json({ error: "not_found" }, 404);
+  await clearNaverSessionBlob(acct.id);
+  return c.json({ ok: true, id: acct.id, status: "session_expired" });
 });
 
 /** 워커 PC 에서만 의미 있는 진단 — 이 머신에 그 계정 세션 파일이 있는가. */

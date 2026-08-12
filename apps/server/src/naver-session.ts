@@ -88,3 +88,16 @@ export function naverSessionAgeDays(accountKey?: string): number | null {
     return null;
   }
 }
+
+/**
+ * 서버에 보관된 세션을 이 머신의 파일로 풀어놓는다.
+ *
+ * 운영자가 웹에서 로그인해 올린 세션을 워커가 받아 쓰는 경로다. 이게 있어야
+ * **사용자 관점에서 "로그인만 하면 끝"** 이 된다 — 워커 PC 앞에 갈 필요가 없다.
+ *
+ * 파일로 푸는 이유: Playwright 는 storageState 를 객체로도 받지만, 브라우저가 세션을
+ * 갱신하면(쿠키 회전) 파일에 남겨둬야 다음 실행이 이어진다.
+ */
+export function materializeNaverSession(accountKey: string, state: unknown): void {
+  saveNaverSession(state, accountKey);
+}
