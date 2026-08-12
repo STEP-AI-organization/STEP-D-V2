@@ -11,7 +11,10 @@
 google-genai>=1.0.0        # Vertex Gemini — 주석·추천·정제
 openai>=1.50.0             # 썸네일 이미지 생성
 scenedetect>=0.6           # shot 경계
-opencv-python>=4.8         # 프레임 추출·이미지 처리
+# MediaPipe가 contrib 패키지를 직접 요구한다. opencv-python과 둘 다 설치하면
+# 동일 cv2 파일을 서로 덮어쓰므로 contrib 하나로 통일한다. OpenCV 5는 아직 제외.
+opencv-contrib-python>=4.8,<5  # 프레임 추출·이미지 처리
+mediapipe==0.10.35        # AI 다중 구도 리프레임 — CPU FaceDetector (video mode)
 yt-dlp>=2024.0             # YouTube 원본 수집
 requests>=2.31
 rembg>=2.0.69              # 인물 세그먼테이션 (썸네일 합성)

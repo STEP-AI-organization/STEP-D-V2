@@ -11,6 +11,7 @@ import Link from "next/link";
 import { useMemo, useState } from "react";
 
 import { PublishDialog } from "@/components/publish/publish-dialog";
+import { UploadClipButton } from "@/components/upload-clip-dialog";
 import { ClipDetail } from "@/components/media/clip-detail";
 import { useToast } from "@/components/ui/toast";
 import { useSession } from "@/lib/auth";
@@ -90,6 +91,8 @@ function MediaView() {
         <span className="sd-mono ml-auto text-[11px]" style={{ color: "var(--sd-mut)" }}>
           {rows.length}건
         </span>
+        {/* 우리 파이프라인 밖에서 만든 완성 영상을 직접 올려 배포한다 — 분석 없이 바로 클립. */}
+        <UploadClipButton className="sd-btn sd-btn-primary" label="완성 영상 업로드" />
       </div>
 
       {/* 목록 */}
@@ -114,7 +117,11 @@ function MediaView() {
               onToggle={() => toggle(c.id)}
               onOpen={() => setDetailId(c.id)}
               programTitle={
-                programs.find((p) => p.id === episodes.find((e) => e.id === c.episodeId)?.programId)?.title ?? ""
+                programs.find((p) => p.id === episodes.find((e) => e.id === c.episodeId)?.programId)?.title
+                // 직접 업로드 클립은 회차가 없어 회차→프로그램 조인이 비므로 클립에 박아둔 값으로 폴백.
+                ?? programs.find((p) => p.id === c.programId)?.title
+                ?? c.programTitle
+                ?? ""
               }
               episodeNumber={episodes.find((e) => e.id === c.episodeId)?.episodeNumber}
             />
@@ -227,7 +234,17 @@ function MediaRow({
         </div>
 
         <div className="flex shrink-0 gap-2">
-          <Link href={`/editor/${clip.id}`} className="sd-btn">편집</Link>
+          {/* 직접 업로드 완성본은 트림·리프레임 대상이 아니다 — 편집기를 열어 봐야 할 게 없다. */}
+          {clip.directUpload ? (
+            <span
+              className="sd-mono self-center rounded-[3px] px-1.5 py-0.5 text-[9.5px]"
+              style={{ background: "var(--sd-card-sub)", color: "var(--sd-mut)" }}
+            >
+              직접 업로드
+            </span>
+          ) : (
+            <Link href={`/editor/${clip.id}`} className="sd-btn">편집</Link>
+          )}
         </div>
       </div>
     </div>

@@ -20,6 +20,7 @@ import { useAudioPeaks, Waveform } from "@/components/editor/editor-waveform";
 import { Filmstrip } from "@/components/editor/filmstrip";
 import { TimecodeInput } from "@/components/editor/editable-timecode";
 import { getRulerConfig, shouldShowLabel, formatRulerLabel } from "@/vendor/opencut/ruler-utils";
+import type { ClipReframe } from "@/lib/types";
 
 type Update = (patch: Partial<EditorState>) => void;
 const SPEEDS = [0.5, 1, 1.5, 2];
@@ -76,6 +77,7 @@ export function EditorTimeline({
   hookAvailable,
   frameMediaId,
   apiBase,
+  reframe,
 }: {
   state: EditorState;
   update: Update;
@@ -94,6 +96,8 @@ export function EditorTimeline({
   /** clip 에 hookTimeSec 이 있어 "첫 3초 훅" 프리롤을 실제로 렌더할 수 있는지. false 면 토글을
    *  켜도 렌더가 no-op 이라 · 토글에 안내 툴팁을 띄운다. */
   hookAvailable?: boolean;
+  /** Read-only Beat decisions. Segment times are source-master absolute seconds. */
+  reframe?: ClipReframe;
 }) {
   const [playing, setPlaying] = useState(false);
   const [t, setT] = useState(0);
@@ -172,10 +176,12 @@ export function EditorTimeline({
     return s.tracks && s.tracks.length > 0 ? s.tracks : [makeMainTrack(s.trimIn, s.trimOut, duration)];
   }
   const trackList = listOf(state);
+  const showReframeLane = reframe?.mode === "ai_multi";
+  const reframeSegments = reframe?.status === "ready" ? (reframe.plan?.segments ?? []) : [];
   const focused = trackList.find((x) => x.id === focusId) ?? trackList[0];
 
   // 타임라인 오버레이 레인(제목·요소 시간창 UI)은 제거됨 — 오버레이 표시/편집은 프리뷰·속성 패널에서 처리.
-  const tracksTop = 0;
+  const tracksTop = showReframeLane ? LANE_H + LANE_GAP : 0;
 
   // Keep playback speed in sync with the transport. The main track's speed ramp wins
   // (it is what the render cuts); no keyframes = uniform state.speed as before.
@@ -522,6 +528,11 @@ export function EditorTimeline({
       {/* tracks: stacked layers (waveform + trim window each) sharing one playhead — click to seek */}
       <div className="flex">
         <div className="w-28 shrink-0 space-y-1 pr-1">
+          {showReframeLane && (
+            <div className="flex h-10 items-center text-[11px] font-medium text-violet-300">
+              AI 리프레임
+            </div>
+          )}
           {trackList.map((tr) => {
             const vol = tr.volume ?? 1;
             const muted = tr.muted === true;
@@ -613,6 +624,40 @@ export function EditorTimeline({
               {/* 프레임 파노라마 — 눈금 바로 아래, 트랙 위. 같은 스크롤 컨테이너라 줌·좌표 자동 정렬. */}
               {frameMediaId && apiBase && (
                 <Filmstrip mediaId={frameMediaId} duration={duration} apiBase={apiBase} />
+              )}
+              {showReframeLane && (
+                <div className="relative mb-1 h-10 overflow-hidden rounded-md border border-violet-500/20 bg-zinc-900/80">
+                  {reframeSegments.length === 0 ? (
+                    <div className="flex h-full items-center justify-center text-[10px] text-zinc-500">
+                      {reframe?.status === "queued" ? "분석 대기 중" : reframe?.status === "running" ? "Beat 분석 중" : reframe?.status === "failed" ? "분석 실패" : reframe?.status === "stale" ? "재분석 필요" : "결과 준비 중"}
+                    </div>
+                  ) : (
+                    reframeSegments.map((segment, index) => (
+                      <button
+                        key={`${segment.beatId ?? index}-${segment.start}`}
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          seekTo(segment.start);
+                        }}
+                        className={cn(
+                          "absolute inset-y-0 overflow-hidden border-r border-zinc-950/60 px-1 text-left text-[9px] font-semibold text-white/90 hover:brightness-125",
+                          segment.layout === "fill" ? "bg-violet-500/70" : "bg-sky-600/55",
+                        )}
+                        style={{
+                          left: pct(segment.start),
+                          width: pct(Math.max(0, segment.end - segment.start)),
+                        }}
+                        title={`${segment.layout === "fill" ? "Fill · 풀스크린" : "Fit · 원본 구도"}${typeof segment.score === "number" ? ` · ${Math.round(segment.score)}점` : ""} · 클릭해서 이동`}
+                      >
+                        <span className="block truncate">
+                          {segment.layout === "fill" ? "Fill" : "Fit"}
+                          {typeof segment.score === "number" ? ` ${Math.round(segment.score)}` : ""}
+                        </span>
+                      </button>
+                    ))
+                  )}
+                </div>
               )}
               <div className="space-y-1">
                 {trackList.map((tr, i) => {

@@ -81,8 +81,17 @@ NEXT_PUBLIC_API_URL=http://localhost:4100/api
 1. **워커 기동** — 별도 터미널에서 `pnpm --filter @stepd/server worker` (같은 로컬 DB·env 사용).
 2. **파이썬 준비** — 워커의 `content-pipeline.ts`가 `python -m core.analyze`를 스폰한다.
    기본 인터프리터는 `core/.venv310/Scripts/python.exe` — 다른 경로면 `CORE_PYTHON` env로 지정.
-   의존성은 `core/requirements.txt` (google-genai, scenedetect, opencv-python, yt-dlp) 를
+   의존성은 `core/requirements.txt` (google-genai, scenedetect, opencv-contrib-python, mediapipe, yt-dlp) 를
    venv에 설치. `ffmpeg`/`ffprobe`가 PATH에 있어야 한다.
+   AI 다중 레이아웃(`clip.reframe`)까지 시험하려면 같은 venv에서 얼굴 모델도 한 번 설치한다.
+
+   ```powershell
+   core\.venv310\Scripts\python.exe -m core.reframe.download_model
+   ```
+
+   모델은 SHA-256을 검증한 뒤 `core/.models/`에 놓인다. 다른 위치를 쓰는 경우에만
+   `apps/server/.env`의 `REFRAME_FACE_MODEL`에 절대 경로를 지정한다. 모델이 없으면
+   안전상 Fill로 추측하지 않고 해당 리프레임 잡이 명시적으로 실패한다.
 3. **Vertex AI 인증(ADC)** — STT·비전·추천이 전부 Vertex Gemini 호출이다 (API 키 아님).
    `gcloud auth application-default login` 한 번 해두면 된다.
    env 기본값: `STT_PROVIDER=gemini`, `GOOGLE_CLOUD_PROJECT=step-d`, `VERTEX_LOCATION=asia-northeast3`

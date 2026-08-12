@@ -158,6 +158,13 @@ export type RenderShortOpts = {
   bgType?: "solid" | "blur" | "image";
   /** bgType='solid'일 때의 letterbox 색 (예: "#0E0E12"). */
   bgColor?: string;
+  /**
+   * 축2 — 원본을 컨테이너에 어떻게 넣나. **프레임(frame)이 없을 때만** 본다.
+   *  - "cover": 잘라 채우기(레터박스 없음, bgType 무의미).
+   *  - "contain"/미설정: 맞춤(레터박스 + bgType 여백). 기존 동작.
+   * 프레임이 있으면 frame.video.fit 이 우선이라 이 값은 무시된다.
+   */
+  fit?: "contain" | "cover";
   /** 프레임 템플릿 기하 (assets/shorts-template/<name>/meta.json).
    *  주면 배경 blur/solid 대신 **프레임 합성 경로**를 탄다: 검정 바탕 → 영상 사각형(cover)
    *  → bands → overlay.png 조각 → over bands. 편집기 미리보기와 같은 순서여야 한다. */
@@ -357,7 +364,10 @@ function renderShortWithPreroll(opts: RenderShortOpts & { hookPreroll: NonNullab
 
   // ── 본문(입력1) 체인 — 기존 renderShort 와 동일 구성, 입력 라벨만 [1:v] ──
   let vf: string;
-  if (bgMode === "solid") {
+  if (opts.fit === "cover") {
+    // 축2 "채우기": 잘라 채운다(레터박스 없음).
+    vf = `[1:v]scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H}[bc0]`;
+  } else if (bgMode === "solid") {
     const colorHex = `0x${solidColor.slice(1)}`;
     vf =
       `color=c=${colorHex}:s=${W}x${H}:d=${(bodyDur / speed).toFixed(3)}[bbg];` +
@@ -603,7 +613,7 @@ function buildDynamicBodyGraph(
 function dynamicInputArgs(opts: RenderShortOpts, startTime: number, endTime?: number): string[] {
   return [
     "-ss", String(startTime),
-    ...(endTime != null ? ["-to", String(endTime)] : []),
+    ...(endTime != null ? ["-t", String(Math.max(0, endTime - startTime))] : []),
     "-i", opts.inputPath,
   ];
 }
@@ -753,16 +763,20 @@ export function renderShort(opts: RenderShortOpts): Promise<void> {
     });
     const overBoxes = boxes(true);
     vf += overBoxes ? `;[${cur}]${overBoxes}[v0]` : `;[${cur}]copy[v0]`;
+  } else if (opts.fit === "cover") {
+    // 축2 "채우기": 프레임 없이 원본을 잘라 컨테이너를 꽉 채운다(레터박스·배경 없음).
+    // increase 로 키워 넘치는 부분을 crop. bgType 은 여백이 없으므로 무의미.
+    vf = `[0:v]scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H}[v0]`;
   } else if (bgMode === "solid") {
-    // fit-to-frame foreground를 [W×H] 단색 캔버스에 오버레이. color 필터는 지속 프레임 만들고,
-    // -shortest 없이 -t로 컷하므로 무한 스트림도 안전. 색은 0xRRGGBB 형식.
+    // 축2 "맞춤"(레터박스) + 검정/단색 여백. fit-to-frame foreground 를 단색 캔버스에 오버레이.
+    // color 필터는 지속 프레임 만들고, -shortest 없이 -t로 컷하므로 무한 스트림도 안전.
     const colorHex = `0x${solidColor.slice(1)}`;
     vf =
       `color=c=${colorHex}:s=${W}x${H}:d=${outDur.toFixed(3)}[bg];` +
       `[0:v]scale=${W}:${H}:force_original_aspect_ratio=decrease[fg];` +
       `[bg][fg]overlay=(W-w)/2:(H-h)/2:shortest=1[v0]`;
   } else {
-    // Blurred cover behind a fit-to-frame foreground → 9:16 (or any target) with no letterbox.
+    // 축2 "맞춤"(레터박스) + 원본 블러 여백. 전경은 decrease(맞춤), 뒤는 같은 영상의 크롭·블러.
     vf =
       `split=2[a][b];` +
       `[a]scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},boxblur=20:1[bg];` +

@@ -31,3 +31,6 @@ test_transcript.srt
 __pycache__/
 *.pyc
 .venv*/
+
+# MediaPipe/TFLite model weights. `python -m core.reframe.download_model` regenerates it.
+.models/

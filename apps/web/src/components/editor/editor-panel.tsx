@@ -17,6 +17,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { frameOverlaySrc, type FrameTemplate } from "@/lib/data/api";
+import type { ClipReframe, ReframeMode } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import {
   ASPECTS,
@@ -70,6 +71,9 @@ export function EditorPanel({
   setKfSel,
   currentTime = 0,
   onSeek,
+  reframe,
+  reframeBusy = false,
+  onReframeModeChange,
 }: {
   state: EditorState;
   update: Update;
@@ -82,6 +86,9 @@ export function EditorPanel({
   currentTime?: number;
   /** Seek the transport to segment-relative seconds. */
   onSeek?: (sec: number) => void;
+  reframe?: ClipReframe;
+  reframeBusy?: boolean;
+  onReframeModeChange?: (mode: ReframeMode) => void;
 }) {
   const [tab, setTab] = useState<TabKey>("layout");
 
@@ -125,7 +132,17 @@ export function EditorPanel({
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-3">
         {tab === "text" && <TextTab state={state} update={update} kf={kf} />}
         {tab === "channel" && <ChannelTab state={state} update={update} />}
-        {tab === "layout" && <LayoutTab state={state} update={update} applyTpl={applyTpl} frames={frames} />}
+        {tab === "layout" && (
+          <LayoutTab
+            state={state}
+            update={update}
+            applyTpl={applyTpl}
+            frames={frames}
+            reframe={reframe}
+            reframeBusy={reframeBusy}
+            onReframeModeChange={onReframeModeChange}
+          />
+        )}
         {tab === "captions" && <CaptionsTab state={state} update={update} />}
         {tab === "elements" && <ElementsTab state={state} update={update} kf={kf} />}
         {tab === "filters" && <FiltersTab state={state} update={update} />}
@@ -526,11 +543,62 @@ function ChannelTab({ state, update }: { state: EditorState; update: Update }) {
   );
 }
 
-function LayoutTab({ state, update, applyTpl, frames = [] }: { state: EditorState; update: Update; applyTpl: (id: EditorState["templateId"]) => void; frames?: FrameTemplate[] }) {
+function LayoutTab({
+  state,
+  update,
+  applyTpl,
+  frames = [],
+  reframe,
+  reframeBusy,
+  onReframeModeChange,
+}: {
+  state: EditorState;
+  update: Update;
+  applyTpl: (id: EditorState["templateId"]) => void;
+  frames?: FrameTemplate[];
+  reframe?: ClipReframe;
+  reframeBusy?: boolean;
+  onReframeModeChange?: (mode: ReframeMode) => void;
+}) {
   // 현재 templateId 가 실제 프레임 목록에 있으면 프레임이 핏·배경을 소유한다.
   const frameActive = frames.some((f) => f.name === state.templateId);
   return (
     <>
+      <div>
+        <Label>화면 구성</Label>
+        <div className="grid grid-cols-2 gap-1">
+          {([
+            { mode: "basic" as const, label: "기본" },
+            { mode: "ai_multi" as const, label: "AI 다중 레이아웃" },
+          ]).map(({ mode, label }) => {
+            const active = (reframe?.mode ?? "basic") === mode;
+            const retryable = mode === "ai_multi" && active && (reframe?.status === "failed" || reframe?.status === "stale");
+            return (
+              <button
+                key={mode}
+                type="button"
+                disabled={reframeBusy}
+                onClick={() => onReframeModeChange?.(mode)}
+                className={cn(
+                  "rounded-md border px-2 py-2 text-xs transition-colors disabled:cursor-wait disabled:opacity-60",
+                  active ? "border-violet-400 bg-violet-500/15 text-violet-100" : "border-zinc-700 text-zinc-400 hover:bg-zinc-800",
+                )}
+              >
+                {retryable ? "AI 다시 분석" : label}
+              </button>
+            );
+          })}
+        </div>
+        <div className="mt-1.5 text-[10px] leading-4 text-zinc-500">
+          {(reframe?.mode ?? "basic") === "ai_multi"
+            ? reframe?.status === "queued" ? "분석 대기 중입니다. 완료되면 자동 반영됩니다."
+            : reframe?.status === "running" ? "Beat별 안전 구도를 분석하고 있습니다."
+            : reframe?.status === "failed" ? "분석에 실패했습니다. ‘AI 다시 분석’을 누르거나 기본 모드로 전환하세요."
+            : reframe?.status === "stale" ? "트림 변경으로 결과가 오래됐습니다. 자동 재분석 중입니다."
+            : "AI가 Beat별 안전 점수로 원본 구도와 풀스크린을 자동 전환합니다. 9:16으로 고정됩니다."
+            : "기존 프레임과 레이아웃 설정을 그대로 사용합니다."}
+        </div>
+      </div>
       <div>
         <Label>프레임 템플릿</Label>
         {frames.length === 0 ? (
@@ -644,60 +712,28 @@ function LayoutTab({ state, update, applyTpl, frames = [] }: { state: EditorStat
         </div>
         <div className="mt-1 text-[10px] text-zinc-500">아이콘은 프로그램 설정의 "쇼츠 아이콘"에서 등록</div>
       </div>
-      {/* ── 축1: 방향(컨테이너) ─────────────────────────────
-          가로/세로 둘로 정리(2026-08-12). 1:1·4:5 는 저장된 클립 호환을 위해 값은 남기되
-          UI 에서는 뺀다 — 실무는 세로 쇼츠·가로 VOD 둘이 전부다. */}
       <div>
-        <Label>방향</Label>
+        <Label>종횡비</Label>
         <div className="grid grid-cols-2 gap-1">
-          {([
-            { a: "9:16" as AspectKey, label: "세로 9:16" },
-            { a: "16:9" as AspectKey, label: "가로 16:9" },
-          ]).map(({ a, label }) => (
+          {(Object.keys(ASPECTS) as AspectKey[]).map((a) => (
             <button
               key={a}
               onClick={() => update({ aspect: a })}
-              className={cn("rounded-md border py-1.5 text-xs", state.aspect === a ? "border-zinc-400 bg-zinc-800 text-white" : "border-zinc-700 text-zinc-400")}
+              disabled={reframe?.mode === "ai_multi"}
+              title={reframe?.mode === "ai_multi" ? "AI 다중 레이아웃은 9:16으로 고정됩니다." : undefined}
+              className={cn(
+                "rounded-md border py-1.5 text-xs disabled:cursor-not-allowed disabled:opacity-45",
+                state.aspect === a ? "border-zinc-400 bg-zinc-800 text-white" : "border-zinc-700 text-zinc-400",
+              )}
             >
-              {label}
+              {ASPECTS[a].label}
             </button>
           ))}
         </div>
       </div>
 
-      {/* ── 축2: 핏(원본을 어떻게 넣나) ──────────────────────
-          프레임 템플릿이 선택돼 있으면 그 프레임이 핏·배경을 정하므로 여기선 안내만 띄운다. */}
-      {frameActive ? (
-        <div className="rounded-md border border-dashed border-zinc-700 p-2 text-[11px] text-zinc-400">
-          맞추기·배경은 선택한 <b>프레임 템플릿</b>이 정합니다. 직접 고르려면 레이아웃 탭 상단에서
-          프레임을 <b>없음</b>으로 바꾸세요.
-        </div>
-      ) : (
-        <div>
-          <Label>맞추기</Label>
-          <div className="grid grid-cols-2 gap-1">
-            {([
-              { k: "contain" as const, label: "원본 그대로", hint: "남는 여백은 아래 배경으로" },
-              { k: "cover" as const, label: "잘라 채우기", hint: "원본을 잘라 꽉 채움" },
-            ]).map((o) => {
-              const active = (state.fit ?? "contain") === o.k;
-              return (
-                <button
-                  key={o.k}
-                  onClick={() => update({ fit: o.k })}
-                  title={o.hint}
-                  className={cn("rounded-md border py-1.5 text-xs", active ? "border-zinc-400 bg-zinc-800 text-white" : "border-zinc-700 text-zinc-400")}
-                >
-                  {o.label}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
       {/* ── 레터박스 배경 — 맞춤(contain)이고 프레임이 없을 때만 의미가 있다 ── */}
-      {!frameActive && (state.fit ?? "contain") === "contain" && (
+      {reframe?.mode !== "ai_multi" && !frameActive && (state.fit ?? "contain") === "contain" && (
       <div>
         <Label>레터박스 배경</Label>
         <div className="grid grid-cols-2 gap-1">

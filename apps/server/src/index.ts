@@ -66,6 +66,10 @@ import {
   getState,
   getEntity,
   putEntity,
+  patchClipEditorAtomic,
+  setClipReframe,
+  tryQueueClipReframe,
+  compareAndSetClipReframe,
   prependEntity,
   commitAdoption,
   markRecommendationRejected,
@@ -209,6 +213,17 @@ import { normalizeCastInput } from "./cast.ts";
 import { youtubeUploadEnabled, UPLOAD_DISABLED_CODE, UPLOAD_DISABLED_MESSAGE } from "./upload-gate.ts";
 import { geminiGenerate, parseJsonLoose } from "./gemini.ts";
 import { syncProgramFromFacesForMedia, CORE_PYTHON, CORE_DIR, REPO_ROOT } from "./content-pipeline.ts";
+import {
+  basicReframeState,
+  canonicalRenderedClipAspect,
+  effectiveReframeState,
+  fitIntervalsForPlan,
+  normalizeReframePlan,
+  reframeFingerprint,
+  reframePlanHash,
+  type ClipReframeState,
+  type ReframePlan,
+} from "./reframe.ts";
 import {
   syncChannelVideos,
   classifyShorts,
@@ -2993,6 +3008,140 @@ async function buildEpisodeAndMedia(opts: {
   return { media: mediaPublic(row), episode, recommendations: [] };
 }
 
+// ── 직접 업로드한 완성 영상 → 배포 가능한 클립 (분석 파이프라인을 태우지 않는다) ──────────
+//
+// 편집자가 우리 도구 밖에서 이미 만든 영상을 올려 바로 배포하고 싶을 때의 경로다. 업로드는
+// content.analyze 를 큐잉하지 않고, 회차도 만들지 않는다. **파일 자체가 최종 산출물**이므로
+// media(role="clip") + rendered=true 클립을 만들어 미디어 목록·배포 흐름에 바로 얹는다.
+// 배포 워커는 clip.mediaId → media.path 로 파일을 내려받으므로, 채택→익스포트로 렌더된
+// 클립과 완전히 같은 방식으로 게시된다.
+
+/**
+ * GCS 에 올라온 업로드 객체를 재생 가능한 상태로 만든다 — faststart 리먹스 + 프로브 + 썸네일.
+ * `/media/finalize` 가 인라인으로 하던 처리와 같다(완성본 clip-finalize 도 이걸 쓴다).
+ * `size` 는 **서버가 실제 객체에서 읽은 값**이다 — 클라이언트 숫자를 신뢰하지 않는다.
+ */
+async function prepareUploadedObject(mediaId: string, objectPath: string): Promise<{
+  size: number;
+  meta: { durationSec: number; width: number; height: number; codec: string; hasAudio: boolean };
+  thumbStored: string | null;
+  storedPath: string;
+}> {
+  const storedPath = `gs://${process.env.GCS_BUCKET}/${objectPath}`;
+  let size = await fileSize(objectPath).catch(() => 0);
+
+  // 브라우저가 <video> 로 매끄럽게 재생하도록 progressive(moov-at-front) mp4 로 리먹스.
+  // RAM 백엔드 /tmp 에 통째로 올라가므로 크기 가드(REMUX_MAX_MB, 기본 512MB)를 둔다.
+  const REMUX_MAX = (Number(process.env.REMUX_MAX_MB) || 512) * 1024 * 1024;
+  const remuxSize = await fileSize(objectPath).catch(() => 0);
+  if (FFMPEG && remuxSize > 0 && remuxSize <= REMUX_MAX) {
+    const tmpDir = path.resolve("/tmp/stepd-uploads");
+    fs.mkdirSync(tmpDir, { recursive: true });
+    const webTmp = path.join(tmpDir, `${mediaId}-web.mp4`);
+    try {
+      const inUrl = await signedReadUrl(objectPath);
+      await remuxFaststart(inUrl, webTmp);
+      await uploadFile(objectPath, webTmp); // fMP4 를 progressive 로 덮어쓴다
+      size = fs.statSync(webTmp).size;
+    } catch (e) {
+      console.error("[prepare] remux failed — keeping original (may not stream if fragmented):", e);
+    } finally {
+      try { fs.unlinkSync(webTmp); } catch {}
+    }
+  }
+
+  // 프로브·썸네일은 짧은 서명 URL 을 ffmpeg 에 넘겨 range-read 로만 뽑는다(전량 다운로드 없음).
+  let meta = { durationSec: 0, width: 0, height: 0, codec: "", hasAudio: false };
+  let thumbStored: string | null = null;
+  if (FFMPEG) {
+    try {
+      const readUrl = await signedReadUrl(objectPath);
+      meta = await probe(readUrl).catch((e) => { console.error("[prepare] probe failed", e); return meta; });
+      const tmpDir = path.resolve("/tmp/stepd-uploads");
+      fs.mkdirSync(tmpDir, { recursive: true });
+      const thumbTmp = path.join(tmpDir, `${mediaId}.jpg`);
+      try {
+        await captureThumbnail(readUrl, Math.max(1, meta.durationSec * 0.1), thumbTmp);
+        thumbStored = await uploadFile(thumbPath(mediaId), thumbTmp);
+      } catch (e) {
+        console.error("[prepare] thumbnail failed", e);
+      } finally {
+        try { fs.unlinkSync(thumbTmp); } catch {}
+      }
+    } catch (err) {
+      console.error("[prepare] signed-url probe unavailable (grant signBlob to the Cloud Run SA):", err);
+    }
+  }
+  return { size, meta, thumbStored, storedPath };
+}
+
+/**
+ * 완성 영상 하나를 배포 가능한 클립으로 만든다. 회차·분석 없이 media(role="clip") 행과
+ * rendered=true 클립 엔티티를 만들어 미디어 목록·배포 게이트에 바로 얹는다. 세로/가로는
+ * 프로브 결과로 판정한다(원본 그대로 — 크롭·리프레임하지 않는다).
+ */
+async function buildFinishedClip(opts: {
+  mediaId: string;
+  programId: string;
+  program: { id: string; title: string; targetAge: number };
+  storedPath: string;
+  filename: string;
+  title: string;
+  mime: string;
+  size: number;
+  meta: { durationSec: number; width: number; height: number; codec: string; hasAudio: boolean };
+  thumbPath: string | null;
+}) {
+  const { mediaId, programId, program, storedPath, filename, title, mime, size, meta } = opts;
+  const row: MediaRow = {
+    id: mediaId,
+    // 회차에 속하지 않는 직접 업로드 완성본 — episodeId 는 비운다(media.episodeId 는 nullable).
+    episodeId: "",
+    role: "clip",
+    title,
+    filename,
+    path: storedPath,
+    mime: mime || "video/mp4",
+    size,
+    durationSec: meta.durationSec,
+    width: meta.width,
+    height: meta.height,
+    codec: meta.codec,
+    hasAudio: meta.hasAudio ? 1 : 0,
+    thumbPath: opts.thumbPath,
+    createdAt: Date.now(),
+  };
+  await insertMedia(row);
+
+  const portrait = meta.height > 0 && meta.width > 0 && meta.height > meta.width;
+  const clipId = newId("c");
+  const clip = {
+    id: clipId,
+    episodeId: "",
+    programId,
+    programTitle: program.title,
+    title,
+    clipType: portrait ? "T6" : "TZ",
+    targetAge: program.targetAge ?? 0,
+    aspectRatio: portrait ? "9:16" : "16:9",
+    durationSec: Math.round(meta.durationSec),
+    // 서버 상대 경로다(접두사 /api 없음). 프론트 absolute()/clipThumbSrc 가 API_BASE 를 붙인다 —
+    // export 라우트(videoUrl:`/media/…`)와 같은 컨벤션. /api 를 넣으면 /api 가 두 번 붙는다.
+    thumbnailUrl: opts.thumbPath ? `/media/${mediaId}/thumb` : undefined,
+    // 이미 완성된 파일이라 결정 상태가 아니다 — 곧바로 배포 가능(rendered).
+    status: "editing",
+    rendered: true,
+    mediaId,                // 배포 워커가 이 미디어의 path 로 파일을 내려받아 올린다
+    sourceMediaId: mediaId,
+    videoUrl: `/media/${mediaId}/stream`,
+    // 직접 업로드 완성본 표식 — 편집(트림·리프레임)이 아니라 배포가 목적이다.
+    directUpload: true,
+    distributions: [] as unknown[],
+  };
+  await prependEntity("clip", clipId, clip);
+  return { clip, media: mediaPublic(row) };
+}
+
 // ── large upload, step 1: open a resumable session — bytes go browser → GCS directly ──
 // The file never passes through Cloud Run, so the 32 MB request cap, in-memory buffering,
 // and the 600 s request timeout no longer apply. Multi-hour masters upload fine.
@@ -3159,6 +3308,47 @@ app.post("/api/media/finalize", async (c) => {
   }
 });
 
+// ── 완성 영상 직접 업로드, 2단계(GCS): 올라간 파일로 배포 가능한 클립을 만든다 ──────────────
+// upload-init 이 발급한 (mediaId, objectPath) 를 그대로 받아 회차·분석 없이 클립을 만든다.
+app.post("/api/media/clip-finalize", async (c) => {
+  const body = await c.req.json().catch(() => ({}) as Record<string, unknown>);
+  const mediaId = typeof body.mediaId === "string" ? String(body.mediaId) : "";
+  const objectPath = typeof body.objectPath === "string" ? String(body.objectPath) : "";
+  if (!mediaId || !objectPath) return c.json({ error: "mediaId and objectPath required" }, 400);
+  // finalize 와 같은 가드 — 이 mediaId 의 upload-init 이 발급했을 objectPath 만 받는다.
+  if (!/^[\w-]+$/.test(mediaId) || !new RegExp(`^uploads/${mediaId}\\.\\w+$`).test(objectPath)) {
+    return c.json({ error: "objectPath does not match mediaId" }, 400);
+  }
+  if (!useGcs()) return c.json({ error: "clip-finalize is GCS-mode only" }, 400);
+
+  const programId = typeof body.programId === "string" && body.programId ? String(body.programId) : "";
+  const program = await getEntity<{ id: string; title: string; targetAge: number }>("program", programId);
+  if (!program) return c.json({ error: "program not found" }, 400);
+
+  // 멱등 재시도: 네트워크가 끊긴 뒤 다시 부르면 이미 만든 클립을 돌려준다(중복 생성 금지).
+  const existing = await getMedia(mediaId);
+  if (existing) {
+    const clip = (await listEntities<{ mediaId?: string }>("clip")).find((x) => x.mediaId === mediaId);
+    return c.json({ clip: clip ?? null, media: mediaPublic(existing) });
+  }
+
+  if (!(await fileExists(objectPath))) return c.json({ error: "upload not found in storage" }, 400);
+
+  const filename = typeof body.filename === "string" && body.filename ? String(body.filename) : `${mediaId}.mp4`;
+  const title = typeof body.title === "string" && body.title ? String(body.title) : filename;
+  const mime = typeof body.contentType === "string" && body.contentType ? String(body.contentType) : "video/mp4";
+
+  const { size, meta, thumbStored, storedPath } = await prepareUploadedObject(mediaId, objectPath);
+  let finalSize = size;
+  if (finalSize <= 0 && typeof body.size === "number" && body.size > 0) finalSize = body.size;
+
+  const result = await buildFinishedClip({
+    mediaId, programId, program, storedPath, filename, title,
+    mime, size: finalSize, meta, thumbPath: thumbStored,
+  });
+  return c.json(result);
+});
+
 app.post("/api/media/upload", async (c) => {
   const body = await c.req.parseBody();
   const file = body["file"];
@@ -3219,6 +3409,52 @@ app.post("/api/media/upload", async (c) => {
     }
     throw err;
   }
+});
+
+// ── 완성 영상 직접 업로드 (로컬 dev · 소용량 multipart 폴백) → 배포 가능한 클립 ──────────────
+// GCS 미설정(로컬)이면 브라우저가 clip-upload-init 의 mode:"multipart" 를 받고 이리로 폴백한다.
+app.post("/api/media/clip-upload", async (c) => {
+  const body = await c.req.parseBody();
+  const file = body["file"];
+  if (typeof file === "string" || !(file as any).arrayBuffer || typeof file === "boolean") return c.json({ error: "file field required" }, 400);
+
+  const programId = typeof body["programId"] === "string" && body["programId"] ? String(body["programId"]) : "";
+  const program = await getEntity<{ id: string; title: string; targetAge: number }>("program", programId);
+  if (!program) return c.json({ error: "program not found" }, 400);
+
+  const mediaId = newId("m");
+  const ext = path.extname(file.name) || ".mp4";
+  const buffer = Buffer.from(await file.arrayBuffer());
+  const storedPath = await writeFile(uploadPath(mediaId, ext), buffer);
+
+  // Probe + thumbnail from a local temp copy (ffmpeg reads the filesystem).
+  let meta = { durationSec: 0, width: 0, height: 0, codec: "", hasAudio: false };
+  let thumbStored: string | null = null;
+  if (FFMPEG) {
+    const tmpDir = path.resolve("/tmp/stepd-uploads");
+    fs.mkdirSync(tmpDir, { recursive: true });
+    const tmpPath = path.join(tmpDir, `${mediaId}${ext}`);
+    fs.writeFileSync(tmpPath, buffer);
+    const thumbTmp = path.join(tmpDir, `${mediaId}.jpg`);
+    try {
+      meta = await probe(tmpPath);
+      await captureThumbnail(tmpPath, Math.max(1, meta.durationSec * 0.1), thumbTmp);
+      thumbStored = await uploadFile(thumbPath(mediaId), thumbTmp);
+    } catch {
+      /* probe/thumb are best-effort */
+    } finally {
+      try { fs.unlinkSync(tmpPath); } catch {}
+      try { fs.unlinkSync(thumbTmp); } catch {}
+    }
+  }
+
+  const title = typeof body["title"] === "string" && body["title"] ? String(body["title"]) : file.name;
+  const result = await buildFinishedClip({
+    mediaId, programId, program, storedPath,
+    filename: file.name, title, mime: file.type || "video/mp4", size: file.size,
+    meta, thumbPath: thumbStored,
+  });
+  return c.json(result);
 });
 
 // ── YouTube URL import: episode + placeholder media now, download on the worker VM ──
@@ -3890,6 +4126,8 @@ async function renderClipMedia(opts: {
   editorState?: any;
   aspect?: string;
   captions?: Caption[];
+  /** Validated compact AI plan; omitted for the legacy basic Fit render. */
+  reframePlan?: ReframePlan | null;
   /** 첫 3초 hook 프리롤 (편집자가 "첫 3초 훅" 토글 ON + clip.hookTimeSec 있을 때만). */
   hookPreroll?: { startTime: number; durationSec: number; hasAudio?: boolean } | null;
 }): Promise<
@@ -3909,12 +4147,32 @@ async function renderClipMedia(opts: {
   const tmpPath = path.join(tmpDir, `${clipMediaId}.mp4`);
   const thumbTmp = path.join(tmpDir, `${clipMediaId}.jpg`);
   const assTmp = path.join(tmpDir, `${clipMediaId}.ass`);
+  const captionAssTmp = path.join(tmpDir, `${clipMediaId}_captions.ass`);
+  const decorationAssTmp = path.join(tmpDir, `${clipMediaId}_decor.ass`);
   const iconRawTmp = path.join(tmpDir, `${clipMediaId}_icon_raw`);
   const iconTmp = path.join(tmpDir, `${clipMediaId}_icon.png`);
 
   const { W, H, stageH } = renderDims(aspect);
-  const ass = buildEditorAss(editorState, W, H, stageH, endTime - startTime, opts.captions);
-  if (ass) fs.writeFileSync(assTmp, ass, "utf-8");
+  const dynamicReframe = opts.reframePlan?.mode === "ai_multi";
+  let ass: string | null = null;
+  let captionAss: string | null = null;
+  let decorationAss: string | null = null;
+  if (dynamicReframe) {
+    const fitIntervals = fitIntervalsForPlan(opts.reframePlan!, startTime, endTime);
+    captionAss = buildEditorAss(
+      editorState, W, H, stageH, endTime - startTime, opts.captions,
+      { include: "captions" },
+    );
+    decorationAss = buildEditorAss(
+      editorState, W, H, stageH, endTime - startTime, opts.captions,
+      { include: "decorations", visibleIntervals: fitIntervals },
+    );
+    if (captionAss) fs.writeFileSync(captionAssTmp, captionAss, "utf-8");
+    if (decorationAss) fs.writeFileSync(decorationAssTmp, decorationAss, "utf-8");
+  } else {
+    ass = buildEditorAss(editorState, W, H, stageH, endTime - startTime, opts.captions);
+    if (ass) fs.writeFileSync(assTmp, ass, "utf-8");
+  }
 
   // Bake the main track's colour grade + volume + uniform speed into the render — previously
   // these were preview-only, so the deliverable silently ignored the operator's edits.
@@ -3974,7 +4232,7 @@ async function renderClipMedia(opts: {
     }
   }
   try {
-    if (!ass && !videoFilters && !audioFilter && speed === 1 && aspect === "16:9" && !hookPreroll) {
+    if (!dynamicReframe && !ass && !videoFilters && !audioFilter && speed === 1 && aspect === "16:9" && !hookPreroll) {
       // Fast path only when there's genuinely nothing to bake (no overlays, no grade, no
       // volume change, no speed change, native 16:9, no hook preroll). Any edit routes through renderShort.
       await trimEncode(srcPath, startTime, endTime, tmpPath);
@@ -3985,6 +4243,7 @@ async function renderClipMedia(opts: {
         ? editorState.bgType
         : "blur") as "solid" | "blur" | "image";
       const bgColor = typeof editorState?.bg === "string" ? editorState.bg : undefined;
+      const fit = editorState?.fit === "cover" ? "cover" : "contain" as "contain" | "cover";
       // 축2 핏 — 프레임이 없을 때만 적용된다(있으면 frame.video.fit 우선). cover=잘라 채우기.
       // 프레임 템플릿 — editorState.templateId 가 assets/shorts-template 의 디렉토리 이름이다.
       // 목록에 없으면(구 프리셋 id 등) null 이라 기존 blur/solid 경로로 떨어진다.
@@ -3996,8 +4255,12 @@ async function renderClipMedia(opts: {
         : null;
       await renderShort({
         inputPath: srcPath, startTime, endTime, outputPath: tmpPath, width: W, height: H,
-        assPath: ass ? assTmp : null, videoFilters, audioFilter, speed,
-        bgType, bgColor, frame,
+        assPath: dynamicReframe ? null : ass ? assTmp : null,
+        captionAssPath: captionAss ? captionAssTmp : null,
+        decorationAssPath: decorationAss ? decorationAssTmp : null,
+        reframePlan: opts.reframePlan ?? null,
+        videoFilters, audioFilter, speed,
+        bgType, bgColor, fit, frame,
         hookPreroll,
         badge,
       });
@@ -4028,6 +4291,8 @@ async function renderClipMedia(opts: {
     try { fs.unlinkSync(tmpPath); } catch {}
     try { fs.unlinkSync(thumbTmp); } catch {}
     try { fs.unlinkSync(assTmp); } catch {}
+    try { fs.unlinkSync(captionAssTmp); } catch {}
+    try { fs.unlinkSync(decorationAssTmp); } catch {}
     try { fs.unlinkSync(iconRawTmp); } catch {}
     try { fs.unlinkSync(iconTmp); } catch {}
   }
@@ -5264,6 +5529,8 @@ app.post("/api/recommendations/:id/adopt", async (c) => {
     endTime: rec.endTime,
     sourceMediaId: master?.id,
     sourceRecommendationId: rec.id,
+    beatIds: Array.isArray(rec.beatIds) ? rec.beatIds : [],
+    reframe: basicReframeState(),
     // The AI's suggested destination (F3) — metadata only, still no render (§2.4). It seeds
     // the export selector's default; the operator's pick at export overrides it.
     targetChannel: pickTargetChannel(rec.channelScores),
@@ -5525,6 +5792,175 @@ app.patch("/api/clips/:id/link-video", async (c) => {
   return c.json({ ok: true, clipId, publishedVideoId: videoId, videoKnown });
 });
 
+// ── AI dynamic 9:16 reframing ────────────────────────────────────────────────
+// GET is read-only: it reports stale when planner inputs changed, but never starts work.
+// POST is the sole state transition so the editor can debounce trim changes and explicitly
+// retry a failed model run. Queue ownership is claimed atomically in PostgreSQL.
+app.get("/api/clips/:id/reframe", async (c) => {
+  const clipId = c.req.param("id");
+  const clip = await getEntity<Record<string, unknown>>("clip", clipId);
+  if (!clip) return c.json({ error: "clip not found" }, 404);
+  return c.json({ clipId, reframe: effectiveReframeState(clip) });
+});
+
+app.post("/api/clips/:id/reframe", async (c) => {
+  const clipId = c.req.param("id");
+  const clip = await getEntity<Record<string, unknown>>("clip", clipId);
+  if (!clip) return c.json({ error: "clip not found" }, 404);
+  const body = await c.req.json<{ mode?: unknown; retry?: unknown }>()
+    .catch(() => ({} as { mode?: unknown; retry?: unknown }));
+  if (body.mode !== "basic" && body.mode !== "ai_multi") {
+    return c.json({ error: "invalid_reframe_mode", message: "mode must be basic or ai_multi" }, 400);
+  }
+
+  if (body.mode === "basic") {
+    if (clip.reframe && typeof clip.reframe === "object") {
+      const current = clip.reframe as Partial<ClipReframeState>;
+      if (current.mode === "basic" && current.status === "idle") {
+        return c.json({ clipId, reframe: current, reused: true, queued: false });
+      }
+    }
+    const reframe = basicReframeState();
+    const restoreAspect = clip.reframe && typeof clip.reframe === "object" &&
+      typeof (clip.reframe as Partial<ClipReframeState>).basicAspectRatio === "string"
+      ? (clip.reframe as ClipReframeState).basicAspectRatio
+      : undefined;
+    await setClipReframe(clipId, reframe, restoreAspect);
+    return c.json({ clipId, reframe, reused: false, queued: false });
+  }
+
+  if (typeof clip.sourceMediaId !== "string" || !clip.sourceMediaId) {
+    return c.json({ error: "source_media_missing", message: "AI 리프레임 원본 영상이 없습니다." }, 409);
+  }
+  let inputFingerprint: string;
+  try {
+    inputFingerprint = reframeFingerprint(clip);
+  } catch (error) {
+    return c.json({
+      error: "invalid_reframe_input",
+      message: error instanceof Error ? error.message : String(error),
+    }, 400);
+  }
+
+  const stored = clip.reframe && typeof clip.reframe === "object"
+    ? clip.reframe as ClipReframeState
+    : null;
+  if (stored?.mode === "ai_multi" && stored.inputFingerprint === inputFingerprint) {
+    if (stored.status === "ready" || stored.status === "queued" || stored.status === "running") {
+      return c.json({ clipId, reframe: stored, reused: true, queued: false });
+    }
+    if (stored.status === "failed" && body.retry !== true) {
+      return c.json({
+        error: "reframe_retry_required",
+        code: "reframe_retry_required",
+        message: "AI 리프레임 분석에 실패했습니다. retry=true로 다시 시도해 주세요.",
+        clipId,
+        reframe: stored,
+      }, 409);
+    }
+  }
+
+  const requestedAt = Date.now();
+  const requestId = newId("rr");
+  const queuedState: ClipReframeState = {
+    mode: "ai_multi",
+    status: "queued",
+    timeBase: "master_absolute",
+    revision: requestedAt,
+    inputFingerprint,
+    requestId,
+    jobId: null,
+    requestedAt,
+    updatedAt: requestedAt,
+    error: null,
+    basicAspectRatio: stored?.mode === "ai_multi" && typeof stored.basicAspectRatio === "string"
+      ? stored.basicAspectRatio
+      : typeof clip.aspectRatio === "string" ? clip.aspectRatio : undefined,
+  };
+  const claimed = await tryQueueClipReframe(
+    clipId,
+    inputFingerprint,
+    queuedState,
+    body.retry === true,
+  );
+  if (!claimed) {
+    const latest = await getEntity<Record<string, unknown>>("clip", clipId);
+    if (!latest) return c.json({ error: "clip not found" }, 404);
+    const reframe = effectiveReframeState(latest);
+    if (reframe.status === "failed" && body.retry !== true) {
+      return c.json({
+        error: "reframe_retry_required", code: "reframe_retry_required",
+        message: "AI 리프레임 분석에 실패했습니다. retry=true로 다시 시도해 주세요.",
+        clipId, reframe,
+      }, 409);
+    }
+    return c.json({ clipId, reframe, reused: true, queued: false });
+  }
+
+  // The editor may have committed a new master-absolute trim between the route's first read
+  // and the atomic queue claim. Do not enqueue a plan for the previous range in that case.
+  let claimedFingerprint = "";
+  try { claimedFingerprint = reframeFingerprint(claimed); } catch { /* stale below */ }
+  if (claimedFingerprint !== inputFingerprint) {
+    const at = Date.now();
+    const stale: ClipReframeState = {
+      ...queuedState,
+      status: "stale",
+      revision: at,
+      updatedAt: at,
+    };
+    await compareAndSetClipReframe(clipId, inputFingerprint, requestId, stale);
+    return c.json({ clipId, reframe: stale, reused: false, queued: false });
+  }
+
+  try {
+    const jobId = await enqueue(
+      "clip.reframe",
+      { clipId, inputFingerprint, requestId },
+      { dedupeKey: `clip.reframe:${clipId}:${requestId}` },
+    );
+    if (!jobId) throw new Error("reframe queue insert conflicted");
+    const withJob: ClipReframeState = {
+      ...queuedState,
+      jobId,
+      revision: Date.now(),
+      updatedAt: Date.now(),
+    };
+    const updated = await compareAndSetClipReframe(clipId, inputFingerprint, requestId, withJob);
+    if (!updated) {
+      // Basic mode or a new trim won a race after enqueue. The queued job is harmless (its
+      // CAS will fail), and the response must reflect the state that actually won.
+      const latest = await getEntity<Record<string, unknown>>("clip", clipId);
+      const reframe = latest ? effectiveReframeState(latest) : withJob;
+      return c.json({ clipId, reframe, reused: true, queued: false });
+    }
+    const reframe = updated.reframe && typeof updated.reframe === "object"
+      ? updated.reframe as ClipReframeState
+      : withJob;
+    return c.json({ clipId, reframe, reused: false, queued: true }, 202);
+  } catch (error) {
+    const at = Date.now();
+    const failed: ClipReframeState = {
+      ...queuedState,
+      status: "failed",
+      revision: at,
+      updatedAt: at,
+      error: {
+        code: "queue_failed",
+        message: (error instanceof Error ? error.message : String(error)).slice(0, 600),
+        at,
+      },
+    };
+    const updated = await compareAndSetClipReframe(clipId, inputFingerprint, requestId, failed);
+    const latest = updated ?? await getEntity<Record<string, unknown>>("clip", clipId);
+    const responseState = latest ? effectiveReframeState(latest) : failed;
+    return c.json({
+      error: "reframe_queue_failed", code: "reframe_queue_failed",
+      message: "AI 리프레임 작업을 큐에 넣지 못했습니다.", clipId, reframe: responseState,
+    }, 503);
+  }
+});
+
 // ── persist the editor's decision blob (revision JSON) ────────────────────────
 //
 // Save = metadata only, never a render (plan §2.4 deferred-render invariant). We store
@@ -5546,7 +5982,7 @@ app.patch("/api/clips/:id/editor", async (c) => {
   // Master-absolute trim(에디터 새 모델): editorState.trimIn/trimOut이 이미 마스터 절대 초.
   // 세그먼트(=clip.startTime/endTime)를 트림에 맞춰 이동시켜 두면, 아래 /export의 세그먼트
   // 상대 계산이 자연스럽게 trimIn=0, trimOut=segLen인 상태로 굽는다 — 렌더 로직 손 안 대고 통합.
-  const patch: Record<string, unknown> = { ...clip, editorState: body.editorState };
+  const patch: Record<string, unknown> = { editorState: body.editorState };
   if (
     es.trimBase === "master" &&
     typeof es.trimIn === "number" && Number.isFinite(es.trimIn) &&
@@ -5582,7 +6018,15 @@ app.patch("/api/clips/:id/editor", async (c) => {
   const moved =
     Number.isFinite(beforeStart) && Number.isFinite(afterStart) &&
     (Math.abs(afterStart - beforeStart) > 0.01 || Math.abs(afterEnd - beforeEnd) > 0.01);
-  await putEntity("clip", clipId, patch);
+  const nextForFingerprint = { ...clip, ...patch };
+  let nextFingerprint = "";
+  try {
+    nextFingerprint = reframeFingerprint(nextForFingerprint);
+  } catch {
+    // Invalid legacy clips cannot have a valid AI plan. The atomic helper still marks any
+    // existing AI state stale because an empty fingerprint cannot match a real one.
+  }
+  await patchClipEditorAtomic(clipId, patch, nextFingerprint);
 
   // 저장이 실제로 성공한 뒤에만 남긴다 — 안 일어난 조정을 학습 데이터에 넣으면 안 된다.
   if (moved) {
@@ -5877,6 +6321,34 @@ app.post("/api/clips/:id/export", async (c) => {
   const end = Number(clip.endTime ?? start + (clip.durationSec ?? 0));
   if (!(end > start)) return c.json({ error: "clip has no valid segment to render" }, 400);
 
+  const reframe = effectiveReframeState(clip);
+  let reframePlan: ReframePlan | null = null;
+  if (reframe.mode === "ai_multi") {
+    if (reframe.status !== "ready" || !reframe.plan || !reframe.planHash) {
+      return c.json({
+        error: "reframe_not_ready",
+        code: "reframe_not_ready",
+        message: reframe.status === "stale"
+          ? "클립 구간이 바뀌어 AI 리프레임을 다시 분석해야 합니다."
+          : "AI 리프레임 분석이 완료된 뒤 내보낼 수 있습니다.",
+        reframe,
+      }, 409);
+    }
+    try {
+      reframePlan = normalizeReframePlan(reframe.plan, { start, end });
+      if (reframePlanHash(reframePlan) !== reframe.planHash) {
+        throw new Error("AI reframe plan hash does not match its validated content");
+      }
+    } catch (error) {
+      return c.json({
+        error: "reframe_plan_invalid",
+        code: "reframe_plan_invalid",
+        message: error instanceof Error ? error.message : String(error),
+        reframe,
+      }, 409);
+    }
+  }
+
   // F3: the destination this render is for. Body `channel` lets the operator export the same
   // adopted segment once per destination; absent that, the clip's own target.
   const body = await c.req.json<{ channel?: string }>().catch(() => ({} as { channel?: string }));
@@ -5896,12 +6368,6 @@ app.post("/api/clips/:id/export", async (c) => {
   // hookTimeSec 이 있을 때만. 토글/시각이 바뀌면 revision 이 달라져 캐시가 자동 무효화되도록 해시에 포함.
   const hookPrerollReq =
     (clip.editorState as any)?.hookOn === true && typeof clip.hookTimeSec === "number";
-
-  const revision = crypto
-    .createHash("sha256")
-    .update(JSON.stringify({ start, end, aspectRatio: clip.aspectRatio, editorState: clip.editorState ?? null, captionsFp, preset: preset?.key ?? null, hookPreroll: hookPrerollReq ? { t: clip.hookTimeSec } : null }))
-    .digest("hex")
-    .slice(0, 16);
 
   // Apply the editor's fine trim within the adopted segment (trimIn/trimOut are relative to
   // the segment). Clamp so the render never escapes [start, end] — the AI-selected window is
@@ -5928,11 +6394,6 @@ app.post("/api/clips/:id/export", async (c) => {
     renderEnd = renderStart + preset.maxSec * spd; // segment length that yields maxSec output
   }
 
-  // Cache hit: identical decisions already rendered — don't re-encode.
-  if (clip.rendered && clip.renderRevision === revision && clip.mediaId) {
-    return c.json({ clipId, clip, cached: true, preset: preset?.key ?? null, capped, hookPreroll: hookPrerollReq });
-  }
-
   const allMedia = await listMedia();
   const master =
     (clip.sourceMediaId ? allMedia.find((m) => m.id === clip.sourceMediaId) : undefined) ??
@@ -5945,7 +6406,12 @@ app.post("/api/clips/:id/export", async (c) => {
   // decided); otherwise the destination preset; otherwise the clip's own adopted ratio. The
   // last step is what keeps a 16:9 highlight that was never opened in the editor out of a
   // 9:16 blur frame.
-  const aspect = normalizeAspect(es?.aspect) ?? preset?.aspect ?? normalizeAspect(clip.aspectRatio) ?? "9:16";
+  // An AI Fill/Fit plan is defined in a vertical Shorts canvas. Do not trust a new web
+  // client to have already changed editorState.aspect: old saved states and direct API
+  // callers can still say 16:9, which would turn the dynamic plan into a landscape render.
+  const aspect = reframePlan
+    ? "9:16"
+    : normalizeAspect(es?.aspect) ?? preset?.aspect ?? normalizeAspect(clip.aspectRatio) ?? "9:16";
 
   // 컷 boundary를 STT word 경계 → 프레임 그리드로 스냅. 대사 중간 절단 방지 + ffmpeg -ss
   // 요청 시각이 실제 디코드 프레임과 일치해 렌더 결과가 요청 시각과 sub-frame 일치.
@@ -5964,6 +6430,34 @@ app.post("/api/clips/:id/export", async (c) => {
   if (Math.abs(snappedStart - renderStart) > 0.001 || Math.abs(snappedEnd - renderEnd) > 0.001) {
     console.log(`[render] snap ${renderStart.toFixed(3)}→${snappedStart.toFixed(3)}s · ` +
       `${renderEnd.toFixed(3)}→${snappedEnd.toFixed(3)}s @ ${masterFps.toFixed(2)}fps`);
+  }
+
+  // The cache key describes the bytes actually rendered, not only the adopted outer range.
+  // Destination caps, editor trim, word snapping and frame snapping all change these bounds.
+  // Keep this after snapping; otherwise a cached basic render can be returned for a newly
+  // generated AI plan (or a different snapped window) without running the dynamic renderer.
+  const revision = crypto
+    .createHash("sha256")
+    .update(JSON.stringify({
+      sourceStart: start,
+      sourceEnd: end,
+      renderStart: snappedStart,
+      renderEnd: snappedEnd,
+      renderAspect: aspect,
+      editorState: clip.editorState ?? null,
+      captionsFp,
+      preset: preset?.key ?? null,
+      hookPreroll: hookPrerollReq ? { t: clip.hookTimeSec } : null,
+      reframe: reframePlan
+        ? { mode: "ai_multi", inputFingerprint: reframe.inputFingerprint, planHash: reframe.planHash }
+        : { mode: "basic" },
+    }))
+    .digest("hex")
+    .slice(0, 16);
+
+  // Cache hit: identical effective decisions already rendered — don't re-encode.
+  if (clip.rendered && clip.renderRevision === revision && clip.mediaId) {
+    return c.json({ clipId, clip, cached: true, preset: preset?.key ?? null, capped, hookPreroll: hookPrerollReq });
   }
 
   // Spoken subtitles that fall inside the render window, rebased to 0.
@@ -5988,6 +6482,7 @@ app.post("/api/clips/:id/export", async (c) => {
     startTime: snappedStart, endTime: snappedEnd,
     title: clip.title, editorState: es, aspect, captions,
     hookPreroll,
+    reframePlan,
   });
   if (!rendered) return c.json({ error: "render failed" }, 500);
 
@@ -5996,6 +6491,7 @@ app.post("/api/clips/:id/export", async (c) => {
   // editorState did change, `revision` no longer matches it, so the cache check correctly
   // re-renders on the next export.
   const latest = (await getEntity<any>("clip", clipId)) ?? clip;
+  const renderedAspectRatio = canonicalRenderedClipAspect(aspect, latest.aspectRatio);
   const next = {
     ...latest,
     status: "ready",
@@ -6006,6 +6502,10 @@ app.post("/api/clips/:id/export", async (c) => {
     videoUrl: `/media/${rendered.clipMediaId}/stream`,
     durationSec: rendered.cmeta.durationSec || latest.durationSec,
     renderPreset: preset?.key ?? null,
+    // Downstream `/media` short classification and publish guards read this field. Store
+    // the aspect of the latest successful render in both directions: AI makes it vertical,
+    // while a later basic 16:9 render must stop being classified as the older AI Short.
+    ...(renderedAspectRatio ? { aspectRatio: renderedAspectRatio } : {}),
   };
   await putEntity("clip", clipId, next);
   return c.json({ clipId, clip: next, preset: preset?.key ?? null, capped, hookPreroll: !!hookPreroll });

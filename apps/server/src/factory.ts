@@ -26,6 +26,7 @@ import { commitAndInherit } from "./adopt.ts";
 import { dispatchPublish } from "./publish-dispatch.ts";
 import { newId } from "./pipeline.ts";
 import { enqueue } from "./queue.ts";
+import { basicReframeState } from "./reframe.ts";
 
 const TRUTHY = new Set(["1", "true", "yes", "on"]);
 
@@ -557,6 +558,8 @@ async function adoptRecommendation(rec: any, job: FactoryJob): Promise<string | 
     endTime: rec.endTime,
     sourceMediaId: master?.id,
     sourceRecommendationId: rec.id,
+    beatIds: Array.isArray(rec.beatIds) ? rec.beatIds : [],
+    reframe: basicReframeState(),
     distributions: [],
     // 공장이 만든 클립이라는 표식 — 나중에 사고 추적·롤백 대상 선별에 쓴다.
     factoryJobId: job.id,

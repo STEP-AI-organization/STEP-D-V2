@@ -22,6 +22,8 @@ export type JobType =
   // Content pipeline (uploaded episodes): STT → refine → scenes → vision → shorts.
   // Distinct from the video.* YouTube-analytics jobs above.
   | "content.analyze"
+  // AI Shorts reframing: clip-only proxy + face/safety planner (content worker).
+  | "clip.reframe"
   // Ingest: yt-dlp a YouTube URL on the worker VM → GCS → content.analyze.
   | "youtube.download"
   // Lab: 선택한 숏폼들이 롱폼의 어느 구간에서 나왔는지 오디오 정렬로 추적.
@@ -118,6 +120,7 @@ export async function initQueue(): Promise<void> {
 // PPL 이 두 번 돌아 회당 ~₩60 낭비. 이런 케이스는 사람 개입이 정답.
 const MAX_ATTEMPTS_BY_TYPE: Partial<Record<JobType, number>> = {
   "content.analyze": 2,
+  "clip.reframe": 2,
   // 이미지 생성은 호출당 과금이라 재시도를 아낀다. 실패는 대개 입력 문제(인물 미등록)라
   // 반복해도 같은 결과다 — 사람이 고쳐야 한다.
   "thumbnail.generate": 2,

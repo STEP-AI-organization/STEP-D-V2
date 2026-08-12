@@ -24,6 +24,7 @@ analyze.py                     오케스트레이터 (단계별 체크포인트 
   ├─ scenes/     영상 → 장면      shot 경계 · scene_type · GEBD 경계 · 화면자막(chyron)
   ├─ beats/      장면 → beat      최소 6초 단위로 쪼개고 Vision 으로 주석
   ├─ recommend/  beat → 쇼츠 추천  (beat-only · 시청자 신호 반영)
+  ├─ reframe/    쇼츠 → AI 구도  beat별 Fill/Fit 판정 · 인물 추적 (CPU)
   └─ search/     세그먼트 색인     pgvector 임베딩 + 키워드축
 ```
 
@@ -33,13 +34,14 @@ analyze.py                     오케스트레이터 (단계별 체크포인트 
 | [`scenes/`](scenes/) | 장면 경계·유형·화면자막 | `boundaries` `scenes` `scene_type` `shots` `chyron_scan` |
 | [`beats/`](beats/) | beat 생성·주석·서사 | `beats` `beat_annot` `narrative` |
 | [`recommend/`](recommend/) | 쇼츠 추천·시청자 신호 | `recommend` `signals` `comment_signal` `learn_profile` |
+| [`reframe/`](reframe/) | 옵션 AI 다중 구도·Beat Fill/Fit·인물 추적 | `cli` `planner` `video` |
 | [`search/`](search/) | 검색 세그먼트 색인·질의 | `index_segments` `embed` `search` |
 | [`vision/`](vision/) | 프레임 이해·인물 | `vision` `faces` `portraits` `cast` `ppl` |
 | [`thumbnail/`](thumbnail/) | 썸네일 엔진 | `cli` `plan` `simple_gen` `swap` |
 | [`evaluate/`](evaluate/) | 품질 평가 배치 | `eval_*` `evaluate` |
 | [`common/`](common/) | 공용 — 모델명·재시도·클라이언트 | `models` `retry` `openai_client` `glossary.json` |
 
-**모델 이름은 `common/models.py` 한 곳에서만 바꾼다.** 단계별 오버라이드는 env
+**Gemini 모델 이름은 `common/models.py` 한 곳에서만 바꾼다.** 단계별 오버라이드는 env
 (`GEMINI_REFINE_MODEL` 등).
 
 ---

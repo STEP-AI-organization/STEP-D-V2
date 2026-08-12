@@ -514,6 +514,124 @@ export async function putEntity(kind: EntityKind, id: string, data: unknown, ord
   await mirrorToDomain(kind, id, data);
 }
 
+/**
+ * Merge editor-owned top-level fields without replacing the whole clip JSON. A reframe
+ * worker may finish while the editor request is in flight; a normal putEntity would then
+ * overwrite the worker's plan with the request's old snapshot. The stale transition is
+ * evaluated against the row that is locked by this UPDATE, so neither side can win with an
+ * out-of-date read.
+ */
+export async function patchClipEditorAtomic(
+  clipId: string,
+  patch: Record<string, unknown>,
+  nextReframeFingerprint: string,
+): Promise<Record<string, unknown> | undefined> {
+  const now = Date.now();
+  const { rows } = await pool.query(
+    `UPDATE entities
+        SET data = CASE
+          WHEN data->'reframe'->>'mode' = 'ai_multi'
+           AND COALESCE(data->'reframe'->>'inputFingerprint', '') <> $3
+          THEN (data || $2::jsonb) || jsonb_build_object(
+            'reframe',
+            jsonb_set(
+              jsonb_set(
+                jsonb_set(COALESCE(data->'reframe', '{}'::jsonb), '{status}', to_jsonb('stale'::text), true),
+                '{revision}', to_jsonb($4::bigint), true
+              ),
+              '{updatedAt}', to_jsonb($4::bigint), true
+            )
+          )
+          ELSE data || $2::jsonb
+        END
+      WHERE kind = 'clip' AND id = $1
+      RETURNING data`,
+    [clipId, JSON.stringify(patch), nextReframeFingerprint, now],
+  );
+  const data = rows[0]?.data as Record<string, unknown> | undefined;
+  if (data) await mirrorToDomain("clip", clipId, data);
+  return data;
+}
+
+/** Replace only clip.reframe, preserving editor and render fields changed concurrently. */
+export async function setClipReframe(
+  clipId: string,
+  reframe: unknown,
+  aspectRatio?: string,
+): Promise<Record<string, unknown> | undefined> {
+  const { rows } = await pool.query(
+    `UPDATE entities
+        SET data = jsonb_set(data, '{reframe}', $2::jsonb, true)
+          || CASE WHEN $3::text IS NULL THEN '{}'::jsonb
+                  ELSE jsonb_build_object('aspectRatio', $3::text) END
+      WHERE kind = 'clip' AND id = $1
+      RETURNING data`,
+    [clipId, JSON.stringify(reframe), aspectRatio ?? null],
+  );
+  const data = rows[0]?.data as Record<string, unknown> | undefined;
+  // A basic-mode transition may restore aspectRatio as well as reframe state. That field is
+  // part of the normalized Clip domain row, so mirror only that infrequent classification
+  // change; planner lifecycle updates remain JSONB-only and cannot race editor saves.
+  if (data && aspectRatio != null) await mirrorToDomain("clip", clipId, data);
+  return data;
+}
+
+/**
+ * Atomically claims one planner request. Concurrent POSTs for the same input reuse the
+ * first queued/running/ready request. A failed request is only replaceable when retry=true.
+ */
+export async function tryQueueClipReframe(
+  clipId: string,
+  inputFingerprint: string,
+  reframe: unknown,
+  retry: boolean,
+): Promise<Record<string, unknown> | undefined> {
+  const { rows } = await pool.query(
+    `UPDATE entities
+        SET data = jsonb_set(data, '{reframe}', $3::jsonb, true)
+      WHERE kind = 'clip' AND id = $1
+        AND NOT (
+          data->'reframe'->>'mode' = 'ai_multi'
+          AND data->'reframe'->>'inputFingerprint' = $2
+          AND data->'reframe'->>'status' IN ('queued', 'running', 'ready')
+        )
+        AND (
+          $4::boolean
+          OR NOT (
+            data->'reframe'->>'mode' = 'ai_multi'
+            AND data->'reframe'->>'inputFingerprint' = $2
+            AND data->'reframe'->>'status' = 'failed'
+          )
+        )
+      RETURNING data`,
+    [clipId, inputFingerprint, JSON.stringify(reframe), retry],
+  );
+  const data = rows[0]?.data as Record<string, unknown> | undefined;
+  return data;
+}
+
+/** CAS used by the worker so a result from a superseded/basic request can never land. */
+export async function compareAndSetClipReframe(
+  clipId: string,
+  inputFingerprint: string,
+  requestId: string,
+  reframe: unknown,
+): Promise<Record<string, unknown> | undefined> {
+  const { rows } = await pool.query(
+    `UPDATE entities
+        SET data = jsonb_set(data, '{reframe}', $4::jsonb, true)
+      WHERE kind = 'clip' AND id = $1
+        AND data->'reframe'->>'mode' = 'ai_multi'
+        AND data->'reframe'->>'inputFingerprint' = $2
+        AND data->'reframe'->>'requestId' = $3
+        AND data->'reframe'->>'status' IN ('queued', 'running')
+      RETURNING data`,
+    [clipId, inputFingerprint, requestId, JSON.stringify(reframe)],
+  );
+  const data = rows[0]?.data as Record<string, unknown> | undefined;
+  return data;
+}
+
 export async function prependEntity(kind: EntityKind, id: string, data: unknown): Promise<void> {
   const { rows } = await pool.query(
     "SELECT COALESCE(MIN(ord), 0) - 1 AS m FROM entities WHERE kind = $1",

@@ -199,10 +199,67 @@ export const RENDER_CHANNELS: Record<RenderChannel, { label: string; aspect: Asp
   naver_tv: { label: "네이버 TV (가로 VOD)", aspect: "16:9", maxSec: 180 },
 };
 
+export type ReframeMode = "basic" | "ai_multi";
+export type ReframeStatus = "idle" | "queued" | "running" | "ready" | "stale" | "failed";
+export type ReframeLayout = "fit" | "fill";
+
+export interface ReframeTrackingPoint {
+  /** Seconds on the source master timeline. */
+  t: number;
+  /** Normalized source-frame focus coordinates (0..1). */
+  cx: number;
+  cy: number;
+  confidence?: number;
+}
+
+export interface ReframeSegment {
+  beatId?: string | number;
+  /** Seconds on the source master timeline. */
+  start: number;
+  end: number;
+  layout: ReframeLayout;
+  /** Integer score on a 0..100 scale. */
+  score?: number;
+  reasonCodes?: string[];
+  tracking?: ReframeTrackingPoint[];
+}
+
+export interface ReframePlan {
+  version: 1;
+  mode: "ai_multi";
+  sourceStart: number;
+  sourceEnd: number;
+  segments: ReframeSegment[];
+}
+
+export interface ClipReframe {
+  mode: ReframeMode;
+  status: ReframeStatus;
+  timeBase?: "master_absolute";
+  revision?: number;
+  inputFingerprint?: string;
+  requestId?: string;
+  jobId?: string | null;
+  planHash?: string;
+  plan?: ReframePlan;
+  overallScore?: number;
+  reasonCodes?: string[];
+  modelVersion?: string;
+  requestedAt?: number;
+  startedAt?: number;
+  completedAt?: number;
+  updatedAt?: number;
+  error?: { code?: string; message: string; at?: number } | string | null;
+}
+
 export interface Clip {
   id: string;
   episodeId: string;
   programTitle: string;
+  /** 완성 영상 직접 업로드로 만들어진 클립 — 분석·회차 없이 파일 자체가 산출물. 편집(트림·리프레임) 비대상. */
+  directUpload?: boolean;
+  /** 프로그램 링크 (직접 업로드 클립은 episodeId 가 없어 이 값으로 프로그램을 표시한다). */
+  programId?: string;
   title: string;
   /** 두 줄 제목 (2026-07-29): editor 오버레이 · 라인1 흰색 setup · 라인2 파란색 payoff. */
   titleLine1?: string;
@@ -247,6 +304,8 @@ export interface Clip {
   sourceRecommendationId?: string;
   /** Serialized editor decisions (revision JSON) — persisted on save, no render (plan §2.4). */
   editorState?: EditorState;
+  /** Beat-by-beat AI Fit/Fill analysis. Times always reference the source master. */
+  reframe?: ClipReframe;
   distributions: DistributionState[];
 }
 

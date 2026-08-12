@@ -5,6 +5,8 @@ import { Heart, MessageCircle, Send } from "lucide-react";
 import { ASPECTS, defaultElementSize, filterCss, overlayVisibleAt, sampleKeyframes, type CaptionStyle, type EditorState } from "@/lib/editor/presets";
 import { Movable, SnapGuides, InlineText, type Guides } from "@/components/editor/editor-overlay";
 import { frameUrl, frameOverlaySrc, type FrameTemplate } from "@/lib/data/api";
+import { sampleReframeFrame } from "@/lib/editor/reframe";
+import type { ClipReframe } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 /**
@@ -68,6 +70,8 @@ export function EditorPreview({
   posterApiBase,
   posterTime,
   frame,
+  reframe,
+  masterTime,
 }: {
   state: EditorState;
   update: (patch: Partial<EditorState>) => void;
@@ -87,6 +91,9 @@ export function EditorPreview({
   posterTime?: number;
   /** 선택된 프레임 템플릿 기하(%). 없으면 프레임 없이 기존 동작. */
   frame?: FrameTemplate | null;
+  /** Ready AI plan. Beat/tracking timestamps use source-master absolute seconds. */
+  reframe?: ClipReframe;
+  masterTime?: number;
 }) {
   const poster =
     posterMediaId && posterApiBase != null ? frameUrl(posterApiBase, posterMediaId, posterTime ?? 0) : undefined;
@@ -96,6 +103,11 @@ export function EditorPreview({
   // Overlay show-windows (startSec/endSec) are segment-relative, like trimIn/trimOut.
   const segT = currentTime ?? state.trimIn;
   const videoFilter = filterCss(state.tracks?.[0]?.filters);
+  const reframeFrame = sampleReframeFrame(reframe, masterTime ?? currentTime ?? state.trimIn);
+  const aiMode = reframe?.mode === "ai_multi";
+  const aiReady = aiMode && reframe.status === "ready";
+  const aiFill = aiReady && reframeFrame.layout === "fill";
+  const aiFit = aiMode && !aiFill;
   const stageRef = useRef<HTMLDivElement | null>(null);
   const bgRef = useRef<HTMLVideoElement | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
@@ -177,7 +189,7 @@ export function EditorPreview({
             프리뷰의 %/px 오버레이 좌표는 ASS 번인과 1:1 (PlayRes = output size). */}
         {videoUrl ? (
           <>
-            {state.bgType === "blur" && (
+            {!aiFill && state.bgType === "blur" && (
               <video
                 aria-hidden
                 ref={bgRef}
@@ -192,7 +204,7 @@ export function EditorPreview({
                 }}
               />
             )}
-            {state.bgType === "image" && state.bgImageDataUrl && (
+            {!aiFill && state.bgType === "image" && state.bgImageDataUrl && (
               // 크롭이 있으면 원본 이미지를 스케일업+오프셋해 크롭 영역만 프레임에 채운다.
               // 크롭이 없으면 기존 object-fit:cover(중앙 크롭) 동작.
               state.bgImageCrop ? (
@@ -261,15 +273,23 @@ export function EditorPreview({
               onClick={onTogglePlay}
               className={cn(
                 "absolute cursor-pointer",
-                // 축2 핏. 프레임이 있으면 그 프레임의 video.fit(레터박스 띠 기하까지 프레임이 소유),
-                // 없으면 **state.fit**(맞춤/채우기)을 따른다 — 예전엔 프레임 없을 때 contain 하드코딩이라
-                // 사용자가 세로형에 원본을 잘라 채우는(cover) 선택을 미리보기에서 볼 수 없었다.
-                frame
+                aiFill
+                  ? "inset-0 size-full object-cover"
+                  : aiFit && frame
+                  ? "object-contain"
+                  : aiFit
+                  ? "inset-0 size-full object-contain"
+                  : frame
                   ? (frame.video.fit === "contain" ? "object-contain" : "object-cover")
                   : `inset-0 size-full ${state.fit === "cover" ? "object-cover" : "object-contain"}`,
               )}
               style={
-                frame
+                aiFill
+                  ? {
+                      filter: videoFilter,
+                      objectPosition: `${reframeFrame.cx * 100}% ${reframeFrame.cy * 100}%`,
+                    }
+                  : frame
                   ? {
                       filter: videoFilter,
                       left: `${frame.video.x}%`, top: `${frame.video.y}%`,
@@ -281,7 +301,7 @@ export function EditorPreview({
             {/* 프레임 레이어 — 서버 meta.json 기하 그대로. 순서는 export 와 동일하게
                 bands(non-over) → overlay 조각 → over bands. 순서가 어긋나면 미리보기에서
                 로고가 지워지거나 캔바 글자가 되살아난다. */}
-            {frame && (
+            {frame && !aiFill && (
               <div className="pointer-events-none absolute inset-0">
                 {frame.bands.filter((b) => !b.over).map((b, i) => (
                   <div key={`b${i}`} className="absolute"
@@ -313,12 +333,12 @@ export function EditorPreview({
           </div>
         )}
 
-        <SnapGuides guides={guides} />
+        {!aiFill && <SnapGuides guides={guides} />}
 
         {/* title lines — draggable block, double-click a line to edit. Lines outside their
             show-window (startSec/endSec) hide with the playhead; the block stays mounted
             while selected so it remains editable. */}
-        {(state.titleLines.some((l) => overlayVisibleAt(l, segT)) ||
+        {!aiFill && (state.titleLines.some((l) => overlayVisibleAt(l, segT)) ||
           selected === "title" ||
           (editing != null && editing.startsWith("title:"))) && (
         <Movable
@@ -413,7 +433,7 @@ export function EditorPreview({
         )}
 
         {/* channel badge — draggable (vertical), double-click to rename */}
-        {state.showChannel && (
+        {!aiFill && state.showChannel && (
           <Movable
             xPct={50}
             yPct={state.channelY}
@@ -511,7 +531,7 @@ export function EditorPreview({
 
         {/* elements — draggable, double-click to edit text. Hidden outside their
             show-window unless selected/editing (so they stay grabbable mid-edit). */}
-        {state.elements.map((el) => {
+        {!aiFill && state.elements.map((el) => {
           const key = `el:${el.id}`;
           const kf = sampleKeyframes(el.keyframes, localT);
           if (!overlayVisibleAt(el, segT) && selected !== key && editing !== key) return null;
@@ -561,7 +581,7 @@ export function EditorPreview({
         })}
 
         {/* safe-area + mock Shorts UI */}
-        {state.showSafeArea && (
+        {!aiFill && state.showSafeArea && (
           <>
             <div className="pointer-events-none absolute inset-[6%] rounded border border-dashed border-white/40" />
             <div className="absolute bottom-[12%] right-3 flex flex-col items-center gap-3 text-white/80">

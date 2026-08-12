@@ -21,6 +21,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     fonts-noto-cjk \
     fontconfig \
+    libgl1 \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender1 \
     python3 \
     python3-venv \
     python3-dev \
@@ -54,6 +59,14 @@ COPY apps/server apps/server
 COPY core core
 COPY --from=deps /app/apps/server/node_modules /app/apps/server/node_modules
 COPY --from=pydeps /opt/corevenv /opt/corevenv
+# MediaPipe's model is intentionally not committed. The downloader verifies the pinned
+# upstream SHA-256, so a missing/corrupt model fails the image build instead of every job.
+RUN mkdir -p /opt/reframe-models \
+ && /opt/corevenv/bin/python -m core.reframe.download_model \
+      --output /opt/reframe-models/blaze_face_full_range.tflite \
+ && REFRAME_FACE_MODEL=/opt/reframe-models/blaze_face_full_range.tflite \
+      /opt/corevenv/bin/python -c \
+      "import cv2, mediapipe; from core.reframe.video import resolve_model_path, _mediapipe_detector; _, detector = _mediapipe_detector(resolve_model_path()); detector.close(); print('reframe detector smoke: ok')"
 # 렌더 폰트 — 서버 Dockerfile 과 동일 (Pretendard, ASS Fontname 매칭)
 COPY assets/fonts /usr/share/fonts/opentype/pretendard
 RUN fc-cache -f
@@ -63,6 +76,7 @@ ENV NODE_ENV=production
 # 없으면 시스템 파이썬으로 폴백해 의존성 없이 죽는다.
 ENV CORE_PYTHON=/opt/corevenv/bin/python
 ENV CORE_DIR=/app
+ENV REFRAME_FACE_MODEL=/opt/reframe-models/blaze_face_full_range.tflite
 
 WORKDIR /app/apps/server
 CMD ["npx", "tsx", "src/worker.ts", "--drain"]

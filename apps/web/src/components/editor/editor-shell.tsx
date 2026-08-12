@@ -5,7 +5,7 @@ import Link from "next/link";
 import { ArrowLeft, Save, Send, Info, Check, Sparkles, Film, Plus, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen } from "lucide-react";
 import { useAppData } from "@/lib/data/store";
 import { useToast } from "@/components/ui/toast";
-import { getStreamUrl, getMediaAnalysis, generateUploadMetadata, API_BASE, type AnalysisTranscriptSegment, type AnalysisScene , fetchShortsTemplates, type FrameTemplate } from "@/lib/data/api";
+import { getStreamUrl, getMediaAnalysis, generateUploadMetadata, API_BASE, ApiError, type AnalysisTranscriptSegment, type AnalysisScene , fetchShortsTemplates, type FrameTemplate } from "@/lib/data/api";
 import {
   applyTemplate,
   ensureTracks,
@@ -20,29 +20,44 @@ import { EditorPanel } from "@/components/editor/editor-panel";
 import { EditorTimeline } from "@/components/editor/editor-timeline";
 import { EditorAiPanel } from "@/components/editor/editor-ai-panel";
 import { TranscriptView } from "@/components/editor/transcript-view";
-import { RENDER_CHANNELS, type RenderChannel } from "@/lib/types";
+import {
+  resolvePendingTrimReframe,
+  type PendingTrimReframe,
+} from "@/lib/editor/reframe";
+import { RENDER_CHANNELS, type ReframeMode, type RenderChannel } from "@/lib/types";
 
 export function EditorShell({ clipId }: { clipId: string }) {
-  const { clips, recsForEpisode, mediaForEpisode, saveClipEditor, exportClip } = useAppData();
+  const {
+    clips,
+    media,
+    recsForEpisode,
+    mediaForEpisode,
+    saveClipEditor,
+    exportClip,
+    refreshClipReframe,
+    requestClipReframe,
+  } = useAppData();
   const { toast } = useToast();
   const clip = clips.find((c) => c.id === clipId);
+  const reframe = clip?.reframe;
+  const reframeMode = reframe?.mode ?? "basic";
 
   const title = clip?.title ?? "새 클립";
   const recs = clip ? recsForEpisode(clip.episodeId) : [];
 
-  // Real footage: the encoded clip video, else the episode's uploaded master — fetched as a
-  // signed GCS URL the player streams directly from Cloud Storage (no proxy in the byte path).
+  // Editing always starts from the source master. A rendered clip's mediaId is already baked;
+  // feeding that back into AI reframe would crop/overlay it a second time on the next export.
   const master = clip ? mediaForEpisode(clip.episodeId, "master") : undefined;
-  const mediaId = clip?.mediaId ?? master?.id;
-  // Draft clips preview the MASTER (no render yet); confirmed clips preview their own baked
-  // file. Only master preview overlays live captions.
-  const previewingMaster = !clip?.mediaId;
+  const sourceAsset = clip?.sourceMediaId ? media.find((asset) => asset.id === clip.sourceMediaId) : master;
+  const sourceMediaId = clip?.sourceMediaId ?? sourceAsset?.id ?? master?.id;
+  const mediaId = sourceMediaId ?? clip?.mediaId;
+  const previewingMaster = Boolean(sourceMediaId);
   // ── 타임라인 좌표계 ──────────────────────────────────────────────────────────
   // 예전엔 세그먼트(추천 창)만 타임라인이 되고 trimIn/trimOut은 그 안쪽 상대 초였다.
   // 이제 '원본 전체'가 타임라인이 되고 trimIn/trimOut은 마스터 절대 초. AI 추천 창은
   // [recStart, recEnd]로 별도 하이라이트만 표시하고, 사용자는 그 밖까지 트림을 확장/축소할 수 있다.
   const masterDuration = previewingMaster
-    ? Math.max(1, Number(master?.durationSec ?? clip?.endTime ?? clip?.durationSec ?? 40))
+    ? Math.max(1, Number(sourceAsset?.durationSec ?? master?.durationSec ?? clip?.endTime ?? clip?.durationSec ?? 40))
     : Math.max(1, Number(clip?.durationSec ?? 40));
   const duration = masterDuration;
   // AI 추천 원본 창은 소스 추천 엔티티에서 가져온다 — clip.startTime/endTime이 저장 시
@@ -135,6 +150,7 @@ export function EditorShell({ clipId }: { clipId: string }) {
   );
   const [saved, setSaved] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [reframeBusy, setReframeBusy] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [exportElapsed, setExportElapsed] = useState(0);
   // 키프레임 선택 상태 (타임라인 다이아몬드 ↔ 속성 패널 공유, C1).
@@ -157,6 +173,7 @@ export function EditorShell({ clipId }: { clipId: string }) {
     : exportElapsed < 8 ? "리프레이밍(9:16 등)"
     : "인코딩(H.264)";
   const rendered = clip?.status === "ready" || clip?.status === "published";
+  const aiReframeNotReady = reframeMode === "ai_multi" && reframe?.status !== "ready";
 
   // ── F3: which destination this export renders for ───────────────────────────
   //
@@ -182,6 +199,13 @@ export function EditorShell({ clipId }: { clipId: string }) {
   }, [clip?.id, clip?.targetChannel]);
 
   const preset = channel ? RENDER_CHANNELS[channel] : null;
+  // AI output is always vertical, but that must not overwrite the operator's Basic layout.
+  // The server independently enforces 9:16 for ai_multi; this effective state keeps preview
+  // and controls honest while preserving state.aspect for a later switch back to Basic.
+  const displayState = useMemo(
+    () => (reframeMode === "ai_multi" && state.aspect !== "9:16" ? { ...state, aspect: "9:16" as const } : state),
+    [reframeMode, state],
+  );
 
   // Operator's manual 종횡비 pick beats the preset (aspectOverrideRef). Without this, the
   // force-sync effect below reverts every layout-tab aspect click instantly, so on the common
@@ -200,15 +224,17 @@ export function EditorShell({ clipId }: { clipId: string }) {
   // an explicit operator override is honored by that same precedence, so it stays consistent.
   // No-op while channel is "" — which is why existing clips (no targetChannel) are untouched.
   useEffect(() => {
+    if (reframeMode === "ai_multi") return;
     if (preset && !aspectOverrideRef.current && state.aspect !== preset.aspect) {
       update({ aspect: preset.aspect });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [preset?.aspect, state.aspect]);
+  }, [preset?.aspect, reframeMode, state.aspect]);
 
   // Layout tab writes through this: an aspect patch is an explicit operator override, so it
   // must stick against the preset force-sync. All other patches pass straight through.
   const panelUpdate = (patch: Partial<EditorState>) => {
+    if (reframeMode === "ai_multi" && "aspect" in patch && patch.aspect !== "9:16") return;
     if ("aspect" in patch) aspectOverrideRef.current = true;
     update(patch);
   };
@@ -219,14 +245,19 @@ export function EditorShell({ clipId }: { clipId: string }) {
   // ("새 클립", 40s) and 확정(렌더) would bake a wrong cut. Only auto-reset while the
   // operator hasn't edited yet (canUndo), so in-flight edits are never clobbered.
   const hydratedClipId = useRef<string | undefined>(undefined);
+  const hydratedTrimSignatureRef = useRef<string | undefined>(undefined);
   useEffect(() => {
     if (!clip || hydratedClipId.current === clip.id) return;
     hydratedClipId.current = clip.id;
     if (clip.editorState) {
-      reset(ensureTracks(clip.editorState, duration, previewingMaster ? recStart : 0));
+      const restored = ensureTracks(clip.editorState, duration, previewingMaster ? recStart : 0);
+      hydratedTrimSignatureRef.current = `${clip.id}:${restored.trimIn.toFixed(3)}:${restored.trimOut.toFixed(3)}`;
+      reset(restored);
       setSaved(true);
     } else if (!canUndo) {
-      reset(makeInitialEditorState(clip.title, duration, recStart, recEnd, clip.titleLine1, clip.titleLine2, clip.programTitle));
+      const initial = makeInitialEditorState(clip.title, duration, recStart, recEnd, clip.titleLine1, clip.titleLine2, clip.programTitle);
+      hydratedTrimSignatureRef.current = `${clip.id}:${initial.trimIn.toFixed(3)}:${initial.trimOut.toFixed(3)}`;
+      reset(initial);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [clip?.id]);
@@ -252,6 +283,138 @@ export function EditorShell({ clipId }: { clipId: string }) {
       setSaving(false);
     }
   }
+
+  const latestStateRef = useRef(state);
+  latestStateRef.current = state;
+  const reframeRequestInFlightRef = useRef(false);
+  const requestedReframeModeRef = useRef<ReframeMode | null>(null);
+  const pendingTrimReframeRef = useRef<PendingTrimReframe | null>(null);
+  const flushPendingTrimReframeRef = useRef<() => void>(() => undefined);
+
+  const runReframeRequest = useCallback(async (mode: ReframeMode, retry = false) => {
+    if (!clip || reframeRequestInFlightRef.current) return;
+    reframeRequestInFlightRef.current = true;
+    requestedReframeModeRef.current = mode;
+    if (mode === "basic") pendingTrimReframeRef.current = null;
+    if (mode === "ai_multi") setLeftTab("ai");
+    setReframeBusy(true);
+    try {
+      // The planner fingerprints the persisted trim. Save first so a mode change/retry never
+      // analyzes yesterday's window. AI output aspect is server-forced; Basic aspect is kept.
+      if (mode === "ai_multi") {
+        const snapshot = latestStateRef.current;
+        await saveClipEditor(clip.id, snapshot);
+        if (latestStateRef.current === snapshot) setSaved(true);
+      }
+      await requestClipReframe(clip.id, mode, retry);
+    } catch (error) {
+      // Store already merges body.reframe for non-2xx responses. A GET closes any gap for
+      // older servers that omitted that field, then the actionable server message is shown.
+      await refreshClipReframe(clip.id).catch(() => undefined);
+      toast({
+        title: mode === "ai_multi" ? "AI 리프레임 요청 실패" : "기본 모드 전환 실패",
+        description: error instanceof Error ? error.message : "요청을 처리하지 못했습니다.",
+        tone: "error",
+      });
+    } finally {
+      requestedReframeModeRef.current = null;
+      reframeRequestInFlightRef.current = false;
+      setReframeBusy(false);
+      // A trim debounce may have expired while this request was active. Re-check it after
+      // releasing the synchronous guard instead of silently dropping that newer trim.
+      queueMicrotask(() => flushPendingTrimReframeRef.current());
+    }
+  }, [clip, requestClipReframe, refreshClipReframe, saveClipEditor, toast]);
+  const runReframeRequestRef = useRef(runReframeRequest);
+  runReframeRequestRef.current = runReframeRequest;
+
+  // Queue/running are transient; stale is polled too so another editor/session's re-analysis
+  // is picked up. A stale result itself is never reused — POST below starts a fresh fingerprint.
+  useEffect(() => {
+    if (!clip || reframeMode !== "ai_multi") return;
+    const status = reframe?.status;
+    if (status !== "queued" && status !== "running" && status !== "stale") return;
+    let stopped = false;
+    const poll = async () => {
+      try {
+        await refreshClipReframe(clip.id);
+      } catch {
+        // The next interval retries; transient polling failures must not discard the plan.
+      }
+    };
+    const timer = window.setInterval(() => { if (!stopped) void poll(); }, 1800);
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+    };
+  }, [clip?.id, reframeMode, reframe?.status, refreshClipReframe]);
+
+  // If the server reports stale after an external edit, request the current fingerprint once.
+  const staleRequestRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!clip || reframeMode !== "ai_multi" || reframe?.status !== "stale" || reframeBusy) return;
+    const key = `${clip.id}:${reframe.inputFingerprint ?? reframe.revision ?? "stale"}:${state.trimIn}:${state.trimOut}`;
+    if (staleRequestRef.current === key) return;
+    staleRequestRef.current = key;
+    void runReframeRequest("ai_multi");
+  }, [clip, reframeMode, reframe?.status, reframe?.inputFingerprint, reframe?.revision, reframeBusy, runReframeRequest, state.trimIn, state.trimOut]);
+
+  // Trim drag/keyboard edits settle before save+re-analysis. Initial hydration is ignored.
+  const trimSignature = `${state.trimIn.toFixed(3)}:${state.trimOut.toFixed(3)}`;
+  const trimReframeContextRef = useRef({
+    key: `${clip?.id ?? ""}:${trimSignature}`,
+    aiMode: false,
+  });
+  trimReframeContextRef.current = {
+    key: `${clip?.id ?? ""}:${trimSignature}`,
+    aiMode: reframeMode === "ai_multi" && requestedReframeModeRef.current !== "basic",
+  };
+
+  const flushPendingTrimReframe = useCallback(() => {
+    const pending = pendingTrimReframeRef.current;
+    const context = trimReframeContextRef.current;
+    const decision = resolvePendingTrimReframe(
+      pending,
+      context.key,
+      context.aiMode,
+      reframeRequestInFlightRef.current,
+      Date.now(),
+    );
+    if (decision === "wait") return;
+    pendingTrimReframeRef.current = null;
+    if (decision === "run") void runReframeRequestRef.current("ai_multi");
+  }, []);
+  flushPendingTrimReframeRef.current = flushPendingTrimReframe;
+
+  const previousTrimRef = useRef(`${clip?.id ?? ""}:${trimSignature}`);
+  useEffect(() => {
+    if (!clip) {
+      pendingTrimReframeRef.current = null;
+      return;
+    }
+    const key = `${clip.id}:${trimSignature}`;
+    if (reframeMode !== "ai_multi" || requestedReframeModeRef.current === "basic") {
+      pendingTrimReframeRef.current = null;
+      previousTrimRef.current = key;
+      return;
+    }
+    if (previousTrimRef.current === key) return;
+    if (hydratedTrimSignatureRef.current === key) {
+      hydratedTrimSignatureRef.current = undefined;
+      previousTrimRef.current = key;
+      pendingTrimReframeRef.current = null;
+      return;
+    }
+    const switchedClip = !previousTrimRef.current.startsWith(`${clip.id}:`);
+    previousTrimRef.current = key;
+    if (switchedClip) {
+      pendingTrimReframeRef.current = null;
+      return;
+    }
+    pendingTrimReframeRef.current = { key, dueAt: Date.now() + 1000 };
+    const timer = window.setTimeout(() => flushPendingTrimReframeRef.current(), 1000);
+    return () => window.clearTimeout(timer);
+  }, [clip?.id, reframeMode, trimSignature]);
 
   // Always-fresh handle to save() for the keydown listener below. The listener isn't
   // re-bound on every edit (its deps deliberately exclude state), so calling save()
@@ -282,11 +445,21 @@ export function EditorShell({ clipId }: { clipId: string }) {
         tone: "done",
       });
     } catch (e) {
-      toast({
-        title: "렌더 실패",
-        description: e instanceof Error ? e.message : "클립 확정(렌더)에 실패했습니다. 다시 시도해 주세요.",
-        tone: "error",
-      });
+      if (e instanceof ApiError && e.code === "reframe_not_ready") {
+        await refreshClipReframe(clip.id).catch(() => undefined);
+        setLeftTab("ai");
+        toast({
+          title: "AI 리프레임 분석이 아직 준비되지 않았습니다",
+          description: "분석 완료 후 다시 렌더하거나, AI 패널에서 재분석·기본 모드를 선택해 주세요.",
+          tone: "error",
+        });
+      } else {
+        toast({
+          title: "렌더 실패",
+          description: e instanceof Error ? e.message : "클립 확정(렌더)에 실패했습니다. 다시 시도해 주세요.",
+          tone: "error",
+        });
+      }
     } finally {
       setExporting(false);
     }
@@ -382,11 +555,41 @@ export function EditorShell({ clipId }: { clipId: string }) {
     const v = videoEl;
     if (!v) return;
     const onTime = () => setVideoTime(v.currentTime);
+    let videoFrameId: number | undefined;
+    let animationFrameId: number | undefined;
+    const onVideoFrame = () => {
+      onTime();
+      videoFrameId = v.requestVideoFrameCallback(onVideoFrame);
+    };
+    const onAnimationFrame = () => {
+      onTime();
+      animationFrameId = window.requestAnimationFrame(onAnimationFrame);
+    };
+    const stopFrameSampling = () => {
+      if (videoFrameId != null) v.cancelVideoFrameCallback(videoFrameId);
+      if (animationFrameId != null) window.cancelAnimationFrame(animationFrameId);
+      videoFrameId = undefined;
+      animationFrameId = undefined;
+    };
+    const startFrameSampling = () => {
+      stopFrameSampling();
+      if (typeof v.requestVideoFrameCallback === "function") {
+        videoFrameId = v.requestVideoFrameCallback(onVideoFrame);
+      } else {
+        animationFrameId = window.requestAnimationFrame(onAnimationFrame);
+      }
+    };
     v.addEventListener("timeupdate", onTime);
     v.addEventListener("seeked", onTime);
+    v.addEventListener("play", startFrameSampling);
+    v.addEventListener("pause", stopFrameSampling);
+    if (!v.paused) startFrameSampling();
     return () => {
+      stopFrameSampling();
       v.removeEventListener("timeupdate", onTime);
       v.removeEventListener("seeked", onTime);
+      v.removeEventListener("play", startFrameSampling);
+      v.removeEventListener("pause", stopFrameSampling);
     };
   }, [videoEl]);
 
@@ -543,9 +746,13 @@ export function EditorShell({ clipId }: { clipId: string }) {
           </button>
           <button
             onClick={confirmExport}
-            disabled={exporting}
+            disabled={exporting || aiReframeNotReady}
             title={
-              preset
+              aiReframeNotReady
+                ? "AI 리프레임 분석 완료 후 렌더할 수 있습니다. 실패했다면 AI 패널에서 재분석하거나 기본 모드를 선택하세요."
+                : reframeMode === "ai_multi"
+                  ? `AI 다중 레이아웃을 9:16으로 렌더합니다${preset ? ` · ${preset.label} 최대 ${preset.maxSec}초` : ""}.`
+                : preset
                 ? `${preset.label} 프리셋으로 렌더합니다 — ${preset.aspect}, 최대 ${preset.maxSec}초 (렌더는 여기서 단 한 번 — plan §2.4)`
                 : `현재 종횡비(${state.aspect})로 구간 전체를 렌더합니다 — 길이 상한 없음 (렌더는 여기서 단 한 번 — plan §2.4)`
             }
@@ -630,6 +837,10 @@ export function EditorShell({ clipId }: { clipId: string }) {
                 sourceRec={sourceRec}
                 currentTitle={state.titleLines[0]?.text ?? ""}
                 onApplyTitle={applyTitle}
+                reframe={reframe}
+                reframeBusy={reframeBusy}
+                onReanalyze={(retry) => void runReframeRequest("ai_multi", retry)}
+                onUseBasic={() => void runReframeRequest("basic")}
               />
             )}
           </aside>
@@ -650,7 +861,7 @@ export function EditorShell({ clipId }: { clipId: string }) {
         <div className="flex min-w-0 flex-1 items-center justify-center overflow-auto bg-zinc-900 p-4 sm:p-6">
           <EditorPreview
             frame={frame}
-            state={state}
+            state={displayState}
             update={update}
             videoUrl={videoUrl}
             videoRef={setVideoEl}
@@ -659,6 +870,8 @@ export function EditorShell({ clipId }: { clipId: string }) {
             caption={captionText}
             hasTranscript={!!transcript}
             currentTime={videoTime}
+            masterTime={videoTime + clipStartAbs}
+            reframe={reframe}
             posterMediaId={mediaId}
             posterApiBase={API_BASE}
             /* poster는 AI 추천 시작 프레임(마스터 절대 초) 하나로 고정 — trimIn이 바뀔 때마다
@@ -683,7 +896,7 @@ export function EditorShell({ clipId }: { clipId: string }) {
             {/* frames·currentTime·onSeek 은 패널이 이미 받는 prop 인데 안 넘겨서 죽어 있었다 —
                 프레임 템플릿 목록·"현재 시간에 키프레임 추가"·키프레임 탐색이 여기에 달려 있다. */}
             <EditorPanel
-              state={state}
+              state={displayState}
               update={panelUpdate}
               applyTpl={applyTpl}
               frames={frames}
@@ -692,6 +905,14 @@ export function EditorShell({ clipId }: { clipId: string }) {
               currentTime={videoTime}
               onSeek={(sec) => {
                 if (videoEl) videoEl.currentTime = sec;
+              }}
+              reframe={reframe}
+              reframeBusy={reframeBusy}
+              onReframeModeChange={(mode) => {
+                if (mode !== reframeMode) void runReframeRequest(mode);
+                else if (mode === "ai_multi" && (reframe?.status === "failed" || reframe?.status === "stale")) {
+                  void runReframeRequest(mode, reframe.status === "failed");
+                }
               }}
             />
           </aside>
@@ -726,6 +947,7 @@ export function EditorShell({ clipId }: { clipId: string }) {
           recWindow={previewingMaster ? { start: recStart, end: recEnd } : undefined}
           // "첫 3초 훅" 토글의 실제 렌더 가능 여부 — clip 에 hook 시각이 있어야 프리롤이 붙는다.
           hookAvailable={typeof clip?.hookTimeSec === "number"}
+          reframe={reframe}
         />
         {/* 서버 렌더는 tracks[0] 만 합성한다(renderClipMedia·export). 추가 트랙은 저장은 되지만
             결과물에 절대 나오지 않아, 될 것처럼 보이지 않게 비활성 + 사유를 붙였다. */}

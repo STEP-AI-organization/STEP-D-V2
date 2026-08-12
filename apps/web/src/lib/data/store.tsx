@@ -22,12 +22,14 @@ import {
 } from "react";
 import type {
   Clip,
+  ClipReframe,
   Connections,
   Episode,
   InboxItem,
   JobEvent,
   MediaAsset,
   RenderChannel,
+  ReframeMode,
   Program,
   Recommendation,
 } from "@/lib/types";
@@ -35,8 +37,10 @@ import type { DistributionChannel } from "@/lib/constants";
 import { type InitialData } from "@/lib/data/repository";
 import {
   API_BASE,
+  ApiError,
   fetchState,
   uploadVideo as apiUploadVideo,
+  uploadFinishedClip as apiUploadFinishedClip,
   importYoutubeVideo as apiImportYoutubeVideo,
   createProgram as apiCreateProgram,
   updateProgram as apiUpdateProgram,
@@ -50,6 +54,8 @@ import {
   selectRecommendationThumbnail as selectRecommendationThumbnailApi,
   retryDist,
   saveClipEditor as saveClipEditorApi,
+  getClipReframe as getClipReframeApi,
+  requestClipReframe as requestClipReframeApi,
   fetchYouTubeChannels,
   fetchMetaAccounts,
   fetchTikTokAccounts,
@@ -153,6 +159,10 @@ interface AppData extends AppState {
   exportClip: (clipId: string, channel?: RenderChannel) => Promise<ExportResult>;
   /** Persist the editor's decision blob on a clip (metadata only, no render). */
   saveClipEditor: (clipId: string, editorState: EditorState) => Promise<void>;
+  /** Read the server-computed AI reframe state and merge it into the local clip. */
+  refreshClipReframe: (clipId: string) => Promise<ClipReframe>;
+  /** Select Basic or queue/retry AI multi reframe analysis. */
+  requestClipReframe: (clipId: string, mode: ReframeMode, retry?: boolean) => Promise<ClipReframe>;
   /** 실패하면 낙관적 반려를 되돌린 뒤 **reject 한다** — 호출부가 사유를 사용자에게 보일 수 있게. */
   rejectRecommendation: (id: string, reason: string) => Promise<void>;
   selectThumbnail: (recId: string, thumbId: string) => Promise<void>;
@@ -161,6 +171,12 @@ interface AppData extends AppState {
   /** Upload a real video → creates an episode + recommendations. Returns episodeId.
    *  `fast=true` → 자막만 · 시각 분석 스킵 (빠른 분석 모드). 기본 false = 정밀 분석. */
   uploadVideo: (file: File, programId: string, opts?: UploadVideoOptions) => Promise<string>;
+  /** 완성 영상 직접 업로드 → 회차·분석 없이 바로 배포 가능한 클립. Returns clipId. */
+  uploadFinishedClip: (
+    file: File,
+    programId: string,
+    opts?: { title?: string; onProgress?: (pct: number) => void },
+  ) => Promise<string>;
   /** Queue a YouTube URL import — the worker downloads then analyzes. Returns episodeId. */
   importYoutube: (url: string, programId: string, title?: string, fast?: boolean) => Promise<string>;
   /** Create a program (content root). Returns the new programId. */
@@ -289,6 +305,9 @@ export function AppDataProvider({
   // the epoch before the fetch and skips the wholesale replace if it moved (the next
   // scheduled poll picks up fresh server state).
   const mutationEpochRef = useRef(0);
+  // Per-clip generation: a slow GET started before POST must not overwrite the newer mode/job.
+  const reframeEpochRef = useRef(new Map<string, number>());
+  const reframeReadRef = useRef(new Map<string, number>());
 
   const applyServerState = useCallback((s: Awaited<ReturnType<typeof fetchState>>) => {
     // 옛/불완전 clip에 distributions·기타 배열 필드가 없으면 빈 배열로 정규화 —
@@ -636,6 +655,21 @@ export function AppDataProvider({
     [refresh],
   );
 
+  const uploadFinishedClip = useCallback(
+    async (
+      file: File,
+      programId: string,
+      opts: { title?: string; onProgress?: (pct: number) => void } = {},
+    ): Promise<string> => {
+      if (!connectedRef.current) throw new Error("영상 업로드는 백엔드 서버가 필요합니다 (pnpm dev:server).");
+      const res = await apiUploadFinishedClip(file, programId, opts);
+      await refresh();
+      if (!res.clip?.id) throw new Error("클립 생성 응답이 비어 있습니다.");
+      return res.clip.id;
+    },
+    [refresh],
+  );
+
   const importYoutube = useCallback(
     async (url: string, programId: string, title?: string, fast?: boolean): Promise<string> => {
       if (!connectedRef.current) throw new Error("YouTube 가져오기는 백엔드 서버가 필요합니다 (pnpm dev:server).");
@@ -761,6 +795,68 @@ export function AppDataProvider({
     }
   }, []);
 
+  const mergeClipReframe = useCallback((clipId: string, reframe: ClipReframe) => {
+    setState((prev) => ({
+      ...prev,
+      clips: prev.clips.map((clip) => (clip.id === clipId ? { ...clip, reframe } : clip)),
+    }));
+    return reframe;
+  }, []);
+
+  const refreshClipReframe = useCallback(async (clipId: string): Promise<ClipReframe> => {
+    if (!connectedRef.current) {
+      const reframe = stateRef.current.clips.find((clip) => clip.id === clipId)?.reframe
+        ?? { mode: "basic" as const, status: "idle" as const };
+      return mergeClipReframe(clipId, reframe);
+    }
+    const epoch = reframeEpochRef.current.get(clipId) ?? 0;
+    const readId = (reframeReadRef.current.get(clipId) ?? 0) + 1;
+    reframeReadRef.current.set(clipId, readId);
+    const { reframe } = await getClipReframeApi(clipId);
+    if (
+      (reframeEpochRef.current.get(clipId) ?? 0) !== epoch
+      || reframeReadRef.current.get(clipId) !== readId
+    ) {
+      return stateRef.current.clips.find((clip) => clip.id === clipId)?.reframe ?? reframe;
+    }
+    return mergeClipReframe(clipId, reframe);
+  }, [mergeClipReframe]);
+
+  const requestClipReframe = useCallback(async (
+    clipId: string,
+    mode: ReframeMode,
+    retry = false,
+  ): Promise<ClipReframe> => {
+    mutationEpochRef.current++;
+    const epoch = (reframeEpochRef.current.get(clipId) ?? 0) + 1;
+    reframeEpochRef.current.set(clipId, epoch);
+    reframeReadRef.current.set(clipId, (reframeReadRef.current.get(clipId) ?? 0) + 1);
+    if (!connectedRef.current) {
+      const reframe: ClipReframe = mode === "basic"
+        ? { mode: "basic", status: "idle" }
+        : { mode: "ai_multi", status: "failed", error: { code: "server_required", message: "AI 분석은 서버 연결이 필요합니다." } };
+      return mergeClipReframe(clipId, reframe);
+    }
+    try {
+      const { reframe } = await requestClipReframeApi(clipId, mode, retry);
+      if ((reframeEpochRef.current.get(clipId) ?? 0) !== epoch) {
+        return stateRef.current.clips.find((clip) => clip.id === clipId)?.reframe ?? reframe;
+      }
+      return mergeClipReframe(clipId, reframe);
+    } catch (error) {
+      // retry_required / queue_failed responses carry the authoritative state even though
+      // their HTTP status is non-2xx. Keep AI mode/status visible instead of falling back to
+      // a stale local Basic state while surfacing the error to the caller.
+      const body = error instanceof ApiError && error.body && typeof error.body === "object"
+        ? error.body as { reframe?: ClipReframe }
+        : undefined;
+      if (body?.reframe && (reframeEpochRef.current.get(clipId) ?? 0) === epoch) {
+        mergeClipReframe(clipId, body.reframe);
+      }
+      throw error;
+    }
+  }, [mergeClipReframe]);
+
   const value = useMemo<AppData>(() => {
     const inbox = deriveInbox(state);
     return {
@@ -782,10 +878,13 @@ export function AppDataProvider({
       adoptRecommendation,
       exportClip,
       saveClipEditor,
+      refreshClipReframe,
+      requestClipReframe,
       rejectRecommendation,
       selectThumbnail,
       retryDistribution,
       uploadVideo,
+      uploadFinishedClip,
       importYoutube,
       createProgram,
       updateProgram,
@@ -802,10 +901,13 @@ export function AppDataProvider({
     adoptRecommendation,
     exportClip,
     saveClipEditor,
+    refreshClipReframe,
+    requestClipReframe,
     rejectRecommendation,
     selectThumbnail,
     retryDistribution,
     uploadVideo,
+    uploadFinishedClip,
     importYoutube,
     createProgram,
     updateProgram,

@@ -6,4 +6,11 @@ node_modules
 dist
 .next
 storage
+tmp
+**/.venv
+**/.venv*
+**/__pycache__
+**/.pytest_cache
+**/*.pyc
+core/.models
 *.md

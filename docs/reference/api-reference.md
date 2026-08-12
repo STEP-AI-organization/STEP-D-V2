@@ -1,6 +1,6 @@
 # @stepd/server HTTP API 레퍼런스
 
-> 실측: **2026-08-12 · 라우트 204개** (GET 85 · POST 81 · DELETE 22 · PATCH 13 · PUT 3) · `apps/server/src/index.ts` 기준 — 라우트 추가 시 이 문서도 갱신.
+> 실측: **2026-08-12 · 라우트 210개** (GET 87 · POST 84 · DELETE 22 · PATCH 14 · PUT 3) · `apps/server/src/index.ts` 기준 — 라우트 추가 시 이 문서도 갱신.
 > 프론트 대응 함수는 `apps/web/src/lib/data/api.ts` 기준. 데이터 구조는 [data-model.md](data-model.md),
 > 큐·워커 동작은 [../ops/worker-queue.md](../ops/worker-queue.md) 참고.
 
@@ -78,6 +78,8 @@ API 키(`api-keys.ts`). **화이트리스트(`API_KEY_ROUTES`)에 올린 라우�
 | `POST /api/media/upload-init` | 대용량 업로드 1단계: GCS resumable 세션 발급 | `{ programId, filename, contentType }` → `{ mode:"resumable", mediaId, objectPath, sessionUrl }`. **GCS 미설정(로컬)이면 `mode:"multipart"`** — 클라이언트가 `/upload`로 폴백 | `uploadVideo` |
 | `POST /api/media/finalize` | 대용량 업로드 2단계: GCS에 올라간 파일로 회차·마스터 미디어 생성 + `content.analyze` 인큐 | `{ mediaId, objectPath(필수), programId, title, filename, contentType, size }` → `{ media, episode, recommendations:[] }`. GCS 모드 전용. probe/썸네일은 서명 URL로 range-read | `uploadVideo` |
 | `POST /api/media/upload` | (레거시) multipart 단일 요청 업로드 — 로컬 dev용 | FormData `file(필수), programId, title` → finalize와 동일 응답. Cloud Run ~32 MB 요청 캡 대상 | `uploadVideo` (로컬 폴백) |
+| `POST /api/media/clip-finalize` | **완성 영상 직접 업로드**(GCS 2단계) — 회차·분석 없이 배포 가능한 클립 생성 | upload-init 이 준 `{mediaId, objectPath, programId, title}` → `{ clip, media }`. rendered=true·mediaId 세팅으로 배포 흐름에 바로 얹힌다(파일 자체가 산출물) | `uploadFinishedClip` |
+| `POST /api/media/clip-upload` | 완성 영상 직접 업로드(로컬 multipart 폴백) | FormData `file(필수), programId, title` → clip-finalize 와 동일 응답 | `uploadFinishedClip` (로컬 폴백) |
 | `GET /api/media/:id/stream` | 영상 스트리밍 | HTTP Range. Range 없어도 **항상 206 + 최대 4 MB 청크**(프록시 500 방지) | `mediaUrl`로 URL 조립 |
 | `GET /api/media/:id/thumb` | 썸네일 JPEG | 200 / 404 | `mediaUrl`로 URL 조립 |
 | `GET /api/media/:id/analysis` | AI 콘텐츠 분석 결과 (STT·씬·쇼츠) | → `{ status: pending\|done\|failed, data, error }`, 없으면 404 `{status:"none"}`. `data`에 `genre`(감지 장르)·`framesBase`(프레임 저장 경로) 추가, 실패 시엔 완료된 단계까지의 부분 결과(`data.partial=true` + transcript/scenes)가 담길 수 있다 | `getMediaAnalysis` |
@@ -180,7 +182,9 @@ Vision으로 분석하고, 프로그램별 스타일 프로파일을 학습해 �
 | `POST /api/recommendations/:id/adopt` | 추천 채택 → ffmpeg 트림·인코딩으로 실제 클립 생성 | → `{ clipId, clip }`. 마스터 미디어+ffmpeg 있으면 실 인코딩(GCS는 서명 URL로 구간만 fetch), 없으면 메타데이터만 | `adoptRec` |
 | `POST /api/recommendations/:id/reject` | 추천 거절 | `{ reason }` (기본 "기타") → `{ ok }` | `rejectRec` |
 | `PATCH /api/recommendations/:id/thumbnail` | 생성된 썸네일 변형 중 하나를 선택 | `{ variantId(필수) }` → `{ recommendation }`. **정확히 하나만** chosen으로 마킹돼서, 이후 채택이 안정적·영속적인 결정을 갖는다 | `selectRecommendationThumbnail` |
-| `POST /api/clips/:id/export` | **클립 렌더 — ffmpeg가 결과물을 굽는 유일한 지점** | `{ channel? }` → `{ clipId, clip, cached, preset, capped, hookPreroll }`. 운영자 결정(segment + aspect + editorState)의 **render-revision 해시로 캐시**돼서, 같은 결정을 재확인하면 재인코딩 없이 기존 렌더를 돌려준다(멱등) | `exportClip` |
+| `GET /api/clips/:id/reframe` | 동적 9:16 리프레임 상태 조회. 입력 구간/원본이 바뀌면 `stale`을 보고하며 자동 큐잉하지 않는다 | → `{ clipId, reframe }`. 상태 `idle/queued/running/ready/stale/failed`; plan 시간은 마스터 절대 초, 추적 좌표는 0..1 | `getClipReframe` |
+| `POST /api/clips/:id/reframe` | 기본 Fit 또는 AI Beat별 Fit/Fill 모드 선택·분석 큐잉 | `{ mode:"basic"|"ai_multi", retry? }` → `{ clipId, reframe, reused, queued }`. 동일 입력 ready/진행 중 요청은 재사용하며 실패 재시도는 `retry:true` 필요 | `requestClipReframe` |
+| `POST /api/clips/:id/export` | **클립 렌더 — ffmpeg가 결과물을 굽는 유일한 지점** | `{ channel? }` → `{ clipId, clip, cached, preset, capped, hookPreroll }`. AI 모드는 현재 입력과 일치하는 ready plan 없이는 `409 reframe_not_ready`; revision에 모드·plan hash가 포함된다 | `exportClip` |
 | `POST /api/clips/:id/regenerate-titles` | 제목 후보 재생성 — 사용자 추가 지시 반영 | `{ prompt }`(예: "더 자극적으로", "이모지 넣지 마") → 후보 4~5개. **저장하지 않는다**(에디터 세션 로컬). 클립에 자막 없으면 409 | `regenerateTitles` |
 | `POST /api/clips/:id/generate-metadata` | 업로드용 title/description/tags를 자막 근거로 생성 | → 메타데이터 객체. **저장 X** — 프론트가 `state.uploadMeta`에 얹는다. 자막 없으면 409 | `generateUploadMetadata` |
 | `POST /api/distributions/publish` | 배포 요청 | `{ clipIds(배열, 필수), channel(필수), reserveDate?, scheduled?, platforms? }` → `{ ok }` · 누락 400 `bad_request`. **`channel:"youtube"`는 실업로드 잡(`distribution.publish`)을 큐잉한다.** 게이트 OFF면 **어떤 부작용도 내기 전에** 409 `{ error:"upload_disabled" }` — distribution 상태를 손대지 않는다. 업로드할 채널이 없으면 409 `no_publish_channel`. Meta·SMR은 여전히 상태 기록만 | `publishClips` |

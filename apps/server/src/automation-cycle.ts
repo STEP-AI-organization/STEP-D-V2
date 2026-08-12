@@ -32,6 +32,7 @@ import { decidePublish, planCycle, selectCandidates, type AutomationRule } from 
 import { eligibility, type ChannelRule } from "./channel-rules.ts";
 import { newId } from "./pipeline.ts";
 import { clipGate, dispatchPublish } from "./publish-dispatch.ts";
+import { basicReframeState } from "./reframe.ts";
 
 export interface CycleReport {
   tenantScoped: true;
@@ -119,6 +120,8 @@ export async function runAutomationCycle(): Promise<CycleReport> {
           endTime: rec.endTime,
           sourceMediaId: master?.id,
           sourceRecommendationId: rec.id,
+          beatIds: Array.isArray(rec.beatIds) ? rec.beatIds : [],
+          reframe: basicReframeState(),
           distributions: [],
           /** 어느 규칙이 만든 미디어인지 — 사고 추적·롤백 대상 선별에 쓴다. */
           automationRuleId: rule.id,

@@ -4,7 +4,7 @@
  * standalone — this module is only used once a live server is detected.
  */
 import type { DistributionChannel } from "@/lib/constants";
-import type { Program, ProgramStatus, RenderChannel } from "@/lib/types";
+import type { ClipReframe, Program, ProgramStatus, ReframeMode, RenderChannel } from "@/lib/types";
 import type { EditorState } from "@/lib/editor/presets";
 
 export const API_BASE =
@@ -28,7 +28,12 @@ export interface ServerState {
 
 /** 상태코드와 서버 메시지를 함께 들고 다니는 에러. `admin/src/api.ts` 와 같은 모양이다. */
 export class ApiError extends Error {
-  constructor(public status: number, message: string) {
+  constructor(
+    public status: number,
+    message: string,
+    public code?: string,
+    public body?: unknown,
+  ) {
     super(message);
     this.name = "ApiError";
   }
@@ -46,7 +51,21 @@ export class ApiError extends Error {
  * 같은 해법이 `admin/src/api.ts:20` 에 이미 있었다. 새로 만들지 않고 그 형태를 가져왔다.
  */
 async function json<T>(res: Response): Promise<T> {
-  if (!res.ok) throw new ApiError(res.status, await errorMessageOf(res));
+  if (!res.ok) {
+    const body = await res.json().catch(() => null) as {
+      message?: string;
+      error?: string | { code?: string; message?: string };
+      code?: string;
+    } | null;
+    const nested = body?.error && typeof body.error === "object" ? body.error : undefined;
+    const fallbackError = typeof body?.error === "string" ? body.error : undefined;
+    throw new ApiError(
+      res.status,
+      body?.message ?? nested?.message ?? fallbackError ?? `${res.status} ${res.statusText}`,
+      body?.code ?? nested?.code ?? fallbackError,
+      body,
+    );
+  }
   return (await res.json()) as T;
 }
 
@@ -460,6 +479,34 @@ export async function saveClipEditor(clipId: string, editorState: EditorState): 
   await json<{ ok: boolean }>(res);
 }
 
+export interface ClipReframeResponse {
+  clipId: string;
+  reframe: ClipReframe;
+}
+
+export interface RequestClipReframeResponse extends ClipReframeResponse {
+  reused: boolean;
+  queued: boolean;
+}
+
+export async function getClipReframe(clipId: string): Promise<ClipReframeResponse> {
+  return json(await fetch(`${API_BASE}/clips/${clipId}/reframe`, { cache: "no-store" }));
+}
+
+export async function requestClipReframe(
+  clipId: string,
+  mode: ReframeMode,
+  retry = false,
+): Promise<RequestClipReframeResponse> {
+  return json(
+    await fetch(`${API_BASE}/clips/${clipId}/reframe`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mode, ...(retry ? { retry: true } : {}) }),
+    }),
+  );
+}
+
 /** 에디터 '제목 후보' 탭의 '새로 생성' 배선 — 사용자 추가 지시(prompt)를 얹어 5개 재생성.
  *  결과는 세션 로컬(에디터에서만 보임) — 서버 저장 없음. 클릭 시 클립 제목만 갈아끼운다. */
 export async function regenerateTitles(clipId: string, prompt: string): Promise<string[]> {
@@ -584,6 +631,81 @@ export async function uploadVideo(
     throw new DuplicateEpisodeError(episodeNumber);
   }
   return json<UploadResult>(finalRes);
+}
+
+/** 직접 업로드한 완성 영상의 서버 응답 — 회차 없이 바로 배포 가능한 클립이 만들어진다. */
+export interface FinishedClipResult {
+  clip: { id: string; title: string; aspectRatio?: string; mediaId?: string } | null;
+  media: { id: string };
+}
+
+/**
+ * 편집자가 우리 도구 밖에서 만든 **완성 영상**을 올려 바로 배포 가능한 클립으로 만든다.
+ * 회차·분석 파이프라인을 태우지 않는다 — 파일 자체가 최종 산출물이다.
+ *
+ * upload-init(대용량 resumable) 을 그대로 재사용하되, 회차 번호는 넘기지 않고 finalize 대신
+ * clip-finalize 를 부른다. 로컬(GCS 미설정)이면 clip-upload multipart 로 폴백한다.
+ */
+export async function uploadFinishedClip(
+  file: File,
+  programId: string,
+  opts: { title?: string; onProgress?: (pct: number) => void } = {},
+): Promise<FinishedClipResult> {
+  const { title, onProgress } = opts;
+
+  const initRes = await fetch(`${API_BASE}/media/upload-init`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ programId, filename: file.name, contentType: file.type || "video/mp4" }),
+  });
+  const init = await json<
+    | { mode: "resumable"; mediaId: string; objectPath: string; sessionUrl: string }
+    | { mode: "multipart"; mediaId: string; objectPath: string }
+  >(initRes);
+
+  if (init.mode === "multipart") return uploadFinishedClipMultipart(file, programId, opts);
+
+  await uploadResumable(init.sessionUrl, file, onProgress);
+
+  const finalRes = await fetch(`${API_BASE}/media/clip-finalize`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      mediaId: init.mediaId,
+      objectPath: init.objectPath,
+      programId,
+      filename: file.name,
+      contentType: file.type || "video/mp4",
+      size: file.size,
+      title,
+    }),
+  });
+  return json<FinishedClipResult>(finalRes);
+}
+
+/** 로컬 dev · 소용량 multipart 폴백 (uploadVideoMultipart 와 같은 형태). */
+function uploadFinishedClipMultipart(
+  file: File,
+  programId: string,
+  opts: { title?: string; onProgress?: (pct: number) => void },
+): Promise<FinishedClipResult> {
+  return new Promise((resolve, reject) => {
+    const form = new FormData();
+    form.append("file", file);
+    form.append("programId", programId);
+    if (opts.title) form.append("title", opts.title);
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", `${API_BASE}/media/clip-upload`);
+    xhr.upload.onprogress = (e) => {
+      if (e.lengthComputable && opts.onProgress) opts.onProgress(Math.round((e.loaded / e.total) * 100));
+    };
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) resolve(JSON.parse(xhr.responseText));
+      else reject(new Error(`upload failed: ${xhr.status} ${xhr.responseText}`));
+    };
+    xhr.onerror = () => reject(new Error("upload network error"));
+    xhr.send(form);
+  });
 }
 
 /**

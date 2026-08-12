@@ -36,6 +36,7 @@ import {
   getPool, getEntity, putEntity, upsertSearchSegments,
   recordUsage,
   addCreditEntry,
+  compareAndSetClipReframe,
 } from "./db-pg.ts";
 import type { TranscriptSegment, SearchSegmentRow } from "./db-pg.ts";
 import { billableMinutes, estimatedCostKrw, usageDedupeKey } from "./billing.ts";
@@ -44,6 +45,14 @@ import { toCoreRegistry, timelineToRows } from "./cast.ts";
 import { createReadStream, parseObjectPath, readFile, uploadFile, useGcs } from "./storage-gcs.ts";
 import { enqueue } from "./queue.ts";
 import { newId } from "./pipeline.ts";
+import {
+  normalizeBeatIds,
+  normalizeReframePlan,
+  reframeFingerprint,
+  reframePlanHash,
+  summarizeReframePlan,
+  type ClipReframeState,
+} from "./reframe.ts";
 
 export const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 
@@ -127,6 +136,257 @@ export function newestMtimeMs(dir: string): number {
     }
   }
   return newest;
+}
+
+export interface ClipReframeJobInput {
+  clipId: string;
+  inputFingerprint: string;
+  requestId: string;
+  attempt: number;
+  maxAttempts: number;
+}
+
+/**
+ * Run the clip-only vision planner. The worker stores the full planner response as an
+ * analysis artifact, while the clip entity receives only the validated renderer contract.
+ * All state writes are request/fingerprint CAS operations, so changing trim or selecting
+ * basic mode makes this job harmless even if Python is already running.
+ */
+export async function runClipReframe(input: ClipReframeJobInput): Promise<void> {
+  const { clipId, inputFingerprint, requestId } = input;
+  if (!clipId || !inputFingerprint || !requestId) {
+    throw new Error("clip.reframe requires clipId, inputFingerprint and requestId");
+  }
+
+  const clip = await getEntity<Record<string, unknown>>("clip", clipId);
+  if (!clip) throw new Error(`clip.reframe: clip ${clipId} not found`);
+  let currentFingerprint: string;
+  try {
+    currentFingerprint = reframeFingerprint(clip);
+  } catch (error) {
+    throw new Error(`clip.reframe: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (currentFingerprint !== inputFingerprint) return;
+
+  const current = clip.reframe && typeof clip.reframe === "object"
+    ? clip.reframe as ClipReframeState
+    : null;
+  if (current?.mode !== "ai_multi" || current.requestId !== requestId) return;
+  const now = Date.now();
+  const running: ClipReframeState = {
+    ...current,
+    mode: "ai_multi",
+    status: "running",
+    timeBase: "master_absolute",
+    revision: now,
+    startedAt: now,
+    updatedAt: now,
+    error: null,
+  };
+  const claimed = await compareAndSetClipReframe(clipId, inputFingerprint, requestId, running);
+  if (!claimed) return;
+
+  const mediaId = String(clip.sourceMediaId ?? "");
+  const media = mediaId ? await getMedia(mediaId) : undefined;
+  const clipStart = Number(clip.startTime);
+  const clipEnd = Number(clip.endTime);
+  if (!Number.isFinite(clipStart) || !Number.isFinite(clipEnd) || !(clipEnd > clipStart)) {
+    await failClipReframe(input, running, "invalid_clip_range", "AI 리프레임 구간이 올바르지 않습니다.");
+    throw new Error("clip.reframe: clip range must be finite and end after start");
+  }
+  if (!media) {
+    await failClipReframe(input, running, "source_media_missing", "AI 리프레임 원본 영상을 찾을 수 없습니다.");
+    throw new Error(`clip.reframe: source media ${mediaId || "(empty)"} not found`);
+  }
+
+  const safeClipId = clipId.replace(/[^a-zA-Z0-9_-]/g, "_");
+  const work = await fs.promises.mkdtemp(path.join(os.tmpdir(), `stepd-reframe-${safeClipId}-`));
+  try {
+    const proxyPath = path.join(work, "proxy.mp4");
+    const beatsPath = path.join(work, "beats.json");
+    const shotsPath = path.join(work, "shots.json");
+    const outputPath = path.join(work, "plan.json");
+    const debugPath = path.join(work, "debug.json");
+
+    await materializeAnalysisInput(mediaId, "beats.json", beatsPath);
+    const hasShots = await materializeOptionalAnalysisInput(mediaId, "shots.json", shotsPath);
+    const sourcePath = useGcs()
+      ? await signedProxySource(media.path)
+      : media.path;
+    await runChild(
+      "ffmpeg",
+      [
+        "-hide_banner", "-loglevel", "error", "-y",
+        "-ss", clipStart.toFixed(6), "-i", sourcePath, "-t", (clipEnd - clipStart).toFixed(6),
+        "-map", "0:v:0", "-an", "-vf", "fps=5,scale=640:-2:flags=lanczos",
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "24", "-movflags", "+faststart",
+        proxyPath,
+      ],
+      { label: "reframe proxy", timeoutMs: 15 * 60 * 1000 },
+    );
+
+    const args = [
+      "-u", "-m", "core.reframe",
+      "--video", proxyPath,
+      "--clip-start", clipStart.toFixed(6),
+      "--clip-end", clipEnd.toFixed(6),
+      "--beats", beatsPath,
+      "--source-width", String(Math.max(0, Number(media.width) || 0)),
+      "--source-height", String(Math.max(0, Number(media.height) || 0)),
+      "--output", outputPath,
+    ];
+    if (hasShots) args.push("--shots", shotsPath);
+    const modelPath = process.env.REFRAME_FACE_MODEL?.trim();
+    if (modelPath) args.push("--model", modelPath);
+    await runChild(CORE_PYTHON, args, {
+      cwd: REPO_ROOT,
+      label: "core.reframe",
+      timeoutMs: (Number(process.env.REFRAME_TIMEOUT_MIN) || 20) * 60 * 1000,
+      env: { PYTHONPATH: "", PYTHONIOENCODING: "utf-8", PYTHONUTF8: "1" },
+    });
+
+    const raw = JSON.parse(await fs.promises.readFile(outputPath, "utf8")) as Record<string, unknown>;
+    const plan = normalizeReframePlan(raw, { start: clipStart, end: clipEnd });
+    const planHash = reframePlanHash(plan);
+    const summary = summarizeReframePlan(plan);
+    const artifactPath = `analysis/${mediaId}/reframe/${safeClipId}/${inputFingerprint}.json`;
+    const debug = {
+      generatedAt: Date.now(),
+      clipId,
+      sourceMediaId: mediaId,
+      inputFingerprint,
+      requestId,
+      requestedBeatIds: normalizeBeatIds(clip.beatIds),
+      planner: raw,
+    };
+    await fs.promises.writeFile(debugPath, JSON.stringify(debug, null, 2), "utf8");
+    await uploadFile(artifactPath, debugPath);
+
+    const latest = await getEntity<Record<string, unknown>>("clip", clipId);
+    const latestState = latest?.reframe && typeof latest.reframe === "object"
+      ? latest.reframe as ClipReframeState
+      : running;
+    const completedAt = Date.now();
+    const ready: ClipReframeState = {
+      ...latestState,
+      mode: "ai_multi",
+      status: "ready",
+      timeBase: "master_absolute",
+      revision: completedAt,
+      inputFingerprint,
+      requestId,
+      plan,
+      planHash,
+      ...summary,
+      modelVersion: typeof raw.scoreVersion === "string" ? raw.scoreVersion : undefined,
+      artifactPath,
+      completedAt,
+      updatedAt: completedAt,
+      error: null,
+    };
+    await compareAndSetClipReframe(clipId, inputFingerprint, requestId, ready);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const code = /beats/i.test(message) ? "beats_unavailable" : "planner_failed";
+    await failClipReframe(input, running, code, message);
+    throw error;
+  } finally {
+    await fs.promises.rm(work, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+async function failClipReframe(
+  input: ClipReframeJobInput,
+  base: ClipReframeState,
+  code: string,
+  message: string,
+): Promise<void> {
+  const at = Date.now();
+  const finalAttempt = input.attempt >= input.maxAttempts;
+  const failed: ClipReframeState = {
+    ...base,
+    status: finalAttempt ? "failed" : "queued",
+    revision: at,
+    updatedAt: at,
+    error: { code, message: message.slice(0, 600), at },
+  };
+  await compareAndSetClipReframe(input.clipId, input.inputFingerprint, input.requestId, failed);
+}
+
+async function materializeAnalysisInput(
+  mediaId: string,
+  name: string,
+  dest: string,
+): Promise<void> {
+  let raw: Buffer;
+  try {
+    raw = await readFile(`analysis/${mediaId}/${name}`);
+  } catch {
+    throw new Error(`${name} is unavailable for source media ${mediaId}`);
+  }
+  // Keep the complete source Beat timeline. beatIds on the clip are lineage/debug only;
+  // filtering here would turn intervening Beats into synthetic Fit gaps and change meaning.
+  await fs.promises.writeFile(dest, raw);
+}
+
+async function materializeOptionalAnalysisInput(mediaId: string, name: string, dest: string): Promise<boolean> {
+  try {
+    await fs.promises.writeFile(dest, await readFile(`analysis/${mediaId}/${name}`));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function signedProxySource(storedPath: string): Promise<string> {
+  const { signedReadUrl } = await import("./storage-gcs.ts");
+  return signedReadUrl(parseObjectPath(storedPath), 30 * 60 * 1000);
+}
+
+async function runChild(
+  command: string,
+  args: string[],
+  opts: {
+    label: string;
+    timeoutMs: number;
+    cwd?: string;
+    env?: Record<string, string>;
+  },
+): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn(command, args, {
+      cwd: opts.cwd,
+      env: { ...process.env, ...opts.env },
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+    });
+    const tail: string[] = [];
+    const collect = (chunk: Buffer | string) => {
+      const text = chunk.toString();
+      for (const line of text.split(/\r?\n/).filter(Boolean)) {
+        console.log(`[${opts.label}] ${line}`);
+        tail.push(line);
+        if (tail.length > 40) tail.shift();
+      }
+    };
+    child.stdout?.on("data", collect);
+    child.stderr?.on("data", collect);
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill("SIGKILL");
+    }, opts.timeoutMs);
+    timer.unref?.();
+    child.once("error", (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    child.once("close", (code) => {
+      clearTimeout(timer);
+      if (code === 0) resolve();
+      else reject(new Error(`${opts.label} ${timedOut ? "timed out" : `exited ${code}`}: ${tail.join("\n").slice(-3000)}`));
+    });
+  });
 }
 
 async function downloadToTemp(storedPath: string, dest: string): Promise<void> {
@@ -325,6 +585,8 @@ function runAnalyze(
 type Short = {
   rank?: number; appeal?: number; start?: number; end?: number;
   title?: string; reason?: string; tags?: string[];
+  /** Core Beat lineage used by the downstream AI reframe planner. */
+  beat_ids?: Array<number | string>;
   /** 3축 직교 스코어(각 0-10, 2026-07-23~). ⚠️ 2026-08-06 이후 회차는 **비어 있다** —
    *  LLM 점수는 실행마다 달라져 A/B 판정이 불가능해서 결정론 스코어로 교체했다. score_parts 참고. */
   hook_strength?: number; payoff?: number; completeness?: number;
@@ -393,6 +655,7 @@ function recFromShort(episodeId: string, s: Short) {
     startTime: start,
     endTime: end,
     editNote: s.reason || "",
+    beatIds: normalizeBeatIds(s.beat_ids),
     tags: Array.isArray(s.tags) ? s.tags : [],
     status: "pending",
     thumbnailCandidates: [

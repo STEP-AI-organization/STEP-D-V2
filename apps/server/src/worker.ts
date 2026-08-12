@@ -54,7 +54,7 @@ import { initQueue, claimJob, completeJob, failJob, requeueStale, heartbeatJob, 
 import { runWithTenant, runAsSystem, DEFAULT_TENANT_ID } from "./tenant.ts";
 import { runAutomationCycle } from "./automation-cycle.ts";
 import { runChannelPipeline } from "./channel-pipeline.ts";
-import { runContentAnalyze, newestMtimeMs } from "./content-pipeline.ts";
+import { runClipReframe, runContentAnalyze, newestMtimeMs } from "./content-pipeline.ts";
 import {
   withAccessToken,
   fetchVideoAnalytics,
@@ -110,7 +110,7 @@ const JOB_LANES: Record<"content" | "youtube" | "gebd" | "naver", JobType[]> = {
   //    성공을 돌려주므로 화면에서는 "생성 중" 으로만 보인다 — 이 리포의 전형적 조용한 실패다.
   //    아래 "모든 JobType 은 실제로 도는 레인에 속한다" 테스트가 재발을 막는다.
   content: ["content.analyze", "youtube.download", "match.align", "match.segment", "match.learn",
-            "thumbnail.style", "thumbnail.generate", "clip.metadata"],
+            "thumbnail.style", "thumbnail.generate", "clip.metadata", "clip.reframe"],
   // factory.* 도 youtube 레인 — 상태기계 한 걸음은 DB 몇 번 읽고 재큐하는 게 전부라
   // 짧고, 배포(distribution.publish)와 같은 레인에 있어야 순서가 자연스럽다.
   // automation.cycle 도 youtube 레인 — 순방 한 바퀴는 DB 를 훑고 dispatchPublish 를 부르는
@@ -217,6 +217,16 @@ async function handle(job: Job): Promise<FollowUp | void> {
     case "distribution.publish": return handleDistributionPublish(job);
     case "naver.publish": return handleNaverPublish(job);
     case "content.analyze": { await runContentAnalyze(String(job.payload.mediaId ?? ""), Boolean(job.payload.fast)); return; }
+    case "clip.reframe": {
+      await runClipReframe({
+        clipId: String(job.payload.clipId ?? ""),
+        inputFingerprint: String(job.payload.inputFingerprint ?? ""),
+        requestId: String(job.payload.requestId ?? ""),
+        attempt: job.attempts,
+        maxAttempts: job.maxAttempts,
+      });
+      return;
+    }
     case "youtube.download": return handleYoutubeDownload(job);
     case "match.align": return handleMatchAlign(job);
     case "match.segment": return handleMatchSegment(job);
