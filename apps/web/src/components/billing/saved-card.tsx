@@ -176,6 +176,13 @@ export function SavedCardPanel({
         <div className="flex flex-wrap items-center gap-2">
           <span className="text-[11.5px]" style={{ color: "var(--sd-mut)" }}>
             등록된 카드가 없습니다. 등록해 두면 매번 카드를 넣지 않고 버튼으로 충전합니다.
+            <br />
+            {/* 법인카드 빌링키는 PG(KG이니시스) 정책상 막힐 수 있다 (2026-08-12 실측 — 개인카드는
+                됨). 카드 등록이 안 돼도 일반결제 충전은 법인카드로 가능하므로 그 사실을 말해 준다. */}
+            <span style={{ color: "var(--sd-warn)" }}>
+              ⚠ 법인카드는 카드사·PG 정책상 등록(정기결제)이 막힐 수 있습니다 — 그 경우
+              위 &quot;크레딧 충전&quot;(일반결제)은 법인카드로 정상 결제됩니다.
+            </span>
           </span>
           {canManage && (
             <button
