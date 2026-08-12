@@ -17,6 +17,10 @@ FROM node:22-bookworm-slim AS base
 
 # ffmpeg — core/ 가 프레임·오디오 추출에 쓴다. fonts-noto-cjk 는 자막 번인용.
 # python3-venv 는 아래 venv 생성에 필요하다 (slim 이미지엔 없다).
+# libgl1·libglib2.0-0·libsm6·libxext6·libxrender1 = opencv 런타임.
+# libegl1·libgles2 = MediaPipe 0.10.x 의 C 바인딩이 dlopen 하는 GLESv2/EGL — 없으면
+#   FaceDetector.create_from_options 가 `libGLESv2.so.2: cannot open` 로 죽는다(리프레임 전용).
+#   빌드 타임 detector 스모크(아래)가 이걸 강제한다 — 지우지 말 것.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     fonts-noto-cjk \
@@ -26,6 +30,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libsm6 \
     libxext6 \
     libxrender1 \
+    libegl1 \
+    libgles2 \
     python3 \
     python3-venv \
     python3-dev \
