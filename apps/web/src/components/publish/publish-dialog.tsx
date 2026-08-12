@@ -18,9 +18,11 @@ import { useEffect, useMemo, useState } from "react";
 import { useToast } from "@/components/ui/toast";
 import {
   fetchChannelEligibility,
+  fetchNaverAccounts,
   publishClips,
   type ChannelEligibility,
   type ChannelRule,
+  type NaverAccount,
 } from "@/lib/data/api";
 import type { DistributionChannel } from "@/lib/constants";
 import { cn } from "@/lib/utils";
@@ -54,6 +56,16 @@ export function PublishDialog({
   const [scheduled, setScheduled] = useState(false);
   const [reserveDate, setReserveDate] = useState("");
   const [busy, setBusy] = useState(false);
+  // 네이버 — 세션이 등록된 계정으로 바로 올린다 (채널 규칙이 없어도 배포 가능해야 한다).
+  const [naverAccounts, setNaverAccounts] = useState<NaverAccount[]>([]);
+  const [naverDesc, setNaverDesc] = useState("");
+  const [naverCat, setNaverCat] = useState<{ primary: string; secondary: string }>({ primary: "엔터", secondary: "엔터" });
+
+  useEffect(() => {
+    void fetchNaverAccounts()
+      .then((r) => setNaverAccounts(r.accounts.filter((a) => a.status !== "disabled" && a.hasSession)))
+      .catch(() => setNaverAccounts([]));
+  }, []);
 
   useEffect(() => {
     let alive = true;
@@ -72,8 +84,16 @@ export function PublishDialog({
   }, [clipIds]);
 
   const rule = useMemo(() => rules.find((r) => `${r.platform}:${r.accountId}` === picked), [rules, picked]);
-  const ok = picked ? elig[picked]?.ok : false;
-  const isUpload = rule ? UPLOAD_PLATFORMS.has(rule.platform) : false;
+  // 네이버 계정 직접 선택 행 — key = "naver:<계정id>:<navertv|naverclip>"
+  const naverPick = useMemo(() => {
+    if (!picked?.startsWith("naver:")) return null;
+    const [, id, ch] = picked.split(":");
+    const acct = naverAccounts.find((a) => a.id === id);
+    return acct ? { acct, channel: ch as "navertv" | "naverclip" } : null;
+  }, [picked, naverAccounts]);
+  const ok = naverPick ? true : picked ? elig[picked]?.ok : false;
+  const isUpload = naverPick ? true : rule ? UPLOAD_PLATFORMS.has(rule.platform) : false;
+  const naverDescShort = naverPick?.channel === "naverclip" && naverDesc.trim().length < 10;
 
   // 채널을 고르면 그 채널의 규칙이 즉시 폼에 반영된다 (F4-2).
   useEffect(() => {
@@ -82,12 +102,19 @@ export function PublishDialog({
   }, [rule]);
 
   async function submit() {
-    if (!rule || !ok) return;
+    if ((!rule && !naverPick) || !ok) return;
+    if (naverDescShort) return;
     setBusy(true);
     try {
-      const res = await publishClips(clipIds, rule.platform as DistributionChannel, {
+      const channel = (naverPick ? naverPick.channel : rule!.platform) as DistributionChannel;
+      const res = await publishClips(clipIds, channel, {
         scheduled,
         ...(scheduled && reserveDate ? { reserveDate } : {}),
+        ...(naverPick ? {
+          naverAccountId: naverPick.acct.id,
+          description: naverDesc.trim(),
+          ...(naverPick.channel === "naverclip" ? { naverCategory: naverCat } : {}),
+        } : {}),
       });
       toast({
         title: isUpload ? "업로드를 시작했습니다" : "배포 기록을 남겼습니다",
@@ -171,7 +198,81 @@ export function PublishDialog({
                 </button>
               );
             })}
+            {/* 네이버 — 세션 등록된 계정으로 직접 업로드 (채널 규칙 불필요) */}
+            {naverAccounts.flatMap((a) => {
+              const chans = a.target === "both" ? (["navertv", "naverclip"] as const)
+                : a.target === "tv" ? (["navertv"] as const) : (["naverclip"] as const);
+              return chans.map((ch) => {
+                const key = `naver:${a.id}:${ch}`;
+                return (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => setPicked(key)}
+                    className={cn(
+                      "flex flex-col gap-1 rounded-[5px] px-3 py-2 text-left",
+                      picked === key && "sd-btn--on",
+                    )}
+                    style={{
+                      border: `1px solid ${picked === key ? "var(--sd-accent-border)" : "var(--sd-border)"}`,
+                      cursor: "pointer",
+                    }}
+                  >
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="text-[12.5px] font-medium" style={{ color: "var(--sd-fg)" }}>{a.label}</span>
+                      <span className="sd-tag">{PLATFORM_LABEL[ch]}</span>
+                      <span className="sd-tag">로그인됨</span>
+                    </div>
+                  </button>
+                );
+              });
+            })}
           </div>
+
+          {naverPick && (
+            <div
+              className="flex flex-col gap-2 rounded-[5px] p-3"
+              style={{ background: "var(--sd-card-sub)", border: "1px solid var(--sd-border)" }}
+            >
+              <div className="sd-eb" style={{ color: "var(--sd-label)" }}>
+                {PLATFORM_LABEL[naverPick.channel]} · {naverPick.acct.label}
+              </div>
+              <label className="text-[11.5px]" style={{ color: "var(--sd-fg)" }}>
+                설명 {naverPick.channel === "naverclip" && <span style={{ color: "var(--sd-mut)" }}>(10자 이상 필수)</span>}
+                <textarea
+                  value={naverDesc}
+                  onChange={(e) => setNaverDesc(e.target.value)}
+                  rows={2}
+                  placeholder="영상 설명을 입력하세요"
+                  className="sd-input mt-1 w-full"
+                />
+              </label>
+              {naverDescShort && (
+                <p className="text-[10.5px]" style={{ color: "var(--sd-danger-strong)" }}>
+                  네이버 클립은 설명이 10자 이상이어야 등록됩니다 (현재 {naverDesc.trim().length}자).
+                </p>
+              )}
+              {naverPick.channel === "naverclip" && (
+                <div className="grid grid-cols-2 gap-2">
+                  <label className="text-[11.5px]" style={{ color: "var(--sd-fg)" }}>
+                    카테고리 1차
+                    <input value={naverCat.primary}
+                      onChange={(e) => setNaverCat({ ...naverCat, primary: e.target.value })}
+                      className="sd-input mt-1 w-full" />
+                  </label>
+                  <label className="text-[11.5px]" style={{ color: "var(--sd-fg)" }}>
+                    카테고리 2차
+                    <input value={naverCat.secondary}
+                      onChange={(e) => setNaverCat({ ...naverCat, secondary: e.target.value })}
+                      className="sd-input mt-1 w-full" />
+                  </label>
+                </div>
+              )}
+              <p className="text-[10.5px]" style={{ color: "var(--sd-mut)" }}>
+                사무실 워커 PC 가 이 계정의 로그인 세션으로 실제 업로드합니다.
+              </p>
+            </div>
+          )}
 
           {rule && ok && (
             <div
@@ -229,7 +330,7 @@ export function PublishDialog({
           <button
             type="button"
             className="sd-btn sd-btn-primary"
-            disabled={busy || !rule || !ok}
+            disabled={busy || (!rule && !naverPick) || !ok || naverDescShort}
             onClick={submit}
           >
             {busy ? "보내는 중…" : isUpload ? "업로드 시작" : "배포 기록"}

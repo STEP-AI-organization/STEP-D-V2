@@ -1447,7 +1447,14 @@ export interface PublishOutcome {
 export async function publishClips(
   clipIds: string[],
   channel: DistributionChannel,
-  opts: { reserveDate?: string; scheduled?: boolean } = {},
+  opts: {
+    reserveDate?: string; scheduled?: boolean;
+    /** 네이버: 어느 계정으로 올릴지 (다계정 필수). */
+    naverAccountId?: string;
+    /** 네이버 클립: 10자 이상 필수. */
+    description?: string;
+    naverCategory?: { primary: string; secondary: string };
+  } = {},
 ): Promise<PublishOutcome> {
   const res = await fetch(`${API_BASE}/distributions/publish`, {
     method: "POST",
