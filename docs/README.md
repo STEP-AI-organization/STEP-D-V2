@@ -50,6 +50,7 @@
 | [gpu-quota-request.md](ops/gpu-quota-request.md) | GPU 쿼터 상향 신청 절차 |
 | [deploy.md](ops/deploy.md) | 배포 런북 — 서버/워커/웹 배포 스크립트와 검증·롤백 |
 | [deploy-win2.md](ops/deploy-win2.md) | **윈도우2(네이버 워커) 배포** — 윈도우1 에서 갱신·확인·진단. 평소엔 push 만 하면 자동 |
+| [audit-2026-08-12.md](ops/audit-2026-08-12.md) | **전면 점검 결과** — 즉시 수정 20건(완료) + 미해결 우선순위 15건. 이 리포의 실패 유형 분석 |
 | [runbook.md](ops/runbook.md) | 장애 대응 — 증상별 진단·조치, 시크릿 로테이션 |
 | [local-dev.md](ops/local-dev.md) | 로컬 개발 — dev.ps1 (웹+서버+Docker Postgres), core/ 로컬 실행 |
 | [worker-queue.md](ops/worker-queue.md) | 잡 큐(job_queue)·워커 VM 아키텍처 — 잡 5종, 신뢰성 설계 |
