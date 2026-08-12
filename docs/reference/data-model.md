@@ -129,7 +129,7 @@ worker.ts L354: await initDb(); await initQueue()  # 워커 VM — 동기, 실�
 3. `schema.sql`, 이 문서, 관련 API 문서를 같이 갱신한다. 안 하면 이 문서 §1 같은 드리프트가 다시 쌓인다.
 
 **반영 시점 주의:** 마이그레이션은 **배포 후 첫 프로세스 기동 시** 실행된다. 실행 주체가 둘이다 —
-Cloud Run(stepd-server, cloudbuild)과 워커 VM(stepd-worker, `deploy-worker.ps1` 수동 배포), 그리고 수동
+Cloud Run(stepd-server, cloudbuild)과 워커 Cloud Run Jobs(`deploy/cloud.sh worker`), 그리고 수동
 `pnpm migrate up` 경로가 함께 있다. 먼저 적용된 스키마 위에서 구버전 코드가 잠시 돌 수 있으므로,
 변경은 반드시 **후방호환**이어야 한다.
 

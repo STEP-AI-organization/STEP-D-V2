@@ -1,6 +1,6 @@
 """채널 스타일 학습 — 수집 + 프로파일링 (프로그램 단위 · 서비스에서 호출).
 
-scripts/thumbnail_style_collect.py · thumbnail_style_profile.py 를 core 로 옮겨
+scripts/thumbnail/thumbnail_style_collect.py · thumbnail_style_profile.py 를 core 로 옮겨
 워커가 부를 수 있게 한 것. 스크립트는 로컬 실험용으로 두고, 서비스 경로는 여기다.
 
 학습이라 부르지만 가중치는 안 건드린다 (gpt-image-2 는 파인튜닝이 없다):

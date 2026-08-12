@@ -13,7 +13,7 @@ apps/
   api/      ⚠️ 레거시 (구 STEPD, Python FastAPI) — 미사용, 새 코드 금지
 core/       Python AI 파이프라인 (STT→정제→장면→비전→이름→쇼츠 추천) — 워커가 스폰
 admin/      STEP D Lab — core/ 분석 결과 검수 도구 (/lab)
-deploy/     배포 스크립트 (deploy-server.ps1 · deploy-web.ps1) + 워커 VM 프로비저닝
+deploy/     배포 (표준: cloud.sh) + deploy-web.ps1(Vercel) + GEBD VM · 윈도우2 프로비저닝
 docs/       문서 — 시작점: docs/README.md
 ```
 

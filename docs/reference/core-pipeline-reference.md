@@ -4,7 +4,7 @@
 > 콘텐츠 분석 파이프라인(파이썬)이다. 전 단계가 **Gemini(Vertex AI) + ffmpeg + scenedetect**로
 > 도는 GPU-free 구성이며, 인증은 ADC(`gcloud auth application-default login`) — API 키 없음.
 > 서버 접점은 워커의 `content.analyze` 잡(`apps/server/src/content-pipeline.ts`).
-> 운영 배포 이력은 [../ops/pipeline-current.md](../ops/pipeline-current.md), 큐/워커 구조는 [../ops/worker-queue.md](../ops/worker-queue.md) 참고.
+> 운영 배포 이력은 [../ops/pipeline-current.md](../ops/pipeline-current-state.md), 큐/워커 구조는 [../ops/worker-queue.md](../ops/worker-queue.md) 참고.
 
 ## 1. 오케스트레이션 — `python -m core.analyze`
 

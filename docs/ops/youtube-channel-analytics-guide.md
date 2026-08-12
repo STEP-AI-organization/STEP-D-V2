@@ -6,7 +6,7 @@
 2026-07-14 초판에서 "구현해야 할 부분"으로 적었던 코드 작업은 그 후 대부분 구현 완료됐다 —
 이 문서는 이제 **무엇이 됐고(✅) 무엇이 남았는지(⬜)** 를 기준으로 읽는다.
 
-수집 파이프라인의 운영 상세(큐·워커·점검 커맨드)는 [pipeline-current.md](pipeline-current.md)·[worker-queue.md](worker-queue.md),
+수집 파이프라인의 운영 상세(큐·워커·점검 커맨드)는 [pipeline-current.md](pipeline-current-state.md)·[worker-queue.md](worker-queue.md),
 인프라 전반은 [infra.md](infra.md), Vercel 설정은 [vercel-ops.md](vercel-ops.md) 참고.
 
 ---

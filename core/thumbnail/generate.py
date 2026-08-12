@@ -1,6 +1,6 @@
 """회차 1건 → 썸네일 후보 (서비스 경로).
 
-scripts/thumbnail_engine_run.py 와 같은 4단계지만, 워커가 부를 수 있도록
+scripts/thumbnail/thumbnail_engine_run.py 와 같은 4단계지만, 워커가 부를 수 있도록
 경로·프로그램 ID 를 인자로 받고 결과를 dict 로 돌려준다.
 
     1) 기획   영상 내용 → 제목·인물·장면        (Gemini 1회)

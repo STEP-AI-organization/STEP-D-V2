@@ -48,7 +48,7 @@ gcloud run services update-traffic stepd-server --to-revisions <직전정상리�
 ```
 
 ⚠️ Cloud Run만 되돌리면 **워커 VM은 새 코드로 남아 둘이 어긋난다.** 코드 자체가 문제면
-`git revert` → `.\deploy\deploy-server.ps1`로 두 곳을 함께 되돌릴 것 ([deploy.md](deploy.md) 롤백 절).
+`git revert` → `bash deploy/cloud.sh all` 로 함께 되돌릴 것 ([deploy.md](deploy.md) 롤백 절).
 
 ## 3. 큐 적체 / 워커 스톨
 
@@ -101,7 +101,7 @@ curl -X POST https://stepd.stepai.kr/api/admin/queue/purge -H "Content-Type: app
    vision/names 단계가 프레임당 호출이라 쿼터를 가장 먼저 소진한다.
 
 **재큐**: `POST /api/admin/queue/purge`(§3) — attempts를 리셋하고 master 미디어마다 잡을 보장하므로
-실패·유실된 분석이 즉시 다시 돈다. 파이프라인 배선 상세: [pipeline-current.md](pipeline-current.md).
+실패·유실된 분석이 즉시 다시 돈다. 파이프라인 배선 상세: [pipeline-current.md](pipeline-current-state.md).
 
 ## 6. YouTube 토큰 (invalid_grant → revoked)
 
@@ -123,7 +123,7 @@ curl -X POST https://stepd.stepai.kr/api/admin/queue/purge -H "Content-Type: app
 |---|---|
 | Vercel 빌드가 UNKNOWN으로 무한대기 | **커밋 author가 Vercel 팀 멤버가 아님** — `contact@stepai.kr` author여야 한다. `deploy-web.ps1`이 자동 강제하니 스크립트로 배포할 것. 상세: [vercel-ops.md](vercel-ops.md) |
 | `gcloud builds submit` 인증 오류 | gcloud 유저 인증 만료 → `gcloud auth login`. 안 되면 배포 SA 키로 `gcloud auth activate-service-account`(2026-07-16 전례, [infra.md](infra.md)) |
-| 배포됐는데 옛 동작 | Cloud Run은 **푸시로 자동 배포되지 않는다**. `deploy-server.ps1` 실행 여부 확인. 워커만/서버만 올려 코드가 어긋난 경우도 여기 |
+| 배포됐는데 옛 동작 | Cloud Run은 **푸시로 자동 배포되지 않는다**. `bash deploy/cloud.sh server` 실행 여부 확인. 워커만/서버만 올려 코드가 어긋난 경우도 여기 |
 
 ⚠️ 루트 `cloudbuild.yaml:37`과 `apps/server/cloudbuild.yaml`의 `--allow-unauthenticated`는 현재
 IAM에 반영되지 않아 실효가 없지만(익명 403 실측), 배포 SA에 IAM 권한이 생기는 순간 **매 배포가
@@ -139,7 +139,7 @@ IAM에 반영되지 않아 실효가 없지만(익명 403 실측), 배포 SA에 
 
 ```powershell
 printf '<새값>' | gcloud secrets versions add <시크릿이름> --data-file=- --project step-d
-# ① Cloud Run: :latest 바인딩은 리비전 생성 시점에 고정된다 → 재배포(deploy-server.ps1) 필요
+# ① Cloud Run: :latest 바인딩은 리비전 생성 시점에 고정된다 → 재배포(`bash deploy/cloud.sh server`) 필요
 # ② 워커 VM: 시크릿이 프로비저닝 때 /etc/stepd/worker.env에 박제된다(deploy/worker-vm.sh)
 #    → SSH해서 worker-vm.sh의 "Secrets" 블록 재실행(또는 worker.env 수동 갱신) 후 systemctl restart stepd-worker
 ```

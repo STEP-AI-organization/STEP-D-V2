@@ -225,6 +225,6 @@ hold 는 웹훅 `awaiting_review` 로 알림 · 사람이 앱에서 승인 눌�
 
 ## 관련
 
-- 지금 실제 채널 등록 상태 · [../ops/infra.md](../ops/infra.md) (YouTube/Meta/TikTok 계정 저장)
+- 지금 실제 채널 등록 상태 · [../ops/infra.md](../../ops/infra.md) (YouTube/Meta/TikTok 계정 저장)
 - 파이프라인 · [step-d-master-build-plan.md](step-d-master-build-plan.md)
 - Meta App Review · [meta-app-review-submission.md](meta-app-review-submission.md) (배포 전 필수)

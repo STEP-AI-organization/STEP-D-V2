@@ -66,8 +66,8 @@
 - env/시크릿(cloudbuild.yaml `--set-secrets`): `DATABASE_URL`=stepd-db-url, `GOOGLE_CLIENT_ID/SECRET`,
   `JWT_SECRET`, `PUBLIC_URL`=stepd-public-url. 평문 env: `NODE_ENV`, `GCS_BUCKET`=stepd-media.
 - Cloud SQL 연결: `--add-cloudsql-instances step-d:us-central1:stepd-db` (유닉스 소켓).
-- 빌드 설정 정본은 **루트 `cloudbuild.yaml`**(docker 빌드, `apps/server/Dockerfile`) — `deploy-server.ps1:101`이 이걸 submit 한다. `apps/server/cloudbuild.yaml`(buildpacks 빌드)도 공존하지만 배포 경로에서 안 쓴다.
-- **자동배포 안 됨** — 두 cloudbuild.yaml 헤더의 "Triggered by GitHub push" 주석은 낡은 서술이고 GitHub 트리거는 없다. 실제 운영은 `deploy-server.ps1`의 수동 `gcloud builds submit`이 정본.
+- 빌드 설정 정본은 **루트 `cloudbuild.yaml`**(docker 빌드, `apps/server/Dockerfile`) — `deploy/cloud.sh server` 가 이걸 submit 한다. `apps/server/cloudbuild.yaml`(buildpacks 빌드)도 공존하지만 배포 경로에서 안 쓴다.
+- **자동배포 안 됨** — 두 cloudbuild.yaml 헤더의 "Triggered by GitHub push" 주석은 낡은 서술이고 GitHub 트리거는 없다. 실제 운영은 `deploy/cloud.sh server` 의 수동 `gcloud builds submit` 이 정본.
 
 ### 2. 워커 — **Cloud Run Jobs** (2026-08-07 이전 완료)
 
@@ -174,8 +174,8 @@ STT(Gemini 오디오, 서울) → 자막정제 → 장면분할(scenedetect+ffmp
 
 - 진입점: `python -m core.analyze <video> --out <dir>` → analysis.json(transcript+scenes+shorts).
 - 실측: 8분 영상 ≈ 512초(vision+names가 프레임당 Gemini 호출이라 지배적).
-- 실서비스 흐름·배선: [pipeline-current.md](pipeline-current.md).
-- 파이프라인 계획: [../plans/pipeline-plan.md](../plans/pipeline-plan.md), 인물엔진: [../plans/context-engine-plan.md](../plans/context-engine-plan.md).
+- 실서비스 흐름·배선: [pipeline-current.md](pipeline-current-state.md).
+- 파이프라인 계획: [../plans/pipeline-plan.md](../archive/plans-2026-07/pipeline-plan.md), 인물엔진: [../plans/context-engine-plan.md](../plans/onhold/context-engine-plan.md).
 - **빠른 모드** `--fast`(잡 `fast:true` 또는 워커 `CORE_ANALYZE_FAST=1`): 시각 분석 스킵, 자막만으로 추천 → 61분 영상 96초. 대량 배치용.
 
 ### 영상 수집 경로 — 실서비스 vs 연구 (봇차단 관점)

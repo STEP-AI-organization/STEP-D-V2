@@ -121,7 +121,7 @@ Gemini 2.5 flash (asia-northeast3) 요율 대략 · **정확한 실측치는 관
   attempts 상한을 낮추고 (기본 5 → 2), dead-letter 로 사람 개입 유도.
 - **체크포인트 재활용 유효** — refined.json 재사용은 확인됨. 다른 산출물(ppl_frames, faces, beats)
   도 workdir 잔존 시 스킵되도록 각 스텝 첫줄에서 존재 확인 → skip 필수.
-- **프롬프트 캐싱** — [Round 3 D3](../research/pipeline-optimization-findings.md) 미완. shorts propose 처럼
+- **프롬프트 캐싱** — [Round 3 D3](../../research/pipeline-optimization-findings.md) 미완. shorts propose 처럼
   같은 컨텍스트 여러 번 도는 스텝은 캐싱하면 in 토큰 30~50% 절감.
 - **배치화 우선순위**: chyron 배치는 시간 절감이 크지 비용 절감은 작음. **thumbnail gen 을 variant
   4개 → 2개** 로 줄이는 게 회당 ₩250 절감 · 가장 크다.

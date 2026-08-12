@@ -243,8 +243,8 @@ export default function ThumbnailTemplatesPage() {
         <div className="rounded-md border border-status-warn/40 bg-muted px-3 py-2 text-xs text-muted-foreground">
           이 서버는 Vision 분석·사전 가공을 실행할 수 없습니다(501). 업로드·태그 편집·삭제는 그대로 됩니다.
           분석·가공은 서로 다른 스크립트라 로컬 워커에서 각각 돌려야 합니다 —
-          분석: <span className="font-mono">python scripts/thumbnail_reference_manifest.py</span>{" "}
-          (전체 스캔 · 인자 없음) · 가공: <span className="font-mono">python scripts/thumbnail_preprocess_template.py &lt;id&gt;</span>
+          분석: <span className="font-mono">python scripts/thumbnail/thumbnail_reference_manifest.py</span>{" "}
+          (전체 스캔 · 인자 없음) · 가공: <span className="font-mono">python scripts/thumbnail/thumbnail_preprocess_template.py &lt;id&gt;</span>
         </div>
       )}
 

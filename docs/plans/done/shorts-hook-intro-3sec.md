@@ -19,7 +19,7 @@
     토글(editorState.hookOn · opt-in 기본 OFF) + clip.hookTimeSec 존재. 시각 소스 = hook_time_sec.
     - `apps/server/src/ffmpeg.ts` — `renderShort` 에 `hookPreroll` 옵션 + 2입력 xfade 분기
       (`renderShortWithPreroll`): 프리롤(punch-in 전체화면 + 살짝 그레이드) → 본문 cross-dissolve.
-      프로토타입 `tmp/gebd/scripts/render_shorts.py` 검증 로직 기반. 본문 자막·타이틀·속도·그레이드는
+      프로토타입 `tmp/gebd/scripts/dev/render_shorts.py` 검증 로직 기반. 본문 자막·타이틀·속도·그레이드는
       기존과 동일하게 본문 프레임에만 번인.
     - `apps/server/src/index.ts` — adopt 가 hookQuote/hookTimeSec/hookIntroCaption 을 clip 으로 승계 ·
       `/clips/:id/export` 가 hookOn+hookTimeSec 로 프리롤 구간([start+hook_time_sec, +3s], 세그먼트

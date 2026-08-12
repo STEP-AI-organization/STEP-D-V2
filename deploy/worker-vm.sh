@@ -79,7 +79,7 @@ pnpm install --filter @stepd/server... --frozen-lockfile --ignore-scripts
 pnpm rebuild esbuild
 
 echo "==> Secrets + config → /etc/stepd/worker.env"
-# Delegated to worker-env.sh, which owns these definitions and is also what deploy-server.ps1
+# Delegated to worker-env.sh, which owns these definitions and is also what the deploy path
 # runs on every deploy — one source of truth, so a provisioned VM and a deployed VM agree.
 # It only ADDS missing variables, so re-running this provisioner never clobbers a live value.
 APP_DIR="$APP_DIR" bash "$APP_DIR/deploy/worker-env.sh"

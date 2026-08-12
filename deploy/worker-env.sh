@@ -17,7 +17,7 @@
 #   - a fully-synced file is a pure no-op that makes NO gcloud/network calls at all
 #   - backs the file up (timestamped) before the first change only
 #   - no apt / pnpm / chown / systemd side effects
-#   - does NOT restart the worker — the caller decides when (deploy-server.ps1 restarts after)
+#   - does NOT restart the worker — the caller decides when
 #   - prints variable NAMES only, never values (this file holds secrets)
 #
 # 🔒 UPLOAD GATE: this script never writes YOUTUBE_UPLOAD_ENABLED. Real YouTube uploads stay

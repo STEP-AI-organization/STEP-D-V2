@@ -191,8 +191,9 @@ core/ 쪽 스위치(파이썬): `RUN_FACES`·`RUN_PPL`·`RUN_REFINE`·`RUN_CHYRO
   `/deploy` 스킬(`.claude/skills/deploy/`)이 같은 스크립트를 감싼다.
 - **웹**: `.\deploy\deploy-web.ps1` — Vercel. **커밋 author가 contact@stepai.kr이어야 배포됨**
   (Vercel git-author 차단, 스크립트가 강제). 프로덕션 = https://stepd.stepai.kr
-- 구 경로(`deploy-server.ps1` / `deploy-worker.ps1`)는 남아 있지만 워커 VM 상시 운영 전제라
-  현재 배치(Cloud Run Jobs)와 맞지 않는다 — `cloud.sh` 를 쓸 것.
+- 구 경로(`deploy-server.ps1`·`deploy-worker.ps1`·`ecosystem.config.cjs`·docker-compose·Caddyfile)는
+  **2026-08-12 삭제됐다.** 워커 VM 상시 운영(pm2/systemd) 전제라 현재 배치(Cloud Run Jobs +
+  윈도우2 작업 스케줄러)와 맞지 않았고, 남겨두면 처음 보는 사람이 그걸 따라간다.
 
 ---
 

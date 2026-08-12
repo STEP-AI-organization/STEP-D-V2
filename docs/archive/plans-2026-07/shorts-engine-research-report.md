@@ -383,7 +383,7 @@ python -m core.eval_topic_ab --runs 2 --holdout <id>=<scenes.json> --truth <trut
 - [실험 로그 (연대기)](shorts-engine-experiment-log.md) — 방법론 진화·실패 실험 상세
 - [성과보고 (읽기용 요약)](shorts-engine-성과보고-2026-07-21.md) — 아침 확인용 진입점
 - [실증 실험 종합](shorts-engine-experiments-2026-07-21.md) — Exp 1·2 상세 기술
-- [증빙 데이터셋 매니페스트](../../바우처_결과보고_2026/증빙_데이터셋/실험자료/MANIFEST.md) — 원자료 라벨링
+- 증빙 데이터셋 매니페스트 — `바우처_결과보고_2026/증빙_데이터셋/실험자료/MANIFEST.md` (**리포 밖 문서다.** 링크로 두면 항상 깨진 것으로 잡혀서 경로만 적는다) — 원자료 라벨링
 
 ---
 

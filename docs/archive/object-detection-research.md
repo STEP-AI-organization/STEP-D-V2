@@ -6,7 +6,7 @@
 > 현행 사용이 아니라 **후보 선정** 의미다. 코드에 이미 있는 것/없는 것은 바로 아래 「구현 현황」 참조.
 >
 > STEP-D 관점 조사: PPL 상품·브랜드 식별(H), 화자 추적 리프레이밍(F), 썸네일 스코어링(G), 트렌드 역분석(T)에 쓸 기술 선정 근거.
-> 전제: GPU 자체 호스팅 없음(관리형 API 위주) — [../plans/pipeline-plan.md](../plans/pipeline-plan.md) 참조.
+> 전제: GPU 자체 호스팅 없음(관리형 API 위주) — [../plans/pipeline-plan.md](plans-2026-07/pipeline-plan.md) 참조.
 
 ## 구현 현황 (2026-07-16 코드 실측)
 
@@ -69,7 +69,7 @@
 - G: MediaPipe 얼굴 + 라플라시안 선명도 — 후보(미착수, MediaPipe 미도입은 F와 동일).
 - T: Gemini 태깅으로 충분. 별도 검출기 불필요.
 
-## CX 인물 확정 식별 스택 (핵심 — [../plans/context-engine-plan.md](../plans/context-engine-plan.md)의 기반 기술)
+## CX 인물 확정 식별 스택 (핵심 — [../plans/context-engine-plan.md](../plans/onhold/context-engine-plan.md)의 기반 기술)
 
 CX 트랙의 성립 조건은 "샷 단위로 등장인물이 확정되는가"다. 단일 모델이 아니라 **다중 신호 융합**으로 설계한다. 방송 콘텐츠라서 생기는 지름길이 많다. **아래 표에서 실제 코드가 존재하는 신호는 ③(Gemini OCR)뿐이다.**
 
@@ -85,7 +85,7 @@ CX 트랙의 성립 조건은 "샷 단위로 등장인물이 확정되는가"다
 | ⑥ 샷 내 전파 | ByteTrack (MIT) | 미구현 | 샷 안에서 한 프레임만 확정되면 트랙 전체에 ID 전파 → 호출 수 절감 |
 
 - 샷의 최종 인물 태그 = ①~⑤ 신호의 가중 투표. 신호 간 충돌 시(얼굴≠자막) 저신뢰 마킹 → 운영자 검수 큐.
-- 이 "얼굴+네임자막+의상+화자 다중 신호에 의한 샷 단위 인물 확정" 구조 자체가 특허 확장 후보 ([../plans/context-engine-plan.md](../plans/context-engine-plan.md)의 청구 후보 1을 구체화).
+- 이 "얼굴+네임자막+의상+화자 다중 신호에 의한 샷 단위 인물 확정" 구조 자체가 특허 확장 후보 ([../plans/context-engine-plan.md](../plans/onhold/context-engine-plan.md)의 청구 후보 1을 구체화).
 
 **검증 PoC (CX1 착수 전 필수)**
 

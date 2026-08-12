@@ -20,7 +20,7 @@ coverage/
 *.log
 apps/api/assets/fonts/*.zip
 
-# 썸네일 폰트 (SIL OFL · scripts/download-fonts.ps1로 로컬 다운 · 61MB 리포 부담 회피)
+# 썸네일 폰트 (SIL OFL · scripts/ops/download-fonts.ps1로 로컬 다운 · 61MB 리포 부담 회피)
 assets/thumbnail-fonts/*.otf
 assets/thumbnail-fonts/*.ttf
 

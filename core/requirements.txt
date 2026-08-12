@@ -44,7 +44,7 @@ requests>=2.31
 # Pillow 는 이미 다른 스테이지가 depend 하지만 여기 문서화.
 rembg>=2.0.69
 Pillow>=10.0
-# 폰트 파일은 assets/thumbnail-fonts/ (gitignore + scripts/download-fonts.ps1 로 다운).
+# 폰트 파일은 assets/thumbnail-fonts/ (gitignore + scripts/ops/download-fonts.ps1 로 다운).
 
 # ── Optional: faster-whisper (MIT) — STT provider AND the Gemini-STT fallback ────
 # Two uses, both optional:

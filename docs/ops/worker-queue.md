@@ -62,7 +62,7 @@ Cloud Run은 **응답이 끝나는 순간 CPU를 throttle**하고 요청을 **60
 | `video.analyze` | 영상별 애널리틱스 + 리텐션 저장 (Analytics 4콜/영상) | channel.analyze 팬아웃 |
 | `video.hotwatch` | 신규 업로드를 게시 후 48시간 동안 1시간 간격으로 조회수 스냅샷. 창이 안 닫혔으면 **자기 자신을 재큐**(FollowUp) | 동기화가 새 업로드를 발견할 때 (`channel-pipeline.ts`) |
 | `video.comments` | fresh 영상의 상위 댓글 100개(1페이지) 수집 | channel.analyze 팬아웃 |
-| `content.analyze` | 업로드된 회차 영상을 GCS에서 내려받아 파이썬 `core/` 파이프라인(`python -m core.analyze`, STT→정제→장면→비전→이름자막→쇼츠, **Vertex Gemini**)으로 분석 → `content_analysis` 저장 + AI 쇼츠를 회차 추천 보드에 기록. 상세는 [pipeline-current.md](pipeline-current.md) | `POST /api/media/upload` (업로드 시), `POST /api/admin/queue/purge`의 재큐 |
+| `content.analyze` | 업로드된 회차 영상을 GCS에서 내려받아 파이썬 `core/` 파이프라인(`python -m core.analyze`, STT→정제→장면→비전→이름자막→쇼츠, **Vertex Gemini**)으로 분석 → `content_analysis` 저장 + AI 쇼츠를 회차 추천 보드에 기록. 상세는 [pipeline-current.md](pipeline-current-state.md) | `POST /api/media/upload` (업로드 시), `POST /api/admin/queue/purge`의 재큐 |
 
 ## 워커 레인 분리 (content ↔ youtube)
 
@@ -87,7 +87,7 @@ Cloud Run은 **응답이 끝나는 순간 CPU를 throttle**하고 요청을 **60
 **content 레인 필수 env** (`/etc/stepd/worker.env`, `worker-vm.sh`가 넣는다):
 `GCS_BUCKET`(GCS 영상 읽기 — 없으면 로컬모드로 못 찾아 ENOENT) · `CORE_PYTHON`(=`/opt/stepd/core/.venv/bin/python`,
 없으면 Windows 기본경로로 폴백해 실패) · `GOOGLE_CLOUD_PROJECT` · `VERTEX_LOCATION` · `STT_PROVIDER=gemini`.
-파이썬 venv는 `worker-pipeline-setup.sh`로 별도 설치 ([pipeline-current.md](pipeline-current.md)).
+파이썬 venv는 `worker-pipeline-setup.sh`로 별도 설치 ([pipeline-current.md](pipeline-current-state.md)).
 
 ## 파이프라인 주기 (쿼터 고려)
 
@@ -163,14 +163,14 @@ curl -s "https://stepd.stepai.kr/api/youtube/analytics/UCxxxx/daily?days=90"
 **재배포는 VM에 들어가 `git pull` 하지 말고 스크립트로.**
 
 ```powershell
-.\deploy\deploy-server.ps1      # Cloud Run + 워커 VM 함께 (권장 — 한쪽만 올리면 코드가 어긋난다)
-.\deploy-worker.ps1             # 워커만 (리포 루트)
+bash deploy/cloud.sh server    # Cloud Run 서비스
+bash deploy/cloud.sh worker    # 워커 Jobs (한쪽만 올리면 코드가 어긋난다 — 보통 둘 다)
 ```
 
 두 스크립트 모두 VM에 SSH해서 `git fetch` + `git reset --hard origin/main` 후
 **두 레인 서비스를 재시작**한다(`stepd-worker-youtube` · `stepd-worker-content`; 분리 전 VM이면 옛
 `stepd-worker` 단일로 폴백). 워커는 origin/main을 당겨가므로 **커밋·푸시가 선행**돼야 한다
-(`deploy-server.ps1`은 이를 자동으로 확인·푸시한다). 워커는 `/opt/stepd`의 TS 소스를 tsx로 직접
+(`cloud.sh` 가 미커밋 변경을 감지해 물어본다). 워커는 `/opt/stepd`의 TS 소스를 tsx로 직접
 실행하므로 빌드 단계가 없다. 전체 배포 절차는 [deploy.md](deploy.md).
 
 **레인 서비스를 처음 만들 때(또는 worker.env 항목 추가)는 `worker-vm.sh`를 다시 돌린다.**

@@ -3,6 +3,17 @@
 > 2026-08-07 재편. **폴더가 문서의 성격을 말한다**: `ops/`는 지금 사실(현황·운영), `plans/`는 계획(`active/` 진행중 · `done/` 구현완료 · `onhold/` 보류),
 > `reference/`는 사전처럼 찾아보는 레퍼런스, `research/`는 기술 조사, `archive/`는 역사 기록(따라하지 말 것).
 
+## 리포 최상위 — 어디에 뭐가 있나
+
+| 폴더 | 무엇 |
+|---|---|
+| `apps/web` · `apps/server` · `core/` | **제품 코드** (프론트 · 서버/워커 · AI 파이프라인) |
+| `admin/` | 플랫폼 관리 콘솔 (STEPAI 운영자 전용) |
+| `deploy/` | 배포 — 표준은 `bash deploy/cloud.sh <target>` |
+| [`scripts/`](../scripts/README.md) | 개발·운영·실험 스크립트 (제품 코드 아님) |
+| `docs/` | 이 문서들 |
+| `apps/api/` | ⚠️ 구 STEPD 레거시 — **미사용, 새 코드 금지** |
+
 ## 읽는 순서
 
 **새 개발자 / 새 AI 세션**
@@ -21,7 +32,7 @@
 1. [plans/active/step-d-master-build-plan.md](plans/active/step-d-master-build-plan.md) — **종합 빌드 플랜 (정본)**
 2. [plans/active/b2b-workspace-strategy.md](plans/active/b2b-workspace-strategy.md) — **B2B 전략 정본** (워크스페이스 판매 · 고객사 API · KT ENA 연동)
 3. [plans/active/broadcast-station-expansion-goal.md](plans/active/broadcast-station-expansion-goal.md) — 방송국 전사 확장 목표
-4. [plans/active/](plans/active/) — 진행 중 10건 · [plans/onhold/](plans/onhold/) — 보류 8건
+4. [plans/active/](plans/active/) — 진행 중 14건 · [plans/onhold/](plans/onhold/) — 보류 8건
 
 **영업·사업 (고객사에 뭘 말하나)**
 1. [plans/active/b2b-workspace-strategy.md](plans/active/b2b-workspace-strategy.md) — 구조·안전장치·온보딩 체크리스트
@@ -53,7 +64,7 @@
 
 | 폴더 | 뜻 | 개수 |
 |---|---|---|
-| **[active/](plans/active/)** | 진행 중이거나 곧 할 것 | 9 |
+| **[active/](plans/active/)** | 진행 중이거나 곧 할 것 | 14 |
 | [done/](plans/done/) | 구현 완료 — 현황은 `ops/` 문서가 정본 | 9 |
 | [onhold/](plans/onhold/) | 보류 (예산·자원 대기) | 8 |
 | [../archive/plans-2026-07/](archive/plans-2026-07/) | 역사 기록 — **따라하지 말 것** | 7 |

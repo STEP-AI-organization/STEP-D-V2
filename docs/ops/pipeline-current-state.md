@@ -37,8 +37,8 @@ content_analysis 저장 · search_segments(pgvector) 인덱싱 · 추천 배선
 | `core/beat_annot.py` | beat 프레임 Vision 주석 (+맥락 누적) | 449 |
 | `core/signals.py` | beat 저수준 신호 (LLM 독립) | 250 |
 | `core/index_segments.py` | 검색 세그먼트 재조립 + 임베딩 | 436 |
-| `scripts/run_analyze_local.py` | **로컬 실행 러너** — .env 로드 + venv 선택 + 자격증명 사전 확인 | 81 |
-| `scripts/make_review_viewer.py` | 검토 뷰어 생성 (영상+beat+쇼츠+검색) | 252 |
+| `scripts/ops/run_analyze_local.py` | **로컬 실행 러너** — .env 로드 + venv 선택 + 자격증명 사전 확인 | 81 |
+| `scripts/experiments/make_review_viewer.py` | 검토 뷰어 생성 (영상+beat+쇼츠+검색) | 252 |
 
 ---
 
@@ -206,7 +206,7 @@ GEBD 배선 버그 5개가 겹쳐 **경계 256개가 각 60초 청크의 앞 11.
 ## 9. 로컬 실행 (함정 3개)
 
 ```bash
-python scripts/run_analyze_local.py <video> --out <workdir> --genre drama
+python scripts/ops/run_analyze_local.py <video> --out <workdir> --genre drama
 ```
 
 이 러너를 쓸 것. 직접 돌리면 아래를 매번 밟는다:
@@ -223,7 +223,7 @@ python scripts/run_analyze_local.py <video> --out <workdir> --genre drama
 검토 뷰어:
 
 ```bash
-python scripts/make_review_viewer.py <workdir> <video> [out.html]
+python scripts/experiments/make_review_viewer.py <workdir> <video> [out.html]
 ```
 
 ---

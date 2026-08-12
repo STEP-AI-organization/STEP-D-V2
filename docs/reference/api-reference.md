@@ -132,7 +132,7 @@ API 키(`api-keys.ts`). **화이트리스트(`API_KEY_ROUTES`)에 올린 라우�
 ```
 
 파일이 Cloud Run을 거치지 않으므로 32 MB 요청 캡·타임아웃이 적용되지 않는다. 실제 추천
-구간은 워커의 `content.analyze` 잡이 채운다 ([../ops/pipeline-current.md](../ops/pipeline-current.md)).
+구간은 워커의 `content.analyze` 잡이 채운다 ([../ops/pipeline-current.md](../ops/pipeline-current-state.md)).
 청크 전송·재개 로직은 `api.ts`의 `uploadResumable()` 참고.
 
 ## 썸네일 — 레퍼런스 · 스타일 프로파일 · 생성
@@ -147,8 +147,8 @@ Vision으로 분석하고, 프로그램별 스타일 프로파일을 학습해 �
 | `POST /api/thumbnail-refs` | 이미지 업로드 (multipart) — GCS(prod) / local(dev) | `file`(필수) → `{ item }`. multipart 아니면 400, 확장자 미지원 400 | (직접 호출) |
 | `PATCH /api/thumbnail-refs/:id` | 메타데이터 편집 (`program`·`custom_tags`·`user_note` 등) | → `{ item }` | (직접 호출) |
 | `DELETE /api/thumbnail-refs/:id` | manifest + 파일 삭제 (GCS + local) | → `{ ok }` | (직접 호출) |
-| `POST /api/thumbnail-refs/:id/analyze` | Vision 자동 분석 (manifest `_analyzed=false → true`) | → `{ item }`. **Cloud Run에서는 501** — 로컬 워커에서 `python scripts/thumbnail_reference_manifest.py` | (직접 호출) |
-| `POST /api/thumbnail-refs/:id/preprocess` | 사전 가공 (텍스트→슬롯 라벨 · 얼굴→실루엣) | → `{ item }`. **Cloud Run에서는 501** — 로컬 워커에서 `python scripts/thumbnail_preprocess_template.py <id>` | (직접 호출) |
+| `POST /api/thumbnail-refs/:id/analyze` | Vision 자동 분석 (manifest `_analyzed=false → true`) | → `{ item }`. **Cloud Run에서는 501** — 로컬 워커에서 `python scripts/thumbnail/thumbnail_reference_manifest.py` | (직접 호출) |
+| `POST /api/thumbnail-refs/:id/preprocess` | 사전 가공 (텍스트→슬롯 라벨 · 얼굴→실루엣) | → `{ item }`. **Cloud Run에서는 501** — 로컬 워커에서 `python scripts/thumbnail/thumbnail_preprocess_template.py <id>` | (직접 호출) |
 | `POST /api/thumbnail-refs/batch/:action` | 미분석/미가공 항목 일괄 처리 (`analyze` \| `preprocess`) | → `{ ok, processed, results }` | (직접 호출) |
 | `POST /api/thumbnail-refs/import-youtube` | 이미 sync된 채널 영상 중 **상위 뷰 썸네일 자동 수집** → refs 추가 | `{ channelId(필수) }` → `{ added, items }`. 전제: 채널 sync 완료 · `entities`에 `youtube_video` 저장됨. 미sync면 404 | (직접 호출) |
 | `POST /api/programs/:id/thumbnail-style` | 프로그램 스타일 프로파일 **학습** (프로그램당 1회성 — 톤이 바뀌면 재실행) | `{ sourceUrl(필수) }` → `{ ok, jobId }`(`thumbnail.style` 잡). **재생목록 URL을 권한다** — 큰 채널은 프로그램·기수를 재생목록으로 나눠 담아서, 채널 전체로 학습하면 여러 프로그램 톤이 섞인다 | `trainThumbnailStyle` |

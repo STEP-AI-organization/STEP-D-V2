@@ -1,6 +1,6 @@
 # STEP-D AI 파이프라인 구현 계획
 
-> 상위 확장: [context-engine-plan.md](context-engine-plan.md) — 인물·서사 컨텍스트 엔진(CX 트랙). 객체인식 기술 선정: [../archive/object-detection-research.md](../archive/object-detection-research.md)
+> 상위 확장: [context-engine-plan.md](../../plans/onhold/context-engine-plan.md) — 인물·서사 컨텍스트 엔진(CX 트랙). 객체인식 기술 선정: [../archive/object-detection-research.md](../object-detection-research.md)
 
 > 2026-07-14 작성 · 2026-07-16 실측 대조 갱신. 발명신고서(구성 A~J)를 실제 제품으로 구현하기 위한 빌드/오픈소스/API 결정.
 > 전제: AI는 **관리형 API 위주**(GPU 자체 운영 없음), 현 Cloud Run + Cloud SQL + GCS 구조 유지.
@@ -12,7 +12,7 @@
 
 | 이 문서의 결정 | 실제 구현 (코드 확인) |
 |---------------|---------------------|
-| 작업 큐 = **pg-boss** (MIT) | **자체 구현 `apps/server/src/queue.ts`** — Postgres `job_queue` 테이블(코드가 런타임 생성), `FOR UPDATE SKIP LOCKED` 클레임, dedupeKey 부분 유니크 인덱스(in-flight 중복 방지), 지수 백오프(30초→최대 30분, maxAttempts 5). pg-boss는 도입되지 않았다. 운영 상세: [../ops/worker-queue.md](../ops/worker-queue.md) |
+| 작업 큐 = **pg-boss** (MIT) | **자체 구현 `apps/server/src/queue.ts`** — Postgres `job_queue` 테이블(코드가 런타임 생성), `FOR UPDATE SKIP LOCKED` 클레임, dedupeKey 부분 유니크 인덱스(in-flight 중복 방지), 지수 백오프(30초→최대 30분, maxAttempts 5). pg-boss는 도입되지 않았다. 운영 상세: [../ops/worker-queue.md](../../ops/worker-queue.md) |
 | STT = **Clova Speech** 1차 | **Gemini가 관리형 기본** — `core/asr.py`, `STT_PROVIDER=gemini` 기본 / `whisper`(로컬 GPU faster-whisper) 2-provider 어댑터. 관리형 Google STT가 한국어 고유명사를 뭉개는("정우성"→"정구속") 품질 문제가 실측돼 Gemini로 확정(Vertex asia-northeast3 서울). Clova는 코드에 없다 |
 | 신규 구현은 **apps/server(TS)** | AI 파이프라인은 **파이썬 `core/` 패키지**(analyze·asr·refine·scenes·vision·names·recommend)로 구현됨. 워커의 `content-pipeline.ts`가 `python -m core.analyze`를 스폰한다 |
 | `buildRecommendations()` 휴리스틱을 AP2에서 교체 | 교체가 아니라 **완전 제거** — 死코드로 잔존 후 2026-07-28 파일에서 삭제. `pipeline.ts`는 `newId`만 export. 실추천은 `core/recommend.py`(장면 타임라인 → Gemini 단일 추론) 결과를 `content-pipeline.ts`의 `writeRecommendationsFromShorts`가 회차 추천 보드에 기록 |
@@ -21,7 +21,7 @@
 **테이블명 매핑 각주** — 본문이 제안한 정규 테이블은 실제 스키마에서 다음으로 대체됐다:
 
 - `transcript` 테이블(구성 B) → 별도 테이블 없음. 전사는 `content_analysis` JSONB(transcript+scenes+shorts 통합 블롭, `db-pg.ts`가 런타임 생성 — schema.sql에 없음)에 저장된다.
-- `metrics_snapshot`(채널 분석 1단계) → `video_stats`(주기 스냅샷) + `video_analytics`(요약/트래픽/시청층) + `video_retention`(리텐션 커브 JSON) + `video_comments`(이상 schema.sql) + `channel_analytics`(런타임 생성). 상세: [../reference/data-model.md](../reference/data-model.md)
+- `metrics_snapshot`(채널 분석 1단계) → `video_stats`(주기 스냅샷) + `video_analytics`(요약/트래픽/시청층) + `video_retention`(리텐션 커브 JSON) + `video_comments`(이상 schema.sql) + `channel_analytics`(런타임 생성). 상세: [../reference/data-model.md](../../reference/data-model.md)
 
 **배포·운영** — cloudbuild.yaml은 Cloud Run 서버(stepd-server)만 배포하며, 워커 VM은 루트 `deploy-worker.ps1`(git reset --hard origin/main + systemctl restart stepd-worker)로 수동 배포한다.
 
@@ -170,7 +170,7 @@
 - Meta Reels: Graph API insights(재생·도달·평균 시청시간·저장/공유). SMR: 어댑터별 가능한 지표만.
 - 저장: `metrics_snapshot` 정규 테이블 — (클립, 채널, 시각, 지표) + 리텐션 커브는 JSON.
 
-**→ 실제:** 수집(1단계)은 YouTube 채널 범위에서 이미 워커로 가동 중이다 — 15분 스윕이 `channel.analyze`를 큐잉하고, 영상별로 `video.analyze`(애널리틱스+리텐션 커브), `video.comments`(상위 댓글), `video.hotwatch`(신규 업로드 48시간 시간별 스냅샷, 자기 재큐)로 팬아웃한다(`worker.ts`, `config.ts`). 저장은 `metrics_snapshot`이 아니라 video_stats/video_analytics/video_retention/video_comments(상단 각주). 다만 이는 "채널의 기존 영상" 분석이고, **우리가 배포한 클립의 성과 조인(2~6단계)은 미착수**다. 현황: [../ops/pipeline-current.md](../ops/pipeline-current.md)
+**→ 실제:** 수집(1단계)은 YouTube 채널 범위에서 이미 워커로 가동 중이다 — 15분 스윕이 `channel.analyze`를 큐잉하고, 영상별로 `video.analyze`(애널리틱스+리텐션 커브), `video.comments`(상위 댓글), `video.hotwatch`(신규 업로드 48시간 시간별 스냅샷, 자기 재큐)로 팬아웃한다(`worker.ts`, `config.ts`). 저장은 `metrics_snapshot`이 아니라 video_stats/video_analytics/video_retention/video_comments(상단 각주). 다만 이는 "채널의 기존 영상" 분석이고, **우리가 배포한 클립의 성과 조인(2~6단계)은 미착수**다. 현황: [../ops/pipeline-current.md](../../ops/pipeline-current-state.md)
 
 **2) 정규화 — 채널 베이스라인 대비**
 
@@ -234,7 +234,7 @@
 - **AP4 — 배포 실동작**: YouTube 실업로드, 스케줄러, 제목/메타 생성 I(프로그램·채널 프로파일 반영), Meta 앱 심사 착수. **채널 분석 수집(1~3단계)도 여기서 시작** — 데이터는 빨리 쌓을수록 좋고, 수집 자체는 기존 인프라로 가벼움.
 - **AP5 — 차별화 완성**: PPL 리포트 H, 화자 추적 리프레이밍, 댓글 요약, 채널 분석 진단·프로파일 갱신·A/B 루프(4~6단계), 트렌드 분석 모듈 T(수집·역분석·주간 리포트 → 콜드오픈 옵션 등 제작 반영), SMR 어댑터.
 
-**→ 진척 (2026-07-16):** AP1의 큐·잡 체인은 자체 job_queue + `content.analyze` 잡으로 가동(프록시·리먹스 제외). AP2·AP3의 분석 축은 core/(asr→refine→scenes→vision→recommend)로 부분 선행 구현 — 단 훅 사전(C)·경계 스냅(D)·프로파일/채널 적합 계수는 미착수. AP4 항목 중 채널 분석 수집은 예정보다 앞당겨 이미 가동 중(`channel.analyze`/`video.*` 잡). 렌더 고도화(F)·실업로드(J)는 미착수. as-built 상세: [../ops/pipeline-current.md](../ops/pipeline-current.md)
+**→ 진척 (2026-07-16):** AP1의 큐·잡 체인은 자체 job_queue + `content.analyze` 잡으로 가동(프록시·리먹스 제외). AP2·AP3의 분석 축은 core/(asr→refine→scenes→vision→recommend)로 부분 선행 구현 — 단 훅 사전(C)·경계 스냅(D)·프로파일/채널 적합 계수는 미착수. AP4 항목 중 채널 분석 수집은 예정보다 앞당겨 이미 가동 중(`channel.analyze`/`video.*` 잡). 렌더 고도화(F)·실업로드(J)는 미착수. as-built 상세: [../ops/pipeline-current.md](../../ops/pipeline-current-state.md)
 
 ## 인프라·비용 노트
 

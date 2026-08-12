@@ -1,6 +1,6 @@
 # 썸네일 배경 생성 · 소스 조합 실측
 
-> 2026-07-26 · 환승연애 workdir(m_5ec98a5a) · `scripts/thumbnail_pilot.py`
+> 2026-07-26 · 환승연애 workdir(m_5ec98a5a) · `scripts/thumbnail/thumbnail_pilot.py`
 > 계획서 §13 default 확정 근거.
 
 ## 세팅

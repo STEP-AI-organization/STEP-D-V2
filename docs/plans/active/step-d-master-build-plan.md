@@ -19,11 +19,11 @@
 | 구분 | 정본(LIVE) | 폐기(따라가면 안 됨) |
 |------|-----------|----------------------|
 | 제품/비전 | `../archive/STEPD-방향기획서.docx·pdf`(마스터), `apps/docs/product-vision.md`(8레이어·5Phase 유효) | — |
-| 아키텍처 | `CLAUDE.md`, [`../ops/infra.md`](../ops/infra.md)("단일 진실 소스"), 본 문서 | `apps/docs/architecture.md`(구 FastAPI), `apps/docs/dev-guide.md`, `apps/docs/feature-status.md`(구 시스템) |
-| 파이프라인 | [`pipeline-plan.md`](pipeline-plan.md)(A~J 청사진), [`../ops/pipeline-current.md`](../ops/pipeline-current.md)(데이터 수집 + AI 콘텐츠 분석 통합) | (구 `core/README.md`·`WHISPERX_GUIDE.md`·`bridge.ts`는 9d76484에서 **삭제 완료**) |
-| 인프라/배포 | [`../ops/infra.md`](../ops/infra.md), [`../ops/worker-queue.md`](../ops/worker-queue.md), [`../ops/deploy.md`](../ops/deploy.md), [`../ops/vercel-ops.md`](../ops/vercel-ops.md), `deploy/deploy-server.ps1`·`deploy-web.ps1`(워커만 재배포 = 루트 `deploy-worker.ps1`) | `docker-compose*.yml`·`Caddyfile`·`scripts/dev.ps1`·`deploy/setup-vm.sh`·`deploy/deploy.sh`(전부 구 shorts-api VM/asia-northeast3). ※루트 `deploy.ps1`은 d48c8f9에서 Cloud Run 서버 배포용으로 교체돼 더는 폐기 아님 |
-| 데이터 모델 | `apps/server/schema.sql` + [`../reference/data-model.md`](../reference/data-model.md)(런타임 생성 테이블 포함 전모, §9) | — |
-| 편집기 | [`opencut-integration-plan.md`](opencut-integration-plan.md), 본 문서 §7 | — |
+| 아키텍처 | `CLAUDE.md`, [`../ops/infra.md`](../../ops/infra.md)("단일 진실 소스"), 본 문서 | `apps/docs/architecture.md`(구 FastAPI), `apps/docs/dev-guide.md`, `apps/docs/feature-status.md`(구 시스템) |
+| 파이프라인 | [`pipeline-plan.md`](../../archive/plans-2026-07/pipeline-plan.md)(A~J 청사진), [`../ops/pipeline-current.md`](../../ops/pipeline-current-state.md)(데이터 수집 + AI 콘텐츠 분석 통합) | (구 `core/README.md`·`WHISPERX_GUIDE.md`·`bridge.ts`는 9d76484에서 **삭제 완료**) |
+| 인프라/배포 | [`../ops/infra.md`](../../ops/infra.md), [`../ops/worker-queue.md`](../../ops/worker-queue.md), [`../ops/deploy.md`](../../ops/deploy.md), [`../ops/vercel-ops.md`](../../ops/vercel-ops.md), `deploy/deploy-server.ps1`·`deploy-web.ps1`(워커만 재배포 = 루트 `deploy-worker.ps1`) | `docker-compose*.yml`·`Caddyfile`·`scripts/dev.ps1`·`deploy/setup-vm.sh`·`deploy/deploy.sh`(전부 구 shorts-api VM/asia-northeast3). ※루트 `deploy.ps1`은 d48c8f9에서 Cloud Run 서버 배포용으로 교체돼 더는 폐기 아님 |
+| 데이터 모델 | `apps/server/schema.sql` + [`../reference/data-model.md`](../../reference/data-model.md)(런타임 생성 테이블 포함 전모, §9) | — |
+| 편집기 | 본 문서 §7 (구 `opencut-integration-plan.md` 는 삭제됨 — 내용은 §7 로 흡수) | — |
 | 코드(레거시) | `apps/web`, `apps/server`, `core/` | `apps/api`(구 Python FastAPI, 로직 참고만 — **폐기 여부 미결정**, §12 R13) |
 
 **정리 권고(문서 위생):** 1차 실행 완료 — 2026-07-16 재편·삭제로 `deploy/INFRA.md`의 죽은 Vercel env 오염원 등이 제거됐다. 남은 폐기 대상(`apps/docs/architecture.md` 등 구 시스템 문서)은 헤더에 `> ⚠️ DEPRECATED` 배너를 달거나 `docs/archive/`로 이동.
@@ -188,7 +188,7 @@ AI: Vertex Gemini(gemini-3.1-flash) — 서울(asia-northeast3) 리전 고정 (�
 | 형태소 | Kiwi(`kiwi-nlp`) | LGPL-3, WASM npm |
 | 이미지 리사이즈 | sharp | Apache-2 |
 
-### 4.3 객체탐지/OCR/비전 ([`../archive/object-detection-research.md`](../archive/object-detection-research.md) 결론)
+### 4.3 객체탐지/OCR/비전 ([`../archive/object-detection-research.md`](../../archive/object-detection-research.md) 결론)
 - **PPL(H):** 1차 Gemini 멀티모달(E 인프라 공유, 추가비용 0) → 보강 **Video Intelligence Logo Recognition**(10만+ 브랜드, 구간 타임스탬프) → 장기 Grounding DINO(Apache) 자체호스팅.
 - **리프레이밍(F)·썸네일(G)·얼굴:** **MediaPipe**(Apache, CPU) + 라플라시안 선명도. 추적 **ByteTrack**(MIT).
 - **OCR(이름자막):** **PaddleOCR**(Apache) 또는 Gemini — 방송 이름자막이 인물 식별 최강 앵커.
@@ -330,7 +330,7 @@ AI: Vertex Gemini(gemini-3.1-flash) — 서울(asia-northeast3) 리전 고정 (�
 **현재 (Cloud SQL):**
 - `entities(kind,id,data JSONB,ord)` — `program|episode|recommendation|clip|job` 도메인 그래프(JSON 블롭).
 - 정규: `media` · `youtube_channels` · `channel_videos` · `video_stats` · `channel_analytics` · `video_analytics` · `video_retention` · `video_comments` · **`content_analysis`**(mediaId PK, AI 분석결과) · `job_queue` · `kv`.
-- **⚠️ 스키마 소재 주의(런타임 생성 3종):** `schema.sql`에는 9개 테이블(entities·media·kv·youtube_channels·channel_videos·video_stats·video_analytics·video_retention·video_comments)만 있다. **`job_queue`(queue.ts:47 initQueue) · `content_analysis`(db-pg.ts:215) · `channel_analytics`(db-pg.ts:135)는 코드가 기동 시 `CREATE TABLE IF NOT EXISTS`로 생성**한다 — schema.sql만으로 DB를 재구축하면 이 3종이 빠진다(서버/워커 기동 시 자동 보정되긴 함). 전체 테이블·컬럼 정의는 [`../reference/data-model.md`](../reference/data-model.md) 참고.
+- **⚠️ 스키마 소재 주의(런타임 생성 3종):** `schema.sql`에는 9개 테이블(entities·media·kv·youtube_channels·channel_videos·video_stats·video_analytics·video_retention·video_comments)만 있다. **`job_queue`(queue.ts:47 initQueue) · `content_analysis`(db-pg.ts:215) · `channel_analytics`(db-pg.ts:135)는 코드가 기동 시 `CREATE TABLE IF NOT EXISTS`로 생성**한다 — schema.sql만으로 DB를 재구축하면 이 3종이 빠진다(서버/워커 기동 시 자동 보정되긴 함). 전체 테이블·컬럼 정의는 [`../reference/data-model.md`](../../reference/data-model.md) 참고.
 
 **신규 필요 (방향기획서 8.2 + 각 트랙):**
 - `transcript`(단어/문장별 start·end PTS) — B의 단일 원천. **C/D/F/I/H가 전부 이 테이블만 읽음(재호출 금지).**
@@ -438,5 +438,5 @@ AI: Vertex Gemini(gemini-3.1-flash) — 서울(asia-northeast3) 리전 고정 (�
 | 프론트 데이터층 | `apps/web/src/lib/data/{store.tsx,api.ts,repository.ts,mock.ts}` |
 | 편집기 골격 | `apps/web/src/components/editor/`, `../prototypes/editor-prototype.html` |
 | 배포 스크립트(정본) | `deploy/{deploy-server,deploy-web}.ps1`, `deploy/{worker-vm,worker-pipeline-setup}.sh` |
-| 인프라 정본 | [`../ops/infra.md`](../ops/infra.md) |
-| 데이터 모델 레퍼런스 | [`../reference/data-model.md`](../reference/data-model.md) |
+| 인프라 정본 | [`../ops/infra.md`](../../ops/infra.md) |
+| 데이터 모델 레퍼런스 | [`../reference/data-model.md`](../../reference/data-model.md) |

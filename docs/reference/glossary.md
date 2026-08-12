@@ -31,4 +31,5 @@
 | TT | 구작 | |
 | T9 | 기타 | |
 
-배포 필수 필드·채널별 준비도 판정은 [../plans/publish-fields-ux-plan.md](../plans/publish-fields-ux-plan.md) 참고.
+배포 필수 필드·채널별 준비도 판정은 코드가 정본이다 — 서버 `publish-guard.ts`(채널 모드·게이트)와
+`apps/web/src/lib/publish/requirements.ts`(채널별 체크리스트). 구 `publish-fields-ux-plan.md` 는 삭제됐다.

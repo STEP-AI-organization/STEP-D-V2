@@ -341,7 +341,7 @@ def add_caption(ctx: SessionContext, text: str, position: str = "bottom",
     font_file = FONT_PRESETS.get(font_role, FONT_PRESETS["_default"])
     font_path = FONT_ROOT / font_file
     if not font_path.exists():
-        return {"error": f"font not found: {font_path} · run scripts/download-fonts.ps1"}
+        return {"error": f"font not found: {font_path} · run scripts/ops/download-fonts.ps1"}
 
     # 폰트 크기: XL/L/M · 3줄 넘으면 축소 재시도 (§14.3 2~3)
     size_px = SIZE_PX.get(size_hint, SIZE_PX["XL"])

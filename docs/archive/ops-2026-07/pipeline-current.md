@@ -5,8 +5,8 @@
 > 두 계층을 한 문서에서 다룬다: ① **채널·영상·성과 데이터 수집** (channel.* / video.* 잡, TS 구현) ·
 > ② **AI 콘텐츠 분석** (`content.analyze`, 파이썬 `core/` 파이프라인 — STT→refine→scenes→vision→names→shorts).
 > 둘은 같은 워커 VM·큐·DB를 공유하되 잡 타입·핸들러·테이블이 분리돼 충돌하지 않는다.
-> 전체 청사진(구성 A~J)은 [../plans/pipeline-plan.md](../plans/pipeline-plan.md),
-> 큐 자체(클레임·백오프·dedupe)의 상세는 [worker-queue.md](worker-queue.md).
+> 전체 청사진(구성 A~J)은 [../plans/pipeline-plan.md](../plans-2026-07/pipeline-plan.md),
+> 큐 자체(클레임·백오프·dedupe)의 상세는 [worker-queue.md](../../ops/worker-queue.md).
 
 ---
 
@@ -141,7 +141,7 @@ Postgres 하나로 처리 (별도 브로커 없음):
 - ⚠️ **`job_queue`·`content_analysis`는 `schema.sql`에 없다** — 코드가 런타임에 생성한다
   (`queue.ts`의 `initQueue`, `db-pg.ts`의 `initDb`). `estimatedRevenue` 컬럼도
   `ALTER TABLE … ADD COLUMN IF NOT EXISTS`로 코드가 백필한다. 테이블 정의의 정본은
-  [../reference/data-model.md](../reference/data-model.md).
+  [../reference/data-model.md](../../reference/data-model.md).
 - `estimatedRevenue`는 별도 Analytics 호출로 일별 수익을 받아 `channel_analytics`에 병합한다.
   수익 창출 채널 + 수익(monetary) 스코프 동의가 있어야 값이 오고, 아니면 **0으로 남되 이유를
   로그로 남긴다** (MCN/CMS가 수익을 관리하는 채널은 403).
@@ -161,8 +161,8 @@ curl "https://stepd.stepai.kr/api/youtube/analytics/CHANNEL_ID/daily?days=90"
 gcloud compute ssh stepd-worker --zone us-central1-a --command "sudo journalctl -u stepd-worker -n 30 --no-pager"
 ```
 
-관련: 큐·워커 인프라 상세 [worker-queue.md](worker-queue.md) · 배포 [deploy.md](deploy.md) ·
-YouTube OAuth·심사 [youtube-channel-analytics-guide.md](youtube-channel-analytics-guide.md)
+관련: 큐·워커 인프라 상세 [worker-queue.md](../../ops/worker-queue.md) · 배포 [deploy.md](../../ops/deploy.md) ·
+YouTube OAuth·심사 [youtube-channel-analytics-guide.md](../../ops/youtube-channel-analytics-guide.md)
 
 ---
 
@@ -301,7 +301,7 @@ core/.venv310/Scripts/python -m core.analyze core/영상.mp4 --out /tmp/out
 ## 아직 안 된 것 (다음 단계)
 
 AI 분석 자체는 이미 이 워커에서 돈다 — `content.analyze`가 STT→장면→비전→쇼츠 추천까지
-만들어 회차 추천 보드에 올린다. [../plans/pipeline-plan.md](../plans/pipeline-plan.md) 기준으로 남은 것:
+만들어 회차 추천 보드에 올린다. [../plans/pipeline-plan.md](../plans-2026-07/pipeline-plan.md) 기준으로 남은 것:
 
 - **렌더 고도화**: 추천 채택 시 지금은 ffmpeg 단순 트림·인코딩뿐 — 리프레이밍(9:16 크롭)·자막·템플릿 렌더 미구현
 - **장면 프레임 UI**: 프레임·산출물은 GCS `analysis/{mediaId}/`에 영구 저장되지만, 웹/Lab에서 이를 그리는 화면은 아직 없다

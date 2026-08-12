@@ -1,10 +1,10 @@
 # 썸네일 엔진 계획 — 사람이 만든 것 같은 쇼츠/클립 썸네일 자동 생성
 
 > 작성 2026-07-26. 이 문서는 초안(계획 시점)입니다.
-> **최신 정본**: [`thumbnail-engine-consolidated.md`](thumbnail-engine-consolidated.md) (2026-07-28)
+> **최신 정본**: [`thumbnail-engine-consolidated.md`](../../plans/done/thumbnail-engine-consolidated.md) (2026-07-28)
 > — 오늘 세션 진행 상황 (Planner CoT · hybrid composition · style 학습) 반영 · MVP1/2/3 재정리.
 
-관련: [`step-d-master-build-plan.md`](step-d-master-build-plan.md) §7(편집기) · `core/faces.py`(얼굴) ·
+관련: [`step-d-master-build-plan.md`](../../plans/active/step-d-master-build-plan.md) §7(편집기) · `core/faces.py`(얼굴) ·
 `apps/server/src/index.ts`의 `selectThumbnail`(현행: 단일 프레임)
 
 ---
@@ -759,8 +759,8 @@ contents:
 
 ### 13.4 실 파일럿 결과 · default 확정 (2026-07-26)
 
-환승연애 workdir(m_5ec98a5a) 실측 5개 조합 (`scripts/thumbnail_pilot.py`).
-상세: [`../research/thumbnail-source-experiments.md`](../research/thumbnail-source-experiments.md)
+환승연애 workdir(m_5ec98a5a) 실측 5개 조합 (`scripts/thumbnail/thumbnail_pilot.py`).
+상세: [`../research/thumbnail-source-experiments.md`](../../research/thumbnail-source-experiments.md)
 
 | 실험 | 소스 | 결과 |
 |------|------|------|

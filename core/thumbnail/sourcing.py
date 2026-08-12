@@ -133,7 +133,7 @@ def search_windows(
     "장면"을 의미로 찾는 것이 목적이고, 초 단위 추측은 그 다음 문제다.
 
     ⚠️ search_segments 의 emb_* 가 NULL 이면 벡터 축이 0 이 되어 키워드 검색으로
-    조용히 격하된다. scripts/backfill_segment_embeddings.py 로 먼저 확인할 것.
+    조용히 격하된다. scripts/ops/backfill_segment_embeddings.py 로 먼저 확인할 것.
     """
     import json
     import os

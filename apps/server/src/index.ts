@@ -4046,7 +4046,7 @@ app.post("/api/thumbnail-refs/:id/preprocess", async (c) => {
   if (useGcs()) {
     return c.json({
       error: "preprocess not supported on Cloud Run",
-      hint: "로컬 워커에서 실행하세요: python scripts/thumbnail_preprocess_template.py " + id,
+      hint: "로컬 워커에서 실행하세요: python scripts/thumbnail/thumbnail_preprocess_template.py " + id,
     }, 501);
   }
   const scriptPath = path.join(REPO_ROOT, "scripts", "thumbnail_preprocess_template.py");
@@ -4077,7 +4077,7 @@ app.post("/api/thumbnail-refs/:id/analyze", async (c) => {
   if (useGcs()) {
     return c.json({
       error: "analyze not supported on Cloud Run",
-      hint: "로컬 워커에서 실행: python scripts/thumbnail_reference_manifest.py",
+      hint: "로컬 워커에서 실행: python scripts/thumbnail/thumbnail_reference_manifest.py",
     }, 501);
   }
   // Python 스크립트 호출

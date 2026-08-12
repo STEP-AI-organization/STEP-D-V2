@@ -375,7 +375,7 @@ BILLING_ENABLED         실결제 게이트 — 미설정·오타·빈값 = OFF
 >   인증 강제는 `AUTH_REQUIRED` 로 켠다(기본 OFF — 화면이 없어서). 테넌트가 둘 이상인데 OFF 면
 >   기동 시 감지해 **모든 요청을 503** 으로 막는다(사람이 기억하는 데 기대지 않는다).
 >   `Bearer stepd_*`(외부 API 키)는 여전히 **501** — 키 테이블이 아직 없다(7단계 4번).
-> - `scripts/backfill_segment_embeddings.py` 등 **파이썬이 DB 에 직접 붙는 스크립트**는
+> - `scripts/ops/backfill_segment_embeddings.py` 등 **파이썬이 DB 에 직접 붙는 스크립트**는
 >   `app.tenant_id` 를 안 심어서 이제 0행을 보거나 INSERT 가 막힌다. 쓰기 전에 세팅 필요.
 >
 > 아래는 원래의 설계 근거 — 왜 이걸 결제보다 먼저 했는지.
@@ -434,6 +434,6 @@ BILLING_ENABLED         실결제 게이트 — 미설정·오타·빈값 = OFF
 ## 관련
 
 - [factory-api-plan.md](factory-api-plan.md) — 외부 API 표면. 이 문서가 그 "과금 보류" 항목을 연다
-- [../reference/data-model.md](../reference/data-model.md) — 현재 스키마
-- [../ops/infra.md](../ops/infra.md) — 시크릿 저장 위치(Secret Manager)
+- [../reference/data-model.md](../../reference/data-model.md) — 현재 스키마
+- [../ops/infra.md](../../ops/infra.md) — 시크릿 저장 위치(Secret Manager)
 - `apps/server/src/upload-gate.ts` — `BILLING_ENABLED` 가 복제할 게이트 패턴
