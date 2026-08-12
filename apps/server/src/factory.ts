@@ -437,6 +437,10 @@ export function autoEditorState(rec: any, programTitle: string): Record<string, 
   const hook = String(rec.hookQuote ?? "").replace(/^['"‘“]|['"’”]$/g, "").trim();
   const headline = hook && hook.length <= 30 ? hook : String(rec.titleLine1 ?? rec.title ?? "");
   const { lines, size } = wrapAutoTitle(headline);
+  // 둘째 줄은 항상 강조색 (사용자 확정: 파랑 또는 빨강). 추천 id 해시로 결정론적으로
+  // 골라 색이 번갈아 나오되 재렌더마다 바뀌지는 않는다.
+  const accent = [...String(rec.id ?? "")].reduce((a, ch) => a + ch.charCodeAt(0), 0) % 2 === 0
+    ? "#FF4040" : "#3B82F6";
   return {
     aspect: "9:16",
     bgType: "solid",
@@ -444,7 +448,10 @@ export function autoEditorState(rec: any, programTitle: string): Record<string, 
     // 실존 프레임 템플릿 (assets/shorts-template/broadcast-clean) — 에디터에서 열어도
     // 같은 템플릿이 선택된 상태로 보인다. 없으면 solid 폴백이라 결과 기하는 동일.
     templateId: "broadcast-clean",
-    titleLines: lines.map((text) => ({ text, size, color: "#FFFFFF" })),
+    // 한 줄이면 통째로 강조색(레퍼런스의 빨간 헤드라인), 두 줄이면 둘째 줄만.
+    titleLines: lines.map((text, i) => ({
+      text, size, color: lines.length === 1 || i === 1 ? accent : "#FFFFFF",
+    })),
     titleX: 50,
     titleY: 11,
     titleAlign: "center",
