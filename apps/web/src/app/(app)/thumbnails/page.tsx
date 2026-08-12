@@ -24,7 +24,7 @@ import {
   type ThumbnailCandidateFile,
 } from "@/lib/data/api";
 import { useAppData } from "@/lib/data/store";
-import { fmtTime } from "@/lib/gate-ui";
+import { fmtTime } from "@/lib/utils";
 import { clipThumbSrc } from "@/lib/media-url";
 import type { Clip } from "@/lib/types";
 import { cn } from "@/lib/utils";

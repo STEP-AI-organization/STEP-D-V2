@@ -16,7 +16,7 @@ import { useMemo, useState } from "react";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { useToast } from "@/components/ui/toast";
 import { useAppData } from "@/lib/data/store";
-import { fmtTime } from "@/lib/gate-ui";
+import { fmtTime } from "@/lib/utils";
 import type { Clip, DistributionState } from "@/lib/types";
 import type { StatusTone } from "@/lib/constants";
 import { cn } from "@/lib/utils";

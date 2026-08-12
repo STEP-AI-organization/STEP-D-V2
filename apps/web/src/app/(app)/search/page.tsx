@@ -5,18 +5,13 @@
  *
  * 이 제품의 목적물은 영상 DB 다 — 쇼츠는 그 위의 질의 하나다.
  * 자연어 질의 + 날짜 필터 → 구간 카드(회차·시각·근거).
- *
- * 권리 배지는 **게이트 어휘로 통일**한다. 검색 결과의 `rightsStatus` 는 파이프라인이 붙인
- * 힌트지 판정이 아니다 — "확인 필요"라고 적고, 통과 여부를 말하지 않는다.
- * 게이트는 미디어가 된 뒤에 사람이 등록한 이슈로만 걸린다(F3).
  */
 import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { useAppData } from "@/lib/data/store";
 import { searchSegments, type SearchResponse, type SearchResultCard } from "@/lib/data/api";
-import { fmtTime } from "@/lib/gate-ui";
-import { cn } from "@/lib/utils";
+import { cn, fmtTime } from "@/lib/utils";
 
 export default function SearchPage() {
   const { programs, media } = useAppData();
@@ -199,9 +194,6 @@ function ResultCard({
   episodeLabel: string;
   episodeId: string | null;
 }) {
-  // 파이프라인이 붙인 권리 주석은 **판정이 아니다.** 게이트 어휘로 "확인 필요"까지만 말한다.
-  const rights = Object.values(hit.rightsStatus ?? {});
-
   return (
     <div className="sd-card flex flex-col gap-1.5 px-3 py-2.5">
       <div className="flex flex-wrap items-center gap-2">
@@ -230,16 +222,6 @@ function ResultCard({
       )}
 
       <div className="flex flex-wrap items-center gap-2">
-        {rights.length > 0 && (
-          <>
-            {rights.map((label, i) => (
-              <span key={i} className="sd-tag sd-tag--warn">{label}</span>
-            ))}
-            <span className="text-[10px]" style={{ color: "var(--sd-mut)" }}>
-              — 파이프라인이 붙인 참고 표시입니다. 실제 게이트는 미디어로 만든 뒤 사람이 등록한 이슈로 걸립니다.
-            </span>
-          </>
-        )}
         {/* /media 는 채택된 클립 목록이라 검색 히트(원본 구간)를 못 연다 — 원본이 있는 회차로 보낸다. */}
         {episodeId ? (
           <Link href={`/episodes/${episodeId}?tab=analyze`} className="sd-btn ml-auto">

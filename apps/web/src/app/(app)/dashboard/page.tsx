@@ -18,15 +18,10 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useSession } from "@/lib/auth";
 import {
   fetchChannelAnalytics,
-  fetchGateBatch,
   fetchYouTubeChannels,
-  type GateResult,
-  type GateState,
   type YouTubeChannelInfo,
 } from "@/lib/data/api";
 import { useAppData } from "@/lib/data/store";
-import { useGateSummary } from "@/lib/gate-summary";
-import { GATE_LABEL } from "@/lib/gate-ui";
 import { normalizeProgramStatus, rightsWindowOf } from "@/lib/programs";
 import { blockedCopy, revenueDisplay, roleOf } from "@/lib/roles";
 import type { Clip } from "@/lib/types";
@@ -52,10 +47,6 @@ export default function DashboardPage() {
   const session = useSession();
   const role = session.user.role;
   const caps = roleOf(role);
-
-  // 게이트는 사이드바 배지와 **같은 값**을 쓴다 — 화면마다 따로 세면 숫자가 갈리고,
-  // 그러면 사용자는 어느 쪽을 믿어야 할지 모른다.
-  const gateSummary = useGateSummary();
 
   const [channels, setChannels] = useState<YouTubeChannelInfo[]>([]);
   const [revenue, setRevenue] = useState<Record<string, number>>({});
@@ -107,9 +98,6 @@ export default function DashboardPage() {
 
   useEffect(() => { void loadRevenue(); }, [loadRevenue]);
 
-  // ── 게이트 요약 ──────────────────────────────────────────────────────────
-  const gateCount = (s: GateState) => gateSummary.counts[s] ?? 0;
-
   const today = new Date();
   const expiringPrograms = programs.filter((p) => {
     if (normalizeProgramStatus(p.status) === "upcoming") return false;
@@ -135,15 +123,6 @@ export default function DashboardPage() {
 
   return (
     <div className="mx-auto flex max-w-[1240px] flex-col gap-[14px]">
-      {/* ── 게이트 요약 줄 ─────────────────────────────────────────────── */}
-      <div className="sd-card flex flex-wrap items-center gap-4 px-3 py-2.5">
-        <GateStat label={GATE_LABEL.rights_hold} n={gateCount("rights_hold")} danger />
-        <GateStat label={GATE_LABEL.conditional} n={gateCount("conditional")} warn />
-        <GateStat label={GATE_LABEL.review_pending} n={gateCount("review_pending")} />
-        <GateStat label="권리 만료 임박 프로그램" n={expiringPrograms.length} danger />
-        <Link href="/media?gate=rights_hold" className="sd-btn ml-auto">미디어에서 처리</Link>
-      </div>
-
       {expiringPrograms.length > 0 && (
         <div
           className="rounded-[4px] px-3 py-2 text-[11.5px] leading-relaxed"
@@ -152,7 +131,7 @@ export default function DashboardPage() {
           권리 만료 임박:{" "}
           {expiringPrograms.slice(0, 5).map((p) => p.title).join(" · ")}
           {expiringPrograms.length > 5 ? ` 외 ${expiringPrograms.length - 5}개` : ""}
-          {" — "}만료돼도 배포가 자동으로 막히지는 않습니다. 사람이 이슈를 등록해야 게이트가 걸립니다.
+          {" — "}만료돼도 배포가 자동으로 막히지는 않습니다. 만료일은 프로그램 설정에서 관리합니다.
         </div>
       )}
 
@@ -294,16 +273,6 @@ export default function DashboardPage() {
           </div>
         )}
       </section>
-    </div>
-  );
-}
-
-function GateStat({ label, n, danger, warn }: { label: string; n: number; danger?: boolean; warn?: boolean }) {
-  const color = n === 0 ? "var(--sd-mut)" : danger ? "var(--sd-danger-strong)" : warn ? "var(--sd-warn)" : "var(--sd-fg)";
-  return (
-    <div className="flex items-baseline gap-1.5">
-      <span className="sd-mono text-[20px]" style={{ color }}>{n}</span>
-      <span className="text-[11.5px]" style={{ color: "var(--sd-mut)" }}>{label}</span>
     </div>
   );
 }

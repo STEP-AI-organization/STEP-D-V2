@@ -449,7 +449,7 @@ function UpcomingEmpty({ programId }: { programId: string }) {
         style={{ color: "var(--sd-mut)" }}
       >
         파일럿이나 선공개 영상이 있다면 지금 올려 두면 됩니다. 업로드는 분석 대기열에
-        들어가고, 권리 정보는 분석이 끝난 뒤 사람이 등록합니다.
+        들어갑니다.
       </p>
       <div className="flex gap-2">
         <Link href="/programs" className="sd-btn">

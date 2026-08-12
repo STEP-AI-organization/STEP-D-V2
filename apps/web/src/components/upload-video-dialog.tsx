@@ -173,7 +173,7 @@ export function UploadDialog({
         title: `회차 ${epNum} 원본이 올라갔습니다`,
         description: backgrounded.current
           ? "분석 대기열에 들어갔습니다. 회차 목록에서 확인하세요."
-          : "분석 대기열에 들어갔고, 권리 정보는 분석이 끝난 뒤 등록합니다.",
+          : "분석 대기열에 들어갔습니다.",
         tone: "done",
       });
       onClose();
@@ -471,12 +471,9 @@ export function UploadDialog({
                 음성 인식(STT)으로 대본을 만듭니다.
               </Notice>
 
-              {/* F1 고지 — 둘 다 필수 문구다. */}
+              {/* F1 고지 — 소요 시간 안내. */}
               <Notice tone="warn">
                 분석에는 대략 <b>러닝타임 × {ANALYZE_RATIO}</b> 만큼 걸립니다(60분 영상 ≈ 24분).
-                <br />
-                <b>권리·심의 정보는 자동으로 인식되지 않습니다.</b> 분석이 끝난 뒤 사람이 등록해야
-                배포 게이트를 지납니다.
               </Notice>
 
               {busy && (

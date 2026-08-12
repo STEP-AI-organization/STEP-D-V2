@@ -261,9 +261,14 @@ export function EditorPreview({
               onClick={onTogglePlay}
               className={cn(
                 "absolute cursor-pointer",
-                // 프레임 템플릿이 붙으면 영역을 꽉 채운다(cover) — export 의 cover 와 같아야
-                // 미리보기와 결과물이 어긋나지 않는다. 프레임이 없으면 기존 contain 동작.
-                frame ? "object-cover" : "inset-0 size-full object-contain",
+                // 프레임 템플릿의 fit 을 그대로 따른다 — renderShort 의 프레임 경로가
+                // meta.json 의 video.fit 으로 cover(crop) / contain(pad) 을 고르므로,
+                // 여기서 한쪽으로 하드코딩하면 미리보기와 결과물이 어긋난다.
+                // (broadcast-clean = contain: 방송 원본의 번인 자막을 자르지 않는다.)
+                // 프레임이 없으면 blur/solid 경로와 같은 기존 contain 동작.
+                frame
+                  ? (frame.video.fit === "contain" ? "object-contain" : "object-cover")
+                  : "inset-0 size-full object-contain",
               )}
               style={
                 frame

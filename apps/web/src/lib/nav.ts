@@ -31,7 +31,7 @@ export interface NavItem {
   label: string;
   icon: LucideIcon;
   /** 배지 숫자를 붙일 자리 (미처리 건수 등). */
-  badgeKey?: "gateHold" | "distributionFailed";
+  badgeKey?: "distributionFailed";
   /**
    * 화면이 아직 스텁이다(무엇이 올 자리인지만 알려준다). 클릭은 막지 않는다 —
    * 스텁 화면이 스스로 예정임을 밝히고 있어서, 여기서는 **누르기 전에** 알려주는 게 목적이다.
@@ -94,10 +94,10 @@ export const NAV_GROUPS: NavGroup[] = [
 
 /** 상단바 제목·부제 (README §0 — 세리프 17px 제목 + 11.5px 부제). */
 export const SCREEN_META: Record<string, { title: string; subtitle: string }> = {
-  "/dashboard": { title: "대시보드", subtitle: "게이트 현황 · 수익 · 채널 순위 · 최근 배포" },
+  "/dashboard": { title: "대시보드", subtitle: "수익 · 채널 순위 · 최근 배포" },
   "/programs": { title: "프로그램", subtitle: "편성·상태별 프로그램 목록" },
   "/analyze": { title: "영상 분석", subtitle: "회차 원본 → 추천 구간 → 미디어 생성" },
-  "/media": { title: "미디어", subtitle: "숏폼·클립 · 권리/심의 게이트" },
+  "/media": { title: "미디어", subtitle: "숏폼·클립" },
   "/assets": { title: "에셋", subtitle: "폴더·파일 · 이름 변경 없음(이름 기반 참조)" },
   "/distribution": { title: "배포", subtitle: "채널별 배포 로그 · 실패는 사람이 재시도" },
   "/performance": { title: "성과", subtitle: "채널별 지표 · 권한 없는 채널은 사유 표시" },
@@ -119,7 +119,7 @@ export const SCREEN_META: Record<string, { title: string; subtitle: string }> = 
   "/credits": { title: "크레딧", subtitle: "잔액 · 충전 · 사용 내역" },
   "/clips": { title: "클립", subtitle: "구 클립 목록 — 미디어 화면으로 대체됨" },
   "/analytics": { title: "성과 (구)", subtitle: "구 성과 화면 — 성과·프로그램/채널 분석으로 대체됨" },
-  "/automation": { title: "자동 배포", subtitle: "규칙 기반 순방 · 게이트를 건너뛰지 않음" },
+  "/automation": { title: "자동 배포", subtitle: "규칙 기반 순방 · 보류 건은 사람이 확정" },
 };
 
 export function screenMetaFor(pathname: string): { title: string; subtitle: string } {

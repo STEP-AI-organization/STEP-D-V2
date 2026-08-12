@@ -9,7 +9,6 @@
  *  - 회차 상태는 `분석 대기` → `분석 중` → `분석 완료`. 업로드했다고 분석된 게 아니다.
  *  - 진행률은 **클라이언트에서 97%를 넘기지 않는다.** 100%는 서버 완료 신호로만(F2-2 ⊘).
  *    타이머로 100%를 채우면 아직 도는 작업이 끝난 것처럼 보인다.
- *  - 추천 구간에 **권리·심의 레인**을 겹쳐 그린다. 채택하면 그 이슈가 미디어로 승계된다.
  *  - 종영 프로그램은 채택 단계가 없다(F2-5). 아카이브 검색으로 간다.
  *  - `+`(채택)를 누른 것만 미디어가 된다. 안 누른 구간은 여기 남아 있는다.
  */
@@ -19,20 +18,12 @@ import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "rea
 
 import { UploadVideoButton } from "@/components/upload-video-dialog";
 import { useToast } from "@/components/ui/toast";
-import { useSession } from "@/lib/auth";
-import {
-  fetchGate,
-  getStreamUrl,
-  type GateResult,
-  type RightsIssue,
-} from "@/lib/data/api";
+import { getStreamUrl } from "@/lib/data/api";
 import { useAppData } from "@/lib/data/store";
-import { GATE_TAG, ISSUE_COLOR, ISSUE_KIND_LABEL, fmtTime } from "@/lib/gate-ui";
 import { normalizeProgramStatus } from "@/lib/programs";
 import { PIPELINE_STAGE_LABELS } from "@/lib/constants";
 import type { Episode, Recommendation } from "@/lib/types";
-import { cn } from "@/lib/utils";
-import { IssuePanel } from "@/components/gate/issue-panel";
+import { cn, fmtTime } from "@/lib/utils";
 
 export default function AnalyzePage() {
   return (
@@ -295,14 +286,6 @@ function EpisodeAnalysis({
         <Metric label="미디어 생성" value={clipCount} />
       </div>
 
-      {/* 회차 전체 권리 판정 — 여기서 등록한 이슈가 채택 시 구간으로 승계된다. */}
-      <IssuePanel
-        subjectType="episode"
-        subjectId={episode.id}
-        title="회차 권리·심의"
-        hint="여기 등록한 이슈는 채택할 때 겹치는 구간의 미디어로 승계됩니다."
-      />
-
       {/* 추천 구간 */}
       {ended ? (
         <div className="sd-card px-3 py-2.5 text-[12.5px]" style={{ color: "var(--sd-fg)" }}>
@@ -367,40 +350,7 @@ function RecommendationRow({
 }) {
   const { adoptRecommendation, rejectRecommendation } = useAppData();
   const { toast } = useToast();
-  const actor = useSession().user.name;
-
   const [busy, setBusy] = useState(false);
-  // undefined = 아직 조회 중 · null = 조회 실패. 둘을 같은 값으로 두면 첫 페인트마다
-  // 모든 행에 "게이트 확인 불가" 가 떠서 진짜 실패와 구분이 안 된다.
-  const [gate, setGate] = useState<{ gate: GateResult; issues: RightsIssue[] } | undefined | null>(undefined);
-  const [open, setOpen] = useState(false);
-
-  // 이 구간에 걸린 이슈 — 회차 전체 이슈 중 겹치는 것 + 구간에 직접 등록된 것.
-  useEffect(() => {
-    let alive = true;
-    setGate(undefined);
-    void (async () => {
-      try {
-        const [ep, own] = await Promise.all([
-          fetchGate("episode", episodeId),
-          fetchGate("recommendation", rec.id),
-        ]);
-        if (!alive) return;
-        const overlapping = ep.issues.filter(
-          (i) =>
-            i.resolution !== "resolved" &&
-            (i.bandStart == null ||
-              i.bandEnd == null ||
-              Math.min(rec.endTime, i.bandEnd) - Math.max(rec.startTime, i.bandStart) > 0),
-        );
-        setGate({ gate: own.gate, issues: [...overlapping, ...own.issues] });
-      } catch {
-        // 게이트를 못 읽으면 조용히 통과시키지 않는다 — 아무것도 안 그린다.
-        if (alive) setGate(null);
-      }
-    })();
-    return () => { alive = false; };
-  }, [rec.id, rec.startTime, rec.endTime, episodeId]);
 
   const decided = rec.status !== "pending";
 
@@ -410,10 +360,7 @@ function RecommendationRow({
       await adoptRecommendation(rec.id);
       toast({
         title: "미디어를 만들었습니다",
-        description:
-          gate && gate.issues.length > 0
-            ? `권리·심의 이슈 ${gate.issues.length}건이 함께 승계됐습니다 — 미디어 화면에서 처리하세요.`
-            : "미디어 화면에서 확인할 수 있습니다.",
+        description: "미디어 화면에서 확인할 수 있습니다.",
         tone: "done",
       });
     } catch (err) {
@@ -475,23 +422,7 @@ function RecommendationRow({
         </div>
       )}
 
-      {/* 권리·심의 레인 — 구간 길이 위에 이슈를 겹쳐 그린다 */}
-      <RightsLane rec={rec} issues={gate?.issues ?? []} />
-
       <div className="flex flex-wrap items-center gap-2">
-        {gate && <span className={GATE_TAG[gate.gate.state]}>{gate.gate.label}</span>}
-        {gate === undefined && (
-          <span className="sd-tag" style={{ color: "var(--sd-mut)" }}>게이트 확인 중…</span>
-        )}
-        {gate === null && (
-          <span className="sd-tag sd-tag--warn" title="권리·심의 게이트를 읽지 못했습니다">
-            게이트 확인 불가
-          </span>
-        )}
-        <button type="button" className="sd-btn" onClick={() => setOpen((v) => !v)}>
-          권리·심의 {open ? "닫기" : `(${gate?.issues.length ?? 0})`}
-        </button>
-
         <div className="ml-auto flex gap-2">
           {decided ? (
             rec.adoptedClipId ? (
@@ -518,69 +449,6 @@ function RecommendationRow({
           )}
         </div>
       </div>
-
-      {open && (
-        <IssuePanel
-          subjectType="recommendation"
-          subjectId={rec.id}
-          title="이 구간의 권리·심의"
-          hint={`구간 ${fmtTime(rec.startTime)}–${fmtTime(rec.endTime)} 기준. 회차 전체 이슈는 위 레인에 함께 표시됩니다.`}
-          bandDefault={{ start: rec.startTime, end: rec.endTime }}
-          actor={actor}
-        />
-      )}
-    </div>
-  );
-}
-
-/**
- * 권리·심의 레인. 구간 길이를 100%로 놓고 이슈가 걸린 부분만 색을 얹는다.
- * 밴드 없는 이슈(회차 전체)는 전 구간을 덮는다.
- */
-function RightsLane({ rec, issues }: { rec: Recommendation; issues: RightsIssue[] }) {
-  const span = Math.max(0.001, rec.endTime - rec.startTime);
-  const live = issues.filter((i) => i.resolution !== "resolved");
-
-  return (
-    <div>
-      <div
-        className="relative h-[10px] overflow-hidden rounded-[3px]"
-        style={{ background: "#eae7e1" }}
-        title={live.length ? `${live.length}건` : "이 구간에 등록된 이슈 없음"}
-      >
-        {live.map((i) => {
-          const s = i.bandStart == null ? rec.startTime : Math.max(rec.startTime, i.bandStart);
-          const e = i.bandEnd == null ? rec.endTime : Math.min(rec.endTime, i.bandEnd);
-          const left = ((s - rec.startTime) / span) * 100;
-          const width = Math.max(1.5, ((e - s) / span) * 100);
-          return (
-            <span
-              key={i.id}
-              className="absolute inset-y-0"
-              style={{
-                left: `${left}%`,
-                width: `${width}%`,
-                background: ISSUE_COLOR[i.kind as keyof typeof ISSUE_COLOR] ?? "#8b877f",
-                opacity: 0.75,
-              }}
-              title={`${ISSUE_KIND_LABEL[i.kind as keyof typeof ISSUE_KIND_LABEL] ?? i.kind} · ${i.note}`}
-            />
-          );
-        })}
-      </div>
-      {live.length > 0 && (
-        <div className="mt-1 flex flex-wrap gap-x-2.5 gap-y-1 text-[10.5px]" style={{ color: "var(--sd-mut)" }}>
-          {[...new Set(live.map((i) => i.kind))].map((k) => (
-            <span key={k} className="inline-flex items-center gap-1">
-              <span
-                className="inline-block size-[7px] rounded-[2px]"
-                style={{ background: ISSUE_COLOR[k as keyof typeof ISSUE_COLOR] ?? "#8b877f" }}
-              />
-              {ISSUE_KIND_LABEL[k as keyof typeof ISSUE_KIND_LABEL] ?? k}
-            </span>
-          ))}
-        </div>
-      )}
     </div>
   );
 }

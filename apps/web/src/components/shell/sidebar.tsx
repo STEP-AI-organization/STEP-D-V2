@@ -13,7 +13,6 @@ import { useEffect, useState } from "react";
 
 import { useSession } from "@/lib/auth";
 import { useAppData } from "@/lib/data/store";
-import { useGateSummary } from "@/lib/gate-summary";
 import { fetchCredits, logout } from "@/lib/data/api";
 import { NAV_GROUPS } from "@/lib/nav";
 import { roleOf } from "@/lib/roles";
@@ -142,33 +141,25 @@ function CreditBalance() {
  * 메뉴 배지 — 사람이 손봐야 하는 건수.
  *
  * 0 이면 아예 안 그린다. 회색 0 이 붙어 있으면 "배지가 있는데 왜 0이지"를 매번 확인하게 된다.
- *
- * 게이트를 못 읽었을 때 **0 으로 보여주지 않는 게 핵심이다** — "처리할 게 없다"로 읽힌다.
- * 그때는 물음표를 띄우고 툴팁으로 사유를 준다.
  */
 function NavBadge({ badgeKey, active }: { badgeKey?: "gateHold" | "distributionFailed"; active: boolean }) {
   const { badgeCounts } = useAppData();
-  const gate = useGateSummary();
-  if (!badgeKey) return null;
+  // gateHold 배지는 제거됐다 (2026-08-12 — 권리 판정 UI 철수). 배포 실패만 남는다.
+  if (badgeKey !== "distributionFailed") return null;
 
-  const unknown = badgeKey === "gateHold" && gate.error !== null;
-  const n = badgeKey === "gateHold" ? gate.needsAttention : badgeCounts.distributionFailed;
-  if (!unknown && n === 0) return null;
+  const n = badgeCounts.distributionFailed;
+  if (n === 0) return null;
 
-  const danger = badgeKey === "distributionFailed";
   return (
     <span
       className="sd-mono ml-auto shrink-0 rounded-full px-1.5 text-[10px]"
-      title={unknown ? "게이트를 읽지 못했습니다" : undefined}
       style={
         active
           ? { background: "rgba(255,255,255,.22)", color: "#fff" }
-          : danger
-            ? { background: "var(--sd-danger-bg)", color: "var(--sd-danger-strong)" }
-            : { background: "var(--sd-warn-bg)", color: "var(--sd-warn)" }
+          : { background: "var(--sd-danger-bg)", color: "var(--sd-danger-strong)" }
       }
     >
-      {unknown ? "?" : n}
+      {n}
     </span>
   );
 }

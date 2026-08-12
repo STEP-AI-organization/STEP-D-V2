@@ -200,7 +200,7 @@ export default function BusinessPage() {
         <StatTile
           icon={ShieldAlert}
           tone={riskItems.length > 0 ? "warn" : "done"}
-          label="권리/승인 확인"
+          label="확인 필요"
           value={formatCount(riskItems.length)}
           sub={riskItems.length > 0 ? "배포 전 확인 필요" : "현재 표시된 리스크 없음"}
         />
@@ -389,7 +389,7 @@ export default function BusinessPage() {
 
         <section>
           <SectionHeading icon={ShieldAlert} count={riskItems.length}>
-            권리/승인 큐
+            확인 큐
           </SectionHeading>
           <Card className="divide-y divide-border/70">
             {loading ? (
@@ -424,13 +424,6 @@ export default function BusinessPage() {
           title="광고영업"
           body={`공유 가능 IP ${shareablePrograms}개`}
           href="/performance"
-        />
-        {/* 권리·심의 게이트는 배포 로그(/distribution)가 아니라 미디어 화면에 있다. */}
-        <DepartmentTile
-          icon={ShieldAlert}
-          title="법무/심의"
-          body="권리 보류 미디어 검수"
-          href="/media?gate=rights_hold"
         />
       </div>
     </div>

@@ -1,14 +1,13 @@
 "use client";
 
 /**
- * U12 · 자동 배포 (README §12 · FLOWS F6 · 게이트 강제 지점 ③).
+ * U12 · 자동 배포 (README §12 · FLOWS F6).
  *
  * 규칙 하나 = 프로그램 ↔ 채널 연결 하나. **규칙이 없으면 아무것도 하지 않는다** —
  * 전체 자동 실행 같은 기본 동작이 없다. 그 사실을 화면에서도 말한다.
  *
- * 보류 큐가 이 화면의 핵심이다. 게이트에 막힌 건은 여기 쌓이고, **사람이 확정 버튼을
- * 눌러야** 다음 순방에 다시 잡힌다. 이슈를 해제해서 게이트가 열려도 자동이 저절로
- * 밀어내지 않는다.
+ * 보류 큐가 이 화면의 핵심이다. 보류된 건은 여기 쌓이고, **사람이 확정 버튼을
+ * 눌러야** 다음 순방에 다시 잡힌다.
  */
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
@@ -41,7 +40,7 @@ const KIND_LABEL: Record<RuleMediaKind, string> = { short: "숏폼", clip: "클�
 const CRIT_LABEL: Record<RuleCriterion, string> = { score80: "점수 80 이상", score85: "점수 85 이상", top3: "상위 3건" };
 const POLICY_LABEL: Record<GatePolicy, string> = {
   approve_first: "게시 전 사람 승인",
-  hold_on_issue: "권리 이슈 시 보류",
+  hold_on_issue: "바로 게시",
 };
 const RESULT_LABEL: Record<string, string> = {
   published: "게시됨", recorded: "기록됨", media_created: "미디어 생성",
@@ -104,7 +103,7 @@ const STEPS = [
   { n: "01", title: "회차 수신", desc: "새 회차 원본 감지 · 없으면 스킵" },
   { n: "02", title: "분석", desc: "분석 큐 투입 · 완료까지 다음 순방에 재확인" },
   { n: "03", title: "미디어 생성", desc: "규칙 조건 통과분만 생성 · 미달은 생성 안 함" },
-  { n: "04", title: "게이트 확인", desc: "F3 그대로 · 막히면 보류 큐로, 사람이 확정해야 함", amber: true },
+  { n: "04", title: "업로드 준비", desc: "보류가 걸리면 보류 큐로, 사람이 확정해야 함", amber: true },
   { n: "05", title: "게시", desc: "채널 규칙 적용 · 실패는 자동 재시도 없음", blue: true },
 ];
 
@@ -246,7 +245,7 @@ export default function AutomationPage() {
         <div className="flex items-baseline gap-2">
           <h3 className="sd-serif text-[16px] font-semibold" style={{ color: "var(--sd-fg)" }}>보류 큐</h3>
           <span className="text-[11px]" style={{ color: "var(--sd-mut)" }}>
-            게이트에 막힌 건입니다 — <b>확정해야 다음 순방에 다시 잡힙니다.</b> 이슈를 해제해도 저절로 나가지 않습니다.
+            보류된 건입니다 — <b>확정해야 다음 순방에 다시 잡힙니다.</b> 저절로 나가지 않습니다.
           </span>
         </div>
         {holds.length === 0 ? (
@@ -381,14 +380,13 @@ export default function AutomationPage() {
         )}
       </section>
 
-      {/* 하단 경고 — 자동도 게이트를 건너뛰지 않는다 */}
+      {/* 하단 안내 — 보류 큐 동작 */}
       <div
         className="rounded-[4px] px-3 py-2.5 text-[11.5px] leading-relaxed"
         style={{ border: "1px solid var(--sd-warn-border)", background: "var(--sd-warn-bg)", color: "var(--sd-warn)" }}
       >
-        <b>자동 배포도 게이트를 건너뛰지 않습니다.</b> 권리·심의를 통과하지 않은 미디어는 어떤 규칙으로도
-        나가지 않고 보류 큐에 쌓입니다. 보류된 건은 사람이 확정해야 다음 순방에 다시 잡힙니다 —
-        이슈를 해제해서 게이트가 열려도 저절로 나가지 않습니다.
+        <b>보류된 미디어는 저절로 나가지 않습니다.</b> 보류 큐에 쌓인 건은 사람이 확정해야
+        다음 순방에 다시 잡힙니다.
       </div>
     </div>
   );
@@ -601,7 +599,7 @@ function RuleForm({
 
       <label className="flex items-center gap-2 text-[11.5px]" style={{ color: "var(--sd-fg)" }}>
         <input type="checkbox" checked={approveFirst} onChange={(e) => setApproveFirst(e.target.checked)} />
-        게시 전 사람 승인 (끄면 게이트만 통과하면 바로 나갑니다)
+        게시 전 사람 승인 (끄면 조건을 만족하면 바로 나갑니다)
       </label>
 
       {/* ⚑ 채널별 안내 — 만들 때 성격을 말한다 (F6). */}
