@@ -183,6 +183,24 @@ describe("배선", () => {
     assert.match(r, /markTopupPaid\(paymentId, "paid"\)/);
   });
 
+  it("결제수단은 owner/admin 만 만진다", () => {
+    // member 는 분석을 돌리는 사람이지 회사 카드를 등록·해지하거나 돈을 쓰는 사람이 아니다.
+    // 안 막으면 초대받은 외주 편집자가 회사 카드를 등록하고 긁을 수 있다.
+    for (const [m, p] of [
+      ["post", "/api/billing/card/prepare"],
+      ["post", "/api/billing/card"],
+      ["delete", "/api/billing/card"],
+      ["post", "/api/credits/topup/card"],
+    ] as [string, string][]) {
+      assert.match(route(m, p), /requireManager\(c\)/, `권한 검사 없음: ${m.toUpperCase()} ${p}`);
+    }
+  });
+
+  it("조회는 막지 않는다", () => {
+    // 잔액·등록 여부는 member 도 봐야 한다 — "왜 분석이 안 돌지"의 답이 거기 있다.
+    assert.doesNotMatch(route("get", "/api/billing/card"), /requireManager\(c\)/);
+  });
+
   it("카드 표는 RLS 대상이라 스코프 있는 풀을 쓴다", () => {
     const dbpg = fs.readFileSync(path.resolve(SRC, "db-pg.ts"), "utf-8");
     const fn = /export async function getBillingCard[\s\S]*?\n\}(?=\r?\n)/.exec(dbpg)?.[0] ?? "";

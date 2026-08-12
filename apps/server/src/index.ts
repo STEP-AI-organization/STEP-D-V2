@@ -4367,6 +4367,10 @@ app.delete("/api/assets", async (c) => {
 
 /** 카드 등록 준비 — 브라우저 SDK 에 넘길 값. 설정·필수정보가 없으면 창을 아예 안 띄운다. */
 app.post("/api/billing/card/prepare", async (c) => {
+  // **결제수단은 owner/admin 만 만진다.** member 는 분석을 돌리는 사람이지 회사 카드를
+  // 등록·해지하거나 돈을 쓰는 사람이 아니다. 안 막으면 초대받은 외주 편집자가 회사 카드를
+  // 등록하고 긁을 수 있다.
+  requireManager(c);
   const cfg = billingConfig();
   if (!cfg.ok) return c.json({ error: "billing_unconfigured", message: cfg.message }, 503);
 
@@ -4389,10 +4393,11 @@ app.post("/api/billing/card/prepare", async (c) => {
 
 /** 발급된 빌링키 저장. 회사당 한 장 — 다시 등록하면 덮어쓴다. */
 app.post("/api/billing/card", async (c) => {
+  const manager = requireManager(c);
   const body = await c.req.json<Record<string, unknown>>().catch(() => ({}) as Record<string, unknown>);
   const billingKey = String(body.billingKey ?? "").trim();
   if (!billingKey) return c.json({ error: "billing_key_required" }, 400);
-  const actor = c.get("user")?.email ?? "unknown";
+  const actor = manager.email;
   const card = await saveBillingCard({
     billingKey,
     cardBrand: String(body.cardBrand ?? "").trim() || null,
@@ -4416,6 +4421,7 @@ app.get("/api/billing/card", async (c) => {
 });
 
 app.delete("/api/billing/card", async (c) => {
+  requireManager(c);
   await revokeBillingCard();
   return c.json({ ok: true });
 });
@@ -4427,6 +4433,8 @@ app.delete("/api/billing/card", async (c) => {
  * 승인 응답을 대조한 뒤에만 원장에 올린다 — 웹훅 경로와 같은 원칙이다.
  */
 app.post("/api/credits/topup/card", async (c) => {
+  // 저장 카드는 결제창도 인증도 없이 바로 긁힌다 — 누를 수 있는 사람을 좁혀야 한다.
+  const manager = requireManager(c);
   const body = await c.req.json<Record<string, unknown>>().catch(() => ({}) as Record<string, unknown>);
   const check = buildTopup(body.credits);
   if (!check.ok) return c.json({ error: "bad_request", message: check.reason }, 400);
@@ -4437,7 +4445,7 @@ app.post("/api/credits/topup/card", async (c) => {
 
   const tenantId = currentTenantId();
   const paymentId = cardTopupPaymentId(tenantId, crypto.randomBytes(6).toString("hex"));
-  const actor = c.get("user")?.email ?? "unknown";
+  const actor = manager.email;
   // 주문을 먼저 만든다 — 승인 응답을 못 받아도 "긁혔을 수 있는 건"이 기록으로 남는다.
   await createTopup({ paymentId, credits: check.credits, amountKrw: check.amountKrw, status: "pending", requestedBy: actor });
 

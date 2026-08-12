@@ -16,6 +16,7 @@ import { useCallback, useEffect, useState } from "react";
 import { useToast } from "@/components/ui/toast";
 import { useSession } from "@/lib/auth";
 import { createTopupOrder, fetchCredits, type CreditState } from "@/lib/data/api";
+import { SavedCardPanel } from "@/components/billing/saved-card";
 import { cn } from "@/lib/utils";
 
 /** 자주 쓰는 충전량. 시간 단위로 생각하는 게 자연스럽다(1크레딧=1분). */
@@ -32,6 +33,11 @@ export default function CreditsPage() {
   const { toast } = useToast();
   const session = useSession();
   const actor = session.user.name;
+  // 결제수단·결제는 owner/admin 만. 화면에서 숨기는 건 편의고 경계는 서버다(403).
+  const canManageBilling =
+    session.user.workspaceRole === "owner" ||
+    session.user.workspaceRole === "admin" ||
+    session.user.workspaceRole === "superadmin";
 
   const [state, setState] = useState<CreditState | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -234,6 +240,13 @@ export default function CreditsPage() {
               </p>
             )}
 
+            <SavedCardPanel
+              canManage={canManageBilling}
+              buyer={{ fullName: buyerName.trim(), email: email.trim(), phoneNumber: phoneDigits }}
+              credits={credits}
+              onCharged={load}
+            />
+
             <div className="flex flex-wrap items-center gap-2">
               <input
                 value={credits}
@@ -247,7 +260,9 @@ export default function CreditsPage() {
                 {amount != null ? WON(amount) : "—"}
               </span>
               <span className="text-[10.5px]" style={{ color: "var(--sd-mut)" }}>
-                (크레딧당 {WON(price)} · 부가세 별도)
+                {/* 실제 청구액은 `크레딧 × 단가` 다 — 부가세를 따로 더하지 않는다.
+                    인보이스도 이 총액에서 역산해 공급가액·세액을 나눈다. */}
+                (크레딧당 {WON(price)} · 부가세 포함)
               </span>
               <button
                 type="button"

@@ -1118,6 +1118,94 @@ export interface TopupOrder {
   orderName: string;
 }
 
+// ── 저장 카드(빌링키) ─────────────────────────────────────────────────────────
+// 매번 카드를 다시 넣지 않게 한 번 등록해 두고 버튼으로 충전한다.
+// 카드 번호는 브라우저 → 포트원으로 **직접** 가고 우리 서버에는 오지 않는다.
+
+export interface SavedCard {
+  registered: boolean;
+  /** "신한 ****1234" — 카드 번호는 애초에 못 받는다. */
+  label: string | null;
+  createdAt: string | null;
+  /** 서버에 빌링 채널키가 없으면 false — 등록 버튼을 아예 안 보여준다. */
+  available: boolean;
+  unavailableReason: string | null;
+}
+
+export async function fetchSavedCard(): Promise<SavedCard> {
+  return json(await fetch(`${API_BASE}/billing/card`, { cache: "no-store", credentials: "include" }));
+}
+
+export interface CardIssuePrep {
+  storeId: string;
+  channelKey: string;
+  billingKeyMethod: "CARD";
+  issueId: string;
+  issueName: string;
+  customer: { fullName: string; email: string; phoneNumber: string };
+}
+
+/**
+ * 카드 등록 준비 — 브라우저 SDK 에 넘길 값을 서버가 만든다.
+ * 필수 고객정보(이름·이메일·휴대폰)가 빠지면 **결제창을 띄우기 전에** 400 으로 막는다.
+ */
+export async function prepareCardIssue(input: {
+  fullName: string; email: string; phoneNumber: string;
+}): Promise<CardIssuePrep> {
+  const res = await fetch(`${API_BASE}/billing/card/prepare`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) {
+    const b = (await res.json().catch(() => null)) as { message?: string; error?: string } | null;
+    throw new Error(b?.message ?? b?.error ?? `${res.status}`);
+  }
+  return res.json();
+}
+
+/** 발급된 빌링키 저장. 회사당 한 장 — 다시 등록하면 덮어쓴다. */
+export async function saveCard(input: {
+  billingKey: string; cardBrand?: string; cardLast4?: string;
+}): Promise<void> {
+  const res = await fetch(`${API_BASE}/billing/card`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) {
+    const b = (await res.json().catch(() => null)) as { message?: string; error?: string } | null;
+    throw new Error(b?.message ?? b?.error ?? `${res.status}`);
+  }
+}
+
+export async function deleteSavedCard(): Promise<void> {
+  const res = await fetch(`${API_BASE}/billing/card`, { method: "DELETE", credentials: "include" });
+  if (!res.ok) throw new Error(`${res.status}`);
+}
+
+/**
+ * 저장 카드로 충전. **결제창이 없다** — 서버가 바로 긁고 승인까지 확인한 뒤 응답한다.
+ * 그래서 일반결제와 달리 웹훅을 기다릴 필요가 없고, 응답의 balance 가 이미 반영된 잔액이다.
+ */
+export async function topupWithCard(credits: number): Promise<{
+  paymentId: string; credits: number; amountKrw: number; balance: number;
+}> {
+  const res = await fetch(`${API_BASE}/credits/topup/card`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({ credits }),
+  });
+  if (!res.ok) {
+    const b = (await res.json().catch(() => null)) as { message?: string; error?: string } | null;
+    throw new Error(b?.message ?? b?.error ?? `${res.status}`);
+  }
+  return res.json();
+}
+
 /** 충전 주문 생성 — **결제창을 띄우기 전에** 서버가 금액을 확정한다. */
 export async function createTopupOrder(credits: number, actor: string): Promise<TopupOrder> {
   const res = await fetch(`${API_BASE}/credits/topup`, {
