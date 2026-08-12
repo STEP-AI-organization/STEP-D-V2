@@ -19,8 +19,15 @@
 
 **기획·설계 (다음에 뭘 만들까)**
 1. [plans/active/step-d-master-build-plan.md](plans/active/step-d-master-build-plan.md) — **종합 빌드 플랜 (정본)**
-2. [plans/active/broadcast-station-expansion-goal.md](plans/active/broadcast-station-expansion-goal.md) — 방송국 전사 확장 목표
-3. [plans/active/](plans/active/) — 진행 중 9건 · [plans/onhold/](plans/onhold/) — 보류 8건
+2. [plans/active/b2b-workspace-strategy.md](plans/active/b2b-workspace-strategy.md) — **B2B 전략 정본** (워크스페이스 판매 · 고객사 API · KT ENA 연동)
+3. [plans/active/broadcast-station-expansion-goal.md](plans/active/broadcast-station-expansion-goal.md) — 방송국 전사 확장 목표
+4. [plans/active/](plans/active/) — 진행 중 10건 · [plans/onhold/](plans/onhold/) — 보류 8건
+
+**영업·사업 (고객사에 뭘 말하나)**
+1. [plans/active/b2b-workspace-strategy.md](plans/active/b2b-workspace-strategy.md) — 구조·안전장치·온보딩 체크리스트
+2. [presentations/stepd-b2b-onepager.html](presentations/stepd-b2b-onepager.html) — 팀 공유용 한 장 요약 (브라우저로 열기)
+3. [reference/customer-api.md](reference/customer-api.md) — **고객사에 그대로 주는 API 문서**
+4. [ops/cost-and-dependencies.md](ops/cost-and-dependencies.md) — 원가·의존성 (⚠️ 가격 제시 전 필독)
 
 ## ops/ — 현황·운영 (지금 프로덕션에서 사실인 것)
 
@@ -28,9 +35,11 @@
 |---|---|
 | [infra.md](ops/infra.md) | **인프라 SSOT** — Cloud Run 서비스·**Cloud Run Jobs**·**GEBD GPU VM**·Cloud SQL·GCS·Vertex·Vercel·시크릿 |
 | [pipeline-current-state.md](ops/pipeline-current-state.md) | **파이프라인 실제 상태** — 스테이지 22개·비용·사각지대 (코드 실측 기준) |
+| [cost-and-dependencies.md](ops/cost-and-dependencies.md) | **원가·의존성 SSOT** — 외부 API 단가·회차당 원가 재산출·고정비·단일장애점. ⚠️ 기존 문서의 ₩285/₩774 는 단가표 오류 |
 | [gebd-worker-setup.md](ops/gebd-worker-setup.md) | 여유 PC 를 GEBD 워커로 붙이기 (GPU 클라우드 대안) |
 | [gpu-quota-request.md](ops/gpu-quota-request.md) | GPU 쿼터 상향 신청 절차 |
 | [deploy.md](ops/deploy.md) | 배포 런북 — 서버/워커/웹 배포 스크립트와 검증·롤백 |
+| [deploy-win2.md](ops/deploy-win2.md) | **윈도우2(네이버 워커) 배포** — 윈도우1 에서 갱신·확인·진단. 평소엔 push 만 하면 자동 |
 | [runbook.md](ops/runbook.md) | 장애 대응 — 증상별 진단·조치, 시크릿 로테이션 |
 | [local-dev.md](ops/local-dev.md) | 로컬 개발 — dev.ps1 (웹+서버+Docker Postgres), core/ 로컬 실행 |
 | [worker-queue.md](ops/worker-queue.md) | 잡 큐(job_queue)·워커 VM 아키텍처 — 잡 5종, 신뢰성 설계 |
@@ -63,6 +72,7 @@
 | [glossary.md](reference/glossary.md) | 용어집 — SMR `clipType` 등 기존 코드값 참고 |
 | [data-model.md](reference/data-model.md) | DB 스키마 종합 — schema.sql + 런타임 안전망 + **migrations/** + 변경 절차 |
 | [api-reference.md](reference/api-reference.md) | 서버 HTTP API 전 라우트(일반 API + admin Lab + match.*) ↔ 프론트 함수 매핑 |
+| [customer-api.md](reference/customer-api.md) | **고객사 API 정본** — 워크스페이스 키(Bearer)·스코프·화이트리스트 21개 라우트·공장·온보딩 런북. (구 `factory-api.md` 는 폐기) |
 | [core-pipeline-reference.md](reference/core-pipeline-reference.md) | core/ 파이썬 파이프라인 모듈·출력 스키마·디버깅·admin Lab |
 | [patent-new-figures-14-17-technical-brief.md](reference/patent-new-figures-14-17-technical-brief.md) | 변리사 회신용 신규 도면(도 14~17) 기술 설명 — 서사 앵커·역매칭·체크포인트·레이어 썸네일 |
 
@@ -71,6 +81,7 @@
 - [archive/object-detection-research.md](archive/object-detection-research.md) — 객체인식·비전 기술 선정 조사 (아카이브)
 - [archive/highlight-model-feasibility.md](archive/highlight-model-feasibility.md) — 하이라이트 품질 개선 실현가능성 조사 · 100만 구독 채널 데이터 활용 (아카이브, 결론은 plans/에 반영됨)
 - prototypes/ — [editor-prototype.html](prototypes/editor-prototype.html) · [program-home-prototype.html](prototypes/program-home-prototype.html) (UI 목업, 코드 아님)
+- presentations/ — [stepd-b2b-onepager.html](presentations/stepd-b2b-onepager.html) (B2B 구조 한 장 요약) · 회의 대본
 - archive/ — 발명신고서·기술소개서·방향기획서 원본 (역사 기록)
 
 ## 문서 관리 규칙

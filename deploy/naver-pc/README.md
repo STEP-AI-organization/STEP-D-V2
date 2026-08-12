@@ -15,6 +15,9 @@
 
 운영 상세는 [docs/ops/naver-publish.md](../../docs/ops/naver-publish.md).
 
+> **이미 셋업이 끝났다면 이 문서가 아니다.** 코드를 고쳐서 윈도우2 에 반영하는 법은
+> [docs/ops/deploy-win2.md](../../docs/ops/deploy-win2.md) 한 장에 있다.
+
 > 이 문서는 리포 안에 있다. 윈도우2 에서 **먼저 클론하고 열어도 된다** — 2단계를 1단계보다
 > 먼저 해도 무방하다.
 > ```powershell

@@ -9,6 +9,7 @@
 | **프론트** (`apps/web/`) | `.\deploy\deploy-web.ps1` | Vercel |
 | **백엔드** (`apps/server/`) | `.\deploy\deploy-server.ps1` | Cloud Run + 워커 VM |
 | **Vercel env 변경** | 빈 커밋 → `.\deploy\deploy-web.ps1` | Vercel (재빌드 트리거) |
+| **네이버 워커** (`apps/server/` 중 naver·worker) | `git push origin HEAD:main` 만 | **윈도우2** — 10분 폴링으로 자동. 즉시 반영은 [deploy-win2.md](deploy-win2.md) |
 
 `deploy-web.ps1`에 재빌드 강제 옵션은 **없다** (파라미터는 `-SkipChecks`/`-SkipVerify` 뿐이고,
 푸시할 커밋이 없으면 "이미 최신"으로 끝난다). env만 바꿨으면
