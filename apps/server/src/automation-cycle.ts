@@ -93,6 +93,9 @@ export async function runAutomationCycle(): Promise<CycleReport> {
       for (const rec of picked) {
         const master = media.find((m: any) => m.episodeId === rec.episodeId && m.role === "master") as any;
         const clipId = newId("c");
+        // 무인 렌더 시드 — factory 와 동일한 기본 모양 (규칙의 templateId 가 최우선).
+        const { autoEditorState } = await import("./factory.ts");
+        const program = ep.programId ? await getEntity<any>("program", ep.programId) : undefined;
         const clip = {
           id: clipId,
           episodeId: rec.episodeId,
@@ -117,6 +120,7 @@ export async function runAutomationCycle(): Promise<CycleReport> {
           distributions: [],
           /** 어느 규칙이 만든 미디어인지 — 사고 추적·롤백 대상 선별에 쓴다. */
           automationRuleId: rule.id,
+          editorState: autoEditorState(rec, ep.programTitle ?? "", program, (rule as any).templateId),
         };
 
         const ok = await commitAndInherit(clipId, clip, rec.id, rec);

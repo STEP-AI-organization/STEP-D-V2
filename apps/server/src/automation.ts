@@ -41,6 +41,8 @@ export interface AutomationRule {
   /** 시간대 자유 문자열 ("방영 익일 10시" · "수시"). 표시·스케줄 힌트. */
   window: string;
   enabled: boolean;
+  /** 렌더 템플릿 (assets/shorts-template 이름). 미지정 = 프로그램 장르 자동. */
+  templateId?: string;
 }
 
 /**

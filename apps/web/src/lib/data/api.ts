@@ -763,6 +763,8 @@ export interface AutomationRule {
   gatePolicy: GatePolicy;
   window: string;
   enabled: boolean;
+  /** 렌더 템플릿 (assets/shorts-template 이름). 미지정 = 프로그램 장르 자동. */
+  templateId?: string;
 }
 
 export interface RuleRun {

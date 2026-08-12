@@ -1890,6 +1890,16 @@ app.patch("/api/programs/:id", async (c) => {
     if (s) next.brandIconDataUrl = s;
     else delete next.brandIconDataUrl;
   }
+  // 자동배포 기본값 — 자동배포 화면에서 프로그램별로 저장 (채널·템플릿). null 이면 해제.
+  if (body.autoPublish === null) {
+    delete next.autoPublish;
+  } else if (body.autoPublish && typeof body.autoPublish === "object" && !Array.isArray(body.autoPublish)) {
+    const ap = body.autoPublish as Record<string, unknown>;
+    next.autoPublish = {
+      ...(typeof ap.channelId === "string" && ap.channelId.trim() ? { channelId: ap.channelId.trim() } : {}),
+      ...(typeof ap.templateId === "string" && ap.templateId.trim() ? { templateId: ap.templateId.trim() } : {}),
+    };
+  }
   // 출연자별 인물 이미지 매핑 — 객체(name→dataUrl). cast에 없는 키는 서버 측에서도 정리.
   if (body.castPhotos && typeof body.castPhotos === "object" && !Array.isArray(body.castPhotos)) {
     const photos: Record<string, string> = {};
@@ -4390,6 +4400,9 @@ app.post("/api/automation/rules", async (c) => {
     mediaKind: body.mediaKind, criterion: body.criterion, gatePolicy: body.gatePolicy,
     window: typeof body.window === "string" ? body.window.trim() || "수시" : "수시",
     enabled: body.enabled !== false,
+    // 렌더 템플릿 — 자동배포 화면에서 선택. 빈 값이면 프로그램 장르 자동 선택.
+    ...(typeof body.templateId === "string" && body.templateId.trim()
+      ? { templateId: body.templateId.trim() } : {}),
   };
   await upsertAutomationRule(row);
   return c.json({

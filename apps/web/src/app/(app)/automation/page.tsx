@@ -19,6 +19,8 @@ import {
   deleteAutomationRule,
   fetchAutomation,
   fetchChannelRules,
+  fetchShortsTemplates,
+  type FrameTemplate,
   releaseAutomationHold,
   runAutomationNow,
   saveAutomationRule,
@@ -252,6 +254,7 @@ export default function AutomationPage() {
                   <span className="sd-tag">{CRIT_LABEL[r.criterion]}</span>
                   <span className="sd-tag sd-tag--warn">{POLICY_LABEL[r.gatePolicy]}</span>
                   <span className="sd-tag">{r.window}</span>
+                  <span className="sd-tag">{r.templateId ? `템플릿 ${r.templateId}` : "템플릿 자동"}</span>
 
                   <div className="ml-auto flex gap-2">
                     <button
@@ -363,7 +366,13 @@ function RuleForm({
   const [criterion, setCriterion] = useState<RuleCriterion>("score80");
   const [approveFirst, setApproveFirst] = useState(true);
   const [win, setWin] = useState("방영 익일 10시");
+  const [templateId, setTemplateId] = useState("");   // "" = 프로그램 장르 자동
+  const [templates, setTemplates] = useState<FrameTemplate[]>([]);
   const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    void fetchShortsTemplates().then(setTemplates).catch(() => setTemplates([]));
+  }, []);
 
   // 계정 ID 를 자유 입력으로 두면 오타 하나로 규칙이 "실행 중" 배지를 달고 영원히 아무것도
   // 안 한다(순방이 채널 규칙을 못 찾으면 skipped 로만 남는다). 실재하는 규칙에서만 고르게 한다.
@@ -400,6 +409,7 @@ function RuleForm({
         mediaKind, criterion,
         gatePolicy: approveFirst ? "approve_first" : "hold_on_issue",
         window: win, enabled: true,
+        ...(templateId ? { templateId } : {}),
       });
       await onSaved(r.notice);
     } catch (err) {
@@ -471,6 +481,19 @@ function RuleForm({
       </div>
 
       <input value={win} onChange={(e) => setWin(e.target.value)} placeholder="시간대" className="sd-input w-full" />
+
+      {/* 렌더 템플릿 — 자동 생성 클립의 기본 모양. 비우면 프로그램 장르로 자동 선택. */}
+      <div>
+        <select value={templateId} onChange={(e) => setTemplateId(e.target.value)} className="sd-input w-full">
+          <option value="">템플릿: 자동 (드라마=확대 크롭 · 그 외=표준)</option>
+          {templates.map((t) => (
+            <option key={t.name} value={t.name}>템플릿: {t.title || t.name}</option>
+          ))}
+        </select>
+        <p className="mt-1 text-[10.5px]" style={{ color: "var(--sd-fg-dim)" }}>
+          로고·방영시간은 프로그램 설정(쇼츠 아이콘·편성 시간)에서 채워집니다.
+        </p>
+      </div>
 
       <label className="flex items-center gap-2 text-[11.5px]" style={{ color: "var(--sd-fg)" }}>
         <input type="checkbox" checked={approveFirst} onChange={(e) => setApproveFirst(e.target.checked)} />

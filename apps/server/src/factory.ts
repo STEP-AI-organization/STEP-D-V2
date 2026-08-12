@@ -65,6 +65,8 @@ export interface FactoryPolicy {
   dryRun?: boolean;
   /** 업로드 직후 공개로 둘 것인가. 기본 false = private 후 유예 공개. */
   publishPublic?: boolean;
+  /** 렌더 템플릿 강제 지정 (자동배포 화면에서 선택). 미지정이면 장르 자동 선택. */
+  templateId?: string;
 }
 
 export interface FactoryJob {
@@ -466,11 +468,16 @@ export function pickTemplateId(program?: any): string {
   return /drama|드라마/i.test(g) ? "broadcast-drama" : "broadcast-standard";
 }
 
-export function autoEditorState(rec: any, programTitle: string, program?: any): Record<string, unknown> {
+export function autoEditorState(
+  rec: any, programTitle: string, program?: any, forcedTemplateId?: string,
+): Record<string, unknown> {
   const hook = String(rec.hookQuote ?? "").replace(/^['"'"]|['"'"]$/g, "").trim();
   const headline = hook && hook.length <= 30 ? hook : String(rec.titleLine1 ?? rec.title ?? "");
   const { lines, size } = wrapAutoTitle(headline);
-  const templateId = pickTemplateId(program);
+  // 자동배포 화면에서 고른 템플릿(policy) > 프로그램 기본(autoPublish 설정) > 장르 자동.
+  const templateId = (forcedTemplateId && TEMPLATE_SEEDS[forcedTemplateId] ? forcedTemplateId : null)
+    ?? (TEMPLATE_SEEDS[String(program?.autoPublish?.templateId ?? "")] ? String(program.autoPublish.templateId) : null)
+    ?? pickTemplateId(program);
   const seed = TEMPLATE_SEEDS[templateId] ?? TEMPLATE_SEEDS["broadcast-standard"];
   return {
     aspect: "9:16",
@@ -529,7 +536,8 @@ async function adoptRecommendation(rec: any, job: FactoryJob): Promise<string | 
     aspectRatio: rec.kind === "short" ? "9:16-crop-main" : "16:9",
     // 무인 렌더 기본 시드 — 에디터를 안 거쳐도 배포 가능한 모양으로 나가게 한다.
     editorState: autoEditorState(rec, episode?.programTitle ?? "",
-      episode?.programId ? await getEntity<any>("program", episode.programId) : undefined),
+      episode?.programId ? await getEntity<any>("program", episode.programId) : undefined,
+      job.policy.templateId),
     durationSec: Math.max(1, rec.endTime - rec.startTime),
     synopsis: rec.editNote ?? undefined,
     status: "editing",
