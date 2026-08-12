@@ -2973,10 +2973,23 @@ export async function getTopup(paymentId: string): Promise<TopupRow | null> {
 }
 
 /** 결제 확정. 이미 paid 면 false — 웹훅이 여러 번 와도 한 번만 처리된다. */
+/**
+ * 충전 주문의 최종 상태를 찍는다.
+ *
+ * ⚠️ 조건이 `status = 'pending'` 이 아니라 **`status <> 'paid'`** 인 이유:
+ * 결제 호출이 던졌다고 카드가 안 긁힌 게 아니다(포트원 승인 후 타임아웃이 대표적). 그때
+ * 라우트는 주문을 'failed' 로 찍는데, 잠시 뒤 포트원 웹훅이 "이거 결제됐다" 며 온다.
+ * 예전 조건에서는 'failed' 행이 **0행 갱신**으로 튕겨서 웹훅이 `"이미 처리됨"` 을 돌려주고
+ * 200 으로 끝냈다 — 돈은 나갔는데 크레딧은 없고 로그는 처리됐다고 말하는 상태.
+ * failed → paid 전이를 허용해야 웹훅이 진실을 반영할 수 있다.
+ *
+ * 멱등의 **정본은 이 컬럼이 아니라 `credit_ledger.dedupe_key`** 다. 이 함수의 반환값은
+ * "내가 상태를 바꿨나" 일 뿐, "크레딧을 줬나" 가 아니다 — 그렇게 읽으면 안 된다.
+ */
 export async function markTopupPaid(paymentId: string, status: "paid" | "failed"): Promise<boolean> {
   const r = await pool.query(
     `UPDATE credit_topup SET status = $2, settled_at = now()
-      WHERE payment_id = $1 AND status = 'pending'`,
+      WHERE payment_id = $1 AND status <> 'paid'`,
     [paymentId, status],
   );
   return (r.rowCount ?? 0) > 0;

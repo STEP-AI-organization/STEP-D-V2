@@ -341,6 +341,35 @@ export async function listJobs(limit = 100): Promise<Job[]> {
   return rows as Job[];
 }
 
+/**
+ * 대기 중인 잡을 **타입별로** 센다.
+ *
+ * `queueStats()` 는 상태별 4개 정수라 "pending 51" 까지만 알려준다. 그런데 워커 레인은
+ * 4개(content·youtube·gebd·naver)라, 어느 레인이 막혔는지 구분할 수 없다 — 장애 대응의
+ * 첫 질문에 답을 못 한다.
+ *
+ * ⚠️ 이 함수가 없어서 실제로 라우트 하나가 죽어 있었다. `/api/admin/worker-vm/wake` 가
+ * `queueStats().pending_by_type` 이라는 **존재하지 않는 필드**를 읽어 항상 0 을 세고
+ * "no pending jobs" 를 돌려줬다(2026-08-12 발견). 가정하지 말고 실제로 세게 한다.
+ */
+export async function pendingByType(): Promise<Record<string, number>> {
+  const { rows } = await getPool().query(
+    `SELECT type, COUNT(*)::int AS n FROM job_queue WHERE status = 'pending' GROUP BY type`,
+  );
+  const out: Record<string, number> = {};
+  for (const r of rows as { type: string; n: number }[]) out[r.type] = r.n;
+  return out;
+}
+
+/** 가장 오래 기다린 대기 잡의 나이(ms). 없으면 0. 큐가 흐르는지 보는 가장 빠른 신호다. */
+export async function oldestPendingAgeMs(): Promise<number> {
+  const { rows } = await getPool().query(
+    `SELECT MIN(runAfter)::bigint AS oldest FROM job_queue WHERE status = 'pending'`,
+  );
+  const oldest = Number(rows[0]?.oldest ?? 0);
+  return oldest > 0 ? Math.max(0, Date.now() - oldest) : 0;
+}
+
 export async function queueStats(): Promise<Record<JobStatus, number>> {
   const { rows } = await getPool().query(
     `SELECT status, COUNT(*)::int AS n FROM job_queue GROUP BY status`,

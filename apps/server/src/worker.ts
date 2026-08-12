@@ -102,7 +102,15 @@ const TICK_INTERVAL_MS = 15 * 60 * 1000;
 const JOB_LANES: Record<"content" | "youtube" | "gebd" | "naver", JobType[]> = {
   // match.align도 content 레인 — 파이썬·ffmpeg로 오디오를 돌리는 무거운 잡이라
   // YouTube API 레인(짧고 쿼터 위주)에 섞으면 그쪽을 막는다.
-  content: ["content.analyze", "youtube.download", "match.align", "match.segment", "match.learn"],
+  // thumbnail.* 도 content 레인. 성격이 같다 — core/thumbnail 파이썬을 스폰하고 이미지 생성
+  // API 를 부르는 무거운 잡이다.
+  // ⚠️ 2026-08-12 이전에는 이 둘이 **어느 레인에도 없고** ALL_LANE_TYPES 에만 있었다.
+  //    그런데 프로덕션에 뜨는 워커는 WORKER_JOBS=content 와 =youtube 뿐이라(all 워커 없음)
+  //    큐잉은 되는데 **아무도 claim 하지 않아 영원히 pending** 이었다. 라우트는 {jobId} 로
+  //    성공을 돌려주므로 화면에서는 "생성 중" 으로만 보인다 — 이 리포의 전형적 조용한 실패다.
+  //    아래 "모든 JobType 은 실제로 도는 레인에 속한다" 테스트가 재발을 막는다.
+  content: ["content.analyze", "youtube.download", "match.align", "match.segment", "match.learn",
+            "thumbnail.style", "thumbnail.generate"],
   // factory.* 도 youtube 레인 — 상태기계 한 걸음은 DB 몇 번 읽고 재큐하는 게 전부라
   // 짧고, 배포(distribution.publish)와 같은 레인에 있어야 순서가 자연스럽다.
   // automation.cycle 도 youtube 레인 — 순방 한 바퀴는 DB 를 훑고 dispatchPublish 를 부르는
@@ -136,8 +144,7 @@ const DRAIN_MAX_MS = Number(process.env.DRAIN_MAX_MS ?? 50 * 60 * 1000);
 
 const WORKER_JOBS = (process.env.WORKER_JOBS ?? "all").trim().toLowerCase();
 /** 머신 전용 레인(gebd·naver)을 제외한 전체 타입 — "all" 워커가 집는 범위. */
-const ALL_LANE_TYPES: JobType[] = [...JOB_LANES.content, ...JOB_LANES.youtube,
-  "thumbnail.style", "thumbnail.generate"];
+const ALL_LANE_TYPES: JobType[] = [...JOB_LANES.content, ...JOB_LANES.youtube];
 const CLAIM_TYPES: JobType[] | undefined =
   WORKER_JOBS === "content" ? JOB_LANES.content
   : WORKER_JOBS === "youtube" ? JOB_LANES.youtube

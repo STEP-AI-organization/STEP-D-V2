@@ -42,7 +42,7 @@ import {
   workspaceBlockReason,
   type User,
 } from "./auth.ts";
-import { audit, clientIp, requireReason, requireSuperadmin } from "./admin.ts";
+import { audit, clientIp, requireReason, requireSuperadmin, requireOpsAccess } from "./admin.ts";
 import { grantDedupeKey, nextTenantId, planOnboarding } from "./onboarding.ts";
 import {
   billingConfig, cardBlockReason, cardLabel, cardTopupPaymentId, checkCustomer,
@@ -155,6 +155,7 @@ import {
   getChannelTrendSummary,
   getChannelAnalytics,
   markContentAnalysisPending,
+  saveContentAnalysis,
   getContentAnalysis,
   listContentAnalysisSummary,
   listEntities,
@@ -224,7 +225,7 @@ import {
 } from "./youtube.ts";
 import { SHORTS_PROBE_MAX_PER_SYNC, SHORTS_PROBE_CONCURRENCY } from "./config.ts";
 import { runChannelPipeline, runDueChannels } from "./channel-pipeline.ts";
-import { initQueue, enqueue, queueStats, listJobs } from "./queue.ts";
+import { initQueue, enqueue, queueStats, listJobs, pendingByType, oldestPendingAgeMs } from "./queue.ts";
 import {
   uploadPath,
   thumbPath,
@@ -253,7 +254,7 @@ import {
   readTrack,
 } from "./episode-intake.ts";
 import { dispatchPublish } from "./publish-dispatch.ts";
-import { opsCapabilityOf } from "./ops-role.ts";
+import { opsCapabilityOf, canPublish } from "./ops-role.ts";
 import {
   CREDIT_UNIT_LABEL, MANUAL_REASONS, buildTopup, checkCredits, creditPriceKrw,
   manualDedupeKey, planManualCredit, settleTopup, topupDedupeKey, topupPaymentId,
@@ -342,6 +343,33 @@ type AppEnv = { Variables: { user?: User } };
 const app = new Hono<AppEnv>();
 app.use("*", logger());
 app.use("/api/*", cors({ origin: (o) => o ?? "*", credentials: false }));
+
+/**
+ * 잡히지 않은 예외 → **사유가 있는 JSON**.
+ *
+ * 이게 없으면 Hono 기본 핸들러가 **본문 없는 500** 을 돌려준다. 그러면 이 리포가 공들여
+ * 써둔 메시지들 — `tenant.ts` 의 "tenant scope missing …", `auth.ts` 의 로그인 사유,
+ * `factory.ts` 의 거절 이유 — 이 전부 사용자에게 도달하지 못하고, 프론트는 본문이 없어서
+ * `res.json()` 에서 또 던진다. 화면에는 "500" 만 남는다.
+ *
+ * 규칙:
+ *  - `HTTPException` 은 던진 쪽이 status·message 를 정한 것이다. 그대로 존중한다.
+ *  - 나머지는 500 + `{error, message}`. **message 는 삼키지 않는다** — 이 리포의 실패는
+ *    대부분 "왜 안 됐는지 모르는 것" 이지 "터진 것" 이 아니다.
+ *  - 스택은 **서버 로그로만** 보낸다. 경로·내부 구조가 응답으로 새면 안 된다.
+ */
+app.onError((err, c) => {
+  if (err instanceof HTTPException) {
+    const res = err.getResponse();
+    // getResponse() 는 본문이 비어 있을 수 있다(message 만 준 경우) — JSON 으로 통일한다.
+    if (res.headers.get("content-type")?.includes("application/json")) return res;
+    return c.json({ error: "request_failed", message: err.message || res.statusText }, err.status);
+  }
+  const message = err instanceof Error ? err.message : String(err);
+  console.error(`[api] ${c.req.method} ${new URL(c.req.url).pathname} 처리 중 예외:`,
+    err instanceof Error ? (err.stack ?? message) : err);
+  return c.json({ error: "internal_error", message }, 500);
+});
 
 // ── 테넌트 컨텍스트 ────────────────────────────────────────────────────────────
 // 모든 요청을 테넌트 스코프 안에서 처리한다. 이 미들웨어가 없으면 db-pg 의 풀 프록시가
@@ -493,6 +521,30 @@ function requireUser(c: Context<AppEnv>): User {
   const user = c.get("user");
   if (!user) throw new HTTPException(401, { message: "login required" });
   return user;
+}
+
+/**
+ * 발행(송출) 권한 확인 + **감사 로그에 쓸 행위자**를 함께 돌려준다.
+ *
+ * 두 가지를 한 번에 고친다:
+ *  1. `ops-role.ts` 의 `canPublish()` 는 만들어져 있고 테스트도 있는데 **어느 라우트도
+ *     부르지 않았다**(2026-08-12 확인). 그래서 "워크스페이스 owner 인 외주 편집자에게
+ *     배포 버튼이 열린다" 는, 그 파일이 막으려던 바로 그 상황이 서버에서 열려 있었다.
+ *  2. 감사 로그의 행위자를 `x-actor` **헤더**에서 읽고 있었다 — 잘못된 발행 뒤에 찾아볼
+ *     바로 그 기록이 위조 가능했다. 세션이 정본이다.
+ *
+ * ⚠️ 세션이 없는 배치(AUTH_REQUIRED=0 · 단일 테넌트)에서는 막지 않는다. 지금 도는 배포를
+ *    깨지 않으면서 다테넌트 구멍만 닫는다 — 인증 자세가 어긋난 상태는 assertAuthPosture 가 잡는다.
+ */
+function requirePublisher(c: Context<AppEnv>): string {
+  const user = c.get("user");
+  if (!user) return readActor(c.req.header("x-actor")) || "unknown";
+  if (!canPublish(user.opsRole)) {
+    throw new HTTPException(403, {
+      message: "송출 권한이 없습니다 — 운영 역할(cp 등)이 필요합니다. 워크스페이스 관리 권한과는 별개입니다.",
+    });
+  }
+  return user.email || user.id;
 }
 
 app.post("/api/auth/login", async (c) => {
@@ -2126,6 +2178,10 @@ app.post("/api/media/:id/cast/:name/register", async (c) => {
 
 // ── admin: wipe all content (programs/episodes/recommendations/clips + media). Irreversible. ──
 app.post("/api/admin/reset", async (c) => {
+  // ⚠️ `requireOpsAccess` 는 이 목적으로 만들어져 있었는데 **어디서도 호출되지 않았다**
+  //    (2026-08-12 확인). AUTH_REQUIRED off 면 현상 유지, on 이면 superadmin 필수 —
+  //    "잊어버려서 영영 열려 있는" 상태를 피하려고 그렇게 설계된 함수다.
+  requireOpsAccess(c);
   const body = await c.req.json().catch(() => ({}) as Record<string, unknown>);
   if (body.confirm !== "RESET") return c.json({ error: "body.confirm must be 'RESET'" }, 400);
 
@@ -2154,6 +2210,7 @@ app.post("/api/admin/reset", async (c) => {
 
 // ── admin: drain the YouTube-analytics job flood + re-kick content.analyze ──
 app.post("/api/admin/queue/purge", async (c) => {
+  requireOpsAccess(c);
   const body = await c.req.json().catch(() => ({}) as Record<string, unknown>);
   if (body.confirm !== "PURGE") return c.json({ error: "body.confirm must be 'PURGE'" }, 400);
   const pool = getPool();
@@ -2194,6 +2251,7 @@ app.post("/api/admin/queue/purge", async (c) => {
 // ── admin: remux an existing master to progressive mp4 in place (for files uploaded
 //    before the ingest remux, or to re-fix a fragmented upload). ──
 app.post("/api/admin/remux/:id", async (c) => {
+  requireOpsAccess(c);
   const m = await getMedia(c.req.param("id"));
   if (!m) return c.json({ error: "media not found" }, 404);
   if (!FFMPEG || !useGcs()) return c.json({ error: "ffmpeg + GCS required" }, 400);
@@ -2897,7 +2955,16 @@ async function buildEpisodeAndMedia(opts: {
           { dedupeKey: `content.analyze:${mediaId}` },
         );
       } catch (err) {
-        console.error("[upload] failed to enqueue content.analyze", err);
+        // ⚠️ 여기서 그냥 삼키면 **회차가 "분석 중" 인 채로 영원히 멈춘다.**
+        // markContentAnalysisPending 은 이미 실행됐고 큐에는 행이 없어서, 화면은 진행 중처럼
+        // 보이는데 실제로는 아무도 그 일을 하지 않는다 — 이 리포가 문서화한 최악의 실패 모드다.
+        // 업로드 자체는 성공했으므로(파일은 저장됐다) 요청을 실패시키지는 않되,
+        // **거짓 진행 상태는 반드시 지운다.**
+        const reason = err instanceof Error ? err.message : String(err);
+        console.error(`[upload] content.analyze 큐잉 실패 ${mediaId}:`, reason);
+        await saveContentAnalysis(mediaId, {
+          error: `분석 큐 등록 실패 — 다시 시도해 주세요: ${reason}`,
+        }).catch((e) => console.error("[upload] 분석 실패 상태 기록도 실패:", e));
       }
     }
   }
@@ -4542,7 +4609,10 @@ app.post("/api/credits/topup/card", async (c) => {
     return c.json({ error: "charge_mismatch", message: verdict.message }, 409);
   }
 
-  await markTopupPaid(paymentId, "paid");
+  // ⚠️ 순서가 중요하다: **원장이 먼저**다.
+  // 원장 insert 는 `dedupe_key` 로 멱등이라 몇 번 불려도 안전하지만, 상태를 먼저 'paid' 로
+  // 찍고 그 사이에서 던지면 재시도가 `settleTopup` 의 'paid' 가드에 막혀 **크레딧이 영구히
+  // 사라진다**. 크레딧을 주는 쪽을 먼저 확정하고, 상태는 그 사실의 표시로만 쓴다.
   await addCreditEntry({
     delta: check.credits,
     reason: "topup",
@@ -4552,6 +4622,7 @@ app.post("/api/credits/topup/card", async (c) => {
     actor,
     dedupeKey: topupDedupeKey(paymentId),
   });
+  await markTopupPaid(paymentId, "paid");
   const balance = await creditBalance();
   return c.json({ ok: true, paymentId, credits: check.credits, amountKrw: check.amountKrw, balance });
 });
@@ -4690,10 +4761,14 @@ app.post("/api/billing/portone/webhook", async (c) => {
       return c.json({ ok: true, credited: false, reason: settle.reason });
     }
 
-    const claimed = await markTopupPaid(paymentId, "paid");
-    if (!claimed) return c.json({ ok: true, credited: false, reason: "이미 처리됨" });
-
-    await addCreditEntry({
+    // ⚠️ **원장이 먼저다.** 예전에는 `markTopupPaid` 를 먼저 부르고 0행이면
+    // `"이미 처리됨"` 으로 끝냈는데, 카드 결제 라우트가 타임아웃으로 주문을 'failed' 로
+    // 찍어둔 경우 여기서 0행이 나와 **돈은 나갔는데 크레딧은 없는 채로 200 을 돌려주고**
+    // 포트원의 재시도까지 멈췄다. 로그는 "이미 처리됨" 이라 사고가 보이지도 않았다.
+    //
+    // 멱등은 `dedupe_key` 가 책임진다(addCreditEntry 는 ON CONFLICT DO NOTHING).
+    // 상태 갱신은 그 사실의 표시일 뿐이라 뒤에 온다.
+    const credited = await addCreditEntry({
       delta: settle.credits,
       reason: "topup",
       paymentId,
@@ -4702,6 +4777,13 @@ app.post("/api/billing/portone/webhook", async (c) => {
       actor: "portone-webhook",
       dedupeKey: topupDedupeKey(paymentId),
     });
+    await markTopupPaid(paymentId, "paid");
+
+    if (!credited) {
+      // 원장에 이미 있다 = 진짜 중복 웹훅. 이건 정상이고, 크레딧은 이미 들어가 있다.
+      console.log(`[billing] 중복 웹훅 ${paymentId} — 원장에 이미 있음(크레딧 유지)`);
+      return c.json({ ok: true, credited: false, reason: "이미 적립된 결제입니다(중복 웹훅)." });
+    }
     console.log(`[billing] 충전 완료 ${paymentId} · +${settle.credits} 크레딧`);
     return c.json({ ok: true, credited: true, credits: settle.credits });
   });
@@ -5116,6 +5198,7 @@ async function resolveYouTubePublishChannel(explicitId?: string): Promise<YouTub
 }
 
 app.post("/api/distributions/publish", async (c) => {
+  const actor = requirePublisher(c);
   const b = await c.req.json<{
     clipIds: string[];
     channel: string;
@@ -5160,7 +5243,7 @@ app.post("/api/distributions/publish", async (c) => {
       clipIds: b.clipIds, channel: "youtube",
       scheduled: b.scheduled, reserveDate: b.reserveDate, privacy: b.privacy,
       youtubeChannelId: target.channelId,
-      actor: readActor(c.req.header("x-actor")) || "unknown",
+      actor,
       origin: "manual",
     });
     return c.json({ ok: true, ...outcome });
@@ -5220,7 +5303,7 @@ app.post("/api/distributions/publish", async (c) => {
       clipIds: b.clipIds, channel: b.channel,
       scheduled: b.scheduled, reserveDate: b.reserveDate,
       naverAccountId: account.id, description: desc, naverCategory: cat,
-      actor: readActor(c.req.header("x-actor")) || "unknown",
+      actor,
       origin: "manual",
     });
     return c.json({ ok: true, naverAccount: { id: account.id, label: account.label }, ...outcome });
@@ -5229,7 +5312,7 @@ app.post("/api/distributions/publish", async (c) => {
   const outcome = await dispatchPublish({
     clipIds: b.clipIds, channel: b.channel,
     scheduled: b.scheduled, reserveDate: b.reserveDate, platforms: b.platforms,
-    actor: readActor(c.req.header("x-actor")) || "unknown",
+    actor,
     origin: "manual",
   });
   return c.json({ ok: true, ...outcome });
@@ -5237,6 +5320,7 @@ app.post("/api/distributions/publish", async (c) => {
 
 // ── retry a failed distribution ───────────────────────────────────────────────
 app.post("/api/distributions/retry", async (c) => {
+  const actor = requirePublisher(c);
   const b = await c.req.json<{ clipId: string; channel: string }>().catch(() => null);
   if (!b || !b.clipId || !b.channel) {
     return c.json({ error: "bad_request", message: "clipId와 channel이 필요합니다." }, 400);
@@ -5260,7 +5344,7 @@ app.post("/api/distributions/retry", async (c) => {
       clipIds: [b.clipId], channel: "youtube",
       reserveDate: prev?.reserveDate,
       youtubeChannelId: target.channelId,
-      actor: readActor(c.req.header("x-actor")) || "unknown",
+      actor,
       origin: "retry",
     });
     return c.json({ ok: true, ...outcome });
@@ -5268,7 +5352,7 @@ app.post("/api/distributions/retry", async (c) => {
 
   const outcome = await dispatchPublish({
     clipIds: [b.clipId], channel: b.channel,
-    actor: readActor(c.req.header("x-actor")) || "unknown",
+    actor,
     origin: "retry",
   });
   return c.json({ ok: true, ...outcome });
@@ -6532,6 +6616,7 @@ app.get("/api/naver/accounts", async (c) => {
 });
 
 app.post("/api/naver/accounts", async (c) => {
+  requireManager(c);
   const b = await c.req.json<{ label?: string; target?: string }>().catch(() => null);
   const label = b?.label?.trim();
   if (!label) return c.json({ error: "label required" }, 400);
@@ -6554,6 +6639,7 @@ app.post("/api/naver/accounts", async (c) => {
 });
 
 app.patch("/api/naver/accounts/:id", async (c) => {
+  requireManager(c);
   const id = c.req.param("id");
   const acct = await getNaverAccount(id);
   if (!acct) return c.json({ error: "not_found" }, 404);
@@ -6576,6 +6662,7 @@ app.patch("/api/naver/accounts/:id", async (c) => {
  * ⚠️ 워커 PC 에 남은 로컬 세션 파일까지는 못 지운다 — 서버에서 닿지 않는 머신이다.
  */
 app.delete("/api/naver/accounts/:id", async (c) => {
+  requireManager(c);
   const id = c.req.param("id");
   const acct = await getNaverAccount(id);
   if (!acct) return c.json({ error: "not_found" }, 404);
@@ -6593,6 +6680,9 @@ app.delete("/api/naver/accounts/:id", async (c) => {
  *    키가 없으면 **거부한다** — 평문으로 조용히 저장되는 것보다 못 받는 게 낫다.
  */
 app.put("/api/naver/accounts/:id/session", async (c) => {
+  // ⚠️ 세션 blob 은 그 계정의 **전체 권한**이다(naver-session-store.ts 헤더 참고).
+  //    아이디·비번보다 즉시 쓸 수 있어 더 위험하다 — 관리자만.
+  requireManager(c);
   const acct = await getNaverAccount(c.req.param("id"));
   if (!acct) return c.json({ error: "not_found" }, 404);
   if (!sessionStoreReady()) {
@@ -6612,6 +6702,7 @@ app.put("/api/naver/accounts/:id/session", async (c) => {
 });
 
 app.delete("/api/naver/accounts/:id/session", async (c) => {
+  requireManager(c);
   const acct = await getNaverAccount(c.req.param("id"));
   if (!acct) return c.json({ error: "not_found" }, 404);
   await clearNaverSessionBlob(acct.id);
@@ -7193,7 +7284,19 @@ app.get("/api/factory/jobs/:id", async (c) => {
   });
 });
 
-app.get("/api/queue/stats", async (c) => c.json(await queueStats()));
+/**
+ * 큐 상태. 런북([docs/ops/runbook.md])의 1차 진단 도구다.
+ *
+ * 상태별 4개 정수만 주면 "pending 51" 까지만 알 수 있어, **레인 4개 중 어디가 막혔는지**를
+ * 구분할 수 없다. 타입별 대기 건수와 가장 오래 기다린 잡의 나이를 함께 준다 —
+ * 기존 키(pending/running/done/failed)는 그대로 두어 호출부를 깨지 않는다.
+ */
+app.get("/api/queue/stats", async (c) => {
+  const [stats, byType, oldestMs] = await Promise.all([
+    queueStats(), pendingByType(), oldestPendingAgeMs(),
+  ]);
+  return c.json({ ...stats, pendingByType: byType, oldestPendingAgeMs: oldestMs });
+});
 
 /**
  * On-demand VM 부팅 · Cloud Scheduler 가 매 3분 호출.
@@ -7216,6 +7319,7 @@ app.get("/api/queue/stats", async (c) => c.json(await queueStats()));
  * Cloud Run 이미지에는 gcloud 가 없다. 여기서는 **Compute REST API** 를 직접 부른다.
  */
 app.post("/api/admin/gebd-vm/wake", async (c) => {
+  requireOpsAccess(c);
   const project = process.env.GOOGLE_CLOUD_PROJECT || "step-d";
   const zone = process.env.GEBD_VM_ZONE || "us-central1-b";
   const instance = process.env.GEBD_VM_NAME || "stepd-gebd-vm";
@@ -7262,24 +7366,21 @@ app.post("/api/admin/gebd-vm/wake", async (c) => {
 });
 
 app.post("/api/admin/worker-vm/wake", async (c) => {
+  requireOpsAccess(c);
   const zone = process.env.WORKER_VM_ZONE || "asia-northeast3-c";
   const instance = process.env.WORKER_VM_NAME || "stepd-worker";
-  const stats = await queueStats();
-  // queueStats 는 type 별 pending count 를 반환한다고 가정 · 모든 content/youtube 계열 합산
-  // GEBD 는 다른 VM 이라 제외.
-  const excludedTypes = new Set(["gebd.detect"]);
-  let pending = 0;
-  const perType = (stats as any)?.pending_by_type || {};
-  if (perType && typeof perType === "object") {
-    for (const [t, n] of Object.entries(perType)) {
-      if (!excludedTypes.has(t)) pending += Number(n) || 0;
-    }
-  } else {
-    // fallback: 전체 pending 을 그대로 (gebd 는 나중에 별 VM 자체 트리거로 커버)
-    pending = Number((stats as any)?.pending ?? 0);
-  }
+  // ⚠️ 예전 코드는 `queueStats().pending_by_type` 을 읽었는데 **그런 필드가 없다.**
+  //    `undefined || {}` → `{}` → `typeof {} === "object"` 가 참 → 빈 객체를 순회 → pending 은
+  //    영원히 0 → 이 라우트는 **항상 "no pending jobs"** 를 돌려줬다(폴백 else 는 도달 불가).
+  //    주석에 "…라고 가정" 이라 적혀 있던 그 가정이 틀렸다. 이제 실제로 센다.
+  //    GEBD 는 다른 VM 이 담당하므로 이 워커의 깨울 이유에서 제외한다.
+  const perType = await pendingByType();
+  const excludedTypes = new Set(["gebd.detect", "naver.publish"]);
+  const pending = Object.entries(perType)
+    .filter(([t]) => !excludedTypes.has(t))
+    .reduce((sum, [, n]) => sum + n, 0);
   if (pending === 0) {
-    return c.json({ waked: false, reason: "no pending jobs", pending });
+    return c.json({ waked: false, reason: "no pending jobs", pending, perType });
   }
   const { spawnSync } = await import("node:child_process");
   const r = spawnSync("gcloud", [
