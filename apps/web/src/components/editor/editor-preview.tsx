@@ -403,10 +403,13 @@ export function EditorPreview({
             })()}
           </div>
         )}
+        {/* 자막 표시는 켰는데 이 회차에 STT 자체가 없을 때만 안내를 띄운다.
+            예전엔 확정 클립에서 transcript를 안 담아 실제 대사 대신 이 더미가 떴다 —
+            이제 transcript는 항상 로드되므로 이 분기는 STT가 진짜 없는 경우에만 걸린다. */}
         {state.captionsOn && !hasTranscript && (
           <div className="absolute inset-x-0 px-6 text-center" style={{ bottom: "14%" }}>
-            <span className="px-1 font-bold" style={{ color: "#fff", textShadow: "0 2px 6px rgba(0,0,0,.6)", fontSize: "4.2cqh" }}>
-              지금 이 장면이 <span style={{ color: state.highlightColor }}>가장 먼저</span> 잡혀야 해요
+            <span className="px-1 font-bold" style={{ color: "#fff", opacity: 0.65, textShadow: "0 2px 6px rgba(0,0,0,.6)", fontSize: "3.4cqh" }}>
+              이 회차는 아직 자막(STT) 데이터가 없습니다
             </span>
           </div>
         )}

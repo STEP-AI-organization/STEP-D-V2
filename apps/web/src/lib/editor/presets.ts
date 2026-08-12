@@ -645,15 +645,79 @@ export function ensureTracks(state: EditorState, durationSec: number, segmentSta
   };
 }
 
+/** 프레임 템플릿의 텍스트 슬롯(서버가 %·px 로 변환해 내려준 것). api.ts FrameTextSlot 미러. */
+export interface TemplateTextSlot {
+  slot: string;
+  x: number;      // % (center면 50)
+  y: number;      // %
+  align: "center" | "left";
+  size: number;   // px (1080 폭 캔버스 기준)
+  color: string;
+}
+export interface TemplateFrame {
+  name: string;
+  text: TemplateTextSlot[];
+}
+
 /**
- * 프레임 템플릿 선택. 프레임은 **기하만** 바꾸므로 여기서는 id 와 캔버스 기본값만 손댄다 —
- * 제목·자막 레이어는 사용자가 잡아둔 위치를 유지한다(템플릿 바꿀 때마다 초기화되면 못 쓴다).
- * 실제 띠·영상 사각형·프레임 그래픽은 서버가 주는 meta.json 기하로 미리보기·export 가 그린다.
+ * 프레임 템플릿 선택.
+ *
+ * ⚠️ 예전에는 기하(띠·영상 사각형)만 바꾸고 제목·채널 텍스트는 손대지 않았다. 그래서
+ * 템플릿을 적용하면 텍스트가 원래 자유배치 자리에 그대로 남아 프레임 띠 위에 겹치거나
+ * 어긋나 **오버레이가 지저분**했다(사용자 지적 2026-08-12).
+ *
+ * 이제 템플릿은 **텍스트·채널 배치까지 정의하는 한 벌**이다. 슬롯을 편집기 요소에 매핑해
+ * 위치·크기·색을 세팅한다:
+ *   title1 → titleLines[0] · titleX/titleY · titleAlign
+ *   title2 → titleLines[1]
+ *   program / schedule → 채널(브랜딩) 블록 위치
+ * **슬롯이 없는 요소는 숨긴다** — 채널 슬롯이 없는 템플릿에서 채널 배지가 남으면 안 된다.
+ * 배치 후 사용자는 드래그로 미세 조정할 수 있다(템플릿은 기본값일 뿐).
+ *
+ * `frame` 을 못 받으면(목록 로딩 전 등) 예전처럼 캔버스 기본값만 손댄다.
  */
-export function applyTemplate(state: EditorState, id: TemplateId): EditorState {
+export function applyTemplate(state: EditorState, id: TemplateId, frame?: TemplateFrame | null): EditorState {
   const legacy = TEMPLATE_PRESETS.find((p) => p.id === id);
-  // 구 프리셋 id 로 저장된 클립을 열었을 때만 예전 패치를 적용한다(하위호환).
-  return legacy
-    ? { ...state, templateId: id, ...legacy.patch }
-    : { ...state, templateId: id, aspect: "9:16", bgType: "solid", bg: "#000000" };
+  if (legacy) {
+    // 구 프리셋 id 로 저장된 클립을 열었을 때만 예전 패치를 적용한다(하위호환).
+    return { ...state, templateId: id, ...legacy.patch };
+  }
+
+  const base: EditorState = { ...state, templateId: id, aspect: "9:16", bgType: "solid", bg: "#000000" };
+  if (!frame || !Array.isArray(frame.text)) return base;
+
+  const slot = (name: string) => frame.text.find((s) => s.slot === name);
+  const t1 = slot("title1");
+  const t2 = slot("title2");
+  // 브랜딩 슬롯은 템플릿마다 이름이 다르다(program=프로그램명 · schedule=방영시간).
+  const brand = slot("program") ?? slot("schedule");
+
+  const next: EditorState = { ...base };
+
+  // ── 제목 ──────────────────────────────────────────────
+  if (t1) {
+    next.titleX = t1.x;
+    next.titleY = t1.y;
+    next.titleAlign = t1.align === "left" ? "left" : "center";
+    // 기존 텍스트는 보존하되(사용자가 쓴 문구) 위치·크기·색만 슬롯으로 덮는다.
+    const lines = state.titleLines.length ? state.titleLines : [{ id: "t1", text: "", size: t1.size, color: t1.color }];
+    next.titleLines = lines.map((l, i) => {
+      const s = i === 0 ? t1 : i === 1 ? (t2 ?? null) : null;
+      // 슬롯이 없는 줄(3줄째 등)은 그대로 둔다 — 지우면 사용자 문구가 사라진다.
+      return s ? { ...l, size: s.size, color: s.color } : l;
+    });
+  }
+
+  // ── 채널/브랜딩 ───────────────────────────────────────
+  if (brand) {
+    next.showChannel = true;
+    next.channelY = brand.y;
+    // 방영시간 슬롯이면 시간 박스 위치도 같이 맞춘다(broadcast-standard 계열).
+    if (slot("schedule")) next.channelBoxY = brand.y;
+  } else {
+    // 이 템플릿엔 채널/브랜딩 슬롯이 없다 → 배지를 숨긴다(겹침 방지).
+    next.showChannel = false;
+  }
+
+  return next;
 }

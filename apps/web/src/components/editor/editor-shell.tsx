@@ -97,8 +97,11 @@ export function EditorShell({ clipId }: { clipId: string }) {
           const list = Array.isArray(a.data?.scenes) ? a.data!.scenes : undefined;
           setScenes(list);
           setScenesState(list && list.length > 0 ? "ready" : "empty");
-          // 마스터 미리보기일 때만 자막 오버레이 (확정 클립은 이미 번인)
-          setTranscript(previewingMaster && Array.isArray(a.data?.transcript) ? a.data!.transcript : undefined);
+          // 자막 오버레이는 항상 실제 STT를 담는다.
+          // 예전엔 previewingMaster일 때만 담아서, 확정 클립을 열면 hasTranscript=false →
+          // 편집기 "자막 표시"가 실제 대사 대신 더미 문구를 띄웠다(사용자 지적 2026-08-12).
+          // 클립 미리보기의 videoTime→절대초 변환은 captionText useMemo가 처리한다.
+          setTranscript(Array.isArray(a.data?.transcript) ? a.data!.transcript : undefined);
         })
         .catch(() => {
           if (!alive) return;
@@ -324,7 +327,10 @@ export function EditorShell({ clipId }: { clipId: string }) {
     [frames, state.templateId],
   );
 
-  const applyTpl = (id: EditorState["templateId"]) => setState((s) => applyTemplate(s, id));
+  // 템플릿 적용 시 그 프레임의 텍스트 슬롯까지 넘긴다 — 제목·채널이 슬롯 위치로 배치되고
+  // 슬롯 없는 요소는 숨는다(안 넘기면 텍스트가 자유배치로 남아 프레임과 겹친다).
+  const applyTpl = (id: EditorState["templateId"]) =>
+    setState((s) => applyTemplate(s, id, frames.find((f) => f.name === id) ?? null));
 
   // 제목만 갈아끼우는 경로 — '제목 후보' 탭에서 클릭할 때 사용. trim은 건드리지 않는다.
   function applyTitle(title: string) {
@@ -388,15 +394,21 @@ export function EditorShell({ clipId }: { clipId: string }) {
   //   전제: master 재생 시 videoTime = 원본 절대 시각 · transcript.start = 실제 발화 시각.
   //   sync 어긋나면 원인은 STT/refine 시각 정확도(코어) 이슈 → 파이프라인 쪽에서 fix.
   // 한국 방송은 word-by-word 하이라이트 안 씀 (2026-07-24) — 세그먼트 텍스트 하나만 넘긴다.
+  // 확정 클립을 재생할 땐 videoTime이 **클립 상대초**(0부터)라, master 절대초로 찍힌
+  // transcript와 대응시키려면 클립 시작 오프셋을 더한다. 마스터 미리보기일 땐 videoTime이
+  // 이미 절대초라 오프셋 0.
+  const clipStartAbs = previewingMaster
+    ? 0
+    : Number(sourceRecEarly?.startTime ?? clip?.startTime ?? 0);
   const captionText = useMemo(() => {
     if (!transcript) return undefined;
-    const t = videoTime + (state.offsetMs || 0) / 1000; // master-absolute seconds
+    const t = videoTime + clipStartAbs + (state.offsetMs || 0) / 1000; // master-absolute seconds
     const seg = transcript.find(
       (s) => Number(s.start ?? 0) <= t && t < Number(s.end ?? Number(s.start ?? 0) + 3),
     );
     const text = (seg?.text ?? "").trim();
     return seg && text ? text : undefined;
-  }, [transcript, videoTime, state.offsetMs]);
+  }, [transcript, videoTime, clipStartAbs, state.offsetMs]);
 
   const togglePlay = useCallback(() => {
     const v = videoEl;
