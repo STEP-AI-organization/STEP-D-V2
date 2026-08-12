@@ -401,6 +401,61 @@ export async function advance(factoryJobId: string): Promise<{ job: FactoryJob; 
 }
 
 /**
+ * 자동 렌더용 제목 랩핑 — 무인 렌더에는 에디터의 손질이 없으므로 여기서 줄수·크기를
+ * 못박는다. 규칙: 2줄 이하 · 넘치면 말줄임 · 길수록 폰트 축소 (렌더러는 자동 줄바꿈이
+ * 없어서(WrapStyle 2) 시드가 안 감싸면 화면 밖으로 나간다 — 2026-08-12 실측).
+ */
+export function wrapAutoTitle(raw: string): { lines: string[]; size: number } {
+  const text = String(raw ?? "").replace(/\s+/g, " ").trim();
+  if (!text) return { lines: [], size: 32 };
+  if (text.length <= 14) return { lines: [text], size: 34 };
+  const budget = 16;
+  // 중간에 가장 가까운 공백에서 자른다 — 단어 중간 절단 방지.
+  const cut = (() => {
+    const mid = Math.min(budget, Math.ceil(text.length / 2));
+    for (let d = 0; d < 8; d++) {
+      if (text[mid - d] === " ") return mid - d;
+      if (text[mid + d] === " ") return mid + d;
+    }
+    return mid;
+  })();
+  let l1 = text.slice(0, cut).trim();
+  let l2 = text.slice(cut).trim();
+  if (l2.length > budget + 4) l2 = `${l2.slice(0, budget + 3).trim()}…`;
+  return { lines: [l1, l2], size: text.length > 24 ? 28 : 30 };
+}
+
+/**
+ * 무인 자동배포 기본 렌더 시드 (사용자 확정 2026-08-12 · TVING 쇼츠 스타일):
+ *   검정 배경에 16:9 원본을 **가운데 레터박스** — 원본 번인 자막이 그대로 보이므로
+ *   AI 자막 오버레이는 끈다(겹침 원천 차단) · 상단 띠에 짧은 훅 한 줄 · 하단 띠에
+ *   프로그램명 브랜딩. editorState 가 없으면 렌더가 블러 커버 + 기본 자막 폴백으로
+ *   나가 조잡했다(스모크 실측) — 시드가 곧 무인 품질의 하한선이다.
+ * 사람이 에디터에서 열어 저장하면 이 시드는 그대로 대체된다.
+ */
+export function autoEditorState(rec: any, programTitle: string): Record<string, unknown> {
+  const hook = String(rec.hookQuote ?? "").replace(/^['"‘“]|['"’”]$/g, "").trim();
+  const headline = hook && hook.length <= 30 ? hook : String(rec.titleLine1 ?? rec.title ?? "");
+  const { lines, size } = wrapAutoTitle(headline);
+  return {
+    aspect: "9:16",
+    bgType: "solid",
+    bg: "#000000",
+    templateId: null,
+    titleLines: lines.map((text) => ({ text, size, color: "#FFFFFF" })),
+    titleX: 50,
+    titleY: 11,
+    titleAlign: "center",
+    captionsOn: false,
+    karaoke: false,
+    hookOn: false,
+    showChannel: Boolean(programTitle),
+    channelName: programTitle,
+    channelY: 88,
+  };
+}
+
+/**
  * 추천 하나 → 클립. index.ts 의 adopt 라우트와 같은 뼈대다.
  * 라우트를 HTTP 로 부르지 않는 이유: 워커가 별도 프로세스라 인증·네트워크가 더 붙는다.
  */
@@ -424,6 +479,8 @@ async function adoptRecommendation(rec: any, job: FactoryJob): Promise<string | 
     clipType: rec.kind === "short" ? "T6" : "TZ",
     targetAge: episode?.targetAge ?? 0,
     aspectRatio: rec.kind === "short" ? "9:16-crop-main" : "16:9",
+    // 무인 렌더 기본 시드 — 에디터를 안 거쳐도 배포 가능한 모양으로 나가게 한다.
+    editorState: autoEditorState(rec, episode?.programTitle ?? ""),
     durationSec: Math.max(1, rec.endTime - rec.startTime),
     synopsis: rec.editNote ?? undefined,
     status: "editing",
