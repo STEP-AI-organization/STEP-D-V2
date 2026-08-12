@@ -86,7 +86,13 @@ export function SavedCardPanel({
 
       if (res?.code) {
         // 사용자가 닫았거나 카드사가 거절했다. 실패로 단정하지 말고 사유를 그대로 보여준다.
-        toast({ title: "카드 등록이 완료되지 않았습니다", description: res.message ?? res.code, tone: "warn" });
+        //
+        // ⚠️ **pgMessage 를 같이 보여준다.** 문서상 실패 응답은 `code`·`message` 외에
+        // `pgCode`·`pgMessage` 를 주는데, 카드사가 왜 거절했는지(한도·해외카드·본인인증 등)는
+        // 거기 담긴다. message 만 띄우면 "결제에 실패했습니다" 같은 빈 문구만 보고 헤맨다.
+        const pg = res as { pgMessage?: string; pgCode?: string };
+        const detail = [res.message ?? res.code, pg.pgMessage ?? pg.pgCode].filter(Boolean).join(" · ");
+        toast({ title: "카드 등록이 완료되지 않았습니다", description: detail, tone: "warn" });
         return;
       }
       const billingKey = (res as { billingKey?: string })?.billingKey;
