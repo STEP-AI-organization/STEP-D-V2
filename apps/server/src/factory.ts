@@ -86,14 +86,42 @@ export interface FactoryJob {
 
 function now(): number { return Date.now(); }
 
-/** 워커에서 서버 라우트를 부를 때 쓰는 베이스. Cloud Run 은 allow-unauthenticated. */
+/** 워커에서 서버 라우트를 부를 때 쓰는 베이스. */
 function apiBase(): string {
   return (process.env.INTERNAL_API_BASE || process.env.PUBLIC_URL || "http://localhost:4100")
     .replace(/\/+$/, "");
 }
 
+/**
+ * 워커 → 서버 내부 호출 인증. 두 겹이다:
+ *  1. Cloud Run IAM — 서비스가 공개가 아니므로(조직 정책) 메타데이터 서버에서 ID 토큰을
+ *     받아 Authorization 에 싣는다. 로컬 dev 엔 메타데이터가 없어 조용히 생략된다.
+ *  2. 앱 레벨 — `INTERNAL_API_TOKEN` 공유 토큰 + 현재 잡의 테넌트를 헤더로 넘긴다
+ *     (index.ts resolveTenant 의 internal 경로). AUTH_REQUIRED 여도 통과해야 렌더가 돈다.
+ * 예전엔 "Cloud Run 은 allow-unauthenticated" 전제로 무인증 fetch 였는데, 그 전제가
+ * 깨지면서 렌더 요청이 GFE 401 로 조용히 죽었다 (2026-08-12 스모크 f_1bccf059 실측).
+ */
+async function internalHeaders(): Promise<Record<string, string>> {
+  const h: Record<string, string> = {};
+  const token = process.env.INTERNAL_API_TOKEN;
+  if (token) {
+    h["x-internal-token"] = token;
+    const { currentTenantId } = await import("./tenant.ts");
+    try { h["x-tenant-id"] = currentTenantId(); } catch { /* 컨텍스트 없으면 기본 테넌트 */ }
+  }
+  const aud = apiBase();
+  const meta = await fetch(
+    `http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity?audience=${encodeURIComponent(aud)}`,
+    { headers: { "Metadata-Flavor": "Google" }, signal: AbortSignal.timeout(2000) },
+  ).catch(() => null);
+  if (meta?.ok) h["Authorization"] = `Bearer ${await meta.text()}`;
+  return h;
+}
+
 async function requestExport(clipId: string): Promise<void> {
-  const res = await fetch(`${apiBase()}/api/clips/${clipId}/export`, { method: "POST" });
+  const res = await fetch(`${apiBase()}/api/clips/${clipId}/export`, {
+    method: "POST", headers: await internalHeaders(),
+  });
   if (!res.ok) throw new Error(`export ${res.status}`);
 }
 

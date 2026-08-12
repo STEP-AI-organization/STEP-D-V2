@@ -401,6 +401,17 @@ async function resolveTenant(c: Context<AppEnv>): Promise<TenantContext> {
     return { scope: row.tenantId, via: "api-key", apiKeyId: row.id };
   }
 
+  // 내부 서비스 호출 (워커 → 서버 렌더 등). Cloud Run IAM 은 GFE 가 ID 토큰으로 검증하고,
+  // 앱 레벨에서는 이 공유 토큰으로 "우리 워커다"를 증명한다. 테넌트는 호출자가 잡의
+  // tenant 스코프를 헤더로 넘긴다 — 워커는 이미 그 스코프로 실행 중이므로 위임이 맞다.
+  // 토큰 env 미설정 = 경로 자체가 닫힘 (fail-closed).
+  const internalGiven = c.req.header("x-internal-token") ?? "";
+  const internalToken = process.env.INTERNAL_API_TOKEN ?? "";
+  if (internalGiven && internalToken && internalGiven.length === internalToken.length &&
+      crypto.timingSafeEqual(Buffer.from(internalGiven), Buffer.from(internalToken))) {
+    return { scope: c.req.header("x-tenant-id") || DEFAULT_TENANT_ID, via: "internal" };
+  }
+
   const user = await resolveSession(getCookie(c, SESSION_COOKIE)).catch(() => null);
   if (user) {
     c.set("user", user);
