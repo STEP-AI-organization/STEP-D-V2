@@ -2259,7 +2259,7 @@ export async function searchSegments(q: SearchQuery): Promise<SearchHit[]> {
            ${lexExpr} AS lex, ${vecExpr} AS vec, ${scoreExpr} AS score
       FROM search_segments
       ${where.length ? "WHERE " + where.join(" AND ") : ""}
-     ORDER BY score DESC, highlight_score DESC NULLS LAST
+     ORDER BY score DESC, highlight_score DESC NULLS LAST, start_sec
      LIMIT ${topK}`;
 
   const { rows } = await pool.query(sql, params);

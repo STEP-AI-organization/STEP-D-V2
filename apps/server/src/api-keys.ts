@@ -135,6 +135,7 @@ export const API_KEY_ROUTES: RouteRule[] = [
   { method: "GET", path: /^\/api\/media\/[^/]+\/clips$/, scope: "media:read" },
   { method: "GET", path: /^\/api\/media\/[^/]+\/thumb$/, scope: "media:read" },
   { method: "GET", path: /^\/api\/media\/[^/]+\/frame$/, scope: "media:read" },
+  { method: "GET", path: /^\/api\/media\/[^/]+\/segment$/, scope: "media:read" },
   { method: "GET", path: /^\/api\/media\/[^/]+\/analysis\/frames\/[^/]+$/, scope: "media:read" },
   { method: "GET", path: /^\/api\/media\/[^/]+\/thumbnails$/, scope: "media:read" },
   // 찾기

@@ -1536,6 +1536,54 @@ app.get("/api/search", async (c) => {
   const isShortParam = c.req.query("is_short");
   const explicitIsShort = isShortParam == null ? undefined : (isShortParam === "true" || isShortParam === "1");
 
+  // q 가 비어 있으면 파서·임베딩을 건너뛰고 기본 목록 — 필터는 그대로, 하이라이트 순.
+  // 검색어 없이 화면에 들어와도 뭐라도 떠야 한다 (2026-08-12).
+  if (!q) {
+    const query: SearchQuery = {
+      programId,
+      genre: c.req.query("genre") || undefined,
+      scopeType: c.req.query("scope_type") || undefined,
+      scopeId: c.req.query("scope_id") || undefined,
+      episode: c.req.query("episode") || undefined,
+      airedFrom: c.req.query("aired_from") || undefined,
+      airedTo: c.req.query("aired_to") || undefined,
+      characters: explicitChars.length ? explicitChars : undefined,
+      sceneType: c.req.query("scene_type") || undefined,
+      isShort: explicitIsShort,
+      allowSpoiler: c.req.query("allow_spoiler") === "true",
+      topK: c.req.query("top_k") ? Number(c.req.query("top_k")) : 30,
+    };
+    let hits: SearchHit[];
+    try {
+      hits = await searchSegments(query);
+    } catch (e) {
+      return c.json({ error: e instanceof Error ? e.message : String(e), results: [] }, 500);
+    }
+    return c.json({
+      query: "",
+      parsed: { empty: true, characters: [], semantic: "", charactersUsed: query.characters ?? [] },
+      embedded: false,
+      count: hits.length,
+      results: hits.map((h) => ({
+        segmentId: h.segmentId,
+        mediaId: h.mediaId,
+        start: h.start,
+        end: h.end,
+        duration: h.duration,
+        characters: h.characters,
+        sceneType: h.sceneType,
+        isShort: h.isShort,
+        highlightScore: h.highlightScore,
+        summary: h.summary,
+        dialogue: h.dialogue,
+        rightsStatus: annotateRights(h.rights),
+        score: h.score,
+        lex: h.lex,
+        vec: h.vec,
+      })),
+    });
+  }
+
   // LLM 쿼리 파서 — q를 {인물·장면유형·방영기간·쇼츠·semantic}로 분해. 명시 파라미터가 우선.
   // 인물 후보(roster)는 프로그램 세그먼트에서 뽑아 환각을 막는다. 실패 시 룰 폴백.
   const roster = await listKnownCharacters(programId).catch(() => [] as string[]);
@@ -2468,6 +2516,61 @@ app.get("/api/media/:id/frame", async (c) => {
   return new Response(createReadStream(objPath), {
     status: 200,
     headers: { "Content-Type": "image/jpeg", "Cache-Control": "public, max-age=86400" },
+  });
+});
+
+// ── segment download — 검색 히트 구간을 mp4 로 잘라 준다 ──────────────────────
+//
+// 캐시: analysis/{id}/segments/{s}_{e}.mp4 (s·e 는 toFixed(2), 점→_). 미스면 원본
+// (GCS 서명 URL 또는 로컬 경로)에서 trimEncode 후 업로드·서빙. ffmpeg 동시성은
+// frame 캡처와 같은 세마포어를 공유한다 (2vCPU 나눠먹기 방지).
+app.get("/api/media/:id/segment", async (c) => {
+  const id = c.req.param("id");
+  if (!/^[\w-]+$/.test(id)) return c.json({ error: "bad media id" }, 400);
+  const start = Number(c.req.query("start"));
+  const end = Number(c.req.query("end"));
+  if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || start >= end) {
+    return c.json({ error: "bad range" }, 400);
+  }
+  if (end - start > 300) return c.json({ error: "segment too long (max 300s)" }, 400);
+
+  const sKey = start.toFixed(2).replace(/\./g, "_");
+  const eKey = end.toFixed(2).replace(/\./g, "_");
+  const objPath = `analysis/${id}/segments/${sKey}_${eKey}.mp4`;
+
+  if (!(await fileExists(objPath))) {
+    if (!FFMPEG) return c.json({ error: "ffmpeg unavailable" }, 503);
+    const m = await getMedia(id);
+    if (!m) return c.json({ error: "media not found" }, 404);
+    const masterObjPath = parseObjectPath(m.path);
+    if (!(await fileExists(masterObjPath))) return c.json({ error: "source not found" }, 404);
+    const srcPath = useGcs() ? await signedReadUrl(masterObjPath, 60 * 60 * 1000) : m.path;
+    const tmpDir = path.resolve("/tmp/stepd-segments");
+    fs.mkdirSync(tmpDir, { recursive: true });
+    const tmpPath = path.join(tmpDir, `${id}_${sKey}_${eKey}.mp4`);
+    try {
+      await withFrameCaptureSlot(async () => {
+        // 대기 중 다른 요청이 같은 구간을 이미 만들었을 수 있다 — 재확인.
+        if (await fileExists(objPath)) return;
+        await trimEncode(srcPath, start, end, tmpPath);
+        await uploadFile(objPath, tmpPath);
+      });
+    } catch (err) {
+      console.error("[segment] trim failed:", err);
+      return c.json({ error: "trim failed" }, 500);
+    } finally {
+      // Cloud Run 의 /tmp 는 tmpfs(RAM) — 반드시 지운다.
+      try { fs.unlinkSync(tmpPath); } catch {}
+    }
+  }
+
+  return new Response(createReadStream(objPath), {
+    status: 200,
+    headers: {
+      "Content-Type": "video/mp4",
+      "Content-Disposition": `attachment; filename="segment_${sKey}-${eKey}.mp4"`,
+      "Cache-Control": "public, max-age=86400",
+    },
   });
 });
 

@@ -2051,8 +2051,16 @@ export interface SearchResultCard {
   vec: number;
 }
 
+/** 검색 히트 구간 다운로드 URL (`<a href download>` 용 — fetch 아님).
+ *  서버가 캐시(analysis/{id}/segments/) 히트면 즉시, 미스면 trimEncode 후 서빙. */
+export function segmentDownloadUrl(mediaId: string, start: number, end: number): string {
+  return `${API_BASE}/media/${mediaId}/segment?start=${Math.max(0, start).toFixed(2)}&end=${end.toFixed(2)}`;
+}
+
 /** 서버가 쿼리를 어떻게 필터로 쪼갰는지 (투명성). */
 export interface SearchParsed {
+  /** q 없이 부른 기본 목록(하이라이트 순)이면 true. */
+  empty?: boolean;
   characters: string[];
   sceneType?: string;
   isShort?: boolean;
