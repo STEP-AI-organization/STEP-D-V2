@@ -54,6 +54,9 @@ COPY apps/server apps/server
 COPY core core
 COPY --from=deps /app/apps/server/node_modules /app/apps/server/node_modules
 COPY --from=pydeps /opt/corevenv /opt/corevenv
+# 렌더 폰트 — 서버 Dockerfile 과 동일 (Pretendard, ASS Fontname 매칭)
+COPY assets/fonts /usr/share/fonts/opentype/pretendard
+RUN fc-cache -f
 
 ENV NODE_ENV=production
 # content-pipeline.ts 가 이 값으로 파이썬을 스폰한다. 지정 안 하면 리포 안 venv 를 찾다가

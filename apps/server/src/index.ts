@@ -3684,7 +3684,10 @@ function buildEditorAss(
   return (
     `[Script Info]\nScriptType: v4.00+\nPlayResX: ${W}\nPlayResY: ${H}\nWrapStyle: 2\nScaledBorderAndShadow: yes\n\n` +
     `[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, OutlineColour, BackColour, Bold, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n` +
-    `Style: Default,Noto Sans CJK KR,48,&H00FFFFFF,&H00000000,&H00000000,1,1,2,1,5,20,20,20,1\n` +
+    // Pretendard ExtraBold — TVING 풍 헤드라인(사용자 확정 2026-08-12). 이미지에 폰트가
+    // 없으면 libass 가 fontconfig 폴백(Noto)으로 조용히 대체하므로 Dockerfile 의
+    // assets/fonts COPY + fc-cache 와 세트다.
+    `Style: Default,Pretendard ExtraBold,48,&H00FFFFFF,&H00000000,&H00000000,1,1,2,1,5,20,20,20,1\n` +
     captionAssStyle(capStyle, capFs, capMV) + "\n\n" +
     `[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n` +
     ev.join("\n") + "\n"
@@ -3701,7 +3704,7 @@ function buildEditorAss(
  *         Outline,Shadow,Alignment,MarginL,MarginR,MarginV,Encoding.
  */
 function captionAssStyle(style: string, fs: number, mv: number): string {
-  const font = "Noto Sans CJK KR";
+  const font = "Pretendard";
   // ASS 필드: Name, Fontname, Fontsize, PrimaryColour, OutlineColour, BackColour, Bold,
   //          BorderStyle(1=outline+shadow, 3=box), Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
   // 색은 &HAABBGGRR (Alpha·B·G·R). 프리뷰(editor-preview.tsx:captionStyleClasses)와 시각 매칭.
