@@ -25,7 +25,9 @@ substitutions:
   # 비밀이 아니다(사업자등록번호는 공개 정보). 평문 substitution 으로 둔다.
   # 비우면 문서에 '미설정'으로 찍힌다 — 없는 값을 지어내지 않는다.
   # 고객사(공급받는 자) 정보는 여기가 아니라 어드민 화면에서 회사마다 입력한다.
-  _INVOICE_ISSUER_NAME: ""
+  _INVOICE_ISSUER_NAME: "하경진"
+  # ⚠️ 아직 비어 있다. 사업자등록번호 없는 명세서는 상대가 회계 처리에 쓸 수 없다 —
+  # 지금은 화면 확인용이고, 실제로 회사에 보내기 전에 반드시 채울 것.
   _INVOICE_ISSUER_BIZNO: ""
   _INVOICE_ISSUER_ADDRESS: ""
   _INVOICE_ISSUER_CONTACT: ""
@@ -79,6 +81,7 @@ steps:
           --set-secrets=PORTONE_CHANNEL_KEY=stepd-portone-channel-key:latest \
           --set-secrets=PORTONE_BILLING_CHANNEL_KEY=stepd-portone-billing-channel-key:latest \
           --set-secrets=PORTONE_WEBHOOK_SECRET=stepd-portone-webhook-secret:latest \
+          --set-secrets=NAVER_SESSION_KEY=stepd-naver-session-key:latest \
           --add-cloudsql-instances=$_CLOUD_SQL_INSTANCE \
           --service-account=stepd-deployer@$PROJECT_ID.iam.gserviceaccount.com
 
