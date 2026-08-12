@@ -22,6 +22,7 @@ import {
   cardLabel,
   cardTopupPaymentId,
   checkCustomer,
+  extractCardDisplay,
   issueIdFor,
   normalizePhone,
   verifyCharge,
@@ -219,5 +220,36 @@ describe("배선", () => {
     const dbpg = fs.readFileSync(path.resolve(SRC, "db-pg.ts"), "utf-8");
     const fn = /export async function revokeBillingCard[\s\S]*?\n\}(?=\r?\n)/.exec(dbpg)?.[0] ?? "";
     assert.match(fn, /billing_key = NULL/, "해지된 결제 권한을 계속 들고 있으면 안 된다");
+  });
+});
+
+describe("카드 표시정보 추출 (extractCardDisplay)", () => {
+  it("methods[].card 에서 발급사와 마스킹 끝 4자리를 뽑는다", () => {
+    const info = {
+      methods: [{ type: "BillingKeyPaymentMethodCard", card: { issuer: "신한카드", brand: "MASTER", number: "533274******1234" } }],
+    };
+    assert.deepEqual(extractCardDisplay(info), { brand: "신한카드", last4: "1234" });
+  });
+
+  it("최상위 card 경로도 지원한다", () => {
+    assert.deepEqual(
+      extractCardDisplay({ card: { name: "국민", number: "94301032******6809" } }),
+      { brand: "국민", last4: "6809" },
+    );
+  });
+
+  it("발급사가 없으면 브랜드 enum 으로 폴백한다", () => {
+    assert.equal(extractCardDisplay({ card: { brand: "VISA", number: "4111********1111" } }).brand, "VISA");
+  });
+
+  it("카드정보를 못 찾으면 조용히 null (표시만 못 할 뿐 저장은 된다)", () => {
+    assert.deepEqual(extractCardDisplay(null), { brand: null, last4: null });
+    assert.deepEqual(extractCardDisplay({}), { brand: null, last4: null });
+    assert.deepEqual(extractCardDisplay({ methods: [] }), { brand: null, last4: null });
+  });
+
+  it("끝 4자리는 맨 뒤 숫자 묶음에서 — 앞 BIN 을 잘못 집지 않는다", () => {
+    // 마스킹이 *가 아니라 공백이어도, x여도 맨 뒤 4자리를 집어야 한다.
+    assert.equal(extractCardDisplay({ card: { number: "5327 74xx xxxx 4321" } }).last4, "4321");
   });
 });

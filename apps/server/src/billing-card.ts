@@ -110,6 +110,34 @@ export function cardTopupPaymentId(tenantId: string, nonce: string): string {
   return `card_${tenantId}_${nonce}`;
 }
 
+/**
+ * 빌링키 조회 응답(getBillingKeyInfo)에서 **표시용** 카드 정보를 뽑는다.
+ *
+ * 순수 함수 — 포트원 응답 모양이 버전·PG 마다 조금씩 달라서, 알려진 경로들을 방어적으로
+ * 훑고 **못 찾으면 조용히 null** 을 준다(카드는 이미 저장됐고 표시만 못 할 뿐이라 치명적이지 않다).
+ * 마스킹된 번호는 보통 `533274******1234` 처럼 **끝 4자리가 보인다** — 맨 뒤 숫자 묶음을 쓴다.
+ */
+export function extractCardDisplay(info: unknown): { brand: string | null; last4: string | null } {
+  const root = info as Record<string, any> | null;
+  const card =
+    (Array.isArray(root?.methods) ? root!.methods.find((m: any) => m?.card)?.card : null) ??
+    root?.method?.card ??
+    root?.card ??
+    null;
+  if (!card || typeof card !== "object") return { brand: null, last4: null };
+
+  // 발급사(신한카드 등)가 브랜드 enum(MASTER 등)보다 사람에게 낫다 — 있는 걸 우선.
+  const brandRaw = card.issuer ?? card.name ?? card.publisher ?? card.brand ?? null;
+  const brand = typeof brandRaw === "string" && brandRaw.trim() ? brandRaw.trim().slice(0, 40) : null;
+
+  const num = typeof card.number === "string" ? card.number : "";
+  // 맨 뒤 숫자 묶음(마스킹 뒤 보이는 끝자리). 없으면 전체 숫자의 끝 4자리로 폴백.
+  const tail = num.match(/(\d+)(?!.*\d)/);
+  const digits = num.replace(/\D/g, "");
+  const last4 = tail ? tail[1].slice(-4) : digits.length >= 4 ? digits.slice(-4) : null;
+  return { brand, last4 };
+}
+
 /** 화면 표시용. 카드 번호는 애초에 없고 브랜드·끝 4자리만 포트원이 준다. */
 export function cardLabel(brand: string | null, last4: string | null): string {
   const b = String(brand ?? "").trim();

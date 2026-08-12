@@ -1282,6 +1282,9 @@ export interface SavedCard {
   registered: boolean;
   /** "신한 ****1234" — 카드 번호는 애초에 못 받는다. */
   label: string | null;
+  /** 카드 모양 UI 재료 — 발급사/브랜드 + 마스킹 끝 4자리(포트원 빌링키 조회에서 채움). */
+  brand?: string | null;
+  last4?: string | null;
   createdAt: string | null;
   /** 서버에 빌링 채널키가 없으면 false — 등록 버튼을 아예 안 보여준다. */
   available: boolean;

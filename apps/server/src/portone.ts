@@ -101,6 +101,19 @@ export async function getPayment(paymentId: string): Promise<unknown> {
 }
 
 /**
+ * 빌링키 단건 조회 — 저장된 카드의 표시용 정보(브랜드·마스킹된 번호)를 얻는다.
+ *
+ * 카드 번호는 브라우저 SDK 응답에 오지 않고(빌링키만 온다), 우리 서버도 원본은 못 본다.
+ * 대신 이 조회가 **마스킹된 번호와 발급사**를 준다 — 화면에 카드 모양으로 보여줄 재료다.
+ * getPayment 과 같은 이유로 storeId 를 붙인다(상점 여럿인 계정에서 404 방지).
+ */
+export async function getBillingKeyInfo(billingKey: string): Promise<unknown> {
+  const storeId = String(process.env.PORTONE_STORE_ID ?? "").trim();
+  const qs = storeId ? `?storeId=${encodeURIComponent(storeId)}` : "";
+  return call("GET", `/billing-keys/${encodeURIComponent(billingKey)}${qs}`);
+}
+
+/**
  * 결제 식별자 — **결제주기당 하나**. 이게 중복 결제를 막는 마지막 방어선이다.
  * 같은 테넌트·같은 달이면 항상 같은 값이 나와야 한다.
  */

@@ -153,19 +153,13 @@ export function SavedCardPanel({
   return (
     <Shell>
       {card.registered ? (
-        <div className="flex flex-wrap items-center gap-2">
-          <span className="sd-tag">등록됨</span>
-          <span className="text-[13px]" style={{ color: "var(--sd-fg)" }}>{card.label}</span>
-          {card.createdAt && (
-            <span className="text-[10.5px]" style={{ color: "var(--sd-mut)" }}>
-              {new Date(card.createdAt).toLocaleDateString("ko-KR")} 등록
-            </span>
-          )}
+        <div className="flex flex-col gap-3">
+          <CardVisual brand={card.brand} last4={card.last4} createdAt={card.createdAt} />
           {canManage && (
-            <>
+            <div className="flex flex-wrap items-center gap-2">
               <button
                 type="button"
-                className="sd-btn sd-btn-primary ml-auto"
+                className="sd-btn sd-btn-primary"
                 disabled={busy !== null || credits <= 0}
                 onClick={charge}
               >
@@ -173,13 +167,13 @@ export function SavedCardPanel({
               </button>
               {/* 카드 변경 시에도 개인/법인 선택이 창에 반영되게 토글을 함께 둔다. */}
               <CardUseToggle value={cardUse} onChange={setCardUse} disabled={busy !== null} />
-              <button type="button" className="sd-btn" disabled={busy !== null} onClick={register}>
+              <button type="button" className="sd-btn ml-auto" disabled={busy !== null} onClick={register}>
                 카드 변경
               </button>
               <button type="button" className="sd-btn" disabled={busy !== null} onClick={remove}>
                 {busy === "delete" ? "삭제 중…" : "삭제"}
               </button>
-            </>
+            </div>
           )}
         </div>
       ) : (
@@ -218,6 +212,53 @@ export function SavedCardPanel({
         </p>
       )}
     </Shell>
+  );
+}
+
+/**
+ * 저장된 카드를 실제 카드 모양으로 보여준다. 카드번호 원본은 우리에게 없으므로
+ * **마스킹**해서 끝 4자리만 — 나머지는 •로 채운다. 브랜드/발급사는 포트원 조회값.
+ */
+function CardVisual({
+  brand,
+  last4,
+  createdAt,
+}: {
+  brand?: string | null;
+  last4?: string | null;
+  createdAt?: string | null;
+}) {
+  return (
+    <div
+      className="relative w-full max-w-[300px] overflow-hidden rounded-[12px] p-4 text-white shadow-md"
+      style={{ background: "linear-gradient(135deg, #33344a 0%, #1c1d2b 100%)", aspectRatio: "1.586 / 1" }}
+    >
+      <div className="flex items-start justify-between">
+        <span className="text-[10.5px] tracking-wide opacity-70">등록된 결제수단</span>
+        <span className="text-[11.5px] font-semibold">{brand || "카드"}</span>
+      </div>
+
+      {/* 칩 */}
+      <div
+        className="mt-3 h-6 w-9 rounded-[4px]"
+        style={{ background: "linear-gradient(135deg, #f0d68a 0%, #b8952f 100%)" }}
+        aria-hidden
+      />
+
+      {/* 마스킹된 카드번호 — 끝 4자리만 보인다 */}
+      <div className="sd-mono mt-3 text-[16px] tracking-[0.18em]">
+        •••• •••• •••• {last4 || "••••"}
+      </div>
+
+      <div className="mt-2 flex items-end justify-between">
+        <span className="text-[9.5px] uppercase tracking-wide opacity-60">STEP-D · 정기결제</span>
+        {createdAt && (
+          <span className="text-[9.5px] opacity-70">
+            {new Date(createdAt).toLocaleDateString("ko-KR")} 등록
+          </span>
+        )}
+      </div>
+    </div>
   );
 }
 

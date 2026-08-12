@@ -3100,6 +3100,18 @@ export async function saveBillingCard(input: {
   return rows[0] as BillingCardRow;
 }
 
+/**
+ * 표시정보(브랜드·끝 4자리)만 갱신한다 — 빌링키·등록일은 건드리지 않는다.
+ * 저장 시점에 못 채운 기존 카드를 조회 때 한 번 백필하는 용도(포트원 조회 결과).
+ */
+export async function updateBillingCardDisplay(brand: string | null, last4: string | null): Promise<void> {
+  await pool.query(
+    `UPDATE billing_card SET card_brand = $1, card_last4 = $2
+      WHERE tenant_id = current_setting('app.tenant_id', true) AND billing_key IS NOT NULL`,
+    [brand, last4],
+  );
+}
+
 /** 해지 — 행은 남기고 **빌링키 문자열은 비운다.** 해지된 권한을 들고 있을 이유가 없다. */
 export async function revokeBillingCard(): Promise<void> {
   await pool.query(

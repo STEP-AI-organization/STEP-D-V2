@@ -47,7 +47,7 @@ import { audit, clientIp, requireReason, requireSuperadmin, requireOpsAccess } f
 import { grantDedupeKey, nextTenantId, planOnboarding } from "./onboarding.ts";
 import {
   billingConfig, cardBlockReason, cardLabel, cardTopupPaymentId, checkCustomer,
-  issueIdFor, verifyCharge,
+  extractCardDisplay, issueIdFor, verifyCharge,
 } from "./billing-card.ts";
 import { buildInvoice, issuerInfo, monthRange, parseMonth } from "./invoice.ts";
 import { checkProfile, incompleteFields } from "./business.ts";
@@ -116,6 +116,7 @@ import {
   markTopupPaid,
   getBillingCard,
   saveBillingCard,
+  updateBillingCardDisplay,
   revokeBillingCard,
   getBusinessProfile,
   saveBusinessProfile,
@@ -280,7 +281,7 @@ import {
   manualDedupeKey, planManualCredit, settleTopup, topupDedupeKey, topupPaymentId,
 } from "./credits.ts";
 import { billableMinutes, portoneConfigured } from "./billing.ts";
-import { chargeWithBillingKey, getPayment, verifyWebhook } from "./portone.ts";
+import { chargeWithBillingKey, getBillingKeyInfo, getPayment, verifyWebhook } from "./portone.ts";
 import { commitAndInherit } from "./adopt.ts";
 import { runAutomationCycle } from "./automation-cycle.ts";
 import {
@@ -5018,7 +5019,20 @@ app.post("/api/billing/card", async (c) => {
 });
 
 app.get("/api/billing/card", async (c) => {
-  const card = await getBillingCard();
+  let card = await getBillingCard();
+  // 저장 시점에 표시정보를 못 채운 기존 카드는 여기서 한 번 백필한다(재등록 없이 번호가 뜨게).
+  // 실패해도 조회는 정상 응답한다 — 표시정보가 없을 뿐이다.
+  if (card?.billingKey && !card.revokedAt && !card.cardLast4) {
+    try {
+      const d = extractCardDisplay(await getBillingKeyInfo(card.billingKey));
+      if (d.last4 || d.brand) {
+        await updateBillingCardDisplay(d.brand, d.last4);
+        card = { ...card, cardBrand: d.brand, cardLast4: d.last4 };
+      }
+    } catch (e) {
+      console.warn("[billing] 카드 표시정보 백필 실패(무시):", e instanceof Error ? e.message : e);
+    }
+  }
   const cfg = billingConfig();
   return c.json({
     // 빌링키 자체는 절대 내보내지 않는다 — 화면이 알 필요가 없다.
