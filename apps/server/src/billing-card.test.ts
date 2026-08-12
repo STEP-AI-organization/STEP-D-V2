@@ -253,3 +253,17 @@ describe("카드 표시정보 추출 (extractCardDisplay)", () => {
     assert.equal(extractCardDisplay({ card: { number: "5327 74xx xxxx 4321" } }).last4, "4321");
   });
 });
+
+describe("빌링키 결제는 발급 채널에서 긁는다", () => {
+  it("chargeWithBillingKey 는 빌링 채널키로 결제한다 — 일반결제 채널이면 빌링키를 못 찾는다", () => {
+    // 빌링키는 발급한 채널(MID)에 묶여 있다. 카드 등록은 PORTONE_BILLING_CHANNEL_KEY 로
+    // 발급하므로 결제도 같은 채널이어야 긁힌다. 일반결제 채널키로 긁으면 채널 불일치로 실패한다
+    // (2026-08-12 · developers.portone.io: 발급 채널과 결제 채널이 일치해야 함).
+    const portone = fs.readFileSync(path.resolve(SRC, "portone.ts"), "utf-8");
+    const fn = /export async function chargeWithBillingKey[\s\S]*?\n\}(?=\r?\n)/.exec(portone)?.[0] ?? "";
+    assert.notEqual(fn, "", "chargeWithBillingKey 를 찾지 못했다");
+    assert.match(fn, /process\.env\.PORTONE_BILLING_CHANNEL_KEY/, "빌링키는 발급한 빌링 채널에서만 긁힌다");
+    // 코드가 실제로 읽는 env 만 본다(설명 주석의 PORTONE_CHANNEL_KEY 언급은 제외).
+    assert.doesNotMatch(fn, /process\.env\.PORTONE_CHANNEL_KEY\b/, "일반결제 채널키로 긁으면 채널 불일치로 실패한다");
+  });
+});

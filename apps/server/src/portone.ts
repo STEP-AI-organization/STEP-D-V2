@@ -76,9 +76,16 @@ export async function chargeWithBillingKey(input: BillingKeyChargeInput): Promis
   if (!Number.isInteger(input.amountKrw) || input.amountKrw <= 0) {
     throw new Error(`결제 금액이 잘못됐습니다: ${input.amountKrw}`);
   }
+  // ⚠️ **빌링키는 발급한 채널에서만 긁힌다.** 빌링키는 발급 채널(MID)에 묶여 있어서,
+  // 일반결제 채널키(PORTONE_CHANNEL_KEY)로 긁으면 그 MID엔 이 빌링키가 없어 결제가 실패한다.
+  // 카드 등록은 PORTONE_BILLING_CHANNEL_KEY 로 발급하므로, 결제도 반드시 같은 채널로 한다.
+  const channelKey = String(process.env.PORTONE_BILLING_CHANNEL_KEY ?? "").trim();
+  if (!channelKey) {
+    throw new Error("PORTONE_BILLING_CHANNEL_KEY 미설정 — 저장 카드 결제는 빌링 채널이 필요합니다.");
+  }
   return call("POST", `/payments/${encodeURIComponent(input.paymentId)}/billing-key`, {
     storeId: String(process.env.PORTONE_STORE_ID ?? "").trim(),
-    channelKey: String(process.env.PORTONE_CHANNEL_KEY ?? "").trim(),
+    channelKey,
     billingKey: input.billingKey,
     orderName: input.orderName,
     amount: { total: input.amountKrw },
