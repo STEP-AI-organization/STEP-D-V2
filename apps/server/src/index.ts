@@ -3639,7 +3639,8 @@ function buildEditorAss(
         ? Number((es as any).channelLabelSize) : 14 * 1.2;
       const fs = Math.max(12, Math.round(chPx * scale));
       const chY = Math.round(((es.channelY ?? 82) / 100) * H);
-      put(8, Math.round(0.5 * W), chY, fs, "&H00FFFFFF&", 2, "&H00000000&", "▶ " + es.channelName);
+      // 채널명은 그대로 — 예전엔 "▶ " 를 앞에 굽었는데 지저분해서 뺐다(사용자 2026-08-12).
+      put(8, Math.round(0.5 * W), chY, fs, "&H00FFFFFF&", 2, "&H00000000&", es.channelName);
     }
     // 방영시간 박스 라벨 (broadcast-standard) — 파란 박스 + 흰 텍스트. BoxLabel 스타일은
     // BorderStyle=3(박스)이고 박스 색은 인라인 \3c 로 지정한다.

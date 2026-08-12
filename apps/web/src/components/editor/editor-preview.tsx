@@ -464,9 +464,8 @@ export function EditorPreview({
                       className="font-semibold text-white"
                       style={{ textShadow: "0 1px 3px rgba(0,0,0,.6)", fontSize: labelPx }}
                     >
-                      {/* 렌더가 채널명 앞에 "▶ " 를 굽는다(index.ts) — 미리보기도 붙여야 WYSIWYG.
-                          예전엔 미리보기에만 없어서 결과물에 안 보이던 삼각형이 나타났다. */}
-                      ▶ {state.channelName}
+                      {/* ▶ 접두사는 뺐다(사용자 2026-08-12 · 지저분함). 렌더도 뺐으니 여전히 일치. */}
+                      {state.channelName}
                     </span>
                     {extras.map((line) => {
                       const size = Math.max(6, Math.min(48, line.size ?? Math.round(labelPx * 0.75)));
