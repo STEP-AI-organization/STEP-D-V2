@@ -889,6 +889,14 @@ export interface AutomationRule {
   templateId?: string;
   /** 템플릿 위치 미세조정 — 자동배포 화면 슬라이더 (시드 기본값 위에 덮임). */
   layout?: { titleY?: number; channelIconY?: number; channelBoxY?: number; channelIconSize?: number };
+  /** 다중 프로그램·채널 (2026-08-12). 배열이 있으면 배열이 정본, 없으면 단수 폴백. */
+  programIds?: string[];
+  channels?: { platform: string; accountId: string }[];
+  /** 채널당 하루 게시 할당량 — 찰 때까지 순방마다 계속. 기본 3. */
+  dailyQuota?: number;
+  /** 활동 시간창(KST 시각). 기본 9~22. */
+  activeStart?: number;
+  activeEnd?: number;
 }
 
 export interface RuleRun {

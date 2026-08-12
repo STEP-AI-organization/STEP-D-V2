@@ -4744,6 +4744,21 @@ app.post("/api/automation/rules", async (c) => {
       const layout = { ...pick("titleY"), ...pick("channelIconY"), ...pick("channelBoxY"), ...pick("channelIconSize") };
       return Object.keys(layout).length ? { layout } : {};
     })()),
+    // 다중 프로그램·채널 (2026-08-12) — 단수 컬럼(programId·platform·accountId)은 첫
+    // 항목으로 유지한다(UNIQUE 기준·구버전 호환). 배열이 정본.
+    ...(Array.isArray(body.programIds) && body.programIds.length
+      ? { programIds: (body.programIds as unknown[]).map(String).filter(Boolean) } : {}),
+    ...(Array.isArray(body.channels) && (body.channels as unknown[]).length
+      ? {
+          channels: (body.channels as { platform?: unknown; accountId?: unknown }[])
+            .map((ch) => ({ platform: String(ch.platform ?? "").trim(), accountId: String(ch.accountId ?? "").trim() }))
+            .filter((ch) => ch.platform && ch.accountId),
+        } : {}),
+    // 하루 할당량(채널당)·활동 시간창(KST 시각)
+    ...(Number.isFinite(body.dailyQuota) && Number(body.dailyQuota) > 0
+      ? { dailyQuota: Math.min(50, Math.round(Number(body.dailyQuota))) } : {}),
+    ...(Number.isFinite(body.activeStart) ? { activeStart: Math.max(0, Math.min(23, Math.round(Number(body.activeStart)))) } : {}),
+    ...(Number.isFinite(body.activeEnd) ? { activeEnd: Math.max(0, Math.min(24, Math.round(Number(body.activeEnd)))) } : {}),
   };
   await upsertAutomationRule(row);
   return c.json({
@@ -4974,13 +4989,32 @@ app.post("/api/billing/card", async (c) => {
   const billingKey = String(body.billingKey ?? "").trim();
   if (!billingKey) return c.json({ error: "billing_key_required" }, 400);
   const actor = manager.email;
+
+  // 카드 표시정보(브랜드·마스킹 끝자리)는 포트원 빌링키 조회로 채운다 — 브라우저 SDK 응답엔
+  // 카드번호가 없기 때문. 조회가 실패해도 카드 저장은 막지 않는다(표시만 못 할 뿐).
+  let display: { brand: string | null; last4: string | null } = { brand: null, last4: null };
+  try {
+    display = extractCardDisplay(await getBillingKeyInfo(billingKey));
+  } catch (e) {
+    console.warn("[billing] 빌링키 카드정보 조회 실패(무시):", e instanceof Error ? e.message : e);
+  }
+
   const card = await saveBillingCard({
     billingKey,
-    cardBrand: String(body.cardBrand ?? "").trim() || null,
-    cardLast4: String(body.cardLast4 ?? "").replace(/\D/g, "").slice(-4) || null,
+    // 포트원 조회값 우선, 없으면 클라이언트가 보낸 값 폴백.
+    cardBrand: display.brand ?? (String(body.cardBrand ?? "").trim() || null),
+    cardLast4: display.last4 ?? (String(body.cardLast4 ?? "").replace(/\D/g, "").slice(-4) || null),
     issuedBy: actor,
   });
-  return c.json({ ok: true, card: { label: cardLabel(card.cardBrand, card.cardLast4), createdAt: card.createdAt } });
+  return c.json({
+    ok: true,
+    card: {
+      label: cardLabel(card.cardBrand, card.cardLast4),
+      brand: card.cardBrand,
+      last4: card.cardLast4,
+      createdAt: card.createdAt,
+    },
+  });
 });
 
 app.get("/api/billing/card", async (c) => {
@@ -4990,6 +5024,9 @@ app.get("/api/billing/card", async (c) => {
     // 빌링키 자체는 절대 내보내지 않는다 — 화면이 알 필요가 없다.
     registered: Boolean(card?.billingKey && !card.revokedAt),
     label: card ? cardLabel(card.cardBrand, card.cardLast4) : null,
+    // 카드 모양 UI 재료 — 브랜드 + 마스킹 끝 4자리. 카드번호 원본은 애초에 없다.
+    brand: card?.cardBrand ?? null,
+    last4: card?.cardLast4 ?? null,
     createdAt: card?.createdAt ?? null,
     available: cfg.ok,
     unavailableReason: cfg.ok ? null : cfg.message,

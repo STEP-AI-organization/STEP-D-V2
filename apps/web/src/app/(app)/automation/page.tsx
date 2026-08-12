@@ -284,12 +284,14 @@ export default function AutomationPage() {
         ) : (
           <div className="flex flex-col gap-1.5">
             {rules.map((r) => {
-              const program = programs.find((p) => p.id === r.programId);
-              const upload = r.platform === "youtube";
+              const pids = r.programIds?.length ? r.programIds : [r.programId];
+              const chans = r.channels?.length ? r.channels : [{ platform: r.platform, accountId: r.accountId }];
+              const firstProgram = programs.find((p) => p.id === pids[0]);
+              const upload = chans.some((c) => c.platform === "youtube" || c.platform.startsWith("naver"));
               return (
                 <div key={r.id} className="sd-card flex flex-wrap items-center gap-2 px-3 py-2.5">
                   <span className="text-[12.5px] font-medium" style={{ color: "var(--sd-fg)" }}>
-                    {program?.title ?? r.programId} → {r.platform}
+                    {firstProgram?.title ?? pids[0]}{pids.length > 1 ? ` 외 ${pids.length - 1}개` : ""} → 채널 {chans.length}곳
                   </span>
                   <span className={cn("sd-tag", !r.enabled ? "sd-tag--ended" : upload ? "sd-tag--airing" : "")}>
                     {!r.enabled ? "멈춤" : upload ? "실행 중" : "기록만"}
@@ -297,7 +299,8 @@ export default function AutomationPage() {
                   <span className="sd-tag">{KIND_LABEL[r.mediaKind]}</span>
                   <span className="sd-tag">{CRIT_LABEL[r.criterion]}</span>
                   <span className="sd-tag sd-tag--warn">{POLICY_LABEL[r.gatePolicy]}</span>
-                  <span className="sd-tag">{r.window}</span>
+                  <span className="sd-tag">하루 {r.dailyQuota ?? 3}개/채널</span>
+                  <span className="sd-tag">{r.activeStart ?? 9}~{r.activeEnd ?? 22}시</span>
                   <span className="sd-tag">{r.templateId ? `템플릿 ${r.templateId}` : "템플릿 자동"}</span>
 
                   <div className="ml-auto flex gap-2">
@@ -309,7 +312,7 @@ export default function AutomationPage() {
                           await saveAutomationRule({ ...r, enabled: !r.enabled });
                           toast({
                             title: r.enabled ? "규칙을 멈췄습니다" : "규칙을 재개했습니다",
-                            description: program?.title ?? r.programId,
+                            description: firstProgram?.title ?? r.programId,
                             tone: "done",
                           });
                         } catch (err) {
@@ -402,9 +405,7 @@ function RuleForm({
   onSaved: (notice: string) => void | Promise<void>;
 }) {
   const { toast } = useToast();
-  const [programId, setProgramId] = useState(programs[0]?.id ?? "");
-  const [platform, setPlatform] = useState("youtube");
-  const [accountId, setAccountId] = useState("");
+  // (구 단수 선택 상태는 다중 선택 selPrograms/selChannels 로 대체됨 — 2026-08-12)
   const [mediaKind, setMediaKind] = useState<RuleMediaKind>("short");
   const [criterion, setCriterion] = useState<RuleCriterion>("score80");
   const [approveFirst, setApproveFirst] = useState(true);
@@ -452,28 +453,45 @@ function RuleForm({
       .catch(() => setYtChannels([]));
   }, []);
 
-  const platformRules = (channelRules ?? []).filter((r) => r.platform === platform);
-  // 선택지 = (YouTube 면) 연결 채널 ∪ 규칙 계정, 그 외 플랫폼은 규칙 계정.
-  const accountOptions: { accountId: string; label: string }[] = platform === "youtube"
-    ? ytChannels.map((c) => {
-        const ruled = platformRules.some((r) => r.accountId === c.channelId);
-        return { accountId: c.channelId, label: `${c.channelName}${ruled ? " · 규칙 있음" : ""}` };
-      })
-    : platformRules.map((r) => ({ accountId: r.accountId, label: `${r.label} · ${r.accountId}` }));
-
+  // ── 다중 선택 (2026-08-12): 여러 프로그램 × 여러 채널 · 하루 할당량 · 활동 시간창 ──
+  const [selPrograms, setSelPrograms] = useState<string[]>(() => programs[0] ? [programs[0].id] : []);
+  const [selChannels, setSelChannels] = useState<string[]>([]);   // "platform:accountId"
+  const [dailyQuota, setDailyQuota] = useState(3);
+  const [activeStart, setActiveStart] = useState(9);
+  const [activeEnd, setActiveEnd] = useState(22);
+  const [naverAccts, setNaverAccts] = useState<{ id: string; label: string; target: string; hasSession: boolean }[]>([]);
   useEffect(() => {
-    // 플랫폼을 바꾸면 그 플랫폼에 없는 계정이 남아 있으면 안 된다.
-    setAccountId((prev) => (accountOptions.some((o) => o.accountId === prev) ? prev : accountOptions[0]?.accountId ?? ""));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [platform, channelRules, ytChannels]);
-  const upload = platform === "youtube";
+    void import("@/lib/data/api").then((m) => m.fetchNaverAccounts())
+      .then((r) => setNaverAccts(r.accounts.filter((a: any) => a.status !== "disabled" && a.hasSession)))
+      .catch(() => setNaverAccts([]));
+  }, []);
+
+  // 채널 선택지 = YouTube 연결 채널 + 세션 등록된 네이버 계정 + (기타 플랫폼) 채널 규칙.
+  const channelOptions: { platform: string; accountId: string; label: string }[] = [
+    ...ytChannels.map((c) => ({ platform: "youtube", accountId: c.channelId, label: `YouTube · ${c.channelName}` })),
+    ...naverAccts.flatMap((a) => {
+      const chans = a.target === "both" ? ["navertv", "naverclip"] : a.target === "tv" ? ["navertv"] : ["naverclip"];
+      return chans.map((ch) => ({ platform: ch, accountId: a.id, label: `${ch === "navertv" ? "네이버 TV" : "네이버 클립"} · ${a.label}` }));
+    }),
+    ...(channelRules ?? []).filter((r) => r.platform !== "youtube" && !r.platform.startsWith("naver"))
+      .map((r) => ({ platform: r.platform, accountId: r.accountId, label: `${r.platform} · ${r.label}` })),
+  ];
+
+  const toggle = (list: string[], v: string) => list.includes(v) ? list.filter((x) => x !== v) : [...list, v];
 
   async function save() {
-    if (!programId || !accountId.trim()) return;
+    if (selPrograms.length === 0 || selChannels.length === 0) return;
     setBusy(true);
     try {
+      const chans = selChannels
+        .map((k) => channelOptions.find((o) => `${o.platform}:${o.accountId}` === k))
+        .filter(Boolean)
+        .map((o) => ({ platform: o!.platform, accountId: o!.accountId }));
       const r = await saveAutomationRule({
-        programId, platform, accountId: accountId.trim(),
+        // 단수 필드 = 첫 항목 (서버 UNIQUE·구버전 호환). 배열이 정본.
+        programId: selPrograms[0], platform: chans[0].platform, accountId: chans[0].accountId,
+        programIds: selPrograms, channels: chans,
+        dailyQuota, activeStart, activeEnd,
         mediaKind, criterion,
         gatePolicy: approveFirst ? "approve_first" : "hold_on_issue",
         window: win, enabled: true,
@@ -492,56 +510,78 @@ function RuleForm({
       className="flex flex-col gap-2.5 rounded-[5px] p-3"
       style={{ background: "var(--sd-card-sub)", border: "1px solid var(--sd-border)" }}
     >
-      <div className="grid grid-cols-2 gap-2">
-        <select value={programId} onChange={(e) => setProgramId(e.target.value)} className="sd-input">
-          {programs.length === 0 && <option value="">프로그램 없음</option>}
-          {programs.map((p) => <option key={p.id} value={p.id}>{p.title}</option>)}
-        </select>
-        <select value={platform} onChange={(e) => setPlatform(e.target.value)} className="sd-input">
-          <option value="youtube">YouTube</option>
-          <option value="instagram">Instagram</option>
-          <option value="facebook">Facebook</option>
-          <option value="tiktok">TikTok</option>
-          <option value="navertv">네이버 TV</option>
-          <option value="naverclip">네이버 클립</option>
-        </select>
-      </div>
-
+      {/* 프로그램 다중 선택 — 규칙 하나가 여러 프로그램의 추천 풀을 함께 돌린다 */}
       <div>
-        <select
-          value={accountId}
-          onChange={(e) => setAccountId(e.target.value)}
-          className="sd-input w-full"
-          disabled={accountOptions.length === 0}
-        >
-          {accountOptions.length === 0 ? (
-            <option value="">
-              {platform === "youtube" ? "연결된 YouTube 채널이 없습니다" : "이 플랫폼의 채널 규칙이 없습니다"}
-            </option>
-          ) : (
-            accountOptions.map((o) => (
-              <option key={o.accountId} value={o.accountId}>{o.label}</option>
-            ))
+        <div className="mb-1 text-[10.5px] font-semibold" style={{ color: "var(--sd-label)" }}>
+          프로그램 ({selPrograms.length}개 선택)
+        </div>
+        <div className="grid max-h-32 grid-cols-2 gap-1 overflow-y-auto rounded-[4px] p-1.5"
+          style={{ border: "1px solid var(--sd-border)" }}>
+          {programs.length === 0 && <span className="text-[11px]" style={{ color: "var(--sd-mut)" }}>프로그램 없음</span>}
+          {programs.map((p) => (
+            <label key={p.id} className="flex items-center gap-1.5 text-[11.5px]" style={{ color: "var(--sd-fg)" }}>
+              <input type="checkbox" checked={selPrograms.includes(p.id)}
+                onChange={() => setSelPrograms(toggle(selPrograms, p.id))} />
+              <span className="truncate">{p.title}</span>
+            </label>
+          ))}
+        </div>
+      </div>
+
+      {/* 채널 다중 선택 — 채널마다 하루 할당량만큼 배포된다 */}
+      <div>
+        <div className="mb-1 text-[10.5px] font-semibold" style={{ color: "var(--sd-label)" }}>
+          채널 ({selChannels.length}개 선택 · 채널당 하루 {dailyQuota}개)
+        </div>
+        <div className="grid max-h-36 grid-cols-1 gap-1 overflow-y-auto rounded-[4px] p-1.5"
+          style={{ border: "1px solid var(--sd-border)" }}>
+          {channelOptions.length === 0 && (
+            <span className="text-[11px]" style={{ color: "var(--sd-warn)" }}>
+              연결된 채널이 없습니다 — <Link href="/publish-channels" className="underline">배포 채널</Link>에서 먼저 연결하세요.
+            </span>
           )}
-        </select>
-        {accountOptions.length === 0 && (
-          <p className="mt-1 text-[10.5px]" style={{ color: "var(--sd-warn)" }}>
-            {platform === "youtube" ? (
-              <><Link href="/publish-channels" className="underline">배포 채널</Link> 화면에서 채널을 먼저 연결하세요.</>
-            ) : (
-              <>{rulesErr ? `채널 규칙을 불러오지 못했습니다 (${rulesErr}) — ` : ""}
-              <Link href="/channels" className="underline">배포 규칙</Link> 화면에서 이 플랫폼의 규칙을 먼저 만드세요.</>
-            )}
-          </p>
-        )}
-        {platform === "youtube" && accountId && !platformRules.some((r) => r.accountId === accountId) && (
-          <p className="mt-1 text-[10.5px]" style={{ color: "var(--sd-fg-dim)" }}>
-            배포 규칙 없이 진행 — 길이·프레임 제한 없이 기본값(비공개 업로드)으로 나갑니다.
-          </p>
+          {channelOptions.map((o) => {
+            const key = `${o.platform}:${o.accountId}`;
+            return (
+              <label key={key} className="flex items-center gap-1.5 text-[11.5px]" style={{ color: "var(--sd-fg)" }}>
+                <input type="checkbox" checked={selChannels.includes(key)}
+                  onChange={() => setSelChannels(toggle(selChannels, key))} />
+                <span className="truncate">{o.label}</span>
+              </label>
+            );
+          })}
+        </div>
+        {rulesErr && (
+          <p className="mt-1 text-[10.5px]" style={{ color: "var(--sd-warn)" }}>채널 규칙 목록을 못 읽었습니다 ({rulesErr}) — 연결 채널만 표시.</p>
         )}
       </div>
 
-      <div className="grid grid-cols-2 gap-2">
+      {/* 하루 할당량 · 활동 시간창 — 할당량이 찰 때까지 시간창 안에서 순방마다 계속 배포 */}
+      <div className="grid grid-cols-3 items-end gap-2">
+        <label className="text-[10.5px]" style={{ color: "var(--sd-label)" }}>
+          채널당 하루 할당량
+          <input type="number" min={1} max={50} value={dailyQuota}
+            onChange={(e) => setDailyQuota(Math.max(1, Math.min(50, Number(e.target.value) || 1)))}
+            className="sd-input mt-1 w-full" />
+        </label>
+        <label className="text-[10.5px]" style={{ color: "var(--sd-label)" }}>
+          시작 (시 · KST)
+          <input type="number" min={0} max={23} value={activeStart}
+            onChange={(e) => setActiveStart(Math.max(0, Math.min(23, Number(e.target.value) || 0)))}
+            className="sd-input mt-1 w-full" />
+        </label>
+        <label className="text-[10.5px]" style={{ color: "var(--sd-label)" }}>
+          종료 (시 · KST)
+          <input type="number" min={1} max={24} value={activeEnd}
+            onChange={(e) => setActiveEnd(Math.max(1, Math.min(24, Number(e.target.value) || 24)))}
+            className="sd-input mt-1 w-full" />
+        </label>
+      </div>
+      <p className="text-[10.5px]" style={{ color: "var(--sd-fg-dim)" }}>
+        {activeStart}시~{activeEnd}시(KST) 사이에만 배포하고, 채널마다 하루 {dailyQuota}개를 채우면 다음 날까지 쉽니다.
+      </p>
+
+<div className="grid grid-cols-2 gap-2">
         <select value={mediaKind} onChange={(e) => setMediaKind(e.target.value as RuleMediaKind)} className="sd-input">
           {(Object.keys(KIND_LABEL) as RuleMediaKind[]).map((k) => (
             <option key={k} value={k}>{KIND_LABEL[k]}</option>
@@ -602,18 +642,13 @@ function RuleForm({
         게시 전 사람 승인 (끄면 조건을 만족하면 바로 나갑니다)
       </label>
 
-      {/* ⚑ 채널별 안내 — 만들 때 성격을 말한다 (F6). */}
+      {/* ⚑ 채널별 안내 — 만들 때 성격을 말한다 (F6). 실업로드 = YouTube·네이버. */}
       <p
         className="rounded-[4px] px-2.5 py-2 text-[11px] leading-relaxed"
-        style={{
-          border: `1px solid ${upload ? "var(--sd-border)" : "var(--sd-warn-border)"}`,
-          background: upload ? "var(--sd-card)" : "var(--sd-warn-bg)",
-          color: upload ? "var(--sd-mut)" : "var(--sd-warn)",
-        }}
+        style={{ border: "1px solid var(--sd-border)", background: "var(--sd-card)", color: "var(--sd-mut)" }}
       >
-        {upload
-          ? "YouTube 는 실제 파일이 업로드됩니다. 기본 공개 범위와 시간대는 배포 채널 규칙을 따릅니다."
-          : "이 채널은 배포 기록만 남습니다 — 파일이 올라가지 않고, 실제 게시는 담당자가 해당 앱에서 직접 해야 합니다."}
+        YouTube·네이버는 실제 파일이 업로드됩니다. Instagram/Facebook/TikTok 은 배포 기록만
+        남고 실제 게시는 담당자가 해당 앱에서 직접 해야 합니다.
       </p>
 
       <div className="flex gap-2">
@@ -621,7 +656,7 @@ function RuleForm({
         <button
           type="button"
           className="sd-btn sd-btn-primary ml-auto"
-          disabled={busy || !programId || !accountId.trim()}
+          disabled={busy || selPrograms.length === 0 || selChannels.length === 0}
           onClick={save}
         >
           규칙 만들기

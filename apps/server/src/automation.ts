@@ -45,6 +45,40 @@ export interface AutomationRule {
   templateId?: string;
   /** 템플릿 위치 미세조정(%·px) — 자동배포 화면 슬라이더. 시드 기본값 위에 덮인다. */
   layout?: { titleY?: number; channelIconY?: number; channelBoxY?: number; channelIconSize?: number };
+  // ── 다중 확장 (2026-08-12) — 배열이 있으면 배열이 정본, 없으면 단수 폴백 ──
+  /** 여러 프로그램. 없으면 [programId]. */
+  programIds?: string[];
+  /** 여러 채널. 없으면 [{platform, accountId}]. */
+  channels?: { platform: string; accountId: string }[];
+  /** 채널당 하루 게시 할당량 — 채워질 때까지 순방마다 계속 배포. 기본 3. */
+  dailyQuota?: number;
+  /** 활동 시간창(KST 시각). 기본 9~22 — 밖에서는 배포하지 않는다. */
+  activeStart?: number;
+  activeEnd?: number;
+}
+
+/** 규칙의 프로그램 목록 — 다중이 있으면 다중, 없으면 단수 폴백. */
+export function rulePrograms(rule: AutomationRule): string[] {
+  return rule.programIds?.length ? rule.programIds : [rule.programId];
+}
+
+/** 규칙의 채널 목록 — 다중이 있으면 다중, 없으면 단수 폴백. */
+export function ruleChannels(rule: AutomationRule): { platform: string; accountId: string }[] {
+  return rule.channels?.length ? rule.channels : [{ platform: rule.platform, accountId: rule.accountId }];
+}
+
+/**
+ * 지금이 활동 시간창(KST) 안인가. end 는 배타 — 9~22 면 09:00:00 ≤ t < 22:00:00.
+ * start·end 가 같으면 24시간으로 본다 (창 없음 의미).
+ */
+export function inActiveWindow(rule: AutomationRule, now = new Date()): boolean {
+  const start = Number.isFinite(rule.activeStart) ? Number(rule.activeStart) : 9;
+  const end = Number.isFinite(rule.activeEnd) ? Number(rule.activeEnd) : 22;
+  if (start === end) return true;
+  const hour = Number(new Intl.DateTimeFormat("en-US", {
+    timeZone: "Asia/Seoul", hour: "numeric", hour12: false,
+  }).format(now));
+  return start < end ? hour >= start && hour < end : hour >= start || hour < end;
 }
 
 /**
