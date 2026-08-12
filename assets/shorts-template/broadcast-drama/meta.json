@@ -1,0 +1,18 @@
+{
+  "name": "broadcast-drama",
+  "canva_title": "방송 드라마 (확대 크롭)",
+  "source": "builtin",
+  "size": [1080, 1920],
+  "video": { "x": 0, "y": 460, "w": 1080, "h": 1000, "fit": "cover" },
+  "bands": [
+    { "x": 0, "y": 0, "w": 1080, "h": 460, "color": "black" },
+    { "x": 0, "y": 1460, "w": 1080, "h": 460, "color": "black" }
+  ],
+  "text": [
+    { "slot": "title1", "y": 150, "size": 64, "color": "#ffffff" },
+    { "slot": "title2", "y": 250, "size": 64, "color": "#40E0E0" },
+    { "slot": "schedule", "y": 1660, "size": 44, "color": "#ffffff" }
+  ],
+  "overlay_regions": [],
+  "_note": "드라마용 (사용자 인사이트 2026-08-12): 번인 자막이 없는 드라마는 16:9 레터박스보다 좌우를 잘라 확대(fit cover, 1080x1000)하는 쪽이 쇼츠 몰입이 산다. 상하 띠는 좁게, 브랜딩은 표준과 동일(로고+시간 박스)."
+}

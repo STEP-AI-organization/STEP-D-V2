@@ -433,36 +433,75 @@ export function wrapAutoTitle(raw: string): { lines: string[]; size: number } {
  *   나가 조잡했다(스모크 실측) — 시드가 곧 무인 품질의 하한선이다.
  * 사람이 에디터에서 열어 저장하면 이 시드는 그대로 대체된다.
  */
-export function autoEditorState(rec: any, programTitle: string): Record<string, unknown> {
-  const hook = String(rec.hookQuote ?? "").replace(/^['"‘“]|['"’”]$/g, "").trim();
+/**
+ * 템플릿별 시드 파라미터 — 템플릿을 바꿔도 이전 것은 버리지 않는다(사용자 지시 2026-08-12:
+ * "여러 템플릿 할 때마다 버리지 말고 만들어두자"). 새 표준이 생기면 여기 행을 추가한다.
+ */
+const TEMPLATE_SEEDS: Record<string, {
+  accent: string; titleY: number;
+  bottom: "logo-box" | "icon-title";
+  channelY: number; iconShape: "circle" | "square"; iconSize: number;
+  iconY?: number; boxY?: number;
+}> = {
+  // 표준 (2026-08-12 확정 · 나는 SOLO 쇼츠 레퍼런스): 청록 훅 + 프로그램 로고 + 방영시간 박스
+  "broadcast-standard": {
+    accent: "#40E0E0", titleY: 11, bottom: "logo-box",
+    channelY: 88, iconShape: "square", iconSize: 173, iconY: 68, boxY: 79.5,
+  },
+  // 드라마: 번인 자막이 없어 확대 크롭(fit cover)이 산다 — 띠가 좁아 위치가 다르다
+  "broadcast-drama": {
+    accent: "#40E0E0", titleY: 8, bottom: "logo-box",
+    channelY: 88, iconShape: "square", iconSize: 173, iconY: 77, boxY: 87.5,
+  },
+  // 구 표준 (TVING 풍 · 보존): 빨강 훅 + 원형 아이콘 + 프로그램명 텍스트
+  "broadcast-clean": {
+    accent: "#FF4040", titleY: 11, bottom: "icon-title",
+    channelY: 88, iconShape: "circle", iconSize: 40,
+  },
+};
+
+/** 프로그램 장르로 템플릿 선택 — 드라마는 확대 크롭, 그 외는 표준. */
+export function pickTemplateId(program?: any): string {
+  const g = `${program?.pipelineGenre ?? ""} ${program?.section ?? ""}`;
+  return /drama|드라마/i.test(g) ? "broadcast-drama" : "broadcast-standard";
+}
+
+export function autoEditorState(rec: any, programTitle: string, program?: any): Record<string, unknown> {
+  const hook = String(rec.hookQuote ?? "").replace(/^['"'"]|['"'"]$/g, "").trim();
   const headline = hook && hook.length <= 30 ? hook : String(rec.titleLine1 ?? rec.title ?? "");
   const { lines, size } = wrapAutoTitle(headline);
-  // 둘째 줄은 항상 강조색 (사용자 확정: 파랑 또는 빨강). 추천 id 해시로 결정론적으로
-  // 골라 색이 번갈아 나오되 재렌더마다 바뀌지는 않는다.
-  const accent = [...String(rec.id ?? "")].reduce((a, ch) => a + ch.charCodeAt(0), 0) % 2 === 0
-    ? "#FF4040" : "#3B82F6";
+  const templateId = pickTemplateId(program);
+  const seed = TEMPLATE_SEEDS[templateId] ?? TEMPLATE_SEEDS["broadcast-standard"];
   return {
     aspect: "9:16",
     bgType: "solid",
     bg: "#000000",
-    // 실존 프레임 템플릿 (assets/shorts-template/broadcast-clean) — 에디터에서 열어도
-    // 같은 템플릿이 선택된 상태로 보인다. 없으면 solid 폴백이라 결과 기하는 동일.
-    templateId: "broadcast-clean",
-    // 한 줄이면 통째로 강조색(레퍼런스의 빨간 헤드라인), 두 줄이면 둘째 줄만.
+    templateId,
+    // 한 줄이면 통째 강조색, 두 줄이면 둘째 줄만 (표준 강조색 = 청록, 레퍼런스 확정).
     titleLines: lines.map((text, i) => ({
-      text, size, color: lines.length === 1 || i === 1 ? accent : "#FFFFFF",
+      text, size, color: lines.length === 1 || i === 1 ? seed.accent : "#FFFFFF",
     })),
     titleX: 50,
-    titleY: 11,
+    titleY: seed.titleY,
     titleAlign: "center",
     captionsOn: false,
     karaoke: false,
     hookOn: false,
-    showChannel: Boolean(programTitle),
-    channelName: programTitle,
-    channelY: 88,
+    showChannel: true,
+    // logo-box 하단은 로고(프로그램 brandIconDataUrl)가 이름을 대신한다 — 텍스트 이름 생략.
+    channelName: seed.bottom === "logo-box" ? "" : programTitle,
+    channelY: seed.channelY,
+    channelLabelSize: 30,
+    channelIconShape: seed.iconShape,
+    channelIconSize: seed.iconSize,
+    ...(seed.iconY != null ? { channelIconY: seed.iconY } : {}),
+    // 방영시간 박스 — 프로그램 설정의 schedule 그대로 (예: "(수) 밤 10시 30분").
+    ...(seed.bottom === "logo-box" && String(program?.schedule ?? "").trim()
+      ? { channelBoxText: String(program.schedule).trim(), channelBoxY: seed.boxY }
+      : {}),
   };
 }
+
 
 /**
  * 추천 하나 → 클립. index.ts 의 adopt 라우트와 같은 뼈대다.
@@ -489,7 +528,8 @@ async function adoptRecommendation(rec: any, job: FactoryJob): Promise<string | 
     targetAge: episode?.targetAge ?? 0,
     aspectRatio: rec.kind === "short" ? "9:16-crop-main" : "16:9",
     // 무인 렌더 기본 시드 — 에디터를 안 거쳐도 배포 가능한 모양으로 나가게 한다.
-    editorState: autoEditorState(rec, episode?.programTitle ?? ""),
+    editorState: autoEditorState(rec, episode?.programTitle ?? "",
+      episode?.programId ? await getEntity<any>("program", episode.programId) : undefined),
     durationSec: Math.max(1, rec.endTime - rec.startTime),
     synopsis: rec.editNote ?? undefined,
     status: "editing",

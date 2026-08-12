@@ -137,6 +137,7 @@ function ProgramDetailInner({
   const [newName, setNewName] = useState("");
   const [castPhotos, setCastPhotos] = useState<Record<string, string>>(program.castPhotos ?? {});
   const [posterImageDataUrl, setPosterImageDataUrl] = useState(program.posterImageDataUrl ?? "");
+  const [brandIconDataUrl, setBrandIconDataUrl] = useState(program.brandIconDataUrl ?? "");
   const [busy, setBusy] = useState(false);
   // AI 자동 채움 결과 (마지막 실행 · 근거 URL 노출용 · 페이지 새로고침 시 사라짐)
   const [autofilling, setAutofilling] = useState(false);
@@ -195,6 +196,7 @@ function ProgramDetailInner({
     setCast(program.cast ?? []);
     setCastPhotos(program.castPhotos ?? {});
     setPosterImageDataUrl(program.posterImageDataUrl ?? "");
+    setBrandIconDataUrl(program.brandIconDataUrl ?? "");
   }, [
     program.id, program.title, program.section, program.targetAge,
     program.status, program.owner, program.pipelineGenre,
@@ -245,6 +247,12 @@ function ProgramDetailInner({
     const dataUrl = await fileToDataUrl(file, 1024 * 1024);
     if (!dataUrl) return;
     setPosterImageDataUrl(dataUrl);
+  }
+  // 쇼츠 브랜딩 아이콘 — 자동 렌더 하단에 원형으로 박힌다 (서버가 원형 크롭).
+  async function setBrandIcon(file: File) {
+    const dataUrl = await fileToDataUrl(file, 512 * 1024);
+    if (!dataUrl) return;
+    setBrandIconDataUrl(dataUrl);
   }
 
   async function runSyncFromAnalysis() {
@@ -375,6 +383,7 @@ function ProgramDetailInner({
         awards: awards.trim(),
         moods,
         posterImageDataUrl,
+        brandIconDataUrl,
         castPhotos,
       });
       onOpenToast({ title: "저장됨", description: title.trim(), tone: "done" });
@@ -492,11 +501,43 @@ function ProgramDetailInner({
 
       {/* 히어로 — 포스터 + 타이틀 */}
       <section className="grid gap-6 lg:grid-cols-[220px_1fr]">
-        <PosterUpload
-          value={posterImageDataUrl}
-          onChange={setPoster}
-          onClear={() => setPosterImageDataUrl("")}
-        />
+        <div className="space-y-3">
+          <PosterUpload
+            value={posterImageDataUrl}
+            onChange={setPoster}
+            onClear={() => setPosterImageDataUrl("")}
+          />
+          {/* 쇼츠 브랜딩 아이콘 — 자동 렌더 하단(프로그램명 위)에 원형으로 들어간다 */}
+          <div>
+            <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">쇼츠 아이콘</div>
+            <div className="flex items-center gap-3">
+              <label className="group relative flex size-16 cursor-pointer items-center justify-center overflow-hidden rounded-full border border-border bg-muted transition-colors hover:border-primary/50">
+                {brandIconDataUrl ? (
+                  <img src={brandIconDataUrl} alt="쇼츠 아이콘" className="size-full object-cover" />
+                ) : (
+                  <Camera className="size-5 text-muted-foreground" />
+                )}
+                <input
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={(e) => {
+                    const f = e.currentTarget.files?.[0];
+                    if (f) void setBrandIcon(f);
+                    e.currentTarget.value = "";
+                  }}
+                />
+              </label>
+              <div className="text-[11px] text-muted-foreground">
+                자동 쇼츠 하단 브랜딩(원형)
+                {brandIconDataUrl && (
+                  <button onClick={() => setBrandIconDataUrl("")}
+                    className="ml-2 text-status-error hover:underline">제거</button>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
         <div className="min-w-0 space-y-3">
           <div>
             <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">제목</div>

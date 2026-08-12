@@ -195,7 +195,7 @@ import {
   type SearchQuery,
   type SearchEventKind,
 } from "./db-pg.ts";
-import { hasFfmpeg, probe, captureThumbnail, trimEncode, remuxFaststart, renderShort } from "./ffmpeg.ts";
+import { hasFfmpeg, probe, captureThumbnail, circleCrop, trimEncode, remuxFaststart, renderShort } from "./ffmpeg.ts";
 import { embedQuery } from "./search-embed.ts";
 import { parseQuery } from "./search-parse.ts";
 import { newId } from "./pipeline.ts";
@@ -1882,6 +1882,13 @@ app.patch("/api/programs/:id", async (c) => {
     const s = body.posterImageDataUrl.trim();
     if (s) next.posterImageDataUrl = s;
     else delete next.posterImageDataUrl;
+  }
+  // 쇼츠 브랜딩 아이콘(data URL) — 자동 렌더 하단의 원형 아이콘. 프로그램에서 미리 설정한다
+  // (사용자 결정 2026-08-12). 빈 문자열이면 삭제.
+  if (typeof body.brandIconDataUrl === "string") {
+    const s = body.brandIconDataUrl.trim();
+    if (s) next.brandIconDataUrl = s;
+    else delete next.brandIconDataUrl;
   }
   // 출연자별 인물 이미지 매핑 — 객체(name→dataUrl). cast에 없는 키는 서버 측에서도 정리.
   if (body.castPhotos && typeof body.castPhotos === "object" && !Array.isArray(body.castPhotos)) {
@@ -3612,8 +3619,25 @@ function buildEditorAss(
       yOff += Math.round(fs * 1.15);
     }
     if (es.showChannel && es.channelName?.trim()) {
-      const fs = Math.max(12, Math.round(14 * scale * 1.2));
-      put(8, Math.round(0.5 * W), Math.round(((es.channelY ?? 82) / 100) * H), fs, "&H00FFFFFF&", 2, "&H00000000&", "▶ " + es.channelName);
+      // channelLabelSize(에디터 px, 웹 프리뷰와 같은 필드)가 있으면 그걸 쓴다 — 하단 띠를
+      // 크게 채우는 브랜딩용. 기본값은 기존과 동일한 14×1.2.
+      const chPx = Number((es as any).channelLabelSize) > 0
+        ? Number((es as any).channelLabelSize) : 14 * 1.2;
+      const fs = Math.max(12, Math.round(chPx * scale));
+      const chY = Math.round(((es.channelY ?? 82) / 100) * H);
+      put(8, Math.round(0.5 * W), chY, fs, "&H00FFFFFF&", 2, "&H00000000&", "▶ " + es.channelName);
+    }
+    // 방영시간 박스 라벨 (broadcast-standard) — 파란 박스 + 흰 텍스트. BoxLabel 스타일은
+    // BorderStyle=3(박스)이고 박스 색은 인라인 \3c 로 지정한다.
+    const boxText = String((es as any).channelBoxText ?? "").trim();
+    if (es.showChannel && boxText) {
+      const boxY = Math.round(((Number((es as any).channelBoxY) || 79.5) / 100) * H);
+      const boxColor = hexToAss(String((es as any).channelBoxColor || "#3D7BD9"));
+      const fs = Math.max(12, Math.round(22 * scale));
+      ev.push(
+        `Dialogue: 0,${assTime(0)},${end},BoxLabel,,0,0,0,,` +
+        `{\\an8\\pos(${Math.round(0.5 * W)},${boxY})\\fs${fs}\\3c${boxColor}\\4c${boxColor}}${assEscape(boxText)}`,
+      );
     }
     for (const el of Array.isArray(es.elements) ? es.elements : []) {
       if (!el?.text?.trim()) continue;
@@ -3692,6 +3716,8 @@ function buildEditorAss(
     // 없으면 libass 가 fontconfig 폴백(Noto)으로 조용히 대체하므로 Dockerfile 의
     // assets/fonts COPY + fc-cache 와 세트다.
     `Style: Default,Pretendard ExtraBold,48,&H00FFFFFF,&H00000000,&H00000000,1,1,2,1,5,20,20,20,1\n` +
+    // 방영시간 박스 라벨 — BorderStyle=3(불투명 박스), Outline=박스 패딩. 박스 색은 인라인 \3c.
+    `Style: BoxLabel,Pretendard ExtraBold,48,&H00FFFFFF,&H00D97B3D,&H00D97B3D,1,3,14,0,5,20,20,20,1\n` +
     captionAssStyle(capStyle, capFs, capMV) + "\n\n" +
     `[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n` +
     ev.join("\n") + "\n"
@@ -3841,6 +3867,8 @@ async function renderClipMedia(opts: {
   const tmpPath = path.join(tmpDir, `${clipMediaId}.mp4`);
   const thumbTmp = path.join(tmpDir, `${clipMediaId}.jpg`);
   const assTmp = path.join(tmpDir, `${clipMediaId}.ass`);
+  const iconRawTmp = path.join(tmpDir, `${clipMediaId}_icon_raw`);
+  const iconTmp = path.join(tmpDir, `${clipMediaId}_icon.png`);
 
   const { W, H, stageH } = renderDims(aspect);
   const ass = buildEditorAss(editorState, W, H, stageH, endTime - startTime, opts.captions);
@@ -3863,6 +3891,43 @@ async function renderClipMedia(opts: {
   // master never lands in Cloud Run's RAM.
   const srcPath = useGcs() ? await signedReadUrl(masterObjPath) : master.path;
   const hookPreroll = opts.hookPreroll && opts.hookPreroll.durationSec > 0 ? opts.hookPreroll : null;
+
+  // 하단 브랜딩 아이콘 — **프로그램에서 미리 설정**한 이미지(brandIconDataUrl, 사용자 결정
+  // 2026-08-12)를 원형으로 잘라 채널명 위에 얹는다. 없으면 조용히 생략(텍스트 브랜딩만).
+  // hookPreroll 경로는 배지 미지원이라 프리롤일 땐 넘기지 않는다.
+  let badge: { path: string; x: number; y: number; w: number } | null = null;
+  if (editorState?.showChannel && !editorState?.channelIconOff && episodeId && !hookPreroll) {
+    try {
+      // 아이콘 소스 우선순위: 클립별 업로드(에디터 channelIconDataUrl) > 프로그램 기본
+      // (프로그램 설정의 brandIconDataUrl — 사용자 결정 2026-08-12 "아이콘은 프로그램에서 미리").
+      let iconSrc = String(editorState?.channelIconDataUrl ?? "");
+      if (!/^data:image\//i.test(iconSrc)) {
+        const ep = await getEntity<Record<string, unknown>>("episode", episodeId);
+        const prog = ep?.programId
+          ? await getEntity<Record<string, unknown>>("program", String(ep.programId)) : null;
+        iconSrc = String(prog?.brandIconDataUrl ?? "");
+      }
+      const m = /^data:image\/[\w.+-]+;base64,(.+)$/i.exec(iconSrc);
+      if (m) {
+        fs.writeFileSync(iconRawTmp, Buffer.from(m[1], "base64"));
+        const scale = H / stageH;
+        const iconW = Math.round((Number(editorState?.channelIconSize) > 0
+          ? Number(editorState.channelIconSize) : 40) * scale);
+        // 모양: circle 이면 원형 크롭, 그 외(square 등)는 원본 비율 그대로 — 프로그램
+        // 로고(가로 워드마크)를 원으로 자르면 깨지기 때문 (broadcast-standard).
+        const shape = String(editorState?.channelIconShape ?? "circle");
+        let badgePath = iconRawTmp;
+        if (shape === "circle") { await circleCrop(iconRawTmp, iconTmp, iconW); badgePath = iconTmp; }
+        // 위치: channelIconY(%) 명시가 우선, 없으면 채널명 위 (구 broadcast-clean 배치).
+        const iconYPct = Number(editorState?.channelIconY);
+        const chY = ((Number(editorState?.channelY) || 82) / 100) * H;
+        const y = iconYPct > 0 ? Math.round((iconYPct / 100) * H) : Math.round(chY - iconW - 28);
+        badge = { path: badgePath, w: iconW, x: Math.round((W - iconW) / 2), y };
+      }
+    } catch (e) {
+      console.warn("[render] 브랜딩 아이콘 준비 실패(생략):", String(e).slice(0, 120));
+    }
+  }
   try {
     if (!ass && !videoFilters && !audioFilter && speed === 1 && aspect === "16:9" && !hookPreroll) {
       // Fast path only when there's genuinely nothing to bake (no overlays, no grade, no
@@ -3888,6 +3953,7 @@ async function renderClipMedia(opts: {
         assPath: ass ? assTmp : null, videoFilters, audioFilter, speed,
         bgType, bgColor, frame,
         hookPreroll,
+        badge,
       });
     }
     const cmeta = await probe(tmpPath).catch(() => ({
@@ -3916,6 +3982,8 @@ async function renderClipMedia(opts: {
     try { fs.unlinkSync(tmpPath); } catch {}
     try { fs.unlinkSync(thumbTmp); } catch {}
     try { fs.unlinkSync(assTmp); } catch {}
+    try { fs.unlinkSync(iconRawTmp); } catch {}
+    try { fs.unlinkSync(iconTmp); } catch {}
   }
 }
 

@@ -561,6 +561,70 @@ function LayoutTab({ state, update, applyTpl, frames = [] }: { state: EditorStat
           </div>
         )}
       </div>
+      {/* 상단·하단 스타일 프리셋 — 영상마다 훅/브랜딩 조합을 바로 고른다 (2026-08-12). */}
+      <div>
+        <Label>상단 스타일 (훅)</Label>
+        <div className="grid grid-cols-3 gap-1">
+          {[
+            { k: "hook2", label: "2줄 컬러" },
+            { k: "hook1", label: "한 줄 컬러" },
+            { k: "none", label: "없음" },
+          ].map((o) => (
+            <button
+              key={o.k}
+              onClick={() => {
+                const lines = state.titleLines ?? [];
+                if (o.k === "none") { update({ titleLines: [] }); return; }
+                if (o.k === "hook1") {
+                  const text = lines.map((l) => l.text).join(" ").trim();
+                  update({ titleLines: text ? [{ id: "t1", text, size: 30, color: "#FF4040" }] : [], titleY: 11 });
+                  return;
+                }
+                // hook2 — 줄 유지, 첫 줄 흰색·둘째 줄 강조색 (한 줄뿐이면 통째 강조색)
+                update({
+                  titleLines: lines.map((l, i) => ({
+                    ...l,
+                    color: lines.length === 1 || i === 1 ? "#FF4040" : "#FFFFFF",
+                  })),
+                  titleY: 11,
+                });
+              }}
+              className="rounded-md border border-zinc-700 py-1.5 text-xs text-zinc-300 hover:bg-zinc-800/50"
+            >
+              {o.label}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div>
+        <Label>하단 스타일 (브랜딩)</Label>
+        <div className="grid grid-cols-3 gap-1">
+          {[
+            { k: "icon-title", label: "아이콘+제목" },
+            { k: "title", label: "제목만" },
+            { k: "none", label: "없음" },
+          ].map((o) => (
+            <button
+              key={o.k}
+              onClick={() => {
+                if (o.k === "none") { update({ showChannel: false }); return; }
+                update({
+                  showChannel: true,
+                  channelY: 88,
+                  channelLabelSize: 30,
+                  channelIconSize: 40,
+                  // 아이콘은 프로그램 설정(brandIconDataUrl)에서 오고, 여기선 켜고 끄기만.
+                  channelIconOff: o.k === "title",
+                } as Partial<EditorState>);
+              }}
+              className="rounded-md border border-zinc-700 py-1.5 text-xs text-zinc-300 hover:bg-zinc-800/50"
+            >
+              {o.label}
+            </button>
+          ))}
+        </div>
+        <div className="mt-1 text-[10px] text-zinc-500">아이콘은 프로그램 설정의 "쇼츠 아이콘"에서 등록</div>
+      </div>
       <div>
         <Label>종횡비</Label>
         <div className="grid grid-cols-4 gap-1">

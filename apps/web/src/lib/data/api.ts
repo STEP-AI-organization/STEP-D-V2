@@ -365,6 +365,7 @@ export interface CreateProgramInput {
   awards?: string;
   moods?: string[];
   posterImageDataUrl?: string;
+  brandIconDataUrl?: string;
   castPhotos?: Record<string, string>;
   // ── 편성 상태 · 담당 · 권리 윈도우 (FLOWS F10 · 2026-08-10) ──────────────
   /** 방영 중/종영/편성 예정. 사람이 지정한다 — 날짜로 자동 판정하지 않는다. */

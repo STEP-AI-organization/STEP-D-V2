@@ -81,6 +81,8 @@ export interface Program {
   /** 프로그램 대표 이미지(포스터) — data URL로 저장(base64). 프로그램 상세 페이지 히어로.
    *  TODO: 사이즈 상한이 있으니 향후 /api/programs/:id/poster 업로드 라우트로 옮기는 게 이상적. */
   posterImageDataUrl?: string;
+  /** 쇼츠 브랜딩 아이콘(data URL) — 자동 렌더 하단 원형 아이콘. 프로그램에서 미리 설정. */
+  brandIconDataUrl?: string;
   /** 출연자별 인물 이미지 매핑 — cast 배열의 이름을 키로 data URL 저장.
    *  cast에서 이름이 제거되면 해당 키도 정리(서버 PATCH 시). */
   castPhotos?: Record<string, string>;

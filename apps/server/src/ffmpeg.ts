@@ -179,7 +179,30 @@ export type RenderShortOpts = {
     /** 오디오 크로스페이드 포함 여부 (마스터에 오디오 있을 때만 true). */
     hasAudio?: boolean;
   } | null;
+  /** 하단 브랜딩 아이콘(원형 PNG) — 프로그램에서 미리 설정한 이미지를 캘러가 원형으로
+   *  전처리(circleCrop)해서 넘긴다. ASS 번인 뒤에 얹으므로 그레이드에 물들지 않는다.
+   *  ⚠️ hookPreroll 경로에는 아직 미지원 — 캘러가 프리롤일 땐 넘기지 않는다. */
+  badge?: { path: string; x: number; y: number; w: number } | null;
 };
+
+/**
+ * 이미지를 원형으로 잘라 PNG 로 저장 (하단 브랜딩 아이콘용). geq 로 원 밖 알파를 0 으로.
+ * size 는 정사각 한 변(px) — 렌더에서 다시 줄이지 않도록 최종 크기로 만든다.
+ */
+export function circleCrop(srcPath: string, dstPath: string, size: number): Promise<void> {
+  const vf =
+    `scale=${size}:${size}:force_original_aspect_ratio=increase,crop=${size}:${size},format=rgba,` +
+    `geq=a='if(lte((X-W/2)*(X-W/2)+(Y-H/2)*(Y-H/2),(W/2)*(W/2)),alpha(X,Y),0)'` +
+    `:r='r(X,Y)':g='g(X,Y)':b='b(X,Y)'`;
+  return new Promise((resolve, reject) => {
+    execFile("ffmpeg", ["-y", "-i", srcPath, "-vf", vf, "-frames:v", "1", dstPath],
+      { timeout: 30_000 }, (err) => {
+        if (err) return reject(err);
+        if (!fs.existsSync(dstPath)) return reject(new Error("circleCrop output not produced"));
+        resolve();
+      });
+  });
+}
 
 /** 프리롤→본문 cross-dissolve 길이(초). 프로토타입(render_shorts.py) 검증값. */
 const HOOK_XFADE_SEC = 0.25;
@@ -346,6 +369,14 @@ export function renderShort(opts: RenderShortOpts): Promise<void> {
     vf += `;${last}ass='${esc}'[vout]`;
     last = "[vout]";
   }
+  // 브랜딩 아이콘 — ASS 뒤에 얹는다(자막·타이틀과 같은 레이어 감각). 이미지 입력은 1프레임이라
+  // overlay 기본 eof_action=repeat 로 전체 길이에 유지된다.
+  if (opts.badge) {
+    const bi = 1 + (fr ? 1 : 0);
+    vf += `;[${bi}:v]scale=${opts.badge.w}:${opts.badge.w}[bdg]` +
+          `;${last}[bdg]overlay=${opts.badge.x}:${opts.badge.y}[vbdg]`;
+    last = "[vbdg]";
+  }
   // Speed LAST — after the burn, so the captions/overlays already baked into the frames
   // speed up in lockstep and never desync.
   if (speed !== 1) {
@@ -359,6 +390,8 @@ export function renderShort(opts: RenderShortOpts): Promise<void> {
     "-i", inputPath,
     // 프레임 PNG 는 입력 1번 — filtergraph 의 [1:v] 와 짝이 맞아야 한다.
     ...(fr ? ["-i", fr.overlayPath] : []),
+    // 브랜딩 아이콘은 그다음 입력 (fr 유무에 따라 [1:v] 또는 [2:v]).
+    ...(opts.badge ? ["-i", opts.badge.path] : []),
     "-t", String(outDur),
     "-filter_complex", vf,
     "-map", last,

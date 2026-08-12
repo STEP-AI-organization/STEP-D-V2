@@ -293,6 +293,14 @@ export interface EditorState {
   /** 채널명 아래에 붙는 부가 줄들. 제목의 titleLines처럼 자유롭게 추가/제거 가능.
    *  줄 하나당 텍스트 + 크기. 비어 있으면 렌더 안 함. */
   channelExtraLines?: ChannelExtraLine[];
+  /** 프로그램 기본 아이콘(brandIconDataUrl)을 이 클립에서 끈다 — 하단 "제목만" 스타일. */
+  channelIconOff?: boolean;
+  /** 아이콘/로고의 세로 위치(%). 미지정이면 채널명 텍스트 위에 자동 배치. */
+  channelIconY?: number;
+  /** 방영시간 박스 라벨 (broadcast-standard) — 텍스트·위치(%)·박스 색. */
+  channelBoxText?: string;
+  channelBoxY?: number;
+  channelBoxColor?: string;
   /** 아이콘·텍스트 배치. horizontal=[아이콘 텍스트], vertical=[아이콘]/[텍스트]. 프리셋이 세팅. */
   channelLayout?: "horizontal" | "vertical";
   /** 아이콘 모양. circle=원, rounded=둥근 사각, square=사각. 프리셋이 세팅. */
@@ -499,6 +507,8 @@ export function makeInitialEditorState(
     showChannel: true,
     channelName: programTitle || "",
     channelY: 88,
+    channelLabelSize: 30,
+    channelIconSize: 40,
     // 방송 원본은 번인 자막이 이미 있다 — AI 자막을 겹쳐 굽지 않는 게 기본.
     captionsOn: false,
     captionStyle: "korean_pop",
