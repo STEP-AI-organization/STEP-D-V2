@@ -9,7 +9,8 @@
     "dev:server": "pnpm --filter @stepd/server dev",
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
-    "start": "pnpm -r --parallel start"
+    "start": "pnpm -r --parallel start",
+    "worker:naver": "pnpm --filter @stepd/server worker:naver"
   },
   "engines": {
     "node": ">=22"
