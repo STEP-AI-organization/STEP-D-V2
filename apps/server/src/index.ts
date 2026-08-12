@@ -3535,9 +3535,13 @@ type KfPoint = { time: number; x?: number; y?: number; scale?: number; opacity?:
  *  interpolation, values hold at both ends. `t` is render-relative seconds (= the preview's
  *  localT = segT − trimIn), so keyframe timing burns identically to what the operator saw. */
 function sampleKf(kfs: KfPoint[], t: number) {
-  const sorted = [...kfs].sort((a, b) => a.time - b.time);
+  // ⚠️ time 이 유한한 키프레임만 쓴다. NaN/undefined time 이 섞이면 정렬·보간이 깨져
+  //    \pos(NaN,NaN)·\fscxNaN 이 ASS 에 박혀 그 오버레이 번인이 통째로 망가진다.
+  //    웹 sampleKeyframes 는 이미 이렇게 거른다(presets.ts) — 서버도 맞춘다.
+  const sorted = [...kfs].filter((k) => Number.isFinite(k?.time)).sort((a, b) => a.time - b.time);
   const prop = (key: "x" | "y" | "scale" | "opacity" | "rotation"): number | undefined => {
-    const pts = sorted.filter((k) => typeof k[key] === "number");
+    // NaN 은 typeof 로 number 라 통과한다 — isFinite 로 걸러야 실제 유효값만 남는다.
+    const pts = sorted.filter((k) => Number.isFinite(k[key] as number));
     if (!pts.length) return undefined;
     if (t <= pts[0].time) return pts[0][key];
     const last = pts[pts.length - 1];
@@ -3682,14 +3686,17 @@ function buildEditorAss(
     for (const cap of Array.isArray(captions) ? captions : []) {
       const text = String(cap.text ?? "").trim();
       if (!text || !(cap.end > cap.start)) continue;
-      // Real word timings if the STT had them; otherwise synthesize (unless karaoke is off).
-      const karaokeOn = !(es && typeof es === "object" && (es as any).karaoke === false);
-      const words =
-        Array.isArray(cap.words) && cap.words.length
-          ? cap.words
-          : karaokeOn
-            ? synthesizeWords(text, cap.start, cap.end)
-            : [];
+      // ⚠️ 카라오케(단어별 하이라이트)는 **명시적으로 켤 때만** 굽는다(karaoke === true).
+      //
+      // 예전엔 기본이 ON 이었다(karaoke !== false). 게다가 whisper STT 의 실제 word timing 이
+      // 있으면 karaoke 설정과 무관하게 단어별로 구웠다. 그런데 미리보기는 **절대** 단어별
+      // 하이라이트를 안 그린다(세그먼트 통짜) — 한국 방송은 word-by-word 를 안 쓴다는 확정
+      // 방침이다(2026-07-24). 그래서 기본 클립·옛 저장분에서 미리보기엔 없던 노란 단어 스윕이
+      // 결과물에만 나타났다. 미리보기=렌더를 위해 명시 opt-in 으로 바꾼다.
+      const karaokeOn = es && typeof es === "object" && (es as any).karaoke === true;
+      const words = karaokeOn
+        ? (Array.isArray(cap.words) && cap.words.length ? cap.words : synthesizeWords(text, cap.start, cap.end))
+        : [];
       if (words.length) {
         // Word-by-word highlight (the signature "AI short" caption): one Dialogue per word
         // window, whole line in white, the active word in the highlight colour and keyword
@@ -6700,6 +6707,19 @@ app.post("/api/tiktok/accounts/:publicId/disconnect", async (c) => {
 app.delete("/api/tiktok/accounts/:publicId", async (c) => {
   await deleteTikTokAccount(c.req.param("publicId"));
   return c.json({ ok: true });
+});
+
+/**
+ * 네이버 로그인 도우미(exe) 다운로드 — 편집자가 pnpm 없이 세션을 등록하게 하는 도구.
+ * 실물은 GCS `tools/stepd-naver-login.exe` (빌드: apps/server/scripts/naver-login-tool.mts
+ * 머리의 bun 명령). 세션 로그인 사용자만 받게 둔다 — 공개 배포물이 아니다.
+ */
+app.get("/api/naver/login-tool", async (c) => {
+  const obj = "tools/stepd-naver-login.exe";
+  if (!useGcs() || !(await fileExists(obj))) {
+    return c.json({ error: "tool_not_uploaded", message: "도구가 아직 업로드되지 않았습니다 — 운영팀에 문의하세요." }, 404);
+  }
+  return c.redirect(await signedReadUrl(obj, 10 * 60_000));
 });
 
 app.get("/api/youtube/channels", async (c) => {

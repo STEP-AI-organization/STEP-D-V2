@@ -321,27 +321,32 @@ export function NaverAccounts({ onChange }: { onChange?: (accounts: NaverAccount
                 </div>
               </div>
 
-              {/* 워커 PC 앞에서 직접 로그인하는 경로 — 세션 파일을 옮기지 않아도 된다.
-                  둘 중 하나만 하면 되므로, 세션이 이미 있으면 접어둔다. */}
+              {/* 편집자용 정상 경로 — 로그인 도우미 다운로드 (pnpm·리포 불필요, 더블클릭).
+                  세션이 이미 있으면 접어둔다. */}
               {!a.hasSession && (
                 <div className="mt-3 border-t border-border pt-3">
                   <p className="text-[11px] leading-relaxed text-muted-foreground">
-                    <b className="text-foreground">로그인하는 법.</b> 아래 명령을 실행하면 브라우저 창이
-                    뜹니다. STEP D 에 한 번, 네이버에 한 번 로그인하면 세션이{" "}
-                    <b className="text-foreground">여기 서버에 등록</b>되고 발행이 가능해집니다.
-                    네이버 아이디·비밀번호는 브라우저에만 들어가고 우리 서버로 오지 않습니다.
+                    <b className="text-foreground">로그인하는 법.</b>{" "}
+                    ① 아래 버튼으로 <b className="text-foreground">로그인 도우미</b>를 내려받아 실행
+                    → ② 뜨는 브라우저에서 STEP D 로그인 → ③ 네이버 로그인. 끝나면 세션이 자동으로
+                    여기 등록됩니다. 아이디·비밀번호는 브라우저에만 들어가고 서버로 오지 않습니다.
                   </p>
-                  <code className="mt-2 block overflow-x-auto rounded-md bg-muted px-2.5 py-2 text-[11px] text-foreground">
-                    pnpm --filter @stepd/server naver:login:upload -- --account {a.id}{" "}
-                    --api {cmdTargets().api} --web {cmdTargets().web}
-                  </code>
+                  <a
+                    href={`${process.env.NEXT_PUBLIC_API_URL ?? "/api"}/naver/login-tool`}
+                    className="mt-2 inline-flex items-center gap-1.5 rounded-md border border-border bg-muted px-3 py-1.5 text-xs font-medium text-foreground transition hover:bg-accent/40"
+                  >
+                    ⬇ 네이버 로그인 도우미 다운로드 (Windows)
+                  </a>
                   <details className="mt-2">
                     <summary className="cursor-pointer text-[11px] text-muted-foreground">
-                      명령을 못 쓰는 경우 — 세션 파일로 등록
+                      개발자용 — 명령줄 / 세션 파일 등록
                     </summary>
+                    <code className="mt-1.5 block overflow-x-auto rounded-md bg-muted px-2.5 py-2 text-[11px] text-foreground">
+                      pnpm --filter @stepd/server naver:login:upload -- --account {a.id}{" "}
+                      --api {cmdTargets().api} --web {cmdTargets().web}
+                    </code>
                     <p className="mt-1.5 text-[11px] leading-relaxed text-muted-foreground">
-                      위 &quot;로그인 세션 등록&quot; 버튼으로 Playwright storageState JSON 을 직접 올릴 수도
-                      있습니다. 파일을 만들 방법이 없다면 이 경로는 쓰지 마세요 — 명령 쪽이 정상 경로입니다.
+                      또는 위 &quot;로그인 세션 등록&quot; 버튼으로 Playwright storageState JSON 을 직접 올립니다.
                     </p>
                   </details>
                 </div>
