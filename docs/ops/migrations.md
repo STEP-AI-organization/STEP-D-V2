@@ -12,6 +12,39 @@
 - **이후 모든 스키마 변경은 새 번호 파일 추가로만** 한다. 기존 파일을 수정하지 않는다(이미 적용된 마이그레이션은 불변).
 - 파일 생성은 `pnpm migrate:create <이름>` — `migrations/`의 최고 순번 +1로 만들어 준다.
 
+### ⚠️ 순번 충돌 — 브랜치가 둘이면 반드시 난다 (2026-08-12 실측)
+
+`migrate:create` 는 **자기 브랜치의** 최고 순번 +1 을 쓴다. 두 브랜치가 동시에 작업하면
+**같은 번호가 두 개** 생기고, 머지하면 그대로 남는다. 실제로 `0028_job-queue-fairness-index`
+와 `0028_naver-session-blob` 이 그렇게 만들어졌다.
+
+여기서 끝이 아니다. 한쪽만 프로덕션에 먼저 적용되면 **파일 순서와 적용 순서가 어긋난다.**
+node-pg-migrate 의 `checkOrder` 는 그 뒤로 **매번 거부**한다:
+
+```
+Error: Not run migration 0028_naver-session-blob is preceding already run migration 0029_billing-card
+```
+
+⚠️ **이 메시지를 곧이곧대로 읽으면 원인을 못 찾는다.** "아직 안 돌았다" 고 하지만
+컬럼은 이미 들어가 있을 수 있다 — 문제는 "안 돌았다"가 아니라 **"늦게 돌았다"** 이다.
+`--no-check-order` 로 한 번 통과시키면 적용은 되지만, 그 뒤로도 계속 같은 에러가 난다
+(적용 순서가 DB 에 그대로 남기 때문). 근본 해결은 둘 다 해야 한다:
+
+1. 파일 순번을 **실제 적용 순서에 맞게** 올린다 (`0028_x.cjs` → `0031_x.cjs`).
+2. `pgmigrations` 의 **기록된 이름도 같이 바꾼다.** 안 바꾸면 이번엔 방향만 뒤집힌
+   같은 에러가 난다(`Not run 0031 ... is preceding already run 0028`).
+
+```sql
+UPDATE pgmigrations SET name = '0031_naver-session-blob' WHERE name = '0028_naver-session-blob';
+```
+
+**예방:** 마이그레이션을 만들기 전에 `git fetch && git log origin/main -- apps/server/migrations`
+로 남의 번호를 먼저 본다. 순번은 싸고, 겹치면 비싸다.
+
+> 진단 시 잡 정의를 임시로 바꿔 로그를 볼 때, `... 2>&1; echo "EXIT=$?"` 같은 래퍼를 쓰면
+> **실패가 exit 0 으로 삼켜져** Cloud Run 이 "successfully completed" 로 기록한다.
+> 실패를 성공으로 보이게 만드는 진단은 진단이 아니다 — 종료코드를 그대로 흘려보낼 것.
+
 ## 배경 — 왜 baseline인가
 
 프로덕션 스키마는 지금까지 런타임 부트스트랩(`src/db-pg.ts` `migrate()` + `src/queue.ts` `initQueue()`)이
