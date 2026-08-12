@@ -3,6 +3,39 @@
 방송사·MCN 운영자 중심의 클립/쇼츠 스튜디오. 긴 영상을 올리면 AI 파이프라인이 추천 구간을
 생성하고, 운영자가 채택하면 트림·인코딩된 클립이 되어 편집 → 멀티채널 배포 → 성과 추적까지 이어진다.
 
+## 처음 클론했다면 — 이 순서대로
+
+```bash
+git clone https://github.com/STEP-AI-organization/STEP-D-V2.git
+cd STEP-D-V2
+
+pnpm install                              # 1. Node 의존성
+cp apps/server/.env.example apps/server/.env   # 2. 값 채우기 (필수: DATABASE_URL)
+cp apps/web/.env.example    apps/web/.env
+
+pnpm setup:check                          # 3. ⭐ 내 머신에 뭐가 없는지 확인
+```
+
+**`pnpm setup:check` 가 뭐가 빠졌는지 채우는 방법까지 알려준다.** 준비물을 README 로만 두면
+빠뜨린 채 개발을 시작해서 한참 뒤 엉뚱한 에러로 나타난다(ffmpeg 이 없어 썸네일이 빈 파일이
+되는 식). 통과하면:
+
+```bash
+pnpm dev            # 웹 + 서버   (Windows 는 .\dev.ps1 — Postgres 컨테이너까지 같이)
+```
+
+AI 파이프라인(`core/`)까지 돌리려면 파이썬 환경이 따로 필요하다 — **없어도 웹·서버는 뜬다.**
+
+```bash
+python -m venv core/.venv310
+core/.venv310/Scripts/pip install -r core/requirements.txt   # macOS/Linux: core/.venv310/bin/pip
+```
+
+> 값을 어디서 얻나: `dev.ps1` 이 띄우는 로컬 Postgres 를 쓸 거면 그대로 넣으면 된다 —
+> `DATABASE_URL=postgresql://postgres:postgres@localhost:5432/stepd`
+> GCP·YouTube·포트원 등 실제 키는 **팀에게 받는다** — 리포에 없다.
+> `.env` 는 절대 커밋하지 않는다([CLAUDE.md](CLAUDE.md) 작업 규칙).
+
 ## 폴더 — 뭐가 뭔지
 
 **리포에 있는 건 7개뿐이다.** 나머지(`node_modules` · `storage` · `logs` · `tmp` ·

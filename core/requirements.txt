@@ -1,59 +1,36 @@
-# STEP D Core — AI Speech Recognition & Clip Recommendation Pipeline
-# Based on VideoLingo's WhisperX pipeline reference (Apache 2.0).
+# core/ — AI 파이프라인 파이썬 의존성
+#
+#   python -m venv core/.venv310            (Python 3.11 권장 · 3.10+ 필요)
+#   core/.venv310/Scripts/pip install -r core/requirements.txt
+#
+# ⚠️ 여기 있는 건 **기본 경로에 필요한 것 전부**다. 아래 "선택" 블록은 기본 off 인 기능용이라
+#    설치하지 않아도 파이프라인이 돈다 — 전부 lazy import 라 안 켜면 불러오지도 않는다.
+#    (torch 계열은 수 GB 라 기본에 넣지 않는다.)
 
-# ── Production deps (GPU-free — runs on the worker VM) ───────────────────────────
-# STT (default STT_PROVIDER=gemini), refine, vision, name-OCR, recommend all use
-# Gemini on Vertex AI. Auth via ADC (gcloud auth application-default login), no API key.
-google-genai>=1.0.0
-
-# 썸네일 이미지 생성만 OpenAI gpt-image-2 사용 (2026-07-30 Gemini→OpenAI 전환).
-# 나머지 텍스트/비전은 여전히 Gemini. OPENAI_API_KEY env var 필수.
-openai>=1.50.0
-
-# Scene segmentation (scenes.py) — shot-change detection + frame extraction.
-# opencv also powers the algorithmic scene pre-filter (prefilter.py): Haar face count +
-# Canny caption-band density, to send only the top-N frames to Gemini Vision.
-scenedetect>=0.6
-opencv-python>=4.8
-
-# Optional: audio signal for the scene pre-filter (prefilter.py) — librosa onset strength.
-# Absent → the audio component degrades to a numpy RMS fallback (still works). ISC license.
-#   pip install librosa>=0.10
-
-# Optional: real OCR for on-frame text (ocr.py) — PaddleOCR Korean model, Apache-2.0.
-# 1st-pass burned-in text on ALL frames; Gemini then validates only the top-N (prefilter).
-# Absent → OCR falls back to the Gemini-only path (OCR_PROVIDER=off forces that too).
-# Pulls in paddlepaddle (CPU) — sizeable, so it's opt-in, not a hard dep.
-#   pip install paddleocr>=2.7 paddlepaddle>=2.6
-# (Alternative engine: pytesseract + tesseract-ocr-kor — weaker on broadcast lower-thirds.)
-
-# YouTube download (downloader.py)
-yt-dlp>=2024.0
-
-# Soniox STT (asr.py:_transcribe_soniox) 가 requests 를 직접 쓴다. 지금까지는 yt-dlp/openai 에
-# 묻어 들어와 우연히 동작했다 — 명시한다 (2026-08-07).
+# ── 기본 (항상 필요) ──────────────────────────────────────────────────────────
+google-genai>=1.0.0        # Vertex Gemini — 주석·추천·정제
+openai>=1.50.0             # 썸네일 이미지 생성
+scenedetect>=0.6           # shot 경계
+opencv-python>=4.8         # 프레임 추출·이미지 처리
+yt-dlp>=2024.0             # YouTube 원본 수집
 requests>=2.31
+rembg>=2.0.69              # 인물 세그먼테이션 (썸네일 합성)
+Pillow>=10.0               # 자막 오버레이 (한글 오타 회피 — nano banana 대신 Pillow)
 
-# ffmpeg/ffprobe must be on PATH (system install), used for audio/frame extraction.
+# 폰트는 리포에 없다(61MB). 썸네일을 돌리려면:
+#   pwsh scripts/ops/download-fonts.ps1
 
-# ── Thumbnail engine (core/thumbnail.py · Phase 1+, docs/plans/thumbnail-engine-plan.md) ─────
-# 인물 누끼 + 배경 + 자막 결합 썸네일 자동 생성.
-# rembg 첫 실행 시 isnet-general-use.onnx ~179MB를 ~/.u2net/에 다운받는다 (한 번만).
-# onnxruntime-directml 로 Windows GPU 가속 가능하지만 rembg 2.0 은 기본 CPU 선택 —
-# GPU 쓰려면 new_session(providers=['DmlExecutionProvider','CPUExecutionProvider']) 명시.
-# Pillow 는 이미 다른 스테이지가 depend 하지만 여기 문서화.
-rembg>=2.0.69
-Pillow>=10.0
-# 폰트 파일은 assets/thumbnail-fonts/ (gitignore + scripts/ops/download-fonts.ps1 로 다운).
+# ── 선택 ① 로컬 GPU STT (STT_PROVIDER=whisper) ────────────────────────────────
+# 프로덕션은 Soniox(SONIOX_API_KEY)다. 로컬에서 GPU 로 돌릴 때만 필요.
+#   pip install faster-whisper torch torchaudio
+# ⚠️ torch 는 CUDA 버전에 맞춰 공식 인덱스에서 설치할 것 (pytorch.org)
 
-# ── Optional: faster-whisper (MIT) — STT provider AND the Gemini-STT fallback ────
-# Two uses, both optional:
-#   1) STT_PROVIDER=whisper — run it as the primary (needs CUDA for large-v3 float16).
-#   2) STT_FALLBACK=whisper (default) — CPU int8 last-resort when Gemini STT returns
-#      nothing. CPU-only, NO CUDA needed; slow on long clips but keeps a transcript.
-# Absent → the fallback is simply skipped (pipeline continues transcript-free).
-#   pip install faster-whisper>=1.0.0                     # enables the CPU int8 fallback
-#   pip install nvidia-cudnn-cu12==8.9.7.29   # only for CUDA float16 (9.x fails — see WHISPERX_GUIDE.md)
+# ── 선택 ② 화자분리 고도화 (PyAnnote) ────────────────────────────────────────
+#   pip install pyannote.audio speechbrain scikit-learn
+# HuggingFace 토큰 동의 필요 (pyannote/speaker-diarization-3.1)
 
-# ── Admin lab server (apps/server serves it; only if running the Python admin) ──
-# fastapi / uvicorn — not needed in production (apps/server is the one backend).
+# ── 선택 ③ 얼굴 인식 (RUN_FACES=1 · 기본 off) ────────────────────────────────
+#   pip install insightface hdbscan scikit-learn
+
+# ── 선택 ④ 썸네일 고급 합성 ──────────────────────────────────────────────────
+#   pip install transparent-background scipy

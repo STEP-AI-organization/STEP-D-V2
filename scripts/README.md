@@ -10,7 +10,11 @@
 | [`thumbnail/`](thumbnail/) | 썸네일 엔진 파이프라인 | **있다** — `core/thumbnail/*` 가 직접 호출한다. 옮기면 코드가 깨진다 |
 | [`experiments/`](experiments/) | 지난 실험 기록 (exp7~13, STT 정합, 컷 비교 등) | **대체로 없다** — 결론은 `docs/` 에 있다. 재현하려는 게 아니면 볼 일 없다 |
 
-`dev.ps1` (루트) 은 로컬 개발 스택(Postgres + 웹 + 서버)을 띄운다 — [docs/ops/local-dev.md](../docs/ops/local-dev.md).
+`setup-check.mjs` 는 클론 직후 준비물 점검(`pnpm setup:check`) — **고치지 않고 무엇이 없는지만
+말한다.** 남의 머신에 임의로 설치하는 쪽이 더 나쁘다.
+
+`dev.ps1` (루트) 은 로컬 개발 스택(Postgres 컨테이너 + 웹 + 서버)을 띄운다 —
+[docs/ops/local-dev.md](../docs/ops/local-dev.md).
 
 ---
 
