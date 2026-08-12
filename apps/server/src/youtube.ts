@@ -44,6 +44,11 @@ export async function fetchChannelAnalytics(
     endDate: opts.endDate,
     metrics: opts.metrics || DEFAULT_ANALYTICS_METRICS,
   });
+  // 수익 지표는 기본이 **USD** 로 온다 — 화면은 전부 ₩ 표기라, 수익이 섞인 요청은 KRW 로
+  // 환산을 요청한다 (2026-08-12 실측: 대시보드가 $18,384 를 ₩18,384 로 보여줬다).
+  if ((opts.metrics ?? DEFAULT_ANALYTICS_METRICS).toLowerCase().includes("revenue")) {
+    params.set("currency", "KRW");
+  }
   if (opts.dimensions) params.set("dimensions", opts.dimensions);
   if (opts.sort) params.set("sort", opts.sort);
   if (opts.maxResults) params.set("maxResults", String(opts.maxResults));
