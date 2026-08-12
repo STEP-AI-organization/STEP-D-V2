@@ -7,7 +7,12 @@
  *  - 잔액을 모르거나 모자라면 **시작하지 않는다** (원가를 쓴 뒤에 알면 늦다)
  */
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
+
+const SRC = path.dirname(fileURLToPath(import.meta.url));
 
 import {
   MAX_TOPUP_CREDITS,
@@ -22,10 +27,58 @@ import {
   type AutoTopupPolicy,
 } from "./credits.ts";
 
+/**
+ * ⚠️ 이 describe 는 **비어 있었다**(2026-08-12 발견). 돈의 핵심 불변식이 이름만 있고
+ * 아무것도 검증하지 않은 채 조용히 통과하고 있었다.
+ *
+ * 잔액은 SQL `SUM(delta)` 라 순수 함수로 증명할 수 없다. 그래서 `publish-guard.test.ts` 의
+ * 소스 스캔 관용구로 **구조**를 고정한다 — "잔액의 정본은 원장이고, 멱등의 정본은
+ * dedupe_key 다" 를 코드에서 확인한다.
+ */
 describe("잔액은 원장 합계다", () => {
+  const dbSrc = fs.readFileSync(path.join(SRC, "db-pg.ts"), "utf-8");
+  const indexSrc = fs.readFileSync(path.join(SRC, "index.ts"), "utf-8");
 
+  it("creditBalance 는 credit_ledger 의 SUM(delta) 다 — 캐시 컬럼이 아니다", () => {
+    const fn = dbSrc.match(/export async function creditBalance[\s\S]*?\n\}/)?.[0] ?? "";
+    assert.match(fn, /SUM\(delta\)/, "잔액이 원장 합계가 아니다");
+    assert.match(fn, /FROM credit_ledger/, "잔액을 credit_ledger 가 아닌 곳에서 읽는다");
+  });
 
+  it("원장 insert 가 dedupe_key 로 멱등이다 — 웹훅 재전송·워커 재시도에 두 번 오르지 않는다", () => {
+    const fn = dbSrc.match(/export async function addCreditEntry[\s\S]*?\n\}/)?.[0] ?? "";
+    assert.match(fn, /ON CONFLICT \(dedupe_key\) DO NOTHING/,
+      "원장이 멱등이 아니면 재시도마다 크레딧이 중복 적립된다");
+  });
 
+  it("충전 주문 상태를 멱등 기준으로 쓰지 않는다", () => {
+    // 예전에는 markTopupPaid 의 `WHERE status='pending'` 이 사실상 멱등 게이트였다.
+    // 결제가 던져 'failed' 로 찍힌 주문은 이후 웹훅에서 0행이 되어 크레딧이 영영 안 들어갔고,
+    // 응답은 "이미 처리됨" 이었다 — 돈은 나갔는데. 상태는 표시일 뿐 관문이면 안 된다.
+    const fn = dbSrc.match(/export async function markTopupPaid[\s\S]*?\n\}/)?.[0] ?? "";
+    assert.doesNotMatch(fn, /status\s*=\s*'pending'/,
+      "markTopupPaid 가 'pending' 만 갱신하면 failed→paid 전이를 막아 크레딧이 유실된다");
+    assert.match(fn, /status\s*<>\s*'paid'/, "failed→paid 전이를 허용해야 웹훅이 진실을 반영한다");
+  });
+
+  it("충전 경로는 원장을 먼저 쓰고 상태를 나중에 찍는다", () => {
+    // 순서가 뒤집히면 그 사이의 예외가 "주문은 paid, 원장은 빈" 상태를 만들고,
+    // 재시도는 settleTopup 의 'paid' 가드에 막혀 복구가 불가능해진다.
+    // 앵커는 **두 호출보다 앞선 지점**이어야 한다. 결제 실행/정산 판정 직후부터 본다.
+    for (const [label, block] of [
+      ["카드 결제", indexSrc.match(/verifyCharge\(\{[\s\S]{0,1600}/)?.[0] ?? ""],
+      ["포트원 웹훅", indexSrc.match(/const settle = settleTopup\([\s\S]{0,1600}/)?.[0] ?? ""],
+    ] as const) {
+      // 성공 경로만 본다. `markTopupPaid(…, "failed")` 는 결제가 실제로 거절됐을 때의
+      // 조기 반환이라 원장보다 앞서는 게 정상이다.
+      const ledgerAt = block.indexOf("addCreditEntry");
+      const statusAt = block.indexOf('markTopupPaid(paymentId, "paid")');
+      assert.ok(ledgerAt >= 0, `${label}: addCreditEntry 를 못 찾았다`);
+      assert.ok(statusAt >= 0, `${label}: markTopupPaid(…, "paid") 를 못 찾았다`);
+      assert.ok(ledgerAt < statusAt,
+        `${label}: markTopupPaid 가 addCreditEntry 보다 먼저다 — 그 사이에서 던지면 크레딧이 영구 손실된다`);
+    }
+  });
 });
 
 describe("모자라면 시작하지 않는다", () => {

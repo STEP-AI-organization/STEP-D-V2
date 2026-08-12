@@ -45,13 +45,13 @@ docs/          ops(현황·운영) / plans(계획) / reference / research / prot
 
 ## 백엔드 — apps/server
 
-Hono 단일 진입점(index.ts, **~5500줄, 라우트 118개**) + 별도 워커 프로세스 구조.
+Hono 단일 진입점(index.ts, **~7700줄, 라우트 204개**) + 별도 워커 프로세스 구조.
 (2026-08-08 실측 갱신)
 
 | 파일 | 역할 |
 |------|------|
 | `src/index.ts` | 모든 HTTP 라우트. 여기 한 파일에 유지. **Cloud Run은 잡을 큐잉만 한다.** |
-| `src/worker.ts` | **워커 프로세스 진입점.** 잡 14종 · 레인 4개 · drain 모드 (아래 참조) |
+| `src/worker.ts` | **워커 프로세스 진입점.** 잡 17종 · 레인 4개 · drain 모드 (아래 참조) |
 | `src/queue.ts` | Postgres job_queue (FOR UPDATE SKIP LOCKED · dedupeKey · 지수 백오프 · 5분 하트비트) |
 | `src/channel-pipeline.ts` | channel.analyze — 업로드 동기화 + 채널 애널리틱스/일별 수익 백필 |
 | `src/content-pipeline.ts` | content.analyze — `python -m core.analyze` 스폰, 진행률 파싱(@@PROGRESS→episode.pipeline), 결과+프레임 영구 저장, 추천 배선. 미디어별 고정 작업 디렉토리로 재시도 시 체크포인트 재개 |
@@ -68,7 +68,7 @@ Hono 단일 진입점(index.ts, **~5500줄, 라우트 118개**) + 별도 워커 
 
 `src/pipeline.ts`는 이제 `newId` 헬퍼만 export한다(구 sqlite `db.ts`·`storage.ts`, 휴리스틱 `buildRecommendations()`는 정리 완료). 실제 추천은 core/ AI 파이프라인이 만든다.
 
-### 워커 — 잡 14종 · 레인 4개 · drain 모드
+### 워커 — 잡 17종 · 레인 4개 · drain 모드
 
 프로세스 하나가 다 처리하지 않는다. `WORKER_JOBS` 로 **레인을 갈라** 서로 굶기지 않게 한다.
 
@@ -219,7 +219,16 @@ core/ 쪽 스위치(파이썬): `RUN_FACES`·`RUN_PPL`·`RUN_REFINE`·`RUN_CHYRO
 - 프론트 API 함수 추가: `apps/web/src/lib/data/api.ts`에 타입 + 함수 함께.
 - 새 화면 추가: `src/app/(app)/<route>/page.tsx` + `src/lib/nav.ts`의 `NAV` 배열에 항목 추가.
 - 핵심 AI 파이프라인 코드는 `core/`에 (파이썬). 서버에서는 content-pipeline.ts로만 접점 유지.
-- 검증: `apps/server`는 `npx tsc --noEmit`, `apps/web`은 `npx next build` (타입체크 포함).
+- **검증: `pnpm check`** — 전 패키지 타입체크 + 서버 테스트. **커밋 전에 이거 하나면 된다.**
+  (CI 는 없다. 아무도 자동으로 안 돌리므로 사람이 돌려야 한다.)
+  - 개별: `apps/server` `npx tsc --noEmit` · `node --import tsx --test "src/**/*.test.ts"` ·
+    `apps/web` `npx next build`
+  - `pnpm lint`(웹 eslint)는 **아직 기존 오류가 있어 `check` 에서 뺐다** — 프론트 개편이
+    끝나면 합칠 것. 초록이 아닌 관문은 사람이 무시하게 된다.
+  - 테스트 중 상당수는 **소스 스캔 아키텍처 테스트**다(`publish-guard`·`worker-lanes`·
+    `docs-drift`·`rls-access`). 순수 함수로 증명 안 되는 불변식 — "큐에 넣는 곳은 한 군데",
+    "모든 잡 타입은 도는 레인에 있다", "문서 숫자가 코드와 같다" — 을 고정한다.
+    **깨지면 숫자를 지우지 말고 원인을 고칠 것.**
 
 ---
 

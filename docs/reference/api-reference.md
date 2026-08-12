@@ -1,6 +1,6 @@
 # @stepd/server HTTP API 레퍼런스
 
-> 실측: **2026-08-08 · 라우트 118개** · `apps/server/src/index.ts` 기준 — 라우트 추가 시 이 문서도 갱신.
+> 실측: **2026-08-12 · 라우트 204개** (GET 85 · POST 81 · DELETE 22 · PATCH 13 · PUT 3) · `apps/server/src/index.ts` 기준 — 라우트 추가 시 이 문서도 갱신.
 > 프론트 대응 함수는 `apps/web/src/lib/data/api.ts` 기준. 데이터 구조는 [data-model.md](data-model.md),
 > 큐·워커 동작은 [../ops/worker-queue.md](../ops/worker-queue.md) 참고.
 
@@ -10,9 +10,17 @@
   **썸네일 레퍼런스/스타일** · 추천/클립/배포 · YouTube OAuth/채널/분석 · **Meta·TikTok OAuth** ·
   큐/파이프라인 · admin(운영·진단·파괴적) · Lab 검수 · Lab `match.*`.
 - 모든 라우트는 `apps/server/src/index.ts` 한 파일에 등록된다 (작업 규칙: 분리 금지).
-- `/api/*`에 CORS 허용 (origin 반사, credentials 없음). 대부분 라우트 자체 인증은 없고,
-  프로덕션 접근 제어는 인프라 레벨(Cloud Run) 몫이다. 예외로 Lab 매칭 쓰기(`POST/DELETE /api/lab/match*`)는
-  `LAB_WRITE_TOKEN`과 `x-lab-token` 헤더를 요구한다.
+- `/api/*`에 CORS 허용 (origin 반사, credentials 없음).
+- **인증 (2026-08-12 갱신 — 이전 판의 "라우트 자체 인증은 없다" 는 낡은 서술이었다).**
+  모든 요청은 `resolveTenant` 를 지나며 세 경로 중 하나로 해석된다:
+  ① `Authorization: Bearer <API 키>` → 그 키의 회사 + **라우트 화이트리스트**(`api-keys.ts`)
+  ② 세션 쿠키(`stepd_session`) → 그 사용자의 회사
+  ③ 인증 없음 → **`AUTH_REQUIRED` 가 켜져 있으면 401**, 꺼져 있으면 기본 테넌트로 폴백
+  프로덕션은 `AUTH_REQUIRED=1` 이다. 그 위에 Postgres **RLS** 가 테넌트 격리를 강제하고,
+  발행은 운영 역할(`canPublish`), 파괴적 어드민 라우트는 `requireOpsAccess` 를 요구한다.
+  ⚠️ 보안 서술이 실제보다 느슨하게 적히면 사람이 그걸 믿고 라우트를 연다 —
+  `docs-drift.test.ts` 가 이 문단의 존재를 검사한다.
+  Lab 매칭 쓰기(`POST/DELETE /api/lab/match*`)는 추가로 `LAB_WRITE_TOKEN`·`x-lab-token` 을 요구한다.
 - 프론트의 `API_BASE`는 `NEXT_PUBLIC_API_URL`(없으면 `/api`). 스트림·썸네일 URL은
   `mediaUrl()` 헬퍼가 `API_BASE`를 붙여 조립한다.
 - DB 초기화는 서버 기동과 비동기 — 기동 직후에는 `/health`의 `ok`가 `false`일 수 있다.
