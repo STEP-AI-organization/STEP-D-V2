@@ -63,7 +63,7 @@
    (어느 구간을 정답으로 볼지만 정해지면 순위는 측정 가능하니까)
 2. `confirmed` — 사람이 영상을 보고 경계를 확정한다. 이때부터 경계 오차가 의미를 갖는다
 
-`core.eval_search`는 draft를 **경계 오차 집계에서만 제외**하고 hit 판정에는 쓴다. 요약 출력에
+`core.evaluate.eval_search`는 draft를 **경계 오차 집계에서만 제외**하고 hit 판정에는 쓴다. 요약 출력에
 `gold 초안 N건` 경고가 뜨면 아직 1단계다.
 
 ---
@@ -199,7 +199,7 @@ SELECT delta_start, delta_end, clip_id FROM search_events
 
 ```bash
 # 서버가 떠 있어야 한다 (검색은 apps/server 가 판정한다 — core/search.py 는 오프라인 참조 구현)
-python -m core.eval_search \
+python -m core.evaluate.eval_search \
   --api http://localhost:8080/api \
   --evalset docs/research/data/search-evalset.jsonl \
   --out tmp/search-eval-$(date +%Y%m%d).json

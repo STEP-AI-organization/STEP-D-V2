@@ -19,7 +19,7 @@ from google.genai import types
 REF_DIR = pathlib.Path(__file__).resolve().parents[1] / "assets" / "thumbnail-reference"
 MANIFEST = REF_DIR / "manifest.json"
 try:
-    from core.models import TEXT as MODEL
+    from core.common.models import TEXT as MODEL
 except ImportError:
     MODEL = "gemini-3.1-flash"
 LOCATION = "asia-northeast3"

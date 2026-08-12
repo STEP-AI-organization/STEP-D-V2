@@ -355,10 +355,10 @@ python scratchpad/learn_haha_shorts.py
 python scratchpad/phase3_crosschannel_ab.py
 
 # IoU 반복 A/B (5회 평균)
-python -m core.eval_repeat --runs 5 --holdout <id>=<scenes.json> --truth <truth.json>
+python -m core.evaluate.eval_repeat --runs 5 --holdout <id>=<scenes.json> --truth <truth.json>
 
 # Topic 3조건 A/B
-python -m core.eval_topic_ab --runs 2 --holdout <id>=<scenes.json> --truth <truth.json> --profile <base> --profile-b <examples>
+python -m core.evaluate.eval_topic_ab --runs 2 --holdout <id>=<scenes.json> --truth <truth.json> --profile <base> --profile-b <examples>
 ```
 
 ---

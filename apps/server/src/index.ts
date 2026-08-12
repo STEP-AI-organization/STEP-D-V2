@@ -1682,7 +1682,7 @@ app.post("/api/programs/:id/autofill", async (c) => {
   const cwd = REPO_ROOT;
 
   const result: unknown = await new Promise((resolve, reject) => {
-    const proc = spawn(CORE_PYTHON, ["-X", "utf8", "-m", "core.autofill_program", "--mode", "questions", title], {
+    const proc = spawn(CORE_PYTHON, ["-X", "utf8", "-m", "core.common.autofill_program", "--mode", "questions", title], {
       cwd, env: process.env, stdio: ["ignore", "pipe", "pipe"],
     });
     let out = "", err = "";
@@ -1733,7 +1733,7 @@ app.post("/api/programs/:id/autofill/chat", async (c) => {
 
   const result: unknown = await new Promise((resolve, reject) => {
     const args = [
-      "-X", "utf8", "-m", "core.autofill_program",
+      "-X", "utf8", "-m", "core.common.autofill_program",
       "--mode", "chat", title,
       "--history", JSON.stringify(history),
       "--draft", JSON.stringify(draft),

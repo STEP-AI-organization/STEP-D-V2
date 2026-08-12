@@ -18,8 +18,8 @@ import mimetypes
 import pathlib
 from typing import Optional
 
-from ..models import IMAGE_PRO as MODEL
-from ..openai_client import edit as openai_edit
+from core.common.models import IMAGE_PRO as MODEL
+from core.common.openai_client import edit as openai_edit
 
 
 def _mime(p: pathlib.Path) -> str:

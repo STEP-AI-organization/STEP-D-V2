@@ -452,7 +452,7 @@
 
 - **대상**: 드나드나 (드라마·허수아비 시리즈) — 하하(꽐라예능)·ENA(연애리얼리티)와 또 다른 장르.
 - **표본**: 롱폼 7편(리텐션 有 · 조회수순) · 매칭 후보 shorts 30편(조회수순). 전 과정 D:/STEPD-experiments 로컬.
-- **파이프라인**: yt-dlp 다운로드 → `core.analyze --fast` 로컬 실행(Gemini 2.5 flash, vertex asia-northeast3) → `core.align` 로컬 매칭 → 리텐션 read-only 조회 → v2 5신호 필터.
+- **파이프라인**: yt-dlp 다운로드 → `core.analyze --fast` 로컬 실행(Gemini 2.5 flash, vertex asia-northeast3) → `core.stt.align` 로컬 매칭 → 리텐션 read-only 조회 → v2 5신호 필터.
 - **매칭 결과 (예상 밖)**: 210 조합 중 **0 매칭**. 30 상위 shorts는 우리 7 상위 longs와 다른 롱폼에서 잘려나옴 (score 최고 0.58, 임계 0.80 훨씬 미달 → align.py의 negative 대조군 범위 0.40~0.60에 부합).
   → 드나드나 shorts↔longs 매칭이 콘텐츠적으로 sparse. 상위 조회수 shorts와 리텐션 있는 상위 longs가 다른 콘텐츠 계열임.
 - **필터 적용 (정직한 처리)**: **IoU truth 없음 → IoU=0 auto-pass**. 나머지 4신호(리텐션·길이·밀도·훅) 실측으로만 판정. 결과 winners는 "편집자 미발견 확정" 아니고 "실측 4신호 통과 히든젬 후보"로 해석.

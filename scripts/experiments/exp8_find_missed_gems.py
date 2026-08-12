@@ -23,7 +23,7 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.stdout.reconfigure(encoding="utf-8") if hasattr(sys.stdout, "reconfigure") else None
 
-from core.recommend import recommend  # type: ignore
+from core.recommend.recommend import recommend  # type: ignore
 from google import genai  # type: ignore
 from google.genai import types  # type: ignore
 

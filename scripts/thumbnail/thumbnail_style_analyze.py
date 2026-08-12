@@ -16,7 +16,7 @@ from google import genai
 from google.genai import types
 
 try:
-    from core.models import TEXT as MODEL
+    from core.common.models import TEXT as MODEL
 except ImportError:
     MODEL = "gemini-3.1-flash"
 LOCATION = "asia-northeast3"

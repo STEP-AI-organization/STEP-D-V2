@@ -725,13 +725,13 @@ interface AlignOut {
 }
 
 /**
- * 숏폼들을 한 번의 호출로 정렬한다 — core.align이 롱폼 특징을 한 번만 계산하도록.
+ * 숏폼들을 한 번의 호출로 정렬한다 — core.stt.align 이 롱폼 특징을 한 번만 계산하도록.
  * 숏폼마다 호출하면 61분 롱폼을 매번 다시 디코딩해 16개에 20분을 넘긴다.
  * 반환은 입력 순서와 1:1.
  */
 function runAlign(longPath: string, shortPaths: string[]): Promise<AlignOut[]> {
   return new Promise((resolve, reject) => {
-    const proc = spawn(CORE_PYTHON_BIN, ["-m", "core.align", longPath, ...shortPaths], {
+    const proc = spawn(CORE_PYTHON_BIN, ["-m", "core.stt.align", longPath, ...shortPaths], {
       cwd: CORE_REPO_ROOT,
       env: { ...process.env, PYTHONPATH: "", PYTHONIOENCODING: "utf-8", PYTHONUTF8: "1" },
       stdio: ["ignore", "pipe", "pipe"],
@@ -742,12 +742,12 @@ function runAlign(longPath: string, shortPaths: string[]): Promise<AlignOut[]> {
     proc.stderr.on("data", (d) => (errText += String(d)));
     proc.on("error", reject);
     proc.on("close", (code) => {
-      if (code !== 0) return reject(new Error(`core.align exited ${code}: ${errText.slice(-300)}`));
+      if (code !== 0) return reject(new Error(`core.stt.align exited ${code}: ${errText.slice(-300)}`));
       try {
         const lines = out.trim().split("\n").filter((l) => l.trim().startsWith("{"));
         resolve(lines.map((l) => JSON.parse(l) as AlignOut));
       } catch (e) {
-        reject(new Error(`core.align 출력 파싱 실패: ${String(e)} / ${out.slice(-200)}`));
+        reject(new Error(`core.stt.align 출력 파싱 실패: ${String(e)} / ${out.slice(-200)}`));
       }
     });
   });
@@ -1034,7 +1034,7 @@ interface SegmentOut {
 /** 롱폼 1편 + 구간 여러 개 → 구간별 설명 (파이썬 1회 스폰). */
 function runSegment(longVideoId: string, spans: { id: string; start: number; end: number }[]): Promise<SegmentOut[]> {
   return new Promise((resolve, reject) => {
-    const proc = spawn(CORE_PYTHON_BIN, ["-m", "core.segment", ytAudioUrl(longVideoId), "-"], {
+    const proc = spawn(CORE_PYTHON_BIN, ["-m", "core.scenes.segment", ytAudioUrl(longVideoId), "-"], {
       cwd: CORE_REPO_ROOT,
       env: { ...process.env, PYTHONPATH: "", PYTHONIOENCODING: "utf-8", PYTHONUTF8: "1" },
       stdio: ["pipe", "pipe", "pipe"],
@@ -1045,7 +1045,7 @@ function runSegment(longVideoId: string, spans: { id: string; start: number; end
     proc.stderr.on("data", (d) => (errText += String(d)));
     proc.on("error", reject);
     proc.on("close", (code) => {
-      if (code !== 0) return reject(new Error(`core.segment exited ${code}: ${errText.slice(-300)}`));
+      if (code !== 0) return reject(new Error(`core.scenes.segment exited ${code}: ${errText.slice(-300)}`));
       try {
         resolve(
           out.trim().split("\n")
@@ -1053,7 +1053,7 @@ function runSegment(longVideoId: string, spans: { id: string; start: number; end
             .map((l) => JSON.parse(l) as SegmentOut),
         );
       } catch (e) {
-        reject(new Error(`core.segment 출력 파싱 실패: ${String(e)} / ${out.slice(-200)}`));
+        reject(new Error(`core.scenes.segment 출력 파싱 실패: ${String(e)} / ${out.slice(-200)}`));
       }
     });
     proc.stdin.write(JSON.stringify(spans));
@@ -1114,17 +1114,17 @@ async function handleMatchSegment(job: Job): Promise<void> {
 
 // ── match.learn — 채널 매칭 데이터에서 고성과 규칙을 학습 ──────────────────────────
 //
-// 자동화의 마지막 단계: 매칭·구간설명이 채워진 채널에서 core.learn_profile로 규칙을 뽑아
+// 자동화의 마지막 단계: 매칭·구간설명이 채워진 채널에서 core.recommend.learn_profile 로 규칙을 뽑아
 // youtube_channels.pointProfile에 저장한다. 이후 그 채널 영상을 분석하면 content-pipeline이
 // 이 프로파일을 --profile로 넘겨 recommend가 채널에 맞는 후보를 고른다(기존 스티어링 배선).
 //
 // 미설명 구간이 남아 있으면 match.segment를 먼저 돌리고 재큐한다 — 설명 없이 학습하면
 // 표본이 얇아 규칙이 부실하다.
 
-/** LEARN 데이터셋(export)을 만들어 core.learn_profile에 넘기고 결과를 받는다. */
+/** LEARN 데이터셋(export)을 만들어 core.recommend.learn_profile 에 넘기고 결과를 받는다. */
 function runLearn(channelId: string, exportJson: string): Promise<{ profile: unknown; text: string }> {
   return new Promise((resolve, reject) => {
-    const proc = spawn(CORE_PYTHON_BIN, ["-m", "core.learn_profile", "-"], {
+    const proc = spawn(CORE_PYTHON_BIN, ["-m", "core.recommend.learn_profile", "-"], {
       cwd: CORE_REPO_ROOT,
       env: { ...process.env, PYTHONPATH: "", PYTHONIOENCODING: "utf-8", PYTHONUTF8: "1" },
       stdio: ["pipe", "pipe", "pipe"],
@@ -1135,7 +1135,7 @@ function runLearn(channelId: string, exportJson: string): Promise<{ profile: unk
     proc.stderr.on("data", (d) => (err += String(d)));
     proc.on("error", reject);
     proc.on("close", (code) => {
-      if (code !== 0) return reject(new Error(`core.learn_profile exited ${code}: ${err.slice(-300)}`));
+      if (code !== 0) return reject(new Error(`core.recommend.learn_profile exited ${code}: ${err.slice(-300)}`));
       try {
         resolve({ profile: JSON.parse(out), text: out });
       } catch (e) {

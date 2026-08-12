@@ -41,7 +41,7 @@ def _resolve_ref_dir() -> pathlib.Path:
     return pathlib.Path(__file__).resolve().parents[2] / "assets" / "thumbnail-reference"
 
 REF_DIR = _resolve_ref_dir()
-from ..models import TEXT as MODEL
+from core.common.models import TEXT as MODEL
 LOCATION = "asia-northeast3"
 
 

@@ -51,7 +51,7 @@ SYSTEM = """너는 한국 방송사 유튜브 썸네일 아트디렉터다.
 def analyze_one(client, model, img_bytes: bytes) -> dict | None:
     from google.genai import types
 
-    from core.retry import call_with_retry
+    from core.common.retry import call_with_retry
     try:
         resp = call_with_retry(lambda: client.models.generate_content(
             model=model,
@@ -133,7 +133,7 @@ def main() -> int:
 
     from google import genai
 
-    from core.models import VISION
+    from core.common.models import VISION
 
     out_dir = STYLE_ROOT / args.program
     thumbs = sorted((out_dir / "thumbs").glob("*.jpg"))

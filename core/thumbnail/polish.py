@@ -101,8 +101,8 @@ def polish(
     """결정론 판 → 마감본. 얼굴은 마스크로 잠근 채 나머지만 다시 그린다."""
     from PIL import Image
 
-    from core.models import IMAGE_PRO
-    from core.openai_client import edit as openai_edit
+    from core.common.models import IMAGE_PRO
+    from core.common.openai_client import edit as openai_edit
 
     plate = Image.open(plate_path)
     boxes = face_boxes if face_boxes is not None else detect_faces_in(plate_path)

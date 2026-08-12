@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from core.models import IMAGE_PRO
+from core.common.models import IMAGE_PRO
 from core.thumbnail.structure import StructureTemplate
 
 # ── 공통 본문 ─────────────────────────────────────────────────────────────────
@@ -260,7 +260,7 @@ def compose(
     이미지 순서가 곧 프롬프트의 Image 번호다 — 바꾸지 말 것.
     """
     # 지연 import: 프롬프트 조립만 할 때는 OpenAI SDK 가 없어도 된다.
-    from core.openai_client import edit as openai_edit
+    from core.common.openai_client import edit as openai_edit
 
     prompt = build_compose_prompt(
         summary=summary,

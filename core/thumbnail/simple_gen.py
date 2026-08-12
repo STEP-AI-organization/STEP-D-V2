@@ -101,8 +101,8 @@ def generate(
     size: str = "1536x1024",
 ) -> list[bytes]:
     """썸네일 후보 n장. 실패한 호출은 결과에서 빠진다."""
-    from core.models import IMAGE_PRO
-    from core.openai_client import edit as openai_edit
+    from core.common.models import IMAGE_PRO
+    from core.common.openai_client import edit as openai_edit
 
     style_block, style_refs = load_style(program_title)
 

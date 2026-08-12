@@ -102,9 +102,9 @@ for i, l in enumerate(longs_meta, 1):
     print(f"    → {r}", flush=True)
 
 # === STAGE 3: 로컬 매칭 ===
-print(f"\n=== STAGE 3: 로컬 매칭 (core.align) ===")
+print(f"\n=== STAGE 3: 로컬 매칭 (core.stt.align) ===")
 sys.path.insert(0, str(Path(r"C:\Users\STEPAI05\STEPD-repo")))
-from core.align import align_many, MIN_SCORE, MIN_PEAK_RATIO
+from core.stt.align import align_many, MIN_SCORE, MIN_PEAK_RATIO
 
 longs = [l["videoid"] for l in longs_meta if (LONGS_DIR / f"{l['videoid']}.m4a").exists()]
 shorts = [s["videoid"] for s in shorts_meta if (SHORTS_DIR / f"{s['videoid']}.m4a").exists()]

@@ -15,7 +15,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 sys.stdout.reconfigure(encoding="utf-8")
 
-from core.align import align_many, MIN_SCORE, MIN_PEAK_RATIO
+from core.stt.align import align_many, MIN_SCORE, MIN_PEAK_RATIO
 
 LONG_DIR = Path("D:/STEPD-experiments/ena_longs_audio")
 SHORT_DIR = Path("D:/STEPD-experiments/ena_shorts_audio")

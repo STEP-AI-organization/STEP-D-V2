@@ -8,7 +8,7 @@
  * — 필터 먼저 좁히고 벡터로 랭킹한다. 60분 1편 ≈ 세그먼트 수백 개라 pgvector로 충분.
  *
  * 벡터는 세그먼트당 2개(emb_dialogue·emb_summary): 하나만 두면 대사·장소·감정이 뭉개진다.
- * 차원 768 = core.embed DIM (text-multilingual-embedding-002 기본) 과 일치해야 한다.
+ * 차원 768 = core.search.embed DIM (text-multilingual-embedding-002 기본) 과 일치해야 한다.
  * 하이브리드 랭킹의 키워드 축은 pg_trgm(언어무관 부분일치 — 한국어에 robust)로 잡는다.
  *
  * rights(출연자·음원·PPL·스포일러)·scope(기수/시즌)는 아직 파이프라인 신호 전이라 대부분
@@ -58,7 +58,7 @@ exports.up = (pgm) => {
       search_text     TEXT GENERATED ALWAYS AS (
                         coalesce(dialogue,'') || ' ' || coalesce(chyron,'') || ' ' || coalesce(summary,'')
                       ) STORED,
-      -- 벡터 (768 = core.embed DIM)
+      -- 벡터 (768 = core.search.embed DIM)
       emb_dialogue    vector(768),
       emb_summary     vector(768),
       created_at      TIMESTAMPTZ NOT NULL DEFAULT now()

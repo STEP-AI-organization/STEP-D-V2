@@ -374,7 +374,7 @@ def main(argv: list[str]) -> int:
     a = ap.parse_args(argv)
 
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
-    from core.boundaries import load_boundaries, dedup_boundaries
+    from core.scenes.boundaries import load_boundaries, dedup_boundaries
 
     dur, fps = probe(a.video)
     bs = dedup_boundaries(load_boundaries(a.boundaries), duration=dur or 1e9)

@@ -11,8 +11,8 @@ from __future__ import annotations
 import pathlib
 from typing import Optional
 
-from ..models import IMAGE_FLASH as MODEL
-from ..openai_client import edit as openai_edit
+from core.common.models import IMAGE_FLASH as MODEL
+from core.common.openai_client import edit as openai_edit
 
 
 def generate_thumbnail(

@@ -8,7 +8,7 @@ import sys, os, json, time
 os.environ.setdefault("STT_PROVIDER", "whisperx")
 sys.path.insert(0, os.getcwd())
 
-from core.asr import transcribe
+from core.stt.asr import transcribe
 
 if len(sys.argv) < 2:
     print("usage: test_whisperx.py <path> [expected_speakers]")

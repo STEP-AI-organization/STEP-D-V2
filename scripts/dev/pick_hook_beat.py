@@ -21,8 +21,8 @@ sys.path.insert(0, str(ROOT))
 
 from google import genai
 from google.genai import types
-from core.retry import call_with_retry
-from core.models import RECOMMEND as MODEL
+from core.common.retry import call_with_retry
+from core.common.models import RECOMMEND as MODEL
 
 PROJECT = "step-d"
 LOCATION = "asia-northeast3"

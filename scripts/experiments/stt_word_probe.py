@@ -17,7 +17,7 @@ os.environ.setdefault("STT_PROVIDER", "hybrid")
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from core.asr import transcribe  # noqa: E402
+from core.stt.asr import transcribe  # noqa: E402
 
 
 def probe_fps(path: str) -> float:

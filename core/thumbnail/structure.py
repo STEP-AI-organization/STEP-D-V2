@@ -18,7 +18,7 @@ import json
 import pathlib
 from typing import Any, Literal, Optional, TypedDict
 
-from core.models import IMAGE_PRO
+from core.common.models import IMAGE_PRO
 
 STRUCTURE_DIR = pathlib.Path(__file__).resolve().parents[2] / "assets" / "thumbnail-structure"
 REGISTRY = STRUCTURE_DIR / "registry.json"
@@ -164,7 +164,7 @@ def extract_structure_image(
 ) -> Optional[bytes]:
     """완성 썸네일 1장 → 구조 청사진 이미지. 실패 시 None."""
     # 지연 import: 프롬프트 조립·스키마 검증은 OpenAI SDK 없이도 돼야 한다.
-    from core.openai_client import edit as openai_edit
+    from core.common.openai_client import edit as openai_edit
 
     return openai_edit(
         images=[source],

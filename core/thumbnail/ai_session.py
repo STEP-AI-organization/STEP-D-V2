@@ -23,7 +23,7 @@ from . import generator as Generator
 from . import compositor as Compositor
 
 
-from ..models import TEXT as MODEL
+from core.common.models import TEXT as MODEL
 DEFAULT_LOCATION = "us-central1"
 MAX_RETRIES = 2
 

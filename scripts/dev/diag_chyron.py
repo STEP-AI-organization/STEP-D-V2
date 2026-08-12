@@ -9,7 +9,7 @@ from google.genai import types
 
 PROJECT = os.environ.get("GOOGLE_CLOUD_PROJECT") or "step-d"
 LOCATION = os.environ.get("VERTEX_LOCATION") or "asia-northeast3"
-from core.models import NAMES as MODEL
+from core.common.models import NAMES as MODEL
 
 frame = sys.argv[1] if len(sys.argv) > 1 else "tmp/gebd/late_frames/f_60s.jpg"
 data = Path(frame).read_bytes()
@@ -17,7 +17,7 @@ data = Path(frame).read_bytes()
 client = genai.Client(vertexai=True, project=PROJECT, location=LOCATION)
 
 # Test 1: 우리 실제 프롬프트 + schema
-from core.chyron_scan import PROMPT, SCHEMA
+from core.scenes.chyron_scan import PROMPT, SCHEMA
 config1 = types.GenerateContentConfig(
     temperature=0,
     response_mime_type="application/json",

@@ -78,7 +78,7 @@ def scenes_to_transcript(scenes):
 
 
 # ── recommend 실행 ──
-from core.recommend import recommend
+from core.recommend.recommend import recommend
 
 results = {}  # lid → {off: [picks], on: [picks], viewer_signals: {...}}
 for lid, (scenes_f, coarse_f) in HOLDOUT_MAP.items():

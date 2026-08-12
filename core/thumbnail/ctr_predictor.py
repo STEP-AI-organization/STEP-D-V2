@@ -14,7 +14,7 @@ from typing import Optional, Sequence
 from google import genai
 from google.genai import types
 
-from ..models import TEXT as MODEL  # text 모델 · Vision 지원
+from core.common.models import TEXT as MODEL  # text 모델 · Vision 지원
 LOCATION = "asia-northeast3"      # text 는 asia OK
 BENCHMARK_ROOT = pathlib.Path(__file__).resolve().parents[2] / "assets" / "thumbnail-benchmark"
 

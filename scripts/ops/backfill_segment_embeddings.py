@@ -46,7 +46,7 @@ def main() -> int:
 
     load_env(ROOT / "apps" / "server" / ".env")
     import psycopg2
-    from core.embed import embed_texts
+    from core.search.embed import embed_texts
 
     conn = psycopg2.connect(os.environ["DATABASE_URL"])
     cur = conn.cursor()

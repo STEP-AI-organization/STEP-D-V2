@@ -69,3 +69,16 @@ STEP-D_일정표*.xlsx
 *.safetensors
 *.tar
 /models/
+
+# core/ 실행 산출물 — 파이프라인이 작업 디렉토리에 쓰는 중간 결과다.
+# 리포에 커밋되면 "코드인지 결과인지" 구분이 안 돼 core/ 가 정체불명이 된다.
+# (2026-08-12: cast.json·timeline.json 이 실제로 커밋돼 있었다.)
+core/cast.json
+core/timeline.json
+core/scenes.json
+core/shorts.json
+core/pipeline_output.json
+core/refined_segments.json
+core/refined_transcript.srt
+core/scene_frames/
+core/clips_review/

@@ -17,7 +17,7 @@ import time
 from pathlib import Path
 from typing import Callable
 
-from .analyze_utils import save_json, load_json, progress
+from core.analyze_utils import save_json, load_json, progress
 
 
 # ── STT / refine / chyron / speaker_postproc ─────────────────────────────────
@@ -34,7 +34,7 @@ def run_stt(
 ) -> tuple[dict, list]:
     """관리형 STT (Soniox/Gemini/whisper). 반환: (stt_dict, segments_list).
     cast_registry 크기를 화자분리 KMeans 힌트로 사용 (실측 정확도↑)."""
-    from .asr import transcribe, get_segments
+    from core.stt.asr import transcribe, get_segments
 
     progress("stt", 3, "음성 인식 준비")
     ts = time.time()
@@ -70,7 +70,7 @@ def run_refine(
     """자막 정제. 2026-07-31 축소 — STT_PROVIDER=soniox 일 땐 default skip (정확도 up 이라
     Gemini refine 대부분 불필요). RUN_REFINE=on 명시하면 강제 실행. 반환: refined 세그 리스트."""
     import os
-    from .refine import refine_segments
+    from core.stt.refine import refine_segments
 
     ts = time.time()
     refined = load_json(out_dir / "refined.json")
@@ -109,7 +109,7 @@ def run_chyron_per_seg(
         return refined
     ts = time.time()
     try:
-        from .chyron_scan import scan_per_seg
+        from core.scenes.chyron_scan import scan_per_seg
         progress("chyron", 38, "화면 이름 태그 세그별 스캔")
         step("chyron per-seg (화면 이름 태그 → speaker 실명 rewrite)…")
         # roster = 프로그램 cast 사전등록 이름 **+ aliases**. 있으면 1회 등장이라도 실명으로
@@ -181,7 +181,7 @@ def run_detect_genre(
     resolved = genre
     try:
         from google import genai
-        from .recommend import detect_genre, PROJECT, LOCATION
+        from core.recommend.recommend import detect_genre, PROJECT, LOCATION
         progress("genre", 39, "장르 자동 감지")
         client = genai.Client(vertexai=True, project=PROJECT, location=LOCATION)
         resolved = detect_genre(client, refined)
@@ -207,7 +207,7 @@ def run_speaker_postproc(
         return refined
     ts = time.time()
     try:
-        from .speaker_postproc import postprocess as _sp_postproc
+        from core.stt.speaker_postproc import postprocess as _sp_postproc
         refined, pp_stats = _sp_postproc(refined)
         step(f"  speaker 후처리 (짧은 흡수·empty 계승·접속사): {pp_stats}")
         save_json(out_dir / "refined.json", refined)
@@ -236,8 +236,8 @@ def run_fast_mode(
 ) -> dict:
     """--fast 경로. 자막 세그먼트만으로 shorts 추천. 시각 분석·서사·비전 스킵 · 긴 영상
     분석 시간의 최대 74% 절감. 대사 기반 콘텐츠에 적합. analyze() 가 fast=True 일 때만 호출."""
-    from .scenes import scenes_from_transcript
-    from .recommend import recommend
+    from core.scenes.scenes import scenes_from_transcript
+    from core.recommend.recommend import recommend
 
     step("빠른 모드 — 자막 세그먼트로 추천 (시각 분석 스킵)")
     scenes = scenes_from_transcript(segments)
@@ -287,7 +287,7 @@ def load_viewer_signals(
         step(f"시청자 신호 — 체크포인트 재사용 (moments {len(vs.get('top_moments') or [])})")
     else:
         try:
-            from .comment_signal import build_viewer_signals
+            from core.recommend.comment_signal import build_viewer_signals
             comments = load_json(viewer_signals_path) or []
             dur = float(segments[-1].get("end") or 0) if segments else None
             step(f"시청자 신호 생성 (댓글 {len(comments)}개)…")
@@ -320,7 +320,7 @@ def index_search_segments(
     content-pipeline 이 pgvector(search_segments)에 적재. best-effort — 실패해도 분석 결과는
     성립(검색만 비게 됨). 임베딩 실패는 embed 내부에서 None 처리."""
     try:
-        from .index_segments import build_segments
+        from core.search.index_segments import build_segments
         _existing = load_json(out_dir / "segments.json")
         _has_emb = isinstance(_existing, dict) and any(
             s.get("emb_dialogue") for s in (_existing.get("segments") or []))
@@ -389,7 +389,7 @@ def run_scenes(
     timed: Callable[[str, float], None],
 ) -> list:
     """장르별 5분 청크 (variety 180s · drama 300s). 반환: scenes list."""
-    from .scenes import scenes_from_duration_chunks
+    from core.scenes.scenes import scenes_from_duration_chunks
 
     ts = time.time()
     scenes = load_json(out_dir / "scenes.json")
@@ -422,14 +422,14 @@ def run_cast_timeline(
         timed("cast", ts)
         return cast
     try:
-        from .cast import build_cast_timeline
+        from core.vision.cast import build_cast_timeline
         progress("cast", 55, "출연자 타임라인 구성")
         cast = build_cast_timeline(scenes, cast_registry or [])
         step(f"  캐스트 확정 {cast.get('matchedCount', 0)}명 · 후보 {cast.get('candidateCount', 0)}명")
         save_json(out_dir / "cast.json", cast)
         if isinstance(cast, dict) and cast.get("people"):
             try:
-                from .portraits import build_portraits
+                from core.vision.portraits import build_portraits
                 progress("cast", 65, "출연진 포트레이트 생성")
                 cast = build_portraits(
                     cast, scenes, out_dir,
@@ -462,7 +462,7 @@ def run_timeline(
         step(f"타임라인 — 체크포인트 재사용 ({len(timeline['blocks'])} 블록)")
     else:
         try:
-            from .timeline import build_timeline
+            from core.scenes.timeline import build_timeline
             progress("timeline", 76, "구간 요약 생성")
             timeline = build_timeline(
                 scenes,
@@ -491,7 +491,7 @@ def run_narrative(
     timed: Callable[[str, float], None],
 ) -> dict | None:
     """서사 요약 · 구간별 · 인물 · 갈등. 반환: narrative dict 또는 None."""
-    from .narrative import build_narrative
+    from core.beats.narrative import build_narrative
 
     ts = time.time()
     narrative = load_json(out_dir / "narrative.json")
@@ -532,7 +532,7 @@ def run_shot_boundary(
 ) -> dict:
     """프레임 diff 기반 shot boundary detection. narrative.segments 창만 스캔.
     반환: {"shots": [...], "windows": N, "threshold": T, "fps": 1, "genre": g}"""
-    from .shots import detect_shots
+    from core.scenes.shots import detect_shots
 
     ts = time.time()
     shots_data = load_json(out_dir / "shots.json")
@@ -560,7 +560,7 @@ def run_shot_boundary(
             pass
     try:
         shots_list = detect_shots(str(video_path), windows, fps=1, genre=genre) if windows else []
-        from .shots import _SHOT_THRESHOLD_BY_GENRE, _DEFAULT_SHOT_THRESHOLD
+        from core.scenes.shots import _SHOT_THRESHOLD_BY_GENRE, _DEFAULT_SHOT_THRESHOLD
         used_th = _SHOT_THRESHOLD_BY_GENRE.get(genre or "", _DEFAULT_SHOT_THRESHOLD)
         # windows_sec = **실제 스캔한 구간**. 이게 없으면 스캔 밖 구간의 "컷 0개"를
         # "컷 없음"으로 오독하게 된다(core.signals 의 cut_rate 가 거짓 0이 됨).
@@ -592,7 +592,7 @@ def run_scene_type(
     timed: Callable[[str, float], None],
 ) -> dict:
     """shot 대표 프레임 → Gemini Vision batch → interview/on_scene/other 분류."""
-    from .scene_type import classify_shot_types
+    from core.scenes.scene_type import classify_shot_types
 
     ts = time.time()
     scene_type_data = load_json(out_dir / "scene_type.json")
@@ -631,8 +631,8 @@ def run_beats(
     timed: Callable[[str, float], None],
 ) -> dict:
     """GEBD boundary (있으면) · 없으면 shots+STT gap fallback → beats."""
-    from .beats import build_beats_from_boundaries
-    from .boundaries import load_boundaries, dedup_boundaries, build_fallback_boundaries, save_boundaries, merge_boundaries
+    from core.beats.beats import build_beats_from_boundaries
+    from core.scenes.boundaries import load_boundaries, dedup_boundaries, build_fallback_boundaries, save_boundaries, merge_boundaries
 
     ts = time.time()
     beats_data = load_json(out_dir / "beats.json")
@@ -728,7 +728,7 @@ def run_beat_signals(
         step(f"beat signals — 체크포인트 재사용 ({len(sig['signals'])}개)")
     else:
         try:
-            from .signals import beat_signals
+            from core.recommend.signals import beat_signals
             progress("signals", 86, "저수준 신호(오디오·컷·대사)")
             sig = beat_signals(
                 str(video_path), beats_list, refined,
@@ -769,7 +769,7 @@ def run_beat_annot(
 ) -> dict:
     """각 beat 프레임 3장 + STT + program_context → Gemini → title/summary/characters."""
     import os
-    from .beat_annot import annotate_beats
+    from core.beats.beat_annot import annotate_beats
 
     ts = time.time()
     beats_list = (beats_data or {}).get("beats") or []
@@ -905,7 +905,7 @@ def run_recommend(
     """두 파이프라인 스위칭 (RECOMMEND_MODE=narrative_first default · chunk_scan fallback).
     반환: {"shorts": [...], "genre": ...}"""
     import os
-    from .recommend import recommend, recommend_narrative_first
+    from core.recommend.recommend import recommend, recommend_narrative_first
 
     ts = time.time()
     rec = load_json(out_dir / "shorts.json")
@@ -950,7 +950,7 @@ def dump_usage(*, out_dir: Path, step: Callable[[str], None]) -> None:
     """Gemini usage 실측 dump — 회당 실비 관측 (2026-08-06). retry.py 가 hook 해서 누적.
     호출은 analyze() 마지막에서 한 번."""
     try:
-        from .retry import usage_summary
+        from core.common.retry import usage_summary
         u = usage_summary()
         step(f"[usage] calls={u['calls']} · in={u['in_tokens']:,} out={u['out_tokens']:,} "
              f"토큰 · 대략 ₩{u['est_krw']:.0f}")

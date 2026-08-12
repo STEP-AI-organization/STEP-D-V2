@@ -18,7 +18,7 @@ from google.genai import types
 from .presets import PRESETS, prompt_summary as presets_prompt_summary, get_preset
 from .templates import TEMPLATES, list_templates_summary, collect_all_slot_ids
 
-from ..models import TEXT as MODEL
+from core.common.models import TEXT as MODEL
 DEFAULT_LOCATION = "us-central1"
 
 SYSTEM_INSTRUCTION = """너는 한국 방송사 편집팀의 썸네일 **기획자(Planner)**다.

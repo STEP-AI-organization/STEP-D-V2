@@ -98,11 +98,11 @@ core/.venv310/Scripts/python -m core.analyze core/영상.mp4 --out core
 단계별 단독 실행(각 모듈이 CLI를 가짐 — `asr.py`는 라이브러리 전용, 단독 CLI 없음):
 
 ```powershell
-python -m core.refine    core/pipeline_output.json            # → refined_segments.json + refined_transcript.srt
-python -m core.scenes    core/영상.mp4 --transcript core/refined_segments.json [--threshold 27]  # → scenes.json + scene_frames/
-python -m core.vision    core/scenes.json [--limit 10]        # scenes.json에 vision_* 필드 in-place 기록
-python -m core.names     core/scenes.json [--limit 15]        # scenes.json에 on_screen_* 필드 in-place 기록
-python -m core.recommend core/scenes.json [--n 8]             # → shorts.json
+python -m core.stt.refine    core/pipeline_output.json            # → refined_segments.json + refined_transcript.srt
+python -m core.scenes.scenes    core/영상.mp4 --transcript core/refined_segments.json [--threshold 27]  # → scenes.json + scene_frames/
+python -m core.vision.vision    core/scenes.json [--limit 10]        # scenes.json에 vision_* 필드 in-place 기록
+python -m core.stt.names     core/scenes.json [--limit 15]        # scenes.json에 on_screen_* 필드 in-place 기록
+python -m core.recommend.recommend core/scenes.json [--n 8]             # → shorts.json
 ```
 
 - 원시 STT 산출물 `pipeline_output.json`을 쓰던 구 `core.pipeline` 모듈은 **제거됨** — `core/`에 남은 파일은 보존된 샘플 산출물이다.

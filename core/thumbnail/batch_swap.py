@@ -30,7 +30,7 @@ from . import person_compositor as PC
 from .planner import load_shorts_slice
 
 REF_DIR = pathlib.Path(__file__).resolve().parents[2] / "assets" / "thumbnail-reference"
-from ..models import TEXT as MODEL
+from core.common.models import TEXT as MODEL
 LOCATION = "asia-northeast3"
 
 

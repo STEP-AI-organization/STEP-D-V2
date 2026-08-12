@@ -123,7 +123,7 @@ def _fetch_thumb(video_id: str, dest: pathlib.Path) -> bool:
 def _analyze_one(client, model, img_bytes: bytes) -> dict | None:
     from google.genai import types
 
-    from core.retry import call_with_retry
+    from core.common.retry import call_with_retry
     try:
         resp = call_with_retry(lambda: client.models.generate_content(
             model=model,
@@ -193,7 +193,7 @@ def build_profile(program_dir: pathlib.Path, title: str, sample: int = 20) -> di
 
     from google import genai
 
-    from core.models import VISION
+    from core.common.models import VISION
 
     thumbs = sorted((program_dir / "thumbs").glob("*.jpg"))[:sample]
     if not thumbs:

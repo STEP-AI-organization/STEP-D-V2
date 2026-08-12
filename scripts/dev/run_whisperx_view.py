@@ -50,7 +50,7 @@ if not video_dst.exists() or video_dst.stat().st_size != src.stat().st_size:
 print(f"[run] STT_PROVIDER={os.environ.get('STT_PROVIDER')}  HF_TOKEN={'set' if os.environ.get('HF_TOKEN') else 'MISSING'}")
 print(f"[run] src={src} → out={out}  expected={args.expected}")
 
-from core.asr import transcribe
+from core.stt.asr import transcribe
 
 t0 = time.time()
 r = transcribe(str(src), expected_speakers=args.expected)
@@ -62,13 +62,13 @@ print(f"\n[stt+diar] {dt:.1f}s · {len(segs)} 세그 · speakers={speakers}")
 
 # ── PyAnnote rediarize (오픈 표준 · HF_TOKEN 필요) ──
 if args.pyannote_rediarize:
-    from core.speaker_postproc import rediarize_pyannote
+    from core.stt.speaker_postproc import rediarize_pyannote
     segs, re_stats = rediarize_pyannote(str(src), segs, expected_speakers=args.pyannote_expected)
     print(f"[pyannote] rediarize {re_stats}")
 
 # ── PyAnnote embedding + 세그별 클러스터링 (STT 세그 그대로 활용) ──
 if args.pyannote_embedding:
-    from core.speaker_postproc import rediarize_pyannote_embedding
+    from core.stt.speaker_postproc import rediarize_pyannote_embedding
     segs, re_stats = rediarize_pyannote_embedding(
         str(src), segs, expected_speakers=args.pyannote_expected,
         distance_threshold=args.pyemb_threshold,
@@ -77,19 +77,19 @@ if args.pyannote_embedding:
 
 # ── ECAPA rediarize (벤더 결과 버리고 파형 클러스터링) ──
 if args.ecapa_rediarize:
-    from core.speaker_postproc import rediarize_ecapa
+    from core.stt.speaker_postproc import rediarize_ecapa
     segs, re_stats = rediarize_ecapa(str(src), segs, expected_speakers=args.ecapa_expected)
     print(f"[ecapa] rediarize {re_stats}")
 
 # ── Layer 1: STT 후처리 (문맥·짧은세그·empty 계승) ──
 if not args.no_postproc:
-    from core.speaker_postproc import postprocess
+    from core.stt.speaker_postproc import postprocess
     segs, pp_stats = postprocess(segs)
     print(f"[layer1] postproc {pp_stats}")
 
 # ── 고유명사 오탈자 정정 (수동 name-fix 매핑) ──
 if args.name_fix:
-    from core.speaker_postproc import rewrite_names
+    from core.stt.speaker_postproc import rewrite_names
     name_map = {}
     for pair in args.name_fix.split(","):
         if ":" in pair:
@@ -105,12 +105,12 @@ if args.name_fix:
 chyron_hits: list[dict] = []
 chyron_map: dict[str, str] = {}
 if args.chyron_per_seg:
-    from core.chyron_scan import scan_per_seg
+    from core.scenes.chyron_scan import scan_per_seg
     print("[layer2] chyron-per-seg 시작 · 세그별 Vision 콜")
     segs, ps_stats = scan_per_seg(str(src), segs, workers=6, prefer_start=True)
     print(f"[layer2] {ps_stats}")
 elif not args.no_chyron:
-    from core.chyron_scan import (
+    from core.scenes.chyron_scan import (
         scan_chyron_over_video, map_speakers_from_chyron,
         apply_speaker_mapping, apply_names_per_seg,
     )

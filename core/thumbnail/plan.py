@@ -166,8 +166,8 @@ def build_plan(
     from google import genai
     from google.genai import types
 
-    from core.models import TEXT
-    from core.retry import call_with_retry
+    from core.common.models import TEXT
+    from core.common.retry import call_with_retry
 
     if client is None:
         import os

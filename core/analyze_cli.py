@@ -11,7 +11,7 @@ from pathlib import Path
 
 
 def main() -> None:
-    from .analyze import analyze  # 지연 import 로 순환 방지
+    from core.analyze import analyze  # 지연 import 로 순환 방지
 
     if len(sys.argv) < 2:
         print("Usage: python -m core.analyze <video> [--out <dir>] [--shorts N] "
@@ -41,13 +41,13 @@ def main() -> None:
     # 2026-07-31: --cast 명시 없어도 workdir/cast_registry.json 자동 로드 (speaker_rename 이 필요).
     cast_registry = None
     if "--cast" in sys.argv:
-        from .cast import load_registry
+        from core.vision.cast import load_registry
         cast_registry = load_registry(sys.argv[sys.argv.index("--cast") + 1])
     else:
         _auto_cast = out_dir / "cast_registry.json"
         if _auto_cast.exists():
             try:
-                from .cast import load_registry
+                from core.vision.cast import load_registry
                 cast_registry = load_registry(str(_auto_cast))
                 print(f"[cast] workdir cast_registry.json 자동 로드 · {len(cast_registry or [])}명")
             except Exception as e:

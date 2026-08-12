@@ -49,7 +49,7 @@ export interface AnalysisScene {
   has_dialogue?: boolean;
   on_screen_names?: string[];
 }
-/** One AI-recommended short (core.recommend output). */
+/** One AI-recommended short (core.recommend.recommend output). */
 export interface AnalysisShort {
   rank?: number;
   title?: string;

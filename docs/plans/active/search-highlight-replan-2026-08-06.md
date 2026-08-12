@@ -383,7 +383,7 @@ LLM 점수는 같은 입력에도 실행마다 달라져 **A/B·회귀 판정 �
 
 ```
 score100 = 100 × ( 0.40×signal + 0.25×hook + 0.20×length + 0.15×complete )
-             signal   core.signals 4축의 회차 내 백분위 평균 (LLM 무관)
+             signal   core.recommend.signals 4축의 회차 내 백분위 평균 (LLM 무관)
              hook     beat_annot 카테고리 라벨 (0-10 점수가 아니라 분류 → 상대적으로 안정)
              length   25~90초 최적 곡선
              complete beat.is_complete 비율

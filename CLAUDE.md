@@ -30,8 +30,9 @@ apps/web/      Next.js 16 (App Router) + React 19 + Tailwind v4 + base-ui  → V
 apps/server/   Hono + PostgreSQL(Cloud SQL) + GCS + ffmpeg                 → Cloud Run (stepd-server)
                + src/worker.ts = 별도 워커 프로세스 → Cloud Run Jobs (stepd-worker-content
                  / stepd-worker-youtube, drain 모드) + GEBD 전용 GPU T4 spot VM
-core/          Python AI 파이프라인 (analyze·asr·boundaries·beats·beat_annot·chyron·recommend·
-               index_segments). analyze.py 는 analyze_cli/stages/utils 로 분리됨
+core/          Python AI 파이프라인. **워커가 아니다** — 워커(worker.ts)가 자식 프로세스로
+               띄운다. 2026-08-12 단계별 하위 패키지로 재편: stt·scenes·beats·recommend·
+               search·vision·thumbnail·evaluate·common. 상세 [core/README.md](core/README.md)
 admin/         STEP D Admin — 플랫폼 관리 콘솔 (Vite+React SPA). 회사·사용자·잡·감사
                → Vercel 독립 배포 · admin.stepd.stepai.kr · superadmin 세션 필수
                (구 STEP D Lab 은 2026-08-10 제거 — /api/lab/* 라우트도 함께 삭제)

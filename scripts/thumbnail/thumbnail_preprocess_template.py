@@ -23,8 +23,8 @@ import pathlib
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
-from core.openai_client import edit as openai_edit
-from core.models import IMAGE_PRO as MODEL
+from core.common.openai_client import edit as openai_edit
+from core.common.models import IMAGE_PRO as MODEL
 
 REF_DIR = pathlib.Path(__file__).resolve().parents[1] / "assets" / "thumbnail-reference"
 MANIFEST = REF_DIR / "manifest.json"

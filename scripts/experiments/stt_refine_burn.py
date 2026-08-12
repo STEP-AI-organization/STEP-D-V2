@@ -10,7 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from core.refine import refine_segments  # noqa: E402
+from core.stt.refine import refine_segments  # noqa: E402
 
 
 def main(stt_path: str, video: str, out_mp4: str) -> None:

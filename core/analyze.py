@@ -36,14 +36,14 @@ for _s in (sys.stdout, sys.stderr):
     except (AttributeError, ValueError):
         pass
 
-from .analyze_utils import (
+from core.analyze_utils import (
     save_json as _save_json,
     load_json as _load_json,
     prepare_checkpoints as _prepare_checkpoints,
     progress as _progress,
 )
 # 스테이지 함수는 전부 analyze_stages 로. 여기는 orchestrator 만.
-from .analyze_stages import (
+from core.analyze_stages import (
     run_fast_mode, load_viewer_signals, index_search_segments, dump_usage,
     run_stt, run_refine, run_chyron_per_seg, run_speaker_postproc, run_detect_genre,
     join_ppl, run_scenes, run_cast_timeline, run_timeline, run_narrative,
@@ -103,7 +103,7 @@ def analyze(
         step("PPL 스킵 (RUN_PPL=1 로 활성화)")
     elif not (isinstance(_ppl_cached, dict) and _ppl_cached.get("detections") is not None) and not fast:
         try:
-            from .ppl import build_ppl_index
+            from core.vision.ppl import build_ppl_index
             import cv2
             cap = cv2.VideoCapture(str(video_path))
             fps = cap.get(cv2.CAP_PROP_FPS) or 30
@@ -143,7 +143,7 @@ def analyze(
     _run_faces = (os.environ.get("RUN_FACES") == "1") or ("--faces" in sys.argv)
     if _run_faces and not (isinstance(_faces_cached, dict) and _faces_cached.get("clusters") is not None) and not fast:
         try:
-            from .faces import build_face_index
+            from core.vision.faces import build_face_index
             _cast_photos_dir = out_dir / "cast_photos"
             faces_executor = ThreadPoolExecutor(max_workers=1)
             # on_progress 안 넘김 (refine 진행률과 UI 충돌 방지)
@@ -200,7 +200,7 @@ def analyze(
         step(f"얼굴 클러스터 — 체크포인트 재사용 ({len(faces.get('clusters', {}))} 클러스터)")
         # 저장된 매핑이 있으면 refined에 적용 (재실행 시 사용자 라벨 유지)
         try:
-            from .faces import apply_mapping
+            from core.vision.faces import apply_mapping
             refined = apply_mapping(refined, faces.get("mapping") or {})
             _save_json(out_dir / "refined.json", refined)
         except Exception as e:
@@ -230,7 +230,7 @@ def analyze(
     else:
         # 병렬 시작 실패 폴백 — 순차 실행
         try:
-            from .faces import build_face_index
+            from core.vision.faces import build_face_index
             _progress("faces", 40, "얼굴 검출·클러스터링 중 (순차)")
             step("얼굴 검출·클러스터링…")
             _cast_photos_dir = out_dir / "cast_photos"
@@ -257,7 +257,7 @@ def analyze(
             stt_data = _load_json(out_dir / "stt.json") or {}
             turns = stt_data.get("diarization_turns") or []
             if turns and faces and refined:
-                from .speaker_face_map import map_speakers_to_face_clusters
+                from core.stt.speaker_face_map import map_speakers_to_face_clusters
                 sf_map = map_speakers_to_face_clusters(faces, refined, turns)
                 if sf_map.get("map"):
                     faces["speaker_face_map"] = sf_map
@@ -394,7 +394,7 @@ def analyze(
 
 
 if __name__ == "__main__":
-    from .analyze_cli import main
+    from core.analyze_cli import main
     # Native library (InsightFace ONNX/DirectML) teardown 에서 Windows access violation
     # (0xC0000005 = -1073741819) 이 관찰됨 — 정상 완료 후에도 exit code non-zero가 되어
     # 워커가 결과를 무시하고 DB write 스킵. main() 정상 반환 즉시 os._exit(0)로 native

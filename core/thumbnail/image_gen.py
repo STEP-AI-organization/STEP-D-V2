@@ -12,8 +12,8 @@ from __future__ import annotations
 
 from typing import Optional
 
-from ..models import IMAGE_FLASH as IMAGE_MODEL
-from ..openai_client import edit as openai_edit, generate as openai_generate
+from core.common.models import IMAGE_FLASH as IMAGE_MODEL
+from core.common.openai_client import edit as openai_edit, generate as openai_generate
 
 
 BACKGROUND_SYSTEM = """목표: 아래 참고 이미지들의 실제 장소·인테리어·조명을 그대로 유지한 배경 (16:9).
