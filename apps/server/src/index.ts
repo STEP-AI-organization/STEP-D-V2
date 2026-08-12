@@ -3895,7 +3895,7 @@ async function renderClipMedia(opts: {
   // 하단 브랜딩 아이콘 — **프로그램에서 미리 설정**한 이미지(brandIconDataUrl, 사용자 결정
   // 2026-08-12)를 원형으로 잘라 채널명 위에 얹는다. 없으면 조용히 생략(텍스트 브랜딩만).
   // hookPreroll 경로는 배지 미지원이라 프리롤일 땐 넘기지 않는다.
-  let badge: { path: string; x: number; y: number; w: number } | null = null;
+  let badge: { path: string; y: number; h: number } | null = null;
   if (editorState?.showChannel && !editorState?.channelIconOff && episodeId && !hookPreroll) {
     try {
       // 아이콘 소스 우선순위: 클립별 업로드(에디터 channelIconDataUrl) > 프로그램 기본
@@ -3911,18 +3911,21 @@ async function renderClipMedia(opts: {
       if (m) {
         fs.writeFileSync(iconRawTmp, Buffer.from(m[1], "base64"));
         const scale = H / stageH;
-        const iconW = Math.round((Number(editorState?.channelIconSize) > 0
+        // channelIconSize 는 **높이(px, 에디터 기준)** — 가로 워드마크도 세로 아이콘도
+        // 높이로 통일해야 크기가 폭주하지 않는다 (2026-08-12 데모에서 정사각 로고가
+        // 폭 기준 519px 로 부풀어 시간 박스를 덮었다).
+        const iconH = Math.round((Number(editorState?.channelIconSize) > 0
           ? Number(editorState.channelIconSize) : 40) * scale);
         // 모양: circle 이면 원형 크롭, 그 외(square 등)는 원본 비율 그대로 — 프로그램
         // 로고(가로 워드마크)를 원으로 자르면 깨지기 때문 (broadcast-standard).
         const shape = String(editorState?.channelIconShape ?? "circle");
         let badgePath = iconRawTmp;
-        if (shape === "circle") { await circleCrop(iconRawTmp, iconTmp, iconW); badgePath = iconTmp; }
+        if (shape === "circle") { await circleCrop(iconRawTmp, iconTmp, iconH); badgePath = iconTmp; }
         // 위치: channelIconY(%) 명시가 우선, 없으면 채널명 위 (구 broadcast-clean 배치).
         const iconYPct = Number(editorState?.channelIconY);
         const chY = ((Number(editorState?.channelY) || 82) / 100) * H;
-        const y = iconYPct > 0 ? Math.round((iconYPct / 100) * H) : Math.round(chY - iconW - 28);
-        badge = { path: badgePath, w: iconW, x: Math.round((W - iconW) / 2), y };
+        const y = iconYPct > 0 ? Math.round((iconYPct / 100) * H) : Math.round(chY - iconH - 28);
+        badge = { path: badgePath, h: iconH, y };
       }
     } catch (e) {
       console.warn("[render] 브랜딩 아이콘 준비 실패(생략):", String(e).slice(0, 120));

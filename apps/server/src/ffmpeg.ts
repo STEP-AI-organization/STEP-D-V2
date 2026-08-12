@@ -179,10 +179,11 @@ export type RenderShortOpts = {
     /** 오디오 크로스페이드 포함 여부 (마스터에 오디오 있을 때만 true). */
     hasAudio?: boolean;
   } | null;
-  /** 하단 브랜딩 아이콘(원형 PNG) — 프로그램에서 미리 설정한 이미지를 캘러가 원형으로
-   *  전처리(circleCrop)해서 넘긴다. ASS 번인 뒤에 얹으므로 그레이드에 물들지 않는다.
+  /** 하단 브랜딩 아이콘/로고 — 프로그램에서 미리 설정한 이미지. **높이(h) 기준**으로
+   *  스케일하고 가로는 비율 유지 + 화면 중앙 정렬((W-w)/2 식) — 정사각 아이콘과 가로
+   *  워드마크 로고가 같은 코드로 자연스럽게 앉는다. ASS 번인 뒤에 얹는다.
    *  ⚠️ hookPreroll 경로에는 아직 미지원 — 캘러가 프리롤일 땐 넘기지 않는다. */
-  badge?: { path: string; x: number; y: number; w: number } | null;
+  badge?: { path: string; y: number; h: number } | null;
 };
 
 /**
@@ -373,8 +374,8 @@ export function renderShort(opts: RenderShortOpts): Promise<void> {
   // overlay 기본 eof_action=repeat 로 전체 길이에 유지된다.
   if (opts.badge) {
     const bi = 1 + (fr ? 1 : 0);
-    vf += `;[${bi}:v]scale=${opts.badge.w}:${opts.badge.w}[bdg]` +
-          `;${last}[bdg]overlay=${opts.badge.x}:${opts.badge.y}[vbdg]`;
+    vf += `;[${bi}:v]scale=-1:${opts.badge.h}[bdg]` +
+          `;${last}[bdg]overlay=(W-w)/2:${opts.badge.y}[vbdg]`;
     last = "[vbdg]";
   }
   // Speed LAST — after the burn, so the captions/overlays already baked into the frames

@@ -446,12 +446,12 @@ const TEMPLATE_SEEDS: Record<string, {
   // 표준 (2026-08-12 확정 · 나는 SOLO 쇼츠 레퍼런스): 청록 훅 + 프로그램 로고 + 방영시간 박스
   "broadcast-standard": {
     accent: "#40E0E0", titleY: 11, bottom: "logo-box",
-    channelY: 88, iconShape: "square", iconSize: 173, iconY: 68, boxY: 79.5,
+    channelY: 88, iconShape: "square", iconSize: 50, iconY: 68, boxY: 79.5,
   },
   // 드라마: 번인 자막이 없어 확대 크롭(fit cover)이 산다 — 띠가 좁아 위치가 다르다
   "broadcast-drama": {
     accent: "#40E0E0", titleY: 8, bottom: "logo-box",
-    channelY: 88, iconShape: "square", iconSize: 173, iconY: 77, boxY: 87.5,
+    channelY: 88, iconShape: "square", iconSize: 50, iconY: 77, boxY: 87.5,
   },
   // 구 표준 (TVING 풍 · 보존): 빨강 훅 + 원형 아이콘 + 프로그램명 텍스트
   "broadcast-clean": {
