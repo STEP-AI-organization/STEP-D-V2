@@ -89,9 +89,12 @@ describe("스코프", () => {
     assert.deepEqual(normalizeScopes(["nonsense"]), []);
   });
 
-  it("관리·결제 스코프는 아예 없다", () => {
+  it("관리 스코프는 아예 없다 · 결제는 읽기(billing:read)만", () => {
     // 있으면 언젠가 누가 붙인다. 고객사 키가 닿을 수 있는 최대치를 여기서 못박는다.
+    // billing:read 는 잔액·사용내역 **조회** 전용으로 의도적으로 열었다 — 쓰기 스코프
+    // (billing:write 류)가 생기는 순간 이 테스트가 잡아야 한다.
     for (const s of API_SCOPES) {
+      if (s === "billing:read") continue;
       assert.doesNotMatch(s, /admin|billing|credit|superadmin|publish/, `위험한 스코프: ${s}`);
     }
   });
@@ -141,7 +144,6 @@ describe("라우트 화이트리스트 — 기본값은 닫힘", () => {
       ["GET", "/api/superadmin/tenants"],
       ["POST", "/api/superadmin/tenants"],
       ["POST", "/api/credits/topup"],
-      ["GET", "/api/credits"],
       ["POST", "/api/distributions/publish"],
       ["POST", "/api/auth/login"],
       ["GET", "/api/state"],
@@ -191,9 +193,29 @@ describe("라우트 화이트리스트 — 기본값은 닫힘", () => {
 
   it("화이트리스트에 관리 경로가 섞여 있지 않다", () => {
     for (const r of API_KEY_ROUTES) {
+      // credits 는 **읽기(GET /api/credits)만** 의도적으로 열었다(billing:read) —
+      // 충전·카드 등 쓰기는 여전히 세션 전용이어야 한다.
+      if (r.path.source === "^\\/api\\/credits$") {
+        assert.equal(r.method, "GET", "credits 는 GET 만 허용된다");
+        continue;
+      }
       assert.doesNotMatch(r.path.source, /superadmin|admin|auth|credits|distributions|youtube/,
         `화이트리스트에 들어가면 안 되는 경로: ${r.path}`);
     }
+  });
+
+  it("결제 쓰기(충전·카드)는 키로 못 부른다", () => {
+    for (const p of ["/api/credits/topup", "/api/credits/topup/card", "/api/billing/card"]) {
+      assert.equal(checkRoute("POST", p, all).ok, false, p);
+    }
+  });
+
+  it("factory 라우트는 factory 스코프로 열린다", () => {
+    assert.equal(checkRoute("POST", "/api/factory/ingest", ["factory:write"]).ok, true);
+    assert.equal(checkRoute("GET", "/api/factory/jobs/f_1", ["factory:read"]).ok, true);
+    assert.equal(checkRoute("GET", "/api/factory/jobs/f_1/performance", ["factory:read"]).ok, true);
+    // 쓰기 스코프 없이 ingest 는 못 부른다
+    assert.equal(checkRoute("POST", "/api/factory/ingest", ["factory:read"]).ok, false);
   });
 });
 

@@ -24,7 +24,10 @@ export const KEY_PREFIX_TEST = "stepd_test_";
 /** 표시·조회용 접두 길이 — `stepd_live_` (11) + 4자. billing.ts apiKeyPrefix 와 같은 길이다. */
 export const PREFIX_LEN = 15;
 
-export const API_SCOPES = ["media:write", "media:read", "search:read"] as const;
+export const API_SCOPES = [
+  "media:write", "media:read", "search:read",
+  "factory:write", "factory:read", "billing:read",
+] as const;
 export type ApiScope = (typeof API_SCOPES)[number];
 
 export function isApiScope(v: unknown): v is ApiScope {
@@ -126,8 +129,26 @@ export const API_KEY_ROUTES: RouteRule[] = [
   { method: "GET", path: /^\/api\/media\/[^/]+\/analysis$/, scope: "media:read" },
   { method: "GET", path: /^\/api\/media\/[^/]+\/transcript$/, scope: "media:read" },
   { method: "GET", path: /^\/api\/media\/[^/]+\/stream-url$/, scope: "media:read" },
+  // 파생 컨텐츠 — 추천·클립·에셋. 에셋은 서명 URL 대신 키 인증 GET 로 연다:
+  // 라우트가 이미 RLS 경로를 지나고, 브라우저 노출은 붙이는 쪽 서버가 프록시한다.
+  { method: "GET", path: /^\/api\/media\/[^/]+\/shorts$/, scope: "media:read" },
+  { method: "GET", path: /^\/api\/media\/[^/]+\/clips$/, scope: "media:read" },
+  { method: "GET", path: /^\/api\/media\/[^/]+\/thumb$/, scope: "media:read" },
+  { method: "GET", path: /^\/api\/media\/[^/]+\/frame$/, scope: "media:read" },
+  { method: "GET", path: /^\/api\/media\/[^/]+\/analysis\/frames\/[^/]+$/, scope: "media:read" },
+  { method: "GET", path: /^\/api\/media\/[^/]+\/thumbnails$/, scope: "media:read" },
   // 찾기
   { method: "GET", path: /^\/api\/search$/, scope: "search:read" },
+  // 공장 — 소스 하나로 분석→쇼츠→배포 완주 (구 x-factory-key 를 대체한다)
+  { method: "POST", path: /^\/api\/factory\/videos$/, scope: "factory:write" },
+  { method: "POST", path: /^\/api\/factory\/ingest$/, scope: "factory:write" },
+  { method: "POST", path: /^\/api\/factory\/channels$/, scope: "factory:write" },
+  { method: "POST", path: /^\/api\/factory\/channels\/connect-url$/, scope: "factory:write" },
+  { method: "GET", path: /^\/api\/factory\/targets$/, scope: "factory:read" },
+  { method: "GET", path: /^\/api\/factory\/jobs\/[^/]+$/, scope: "factory:read" },
+  { method: "GET", path: /^\/api\/factory\/jobs\/[^/]+\/performance$/, scope: "factory:read" },
+  // 잔액·사용내역 (읽기만 — 결제·카드는 세션 전용으로 남긴다)
+  { method: "GET", path: /^\/api\/credits$/, scope: "billing:read" },
 ];
 
 export type RouteVerdict = { ok: true; scope: ApiScope } | { ok: false; reason: string };

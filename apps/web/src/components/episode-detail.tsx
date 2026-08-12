@@ -251,21 +251,27 @@ function FactoryButton({ mediaId }: { mediaId: string }) {
             <div className="text-xs text-muted-foreground">연결된 채널이 없습니다.</div>
           ) : (
             <div className="grid gap-1">
-              {channels.map((ch) => (
-                <label key={ch.channelId} className="flex items-center gap-2 text-xs">
-                  <input
-                    type="checkbox"
-                    checked={picked.includes(`youtube:${ch.channelId}`)}
-                    onChange={(e) => setPicked((prev) => e.target.checked
-                      ? [...prev, `youtube:${ch.channelId}`]
-                      : prev.filter((t) => t !== `youtube:${ch.channelId}`))}
-                  />
-                  <span className="truncate">{ch.channelName}</span>
-                  {ch.status === "revoked" && (
-                    <span className="text-status-error">연결 끊김</span>
-                  )}
-                </label>
-              ))}
+              {channels.map((ch) => {
+                // 연동된(active) 채널만 배포 가능 — 서버 validateTargets 와 같은 기준.
+                const connected = ch.status === "active";
+                return (
+                  <label key={ch.channelId}
+                    className={`flex items-center gap-2 text-xs ${connected ? "" : "opacity-50"}`}>
+                    <input
+                      type="checkbox"
+                      disabled={!connected}
+                      checked={picked.includes(`youtube:${ch.channelId}`)}
+                      onChange={(e) => setPicked((prev) => e.target.checked
+                        ? [...prev, `youtube:${ch.channelId}`]
+                        : prev.filter((t) => t !== `youtube:${ch.channelId}`))}
+                    />
+                    <span className="truncate">{ch.channelName}</span>
+                    {!connected && (
+                      <span className="text-status-error">연동 끊김 — 재연결 필요</span>
+                    )}
+                  </label>
+                );
+              })}
             </div>
           )}
 

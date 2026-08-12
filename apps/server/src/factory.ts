@@ -19,7 +19,9 @@
  *   3. 일일 상한        프로그램당 하루 N개 (기본 5) — 같은 영상 20번 올라가는 사고 방지
  *   4. private 업로드   → 유예 후 공개 전환 (factory.publicize). 되돌리기 = 전환 취소
  */
-import { getEntity, putEntity, listEntities, listMedia } from "./db-pg.ts";
+import { creditBalance, getEntity, putEntity, listEntities, listMedia } from "./db-pg.ts";
+import { checkCredits } from "./credits.ts";
+import { billableMinutes } from "./billing.ts";
 import { commitAndInherit } from "./adopt.ts";
 import { dispatchPublish } from "./publish-dispatch.ts";
 import { newId } from "./pipeline.ts";
@@ -117,8 +119,9 @@ export async function validateTargets(targets: string[]): Promise<string[]> {
     const id = t.slice("youtube:".length).trim();
     const ch = channels.find((c: any) => c.channelId === id);
     if (!ch) { problems.push(`${t}: 연동되지 않은 채널`); continue; }
-    if ((ch as any).status === "revoked" || !(ch as any).refreshToken) {
-      problems.push(`${t}: 연결이 끊겼습니다 (재인증 필요)`); continue;
+    // active 가 아니면 전부 막는다 — revoked(구글이 끊음)·disconnected(사람이 연동해제) 포함.
+    if ((ch as any).status !== "active" || !(ch as any).refreshToken) {
+      problems.push(`${t}: 연결이 끊겼습니다 (재연동 필요)`); continue;
     }
     const { scopeCanPublish } = await import("./youtube.ts");
     if (!scopeCanPublish((ch as any).scope)) {
@@ -184,6 +187,19 @@ export async function advance(factoryJobId: string): Promise<{ job: FactoryJob; 
     return { job, retryInMs: null };
   };
 
+  /**
+   * 분석을 태우기 전 크레딧 판정 — 라우트의 `/api/media/:id/analyze` 게이트와 같은 규칙.
+   * 공장은 그 라우트를 거치지 않고 content.analyze 를 직접 큐잉하므로, 여기서 안 보면
+   * 잔액 없는 테넌트도 분석이 돌아 원가가 그대로 나간다. 러닝타임을 모르면 막지 않고
+   * 차감은 끝난 뒤 실제 길이로 한다(recordUsage) — 라우트 쪽과 같은 방향이다.
+   */
+  const creditBlocked = async (durationSec: number): Promise<string | null> => {
+    const need = billableMinutes(durationSec ?? 0);
+    if (need <= 0) return null;
+    const verdict = checkCredits({ balance: await creditBalance(), needMinutes: need });
+    return verdict.allow ? null : verdict.reason;
+  };
+
   switch (job.state) {
     // ── 소스 확보 ────────────────────────────────────────────────────────────
     case "queued": {
@@ -193,6 +209,8 @@ export async function advance(factoryJobId: string): Promise<{ job: FactoryJob; 
       const existing = media.find((m: any) => m.storedPath === job.sourceUrl
         || m.storedPath === `youtube:${job.sourceUrl}`);
       if (existing) {
+        const blocked = await creditBlocked((existing as any).durationSec ?? 0);
+        if (blocked) return await fail(`크레딧 부족 — ${blocked}`);
         job = await save({ ...job, state: "analyzing", mediaId: (existing as any).id,
           episodeId: (existing as any).episodeId });
         await enqueue("content.analyze", { mediaId: (existing as any).id },
@@ -214,6 +232,8 @@ export async function advance(factoryJobId: string): Promise<{ job: FactoryJob; 
       if (String(media.storedPath ?? "").startsWith("youtube:")) {
         return { job, retryInMs: 60_000 };   // 아직 다운로드 중
       }
+      const blocked = await creditBlocked(media.durationSec ?? 0);
+      if (blocked) return await fail(`크레딧 부족 — ${blocked}`);
       job = await save({ ...job, state: "analyzing", episodeId: media.episodeId });
       await enqueue("content.analyze", { mediaId: job.mediaId },
         { dedupeKey: `content.analyze:${job.mediaId}` });

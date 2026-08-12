@@ -1524,6 +1524,15 @@ export async function deleteYouTubeChannel(channelId: string): Promise<void> {
   }
 }
 
+/** 연동해제 — 토큰만 끊고 채널 행·이력은 남긴다. 삭제와 다른 동작. */
+export async function disconnectYouTubeChannel(channelId: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/youtube/channels/${channelId}/disconnect`, { method: "POST" });
+  if (!res.ok) {
+    const body = (await res.json().catch(() => null)) as { error?: string; message?: string } | null;
+    throw new Error(body?.message ?? body?.error ?? `${res.status} ${res.statusText}`);
+  }
+}
+
 // ── Meta (Facebook + Instagram) accounts ───────────────────────────────────────
 
 export interface MetaAccountInfo {
@@ -1558,6 +1567,12 @@ export async function deleteMetaAccount(publicId: string): Promise<void> {
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
 }
 
+/** 연동해제 — 토큰만 끊고 계정 행은 남긴다. */
+export async function disconnectMetaAccount(publicId: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/meta/accounts/${publicId}/disconnect`, { method: "POST" });
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+}
+
 // ── TikTok accounts ────────────────────────────────────────────────────────────
 
 export interface TikTokAccountInfo {
@@ -1589,6 +1604,12 @@ export function getTikTokAuthUrl(returnTo?: string): string {
 
 export async function deleteTikTokAccount(publicId: string): Promise<void> {
   const res = await fetch(`${API_BASE}/tiktok/accounts/${publicId}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+}
+
+/** 연동해제 — 토큰만 끊고 계정 행은 남긴다. */
+export async function disconnectTikTokAccount(publicId: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/tiktok/accounts/${publicId}/disconnect`, { method: "POST" });
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
 }
 

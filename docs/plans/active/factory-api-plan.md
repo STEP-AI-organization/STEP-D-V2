@@ -1,6 +1,23 @@
 # Factory API — 소스 영상 하나로 완주·자동배포
 
-2026-08-05 스케치 · **2026-08-10 범위 확정 (사용자 결정)**
+2026-08-05 스케치 · **2026-08-10 범위 확정 (사용자 결정)** · **2026-08-12 전제 변경 (아래)**
+
+## 2026-08-12 전제 변경 — 소비자가 유료 외부 테넌트(ENA)가 됐다
+
+"소비자 = AENA 사내"라서 보류했던 것들이 전부 되살아났고, 구현 방식이 바뀌었다:
+
+| 2026-08-10 결정 | 2026-08-12 현재 |
+|---|---|
+| 서비스 간 ID 토큰 / x-factory-key | **워크스페이스 API 키** (`Authorization: Bearer stepd_live_…`) — factory 라우트가 `API_KEY_ROUTES` 화이트리스트에 등재(`factory:write`/`factory:read`) |
+| 과금 불필요 | **선불 크레딧 과금** — videos/ingest 402 게이트 + factory.ts advance() 분석 직전 정밀 게이트, 차감은 기존 recordUsage |
+| 테넌트 관리 UI 불필요 | superadmin 콘솔로 회사 개설·키 발급 (기존 다회사 3·4단계 재사용) |
+
+x-factory-key 폐기 근거: 글로벌 단일 키라 테넌트 귀속(usage_events/credit_ledger)이
+불가능했고, `/api/factory/*` 가 PUBLIC_PATHS 에 없어 AUTH_REQUIRED=1 이 되는 순간
+미들웨어 401 로 구조적으로 죽는 경로였다. 대신 `/api/factory/*` 에 "키 또는 세션 필수"
+미들웨어를 둬 익명 폴백(단일 테넌트 자세)을 막았다.
+
+고객 문서: [../../reference/customer-api.md](../../reference/customer-api.md) (구 factory-api.md 를 대체)
 
 > "고객이 소스 영상 URL 하나만 던지면 · 분석·쇼츠·썸네일까지 만들고 · 지정 채널로 알아서
 > 배포까지" — 이걸 외부 API 하나로 노출하는 그림.

@@ -17,6 +17,16 @@
   `mediaUrl()` 헬퍼가 `API_BASE`를 붙여 조립한다.
 - DB 초기화는 서버 기동과 비동기 — 기동 직후에는 `/health`의 `ok`가 `false`일 수 있다.
 
+### 외부 API 키 (고객사 시스템 · 2026-08-12)
+
+세션 없이 `Authorization: Bearer stepd_live_…` 로 부르는 경로가 있다 — 워크스페이스
+API 키(`api-keys.ts`). **화이트리스트(`API_KEY_ROUTES`)에 올린 라우트만** 열리고,
+스코프 6종(`media:write/read · search:read · factory:write/read · billing:read`)으로
+쪼개진다. 발급·폐기는 superadmin 전용(admin 콘솔). 키 호출도 세션과 같은
+`resolveTenant` → RLS 경로를 지나므로 데이터는 키가 속한 워크스페이스에 귀속된다.
+`/api/factory/*` 는 익명 폴백이 막혀 있어 키 또는 세션 없이는 401 이다.
+고객사 배포용 문서: [customer-api.md](customer-api.md).
+
 ## 헬스 · 상태
 
 | 메서드·경로 | 역할 | 요청/응답 요점 | 프론트 함수 |

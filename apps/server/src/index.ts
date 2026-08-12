@@ -129,13 +129,16 @@ import {
   updateYouTubeTokens,
   markYouTubeChannelRevoked,
   deleteYouTubeChannel,
+  disconnectYouTubeChannel,
   listMetaAccounts,
   upsertMetaAccount,
   deleteMetaAccount,
+  disconnectMetaAccount,
   type MetaAccount,
   listTikTokAccounts,
   upsertTikTokAccount,
   deleteTikTokAccount,
+  disconnectTikTokAccount,
   type TikTokAccount,
   listChannelVideos,
   upsertChannelVideo,
@@ -6255,6 +6258,12 @@ app.get("/api/meta/accounts", async (c) => {
   });
 });
 
+/** 연동해제 — 행은 남기고 토큰만 비운다. Meta 는 토큰 무효화 API 를 따로 부르지 않는다. */
+app.post("/api/meta/accounts/:publicId/disconnect", async (c) => {
+  await disconnectMetaAccount(c.req.param("publicId"));
+  return c.json({ ok: true, status: "disconnected" });
+});
+
 app.delete("/api/meta/accounts/:publicId", async (c) => {
   await deleteMetaAccount(c.req.param("publicId"));
   return c.json({ ok: true });
@@ -6404,6 +6413,12 @@ app.get("/api/tiktok/accounts", async (c) => {
   });
 });
 
+/** 연동해제 — 행은 남기고 토큰만 비운다. */
+app.post("/api/tiktok/accounts/:publicId/disconnect", async (c) => {
+  await disconnectTikTokAccount(c.req.param("publicId"));
+  return c.json({ ok: true, status: "disconnected" });
+});
+
 app.delete("/api/tiktok/accounts/:publicId", async (c) => {
   await deleteTikTokAccount(c.req.param("publicId"));
   return c.json({ ok: true });
@@ -6434,6 +6449,29 @@ app.get("/api/youtube/channels", async (c) => {
 app.delete("/api/youtube/channels/:channelId", async (c) => {
   await deleteYouTubeChannel(c.req.param("channelId"));
   return c.json({ ok: true });
+});
+
+/**
+ * 연동해제 — 삭제와 다르다. Google 쪽 토큰을 revoke 하고(실패해도 진행 — 우리 쪽 토큰을
+ * 비우는 것이 본질) 행은 남긴다. 애널리틱스 이력이 보존되고, 재연동하면 이어서 쓴다.
+ * 토큰이 비면 배포 가능 판정(validateTargets · /api/factory/targets)에서 자동으로 빠진다.
+ */
+app.post("/api/youtube/channels/:channelId/disconnect", async (c) => {
+  const channelId = c.req.param("channelId");
+  const ch = await getYouTubeChannelByChannelId(channelId);
+  if (!ch) return c.json({ error: "channel not found" }, 404);
+
+  const token = ch.refreshToken ?? ch.accessToken;
+  if (token) {
+    // best-effort — 이미 revoke 됐거나 만료면 400 이 오지만, 목적은 우리 쪽 절단이다.
+    await fetch("https://oauth2.googleapis.com/revoke", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ token }),
+    }).catch(() => null);
+  }
+  await disconnectYouTubeChannel(channelId);
+  return c.json({ ok: true, status: "disconnected" });
 });
 
 app.post("/api/youtube/refresh", async (c) => {
@@ -7030,7 +7068,7 @@ app.get("/api/factory/targets", async (c) => {
   const channels = await listYouTubeChannels();
   return c.json({
     targets: channels.map((ch) => {
-      const live = ch.status !== "revoked" && Boolean(ch.refreshToken);
+      const live = ch.status === "active" && Boolean(ch.refreshToken);
       const canPublish = live && scopeCanPublish((ch as any).scope);
       return {
         target: `youtube:${ch.channelId}`,

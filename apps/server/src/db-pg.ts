@@ -749,6 +749,21 @@ export async function deleteYouTubeChannel(channelId: string): Promise<void> {
   await pool.query("DELETE FROM youtube_channels WHERE channelId = $1", [channelId]);
 }
 
+/**
+ * 연동해제 — 토큰만 비우고 **행은 남긴다** (삭제와 다른 개념).
+ * 애널리틱스 이력·영상 매핑이 채널 행에 걸려 있어, "그만 쓸래"가 곧 "이력 삭제"면
+ * 재연동 때 처음부터 다시 동기화해야 한다. 배포 가능 판정은 refreshToken 유무를 보므로
+ * 토큰이 비면 자동으로 배포 대상에서 빠진다 (factory validateTargets · targets 라우트).
+ */
+export async function disconnectYouTubeChannel(channelId: string): Promise<void> {
+  await pool.query(
+    `UPDATE youtube_channels
+        SET refreshToken = NULL, accessToken = NULL, status = 'disconnected'
+      WHERE channelId = $1`,
+    [channelId],
+  );
+}
+
 // ── Meta (Facebook + Instagram) accounts ───────────────────────────────────────
 
 export interface MetaAccount {
@@ -804,6 +819,14 @@ export async function upsertMetaAccount(a: MetaAccount): Promise<void> {
 
 export async function deleteMetaAccount(publicId: string): Promise<void> {
   await pool.query("DELETE FROM meta_accounts WHERE publicId = $1", [publicId]);
+}
+
+/** 연동해제 — 토큰을 비우고 행은 남긴다 (youtube 쪽 disconnect 와 같은 의미). */
+export async function disconnectMetaAccount(publicId: string): Promise<void> {
+  await pool.query(
+    `UPDATE meta_accounts SET pageAccessToken = '', status = 'disconnected' WHERE publicId = $1`,
+    [publicId],
+  );
 }
 
 // ── 네이버 계정 (B2B 다계정) ───────────────────────────────────────────────────
@@ -966,6 +989,16 @@ export async function upsertTikTokAccount(a: TikTokAccount): Promise<void> {
 
 export async function deleteTikTokAccount(publicId: string): Promise<void> {
   await pool.query("DELETE FROM tiktok_accounts WHERE publicId = $1", [publicId]);
+}
+
+/** 연동해제 — 토큰을 비우고 행은 남긴다 (youtube 쪽 disconnect 와 같은 의미). */
+export async function disconnectTikTokAccount(publicId: string): Promise<void> {
+  await pool.query(
+    `UPDATE tiktok_accounts
+        SET accessToken = '', refreshToken = '', status = 'disconnected'
+      WHERE publicId = $1`,
+    [publicId],
+  );
 }
 
 /**

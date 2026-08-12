@@ -15,12 +15,15 @@ import {
   fetchYouTubeChannels,
   getYouTubeAuthUrl,
   deleteYouTubeChannel,
+  disconnectYouTubeChannel,
   fetchMetaAccounts,
   getMetaAuthUrl,
   deleteMetaAccount,
+  disconnectMetaAccount,
   fetchTikTokAccounts,
   getTikTokAuthUrl,
   deleteTikTokAccount,
+  disconnectTikTokAccount,
   fetchChannelRules,
 } from "@/lib/data/api";
 import { ChannelRuleDialog } from "@/components/publish/channel-rule-dialog";
@@ -192,8 +195,10 @@ export default function PublishChannelsPage() {
     }
   }, []);
 
+  // 연동해제 ≠ 삭제. 해제는 토큰만 끊고 행·이력을 남긴다(재연동하면 이어서 씀).
+  // 삭제는 행까지 지운다. 해제된 채널은 배포 대상에서 자동으로 빠진다(서버 판정).
   const handleDeleteMeta = async (publicId: string) => {
-    if (!confirm("이 Meta 페이지 연결을 해제하시겠습니까?")) return;
+    if (!confirm("이 Meta 페이지를 완전히 삭제하시겠습니까? 연결 기록까지 지워집니다.\n(배포만 멈추려면 '연동해제'를 쓰세요)")) return;
     try {
       await deleteMetaAccount(publicId);
       setMetaAccounts((prev) => prev.filter((a) => a.publicId !== publicId));
@@ -202,8 +207,18 @@ export default function PublishChannelsPage() {
     }
   };
 
+  const handleDisconnectMeta = async (publicId: string) => {
+    if (!confirm("이 Meta 페이지 연동을 해제하시겠습니까? 배포 대상에서 빠지고, 다시 연결하면 이어서 쓸 수 있습니다.")) return;
+    try {
+      await disconnectMetaAccount(publicId);
+      setMetaAccounts((prev) => prev.map((a) => a.publicId === publicId ? { ...a, status: "disconnected" } : a));
+    } catch {
+      alert("연동해제에 실패했습니다.");
+    }
+  };
+
   const handleDeleteTiktok = async (publicId: string) => {
-    if (!confirm("이 TikTok 계정 연결을 해제하시겠습니까?")) return;
+    if (!confirm("이 TikTok 계정을 완전히 삭제하시겠습니까? 연결 기록까지 지워집니다.\n(배포만 멈추려면 '연동해제'를 쓰세요)")) return;
     try {
       await deleteTikTokAccount(publicId);
       setTiktokAccounts((prev) => prev.filter((a) => a.publicId !== publicId));
@@ -212,13 +227,33 @@ export default function PublishChannelsPage() {
     }
   };
 
+  const handleDisconnectTiktok = async (publicId: string) => {
+    if (!confirm("이 TikTok 계정 연동을 해제하시겠습니까? 배포 대상에서 빠지고, 다시 연결하면 이어서 쓸 수 있습니다.")) return;
+    try {
+      await disconnectTikTokAccount(publicId);
+      setTiktokAccounts((prev) => prev.map((a) => a.publicId === publicId ? { ...a, status: "disconnected" } : a));
+    } catch {
+      alert("연동해제에 실패했습니다.");
+    }
+  };
+
   const handleDelete = async (channelId: string) => {
-    if (!confirm("이 YouTube 채널 연결을 해제하시겠습니까?")) return;
+    if (!confirm("이 YouTube 채널을 완전히 삭제하시겠습니까? 애널리틱스 이력까지 지워집니다.\n(배포만 멈추려면 '연동해제'를 쓰세요)")) return;
     try {
       await deleteYouTubeChannel(channelId);
       setChannels((prev) => prev.filter((c) => c.channelId !== channelId));
     } catch {
       alert("삭제에 실패했습니다.");
+    }
+  };
+
+  const handleDisconnect = async (channelId: string) => {
+    if (!confirm("이 YouTube 채널 연동을 해제하시겠습니까? 배포 대상에서 빠지고, 이력은 남습니다. 다시 연결하면 이어서 씁니다.")) return;
+    try {
+      await disconnectYouTubeChannel(channelId);
+      setChannels((prev) => prev.map((c) => c.channelId === channelId ? { ...c, status: "disconnected" } : c));
+    } catch {
+      alert("연동해제에 실패했습니다.");
     }
   };
 
@@ -458,7 +493,8 @@ export default function PublishChannelsPage() {
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
                     <StatusBadge tone={a.status === "active" ? "done" : "warn"}>
-                      {a.status === "active" ? "활성" : a.status}
+                      {a.status === "active" ? "활성"
+                        : a.status === "disconnected" ? "연동 끊김 — 재연결 필요" : a.status}
                     </StatusBadge>
                     <RuleControls
                       platform="facebook"
@@ -479,6 +515,14 @@ export default function PublishChannelsPage() {
                         onOpen={setRuleFor}
                         prefix="IG "
                       />
+                    )}
+                    {a.status === "active" && (
+                      <button
+                        onClick={() => handleDisconnectMeta(a.publicId)}
+                        className="rounded-md border border-border px-2 py-1 text-xs text-muted-foreground transition hover:text-status-warn"
+                      >
+                        연동해제
+                      </button>
                     )}
                     <button
                       onClick={() => handleDeleteMeta(a.publicId)}
@@ -550,7 +594,8 @@ export default function PublishChannelsPage() {
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
                     <StatusBadge tone={a.status === "active" ? "done" : "warn"}>
-                      {a.status === "active" ? "활성" : a.status}
+                      {a.status === "active" ? "활성"
+                        : a.status === "disconnected" ? "연동 끊김 — 재연결 필요" : a.status}
                     </StatusBadge>
                     <RuleControls
                       platform="tiktok"
@@ -560,6 +605,14 @@ export default function PublishChannelsPage() {
                       unknown={rulesErr !== null}
                       onOpen={setRuleFor}
                     />
+                    {a.status === "active" && (
+                      <button
+                        onClick={() => handleDisconnectTiktok(a.publicId)}
+                        className="rounded-md border border-border px-2 py-1 text-xs text-muted-foreground transition hover:text-status-warn"
+                      >
+                        연동해제
+                      </button>
+                    )}
                     <button
                       onClick={() => handleDeleteTiktok(a.publicId)}
                       className="rounded-md px-2 py-1 text-xs text-muted-foreground transition hover:text-status-error"
@@ -617,9 +670,12 @@ export default function PublishChannelsPage() {
                   </div>
                   <div className="flex items-center gap-2">
                     <StatusBadge
-                      tone={ch.status === "active" ? "done" : ch.status === "revoked" ? "warn" : "error"}
+                      tone={ch.status === "active" ? "done"
+                        : ch.status === "revoked" || ch.status === "disconnected" ? "warn" : "error"}
                     >
-                      {ch.status === "active" ? "활성" : ch.status === "revoked" ? "재연결 필요" : "오류"}
+                      {ch.status === "active" ? "활성"
+                        : ch.status === "revoked" ? "재연결 필요"
+                        : ch.status === "disconnected" ? "연동 끊김 — 재연결 필요" : "오류"}
                     </StatusBadge>
                     <RuleControls
                       platform="youtube"
@@ -629,6 +685,14 @@ export default function PublishChannelsPage() {
                       unknown={rulesErr !== null}
                       onOpen={setRuleFor}
                     />
+                    {ch.status === "active" && (
+                      <button
+                        onClick={() => handleDisconnect(ch.channelId)}
+                        className="rounded-md border border-border px-2 py-1 text-xs text-muted-foreground transition hover:text-status-warn"
+                      >
+                        연동해제
+                      </button>
+                    )}
                     <button
                       onClick={() => handleDelete(ch.channelId)}
                       className="rounded-md px-2 py-1 text-xs text-muted-foreground transition hover:text-status-error"

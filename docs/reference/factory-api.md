@@ -1,25 +1,31 @@
 # Factory API — 외부 연동 문서
 
+> ⚠️ **이 문서는 [customer-api.md](customer-api.md) 로 대체됐다** (2026-08-12).
+> 인증이 `x-factory-key`(글로벌 단일 키)에서 **워크스페이스 API 키
+> (`Authorization: Bearer stepd_live_...`)** 로 바뀌었다 — 테넌트 귀속·과금(선불
+> 크레딧)이 붙으면서다. 아래 요청/응답 형식·status 값·에러표는 여전히 유효하지만,
+> 인증·과금·온보딩은 customer-api.md 를 볼 것.
+
 소스 영상 하나를 넣으면 분석·쇼츠·클립·YouTube 배포까지 자동으로 완주시키는 API.
-붙이는 쪽(AENA 등 외부 서버)이 읽는 문서다.
+붙이는 쪽(aena 등 외부 서버)이 읽는 문서다.
 
 베이스: `https://stepd.stepai.kr/api` (프로덕션)
 
 ---
 
-## 인증
+## 인증 (2026-08-12 변경)
 
-모든 Factory 라우트에 헤더가 필요하다.
+모든 라우트에 워크스페이스 API 키:
 
 ```
-x-factory-key: <발급받은 키>
+Authorization: Bearer stepd_live_...
 ```
 
-- 키 미설정 서버 → `503 factory_key_unset` (열림이 아니라 **닫힘**)
-- 키 불일치 → `401 unauthorized`
+- 401 = 키 불일치·폐기 · 403 = 스코프 부족(`factory:write`/`factory:read` 필요) ·
+  402 = 크레딧 부족.
+- 구 `x-factory-key` 헤더와 `FACTORY_API_KEY` env 는 제거됐다.
 
-> ⚠️ Cloud Run 이 allow-unauthenticated 라 IAM 이 막아주지 않는다. 이 키가 유일한 방어선이고,
-> 유출되면 **남이 우리 YouTube 채널에 영상을 올릴 수 있다.** Secret Manager 로만 관리할 것.
+> ⚠️ 키가 유출되면 **남이 그 워크스페이스 채널에 영상을 올릴 수 있다.** 서버 env 로만 관리할 것.
 
 ---
 
