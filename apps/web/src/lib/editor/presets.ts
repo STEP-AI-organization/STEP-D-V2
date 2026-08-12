@@ -571,8 +571,15 @@ export function ensureTracks(state: EditorState, durationSec: number, segmentSta
 
   // titleLines·elements의 keyframes가 undefined거나 배열 아닌 경우 빈 배열로 정규화.
   // sampleKeyframes는 undefined도 처리하지만, 다른 소비자(server render·인덱스 접근)가 배열 가정할 수 있음.
+  // ⚠️ id 를 백필한다. factory 가 예전에 id 없이 titleLines 를 만들었고(2026-08-12 수정),
+  //    그렇게 저장된 클립을 열면 편집기가 l.id === undefined 로 두 줄을 다 매칭해 붕괴한다.
+  //    이미 저장된 것까지 방어하려면 여기서 채운다.
   const titleLines = Array.isArray(state.titleLines)
-    ? state.titleLines.map((l) => ({ ...l, keyframes: Array.isArray(l.keyframes) ? l.keyframes : [] }))
+    ? state.titleLines.map((l, i) => ({
+        ...l,
+        id: l.id || `t${i}`,
+        keyframes: Array.isArray(l.keyframes) ? l.keyframes : [],
+      }))
     : [];
   const elements = Array.isArray(state.elements)
     ? state.elements.map((e) => ({ ...e, keyframes: Array.isArray(e.keyframes) ? e.keyframes : [] }))

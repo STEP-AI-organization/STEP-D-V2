@@ -486,8 +486,10 @@ export function autoEditorState(
     bg: "#000000",
     templateId,
     // 한 줄이면 통째 강조색, 두 줄이면 둘째 줄만 (표준 강조색 = 청록, 레퍼런스 확정).
+    // ⚠️ id 를 반드시 넣는다. 없으면 편집기에서 setLine 이 l.id === undefined 로 **두 줄을 다**
+    //    매칭해 한 줄로 붕괴하고, React key 도 undefined 로 겹친다(2026-08-12 발견).
     titleLines: lines.map((text, i) => ({
-      text, size, color: lines.length === 1 || i === 1 ? seed.accent : "#FFFFFF",
+      id: `t${i}`, text, size, color: lines.length === 1 || i === 1 ? seed.accent : "#FFFFFF",
     })),
     titleX: 50,
     titleY: seed.titleY,

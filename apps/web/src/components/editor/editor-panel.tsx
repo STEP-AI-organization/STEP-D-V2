@@ -357,16 +357,16 @@ function ChannelTab({ state, update }: { state: EditorState; update: Update }) {
         <Label>채널명</Label>
         <input value={state.channelName} onChange={(e) => update({ channelName: e.target.value })} className={field} />
       </div>
-      {/* 서버 번인(index.ts buildEditorAss)은 "▶ 채널명" 한 줄 + 세로 위치만 굽는다.
-          아이콘·뱃지·크기·부가 줄은 ASS 로 표현할 수 없어 결과물에 안 나온다. */}
+      {/* 렌더가 실제로 굽는 것: "▶ 채널명" · 세로 위치 · **채널 아이콘 합성** · **글자 크기**
+          (index.ts buildEditorAss + 아이콘 오버레이). 부가 줄만 아직 미리보기 전용이다.
+          예전 이 고지는 "아이콘·크기는 미리보기 전용"이라 했는데 지금은 거짓 — 둘 다 구워진다. */}
       <div className="rounded-md border border-dashed border-zinc-700 p-2 text-[11px] text-zinc-400">
-        결과물에 실제로 구워지는 값은 <b>채널 표시 · 채널명 · 세로 위치</b>뿐입니다. 아래 아이콘·뱃지·크기·부가
-        줄은 미리보기에만 적용됩니다.
+        <b>채널 표시 · 채널명 · 세로 위치 · 아이콘 · 글자 크기</b>는 결과물에 그대로 구워집니다.
+        <b> 부가 줄</b>만 아직 미리보기 전용입니다.
       </div>
       <div>
         <Label>
           채널 아이콘
-          <PreviewOnly reason="아이콘 합성은 렌더 미지원 — 결과물에는 채널명 텍스트만 들어갑니다." />
         </Label>
         <ImagePickField
           value={state.channelIconDataUrl}
@@ -400,7 +400,6 @@ function ChannelTab({ state, update }: { state: EditorState; update: Update }) {
       <div>
         <Label>
           뱃지 스타일
-          <PreviewOnly reason="뱃지 레이아웃·모양은 렌더 미지원 — 결과물에는 채널명 텍스트만 들어갑니다." />
         </Label>
         <div className="grid grid-cols-2 gap-1.5">
           {CHANNEL_BADGE_PRESETS.map((p) => {
@@ -424,7 +423,6 @@ function ChannelTab({ state, update }: { state: EditorState; update: Update }) {
       <div>
         <Label>
           아이콘 크기 {state.channelIconSize ?? 24}px
-          <PreviewOnly reason="아이콘 자체가 렌더에 없으므로 크기도 결과물에 반영되지 않습니다." />
         </Label>
         <input
           type="range"
@@ -438,7 +436,6 @@ function ChannelTab({ state, update }: { state: EditorState; update: Update }) {
       <div>
         <Label>
           글자 크기 {state.channelLabelSize ?? 14}px
-          <PreviewOnly reason="렌더는 기준 14px 고정(index.ts) — 이 값은 미리보기에만 적용됩니다." />
         </Label>
         <input
           type="range"
