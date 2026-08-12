@@ -5583,6 +5583,51 @@ app.post("/api/clips/:id/regenerate-titles", async (c) => {
 // ── 업로드 메타데이터 AI 자동 생성 — YouTube 업로드용 title/description/tags를 자막 근거로 생성.
 //    저장 X. 프론트 MetadataButton의 '생성' 버튼이 호출 → 결과를 state.uploadMeta에 얹는다. ──
 /**
+ * 사람이 고친 채널 메타를 저장한다.
+ *
+ * `edited: true` 를 붙여 두면 재생성이 그 채널을 덮지 않는다 — 운영자가 다듬어 놓은 문구가
+ * 자동 생성 한 번에 날아가면 아무도 이 기능을 안 쓴다.
+ *
+ * 저장 시점에 규격을 다시 본다. 화면에서 이미 보여주지만, 화면만 믿으면 API 로 들어오는
+ * 값이 그대로 발행 경로까지 간다.
+ */
+app.patch("/api/clips/:id/metadata/:channel", async (c) => {
+  const clipId = c.req.param("id");
+  const channel = c.req.param("channel") as MetaChannel;
+  if (!META_CHANNELS.includes(channel)) {
+    return c.json({ error: "unknown_channel", message: `알 수 없는 채널: ${channel}` }, 400);
+  }
+  const clip = await getEntity<any>("clip", clipId);
+  if (!clip) return c.json({ error: "clip_not_found", message: "클립을 찾을 수 없습니다." }, 404);
+
+  const b = await c.req.json<{ title?: string; description?: string; tags?: string[] }>()
+    .catch(() => null);
+  if (!b) return c.json({ error: "bad_request", message: "본문이 올바르지 않습니다." }, 400);
+
+  const spec = CHANNEL_SPECS[channel];
+  const next = {
+    channel,
+    // 제목 필드가 없는 채널에 제목을 저장하지 않는다 — 저장되면 발행 때 어디론가 새어 나간다.
+    title: spec.titleMax === null ? null : String(b.title ?? "").trim(),
+    description: String(b.description ?? "").trim(),
+    tags: Array.isArray(b.tags)
+      ? [...new Set(b.tags.map((t) => String(t).replace(/^#/, "").trim()).filter(Boolean))]
+          .slice(0, spec.tagsMax)
+      : [],
+    needsCategory: spec.needsCategory,
+    problems: validateForChannel({ title: b.title ?? null, description: b.description ?? "" }, channel),
+    edited: true,
+    editedAt: Date.now(),
+  };
+
+  await putEntity("clip", clipId, {
+    ...clip,
+    channelMeta: { ...(clip.channelMeta ?? {}), [channel]: next },
+  });
+  return c.json({ channel, meta: next });
+});
+
+/**
  * 채널별 업로드 메타데이터 생성.
  *
  * 예전에는 **원본 자막 40줄만** 다시 읽어 문구 한 벌을 만들고, 그걸 모든 채널에 그대로 썼다.

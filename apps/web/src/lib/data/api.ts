@@ -2266,3 +2266,50 @@ async function naverError(res: Response): Promise<string> {
   const body = (await res.json().catch(() => null)) as { message?: string; error?: string } | null;
   return body?.message ?? body?.error ?? `${res.status} ${res.statusText}`;
 }
+
+// ── 채널별 업로드 메타데이터 ────────────────────────────────────────────────────
+//
+// 클립 하나를 여러 채널에 올리는데 규격이 서로 다르다 — 네이버 클립은 **제목 필드가 없고**
+// 설명 10자 이상 + 카테고리 필수, YouTube 는 제목 100자에 태그 필드가 따로다.
+// 서버가 바탕 한 벌을 만들고 채널 맞춤은 결정론으로 한다(server: clip-metadata.ts).
+
+export type MetaChannel =
+  | "youtube" | "navertv" | "naverclip" | "instagram" | "facebook" | "tiktok";
+
+export interface ChannelMeta {
+  channel: MetaChannel;
+  /** 그 채널에 제목 필드가 없으면 null (네이버 클립·인스타·틱톡). */
+  title: string | null;
+  description: string;
+  tags: string[];
+  /** 발행 전에 사람이 카테고리를 골라야 하는가. */
+  needsCategory: boolean;
+  /** 규격 위반 사유. 비어야 발행할 수 있다. */
+  problems: string[];
+  /** 사람이 고친 것 — 재생성이 덮지 않는다. */
+  edited?: boolean;
+}
+
+/** 채널별 메타를 새로 만든다(사람이 고친 채널은 보존된다). */
+export async function generateClipMetadata(
+  clipId: string,
+): Promise<{ channels: Record<string, ChannelMeta> }> {
+  const res = await fetch(`${API_BASE}/clips/${clipId}/generate-metadata`, { method: "POST" });
+  if (!res.ok) throw new ApiError(res.status, await errorMessageOf(res));
+  return (await res.json()) as { channels: Record<string, ChannelMeta> };
+}
+
+/** 사람이 고친 값을 저장한다. 저장 시점에 서버가 규격을 다시 본다. */
+export async function saveClipMetadata(
+  clipId: string,
+  channel: MetaChannel,
+  meta: { title?: string | null; description: string; tags: string[] },
+): Promise<ChannelMeta> {
+  const res = await fetch(`${API_BASE}/clips/${clipId}/metadata/${channel}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(meta),
+  });
+  if (!res.ok) throw new ApiError(res.status, await errorMessageOf(res));
+  return ((await res.json()) as { meta: ChannelMeta }).meta;
+}

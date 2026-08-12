@@ -17,6 +17,7 @@ import { Suspense, useEffect, useMemo, useState } from "react";
 
 import { IssuePanel } from "@/components/gate/issue-panel";
 import { PublishDialog } from "@/components/publish/publish-dialog";
+import { ClipDetail } from "@/components/media/clip-detail";
 import { useToast } from "@/components/ui/toast";
 import { useSession } from "@/lib/auth";
 import { roleOf } from "@/lib/roles";
@@ -67,6 +68,8 @@ function MediaView() {
 
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [openIssues, setOpenIssues] = useState<string | null>(null);
+  // 클릭한 행 — AENA 처럼 목록은 한 줄, 상세는 큰 영상 + 메타데이터.
+  const [detailId, setDetailId] = useState<string | null>(null);
   const [publishTarget, setPublishTarget] = useState<string[] | null>(null);
 
   // 화면이 떠 있는 상태에서 다른 링크로 들어와도 필터가 따라오게 한다.
@@ -200,6 +203,7 @@ function MediaView() {
               onOpenIssues={() => setOpenIssues(openIssues === c.id ? null : c.id)}
               issuesOpen={openIssues === c.id}
               onGateChanged={loadGates}
+              onOpen={() => setDetailId(c.id)}
               programTitle={
                 programs.find((p) => p.id === episodes.find((e) => e.id === c.episodeId)?.programId)?.title ?? ""
               }
@@ -236,6 +240,20 @@ function MediaView() {
         </div>
       )}
 
+      {detailId && (() => {
+        const c = clips.find((x) => x.id === detailId);
+        if (!c) return null;
+        return (
+          <ClipDetail
+            clip={c as any}
+            programTitle={
+              programs.find((p) => p.id === episodes.find((e) => e.id === c.episodeId)?.programId)?.title
+            }
+            onClose={() => setDetailId(null)}
+          />
+        );
+      })()}
+
       {publishTarget && (
         <PublishDialog
           clipIds={publishTarget}
@@ -256,6 +274,7 @@ function MediaRow({
   onOpenIssues,
   issuesOpen,
   onGateChanged,
+  onOpen,
   programTitle,
   episodeNumber,
 }: {
@@ -267,6 +286,8 @@ function MediaRow({
   onOpenIssues: () => void;
   issuesOpen: boolean;
   onGateChanged: () => void | Promise<void>;
+  /** 행을 열어 상세(렌더 영상 + 메타데이터)를 본다. */
+  onOpen: () => void;
   programTitle: string;
   episodeNumber?: number;
 }) {
@@ -280,19 +301,30 @@ function MediaRow({
       <div className="flex items-center gap-3 px-3 py-2.5">
         <input type="checkbox" checked={checked} onChange={onToggle} aria-label="선택" />
 
-        <div className="sd-ph h-[44px] w-[78px] shrink-0 overflow-hidden rounded-[3px]">
+        {/* 썸네일·제목을 누르면 상세가 열린다. 체크박스·우측 버튼은 각자 동작을 유지한다. */}
+        <button
+          type="button"
+          onClick={onOpen}
+          className="sd-ph h-[44px] w-[78px] shrink-0 overflow-hidden rounded-[3px] text-left"
+          aria-label="상세 보기"
+        >
           {thumb ? (
             // eslint-disable-next-line @next/next/no-img-element
             <img src={thumb} alt="" loading="lazy" className="size-full object-cover" />
           ) : (
             <span className="text-[9px]">썸네일</span>
           )}
-        </div>
+        </button>
 
         <div className="min-w-0 flex-1">
-          <div className="truncate text-[12.5px] font-medium" style={{ color: "var(--sd-fg)" }}>
+          <button
+            type="button"
+            onClick={onOpen}
+            className="block w-full truncate text-left text-[12.5px] font-medium hover:underline"
+            style={{ color: "var(--sd-fg)" }}
+          >
             {clip.title}
-          </div>
+          </button>
           <div className="sd-mono truncate text-[10.5px]" style={{ color: "var(--sd-mut)" }}>
             {programTitle}
             {episodeNumber != null ? ` · 회차 ${episodeNumber}` : ""} · {fmtTime(clip.durationSec)} ·{" "}
