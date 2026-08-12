@@ -28,10 +28,12 @@ const issue = (over: Partial<Issue> = {}): Issue => ({
 });
 
 describe("미판정 ≠ 이슈 없음 (F2 Invariant · FLOWS.md:51)", () => {
-  it("아무도 안 본 미디어는 검수 대기지 통과가 아니다", () => {
+  it("미판정은 '검수 대기' 표시로만 남고 배포는 막지 않는다 (2026-08-12 사용자 결정)", () => {
+    // 권리 여부를 데이터로 알 방법이 없어 무판정=차단이면 자동 배포가 전부 멈춘다.
+    // 명시적 이슈(blocked·open·conditional)는 여전히 막는다 — 아래 테스트들이 그 보증이다.
     const g = evaluateGate({ judged: false, issues: [] });
     assert.equal(g.state, "review_pending");
-    assert.equal(g.allowed, false);
+    assert.equal(g.allowed, true);
   });
 
   it("'이슈 없음' 판정이 있어야 통과한다", () => {

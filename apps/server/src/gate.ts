@@ -136,14 +136,17 @@ export function evaluateGate(input: { judged: boolean; issues: Issue[] }): GateR
     };
   }
 
-  // 여기부터는 미해결 이슈가 없다. 그래도 아무도 안 봤으면 통과가 아니다.
+  // 여기부터는 미해결 이슈가 없다. "검수 전" 상태는 정보로만 남기고 **배포는 막지 않는다**
+  // (사용자 결정 2026-08-12: 권리 판정 필수 게이트 제거 — 데이터로 알 방법이 현실적으로
+  // 없어, 필수로 두면 자동 배포가 전부 조용히 멈춘다). 명시적으로 등록된 이슈(blocked·
+  // open·conditional)는 위에서 여전히 막는다 — 없앤 것은 "무판정=차단" 하나다.
   const judged = input.judged || issues.length > 0;
   if (!judged) {
     return {
       state: "review_pending",
       label: GATE_LABEL.review_pending,
-      allowed: false,
-      reason: "권리·심의 검수 전입니다 — 이슈가 없다는 판정도 사람이 남겨야 합니다",
+      allowed: true,
+      reason: "",
       blocking: [],
     };
   }
