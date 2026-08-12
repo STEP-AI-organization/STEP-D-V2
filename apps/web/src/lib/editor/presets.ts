@@ -706,12 +706,16 @@ export function applyTemplate(state: EditorState, id: TemplateId, frame?: Templa
     next.titleX = t1.x;
     next.titleY = t1.y;
     next.titleAlign = t1.align === "left" ? "left" : "center";
-    // 기존 텍스트는 보존하되(사용자가 쓴 문구) 위치·크기·색만 슬롯으로 덮는다.
-    const lines = state.titleLines.length ? state.titleLines : [{ id: "t1", text: "", size: t1.size, color: t1.color }];
+    // ⚠️ **크기(size)는 슬롯에서 가져오지 않는다.** 슬롯 size 는 1080폭 캔버스 기준 px 인데
+    //    미리보기는 line.size 를 **절대 px** 로 그린다(스테이지 폭이 1080 이 아님) — 슬롯 64 를
+    //    그대로 넣으면 좁은 미리보기에서 제목이 2배로 거대해져 프레임을 침범했다(2026-08-12).
+    //    위치·정렬·색만 슬롯으로 덮고, 크기는 사용자가 정한 값을 유지한다. 크기 단위 정합은
+    //    저장된 클립 전부에 영향을 줘서 별도 작업이다.
+    const lines = state.titleLines.length ? state.titleLines : [{ id: "t1", text: "", size: 30, color: t1.color }];
     next.titleLines = lines.map((l, i) => {
       const s = i === 0 ? t1 : i === 1 ? (t2 ?? null) : null;
       // 슬롯이 없는 줄(3줄째 등)은 그대로 둔다 — 지우면 사용자 문구가 사라진다.
-      return s ? { ...l, size: s.size, color: s.color } : l;
+      return s ? { ...l, color: s.color } : l;
     });
   }
 
