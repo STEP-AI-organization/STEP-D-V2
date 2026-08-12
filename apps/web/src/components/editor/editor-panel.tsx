@@ -551,8 +551,28 @@ function LayoutTab({ state, update, applyTpl, frames = [] }: { state: EditorStat
                   state.templateId === f.name ? "border-zinc-300 bg-zinc-800" : "border-zinc-700 hover:bg-zinc-800/50",
                 )}
               >
-                {/* 프레임 자체를 썸네일로 쓴다 — 별도 미리보기 이미지를 만들 필요가 없다 */}
-                <div className="relative aspect-[9/16] bg-zinc-900">
+                {/* 프레임 기하를 축소해 썸네일로 그린다.
+                    ⚠️ 예전엔 overlay.png 만 보여줬는데, 이 템플릿들의 overlay 는 전부 **투명**이라
+                    (bands·video 는 meta.json 기하로만 정의) 셋 다 빈 검정 사각형으로 똑같이
+                    보였다(사용자 지적 2026-08-12). 실제로 다른 건 영상 위치·띠 크기라 그걸 그린다. */}
+                <div className="relative aspect-[9/16] overflow-hidden bg-zinc-800">
+                  {/* 영상이 차지하는 영역 — contain=레터박스, cover=확대. 파랑으로 표시. */}
+                  <div
+                    className="absolute grid place-items-center text-[8px] text-white/70"
+                    style={{
+                      left: `${f.video.x}%`, top: `${f.video.y}%`,
+                      width: `${f.video.w}%`, height: `${f.video.h}%`,
+                      background: "linear-gradient(135deg,#3b5bdb,#5c7cfa)",
+                    }}
+                  >
+                    영상
+                  </div>
+                  {/* 검정 띠 — 훅/브랜딩 자리 */}
+                  {f.bands.map((b, i) => (
+                    <div key={i} className="absolute"
+                      style={{ left: `${b.x}%`, top: `${b.y}%`, width: `${b.w}%`, height: `${b.h}%`, background: b.color }} />
+                  ))}
+                  {/* 투명이 아닌 실제 프레임 그래픽이 있으면 그것도 겹쳐 보여준다 */}
                   <img src={frameOverlaySrc(f)} alt="" className="absolute inset-0 size-full object-contain" />
                 </div>
                 <div className="truncate px-1.5 py-1 text-[11px] text-white">{f.name}</div>
