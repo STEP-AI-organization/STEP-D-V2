@@ -4,5 +4,11 @@ packages:
   - admin
   - packages/*
 
+# 빌드 스크립트를 돌릴 패키지. 여기 없으면 pnpm 이 ERR_PNPM_IGNORED_BUILDS 로 **exit 1** 을
+# 내고, 그게 `pnpm <script>` 의 자동 install 까지 막아 스크립트 실행 자체가 안 된다
+# (2026-08-12 윈도우2 에서 워커가 안 뜬 원인). 로컬 `pnpm approve-builds` 로 고치면
+# self-update 의 git reset 에 날아가므로 리포에 박아둔다.
 onlyBuiltDependencies:
   - esbuild
+  - sharp
+  - unrs-resolver
