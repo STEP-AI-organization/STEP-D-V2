@@ -96,7 +96,11 @@ npx playwright install chromium          # ~150MB
 cloud-sql-proxy step-d:us-central1:stepd-db --port 5432
 ```
 
-프록시도 워커와 함께 항상 떠 있어야 한다 — pm2 로 같이 등록해두는 편이 안전하다.
+프록시도 워커와 함께 **항상** 떠 있어야 한다. `install.ps1` 이 작업 스케줄러에
+`STEPD-CloudSQL-Proxy` 로 등록한다(로그온 시 시작 · 죽으면 1분 뒤 재시작 · 시간제한 없음).
+
+> pm2 는 쓰지 않는다. Windows 에서 두 번 막혔다 — pm2 가 프록시의 `--port` 를 자기 옵션으로
+> 먹고, pm2 로 pnpm 을 띄우면 빌드 승인 문제로 exit 1 이 나 워커가 아예 안 뜬다.
 
 ---
 
@@ -142,8 +146,8 @@ pnpm --filter @stepd/server naver:login
 .\deploy\naver-pc\install.ps1
 ```
 
-pm2 로 워커를 등록하고, **10분마다 origin/main 을 당겨 재시작**하는 작업을 스케줄러에 건다.
-이후 **배포는 `main` 에 push 하는 것으로 끝난다** — 윈도우2 는 알아서 따라온다.
+작업 스케줄러에 세 개를 건다 — `STEPD-CloudSQL-Proxy` · `STEPD-Naver-Worker` ·
+**10분마다 origin/main 을 당겨 재시작**하는 자가 갱신. 이후 **배포는 `main` 에 push 하는 것으로 끝난다** — 윈도우2 는 알아서 따라온다.
 급하면 윈도우1 에서 Tailscale 로 즉시 갱신을 찌를 수도 있다(`push-update.ps1`).
 
 ---
@@ -151,8 +155,8 @@ pm2 로 워커를 등록하고, **10분마다 origin/main 을 당겨 재시작**
 ## 7. 확인
 
 ```powershell
-pm2 status stepd-naver-worker            # running 이어야 한다
-pm2 logs stepd-naver-worker              # lane=naver 로 떠야 한다
+Get-ScheduledTask STEPD-*                # 둘 다 Running 이어야 한다
+Get-Process node -ErrorAction Ignore     # 워커 프로세스
 Get-Content $env:USERPROFILE\.stepd\self-update.log -Tail 20
 ```
 

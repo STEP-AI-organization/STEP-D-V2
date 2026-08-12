@@ -34,16 +34,16 @@ pnpm --filter @stepd/server naver:login                # 브라우저가 뜬다 
 aver-pc\install.ps1
 ```
 
-pm2 로 워커를 등록하고, **10분마다 origin/main 을 당겨 재시작**하는 작업을 스케줄러에 건다.
-이후 **배포는 `main` 에 push 하는 것으로 끝난다** — 이 PC 는 알아서 따라온다.
+작업 스케줄러에 `STEPD-CloudSQL-Proxy` · `STEPD-Naver-Worker` 와 **10분마다 origin/main 을
+당겨 재시작**하는 자가 갱신을 건다(pm2 를 쓰지 않는 이유는 `deploy/naver-pc/README.md`). 이후 **배포는 `main` 에 push 하는 것으로 끝난다** — 이 PC 는 알아서 따라온다.
 
 왜 SSH 로 밀지 않는가: 사무실 PC 는 NAT 뒤라 포트포워딩·고정IP·키 관리가 전부 유지보수
 부담이 된다. **당겨오는 쪽이 설정할 게 없다.** 변경이 없으면 재시작도 하지 않으므로
 발행 중인 잡이 끊기지 않는다.
 
 ```
-pm2 status stepd-naver-worker      # 상태
-pm2 logs stepd-naver-worker        # 워커 로그
+Get-ScheduledTask STEPD-*          # 프록시·워커 둘 다 Running
+Get-Process node                   # 워커 프로세스
 ~/.stepd/self-update.log           # 갱신 로그
 ```
 

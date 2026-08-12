@@ -19,7 +19,7 @@
 param(
   [string]$RepoRoot = (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)),
   [string]$Branch   = "main",
-  [string]$PmName   = "stepd-naver-worker",
+  [string]$TaskWorker = "STEPD-Naver-Worker",
   [switch]$Force
 )
 
@@ -71,10 +71,14 @@ if ($LASTEXITCODE -ne 0) {
 # Playwright 브라우저는 버전이 올라갈 수 있다. 이미 있으면 즉시 끝난다.
 npx playwright install chromium 2>&1 | Out-Null
 
-Say "워커 재시작 ($PmName)"
-pm2 restart $PmName 2>&1 | Out-Null
-if ($LASTEXITCODE -ne 0) {
-  Say "pm2 restart 실패 — 등록되어 있지 않으면 install-task.ps1 을 먼저 실행할 것"
+Say "워커 재시작 ($TaskWorker)"
+# pm2 가 아니라 작업 스케줄러다(Windows 에서 pm2 가 두 번 발목을 잡았다 — install.ps1 주석 참고).
+try {
+  Stop-ScheduledTask -TaskName $TaskWorker -ErrorAction SilentlyContinue
+  Start-Sleep -Seconds 2
+  Start-ScheduledTask -TaskName $TaskWorker -ErrorAction Stop
+} catch {
+  Say "워커 재시작 실패 — install.ps1 로 먼저 등록할 것: $($_.Exception.Message)"
   exit 1
 }
 
