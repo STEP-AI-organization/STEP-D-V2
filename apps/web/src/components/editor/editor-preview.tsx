@@ -261,14 +261,12 @@ export function EditorPreview({
               onClick={onTogglePlay}
               className={cn(
                 "absolute cursor-pointer",
-                // 프레임 템플릿의 fit 을 그대로 따른다 — renderShort 의 프레임 경로가
-                // meta.json 의 video.fit 으로 cover(crop) / contain(pad) 을 고르므로,
-                // 여기서 한쪽으로 하드코딩하면 미리보기와 결과물이 어긋난다.
-                // (broadcast-clean = contain: 방송 원본의 번인 자막을 자르지 않는다.)
-                // 프레임이 없으면 blur/solid 경로와 같은 기존 contain 동작.
+                // 축2 핏. 프레임이 있으면 그 프레임의 video.fit(레터박스 띠 기하까지 프레임이 소유),
+                // 없으면 **state.fit**(맞춤/채우기)을 따른다 — 예전엔 프레임 없을 때 contain 하드코딩이라
+                // 사용자가 세로형에 원본을 잘라 채우는(cover) 선택을 미리보기에서 볼 수 없었다.
                 frame
                   ? (frame.video.fit === "contain" ? "object-contain" : "object-cover")
-                  : "inset-0 size-full object-contain",
+                  : `inset-0 size-full ${state.fit === "cover" ? "object-cover" : "object-contain"}`,
               )}
               style={
                 frame

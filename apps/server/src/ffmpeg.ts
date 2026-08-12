@@ -184,7 +184,134 @@ export type RenderShortOpts = {
    *  워드마크 로고가 같은 코드로 자연스럽게 앉는다. ASS 번인 뒤에 얹는다.
    *  ⚠️ hookPreroll 경로에는 아직 미지원 — 캘러가 프리롤일 땐 넘기지 않는다. */
   badge?: { path: string; y: number; h: number } | null;
+  /** AI multi-layout plan. Times are absolute master seconds and tracking centres are
+   * normalized source-frame coordinates. The renderer intersects it with startTime/endTime
+   * and deterministically fills every uncovered gap with `fit`. */
+  reframePlan?: ReframeRenderPlan | null;
+  /** In AI multi-layout mode captions stay visible during both layouts, while decorative
+   * editor overlays are pre-clipped to fit intervals by the caller. `assPath` remains the
+   * backwards-compatible all-in-one path used by basic mode. */
+  captionAssPath?: string | null;
+  decorationAssPath?: string | null;
 };
+
+export type ReframeTrackingKeyframe = {
+  /** Absolute master second. */
+  t: number;
+  /** Normalized source-frame centre. */
+  cx: number;
+  cy: number;
+  confidence?: number;
+};
+
+export type ReframeRenderSegment = {
+  beatId?: string | number;
+  /** Absolute master seconds. */
+  start: number;
+  end: number;
+  layout: "fit" | "fill";
+  score?: number;
+  reasonCodes?: string[];
+  tracking?: ReframeTrackingKeyframe[];
+};
+
+export type ReframeRenderPlan = {
+  version: 1;
+  mode: "ai_multi";
+  sourceStart?: number;
+  sourceEnd?: number;
+  segments?: ReframeRenderSegment[];
+  /** `beats` is accepted as a wire-format alias so the worker plan can stay beat-shaped. */
+  beats?: ReframeRenderSegment[];
+};
+
+export type NormalizedReframeSegment = ReframeRenderSegment & {
+  start: number;
+  end: number;
+  tracking: ReframeTrackingKeyframe[];
+};
+
+const finite = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
+const clamp01 = (v: number): number => Math.max(0, Math.min(1, v));
+
+/**
+ * Validate, sort and fully cover an export window. Invalid/overlapping pieces never reach
+ * ffmpeg; uncovered ranges intentionally become fit instead of silently inheriting a stale
+ * crop. Export routes validate too, but keeping this boundary pure protects every caller.
+ */
+export function normalizeReframeSegments(
+  plan: ReframeRenderPlan | null | undefined,
+  windowStart: number,
+  windowEnd: number,
+): NormalizedReframeSegment[] {
+  if (!plan || plan.mode !== "ai_multi" || !(windowEnd > windowStart)) return [];
+  const raw = (Array.isArray(plan.segments) ? plan.segments : Array.isArray(plan.beats) ? plan.beats : [])
+    .filter((s): s is ReframeRenderSegment => !!s && finite(s.start) && finite(s.end) && s.end > s.start
+      && (s.layout === "fit" || s.layout === "fill"))
+    .sort((a, b) => a.start - b.start || a.end - b.end);
+
+  const out: NormalizedReframeSegment[] = [];
+  let cursor = windowStart;
+  for (const source of raw) {
+    const start = Math.max(windowStart, cursor, source.start);
+    const end = Math.min(windowEnd, source.end);
+    if (end <= start + 1e-6) continue;
+    if (start > cursor + 1e-6) {
+      out.push({ start: cursor, end: start, layout: "fit", reasonCodes: ["uncovered_range"], tracking: [] });
+    }
+    const byTime = new Map<number, ReframeTrackingKeyframe>();
+    for (const k of Array.isArray(source.tracking) ? source.tracking : []) {
+      if (!k || !finite(k.t) || !finite(k.cx) || !finite(k.cy)) continue;
+      // Keep one sample immediately outside each edge useful for interpolation, but reject
+      // unrelated points from another beat/plan.
+      if (k.t < source.start - 0.5 || k.t > source.end + 0.5) continue;
+      byTime.set(k.t, {
+        t: k.t,
+        cx: clamp01(k.cx),
+        cy: clamp01(k.cy),
+        ...(finite(k.confidence) ? { confidence: clamp01(k.confidence) } : {}),
+      });
+    }
+    const tracking = [...byTime.values()].sort((a, b) => a.t - b.t);
+    out.push({ ...source, start, end, tracking });
+    cursor = end;
+    if (cursor >= windowEnd - 1e-6) break;
+  }
+  if (cursor < windowEnd - 1e-6) {
+    out.push({ start: cursor, end: windowEnd, layout: "fit", reasonCodes: ["uncovered_range"], tracking: [] });
+  }
+  if (!out.length) {
+    out.push({ start: windowStart, end: windowEnd, layout: "fit", reasonCodes: ["missing_plan"], tracking: [] });
+  }
+  return out;
+}
+
+const ffNum = (v: number): string => {
+  const s = Number(v.toFixed(6)).toString();
+  return s === "-0" ? "0" : s;
+};
+
+/** Piecewise-linear focus expression for ffmpeg's per-frame crop x/y evaluation. */
+export function trackingAxisExpression(
+  tracking: ReframeTrackingKeyframe[],
+  axis: "cx" | "cy",
+  segmentStart: number,
+): string {
+  const pts = tracking
+    .filter((k) => finite(k?.t) && finite(k?.[axis]))
+    .map((k) => ({ t: Math.max(0, k.t - segmentStart), v: clamp01(k[axis]) }))
+    .sort((a, b) => a.t - b.t);
+  if (!pts.length) return "0.5";
+  if (pts.length === 1) return ffNum(pts[0].v);
+  let expr = ffNum(pts[pts.length - 1].v);
+  for (let i = pts.length - 2; i >= 0; i--) {
+    const a = pts[i], b = pts[i + 1];
+    const dt = Math.max(0.000001, b.t - a.t);
+    const lerp = `${ffNum(a.v)}+(${ffNum(b.v - a.v)})*clip((t-${ffNum(a.t)})/${ffNum(dt)},0,1)`;
+    expr = `if(lt(t,${ffNum(b.t)}),${lerp},${expr})`;
+  }
+  return expr;
+}
 
 /**
  * 이미지를 원형으로 잘라 PNG 로 저장 (하단 브랜딩 아이콘용). geq 로 원 밖 알파를 0 으로.
@@ -290,6 +417,285 @@ function renderShortWithPreroll(opts: RenderShortOpts & { hookPreroll: NonNullab
   });
 }
 
+function escapeAssPath(p: string): string {
+  return p.replace(/\\/g, "\\\\").replace(/:/g, "\\:").replace(/'/g, "\\'");
+}
+
+function trackingValueAt(
+  tracking: ReframeTrackingKeyframe[],
+  axis: "cx" | "cy",
+  absoluteTime: number,
+): number {
+  const pts = tracking
+    .filter((k) => finite(k?.t) && finite(k?.[axis]))
+    .sort((a, b) => a.t - b.t);
+  if (!pts.length) return 0.5;
+  if (absoluteTime <= pts[0].t) return clamp01(pts[0][axis]);
+  if (absoluteTime >= pts[pts.length - 1].t) return clamp01(pts[pts.length - 1][axis]);
+  for (let i = 0; i < pts.length - 1; i++) {
+    const a = pts[i], b = pts[i + 1];
+    if (absoluteTime <= b.t) {
+      const f = (absoluteTime - a.t) / Math.max(0.000001, b.t - a.t);
+      return clamp01(a[axis] + (b[axis] - a[axis]) * f);
+    }
+  }
+  return 0.5;
+}
+
+type DynamicBodyGraph = {
+  graph: string;
+  last: string;
+  segments: NormalizedReframeSegment[];
+};
+
+/**
+ * Build only the AI body video graph. Keeping this separate lets the hook-preroll path use
+ * exactly the same beat cuts/crops/overlays instead of falling back to the legacy static body.
+ */
+function buildDynamicBodyGraph(
+  opts: RenderShortOpts,
+  sourceInput: number,
+  templateInput: number | null,
+  badgeInput: number | null,
+  prefix: string,
+): DynamicBodyGraph {
+  const W = opts.width, H = opts.height;
+  const speed = opts.speed && opts.speed > 0 ? opts.speed : 1;
+  const segments = normalizeReframeSegments(opts.reframePlan, opts.startTime, opts.endTime);
+  const parts: string[] = [];
+  const srcLabels = segments.map((_, i) => `[${prefix}src${i}]`).join("");
+  if (segments.length === 1) parts.push(`[${sourceInput}:v]setpts=PTS-STARTPTS,null${srcLabels}`);
+  else parts.push(`[${sourceInput}:v]setpts=PTS-STARTPTS,split=${segments.length}${srcLabels}`);
+
+  const fr = opts.frame;
+  const fitCount = segments.filter((s) => s.layout === "fit").length;
+  const tplUseCount = fr && templateInput != null ? fitCount * fr.overlayRegions.length : 0;
+  const tplLabels = Array.from({ length: tplUseCount }, (_, i) => `[${prefix}tpl${i}]`);
+  if (tplUseCount === 1) parts.push(`[${templateInput}:v]null${tplLabels[0]}`);
+  else if (tplUseCount > 1) parts.push(`[${templateInput}:v]split=${tplUseCount}${tplLabels.join("")}`);
+  let tplUse = 0;
+
+  const bgMode = opts.bgType === "solid" || opts.bgType === "image" ? "solid" : "blur";
+  const solidColor = normalizeHexColor(opts.bgColor, "#0E0E12");
+
+  segments.forEach((segment, i) => {
+    const relStart = segment.start - opts.startTime;
+    const relEnd = segment.end - opts.startTime;
+    const dur = relEnd - relStart;
+    const src = `[${prefix}src${i}]`;
+    let cur: string;
+
+    if (segment.layout === "fill") {
+      const cx = trackingAxisExpression(segment.tracking, "cx", segment.start);
+      const cy = trackingAxisExpression(segment.tracking, "cy", segment.start);
+      // After `increase`, iw/ih are the scaled source dimensions. Mapping normalized source
+      // centres through those dimensions is equivalent because scale preserves aspect ratio.
+      const x = `max(0,min(iw-ow,(${cx})*iw-ow/2))`;
+      const y = `max(0,min(ih-oh,(${cy})*ih-oh/2))`;
+      parts.push(
+        `${src}trim=start=${ffNum(relStart)}:end=${ffNum(relEnd)},setpts=PTS-STARTPTS,` +
+        `scale=${W}:${H}:force_original_aspect_ratio=increase,` +
+        `crop=${W}:${H}:x='${x}':y='${y}'[${prefix}raw${i}]`,
+      );
+      cur = `${prefix}raw${i}`;
+    } else if (fr) {
+      const v = fr.video;
+      // AI `fit` has a product-level meaning: preserve the entire 16:9 source. A template's
+      // legacy static slot may say cover (broadcast-drama), but carrying that into this mode
+      // would turn a low-score safety fallback into another crop.
+      const fit = `scale=${v.w}:${v.h}:force_original_aspect_ratio=decrease,` +
+        `pad=${v.w}:${v.h}:(ow-iw)/2:(oh-ih)/2:black`;
+      parts.push(`color=c=black:s=${W}x${H}:d=${ffNum(dur)}[${prefix}base${i}]`);
+      parts.push(
+        `${src}trim=start=${ffNum(relStart)}:end=${ffNum(relEnd)},setpts=PTS-STARTPTS,${fit},setsar=1[${prefix}fg${i}]`,
+      );
+      parts.push(`[${prefix}base${i}][${prefix}fg${i}]overlay=${v.x}:${v.y}:shortest=1[${prefix}comp${i}]`);
+      cur = `${prefix}comp${i}`;
+      const boxes = (over: boolean) => fr.bands.filter((b) => !!b.over === over)
+        .map((b) => `drawbox=x=${b.x}:y=${b.y}:w=${b.w}:h=${b.h}:color=${b.color ?? "black"}:t=fill`)
+        .join(",");
+      const under = boxes(false);
+      if (under) {
+        parts.push(`[${cur}]${under}[${prefix}under${i}]`);
+        cur = `${prefix}under${i}`;
+      }
+      fr.overlayRegions.forEach((r, ri) => {
+        const tpl = tplLabels[tplUse++];
+        parts.push(`${tpl}crop=${r.w}:${r.h}:${r.x}:${r.y}[${prefix}frg${i}_${ri}]`);
+        parts.push(
+          `[${cur}][${prefix}frg${i}_${ri}]overlay=${r.x}:${r.y}:eof_action=repeat:repeatlast=1[${prefix}fov${i}_${ri}]`,
+        );
+        cur = `${prefix}fov${i}_${ri}`;
+      });
+      const over = boxes(true);
+      if (over) {
+        parts.push(`[${cur}]${over}[${prefix}over${i}]`);
+        cur = `${prefix}over${i}`;
+      }
+    } else if (bgMode === "solid") {
+      const colorHex = `0x${solidColor.slice(1)}`;
+      parts.push(`color=c=${colorHex}:s=${W}x${H}:d=${ffNum(dur)}[${prefix}bg${i}]`);
+      parts.push(
+        `${src}trim=start=${ffNum(relStart)}:end=${ffNum(relEnd)},setpts=PTS-STARTPTS,` +
+        `scale=${W}:${H}:force_original_aspect_ratio=decrease[${prefix}fg${i}]`,
+      );
+      parts.push(
+        `[${prefix}bg${i}][${prefix}fg${i}]overlay=(W-w)/2:(H-h)/2:shortest=1[${prefix}solid${i}]`,
+      );
+      cur = `${prefix}solid${i}`;
+    } else {
+      parts.push(
+        `${src}trim=start=${ffNum(relStart)}:end=${ffNum(relEnd)},setpts=PTS-STARTPTS,split=2` +
+        `[${prefix}ba${i}][${prefix}bb${i}]`,
+      );
+      parts.push(
+        `[${prefix}ba${i}]scale=${W}:${H}:force_original_aspect_ratio=increase,` +
+        `crop=${W}:${H},boxblur=20:1[${prefix}bg${i}]`,
+      );
+      parts.push(
+        `[${prefix}bb${i}]scale=${W}:${H}:force_original_aspect_ratio=decrease[${prefix}fg${i}]`,
+      );
+      parts.push(`[${prefix}bg${i}][${prefix}fg${i}]overlay=(W-w)/2:(H-h)/2[${prefix}blur${i}]`);
+      cur = `${prefix}blur${i}`;
+    }
+    parts.push(`[${cur}]fps=30,format=yuv420p,setsar=1[${prefix}seg${i}]`);
+  });
+
+  if (segments.length === 1) parts.push(`[${prefix}seg0]null[${prefix}base]`);
+  else {
+    const labels = segments.map((_, i) => `[${prefix}seg${i}]`).join("");
+    parts.push(`${labels}concat=n=${segments.length}:v=1:a=0[${prefix}base]`);
+  }
+  let last = `[${prefix}base]`;
+  if (opts.videoFilters) {
+    parts.push(`${last}${opts.videoFilters}[${prefix}grade]`);
+    last = `[${prefix}grade]`;
+  }
+  // Decorations first, captions last, matching the former single ASS event order while
+  // allowing decorations to be absent during fill beats.
+  const assLayers = [opts.decorationAssPath, opts.assPath, opts.captionAssPath].filter(
+    (p): p is string => typeof p === "string" && p.length > 0,
+  );
+  assLayers.forEach((p, i) => {
+    parts.push(`${last}ass='${escapeAssPath(p)}'[${prefix}ass${i}]`);
+    last = `[${prefix}ass${i}]`;
+  });
+
+  const fitIntervals = segments.filter((s) => s.layout === "fit")
+    .map((s) => ({ start: s.start - opts.startTime, end: s.end - opts.startTime }));
+  if (opts.badge && badgeInput != null && fitIntervals.length) {
+    const enable = fitIntervals
+      .map((x) => `gte(t,${ffNum(x.start)})*lt(t,${ffNum(x.end)})`)
+      .join("+");
+    parts.push(`[${badgeInput}:v]scale=-1:${opts.badge.h}[${prefix}badge]`);
+    parts.push(
+      `${last}[${prefix}badge]overlay=(W-w)/2:${opts.badge.y}:enable='${enable}'[${prefix}badged]`,
+    );
+    last = `[${prefix}badged]`;
+  }
+  if (speed !== 1) {
+    parts.push(`${last}setpts=PTS/${speed}[${prefix}speed]`);
+    last = `[${prefix}speed]`;
+  }
+  return { graph: parts.join(";"), last, segments };
+}
+
+function dynamicInputArgs(opts: RenderShortOpts, startTime: number, endTime?: number): string[] {
+  return [
+    "-ss", String(startTime),
+    ...(endTime != null ? ["-to", String(endTime)] : []),
+    "-i", opts.inputPath,
+  ];
+}
+
+/** AI beat renderer without a hook preroll. */
+function renderDynamicShort(opts: RenderShortOpts): Promise<void> {
+  const duration = opts.endTime - opts.startTime;
+  if (duration <= 0) return Promise.reject(new Error("Invalid render duration"));
+  const speed = opts.speed && opts.speed > 0 ? opts.speed : 1;
+  const frameIndex = opts.frame ? 1 : null;
+  const badgeIndex = opts.badge ? (opts.frame ? 2 : 1) : null;
+  const body = buildDynamicBodyGraph(opts, 0, frameIndex, badgeIndex, "rf");
+  const args = [
+    "-y",
+    ...dynamicInputArgs(opts, opts.startTime),
+    ...(opts.frame ? ["-i", opts.frame.overlayPath] : []),
+    ...(opts.badge ? ["-i", opts.badge.path] : []),
+    "-t", String(duration / speed),
+    "-filter_complex", body.graph,
+    "-map", body.last,
+    "-map", "0:a?",
+    ...(opts.audioFilter ? ["-af", opts.audioFilter] : []),
+    "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p",
+    "-c:a", "aac", "-movflags", "+faststart",
+    opts.outputPath,
+  ];
+  return new Promise((resolve, reject) => {
+    execFile("ffmpeg", args, { timeout: 300_000 }, (err) => {
+      if (err) return reject(err);
+      if (!fs.existsSync(opts.outputPath)) return reject(new Error("AI reframe output not produced"));
+      resolve();
+    });
+  });
+}
+
+/** AI beat renderer with the legacy hook clip prepended to the exact same dynamic body. */
+function renderDynamicShortWithPreroll(
+  opts: RenderShortOpts & { hookPreroll: NonNullable<RenderShortOpts["hookPreroll"]> },
+): Promise<void> {
+  const bodyDur = opts.endTime - opts.startTime;
+  if (bodyDur <= 0) return Promise.reject(new Error("Invalid render duration"));
+  const pre = opts.hookPreroll;
+  const preDur = Math.max(0.5, pre.durationSec);
+  const preStart = Math.max(0, pre.startTime);
+  const preEnd = preStart + preDur;
+  const frameIndex = opts.frame ? 2 : null;
+  const badgeIndex = opts.badge ? (opts.frame ? 3 : 2) : null;
+  const body = buildDynamicBodyGraph(opts, 1, frameIndex, badgeIndex, "rfb");
+  const focusSeg = body.segments.find((s) => preStart >= s.start && preStart < s.end)
+    ?? body.segments.find((s) => s.tracking.length > 0);
+  const cx = focusSeg ? trackingValueAt(focusSeg.tracking, "cx", preStart) : 0.5;
+  const cy = focusSeg ? trackingValueAt(focusSeg.tracking, "cy", preStart) : 0.5;
+  const x = `max(0,min(iw-ow,${ffNum(cx)}*iw-ow/2))`;
+  const y = `max(0,min(ih-oh,${ffNum(cy)}*ih-oh/2))`;
+  const parts = [body.graph];
+  parts.push(
+    `[0:v]setpts=PTS-STARTPTS,scale=${opts.width}:${opts.height}:force_original_aspect_ratio=increase,` +
+    `crop=${opts.width}:${opts.height}:x='${x}':y='${y}',` +
+    `eq=saturation=1.20:contrast=1.05,fps=30,setsar=1[rfpre]`,
+  );
+  parts.push(`${body.last}fps=30,setsar=1[rfbody]`);
+  const xfadeOffset = Math.max(0, preDur - HOOK_XFADE_SEC);
+  parts.push(
+    `[rfpre][rfbody]xfade=transition=fade:duration=${HOOK_XFADE_SEC}:offset=${ffNum(xfadeOffset)}[v]`,
+  );
+  if (pre.hasAudio === true) {
+    parts.push(`[1:a]${opts.audioFilter || "anull"}[rfa_body]`);
+    parts.push(`[0:a]anull[rfa_pre]`);
+    parts.push(`[rfa_pre][rfa_body]acrossfade=d=${HOOK_XFADE_SEC}[a]`);
+  }
+  const args = [
+    "-y",
+    ...dynamicInputArgs(opts, preStart, preEnd),
+    ...dynamicInputArgs(opts, opts.startTime, opts.endTime),
+    ...(opts.frame ? ["-i", opts.frame.overlayPath] : []),
+    ...(opts.badge ? ["-i", opts.badge.path] : []),
+    "-filter_complex", parts.join(";"),
+    "-map", "[v]",
+    ...(pre.hasAudio === true ? ["-map", "[a]"] : []),
+    "-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p",
+    "-c:a", "aac", "-movflags", "+faststart",
+    opts.outputPath,
+  ];
+  return new Promise((resolve, reject) => {
+    execFile("ffmpeg", args, { timeout: 300_000 }, (err) => {
+      if (err) return reject(err);
+      if (!fs.existsSync(opts.outputPath)) return reject(new Error("AI reframe preroll output not produced"));
+      resolve();
+    });
+  });
+}
+
 /**
  * Render construct F (plan §2.4 — the single expensive render). Reframes the trimmed
  * segment to the target aspect with a blurred-cover background + centered fit foreground
@@ -297,6 +703,12 @@ function renderShortWithPreroll(opts: RenderShortOpts & { hookPreroll: NonNullab
  * pass. `inputPath` may be a local path or an https signed URL (range-seek via -ss).
  */
 export function renderShort(opts: RenderShortOpts): Promise<void> {
+  const dynamic = normalizeReframeSegments(opts.reframePlan, opts.startTime, opts.endTime).length > 0;
+  if (dynamic) {
+    return opts.hookPreroll && opts.hookPreroll.durationSec > 0
+      ? renderDynamicShortWithPreroll(opts as RenderShortOpts & { hookPreroll: NonNullable<RenderShortOpts["hookPreroll"]> })
+      : renderDynamicShort(opts);
+  }
   // 첫 3초 hook 프리롤이 요청되면 · 2입력 xfade 경로로 분기(본문 처리 로직은 renderShortWithPreroll
   // 안에서 동일하게 재현). 아래 단일 입력 경로는 프리롤 없을 때 그대로 유지(무회귀).
   if (opts.hookPreroll && opts.hookPreroll.durationSec > 0) {

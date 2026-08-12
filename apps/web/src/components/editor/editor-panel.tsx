@@ -527,6 +527,8 @@ function ChannelTab({ state, update }: { state: EditorState; update: Update }) {
 }
 
 function LayoutTab({ state, update, applyTpl, frames = [] }: { state: EditorState; update: Update; applyTpl: (id: EditorState["templateId"]) => void; frames?: FrameTemplate[] }) {
+  // 현재 templateId 가 실제 프레임 목록에 있으면 프레임이 핏·배경을 소유한다.
+  const frameActive = frames.some((f) => f.name === state.templateId);
   return (
     <>
       <div>
@@ -642,28 +644,66 @@ function LayoutTab({ state, update, applyTpl, frames = [] }: { state: EditorStat
         </div>
         <div className="mt-1 text-[10px] text-zinc-500">아이콘은 프로그램 설정의 "쇼츠 아이콘"에서 등록</div>
       </div>
+      {/* ── 축1: 방향(컨테이너) ─────────────────────────────
+          가로/세로 둘로 정리(2026-08-12). 1:1·4:5 는 저장된 클립 호환을 위해 값은 남기되
+          UI 에서는 뺀다 — 실무는 세로 쇼츠·가로 VOD 둘이 전부다. */}
       <div>
-        <Label>종횡비</Label>
-        <div className="grid grid-cols-4 gap-1">
-          {(Object.keys(ASPECTS) as AspectKey[]).map((a) => (
+        <Label>방향</Label>
+        <div className="grid grid-cols-2 gap-1">
+          {([
+            { a: "9:16" as AspectKey, label: "세로 9:16" },
+            { a: "16:9" as AspectKey, label: "가로 16:9" },
+          ]).map(({ a, label }) => (
             <button
               key={a}
               onClick={() => update({ aspect: a })}
               className={cn("rounded-md border py-1.5 text-xs", state.aspect === a ? "border-zinc-400 bg-zinc-800 text-white" : "border-zinc-700 text-zinc-400")}
             >
-              {a}
+              {label}
             </button>
           ))}
         </div>
       </div>
+
+      {/* ── 축2: 핏(원본을 어떻게 넣나) ──────────────────────
+          프레임 템플릿이 선택돼 있으면 그 프레임이 핏·배경을 정하므로 여기선 안내만 띄운다. */}
+      {frameActive ? (
+        <div className="rounded-md border border-dashed border-zinc-700 p-2 text-[11px] text-zinc-400">
+          맞추기·배경은 선택한 <b>프레임 템플릿</b>이 정합니다. 직접 고르려면 레이아웃 탭 상단에서
+          프레임을 <b>없음</b>으로 바꾸세요.
+        </div>
+      ) : (
+        <div>
+          <Label>맞추기</Label>
+          <div className="grid grid-cols-2 gap-1">
+            {([
+              { k: "contain" as const, label: "원본 그대로", hint: "남는 여백은 아래 배경으로" },
+              { k: "cover" as const, label: "잘라 채우기", hint: "원본을 잘라 꽉 채움" },
+            ]).map((o) => {
+              const active = (state.fit ?? "contain") === o.k;
+              return (
+                <button
+                  key={o.k}
+                  onClick={() => update({ fit: o.k })}
+                  title={o.hint}
+                  className={cn("rounded-md border py-1.5 text-xs", active ? "border-zinc-400 bg-zinc-800 text-white" : "border-zinc-700 text-zinc-400")}
+                >
+                  {o.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* ── 레터박스 배경 — 맞춤(contain)이고 프레임이 없을 때만 의미가 있다 ── */}
+      {!frameActive && (state.fit ?? "contain") === "contain" && (
       <div>
-        <Label>배경 채우기</Label>
-        <div className="grid grid-cols-3 gap-1">
+        <Label>레터박스 배경</Label>
+        <div className="grid grid-cols-2 gap-1">
           {[
-            { k: "solid" as const, label: "단색", disabled: false },
-            { k: "blur" as const, label: "영상 블러", disabled: false },
-            // ffmpeg.ts 가 image 를 solid 로 강등한다(렌더 파이프라인 미지원) — 고를 수 없게 막는다.
-            { k: "image" as const, label: "이미지", disabled: true },
+            { k: "solid" as const, label: "검정", disabled: false },
+            { k: "blur" as const, label: "원본 블러", disabled: false },
           ].map((o) => {
             const active = (state.bgType ?? "solid") === o.k;
             return (
@@ -703,6 +743,7 @@ function LayoutTab({ state, update, applyTpl, frames = [] }: { state: EditorStat
           </div>
         )}
       </div>
+      )}
       <Toggle on={state.showSafeArea} onChange={() => update({ showSafeArea: !state.showSafeArea })} label="세이프 에어리어 · Shorts UI" />
     </>
   );

@@ -3587,16 +3587,39 @@ function buildEditorAss(
   stageH: number,
   durSec: number,
   captions?: Caption[],
+  options: {
+    include?: "all" | "decorations" | "captions";
+    /** Render-relative windows in which decorative events may appear. */
+    visibleIntervals?: Array<{ start: number; end: number }>;
+  } = {},
 ): string | null {
   const scale = H / stageH;
-  const end = assTime(durSec);
-  const ev: string[] = [];
+  const decorationEv: string[] = [];
+  const captionEv: string[] = [];
+  const includeDecorations = options.include !== "captions";
+  const includeCaptions = options.include !== "decorations";
+  const visibleIntervals = Array.isArray(options.visibleIntervals)
+    ? options.visibleIntervals
+      .filter((x) => Number.isFinite(x?.start) && Number.isFinite(x?.end) && x.end > x.start)
+      .map((x) => ({ start: Math.max(0, x.start), end: Math.min(durSec, x.end) }))
+      .filter((x) => x.end > x.start + 0.001)
+    : [{ start: 0, end: durSec }];
   // Overlay show-windows (startSec/endSec) are segment-relative (0 at the adopted segment
   // start); the render window starts at trimIn, so subtract it to get render-relative time.
   // Keyframe times are ALREADY render-relative (localT = segT − trimIn), so they need no shift.
   const trimIn = Number(es?.trimIn ?? 0);
+  const pushDecor = (vs: number, ve: number, line: (start: number, end: number) => string) => {
+    if (!includeDecorations) return;
+    for (const visible of visibleIntervals) {
+      const start = Math.max(vs, visible.start);
+      const finish = Math.min(ve, visible.end);
+      if (finish > start + 0.001) decorationEv.push(line(start, finish));
+    }
+  };
   const putWin = (an: number, x: number, y: number, fs: number, color: string, bord: number, bordColor: string, text: string, vs: number, ve: number, extra = "") =>
-    ev.push(`Dialogue: 0,${assTime(vs)},${assTime(ve)},Default,,0,0,0,,{\\an${an}\\pos(${Math.round(x)},${Math.round(y)})\\fs${fs}\\c${color}\\b1\\bord${bord}\\3c${bordColor}\\shad1${extra}}${assEscape(text)}`);
+    pushDecor(vs, ve, (start, finish) =>
+      `Dialogue: 0,${assTime(start)},${assTime(finish)},Default,,0,0,0,,{\\an${an}\\pos(${Math.round(x)},${Math.round(y)})\\fs${fs}\\c${color}\\b1\\bord${bord}\\3c${bordColor}\\shad1${extra}}${assEscape(text)}`,
+    );
   const put = (an: number, x: number, y: number, fs: number, color: string, bord: number, bordColor: string, text: string) =>
     putWin(an, x, y, fs, color, bord, bordColor, text, 0, durSec);
   // Visible [start,end] render-relative window for an overlay; null if it never shows.
@@ -3649,8 +3672,8 @@ function buildEditorAss(
       const boxY = Math.round(((Number((es as any).channelBoxY) || 79.5) / 100) * H);
       const boxColor = hexToAss(String((es as any).channelBoxColor || "#3D7BD9"));
       const fs = Math.max(12, Math.round(22 * scale));
-      ev.push(
-        `Dialogue: 0,${assTime(0)},${end},BoxLabel,,0,0,0,,` +
+      pushDecor(0, durSec, (start, finish) =>
+        `Dialogue: 0,${assTime(start)},${assTime(finish)},BoxLabel,,0,0,0,,` +
         `{\\an8\\pos(${Math.round(0.5 * W)},${boxY})\\fs${fs}\\3c${boxColor}\\4c${boxColor}}${assEscape(boxText)}`,
       );
     }
@@ -3678,7 +3701,7 @@ function buildEditorAss(
   // karaoke — the sung word sweeps from white to the highlight colour; otherwise one plain
   // Dialogue per sentence (gemini path). Inline \1c/\2c keep the Caption style unchanged.
   const capOn = es && typeof es === "object" ? es.captionsOn !== false : true;
-  if (capOn) {
+  if (capOn && includeCaptions) {
     const capHi = hexToAss((es && typeof es === "object" && es.highlightColor) || "#FFD400");
     // Keyword tokens sweep to a distinct colour; default = the highlight colour (so it's a
     // no-op unless the operator picks one), matching CapCut/Opus keyword emphasis.
@@ -3714,15 +3737,16 @@ function buildEditorAss(
             if (j === i) return `{\\1c${keyIdx.has(j) ? capKey : capHi}}${tok}{\\1c${white}}`;
             return tok;
           });
-          ev.push(`Dialogue: 0,${assTime(prev)},${assTime(lineEnd)},Caption,,0,0,0,,{\\1c${white}}${parts.join(" ")}`);
+          captionEv.push(`Dialogue: 0,${assTime(prev)},${assTime(lineEnd)},Caption,,0,0,0,,{\\1c${white}}${parts.join(" ")}`);
           prev = we;
         });
       } else {
-        ev.push(`Dialogue: 0,${assTime(cap.start)},${assTime(cap.end)},Caption,,0,0,0,,${assEscape(text)}`);
+        captionEv.push(`Dialogue: 0,${assTime(cap.start)},${assTime(cap.end)},Caption,,0,0,0,,${assEscape(text)}`);
       }
     }
   }
 
+  const ev = [...decorationEv, ...captionEv];
   if (!ev.length) return null;
   const capFs = Math.round(H * 0.042);
   const capMV = Math.round(H * 0.14);
@@ -3961,6 +3985,7 @@ async function renderClipMedia(opts: {
         ? editorState.bgType
         : "blur") as "solid" | "blur" | "image";
       const bgColor = typeof editorState?.bg === "string" ? editorState.bg : undefined;
+      // 축2 핏 — 프레임이 없을 때만 적용된다(있으면 frame.video.fit 우선). cover=잘라 채우기.
       // 프레임 템플릿 — editorState.templateId 가 assets/shorts-template 의 디렉토리 이름이다.
       // 목록에 없으면(구 프리셋 id 등) null 이라 기존 blur/solid 경로로 떨어진다.
       const tpl = typeof editorState?.templateId === "string"

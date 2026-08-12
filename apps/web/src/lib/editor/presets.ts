@@ -271,7 +271,16 @@ export function makeMainTrack(trimIn: number, trimOut: number, duration: number)
 
 export interface EditorState {
   templateId: TemplateId;
+  /** 축1 — 컨테이너(출력) 방향/비율. 실무는 가로(16:9)·세로(9:16) 둘이 전부다. */
   aspect: AspectKey;
+  /**
+   * 축2 — **원본을 컨테이너에 어떻게 넣나.**
+   *  - "contain"(맞춤): 원본 그대로 넣어 남는 여백은 레터박스(뒤는 bgType 검정/블러).
+   *  - "cover"(채우기): 원본을 잘라 컨테이너를 꽉 채운다.
+   * 예전엔 이 축이 **프레임 템플릿 video.fit 안에만** 있어 프레임 없이는 사용자가 못 골랐다.
+   * 이제 독립 필드로 꺼낸다. 프레임이 있으면 그 프레임의 fit 이 이 값의 시드가 된다(applyTemplate).
+   */
+  fit?: "contain" | "cover";
   bg: string;
   accent: string;
   titleLines: TitleLine[];
@@ -497,6 +506,7 @@ export function makeInitialEditorState(
     // broadcast-clean 은 assets/shorts-template/ 의 실존 프레임이다.
     templateId: "broadcast-clean",
     aspect: "9:16",
+    fit: "contain",
     bgType: "solid",
     bg: "#000000",
     accent: "#FFD400",
@@ -596,8 +606,10 @@ export function ensureTracks(state: EditorState, durationSec: number, segmentSta
     captionsOn: typeof state.captionsOn === "boolean" ? state.captionsOn : true,
     highlightColor: state.highlightColor ?? "#FFD400",
     keywordColor: state.keywordColor ?? state.highlightColor ?? "#FFD400",
-    // 종횡비·배경·강조색
+    // 종횡비·핏·배경·강조색
     aspect: state.aspect ?? "9:16",
+    // 구 클립엔 fit 이 없다. contain 이 지금까지의 비프레임 동작(레터박스)과 같아 무회귀.
+    fit: state.fit ?? "contain",
     bg: state.bg ?? "#0E0E12",
     accent: state.accent ?? "#FFD400",
     templateId: state.templateId ?? "stacked_channel",
@@ -663,6 +675,8 @@ export interface TemplateTextSlot {
 }
 export interface TemplateFrame {
   name: string;
+  /** 이 프레임이 원본을 어떻게 넣는지(맞춤/채우기) — applyTemplate 이 editorState.fit 시드로 쓴다. */
+  video?: { fit?: "contain" | "cover" };
   text: TemplateTextSlot[];
 }
 
@@ -690,7 +704,10 @@ export function applyTemplate(state: EditorState, id: TemplateId, frame?: Templa
     return { ...state, templateId: id, ...legacy.patch };
   }
 
-  const base: EditorState = { ...state, templateId: id, aspect: "9:16", bgType: "solid", bg: "#000000" };
+  // 프레임의 fit 을 editorState.fit 시드로 복사한다 — 이후 렌더·미리보기는 editorState.fit 만
+  // 읽으므로 두 값이 어긋날 일이 없다(조사 함정 #1). 프레임 fit 이 없으면 contain(레터박스).
+  const frameFit = frame?.video?.fit === "cover" ? "cover" : "contain";
+  const base: EditorState = { ...state, templateId: id, aspect: "9:16", fit: frameFit, bgType: "solid", bg: "#000000" };
   if (!frame || !Array.isArray(frame.text)) return base;
 
   const slot = (name: string) => frame.text.find((s) => s.slot === name);
