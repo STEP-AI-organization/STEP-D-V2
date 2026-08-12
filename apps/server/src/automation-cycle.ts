@@ -66,14 +66,16 @@ export async function runAutomationCycle(): Promise<CycleReport> {
   for (const rule of plan.rules) {
     // 규칙이 가리키는 채널이 **이 워크스페이스 것인지** 확인한다.
     // RLS 가 이미 남의 채널을 안 보여주지만, 없으면 조용히 넘기지 않고 사유를 남긴다.
-    const channelRule = (await getChannelRule(rule.platform, rule.accountId)) as unknown as ChannelRule | null;
-    if (!channelRule) {
-      await appendRuleRun({
-        ruleId: rule.id, result: "skipped",
-        detail: `채널 규칙이 이 워크스페이스에 없습니다 (${rule.platform}:${rule.accountId})`,
-      });
-      continue;
-    }
+    // 채널 규칙이 없어도 배포는 가능해야 한다 (사용자 결정 2026-08-12) — 규칙은
+    // 제한(길이·프레임·톤)을 더하는 장치지 배포의 전제조건이 아니다. 없으면 전부
+    // 허용하는 기본 규칙으로 진행한다.
+    const channelRule = ((await getChannelRule(rule.platform, rule.accountId)) as unknown as ChannelRule | null)
+      ?? ({
+        platform: rule.platform, accountId: rule.accountId, label: rule.accountId,
+        role: "main", maxSec: null, aspect: "any",
+        titlePrefix: "", hashtagTemplate: "", tonePreset: "",
+        privacy: "private", scheduleWindow: "", enabled: true,
+      } as unknown as ChannelRule);
 
     // 01 회차 수신 — 이 규칙의 프로그램 회차만.
     const eps = episodes.filter((e) => e.programId === rule.programId);

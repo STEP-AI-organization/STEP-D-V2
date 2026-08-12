@@ -51,7 +51,8 @@ export const NAV_GROUPS: NavGroup[] = [
       { href: "/dashboard", label: "대시보드", icon: LayoutDashboard },
       { href: "/programs", label: "프로그램", icon: LayoutGrid },
       { href: "/analyze", label: "영상 분석", icon: Film },
-      { href: "/media", label: "미디어", icon: Clapperboard, badgeKey: "gateHold" },
+      // 권리·심의 게이트 뱃지는 제거 (2026-08-12 사용자 결정 — 데이터로 알 수 없어 무의미)
+      { href: "/media", label: "미디어", icon: Clapperboard },
       { href: "/assets", label: "에셋", icon: Boxes },
       { href: "/distribution", label: "배포", icon: Send, badgeKey: "distributionFailed" },
       { href: "/performance", label: "성과", icon: BarChart3 },

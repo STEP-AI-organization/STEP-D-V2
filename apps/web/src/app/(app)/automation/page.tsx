@@ -20,6 +20,7 @@ import {
   fetchAutomation,
   fetchChannelRules,
   fetchShortsTemplates,
+  fetchYouTubeChannels,
   type FrameTemplate,
   releaseAutomationHold,
   runAutomationNow,
@@ -444,13 +445,29 @@ function RuleForm({
     return () => { alive = false; };
   }, []);
 
+  // 배포 규칙이 없어도 배포는 가능해야 한다 — YouTube 는 연결된 게시 가능 채널을
+  // 직접 불러와 규칙 유무와 무관하게 고를 수 있게 한다 (규칙 있으면 라벨에 표시만).
+  const [ytChannels, setYtChannels] = useState<{ channelId: string; channelName: string; status: string }[]>([]);
   useEffect(() => {
-    // 플랫폼을 바꾸면 그 플랫폼에 없는 계정이 남아 있으면 안 된다.
-    const list = (channelRules ?? []).filter((r) => r.platform === platform);
-    setAccountId((prev) => (list.some((r) => r.accountId === prev) ? prev : list[0]?.accountId ?? ""));
-  }, [platform, channelRules]);
+    void fetchYouTubeChannels()
+      .then((cs) => setYtChannels(cs.filter((c) => c.status === "active")))
+      .catch(() => setYtChannels([]));
+  }, []);
 
   const platformRules = (channelRules ?? []).filter((r) => r.platform === platform);
+  // 선택지 = (YouTube 면) 연결 채널 ∪ 규칙 계정, 그 외 플랫폼은 규칙 계정.
+  const accountOptions: { accountId: string; label: string }[] = platform === "youtube"
+    ? ytChannels.map((c) => {
+        const ruled = platformRules.some((r) => r.accountId === c.channelId);
+        return { accountId: c.channelId, label: `${c.channelName}${ruled ? " · 규칙 있음" : ""}` };
+      })
+    : platformRules.map((r) => ({ accountId: r.accountId, label: `${r.label} · ${r.accountId}` }));
+
+  useEffect(() => {
+    // 플랫폼을 바꾸면 그 플랫폼에 없는 계정이 남아 있으면 안 된다.
+    setAccountId((prev) => (accountOptions.some((o) => o.accountId === prev) ? prev : accountOptions[0]?.accountId ?? ""));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [platform, channelRules, ytChannels]);
   const upload = platform === "youtube";
 
   async function save() {
@@ -497,26 +514,31 @@ function RuleForm({
           value={accountId}
           onChange={(e) => setAccountId(e.target.value)}
           className="sd-input w-full"
-          disabled={platformRules.length === 0}
+          disabled={accountOptions.length === 0}
         >
-          {platformRules.length === 0 ? (
+          {accountOptions.length === 0 ? (
             <option value="">
-              {channelRules === null ? "채널 규칙 불러오는 중…" : "이 플랫폼의 채널 규칙이 없습니다"}
+              {platform === "youtube" ? "연결된 YouTube 채널이 없습니다" : "이 플랫폼의 채널 규칙이 없습니다"}
             </option>
           ) : (
-            platformRules.map((r) => (
-              <option key={r.accountId} value={r.accountId}>
-                {r.label} · {r.accountId}
-              </option>
+            accountOptions.map((o) => (
+              <option key={o.accountId} value={o.accountId}>{o.label}</option>
             ))
           )}
         </select>
-        {channelRules !== null && platformRules.length === 0 && (
+        {accountOptions.length === 0 && (
           <p className="mt-1 text-[10.5px]" style={{ color: "var(--sd-warn)" }}>
-            {rulesErr
-              ? `채널 규칙을 불러오지 못했습니다 (${rulesErr}) — `
-              : "자동 배포는 채널 규칙이 있어야 돌아갑니다 — "}
-            <Link href="/channels" className="underline">배포 규칙</Link> 화면에서 이 플랫폼의 규칙을 먼저 만드세요.
+            {platform === "youtube" ? (
+              <><Link href="/publish-channels" className="underline">배포 채널</Link> 화면에서 채널을 먼저 연결하세요.</>
+            ) : (
+              <>{rulesErr ? `채널 규칙을 불러오지 못했습니다 (${rulesErr}) — ` : ""}
+              <Link href="/channels" className="underline">배포 규칙</Link> 화면에서 이 플랫폼의 규칙을 먼저 만드세요.</>
+            )}
+          </p>
+        )}
+        {platform === "youtube" && accountId && !platformRules.some((r) => r.accountId === accountId) && (
+          <p className="mt-1 text-[10.5px]" style={{ color: "var(--sd-fg-dim)" }}>
+            배포 규칙 없이 진행 — 길이·프레임 제한 없이 기본값(비공개 업로드)으로 나갑니다.
           </p>
         )}
       </div>
