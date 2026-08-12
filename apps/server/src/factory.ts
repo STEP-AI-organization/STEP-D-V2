@@ -441,7 +441,9 @@ export function autoEditorState(rec: any, programTitle: string): Record<string, 
     aspect: "9:16",
     bgType: "solid",
     bg: "#000000",
-    templateId: null,
+    // 실존 프레임 템플릿 (assets/shorts-template/broadcast-clean) — 에디터에서 열어도
+    // 같은 템플릿이 선택된 상태로 보인다. 없으면 solid 폴백이라 결과 기하는 동일.
+    templateId: "broadcast-clean",
     titleLines: lines.map((text) => ({ text, size, color: "#FFFFFF" })),
     titleX: 50,
     titleY: 11,

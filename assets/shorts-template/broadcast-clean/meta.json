@@ -1,0 +1,18 @@
+{
+  "name": "broadcast-clean",
+  "canva_title": "방송 클린 (기본)",
+  "source": "builtin",
+  "size": [1080, 1920],
+  "video": { "x": 0, "y": 656, "w": 1080, "h": 608, "fit": "contain" },
+  "bands": [
+    { "x": 0, "y": 0, "w": 1080, "h": 656, "color": "black" },
+    { "x": 0, "y": 1264, "w": 1080, "h": 656, "color": "black" }
+  ],
+  "text": [
+    { "slot": "title1", "y": 230, "size": 64, "color": "#ffffff" },
+    { "slot": "title2", "y": 330, "size": 64, "color": "#ffffff" },
+    { "slot": "program", "y": 1700, "size": 44, "color": "#d8d8d8" }
+  ],
+  "overlay_regions": [],
+  "_note": "TVING 쇼츠 스타일 (사용자 확정 2026-08-12): 16:9 원본을 y656 에 그대로(레터박스) — 원본 번인 자막 보존. 상단 띠 = 훅 한 줄(최대 2줄), 하단 띠 = 프로그램명 브랜딩. AI 자막 오버레이는 쓰지 않는 전제. overlay.png 는 투명(기하만 쓰는 템플릿)."
+}
