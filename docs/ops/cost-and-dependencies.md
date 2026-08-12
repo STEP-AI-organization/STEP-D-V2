@@ -279,7 +279,6 @@
 | `apps/server` (Hono · Node ≥22) | Cloud Run | 비공개(IAM) · Vercel rewrite 프록시 | **전체 정지** |
 | `apps/server/src/worker.ts` | Cloud Run Jobs ×2 + 사무실 PC ×1 + GPU VM | drain 모드 | 잡이 쌓이기만 |
 | `core/` (Python) | 워커가 `python -m core.analyze` 스폰 | Dockerfile.worker 에 venv 포함 | 분석 정지 |
-| `apps/api/` | — | **레거시. 미사용** | — |
 
 ### 8-2. 잡 레인 의존 (`worker.ts` `JOB_LANES`)
 

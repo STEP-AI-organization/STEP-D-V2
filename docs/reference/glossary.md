@@ -17,7 +17,7 @@
 
 ## 배포용 SMR `clipType`
 
-**배포용 SMR `clipType` (전 9종)** — 정의는 `constants.ts:10-20`. 추천→클립 채택 시 서버가 자동 부여: `apps/server/src/index.ts:506`(adopt 핸들러) `clipType: rec.kind === "short" ? "T6" : "TZ"`. (구 문서가 이 매핑을 "레거시 apps/api"로 표기했으나 오류 — apps/api에는 clipType이 없고, 현행 라이브 서버 코드다.)
+**배포용 `clipType` (전 9종)** — 정의는 `constants.ts:10-20`. 추천→클립 채택 시 서버가 자동 부여: `apps/server/src/index.ts:506`(adopt 핸들러) `clipType: rec.kind === "short" ? "T6" : "TZ"`. (구 문서가 이 매핑을 "레거시 apps/api"로 표기했으나 오류였다 — 현행 라이브 서버 코드다. apps/api 는 2026-08-12 삭제.)
 
 | 코드 | 라벨 | 비고 |
 |------|------|------|

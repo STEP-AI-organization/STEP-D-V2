@@ -18,15 +18,15 @@
 
 | 구분 | 정본(LIVE) | 폐기(따라가면 안 됨) |
 |------|-----------|----------------------|
-| 제품/비전 | `../archive/STEPD-방향기획서.docx·pdf`(마스터), `apps/docs/product-vision.md`(8레이어·5Phase 유효) | — |
-| 아키텍처 | `CLAUDE.md`, [`../ops/infra.md`](../../ops/infra.md)("단일 진실 소스"), 본 문서 | `apps/docs/architecture.md`(구 FastAPI), `apps/docs/dev-guide.md`, `apps/docs/feature-status.md`(구 시스템) |
+| 제품/비전 | `../archive/STEPD-방향기획서.docx·pdf`(마스터), `../archive/product-vision-2026-06.md`(8레이어·5Phase 유효) | — |
+| 아키텍처 | `CLAUDE.md`, [`../ops/infra.md`](../../ops/infra.md)("단일 진실 소스"), 본 문서 | 구 `apps/docs/*`(2026-08-12 삭제 — git 이력 참조) |
 | 파이프라인 | [`pipeline-plan.md`](../../archive/plans-2026-07/pipeline-plan.md)(A~J 청사진), [`../ops/pipeline-current.md`](../../ops/pipeline-current-state.md)(데이터 수집 + AI 콘텐츠 분석 통합) | (구 `core/README.md`·`WHISPERX_GUIDE.md`·`bridge.ts`는 9d76484에서 **삭제 완료**) |
-| 인프라/배포 | [`../ops/infra.md`](../../ops/infra.md), [`../ops/worker-queue.md`](../../ops/worker-queue.md), [`../ops/deploy.md`](../../ops/deploy.md), [`../ops/vercel-ops.md`](../../ops/vercel-ops.md), `deploy/deploy-server.ps1`·`deploy-web.ps1`(워커만 재배포 = 루트 `deploy-worker.ps1`) | `docker-compose*.yml`·`Caddyfile`·`scripts/dev.ps1`·`deploy/setup-vm.sh`·`deploy/deploy.sh`(전부 구 shorts-api VM/asia-northeast3). ※루트 `deploy.ps1`은 d48c8f9에서 Cloud Run 서버 배포용으로 교체돼 더는 폐기 아님 |
+| 인프라/배포 | [`../ops/infra.md`](../../ops/infra.md), [`../ops/worker-queue.md`](../../ops/worker-queue.md), [`../ops/deploy.md`](../../ops/deploy.md), [`../ops/vercel-ops.md`](../../ops/vercel-ops.md), `deploy/cloud.sh`(표준)·`deploy/deploy-web.ps1`·[`../ops/deploy-win2.md`](../../ops/deploy-win2.md) | 구 VM/pm2/Docker 배포 자산(`docker-compose*.yml`·`Caddyfile`·`deploy-server.ps1`·`deploy-worker.ps1`·`deploy/setup-vm.sh`·`deploy/deploy.sh`)은 **2026-08-12 전부 삭제** |
 | 데이터 모델 | `apps/server/schema.sql` + [`../reference/data-model.md`](../../reference/data-model.md)(런타임 생성 테이블 포함 전모, §9) | — |
 | 편집기 | 본 문서 §7 (구 `opencut-integration-plan.md` 는 삭제됨 — 내용은 §7 로 흡수) | — |
-| 코드(레거시) | `apps/web`, `apps/server`, `core/` | `apps/api`(구 Python FastAPI, 로직 참고만 — **폐기 여부 미결정**, §12 R13) |
+| 코드(레거시) | `apps/web`, `apps/server`, `core/` | ~~`apps/api`~~ **2026-08-12 삭제** (R13 종결) |
 
-**정리 권고(문서 위생):** 1차 실행 완료 — 2026-07-16 재편·삭제로 `deploy/INFRA.md`의 죽은 Vercel env 오염원 등이 제거됐다. 남은 폐기 대상(`apps/docs/architecture.md` 등 구 시스템 문서)은 헤더에 `> ⚠️ DEPRECATED` 배너를 달거나 `docs/archive/`로 이동.
+**정리 권고(문서 위생):** 1차 실행 완료 — 2026-07-16 재편·삭제로 `deploy/INFRA.md`의 죽은 Vercel env 오염원 등이 제거됐다. 2차 실행 완료 — 2026-08-12 에 `apps/api`·`apps/docs` 삭제, 사업 자료 2건은 `docs/archive/` 로 이동.
 
 ---
 
@@ -176,7 +176,7 @@ AI: Vertex Gemini(gemini-3.1-flash) — 서울(asia-northeast3) 리전 고정 (�
 | **E 융합 평가** | 상위 20개×7프레임 비전 루브릭 → 0.70/0.30 융합 | **Gemini** 멀티모달(structured JSON 4축) + 융합 자체 | 관리형 | core `vision.py`가 장면 단위 채점은 함(후보×프레임 방식과 다름) |
 | **F 렌더링** ⟵ **유일 렌더 지점(최종 확정 시 1회)** | 9:16 리프레이밍(블러배경)·자막번인·템플릿·render revision 캐시 | **ffmpeg + libass(ASS)** = 디자인 템플릿. 화자추적은 **MediaPipe**(2단계). Remotion **비채택**(유료) | MediaPipe Apache-2 | `trimEncode` 단순 트림만. 9:16·자막·템플릿 신규. **§2.4: 채택 즉시 렌더 → 확정 시 렌더로 이연** |
 | **G 썸네일** | 후보 프레임 스코어링(선명도+얼굴)+규격 최적화 | ffmpeg + 라플라시안 분산 + MediaPipe + **sharp** 리사이즈 | sharp Apache-2 | 1장 고정. 스코어링 신규 |
-| **H PPL** | 비전 상품식별 × 음성 브랜드 언급 이중 신호 → 구간화·CSV | Gemini vision + STT 브랜드매칭(사전 자체). 보강: **Video Intelligence Logo Recognition**(구간 타임스탬프) | 관리형 | 전부 신규(레거시 apps/api에 참고 코드) |
+| **H PPL** | 비전 상품식별 × 음성 브랜드 언급 이중 신호 → 구간화·CSV | Gemini vision + STT 브랜드매칭(사전 자체). 보강: **Video Intelligence Logo Recognition**(구간 타임스탬프) | 관리형 | 전부 신규(구 apps/api 참고 코드는 git 이력에) |
 | **I 제목·메타** | 바이럴 5종 제목·태그·무음 리포트 | Gemini + 프롬프트 자산 자체. 무음=D의 silencedetect 재사용 | 관리형 | 전부 신규 |
 | **J 배포·환류** | 회차 스케줄링·멀티플랫폼 업로드·성과 수집·환류 | **YouTube Data API v3** resumable / **Meta Graph API**(앱심사 리드타임) / **SMR 어댑터**(공개 API 없음, FTP/CMS) / 댓글요약 LLM | — | 채널 수집·OAuth 실동작, **publish 스텁**. 실업로드·Meta·SMR·환류 신규 |
 
@@ -349,7 +349,7 @@ AI: Vertex Gemini(gemini-3.1-flash) — 서울(asia-northeast3) 리전 고정 (�
 
 > 운영 원칙(방향기획서): 소수 팀은 병렬로 벌리지 말고 **PoC → AP1+AP2 → 첫 고객 회차 골드셋 평가 → 다음 단계**로. 고객이 과거 수동 제작한 클립을 **골드셋**으로 확보해 AP2부터 자동 회귀 평가.
 >
-> 리포 위생(로드맵 외 상시 항목): **`apps/api`(구 Python FastAPI) 폐기 여부 결정** — 현 서버·워커 어디서도 참조하지 않는 잔존 레거시이나, H(PPL) 등 참고 로직 가치 확인 전까지 **제거 시점 미결정**(§12 R13). 결정 시 `docs/archive/` 기록 후 삭제.
+> 리포 위생: **`apps/api` 폐기 — 2026-08-12 완료.** 구 Python FastAPI 와 `apps/docs/` 를 삭제했다. 참고 로직(H PPL 등)은 git 이력에 남아 있고, 사업 자료(제품비전·경쟁사분석)는 `docs/archive/` 로 옮겼다.
 
 ### PoC 게이트 (1~2주, 버리는 코드) — **가장 먼저**
 - **PoC A 추천 품질:** 실제 회차 1개 → STT → 훅 사전 초안 + 경계 스냅 → 후보 20개 육안 평가. 종결어미 스냅이 정말 문장을 안 자르는지 + STT 단어 타임스탬프 정밀도 실측(→ B 스택 확정).
@@ -380,7 +380,7 @@ AI: Vertex Gemini(gemini-3.1-flash) — 서울(asia-northeast3) 리전 고정 (�
 
 **🎯 다음 착수점 #3 — transcript 단일 원천 확립 (B, AP2):** STT 스택 확정(§12) → `transcript` 테이블(단어/문장 PTS) 신설 → C/D/H/I가 전부 이 테이블만 읽게. Gemini STT는 word-level이 없으므로 word 필요 로직은 whisper 경로 or Clova 확정 필요.
 
-**부차 갭:** 프레임 GCS 호스팅(현 temp 폐기) / admin Lab을 로컬 파일→DB(`/api/media/:id/analysis`) 전환 / `schema.sql`에 런타임 생성 3테이블 반영(§9) / **`apps/api` 레거시 폐기 여부 결정(미결정 — §10·§12 R13)**. ※죽은 코드(`db.ts`·`storage.ts`·`pipeline.ts::buildRecommendations`·`repository.ts` `apiRepository` 스텁)와 core stale 파일(`README`·`bridge.ts`·`WHISPERX_GUIDE`·`ocr.py`·`prefilter.py`)은 이후 정리로 해소됨.
+**부차 갭:** 프레임 GCS 호스팅(현 temp 폐기) / admin Lab을 로컬 파일→DB(`/api/media/:id/analysis`) 전환 / `schema.sql`에 런타임 생성 3테이블 반영(§9) / ~~`apps/api` 레거시 폐기~~ **2026-08-12 완료**. ※죽은 코드(`db.ts`·`storage.ts`·`pipeline.ts::buildRecommendations`·`repository.ts` `apiRepository` 스텁)와 core stale 파일(`README`·`bridge.ts`·`WHISPERX_GUIDE`·`ocr.py`·`prefilter.py`)은 이후 정리로 해소됨.
 
 ---
 
@@ -400,7 +400,7 @@ AI: Vertex Gemini(gemini-3.1-flash) — 서울(asia-northeast3) 리전 고정 (�
 | R10 | **얼굴 임베딩 라이선스** | InsightFace 등 가중치 비상업 함정 | 도입 시점 재조사, 상업 가능 가중치 or 관리형(Rekognition) |
 | R11 | **배포 자동화 부재** | Cloud Run 푸시 자동배포 안 됨 → 옛 코드 계속 실행 위험 | 배포 스크립트 필수화·카나리아(`media.durationSec`) |
 | R12 | **편집기 업스트림 표류** | OpenCut main = Vite/Rust 재작성, classic은 아카이브(픽스 없음) | `opencut-classic` 아카이브 커밋 고정·부품 격리(vendor)·우리가 소유 관리 |
-| R13 | **`apps/api` 레거시 폐기 미결정** | 구 Python FastAPI가 `apps/api/`에 잔존(pnpm workspace 미등록 — 디렉터리만 남음). 현 서버·워커 미참조이나 H(PPL) 등 참고 로직 보유 | 참고 가치 확인 후 제거 시점 결정(§10 리포 위생). 그 전까지 **새 코드 반입 금지**(CLAUDE.md 규칙) |
+| R13 | ~~`apps/api` 레거시 폐기 미결정~~ **종결(2026-08-12)** | 구 Python FastAPI · `apps/docs/` 삭제. 실행 수단(docker-compose·Caddyfile)도 함께 제거돼 유지 이유가 없어졌다 | 완료 — 참고 로직은 git 이력, 사업 자료는 `docs/archive/` |
 
 ---
 
@@ -418,7 +418,7 @@ AI: Vertex Gemini(gemini-3.1-flash) — 서울(asia-northeast3) 리전 고정 (�
 
 > ⚠️ 작성 시점(2026-07-16) 경로 기준의 **역사 기록**. 이후 같은 날 `docs/`가 `ops/`·`plans/`·`reference/`·`research/`·`prototypes/`·`archive/`로 재편됐고, `step-d-ux-plan`·`integration-map`·`backend-notes`·`deploy/INFRA`·`deploy/runbook`은 삭제, `core/{README,WHISPERX_GUIDE}.md`는 9d76484에서 삭제됐다(§0 참고).
 
-- **루트/제품:** `CLAUDE.md`, `README.md`, `admin/README.md`, `docs/STEPD-방향기획서.docx/pdf`(마스터), `apps/docs/{product-vision,architecture,feature-status,competitor-analysis,dev-guide}.md`
+- **루트/제품:** `CLAUDE.md`, `README.md`, `admin/README.md`, `docs/STEPD-방향기획서.docx/pdf`(마스터), 구 `apps/docs/*`(삭제 — 제품비전·경쟁사분석은 `docs/archive/` 로 이동)
 - **파이프라인/AI:** `docs/{pipeline-plan,pipeline-current,content-pipeline-prod,context-engine-plan,worker-queue,opencut-integration-plan}.md`, `docs/archive/object-detection-research.md`, `core/{README,WHISPERX_GUIDE}.md`
 - **UX/배포필드:** `docs/{step-d-ux-plan,publish-fields-ux-plan,integration-map,backend-notes,glossary}.md`
 - **인프라:** `docs/{infra,deploy,local-dev,vercel-ops,youtube-channel-analytics-guide}.md`, `deploy/{INFRA,runbook}.md`(폐기)

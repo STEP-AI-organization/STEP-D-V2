@@ -3,7 +3,7 @@
 2026-08-12 작성. 조사 기준 커밋 `d8ba693`(고객사 API 상품화).
 대상: 팀 전원. **읽고 나면 "우리가 무엇을 파는지"와 "KT ENA를 어떻게 붙이는지"를 말할 수 있어야 한다.**
 
-관련: [admin-multi-tenant-plan.md](../admin-multi-tenant-plan.md) · [factory-api-plan.md](factory-api-plan.md) ·
+관련: [admin-multi-tenant-plan.md](admin-multi-tenant-plan.md) · [factory-api-plan.md](factory-api-plan.md) ·
 [customer-api.md](../../reference/customer-api.md) · [billing-portone-plan.md](billing-portone-plan.md) ·
 [infra.md](../../ops/infra.md)
 

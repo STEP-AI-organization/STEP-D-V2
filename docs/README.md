@@ -12,7 +12,6 @@
 | `deploy/` | 배포 — 표준은 `bash deploy/cloud.sh <target>` |
 | [`scripts/`](../scripts/README.md) | 개발·운영·실험 스크립트 (제품 코드 아님) |
 | `docs/` | 이 문서들 |
-| `apps/api/` | ⚠️ 구 STEPD 레거시 — **미사용, 새 코드 금지** |
 
 ## 읽는 순서
 

@@ -26,4 +26,4 @@
 | 배포 | `deploy/` — 표준은 `bash deploy/cloud.sh <target>` |
 | 개발·실험 스크립트 | `scripts/` ([README](scripts/README.md)) |
 
-⚠️ `apps/api/` 는 **구 STEPD 레거시**다. 미사용 — 새 코드를 넣지 않는다.
+⚠️ 구 STEPD(Python FastAPI `apps/api/`)는 **2026-08-12 삭제됐다.** 참고할 일이 있으면 git 이력에서 꺼낸다.

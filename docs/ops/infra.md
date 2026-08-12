@@ -5,7 +5,7 @@
 > ⚠️ **2026-08-07 전면 개편.** 워커가 GCE VM → **Cloud Run Jobs** 로 옮겨졌고,
 > GEBD(화면전환 모델)용 **GPU VM** 이 새로 생겼다. 이전 판이 기술하던 `stepd-worker` VM 은
 > **존재하지 않는다**(조회 결과 GCE 인스턴스 0개였다).
-> 레거시 주의: 구 시스템(shorts-vm/shorts-pg) 문서는 폐기·삭제됐고, 리포에 남은 `apps/api`
+> 레거시 주의: 구 시스템(shorts-vm/shorts-pg) 문서는 폐기·삭제됐고, 2026-08-12 삭제된 `apps/api`
 > (구 Python FastAPI)는 레거시 잔존물 — 현 서버(`apps/server`)는 이를 전혀 사용하지 않는다.
 
 ## 한눈에

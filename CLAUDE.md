@@ -1,7 +1,7 @@
 # STEP-D — Claude 컨텍스트
 
 > 2026-08-08 실측 기준 갱신. 이 리포는 구 STEPD(Python FastAPI + VM)가 아니다.
-> 구 코드는 `apps/api/`에 레거시로만 남아 있고, 새 작업은 `apps/web` + `apps/server` + `core/`에서 한다.
+> 구 코드(`apps/api/` · `apps/docs/`)는 **2026-08-12 삭제됐다.** 작업은 `apps/web` + `apps/server` + `core/` 에서 한다.
 
 ## 제품 개요
 
@@ -35,7 +35,6 @@ core/          Python AI 파이프라인 (analyze·asr·boundaries·beats·beat_
 admin/         STEP D Admin — 플랫폼 관리 콘솔 (Vite+React SPA). 회사·사용자·잡·감사
                → Vercel 독립 배포 · admin.stepd.stepai.kr · superadmin 세션 필수
                (구 STEP D Lab 은 2026-08-10 제거 — /api/lab/* 라우트도 함께 삭제)
-apps/api/      ⚠️ 레거시 (구 STEPD, Python FastAPI). 미사용 — 새 코드 금지. 제거 여부 미결정.
 deploy/        cloud.sh(표준 배포: status|server|worker|gebd|migrate|all) · deploy-web.ps1(Vercel)
                · gebd/(Dockerfile.slim · vm-startup.sh · run_long_v3.sh) · worker-vm.sh
 docs/          ops(현황·운영) / plans(계획) / reference / research / prototypes / archive
