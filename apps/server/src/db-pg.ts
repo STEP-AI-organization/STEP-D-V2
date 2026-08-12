@@ -874,9 +874,11 @@ export async function deleteYouTubeChannel(channelId: string): Promise<void> {
  * 토큰이 비면 자동으로 배포 대상에서 빠진다 (factory validateTargets · targets 라우트).
  */
 export async function disconnectYouTubeChannel(channelId: string): Promise<void> {
+  // ⚠️ refreshtoken 컬럼이 NOT NULL 이라 NULL 은 제약 위반으로 500 난다 (2026-08-12 실측).
+  // 빈 문자열이면 배포 가능 판정(!refreshToken)이 동일하게 falsy 로 걸린다.
   await pool.query(
     `UPDATE youtube_channels
-        SET refreshToken = NULL, accessToken = NULL, status = 'disconnected'
+        SET refreshToken = '', accessToken = '', status = 'disconnected'
       WHERE channelId = $1`,
     [channelId],
   );
@@ -2758,11 +2760,21 @@ export async function deleteAssetFiles(ids: string[]): Promise<AssetFileRow[]> {
 export interface AutomationRuleRow {
   id: string; programId: string; platform: string; accountId: string;
   mediaKind: string; criterion: string; gatePolicy: string; window: string; enabled: boolean;
+  // 다중 확장 (0032) — 배열이 있으면 배열이 정본, 없으면 단수 폴백.
+  templateId?: string | null;
+  layout?: Record<string, number> | null;
+  programIds?: string[] | null;
+  channels?: { platform: string; accountId: string }[] | null;
+  dailyQuota?: number;
+  activeStart?: number;
+  activeEnd?: number;
 }
 
 const RULE_SEL = `id, program_id AS "programId", platform, account_id AS "accountId",
   media_kind AS "mediaKind", criterion, gate_policy AS "gatePolicy",
-  time_window AS "window", enabled`;
+  time_window AS "window", enabled,
+  template_id AS "templateId", layout, program_ids AS "programIds", channels,
+  daily_quota AS "dailyQuota", active_start AS "activeStart", active_end AS "activeEnd"`;
 
 export async function listAutomationRules(): Promise<AutomationRuleRow[]> {
   const { rows } = await pool.query<AutomationRuleRow>(
@@ -2774,12 +2786,34 @@ export async function listAutomationRules(): Promise<AutomationRuleRow[]> {
 export async function upsertAutomationRule(r: AutomationRuleRow): Promise<void> {
   await pool.query(
     `INSERT INTO automation_rule
-       (id, program_id, platform, account_id, media_kind, criterion, gate_policy, time_window, enabled)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+       (id, program_id, platform, account_id, media_kind, criterion, gate_policy, time_window, enabled,
+        template_id, layout, program_ids, channels, daily_quota, active_start, active_end)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12::jsonb,$13::jsonb,$14,$15,$16)
      ON CONFLICT (program_id, platform, account_id) DO UPDATE SET
-       media_kind = $5, criterion = $6, gate_policy = $7, time_window = $8, enabled = $9`,
-    [r.id, r.programId, r.platform, r.accountId, r.mediaKind, r.criterion, r.gatePolicy, r.window, r.enabled],
+       media_kind = $5, criterion = $6, gate_policy = $7, time_window = $8, enabled = $9,
+       template_id = $10, layout = $11::jsonb, program_ids = $12::jsonb, channels = $13::jsonb,
+       daily_quota = $14, active_start = $15, active_end = $16`,
+    [r.id, r.programId, r.platform, r.accountId, r.mediaKind, r.criterion, r.gatePolicy, r.window, r.enabled,
+     r.templateId ?? null,
+     r.layout ? JSON.stringify(r.layout) : null,
+     r.programIds?.length ? JSON.stringify(r.programIds) : null,
+     r.channels?.length ? JSON.stringify(r.channels) : null,
+     r.dailyQuota ?? 3, r.activeStart ?? 9, r.activeEnd ?? 22],
   );
+}
+
+/**
+ * 채널별 오늘(KST) 게시 수 — 하루 할당량 판정. rule_run 은 UTC 저장이라
+ * KST 자정( UTC 전날 15:00 ) 기준으로 자른다.
+ */
+export async function publishedTodayKst(ruleId: string, accountKey: string): Promise<number> {
+  const { rows } = await pool.query(
+    `SELECT COUNT(*)::int AS n FROM rule_run
+      WHERE rule_id = $1 AND account_key = $2 AND result = 'published'
+        AND at >= date_trunc('day', now() AT TIME ZONE 'Asia/Seoul') AT TIME ZONE 'Asia/Seoul'`,
+    [ruleId, accountKey],
+  );
+  return Number((rows[0] as { n: number } | undefined)?.n ?? 0);
 }
 
 export async function deleteAutomationRule(id: string): Promise<boolean> {
@@ -2790,10 +2824,12 @@ export async function deleteAutomationRule(id: string): Promise<boolean> {
 /** 자동 실행 전용 로그 — 사람이 누른 배포와 섞지 않는다(F6). */
 export async function appendRuleRun(ev: {
   ruleId?: string | null; clipId?: string | null; result: string; detail?: string;
+  /** 채널별 할당량 집계 키 — "youtube:UCxxx" · "naverclip:nva_xxx" 형식. */
+  accountKey?: string | null;
 }): Promise<void> {
   await pool.query(
-    `INSERT INTO rule_run (rule_id, clip_id, result, detail) VALUES ($1,$2,$3,$4)`,
-    [ev.ruleId ?? null, ev.clipId ?? null, ev.result, ev.detail ?? ""],
+    `INSERT INTO rule_run (rule_id, clip_id, result, detail, account_key) VALUES ($1,$2,$3,$4,$5)`,
+    [ev.ruleId ?? null, ev.clipId ?? null, ev.result, ev.detail ?? "", ev.accountKey ?? null],
   );
 }
 
