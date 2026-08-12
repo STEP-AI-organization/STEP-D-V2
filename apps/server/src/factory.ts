@@ -240,13 +240,22 @@ export async function advance(factoryJobId: string): Promise<{ job: FactoryJob; 
       const existing = media.find((m: any) => m.path === job.sourceUrl
         || m.path === `youtube:${job.sourceUrl}` || m.id === job.sourceUrl);
       if (existing) {
-        const blocked = await creditBlocked((existing as any).durationSec ?? 0);
-        if (blocked) return await fail(`크레딧 부족 — ${blocked}`);
+        // 이미 분석이 끝난 미디어면 **다시 태우지 않는다.** content.analyze 는 체크포인트로
+        // 연산은 스킵해도 recordUsage 가 전체 분수를 다시 차감한다 — 프로덕션 스모크에서
+        // 재분석 없는 관통인데 59크레딧이 재차감됐다 (2026-08-12 실측). 분석이 있으면
+        // 바로 analyzing 으로 가서 추천 존재 확인만 한다.
+        const { getContentAnalysis } = await import("./db-pg.ts");
+        const analysis = await getContentAnalysis((existing as any).id).catch(() => null);
+        const analyzed = (analysis as any)?.status === "done";
+        if (!analyzed) {
+          const blocked = await creditBlocked((existing as any).durationSec ?? 0);
+          if (blocked) return await fail(`크레딧 부족 — ${blocked}`);
+          await enqueue("content.analyze", { mediaId: (existing as any).id },
+            { dedupeKey: `content.analyze:${(existing as any).id}` });
+        }
         job = await save({ ...job, state: "analyzing", mediaId: (existing as any).id,
           episodeId: (existing as any).episodeId });
-        await enqueue("content.analyze", { mediaId: (existing as any).id },
-          { dedupeKey: `content.analyze:${(existing as any).id}` });
-        return { job, retryInMs: 60_000 };
+        return { job, retryInMs: analyzed ? 0 : 60_000 };
       }
       if (!job.mediaId) {
         return await fail(
@@ -263,12 +272,18 @@ export async function advance(factoryJobId: string): Promise<{ job: FactoryJob; 
       if (String(media.path ?? "").startsWith("youtube:")) {
         return { job, retryInMs: 60_000 };   // 아직 다운로드 중
       }
-      const blocked = await creditBlocked(media.durationSec ?? 0);
-      if (blocked) return await fail(`크레딧 부족 — ${blocked}`);
+      // queued 분기와 같은 이유 — 분석이 이미 있으면 재큐잉(=재차감)하지 않는다.
+      const { getContentAnalysis } = await import("./db-pg.ts");
+      const analysis = await getContentAnalysis(job.mediaId!).catch(() => null);
+      const analyzed = (analysis as any)?.status === "done";
+      if (!analyzed) {
+        const blocked = await creditBlocked(media.durationSec ?? 0);
+        if (blocked) return await fail(`크레딧 부족 — ${blocked}`);
+        await enqueue("content.analyze", { mediaId: job.mediaId },
+          { dedupeKey: `content.analyze:${job.mediaId}` });
+      }
       job = await save({ ...job, state: "analyzing", episodeId: media.episodeId });
-      await enqueue("content.analyze", { mediaId: job.mediaId },
-        { dedupeKey: `content.analyze:${job.mediaId}` });
-      return { job, retryInMs: 60_000 };
+      return { job, retryInMs: analyzed ? 0 : 60_000 };
     }
 
     // ── 분석 완료 대기 ───────────────────────────────────────────────────────
