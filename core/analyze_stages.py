@@ -39,9 +39,18 @@ def run_stt(
     progress("stt", 3, "음성 인식 준비")
     ts = time.time()
     stt = load_json(out_dir / "stt.json")
-    if stt and "segments" in stt:
+    # ⚠️ 체크포인트는 **비어 있지 않을 때만** 재사용한다.
+    # 예전 조건은 `if stt and "segments" in stt:` 였는데 `{"segments": []}` 도 통과했다.
+    # Soniox 가 0토큰을 돌려주거나(무음·잘못된 오디오 트랙) Gemini 예외가 빈 결과로 강등되면
+    # 빈 stt.json 이 저장되고, 그 뒤 scenes·beats 가 전부 비면서 @@COMPLETE 로 **성공 종료**했다.
+    # 지문이 그대로라 **모든 재시도가 같은 빈 파일을 재사용** — ₩270 은 이미 나갔는데
+    # 영원히 회복되지 않는다. 이웃 스테이지(scenes·beats·recommend)는 전부 비어있지 않음을
+    # 요구한다. STT 만 예외였다.
+    if stt and stt.get("segments"):
         step(f"STT — 체크포인트 재사용 ({len(stt['segments'])} 세그먼트)")
     else:
+        if stt is not None:
+            step("STT — 체크포인트가 비어 있어 다시 인식한다")
         step("STT (관리형)…")
         expected_speakers = len(cast_registry) if isinstance(cast_registry, list) and cast_registry else None
         stt = transcribe(
@@ -50,6 +59,12 @@ def run_stt(
             on_progress=lambda done, total: progress(
                 "stt", 3 + 27 * done / max(1, total), f"음성 인식 {done}/{total} 윈도우"),
         )
+        # 빈 결과를 체크포인트로 굳히지 않는다 — 굳으면 위와 같은 영구 고착이 된다.
+        if not stt or not stt.get("segments"):
+            raise RuntimeError(
+                "STT 결과가 비어 있습니다 — 오디오 트랙이 없거나 인식이 실패했습니다. "
+                "영상의 오디오를 확인하고 다시 시도하세요(빈 결과를 체크포인트로 저장하지 않았습니다)."
+            )
         save_json(out_dir / "stt.json", stt)
     segments = get_segments(stt)
     step(f"  {len(segments)} 세그먼트")
@@ -108,6 +123,21 @@ def run_chyron_per_seg(
     if os.environ.get("RUN_CHYRON_PER_SEG", "1") == "0":
         return refined
     ts = time.time()
+
+    # ⚠️ 체크포인트 게이트. 이웃 스테이지와 달리 이 함수는 **아무것도 확인하지 않고 매번
+    # 다시 돌았다**(2026-08-12 발견). STT 세그먼트당 Vision 1회라 실측 662회 · 회차당 ≈₩150 이고,
+    # content-pipeline 은 그 비용 때문에 chyron.json 을 GCS 로 왕복시켜 복원까지 해두는데
+    # **읽는 게이트가 없어 그 복원이 무의미**했다. 재시도할 때마다 다시 샀다.
+    #
+    # chyron.json 은 refined.json 에 실명 rewrite 를 반영한 **뒤에만** 저장된다(아래 순서 참고).
+    # 따라서 이 파일의 존재 = "이 미디어의 rewrite 는 이미 끝났다" 로 읽어도 안전하다.
+    # 중간에 죽으면 chyron.json 이 없으므로 다시 돈다 — 안전한 방향이다.
+    prior = load_json(out_dir / "chyron.json")
+    if isinstance(prior, dict) and isinstance(prior.get("hits"), list):
+        step(f"chyron per-seg — 체크포인트 재사용 ({len(prior['hits'])}건 · 재스캔 안 함)")
+        timed("chyron_per_seg", ts)
+        return refined
+
     try:
         from core.scenes.chyron_scan import scan_per_seg
         progress("chyron", 38, "화면 이름 태그 세그별 스캔")
@@ -574,9 +604,12 @@ def run_shot_boundary(
         step(f"shot boundary — {len(shots_list)}개 (창 {len(windows)}개 · {covered:.0f}s 스캔, "
              f"threshold={used_th}, genre={genre})")
     except Exception as e:
-        step(f"  (shot boundary 실패 · 빈 리스트로 진행: {str(e)[:70]})")
+        # 이번 회차는 빈 값으로 진행한다(전체를 실패시키지 않는다) — 여기까지는 의도대로다.
+        # ⚠️ 다만 **체크포인트로 저장하지 않는다.** 저장하면 위 게이트(`isinstance(list)`)가
+        #    빈 리스트도 통과시켜서, ffmpeg/Vertex 가 한 번 딸꾹질한 미디어는 shots 가
+        #    **영구히 빈 채로 고정**되고 어떤 재시도로도 회복되지 않는다.
+        step(f"  (shot boundary 실패 · 이번 회차만 빈 리스트로 진행 · 체크포인트 미저장: {str(e)[:70]})")
         shots_data = {"shots": [], "windows": 0, "threshold": 0.55, "fps": 1}
-        save_json(out_dir / "shots.json", shots_data)
     timed("shots", ts)
     return shots_data
 
@@ -614,9 +647,9 @@ def run_scene_type(
         save_json(out_dir / "scene_type.json", scene_type_data)
         step(f"scene_type — {len(shot_types)} shot 분류 완료")
     except Exception as e:
-        step(f"  (scene_type 실패 · 빈 리스트로 진행: {str(e)[:70]})")
+        # shots 와 같은 이유로 **저장하지 않는다** — 빈 체크포인트는 게이트를 통과해 고착된다.
+        step(f"  (scene_type 실패 · 이번 회차만 빈 리스트로 진행 · 체크포인트 미저장: {str(e)[:70]})")
         scene_type_data = {"shot_types": []}
-        save_json(out_dir / "scene_type.json", scene_type_data)
     timed("scene_type", ts)
     return scene_type_data
 

@@ -191,7 +191,12 @@ function runAnalyze(
           PYTHONPATH: "",
           PYTHONIOENCODING: "utf-8",
           PYTHONUTF8: "1",
-          STT_PROVIDER: process.env.STT_PROVIDER || "hybrid",
+          // ⚠️ 이 값은 자식 env 에 **항상** 주입되므로 core 쪽 기본값보다 이게 이긴다.
+          //    예전 기본값 "hybrid" 는 torch/faster-whisper 를 요구하는데 워커 이미지는
+          //    그 스택을 일부러 뺐고, run_refine 도 hybrid≠soniox 로 보아 유료 Gemini
+          //    정제를 한 번 더 돌렸다. 확정 스택인 "soniox" 로 맞춘다.
+          //    (프로덕션 워커는 STT_PROVIDER=soniox 를 명시하므로 지문 변화 없음)
+          STT_PROVIDER: process.env.STT_PROVIDER || "soniox",
           GOOGLE_CLOUD_PROJECT: process.env.GOOGLE_CLOUD_PROJECT || "step-d",
           VERTEX_LOCATION: process.env.VERTEX_LOCATION || "asia-northeast3",
         },
@@ -208,11 +213,26 @@ function runAnalyze(
     if (proc.stdin && typeof (proc.stdin as any).unref === "function") (proc.stdin as any).unref();
     if (proc.stdout && typeof (proc.stdout as any).unref === "function") (proc.stdout as any).unref();
     if (proc.stderr && typeof (proc.stderr as any).unref === "function") (proc.stderr as any).unref();
-    // stderr는 로그로만 사용 (워커 프로세스에 영향 없게)
+    // stderr 는 로그로 흘리되 **마지막 몇 줄은 붙잡아 둔다.**
+    //
+    // ⚠️ 예전에는 콘솔로만 보내고 버렸다. 그래서 파이썬이 죽으면 잡에 남는 건
+    //    `core.analyze exited 1` 한 줄뿐이었고, 실제 트레이스백은 컨테이너 로그에만 있었다
+    //    — 가장 비싼 잡(회차당 ≈₩285)이 정보가 가장 적었다. 운영자는 어드민 잡 표에서
+    //    종료코드만 보고 원인을 알 수 없었다.
+    //    같은 문제를 이미 해결해 둔 곳이 리포 안에 있다: 썸네일 스폰과 match.align 은
+    //    `stderr.slice(-N)` 을 에러에 붙인다. 같은 방식을 여기에도 쓴다.
+    const errTail: string[] = [];
+    const ERR_TAIL_LINES = 40;
     if (proc.stderr) {
       const errRl = readline.createInterface({ input: proc.stderr });
-      errRl.on("line", (line) => console.error(`[core:err] ${line}`));
+      errRl.on("line", (line) => {
+        console.error(`[core:err] ${line}`);
+        errTail.push(line);
+        if (errTail.length > ERR_TAIL_LINES) errTail.shift();
+      });
     }
+    /** 실패 메시지에 붙일 파이썬 stderr 꼬리. 없으면 빈 문자열. */
+    const tail = () => (errTail.length ? `\n--- python stderr (마지막 ${errTail.length}줄) ---\n${errTail.join("\n")}` : "");
 
     // Stall watchdog: every stdout line re-arms it. The pipeline prints per-window/-frame/
     // -batch progress on stdout, so a long silence means a hung call, not slow work.
@@ -265,7 +285,8 @@ function runAnalyze(
         activeChild = null;
         if (earlyResolved) return;
         if (stalled) {
-          reject(new Error(`core.analyze stalled (${STALL_TIMEOUT_MS / 60000}min without output) — killed`));
+          reject(new Error(
+            `core.analyze stalled (${STALL_TIMEOUT_MS / 60000}min without output) — killed${tail()}`));
           return;
         }
         if (code === 0) { resolve(); return; }
@@ -275,10 +296,14 @@ function runAnalyze(
           resolve();
           return;
         }
-        reject(new Error(`core.analyze exited ${code}`));
+        reject(new Error(`core.analyze exited ${code}${tail()}`));
       } catch (e) {
-        console.error("[worker] close handler err (swallowed):", e);
-        try { resolve(); } catch { /* ignore */ }
+        // ⚠️ 예전엔 여기서 삼키고 `resolve()` 했다 — **실패가 성공이 됐다.**
+        //    close 핸들러에서 예외가 나가면 워커가 죽는다는 2026-07-26 관찰은 유효하므로
+        //    throw 는 여전히 막되, **결과는 실패로 돌린다.** 조용한 성공보다 시끄러운 실패가 낫다.
+        const why = e instanceof Error ? e.message : String(e);
+        console.error("[worker] core.analyze close handler 예외:", e);
+        try { reject(new Error(`core.analyze close handler 실패: ${why}${tail()}`)); } catch { /* 이미 정산됨 */ }
       }
     });
     proc.on("error", (err) => {
@@ -845,7 +870,7 @@ async function persistTranscript(
       segments: segments as TranscriptSegment[],
       // core/analyze.py transcribes with language="ko"; provider is the worker's STT choice.
       language: "ko",
-      provider: process.env.STT_PROVIDER || "gemini",
+      provider: process.env.STT_PROVIDER || "soniox",
       source,
     });
   } catch (e) {
@@ -1135,12 +1160,25 @@ export async function runContentAnalyze(mediaId: string, fast = false): Promise<
 
     // 2026-07-23: runAnalyze reject 되어도 analysis.json 있으면 결과 사용 (native cleanup crash 등).
     // 워커 안정성 개선의 두 번째 축 — 파일 있으면 DB write 반드시 진행, 없으면 진짜 실패.
+    //
+    // ⚠️ 단, **이번 실행이 만든 파일일 때만**이다(2026-08-12 보강).
+    // 작업 디렉토리는 미디어별로 고정이고 실패 시 일부러 보존한다. 그래서 재시도에서
+    // 파이썬이 즉시 죽으면(venv 소실·CUDA·import OOM) 지난 회차의 analysis.json 이 그대로
+    // 남아 있어, 크래시가 경고로 강등되고 **옛 분석이 새 분석으로 저장되며 크레딧까지 차감**됐다.
+    // 시작 시각보다 새로운 파일만 "이번 산출물" 로 인정한다.
+    const runStartedAt = Date.now();
     try {
       await runAnalyze(videoPath, work, onProgress, profilePath, castPath, fast, programContextPath, pipelineGenre, mediaId);
     } catch (e) {
       const analysisPath = path.join(work, "analysis.json");
       if (!fs.existsSync(analysisPath)) throw e;
-      console.warn(`[worker] content.analyze ${mediaId}: runAnalyze 실패 (${(e as Error).message}) — analysis.json 있어 진행`);
+      const producedAt = fs.statSync(analysisPath).mtimeMs;
+      if (producedAt < runStartedAt) {
+        console.error(`[worker] content.analyze ${mediaId}: analysis.json 이 지난 회차 것이다 ` +
+          `(mtime ${new Date(producedAt).toISOString()} < 시작 ${new Date(runStartedAt).toISOString()}) — 실패로 처리`);
+        throw e;
+      }
+      console.warn(`[worker] content.analyze ${mediaId}: runAnalyze 실패 (${(e as Error).message}) — 이번 회차 analysis.json 있어 진행`);
     }
     await chain.catch(() => {});
 

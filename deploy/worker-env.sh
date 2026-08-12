@@ -42,7 +42,7 @@ ENV_FILE="${ENV_FILE:-/etc/stepd/worker.env}"
 PROJECT="${PROJECT:-step-d}"
 GCS_BUCKET="${GCS_BUCKET:-stepd-media}"
 VERTEX_LOCATION="${VERTEX_LOCATION:-asia-northeast3}"
-STT_PROVIDER="${STT_PROVIDER:-gemini}"
+STT_PROVIDER="${STT_PROVIDER:-soniox}"
 
 # `sudo` is skipped when already root (worker-vm.sh may be invoked either way, and tests run
 # against a temp ENV_FILE as an ordinary user).

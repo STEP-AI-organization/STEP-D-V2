@@ -4091,7 +4091,10 @@ app.post("/api/thumbnail-refs/batch/:action", async (c) => {
   const scriptName = action === "analyze"
     ? "thumbnail_reference_manifest.py"
     : "thumbnail_preprocess_template.py";
-  const scriptPath = path.join(REPO_ROOT, "scripts", scriptName);
+  // ⚠️ scripts/ 재편(2026-08-12)으로 썸네일 스크립트는 scripts/thumbnail/ 로 옮겨졌다.
+  //    힌트 문자열은 갱신됐는데 여기는 basename 을 조립하는 형태라 문자열 치환이 못 잡아
+    //  두 엔드포인트가 exit 2 로 죽고 있었다.
+  const scriptPath = path.join(REPO_ROOT, "scripts", "thumbnail", scriptName);
   const { spawn } = await import("node:child_process");
   const results: any[] = [];
   for (const target of targets) {
@@ -4127,7 +4130,7 @@ app.post("/api/thumbnail-refs/:id/preprocess", async (c) => {
       hint: "로컬 워커에서 실행하세요: python scripts/thumbnail/thumbnail_preprocess_template.py " + id,
     }, 501);
   }
-  const scriptPath = path.join(REPO_ROOT, "scripts", "thumbnail_preprocess_template.py");
+  const scriptPath = path.join(REPO_ROOT, "scripts", "thumbnail", "thumbnail_preprocess_template.py");
   const { spawn } = await import("node:child_process");
   try {
     await new Promise<void>((resolve, reject) => {
@@ -4159,7 +4162,7 @@ app.post("/api/thumbnail-refs/:id/analyze", async (c) => {
     }, 501);
   }
   // Python 스크립트 호출
-  const scriptPath = path.join(REPO_ROOT, "scripts", "thumbnail_reference_manifest.py");
+  const scriptPath = path.join(REPO_ROOT, "scripts", "thumbnail", "thumbnail_reference_manifest.py");
   const { spawn } = await import("node:child_process");
   await new Promise<void>((resolve, reject) => {
     const proc = spawn(CORE_PYTHON, [scriptPath], {

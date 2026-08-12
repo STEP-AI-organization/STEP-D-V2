@@ -277,7 +277,9 @@ export async function failJob(id: string, error: string): Promise<void> {
        error     = $4,
        updatedAt = $5
      WHERE id = $1 AND status = 'running'`,
-    [id, exhausted ? "failed" : "pending", now + backoff, error.slice(0, 1000), now],
+    // 4000자. 예전 1000자는 파이썬 스택트레이스나 stderr 꼬리를 잘라먹었다 —
+    // 잡이 왜 죽었는지가 컬럼 안에서 끝나야 운영자가 로그를 뒤지지 않는다.
+    [id, exhausted ? "failed" : "pending", now + backoff, error.slice(0, 4000), now],
   );
 }
 

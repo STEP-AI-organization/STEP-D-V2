@@ -86,7 +86,9 @@ def prepare_checkpoints(
     INDEX_VER = "2026-08-07-init"   # segments.json (검색 인덱스) 재조립 로직 버전
     STT_VER = "2026-07-27-word-normalize"
     VIEWER_SIGNALS_VER = "2026-07-28-init"
-    STT_PROVIDER_ENV = (os.environ.get("STT_PROVIDER") or "gemini").lower()
+    # ⚠️ 이 값이 stt.json 지문에 들어간다 — 기본값이 다른 곳과 어긋나면 체크포인트가
+    #    무효화돼 STT 를 다시 산다(≈₩270). 확정 스택인 "soniox" 로 통일한다.
+    STT_PROVIDER_ENV = (os.environ.get("STT_PROVIDER") or "soniox").lower()
     RECOMMEND_MODE = os.environ.get("RECOMMEND_MODE") or "narrative_first"
     _comments_path = out_dir / "comments.json"
     _comments_hash = ""
