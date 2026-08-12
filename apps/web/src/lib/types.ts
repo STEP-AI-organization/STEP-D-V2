@@ -55,8 +55,6 @@ export interface Program {
   rightsUntil?: string;
   /** 권리 관련 자유 메모 (예: "해외 배포 불가 · 국내만", "재계약 확인"). */
   rightsNote?: string;
-  /** SMR feed-level requirements — set once per program (plan §3, §5.1③). */
-  smr?: ProgramSmrConfig;
   /** 파이프라인 분기 축(2026-07-24~). section("예능") 표시와 별개로 코어 파이프라인이 어떤
    *  트랙을 타야 하는지 명시. "variety"·"drama"만 지원 — 미설정이면 자동 판정. 씬 청크 크기,
    *  shot 임계, faces 정면성 관용도, recommend 프롬프트 팩이 이 값에 따라 분기. */
@@ -86,25 +84,6 @@ export interface Program {
   /** 출연자별 인물 이미지 매핑 — cast 배열의 이름을 키로 data URL 저장.
    *  cast에서 이름이 제거되면 해당 키도 정리(서버 PATCH 시). */
   castPhotos?: Record<string, string>;
-}
-
-/**
- * Program-level SMR feed metadata. In STEPD these gate whether the whole program
- * (and thus its clips) can appear in the 네이버 SMR XML feed
- * (validateAggregateFeedProgramInfo). Kept off the per-clip publish path so
- * operators don't re-enter them for every clip.
- */
-export interface ProgramSmrConfig {
-  /** SMR programcode — lowercase alphanumeric (`^[a-z0-9]+$`). */
-  programCode?: string;
-  /** SMR category code: 01/02/03. */
-  category?: string;
-  /** Broadcast weekdays 0(일)–6(토) → SMR weekcode (≥1 required). */
-  weekdays?: number[];
-  /** 포스터 이미지 등록 여부. */
-  posterReady?: boolean;
-  /** 프로그램 썸네일 이미지 등록 여부. */
-  thumbnailReady?: boolean;
 }
 
 export interface Episode {
@@ -205,7 +184,7 @@ export interface ThumbnailVariant {
  * Destinations that have a render preset (frame + hard length cap) — mirrors the server's
  * RENDER_PRESETS keys, which in turn mirror core/channels.py CHANNEL_PRESETS.
  */
-export type RenderChannel = "youtube_shorts" | "instagram_reels" | "smr";
+export type RenderChannel = "youtube_shorts" | "instagram_reels" | "naver_tv";
 
 /**
  * What each preset does to the render. Labels/caps are shown in the export selector, and
@@ -215,7 +194,7 @@ export type RenderChannel = "youtube_shorts" | "instagram_reels" | "smr";
 export const RENDER_CHANNELS: Record<RenderChannel, { label: string; aspect: AspectKey; maxSec: number }> = {
   youtube_shorts: { label: "YouTube Shorts", aspect: "9:16", maxSec: 60 },
   instagram_reels: { label: "Instagram Reels", aspect: "9:16", maxSec: 90 },
-  smr: { label: "SMR (포털 VOD)", aspect: "16:9", maxSec: 180 },
+  naver_tv: { label: "네이버 TV (가로 VOD)", aspect: "16:9", maxSec: 180 },
 };
 
 export interface Clip {
@@ -270,13 +249,19 @@ export interface Clip {
 }
 
 // ── Account connections (channel-level, set once) ────────────────────────────────
-/** Whether each push-channel account is connected. SMR is an internal feed (no OAuth).
- *  YouTube만 실제 OAuth 배선 됨 — 나머지는 UI 슬롯만 있고 백엔드 미구현(false 유지). */
+/**
+ * 채널 계정이 연결돼 있는가.
+ *
+ * `naver` 만 OAuth 가 아니다 — 네이버는 공개 업로드 API 가 없어서, 사람이 로그인해 만든
+ * 브라우저 세션이 등록돼 있는지를 뜻한다(배포채널 화면 → 네이버 연결 계정).
+ * YouTube·네이버는 실제 배선됨 · Meta/TikTok 은 UI 슬롯만 있고 파일은 올라가지 않는다.
+ */
 export interface Connections {
   youtube: boolean;
   instagram: boolean;
   facebook: boolean;
   tiktok: boolean;
+  naver: boolean;
 }
 
 // ── Distribution (per-channel state) ─────────────────────────────────────────────
@@ -286,7 +271,7 @@ export interface DistributionState {
   /**
    * "pending" = 워커 큐에 들어감(업로드 중) → published/scheduled/failed 로 풀린다.
    *
-   * **"recorded" 는 게시가 아니다** (F4 Invariant · FLOWS.md:92). Meta·TikTok·SMR 은
+   * **"recorded" 는 게시가 아니다** (F4 Invariant · FLOWS.md:92). Meta·TikTok 은
    * 파일이 올라가지 않는다 — 우리 쪽 기록만 남고 실제 게시는 담당자가 해당 앱에서 직접 한다.
    * 그래서 published 와 같은 톤·같은 문구로 그리면 안 된다.
    */

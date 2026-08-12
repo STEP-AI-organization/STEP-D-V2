@@ -30,11 +30,12 @@ const PLATFORM_LABEL: Record<string, string> = {
   instagram: "Instagram",
   facebook: "Facebook",
   tiktok: "TikTok",
-  smr: "SMR (포털 VOD)",
+  navertv: "네이버 TV",
+  naverclip: "네이버 클립",
 };
 
-/** 실제 파일이 올라가는 곳은 YouTube 뿐이다 (F4-3). */
-const UPLOAD_PLATFORMS = new Set(["youtube"]);
+/** 실제 파일이 올라가는 곳 (F4-3). 네이버는 브라우저 자동화지만 파일이 실제로 올라간다. */
+const UPLOAD_PLATFORMS = new Set(["youtube", "navertv", "naverclip"]);
 
 export function PublishDialog({
   clipIds,

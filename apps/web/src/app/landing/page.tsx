@@ -245,7 +245,7 @@ export default function LandingPage() {
               <div className="num">5</div>
               <h4>멀티채널 배포</h4>
               <p>
-                SMR·YouTube·Meta
+                네이버·YouTube·Meta
                 <br />
                 배포 스케줄링
               </p>
@@ -296,7 +296,7 @@ export default function LandingPage() {
             <div className="dept">
               <div className="di">유통</div>
               <div className="dn">유통·송출팀</div>
-              <div className="dd">SMR·멀티채널 배포·스케줄링</div>
+              <div className="dd">네이버·멀티채널 배포·스케줄링</div>
             </div>
             <div className="dept">
               <div className="di">광고</div>
@@ -375,9 +375,9 @@ export default function LandingPage() {
             <div className="fcard">
               <div className="ic">📡</div>
               <h3>멀티채널 배포 + 광고·커머스 수익화</h3>
-              <p>YouTube·네이버TV·인스타·틱톡·Meta로 한 번에 배포하고, 국내 고유 유통망 SMR로 광고 수익화. 영상 속 상품은 커머스로 연결해 판매 수수료까지 법니다.</p>
+              <p>YouTube·네이버TV·인스타·틱톡·Meta로 한 번에 배포하고, 국내 고유 유통망 네이버 TV·클립으로 광고 수익화. 영상 속 상품은 커머스로 연결해 판매 수수료까지 법니다.</p>
               <ul>
-                <li>SMR·지상파·종편 VOD 워크플로우</li>
+                <li>네이버·지상파·종편 VOD 워크플로우</li>
                 <li>PPL·광고 구간 분석</li>
                 <li>커머스 제휴 판매(쿠팡·올리브영·무신사 등)</li>
               </ul>
@@ -439,7 +439,7 @@ export default function LandingPage() {
                 <tr>
                   <td>국내 유통·수익화</td>
                   <td>미대응</td>
-                  <td>SMR·광고·커머스 내장</td>
+                  <td>네이버·광고·커머스 내장</td>
                 </tr>
                 <tr className="hl">
                   <td>주 고객</td>

@@ -95,7 +95,8 @@ export function ChannelRuleDialog({
   function pickRole(role: ChannelRole) {
     if (touched) { set({ role }); return; }
     if (role === "shorts_only") set({ role, aspect: "9:16", maxSec: platform === "youtube" ? 60 : 90 });
-    else if (platform === "smr") set({ role, aspect: "16:9", maxSec: 180 });
+    else if (platform === "navertv") set({ role, aspect: "16:9", maxSec: 180 });
+    else if (platform === "naverclip") set({ role, aspect: "9:16", maxSec: 90 });
     else set({ role, aspect: "any", maxSec: null });
   }
 

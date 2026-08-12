@@ -27,7 +27,6 @@ import { useToast } from "@/components/ui/toast";
 import { useAppData } from "@/lib/data/store";
 import { TARGET_AGES, targetAgeLabel, type TargetAge } from "@/lib/constants";
 import { WEEKDAYS } from "@/lib/reserve-date";
-import { programSmrChecks } from "@/lib/publish/requirements";
 import {
   PROGRAM_STATUSES,
   PROGRAM_STATUS_LABEL,
@@ -36,7 +35,6 @@ import {
 import type { Program, ProgramStatus } from "@/lib/types";
 
 const SECTIONS = ["드라마/영화", "예능", "뮤직", "시사", "교양", "라이프", "스포츠", "게임", "어린이", "뉴스", "애니"];
-const SMR_CATEGORIES = ["01", "02", "03"];
 const CODE_RE = /^[a-z0-9]+$/;
 
 /** 이미지 파일을 data URL로. 사이즈 상한 초과 시 alert 후 reject. */
@@ -139,9 +137,6 @@ function ProgramDetailInner({
   const [newName, setNewName] = useState("");
   const [castPhotos, setCastPhotos] = useState<Record<string, string>>(program.castPhotos ?? {});
   const [posterImageDataUrl, setPosterImageDataUrl] = useState(program.posterImageDataUrl ?? "");
-  const [programCode, setProgramCode] = useState(program.smr?.programCode ?? "");
-  const [category, setCategory] = useState(program.smr?.category ?? "");
-  const [weekdays, setWeekdays] = useState<number[]>(program.smr?.weekdays ?? []);
   const [busy, setBusy] = useState(false);
   // AI 자동 채움 결과 (마지막 실행 · 근거 URL 노출용 · 페이지 새로고침 시 사라짐)
   const [autofilling, setAutofilling] = useState(false);
@@ -200,9 +195,6 @@ function ProgramDetailInner({
     setCast(program.cast ?? []);
     setCastPhotos(program.castPhotos ?? {});
     setPosterImageDataUrl(program.posterImageDataUrl ?? "");
-    setProgramCode(program.smr?.programCode ?? "");
-    setCategory(program.smr?.category ?? "");
-    setWeekdays(program.smr?.weekdays ?? []);
   }, [
     program.id, program.title, program.section, program.targetAge,
     program.status, program.owner, program.pipelineGenre,
@@ -210,17 +202,11 @@ function ProgramDetailInner({
     program.synopsis, program.broadcaster, program.schedule, program.firstAiredDate,
     program.currentInfo, program.director, program.spinoff, program.awards,
     program.moods, program.cast, program.castPhotos, program.posterImageDataUrl,
-    program.smr?.programCode, program.smr?.category, program.smr?.weekdays,
     hydratedRef,
   ]);
 
-  const codeError = programCode.length > 0 && !CODE_RE.test(programCode);
   const titleError = !title.trim();
-  const canSave = !titleError && !codeError && !busy;
-
-  function toggleDay(i: number) {
-    setWeekdays((prev) => (prev.includes(i) ? prev.filter((d) => d !== i) : [...prev, i].sort((a, b) => a - b)));
-  }
+  const canSave = !titleError && !busy;
   function addMood() {
     const v = newMood.trim();
     if (!v || moods.includes(v)) return;
@@ -390,9 +376,6 @@ function ProgramDetailInner({
         moods,
         posterImageDataUrl,
         castPhotos,
-        programCode: programCode.trim(),
-        category,
-        weekdays,
       });
       onOpenToast({ title: "저장됨", description: title.trim(), tone: "done" });
     } catch (err) {
@@ -405,9 +388,6 @@ function ProgramDetailInner({
       setBusy(false);
     }
   }
-
-  const smrChecks = programSmrChecks(program);
-  const smrMissing = smrChecks.filter((c) => !c.met).length;
 
   return (
     <div className="mx-auto max-w-5xl space-y-6 pb-24">
@@ -425,7 +405,7 @@ function ProgramDetailInner({
           variant="outline"
           onClick={runAutofill}
           disabled={autofilling || busy || !title.trim()}
-          title="Gemini 웹 검색 + 팩트체크로 빈 필드 채움 (출연자·SMR 제외)"
+          title="Gemini 웹 검색 + 팩트체크로 빈 필드 채움 (출연자 제외)"
         >
           {autofilling ? <Loader2 className="animate-spin" /> : <Sparkles />}
           {autofilling ? "검색·팩트체크…" : "AI 자동 채움"}
@@ -532,11 +512,6 @@ function ProgramDetailInner({
             <Badge variant="muted">{section}</Badge>
             <Badge variant="muted">{targetAgeLabel(targetAge)}</Badge>
             <Badge variant="muted">회차 {episodeCount}</Badge>
-            {smrMissing === 0 ? (
-              <StatusBadge tone="done">SMR 피드 준비 완료</StatusBadge>
-            ) : (
-              <StatusBadge tone="warn">SMR {smrMissing}개 미충족</StatusBadge>
-            )}
           </div>
           <div className="grid grid-cols-2 gap-3">
             <Field label="장르">
@@ -795,50 +770,6 @@ function ProgramDetailInner({
       {/* 썸네일 엔진 — 프로그램마다 한 번 준비하면 이후 회차에 자동 적용된다 */}
       <ThumbnailEngineCard programId={program.id} programCast={cast} />
 
-      {/* SMR 피드 */}
-      <Card title="SMR 피드 정보" hint="네이버 SMR 배포에 필요한 프로그램 레벨 메타.">
-        <div className="grid gap-3 md:grid-cols-2">
-          <Field label="프로그램 코드" hint="영문 소문자·숫자">
-            <input
-              value={programCode}
-              onChange={(e) => setProgramCode(e.target.value)}
-              placeholder="jamsi"
-              className={cn(inputCls, codeError && "border-status-error focus-visible:ring-status-error")}
-            />
-            {codeError && <div className="mt-1 text-[11px] text-status-error">영문 소문자·숫자만 사용할 수 있습니다.</div>}
-          </Field>
-          <Field label="카테고리" hint="SMR 코드">
-            <select value={category} onChange={(e) => setCategory(e.target.value)} className={inputCls}>
-              <option value="">선택 안 함</option>
-              {SMR_CATEGORIES.map((c) => (
-                <option key={c} value={c}>{c}</option>
-              ))}
-            </select>
-          </Field>
-        </div>
-        <Field label="편성 요일" hint="방송 요일 선택">
-          <div className="flex gap-1.5">
-            {WEEKDAYS.map((w, i) => {
-              const on = weekdays.includes(i);
-              return (
-                <button
-                  key={w}
-                  type="button"
-                  onClick={() => toggleDay(i)}
-                  className={cn(
-                    "size-9 rounded-md border text-sm font-medium transition-colors",
-                    on
-                      ? "border-primary bg-primary text-primary-foreground"
-                      : "border-border text-muted-foreground hover:bg-accent/40",
-                  )}
-                >
-                  {w}
-                </button>
-              );
-            })}
-          </div>
-        </Field>
-      </Card>
 
       {/* 하단 저장 바 (스크롤 편의) */}
       <div className="flex items-center justify-end gap-2 border-t border-border pt-4">

@@ -2,7 +2,7 @@
  * STEP-D — YouTube 실업로드 게이트 (기본값 OFF).
  *
  * The only thing this gate blocks is the moment bytes would leave for YouTube. Analysis,
- * recommendation, adopt, render/export, analytics collection, and the Meta/SMR status-only
+ * recommendation, adopt, render/export, analytics collection, and the Meta status-only
  * stubs are all untouched — the boundary is the real upload, nothing else.
  *
  * SAFE BY DEFAULT: uploads are OFF unless `YOUTUBE_UPLOAD_ENABLED` is explicitly set to a

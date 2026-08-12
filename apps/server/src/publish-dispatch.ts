@@ -17,6 +17,8 @@ import { evaluateGate } from "./gate.ts";
 import {
   channelPublishMode,
   distributionStatusFor,
+  isNaverChannel,
+  NAVER_CHANNELS,
   screenForPublish,
   upsertDistribution,
   type PublishSkip,
@@ -39,6 +41,15 @@ export interface PublishInput {
   privacy?: "public" | "unlisted" | "private";
   /** YouTube 전용 — 어느 연결 채널로 올릴지. 추론하지 않는다. */
   youtubeChannelId?: string;
+  /**
+   * 네이버 전용 — 어느 네이버 계정으로 올릴지. B2B 다계정에서 **추론하면 안 된다**:
+   * A사 클립이 B사 채널로 나가는 사고가 조용히 일어난다. 워커가 테넌트를 한 번 더 대조한다.
+   */
+  naverAccountId?: string;
+  /** 네이버 전용 — 발행 시점에 사람이 넣는 설명(클립은 10자 이상 필수). 없으면 클립 synopsis. */
+  description?: string;
+  /** 네이버 전용 — 카테고리(1차·2차 둘 다 필수). 자동 판정하지 않는다. */
+  naverCategory?: { primary: string; secondary: string };
   /** 누가 눌렀나. 감사 로그에 남는다. */
   actor: string;
   /** 어디서 왔나 — manual | retry | factory. 자동 실행 로그를 수동과 분리하기 위해. */
@@ -46,9 +57,9 @@ export interface PublishInput {
 }
 
 export interface PublishOutcome {
-  /** 실업로드 큐에 들어간 클립 (YouTube). */
+  /** 실업로드 큐에 들어간 클립 (YouTube · 네이버 TV/클립). */
   queued: string[];
-  /** 파일이 올라가지 않고 상태만 기록된 클립 (Meta·SMR·TikTok). */
+  /** 파일이 올라가지 않고 상태만 기록된 클립 (Meta·TikTok). */
   recorded: string[];
   /** 게이트·렌더 때문에 빠진 클립. **버리지 않고 사유와 함께 돌려준다.** */
   skipped: PublishSkip[];
@@ -133,12 +144,16 @@ export async function dispatchPublish(input: PublishInput): Promise<PublishOutco
       ...(input.reserveDate ? { reserveDate: input.reserveDate } : {}),
       ...(mode === "upload" && input.youtubeChannelId ? { youtubeChannelId: input.youtubeChannelId } : {}),
       ...(input.channel === "meta" && input.platforms ? { platforms: input.platforms } : {}),
+      // 어느 네이버 계정으로 나갔는지를 배포 기록에 남긴다. B2B 다계정에서 이게 없으면
+      // 나중에 "이 클립 어느 채널에 올라갔지?" 를 로그로만 추적해야 한다.
+      ...(isNaverChannel(input.channel) && input.naverAccountId
+        ? { naverAccountId: input.naverAccountId } : {}),
     };
     const distributions = upsertDistribution(clip.distributions, input.channel, value);
 
     // 클립을 published 로 승격하지 않는다 — 어느 모드에서도.
     // upload 모드는 워커가 실제로 올린 뒤에 승격하고, record 모드는 애초에 게시가 아니다.
-    // 예전 코드는 Meta·SMR 스텁에서 clip.status = "published" 를 써서, 파일이 한 바이트도
+    // 예전 코드는 Meta 스텁에서 clip.status = "published" 를 써서, 파일이 한 바이트도
     // 안 올라간 클립이 게시된 것처럼 보였다(F4 Invariant 위반).
     await putEntity("clip", clipId, { ...clip, distributions });
 
@@ -148,7 +163,26 @@ export async function dispatchPublish(input: PublishInput): Promise<PublishOutco
       basis: `${input.origin} 배포 · ${input.channel}`,
     });
 
-    if (mode === "upload") {
+    if (mode === "upload" && isNaverChannel(input.channel)) {
+      // 네이버는 별도 잡·별도 레인이다(사무실 PC · Playwright). 여기서 큐잉하는 이유는
+      // 하나다 — **게이트를 지나는 문이 하나여야** 하기 때문이다. 잡 종류가 다르다고
+      // 다른 파일에서 넣기 시작하면 그 문이 둘이 된다.
+      await enqueue("naver.publish", {
+        clipId,
+        target: NAVER_CHANNELS[input.channel],
+        naverAccountId: input.naverAccountId,
+        description: input.description,
+        category: input.naverCategory,
+        // 워커는 epoch ms 를 본다. 문자열을 그대로 넘기면 Number() 가 NaN 이 되어
+        // 예약이 조용히 사라지고 즉시 발행된다 — 예약은 못 걸리는 것보다 틀리는 게 나쁘다.
+        publishAt: naverPublishAt(input.scheduled, input.reserveDate),
+      }, {
+        // 같은 클립을 같은 계정·같은 타깃에 두 번 넣지 않는다. 네이버는 중복 게시를
+        // 되돌리기가 번거롭다.
+        dedupeKey: `naver.publish:${clipId}:${input.channel}:${input.naverAccountId ?? "-"}`,
+      });
+      queued.push(clipId);
+    } else if (mode === "upload") {
       // ⚠️ 배포 큐에 넣는 **유일한 지점**. 여기 밖에서 enqueue 하면 게이트를 우회하게 된다.
       await enqueue("distribution.publish", {
         clipId,
@@ -166,6 +200,16 @@ export async function dispatchPublish(input: PublishInput): Promise<PublishOutco
   }
 
   return { queued, recorded, skipped, notice: noticeFor({ queued, recorded, skipped }, input.channel) };
+}
+
+/**
+ * 예약 시각 → epoch ms. 과거·해석 불가는 undefined(= 즉시 발행)로 돌린다.
+ * 워커도 한 번 더 거르지만, 여기서 NaN 을 만들어 보내지 않는 게 먼저다.
+ */
+function naverPublishAt(scheduled: boolean | undefined, reserveDate: string | undefined): number | undefined {
+  if (!scheduled || !reserveDate) return undefined;
+  const t = Date.parse(reserveDate);
+  return Number.isFinite(t) && t > Date.now() ? t : undefined;
 }
 
 /**
@@ -196,7 +240,10 @@ const SKIP_LABEL: Record<string, string> = {
 
 function channelName(channel: string): string {
   return (
-    { youtube: "YouTube", instagram: "Instagram", facebook: "Facebook", tiktok: "TikTok", smr: "SMR" }[
+    {
+      youtube: "YouTube", instagram: "Instagram", facebook: "Facebook", tiktok: "TikTok",
+      navertv: "네이버 TV", naverclip: "네이버 클립",
+    }[
       channel
     ] ?? channel
   );

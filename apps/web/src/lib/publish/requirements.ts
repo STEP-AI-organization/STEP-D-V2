@@ -4,17 +4,13 @@
  * Each distribution channel has its OWN required fields; a clip can be ready for
  * one channel and not another. This module computes, per channel, a checklist of
  * requirements with met/unmet state — so the UI can gate publishing independently
- * and surface exactly what's missing (no silent SMR drop).
+ * and surface exactly what's missing (no silent drop).
  *
  * Field sources mirror STEPD:
- *  - SMR is rendered from clip/episode/program columns → those must be complete,
- *    plus program-level feed metadata (set once per program).
+ *  - 네이버 TV/클립은 브라우저 자동화로 올린다 → 계정 세션 + 발행 시점 입력(설명·카테고리).
  *  - YouTube/Meta are per-item pushes → account connection + a few per-publish fields.
  *
- * ⚠️ 현재 실제 소비자는 `programSmrChecks` 하나뿐이다
- * (programs/[id]/settings/page.tsx — 미충족 개수 표시). 구형 publish-dialog 가 사라지면서
- * 아래 채널별 판정 블록(smrChecks·youtubeChecks·socialStubChecks·CHANNEL_EVAL·evaluateChannel
- * 과 hasThumbnail/isVertical/isEncoded)은 호출자가 0 이다.
+ * ⚠️ 현재 이 모듈의 호출자는 0 이다(구형 publish-dialog 가 사라지면서 끊겼다).
  *
  * 존치 사유: 배포 가능 여부의 최종 판정은 서버(/api/channel-rules/eligibility + 업로드 게이트)가
  * 하지만, 서버는 "무엇이 왜 빠졌는지"를 채널별 체크리스트로 돌려주지 않는다. 클라 체크리스트를
@@ -27,13 +23,11 @@ import {
   TARGET_AGES,
   type DistributionChannel,
 } from "@/lib/constants";
-import { WEEKDAYS } from "@/lib/reserve-date";
 import type {
   Clip,
   Connections,
   Episode,
   Program,
-  ProgramSmrConfig,
 } from "@/lib/types";
 
 /** Where a requirement is fixed — drives grouping and deep-link affordances. */
@@ -62,9 +56,11 @@ export interface ChannelReadiness {
 
 /** Operator inputs collected in the publish surface (per channel). */
 export interface PublishInputs {
-  /** SMR / scheduled public datetime (reserve string). Empty ⇒ not set. */
+  /** 예약 공개일시(reserve 문자열). 비면 미설정. */
   reserveDate?: string;
   scheduled?: boolean;
+  /** 발행 시점에 사람이 넣는 설명. 네이버 클립은 10자 이상이어야 등록 자체가 된다. */
+  description?: string;
 }
 
 export interface EvalContext {
@@ -77,7 +73,7 @@ export interface EvalContext {
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 
-/** A clip has a usable thumbnail (SMR contentImg / YouTube cover). */
+/** A clip has a usable thumbnail (YouTube cover 등). */
 export function hasThumbnail(clip: Clip): boolean {
   return Boolean(clip.thumbnailUrl || clip.thumbnailLabel);
 }
@@ -94,119 +90,59 @@ export function isEncoded(clip: Clip): boolean {
   return clip.rendered === true || Boolean(clip.mediaId) || clip.status === "ready" || clip.status === "published";
 }
 
-function weekdaysLabel(weekdays?: number[]): string {
-  if (!weekdays || weekdays.length === 0) return "미설정";
-  return weekdays.map((d) => WEEKDAYS[d]).join("·");
-}
-
-// ── program-level SMR readiness (set once per program) ─────────────────────────
-
-/** SMR feed requirements that live on the PROGRAM, not the clip (plan §5.1③). */
-export function programSmrChecks(program?: Program): RequirementCheck[] {
-  const smr: ProgramSmrConfig = program?.smr ?? {};
-  // 목록(/programs)이 아니라 실제 입력이 있는 화면으로 보낸다.
-  // (현재 이 fix 링크를 렌더하는 소비자는 없다 — settings 화면은 미충족 개수만 센다.)
-  const fix = { label: "프로그램 설정", href: program ? `/programs/${program.id}/settings` : "/programs" };
-  const codeOk = Boolean(smr.programCode && /^[a-z0-9]+$/.test(smr.programCode));
-  return [
-    {
-      key: "smr-program-code",
-      label: "프로그램 코드",
-      met: codeOk,
-      detail: smr.programCode
-        ? codeOk
-          ? smr.programCode
-          : `형식 오류(${smr.programCode}) · 영문 소문자·숫자만`
-        : "미입력",
-      scope: "program",
-      fix,
-    },
-    {
-      key: "smr-program-category",
-      label: "카테고리",
-      met: Boolean(smr.category),
-      detail: smr.category ?? "미설정",
-      scope: "program",
-      fix,
-    },
-    {
-      key: "smr-program-weekcode",
-      label: "편성 요일",
-      met: Boolean(smr.weekdays && smr.weekdays.length > 0),
-      detail: weekdaysLabel(smr.weekdays),
-      scope: "program",
-      fix,
-    },
-    {
-      key: "smr-program-poster",
-      // smr.posterReady 는 세터가 어디에도 없어 영구 false 였다 — 실제로 저장되는 필드로 판정한다.
-      label: "포스터 이미지",
-      met: Boolean(program?.posterImageDataUrl),
-      detail: program?.posterImageDataUrl ? "등록됨" : "미등록",
-      scope: "program",
-      fix,
-    },
-    // "프로그램 썸네일" 체크는 제거했다 — 저장 필드도 등록 UI도 없어 충족 자체가 불가능했다.
-  ];
-}
-
 // ── per-channel evaluation ─────────────────────────────────────────────────────
 
-function smrChecks(ctx: EvalContext): RequirementCheck[] {
-  const { clip, episode, program, inputs } = ctx;
-  const ageOk = episode ? (TARGET_AGES as readonly number[]).includes(episode.targetAge) : false;
-  return [
-    {
-      key: "smr-file",
-      label: "확정(렌더) 완료",
-      met: isEncoded(clip),
-      detail: isEncoded(clip) ? "완료" : "에디터에서 확정(렌더) 필요",
-      scope: "clip",
-    },
-    {
-      key: "smr-cliptype",
-      label: "클립 유형",
-      met: clip.clipType in CLIP_TYPES,
-      detail: clip.clipType in CLIP_TYPES ? CLIP_TYPES[clip.clipType] : "유형 오류",
-      scope: "clip",
-    },
-    {
-      key: "smr-thumb",
-      label: "클립 썸네일",
-      met: hasThumbnail(clip),
-      detail: hasThumbnail(clip) ? (clip.thumbnailLabel ?? "등록됨") : "미등록",
-      scope: "clip",
-    },
-    {
-      key: "smr-link",
-      label: "프로그램·회차 연결",
-      met: Boolean(program && episode),
-      detail: program && episode ? `${program.title} · ${episode.episodeNumber}화` : "연결 필요",
-      scope: "clip",
-    },
-    {
-      key: "smr-broaddate",
-      label: "방송일자",
-      met: Boolean(episode?.broadDate),
-      detail: episode?.broadDate ?? "미입력",
-      scope: "episode",
-    },
-    {
-      key: "smr-age",
-      label: "시청연령",
-      met: ageOk,
-      detail: episode ? `${episode.targetAge === 0 ? "전체" : episode.targetAge + "세"}` : "미설정",
-      scope: "episode",
-    },
-    ...programSmrChecks(program),
-    {
-      key: "smr-reserve",
-      label: "공개일시(예약)",
-      met: Boolean(inputs.reserveDate),
-      detail: inputs.reserveDate ? undefined : "SMR은 공개일시 필수 — 비면 네이버 미게시",
-      scope: "publish",
-    },
-  ];
+/**
+ * 네이버 TV·클립.
+ *
+ * 예전에는 여기에 포털 피드 판정이 있었다 — 프로그램 코드·편성요일·카테고리를 프로그램마다
+ * 입력받는 폼이 붙어 있었는데, **그 값을 읽는 소비처가 어디에도 없었다.** 실제 네이버 발행은
+ * 브라우저 자동화(naver.publish)로 하고, 거기서 막히는 건 전혀 다른 것들이다. 그래서
+ * 판정을 실제 실패 지점으로 바꿨다.
+ *
+ * ⚠️ 최종 판정은 서버다(/api/distributions/publish 가 계정·설명·카테고리를 다시 본다).
+ * 여기 체크리스트는 "무엇이 왜 빠졌는지"를 미리 보여주는 설명용이다 — 둘이 갈리면 서버가 맞다.
+ */
+function naverChecks(target: "tv" | "clip") {
+  return (ctx: EvalContext): RequirementCheck[] => {
+    const { clip, connections, inputs } = ctx;
+    const desc = inputs.description?.trim() ?? "";
+    const checks: RequirementCheck[] = [
+      {
+        key: "naver-file",
+        label: "확정(렌더) 완료",
+        met: isEncoded(clip),
+        detail: isEncoded(clip) ? "완료" : "에디터에서 확정(렌더) 필요",
+        scope: "clip",
+      },
+      {
+        key: "naver-account",
+        label: "네이버 계정 연결",
+        met: Boolean(connections.naver),
+        detail: connections.naver ? "연결됨" : "배포채널 화면에서 계정 추가 후 로그인",
+        scope: "account",
+        fix: { label: "배포채널", href: "/publish-channels" },
+      },
+    ];
+    if (target === "clip") {
+      // 실측(2026-08-11): 설명이 10자 미만이면 등록 버튼 자체가 비활성이다.
+      checks.push({
+        key: "naver-description",
+        label: "설명 10자 이상",
+        met: desc.length >= 10,
+        detail: desc ? `${desc.length}자` : "미입력",
+        scope: "publish",
+      });
+      checks.push({
+        key: "naver-vertical",
+        label: "세로 9:16",
+        met: isVertical(clip.aspectRatio),
+        detail: isVertical(clip.aspectRatio) ? clip.aspectRatio : `현재 ${clip.aspectRatio} — 클립은 세로만 받는다`,
+        scope: "clip",
+      });
+    }
+    return checks;
+  };
 }
 
 function youtubeChecks(ctx: EvalContext): RequirementCheck[] {
@@ -280,7 +216,8 @@ function socialStubChecks(
 }
 
 const EVALUATORS: Record<DistributionChannel, (ctx: EvalContext) => RequirementCheck[]> = {
-  smr: smrChecks,
+  navertv: naverChecks("tv"),
+  naverclip: naverChecks("clip"),
   youtube: youtubeChecks,
   instagram: (ctx) => socialStubChecks("ig", "Instagram", ctx.connections.instagram, true)(ctx),
   facebook: (ctx) => socialStubChecks("fb", "Facebook", ctx.connections.facebook, false)(ctx),

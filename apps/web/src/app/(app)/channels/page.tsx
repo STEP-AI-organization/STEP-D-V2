@@ -36,7 +36,8 @@ const PLATFORMS = [
   { key: "instagram", label: "Instagram", upload: false },
   { key: "facebook", label: "Facebook", upload: false },
   { key: "tiktok", label: "TikTok", upload: false },
-  { key: "smr", label: "SMR (포털 VOD)", upload: false },
+  { key: "navertv", label: "네이버 TV", upload: true },
+  { key: "naverclip", label: "네이버 클립", upload: true },
 ];
 
 export default function ChannelsPage() {
@@ -332,7 +333,8 @@ function RuleForm({
   function pickRole(role: ChannelRole) {
     if (touchedDefaults) { set({ role }); return; }
     if (role === "shorts_only") set({ role, aspect: "9:16", maxSec: r.platform === "youtube" ? 60 : 90 });
-    else if (r.platform === "smr") set({ role, aspect: "16:9", maxSec: 180 });
+    else if (r.platform === "navertv") set({ role, aspect: "16:9", maxSec: 180 });
+    else if (r.platform === "naverclip") set({ role, aspect: "9:16", maxSec: 90 });
     else set({ role, aspect: "any", maxSec: null });
   }
 

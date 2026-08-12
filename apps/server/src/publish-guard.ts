@@ -20,17 +20,34 @@
  */
 
 /** 배포 대상이 될 수 있는 채널. */
-export type PublishChannel = "youtube" | "instagram" | "facebook" | "tiktok" | "smr" | (string & {});
+export type PublishChannel =
+  | "youtube" | "instagram" | "facebook" | "tiktok" | "navertv" | "naverclip" | (string & {});
+
+/**
+ * 네이버 채널 id → 워커가 쓰는 target.
+ *
+ * 채널 id 를 두 개로 나눈 이유: 네이버 TV(가로 VOD)와 네이버 클립(세로 숏폼)은 **올리는
+ * 스튜디오도 폼도 다르다.** 하나로 묶으면 배포 기록에서 어느 쪽에 올라갔는지 알 수 없고,
+ * 워커도 target 을 추측해야 한다 — "클립에 올린 줄 알았는데 TV 에 올라간" 실패가 제일 나쁘다.
+ */
+export const NAVER_CHANNELS = { navertv: "tv", naverclip: "clip" } as const;
+export type NaverChannelId = keyof typeof NAVER_CHANNELS;
+export function isNaverChannel(channel: string): channel is NaverChannelId {
+  return channel in NAVER_CHANNELS;
+}
 
 /**
  * 채널이 실제로 파일을 올리는가, 기록만 남기는가 (FLOWS.md:86-87).
  *
- * YouTube 만 실업로드다. 나머지는 "실제 게시는 담당자가 해당 앱에서 직접" 하고
- * 우리는 기록만 남긴다. **이 구분이 사라지면 F4 Invariant(FLOWS.md:92)가 깨진다** —
+ * YouTube 와 **네이버 TV·클립**이 실업로드다. 네이버는 공개 API 가 없어 브라우저 자동화로
+ * 올리지만, 파일이 실제로 올라간다는 점에서 YouTube 와 같은 축이다(2026-08-11 실발행 확인).
+ * 나머지(Meta·TikTok)는 "실제 게시는 담당자가 해당 앱에서 직접" 하고 우리는 기록만 남긴다.
+ *
+ * **이 구분이 사라지면 F4 Invariant(FLOWS.md:92)가 깨진다** —
  * 올라가지도 않은 것을 '게시됨'으로 보여주게 된다.
  */
 export function channelPublishMode(channel: PublishChannel): "upload" | "record" {
-  return channel === "youtube" ? "upload" : "record";
+  return channel === "youtube" || isNaverChannel(channel) ? "upload" : "record";
 }
 
 /** 배포 상태값. `recorded`(기록됨)는 `published`(게시됨)와 **절대** 같은 값이 아니다. */

@@ -8,7 +8,9 @@ import { StatusBadge } from "@/components/ui/status-badge";
 import { Youtube } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
-import type { YouTubeChannelInfo, MetaAccountInfo, TikTokAccountInfo } from "@/lib/data/api";
+import type {
+  YouTubeChannelInfo, MetaAccountInfo, TikTokAccountInfo, NaverAccount,
+} from "@/lib/data/api";
 import {
   fetchYouTubeChannels,
   getYouTubeAuthUrl,
@@ -22,20 +24,26 @@ import {
   fetchChannelRules,
 } from "@/lib/data/api";
 import { ChannelRuleDialog } from "@/components/publish/channel-rule-dialog";
+import { NaverAccounts } from "@/components/publish/naver-accounts";
 import { ChannelAnalysis } from "@/components/channel-analysis";
-import { DISTRIBUTION_CHANNELS, type DistributionChannel } from "@/lib/constants";
+import {
+  DISTRIBUTION_CHANNELS,
+  type DistributionChannel,
+  type DistributionChannelMeta,
+} from "@/lib/constants";
 
 /**
- * 배포채널 — 각 플랫폼 카드. YouTube·Meta(FB/IG)·TikTok 은 OAuth 가 실제로 배선돼 있고,
- * SMR 만 별도 연결 절차가 없다. 새 채널 추가 흐름:
+ * 배포채널 — 각 플랫폼 카드. YouTube·Meta(FB/IG)·TikTok 은 OAuth 로 붙고, **네이버(TV·클립)는
+ * OAuth 가 없어** 로그인 세션을 등록하는 별도 섹션(NaverAccounts)에서 다룬다.
+ * 새 채널 추가 흐름:
  *  1) lib/constants.ts DISTRIBUTION_CHANNELS 에 { label, icon, status } 항목 추가
  *     (status 는 DistributionChannelMeta 타입상 필수이지만, 이 화면의 배지는 더 이상 읽지 않는다
  *      — 실제 연결 계정 수와 OAuth 라우트 유무로만 판단한다)
  *  2) apps/web/public/channel-icons/<id>.png 배치 (공식 favicon 권장)
  *  3) 서버 /api/distributions/publish 스위치 + 필요 시 OAuth 라우트
  *
- * ⚠️ **연결됨 ≠ 파일이 올라간다.** 실제 업로드는 YouTube 뿐이고 나머지는 배포 기록만 남는다
- * (F4-3). 그래서 카드 안내 문구에서 그 사실을 분리해서 말한다.
+ * ⚠️ **연결됨 ≠ 파일이 올라간다.** 실제 업로드는 YouTube 와 네이버 TV·클립이고,
+ * Meta·TikTok 은 배포 기록만 남는다(F4-3). 그래서 카드 안내 문구에서 그 사실을 분리해서 말한다.
  */
 
 /** 채널별 안내 문구 · 연결 방식. */
@@ -55,9 +63,11 @@ const CHANNEL_INFO: Record<DistributionChannel, { desc: string; note?: string }>
     desc: "TikTok Login Kit + Content Posting API 로 계정 연결.",
     note: "연결해도 파일은 올라가지 않습니다 — 배포 기록만 남습니다",
   },
-  smr: {
-    desc: "네이버 SMR은 내부 피드 배포 방식으로, 별도 OAuth 연결이 없습니다.",
-    note: "제휴 배급 · 프로그램 단위 설정",
+  navertv: {
+    desc: "가로 VOD. OAuth 가 없어 로그인 세션으로 발행합니다 — 아래 '네이버 연결 계정' 참고.",
+  },
+  naverclip: {
+    desc: "세로 9:16 숏폼. 설명 10자 이상 · 카테고리 1·2차가 필수입니다.",
   },
 };
 
@@ -131,6 +141,9 @@ export default function PublishChannelsPage() {
   useEffect(() => { void loadRules(); }, [loadRules]);
   const [metaAccounts, setMetaAccounts] = useState<MetaAccountInfo[]>([]);
   const [tiktokAccounts, setTiktokAccounts] = useState<TikTokAccountInfo[]>([]);
+  // 네이버 계정은 아래 NaverAccounts 섹션이 소유한다. 여기서는 상단 카드의 숫자만 쓰려고
+  // 사본을 받는다 — 두 곳에서 각자 fetch 하면 추가·삭제 후 숫자가 어긋난다.
+  const [naverAccounts, setNaverAccounts] = useState<NaverAccount[]>([]);
   const [loading, setLoading] = useState(true);
   const [banner, setBanner] = useState<string | null>(null);
 
@@ -234,13 +247,16 @@ export default function PublishChannelsPage() {
         </Link>
       </PageActions>
 
-      {/* 플랫폼 개요 그리드 — 모든 채널을 한눈에. YouTube·Meta(FB/IG)·TikTok 은 연결 버튼이 동작하고,
-          SMR 만 연결 절차가 없어 버튼이 비활성이다. */}
+      {/* 플랫폼 개요 그리드 — 모든 채널을 한눈에. YouTube·Meta(FB/IG)·TikTok 은 여기서 바로
+          연결하고, 네이버는 절차가 달라(로그인 세션) 아래 전용 섹션으로 보낸다. */}
       <section className="mb-10">
         <h2 className="mb-3 text-sm font-semibold text-muted-foreground">플랫폼</h2>
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {ids.map((id) => {
-            const meta = DISTRIBUTION_CHANNELS[id];
+            // 넓은 타입으로 받는다. 지금은 모든 채널에 아이콘이 있어서, 리터럴 타입 그대로
+            // 두면 아래 아이콘 없음 폴백이 `never` 가 되어 컴파일이 깨진다 — 아이콘 없는
+            // 채널이 다시 생겼을 때 폴백을 되살리느니 타입만 넓혀 둔다.
+            const meta: DistributionChannelMeta = DISTRIBUTION_CHANNELS[id];
             const info = CHANNEL_INFO[id];
             const isYouTube = id === "youtube";
             // 아래 섹션이 이미 Meta·TikTok 계정을 그리고 있다 — 상단 배지가 0 이라고 말하면 모순이다.
@@ -252,8 +268,13 @@ export default function PublishChannelsPage() {
               // (서버에서 igUserId=instagram_business_account.id · igUsername=username 은 각각
               //  독립적으로 null 이 될 수 있다 — index.ts:5582-5583)
               : id === "instagram" ? metaAccounts.filter((a) => a.igUserId).length
+              // 네이버는 계정마다 쓸 곳(target)이 정해져 있다. TV 전용 계정을 클립 카드에서
+              // 세면 "연결됨"인데 발행이 거부되는 모순이 생긴다.
+              : id === "navertv" ? naverAccounts.filter((a) => a.target !== "clip" && a.hasSession).length
+              : id === "naverclip" ? naverAccounts.filter((a) => a.target !== "tv" && a.hasSession).length
               : 0;
-            // SMR 만 연결 절차 자체가 없다. 나머지는 OAuth 라우트가 실재한다.
+            // 네이버는 OAuth 가 아니라 로그인 세션이라 아래 전용 섹션에서 다룬다.
+            const isNaver = id === "navertv" || id === "naverclip";
             const connectHref =
               id === "instagram" || id === "facebook" ? getMetaAuthUrl("/publish-channels")
               : id === "tiktok" ? getTikTokAuthUrl("/publish-channels")
@@ -279,7 +300,7 @@ export default function PublishChannelsPage() {
                       {/* 연결 여부가 먼저다 — 실제로 연결된 계정이 있는데 '준비 중'이라고 하면 거짓말이다. */}
                       {connectedCount > 0 ? (
                         <StatusBadge tone="done">{connectedCount}개 연결</StatusBadge>
-                      ) : isYouTube || connectHref ? (
+                      ) : isYouTube || connectHref || isNaver ? (
                         <StatusBadge tone="idle">미연결</StatusBadge>
                       ) : (
                         <StatusBadge tone="warn">연결 절차 없음</StatusBadge>
@@ -319,6 +340,17 @@ export default function PublishChannelsPage() {
                       + 업로드 채널
                     </Button>
                   </div>
+                ) : isNaver ? (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="w-full"
+                    onClick={() => {
+                      document.getElementById("naver-accounts")?.scrollIntoView({ behavior: "smooth" });
+                    }}
+                  >
+                    네이버 계정 관리
+                  </Button>
                 ) : connectHref ? (
                   <Button
                     size="sm"
@@ -336,7 +368,9 @@ export default function PublishChannelsPage() {
                     variant="outline"
                     disabled
                     className="w-full"
-                    title="네이버 SMR 은 제휴 배급 — 계정 연결(OAuth) 절차가 없습니다. 프로그램 설정에서 SMR 항목을 채우세요."
+                    // 지금은 여기 오는 채널이 없다. DISTRIBUTION_CHANNELS 에 연결 경로가
+                    // 아직 없는 채널을 추가했을 때를 위한 폴백이다.
+                    title="이 채널은 아직 연결 절차가 없습니다."
                   >
                     연결 절차 없음
                   </Button>
@@ -346,6 +380,8 @@ export default function PublishChannelsPage() {
           })}
         </div>
       </section>
+
+      <NaverAccounts onChange={setNaverAccounts} />
 
       {/* Meta: Facebook Page + Instagram Business (한 번 연결로 둘 다) */}
       <section className="mb-10">

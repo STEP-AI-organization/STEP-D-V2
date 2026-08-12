@@ -74,7 +74,7 @@ export interface AnalysisShort {
   hook_quote?: string;        // 실 대사 원문 인용 (STT 그대로 · 30자 이내)
   hook_time_sec?: number | null; // hook 대사 시각 (쇼츠 시작 상대 · 초)
   hook_intro_caption?: string; // 어그로 편집자막 (20자 · "충격 고백!" 톤)
-  /** 방송 실무 3-type (2026-07-23~): shortform(40~60s SNS) / clip(1~5분 SMR·재편집) / highlight(5~10분 회차 요약). */
+  /** 방송 실무 3-type (2026-07-23~): shortform(40~60s SNS) / clip(1~5분 네이버·재편집) / highlight(5~10분 회차 요약). */
   type?: "shortform" | "clip" | "highlight";
   /** highlight 전용 — 여러 시나리오를 시간순으로 이어붙인 편집 세그먼트 리스트. */
   segments?: { scenario_id?: number | null; start: number; end: number; title?: string }[];
@@ -329,10 +329,6 @@ export interface CreateProgramInput {
   /** 파이프라인 분기 축(variety|drama). 미설정이면 워커가 auto 판정.
    *  ""를 보내면 서버가 필드를 삭제한다(= 지정 해제 → auto 판정으로 복귀). */
   pipelineGenre?: "variety" | "drama" | "";
-  /** SMR feed metadata (program-level). */
-  programCode?: string;
-  category?: string;
-  weekdays?: number[];
   // ── TV/OTT 프로그램 정보 (선택 필드) ────────────────────────────
   synopsis?: string;
   broadcaster?: string;
@@ -1369,7 +1365,7 @@ export async function selectRecommendationThumbnail(recId: string, variantId: st
  * deliverable once and caches by revision hash, so re-exporting identical decisions is a
  * no-op. Returns the updated (rendered, status:"ready") clip.
  *
- * `channel` picks the destination render preset (F3): the frame (SMR renders 16:9, Shorts/
+ * `channel` picks the destination render preset (F3): the frame (네이버 TV renders 16:9, Shorts/
  * Reels 9:16) and the hard length cap. Omit it to render the clip's own aspect over the full
  * segment. `capped` comes back set when the preset's maxSec shortened the deliverable — show
  * it; the operator's segment was longer than what shipped.
@@ -2116,52 +2112,111 @@ export function frameOverlaySrc(t: FrameTemplate): string {
   return t.overlayUrl.startsWith("http") ? t.overlayUrl : `${API_BASE}${t.overlayUrl.replace(/^\/api/, "")}`;
 }
 
-// ── 네이버 계정 (B2B 다계정) ───────────────────────────────────────────────────
+// ── 네이버 계정 (네이버 TV · 클립 · B2B 다계정) ────────────────────────────────
 //
-// 서버는 네이버 자격증명을 **받지도 저장하지도 않는다.** 여기서 하는 건 "어느 고객사의
-// 어떤 채널을 쓸 것인가" 라는 메타 등록뿐이고, 실제 로그인은 워커 PC 에서 사람이
-// 브라우저로 한다(`loginCommand` 를 그대로 실행). 그래서 등록 직후 상태는
-// `session_expired` 다 — 아직 발행할 수 없다는 뜻이고, active 로 시작하면 거짓말이다.
+// 다른 채널과 근본적으로 다르다: 네이버는 **공개 업로드 API 가 없다.** 그래서 OAuth 가 없고,
+// 사람이 한 번 로그인해서 만든 브라우저 세션을 등록하면 워커(사무실 PC)가 그걸로 대신 올린다.
+//
+// ⚠️ **세션 쿠키는 그 계정의 전체 권한이다.** 아이디·비번보다 오히려 즉시 쓸 수 있어 위험하다.
+// 그래서 세션은 **올릴 때 한 번만** 오가고, 서버는 암호화해 저장한 뒤 다시는 돌려주지 않는다 —
+// 조회 응답에 있는 건 "있다/없다 + 갱신 시각" 뿐이다.
 
 export type NaverAccountStatus = "active" | "session_expired" | "disabled";
 
 export interface NaverAccount {
   id: string;
   label: string;
+  /** 우리가 발급한 불투명 키. 네이버 아이디가 아니다 — 워커 세션 파일 이름에 쓰인다. */
   accountKey: string;
   target: "clip" | "tv" | "both";
   status: NaverAccountStatus;
+  /** 서버에 세션이 등록돼 있는가. 값 자체는 절대 내려오지 않는다. */
+  hasSession: boolean;
+  sessionUpdatedAt: number | null;
   lastLoginAt: number | null;
   lastPublishAt: number | null;
-  /** 워커 PC 에서 그대로 실행할 로그인 명령. 옮겨 적다 틀리지 않게 서버가 만들어 준다. */
+  /** 워커 PC 에서 직접 로그인할 때 그대로 실행할 명령. 옮겨 적다 틀리지 않게 서버가 만든다. */
   loginCommand: string;
 }
 
-export async function fetchNaverAccounts(): Promise<NaverAccount[]> {
+export interface NaverAccountsResponse {
+  accounts: NaverAccount[];
+  /**
+   * false 면 세션 등록이 503 이다(서버에 NAVER_SESSION_KEY 미설정).
+   * 화면은 이 값으로 버튼을 미리 막는다 — 올려도 안 되는 버튼을 눌러보게 하는 게 더 나쁘다.
+   */
+  sessionStoreReady: boolean;
+}
+
+/**
+ * 목록. **빈 배열로 삼키지 않는다** — 실패를 "계정 없음"으로 보여주면 사용자가 계정을
+ * 다시 만들려 든다. 호출부가 에러를 표시하도록 던진다.
+ */
+export async function fetchNaverAccounts(): Promise<NaverAccountsResponse> {
   const res = await fetch(`${API_BASE}/naver/accounts`, { cache: "no-store" });
-  if (!res.ok) return [];
-  return ((await res.json()) as { accounts: NaverAccount[] }).accounts ?? [];
+  if (!res.ok) throw new Error(await naverError(res));
+  const body = (await res.json()) as Partial<NaverAccountsResponse>;
+  return { accounts: body.accounts ?? [], sessionStoreReady: body.sessionStoreReady ?? false };
 }
 
 export async function createNaverAccount(
   label: string,
   target: NaverAccount["target"] = "both",
-): Promise<NaverAccount & { hint: string }> {
+): Promise<NaverAccount> {
   const res = await fetch(`${API_BASE}/naver/accounts`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ label, target }),
   });
-  const body = await res.json().catch(() => null);
-  if (!res.ok) throw new Error((body as { error?: string })?.error ?? `${res.status}`);
-  return body as NaverAccount & { hint: string };
+  if (!res.ok) throw new Error(await naverError(res));
+  return (await res.json()) as NaverAccount;
 }
 
-export async function setNaverAccountStatus(id: string, status: NaverAccountStatus): Promise<void> {
+export async function updateNaverAccount(
+  id: string,
+  patch: { label?: string; target?: NaverAccount["target"]; status?: NaverAccountStatus },
+): Promise<void> {
   const res = await fetch(`${API_BASE}/naver/accounts/${id}`, {
     method: "PATCH",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ status }),
+    body: JSON.stringify(patch),
   });
-  if (!res.ok) throw new Error(`${res.status}`);
+  if (!res.ok) throw new Error(await naverError(res));
+}
+
+/** 상태만 바꾸는 단축 — 기존 호출부 호환. */
+export async function setNaverAccountStatus(id: string, status: NaverAccountStatus): Promise<void> {
+  await updateNaverAccount(id, { status });
+}
+
+/** 계정 삭제. 등록된 세션도 같은 행이라 함께 사라진다. */
+export async function deleteNaverAccount(id: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/naver/accounts/${id}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(await naverError(res));
+}
+
+/**
+ * 로그인 세션(Playwright storageState) 등록.
+ *
+ * 이걸 올리고 나면 워커가 어느 머신에서든 받아 쓴다 — 운영자가 워커 PC 앞에 갈 필요가 없다.
+ */
+export async function uploadNaverSession(id: string, storageState: unknown): Promise<void> {
+  const res = await fetch(`${API_BASE}/naver/accounts/${id}/session`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ storageState }),
+  });
+  if (!res.ok) throw new Error(await naverError(res));
+}
+
+/** 세션만 폐기한다(계정 설정은 남긴다). 계정이 바뀌었을 때 쓴다. */
+export async function clearNaverSession(id: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/naver/accounts/${id}/session`, { method: "DELETE" });
+  if (!res.ok) throw new Error(await naverError(res));
+}
+
+/** 서버가 준 message 를 살려서 던진다 — "409" 만 뜨면 무엇을 고쳐야 할지 알 수 없다. */
+async function naverError(res: Response): Promise<string> {
+  const body = (await res.json().catch(() => null)) as { message?: string; error?: string } | null;
+  return body?.message ?? body?.error ?? `${res.status} ${res.statusText}`;
 }

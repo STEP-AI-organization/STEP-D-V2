@@ -1,12 +1,12 @@
 /**
- * SMR reserve-date helpers.
+ * 예약 발행 일시 helpers.
  *
- * STEPD pain C2: SMR "즉시발행"(예약일 빈값) actually means 미게시 — the honest rule is
+ * STEPD pain C2: "즉시발행"(예약일 빈값) actually means 미게시 — the honest rule is
  * that a public datetime is REQUIRED. v2 never leaves it empty: immediate publish stamps
  * the current time, and the UI shows the resolved datetime so copy matches behavior.
  */
 
-/** Format a Date as SMR reserve string "YYYYMMDDHHmmss". */
+/** Format a Date as reserve string "YYYYMMDDHHmmss". */
 export function formatReserve(d: Date): string {
   const p = (n: number, w = 2) => String(n).padStart(w, "0");
   return (

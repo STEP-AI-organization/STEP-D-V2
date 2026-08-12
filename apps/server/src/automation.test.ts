@@ -170,7 +170,7 @@ describe("채택 기준 (F6 03단계)", () => {
 describe("규칙 생성 분기 (F6)", () => {
   it("YouTube 만 실행 중, 나머지는 기록만", () => {
     assert.equal(initialRuleState("youtube"), "running");
-    for (const p of ["instagram", "facebook", "tiktok", "smr"]) {
+    for (const p of ["instagram", "facebook", "tiktok"]) {
       assert.equal(initialRuleState(p), "record_only", p);
     }
   });

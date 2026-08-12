@@ -7,40 +7,34 @@
  */
 import type { Clip, Connections, Episode, JobEvent, Program, Recommendation } from "@/lib/types";
 
-/** Account-level channel connections (set once). SMR needs none (internal feed). */
-export const connections: Connections = { youtube: true, instagram: false, facebook: false, tiktok: false };
+/** Account-level channel connections (set once). 네이버는 OAuth 가 아니라 로그인 세션 등록 여부다. */
+export const connections: Connections = { youtube: true, instagram: false, facebook: false, tiktok: false, naver: false };
 
 export const programs: Program[] = [
-  { id: "p1", title: "전지적 참견 시점", section: "예능", targetAge: 12, cast: ["이영자", "홍현희"], episodeCount: 5, status: "active",
-    smr: { programCode: "jeonchamsi", category: "02", weekdays: [6], posterReady: true, thumbnailReady: true } },
-  { id: "p2", title: "허수아비", section: "드라마", targetAge: 15, cast: ["김수현", "박은빈"], episodeCount: 3, status: "active",
-    smr: { programCode: "heosuabi", category: "01", weekdays: [5, 6], posterReady: true, thumbnailReady: true } },
-  // p3: SMR 프로그램 설정 미완 — 코드·편성요일·포스터 누락. 클립을 SMR에 올리려면 프로그램 준비부터 완료해야 함.
-  { id: "p3", title: "짐쌀라비", section: "예능", targetAge: 0, cast: ["유재석"], episodeCount: 1, status: "active",
-    smr: { category: "02", weekdays: [], posterReady: false, thumbnailReady: true } },
-  { id: "p4", title: "놀면 뭐하니?", section: "예능", targetAge: 12, cast: ["유재석", "하하", "정준하"], episodeCount: 2, status: "active",
-    smr: { programCode: "hangout", category: "02", weekdays: [6], posterReady: true, thumbnailReady: true } },
-  { id: "p5", title: "뭉쳐야 찬다", section: "예능", targetAge: 7, cast: ["안정환", "이동국", "김성주"], episodeCount: 2, status: "active",
-    smr: { programCode: "moongchan", category: "02", weekdays: [0], posterReady: true, thumbnailReady: true } },
-  { id: "p6", title: "아침 시사 브런치", section: "시사", targetAge: 15, cast: ["김어준"], episodeCount: 1, status: "active",
-    smr: { programCode: "morningbrunch", category: "04", weekdays: [1, 2, 3, 4, 5], posterReady: true, thumbnailReady: true } },
+  { id: "p1", title: "전지적 참견 시점", section: "예능", targetAge: 12, cast: ["이영자", "홍현희"], episodeCount: 5, status: "active" },
+  { id: "p2", title: "허수아비", section: "드라마", targetAge: 15, cast: ["김수현", "박은빈"], episodeCount: 3, status: "active" },
+  // p3: 네이버 프로그램 설정 미완 — 코드·편성요일·포스터 누락. 클립을 네이버에 올리려면 프로그램 준비부터 완료해야 함.
+  { id: "p3", title: "짐쌀라비", section: "예능", targetAge: 0, cast: ["유재석"], episodeCount: 1, status: "active" },
+  { id: "p4", title: "놀면 뭐하니?", section: "예능", targetAge: 12, cast: ["유재석", "하하", "정준하"], episodeCount: 2, status: "active" },
+  { id: "p5", title: "뭉쳐야 찬다", section: "예능", targetAge: 7, cast: ["안정환", "이동국", "김성주"], episodeCount: 2, status: "active" },
+  { id: "p6", title: "아침 시사 브런치", section: "시사", targetAge: 15, cast: ["김어준"], episodeCount: 1, status: "active" },
 ];
 
 export const episodes: Episode[] = [
   { id: "e1", programId: "p1", programTitle: "전지적 참견 시점", episodeNumber: 312, broadDate: "2026-07-05", targetAge: 12,
     pipeline: { stage: "recommend", stageStatus: "done", note: "추천 18건 · 채택 대기", progress: 100 } },
   { id: "e2", programId: "p1", programTitle: "전지적 참견 시점", episodeNumber: 311, broadDate: "2026-06-28", targetAge: 12,
-    pipeline: { stage: "publish", stageStatus: "done", note: "SMR·YT 게시 완료" } },
+    pipeline: { stage: "publish", stageStatus: "done", note: "네이버·YT 게시 완료" } },
   { id: "e3", programId: "p2", programTitle: "허수아비", episodeNumber: 8, broadDate: "2026-07-06", targetAge: 15,
     pipeline: { stage: "analyze", stageStatus: "progress", progress: 62, note: "3-Pass 분석 중" } },
   { id: "e4", programId: "p3", programTitle: "짐쌀라비", episodeNumber: 1, broadDate: "2026-07-09", targetAge: 0,
-    pipeline: { stage: "publish", stageStatus: "error", blockedReason: "SMR 예약일 미설정으로 미게시 (3건)" } },
+    pipeline: { stage: "publish", stageStatus: "error", blockedReason: "네이버 예약일 미설정으로 미게시 (3건)" } },
   { id: "e5", programId: "p1", programTitle: "전지적 참견 시점", episodeNumber: 313, broadDate: "2026-07-12", targetAge: 12,
     pipeline: { stage: "encode", stageStatus: "progress", progress: 45, note: "클립 2건 인코딩 중" } },
   { id: "e6", programId: "p4", programTitle: "놀면 뭐하니?", episodeNumber: 45, broadDate: "2026-07-11", targetAge: 12,
     pipeline: { stage: "recommend", stageStatus: "done", note: "추천 22건 · 채택 대기", progress: 100 } },
   { id: "e7", programId: "p4", programTitle: "놀면 뭐하니?", episodeNumber: 44, broadDate: "2026-07-04", targetAge: 12,
-    pipeline: { stage: "publish", stageStatus: "done", note: "YT·SMR·Meta 게시 완료" } },
+    pipeline: { stage: "publish", stageStatus: "done", note: "YT·네이버·Meta 게시 완료" } },
   { id: "e8", programId: "p2", programTitle: "허수아비", episodeNumber: 7, broadDate: "2026-06-29", targetAge: 15,
     pipeline: { stage: "publish", stageStatus: "warn", note: "YT 1건 실패 · 재시도 대기", blockedReason: "YouTube 업로드 실패 — 인증 만료" } },
   { id: "e9", programId: "p5", programTitle: "뭉쳐야 찬다", episodeNumber: 12, broadDate: "2026-07-13", targetAge: 7,
@@ -48,7 +42,7 @@ export const episodes: Episode[] = [
   { id: "e10", programId: "p5", programTitle: "뭉쳐야 찬다", episodeNumber: 11, broadDate: "2026-07-06", targetAge: 7,
     pipeline: { stage: "edit", stageStatus: "progress", note: "편집 검수 · 클립 3건 초안", progress: 60 } },
   { id: "e11", programId: "p6", programTitle: "아침 시사 브런치", episodeNumber: 88, broadDate: "2026-07-15", targetAge: 15,
-    pipeline: { stage: "publish", stageStatus: "done", note: "SMR 게시 완료" } },
+    pipeline: { stage: "publish", stageStatus: "done", note: "네이버 게시 완료" } },
   { id: "e12", programId: "p1", programTitle: "전지적 참견 시점", episodeNumber: 310, broadDate: "2026-06-21", targetAge: 12,
     pipeline: { stage: "publish", stageStatus: "done", note: "3채널 배포 완료" } },
 ];
@@ -116,20 +110,20 @@ export const clips: Clip[] = [
   { id: "c1", episodeId: "e2", programTitle: "전지적 참견 시점", title: "이영자 먹방 하이라이트", clipType: "T6", clipCategory: "02", targetAge: 12, aspectRatio: "9:16-crop-main", durationSec: 34, thumbnailLabel: "리액션 클로즈업",
     synopsis: "이영자가 먹방 중 폭소하는 하이라이트 모먼트", status: "published",
     distributions: [
-      { channel: "smr", status: "published", reserveDate: "20260628103000" },
+      { channel: "naverclip", status: "published", reserveDate: "20260628103000" },
       { channel: "youtube", status: "published", reserveDate: "20260628110000", externalId: "enJbzwZnZZI" },
     ] },
   { id: "c2", episodeId: "e2", programTitle: "전지적 참견 시점", title: "311화 요약", clipType: "TZ", clipCategory: "02", targetAge: 12, aspectRatio: "16:9", durationSec: 498, thumbnailLabel: "오프닝 타이틀",
     synopsis: "전참시 311화 핵심 장면 8분 요약 클립", status: "published",
     distributions: [
-      { channel: "smr", status: "scheduled", reserveDate: "20260712190000" },
+      { channel: "navertv", status: "scheduled", reserveDate: "20260712190000" },
       { channel: "youtube", status: "published", reserveDate: "20260630193000", externalId: "GOzKHs6CYAU" },
     ] },
-  // c3: 짐쌀라비(p3) — 프로그램 SMR 설정 미완이라 SMR만 막힘. YouTube는 이미 게시됨.
+  // c3: 짐쌀라비(p3) — 네이버 계정 미연결이라 네이버만 막힘. YouTube는 이미 게시됨.
   { id: "c3", episodeId: "e4", programTitle: "짐쌀라비", title: "유재석 오프닝", clipType: "T6", targetAge: 0, aspectRatio: "9:16-crop-main", durationSec: 28, thumbnailLabel: "유재석 등장",
     synopsis: "유재석의 오프닝 등장 숏폼", status: "published",
     distributions: [
-      { channel: "smr", status: "failed", error: "예약일 빈값 — 네이버 미게시" },
+      { channel: "naverclip", status: "failed", error: "예약일 빈값 — 네이버 미게시" },
       { channel: "youtube", status: "published", reserveDate: "20260709200000", externalId: "aB3kZ9xQp0" },
     ] },
 
@@ -150,16 +144,16 @@ export const clips: Clip[] = [
     aspectRatio: "9:16-crop-main", durationSec: 34, thumbnailLabel: "표정 클로즈업",
     synopsis: "유재석의 즉흥 랩과 멤버들 반응", status: "published", rendered: true, renderPreset: "youtube_shorts",
     distributions: [
-      { channel: "smr", status: "published", reserveDate: "20260704193000" },
+      { channel: "naverclip", status: "published", reserveDate: "20260704193000" },
       { channel: "youtube", status: "published", reserveDate: "20260704200000", externalId: "yt_hangout_c6" },
       { channel: "instagram", status: "published", reserveDate: "20260704210000" },
       { channel: "facebook", status: "published", reserveDate: "20260704210000" },
     ] },
   { id: "c7", episodeId: "e7", programTitle: "놀면 뭐하니?", title: "44화 8분 요약", clipType: "TZ", clipCategory: "02", targetAge: 12,
     aspectRatio: "16:9", durationSec: 486, thumbnailLabel: "오프닝",
-    synopsis: "놀면 뭐하니 44화의 핵심 장면 8분 요약", status: "published", rendered: true, renderPreset: "smr",
+    synopsis: "놀면 뭐하니 44화의 핵심 장면 8분 요약", status: "published", rendered: true, renderPreset: "naver_tv",
     distributions: [
-      { channel: "smr", status: "published", reserveDate: "20260704220000" },
+      { channel: "navertv", status: "published", reserveDate: "20260704220000" },
       { channel: "youtube", status: "scheduled", reserveDate: "20260716180000", externalId: "yt_hangout_c7" },
     ] },
 
@@ -168,14 +162,14 @@ export const clips: Clip[] = [
     aspectRatio: "9:16-crop-main", durationSec: 42, thumbnailLabel: "오열 클로즈업",
     synopsis: "김수현의 오열 명장면", status: "published", rendered: true, renderPreset: "youtube_shorts",
     distributions: [
-      { channel: "smr", status: "published", reserveDate: "20260629221500" },
+      { channel: "naverclip", status: "published", reserveDate: "20260629221500" },
       { channel: "youtube", status: "failed", error: "인증 토큰 만료 — 재연결 필요" },
     ] },
   { id: "c9", episodeId: "e8", programTitle: "허수아비", title: "박은빈 반전 재회", clipType: "T6", clipCategory: "01", targetAge: 15,
     aspectRatio: "9:16-crop-main", durationSec: 38, thumbnailLabel: "재회 순간",
     synopsis: "박은빈의 반전 재회 하이라이트", status: "published", rendered: true, renderPreset: "youtube_shorts",
     distributions: [
-      { channel: "smr", status: "published", reserveDate: "20260629223000" },
+      { channel: "naverclip", status: "published", reserveDate: "20260629223000" },
       { channel: "youtube", status: "published", reserveDate: "20260629230000", externalId: "yt_scarecrow_c9" },
     ] },
 
@@ -191,17 +185,17 @@ export const clips: Clip[] = [
     distributions: [] },
   { id: "c12", episodeId: "e10", programTitle: "뭉쳐야 찬다", title: "전반전 하이라이트", clipType: "TH", clipCategory: "02", targetAge: 7,
     aspectRatio: "16:9", durationSec: 320, thumbnailLabel: "역전골",
-    synopsis: "전반전 주요 장면 압축", status: "ready", rendered: true, renderPreset: "smr",
+    synopsis: "전반전 주요 장면 압축", status: "ready", rendered: true, renderPreset: "naver_tv",
     distributions: [
-      { channel: "smr", status: "pending" },
+      { channel: "navertv", status: "pending" },
     ] },
 
-  // e11 · 아침 시사 브런치 88화 — SMR만 (시사 카테고리)
+  // e11 · 아침 시사 브런치 88화 — 네이버만 (시사 카테고리)
   { id: "c13", episodeId: "e11", programTitle: "아침 시사 브런치", title: "오늘의 톱이슈 3분 브리핑", clipType: "TS", clipCategory: "04", targetAge: 15,
     aspectRatio: "16:9", durationSec: 178, thumbnailLabel: "톱이슈",
-    synopsis: "당일 이슈 3분 요약 브리핑", status: "published", rendered: true, renderPreset: "smr",
+    synopsis: "당일 이슈 3분 요약 브리핑", status: "published", rendered: true, renderPreset: "naver_tv",
     distributions: [
-      { channel: "smr", status: "published", reserveDate: "20260715080000" },
+      { channel: "navertv", status: "published", reserveDate: "20260715080000" },
     ] },
 
   // e12 · 전참시 310화 — 3채널 게시 (오래된 표본)
@@ -209,7 +203,7 @@ export const clips: Clip[] = [
     aspectRatio: "9:16-crop-main", durationSec: 48, thumbnailLabel: "리액션",
     synopsis: "310화 회식 하이라이트", status: "published", rendered: true, renderPreset: "youtube_shorts",
     distributions: [
-      { channel: "smr", status: "published", reserveDate: "20260621230000" },
+      { channel: "naverclip", status: "published", reserveDate: "20260621230000" },
       { channel: "youtube", status: "published", reserveDate: "20260622000000", externalId: "yt_jch_c14" },
       { channel: "instagram", status: "published", reserveDate: "20260622013000" },
     ] },
@@ -217,7 +211,7 @@ export const clips: Clip[] = [
 
 export const jobs: JobEvent[] = [
   { id: "j1", label: "허수아비 8화 · 3-Pass 분석", stage: "analyze", status: "running", progress: 62, episodeId: "e3" },
-  { id: "j2", label: "짐쌀라비 1화 · SMR 배포", stage: "publish", status: "failed", episodeId: "e4", needsAction: true },
+  { id: "j2", label: "짐쌀라비 1화 · 네이버 배포", stage: "publish", status: "failed", episodeId: "e4", needsAction: true },
   { id: "j3", label: "전참시 312화 · 추천 생성", stage: "recommend", status: "done", episodeId: "e1" },
   { id: "j4", label: "놀면 뭐하니 45화 · 추천 생성", stage: "recommend", status: "done", episodeId: "e6" },
   { id: "j5", label: "전참시 313화 · 클립 인코딩", stage: "encode", status: "running", progress: 45, episodeId: "e5" },

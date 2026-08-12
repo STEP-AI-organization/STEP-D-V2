@@ -821,12 +821,16 @@ export interface NaverAccount {
   status: "active" | "session_expired" | "disabled";
   lastLoginAt: number | null;
   lastPublishAt: number | null;
+  /** 서버에 세션이 올라온 시각. **값 자체(session_blob)는 여기 절대 싣지 않는다** — 있다/없다만. */
+  sessionUpdatedAt: number | null;
   createdAt: number;
 }
 
+// ⚠️ session_blob 은 이 목록에 넣지 않는다. 한 번 SELECT 에 들어가면 로그·응답·에러 덤프
+//    어디로든 새어나간다 — 세션 쿠키는 그 계정의 전체 권한이다.
 const NAVER_ACCOUNT_COLS = `id, tenant_id AS "tenantId", label, account_key AS "accountKey",
   target, status, last_login_at AS "lastLoginAt", last_publish_at AS "lastPublishAt",
-  created_at AS "createdAt"`;
+  session_updated_at AS "sessionUpdatedAt", created_at AS "createdAt"`;
 
 export async function listNaverAccounts(): Promise<NaverAccount[]> {
   const { rows } = await pool.query(
@@ -844,7 +848,11 @@ export async function getNaverAccount(id: string): Promise<NaverAccount | undefi
   return rows[0] as NaverAccount | undefined;
 }
 
-export async function upsertNaverAccount(a: Omit<NaverAccount, "tenantId">): Promise<void> {
+// sessionUpdatedAt 은 받지 않는다 — 세션은 setNaverSessionBlob 으로만 들어온다.
+// (여기서 같이 쓰게 두면 "세션 없이 세션 시각만 있는" 행이 만들어질 수 있다.)
+export async function upsertNaverAccount(
+  a: Omit<NaverAccount, "tenantId" | "sessionUpdatedAt">,
+): Promise<void> {
   await pool.query(
     `INSERT INTO naver_account (id, label, account_key, target, status,
        last_login_at, last_publish_at, created_at)
@@ -877,15 +885,30 @@ export async function clearNaverSessionBlob(id: string): Promise<void> {
 }
 
 export async function markNaverAccount(
-  id: string, patch: { status?: NaverAccount["status"]; lastPublishAt?: number; lastLoginAt?: number },
+  id: string,
+  patch: {
+    status?: NaverAccount["status"]; lastPublishAt?: number; lastLoginAt?: number;
+    label?: string; target?: NaverAccount["target"];
+  },
 ): Promise<void> {
   await pool.query(
     `UPDATE naver_account SET
        status          = COALESCE($2, status),
        last_publish_at = COALESCE($3, last_publish_at),
-       last_login_at   = COALESCE($4, last_login_at)
+       last_login_at   = COALESCE($4, last_login_at),
+       label           = COALESCE($5, label),
+       target          = COALESCE($6, target)
      WHERE id = $1`,
-    [id, patch.status ?? null, patch.lastPublishAt ?? null, patch.lastLoginAt ?? null]);
+    [id, patch.status ?? null, patch.lastPublishAt ?? null, patch.lastLoginAt ?? null,
+     patch.label ?? null, patch.target ?? null]);
+}
+
+/**
+ * 계정 삭제. 세션도 같이 사라진다(같은 행이다).
+ * accountKey 로 만든 **워커 PC 로컬 세션 파일은 남는다** — 그건 그 머신에서 지워야 한다.
+ */
+export async function deleteNaverAccount(id: string): Promise<void> {
+  await pool.query(`DELETE FROM naver_account WHERE id = $1`, [id]);
 }
 
 // ── TikTok accounts ────────────────────────────────────────────────────────────

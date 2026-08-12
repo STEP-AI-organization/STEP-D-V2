@@ -21,7 +21,7 @@ export interface InitialData {
 /** Deep-ish clone of the seed so the store owns mutable copies. */
 export function seedInitialData(): InitialData {
   return {
-    programs: seed.programs.map((p) => ({ ...p, smr: p.smr ? { ...p.smr } : undefined })),
+    programs: seed.programs.map((p) => ({ ...p })),
     episodes: seed.episodes.map((e) => ({ ...e, pipeline: { ...e.pipeline } })),
     recommendations: seed.recommendations.map((r) => ({ ...r })),
     clips: seed.clips.map((c) => ({ ...c, distributions: c.distributions.map((d) => ({ ...d })) })),

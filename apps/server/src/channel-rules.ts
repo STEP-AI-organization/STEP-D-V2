@@ -53,7 +53,8 @@ export function defaultRuleFor(role: ChannelRole, platform: string): Omit<Channe
     enabled: true,
   };
   if (role === "shorts_only") return { ...base, maxSec: platform === "youtube" ? 60 : 90, aspect: "9:16" };
-  if (platform === "smr") return { ...base, maxSec: 180, aspect: "16:9" };
+  // 네이버 TV 는 가로 VOD. 3분은 클립 길이 관행이지 하드 상한은 아니다.
+  if (platform === "navertv") return { ...base, maxSec: 180, aspect: "16:9" };
   // 네이버 클립은 세로 숏폼 전용이다 — 가로 영상을 올리면 스튜디오가 거부한다.
   if (platform === "naverclip") return { ...base, maxSec: 90, aspect: "9:16" };
   return { ...base, maxSec: null, aspect: "any" };

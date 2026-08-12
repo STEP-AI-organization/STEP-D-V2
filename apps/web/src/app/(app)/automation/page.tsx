@@ -423,7 +423,8 @@ function RuleForm({
           <option value="instagram">Instagram</option>
           <option value="facebook">Facebook</option>
           <option value="tiktok">TikTok</option>
-          <option value="smr">SMR</option>
+          <option value="navertv">네이버 TV</option>
+          <option value="naverclip">네이버 클립</option>
         </select>
       </div>
 

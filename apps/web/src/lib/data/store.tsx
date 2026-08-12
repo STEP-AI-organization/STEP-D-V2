@@ -53,6 +53,7 @@ import {
   fetchYouTubeChannels,
   fetchMetaAccounts,
   fetchTikTokAccounts,
+  fetchNaverAccounts,
 } from "@/lib/data/api";
 import type { EditorState } from "@/lib/editor/presets";
 
@@ -65,7 +66,7 @@ interface AppState {
   connections: Connections;
 }
 
-const NO_CONNECTIONS: Connections = { youtube: false, instagram: false, facebook: false, tiktok: false };
+const NO_CONNECTIONS: Connections = { youtube: false, instagram: false, facebook: false, tiktok: false, naver: false };
 
 /** Empty starting state — screens show nothing/skeleton until /api/state loads, instead
  *  of flashing mock seed data for a moment on every refresh. */
@@ -185,7 +186,7 @@ interface AppData extends AppState {
 // 삭제했다(2026-08-11) — 소비처가 0 이다. 현재 배포 다이얼로그(components/publish/publish-dialog.tsx)는
 // store 를 거치지 않고 api.publishClips 를 직접 부른 뒤 refresh 로 서버 상태를 다시 읽는다.
 // 되살릴 때는 서버 규칙(publish-guard: YouTube 만 실제 업로드 → pending/scheduled,
-// Meta·TikTok·SMR 은 recorded)을 그대로 반영할 것 — 클립 자체를 published 로 올리면 거짓말이 된다.
+// Meta·TikTok 은 recorded)을 그대로 반영할 것 — 클립 자체를 published 로 올리면 거짓말이 된다.
 
 const AppDataContext = createContext<AppData | null>(null);
 
@@ -353,10 +354,12 @@ export function AppDataProvider({
     }
     let alive = true;
     (async () => {
-      const [youtube, meta, tiktok] = await Promise.all([
+      const [youtube, meta, tiktok, naver] = await Promise.all([
         fetchYouTubeChannels().catch(() => []),
         fetchMetaAccounts().catch(() => []),
         fetchTikTokAccounts().catch(() => []),
+        // 실패해도 "연결 안 됨"으로만 떨어진다 — 여기서 던지면 나머지 연결 상태까지 못 읽는다.
+        fetchNaverAccounts().then((r) => r.accounts).catch(() => []),
       ]);
       if (!alive) return;
       setAccountConnections({
@@ -364,6 +367,8 @@ export function AppDataProvider({
         instagram: meta.some((a) => a.status === "active" && !!a.igUserId),
         facebook: meta.some((a) => a.status === "active"),
         tiktok: tiktok.some((a) => a.status === "active"),
+        // 네이버는 계정이 있는 것만으로는 부족하다 — **로그인 세션이 있어야** 발행이 된다.
+        naver: naver.some((a) => a.status !== "disabled" && a.hasSession),
       });
     })();
     return () => {
@@ -657,10 +662,6 @@ export function AppDataProvider({
         return res.program.id;
       }
       // Mock mode: keep the demo working standalone by adding to local state.
-      const smr: NonNullable<Program["smr"]> = {};
-      if (input.programCode?.trim()) smr.programCode = input.programCode.trim().toLowerCase();
-      if (input.category?.trim()) smr.category = input.category.trim();
-      if (input.weekdays?.length) smr.weekdays = input.weekdays;
       const id = `p-${Date.now()}`;
       const program: Program = {
         id,
@@ -670,7 +671,6 @@ export function AppDataProvider({
         cast: input.cast ?? [],
         episodeCount: 0,
         status: "active",
-        ...(Object.keys(smr).length ? { smr } : {}),
       };
       setState((prev) => ({ ...prev, programs: [program, ...prev.programs] }));
       return id;
@@ -692,11 +692,6 @@ export function AppDataProvider({
             if (patch.section != null) merged.section = patch.section;
             if (patch.targetAge != null) merged.targetAge = patch.targetAge as Program["targetAge"];
             if (patch.cast != null) merged.cast = patch.cast;
-            const smr = { ...(p.smr ?? {}) };
-            if (patch.programCode != null) smr.programCode = patch.programCode.trim().toLowerCase() || undefined;
-            if (patch.category != null) smr.category = patch.category.trim() || undefined;
-            if (patch.weekdays != null) smr.weekdays = patch.weekdays;
-            merged.smr = Object.keys(smr).length ? smr : undefined;
             return merged;
           }),
         }));

@@ -24,12 +24,16 @@ const SRC = path.dirname(fileURLToPath(import.meta.url));
 const PASS = () => ({ allowed: true, reason: "" });
 
 describe("채널 모드 — 올리는 채널과 기록만 하는 채널 (FLOWS.md:86-87)", () => {
-  it("YouTube 만 실업로드다", () => {
+  it("YouTube 와 네이버 TV·클립이 실업로드다", () => {
     assert.equal(channelPublishMode("youtube"), "upload");
+    // 네이버는 공개 API 가 없어 브라우저 자동화로 올리지만, **파일이 실제로 올라간다**.
+    // record 로 두면 올라간 것을 '기록됨'으로 표시하게 된다 — 반대 방향의 F4 위반이다.
+    assert.equal(channelPublishMode("navertv"), "upload");
+    assert.equal(channelPublishMode("naverclip"), "upload");
   });
 
   it("나머지는 전부 기록만 — 새 채널이 추가돼도 기본이 record 여야 한다", () => {
-    for (const ch of ["instagram", "facebook", "tiktok", "smr", "threads", "새채널"]) {
+    for (const ch of ["instagram", "facebook", "tiktok", "threads", "새채널"]) {
       assert.equal(channelPublishMode(ch), "record", `${ch} 는 record`);
     }
   });
@@ -174,7 +178,9 @@ describe("관문 우회 불가 (F3 Invariant · FLOWS.md:73)", () => {
         // 주석에 적힌 설명은 세지 않는다 — 규칙을 문서화한 줄까지 위반으로 잡히면
         // 규칙을 설명하지 못하게 된다.
         if (/^\s*(\*|\/\/)/.test(line)) return;
-        if (/enqueue\(\s*["']distribution\.publish["']/.test(line)) hits.push(`${f}:${i + 1}`);
+        // 네이버는 잡 종류가 다르다(naver.publish · 별도 레인). 잡이 다르다고 다른 파일에서
+        // 넣기 시작하면 게이트를 지나는 문이 둘이 된다 — 같은 규칙으로 묶는다.
+        if (/enqueue\(\s*["'](distribution|naver)\.publish["']/.test(line)) hits.push(`${f}:${i + 1}`);
       });
     }
     const filesWithHits = [...new Set(hits.map((h) => h.split(":")[0]))];

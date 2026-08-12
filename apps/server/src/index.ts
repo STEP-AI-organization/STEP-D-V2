@@ -11,7 +11,8 @@ import { HTTPException } from "hono/http-exception";
 import { cors } from "hono/cors";
 import { getCookie, setCookie, deleteCookie } from "hono/cookie";
 import {
-  runWithTenant, runAsSystem, currentTenantId, DEFAULT_TENANT_ID, type TenantContext,
+  runWithTenant, runAsSystem, currentContext, currentTenantId, DEFAULT_TENANT_ID,
+  type TenantContext,
 } from "./tenant.ts";
 import {
   SESSION_COOKIE,
@@ -51,7 +52,7 @@ import { buildInvoice, issuerInfo, monthRange, parseMonth } from "./invoice.ts";
 import { checkProfile, incompleteFields } from "./business.ts";
 import {
   API_SCOPES, bearerKey, checkRoute, generateKey, hashKey, keyBlockReason, keyPrefix,
-  shouldTouchLastUsed,
+  normalizeScopes, shouldTouchLastUsed,
 } from "./api-keys.ts";
 import { logger } from "hono/logger";
 import fs from "node:fs";
@@ -240,7 +241,8 @@ import {
   listPrefix,
 } from "./storage-gcs.ts";
 import { castPrefix, stylePrefix, thumbnailPrefix } from "./thumbnail-assets.ts";
-import { isClipRendered, upsertDistribution } from "./publish-guard.ts";
+import { isClipRendered, upsertDistribution, isNaverChannel, NAVER_CHANNELS } from "./publish-guard.ts";
+import { naverUploadEnabled, NAVER_DISABLED_MESSAGE, DESC_MIN } from "./naver-gate.ts";
 import {
   initialPipeline,
   isoDateOrToday,
@@ -296,7 +298,8 @@ import {
   type Issue,
 } from "./gate.ts";
 import { listShortsTemplates, getShortsTemplate, toPercent } from "./shorts-template.ts";
-import { listNaverAccounts, getNaverAccount, upsertNaverAccount, markNaverAccount } from "./db-pg.ts";
+import { listNaverAccounts, getNaverAccount, upsertNaverAccount, markNaverAccount,
+  deleteNaverAccount } from "./db-pg.ts";
 import { naverSessionPath } from "./naver-session.ts";
 import { sealSession, sessionStoreReady, looksLikeStorageState } from "./naver-session-store.ts";
 import { setNaverSessionBlob, clearNaverSessionBlob } from "./db-pg.ts";
@@ -415,6 +418,21 @@ app.use("*", async (c, next) => {
   }
   const ctx = await resolveTenant(c);
   return runWithTenant(ctx, () => next());
+});
+
+/**
+ * 공장 라우트는 **익명 폴백을 허용하지 않는다.** AUTH_REQUIRED 가 꺼진 단일 테넌트
+ * 자세에서는 인증 없는 요청이 기본 테넌트로 폴백하는데(resolveTenant 3번 경로),
+ * 공장은 남의 YouTube 채널에 영상을 올릴 수 있는 표면이라 그 폴백이 곧 사고다.
+ * API 키 또는 로그인 세션이 있어야만 통과시킨다 (구 x-factory-key 의 방어를 대체).
+ */
+app.use("/api/factory/*", async (c, next) => {
+  if (c.req.method === "OPTIONS") return next();
+  const via = currentContext()?.via;
+  if (via !== "api-key" && !c.get("user")) {
+    return c.json({ error: "unauthorized", message: "API 키(Authorization: Bearer)가 필요합니다." }, 401);
+  }
+  return next();
 });
 
 /**
@@ -1135,13 +1153,14 @@ app.get("/api/superadmin/tenants/:id/api-keys", async (c) => {
 app.post("/api/superadmin/tenants/:id/api-keys", async (c) => {
   const actor = requireSuperadmin(c);
   const tenantId = c.req.param("id");
-  const body = await c.req.json<{ name?: string; reason?: string }>().catch(() => ({}) as any);
+  const body = await c.req.json<{ name?: string; reason?: string; scopes?: unknown }>()
+    .catch(() => ({}) as any);
   const reason = requireReason(actor, tenantId, body.reason);
 
   // 모르는 스코프는 버린다. 다 버려서 비면 **키를 만들지 않는다** — 아무것도 못 하는 키를
   // 쥐여 주면 고객사는 그게 권한 문제인지 장애인지 구분하지 못한다.
-  // A named customer key always receives the standard customer API surface.
-  const scopes = [...API_SCOPES];
+  // scopes 를 안 보내면(구 admin UI) 기존 동작대로 전체 표면을 준다.
+  const scopes = body.scopes === undefined ? [...API_SCOPES] : normalizeScopes(body.scopes);
   if (scopes.length === 0) {
     return c.json(
       { error: "scopes_required", message: `허용할 권한을 하나 이상 고르세요: ${API_SCOPES.join(", ")}` },
@@ -1557,18 +1576,10 @@ app.post("/api/programs", async (c) => {
     ? body.cast.filter((x: unknown): x is string => typeof x === "string")
     : [];
 
-  // SMR feed metadata (program-level, set once — docs/plans/publish-fields-ux-plan.md §5.1③).
-  const smr: { programCode?: string; category?: string; weekdays?: number[] } = {};
-  if (typeof body.programCode === "string" && body.programCode.trim()) {
-    smr.programCode = body.programCode.trim().toLowerCase();
-  }
-  if (typeof body.category === "string" && body.category.trim()) {
-    smr.category = body.category.trim();
-  }
-  if (Array.isArray(body.weekdays)) {
-    const days = body.weekdays.filter((n: unknown): n is number => typeof n === "number" && n >= 0 && n <= 6);
-    if (days.length) smr.weekdays = days;
-  }
+  // 예전엔 여기서 SMR 피드 메타(programCode·category·weekdays)를 받아 program.smr 에 저장했다.
+  // **읽는 곳이 어디에도 없었다** — 실제 네이버 발행은 브라우저 자동화 경로(naver.publish)라
+  // 이 값들을 쓰지 않는다. 운영자가 채워 넣어도 아무 데도 닿지 않는 폼이라 제거했다.
+  // (2026-08-12. 네이버 발행에 실제로 필요한 것은 배포채널 화면의 네이버 계정 + 세션이다.)
 
   const pipelineGenre =
     typeof body.pipelineGenre === "string" && (body.pipelineGenre === "variety" || body.pipelineGenre === "drama")
@@ -1585,7 +1596,6 @@ app.post("/api/programs", async (c) => {
     episodeCount: 0,
     status: "active" as const,
     ...(pipelineGenre ? { pipelineGenre } : {}),
-    ...(Object.keys(smr).length ? { smr } : {}),
     // Optional understanding profile (feeds candidate scoring — plan §program-fit). Stored
     // as JSON on the entity; normalized so downstream can trust the shape.
     ...(body.profile !== undefined ? { profile: normalizeProfile(body.profile) } : {}),
@@ -1647,7 +1657,7 @@ app.post("/api/programs/:id/sync-from-analysis", async (c) => {
 
 // ── autofill program metadata via Gemini + google_search grounding ──
 // 프로그램 제목만으로 웹 검색·팩트체크로 나머지 필드 자동 채움 (2단계: 검색·수집 → 팩트체크).
-// 출연자·SMR은 채우지 않음. 결과는 저장하지 않고 반환만 — 사용자가 UI에서 확인 후 저장.
+// 출연자는 채우지 않음. 결과는 저장하지 않고 반환만 — 사용자가 UI에서 확인 후 저장.
 app.post("/api/programs/:id/autofill", async (c) => {
   const id = c.req.param("id");
   const program = await getEntity<Record<string, unknown>>("program", id);
@@ -1852,25 +1862,9 @@ app.patch("/api/programs/:id", async (c) => {
     }
   }
 
-  // SMR: merge onto the existing config so fields absent from the body survive; an
-  // explicitly-sent empty value clears that field (the edit UI sends what it manages).
-  const smr = { ...((program.smr as Record<string, unknown> | undefined) ?? {}) };
-  if (typeof body.programCode === "string") {
-    const code = body.programCode.trim().toLowerCase();
-    if (code) smr.programCode = code;
-    else delete smr.programCode;
-  }
-  if (typeof body.category === "string") {
-    if (body.category.trim()) smr.category = body.category.trim();
-    else delete smr.category;
-  }
-  if (Array.isArray(body.weekdays)) {
-    const days = body.weekdays.filter((n: unknown): n is number => typeof n === "number" && n >= 0 && n <= 6);
-    if (days.length) smr.weekdays = days;
-    else delete smr.weekdays;
-  }
-  if (Object.keys(smr).length) next.smr = smr;
-  else delete next.smr;
+  // (구 SMR 피드 설정 제거 — 2026-08-12. 읽는 곳이 없는 필드였다. index.ts:1579 주석 참고.
+  //  기존 행에 남아 있는 program.smr 값은 건드리지 않는다: 지우는 마이그레이션을 따로 돌리지
+  //  않는 한, 쓰지 않는 필드를 저장 때마다 삭제하면 되돌릴 수 없다.)
 
   await putEntity("program", id, next);
   return c.json({ program: next });
@@ -2338,6 +2332,70 @@ app.get("/api/media/:id/analysis", async (c) => {
   const row = await getContentAnalysis(c.req.param("id"));
   if (!row) return c.json({ status: "none" }, 404);
   return c.json(row);
+});
+
+// ── 파생 컨텐츠 조회 (외부 API 키 대상) ────────────────────────────────────────
+// 웹은 /api/state 로 상태를 통째로 받지만, 고객사 API 에 그걸 열면 워크스페이스 전체가
+// 새어 나간다. 미디어 하나 단위의 절단면만 준다 — 쇼츠 추천과 클립.
+
+/** 이 미디어의 쇼츠 추천 목록. 분석이 아직이면 404 가 아니라 빈 목록 + 상태를 준다. */
+app.get("/api/media/:id/shorts", async (c) => {
+  const mediaId = c.req.param("id");
+  const media = await getMedia(mediaId);
+  if (!media) return c.json({ error: "media_not_found" }, 404);
+  const episodeId = (media as any).episodeId ?? null;
+  const recs = episodeId
+    ? (await listEntities<any>("recommendation")).filter((r) => r.episodeId === episodeId)
+    : [];
+  const analysis = await getContentAnalysis(mediaId);
+  return c.json({
+    mediaId,
+    episodeId,
+    analysisStatus: (analysis as any)?.status ?? "none",
+    shorts: recs
+      .sort((a, b) => (b.score100 ?? 0) - (a.score100 ?? 0))
+      .map((r) => ({
+        id: r.id,
+        title: r.title ?? null,
+        startTime: r.startTime ?? null,
+        endTime: r.endTime ?? null,
+        status: r.status ?? null,
+        score100: r.score100 ?? null,
+        reason: r.reason ?? null,
+        clipId: r.clipId ?? null,
+        thumbnails: Array.isArray(r.thumbnails)
+          ? r.thumbnails.map((t: any) => ({ id: t.id, chosen: Boolean(t.chosen), urls: t.urls ?? {} }))
+          : [],
+      })),
+  });
+});
+
+/** 이 미디어에서 만들어진 클립 목록 (채택된 추천의 산출물 + 배포 상태). */
+app.get("/api/media/:id/clips", async (c) => {
+  const mediaId = c.req.param("id");
+  const media = await getMedia(mediaId);
+  if (!media) return c.json({ error: "media_not_found" }, 404);
+  const episodeId = (media as any).episodeId ?? null;
+  const clips = (await listEntities<any>("clip")).filter(
+    (cl) => (episodeId && cl.episodeId === episodeId) || cl.sourceMediaId === mediaId,
+  );
+  return c.json({
+    mediaId,
+    episodeId,
+    clips: clips.map((cl) => ({
+      id: cl.id,
+      title: cl.title ?? null,
+      startTime: cl.startTime ?? null,
+      endTime: cl.endTime ?? null,
+      durationSec: cl.durationSec ?? null,
+      status: cl.status ?? null,
+      rendered: Boolean(cl.rendered),
+      publishedVideoId: cl.publishedVideoId ?? null,
+      distributions: (cl.distributions ?? []).map((d: any) => ({
+        channel: d.channel, status: d.status, externalId: d.externalId ?? null,
+      })),
+    })),
+  });
 });
 
 // ── re-run the AI content pipeline for one media (operator recovery from a failed run) ──
@@ -3165,13 +3223,13 @@ function renderDims(aspect: string): { W: number; H: number; stageH: number } {
 //
 // The render-side mirror of core/channels.py CHANNEL_PRESETS. That table ranks candidates
 // per destination (scoring only); this one decides what the encoder actually emits. The two
-// must agree — a candidate scored as SMR (16:9, up to 180s) that rendered as a 60s 9:16
+// must agree — a candidate scored as 네이버 TV (16:9, up to 180s) that rendered as a 60s 9:16
 // short would make the whole (candidate × destination) matrix a lie. Keep maxSec/aspect in
 // sync with core/channels.py when either moves.
 const RENDER_PRESETS: Record<string, { label: string; aspect: string; maxSec: number }> = {
   youtube_shorts:  { label: "YouTube Shorts",   aspect: "9:16", maxSec: 60 },
   instagram_reels: { label: "Instagram Reels",  aspect: "9:16", maxSec: 90 },
-  smr:             { label: "SMR (포털 VOD)",   aspect: "16:9", maxSec: 180 },
+  naver_tv:        { label: "네이버 TV (가로 VOD)", aspect: "16:9", maxSec: 180 },
 };
 
 /**
@@ -5054,6 +5112,12 @@ app.post("/api/distributions/publish", async (c) => {
     youtubeChannelId?: string;
     /** YouTube visibility for an immediate publish. Defaults to "public" (the publish intent). */
     privacy?: "public" | "unlisted" | "private";
+    /** 네이버: 어느 계정으로 올릴지. 다계정에서는 필수 — 추론하지 않는다. */
+    naverAccountId?: string;
+    /** 네이버: 발행 시점 설명. 클립은 10자 이상이어야 등록 자체가 된다. */
+    description?: string;
+    /** 네이버: 카테고리 1차·2차. 둘 다 있어야 등록된다. */
+    naverCategory?: { primary?: string; secondary?: string };
   }>().catch(() => null);
 
   // Reject malformed input up front — a bad/empty body must be a 400, not a 500.
@@ -5086,6 +5150,66 @@ app.post("/api/distributions/publish", async (c) => {
       origin: "manual",
     });
     return c.json({ ok: true, ...outcome });
+  }
+
+  // ── 네이버 TV·클립 ─────────────────────────────────────────────────────────
+  // YouTube 와 같은 축(실업로드)이지만 막히는 지점이 다르다. **부작용 전에** 전부 거른다 —
+  // 클립이 'pending' 으로 남았는데 워커에서 실패하는 것보다, 아예 안 받는 게 낫다.
+  if (isNaverChannel(b.channel)) {
+    if (!naverUploadEnabled()) {
+      return c.json({ error: "naver_upload_disabled", message: NAVER_DISABLED_MESSAGE }, 409);
+    }
+    const accounts = await listNaverAccounts();
+    const usable = accounts.filter((a) => a.status !== "disabled");
+    if (usable.length === 0) {
+      return c.json({
+        error: "no_naver_account",
+        message: "연결된 네이버 계정이 없습니다 — 배포채널 화면에서 계정을 추가하고 로그인하세요.",
+      }, 409);
+    }
+    // 계정이 하나뿐이면 그걸 쓴다. 둘 이상이면 **고르게 한다** — 아무거나 집으면
+    // 다른 고객사 채널로 나갈 수 있다.
+    const account = b.naverAccountId
+      ? usable.find((a) => a.id === b.naverAccountId)
+      : (usable.length === 1 ? usable[0] : undefined);
+    if (!account) {
+      return c.json({
+        error: b.naverAccountId ? "naver_account_not_found" : "naver_account_required",
+        message: b.naverAccountId
+          ? "지정한 네이버 계정을 찾을 수 없거나 비활성입니다."
+          : "네이버 계정이 여러 개입니다 — 어느 계정으로 올릴지 선택하세요.",
+        accounts: usable.map((a) => ({ id: a.id, label: a.label, target: a.target })),
+      }, 409);
+    }
+    // 계정마다 올릴 수 있는 곳이 정해져 있다(clip 전용 계정에 TV 를 밀면 그냥 실패한다).
+    const want = NAVER_CHANNELS[b.channel];
+    if (account.target !== "both" && account.target !== want) {
+      return c.json({
+        error: "naver_target_mismatch",
+        message: `'${account.label}' 계정은 ${account.target === "tv" ? "네이버 TV" : "네이버 클립"} 전용입니다.`,
+      }, 409);
+    }
+    // 클립은 설명이 10자 미만이면 등록 버튼 자체가 막힌다(2026-08-11 실측).
+    // 워커까지 갔다가 실패하면 원인이 안 보여서, 받을 때 거른다.
+    const desc = b.description?.trim();
+    if (b.channel === "naverclip" && (!desc || desc.length < DESC_MIN)) {
+      return c.json({
+        error: "description_too_short",
+        message: `네이버 클립은 설명이 ${DESC_MIN}자 이상이어야 합니다.`,
+      }, 400);
+    }
+    const cat = b.naverCategory?.primary && b.naverCategory?.secondary
+      ? { primary: String(b.naverCategory.primary), secondary: String(b.naverCategory.secondary) }
+      : undefined;
+
+    const outcome = await dispatchPublish({
+      clipIds: b.clipIds, channel: b.channel,
+      scheduled: b.scheduled, reserveDate: b.reserveDate,
+      naverAccountId: account.id, description: desc, naverCategory: cat,
+      actor: readActor(c.req.header("x-actor")) || "unknown",
+      origin: "manual",
+    });
+    return c.json({ ok: true, naverAccount: { id: account.id, label: account.label }, ...outcome });
   }
 
   const outcome = await dispatchPublish({
@@ -5726,8 +5850,6 @@ app.get("/api/youtube/auth", (c) => {
  * 남이 만든 refresh token 은 우리 client_id 로 발급된 게 아니면 갱신이 안 된다.
  */
 app.post("/api/factory/channels/connect-url", async (c) => {
-  const denied = factoryAuthDenied(c);
-  if (denied) return denied;
   if (!GOOGLE_CLIENT_ID) return c.json({ error: "oauth_not_configured" }, 500);
 
   const b = await c.req.json<{ returnUrl?: string; channelUrl?: string }>().catch(() => null);
@@ -5754,9 +5876,6 @@ app.post("/api/factory/channels/connect-url", async (c) => {
  * sourceUrl 대신 쓰거나, 같은 URL 로 ingest 하면 이 미디어가 재사용된다.
  */
 app.post("/api/factory/videos", async (c) => {
-  const denied = factoryAuthDenied(c);
-  if (denied) return denied;
-
   const b = await c.req.json<{ url?: string; programId?: string; title?: string }>()
     .catch(() => null);
   const url = (b?.url ?? "").trim();
@@ -5767,6 +5886,12 @@ app.post("/api/factory/videos", async (c) => {
   const program = await getEntity<{ id: string; title: string; targetAge: number }>(
     "program", programId);
   if (!program) return c.json({ error: "program_not_found" }, 404);
+
+  // 잔액 없는 워크스페이스의 등록은 받지 않는다 — 다운로드·분석이 곧 원가다.
+  // 러닝타임을 아직 모르므로 여기서는 0 판정만 하고, 정밀 게이트는 분석 직전에 선다.
+  if ((await creditBalance()) <= 0) {
+    return c.json({ error: "insufficient_credits", message: "크레딧 잔액이 없습니다. 충전 후 다시 시도해 주세요." }, 402);
+  }
 
   // 같은 영상을 두 번 넣지 않는다 — 분석은 회당 ₩600 대다.
   const dup = (await listMedia()).find((m: any) => m.storedPath === `youtube:${url}`);
@@ -5803,9 +5928,6 @@ app.post("/api/factory/videos", async (c) => {
  * 정상**이고, 그걸 "실패"로 읽지 않도록 `hasMetrics` 를 함께 내려준다.
  */
 app.get("/api/factory/jobs/:id/performance", async (c) => {
-  const denied = factoryAuthDenied(c);
-  if (denied) return denied;
-
   const job = await getEntity<any>("factoryJob", c.req.param("id"));
   if (!job) return c.json({ error: "not_found" }, 404);
 
@@ -5844,8 +5966,6 @@ app.get("/api/factory/jobs/:id/performance", async (c) => {
  * 갱신해 보고** 실패하면 거절한다 — 나중에 배포 시점에 알면 이미 늦다.
  */
 app.post("/api/factory/channels", async (c) => {
-  const denied = factoryAuthDenied(c);
-  if (denied) return denied;
   if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET) {
     return c.json({ error: "oauth_not_configured" }, 500);
   }
@@ -6350,9 +6470,14 @@ app.get("/api/naver/accounts", async (c) => {
       id: a.id, label: a.label, accountKey: a.accountKey,
       target: a.target, status: a.status,
       lastLoginAt: a.lastLoginAt, lastPublishAt: a.lastPublishAt,
+      // **있다/없다 + 언제** 만 나간다. 세션 값은 어떤 경우에도 응답에 싣지 않는다.
+      hasSession: a.sessionUpdatedAt != null,
+      sessionUpdatedAt: a.sessionUpdatedAt,
       // 워커 PC 에서 실행할 명령을 그대로 준다 — 운영자가 옮겨 적다 틀리지 않게.
       loginCommand: `pnpm --filter @stepd/server naver:login --account ${a.accountKey}`,
     })),
+    // 키가 없으면 세션 업로드가 503 이다. 화면이 "올려도 안 되는 버튼"을 띄우지 않게 미리 알려준다.
+    sessionStoreReady: sessionStoreReady(),
   });
 });
 
@@ -6382,12 +6507,30 @@ app.patch("/api/naver/accounts/:id", async (c) => {
   const id = c.req.param("id");
   const acct = await getNaverAccount(id);
   if (!acct) return c.json({ error: "not_found" }, 404);
-  const b = await c.req.json<{ status?: string }>().catch(() => null);
+  const b = await c.req.json<{ status?: string; label?: string; target?: string }>().catch(() => null);
   const status = ["active", "session_expired", "disabled"].includes(String(b?.status))
     ? (String(b?.status) as "active" | "session_expired" | "disabled") : undefined;
-  if (!status) return c.json({ error: "status required" }, 400);
-  await markNaverAccount(id, { status });
-  return c.json({ ok: true, id, status });
+  const target = ["clip", "tv", "both"].includes(String(b?.target))
+    ? (String(b?.target) as "clip" | "tv" | "both") : undefined;
+  const label = b?.label?.trim() || undefined;
+  if (!status && !target && !label) {
+    return c.json({ error: "nothing_to_update", message: "status·label·target 중 하나는 있어야 합니다." }, 400);
+  }
+  await markNaverAccount(id, { status, label, target });
+  const after = await getNaverAccount(id);
+  return c.json({ ok: true, id, status: after?.status, label: after?.label, target: after?.target });
+});
+
+/**
+ * 계정 삭제. 세션도 같은 행이라 함께 사라진다.
+ * ⚠️ 워커 PC 에 남은 로컬 세션 파일까지는 못 지운다 — 서버에서 닿지 않는 머신이다.
+ */
+app.delete("/api/naver/accounts/:id", async (c) => {
+  const id = c.req.param("id");
+  const acct = await getNaverAccount(id);
+  if (!acct) return c.json({ error: "not_found" }, 404);
+  await deleteNaverAccount(id);
+  return c.json({ ok: true, id });
 });
 
 /**
@@ -6786,26 +6929,11 @@ app.post("/api/media/:id/thumbnails/select", async (c) => {
 // 서버는 잡을 만들기만 하고, 진행은 factory.orchestrate 상태기계가 워커에서 굴린다.
 // 계획·결정 근거: docs/plans/active/factory-api-plan.md
 //
-// **외부 서버가 부른다.** Cloud Run 이 allow-unauthenticated 라 IAM 이 막아주지 않으므로
-// 이 라우트들이 스스로 인증해야 한다. 남이 이 엔드포인트를 찾으면 우리 YouTube 채널에
-// 영상을 올릴 수 있다 — Lab 쓰기 토큰과 같은 방식으로 막는다.
-
-const FACTORY_API_KEY = process.env.FACTORY_API_KEY ?? "";
-/** 키 미설정 = 열림이 아니라 닫힘. env 실수의 실패 방향을 '안 됨' 쪽으로 둔다. */
-function factoryAuthDenied(c: Context) {
-  if (!FACTORY_API_KEY) {
-    return c.json({
-      error: "factory_key_unset",
-      message: "FACTORY_API_KEY 가 서버에 설정되지 않아 Factory API 가 닫혀 있습니다.",
-    }, 503);
-  }
-  const given = c.req.header("x-factory-key") ?? "";
-  // 길이가 다르면 어차피 다르다. 같은 길이일 때만 상수시간 비교로 타이밍 누출을 줄인다.
-  const ok = given.length === FACTORY_API_KEY.length &&
-    crypto.timingSafeEqual(Buffer.from(given), Buffer.from(FACTORY_API_KEY));
-  if (!ok) return c.json({ error: "unauthorized", message: "x-factory-key 가 올바르지 않습니다." }, 401);
-  return null;
-}
+// **외부 서버가 부른다.** 인증은 테넌트 API 키(`Authorization: Bearer stepd_live_…`)가
+// 전담한다 — resolveTenant 미들웨어가 키를 검증하고 테넌트 스코프(RLS)까지 세우므로,
+// 이 라우트들에는 자체 인증이 없다. 구 x-factory-key(글로벌 단일 키)는 폐기했다:
+// 테넌트 정체성이 없어 과금·격리가 불가능했고, 다테넌트 자세(AUTH_REQUIRED)에서는
+// 미들웨어 단계에서 이미 401 이라 구조적으로 죽은 경로였다.
 
 /** 브라우저에서 직접 부르는 경우 대비. 서버간 호출이면 안 쓰인다. */
 const FACTORY_ALLOWED_ORIGIN = process.env.FACTORY_ALLOWED_ORIGIN ?? "";
@@ -6813,7 +6941,7 @@ app.options("/api/factory/*", (c) => {
   if (!FACTORY_ALLOWED_ORIGIN) return c.body(null, 204);
   return c.body(null, 204, {
     "Access-Control-Allow-Origin": FACTORY_ALLOWED_ORIGIN,
-    "Access-Control-Allow-Headers": "content-type,x-factory-key",
+    "Access-Control-Allow-Headers": "content-type,authorization",
     "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
     "Access-Control-Max-Age": "3600",
   });
@@ -6832,8 +6960,6 @@ async function ingestRateExceeded(): Promise<boolean> {
 
 /** 진입. 즉시 202 로 jobId 만 준다 — 완주까지 수십 분 걸리므로 붙잡지 않는다. */
 app.post("/api/factory/ingest", async (c) => {
-  const denied = factoryAuthDenied(c);
-  if (denied) return denied;
   // 킬 스위치. 잘못된 env 의 실패 모드가 "안 돌아감"이지 "실수로 배포됨"이 아니게.
   if (!factoryEnabled()) {
     return c.json({
@@ -6870,6 +6996,11 @@ app.post("/api/factory/ingest", async (c) => {
   if (!(await getEntity("program", programId))) {
     return c.json({ error: "program_not_found" }, 404);
   }
+  // 잔액 0 이면 접수 자체를 거절한다 (402). 정밀 판정(길이 기반)은 공장이 분석을
+  // 태우기 직전에 한 번 더 한다 — factory.ts advance() 의 creditBlocked.
+  if ((await creditBalance()) <= 0) {
+    return c.json({ error: "insufficient_credits", message: "크레딧 잔액이 없습니다. 충전 후 다시 시도해 주세요." }, 402);
+  }
   if (await ingestRateExceeded()) {
     return c.json({
       error: "rate_limited",
@@ -6896,8 +7027,6 @@ app.post("/api/factory/ingest", async (c) => {
  * "왜 내 채널이 안 보이지"에서 막힌다.
  */
 app.get("/api/factory/targets", async (c) => {
-  const denied = factoryAuthDenied(c);
-  if (denied) return denied;
   const channels = await listYouTubeChannels();
   return c.json({
     targets: channels.map((ch) => {
@@ -6987,8 +7116,6 @@ app.get("/api/media/:id/factory-run", async (c) => {
 
 /** 폴링용 상태 조회. 웹훅은 후순위 — 내부 소비자라 폴링으로 시작한다. */
 app.get("/api/factory/jobs/:id", async (c) => {
-  const denied = factoryAuthDenied(c);
-  if (denied) return denied;
   const job = await getEntity<any>("factoryJob", c.req.param("id"));
   if (!job) return c.json({ error: "not_found" }, 404);
 

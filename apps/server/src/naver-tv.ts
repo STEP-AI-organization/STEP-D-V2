@@ -1,7 +1,7 @@
 /**
  * 네이버 TV · 네이버 클립 업로드 — Playwright 브라우저 자동화.
  *
- * 네이버는 공개 업로드 API 가 없다. 파트너 계약(SMR) 경로가 열리기 전까지는 이게 유일하다.
+ * 네이버는 공개 업로드 API 가 없다. 파트너 계약 경로가 열리기 전까지는 이게 유일하다.
  * **사무실 상시 PC 의 `naver` 레인 워커에서만 돈다** — Cloud Run 에서 돌리면 해외 IP 라
  * 로그인부터 막힌다. 세션은 [naver-session.ts] 참고.
  *
@@ -17,7 +17,7 @@ import path from "node:path";
 import os from "node:os";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { loadNaverSession, saveNaverSession } from "./naver-session.ts";
-import { assertNaverUploadEnabled } from "./naver-gate.ts";
+import { assertNaverUploadEnabled, DESC_MIN, DESC_MAX } from "./naver-gate.ts";
 
 const LOGIN_URL = "https://nid.naver.com/nidlogin.login";
 
@@ -97,11 +97,11 @@ export const NAVER_TARGETS = {
 
 export type NaverTarget = keyof typeof NAVER_TARGETS;
 
-/** 로그인 여부 판정 — 스튜디오에 들어갔을 때 로그인 화면으로 튕기면 세션 만료다. */
-/** 클립 설명 길이(실측 2026-08-11). 최소 10자 미만이면 등록 자체가 막힌다. */
-export const DESC_MAX = 300;
-export const DESC_MIN = 10;
+// 설명 길이 제한은 naver-gate.ts 에 있다 — playwright 를 안 끌고 오는 모듈이라 라우트에서도
+// 쓸 수 있다. (import 해서 다시 export: 이 파일 안에서도 쓰기 때문에 re-export 만으로는 부족하다.)
+export { DESC_MIN, DESC_MAX };
 
+/** 로그인 여부 판정 — 스튜디오에 들어갔을 때 로그인 화면으로 튕기면 세션 만료다. */
 const LOGGED_OUT_HINT = 'form[name="frmNIDLogin"], input#id';
 
 export interface NaverUploadInput {

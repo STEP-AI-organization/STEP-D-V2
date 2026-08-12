@@ -199,7 +199,7 @@ function RecommendTab({
   // 2026-07-23: 3-type (숏폼/클립/하이라이트) 그룹핑 표시. type 필드 없으면 legacy shortform.
   const groups: { key: string; label: string; badge: string; items: AnalysisShort[] }[] = [
     { key: "shortform", label: "숏폼", badge: "40~60초 · SNS 배포", items: [] },
-    { key: "clip", label: "클립", badge: "1~10분 · SMR·재편집·코너/세션", items: [] },
+    { key: "clip", label: "클립", badge: "1~10분 · 네이버 TV·재편집·코너/세션", items: [] },
     // 하이라이트는 60분+ 회차의 대주제 큐레이션(다구간)이다. 서버 채택이 다구간을 못 이어붙여
     // start~end 한 덩어리로 잘리므로, 그 제약을 뱃지에 그대로 적는다.
     { key: "highlight", label: "하이라이트", badge: "60분+ 회차 대주제 큐레이션 · 다구간 편집 미지원", items: [] },

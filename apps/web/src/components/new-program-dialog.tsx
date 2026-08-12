@@ -7,14 +7,10 @@ import { Button } from "@/components/ui/button";
 import { useAppData } from "@/lib/data/store";
 import { useToast } from "@/components/ui/toast";
 import { TARGET_AGES, targetAgeLabel } from "@/lib/constants";
-import { WEEKDAYS } from "@/lib/reserve-date";
 
-// 장르(section) — SMR clipCategory 01–11 (docs/reference/glossary.md).
+// 장르(section) — clipCategory 01–11 (docs/reference/glossary.md).
 const SECTIONS = ["드라마/영화", "예능", "뮤직", "시사", "교양", "라이프", "스포츠", "게임", "어린이", "뉴스", "애니"];
-// SMR 프로그램 카테고리 코드(01/02/03). 라벨 미확정 — 코드로 노출.
-const SMR_CATEGORIES = ["01", "02", "03"];
 
-const CODE_RE = /^[a-z0-9]+$/;
 
 /** Header action on /programs: create the content root a program needs before any upload. */
 export function NewProgramButton({ className }: { className?: string } = {}) {
@@ -58,17 +54,9 @@ function NewProgramDialog({ onClose }: { onClose: () => void }) {
   const [section, setSection] = useState(SECTIONS[0]);
   const [targetAge, setTargetAge] = useState<number>(0);
   const [cast, setCast] = useState("");
-  const [programCode, setProgramCode] = useState("");
-  const [category, setCategory] = useState("");
-  const [weekdays, setWeekdays] = useState<number[]>([]);
   const [busy, setBusy] = useState(false);
 
-  const codeError = programCode.length > 0 && !CODE_RE.test(programCode);
-  const canSave = Boolean(title.trim()) && !codeError && !busy;
-
-  function toggleDay(i: number) {
-    setWeekdays((prev) => (prev.includes(i) ? prev.filter((d) => d !== i) : [...prev, i].sort((a, b) => a - b)));
-  }
+  const canSave = Boolean(title.trim()) && !busy;
 
   async function submit() {
     if (!canSave) return;
@@ -82,9 +70,6 @@ function NewProgramDialog({ onClose }: { onClose: () => void }) {
           .split(",")
           .map((s) => s.trim())
           .filter(Boolean),
-        programCode: programCode.trim() || undefined,
-        category: category || undefined,
-        weekdays: weekdays.length ? weekdays : undefined,
       });
       toast({ title: "프로그램 생성됨", description: title.trim(), tone: "done" });
       onClose();
@@ -157,66 +142,9 @@ function NewProgramDialog({ onClose }: { onClose: () => void }) {
             </Field>
           </div>
 
-          {/* ── SMR 피드 정보 ── */}
-          <div className="space-y-3 border-t border-border pt-4">
-            <div>
-              <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">SMR 피드 정보</div>
-              <p className="mt-0.5 text-[11px] text-muted-foreground/70">
-                네이버 SMR 배포에 필요 · 지금 비워도 프로그램은 생성됩니다(배포 전 채우면 됨).
-              </p>
-            </div>
-
-            <div className="grid grid-cols-2 gap-3">
-              <Field label="프로그램 코드" hint="영문 소문자·숫자">
-                <input
-                  value={programCode}
-                  onChange={(e) => setProgramCode(e.target.value)}
-                  placeholder="jamsi"
-                  className={cn(inputCls, codeError && "border-status-error focus-visible:ring-status-error")}
-                />
-                {codeError && (
-                  <div className="mt-1 text-[11px] text-status-error">영문 소문자·숫자만 사용할 수 있습니다.</div>
-                )}
-              </Field>
-              <Field label="카테고리" hint="SMR 코드">
-                <select value={category} onChange={(e) => setCategory(e.target.value)} className={inputCls}>
-                  <option value="">선택 안 함</option>
-                  {SMR_CATEGORIES.map((c) => (
-                    <option key={c} value={c}>
-                      {c}
-                    </option>
-                  ))}
-                </select>
-              </Field>
-            </div>
-
-            <Field label="편성 요일" hint="방송 요일 선택">
-              <div className="flex gap-1.5">
-                {WEEKDAYS.map((w, i) => {
-                  const on = weekdays.includes(i);
-                  return (
-                    <button
-                      key={w}
-                      type="button"
-                      onClick={() => toggleDay(i)}
-                      className={cn(
-                        "size-9 rounded-md border text-sm font-medium transition-colors",
-                        on
-                          ? "border-primary bg-primary text-primary-foreground"
-                          : "border-border text-muted-foreground hover:bg-accent/40",
-                      )}
-                    >
-                      {w}
-                    </button>
-                  );
-                })}
-              </div>
-            </Field>
-
-            <p className="text-[11px] text-muted-foreground/70">
-              포스터·프로그램 썸네일 이미지는 프로그램 생성 후 등록합니다.
-            </p>
-          </div>
+          <p className="text-[11px] text-muted-foreground/70">
+            포스터·프로그램 썸네일 이미지는 프로그램 생성 후 등록합니다.
+          </p>
         </div>
 
         <div className="flex items-center justify-end gap-2 border-t border-border px-4 py-3">

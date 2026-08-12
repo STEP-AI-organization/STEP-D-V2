@@ -27,7 +27,7 @@ export interface ExportData {
 /**
  * 상태 라벨.
  *
- * `recorded` 를 빠뜨리면 Meta·TikTok·SMR 건이 영문 'recorded' 로 찍혀서, **실제 게시**와
+ * `recorded` 를 빠뜨리면 Meta·TikTok 건이 영문 'recorded' 로 찍혀서, **실제 게시**와
  * **상태 기록만 한 것**의 구분이 내보낸 파일에서 사라진다. 라벨에 그 차이를 적어 둔다.
  */
 const DIST_STATUS_LABEL: Record<string, string> = {

@@ -154,8 +154,8 @@ describe("역할 기본값", () => {
     assert.equal(main.aspect, "any");
   });
 
-  it("SMR 은 가로 3분", () => {
-    const smr = defaultRuleFor("main", "smr");
+  it("네이버 TV 는 가로 3분", () => {
+    const smr = defaultRuleFor("main", "navertv");
     assert.equal(smr.aspect, "16:9");
     assert.equal(smr.maxSec, 180);
   });

@@ -5,7 +5,7 @@
  *
  * 무엇이 어디로 언제 나갔는지의 기록. 두 가지를 특히 지킨다:
  *
- *  - **`기록됨`을 `게시됨`처럼 보여주지 않는다** (F4 Invariant). Meta·TikTok·SMR 은
+ *  - **`기록됨`을 `게시됨`처럼 보여주지 않는다** (F4 Invariant). Meta·TikTok 은
  *    파일이 올라가지 않는다 — 색도 문구도 분리한다.
  *  - **실패는 자동 재시도하지 않는다** (F4-4 ⊘). 사람이 이 화면의 버튼을 눌러야 다시 간다.
  *    중복 게시 위험 때문이다.
@@ -113,7 +113,7 @@ export default function DistributionPage() {
           className="rounded-[4px] px-3 py-2 text-[11.5px] leading-relaxed"
           style={{ border: "1px solid var(--sd-border)", background: "var(--sd-card-sub)", color: "var(--sd-mut)" }}
         >
-          <b style={{ color: "var(--sd-fg)" }}>기록됨</b>은 게시가 아닙니다. Instagram·Facebook·TikTok·SMR 은
+          <b style={{ color: "var(--sd-fg)" }}>기록됨</b>은 게시가 아닙니다. Instagram·Facebook·TikTok 은
           파일이 올라가지 않고 우리 쪽 기록만 남습니다 — 실제 게시는 담당자가 해당 앱에서 직접 해야 합니다.
         </div>
       )}
