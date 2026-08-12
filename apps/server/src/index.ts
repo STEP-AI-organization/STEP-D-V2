@@ -9,6 +9,7 @@ import { serve } from "@hono/node-server";
 import { Hono, type Context } from "hono";
 import { HTTPException } from "hono/http-exception";
 import { cors } from "hono/cors";
+import { compress } from "hono/compress";
 import { getCookie, setCookie, deleteCookie } from "hono/cookie";
 import {
   runWithTenant, runAsSystem, currentContext, currentTenantId, DEFAULT_TENANT_ID,
@@ -362,6 +363,15 @@ type AppEnv = { Variables: { user?: User } };
 const app = new Hono<AppEnv>();
 app.use("*", logger());
 app.use("/api/*", cors({ origin: (o) => o ?? "*", credentials: false }));
+
+// JSON 응답 gzip — /api/state 같은 큰 페이로드의 전송을 줄인다 (Cloud Run 은 자동 압축이
+// 없다). 바이너리·스트림 경로는 제외 — 이미 압축된 포맷(jpg/mp4)이고, Range 스트리밍에
+// 압축이 끼면 시킹이 깨진다.
+const NO_COMPRESS = /\/(stream|thumb|frame|overlay\.png|analysis\/frames|analysis\/faces|thumbnails\/)/;
+app.use("/api/*", async (c, next) => {
+  if (NO_COMPRESS.test(new URL(c.req.url).pathname)) return next();
+  return compress()(c, next);
+});
 
 /**
  * 잡히지 않은 예외 → **사유가 있는 JSON**.
@@ -2394,6 +2404,27 @@ app.get("/api/media/:id/thumb", async (c) => {
 // 쿼리 t(초)를 두 자리로 반올림해 캐시 키로 사용 · analysis/{id}/frames/{key}.jpg.
 // 캐시 히트면 즉시 반환, 미스면 ffmpeg(-ss t -vframes 1)로 뽑아 저장 후 서빙.
 // 클립 카드도 이 라우트로 원본 구간의 시작 프레임을 표시(트림 전에도 검증 가능).
+
+/**
+ * 캡처 동시성 제한 — 카드 그리드가 프레임 8~10장을 한꺼번에 요청하면 ffmpeg 이 그 수만큼
+ * 동시에 떠서 2vCPU 를 나눠 먹고 **전부 7초대**가 된다 (2026-08-12 로그 실측). 2개씩
+ * 직렬화하면 개당 ~1초라 전체 체감이 오히려 빨라진다. 캐시 히트는 세마포어를 안 탄다.
+ */
+const FRAME_CAPTURE_LIMIT = 2;
+let frameCaptureActive = 0;
+const frameCaptureWaiters: (() => void)[] = [];
+async function withFrameCaptureSlot<T>(fn: () => Promise<T>): Promise<T> {
+  if (frameCaptureActive >= FRAME_CAPTURE_LIMIT) {
+    await new Promise<void>((res) => frameCaptureWaiters.push(res));
+  }
+  frameCaptureActive++;
+  try { return await fn(); }
+  finally {
+    frameCaptureActive--;
+    frameCaptureWaiters.shift()?.();
+  }
+}
+
 app.get("/api/media/:id/frame", async (c) => {
   const id = c.req.param("id");
   if (!/^[\w-]+$/.test(id)) return c.json({ error: "bad media id" }, 400);
@@ -2418,8 +2449,12 @@ app.get("/api/media/:id/frame", async (c) => {
     fs.mkdirSync(tmpDir, { recursive: true });
     const tmpPath = path.join(tmpDir, `${id}_${key.replace(/\./g, "_")}.jpg`);
     try {
-      await captureThumbnail(srcPath, clamped, tmpPath);
-      await uploadFile(objPath, tmpPath);
+      await withFrameCaptureSlot(async () => {
+        // 세마포어 대기 중에 다른 요청이 같은 키를 이미 만들었을 수 있다 — 재확인.
+        if (await fileExists(objPath)) return;
+        await captureThumbnail(srcPath, clamped, tmpPath);
+        await uploadFile(objPath, tmpPath);
+      });
     } catch (err) {
       console.error("[frame] capture failed:", err);
       try { fs.unlinkSync(tmpPath); } catch {}

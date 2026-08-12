@@ -64,7 +64,8 @@ steps:
           --memory=4Gi \
           --timeout=600 \
           --concurrency=10 \
-          --min-instances=0 \
+          --min-instances=1 \
+          --cpu-boost \
           --max-instances=5 \
           --set-env-vars=NODE_ENV=production,GCS_BUCKET=$_GCS_BUCKET,FACTORY_ENABLED=1,CREDIT_PRICE_KRW=$_CREDIT_PRICE_KRW,AUTH_REQUIRED=$_AUTH_REQUIRED,INVOICE_ISSUER_NAME=$_INVOICE_ISSUER_NAME,INVOICE_ISSUER_BIZNO=$_INVOICE_ISSUER_BIZNO,INVOICE_ISSUER_ADDRESS=$_INVOICE_ISSUER_ADDRESS,INVOICE_ISSUER_CONTACT=$_INVOICE_ISSUER_CONTACT \
           --set-secrets=DATABASE_URL=stepd-db-url:latest \
