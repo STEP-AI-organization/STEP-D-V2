@@ -714,6 +714,8 @@ export function EditorShell({ clipId }: { clipId: string }) {
           state={state}
           update={update}
           duration={timelineDuration}
+          frameMediaId={transcriptMediaId}
+          apiBase={API_BASE}
           video={videoEl}
           // 마스터 프리뷰(미렌더 드래프트)에선 파형 생략 — useAudioPeaks가 파일 전체를
           // 받아 디코드하므로 수 GB 마스터면 탭이 OOM 난다. 렌더된 클립만 파형 표시.

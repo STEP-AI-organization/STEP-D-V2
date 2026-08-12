@@ -17,6 +17,7 @@ import {
   type SpeedPoint,
 } from "@/lib/editor/presets";
 import { useAudioPeaks, Waveform } from "@/components/editor/editor-waveform";
+import { Filmstrip } from "@/components/editor/filmstrip";
 import { TimecodeInput } from "@/components/editor/editable-timecode";
 import { getRulerConfig, shouldShowLabel, formatRulerLabel } from "@/vendor/opencut/ruler-utils";
 
@@ -73,12 +74,17 @@ export function EditorTimeline({
   onTogglePlay,
   recWindow,
   hookAvailable,
+  frameMediaId,
+  apiBase,
 }: {
   state: EditorState;
   update: Update;
   duration: number;
   video: HTMLVideoElement | null;
   videoUrl?: string;
+  /** 필름스트립용 원본(master) 미디어 id + API 베이스. 프레임 파노라마를 눈금 아래 깐다. */
+  frameMediaId?: string;
+  apiBase?: string;
   /** Vertical layers, stacked. tracks[0] is the main track (mirrors the master trim). */
   tracks?: EditorTrack[];
   onTogglePlay: () => void;
@@ -604,6 +610,10 @@ export function EditorTimeline({
                   </div>
                 );
               })()}
+              {/* 프레임 파노라마 — 눈금 바로 아래, 트랙 위. 같은 스크롤 컨테이너라 줌·좌표 자동 정렬. */}
+              {frameMediaId && apiBase && (
+                <Filmstrip mediaId={frameMediaId} duration={duration} apiBase={apiBase} />
+              )}
               <div className="space-y-1">
                 {trackList.map((tr, i) => {
                   const trIn = i === 0 ? state.trimIn : tr.trimIn;
