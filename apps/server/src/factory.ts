@@ -206,8 +206,11 @@ export async function advance(factoryJobId: string): Promise<{ job: FactoryJob; 
       // 이미 우리 미디어면 재사용, YouTube URL 이면 다운로드 잡을 태운다.
       // 고객 스토리지 인증을 위임받지 않는다 — 우리 GCS 로 가져와야 재현이 된다.
       const media = await listMedia();
-      const existing = media.find((m: any) => m.storedPath === job.sourceUrl
-        || m.storedPath === `youtube:${job.sourceUrl}`);
+      // media 행의 저장 경로 필드는 `path` 다 (listMedia). 예전엔 존재하지 않는
+      // `storedPath` 를 봐서 이 재사용 분기가 항상 빗나갔다 — 이미 분석된 회차도
+      // "미디어를 찾지 못했다"로 죽는 버그 (2026-08-12 프로덕션 스모크에서 발견).
+      const existing = media.find((m: any) => m.path === job.sourceUrl
+        || m.path === `youtube:${job.sourceUrl}` || m.id === job.sourceUrl);
       if (existing) {
         const blocked = await creditBlocked((existing as any).durationSec ?? 0);
         if (blocked) return await fail(`크레딧 부족 — ${blocked}`);
@@ -229,7 +232,7 @@ export async function advance(factoryJobId: string): Promise<{ job: FactoryJob; 
     case "ingesting": {
       const media = (await listMedia()).find((m: any) => m.id === job.mediaId) as any;
       if (!media) return await fail("미디어가 사라졌다");
-      if (String(media.storedPath ?? "").startsWith("youtube:")) {
+      if (String(media.path ?? "").startsWith("youtube:")) {
         return { job, retryInMs: 60_000 };   // 아직 다운로드 중
       }
       const blocked = await creditBlocked(media.durationSec ?? 0);

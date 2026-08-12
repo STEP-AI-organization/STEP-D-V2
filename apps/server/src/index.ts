@@ -5897,7 +5897,8 @@ app.post("/api/factory/videos", async (c) => {
   }
 
   // 같은 영상을 두 번 넣지 않는다 — 분석은 회당 ₩600 대다.
-  const dup = (await listMedia()).find((m: any) => m.storedPath === `youtube:${url}`);
+  // media 저장 경로 필드는 `path` — storedPath 는 존재하지 않는다 (factory.ts 와 같은 버그였음)
+  const dup = (await listMedia()).find((m: any) => m.path === `youtube:${url}`);
   if (dup) {
     return c.json({ mediaId: (dup as any).id, episodeId: (dup as any).episodeId, reused: true });
   }
@@ -7125,7 +7126,7 @@ app.post("/api/media/:id/factory-run", async (c) => {
   if (existing) return c.json({ jobId: existing.id, status: existing.state, reused: true }, 202);
 
   const job = await createFactoryJob({
-    sourceUrl: (media as any).storedPath ?? mediaId,
+    sourceUrl: (media as any).path ?? mediaId,
     programId, targets,
     policy: (b?.policy ?? {}) as any,
     idempotencyKey: key,
