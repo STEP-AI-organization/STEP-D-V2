@@ -20,25 +20,32 @@ export function Filmstrip({
   mediaId,
   duration,
   apiBase,
-  /** 썸네일 한 장이 대표할 시간 폭(초). 촘촘할수록 장면 파악이 쉽지만 첫 로드에 프레임을 더 뽑는다. */
-  stepSec = 1.2,
+  /** 스트립에 깔 썸네일 최대 개수. 프레임 하나가 서버 ffmpeg 추출 + 이미지 로드라 이게 곧 부하다. */
+  maxFrames = 20,
+  /** 아주 짧은 클립이 과하게 촘촘해지지 않게 두 프레임 사이 최소 간격(초). */
+  minSpacingSec = 2.5,
   /** 스트립 높이(px). 9:16 세로 프레임 기준 가로폭이 정해진다. */
   height = 40,
 }: {
   mediaId: string | undefined;
   duration: number;
   apiBase: string;
-  stepSec?: number;
+  maxFrames?: number;
+  minSpacingSec?: number;
   height?: number;
 }) {
-  // 구간 중앙 시각들. 개수 상한을 둔다 — 아주 긴 원본에서 수백 장을 한 번에 요청하지 않게
-  // (그래도 캐시되면 다음부턴 즉시). 상한에 걸리면 간격이 넓어질 뿐 정렬은 유지된다.
+  // 구간 중앙 시각들. **개수를 확실히 묶는다** — 예전엔 최대 120장을 깔았는데, zoom=1 에서는
+  // 그게 전부 화면 안이라 lazy 여도 첫 로드에 다 요청된다. 프레임 하나하나가 /frame?t= →
+  // 서버 ffmpeg 추출 + 이미지 디코드라, 120장이면 브라우저와 서버가 동시에 마비됐다.
+  // 이 스트립은 "어디가 어느 장면인지" 오리엔테이션용이라 촘촘할 필요가 없다: 전체를
+  // 최대 maxFrames 장으로만 훑고, 짧은 클립은 minSpacingSec 로 더 적게 깐다.
   const marks = useMemo(() => {
     if (!mediaId || !(duration > 0)) return [];
-    const MAX = 120;
-    const step = Math.max(stepSec, duration / MAX);
+    const count = Math.min(maxFrames, Math.max(1, Math.floor(duration / minSpacingSec)));
+    const step = duration / count;
     const out: { t: number; leftPct: number; widPct: number }[] = [];
-    for (let s = 0; s < duration; s += step) {
+    for (let i = 0; i < count; i++) {
+      const s = i * step;
       const e = Math.min(duration, s + step);
       out.push({
         t: (s + e) / 2,
@@ -47,7 +54,7 @@ export function Filmstrip({
       });
     }
     return out;
-  }, [mediaId, duration, stepSec]);
+  }, [mediaId, duration, maxFrames, minSpacingSec]);
 
   if (!mediaId || marks.length === 0) {
     // 원본이 없거나 길이를 모르면 스트립을 그리지 않는다(빈 회색 밭 대신 조용히 없음).
@@ -67,6 +74,7 @@ export function Filmstrip({
             src={frameUrl(apiBase, mediaId, m.t)}
             alt=""
             loading="lazy"
+            decoding="async"
             draggable={false}
             className="h-full w-full object-cover"
             // 프레임 추출 실패(끝단 등)는 조용히 비운다 — 한 칸 회색이 낫지 스트립 전체가 깨지지 않게.
