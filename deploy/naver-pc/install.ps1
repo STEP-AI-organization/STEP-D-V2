@@ -39,7 +39,11 @@ Write-Host "    OK  .env · 네이버 세션"
 # 후에도 pm2 resurrect 로 살아난다.
 Write-Host "==> 워커 등록 (pm2)"
 pm2 delete $PmName 2>&1 | Out-Null   # 있으면 갈아끼운다
-pm2 start "pnpm" --name $PmName --cwd $RepoRoot -- --filter @stepd/server worker:naver
+# pnpm 을 거치지 않는다. pnpm 은 스크립트 실행 전 자동 install 을 돌리는데, 빌드 스크립트
+# 미승인(ERR_PNPM_IGNORED_BUILDS)만으로 exit 1 을 내서 **워커가 아예 안 뜬다**
+# (2026-08-12 윈도우2 실측). node 로 직접 띄우면 그 단계가 없다.
+$serverDir = Join-Path $RepoRoot "apps\server"
+pm2 start "node" --name $PmName --cwd $serverDir -- --unhandled-rejections=warn --import tsx --env-file-if-exists=.env scripts/worker-naver.mts
 if ($LASTEXITCODE -ne 0) { throw "pm2 start 실패" }
 pm2 save | Out-Null
 Write-Host "    OK  $PmName"

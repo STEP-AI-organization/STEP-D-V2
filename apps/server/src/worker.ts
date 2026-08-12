@@ -1678,7 +1678,12 @@ async function main(): Promise<void> {
     console.error("[worker] uncaughtException (surviving):", err);
   });
 
-  if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET) {
+  // YouTube OAuth 자격증명은 **그걸 쓰는 레인에서만** 필요하다.
+  // 네이버·GEBD 워커는 YouTube 를 건드리지 않는데, 여기서 막으면 그 머신에 쓰지도 않을
+  // 시크릿을 넣어야 워커가 뜬다(2026-08-12 윈도우2 에서 실제로 막혔다).
+  // 시크릿은 필요한 곳에만 두는 게 맞다.
+  const NEEDS_YT = WORKER_JOBS !== "naver" && WORKER_JOBS !== "gebd";
+  if (NEEDS_YT && (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET)) {
     console.error("[worker] GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET are required");
     process.exit(1);
   }
