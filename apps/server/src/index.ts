@@ -4403,6 +4403,14 @@ app.post("/api/automation/rules", async (c) => {
     // 렌더 템플릿 — 자동배포 화면에서 선택. 빈 값이면 프로그램 장르 자동 선택.
     ...(typeof body.templateId === "string" && body.templateId.trim()
       ? { templateId: body.templateId.trim() } : {}),
+    // 위치 미세조정 — 숫자 필드만 통과 (자동배포 화면 슬라이더).
+    ...((() => {
+      const l = body.layout as Record<string, unknown> | undefined;
+      if (!l || typeof l !== "object") return {};
+      const pick = (k: string) => (typeof l[k] === "number" && Number.isFinite(l[k]) ? { [k]: l[k] } : {});
+      const layout = { ...pick("titleY"), ...pick("channelIconY"), ...pick("channelBoxY"), ...pick("channelIconSize") };
+      return Object.keys(layout).length ? { layout } : {};
+    })()),
   };
   await upsertAutomationRule(row);
   return c.json({

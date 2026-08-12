@@ -55,6 +55,50 @@ const RESULT_TAG: Record<string, string> = {
   skipped: "sd-tag",
 };
 
+/**
+ * 서버 factory.ts TEMPLATE_SEEDS 의 UI 미러 — 미리보기·슬라이더 초기값용.
+ * 서버 시드를 바꾸면 여기도 같이 바꿔야 미리보기가 실제 렌더와 일치한다.
+ */
+const TEMPLATE_SEED_UI: Record<string, { accent: string; titleY: number; iconY: number; boxY: number; iconSize: number }> = {
+  "broadcast-standard": { accent: "#40E0E0", titleY: 11, iconY: 68, boxY: 79.5, iconSize: 50 },
+  "broadcast-drama": { accent: "#40E0E0", titleY: 8, iconY: 77, boxY: 87.5, iconSize: 50 },
+  "broadcast-clean": { accent: "#FF4040", titleY: 11, iconY: 80, boxY: 92, iconSize: 40 },
+};
+
+/** 9:16 미니 캔버스에 템플릿 기하(띠·영상 영역)와 제목·로고·시간박스 위치를 그린다. */
+function TemplatePreview({ template, accent, layout }: {
+  template: FrameTemplate | null;
+  accent: string;
+  layout: { titleY: number; channelIconY: number; channelBoxY: number; channelIconSize: number };
+}) {
+  const video = template?.video ?? { x: 0, y: 34.2, w: 100, h: 31.7 };
+  const iconPct = (layout.channelIconSize * 3 / 1920) * 100; // px(에디터) → 출력높이 → %
+  return (
+    <div className="relative w-[120px] shrink-0 overflow-hidden rounded-md border"
+      style={{ aspectRatio: "9/16", background: "#000", borderColor: "var(--sd-border)" }}>
+      {/* 영상 영역 */}
+      <div className="absolute" style={{
+        left: `${video.x}%`, top: `${video.y}%`, width: `${video.w}%`, height: `${video.h}%`,
+        background: "linear-gradient(135deg,#2a3f4d,#1a2630)",
+      }} />
+      {/* 제목 2줄 */}
+      <div className="absolute inset-x-1 text-center font-bold leading-tight"
+        style={{ top: `${layout.titleY}%`, fontSize: 7, color: "#fff" }}>
+        훅 첫 줄 텍스트
+        <div style={{ color: accent }}>둘째 줄 강조</div>
+      </div>
+      {/* 로고 */}
+      <div className="absolute left-1/2 -translate-x-1/2 rounded-sm"
+        style={{ top: `${layout.channelIconY}%`, width: `${iconPct * 1.4}%`, height: `${iconPct}%`, background: "#666" }} />
+      {/* 시간 박스 */}
+      <div className="absolute left-1/2 -translate-x-1/2 rounded-[2px] px-1 text-center font-bold"
+        style={{ top: `${layout.channelBoxY}%`, fontSize: 5.5, color: "#fff", background: "#3D7BD9" }}>
+        (수) 밤 10시 30분
+      </div>
+    </div>
+  );
+}
+
 const STEPS = [
   { n: "01", title: "회차 수신", desc: "새 회차 원본 감지 · 없으면 스킵" },
   { n: "02", title: "분석", desc: "분석 큐 투입 · 완료까지 다음 순방에 재확인" },
@@ -368,11 +412,20 @@ function RuleForm({
   const [win, setWin] = useState("방영 익일 10시");
   const [templateId, setTemplateId] = useState("");   // "" = 프로그램 장르 자동
   const [templates, setTemplates] = useState<FrameTemplate[]>([]);
+  // 위치 미세조정 — 시드 기본값에서 시작, 슬라이더로 조절. 저장 시 layout 으로 전송.
+  const [layout, setLayout] = useState<{ titleY: number; channelIconY: number; channelBoxY: number; channelIconSize: number } | null>(null);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     void fetchShortsTemplates().then(setTemplates).catch(() => setTemplates([]));
   }, []);
+
+  // 템플릿 바꾸면 슬라이더를 그 템플릿의 시드 기본값으로 리셋.
+  const effectiveTemplate = templateId || "broadcast-standard";
+  useEffect(() => {
+    const s = TEMPLATE_SEED_UI[effectiveTemplate] ?? TEMPLATE_SEED_UI["broadcast-standard"];
+    setLayout({ titleY: s.titleY, channelIconY: s.iconY, channelBoxY: s.boxY, channelIconSize: s.iconSize });
+  }, [effectiveTemplate]);
 
   // 계정 ID 를 자유 입력으로 두면 오타 하나로 규칙이 "실행 중" 배지를 달고 영원히 아무것도
   // 안 한다(순방이 채널 규칙을 못 찾으면 skipped 로만 남는다). 실재하는 규칙에서만 고르게 한다.
@@ -410,6 +463,7 @@ function RuleForm({
         gatePolicy: approveFirst ? "approve_first" : "hold_on_issue",
         window: win, enabled: true,
         ...(templateId ? { templateId } : {}),
+        ...(layout ? { layout } : {}),
       });
       await onSaved(r.notice);
     } catch (err) {
@@ -494,6 +548,34 @@ function RuleForm({
           로고·방영시간은 프로그램 설정(쇼츠 아이콘·편성 시간)에서 채워집니다.
         </p>
       </div>
+
+      {/* 미리보기 + 위치 조절 — 저장되는 렌더 기하와 같은 % 좌표를 그대로 그린다 */}
+      {layout && (
+        <div className="flex gap-3">
+          <TemplatePreview
+            template={templates.find((t) => t.name === effectiveTemplate) ?? null}
+            accent={(TEMPLATE_SEED_UI[effectiveTemplate] ?? TEMPLATE_SEED_UI["broadcast-standard"]).accent}
+            layout={layout}
+          />
+          <div className="flex-1 space-y-2 text-[10.5px]" style={{ color: "var(--sd-fg-dim)" }}>
+            {([
+              ["제목 위치", "titleY", 3, 30],
+              ["로고 위치", "channelIconY", 60, 92],
+              ["시간박스 위치", "channelBoxY", 62, 94],
+              ["로고 크기", "channelIconSize", 20, 90],
+            ] as const).map(([label, key, min, max]) => (
+              <label key={key} className="block">
+                {label} <span className="opacity-70">{Math.round(layout[key])}{key === "channelIconSize" ? "px" : "%"}</span>
+                <input
+                  type="range" min={min} max={max} step={0.5} value={layout[key]}
+                  onChange={(e) => setLayout({ ...layout, [key]: Number(e.target.value) })}
+                  className="w-full"
+                />
+              </label>
+            ))}
+          </div>
+        </div>
+      )}
 
       <label className="flex items-center gap-2 text-[11.5px]" style={{ color: "var(--sd-fg)" }}>
         <input type="checkbox" checked={approveFirst} onChange={(e) => setApproveFirst(e.target.checked)} />

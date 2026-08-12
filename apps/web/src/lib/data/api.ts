@@ -765,6 +765,8 @@ export interface AutomationRule {
   enabled: boolean;
   /** 렌더 템플릿 (assets/shorts-template 이름). 미지정 = 프로그램 장르 자동. */
   templateId?: string;
+  /** 템플릿 위치 미세조정 — 자동배포 화면 슬라이더 (시드 기본값 위에 덮임). */
+  layout?: { titleY?: number; channelIconY?: number; channelBoxY?: number; channelIconSize?: number };
 }
 
 export interface RuleRun {

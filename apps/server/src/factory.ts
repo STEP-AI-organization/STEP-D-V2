@@ -470,6 +470,7 @@ export function pickTemplateId(program?: any): string {
 
 export function autoEditorState(
   rec: any, programTitle: string, program?: any, forcedTemplateId?: string,
+  layoutOverride?: { titleY?: number; channelIconY?: number; channelBoxY?: number; channelIconSize?: number },
 ): Record<string, unknown> {
   const hook = String(rec.hookQuote ?? "").replace(/^['"'"]|['"'"]$/g, "").trim();
   const headline = hook && hook.length <= 30 ? hook : String(rec.titleLine1 ?? rec.title ?? "");
@@ -505,6 +506,14 @@ export function autoEditorState(
     // 방영시간 박스 — 프로그램 설정의 schedule 그대로 (예: "(수) 밤 10시 30분").
     ...(seed.bottom === "logo-box" && String(program?.schedule ?? "").trim()
       ? { channelBoxText: String(program.schedule).trim(), channelBoxY: seed.boxY }
+      : {}),
+    // 자동배포 규칙의 위치 미세조정 — 시드 기본값 위에 덮인다 (숫자 필드만).
+    ...(layoutOverride && typeof layoutOverride === "object"
+      ? Object.fromEntries(
+          (["titleY", "channelIconY", "channelBoxY", "channelIconSize"] as const)
+            .filter((k) => Number.isFinite(layoutOverride[k]))
+            .map((k) => [k, layoutOverride[k]]),
+        )
       : {}),
   };
 }

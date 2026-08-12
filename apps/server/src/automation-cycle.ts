@@ -120,7 +120,8 @@ export async function runAutomationCycle(): Promise<CycleReport> {
           distributions: [],
           /** 어느 규칙이 만든 미디어인지 — 사고 추적·롤백 대상 선별에 쓴다. */
           automationRuleId: rule.id,
-          editorState: autoEditorState(rec, ep.programTitle ?? "", program, (rule as any).templateId),
+          editorState: autoEditorState(rec, ep.programTitle ?? "", program,
+            (rule as any).templateId, (rule as any).layout),
         };
 
         const ok = await commitAndInherit(clipId, clip, rec.id, rec);
