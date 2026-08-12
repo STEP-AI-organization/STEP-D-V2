@@ -1,5 +1,6 @@
 import { Sidebar } from "@/components/shell/sidebar";
 import { Topbar } from "@/components/shell/topbar";
+import { ConnectionBanner } from "@/components/shell/connection-banner";
 
 /**
  * 앱 셸 (README §0) — 좌측 고정 사이드바 206px + 상단바 54px + 스크롤 본문 padding 20px.
@@ -17,6 +18,8 @@ export function AppShell({
       <Sidebar />
       <div className="pl-[206px]">
         <Topbar breadcrumb={breadcrumb} />
+        {/* 빈 화면이 "데이터 없음"인지 "서버 미연결"인지 구분해 준다. */}
+        <ConnectionBanner />
         <main className="p-5">{children}</main>
 
         {/* 법적 링크는 로그인·메뉴 없이 루트에서 닿아야 한다 (TikTok 앱 심사 체크리스트). */}

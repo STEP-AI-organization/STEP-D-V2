@@ -26,9 +26,34 @@ export interface ServerState {
   media: unknown[];
 }
 
+/** 상태코드와 서버 메시지를 함께 들고 다니는 에러. `admin/src/api.ts` 와 같은 모양이다. */
+export class ApiError extends Error {
+  constructor(public status: number, message: string) {
+    super(message);
+    this.name = "ApiError";
+  }
+}
+
+/**
+ * 응답 → 결과. 실패면 **서버가 준 사유를 살려서** 던진다.
+ *
+ * ⚠️ 예전에는 `throw new Error(\`${res.status} ${res.statusText}\`)` 로 본문을 **읽지도 않았다.**
+ * 그래서 서버가 공들여 쓴 한국어 사유가 전부 사라졌다 —
+ * `"워크스페이스 관리는 owner/admin 만 가능합니다"` 가 화면에서는 `403 Forbidden` 이 됐다.
+ * 사용자는 자기 권한 문제의 HTTP 상태코드를 듣고, 무엇을 해야 하는지는 못 듣는다.
+ *
+ * 서버는 라우트마다 `error` 또는 `message` 키를 쓴다(둘 다인 경우도 있다) — 둘 다 본다.
+ * 같은 해법이 `admin/src/api.ts:20` 에 이미 있었다. 새로 만들지 않고 그 형태를 가져왔다.
+ */
 async function json<T>(res: Response): Promise<T> {
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  if (!res.ok) throw new ApiError(res.status, await errorMessageOf(res));
   return (await res.json()) as T;
+}
+
+/** 실패 응답에서 사람이 읽을 사유를 뽑는다. 본문이 없거나 JSON 이 아니면 상태줄로 물러난다. */
+export async function errorMessageOf(res: Response): Promise<string> {
+  const body = await res.json().catch(() => null) as { message?: string; error?: string } | null;
+  return body?.message ?? body?.error ?? `${res.status} ${res.statusText}`;
 }
 
 /** Probe + load full state. Rejects (fast) if the server isn't up. */
@@ -163,7 +188,7 @@ export interface MediaAnalysis {
 /** PPL 결과 별도 폴링 — 분석 진행 중에도 도착하는 대로 UI에 반영 (faces와 동일 패턴). */
 export async function getMediaPpl(mediaId: string): Promise<PplData> {
   const res = await fetch(`${API_BASE}/media/${mediaId}/ppl`, { cache: "no-store" });
-  if (!res.ok) throw new Error(`ppl fetch failed (${res.status})`);
+  if (!res.ok) throw new ApiError(res.status, `ppl fetch failed: ${await errorMessageOf(res)}`);
   return res.json();
 }
 export function pplFrameUrl(apiBase: string, mediaId: string, framePath: string): string {
@@ -175,7 +200,7 @@ export function pplFrameUrl(apiBase: string, mediaId: string, framePath: string)
 /** Content-pipeline result for one uploaded media (STT → scenes → shorts). */
 export async function getMediaAnalysis(mediaId: string): Promise<MediaAnalysis> {
   const res = await fetch(`${API_BASE}/media/${mediaId}/analysis`, { cache: "no-store" });
-  if (!res.ok) throw new Error(`analysis fetch failed (${res.status})`);
+  if (!res.ok) throw new ApiError(res.status, `analysis fetch failed: ${await errorMessageOf(res)}`);
   return res.json();
 }
 
@@ -198,7 +223,7 @@ export interface MediaFaces {
 }
 export async function getMediaFaces(mediaId: string): Promise<MediaFaces> {
   const res = await fetch(`${API_BASE}/media/${mediaId}/faces`, { cache: "no-store" });
-  if (!res.ok) throw new Error(`faces fetch failed (${res.status})`);
+  if (!res.ok) throw new ApiError(res.status, `faces fetch failed: ${await errorMessageOf(res)}`);
   return res.json();
 }
 export function faceCropUrl(apiBase: string, mediaId: string, framePath: string): string {
@@ -224,7 +249,7 @@ export async function patchMediaFacesMapping(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ mapping }),
   });
-  if (!res.ok) throw new Error(`mapping save failed (${res.status})`);
+  if (!res.ok) throw new ApiError(res.status, `mapping save failed: ${await errorMessageOf(res)}`);
   return res.json();
 }
 
@@ -250,7 +275,7 @@ export interface EpisodeCastResponse {
 
 export async function fetchEpisodeCast(mediaId: string): Promise<EpisodeCastResponse> {
   const res = await fetch(`${API_BASE}/media/${mediaId}/cast`, { cache: "no-store" });
-  if (!res.ok) throw new Error(`cast fetch failed (${res.status})`);
+  if (!res.ok) throw new ApiError(res.status, `cast fetch failed: ${await errorMessageOf(res)}`);
   return res.json();
 }
 
@@ -306,7 +331,7 @@ export async function reanalyzeMedia(mediaId: string, fast = false): Promise<{ o
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ ...(fast ? { fast: true } : {}) }),
   });
-  if (!res.ok) throw new Error(`재분석 요청 실패 (${res.status})`);
+  if (!res.ok) throw new ApiError(res.status, `재분석 요청 실패: ${await errorMessageOf(res)}`);
   return res.json();
 }
 
@@ -773,7 +798,7 @@ export async function saveAutomationRule(
 
 export async function deleteAutomationRule(id: string): Promise<{ notice: string }> {
   const res = await fetch(`${API_BASE}/automation/rules/${id}`, { method: "DELETE" });
-  if (!res.ok) throw new Error(`${res.status}`);
+  if (!res.ok) throw new ApiError(res.status, await errorMessageOf(res));
   return res.json();
 }
 
@@ -783,7 +808,7 @@ export async function setAutomationPaused(paused: boolean): Promise<{ notice: st
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ paused }),
   });
-  if (!res.ok) throw new Error(`${res.status}`);
+  if (!res.ok) throw new ApiError(res.status, await errorMessageOf(res));
   return res.json();
 }
 
@@ -845,7 +870,7 @@ export async function selectThumbnailCandidate(mediaId: string, path: string): P
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ path }),
   });
-  if (!res.ok) throw new Error(`${res.status}`);
+  if (!res.ok) throw new ApiError(res.status, await errorMessageOf(res));
 }
 
 // ── 에셋 (FLOWS F8 · 서버 migrations/0016) ──────────────────────────────────────
@@ -940,7 +965,7 @@ export async function deleteAssets(ids: string[]): Promise<number> {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ ids }),
   });
-  if (!res.ok) throw new Error(`${res.status}`);
+  if (!res.ok) throw new ApiError(res.status, await errorMessageOf(res));
   return (await res.json()).deleted;
 }
 
@@ -999,7 +1024,7 @@ export async function deleteChannelRule(platform: string, accountId: string): Pr
   const res = await fetch(`${API_BASE}/channel-rules/${platform}/${encodeURIComponent(accountId)}`, {
     method: "DELETE",
   });
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  if (!res.ok) throw new ApiError(res.status, await errorMessageOf(res));
 }
 
 /** 배포 모달용 — 이 미디어들을 각 채널에 보낼 수 있는지. 키는 `platform:accountId`. */
@@ -1179,7 +1204,7 @@ export async function saveCard(input: {
 
 export async function deleteSavedCard(): Promise<void> {
   const res = await fetch(`${API_BASE}/billing/card`, { method: "DELETE", credentials: "include" });
-  if (!res.ok) throw new Error(`${res.status}`);
+  if (!res.ok) throw new ApiError(res.status, await errorMessageOf(res));
 }
 
 /**
@@ -1318,7 +1343,7 @@ export async function deleteRightsIssue(id: string, actor: string): Promise<void
   const res = await fetch(`${API_BASE}/rights-issues/${id}?actor=${encodeURIComponent(actor)}`, {
     method: "DELETE",
   });
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  if (!res.ok) throw new ApiError(res.status, await errorMessageOf(res));
 }
 
 /** "이슈 없음" 판정 — 이것도 사람의 판단이다(F2 Invariant: 미판정과 구분). */
@@ -1549,7 +1574,7 @@ export interface MetaAccountInfo {
 
 export async function fetchMetaAccounts(): Promise<MetaAccountInfo[]> {
   const res = await fetch(`${API_BASE}/meta/accounts`);
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  if (!res.ok) throw new ApiError(res.status, await errorMessageOf(res));
   const data = (await res.json()) as { accounts: MetaAccountInfo[] };
   return data.accounts;
 }
@@ -1564,13 +1589,13 @@ export function getMetaAuthUrl(returnTo?: string, rerequest = false): string {
 
 export async function deleteMetaAccount(publicId: string): Promise<void> {
   const res = await fetch(`${API_BASE}/meta/accounts/${publicId}`, { method: "DELETE" });
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  if (!res.ok) throw new ApiError(res.status, await errorMessageOf(res));
 }
 
 /** 연동해제 — 토큰만 끊고 계정 행은 남긴다. */
 export async function disconnectMetaAccount(publicId: string): Promise<void> {
   const res = await fetch(`${API_BASE}/meta/accounts/${publicId}/disconnect`, { method: "POST" });
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  if (!res.ok) throw new ApiError(res.status, await errorMessageOf(res));
 }
 
 // ── TikTok accounts ────────────────────────────────────────────────────────────
@@ -1590,7 +1615,7 @@ export interface TikTokAccountInfo {
 
 export async function fetchTikTokAccounts(): Promise<TikTokAccountInfo[]> {
   const res = await fetch(`${API_BASE}/tiktok/accounts`);
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  if (!res.ok) throw new ApiError(res.status, await errorMessageOf(res));
   const data = (await res.json()) as { accounts: TikTokAccountInfo[] };
   return data.accounts;
 }
@@ -1604,13 +1629,13 @@ export function getTikTokAuthUrl(returnTo?: string): string {
 
 export async function deleteTikTokAccount(publicId: string): Promise<void> {
   const res = await fetch(`${API_BASE}/tiktok/accounts/${publicId}`, { method: "DELETE" });
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  if (!res.ok) throw new ApiError(res.status, await errorMessageOf(res));
 }
 
 /** 연동해제 — 토큰만 끊고 계정 행은 남긴다. */
 export async function disconnectTikTokAccount(publicId: string): Promise<void> {
   const res = await fetch(`${API_BASE}/tiktok/accounts/${publicId}/disconnect`, { method: "POST" });
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  if (!res.ok) throw new ApiError(res.status, await errorMessageOf(res));
 }
 
 /**
@@ -1621,7 +1646,7 @@ export async function triggerChannelAnalysis(
   channelId: string,
 ): Promise<{ ok: boolean; queued: boolean; note: string }> {
   const res = await fetch(`${API_BASE}/youtube/pipeline/run/${channelId}`, { method: "POST" });
-  if (!res.ok) throw new Error(`analysis trigger failed (${res.status})`);
+  if (!res.ok) throw new ApiError(res.status, `analysis trigger failed: ${await errorMessageOf(res)}`);
   return res.json();
 }
 
@@ -1982,7 +2007,7 @@ export interface ThumbnailStyleProfile {
 export async function fetchThumbnailStyle(programId: string): Promise<ThumbnailStyleProfile | null> {
   const res = await fetch(`${API_BASE}/programs/${programId}/thumbnail-style`);
   if (res.status === 404) return null;
-  if (!res.ok) throw new Error(`스타일 조회 실패 (${res.status})`);
+  if (!res.ok) throw new ApiError(res.status, `스타일 조회 실패: ${await errorMessageOf(res)}`);
   return (await res.json()) as ThumbnailStyleProfile;
 }
 
