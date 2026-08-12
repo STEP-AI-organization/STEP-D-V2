@@ -51,7 +51,7 @@ Hono 단일 진입점(index.ts, **~7700줄, 라우트 204개**) + 별도 워커 
 | 파일 | 역할 |
 |------|------|
 | `src/index.ts` | 모든 HTTP 라우트. 여기 한 파일에 유지. **Cloud Run은 잡을 큐잉만 한다.** |
-| `src/worker.ts` | **워커 프로세스 진입점.** 잡 17종 · 레인 4개 · drain 모드 (아래 참조) |
+| `src/worker.ts` | **워커 프로세스 진입점.** 잡 18종 · 레인 4개 · drain 모드 (아래 참조) |
 | `src/queue.ts` | Postgres job_queue (FOR UPDATE SKIP LOCKED · dedupeKey · 지수 백오프 · 5분 하트비트) |
 | `src/channel-pipeline.ts` | channel.analyze — 업로드 동기화 + 채널 애널리틱스/일별 수익 백필 |
 | `src/content-pipeline.ts` | content.analyze — `python -m core.analyze` 스폰, 진행률 파싱(@@PROGRESS→episode.pipeline), 결과+프레임 영구 저장, 추천 배선. 미디어별 고정 작업 디렉토리로 재시도 시 체크포인트 재개 |
@@ -68,13 +68,14 @@ Hono 단일 진입점(index.ts, **~7700줄, 라우트 204개**) + 별도 워커 
 
 `src/pipeline.ts`는 이제 `newId` 헬퍼만 export한다(구 sqlite `db.ts`·`storage.ts`, 휴리스틱 `buildRecommendations()`는 정리 완료). 실제 추천은 core/ AI 파이프라인이 만든다.
 
-### 워커 — 잡 17종 · 레인 4개 · drain 모드
+### 워커 — 잡 18종 · 레인 4개 · drain 모드
 
 프로세스 하나가 다 처리하지 않는다. `WORKER_JOBS` 로 **레인을 갈라** 서로 굶기지 않게 한다.
 
 ```
 content : content.analyze · youtube.download · match.align · match.segment · match.learn
-          → 파이썬·ffmpeg 무거운 잡. Cloud Run Job `stepd-worker-content`
+          · thumbnail.style · thumbnail.generate · clip.metadata
+          → 파이썬·ffmpeg·이미지생성 무거운 잡. Cloud Run Job `stepd-worker-content`
 youtube : channel.analyze · video.analyze · video.hotwatch · video.comments · distribution.publish
           → 짧고 API 쿼터 위주. Cloud Run Job `stepd-worker-youtube`
 gebd    : gebd.detect
@@ -82,7 +83,9 @@ gebd    : gebd.detect
 naver   : naver.publish
           → 사무실 상시 PC 전용. 네이버는 공개 업로드 API 가 없어 Playwright 자동화인데,
             해외 데이터센터 IP 로 로그인하면 캡차·2차인증에 막힌다 → 한국 IP 필요
-thumbnail.style · thumbnail.generate 는 레인 미지정(=all) 워커가 집는다
+⚠️ 2026-08-12 이전에는 thumbnail.* 가 **어느 레인에도 없어** 프로덕션(content·youtube 워커만
+   뜬다)에서 아무도 집지 않았다. 잡을 추가하면 반드시 레인에 넣을 것 —
+   `worker-lanes.test.ts` 가 강제한다.
 ```
 
 ⚠️ **`all` 워커는 머신 전용 레인(gebd·naver)을 집지 않는다**(`ALL_LANE_TYPES`). 예전엔
@@ -116,7 +119,7 @@ rights · dialogue · chyron · summary · emb_dialogue vector(768) · emb_summa
 `search-embed.ts`(RETRIEVAL_QUERY). Vertex 실패 시 **키워드축(pg_trgm) 단독 폴백** — 한국어는
 키워드 매칭이 강해서 벡터 없이도 검색이 성립한다.
 
-**주요 라우트** — 총 118개 (전체: [docs/reference/api-reference.md](docs/reference/api-reference.md))
+**주요 라우트** — 총 204개 (전체: [docs/reference/api-reference.md](docs/reference/api-reference.md))
 ```
 GET  /health · /api/state · /api/search        # 검색 = 하이브리드(벡터+키워드)
 POST /api/media/upload-init → finalize   # 브라우저→GCS 직접 resumable 업로드 (대용량 표준 경로)
@@ -127,7 +130,7 @@ GET/POST /api/programs/:id/cast          # 캐스트 사전등록 (인물 라벨
 POST /api/programs/:id/autofill · /profile/generate · /thumbnail-style
 GET/POST/PATCH/DELETE /api/thumbnail-refs/*      # 썸네일 레퍼런스 13개 라우트
 POST /api/recommendations/:id/adopt · /reject
-POST /api/clips/:id/export · /generate-metadata · /regenerate-titles
+POST /api/clips/:id/export · /generate-metadata(채널별 메타) · /regenerate-titles
 POST /api/distributions/publish · /retry # YouTube 실업로드(게이트 OFF) · Meta/SMR 은 상태 기록만
 GET/POST /api/youtube/*                  # auth(mode=analytics|publish) · callback · channels ·
                                          # analytics/:id(/daily) · sync · videos · trends · comments

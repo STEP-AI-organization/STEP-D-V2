@@ -246,6 +246,10 @@ import {
 } from "./storage-gcs.ts";
 import { castPrefix, stylePrefix, thumbnailPrefix } from "./thumbnail-assets.ts";
 import { isClipRendered, upsertDistribution, isNaverChannel, NAVER_CHANNELS } from "./publish-guard.ts";
+import {
+  buildMetadataPrompt, normalizeForChannel, validateForChannel,
+  META_CHANNELS, CHANNEL_SPECS, type MetaChannel,
+} from "./clip-metadata.ts";
 import { naverUploadEnabled, NAVER_DISABLED_MESSAGE, DESC_MIN } from "./naver-gate.ts";
 import {
   initialPipeline,
@@ -5150,6 +5154,17 @@ app.post("/api/recommendations/:id/adopt", async (c) => {
     const latest = await getEntity<any>("recommendation", recId);
     return c.json({ clipId: latest?.adoptedClipId });
   }
+  // 채널별 업로드 메타를 **채택 시점에 미리** 만들어 둔다.
+  //
+  // 실무 동선이 이유다: 운영자는 채택 → 편집 → 발행으로 가는데, 발행 모달에서야 문구를
+  // 만들면 채널마다 몇 초씩 기다려야 하고 여러 건을 몰아 발행할 때 그만큼 곱해진다.
+  // 미리 만들어 두면 모달은 빈칸 없이 열리고 사람은 고치기만 하면 된다.
+  //
+  // ⚠️ 채택 응답을 붙잡지 않는다 — 생성이 느리거나 실패해도 채택 자체는 성공해야 한다.
+  //    실패하면 발행 화면의 "메타 생성" 버튼으로 다시 만들 수 있다.
+  void enqueue("clip.metadata", { clipId }, { dedupeKey: `clip.metadata:${clipId}` })
+    .catch((e) => console.error(`[adopt] 메타데이터 잡 큐잉 실패 ${clipId}:`, e));
+
   return c.json({ clipId, clip, gate: await gateFor("clip", clipId) });
 });
 
@@ -5567,88 +5582,112 @@ app.post("/api/clips/:id/regenerate-titles", async (c) => {
 
 // ── 업로드 메타데이터 AI 자동 생성 — YouTube 업로드용 title/description/tags를 자막 근거로 생성.
 //    저장 X. 프론트 MetadataButton의 '생성' 버튼이 호출 → 결과를 state.uploadMeta에 얹는다. ──
+/**
+ * 채널별 업로드 메타데이터 생성.
+ *
+ * 예전에는 **원본 자막 40줄만** 다시 읽어 문구 한 벌을 만들고, 그걸 모든 채널에 그대로 썼다.
+ * 두 가지가 잘못이었다:
+ *  - 파이프라인이 이미 비싸게 만들어 둔 것(분석 제목·요약·훅 대사·등장 인물)을 안 썼다.
+ *  - 채널 규격이 서로 다른데(네이버 클립은 제목 필드가 없고 설명 10자↑·카테고리 필수)
+ *    한 벌을 공유해서, 발행 시점에 사람이 손으로 메웠다.
+ *
+ * 지금은 **바탕 한 벌을 LLM 으로 만들고, 채널 맞춤은 결정론으로** 한다(clip-metadata.ts).
+ * 채널 수만큼 LLM 을 부르면 6배 비싸지고 채널 간 내용이 달라져 검토가 불가능해진다.
+ */
 app.post("/api/clips/:id/generate-metadata", async (c) => {
   const clipId = c.req.param("id");
   const clip = await getEntity<any>("clip", clipId);
-  if (!clip) return c.json({ error: "clip not found" }, 404);
+  if (!clip) return c.json({ error: "clip_not_found", message: "클립을 찾을 수 없습니다." }, 404);
 
   const start = Number(clip.startTime ?? 0);
   const end = Number(clip.endTime ?? start + (clip.durationSec ?? 0));
-  if (!(end > start)) return c.json({ error: "clip has no valid segment" }, 400);
 
-  const resolved = clip.sourceMediaId
-    ? await resolveTranscript(clip.sourceMediaId)
-    : { segments: [] as unknown[], updatedAt: 0, source: "none" as const };
-  const captions = windowCaptions(resolved.segments, start, end);
-  if (captions.length === 0) {
-    return c.json({ error: "no captions in clip segment — cannot generate metadata" }, 409);
+  // 프로그램·회차 맥락. 인물 이름은 **등록 캐스트가 정본**이라 여기서 가져온다.
+  const episode = clip.episodeId ? await getEntity<any>("episode", clip.episodeId) : null;
+  const program = episode?.programId ? await getEntity<any>("program", episode.programId) : null;
+  const cast = Array.isArray(program?.cast) ? program.cast.map((x: any) => String(x?.name ?? x)).filter(Boolean) : [];
+
+  // 추천에서 승계된 재료가 있으면 그게 가장 좋다 — 훅 대사·인물은 분석이 이미 뽑아 뒀다.
+  const rec = clip.sourceRecommendationId
+    ? await getEntity<any>("recommendation", clip.sourceRecommendationId)
+    : null;
+
+  // 자막은 **보조**다. 없어도 진행한다(대사 없는 리액션 클립도 메타가 필요하다).
+  let captions: string[] = [];
+  if (clip.sourceMediaId && end > start) {
+    const resolved = await resolveTranscript(clip.sourceMediaId).catch(() => null);
+    if (resolved) {
+      captions = windowCaptions(resolved.segments, start, end)
+        .slice(0, 40)
+        .map((cp: any) => `[${cp.start.toFixed(1)}s] ${String(cp.text).slice(0, 180)}`);
+    }
   }
 
-  const shown = captions.slice(0, 40)
-    .map((cp) => `[${cp.start.toFixed(1)}s] ${cp.text.slice(0, 180)}`)
-    .join("\n");
-  const currentTitle = String(clip.title ?? "").trim() || "-";
-  const channelHint = typeof clip.programTitle === "string" ? clip.programTitle : "";
-
-  // 제목은 '예능 자막 톤' 원칙 유지 (title-prompt-yeneung-caption-tone 메모리 참고).
-  // 설명은 3~5 문장, 자연스럽고 담담하게. 마지막에 해시태그 2~4개.
-  // 태그는 YouTube 태그 필드용 5~10개, 인물·상황·프로그램 키워드.
-  const prompt =
-    "너는 한국 예능 유튜브 채널의 업로드 담당자다. 아래 자막이 이 쇼츠 클립의 실제 대사다. " +
-    "이 자막 안에서 벌어진 일만을 근거로 YouTube 업로드용 **title·description·tags**를 만들어라.\n\n" +
-    "[title — 예능 자막 톤]\n" +
-    "- 8~18자. 담백한 관찰조·현재형, 여운(…) 활용 가능.\n" +
-    "- 다음 어휘 금지: 미친/헐/실화/대박/소름/레전드/폭발/폭탄/충격/초토화/뒤집혔다/해버렸다/터졌다/저질렀다/스튜디오.\n" +
-    "- 화살표(→)·이모지·특수문자 금지. ㅋㅋ·ㅎㅎ 반복 금지.\n" +
-    "- 두루뭉술 명사(썰/이야기/모먼트/사연) 금지.\n\n" +
-    "[description — 3~5문장 · 자연스럽게]\n" +
-    "- 클립에서 벌어지는 상황을 간결히 소개. 감정어휘 남발 금지, TV 프로그램 소개 톤.\n" +
-    "- 등장 인물·상황·핵심 대사는 자막에 있는 것만.\n" +
-    "- 마지막 줄에 관련 해시태그 2~4개 (프로그램/인물/장르 키워드).\n\n" +
-    "[tags — 5~10개]\n" +
-    "- YouTube 태그 필드용. 인물명·프로그램명·장르·상황 키워드. 한 태그당 1~4단어.\n" +
-    "- 자막에 등장한 실 인물명은 반드시 포함. 만들어낸 이름 금지.\n\n" +
-    "[절대 규칙]\n" +
-    "- **자막에 없는 사실 금지**. 인물·장소·수치·행동을 만들지 마라.\n\n" +
-    `[기존 제목] ${currentTitle}\n` +
-    (channelHint ? `[채널/프로그램] ${channelHint}\n` : "") +
-    `\n[자막]\n${shown}\n\n` +
-    'Return ONLY a valid JSON object like {"title":"...","description":"...","tags":["...","..."]}.';
-
-  const schema = {
-    type: "OBJECT",
-    properties: {
-      title: { type: "STRING" },
-      description: { type: "STRING" },
-      tags: { type: "ARRAY", items: { type: "STRING" } },
-    },
-    required: ["title", "description", "tags"],
-  };
+  const prompt = buildMetadataPrompt({
+    program: program?.title ?? clip.programTitle,
+    episode: episode?.title ?? (episode?.episodeNumber ? `${episode.episodeNumber}화` : undefined),
+    genre: program?.pipelineGenre ?? program?.section,
+    cast,
+    people: Array.isArray(rec?.people) ? rec.people : (Array.isArray(clip.people) ? clip.people : []),
+    workingTitle: rec?.title ?? clip.title,
+    summary: clip.synopsis ?? rec?.editNote,
+    hookQuote: rec?.hookQuote ?? clip.hookQuote,
+    hookType: rec?.hook,
+    captions,
+    durationSec: end > start ? end - start : clip.durationSec,
+  });
 
   try {
-    const res = await geminiGenerate(prompt, { schema, temperature: 1.1, maxOutputTokens: 2048 });
-    const parsed = parseJsonLoose(res.text) as { title?: unknown; description?: unknown; tags?: unknown };
-    const title = String(parsed.title ?? "").trim();
-    const description = String(parsed.description ?? "").trim();
-    const tagsRaw = Array.isArray(parsed.tags) ? parsed.tags : [];
-    const tags: string[] = [];
-    const seen = new Set<string>();
-    for (const t of tagsRaw) {
-      const v = String(t ?? "").trim().replace(/^#/, "");
-      if (!v || seen.has(v)) continue;
-      seen.add(v);
-      tags.push(v);
-      if (tags.length >= 10) break;
+    // ⚠️ schema 를 넘기지 않는다(AENA 결론) — 잘렸을 때 부분 복구가 가능해야 한다.
+    //    temperature 는 낮게: 사실을 다루는 작업이라 실행마다 달라질 이유가 없다.
+    const res = await geminiGenerate(prompt, { temperature: 0.4, maxOutputTokens: 2048 });
+    const parsed = parseJsonLoose(res.text) as Record<string, unknown>;
+    const asList = (v: unknown) => (Array.isArray(v) ? v.map((x) => String(x ?? "").trim()).filter(Boolean) : []);
+    const baseMeta = {
+      title: String(parsed.title ?? "").trim(),
+      description: String(parsed.description ?? "").trim(),
+      tags: asList(parsed.tags),
+      hashtags: asList(parsed.hashtags),
+    };
+    if (!baseMeta.title && !baseMeta.description) {
+      console.error("[generate-metadata] 빈 결과 — raw:", res.text?.slice(0, 500));
+      return c.json({
+        error: "empty_metadata",
+        message: "모델이 빈 결과를 돌려줬습니다. 다시 시도해 주세요.",
+        rawText: res.text?.slice(0, 500) ?? "",
+      }, 502);
     }
-    if (!title || !description) {
-      console.error("[generate-metadata] empty result — raw:", res.text?.slice(0, 500));
-      return c.json({ error: "empty metadata", rawText: res.text?.slice(0, 500) ?? "" }, 502);
+
+    // 채널 규칙(titlePrefix·hashtagTemplate)을 여기서 **드디어** 쓴다 — 그동안 입력만 받고
+    // 읽는 코드가 없었다.
+    const rules = await listChannelRules().catch(() => []);
+    const vars = {
+      program: program?.title ?? clip.programTitle,
+      episode: episode?.title ?? (episode?.episodeNumber ? `${episode.episodeNumber}화` : undefined),
+    };
+    const byChannel: Record<string, unknown> = {};
+    for (const ch of META_CHANNELS) {
+      const rule = rules.find((r: any) => r.platform === ch && r.enabled !== false);
+      byChannel[ch] = normalizeForChannel(baseMeta, ch, rule ?? {}, vars);
     }
-    return c.json({ title, description, tags });
+
+    // 사람이 고친 값을 덮지 않는다 — `edited` 가 붙은 채널은 그대로 둔다.
+    const prev = (clip.channelMeta ?? {}) as Record<string, any>;
+    for (const ch of Object.keys(byChannel)) {
+      if (prev[ch]?.edited) byChannel[ch] = prev[ch];
+    }
+
+    await putEntity("clip", clipId, {
+      ...clip,
+      channelMeta: byChannel,
+      channelMetaBase: baseMeta,
+      channelMetaAt: Date.now(),
+    });
+    return c.json({ base: baseMeta, channels: byChannel });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
-    console.error("[generate-metadata] failed:", msg);
-    return c.json({ error: "generation failed", message: msg.slice(0, 300) }, 502);
+    console.error("[generate-metadata] 실패:", msg);
+    return c.json({ error: "generation_failed", message: msg.slice(0, 300) }, 502);
   }
 });
 

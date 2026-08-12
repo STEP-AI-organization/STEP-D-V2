@@ -87,7 +87,7 @@ export interface FactoryJob {
 function now(): number { return Date.now(); }
 
 /** 워커에서 서버 라우트를 부를 때 쓰는 베이스. */
-function apiBase(): string {
+export function apiBase(): string {
   return (process.env.INTERNAL_API_BASE || process.env.PUBLIC_URL || "http://localhost:4100")
     .replace(/\/+$/, "");
 }
@@ -101,7 +101,7 @@ function apiBase(): string {
  * 예전엔 "Cloud Run 은 allow-unauthenticated" 전제로 무인증 fetch 였는데, 그 전제가
  * 깨지면서 렌더 요청이 GFE 401 로 조용히 죽었다 (2026-08-12 스모크 f_1bccf059 실측).
  */
-async function internalHeaders(): Promise<Record<string, string>> {
+export async function internalHeaders(): Promise<Record<string, string>> {
   const h: Record<string, string> = {};
   const token = process.env.INTERNAL_API_TOKEN;
   if (token) {

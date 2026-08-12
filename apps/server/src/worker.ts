@@ -110,7 +110,7 @@ const JOB_LANES: Record<"content" | "youtube" | "gebd" | "naver", JobType[]> = {
   //    성공을 돌려주므로 화면에서는 "생성 중" 으로만 보인다 — 이 리포의 전형적 조용한 실패다.
   //    아래 "모든 JobType 은 실제로 도는 레인에 속한다" 테스트가 재발을 막는다.
   content: ["content.analyze", "youtube.download", "match.align", "match.segment", "match.learn",
-            "thumbnail.style", "thumbnail.generate"],
+            "thumbnail.style", "thumbnail.generate", "clip.metadata"],
   // factory.* 도 youtube 레인 — 상태기계 한 걸음은 DB 몇 번 읽고 재큐하는 게 전부라
   // 짧고, 배포(distribution.publish)와 같은 레인에 있어야 순서가 자연스럽다.
   // automation.cycle 도 youtube 레인 — 순방 한 바퀴는 DB 를 훑고 dispatchPublish 를 부르는
@@ -225,6 +225,7 @@ async function handle(job: Job): Promise<FollowUp | void> {
     case "automation.cycle": return handleAutomationCycle(job);
     case "factory.orchestrate": return handleFactoryOrchestrate(job);
     case "factory.publicize": return handleFactoryPublicize(job);
+    case "clip.metadata": return handleClipMetadata(job);
     case "thumbnail.style": return handleThumbnailStyle(job);
     case "thumbnail.generate": return handleThumbnailGenerate(job);
     default:
@@ -893,6 +894,37 @@ async function handleFactoryPublicize(job: Job): Promise<void> {
   console.log(`[worker] factory.publicize ${factoryJobId} · ${switched}건 공개`);
 }
 
+/**
+ * 채택된 클립의 채널별 업로드 메타데이터를 미리 만든다.
+ *
+ * 생성 로직은 서버 라우트에 있다(`/api/clips/:id/generate-metadata`) — 프롬프트·채널 규칙·
+ * 저장이 한 곳에 있어야 화면에서 누른 것과 자동 생성이 **같은 결과**를 낸다. 워커는
+ * 그 라우트를 부르기만 한다.
+ *
+ * ⚠️ 실패해도 던지지 않는다. 메타는 발행 화면에서 다시 만들 수 있고, 여기서 재시도를
+ * 쌓아 봐야 같은 이유로 또 실패한다(대개 입력 부족이다). 사유만 남긴다.
+ */
+async function handleClipMetadata(job: Job): Promise<void> {
+  const clipId = String(job.payload.clipId ?? "");
+  if (!clipId) { console.error("[worker] clip.metadata: clipId 누락 — 버림"); return; }
+  try {
+    // 워커 → 서버 내부 호출. 인증(IAM ID 토큰 + 내부 토큰)은 factory 가 이미 풀어 둔 문제라
+    // 복제하지 않고 그대로 쓴다 — 두 벌이 되면 한쪽만 고쳐지는 날이 온다.
+    const { apiBase, internalHeaders } = await import("./factory.ts");
+    const res = await fetch(`${apiBase()}/api/clips/${clipId}/generate-metadata`, {
+      method: "POST", headers: await internalHeaders(),
+    });
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      console.error(`[worker] clip.metadata ${clipId} 실패 (${res.status}): ${body.slice(0, 300)}`);
+      return;
+    }
+    console.log(`[worker] clip.metadata ${clipId} 완료`);
+  } catch (e) {
+    console.error(`[worker] clip.metadata ${clipId} 실패:`, e instanceof Error ? e.message : e);
+  }
+}
+
 async function handleThumbnailStyle(job: Job): Promise<void> {
   const programId = String(job.payload.programId ?? "");
   // 재생목록 URL 을 권한다 — 큰 채널은 프로그램·기수가 재생목록으로 나뉘어 있고,
@@ -1273,6 +1305,33 @@ function futurePublishAt(raw: unknown): string | null {
 //
 // distribution.publish 와 마찬가지로 **자동 재시도를 하지 않는다.** 브라우저 자동화 실패는
 // 대개 DOM 개편·세션 만료라서 재시도해도 같은 결과고, 계정 잠금 위험만 키운다.
+
+/**
+ * 이 채널로 나갈 메타데이터.
+ *
+ * `/api/clips/:id/generate-metadata` 가 채널별로 만들어 둔 것을 쓴다. 없으면 예전처럼
+ * clip.title·synopsis 로 폴백한다 — 메타를 아직 안 만든 옛 클립도 발행은 돼야 한다.
+ *
+ * ⚠️ **생성만 하고 여기서 안 쓰면 아무 의미가 없다.** 이 리포의 최빈 실패가 그거다
+ * (기능은 있는데 출력이 소비처에 미도달). 채널 규칙의 titlePrefix·hashtagTemplate 도
+ * 그렇게 1년 가까이 아무 데도 안 갔다.
+ */
+function metaForChannel(clip: any, channel: string): { title: string; description: string; tags?: string[] } {
+  const m = clip?.channelMeta?.[channel];
+  if (m && (m.title || m.description)) {
+    return {
+      title: String(m.title ?? clip.title ?? "무제 클립"),
+      description: String(m.description ?? ""),
+      tags: Array.isArray(m.tags) && m.tags.length ? m.tags : undefined,
+    };
+  }
+  return {
+    title: String(clip?.title ?? "무제 클립"),
+    description: String(clip?.synopsis ?? ""),
+    tags: Array.isArray(clip?.tags) ? clip.tags : undefined,
+  };
+}
+
 async function handleNaverPublish(job: Job): Promise<void> {
   const clipId = String(job.payload.clipId ?? "");
   if (!clipId) { console.error("[worker] naver.publish: clipId 누락 — 버림"); return; }
@@ -1353,6 +1412,7 @@ async function handleNaverPublish(job: Job): Promise<void> {
       // 설명·태그는 **배포 시점에 사람이 넣은 값이 우선**이다. 클립은 제목 칸이 없고 설명
       // 300자가 전부라, 분석이 만든 synopsis 를 그대로 쓰면 잘리거나 어색하다.
       // 페이로드에 없을 때만 클립 메타로 폴백한다.
+      const naverMeta = metaForChannel(clip, channel);
       const description = typeof job.payload.description === "string"
         ? job.payload.description
         : (clip.synopsis ?? "");
@@ -1376,9 +1436,10 @@ async function handleNaverPublish(job: Job): Promise<void> {
         accountKey,
         videoPath: localPath,
         publishAt,
-        title: clip.title ?? "무제 클립",
-        description,
-        tags,
+        // 발행 시점에 사람이 넣은 값 > 채널별 메타 > 클립 기본값 순서.
+        title: naverMeta.title,
+        description: description || naverMeta.description,
+        tags: tags ?? naverMeta.tags,
         category,
         artifactDir: path.join(os.homedir(), ".stepd", "naver-artifacts"),
       });
@@ -1490,9 +1551,7 @@ async function runDistributionPublish(job: Job): Promise<void> {
         token,
         { body, contentType: media.mime || "video/mp4" },
         {
-          title: clip.title ?? "무제 클립",
-          description: clip.synopsis ?? "",
-          tags: Array.isArray(clip.tags) ? clip.tags : undefined,
+          ...metaForChannel(clip, "youtube"),
           privacyStatus: privacy,
           publishAt,
         },

@@ -40,6 +40,8 @@ export type JobType =
   // 공장: private 로 올린 영상을 유예 후 공개로 전환 (되돌릴 시간을 벌기 위한 장치).
   | "factory.publicize"
   // 썸네일: 프로그램 채널의 기존 썸네일을 모아 스타일 프로파일을 만든다 (프로그램당 1회성).
+  // 채택 시 채널별 업로드 메타를 미리 만든다 — 발행 모달이 빈칸 없이 열리게.
+  | "clip.metadata"
   | "thumbnail.style"
   // 썸네일: 회차 1건 → 후보 N장. 인물은 사람이 등록한 사진에서만 가져온다.
   | "thumbnail.generate"
