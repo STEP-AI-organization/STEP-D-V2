@@ -127,7 +127,7 @@ export function EditorShell({ clipId }: { clipId: string }) {
   } = useEditorHistory(() =>
     clip?.editorState
       ? ensureTracks(clip.editorState, duration, previewingMaster ? recStart : 0)
-      : makeInitialEditorState(title, duration, recStart, recEnd, clip?.titleLine1, clip?.titleLine2),
+      : makeInitialEditorState(title, duration, recStart, recEnd, clip?.titleLine1, clip?.titleLine2, clip?.programTitle),
   );
   const [saved, setSaved] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -220,7 +220,7 @@ export function EditorShell({ clipId }: { clipId: string }) {
       reset(ensureTracks(clip.editorState, duration, previewingMaster ? recStart : 0));
       setSaved(true);
     } else if (!canUndo) {
-      reset(makeInitialEditorState(clip.title, duration, recStart, recEnd, clip.titleLine1, clip.titleLine2));
+      reset(makeInitialEditorState(clip.title, duration, recStart, recEnd, clip.titleLine1, clip.titleLine2, clip.programTitle));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [clip?.id]);

@@ -471,31 +471,36 @@ export function makeInitialEditorState(
   trimOut?: number,
   titleLine1?: string,  // 2026-07-29: 두 줄 제목 (AI가 line1/line2 생성한 경우)
   titleLine2?: string,
+  programTitle?: string, // 2026-08-12: 하단 브랜딩 (TVING 풍 기본 템플릿)
 ): EditorState {
   const dur = Math.max(1, masterDurationSec);
   const inAbs = Math.max(0, Math.min(trimIn, dur - 0.1));
   const outAbs = Math.min(dur, Math.max(inAbs + 0.1, trimOut ?? dur));
-  // 두 줄 title 있으면 · 라인1(흰색) + 라인2(파란색 · 고정) 로 초기화.
-  // 없으면 · 기존처럼 title 단일 라인.
+  // 강조색 규칙(사용자 확정 2026-08-12): 두 줄이면 둘째 줄만, 한 줄이면 통째로 색.
+  // 서버 자동 렌더 시드(factory.ts autoEditorState)와 같은 모양이어야 한다.
   const initialLines = (titleLine1 && titleLine2)
     ? [
         { id: "t1", text: titleLine1, size: 30, color: "#FFFFFF" },
         { id: "t2", text: titleLine2, size: 30, color: "#3B82F6" },  // Tailwind blue-500
       ]
-    : [{ id: "t1", text: title, size: 30, color: "#FFFFFF" }];
+    : [{ id: "t1", text: title, size: 30, color: "#FF4040" }];
   return {
-    templateId: "stacked_channel",
+    // TVING 쇼츠 스타일이 기본 (2026-08-12): 검정 레터박스 + 상단 훅 + 하단 프로그램명.
+    // broadcast-clean 은 assets/shorts-template/ 의 실존 프레임이다.
+    templateId: "broadcast-clean",
     aspect: "9:16",
-    bg: "#0E0E12",
+    bgType: "solid",
+    bg: "#000000",
     accent: "#FFD400",
     titleLines: initialLines,
     titleAlign: "center",
     titleX: 50,
-    titleY: 8,
+    titleY: 11,
     showChannel: true,
-    channelName: "전참시 공식",
-    channelY: 82,
-    captionsOn: true,
+    channelName: programTitle || "",
+    channelY: 88,
+    // 방송 원본은 번인 자막이 이미 있다 — AI 자막을 겹쳐 굽지 않는 게 기본.
+    captionsOn: false,
     captionStyle: "korean_pop",
     highlightColor: "#FFD400",
     showSafeArea: false,
