@@ -43,6 +43,11 @@ export function SavedCardPanel({
   const { toast } = useToast();
   const [card, setCard] = useState<SavedCard | null>(null);
   const [busy, setBusy] = useState<"register" | "charge" | "delete" | null>(null);
+  // 개인/법인 카드 선택. KG이니시스 빌링키 창은 이 값(bypass.inicis_v2.carduse)으로 카드
+  // 종류를 고정한다 — 안 넘기면 창 안 토글에서 법인 고르는 순간 본인확인 흐름이 꼬여
+  // "비번칸이 잠겼다"처럼 보인다. 우리 화면에서 먼저 고르게 해 창을 해당 종류로 바로 연다.
+  // 기본은 개인(percard) — 지금까지 되던 경우.
+  const [cardUse, setCardUse] = useState<"percard" | "cocard">("percard");
 
   const load = useCallback(async () => {
     try {
@@ -82,6 +87,9 @@ export function SavedCardPanel({
         issueId: prep.issueId,
         issueName: prep.issueName,
         customer: prep.customer,
+        // KG이니시스 전용 — 카드 종류를 창에 고정한다(개인=percard·법인=cocard).
+        // 법인 선택 시 사업자등록번호로 본인확인하는 정상 흐름으로 바로 연다.
+        bypass: { inicis_v2: { carduse: cardUse } },
       });
 
       if (res?.code) {
@@ -163,6 +171,8 @@ export function SavedCardPanel({
               >
                 {busy === "charge" ? "결제 중…" : "저장 카드로 결제"}
               </button>
+              {/* 카드 변경 시에도 개인/법인 선택이 창에 반영되게 토글을 함께 둔다. */}
+              <CardUseToggle value={cardUse} onChange={setCardUse} disabled={busy !== null} />
               <button type="button" className="sd-btn" disabled={busy !== null} onClick={register}>
                 카드 변경
               </button>
@@ -173,26 +183,30 @@ export function SavedCardPanel({
           )}
         </div>
       ) : (
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-col gap-2">
           <span className="text-[11.5px]" style={{ color: "var(--sd-mut)" }}>
             등록된 카드가 없습니다. 등록해 두면 매번 카드를 넣지 않고 버튼으로 충전합니다.
             <br />
-            {/* 법인카드 빌링키는 PG(KG이니시스) 정책상 막힐 수 있다 (2026-08-12 실측 — 개인카드는
-                됨). 카드 등록이 안 돼도 일반결제 충전은 법인카드로 가능하므로 그 사실을 말해 준다. */}
+            {/* carduse bypass 로 카드 종류를 창에 고정하므로(2026-08-12) 이제 화면에서 먼저 고른다.
+                무기명(공용) 법인카드는 카드사 정책상 정기결제 등록이 막힐 수 있는데, 그때도
+                일반결제(위 '크레딧 충전')는 법인카드로 정상 결제된다. */}
             <span style={{ color: "var(--sd-warn)" }}>
-              ⚠ 법인카드는 카드사·PG 정책상 등록(정기결제)이 막힐 수 있습니다 — 그 경우
-              위 &quot;크레딧 충전&quot;(일반결제)은 법인카드로 정상 결제됩니다.
+              ⚠ 무기명(공용) 법인카드는 카드사 정책상 등록이 막힐 수 있습니다 — 그 경우 위
+              &quot;크레딧 충전&quot;(일반결제)은 법인카드로 정상 결제됩니다.
             </span>
           </span>
           {canManage && (
-            <button
-              type="button"
-              className="sd-btn sd-btn-primary ml-auto"
-              disabled={busy !== null}
-              onClick={register}
-            >
-              {busy === "register" ? "등록 중…" : "카드 등록"}
-            </button>
+            <div className="flex flex-wrap items-center gap-2">
+              <CardUseToggle value={cardUse} onChange={setCardUse} disabled={busy !== null} />
+              <button
+                type="button"
+                className="sd-btn sd-btn-primary ml-auto"
+                disabled={busy !== null}
+                onClick={register}
+              >
+                {busy === "register" ? "등록 중…" : "카드 등록"}
+              </button>
+            </div>
           )}
         </div>
       )}
@@ -204,6 +218,43 @@ export function SavedCardPanel({
         </p>
       )}
     </Shell>
+  );
+}
+
+/** 개인/법인 카드 선택 — KG이니시스 빌링키 창을 해당 카드 종류로 고정한다(carduse bypass). */
+function CardUseToggle({
+  value,
+  onChange,
+  disabled,
+}: {
+  value: "percard" | "cocard";
+  onChange: (v: "percard" | "cocard") => void;
+  disabled?: boolean;
+}) {
+  return (
+    <div
+      className="inline-flex overflow-hidden rounded-[5px]"
+      style={{ border: "1px solid var(--sd-border)" }}
+      role="group"
+      aria-label="카드 종류"
+    >
+      {([["percard", "개인카드"], ["cocard", "법인카드"]] as const).map(([k, label]) => (
+        <button
+          key={k}
+          type="button"
+          disabled={disabled}
+          onClick={() => onChange(k)}
+          className="px-2.5 py-1 text-[11.5px] font-medium disabled:opacity-50"
+          style={
+            value === k
+              ? { background: "var(--sd-fg)", color: "#fff" }
+              : { background: "transparent", color: "var(--sd-mut)" }
+          }
+        >
+          {label}
+        </button>
+      ))}
+    </div>
   );
 }
 
