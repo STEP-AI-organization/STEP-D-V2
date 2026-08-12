@@ -35,6 +35,24 @@ const TARGET_LABEL: Record<NaverAccount["target"], string> = {
   clip: "네이버 클립 전용",
 };
 
+/**
+ * 명령에 넣어줄 주소. 운영자가 "그래서 --api 에 뭘 쓰죠?" 를 묻지 않게 화면이 채워 준다.
+ *
+ * ⚠️ `--api` 와 `--web` 이 다를 수 있다. 프로덕션 웹은 서버를 `/api/proxy` 로 경유하므로
+ * (NEXT_PUBLIC_API_URL=/api/proxy/api), 스크립트가 뒤에 `/api/...` 를 붙인다는 걸 감안해
+ * 끝의 `/api` 를 떼서 준다. 오리진만 주면 404 가 난다 — 프록시를 안 타기 때문이다.
+ */
+function cmdTargets(): { api: string; web: string } {
+  if (typeof window === "undefined") return { api: "<서버주소>", web: "<웹주소>" };
+  const origin = window.location.origin;
+  const base = process.env.NEXT_PUBLIC_API_URL ?? "";
+  if (base.startsWith("http")) {
+    // 서버에 직접 붙는 구성 — 로그인 화면은 여전히 웹 쪽이다.
+    return { api: base.replace(/\/api$/, ""), web: origin };
+  }
+  return { api: `${origin}${base.replace(/\/api$/, "")}`, web: origin };
+}
+
 function when(ts: number | null): string {
   if (!ts) return "";
   return new Date(Number(ts)).toLocaleString("ko-KR", {
@@ -306,19 +324,27 @@ export function NaverAccounts({ onChange }: { onChange?: (accounts: NaverAccount
               {/* 워커 PC 앞에서 직접 로그인하는 경로 — 세션 파일을 옮기지 않아도 된다.
                   둘 중 하나만 하면 되므로, 세션이 이미 있으면 접어둔다. */}
               {!a.hasSession && (
-                <details className="mt-3 border-t border-border pt-3">
-                  <summary className="cursor-pointer text-xs text-muted-foreground">
-                    워커 PC 앞에서 직접 로그인하기 (세션 파일 없이)
-                  </summary>
-                  <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
-                    발행을 담당하는 PC 에서 아래 명령을 실행하면 브라우저가 떠서 직접 로그인할 수
-                    있습니다. 2차인증까지 마치면 그 PC 에 세션이 저장되고, 이 화면에는 표시되지
-                    않습니다(서버로 올라오지 않기 때문입니다).
+                <div className="mt-3 border-t border-border pt-3">
+                  <p className="text-[11px] leading-relaxed text-muted-foreground">
+                    <b className="text-foreground">로그인하는 법.</b> 아래 명령을 실행하면 브라우저 창이
+                    뜹니다. STEP D 에 한 번, 네이버에 한 번 로그인하면 세션이{" "}
+                    <b className="text-foreground">여기 서버에 등록</b>되고 발행이 가능해집니다.
+                    네이버 아이디·비밀번호는 브라우저에만 들어가고 우리 서버로 오지 않습니다.
                   </p>
                   <code className="mt-2 block overflow-x-auto rounded-md bg-muted px-2.5 py-2 text-[11px] text-foreground">
-                    {a.loginCommand}
+                    pnpm --filter @stepd/server naver:login:upload -- --account {a.id}{" "}
+                    --api {cmdTargets().api} --web {cmdTargets().web}
                   </code>
-                </details>
+                  <details className="mt-2">
+                    <summary className="cursor-pointer text-[11px] text-muted-foreground">
+                      명령을 못 쓰는 경우 — 세션 파일로 등록
+                    </summary>
+                    <p className="mt-1.5 text-[11px] leading-relaxed text-muted-foreground">
+                      위 &quot;로그인 세션 등록&quot; 버튼으로 Playwright storageState JSON 을 직접 올릴 수도
+                      있습니다. 파일을 만들 방법이 없다면 이 경로는 쓰지 마세요 — 명령 쪽이 정상 경로입니다.
+                    </p>
+                  </details>
+                </div>
               )}
             </Card>
           ))}
