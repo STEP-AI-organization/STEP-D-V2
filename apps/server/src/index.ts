@@ -2294,6 +2294,12 @@ app.delete("/api/programs/:id", async (c) => {
     await getPool().query("DELETE FROM program_cast WHERE programid = $1", [id]);
   } catch {}
 
+  // 영상 DB(검색 인덱스) 보강 삭제 — media 캐스케이드가 media_id 기준으로 지우지만,
+  // media 행이 먼저 사라졌던 과거 삭제의 잔재가 program_id 로 남아 검색에 유령으로 뜬다.
+  try {
+    await getPool().query("DELETE FROM search_segments WHERE program_id = $1", [id]);
+  } catch {}
+
   await deleteEntityRow("program", id);
   return c.json({ ok: true, programId: id, episodesDeleted: episodes.length, mediaDeleted: mediaCount });
 });

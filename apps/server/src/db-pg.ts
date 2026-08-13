@@ -1743,6 +1743,8 @@ export async function deleteMediaData(mediaId: string): Promise<void> {
   try { await pool.query("DELETE FROM content_analysis WHERE mediaId = $1", [mediaId]); } catch {}
   try { await pool.query("DELETE FROM transcript WHERE mediaId = $1", [mediaId]); } catch {}
   try { await pool.query("DELETE FROM episode_cast WHERE mediaId = $1", [mediaId]); } catch {}
+  // 영상 DB(검색 인덱스)도 같이 — 안 지우면 삭제된 회차가 영상검색에 유령으로 남는다.
+  try { await pool.query("DELETE FROM search_segments WHERE media_id = $1", [mediaId]); } catch {}
   // 진행중/대기중 잡 정리 — done/failed는 이력이라 보존.
   try {
     await pool.query(
