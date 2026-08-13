@@ -359,6 +359,14 @@ export default function PublishChannelsPage() {
               // 세면 "연결됨"인데 발행이 거부되는 모순이 생긴다.
               : id === "naverclip" ? naverAccounts.filter((a) => a.target !== "tv" && a.hasSession).length
               : 0;
+            // 목록을 못 읽었으면 "0개 연결"이 아니라 "확인 불가"다 — 아래 섹션은 실패를
+            // 말하는데 상단 카드만 0을 단정하면 화면 안에서 자기모순이 난다.
+            const countUnknown =
+              id === "youtube" ? loadFailed.youtube
+              : id === "facebook" ? loadFailed.meta
+              : id === "instagram" ? loadFailed.ig
+              : id === "tiktok" ? loadFailed.tiktok
+              : false;
             // 네이버는 OAuth 가 아니라 로그인 세션이라 아래 전용 섹션에서 다룬다.
             const isNaver = id === "naverclip";
             const connectHref =
@@ -385,7 +393,9 @@ export default function PublishChannelsPage() {
                     <div className="flex items-center gap-2">
                       <span className="text-sm font-semibold text-foreground">{meta.label}</span>
                       {/* 연결 여부가 먼저다 — 실제로 연결된 계정이 있는데 '준비 중'이라고 하면 거짓말이다. */}
-                      {connectedCount > 0 ? (
+                      {countUnknown ? (
+                        <StatusBadge tone="warn">확인 불가</StatusBadge>
+                      ) : connectedCount > 0 ? (
                         <StatusBadge tone="done">{connectedCount}개 연결</StatusBadge>
                       ) : isYouTube || connectHref || isNaver ? (
                         <StatusBadge tone="idle">미연결</StatusBadge>

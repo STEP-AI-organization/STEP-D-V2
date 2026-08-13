@@ -14,7 +14,7 @@
  *  - **완료 알림이 없다.** 다른 화면으로 가도 결과는 미디어에 남는다 — 그 점을 문구로
  *    명시한다(F7-5). 알림을 만들면 "알림을 놓치면 결과도 사라진다"고 오해하게 된다.
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 
 import { useToast } from "@/components/ui/toast";
@@ -79,19 +79,25 @@ export default function ThumbnailsPage() {
     return () => { alive = false; };
   }, [targetProgramId]);
 
+  // 늦게 도착한 이전 대상의 응답이 현재 대상 화면을 덮지 않게, 요청 시점의 mediaId 를 기억해
+  // 도착 시 현재 값과 대조한다 (대상 A 조회 중 B 로 바꾸는 경합).
+  const candReqRef = useRef<string>("");
   const loadCandidates = useCallback(async (mediaId: string) => {
+    candReqRef.current = mediaId;
     if (!mediaId) { setCandidates([]); setSelected(null); return; }
     setCandLoading(true);
     try {
       const r = await fetchThumbnailCandidates(mediaId);
+      if (candReqRef.current !== mediaId) return;
       setCandidates(r.candidates);
       setSelected(r.selected);
       setError(null);
     } catch (err) {
+      if (candReqRef.current !== mediaId) return;
       setCandidates([]);
       setError(err instanceof Error ? err.message : String(err));
     } finally {
-      setCandLoading(false);
+      if (candReqRef.current === mediaId) setCandLoading(false);
     }
   }, []);
 
