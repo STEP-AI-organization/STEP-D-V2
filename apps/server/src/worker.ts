@@ -1781,8 +1781,24 @@ async function main(): Promise<void> {
   console.log("[worker] queue:", JSON.stringify(await runAsSystem(queueStats)));
 
   if (RUNS_SWEEP) await sweepDueChannels();
-  // drain 모드는 Scheduler 가 주기적으로 깨우므로 내부 타이머가 필요 없다.
-  // (setInterval 을 걸면 Node 이벤트 루프가 살아 있어 잡을 다 처리하고도 안 끝난다.)
+
+  // ── 자동 배포 순방 (drain) ──────────────────────────────────────────────────
+  // drain 워커는 Scheduler 가 주기적으로 깨운다. 그때 자동 배포 순방을 **한 번** 팬아웃한다
+  // (반복 아님 — 한 번이라 큐는 여전히 비고 종료된다). 이게 **프로덕션의 자동 배포 주기**다:
+  // 예전엔 loop() 의 10분 타이머가 순방을 돌렸는데 그건 `!DRAIN_MODE` 라 프로덕션(drain)에선
+  // 아무도 순방을 안 돌려 "규칙을 만들어도 저절로 안 나감" 이었다. AUTOMATION_CYCLE_MS=0 이면
+  // 자동 순방을 끈다(수동 "지금 실행"만).
+  if (RUNS_SWEEP && DRAIN_MODE && CYCLE_EVERY_MS > 0) {
+    try {
+      const n = await fanOutAutomationCycles();
+      if (n > 0) console.log(`[worker] drain 기동 자동 배포 순방 팬아웃 — ${n}개 테넌트`);
+    } catch (err) {
+      console.error("[worker] drain 순방 팬아웃 실패(다음 기동에 재시도)", err);
+    }
+  }
+
+  // 상시(비-drain) 모드는 Scheduler 가 없으므로 내부 타이머가 순방·정리를 돌린다.
+  // (drain 에 setInterval 을 걸면 Node 이벤트 루프가 살아 있어 잡을 다 처리하고도 안 끝난다.)
   const tick = DRAIN_MODE ? null : setInterval(() => {
     if (RUNS_SWEEP) void sweepDueChannels().catch((err) => console.error("[worker] sweep failed", err));
     void requeueStale().catch((err) => console.error("[worker] requeue failed", err));

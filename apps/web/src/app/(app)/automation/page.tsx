@@ -34,6 +34,7 @@ import {
   type RuleRun,
 } from "@/lib/data/api";
 import { useAppData } from "@/lib/data/store";
+import { channelLabel } from "@/lib/constants";
 import { cn } from "@/lib/utils";
 
 const KIND_LABEL: Record<RuleMediaKind, string> = { short: "숏폼", clip: "클립", both: "숏폼+클립" };
@@ -108,7 +109,7 @@ const STEPS = [
 ];
 
 export default function AutomationPage() {
-  const { programs } = useAppData();
+  const { programs, clips } = useAppData();
   const { toast } = useToast();
   const actor = useSession().user.name;
 
@@ -174,28 +175,37 @@ export default function AutomationPage() {
 
   return (
     <div className="mx-auto flex max-w-[1240px] flex-col gap-[14px]">
-      {/* ── 상태 바 ───────────────────────────────────────────────────────── */}
-      <div className="sd-card flex flex-wrap items-center gap-3 px-3 py-2.5">
-        <span
-          className="size-[9px] shrink-0 rounded-full"
-          style={{ background: running ? "var(--sd-ok)" : "var(--sd-idle)" }}
-          aria-hidden
-        />
-        <span className="text-[13px] font-semibold" style={{ color: "var(--sd-fg)" }}>
-          {running ? "파이프라인 도는 중" : "멈춤"}
-        </span>
-        <span className="text-[11.5px]" style={{ color: "var(--sd-mut)" }}>
-          {idleReason || `규칙 ${rules.filter((r) => r.enabled).length}개가 순방마다 평가됩니다`}
-        </span>
-        <button type="button" className="sd-btn ml-auto" onClick={runNow}>
-          지금 한 바퀴
-        </button>
-        <button type="button" className="sd-btn" onClick={togglePause}>
-          {paused ? "재시작" : "일시정지"}
-        </button>
-        <button type="button" className="sd-btn sd-btn-primary" onClick={() => setAdding(true)}>
-          ＋ 자동 배포 규칙 추가
-        </button>
+      {/* ── 상태 바 — "어떻게 돌아가는지" 를 분명히 ─────────────────────────── */}
+      <div className="sd-card flex flex-col gap-2 px-3 py-2.5">
+        <div className="flex flex-wrap items-center gap-3">
+          <span
+            className="size-[9px] shrink-0 rounded-full"
+            style={{ background: running ? "var(--sd-ok)" : "var(--sd-idle)" }}
+            aria-hidden
+          />
+          <span className="text-[13px] font-semibold" style={{ color: "var(--sd-fg)" }}>
+            {paused ? "일시정지됨" : running ? "자동 순방 켜짐" : "규칙 없음 — 만들면 시작"}
+          </span>
+          <span className="sd-mono text-[11px]" style={{ color: "var(--sd-mut)" }}>
+            {runs[0]?.at ? `마지막 실행 ${runs[0].at.slice(0, 16).replace("T", " ")}` : "아직 실행 기록 없음"}
+          </span>
+          <button type="button" className="sd-btn sd-btn-primary ml-auto" onClick={runNow}>
+            지금 실행
+          </button>
+          <button type="button" className="sd-btn" onClick={togglePause}>
+            {paused ? "재시작" : "일시정지"}
+          </button>
+          <button type="button" className="sd-btn" onClick={() => setAdding(true)}>
+            ＋ 규칙 추가
+          </button>
+        </div>
+        {/* 실행 모델을 한 줄로 못박는다 — "어떻게 돌리는지" 가 가장 자주 막히는 지점이다. */}
+        <p className="text-[11px] leading-relaxed" style={{ color: "var(--sd-mut)" }}>
+          규칙을 만들면 <b style={{ color: "var(--sd-fg)" }}>워커가 깨어날 때마다(약 10분)</b> 조건에 맞는 미디어를
+          자동 배포합니다. 바로 확인하려면 <b style={{ color: "var(--sd-fg)" }}>지금 실행</b>을 누르세요 —
+          결과는 아래 <b style={{ color: "var(--sd-fg)" }}>자동 배포 기록</b>에 쌓입니다.
+          {idleReason ? ` · ${idleReason}` : ""}
+        </p>
       </div>
 
       {error && (
@@ -349,36 +359,63 @@ export default function AutomationPage() {
         )}
       </section>
 
-      {/* ── 자동 실행 로그 — 사람이 누른 배포와 분리 ─────────────────────── */}
+      {/* ── 자동 배포 기록 — 규칙이 자동으로 배포한 것. 사람이 누른 배포와 분리 ── */}
       <section className="flex flex-col gap-2">
         <div className="flex items-baseline gap-2">
-          <h3 className="sd-serif text-[16px] font-semibold" style={{ color: "var(--sd-fg)" }}>최근 자동 실행</h3>
+          <h3 className="sd-serif text-[16px] font-semibold" style={{ color: "var(--sd-fg)" }}>자동 배포 기록</h3>
           <span className="text-[11px]" style={{ color: "var(--sd-mut)" }}>
-            사람이 누른 배포는 여기 없습니다 — 배포 화면에서 봅니다
+            규칙이 <b>자동으로</b> 배포한 것만 — 사람이 누른 배포는 배포 화면에서 봅니다
           </span>
         </div>
         {runs.length === 0 ? (
           <div
-            className="sd-ph grid min-h-[80px] place-items-center rounded-[6px] px-6 text-center"
-            style={{ border: "1px dashed var(--sd-border)" }}
+            className="sd-ph grid min-h-[80px] place-items-center rounded-[6px] px-6 text-center text-[11.5px]"
+            style={{ border: "1px dashed var(--sd-border)", color: "var(--sd-mut)" }}
           >
-            자동 실행 기록이 없습니다
+            아직 자동 배포된 것이 없습니다 — 규칙을 만들고 “지금 실행”을 누르면 여기 쌓입니다
           </div>
         ) : (
           <div className="flex flex-col gap-1">
-            {runs.map((run) => (
-              <div key={run.id} className="sd-card flex flex-wrap items-center gap-3 px-3 py-2">
-                <span className="sd-mono text-[10.5px]" style={{ color: "var(--sd-mut)" }}>
-                  {run.at?.slice(0, 16).replace("T", " ")}
-                </span>
-                <span className="min-w-[200px] flex-1 text-[11.5px]" style={{ color: "var(--sd-fg)" }}>
-                  {run.detail || run.clipId || "—"}
-                </span>
-                <span className={RESULT_TAG[run.result] ?? "sd-tag"}>
-                  {RESULT_LABEL[run.result] ?? run.result}
-                </span>
-              </div>
-            ))}
+            {runs.map((run) => {
+              const clip = clips.find((c) => c.id === run.clipId);
+              // accountKey("platform:accountId") 는 서버가 최근 노출한 필드 — 구 응답엔 없을 수
+              // 있어 로컬 캐스트로 읽는다(없으면 채널 배지만 생략, 나머지는 그대로).
+              const accountKey = (run as { accountKey?: string | null }).accountKey;
+              const platform = accountKey ? accountKey.split(":")[0] : "";
+              const ytId =
+                platform === "youtube"
+                  ? clip?.distributions?.find((d) => d.channel === "youtube")?.externalId
+                  : undefined;
+              return (
+                <div key={run.id} className="sd-card flex flex-wrap items-center gap-3 px-3 py-2">
+                  <span className="sd-mono shrink-0 text-[10.5px]" style={{ color: "var(--sd-mut)" }}>
+                    {run.at?.slice(0, 16).replace("T", " ")}
+                  </span>
+                  <span className="min-w-[160px] flex-1 truncate text-[12px] font-medium" style={{ color: "var(--sd-fg)" }}>
+                    {clip?.title || run.clipId || "—"}
+                  </span>
+                  {platform && <span className="sd-tag shrink-0">{channelLabel(platform)}</span>}
+                  <span className={cn("shrink-0", RESULT_TAG[run.result] ?? "sd-tag")}>
+                    {RESULT_LABEL[run.result] ?? run.result}
+                  </span>
+                  {run.detail && (
+                    <span className="max-w-[240px] truncate text-[10.5px]" style={{ color: "var(--sd-mut)" }}>
+                      {run.detail}
+                    </span>
+                  )}
+                  {ytId && (
+                    <a
+                      href={`https://www.youtube.com/watch?v=${ytId}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="sd-btn shrink-0"
+                    >
+                      열기
+                    </a>
+                  )}
+                </div>
+              );
+            })}
           </div>
         )}
       </section>
