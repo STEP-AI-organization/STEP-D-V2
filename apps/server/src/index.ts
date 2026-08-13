@@ -143,6 +143,11 @@ import {
   deleteMetaAccount,
   disconnectMetaAccount,
   type MetaAccount,
+  listInstagramAccounts,
+  upsertInstagramAccount,
+  deleteInstagramAccount,
+  disconnectInstagramAccount,
+  type InstagramAccount,
   listTikTokAccounts,
   upsertTikTokAccount,
   deleteTikTokAccount,
@@ -423,7 +428,7 @@ app.onError((err, c) => {
 const PUBLIC_PATHS: RegExp[] = [
   /^\/health$/,
   /^\/api\/auth\//,
-  /^\/api\/(youtube|meta|tiktok|canva)\/oauth\/callback/,
+  /^\/api\/(youtube|meta|instagram|tiktok|canva)\/oauth\/callback/,
   // 포트원 웹훅 — 세션이 없다. 대신 **서명으로 인증**한다(verifyWebhook).
   /^\/api\/billing\/portone\/webhook$/,
 ];
@@ -4440,325 +4445,6 @@ async function renderClipMedia(opts: {
   }
 }
 
-// ── thumbnail template refs (Web UI CRUD · 2026-07-28) ─────────────────────────
-// Templates = 방송사 완성작 · swap 파이프라인용 reference.
-// Storage:
-//   Production (GCS mode): templates/thumbnail/{id}.{ext} + templates/thumbnail/manifest.json
-//   Local dev: assets/thumbnail-reference/{id}.{ext} + manifest.json (기존)
-// Cloud Run 컨테이너는 재시작 시 로컬 fs 유실 · GCS 우선.
-const THUMB_REF_DIR = path.join(REPO_ROOT, "assets", "thumbnail-reference");
-const THUMB_MANIFEST = path.join(THUMB_REF_DIR, "manifest.json");
-const THUMB_GCS_PREFIX = "templates/thumbnail";
-const THUMB_GCS_MANIFEST = `${THUMB_GCS_PREFIX}/manifest.json`;
-
-async function readThumbManifest(): Promise<any[]> {
-  if (useGcs()) {
-    try {
-      if (await fileExists(THUMB_GCS_MANIFEST)) {
-        const buf = await readFile(THUMB_GCS_MANIFEST);
-        return JSON.parse(buf.toString("utf-8"));
-      }
-    } catch (e) { console.warn("[thumb-refs] GCS manifest read fail", e); }
-    return [];
-  }
-  try {
-    if (!fs.existsSync(THUMB_MANIFEST)) return [];
-    return JSON.parse(fs.readFileSync(THUMB_MANIFEST, "utf-8")) as any[];
-  } catch { return []; }
-}
-
-async function writeThumbManifest(entries: any[]): Promise<void> {
-  const json = JSON.stringify(entries, null, 2);
-  if (useGcs()) {
-    await writeFile(THUMB_GCS_MANIFEST, Buffer.from(json, "utf-8"));
-    return;
-  }
-  fs.mkdirSync(THUMB_REF_DIR, { recursive: true });
-  fs.writeFileSync(THUMB_MANIFEST, json, "utf-8");
-}
-
-/** Resolve stored path (relative to repo root) → GCS object path or local fs path. */
-function refGcsPath(entry: any): string | null {
-  if (!useGcs() || !entry?.path) return null;
-  // entry.path is either "assets/thumbnail-reference/{id}.{ext}" (legacy · migrate) or
-  // "templates/thumbnail/{id}.{ext}" (GCS-native).
-  const p = String(entry.path);
-  if (p.startsWith("templates/")) return p;
-  // Legacy assets/ path → migrate to templates/thumbnail/ convention
-  const fname = path.basename(p);
-  return `${THUMB_GCS_PREFIX}/${fname}`;
-}
-
-function refCleanedGcsPath(entry: any): string | null {
-  if (!useGcs() || !entry?.cleaned_path) return null;
-  const p = String(entry.cleaned_path);
-  if (p.startsWith("templates/")) return p;
-  const fname = path.basename(p);
-  return `${THUMB_GCS_PREFIX}/cleaned/${fname}`;
-}
-
-// GET · 모든 template metadata
-app.get("/api/thumbnail-refs", async (c) => {
-  const items = await readThumbManifest();
-  return c.json({ items });
-});
-
-// GET · template 이미지 (GCS or local)
-app.get("/api/thumbnail-refs/:id/image", async (c) => {
-  const id = c.req.param("id").replace(/[^\w.-]/g, "");
-  const variant = c.req.query("variant"); // "cleaned" 또는 원본
-  const entries = await readThumbManifest();
-  const entry = entries.find((e: any) => e.id === id);
-  if (!entry) return c.json({ error: "not found" }, 404);
-  const gcsPath = variant === "cleaned" ? refCleanedGcsPath(entry) : refGcsPath(entry);
-  if (useGcs() && gcsPath) {
-    if (!(await fileExists(gcsPath))) return c.json({ error: "file missing on GCS" }, 404);
-    const buf = await readFile(gcsPath);
-    const ext = gcsPath.split(".").pop()?.toLowerCase() || "jpg";
-    const mime = ext === "png" ? "image/png" : ext === "webp" ? "image/webp" : "image/jpeg";
-    return new Response(buf, { headers: { "content-type": mime, "cache-control": "public, max-age=600" } });
-  }
-  // Local fallback
-  const rel = variant === "cleaned" ? entry.cleaned_path : entry.path;
-  if (!rel) return c.json({ error: "no path" }, 404);
-  const p = path.join(REPO_ROOT, String(rel));
-  if (!fs.existsSync(p)) return c.json({ error: "file missing" }, 404);
-  const ext = path.extname(p).slice(1).toLowerCase();
-  const mime = ext === "png" ? "image/png" : ext === "webp" ? "image/webp" : "image/jpeg";
-  return new Response(fs.readFileSync(p), { headers: { "content-type": mime } });
-});
-
-// POST · 이미지 업로드 (multipart) · GCS(prod) or local(dev) 저장
-app.post("/api/thumbnail-refs", async (c) => {
-  const form = await c.req.formData().catch(() => null);
-  if (!form) return c.json({ error: "multipart required" }, 400);
-  const file = form.get("file");
-  const idHint = String(form.get("id") || "").trim();
-  const program = String(form.get("program") || "").trim();
-  if (!(file instanceof File)) return c.json({ error: "file required" }, 400);
-  const ext = (file.name.split(".").pop() || "png").toLowerCase();
-  if (!["png", "jpg", "jpeg", "webp"].includes(ext)) {
-    return c.json({ error: "unsupported ext" }, 400);
-  }
-  const entries = await readThumbManifest();
-  const usedIds = new Set(entries.map((e: any) => e.id));
-  let id = idHint || `ref_${String(Date.now()).slice(-8)}`;
-  id = id.replace(/[^\w.-]/g, "_");
-  let n = 1;
-  while (usedIds.has(id)) { id = `${idHint || "ref"}_${n++}`; }
-  const fname = `${id}.${ext}`;
-  const buf = Buffer.from(await file.arrayBuffer());
-
-  let storedPath: string;
-  if (useGcs()) {
-    const gcsPath = `${THUMB_GCS_PREFIX}/${fname}`;
-    await writeFile(gcsPath, buf);
-    storedPath = gcsPath;
-  } else {
-    fs.mkdirSync(THUMB_REF_DIR, { recursive: true });
-    fs.writeFileSync(path.join(THUMB_REF_DIR, fname), buf);
-    storedPath = `assets/thumbnail-reference/${fname}`;
-  }
-  const entry = {
-    id, path: storedPath,
-    _analyzed: false, program, custom_tags: [],
-    uploaded_at: new Date().toISOString(),
-  };
-  entries.push(entry);
-  await writeThumbManifest(entries);
-  return c.json({ item: entry });
-});
-
-// PATCH · metadata 편집 (program·custom_tags·user_note 등)
-app.patch("/api/thumbnail-refs/:id", async (c) => {
-  const id = c.req.param("id");
-  const entries = await readThumbManifest();
-  const idx = entries.findIndex((e: any) => e.id === id);
-  if (idx < 0) return c.json({ error: "not found" }, 404);
-  const body = await c.req.json<any>().catch(() => ({}));
-  const patch: any = {};
-  for (const k of ["program", "custom_tags", "user_note", "person_count", "mood", "composition"]) {
-    if (k in body) patch[k] = body[k];
-  }
-  entries[idx] = { ...entries[idx], ...patch };
-  await writeThumbManifest(entries);
-  return c.json({ item: entries[idx] });
-});
-
-// DELETE · manifest + 파일 삭제 (GCS + local)
-app.delete("/api/thumbnail-refs/:id", async (c) => {
-  const id = c.req.param("id");
-  const entries = await readThumbManifest();
-  const entry = entries.find((e: any) => e.id === id);
-  if (!entry) return c.json({ error: "not found" }, 404);
-  if (useGcs()) {
-    try {
-      const gp = refGcsPath(entry); if (gp) await deleteFile(gp);
-      const cp = refCleanedGcsPath(entry); if (cp) await deleteFile(cp);
-    } catch (e) { console.warn("[thumb-refs] GCS delete err", e); }
-  } else {
-    const p = path.join(REPO_ROOT, String(entry.path || ""));
-    try { if (fs.existsSync(p)) fs.unlinkSync(p); } catch {}
-    if (entry.cleaned_path) {
-      const cp = path.join(REPO_ROOT, String(entry.cleaned_path));
-      try { if (fs.existsSync(cp)) fs.unlinkSync(cp); } catch {}
-    }
-  }
-  await writeThumbManifest(entries.filter((e: any) => e.id !== id));
-  return c.json({ ok: true });
-});
-
-// POST · 전체 미분석/미가공 항목 배치 처리 (분석 or 가공)
-app.post("/api/thumbnail-refs/batch/:action", async (c) => {
-  const action = c.req.param("action");
-  if (!["analyze", "preprocess"].includes(action)) return c.json({ error: "action" }, 400);
-  const entries = await readThumbManifest();
-  const targets = entries.filter((e: any) =>
-    action === "analyze" ? !e._analyzed : !e.cleaned_path);
-  if (!targets.length) return c.json({ ok: true, processed: 0, note: "nothing to do" });
-  const scriptName = action === "analyze"
-    ? "thumbnail_reference_manifest.py"
-    : "thumbnail_preprocess_template.py";
-  // ⚠️ scripts/ 재편(2026-08-12)으로 썸네일 스크립트는 scripts/thumbnail/ 로 옮겨졌다.
-  //    힌트 문자열은 갱신됐는데 여기는 basename 을 조립하는 형태라 문자열 치환이 못 잡아
-    //  두 엔드포인트가 exit 2 로 죽고 있었다.
-  const scriptPath = path.join(REPO_ROOT, "scripts", "thumbnail", scriptName);
-  const { spawn } = await import("node:child_process");
-  const results: any[] = [];
-  for (const target of targets) {
-    try {
-      await new Promise<void>((resolve, reject) => {
-        const args = action === "analyze" ? [scriptPath] : [scriptPath, target.id];
-        const proc = spawn(CORE_PYTHON, args, {
-          cwd: REPO_ROOT, env: { ...process.env, PYTHONIOENCODING: "utf-8" },
-        });
-        let stderr = "";
-        proc.stderr.on("data", (d) => { stderr += d.toString(); });
-        proc.on("close", (code) => code === 0 ? resolve() : reject(new Error(`${action} ${target.id} exit ${code}: ${stderr.slice(-300)}`)));
-        proc.on("error", reject);
-      });
-      results.push({ id: target.id, ok: true });
-    } catch (e: any) {
-      results.push({ id: target.id, ok: false, error: String(e?.message || e) });
-    }
-    if (action === "analyze") break;  // analyze 는 전체 스캔 · 한 번만
-  }
-  return c.json({ ok: true, processed: results.length, results });
-});
-
-// POST · template 사전 가공 (텍스트→슬롯 라벨 · 얼굴→실루엣)
-app.post("/api/thumbnail-refs/:id/preprocess", async (c) => {
-  const id = c.req.param("id").replace(/[^\w.-]/g, "");
-  const entries = await readThumbManifest();
-  const entry = entries.find((e: any) => e.id === id);
-  if (!entry) return c.json({ error: "not found" }, 404);
-  if (useGcs()) {
-    return c.json({
-      error: "preprocess not supported on Cloud Run",
-      hint: "로컬 워커에서 실행하세요: python scripts/thumbnail/thumbnail_preprocess_template.py " + id,
-    }, 501);
-  }
-  const scriptPath = path.join(REPO_ROOT, "scripts", "thumbnail", "thumbnail_preprocess_template.py");
-  const { spawn } = await import("node:child_process");
-  try {
-    await new Promise<void>((resolve, reject) => {
-      const proc = spawn(CORE_PYTHON, [scriptPath, id, "--force"], {
-        cwd: REPO_ROOT, env: { ...process.env, PYTHONIOENCODING: "utf-8" },
-      });
-      let stderr = "";
-      proc.stderr.on("data", (d) => { stderr += d.toString(); });
-      proc.on("close", (code) => code === 0 ? resolve() : reject(new Error(`preprocess exit ${code}: ${stderr.slice(-500)}`)));
-      proc.on("error", reject);
-    });
-  } catch (e: any) {
-    return c.json({ error: String(e?.message || e) }, 500);
-  }
-  const updated = (await readThumbManifest()).find((e: any) => e.id === id);
-  return c.json({ item: updated });
-});
-
-// POST · Vision 자동 분석 (기존 entry · 새 업로드 후 · manifest _analyzed=false → true)
-app.post("/api/thumbnail-refs/:id/analyze", async (c) => {
-  const id = c.req.param("id").replace(/[^\w.-]/g, "");
-  const entries = await readThumbManifest();
-  const entry = entries.find((e: any) => e.id === id);
-  if (!entry) return c.json({ error: "not found" }, 404);
-  if (useGcs()) {
-    return c.json({
-      error: "analyze not supported on Cloud Run",
-      hint: "로컬 워커에서 실행: python scripts/thumbnail/thumbnail_reference_manifest.py",
-    }, 501);
-  }
-  // Python 스크립트 호출
-  const scriptPath = path.join(REPO_ROOT, "scripts", "thumbnail", "thumbnail_reference_manifest.py");
-  const { spawn } = await import("node:child_process");
-  await new Promise<void>((resolve, reject) => {
-    const proc = spawn(CORE_PYTHON, [scriptPath], {
-      cwd: REPO_ROOT, env: { ...process.env, PYTHONIOENCODING: "utf-8" },
-    });
-    let stderr = "";
-    proc.stderr.on("data", (d) => { stderr += d.toString(); });
-    proc.on("close", (code) => code === 0 ? resolve() : reject(new Error(`analyze exit ${code}: ${stderr.slice(-500)}`)));
-    proc.on("error", reject);
-  }).catch((e) => c.json({ error: String(e) }, 500));
-  const updated2 = (await readThumbManifest()).find((e: any) => e.id === id);
-  return c.json({ item: updated2 });
-});
-
-// POST · YouTube 채널 이미 sync 된 영상 중 상위 뷰 썸네일 자동 수집 → refs 로 추가
-// 전제: 해당 채널이 이미 sync 완료 · entities table 에 youtube_video 저장됨
-app.post("/api/thumbnail-refs/import-youtube", async (c) => {
-  const body = await c.req.json<{ channelId?: string; program?: string; max?: number }>()
-    .catch(() => ({} as any));
-  const channelId = String(body?.channelId || "").trim();
-  const program = String(body?.program || "").trim();
-  const max = Math.min(20, Math.max(1, Number(body?.max) || 6));
-  if (!channelId) return c.json({ error: "channelId required" }, 400);
-  // channel_videos 테이블에서 상위 뷰 조회 (sync 결과)
-  const { rows } = await getPool().query(
-    `SELECT videoid AS "videoId", title, thumbnail, viewcount AS "viewCount"
-       FROM channel_videos WHERE channelid = $1 AND thumbnail IS NOT NULL
-       ORDER BY viewcount DESC NULLS LAST LIMIT $2`,
-    [channelId, max]
-  );
-  if (!rows.length) return c.json({ error: "no synced videos for channel", channelId }, 404);
-  const entries = await readThumbManifest();
-  const usedIds = new Set(entries.map((e: any) => e.id));
-  const added: any[] = [];
-  for (const v of rows) {
-    const thumbUrl = String(v.thumbnail || "");
-    if (!thumbUrl) continue;
-    let id = `yt_${v.videoId}`.replace(/[^\w.-]/g, "_");
-    let n = 1;
-    while (usedIds.has(id)) { id = `yt_${v.videoId}_${n++}`; }
-    try {
-      const buf = Buffer.from(await (await fetch(thumbUrl)).arrayBuffer());
-      const fname = `${id}.jpg`;
-      let storedPath: string;
-      if (useGcs()) {
-        const gcsPath = `${THUMB_GCS_PREFIX}/${fname}`;
-        await writeFile(gcsPath, buf);
-        storedPath = gcsPath;
-      } else {
-        fs.mkdirSync(THUMB_REF_DIR, { recursive: true });
-        fs.writeFileSync(path.join(THUMB_REF_DIR, fname), buf);
-        storedPath = `assets/thumbnail-reference/${fname}`;
-      }
-      const entry = {
-        id, path: storedPath,
-        _analyzed: false, program, custom_tags: ["youtube"],
-        source: { videoId: v.videoId, title: v.title, viewCount: v.viewCount },
-        uploaded_at: new Date().toISOString(),
-      };
-      entries.push(entry); usedIds.add(id); added.push(entry);
-    } catch (e) {
-      console.error("[thumb-import]", id, e);
-    }
-  }
-  await writeThumbManifest(entries);
-  return c.json({ added: added.length, items: added });
-});
-
 // ── 게이트: 권리·심의 이슈 (FLOWS F3) ──────────────────────────────────────────
 //
 // **자동 판정이 없다.** 여기 있는 라우트는 전부 사람이 누르는 것이고, 그래서 전부
@@ -7162,9 +6848,11 @@ const oauthCallback = async (c: Context) => {
 app.get(OAUTH_CALLBACK_PATH, oauthCallback);
 app.get("/api/youtube/callback", oauthCallback);
 
-// ── Meta (Facebook + Instagram) OAuth ─────────────────────────────────────────
-// One connect flow covers both — Facebook Page owner grants us the Page + its
-// linked Instagram Business account. 1 DB row per Page, long-lived Page token.
+// ── Meta (Facebook Pages) OAuth ───────────────────────────────────────────────
+// Facebook Page owner grants us their Pages. 1 DB row per Page, long-lived Page token.
+// Instagram 은 여기서 다루지 않는다 — 2026-08-13 부터 별도 "Instagram API with
+// Instagram Login" 흐름(/api/instagram/*)으로 분리했다. Facebook 로그인 방식은
+// Page 에 IG 를 연결해 두는 전제가 필요해서, IG 는 IG 계정으로 직접 붙는 게 낫다.
 // Redirect URI MUST match what's registered in developers.facebook.com > App > Login.
 const META_APP_ID = process.env.META_APP_ID ?? "";
 const META_APP_SECRET = process.env.META_APP_SECRET ?? "";
@@ -7176,8 +6864,6 @@ const META_SCOPES = [
   "pages_show_list",
   "pages_read_engagement",
   "pages_manage_posts",
-  "instagram_basic",
-  "instagram_content_publish",
   "business_management",
 ].join(",");
 
@@ -7246,11 +6932,12 @@ const metaOauthCallback = async (c: Context) => {
     if (!longRes.ok) throw new Error(`long-lived exchange failed: ${await longRes.text()}`);
     const userToken = ((await longRes.json()) as { access_token: string }).access_token;
 
-    // 3. /me/accounts — Pages + linked IG Business accounts (Page tokens here are long-lived)
+    // 3. /me/accounts — Pages (Page tokens here are long-lived).
+    //    instagram_business_account 필드는 더 이상 묻지 않는다 — instagram_basic 권한이
+    //    scope 에서 빠졌으므로 요청하면 통째로 에러가 난다. IG 는 /api/instagram/* 로 붙는다.
     const accountsParams = new URLSearchParams({
       access_token: userToken,
-      fields:
-        "id,name,access_token,picture{data{url}},instagram_business_account{id,username,profile_picture_url}",
+      fields: "id,name,access_token,picture{data{url}}",
       limit: "100",
     });
     const accountsRes = await fetch(`${META_GRAPH_BASE}/me/accounts?${accountsParams}`);
@@ -7261,11 +6948,6 @@ const metaOauthCallback = async (c: Context) => {
         name: string;
         access_token: string;
         picture?: { data?: { url?: string } };
-        instagram_business_account?: {
-          id: string;
-          username?: string;
-          profile_picture_url?: string;
-        };
       }>;
     };
 
@@ -7278,9 +6960,11 @@ const metaOauthCallback = async (c: Context) => {
         pageName: page.name,
         pageProfilePictureUrl: page.picture?.data?.url ?? null,
         pageAccessToken: page.access_token,
-        igUserId: page.instagram_business_account?.id ?? null,
-        igUsername: page.instagram_business_account?.username ?? null,
-        igProfilePictureUrl: page.instagram_business_account?.profile_picture_url ?? null,
+        // 재연결 upsert 가 옛 행의 IG 컬럼도 비운다 — 의도된 동작이다(분리 이후 이 흐름에
+        // IG 가 남아 있으면 배포 규칙이 죽은 ID 를 계속 가리킨다).
+        igUserId: null,
+        igUsername: null,
+        igProfilePictureUrl: null,
         status: "active",
         connectedAt: now,
       };
@@ -7322,6 +7006,159 @@ app.post("/api/meta/accounts/:publicId/disconnect", async (c) => {
 
 app.delete("/api/meta/accounts/:publicId", async (c) => {
   await deleteMetaAccount(c.req.param("publicId"));
+  return c.json({ ok: true });
+});
+
+// ── Instagram OAuth (Instagram API with Instagram Login) ─────────────────────
+// Facebook Page 를 경유하지 않는다 — 운영자가 IG 계정으로 직접 로그인한다(비즈니스 로그인).
+// developers.facebook.com > 앱 > Instagram > API setup with Instagram login 의
+// "비즈니스 로그인 설정" 에 redirect URI 를 등록할 것. 앱 ID·시크릿도 **그 화면의
+// Instagram 앱 ID/시크릿**이다 — Meta 앱 ID(META_APP_ID)와 다르다.
+// 토큰: short-lived(1h) → long-lived(~60일). refresh 토큰이 따로 없고 같은 토큰을
+// 24시간 이후~만료 전에 ig_refresh_token 으로 연장한다. 만료를 넘기면 재연결뿐.
+const INSTAGRAM_APP_ID = process.env.INSTAGRAM_APP_ID ?? "";
+const INSTAGRAM_APP_SECRET = process.env.INSTAGRAM_APP_SECRET ?? "";
+const IG_OAUTH_DIALOG = "https://www.instagram.com/oauth/authorize";
+const IG_TOKEN_URL = "https://api.instagram.com/oauth/access_token";
+const IG_GRAPH_BASE = "https://graph.instagram.com";
+const IG_CALLBACK_PATH = "/api/instagram/oauth/callback";
+// 콘솔에서 허용해 둔 권한만 요청한다 — 미허용 scope 가 섞이면 동의 화면에서 통째로 거부된다.
+const IG_SCOPES = ["instagram_business_basic", "instagram_business_content_publish"].join(",");
+
+function instagramRedirectUri(): string {
+  const explicit = process.env.INSTAGRAM_REDIRECT_URI;
+  if (explicit) return explicit;
+  if (process.env.NODE_ENV === "production") {
+    return `https://stepd.stepai.kr/api/proxy${IG_CALLBACK_PATH}`;
+  }
+  return `${process.env.PUBLIC_URL ?? `http://localhost:${PORT}`}${IG_CALLBACK_PATH}`;
+}
+
+app.get("/api/instagram/auth", (c) => {
+  if (!INSTAGRAM_APP_ID) return c.json({ error: "INSTAGRAM_APP_ID not configured" }, 500);
+  const returnTo = safeReturn(c.req.query("return"));
+  const state = Buffer.from(JSON.stringify({ return: returnTo })).toString("base64url");
+  const params = new URLSearchParams({
+    client_id: INSTAGRAM_APP_ID,
+    redirect_uri: instagramRedirectUri(),
+    response_type: "code",
+    scope: IG_SCOPES,
+    state,
+  });
+  return c.redirect(`${IG_OAUTH_DIALOG}?${params}`);
+});
+
+const instagramOauthCallback = async (c: Context) => {
+  // Instagram 은 리다이렉트에 `#_` 를 붙여 보낸다 — code 끝에 딸려오면 교환이 실패한다.
+  const code = c.req.query("code")?.replace(/#_$/, "");
+  const error = c.req.query("error");
+  let returnTo = "/publish-channels";
+  try {
+    const st = JSON.parse(Buffer.from(c.req.query("state") ?? "", "base64url").toString("utf8"));
+    returnTo = safeReturn(st?.return);
+  } catch {}
+
+  if (error) return c.redirect(`${returnTo}?ig_error=access_denied`);
+  if (!code) return c.json({ error: "missing code" }, 400);
+  if (!INSTAGRAM_APP_ID || !INSTAGRAM_APP_SECRET) {
+    return c.json({ error: "Instagram OAuth not configured" }, 500);
+  }
+
+  try {
+    // 1. code → short-lived token (form POST — 쿼리스트링이 아니다)
+    const tokenRes = await fetch(IG_TOKEN_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        client_id: INSTAGRAM_APP_ID,
+        client_secret: INSTAGRAM_APP_SECRET,
+        grant_type: "authorization_code",
+        redirect_uri: instagramRedirectUri(),
+        code,
+      }),
+    });
+    if (!tokenRes.ok) throw new Error(`token exchange failed: ${await tokenRes.text()}`);
+    // 문서상 flat 객체지만 data:[…] 로 감싸 오는 응답이 관측된 적 있다 — 둘 다 받는다.
+    const tokenBody = (await tokenRes.json()) as any;
+    const tok = Array.isArray(tokenBody?.data) ? tokenBody.data[0] : tokenBody;
+    const shortToken: string | undefined = tok?.access_token;
+    const igUserId = tok?.user_id != null ? String(tok.user_id) : "";
+    if (!shortToken || !igUserId) {
+      throw new Error(`unexpected token response: ${JSON.stringify(tokenBody).slice(0, 300)}`);
+    }
+
+    // 2. short-lived → long-lived (~60일)
+    const exchangeParams = new URLSearchParams({
+      grant_type: "ig_exchange_token",
+      client_secret: INSTAGRAM_APP_SECRET,
+      access_token: shortToken,
+    });
+    const longRes = await fetch(`${IG_GRAPH_BASE}/access_token?${exchangeParams}`);
+    if (!longRes.ok) throw new Error(`long-lived exchange failed: ${await longRes.text()}`);
+    const longData = (await longRes.json()) as { access_token: string; expires_in?: number };
+    const expiresAt = Date.now() + (longData.expires_in ?? 60 * 24 * 3600) * 1000;
+
+    // 3. 프로필 — 카드에 보여줄 최소 정보
+    const meParams = new URLSearchParams({
+      fields: "user_id,username,name,profile_picture_url",
+      access_token: longData.access_token,
+    });
+    const meRes = await fetch(`${IG_GRAPH_BASE}/v21.0/me?${meParams}`);
+    if (!meRes.ok) throw new Error(`/me failed: ${await meRes.text()}`);
+    const me = (await meRes.json()) as {
+      user_id?: string | number; username?: string; name?: string; profile_picture_url?: string;
+    };
+
+    const account: InstagramAccount = {
+      publicId: crypto.randomUUID(),
+      igUserId,
+      username: me.username ?? igUserId,
+      name: me.name ?? null,
+      profilePictureUrl: me.profile_picture_url ?? null,
+      accessToken: longData.access_token,
+      expiresAt,
+      permissions: typeof tok?.permissions === "string"
+        ? tok.permissions
+        : Array.isArray(tok?.permissions) ? tok.permissions.join(",") : "",
+      status: "active",
+      connectedAt: Date.now(),
+    };
+    // upsert by igUserId — publicId only used on first insert
+    await upsertInstagramAccount(account);
+
+    return c.redirect(`${returnTo}?ig_success=1&ig_name=${encodeURIComponent(account.username)}`);
+  } catch (err: any) {
+    console.error("[instagram/oauth]", err);
+    return c.redirect(`${returnTo}?ig_error=${encodeURIComponent(err.message ?? "unknown")}`);
+  }
+};
+app.get(IG_CALLBACK_PATH, instagramOauthCallback);
+
+app.get("/api/instagram/accounts", async (c) => {
+  const accounts = await listInstagramAccounts();
+  return c.json({
+    accounts: accounts.map((a) => ({
+      publicId: a.publicId,
+      igUserId: a.igUserId,
+      username: a.username,
+      name: a.name,
+      profilePictureUrl: a.profilePictureUrl,
+      // 토큰은 내보내지 않는다. 만료는 화면이 "재연결 필요" 를 미리 보여줄 수 있게 준다.
+      expiresAt: a.expiresAt,
+      status: a.status,
+      connectedAt: a.connectedAt,
+    })),
+  });
+});
+
+/** 연동해제 — 행은 남기고 토큰만 비운다 (meta/tiktok 과 같은 의미). */
+app.post("/api/instagram/accounts/:publicId/disconnect", async (c) => {
+  await disconnectInstagramAccount(c.req.param("publicId"));
+  return c.json({ ok: true, status: "disconnected" });
+});
+
+app.delete("/api/instagram/accounts/:publicId", async (c) => {
+  await deleteInstagramAccount(c.req.param("publicId"));
   return c.json({ ok: true });
 });
 
@@ -7914,7 +7751,38 @@ app.get("/api/programs/:id/thumbnail-style", async (c) => {
   if (await fileExists(`${prefix}/style_prompt.txt`)) {
     prompt = (await readFile(`${prefix}/style_prompt.txt`)).toString("utf-8");
   }
-  return c.json({ programId, title: data.title ?? "", aggregate: data.aggregate ?? null, prompt });
+  // 대표 썸네일 = 학습 때 수집한 thumbs/ 원본. refs.json 의 2장이 "그 채널의 전형"이고,
+  // 나머지는 수집 목록으로 함께 준다 — 화면이 학습 근거를 보여줄 수 있게.
+  let refs: string[] = [];
+  if (await fileExists(`${prefix}/refs.json`)) {
+    try {
+      const r = JSON.parse((await readFile(`${prefix}/refs.json`)).toString("utf-8"));
+      if (Array.isArray(r?.refs)) refs = r.refs.map(String);
+    } catch { /* refs 없이도 프로파일은 유효하다 */ }
+  }
+  const thumbs = (await listPrefix(`${prefix}/thumbs`))
+    .map((o) => o.split("/").pop() ?? "")
+    .filter((n) => /\.(jpg|jpeg|png|webp)$/i.test(n))
+    .sort();
+  return c.json({
+    programId, title: data.title ?? "", aggregate: data.aggregate ?? null, prompt,
+    refs, thumbs,
+  });
+});
+
+/** 학습에 쓴 수집 썸네일 이미지 서빙 (위 라우트의 refs·thumbs 파일명을 넣는다). */
+app.get("/api/programs/:id/thumbnail-style/thumbs/:name", async (c) => {
+  const programId = c.req.param("id");
+  const name = c.req.param("name").replace(/[^\w.-]/g, "");
+  if (!name) return c.json({ error: "bad_name" }, 400);
+  const objectPath = `${stylePrefix(programId)}/thumbs/${name}`;
+  if (!(await fileExists(objectPath))) return c.json({ error: "not_found" }, 404);
+  const buf = await readFile(objectPath);
+  const ext = name.split(".").pop()?.toLowerCase() ?? "jpg";
+  const mime = ext === "png" ? "image/png" : ext === "webp" ? "image/webp" : "image/jpeg";
+  return new Response(buf, {
+    headers: { "content-type": mime, "cache-control": "public, max-age=600" },
+  });
 });
 
 /** 이 프로그램에 등록된 출연자 목록. 등록은 사람이 파일로 한다(자동 판정 없음). */

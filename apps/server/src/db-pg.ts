@@ -438,6 +438,23 @@ async function migrate(): Promise<void> {
       connectedAt       BIGINT NOT NULL
     );
   `);
+  // Instagram (API with Instagram Login) — Facebook Page 를 거치지 않는 직접 연결.
+  // long-lived 토큰 ~60일, 갱신 토큰이 따로 없고 **같은 토큰을 refresh** 한다
+  // (24시간 지난 뒤 ~ 만료 전에만 가능). 만료를 넘기면 재연결뿐이다.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS instagram_accounts (
+      publicId           TEXT PRIMARY KEY,
+      igUserId           TEXT NOT NULL UNIQUE,
+      username           TEXT NOT NULL,
+      name               TEXT,
+      profilePictureUrl  TEXT,
+      accessToken        TEXT NOT NULL,
+      expiresAt          BIGINT NOT NULL,
+      permissions        TEXT NOT NULL DEFAULT '',
+      status             TEXT NOT NULL DEFAULT 'active',
+      connectedAt        BIGINT NOT NULL
+    );
+  `);
 }
 
 /**
@@ -1118,6 +1135,77 @@ export async function disconnectTikTokAccount(publicId: string): Promise<void> {
         SET accessToken = '', refreshToken = '', status = 'disconnected'
       WHERE publicId = $1`,
     [publicId],
+  );
+}
+
+// ── Instagram accounts (Instagram 비즈니스 로그인 — Facebook Page 경유 아님) ────
+
+export interface InstagramAccount {
+  publicId: string;
+  igUserId: string;
+  username: string;
+  name: string | null;
+  profilePictureUrl: string | null;
+  accessToken: string;
+  expiresAt: number;
+  permissions: string;
+  status: string;
+  connectedAt: number;
+}
+
+const INSTAGRAM_COLS = `publicid AS "publicId", iguserid AS "igUserId", username,
+  name, profilepictureurl AS "profilePictureUrl", accesstoken AS "accessToken",
+  expiresat AS "expiresAt", permissions, status, connectedat AS "connectedAt"`;
+
+export async function listInstagramAccounts(): Promise<InstagramAccount[]> {
+  const { rows } = await pool.query(
+    `SELECT ${INSTAGRAM_COLS} FROM instagram_accounts ORDER BY connectedAt DESC`,
+  );
+  return rows as InstagramAccount[];
+}
+
+export async function upsertInstagramAccount(a: InstagramAccount): Promise<void> {
+  await pool.query(
+    `INSERT INTO instagram_accounts (publicId, igUserId, username, name, profilePictureUrl,
+       accessToken, expiresAt, permissions, status, connectedAt)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+     ON CONFLICT (igUserId) DO UPDATE SET
+       username          = EXCLUDED.username,
+       name              = EXCLUDED.name,
+       profilePictureUrl = EXCLUDED.profilePictureUrl,
+       accessToken       = EXCLUDED.accessToken,
+       expiresAt         = EXCLUDED.expiresAt,
+       permissions       = EXCLUDED.permissions,
+       status            = EXCLUDED.status`,
+    [a.publicId, a.igUserId, a.username, a.name, a.profilePictureUrl,
+     a.accessToken, a.expiresAt, a.permissions, a.status, a.connectedAt],
+  );
+}
+
+export async function deleteInstagramAccount(publicId: string): Promise<void> {
+  await pool.query("DELETE FROM instagram_accounts WHERE publicId = $1", [publicId]);
+}
+
+/** 연동해제 — 토큰을 비우고 행은 남긴다 (youtube 쪽 disconnect 와 같은 의미). */
+export async function disconnectInstagramAccount(publicId: string): Promise<void> {
+  await pool.query(
+    `UPDATE instagram_accounts SET accessToken = '', status = 'disconnected' WHERE publicId = $1`,
+    [publicId],
+  );
+}
+
+/**
+ * ig_refresh_token 결과 저장 — updateYouTubeTokens 와 같은 이유로 토큰·만료 두 컬럼만 쓴다
+ * (전체 행 upsert 는 동시 재연결의 새 토큰을 밟을 수 있다).
+ */
+export async function updateInstagramToken(
+  igUserId: string,
+  accessToken: string,
+  expiresAt: number,
+): Promise<void> {
+  await pool.query(
+    "UPDATE instagram_accounts SET accessToken = $2, expiresAt = $3 WHERE igUserId = $1",
+    [igUserId, accessToken, expiresAt],
   );
 }
 
@@ -2836,7 +2924,8 @@ export async function appendRuleRun(ev: {
 
 export async function listRuleRuns(limit = 100): Promise<Record<string, unknown>[]> {
   const { rows } = await pool.query(
-    `SELECT id, at, rule_id AS "ruleId", clip_id AS "clipId", result, detail
+    `SELECT id, at, rule_id AS "ruleId", clip_id AS "clipId", result, detail,
+            account_key AS "accountKey"
        FROM rule_run ORDER BY at DESC LIMIT ${Math.max(1, Math.min(limit, 500))}`,
   );
   return rows;

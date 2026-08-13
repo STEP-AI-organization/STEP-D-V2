@@ -16,7 +16,8 @@ import {
 } from "lucide-react";
 import {
   autofillProgram, syncProgramFromAnalysis, type AutofillProgramResult,
-  fetchThumbnailStyle, trainThumbnailStyle, fetchCastPhotos, uploadCastPhoto,
+  fetchThumbnailStyle, trainThumbnailStyle, thumbnailStyleImageUrl,
+  fetchCastPhotos, uploadCastPhoto,
   deleteCastPhotos, type ThumbnailStyleProfile, type CastPhotoEntry,
 } from "@/lib/data/api";
 import { cn } from "@/lib/utils";
@@ -1194,6 +1195,10 @@ function ThumbnailEngineCard({
 
   const agg = (style?.aggregate ?? {}) as Record<string, any>;
   const first = (k: string) => (Array.isArray(agg[k]) && agg[k][0] ? String(agg[k][0][0]) : "");
+  // 대표(전형) 2장은 크게, 나머지 수집분은 작은 그리드로 — 학습이 뭘 보고 내린 결론인지 보인다.
+  const refNames = style?.refs ?? [];
+  const refSet = new Set(refNames);
+  const restThumbs = (style?.thumbs ?? []).filter((n) => !refSet.has(n));
 
   return (
     <Card
@@ -1219,6 +1224,41 @@ function ThumbnailEngineCard({
                 {first("tone")}
               </div>
               <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">{style.prompt}</p>
+              {refNames.length > 0 && (
+                <div className="mt-3">
+                  <div className="mb-1.5 text-[11px] font-medium text-muted-foreground">
+                    대표 썸네일 — 이 채널의 전형으로 뽑힌 {refNames.length}장
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {refNames.map((n) => (
+                      <img
+                        key={n}
+                        src={thumbnailStyleImageUrl(programId, n)}
+                        alt={n}
+                        className="aspect-video w-44 rounded-md border border-border object-cover"
+                      />
+                    ))}
+                  </div>
+                </div>
+              )}
+              {restThumbs.length > 0 && (
+                <div className="mt-3">
+                  <div className="mb-1.5 text-[11px] font-medium text-muted-foreground">
+                    학습에 쓴 수집 썸네일 {(style.thumbs ?? []).length}장
+                    {restThumbs.length > 12 ? " · 12장만 표시" : ""}
+                  </div>
+                  <div className="grid grid-cols-4 gap-1.5 sm:grid-cols-6">
+                    {restThumbs.slice(0, 12).map((n) => (
+                      <img
+                        key={n}
+                        src={thumbnailStyleImageUrl(programId, n)}
+                        alt={n}
+                        className="aspect-video w-full rounded border border-border object-cover"
+                      />
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           ) : (
             <div className="text-sm text-muted-foreground">아직 학습하지 않았습니다.</div>

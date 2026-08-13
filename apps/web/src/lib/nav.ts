@@ -88,7 +88,6 @@ export const NAV_GROUPS: NavGroup[] = [
     label: "도구",
     items: [
       { href: "/trends", label: "유튜브 트렌드", icon: TrendingUp },
-      { href: "/thumbnail-templates", label: "썸네일 레퍼런스", icon: ImageIcon },
       { href: "/business", label: "사업 운영", icon: Boxes },
       { href: "/ops", label: "운영 진단", icon: Activity },
     ],
@@ -113,7 +112,6 @@ export const SCREEN_META: Record<string, { title: string; subtitle: string }> = 
   // 아래 넷은 화면 안에서 제목을 또 그리던 것들이라(구 PageHeader) 부제를 그쪽 설명으로
   // 옮겨 왔다 — 상단바가 한 번만 그린다. 제목 표기도 여기로 단일화한다.
   "/trends": { title: "유튜브 트렌드", subtitle: "국가·카테고리별 인기 급상승 영상 — 기획 참고용" },
-  "/thumbnail-templates": { title: "썸네일 레퍼런스", subtitle: "swap 파이프라인이 쓸 방송사 완성작 · 드래그 업로드 · 태그 편집" },
   "/business": { title: "사업 운영", subtitle: "추천·클립·배포 결과를 프로그램/IP 단위로 — 부서 공유 · 편성 신호 · 승인 리스크" },
   "/ops": { title: "운영 진단", subtitle: "큐가 어떻게 도는지 · 업로드 영상에서 뭐가 나오고 뭐가 깨지는지" },
   // 사이드바에 없는 화면도 여기 있어야 한다 — 빠지면 상단바가 "STEP-D" 로 폴백해서

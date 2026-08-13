@@ -1,13 +1,13 @@
 # @stepd/server HTTP API 레퍼런스
 
-> 실측: **2026-08-12 · 라우트 214개** (GET 89 · POST 85 · DELETE 22 · PATCH 14 · PUT 4) · `apps/server/src/index.ts` 기준 — 라우트 추가 시 이 문서도 갱신.
+> 실측: **2026-08-13 · 라우트 206개** (GET 88 · POST 80 · DELETE 21 · PATCH 13 · PUT 4) · `apps/server/src/index.ts` 기준 — 라우트 추가 시 이 문서도 갱신.
 > 프론트 대응 함수는 `apps/web/src/lib/data/api.ts` 기준. 데이터 구조는 [data-model.md](data-model.md),
 > 큐·워커 동작은 [../ops/worker-queue.md](../ops/worker-queue.md) 참고.
 
 ## 공통 사항
 
 - 등록 라우트는 영역별로 관리한다: 헬스·상태 · **검색** · 콘텐츠(프로그램·업로드·미디어) · 캐스트 ·
-  **썸네일 레퍼런스/스타일** · 추천/클립/배포 · YouTube OAuth/채널/분석 · **Meta·TikTok OAuth** ·
+  **썸네일 스타일** · 추천/클립/배포 · YouTube OAuth/채널/분석 · **Meta·TikTok OAuth** ·
   큐/파이프라인 · admin(운영·진단·파괴적) · Lab 검수 · Lab `match.*`.
 - 모든 라우트는 `apps/server/src/index.ts` 한 파일에 등록된다 (작업 규칙: 분리 금지).
 - `/api/*`에 CORS 허용 (origin 반사, credentials 없음).
@@ -145,24 +145,18 @@ API 키(`api-keys.ts`). **화이트리스트(`API_KEY_ROUTES`)에 올린 라우�
 구간은 워커의 `content.analyze` 잡이 채운다 ([../ops/pipeline-current.md](../ops/pipeline-current-state.md)).
 청크 전송·재개 로직은 `api.ts`의 `uploadResumable()` 참고.
 
-## 썸네일 — 레퍼런스 · 스타일 프로파일 · 생성
+## 썸네일 — 스타일 프로파일 · 생성
 
-썸네일은 **사진 몇 장 + 한국어 한 줄 + 채널 스타일 프로파일**로 만든다. 레퍼런스 이미지를 모아
-Vision으로 분석하고, 프로그램별 스타일 프로파일을 학습해 생성 프롬프트에 얹는 구조다.
+썸네일은 **사진 몇 장 + 한국어 한 줄 + 채널 스타일 프로파일**로 만든다. 프로그램별로 채널
+썸네일을 수집·Vision 분석해 스타일 프로파일을 학습하고, 생성 프롬프트에 얹는 구조다.
+(구 `thumbnail-refs` 레퍼런스 풀 9개 라우트는 **2026-08-13 삭제** — swap 접근 폐기.
+정책의 근거는 이제 프로그램 스타일 프로파일 하나다.)
 
 | 메서드·경로 | 역할 | 요청/응답 요점 | 프론트 함수 |
 |---|---|---|---|
-| `GET /api/thumbnail-refs` | 레퍼런스 메타데이터 전체 | → `{ items }` | (직접 호출) |
-| `GET /api/thumbnail-refs/:id/image` | 레퍼런스 이미지 (GCS or local) | 쿼리 `variant` | (직접 URL) |
-| `POST /api/thumbnail-refs` | 이미지 업로드 (multipart) — GCS(prod) / local(dev) | `file`(필수) → `{ item }`. multipart 아니면 400, 확장자 미지원 400 | (직접 호출) |
-| `PATCH /api/thumbnail-refs/:id` | 메타데이터 편집 (`program`·`custom_tags`·`user_note` 등) | → `{ item }` | (직접 호출) |
-| `DELETE /api/thumbnail-refs/:id` | manifest + 파일 삭제 (GCS + local) | → `{ ok }` | (직접 호출) |
-| `POST /api/thumbnail-refs/:id/analyze` | Vision 자동 분석 (manifest `_analyzed=false → true`) | → `{ item }`. **Cloud Run에서는 501** — 로컬 워커에서 `python scripts/thumbnail/thumbnail_reference_manifest.py` | (직접 호출) |
-| `POST /api/thumbnail-refs/:id/preprocess` | 사전 가공 (텍스트→슬롯 라벨 · 얼굴→실루엣) | → `{ item }`. **Cloud Run에서는 501** — 로컬 워커에서 `python scripts/thumbnail/thumbnail_preprocess_template.py <id>` | (직접 호출) |
-| `POST /api/thumbnail-refs/batch/:action` | 미분석/미가공 항목 일괄 처리 (`analyze` \| `preprocess`) | → `{ ok, processed, results }` | (직접 호출) |
-| `POST /api/thumbnail-refs/import-youtube` | 이미 sync된 채널 영상 중 **상위 뷰 썸네일 자동 수집** → refs 추가 | `{ channelId(필수) }` → `{ added, items }`. 전제: 채널 sync 완료 · `entities`에 `youtube_video` 저장됨. 미sync면 404 | (직접 호출) |
 | `POST /api/programs/:id/thumbnail-style` | 프로그램 스타일 프로파일 **학습** (프로그램당 1회성 — 톤이 바뀌면 재실행) | `{ sourceUrl(필수) }` → `{ ok, jobId }`(`thumbnail.style` 잡). **재생목록 URL을 권한다** — 큰 채널은 프로그램·기수를 재생목록으로 나눠 담아서, 채널 전체로 학습하면 여러 프로그램 톤이 섞인다 | `trainThumbnailStyle` |
-| `GET /api/programs/:id/thumbnail-style` | 학습된 스타일 프로파일 조회 | → `{ programId, title, aggregate, prompt }`. 없으면 404 `not_trained` (먼저 학습을 돌려야 한다) | `fetchThumbnailStyle` |
+| `GET /api/programs/:id/thumbnail-style` | 학습된 스타일 프로파일 조회 | → `{ programId, title, aggregate, prompt, refs, thumbs }`. `refs`=전형으로 뽑힌 대표 2장, `thumbs`=수집 썸네일 전체 파일명. 없으면 404 `not_trained` (먼저 학습을 돌려야 한다) | `fetchThumbnailStyle` |
+| `GET /api/programs/:id/thumbnail-style/thumbs/:name` | 수집 썸네일 이미지 서빙 (`refs`·`thumbs`의 파일명) | → 이미지. 없으면 404 | `thumbnailStyleImageUrl` |
 | `POST /api/media/:id/thumbnail` | 회차 → 썸네일 후보 생성 | `{ programId(필수) }` → `{ ok, jobId }`(`thumbnail.generate` 잡). **인물이 등록 안 됐으면 워커가 실패로 남긴다** | `generateThumbnail` |
 
 ### 출연자 사진 — 사람이 등록한다
@@ -243,6 +237,11 @@ Vision으로 분석하고, 프로그램별 스타일 프로파일을 학습해 �
 | `GET /api/meta/auth` | Meta OAuth — 동의 화면 리다이렉트 **겸 콜백** (`code` 유무로 분기) | 쿼리 `return`(완료 후 이동 경로) · 콜백 시 `code, state, error, rerequest`. `META_APP_ID` 미설정 500 · `code` 누락 400 | `getMetaAuthUrl` |
 | `GET /api/meta/accounts` | 연결된 Meta 계정 목록 | → `{ accounts }` | `fetchMetaAccounts` |
 | `DELETE /api/meta/accounts/:publicId` | 계정 연결 해제 | → `{ ok }` | `deleteMetaAccount` |
+| `GET /api/instagram/auth` | Instagram 비즈니스 로그인(FB Page 경유 아님) — 동의 화면 리다이렉트 | 쿼리 `return`. `INSTAGRAM_APP_ID` 미설정 500 | `getInstagramAuthUrl` |
+| `GET /api/instagram/oauth/callback` | IG OAuth 콜백 — 토큰 교환(장기 ~60일)·프로필 저장 | `code, state, error` | — |
+| `GET /api/instagram/accounts` | 연결된 Instagram 계정 목록 | → `{ accounts }` (`expiresAt` 로 만료 표시) | `fetchInstagramAccounts` |
+| `POST /api/instagram/accounts/:publicId/disconnect` | 연동해제 — 토큰만 비움 | → `{ ok, status }` | `disconnectInstagramAccount` |
+| `DELETE /api/instagram/accounts/:publicId` | 계정 삭제 | → `{ ok }` | `deleteInstagramAccount` |
 | `GET /api/tiktok/auth` | TikTok OAuth — 동의 화면 리다이렉트 겸 콜백 | 쿼리 `return` · 콜백 `code, state, error`. `TIKTOK_CLIENT_KEY` 미설정 500 | `getTikTokAuthUrl` |
 | `GET /api/tiktok/accounts` | 연결된 TikTok 계정 목록 | → `{ accounts }` | `fetchTikTokAccounts` |
 | `DELETE /api/tiktok/accounts/:publicId` | 계정 연결 해제 | → `{ ok }` | `deleteTikTokAccount` |
@@ -347,8 +346,6 @@ Vision으로 분석하고, 프로그램별 스타일 프로파일을 학습해 �
   - (그 밖에 클립에 자막이 없어 제목·메타 생성이 불가할 때도 409를 쓴다.)
 - **416** — `stream`의 Range 시작점이 파일 크기를 벗어난 경우 (`Content-Range: bytes */<size>`).
 - **500** — OAuth env 미설정(`OAuth not configured`), 외부 API·인코딩 실패 등.
-- **501** — 해당 환경에서 미지원. `thumbnail-refs/:id/analyze`·`/preprocess`가 **Cloud Run에서**
-  501을 준다 (로컬 워커 스크립트로 돌려야 한다 · `hint`에 명령이 담겨 온다).
 - **502** — 외부 LLM 호출 실패 (`autofill failed` · `profile generation failed` · `no titles generated`).
 - **503** — ffmpeg 없음 (`GET /api/media/:id/frame`).
 

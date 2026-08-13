@@ -45,8 +45,8 @@ docs/          ops(현황·운영) / plans(계획) / reference / research / prot
 
 ## 백엔드 — apps/server
 
-Hono 단일 진입점(index.ts, **~7700줄, 라우트 214개**) + 별도 워커 프로세스 구조.
-(2026-08-08 실측 갱신)
+Hono 단일 진입점(index.ts, **~8400줄, 라우트 206개**) + 별도 워커 프로세스 구조.
+(2026-08-13 실측 갱신)
 
 | 파일 | 역할 |
 |------|------|
@@ -119,7 +119,7 @@ rights · dialogue · chyron · summary · emb_dialogue vector(768) · emb_summa
 `search-embed.ts`(RETRIEVAL_QUERY). Vertex 실패 시 **키워드축(pg_trgm) 단독 폴백** — 한국어는
 키워드 매칭이 강해서 벡터 없이도 검색이 성립한다.
 
-**주요 라우트** — 총 208개 (전체: [docs/reference/api-reference.md](docs/reference/api-reference.md))
+**주요 라우트** — 총 206개 (전체: [docs/reference/api-reference.md](docs/reference/api-reference.md))
 ```
 GET  /health · /api/state · /api/search        # 검색 = 하이브리드(벡터+키워드)
 POST /api/media/upload-init → finalize   # 브라우저→GCS 직접 resumable 업로드 (대용량 표준 경로)
@@ -128,7 +128,8 @@ GET  /api/media/:id/stream · /thumb · /frame · /analysis · /transcript
 POST /api/media/:id/analyze              # → content.analyze 큐잉
 GET/POST /api/programs/:id/cast          # 캐스트 사전등록 (인물 라벨링의 primary)
 POST /api/programs/:id/autofill · /profile/generate · /thumbnail-style
-GET/POST/PATCH/DELETE /api/thumbnail-refs/*      # 썸네일 레퍼런스 13개 라우트
+GET  /api/programs/:id/thumbnail-style(/thumbs/:name)   # 스타일 프로파일 + 수집 썸네일
+                                         # (구 /api/thumbnail-refs/* 레퍼런스 풀은 2026-08-13 삭제)
 POST /api/recommendations/:id/adopt · /reject
 GET/POST /api/clips/:id/reframe          # AI Beat별 Fit/Fill 분석 상태 조회·큐잉
 POST /api/clips/:id/export · /generate-metadata(채널별 메타) · /regenerate-titles
@@ -138,8 +139,7 @@ GET/POST /api/youtube/*                  # auth(mode=analytics|publish) · callb
 GET  /api/meta/auth · /api/tiktok/auth   # Meta·TikTok OAuth + 계정 연결
 GET  /api/queue/stats · /api/admin/jobs · /api/admin/media-analysis
 POST /api/admin/reset · /queue/purge · /gebd-vm/wake · /worker-vm/wake
-GET  /lab · /api/lab/*                   # admin Lab 20개 라우트 (읽기 무인증)
-POST /api/lab/match · /match/auto-bulk · DELETE /api/lab/match/:id   # LAB_WRITE_TOKEN 필요
+GET  /api/instagram/auth                 # Instagram 비즈니스 로그인 (FB Page 경유 아님 · 2026-08-13 분리)
 ```
 
 **환경변수** (실제 코드가 읽는 것)
@@ -148,7 +148,6 @@ DATABASE_URL          Cloud SQL 접속 (없으면 DB 초기화 실패)
 GCS_BUCKET            있으면 GCS 모드 / STEPD_STORAGE_DIR  로컬 모드 저장 경로
 GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET / PUBLIC_URL       YouTube OAuth
 PORT                  Cloud Run 주입(8080). cloudbuild에서 직접 설정 금지 — 예약 변수
-LAB_WRITE_TOKEN       Lab 매칭 쓰기 가드 (Secret Manager: stepd-lab-write-token). 없으면 쓰기 503
 CORE_DIR / CORE_PYTHON                    core/ 파이프라인 위치·파이썬 (워커)
 REFRAME_FACE_MODEL / REFRAME_PIPELINE_VERSION   AI 리프레임 모델 경로·플랜 캐시 버전 (워커)
 STT_PROVIDER          프로덕션 soniox (SONIOX_API_KEY 필요) · gemini · whisper(로컬 GPU)
@@ -159,7 +158,9 @@ WORKER_MODE           drain 이면 큐 비는 즉시 종료 / DRAIN_MAX_MS(기�
 YOUTUBE_UPLOAD_ENABLED   실업로드 게이트. 미설정·오타·빈값 = OFF
 GEBD_IMAGE / GEBD_MODEL / GEBD_ASSETS / GEBD_CHUNK_SEC(300) / GEBD_CORES(1)   GPU VM
 GEBD_VM_NAME / GEBD_VM_ZONE · WORKER_VM_NAME / WORKER_VM_ZONE   /admin/*-vm/wake 대상
-META_APP_ID / META_APP_SECRET / META_REDIRECT_URI                Meta OAuth
+META_APP_ID / META_APP_SECRET / META_REDIRECT_URI                Meta OAuth (Facebook Page 전용)
+INSTAGRAM_APP_ID / INSTAGRAM_APP_SECRET / INSTAGRAM_REDIRECT_URI Instagram 비즈니스 로그인
+                      (콘솔 "Instagram API" 제품의 Instagram 앱 ID/시크릿 — Meta 앱 ID와 다름)
 TIKTOK_CLIENT_KEY / TIKTOK_CLIENT_SECRET / TIKTOK_REDIRECT_URI   TikTok OAuth
 AUTO_GEBD / AUTO_THUMBNAIL                분석 완료 후 후속 잡 자동 큐잉 스위치
 ```

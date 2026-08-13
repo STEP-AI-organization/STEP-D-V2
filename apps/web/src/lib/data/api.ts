@@ -902,6 +902,8 @@ export interface AutomationRule {
 export interface RuleRun {
   id: number; at: string; ruleId: string | null; clipId: string | null;
   result: string; detail: string;
+  /** "platform:accountId" — 어느 채널로 나갔나(자동 배포 기록 표시용). */
+  accountKey?: string | null;
 }
 
 export interface RuleHold { ruleId: string; clipId: string; reason: string; heldAt: string }
@@ -1749,7 +1751,9 @@ export async function disconnectYouTubeChannel(channelId: string): Promise<void>
   }
 }
 
-// ── Meta (Facebook + Instagram) accounts ───────────────────────────────────────
+// ── Meta (Facebook Pages) accounts ─────────────────────────────────────────────
+// 2026-08-13 분리: Instagram 은 더 이상 이 흐름에 실려오지 않는다(아래 Instagram 섹션).
+// ig* 필드는 분리 전에 연결된 행에만 남아 있다.
 
 export interface MetaAccountInfo {
   publicId: string;
@@ -1786,6 +1790,45 @@ export async function deleteMetaAccount(publicId: string): Promise<void> {
 /** 연동해제 — 토큰만 끊고 계정 행은 남긴다. */
 export async function disconnectMetaAccount(publicId: string): Promise<void> {
   const res = await fetch(`${API_BASE}/meta/accounts/${publicId}/disconnect`, { method: "POST" });
+  if (!res.ok) throw new ApiError(res.status, await errorMessageOf(res));
+}
+
+// ── Instagram accounts (Instagram 비즈니스 로그인 — Facebook Page 경유 아님) ────
+
+export interface InstagramAccountInfo {
+  publicId: string;
+  igUserId: string;
+  username: string;
+  name: string | null;
+  profilePictureUrl: string | null;
+  /** long-lived 토큰 만료(~60일). 지나면 재연결해야 한다. */
+  expiresAt: number;
+  status: string;
+  connectedAt: number;
+}
+
+export async function fetchInstagramAccounts(): Promise<InstagramAccountInfo[]> {
+  const res = await fetch(`${API_BASE}/instagram/accounts`);
+  if (!res.ok) throw new ApiError(res.status, await errorMessageOf(res));
+  const data = (await res.json()) as { accounts: InstagramAccountInfo[] };
+  return data.accounts;
+}
+
+export function getInstagramAuthUrl(returnTo?: string): string {
+  const params = new URLSearchParams();
+  if (returnTo) params.set("return", returnTo);
+  const qs = params.toString();
+  return `${API_BASE}/instagram/auth${qs ? `?${qs}` : ""}`;
+}
+
+export async function deleteInstagramAccount(publicId: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/instagram/accounts/${publicId}`, { method: "DELETE" });
+  if (!res.ok) throw new ApiError(res.status, await errorMessageOf(res));
+}
+
+/** 연동해제 — 토큰만 끊고 계정 행은 남긴다. */
+export async function disconnectInstagramAccount(publicId: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/instagram/accounts/${publicId}/disconnect`, { method: "POST" });
   if (!res.ok) throw new ApiError(res.status, await errorMessageOf(res));
 }
 
@@ -2200,6 +2243,15 @@ export interface ThumbnailStyleProfile {
   aggregate: Record<string, unknown> | null;
   /** 생성 프롬프트에 실제로 들어가는 한국어 문장. */
   prompt: string;
+  /** 대표 썸네일 파일명 — 학습이 "그 채널의 전형"으로 뽑은 2장. */
+  refs: string[];
+  /** 학습에 쓴 수집 썸네일 전체 파일명. */
+  thumbs: string[];
+}
+
+/** refs·thumbs 의 파일명 → 이미지 URL. */
+export function thumbnailStyleImageUrl(programId: string, name: string): string {
+  return `${API_BASE}/programs/${programId}/thumbnail-style/thumbs/${encodeURIComponent(name)}`;
 }
 
 /** 없으면 null — 아직 학습 안 한 프로그램이다. */

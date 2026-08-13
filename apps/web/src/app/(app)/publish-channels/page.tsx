@@ -9,7 +9,7 @@ import { Youtube } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import type {
-  YouTubeChannelInfo, MetaAccountInfo, TikTokAccountInfo, NaverAccount,
+  YouTubeChannelInfo, MetaAccountInfo, InstagramAccountInfo, TikTokAccountInfo, NaverAccount,
 } from "@/lib/data/api";
 import {
   fetchYouTubeChannels,
@@ -20,6 +20,10 @@ import {
   getMetaAuthUrl,
   deleteMetaAccount,
   disconnectMetaAccount,
+  fetchInstagramAccounts,
+  getInstagramAuthUrl,
+  deleteInstagramAccount,
+  disconnectInstagramAccount,
   fetchTikTokAccounts,
   getTikTokAuthUrl,
   deleteTikTokAccount,
@@ -36,8 +40,10 @@ import {
 } from "@/lib/constants";
 
 /**
- * 배포채널 — 각 플랫폼 카드. YouTube·Meta(FB/IG)·TikTok 은 OAuth 로 붙고, **네이버(TV·클립)는
- * OAuth 가 없어** 로그인 세션을 등록하는 별도 섹션(NaverAccounts)에서 다룬다.
+ * 배포채널 — 각 플랫폼 카드. YouTube·Facebook·Instagram·TikTok 은 OAuth 로 붙고,
+ * **네이버(TV·클립)는 OAuth 가 없어** 로그인 세션을 등록하는 별도 섹션(NaverAccounts)에서 다룬다.
+ * Instagram 은 2026-08-13 부터 Facebook(Meta OAuth)과 **분리** — IG 계정으로 직접
+ * 로그인하는 비즈니스 로그인(/api/instagram/*)을 쓴다. Page 에 IG 를 연결해 둘 필요가 없다.
  * 새 채널 추가 흐름:
  *  1) lib/constants.ts DISTRIBUTION_CHANNELS 에 { label, icon, status } 항목 추가
  *     (status 는 DistributionChannelMeta 타입상 필수이지만, 이 화면의 배지는 더 이상 읽지 않는다
@@ -55,11 +61,11 @@ const CHANNEL_INFO: Record<DistributionChannel, { desc: string; note?: string }>
     desc: "OAuth로 채널 연결. 분석·수익은 '분석·수익 연결', 배포는 '업로드 채널' 옵션.",
   },
   instagram: {
-    desc: "Meta 통합 연결 — Facebook Page + 연결된 Instagram Business 한 번에.",
+    desc: "Instagram 비즈니스 로그인 — IG 프로페셔널 계정으로 직접 연결.",
     note: "연결해도 파일은 올라가지 않습니다 — 배포 기록만 남습니다",
   },
   facebook: {
-    desc: "Meta 통합 연결 — Facebook Page + 연결된 Instagram Business 한 번에.",
+    desc: "Meta OAuth 로 Facebook Page 연결.",
     note: "연결해도 파일은 올라가지 않습니다 — 배포 기록만 남습니다",
   },
   tiktok: {
@@ -143,6 +149,7 @@ export default function PublishChannelsPage() {
   }, []);
   useEffect(() => { void loadRules(); }, [loadRules]);
   const [metaAccounts, setMetaAccounts] = useState<MetaAccountInfo[]>([]);
+  const [igAccounts, setIgAccounts] = useState<InstagramAccountInfo[]>([]);
   const [tiktokAccounts, setTiktokAccounts] = useState<TikTokAccountInfo[]>([]);
   // 네이버 계정은 아래 NaverAccounts 섹션이 소유한다. 여기서는 상단 카드의 숫자만 쓰려고
   // 사본을 받는다 — 두 곳에서 각자 fetch 하면 추가·삭제 후 숫자가 어긋난다.
@@ -152,13 +159,15 @@ export default function PublishChannelsPage() {
 
   const loadAll = async () => {
     try {
-      const [chs, ma, tt] = await Promise.all([
+      const [chs, ma, ig, tt] = await Promise.all([
         fetchYouTubeChannels().catch(() => [] as YouTubeChannelInfo[]),
         fetchMetaAccounts().catch(() => [] as MetaAccountInfo[]),
+        fetchInstagramAccounts().catch(() => [] as InstagramAccountInfo[]),
         fetchTikTokAccounts().catch(() => [] as TikTokAccountInfo[]),
       ]);
       setChannels(chs);
       setMetaAccounts(ma);
+      setIgAccounts(ig);
       setTiktokAccounts(tt);
     } finally {
       setLoading(false);
@@ -178,9 +187,13 @@ export default function PublishChannelsPage() {
       setBanner(`채널 연결 실패: ${decodeURIComponent(params.get("error")!)}`);
     } else if (params.get("meta_success")) {
       const n = params.get("meta_count") ?? "0";
-      setBanner(`Meta 연결 완료 · ${n}개 페이지 저장됨`);
+      setBanner(`Facebook 연결 완료 · ${n}개 페이지 저장됨`);
     } else if (params.get("meta_error")) {
-      setBanner(`Meta 연결 실패: ${decodeURIComponent(params.get("meta_error")!)}`);
+      setBanner(`Facebook 연결 실패: ${decodeURIComponent(params.get("meta_error")!)}`);
+    } else if (params.get("ig_success")) {
+      setBanner(`Instagram 연결 완료 · @${decodeURIComponent(params.get("ig_name") ?? "")}`);
+    } else if (params.get("ig_error")) {
+      setBanner(`Instagram 연결 실패: ${decodeURIComponent(params.get("ig_error")!)}`);
     } else if (params.get("tiktok_success")) {
       setBanner(`TikTok 연결 완료 · "${decodeURIComponent(params.get("tiktok_name") ?? "")}"`);
     } else if (params.get("tiktok_error")) {
@@ -189,6 +202,7 @@ export default function PublishChannelsPage() {
     if (
       params.get("success") || params.get("error") ||
       params.get("meta_success") || params.get("meta_error") ||
+      params.get("ig_success") || params.get("ig_error") ||
       params.get("tiktok_success") || params.get("tiktok_error")
     ) {
       window.history.replaceState(null, "", "/publish-channels");
@@ -212,6 +226,26 @@ export default function PublishChannelsPage() {
     try {
       await disconnectMetaAccount(publicId);
       setMetaAccounts((prev) => prev.map((a) => a.publicId === publicId ? { ...a, status: "disconnected" } : a));
+    } catch {
+      alert("연동해제에 실패했습니다.");
+    }
+  };
+
+  const handleDeleteIg = async (publicId: string) => {
+    if (!confirm("이 Instagram 계정을 완전히 삭제하시겠습니까? 연결 기록까지 지워집니다.\n(배포만 멈추려면 '연동해제'를 쓰세요)")) return;
+    try {
+      await deleteInstagramAccount(publicId);
+      setIgAccounts((prev) => prev.filter((a) => a.publicId !== publicId));
+    } catch {
+      alert("삭제에 실패했습니다.");
+    }
+  };
+
+  const handleDisconnectIg = async (publicId: string) => {
+    if (!confirm("이 Instagram 계정 연동을 해제하시겠습니까? 배포 대상에서 빠지고, 다시 연결하면 이어서 쓸 수 있습니다.")) return;
+    try {
+      await disconnectInstagramAccount(publicId);
+      setIgAccounts((prev) => prev.map((a) => a.publicId === publicId ? { ...a, status: "disconnected" } : a));
     } catch {
       alert("연동해제에 실패했습니다.");
     }
@@ -295,10 +329,9 @@ export default function PublishChannelsPage() {
               id === "youtube" ? channels.length
               : id === "tiktok" ? tiktokAccounts.length
               : id === "facebook" ? metaAccounts.length
-              // 아래 Meta 섹션의 IG 규칙 컨트롤은 igUserId 로 렌더한다 — 세는 기준도 같아야 한다.
-              // (서버에서 igUserId=instagram_business_account.id · igUsername=username 은 각각
-              //  독립적으로 null 이 될 수 있다 — index.ts:5582-5583)
-              : id === "instagram" ? metaAccounts.filter((a) => a.igUserId).length
+              // IG 는 비즈니스 로그인으로 직접 붙는다 — Meta 행의 잔존 ig* 는 세지 않는다
+              // (그 토큰으로는 더 이상 IG 게시가 안 된다).
+              : id === "instagram" ? igAccounts.length
               // 네이버는 계정마다 쓸 곳(target)이 정해져 있다. TV 전용 계정을 클립 카드에서
               // 세면 "연결됨"인데 발행이 거부되는 모순이 생긴다.
               : id === "navertv" ? naverAccounts.filter((a) => a.target !== "clip" && a.hasSession).length
@@ -307,7 +340,8 @@ export default function PublishChannelsPage() {
             // 네이버는 OAuth 가 아니라 로그인 세션이라 아래 전용 섹션에서 다룬다.
             const isNaver = id === "navertv" || id === "naverclip";
             const connectHref =
-              id === "instagram" || id === "facebook" ? getMetaAuthUrl("/publish-channels")
+              id === "facebook" ? getMetaAuthUrl("/publish-channels")
+              : id === "instagram" ? getInstagramAuthUrl("/publish-channels")
               : id === "tiktok" ? getTikTokAuthUrl("/publish-channels")
               : null;
             return (
@@ -414,19 +448,19 @@ export default function PublishChannelsPage() {
 
       <NaverAccounts onChange={setNaverAccounts} />
 
-      {/* Meta: Facebook Page + Instagram Business (한 번 연결로 둘 다) */}
+      {/* Facebook: Meta OAuth — Page 단위. IG 는 아래 전용 섹션(비즈니스 로그인)으로 분리됨. */}
       <section className="mb-10">
         <div className="mb-3 flex items-center gap-2">
-          <h2 className="text-sm font-semibold text-muted-foreground">페이스북 · 인스타그램 연결</h2>
+          <h2 className="text-sm font-semibold text-muted-foreground">페이스북 연결</h2>
           <span className="text-[11px] text-muted-foreground/70">
-            (Facebook Page 소유자로 로그인 · 연결된 Instagram Business 계정이 자동으로 함께 저장됨)
+            (Facebook Page 소유자로 로그인 — 관리하는 모든 Page 가 저장됨)
           </span>
         </div>
 
         <Card className="p-4 mb-3">
           <div className="flex items-center justify-between gap-3">
             <div className="text-sm text-muted-foreground">
-              Facebook Page + 연결된 Instagram Business 계정을 한 번의 OAuth 로 등록합니다.
+              Facebook Page 를 Meta OAuth 로 등록합니다.
               같은 Meta 계정을 다시 클릭하면 최신 Page 목록으로 새로고침됩니다.
             </div>
             <div className="flex gap-2 shrink-0">
@@ -454,8 +488,8 @@ export default function PublishChannelsPage() {
         {metaAccounts.length === 0 ? (
           <Card className="p-6">
             <div className="text-sm text-muted-foreground">
-              연결된 Meta 페이지가 없습니다. 위 "+ Meta 계정 연결" 을 누르면
-              관리하는 모든 Facebook Page 와 연결된 Instagram Business 계정이 저장됩니다.
+              연결된 Facebook Page 가 없습니다. 위 "+ Meta 계정 연결" 을 누르면
+              관리하는 모든 Facebook Page 가 저장됩니다.
             </div>
           </Card>
         ) : (
@@ -479,9 +513,8 @@ export default function PublishChannelsPage() {
                       <div className="text-sm font-medium text-foreground">{a.pageName}</div>
                       <div className="text-xs text-muted-foreground">
                         FB Page ID {a.pageId}
-                        {a.igUsername
-                          ? ` · IG @${a.igUsername}`
-                          : " · IG 미연결 (Page 설정에서 연결 필요)"}
+                        {/* ig* 는 분리 전 통합 연결의 잔재 — 재연결하면 지워진다. IG 는 아래 전용 섹션. */}
+                        {a.igUsername ? ` · (구) IG @${a.igUsername}` : ""}
                         {a.connectedAt &&
                           ` · ${new Date(Number(a.connectedAt)).toLocaleDateString("ko-KR")} 연결`}
                       </div>
@@ -530,6 +563,99 @@ export default function PublishChannelsPage() {
                 </div>
               </Card>
             ))}
+          </div>
+        )}
+      </section>
+
+      {/* Instagram: 비즈니스 로그인 (IG 계정으로 직접 — Facebook Page 경유 아님) */}
+      <section className="mb-10">
+        <div className="mb-3 flex items-center gap-2">
+          <h2 className="text-sm font-semibold text-muted-foreground">인스타그램 연결 계정</h2>
+          <span className="text-[11px] text-muted-foreground/70">
+            (IG 프로페셔널 계정으로 직접 로그인 · 토큰 ~60일 — 만료 전 재연결 필요)
+          </span>
+        </div>
+
+        <Card className="p-4 mb-3">
+          <div className="flex items-center justify-between gap-3">
+            <div className="text-sm text-muted-foreground">
+              Instagram 비즈니스 로그인으로 계정을 연결합니다. Facebook Page 에 연결돼
+              있지 않아도 됩니다 — 프로페셔널(비즈니스·크리에이터) 계정이면 됩니다.
+            </div>
+            <Button
+              size="sm"
+              onClick={() => {
+                window.location.href = getInstagramAuthUrl("/publish-channels");
+              }}
+            >
+              + Instagram 계정 연결
+            </Button>
+          </div>
+        </Card>
+
+        {igAccounts.length === 0 ? (
+          <Card className="p-6">
+            <div className="text-sm text-muted-foreground">
+              연결된 Instagram 계정이 없습니다. 위 "+ Instagram 계정 연결" 버튼으로 붙이세요.
+            </div>
+          </Card>
+        ) : (
+          <div className="grid gap-3">
+            {igAccounts.map((a) => {
+              const expired = a.expiresAt && Number(a.expiresAt) < Date.now();
+              return (
+                <Card key={a.publicId} className="p-4">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      {a.profilePictureUrl ? (
+                        <img src={a.profilePictureUrl} alt={a.username} className="size-10 rounded-full" />
+                      ) : (
+                        <div className="flex size-10 items-center justify-center rounded-full bg-muted text-sm text-muted-foreground">
+                          {a.username.charAt(0)}
+                        </div>
+                      )}
+                      <div>
+                        <div className="text-sm font-medium text-foreground">@{a.username}</div>
+                        <div className="text-xs text-muted-foreground">
+                          {a.name ? `${a.name} · ` : ""}
+                          IG ID {a.igUserId}
+                          {a.connectedAt &&
+                            ` · ${new Date(Number(a.connectedAt)).toLocaleDateString("ko-KR")} 연결`}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <StatusBadge tone={a.status === "active" && !expired ? "done" : "warn"}>
+                        {a.status !== "active" ? "연동 끊김 — 재연결 필요"
+                          : expired ? "토큰 만료 — 재연결 필요" : "활성"}
+                      </StatusBadge>
+                      <RuleControls
+                        platform="instagram"
+                        accountId={a.igUserId}
+                        accountLabel={`@${a.username}`}
+                        ruled={ruledKeys.has(`instagram:${a.igUserId}`)}
+                        unknown={rulesErr !== null}
+                        onOpen={setRuleFor}
+                      />
+                      {a.status === "active" && (
+                        <button
+                          onClick={() => handleDisconnectIg(a.publicId)}
+                          className="rounded-md border border-border px-2 py-1 text-xs text-muted-foreground transition hover:text-status-warn"
+                        >
+                          연동해제
+                        </button>
+                      )}
+                      <button
+                        onClick={() => handleDeleteIg(a.publicId)}
+                        className="rounded-md px-2 py-1 text-xs text-muted-foreground transition hover:text-status-error"
+                      >
+                        삭제
+                      </button>
+                    </div>
+                  </div>
+                </Card>
+              );
+            })}
           </div>
         )}
       </section>

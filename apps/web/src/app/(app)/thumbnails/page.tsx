@@ -15,13 +15,17 @@
  *    명시한다(F7-5). 알림을 만들면 "알림을 놓치면 결과도 사라진다"고 오해하게 된다.
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 
 import { useToast } from "@/components/ui/toast";
 import {
   fetchThumbnailCandidates,
+  fetchThumbnailStyle,
   generateThumbnails,
   selectThumbnailCandidate,
+  thumbnailStyleImageUrl,
   type ThumbnailCandidateFile,
+  type ThumbnailStyleProfile,
 } from "@/lib/data/api";
 import { useAppData } from "@/lib/data/store";
 import { fmtTime } from "@/lib/utils";
@@ -46,6 +50,31 @@ export default function ThumbnailsPage() {
   const target = targets.find((c) => c.id === targetId) ?? null;
 
   const mediaIdOf = (c: Clip) => c.mediaId ?? c.sourceMediaId ?? "";
+
+  // 생성 정책 = 프로그램 스타일 프로파일. 대상을 고르면 그 프로그램의 대표 썸네일과
+  // 분석 결과를 함께 보여 준다 — 뭘 근거로 생성될지 누르기 전에 보인다.
+  const targetProgramId = useMemo(() => {
+    const ep = episodes.find((e) => e.id === target?.episodeId);
+    return ep?.programId ?? "";
+  }, [episodes, target]);
+  const targetProgram = programs.find((p) => p.id === targetProgramId) ?? null;
+  const [style, setStyle] = useState<ThumbnailStyleProfile | null>(null);
+  const [styleLoading, setStyleLoading] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    setStyle(null);
+    if (!targetProgramId) { setStyleLoading(false); return; }
+    setStyleLoading(true);
+    void fetchThumbnailStyle(targetProgramId)
+      .catch(() => null)
+      .then((s) => {
+        if (!alive) return;
+        setStyle(s);
+        setStyleLoading(false);
+      });
+    return () => { alive = false; };
+  }, [targetProgramId]);
 
   const loadCandidates = useCallback(async (clip: Clip | null) => {
     const mediaId = clip ? mediaIdOf(clip) : "";
@@ -230,6 +259,64 @@ export default function ThumbnailsPage() {
             {busy ? "요청 중…" : "썸네일 생성"}
           </button>
         </div>
+
+        {/* 프로그램 스타일 — 생성 정책의 근거. 뭘 보고 만들지 누르기 전에 보여 준다. */}
+        {target && targetProgramId && (
+          <div className="sd-card flex flex-col gap-2.5 p-3">
+            <div className="flex items-center gap-2">
+              <span className="sd-eb" style={{ color: "var(--sd-label)" }}>프로그램 스타일</span>
+              <span className="sd-mono ml-auto truncate text-[10px]" style={{ color: "var(--sd-mut)" }}>
+                {targetProgram?.title ?? ""}
+              </span>
+            </div>
+            {styleLoading ? (
+              <div className="text-[11.5px]" style={{ color: "var(--sd-mut)" }}>불러오는 중…</div>
+            ) : style ? (
+              <>
+                {(style.refs ?? []).length > 0 && (
+                  <div>
+                    <div className="mb-1 text-[10.5px]" style={{ color: "var(--sd-mut)" }}>
+                      대표 썸네일 — 이 채널의 전형으로 뽑힌 {style.refs.length}장
+                    </div>
+                    <div className="grid grid-cols-2 gap-1.5">
+                      {style.refs.map((n) => (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          key={n}
+                          src={thumbnailStyleImageUrl(targetProgramId, n)}
+                          alt={n}
+                          className="aspect-video w-full rounded-[4px] object-cover"
+                          style={{ border: "1px solid var(--sd-border)" }}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                )}
+                <p className="text-[11px] leading-relaxed" style={{ color: "var(--sd-mut)" }}>
+                  {style.prompt || "분석 문장이 없습니다."}
+                </p>
+                <Link
+                  href={`/programs/${targetProgramId}/settings`}
+                  className="text-[10.5px] underline underline-offset-2"
+                  style={{ color: "var(--sd-accent)" }}
+                >
+                  프로그램 설정에서 다시 학습 · 수집 썸네일 전체 보기
+                </Link>
+              </>
+            ) : (
+              <p className="text-[11.5px] leading-relaxed" style={{ color: "var(--sd-mut)" }}>
+                이 프로그램은 아직 스타일 학습 전입니다 — 생성이 프로그램 톤을 반영하지 못합니다.{" "}
+                <Link
+                  href={`/programs/${targetProgramId}/settings`}
+                  className="underline underline-offset-2"
+                  style={{ color: "var(--sd-accent)" }}
+                >
+                  프로그램 설정에서 학습하기
+                </Link>
+              </p>
+            )}
+          </div>
+        )}
 
         <div className="sd-card flex flex-col gap-2.5 p-3">
           <div className="flex items-center gap-2">

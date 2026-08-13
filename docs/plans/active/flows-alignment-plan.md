@@ -82,7 +82,9 @@ README.md:115 가 요구하는 라우트 12개 + 오버레이 3개 + 앱 셸 1�
 | §15 주간 리포트 모달 | 없음 | 신규 |
 | §0 앱 셸 | `(app)/layout.tsx` + `AppShell` | 대폭수정 (역할 컨텍스트) |
 
-설계에 대응이 없는 현행 라우트 4개(`/business`, `/trends`, `/ops`, `/thumbnail-templates`)와 `/highlights`·`/programs/[id]/highlights` 는 존치/폐기 결정 필요(§7 D9).
+설계에 대응이 없는 현행 라우트 중 `/thumbnail-templates` 는 **2026-08-13 폐기됨**(썸네일 정책이
+프로그램 스타일 프로파일로 일원화). 나머지(`/business`, `/trends`, `/ops`)와
+`/highlights`·`/programs/[id]/highlights` 는 존치/폐기 결정 필요(§7 D9).
 
 ---
 
@@ -324,7 +326,7 @@ mock 이 무의미한 것들만:
 | **D6** | F8 에셋은 백엔드가 통째로 없다 | 폴더 CRUD·업로드·서빙·삭제 전부 신설(README.md:185). 다른 화면 PR 과 규모가 다르다 | 베타 범위에 넣을지. 메모리의 "영업 전 단계: 외부 데이터만으로 굴러가는 기능"과 대조 필요 |
 | **D7** | 진행률·폴링 수치 불일치 | 명세는 97% 정지 + 2.6초 폴링(FLOWS.md:43). 현재는 서버 99% clamp(`content-pipeline.ts:983`)에 8/45/15초 적응형 폴링. **⊘ 규칙(클라 타이머로 100%)은 이미 지켜지고 있다** | 2.6초로 낮추면 DB 부하가 3배 이상. 값을 명세에 맞출지, ⊘ 만족으로 볼지 |
 | **D8** | 프로그램 상태 3분류 도입 | 현재 `"archived"` 는 **도달 불가능한 죽은 값**(`index.ts:372` 하드코딩, PATCH 에 status 분기 없음 `:538-658`). `편성 예정`은 타입에도 없다 | 3분류 전이 규칙(누가 언제 종영 처리?) |
-| **D9** | 설계에 대응이 없는 현행 화면 4개 | `/business`, `/trends`, `/ops`, `/thumbnail-templates` + `/highlights`, `/programs/[id]/highlights` | 존치/폐기. 특히 `/business` 의 "권리/승인 큐"(`business/page.tsx:404`)는 이름만 권리이고 실제로는 배포실패+19세+브랜드 파생 목록(`:142-172`)이라 U6 과 중복·혼동 |
+| **D9** | 설계에 대응이 없는 현행 화면 | `/business`, `/trends`, `/ops` (`/thumbnail-templates` 는 2026-08-13 폐기 완료) + `/highlights`, `/programs/[id]/highlights` | 존치/폐기. 특히 `/business` 의 "권리/승인 큐"(`business/page.tsx:404`)는 이름만 권리이고 실제로는 배포실패+19세+브랜드 파생 목록(`:142-172`)이라 U6 과 중복·혼동 |
 | **D10** | factory ingest API 와 F6 규칙의 관계 | FLOWS.md:143 "규칙이 없으면 파이프라인은 아무것도 하지 않는다". 외부 소비자(AENA)의 `POST /api/factory/ingest` 는 사람이 명시적으로 부르는 것이라 "기본 동작"은 아니지만, 규칙을 우회하는 건 사실이다 | 규칙 우회 ingest 를 허용할지, 아니면 ingest 도 임시 규칙을 만들게 할지 |
 | **D11** | 테스트가 프로덕션 이미지에 들어간다 | `apps/server/.dockerignore` 에 `*.test.ts` 없음. 지금은 2개지만 계획대로면 10개 이상 | S0 에서 한 줄 추가 |
 | **D12** | `index.ts` 6036줄 | CLAUDE.md 는 라우트 분리를 금지한다. 이 계획은 **순수 헬퍼만** 빼므로 규칙과 충돌하지 않지만, S1b~S4 가 index.ts 를 크게 건드린다 — 병렬 세션 동시 편집 위험(메모리 `concurrent-editor-sessions`) | 서버 PR 은 직렬로. S 레인 병렬 금지 |
