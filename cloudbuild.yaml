@@ -67,16 +67,19 @@ steps:
           --min-instances=1 \
           --cpu-boost \
           --max-instances=5 \
-          --set-env-vars=NODE_ENV=production,GCS_BUCKET=$_GCS_BUCKET,FACTORY_ENABLED=1,CREDIT_PRICE_KRW=$_CREDIT_PRICE_KRW,AUTH_REQUIRED=$_AUTH_REQUIRED,INVOICE_ISSUER_NAME=$_INVOICE_ISSUER_NAME,INVOICE_ISSUER_BIZNO=$_INVOICE_ISSUER_BIZNO,INVOICE_ISSUER_ADDRESS=$_INVOICE_ISSUER_ADDRESS,INVOICE_ISSUER_CONTACT=$_INVOICE_ISSUER_CONTACT \
+          --set-env-vars=NODE_ENV=production,GCS_BUCKET=$_GCS_BUCKET,FACTORY_ENABLED=1,CREDIT_PRICE_KRW=$_CREDIT_PRICE_KRW,AUTH_REQUIRED=$_AUTH_REQUIRED,NAVER_UPLOAD_ENABLED=1,INVOICE_ISSUER_NAME=$_INVOICE_ISSUER_NAME,INVOICE_ISSUER_BIZNO=$_INVOICE_ISSUER_BIZNO,INVOICE_ISSUER_ADDRESS=$_INVOICE_ISSUER_ADDRESS,INVOICE_ISSUER_CONTACT=$_INVOICE_ISSUER_CONTACT \
           --set-secrets=DATABASE_URL=stepd-db-url:latest \
           --set-secrets=GOOGLE_CLIENT_ID=stepd-google-client-id:latest \
           --set-secrets=GOOGLE_CLIENT_SECRET=stepd-google-client-secret:latest \
           --set-secrets=JWT_SECRET=stepd-jwt-secret:latest \
           --set-secrets=PUBLIC_URL=stepd-public-url:latest \
-          --set-secrets=LAB_WRITE_TOKEN=stepd-lab-write-token:latest \
           --set-secrets=INTERNAL_API_TOKEN=stepd-factory-api-key:latest \
           --set-secrets=TIKTOK_CLIENT_KEY=stepd-tiktok-client-key:latest \
           --set-secrets=TIKTOK_CLIENT_SECRET=stepd-tiktok-client-secret:latest \
+          --set-secrets=META_APP_ID=stepd-meta-app-id:latest \
+          --set-secrets=META_APP_SECRET=stepd-meta-app-secret:latest \
+          --set-secrets=INSTAGRAM_APP_ID=stepd-instagram-app-id:latest \
+          --set-secrets=INSTAGRAM_APP_SECRET=stepd-instagram-app-secret:latest \
           --set-secrets=PORTONE_API_SECRET=stepd-portone-api-secret:latest \
           --set-secrets=PORTONE_STORE_ID=stepd-portone-store-id:latest \
           --set-secrets=PORTONE_CHANNEL_KEY=stepd-portone-channel-key:latest \
