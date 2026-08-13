@@ -358,8 +358,8 @@ process.on("uncaughtException", (err) => console.error("[stepd-server] uncaughtE
 
 // Sync init — no CPU throttling issues on Cloud Run
 let dbReady = false;
-const FFMPEG = hasFfmpeg();
-console.log(`[stepd-server] ffmpeg available: ${FFMPEG}`);
+// 상수 캐시 금지 — hasFfmpeg 가 성공을 캐시하고 실패만 재프로브한다 (ffmpeg.ts 주석 참조).
+console.log(`[stepd-server] ffmpeg available: ${hasFfmpeg()}`);
 
 // Init DB in background — don't block server startup
 initDb()
@@ -540,7 +540,7 @@ async function assertAuthPosture(): Promise<void> {
 app.get("/health", async (c) => {
   // `youtubeUpload` is the gate's state, not a secret — it's the fastest way to confirm a
   // deployed revision can't publish (and lets the web hide the publish action).
-  return c.json({ ok: dbReady, ffmpeg: FFMPEG, youtubeUpload: youtubeUploadEnabled() });
+  return c.json({ ok: dbReady, ffmpeg: hasFfmpeg(), youtubeUpload: youtubeUploadEnabled() });
 });
 
 // ── 로그인 (이메일+비밀번호 · 초대제) ─────────────────────────────────────────
@@ -2465,7 +2465,7 @@ app.post("/api/admin/remux/:id", async (c) => {
   requireOpsAccess(c);
   const m = await getMedia(c.req.param("id"));
   if (!m) return c.json({ error: "media not found" }, 404);
-  if (!FFMPEG || !useGcs()) return c.json({ error: "ffmpeg + GCS required" }, 400);
+  if (!hasFfmpeg() || !useGcs()) return c.json({ error: "ffmpeg + GCS required" }, 400);
   const objPath = parseObjectPath(m.path);
   if (!(await fileExists(objPath))) return c.json({ error: "file not found in storage" }, 404);
 
@@ -2606,7 +2606,7 @@ app.get("/api/media/:id/frame", async (c) => {
   const objPath = `analysis/${id}/frames/${key}.jpg`;
 
   if (!(await fileExists(objPath))) {
-    if (!FFMPEG) return c.json({ error: "ffmpeg unavailable" }, 503);
+    if (!hasFfmpeg()) return c.json({ error: "ffmpeg unavailable" }, 503);
     const masterObjPath = parseObjectPath(m.path);
     if (!(await fileExists(masterObjPath))) return c.json({ error: "source not found" }, 404);
     const srcPath = useGcs() ? await signedReadUrl(masterObjPath, 60 * 60 * 1000) : m.path;
@@ -2655,7 +2655,7 @@ app.get("/api/media/:id/segment", async (c) => {
   const objPath = `analysis/${id}/segments/${sKey}_${eKey}.mp4`;
 
   if (!(await fileExists(objPath))) {
-    if (!FFMPEG) return c.json({ error: "ffmpeg unavailable" }, 503);
+    if (!hasFfmpeg()) return c.json({ error: "ffmpeg unavailable" }, 503);
     const m = await getMedia(id);
     if (!m) return c.json({ error: "media not found" }, 404);
     const masterObjPath = parseObjectPath(m.path);
@@ -3289,7 +3289,7 @@ async function prepareUploadedObject(mediaId: string, objectPath: string): Promi
   // RAM 백엔드 /tmp 에 통째로 올라가므로 크기 가드(REMUX_MAX_MB, 기본 512MB)를 둔다.
   const REMUX_MAX = (Number(process.env.REMUX_MAX_MB) || 512) * 1024 * 1024;
   const remuxSize = await fileSize(objectPath).catch(() => 0);
-  if (FFMPEG && remuxSize > 0 && remuxSize <= REMUX_MAX) {
+  if (hasFfmpeg() && remuxSize > 0 && remuxSize <= REMUX_MAX) {
     const tmpDir = path.resolve("/tmp/stepd-uploads");
     fs.mkdirSync(tmpDir, { recursive: true });
     const webTmp = path.join(tmpDir, `${mediaId}-web.mp4`);
@@ -3308,7 +3308,7 @@ async function prepareUploadedObject(mediaId: string, objectPath: string): Promi
   // 프로브·썸네일은 짧은 서명 URL 을 ffmpeg 에 넘겨 range-read 로만 뽑는다(전량 다운로드 없음).
   let meta = { durationSec: 0, width: 0, height: 0, codec: "", hasAudio: false };
   let thumbStored: string | null = null;
-  if (FFMPEG) {
+  if (hasFfmpeg()) {
     try {
       const readUrl = await signedReadUrl(objectPath);
       meta = await probe(readUrl).catch((e) => { console.error("[prepare] probe failed", e); return meta; });
@@ -3525,7 +3525,7 @@ app.post("/api/media/finalize", async (c) => {
   // instance; raise REMUX_MAX_MB only if the Cloud Run instance has the RAM to spare.
   const REMUX_MAX = (Number(process.env.REMUX_MAX_MB) || 512) * 1024 * 1024;
   const remuxSize = await fileSize(objectPath).catch(() => 0); // never the client's number
-  if (FFMPEG && remuxSize > 0 && remuxSize <= REMUX_MAX) {
+  if (hasFfmpeg() && remuxSize > 0 && remuxSize <= REMUX_MAX) {
     const tmpDir = path.resolve("/tmp/stepd-uploads");
     fs.mkdirSync(tmpDir, { recursive: true });
     const webTmp = path.join(tmpDir, `${mediaId}-web.mp4`);
@@ -3547,7 +3547,7 @@ app.post("/api/media/finalize", async (c) => {
   // so Cloud Run memory stays flat regardless of source length.
   let meta = { durationSec: 0, width: 0, height: 0, codec: "", hasAudio: false };
   let thumbStored: string | null = null;
-  if (FFMPEG) {
+  if (hasFfmpeg()) {
     try {
       const readUrl = await signedReadUrl(objectPath);
       meta = await probe(readUrl).catch((e) => {
@@ -3656,7 +3656,7 @@ app.post("/api/media/upload", async (c) => {
   // Probe + thumbnail from a local temp copy (ffmpeg reads the filesystem).
   let meta = { durationSec: 0, width: 0, height: 0, codec: "", hasAudio: false };
   let thumbStored: string | null = null;
-  if (FFMPEG) {
+  if (hasFfmpeg()) {
     const tmpDir = path.resolve("/tmp/stepd-uploads");
     fs.mkdirSync(tmpDir, { recursive: true });
     const tmpPath = path.join(tmpDir, `${mediaId}${ext}`);
@@ -3715,7 +3715,7 @@ app.post("/api/media/clip-upload", async (c) => {
   // Probe + thumbnail from a local temp copy (ffmpeg reads the filesystem).
   let meta = { durationSec: 0, width: 0, height: 0, codec: "", hasAudio: false };
   let thumbStored: string | null = null;
-  if (FFMPEG) {
+  if (hasFfmpeg()) {
     const tmpDir = path.resolve("/tmp/stepd-uploads");
     fs.mkdirSync(tmpDir, { recursive: true });
     const tmpPath = path.join(tmpDir, `${mediaId}${ext}`);
@@ -6573,7 +6573,7 @@ app.post("/api/clips/:id/export", async (c) => {
   const master =
     (clip.sourceMediaId ? allMedia.find((m) => m.id === clip.sourceMediaId) : undefined) ??
     allMedia.find((m) => m.episodeId === clip.episodeId && m.role === "master");
-  if (!master || !FFMPEG) {
+  if (!master || !hasFfmpeg()) {
     return c.json({ error: "no master video or ffmpeg unavailable to render" }, 409);
   }
 

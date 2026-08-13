@@ -21,13 +21,25 @@ function normalizeHexColor(input: string | undefined, fallback: string): string 
   return m ? `#${m[1].toLowerCase()}` : fallback;
 }
 
+// 성공은 영구 캐시, 실패는 30초 간격으로만 재프로브한다.
+// 부팅 1회 프로브를 상수로 들고 있으면 콜드스타트 CPU 경합에서 5초 타임아웃 오탐 한 번에
+// 인스턴스 수명 내내 false 로 고착된다(실측 2026-08-13 — 이미지에 ffmpeg 이 있는데 /health
+// 가 false). 반대로 스로틀 없이 매번 물으면 ffmpeg 없는 로컬 폴백 환경에서 요청마다 5초씩
+// 동기 블로킹된다 — 그래서 실패 쪽만 간격을 둔다.
+let ffmpegOk = false;
+let lastProbeAt = 0;
 export function hasFfmpeg(): boolean {
+  if (ffmpegOk) return true;
+  const now = Date.now();
+  if (now - lastProbeAt < 30_000) return false;
+  lastProbeAt = now;
   try {
     const out = execFileSync("ffmpeg", ["-version"], { timeout: 5000, encoding: "utf8", stdio: "pipe" });
-    return out.includes("ffmpeg version");
+    ffmpegOk = out.includes("ffmpeg version");
   } catch {
-    return false;
+    ffmpegOk = false;
   }
+  return ffmpegOk;
 }
 
 export function probe(filePath: string): Promise<ProbeResult> {
