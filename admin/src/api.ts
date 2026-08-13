@@ -4,7 +4,7 @@
  */
 
 export class ApiError extends Error {
-  constructor(public status: number, message: string) {
+  constructor(public status: number, message: string, public field?: string) {
     super(message);
   }
 }
@@ -16,8 +16,14 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
     headers: { "content-type": "application/json", ...(init?.headers ?? {}) },
   });
   const text = await res.text();
-  const body = text ? (JSON.parse(text) as any) : {};
-  if (!res.ok) throw new ApiError(res.status, body.message ?? body.error ?? `HTTP ${res.status}`);
+  // 프록시 502/503·Cloud Run 콜드스타트는 HTML/plain 을 준다. res.ok 판정 전에 JSON.parse 하면
+  // 진짜 상태 코드 대신 SyntaxError 로 터져 장애가 클라 버그처럼 보인다 → 파싱 실패를 흡수한다.
+  let body: any = {};
+  if (text) {
+    try { body = JSON.parse(text); }
+    catch { body = { message: text.slice(0, 300) }; }
+  }
+  if (!res.ok) throw new ApiError(res.status, body.message ?? body.error ?? `HTTP ${res.status}`, body.field);
   return body as T;
 }
 

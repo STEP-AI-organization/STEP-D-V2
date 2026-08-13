@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { api, type AdminUser, type ApiKey, type CompanyDetail, type Tenant } from "../api";
 import { Panel, State, StatusTag, useLoad, when } from "./common";
 import { Invoice } from "./Invoice";
@@ -36,18 +36,22 @@ function CompanyCreate({ onDone, onClose }: { onDone: () => void; onClose: () =>
   const [name, setName] = useState(""); const [billingEmail, setBillingEmail] = useState("");
   const [ownerName, setOwnerName] = useState(""); const [ownerEmail, setOwnerEmail] = useState("");
   const [password, setPassword] = useState(""); const [credits, setCredits] = useState("");
+  const [kind, setKind] = useState("api");
   const [result, setResult] = useState<{ email: string; password: string } | null>(null);
   const [error, setError] = useState<string | null>(null); const [busy, setBusy] = useState(false);
   async function submit(e: React.FormEvent) {
     e.preventDefault(); setBusy(true); setError(null);
     try {
-      const made = await api.createTenant({ name, kind: "standard", billingEmail: billingEmail || undefined, ownerName, ownerEmail, ownerPassword: password || undefined, initialCredits: credits ? Number(credits) : undefined });
-      setResult({ email: made.owner.email, password: made.temporaryPassword }); onDone();
-    } catch (err) { setError(String(err)); } finally { setBusy(false); }
+      const made = await api.createTenant({ name, kind, billingEmail: billingEmail || undefined, ownerName, ownerEmail, ownerPassword: password || undefined, initialCredits: credits ? Number(credits) : undefined });
+      // ⚠️ 여기서 onDone() 을 부르지 않는다 — 부모가 폼을 unmount 해 자동생성 비밀번호가 화면에
+      // 뜨기 전에 사라진다(서버는 평문 미보관 → 복구 불가). 확인을 눌러야 닫고 목록을 새로고침한다.
+      setResult({ email: made.owner.email, password: made.temporaryPassword });
+    } catch (err) { setError(err instanceof Error ? err.message : String(err)); } finally { setBusy(false); }
   }
-  return <div className="formbox">{result ? <Credential email={result.email} password={result.password} onClose={onClose} /> : <form onSubmit={submit}>
+  return <div className="formbox">{result ? <Credential email={result.email} password={result.password} onClose={onDone} /> : <form onSubmit={submit}>
     <div className="formgrid">
       <label>회사명<input value={name} onChange={(e) => setName(e.target.value)} required /></label>
+      <label>유형<select value={kind} onChange={(e) => setKind(e.target.value)}><option value="api">api · 고객사(시스템 연동)</option><option value="web">web · 고객사(화면 사용)</option><option value="internal">internal · 사내</option></select></label>
       <label>청구 연락처 이메일<input type="email" value={billingEmail} onChange={(e) => setBillingEmail(e.target.value)} /></label>
       <label>첫 담당자 이름<input value={ownerName} onChange={(e) => setOwnerName(e.target.value)} /></label>
       <label>첫 담당자 이메일<input type="email" value={ownerEmail} onChange={(e) => setOwnerEmail(e.target.value)} required /></label>
@@ -65,7 +69,7 @@ export function CompanyPage({ tenantId, onClose }: { tenantId: string; onClose: 
   return <>
     <button className="back" onClick={onClose}>← 회사 목록</button>
     <State busy={detail.busy} error={detail.error}>{data && <>
-      <div className="company-head"><div><h1>{data.tenant.name}</h1><p className="sub">#{data.tenant.id} · {data.tenant.billingEmail || "청구 연락처 미등록"}</p></div><StatusTag status={data.tenant.status} /></div>
+      <div className="company-head"><div><h1>{data.tenant.name}</h1><p className="sub">#{data.tenant.id} · {data.tenant.billingEmail || "청구 연락처 미등록"}</p></div><div className="row" style={{ gap: 10, alignItems: "center" }}><StatusTag status={data.tenant.status} /><TenantStatusControls tenant={data.tenant} onChanged={detail.reload} /></div></div>
       <div className="tabs">{(["overview", "performance", "billing", "members", "keys", "history"] as const).map((id) => <button key={id} className={tab === id ? "active" : ""} onClick={() => setTab(id)}>{labels[id]}</button>)}</div>
       {tab === "overview" && <CompanyOverview data={data} onChanged={detail.reload} />}
       {tab === "performance" && <Performance tenantId={tenantId} />}
@@ -75,6 +79,30 @@ export function CompanyPage({ tenantId, onClose }: { tenantId: string; onClose: 
       {tab === "history" && <History data={data} />}
     </>}</State>
   </>;
+}
+
+// 회사 정지/재개/해지 — 미납·악용 회사를 콘솔에서 끊는 자리. 서버가 status 검증 + 세션 취소를
+// 처리하고(requireReason 강제), 여기서는 사유를 받아 넘기고 종료된 세션 수를 보여준다.
+function TenantStatusControls({ tenant, onChanged }: { tenant: CompanyDetail["tenant"]; onChanged: () => void }) {
+  const [busy, setBusy] = useState(false);
+  async function setStatus(status: string, label: string) {
+    const why = window.prompt(`${tenant.name} 을(를) ${label} 합니다. 사유(4자 이상, 감사에 남습니다):`);
+    if (why === null) return;
+    if (why.trim().length < 4) { alert("사유는 4자 이상이어야 합니다."); return; }
+    if (!confirm(`정말 ${label} 할까요? — ${tenant.name}`)) return;
+    setBusy(true);
+    try {
+      const r = await api.updateTenant(tenant.id, { status, reason: why.trim() });
+      onChanged();
+      alert(`${label} 완료${r.sessionsRevoked != null ? ` · 세션 ${r.sessionsRevoked}개 종료` : ""}`);
+    } catch (e) { alert(e instanceof Error ? e.message : String(e)); }
+    finally { setBusy(false); }
+  }
+  return <div className="row" style={{ gap: 6 }}>
+    {tenant.status !== "active" && <button disabled={busy} onClick={() => void setStatus("active", "활성화")}>활성화</button>}
+    {tenant.status === "active" && <button className="danger" disabled={busy} onClick={() => void setStatus("suspended", "정지")}>정지</button>}
+    {tenant.status !== "closed" && <button className="danger" disabled={busy} onClick={() => void setStatus("closed", "해지")}>해지</button>}
+  </div>;
 }
 
 const labels = { overview: "개요", performance: "성과", billing: "결제·크레딧", members: "멤버", keys: "API 키", history: "운영 이력" };
@@ -110,26 +138,50 @@ function Performance({ tenantId }: { tenantId: string }) {
 function Billing({ tenantId, payments }: { tenantId: string; payments: CompanyDetail["payments"] }) {
   const credits = useLoad(() => api.credits(tenantId), [tenantId]);
   return <>
-    <Panel title="크레딧 원장"><State busy={credits.busy} error={credits.error}>{credits.data && <><div className="cards"><Metric k="현재 잔액" v={number(credits.data.balance)} bad={credits.data.balance <= 0} /></div><CreditAdjust tenantId={tenantId} onChanged={credits.reload} /><div className="tablewrap"><table><thead><tr><th>시각</th><th className="num">증감</th><th>유형</th><th>메모</th><th>처리자</th></tr></thead><tbody>{credits.data.entries.map((row) => <tr key={row.id}><td className="muted">{new Date(row.occurredAt).toLocaleString("ko-KR")}</td><td className="num" style={row.delta < 0 ? { color: "var(--bad)" } : undefined}>{row.delta > 0 ? "+" : ""}{number(row.delta)}</td><td>{row.reason}</td><td className="wrap">{row.note || "—"}</td><td>{row.actor || "—"}</td></tr>)}</tbody></table></div></>}</State></Panel>
+    <Panel title="크레딧 원장"><State busy={credits.busy} error={credits.error}>{credits.data && <><div className="cards"><Metric k="현재 잔액" v={number(credits.data.balance)} bad={credits.data.balance <= 0} /></div><CreditAdjust tenantId={tenantId} balance={credits.data.balance} onChanged={credits.reload} /><div className="tablewrap"><table><thead><tr><th>시각</th><th className="num">증감</th><th>유형</th><th>메모</th><th>처리자</th></tr></thead><tbody>{credits.data.entries.map((row) => <tr key={row.id}><td className="muted">{new Date(row.occurredAt).toLocaleString("ko-KR")}</td><td className="num" style={row.delta < 0 ? { color: "var(--bad)" } : undefined}>{row.delta > 0 ? "+" : ""}{number(row.delta)}</td><td>{row.reason}</td><td className="wrap">{row.note || "—"}</td><td>{row.actor || "—"}</td></tr>)}</tbody></table></div></>}</State></Panel>
     <BusinessProfileForm tenantId={tenantId} />
     <Invoice tenantId={tenantId} />
     <Panel title="최근 결제"><div className="tablewrap"><table><thead><tr><th>시각</th><th className="num">크레딧</th><th className="num">금액</th><th>상태</th></tr></thead><tbody>{payments.map((row) => <tr key={row.paymentId}><td>{new Date(row.createdAt).toLocaleString("ko-KR")}</td><td className="num">{number(row.credits)}</td><td className="num">₩{number(row.amountKrw)}</td><td><StatusTag status={row.status === "paid" ? "done" : row.status} /></td></tr>)}</tbody></table></div></Panel>
   </>;
 }
-function CreditAdjust({ tenantId, onChanged }: { tenantId: string; onChanged: () => void }) {
+function CreditAdjust({ tenantId, balance, onChanged }: { tenantId: string; balance: number; onChanged: () => void }) {
   const [delta, setDelta] = useState(""); const [note, setNote] = useState(""); const [busy, setBusy] = useState(false);
-  async function submit(e: React.FormEvent) { e.preventDefault(); setBusy(true); try { await api.adjustCredits(tenantId, { delta: Number(delta), kind: Number(delta) >= 0 ? "grant" : "adjust", note, reason: "운영 조정" }); setDelta(""); setNote(""); onChanged(); } catch (err) { alert(String(err)); } finally { setBusy(false); } }
-  return <form className="inlineform" onSubmit={submit}><input placeholder="증감 예: 600 / -60" value={delta} onChange={(e) => setDelta(e.target.value)} required /><input placeholder="메모" value={note} onChange={(e) => setNote(e.target.value)} required /><button disabled={busy}>적용</button></form>;
+  const n = Number(delta);
+  const valid = delta.trim() !== "" && delta.trim() !== "-" && Number.isFinite(n) && n !== 0;
+  const next = valid ? balance + n : balance;
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!valid) { alert("증감 값을 숫자로 입력하세요 (예: 600 또는 -60)."); return; }
+    if (note.trim().length < 4) { alert("메모는 4자 이상 입력하세요 (원장에 영구 기록됩니다)."); return; }
+    // 원장은 append-only — 부호 오타(-600 ↔ 600)가 영구다. 결과 잔액을 사람이 눈으로 확인하게 한다.
+    if (!confirm(`크레딧 ${n > 0 ? "+" : ""}${n.toLocaleString("ko-KR")} 적용\n잔액 ${balance.toLocaleString("ko-KR")} → ${next.toLocaleString("ko-KR")}\n\n원장은 되돌릴 수 없습니다. 진행할까요?`)) return;
+    setBusy(true);
+    try { await api.adjustCredits(tenantId, { delta: n, kind: n >= 0 ? "grant" : "adjust", note: note.trim(), reason: "운영 조정" }); setDelta(""); setNote(""); onChanged(); }
+    catch (err) { alert(err instanceof Error ? err.message : String(err)); } finally { setBusy(false); }
+  }
+  return <form className="inlineform" onSubmit={submit}>
+    <input placeholder="증감 예: 600 / -60" value={delta} onChange={(e) => setDelta(e.target.value.replace(/[^\d-]/g, ""))} required />
+    <input placeholder="메모 (4자 이상)" value={note} onChange={(e) => setNote(e.target.value)} required />
+    <button disabled={busy || !valid}>적용</button>
+    {valid && <span className="muted" style={{ fontSize: 12, alignSelf: "center" }}>잔액 {balance.toLocaleString("ko-KR")} → <strong style={next < 0 ? { color: "var(--bad)" } : undefined}>{next.toLocaleString("ko-KR")}</strong></span>}
+  </form>;
 }
 
 function Members({ tenantId, members, onChanged }: { tenantId: string; members: AdminUser[]; onChanged: () => void }) {
   const [adding, setAdding] = useState(false); const [credential, setCredential] = useState<{ email: string; password: string } | null>(null);
-  async function reset(member: AdminUser) { try { const r = await api.resetMemberPassword(member.id); setCredential({ email: member.email, password: r.temporaryPassword }); } catch (e) { alert(String(e)); } }
-  async function remove(member: AdminUser) { if (!confirm(`${member.email} 계정을 삭제할까요?`)) return; try { await api.deleteMember(member.id); onChanged(); } catch (e) { alert(String(e)); } }
+  async function reset(member: AdminUser) { try { const r = await api.resetMemberPassword(member.id); setCredential({ email: member.email, password: r.temporaryPassword }); } catch (e) { alert(e instanceof Error ? e.message : String(e)); } }
+  async function remove(member: AdminUser) { if (!confirm(`${member.email} 계정을 삭제할까요?`)) return; try { await api.deleteMember(member.id); onChanged(); } catch (e) { alert(e instanceof Error ? e.message : String(e)); } }
+  async function toggleStatus(member: AdminUser) {
+    const next = member.status === "active" ? "suspended" : "active"; const label = next === "suspended" ? "정지" : "활성화";
+    const why = window.prompt(`${member.email} 을(를) ${label} 합니다. 사유(4자 이상):`);
+    if (why === null) return;
+    if (why.trim().length < 4) { alert("사유는 4자 이상이어야 합니다."); return; }
+    try { await api.setUserStatus(member.id, next, why.trim()); onChanged(); } catch (e) { alert(e instanceof Error ? e.message : String(e)); }
+  }
   return <><Panel title="멤버" actions={<button className="primary" onClick={() => setAdding(true)}>계정 추가</button>}>
     {adding && <MemberCreate tenantId={tenantId} onDone={(x) => { setCredential(x); setAdding(false); onChanged(); }} onClose={() => setAdding(false)} />}
     {credential && <Credential email={credential.email} password={credential.password} onClose={() => setCredential(null)} />}
-    <div className="tablewrap"><table><thead><tr><th>이름</th><th>이메일</th><th>역할</th><th>상태</th><th>최근 로그인</th><th /></tr></thead><tbody>{members.map((member) => <tr key={member.id}><td>{member.name || "—"}</td><td>{member.email}</td><td>{member.role}</td><td><StatusTag status={member.status} /></td><td className="muted">{when(member.lastLoginAt)}</td><td className="row">{member.role !== "superadmin" && <><button onClick={() => void reset(member)}>비밀번호 재설정</button><button className="danger" onClick={() => void remove(member)}>삭제</button></>}</td></tr>)}</tbody></table></div>
+    <div className="tablewrap"><table><thead><tr><th>이름</th><th>이메일</th><th>역할</th><th>상태</th><th>최근 로그인</th><th /></tr></thead><tbody>{members.map((member) => <tr key={member.id}><td>{member.name || "—"}</td><td>{member.email}</td><td>{member.role}</td><td><StatusTag status={member.status} /></td><td className="muted">{when(member.lastLoginAt)}</td><td className="row">{member.role !== "superadmin" && <><button className={member.status === "active" ? "danger" : ""} onClick={() => void toggleStatus(member)}>{member.status === "active" ? "정지" : "활성화"}</button><button onClick={() => void reset(member)}>비밀번호 재설정</button><button className="danger" onClick={() => void remove(member)}>삭제</button></>}</td></tr>)}</tbody></table></div>
   </Panel></>;
 }
 function MemberCreate({ tenantId, onDone, onClose }: { tenantId: string; onDone: (credential: { email: string; password: string }) => void; onClose: () => void }) {
@@ -141,10 +193,33 @@ function MemberCreate({ tenantId, onDone, onClose }: { tenantId: string; onDone:
 function Credential({ email, password, onClose }: { email: string; password: string; onClose: () => void }) { return <div className="credential"><strong>전달용 계정 정보</strong><p className="muted">이 비밀번호는 지금만 표시됩니다. 실무자에게 직접 전달하세요.</p><div className="token">이메일: {email}<br />비밀번호: {password}</div><div className="row"><button onClick={() => void navigator.clipboard.writeText(`이메일: ${email}\n비밀번호: ${password}`)}>복사</button><button className="primary" onClick={onClose}>확인</button></div></div>; }
 
 function Keys({ tenantId }: { tenantId: string }) {
-  const { data, error, busy, reload } = useLoad(() => api.apiKeys(tenantId), [tenantId]); const [name, setName] = useState(""); const [issued, setIssued] = useState<string | null>(null);
-  async function create(e: React.FormEvent) { e.preventDefault(); try { const r = await api.createApiKey(tenantId, { name }); setIssued(r.key); setName(""); reload(); } catch (err) { alert(String(err)); } }
-  async function revoke(key: ApiKey) { if (!confirm(`${key.name || key.prefix} 키를 폐기할까요?`)) return; try { await api.revokeApiKey(key.id, "운영 폐기"); reload(); } catch (err) { alert(String(err)); } }
-  return <Panel title="API 키"><p className="sub">키 이름만 입력하면 표준 고객 API 권한으로 자동 발급됩니다.</p>{issued && <Credential email="API key" password={issued} onClose={() => setIssued(null)} />}<form className="inlineform" onSubmit={create}><input placeholder="키 이름 예: 고객사 운영 서버" value={name} onChange={(e) => setName(e.target.value)} required /><button className="primary">키 발급</button></form><State busy={busy} error={error} empty={!data?.keys.length}><div className="tablewrap"><table><thead><tr><th>이름</th><th>접두사</th><th>마지막 사용</th><th>상태</th><th /></tr></thead><tbody>{data?.keys.map((key) => <tr key={key.id}><td>{key.name || "—"}</td><td><code>{key.prefix}…</code></td><td>{key.lastUsedAt ? new Date(key.lastUsedAt).toLocaleString("ko-KR") : "없음"}</td><td>{key.revokedAt ? "폐기됨" : "활성"}</td><td>{!key.revokedAt && <button className="danger" onClick={() => void revoke(key)}>폐기</button>}</td></tr>)}</tbody></table></div></State></Panel>;
+  const { data, error, busy, reload } = useLoad(() => api.apiKeys(tenantId), [tenantId]);
+  const [name, setName] = useState(""); const [scopes, setScopes] = useState<string[]>([]); const [issued, setIssued] = useState<string | null>(null);
+  const available = data?.scopes ?? [];
+  // 기본값은 최소 권한(읽기+미디어쓰기+검색). 서버 스코프 목록이 도착하면 한 번만 시드한다.
+  useEffect(() => {
+    if (available.length) setScopes((cur) => cur.length ? cur : available.filter((s) => ["media:read", "media:write", "search:read"].includes(s)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [available.join(",")]);
+  const toggle = (s: string) => setScopes((cur) => cur.includes(s) ? cur.filter((x) => x !== s) : [...cur, s]);
+  async function create(e: React.FormEvent) {
+    e.preventDefault();
+    if (!scopes.length) { alert("권한(스코프)을 최소 1개 선택하세요."); return; }
+    try { const r = await api.createApiKey(tenantId, { name, scopes, reason: "키 발급" }); setIssued(r.key); setName(""); reload(); }
+    catch (err) { alert(err instanceof Error ? err.message : String(err)); }
+  }
+  async function revoke(key: ApiKey) { if (!confirm(`${key.name || key.prefix} 키를 폐기할까요?`)) return; try { await api.revokeApiKey(key.id, "운영 폐기"); reload(); } catch (err) { alert(err instanceof Error ? err.message : String(err)); } }
+  return <Panel title="API 키">
+    <p className="sub">고객사 <strong>시스템</strong>이 우리를 호출하는 키입니다. <strong>필요한 권한만</strong> 골라 최소로 발급하세요 — 평문은 발급 직후 한 번만 표시됩니다.</p>
+    {issued && <Credential email="API key" password={issued} onClose={() => setIssued(null)} />}
+    <form onSubmit={create}>
+      <div className="inlineform"><input placeholder="키 이름 예: 고객사 운영 서버" value={name} onChange={(e) => setName(e.target.value)} required /><button className="primary" disabled={!scopes.length}>키 발급</button></div>
+      <div className="row" style={{ flexWrap: "wrap", gap: 12, margin: "8px 0 2px" }}>
+        {available.length ? available.map((s) => <label key={s} className="row" style={{ gap: 5, fontSize: 13, cursor: "pointer" }}><input type="checkbox" checked={scopes.includes(s)} onChange={() => toggle(s)} /><code>{s}</code></label>) : <span className="muted">권한 목록 불러오는 중…</span>}
+      </div>
+    </form>
+    <State busy={busy} error={error} empty={!data?.keys.length}><div className="tablewrap"><table><thead><tr><th>이름</th><th>접두사</th><th>권한</th><th>마지막 사용</th><th>상태</th><th /></tr></thead><tbody>{data?.keys.map((key) => <tr key={key.id}><td>{key.name || "—"}</td><td><code>{key.prefix}…</code></td><td className="muted" style={{ fontSize: 11 }}>{key.scopes?.join(" · ") || "—"}</td><td>{key.lastUsedAt ? new Date(key.lastUsedAt).toLocaleString("ko-KR") : "없음"}</td><td>{key.revokedAt ? "폐기됨" : "활성"}</td><td>{!key.revokedAt && <button className="danger" onClick={() => void revoke(key)}>폐기</button>}</td></tr>)}</tbody></table></div></State>
+  </Panel>;
 }
 
 function History({ data }: { data: CompanyDetail }) { return <Panel title="운영 이력"><State busy={false} error={null} empty={!data.audit.length}><div className="timeline">{data.audit.map((row) => <div className="event" key={row.id}><strong>{row.action}</strong><span>{row.actorEmail}</span><span>{when(row.at)}</span>{row.reason && <p>{row.reason}</p>}</div>)}</div></State></Panel>; }

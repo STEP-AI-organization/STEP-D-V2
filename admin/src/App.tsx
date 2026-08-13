@@ -12,6 +12,9 @@ import { api, ApiError, type Me } from "./api";
 import { Overview } from "./views/Overview";
 import { Companies, CompanyPage } from "./views/Companies";
 import { Operations } from "./views/Operations";
+import { Users } from "./views/Users";
+import { Payments } from "./views/Payments";
+import { Audit } from "./views/Audit";
 import { TenantNames } from "./views/tenant-name";
 
 type Tab = "overview" | "tenants" | "users" | "payments" | "jobs" | "audit";
@@ -35,6 +38,9 @@ export default function App() {
     try {
       const r = await api.me();
       setMe(r.user);
+    } catch {
+      // /api/auth/me 네트워크 실패는 unhandled rejection 이 되면 안 된다 — 로그인 화면으로 떨군다.
+      setMe(null);
     } finally {
       setLoading(false);
     }
@@ -75,8 +81,14 @@ export default function App() {
     <div className="shell">
       <nav className="side">
         <div className="brand">STEP D<small>ADMIN CONSOLE</small></div>
-        {TABS.filter((t) => t.id === "overview" || t.id === "tenants" || t.id === "jobs").map((t) => (
-          <button key={t.id} className="nav" data-active={tab === t.id} onClick={() => setTab(t.id)}>
+        {TABS.map((t) => (
+          <button
+            key={t.id}
+            className="nav"
+            data-active={!companyId && tab === t.id}
+            // 회사 상세가 열려 있을 때도 nav 를 누르면 그 탭으로 나가야 한다(예전엔 먹통이었다).
+            onClick={() => { if (companyId) closeCompany(); setTab(t.id); }}
+          >
             {t.label}
           </button>
         ))}
@@ -92,7 +104,10 @@ export default function App() {
         {companyId ? <CompanyPage tenantId={companyId} onClose={closeCompany} /> : <>
           {tab === "overview" && <Overview />}
           {tab === "tenants" && <Companies onOpen={openCompany} />}
+          {tab === "users" && <Users />}
+          {tab === "payments" && <Payments />}
           {tab === "jobs" && <Operations />}
+          {tab === "audit" && <Audit />}
         </>}
       </main>
     </div>

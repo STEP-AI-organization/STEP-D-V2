@@ -32,7 +32,9 @@ export function BusinessProfileForm({ tenantId }: { tenantId: string }) {
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
-    if (loaded.data?.profile) setForm(loaded.data.profile);
+    // profile 이 null 인 회사로 바뀌면 폼을 **비운다** — 이전 회사 값이 남아 있으면 그걸
+    // 새 tenantId 로 저장해 남의 사업자정보가 넘어갈 수 있다(지금은 언마운트로 가려질 뿐).
+    setForm(loaded.data?.profile ?? {});
   }, [loaded.data]);
 
   async function submit(e: React.FormEvent) {
