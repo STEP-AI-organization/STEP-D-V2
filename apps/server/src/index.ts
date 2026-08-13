@@ -6700,7 +6700,7 @@ const PORT = Number(process.env.PORT ?? 4000);
  *   write-scoped token would let an attacker edit or delete a partner's videos.
  * publish — our own channels, which we upload to.
  */
-export type ConsentMode = "analytics" | "publish";
+export type ConsentMode = "analytics" | "publish" | "all";
 
 const YT_ANALYTICS_SCOPES = [
   "https://www.googleapis.com/auth/youtube.readonly", // channel + video metadata (Data API)
@@ -6724,8 +6724,13 @@ function redirectUri(): string {
   return `${process.env.PUBLIC_URL ?? `http://localhost:${PORT}`}${OAUTH_CALLBACK_PATH}`;
 }
 
+// 계정 연결(단일 버튼) — 분석·수익 + 배포 스코프를 **한 번의 동의**로 받는다. 중복 스코프 제거.
+const YT_ALL_SCOPES = [...new Set(`${YT_ANALYTICS_SCOPES} ${YT_PUBLISH_SCOPES}`.split(" "))].join(" ");
+
 function scopesFor(mode: ConsentMode): string {
-  return mode === "publish" ? YT_PUBLISH_SCOPES : YT_ANALYTICS_SCOPES;
+  return mode === "all" ? YT_ALL_SCOPES
+    : mode === "publish" ? YT_PUBLISH_SCOPES
+    : YT_ANALYTICS_SCOPES;
 }
 
 function googleAuthUrl(state: string, mode: ConsentMode): string {
@@ -6824,7 +6829,8 @@ function safeExternalReturn(url: string | undefined): string | null {
 app.get("/api/youtube/auth", (c) => {
   if (!GOOGLE_CLIENT_ID) return c.json({ error: "GOOGLE_CLIENT_ID not configured" }, 500);
   const channelUrl = c.req.query("channel") ?? "";
-  const mode: ConsentMode = c.req.query("mode") === "publish" ? "publish" : "analytics";
+  const mode: ConsentMode = c.req.query("mode") === "publish" ? "publish"
+    : c.req.query("mode") === "all" ? "all" : "analytics";
   const returnTo = safeReturn(c.req.query("return"));
   const state = Buffer.from(JSON.stringify({ channel: channelUrl, mode, return: returnTo })).toString("base64");
   return c.redirect(googleAuthUrl(state, mode));

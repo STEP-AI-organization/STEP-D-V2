@@ -58,7 +58,7 @@ import {
 /** 채널별 안내 문구 · 연결 방식. */
 const CHANNEL_INFO: Record<DistributionChannel, { desc: string; note?: string }> = {
   youtube: {
-    desc: "OAuth로 채널 연결. 분석·수익은 '분석·수익 연결', 배포는 '업로드 채널' 옵션.",
+    desc: "OAuth로 채널을 한 번에 연결 — 분석·수익과 배포 권한을 함께 요청합니다.",
   },
   instagram: {
     desc: "Instagram 비즈니스 로그인 — IG 프로페셔널 계정으로 직접 연결.",
@@ -410,33 +410,16 @@ export default function PublishChannelsPage() {
                   </div>
                 </div>
                 {isYouTube ? (
-                  <div className="flex gap-2">
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => {
-                        window.location.href = getYouTubeAuthUrl(
-                          undefined,
-                          "analytics",
-                          "/publish-channels",
-                        );
-                      }}
-                    >
-                      + 분석·수익 연결
-                    </Button>
-                    <Button
-                      size="sm"
-                      onClick={() => {
-                        window.location.href = getYouTubeAuthUrl(
-                          undefined,
-                          "publish",
-                          "/publish-channels",
-                        );
-                      }}
-                    >
-                      + 업로드 채널
-                    </Button>
-                  </div>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="w-full"
+                    onClick={() => {
+                      window.location.href = getYouTubeAuthUrl(undefined, "all", "/publish-channels");
+                    }}
+                  >
+                    {connectedCount > 0 ? "계정 추가·새로고침" : "+ 계정 연결"}
+                  </Button>
                 ) : isNaver ? (
                   <Button
                     size="sm"
@@ -839,7 +822,7 @@ export default function PublishChannelsPage() {
             <EmptyState
               icon={Youtube}
               title="연동된 YouTube 채널이 없습니다"
-              description="위 카드의 '분석·수익 연결' 또는 '업로드 채널' 버튼으로 붙이세요. 외부 협력자는 /register 페이지에서 직접 등록할 수 있습니다."
+              description="위 카드의 '계정 연결' 버튼으로 붙이세요. 외부 협력자는 /register 페이지에서 직접 등록할 수 있습니다."
             />
           </Card>
         ) : (

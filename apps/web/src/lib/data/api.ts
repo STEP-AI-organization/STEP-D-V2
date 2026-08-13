@@ -1728,7 +1728,7 @@ export async function fetchYouTubeChannels(): Promise<YouTubeChannelInfo[]> {
  * pull their channel metrics. `publish` asks for upload rights and is only for
  * our own channels — never send it to a partner.
  */
-export type ConsentMode = "analytics" | "publish";
+export type ConsentMode = "analytics" | "publish" | "all";
 
 export function getYouTubeAuthUrl(
   channelUrl?: string,
