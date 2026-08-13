@@ -27,15 +27,16 @@ B는 잡을 `delayMs = 예약시각 − now` 로 **지연 큐잉**해서 워커�
 | **YouTube** | upload | ✅ | **A 네이티브** — private 업로드 + `publishAt` → 유튜브가 그 시각 공개 | `distribution.publish` · youtube | `youtubeChannelId` (추론 금지) |
 | **네이버 클립** | upload | ✅ (Playwright) | **A 네이티브** — 업로드 시 스튜디오 **예약발행 시각** 설정 | `naver.publish` · **naver(사무실 PC)** | `naverAccountId` (추론 금지) |
 | **네이버 TV** | upload | ✅ (Playwright) | A 네이티브 (클립과 동일) · *신규 계정은 클립 전용* | `naver.publish` · naver | `naverAccountId` |
-| **TikTok** | upload*(게이트 ON+계정)* / record | 받은함 **초안** | 예약 없음 — 사용자가 틱톡 앱에서 마무리·게시 | `distribution.publish` · youtube | `tiktokOpenId` (추론 금지) |
-| **Instagram** | **record (스텁)** | ❌ 미구현 | **B 우리쪽 발사가 필요** — 그런데 실업로드 자체가 아직 없음 | — | (IG 비즈니스 OAuth 연결만 됨) |
-| **Facebook** | **record (스텁)** | ❌ 미구현 | (A 가능 — Page는 `scheduled_publish_time` 지원. 구현 시) | — | (Meta OAuth 연결만 됨) |
+| **TikTok** | upload*(게이트 ON+계정)* / record | 받은함 **초안** | **B 우리쪽 발사** — 초안을 예약 시각에 발사(delayMs) | `distribution.publish` · youtube | `tiktokOpenId` (추론 금지) |
+| **Instagram** | upload*(게이트 ON+계정)* / record | ✅ 릴 (게이트 OFF 기본) | **B 우리쪽 발사** — 잡을 예약 시각까지 `delayMs` 지연 → 그때 media_publish | `distribution.publish` · youtube | `igUserId` (추론 금지) |
+| **Facebook** | upload*(게이트 ON+페이지)* / record | ✅ 릴 (게이트 OFF 기본) | **A 네이티브** `scheduled_publish_time` | `distribution.publish` · youtube | `metaPageId` (추론 금지) |
 
-\* TikTok은 `TIKTOK_UPLOAD_ENABLED` 게이트 ON **그리고** `tiktokOpenId`가 있을 때만 upload,
-그 외에는 record. (`publish-guard.ts:channelPublishMode`)
+\* TikTok·Instagram·Facebook 은 각 `*_UPLOAD_ENABLED` 게이트 ON **그리고** 계정 지정이
+있을 때만 upload, 그 외에는 record. 게이트는 **모두 기본 OFF**(오타·빈값·미설정 = OFF ·
+`upload-gate.ts`). (`publish-guard.ts:channelPublishMode`)
 
-`channelPublishMode`(정본): youtube·naver → `upload` · tiktok → 조건부 `upload` ·
-**그 외(instagram·facebook·모르는 값) → `record`**. record는 파일이 안 올라가고 **상태만** 남는다
+`channelPublishMode`(정본): youtube·naver → `upload` · tiktok·instagram·facebook → 조건부 `upload` ·
+**그 외(모르는 값) → `record`**. record는 파일이 안 올라가고 **상태만** 남는다
 (`distributionStatusFor`: record→`recorded`, upload+예약→`scheduled`, upload→`pending`).
 
 ---
@@ -65,26 +66,37 @@ worker:   rawAt = Number(payload.publishAt); publishAt = rawAt > now ? rawAt : u
 
 ---
 
-## 3. 유형 B — 우리쪽 발사 (Instagram · **미구현**)
+## 3. Instagram — 유형 B 우리쪽 발사 (구현됨 · 게이트 OFF 기본 · 사내 AENA 이식)
 
-Instagram Content Publishing API는 **게시 예약 파라미터가 없다** — 컨테이너를 만들고
-`media_publish`를 **호출하는 순간** 게시된다. 그래서 예약하려면 **그 시각에 우리가**
-`media_publish`를 쏴야 한다(유형 B).
+IG Content Publishing API는 **게시 예약 파라미터가 없다** — 컨테이너를 만들고 `media_publish`를
+**호출하는 순간** 게시된다. 그래서 예약은 **그 시각에 우리가** 쏜다(유형 B).
 
-**현재 상태**: Instagram은 `record` 모드 — 실제 게시 자체가 스텁이라, 예약 이전에 업로드도 안 된다.
-IG 비즈니스 OAuth **연결**만 되어 있다(`/api/instagram/*`, 2026-08-13 분리).
-
-**구현할 때의 패턴** (아키텍처는 이미 준비됨):
+**배선** (`instagram.ts` · `publish-dispatch.ts` · `worker.ts`):
 ```
-dispatch: const delayMs = scheduled ? Math.max(0, Date.parse(reserveDate) - Date.now()) : 0;
-          enqueue("distribution.publish", { clipId, channel: "instagram", igUserId },
-                  { dedupeKey: `distribution.publish:${clipId}:instagram:${igUserId}`, delayMs });
-worker:   handleDistributionPublish 의 channel==="instagram" 분기 —
-          큐가 delayMs 만큼 잡을 안 준다 → 예약 시각에 claim 되면 그때 media→media_publish 발사
+dispatch: scheduleDelay(scheduled, reserveDate) → { delayMs: 예약−now }  // 미래일 때만
+          enqueue("distribution.publish", { clipId, channel:"instagram", igUserId },
+                  { dedupeKey:`distribution.publish:${clipId}:instagram:${igUserId}`, delayMs });
+worker(runInstagramPublish): 게이트 재확인 → 킬스위치(INSTAGRAM_UPLOAD_ENABLED) → 계정(igUserId)
+          → 멱등가드(igMediaId 있으면 스킵) → GCS signed URL(1h) → publishInstagramReel:
+            POST /{igUserId}/media(REELS,video_url) → status 폴링(FINISHED) → media_publish → media_id
+          (graph.instagram.com · instagram_accounts.accessToken 직결)
 ```
-- 즉시 발행이면 `delayMs=0`(지금과 동일), 예약이면 그 시각까지 큐가 홀드한다.
-- **재시도 금지 원칙 유지**: 게시 시작 후 던지면 중복 게시 → 실패는 상태에 사유만 남기고 정상 종료.
-- Facebook Page를 구현하면 그건 유형 A(`scheduled_publish_time`)로 가는 게 맞다 — IG와 갈린다.
+- `video_url` 은 Meta 가 직접 fetch → **GCS signed URL** 을 넘긴다(로컬 모드면 실패, GCS 필수).
+- 즉시 발행이면 `delayMs` 없음, 예약이면 큐가 그 시각까지 홀드 → 상태는 `scheduled`.
+- **재시도 금지 원칙 유지**: 워커는 auto-retry 안 함 · 게시 성공 즉시 igMediaId 기록(수동 재시도 중복 방지).
+
+## 3b. Facebook — 유형 A 네이티브 (구현됨 · 게이트 OFF 기본)
+
+FB Page는 `scheduled_publish_time` 을 지원한다 → 잡은 즉시 돌고 워커가 그 시각을 실어 등록한다.
+`facebook.ts` publishFacebookReel: video_reels **3-phase**(start→transfer(바이너리)→finish).
+finish 에 `video_state=SCHEDULED` + `scheduled_publish_time`(epoch 초)이면 예약, 아니면 즉시.
+graph.facebook.com · meta_accounts.pageAccessToken. 멱등: fbVideoId + published/scheduled 상태.
+
+**게이트**: `INSTAGRAM_UPLOAD_ENABLED`·`FACEBOOK_UPLOAD_ENABLED` **기본 OFF**(YouTube/TikTok 과 동일
+3중 방어). OFF 면 record(상태만). 실게시 검증은 게이트 ON 후 실계정으로.
+
+**남은 것(후속)**: 발행 화면(publish-dialog)에서 IG 계정·FB 페이지를 고르는 UI. 지금은 라우트가
+`igUserId`/`metaPageId` 를 받고, 단일 계정이면 자동 선택 · 다계정이면 409 로 목록을 돌려준다.
 
 ---
 
