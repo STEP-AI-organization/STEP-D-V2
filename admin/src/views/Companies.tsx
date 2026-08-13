@@ -209,6 +209,7 @@ function Keys({ tenantId }: { tenantId: string }) {
     catch (err) { alert(err instanceof Error ? err.message : String(err)); }
   }
   async function revoke(key: ApiKey) { if (!confirm(`${key.name || key.prefix} 키를 폐기할까요?`)) return; try { await api.revokeApiKey(key.id, "운영 폐기"); reload(); } catch (err) { alert(err instanceof Error ? err.message : String(err)); } }
+  async function rotate(key: ApiKey) { if (!confirm(`${key.name || key.prefix} 키를 회전합니다 — 같은 권한으로 새 키를 발급하고 이 키를 폐기합니다. 계속?`)) return; try { const r = await api.rotateApiKey(key.id, "키 회전"); setIssued(r.key); reload(); } catch (err) { alert(err instanceof Error ? err.message : String(err)); } }
   return <Panel title="API 키">
     <p className="sub">고객사 <strong>시스템</strong>이 우리를 호출하는 키입니다. <strong>필요한 권한만</strong> 골라 최소로 발급하세요 — 평문은 발급 직후 한 번만 표시됩니다.</p>
     {issued && <Credential email="API key" password={issued} onClose={() => setIssued(null)} />}
@@ -218,7 +219,7 @@ function Keys({ tenantId }: { tenantId: string }) {
         {available.length ? available.map((s) => <label key={s} className="row" style={{ gap: 5, fontSize: 13, cursor: "pointer" }}><input type="checkbox" checked={scopes.includes(s)} onChange={() => toggle(s)} /><code>{s}</code></label>) : <span className="muted">권한 목록 불러오는 중…</span>}
       </div>
     </form>
-    <State busy={busy} error={error} empty={!data?.keys.length}><div className="tablewrap"><table><thead><tr><th>이름</th><th>접두사</th><th>권한</th><th>마지막 사용</th><th>상태</th><th /></tr></thead><tbody>{data?.keys.map((key) => <tr key={key.id}><td>{key.name || "—"}</td><td><code>{key.prefix}…</code></td><td className="muted" style={{ fontSize: 11 }}>{key.scopes?.join(" · ") || "—"}</td><td>{key.lastUsedAt ? new Date(key.lastUsedAt).toLocaleString("ko-KR") : "없음"}</td><td>{key.revokedAt ? "폐기됨" : "활성"}</td><td>{!key.revokedAt && <button className="danger" onClick={() => void revoke(key)}>폐기</button>}</td></tr>)}</tbody></table></div></State>
+    <State busy={busy} error={error} empty={!data?.keys.length}><div className="tablewrap"><table><thead><tr><th>이름</th><th>접두사</th><th>권한</th><th>마지막 사용</th><th>상태</th><th /></tr></thead><tbody>{data?.keys.map((key) => <tr key={key.id}><td>{key.name || "—"}</td><td><code>{key.prefix}…</code></td><td className="muted" style={{ fontSize: 11 }}>{key.scopes?.join(" · ") || "—"}</td><td>{key.lastUsedAt ? new Date(key.lastUsedAt).toLocaleString("ko-KR") : "없음"}</td><td>{key.revokedAt ? "폐기됨" : "활성"}</td><td className="row">{!key.revokedAt && <><button onClick={() => void rotate(key)}>회전</button><button className="danger" onClick={() => void revoke(key)}>폐기</button></>}</td></tr>)}</tbody></table></div></State>
   </Panel>;
 }
 

@@ -82,6 +82,26 @@ export interface Overview {
   jobs: Record<string, number>;
   media: { count: number; minutes: number };
 }
+export interface UsageRow {
+  tenantId: string; minutes: number; events: number;
+  costKrw: number; revenueKrw: number; marginKrw: number;
+}
+export interface UsageSummary {
+  days: number;
+  totals: { minutes: number; costKrw: number; revenueKrw: number; marginKrw: number };
+  byTenant: UsageRow[];
+}
+export interface AuditQuery { tenant?: string; q?: string; from?: string; to?: string; limit?: number }
+
+function auditParams(o: AuditQuery): string {
+  const qs = new URLSearchParams();
+  if (o.tenant) qs.set("tenant", o.tenant);
+  if (o.q) qs.set("q", o.q);
+  if (o.from) qs.set("from", o.from);
+  if (o.to) qs.set("to", o.to);
+  if (o.limit) qs.set("limit", String(o.limit));
+  return qs.toString();
+}
 export interface CompanyDetail {
   tenant: Pick<Tenant, "id" | "name" | "kind" | "status" | "billingEmail" | "createdAt">;
   members: AdminUser[];
@@ -166,6 +186,10 @@ export const api = {
   revokeApiKey: (keyId: string, reason?: string) =>
     post<{ ok: true; alreadyRevoked: boolean }>(
       `/api/superadmin/api-keys/${encodeURIComponent(keyId)}/revoke`, { reason }),
+  // 같은 스코프·이름으로 새 키 발급 후 옛 키 폐기(무중단 회전). 새 평문은 응답에 1회만.
+  rotateApiKey: (keyId: string, reason?: string) =>
+    post<{ id: string; key: string; prefix: string; scopes: string[]; replaced: string }>(
+      `/api/superadmin/api-keys/${encodeURIComponent(keyId)}/rotate`, { reason }),
 
   // ── 회사 사업자정보 (거래명세서의 "공급받는 자") ──
   business: (tenantId: string) =>
@@ -210,11 +234,18 @@ export const api = {
       `/api/superadmin/jobs${tenant ? `?tenant=${encodeURIComponent(tenant)}` : ""}`),
   retryJob: (id: string) => post<{ ok: true }>(`/api/superadmin/jobs/${encodeURIComponent(id)}/retry`),
   removeJob: (id: string) => del<{ ok: true }>(`/api/superadmin/jobs/${encodeURIComponent(id)}`),
-  // 감사 로그는 300건 상한이라 필터 없이는 "누가 우리 회사를 봤나" 를 못 찾는다.
-  audit: (opts: { tenant?: string; q?: string } = {}) => {
-    const qs = new URLSearchParams();
-    if (opts.tenant) qs.set("tenant", opts.tenant);
-    if (opts.q) qs.set("q", opts.q);
-    return get<{ entries: AuditEntry[] }>(`/api/superadmin/audit${qs.size ? `?${qs}` : ""}`);
+  // 감사 로그는 필터(회사·검색·기간) 없이는 "누가 우리 회사를 봤나" 를 못 찾는다.
+  audit: (opts: AuditQuery = {}) => {
+    const qs = auditParams(opts);
+    return get<{ entries: AuditEntry[] }>(`/api/superadmin/audit${qs ? `?${qs}` : ""}`);
   },
+  // CSV 내려받기 — 쿠키 인증 fetch 로 Blob 을 받아 뷰가 다운로드한다(대량은 limit 상향).
+  auditCsv: async (opts: AuditQuery = {}): Promise<Blob> => {
+    const qs = auditParams({ limit: 5000, ...opts });
+    const res = await fetch(`/api/superadmin/audit?${qs}&format=csv`, { credentials: "include" });
+    if (!res.ok) throw new ApiError(res.status, `CSV ${res.status}`);
+    return res.blob();
+  },
+  // 사용 원가 · 충전 · 마진 (플랫폼/회사별)
+  usage: (days = 30) => get<UsageSummary>(`/api/superadmin/usage?days=${days}`),
 };

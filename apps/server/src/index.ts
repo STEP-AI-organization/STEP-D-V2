@@ -1316,6 +1316,36 @@ app.post("/api/superadmin/api-keys/:keyId/revoke", async (c) => {
   return c.json({ ok: true, alreadyRevoked: rowCount === 0 });
 });
 
+/**
+ * 키 회전 — 같은 회사·이름·스코프로 **새 키를 먼저 발급**하고 옛 키를 폐기한다.
+ * 순서가 반대면 새 키 배포 전 인증이 통째로 끊기는 창이 생긴다. revoke+create 를 손으로
+ * 두 번 하는 것보다 실수(스코프 누락)가 없다. 새 평문은 이 응답에만 1회 노출된다.
+ */
+app.post("/api/superadmin/api-keys/:keyId/rotate", async (c) => {
+  const actor = requireSuperadmin(c);
+  const keyId = c.req.param("keyId");
+  const body = await c.req.json<{ reason?: string }>().catch(() => ({}) as any);
+  const { rows } = await asSystem((db) => db.query(
+    `SELECT tenant_id AS "tenantId", name, scopes FROM api_keys WHERE id = $1`, [keyId]));
+  if (!rows[0]) return c.json({ error: "not_found" }, 404);
+  const old = rows[0] as { tenantId: string; name: string | null; scopes: string[] };
+  const reason = requireReason(actor, old.tenantId, body.reason);
+  const scopes = Array.isArray(old.scopes) ? old.scopes : [];
+  const raw = generateKey(true);
+  const newId = `ak_${crypto.randomBytes(9).toString("base64url")}`;
+  await audit(
+    actor,
+    { action: "apikey.rotate", targetTenant: old.tenantId, targetId: newId, reason, detail: { replaced: keyId, scopes } },
+    clientIp(c),
+  );
+  await asSystem((db) => db.query(
+    `INSERT INTO api_keys (id, tenant_id, name, key_hash, prefix, scopes) VALUES ($1,$2,$3,$4,$5,$6)`,
+    [newId, old.tenantId, old.name ?? null, hashKey(raw), keyPrefix(raw), scopes]));
+  await asSystem((db) => db.query(
+    "UPDATE api_keys SET revoked_at = now() WHERE id = $1 AND revoked_at IS NULL", [keyId]));
+  return c.json({ id: newId, key: raw, prefix: keyPrefix(raw), scopes, replaced: keyId });
+});
+
 // ── 결제 · 크레딧 (4단계) ─────────────────────────────────────────────────────
 
 /**
@@ -1497,8 +1527,11 @@ app.get("/api/superadmin/audit", async (c) => {
   requireSuperadmin(c);   // 감사 로그 열람 자체는 감사하지 않는다 — 무한 증식만 만든다
   const tenant = c.req.query("tenant") ?? null;
   const q = (c.req.query("q") ?? "").trim();
-  // 전체 목록만 있으면 "누가 우리 회사를 봤나"를 찾을 수가 없다. 운영자가 다 볼 수 있게
-  // 열어 준 만큼 **되짚을 수 있어야** 견제가 성립한다.
+  // 300건 하드캡 + 부분검색만으로는 컴플라이언스 조회가 안 된다 → 기간(from/to) + 한도 + CSV 추가.
+  const fromMs = Date.parse(c.req.query("from") ?? "");
+  const toMs = Date.parse(c.req.query("to") ?? "");
+  const csv = c.req.query("format") === "csv";
+  const limit = Math.min(5000, Math.max(1, Number(c.req.query("limit")) || 300));
   const where: string[] = [];
   const args: unknown[] = [];
   if (tenant) { args.push(tenant); where.push(`target_tenant = $${args.length}`); }
@@ -1507,14 +1540,73 @@ app.get("/api/superadmin/audit", async (c) => {
     where.push(`(actor_email ILIKE $${args.length} OR action ILIKE $${args.length}
                  OR target_id ILIKE $${args.length} OR reason ILIKE $${args.length})`);
   }
+  // at 은 Date.now() ms(BIGINT)로 저장된다 — from/to 도 ms 로 비교한다.
+  if (Number.isFinite(fromMs)) { args.push(fromMs); where.push(`at >= $${args.length}`); }
+  if (Number.isFinite(toMs)) { args.push(toMs + 86_399_999); where.push(`at <= $${args.length}`); }
   const { rows } = await getRawPool().query(
     `SELECT id, actor_email AS "actorEmail", action, target_tenant AS "targetTenant",
             target_id AS "targetId", reason, detail, ip, at
        FROM admin_audit ${where.length ? `WHERE ${where.join(" AND ")}` : ""}
-      ORDER BY at DESC LIMIT 300`,
+      ORDER BY at DESC LIMIT ${limit}`,
     args,
   );
+  if (csv) {
+    const esc = (v: unknown) => { const s = v == null ? "" : String(v); return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+    const head = ["at", "actorEmail", "action", "targetTenant", "targetId", "reason", "ip"];
+    const lines = [head.join(",")];
+    for (const r of rows as Record<string, unknown>[]) {
+      lines.push([new Date(Number(r.at)).toISOString(), r.actorEmail, r.action, r.targetTenant, r.targetId, r.reason, r.ip].map(esc).join(","));
+    }
+    // BOM — Excel 이 UTF-8 한글을 깨지 않게.
+    return c.body("﻿" + lines.join("\r\n"), 200, {
+      "content-type": "text/csv; charset=utf-8",
+      "content-disposition": `attachment; filename="admin-audit-${Date.now()}.csv"`,
+    });
+  }
   return c.json({ entries: rows });
+});
+
+/**
+ * 사용 원가 · 충전액 · 마진 — 플랫폼/회사별. `usage_events.cost_krw` 는 우리 **실측 원가**
+ * (청구액이 아니다)인데 지금까지 어디에도 노출되지 않아 마진을 볼 수 없었다. 충전(credit_topup)과
+ * 나란히 두어 회사별 원가/매출/마진을 본다. 두 표 모두 RLS 라 asSystem('*') 로 횡단 집계한다.
+ */
+app.get("/api/superadmin/usage", async (c) => {
+  const actor = requireSuperadmin(c);
+  const days = Math.min(365, Math.max(1, Number(c.req.query("days")) || 30));
+  // 회사별 원가·매출을 횡단으로 보는 열람이라 기록을 남긴다("누가 봤나" — admin.ts 원칙 3).
+  await audit(actor, { action: "usage.view", detail: { days } }, clientIp(c));
+  const iv = `${days} days`;
+  const [cost, rev] = await asSystem((db) => Promise.all([
+    db.query(
+      `SELECT tenant_id AS "tenantId",
+              COALESCE(SUM(quantity) FILTER (WHERE kind='analyze_minutes'),0)::float AS minutes,
+              COALESCE(SUM(cost_krw),0)::float AS "costKrw",
+              COUNT(*)::int AS events
+         FROM usage_events WHERE occurred_at >= now() - $1::interval
+        GROUP BY tenant_id`, [iv]),
+    db.query(
+      `SELECT tenant_id AS "tenantId", COALESCE(SUM(amount_krw),0)::float AS "revenueKrw"
+         FROM credit_topup WHERE status='paid' AND created_at >= now() - $1::interval
+        GROUP BY tenant_id`, [iv]),
+  ]));
+  const revBy = new Map<string, number>((rev.rows as any[]).map((r) => [r.tenantId, Number(r.revenueKrw)]));
+  const byTenant = (cost.rows as any[]).map((r) => {
+    const revenueKrw = revBy.get(r.tenantId) ?? 0;
+    revBy.delete(r.tenantId);
+    const costKrw = Number(r.costKrw);
+    return { tenantId: r.tenantId, minutes: Number(r.minutes), events: r.events, costKrw, revenueKrw, marginKrw: revenueKrw - costKrw };
+  });
+  // 원가는 없고 충전만 있는 회사도 포함(순마진 플러스로).
+  for (const [tenantId, revenueKrw] of revBy) {
+    byTenant.push({ tenantId, minutes: 0, events: 0, costKrw: 0, revenueKrw, marginKrw: revenueKrw });
+  }
+  byTenant.sort((a, b) => b.costKrw - a.costKrw);
+  const totals = byTenant.reduce(
+    (t, r) => ({ minutes: t.minutes + r.minutes, costKrw: t.costKrw + r.costKrw, revenueKrw: t.revenueKrw + r.revenueKrw }),
+    { minutes: 0, costKrw: 0, revenueKrw: 0 },
+  );
+  return c.json({ days, totals: { ...totals, marginKrw: totals.revenueKrw - totals.costKrw }, byTenant });
 });
 
 // ── full state (web InitialData + media) ──────────────────────────────────────
