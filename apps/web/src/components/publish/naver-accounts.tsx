@@ -70,7 +70,7 @@ export function NaverAccounts({ onChange }: { onChange?: (accounts: NaverAccount
 
   const [adding, setAdding] = useState(false);
   const [label, setLabel] = useState("");
-  const [target, setTarget] = useState<NaverAccount["target"]>("both");
+  const [target, setTarget] = useState<NaverAccount["target"]>("clip");
   const [busy, setBusy] = useState<string | null>(null);
 
   const load = useCallback(async () => {
@@ -95,7 +95,7 @@ export function NaverAccounts({ onChange }: { onChange?: (accounts: NaverAccount
     setBusy("add");
     try {
       await createNaverAccount(name, target);
-      setLabel(""); setTarget("both"); setAdding(false);
+      setLabel(""); setTarget("clip"); setAdding(false);
       setMsg(`'${name}' 추가됨 — 아래에서 로그인 세션을 등록하면 발행이 가능합니다.`);
       await load();
     } catch (e) {
@@ -171,7 +171,7 @@ export function NaverAccounts({ onChange }: { onChange?: (accounts: NaverAccount
       <div className="mb-3 flex items-center gap-2">
         <h2 className="text-sm font-semibold text-muted-foreground">네이버 연결 계정</h2>
         <span className="text-[11px] text-muted-foreground/70">
-          (네이버 TV · 클립 — 공개 업로드 API 가 없어 로그인 세션으로 발행합니다)
+          (네이버 클립 — 공개 업로드 API 가 없어 로그인 세션으로 발행합니다)
         </span>
       </div>
 
@@ -207,13 +207,13 @@ export function NaverAccounts({ onChange }: { onChange?: (accounts: NaverAccount
             </label>
             <label className="flex flex-col gap-1">
               <span className="text-[11px] text-muted-foreground">쓸 곳</span>
+              {/* 네이버 TV 는 제품에서 제외 (2026-08-13) — 새 계정은 클립 전용으로만 만든다.
+                  기존 tv·both 계정은 데이터에 남아 있고 라벨 표시는 유지된다. */}
               <select
                 value={target}
                 onChange={(e) => setTarget(e.target.value as NaverAccount["target"])}
                 className="rounded-md border border-border bg-background px-2.5 py-1.5 text-sm text-foreground"
               >
-                <option value="both">네이버 TV + 클립</option>
-                <option value="tv">네이버 TV 전용</option>
                 <option value="clip">네이버 클립 전용</option>
               </select>
             </label>

@@ -53,7 +53,9 @@ describe("RLS 표 목록", () => {
     const tables = rlsTables();
     assert.ok(tables.length >= 10, `너무 적다 — 파싱이 깨졌다: ${tables.join(", ")}`);
     // 대표적인 것들이 빠지면 파싱이 잘못된 것이다.
-    for (const t of ["api_keys", "credit_ledger", "channel_rule", "usage_events"]) {
+    // instagram_accounts 는 런타임 CREATE 로만 생기다 0034 에서 편입됐다 — 여기서 고정해
+    // 마이그레이션이 지워지면(격리 회귀) 테스트가 알게 한다.
+    for (const t of ["api_keys", "credit_ledger", "channel_rule", "usage_events", "instagram_accounts"]) {
       assert.ok(tables.includes(t), `${t} 를 못 걷었다`);
     }
   });

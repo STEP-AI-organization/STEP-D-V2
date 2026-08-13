@@ -24,6 +24,18 @@ export type PublishChannel =
   | "youtube" | "instagram" | "facebook" | "tiktok" | "navertv" | "naverclip" | (string & {});
 
 /**
+ * 실제로 받는 채널의 전체 목록. channelPublishMode 가 "모르는 값 = record" 로 처리하므로,
+ * 이 목록으로 먼저 거르지 않으면 오타·폐기된 채널명("meta" 등)이 **조용히 record 로
+ * 수락**되어 존재하지 않는 채널에 '기록됨'이 쌓인다.
+ */
+export const PUBLISH_CHANNELS = new Set<string>([
+  "youtube", "instagram", "facebook", "tiktok", "navertv", "naverclip",
+]);
+export function isPublishChannel(channel: string): boolean {
+  return PUBLISH_CHANNELS.has(channel);
+}
+
+/**
  * 네이버 채널 id → 워커가 쓰는 target.
  *
  * 채널 id 를 두 개로 나눈 이유: 네이버 TV(가로 VOD)와 네이버 클립(세로 숏폼)은 **올리는
@@ -82,8 +94,27 @@ export function isClipRendered(clip: {
 }
 
 /**
- * 클립의 distributions 배열에서 한 채널 항목을 갱신한다(새 배열 반환).
+ * 배포 항목의 계정 정체성 — 같은 플랫폼 다계정을 가르는 열쇠.
+ * YouTube 는 youtubeChannelId, 네이버는 naverAccountId. 둘 다 없으면 null
+ * (기록 전용 채널·계정 개념 이전의 레거시 행).
+ */
+export function distributionAccountId(
+  d: { youtubeChannelId?: unknown; naverAccountId?: unknown },
+): string | null {
+  if (typeof d.youtubeChannelId === "string" && d.youtubeChannelId) return d.youtubeChannelId;
+  if (typeof d.naverAccountId === "string" && d.naverAccountId) return d.naverAccountId;
+  return null;
+}
+
+/**
+ * 클립의 distributions 배열에서 한 채널·**한 계정** 항목을 갱신한다(새 배열 반환).
  * index.ts 와 worker.ts 에 같은 함수가 두 벌 있던 것을 하나로 합쳤다.
+ *
+ * 채널당 1행이면 규칙에 같은 플랫폼 계정 A·B 를 넣었을 때 기록이 서로 덮여,
+ * 순방의 "이미 나갔나" 체크가 매번 거짓이 되어 **같은 클립이 계속 재업로드**된다.
+ * 그래서 매칭 키는 채널 + 계정 정체성이다 — value 에 실린 정체성이 같은 항목만 갱신하고,
+ * 다르면 별도 항목으로 쌓는다. 정체성 없는 쓰기(기록 전용 채널·레거시)는 예전처럼
+ * 채널 단독으로 매칭한다.
  */
 export function upsertDistribution<T extends { channel: string }>(
   distributions: T[] | undefined,
@@ -91,10 +122,32 @@ export function upsertDistribution<T extends { channel: string }>(
   value: Record<string, unknown>,
 ): T[] {
   const next = (distributions ?? []).map((d) => ({ ...d }));
-  const existing = next.find((d) => d.channel === channel);
+  const acct = distributionAccountId(value);
+  const existing = next.find((d) =>
+    d.channel === channel
+    && (acct === null || distributionAccountId(d as Record<string, unknown>) === acct));
   if (existing) Object.assign(existing, value);
   else next.push({ channel, ...value } as T);
   return next;
+}
+
+/**
+ * 이 채널·이 계정으로 이미 나갔는가(실패 제외) — 자동 순방의 중복 게시 방지 판정.
+ * 계정 식별자가 없는 행(구 데이터)은 플랫폼 일치만으로 **보수적으로 참** —
+ * 중복 게시가 놓친 게시보다 나쁘다.
+ */
+export function hasAccountDistribution(
+  distributions:
+    | Array<{ channel: string; status?: string; youtubeChannelId?: unknown; naverAccountId?: unknown }>
+    | undefined,
+  channel: string,
+  accountId: string,
+): boolean {
+  return (distributions ?? []).some((d) => {
+    if (d.channel !== channel || d.status === "failed") return false;
+    const acct = distributionAccountId(d);
+    return acct === null || acct === accountId;
+  });
 }
 
 /** 배포에서 제외된 건과 그 사유. **사유 없는 제외는 타입이 허용하지 않는다.** */

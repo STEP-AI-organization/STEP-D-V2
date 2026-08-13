@@ -18,23 +18,51 @@ import { fetchAutoTopup, runAutoTopup, saveAutoTopup, type AutoTopupPolicy } fro
 export function AutoTopupPanel({
   canManage,
   hasCard,
+  priceKrw,
   onCharged,
 }: {
   canManage: boolean;
   /** 저장된 카드가 있는가 — 없으면 자동 충전을 켤 수 없다(안내만). */
   hasCard: boolean;
+  /** 크레딧 단가(원) — 즉시 실행 시 청구될 ₩금액을 본문과 confirm 에 보여주는 데 쓴다. */
+  priceKrw?: number | null;
   onCharged?: () => void | Promise<void>;
 }) {
   const { toast } = useToast();
   const [p, setP] = useState<AutoTopupPolicy | null>(null);
+  // 서버에 저장된 정책 스냅샷 — 실행은 이걸로 결제되므로, 화면 편집분과 어긋나면 실행을 막는다.
+  const [savedP, setSavedP] = useState<AutoTopupPolicy | null>(null);
   const [busy, setBusy] = useState<"save" | "run" | null>(null);
+  const [loadFailed, setLoadFailed] = useState(false);
 
   const load = useCallback(async () => {
-    try { setP(await fetchAutoTopup()); } catch { setP(null); }
+    try {
+      const fetched = await fetchAutoTopup();
+      setP(fetched);
+      setSavedP(fetched);
+      setLoadFailed(false);
+    } catch {
+      // 패널을 통째로 숨기면 기능이 있는지조차 알 수 없다 — 실패했다는 한 줄은 남긴다.
+      setP(null);
+      setLoadFailed(true);
+    }
   }, []);
   useEffect(() => { void load(); }, [load]);
 
-  if (!p) return null;
+  if (!p) {
+    if (!loadFailed) return null; // 첫 조회 중 — 빈 껍데기 깜빡임 방지
+    return (
+      <div className="flex flex-col gap-2 rounded-[6px] p-3" style={{ border: "1px solid var(--sd-border)" }}>
+        <div className="text-[11.5px] font-semibold" style={{ color: "var(--sd-fg)" }}>자동 충전</div>
+        <p className="text-[11.5px]" style={{ color: "var(--sd-mut)" }}>
+          자동 충전 설정을 불러오지 못했습니다.{" "}
+          <button type="button" className="underline" onClick={() => void load()}>
+            다시 시도
+          </button>
+        </p>
+      </div>
+    );
+  }
 
   const set = <K extends keyof AutoTopupPolicy>(k: K, v: AutoTopupPolicy[K]) =>
     setP((prev) => (prev ? { ...prev, [k]: v } : prev));
@@ -52,6 +80,7 @@ export function AutoTopupPanel({
         maxKrwPerMonth: p.maxKrwPerMonth,
       });
       setP(saved);
+      setSavedP(saved);
       toast({ title: "자동 충전 설정을 저장했습니다", tone: "done" });
     } catch (e) {
       toast({ title: "저장 실패", description: e instanceof Error ? e.message : String(e), tone: "error" });
@@ -60,7 +89,27 @@ export function AutoTopupPanel({
     }
   }
 
+  // 실행(runAutoTopup)은 **서버에 저장된 정책**으로 결제한다 — 화면의 미저장 값으로 confirm 을
+  // 띄우면 동의한 금액과 청구액이 달라질 수 있다. 어긋나 있으면 실행을 막는다.
+  const dirty =
+    !!p && !!savedP &&
+    (p.enabled !== savedP.enabled ||
+      p.thresholdCredits !== savedP.thresholdCredits ||
+      p.topupCredits !== savedP.topupCredits ||
+      p.maxPerDay !== savedP.maxPerDay ||
+      p.maxKrwPerMonth !== savedP.maxKrwPerMonth);
+
   async function runNow() {
+    if (!p || !savedP || dirty) return;
+    // "테스트"가 아니다 — 조건이 맞으면 진짜 긁힌다. 저장된 정책의 금액으로 확인을 받는다.
+    const won = priceKrw != null ? ` (₩${(savedP.topupCredits * priceKrw).toLocaleString("ko-KR")})` : "";
+    if (
+      !window.confirm(
+        `지금 잔액이 임계(${savedP.thresholdCredits.toLocaleString("ko-KR")}크레딧) 아래면 저장 카드로 ` +
+          `${savedP.topupCredits.toLocaleString("ko-KR")}크레딧${won}이 즉시 결제됩니다.\n\n실행할까요?`,
+      )
+    )
+      return;
     setBusy("run");
     try {
       const r = await runAutoTopup();
@@ -71,6 +120,8 @@ export function AutoTopupPanel({
           tone: "done",
         });
         await onCharged?.();
+        // 사이드바 잔액도 즉시 따라오게 한다 — 일반결제 웹훅 반영과 같은 신호.
+        window.dispatchEvent(new Event("stepd:credits-changed"));
       } else {
         toast({ title: "지금은 충전 조건이 아닙니다", description: r.reason, tone: "warn" });
       }
@@ -146,12 +197,25 @@ export function AutoTopupPanel({
             <button type="button" className="sd-btn sd-btn-primary" disabled={busy !== null} onClick={save}>
               {busy === "save" ? "저장 중…" : "설정 저장"}
             </button>
-            {/* 설정이 맞는지 지금 바로 판정 실행 — 조건 맞으면 실제로 1회 긁힌다. */}
-            <button type="button" className="sd-btn" disabled={busy !== null || !p.enabled || !hasCard} onClick={runNow}
-              title={!p.enabled ? "먼저 자동 충전을 켜고 저장하세요" : "지금 조건이 맞으면 실제로 1회 충전됩니다"}>
-              {busy === "run" ? "실행 중…" : "지금 실행 (테스트)"}
+            <button type="button" className="sd-btn" disabled={busy !== null || !p.enabled || !hasCard || dirty} onClick={runNow}
+              title={dirty ? "저장하지 않은 변경이 있습니다 — 먼저 저장하세요 (실행은 저장된 설정으로 결제됩니다)"
+                : !p.enabled ? "먼저 자동 충전을 켜고 저장하세요" : undefined}>
+              {busy === "run" ? "실행 중…" : "지금 1회 충전 실행"}
             </button>
+            {dirty && (
+              <span className="text-[10.5px]" style={{ color: "var(--sd-warn)" }}>
+                저장 안 된 변경 있음 — 저장 후 실행
+              </span>
+            )}
           </div>
+          {/* "테스트" 같은 완곡어로 실결제를 숨기지 않는다 — 사유·금액을 본문에 그대로 적는다. */}
+          <p className="text-[11px]" style={{ color: "var(--sd-mut)" }}>
+            위 실행 버튼은 <b style={{ color: "var(--sd-fg)" }}>실제 결제</b>입니다 — 지금 잔액이
+            임계({p.thresholdCredits.toLocaleString("ko-KR")}크레딧) 아래면 저장 카드로{" "}
+            {p.topupCredits.toLocaleString("ko-KR")}크레딧
+            {priceKrw != null ? ` (₩${(p.topupCredits * priceKrw).toLocaleString("ko-KR")})` : ""}이 즉시
+            결제됩니다. 조건이 아니면 결제 없이 사유만 알려줍니다.
+          </p>
         </>
       ) : (
         <p className="text-[10.5px]" style={{ color: "var(--sd-mut)" }}>

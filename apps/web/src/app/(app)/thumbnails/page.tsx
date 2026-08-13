@@ -42,6 +42,8 @@ export default function ThumbnailsPage() {
   const [aspect, setAspect] = useState<"16:9" | "9:16">("16:9");
   const [candidates, setCandidates] = useState<ThumbnailCandidateFile[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
+  // 후보 조회 중 표시 — 없으면 로딩 중에도 "결과 없음"으로 보인다.
+  const [candLoading, setCandLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -50,6 +52,7 @@ export default function ThumbnailsPage() {
   const target = targets.find((c) => c.id === targetId) ?? null;
 
   const mediaIdOf = (c: Clip) => c.mediaId ?? c.sourceMediaId ?? "";
+  const targetMediaId = target ? mediaIdOf(target) : "";
 
   // 생성 정책 = 프로그램 스타일 프로파일. 대상을 고르면 그 프로그램의 대표 썸네일과
   // 분석 결과를 함께 보여 준다 — 뭘 근거로 생성될지 누르기 전에 보인다.
@@ -76,9 +79,9 @@ export default function ThumbnailsPage() {
     return () => { alive = false; };
   }, [targetProgramId]);
 
-  const loadCandidates = useCallback(async (clip: Clip | null) => {
-    const mediaId = clip ? mediaIdOf(clip) : "";
+  const loadCandidates = useCallback(async (mediaId: string) => {
     if (!mediaId) { setCandidates([]); setSelected(null); return; }
+    setCandLoading(true);
     try {
       const r = await fetchThumbnailCandidates(mediaId);
       setCandidates(r.candidates);
@@ -87,17 +90,21 @@ export default function ThumbnailsPage() {
     } catch (err) {
       setCandidates([]);
       setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setCandLoading(false);
     }
   }, []);
 
   // 대상이 바뀌면 이전 결과를 버린다 (F7-4). 남겨 두면 다른 미디어의 결과를
   // 이 미디어 것으로 착각한다.
+  // 의존성은 원시값만 — target **객체**를 넣으면 store 폴링마다 아이덴티티가 바뀌어
+  // 몇십 초마다 결과가 초기화된다.
   useEffect(() => {
     setCandidates([]);
     setSelected(null);
     setError(null);
-    void loadCandidates(target);
-  }, [targetId, target, loadCandidates]);
+    void loadCandidates(targetMediaId);
+  }, [targetId, targetMediaId, loadCandidates]);
 
   const canGenerate = Boolean(target) && !busy;
 
@@ -139,7 +146,8 @@ export default function ThumbnailsPage() {
   }
 
   return (
-    <div className="flex gap-4">
+    // 좁은 화면에서 사이드가 아래로 내려가게 wrap — 고정폭 사이드가 가로 오버플로를 만들지 않게.
+    <div className="flex flex-wrap gap-4">
       {/* ── 대상 그리드 ───────────────────────────────────────────────────── */}
       <div className="flex min-w-0 flex-1 flex-col gap-2.5">
         <div className="flex items-baseline gap-2">
@@ -194,7 +202,7 @@ export default function ThumbnailsPage() {
       </div>
 
       {/* ── 우측 400px ────────────────────────────────────────────────────── */}
-      <aside className="flex w-[400px] shrink-0 flex-col gap-2.5">
+      <aside className="flex w-full min-w-0 flex-col gap-2.5 lg:w-[400px] lg:shrink-0">
         <div className="sd-card flex flex-col gap-2.5 p-3">
           <div className="sd-eb" style={{ color: "var(--sd-label)" }}>선택한 미디어</div>
           {target ? (
@@ -324,7 +332,7 @@ export default function ThumbnailsPage() {
             <button
               type="button"
               className="sd-btn ml-auto"
-              onClick={() => void loadCandidates(target)}
+              onClick={() => void loadCandidates(targetMediaId)}
               disabled={!target}
             >
               새로고침
@@ -342,7 +350,7 @@ export default function ThumbnailsPage() {
               className="sd-ph grid min-h-[120px] place-items-center rounded-[5px] px-4 text-center"
               style={{ border: "1px dashed var(--sd-border)" }}
             >
-              {target ? "아직 생성된 결과가 없습니다" : "대상을 고르면 기존 결과가 여기 보입니다"}
+              {candLoading ? "불러오는 중…" : target ? "아직 생성된 결과가 없습니다" : "대상을 고르면 기존 결과가 여기 보입니다"}
             </div>
           ) : (
             <div className="grid grid-cols-1 gap-2">

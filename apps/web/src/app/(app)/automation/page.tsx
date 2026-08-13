@@ -118,8 +118,12 @@ export default function AutomationPage() {
   const [holds, setHolds] = useState<RuleHold[]>([]);
   const [paused, setPaused] = useState(false);
   const [idleReason, setIdleReason] = useState("");
+  // loading 없이는 fetch 전에 "규칙 없음"이 먼저 보인다 — 로딩/빈/에러 3종을 구분한다.
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
+  const [runningNow, setRunningNow] = useState(false);
+  const [releasing, setReleasing] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -129,6 +133,8 @@ export default function AutomationPage() {
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLoading(false);
     }
   }, []);
 
@@ -146,6 +152,8 @@ export default function AutomationPage() {
 
   /** 규칙을 만들고 10분을 기다리지 않아도 결과를 본다. */
   async function runNow() {
+    if (runningNow) return; // 더블클릭 = 순방 중복 실행
+    setRunningNow(true);
     try {
       const r = await runAutomationNow();
       toast({
@@ -158,16 +166,23 @@ export default function AutomationPage() {
       await load();
     } catch (err) {
       toast({ title: "순방 실패", description: err instanceof Error ? err.message : String(err), tone: "error" });
+    } finally {
+      setRunningNow(false);
     }
   }
 
   async function release(h: RuleHold) {
+    const key = `${h.ruleId}:${h.clipId}`;
+    if (releasing) return; // 더블클릭 = 확정 중복 요청
+    setReleasing(key);
     try {
       const r = await releaseAutomationHold(h.ruleId, h.clipId, actor);
       toast({ title: "확정했습니다", description: r.notice, tone: "done" });
       await load();
     } catch (err) {
       toast({ title: "확정 실패", description: err instanceof Error ? err.message : String(err), tone: "error" });
+    } finally {
+      setReleasing(null);
     }
   }
 
@@ -184,13 +199,13 @@ export default function AutomationPage() {
             aria-hidden
           />
           <span className="text-[13px] font-semibold" style={{ color: "var(--sd-fg)" }}>
-            {paused ? "일시정지됨" : running ? "자동 순방 켜짐" : "규칙 없음 — 만들면 시작"}
+            {loading ? "불러오는 중…" : paused ? "일시정지됨" : running ? "자동 순방 켜짐" : "규칙 없음 — 만들면 시작"}
           </span>
           <span className="sd-mono text-[11px]" style={{ color: "var(--sd-mut)" }}>
             {runs[0]?.at ? `마지막 실행 ${runs[0].at.slice(0, 16).replace("T", " ")}` : "아직 실행 기록 없음"}
           </span>
-          <button type="button" className="sd-btn sd-btn-primary ml-auto" onClick={runNow}>
-            지금 실행
+          <button type="button" className="sd-btn sd-btn-primary ml-auto" disabled={runningNow} onClick={runNow}>
+            {runningNow ? "실행 중…" : "지금 실행"}
           </button>
           <button type="button" className="sd-btn" onClick={togglePause}>
             {paused ? "재시작" : "일시정지"}
@@ -263,7 +278,7 @@ export default function AutomationPage() {
             className="sd-ph grid min-h-[80px] place-items-center rounded-[6px] px-6 text-center"
             style={{ border: "1px dashed var(--sd-border)" }}
           >
-            보류된 건이 없습니다
+            {loading ? "불러오는 중…" : error ? "상태를 불러오지 못했습니다" : "보류된 건이 없습니다"}
           </div>
         ) : (
           <div className="flex flex-col gap-1.5">
@@ -272,8 +287,13 @@ export default function AutomationPage() {
                 <span className="sd-mono text-[11px]" style={{ color: "var(--sd-mut)" }}>{h.clipId}</span>
                 <span className="min-w-[200px] flex-1 text-[11.5px]" style={{ color: "var(--sd-fg)" }}>{h.reason}</span>
                 <span className="sd-mono text-[10.5px]" style={{ color: "var(--sd-mut)" }}>{h.heldAt?.slice(0, 16).replace("T", " ")}</span>
-                <button type="button" className="sd-btn sd-btn-primary" onClick={() => void release(h)}>
-                  확정 — 다시 잡기
+                <button
+                  type="button"
+                  className="sd-btn sd-btn-primary"
+                  disabled={releasing !== null}
+                  onClick={() => void release(h)}
+                >
+                  {releasing === `${h.ruleId}:${h.clipId}` ? "확정 중…" : "확정 — 다시 잡기"}
                 </button>
               </div>
             ))}
@@ -289,7 +309,7 @@ export default function AutomationPage() {
             className="sd-ph grid min-h-[100px] place-items-center rounded-[6px] px-6 text-center"
             style={{ border: "1px dashed var(--sd-border)" }}
           >
-            규칙이 없습니다 — 자동 배포는 규칙이 있어야만 동작합니다 (기본 동작 없음)
+            {loading ? "불러오는 중…" : error ? "상태를 불러오지 못했습니다" : "규칙이 없습니다 — 자동 배포는 규칙이 있어야만 동작합니다 (기본 동작 없음)"}
           </div>
         ) : (
           <div className="flex flex-col gap-1.5">
@@ -372,7 +392,7 @@ export default function AutomationPage() {
             className="sd-ph grid min-h-[80px] place-items-center rounded-[6px] px-6 text-center text-[11.5px]"
             style={{ border: "1px dashed var(--sd-border)", color: "var(--sd-mut)" }}
           >
-            아직 자동 배포된 것이 없습니다 — 규칙을 만들고 “지금 실행”을 누르면 여기 쌓입니다
+            {loading ? "불러오는 중…" : error ? "상태를 불러오지 못했습니다" : "아직 자동 배포된 것이 없습니다 — 규칙을 만들고 “지금 실행”을 누르면 여기 쌓입니다"}
           </div>
         ) : (
           <div className="flex flex-col gap-1">
@@ -506,10 +526,9 @@ function RuleForm({
   // 채널 선택지 = YouTube 연결 채널 + 세션 등록된 네이버 계정 + (기타 플랫폼) 채널 규칙.
   const channelOptions: { platform: string; accountId: string; label: string }[] = [
     ...ytChannels.map((c) => ({ platform: "youtube", accountId: c.channelId, label: `YouTube · ${c.channelName}` })),
-    ...naverAccts.flatMap((a) => {
-      const chans = a.target === "both" ? ["navertv", "naverclip"] : a.target === "tv" ? ["navertv"] : ["naverclip"];
-      return chans.map((ch) => ({ platform: ch, accountId: a.id, label: `${ch === "navertv" ? "네이버 TV" : "네이버 클립"} · ${a.label}` }));
-    }),
+    // 네이버 TV 는 제품에서 제외 (2026-08-13) — 클립만 선택지로 내놓는다.
+    ...naverAccts.filter((a) => a.target !== "tv")
+      .map((a) => ({ platform: "naverclip", accountId: a.id, label: `네이버 클립 · ${a.label}` })),
     ...(channelRules ?? []).filter((r) => r.platform !== "youtube" && !r.platform.startsWith("naver"))
       .map((r) => ({ platform: r.platform, accountId: r.accountId, label: `${r.platform} · ${r.label}` })),
   ];
@@ -524,6 +543,12 @@ function RuleForm({
         .map((k) => channelOptions.find((o) => `${o.platform}:${o.accountId}` === k))
         .filter(Boolean)
         .map((o) => ({ platform: o!.platform, accountId: o!.accountId }));
+      // 선택 키가 채널 목록에서 사라졌을 수 있다(목록 재조회 등) — 빈 배열이면 chans[0] 크래시.
+      if (chans.length === 0) {
+        toast({ title: "저장 실패", description: "선택한 채널을 찾을 수 없습니다 — 채널을 다시 선택해 주세요.", tone: "error" });
+        setBusy(false);
+        return;
+      }
       const r = await saveAutomationRule({
         // 단수 필드 = 첫 항목 (서버 UNIQUE·구버전 호환). 배열이 정본.
         programId: selPrograms[0], platform: chans[0].platform, accountId: chans[0].accountId,

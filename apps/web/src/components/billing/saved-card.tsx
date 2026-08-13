@@ -32,13 +32,19 @@ export function SavedCardPanel({
   canManage,
   buyer,
   credits,
+  amountKrw,
   onCharged,
+  onCardChange,
 }: {
   canManage: boolean;
   buyer: { fullName: string; email: string; phoneNumber: string };
   /** 충전할 크레딧 — 위 입력칸과 같은 값을 쓴다. 두 군데서 따로 받으면 헷갈린다. */
   credits: number;
+  /** 청구될 원화 총액 — 저장 카드는 결제창이 없어서, 이 화면이 금액을 보여줄 유일한 자리다. */
+  amountKrw: number;
   onCharged: () => void | Promise<void>;
+  /** 카드 등록/삭제 뒤 부모가 카드 상태를 다시 읽게 한다 — 자동충전 패널의 게이트가 이걸 본다. */
+  onCardChange?: () => void | Promise<void>;
 }) {
   const { toast } = useToast();
   const [card, setCard] = useState<SavedCard | null>(null);
@@ -49,19 +55,36 @@ export function SavedCardPanel({
   // 기본은 개인(percard) — 지금까지 되던 경우.
   const [cardUse, setCardUse] = useState<"percard" | "cocard">("percard");
 
+  const [loadFailed, setLoadFailed] = useState(false);
+
   const load = useCallback(async () => {
     try {
       setCard(await fetchSavedCard());
+      setLoadFailed(false);
     } catch {
-      // 조회가 실패해도 일반결제는 쓸 수 있어야 한다 — 이 패널만 조용히 접는다.
+      // 조회가 실패해도 일반결제는 쓸 수 있어야 한다 — 다만 패널을 통째로 숨기면
+      // 기능이 있는지조차 알 수 없으니, 실패했다는 한 줄은 남긴다.
       setCard(null);
+      setLoadFailed(true);
     }
   }, []);
   useEffect(() => { void load(); }, [load]);
 
   // 서버에 빌링 채널키가 없으면 등록 자체가 안 된다. 버튼을 보여주고 눌렀을 때 실패하는
   // 것보다, 왜 안 되는지 적어 두는 편이 낫다.
-  if (!card) return null;
+  if (!card) {
+    if (!loadFailed) return null; // 첫 조회 중 — 빈 껍데기 깜빡임 방지
+    return (
+      <Shell>
+        <p className="text-[11.5px]" style={{ color: "var(--sd-mut)" }}>
+          결제수단 정보를 불러오지 못했습니다.{" "}
+          <button type="button" className="underline" onClick={() => void load()}>
+            다시 시도
+          </button>
+        </p>
+      </Shell>
+    );
+  }
   if (!card.available) {
     return (
       <Shell>
@@ -109,6 +132,8 @@ export function SavedCardPanel({
       await saveCard({ billingKey });
       toast({ title: "카드를 등록했습니다", description: "이제 버튼 한 번으로 충전할 수 있습니다.", tone: "done" });
       await load();
+      // 부모의 카드 등록 여부(자동충전 게이트)도 같이 갱신 — 안 하면 낡은 상태로 남는다.
+      await onCardChange?.();
     } catch (err) {
       toast({ title: "카드 등록 실패", description: msg(err), tone: "error" });
     } finally {
@@ -118,6 +143,13 @@ export function SavedCardPanel({
 
   async function charge() {
     if (credits <= 0) return;
+    // 저장 카드는 결제창이 없어서 이 confirm 이 유일한 금액 확인 관문이다 — 클릭 즉시 과금 방지.
+    if (
+      !window.confirm(
+        `₩${amountKrw.toLocaleString("ko-KR")} 이 저장 카드로 즉시 결제됩니다.\n\n크레딧 ${credits.toLocaleString("ko-KR")}개 충전을 진행할까요?`,
+      )
+    )
+      return;
     setBusy("charge");
     try {
       // 저장 카드는 결제창이 없다 — 서버가 긁고 승인까지 확인한 뒤 응답한다.
@@ -129,6 +161,8 @@ export function SavedCardPanel({
         tone: "done",
       });
       await onCharged();
+      // 사이드바 잔액도 즉시 따라오게 한다 — 일반결제 웹훅 반영과 같은 신호.
+      window.dispatchEvent(new Event("stepd:credits-changed"));
     } catch (err) {
       toast({ title: "결제 실패", description: msg(err), tone: "error" });
     } finally {
@@ -143,6 +177,8 @@ export function SavedCardPanel({
       await deleteSavedCard();
       toast({ title: "카드를 삭제했습니다", tone: "done" });
       await load();
+      // 카드가 사라졌는데 부모가 모른 채면 자동충전 패널이 "카드 있음"으로 남는다.
+      await onCardChange?.();
     } catch (err) {
       toast({ title: "삭제 실패", description: msg(err), tone: "error" });
     } finally {
@@ -163,7 +199,8 @@ export function SavedCardPanel({
                 disabled={busy !== null || credits <= 0}
                 onClick={charge}
               >
-                {busy === "charge" ? "결제 중…" : "저장 카드로 결제"}
+                {/* 청구액을 버튼에 그대로 박는다 — 얼마가 나가는지 모르고 누르는 일이 없게. */}
+                {busy === "charge" ? "결제 중…" : `저장 카드로 ₩${amountKrw.toLocaleString("ko-KR")} 결제`}
               </button>
               {/* 카드 변경 시에도 개인/법인 선택이 창에 반영되게 토글을 함께 둔다. */}
               <CardUseToggle value={cardUse} onChange={setCardUse} disabled={busy !== null} />

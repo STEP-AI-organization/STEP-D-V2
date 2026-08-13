@@ -20,6 +20,7 @@ import { commitAndInherit } from "./adopt.ts";
 import {
   appendRuleRun,
   getEntity,
+  hasReleasedHold,
   holdClip,
   isHeldAwaitingHuman,
   listAutomationRules,
@@ -35,6 +36,7 @@ import {
 } from "./automation.ts";
 import { eligibility, type ChannelRule } from "./channel-rules.ts";
 import { newId } from "./pipeline.ts";
+import { hasAccountDistribution } from "./publish-guard.ts";
 import { clipGate, dispatchPublish } from "./publish-dispatch.ts";
 import { basicReframeState } from "./reframe.ts";
 
@@ -162,12 +164,9 @@ export async function runAutomationCycle(): Promise<CycleReport> {
 
         // 이미 **이 계정으로** 나갔으면 건드리지 않는다(중복 게시 방지). 배포 행에
         // 계정 식별자가 없으면(구 데이터) 플랫폼 일치만으로 보수적으로 스킵한다.
-        const already = (clip.distributions ?? []).some((d: any) => {
-          if (d.channel !== chan.platform || d.status === "failed") return false;
-          const acct = d.youtubeChannelId ?? d.naverAccountId ?? null;
-          return acct === null || acct === chan.accountId;
-        });
-        if (already) continue;
+        // 판정은 upsertDistribution 과 같은 정체성 규칙(publish-guard)을 공유한다 —
+        // 두 벌이 되면 한쪽만 고쳐져 매 순방 재업로드가 재발한다.
+        if (hasAccountDistribution(clip.distributions, chan.platform, chan.accountId)) continue;
 
         const why = eligibility(channelRule, {
           id: clip.id, durationSec: clip.durationSec,
@@ -180,11 +179,14 @@ export async function runAutomationCycle(): Promise<CycleReport> {
 
         const gate = await clipGate(clip.id);
         const held = await isHeldAwaitingHuman(rule.id, clip.id);
+        // 승인 정책은 사람의 보류 해제를 승인으로 본다 — 별도 승인 버튼을 또 만들지 않는다.
+        // 단, 근거는 **해제 기록**(released_at)이어야 한다. `!held` 를 승인으로 쓰면
+        // 보류된 적 없는 새 클립까지 자동 승인되어 approve_first 가 무력화된다.
+        const approved = await hasReleasedHold(rule.id, clip.id);
         const decision = decidePublish({
           rule,
           gate: { allowed: gate.allowed, state: gate.state, reason: gate.reason },
-          // 승인 정책은 사람의 보류 해제를 승인으로 본다 — 별도 승인 버튼을 또 만들지 않는다.
-          approved: !held,
+          approved,
           heldAwaitingHuman: held,
         });
 
@@ -203,10 +205,14 @@ export async function runAutomationCycle(): Promise<CycleReport> {
         const outcome = await dispatchPublish({
           clipIds: [clip.id],
           channel: chan.platform,
-          youtubeChannelId: chan.accountId,
+          // 계정 식별자는 플랫폼에 맞는 필드로만 — 배포 행의 계정 정체성
+          // (distributionAccountId)이 이 필드로 판정된다.
+          ...(chan.platform === "youtube" ? { youtubeChannelId: chan.accountId } : {}),
           ...(isNaver ? {
             naverAccountId: chan.accountId,
-            description: desc.length >= 10 ? desc : `${desc} 하이라이트 클립`.trim(),
+            // 패딩 문구는 단독으로도 10자 이상이어야 한다 — 네이버 클립 최소 설명 길이가
+            // 10자라서, 시놉시스가 비어 있으면 패딩만으로 통과해야 워커 단 실패가 없다.
+            description: desc.length >= 10 ? desc : `${desc} 방송 하이라이트 클립입니다`.trim(),
             naverCategory: { primary: "엔터", secondary: "엔터" },
           } : {}),
           actor: `automation:${rule.id}`,

@@ -1284,11 +1284,17 @@ async function streamToBuffer(web: ReadableStream): Promise<Buffer> {
 
 // upsertDistribution 은 publish-guard.ts 로 이동 (index.ts 와 두 벌이었다).
 
-/** Re-read the clip (avoid clobbering concurrent edits) and mark its youtube dist failed. */
-async function markDistributionFailed(clipId: string, channel: string, error: string): Promise<void> {
+/** Re-read the clip (avoid clobbering concurrent edits) and mark its dist failed. */
+async function markDistributionFailed(
+  clipId: string, channel: string, error: string, accountId?: string,
+): Promise<void> {
   const clip = await getEntity<any>("clip", clipId);
   if (!clip) return;
-  const distributions = upsertDistribution(clip.distributions, channel, { status: "failed", error });
+  // 실패도 **같은 계정 항목**에 겹쳐 써야 한다 — 정체성 없이 쓰면 같은 플랫폼
+  // 다른 계정의 기록을 덮는다(upsertDistribution 이 채널+계정으로 매칭한다).
+  const value: Record<string, unknown> = { status: "failed", error };
+  if (accountId) value[channel === "youtube" ? "youtubeChannelId" : "naverAccountId"] = accountId;
+  const distributions = upsertDistribution(clip.distributions, channel, value);
   await putEntity("clip", clipId, { ...clip, distributions });
 }
 
@@ -1355,9 +1361,13 @@ async function handleNaverPublish(job: Job): Promise<void> {
   const target = rawTarget as NaverTarget;
   const channel = NAVER_TARGETS[target].channel;
 
+  // 어느 네이버 계정으로 올릴지 — 실패 기록도 이 계정 항목에 남아야 해서(다계정 덮어쓰기
+  // 방지) fail 보다 먼저 읽는다. 계정 미지정이면 레거시 단일 세션.
+  const accountId = typeof job.payload.naverAccountId === "string" ? job.payload.naverAccountId : "";
+
   const fail = async (msg: string) => {
     console.error(`[worker] naver.publish ${clipId} (${channel}) 실패:`, msg);
-    await markDistributionFailed(clipId, channel, msg).catch(() => {});
+    await markDistributionFailed(clipId, channel, msg, accountId || undefined).catch(() => {});
   };
 
   try {
@@ -1366,9 +1376,8 @@ async function handleNaverPublish(job: Job): Promise<void> {
     const clip = await getEntity<any>("clip", clipId);
     if (!clip) { console.warn(`[worker] naver.publish: clip ${clipId} 없음 — 버림`); return; }
 
-    // 어느 네이버 계정으로 올릴지. B2B 다계정에서 **이 검증이 제일 중요하다** —
-    // A사 클립이 B사 채널에 올라가는 사고를 막는다. 계정 미지정이면 레거시 단일 세션.
-    const accountId = typeof job.payload.naverAccountId === "string" ? job.payload.naverAccountId : "";
+    // B2B 다계정에서 **이 검증이 제일 중요하다** —
+    // A사 클립이 B사 채널에 올라가는 사고를 막는다.
     let accountKey: string | undefined;
     if (accountId) {
       const acct = await getNaverAccount(accountId);
@@ -1459,8 +1468,12 @@ async function handleNaverPublish(job: Job): Promise<void> {
       const fresh = (await getEntity<any>("clip", clipId)) ?? clip;
       await putEntity("clip", clipId, {
         ...fresh,
-        distributions: upsertDistribution(fresh.distributions, channel,
-          { status: "published", url: r.url ?? null, publishedAt: Date.now() }),
+        // 계정 정체성을 함께 남긴다 — 관문(pending)이 만든 같은 계정 항목을 갱신하고,
+        // 순방의 중복 게시 판정(hasAccountDistribution)이 계정 단위로 성립한다.
+        distributions: upsertDistribution(fresh.distributions, channel, {
+          status: "published", url: r.url ?? null, publishedAt: Date.now(),
+          ...(accountId ? { naverAccountId: accountId } : {}),
+        }),
       });
       if (accountId) await markNaverAccount(accountId, { lastPublishAt: Date.now(), status: "active" }).catch(() => {});
       console.log(`[worker] naver.publish ${clipId} (${channel}) 완료 → ${r.url ?? "(URL 미확인)"}`);
@@ -1488,9 +1501,10 @@ async function handleDistributionPublish(job: Job): Promise<void> {
     await runDistributionPublish(job);
   } catch (err) {
     const clipId = String(job.payload.clipId ?? "");
+    const channelId = String(job.payload.channelId ?? "");
     const msg = err instanceof Error ? err.message : String(err);
     console.error(`[worker] distribution.publish ${clipId} 실패(재시도 안 함):`, err);
-    if (clipId) await markDistributionFailed(clipId, "youtube", msg).catch(() => {});
+    if (clipId) await markDistributionFailed(clipId, "youtube", msg, channelId || undefined).catch(() => {});
     // 여기서 throw 하지 않는 것이 요점이다. 자동 재시도 금지(F4-4 ⊘).
   }
 }
@@ -1509,7 +1523,7 @@ async function runDistributionPublish(job: Job): Promise<void> {
   const gate = await clipGate(clipId);
   if (!gate.allowed) {
     console.warn(`[worker] distribution.publish ${clipId}: 게이트 미통과 — ${gate.reason}`);
-    await markDistributionFailed(clipId, "youtube", gate.reason).catch(() => {});
+    await markDistributionFailed(clipId, "youtube", gate.reason, channelId).catch(() => {});
     await appendGateAudit({
       subjectType: "clip", subjectId: clipId, action: "publish.blocked",
       fromState: gate.state, toState: "blocked", actor: "worker",
@@ -1528,7 +1542,7 @@ async function runDistributionPublish(job: Job): Promise<void> {
     // Record WHY on the board rather than leaving 'pending' (which reads as "업로드 중"),
     // and never as published. markDistributionFailed only writes status+error — it cannot
     // set externalId/publishedVideoId, so no clip can look uploaded because of this path.
-    await markDistributionFailed(clipId, "youtube", UPLOAD_DISABLED_MESSAGE).catch(() => {});
+    await markDistributionFailed(clipId, "youtube", UPLOAD_DISABLED_MESSAGE, channelId).catch(() => {});
     return;
   }
 
@@ -1537,15 +1551,15 @@ async function runDistributionPublish(job: Job): Promise<void> {
 
   // The deliverable is the single render (plan §2.4); without it there is nothing to ship.
   const mediaId = clip.mediaId;
-  if (!mediaId) { await markDistributionFailed(clipId, "youtube", "클립이 아직 렌더되지 않았습니다 (익스포트 필요)"); return; }
+  if (!mediaId) { await markDistributionFailed(clipId, "youtube", "클립이 아직 렌더되지 않았습니다 (익스포트 필요)", channelId); return; }
   const media = await getMedia(mediaId);
-  if (!media) { await markDistributionFailed(clipId, "youtube", "렌더된 영상 파일을 찾을 수 없습니다"); return; }
+  if (!media) { await markDistributionFailed(clipId, "youtube", "렌더된 영상 파일을 찾을 수 없습니다", channelId); return; }
 
   const ch = await loadActiveChannel(channelId);
-  if (!ch) { await markDistributionFailed(clipId, "youtube", "업로드할 YouTube 채널이 연결되지 않았거나 재연결이 필요합니다"); return; }
+  if (!ch) { await markDistributionFailed(clipId, "youtube", "업로드할 YouTube 채널이 연결되지 않았거나 재연결이 필요합니다", channelId); return; }
 
   const objPath = parseObjectPath(media.path);
-  if (!(await fileExists(objPath))) { await markDistributionFailed(clipId, "youtube", "스토리지에 영상 파일이 없습니다"); return; }
+  if (!(await fileExists(objPath))) { await markDistributionFailed(clipId, "youtube", "스토리지에 영상 파일이 없습니다", channelId); return; }
 
   const publishAt = futurePublishAt(job.payload.publishAt);
   const privacy = publishAt
@@ -1583,12 +1597,12 @@ async function runDistributionPublish(job: Job): Promise<void> {
     if (err instanceof TokenRevokedError) {
       // Refresh can never succeed again — park the channel AND surface the failure on the clip.
       await markChannelRevoked(channelId).catch(() => {});
-      await markDistributionFailed(clipId, "youtube", "YouTube 채널 재연결이 필요합니다 (토큰 만료/취소)");
+      await markDistributionFailed(clipId, "youtube", "YouTube 채널 재연결이 필요합니다 (토큰 만료/취소)", channelId);
       console.error(`[worker] distribution.publish ${clipId}: token revoked — channel ${channelId} parked`);
       return;
     }
     const message = String(err?.message ?? err);
-    await markDistributionFailed(clipId, "youtube", message);
+    await markDistributionFailed(clipId, "youtube", message, channelId);
     console.error(`[worker] distribution.publish ${clipId} failed:`, message);
   }
 }

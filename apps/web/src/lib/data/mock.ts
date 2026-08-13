@@ -116,7 +116,7 @@ export const clips: Clip[] = [
   { id: "c2", episodeId: "e2", programTitle: "전지적 참견 시점", title: "311화 요약", clipType: "TZ", clipCategory: "02", targetAge: 12, aspectRatio: "16:9", durationSec: 498, thumbnailLabel: "오프닝 타이틀",
     synopsis: "전참시 311화 핵심 장면 8분 요약 클립", status: "published",
     distributions: [
-      { channel: "navertv", status: "scheduled", reserveDate: "20260712190000" },
+      { channel: "naverclip", status: "scheduled", reserveDate: "20260712190000" },
       { channel: "youtube", status: "published", reserveDate: "20260630193000", externalId: "GOzKHs6CYAU" },
     ] },
   // c3: 짐쌀라비(p3) — 네이버 계정 미연결이라 네이버만 막힘. YouTube는 이미 게시됨.
@@ -153,7 +153,7 @@ export const clips: Clip[] = [
     aspectRatio: "16:9", durationSec: 486, thumbnailLabel: "오프닝",
     synopsis: "놀면 뭐하니 44화의 핵심 장면 8분 요약", status: "published", rendered: true, renderPreset: "naver_tv",
     distributions: [
-      { channel: "navertv", status: "published", reserveDate: "20260704220000" },
+      { channel: "naverclip", status: "published", reserveDate: "20260704220000" },
       { channel: "youtube", status: "scheduled", reserveDate: "20260716180000", externalId: "yt_hangout_c7" },
     ] },
 
@@ -187,7 +187,7 @@ export const clips: Clip[] = [
     aspectRatio: "16:9", durationSec: 320, thumbnailLabel: "역전골",
     synopsis: "전반전 주요 장면 압축", status: "ready", rendered: true, renderPreset: "naver_tv",
     distributions: [
-      { channel: "navertv", status: "pending" },
+      { channel: "naverclip", status: "pending" },
     ] },
 
   // e11 · 아침 시사 브런치 88화 — 네이버만 (시사 카테고리)
@@ -195,7 +195,7 @@ export const clips: Clip[] = [
     aspectRatio: "16:9", durationSec: 178, thumbnailLabel: "톱이슈",
     synopsis: "당일 이슈 3분 요약 브리핑", status: "published", rendered: true, renderPreset: "naver_tv",
     distributions: [
-      { channel: "navertv", status: "published", reserveDate: "20260715080000" },
+      { channel: "naverclip", status: "published", reserveDate: "20260715080000" },
     ] },
 
   // e12 · 전참시 310화 — 3채널 게시 (오래된 표본)

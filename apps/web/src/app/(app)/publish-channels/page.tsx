@@ -51,7 +51,7 @@ import {
  *  2) apps/web/public/channel-icons/<id>.png 배치 (공식 favicon 권장)
  *  3) 서버 /api/distributions/publish 스위치 + 필요 시 OAuth 라우트
  *
- * ⚠️ **연결됨 ≠ 파일이 올라간다.** 실제 업로드는 YouTube 와 네이버 TV·클립이고,
+ * ⚠️ **연결됨 ≠ 파일이 올라간다.** 실제 업로드는 YouTube 와 네이버 클립이고,
  * Meta·TikTok 은 배포 기록만 남는다(F4-3). 그래서 카드 안내 문구에서 그 사실을 분리해서 말한다.
  */
 
@@ -69,20 +69,19 @@ const CHANNEL_INFO: Record<DistributionChannel, { desc: string; note?: string }>
     note: "연결해도 파일은 올라가지 않습니다 — 배포 기록만 남습니다",
   },
   tiktok: {
-    desc: "TikTok Login Kit + Content Posting API 로 계정 연결.",
-    note: "연결해도 파일은 올라가지 않습니다 — 배포 기록만 남습니다",
-  },
-  navertv: {
-    desc: "가로 VOD. OAuth 가 없어 로그인 세션으로 발행합니다 — 아래 '네이버 연결 계정' 참고.",
+    // 실 scope 는 user.info.basic 뿐 — 게시 권한은 TikTok 앱 심사 후에나 붙는다.
+    desc: "TikTok Login Kit 로 계정 연결 — 기본 프로필 권한만 요청됩니다.",
+    note: "연결해도 파일은 올라가지 않습니다 — 배포 기록만 남습니다 (게시 권한은 앱 심사 후)",
   },
   naverclip: {
-    desc: "세로 9:16 숏폼. 설명 10자 이상 · 카테고리 1·2차가 필수입니다.",
+    desc: "세로 9:16 숏폼. OAuth 가 없어 로그인 세션으로 발행합니다 — 설명 10자 이상 · 카테고리 1·2차 필수.",
   },
 };
 
 /**
- * 연결과 규칙은 다른 것이다 — 규칙이 없으면 배포 모달에 그 계정이 아예 안 뜬다.
- * 그래서 상태를 계정 카드에서 바로 보여주고, 거기서 바로 만들게 한다.
+ * 연결과 규칙은 다른 것이다 — 단 규칙이 없어도 서버가 기본 규칙을 합성해 배포는 된다
+ * (index.ts eligibility). 규칙은 다듬는 도구라서, 상태를 계정 카드에서 바로 보여주고
+ * 필요할 때 거기서 바로 만들게 한다.
  */
 function RuleControls({
   platform,
@@ -114,8 +113,12 @@ function RuleControls({
           {prefix}배포 규칙 있음
         </span>
       ) : (
-        <span className="rounded-md border border-status-warn/40 bg-status-warn/10 px-2 py-1 text-[11px] text-status-warn">
-          {prefix}배포 규칙 없음
+        // 규칙 없음은 경고가 아니다 — 서버가 기본 규칙으로 배포한다.
+        <span
+          className="rounded-md border border-border px-2 py-1 text-[11px] text-muted-foreground"
+          title="커스텀 규칙이 없으면 서버 기본 규칙으로 배포됩니다 — 필요하면 옆 버튼으로 만드세요"
+        >
+          {prefix}기본 규칙 사용 중
         </span>
       )}
       <button
@@ -131,7 +134,7 @@ function RuleControls({
 
 export default function PublishChannelsPage() {
   const [channels, setChannels] = useState<YouTubeChannelInfo[]>([]);
-  // 배포 규칙이 붙은 계정 — 연결돼 있어도 규칙이 없으면 배포가 안 된다.
+  // 커스텀 배포 규칙이 붙은 계정 — 없어도 서버가 기본 규칙을 합성해 배포는 된다.
   // 키는 `${platform}:${accountId}` — YouTube 뿐 아니라 Meta·TikTok 도 같은 규칙 체계를 쓴다.
   const [ruledKeys, setRuledKeys] = useState<Set<string>>(new Set());
   const [rulesErr, setRulesErr] = useState<string | null>(null);
@@ -155,20 +158,25 @@ export default function PublishChannelsPage() {
   // 사본을 받는다 — 두 곳에서 각자 fetch 하면 추가·삭제 후 숫자가 어긋난다.
   const [naverAccounts, setNaverAccounts] = useState<NaverAccount[]>([]);
   const [loading, setLoading] = useState(true);
-  const [banner, setBanner] = useState<string | null>(null);
+  const [banner, setBanner] = useState<{ text: string; warn?: boolean } | null>(null);
+  // .catch(() => []) 만 있으면 서버 다운이 "계정 없음"으로 둔갑한다 — 실패를 플랫폼별로
+  // 기록해 빈 상태와 구분해서 그린다.
+  const [loadFailed, setLoadFailed] = useState({ youtube: false, meta: false, ig: false, tiktok: false });
 
   const loadAll = async () => {
+    const failed = { youtube: false, meta: false, ig: false, tiktok: false };
     try {
       const [chs, ma, ig, tt] = await Promise.all([
-        fetchYouTubeChannels().catch(() => [] as YouTubeChannelInfo[]),
-        fetchMetaAccounts().catch(() => [] as MetaAccountInfo[]),
-        fetchInstagramAccounts().catch(() => [] as InstagramAccountInfo[]),
-        fetchTikTokAccounts().catch(() => [] as TikTokAccountInfo[]),
+        fetchYouTubeChannels().catch(() => { failed.youtube = true; return [] as YouTubeChannelInfo[]; }),
+        fetchMetaAccounts().catch(() => { failed.meta = true; return [] as MetaAccountInfo[]; }),
+        fetchInstagramAccounts().catch(() => { failed.ig = true; return [] as InstagramAccountInfo[]; }),
+        fetchTikTokAccounts().catch(() => { failed.tiktok = true; return [] as TikTokAccountInfo[]; }),
       ]);
       setChannels(chs);
       setMetaAccounts(ma);
       setIgAccounts(ig);
       setTiktokAccounts(tt);
+      setLoadFailed(failed);
     } finally {
       setLoading(false);
     }
@@ -180,24 +188,30 @@ export default function PublishChannelsPage() {
     // Both YouTube and Meta callbacks land here (return=/publish-channels). Show the banner,
     // then strip the params so a refresh doesn't repeat it. Reading location.search directly
     // avoids the <Suspense> that useSearchParams would force.
+    // URLSearchParams.get() 이 이미 퍼센트 디코드를 마친 값을 준다 — 여기서
+    // decodeURIComponent 를 또 부르면 "%" 든 에러 메시지에서 URIError 가 나
+    // 이 useEffect 전체(파라미터 제거까지)가 죽는다.
     const params = new URLSearchParams(window.location.search);
     if (params.get("success")) {
-      setBanner(`"${params.get("channelName") ?? "채널"}" 연결 완료 · 분석을 시작했습니다`);
+      setBanner({ text: `"${params.get("channelName") ?? "채널"}" 연결 완료 · 분석을 시작했습니다` });
     } else if (params.get("error")) {
-      setBanner(`채널 연결 실패: ${decodeURIComponent(params.get("error")!)}`);
+      setBanner({ text: `채널 연결 실패: ${params.get("error")!}`, warn: true });
     } else if (params.get("meta_success")) {
-      const n = params.get("meta_count") ?? "0";
-      setBanner(`Facebook 연결 완료 · ${n}개 페이지 저장됨`);
+      const n = Number(params.get("meta_count") ?? "0");
+      // 0개 저장은 성공이 아니다 — Page 없는 개인 계정으로 로그인하면 여기로 온다.
+      setBanner(n > 0
+        ? { text: `Facebook 연결 완료 · ${n}개 페이지 저장됨` }
+        : { text: "Facebook 연결은 됐지만 저장된 Page 가 0개입니다 — Page 관리자 계정으로 로그인했는지 확인하세요.", warn: true });
     } else if (params.get("meta_error")) {
-      setBanner(`Facebook 연결 실패: ${decodeURIComponent(params.get("meta_error")!)}`);
+      setBanner({ text: `Facebook 연결 실패: ${params.get("meta_error")!}`, warn: true });
     } else if (params.get("ig_success")) {
-      setBanner(`Instagram 연결 완료 · @${decodeURIComponent(params.get("ig_name") ?? "")}`);
+      setBanner({ text: `Instagram 연결 완료 · @${params.get("ig_name") ?? ""}` });
     } else if (params.get("ig_error")) {
-      setBanner(`Instagram 연결 실패: ${decodeURIComponent(params.get("ig_error")!)}`);
+      setBanner({ text: `Instagram 연결 실패: ${params.get("ig_error")!}`, warn: true });
     } else if (params.get("tiktok_success")) {
-      setBanner(`TikTok 연결 완료 · "${decodeURIComponent(params.get("tiktok_name") ?? "")}"`);
+      setBanner({ text: `TikTok 연결 완료 · "${params.get("tiktok_name") ?? ""}"` });
     } else if (params.get("tiktok_error")) {
-      setBanner(`TikTok 연결 실패: ${decodeURIComponent(params.get("tiktok_error")!)}`);
+      setBanner({ text: `TikTok 연결 실패: ${params.get("tiktok_error")!}`, warn: true });
     }
     if (
       params.get("success") || params.get("error") ||
@@ -272,7 +286,8 @@ export default function PublishChannelsPage() {
   };
 
   const handleDelete = async (channelId: string) => {
-    if (!confirm("이 YouTube 채널을 완전히 삭제하시겠습니까? 애널리틱스 이력까지 지워집니다.\n(배포만 멈추려면 '연동해제'를 쓰세요)")) return;
+    // 서버 삭제는 채널 행(연결 정보)만 지운다 — 수집된 애널리틱스 데이터 행은 남는다.
+    if (!confirm("이 YouTube 채널을 완전히 삭제하시겠습니까? 채널 연결 정보가 지워지며, 다시 쓰려면 처음부터 재연결해야 합니다.\n(배포만 멈추려면 '연동해제'를 쓰세요)")) return;
     try {
       await deleteYouTubeChannel(channelId);
       setChannels((prev) => prev.filter((c) => c.channelId !== channelId));
@@ -296,8 +311,14 @@ export default function PublishChannelsPage() {
   return (
     <div className="mx-auto max-w-[1240px]">
       {banner && (
-        <div className="mb-4 rounded-md border border-border bg-muted px-4 py-3 text-sm text-foreground">
-          {banner}
+        <div
+          className={
+            banner.warn
+              ? "mb-4 rounded-md border border-status-warn/40 bg-status-warn/10 px-4 py-3 text-sm text-status-warn"
+              : "mb-4 rounded-md border border-border bg-muted px-4 py-3 text-sm text-foreground"
+          }
+        >
+          {banner.text}
         </div>
       )}
 
@@ -324,21 +345,22 @@ export default function PublishChannelsPage() {
             const meta: DistributionChannelMeta = DISTRIBUTION_CHANNELS[id];
             const info = CHANNEL_INFO[id];
             const isYouTube = id === "youtube";
-            // 아래 섹션이 이미 Meta·TikTok 계정을 그리고 있다 — 상단 배지가 0 이라고 말하면 모순이다.
+            // 지금 쓸 수 있는 계정만 센다 — disconnected·만료 행까지 세면 "N개 연결"인데
+            // 배포는 안 되는 모순이 생긴다.
             const connectedCount =
-              id === "youtube" ? channels.length
-              : id === "tiktok" ? tiktokAccounts.length
-              : id === "facebook" ? metaAccounts.length
+              id === "youtube" ? channels.filter((c) => c.status === "active").length
+              : id === "tiktok" ? tiktokAccounts.filter((a) => a.status === "active").length
+              : id === "facebook" ? metaAccounts.filter((a) => a.status === "active").length
               // IG 는 비즈니스 로그인으로 직접 붙는다 — Meta 행의 잔존 ig* 는 세지 않는다
-              // (그 토큰으로는 더 이상 IG 게시가 안 된다).
-              : id === "instagram" ? igAccounts.length
+              // (그 토큰으로는 더 이상 IG 게시가 안 된다). 토큰 만료 계정도 뺀다.
+              : id === "instagram" ? igAccounts.filter((a) =>
+                  a.status === "active" && !(a.expiresAt && Number(a.expiresAt) < Date.now())).length
               // 네이버는 계정마다 쓸 곳(target)이 정해져 있다. TV 전용 계정을 클립 카드에서
               // 세면 "연결됨"인데 발행이 거부되는 모순이 생긴다.
-              : id === "navertv" ? naverAccounts.filter((a) => a.target !== "clip" && a.hasSession).length
               : id === "naverclip" ? naverAccounts.filter((a) => a.target !== "tv" && a.hasSession).length
               : 0;
             // 네이버는 OAuth 가 아니라 로그인 세션이라 아래 전용 섹션에서 다룬다.
-            const isNaver = id === "navertv" || id === "naverclip";
+            const isNaver = id === "naverclip";
             const connectHref =
               id === "facebook" ? getMetaAuthUrl("/publish-channels")
               : id === "instagram" ? getInstagramAuthUrl("/publish-channels")
@@ -485,7 +507,15 @@ export default function PublishChannelsPage() {
           </div>
         </Card>
 
-        {metaAccounts.length === 0 ? (
+        {loading ? (
+          <div className="text-sm text-muted-foreground">불러오는 중...</div>
+        ) : loadFailed.meta ? (
+          <Card className="p-6">
+            <div className="text-sm text-status-warn">
+              Facebook Page 목록을 불러오지 못했습니다 — 서버 연결을 확인한 뒤 새로고침하세요.
+            </div>
+          </Card>
+        ) : metaAccounts.length === 0 ? (
           <Card className="p-6">
             <div className="text-sm text-muted-foreground">
               연결된 Facebook Page 가 없습니다. 위 "+ Meta 계정 연결" 을 누르면
@@ -593,7 +623,15 @@ export default function PublishChannelsPage() {
           </div>
         </Card>
 
-        {igAccounts.length === 0 ? (
+        {loading ? (
+          <div className="text-sm text-muted-foreground">불러오는 중...</div>
+        ) : loadFailed.ig ? (
+          <Card className="p-6">
+            <div className="text-sm text-status-warn">
+              Instagram 계정 목록을 불러오지 못했습니다 — 서버 연결을 확인한 뒤 새로고침하세요.
+            </div>
+          </Card>
+        ) : igAccounts.length === 0 ? (
           <Card className="p-6">
             <div className="text-sm text-muted-foreground">
               연결된 Instagram 계정이 없습니다. 위 "+ Instagram 계정 연결" 버튼으로 붙이세요.
@@ -603,6 +641,9 @@ export default function PublishChannelsPage() {
           <div className="grid gap-3">
             {igAccounts.map((a) => {
               const expired = a.expiresAt && Number(a.expiresAt) < Date.now();
+              // 만료된 뒤에야 알리면 이미 배포가 끊긴 뒤다 — 60일 토큰이라 임박(7일)에 미리 권한다.
+              const expiringSoon = Boolean(a.expiresAt) && !expired
+                && Number(a.expiresAt) - Date.now() < 7 * 24 * 60 * 60 * 1000;
               return (
                 <Card key={a.publicId} className="p-4">
                   <div className="flex items-center justify-between">
@@ -629,6 +670,9 @@ export default function PublishChannelsPage() {
                         {a.status !== "active" ? "연동 끊김 — 재연결 필요"
                           : expired ? "토큰 만료 — 재연결 필요" : "활성"}
                       </StatusBadge>
+                      {a.status === "active" && expiringSoon && (
+                        <StatusBadge tone="warn">토큰 만료 임박 — 재연결 권장</StatusBadge>
+                      )}
                       <RuleControls
                         platform="instagram"
                         accountId={a.igUserId}
@@ -660,7 +704,7 @@ export default function PublishChannelsPage() {
         )}
       </section>
 
-      {/* TikTok: Login Kit + Content Posting API */}
+      {/* TikTok: Login Kit — 게시(Content Posting) 권한은 앱 심사 승인 후에나 요청 가능 */}
       <section className="mb-10">
         <div className="mb-3 flex items-center gap-2">
           <h2 className="text-sm font-semibold text-muted-foreground">TikTok 연결 계정</h2>
@@ -672,7 +716,8 @@ export default function PublishChannelsPage() {
         <Card className="p-4 mb-3">
           <div className="flex items-center justify-between gap-3">
             <div className="text-sm text-muted-foreground">
-              TikTok Login Kit 로 계정을 연결합니다. Content Posting API 권한이 함께 요청됩니다.
+              TikTok Login Kit 로 계정을 연결합니다. 지금은 기본 프로필 권한(user.info.basic)만
+              요청됩니다 — 게시(Content Posting) 권한은 앱 심사 승인 후에 추가됩니다.
             </div>
             <Button
               size="sm"
@@ -685,7 +730,15 @@ export default function PublishChannelsPage() {
           </div>
         </Card>
 
-        {tiktokAccounts.length === 0 ? (
+        {loading ? (
+          <div className="text-sm text-muted-foreground">불러오는 중...</div>
+        ) : loadFailed.tiktok ? (
+          <Card className="p-6">
+            <div className="text-sm text-status-warn">
+              TikTok 계정 목록을 불러오지 못했습니다 — 서버 연결을 확인한 뒤 새로고침하세요.
+            </div>
+          </Card>
+        ) : tiktokAccounts.length === 0 ? (
           <Card className="p-6">
             <div className="text-sm text-muted-foreground">
               연결된 TikTok 계정이 없습니다. 위 "+ TikTok 계정 연결" 버튼으로 붙이세요.
@@ -760,6 +813,12 @@ export default function PublishChannelsPage() {
 
         {loading ? (
           <div className="text-sm text-muted-foreground">불러오는 중...</div>
+        ) : loadFailed.youtube ? (
+          <Card className="p-6">
+            <div className="text-sm text-status-warn">
+              YouTube 채널 목록을 불러오지 못했습니다 — 서버 연결을 확인한 뒤 새로고침하세요.
+            </div>
+          </Card>
         ) : channels.length === 0 ? (
           <Card className="p-8">
             <EmptyState

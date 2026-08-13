@@ -20,7 +20,7 @@ import type { Clip } from "@/lib/types";
 import type { DistributionChannel } from "@/lib/constants";
 
 export default function EditsPage() {
-  const { clips, programs, retryDistribution, loading, serverConnected } = useAppData();
+  const { clips, programs, episodes, retryDistribution, loading, serverConnected } = useAppData();
   const { toast } = useToast();
   const session = useSession();
   const role = roleOf(session.user.role);
@@ -34,9 +34,11 @@ export default function EditsPage() {
           clip: c,
           programTitle:
             programs.find((p) => p.id === c.programId)?.title ?? c.programTitle ?? "",
-          episodeNumber: undefined,
+          // 업로드 때 적은 번호가 우선 — 회차 엔티티 없이도 남는 사실이다.
+          episodeNumber:
+            c.episodeNumber ?? episodes.find((e) => e.id === c.episodeId)?.episodeNumber ?? undefined,
         })),
-    [clips, programs],
+    [clips, programs, episodes],
   );
 
   async function retry(clipId: string, channel: DistributionChannel) {

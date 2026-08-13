@@ -103,20 +103,19 @@ export const PIPELINE_STATUS_TONE: Record<string, StatusTone> = {
 // 새 채널 추가 시: 1) 여기 항목 하나 · 2) apps/web/public/channel-icons/<id>.png · 3) 서버
 // /api/distributions/publish 스위치. UI는 이 맵을 순회해 자동으로 카드가 늘어난다.
 //
-// 네이버는 **TV 와 클립이 서로 다른 채널**이다. 올리는 스튜디오도 폼도 요구 규격도 다르고
-// (TV=가로 VOD · 클립=세로 9:16 숏폼), 하나로 묶으면 배포 기록에서 어디에 올라갔는지 알 수 없다.
+// 네이버는 **클립만** 배포 대상이다 (2026-08-13 사용자 결정 — TV 는 제품에서 제외).
+// 서버는 옛 기록 호환을 위해 navertv 를 계속 받지만, 화면은 새 배포 대상으로 내놓지 않는다.
 // 서버 채널 id 와 문자열이 정확히 같아야 한다(publish-guard.ts NAVER_CHANNELS).
 export const DISTRIBUTION_CHANNELS = {
   youtube:   { label: "YouTube",   icon: "/channel-icons/youtube.png",   status: "implemented" },
   instagram: { label: "Instagram", icon: "/channel-icons/instagram.png", status: "planned" },
   facebook:  { label: "Facebook",  icon: "/channel-icons/facebook.png",  status: "planned" },
   tiktok:    { label: "TikTok",    icon: "/channel-icons/tiktok.png",    status: "planned" },
-  navertv:   { label: "네이버 TV",  icon: "/channel-icons/naver.png",     status: "implemented" },
   naverclip: { label: "네이버 클립", icon: "/channel-icons/naver.png",     status: "implemented" },
 } as const;
 
 /** 네이버 채널인가 — 계정 선택·설명 입력이 필요한 축. 서버 판정과 같은 집합이어야 한다. */
-export const NAVER_CHANNEL_IDS = ["navertv", "naverclip"] as const;
+export const NAVER_CHANNEL_IDS = ["naverclip"] as const;
 export type NaverChannelId = (typeof NAVER_CHANNEL_IDS)[number];
 export function isNaverChannel(id: string): id is NaverChannelId {
   return (NAVER_CHANNEL_IDS as readonly string[]).includes(id);

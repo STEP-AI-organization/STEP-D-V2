@@ -18,6 +18,7 @@ import {
   channelPublishMode,
   distributionStatusFor,
   isNaverChannel,
+  isPublishChannel,
   NAVER_CHANNELS,
   screenForPublish,
   upsertDistribution,
@@ -37,7 +38,6 @@ export interface PublishInput {
   channel: string;
   scheduled?: boolean;
   reserveDate?: string;
-  platforms?: string[];
   privacy?: "public" | "unlisted" | "private";
   /** YouTube 전용 — 어느 연결 채널로 올릴지. 추론하지 않는다. */
   youtubeChannelId?: string;
@@ -89,6 +89,15 @@ export async function clipGate(clipId: string) {
  * 막힌 게 섞여 있어도 통과 건은 진행하고, 빠진 건수와 사유를 반드시 돌려준다.
  */
 export async function dispatchPublish(input: PublishInput): Promise<PublishOutcome> {
+  // 채널명부터 거른다 — channelPublishMode 는 모르는 값을 record 로 처리하므로, 여기서
+  // 막지 않으면 오타·폐기 채널("meta" 등)이 조용히 '기록됨'으로 수락된다.
+  if (!isPublishChannel(input.channel)) {
+    const skipped: PublishSkip[] = input.clipIds.map((clipId) => ({
+      clipId, code: "channel_unsupported",
+      reason: `지원하지 않는 채널입니다: ${input.channel}`,
+    }));
+    return { queued: [], recorded: [], skipped, notice: noticeFor({ queued: [], recorded: [], skipped }, input.channel) };
+  }
   const mode = channelPublishMode(input.channel);
 
   // 1) 클립을 읽는다. 없는 건 조용히 흘리지 않고 사유를 붙인다.
@@ -143,7 +152,6 @@ export async function dispatchPublish(input: PublishInput): Promise<PublishOutco
       error: undefined,
       ...(input.reserveDate ? { reserveDate: input.reserveDate } : {}),
       ...(mode === "upload" && input.youtubeChannelId ? { youtubeChannelId: input.youtubeChannelId } : {}),
-      ...(input.channel === "meta" && input.platforms ? { platforms: input.platforms } : {}),
       // 어느 네이버 계정으로 나갔는지를 배포 기록에 남긴다. B2B 다계정에서 이게 없으면
       // 나중에 "이 클립 어느 채널에 올라갔지?" 를 로그로만 추적해야 한다.
       ...(isNaverChannel(input.channel) && input.naverAccountId
@@ -236,6 +244,7 @@ const SKIP_LABEL: Record<string, string> = {
   gate_blocked: "게이트 미통과",
   not_rendered: "렌더 전",
   not_found: "클립 없음",
+  channel_unsupported: "지원하지 않는 채널",
 };
 
 function channelName(channel: string): string {

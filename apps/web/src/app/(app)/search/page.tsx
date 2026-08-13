@@ -16,6 +16,7 @@ import {
   API_BASE,
   frameUrl,
   getStreamUrl,
+  logSearchEvent,
   searchSegments,
   segmentDownloadUrl,
   type SearchResponse,
@@ -66,7 +67,8 @@ export default function SearchPage() {
       setRes(null);
       setError(err instanceof Error ? err.message : String(err));
     } finally {
-      setBusy(false);
+      // 취소된(abort 된) 호출의 finally 가 뒤늦게 새 검색의 스피너를 끄면 안 된다.
+      if (abortRef.current === ac) setBusy(false);
     }
   }, [q, programId, from, to, onlyShorts]);
 
@@ -179,14 +181,26 @@ export default function SearchPage() {
         </div>
       ) : (
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
-          {res.results.map((r) => {
+          {res.results.map((r, rank) => {
             const m = media.find((x) => x.id === r.mediaId);
             return (
               <ResultCard
                 key={r.segmentId}
                 hit={r}
                 episodeLabel={m?.title ?? r.mediaId}
-                onOpen={() => setActive(r)}
+                onOpen={() => {
+                  // 어떤 결과를 골랐는지가 랭킹 학습의 지도 신호 — fire-and-forget, UI 를 막지 않는다.
+                  logSearchEvent({
+                    event: "click",
+                    queryId: res.queryId,
+                    segmentId: r.segmentId,
+                    mediaId: r.mediaId,
+                    rank,
+                    start: r.start,
+                    end: r.end,
+                  });
+                  setActive(r);
+                }}
               />
             );
           })}
@@ -196,6 +210,7 @@ export default function SearchPage() {
       {active && (
         <PreviewModal
           hit={active}
+          queryId={res?.queryId}
           episodeLabel={media.find((x) => x.id === active.mediaId)?.title ?? active.mediaId}
           episodeId={media.find((x) => x.id === active.mediaId)?.episodeId ?? null}
           onClose={() => setActive(null)}
@@ -280,17 +295,22 @@ function ResultCard({
 /** 인라인 미리보기 — 모달이 열릴 때만 <video> 마운트 (그리드 N개 동시 로드 금지). */
 function PreviewModal({
   hit,
+  queryId,
   episodeLabel,
   episodeId,
   onClose,
 }: {
   hit: SearchResultCard;
+  queryId?: string;
   episodeLabel: string;
   episodeId: string | null;
   onClose: () => void;
 }) {
   const [streamUrl, setStreamUrl] = useState<string | null>(null);
   const [streamErr, setStreamErr] = useState<string | null>(null);
+  const [downloading, setDownloading] = useState(false);
+  const [downloadErr, setDownloadErr] = useState<string | null>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -308,8 +328,54 @@ function PreviewModal({
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
+  // #t=start,end 의 end 정지는 브라우저가 보장하지 않는다 — timeupdate 로 직접 멈춘다.
+  // 정지는 경계를 넘는 순간 1회만 — 사용자가 이어보기로 재생을 누르면 다시 막지 않는다.
+  useEffect(() => {
+    const v = videoRef.current;
+    if (!v) return;
+    let stopped = false;
+    const onTime = () => {
+      if (v.currentTime < hit.end) { stopped = false; return; }
+      if (!stopped) { stopped = true; v.pause(); }
+    };
+    v.addEventListener("timeupdate", onTime);
+    return () => v.removeEventListener("timeupdate", onTime);
+  }, [streamUrl, hit.end]);
+
   const seconds = durSec(hit);
   const downloadable = seconds <= MAX_DOWNLOAD_SEC;
+
+  // <a download> 는 서버 trimEncode 가 끝날 때까지 아무 피드백이 없다 — fetch 로 받아
+  // 완료를 알 수 있게 하고, 그동안 버튼을 진행 중 상태로 잠근다.
+  const downloadSegment = useCallback(async () => {
+    if (downloading) return;
+    // 다운로드 선택 자체가 학습 신호 — fire-and-forget, 실패해도 UI 를 막지 않는다.
+    logSearchEvent({
+      event: "export",
+      queryId,
+      segmentId: hit.segmentId,
+      mediaId: hit.mediaId,
+      start: hit.start,
+      end: hit.end,
+    });
+    setDownloading(true);
+    setDownloadErr(null);
+    try {
+      const r = await fetch(segmentDownloadUrl(hit.mediaId, hit.start, hit.end));
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const url = URL.createObjectURL(await r.blob());
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `${hit.mediaId}_${Math.round(hit.start)}-${Math.round(hit.end)}s.mp4`;
+      a.click();
+      // click 직후 즉시 revoke 하면 일부 브라우저에서 저장이 끊긴다 — 한 박자 늦춘다.
+      setTimeout(() => URL.revokeObjectURL(url), 10_000);
+    } catch (err) {
+      setDownloadErr(err instanceof Error ? err.message : String(err));
+    } finally {
+      setDownloading(false);
+    }
+  }, [downloading, queryId, hit.segmentId, hit.mediaId, hit.start, hit.end]);
 
   return (
     <div
@@ -337,6 +403,7 @@ function PreviewModal({
           {streamUrl ? (
             // 미디어 프래그먼트(#t=start,end) — 구간 시작에서 재생, 끝에서 정지.
             <video
+              ref={videoRef}
               controls
               autoPlay
               src={`${streamUrl}#t=${hit.start},${hit.end}`}
@@ -373,13 +440,14 @@ function PreviewModal({
 
         <div className="flex flex-wrap items-center gap-2">
           {downloadable ? (
-            <a
-              href={segmentDownloadUrl(hit.mediaId, hit.start, hit.end)}
-              download
+            <button
+              type="button"
               className="sd-btn sd-btn-primary"
+              disabled={downloading}
+              onClick={() => void downloadSegment()}
             >
-              구간 다운로드
-            </a>
+              {downloading ? "받는 중… (구간 인코딩에 시간이 걸릴 수 있습니다)" : "구간 다운로드"}
+            </button>
           ) : (
             <button type="button" className="sd-btn" disabled title="5분 초과 구간은 다운로드 불가">
               구간 다운로드
@@ -388,6 +456,11 @@ function PreviewModal({
           {!downloadable && (
             <span className="text-[11px]" style={{ color: "var(--sd-warn)" }}>
               5분 초과 구간은 다운로드 불가
+            </span>
+          )}
+          {downloadErr && (
+            <span className="text-[11px]" style={{ color: "var(--sd-danger-strong)" }}>
+              다운로드 실패 ({downloadErr})
             </span>
           )}
           {/* /media 는 채택된 클립 목록이라 검색 히트(원본 구간)를 못 연다 — 원본이 있는 회차로 보낸다. */}

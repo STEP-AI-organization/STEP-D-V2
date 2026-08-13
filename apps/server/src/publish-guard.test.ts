@@ -15,7 +15,9 @@ import { describe, it } from "node:test";
 import {
   channelPublishMode,
   distributionStatusFor,
+  hasAccountDistribution,
   isClipRendered,
+  isPublishChannel,
   screenForPublish,
   upsertDistribution,
 } from "./publish-guard.ts";
@@ -87,6 +89,75 @@ describe("distributions upsert", () => {
   it("없는 채널은 추가한다", () => {
     const after = upsertDistribution([], "instagram", { status: "recorded" });
     assert.deepEqual(after, [{ channel: "instagram", status: "recorded" }]);
+  });
+
+  it("같은 플랫폼 두 계정은 두 항목이다 — 덮어쓰면 매 순방 재업로드가 난다", () => {
+    // 채널당 1행이던 시절: 계정 B 기록이 A 기록을 덮어 already 체크가 매번 거짓 →
+    // 규칙에 YouTube 채널 A·B 를 넣으면 같은 클립이 순방마다 다시 올라갔다.
+    const one = [{ channel: "youtube", status: "published", youtubeChannelId: "UC_A" }];
+    const two = upsertDistribution(one, "youtube", { status: "pending", youtubeChannelId: "UC_B" });
+    assert.equal(two.length, 2);
+    assert.equal(two[0].youtubeChannelId, "UC_A");
+    assert.equal(two[0].status, "published", "A 계정 기록이 B 에 덮이면 안 된다");
+  });
+
+  it("같은 계정으로 다시 쓰면 그 항목만 갱신된다", () => {
+    const two = [
+      { channel: "youtube", status: "published", youtubeChannelId: "UC_A" },
+      { channel: "youtube", status: "pending", youtubeChannelId: "UC_B" },
+    ];
+    const after = upsertDistribution(two, "youtube", { status: "failed", error: "e", youtubeChannelId: "UC_B" });
+    assert.equal(after.length, 2);
+    assert.equal(after.find((d: any) => d.youtubeChannelId === "UC_B")?.status, "failed");
+    assert.equal(after.find((d: any) => d.youtubeChannelId === "UC_A")?.status, "published");
+  });
+
+  it("정체성 없는 쓰기(기록 전용 채널·레거시)는 채널 단독 매칭을 유지한다", () => {
+    const before = [{ channel: "instagram", status: "recorded" }];
+    const after = upsertDistribution(before, "instagram", { status: "recorded", externalId: "x" });
+    assert.equal(after.length, 1, "기록 전용 채널이 계정 없이 항목을 불리면 안 된다");
+  });
+
+  it("재순방에 중복 큐잉이 없다 — 계정별 기록이 계정별 already 판정을 성립시킨다", () => {
+    // 순방 1: A 로 게시 성공, B 는 아직.
+    const dists = [{ channel: "youtube", status: "published", youtubeChannelId: "UC_A" }];
+    assert.equal(hasAccountDistribution(dists, "youtube", "UC_A"), true, "A 는 다시 큐잉되면 안 된다");
+    assert.equal(hasAccountDistribution(dists, "youtube", "UC_B"), false, "B 는 아직 나가야 한다");
+    // 순방 2: B 게시 뒤에는 둘 다 막힌다.
+    const both = upsertDistribution(dists, "youtube", { status: "published", youtubeChannelId: "UC_B" });
+    assert.equal(hasAccountDistribution(both, "youtube", "UC_A"), true);
+    assert.equal(hasAccountDistribution(both, "youtube", "UC_B"), true);
+  });
+
+  it("실패한 기록은 already 로 치지 않는다 — 사람이 재시도할 길을 막으면 안 된다", () => {
+    const dists = [{ channel: "youtube", status: "failed", youtubeChannelId: "UC_A" }];
+    assert.equal(hasAccountDistribution(dists, "youtube", "UC_A"), false);
+  });
+
+  it("계정 식별자 없는 구 데이터는 보수적으로 already 다 — 중복 게시가 더 나쁘다", () => {
+    const dists = [{ channel: "youtube", status: "published" }];
+    assert.equal(hasAccountDistribution(dists, "youtube", "UC_A"), true);
+  });
+});
+
+describe("채널명 검증 — 모르는 값이 조용히 record 로 수락되면 안 된다", () => {
+  it("실제 채널만 통과한다", () => {
+    for (const ch of ["youtube", "instagram", "facebook", "tiktok", "navertv", "naverclip"]) {
+      assert.equal(isPublishChannel(ch), true, ch);
+    }
+  });
+
+  it("죽은 이름·오타를 거른다", () => {
+    // "meta" 는 폐기된 분기의 잔재다 — channelPublishMode 는 모르는 값을 record 로
+    // 처리하므로, 이 검증이 없으면 존재하지 않는 채널에 '기록됨'이 쌓인다.
+    for (const ch of ["meta", "youtub", "", "naver"]) {
+      assert.equal(isPublishChannel(ch), false, ch);
+    }
+  });
+
+  it("관문(dispatchPublish)이 이 검증을 쓴다", () => {
+    const src = fs.readFileSync(path.join(SRC, "publish-dispatch.ts"), "utf-8");
+    assert.match(src, /isPublishChannel\(/, "publish-dispatch 가 채널명을 검증하지 않는다");
   });
 });
 

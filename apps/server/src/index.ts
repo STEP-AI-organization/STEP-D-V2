@@ -126,6 +126,7 @@ import {
   getChannelRule,
   upsertChannelRule,
   deleteChannelRule,
+  deleteChannelRulesForAccount,
   type ChannelRuleRow,
   listMedia,
   getMedia,
@@ -3222,10 +3223,20 @@ async function prepareUploadedObject(mediaId: string, objectPath: string): Promi
   return { size, meta, thumbStored, storedPath };
 }
 
+/** 편집본 유형 — 숏폼·클립·하이라이트만 유효. 그 외는 undefined(미지정). */
+const EDIT_KINDS = ["shorts", "clip", "highlight"] as const;
+type EditKind = (typeof EDIT_KINDS)[number];
+function readEditKind(raw: unknown): EditKind | undefined {
+  return (EDIT_KINDS as readonly string[]).includes(String(raw)) ? (raw as EditKind) : undefined;
+}
+
 /**
  * 완성 영상 하나를 배포 가능한 클립으로 만든다. 회차·분석 없이 media(role="clip") 행과
  * rendered=true 클립 엔티티를 만들어 미디어 목록·배포 게이트에 바로 얹는다. 세로/가로는
  * 프로브 결과로 판정한다(원본 그대로 — 크롭·리프레임하지 않는다).
+ *
+ * 회차 번호가 오면 기록하고, 그 번호의 회차가 시스템에 있으면 연결까지 한다.
+ * 없어도 번호는 남긴다 — 편집본은 회차를 만들지 않으므로(설계), 표시용 사실로 기록한다.
  */
 async function buildFinishedClip(opts: {
   mediaId: string;
@@ -3238,12 +3249,26 @@ async function buildFinishedClip(opts: {
   size: number;
   meta: { durationSec: number; width: number; height: number; codec: string; hasAudio: boolean };
   thumbPath: string | null;
+  episodeNumber?: number;
+  editKind?: EditKind;
 }) {
   const { mediaId, programId, program, storedPath, filename, title, mime, size, meta } = opts;
+
+  let episodeId = "";
+  if (opts.episodeNumber !== undefined) {
+    const { rows } = await getPool().query(
+      `SELECT id FROM entities
+        WHERE kind = 'episode' AND data->>'programId' = $1 AND data->>'episodeNumber' = $2
+        LIMIT 1`,
+      [programId, String(opts.episodeNumber)],
+    );
+    episodeId = rows[0]?.id ?? "";
+  }
+
   const row: MediaRow = {
     id: mediaId,
-    // 회차에 속하지 않는 직접 업로드 완성본 — episodeId 는 비운다(media.episodeId 는 nullable).
-    episodeId: "",
+    // 같은 번호의 회차가 있으면 연결, 없으면 비운다(media.episodeId 는 nullable).
+    episodeId,
     role: "clip",
     title,
     filename,
@@ -3264,10 +3289,14 @@ async function buildFinishedClip(opts: {
   const clipId = newId("c");
   const clip = {
     id: clipId,
-    episodeId: "",
+    episodeId,
     programId,
     programTitle: program.title,
     title,
+    // 회차 번호는 회차 엔티티가 없어도 남긴다 — 매트릭스가 "몇 화 편집본"인지 보여줄 근거.
+    episodeNumber: opts.episodeNumber,
+    // 편집본 유형(숏폼·클립·하이라이트) — 배포 채널 선택·목록 필터의 근거.
+    editKind: opts.editKind,
     clipType: portrait ? "T6" : "TZ",
     targetAge: program.targetAge ?? 0,
     aspectRatio: portrait ? "9:16" : "16:9",
@@ -3492,6 +3521,8 @@ app.post("/api/media/clip-finalize", async (c) => {
   const result = await buildFinishedClip({
     mediaId, programId, program, storedPath, filename, title,
     mime, size: finalSize, meta, thumbPath: thumbStored,
+    episodeNumber: readEpisodeNumber(body.episodeNumber),
+    editKind: readEditKind(body.editKind),
   });
   return c.json(result);
 });
@@ -3600,6 +3631,8 @@ app.post("/api/media/clip-upload", async (c) => {
     mediaId, programId, program, storedPath,
     filename: file.name, title, mime: file.type || "video/mp4", size: file.size,
     meta, thumbPath: thumbStored,
+    episodeNumber: readEpisodeNumber(body["episodeNumber"]),
+    editKind: readEditKind(body["editKind"]),
   });
   return c.json(result);
 });
@@ -5179,7 +5212,30 @@ app.post("/api/channel-rules/eligibility", async (c) => {
   const rawIds: unknown[] = Array.isArray(body.clipIds) ? body.clipIds : [];
   const clipIds = rawIds.filter((x): x is string => typeof x === "string");
 
-  const rules = await listChannelRules();
+  // 규칙은 다듬는 도구지 배포의 전제 조건이 아니다 (2026-08-13: "규칙 없으면 배포 자체가
+  // 안 됨" 해소). 연결돼 있는데 규칙이 없는 채널은 역할 기본값(main)으로 합성해 내려보낸다 —
+  // isDefault 표식으로 화면이 "기본 규칙"임을 밝힐 수 있다. 저장된 규칙에는 손대지 않는다.
+  const rules: (ChannelRuleRow & { isDefault?: boolean })[] = await listChannelRules();
+  const have = new Set(rules.map((r) => `${r.platform}:${r.accountId}`));
+  const addDefault = (platform: string, accountId: string, label: string) => {
+    if (!accountId || have.has(`${platform}:${accountId}`)) return;
+    have.add(`${platform}:${accountId}`);
+    rules.push({ platform, accountId, label: label || accountId, ...defaultRuleFor("main", platform), isDefault: true });
+  };
+  const [ytChannels, metaAccounts, igAccounts, ttAccounts] = await Promise.all([
+    listYouTubeChannels().catch(() => []),
+    listMetaAccounts().catch(() => []),
+    listInstagramAccounts().catch(() => []),
+    listTikTokAccounts().catch(() => []),
+  ]);
+  // YouTube 는 업로드 가능한 채널만 — 게시 스코프 없는 채널을 보여 주면 고르고 나서 409 를 본다.
+  for (const ch of ytChannels) if (youtubeCanPublish(ch)) addDefault("youtube", ch.channelId, ch.channelName);
+  // 나머지 플랫폼은 상태 기록만 하므로(스텁) **살아 있는 연결만** 보여 준다.
+  // `!== "disabled"` 는 이 세 테이블에 disabled 값 자체가 없어 항상 통과였다 —
+  // 연동해제(disconnected) 계정이 배포 후보로 계속 노출됐다. active 만 허용한다.
+  for (const a of metaAccounts) if (a.status === "active") addDefault("facebook", a.pageId, a.pageName);
+  for (const a of igAccounts) if (a.status === "active") addDefault("instagram", a.igUserId, a.username);
+  for (const a of ttAccounts) if (a.status === "active") addDefault("tiktok", a.openId, a.displayName || a.username || a.openId);
   const medias: { id: string; durationSec: number; aspectRatio?: string | null; rendered?: boolean }[] = [];
   for (const id of clipIds) {
     const clip = await getEntity<any>("clip", id);
@@ -5526,16 +5582,19 @@ const YT_UPLOAD_SCOPE = YT_PUBLISH_SCOPE;
  * it. Returns null when none qualify (caller tells the operator to connect one in publish
  * mode) or when the id is ambiguous/unknown.
  */
+/** 업로드 가능한 YouTube 채널인가 — eligibility 목록·발행 대상 해석이 같은 기준을 쓴다. */
+function youtubeCanPublish(ch: YouTubeChannel): boolean {
+  return ch.status !== "revoked" && Boolean(ch.refreshToken) &&
+    (ch.scope ?? "").split(" ").includes(YT_UPLOAD_SCOPE);
+}
+
 async function resolveYouTubePublishChannel(explicitId?: string): Promise<YouTubeChannel | null> {
   const channels = await listYouTubeChannels();
-  const canPublish = (ch: YouTubeChannel) =>
-    ch.status !== "revoked" && Boolean(ch.refreshToken) &&
-    (ch.scope ?? "").split(" ").includes(YT_UPLOAD_SCOPE);
   if (explicitId) {
     const ch = channels.find((c) => c.channelId === explicitId);
-    return ch && canPublish(ch) ? ch : null;
+    return ch && youtubeCanPublish(ch) ? ch : null;
   }
-  const eligible = channels.filter(canPublish);
+  const eligible = channels.filter(youtubeCanPublish);
   // Exactly one publish channel is the common case (single operator channel). With several,
   // require an explicit id rather than guessing which one the operator meant.
   return eligible.length === 1 ? eligible[0] : null;
@@ -5655,7 +5714,7 @@ app.post("/api/distributions/publish", async (c) => {
 
   const outcome = await dispatchPublish({
     clipIds: b.clipIds, channel: b.channel,
-    scheduled: b.scheduled, reserveDate: b.reserveDate, platforms: b.platforms,
+    scheduled: b.scheduled, reserveDate: b.reserveDate,
     actor,
     origin: "manual",
   });
@@ -5679,7 +5738,10 @@ app.post("/api/distributions/retry", async (c) => {
       console.warn(`[publish/retry] blocked: YouTube 실업로드 비활성 (clip=${b.clipId})`);
       return c.json({ error: UPLOAD_DISABLED_CODE, message: UPLOAD_DISABLED_MESSAGE }, 409);
     }
-    const prev = (clip.distributions ?? []).find((d: any) => d.channel === "youtube");
+    // 다계정 행이 생기면서 "첫 youtube 행"은 성공한 계정일 수 있다 — 그걸 집으면 성공분을
+    // pending 으로 되돌려 같은 계정에 중복 업로드된다. 실패한 행을 우선 집는다.
+    const ytRows = (clip.distributions ?? []).filter((d: any) => d.channel === "youtube");
+    const prev = ytRows.find((d: any) => d.status === "failed") ?? ytRows[0];
     const target = await resolveYouTubePublishChannel(prev?.youtubeChannelId);
     if (!target) {
       return c.json({ error: "no_publish_channel", message: "재시도할 YouTube 채널을 찾을 수 없습니다." }, 409);
@@ -7005,7 +7067,12 @@ app.post("/api/meta/accounts/:publicId/disconnect", async (c) => {
 });
 
 app.delete("/api/meta/accounts/:publicId", async (c) => {
-  await deleteMetaAccount(c.req.param("publicId"));
+  const publicId = c.req.param("publicId");
+  // 행을 지우기 전에 계정 ID 를 읽어 이 계정을 겨눈 채널 규칙도 지운다 —
+  // 남기면 배포 순방이 존재하지 않는 계정을 계속 평가하는 고아 규칙이 된다.
+  const acct = (await listMetaAccounts()).find((a) => a.publicId === publicId);
+  if (acct) await deleteChannelRulesForAccount("facebook", acct.pageId);
+  await deleteMetaAccount(publicId);
   return c.json({ ok: true });
 });
 
@@ -7047,6 +7114,16 @@ app.get("/api/instagram/auth", (c) => {
   });
   return c.redirect(`${IG_OAUTH_DIALOG}?${params}`);
 });
+
+/**
+ * 에러 문구에 섞여 들어온 액세스 토큰 값을 가린다 — 토큰 응답을 그대로 err.message 에
+ * 담는 경로(unexpected token response 등)가 있어, 로그에 남기기 전에 반드시 거친다.
+ */
+function maskIgTokens(s: string): string {
+  return s
+    .replace(/("access_token"\s*:\s*")[^"]+(")/g, "$1***$2")
+    .replace(/(access_token=)[^&\s"']+/g, "$1***");
+}
 
 const instagramOauthCallback = async (c: Context) => {
   // Instagram 은 리다이렉트에 `#_` 를 붙여 보낸다 — code 끝에 딸려오면 교환이 실패한다.
@@ -7128,8 +7205,11 @@ const instagramOauthCallback = async (c: Context) => {
 
     return c.redirect(`${returnTo}?ig_success=1&ig_name=${encodeURIComponent(account.username)}`);
   } catch (err: any) {
-    console.error("[instagram/oauth]", err);
-    return c.redirect(`${returnTo}?ig_error=${encodeURIComponent(err.message ?? "unknown")}`);
+    // err.message 에 토큰 응답 본문(access_token)이 실릴 수 있다 — 쿼리에 넣으면
+    // 브라우저 히스토리·프록시·접근 로그로 샌다. 리다이렉트에는 일반 문구만 싣고,
+    // 서버 로그에도 토큰 값은 마스킹해 남긴다.
+    console.error("[instagram/oauth]", maskIgTokens(String(err?.message ?? err)));
+    return c.redirect(`${returnTo}?ig_error=${encodeURIComponent("연결에 실패했습니다 — 다시 시도해 주세요.")}`);
   }
 };
 app.get(IG_CALLBACK_PATH, instagramOauthCallback);
@@ -7158,7 +7238,11 @@ app.post("/api/instagram/accounts/:publicId/disconnect", async (c) => {
 });
 
 app.delete("/api/instagram/accounts/:publicId", async (c) => {
-  await deleteInstagramAccount(c.req.param("publicId"));
+  const publicId = c.req.param("publicId");
+  // 계정을 지우면 그 계정을 겨눈 채널 규칙도 같이 — 고아 규칙 방지 (meta 삭제와 동일).
+  const acct = (await listInstagramAccounts()).find((a) => a.publicId === publicId);
+  if (acct) await deleteChannelRulesForAccount("instagram", acct.igUserId);
+  await deleteInstagramAccount(publicId);
   return c.json({ ok: true });
 });
 
@@ -7313,7 +7397,11 @@ app.post("/api/tiktok/accounts/:publicId/disconnect", async (c) => {
 });
 
 app.delete("/api/tiktok/accounts/:publicId", async (c) => {
-  await deleteTikTokAccount(c.req.param("publicId"));
+  const publicId = c.req.param("publicId");
+  // 계정을 지우면 그 계정을 겨눈 채널 규칙도 같이 — 고아 규칙 방지 (meta 삭제와 동일).
+  const acct = (await listTikTokAccounts()).find((a) => a.publicId === publicId);
+  if (acct) await deleteChannelRulesForAccount("tiktok", acct.openId);
+  await deleteTikTokAccount(publicId);
   return c.json({ ok: true });
 });
 
@@ -7353,7 +7441,10 @@ app.get("/api/youtube/channels", async (c) => {
 });
 
 app.delete("/api/youtube/channels/:channelId", async (c) => {
-  await deleteYouTubeChannel(c.req.param("channelId"));
+  const channelId = c.req.param("channelId");
+  // 채널을 지우면 그 채널을 겨눈 채널 규칙도 같이 — 고아 규칙 방지 (meta 삭제와 동일).
+  await deleteChannelRulesForAccount("youtube", channelId);
+  await deleteYouTubeChannel(channelId);
   return c.json({ ok: true });
 });
 

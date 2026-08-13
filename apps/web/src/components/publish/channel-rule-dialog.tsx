@@ -4,9 +4,9 @@
  * 채널 배포 규칙 — 연결된 계정 하나에 붙는 "이 채널로 보낼 때의 조건" (FLOWS F4-2).
  *
  * **연결(OAuth)과 규칙은 다른 것이다.** 연결은 "우리가 이 채널에 올릴 수 있다"이고,
- * 규칙은 "무엇을, 어떤 모양으로 올릴 것인가"다. 규칙이 없으면 배포 모달에 그 채널이
- * 아예 안 뜬다 — 연결만 해두고 배포가 안 되는 이유가 이것이라, 연결 화면에서 바로
- * 붙일 수 있게 이 다이얼로그를 옛 화면과 새 화면이 함께 쓴다.
+ * 규칙은 "무엇을, 어떤 모양으로 올릴 것인가"다. 규칙이 없어도 서버가 기본 규칙을
+ * 합성해 배포는 된다(index.ts eligibility) — 규칙은 조건을 다듬는 도구라서, 연결
+ * 화면에서 바로 붙일 수 있게 이 다이얼로그를 옛 화면과 새 화면이 함께 쓴다.
  */
 import { useEffect, useState } from "react";
 
@@ -104,7 +104,7 @@ export function ChannelRuleDialog({
     setBusy(true);
     try {
       await saveChannelRule({ ...r, label: r.label.trim() || accountId });
-      toast({ title: "배포 규칙을 저장했습니다", description: `${r.label} — 이제 배포 모달에서 고를 수 있습니다.`, tone: "done" });
+      toast({ title: "배포 규칙을 저장했습니다", description: `${r.label} — 이 채널 배포에 이 규칙이 적용됩니다.`, tone: "done" });
       await onSaved?.();
       onClose();
     } catch (err) {
@@ -127,7 +127,7 @@ export function ChannelRuleDialog({
             배포 규칙 · {accountLabel}
           </h2>
           <p className="mt-0.5 text-[11px]" style={{ color: "var(--sd-mut)" }}>
-            이 채널로 보낼 때 적용할 조건입니다. <b>규칙이 없으면 배포 모달에 이 채널이 뜨지 않습니다.</b>
+            이 채널로 보낼 때 적용할 조건입니다. 규칙이 없으면 기본 규칙으로 배포됩니다 — 필요할 때만 커스텀하세요.
           </p>
           {loadState === "error" && (
             <div

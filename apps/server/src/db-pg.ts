@@ -2718,6 +2718,14 @@ export async function upsertChannelRule(r: ChannelRuleRow): Promise<void> {
   );
 }
 
+/**
+ * 계정이 삭제될 때 그 계정을 겨눈 채널 규칙도 같이 지운다.
+ * 남겨 두면 배포 순방·eligibility 가 존재하지 않는 계정을 계속 평가하는 고아 규칙이 된다.
+ */
+export async function deleteChannelRulesForAccount(platform: string, accountId: string): Promise<void> {
+  await pool.query(`DELETE FROM channel_rule WHERE platform = $1 AND account_id = $2`, [platform, accountId]);
+}
+
 export async function deleteChannelRule(platform: string, accountId: string): Promise<boolean> {
   const r = await pool.query(`DELETE FROM channel_rule WHERE platform = $1 AND account_id = $2`, [platform, accountId]);
   return (r.rowCount ?? 0) > 0;
@@ -2933,9 +2941,12 @@ export async function listRuleRuns(limit = 100): Promise<Record<string, unknown>
 
 /** 보류 — 행이 남아 있는 동안은 게이트가 열려도 자동이 밀어내지 않는다(F6 Invariant). */
 export async function holdClip(ruleId: string, clipId: string, reason: string): Promise<void> {
+  // 0021 이 rule_hold_pkey 를 (tenant_id, rule_id, clip_id) 로 재키잉했다 — 구 (rule_id, clip_id)
+  // 타깃은 42P10 으로 죽는다. channel_rule 과 같은 병(1275481)의 같은 처방. tenant_id 는
+  // DEFAULT current_setting 이 채운다.
   await pool.query(
     `INSERT INTO rule_hold (rule_id, clip_id, reason) VALUES ($1,$2,$3)
-     ON CONFLICT (rule_id, clip_id) DO UPDATE SET reason = $3`,
+     ON CONFLICT (tenant_id, rule_id, clip_id) DO UPDATE SET reason = $3`,
     [ruleId, clipId, reason],
   );
 }
@@ -2965,6 +2976,19 @@ export async function openHolds(ruleId?: string): Promise<{ ruleId: string; clip
 export async function isHeldAwaitingHuman(ruleId: string, clipId: string): Promise<boolean> {
   const { rows } = await pool.query(
     `SELECT 1 FROM rule_hold WHERE rule_id = $1 AND clip_id = $2 AND released_at IS NULL`,
+    [ruleId, clipId],
+  );
+  return rows.length > 0;
+}
+
+/**
+ * 사람이 이 클립의 보류를 **해제한 기록**이 있는가 — approve_first 의 '승인' 근거.
+ * `!isHeldAwaitingHuman` 을 승인으로 쓰면 보류된 적 없는 새 클립까지 자동 승인된다
+ * (승인 정책이 통째로 무력화된다). 해제 행이 남아 있어야 사람이 봤다는 뜻이다.
+ */
+export async function hasReleasedHold(ruleId: string, clipId: string): Promise<boolean> {
+  const { rows } = await pool.query(
+    `SELECT 1 FROM rule_hold WHERE rule_id = $1 AND clip_id = $2 AND released_at IS NOT NULL`,
     [ruleId, clipId],
   );
   return rows.length > 0;
@@ -3277,6 +3301,43 @@ export async function autoTopupMonthKrw(): Promise<number> {
         AND created_at >= date_trunc('month', now())`,
   );
   return Number(rows[0]?.krw ?? 0);
+}
+
+/**
+ * 오늘(KST) 자동 충전 **시도** 수 — 결정적 paymentId 의 슬롯 재료. 성공분만 세는
+ * autoTopupTodayCount 와 달리 실패분도 센다: 실패한 paymentId 를 재사용하면 포트원이
+ * 새 결제를 거부하므로, 시도마다 슬롯이 한 칸씩 밀려야 한다.
+ */
+export async function autoTopupTodayAttempts(): Promise<number> {
+  const { rows } = await pool.query(
+    `SELECT count(*)::int AS n FROM credit_topup
+      WHERE tenant_id = current_setting('app.tenant_id', true)
+        AND requested_by = 'auto-topup'
+        AND created_at >= date_trunc('day', now() AT TIME ZONE 'Asia/Seoul') AT TIME ZONE 'Asia/Seoul'`,
+  );
+  return Number(rows[0]?.n ?? 0);
+}
+
+/**
+ * 테넌트 단위 자문 잠금(pg_advisory_xact_lock) 안에서 fn 을 실행한다 — 잠금은
+ * 트랜잭션 종료(함수 반환)와 함께 풀린다. **직렬화가 목적이지 원자성이 아니다**:
+ * fn 안의 쿼리는 평소처럼 pool 로 나가 즉시 커밋돼도 된다. 경쟁자는 같은 키에서
+ * 기다렸다가 앞선 실행이 커밋한 결과를 보고 재판정하게 된다 (자동 충전 이중 결제 방어).
+ */
+export async function withTenantLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  const client = await pool.connect(); // 스코프 프록시가 app.tenant_id 를 심는다
+  try {
+    await client.query("BEGIN");
+    await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [key]);
+    const out = await fn();
+    await client.query("COMMIT");
+    return out;
+  } catch (e) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw e;
+  } finally {
+    client.release();
+  }
 }
 
 export async function createTopup(r: TopupRow): Promise<void> {

@@ -38,7 +38,8 @@ export default function DistributionPage() {
           programs.find((p) => p.id === c.programId)?.title ??
           c.programTitle ??
           "";
-        return { clip: c, programTitle, episodeNumber: ep?.episodeNumber };
+        // directUpload 클립은 episodeId 가 없다 — edits 화면과 같은 규칙으로 클립 필드 우선.
+        return { clip: c, programTitle, episodeNumber: c.episodeNumber ?? ep?.episodeNumber };
       });
   }, [clips, episodes, programs, failedOnly]);
 
@@ -77,7 +78,7 @@ export default function DistributionPage() {
         </button>
         <span className="sd-mono ml-auto text-[11px]" style={{ color: "var(--sd-mut)" }}>
           게시됨 {counts.get("published") ?? 0} · 기록됨 {counts.get("recorded") ?? 0} ·{" "}
-          예약 {counts.get("scheduled") ?? 0} · 실패 {counts.get("failed") ?? 0}
+          예약 {counts.get("scheduled") ?? 0} · 진행 중 {counts.get("pending") ?? 0} · 실패 {counts.get("failed") ?? 0}
         </span>
       </div>
 

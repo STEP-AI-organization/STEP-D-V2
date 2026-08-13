@@ -646,12 +646,21 @@ export interface FinishedClipResult {
  * upload-init(대용량 resumable) 을 그대로 재사용하되, 회차 번호는 넘기지 않고 finalize 대신
  * clip-finalize 를 부른다. 로컬(GCS 미설정)이면 clip-upload multipart 로 폴백한다.
  */
+export interface FinishedClipOptions {
+  title?: string;
+  /** 회차 번호 — 기록되고, 같은 번호의 회차가 있으면 연결까지 된다. */
+  episodeNumber?: number;
+  /** 편집본 유형: shorts(숏폼) · clip(클립) · highlight(하이라이트). */
+  editKind?: "shorts" | "clip" | "highlight";
+  onProgress?: (pct: number) => void;
+}
+
 export async function uploadFinishedClip(
   file: File,
   programId: string,
-  opts: { title?: string; onProgress?: (pct: number) => void } = {},
+  opts: FinishedClipOptions = {},
 ): Promise<FinishedClipResult> {
-  const { title, onProgress } = opts;
+  const { title, episodeNumber, editKind, onProgress } = opts;
 
   const initRes = await fetch(`${API_BASE}/media/upload-init`, {
     method: "POST",
@@ -678,6 +687,8 @@ export async function uploadFinishedClip(
       contentType: file.type || "video/mp4",
       size: file.size,
       title,
+      episodeNumber,
+      editKind,
     }),
   });
   return json<FinishedClipResult>(finalRes);
@@ -687,13 +698,15 @@ export async function uploadFinishedClip(
 function uploadFinishedClipMultipart(
   file: File,
   programId: string,
-  opts: { title?: string; onProgress?: (pct: number) => void },
+  opts: FinishedClipOptions,
 ): Promise<FinishedClipResult> {
   return new Promise((resolve, reject) => {
     const form = new FormData();
     form.append("file", file);
     form.append("programId", programId);
     if (opts.title) form.append("title", opts.title);
+    if (opts.episodeNumber !== undefined) form.append("episodeNumber", String(opts.episodeNumber));
+    if (opts.editKind) form.append("editKind", opts.editKind);
     const xhr = new XMLHttpRequest();
     xhr.open("POST", `${API_BASE}/media/clip-upload`);
     xhr.upload.onprogress = (e) => {
@@ -1130,6 +1143,8 @@ export interface ChannelRule {
   privacy: "public" | "unlisted" | "private";
   scheduleWindow: string;
   enabled: boolean;
+  /** true = 저장된 규칙이 없어 서버가 기본값으로 합성한 것 (연결된 채널이면 규칙 없이도 배포된다). */
+  isDefault?: boolean;
 }
 
 export interface ChannelEligibility {
@@ -1630,6 +1645,8 @@ export async function publishClips(
   channel: DistributionChannel,
   opts: {
     reserveDate?: string; scheduled?: boolean;
+    /** YouTube: 어느 연결 채널로 올릴지 — 게시 가능 채널이 여럿이면 필수(서버가 추측하지 않는다). */
+    youtubeChannelId?: string;
     /** 네이버: 어느 계정으로 올릴지 (다계정 필수). */
     naverAccountId?: string;
     /** 네이버 클립: 10자 이상 필수. */

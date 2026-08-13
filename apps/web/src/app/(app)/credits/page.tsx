@@ -253,10 +253,13 @@ export default function CreditsPage() {
               canManage={canManageBilling}
               buyer={{ fullName: buyerName.trim(), email: email.trim(), phoneNumber: phoneDigits }}
               credits={credits}
+              amountKrw={credits * price}
               onCharged={load}
+              // 카드 등록/삭제 직후 cardRegistered 를 다시 읽는다 — 안 하면 자동충전 패널이 낡은 상태로 남는다.
+              onCardChange={load}
             />
 
-            <AutoTopupPanel canManage={canManageBilling} hasCard={cardRegistered} onCharged={load} />
+            <AutoTopupPanel canManage={canManageBilling} hasCard={cardRegistered} priceKrw={price} onCharged={load} />
 
             <div className="flex flex-wrap items-center gap-2">
               <input

@@ -13,7 +13,7 @@
  *  - 그 외 상태(게시·예약·기록·진행) → 표시만.
  */
 import { DISTRIBUTION_CHANNELS, type DistributionChannel } from "@/lib/constants";
-import type { Clip } from "@/lib/types";
+import { EDIT_KIND_LABEL, type Clip } from "@/lib/types";
 import { clipThumbSrc } from "@/lib/media-url";
 import { fmtTime } from "@/lib/utils";
 
@@ -95,7 +95,8 @@ export function DistributionMatrix({
                       </div>
                       <div className="sd-mono truncate text-[10px]" style={{ color: "var(--sd-mut)" }}>
                         {programTitle}
-                        {episodeNumber != null ? ` · 회차 ${episodeNumber}` : ""} · {fmtTime(clip.durationSec)}
+                        {episodeNumber != null ? ` · ${episodeNumber}화` : ""}
+                        {clip.editKind ? ` · ${EDIT_KIND_LABEL[clip.editKind]}` : ""} · {fmtTime(clip.durationSec)}
                       </div>
                     </div>
                   </div>

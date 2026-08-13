@@ -252,6 +252,15 @@ export interface ClipReframe {
   error?: { code?: string; message: string; at?: number } | string | null;
 }
 
+/** 편집본(직접 업로드) 유형 — 업로드할 때 사람이 지정한다. */
+export type EditKind = "shorts" | "clip" | "highlight";
+
+export const EDIT_KIND_LABEL: Record<EditKind, string> = {
+  shorts: "숏폼",
+  clip: "클립",
+  highlight: "하이라이트",
+};
+
 export interface Clip {
   id: string;
   episodeId: string;
@@ -260,6 +269,10 @@ export interface Clip {
   directUpload?: boolean;
   /** 프로그램 링크 (직접 업로드 클립은 episodeId 가 없어 이 값으로 프로그램을 표시한다). */
   programId?: string;
+  /** 편집본이 기록한 회차 번호 — 같은 번호의 회차가 시스템에 있으면 episodeId 도 연결돼 있다. */
+  episodeNumber?: number;
+  /** 편집본 유형(숏폼·클립·하이라이트) — 업로드 때 지정. */
+  editKind?: EditKind;
   title: string;
   /** 두 줄 제목 (2026-07-29): editor 오버레이 · 라인1 흰색 setup · 라인2 파란색 payoff. */
   titleLine1?: string;

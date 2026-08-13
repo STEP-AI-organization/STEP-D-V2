@@ -32,12 +32,11 @@ const PLATFORM_LABEL: Record<string, string> = {
   instagram: "Instagram",
   facebook: "Facebook",
   tiktok: "TikTok",
-  navertv: "네이버 TV",
   naverclip: "네이버 클립",
 };
 
 /** 실제 파일이 올라가는 곳 (F4-3). 네이버는 브라우저 자동화지만 파일이 실제로 올라간다. */
-const UPLOAD_PLATFORMS = new Set(["youtube", "navertv", "naverclip"]);
+const UPLOAD_PLATFORMS = new Set(["youtube", "naverclip"]);
 
 export function PublishDialog({
   clipIds,
@@ -73,7 +72,8 @@ export function PublishDialog({
       try {
         const r = await fetchChannelEligibility(clipIds);
         if (!alive) return;
-        setRules(r.rules);
+        // 네이버 TV 는 제품에서 제외됐다 (2026-08-13) — 옛 규칙이 남아 있어도 새 배포 대상으로 안 내놓는다.
+        setRules(r.rules.filter((x) => x.platform !== "navertv"));
         setElig(r.eligibility);
         setLoadErr(null);
       } catch (err) {
@@ -84,12 +84,12 @@ export function PublishDialog({
   }, [clipIds]);
 
   const rule = useMemo(() => rules.find((r) => `${r.platform}:${r.accountId}` === picked), [rules, picked]);
-  // 네이버 계정 직접 선택 행 — key = "naver:<계정id>:<navertv|naverclip>"
+  // 네이버 계정 직접 선택 행 — key = "naver:<계정id>:naverclip" (TV 는 제품에서 제외)
   const naverPick = useMemo(() => {
     if (!picked?.startsWith("naver:")) return null;
-    const [, id, ch] = picked.split(":");
+    const [, id] = picked.split(":");
     const acct = naverAccounts.find((a) => a.id === id);
-    return acct ? { acct, channel: ch as "navertv" | "naverclip" } : null;
+    return acct ? { acct, channel: "naverclip" as const } : null;
   }, [picked, naverAccounts]);
   const ok = naverPick ? true : picked ? elig[picked]?.ok : false;
   const isUpload = naverPick ? true : rule ? UPLOAD_PLATFORMS.has(rule.platform) : false;
@@ -110,6 +110,8 @@ export function PublishDialog({
       const res = await publishClips(clipIds, channel, {
         scheduled,
         ...(scheduled && reserveDate ? { reserveDate } : {}),
+        // 고른 행이 곧 대상 채널이다 — 게시 가능 채널이 여럿일 때 서버가 추측하지 않게 명시한다.
+        ...(rule?.platform === "youtube" ? { youtubeChannelId: rule.accountId } : {}),
         ...(naverPick ? {
           naverAccountId: naverPick.acct.id,
           description: naverDesc.trim(),
@@ -153,9 +155,11 @@ export function PublishDialog({
             </p>
           )}
 
-          {rules.length === 0 && !loadErr && (
+          {/* 서버가 연결된 채널을 기본 규칙으로 합성해 주므로, 여기가 비면 연결 자체가 없는 것이다. */}
+          {rules.length === 0 && naverAccounts.length === 0 && !loadErr && (
             <p className="text-[11.5px]" style={{ color: "var(--sd-mut)" }}>
-              등록된 채널 규칙이 없습니다 — 배포 채널 화면에서 먼저 규칙을 만들어야 합니다.
+              보낼 수 있는 채널이 없습니다 — 배포 채널 화면에서 채널을 먼저 연결하세요.
+              (규칙은 없어도 됩니다 — 연결만 되면 기본 설정으로 나갑니다.)
             </p>
           )}
 
@@ -186,6 +190,7 @@ export function PublishDialog({
                     </span>
                     <span className="sd-tag">{PLATFORM_LABEL[r.platform] ?? r.platform}</span>
                     {!UPLOAD_PLATFORMS.has(r.platform) && <span className="sd-tag">기록만</span>}
+                    {r.isDefault && <span className="sd-tag" title="저장된 규칙이 없어 기본 설정으로 나갑니다">기본 규칙</span>}
                     {r.maxSec != null && <span className="sd-tag sd-mono">≤{r.maxSec}초</span>}
                     {r.aspect !== "any" && <span className="sd-tag sd-mono">{r.aspect}</span>}
                   </div>
@@ -198,34 +203,30 @@ export function PublishDialog({
                 </button>
               );
             })}
-            {/* 네이버 — 세션 등록된 계정으로 직접 업로드 (채널 규칙 불필요) */}
-            {naverAccounts.flatMap((a) => {
-              const chans = a.target === "both" ? (["navertv", "naverclip"] as const)
-                : a.target === "tv" ? (["navertv"] as const) : (["naverclip"] as const);
-              return chans.map((ch) => {
-                const key = `naver:${a.id}:${ch}`;
-                return (
-                  <button
-                    key={key}
-                    type="button"
-                    onClick={() => setPicked(key)}
-                    className={cn(
-                      "flex flex-col gap-1 rounded-[5px] px-3 py-2 text-left",
-                      picked === key && "sd-btn--on",
-                    )}
-                    style={{
-                      border: `1px solid ${picked === key ? "var(--sd-accent-border)" : "var(--sd-border)"}`,
-                      cursor: "pointer",
-                    }}
-                  >
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="text-[12.5px] font-medium" style={{ color: "var(--sd-fg)" }}>{a.label}</span>
-                      <span className="sd-tag">{PLATFORM_LABEL[ch]}</span>
-                      <span className="sd-tag">로그인됨</span>
-                    </div>
-                  </button>
-                );
-              });
+            {/* 네이버 클립 — 세션 등록된 계정으로 직접 업로드 (채널 규칙 불필요 · TV 는 제품에서 제외) */}
+            {naverAccounts.filter((a) => a.target !== "tv").map((a) => {
+              const key = `naver:${a.id}:naverclip`;
+              return (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => setPicked(key)}
+                  className={cn(
+                    "flex flex-col gap-1 rounded-[5px] px-3 py-2 text-left",
+                    picked === key && "sd-btn--on",
+                  )}
+                  style={{
+                    border: `1px solid ${picked === key ? "var(--sd-accent-border)" : "var(--sd-border)"}`,
+                    cursor: "pointer",
+                  }}
+                >
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-[12.5px] font-medium" style={{ color: "var(--sd-fg)" }}>{a.label}</span>
+                    <span className="sd-tag">{PLATFORM_LABEL.naverclip}</span>
+                    <span className="sd-tag">로그인됨</span>
+                  </div>
+                </button>
+              );
             })}
           </div>
 

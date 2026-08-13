@@ -25,9 +25,10 @@ import { useAppData } from "@/lib/data/store";
 import { clipVideoSrc, clipThumbSrc } from "@/lib/media-url";
 import type { Clip } from "@/lib/types";
 
-/** 화면에 보여줄 채널 순서 — 실제로 파일이 올라가는 곳을 앞에 둔다. */
+/** 화면에 보여줄 채널 순서 — 실제로 파일이 올라가는 곳을 앞에 둔다.
+ *  네이버 TV 는 제품에서 제외 (2026-08-13) — 타입(MetaChannel)에는 남아 있지만 그리지 않는다. */
 const CHANNEL_ORDER: MetaChannel[] = [
-  "youtube", "naverclip", "navertv", "instagram", "facebook", "tiktok",
+  "youtube", "naverclip", "instagram", "facebook", "tiktok",
 ];
 
 const CHANNEL_LABEL: Record<MetaChannel, string> = {

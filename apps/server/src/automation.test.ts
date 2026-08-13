@@ -83,6 +83,21 @@ describe("보류된 건은 사람이 확정해야 다시 잡힌다 (F6 Invariant
   });
 });
 
+describe("승인 배선 — automation-cycle 소스 스캔", () => {
+  /**
+   * decidePublish 의 approve_first 는 순수 함수라 옳아도, 호출부가 `approved: !held` 로
+   * 배선하면 **보류된 적 없는 새 클립이 전부 자동 승인**되어 정책이 무력화된다.
+   * 승인의 근거는 사람이 보류를 해제한 기록(released_at)이어야 한다.
+   */
+  it("automation-cycle 는 approved 에 released 기반 값을 넘긴다 (!held 금지)", () => {
+    const src = fs.readFileSync(path.join(SRC, "automation-cycle.ts"), "utf-8");
+    assert.match(src, /hasReleasedHold\(/,
+      "automation-cycle 이 보류 해제 기록(hasReleasedHold)을 읽지 않는다");
+    assert.doesNotMatch(src, /approved:\s*!\s*held/,
+      "`approved: !held` 는 보류된 적 없는 새 클립을 자동 승인한다 — approve_first 무력화");
+  });
+});
+
 describe("승인 정책", () => {
   it("approve_first 는 승인 없이 안 나간다", () => {
     const d = decidePublish({ rule: rule({ gatePolicy: "approve_first" }), gate: PASS, approved: false, heldAwaitingHuman: false });

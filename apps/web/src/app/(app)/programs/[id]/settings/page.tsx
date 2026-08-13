@@ -38,10 +38,15 @@ import type { Program, ProgramStatus } from "@/lib/types";
 const SECTIONS = ["드라마/영화", "예능", "뮤직", "시사", "교양", "라이프", "스포츠", "게임", "어린이", "뉴스", "애니"];
 const CODE_RE = /^[a-z0-9]+$/;
 
-/** 이미지 파일을 data URL로. 사이즈 상한 초과 시 alert 후 reject. */
-async function fileToDataUrl(file: File, maxBytes: number): Promise<string | null> {
+/** 이미지 파일을 data URL로. 사이즈 상한 초과 시 onTooBig 알림 후 null.
+ *  피드백은 호출부의 toast 로 — 이 화면의 다른 피드백과 패턴을 맞춘다(브라우저 alert 금지). */
+async function fileToDataUrl(
+  file: File,
+  maxBytes: number,
+  onTooBig: (detail: string) => void,
+): Promise<string | null> {
   if (file.size > maxBytes) {
-    alert(`파일이 너무 큽니다 (${Math.round(file.size / 1024)} KB > ${Math.round(maxBytes / 1024)} KB).`);
+    onTooBig(`${Math.round(file.size / 1024)} KB > 상한 ${Math.round(maxBytes / 1024)} KB`);
     return null;
   }
   return new Promise((resolve, reject) => {
@@ -235,8 +240,10 @@ function ProgramDetailInner({
       setCastPhotos(rest);
     }
   }
+  const fileTooBig = (detail: string) =>
+    onOpenToast({ title: "파일이 너무 큽니다", description: detail, tone: "warn" });
   async function setCastPhoto(name: string, file: File) {
-    const dataUrl = await fileToDataUrl(file, 256 * 1024);
+    const dataUrl = await fileToDataUrl(file, 256 * 1024, fileTooBig);
     if (!dataUrl) return;
     setCastPhotos({ ...castPhotos, [name]: dataUrl });
   }
@@ -245,18 +252,20 @@ function ProgramDetailInner({
     setCastPhotos(rest);
   }
   async function setPoster(file: File) {
-    const dataUrl = await fileToDataUrl(file, 1024 * 1024);
+    const dataUrl = await fileToDataUrl(file, 1024 * 1024, fileTooBig);
     if (!dataUrl) return;
     setPosterImageDataUrl(dataUrl);
   }
   // 쇼츠 브랜딩 아이콘 — 자동 렌더 하단에 원형으로 박힌다 (서버가 원형 크롭).
   async function setBrandIcon(file: File) {
-    const dataUrl = await fileToDataUrl(file, 512 * 1024);
+    const dataUrl = await fileToDataUrl(file, 512 * 1024, fileTooBig);
     if (!dataUrl) return;
     setBrandIconDataUrl(dataUrl);
   }
 
   async function runSyncFromAnalysis() {
+    // 반영되면 아래에서 페이지를 리로드한다 — 미저장 편집이 경고 없이 날아가지 않게 먼저 confirm.
+    if (!confirm("반영 시 페이지를 새로고침합니다. 저장하지 않은 편집은 사라집니다. 계속할까요?")) return;
     setSyncing(true);
     try {
       const r = await syncProgramFromAnalysis(program.id);
@@ -1179,6 +1188,8 @@ function ThumbnailEngineCard({
   // ⚠️ api.ts deleteCastPhotos 는 !res.ok 를 던지지 않는다(현재 다른 패키지 소유).
   // 그래서 목록 재조회 결과로 실제 삭제 여부를 확인한 뒤에만 "삭제됨"이라고 말한다.
   async function onDeleteCast(name: string) {
+    // GCS 원본 폴더째 지운다 — 이 파일의 다른 파괴 액션과 같게 confirm 을 거친다.
+    if (!confirm(`${name} 의 썸네일용 사진 폴더를 삭제합니다. 되돌릴 수 없습니다.`)) return;
     try {
       await deleteCastPhotos(programId, name);
       const next = await fetchCastPhotos(programId);

@@ -41,6 +41,7 @@ import {
   fetchState,
   uploadVideo as apiUploadVideo,
   uploadFinishedClip as apiUploadFinishedClip,
+  type FinishedClipOptions,
   importYoutubeVideo as apiImportYoutubeVideo,
   createProgram as apiCreateProgram,
   updateProgram as apiUpdateProgram,
@@ -171,11 +172,12 @@ interface AppData extends AppState {
   /** Upload a real video → creates an episode + recommendations. Returns episodeId.
    *  `fast=true` → 자막만 · 시각 분석 스킵 (빠른 분석 모드). 기본 false = 정밀 분석. */
   uploadVideo: (file: File, programId: string, opts?: UploadVideoOptions) => Promise<string>;
-  /** 완성 영상 직접 업로드 → 회차·분석 없이 바로 배포 가능한 클립. Returns clipId. */
+  /** 완성 영상 직접 업로드 → 회차·분석 없이 바로 배포 가능한 클립. Returns clipId.
+   *  opts.episodeNumber = 회차 번호 기록(있으면 회차 연결) · opts.editKind = 숏폼/클립/하이라이트. */
   uploadFinishedClip: (
     file: File,
     programId: string,
-    opts?: { title?: string; onProgress?: (pct: number) => void },
+    opts?: FinishedClipOptions,
   ) => Promise<string>;
   /** Queue a YouTube URL import — the worker downloads then analyzes. Returns episodeId. */
   importYoutube: (url: string, programId: string, title?: string, fast?: boolean) => Promise<string>;
@@ -659,7 +661,7 @@ export function AppDataProvider({
     async (
       file: File,
       programId: string,
-      opts: { title?: string; onProgress?: (pct: number) => void } = {},
+      opts: FinishedClipOptions = {},
     ): Promise<string> => {
       if (!connectedRef.current) throw new Error("영상 업로드는 백엔드 서버가 필요합니다 (pnpm dev:server).");
       const res = await apiUploadFinishedClip(file, programId, opts);

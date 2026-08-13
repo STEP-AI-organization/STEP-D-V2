@@ -216,7 +216,7 @@ function socialStubChecks(
 }
 
 const EVALUATORS: Record<DistributionChannel, (ctx: EvalContext) => RequirementCheck[]> = {
-  navertv: naverChecks("tv"),
+
   naverclip: naverChecks("clip"),
   youtube: youtubeChecks,
   instagram: (ctx) => socialStubChecks("ig", "Instagram", ctx.connections.instagram, true)(ctx),

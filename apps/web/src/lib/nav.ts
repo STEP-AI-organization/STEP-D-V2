@@ -61,14 +61,14 @@ export const NAV_GROUPS: NavGroup[] = [
       { href: "/performance", label: "성과", icon: BarChart3 },
       { href: "/search", label: "영상 검색", icon: Search },
       // 채널은 **연결이 먼저**다 — 옛 화면(OAuth 등록·해제)이 그 일을 하고 있고 잘 돈다.
-      // 배포 규칙은 그 화면의 채널 행에서 바로 열린다. 규칙 전용 목록은 /channels.
+      // 배포 규칙도 그 화면의 채널 행에서 바로 열린다 (규칙 전용 목록 /channels 는 제거됨).
       { href: "/publish-channels", label: "배포 채널", icon: Radio },
     ],
   },
   {
     label: "분석",
     items: [
-      { href: "/program-analytics", label: "프로그램 분석", icon: Activity, soon: true },
+      { href: "/program-analytics", label: "프로그램 분석", icon: Activity },
       { href: "/channel-analytics", label: "채널 분석", icon: TrendingUp, soon: true },
     ],
   },
@@ -106,7 +106,7 @@ export const SCREEN_META: Record<string, { title: string; subtitle: string }> = 
   "/performance": { title: "성과", subtitle: "채널별 지표 · 권한 없는 채널은 사유 표시" },
   "/search": { title: "영상 검색", subtitle: "자연어 질의로 구간 찾기" },
   "/publish-channels": { title: "배포 채널", subtitle: "채널 연결 · 채널별 배포 규칙" },
-  "/program-analytics": { title: "프로그램 분석", subtitle: "프로그램 단위 성과" },
+  "/program-analytics": { title: "프로그램 분석", subtitle: "프로그램 현황 · 썸네일 스타일 분석" },
   "/channel-analytics": { title: "채널 분석", subtitle: "채널 단위 성과" },
   "/thumbnails": { title: "썸네일 생성", subtitle: "대상 선택 → 프롬프트 → 3안 중 대표 지정" },
   // 아래 넷은 화면 안에서 제목을 또 그리던 것들이라(구 PageHeader) 부제를 그쪽 설명으로

@@ -19,6 +19,7 @@ import { AlertTriangle, Film, Info, Loader2, Upload } from "lucide-react";
 
 import { useToast } from "@/components/ui/toast";
 import { useAppData } from "@/lib/data/store";
+import { EDIT_KIND_LABEL, type EditKind } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 export function UploadClipButton({
@@ -71,11 +72,16 @@ function UploadClipDialog({
 
   const [file, setFile] = useState<File | null>(null);
   const [title, setTitle] = useState("");
+  // 회차는 번호로 적는다 — 편집본은 회차 엔티티를 만들지 않지만(설계), 몇 화 것인지는
+  // 남겨야 매트릭스에서 구분된다. 같은 번호의 회차가 있으면 서버가 연결까지 한다.
+  const [episodeNumber, setEpisodeNumber] = useState("");
+  const [editKind, setEditKind] = useState<EditKind>("clip");
   const [busy, setBusy] = useState(false);
   const [pct, setPct] = useState(0);
   const [dragOver, setDragOver] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
+  const epNum = /^\d+$/.test(episodeNumber.trim()) ? Number(episodeNumber.trim()) : undefined;
   const canSubmit = Boolean(file) && Boolean(programId) && !busy;
 
   function pick(f: File | null | undefined) {
@@ -98,6 +104,8 @@ function UploadClipDialog({
     try {
       await uploadFinishedClip(file, programId, {
         title: title || file.name,
+        episodeNumber: epNum,
+        editKind,
         onProgress: setPct,
       });
       toast({
@@ -157,6 +165,34 @@ function UploadClipDialog({
               <Link href="/programs" className="underline">프로그램 만들기</Link>
             </Notice>
           )}
+
+          <div className="grid grid-cols-2 gap-3">
+            <L label="회차 번호">
+              <input
+                value={episodeNumber}
+                onChange={(e) => setEpisodeNumber(e.target.value.replace(/[^\d]/g, ""))}
+                disabled={busy}
+                inputMode="numeric"
+                placeholder="예: 3 (모르면 비움)"
+                className="sd-input w-full"
+              />
+            </L>
+            <L label="유형" required>
+              <div className="flex gap-[3px]">
+                {(Object.keys(EDIT_KIND_LABEL) as EditKind[]).map((k) => (
+                  <button
+                    key={k}
+                    type="button"
+                    disabled={busy}
+                    className={cn("sd-btn flex-1", editKind === k && "sd-btn--on")}
+                    onClick={() => setEditKind(k)}
+                  >
+                    {EDIT_KIND_LABEL[k]}
+                  </button>
+                ))}
+              </div>
+            </L>
+          </div>
 
           {/* 드롭 존 */}
           <div
