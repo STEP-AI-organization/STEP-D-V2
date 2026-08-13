@@ -919,6 +919,10 @@ app.post("/api/superadmin/tenants", async (c) => {
         const { rows } = await db.query(`SELECT id FROM tenants`);
         id = nextTenantId(rows.map((r: { id: string }) => r.id));
       }
+      // credit_ledger 는 RLS FORCE 라, 스코프 없는 rawPool 트랜잭션에서 새 테넌트 행을 넣으면
+      // WITH CHECK 에 막힌다(app.tenant_id 미설정 → 새 id 도 '*' 도 아님 → "violates RLS policy").
+      // 이 트랜잭션 동안만 새 테넌트로 스코프를 세운다 — is_local=true 라 COMMIT/ROLLBACK 시 리셋된다.
+      await db.query(`SELECT set_config('app.tenant_id', $1, true)`, [id]);
       await db.query(`INSERT INTO tenants (id, name, kind, billing_email) VALUES ($1,$2,$3,$4)`, [
         id, plan.name, plan.kind, plan.billingEmail,
       ]);
