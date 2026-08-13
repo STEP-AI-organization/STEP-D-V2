@@ -53,13 +53,21 @@ export function isNaverChannel(channel: string): channel is NaverChannelId {
  *
  * YouTube 와 **네이버 TV·클립**이 실업로드다. 네이버는 공개 API 가 없어 브라우저 자동화로
  * 올리지만, 파일이 실제로 올라간다는 점에서 YouTube 와 같은 축이다(2026-08-11 실발행 확인).
- * 나머지(Meta·TikTok)는 "실제 게시는 담당자가 해당 앱에서 직접" 하고 우리는 기록만 남긴다.
+ * TikTok 은 게이트에 달렸다: TIKTOK_UPLOAD_ENABLED ON 이면 받은함 **드래프트** 실업로드,
+ * OFF 면 기록만. env 는 여기서 읽지 않는다(모듈 순수성 — 상단 주석) — 게이트 판정은
+ * 호출부(publish-dispatch)가 upload-gate 에서 읽어 opts 로 넘긴다.
+ * 나머지(Meta)는 "실제 게시는 담당자가 해당 앱에서 직접" 하고 우리는 기록만 남긴다.
  *
  * **이 구분이 사라지면 F4 Invariant(FLOWS.md:92)가 깨진다** —
  * 올라가지도 않은 것을 '게시됨'으로 보여주게 된다.
  */
-export function channelPublishMode(channel: PublishChannel): "upload" | "record" {
-  return channel === "youtube" || isNaverChannel(channel) ? "upload" : "record";
+export function channelPublishMode(
+  channel: PublishChannel,
+  opts?: { tiktokUpload?: boolean },
+): "upload" | "record" {
+  if (channel === "youtube" || isNaverChannel(channel)) return "upload";
+  if (channel === "tiktok" && opts?.tiktokUpload) return "upload";
+  return "record";
 }
 
 /** 배포 상태값. `recorded`(기록됨)는 `published`(게시됨)와 **절대** 같은 값이 아니다. */
@@ -95,14 +103,15 @@ export function isClipRendered(clip: {
 
 /**
  * 배포 항목의 계정 정체성 — 같은 플랫폼 다계정을 가르는 열쇠.
- * YouTube 는 youtubeChannelId, 네이버는 naverAccountId. 둘 다 없으면 null
- * (기록 전용 채널·계정 개념 이전의 레거시 행).
+ * YouTube 는 youtubeChannelId, 네이버는 naverAccountId, TikTok 은 tiktokOpenId.
+ * 전부 없으면 null (기록 전용 채널·계정 개념 이전의 레거시 행).
  */
 export function distributionAccountId(
-  d: { youtubeChannelId?: unknown; naverAccountId?: unknown },
+  d: { youtubeChannelId?: unknown; naverAccountId?: unknown; tiktokOpenId?: unknown },
 ): string | null {
   if (typeof d.youtubeChannelId === "string" && d.youtubeChannelId) return d.youtubeChannelId;
   if (typeof d.naverAccountId === "string" && d.naverAccountId) return d.naverAccountId;
+  if (typeof d.tiktokOpenId === "string" && d.tiktokOpenId) return d.tiktokOpenId;
   return null;
 }
 
@@ -138,7 +147,10 @@ export function upsertDistribution<T extends { channel: string }>(
  */
 export function hasAccountDistribution(
   distributions:
-    | Array<{ channel: string; status?: string; youtubeChannelId?: unknown; naverAccountId?: unknown }>
+    | Array<{
+        channel: string; status?: string;
+        youtubeChannelId?: unknown; naverAccountId?: unknown; tiktokOpenId?: unknown;
+      }>
     | undefined,
   channel: string,
   accountId: string,

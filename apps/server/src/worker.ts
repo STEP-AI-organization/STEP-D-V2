@@ -67,7 +67,14 @@ import {
 } from "./youtube.ts";
 import { createReadStream, parseObjectPath, fileExists } from "./storage-gcs.ts";
 import { pipeline } from "node:stream/promises";
-import { youtubeUploadEnabled, UPLOAD_DISABLED_MESSAGE } from "./upload-gate.ts";
+import {
+  youtubeUploadEnabled, UPLOAD_DISABLED_MESSAGE,
+  tiktokUploadEnabled, TIKTOK_UPLOAD_DISABLED_MESSAGE,
+} from "./upload-gate.ts";
+import { withTikTokToken, uploadDraftToTikTok, TikTokTokenRevokedError } from "./tiktok.ts";
+import {
+  getTikTokAccountByOpenId, updateTikTokTokens, markTikTokAccountDisconnected,
+} from "./db-pg.ts";
 import { naverUploadEnabled, NAVER_DISABLED_MESSAGE } from "./naver-gate.ts";
 import { hasNaverSession, materializeNaverSession } from "./naver-session.ts";
 import { getNaverAccount, markNaverAccount, getNaverSessionBlob } from "./db-pg.ts";
@@ -1293,7 +1300,10 @@ async function markDistributionFailed(
   // 실패도 **같은 계정 항목**에 겹쳐 써야 한다 — 정체성 없이 쓰면 같은 플랫폼
   // 다른 계정의 기록을 덮는다(upsertDistribution 이 채널+계정으로 매칭한다).
   const value: Record<string, unknown> = { status: "failed", error };
-  if (accountId) value[channel === "youtube" ? "youtubeChannelId" : "naverAccountId"] = accountId;
+  const accountField = channel === "youtube" ? "youtubeChannelId"
+    : channel === "tiktok" ? "tiktokOpenId"
+    : "naverAccountId";
+  if (accountId) value[accountField] = accountId;
   const distributions = upsertDistribution(clip.distributions, channel, value);
   await putEntity("clip", clipId, { ...clip, distributions });
 }
@@ -1497,15 +1507,111 @@ async function handleNaverPublish(job: Job): Promise<void> {
 }
 
 async function handleDistributionPublish(job: Job): Promise<void> {
+  // 같은 잡 타입을 channel 로 가른다 — 잡 타입을 늘리면 레인 배정이 또 필요하다.
+  // 구 페이로드(channel 없음)는 전부 YouTube 다.
+  const channel = String(job.payload.channel ?? "youtube");
   try {
-    await runDistributionPublish(job);
+    if (channel === "tiktok") await runTikTokDraftPublish(job);
+    else await runDistributionPublish(job);
   } catch (err) {
     const clipId = String(job.payload.clipId ?? "");
-    const channelId = String(job.payload.channelId ?? "");
+    const accountId = channel === "tiktok"
+      ? String(job.payload.tiktokOpenId ?? "")
+      : String(job.payload.channelId ?? "");
     const msg = err instanceof Error ? err.message : String(err);
-    console.error(`[worker] distribution.publish ${clipId} 실패(재시도 안 함):`, err);
-    if (clipId) await markDistributionFailed(clipId, "youtube", msg, channelId || undefined).catch(() => {});
+    console.error(`[worker] distribution.publish ${clipId} (${channel}) 실패(재시도 안 함):`, err);
+    if (clipId) await markDistributionFailed(clipId, channel, msg, accountId || undefined).catch(() => {});
     // 여기서 throw 하지 않는 것이 요점이다. 자동 재시도 금지(F4-4 ⊘).
+  }
+}
+
+/**
+ * TikTok 받은함 드래프트 업로드 — YouTube 경로와 같은 뼈대(게이트 재확인 → 킬스위치 →
+ * 계정·클립·파일 검증 → 업로드 → 계정 정체성 포함 기록). 다른 점은 둘이다:
+ * ① 파일을 /tmp 로 내려받아 올린다 — **작업 후 반드시 지운다.** Cloud Run 의 /tmp 는
+ *    RAM(tmpfs) 이라 안 지우면 잡마다 메모리가 쌓여 OOM 난다.
+ * ② clip.status 를 'published' 로 승격하지 않는다 — 초안은 공개 게시가 아니다. 최종 게시는
+ *    크리에이터가 앱에서 하고, 우리 기록은 배포 항목(tiktokPublishId)까지다.
+ */
+async function runTikTokDraftPublish(job: Job): Promise<void> {
+  const clipId = String(job.payload.clipId ?? "");
+  const openId = String(job.payload.tiktokOpenId ?? "");
+  if (!clipId || !openId) {
+    console.error("[worker] distribution.publish(tiktok): clipId/tiktokOpenId 누락 — 버림");
+    return;
+  }
+
+  // 게이트 재확인 — 큐에 앉아 있는 동안 권리 이슈가 새로 등록될 수 있다 (YouTube 와 동일).
+  const gate = await clipGate(clipId);
+  if (!gate.allowed) {
+    console.warn(`[worker] distribution.publish(tiktok) ${clipId}: 게이트 미통과 — ${gate.reason}`);
+    await markDistributionFailed(clipId, "tiktok", gate.reason, openId).catch(() => {});
+    await appendGateAudit({
+      subjectType: "clip", subjectId: clipId, action: "publish.blocked",
+      fromState: gate.state, toState: "blocked", actor: "worker",
+      basis: `업로드 직전 재확인 · ${gate.reason}`,
+    }).catch(() => {});
+    return;
+  }
+
+  // 킬스위치 (2/3) — 게이트가 켜진 동안 큐잉됐다가 꺼진 뒤 남은 잡을 막는다.
+  // return (throw 금지): 던지면 백오프 재시도가 스위치 꺼진 내내 재시도만 쌓는다.
+  if (!tiktokUploadEnabled()) {
+    console.warn(`[worker] distribution.publish(tiktok) ${clipId}: blocked — TikTok 실업로드 비활성`);
+    await markDistributionFailed(clipId, "tiktok", TIKTOK_UPLOAD_DISABLED_MESSAGE, openId).catch(() => {});
+    return;
+  }
+
+  const acct = await getTikTokAccountByOpenId(openId);
+  if (!acct || acct.status !== "active" || !acct.refreshToken) {
+    await markDistributionFailed(clipId, "tiktok",
+      "TikTok 계정이 연결되지 않았거나 재연결이 필요합니다", openId);
+    return;
+  }
+
+  const clip = await getEntity<any>("clip", clipId);
+  if (!clip) { console.warn(`[worker] distribution.publish(tiktok): clip ${clipId} gone — dropping`); return; }
+  const mediaId = clip.mediaId;
+  if (!mediaId) { await markDistributionFailed(clipId, "tiktok", "클립이 아직 렌더되지 않았습니다 (익스포트 필요)", openId); return; }
+  const media = await getMedia(mediaId);
+  if (!media) { await markDistributionFailed(clipId, "tiktok", "렌더된 영상 파일을 찾을 수 없습니다", openId); return; }
+  const objPath = parseObjectPath(media.path);
+  if (!(await fileExists(objPath))) { await markDistributionFailed(clipId, "tiktok", "스토리지에 영상 파일이 없습니다", openId); return; }
+
+  const tmpPath = path.join(os.tmpdir(), `stepd-tiktok-${clipId}-${Date.now()}.mp4`);
+  try {
+    await pipeline(createReadStream(objPath), fs.createWriteStream(tmpPath));
+    const body = await fs.promises.readFile(tmpPath);
+    const { publishId } = await withTikTokToken(
+      acct,
+      // targeted 컬럼 write — 잡 시작 스냅샷으로 전체 행을 덮으면 동시 재연결 토큰을 밟는다(B6).
+      (t) => updateTikTokTokens(acct.openId, t.accessToken, t.refreshToken, t.expiresAt, t.refreshExpiresAt),
+      (token) => uploadDraftToTikTok(token, { body, contentType: media.mime || "video/mp4" }),
+    );
+
+    const fresh = (await getEntity<any>("clip", clipId)) ?? clip;
+    await putEntity("clip", clipId, {
+      ...fresh,
+      distributions: upsertDistribution(fresh.distributions, "tiktok", {
+        status: "published", tiktokPublishId: publishId, tiktokOpenId: openId,
+        publishedAt: Date.now(), error: undefined,
+      }),
+    });
+    console.log(`[worker] distribution.publish(tiktok) ${clipId} → 받은함 초안 ${publishId} (@${acct.username ?? acct.displayName})`);
+  } catch (err) {
+    if (err instanceof TikTokTokenRevokedError) {
+      // 죽은 토큰을 함께 넘긴다 — 재연결이 이미 끝났으면 파킹이 no-op 이 된다.
+      await markTikTokAccountDisconnected(openId, acct.refreshToken).catch(() => {});
+      await markDistributionFailed(clipId, "tiktok", "TikTok 계정 재연결이 필요합니다 (토큰 만료/취소)", openId);
+      console.error(`[worker] distribution.publish(tiktok) ${clipId}: token revoked — ${openId} parked`);
+      return;
+    }
+    const message = err instanceof Error ? err.message : String(err);
+    await markDistributionFailed(clipId, "tiktok", message, openId);
+    console.error(`[worker] distribution.publish(tiktok) ${clipId} failed:`, message);
+  } finally {
+    // Cloud Run /tmp = tmpfs(RAM). 성공·실패 무관하게 지운다 — 안 지우면 OOM.
+    await fs.promises.unlink(tmpPath).catch(() => {});
   }
 }
 

@@ -220,7 +220,9 @@ import {
   type GenerateMode,
 } from "./profile.ts";
 import { normalizeCastInput } from "./cast.ts";
-import { youtubeUploadEnabled, UPLOAD_DISABLED_CODE, UPLOAD_DISABLED_MESSAGE } from "./upload-gate.ts";
+import {
+  youtubeUploadEnabled, UPLOAD_DISABLED_CODE, UPLOAD_DISABLED_MESSAGE, tiktokUploadEnabled,
+} from "./upload-gate.ts";
 import { geminiGenerate, parseJsonLoose } from "./gemini.ts";
 import { syncProgramFromFacesForMedia, CORE_PYTHON, CORE_DIR, REPO_ROOT } from "./content-pipeline.ts";
 import {
@@ -5740,6 +5742,8 @@ app.post("/api/distributions/publish", async (c) => {
     description?: string;
     /** 네이버: 카테고리 1차·2차. 둘 다 있어야 등록된다. */
     naverCategory?: { primary?: string; secondary?: string };
+    /** TikTok: 어느 계정 받은함에 초안을 넣을지 (게이트 ON 일 때만 의미). 추론하지 않는다. */
+    tiktokOpenId?: string;
   }>().catch(() => null);
 
   // Reject malformed input up front — a bad/empty body must be a 400, not a 500.
@@ -5834,6 +5838,43 @@ app.post("/api/distributions/publish", async (c) => {
     return c.json({ ok: true, naverAccount: { id: account.id, label: account.label }, ...outcome });
   }
 
+  // ── TikTok — 게이트 ON 이면 받은함 드래프트 실업로드, OFF 면 아래 record 경로 그대로 ──
+  // 계정은 여기서 확정한다(네이버와 같은 이유) — 추론으로 다른 계정 받은함에 초안이 가면
+  // 안 된다. 규칙(eligibility)의 tiktok accountId 와 같은 식별자(openId)를 쓴다.
+  if (b.channel === "tiktok" && tiktokUploadEnabled()) {
+    // video.upload 없이(스코프 확장 전에) 연결된 토큰은 inbox init 에서 scope_not_authorized
+    // 로 전건 실패한다 — 여기서 걸러 클립별 failed 대신 409 한 번으로 알린다. 재연동이 해법.
+    const usable = (await listTikTokAccounts())
+      .filter((a) => a.status === "active" && a.refreshToken
+        && (a.scope ?? "").includes("video.upload"));
+    const account = b.tiktokOpenId
+      ? usable.find((a) => a.openId === b.tiktokOpenId)
+      : (usable.length === 1 ? usable[0] : undefined);
+    if (!account) {
+      return c.json({
+        error: b.tiktokOpenId ? "tiktok_account_not_found"
+          : usable.length ? "tiktok_account_required" : "no_tiktok_account",
+        message: b.tiktokOpenId
+          ? "지정한 TikTok 계정을 찾을 수 없거나 재연결이 필요합니다."
+          : usable.length
+            ? "TikTok 계정이 여러 개입니다 — 어느 계정 받은함으로 보낼지 선택하세요."
+            : "업로드 가능한 TikTok 계정이 없습니다 — video.upload 권한이 없는 옛 연결이면 배포채널에서 연동해제 후 재연결하세요.",
+        accounts: usable.map((a) => ({
+          openId: a.openId, label: a.username ? `@${a.username}` : a.displayName,
+        })),
+      }, 409);
+    }
+    const outcome = await dispatchPublish({
+      clipIds: b.clipIds, channel: "tiktok",
+      // 예약(reserveDate)은 넘기지 않는다 — 초안은 예약 게시가 없다. 최종 게시는
+      // 크리에이터가 앱에서 직접 한다.
+      tiktokOpenId: account.openId,
+      actor,
+      origin: "manual",
+    });
+    return c.json({ ok: true, tiktokAccount: { openId: account.openId }, ...outcome });
+  }
+
   const outcome = await dispatchPublish({
     clipIds: b.clipIds, channel: b.channel,
     scheduled: b.scheduled, reserveDate: b.reserveDate,
@@ -5876,6 +5917,25 @@ app.post("/api/distributions/retry", async (c) => {
       origin: "retry",
     });
     return c.json({ ok: true, ...outcome });
+  }
+
+  // TikTok 재시도 — 실패한 행의 openId 로 **같은 계정에** 다시 보낸다. 정체성 없이 넘기면
+  // dispatchPublish 가 record 로 강등해 재시도가 조용히 기록으로 둔갑한다.
+  if (b.channel === "tiktok" && tiktokUploadEnabled()) {
+    const ttRows = (clip.distributions ?? []).filter((d: any) => d.channel === "tiktok");
+    // 실패한 행이 있을 때만 — published 행의 openId 까지 집으면 "성공한 클립 재시도" 가
+    // 같은 받은함에 중복 초안을 쌓는다 (queue dedupe 는 done 이후를 못 막는다).
+    const prev = ttRows.find((d: any) => d.status === "failed" && d.tiktokOpenId);
+    if (prev?.tiktokOpenId) {
+      const outcome = await dispatchPublish({
+        clipIds: [b.clipId], channel: "tiktok",
+        tiktokOpenId: String(prev.tiktokOpenId),
+        actor,
+        origin: "retry",
+      });
+      return c.json({ ok: true, ...outcome });
+    }
+    // openId 없는 구 기록(record 시절)은 아래 일반 경로로 — 기록만 갱신된다.
   }
 
   const outcome = await dispatchPublish({
@@ -7378,11 +7438,12 @@ const TIKTOK_TOKEN_URL = "https://open.tiktokapis.com/v2/oauth/token/";
 const TIKTOK_USER_INFO_URL = "https://open.tiktokapis.com/v2/user/info/";
 const TIKTOK_CALLBACK_PATH = "/api/tiktok/oauth/callback";
 // 승인된 scope 만 요청한다 — 미승인 scope 를 섞으면 인증 화면에서 통째로 거부된다.
-// user.info.profile = 채널 핸들(@username)용. **콘솔(Login Kit → Scopes)에 추가돼 있어야 한다**
-// — 없으면 동의 화면이 통째로 거부되니, 거부되면 콘솔 scope 부터 확인할 것 (2026-08-13:
-// 실명(display_name)만 떠서 채널을 구분 못 한다는 피드백으로 추가).
-// video.upload / video.publish 는 Content Posting API 구현 + 심사 통과 후 여기에 추가할 것.
-const TIKTOK_SCOPES = ["user.info.basic", "user.info.profile"].join(",");
+// 콘솔(Login Kit·Content Posting API → Scopes)에 세 개 전부 있어야 한다. 거부되면 콘솔부터.
+// - user.info.profile: 채널 핸들(@username)용 (2026-08-13 — 실명만 떠서 채널 구분 불가 피드백)
+// - video.upload: 받은함 드래프트 업로드용 (tiktok.ts). **이게 빠진 토큰은 게이트를 켜도
+//   inbox init 에서 scope_not_authorized 로 전건 실패한다** — scope 없는 옛 연결은 재연동.
+// video.publish(직접 게시)는 만들지 않았다 — 드래프트만.
+const TIKTOK_SCOPES = ["user.info.basic", "user.info.profile", "video.upload"].join(",");
 
 function tiktokRedirectUri(): string {
   const explicit = process.env.TIKTOK_REDIRECT_URI;

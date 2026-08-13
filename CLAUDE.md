@@ -107,7 +107,8 @@ claim 하지 않고 진행 중인 것만 마친다(Job 타임아웃 중간 사�
 **⚠️ YouTube 실업로드는 구현 완료 · 기본 OFF.** `upload-gate.ts` 3중 방어 —
 `YOUTUBE_UPLOAD_ENABLED` 가 명시적 truthy 일 때만 ON, 라우트 409 · 워커 차단 · 업로드 직전
 `assertUploadEnabled()`. 잘못된 env 의 실패 모드가 "업로드 안 됨"이지 "실수로 업로드됨"이
-아니게 방향을 잡아뒀다. **Meta·SMR 송출은 여전히 상태 기록만(스텁).**
+아니게 방향을 잡아뒀다. **TikTok 은 같은 패턴의 `TIKTOK_UPLOAD_ENABLED` 게이트로 받은함
+드래프트 실업로드(기본 OFF=기록만). Meta·SMR 송출은 여전히 상태 기록만(스텁).**
 
 ### 검색 — 제품의 목적물
 
@@ -156,6 +157,7 @@ EMBED_MODEL / EMBED_DIM                   검색 임베딩 (기본 text-multilin
 WORKER_JOBS           content | youtube | gebd | all(기본)   ← 레인 선택
 WORKER_MODE           drain 이면 큐 비는 즉시 종료 / DRAIN_MAX_MS(기본 50분)
 YOUTUBE_UPLOAD_ENABLED   실업로드 게이트. 미설정·오타·빈값 = OFF
+TIKTOK_UPLOAD_ENABLED    TikTok 받은함 드래프트 업로드 게이트. 기본 OFF · 오타=OFF
 GEBD_IMAGE / GEBD_MODEL / GEBD_ASSETS / GEBD_CHUNK_SEC(300) / GEBD_CORES(1)   GPU VM
 GEBD_VM_NAME / GEBD_VM_ZONE · WORKER_VM_NAME / WORKER_VM_ZONE   /admin/*-vm/wake 대상
 META_APP_ID / META_APP_SECRET / META_REDIRECT_URI                Meta OAuth (Facebook Page 전용)

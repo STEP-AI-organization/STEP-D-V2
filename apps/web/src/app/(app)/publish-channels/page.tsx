@@ -51,8 +51,8 @@ import {
  *  2) apps/web/public/channel-icons/<id>.png 배치 (공식 favicon 권장)
  *  3) 서버 /api/distributions/publish 스위치 + 필요 시 OAuth 라우트
  *
- * ⚠️ **연결됨 ≠ 파일이 올라간다.** 실제 업로드는 YouTube 와 네이버 클립이고,
- * Meta·TikTok 은 배포 기록만 남는다(F4-3). 그래서 카드 안내 문구에서 그 사실을 분리해서 말한다.
+ * ⚠️ **연결됨 ≠ 파일이 올라간다.** 실제 업로드는 YouTube·네이버 클립·TikTok(게이트 ON 드래프트)이고,
+ * Meta 는 배포 기록만 남는다(F4-3). 그래서 카드 안내 문구에서 그 사실을 분리해서 말한다.
  */
 
 /** 채널별 안내 문구 · 연결 방식. */
@@ -71,7 +71,7 @@ const CHANNEL_INFO: Record<DistributionChannel, { desc: string; note?: string }>
   tiktok: {
     // 실 scope 는 user.info.basic 뿐 — 게시 권한은 TikTok 앱 심사 후에나 붙는다.
     desc: "TikTok Login Kit 로 계정 연결 — 기본 프로필 권한만 요청됩니다.",
-    note: "연결해도 파일은 올라가지 않습니다 — 배포 기록만 남습니다 (게시 권한은 앱 심사 후)",
+    note: "업로드 게이트 OFF 상태에서는 기록만 남습니다 — ON 이면 틱톡 앱 받은함에 초안으로 올라갑니다",
   },
   naverclip: {
     desc: "세로 9:16 숏폼. OAuth 가 없어 로그인 세션으로 발행합니다 — 설명 10자 이상 · 카테고리 1·2차 필수.",

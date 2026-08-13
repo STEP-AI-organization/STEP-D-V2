@@ -12,7 +12,9 @@ import assert from "node:assert/strict";
 import { afterEach, describe, it } from "node:test";
 
 import {
+  assertTikTokUploadEnabled,
   assertUploadEnabled,
+  tiktokUploadEnabled,
   UPLOAD_DISABLED_CODE,
   UploadDisabledError,
   youtubeUploadEnabled,
@@ -69,5 +71,68 @@ describe("업로드 게이트", () => {
     // 모듈 로드 시점에 캡처하면, 켜진 채 뜬 프로세스를 끌 방법이 없어진다.
     withEnv("true", () => assert.equal(youtubeUploadEnabled(), true));
     withEnv("false", () => assert.equal(youtubeUploadEnabled(), false));
+  });
+});
+
+// ── TikTok 게이트 — 같은 꺼지는 방향을 별도 스위치에 대해 고정 ──────────────────
+const TT_KEY = "TIKTOK_UPLOAD_ENABLED";
+const ttOriginal = process.env[TT_KEY];
+
+afterEach(() => {
+  if (ttOriginal === undefined) delete process.env[TT_KEY];
+  else process.env[TT_KEY] = ttOriginal;
+});
+
+function withTtEnv(value: string | undefined, run: () => void): void {
+  if (value === undefined) delete process.env[TT_KEY];
+  else process.env[TT_KEY] = value;
+  run();
+}
+
+describe("TikTok 업로드 게이트", () => {
+  it("미설정이면 꺼져 있다 — 배포만 해서는 아무것도 올라가지 않는다", () => {
+    withTtEnv(undefined, () => assert.equal(tiktokUploadEnabled(), false));
+  });
+
+  it("명시적 truthy 값에서만 켜진다", () => {
+    for (const v of ["true", "1", "on", "yes", "enabled", "TRUE", " On "]) {
+      withTtEnv(v, () => assert.equal(tiktokUploadEnabled(), true, `${JSON.stringify(v)} 는 ON 이어야 한다`));
+    }
+  });
+
+  it("오타·빈값·유사값은 전부 꺼진다 (실패 방향이 '안 나감' 이어야 한다)", () => {
+    for (const v of ["", " ", "ture", "tru", "y", "Y", "ok", "0", "false", "off", "no", "disabled", "2", "null"]) {
+      withTtEnv(v, () => assert.equal(tiktokUploadEnabled(), false, `${JSON.stringify(v)} 는 OFF 여야 한다`));
+    }
+  });
+
+  it("YouTube 게이트와 독립이다 — 한쪽을 켜도 다른 쪽이 열리면 안 된다", () => {
+    withEnv("true", () => withTtEnv(undefined, () => {
+      assert.equal(youtubeUploadEnabled(), true);
+      assert.equal(tiktokUploadEnabled(), false);
+    }));
+    withEnv(undefined, () => withTtEnv("true", () => {
+      assert.equal(youtubeUploadEnabled(), false);
+      assert.equal(tiktokUploadEnabled(), true);
+    }));
+  });
+
+  it("꺼져 있으면 assertTikTokUploadEnabled 가 던지고, 구분 가능한 코드를 갖는다", () => {
+    withTtEnv(undefined, () => {
+      assert.throws(() => assertTikTokUploadEnabled(), (err: unknown) => {
+        assert.ok(err instanceof UploadDisabledError, "전용 예외 클래스여야 한다");
+        assert.equal((err as UploadDisabledError).code, UPLOAD_DISABLED_CODE);
+        return true;
+      });
+    });
+  });
+
+  it("켜져 있으면 통과한다", () => {
+    withTtEnv("true", () => assert.doesNotThrow(() => assertTikTokUploadEnabled()));
+  });
+
+  it("호출 시점에 env 를 읽는다 — 재배포로 끌 수 있어야 한다", () => {
+    withTtEnv("true", () => assert.equal(tiktokUploadEnabled(), true));
+    withTtEnv("false", () => assert.equal(tiktokUploadEnabled(), false));
   });
 });

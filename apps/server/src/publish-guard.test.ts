@@ -39,6 +39,15 @@ describe("채널 모드 — 올리는 채널과 기록만 하는 채널 (FLOWS.m
       assert.equal(channelPublishMode(ch), "record", `${ch} 는 record`);
     }
   });
+
+  it("tiktok 은 게이트가 켜졌을 때만 실업로드(드래프트)다 — 기본은 record", () => {
+    // env 를 직접 읽지 않는다(순수 모듈) — 게이트 판정은 호출부가 opts 로 넘긴다.
+    assert.equal(channelPublishMode("tiktok"), "record");
+    assert.equal(channelPublishMode("tiktok", { tiktokUpload: false }), "record");
+    assert.equal(channelPublishMode("tiktok", { tiktokUpload: true }), "upload");
+    // 이 스위치는 tiktok 전용이다 — 다른 record 채널을 열면 안 된다.
+    assert.equal(channelPublishMode("instagram", { tiktokUpload: true }), "record");
+  });
 });
 
 describe("'기록됨'을 '게시됨'처럼 보여주지 않는다 (F4 Invariant · FLOWS.md:92)", () => {
@@ -127,6 +136,16 @@ describe("distributions upsert", () => {
     const both = upsertDistribution(dists, "youtube", { status: "published", youtubeChannelId: "UC_B" });
     assert.equal(hasAccountDistribution(both, "youtube", "UC_A"), true);
     assert.equal(hasAccountDistribution(both, "youtube", "UC_B"), true);
+  });
+
+  it("tiktok 다계정도 계정 정체성으로 갈린다 — openId 가 열쇠다", () => {
+    const one = [{ channel: "tiktok", status: "published", tiktokOpenId: "open_A" }];
+    const two = upsertDistribution(one, "tiktok", { status: "pending", tiktokOpenId: "open_B" });
+    assert.equal(two.length, 2, "다른 openId 는 별도 항목이어야 한다");
+    assert.equal((two[0] as any).status, "published", "A 계정 기록이 B 에 덮이면 안 된다");
+    assert.equal(hasAccountDistribution(two as any, "tiktok", "open_A"), true);
+    assert.equal(hasAccountDistribution([{ channel: "tiktok", status: "recorded" }], "tiktok", "open_A"),
+      true, "정체성 없는 구 기록은 보수적으로 already 다");
   });
 
   it("실패한 기록은 already 로 치지 않는다 — 사람이 재시도할 길을 막으면 안 된다", () => {

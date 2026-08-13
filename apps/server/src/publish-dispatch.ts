@@ -32,6 +32,7 @@ import {
   putEntity,
 } from "./db-pg.ts";
 import { enqueue } from "./queue.ts";
+import { tiktokUploadEnabled } from "./upload-gate.ts";
 
 export interface PublishInput {
   clipIds: string[];
@@ -50,6 +51,11 @@ export interface PublishInput {
   description?: string;
   /** 네이버 전용 — 카테고리(1차·2차 둘 다 필수). 자동 판정하지 않는다. */
   naverCategory?: { primary: string; secondary: string };
+  /**
+   * TikTok 전용 — 어느 계정 받은함에 초안을 넣을지. 네이버와 같은 이유로 **추론하지 않는다**.
+   * 게이트 ON 인데 이 값이 없으면 record 로 남긴다 — 어디로 갈지 모르는 업로드는 안 하는 게 맞다.
+   */
+  tiktokOpenId?: string;
   /** 누가 눌렀나. 감사 로그에 남는다. */
   actor: string;
   /** 어디서 왔나 — manual | retry | factory. 자동 실행 로그를 수동과 분리하기 위해. */
@@ -57,9 +63,9 @@ export interface PublishInput {
 }
 
 export interface PublishOutcome {
-  /** 실업로드 큐에 들어간 클립 (YouTube · 네이버 TV/클립). */
+  /** 실업로드 큐에 들어간 클립 (YouTube · 네이버 TV/클립 · TikTok 게이트 ON 드래프트). */
   queued: string[];
-  /** 파일이 올라가지 않고 상태만 기록된 클립 (Meta·TikTok). */
+  /** 파일이 올라가지 않고 상태만 기록된 클립 (Meta · TikTok 게이트 OFF). */
   recorded: string[];
   /** 게이트·렌더 때문에 빠진 클립. **버리지 않고 사유와 함께 돌려준다.** */
   skipped: PublishSkip[];
@@ -98,7 +104,11 @@ export async function dispatchPublish(input: PublishInput): Promise<PublishOutco
     }));
     return { queued: [], recorded: [], skipped, notice: noticeFor({ queued: [], recorded: [], skipped }, input.channel) };
   }
-  const mode = channelPublishMode(input.channel);
+  // TikTok 실업로드(받은함 드래프트)는 게이트 + 계정 지정 둘 다 있어야 한다.
+  // 게이트 OFF 거나 계정 미지정(자동 순방 등 구 호출부)이면 예전 그대로 record.
+  const mode = channelPublishMode(input.channel, {
+    tiktokUpload: tiktokUploadEnabled() && Boolean(input.tiktokOpenId),
+  });
 
   // 1) 클립을 읽는다. 없는 건 조용히 흘리지 않고 사유를 붙인다.
   const loaded: { id: string; clip: any }[] = [];
@@ -156,6 +166,9 @@ export async function dispatchPublish(input: PublishInput): Promise<PublishOutco
       // 나중에 "이 클립 어느 채널에 올라갔지?" 를 로그로만 추적해야 한다.
       ...(isNaverChannel(input.channel) && input.naverAccountId
         ? { naverAccountId: input.naverAccountId } : {}),
+      // TikTok 도 계정 정체성을 기록에 남긴다 — 없으면 다계정에서 기록이 서로 덮인다.
+      ...(input.channel === "tiktok" && mode === "upload" && input.tiktokOpenId
+        ? { tiktokOpenId: input.tiktokOpenId } : {}),
     };
     const distributions = upsertDistribution(clip.distributions, input.channel, value);
 
@@ -188,6 +201,19 @@ export async function dispatchPublish(input: PublishInput): Promise<PublishOutco
         // 같은 클립을 같은 계정·같은 타깃에 두 번 넣지 않는다. 네이버는 중복 게시를
         // 되돌리기가 번거롭다.
         dedupeKey: `naver.publish:${clipId}:${input.channel}:${input.naverAccountId ?? "-"}`,
+      });
+      queued.push(clipId);
+    } else if (mode === "upload" && input.channel === "tiktok") {
+      // TikTok 드래프트도 **같은 잡 타입**(distribution.publish)으로 간다 — channel 로 워커가
+      // 분기한다. 잡 타입을 늘리면 레인 배정(worker-lanes)이 또 필요하고, 성격(짧은 API 업로드)이
+      // YouTube 배포와 같아 youtube 레인이 맞다.
+      await enqueue("distribution.publish", {
+        clipId,
+        channel: "tiktok",
+        tiktokOpenId: input.tiktokOpenId,
+      }, {
+        // dedupe 에 채널을 박는다 — youtube 키(clipId:channelId)와 충돌하면 한쪽이 조용히 빠진다.
+        dedupeKey: `distribution.publish:${clipId}:tiktok:${input.tiktokOpenId}`,
       });
       queued.push(clipId);
     } else if (mode === "upload") {

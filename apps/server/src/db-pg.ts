@@ -1138,6 +1138,57 @@ export async function disconnectTikTokAccount(publicId: string): Promise<void> {
   );
 }
 
+/** 워커가 배포 페이로드의 openId 로 계정을 찾는 경로 — openId 는 (user, app) 에 안정적이다. */
+export async function getTikTokAccountByOpenId(openId: string): Promise<TikTokAccount | null> {
+  const { rows } = await pool.query(
+    `SELECT ${TIKTOK_COLS} FROM tiktok_accounts WHERE openId = $1`, [openId],
+  );
+  return (rows[0] as TikTokAccount) ?? null;
+}
+
+/**
+ * refresh 결과 저장 — updateYouTubeTokens(B6)와 같은 이유로 targeted 컬럼 write 만 한다.
+ * 잡 시작 시점 스냅샷으로 전체 행을 upsert 하면 동시 재연결의 새 토큰을 밟는다.
+ * TikTok 은 refresh 응답이 **새 refresh_token 을 줄 수 있다**(회전) — 안 쓰면 다음
+ * 갱신부터 죽은 토큰으로 부딪히므로 네 컬럼을 함께 쓴다.
+ */
+export async function updateTikTokTokens(
+  openId: string,
+  accessToken: string,
+  refreshToken: string,
+  expiresAt: number,
+  refreshExpiresAt: number,
+): Promise<void> {
+  await pool.query(
+    `UPDATE tiktok_accounts
+        SET accessToken = $2, refreshToken = $3, expiresAt = $4, refreshExpiresAt = $5
+      WHERE openId = $1`,
+    [openId, accessToken, refreshToken, expiresAt, refreshExpiresAt],
+  );
+}
+
+/**
+ * 죽은 refresh 토큰 계정 파킹 — markYouTubeChannelRevoked 와 같은 status-only write.
+ * 죽은 토큰을 알면 함께 넘겨라: 재연결이 이미 토큰을 갈아끼웠으면 no-op 이 되어,
+ * 느린 요청이 방금 재연결된 계정을 다시 파킹하는 일이 없다.
+ */
+export async function markTikTokAccountDisconnected(
+  openId: string,
+  deadRefreshToken?: string,
+): Promise<void> {
+  if (deadRefreshToken) {
+    await pool.query(
+      "UPDATE tiktok_accounts SET status = 'disconnected' WHERE openId = $1 AND refreshToken = $2",
+      [openId, deadRefreshToken],
+    );
+  } else {
+    await pool.query(
+      "UPDATE tiktok_accounts SET status = 'disconnected' WHERE openId = $1",
+      [openId],
+    );
+  }
+}
+
 // ── Instagram accounts (Instagram 비즈니스 로그인 — Facebook Page 경유 아님) ────
 
 export interface InstagramAccount {

@@ -50,3 +50,21 @@ export class UploadDisabledError extends Error {
 export function assertUploadEnabled(): void {
   if (!youtubeUploadEnabled()) throw new UploadDisabledError();
 }
+
+// ── TikTok — 같은 3중 방어, 별도 스위치 ────────────────────────────────────────
+// 축이 다르다: YouTube 게이트를 켰다고 TikTok 까지 나가면 안 된다. 스위치는 플랫폼마다
+// 하나씩이고, 실패 방향은 동일하다 — 오타·빈값·미설정 = OFF.
+
+/** True only when TIKTOK_UPLOAD_ENABLED is explicitly one of TRUTHY. Default: false. */
+export function tiktokUploadEnabled(): boolean {
+  return TRUTHY.has(String(process.env.TIKTOK_UPLOAD_ENABLED ?? "").trim().toLowerCase());
+}
+
+export const TIKTOK_UPLOAD_DISABLED_MESSAGE =
+  "TikTok 실업로드가 비활성화되어 있습니다 (TIKTOK_UPLOAD_ENABLED 미설정). 업로드는 수행되지 않았습니다.";
+
+/** Throw unless TikTok uploads are explicitly enabled. Call immediately before the upload API. */
+export function assertTikTokUploadEnabled(): void {
+  // 같은 예외 클래스를 쓴다 — 호출부가 "막았다/실패했다"를 code 하나로 구분하는 구조를 유지.
+  if (!tiktokUploadEnabled()) throw new UploadDisabledError(TIKTOK_UPLOAD_DISABLED_MESSAGE);
+}
