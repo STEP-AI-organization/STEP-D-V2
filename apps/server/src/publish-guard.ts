@@ -53,20 +53,22 @@ export function isNaverChannel(channel: string): channel is NaverChannelId {
  *
  * YouTube 와 **네이버 TV·클립**이 실업로드다. 네이버는 공개 API 가 없어 브라우저 자동화로
  * 올리지만, 파일이 실제로 올라간다는 점에서 YouTube 와 같은 축이다(2026-08-11 실발행 확인).
- * TikTok 은 게이트에 달렸다: TIKTOK_UPLOAD_ENABLED ON 이면 받은함 **드래프트** 실업로드,
- * OFF 면 기록만. env 는 여기서 읽지 않는다(모듈 순수성 — 상단 주석) — 게이트 판정은
- * 호출부(publish-dispatch)가 upload-gate 에서 읽어 opts 로 넘긴다.
- * 나머지(Meta)는 "실제 게시는 담당자가 해당 앱에서 직접" 하고 우리는 기록만 남긴다.
+ * TikTok·Instagram·Facebook 은 게이트에 달렸다: 각 *_UPLOAD_ENABLED ON + 계정 지정이면
+ * 실업로드(IG 릴·FB 릴·TikTok 드래프트), OFF 면 기록만. env 는 여기서 읽지 않는다(모듈
+ * 순수성 — 상단 주석) — 게이트 판정은 호출부(publish-dispatch)가 upload-gate 에서 읽어 opts 로 넘긴다.
+ * 게이트 OFF 인 Meta 는 "실제 게시는 담당자가 해당 앱에서 직접" 하고 우리는 기록만 남긴다.
  *
  * **이 구분이 사라지면 F4 Invariant(FLOWS.md:92)가 깨진다** —
  * 올라가지도 않은 것을 '게시됨'으로 보여주게 된다.
  */
 export function channelPublishMode(
   channel: PublishChannel,
-  opts?: { tiktokUpload?: boolean },
+  opts?: { tiktokUpload?: boolean; instagramUpload?: boolean; facebookUpload?: boolean },
 ): "upload" | "record" {
   if (channel === "youtube" || isNaverChannel(channel)) return "upload";
   if (channel === "tiktok" && opts?.tiktokUpload) return "upload";
+  if (channel === "instagram" && opts?.instagramUpload) return "upload";
+  if (channel === "facebook" && opts?.facebookUpload) return "upload";
   return "record";
 }
 

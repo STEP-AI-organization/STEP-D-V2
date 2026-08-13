@@ -65,16 +65,21 @@ import {
   TokenRevokedError,
   type PersistTokens,
 } from "./youtube.ts";
-import { createReadStream, parseObjectPath, fileExists } from "./storage-gcs.ts";
+import { createReadStream, parseObjectPath, fileExists, signedReadUrl } from "./storage-gcs.ts";
 import { pipeline } from "node:stream/promises";
 import {
   youtubeUploadEnabled, UPLOAD_DISABLED_MESSAGE,
   tiktokUploadEnabled, TIKTOK_UPLOAD_DISABLED_MESSAGE,
+  instagramUploadEnabled, INSTAGRAM_UPLOAD_DISABLED_MESSAGE,
+  facebookUploadEnabled, FACEBOOK_UPLOAD_DISABLED_MESSAGE,
 } from "./upload-gate.ts";
 import { withTikTokToken, uploadDraftToTikTok, TikTokTokenRevokedError } from "./tiktok.ts";
 import {
   getTikTokAccountByOpenId, updateTikTokTokens, markTikTokAccountDisconnected,
 } from "./db-pg.ts";
+import { publishInstagramReel } from "./instagram.ts";
+import { publishFacebookReel } from "./facebook.ts";
+import { listInstagramAccounts, getMetaAccountByPageId } from "./db-pg.ts";
 import { naverUploadEnabled, NAVER_DISABLED_MESSAGE } from "./naver-gate.ts";
 import { hasNaverSession, materializeNaverSession } from "./naver-session.ts";
 import { getNaverAccount, markNaverAccount, getNaverSessionBlob } from "./db-pg.ts";
@@ -1512,11 +1517,14 @@ async function handleDistributionPublish(job: Job): Promise<void> {
   const channel = String(job.payload.channel ?? "youtube");
   try {
     if (channel === "tiktok") await runTikTokDraftPublish(job);
+    else if (channel === "instagram") await runInstagramPublish(job);
+    else if (channel === "facebook") await runFacebookPublish(job);
     else await runDistributionPublish(job);
   } catch (err) {
     const clipId = String(job.payload.clipId ?? "");
-    const accountId = channel === "tiktok"
-      ? String(job.payload.tiktokOpenId ?? "")
+    const accountId = channel === "tiktok" ? String(job.payload.tiktokOpenId ?? "")
+      : channel === "instagram" ? String(job.payload.igUserId ?? "")
+      : channel === "facebook" ? String(job.payload.metaPageId ?? "")
       : String(job.payload.channelId ?? "");
     const msg = err instanceof Error ? err.message : String(err);
     console.error(`[worker] distribution.publish ${clipId} (${channel}) 실패(재시도 안 함):`, err);
@@ -1611,6 +1619,145 @@ async function runTikTokDraftPublish(job: Job): Promise<void> {
     console.error(`[worker] distribution.publish(tiktok) ${clipId} failed:`, message);
   } finally {
     // Cloud Run /tmp = tmpfs(RAM). 성공·실패 무관하게 지운다 — 안 지우면 OOM.
+    await fs.promises.unlink(tmpPath).catch(() => {});
+  }
+}
+
+/**
+ * Instagram Reels 게시 (우리쪽 발사 · IG 비즈니스 로그인 토큰 · graph.instagram.com).
+ * TikTok/YouTube 와 같은 뼈대: 게이트 재확인 → 킬스위치 → 계정 → 클립/미디어 → 게시.
+ * 다른 점: IG 는 바이트가 아니라 **퍼블릭 video_url** 을 받으므로 GCS signed URL 을 넘긴다.
+ * 예약은 잡을 그 시각까지 지연(publish-dispatch delayMs)시켜 맞춘다 — 여기서는 즉시 게시한다.
+ * 멱등: distributions.instagram.igMediaId 가 있으면 이미 게시 → 스킵(수동 재시도 중복 방지).
+ */
+async function runInstagramPublish(job: Job): Promise<void> {
+  const clipId = String(job.payload.clipId ?? "");
+  const igUserId = String(job.payload.igUserId ?? "");
+  if (!clipId || !igUserId) { console.error("[worker] distribution.publish(instagram): clipId/igUserId 누락 — 버림"); return; }
+
+  const gate = await clipGate(clipId);
+  if (!gate.allowed) {
+    await markDistributionFailed(clipId, "instagram", gate.reason, igUserId).catch(() => {});
+    await appendGateAudit({ subjectType: "clip", subjectId: clipId, action: "publish.blocked", fromState: gate.state, toState: "blocked", actor: "worker", basis: `업로드 직전 재확인 · ${gate.reason}` }).catch(() => {});
+    return;
+  }
+  if (!instagramUploadEnabled()) {
+    await markDistributionFailed(clipId, "instagram", INSTAGRAM_UPLOAD_DISABLED_MESSAGE, igUserId).catch(() => {});
+    return;
+  }
+
+  const clip = await getEntity<any>("clip", clipId);
+  if (!clip) { console.warn(`[worker] distribution.publish(instagram): clip ${clipId} gone — dropping`); return; }
+  // 멱등 — 이미 게시됐으면 다시 만들지 않는다(IG 는 되돌리기 번거롭다).
+  const existing = (clip.distributions ?? []).find((d: any) => d.channel === "instagram");
+  if (existing?.igMediaId) { console.log(`[worker] distribution.publish(instagram) ${clipId}: 이미 게시(${existing.igMediaId}) — 스킵`); return; }
+
+  const acct = (await listInstagramAccounts()).find((a) => a.igUserId === igUserId);
+  if (!acct || acct.status === "disconnected" || !acct.accessToken) {
+    await markDistributionFailed(clipId, "instagram", "Instagram 계정이 연결되지 않았거나 재연결이 필요합니다", igUserId);
+    return;
+  }
+  const mediaId = clip.mediaId;
+  if (!mediaId) { await markDistributionFailed(clipId, "instagram", "클립이 아직 렌더되지 않았습니다 (익스포트 필요)", igUserId); return; }
+  const media = await getMedia(mediaId);
+  if (!media) { await markDistributionFailed(clipId, "instagram", "렌더된 영상 파일을 찾을 수 없습니다", igUserId); return; }
+  const objPath = parseObjectPath(media.path);
+  if (!(await fileExists(objPath))) { await markDistributionFailed(clipId, "instagram", "스토리지에 영상 파일이 없습니다", igUserId); return; }
+
+  let videoUrl: string;
+  try {
+    videoUrl = await signedReadUrl(objPath, 60 * 60 * 1000); // Meta 가 직접 fetch — 1h signed URL
+  } catch {
+    await markDistributionFailed(clipId, "instagram", "Instagram 게시는 GCS 모드가 필요합니다 (video_url 을 Meta 가 직접 받음)", igUserId);
+    return;
+  }
+
+  const meta = metaForChannel(clip, "instagram");
+  const { mediaId: igMediaId, permalink } = await publishInstagramReel({
+    igUserId, accessToken: acct.accessToken, videoUrl,
+    caption: [meta.title, meta.description].filter(Boolean).join("\n\n") || undefined,
+  });
+
+  // 게시 성공 즉시 igMediaId 기록 — permalink 는 이미 위에서 받았으므로 한 번의 write 로 충분.
+  const fresh = (await getEntity<any>("clip", clipId)) ?? clip;
+  await putEntity("clip", clipId, {
+    ...fresh,
+    distributions: upsertDistribution(fresh.distributions, "instagram", {
+      status: "published", externalId: igMediaId, igMediaId, igUserId,
+      publishedAt: Date.now(), error: undefined,
+      ...(permalink ? { permalink } : {}),
+    }),
+  });
+  console.log(`[worker] distribution.publish(instagram) ${clipId} → IG reel ${igMediaId} (@${acct.username ?? igUserId})`);
+}
+
+/**
+ * Facebook Reels 게시 (네이티브 예약 · Meta 페이지 토큰 · graph.facebook.com).
+ * FB 는 예약을 API 가 잡으므로 잡은 즉시 돈다 — scheduleDate 를 scheduled_publish_time 으로 넘긴다.
+ * 바이트 3-phase 업로드라 /tmp 로 내려받아 올린다(끝나면 삭제 · tmpfs OOM 방지).
+ * 멱등: distributions.facebook.fbVideoId + published/scheduled 면 스킵(부분실패 후 재시도 중복 완화).
+ */
+async function runFacebookPublish(job: Job): Promise<void> {
+  const clipId = String(job.payload.clipId ?? "");
+  const pageId = String(job.payload.metaPageId ?? "");
+  if (!clipId || !pageId) { console.error("[worker] distribution.publish(facebook): clipId/metaPageId 누락 — 버림"); return; }
+
+  const gate = await clipGate(clipId);
+  if (!gate.allowed) {
+    await markDistributionFailed(clipId, "facebook", gate.reason, pageId).catch(() => {});
+    await appendGateAudit({ subjectType: "clip", subjectId: clipId, action: "publish.blocked", fromState: gate.state, toState: "blocked", actor: "worker", basis: `업로드 직전 재확인 · ${gate.reason}` }).catch(() => {});
+    return;
+  }
+  if (!facebookUploadEnabled()) {
+    await markDistributionFailed(clipId, "facebook", FACEBOOK_UPLOAD_DISABLED_MESSAGE, pageId).catch(() => {});
+    return;
+  }
+
+  const clip = await getEntity<any>("clip", clipId);
+  if (!clip) { console.warn(`[worker] distribution.publish(facebook): clip ${clipId} gone — dropping`); return; }
+  const existing = (clip.distributions ?? []).find((d: any) => d.channel === "facebook");
+  if (existing?.fbVideoId && (existing.status === "published" || existing.status === "scheduled")) {
+    console.log(`[worker] distribution.publish(facebook) ${clipId}: 이미 게시(${existing.fbVideoId}) — 스킵`); return;
+  }
+
+  const acct = await getMetaAccountByPageId(pageId);
+  if (!acct || !acct.pageAccessToken) {
+    await markDistributionFailed(clipId, "facebook", "Facebook 페이지가 연결되지 않았거나 재연결이 필요합니다", pageId);
+    return;
+  }
+  const mediaId = clip.mediaId;
+  if (!mediaId) { await markDistributionFailed(clipId, "facebook", "클립이 아직 렌더되지 않았습니다 (익스포트 필요)", pageId); return; }
+  const media = await getMedia(mediaId);
+  if (!media) { await markDistributionFailed(clipId, "facebook", "렌더된 영상 파일을 찾을 수 없습니다", pageId); return; }
+  const objPath = parseObjectPath(media.path);
+  if (!(await fileExists(objPath))) { await markDistributionFailed(clipId, "facebook", "스토리지에 영상 파일이 없습니다", pageId); return; }
+
+  // 예약 시각(epoch 초) — scheduleDate 가 미래일 때만 SCHEDULED, 아니면 즉시 공개.
+  const rawDate = typeof job.payload.scheduleDate === "string" ? Date.parse(job.payload.scheduleDate) : NaN;
+  const scheduledPublishSec = Number.isFinite(rawDate) && rawDate > Date.now() ? Math.floor(rawDate / 1000) : undefined;
+
+  const tmpPath = path.join(os.tmpdir(), `stepd-fb-${clipId}-${Date.now()}.mp4`);
+  try {
+    await pipeline(createReadStream(objPath), fs.createWriteStream(tmpPath));
+    const video = await fs.promises.readFile(tmpPath);
+    const meta = metaForChannel(clip, "facebook");
+    const { videoId, scheduled, permalink } = await publishFacebookReel({
+      pageId, pageToken: acct.pageAccessToken, video,
+      title: meta.title, description: meta.description, scheduledPublishSec,
+    });
+    const fresh = (await getEntity<any>("clip", clipId)) ?? clip;
+    await putEntity("clip", clipId, {
+      ...fresh,
+      distributions: upsertDistribution(fresh.distributions, "facebook", {
+        status: scheduled ? "scheduled" : "published", externalId: videoId, fbVideoId: videoId, metaPageId: pageId,
+        publishedAt: Date.now(), error: undefined,
+        ...(scheduled && job.payload.scheduleDate ? { reserveDate: String(job.payload.scheduleDate) } : {}),
+        ...(permalink ? { permalink } : {}),
+      }),
+    });
+    console.log(`[worker] distribution.publish(facebook) ${clipId} → FB reel ${videoId} (${scheduled ? "scheduled" : "published"} · ${acct.pageName ?? pageId})`);
+  } finally {
+    // Cloud Run /tmp = tmpfs(RAM). 성공·실패 무관하게 지운다.
     await fs.promises.unlink(tmpPath).catch(() => {});
   }
 }

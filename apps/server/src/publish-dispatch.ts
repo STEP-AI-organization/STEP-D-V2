@@ -32,7 +32,7 @@ import {
   putEntity,
 } from "./db-pg.ts";
 import { enqueue } from "./queue.ts";
-import { tiktokUploadEnabled } from "./upload-gate.ts";
+import { tiktokUploadEnabled, instagramUploadEnabled, facebookUploadEnabled } from "./upload-gate.ts";
 
 export interface PublishInput {
   clipIds: string[];
@@ -56,6 +56,13 @@ export interface PublishInput {
    * 게이트 ON 인데 이 값이 없으면 record 로 남긴다 — 어디로 갈지 모르는 업로드는 안 하는 게 맞다.
    */
   tiktokOpenId?: string;
+  /**
+   * Instagram 전용 — 어느 IG 비즈니스 계정(igUserId)으로 올릴지. 다른 채널과 같은 이유로
+   * **추론하지 않는다**. 게이트 ON 인데 없으면 record.
+   */
+  igUserId?: string;
+  /** Facebook 전용 — 어느 Meta 페이지(pageId)로 올릴지. 추론하지 않는다. */
+  metaPageId?: string;
   /** 누가 눌렀나. 감사 로그에 남는다. */
   actor: string;
   /** 어디서 왔나 — manual | retry | factory. 자동 실행 로그를 수동과 분리하기 위해. */
@@ -108,6 +115,8 @@ export async function dispatchPublish(input: PublishInput): Promise<PublishOutco
   // 게이트 OFF 거나 계정 미지정(자동 순방 등 구 호출부)이면 예전 그대로 record.
   const mode = channelPublishMode(input.channel, {
     tiktokUpload: tiktokUploadEnabled() && Boolean(input.tiktokOpenId),
+    instagramUpload: instagramUploadEnabled() && Boolean(input.igUserId),
+    facebookUpload: facebookUploadEnabled() && Boolean(input.metaPageId),
   });
 
   // 1) 클립을 읽는다. 없는 건 조용히 흘리지 않고 사유를 붙인다.
@@ -169,6 +178,10 @@ export async function dispatchPublish(input: PublishInput): Promise<PublishOutco
       // TikTok 도 계정 정체성을 기록에 남긴다 — 없으면 다계정에서 기록이 서로 덮인다.
       ...(input.channel === "tiktok" && mode === "upload" && input.tiktokOpenId
         ? { tiktokOpenId: input.tiktokOpenId } : {}),
+      ...(input.channel === "instagram" && mode === "upload" && input.igUserId
+        ? { igUserId: input.igUserId } : {}),
+      ...(input.channel === "facebook" && mode === "upload" && input.metaPageId
+        ? { metaPageId: input.metaPageId } : {}),
     };
     const distributions = upsertDistribution(clip.distributions, input.channel, value);
 
@@ -214,6 +227,32 @@ export async function dispatchPublish(input: PublishInput): Promise<PublishOutco
       }, {
         // dedupe 에 채널을 박는다 — youtube 키(clipId:channelId)와 충돌하면 한쪽이 조용히 빠진다.
         dedupeKey: `distribution.publish:${clipId}:tiktok:${input.tiktokOpenId}`,
+        // TikTok Content Posting API 는 예약 파라미터가 없다 → 예약이면 잡을 그 시각까지 지연 발사.
+        ...scheduleDelay(input.scheduled, input.reserveDate),
+      });
+      queued.push(clipId);
+    } else if (mode === "upload" && input.channel === "instagram") {
+      // IG 도 예약 API 가 없다(우리쪽 발사) → 잡을 예약 시각까지 지연시키고 워커가 그때
+      // 컨테이너→media_publish 로 발사한다. 잡 타입은 distribution.publish 공유(youtube 레인).
+      await enqueue("distribution.publish", {
+        clipId,
+        channel: "instagram",
+        igUserId: input.igUserId,
+      }, {
+        dedupeKey: `distribution.publish:${clipId}:instagram:${input.igUserId ?? "-"}`,
+        ...scheduleDelay(input.scheduled, input.reserveDate),
+      });
+      queued.push(clipId);
+    } else if (mode === "upload" && input.channel === "facebook") {
+      // FB 는 **네이티브 예약**(scheduled_publish_time) → 잡은 즉시 돌고, 워커가 그 시각을
+      // finish 단계에 실어 SCHEDULED 로 등록한다. reserveDate 를 페이로드로 넘긴다.
+      await enqueue("distribution.publish", {
+        clipId,
+        channel: "facebook",
+        metaPageId: input.metaPageId,
+        scheduleDate: input.scheduled ? input.reserveDate : undefined,
+      }, {
+        dedupeKey: `distribution.publish:${clipId}:facebook:${input.metaPageId ?? "-"}`,
       });
       queued.push(clipId);
     } else if (mode === "upload") {
@@ -244,6 +283,18 @@ function naverPublishAt(scheduled: boolean | undefined, reserveDate: string | un
   if (!scheduled || !reserveDate) return undefined;
   const t = Date.parse(reserveDate);
   return Number.isFinite(t) && t > Date.now() ? t : undefined;
+}
+
+/**
+ * 네이티브 예약이 없는 채널(Instagram·TikTok)의 예약 = **잡을 그 시각까지 지연**시켜
+ * 워커가 발사한다(우리쪽 발사). 큐의 delayMs(= runAfter) 를 쓴다. 과거·해석불가는 지연 없음
+ * (= 즉시 발사) — 예약은 못 걸리는 것보다 틀리는 게 나쁘다(YouTube/네이버와 같은 방향).
+ */
+function scheduleDelay(scheduled: boolean | undefined, reserveDate: string | undefined): { delayMs?: number } {
+  if (!scheduled || !reserveDate) return {};
+  const t = Date.parse(reserveDate);
+  const ms = Number.isFinite(t) ? t - Date.now() : 0;
+  return ms > 0 ? { delayMs: ms } : {};
 }
 
 /**

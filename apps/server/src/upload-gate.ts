@@ -68,3 +68,23 @@ export function assertTikTokUploadEnabled(): void {
   // 같은 예외 클래스를 쓴다 — 호출부가 "막았다/실패했다"를 code 하나로 구분하는 구조를 유지.
   if (!tiktokUploadEnabled()) throw new UploadDisabledError(TIKTOK_UPLOAD_DISABLED_MESSAGE);
 }
+
+// ── Instagram · Facebook (Meta) — 같은 3중 방어, 플랫폼마다 별도 스위치 ─────────────
+// 축이 다르다: YouTube/TikTok 을 켰다고 Meta 로 나가면 안 된다. IG(비즈니스 로그인)와
+// FB(페이지)는 저장소·토큰이 달라 스위치도 따로 둔다. 실패 방향은 동일 — 오타·빈값·미설정 = OFF.
+
+/** True only when INSTAGRAM_UPLOAD_ENABLED is explicitly one of TRUTHY. Default: false. */
+export function instagramUploadEnabled(): boolean {
+  return TRUTHY.has(String(process.env.INSTAGRAM_UPLOAD_ENABLED ?? "").trim().toLowerCase());
+}
+
+export const INSTAGRAM_UPLOAD_DISABLED_MESSAGE =
+  "Instagram 실업로드가 비활성화되어 있습니다 (INSTAGRAM_UPLOAD_ENABLED 미설정). 업로드는 수행되지 않았습니다.";
+
+/** True only when FACEBOOK_UPLOAD_ENABLED is explicitly one of TRUTHY. Default: false. */
+export function facebookUploadEnabled(): boolean {
+  return TRUTHY.has(String(process.env.FACEBOOK_UPLOAD_ENABLED ?? "").trim().toLowerCase());
+}
+
+export const FACEBOOK_UPLOAD_DISABLED_MESSAGE =
+  "Facebook 실업로드가 비활성화되어 있습니다 (FACEBOOK_UPLOAD_ENABLED 미설정). 업로드는 수행되지 않았습니다.";
