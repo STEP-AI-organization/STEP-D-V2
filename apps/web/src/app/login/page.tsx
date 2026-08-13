@@ -57,13 +57,14 @@ function LoginInner() {
     >
       <form onSubmit={submit} className="sd-card w-full max-w-[360px] p-6">
         <div className="mb-4 flex items-center gap-2">
-          <span
-            className="grid size-[22px] place-items-center rounded-[4px] text-[12px] font-bold text-white"
-            style={{ background: "var(--sd-accent)" }}
+          {/* eslint-disable-next-line @next/next/no-img-element -- 22px 정적 브랜드 아이콘, next/image 최적화 불필요 */}
+          <img
+            src="/brand/stepd-icon-192.png"
+            alt=""
             aria-hidden
-          >
-            D
-          </span>
+            className="size-[22px] rounded-[4px]"
+            draggable={false}
+          />
           <span className="sd-serif text-[16px] font-semibold" style={{ color: "var(--sd-fg)" }}>
             STEP-D
           </span>
