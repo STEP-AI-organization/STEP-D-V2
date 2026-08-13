@@ -768,9 +768,14 @@ export default function PublishChannelsPage() {
                       </div>
                     )}
                     <div>
-                      <div className="text-sm font-medium text-foreground">{a.displayName}</div>
+                      {/* 제목은 채널 핸들 우선 — display_name 은 실명(프로필 이름)이라 어느
+                          채널인지 구분이 안 된다. 핸들이 없으면(구 연결·profile scope 이전)
+                          실명으로 폴백하고, 재연동하면 핸들이 채워진다. */}
+                      <div className="text-sm font-medium text-foreground">
+                        {a.username ? `@${a.username}` : a.displayName}
+                      </div>
                       <div className="text-xs text-muted-foreground" title={a.openId}>
-                        {a.username ? `@${a.username} · ` : ""}
+                        {a.username ? `${a.displayName} · ` : ""}
                         open_id {a.openId.slice(0, 8)}…
                         {a.connectedAt &&
                           ` · ${new Date(Number(a.connectedAt)).toLocaleDateString("ko-KR")} 연결`}
@@ -785,7 +790,7 @@ export default function PublishChannelsPage() {
                     <RuleControls
                       platform="tiktok"
                       accountId={a.openId}
-                      accountLabel={a.displayName || a.username || a.openId}
+                      accountLabel={a.username ? `@${a.username}` : (a.displayName || a.openId)}
                       ruled={ruledKeys.has(`tiktok:${a.openId}`)}
                       unknown={rulesErr !== null}
                       onOpen={setRuleFor}

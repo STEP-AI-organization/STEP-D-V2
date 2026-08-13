@@ -5348,7 +5348,8 @@ app.post("/api/channel-rules/eligibility", async (c) => {
   // 연동해제(disconnected) 계정이 배포 후보로 계속 노출됐다. active 만 허용한다.
   for (const a of metaAccounts) if (a.status === "active") addDefault("facebook", a.pageId, a.pageName);
   for (const a of igAccounts) if (a.status === "active") addDefault("instagram", a.igUserId, a.username);
-  for (const a of ttAccounts) if (a.status === "active") addDefault("tiktok", a.openId, a.displayName || a.username || a.openId);
+  // 라벨은 채널 핸들(@username) 우선 — display_name 은 실명이라 채널 구분이 안 된다.
+  for (const a of ttAccounts) if (a.status === "active") addDefault("tiktok", a.openId, a.username ? `@${a.username}` : (a.displayName || a.openId));
   const medias: { id: string; durationSec: number; aspectRatio?: string | null; rendered?: boolean }[] = [];
   for (const id of clipIds) {
     const clip = await getEntity<any>("clip", id);
@@ -7377,8 +7378,11 @@ const TIKTOK_TOKEN_URL = "https://open.tiktokapis.com/v2/oauth/token/";
 const TIKTOK_USER_INFO_URL = "https://open.tiktokapis.com/v2/user/info/";
 const TIKTOK_CALLBACK_PATH = "/api/tiktok/oauth/callback";
 // 승인된 scope 만 요청한다 — 미승인 scope 를 섞으면 인증 화면에서 통째로 거부된다.
+// user.info.profile = 채널 핸들(@username)용. **콘솔(Login Kit → Scopes)에 추가돼 있어야 한다**
+// — 없으면 동의 화면이 통째로 거부되니, 거부되면 콘솔 scope 부터 확인할 것 (2026-08-13:
+// 실명(display_name)만 떠서 채널을 구분 못 한다는 피드백으로 추가).
 // video.upload / video.publish 는 Content Posting API 구현 + 심사 통과 후 여기에 추가할 것.
-const TIKTOK_SCOPES = ["user.info.basic"].join(",");
+const TIKTOK_SCOPES = ["user.info.basic", "user.info.profile"].join(",");
 
 function tiktokRedirectUri(): string {
   const explicit = process.env.TIKTOK_REDIRECT_URI;
@@ -7445,11 +7449,16 @@ const tiktokOauthCallback = async (c: Context) => {
     };
     if (tokenData.error) throw new Error(`${tokenData.error}: ${tokenData.error_description ?? ""}`);
 
-    // 2. /v2/user/info/ — user.info.basic 로 읽을 수 있는 필드만 요청한다.
-    // username 은 user.info.profile scope 가 있어야 하고, 섞어 보내면 응답 전체가
-    // scope_not_authorized 로 실패한다 (일부만 빠지는 게 아니다).
+    // 2. /v2/user/info/ — **부여된** scope 로 읽을 수 있는 필드만 요청한다.
+    // username 은 user.info.profile 이 부여됐을 때만 — 없이 섞어 보내면 응답 전체가
+    // scope_not_authorized 로 실패한다 (일부만 빠지는 게 아니다). 토큰 응답의 scope 가
+    // 실제 부여분이므로 그걸 보고 가른다.
+    const hasProfileScope = (tokenData.scope ?? "").includes("user.info.profile");
+    const fields = hasProfileScope
+      ? "open_id,union_id,avatar_url,display_name,username"
+      : "open_id,union_id,avatar_url,display_name";
     const userRes = await fetch(
-      `${TIKTOK_USER_INFO_URL}?fields=open_id,union_id,avatar_url,display_name`,
+      `${TIKTOK_USER_INFO_URL}?fields=${fields}`,
       { headers: { Authorization: `Bearer ${tokenData.access_token}` } },
     );
     if (!userRes.ok) throw new Error(`/user/info failed: ${await userRes.text()}`);
@@ -7485,7 +7494,8 @@ const tiktokOauthCallback = async (c: Context) => {
     };
     await upsertTikTokAccount(account);
 
-    return c.redirect(`${returnTo}?tiktok_success=1&tiktok_name=${encodeURIComponent(account.displayName)}`);
+    return c.redirect(`${returnTo}?tiktok_success=1&tiktok_name=${
+      encodeURIComponent(account.username ? `@${account.username}` : account.displayName)}`);
   } catch (err: any) {
     console.error("[tiktok/oauth]", err);
     return c.redirect(`${returnTo}?tiktok_error=${encodeURIComponent(err.message ?? "unknown")}`);
