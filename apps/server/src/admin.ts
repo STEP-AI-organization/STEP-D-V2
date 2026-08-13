@@ -48,6 +48,19 @@ export function requireOpsAccess(c: Context<{ Variables: { user?: User } }>): Us
   return requireSuperadmin(c);
 }
 
+/**
+ * ops 라우트 중 **머신(Cloud Scheduler·워커)도 호출**하는 것용 관문 (큐 통계·VM wake).
+ * 내부 토큰으로 들어온 호출(`via === "internal"`)은 통과시키고, 그 외에는 `requireOpsAccess` 와 같다.
+ * 스케줄러가 주기적으로 때리는 라우트가 AUTH_REQUIRED 를 켜는 순간 "세션 없음"으로 401 나서
+ * VM 이 안 깨어나는 사고(머신엔 로그인 세션이 없다)를 막는다. via 는 호출부가 넘긴다.
+ */
+export function requireOpsOrInternal(
+  c: Context<{ Variables: { user?: User } }>, via: string | undefined,
+): User | null {
+  if (via === "internal") return null;
+  return requireOpsAccess(c);
+}
+
 export interface AuditEntry {
   action: string;
   targetTenant?: string | null;

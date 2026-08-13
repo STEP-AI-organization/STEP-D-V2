@@ -43,7 +43,7 @@ import {
   workspaceBlockReason,
   type User,
 } from "./auth.ts";
-import { audit, clientIp, requireReason, requireSuperadmin, requireOpsAccess } from "./admin.ts";
+import { audit, clientIp, requireReason, requireSuperadmin, requireOpsAccess, requireOpsOrInternal } from "./admin.ts";
 import { grantDedupeKey, nextTenantId, planOnboarding } from "./onboarding.ts";
 import {
   billingConfig, cardBlockReason, cardLabel, cardTopupPaymentId, checkCustomer,
@@ -2290,12 +2290,15 @@ app.post("/api/admin/reset", async (c) => {
   if (body.confirm !== "RESET") return c.json({ error: "body.confirm must be 'RESET'" }, 400);
 
   // Remove stored files first (best-effort) so GCS/local don't accrue orphans.
+  // 삭제 실패를 세어 응답에 담는다 — 예전엔 전부 삼키고 ok:true 를 줘서, GCS 객체가 통째로
+  // 남아도 "깨끗이 지웠다"로 보고했다. DB reset 은 성공해도 스토리지 고아는 사실대로 알린다.
   const media = await listMedia();
+  let storageFailures = 0;
   for (const m of media) {
-    try { await deleteFile(parseObjectPath(m.path)); } catch {}
-    if (m.thumbPath) { try { await deleteFile(parseObjectPath(m.thumbPath)); } catch {} }
+    try { await deleteFile(parseObjectPath(m.path)); } catch { storageFailures++; }
+    if (m.thumbPath) { try { await deleteFile(parseObjectPath(m.thumbPath)); } catch { storageFailures++; } }
     // Analysis artifacts (scene frames + stage outputs) live under analysis/{mediaId}/.
-    try { await deletePrefix(`analysis/${m.id}`); } catch {}
+    try { await deletePrefix(`analysis/${m.id}`); } catch { storageFailures++; }
   }
 
   const pool = getPool();
@@ -2309,7 +2312,7 @@ app.post("/api/admin/reset", async (c) => {
   try { await pool.query("DELETE FROM episode_cast"); } catch {}
   try { await pool.query("DELETE FROM program_cast"); } catch {}
 
-  return c.json({ ok: true, deletedMedia: media.length });
+  return c.json({ ok: true, deletedMedia: media.length, storageFailures, orphansMayRemain: storageFailures > 0 });
 });
 
 // ── admin: drain the YouTube-analytics job flood + re-kick content.analyze ──
@@ -4497,6 +4500,14 @@ function readActor(v: unknown): string {
   return typeof v === "string" ? v.trim() : "";
 }
 
+/**
+ * 감사·요청자 표기용 행위자. **세션이 있으면 그 이메일이 정본** — 클라이언트가 보낸 actor 는
+ * 위조 가능하므로 세션을 우선한다. 세션이 없는 자세에서만 클라이언트 값으로 폴백한다(없으면 "").
+ */
+function sessionActor(c: Context<AppEnv>, fallback: unknown): string {
+  return c.get("user")?.email || readActor(fallback);
+}
+
 /** DB 행 → gate.ts 가 보는 모양. */
 function toIssue(r: { id: string; kind: string; resolution: string; bandStart: number | null; bandEnd: number | null; note: string }): Issue {
   return {
@@ -5023,7 +5034,7 @@ app.post("/api/credits/topup", async (c) => {
   }
 
   const paymentId = topupPaymentId(currentTenantId(), crypto.randomUUID().replace(/-/g, "").slice(0, 12));
-  const actor = readActor(body.actor) || "unknown";
+  const actor = sessionActor(c, body.actor) || "unknown";
   await createTopup({
     paymentId, credits: check.credits, amountKrw: check.amountKrw,
     status: "pending", requestedBy: actor,
@@ -5317,7 +5328,7 @@ app.post("/api/rights-issues", async (c) => {
   const body = await c.req.json().catch(() => ({}) as Record<string, unknown>);
   const subjectType = readSubjectType(body.subjectType);
   const subjectId = typeof body.subjectId === "string" ? body.subjectId.trim() : "";
-  const actor = readActor(body.actor);
+  const actor = sessionActor(c, body.actor);
   if (!subjectType || !subjectId) return c.json({ error: "subjectType and subjectId required" }, 400);
   // 등록자가 없는 이슈는 만들지 않는다 — 자동 판정과 구분이 안 된다.
   if (!actor) return c.json({ error: "actor required — 이슈는 사람이 등록합니다" }, 400);
@@ -5361,7 +5372,7 @@ app.patch("/api/rights-issues/:id", async (c) => {
   if (!existing) return c.json({ error: "issue not found" }, 404);
 
   const body = await c.req.json().catch(() => ({}) as Record<string, unknown>);
-  const actor = readActor(body.actor);
+  const actor = sessionActor(c, body.actor);
   if (!actor) return c.json({ error: "actor required — 해제도 사람이 합니다" }, 400);
   if (!isResolution(body.resolution)) return c.json({ error: "invalid resolution" }, 400);
 
@@ -5393,7 +5404,7 @@ app.delete("/api/rights-issues/:id", async (c) => {
   const id = c.req.param("id");
   const existing = await getRightsIssue(id);
   if (!existing) return c.json({ error: "issue not found" }, 404);
-  const actor = readActor(c.req.query("actor"));
+  const actor = sessionActor(c, c.req.query("actor"));
   if (!actor) return c.json({ error: "actor required" }, 400);
 
   // 삭제 기록을 먼저 남긴다 — 지운 뒤 기록에 실패하면 흔적 없이 사라진다.
@@ -5411,7 +5422,7 @@ app.post("/api/rights-judgement", async (c) => {
   const body = await c.req.json().catch(() => ({}) as Record<string, unknown>);
   const subjectType = readSubjectType(body.subjectType);
   const subjectId = typeof body.subjectId === "string" ? body.subjectId.trim() : "";
-  const actor = readActor(body.actor);
+  const actor = sessionActor(c, body.actor);
   if (!subjectType || !subjectId) return c.json({ error: "subjectType and subjectId required" }, 400);
   if (!actor) return c.json({ error: "actor required" }, 400);
 
@@ -8224,9 +8235,12 @@ app.get("/api/factory/jobs/:id", async (c) => {
  * 기존 키(pending/running/done/failed)는 그대로 두어 호출부를 깨지 않는다.
  */
 app.get("/api/queue/stats", async (c) => {
-  const [stats, byType, oldestMs] = await Promise.all([
+  requireOpsOrInternal(c, currentContext()?.via);
+  // 큐는 전 테넌트 횡단으로 세야 한다 — 요청자 스코프로 읽으면 멀티테넌트에서 자기 회사 잡만
+  // 보여 백로그를 놓친다(RLS 는 job_queue 도 스코프한다). runAsSystem 으로 '*' 스코프.
+  const [stats, byType, oldestMs] = await runAsSystem(() => Promise.all([
     queueStats(), pendingByType(), oldestPendingAgeMs(),
-  ]);
+  ]));
   return c.json({ ...stats, pendingByType: byType, oldestPendingAgeMs: oldestMs });
 });
 
@@ -8251,16 +8265,17 @@ app.get("/api/queue/stats", async (c) => {
  * Cloud Run 이미지에는 gcloud 가 없다. 여기서는 **Compute REST API** 를 직접 부른다.
  */
 app.post("/api/admin/gebd-vm/wake", async (c) => {
-  requireOpsAccess(c);
+  requireOpsOrInternal(c, currentContext()?.via);
   const project = process.env.GOOGLE_CLOUD_PROJECT || "step-d";
   const zone = process.env.GEBD_VM_ZONE || "us-central1-b";
   const instance = process.env.GEBD_VM_NAME || "stepd-gebd-vm";
 
   // 대기 중인 gebd.detect 가 있는지 — 없으면 켜지 않는다 (VM 이 켜지면 시간당 과금이다).
-  const { rows } = await getPool().query(
+  // 전 테넌트 횡단(runAsSystem) — 요청자 스코프면 다른 회사 잡을 못 세 VM 이 안 깨어난다.
+  const { rows } = await runAsSystem(() => getPool().query(
     `SELECT COUNT(*)::int AS n FROM job_queue
       WHERE type = 'gebd.detect' AND status IN ('pending','running')`,
-  );
+  ));
   const pending = Number((rows[0] as { n: number } | undefined)?.n ?? 0);
   if (pending === 0) return c.json({ waked: false, reason: "no pending gebd.detect", pending });
 
@@ -8298,7 +8313,7 @@ app.post("/api/admin/gebd-vm/wake", async (c) => {
 });
 
 app.post("/api/admin/worker-vm/wake", async (c) => {
-  requireOpsAccess(c);
+  requireOpsOrInternal(c, currentContext()?.via);
   const zone = process.env.WORKER_VM_ZONE || "asia-northeast3-c";
   const instance = process.env.WORKER_VM_NAME || "stepd-worker";
   // ⚠️ 예전 코드는 `queueStats().pending_by_type` 을 읽었는데 **그런 필드가 없다.**
@@ -8306,7 +8321,7 @@ app.post("/api/admin/worker-vm/wake", async (c) => {
   //    영원히 0 → 이 라우트는 **항상 "no pending jobs"** 를 돌려줬다(폴백 else 는 도달 불가).
   //    주석에 "…라고 가정" 이라 적혀 있던 그 가정이 틀렸다. 이제 실제로 센다.
   //    GEBD 는 다른 VM 이 담당하므로 이 워커의 깨울 이유에서 제외한다.
-  const perType = await pendingByType();
+  const perType = await runAsSystem(() => pendingByType());
   const excludedTypes = new Set(["gebd.detect", "naver.publish"]);
   const pending = Object.entries(perType)
     .filter(([t]) => !excludedTypes.has(t))
@@ -8328,9 +8343,10 @@ app.post("/api/admin/worker-vm/wake", async (c) => {
 // ── ops/diagnostics: raw queue + per-media analysis (superadmin dashboard /ops) ──
 /** Individual jobs, newest activity first — the live view of what the worker is doing. */
 app.get("/api/admin/jobs", async (c) => {
+  requireOpsAccess(c);   // 잡 페이로드·오류를 노출한다 — 인가 없이 열려 있던 라우트다.
   const limit = Number(c.req.query("limit")) || 100;
-  const jobs = await listJobs(limit);
-  return c.json({ jobs, stats: await queueStats() });
+  const [jobs, stats] = await runAsSystem(() => Promise.all([listJobs(limit), queueStats()]));
+  return c.json({ jobs, stats });
 });
 
 /**
@@ -8339,6 +8355,7 @@ app.get("/api/admin/jobs", async (c) => {
  * of each upload, and what broke" table. Drill-down stays on GET /api/media/:id/analysis.
  */
 app.get("/api/admin/media-analysis", async (c) => {
+  requireOpsAccess(c);   // 미디어 제목·장르·파이프라인 단계를 노출한다 — 인가 없이 열려 있었다.
   const [media, summaries, episodes] = await Promise.all([
     listMedia(),
     listContentAnalysisSummary(),

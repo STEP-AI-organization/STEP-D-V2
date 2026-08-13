@@ -109,8 +109,10 @@ describe("파괴적 어드민 라우트는 인가를 거친다", () => {
       const idx = src.indexOf(`app.post("${route}"`);
       if (idx < 0) { missing.push(`${route} (라우트 자체를 못 찾음)`); continue; }
       // 핸들러 앞부분만 본다 — 뒤쪽 다른 라우트의 가드를 잘못 세지 않게.
+      // requireOpsOrInternal 은 requireOpsAccess 로 위임하는 가드(머신 호출은 내부 토큰 허용) —
+      // 인자가 (c, via) 라 `(c` 로 매칭한다.
       const head = src.slice(idx, idx + 1200);
-      if (!/require(OpsAccess|Superadmin)\(c\)/.test(head)) missing.push(route);
+      if (!/require(OpsAccess|Superadmin|OpsOrInternal)\(c\b/.test(head)) missing.push(route);
     }
     assert.deepEqual(
       missing, [],
