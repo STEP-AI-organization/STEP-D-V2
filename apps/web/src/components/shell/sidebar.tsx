@@ -29,13 +29,15 @@ export function Sidebar() {
       style={{ background: "var(--sd-sidebar-bg)", borderColor: "var(--sd-sidebar-border)", padding: "14px 10px" }}
     >
       <Link href="/dashboard" className="mb-3 flex items-center gap-2 px-2">
-        <span
-          className="grid size-[18px] place-items-center rounded-[4px] text-[11px] font-bold text-white"
-          style={{ background: "var(--sd-accent)" }}
+        {/* 랜딩·로그인과 같은 브랜드 마크 — 글자 "D" 배지는 브랜드 아이콘으로 교체(2026-08-13). */}
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src="/brand/stepd-icon-192.png"
+          alt=""
           aria-hidden
-        >
-          D
-        </span>
+          draggable={false}
+          className="size-[18px] rounded-[4px]"
+        />
         <span className="sd-serif text-[13px] font-semibold" style={{ color: "var(--sd-fg)" }}>
           STEP-D
         </span>
