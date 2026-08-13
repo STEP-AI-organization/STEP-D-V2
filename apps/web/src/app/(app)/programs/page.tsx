@@ -203,8 +203,10 @@ function ProgramCard({
       href={`/programs/${program.id}`}
       className="sd-card flex flex-col overflow-hidden transition-shadow"
     >
+      {/* 이미지와 텍스트는 **위아래로 완전 분리** — 글자가 사진 위에 얹히면 밝은 포스터에서
+          안 읽힌다(2026-08-13 사용자 지적). 이미지 영역은 140px 고정, 텍스트는 불투명 카드 배경. */}
       <div
-        className="sd-ph h-[180px]"
+        className="sd-ph h-[140px] shrink-0 overflow-hidden"
         style={{ borderBottom: "1px solid var(--sd-border)" }}
       >
         {program.posterImageDataUrl ? (
@@ -219,7 +221,10 @@ function ProgramCard({
         )}
       </div>
 
-      <div className="flex flex-col gap-1.5 px-3 py-[11px]">
+      <div
+        className="relative flex flex-col gap-1.5 px-3 py-[11px]"
+        style={{ background: "var(--sd-card)" }}
+      >
         <div className="text-[13px] font-semibold" style={{ color: "var(--sd-fg)" }}>
           {program.title}
         </div>
