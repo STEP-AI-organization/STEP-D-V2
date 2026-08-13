@@ -25,6 +25,7 @@ import { formatTimecode } from "@/lib/utils";
 import { cn } from "@/lib/utils";
 
 import { ThumbnailPicker } from "./thumbnail-picker";
+import { AdoptDialog, type AdoptOrientation, type AdoptReframe } from "@/components/adopt-dialog";
 
 /** 매칭 관용 시간창 — recFromShort()가 0.1초 이내로 그대로 옮기지만
  *  간혹 라운딩·재분석 후 변형이 있어 넉넉히 잡음. */
@@ -59,6 +60,7 @@ export function ShortsCard({
   const { toast } = useToast();
   const seek = useVideoSeek();
   const [busy, setBusy] = useState<null | "adopt" | "edit" | "reject">(null);
+  const [adoptOpen, setAdoptOpen] = useState<null | "adopt" | "edit">(null);
 
   const rec = matchRec(recsForEpisode(episodeId), short);
   const status = rec?.status ?? "unregistered";
@@ -75,14 +77,18 @@ export function ShortsCard({
       : short.start + duration * 0.5;  // 클립·하이라이트는 정중앙
   const src = frameUrl(apiBase, mediaId, thumbTime);
 
-  async function doAdopt(edit: boolean) {
+  // 채택 = 다이얼로그로 방향(가로/세로) + (세로면) AI 리프레임을 고른 뒤 실행한다.
+  async function runAdopt(opts: { orientation: AdoptOrientation; reframe: AdoptReframe }) {
     if (!rec || busy) return;
+    const edit = adoptOpen === "edit";
     setBusy(edit ? "edit" : "adopt");
     try {
-      const clipId = await adoptRecommendation(rec.id);
+      const clipId = await adoptRecommendation(rec.id, opts);
+      setAdoptOpen(null);
       toast({
         title: "채택됨",
-        description: `${short.title || "쇼츠 후보"} · 클립을 생성했습니다.`,
+        description: `${short.title || "쇼츠 후보"} · ${opts.orientation === "portrait" ? "세로 9:16" : "가로 16:9"}`
+          + `${opts.reframe === "ai" ? " · AI 리프레임" : ""} 클립을 생성했습니다.`,
         tone: "done",
       });
       if (edit && clipId) router.push(`/editor/${clipId}`);
@@ -310,7 +316,7 @@ export function ShortsCard({
                   size="xs"
                   variant="outline"
                   className="flex-1"
-                  onClick={() => doAdopt(false)}
+                  onClick={() => setAdoptOpen("adopt")}
                   disabled={!!busy || multiSegment}
                   title={multiSegment ? MULTI_SEGMENT_REASON : undefined}
                 >
@@ -320,7 +326,7 @@ export function ShortsCard({
                 <Button
                   size="xs"
                   className="flex-1"
-                  onClick={() => doAdopt(true)}
+                  onClick={() => setAdoptOpen("edit")}
                   disabled={!!busy || multiSegment}
                   title={multiSegment ? MULTI_SEGMENT_REASON : undefined}
                 >
@@ -338,6 +344,14 @@ export function ShortsCard({
                   {busy === "reject" ? <Loader2 className="size-3 animate-spin" /> : "✕"}
                 </Button>
               </div>
+              {adoptOpen && rec && (
+                <AdoptDialog
+                  title={short.title}
+                  busy={busy === "adopt" || busy === "edit"}
+                  onClose={() => setAdoptOpen(null)}
+                  onConfirm={runAdopt}
+                />
+              )}
               {multiSegment && (
                 <p className="text-[10px] leading-relaxed text-muted-foreground">
                   {short.segments?.length}개 구간 · {MULTI_SEGMENT_REASON}

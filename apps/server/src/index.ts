@@ -5580,6 +5580,14 @@ app.post("/api/recommendations/:id/adopt", async (c) => {
   if (!rec) return c.json({ error: "recommendation not found" }, 404);
   if (rec.status !== "pending") return c.json({ clipId: rec.adoptedClipId });
 
+  // 채택 시 사람이 고른 방향(가로/세로). 없으면 예전처럼 rec.kind 로 기본값을 잡는다(하위호환).
+  // AI 리프레임 여부는 세로형일 때만 의미가 있고, 클립 생성 뒤 프론트가 /clips/:id/reframe 로
+  // 켠다(basicReframeState 로 만들어 두고, 세로+AI 면 그 라우트가 ai_multi 로 전환·큐잉).
+  const body = await c.req.json<{ orientation?: string }>().catch(() => ({} as { orientation?: string }));
+  const aspectRatio = body.orientation === "portrait" ? "9:16-crop-main"
+    : body.orientation === "landscape" ? "16:9"
+    : (rec.kind === "short" ? "9:16-crop-main" : "16:9");
+
   const episode = await getEntity<any>("episode", rec.episodeId);
   const allMedia = await listMedia();
   const master = allMedia.find((m) => m.episodeId === rec.episodeId && m.role === "master");
@@ -5610,7 +5618,7 @@ app.post("/api/recommendations/:id/adopt", async (c) => {
     hookIntroCaption: rec.hookIntroCaption,
     clipType: rec.kind === "short" ? "T6" : "TZ",
     targetAge: episode?.targetAge ?? 0,
-    aspectRatio: rec.kind === "short" ? "9:16-crop-main" : "16:9",
+    aspectRatio,
     durationSec: Math.max(1, rec.endTime - rec.startTime),
     thumbnailLabel: chosenVariant?.caption_text ?? chosenCandidate?.label,
     thumbnailUrl: chosenThumbnailUrl,

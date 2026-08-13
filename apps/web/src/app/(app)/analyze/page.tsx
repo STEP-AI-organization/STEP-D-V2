@@ -70,6 +70,13 @@ function AnalyzeInner() {
 
   const ended = program ? normalizeProgramStatus(program.status) === "ended" : false;
 
+  // 회차별 "분석(추천구간)" 중간 화면은 없앤다 — 회차를 지정해 들어오면 곧바로 회차 상세로 보낸다.
+  // (좌측 레일에서 회차를 고르면 아래에서 바로 /episodes/:id 로 push 한다.)
+  const episodeParam = params.get("episode");
+  useEffect(() => {
+    if (episodeParam) router.replace(`/episodes/${episodeParam}`);
+  }, [episodeParam, router]);
+
   return (
     <div className="flex gap-4">
       {/* ── 좌측 레일 214px ─────────────────────────────────────────────── */}
@@ -97,7 +104,7 @@ function AnalyzeInner() {
                 <li key={e.id}>
                   <button
                     type="button"
-                    onClick={() => go({ episode: e.id })}
+                    onClick={() => router.push(`/episodes/${e.id}`)}
                     className={cn(
                       "flex w-full flex-col gap-0.5 rounded-[4px] px-2 py-1.5 text-left",
                       e.id === episodeId && "bg-[var(--sd-accent-bg)]",

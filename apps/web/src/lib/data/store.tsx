@@ -152,7 +152,7 @@ interface AppData extends AppState {
   clipsForEpisode: (episodeId: string) => Clip[];
   mediaForEpisode: (episodeId: string, role?: string) => MediaAsset | undefined;
   // actions
-  adoptRecommendation: (id: string) => Promise<string>;
+  adoptRecommendation: (id: string, opts?: { orientation?: "portrait" | "landscape"; reframe?: "ai" | "none" }) => Promise<string>;
   /**
    * Confirm/export a clip — triggers the single server render (plan §2.4). Draft until here.
    * `channel` applies that destination's render preset (frame + length cap); omit for 원본 유지.
@@ -437,11 +437,15 @@ export function AppDataProvider({
     };
   }, [refresh]);
 
-  const adoptRecommendation = useCallback(async (id: string): Promise<string> => {
+  const adoptRecommendation = useCallback(async (
+    id: string,
+    opts?: { orientation?: "portrait" | "landscape"; reframe?: "ai" | "none" },
+  ): Promise<string> => {
     // SERVER: adopt confirms the segment as a DRAFT clip (metadata only, no render — §2.4).
-    // The single render happens later via exportClip().
+    // 채택 시 사람이 고른 방향(가로/세로)은 서버가 clip.aspectRatio 로 세팅한다. AI 리프레임은
+    // 세로형일 때만 의미가 있어, 클립 생성 직후 별도로 큐잉한다(아래). 렌더는 exportClip() 에서.
     if (connectedRef.current) {
-      const { clipId, clip } = await adoptRec(id);
+      const { clipId, clip } = await adoptRec(id, opts?.orientation ? { orientation: opts.orientation } : undefined);
       mutationEpochRef.current++;
       setState((prev) => ({
         ...prev,
@@ -455,6 +459,18 @@ export function AppDataProvider({
       }));
       // No clip in the response: pull the real one from the server.
       if (!clip) void refresh();
+      // 세로형 + AI 리프레임 → 채택 직후 얼굴추적 리프레임 분석을 큐잉(에디터 안 들어가도 시작).
+      if (opts?.orientation === "portrait" && opts?.reframe === "ai") {
+        try {
+          const { reframe } = await requestClipReframeApi(clipId, "ai_multi");
+          setState((prev) => ({
+            ...prev,
+            clips: prev.clips.map((c) => (c.id === clipId ? { ...c, reframe } : c)),
+          }));
+        } catch (e) {
+          console.error("adopt→reframe 큐잉 실패:", e);
+        }
+      }
       return clipId;
     }
 
@@ -474,7 +490,9 @@ export function AppDataProvider({
         title: rec.title,
         clipType: rec.kind === "short" ? "T6" : "TZ",
         targetAge: ep?.targetAge ?? 0,
-        aspectRatio: rec.kind === "short" ? "9:16-crop-main" : "16:9",
+        aspectRatio: opts?.orientation === "landscape" ? "16:9"
+          : opts?.orientation === "portrait" ? "9:16-crop-main"
+          : rec.kind === "short" ? "9:16-crop-main" : "16:9",
         durationSec: Math.max(1, rec.endTime - rec.startTime),
         thumbnailLabel: chosen?.label,
         status: "encoding",

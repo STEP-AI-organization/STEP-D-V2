@@ -878,8 +878,17 @@ function uploadVideoMultipart(
 }
 
 // `clip` is absent when the rec was already adopted (server returns just the clipId).
-export async function adoptRec(recId: string): Promise<{ clipId: string; clip?: unknown }> {
-  return json(await fetch(`${API_BASE}/recommendations/${recId}/adopt`, { method: "POST" }));
+// orientation(가로/세로)은 채택 시 사람이 고른 값 — 서버가 clip.aspectRatio 로 세팅한다.
+export async function adoptRec(
+  recId: string,
+  opts?: { orientation?: "portrait" | "landscape" },
+): Promise<{ clipId: string; clip?: unknown }> {
+  return json(await fetch(`${API_BASE}/recommendations/${recId}/adopt`, {
+    method: "POST",
+    ...(opts?.orientation
+      ? { headers: { "Content-Type": "application/json" }, body: JSON.stringify({ orientation: opts.orientation }) }
+      : {}),
+  }));
 }
 
 // ── 자동 배포 (FLOWS F6 · 서버 migrations/0019) ──────────────────────────────────

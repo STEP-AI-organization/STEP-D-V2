@@ -397,7 +397,7 @@ function AiringBar({ programId, episodes }: { programId: string; episodes: Episo
           </span>
         </>
       )}
-      <Link href={`/analyze?program=${programId}&episode=${target.id}`} className="sd-btn">
+      <Link href={`/episodes/${target.id}`} className="sd-btn">
         회차 열기
       </Link>
     </div>
