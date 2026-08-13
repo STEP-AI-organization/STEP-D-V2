@@ -841,8 +841,9 @@ def run_speaker_identity(
     out_dir: Path,
     step: Callable[[str], None],
     timed: Callable[[str, float], None],
+    cast_registry: list | None = None,
 ) -> None:
-    """짧은 발화 상속 (2s 미만 · 앞뒤 같은 화자면 상속) → S1/S2/… 익명 라벨 부여.
+    """등록 캐스트 실명화 → 짧은 발화 상속 (2s 미만 · 앞뒤 같은 화자면 상속) → S1/S2/… 익명.
     실명(한글 2자 이상)은 그대로 speaker_name 보존. beats.characters 도 S 라벨로 갱신.
     반환값 없음 · refined/beats_data in-place mutate + speaker_identity_map.json 저장."""
     import re as _re
@@ -851,6 +852,32 @@ def run_speaker_identity(
         return
     ts = time.time()
     beats_list = (beats_data or {}).get("beats") or []
+
+    # (0) 등록 캐스트 실명화 (2026-08-13) — cast_registry 있을 때만.
+    # beat_annot 이 채운 characters_visible(명찰판/자막 근거 실명) ↔ 익명 STT 화자(발화자N)를
+    # 짝지어, **등록 인물만** 다수결로 확정해 대사 speaker 를 실명으로 rewrite 한다.
+    # 미등록 화면인물은 지어내지 않고 flagged 로 검토에 남긴다(등록+얼굴이면 자동, 그 외 flag).
+    # cast_registry 없으면 이 블록 통째로 skip → 기존과 동일(전원 익명 S1/S2).
+    flagged: list[str] = []
+    cast_named: set[str] = set()   # 이번 cast_registry 로 확정한 이름 (evidence 표기용)
+    if cast_registry and beats_list:
+        try:
+            from core.stt.speaker_rename import build_speaker_mapping, apply_speaker_mapping
+            mapping, flagged = build_speaker_mapping(beats_list, cast_registry)
+            cast_named = set(mapping.values())
+            if mapping:
+                narrative = load_json(out_dir / "narrative.json")
+                nrt = narrative if isinstance(narrative, dict) else None
+                counts = apply_speaker_mapping(mapping, refined, nrt, beats_list)
+                if nrt is not None:
+                    save_json(out_dir / "narrative.json", nrt)
+                step(f"  등록 캐스트 실명화 · {len(mapping)}명 확정 "
+                     f"({' · '.join(f'{k}→{v}' for k, v in list(mapping.items())[:6])}) · "
+                     f"대사 {counts['refined']} seg rewrite")
+            if flagged:
+                step(f"  미등록 화면인물 {len(flagged)}명 flag (검토 필요): {' · '.join(flagged[:8])}")
+        except Exception as e:
+            step(f"  (등록 캐스트 실명화 skip · {str(e)[:70]})")
 
     # (a) 짧은 발화 상속: duration < 2s 이고 앞뒤 speaker 가 같으면 상속.
     _MIN_STABLE_SEC = 2.0
@@ -911,14 +938,24 @@ def run_speaker_identity(
         save_json(out_dir / "beats.json", beats_data)
     identity_map = {
         "version": 1,
+        # 실명(한글)으로 rewrite 됐으면 확정 · 익명 S 라벨은 미확정 유지.
+        # evidence: 이번 cast_registry 매핑으로 확정 → cast_registry · 그 외 실명(chyron/자막) → onscreen
         "speakers": [
-            {"speaker_id": sid, "raw_label": raw, "name": "", "confidence": 0.0,
-             "evidence": [], "status": "unconfirmed"}
+            {"speaker_id": sid, "raw_label": raw,
+             "name": raw if _KOREAN_NAME.match(raw) else "",
+             "confidence": 1.0 if _KOREAN_NAME.match(raw) else 0.0,
+             "evidence": (["cast_registry"] if raw in cast_named else ["onscreen"]) if _KOREAN_NAME.match(raw) else [],
+             "status": "confirmed" if _KOREAN_NAME.match(raw) else "unconfirmed"}
             for raw, sid in id_map.items()
         ],
+        # 화면에 잡혔으나 cast 미등록 → 편집자 검토용 (지어내지 않음)
+        "flagged_unregistered": flagged,
     }
     save_json(out_dir / "speaker_identity_map.json", identity_map)
-    step(f"speaker identity — {len(id_map)}명 익명 (S1~S{len(id_map)}) · 실명 미확정 (편집자 검수 후 확정)")
+    _named = sum(1 for raw in id_map if _KOREAN_NAME.match(raw))
+    _anon = len(id_map) - _named
+    step(f"speaker identity — 실명 확정 {_named}명 · 익명 {_anon}명 (S 라벨 · 편집자 검수)"
+         + (f" · 미등록 flag {len(flagged)}명" if flagged else ""))
     timed("speaker_rename", ts)
 
 

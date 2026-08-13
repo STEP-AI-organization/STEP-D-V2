@@ -341,7 +341,7 @@ def analyze(
     # 4j) speaker identity → analyze_stages.run_speaker_identity (refined/beats_data in-place mutate)
     run_speaker_identity(
         refined=refined, beats_data=beats_data, out_dir=out_dir,
-        step=step, timed=timed,
+        step=step, timed=timed, cast_registry=cast_registry,
     )
 
     # 5) shorts recommend → analyze_stages.run_recommend
