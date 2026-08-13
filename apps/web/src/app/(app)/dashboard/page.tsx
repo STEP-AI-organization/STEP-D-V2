@@ -60,7 +60,8 @@ export default function DashboardPage() {
   useEffect(() => {
     let alive = true;
     void fetchYouTubeChannels()
-      .then((cs) => { if (alive) { setChannels(cs); setChannelsReady(true); } })
+      // 연동 끊긴 채널은 수익 조회가 실패만 쌓는다 — 대시보드 합계에는 활성만 넣는다.
+      .then((cs) => { if (alive) { setChannels(cs.filter((c) => c.status === "active")); setChannelsReady(true); } })
       .catch(() => { if (alive) { setChannels([]); setChannelsReady(true); } });
     return () => { alive = false; };
   }, []);

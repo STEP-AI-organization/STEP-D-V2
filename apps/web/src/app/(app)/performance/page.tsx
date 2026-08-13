@@ -61,8 +61,11 @@ export default function PerformancePage() {
     void fetchYouTubeChannels()
       .then((cs) => {
         if (!alive) return;
-        setChannels(cs);
-        setPicked((p) => p ?? cs[0]?.channelId ?? null);
+        // 연동이 끊긴(disconnected·revoked) 채널은 지표 조회가 어차피 실패한다 —
+        // 여기 보이면 "채널은 있는데 숫자가 안 나오는" 화면이 된다. 성과에는 활성만.
+        const active = cs.filter((c) => c.status === "active");
+        setChannels(active);
+        setPicked((p) => p ?? active[0]?.channelId ?? null);
       })
       .catch((err) => { if (alive) setLoadErr(err instanceof Error ? err.message : String(err)); });
     return () => { alive = false; };
