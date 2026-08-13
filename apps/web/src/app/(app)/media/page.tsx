@@ -11,7 +11,6 @@ import Link from "next/link";
 import { useMemo, useState } from "react";
 
 import { PublishDialog } from "@/components/publish/publish-dialog";
-import { UploadClipButton } from "@/components/upload-clip-dialog";
 import { ClipDetail } from "@/components/media/clip-detail";
 import { useToast } from "@/components/ui/toast";
 import { useSession } from "@/lib/auth";
@@ -41,6 +40,8 @@ function MediaView() {
 
   const rows = useMemo(() => {
     return clips.filter((c) => {
+      // 편집본(외부 업로드 완성본)은 미디어가 아니다 — 전용 탭(/edits)에서 다룬다.
+      if (c.directUpload) return false;
       const isShort = c.aspectRatio?.startsWith("9:16");
       if (kind === "short" && !isShort) return false;
       if (kind === "clip" && isShort) return false;
@@ -91,8 +92,6 @@ function MediaView() {
         <span className="sd-mono ml-auto text-[11px]" style={{ color: "var(--sd-mut)" }}>
           {rows.length}건
         </span>
-        {/* 우리 파이프라인 밖에서 만든 완성 영상을 직접 올려 배포한다 — 분석 없이 바로 클립. */}
-        <UploadClipButton className="sd-btn sd-btn-primary" label="완성 영상 업로드" />
       </div>
 
       {/* 목록 */}

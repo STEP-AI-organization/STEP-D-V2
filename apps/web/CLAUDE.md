@@ -16,7 +16,8 @@ Next.js 16 (App Router) · React 19 · TypeScript · **Tailwind v4** · base-ui 
 | `/episodes/:id` | `(app)/episodes/[id]/` | 회차 상세 (파이프라인 허브) |
 | `/recommendations` | `(app)/recommendations/` | 추천 & 채택 보드 |
 | `/clips` | `(app)/clips/` | 클립 |
-| `/distribution` | `(app)/distribution/` | 배포 |
+| `/edits` | `(app)/edits/` | 편집본 (외부 편집 완성 영상 업로드 → 다중 채널 배포) |
+| `/distribution` | `(app)/distribution/` | 배포 (영상×채널 매트릭스) |
 | `/analytics` | `(app)/analytics/` | 성과 |
 | `/channels` | `(app)/channels/` | 채널 트렌드 |
 | `/publish-channels` | `(app)/publish-channels/` | 배포채널 (YouTube 채널 연동) |

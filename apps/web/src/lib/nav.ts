@@ -16,6 +16,7 @@ import {
   LayoutDashboard,
   LayoutGrid,
   Radio,
+  Scissors,
   Search,
   Send,
   Sparkles,
@@ -53,6 +54,8 @@ export const NAV_GROUPS: NavGroup[] = [
       { href: "/analyze", label: "영상 분석", icon: Film },
       // 권리·심의 게이트 뱃지는 제거 (2026-08-12 사용자 결정 — 데이터로 알 수 없어 무의미)
       { href: "/media", label: "미디어", icon: Clapperboard },
+      // 편집본 = 외부에서 편집한 완성 영상 업로드 → 다중 채널 배포 (미디어와 분리).
+      { href: "/edits", label: "편집본", icon: Scissors },
       { href: "/assets", label: "에셋", icon: Boxes },
       { href: "/distribution", label: "배포", icon: Send, badgeKey: "distributionFailed" },
       { href: "/performance", label: "성과", icon: BarChart3 },
@@ -98,6 +101,7 @@ export const SCREEN_META: Record<string, { title: string; subtitle: string }> = 
   "/programs": { title: "프로그램", subtitle: "편성·상태별 프로그램 목록" },
   "/analyze": { title: "영상 분석", subtitle: "회차 원본 → 추천 구간 → 미디어 생성" },
   "/media": { title: "미디어", subtitle: "숏폼·클립" },
+  "/edits": { title: "편집본", subtitle: "외부 편집 완성 영상 업로드 → 다중 채널 배포" },
   "/assets": { title: "에셋", subtitle: "폴더·파일 · 이름 변경 없음(이름 기반 참조)" },
   "/distribution": { title: "배포", subtitle: "채널별 배포 로그 · 실패는 사람이 재시도" },
   "/performance": { title: "성과", subtitle: "채널별 지표 · 권한 없는 채널은 사유 표시" },
