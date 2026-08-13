@@ -222,6 +222,7 @@ import {
 import { normalizeCastInput } from "./cast.ts";
 import {
   youtubeUploadEnabled, UPLOAD_DISABLED_CODE, UPLOAD_DISABLED_MESSAGE, tiktokUploadEnabled,
+  instagramUploadEnabled, facebookUploadEnabled,
 } from "./upload-gate.ts";
 import { geminiGenerate, parseJsonLoose } from "./gemini.ts";
 import { syncProgramFromFacesForMedia, CORE_PYTHON, CORE_DIR, REPO_ROOT } from "./content-pipeline.ts";
@@ -5744,6 +5745,10 @@ app.post("/api/distributions/publish", async (c) => {
     naverCategory?: { primary?: string; secondary?: string };
     /** TikTok: 어느 계정 받은함에 초안을 넣을지 (게이트 ON 일 때만 의미). 추론하지 않는다. */
     tiktokOpenId?: string;
+    /** Instagram: 어느 IG 비즈니스 계정으로 올릴지 (게이트 ON 일 때만). 추론하지 않는다. */
+    igUserId?: string;
+    /** Facebook: 어느 Meta 페이지로 올릴지 (게이트 ON 일 때만). 추론하지 않는다. */
+    metaPageId?: string;
   }>().catch(() => null);
 
   // Reject malformed input up front — a bad/empty body must be a 400, not a 500.
@@ -5873,6 +5878,54 @@ app.post("/api/distributions/publish", async (c) => {
       origin: "manual",
     });
     return c.json({ ok: true, tiktokAccount: { openId: account.openId }, ...outcome });
+  }
+
+  // ── Instagram — 게이트 ON 이면 릴 실업로드(우리쪽 발사·예약은 지연). 계정 확정(추론 금지). ──
+  if (b.channel === "instagram" && instagramUploadEnabled()) {
+    const usable = (await listInstagramAccounts()).filter((a) => a.status !== "disconnected" && a.accessToken);
+    const account = b.igUserId
+      ? usable.find((a) => a.igUserId === b.igUserId)
+      : (usable.length === 1 ? usable[0] : undefined);
+    if (!account) {
+      return c.json({
+        error: b.igUserId ? "instagram_account_not_found" : usable.length ? "instagram_account_required" : "no_instagram_account",
+        message: b.igUserId ? "지정한 Instagram 계정을 찾을 수 없거나 재연결이 필요합니다."
+          : usable.length ? "Instagram 계정이 여러 개입니다 — 어느 계정으로 올릴지 선택하세요."
+          : "연결된 Instagram 비즈니스 계정이 없습니다 — 배포채널에서 연결하세요.",
+        accounts: usable.map((a) => ({ igUserId: a.igUserId, label: a.username ? `@${a.username}` : a.name })),
+      }, 409);
+    }
+    const outcome = await dispatchPublish({
+      clipIds: b.clipIds, channel: "instagram",
+      scheduled: b.scheduled, reserveDate: b.reserveDate,
+      igUserId: account.igUserId,
+      actor, origin: "manual",
+    });
+    return c.json({ ok: true, instagramAccount: { igUserId: account.igUserId }, ...outcome });
+  }
+
+  // ── Facebook — 게이트 ON 이면 릴 실업로드(네이티브 예약). 페이지 확정(추론 금지). ──
+  if (b.channel === "facebook" && facebookUploadEnabled()) {
+    const usable = (await listMetaAccounts()).filter((a) => a.pageAccessToken);
+    const account = b.metaPageId
+      ? usable.find((a) => a.pageId === b.metaPageId)
+      : (usable.length === 1 ? usable[0] : undefined);
+    if (!account) {
+      return c.json({
+        error: b.metaPageId ? "facebook_page_not_found" : usable.length ? "facebook_page_required" : "no_facebook_page",
+        message: b.metaPageId ? "지정한 Facebook 페이지를 찾을 수 없습니다."
+          : usable.length ? "Facebook 페이지가 여러 개입니다 — 어느 페이지로 올릴지 선택하세요."
+          : "연결된 Facebook 페이지가 없습니다 — 배포채널에서 연결하세요.",
+        accounts: usable.map((a) => ({ pageId: a.pageId, label: a.pageName })),
+      }, 409);
+    }
+    const outcome = await dispatchPublish({
+      clipIds: b.clipIds, channel: "facebook",
+      scheduled: b.scheduled, reserveDate: b.reserveDate,
+      metaPageId: account.pageId,
+      actor, origin: "manual",
+    });
+    return c.json({ ok: true, facebookPage: { pageId: account.pageId }, ...outcome });
   }
 
   const outcome = await dispatchPublish({
