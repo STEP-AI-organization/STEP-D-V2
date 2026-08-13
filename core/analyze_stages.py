@@ -799,8 +799,13 @@ def run_beat_annot(
     program_context: dict | None,
     step: Callable[[str], None],
     timed: Callable[[str, float], None],
+    cast_registry: list | None = None,
 ) -> dict:
-    """각 beat 프레임 3장 + STT + program_context → Gemini → title/summary/characters."""
+    """각 beat 프레임 3장 + STT + program_context → Gemini → title/summary/characters.
+
+    cast_registry 가 있고 그 인물 사진(work/cast_photos)이 있으면 '참조 인물 명찰판'을
+    첫 이미지로 첨부해 chyron 없이도 프레임 속 얼굴을 실명(characters)으로 찍게 한다.
+    """
     import os
     from core.beats.beat_annot import annotate_beats
 
@@ -813,6 +818,7 @@ def run_beat_annot(
             annotate_beats(
                 beats_list, video_path=str(video_path), out_dir=out_dir,
                 program_context=program_context,
+                cast_registry=cast_registry,
                 workers=int(os.environ.get("BEAT_ANNOT_WORKERS") or 4),
                 on_progress=lambda done, total: progress(
                     "beat_annot", 85 + 1 * done / max(1, total), f"beat annotate {done}/{total}"),

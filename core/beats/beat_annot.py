@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -86,6 +87,140 @@ def _ffmpeg_frame(video: Path, t_sec: float, out: Path, width: int = 640) -> boo
         return False
 
 
+# ── 참조 인물 명찰판 (Gemini 참조사진 방식 · 2026-08-13) ───────────────────────
+# 등록 캐스트 사진(work/cast_photos/{이름}.jpg)을 한 장의 번호배지 격자로 합쳐, 매 beat
+# Vision 콜에 **첫 이미지**로 붙인다. chyron·화면자막이 없어도 프레임 속 얼굴을 이 명찰판과
+# 대조해 characters 에 실명을 찍게 하는 게 목적(→ speaker_rename 이 대사 화자까지 실명화).
+# 이름 매핑은 이미지 라벨뿐 아니라 **프롬프트 텍스트("번호→이름")로도** 준다 — 프로덕션
+# 워커 이미지에 한국어 폰트(assets/)가 없어도 위치 매핑이 성립하도록. 사진이 없으면 None →
+# 기존과 동작·비용 완전 동일(회당 추가 콜 0). 이미지는 회차 내내 동일하므로 청크 안에서
+# 프롬프트 캐시 접두로 재사용된다(비용 사실상 회차당 1장).
+_FONT_DIR = Path(__file__).resolve().parents[2] / "assets" / "thumbnail-fonts"
+_PHOTO_EXTS = (".jpg", ".jpeg", ".png", ".webp")
+
+
+def _safe_stem(name: str) -> str:
+    # 서버(content-pipeline.ts:1361)와 동일한 파일명 안전화: 슬래시·백슬래시·NUL만 치환.
+    return re.sub(r"[/\\\x00]", "_", name).strip()[:60]
+
+
+def _resolve_cast_photos(cast_photos_dir: Path, names: list[str]) -> list[tuple[str, Path]]:
+    """등록 이름 목록 → (이름, 사진경로) 쌍. 이름 순서 유지 · 파일 없는 이름은 스킵."""
+    if not cast_photos_dir or not cast_photos_dir.exists() or not cast_photos_dir.is_dir():
+        return []
+    by_stem: dict[str, Path] = {}
+    for p in sorted(cast_photos_dir.iterdir()):
+        if p.suffix.lower() in _PHOTO_EXTS:
+            by_stem.setdefault(p.stem, p)
+    pairs: list[tuple[str, Path]] = []
+    seen: set[str] = set()
+    for nm in names:
+        nm = (nm or "").strip()
+        if not nm or nm in seen:
+            continue
+        p = by_stem.get(_safe_stem(nm)) or by_stem.get(nm)
+        if p:
+            pairs.append((nm, p))
+            seen.add(nm)
+    return pairs
+
+
+def _board_font(size: int):
+    from PIL import ImageFont
+    for f in ("Pretendard-Bold.otf", "NotoSansKR-Black.otf", "BlackHanSans-Regular.ttf"):
+        fp = _FONT_DIR / f
+        if fp.exists():
+            try:
+                return ImageFont.truetype(str(fp), size)
+            except Exception:
+                pass
+    try:
+        return ImageFont.load_default()   # 한글은 못 그려도 번호 배지는 렌더됨
+    except Exception:
+        return None
+
+
+def build_cast_board(cast_photos_dir: Path, names: list[str], out_dir: Path,
+                     max_n: int = 16) -> Optional[tuple[bytes, list[str]]]:
+    """등록 캐스트 사진을 번호배지 격자 한 장으로 합쳐 (jpeg bytes, 순서대로의 이름) 반환.
+
+    사진이 하나도 없으면 None (→ 명찰판 미첨부, 기존 동작 유지).
+    """
+    pairs = _resolve_cast_photos(Path(cast_photos_dir), names)[:max_n]
+    if not pairs:
+        return None
+    try:
+        from PIL import Image, ImageDraw
+    except Exception:
+        return None
+
+    cell, pad, lbl_h, badge = 200, 8, 30, 30
+    cols = min(4, len(pairs))
+    rows = (len(pairs) + cols - 1) // cols
+    W = cols * cell + (cols + 1) * pad
+    H = rows * (cell + lbl_h) + (rows + 1) * pad
+    board = Image.new("RGB", (W, H), (245, 245, 247))
+    draw = ImageDraw.Draw(board)
+    lbl_font = _board_font(20)
+    num_font = _board_font(26) or lbl_font
+
+    ordered: list[str] = []
+    for i, (nm, p) in enumerate(pairs):
+        r, cc = divmod(i, cols)
+        x = pad + cc * (cell + pad)
+        y = pad + r * (cell + lbl_h + pad)
+        try:
+            im = Image.open(p).convert("RGB")
+            w, h = im.size
+            s = min(w, h)
+            left, top = (w - s) // 2, (h - s) // 2
+            im = im.crop((left, top, left + s, top + s)).resize((cell, cell))
+            board.paste(im, (x, y))
+        except Exception:
+            draw.rectangle([x, y, x + cell, y + cell], fill=(210, 210, 214))
+        n = str(i + 1)
+        # 번호 배지 (좌상단) — 폰트 유무와 무관하게 위치 매핑 성립
+        draw.rectangle([x, y, x + badge, y + badge], fill=(20, 20, 24))
+        if num_font:
+            draw.text((x + 9, y + 2), n, fill=(255, 255, 255), font=num_font)
+        # 이름 라벨 (하단 바) — 폰트 있으면 한국어 이름도
+        draw.rectangle([x, y + cell, x + cell, y + cell + lbl_h], fill=(20, 20, 24))
+        if lbl_font:
+            draw.text((x + 6, y + cell + 5), f"{n}. {nm}"[:16], fill=(255, 255, 255), font=lbl_font)
+        ordered.append(nm)
+
+    try:
+        import io
+        buf = io.BytesIO()
+        board.save(buf, format="JPEG", quality=85)
+        data = buf.getvalue()
+    except Exception:
+        return None
+    # 디버그·재사용 캐시 (추가 비용 없음)
+    try:
+        (Path(out_dir) / "_cast_board.jpg").write_bytes(data)
+    except Exception:
+        pass
+    return data, ordered
+
+
+def _registry_names(cast_registry) -> list[str]:
+    """cast_registry(list[dict{name,aliases}] | list[str]) → 대표 이름 목록(순서 유지·중복 제거).
+
+    명찰판 라벨·프롬프트 roster 는 speaker_rename._in_registry 가 확정하는 것과 같은
+    **대표 이름(name)** 을 써야 characters_visible → 대사 실명화까지 이어진다.
+    """
+    out: list[str] = []
+    seen: set[str] = set()
+    for c in (cast_registry or []):
+        nm = c.get("name") if isinstance(c, dict) else c
+        nm = str(nm).strip() if nm is not None else ""
+        if nm and nm not in seen:
+            out.append(nm)
+            seen.add(nm)
+    return out
+
+
 CTX_RECENT = int(os.environ.get("BEAT_ANNOT_CTX_RECENT") or 12)   # 요약까지 붙일 최근 beat 수
 CTX_MAX = int(os.environ.get("BEAT_ANNOT_CTX_MAX") or 400)        # 제목만이라도 붙일 최대 beat 수
 
@@ -141,16 +276,31 @@ def build_prior_context(beats: list[dict], upto: int) -> str:
     return "[지금까지의 흐름 — 앞 beat 들의 확정 결과]\n" + "\n".join(lines) + "\n"
 
 
-def build_prompt_head(program_ctx_str: str, prior_ctx: str = "") -> str:
+def build_prompt_head(program_ctx_str: str, prior_ctx: str = "",
+                      cast_board_names: Optional[list[str]] = None) -> str:
     """**호출 간 동일한** 부분만 모은 프롬프트 앞머리 = 프롬프트 캐시의 접두.
 
     ⚠️ 이게 요청의 **맨 앞** 파트여야 한다. 예전에는 이미지 파트를 먼저 넣었는데,
     그러면 호출마다 접두(=서로 다른 프레임)가 달라져 **캐시가 한 번도 안 걸린다.**
-    순서는 [head 텍스트] → [이미지] → [beat 별 꼬리 텍스트].
+    순서는 [head 텍스트] → [명찰판 이미지] → [beat 프레임] → [beat 별 꼬리 텍스트].
+
+    명찰판 안내는 회차 내내 고정이라 prior_ctx **앞**(프로그램 정보 바로 뒤)에 둔다 —
+    prior_ctx 는 청크마다 늘지만 그 앞은 안 변해 접두가 유지된다.
     """
     body = ""
     if program_ctx_str:
         body += f"[프로그램 정보]\n{program_ctx_str}\n\n"
+    if cast_board_names:
+        roster = " · ".join(f"{i + 1}){nm}" for i, nm in enumerate(cast_board_names))
+        body += (
+            "[참조 인물 명찰판]\n"
+            "아래 이미지들 중 **첫 번째**는 이 프로그램 등록 출연자 얼굴 사진판이다 "
+            "(각 얼굴 좌상단 번호 배지 · 하단 이름).\n"
+            f"번호→이름: {roster}\n"
+            "beat 프레임 속 인물이 이 명찰판의 누군가와 **동일 인물**로 보이면 characters 에 그\n"
+            "실명을 그대로 쓴다(추정 라벨 '여성 참가자 1' 대신). 명찰판에 없거나 동일인 확신이\n"
+            "없으면 익명 라벨을 유지한다. 얼굴이 가려지거나 안 보이면 명찰판을 근거로 쓰지 않는다.\n\n"
+        )
     if prior_ctx:
         body += prior_ctx + "\n"
     return body
@@ -218,7 +368,9 @@ def build_prompt_tail(beat: dict, has_prior: bool = False) -> str:
 
 
 def _annotate_one(idx: int, beat: dict, video: Path, out_dir: Path,
-                   program_ctx_str: str, prior_ctx: str = "") -> dict:
+                   program_ctx_str: str, prior_ctx: str = "",
+                   cast_board: Optional[bytes] = None,
+                   cast_board_names: Optional[list[str]] = None) -> dict:
     st = float(beat["start"]); en = float(beat["end"])
     dur = en - st
     if dur < 0.6:
@@ -256,11 +408,17 @@ def _annotate_one(idx: int, beat: dict, video: Path, out_dir: Path,
     # 예전에는 이미지를 **맨 앞**에 넣어서, 호출마다 접두가 서로 다른 프레임으로 시작했다
     # → 공통 접두가 0바이트라 캐시가 한 번도 안 걸렸다. 헤드(프로그램 정보 + 누적 맥락)는
     # 한 청크 안에서 완전히 동일하고 다음 청크에선 몇 줄만 늘어나므로 접두 재사용이 된다.
-    head = build_prompt_head(program_ctx_str, prior_ctx)
+    head = build_prompt_head(program_ctx_str, prior_ctx, cast_board_names)
     tail = build_prompt_tail(beat, bool(prior_ctx))
     parts: list = []
     if head:
         parts.append(types.Part.from_text(text=head))
+    # 참조 인물 명찰판 = **첫 이미지** (head 안내가 "첫 번째"라고 지목). 회차 내내 동일.
+    if cast_board:
+        try:
+            parts.append(types.Part.from_bytes(data=cast_board, mime_type="image/jpeg"))
+        except Exception:
+            pass
     for p, _ in frames_available:
         try:
             parts.append(types.Part.from_bytes(data=p.read_bytes(), mime_type="image/jpeg"))
@@ -368,6 +526,7 @@ def annotate_beats(
     program_context: dict | None = None,
     workers: int = 4,
     on_progress: Optional[Callable[[int, int], None]] = None,
+    cast_registry: list | None = None,
 ) -> list[dict]:
     """각 beat 에 title/summary/scene_summary/hook 채우고 boundary.*_frame 경로 기록.
 
@@ -399,6 +558,22 @@ def annotate_beats(
     # 덧붙는다. 맥락을 뒤에 두면 매 호출 접두가 달라져 캐시가 통째로 빗나간다.
     chunk = max(1, workers)
     use_ctx = (os.environ.get("BEAT_ANNOT_CTX") or "1") != "0"
+
+    # ── 참조 인물 명찰판 (Gemini 참조사진 방식) — 등록 캐스트 사진이 있을 때만 첨부 ──
+    # 회차 한 번만 만들어 모든 beat 콜에 공유(첫 이미지). 사진 없으면 None → 기존 동작.
+    cast_board = None
+    cast_board_names = None
+    if (os.environ.get("BEAT_ANNOT_CAST_BOARD") or "1") != "0":
+        # 이름 원천: cast_registry(대표 이름) 우선 · 없으면 program_context.cast 폴백.
+        cast_names = _registry_names(cast_registry)
+        if not cast_names and isinstance(program_context, dict):
+            cast_names = [str(x).strip() for x in (program_context.get("cast") or []) if str(x).strip()]
+        built = build_cast_board(out / "cast_photos", cast_names, out) if cast_names else None
+        if built:
+            cast_board, cast_board_names = built
+            print(f"   beat annotate: 참조 명찰판 {len(cast_board_names)}명 첨부 "
+                  f"({len(cast_board) // 1024}KB · {' · '.join(cast_board_names)})")
+
     print(f"   beat annotate: {len(beats)} beats · workers={workers} · "
           f"맥락누적 {'ON' if use_ctx else 'OFF'} (청크 {chunk})")
     ok = 0
@@ -407,7 +582,8 @@ def annotate_beats(
         idxs = list(range(c0, min(c0 + chunk, len(beats))))
         prior = build_prior_context(beats, c0) if use_ctx else ""
         with ThreadPoolExecutor(max_workers=max(1, workers)) as ex:
-            futs = {ex.submit(_annotate_one, i, beats[i], video, out, pc_str, prior): i
+            futs = {ex.submit(_annotate_one, i, beats[i], video, out, pc_str, prior,
+                              cast_board, cast_board_names): i
                     for i in idxs}
             results = {}
             for fut in as_completed(futs):

@@ -334,7 +334,8 @@ def analyze(
     # 4i) beat annotate → analyze_stages.run_beat_annot
     beats_data = run_beat_annot(
         beats_data=beats_data, video_path=video_path, out_dir=out_dir,
-        program_context=program_context, step=step, timed=timed,
+        program_context=program_context, cast_registry=cast_registry,
+        step=step, timed=timed,
     )
 
     # 4j) speaker identity → analyze_stages.run_speaker_identity (refined/beats_data in-place mutate)
