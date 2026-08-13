@@ -41,6 +41,7 @@ import {
 import type { TranscriptSegment, SearchSegmentRow } from "./db-pg.ts";
 import { billableMinutes, estimatedCostKrw, usageDedupeKey } from "./billing.ts";
 import { usageDedupeKey as creditUsageKey } from "./credits.ts";
+import { maybeAutoTopup } from "./auto-topup.ts";
 import { toCoreRegistry, timelineToRows } from "./cast.ts";
 import { createReadStream, parseObjectPath, readFile, uploadFile, useGcs } from "./storage-gcs.ts";
 import { enqueue } from "./queue.ts";
@@ -1597,6 +1598,18 @@ export async function runContentAnalyze(mediaId: string, fast = false): Promise<
           actor: "system",
           dedupeKey: creditUsageKey(mediaId),
         });
+
+        // 차감으로 잔액이 임계 아래로 떨어졌으면 저장 카드로 자동 충전(정책 켜진 경우만).
+        // **best-effort** — 자동 충전 실패가 분석을 깨면 안 되므로 던지지 않고 로그만 남긴다.
+        try {
+          const r = await maybeAutoTopup();
+          if (r.charged) console.log(`[auto-topup] ${mediaId}: +${r.credits} 크레딧 자동 충전`);
+          else if (r.reason && !/꺼져|임계보다 많|카드가 없/.test(r.reason)) {
+            console.warn(`[auto-topup] ${mediaId}: 자동 충전 안 됨 — ${r.reason}`);
+          }
+        } catch (e) {
+          console.error("[auto-topup] 예외(무시):", e instanceof Error ? e.message : e);
+        }
       }
     } catch (e) {
       console.error(`[worker] content.analyze ${mediaId}: 사용량 기록 실패(분석은 정상)`, e);

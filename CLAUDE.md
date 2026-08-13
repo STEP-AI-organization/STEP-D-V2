@@ -45,7 +45,7 @@ docs/          ops(현황·운영) / plans(계획) / reference / research / prot
 
 ## 백엔드 — apps/server
 
-Hono 단일 진입점(index.ts, **~7700줄, 라우트 210개**) + 별도 워커 프로세스 구조.
+Hono 단일 진입점(index.ts, **~7700줄, 라우트 214개**) + 별도 워커 프로세스 구조.
 (2026-08-08 실측 갱신)
 
 | 파일 | 역할 |

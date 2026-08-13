@@ -3121,6 +3121,75 @@ export async function revokeBillingCard(): Promise<void> {
   );
 }
 
+// ── 자동 충전 정책 (0033) ────────────────────────────────────────────────────────
+
+export interface AutoTopupRow {
+  enabled: boolean;
+  thresholdCredits: number;
+  topupCredits: number;
+  maxPerDay: number;
+  maxKrwPerMonth: number;
+  updatedAt: string;
+  updatedBy: string;
+}
+
+/** 워크스페이스의 자동 충전 정책. 없으면 null(=한 번도 설정 안 함 → 꺼짐). */
+export async function getAutoTopupPolicy(): Promise<AutoTopupRow | null> {
+  const { rows } = await pool.query(
+    `SELECT enabled, threshold_credits AS "thresholdCredits", topup_credits AS "topupCredits",
+            max_per_day AS "maxPerDay", max_krw_per_month AS "maxKrwPerMonth",
+            updated_at AS "updatedAt", updated_by AS "updatedBy"
+       FROM auto_topup WHERE tenant_id = current_setting('app.tenant_id', true)`,
+  );
+  return (rows[0] as AutoTopupRow | undefined) ?? null;
+}
+
+export async function saveAutoTopupPolicy(p: {
+  enabled: boolean;
+  thresholdCredits: number;
+  topupCredits: number;
+  maxPerDay: number;
+  maxKrwPerMonth: number;
+  updatedBy: string;
+}): Promise<AutoTopupRow> {
+  const { rows } = await pool.query(
+    `INSERT INTO auto_topup (tenant_id, enabled, threshold_credits, topup_credits, max_per_day, max_krw_per_month, updated_by, updated_at)
+     VALUES (current_setting('app.tenant_id', true), $1, $2, $3, $4, $5, $6, now())
+     ON CONFLICT (tenant_id) DO UPDATE SET
+       enabled = EXCLUDED.enabled, threshold_credits = EXCLUDED.threshold_credits,
+       topup_credits = EXCLUDED.topup_credits, max_per_day = EXCLUDED.max_per_day,
+       max_krw_per_month = EXCLUDED.max_krw_per_month, updated_by = EXCLUDED.updated_by,
+       updated_at = now()
+     RETURNING enabled, threshold_credits AS "thresholdCredits", topup_credits AS "topupCredits",
+               max_per_day AS "maxPerDay", max_krw_per_month AS "maxKrwPerMonth",
+               updated_at AS "updatedAt", updated_by AS "updatedBy"`,
+    [p.enabled, p.thresholdCredits, p.topupCredits, p.maxPerDay, p.maxKrwPerMonth, p.updatedBy],
+  );
+  return rows[0] as AutoTopupRow;
+}
+
+/** 최근 24시간 **자동** 충전 성공 횟수 — 하루 상한 판정용(수동 충전은 세지 않는다). */
+export async function autoTopupTodayCount(): Promise<number> {
+  const { rows } = await pool.query(
+    `SELECT count(*)::int AS n FROM credit_topup
+      WHERE tenant_id = current_setting('app.tenant_id', true)
+        AND requested_by = 'auto-topup' AND status = 'paid'
+        AND created_at >= now() - interval '24 hours'`,
+  );
+  return Number(rows[0]?.n ?? 0);
+}
+
+/** 이번 달(달력) **자동** 충전 성공 금액 합 — 월 상한 판정용. */
+export async function autoTopupMonthKrw(): Promise<number> {
+  const { rows } = await pool.query(
+    `SELECT COALESCE(SUM(amount_krw), 0)::int AS krw FROM credit_topup
+      WHERE tenant_id = current_setting('app.tenant_id', true)
+        AND requested_by = 'auto-topup' AND status = 'paid'
+        AND created_at >= date_trunc('month', now())`,
+  );
+  return Number(rows[0]?.krw ?? 0);
+}
+
 export async function createTopup(r: TopupRow): Promise<void> {
   await pool.query(
     `INSERT INTO credit_topup (payment_id, tenant_id, credits, amount_krw, status, requested_by)

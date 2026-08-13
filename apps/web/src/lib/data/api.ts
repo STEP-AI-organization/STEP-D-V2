@@ -1345,6 +1345,52 @@ export async function deleteSavedCard(): Promise<void> {
   if (!res.ok) throw new ApiError(res.status, await errorMessageOf(res));
 }
 
+/** 자동 충전 정책 — 잔액이 임계 이하로 떨어지면 저장 카드로 자동 결제. */
+export interface AutoTopupPolicy {
+  enabled: boolean;
+  thresholdCredits: number;
+  topupCredits: number;
+  maxPerDay: number;
+  maxKrwPerMonth: number;
+  updatedAt?: string | null;
+  updatedBy?: string;
+}
+
+export async function fetchAutoTopup(): Promise<AutoTopupPolicy> {
+  const r = await json<{ policy: AutoTopupPolicy }>(
+    await fetch(`${API_BASE}/credits/auto-topup`, { cache: "no-store", credentials: "include" }),
+  );
+  return r.policy;
+}
+
+export async function saveAutoTopup(policy: {
+  enabled: boolean; thresholdCredits: number; topupCredits: number; maxPerDay: number; maxKrwPerMonth: number;
+}): Promise<AutoTopupPolicy> {
+  const res = await fetch(`${API_BASE}/credits/auto-topup`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify(policy),
+  });
+  if (!res.ok) {
+    const b = (await res.json().catch(() => null)) as { message?: string; error?: string } | null;
+    throw new Error(b?.message ?? b?.error ?? `${res.status}`);
+  }
+  return ((await res.json()) as { policy: AutoTopupPolicy }).policy;
+}
+
+/** 지금 바로 자동 충전 판정을 실행(설정 테스트용). 조건 안 맞으면 charged:false + 사유. */
+export async function runAutoTopup(): Promise<{
+  charged: boolean; reason: string; credits?: number; amountKrw?: number; balance?: number;
+}> {
+  const res = await fetch(`${API_BASE}/credits/auto-topup/run`, { method: "POST", credentials: "include" });
+  if (!res.ok) {
+    const b = (await res.json().catch(() => null)) as { message?: string; error?: string } | null;
+    throw new Error(b?.message ?? b?.error ?? `${res.status}`);
+  }
+  return res.json();
+}
+
 /**
  * 저장 카드로 충전. **결제창이 없다** — 서버가 바로 긁고 승인까지 확인한 뒤 응답한다.
  * 그래서 일반결제와 달리 웹훅을 기다릴 필요가 없고, 응답의 balance 가 이미 반영된 잔액이다.

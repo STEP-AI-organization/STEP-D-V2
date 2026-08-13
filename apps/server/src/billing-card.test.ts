@@ -192,9 +192,25 @@ describe("배선", () => {
       ["post", "/api/billing/card"],
       ["delete", "/api/billing/card"],
       ["post", "/api/credits/topup/card"],
+      // 자동 충전 — 돈이 자동으로 나가는 설정이라 더더욱 owner/admin 만.
+      ["put", "/api/credits/auto-topup"],
+      ["post", "/api/credits/auto-topup/run"],
     ] as [string, string][]) {
       assert.match(route(m, p), /requireManager\(c\)/, `권한 검사 없음: ${m.toUpperCase()} ${p}`);
     }
+  });
+
+  it("자동 충전 결제는 수동 저장카드 충전과 같은 안전 경로를 쓴다", () => {
+    // 자동으로 카드를 긁는 코드다. 멱등키·원장 먼저·자동/수동 구분이 빠지면 이중 충전이나
+    // 상한 오집계로 돈 사고가 난다. maybeAutoTopup 이 그 불변식을 지키는지 소스로 고정한다.
+    const auto = fs.readFileSync(path.resolve(SRC, "auto-topup.ts"), "utf-8");
+    assert.match(auto, /topupDedupeKey\(paymentId\)/, "멱등키가 없으면 재시도가 이중 충전이 된다");
+    assert.match(auto, /requestedBy: "auto-topup"/, "자동/수동 구분이 없으면 하루·월 상한이 수동 충전까지 센다");
+    assert.match(auto, /shouldAutoTopup\(/, "상한·임계 판정을 반드시 거친다");
+    assert.match(auto, /chargeWithBillingKey\(/, "빌링 채널 결제 경로를 재사용한다");
+    const ledgerAt = auto.indexOf("addCreditEntry(");
+    const paidAt = auto.indexOf('markTopupPaid(paymentId, "paid")');
+    assert.ok(ledgerAt >= 0 && paidAt > ledgerAt, "원장(addCreditEntry)이 'paid' 표시보다 먼저여야 크레딧이 안 샌다");
   });
 
   it("조회는 막지 않는다", () => {

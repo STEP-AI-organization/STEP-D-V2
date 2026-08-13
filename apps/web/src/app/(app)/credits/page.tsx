@@ -15,8 +15,9 @@ import { useCallback, useEffect, useState } from "react";
 
 import { useToast } from "@/components/ui/toast";
 import { useSession } from "@/lib/auth";
-import { createTopupOrder, fetchCredits, type CreditState } from "@/lib/data/api";
+import { createTopupOrder, fetchCredits, fetchSavedCard, type CreditState } from "@/lib/data/api";
 import { SavedCardPanel } from "@/components/billing/saved-card";
+import { AutoTopupPanel } from "@/components/billing/auto-topup";
 import { cn } from "@/lib/utils";
 
 /** 자주 쓰는 충전량. 시간 단위로 생각하는 게 자연스럽다(1크레딧=1분). */
@@ -42,6 +43,8 @@ export default function CreditsPage() {
   const [state, setState] = useState<CreditState | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [credits, setCredits] = useState(600);
+  // 자동 충전 패널이 "카드 먼저 등록" 안내/게이트를 그리려면 카드 등록 여부가 필요하다.
+  const [cardRegistered, setCardRegistered] = useState(false);
   // **PG 가 구매자 이메일을 필수로 요구한다**(이니시스 V2 일반결제). 세션에 있으면 채우고,
   // 없으면 사람이 입력한다 — 지금은 로그인이 강제되지 않아 세션 이메일이 빌 수 있다.
   const [email, setEmail] = useState("");
@@ -59,6 +62,12 @@ export default function CreditsPage() {
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+    }
+    // 카드 등록 여부는 자동 충전 패널용 — 실패해도 크레딧 화면은 정상 동작해야 한다.
+    try {
+      setCardRegistered((await fetchSavedCard()).registered);
+    } catch {
+      setCardRegistered(false);
     }
   }, []);
 
@@ -246,6 +255,8 @@ export default function CreditsPage() {
               credits={credits}
               onCharged={load}
             />
+
+            <AutoTopupPanel canManage={canManageBilling} hasCard={cardRegistered} onCharged={load} />
 
             <div className="flex flex-wrap items-center gap-2">
               <input

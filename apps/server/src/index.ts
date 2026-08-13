@@ -118,6 +118,8 @@ import {
   saveBillingCard,
   updateBillingCardDisplay,
   revokeBillingCard,
+  getAutoTopupPolicy,
+  saveAutoTopupPolicy,
   getBusinessProfile,
   saveBusinessProfile,
   listChannelRules,
@@ -282,6 +284,7 @@ import {
 } from "./credits.ts";
 import { billableMinutes, portoneConfigured } from "./billing.ts";
 import { chargeWithBillingKey, getBillingKeyInfo, getPayment, verifyWebhook } from "./portone.ts";
+import { maybeAutoTopup } from "./auto-topup.ts";
 import { commitAndInherit } from "./adopt.ts";
 import { runAutomationCycle } from "./automation-cycle.ts";
 import {
@@ -5214,6 +5217,59 @@ app.post("/api/credits/topup/card", async (c) => {
   await markTopupPaid(paymentId, "paid");
   const balance = await creditBalance();
   return c.json({ ok: true, paymentId, credits: check.credits, amountKrw: check.amountKrw, balance });
+});
+
+// ── 자동 충전 정책 (잔액 임계 이하 → 저장 카드로 자동 결제) ─────────────────────────
+const AUTO_TOPUP_DEFAULT = {
+  enabled: false, thresholdCredits: 300, topupCredits: 600, maxPerDay: 3, maxKrwPerMonth: 200000,
+};
+
+app.get("/api/credits/auto-topup", async (c) => {
+  // 조회는 막지 않는다 — 자동 충전이 켜졌는지/상한이 뭔지는 member 도 봐야 "왜 안 막혔지"를 안다.
+  const p = await getAutoTopupPolicy();
+  return c.json({ policy: p ?? { ...AUTO_TOPUP_DEFAULT, updatedAt: null, updatedBy: "" } });
+});
+
+app.put("/api/credits/auto-topup", async (c) => {
+  // **돈이 자동으로 나가는 설정**이라 owner/admin 만.
+  const manager = requireManager(c);
+  const body = await c.req.json<Record<string, unknown>>().catch(() => ({}) as Record<string, unknown>);
+  const int = (v: unknown, d: number) => {
+    const n = Math.floor(Number(v));
+    return Number.isFinite(n) ? n : d;
+  };
+  const enabled = body.enabled === true;
+  const thresholdCredits = int(body.thresholdCredits, AUTO_TOPUP_DEFAULT.thresholdCredits);
+  const topupCredits = int(body.topupCredits, AUTO_TOPUP_DEFAULT.topupCredits);
+  const maxPerDay = int(body.maxPerDay, AUTO_TOPUP_DEFAULT.maxPerDay);
+  const maxKrwPerMonth = int(body.maxKrwPerMonth, AUTO_TOPUP_DEFAULT.maxKrwPerMonth);
+
+  // 상한이 곧 안전벨트다 — 0 이하로는 못 저장한다(무한 충전 방지). 충전량은 실제 판매 가능한
+  // 크레딧 범위여야 한다(buildTopup 이 단가·최소/최대를 검증한다).
+  if (thresholdCredits < 0) return c.json({ error: "bad_request", message: "임계 크레딧은 0 이상이어야 합니다." }, 400);
+  if (maxPerDay < 1) return c.json({ error: "bad_request", message: "하루 최대 횟수는 1회 이상이어야 합니다." }, 400);
+  if (maxKrwPerMonth < 1) return c.json({ error: "bad_request", message: "월 최대 금액을 정해야 합니다." }, 400);
+  const amt = buildTopup(topupCredits);
+  if (!amt.ok) return c.json({ error: "bad_request", message: `자동 충전량이 올바르지 않습니다: ${amt.reason}` }, 400);
+
+  // 켜려면 카드가 있어야 한다 — 없으면 켜도 매번 조용히 실패한다. 미리 막는다.
+  if (enabled) {
+    const blocked = cardBlockReason(await getBillingCard());
+    if (blocked) return c.json({ error: "no_card", message: `자동 충전을 켜려면 먼저 카드를 등록하세요. (${blocked})` }, 409);
+  }
+
+  const policy = await saveAutoTopupPolicy({
+    enabled, thresholdCredits, topupCredits, maxPerDay, maxKrwPerMonth, updatedBy: manager.email,
+  });
+  return c.json({ ok: true, policy });
+});
+
+/** 지금 바로 자동 충전 판정을 실행한다(설정 테스트용). 조건 안 맞으면 charged:false + 사유. */
+app.post("/api/credits/auto-topup/run", async (c) => {
+  requireManager(c);
+  const result = await maybeAutoTopup();
+  const balance = await creditBalance();
+  return c.json({ ...result, balance });
 });
 
 app.get("/api/credits", async (c) => {
