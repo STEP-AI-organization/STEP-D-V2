@@ -69,6 +69,16 @@ export async function maybeAutoTopup(): Promise<AutoTopupResult> {
   const blocked = cardBlockReason(card);
   if (blocked) return { charged: false, reason: blocked };
 
+  // 빌링키 결제의 customer 필수 3종(이니시스). 자동 경로엔 화면 입력 폴백이 없다 —
+  // 0037 이전 카드(저장분 없음)는 수동 충전 1회 성공(백필) 또는 카드 재등록이 선행돼야 한다.
+  if (!card?.buyerName || !card?.buyerEmail || !card?.buyerPhone) {
+    return {
+      charged: false,
+      reason: "카드에 구매자 정보가 없어 자동 결제를 보낼 수 없습니다 — 수동 충전 1회 또는 카드 재등록 후 다시 켜집니다.",
+    };
+  }
+  const customer = { fullName: card.buyerName, email: card.buyerEmail, phoneNumber: card.buyerPhone };
+
   const balance = await creditBalance();
 
   // 충전 금액은 **서버가** 정책의 topupCredits 로 계산한다(단가·최소/최대 검증 포함).
@@ -167,6 +177,7 @@ export async function maybeAutoTopup(): Promise<AutoTopupResult> {
         billingKey: card!.billingKey!,
         orderName: `STEP-D 자동 충전 ${check.credits}개`,
         amountKrw: check.amountKrw,
+        customer,
       });
     } catch (e) {
       // "이미 결제됨"은 우리가 응답을 놓친 성공이다 — failed 로 닫지 말고 아래 재조회로 정산.

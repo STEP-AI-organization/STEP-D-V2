@@ -1365,6 +1365,8 @@ export async function prepareCardIssue(input: {
 /** 발급된 빌링키 저장. 회사당 한 장 — 다시 등록하면 덮어쓴다. */
 export async function saveCard(input: {
   billingKey: string; cardBrand?: string; cardLast4?: string;
+  /** 빌링키 결제의 customer 필수 3종(이니시스) — 서버가 카드에 저장해 결제 때 보낸다. */
+  buyer: { fullName: string; email: string; phoneNumber: string };
 }): Promise<void> {
   const res = await fetch(`${API_BASE}/billing/card`, {
     method: "POST",
@@ -1433,7 +1435,13 @@ export async function runAutoTopup(): Promise<{
  * 저장 카드로 충전. **결제창이 없다** — 서버가 바로 긁고 승인까지 확인한 뒤 응답한다.
  * 그래서 일반결제와 달리 웹훅을 기다릴 필요가 없고, 응답의 balance 가 이미 반영된 잔액이다.
  */
-export async function topupWithCard(credits: number, idempotencyKey: string): Promise<{
+export async function topupWithCard(
+  credits: number,
+  idempotencyKey: string,
+  // 구 카드(구매자 정보 미저장)의 폴백 — 서버는 카드 저장분을 우선 쓰고, 없으면 이 값으로
+  // 결제한 뒤 카드에 백필한다.
+  buyer?: { fullName: string; email: string; phoneNumber: string },
+): Promise<{
   paymentId: string; credits: number; amountKrw: number; balance: number; duplicate?: boolean;
 }> {
   const res = await fetch(`${API_BASE}/credits/topup/card`, {
@@ -1441,7 +1449,7 @@ export async function topupWithCard(credits: number, idempotencyKey: string): Pr
     headers: { "Content-Type": "application/json" },
     credentials: "include",
     // idempotencyKey: 성공할 때까지 같은 키를 재사용해야 재시도가 이중 결제가 안 된다(서버 필수).
-    body: JSON.stringify({ credits, idempotencyKey }),
+    body: JSON.stringify({ credits, idempotencyKey, ...(buyer ? { buyer } : {}) }),
   });
   if (!res.ok) {
     const b = (await res.json().catch(() => null)) as { message?: string; error?: string } | null;

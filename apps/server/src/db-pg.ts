@@ -3275,15 +3275,35 @@ export interface BillingCardRow {
   cardLast4: string | null;
   createdAt: string;
   revokedAt: string | null;
+  /** 빌링키 결제의 customer 필수 3종(이니시스) — 0037 이전 등록 카드는 null 일 수 있다. */
+  buyerName: string | null;
+  buyerEmail: string | null;
+  buyerPhone: string | null;
 }
 
 export async function getBillingCard(): Promise<BillingCardRow | null> {
   const { rows } = await pool.query(
     `SELECT billing_key AS "billingKey", card_brand AS "cardBrand", card_last4 AS "cardLast4",
-            created_at AS "createdAt", revoked_at AS "revokedAt"
+            created_at AS "createdAt", revoked_at AS "revokedAt",
+            buyer_name AS "buyerName", buyer_email AS "buyerEmail", buyer_phone AS "buyerPhone"
        FROM billing_card WHERE tenant_id = current_setting('app.tenant_id', true)`,
   );
   return (rows[0] as BillingCardRow | undefined) ?? null;
+}
+
+/**
+ * 구매자 정보 백필 — 0037 이전에 등록된 카드는 buyer 가 비어 있어 빌링키 결제가 불가능하다.
+ * 수동 충전이 화면 입력값으로 성공하면 그 값을 카드에 남겨 자동충전도 가능해지게 한다.
+ * targeted write(B6) — 다른 컬럼을 안 건드린다.
+ */
+export async function updateBillingCardBuyer(b: {
+  fullName: string; email: string; phoneNumber: string;
+}): Promise<void> {
+  await pool.query(
+    `UPDATE billing_card SET buyer_name = $1, buyer_email = $2, buyer_phone = $3
+      WHERE tenant_id = current_setting('app.tenant_id', true)`,
+    [b.fullName, b.email, b.phoneNumber],
+  );
 }
 
 /**
@@ -3295,17 +3315,24 @@ export async function saveBillingCard(input: {
   cardBrand: string | null;
   cardLast4: string | null;
   issuedBy: string;
+  /** 빌링키 결제의 customer 필수 3종 — 저장해 둬야 결제·자동충전 때 보낼 값이 있다(0037). */
+  buyer: { fullName: string; email: string; phoneNumber: string };
 }): Promise<BillingCardRow> {
   const { rows } = await pool.query(
-    `INSERT INTO billing_card (tenant_id, billing_key, card_brand, card_last4, issued_by)
-     VALUES (current_setting('app.tenant_id', true), $1, $2, $3, $4)
+    `INSERT INTO billing_card (tenant_id, billing_key, card_brand, card_last4, issued_by,
+                               buyer_name, buyer_email, buyer_phone)
+     VALUES (current_setting('app.tenant_id', true), $1, $2, $3, $4, $5, $6, $7)
      ON CONFLICT (tenant_id) DO UPDATE SET
        billing_key = EXCLUDED.billing_key, card_brand = EXCLUDED.card_brand,
        card_last4  = EXCLUDED.card_last4,  issued_by  = EXCLUDED.issued_by,
+       buyer_name  = EXCLUDED.buyer_name,  buyer_email = EXCLUDED.buyer_email,
+       buyer_phone = EXCLUDED.buyer_phone,
        created_at  = now(), revoked_at = NULL
      RETURNING billing_key AS "billingKey", card_brand AS "cardBrand", card_last4 AS "cardLast4",
-               created_at AS "createdAt", revoked_at AS "revokedAt"`,
-    [input.billingKey, input.cardBrand, input.cardLast4, input.issuedBy],
+               created_at AS "createdAt", revoked_at AS "revokedAt",
+               buyer_name AS "buyerName", buyer_email AS "buyerEmail", buyer_phone AS "buyerPhone"`,
+    [input.billingKey, input.cardBrand, input.cardLast4, input.issuedBy,
+     input.buyer.fullName, input.buyer.email, input.buyer.phoneNumber],
   );
   return rows[0] as BillingCardRow;
 }

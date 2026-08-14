@@ -62,7 +62,11 @@ export interface BillingKeyChargeInput {
   orderName: string;
   /** 원 단위 정수. 소수점을 보내면 거절된다. */
   amountKrw: number;
-  customer?: { id?: string; email?: string; name?: string };
+  /**
+   * KG이니시스 빌링키 결제는 customer.name·email·phoneNumber 가 **필수**다
+   * (2026-08-14 실결제 실측: 셋 다 REQUIRED 로 거절). 카드 등록 때 저장해 둔 값을 넣는다.
+   */
+  customer: { fullName: string; email: string; phoneNumber: string };
 }
 
 /**
@@ -90,7 +94,12 @@ export async function chargeWithBillingKey(input: BillingKeyChargeInput): Promis
     orderName: input.orderName,
     amount: { total: input.amountKrw },
     currency: "KRW",
-    ...(input.customer ? { customer: input.customer } : {}),
+    // V2 형식 — name 은 평문이 아니라 { full } 객체다. 평문으로 보내면 형식 오류.
+    customer: {
+      name: { full: input.customer.fullName },
+      email: input.customer.email,
+      phoneNumber: input.customer.phoneNumber,
+    },
   });
 }
 

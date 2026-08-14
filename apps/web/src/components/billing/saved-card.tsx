@@ -72,6 +72,7 @@ export function SavedCardChargeButton({
   amountKrw,
   onCharged,
   onBusyChange,
+  buyer,
 }: {
   /** 부모(page)가 조회한 저장 카드 — 결제수단 패널과 같은 스냅샷을 본다. */
   card: SavedCard | null;
@@ -83,6 +84,8 @@ export function SavedCardChargeButton({
   onCharged: () => void | Promise<void>;
   /** 결제 요청 in-flight 를 부모에 알린다 — 다이얼로그가 진행 중 닫힘(ESC·오버레이)을 막는 데 쓴다. */
   onBusyChange?: (busy: boolean) => void;
+  /** 구매자 3종(이니시스 필수) — 구 카드(미저장)의 폴백. 화면의 구매자 입력값 그대로. */
+  buyer?: { fullName: string; email: string; phoneNumber: string };
 }) {
   const { toast } = useToast();
   const [busy, setBusyState] = useState(false);
@@ -107,7 +110,7 @@ export function SavedCardChargeButton({
     try {
       // 저장 카드는 결제창이 없다 — 서버가 긁고 승인까지 확인한 뒤 응답한다.
       // 그래서 일반결제와 달리 웹훅을 기다리지 않고 바로 반영된 잔액이 온다.
-      const r = await topupWithCard(credits, idemKey);
+      const r = await topupWithCard(credits, idemKey, buyer);
       // 성공 — 이 키의 일은 끝났다. 지금 갈아야 다음 충전이 "중복"으로 무시되지 않는다.
       setIdemKey(rotateIdemKey());
       toast({
@@ -242,7 +245,9 @@ export function SavedCardManager({
       const billingKey = (res as { billingKey?: string })?.billingKey;
       if (!billingKey) throw new Error("빌링키를 받지 못했습니다.");
 
-      await saveCard({ billingKey });
+      // buyer 를 함께 저장한다 — 빌링키 결제의 customer 필수 3종(이니시스)이라, 여기서
+      // 안 남기면 저장 카드가 결제 못 하는 장식이 된다(2026-08-14 실측).
+      await saveCard({ billingKey, buyer });
       toast({ title: "카드를 등록했습니다", description: "이제 버튼 한 번으로 충전할 수 있습니다.", tone: "done" });
       // 카드 상태는 부모가 갖고 있다 — 부모를 다시 읽혀야 충전 버튼·자동충전 게이트가 따라온다.
       await onReload();

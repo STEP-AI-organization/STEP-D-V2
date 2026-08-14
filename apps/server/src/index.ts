@@ -119,6 +119,7 @@ import {
   withTenantLock,
   getBillingCard,
   saveBillingCard,
+  updateBillingCardBuyer,
   updateBillingCardDisplay,
   revokeBillingCard,
   getAutoTopupPolicy,
@@ -5004,12 +5005,18 @@ app.post("/api/billing/card", async (c) => {
     console.warn("[billing] 빌링키 카드정보 조회 실패(무시):", e instanceof Error ? e.message : e);
   }
 
+  // 구매자 3종은 **저장 시 필수**다 — 빌링키 결제의 customer 필수값(이니시스)이라, 여기서
+  // 안 받아두면 결제 때 보낼 값이 없어 저장 카드가 긁히지 않는 장식이 된다(2026-08-14 실측).
+  const who = checkCustomer((body.buyer ?? {}) as Record<string, unknown>);
+  if (!who.ok) return c.json({ error: "customer_required", message: who.message, missing: who.missing }, 400);
+
   const card = await saveBillingCard({
     billingKey,
     // 포트원 조회값 우선, 없으면 클라이언트가 보낸 값 폴백.
     cardBrand: display.brand ?? (String(body.cardBrand ?? "").trim() || null),
     cardLast4: display.last4 ?? (String(body.cardLast4 ?? "").replace(/\D/g, "").slice(-4) || null),
     issuedBy: actor,
+    buyer: who.customer,
   });
   return c.json({
     ok: true,
@@ -5085,6 +5092,20 @@ app.post("/api/credits/topup/card", async (c) => {
   const blocked = cardBlockReason(card);
   if (blocked) return c.json({ error: "no_card", message: blocked }, 409);
 
+  // 빌링키 결제의 customer 필수 3종(이니시스). 카드에 저장된 값이 정본이고, 0037 이전
+  // 등록 카드(저장분 없음)는 충전 화면의 구매자 입력으로 폴백한다 — 그마저 없으면 400.
+  const storedBuyer = card?.buyerName && card?.buyerEmail && card?.buyerPhone
+    ? { fullName: card.buyerName, email: card.buyerEmail, phoneNumber: card.buyerPhone }
+    : null;
+  const bodyBuyer = checkCustomer((body.buyer ?? {}) as Record<string, unknown>);
+  const customer = storedBuyer ?? (bodyBuyer.ok ? bodyBuyer.customer : null);
+  if (!customer) {
+    return c.json({
+      error: "customer_required",
+      message: "결제에 구매자 정보(이름·이메일·휴대폰)가 필요합니다 — 충전 화면에서 입력해 주세요.",
+    }, 400);
+  }
+
   const tenantId = currentTenantId();
   const paymentId = cardTopupPaymentId(tenantId, idem);
   const actor = manager.email;
@@ -5122,6 +5143,7 @@ app.post("/api/credits/topup/card", async (c) => {
         billingKey: card!.billingKey!,
         orderName: `STEP-D 크레딧 ${check.credits}개`,
         amountKrw: check.amountKrw,
+        customer,
       });
     } catch (e: any) {
       // "이미 결제됨"은 실패가 아니라 **우리가 응답을 놓친 성공**이다(pending 재시도 경로).
@@ -5145,6 +5167,11 @@ app.post("/api/credits/topup/card", async (c) => {
       verdict = verifyCharge({ response: await getPayment(paymentId), expectedKrw: check.amountKrw });
     } catch {
       verdict = { ok: false, message: "결제 상태 조회가 일시적으로 실패했습니다." };
+    }
+    if (verdict.ok && !storedBuyer) {
+      // 0037 이전 카드 백필 — 화면 입력값으로 결제가 실제 성공했으니 그 값을 카드에 남긴다.
+      // 이게 있어야 자동충전(화면 입력이 없는 경로)도 이 카드로 결제할 수 있다.
+      await updateBillingCardBuyer(customer).catch(() => {});
     }
     if (!verdict.ok) {
       // failed 로 찍지 않는다 — 응답 모양이 어긋났을 뿐 **돈은 나갔을 수 있다.**

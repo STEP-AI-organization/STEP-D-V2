@@ -386,6 +386,9 @@ export default function CreditsPage() {
                   amountKrw={credits * price}
                   onCharged={load}
                   onBusyChange={setCardCharging}
+                  // 구 카드(구매자 정보 미저장) 폴백 — 화면의 구매자 입력값으로 결제하고
+                  // 서버가 성공 시 카드에 백필한다.
+                  buyer={{ fullName: buyerName.trim(), email: email.trim(), phoneNumber: phoneDigits }}
                 />
               </>
             ) : undefined
