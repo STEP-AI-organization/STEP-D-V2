@@ -1307,6 +1307,8 @@ async function markDistributionFailed(
   const value: Record<string, unknown> = { status: "failed", error };
   const accountField = channel === "youtube" ? "youtubeChannelId"
     : channel === "tiktok" ? "tiktokOpenId"
+    : channel === "instagram" ? "igUserId"
+    : channel === "facebook" ? "metaPageId"
     : "naverAccountId";
   if (accountId) value[accountField] = accountId;
   const distributions = upsertDistribution(clip.distributions, channel, value);

@@ -6086,6 +6086,52 @@ app.post("/api/distributions/retry", async (c) => {
     // openId 없는 구 기록(record 시절)은 아래 일반 경로로 — 기록만 갱신된다.
   }
 
+  // Instagram 재시도 — 실패한 행의 igUserId 로 **같은 계정에** 다시(추론 금지). 게이트 ON 일 때만.
+  // 정체성 없이 넘기면 dispatchPublish 가 record 로 강등해 재시도가 조용히 기록으로 둔갑한다.
+  if (b.channel === "instagram" && instagramUploadEnabled()) {
+    const rows = (clip.distributions ?? []).filter((d: any) => d.channel === "instagram");
+    const prev = rows.find((d: any) => d.status === "failed" && d.igUserId);
+    if (prev?.igUserId) {
+      const outcome = await dispatchPublish({
+        clipIds: [b.clipId], channel: "instagram",
+        igUserId: String(prev.igUserId),
+        actor, origin: "retry",
+      });
+      return c.json({ ok: true, ...outcome });
+    }
+    // igUserId 없는 옛 기록은 아래 일반 경로로.
+  }
+
+  // Facebook 재시도 — 실패한 행의 metaPageId 로 같은 페이지에 다시. 게이트 ON 일 때만.
+  if (b.channel === "facebook" && facebookUploadEnabled()) {
+    const rows = (clip.distributions ?? []).filter((d: any) => d.channel === "facebook");
+    const prev = rows.find((d: any) => d.status === "failed" && d.metaPageId);
+    if (prev?.metaPageId) {
+      const outcome = await dispatchPublish({
+        clipIds: [b.clipId], channel: "facebook",
+        metaPageId: String(prev.metaPageId),
+        actor, origin: "retry",
+      });
+      return c.json({ ok: true, ...outcome });
+    }
+  }
+
+  // 네이버 재시도 — 실패한 행의 naverAccountId 로 같은 계정에 다시(설명은 있으면 재사용,
+  // 없으면 워커가 클립 메타로 폴백). 다계정에서 계정 없이 재시도하면 엉뚱한 세션으로 나간다.
+  if (b.channel === "naverclip" || b.channel === "navertv") {
+    const rows = (clip.distributions ?? []).filter((d: any) => d.channel === b.channel);
+    const prev = rows.find((d: any) => d.status === "failed" && d.naverAccountId);
+    if (prev?.naverAccountId) {
+      const outcome = await dispatchPublish({
+        clipIds: [b.clipId], channel: b.channel,
+        naverAccountId: String(prev.naverAccountId),
+        ...(prev.description ? { description: String(prev.description) } : {}),
+        actor, origin: "retry",
+      });
+      return c.json({ ok: true, ...outcome });
+    }
+  }
+
   const outcome = await dispatchPublish({
     clipIds: [b.clipId], channel: b.channel,
     actor,

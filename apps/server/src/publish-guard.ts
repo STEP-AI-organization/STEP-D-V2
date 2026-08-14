@@ -105,15 +105,21 @@ export function isClipRendered(clip: {
 
 /**
  * 배포 항목의 계정 정체성 — 같은 플랫폼 다계정을 가르는 열쇠.
- * YouTube 는 youtubeChannelId, 네이버는 naverAccountId, TikTok 은 tiktokOpenId.
- * 전부 없으면 null (기록 전용 채널·계정 개념 이전의 레거시 행).
+ * YouTube=youtubeChannelId · 네이버=naverAccountId · TikTok=tiktokOpenId ·
+ * Instagram=igUserId · Facebook=metaPageId. 전부 없으면 null(계정 개념 이전의 레거시 행).
+ * ⚠️ 새 계정형 채널을 추가하면 여기에도 넣어야 upsert 가 계정별로 매칭하고 retry 가 계정을 재사용한다.
  */
 export function distributionAccountId(
-  d: { youtubeChannelId?: unknown; naverAccountId?: unknown; tiktokOpenId?: unknown },
+  d: {
+    youtubeChannelId?: unknown; naverAccountId?: unknown; tiktokOpenId?: unknown;
+    igUserId?: unknown; metaPageId?: unknown;
+  },
 ): string | null {
   if (typeof d.youtubeChannelId === "string" && d.youtubeChannelId) return d.youtubeChannelId;
   if (typeof d.naverAccountId === "string" && d.naverAccountId) return d.naverAccountId;
   if (typeof d.tiktokOpenId === "string" && d.tiktokOpenId) return d.tiktokOpenId;
+  if (typeof d.igUserId === "string" && d.igUserId) return d.igUserId;
+  if (typeof d.metaPageId === "string" && d.metaPageId) return d.metaPageId;
   return null;
 }
 
