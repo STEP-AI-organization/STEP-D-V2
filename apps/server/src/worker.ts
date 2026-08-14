@@ -30,6 +30,7 @@ import {
   upsertVideoRetention,
   getLatestCommentFetchedAt,
   upsertVideoComment,
+  creditBalance,
   getEntity,
   putEntity,
   getMedia,
@@ -45,6 +46,8 @@ import {
   getRawPool,
 } from "./db-pg.ts";
 import { clipGate } from "./publish-dispatch.ts";
+import { checkCredits } from "./credits.ts";
+import { billableMinutes } from "./billing.ts";
 import { probe, captureThumbnail } from "./ffmpeg.ts";
 import {
   prepareProgramAssets, publishStyleProfile, publishThumbnails, tempAssetRoot,
@@ -705,9 +708,23 @@ async function handleYoutubeDownload(job: Job): Promise<void> {
     });
 
     await markContentAnalysisPending(mediaId);
-    // fast를 content.analyze로 이어 전달 — 대량 배치용.
-    await enqueue("content.analyze", { mediaId, ...(fast ? { fast: true } : {}) }, { dedupeKey: `content.analyze:${mediaId}` });
-    await setEpisodeNote("AI 장면 분석 대기 중…", "progress", 30);
+    // 분석 자동 큐잉 전 크레딧 재확인 — 등록 라우트(402)는 러닝타임을 몰라 "잔액 0 이하"만
+    // 봤다. 지금은 실제 길이를 아니 factory·/analyze 라우트와 같은 정밀 판정을 한다.
+    // 막히면 잡 **실패가 아니라 스킵**이다: 다운로드 자체는 성공했고, 여기서 던지면 큐가
+    // 백오프 재시도를 돌며 매번 같은 사유로 죽는 재큐잉 루프가 된다. 사유는 에피소드
+    // 파이프라인 노트로 사람에게 남긴다 — 충전 후 화면의 '분석 시작'으로 재개하면 된다.
+    const verdict = checkCredits({
+      balance: await creditBalance(),
+      needMinutes: billableMinutes(meta.durationSec),
+    });
+    if (!verdict.allow) {
+      await setEpisodeNote(`크레딧 부족 — 충전 후 분석을 시작해 주세요 (${verdict.reason})`, "idle", 0);
+      console.warn(`[worker] youtube.download ${mediaId}: content.analyze 큐잉 스킵 — ${verdict.reason}`);
+    } else {
+      // fast를 content.analyze로 이어 전달 — 대량 배치용.
+      await enqueue("content.analyze", { mediaId, ...(fast ? { fast: true } : {}) }, { dedupeKey: `content.analyze:${mediaId}` });
+      await setEpisodeNote("AI 장면 분석 대기 중…", "progress", 30);
+    }
     console.log(`[worker] youtube.download ${mediaId}: ${size} bytes → ${storedPath}`);
 
     // Success only — a failed attempt keeps its .part files so the retry resumes.

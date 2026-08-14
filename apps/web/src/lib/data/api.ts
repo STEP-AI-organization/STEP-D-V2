@@ -914,11 +914,16 @@ export interface AutomationRule {
   /** 다중 프로그램·채널 (2026-08-12). 배열이 있으면 배열이 정본, 없으면 단수 폴백. */
   programIds?: string[];
   channels?: { platform: string; accountId: string }[];
-  /** 채널당 하루 게시 할당량 — 찰 때까지 순방마다 계속. 기본 3. */
+  /** 채널당 하루 게시 할당량 — 찰 때까지 확인 때마다 계속. 기본 3. */
   dailyQuota?: number;
   /** 활동 시간창(KST 시각). 기본 9~22. */
   activeStart?: number;
   activeEnd?: number;
+  /**
+   * 채널별 오늘 게시 수 — key = "platform:accountId" (서버 확장분 · 옵셔널).
+   * 구버전 서버는 안 내려준다 — 없으면 화면은 "오늘 N/한도" 줄을 통째로 숨긴다.
+   */
+  publishedToday?: Record<string, number>;
 }
 
 export interface RuleRun {
@@ -935,7 +940,14 @@ export async function fetchAutomation(): Promise<{
   runs: RuleRun[];
   holds: RuleHold[];
   paused: boolean;
+  /** 크레딧 부족 등 "왜 아무것도 안 하는지" — 빈 문자열이면 정상 가동. */
   idleReason: string;
+  /**
+   * 채널별 실업로드 스위치 (서버 확장분 · 옵셔널). key = "platform:accountId" 또는 platform.
+   * **명시적 false 만 "꺼짐"이다** — 키가 없으면 알 수 없음이므로 경고하지 않는다.
+   * 구버전 서버는 필드 자체가 없다 — 그때는 게이트 경고를 전부 숨긴다.
+   */
+  gates?: Record<string, boolean>;
 }> {
   return json(await fetch(`${API_BASE}/automation`, { cache: "no-store" }));
 }

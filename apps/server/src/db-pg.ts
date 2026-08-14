@@ -2997,9 +2997,15 @@ export async function holdClip(ruleId: string, clipId: string, reason: string): 
   // 0021 이 rule_hold_pkey 를 (tenant_id, rule_id, clip_id) 로 재키잉했다 — 구 (rule_id, clip_id)
   // 타깃은 42P10 으로 죽는다. channel_rule 과 같은 병(1275481)의 같은 처방. tenant_id 는
   // DEFAULT current_setting 이 채운다.
+  //
+  // released_at·released_by 를 **반드시 NULL 로 되돌린다** — 재보류는 새 보류다.
+  // 해제된 행 위에 reason 만 덮으면 (1) released_at 이 남아 openHolds(승인 큐)에 안 보이고
+  // (2) hasReleasedHold 가 계속 참이라 approve_first 규칙을 **재승인 없이** 통과한다.
+  // 사람이 봐야 하는 건이 사람 눈을 거치지 않고 나가는 방향의 실패라 여기서 막는다.
   await pool.query(
     `INSERT INTO rule_hold (rule_id, clip_id, reason) VALUES ($1,$2,$3)
-     ON CONFLICT (tenant_id, rule_id, clip_id) DO UPDATE SET reason = $3`,
+     ON CONFLICT (tenant_id, rule_id, clip_id) DO UPDATE
+       SET reason = $3, released_at = NULL, released_by = NULL`,
     [ruleId, clipId, reason],
   );
 }

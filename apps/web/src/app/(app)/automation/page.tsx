@@ -6,8 +6,12 @@
  * 규칙 하나 = 프로그램 ↔ 채널 연결 하나. **규칙이 없으면 아무것도 하지 않는다** —
  * 전체 자동 실행 같은 기본 동작이 없다. 그 사실을 화면에서도 말한다.
  *
- * 보류 큐가 이 화면의 핵심이다. 보류된 건은 여기 쌓이고, **사람이 확정 버튼을
- * 눌러야** 다음 순방에 다시 잡힌다.
+ * 승인 대기 큐가 이 화면의 핵심이다. 대기 건은 여기 쌓이고, **사람이 승인해야**
+ * 다음 확인 때 게시된다. 문구에서 "순방·워커·게이트" 같은 내부어는 쓰지 않는다 —
+ * 확인(10분마다 자동)·승인·실제 업로드 잠금/권리 확인으로 말한다.
+ *
+ * 서버 확장 필드(gates·publishedToday)는 **옵셔널로 읽는다** — 구버전 서버가 안
+ * 내려주면 해당 표시만 조용히 숨긴다(경고 오탐보다 미표시가 낫다).
  */
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
@@ -35,26 +39,32 @@ import {
 } from "@/lib/data/api";
 import { useAppData } from "@/lib/data/store";
 import { channelLabel } from "@/lib/constants";
+import { clipThumbSrc } from "@/lib/media-url";
 import { cn } from "@/lib/utils";
 
 const KIND_LABEL: Record<RuleMediaKind, string> = { short: "숏폼", clip: "클립", both: "숏폼+클립" };
 const CRIT_LABEL: Record<RuleCriterion, string> = { score80: "점수 80 이상", score85: "점수 85 이상", top3: "상위 3건" };
 const POLICY_LABEL: Record<GatePolicy, string> = {
   approve_first: "게시 전 사람 승인",
-  hold_on_issue: "바로 게시",
+  hold_on_issue: "문제 없으면 바로 게시 (권리 문제는 승인 대기로)",
 };
+// published 는 큐잉 시점 기록이라 "게시됨"이라 쓰면 거짓말이 된다 — 업로드는 이제 시작.
+// 실제 완료/실패는 클립의 배포 상태(distributions)와 조인해 피드에서 덮어쓴다.
 const RESULT_LABEL: Record<string, string> = {
-  published: "게시됨", recorded: "기록됨", media_created: "미디어 생성",
-  held: "보류", failed: "실패", skipped: "건너뜀",
+  published: "업로드 시작", recorded: "기록됨", media_created: "미디어 생성",
+  held: "승인 대기", failed: "실패", skipped: "안 보냄",
 };
 const RESULT_TAG: Record<string, string> = {
-  published: "sd-tag sd-tag--airing",
+  published: "sd-tag sd-tag--upcoming", // 시작이지 완료가 아니다 — 완료(게시함)만 airing
   recorded: "sd-tag",
   media_created: "sd-tag sd-tag--upcoming",
   held: "sd-tag sd-tag--warn",
   failed: "sd-tag sd-tag--danger",
   skipped: "sd-tag",
 };
+
+/** 실제 파일이 올라가는 플랫폼 — 나머지(Meta·TikTok)는 원래 기록만 남는다. */
+const isUploadPlatform = (p: string) => p === "youtube" || p.startsWith("naver");
 
 /**
  * 서버 factory.ts TEMPLATE_SEEDS 의 UI 미러 — 미리보기·슬라이더 초기값용.
@@ -102,9 +112,9 @@ function TemplatePreview({ template, accent, layout }: {
 
 const STEPS = [
   { n: "01", title: "회차 수신", desc: "새 회차 원본 감지 · 없으면 스킵" },
-  { n: "02", title: "분석", desc: "분석 큐 투입 · 완료까지 다음 순방에 재확인" },
+  { n: "02", title: "분석", desc: "분석 큐 투입 · 완료까지 다음 확인 때 다시 봄" },
   { n: "03", title: "미디어 생성", desc: "규칙 조건 통과분만 생성 · 미달은 생성 안 함" },
-  { n: "04", title: "업로드 준비", desc: "보류가 걸리면 보류 큐로, 사람이 확정해야 함", amber: true },
+  { n: "04", title: "업로드 준비", desc: "권리 문제가 있으면 승인 대기로 — 사람이 승인해야 함", amber: true },
   { n: "05", title: "게시", desc: "채널 규칙 적용 · 실패는 자동 재시도 없음", blue: true },
 ];
 
@@ -118,6 +128,8 @@ export default function AutomationPage() {
   const [holds, setHolds] = useState<RuleHold[]>([]);
   const [paused, setPaused] = useState(false);
   const [idleReason, setIdleReason] = useState("");
+  // 채널별 실업로드 스위치 — 구버전 서버는 안 내려준다(null = 모름 → 경고 안 띄움).
+  const [gates, setGates] = useState<Record<string, boolean> | null>(null);
   // loading 없이는 fetch 전에 "규칙 없음"이 먼저 보인다 — 로딩/빈/에러 3종을 구분한다.
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -130,6 +142,7 @@ export default function AutomationPage() {
       const r = await fetchAutomation();
       setRules(r.rules); setRuns(r.runs); setHolds(r.holds);
       setPaused(r.paused); setIdleReason(r.idleReason);
+      setGates(r.gates ?? null);
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -152,20 +165,20 @@ export default function AutomationPage() {
 
   /** 규칙을 만들고 10분을 기다리지 않아도 결과를 본다. */
   async function runNow() {
-    if (runningNow) return; // 더블클릭 = 순방 중복 실행
+    if (runningNow) return; // 더블클릭 = 확인 중복 실행
     setRunningNow(true);
     try {
       const r = await runAutomationNow();
       toast({
-        title: "순방을 돌렸습니다",
+        title: "확인했습니다",
         description:
           r.idleReason ||
-          `규칙 ${r.rulesEvaluated}개 · 미디어 ${r.adopted} · 게시 ${r.published} · 보류 ${r.held}`,
+          `규칙 ${r.rulesEvaluated}개 · 미디어 ${r.adopted} · 게시 ${r.published} · 승인 대기 ${r.held}`,
         tone: r.held > 0 ? "warn" : "done",
       });
       await load();
     } catch (err) {
-      toast({ title: "순방 실패", description: err instanceof Error ? err.message : String(err), tone: "error" });
+      toast({ title: "확인 실패", description: err instanceof Error ? err.message : String(err), tone: "error" });
     } finally {
       setRunningNow(false);
     }
@@ -173,14 +186,40 @@ export default function AutomationPage() {
 
   async function release(h: RuleHold) {
     const key = `${h.ruleId}:${h.clipId}`;
-    if (releasing) return; // 더블클릭 = 확정 중복 요청
+    if (releasing) return; // 더블클릭 = 승인 중복 요청
     setReleasing(key);
     try {
       const r = await releaseAutomationHold(h.ruleId, h.clipId, actor);
-      toast({ title: "확정했습니다", description: r.notice, tone: "done" });
+      toast({ title: "승인했습니다", description: r.notice, tone: "done" });
       await load();
     } catch (err) {
-      toast({ title: "확정 실패", description: err instanceof Error ? err.message : String(err), tone: "error" });
+      toast({ title: "승인 실패", description: err instanceof Error ? err.message : String(err), tone: "error" });
+    } finally {
+      setReleasing(null);
+    }
+  }
+
+  /** 전체 승인 — 서버 API 가 건당이라 순차로 돈다. 실패 건은 남기고 계속 간다. */
+  async function releaseAll() {
+    if (releasing || holds.length === 0) return;
+    setReleasing("__all__");
+    let ok = 0;
+    let fail = 0;
+    try {
+      for (const h of holds) {
+        try {
+          await releaseAutomationHold(h.ruleId, h.clipId, actor);
+          ok += 1;
+        } catch {
+          fail += 1;
+        }
+      }
+      toast({
+        title: `전체 승인 — ${ok}건 완료${fail ? ` · ${fail}건 실패` : ""}`,
+        description: "다음 확인 때 게시됩니다.",
+        tone: fail ? "warn" : "done",
+      });
+      await load();
     } finally {
       setReleasing(null);
     }
@@ -188,8 +227,48 @@ export default function AutomationPage() {
 
   const running = !paused && rules.some((r) => r.enabled);
 
+  /** 규칙의 채널 목록 — 배열이 정본, 없으면 단수 폴백(구 규칙). */
+  const channelsOf = (r: AutomationRule) =>
+    r.channels?.length ? r.channels : [{ platform: r.platform, accountId: r.accountId }];
+
+  /**
+   * 게이트가 **명시적으로 꺼진** 채널인가. "platform:accountId" 키 우선, 플랫폼 키 폴백.
+   * gates 미수신(구버전 서버)이나 키 없음은 "모름" — 꺼짐으로 단정하지 않는다.
+   */
+  const gateOff = (platform: string, accountId: string): boolean => {
+    if (!gates) return false;
+    const v = gates[`${platform}:${accountId}`] ?? gates[platform];
+    return v === false;
+  };
+
+  // 실업로드 채널이 규칙에 있는데 게이트가 꺼져 있으면 — "실행 중"이 착시가 된다.
+  const gateBlocked = rules.some(
+    (r) => r.enabled && channelsOf(r).some((c) => isUploadPlatform(c.platform) && gateOff(c.platform, c.accountId)),
+  );
+
+  // 오늘 게시 합산 — publishedToday 를 내려주는 서버에서만 계산한다(없으면 줄 숨김).
+  const hasToday = rules.some((r) => r.publishedToday);
+  const todayPublished = rules.reduce(
+    (sum, r) => sum + Object.values(r.publishedToday ?? {}).reduce((a, b) => a + b, 0),
+    0,
+  );
+  const todayQuota = rules
+    .filter((r) => r.enabled)
+    .reduce((sum, r) => sum + (r.dailyQuota ?? 3) * channelsOf(r).length, 0);
+
   return (
     <div className="mx-auto flex max-w-[1240px] flex-col gap-[14px]">
+      {/* ── 게이트 착시 방지 — 실업로드가 꺼져 있으면 최상단에서 먼저 말한다 ── */}
+      {gateBlocked && (
+        <div
+          className="rounded-[4px] px-3 py-2.5 text-[12px] font-medium leading-relaxed"
+          style={{ border: "1px solid var(--sd-warn-border)", background: "var(--sd-warn-bg)", color: "var(--sd-warn)" }}
+        >
+          ⚠ 지금은 실제 업로드가 꺼져 있습니다 — 규칙이 돌아도 기록만 남고 채널에는
+          올라가지 않습니다. (권리 확인의 승인 대기와는 별개인 운영 설정입니다.)
+        </div>
+      )}
+
       {/* ── 상태 바 — "어떻게 돌아가는지" 를 분명히 ─────────────────────────── */}
       <div className="sd-card flex flex-col gap-2 px-3 py-2.5">
         <div className="flex flex-wrap items-center gap-3">
@@ -199,13 +278,19 @@ export default function AutomationPage() {
             aria-hidden
           />
           <span className="text-[13px] font-semibold" style={{ color: "var(--sd-fg)" }}>
-            {loading ? "불러오는 중…" : paused ? "일시정지됨" : running ? "자동 순방 켜짐" : "규칙 없음 — 만들면 시작"}
+            {loading ? "불러오는 중…" : paused ? "일시정지됨" : running ? "자동 확인 켜짐" : "규칙 없음 — 만들면 시작"}
           </span>
           <span className="sd-mono text-[11px]" style={{ color: "var(--sd-mut)" }}>
-            {runs[0]?.at ? `마지막 실행 ${runs[0].at.slice(0, 16).replace("T", " ")}` : "아직 실행 기록 없음"}
+            {runs[0]?.at ? `마지막 확인 ${runs[0].at.slice(0, 16).replace("T", " ")}` : "아직 확인 기록 없음"}
           </span>
+          {/* 오늘 합산 — publishedToday 를 내려주는 서버에서만 보인다(구버전은 숨김). */}
+          {hasToday && (
+            <span className="text-[11px] font-medium" style={{ color: "var(--sd-fg)" }}>
+              오늘 게시 {todayPublished}건 / 한도 {todayQuota}건 · 승인 대기 {holds.length}건
+            </span>
+          )}
           <button type="button" className="sd-btn sd-btn-primary ml-auto" disabled={runningNow} onClick={runNow}>
-            {runningNow ? "실행 중…" : "지금 실행"}
+            {runningNow ? "확인 중…" : "지금 확인하기"}
           </button>
           <button type="button" className="sd-btn" onClick={togglePause}>
             {paused ? "재시작" : "일시정지"}
@@ -216,10 +301,11 @@ export default function AutomationPage() {
         </div>
         {/* 실행 모델을 한 줄로 못박는다 — "어떻게 돌리는지" 가 가장 자주 막히는 지점이다. */}
         <p className="text-[11px] leading-relaxed" style={{ color: "var(--sd-mut)" }}>
-          규칙을 만들면 <b style={{ color: "var(--sd-fg)" }}>워커가 깨어날 때마다(약 10분)</b> 조건에 맞는 미디어를
-          자동 배포합니다. 바로 확인하려면 <b style={{ color: "var(--sd-fg)" }}>지금 실행</b>을 누르세요 —
+          규칙을 만들면 <b style={{ color: "var(--sd-fg)" }}>10분마다 자동 확인</b>해 조건에 맞는 미디어를
+          자동 배포합니다. 바로 보려면 <b style={{ color: "var(--sd-fg)" }}>지금 확인하기</b>를 누르세요 —
           결과는 아래 <b style={{ color: "var(--sd-fg)" }}>자동 배포 기록</b>에 쌓입니다.
-          {idleReason ? ` · ${idleReason}` : ""}
+          {/* idleReason = 서버가 말하는 "왜 안 도는가"(일시정지·크레딧 부족 등) — 눈에 띄게. */}
+          {idleReason ? <b style={{ color: "var(--sd-warn)" }}> · {idleReason}</b> : null}
         </p>
       </div>
 
@@ -232,7 +318,8 @@ export default function AutomationPage() {
         </div>
       )}
 
-      {/* ── 5단계 ─────────────────────────────────────────────────────────── */}
+      {/* ── 5단계 안내 — 규칙이 하나라도 있으면 자리만 차지한다. 첫 진입에만. ── */}
+      {!loading && rules.length === 0 && (
       <div className="grid gap-2 [grid-template-columns:repeat(auto-fit,minmax(190px,1fr))]">
         {STEPS.map((s) => (
           <div
@@ -252,6 +339,7 @@ export default function AutomationPage() {
           </div>
         ))}
       </div>
+      )}
 
       {adding && (
         <RuleForm
@@ -265,38 +353,79 @@ export default function AutomationPage() {
         />
       )}
 
-      {/* ── 보류 큐 — 이 화면의 핵심 ──────────────────────────────────────── */}
+      {/* ── 승인 대기 — 이 화면의 핵심 ────────────────────────────────────── */}
       <section className="flex flex-col gap-2">
-        <div className="flex items-baseline gap-2">
-          <h3 className="sd-serif text-[16px] font-semibold" style={{ color: "var(--sd-fg)" }}>보류 큐</h3>
+        <div className="flex flex-wrap items-center gap-2">
+          <h3 className="sd-serif text-[16px] font-semibold" style={{ color: "var(--sd-fg)" }}>승인 대기</h3>
           <span className="text-[11px]" style={{ color: "var(--sd-mut)" }}>
-            보류된 건입니다 — <b>확정해야 다음 순방에 다시 잡힙니다.</b> 저절로 나가지 않습니다.
+            사람 확인이 필요한 건입니다 — <b>승인해야 다음 확인 때 게시됩니다.</b> 저절로 나가지 않습니다.
           </span>
+          {holds.length > 0 && (
+            <button
+              type="button"
+              className="sd-btn ml-auto"
+              disabled={releasing !== null}
+              onClick={() => void releaseAll()}
+            >
+              {releasing === "__all__" ? "전체 승인 중…" : `전체 승인 (${holds.length}건)`}
+            </button>
+          )}
         </div>
         {holds.length === 0 ? (
           <div
             className="sd-ph grid min-h-[80px] place-items-center rounded-[6px] px-6 text-center"
             style={{ border: "1px dashed var(--sd-border)" }}
           >
-            {loading ? "불러오는 중…" : error ? "상태를 불러오지 못했습니다" : "보류된 건이 없습니다"}
+            {loading ? "불러오는 중…" : error ? "상태를 불러오지 못했습니다" : "승인 대기 중인 건이 없습니다"}
           </div>
         ) : (
           <div className="flex flex-col gap-1.5">
-            {holds.map((h) => (
-              <div key={`${h.ruleId}:${h.clipId}`} className="sd-card flex flex-wrap items-center gap-3 px-3 py-2.5">
-                <span className="sd-mono text-[11px]" style={{ color: "var(--sd-mut)" }}>{h.clipId}</span>
-                <span className="min-w-[200px] flex-1 text-[11.5px]" style={{ color: "var(--sd-fg)" }}>{h.reason}</span>
-                <span className="sd-mono text-[10.5px]" style={{ color: "var(--sd-mut)" }}>{h.heldAt?.slice(0, 16).replace("T", " ")}</span>
-                <button
-                  type="button"
-                  className="sd-btn sd-btn-primary"
-                  disabled={releasing !== null}
-                  onClick={() => void release(h)}
-                >
-                  {releasing === `${h.ruleId}:${h.clipId}` ? "확정 중…" : "확정 — 다시 잡기"}
-                </button>
-              </div>
-            ))}
+            {holds.map((h) => {
+              // 원시 clipId 만으론 판단이 안 된다 — 스토어의 클립·규칙과 조인해 얼굴을 붙인다.
+              const clip = clips.find((c) => c.id === h.clipId);
+              const rule = rules.find((r) => r.id === h.ruleId);
+              const ruleProgram = rule
+                ? programs.find((p) => p.id === (rule.programIds?.[0] ?? rule.programId))
+                : undefined;
+              const thumb = clip ? clipThumbSrc(clip) : undefined;
+              const key = `${h.ruleId}:${h.clipId}`;
+              return (
+                <div key={key} className="sd-card flex flex-wrap items-center gap-3 px-3 py-2.5">
+                  {thumb ? (
+                    // eslint-disable-next-line @next/next/no-img-element -- 서버 동적 프레임(최적화 대상 아님)
+                    <img src={thumb} alt="" className="h-12 w-[68px] shrink-0 rounded-[3px] object-cover" />
+                  ) : (
+                    <div
+                      className="grid h-12 w-[68px] shrink-0 place-items-center rounded-[3px] text-[9px]"
+                      style={{ background: "var(--sd-card-sub)", color: "var(--sd-mut)" }}
+                    >
+                      no img
+                    </div>
+                  )}
+                  <div className="min-w-[220px] flex-1">
+                    <div className="truncate text-[12.5px] font-medium" style={{ color: "var(--sd-fg)" }}>
+                      {clip?.title || h.clipId}
+                    </div>
+                    <div className="sd-mono text-[10.5px]" style={{ color: "var(--sd-mut)" }}>
+                      {clip ? `${Math.round(clip.durationSec)}초 · ` : ""}
+                      {ruleProgram?.title ? `규칙 ${ruleProgram.title} · ` : ""}
+                      대기 시작 {h.heldAt?.slice(0, 16).replace("T", " ") || "—"}
+                    </div>
+                    {/* 사유는 잘리면 판단을 못 한다 — 둘째 줄 전체 폭. */}
+                    <div className="text-[11px] leading-relaxed" style={{ color: "var(--sd-warn)" }}>{h.reason}</div>
+                  </div>
+                  <Link href={`/editor/${h.clipId}`} className="sd-btn shrink-0">미리보기</Link>
+                  <button
+                    type="button"
+                    className="sd-btn sd-btn-primary shrink-0"
+                    disabled={releasing !== null}
+                    onClick={() => void release(h)}
+                  >
+                    {releasing === key ? "승인 중…" : "승인 — 다음 확인 때 게시"}
+                  </button>
+                </div>
+              );
+            })}
           </div>
         )}
       </section>
@@ -315,16 +444,18 @@ export default function AutomationPage() {
           <div className="flex flex-col gap-1.5">
             {rules.map((r) => {
               const pids = r.programIds?.length ? r.programIds : [r.programId];
-              const chans = r.channels?.length ? r.channels : [{ platform: r.platform, accountId: r.accountId }];
+              const chans = channelsOf(r);
               const firstProgram = programs.find((p) => p.id === pids[0]);
-              const upload = chans.some((c) => c.platform === "youtube" || c.platform.startsWith("naver"));
+              const uploadChans = chans.filter((c) => isUploadPlatform(c.platform));
+              // 실업로드 채널이 있어도 게이트가 전부 꺼져 있으면 "실행 중"은 착시다 — 기록만.
+              const uploadLive = uploadChans.some((c) => !gateOff(c.platform, c.accountId));
               return (
                 <div key={r.id} className="sd-card flex flex-wrap items-center gap-2 px-3 py-2.5">
                   <span className="text-[12.5px] font-medium" style={{ color: "var(--sd-fg)" }}>
                     {firstProgram?.title ?? pids[0]}{pids.length > 1 ? ` 외 ${pids.length - 1}개` : ""} → 채널 {chans.length}곳
                   </span>
-                  <span className={cn("sd-tag", !r.enabled ? "sd-tag--ended" : upload ? "sd-tag--airing" : "")}>
-                    {!r.enabled ? "멈춤" : upload ? "실행 중" : "기록만"}
+                  <span className={cn("sd-tag", !r.enabled ? "sd-tag--ended" : uploadChans.length > 0 && uploadLive ? "sd-tag--airing" : "")}>
+                    {!r.enabled ? "멈춤" : uploadChans.length > 0 && uploadLive ? "실행 중" : "기록만"}
                   </span>
                   <span className="sd-tag">{KIND_LABEL[r.mediaKind]}</span>
                   <span className="sd-tag">{CRIT_LABEL[r.criterion]}</span>
@@ -332,6 +463,17 @@ export default function AutomationPage() {
                   <span className="sd-tag">하루 {r.dailyQuota ?? 3}개/채널</span>
                   <span className="sd-tag">{r.activeStart ?? 9}~{r.activeEnd ?? 22}시</span>
                   <span className="sd-tag">{r.templateId ? `템플릿 ${r.templateId}` : "템플릿 자동"}</span>
+                  {/* 오늘 게시 수 — 서버가 publishedToday 를 내려줄 때만(구버전은 숨김). */}
+                  {r.publishedToday &&
+                    chans.map((c) => {
+                      const n = r.publishedToday?.[`${c.platform}:${c.accountId}`];
+                      if (typeof n !== "number") return null;
+                      return (
+                        <span key={`${c.platform}:${c.accountId}`} className="sd-tag">
+                          오늘: {channelLabel(c.platform)} {n}/{r.dailyQuota ?? 3}
+                        </span>
+                      );
+                    })}
 
                   <div className="ml-auto flex gap-2">
                     <button
@@ -398,14 +540,24 @@ export default function AutomationPage() {
           <div className="flex flex-col gap-1">
             {runs.map((run) => {
               const clip = clips.find((c) => c.id === run.clipId);
-              // accountKey("platform:accountId") 는 서버가 최근 노출한 필드 — 구 응답엔 없을 수
-              // 있어 로컬 캐스트로 읽는다(없으면 채널 배지만 생략, 나머지는 그대로).
-              const accountKey = (run as { accountKey?: string | null }).accountKey;
-              const platform = accountKey ? accountKey.split(":")[0] : "";
-              const ytId =
-                platform === "youtube"
-                  ? clip?.distributions?.find((d) => d.channel === "youtube")?.externalId
-                  : undefined;
+              // accountKey("platform:accountId") — 구 응답엔 없을 수 있다(없으면 채널
+              // 배지·배포 상태 조인만 생략, 나머지는 그대로).
+              const platform = run.accountKey ? run.accountKey.split(":")[0] : "";
+              const dist = platform ? clip?.distributions?.find((d) => d.channel === platform) : undefined;
+              const ytId = platform === "youtube" ? dist?.externalId : undefined;
+              // 큐잉 시점의 published 는 "업로드 시작"일 뿐이다 — 실제 완료/실패는
+              // 클립의 배포 상태에서 온다(있으면 덮어쓴다).
+              let label = RESULT_LABEL[run.result] ?? run.result;
+              let tag = RESULT_TAG[run.result] ?? "sd-tag";
+              let reason = run.detail;
+              if (run.result === "published") {
+                if (dist?.status === "published") {
+                  label = "게시함"; tag = "sd-tag sd-tag--airing";
+                } else if (dist?.status === "failed") {
+                  label = "실패"; tag = "sd-tag sd-tag--danger";
+                  reason = dist.error || run.detail;
+                }
+              }
               return (
                 <div key={run.id} className="sd-card flex flex-wrap items-center gap-3 px-3 py-2">
                   <span className="sd-mono shrink-0 text-[10.5px]" style={{ color: "var(--sd-mut)" }}>
@@ -415,14 +567,7 @@ export default function AutomationPage() {
                     {clip?.title || run.clipId || "—"}
                   </span>
                   {platform && <span className="sd-tag shrink-0">{channelLabel(platform)}</span>}
-                  <span className={cn("shrink-0", RESULT_TAG[run.result] ?? "sd-tag")}>
-                    {RESULT_LABEL[run.result] ?? run.result}
-                  </span>
-                  {run.detail && (
-                    <span className="max-w-[240px] truncate text-[10.5px]" style={{ color: "var(--sd-mut)" }}>
-                      {run.detail}
-                    </span>
-                  )}
+                  <span className={cn("shrink-0", tag)}>{label}</span>
                   {ytId && (
                     <a
                       href={`https://www.youtube.com/watch?v=${ytId}`}
@@ -433,6 +578,12 @@ export default function AutomationPage() {
                       열기
                     </a>
                   )}
+                  {/* 사유("안 보냄" 등)는 잘리면 읽을 수 없다 — 둘째 줄 전체 폭. */}
+                  {reason && (
+                    <span className="basis-full text-[10.5px] leading-relaxed" style={{ color: "var(--sd-mut)" }}>
+                      {reason}
+                    </span>
+                  )}
                 </div>
               );
             })}
@@ -440,13 +591,14 @@ export default function AutomationPage() {
         )}
       </section>
 
-      {/* 하단 안내 — 보류 큐 동작 */}
+      {/* 하단 안내 — 승인 대기 동작. "실제 업로드 잠금"(운영 설정)과 구분해 말한다. */}
       <div
         className="rounded-[4px] px-3 py-2.5 text-[11.5px] leading-relaxed"
         style={{ border: "1px solid var(--sd-warn-border)", background: "var(--sd-warn-bg)", color: "var(--sd-warn)" }}
       >
-        <b>보류된 미디어는 저절로 나가지 않습니다.</b> 보류 큐에 쌓인 건은 사람이 확정해야
-        다음 순방에 다시 잡힙니다.
+        <b>승인 대기 미디어는 저절로 나가지 않습니다.</b> 권리 확인 등으로 승인 대기에 들어온
+        건은 사람이 승인해야 다음 확인 때 게시됩니다. 실제 업로드 잠금(운영 설정)은 이것과
+        별개입니다 — 잠겨 있으면 승인해도 기록만 남습니다.
       </div>
     </div>
   );
@@ -618,7 +770,7 @@ function RuleForm({
         )}
       </div>
 
-      {/* 하루 할당량 · 활동 시간창 — 할당량이 찰 때까지 시간창 안에서 순방마다 계속 배포 */}
+      {/* 하루 할당량 · 활동 시간창 — 할당량이 찰 때까지 시간창 안에서 확인 때마다 계속 배포 */}
       <div className="grid grid-cols-3 items-end gap-2">
         <label className="text-[10.5px]" style={{ color: "var(--sd-label)" }}>
           채널당 하루 할당량
@@ -701,7 +853,7 @@ function RuleForm({
 
       <label className="flex items-center gap-2 text-[11.5px]" style={{ color: "var(--sd-fg)" }}>
         <input type="checkbox" checked={approveFirst} onChange={(e) => setApproveFirst(e.target.checked)} />
-        게시 전 사람 승인 (끄면 조건을 만족하면 바로 나갑니다)
+        게시 전 사람 승인 (끄면 문제 없는 건은 바로 나가고, 권리 문제만 승인 대기로 빠집니다)
       </label>
 
       {/* ⚑ 채널별 안내 — 만들 때 성격을 말한다 (F6). 실업로드 = YouTube·네이버. */}

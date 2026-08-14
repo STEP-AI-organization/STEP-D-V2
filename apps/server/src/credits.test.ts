@@ -104,6 +104,33 @@ describe("사용자 내역과 운영 원장은 다르다", () => {
   });
 });
 
+describe("잔액 게이트가 원가 진입점마다 선다", () => {
+  const indexSrc = fs.readFileSync(path.join(SRC, "index.ts"), "utf-8");
+  const workerSrc = fs.readFileSync(path.join(SRC, "worker.ts"), "utf-8");
+
+  it("/api/media/from-youtube 는 잔액 0 이하를 402 로 거부한다", () => {
+    // /api/factory/videos 와 같은 성격(다운로드·분석 = 원가)인데 이 라우트만 게이트가
+    // 없으면 화면 경로로 잔액 없는 워크스페이스가 원가를 계속 쓴다.
+    const route = indexSrc.match(/app\.post\("\/api\/media\/from-youtube"[\s\S]{0,1500}/)?.[0] ?? "";
+    assert.match(route, /creditBalance\(\)/, "from-youtube 에 잔액 확인이 없다");
+    assert.match(route, /insufficient_credits/, "402 사유 코드는 factory 쪽과 같아야 한다");
+    // 게이트는 행을 만들기 **전에** 서야 한다 — 뒤에 서면 placeholder 회차가 남는다.
+    assert.ok(route.indexOf("creditBalance()") < route.indexOf("buildEpisodeAndMedia"),
+      "잔액 게이트가 미디어·회차 생성보다 뒤에 있다");
+  });
+
+  it("다운로드 완료 → content.analyze 자동 큐잉 전에 정밀 잔액 판정이 선다", () => {
+    // 등록 라우트는 러닝타임을 몰라 0 판정만 했다. 다운로드가 끝나면 실제 길이를 아니
+    // 여기서 checkCredits 로 정밀 판정한다. 막히면 잡 실패가 아니라 스킵 기록이어야
+    // 한다 — 실패면 큐 백오프가 매일 같은 사유로 재시도하는 루프가 된다.
+    const fn = workerSrc.match(/async function handleYoutubeDownload[\s\S]*?\n\}/)?.[0] ?? "";
+    assert.match(fn, /checkCredits\(/, "다운로드 완료 후 분석 큐잉 전 잔액 판정이 없다");
+    assert.ok(fn.indexOf("checkCredits(") < fn.indexOf('enqueue("content.analyze"'),
+      "잔액 판정이 content.analyze 큐잉보다 뒤에 있다");
+    assert.match(fn, /크레딧 부족/, "막힌 사유가 사람 말(에피소드 노트)로 안 남는다");
+  });
+});
+
 describe("모자라면 시작하지 않는다", () => {
   it("잔액이 부족하면 거부하고 몇 개 모자란지 말한다", () => {
     const r = checkCredits({ balance: 10, needMinutes: 59 });

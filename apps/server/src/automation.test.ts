@@ -83,6 +83,53 @@ describe("보류된 건은 사람이 확정해야 다시 잡힌다 (F6 Invariant
   });
 });
 
+describe("재보류 유령 방지 — db-pg 소스 스캔", () => {
+  /**
+   * holdClip 의 ON CONFLICT DO UPDATE 가 released_at 을 안 되돌리면, 해제 후 재보류된
+   * 클립이 (1) openHolds(승인 큐)에 안 보이면서 (2) hasReleasedHold 는 참이라
+   * approve_first 를 **재승인 없이** 통과한다 — 사람 눈을 거쳐야 하는 건이 그냥 나간다.
+   */
+  it("holdClip 재보류는 released_at·released_by 를 NULL 로 되돌린다", () => {
+    const src = fs.readFileSync(path.join(SRC, "db-pg.ts"), "utf-8");
+    const fn = src.match(/export async function holdClip[\s\S]*?\n\}/)?.[0] ?? "";
+    assert.match(fn, /DO UPDATE/, "holdClip 이 upsert 가 아니다");
+    assert.match(fn, /released_at\s*=\s*NULL/, "재보류가 해제 기록을 안 되돌린다 — 재승인 없이 통과하는 유령 보류");
+    assert.match(fn, /released_by\s*=\s*NULL/, "released_by 도 함께 리셋해야 감사 기록이 안 헷갈린다");
+  });
+});
+
+describe("순방 배선 — automation-cycle 소스 스캔", () => {
+  const src = fs.readFileSync(path.join(SRC, "automation-cycle.ts"), "utf-8");
+
+  it("채택 직후 렌더를 건다 — 안 걸면 not_rendered 로 매 순방 스킵되어 자동 게시가 0건", () => {
+    assert.match(src, /requestAutoRender\(clipId\)/,
+      "commitAndInherit 직후 렌더 요청이 없다");
+    assert.match(src, /\/api\/clips\/\$\{clipId\}\/export/,
+      "렌더는 factory 와 같은 경로(/api/clips/:id/export)여야 한다 — 복제하면 두 벌이 갈라진다");
+  });
+
+  it("규칙 channels[] 의 계정을 플랫폼별 필드로 풀어 넘긴다", () => {
+    // youtube/naver 만 넘기면 TikTok·IG·FB 는 계정 미지정 배포(record 강등)가 된다.
+    assert.match(src, /tiktokOpenId:\s*chan\.accountId/);
+    assert.match(src, /igUserId:\s*chan\.accountId/);
+    assert.match(src, /metaPageId:\s*chan\.accountId/);
+  });
+
+  it("순방이 채널 실업로드 게이트를 미리 본다 — OFF 채널로 큐잉·한도 차감 금지", () => {
+    assert.match(src, /youtubeUploadEnabled\(\)/);
+    assert.match(src, /naverUploadEnabled\(\)/);
+    assert.match(src, /tiktokUploadEnabled\(\)/);
+    assert.match(src, /instagramUploadEnabled\(\)/);
+    assert.match(src, /facebookUploadEnabled\(\)/);
+  });
+
+  it("크레딧 잔액 0 이하면 순방이 정지하고 사유가 공용 상수다", () => {
+    assert.match(src, /creditBalance\(\)/, "순방 시작에 잔액 확인이 없다");
+    assert.match(src, /CREDIT_IDLE_REASON/,
+      "정지 사유는 automation.ts 의 CREDIT_IDLE_REASON — 라우트와 같은 문구여야 한다");
+  });
+});
+
 describe("승인 배선 — automation-cycle 소스 스캔", () => {
   /**
    * decidePublish 의 approve_first 는 순수 함수라 옳아도, 호출부가 `approved: !held` 로
@@ -164,6 +211,24 @@ describe("채택 기준 (F6 03단계)", () => {
     // 0점으로 치면 아무거나 상위에 올라온다.
     const got = selectCandidates(rule({ criterion: "top3" }), cands).map((c) => c.id);
     assert.deepEqual(got, ["a", "c", "b"]);
+  });
+
+  it("top3 는 회차당 상한이다 — 이미 채택한 수만큼 덜 뽑는다", () => {
+    // 채택하면 후보가 pending 풀에서 빠지므로, 이미 채택한 수를 안 빼면 순방마다
+    // "새 상위 3건"이 또 뽑혀 상한이 없는 것과 같다(수 시간 내 추천 전량 클립화).
+    const r = rule({ criterion: "top3" });
+    assert.deepEqual(selectCandidates(r, cands, 2).map((c) => c.id), ["a"]);
+    assert.deepEqual(selectCandidates(r, cands, 3), []);
+    assert.deepEqual(selectCandidates(r, cands, 99), []);
+    // 음수·소수 같은 이상값은 0 취급 — 상한이 늘어나는 방향의 실수를 막는다.
+    assert.equal(selectCandidates(r, cands, -5).length, 3);
+  });
+
+  it("점수 하한 기준(score80/85)은 채택 수와 무관하다 — 상한은 top3 만의 의미다", () => {
+    assert.deepEqual(
+      selectCandidates(rule({ criterion: "score85" }), cands, 3).map((c) => c.id),
+      ["a", "c"],
+    );
   });
 
   it("사람이 이미 판단한 것은 다시 잡지 않는다", () => {

@@ -163,24 +163,31 @@ export async function dispatchPublish(input: PublishInput): Promise<PublishOutco
   const queued: string[] = [];
   const recorded: string[] = [];
   const status = distributionStatusFor(mode, Boolean(input.scheduled));
+  // 예약 시각은 여기서 한 번만 정규화한다(KST 해석) — 기록·큐 페이로드·지연 계산이
+  // 전부 이 값을 쓴다. 채널마다 따로 파싱하면 한 채널만 +9시간 밀리는 반쪽 수정이 된다.
+  const reserveDate = normalizeReserveDate(input.reserveDate);
 
   for (const clipId of screen.queue) {
     const clip = loaded.find((l) => l.id === clipId)!.clip;
     const value: Record<string, unknown> = {
       status,
       error: undefined,
-      ...(input.reserveDate ? { reserveDate: input.reserveDate } : {}),
-      ...(mode === "upload" && input.youtubeChannelId ? { youtubeChannelId: input.youtubeChannelId } : {}),
+      ...(reserveDate ? { reserveDate } : {}),
+      // 계정 정체성은 **record 모드에도** 남긴다. 예전엔 upload 조건이 걸려 있어 게이트
+      // OFF 로 남는 record 행이 정체성 없는(null) 행이 됐고, hasAccountDistribution 의
+      // 보수 규칙(null = 모든 계정 일치)이 같은 플랫폼의 **2번째 계정을 영구 스킵**시켰다.
+      ...(input.channel === "youtube" && input.youtubeChannelId
+        ? { youtubeChannelId: input.youtubeChannelId } : {}),
       // 어느 네이버 계정으로 나갔는지를 배포 기록에 남긴다. B2B 다계정에서 이게 없으면
       // 나중에 "이 클립 어느 채널에 올라갔지?" 를 로그로만 추적해야 한다.
       ...(isNaverChannel(input.channel) && input.naverAccountId
         ? { naverAccountId: input.naverAccountId } : {}),
       // TikTok 도 계정 정체성을 기록에 남긴다 — 없으면 다계정에서 기록이 서로 덮인다.
-      ...(input.channel === "tiktok" && mode === "upload" && input.tiktokOpenId
+      ...(input.channel === "tiktok" && input.tiktokOpenId
         ? { tiktokOpenId: input.tiktokOpenId } : {}),
-      ...(input.channel === "instagram" && mode === "upload" && input.igUserId
+      ...(input.channel === "instagram" && input.igUserId
         ? { igUserId: input.igUserId } : {}),
-      ...(input.channel === "facebook" && mode === "upload" && input.metaPageId
+      ...(input.channel === "facebook" && input.metaPageId
         ? { metaPageId: input.metaPageId } : {}),
     };
     const distributions = upsertDistribution(clip.distributions, input.channel, value);
@@ -209,7 +216,7 @@ export async function dispatchPublish(input: PublishInput): Promise<PublishOutco
         category: input.naverCategory,
         // 워커는 epoch ms 를 본다. 문자열을 그대로 넘기면 Number() 가 NaN 이 되어
         // 예약이 조용히 사라지고 즉시 발행된다 — 예약은 못 걸리는 것보다 틀리는 게 나쁘다.
-        publishAt: naverPublishAt(input.scheduled, input.reserveDate),
+        publishAt: naverPublishAt(input.scheduled, reserveDate),
       }, {
         // 같은 클립을 같은 계정·같은 타깃에 두 번 넣지 않는다. 네이버는 중복 게시를
         // 되돌리기가 번거롭다.
@@ -228,7 +235,7 @@ export async function dispatchPublish(input: PublishInput): Promise<PublishOutco
         // dedupe 에 채널을 박는다 — youtube 키(clipId:channelId)와 충돌하면 한쪽이 조용히 빠진다.
         dedupeKey: `distribution.publish:${clipId}:tiktok:${input.tiktokOpenId}`,
         // TikTok Content Posting API 는 예약 파라미터가 없다 → 예약이면 잡을 그 시각까지 지연 발사.
-        ...scheduleDelay(input.scheduled, input.reserveDate),
+        ...scheduleDelay(input.scheduled, reserveDate),
       });
       queued.push(clipId);
     } else if (mode === "upload" && input.channel === "instagram") {
@@ -240,7 +247,7 @@ export async function dispatchPublish(input: PublishInput): Promise<PublishOutco
         igUserId: input.igUserId,
       }, {
         dedupeKey: `distribution.publish:${clipId}:instagram:${input.igUserId ?? "-"}`,
-        ...scheduleDelay(input.scheduled, input.reserveDate),
+        ...scheduleDelay(input.scheduled, reserveDate),
       });
       queued.push(clipId);
     } else if (mode === "upload" && input.channel === "facebook") {
@@ -250,7 +257,8 @@ export async function dispatchPublish(input: PublishInput): Promise<PublishOutco
         clipId,
         channel: "facebook",
         metaPageId: input.metaPageId,
-        scheduleDate: input.scheduled ? input.reserveDate : undefined,
+        // 정규화된 문자열을 넘긴다 — 워커의 Date.parse 가 KST 오프셋을 그대로 읽는다.
+        scheduleDate: input.scheduled ? reserveDate : undefined,
       }, {
         dedupeKey: `distribution.publish:${clipId}:facebook:${input.metaPageId ?? "-"}`,
       });
@@ -261,8 +269,9 @@ export async function dispatchPublish(input: PublishInput): Promise<PublishOutco
         clipId,
         channelId: input.youtubeChannelId,
         privacy: input.privacy,
-        // 예약은 미래 시각으로 파싱될 때만 효력이 있다.
-        publishAt: input.scheduled ? input.reserveDate : undefined,
+        // 예약은 미래 시각으로 파싱될 때만 효력이 있다. 정규화된 문자열을 넘긴다 —
+        // 워커의 futurePublishAt(Date.parse)이 KST 오프셋을 그대로 읽는다.
+        publishAt: input.scheduled ? reserveDate : undefined,
       }, {
         dedupeKey: `distribution.publish:${clipId}:${input.youtubeChannelId ?? "-"}`,
       });
@@ -273,6 +282,24 @@ export async function dispatchPublish(input: PublishInput): Promise<PublishOutco
   }
 
   return { queued, recorded, skipped, notice: noticeFor({ queued, recorded, skipped }, input.channel) };
+}
+
+/**
+ * 예약 문자열 정규화 — **TZ 정보가 없으면 KST(+09:00) 로 해석한다.**
+ *
+ * 화면의 datetime-local 은 'YYYY-MM-DDTHH:mm' 을 만드는데, ES 규격상 Date.parse 는
+ * 오프셋 없는 date-time 문자열을 **UTC** 로 읽는다. 서버(Cloud Run)가 UTC 라서 KST
+ * 사용자의 예약이 전 채널에서 +9시간 밀렸다 — "저녁 7시 예약"이 다음날 새벽 4시에 나간다.
+ * 사용자는 KST 로 입력한다(제품이 한국 방송사 대상)는 사실을 여기서 못박는다.
+ *
+ * 이미 오프셋('Z'·±hh:mm)이 있는 문자열은 손대지 않는다 — 명시된 TZ 는 존중한다.
+ * 날짜만('YYYY-MM-DD') 온 경우도 KST 자정으로 해석한다(그냥 +09:00 을 붙이면 파싱 불가).
+ */
+export function normalizeReserveDate(reserveDate: string | undefined): string | undefined {
+  const s = (reserveDate ?? "").trim();
+  if (!s) return undefined;
+  if (/(?:Z|[+-]\d{2}:?\d{2})$/i.test(s)) return s;
+  return /^\d{4}-\d{2}-\d{2}$/.test(s) ? `${s}T00:00+09:00` : `${s}+09:00`;
 }
 
 /**

@@ -308,6 +308,7 @@ import {
   validateName,
 } from "./asset-path.ts";
 import {
+  CREDIT_IDLE_REASON,
   RULE_CRITERIA,
   RULE_MEDIA_KINDS,
   GATE_POLICIES,
@@ -3764,6 +3765,13 @@ app.post("/api/media/from-youtube", async (c) => {
   const program = await getEntity<{ id: string; title: string; targetAge: number }>("program", programId);
   if (!program) return c.json({ error: "program not found" }, 400);
 
+  // 잔액 없는 워크스페이스의 등록은 받지 않는다 — 같은 성격의 /api/factory/videos 와 같은
+  // 기준(잔액 0 이하 = 402). 다운로드·분석이 곧 원가인데, 러닝타임을 아직 모르므로 여기서는
+  // 0 판정만 하고 정밀 게이트는 다운로드 완료 후(워커의 content.analyze 큐잉 직전)에 선다.
+  if ((await creditBalance()) <= 0) {
+    return c.json({ error: "insufficient_credits", message: "크레딧 잔액이 없습니다. 충전 후 다시 시도해 주세요." }, 402);
+  }
+
   const title = typeof body.title === "string" && body.title.trim() ? body.title.trim() : "YouTube 영상";
   const mediaId = newId("m");
 
@@ -4644,17 +4652,20 @@ async function gateFor(subjectType: GateSubjectType, subjectId: string): Promise
 const PAUSE_KEY = "automation.paused";
 
 app.get("/api/automation", async (c) => {
-  const [rules, runs, holds, paused] = await Promise.all([
+  const [rules, runs, holds, paused, balance] = await Promise.all([
     listAutomationRules(),
     listRuleRuns(50),
     openHolds(),
     getAutomationSetting(PAUSE_KEY),
+    creditBalance(),
   ]);
   const plan = planCycle({ paused: paused === "true", rules: rules as any });
   return c.json({
     rules, runs, holds,
     paused: paused === "true",
-    idleReason: plan.idleReason,
+    // 순방(runAutomationCycle)이 크레딧 부족으로 정지 중이면 화면도 같은 사유를 보여야
+    // 한다 — 규칙이 멀쩡한데 아무것도 안 나가는 상태를 사용자가 추리하게 두지 않는다.
+    idleReason: balance <= 0 ? CREDIT_IDLE_REASON : plan.idleReason,
     options: { mediaKinds: RULE_MEDIA_KINDS, criteria: RULE_CRITERIA, gatePolicies: GATE_POLICIES },
   });
 });

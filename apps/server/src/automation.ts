@@ -106,11 +106,22 @@ export interface Candidate {
   status?: string | null;
 }
 
+/** top3 기준의 상한 — **회차(에피소드)당** 총 3건이지, 순방당 3건이 아니다. */
+export const TOP3_CAP = 3;
+
 /**
  * 규칙 조건을 통과한 추천만 고른다 (F6 03단계).
  * 이미 판단된 것(채택·거절)은 다시 잡지 않는다 — 사람이 거절한 걸 자동이 되살리면 안 된다.
+ *
+ * `adoptedCount` = 이 규칙이 **같은 회차에서 이미 채택한 수**(클립의 automationRuleId ·
+ * episodeId 로 센다). top3 만 본다 — 채택하면 후보가 pending 풀에서 빠지므로, 이걸 안 빼면
+ * 순방마다 "새 상위 3건"이 또 뽑혀 상한이 없는 것과 같다(수 시간이면 추천 전량이 클립화).
  */
-export function selectCandidates(rule: AutomationRule, candidates: Candidate[]): Candidate[] {
+export function selectCandidates(
+  rule: AutomationRule,
+  candidates: Candidate[],
+  adoptedCount = 0,
+): Candidate[] {
   const undecided = candidates.filter((c) => (c.status ?? "pending") === "pending");
 
   const byKind = undecided.filter((c) => {
@@ -119,11 +130,14 @@ export function selectCandidates(rule: AutomationRule, candidates: Candidate[]):
   });
 
   if (rule.criterion === "top3") {
+    // 회차당 잔여 상한. 이미 3건 채웠으면 아무것도 뽑지 않는다.
+    const remaining = Math.max(0, TOP3_CAP - Math.max(0, Math.trunc(adoptedCount)));
+    if (remaining === 0) return [];
     // 점수가 없는 후보는 상위 N 에서 뺀다 — 0점으로 치면 아무거나 올라온다.
     return byKind
       .filter((c) => typeof c.score100 === "number")
       .sort((a, b) => (b.score100 ?? 0) - (a.score100 ?? 0))
-      .slice(0, 3);
+      .slice(0, remaining);
   }
 
   const floor = rule.criterion === "score85" ? 85 : 80;
@@ -180,6 +194,12 @@ export function decidePublish(input: {
 }
 
 // ── 순방(cycle) ─────────────────────────────────────────────────────────────────
+
+/**
+ * 크레딧 소진 시 순방 정지 사유 — runAutomationCycle 과 GET /api/automation 이
+ * **같은 문구**를 쓴다. 두 벌이 되면 화면과 로그가 다른 말을 해서 원인 추적이 갈라진다.
+ */
+export const CREDIT_IDLE_REASON = "크레딧 부족 — 충전 필요";
 
 export interface CycleInput {
   /** 전역 일시정지 상태. */

@@ -19,6 +19,7 @@
 import { commitAndInherit } from "./adopt.ts";
 import {
   appendRuleRun,
+  creditBalance,
   getEntity,
   hasReleasedHold,
   holdClip,
@@ -31,9 +32,14 @@ import {
   publishedTodayKst,
 } from "./db-pg.ts";
 import {
+  CREDIT_IDLE_REASON,
   decidePublish, inActiveWindow, planCycle, ruleChannels, rulePrograms, selectCandidates,
   type AutomationRule,
 } from "./automation.ts";
+import {
+  youtubeUploadEnabled, tiktokUploadEnabled, instagramUploadEnabled, facebookUploadEnabled,
+} from "./upload-gate.ts";
+import { naverUploadEnabled } from "./naver-gate.ts";
 import { eligibility, type ChannelRule } from "./channel-rules.ts";
 import { newId } from "./pipeline.ts";
 import { hasAccountDistribution } from "./publish-guard.ts";
@@ -51,6 +57,16 @@ export interface CycleReport {
 
 /** 현재 테넌트의 규칙을 한 바퀴 돈다. */
 export async function runAutomationCycle(): Promise<CycleReport> {
+  // 크레딧 게이트 — 잔액 0 이하면 채택도 게시도 하지 않는다. 채택은 렌더(원가),
+  // 게시는 업로드로 이어져 잔액 없는 워크스페이스가 자동으로 원가를 계속 쓰게 된다.
+  // 사유를 리포트에 실어 GET /api/automation 이 화면에 같은 문구를 보여준다.
+  if ((await creditBalance()) <= 0) {
+    return {
+      tenantScoped: true, rulesEvaluated: 0, adopted: 0, published: 0, held: 0,
+      idleReason: CREDIT_IDLE_REASON,
+    };
+  }
+
   const paused = (await getAutomationSetting("automation.paused")) === "true";
   const rules = (await listAutomationRules()) as unknown as AutomationRule[];
   const plan = planCycle({ paused, rules });
@@ -69,6 +85,11 @@ export async function runAutomationCycle(): Promise<CycleReport> {
   const episodes = await listEntities<any>("episode");
   const recommendations = await listEntities<any>("recommendation");
   const media = await listMedia();
+  // 이미 만들어진 클립 전부 — top3 의 "회차당 3건" 상한을 세는 근거다. 채택하면 추천이
+  // pending 풀에서 빠지므로, 클립 쪽에서 세지 않으면 순방마다 새 상위 3건이 또 뽑힌다.
+  const allClips = await listEntities<any>("clip");
+  const adoptedCountFor = (ruleId: string, episodeId: string): number =>
+    allClips.filter((c) => c.automationRuleId === ruleId && c.episodeId === episodeId).length;
 
   for (const rule of plan.rules) {
     // 활동 시간창(KST · 기본 9~22) 밖에서는 아무것도 하지 않는다 — 다음 순방에 다시 본다.
@@ -92,7 +113,9 @@ export async function runAutomationCycle(): Promise<CycleReport> {
       if (stage === "idle" || stage === "progress") continue;
 
       const cands = recommendations.filter((r) => r.episodeId === ep.id);
-      const pickedIds = new Set(selectCandidates(rule, cands).map((r) => r.id));
+      // top3 는 회차당 상한 — 이 규칙이 이 회차에서 이미 채택한 수를 빼고 뽑는다.
+      const pickedIds = new Set(
+        selectCandidates(rule, cands, adoptedCountFor(rule.id, ep.id)).map((r) => r.id));
       const picked = cands.filter((r) => pickedIds.has(r.id));
 
       for (const rec of picked) {
@@ -133,7 +156,18 @@ export async function runAutomationCycle(): Promise<CycleReport> {
         const ok = await commitAndInherit(clipId, clip, rec.id, rec);
         if (!ok) continue; // 다른 요청이 먼저 채택했다
         report.adopted += 1;
-        await appendRuleRun({ ruleId: rule.id, clipId, result: "media_created", detail: rec.title });
+        // 같은 순방 안에서 top3 상한이 정확히 걸리도록 로컬 목록에도 반영한다.
+        allClips.push(clip);
+        // "렌더 대기"를 사람 말로 남긴다 — 렌더가 늦거나 실패해도 실행 로그만 보면
+        // 클립이 어디까지 왔는지 보이게. 조용한 스킵(not_rendered 무한 반복)의 해독제다.
+        await appendRuleRun({
+          ruleId: rule.id, clipId, result: "media_created",
+          detail: `${rec.title} — 클립 생성 · 렌더 대기`,
+        });
+        // 채택 즉시 렌더를 건다 (아래 requestAutoRender). 여기서 안 걸면 클립이
+        // rendered:false 로 남아 eligibility(not_rendered)에 매 순방 걸리고 자동 게시가
+        // 영원히 0건이다 — 어떤 경로도 렌더를 요청하지 않았기 때문(2026-08-14 확정).
+        await requestAutoRender(clipId);
       }
     }
 
@@ -145,6 +179,23 @@ export async function runAutomationCycle(): Promise<CycleReport> {
 
     for (const chan of channels) {
       const accountKey = `${chan.platform}:${chan.accountId}`;
+
+      // 실업로드 게이트(env) — 순방이 미리 본다. 예전엔 안 봐서, 게이트 OFF 인데도
+      // 큐잉→'published' 기록→하루 한도 차감까지 하고 워커는 전부 failed 로 만들었다
+      // (다음날 재큐잉 루프). 수동 발행 라우트는 자기 409 게이트가 따로 있어 불변.
+      const upGate = autoUploadGate(chan.platform);
+      if (!upGate.send) {
+        // 큐잉·published 기록·한도 차감 없이 사유만 남긴다 — 조용히 건너뛰면
+        // "왜 안 나가지"를 아무도 모른다. 이번 순방에 보낼 게 실제로 있을 때만
+        // 한 줄(채널당) 남긴다 — 매 순방 무조건 쌓으면 로그가 사유를 덮는다.
+        const wouldSend = mine.some(
+          (c) => !hasAccountDistribution(c.distributions, chan.platform, chan.accountId));
+        if (wouldSend) {
+          await appendRuleRun({ ruleId: rule.id, result: "skipped", detail: upGate.offNote, accountKey });
+        }
+        continue;
+      }
+
       const quota = Number(rule.dailyQuota) > 0 ? Number(rule.dailyQuota) : 3;
       let remaining = quota - (await publishedTodayKst(rule.id, accountKey));
       if (remaining <= 0) continue; // 오늘 할당량 완료 — 내일 KST 자정에 리셋
@@ -168,12 +219,25 @@ export async function runAutomationCycle(): Promise<CycleReport> {
         // 두 벌이 되면 한쪽만 고쳐져 매 순방 재업로드가 재발한다.
         if (hasAccountDistribution(clip.distributions, chan.platform, chan.accountId)) continue;
 
+        // 지난 순방에서 렌더가 안 끝난(또는 실패한) 클립 — 다시 걸고, 끝났으면 이번
+        // 순방에서 바로 집는다. /export 는 revision 캐시가 있어 이미 렌더된 클립의
+        // 재요청은 재인코딩 없이 즉시 돌아온다(중복 렌더 방지).
+        if (clip.rendered === false && await requestAutoRender(clip.id)) {
+          const fresh = await getEntity<any>("clip", clip.id);
+          if (fresh) Object.assign(clip, fresh);
+        }
+
         const why = eligibility(channelRule, {
           id: clip.id, durationSec: clip.durationSec,
           aspectRatio: clip.aspectRatio, rendered: clip.rendered !== false,
         });
         if (!why.ok) {
-          await appendRuleRun({ ruleId: rule.id, clipId: clip.id, result: "skipped", detail: why.reason, accountKey });
+          // not_rendered 의 기본 문구는 수동 화면용("내보내기 후…")이라 자동 경로에선
+          // 오독된다 — 사람이 할 일이 없음을 말해 준다.
+          const detail = why.code === "not_rendered"
+            ? "렌더 대기 — 완료되면 다음 순방에 자동으로 게시됩니다."
+            : why.reason;
+          await appendRuleRun({ ruleId: rule.id, clipId: clip.id, result: "skipped", detail, accountKey });
           continue;
         }
 
@@ -206,8 +270,13 @@ export async function runAutomationCycle(): Promise<CycleReport> {
           clipIds: [clip.id],
           channel: chan.platform,
           // 계정 식별자는 플랫폼에 맞는 필드로만 — 배포 행의 계정 정체성
-          // (distributionAccountId)이 이 필드로 판정된다.
+          // (distributionAccountId)이 이 필드로 판정된다. 규칙 channels[] 의 accountId 를
+          // 플랫폼별 필드로 푼다 — 예전엔 youtube/naver 만 넘겨서 TikTok·IG·FB 는 계정
+          // 지정 없는 배포(추론 금지 → record 강등·정체성 없는 행)가 됐다.
           ...(chan.platform === "youtube" ? { youtubeChannelId: chan.accountId } : {}),
+          ...(chan.platform === "tiktok" ? { tiktokOpenId: chan.accountId } : {}),
+          ...(chan.platform === "instagram" ? { igUserId: chan.accountId } : {}),
+          ...(chan.platform === "facebook" ? { metaPageId: chan.accountId } : {}),
           ...(isNaver ? {
             naverAccountId: chan.accountId,
             // 패딩 문구는 단독으로도 10자 이상이어야 한다 — 네이버 클립 최소 설명 길이가
@@ -231,7 +300,9 @@ export async function runAutomationCycle(): Promise<CycleReport> {
           await appendRuleRun({
             ruleId: rule.id, clipId: clip.id,
             result: published ? "published" : "recorded",
-            detail: outcome.notice,
+            // 게이트 OFF 로 record 강등된 채널(TikTok·IG·FB)은 그 사실을 로그에 박는다 —
+            // '기록됨'만 보면 게이트 문제인지 채널 성격인지 구분이 안 된다.
+            detail: upGate.recordOnly ? `${upGate.offNote} · ${outcome.notice}` : outcome.notice,
             accountKey,
           });
         }
@@ -240,6 +311,63 @@ export async function runAutomationCycle(): Promise<CycleReport> {
   }
 
   return report;
+}
+
+/**
+ * 채널별 실업로드 게이트(env) 스냅샷 — 자동 경로 전용 판정.
+ *
+ * - youtube·naver 는 channelPublishMode 가 **항상 upload** 라, 게이트 OFF 인 채로 큐잉하면
+ *   워커가 전부 failed 로 만든다(순방은 이미 'published' 기록+한도 차감). → send:false 로
+ *   순방이 아예 보내지 않는다.
+ * - tiktok·instagram·facebook 은 게이트 OFF 면 dispatchPublish 가 record 모드로 기록만
+ *   남긴다 — 그건 record_only 규칙의 제품 동작("배포 기록만 남습니다")이라 막지 않고,
+ *   recordOnly 표시로 실행 로그에 '기록만 됨'을 명시한다.
+ * - 모르는 플랫폼은 보낸다(dispatchPublish 의 channel_unsupported 가 사유와 함께 거른다 —
+ *   여기서 또 거르면 거절 사유가 두 벌이 된다).
+ */
+function autoUploadGate(platform: string): { send: boolean; recordOnly: boolean; offNote: string } {
+  const on = { send: true, recordOnly: false, offNote: "" };
+  const blocked = (env: string) => ({
+    send: false, recordOnly: false,
+    offNote: `실제 업로드가 꺼져 있습니다 (${env} 미설정) — 보내지 않음. 게이트를 켜면 다음 순방에 게시됩니다.`,
+  });
+  const recordOnly = (env: string) => ({
+    send: true, recordOnly: true,
+    offNote: `실제 업로드 꺼짐 (${env} 미설정) — 기록만 됨`,
+  });
+  switch (platform) {
+    case "youtube": return youtubeUploadEnabled() ? on : blocked("YOUTUBE_UPLOAD_ENABLED");
+    case "navertv":
+    case "naverclip": return naverUploadEnabled() ? on : blocked("NAVER_UPLOAD_ENABLED");
+    case "tiktok": return tiktokUploadEnabled() ? on : recordOnly("TIKTOK_UPLOAD_ENABLED");
+    case "instagram": return instagramUploadEnabled() ? on : recordOnly("INSTAGRAM_UPLOAD_ENABLED");
+    case "facebook": return facebookUploadEnabled() ? on : recordOnly("FACEBOOK_UPLOAD_ENABLED");
+    default: return on;
+  }
+}
+
+/**
+ * 렌더 요청 — factory 의 requestExport 와 같은 경로(POST /api/clips/:id/export · 내부 인증).
+ * 렌더 로직이 서버 라우트에 있는 이유(자막·훅 프리롤·썸네일 오버레이가 전부 거기)는
+ * factory.ts 렌더 단계 주석과 같다 — 워커에서 복제하면 두 벌이 갈라진다.
+ *
+ * 던지지 않는다: 실패한 렌더는 다음 순방의 not_rendered 분기가 다시 요청한다.
+ * 중복 렌더 방지(dedupe)는 두 겹 — (1) 순방 잡 자체가 automation.cycle:{tenantId}
+ * dedupeKey 로 테넌트당 직렬이고, (2) /export 는 revision 캐시가 있어 이미 렌더된
+ * 클립의 재요청은 재인코딩 없이 즉시 돌아온다.
+ */
+async function requestAutoRender(clipId: string): Promise<boolean> {
+  try {
+    const { apiBase, internalHeaders } = await import("./factory.ts");
+    const res = await fetch(`${apiBase()}/api/clips/${clipId}/export`, {
+      method: "POST", headers: await internalHeaders(),
+    });
+    if (!res.ok) throw new Error(`export ${res.status}`);
+    return true;
+  } catch (e) {
+    console.warn(`[automation] 렌더 요청 실패 ${clipId}: ${String(e).slice(0, 160)}`);
+    return false;
+  }
 }
 
 /** 규칙이 이 클립을 만들었는지 — 화면·로그가 자동 생성물을 가려낼 때. */
