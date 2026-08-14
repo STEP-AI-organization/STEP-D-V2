@@ -69,8 +69,10 @@ do_worker() {
   # spawn ENOENT 로 전멸하는 사고 실측(2026-08-13·14). ⚠️ jobs 의 --remove-env-vars 는
   # 조용히 무시되는 것까지 실측했다 — 지우지 말고 **정답으로 덮어쓴다**.
   # MSYS2_ARG_CONV_EXCL 이 없으면 Git Bash 가 /opt/... 를 C:\Program Files\Git\... 로
-  # 변환해 정확히 이 오염을 재생산한다(애초의 원인).
-  MSYS2_ARG_CONV_EXCL="*" gcloud run jobs update stepd-worker-content \
+  # 변환해 정확히 이 오염을 재생산한다(애초의 원인). ⚠️ 단 "*" 로 전부 막으면 gcloud
+  # 래퍼가 자기 gcloud.py 경로 변환까지 못 해 **아예 안 뜬다**(2026-08-14 실측 — 이
+  # 자가치유가 배포마다 조용히 실패하고 있었다). 값이 든 플래그만 좁혀서 막는다.
+  MSYS2_ARG_CONV_EXCL="--update-env-vars" gcloud run jobs update stepd-worker-content \
     --project="$PROJECT" --region="$REGION" \
     --update-env-vars=CORE_PYTHON=/opt/corevenv/bin/python,CORE_DIR=/app \
     >/dev/null 2>&1 || log "⚠️ content job env 자가치유 실패 — 수동 확인 필요"
