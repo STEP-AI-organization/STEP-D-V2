@@ -19,10 +19,14 @@ import { useToast } from "@/components/ui/toast";
 import {
   fetchChannelEligibility,
   fetchNaverAccounts,
+  fetchInstagramAccounts,
+  fetchMetaAccounts,
   publishClips,
   type ChannelEligibility,
   type ChannelRule,
   type NaverAccount,
+  type InstagramAccountInfo,
+  type MetaAccountInfo,
 } from "@/lib/data/api";
 import type { DistributionChannel } from "@/lib/constants";
 import { cn } from "@/lib/utils";
@@ -59,11 +63,21 @@ export function PublishDialog({
   const [naverAccounts, setNaverAccounts] = useState<NaverAccount[]>([]);
   const [naverDesc, setNaverDesc] = useState("");
   const [naverCat, setNaverCat] = useState<{ primary: string; secondary: string }>({ primary: "엔터", secondary: "엔터" });
+  // Instagram(비즈니스 로그인) · Facebook(Meta 페이지) — 네이버/틱톡처럼 계정을 직접 고른다(추론 금지).
+  // 게이트 OFF 면 서버가 record 로 강등, ON 이면 실업로드 — 결과는 응답 notice 에 그대로 나온다.
+  const [igAccounts, setIgAccounts] = useState<InstagramAccountInfo[]>([]);
+  const [metaPages, setMetaPages] = useState<MetaAccountInfo[]>([]);
 
   useEffect(() => {
     void fetchNaverAccounts()
       .then((r) => setNaverAccounts(r.accounts.filter((a) => a.status !== "disabled" && a.hasSession)))
       .catch(() => setNaverAccounts([]));
+    void fetchInstagramAccounts()
+      .then((a) => setIgAccounts(a.filter((x) => x.status !== "disconnected")))
+      .catch(() => setIgAccounts([]));
+    void fetchMetaAccounts()
+      .then((a) => setMetaPages(a.filter((x) => x.status !== "disconnected" && x.pageId)))
+      .catch(() => setMetaPages([]));
   }, []);
 
   useEffect(() => {
@@ -72,8 +86,9 @@ export function PublishDialog({
       try {
         const r = await fetchChannelEligibility(clipIds);
         if (!alive) return;
-        // 네이버 TV 는 제품에서 제외됐다 (2026-08-13) — 옛 규칙이 남아 있어도 새 배포 대상으로 안 내놓는다.
-        setRules(r.rules.filter((x) => x.platform !== "navertv"));
+        // 네이버 TV 는 제품에서 제외(2026-08-13). instagram·facebook 은 아래에서 **계정 단위**로
+        // 직접 고르므로(추론 금지) 제네릭 규칙 행은 뺀다 — 안 그러면 계정 행과 중복된다.
+        setRules(r.rules.filter((x) => !["navertv", "instagram", "facebook"].includes(x.platform)));
         setElig(r.eligibility);
         setLoadErr(null);
       } catch (err) {
@@ -91,8 +106,18 @@ export function PublishDialog({
     const acct = naverAccounts.find((a) => a.id === id);
     return acct ? { acct, channel: "naverclip" as const } : null;
   }, [picked, naverAccounts]);
-  const ok = naverPick ? true : picked ? elig[picked]?.ok : false;
-  const isUpload = naverPick ? true : rule ? UPLOAD_PLATFORMS.has(rule.platform) : false;
+  // IG/FB 계정 선택 행 — key = "ig:<igUserId>" · "fb:<pageId>" (둘 다 숫자 id 라 ':' 안전).
+  const igPick = useMemo(
+    () => (picked?.startsWith("ig:") ? igAccounts.find((a) => `ig:${a.igUserId}` === picked) ?? null : null),
+    [picked, igAccounts],
+  );
+  const fbPick = useMemo(
+    () => (picked?.startsWith("fb:") ? metaPages.find((a) => `fb:${a.pageId}` === picked) ?? null : null),
+    [picked, metaPages],
+  );
+  const accountPick = naverPick || igPick || fbPick;
+  const ok = accountPick ? true : picked ? elig[picked]?.ok : false;
+  const isUpload = accountPick ? true : rule ? UPLOAD_PLATFORMS.has(rule.platform) : false;
   const naverDescShort = naverPick?.channel === "naverclip" && naverDesc.trim().length < 10;
 
   // 채널을 고르면 그 채널의 규칙이 즉시 폼에 반영된다 (F4-2).
@@ -102,21 +127,24 @@ export function PublishDialog({
   }, [rule]);
 
   async function submit() {
-    if ((!rule && !naverPick) || !ok) return;
+    if ((!rule && !accountPick) || !ok) return;
     if (naverDescShort) return;
     setBusy(true);
     try {
-      const channel = (naverPick ? naverPick.channel : rule!.platform) as DistributionChannel;
+      const channel = (naverPick ? naverPick.channel
+        : igPick ? "instagram" : fbPick ? "facebook" : rule!.platform) as DistributionChannel;
       const res = await publishClips(clipIds, channel, {
         scheduled,
         ...(scheduled && reserveDate ? { reserveDate } : {}),
-        // 고른 행이 곧 대상 채널이다 — 게시 가능 채널이 여럿일 때 서버가 추측하지 않게 명시한다.
+        // 고른 행이 곧 대상 채널·계정이다 — 서버가 추측하지 않게 명시한다(다계정 오배포 방지).
         ...(rule?.platform === "youtube" ? { youtubeChannelId: rule.accountId } : {}),
         ...(naverPick ? {
           naverAccountId: naverPick.acct.id,
           description: naverDesc.trim(),
           ...(naverPick.channel === "naverclip" ? { naverCategory: naverCat } : {}),
         } : {}),
+        ...(igPick ? { igUserId: igPick.igUserId } : {}),
+        ...(fbPick ? { metaPageId: fbPick.pageId } : {}),
       });
       toast({
         title: isUpload ? "업로드를 시작했습니다" : "배포 기록을 남겼습니다",
@@ -156,7 +184,7 @@ export function PublishDialog({
           )}
 
           {/* 서버가 연결된 채널을 기본 규칙으로 합성해 주므로, 여기가 비면 연결 자체가 없는 것이다. */}
-          {rules.length === 0 && naverAccounts.length === 0 && !loadErr && (
+          {rules.length === 0 && naverAccounts.length === 0 && igAccounts.length === 0 && metaPages.length === 0 && !loadErr && (
             <p className="text-[11.5px]" style={{ color: "var(--sd-mut)" }}>
               보낼 수 있는 채널이 없습니다 — 배포 채널 화면에서 채널을 먼저 연결하세요.
               (규칙은 없어도 됩니다 — 연결만 되면 기본 설정으로 나갑니다.)
@@ -228,6 +256,34 @@ export function PublishDialog({
                 </button>
               );
             })}
+            {/* Instagram(비즈니스) — 계정 단위 선택. 게이트 OFF 면 서버가 record 로 강등한다. */}
+            {igAccounts.map((a) => {
+              const key = `ig:${a.igUserId}`;
+              return (
+                <button key={key} type="button" onClick={() => setPicked(key)}
+                  className={cn("flex flex-col gap-1 rounded-[5px] px-3 py-2 text-left", picked === key && "sd-btn--on")}
+                  style={{ border: `1px solid ${picked === key ? "var(--sd-accent-border)" : "var(--sd-border)"}`, cursor: "pointer" }}>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-[12.5px] font-medium" style={{ color: "var(--sd-fg)" }}>@{a.username}</span>
+                    <span className="sd-tag">{PLATFORM_LABEL.instagram}</span>
+                  </div>
+                </button>
+              );
+            })}
+            {/* Facebook — Meta 페이지 단위 선택. */}
+            {metaPages.map((a) => {
+              const key = `fb:${a.pageId}`;
+              return (
+                <button key={key} type="button" onClick={() => setPicked(key)}
+                  className={cn("flex flex-col gap-1 rounded-[5px] px-3 py-2 text-left", picked === key && "sd-btn--on")}
+                  style={{ border: `1px solid ${picked === key ? "var(--sd-accent-border)" : "var(--sd-border)"}`, cursor: "pointer" }}>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-[12.5px] font-medium" style={{ color: "var(--sd-fg)" }}>{a.pageName}</span>
+                    <span className="sd-tag">{PLATFORM_LABEL.facebook}</span>
+                  </div>
+                </button>
+              );
+            })}
           </div>
 
           {naverPick && (
@@ -271,6 +327,40 @@ export function PublishDialog({
               )}
               <p className="text-[10.5px]" style={{ color: "var(--sd-mut)" }}>
                 사무실 워커 PC 가 이 계정의 로그인 세션으로 실제 업로드합니다.
+              </p>
+            </div>
+          )}
+
+          {(igPick || fbPick) && (
+            <div
+              className="flex flex-col gap-2 rounded-[5px] p-3"
+              style={{ background: "var(--sd-card-sub)", border: "1px solid var(--sd-border)" }}
+            >
+              <div className="sd-eb" style={{ color: "var(--sd-label)" }}>
+                {igPick ? `${PLATFORM_LABEL.instagram} · @${igPick.username}` : `${PLATFORM_LABEL.facebook} · ${fbPick!.pageName}`}
+              </div>
+              <label className="flex items-center gap-2 text-[11.5px]" style={{ color: "var(--sd-fg)" }}>
+                <input type="checkbox" checked={scheduled} onChange={(e) => setScheduled(e.target.checked)} />
+                예약 발행
+              </label>
+              {scheduled && (
+                <>
+                  <input
+                    type="datetime-local"
+                    value={reserveDate}
+                    onChange={(e) => setReserveDate(e.target.value)}
+                    className="sd-input w-full"
+                  />
+                  <p className="text-[10.5px]" style={{ color: "var(--sd-mut)" }}>
+                    {fbPick
+                      ? "Facebook 이 예약 시각에 공개합니다(네이티브 예약)."
+                      : "예약 시각에 자동 게시합니다(그 시각까지 대기 후 발사)."}{" "}
+                    미래 시각으로 읽힐 때만 예약 · 과거·빈값이면 즉시 발행됩니다.
+                  </p>
+                </>
+              )}
+              <p className="text-[10.5px]" style={{ color: "var(--sd-mut)" }}>
+                업로드 게이트가 꺼져 있으면 실제 게시 없이 <b>기록됨</b>만 남습니다 (결과는 완료 메시지에 표시).
               </p>
             </div>
           )}
@@ -331,7 +421,7 @@ export function PublishDialog({
           <button
             type="button"
             className="sd-btn sd-btn-primary"
-            disabled={busy || (!rule && !naverPick) || !ok || naverDescShort}
+            disabled={busy || (!rule && !accountPick) || !ok || naverDescShort}
             onClick={submit}
           >
             {busy ? "보내는 중…" : isUpload ? "업로드 시작" : "배포 기록"}

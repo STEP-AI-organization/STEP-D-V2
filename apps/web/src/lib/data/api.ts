@@ -1661,6 +1661,12 @@ export async function publishClips(
     /** 네이버 클립: 10자 이상 필수. */
     description?: string;
     naverCategory?: { primary: string; secondary: string };
+    /** TikTok: 어느 계정 받은함으로 (게이트 ON 일 때만). */
+    tiktokOpenId?: string;
+    /** Instagram: 어느 IG 비즈니스 계정으로 (게이트 ON 일 때만). */
+    igUserId?: string;
+    /** Facebook: 어느 Meta 페이지로 (게이트 ON 일 때만). */
+    metaPageId?: string;
   } = {},
 ): Promise<PublishOutcome> {
   const res = await fetch(`${API_BASE}/distributions/publish`, {
