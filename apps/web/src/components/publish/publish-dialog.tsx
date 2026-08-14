@@ -34,6 +34,7 @@ import {
   type PublishOutcome,
 } from "@/lib/data/api";
 import type { DistributionChannel } from "@/lib/constants";
+import { humanReserve, isFutureReserve, nowDatetimeLocal } from "@/lib/reserve-date";
 import { cn } from "@/lib/utils";
 
 const PLATFORM_LABEL: Record<string, string> = {
@@ -464,21 +465,37 @@ export function PublishDialog({
               style={{ background: "var(--sd-card-sub)", border: "1px solid var(--sd-border)" }}
             >
               <label className="flex items-center gap-2 text-[11.5px]" style={{ color: "var(--sd-fg)" }}>
-                <input type="checkbox" checked={scheduled} onChange={(e) => setScheduled(e.target.checked)} />
+                <input
+                  type="checkbox"
+                  checked={scheduled}
+                  onChange={(e) => {
+                    const on = e.target.checked;
+                    setScheduled(on);
+                    if (on && !reserveDate) setReserveDate(nowDatetimeLocal());
+                  }}
+                />
                 예약 발행 <span style={{ color: "var(--sd-mut)" }}>(선택한 {chosen.length}개 채널 공통)</span>
               </label>
               {scheduled && (
                 <>
                   <input
                     type="datetime-local"
+                    min={nowDatetimeLocal()}
                     value={reserveDate}
                     onChange={(e) => setReserveDate(e.target.value)}
                     className="sd-input w-full"
                   />
-                  <p className="text-[10.5px]" style={{ color: "var(--sd-mut)" }}>
-                    YouTube·네이버·Facebook 은 플랫폼이 그 시각에 공개(네이티브 예약), Instagram·TikTok 은
-                    그 시각까지 대기했다가 자동 게시합니다. 미래 시각으로 읽힐 때만 예약 · 과거·빈값이면 즉시 발행됩니다.
-                  </p>
+                  {/* 서버와 같은 판정(isFutureReserve)으로 예약/즉시를 미리 보여 준다 — 화면이 결과와 어긋나지 않게. */}
+                  {isFutureReserve(reserveDate) ? (
+                    <p className="text-[10.5px]" style={{ color: "var(--sd-mut)" }}>
+                      예약: <b>{humanReserve(reserveDate)}</b> — YouTube·네이버·Facebook 은 플랫폼이 그 시각에 공개(네이티브 예약),
+                      Instagram·TikTok 은 그 시각까지 대기했다가 자동 게시합니다.
+                    </p>
+                  ) : (
+                    <p className="text-[10.5px]" style={{ color: "var(--sd-warn)" }}>
+                      시각이 비었거나 과거예요 — 이대로 배포하면 <b>즉시 발행</b>됩니다.
+                    </p>
+                  )}
                 </>
               )}
               {/* F4-3 ⚑ — 게이트/기록만 채널이 섞였으면 명확히 알린다. */}
