@@ -190,6 +190,8 @@ export interface MetaSource {
   /** 자막 일부. 없을 수도 있다(대사 없는 리액션 클립) — 없다고 실패시키지 않는다. */
   captions?: string[];
   durationSec?: number;
+  /** 프로그램별 운영자 커스텀 지시(program.titlePrompt) — 제목·문구 기본 규칙 위에 얹는다. */
+  titlePrompt?: string;
 }
 
 /** 값이 있는 블록만 `\n\n` 으로 잇는다. AENA 의 조립 방식. */
@@ -253,6 +255,15 @@ export function buildMetadataPrompt(src: MetaSource): string {
     "- 위에 주어진 것 밖의 사실을 만들지 마라. 인물·장소·수치·행동 전부.\n" +
     "- 등록 출연자 명단에 없는 이름을 쓰지 마라.\n" +
     "- 낚시성 표현으로 내용을 왜곡하지 마라. 안 나온 일을 났다고 쓰면 안 된다.",
+
+    // ⑧.5 프로그램별 운영자 지시 — 프로그램 상세에서 운영자가 직접 입력(program.titlePrompt).
+    //     기본 규칙 위에 얹는 추가 지시. 값 없으면 블록 자체 생략.
+    src.titlePrompt?.trim()
+      ? "## 프로그램별 운영자 지시\n" +
+        // 1000자 컷 — 운영자 입력이라 길이 통제가 없다. 프롬프트 낭비 방지.
+        `${src.titlePrompt.trim().slice(0, 1000)}\n` +
+        "(위 지시는 이 프로그램 운영자가 직접 입력했다. 기본 규칙은 유지한 채 추가로 반영하라.)"
+      : null,
 
     // ⑨ 출력 형식 — ⚠️ response_schema 를 쓰지 않는다(잘림 복구를 위해)
     "아래 JSON 만 출력한다. 설명·마크다운·코드펜스 금지.\n" +

@@ -184,6 +184,16 @@ describe("프롬프트 조립", () => {
     const p = buildMetadataPrompt({ program: "전참시" });
     assert.doesNotMatch(p, /\n\n\n/, "빈 블록이 그대로 이어져 개행이 3개 이상 생겼다");
   });
+
+  it("titlePrompt(프로그램별 운영자 지시)가 실리고, 없으면 블록 자체가 빠진다", () => {
+    const withPrompt = buildMetadataPrompt({ program: "전참시", titlePrompt: "출연자 실명 필수" });
+    assert.match(withPrompt, /## 프로그램별 운영자 지시/);
+    assert.match(withPrompt, /출연자 실명 필수/);
+    // 값이 없거나 공백뿐이면 헤더도 남기지 않는다 — 빈 지시 블록은 모델에게 소음이다.
+    for (const src of [{ program: "전참시" }, { program: "전참시", titlePrompt: "   " }]) {
+      assert.doesNotMatch(buildMetadataPrompt(src), /프로그램별 운영자 지시/);
+    }
+  });
 });
 
 describe("⚠️ 만든 것이 실제로 소비된다 — 이 리포의 최빈 실패", () => {
@@ -221,6 +231,25 @@ describe("⚠️ 만든 것이 실제로 소비된다 — 이 리포의 최빈 �
     const idx = read("index.ts");
     const block = idx.match(/generate-metadata[\s\S]{0,4000}/)?.[0] ?? "";
     assert.match(block, /edited/, "사람이 수정한 채널을 보존하는 처리가 없다");
+  });
+
+  it("program.titlePrompt 가 서버 제목 경로 두 곳에 실제로 실린다", () => {
+    // 저장(PATCH)만 되고 안 읽히면 이 필드도 titlePrefix 의 길을 간다.
+    const idx = read("index.ts");
+    const gen = idx.match(/generate-metadata[\s\S]{0,4000}/)?.[0] ?? "";
+    assert.match(gen, /titlePrompt/, "generate-metadata 가 program.titlePrompt 를 안 넘긴다");
+    const re = idx.match(/regenerate-titles[\s\S]{0,6000}/)?.[0] ?? "";
+    assert.match(re, /titlePrompt/, "regenerate-titles 가 program.titlePrompt 를 안 쓴다");
+  });
+
+  it("커스텀 프롬프트 2종이 저장(PATCH)→전달(program_context.json)→core 로 이어진다", () => {
+    const idx = read("index.ts");
+    assert.match(idx, /"titlePrompt", "recommendPrompt"/,
+      "PATCH /api/programs/:id 병합 목록에 커스텀 프롬프트 필드가 없다");
+    const cp = read("content-pipeline.ts");
+    const ctxBlock = cp.match(/program_context\.json 로 넘겨[\s\S]{0,1500}/)?.[0] ?? cp;
+    assert.match(ctxBlock, /"titlePrompt", "recommendPrompt"/,
+      "content-pipeline 이 program_context.json 에 커스텀 프롬프트를 안 싣는다 — core 미도달");
   });
 });
 

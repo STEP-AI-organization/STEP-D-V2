@@ -86,6 +86,12 @@ export interface Program {
   /** 출연자별 인물 이미지 매핑 — cast 배열의 이름을 키로 data URL 저장.
    *  cast에서 이름이 제거되면 해당 키도 정리(서버 PATCH 시). */
   castPhotos?: Record<string, string>;
+  /** 쇼츠·클립 제목 생성 시 이 프로그램에만 덧붙는 운영자 추가 지시.
+   *  저장 즉시가 아니라 **다음 content.analyze 부터** 프롬프트에 주입된다 —
+   *  이미 분석된 회차는 재분석해야 반영. 빈 값이면 필드 자체가 없다(지시 없음). */
+  titlePrompt?: string;
+  /** 추천 구간(BEAT 조합) 생성 시 덧붙는 운영자 추가 지시. 반영 시점은 titlePrompt 와 같다. */
+  recommendPrompt?: string;
 }
 
 export interface Episode {

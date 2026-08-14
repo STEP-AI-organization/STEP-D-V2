@@ -386,6 +386,11 @@ export interface CreateProgramInput {
   posterImageDataUrl?: string;
   brandIconDataUrl?: string;
   castPhotos?: Record<string, string>;
+  // ── AI 프롬프트 — 프로그램별 추가 지시 (다음 분석부터 반영) ─────────────
+  /** 제목 생성 추가 지시. ""를 보내면 서버가 필드를 삭제한다(pipelineGenre 와 같은 시맨틱). */
+  titlePrompt?: string;
+  /** 추천(BEAT 조합) 추가 지시. "" = 필드 삭제(지시 없음 복귀). */
+  recommendPrompt?: string;
   // ── 편성 상태 · 담당 · 권리 윈도우 (FLOWS F10 · 2026-08-10) ──────────────
   /** 방영 중/종영/편성 예정. 사람이 지정한다 — 날짜로 자동 판정하지 않는다. */
   status?: ProgramStatus;

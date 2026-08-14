@@ -238,6 +238,9 @@
     line-height: 2rem;
     font-weight: 700;
     letter-spacing: -0.02em;
+    /* 색을 상속에 맡기면 sd 다크 영역에서 어두운 상속색이 배경에 묻혀 제목이 안 보인다
+       (2026-08-14 실측: 회차 상세 프로그램명 비가시). 전경색을 명시한다. */
+    color: var(--sd-fg, hsl(var(--foreground)));
   }
 
   /* Eyebrow label sitting above a page title (Review OS accent kicker). */

@@ -2046,6 +2046,10 @@ app.patch("/api/programs/:id", async (c) => {
     // 담당 PD ("내 담당만" 필터의 비교 대상) · 권리 윈도우(만료일 + 자유 메모) · 종영일.
     // ⚠️ rightsUntil 은 경고용이다 — 지나도 배포를 자동 차단하지 않는다(F3 "자동 판정 없음").
     "owner", "rightsUntil", "rightsNote", "endedDate",
+    // 프로그램별 커스텀 프롬프트 2종 — titlePrompt(제목 생성에 얹는 지시) ·
+    // recommendPrompt(beat 이어붙여 추천 구간 만들 때 얹는 지시). 소비처: core recommend
+    // 프롬프트(program_context.json 경유) + clip-metadata·regenerate-titles. 빈 문자열 = 삭제.
+    "titlePrompt", "recommendPrompt",
   ] as const;
   for (const k of strFields) {
     const v = body[k];
@@ -6518,6 +6522,16 @@ app.post("/api/clips/:id/regenerate-titles", async (c) => {
   const body = await c.req.json<{ prompt?: string }>().catch(() => ({} as { prompt?: string }));
   const extra = String(body.prompt ?? "").trim().slice(0, 400); // 지나치게 긴 지시는 컷
 
+  // 프로그램별 운영자 커스텀 제목 지시(program.titlePrompt) — episode→program 조인으로 로드.
+  // 재생성 버튼을 누를 때마다 자동으로 붙는 지시라, 요청 본문의 일회성 extra 와 별개다.
+  const epForPrompt = clip.episodeId ? await getEntity<any>("episode", clip.episodeId) : null;
+  const programForPrompt = epForPrompt?.programId
+    ? await getEntity<any>("program", epForPrompt.programId)
+    : null;
+  const programTitlePrompt = typeof programForPrompt?.titlePrompt === "string"
+    ? programForPrompt.titlePrompt.trim()
+    : "";
+
   const start = Number(clip.startTime ?? 0);
   const end = Number(clip.endTime ?? start + (clip.durationSec ?? 0));
   if (!(end > start)) return c.json({ error: "clip has no valid segment" }, 400);
@@ -6558,11 +6572,16 @@ app.post("/api/clips/:id/regenerate-titles", async (c) => {
     "- ㅋㅋㅋ·ㅎㅎ 자모 반복 금지. 감탄사(오·와·헐 등) 문두 금지.\n" +
     "- 대괄호 뉴스 접두어([속보]/[단독]/[충격]) 금지. 두루뭉술 명사(썰/이야기/모먼트/사연) 금지.\n" +
     "- **자막에 없는 사실 금지**. 인물·장소·수치·행동을 만들지 마라. 인용은 자막 원문 그대로.";
+  // 프로그램별 운영자 지시는 기본 톤 위에 얹는 상시 규칙, 일회성 extra 는 그보다도 우선.
+  const programBlock = programTitlePrompt
+    ? `\n\n## 프로그램별 운영자 지시\n${programTitlePrompt.slice(0, 1000)}\n` +
+      "(위 지시는 이 프로그램 운영자가 직접 입력했다. 기본 톤·금지 규칙은 유지한 채 추가로 반영하라.)"
+    : "";
   const extraBlock = extra
     ? `\n\n[사용자 추가 요청 — 위 규칙과 충돌하면 사용자 요청을 우선]\n${extra}`
     : "";
   const prompt =
-    `${systemBase}${extraBlock}\n\n` +
+    `${systemBase}${programBlock}${extraBlock}\n\n` +
     `[기존 제목(참고만)]\n${old}\n\n` +
     `[클립 자막]\n${shown}\n\n` +
     'Return ONLY a valid JSON object like {"titles": ["...", "...", "...", "...", "..."]}. ' +
@@ -6709,6 +6728,8 @@ app.post("/api/clips/:id/generate-metadata", async (c) => {
     hookType: rec?.hook,
     captions,
     durationSec: end > start ? end - start : clip.durationSec,
+    // 프로그램별 운영자 커스텀 제목 지시 — PATCH /api/programs/:id 로 저장된 것.
+    titlePrompt: typeof program?.titlePrompt === "string" ? program.titlePrompt : undefined,
   });
 
   try {

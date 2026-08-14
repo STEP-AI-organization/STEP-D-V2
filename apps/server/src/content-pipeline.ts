@@ -1378,6 +1378,10 @@ export async function runContentAnalyze(mediaId: string, fast = false): Promise<
         for (const k of [
           "title", "section", "synopsis", "broadcaster", "schedule",
           "firstAiredDate", "currentInfo", "director", "spinoff", "awards",
+          // 운영자 커스텀 프롬프트 2종 — core/recommend 가 "## 프로그램별 운영자 지시" 블록으로
+          // 소비한다(titlePrompt=제목 생성 · recommendPrompt=beat 조합 추천). 다른 core 소비처
+          // (refine·beat_annot·thumbnail)는 전부 allowlist 렌더라 이 키가 새지 않는다.
+          "titlePrompt", "recommendPrompt",
         ] as const) {
           const v = (program as Record<string, unknown>)[k];
           if (typeof v === "string" && v.trim()) ctx[k] = v.trim();

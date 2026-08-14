@@ -137,6 +137,10 @@ function ProgramDetailInner({
   const [director, setDirector] = useState(program.director ?? "");
   const [spinoff, setSpinoff] = useState(program.spinoff ?? "");
   const [awards, setAwards] = useState(program.awards ?? "");
+  // AI 프롬프트 2종 — 저장 시 trim 해서 보내고, 빈 값은 "" 그대로 → 서버가 필드를 삭제한다
+  // (pipelineGenre 와 같은 시맨틱). 반영은 다음 분석부터라 화면에 그렇게 말해 준다.
+  const [titlePrompt, setTitlePrompt] = useState(program.titlePrompt ?? "");
+  const [recommendPrompt, setRecommendPrompt] = useState(program.recommendPrompt ?? "");
   const [moods, setMoods] = useState<string[]>(program.moods ?? []);
   const [newMood, setNewMood] = useState("");
   const [cast, setCast] = useState<string[]>(program.cast ?? []);
@@ -198,6 +202,8 @@ function ProgramDetailInner({
     setDirector(program.director ?? "");
     setSpinoff(program.spinoff ?? "");
     setAwards(program.awards ?? "");
+    setTitlePrompt(program.titlePrompt ?? "");
+    setRecommendPrompt(program.recommendPrompt ?? "");
     setMoods(program.moods ?? []);
     setCast(program.cast ?? []);
     setCastPhotos(program.castPhotos ?? {});
@@ -209,6 +215,7 @@ function ProgramDetailInner({
     program.rightsUntil, program.rightsNote, program.endedDate,
     program.synopsis, program.broadcaster, program.schedule, program.firstAiredDate,
     program.currentInfo, program.director, program.spinoff, program.awards,
+    program.titlePrompt, program.recommendPrompt,
     program.moods, program.cast, program.castPhotos, program.posterImageDataUrl,
     hydratedRef,
   ]);
@@ -391,6 +398,10 @@ function ProgramDetailInner({
         director: director.trim(),
         spinoff: spinoff.trim(),
         awards: awards.trim(),
+        // AI 프롬프트 — 빈 값도 "" 로 보낸다. 서버 PATCH 가 "" 를 받으면 필드를 제거해
+        // "지시 없음" 상태로 되돌아간다(안 보내면 기존 값이 병합 유지돼 못 지운다).
+        titlePrompt: titlePrompt.trim(),
+        recommendPrompt: recommendPrompt.trim(),
         moods,
         posterImageDataUrl,
         brandIconDataUrl,
@@ -816,6 +827,53 @@ function ProgramDetailInner({
             ))}
           </div>
         )}
+      </Card>
+
+      {/* AI 프롬프트 — 제목·추천 생성에 이 프로그램만의 추가 지시. 별도 저장 버튼 없이
+          위/아래 저장 버튼(updateProgram PATCH)에 합류한다 — 저장 경로가 둘이면 한쪽만
+          누르고 "저장했는데 안 됐다"가 된다. */}
+      <Card
+        title="AI 프롬프트"
+        hint="쇼츠 제목·추천 구간 생성에 이 프로그램에만 적용되는 추가 지시. 비워 두면 기본 동작."
+      >
+        <div className="space-y-4">
+          <div>
+            <div className="mb-1.5">
+              <span className="text-xs font-semibold text-muted-foreground">제목 프롬프트</span>
+              <p className="mt-0.5 text-[11px] text-muted-foreground/70">
+                쇼츠·클립 제목을 만들 때 이 프로그램에만 적용할 추가 지시.
+                예: 출연자 실명을 반드시 넣기 · 스포일러 금지
+              </p>
+            </div>
+            <textarea
+              value={titlePrompt}
+              onChange={(e) => setTitlePrompt(e.target.value)}
+              rows={3}
+              placeholder="예: 출연자 실명을 반드시 넣기 · 스포일러 금지"
+              className={textareaCls}
+            />
+          </div>
+          <div>
+            <div className="mb-1.5">
+              <span className="text-xs font-semibold text-muted-foreground">추천 프롬프트</span>
+              <p className="mt-0.5 text-[11px] text-muted-foreground/70">
+                장면(BEAT)을 이어붙여 추천 구간을 만들 때 적용할 추가 지시.
+                예: 요리 완성 장면 우선 · 게스트 단독 구간 제외
+              </p>
+            </div>
+            <textarea
+              value={recommendPrompt}
+              onChange={(e) => setRecommendPrompt(e.target.value)}
+              rows={3}
+              placeholder="예: 요리 완성 장면 우선 · 게스트 단독 구간 제외"
+              className={textareaCls}
+            />
+          </div>
+        </div>
+        {/* 거짓 즉시성 금지 — 저장해도 이미 분석된 회차에는 소급되지 않는다는 걸 명시 */}
+        <p className="mt-3 text-[11px] leading-relaxed text-muted-foreground/70">
+          저장 후 <b>다음 분석부터</b> 적용됩니다 (이미 분석된 회차는 재분석 필요).
+        </p>
       </Card>
 
       {/* 썸네일 엔진 — 프로그램마다 한 번 준비하면 이후 회차에 자동 적용된다 */}

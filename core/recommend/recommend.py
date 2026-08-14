@@ -308,6 +308,24 @@ def _program_context_block(ctx: dict | None) -> str:
     )
 
 
+def _operator_prompt_block(ctx: dict | None, key: str, usage: str) -> str:
+    """운영자 커스텀 프롬프트(program_context.json 의 titlePrompt·recommendPrompt)를
+    "## 프로그램별 운영자 지시" 블록으로 렌더. 프로그램 상세에서 운영자가 직접 입력한 지시라
+    기본 프롬프트 위에 얹는다 — 단 점수·순위·선별은 결정론 유지(리포 원칙)라서
+    서술·후보 생성 프롬프트에만 넣는다. 값 없으면 블록 자체 생략(no-op)."""
+    if not isinstance(ctx, dict):
+        return ""
+    v = str(ctx.get(key) or "").strip()
+    if not v:
+        return ""
+    # 1000자 컷 — 운영자 입력이라 길이 통제가 없다. 프롬프트 낭비 방지.
+    return (
+        f"\n\n## 프로그램별 운영자 지시 — {usage}\n"
+        + v[:1000]
+        + "\n(위 지시는 이 프로그램 운영자가 직접 입력했다. 기본 톤·금지 규칙은 유지한 채 추가로 반영하라.)"
+    )
+
+
 # recommend()·recommend_narrative_first() 호출 스코프 동안만 활성 — _base_system에서 참조.
 # 매 콜마다 recommend/RNF 진입시 세팅, 종료시 초기화. threading 없어 안전.
 _CURRENT_PROGRAM_CTX: dict | None = None
@@ -330,7 +348,7 @@ def _base_system(genre: str, profile: dict | None = None, cast_registry: list[di
 - **길이는 완결성이 최우선.** 30~90초 안에서, 60초 안에 못 담으면 60초를 넘어 완결시켜라.
   단, 숏폼 하드 실링은 90초다. 20초 미만은
   정말 그 한 컷으로 완결될 때만. start/end는 장면·문장 경계에서 깔끔히 끊어라.
-- appeal은 바이럴 잠재력의 절대평가다: 5=확실히 터진다, 4=강함, 3=쓸만함, 2=약함, 1=비추천.{_profile_block(profile)}{_cast_block(cast_registry, transcript)}{_program_context_block(_CURRENT_PROGRAM_CTX)}"""
+- appeal은 바이럴 잠재력의 절대평가다: 5=확실히 터진다, 4=강함, 3=쓸만함, 2=약함, 1=비추천.{_profile_block(profile)}{_cast_block(cast_registry, transcript)}{_program_context_block(_CURRENT_PROGRAM_CTX)}{_operator_prompt_block(_CURRENT_PROGRAM_CTX, "recommendPrompt", "추천 구간 선택")}"""
 
 
 def _parse_target_len(profile: dict | None) -> float | None:
@@ -1499,7 +1517,9 @@ def _retitle_final_windows(client, shorts: list[dict], transcript: list[dict] | 
         f"index는 입력의 쇼츠 번호를 그대로 돌려준다.{cast_block}"
         # 사용자가 입력한 프로그램 정보(시놉시스·태그·크레딧·방영정보)를 배경 브리핑으로 얹기.
         # recommend()가 활성화한 _CURRENT_PROGRAM_CTX를 읽어 program_context_block으로 렌더.
-        f"{_program_context_block(_CURRENT_PROGRAM_CTX)}\n"
+        f"{_program_context_block(_CURRENT_PROGRAM_CTX)}"
+        # 운영자 커스텀 제목 지시(program.titlePrompt) — 기본 톤 위에 얹는 프로그램별 추가 규칙.
+        f"{_operator_prompt_block(_CURRENT_PROGRAM_CTX, 'titlePrompt', '제목 작성')}\n"
         "\n"
         'Return ONLY a valid JSON object like '
         '{"titles":[{"index":0,"title":"...","candidates":["...","...","...","..."]}]}.'
@@ -3451,6 +3471,12 @@ title (폴백) 은 두 줄 합쳐 한 줄로 자연스럽게.
             "   최대한 활용. 시놉시스 밖 사건은 지어내지 마.\n"
             "4. 인용·여운(...)·'?!' 등 자극 문장부호 자유롭게. 담백·감상 톤은 스크롤 유발 못함.\n"
         )
+
+    # 운영자 커스텀 프롬프트 — recommendPrompt 는 beat 조합(어떤 구간을 묶어 쇼츠로 만들지),
+    # titlePrompt 는 제목·훅 자막 어투에 얹는다. 점수·순위는 아래 _deterministic_score 가
+    # 신호로 계산하므로 여기 지시가 순위 결정론을 깨지 않는다(리포 원칙 유지).
+    system += _operator_prompt_block(_CURRENT_PROGRAM_CTX, "recommendPrompt", "추천 구간(beat 조합) 선택")
+    system += _operator_prompt_block(_CURRENT_PROGRAM_CTX, "titlePrompt", "제목 작성")
 
     prompt = "\n".join(lines) + f"\n\n=== 뽑을 쇼츠 수: {n}개 ==="
 
