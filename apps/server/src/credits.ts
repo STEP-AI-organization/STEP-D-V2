@@ -222,6 +222,14 @@ export type AutoTopupVerdict =
   | { charge: true; reason: "" }
   | { charge: false; reason: string };
 
+/**
+ * 정책값의 **절대 상한** — 사용자가 정하는 상한(월 한도·일 횟수) 자체가 미친 값이면
+ * 상한이 상한 노릇을 못 한다. 라우트 검증과 shouldAutoTopup 양쪽이 같은 값을 본다:
+ * 검증이 생기기 **이전에 저장된 행**도 판정 시점에 여기 걸려야 하기 때문이다.
+ */
+export const AUTO_TOPUP_HARD_MAX_KRW_PER_MONTH = 5_000_000;
+export const AUTO_TOPUP_HARD_MAX_PER_DAY = 10;
+
 /** 지금 자동 충전을 해도 되는가. **상한 중 하나라도 걸리면 멈추고 알린다.** */
 export function shouldAutoTopup(input: {
   policy: AutoTopupPolicy;
@@ -232,12 +240,21 @@ export function shouldAutoTopup(input: {
 }): AutoTopupVerdict {
   const p = input.policy;
   if (!p.enabled) return { charge: false, reason: "자동 충전이 꺼져 있습니다." };
-  if (input.balance > p.thresholdCredits) return { charge: false, reason: "잔액이 임계보다 많습니다." };
-  if (input.todayCount >= p.maxPerDay) {
-    return { charge: false, reason: `오늘 자동 충전 한도(${p.maxPerDay}회)에 도달했습니다 — 조용히 계속 긁지 않습니다.` };
+  // 충전량이 임계 이하면 충전해도 잔액이 임계를 못 넘어 **다음 판정에 또 걸린다** —
+  // 하루 한도까지 연속 과금되는 모양이다. 라우트가 400 으로 막지만, 검증 이전에
+  // 저장된 행 대비 판정에서도 한 번 더 막는다.
+  if (p.topupCredits <= p.thresholdCredits) {
+    return { charge: false, reason: "충전량이 임계 이하라 자동 충전을 멈춥니다 — 충전량을 임계보다 크게 설정하세요." };
   }
-  if (input.monthKrw + input.amountKrw > p.maxKrwPerMonth) {
-    return { charge: false, reason: `이번 달 자동 충전 한도(${p.maxKrwPerMonth.toLocaleString("ko-KR")}원)를 넘습니다.` };
+  if (input.balance > p.thresholdCredits) return { charge: false, reason: "잔액이 임계보다 많습니다." };
+  // 정책값이 절대 상한을 넘어도(검증 전 저장분) 실제 판정은 절대 상한으로 조인다.
+  const maxPerDay = Math.min(p.maxPerDay, AUTO_TOPUP_HARD_MAX_PER_DAY);
+  const maxKrwPerMonth = Math.min(p.maxKrwPerMonth, AUTO_TOPUP_HARD_MAX_KRW_PER_MONTH);
+  if (input.todayCount >= maxPerDay) {
+    return { charge: false, reason: `오늘 자동 충전 한도(${maxPerDay}회)에 도달했습니다 — 조용히 계속 긁지 않습니다.` };
+  }
+  if (input.monthKrw + input.amountKrw > maxKrwPerMonth) {
+    return { charge: false, reason: `이번 달 자동 충전 한도(${maxKrwPerMonth.toLocaleString("ko-KR")}원)를 넘습니다.` };
   }
   return { charge: true, reason: "" };
 }

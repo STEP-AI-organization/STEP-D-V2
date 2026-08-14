@@ -25,6 +25,7 @@ import {
   extractCardDisplay,
   issueIdFor,
   normalizePhone,
+  unwrapPayment,
   verifyCharge,
 } from "./billing-card.ts";
 
@@ -123,21 +124,43 @@ describe("카드 상태", () => {
 });
 
 describe("승인 응답 대조", () => {
-  it("금액이 다르면 크레딧을 주지 않는다", () => {
+  // V2 빌링키 결제 응답은 { payment: {...} } 로 감싸 온다 — 실전과 같은 모양으로 테스트한다.
+  const wrap = (p: unknown) => ({ payment: p });
+
+  it("감싸인(billing-key) 응답을 언랩해 대조한다", () => {
+    assert.equal(verifyCharge({ response: wrap({ status: "PAID", amount: { total: 1680 } }), expectedKrw: 1680 }).ok, true);
+    assert.equal(verifyCharge({ response: wrap({ status: "PAID", amount: { total: 1000 } }), expectedKrw: 1680 }).ok, false);
+    assert.equal(verifyCharge({ response: wrap({ status: "FAILED" }), expectedKrw: 100 }).ok, false);
+  });
+
+  it("최상위(GET /payments) 응답도 그대로 대조한다", () => {
     const r = verifyCharge({ response: { status: "PAID", amount: { total: 1000 } }, expectedKrw: 1680 });
     assert.equal(r.ok, false);
+    assert.equal(verifyCharge({ response: { status: "PAID", amount: { total: 100 } }, expectedKrw: 100 }).ok, true);
   });
 
   it("상태가 PAID 가 아니면 막는다", () => {
     assert.equal(verifyCharge({ response: { status: "FAILED" }, expectedKrw: 100 }).ok, false);
-    assert.equal(verifyCharge({ response: { status: "PAID", amount: { total: 100 } }, expectedKrw: 100 }).ok, true);
   });
 
-  it("금액을 안 주는 응답은 통과시킨다", () => {
-    // 실제로 긁힌 결제를 "금액을 못 봤다"는 이유로 버리면 **돈만 받고 크레딧을 안 준 꼴**이
-    // 된다. 있을 때만 대조하는 게 맞다.
+  it("빈/누락 status 는 실패다 — 모양이 어긋나면 통과 금지", () => {
+    // 예전엔 "status 를 안 주면 통과"였고, 그 관용이 언랩 버그(감싸인 응답의 status 가
+    // 항상 빈 값)를 숨겼다. 모양이 어긋난 응답으로 크레딧을 주면 안 된다.
+    assert.equal(verifyCharge({ response: {}, expectedKrw: 100 }).ok, false);
+    assert.equal(verifyCharge({ response: null, expectedKrw: 100 }).ok, false);
+    assert.equal(verifyCharge({ response: wrap({}), expectedKrw: 100 }).ok, false);
+  });
+
+  it("PAID 인데 금액을 안 주면 통과 — 긁힌 결제를 금액 누락만으로 버리지 않는다", () => {
     assert.equal(verifyCharge({ response: { status: "PAID" }, expectedKrw: 100 }).ok, true);
-    assert.equal(verifyCharge({ response: {}, expectedKrw: 100 }).ok, true);
+    assert.equal(verifyCharge({ response: wrap({ status: "PAID" }), expectedKrw: 100 }).ok, true);
+  });
+
+  it("unwrapPayment — 감싸임/맨몸 양쪽에서 같은 결제 객체가 나온다", () => {
+    assert.deepEqual(unwrapPayment({ payment: { status: "PAID" } }), { status: "PAID" });
+    assert.deepEqual(unwrapPayment({ status: "PAID" }), { status: "PAID" });
+    assert.equal(unwrapPayment(null), null);
+    assert.equal(unwrapPayment("oops"), null);
   });
 });
 
@@ -177,11 +200,43 @@ describe("배선", () => {
     assert.match(r, /topupDedupeKey\(paymentId\)/, "멱등키가 없으면 재시도가 중복 충전이 된다");
   });
 
-  it("실패하면 주문을 failed 로 닫는다", () => {
-    // pending 으로 남겨 두면 결제 로그에서 "긁혔는지 아닌지" 를 구분할 수 없다.
+  it("결제 호출이 던지면 failed, 승인 대조 실패는 pending 유지", () => {
     const r = route("post", "/api/credits/topup/card");
+    // 호출이 던진 실패는 failed 로 닫는다(웹훅의 failed→paid 전이가 진실을 정산한다).
     assert.match(r, /markTopupPaid\(paymentId, "failed"\)/);
     assert.match(r, /markTopupPaid\(paymentId, "paid"\)/);
+    // 승인 대조(verifyCharge) 실패는 **failed 로 찍지 않는다** — 응답 모양이 어긋났을 뿐
+    // 돈은 나갔을 수 있어, pending 으로 두고 웹훅이 정산하게 한다.
+    const afterVerify = r.slice(r.indexOf("const verdict = verifyCharge"));
+    assert.doesNotMatch(afterVerify, /markTopupPaid\(paymentId, "failed"\)/,
+      "대조 실패를 failed 로 닫으면 '안 긁힘' 이라는 거짓 기록이 남고 재결제→이중 청구가 된다");
+  });
+
+  it("수동 카드충전은 멱등키 + 테넌트 잠금으로 이중 결제를 막는다", () => {
+    const r = route("post", "/api/credits/topup/card");
+    // 멱등키가 없으면 더블클릭·재시도마다 새 paymentId 가 되어 카드가 두 번 긁힌다.
+    assert.match(r, /idempotencyKey/, "브라우저 멱등키를 필수로 받아야 한다");
+    assert.match(r, /withTenantLock\(/, "잠금 없이는 동시 클릭 둘이 나란히 긁는다");
+    assert.match(r, /getTopup\(paymentId\)/, "잠금 안에서 기존 주문(paid 여부)을 먼저 봐야 한다");
+    assert.doesNotMatch(r, /randomBytes/, "랜덤 paymentId 는 포트원 멱등키 보호를 무력화한다");
+  });
+
+  it("자동 충전 정책은 절대 상한·임계<충전량 불변식을 라우트에서 막는다", () => {
+    const r = route("put", "/api/credits/auto-topup");
+    assert.match(r, /AUTO_TOPUP_HARD_MAX_PER_DAY/, "일 횟수 절대 상한이 없다");
+    assert.match(r, /AUTO_TOPUP_HARD_MAX_KRW_PER_MONTH/, "월 금액 절대 상한이 없다");
+    assert.match(r, /topupCredits <= thresholdCredits/,
+      "충전량 ≤ 임계면 충전 후에도 임계 아래라 하루 한도까지 연속 과금된다");
+  });
+
+  it("웹훅은 일시적 실패에만 503 을 돌려 재전송을 살린다", () => {
+    // 일괄 200 이면 포트원 재전송이 영영 안 온다 — 조회 실패·READY/PENDING 은 503,
+    // 확정 실패(금액 불일치·이미 처리·우리 주문 아님)는 200 으로 닫는다.
+    const r = route("post", "/api/billing/portone/webhook");
+    assert.notEqual(r, "", "웹훅 라우트를 찾지 못했다");
+    assert.match(r, /503/, "재전송을 살리는 5xx 분기가 없다");
+    assert.match(r, /"READY" \|\| st === "PENDING"/, "진행 중 상태는 재전송 대상이어야 한다");
+    assert.match(r, /금액 불일치/, "금액 불일치는 알람 로그를 남기고 200 으로 닫아야 한다");
   });
 
   it("결제수단은 owner/admin 만 만진다", () => {

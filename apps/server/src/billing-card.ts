@@ -164,6 +164,23 @@ export function cardBlockReason(card: StoredCard | null | undefined): string | n
 }
 
 /**
+ * 포트원 응답에서 결제 객체를 꺼낸다.
+ *
+ * V2 빌링키 결제(`POST /payments/{id}/billing-key`)는 `{ payment: {...} }` 로 **감싸서** 오고,
+ * 단건 조회(`GET /payments/{id}`)는 최상위가 결제 객체다. 이 차이를 호출부마다 따로 다루면
+ * 한쪽이 반드시 틀린다 — 실제로 언랩을 안 해서 빌링키 응답의 status 가 항상 빈 값으로
+ * 보였고, 당시 "status 를 안 주면 통과" 정책이 그 버그를 숨겼다. 응답을 읽는 경로는
+ * 전부 이 헬퍼를 거친다(수동 충전·자동 충전·웹훅·미정산 정산).
+ */
+export function unwrapPayment(response: unknown): { status?: string; amount?: { total?: number } } | null {
+  const r = response as Record<string, unknown> | null;
+  if (!r || typeof r !== "object") return null;
+  const inner = (r as { payment?: unknown }).payment;
+  if (inner && typeof inner === "object") return inner as { status?: string; amount?: { total?: number } };
+  return r as { status?: string; amount?: { total?: number } };
+}
+
+/**
  * 포트원 결제 응답이 우리가 요청한 것과 맞는가.
  *
  * 서버가 직접 부른 결과라 브라우저처럼 위조되진 않지만, **금액이 어긋나면 크레딧을 주면
@@ -173,14 +190,17 @@ export function verifyCharge(input: {
   response: unknown;
   expectedKrw: number;
 }): { ok: true } | { ok: false; message: string } {
-  const r = input.response as { status?: string; amount?: { total?: number } } | null;
+  const r = unwrapPayment(input.response);
   const status = String(r?.status ?? "").toUpperCase();
-  if (status && status !== "PAID") {
-    return { ok: false, message: `결제가 완료되지 않았습니다 (상태 ${status}).` };
+  // status 가 없으면 **실패**다. 예전 "안 주면 통과" 정책은 언랩 버그(빌링키 응답이
+  // { payment: {...} } 로 감싸여 status 가 항상 빈 값)를 숨겼다 — 모양이 어긋난 응답으로
+  // 크레딧을 주면 안 된다. PAID 를 적극적으로 확인한다.
+  if (status !== "PAID") {
+    return { ok: false, message: `결제가 완료되지 않았습니다 (상태 ${status || "없음"}).` };
   }
   const total = r?.amount?.total;
-  // 금액을 안 돌려주는 응답도 있다 — **있을 때만** 대조한다. 없다고 실패로 보면
-  // 실제로 긁힌 결제를 크레딧 없이 버리게 된다(돈만 받고 안 준 꼴).
+  // 금액은 숫자로 **주면** 대조한다. PAID 는 위에서 이미 확인했으므로, 금액 누락만으로
+  // 실제로 긁힌 결제를 버리진 않는다(돈만 받고 크레딧을 안 준 꼴 방지).
   if (typeof total === "number" && total !== input.expectedKrw) {
     return { ok: false, message: `결제 금액이 다릅니다 (요청 ${input.expectedKrw} · 승인 ${total}).` };
   }

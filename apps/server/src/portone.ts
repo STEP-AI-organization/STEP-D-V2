@@ -56,7 +56,7 @@ function safeJson(text: string): unknown {
 // ── 빌링키 결제 (§4-2) ───────────────────────────────────────────────────────────
 
 export interface BillingKeyChargeInput {
-  /** **우리가 만드는 값**이자 멱등키. `pay_{tenantId}_{YYYYMM}` (아래 helper 참조). */
+  /** **우리가 만드는 값**이자 멱등키. cardTopupPaymentId(billing-card.ts)로 만든다. */
   paymentId: string;
   billingKey: string;
   orderName: string;
@@ -120,16 +120,8 @@ export async function getBillingKeyInfo(billingKey: string): Promise<unknown> {
   return call("GET", `/billing-keys/${encodeURIComponent(billingKey)}${qs}`);
 }
 
-/**
- * 결제 식별자 — **결제주기당 하나**. 이게 중복 결제를 막는 마지막 방어선이다.
- * 같은 테넌트·같은 달이면 항상 같은 값이 나와야 한다.
- */
-export function paymentIdFor(tenantId: string, period: Date): string {
-  const ym = `${period.getUTCFullYear()}${String(period.getUTCMonth() + 1).padStart(2, "0")}`;
-  // 포트원 paymentId 는 영숫자·일부 기호만 안전하다. 테넌트 id 의 이상 문자를 지운다.
-  const safe = tenantId.replace(/[^A-Za-z0-9_-]/g, "");
-  return `pay_${safe}_${ym}`;
-}
+// (구 paymentIdFor — 월 단위 구독 결제용 식별자 — 는 2026-08-14 삭제. 선불 크레딧 전환 후
+//  사용처가 없었다. 지금 쓰는 식별자는 topupPaymentId(credits.ts)·cardTopupPaymentId(billing-card.ts).)
 
 // ── 웹훅 검증 (§4-5 · Standard Webhooks 규격) ────────────────────────────────────
 

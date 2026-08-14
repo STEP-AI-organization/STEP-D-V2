@@ -53,4 +53,45 @@ describe("이중 결제 방어 배선 — 소스 스캔", () => {
     assert.match(src, /withTenantLock\(/,
       "잠금 없이는 동시 트리거 둘이 판정을 같이 통과해 카드가 두 번 긁힌다");
   });
+
+  it("새 결제 전에 미정산 주문을 먼저 정산한다", () => {
+    // 승인 후 타임아웃이면 주문은 pending/failed 인데 카드는 긁혀 있다 — 그 위에 새 결제를
+    // 이어가면 이중 청구다. 정산(listUnsettledAutoTopups + getPayment 조회)이 반드시
+    // 새 결제(chargeWithBillingKey)보다 앞서야 한다.
+    const reconcileAt = src.indexOf("listUnsettledAutoTopups(");
+    const chargeAt = src.indexOf("chargeWithBillingKey(");
+    assert.ok(reconcileAt >= 0, "미정산 정산 호출이 없다");
+    assert.ok(chargeAt > reconcileAt, "정산이 새 결제보다 앞서지 않는다");
+    // 정산도 같은 대조 경로(verifyCharge = PAID + 금액 일치)를 지나야 한다.
+    const seg = src.slice(reconcileAt, chargeAt);
+    assert.match(seg, /getPayment\(/, "포트원 실제 상태를 조회하지 않고 정산하면 안 된다");
+    assert.match(seg, /verifyCharge\(/, "미승인·금액 불일치를 정산하면 안 된다");
+    assert.match(seg, /topupDedupeKey\(/, "정산 적립도 멱등키(dedupe_key)를 지나야 한다");
+  });
+});
+
+describe("하루 기준 통일 — 소스 스캔 (db-pg.ts)", () => {
+  const dbpg = fs.readFileSync(path.join(SRC, "db-pg.ts"), "utf-8");
+  const fn = (name: string) =>
+    new RegExp(`export async function ${name}[\\s\\S]*?\\n\\}(?=\\r?\\n)`).exec(dbpg)?.[0] ?? "";
+
+  it("성공 카운트와 시도 슬롯이 같은 'KST 달력일' 을 쓴다", () => {
+    // UI 문구가 "하루 최대 N회"(달력일)이고 paymentId 슬롯(kstDateStamp)도 KST 달력일이다.
+    // 카운트만 롤링 24시간이면 자정 직후 슬롯과 판정이 서로 다른 "하루"를 산다.
+    for (const name of ["autoTopupTodayCount", "autoTopupTodayAttempts"]) {
+      const src = fn(name);
+      assert.notEqual(src, "", `${name} 를 찾지 못했다`);
+      assert.match(src, /Asia\/Seoul/, `${name} 가 KST 달력일을 쓰지 않는다`);
+      assert.doesNotMatch(src, /interval '24 hours'/, `${name} 가 롤링 24시간을 쓴다`);
+    }
+  });
+
+  it("미정산 목록은 자동 충전 요청분만 · 미결제 상태만 · 기간 제한", () => {
+    const src = fn("listUnsettledAutoTopups");
+    assert.notEqual(src, "", "listUnsettledAutoTopups 를 찾지 못했다");
+    assert.match(src, /requested_by = 'auto-topup'/, "수동 충전 미정산은 웹훅 몫 — 자동 충전이 결정하면 안 된다");
+    assert.match(src, /status <> 'paid'/);
+    assert.match(src, /interval '3 days'/, "무기한이면 오래된 주문을 영원히 재조회한다");
+    assert.match(src, /LIMIT 20/);
+  });
 });

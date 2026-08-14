@@ -66,8 +66,10 @@ describe("잔액은 원장 합계다", () => {
     // 재시도는 settleTopup 의 'paid' 가드에 막혀 복구가 불가능해진다.
     // 앵커는 **두 호출보다 앞선 지점**이어야 한다. 결제 실행/정산 판정 직후부터 본다.
     for (const [label, block] of [
-      ["카드 결제", indexSrc.match(/verifyCharge\(\{[\s\S]{0,1600}/)?.[0] ?? ""],
-      ["포트원 웹훅", indexSrc.match(/const settle = settleTopup\([\s\S]{0,1600}/)?.[0] ?? ""],
+      // 창 크기는 "판정 직후 ~ 성공 경로 끝"을 덮으면 된다. 2026-08-14 웹훅에 재전송
+      // 분기(일시적 실패 503)가 늘어 1600자로는 성공 경로가 창 밖으로 밀렸다 — 3000자.
+      ["카드 결제", indexSrc.match(/verifyCharge\(\{[\s\S]{0,3000}/)?.[0] ?? ""],
+      ["포트원 웹훅", indexSrc.match(/const settle = settleTopup\([\s\S]{0,3000}/)?.[0] ?? ""],
     ] as const) {
       // 성공 경로만 본다. `markTopupPaid(…, "failed")` 는 결제가 실제로 거절됐을 때의
       // 조기 반환이라 원장보다 앞서는 게 정상이다.
@@ -78,6 +80,27 @@ describe("잔액은 원장 합계다", () => {
       assert.ok(ledgerAt < statusAt,
         `${label}: markTopupPaid 가 addCreditEntry 보다 먼저다 — 그 사이에서 던지면 크레딧이 영구 손실된다`);
     }
+  });
+});
+
+describe("사용자 내역과 운영 원장은 다르다", () => {
+  const dbSrc = fs.readFileSync(path.join(SRC, "db-pg.ts"), "utf-8");
+  const indexSrc = fs.readFileSync(path.join(SRC, "index.ts"), "utf-8");
+
+  it("사용자 내역에는 delta 0 행이 안 나온다", () => {
+    // PG 취소·실패 웹훅이 delta 0 운영 기록을 원장에 남긴다 — 필터 없이 뿌리면
+    // "조정 +0" 이 결제 취소 때마다 쌓여 결제 내역처럼 보인다 (2026-08-14 실측).
+    const fn = dbSrc.match(/export async function listCreditLedger[\s\S]*?\n\}/)?.[0] ?? "";
+    assert.match(fn, /delta\s*<>\s*0/, "user 스코프가 delta 0 행을 거르지 않는다");
+    const userRoute = indexSrc.match(/app\.get\("\/api\/credits",[\s\S]{0,400}/)?.[0] ?? "";
+    assert.match(userRoute, /listCreditLedger\(50,\s*"user"\)/,
+      "취소 이벤트 기록이 사용자 결제 내역처럼 보이면 안 된다");
+  });
+
+  it("운영·정산 경로는 전부 본다 — user 스코프는 사용자 라우트 한 곳뿐", () => {
+    // 운영자는 취소 흔적까지 봐야 대사가 된다. 기본값이 ops 라 다른 호출부는 무변경이다.
+    const userCalls = indexSrc.match(/listCreditLedger\([^)]*"user"\)/g) ?? [];
+    assert.equal(userCalls.length, 1, "user 스코프가 운영 경로로 번지면 대사 근거가 사라진다");
   });
 });
 
@@ -228,5 +251,27 @@ describe("자동 충전 — 상한이 없으면 못 켠다", () => {
 
   it("전부 통과해야 긁는다", () => {
     assert.equal(shouldAutoTopup(base).charge, true);
+  });
+
+  it("충전량 ≤ 임계면 긁지 않는다 — 충전해도 임계 아래라 하루 한도까지 연속 과금된다", () => {
+    // 라우트가 400 으로 막지만, 검증이 생기기 전에 저장된 행도 판정에서 걸려야 한다.
+    for (const topupCredits of [60, 30]) {
+      const r = shouldAutoTopup({ ...base, policy: { ...policy, topupCredits } });
+      assert.equal(r.charge, false, `topupCredits=${topupCredits} 가 통과했다`);
+    }
+    // 임계보다 1 이라도 크면 정상 — 정상 설정을 막지 않는다.
+    assert.equal(shouldAutoTopup({ ...base, policy: { ...policy, topupCredits: 61 } }).charge, true);
+  });
+
+  it("절대 상한 — 정책값이 미쳐도 월 500만원·일 10회에서 멈춘다", () => {
+    // 검증 전 저장분·수동 조작 대비: 판정은 min(정책, 절대 상한)으로 조인다.
+    const r = shouldAutoTopup({
+      ...base, policy: { ...policy, maxKrwPerMonth: 99_999_999 }, monthKrw: 5_000_000,
+    });
+    assert.equal(r.charge, false, "월 절대 상한이 안 걸렸다");
+    const r2 = shouldAutoTopup({
+      ...base, policy: { ...policy, maxPerDay: 999 }, todayCount: 10,
+    });
+    assert.equal(r2.charge, false, "일 절대 상한이 안 걸렸다");
   });
 });

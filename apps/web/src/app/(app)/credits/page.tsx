@@ -15,8 +15,8 @@ import { useCallback, useEffect, useState } from "react";
 
 import { useToast } from "@/components/ui/toast";
 import { useSession } from "@/lib/auth";
-import { createTopupOrder, fetchCredits, fetchSavedCard, type CreditState } from "@/lib/data/api";
-import { SavedCardPanel } from "@/components/billing/saved-card";
+import { createTopupOrder, fetchCredits, fetchSavedCard, type CreditState, type SavedCard } from "@/lib/data/api";
+import { SavedCardChargeButton, SavedCardPanel } from "@/components/billing/saved-card";
 import { AutoTopupPanel } from "@/components/billing/auto-topup";
 import { cn } from "@/lib/utils";
 
@@ -43,8 +43,10 @@ export default function CreditsPage() {
   const [state, setState] = useState<CreditState | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [credits, setCredits] = useState(600);
-  // 자동 충전 패널이 "카드 먼저 등록" 안내/게이트를 그리려면 카드 등록 여부가 필요하다.
-  const [cardRegistered, setCardRegistered] = useState(false);
+  // 카드 상태는 셋이 같이 본다 — 충전 카드의 저장카드 결제 버튼 · 결제수단 패널(등록·삭제) ·
+  // 자동충전 게이트. 한 번만 조회해 같은 스냅샷을 나눠 준다(따로 조회하면 서로 어긋난다).
+  const [card, setCard] = useState<SavedCard | null>(null);
+  const [cardLoadFailed, setCardLoadFailed] = useState(false);
   // **PG 가 구매자 이메일을 필수로 요구한다**(이니시스 V2 일반결제). 세션에 있으면 채우고,
   // 없으면 사람이 입력한다 — 지금은 로그인이 강제되지 않아 세션 이메일이 빌 수 있다.
   const [email, setEmail] = useState("");
@@ -63,11 +65,13 @@ export default function CreditsPage() {
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
-    // 카드 등록 여부는 자동 충전 패널용 — 실패해도 크레딧 화면은 정상 동작해야 한다.
+    // 카드 조회 실패가 크레딧 화면을 무너뜨리면 안 된다 — 따로 잡고, 실패 사실만 남긴다.
     try {
-      setCardRegistered((await fetchSavedCard()).registered);
+      setCard(await fetchSavedCard());
+      setCardLoadFailed(false);
     } catch {
-      setCardRegistered(false);
+      setCard(null);
+      setCardLoadFailed(true);
     }
   }, []);
 
@@ -76,7 +80,6 @@ export default function CreditsPage() {
   useEffect(() => { if (session.user.name) setBuyerName(session.user.name); }, [session.user.name]);
 
   const price = state?.priceKrw ?? null;
-  const amount = price != null ? credits * price : null;
 
   const emailOk = /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email.trim());
   const phoneDigits = phone.replace(/\D/g, "");
@@ -160,18 +163,26 @@ export default function CreditsPage() {
 
   return (
     <div className="mx-auto flex max-w-[900px] flex-col gap-[14px]">
-      {/* 잔액 */}
-      <div className="sd-card flex flex-wrap items-end gap-6 p-4">
+      {/* 요약 — 잔액과 단가. 아래 결제 버튼들은 전부 이 단가 기준으로 계산된다. */}
+      <div className="sd-card flex flex-wrap items-end gap-8 p-4">
         <div>
           <div className="sd-eb" style={{ color: "var(--sd-label)" }}>보유 크레딧</div>
           <div className="sd-mono text-[34px] leading-none" style={{ color: "var(--sd-fg)" }}>
             {state ? state.balance.toLocaleString("ko-KR") : "—"}
           </div>
+          <div className="mt-1.5 text-[10.5px]" style={{ color: "var(--sd-mut)" }}>
+            {state?.unit ?? "크레딧 1개 = 분석 1분"}
+            {state ? ` · 약 ${Math.floor(state.balance / 60)}시간 ${state.balance % 60}분 분석 가능` : ""}
+          </div>
         </div>
-        <div className="text-[11.5px]" style={{ color: "var(--sd-mut)" }}>
-          {state?.unit ?? "크레딧 1개 = 분석 1분"}
-          <br />
-          {state ? `약 ${Math.floor(state.balance / 60)}시간 ${state.balance % 60}분 분석 가능` : ""}
+        <div>
+          <div className="sd-eb" style={{ color: "var(--sd-label)" }}>크레딧 단가</div>
+          <div className="sd-mono text-[20px] leading-none" style={{ color: "var(--sd-fg)" }}>
+            {price != null ? WON(price) : "—"}
+          </div>
+          <div className="mt-1.5 text-[10.5px]" style={{ color: "var(--sd-mut)" }}>
+            {price != null ? "부가세 포함" : "단가 미설정"}
+          </div>
         </div>
         {awaiting && (
           <span className="sd-tag sd-tag--warn ml-auto">결제 확인 중…</span>
@@ -213,6 +224,32 @@ export default function CreditsPage() {
               ))}
             </div>
 
+            {/* 수량 + 금액 — 아래 결제 버튼 두 개가 모두 이 금액을 긁는다.
+                예전엔 금액과 저장카드 버튼이 서로 다른 자리에 있어 무슨 금액이 나가는지 안 보였다. */}
+            <div className="flex flex-wrap items-center gap-2">
+              <input
+                value={credits}
+                onChange={(e) => setCredits(Number(e.target.value.replace(/\D/g, "")) || 0)}
+                inputMode="numeric"
+                className="sd-input w-[120px]"
+                aria-label="충전할 크레딧"
+              />
+              <span className="text-[11.5px]" style={{ color: "var(--sd-mut)" }}>크레딧</span>
+              <span className="sd-mono text-[15px]" style={{ color: "var(--sd-fg)" }}>
+                {WON(credits * price)}
+              </span>
+              <span
+                className="text-[10.5px]"
+                style={{ color: "var(--sd-mut)" }}
+                // 실제 청구액은 `크레딧 × 단가` 다 — 부가세를 따로 더하지 않는다.
+                // 인보이스도 이 총액에서 역산해 공급가액·세액을 나눈다. 상세는 title 로.
+                title="실제 청구액은 크레딧 × 단가 그대로입니다. 인보이스는 이 총액에서 공급가액·세액을 역산합니다."
+              >
+                (크레딧당 {WON(price)} · 부가세 포함)
+              </span>
+            </div>
+
+            {/* 구매자 정보 — PG(KG이니시스) 필수 3종 */}
             <div className="flex flex-wrap items-center gap-2">
               <input
                 value={buyerName}
@@ -249,57 +286,61 @@ export default function CreditsPage() {
               </p>
             )}
 
-            <SavedCardPanel
-              canManage={canManageBilling}
-              buyer={{ fullName: buyerName.trim(), email: email.trim(), phoneNumber: phoneDigits }}
-              credits={credits}
-              amountKrw={credits * price}
-              onCharged={load}
-              // 카드 등록/삭제 직후 cardRegistered 를 다시 읽는다 — 안 하면 자동충전 패널이 낡은 상태로 남는다.
-              onCardChange={load}
-            />
-
-            <AutoTopupPanel canManage={canManageBilling} hasCard={cardRegistered} priceKrw={price} onCharged={load} />
-
-            <div className="flex flex-wrap items-center gap-2">
-              <input
-                value={credits}
-                onChange={(e) => setCredits(Number(e.target.value.replace(/\D/g, "")) || 0)}
-                inputMode="numeric"
-                className="sd-input w-[120px]"
-                aria-label="충전할 크레딧"
-              />
-              <span className="text-[11.5px]" style={{ color: "var(--sd-mut)" }}>크레딧</span>
-              <span className="sd-mono text-[15px]" style={{ color: "var(--sd-fg)" }}>
-                {amount != null ? WON(amount) : "—"}
-              </span>
-              <span className="text-[10.5px]" style={{ color: "var(--sd-mut)" }}>
-                {/* 실제 청구액은 `크레딧 × 단가` 다 — 부가세를 따로 더하지 않는다.
-                    인보이스도 이 총액에서 역산해 공급가액·세액을 나눈다. */}
-                (크레딧당 {WON(price)} · 부가세 포함)
-              </span>
+            {/* 결제 — 일반결제(결제창)와 저장 카드(즉시 결제). 둘 다 위의 같은 수량·금액을 긁는다. */}
+            <div
+              className="flex flex-wrap items-center gap-2 pt-2.5"
+              style={{ borderTop: "1px solid var(--sd-divider)" }}
+            >
               <button
                 type="button"
-                className="sd-btn sd-btn-primary ml-auto"
+                className="sd-btn sd-btn-primary"
                 disabled={busy || credits <= 0 || !canPay}
                 title={canPay ? undefined : "KG이니시스는 이름·이메일·휴대폰번호가 모두 필요합니다"}
                 onClick={topup}
               >
-                {busy ? "진행 중…" : "결제하기"}
+                {busy ? "진행 중…" : `결제창으로 ${WON(credits * price)} 결제`}
               </button>
+              <SavedCardChargeButton
+                card={card}
+                canManage={canManageBilling}
+                credits={credits}
+                amountKrw={credits * price}
+                onCharged={load}
+              />
             </div>
 
-            <p className="text-[11px] leading-relaxed" style={{ color: "var(--sd-mut)" }}>
-              결제 승인 후 <b>서버가 확인을 마쳐야</b> 잔액에 반영됩니다 — 결제창이 닫힌 직후
-              바로 보이지 않을 수 있습니다. 크레딧은 분석에 쓰인 분만큼 차감됩니다.
+            <p
+              className="text-[11px]"
+              style={{ color: "var(--sd-mut)" }}
+              title="결제 승인 후 서버가 포트원 웹훅으로 확인을 마쳐야 잔액에 반영됩니다 — 결제창이 닫힌 직후에는 바로 보이지 않을 수 있습니다."
+            >
+              승인 후 서버 확인이 끝나야 잔액에 반영됩니다 · 크레딧은 분석에 쓰인 분만큼 차감됩니다.
             </p>
           </>
         )}
       </div>
 
+      {/* 결제 수단 · 자동 충전 — 나란히 두고, 좁은 화면에선 세로로 쌓인다.
+          단가 미설정이어도 카드 등록·자동충전 설정은 미리 해 둘 수 있게 충전 카드 밖에 둔다. */}
+      <div className="grid items-start gap-[14px] md:grid-cols-2">
+        <SavedCardPanel
+          canManage={canManageBilling}
+          buyer={{ fullName: buyerName.trim(), email: email.trim(), phoneNumber: phoneDigits }}
+          card={card}
+          loadFailed={cardLoadFailed}
+          onReload={load}
+        />
+        <AutoTopupPanel
+          canManage={canManageBilling}
+          hasCard={card?.registered ?? false}
+          priceKrw={price}
+          onCharged={load}
+        />
+      </div>
+
       {/* 내역 */}
       <section className="flex flex-col gap-2">
-        <h3 className="sd-serif text-[16px] font-semibold" style={{ color: "var(--sd-fg)" }}>내역</h3>
+        <h3 className="sd-serif text-[16px] font-semibold" style={{ color: "var(--sd-fg)" }}>크레딧 내역</h3>
         {!state || state.ledger.length === 0 ? (
           <div
             className="sd-ph grid min-h-[100px] place-items-center rounded-[6px] px-6 text-center"
@@ -311,21 +352,22 @@ export default function CreditsPage() {
           <div className="flex flex-col gap-1">
             {state.ledger.map((l) => (
               <div key={l.id} className="sd-card flex flex-wrap items-center gap-3 px-3 py-2">
-                <span className="sd-mono text-[10.5px]" style={{ color: "var(--sd-mut)" }}>
+                <span className="sd-mono w-[108px] shrink-0 text-[10.5px]" style={{ color: "var(--sd-mut)" }}>
                   {l.occurredAt?.slice(0, 16).replace("T", " ")}
                 </span>
                 <span className="min-w-[160px] flex-1 truncate text-[11.5px]" style={{ color: "var(--sd-fg)" }}>
                   {reasonLabel(l.reason)}
                   {l.note ? ` · ${l.note}` : ""}
                 </span>
-                {l.amountKrw != null && (
-                  <span className="sd-mono text-[10.5px]" style={{ color: "var(--sd-mut)" }}>{WON(l.amountKrw)}</span>
-                )}
+                {/* 금액·크레딧은 항상 같은 폭의 칸에 우측 정렬 — 조건부로 빼면 줄마다 컬럼이 어긋난다. */}
+                <span className="sd-mono w-[88px] shrink-0 text-right text-[10.5px]" style={{ color: "var(--sd-mut)" }}>
+                  {l.amountKrw != null ? WON(l.amountKrw) : ""}
+                </span>
                 <span
-                  className="sd-mono text-[12.5px]"
+                  className="sd-mono w-[56px] shrink-0 text-right text-[12.5px]"
                   style={{ color: l.delta >= 0 ? "var(--sd-ok)" : "var(--sd-fg)" }}
                 >
-                  {l.delta >= 0 ? "+" : ""}{l.delta}
+                  {l.delta >= 0 ? "+" : ""}{l.delta.toLocaleString("ko-KR")}
                 </span>
               </div>
             ))}

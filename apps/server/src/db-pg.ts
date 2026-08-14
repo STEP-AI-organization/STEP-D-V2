@@ -3166,11 +3166,25 @@ export async function addCreditEntry(e: CreditEntryInput): Promise<boolean> {
   return rows.length > 0;
 }
 
-export async function listCreditLedger(limit = 100): Promise<Record<string, unknown>[]> {
+/**
+ * 크레딧 원장 조회.
+ *
+ * `scope: "user"` 는 **잔액을 움직인 행만** 준다. delta 0 행(PG 취소·실패 이벤트의 운영 기록)은
+ * 원장엔 남지만 사용자 화면엔 안 나간다 — "조정 +0" 이 결제 취소 때마다 쌓여 결제 내역처럼
+ * 보이는 걸 막는다. 실제 환불은 음수 delta 라 그대로 보인다(숨기면 안 되는 건 안 숨겨진다).
+ * planManualCredit 이 delta 0 수동조정을 거부하므로 정상 조정이 걸릴 일도 없다.
+ * 기본값 "ops" 는 기존 호출부(운영·정산 대사) 무변경 — 운영자는 전부 봐야 한다.
+ */
+export async function listCreditLedger(
+  limit = 100,
+  scope: "user" | "ops" = "ops",
+): Promise<Record<string, unknown>[]> {
   const { rows } = await pool.query(
     `SELECT id, delta, reason, media_id AS "mediaId", payment_id AS "paymentId",
             amount_krw AS "amountKrw", note, actor, occurred_at AS "occurredAt"
-       FROM credit_ledger ORDER BY occurred_at DESC LIMIT ${Math.max(1, Math.min(limit, 500))}`,
+       FROM credit_ledger
+      ${scope === "user" ? "WHERE delta <> 0" : ""}
+      ORDER BY occurred_at DESC LIMIT ${Math.max(1, Math.min(limit, 500))}`,
   );
   return rows;
 }
@@ -3334,13 +3348,20 @@ export async function saveAutoTopupPolicy(p: {
   return rows[0] as AutoTopupRow;
 }
 
-/** 최근 24시간 **자동** 충전 성공 횟수 — 하루 상한 판정용(수동 충전은 세지 않는다). */
+/**
+ * 오늘(KST 달력일) **자동** 충전 성공 횟수 — 하루 상한 판정용(수동 충전은 세지 않는다).
+ *
+ * "하루" 는 **KST 달력일**이다 — 롤링 24시간이 아니다. UI 문구가 "하루 최대 N회"라
+ * 사용자는 달력일로 읽고, paymentId 슬롯(autoTopupTodayAttempts·kstDateStamp)도 KST
+ * 달력일이다. 예전엔 이 함수만 롤링 24시간이라 두 "하루"가 어긋났다 — 자정 직후
+ * 슬롯은 1부터 새로 시작하는데 카운트는 어제 것까지 세는 식의 불일치.
+ */
 export async function autoTopupTodayCount(): Promise<number> {
   const { rows } = await pool.query(
     `SELECT count(*)::int AS n FROM credit_topup
       WHERE tenant_id = current_setting('app.tenant_id', true)
         AND requested_by = 'auto-topup' AND status = 'paid'
-        AND created_at >= now() - interval '24 hours'`,
+        AND created_at >= date_trunc('day', now() AT TIME ZONE 'Asia/Seoul') AT TIME ZONE 'Asia/Seoul'`,
   );
   return Number(rows[0]?.n ?? 0);
 }
@@ -3351,7 +3372,9 @@ export async function autoTopupMonthKrw(): Promise<number> {
     `SELECT COALESCE(SUM(amount_krw), 0)::int AS krw FROM credit_topup
       WHERE tenant_id = current_setting('app.tenant_id', true)
         AND requested_by = 'auto-topup' AND status = 'paid'
-        AND created_at >= date_trunc('month', now())`,
+        -- 일 카운터와 같은 KST 달력 기준 — 서버 TZ(UTC)로 자르면 매월 1일 00~09시 KST 의
+        -- 충전이 전월로 집계돼 월 상한 판정이 사용자 인식과 9시간 어긋난다.
+        AND (created_at AT TIME ZONE 'Asia/Seoul') >= date_trunc('month', now() AT TIME ZONE 'Asia/Seoul')`,
   );
   return Number(rows[0]?.krw ?? 0);
 }
@@ -3369,6 +3392,30 @@ export async function autoTopupTodayAttempts(): Promise<number> {
         AND created_at >= date_trunc('day', now() AT TIME ZONE 'Asia/Seoul') AT TIME ZONE 'Asia/Seoul'`,
   );
   return Number(rows[0]?.n ?? 0);
+}
+
+/**
+ * 최근 3일 내 **자동 충전** 주문 중 paid 로 못 끝난 것 — 정산 대상 후보.
+ *
+ * 결제 호출이 승인 뒤 타임아웃으로 끊기면 주문은 pending/failed 인데 카드는 긁혀 있다.
+ * 자동 충전은 새 결제 **전에** 이 목록을 포트원에 물어 정산한다(auto-topup.ts) — 안 하면
+ * 이미 나간 돈 위에 또 긁는 이중 청구가 된다. 자동 충전 요청분(requested_by='auto-topup')만
+ * 본다: 수동 충전의 미정산은 웹훅이 정산할 몫이지 자동 충전이 대신 결정할 일이 아니다.
+ * 3일 컷 — 그보다 오래 안 정산된 건 웹훅 재전송도 끝났을 테니 사람이 봐야 한다.
+ */
+export async function listUnsettledAutoTopups(): Promise<TopupRow[]> {
+  const { rows } = await pool.query<TopupRow>(
+    `SELECT payment_id AS "paymentId", credits, amount_krw AS "amountKrw", status,
+            requested_by AS "requestedBy"
+       FROM credit_topup
+      WHERE tenant_id = current_setting('app.tenant_id', true)
+        AND requested_by = 'auto-topup'
+        AND status <> 'paid'
+        AND created_at >= now() - interval '3 days'
+      ORDER BY created_at ASC
+      LIMIT 20`,
+  );
+  return rows;
 }
 
 /**

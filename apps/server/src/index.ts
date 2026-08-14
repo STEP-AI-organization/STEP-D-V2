@@ -47,7 +47,7 @@ import { audit, clientIp, requireReason, requireSuperadmin, requireOpsAccess, re
 import { grantDedupeKey, nextTenantId, planOnboarding } from "./onboarding.ts";
 import {
   billingConfig, cardBlockReason, cardLabel, cardTopupPaymentId, checkCustomer,
-  extractCardDisplay, issueIdFor, verifyCharge,
+  extractCardDisplay, issueIdFor, unwrapPayment, verifyCharge,
 } from "./billing-card.ts";
 import { buildInvoice, issuerInfo, monthRange, parseMonth } from "./invoice.ts";
 import { checkProfile, incompleteFields } from "./business.ts";
@@ -114,6 +114,7 @@ import {
   createTopup,
   getTopup,
   markTopupPaid,
+  withTenantLock,
   getBillingCard,
   saveBillingCard,
   updateBillingCardDisplay,
@@ -288,6 +289,7 @@ import {
 import { dispatchPublish } from "./publish-dispatch.ts";
 import { opsCapabilityOf, canPublish } from "./ops-role.ts";
 import {
+  AUTO_TOPUP_HARD_MAX_KRW_PER_MONTH, AUTO_TOPUP_HARD_MAX_PER_DAY,
   CREDIT_UNIT_LABEL, MANUAL_REASONS, buildTopup, checkCredits, creditPriceKrw,
   manualDedupeKey, planManualCredit, settleTopup, topupDedupeKey, topupPaymentId,
 } from "./credits.ts";
@@ -5007,51 +5009,110 @@ app.post("/api/credits/topup/card", async (c) => {
   const check = buildTopup(body.credits);
   if (!check.ok) return c.json({ error: "bad_request", message: check.reason }, 400);
 
+  // 멱등키는 **브라우저가 만들고 성공할 때까지 재사용한다** — 더블클릭·네트워크 재시도가
+  // 같은 키로 오면 같은 paymentId 가 되어, 이미 긁힌 주문을 다시 긁지 않는다.
+  // 키가 없으면 그 보호가 성립하지 않으므로 요청 자체를 받지 않는다.
+  // 정제(strip)하면 서로 다른 키가 같은 paymentId 로 접힐 수 있다('a!b'와 'a?b') — 형식이
+  // 틀리면 고쳐주지 말고 거절한다. 'auto' 시작은 자동 충전 슬롯(autoTopupNonce)과 같은
+  // paymentId 네임스페이스라 예약어다.
+  const idem = String(body.idempotencyKey ?? "");
+  if (!/^[A-Za-z0-9_-]{8,40}$/.test(idem) || /^auto/i.test(idem)) {
+    return c.json({ error: "bad_request", message: "idempotencyKey 형식이 올바르지 않습니다 (영숫자·-·_ 8~40자, 'auto' 시작 금지)." }, 400);
+  }
+
   const card = await getBillingCard();
   const blocked = cardBlockReason(card);
   if (blocked) return c.json({ error: "no_card", message: blocked }, 409);
 
   const tenantId = currentTenantId();
-  const paymentId = cardTopupPaymentId(tenantId, crypto.randomBytes(6).toString("hex"));
+  const paymentId = cardTopupPaymentId(tenantId, idem);
   const actor = manager.email;
-  // 주문을 먼저 만든다 — 승인 응답을 못 받아도 "긁혔을 수 있는 건"이 기록으로 남는다.
-  await createTopup({ paymentId, credits: check.credits, amountKrw: check.amountKrw, status: "pending", requestedBy: actor });
 
-  let response: unknown;
-  try {
-    response = await chargeWithBillingKey({
+  // 동시 클릭 둘이 나란히 들어와도 잠금 안에서 한 명씩 — 먼저 끝난 쪽이 paid 를 찍으면
+  // 뒤따르는 쪽은 아래 getTopup 조회에서 걸려 카드를 다시 긁지 않는다.
+  return await withTenantLock(`card-topup:${tenantId}`, async () => {
+    const existing = await getTopup(paymentId);
+    // 같은 멱등키가 **다른 금액**으로 오면(실패 후 금액 바꿔 재클릭) 어느 쪽도 진실이 아니다 —
+    // 옛 주문 재사용도, 새 금액 결제도 하지 않고 거절한다. 통과시키면 credit_topup 행과 실제
+    // 결제액이 어긋나 웹훅 정산이 '금액 불일치' 데드엔드에 빠진다.
+    if (existing && (existing.credits !== check.credits || existing.amountKrw !== check.amountKrw)) {
+      return c.json({
+        error: "idempotency_mismatch",
+        message: `이 요청 키는 다른 금액(${existing.credits}크레딧)의 주문에 이미 사용됐습니다 — 화면을 새로고침한 뒤 다시 시도하세요.`,
+      }, 409);
+    }
+    if (existing?.status === "paid") {
+      // 같은 멱등키로 이미 성공한 요청 — 결제를 반복하지 않고 그 결과를 그대로 돌려준다.
+      const balance = await creditBalance();
+      return c.json({
+        ok: true, duplicate: true, paymentId,
+        credits: existing.credits, amountKrw: existing.amountKrw, balance,
+      });
+    }
+    if (!existing) {
+      // 주문을 먼저 만든다 — 승인 응답을 못 받아도 "긁혔을 수 있는 건"이 기록으로 남는다.
+      // (재시도라 이미 있으면 그대로 쓴다 — payment_id 가 PK 라 다시 넣으면 터진다.)
+      await createTopup({ paymentId, credits: check.credits, amountKrw: check.amountKrw, status: "pending", requestedBy: actor });
+    }
+
+    try {
+      await chargeWithBillingKey({
+        paymentId,
+        billingKey: card!.billingKey!,
+        orderName: `STEP-D 크레딧 ${check.credits}개`,
+        amountKrw: check.amountKrw,
+      });
+    } catch (e: any) {
+      // "이미 결제됨"은 실패가 아니라 **우리가 응답을 놓친 성공**이다(pending 재시도 경로).
+      // failed 로 닫으면 사용자가 새 키로 재결제해 진짜 이중 청구가 된다.
+      const alreadyPaid = /ALREADY[_ ]?PAID/i.test(
+        JSON.stringify((e as { body?: unknown })?.body ?? "") + String(e?.message ?? ""));
+      if (alreadyPaid) {
+        console.warn(`[billing] 카드충전 already-paid ${paymentId} — 아래 재조회로 정산 시도`);
+      } else {
+        await markTopupPaid(paymentId, "failed");
+        return c.json({ error: "charge_failed", message: String(e?.message ?? e) }, 402);
+      }
+    }
+
+    // 동기 빌링키 응답엔 status·amount 가 **없다**(성공 시 { payment: { pgTxId, paidAt } } 뿐 —
+    // @portone/server-sdk 타입으로 확인). 그 응답을 대조하면 모든 성공 결제가 '미확인'이 된다.
+    // 결제 직후 단건 조회(GET /payments — 여긴 status·amount 가 있다)로 재확인한다.
+    // 조회가 일시 실패하면 '미확인' → pending 유지, 웹훅이 정산한다.
+    let verdict: { ok: true } | { ok: false; message: string };
+    try {
+      verdict = verifyCharge({ response: await getPayment(paymentId), expectedKrw: check.amountKrw });
+    } catch {
+      verdict = { ok: false, message: "결제 상태 조회가 일시적으로 실패했습니다." };
+    }
+    if (!verdict.ok) {
+      // failed 로 찍지 않는다 — 응답 모양이 어긋났을 뿐 **돈은 나갔을 수 있다.**
+      // pending 으로 두면 포트원 웹훅(실제 승인 사실)이 정산한다. 여기서 failed 로 닫으면
+      // 로그가 "안 긁힘" 이라고 거짓말하고, 사용자는 재결제해 이중 청구가 된다.
+      console.warn(`[billing] 카드충전 확인 보류 ${paymentId}: ${verdict.message} — 웹훅 정산 대기`);
+      return c.json({
+        error: "charge_unverified",
+        message: `결제 확인 중입니다 — ${verdict.message} 승인 여부는 포트원 웹훅으로 정산됩니다. 잠시 후 잔액을 확인하세요.`,
+      }, 409);
+    }
+
+    // ⚠️ 순서가 중요하다: **원장이 먼저**다.
+    // 원장 insert 는 `dedupe_key` 로 멱등이라 몇 번 불려도 안전하지만, 상태를 먼저 'paid' 로
+    // 찍고 그 사이에서 던지면 재시도가 `settleTopup` 의 'paid' 가드에 막혀 **크레딧이 영구히
+    // 사라진다**. 크레딧을 주는 쪽을 먼저 확정하고, 상태는 그 사실의 표시로만 쓴다.
+    await addCreditEntry({
+      delta: check.credits,
+      reason: "topup",
       paymentId,
-      billingKey: card!.billingKey!,
-      orderName: `STEP-D 크레딧 ${check.credits}개`,
       amountKrw: check.amountKrw,
+      note: "저장 카드 결제",
+      actor,
+      dedupeKey: topupDedupeKey(paymentId),
     });
-  } catch (e: any) {
-    await markTopupPaid(paymentId, "failed");
-    return c.json({ error: "charge_failed", message: String(e?.message ?? e) }, 402);
-  }
-
-  const verdict = verifyCharge({ response, expectedKrw: check.amountKrw });
-  if (!verdict.ok) {
-    await markTopupPaid(paymentId, "failed");
-    return c.json({ error: "charge_mismatch", message: verdict.message }, 409);
-  }
-
-  // ⚠️ 순서가 중요하다: **원장이 먼저**다.
-  // 원장 insert 는 `dedupe_key` 로 멱등이라 몇 번 불려도 안전하지만, 상태를 먼저 'paid' 로
-  // 찍고 그 사이에서 던지면 재시도가 `settleTopup` 의 'paid' 가드에 막혀 **크레딧이 영구히
-  // 사라진다**. 크레딧을 주는 쪽을 먼저 확정하고, 상태는 그 사실의 표시로만 쓴다.
-  await addCreditEntry({
-    delta: check.credits,
-    reason: "topup",
-    paymentId,
-    amountKrw: check.amountKrw,
-    note: "저장 카드 결제",
-    actor,
-    dedupeKey: topupDedupeKey(paymentId),
+    await markTopupPaid(paymentId, "paid");
+    const balance = await creditBalance();
+    return c.json({ ok: true, paymentId, credits: check.credits, amountKrw: check.amountKrw, balance });
   });
-  await markTopupPaid(paymentId, "paid");
-  const balance = await creditBalance();
-  return c.json({ ok: true, paymentId, credits: check.credits, amountKrw: check.amountKrw, balance });
 });
 
 // ── 자동 충전 정책 (잔액 임계 이하 → 저장 카드로 자동 결제) ─────────────────────────
@@ -5084,6 +5145,18 @@ app.put("/api/credits/auto-topup", async (c) => {
   if (thresholdCredits < 0) return c.json({ error: "bad_request", message: "임계 크레딧은 0 이상이어야 합니다." }, 400);
   if (maxPerDay < 1) return c.json({ error: "bad_request", message: "하루 최대 횟수는 1회 이상이어야 합니다." }, 400);
   if (maxKrwPerMonth < 1) return c.json({ error: "bad_request", message: "월 최대 금액을 정해야 합니다." }, 400);
+  // 상한 자체가 미친 값이면 상한 노릇을 못 한다 — 절대 상한(credits.ts)을 넘는 정책은 저장 불가.
+  if (maxPerDay > AUTO_TOPUP_HARD_MAX_PER_DAY) {
+    return c.json({ error: "bad_request", message: `하루 최대 횟수는 ${AUTO_TOPUP_HARD_MAX_PER_DAY}회를 넘을 수 없습니다.` }, 400);
+  }
+  if (maxKrwPerMonth > AUTO_TOPUP_HARD_MAX_KRW_PER_MONTH) {
+    return c.json({ error: "bad_request", message: `월 최대 금액은 ${AUTO_TOPUP_HARD_MAX_KRW_PER_MONTH.toLocaleString("ko-KR")}원을 넘을 수 없습니다.` }, 400);
+  }
+  // 충전량이 임계 이하면 충전해도 잔액이 임계를 못 넘어 다음 판정에 또 걸린다 —
+  // 하루 한도까지 연속 과금되는 설정이라 저장 자체를 막는다.
+  if (topupCredits <= thresholdCredits) {
+    return c.json({ error: "bad_request", message: "충전량은 임계 크레딧보다 커야 합니다 — 아니면 충전 후에도 임계 아래라 연속 과금됩니다." }, 400);
+  }
   const amt = buildTopup(topupCredits);
   if (!amt.ok) return c.json({ error: "bad_request", message: `자동 충전량이 올바르지 않습니다: ${amt.reason}` }, 400);
 
@@ -5108,7 +5181,8 @@ app.post("/api/credits/auto-topup/run", async (c) => {
 });
 
 app.get("/api/credits", async (c) => {
-  const [balance, ledger] = await Promise.all([creditBalance(), listCreditLedger(50)]);
+  // "user" 스코프 — PG 취소·실패 이벤트의 delta 0 운영 기록은 사용자 결제 내역이 아니다.
+  const [balance, ledger] = await Promise.all([creditBalance(), listCreditLedger(50, "user")]);
   return c.json({
     balance,
     unit: CREDIT_UNIT_LABEL,
@@ -5210,7 +5284,8 @@ app.post("/api/billing/portone/webhook", async (c) => {
     const order = await getTopup(paymentId);
     let payment: { status?: string; amountTotal?: number } | null = null;
     try {
-      const p = (await getPayment(paymentId)) as any;
+      // 빌링키 결제 응답과 조회 응답의 래핑 차이를 한 곳(unwrapPayment)에서 흡수한다.
+      const p = unwrapPayment(await getPayment(paymentId));
       payment = { status: p?.status, amountTotal: p?.amount?.total };
     } catch (e) {
       // 조회가 실패하면 크레딧을 올리지 않는다. 포트원이 웹훅을 재전송하므로
@@ -5237,7 +5312,27 @@ app.post("/api/billing/portone/webhook", async (c) => {
     const settle = settleTopup({ order, payment });
     if (!settle.credit) {
       console.warn(`[billing] 충전 보류 ${paymentId}: ${settle.reason}`);
-      // 실패로 확정하지 않는다 — 조회 실패였을 수 있고, 포트원이 재전송한다.
+      // HTTP 코드가 곧 재전송 신호다 — 포트원은 2xx 가 아니면 지수 백오프로 **재전송**한다.
+      // 일괄 200 이면 재전송이 영영 안 온다. 그래서 "나중에 다시 보면 결과가 달라질 수 있는"
+      // 실패만 503 으로 돌려 재전송을 살리고, 다시 봐도 같은 실패는 200 으로 닫는다.
+      const st = String(payment?.status ?? "").toUpperCase();
+      if (!payment) {
+        // 결제 조회 실패(네트워크·포트원 일시 장애) — 다음 재전송 때는 성공할 수 있다.
+        return c.json({ ok: false, retry: true, reason: settle.reason }, 503);
+      }
+      // V2 단건 조회의 대기 상태 리터럴은 PAY_PENDING 이다 — PENDING 만 보면 이 분기가
+      // 죽은 코드가 된다. 혹시 모를 표기 변형까지 셋 다 잡는다.
+      if (st === "READY" || st === "PENDING" || st === "PAY_PENDING") {
+        // 아직 결제 진행 중 — 곧 PAID 로 바뀔 수 있다. 지금 200 으로 닫으면 그 전이를 놓친다.
+        return c.json({ ok: false, retry: true, reason: settle.reason }, 503);
+      }
+      if (st === "PAID" && order && order.status !== "paid") {
+        // 돈은 나갔는데 금액이 주문과 다르다 — 재전송으로 해결될 문제가 아니라 사람 문제다
+        // (결제창 파라미터 조작 또는 우리 계산 버그). 알람 대상으로 크게 남기고 200 으로 닫는다.
+        console.error(`[billing] ⚠ 금액 불일치 ${paymentId}: ${settle.reason} — 수동 확인 필요`);
+        return c.json({ ok: true, credited: false, reason: settle.reason });
+      }
+      // 이미 처리된 충전 · 우리 주문 아님 · FAILED/CANCELLED 확정 — 몇 번을 다시 봐도 같다.
       return c.json({ ok: true, credited: false, reason: settle.reason });
     }
 

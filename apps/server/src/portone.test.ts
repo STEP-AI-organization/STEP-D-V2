@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import { describe, it } from "node:test";
 
-import { WEBHOOK_TOLERANCE_SEC, paymentIdFor, verifyWebhook } from "./portone.ts";
+import { WEBHOOK_TOLERANCE_SEC, verifyWebhook } from "./portone.ts";
 
 const SECRET_RAW = Buffer.from("stepd-webhook-test-secret-0001").toString("base64");
 const SECRET = `whsec_${SECRET_RAW}`;
@@ -98,18 +98,5 @@ describe("웹훅 서명 — 하나라도 어긋나면 거부", () => {
   });
 });
 
-describe("결제 식별자", () => {
-  it("같은 테넌트·같은 달이면 같은 값 (중복 결제 방어)", () => {
-    const a = paymentIdFor("t_default", new Date(Date.UTC(2026, 7, 3)));
-    const b = paymentIdFor("t_default", new Date(Date.UTC(2026, 7, 28)));
-    assert.equal(a, b);
-    assert.equal(a, "pay_t_default_202608");
-  });
-
-  it("달이 바뀌면 달라진다", () => {
-    assert.notEqual(
-      paymentIdFor("t1", new Date(Date.UTC(2026, 7, 1))),
-      paymentIdFor("t1", new Date(Date.UTC(2026, 8, 1))),
-    );
-  });
-});
+// (구 paymentIdFor 테스트는 함수 삭제와 함께 제거 — 2026-08-14. 결정적 결제 식별자 고정은
+//  billing-card.test.ts(cardTopupPaymentId)·auto-topup.test.ts(autoTopupNonce)가 담당한다.)

@@ -52,8 +52,8 @@ export function AutoTopupPanel({
   if (!p) {
     if (!loadFailed) return null; // 첫 조회 중 — 빈 껍데기 깜빡임 방지
     return (
-      <div className="flex flex-col gap-2 rounded-[6px] p-3" style={{ border: "1px solid var(--sd-border)" }}>
-        <div className="text-[11.5px] font-semibold" style={{ color: "var(--sd-fg)" }}>자동 충전</div>
+      <div className="sd-card flex flex-col gap-2.5 p-4">
+        <div className="sd-eb" style={{ color: "var(--sd-label)" }}>자동 충전</div>
         <p className="text-[11.5px]" style={{ color: "var(--sd-mut)" }}>
           자동 충전 설정을 불러오지 못했습니다.{" "}
           <button type="button" className="underline" onClick={() => void load()}>
@@ -133,9 +133,11 @@ export function AutoTopupPanel({
   }
 
   return (
-    <div className="flex flex-col gap-3 rounded-[6px] p-3" style={{ border: "1px solid var(--sd-border)" }}>
+    // 충전 카드 안에 접혀 있던 시절의 얇은 박스가 아니라 이제 화면 최상위 카드다 —
+    // 이웃(충전·결제 수단) 카드와 같은 sd-card + 오버라인 헤더로 층을 맞춘다.
+    <div className="sd-card flex flex-col gap-3 p-4">
       <div className="flex items-center gap-2">
-        <div className="text-[11.5px] font-semibold" style={{ color: "var(--sd-fg)" }}>자동 충전</div>
+        <div className="sd-eb" style={{ color: "var(--sd-label)" }}>자동 충전</div>
         <span
           className="rounded-[3px] px-1.5 py-0.5 text-[10px] font-medium"
           style={
@@ -199,7 +201,8 @@ export function AutoTopupPanel({
             </button>
             <button type="button" className="sd-btn" disabled={busy !== null || !p.enabled || !hasCard || dirty} onClick={runNow}
               title={dirty ? "저장하지 않은 변경이 있습니다 — 먼저 저장하세요 (실행은 저장된 설정으로 결제됩니다)"
-                : !p.enabled ? "먼저 자동 충전을 켜고 저장하세요" : undefined}>
+                : !p.enabled ? "먼저 자동 충전을 켜고 저장하세요"
+                : "실제 결제입니다 — 잔액이 임계 아래면 저장 카드로 즉시 결제됩니다"}>
               {busy === "run" ? "실행 중…" : "지금 1회 충전 실행"}
             </button>
             {dirty && (
@@ -208,13 +211,16 @@ export function AutoTopupPanel({
               </span>
             )}
           </div>
-          {/* "테스트" 같은 완곡어로 실결제를 숨기지 않는다 — 사유·금액을 본문에 그대로 적는다. */}
-          <p className="text-[11px]" style={{ color: "var(--sd-mut)" }}>
-            위 실행 버튼은 <b style={{ color: "var(--sd-fg)" }}>실제 결제</b>입니다 — 지금 잔액이
-            임계({p.thresholdCredits.toLocaleString("ko-KR")}크레딧) 아래면 저장 카드로{" "}
+          {/* "테스트" 같은 완곡어로 실결제를 숨기지 않는다 — 금액은 본문 한 줄에, 상세는 title 로. */}
+          <p
+            className="text-[11px]"
+            style={{ color: "var(--sd-mut)" }}
+            title={`지금 잔액이 임계(${p.thresholdCredits.toLocaleString("ko-KR")}크레딧) 아래면 저장 카드로 즉시 결제됩니다. 조건이 아니면 결제 없이 사유만 알려줍니다.`}
+          >
+            실행 버튼은 <b style={{ color: "var(--sd-fg)" }}>실제 결제</b>입니다 — 조건 충족 시{" "}
             {p.topupCredits.toLocaleString("ko-KR")}크레딧
-            {priceKrw != null ? ` (₩${(p.topupCredits * priceKrw).toLocaleString("ko-KR")})` : ""}이 즉시
-            결제됩니다. 조건이 아니면 결제 없이 사유만 알려줍니다.
+            {priceKrw != null ? ` (₩${(p.topupCredits * priceKrw).toLocaleString("ko-KR")})` : ""}이
+            즉시 결제됩니다.
           </p>
         </>
       ) : (

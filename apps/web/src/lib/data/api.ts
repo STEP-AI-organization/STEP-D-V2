@@ -1421,14 +1421,15 @@ export async function runAutoTopup(): Promise<{
  * 저장 카드로 충전. **결제창이 없다** — 서버가 바로 긁고 승인까지 확인한 뒤 응답한다.
  * 그래서 일반결제와 달리 웹훅을 기다릴 필요가 없고, 응답의 balance 가 이미 반영된 잔액이다.
  */
-export async function topupWithCard(credits: number): Promise<{
-  paymentId: string; credits: number; amountKrw: number; balance: number;
+export async function topupWithCard(credits: number, idempotencyKey: string): Promise<{
+  paymentId: string; credits: number; amountKrw: number; balance: number; duplicate?: boolean;
 }> {
   const res = await fetch(`${API_BASE}/credits/topup/card`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     credentials: "include",
-    body: JSON.stringify({ credits }),
+    // idempotencyKey: 성공할 때까지 같은 키를 재사용해야 재시도가 이중 결제가 안 된다(서버 필수).
+    body: JSON.stringify({ credits, idempotencyKey }),
   });
   if (!res.ok) {
     const b = (await res.json().catch(() => null)) as { message?: string; error?: string } | null;
