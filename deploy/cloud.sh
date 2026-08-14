@@ -65,11 +65,15 @@ do_worker() {
     --image="${REPO}:${tag_y}" || die "youtube job 갱신 실패"
   gcloud run jobs update stepd-worker-content --project="$PROJECT" --region="$REGION" \
     --image="${REPO}:${tag_c}" || die "content job 갱신 실패"
-  # env 자가 치유 — 깨진 CORE_PYTHON/CORE_DIR(윈도우 경로로 오염된 옛 스냅샷)이 어떤
-  # 경로로든 잡에 되살아나는 사고가 두 번 실측됐다(2026-08-13·08-14: 이미지 기본값을
-  # 덮어 분석이 spawn ENOENT 로 전멸). 이미지 ENV 가 정답이므로 배포 때마다 걷어낸다.
-  gcloud run jobs update stepd-worker-content --project="$PROJECT" --region="$REGION" \
-    --remove-env-vars=CORE_PYTHON,CORE_DIR >/dev/null 2>&1 || true
+  # env 자가 치유 — 깨진 CORE_PYTHON/CORE_DIR(윈도우 경로)이 잡에 눌러앉아 분석이
+  # spawn ENOENT 로 전멸하는 사고 실측(2026-08-13·14). ⚠️ jobs 의 --remove-env-vars 는
+  # 조용히 무시되는 것까지 실측했다 — 지우지 말고 **정답으로 덮어쓴다**.
+  # MSYS2_ARG_CONV_EXCL 이 없으면 Git Bash 가 /opt/... 를 C:\Program Files\Git\... 로
+  # 변환해 정확히 이 오염을 재생산한다(애초의 원인).
+  MSYS2_ARG_CONV_EXCL="*" gcloud run jobs update stepd-worker-content \
+    --project="$PROJECT" --region="$REGION" \
+    --update-env-vars=CORE_PYTHON=/opt/corevenv/bin/python,CORE_DIR=/app \
+    >/dev/null 2>&1 || log "⚠️ content job env 자가치유 실패 — 수동 확인 필요"
   log "worker 완료"
 }
 
