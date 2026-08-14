@@ -47,6 +47,7 @@
 | [pipeline-current-state.md](ops/pipeline-current-state.md) | **파이프라인 실제 상태** — 스테이지 22개·비용·사각지대 (코드 실측 기준) |
 | [cost-and-dependencies.md](ops/cost-and-dependencies.md) | **원가·의존성 SSOT** — 외부 API 단가·회차당 원가 재산출·고정비·단일장애점. ⚠️ 기존 문서의 ₩285/₩774 는 단가표 오류 |
 | [gebd-worker-setup.md](ops/gebd-worker-setup.md) | 여유 PC 를 GEBD 워커로 붙이기 (GPU 클라우드 대안) |
+| [youtube-ingest.md](ops/youtube-ingest.md) | **유튜브 가져오기 배선** — 다운로드=윈도우2(한국 IP·download 레인), 분석=클라우드. 함정 7개와 점검 순서 |
 | [gpu-quota-request.md](ops/gpu-quota-request.md) | GPU 쿼터 상향 신청 절차 |
 | [deploy.md](ops/deploy.md) | 배포 런북 — 서버/워커/웹 배포 스크립트와 검증·롤백 |
 | [deploy-win2.md](ops/deploy-win2.md) | **윈도우2(네이버 워커) 배포** — 윈도우1 에서 갱신·확인·진단. 평소엔 push 만 하면 자동 |

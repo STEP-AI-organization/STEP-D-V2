@@ -5,7 +5,10 @@
 > | 이름 | 정체 | 주소 |
 > |---|---|---|
 > | **윈도우1** | 개발·배포 PC. **배포는 전부 여기서 나간다** | `desktop-c5bdabc` |
-> | **윈도우2** | 네이버 워커 전용 (한국 IP 상시 PC) | `DESKTOP-IGVKIBN` · `192.168.13.14` · 계정 `STEPAI04` · 리포 `C:\Users\STEPAI04\STEP-D-V2` |
+> | **윈도우2** | 네이버 발행 + **유튜브 다운로드** 워커 (한국 IP 상시 PC) | `DESKTOP-IGVKIBN` · `192.168.13.14` · 계정 `STEPAI04` · 리포 `C:\Users\STEPAI04\STEP-D-V2` |
+
+> 2026-08-14 부터 윈도우2 는 `naver,download` 두 레인을 돈다 — 유튜브 다운로드 배선 전체는
+> [youtube-ingest.md](youtube-ingest.md) 참고 (밟은 함정 7개·점검 순서 포함).
 
 최초 셋업은 [deploy/naver-pc/README.md](../../deploy/naver-pc/README.md) 다. **이 문서는 그 뒤,
 "코드 고쳤는데 윈도우2 에 어떻게 반영하지?" 하나만 다룬다.**
