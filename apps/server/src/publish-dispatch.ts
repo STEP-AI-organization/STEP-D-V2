@@ -65,8 +65,11 @@ export interface PublishInput {
   metaPageId?: string;
   /** 누가 눌렀나. 감사 로그에 남는다. */
   actor: string;
-  /** 어디서 왔나 — manual | retry | factory. 자동 실행 로그를 수동과 분리하기 위해. */
-  origin: "manual" | "retry" | "factory";
+  /**
+   * 어디서 왔나 — manual(사람이 버튼) | retry(사람이 재시도) | factory(공장 API) |
+   * automation(자동 순방). 배포 기록 행에도 남아 화면이 자동/수동을 구분한다.
+   */
+  origin: "manual" | "retry" | "factory" | "automation";
 }
 
 export interface PublishOutcome {
@@ -172,6 +175,9 @@ export async function dispatchPublish(input: PublishInput): Promise<PublishOutco
     const value: Record<string, unknown> = {
       status,
       error: undefined,
+      // 자동/수동 구분을 기록 자체에 남긴다 — 감사 로그(basis)에만 있으면 화면이 못 읽는다.
+      // 워커의 후속 갱신(Object.assign 병합)은 origin 키를 안 보내므로 이 값이 보존된다.
+      origin: input.origin,
       ...(reserveDate ? { reserveDate } : {}),
       // 계정 정체성은 **record 모드에도** 남긴다. 예전엔 upload 조건이 걸려 있어 게이트
       // OFF 로 남는 record 행이 정체성 없는(null) 행이 됐고, hasAccountDistribution 의

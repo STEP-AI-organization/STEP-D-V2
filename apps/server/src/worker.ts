@@ -1667,8 +1667,12 @@ async function runInstagramPublish(job: Job): Promise<void> {
 
   const clip = await getEntity<any>("clip", clipId);
   if (!clip) { console.warn(`[worker] distribution.publish(instagram): clip ${clipId} gone — dropping`); return; }
-  // 멱등 — 이미 게시됐으면 다시 만들지 않는다(IG 는 되돌리기 번거롭다).
-  const existing = (clip.distributions ?? []).find((d: any) => d.channel === "instagram");
+  // 멱등 — **이 계정으로** 이미 게시됐으면 다시 만들지 않는다(IG 는 되돌리기 번거롭다).
+  // 채널 단독 매칭이면 다계정 규칙에서 두 번째 계정 잡이 첫 계정의 igMediaId 를 보고
+  // 스킵돼 그 계정 행이 pending 으로 영구 방치된다 — upsertDistribution 의 채널+계정
+  // 매칭과 같은 기준으로 본다.
+  const existing = (clip.distributions ?? []).find(
+    (d: any) => d.channel === "instagram" && (d.igUserId == null || d.igUserId === igUserId));
   if (existing?.igMediaId) { console.log(`[worker] distribution.publish(instagram) ${clipId}: 이미 게시(${existing.igMediaId}) — 스킵`); return; }
 
   const acct = (await listInstagramAccounts()).find((a) => a.igUserId === igUserId);
@@ -1734,7 +1738,9 @@ async function runFacebookPublish(job: Job): Promise<void> {
 
   const clip = await getEntity<any>("clip", clipId);
   if (!clip) { console.warn(`[worker] distribution.publish(facebook): clip ${clipId} gone — dropping`); return; }
-  const existing = (clip.distributions ?? []).find((d: any) => d.channel === "facebook");
+  // 계정 인지 멱등 — instagram 분기와 같은 이유(다계정에서 남의 게시를 내 것으로 오인 금지).
+  const existing = (clip.distributions ?? []).find(
+    (d: any) => d.channel === "facebook" && (d.metaPageId == null || d.metaPageId === pageId));
   if (existing?.fbVideoId && (existing.status === "published" || existing.status === "scheduled")) {
     console.log(`[worker] distribution.publish(facebook) ${clipId}: 이미 게시(${existing.fbVideoId}) — 스킵`); return;
   }

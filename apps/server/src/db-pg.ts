@@ -2953,6 +2953,29 @@ export async function upsertAutomationRule(r: AutomationRuleRow): Promise<void> 
 }
 
 /**
+ * id 로 기존 규칙을 통째로 갱신. 자연키 upsert 는 **첫 채널이 바뀌면 새 규칙을 만든다** —
+ * 구 규칙이 enabled 로 남아 이중 커버(한도 2배·뺀 채널로 계속 게시)가 되므로,
+ * "갱신"의 정본은 id 다. 자연키가 다른 규칙과 충돌하면 unique_violation 이 던져진다(호출부 409).
+ */
+export async function updateAutomationRuleById(r: AutomationRuleRow): Promise<boolean> {
+  const res = await pool.query(
+    `UPDATE automation_rule SET
+       program_id = $2, platform = $3, account_id = $4, media_kind = $5, criterion = $6,
+       gate_policy = $7, time_window = $8, enabled = $9, template_id = $10, layout = $11::jsonb,
+       program_ids = $12::jsonb, channels = $13::jsonb, daily_quota = $14,
+       active_start = $15, active_end = $16
+     WHERE id = $1`,
+    [r.id, r.programId, r.platform, r.accountId, r.mediaKind, r.criterion, r.gatePolicy, r.window, r.enabled,
+     r.templateId ?? null,
+     r.layout ? JSON.stringify(r.layout) : null,
+     r.programIds?.length ? JSON.stringify(r.programIds) : null,
+     r.channels?.length ? JSON.stringify(r.channels) : null,
+     r.dailyQuota ?? 3, r.activeStart ?? 9, r.activeEnd ?? 22],
+  );
+  return (res.rowCount ?? 0) > 0;
+}
+
+/**
  * 채널별 오늘(KST) 게시 수 — 하루 할당량 판정. rule_run 은 UTC 저장이라
  * KST 자정( UTC 전날 15:00 ) 기준으로 자른다.
  */

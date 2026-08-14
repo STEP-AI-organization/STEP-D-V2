@@ -350,6 +350,12 @@ export interface DistributionState {
    * 그래서 published 와 같은 톤·같은 문구로 그리면 안 된다.
    */
   status: "none" | "pending" | "scheduled" | "published" | "recorded" | "failed";
+  /**
+   * 자동/수동 구분 (서버 publish-dispatch.ts 가 기록에 남긴다 · 2026-08-13~).
+   * "automation"·"factory" = 자동, "manual"·"retry" = 수동. **구 기록에는 없다** —
+   * 없으면 화면은 배지를 그리지 않는다(추측 표기 금지).
+   */
+  origin?: string;
   reserveDate?: string; // KST, honest scheduling (plan §7.5)
   error?: string;
   /** External ref on the channel — YouTube videoId / Meta post id (→ dist.metadata.youtubeVideoId). */

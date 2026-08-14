@@ -2377,7 +2377,8 @@ export interface FactoryRunClip {
   clipId: string;
   title: string;
   rendered: boolean;
-  distributions: { channel: string; status: string; externalId: string | null }[];
+  // origin: "automation"·"factory"=자동 · "manual"·"retry"=수동 · 구 기록엔 없음(배지 생략)
+  distributions: { channel: string; status: string; externalId: string | null; origin?: string }[];
 }
 
 export interface FactoryRunStatus {

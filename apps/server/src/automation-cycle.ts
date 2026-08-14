@@ -285,7 +285,8 @@ export async function runAutomationCycle(): Promise<CycleReport> {
             naverCategory: { primary: "엔터", secondary: "엔터" },
           } : {}),
           actor: `automation:${rule.id}`,
-          origin: "factory",
+          // "factory"(외부 공장 API)와 구분되는 자동 순방 표식 — 화면의 자동/수동 배지가 읽는다.
+          origin: "automation",
         });
 
         if (outcome.skipped.length > 0) {

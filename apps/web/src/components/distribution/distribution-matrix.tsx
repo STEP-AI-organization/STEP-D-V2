@@ -139,6 +139,10 @@ function Cell({
   onRetry: (clipId: string, channel: DistributionChannel) => void;
 }) {
   const d = clip.distributions?.find((x) => x.channel === channel && x.status !== "none");
+  // 자동/수동 구분 — origin 이 있는 기록만(구 기록은 표기 생략 · 추측 금지).
+  const originLabel =
+    d?.origin === "automation" || d?.origin === "factory" ? "자동"
+    : d?.origin === "manual" || d?.origin === "retry" ? "수동" : null;
 
   // 아직 이 채널로 안 나감 — 누르면 배포.
   if (!d) {
@@ -179,9 +183,9 @@ function Cell({
         rel="noreferrer"
         className="mx-auto inline-flex items-center gap-1 rounded-[4px] px-1.5 py-0.5 text-[10.5px] font-medium hover:brightness-95"
         style={{ background: s.bg, color: s.fg }}
-        title="영상 열기"
+        title={originLabel ? `영상 열기 · ${originLabel} 배포` : "영상 열기"}
       >
-        ● 게시 ↗
+        ● 게시{originLabel ? ` · ${originLabel}` : ""} ↗
       </a>
     );
   }
@@ -190,9 +194,9 @@ function Cell({
     <span
       className="mx-auto inline-flex items-center gap-1 rounded-[4px] px-1.5 py-0.5 text-[10.5px] font-medium"
       style={{ background: s.bg, color: s.fg }}
-      title={d.reserveDate ? `예약 ${d.reserveDate}` : s.label}
+      title={d.reserveDate ? `예약 ${d.reserveDate}` : originLabel ? `${s.label} · ${originLabel} 배포` : s.label}
     >
-      ● {s.label}
+      ● {s.label}{originLabel ? ` · ${originLabel}` : ""}
     </span>
   );
 }

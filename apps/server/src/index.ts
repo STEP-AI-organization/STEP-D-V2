@@ -100,6 +100,8 @@ import {
   deleteAssetFiles,
   updateMediaThumb,
   listAutomationRules,
+  publishedTodayKst,
+  updateAutomationRuleById,
   upsertAutomationRule,
   deleteAutomationRule,
   appendRuleRun,
@@ -4660,12 +4662,37 @@ app.get("/api/automation", async (c) => {
     creditBalance(),
   ]);
   const plan = planCycle({ paused: paused === "true", rules: rules as any });
+  // 규칙×채널별 오늘 게시 수 — 순방이 한도 판정에 쓰는 publishedTodayKst 그대로.
+  // 화면의 "오늘 2/3" 표기가 이 필드를 읽는다(없으면 UI 가 그 줄을 숨긴다 — 생산자가
+  // 빠지면 죽은 기능이 되는 걸 검증에서 한 번 잡았다).
+  const rulesWithToday = await Promise.all(
+    (rules as any[]).map(async (rule) => {
+      const chans: { platform: string; accountId: string }[] =
+        rule.channels?.length ? rule.channels : [{ platform: rule.platform, accountId: rule.accountId }];
+      const publishedToday: Record<string, number> = {};
+      for (const ch of chans) {
+        const key = `${ch.platform}:${ch.accountId}`;
+        publishedToday[key] = await publishedTodayKst(rule.id, key);
+      }
+      return { ...rule, publishedToday };
+    }),
+  );
   return c.json({
-    rules, runs, holds,
+    rules: rulesWithToday, runs, holds,
     paused: paused === "true",
     // 순방(runAutomationCycle)이 크레딧 부족으로 정지 중이면 화면도 같은 사유를 보여야
     // 한다 — 규칙이 멀쩡한데 아무것도 안 나가는 상태를 사용자가 추리하게 두지 않는다.
     idleReason: balance <= 0 ? CREDIT_IDLE_REASON : plan.idleReason,
+    // 채널별 실업로드 스위치 — 게이트 경고 배너·"기록만" 배지의 생산자. 플랫폼 키 단독
+    // (계정 무관 env 스위치라 계정별로 다를 수 없다).
+    gates: {
+      youtube: youtubeUploadEnabled(),
+      navertv: naverUploadEnabled(),
+      naverclip: naverUploadEnabled(),
+      tiktok: tiktokUploadEnabled(),
+      instagram: instagramUploadEnabled(),
+      facebook: facebookUploadEnabled(),
+    },
     options: { mediaKinds: RULE_MEDIA_KINDS, criteria: RULE_CRITERIA, gatePolicies: GATE_POLICIES },
   });
 });
@@ -4715,6 +4742,29 @@ app.post("/api/automation/rules", async (c) => {
     ...(Number.isFinite(body.activeStart) ? { activeStart: Math.max(0, Math.min(23, Math.round(Number(body.activeStart)))) } : {}),
     ...(Number.isFinite(body.activeEnd) ? { activeEnd: Math.max(0, Math.min(24, Math.round(Number(body.activeEnd)))) } : {}),
   };
+  // id 가 온 저장은 **갱신**이다 — 자연키 upsert 로 흘리면 첫 채널이 바뀌었을 때 새 규칙이
+  // 생기고 구 규칙이 살아남아 이중 커버(한도 2배·뺀 채널로 계속 게시)가 된다.
+  if (typeof body.id === "string" && body.id) {
+    try {
+      const updated = await updateAutomationRuleById(row as Parameters<typeof updateAutomationRuleById>[0]);
+      if (updated) {
+        return c.json({
+          rule: row,
+          state: initialRuleState(platform, row.enabled),
+          notice: ruleCreatedNotice(platform),
+        });
+      }
+      // id 를 줬는데 규칙이 없다(그새 삭제됨) — 새로 만드는 아래 경로로 진행.
+    } catch (e: any) {
+      if (String(e?.code) === "23505") {
+        return c.json({
+          error: "duplicate_rule",
+          message: "같은 프로그램·채널 조합의 다른 규칙이 이미 있습니다 — 그 규칙을 수정하거나 삭제하세요.",
+        }, 409);
+      }
+      throw e;
+    }
+  }
   await upsertAutomationRule(row);
   return c.json({
     rule: row,
@@ -6070,7 +6120,10 @@ app.post("/api/distributions/retry", async (c) => {
     }
     const outcome = await dispatchPublish({
       clipIds: [b.clipId], channel: "youtube",
+      // 예약이 있던 건은 예약도 함께 살린다 — reserveDate 만 넘기고 scheduled 를 빼면
+      // dispatch 가 즉시 업로드로 처리해 행의 예약 표기와 실제 동작이 어긋난다.
       reserveDate: prev?.reserveDate,
+      scheduled: Boolean(prev?.reserveDate),
       youtubeChannelId: target.channelId,
       actor,
       origin: "retry",
