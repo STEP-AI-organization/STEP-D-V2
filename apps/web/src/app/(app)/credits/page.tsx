@@ -26,11 +26,14 @@ import {
   createTopupOrder,
   fetchAutoTopup,
   fetchCredits,
+  fetchInvoices,
   fetchSavedCard,
   type AutoTopupPolicy,
   type CreditState,
+  type InvoiceList,
   type SavedCard,
 } from "@/lib/data/api";
+import { downloadInvoicePdf } from "@/lib/billing/invoice-pdf";
 import { SavedCardChargeButton, SavedCardManager } from "@/components/billing/saved-card";
 import { AutoTopupManager } from "@/components/billing/auto-topup";
 import { BillingCard, BillingDialog, CardAction } from "@/components/billing/billing-ui";
@@ -47,7 +50,7 @@ const PRESETS = [
 const WON = (n: number) => `₩${n.toLocaleString("ko-KR")}`;
 
 /** 열려 있는 다이얼로그 — 한 번에 하나만. */
-type DialogKind = "topup" | "ledger" | "card" | "autotopup" | "settings" | null;
+type DialogKind = "topup" | "ledger" | "card" | "autotopup" | "settings" | "invoices" | null;
 
 const ROLE_KO: Record<string, string> = {
   owner: "소유자", admin: "관리자", member: "구성원", superadmin: "슈퍼관리자",
@@ -87,6 +90,10 @@ export default function CreditsPage() {
   const [cardCharging, setCardCharging] = useState(false);
   const [awaiting, setAwaiting] = useState<string | null>(null);
   const [dialog, setDialog] = useState<DialogKind>(null);
+  // 인보이스 — 결제 완료 건마다 하나. PDF 는 브라우저가 그린다(폰트 로드 때문에 건별 busy).
+  const [invoiceList, setInvoiceList] = useState<InvoiceList | null>(null);
+  const [invoicesFailed, setInvoicesFailed] = useState(false);
+  const [pdfBusy, setPdfBusy] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -108,6 +115,14 @@ export default function CreditsPage() {
       setPolicy(await fetchAutoTopup());
     } catch {
       setPolicy(null);
+    }
+    // 인보이스 실패가 잔액 화면을 무너뜨리면 안 된다 — 실패 사실만 남긴다.
+    try {
+      setInvoiceList(await fetchInvoices());
+      setInvoicesFailed(false);
+    } catch {
+      setInvoiceList(null);
+      setInvoicesFailed(true);
     }
   }, []);
 
@@ -203,6 +218,22 @@ export default function CreditsPage() {
 
   const close = () => setDialog(null);
   const recent = state?.ledger.slice(0, 5) ?? [];
+  const recentInvoices = invoiceList?.invoices.slice(0, 3) ?? [];
+
+  /** 인보이스 한 건 → PDF 다운로드. 첫 호출은 한글 폰트 다운로드가 있어 잠깐 걸린다. */
+  async function savePdf(invoiceId: string) {
+    if (!invoiceList || pdfBusy) return;
+    const invoice = invoiceList.invoices.find((i) => i.id === invoiceId);
+    if (!invoice) return;
+    setPdfBusy(invoiceId);
+    try {
+      await downloadInvoicePdf({ invoice, supplier: invoiceList.supplier, buyer: invoiceList.buyer });
+    } catch (err) {
+      toast({ title: "PDF 생성 실패", description: err instanceof Error ? err.message : String(err), tone: "error" });
+    } finally {
+      setPdfBusy(null);
+    }
+  }
   const buyerSummary = [buyerName.trim(), email.trim(), phoneDigits].filter(Boolean).join(" · ");
 
   return (
@@ -335,10 +366,50 @@ export default function CreditsPage() {
         </BillingCard>
       </div>
 
-      {/* ── 설정 (좁은 폭) ─────────────────────────────────────────────────── */}
+      {/* ── 2열 — 인보이스 · 설정 ──────────────────────────────────────────── */}
+      <div className="grid items-stretch gap-[14px] md:grid-cols-2">
+      <BillingCard
+        title="인보이스"
+        action={
+          <CardAction
+            label="인보이스 보기"
+            onClick={() => setDialog("invoices")}
+            disabled={!invoiceList || invoiceList.invoices.length === 0}
+          />
+        }
+      >
+        {invoicesFailed ? (
+          <p className="text-[11.5px]" style={{ color: "var(--sd-mut)" }}>
+            인보이스를 불러오지 못했습니다.{" "}
+            <button type="button" className="underline" onClick={() => void load()}>다시 시도</button>
+          </p>
+        ) : !invoiceList ? (
+          <p className="text-[11.5px]" style={{ color: "var(--sd-mut)" }}>불러오는 중…</p>
+        ) : invoiceList.invoices.length === 0 ? (
+          <p className="text-[11.5px]" style={{ color: "var(--sd-mut)" }}>
+            아직 결제된 내역이 없습니다 — 결제가 완료되면 건마다 인보이스가 쌓이고 PDF 로 받을 수 있습니다.
+          </p>
+        ) : (
+          <div className="flex flex-col gap-1.5">
+            {recentInvoices.map((inv) => (
+              <div key={inv.id} className="flex items-center gap-2.5">
+                <span className="sd-mono w-[76px] shrink-0 text-[10.5px]" style={{ color: "var(--sd-mut)" }}>
+                  {inv.paidAt.slice(0, 10)}
+                </span>
+                <span className="sd-mono min-w-0 flex-1 truncate text-[11px]" style={{ color: "var(--sd-fg)" }}>
+                  {inv.number}
+                </span>
+                <span className="sd-mono shrink-0 text-right text-[11.5px]" style={{ color: "var(--sd-fg)" }}>
+                  {WON(inv.amountKrw)}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+      </BillingCard>
+
       <BillingCard
         title="설정"
-        className="md:max-w-[420px]"
         action={<CardAction label="설정 관리" onClick={() => setDialog("settings")} />}
       >
         <SettingRow
@@ -356,6 +427,7 @@ export default function CreditsPage() {
         />
         <SettingRow label="구매자 정보" value={buyerSummary || "미입력"} />
       </BillingCard>
+      </div>
 
       {/* ══ 다이얼로그들 ══════════════════════════════════════════════════════ */}
 
@@ -620,6 +692,57 @@ export default function CreditsPage() {
             크레딧 단가: {price != null ? `${WON(price)} · 부가세 포함` : "미설정"} — 단가는 서버 설정
             (<code>CREDIT_PRICE_KRW</code>)이라 여기서 바꿀 수 없습니다.
           </p>
+        </BillingDialog>
+      )}
+
+      {/* 인보이스 — 결제 완료 건 전체. 건마다 PDF 다운로드(한글 폰트 임베드라 첫 건은 잠깐 걸린다). */}
+      {dialog === "invoices" && (
+        <BillingDialog
+          title="인보이스"
+          subtitle="결제 완료된 충전 건마다 발급됩니다 · 세금계산서가 아닌 결제 내역 확인용 문서입니다."
+          onClose={close}
+          maxWidth={640}
+        >
+          {!invoiceList || invoiceList.invoices.length === 0 ? (
+            <div
+              className="sd-ph grid min-h-[100px] place-items-center rounded-[6px] px-6 text-center"
+              style={{ border: "1px dashed var(--sd-border)" }}
+            >
+              아직 결제된 내역이 없습니다
+            </div>
+          ) : (
+            <div className="flex flex-col gap-1">
+              {invoiceList.invoices.map((inv) => (
+                <div
+                  key={inv.id}
+                  className="flex flex-wrap items-center gap-3 rounded-[4px] px-2 py-1.5"
+                  style={{ border: "1px solid var(--sd-border)" }}
+                >
+                  <span className="sd-mono w-[76px] shrink-0 text-[10.5px]" style={{ color: "var(--sd-mut)" }}>
+                    {inv.paidAt.slice(0, 10)}
+                  </span>
+                  <span className="sd-mono w-[150px] shrink-0 truncate text-[11px]" style={{ color: "var(--sd-fg)" }} title={inv.number}>
+                    {inv.number}
+                  </span>
+                  <span className="min-w-[120px] flex-1 truncate text-[11.5px]" style={{ color: "var(--sd-fg)" }}>
+                    {inv.description}
+                    {inv.origin === "auto" ? " · 자동 충전" : ""}
+                  </span>
+                  <span className="sd-mono w-[80px] shrink-0 text-right text-[11.5px]" style={{ color: "var(--sd-fg)" }}>
+                    {WON(inv.amountKrw)}
+                  </span>
+                  <button
+                    type="button"
+                    className="sd-btn shrink-0"
+                    disabled={pdfBusy !== null}
+                    onClick={() => void savePdf(inv.id)}
+                  >
+                    {pdfBusy === inv.id ? "생성 중…" : "PDF"}
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
         </BillingDialog>
       )}
     </div>

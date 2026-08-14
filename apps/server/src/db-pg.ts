@@ -3523,6 +3523,22 @@ export async function getTopup(paymentId: string): Promise<TopupRow | null> {
   return rows[0] ?? null;
 }
 
+/** 결제 완료(paid)된 충전 건 — 인보이스 목록의 원천. 별도 인보이스 표는 두지 않는다. */
+export async function listPaidTopups(
+  limit = 100,
+): Promise<(TopupRow & { createdAt: string; settledAt: string | null })[]> {
+  const { rows } = await pool.query(
+    `SELECT payment_id AS "paymentId", credits, amount_krw AS "amountKrw", status,
+            requested_by AS "requestedBy", created_at AS "createdAt", settled_at AS "settledAt"
+       FROM credit_topup
+      WHERE status = 'paid'
+      ORDER BY COALESCE(settled_at, created_at) DESC
+      LIMIT $1`,
+    [limit],
+  );
+  return rows as (TopupRow & { createdAt: string; settledAt: string | null })[];
+}
+
 /** 결제 확정. 이미 paid 면 false — 웹훅이 여러 번 와도 한 번만 처리된다. */
 /**
  * 충전 주문의 최종 상태를 찍는다.

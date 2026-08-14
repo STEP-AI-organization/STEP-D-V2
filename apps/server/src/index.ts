@@ -115,6 +115,7 @@ import {
   listCreditLedger,
   createTopup,
   getTopup,
+  listPaidTopups,
   markTopupPaid,
   withTenantLock,
   getBillingCard,
@@ -5298,6 +5299,63 @@ app.get("/api/credits", async (c) => {
     unit: CREDIT_UNIT_LABEL,
     priceKrw: creditPriceKrw(),
     ledger,
+  });
+});
+
+/**
+ * 인보이스 목록 — **결제 완료된 충전 건이 곧 인보이스다.** 별도 표 없이 credit_topup 에서
+ * 결정적으로 만든다(번호 = 결제일 + paymentId 꼬리). PDF 는 브라우저가 이 데이터로 그린다 —
+ * 서버가 PDF 를 저장하지 않으므로 "문서와 원장이 어긋나는" 상태가 애초에 없다.
+ *
+ * 금액은 부가세 포함 총액이다(단가 정책). 공급가액·세액은 총액에서 역산해 내려준다 —
+ * 화면·PDF 가 제각기 계산해 1원씩 어긋나는 일을 막는다.
+ */
+app.get("/api/credits/invoices", async (c) => {
+  const rows = await listPaidTopups(100);
+  const tenantId = currentTenantId();
+  const [tenant, biz] = await Promise.all([
+    asSystem(async (db) => {
+      const { rows: t } = await db.query(`SELECT name, billing_email AS "billingEmail" FROM tenants WHERE id = $1`, [tenantId]);
+      return (t[0] ?? null) as { name: string; billingEmail: string | null } | null;
+    }),
+    asSystem((db) => getBusinessProfile(db, tenantId)),
+  ]);
+
+  const invoices = rows.map((r) => {
+    const paidAt = r.settledAt ?? r.createdAt;
+    const ymd = String(paidAt).slice(0, 10).replace(/-/g, "");
+    const supply = Math.round(r.amountKrw / 1.1);
+    return {
+      id: r.paymentId,
+      number: `SD-${ymd}-${r.paymentId.slice(-6).toUpperCase()}`,
+      paidAt,
+      credits: r.credits,
+      amountKrw: r.amountKrw,
+      supplyKrw: supply,
+      vatKrw: r.amountKrw - supply,
+      // auto: 접두 actor 는 자동 충전이 만든 결제다 — 문서에 결제 경위로 남긴다.
+      origin: r.requestedBy.startsWith("auto") ? "auto" as const : "manual" as const,
+      description: `STEP-D 크레딧 ${r.credits.toLocaleString("ko-KR")}개 (분석 ${r.credits.toLocaleString("ko-KR")}분)`,
+    };
+  });
+
+  return c.json({
+    invoices,
+    // 공급자(우리) 정보는 env 로 — 비면 화면·PDF 가 그 항목을 그리지 않는다(지어내지 않는다).
+    supplier: {
+      name: String(process.env.BILLING_SUPPLIER_NAME ?? "STEP AI"),
+      bizNo: String(process.env.BILLING_SUPPLIER_BIZNO ?? ""),
+      ceoName: String(process.env.BILLING_SUPPLIER_CEO ?? ""),
+      address: String(process.env.BILLING_SUPPLIER_ADDR ?? ""),
+      email: String(process.env.BILLING_SUPPLIER_EMAIL ?? "contact@stepai.kr"),
+    },
+    buyer: {
+      name: biz?.bizName || tenant?.name || "",
+      bizNo: biz?.bizNo ?? "",
+      ceoName: biz?.ceoName ?? "",
+      address: biz?.address ?? "",
+      email: biz?.contactEmail || tenant?.billingEmail || "",
+    },
   });
 });
 

@@ -1319,6 +1319,40 @@ export async function fetchCredits(): Promise<CreditState> {
   return json(await fetch(`${API_BASE}/credits`, { cache: "no-store", credentials: "include" }));
 }
 
+// ── 인보이스 — 결제 완료된 충전 건마다 하나. PDF 는 브라우저가 이 데이터로 그린다. ──
+
+export interface InvoiceRow {
+  id: string;
+  /** 표시용 번호 (SD-YYYYMMDD-XXXXXX) — 결제 데이터에서 결정적으로 만든다. */
+  number: string;
+  paidAt: string;
+  credits: number;
+  /** 부가세 포함 총액. supply/vat 는 서버가 역산해 준다 — 화면이 다시 계산하지 않는다. */
+  amountKrw: number;
+  supplyKrw: number;
+  vatKrw: number;
+  origin: "auto" | "manual";
+  description: string;
+}
+
+export interface InvoiceParty {
+  name: string;
+  bizNo: string;
+  ceoName: string;
+  address: string;
+  email: string;
+}
+
+export interface InvoiceList {
+  invoices: InvoiceRow[];
+  supplier: InvoiceParty;
+  buyer: InvoiceParty;
+}
+
+export async function fetchInvoices(): Promise<InvoiceList> {
+  return json(await fetch(`${API_BASE}/credits/invoices`, { cache: "no-store", credentials: "include" }));
+}
+
 export interface TopupOrder {
   paymentId: string;
   credits: number;
