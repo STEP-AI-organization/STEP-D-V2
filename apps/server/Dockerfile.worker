@@ -55,7 +55,10 @@ FROM base AS pydeps
 COPY core/requirements.txt /tmp/requirements.txt
 RUN python3 -m venv /opt/corevenv \
  && /opt/corevenv/bin/pip install --no-cache-dir --upgrade pip \
- && /opt/corevenv/bin/pip install --no-cache-dir -r /tmp/requirements.txt
+ && /opt/corevenv/bin/pip install --no-cache-dir -r /tmp/requirements.txt \
+ # yt-dlp — youtube.download 잡의 필수 바이너리. 없으면 유튜브 가져오기가 전건 실패한다
+ # (2026-08-14 실측: "yt-dlp가 설치되어 있지 않습니다"). venv 에 넣고 YT_DLP 로 경로 고정.
+ && /opt/corevenv/bin/pip install --no-cache-dir yt-dlp
 
 # ── runtime ─────────────────────────────────────────────────────────────────
 FROM base AS runtime
@@ -82,6 +85,8 @@ ENV NODE_ENV=production
 # 없으면 시스템 파이썬으로 폴백해 의존성 없이 죽는다.
 ENV CORE_PYTHON=/opt/corevenv/bin/python
 ENV CORE_DIR=/app
+# yt-dlp 는 corevenv 에 설치된다(위 pydeps 스테이지) — PATH 의존 대신 경로를 고정한다.
+ENV YT_DLP=/opt/corevenv/bin/yt-dlp
 ENV REFRAME_FACE_MODEL=/opt/reframe-models/blaze_face_full_range.tflite
 
 WORKDIR /app/apps/server
