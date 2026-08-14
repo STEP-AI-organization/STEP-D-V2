@@ -10,6 +10,10 @@
  * 둘 다 **사유를 보여 준다.** 채널을 그냥 회색으로 두면 사용자는 왜 안 되는지 몰라
  * 다른 데를 찾아 헤맨다.
  *
+ * **다중 선택** — 채널을 플랫폼별로 묶어 보여 주고, 여러 채널을 체크해 **한 번에** 배포한다
+ * (하나만 골라도 된다). 서버 계약은 채널당 1콜이라 submit 이 선택 수만큼 publishClips 를 부르고
+ * 결과를 합쳐 한 번의 notice 로 보고한다. 예약 시각은 **선택한 모든 채널에 공통** 적용된다.
+ *
  * 판정은 서버가 한다. 이 모달은 서버가 준 결과를 그리고, 최종 결과 문구도 서버가 준
  * notice 를 그대로 쓴다 — 화면이 통과로 본 것이 서버 재판정에서 빠질 수 있기 때문이다.
  */
@@ -27,6 +31,7 @@ import {
   type NaverAccount,
   type InstagramAccountInfo,
   type MetaAccountInfo,
+  type PublishOutcome,
 } from "@/lib/data/api";
 import type { DistributionChannel } from "@/lib/constants";
 import { cn } from "@/lib/utils";
@@ -39,8 +44,41 @@ const PLATFORM_LABEL: Record<string, string> = {
   naverclip: "네이버 클립",
 };
 
-/** 실제 파일이 올라가는 곳 (F4-3). 네이버는 브라우저 자동화지만 파일이 실제로 올라간다. */
-const UPLOAD_PLATFORMS = new Set(["youtube", "naverclip"]);
+/** 플랫폼 그룹 렌더 순서 (연결된 것만 그려진다). */
+const GROUP_ORDER = ["youtube", "instagram", "facebook", "tiktok", "naverclip"] as const;
+
+/**
+ * 채널이 실제로 어떻게 나가는가 —
+ *  upload  : 파일이 무조건 올라간다 (YouTube · 네이버).
+ *  gate    : 업로드 게이트 ON + 계정 지정일 때만 실제 게시, 아니면 기록만 (IG · FB · TikTok).
+ *  record  : 파일이 안 올라가고 상태만 남는다 (알 수 없는 채널 폴백).
+ */
+type PublishMode = "upload" | "gate" | "record";
+function modeFor(platform: string): PublishMode {
+  if (platform === "youtube" || platform === "naverclip") return "upload";
+  if (platform === "instagram" || platform === "facebook" || platform === "tiktok") return "gate";
+  return "record";
+}
+const MODE_TAG: Record<PublishMode, string | null> = { upload: null, gate: "게이트 시 업로드", record: "기록만" };
+
+type NaverForm = { description: string; primary: string; secondary: string };
+const NAVER_FORM_DEFAULT: NaverForm = { description: "", primary: "엔터", secondary: "엔터" };
+
+/** 규칙·네이버·IG·FB 를 한 줄짜리 '대상' 으로 정규화한다 — 그리기·검증·submit 이 한 모양을 쓴다. */
+type Target = {
+  key: string;
+  platform: string;
+  channel: DistributionChannel;
+  label: string;
+  meta: string[]; // ≤60초 · 9:16 같은 규칙 제약
+  badges: string[]; // 기본 규칙 · 로그인됨
+  mode: PublishMode;
+  blocked?: string; // 규칙 채널의 부적격 사유 (게이트/길이)
+  rule?: ChannelRule;
+  naver?: NaverAccount;
+  ig?: InstagramAccountInfo;
+  fb?: MetaAccountInfo;
+};
 
 export function PublishDialog({
   clipIds,
@@ -55,18 +93,16 @@ export function PublishDialog({
   const [rules, setRules] = useState<ChannelRule[]>([]);
   const [elig, setElig] = useState<Record<string, ChannelEligibility>>({});
   const [loadErr, setLoadErr] = useState<string | null>(null);
-  const [picked, setPicked] = useState<string | null>(null);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
   const [scheduled, setScheduled] = useState(false);
   const [reserveDate, setReserveDate] = useState("");
   const [busy, setBusy] = useState(false);
-  // 네이버 — 세션이 등록된 계정으로 바로 올린다 (채널 규칙이 없어도 배포 가능해야 한다).
+  // 네이버·IG·FB — 세션/계정을 직접 고른다 (채널 규칙이 없어도 배포 가능해야 한다 · 추론 금지).
   const [naverAccounts, setNaverAccounts] = useState<NaverAccount[]>([]);
-  const [naverDesc, setNaverDesc] = useState("");
-  const [naverCat, setNaverCat] = useState<{ primary: string; secondary: string }>({ primary: "엔터", secondary: "엔터" });
-  // Instagram(비즈니스 로그인) · Facebook(Meta 페이지) — 네이버/틱톡처럼 계정을 직접 고른다(추론 금지).
-  // 게이트 OFF 면 서버가 record 로 강등, ON 이면 실업로드 — 결과는 응답 notice 에 그대로 나온다.
   const [igAccounts, setIgAccounts] = useState<InstagramAccountInfo[]>([]);
   const [metaPages, setMetaPages] = useState<MetaAccountInfo[]>([]);
+  // 네이버 클립은 계정마다 설명(10자+)·카테고리를 따로 받는다 — 대상 key 로 폼을 보관한다.
+  const [naverForms, setNaverForms] = useState<Record<string, NaverForm>>({});
 
   useEffect(() => {
     void fetchNaverAccounts()
@@ -95,63 +131,165 @@ export function PublishDialog({
         if (alive) setLoadErr(err instanceof Error ? err.message : String(err));
       }
     })();
-    return () => { alive = false; };
+    return () => {
+      alive = false;
+    };
   }, [clipIds]);
 
-  const rule = useMemo(() => rules.find((r) => `${r.platform}:${r.accountId}` === picked), [rules, picked]);
-  // 네이버 계정 직접 선택 행 — key = "naver:<계정id>:naverclip" (TV 는 제품에서 제외)
-  const naverPick = useMemo(() => {
-    if (!picked?.startsWith("naver:")) return null;
-    const [, id] = picked.split(":");
-    const acct = naverAccounts.find((a) => a.id === id);
-    return acct ? { acct, channel: "naverclip" as const } : null;
-  }, [picked, naverAccounts]);
-  // IG/FB 계정 선택 행 — key = "ig:<igUserId>" · "fb:<pageId>" (둘 다 숫자 id 라 ':' 안전).
-  const igPick = useMemo(
-    () => (picked?.startsWith("ig:") ? igAccounts.find((a) => `ig:${a.igUserId}` === picked) ?? null : null),
-    [picked, igAccounts],
-  );
-  const fbPick = useMemo(
-    () => (picked?.startsWith("fb:") ? metaPages.find((a) => `fb:${a.pageId}` === picked) ?? null : null),
-    [picked, metaPages],
-  );
-  const accountPick = naverPick || igPick || fbPick;
-  const ok = accountPick ? true : picked ? elig[picked]?.ok : false;
-  const isUpload = accountPick ? true : rule ? UPLOAD_PLATFORMS.has(rule.platform) : false;
-  const naverDescShort = naverPick?.channel === "naverclip" && naverDesc.trim().length < 10;
+  // 규칙 + 세 계정 목록 → 하나의 대상 리스트. (네이버 TV 는 제외)
+  const targets = useMemo<Target[]>(() => {
+    const out: Target[] = [];
+    for (const r of rules) {
+      const key = `${r.platform}:${r.accountId}`;
+      const e = elig[key];
+      const meta: string[] = [];
+      if (r.maxSec != null) meta.push(`≤${r.maxSec}초`);
+      if (r.aspect !== "any") meta.push(r.aspect);
+      const badges: string[] = [];
+      if (r.isDefault) badges.push("기본 규칙");
+      out.push({
+        key,
+        platform: r.platform,
+        channel: r.platform as DistributionChannel,
+        label: r.label,
+        meta,
+        badges,
+        mode: modeFor(r.platform),
+        blocked: e && !e.ok ? e.reason || "이 채널로는 보낼 수 없습니다." : undefined,
+        rule: r,
+      });
+    }
+    for (const a of naverAccounts.filter((a) => a.target !== "tv")) {
+      out.push({
+        key: `naver:${a.id}:naverclip`,
+        platform: "naverclip",
+        channel: "naverclip" as DistributionChannel,
+        label: a.label,
+        meta: [],
+        badges: ["로그인됨"],
+        mode: "upload",
+        naver: a,
+      });
+    }
+    for (const a of igAccounts) {
+      out.push({
+        key: `ig:${a.igUserId}`,
+        platform: "instagram",
+        channel: "instagram" as DistributionChannel,
+        label: `@${a.username}`,
+        meta: [],
+        badges: [],
+        mode: "gate",
+        ig: a,
+      });
+    }
+    for (const a of metaPages) {
+      out.push({
+        key: `fb:${a.pageId}`,
+        platform: "facebook",
+        channel: "facebook" as DistributionChannel,
+        label: a.pageName,
+        meta: [],
+        badges: [],
+        mode: "gate",
+        fb: a,
+      });
+    }
+    return out;
+  }, [rules, elig, naverAccounts, igAccounts, metaPages]);
 
-  // 채널을 고르면 그 채널의 규칙이 즉시 폼에 반영된다 (F4-2).
-  useEffect(() => {
-    if (!rule) return;
-    setScheduled(Boolean(rule.scheduleWindow));
-  }, [rule]);
+  // 플랫폼별 그룹 — 고정 순서 먼저, 모르는 플랫폼은 뒤에 그대로.
+  const groups = useMemo(() => {
+    const out: { platform: string; items: Target[] }[] = [];
+    for (const p of GROUP_ORDER) {
+      const items = targets.filter((t) => t.platform === p);
+      if (items.length) out.push({ platform: p, items });
+    }
+    for (const t of targets) {
+      if ((GROUP_ORDER as readonly string[]).includes(t.platform)) continue;
+      let g = out.find((x) => x.platform === t.platform);
+      if (!g) out.push((g = { platform: t.platform, items: [] }));
+      g.items.push(t);
+    }
+    return out;
+  }, [targets]);
+
+  const selectable = useMemo(() => targets.filter((t) => !t.blocked), [targets]);
+  const chosen = useMemo(() => selectable.filter((t) => selected.has(t.key)), [selectable, selected]);
+  const allOn = selectable.length > 0 && chosen.length === selectable.length;
+
+  const naverForm = (key: string) => naverForms[key] ?? NAVER_FORM_DEFAULT;
+  // 선택된 네이버 클립 중 설명이 10자 미만인 게 하나라도 있으면 막는다.
+  const naverShort = chosen.some((t) => t.naver && naverForm(t.key).description.trim().length < 10);
+  const canSubmit = chosen.length > 0 && !naverShort && !busy;
+  const gateChosen = chosen.filter((t) => t.mode !== "upload");
+
+  function toggle(key: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
+  function toggleAll() {
+    setSelected(allOn ? new Set() : new Set(selectable.map((t) => t.key)));
+  }
+  function patchNaver(key: string, patch: Partial<NaverForm>) {
+    setNaverForms((prev) => ({ ...prev, [key]: { ...(prev[key] ?? NAVER_FORM_DEFAULT), ...patch } }));
+  }
+
+  function buildOpts(t: Target): Parameters<typeof publishClips>[2] {
+    const base: Parameters<typeof publishClips>[2] = {
+      scheduled,
+      ...(scheduled && reserveDate ? { reserveDate } : {}),
+    };
+    // 고른 행이 곧 대상 채널·계정이다 — 서버가 추측하지 않게 명시한다(다계정 오배포 방지).
+    if (t.rule?.platform === "youtube") return { ...base, youtubeChannelId: t.rule.accountId };
+    if (t.rule?.platform === "tiktok") return { ...base, ...(t.rule.accountId ? { tiktokOpenId: t.rule.accountId } : {}) };
+    if (t.naver) {
+      const f = naverForm(t.key);
+      return { ...base, naverAccountId: t.naver.id, description: f.description.trim(), naverCategory: { primary: f.primary, secondary: f.secondary } };
+    }
+    if (t.ig) return { ...base, igUserId: t.ig.igUserId };
+    if (t.fb) return { ...base, metaPageId: t.fb.pageId };
+    return base;
+  }
 
   async function submit() {
-    if ((!rule && !accountPick) || !ok) return;
-    if (naverDescShort) return;
+    if (!canSubmit) return;
     setBusy(true);
     try {
-      const channel = (naverPick ? naverPick.channel
-        : igPick ? "instagram" : fbPick ? "facebook" : rule!.platform) as DistributionChannel;
-      const res = await publishClips(clipIds, channel, {
-        scheduled,
-        ...(scheduled && reserveDate ? { reserveDate } : {}),
-        // 고른 행이 곧 대상 채널·계정이다 — 서버가 추측하지 않게 명시한다(다계정 오배포 방지).
-        ...(rule?.platform === "youtube" ? { youtubeChannelId: rule.accountId } : {}),
-        ...(naverPick ? {
-          naverAccountId: naverPick.acct.id,
-          description: naverDesc.trim(),
-          ...(naverPick.channel === "naverclip" ? { naverCategory: naverCat } : {}),
-        } : {}),
-        ...(igPick ? { igUserId: igPick.igUserId } : {}),
-        ...(fbPick ? { metaPageId: fbPick.pageId } : {}),
-      });
+      // 채널당 1콜. 하나 실패가 나머지를 막지 않게 allSettled 로 모아 한 번에 보고한다.
+      const settled = await Promise.allSettled(chosen.map((t) => publishClips(clipIds, t.channel, buildOpts(t))));
+      const okResults = settled
+        .filter((s): s is PromiseFulfilledResult<PublishOutcome> => s.status === "fulfilled")
+        .map((s) => s.value);
+      const failCount = settled.length - okResults.length;
+
+      if (okResults.length === 0) {
+        const firstErr = settled.find((s) => s.status === "rejected") as PromiseRejectedResult | undefined;
+        const reason = firstErr?.reason;
+        toast({
+          title: "배포 실패",
+          description: reason instanceof Error ? reason.message : reason ? String(reason) : "모든 채널 배포에 실패했습니다.",
+          tone: "error",
+        });
+        setBusy(false);
+        return;
+      }
+
+      const notices = okResults.map((r) => r.notice).filter(Boolean);
+      const anySkipped = okResults.some((r) => r.skipped.length > 0);
       toast({
-        title: isUpload ? "업로드를 시작했습니다" : "배포 기록을 남겼습니다",
+        title:
+          failCount > 0
+            ? `${okResults.length}개 채널 배포 · ${failCount}개 실패`
+            : `${okResults.length}개 채널로 ${scheduled ? "예약" : "배포"}했습니다`,
         description:
-          res.notice ||
-          (isUpload ? "배포 화면에서 진행 상황을 볼 수 있습니다." : "실제 게시는 담당자가 해당 앱에서 직접 해야 합니다."),
-        tone: res.skipped.length > 0 ? "warn" : "done",
+          notices.join(" · ") ||
+          (scheduled ? "예약 시각에 발행됩니다." : "배포 화면에서 진행 상황을 볼 수 있습니다."),
+        tone: failCount > 0 ? "error" : anySkipped ? "warn" : "done",
       });
       await onDone?.();
       onClose();
@@ -160,6 +298,8 @@ export function PublishDialog({
       setBusy(false);
     }
   }
+
+  const empty = groups.length === 0 && !loadErr;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -170,13 +310,23 @@ export function PublishDialog({
         role="dialog"
         aria-modal="true"
       >
-        <div className="px-4 py-3" style={{ borderBottom: "1px solid var(--sd-border)" }}>
-          <h2 className="sd-serif text-[14px] font-semibold" style={{ color: "var(--sd-fg)" }}>
-            배포 · {clipIds.length}건
-          </h2>
+        <div className="flex items-center justify-between gap-3 px-4 py-3" style={{ borderBottom: "1px solid var(--sd-border)" }}>
+          <div>
+            <h2 className="sd-serif text-[14px] font-semibold" style={{ color: "var(--sd-fg)" }}>
+              배포 · 클립 {clipIds.length}건
+            </h2>
+            <p className="text-[11px]" style={{ color: "var(--sd-mut)" }}>
+              채널을 골라 한 번에 배포 — 하나만 골라도, 여러 개 골라도 됩니다.
+            </p>
+          </div>
+          {selectable.length > 0 && (
+            <button type="button" className="sd-btn text-[11.5px]" onClick={toggleAll} disabled={busy}>
+              {allOn ? "모두 해제" : "모두 선택"}
+            </button>
+          )}
         </div>
 
-        <div className="flex-1 space-y-3 overflow-y-auto p-4">
+        <div className="flex-1 space-y-3.5 overflow-y-auto p-4">
           {loadErr && (
             <p className="text-[11.5px]" style={{ color: "var(--sd-danger-strong)" }}>
               채널 규칙을 불러오지 못했습니다 ({loadErr}).
@@ -184,164 +334,138 @@ export function PublishDialog({
           )}
 
           {/* 서버가 연결된 채널을 기본 규칙으로 합성해 주므로, 여기가 비면 연결 자체가 없는 것이다. */}
-          {rules.length === 0 && naverAccounts.length === 0 && igAccounts.length === 0 && metaPages.length === 0 && !loadErr && (
+          {empty && (
             <p className="text-[11.5px]" style={{ color: "var(--sd-mut)" }}>
               보낼 수 있는 채널이 없습니다 — 배포 채널 화면에서 채널을 먼저 연결하세요.
               (규칙은 없어도 됩니다 — 연결만 되면 기본 설정으로 나갑니다.)
             </p>
           )}
 
-          <div className="flex flex-col gap-1.5">
-            {rules.map((r) => {
-              const key = `${r.platform}:${r.accountId}`;
-              const e = elig[key];
-              const blocked = !e?.ok;
-              return (
-                <button
-                  key={key}
-                  type="button"
-                  disabled={blocked}
-                  onClick={() => setPicked(key)}
-                  className={cn(
-                    "flex flex-col gap-1 rounded-[5px] px-3 py-2 text-left",
-                    picked === key && "sd-btn--on",
-                  )}
-                  style={{
-                    border: `1px solid ${picked === key ? "var(--sd-accent-border)" : "var(--sd-border)"}`,
-                    opacity: blocked ? 0.6 : 1,
-                    cursor: blocked ? "not-allowed" : "pointer",
-                  }}
-                >
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-[12.5px] font-medium" style={{ color: "var(--sd-fg)" }}>
-                      {r.label}
-                    </span>
-                    <span className="sd-tag">{PLATFORM_LABEL[r.platform] ?? r.platform}</span>
-                    {!UPLOAD_PLATFORMS.has(r.platform) && <span className="sd-tag">기록만</span>}
-                    {r.isDefault && <span className="sd-tag" title="저장된 규칙이 없어 기본 설정으로 나갑니다">기본 규칙</span>}
-                    {r.maxSec != null && <span className="sd-tag sd-mono">≤{r.maxSec}초</span>}
-                    {r.aspect !== "any" && <span className="sd-tag sd-mono">{r.aspect}</span>}
-                  </div>
-                  {/* 못 고르는 이유를 반드시 적는다 (F4-2). */}
-                  {blocked && (
-                    <span className="text-[11px]" style={{ color: "var(--sd-danger-strong)" }}>
-                      {e?.reason ?? "이 채널로는 보낼 수 없습니다."}
-                    </span>
-                  )}
-                </button>
-              );
-            })}
-            {/* 네이버 클립 — 세션 등록된 계정으로 직접 업로드 (채널 규칙 불필요 · TV 는 제품에서 제외) */}
-            {naverAccounts.filter((a) => a.target !== "tv").map((a) => {
-              const key = `naver:${a.id}:naverclip`;
-              return (
-                <button
-                  key={key}
-                  type="button"
-                  onClick={() => setPicked(key)}
-                  className={cn(
-                    "flex flex-col gap-1 rounded-[5px] px-3 py-2 text-left",
-                    picked === key && "sd-btn--on",
-                  )}
-                  style={{
-                    border: `1px solid ${picked === key ? "var(--sd-accent-border)" : "var(--sd-border)"}`,
-                    cursor: "pointer",
-                  }}
-                >
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-[12.5px] font-medium" style={{ color: "var(--sd-fg)" }}>{a.label}</span>
-                    <span className="sd-tag">{PLATFORM_LABEL.naverclip}</span>
-                    <span className="sd-tag">로그인됨</span>
-                  </div>
-                </button>
-              );
-            })}
-            {/* Instagram(비즈니스) — 계정 단위 선택. 게이트 OFF 면 서버가 record 로 강등한다. */}
-            {igAccounts.map((a) => {
-              const key = `ig:${a.igUserId}`;
-              return (
-                <button key={key} type="button" onClick={() => setPicked(key)}
-                  className={cn("flex flex-col gap-1 rounded-[5px] px-3 py-2 text-left", picked === key && "sd-btn--on")}
-                  style={{ border: `1px solid ${picked === key ? "var(--sd-accent-border)" : "var(--sd-border)"}`, cursor: "pointer" }}>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-[12.5px] font-medium" style={{ color: "var(--sd-fg)" }}>@{a.username}</span>
-                    <span className="sd-tag">{PLATFORM_LABEL.instagram}</span>
-                  </div>
-                </button>
-              );
-            })}
-            {/* Facebook — Meta 페이지 단위 선택. */}
-            {metaPages.map((a) => {
-              const key = `fb:${a.pageId}`;
-              return (
-                <button key={key} type="button" onClick={() => setPicked(key)}
-                  className={cn("flex flex-col gap-1 rounded-[5px] px-3 py-2 text-left", picked === key && "sd-btn--on")}
-                  style={{ border: `1px solid ${picked === key ? "var(--sd-accent-border)" : "var(--sd-border)"}`, cursor: "pointer" }}>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="text-[12.5px] font-medium" style={{ color: "var(--sd-fg)" }}>{a.pageName}</span>
-                    <span className="sd-tag">{PLATFORM_LABEL.facebook}</span>
-                  </div>
-                </button>
-              );
-            })}
-          </div>
-
-          {naverPick && (
-            <div
-              className="flex flex-col gap-2 rounded-[5px] p-3"
-              style={{ background: "var(--sd-card-sub)", border: "1px solid var(--sd-border)" }}
-            >
-              <div className="sd-eb" style={{ color: "var(--sd-label)" }}>
-                {PLATFORM_LABEL[naverPick.channel]} · {naverPick.acct.label}
+          {groups.map((g) => (
+            <div key={g.platform} className="flex flex-col gap-1.5">
+              <div className="flex items-center gap-2">
+                <span className="sd-eb" style={{ color: "var(--sd-label)" }}>
+                  {PLATFORM_LABEL[g.platform] ?? g.platform}
+                </span>
+                <span className="text-[10.5px]" style={{ color: "var(--sd-mut)" }}>
+                  {g.items.length}개
+                </span>
               </div>
-              <label className="text-[11.5px]" style={{ color: "var(--sd-fg)" }}>
-                설명 {naverPick.channel === "naverclip" && <span style={{ color: "var(--sd-mut)" }}>(10자 이상 필수)</span>}
-                <textarea
-                  value={naverDesc}
-                  onChange={(e) => setNaverDesc(e.target.value)}
-                  rows={2}
-                  placeholder="영상 설명을 입력하세요"
-                  className="sd-input mt-1 w-full"
-                />
-              </label>
-              {naverDescShort && (
-                <p className="text-[10.5px]" style={{ color: "var(--sd-danger-strong)" }}>
-                  네이버 클립은 설명이 10자 이상이어야 등록됩니다 (현재 {naverDesc.trim().length}자).
-                </p>
-              )}
-              {naverPick.channel === "naverclip" && (
-                <div className="grid grid-cols-2 gap-2">
-                  <label className="text-[11.5px]" style={{ color: "var(--sd-fg)" }}>
-                    카테고리 1차
-                    <input value={naverCat.primary}
-                      onChange={(e) => setNaverCat({ ...naverCat, primary: e.target.value })}
-                      className="sd-input mt-1 w-full" />
-                  </label>
-                  <label className="text-[11.5px]" style={{ color: "var(--sd-fg)" }}>
-                    카테고리 2차
-                    <input value={naverCat.secondary}
-                      onChange={(e) => setNaverCat({ ...naverCat, secondary: e.target.value })}
-                      className="sd-input mt-1 w-full" />
-                  </label>
-                </div>
-              )}
-              <p className="text-[10.5px]" style={{ color: "var(--sd-mut)" }}>
-                사무실 워커 PC 가 이 계정의 로그인 세션으로 실제 업로드합니다.
-              </p>
+              {g.items.map((t) => {
+                const on = selected.has(t.key);
+                const blocked = Boolean(t.blocked);
+                const modeTag = MODE_TAG[t.mode];
+                return (
+                  <div key={t.key} className="flex flex-col gap-1.5">
+                    <button
+                      type="button"
+                      role="checkbox"
+                      aria-checked={on}
+                      disabled={blocked}
+                      onClick={() => toggle(t.key)}
+                      className={cn("flex items-start gap-2.5 rounded-[5px] px-3 py-2 text-left", on && "sd-btn--on")}
+                      style={{
+                        border: `1px solid ${on ? "var(--sd-accent-border)" : "var(--sd-border)"}`,
+                        opacity: blocked ? 0.6 : 1,
+                        cursor: blocked ? "not-allowed" : "pointer",
+                      }}
+                    >
+                      <span
+                        aria-hidden
+                        className="mt-[2px] flex h-[15px] w-[15px] shrink-0 items-center justify-center rounded-[3px] text-[10px] font-bold"
+                        style={{
+                          border: `1.5px solid ${on ? "var(--sd-accent-border)" : "var(--sd-border-strong, var(--sd-border))"}`,
+                          background: on ? "var(--sd-accent-border)" : "transparent",
+                          color: on ? "#fff" : "transparent",
+                        }}
+                      >
+                        ✓
+                      </span>
+                      <span className="flex min-w-0 flex-1 flex-col gap-1">
+                        <span className="flex flex-wrap items-center gap-1.5">
+                          <span className="text-[12.5px] font-medium" style={{ color: "var(--sd-fg)" }}>
+                            {t.label}
+                          </span>
+                          {modeTag && <span className="sd-tag">{modeTag}</span>}
+                          {t.badges.map((b) => (
+                            <span key={b} className="sd-tag" title={b === "기본 규칙" ? "저장된 규칙이 없어 기본 설정으로 나갑니다" : undefined}>
+                              {b}
+                            </span>
+                          ))}
+                          {t.meta.map((m) => (
+                            <span key={m} className="sd-tag sd-mono">
+                              {m}
+                            </span>
+                          ))}
+                        </span>
+                        {/* 못 고르는 이유를 반드시 적는다 (F4-2). */}
+                        {blocked && (
+                          <span className="text-[11px]" style={{ color: "var(--sd-danger-strong)" }}>
+                            {t.blocked}
+                          </span>
+                        )}
+                      </span>
+                    </button>
+
+                    {/* 네이버 클립 — 선택 시 설명·카테고리를 인라인으로 받는다 (계정마다 따로). */}
+                    {t.naver && on && (
+                      <div
+                        className="ml-[26px] flex flex-col gap-2 rounded-[5px] p-3"
+                        style={{ background: "var(--sd-card-sub)", border: "1px solid var(--sd-border)" }}
+                      >
+                        <label className="text-[11.5px]" style={{ color: "var(--sd-fg)" }}>
+                          설명 <span style={{ color: "var(--sd-mut)" }}>(10자 이상 필수)</span>
+                          <textarea
+                            value={naverForm(t.key).description}
+                            onChange={(e) => patchNaver(t.key, { description: e.target.value })}
+                            rows={2}
+                            placeholder="영상 설명을 입력하세요"
+                            className="sd-input mt-1 w-full"
+                          />
+                        </label>
+                        {naverForm(t.key).description.trim().length < 10 && (
+                          <p className="text-[10.5px]" style={{ color: "var(--sd-danger-strong)" }}>
+                            네이버 클립은 설명이 10자 이상이어야 등록됩니다 (현재 {naverForm(t.key).description.trim().length}자).
+                          </p>
+                        )}
+                        <div className="grid grid-cols-2 gap-2">
+                          <label className="text-[11.5px]" style={{ color: "var(--sd-fg)" }}>
+                            카테고리 1차
+                            <input
+                              value={naverForm(t.key).primary}
+                              onChange={(e) => patchNaver(t.key, { primary: e.target.value })}
+                              className="sd-input mt-1 w-full"
+                            />
+                          </label>
+                          <label className="text-[11.5px]" style={{ color: "var(--sd-fg)" }}>
+                            카테고리 2차
+                            <input
+                              value={naverForm(t.key).secondary}
+                              onChange={(e) => patchNaver(t.key, { secondary: e.target.value })}
+                              className="sd-input mt-1 w-full"
+                            />
+                          </label>
+                        </div>
+                        <p className="text-[10.5px]" style={{ color: "var(--sd-mut)" }}>
+                          사무실 워커 PC 가 이 계정의 로그인 세션으로 실제 업로드합니다.
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
-          )}
+          ))}
 
-          {(igPick || fbPick) && (
+          {/* 공통 예약 — 선택한 모든 채널에 같은 시각을 적용한다. */}
+          {chosen.length > 0 && (
             <div
               className="flex flex-col gap-2 rounded-[5px] p-3"
               style={{ background: "var(--sd-card-sub)", border: "1px solid var(--sd-border)" }}
             >
-              <div className="sd-eb" style={{ color: "var(--sd-label)" }}>
-                {igPick ? `${PLATFORM_LABEL.instagram} · @${igPick.username}` : `${PLATFORM_LABEL.facebook} · ${fbPick!.pageName}`}
-              </div>
               <label className="flex items-center gap-2 text-[11.5px]" style={{ color: "var(--sd-fg)" }}>
                 <input type="checkbox" checked={scheduled} onChange={(e) => setScheduled(e.target.checked)} />
-                예약 발행
+                예약 발행 <span style={{ color: "var(--sd-mut)" }}>(선택한 {chosen.length}개 채널 공통)</span>
               </label>
               {scheduled && (
                 <>
@@ -352,80 +476,38 @@ export function PublishDialog({
                     className="sd-input w-full"
                   />
                   <p className="text-[10.5px]" style={{ color: "var(--sd-mut)" }}>
-                    {fbPick
-                      ? "Facebook 이 예약 시각에 공개합니다(네이티브 예약)."
-                      : "예약 시각에 자동 게시합니다(그 시각까지 대기 후 발사)."}{" "}
-                    미래 시각으로 읽힐 때만 예약 · 과거·빈값이면 즉시 발행됩니다.
+                    YouTube·네이버·Facebook 은 플랫폼이 그 시각에 공개(네이티브 예약), Instagram·TikTok 은
+                    그 시각까지 대기했다가 자동 게시합니다. 미래 시각으로 읽힐 때만 예약 · 과거·빈값이면 즉시 발행됩니다.
                   </p>
                 </>
               )}
-              <p className="text-[10.5px]" style={{ color: "var(--sd-mut)" }}>
-                업로드 게이트가 꺼져 있으면 실제 게시 없이 <b>기록됨</b>만 남습니다 (결과는 완료 메시지에 표시).
-              </p>
-            </div>
-          )}
-
-          {rule && ok && (
-            <div
-              className="flex flex-col gap-2 rounded-[5px] p-3"
-              style={{ background: "var(--sd-card-sub)", border: "1px solid var(--sd-border)" }}
-            >
-              <div className="sd-eb" style={{ color: "var(--sd-label)" }}>적용될 규칙</div>
-              <dl className="grid grid-cols-[80px_1fr] gap-x-2 gap-y-1 text-[11.5px]">
-                <dt style={{ color: "var(--sd-mut)" }}>제목 접두</dt>
-                <dd style={{ color: "var(--sd-fg)" }}>{rule.titlePrefix || "—"}</dd>
-                <dt style={{ color: "var(--sd-mut)" }}>해시태그</dt>
-                <dd style={{ color: "var(--sd-fg)" }}>{rule.hashtagTemplate || "—"}</dd>
-                <dt style={{ color: "var(--sd-mut)" }}>말투</dt>
-                <dd style={{ color: "var(--sd-fg)" }}>{rule.tonePreset || "—"}</dd>
-                <dt style={{ color: "var(--sd-mut)" }}>공개 범위</dt>
-                <dd style={{ color: "var(--sd-fg)" }}>
-                  {{ public: "공개", unlisted: "일부 공개", private: "비공개" }[rule.privacy]}
-                </dd>
-              </dl>
-
-              <label className="flex items-center gap-2 text-[11.5px]" style={{ color: "var(--sd-fg)" }}>
-                <input type="checkbox" checked={scheduled} onChange={(e) => setScheduled(e.target.checked)} />
-                예약 발행{rule.scheduleWindow ? ` (채널 기본 ${rule.scheduleWindow})` : ""}
-              </label>
-              {scheduled && (
-                <>
-                  <input
-                    type="datetime-local"
-                    value={reserveDate}
-                    onChange={(e) => setReserveDate(e.target.value)}
-                    className="sd-input w-full"
-                  />
-                  <p className="text-[10.5px]" style={{ color: "var(--sd-mut)" }}>
-                    미래 시각으로 읽힐 때만 예약이 걸립니다. 과거·빈값이면 즉시 발행됩니다.
-                  </p>
-                </>
-              )}
-
-              {/* F4-3 ⚑ — 기록만 하는 채널은 반드시 이 문장을 보여 준다. */}
-              {!isUpload && (
+              {/* F4-3 ⚑ — 게이트/기록만 채널이 섞였으면 명확히 알린다. */}
+              {gateChosen.length > 0 && (
                 <p
-                  className="rounded-[4px] px-2.5 py-2 text-[11.5px] leading-relaxed"
+                  className="rounded-[4px] px-2.5 py-2 text-[11px] leading-relaxed"
                   style={{ border: "1px solid var(--sd-warn-border)", background: "var(--sd-warn-bg)", color: "var(--sd-warn)" }}
                 >
-                  이 채널은 <b>파일이 올라가지 않습니다.</b> 우리 쪽에 `기록됨` 상태만 남고,
-                  <b> 실제 게시는 담당자가 {PLATFORM_LABEL[rule.platform] ?? rule.platform} 앱에서 직접</b> 해야 합니다.
+                  <b>{gateChosen.map((t) => PLATFORM_LABEL[t.platform] ?? t.platform).filter((v, i, a) => a.indexOf(v) === i).join(" · ")}</b>{" "}
+                  는 업로드 게이트가 켜져 있을 때만 실제 게시됩니다. 꺼져 있으면 <b>기록됨</b> 상태만 남습니다
+                  (실제 결과는 완료 메시지에 표시).
                 </p>
               )}
             </div>
           )}
         </div>
 
-        <div className="flex items-center justify-end gap-2 px-4 py-3" style={{ borderTop: "1px solid var(--sd-border)" }}>
-          <button type="button" className="sd-btn" onClick={onClose} disabled={busy}>취소</button>
-          <button
-            type="button"
-            className="sd-btn sd-btn-primary"
-            disabled={busy || (!rule && !accountPick) || !ok || naverDescShort}
-            onClick={submit}
-          >
-            {busy ? "보내는 중…" : isUpload ? "업로드 시작" : "배포 기록"}
-          </button>
+        <div className="flex items-center justify-between gap-2 px-4 py-3" style={{ borderTop: "1px solid var(--sd-border)" }}>
+          <span className="text-[11.5px]" style={{ color: "var(--sd-mut)" }}>
+            {chosen.length > 0 ? `${chosen.length}개 채널 선택됨` : "채널을 선택하세요"}
+          </span>
+          <div className="flex items-center gap-2">
+            <button type="button" className="sd-btn" onClick={onClose} disabled={busy}>
+              취소
+            </button>
+            <button type="button" className="sd-btn sd-btn-primary" disabled={!canSubmit} onClick={submit}>
+              {busy ? "보내는 중…" : chosen.length === 0 ? "배포" : scheduled ? `${chosen.length}곳 예약 배포` : `${chosen.length}곳에 배포`}
+            </button>
+          </div>
         </div>
       </div>
     </div>
