@@ -37,7 +37,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-dev \
     make \
     g++ \
+    curl \
+    unzip \
+    ca-certificates \
   && rm -rf /var/lib/apt/lists/*
+
+# deno — yt-dlp 신버전의 유튜브 추출은 JS 챌린지(nsig) 해석에 JS 런타임을 요구한다.
+# 없으면 "without a JS runtime has been deprecated" 경고와 함께 포맷 누락·봇 판정이 잦다
+# (2026-08-14 실측). yt-dlp 가 PATH 의 deno 를 자동 감지한다.
+RUN curl -fsSL https://github.com/denoland/deno/releases/latest/download/deno-x86_64-unknown-linux-gnu.zip -o /tmp/deno.zip \
+ && unzip -o /tmp/deno.zip -d /usr/local/bin \
+ && rm /tmp/deno.zip \
+ && chmod +x /usr/local/bin/deno \
+ && /usr/local/bin/deno --version
 
 ENV PNPM_HOME=/pnpm
 ENV PATH="$PNPM_HOME:$PATH"
