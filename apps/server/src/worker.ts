@@ -2065,10 +2065,12 @@ async function main(): Promise<void> {
   });
 
   // YouTube OAuth 자격증명은 **그걸 쓰는 레인에서만** 필요하다.
-  // 네이버·GEBD 워커는 YouTube 를 건드리지 않는데, 여기서 막으면 그 머신에 쓰지도 않을
-  // 시크릿을 넣어야 워커가 뜬다(2026-08-12 윈도우2 에서 실제로 막혔다).
-  // 시크릿은 필요한 곳에만 두는 게 맞다.
-  const NEEDS_YT = WORKER_JOBS !== "naver" && WORKER_JOBS !== "gebd";
+  // 네이버·GEBD·download 워커는 YouTube API 를 건드리지 않는데(다운로드는 yt-dlp 뿐,
+  // OAuth 무관), 여기서 막으면 그 머신에 쓰지도 않을 시크릿을 넣어야 워커가 뜬다
+  // (2026-08-12 윈도우2 실측 · 2026-08-14 naver,download 조합에서 재발 — 워커가 부팅
+  // 즉시 죽는데 작업 스케줄러는 Running 으로 보여 원인이 안 보였다).
+  const YT_FREE = new Set(["naver", "gebd", "download", "naver,download", "download,naver"]);
+  const NEEDS_YT = !YT_FREE.has(WORKER_JOBS);
   if (NEEDS_YT && (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET)) {
     console.error("[worker] GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET are required");
     process.exit(1);
