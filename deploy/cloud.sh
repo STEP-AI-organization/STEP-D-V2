@@ -20,6 +20,9 @@ PROJECT="${PROJECT:-step-d}"
 REGION="${REGION:-us-central1}"
 REPO="us-central1-docker.pkg.dev/${PROJECT}/stepd-server/stepd-server"
 SA="stepd-deployer@${PROJECT}.iam.gserviceaccount.com"
+# gcloud 는 항상 deployer SA 로 — 사용자 계정(hkj)은 토큰이 만료되면 비대화형에서
+# 재인증을 못 해 배포가 중간에 죽는다(2026-08-14 실측). 밖에서 준 값이 있으면 존중한다.
+export CLOUDSDK_CORE_ACCOUNT="${CLOUDSDK_CORE_ACCOUNT:-$SA}"
 SQL="${PROJECT}:${REGION}:stepd-db"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
