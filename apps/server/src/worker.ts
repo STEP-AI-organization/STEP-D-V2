@@ -602,11 +602,17 @@ function sweepStaleYoutubeDirs(): void {
 }
 
 function runYtDlp(args: string[]): Promise<void> {
-  return new Promise((resolve, reject) => {
-    // 쿠키 파일이 실제로 존재할 때만 붙인다 — 경로만 있고 파일이 없으면 yt-dlp가 죽는다.
-    const withCookies = YTDLP_COOKIES && fs.existsSync(YTDLP_COOKIES)
-      ? ["--cookies", YTDLP_COOKIES, ...args]
-      : args;
+  // 쿠키 파일이 실제로 존재할 때만 붙인다 — 경로만 있고 파일이 없으면 yt-dlp가 죽는다.
+  // ⚠️ yt-dlp 는 --cookies 파일을 실행 종료 시 **다시 쓴다**(세션 쿠키 갱신 저장). Cloud Run
+  // 시크릿 마운트는 읽기 전용이라 그대로 넘기면 EROFS 로 다운로드 전체가 죽는다(2026-08-14
+  // 실측: "Read-only file system: /secrets/ytdlp/cookies.txt") — 쓰기 가능한 tmp 사본을 넘긴다.
+  let cookiesTmp: string | null = null;
+  if (YTDLP_COOKIES && fs.existsSync(YTDLP_COOKIES)) {
+    cookiesTmp = path.join(os.tmpdir(), `ytdlp-cookies-${process.pid}-${Date.now()}.txt`);
+    fs.copyFileSync(YTDLP_COOKIES, cookiesTmp);
+  }
+  const withCookies = cookiesTmp ? ["--cookies", cookiesTmp, ...args] : args;
+  return new Promise<void>((resolve, reject) => {
     const child = spawn(YT_DLP, withCookies, { stdio: ["ignore", "ignore", "pipe"] });
     let stderr = "";
     child.stderr.on("data", (d) => { stderr += String(d); });
@@ -619,6 +625,9 @@ function runYtDlp(args: string[]): Promise<void> {
       if (code === 0) resolve();
       else reject(new Error(`yt-dlp exited ${code}: ${stderr.slice(-800)}`));
     });
+  }).finally(() => {
+    // tmpfs(RAM) 잔류 방지 — 쿠키 사본은 실행마다 지운다.
+    if (cookiesTmp) { try { fs.unlinkSync(cookiesTmp); } catch {} }
   });
 }
 
