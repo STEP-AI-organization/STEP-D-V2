@@ -15,11 +15,12 @@ import { useCallback, useEffect, useState } from "react";
 import { useToast } from "@/components/ui/toast";
 import { fetchAutoTopup, runAutoTopup, saveAutoTopup, type AutoTopupPolicy } from "@/lib/data/api";
 
-export function AutoTopupPanel({
+export function AutoTopupManager({
   canManage,
   hasCard,
   priceKrw,
   onCharged,
+  onPolicySaved,
 }: {
   canManage: boolean;
   /** 저장된 카드가 있는가 — 없으면 자동 충전을 켤 수 없다(안내만). */
@@ -27,6 +28,8 @@ export function AutoTopupPanel({
   /** 크레딧 단가(원) — 즉시 실행 시 청구될 ₩금액을 본문과 confirm 에 보여주는 데 쓴다. */
   priceKrw?: number | null;
   onCharged?: () => void | Promise<void>;
+  /** 저장 성공 시 부모에 알린다 — 히어로 카드의 "자동 충전: 켜짐/사용 중지" 표시가 이걸 본다. */
+  onPolicySaved?: (p: AutoTopupPolicy) => void;
 }) {
   const { toast } = useToast();
   const [p, setP] = useState<AutoTopupPolicy | null>(null);
@@ -50,17 +53,17 @@ export function AutoTopupPanel({
   useEffect(() => { void load(); }, [load]);
 
   if (!p) {
-    if (!loadFailed) return null; // 첫 조회 중 — 빈 껍데기 깜빡임 방지
+    if (!loadFailed) {
+      // 다이얼로그 안이라 빈 화면이 더 어색하다 — 조회 중임을 말한다.
+      return <p className="text-[11.5px]" style={{ color: "var(--sd-mut)" }}>불러오는 중…</p>;
+    }
     return (
-      <div className="sd-card flex flex-col gap-2.5 p-4">
-        <div className="sd-eb" style={{ color: "var(--sd-label)" }}>자동 충전</div>
-        <p className="text-[11.5px]" style={{ color: "var(--sd-mut)" }}>
-          자동 충전 설정을 불러오지 못했습니다.{" "}
-          <button type="button" className="underline" onClick={() => void load()}>
-            다시 시도
-          </button>
-        </p>
-      </div>
+      <p className="text-[11.5px]" style={{ color: "var(--sd-mut)" }}>
+        자동 충전 설정을 불러오지 못했습니다.{" "}
+        <button type="button" className="underline" onClick={() => void load()}>
+          다시 시도
+        </button>
+      </p>
     );
   }
 
@@ -81,6 +84,8 @@ export function AutoTopupPanel({
       });
       setP(saved);
       setSavedP(saved);
+      // 히어로 카드의 켜짐/사용 중지 표시가 이 스냅샷을 따라온다.
+      onPolicySaved?.(saved);
       toast({ title: "자동 충전 설정을 저장했습니다", tone: "done" });
     } catch (e) {
       toast({ title: "저장 실패", description: e instanceof Error ? e.message : String(e), tone: "error" });
@@ -133,11 +138,10 @@ export function AutoTopupPanel({
   }
 
   return (
-    // 충전 카드 안에 접혀 있던 시절의 얇은 박스가 아니라 이제 화면 최상위 카드다 —
-    // 이웃(충전·결제 수단) 카드와 같은 sd-card + 오버라인 헤더로 층을 맞춘다.
-    <div className="sd-card flex flex-col gap-3 p-4">
+    // 껍데기는 다이얼로그(BillingDialog)가 그린다 — 여기는 내용만.
+    <div className="flex flex-col gap-3">
       <div className="flex items-center gap-2">
-        <div className="sd-eb" style={{ color: "var(--sd-label)" }}>자동 충전</div>
+        <span className="text-[11.5px] font-semibold" style={{ color: "var(--sd-fg)" }}>상태</span>
         <span
           className="rounded-[3px] px-1.5 py-0.5 text-[10px] font-medium"
           style={

@@ -3,10 +3,11 @@
 /**
  * 저장 카드(결제수단) — 회사 실무자가 직접 등록·삭제하고, 등록해 두면 버튼 한 번으로 충전한다.
  *
- * ## 결제 버튼과 관리 패널을 갈랐다 (2026-08-14)
+ * ## 결제 버튼과 관리 화면을 갈랐다 (2026-08-14)
  * 저장카드 결제 버튼이 금액 입력과 다른 자리에 있어 "이 버튼이 무슨 금액을 긁는지"가 안
- * 보였다. 그래서 결제 버튼(SavedCardChargeButton)은 충전 카드의 금액 바로 옆으로, 등록·삭제
- * (SavedCardPanel)는 "결제 수단" 카드로 분리했다. 카드 조회는 부모(page)가 한 번 해서
+ * 보였다. 그래서 결제 버튼(SavedCardChargeButton)은 크레딧 구매 다이얼로그의 금액 바로
+ * 옆으로, 등록·삭제(SavedCardManager)는 "결제 수단 관리" 다이얼로그 본문으로 분리했다
+ * (껍데기는 다이얼로그가 그린다 — 여기는 내용만). 카드 조회는 부모(page)가 한 번 해서
  * 둘에 같은 스냅샷을 나눠 준다.
  *
  * ## 카드 번호는 우리에게 오지 않는다
@@ -60,9 +61,9 @@ function rotateIdemKey(): string {
 }
 
 /**
- * 저장 카드 결제 버튼 — 충전 카드의 **금액 입력 옆**에 놓는다. 무슨 금액을 긁는지 그 자리에서
- * 보이게 하기 위한 분리다. 등록 카드가 없거나 권한이 없으면 아무것도 그리지 않는다
- * (등록 유도는 "결제 수단" 카드 몫).
+ * 저장 카드 결제 버튼 — 크레딧 구매 다이얼로그의 **금액 입력 옆**에 놓는다. 무슨 금액을
+ * 긁는지 그 자리에서 보이게 하기 위한 분리다. 등록 카드가 없거나 권한이 없으면 아무것도
+ * 그리지 않는다(등록 유도는 "결제 수단 관리" 다이얼로그 몫).
  */
 export function SavedCardChargeButton({
   card,
@@ -70,6 +71,7 @@ export function SavedCardChargeButton({
   credits,
   amountKrw,
   onCharged,
+  onBusyChange,
 }: {
   /** 부모(page)가 조회한 저장 카드 — 결제수단 패널과 같은 스냅샷을 본다. */
   card: SavedCard | null;
@@ -79,9 +81,12 @@ export function SavedCardChargeButton({
   /** 청구될 원화 총액 — 저장 카드는 결제창이 없어서 버튼 라벨이 금액 확인의 첫 관문이다. */
   amountKrw: number;
   onCharged: () => void | Promise<void>;
+  /** 결제 요청 in-flight 를 부모에 알린다 — 다이얼로그가 진행 중 닫힘(ESC·오버레이)을 막는 데 쓴다. */
+  onBusyChange?: (busy: boolean) => void;
 }) {
   const { toast } = useToast();
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusyState] = useState(false);
+  const setBusy = (b: boolean) => { setBusyState(b); onBusyChange?.(b); };
   const [idemKey, setIdemKey] = useState<string>(() =>
     // SSR 프리렌더에는 sessionStorage 가 없다 — DOM 에 안 그려지는 값이라 서버/클라 불일치는 무해.
     typeof window === "undefined" ? crypto.randomUUID() : restoreOrCreateIdemKey(),
@@ -154,7 +159,7 @@ export function SavedCardChargeButton({
   );
 }
 
-export function SavedCardPanel({
+export function SavedCardManager({
   canManage,
   buyer,
   card,
@@ -173,34 +178,33 @@ export function SavedCardPanel({
 }) {
   const { toast } = useToast();
   const [busy, setBusy] = useState<"register" | "delete" | null>(null);
-  // 개인/법인 카드 선택. KG이니시스 빌링키 창은 이 값(bypass.inicis_v2.carduse)으로 카드
-  // 종류를 고정한다 — 안 넘기면 창 안 토글에서 법인 고르는 순간 본인확인 흐름이 꼬여
-  // "비번칸이 잠겼다"처럼 보인다. 우리 화면에서 먼저 고르게 해 창을 해당 종류로 바로 연다.
-  // 기본은 개인(percard) — 지금까지 되던 경우.
-  const [cardUse, setCardUse] = useState<"percard" | "cocard">("percard");
+  // KG이니시스 빌링키 창의 카드 종류 고정값(bypass.inicis_v2.carduse). 고객이 전부 법인이라
+  // 화면 선택(개인/법인 토글)은 제거하고 법인(cocard)으로 고정했다 (2026-08-14 사용자 결정).
+  // 개인카드가 필요해지면 이 상수를 다시 토글로 되살린다 — 안 넘기면 창 안에서 종류를
+  // 바꾸는 순간 본인확인 흐름이 꼬여 "비번칸이 잠겼다"처럼 보이니 고정 자체는 유지할 것.
+  const cardUse = "cocard" as const;
 
   // 서버에 빌링 채널키가 없으면 등록 자체가 안 된다. 버튼을 보여주고 눌렀을 때 실패하는
   // 것보다, 왜 안 되는지 적어 두는 편이 낫다.
   if (!card) {
-    if (!loadFailed) return null; // 첫 조회 중 — 빈 껍데기 깜빡임 방지
+    if (!loadFailed) {
+      // 다이얼로그 안이라 빈 화면이 더 어색하다 — 조회 중임을 말한다.
+      return <p className="text-[11.5px]" style={{ color: "var(--sd-mut)" }}>불러오는 중…</p>;
+    }
     return (
-      <Shell>
-        <p className="text-[11.5px]" style={{ color: "var(--sd-mut)" }}>
-          결제수단 정보를 불러오지 못했습니다.{" "}
-          <button type="button" className="underline" onClick={() => void onReload()}>
-            다시 시도
-          </button>
-        </p>
-      </Shell>
+      <p className="text-[11.5px]" style={{ color: "var(--sd-mut)" }}>
+        결제수단 정보를 불러오지 못했습니다.{" "}
+        <button type="button" className="underline" onClick={() => void onReload()}>
+          다시 시도
+        </button>
+      </p>
     );
   }
   if (!card.available) {
     return (
-      <Shell>
-        <p className="text-[11.5px]" style={{ color: "var(--sd-mut)" }}>
-          카드 저장이 아직 준비되지 않았습니다. {card.unavailableReason ?? ""}
-        </p>
-      </Shell>
+      <p className="text-[11.5px]" style={{ color: "var(--sd-mut)" }}>
+        카드 저장이 아직 준비되지 않았습니다. {card.unavailableReason ?? ""}
+      </p>
     );
   }
 
@@ -265,15 +269,13 @@ export function SavedCardPanel({
   }
 
   return (
-    <Shell>
+    <div className="flex flex-col gap-2.5">
       {card.registered ? (
         <div className="flex flex-col gap-3">
           <CardVisual brand={card.brand} last4={card.last4} createdAt={card.createdAt} />
           {canManage && (
             <div className="flex flex-wrap items-center gap-2">
-              {/* 결제 버튼은 여기 없다 — 충전 카드(금액 옆)의 SavedCardChargeButton 이 긁는다. */}
-              {/* 카드 변경 시에도 개인/법인 선택이 창에 반영되게 토글을 함께 둔다. */}
-              <CardUseToggle value={cardUse} onChange={setCardUse} disabled={busy !== null} />
+              {/* 결제 버튼은 여기 없다 — 크레딧 구매 다이얼로그(금액 옆)의 SavedCardChargeButton 이 긁는다. */}
               <button type="button" className="sd-btn ml-auto" disabled={busy !== null} onClick={register}>
                 {busy === "register" ? "등록 중…" : "카드 변경"}
               </button>
@@ -300,7 +302,6 @@ export function SavedCardPanel({
           </span>
           {canManage && (
             <div className="flex flex-wrap items-center gap-2">
-              <CardUseToggle value={cardUse} onChange={setCardUse} disabled={busy !== null} />
               <button
                 type="button"
                 className="sd-btn sd-btn-primary ml-auto"
@@ -320,7 +321,7 @@ export function SavedCardPanel({
           결제수단 등록·삭제와 결제는 워크스페이스 owner·admin 만 할 수 있습니다.
         </p>
       )}
-    </Shell>
+    </div>
   );
 }
 
@@ -367,54 +368,6 @@ function CardVisual({
           </span>
         )}
       </div>
-    </div>
-  );
-}
-
-/** 개인/법인 카드 선택 — KG이니시스 빌링키 창을 해당 카드 종류로 고정한다(carduse bypass). */
-function CardUseToggle({
-  value,
-  onChange,
-  disabled,
-}: {
-  value: "percard" | "cocard";
-  onChange: (v: "percard" | "cocard") => void;
-  disabled?: boolean;
-}) {
-  return (
-    <div
-      className="inline-flex overflow-hidden rounded-[5px]"
-      style={{ border: "1px solid var(--sd-border)" }}
-      role="group"
-      aria-label="카드 종류"
-    >
-      {([["percard", "개인카드"], ["cocard", "법인카드"]] as const).map(([k, label]) => (
-        <button
-          key={k}
-          type="button"
-          disabled={disabled}
-          onClick={() => onChange(k)}
-          className="px-2.5 py-1 text-[11.5px] font-medium disabled:opacity-50"
-          style={
-            value === k
-              ? { background: "var(--sd-fg)", color: "#fff" }
-              : { background: "transparent", color: "var(--sd-mut)" }
-          }
-        >
-          {label}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-function Shell({ children }: { children: React.ReactNode }) {
-  // 충전 카드 안에 접혀 있던 시절의 얇은 테두리 박스가 아니라, 이제 화면 최상위 카드다 —
-  // 이웃(충전·자동 충전) 카드와 같은 sd-card + 오버라인 헤더로 층을 맞춘다.
-  return (
-    <div className="sd-card flex flex-col gap-2.5 p-4">
-      <div className="sd-eb" style={{ color: "var(--sd-label)" }}>결제 수단</div>
-      {children}
     </div>
   );
 }
