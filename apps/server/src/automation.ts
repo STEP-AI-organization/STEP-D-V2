@@ -28,6 +28,16 @@ export type RuleCriterion = (typeof RULE_CRITERIA)[number];
 export const GATE_POLICIES = ["approve_first", "hold_on_issue"] as const;
 export type GatePolicy = (typeof GATE_POLICIES)[number];
 
+/**
+ * 채택 형태 (2026-08-14) — **수동 채택 다이얼로그와 같은 값 체계**(8023f6a · store.tsx
+ * adoptRecommendation opts). 자동 순방엔 다이얼로그에서 고를 사람이 없어 규칙에 미리 담는다.
+ * 값 체계가 갈라지면 화면·서버가 서로 다른 말을 하게 되므로 이름·값을 그대로 쓴다.
+ */
+export const RULE_ORIENTATIONS = ["portrait", "landscape"] as const;
+export type RuleOrientation = (typeof RULE_ORIENTATIONS)[number];
+export const RULE_REFRAMES = ["ai", "none"] as const;
+export type RuleReframe = (typeof RULE_REFRAMES)[number];
+
 export type RuleState = "running" | "record_only" | "paused";
 
 export interface AutomationRule {
@@ -55,6 +65,10 @@ export interface AutomationRule {
   /** 활동 시간창(KST 시각). 기본 9~22 — 밖에서는 배포하지 않는다. */
   activeStart?: number;
   activeEnd?: number;
+  /** 채택 방향 — 수동 채택과 같은 값. 미지정 = 기존처럼 추천 kind 로 결정(하위호환). */
+  orientation?: RuleOrientation | null;
+  /** 'ai' = 세로형 채택 직후 AI 리프레임(clip.reframe) 큐잉. 세로형일 때만 의미. */
+  reframe?: RuleReframe | null;
 }
 
 /** 규칙의 프로그램 목록 — 다중이 있으면 다중, 없으면 단수 폴백. */
@@ -258,4 +272,10 @@ export function isRuleCriterion(v: unknown): v is RuleCriterion {
 }
 export function isGatePolicy(v: unknown): v is GatePolicy {
   return typeof v === "string" && (GATE_POLICIES as readonly string[]).includes(v);
+}
+export function isRuleOrientation(v: unknown): v is RuleOrientation {
+  return typeof v === "string" && (RULE_ORIENTATIONS as readonly string[]).includes(v);
+}
+export function isRuleReframe(v: unknown): v is RuleReframe {
+  return typeof v === "string" && (RULE_REFRAMES as readonly string[]).includes(v);
 }

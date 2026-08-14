@@ -320,6 +320,8 @@ import {
   isGatePolicy,
   isRuleCriterion,
   isRuleMediaKind,
+  isRuleOrientation,
+  isRuleReframe,
   planCycle,
   ruleCreatedNotice,
 } from "./automation.ts";
@@ -4713,6 +4715,19 @@ app.post("/api/automation/rules", async (c) => {
   if (!isRuleMediaKind(body.mediaKind)) return c.json({ error: "invalid mediaKind" }, 400);
   if (!isRuleCriterion(body.criterion)) return c.json({ error: "invalid criterion" }, 400);
   if (!isGatePolicy(body.gatePolicy)) return c.json({ error: "invalid gatePolicy" }, 400);
+  // 채택 형태 — 수동 채택 다이얼로그와 같은 값 체계(orientation·reframe). 틀린 값은 조용히
+  // 버리지 않고 400 — "저장은 됐는데 반영이 안 된다"(이 리포 최빈 실패모드)의 입구를 막는다.
+  if (body.orientation != null && !isRuleOrientation(body.orientation)) {
+    return c.json({ error: "invalid orientation" }, 400);
+  }
+  if (body.reframe != null && !isRuleReframe(body.reframe)) {
+    return c.json({ error: "invalid reframe" }, 400);
+  }
+  // 수동 다이얼로그는 세로형일 때만 리프레임을 묻는다(가로는 크롭이 없어 오선택 방지) —
+  // 규칙도 같은 제약. 여기서 안 막으면 "AI 켰는데 영영 안 돈다"가 침묵 속에 저장된다.
+  if (body.reframe === "ai" && body.orientation !== "portrait") {
+    return c.json({ error: "AI 리프레임은 세로(portrait) 방향에서만 선택할 수 있습니다." }, 400);
+  }
 
   const row = {
     id: typeof body.id === "string" && body.id ? body.id : newId("ar"),
@@ -4746,6 +4761,9 @@ app.post("/api/automation/rules", async (c) => {
       ? { dailyQuota: Math.min(50, Math.round(Number(body.dailyQuota))) } : {}),
     ...(Number.isFinite(body.activeStart) ? { activeStart: Math.max(0, Math.min(23, Math.round(Number(body.activeStart)))) } : {}),
     ...(Number.isFinite(body.activeEnd) ? { activeEnd: Math.max(0, Math.min(24, Math.round(Number(body.activeEnd)))) } : {}),
+    // 채택 형태(0038) — 순방(automation-cycle)이 수동 채택과 같은 매핑으로 소비한다.
+    ...(isRuleOrientation(body.orientation) ? { orientation: body.orientation } : {}),
+    ...(isRuleReframe(body.reframe) ? { reframe: body.reframe } : {}),
   };
   // id 가 온 저장은 **갱신**이다 — 자연키 upsert 로 흘리면 첫 채널이 바뀌었을 때 새 규칙이
   // 생기고 구 규칙이 살아남아 이중 커버(한도 2배·뺀 채널로 계속 게시)가 된다.

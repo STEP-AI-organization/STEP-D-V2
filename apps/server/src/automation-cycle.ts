@@ -27,6 +27,7 @@ import {
   listAutomationRules,
   listEntities,
   listMedia,
+  putEntity,
   getAutomationSetting,
   getChannelRule,
   publishedTodayKst,
@@ -44,7 +45,7 @@ import { eligibility, type ChannelRule } from "./channel-rules.ts";
 import { newId } from "./pipeline.ts";
 import { hasAccountDistribution } from "./publish-guard.ts";
 import { clipGate, dispatchPublish } from "./publish-dispatch.ts";
-import { basicReframeState } from "./reframe.ts";
+import { basicReframeState, effectiveReframeState } from "./reframe.ts";
 
 export interface CycleReport {
   tenantScoped: true;
@@ -124,6 +125,11 @@ export async function runAutomationCycle(): Promise<CycleReport> {
         // 무인 렌더 시드 — factory 와 동일한 기본 모양 (규칙의 templateId·layout 최우선).
         const { autoEditorState } = await import("./factory.ts");
         const program = ep.programId ? await getEntity<any>("program", ep.programId) : undefined;
+        // 채택 형태 — 규칙의 방향 선택을 **수동 채택(adopt 라우트)과 같은 매핑**으로 클립에
+        // 적용한다. 미지정이면 기존처럼 추천 kind 로 결정(하위호환 · 리프레임 OFF 시 불변).
+        const aspectRatio = rule.orientation === "portrait" ? "9:16-crop-main"
+          : rule.orientation === "landscape" ? "16:9"
+          : (rec.kind === "short" ? "9:16-crop-main" : "16:9");
         const clip = {
           id: clipId,
           episodeId: rec.episodeId,
@@ -136,7 +142,7 @@ export async function runAutomationCycle(): Promise<CycleReport> {
           hookIntroCaption: rec.hookIntroCaption,
           clipType: rec.kind === "short" ? "T6" : "TZ",
           targetAge: ep.targetAge ?? 0,
-          aspectRatio: rec.kind === "short" ? "9:16-crop-main" : "16:9",
+          aspectRatio,
           durationSec: Math.max(1, rec.endTime - rec.startTime),
           synopsis: rec.editNote ?? undefined,
           status: "editing",
@@ -149,8 +155,14 @@ export async function runAutomationCycle(): Promise<CycleReport> {
           distributions: [],
           /** 어느 규칙이 만든 미디어인지 — 사고 추적·롤백 대상 선별에 쓴다. */
           automationRuleId: rule.id,
-          editorState: autoEditorState(rec, ep.programTitle ?? "", program,
-            (rule as any).templateId, (rule as any).layout),
+          editorState: {
+            ...autoEditorState(rec, ep.programTitle ?? "", program,
+              (rule as any).templateId, (rule as any).layout),
+            // autoEditorState 는 쇼츠 전제로 aspect 9:16 을 박는데, /export 는 editorState.aspect
+            // 를 **최우선**으로 읽는다 — 가로 규칙은 여기서 안 뒤집으면 aspectRatio 에 저장만
+            // 되고 렌더에 미도달(세로로 나간다). 미지정·세로는 기존값 그대로.
+            ...(rule.orientation === "landscape" ? { aspect: "16:9" } : {}),
+          },
         };
 
         const ok = await commitAndInherit(clipId, clip, rec.id, rec);
@@ -164,10 +176,20 @@ export async function runAutomationCycle(): Promise<CycleReport> {
           ruleId: rule.id, clipId, result: "media_created",
           detail: `${rec.title} — 클립 생성 · 렌더 대기`,
         });
-        // 채택 즉시 렌더를 건다 (아래 requestAutoRender). 여기서 안 걸면 클립이
-        // rendered:false 로 남아 eligibility(not_rendered)에 매 순방 걸리고 자동 게시가
-        // 영원히 0건이다 — 어떤 경로도 렌더를 요청하지 않았기 때문(2026-08-14 확정).
-        await requestAutoRender(clipId);
+        // AI 리프레임(규칙 옵션) — 수동 채택과 같은 배선: 세로+AI 조합(store.tsx 와 같은
+        // 조건식)이면 채택 직후 /clips/:id/reframe(mode=ai_multi)로 분석을 큐잉한다.
+        // 리프레임→렌더 순서도 수동과 동일하다: /export 가 플랜 완료 전엔 reframe_not_ready
+        // 409 로 막으므로, 큐잉에 성공한 순방엔 렌더를 걸지 않는다 — rendered:false 는
+        // 아래 not_rendered 재요청 분기가 매 순방 다시 걸어 주니, 플랜이 준비된 순방에
+        // 자동으로 렌더→게시로 이어진다(새 조율 로직 없음). 큐잉 실패면 수동 실패와 같은
+        // 폴백 — 기본(중앙 크롭) 렌더로 진행한다.
+        const wantsAiReframe = rule.orientation === "portrait" && rule.reframe === "ai";
+        if (!(wantsAiReframe && await requestAutoReframe(clipId))) {
+          // 채택 즉시 렌더를 건다 (아래 requestAutoRender). 여기서 안 걸면 클립이
+          // rendered:false 로 남아 eligibility(not_rendered)에 매 순방 걸리고 자동 게시가
+          // 영원히 0건이다 — 어떤 경로도 렌더를 요청하지 않았기 때문(2026-08-14 확정).
+          await requestAutoRender(clipId);
+        }
       }
     }
 
@@ -222,9 +244,23 @@ export async function runAutomationCycle(): Promise<CycleReport> {
         // 지난 순방에서 렌더가 안 끝난(또는 실패한) 클립 — 다시 걸고, 끝났으면 이번
         // 순방에서 바로 집는다. /export 는 revision 캐시가 있어 이미 렌더된 클립의
         // 재요청은 재인코딩 없이 즉시 돌아온다(중복 렌더 방지).
-        if (clip.rendered === false && await requestAutoRender(clip.id)) {
-          const fresh = await getEntity<any>("clip", clip.id);
-          if (fresh) Object.assign(clip, fresh);
+        if (clip.rendered === false) {
+          // AI 리프레임 분석이 failed 로 끝나면 /export 가 영원히 409(reframe_not_ready)라
+          // 이 클립은 조용히 영영 미게시된다 — 무인 경로엔 재시도 누를 사람이 없다.
+          // 채택 직후 큐잉 실패와 같은 결말(기본 중앙 크롭)로 낮춰 렌더를 살린다.
+          const rf = effectiveReframeState(clip);
+          if (rf.mode === "ai_multi" && rf.status === "failed") {
+            await putEntity("clip", clip.id, { ...clip, reframe: basicReframeState() });
+            clip.reframe = basicReframeState();
+            await appendRuleRun({
+              ruleId: rule.id, clipId: clip.id, result: "skipped",
+              detail: "AI 리프레임 분석 실패 — 기본(중앙 크롭)으로 렌더를 진행합니다.", accountKey,
+            });
+          }
+          if (await requestAutoRender(clip.id)) {
+            const fresh = await getEntity<any>("clip", clip.id);
+            if (fresh) Object.assign(clip, fresh);
+          }
         }
 
         const why = eligibility(channelRule, {
@@ -367,6 +403,32 @@ async function requestAutoRender(clipId: string): Promise<boolean> {
     return true;
   } catch (e) {
     console.warn(`[automation] 렌더 요청 실패 ${clipId}: ${String(e).slice(0, 160)}`);
+    return false;
+  }
+}
+
+/**
+ * AI 리프레임 요청 — 수동 채택 직후 프론트가 부르는 것과 **같은 라우트**
+ * (POST /api/clips/:id/reframe · mode="ai_multi" · 내부 인증은 requestAutoRender 와 동일).
+ * dedupe(입력 지문 CAS·requestId)·잡 페이로드·clip.reframe 상태 전이가 전부 라우트 안에
+ * 있으므로 여기서 복제하지 않는다 — 두 벌이 되면 한쪽만 고쳐진다.
+ *
+ * 던지지 않는다: 실패하면 false — 호출부가 기본(중앙 크롭) 렌더로 진행한다(수동 경로의
+ * "adopt→reframe 큐잉 실패" 콘솔 폴백과 같은 결말). 분석 실패(failed) 후 재시도는 수동과
+ * 마찬가지로 사람 몫(retry=true)이다 — 자동 재시도 루프는 분석 원가만 태운다.
+ */
+async function requestAutoReframe(clipId: string): Promise<boolean> {
+  try {
+    const { apiBase, internalHeaders } = await import("./factory.ts");
+    const res = await fetch(`${apiBase()}/api/clips/${clipId}/reframe`, {
+      method: "POST",
+      headers: { ...(await internalHeaders()), "content-type": "application/json" },
+      body: JSON.stringify({ mode: "ai_multi" }),
+    });
+    if (!res.ok) throw new Error(`reframe ${res.status}`);
+    return true;
+  } catch (e) {
+    console.warn(`[automation] AI 리프레임 요청 실패 ${clipId}: ${String(e).slice(0, 160)}`);
     return false;
   }
 }

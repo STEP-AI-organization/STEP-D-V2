@@ -21,6 +21,13 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { UploadVideoButton } from "@/components/upload-video-dialog";
+import type { AdoptReframe } from "@/components/adopt-dialog";
+import {
+  LayoutSliders,
+  TemplatePreview,
+  TemplatePreviewDialog,
+  type LayoutState,
+} from "@/components/automation/template-preview";
 import { useToast } from "@/components/ui/toast";
 import { useSession } from "@/lib/auth";
 import {
@@ -84,42 +91,6 @@ const TEMPLATE_SEED_UI: Record<string, { accent: string; titleY: number; iconY: 
   "broadcast-drama": { accent: "#40E0E0", titleY: 8, iconY: 77, boxY: 87.5, iconSize: 50 },
   "broadcast-clean": { accent: "#FF4040", titleY: 11, iconY: 80, boxY: 92, iconSize: 40 },
 };
-
-type LayoutState = { titleY: number; channelIconY: number; channelBoxY: number; channelIconSize: number };
-
-/** 9:16 미니 캔버스에 템플릿 기하(띠·영상 영역)와 제목·로고·시간박스 위치를 그린다. */
-function TemplatePreview({ template, accent, layout }: {
-  template: FrameTemplate | null;
-  accent: string;
-  layout: LayoutState;
-}) {
-  const video = template?.video ?? { x: 0, y: 34.2, w: 100, h: 31.7 };
-  const iconPct = (layout.channelIconSize * 3 / 1920) * 100; // px(에디터) → 출력높이 → %
-  return (
-    <div className="relative w-[120px] shrink-0 overflow-hidden rounded-md border"
-      style={{ aspectRatio: "9/16", background: "#000", borderColor: "var(--sd-border)" }}>
-      {/* 영상 영역 */}
-      <div className="absolute" style={{
-        left: `${video.x}%`, top: `${video.y}%`, width: `${video.w}%`, height: `${video.h}%`,
-        background: "linear-gradient(135deg,#2a3f4d,#1a2630)",
-      }} />
-      {/* 제목 2줄 */}
-      <div className="absolute inset-x-1 text-center font-bold leading-tight"
-        style={{ top: `${layout.titleY}%`, fontSize: 7, color: "#fff" }}>
-        훅 첫 줄 텍스트
-        <div style={{ color: accent }}>둘째 줄 강조</div>
-      </div>
-      {/* 로고 */}
-      <div className="absolute left-1/2 -translate-x-1/2 rounded-sm"
-        style={{ top: `${layout.channelIconY}%`, width: `${iconPct * 1.4}%`, height: `${iconPct}%`, background: "#666" }} />
-      {/* 시간 박스 */}
-      <div className="absolute left-1/2 -translate-x-1/2 rounded-[2px] px-1 text-center font-bold"
-        style={{ top: `${layout.channelBoxY}%`, fontSize: 5.5, color: "#fff", background: "#3D7BD9" }}>
-        (수) 밤 10시 30분
-      </div>
-    </div>
-  );
-}
 
 const STEPS = [
   { n: "01", title: "회차 수신", desc: "새 회차 원본 감지 · 없으면 스킵" },
@@ -223,6 +194,11 @@ export default function AutomationPage() {
   const [templateId, setTemplateId] = useState(""); // "" = 프로그램 장르 자동
   const [templates, setTemplates] = useState<FrameTemplate[]>([]);
   const [layout, setLayout] = useState<LayoutState | null>(null);
+  // AI 리프레임 — 수동 채택(adopt-dialog)과 같은 값 체계("ai"|"none")·같은 라벨.
+  // 기본 "none" = 중앙 고정 크롭(서버 factory 의 basicReframeState 기본과 동일).
+  const [reframe, setReframe] = useState<AdoptReframe>("none");
+  // 템플릿 대형 미리보기 — 소형 카드로는 실제 결과감이 안 온다는 피드백(클릭 시 확대).
+  const [tplPreviewOpen, setTplPreviewOpen] = useState(false);
 
   useEffect(() => {
     void fetchShortsTemplates().then(setTemplates).catch(() => setTemplates([]));
@@ -309,6 +285,7 @@ export default function AutomationPage() {
     setDailyQuota(r.dailyQuota ?? 3);
     setActiveStart(r.activeStart ?? 9); setActiveEnd(r.activeEnd ?? 22);
     setTemplateId(r.templateId ?? "");
+    setReframe(r.reframe ?? "none"); // 구 규칙(필드 없음)은 기본과 같은 "none"
     if (r.layout) {
       const seed = TEMPLATE_SEED_UI[r.templateId || "broadcast-standard"] ?? TEMPLATE_SEED_UI["broadcast-standard"];
       skipLayoutReset.current = true; // 템플릿 리셋 이펙트가 이 값을 덮지 않게
@@ -406,6 +383,14 @@ export default function AutomationPage() {
         mediaKind, criterion,
         gatePolicy: approveFirst ? "approve_first" : "hold_on_issue",
         window: win, enabled: true,
+        // 리프레임은 9:16 숏폼에만 의미 있다 — 클립 전용 규칙이면 "none" 으로 강제
+        // (수동 채택 다이얼로그가 가로형에서 리프레임 단계를 생략하는 것과 같은 규칙).
+        // orientation 을 함께 보내야 한다 — 서버는 reframe=ai 를 portrait 에서만 허용하고
+        // (400), 순방 소비 조건도 orientation==="portrait" && reframe==="ai" 다. 숏폼=세로,
+        // 클립=가로, 둘 다(both)는 추천 kind 기반이라 미지정(+AI 비활성).
+        ...(mediaKind === "short" ? { orientation: "portrait" as const }
+          : mediaKind === "clip" ? { orientation: "landscape" as const } : {}),
+        reframe: mediaKind === "short" ? reframe : "none",
         ...(templateId ? { templateId } : {}),
         ...(layout ? { layout } : {}),
       });
@@ -769,6 +754,41 @@ export default function AutomationPage() {
               </select>
             </div>
 
+            {/* AI 리프레임 — 수동 채택 다이얼로그(adopt-dialog)와 같은 선택지·라벨.
+                숏폼(세로) 전용 옵션이다: 클립(가로)은 크롭이 없고, "둘 다"는 방향이 추천마다
+                달라 orientation 을 못 정한다(서버가 portrait 에서만 AI 허용) — 흐리게 + none 강제. */}
+            <div style={mediaKind !== "short" ? { opacity: 0.45, pointerEvents: "none" } : undefined}>
+              <div className="text-[10.5px]" style={{ color: "var(--sd-label)" }}>
+                AI 리프레임 (숏폼 9:16)
+              </div>
+              <div className="mt-1 grid grid-cols-2 gap-2">
+                {([
+                  ["ai", "AI 리프레임 ON", "beat별 얼굴 추적 자동 크롭"],
+                  ["none", "OFF", "중앙 고정 크롭"],
+                ] as const).map(([value, title, sub]) => {
+                  const active = reframe === value;
+                  return (
+                    <button
+                      key={value}
+                      type="button"
+                      onClick={() => setReframe(value)}
+                      className="rounded-[5px] px-3 py-2 text-left transition"
+                      style={{
+                        border: `1px solid ${active ? "var(--sd-accent-border)" : "var(--sd-border)"}`,
+                        background: active ? "var(--sd-accent-bg)" : "var(--sd-card)",
+                      }}
+                    >
+                      <div className="text-[12px] font-medium" style={{ color: active ? "var(--sd-accent)" : "var(--sd-fg)" }}>{title}</div>
+                      <div className="text-[10.5px]" style={{ color: "var(--sd-mut)" }}>{sub}</div>
+                    </button>
+                  );
+                })}
+              </div>
+              <p className="mt-1 text-[10.5px]" style={{ color: "var(--sd-fg-dim)" }}>
+                AI 리프레임 — 인물 위치를 따라 9:16 구도를 자동으로 잡습니다 (렌더 시간이 늘어납니다)
+              </p>
+            </div>
+
             {/* 하루 할당량 · 활동 시간창 — 할당량이 찰 때까지 시간창 안에서 확인 때마다 계속 배포 */}
             <div className="grid grid-cols-3 items-end gap-2">
               <label className="text-[10.5px]" style={{ color: "var(--sd-label)" }}>
@@ -809,31 +829,29 @@ export default function AutomationPage() {
               </p>
             </div>
 
-            {/* 미리보기 + 위치 조절 — 저장되는 렌더 기하와 같은 % 좌표를 그대로 그린다 */}
+            {/* 미리보기 + 위치 조절 — 저장되는 렌더 기하와 같은 % 좌표를 그대로 그린다.
+                소형 카드 클릭 = 대형 다이얼로그(같은 TemplatePreview, width 만 다름). */}
             {layout && (
               <div className="flex gap-3">
-                <TemplatePreview
-                  template={templates.find((t) => t.name === effectiveTemplate) ?? null}
-                  accent={(TEMPLATE_SEED_UI[effectiveTemplate] ?? TEMPLATE_SEED_UI["broadcast-standard"]).accent}
-                  layout={layout}
-                />
-                <div className="flex-1 space-y-2 text-[10.5px]" style={{ color: "var(--sd-fg-dim)" }}>
-                  {([
-                    ["제목 위치", "titleY", 3, 30],
-                    ["로고 위치", "channelIconY", 60, 92],
-                    ["시간박스 위치", "channelBoxY", 62, 94],
-                    ["로고 크기", "channelIconSize", 20, 90],
-                  ] as const).map(([label, key, min, max]) => (
-                    <label key={key} className="block">
-                      {label} <span className="opacity-70">{Math.round(layout[key])}{key === "channelIconSize" ? "px" : "%"}</span>
-                      <input
-                        type="range" min={min} max={max} step={0.5} value={layout[key]}
-                        onChange={(e) => setLayout({ ...layout, [key]: Number(e.target.value) })}
-                        className="w-full"
-                      />
-                    </label>
-                  ))}
+                <div className="flex shrink-0 flex-col gap-1">
+                  <button
+                    type="button"
+                    className="cursor-zoom-in"
+                    onClick={() => setTplPreviewOpen(true)}
+                    aria-label="템플릿 미리보기 크게 보기"
+                    title="클릭하면 크게 봅니다"
+                  >
+                    <TemplatePreview
+                      template={templates.find((t) => t.name === effectiveTemplate) ?? null}
+                      accent={(TEMPLATE_SEED_UI[effectiveTemplate] ?? TEMPLATE_SEED_UI["broadcast-standard"]).accent}
+                      layout={layout}
+                    />
+                  </button>
+                  <span className="text-center text-[10px]" style={{ color: "var(--sd-mut)" }}>
+                    클릭해 크게 보기
+                  </span>
                 </div>
+                <LayoutSliders layout={layout} onChange={setLayout} className="flex-1 space-y-2 text-[10.5px]" />
               </div>
             )}
 
@@ -1154,6 +1172,17 @@ export default function AutomationPage() {
         건은 사람이 승인해야 다음 확인 때 게시됩니다. 실제 업로드 잠금(운영 설정)은 이것과
         별개입니다 — 잠겨 있으면 승인해도 기록만 남습니다.
       </div>
+
+      {/* 템플릿 대형 미리보기 — 부모 layout 상태를 공유해 슬라이더가 즉시 반영된다. */}
+      {tplPreviewOpen && layout && (
+        <TemplatePreviewDialog
+          template={templates.find((t) => t.name === effectiveTemplate) ?? null}
+          accent={(TEMPLATE_SEED_UI[effectiveTemplate] ?? TEMPLATE_SEED_UI["broadcast-standard"]).accent}
+          layout={layout}
+          onLayoutChange={setLayout}
+          onClose={() => setTplPreviewOpen(false)}
+        />
+      )}
     </div>
   );
 }

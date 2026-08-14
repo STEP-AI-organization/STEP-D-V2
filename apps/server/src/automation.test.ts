@@ -17,6 +17,8 @@ import {
   isGatePolicy,
   isRuleCriterion,
   isRuleMediaKind,
+  isRuleOrientation,
+  isRuleReframe,
   planCycle,
   ruleCreatedNotice,
   selectCandidates,
@@ -127,6 +129,75 @@ describe("순방 배선 — automation-cycle 소스 스캔", () => {
     assert.match(src, /creditBalance\(\)/, "순방 시작에 잔액 확인이 없다");
     assert.match(src, /CREDIT_IDLE_REASON/,
       "정지 사유는 automation.ts 의 CREDIT_IDLE_REASON — 라우트와 같은 문구여야 한다");
+  });
+});
+
+describe("채택 형태(방향·AI 리프레임) — 규칙 저장 왕복", () => {
+  it("값 체계는 수동 채택 다이얼로그와 동일하다 (orientation·reframe)", () => {
+    assert.equal(isRuleOrientation("portrait"), true);
+    assert.equal(isRuleOrientation("landscape"), true);
+    assert.equal(isRuleOrientation("vertical"), false); // 다른 어휘가 생기면 화면과 갈라진다
+    assert.equal(isRuleReframe("ai"), true);
+    assert.equal(isRuleReframe("none"), true);
+    assert.equal(isRuleReframe("ai_multi"), false); // 잡 모드명(ai_multi)은 규칙 값이 아니다
+  });
+
+  it("db-pg 왕복 — SELECT·INSERT·UPDATE(id) 셋 다 orientation·reframe 를 안다", () => {
+    // 0032 의 교훈: 컬럼이 upsert 에 없으면 저장이 조용히 유실된다. 세 지점 전부 고정.
+    const src = fs.readFileSync(path.join(SRC, "db-pg.ts"), "utf-8");
+    const sel = /const RULE_SEL = `([\s\S]*?)`/.exec(src)?.[1] ?? "";
+    assert.match(sel, /orientation/, "RULE_SEL 에 orientation 이 없다 — GET /api/automation 미도달");
+    assert.match(sel, /reframe/, "RULE_SEL 에 reframe 이 없다");
+    const up = src.match(/export async function upsertAutomationRule[\s\S]*?\n\}/)?.[0] ?? "";
+    assert.match(up, /orientation, reframe/, "INSERT 컬럼에 orientation·reframe 이 없다");
+    assert.match(up, /orientation = \$\d+, reframe = \$\d+/, "ON CONFLICT UPDATE 가 채택 형태를 유실한다");
+    const byId = src.match(/export async function updateAutomationRuleById[\s\S]*?\n\}/)?.[0] ?? "";
+    assert.match(byId, /orientation = \$\d+, reframe = \$\d+/, "id 갱신 경로가 채택 형태를 유실한다");
+  });
+
+  it("규칙 라우트가 orientation·reframe 를 검증해 받는다 — 틀린 값 침묵 저장 금지", () => {
+    const src = fs.readFileSync(path.join(SRC, "index.ts"), "utf-8");
+    const route = /app\.post\("\/api\/automation\/rules"[\s\S]*?\n\}\);/.exec(src)?.[0] ?? "";
+    assert.match(route, /isRuleOrientation\(body\.orientation\)/, "라우트가 orientation 을 안 받는다");
+    assert.match(route, /isRuleReframe\(body\.reframe\)/, "라우트가 reframe 을 안 받는다");
+    // 수동 다이얼로그는 세로형일 때만 리프레임을 묻는다 — 규칙도 같은 제약이어야
+    // "AI 켰는데 영영 안 돈다"가 침묵 속에 저장되지 않는다.
+    assert.match(route, /body\.reframe === "ai" && body\.orientation !== "portrait"/,
+      "가로+AI 조합을 막는 검증이 없다");
+  });
+});
+
+describe("채택 형태 순방 배선 — automation-cycle 소스 스캔", () => {
+  const src = fs.readFileSync(path.join(SRC, "automation-cycle.ts"), "utf-8");
+
+  it("규칙 방향이 클립 aspectRatio 에 수동 채택과 같은 매핑으로 적용된다", () => {
+    assert.match(src, /rule\.orientation === "portrait" \? "9:16-crop-main"/,
+      "portrait → 9:16-crop-main 매핑(adopt 라우트와 동일)이 없다");
+    assert.match(src, /rule\.orientation === "landscape" \? "16:9"/);
+  });
+
+  it("방향 미지정이면 기존 kind 기반 기본값 그대로다 (하위호환)", () => {
+    assert.match(src, /rec\.kind === "short" \? "9:16-crop-main" : "16:9"/);
+  });
+
+  it("가로 규칙은 editorState.aspect 도 뒤집는다 — /export 는 editorState 를 최우선으로 읽는다", () => {
+    // autoEditorState 는 쇼츠 전제 aspect 9:16 고정 — 여기서 안 뒤집으면 aspectRatio 에
+    // 저장만 되고 렌더에 미도달(이 리포 최빈 실패모드).
+    assert.match(src, /rule\.orientation === "landscape" \? \{ aspect: "16:9" \}/);
+  });
+
+  it("세로+AI 면 채택 직후 리프레임을 수동과 같은 라우트로 큐잉한다", () => {
+    // 조건식은 store.tsx(수동 채택)와 동일: orientation==="portrait" && reframe==="ai".
+    assert.match(src, /rule\.orientation === "portrait" && rule\.reframe === "ai"/,
+      "세로+AI 조건이 없다 — 규칙에 저장만 되고 순방이 소비하지 않는다");
+    assert.match(src, /\/api\/clips\/\$\{clipId\}\/reframe/,
+      "리프레임은 수동과 같은 라우트(/api/clips/:id/reframe)여야 한다 — 큐잉·dedupe 복제 금지");
+    assert.match(src, /"ai_multi"/, "mode=ai_multi 페이로드가 없다");
+  });
+
+  it("리프레임을 큐잉한 순방엔 렌더를 걸지 않는다 — /export 의 reframe_not_ready 409 가 순서를 강제한다", () => {
+    assert.match(src, /wantsAiReframe && await requestAutoReframe\(clipId\)/,
+      "리프레임→렌더 순서 분기가 없다 — 플랜 없이 기본 크롭이 먼저 렌더된다");
   });
 });
 

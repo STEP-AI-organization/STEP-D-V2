@@ -916,6 +916,17 @@ export interface AutomationRule {
   templateId?: string;
   /** 템플릿 위치 미세조정 — 자동배포 화면 슬라이더 (시드 기본값 위에 덮임). */
   layout?: { titleY?: number; channelIconY?: number; channelBoxY?: number; channelIconSize?: number };
+  /**
+   * 자동 생성 숏폼의 리프레임 — 수동 채택(adopt-dialog)과 같은 값 체계.
+   * "ai" = beat별 얼굴 추적 자동 크롭 · "none"(기본) = 중앙 고정 크롭.
+   * 구버전 서버/규칙엔 없다 — 없으면 "none" 으로 읽는다.
+   */
+  reframe?: "ai" | "none";
+  /**
+   * 채택 형태 — 수동 채택과 같은 값 체계. 서버는 reframe=ai 를 portrait 에서만 허용하므로
+   * reframe 을 보낼 땐 orientation 도 함께 보내야 한다. 미지정=추천 kind 기반(하위호환).
+   */
+  orientation?: "portrait" | "landscape";
   /** 다중 프로그램·채널 (2026-08-12). 배열이 있으면 배열이 정본, 없으면 단수 폴백. */
   programIds?: string[];
   channels?: { platform: string; accountId: string }[];
