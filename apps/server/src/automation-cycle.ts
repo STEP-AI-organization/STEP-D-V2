@@ -34,7 +34,8 @@ import {
 } from "./db-pg.ts";
 import {
   CREDIT_IDLE_REASON,
-  decidePublish, inActiveWindow, planCycle, ruleChannels, rulePrograms, selectCandidates,
+  decidePublish, inActiveWindow, overlapsExistingClip, planCycle, ruleChannels, rulePrograms,
+  selectCandidates,
   type AutomationRule,
 } from "./automation.ts";
 import {
@@ -43,6 +44,7 @@ import {
 import { naverUploadEnabled } from "./naver-gate.ts";
 import { eligibility, type ChannelRule } from "./channel-rules.ts";
 import { newId } from "./pipeline.ts";
+import { enqueue } from "./queue.ts";
 import { hasAccountDistribution } from "./publish-guard.ts";
 import { clipGate, dispatchPublish } from "./publish-dispatch.ts";
 import { basicReframeState, effectiveReframeState } from "./reframe.ts";
@@ -113,7 +115,12 @@ export async function runAutomationCycle(): Promise<CycleReport> {
       const stage = ep.pipeline?.stageStatus;
       if (stage === "idle" || stage === "progress") continue;
 
-      const cands = recommendations.filter((r) => r.episodeId === ep.id);
+      // 이 회차의 기존 클립(수동 채택 포함)과 구간이 겹치는 추천은 제외 — 재분석이
+      // 추천을 새 ID 로 다시 만들어도 이미 내보낸 구간이 재채택되지 않게(중복 배포 방지).
+      const epClips = allClips.filter((c) => c.episodeId === ep.id);
+      const cands = recommendations
+        .filter((r) => r.episodeId === ep.id)
+        .filter((r) => !overlapsExistingClip(r, epClips));
       // top3 는 회차당 상한 — 이 규칙이 이 회차에서 이미 채택한 수를 빼고 뽑는다.
       const pickedIds = new Set(
         selectCandidates(rule, cands, adoptedCountFor(rule.id, ep.id)).map((r) => r.id));
@@ -176,6 +183,9 @@ export async function runAutomationCycle(): Promise<CycleReport> {
           ruleId: rule.id, clipId, result: "media_created",
           detail: `${rec.title} — 클립 생성 · 렌더 대기`,
         });
+        // 채널별 메타데이터 생성 — 수동 채택(adopt 라우트)과 같은 배선. 안 걸면 자동
+        // 클립은 clip.title 폴백으로만 나간다(프로그램 제목 프롬프트·태그 미반영).
+        await enqueue("clip.metadata", { clipId }, { dedupeKey: `clip.metadata:${clipId}` }).catch(() => {});
         // AI 리프레임(규칙 옵션) — 수동 채택과 같은 배선: 세로+AI 조합(store.tsx 와 같은
         // 조건식)이면 채택 직후 /clips/:id/reframe(mode=ai_multi)로 분석을 큐잉한다.
         // 리프레임→렌더 순서도 수동과 동일하다: /export 가 플랜 완료 전엔 reframe_not_ready
@@ -297,6 +307,20 @@ export async function runAutomationCycle(): Promise<CycleReport> {
           continue;
         }
         if (decision.action === "skip") continue;
+
+        // 채널별 메타 없이 게시하지 않는다 — 워커 metaForChannel 폴백(clip.title)으로
+        // 나가면 제목 프롬프트·채널별 태그가 미반영된 채 실업로드된다. 생성 잡을
+        // (재)큐잉하고 이번 순방은 넘긴다 — dedupe 는 pending/running 에만 걸리므로
+        // 잡이 실패했어도 다음 순방이 다시 큐잉한다(조용한 영구 정지 없음).
+        const chanMeta = (clip as any).channelMeta?.[chan.platform];
+        if (!chanMeta || !(chanMeta.title || chanMeta.description)) {
+          await enqueue("clip.metadata", { clipId: clip.id }, { dedupeKey: `clip.metadata:${clip.id}` }).catch(() => {});
+          await appendRuleRun({
+            ruleId: rule.id, clipId: clip.id, result: "skipped",
+            detail: "메타데이터 생성 대기 — 완료되면 다음 확인 때 자동으로 게시됩니다.", accountKey,
+          });
+          continue;
+        }
 
         // 05 게시 — 사람이 누르는 배포와 **같은 관문**을 지난다(F6 Invariant).
         // 네이버는 설명이 필수(클립 10자) — 자동 경로에서는 클립 시놉시스/제목으로 채운다.

@@ -19,12 +19,63 @@ import {
   isRuleMediaKind,
   isRuleOrientation,
   isRuleReframe,
+  overlapsExistingClip,
   planCycle,
   ruleCreatedNotice,
   selectCandidates,
   type AutomationRule,
   type GateSnapshot,
 } from "./automation.ts";
+
+describe("이미 내보낸 구간은 다시 채택하지 않는다 (재분석 중복 배포 방지)", () => {
+  // 재분석은 추천을 **새 ID** 로 다시 만든다 — "채택됨" 표식이 사라지므로 구간 겹침으로
+  // 막지 않으면 같은 쇼츠가 또 채택→배포된다.
+  const clip = { startTime: 100, endTime: 160 };
+
+  it("같은 구간(완전 일치·대부분 겹침)은 중복이다", () => {
+    assert.equal(overlapsExistingClip({ startTime: 100, endTime: 160 }, [clip]), true);
+    assert.equal(overlapsExistingClip({ startTime: 110, endTime: 165 }, [clip]), true);
+  });
+
+  it("절반 이하로 스치는 구간·전혀 다른 구간은 통과한다", () => {
+    assert.equal(overlapsExistingClip({ startTime: 150, endTime: 260 }, [clip]), false);
+    assert.equal(overlapsExistingClip({ startTime: 300, endTime: 360 }, [clip]), false);
+  });
+
+  it("수동 채택 클립도 존중한다 — 목록에 섞여 있으면 막힌다", () => {
+    assert.equal(
+      overlapsExistingClip({ startTime: 100, endTime: 160 }, [{ startTime: 500, endTime: 560 }, clip]),
+      true,
+    );
+  });
+
+  it("시간 정보가 없는 쪽은 판정하지 않는다 (막지도, 터지지도 않는다)", () => {
+    assert.equal(overlapsExistingClip({ startTime: null, endTime: null }, [clip]), false);
+    assert.equal(overlapsExistingClip({ startTime: 100, endTime: 160 }, [{ startTime: null, endTime: null }]), false);
+  });
+
+  it("순방이 이 가드를 실제로 통과시킨다 — 소스 배선 고정", () => {
+    const src = fs.readFileSync(
+      path.join(path.dirname(fileURLToPath(import.meta.url)), "automation-cycle.ts"), "utf-8");
+    assert.match(src, /overlapsExistingClip\(/,
+      "automation-cycle 이 구간 겹침 가드를 부르지 않으면 재분석 시 중복 배포가 재발한다");
+  });
+});
+
+describe("자동 배포도 채널별 메타데이터를 만든 뒤 나간다", () => {
+  const src = fs.readFileSync(
+    path.join(path.dirname(fileURLToPath(import.meta.url)), "automation-cycle.ts"), "utf-8");
+
+  it("채택 직후 clip.metadata 잡을 큐잉한다 — 수동 채택과 같은 배선", () => {
+    assert.match(src, /enqueue\("clip\.metadata"/,
+      "자동 채택이 메타 생성을 안 걸면 clip.title 폴백으로만 실업로드된다");
+  });
+
+  it("채널별 메타 없이는 게시하지 않는다 (생성 대기 후 다음 순방에 게시)", () => {
+    assert.match(src, /channelMeta/,
+      "게시 전 channelMeta 게이트가 없으면 메타 생성이 끝나기 전에 폴백 제목으로 나간다");
+  });
+});
 
 const SRC = path.dirname(fileURLToPath(import.meta.url));
 

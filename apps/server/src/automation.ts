@@ -124,6 +124,31 @@ export interface Candidate {
 export const TOP3_CAP = 3;
 
 /**
+ * 이 구간의 쇼츠가 이미 존재하는가 — **재분석 중복 채택 방지.**
+ *
+ * 회차를 재분석하면 추천이 새 ID 로 다시 생성돼 "채택됨" 표식이 사라진다. 그대로 두면
+ * 이미 내보낸 구간이 새 추천으로 또 채택돼 같은 쇼츠가 중복 배포된다. 판정은 결정론 —
+ * 겹침 길이가 짧은 쪽 길이의 절반을 넘으면 같은 구간으로 본다. 수동 채택 클립도 존중한다:
+ * 사람이 이미 만든 구간을 자동이 또 만들면 안 되는 건 마찬가지다.
+ */
+export function overlapsExistingClip(
+  rec: { startTime?: number | null; endTime?: number | null },
+  clips: Array<{ startTime?: number | null; endTime?: number | null }>,
+): boolean {
+  const rs = Number(rec.startTime);
+  const re = Number(rec.endTime);
+  if (!Number.isFinite(rs) || !Number.isFinite(re) || re <= rs) return false;
+  for (const c of clips) {
+    const cs = Number(c.startTime);
+    const ce = Number(c.endTime);
+    if (!Number.isFinite(cs) || !Number.isFinite(ce) || ce <= cs) continue;
+    const ov = Math.min(re, ce) - Math.max(rs, cs);
+    if (ov > 0 && ov / Math.min(re - rs, ce - cs) > 0.5) return true;
+  }
+  return false;
+}
+
+/**
  * 규칙 조건을 통과한 추천만 고른다 (F6 03단계).
  * 이미 판단된 것(채택·거절)은 다시 잡지 않는다 — 사람이 거절한 걸 자동이 되살리면 안 된다.
  *
