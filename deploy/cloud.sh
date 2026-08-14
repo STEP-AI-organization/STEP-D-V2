@@ -65,6 +65,11 @@ do_worker() {
     --image="${REPO}:${tag_y}" || die "youtube job 갱신 실패"
   gcloud run jobs update stepd-worker-content --project="$PROJECT" --region="$REGION" \
     --image="${REPO}:${tag_c}" || die "content job 갱신 실패"
+  # env 자가 치유 — 깨진 CORE_PYTHON/CORE_DIR(윈도우 경로로 오염된 옛 스냅샷)이 어떤
+  # 경로로든 잡에 되살아나는 사고가 두 번 실측됐다(2026-08-13·08-14: 이미지 기본값을
+  # 덮어 분석이 spawn ENOENT 로 전멸). 이미지 ENV 가 정답이므로 배포 때마다 걷어낸다.
+  gcloud run jobs update stepd-worker-content --project="$PROJECT" --region="$REGION" \
+    --remove-env-vars=CORE_PYTHON,CORE_DIR >/dev/null 2>&1 || true
   log "worker 완료"
 }
 
