@@ -114,7 +114,7 @@ const TICK_INTERVAL_MS = 15 * 60 * 1000;
  * heavy content.analyze (STT/vision, minutes) no longer blocks the flood of light video.*
  * jobs, and vice versa. Unset / "all" keeps the legacy single worker that drains everything.
  */
-const JOB_LANES: Record<"content" | "youtube" | "gebd" | "naver", JobType[]> = {
+const JOB_LANES: Record<"content" | "youtube" | "gebd" | "naver" | "download", JobType[]> = {
   // match.align도 content 레인 — 파이썬·ffmpeg로 오디오를 돌리는 무거운 잡이라
   // YouTube API 레인(짧고 쿼터 위주)에 섞으면 그쪽을 막는다.
   // thumbnail.* 도 content 레인. 성격이 같다 — core/thumbnail 파이썬을 스폰하고 이미지 생성
@@ -124,7 +124,7 @@ const JOB_LANES: Record<"content" | "youtube" | "gebd" | "naver", JobType[]> = {
   //    큐잉은 되는데 **아무도 claim 하지 않아 영원히 pending** 이었다. 라우트는 {jobId} 로
   //    성공을 돌려주므로 화면에서는 "생성 중" 으로만 보인다 — 이 리포의 전형적 조용한 실패다.
   //    아래 "모든 JobType 은 실제로 도는 레인에 속한다" 테스트가 재발을 막는다.
-  content: ["content.analyze", "youtube.download", "match.align", "match.segment", "match.learn",
+  content: ["content.analyze", "match.align", "match.segment", "match.learn",
             "thumbnail.style", "thumbnail.generate", "clip.metadata", "clip.reframe"],
   // factory.* 도 youtube 레인 — 상태기계 한 걸음은 DB 몇 번 읽고 재큐하는 게 전부라
   // 짧고, 배포(distribution.publish)와 같은 레인에 있어야 순서가 자연스럽다.
@@ -138,6 +138,11 @@ const JOB_LANES: Record<"content" | "youtube" | "gebd" | "naver", JobType[]> = {
   // 그래서 한국 가정/사무실 IP 의 놀고 있는 PC 한 대에서만 이 레인을 돌린다.
   // 세션(storageState)도 그 PC 로컬에만 둔다 — 쿠키를 클라우드로 올리지 않는다.
   naver: ["naver.publish"],
+  // download 도 **사무실 PC 전용 lane** (naver 와 같은 머신, 윈도우2). 유튜브가 데이터센터
+  // IP(Cloud Run)를 봇으로 판정해 다운로드가 상시 실패한다(2026-08-14 실측: 쿠키를 물려도
+  // "Sign in to confirm you're not a bot"). 한국 가정/사무실 IP 에서만 안정적으로 받아지므로
+  // 다운로드는 윈도우2가 받고 GCS 에 올린 뒤, 분석(content.analyze)은 클라우드가 잇는다.
+  download: ["youtube.download"],
   // gebd 는 GPU T4 spot VM 전용 lane. content lane 이 이 잡을 claim 하면 GPU 없는 곳에서
   // Docker mmaction2 를 못 돌린다. 그래서 별도 프로세스 (WORKER_JOBS=gebd) 로만 픽업.
   gebd: ["gebd.detect"],
@@ -165,6 +170,10 @@ const CLAIM_TYPES: JobType[] | undefined =
   : WORKER_JOBS === "youtube" ? JOB_LANES.youtube
   : WORKER_JOBS === "gebd" ? JOB_LANES.gebd
   : WORKER_JOBS === "naver" ? JOB_LANES.naver
+  : WORKER_JOBS === "download" ? JOB_LANES.download
+  // 윈도우2 는 네이버 발행과 유튜브 다운로드를 한 프로세스로 돌린다(런처가 고정).
+  : WORKER_JOBS === "naver,download" || WORKER_JOBS === "download,naver"
+    ? [...JOB_LANES.naver, ...JOB_LANES.download]
   // "all" 은 **머신 전용 레인을 빼고** 전부 집는다. gebd 는 GPU 가, naver 는 Playwright·
   // 한국 IP·로그인 세션이 있는 PC 가 필요해서, 아무 워커나 집으면 100% 실패한다.
   // (실측 2026-08-11: all 워커가 naver.publish 를 집어가 재시도만 쌓았다.)

@@ -10,5 +10,7 @@
  *
  * 그래서 레인을 코드에 못 박는다. env 로 뒤집을 수 없다.
  */
-process.env.WORKER_JOBS = "naver";
+// 유튜브 다운로드도 이 PC 몫이다 — 데이터센터 IP 는 유튜브 봇 판정에 상시 걸린다
+// (2026-08-14). 한국 IP 인 이 머신이 받아 GCS 로 올리면 분석은 클라우드가 잇는다.
+process.env.WORKER_JOBS = "naver,download";
 await import("../src/worker.ts");

@@ -68,9 +68,11 @@ describe("워커 레인 — 잡이 큐에 갇히지 않는다", () => {
     assert.deepEqual(dupes, [], `여러 레인에 중복 배정된 잡: ${dupes.join(" / ")}`);
   });
 
-  it("ALL_LANE_TYPES 는 머신 전용 레인(gebd·naver)을 포함하지 않는다", () => {
+  it("ALL_LANE_TYPES 는 머신 전용 레인(gebd·naver·download)을 포함하지 않는다", () => {
     // "all" 워커가 GPU 나 한국 IP 가 필요한 잡을 집으면 100% 실패한다.
     // 2026-08-11 에 실제로 all 워커가 naver.publish 를 집어가 재시도만 쌓였다.
+    // 2026-08-14 부터 youtube.download 도 머신 전용(download 레인) — 데이터센터 IP 는
+    // 유튜브 봇 판정에 상시 걸려 윈도우2(한국 IP)만 받을 수 있다.
     const src = read("worker.ts");
     const m = src.match(/ALL_LANE_TYPES[^=]*=\s*\[([\s\S]*?)\];/);
     assert.ok(m, "worker.ts 에서 ALL_LANE_TYPES 를 못 찾았다");
@@ -80,7 +82,7 @@ describe("워커 레인 — 잡이 큐에 갇히지 않는다", () => {
     for (const lane of [...m![1].matchAll(/JOB_LANES\.(\w+)/g)].map((x) => x[1])) {
       for (const t of l[lane] ?? []) inAll.add(t);
     }
-    const leaked = [...(l.gebd ?? []), ...(l.naver ?? [])].filter((t) => inAll.has(t));
+    const leaked = [...(l.gebd ?? []), ...(l.naver ?? []), ...(l.download ?? [])].filter((t) => inAll.has(t));
     assert.deepEqual(
       leaked, [],
       `머신 전용 잡이 "all" 범위에 샜다: ${leaked.join(", ")} — GPU/한국 IP 가 없는 워커가 집으면 반드시 실패한다.`,

@@ -73,7 +73,7 @@ Hono 단일 진입점(index.ts, **~8400줄, 라우트 206개**) + 별도 워커 
 프로세스 하나가 다 처리하지 않는다. `WORKER_JOBS` 로 **레인을 갈라** 서로 굶기지 않게 한다.
 
 ```
-content : content.analyze · youtube.download · match.align · match.segment · match.learn
+content : content.analyze · match.align · match.segment · match.learn
           · thumbnail.style · thumbnail.generate · clip.metadata · clip.reframe
           → 파이썬·ffmpeg·이미지생성 무거운 잡. Cloud Run Job `stepd-worker-content`
 youtube : channel.analyze · video.analyze · video.hotwatch · video.comments · distribution.publish
@@ -83,12 +83,16 @@ gebd    : gebd.detect
 naver   : naver.publish
           → 사무실 상시 PC 전용. 네이버는 공개 업로드 API 가 없어 Playwright 자동화인데,
             해외 데이터센터 IP 로 로그인하면 캡차·2차인증에 막힌다 → 한국 IP 필요
+download: youtube.download
+          → 윈도우2(naver 와 같은 PC) 전용 — 2026-08-14 이동. 유튜브가 데이터센터 IP 를
+            봇으로 판정해(쿠키 물려도) 다운로드 상시 실패 → 한국 IP 가 받아 GCS 로 올리고
+            분석은 클라우드 content 레인이 잇는다. 런처 worker:naver 가 naver,download 고정
 ⚠️ 2026-08-12 이전에는 thumbnail.* 가 **어느 레인에도 없어** 프로덕션(content·youtube 워커만
    뜬다)에서 아무도 집지 않았다. 잡을 추가하면 반드시 레인에 넣을 것 —
    `worker-lanes.test.ts` 가 강제한다.
 ```
 
-⚠️ **`all` 워커는 머신 전용 레인(gebd·naver)을 집지 않는다**(`ALL_LANE_TYPES`). 예전엔
+⚠️ **`all` 워커는 머신 전용 레인(gebd·naver·download)을 집지 않는다**(`ALL_LANE_TYPES`). 예전엔
 집어가서 `unknown job type`·GPU 없음으로 실패시키고 재시도만 쌓았다 — 증상이 "잡은 조용히
 실패하는데 정작 전용 워커는 큐가 비어 보임" 이라 원인을 찾기 어렵다. 잡이 안 잡히면
 **다른 워커 프로세스가 떠 있는지부터 확인할 것.**
