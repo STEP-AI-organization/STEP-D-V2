@@ -1513,7 +1513,18 @@ app.post("/api/superadmin/tenants/:id/credits", async (c) => {
   const checked = planManualCredit({ delta: body.delta, reason: body.kind, note: body.note });
   if (!checked.ok) return c.json({ error: "bad_request", message: checked.message }, 400);
 
-  const dedupeKey = manualDedupeKey(tenantId, crypto.randomBytes(8).toString("hex"));
+  // 멱등키는 **클라이언트가 보낸 nonce** 로 만든다. 서버에서 매번 랜덤으로 만들면
+  // ON CONFLICT (dedupe_key) 가 충돌할 일이 없어 중복 방지가 장식이 된다 — 느린 응답에
+  // 재클릭하거나 네트워크가 재전송하면 지급·차감이 두 번 쌓이고, credit_ledger 는
+  // append-only(0024)라 되돌릴 수도 없다. nonce 가 없으면 (금액·사유·메모)로 만든다:
+  // 같은 조정을 연달아 두 번 누른 경우를 막는 게 목적이고, 진짜로 두 번 넣어야 하면
+  // 메모를 달리 쓰면 된다.
+  // 폴백 키에는 5분 버킷을 넣는다 — 같은 조정을 나중에 정말 한 번 더 해야 할 때까지
+  // 막지는 않으면서, 연달아 두 번 도달하는 것만 막는다.
+  const bucket = Math.floor(Date.now() / (5 * 60_000));
+  const nonce = String(body.nonce ?? "").trim()
+    || `${checked.delta}:${checked.reason}:${checked.note ?? ""}:${bucket}`;
+  const dedupeKey = manualDedupeKey(tenantId, nonce);
   await audit(
     actor,
     {
@@ -1524,8 +1535,8 @@ app.post("/api/superadmin/tenants/:id/credits", async (c) => {
     },
     clientIp(c),
   );
-  const balance = await asSystem(async (db) => {
-    await db.query(
+  const { balance, applied } = await asSystem(async (db) => {
+    const ins = await db.query(
       `INSERT INTO credit_ledger (tenant_id, delta, reason, note, actor, dedupe_key)
        VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (dedupe_key) DO NOTHING`,
       [tenantId, checked.delta, checked.reason, checked.note, actor.email, dedupeKey],
@@ -1534,9 +1545,13 @@ app.post("/api/superadmin/tenants/:id/credits", async (c) => {
       `SELECT COALESCE(SUM(delta), 0)::int AS n FROM credit_ledger WHERE tenant_id = $1`,
       [tenantId],
     );
-    return rows[0]?.n ?? 0;
+    return { balance: rows[0]?.n ?? 0, applied: (ins.rowCount ?? 0) > 0 };
   });
-  return c.json({ ok: true, delta: checked.delta, balance });
+  // 중복이라 안 쌓인 건 **그렇다고 말한다** — ok:true 만 주면 운영자는 적용된 줄 안다.
+  return c.json({
+    ok: true, delta: checked.delta, balance, applied,
+    ...(applied ? {} : { duplicate: true, message: "같은 조정이 방금 이미 반영돼 있어 다시 쌓지 않았습니다." }),
+  });
 });
 
 /** 감사 로그. superadmin 이 서로를 볼 수 있어야 견제가 성립한다. */
@@ -9204,11 +9219,14 @@ app.get("/api/admin/jobs", async (c) => {
  */
 app.get("/api/admin/media-analysis", async (c) => {
   requireOpsAccess(c);   // 미디어 제목·장르·파이프라인 단계를 노출한다 — 인가 없이 열려 있었다.
-  const [media, summaries, episodes] = await Promise.all([
+  // 바로 위 잡 표(/api/admin/jobs)는 runAsSystem 으로 **전 회사**를 보여주는데 여기만
+  // 요청자 테넌트로 읽으면, 같은 화면에서 고객사 A 의 실패 잡은 보이는데 "그 업로드에서
+  // 뭐가 나왔나" 표는 빈 줄이 된다 — 에러가 아니라 공백이라 "분석된 게 없다" 로 오독된다.
+  const [media, summaries, episodes] = await runAsSystem(() => Promise.all([
     listMedia(),
     listContentAnalysisSummary(),
     listEntities<any>("episode"),
-  ]);
+  ]));
   const byMedia = new Map(summaries.map((s) => [s.mediaId, s]));
   const epById = new Map(episodes.map((e) => [e.id, e]));
   const rows = media

@@ -862,7 +862,9 @@ export async function upsertYouTubeChannel(ch: YouTubeChannel): Promise<void> {
   await pool.query(
     `INSERT INTO youtube_channels (id, channelId, channelName, channelUrl, thumbnail, subscribers, refreshToken, accessToken, expiresAt, scope, email, status, connectedAt)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
-     ON CONFLICT (channelId) DO UPDATE SET
+     -- 충돌 대상은 **테넌트 포함**(0039) — 전역으로 두면 다른 워크스페이스가 이미 연결한
+     -- 채널과 부딪혀, 보이지도 않는 행 때문에 연결이 실패한다.
+     ON CONFLICT (tenant_id, channelId) DO UPDATE SET
        channelName = EXCLUDED.channelName,
        channelUrl  = EXCLUDED.channelUrl,
        thumbnail   = EXCLUDED.thumbnail,
@@ -941,7 +943,8 @@ export async function upsertMetaAccount(a: MetaAccount): Promise<void> {
     `INSERT INTO meta_accounts (publicId, pageId, pageName, pageProfilePictureUrl,
        pageAccessToken, igUserId, igUsername, igProfilePictureUrl, status, connectedAt)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-     ON CONFLICT (pageId) DO UPDATE SET
+     -- 충돌 대상은 테넌트 포함(0039).
+     ON CONFLICT (tenant_id, pageId) DO UPDATE SET
        pageName              = EXCLUDED.pageName,
        pageProfilePictureUrl = EXCLUDED.pageProfilePictureUrl,
        pageAccessToken       = EXCLUDED.pageAccessToken,
@@ -1107,7 +1110,8 @@ export async function upsertTikTokAccount(a: TikTokAccount): Promise<void> {
     `INSERT INTO tiktok_accounts (publicId, openId, unionId, displayName, username, avatarUrl,
        accessToken, refreshToken, expiresAt, refreshExpiresAt, scope, status, connectedAt)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
-     ON CONFLICT (openId) DO UPDATE SET
+     -- 충돌 대상은 테넌트 포함(0039).
+     ON CONFLICT (tenant_id, openId) DO UPDATE SET
        unionId          = EXCLUDED.unionId,
        displayName      = EXCLUDED.displayName,
        username         = EXCLUDED.username,
@@ -1220,7 +1224,8 @@ export async function upsertInstagramAccount(a: InstagramAccount): Promise<void>
     `INSERT INTO instagram_accounts (publicId, igUserId, username, name, profilePictureUrl,
        accessToken, expiresAt, permissions, status, connectedAt)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-     ON CONFLICT (igUserId) DO UPDATE SET
+     -- 충돌 대상은 테넌트 포함(0039).
+     ON CONFLICT (tenant_id, igUserId) DO UPDATE SET
        username          = EXCLUDED.username,
        name              = EXCLUDED.name,
        profilePictureUrl = EXCLUDED.profilePictureUrl,
