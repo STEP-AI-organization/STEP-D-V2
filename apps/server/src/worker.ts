@@ -955,11 +955,16 @@ async function handleFactoryPublicize(job: Job): Promise<void> {
       console.warn(`[factory] 공개 전환 실패 ${clipId}: ${String(e).slice(0, 160)}`);
     }
   }
+  // 결과는 **실제 배포 행을 세어** 정한다 — 공개 전환 성공 여부와 무관하게 무조건 done 을
+  // 찍으면, 업로드가 전멸한 잡도 호출자에게 성공으로 보인다.
+  const { summarizeOutcome } = await import("./factory.ts");
+  const out = await summarizeOutcome(fj);
   await putEntity("factoryJob", factoryJobId, {
-    ...fj, state: "done", note: `공개 전환 ${switched}/${(fj.clipIds ?? []).length}`,
+    ...fj, state: out.state, ...(out.error ? { error: out.error } : {}),
+    note: `게시 ${out.counts.published}/${out.counts.clips} · 공개 전환 ${switched}건`,
     updatedAt: Date.now(),
   });
-  console.log(`[worker] factory.publicize ${factoryJobId} · ${switched}건 공개`);
+  console.log(`[worker] factory.publicize ${factoryJobId} · ${switched}건 공개 · ${out.state}`);
 }
 
 /**

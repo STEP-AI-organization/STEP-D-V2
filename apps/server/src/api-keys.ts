@@ -147,6 +147,9 @@ export const API_KEY_ROUTES: RouteRule[] = [
   { method: "POST", path: /^\/api\/factory\/channels\/connect-url$/, scope: "factory:write" },
   { method: "GET", path: /^\/api\/factory\/targets$/, scope: "factory:read" },
   { method: "GET", path: /^\/api\/factory\/jobs\/[^/]+$/, scope: "factory:read" },
+  // 재시도 — 없으면 일시적 실패 하나가 그 회차를 영구 사망시킨다(사람이 DB 를 만져야 했다).
+  // 쓰기 스코프를 요구한다: 다시 태우는 것은 읽기가 아니다.
+  { method: "POST", path: /^\/api\/factory\/jobs\/[^/]+\/retry$/, scope: "factory:write" },
   { method: "GET", path: /^\/api\/factory\/jobs\/[^/]+\/performance$/, scope: "factory:read" },
   // 잔액·사용내역 (읽기만 — 결제·카드는 세션 전용으로 남긴다)
   { method: "GET", path: /^\/api\/credits$/, scope: "billing:read" },

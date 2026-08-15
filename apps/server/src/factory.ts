@@ -58,7 +58,28 @@ export function publicizeDelayMs(): number {
 export type FactoryState =
   | "queued" | "ingesting" | "analyzing" | "adopting"
   | "rendering" | "publishing" | "publicizing"
-  | "done" | "failed" | "hold";
+  | "done" | "partial" | "failed" | "hold";
+
+/** 더 진행하지 않는 상태 — 호출자는 여기서 폴링을 멈춰도 된다. */
+export const TERMINAL_STATES: FactoryState[] = ["done", "partial", "failed", "hold"];
+
+/**
+ * 상태별 최대 체류시간. 넘기면 실패로 닫는다.
+ *
+ * 없으면 죽은 잡을 외부 호출자가 **영원히 폴링한다** — 예컨대 content.analyze 는 2회 실패로
+ * 종결되는데 여기 `analyzing` 은 추천이 0인 동안 60초마다 무기한 재큐만 했다. 고객 입장에선
+ * "멈춘 것도 실패한 것도 아닌 상태" 가 며칠 이어지고, 우리도 전화를 받기 전엔 모른다.
+ * 값은 넉넉하게 — 진짜 오래 걸리는 회차를 죽이면 그게 더 나쁘다(60분 회차 분석 ≈ 16분).
+ */
+const STATE_DEADLINE_MS: Partial<Record<FactoryState, number>> = {
+  queued: 30 * 60_000,
+  ingesting: 6 * 3600_000,   // 유튜브 다운로드는 사무실 PC 가 받는다 — 대기가 길 수 있다
+  analyzing: 3 * 3600_000,
+  adopting: 30 * 60_000,
+  rendering: 3 * 3600_000,
+  publishing: 60 * 60_000,
+  publicizing: 24 * 3600_000, // 유예 공개는 설계상 길다(publicizeDelayMs)
+};
 
 export interface FactoryPolicy {
   maxShorts?: number;
@@ -194,6 +215,46 @@ export async function createJob(input: {
   return job;
 }
 
+/**
+ * 이 잡이 **실제로 뭘 내보냈는가** — 클립들의 배포 행을 세어 결과를 만든다.
+ *
+ * `done` 을 무조건 찍으면 안 된다. 게이트·토큰만료·채널끊김으로 업로드가 **전멸해도**
+ * 호출자(AENA)는 성공으로 읽고 다음 회차를 밀어넣는다 — 며칠치가 조용히 안 올라간 뒤에
+ * 사람이 눈으로 발견하게 된다. 그래서 한 건이라도 나갔으면 done, 일부면 partial,
+ * 하나도 못 나갔으면 failed 다.
+ */
+export async function summarizeOutcome(job: FactoryJob): Promise<{
+  state: FactoryState; counts: { clips: number; published: number; failed: number }; error?: string;
+}> {
+  let published = 0;
+  let failed = 0;
+  const reasons: string[] = [];
+  for (const clipId of job.clipIds ?? []) {
+    const clip = await getEntity<any>("clip", clipId);
+    const rows = (clip?.distributions ?? []).filter((d: any) => d.channel === "youtube");
+    if (rows.some((d: any) => d.status === "published" || d.status === "scheduled" || d.externalId)) {
+      published += 1;
+    } else if (rows.some((d: any) => d.status === "failed")) {
+      failed += 1;
+      const why = rows.find((d: any) => d.status === "failed")?.error;
+      if (why && reasons.length < 3) reasons.push(String(why).slice(0, 120));
+    } else {
+      // 배포 행 자체가 없다 = 게이트에서 걸러졌거나 큐잉이 안 됐다. 성공은 아니다.
+      failed += 1;
+    }
+  }
+  const clips = (job.clipIds ?? []).length;
+  const state: FactoryState = published === 0 ? (clips === 0 ? "failed" : "failed")
+    : failed > 0 ? "partial" : "done";
+  return {
+    state,
+    counts: { clips, published, failed },
+    ...(published === 0
+      ? { error: reasons.length ? `게시 0건 — ${reasons.join(" · ")}` : "게시된 클립이 없습니다." }
+      : {}),
+  };
+}
+
 /** 오늘 이 프로그램으로 자동 배포된 클립 수 — 일일 상한 판정용. */
 async function publishedToday(programId: string): Promise<number> {
   const since = now() - 24 * 60 * 60 * 1000;
@@ -217,6 +278,14 @@ export async function advance(factoryJobId: string): Promise<{ job: FactoryJob; 
     job = await save({ ...job, state: "failed", error: msg });
     return { job, retryInMs: null };
   };
+
+  // 상태가 너무 오래 머물면 **여기서 닫는다.** 종결 상태는 대상이 아니다.
+  const deadline = STATE_DEADLINE_MS[job.state];
+  if (deadline && now() - job.updatedAt > deadline) {
+    return await fail(
+      `${job.state} 상태로 ${Math.round((now() - job.updatedAt) / 60_000)}분 진행이 없어 종료했습니다.`
+      + " 원인 확인 후 재시도해 주세요.");
+  }
 
   /**
    * 분석을 태우기 전 크레딧 판정 — 라우트의 `/api/media/:id/analyze` 게이트와 같은 규칙.
@@ -387,8 +456,14 @@ export async function advance(factoryJobId: string): Promise<{ job: FactoryJob; 
       if (gateBlocked.length > 0) {
         console.warn(`[factory] ${job.id}: 게이트 미통과 ${gateBlocked.length}건 — ${gateBlocked.join(" · ")}`);
       }
-      job = await save({ ...job, state: job.policy.publishPublic ? "done" : "publicizing" });
-      if (job.state === "done") return { job, retryInMs: null };
+      if (job.policy.publishPublic) {
+        // 바로 종결하는 경로 — **실제로 나갔는지 세어** 결과를 정한다(무조건 done 금지).
+        const out = await summarizeOutcome({ ...job, clipIds: job.clipIds });
+        job = await save({ ...job, state: out.state, ...(out.error ? { error: out.error } : {}),
+          note: `게시 ${out.counts.published}/${out.counts.clips}` });
+        return { job, retryInMs: null };
+      }
+      job = await save({ ...job, state: "publicizing" });
 
       await enqueue("factory.publicize", { factoryJobId: job.id },
         { dedupeKey: `factory.publicize:${job.id}`, delayMs: publicizeDelayMs() });
@@ -397,6 +472,7 @@ export async function advance(factoryJobId: string): Promise<{ job: FactoryJob; 
 
     case "publicizing":
     case "done":
+    case "partial":
     case "failed":
     case "hold":
       return { job, retryInMs: null };

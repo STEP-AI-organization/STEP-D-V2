@@ -359,6 +359,7 @@ import {
   findByIdempotencyKey as findFactoryJobByKey,
   validateTargets as validateFactoryTargets,
   factoryEnabled,
+  TERMINAL_STATES,
 } from "./factory.ts";
 
 // A stray async error (e.g. a GCS stream 'error' after the response started, or a background
@@ -464,6 +465,18 @@ function isPublicPath(path: string): boolean {
  * 3번의 폴백은 **테넌트가 t_default 하나뿐인 동안에만 안전하다.** 전제가 깨지는 순간은
  * 기동 시 assertAuthPosture() 가 잡는다 — 사람이 기억하는 데 기대지 않는다.
  */
+/**
+ * 기계가 읽을 수 있는 인증 오류. onError 는 JSON 본문이 실린 HTTPException 을 그대로
+ * 내보내므로(위), 여기서 본문을 만들면 `{error:"invalid_api_key"|"scope_denied", …}` 가 나간다.
+ */
+function keyError(status: 401 | 403, code: string, message: string): HTTPException {
+  return new HTTPException(status, {
+    res: new Response(JSON.stringify({ error: code, message }), {
+      status, headers: { "content-type": "application/json; charset=utf-8" },
+    }),
+  });
+}
+
 async function resolveTenant(c: Context<AppEnv>): Promise<TenantContext> {
   // 키는 두 자리에서 받는다.
   //   Authorization: Bearer stepd_live_…  → Cloud Run 직통 호출(정석)
@@ -478,11 +491,14 @@ async function resolveTenant(c: Context<AppEnv>): Promise<TenantContext> {
     const row = await lookupApiKey(hashKey(rawKey));
     const blocked = keyBlockReason(row);
     // 왜 막혔는지 말한다 — "401" 만 주면 고객사가 키를 다시 발급받아도 같은 벽을 만난다.
-    if (blocked || !row) throw new HTTPException(401, { message: blocked ?? "알 수 없는 API 키입니다." });
+    // ⚠️ **기계가 읽을 코드**도 같이 준다. 예전엔 전부 `request_failed` 라, 호출자가
+    // "키를 새로 발급받아야 함"과 "이 라우트는 원래 안 열림"과 "일시 오류"를 구분할 수
+    // 없어 재시도할지 멈출지를 코드로 판단하지 못했다(한국어 문자열 매칭 말고는).
+    if (blocked || !row) throw keyError(401, "invalid_api_key", blocked ?? "알 수 없는 API 키입니다.");
 
     // 라우트 화이트리스트. 세션용 라우트 118개를 키에 통째로 열지 않는다.
     const verdict = checkRoute(c.req.method, new URL(c.req.url).pathname, row.scopes);
-    if (!verdict.ok) throw new HTTPException(403, { message: verdict.reason });
+    if (!verdict.ok) throw keyError(403, "scope_denied", verdict.reason);
 
     // 안 쓰는 키를 회수할 근거. 매 요청 쓰기는 과해서 분 단위로 던다.
     if (shouldTouchLastUsed(row.lastUsedAt, Date.now())) void touchApiKey(row.id);
@@ -9089,9 +9105,25 @@ app.get("/api/factory/jobs/:id", async (c) => {
 
   const clips = await Promise.all(
     (job.clipIds ?? []).map((id: string) => getEntity<any>("clip", id)));
+  // 호출자가 폴링을 멈춰도 되는지, 몇 건이 실제로 나갔는지를 **응답만 보고** 알 수 있어야
+  // 한다. 예전엔 status 만 있었고 그 status 는 업로드가 전멸해도 done 이었다.
+  const counts = (job.clipIds ?? []).reduce(
+    (acc: { clips: number; published: number; failed: number }, id: string) => {
+      const cl = clips.find((x: any) => x?.id === id);
+      const rows = (cl?.distributions ?? []).filter((d: any) => d.channel === "youtube");
+      acc.clips += 1;
+      if (rows.some((d: any) => d.status === "published" || d.status === "scheduled" || d.externalId)) acc.published += 1;
+      else acc.failed += 1;
+      return acc;
+    }, { clips: 0, published: 0, failed: 0 });
   return c.json({
     jobId: job.id,
     status: job.state,
+    /** 더 기다릴 필요가 없는 상태인가 — 폴링 종료 판단을 문자열 비교에 맡기지 않게. */
+    terminal: TERMINAL_STATES.includes(job.state),
+    counts,
+    /** 이 상태로 머문 시간(ms) — 정체를 호출자도 볼 수 있게. */
+    stalledForMs: Math.max(0, Date.now() - Number(job.updatedAt ?? Date.now())),
     programId: job.programId,
     mediaId: job.mediaId ?? null,
     note: job.note ?? null,
@@ -9109,6 +9141,41 @@ app.get("/api/factory/jobs/:id", async (c) => {
     createdAt: job.createdAt,
     updatedAt: job.updatedAt,
   });
+});
+
+/**
+ * 실패·보류된 공장 잡 재시도.
+ *
+ * 없으면 transient 실패(다운로드 한 번 실패·토큰 갱신 실패·일일 상한) 하나가 그 회차를
+ * **영구 사망**시킨다. 같은 idempotencyKey 로 다시 부르면 실패한 잡을 그대로 202 로
+ * 돌려주므로 재시도로 보이지도 않고, 새 키를 쓰면 같은 영상을 다시 분석해 원가가 두 번 난다.
+ *
+ * **이미 확보한 mediaId 를 그대로 재사용**해 분석부터 다시 하지 않는다(재과금 없음).
+ * 종결이 아닌 잡은 건드리지 않는다 — 돌고 있는 것을 흔들면 중복 게시가 난다.
+ */
+app.post("/api/factory/jobs/:id/retry", async (c) => {
+  const id = c.req.param("id");
+  const job = await getEntity<any>("factoryJob", id);
+  if (!job) return c.json({ error: "not_found", message: "잡을 찾을 수 없습니다." }, 404);
+  if (!["failed", "hold", "partial"].includes(String(job.state))) {
+    return c.json({
+      error: "not_retryable",
+      message: `지금 상태(${job.state})는 재시도할 수 없습니다 — 실패·보류·부분성공만 가능합니다.`,
+    }, 409);
+  }
+  // 어디부터 다시 시작할지: 미디어가 이미 있으면 분석 대기부터, 없으면 처음부터.
+  // 클립까지 만들어졌으면 배포만 다시 태운다(렌더는 캐시가 있어 재인코딩되지 않는다).
+  const resume = (job.clipIds ?? []).length ? "publishing"
+    : job.episodeId ? "analyzing"
+    : job.mediaId ? "analyzing" : "queued";
+  const next = {
+    ...job, state: resume, error: null,
+    note: `재시도 (${job.state} → ${resume})`, updatedAt: Date.now(),
+  };
+  await putEntity("factoryJob", id, next);
+  await enqueue("factory.orchestrate", { factoryJobId: id },
+    { dedupeKey: `factory.orchestrate:${id}:retry:${Date.now()}` });
+  return c.json({ ok: true, jobId: id, status: resume, resumedFrom: job.state }, 202);
 });
 
 /**

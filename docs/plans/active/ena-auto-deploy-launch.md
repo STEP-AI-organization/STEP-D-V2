@@ -48,22 +48,29 @@ A 는 AENA 쪽 구현이 필요하고 아래 §2 의 차단 항목이 먼저 닫
 | 1 | **새 워크스페이스는 배포가 영구 403** — `ops_role` 을 주는 코드 경로가 없었다 | ✅ 해결 (0040 백필 + createUser/PATCH members, 프로덕션 ENA owner = `cp` 확인) |
 | 2 | **웹 프록시가 고객사 키를 덮어써 문서상 인증 경로로 단 한 건도 성공 못 함** | ✅ 해결 (`x-api-key` 헤더 병행 수용) |
 | 3 | **자동 게시가 `public` 으로 나감** — 채널 규칙의 privacy 를 아무도 안 읽었다 | ✅ 해결 (규칙값 우선, 기본 `unlisted`) |
-| 4 | 실패·hold 잡의 **재시도 수단이 API 에 없다** | ❌ 남음 (M) |
-| 5 | factory 상태기계에 **데드라인이 없어** 죽은 잡을 영원히 `analyzing` 으로 폴링 | ❌ 남음 (M) |
-| 6 | factory 잡이 **배포 실패를 status 로 표현하지 않는다**(전멸해도 `done`) | ❌ 남음 (S) |
-| 7 | 키 인증 401/403 이 전부 `request_failed` — 호출자가 재시도/중단을 코드로 못 가름 | ❌ 남음 (S) |
+| 4 | 실패·hold 잡의 **재시도 수단이 API 에 없다** | ✅ 해결 (`POST /api/factory/jobs/:id/retry`) |
+| 5 | factory 상태기계에 **데드라인이 없어** 죽은 잡을 영원히 `analyzing` 으로 폴링 | ✅ 해결 (상태별 체류 상한 → `failed` + 사유) |
+| 6 | factory 잡이 **배포 실패를 status 로 표현하지 않는다**(전멸해도 `done`) | ✅ 해결 (`done`/`partial`/`failed` + counts) |
+| 7 | 키 인증 401/403 이 전부 `request_failed` — 호출자가 재시도/중단을 코드로 못 가름 | ✅ 해결 (`invalid_api_key` · `scope_denied`) |
 
-**4·5·6 은 같은 병이다:** 외부 호출자가 "끝났는지 / 실패했는지 / 다시 걸어도 되는지" 를
-**우리 응답만 보고 판단할 수 없다.** 아카이브 대량 투입에서는 이게 품질 문제보다 먼저 터진다.
-셋을 묶어 하나로 처리하는 것을 권한다:
+**4·5·6 은 같은 병이었다:** 외부 호출자가 "끝났는지 / 실패했는지 / 다시 걸어도 되는지" 를
+**우리 응답만 보고 판단할 수 없었다.** 아카이브 대량 투입에서는 이게 품질 문제보다 먼저 터진다.
+
+### AENA 가 지켜야 할 계약 (이번에 확정된 것)
 
 ```
-GET  /api/factory/jobs/:id      → state ∈ {queued,analyzing,rendering,publishing,done,partial,failed,hold}
-                                   + counts {clips, published, failed}  + lastError + stalledSince
-POST /api/factory/jobs/:id/retry → failed·hold 만, 같은 mediaId 재사용(재과금 없음)
+POST /api/factory/ingest            → 202 {jobId}          (idempotencyKey 권장)
+GET  /api/factory/jobs/:id          → {status, terminal, counts:{clips,published,failed},
+                                        stalledForMs, error, clips[]}
+POST /api/factory/jobs/:id/retry    → 202  (failed·hold·partial 만 · 같은 mediaId 재사용 = 재과금 없음)
 ```
-- 상태별 최대 체류시간(예: analyzing 90분)을 넘기면 `failed` + 사유. 지금은 무기한 재큐다.
-- `done` 은 **한 건이라도 실제로 게시됐을 때만.** 전멸이면 `failed`, 일부면 `partial`.
+- **`terminal: true` 일 때만 폴링을 멈춘다.** 상태 문자열 비교로 판단하지 말 것.
+- `status`: `done`(전건 게시) · `partial`(일부 실패) · `failed`(0건) · `hold`(사람 확인 필요).
+  `done` 은 **한 건이라도 실제로 게시됐을 때만** 나간다.
+- 상태별 체류 상한을 넘기면 자동으로 `failed` + 사유가 찍힌다(무한 `analyzing` 없음).
+- 인증 오류는 `error` 코드로 구분한다: `invalid_api_key`(키 재발급 필요) ·
+  `scope_denied`(그 라우트는 이 키에 안 열림 — 재시도해도 소용없음).
+- 인증 헤더는 **`x-api-key: stepd_live_…`** (프록시 경유). Bearer 는 Cloud Run 직통일 때만.
 
 ---
 
