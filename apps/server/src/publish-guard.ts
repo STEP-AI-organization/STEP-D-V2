@@ -170,6 +170,33 @@ export function hasAccountDistribution(
   });
 }
 
+/**
+ * 이 채널·이 계정으로 **실패한** 배포 행이 있는가.
+ *
+ * 자동 순방은 이걸 보면 멈춰야 한다. 실패 행은 `hasAccountDistribution` 이 "안 나간 것" 으로
+ * 보기 때문에, 막지 않으면 순방이 10분마다 같은 클립·같은 계정으로 재업로드를 건다 —
+ * 백오프도 상한도 없이. **업로드가 실제로 시작된 뒤 응답만 유실된 실패**면 채널에 같은
+ * 영상이 중복 게시되고, 네이버는 재로그인이 반복돼 계정 잠금·캡차 위험이 커진다.
+ * 워커(worker.ts)와 재시도 라우트는 "재시도는 사람이 누른다"(F4-4)를 지키는데 순방만
+ * 이 금지를 우회하고 있었다.
+ */
+export function hasFailedAccountDistribution(
+  distributions:
+    | Array<{
+        channel: string; status?: string;
+        youtubeChannelId?: unknown; naverAccountId?: unknown; tiktokOpenId?: unknown;
+      }>
+    | undefined,
+  channel: string,
+  accountId: string,
+): boolean {
+  return (distributions ?? []).some((d) => {
+    if (d.channel !== channel || d.status !== "failed") return false;
+    const acct = distributionAccountId(d);
+    return acct === null || acct === accountId;
+  });
+}
+
 /** 배포에서 제외된 건과 그 사유. **사유 없는 제외는 타입이 허용하지 않는다.** */
 export interface PublishSkip {
   clipId: string;

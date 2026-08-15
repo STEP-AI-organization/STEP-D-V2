@@ -442,6 +442,8 @@ function runAnalyze(
     // 하는 문제 관찰 (job object 공유로 인한 cascade). detached:true 로 별도 process group
     // 만들어 격리. stderr도 inherit → pipe로 signal 전파 차단.
     const isWindows = process.platform === "win32";
+    // 이 실행이 시작된 시각 — 산출물이 "이번 것" 인지 "복원된 지난 회차 것" 인지 가른다.
+    const spawnedAt = Date.now();
     const proc = spawn(
       CORE_PYTHON,
       args,
@@ -551,11 +553,24 @@ function runAnalyze(
           return;
         }
         if (code === 0) { resolve(); return; }
+        // ⚠️ **이번 실행이 만든 analysis.json 일 때만** 결과로 인정한다.
+        //
+        // 재분석은 시작할 때 GCS 체크포인트(analysis.json 포함)를 작업 디렉토리로 되돌린다.
+        // 그래서 "파일이 있으면 성공" 으로 보면, 파이썬이 죽어도 **지난 회차 결과**를 이번
+        // 분석 결과로 저장하고 회차를 progress:100·done 으로 찍어 버린다(크레딧까지 차감,
+        // 실패 흔적 0). 바깥 catch 에는 같은 mtime 가드가 이미 있는데 여기서 먼저 resolve
+        // 해버려 그 가드가 실행되지 않았다.
         const analysisPath = path.join(outDir, "analysis.json");
-        if (fs.existsSync(analysisPath)) {
-          console.warn(`[worker] core.analyze exited ${code} · @@COMPLETE 없음 · analysis.json 존재하므로 결과 사용`);
+        const producedAt = (() => {
+          try { return fs.statSync(analysisPath).mtimeMs; } catch { return 0; }
+        })();
+        if (producedAt >= spawnedAt) {
+          console.warn(`[worker] core.analyze exited ${code} · @@COMPLETE 없음 · 이번 실행이 만든 analysis.json 존재하므로 결과 사용`);
           resolve();
           return;
+        }
+        if (producedAt > 0) {
+          console.error(`[worker] core.analyze exited ${code} · analysis.json 은 지난 회차 것(mtime ${new Date(producedAt).toISOString()}) — 실패로 처리`);
         }
         reject(new Error(`core.analyze exited ${code}${tail()}`));
       } catch (e) {

@@ -85,7 +85,12 @@ export async function maybeAutoTopup(): Promise<AutoTopupResult> {
   const check = buildTopup(policy.topupCredits);
   if (!check.ok) return { charged: false, reason: `자동 충전 금액이 올바르지 않습니다: ${check.reason}` };
 
-  const [todayCount, monthKrw] = await Promise.all([autoTopupTodayCount(), autoTopupMonthKrw()]);
+  // ⚠️ 하루 상한은 **시도** 기준으로 센다(성공분만 세면 안 된다).
+  // 카드가 한도초과·정지면 승인은 0건이라 maxPerDay 도 절대상한(10회)도 영원히 안 걸리고,
+  // 분석이 끝날 때마다 카드 승인 시도가 계속 나간다 — 사용자는 거절 알림을 반복 수신하고
+  // 이상거래로 카드가 막힐 수 있다. "조용히 계속 긁지 않습니다" 라는 안전벨트가 정확히
+  // 실패 경로에서만 무력했다.
+  const [todayCount, monthKrw] = await Promise.all([autoTopupTodayAttempts(), autoTopupMonthKrw()]);
   const verdict = shouldAutoTopup({
     policy: {
       enabled: policy.enabled,
@@ -107,9 +112,11 @@ export async function maybeAutoTopup(): Promise<AutoTopupResult> {
   // 조건이 이미 해소됐으면 긁지 않는다.
   const tenantId = currentTenantId();
   return await withTenantLock(`auto-topup:${tenantId}`, async () => {
-    const [balance2, todayCount2, monthKrw2, attempts] = await Promise.all([
-      creditBalance(), autoTopupTodayCount(), autoTopupMonthKrw(), autoTopupTodayAttempts(),
+    // 재판정도 같은 기준(시도 수)으로 — 두 판정이 다른 숫자를 보면 상한이 새는 쪽으로 샌다.
+    const [balance2, monthKrw2, attempts] = await Promise.all([
+      creditBalance(), autoTopupMonthKrw(), autoTopupTodayAttempts(),
     ]);
+    const todayCount2 = attempts;
     const verdict2 = shouldAutoTopup({
       policy: {
         enabled: policy.enabled,

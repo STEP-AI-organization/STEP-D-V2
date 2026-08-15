@@ -30,6 +30,7 @@ import {
   putEntity,
   getAutomationSetting,
   getChannelRule,
+  hasRunNote,
   publishedTodayKst,
 } from "./db-pg.ts";
 import {
@@ -45,9 +46,15 @@ import { naverUploadEnabled } from "./naver-gate.ts";
 import { eligibility, type ChannelRule } from "./channel-rules.ts";
 import { newId } from "./pipeline.ts";
 import { enqueue } from "./queue.ts";
-import { hasAccountDistribution } from "./publish-guard.ts";
+import { distributionAccountId, hasAccountDistribution, hasFailedAccountDistribution } from "./publish-guard.ts";
 import { clipGate, dispatchPublish } from "./publish-dispatch.ts";
 import { basicReframeState, effectiveReframeState } from "./reframe.ts";
+
+/**
+ * AI 리프레임이 이만큼 진행이 없으면 죽은 것으로 보고 기본 크롭으로 강등한다.
+ * 큐의 하트비트 만료(5분)보다 넉넉히 잡는다 — 진짜 오래 걸리는 분석을 죽이면 안 된다.
+ */
+const REFRAME_STUCK_MS = 30 * 60_000;
 
 export interface CycleReport {
   tenantScoped: true;
@@ -229,8 +236,18 @@ export async function runAutomationCycle(): Promise<CycleReport> {
       }
 
       const quota = Number(rule.dailyQuota) > 0 ? Number(rule.dailyQuota) : 3;
-      let remaining = quota - (await publishedTodayKst(rule.id, accountKey));
-      if (remaining <= 0) continue; // 오늘 할당량 완료 — 내일 KST 자정에 리셋
+      let remaining = quota - (await publishedTodayKst(accountKey));
+      if (remaining <= 0) {
+        // 조용히 넘기면 "왜 오늘은 아무것도 안 나갔지" 를 설명할 근거가 로그에 없다.
+        // 채널당 하루 한 줄만 남긴다(순방은 10분마다 돈다).
+        if (!(await hasRunNote(rule.id, null, accountKey, "skipped", true))) {
+          await appendRuleRun({
+            ruleId: rule.id, clipId: null, result: "skipped", accountKey,
+            detail: `오늘 이 채널 할당량(${quota}건)을 다 썼습니다 — 내일 자정(KST)에 초기화됩니다.`,
+          });
+        }
+        continue; // 오늘 할당량 완료 — 내일 KST 자정에 리셋
+      }
 
       // 채널 규칙이 없어도 배포는 가능해야 한다 (사용자 결정 2026-08-12) — 규칙은
       // 제한을 더하는 장치지 전제조건이 아니다. 없으면 전부 허용 기본값.
@@ -249,7 +266,33 @@ export async function runAutomationCycle(): Promise<CycleReport> {
         // 계정 식별자가 없으면(구 데이터) 플랫폼 일치만으로 보수적으로 스킵한다.
         // 판정은 upsertDistribution 과 같은 정체성 규칙(publish-guard)을 공유한다 —
         // 두 벌이 되면 한쪽만 고쳐져 매 순방 재업로드가 재발한다.
-        if (hasAccountDistribution(clip.distributions, chan.platform, chan.accountId)) continue;
+        if (hasAccountDistribution(clip.distributions, chan.platform, chan.accountId)) {
+          // 계정 식별자가 없는 옛 기록 때문에 스킵한 경우는 **로그를 남긴다.** 조용히 넘기면
+          // "왜 이 클립만 안 나가지" 를 추적할 근거가 제품 안에 없다.
+          const vague = (clip.distributions ?? []).some((d: any) =>
+            d.channel === chan.platform && d.status !== "failed" && distributionAccountId(d) === null);
+          if (vague && !(await hasRunNote(rule.id, clip.id, accountKey))) {
+            await appendRuleRun({
+              ruleId: rule.id, clipId: clip.id, result: "skipped", accountKey,
+              detail: "계정 미상 배포 기록이 있어 건너뜁니다 — 이미 나간 건이면 그대로 두고, 아니면 배포 화면에서 계정을 지정해 발행하세요.",
+            });
+          }
+          continue;
+        }
+
+        // 실패한 배포는 **자동으로 다시 쏘지 않는다**(F4-4). 실패 행은 위 판정에서 "안 나간
+        // 것" 이라 막지 않으면 순방이 10분마다 같은 클립을 재업로드한다 — 업로드가 시작된
+        // 뒤 응답만 유실된 실패면 채널에 같은 영상이 중복으로 올라간다. 사람이 배포 로그의
+        // 재시도 버튼을 눌러야 다시 나간다. 조용히 넘기지 말고 승인 큐에 올려 보이게 한다.
+        if (hasFailedAccountDistribution(clip.distributions, chan.platform, chan.accountId)) {
+          if (!(await isHeldAwaitingHuman(rule.id, clip.id))) {
+            const reason = "직전 배포가 실패했습니다 — 자동 재시도는 하지 않습니다. 배포 기록에서 재시도를 눌러 주세요.";
+            await holdClip(rule.id, clip.id, reason);
+            await appendRuleRun({ ruleId: rule.id, clipId: clip.id, result: "held", detail: reason, accountKey });
+            report.held += 1;
+          }
+          continue;
+        }
 
         // 지난 순방에서 렌더가 안 끝난(또는 실패한) 클립 — 다시 걸고, 끝났으면 이번
         // 순방에서 바로 집는다. /export 는 revision 캐시가 있어 이미 렌더된 클립의
@@ -259,13 +302,28 @@ export async function runAutomationCycle(): Promise<CycleReport> {
           // 이 클립은 조용히 영영 미게시된다 — 무인 경로엔 재시도 누를 사람이 없다.
           // 채택 직후 큐잉 실패와 같은 결말(기본 중앙 크롭)로 낮춰 렌더를 살린다.
           const rf = effectiveReframeState(clip);
-          if (rf.mode === "ai_multi" && rf.status === "failed") {
-            await putEntity("clip", clip.id, { ...clip, reframe: basicReframeState() });
-            clip.reframe = basicReframeState();
-            await appendRuleRun({
-              ruleId: rule.id, clipId: clip.id, result: "skipped",
-              detail: "AI 리프레임 분석 실패 — 기본(중앙 크롭)으로 렌더를 진행합니다.", accountKey,
-            });
+          if (rf.mode === "ai_multi" && rf.status !== "ready") {
+            // failed 만 구제하면 부족하다. stale(입력 지문 불일치)·queued/running(워커가
+            // 죽어 실패 기록을 못 남긴 경우)로 굳으면 /export 가 영원히 409 라 클립이 조용히
+            // 영영 미게시된다 — 그런데 로그에는 "곧 자동 게시됩니다" 만 쌓여 운영자는
+            // 진행 중이라 믿고 기다린다. 되살릴 수 있으면 되살리고, 정체되면 강등한다.
+            const stuckMs = Date.now() - Number((rf as any).updatedAt ?? 0);
+            if (rf.status === "stale" && await requestAutoReframe(clip.id)) {
+              await appendRuleRun({
+                ruleId: rule.id, clipId: clip.id, result: "skipped",
+                detail: "AI 리프레임 결과가 낡아 다시 분석을 겁니다 — 끝나면 자동으로 게시됩니다.", accountKey,
+              });
+            } else if (rf.status === "failed" || stuckMs > REFRAME_STUCK_MS) {
+              await putEntity("clip", clip.id, { ...clip, reframe: basicReframeState() });
+              clip.reframe = basicReframeState();
+              await appendRuleRun({
+                ruleId: rule.id, clipId: clip.id, result: "skipped",
+                detail: rf.status === "failed"
+                  ? "AI 리프레임 분석 실패 — 기본(중앙 크롭)으로 렌더를 진행합니다."
+                  : `AI 리프레임이 ${Math.round(stuckMs / 60000)}분째 진행이 없어 기본(중앙 크롭)으로 렌더합니다.`,
+                accountKey,
+              });
+            }
           }
           if (await requestAutoRender(clip.id)) {
             const fresh = await getEntity<any>("clip", clip.id);

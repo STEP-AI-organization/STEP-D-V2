@@ -215,6 +215,7 @@ import {
   type SearchEventKind,
 } from "./db-pg.ts";
 import { hasFfmpeg, probe, captureThumbnail, circleCrop, trimEncode, remuxFaststart, renderShort } from "./ffmpeg.ts";
+import { issueOAuthState, consumeOAuthState } from "./oauth-state.ts";
 import { embedQuery } from "./search-embed.ts";
 import { parseQuery } from "./search-parse.ts";
 import { newId } from "./pipeline.ts";
@@ -2429,6 +2430,10 @@ app.post("/api/admin/reset", async (c) => {
   try { await pool.query("DELETE FROM transcript"); } catch {}
   try { await pool.query("DELETE FROM episode_cast"); } catch {}
   try { await pool.query("DELETE FROM program_cast"); } catch {}
+  // 영상 DB(검색 인덱스)도 같이 — /api/search 는 media 와 조인하지 않으므로, 안 지우면
+  // 초기화 뒤에도 삭제된 회차가 영상검색에 유령으로 계속 뜬다(썸네일·미리보기는 404).
+  // 미디어 삭제 캐스케이드(db-pg.ts deleteMediaData)에는 이미 있는데 여기만 빠져 있었다.
+  try { await pool.query("DELETE FROM search_segments"); } catch {}
 
   return c.json({ ok: true, deletedMedia: media.length, storageFailures, orphansMayRemain: storageFailures > 0 });
 });
@@ -4905,7 +4910,9 @@ app.get("/api/automation", async (c) => {
       const publishedToday: Record<string, number> = {};
       for (const ch of chans) {
         const key = `${ch.platform}:${ch.accountId}`;
-        publishedToday[key] = await publishedTodayKst(rule.id, key);
+        // 채널 단위 집계 — 순방의 할당량 판정과 **같은 함수**를 써야 화면 숫자와 실제
+        // 남은 건수가 갈라지지 않는다.
+        publishedToday[key] = await publishedTodayKst(key);
       }
       return { ...rule, publishedToday };
     }),
@@ -5355,13 +5362,21 @@ app.post("/api/credits/topup/card", async (c) => {
   }
 
   const tenantId = currentTenantId();
-  const paymentId = cardTopupPaymentId(tenantId, idem);
   const actor = manager.email;
 
   // 동시 클릭 둘이 나란히 들어와도 잠금 안에서 한 명씩 — 먼저 끝난 쪽이 paid 를 찍으면
   // 뒤따르는 쪽은 아래 getTopup 조회에서 걸려 카드를 다시 긁지 않는다.
   return await withTenantLock(`card-topup:${tenantId}`, async () => {
-    const existing = await getTopup(paymentId);
+    // ⚠️ **실패로 닫힌 paymentId 는 재사용할 수 없다** — 포트원이 그 id 로는 새 결제를
+    // 거부한다. 한도초과처럼 흔한 거절 뒤 사용자가 한도를 풀고 같은 금액으로 다시 눌러도
+    // 계속 실패하는 함정이었다(브라우저 요청 키는 sessionStorage 에 그대로 남는다).
+    // 같은 요청 키를 유지하되 슬롯을 한 칸씩 민다 — 자동 충전이 이미 쓰는 방법이다.
+    let paymentId = cardTopupPaymentId(tenantId, idem);
+    let existing = await getTopup(paymentId);
+    for (let slot = 2; existing?.status === "failed" && slot <= 20; slot++) {
+      paymentId = cardTopupPaymentId(tenantId, `${idem}#${slot}`);
+      existing = await getTopup(paymentId);
+    }
     // 같은 멱등키가 **다른 금액**으로 오면(실패 후 금액 바꿔 재클릭) 어느 쪽도 진실이 아니다 —
     // 옛 주문 재사용도, 새 금액 결제도 하지 않고 거절한다. 통과시키면 credit_topup 행과 실제
     // 결제액이 어긋나 웹훅 정산이 '금액 불일치' 데드엔드에 빠진다.
@@ -6416,9 +6431,35 @@ app.post("/api/distributions/publish", async (c) => {
     return c.json({ ok: true, facebookPage: { pageId: account.pageId }, ...outcome });
   }
 
+  // 게이트 OFF 라 '기록만' 남기는 경로(tiktok·instagram·facebook 기본값)도 **어느 계정에
+  // 기록했는지**는 남겨야 한다. 정체성 없는 행은 자동 순방이 "모든 계정으로 이미 나갔다"로
+  // 보수 판정해, 그 클립을 그 플랫폼에서 **영원히 건너뛴다**(로그도 안 남는다).
+  const requested = { tiktokOpenId: b.tiktokOpenId, igUserId: b.igUserId, metaPageId: b.metaPageId };
+  const recordedAccount = await (async () => {
+    try {
+      if (b.channel === "tiktok") {
+        const list = (await listTikTokAccounts()).filter((a) => a.status === "active");
+        const a = requested.tiktokOpenId ? list.find((x) => x.openId === requested.tiktokOpenId) : (list.length === 1 ? list[0] : undefined);
+        return a ? { tiktokOpenId: a.openId } : {};
+      }
+      if (b.channel === "instagram") {
+        const list = (await listInstagramAccounts()).filter((a) => a.status !== "disconnected");
+        const a = requested.igUserId ? list.find((x) => x.igUserId === requested.igUserId) : (list.length === 1 ? list[0] : undefined);
+        return a ? { igUserId: a.igUserId } : {};
+      }
+      if (b.channel === "facebook") {
+        const list = await listMetaAccounts();
+        const a = requested.metaPageId ? list.find((x) => x.pageId === requested.metaPageId) : (list.length === 1 ? list[0] : undefined);
+        return a ? { metaPageId: a.pageId } : {};
+      }
+    } catch { /* 계정 조회 실패는 기록을 막을 이유가 아니다 */ }
+    return {};
+  })();
+
   const outcome = await dispatchPublish({
     clipIds: b.clipIds, channel: b.channel,
     scheduled: b.scheduled, reserveDate: b.reserveDate,
+    ...recordedAccount,
     actor,
     origin: "manual",
   });
@@ -7394,13 +7435,29 @@ interface OAuthState {
   return?: string;
 }
 
-function decodeState(raw: string | undefined): OAuthState {
-  if (!raw) return {};
-  try {
-    return JSON.parse(Buffer.from(raw, "base64").toString()) as OAuthState;
-  } catch {
-    return {};
-  }
+/**
+ * OAuth 콜백 공통 껍데기 — state 를 검증하고 **발급 시점 워크스페이스로 컨텍스트를 고정**한다.
+ *
+ * 두 가지를 동시에 막는다.
+ *  1. 남이 만든 콜백 URL (공격자 계정이 운영자 워크스페이스에 붙던 경로) — 우리가 발급한
+ *     1회용 난수가 아니면 여기서 끝난다.
+ *  2. 엉뚱한 워크스페이스 귀속 — 콜백은 **남의 브라우저에서 열릴 수 있다**(외부 채널 연결
+ *     링크는 채널 주인이 연다). 쿠키를 믿으면 계정이 링크 발급자가 아닌 사람에게 붙는다.
+ */
+function oauthStateGuard(
+  errorParam: string,
+  fallbackReturn: string,
+  handler: (c: Context, st: Record<string, any>) => Promise<any>,
+) {
+  return async (c: Context) => {
+    const st = await consumeOAuthState(c.req.query("state"));
+    if (!st) {
+      const why = c.req.query("error") ? "access_denied" : "invalid_state";
+      return c.redirect(`${fallbackReturn}?${errorParam}=${why}`);
+    }
+    const run = () => handler(c, st.data);
+    return st.tenant ? runWithTenant({ scope: st.tenant, via: "web" }, run) : run();
+  };
 }
 
 /**
@@ -7433,13 +7490,13 @@ function safeExternalReturn(url: string | undefined): string | null {
   }
 }
 
-app.get("/api/youtube/auth", (c) => {
+app.get("/api/youtube/auth", async (c) => {
   if (!GOOGLE_CLIENT_ID) return c.json({ error: "GOOGLE_CLIENT_ID not configured" }, 500);
   const channelUrl = c.req.query("channel") ?? "";
   const mode: ConsentMode = c.req.query("mode") === "publish" ? "publish"
     : c.req.query("mode") === "all" ? "all" : "analytics";
   const returnTo = safeReturn(c.req.query("return"));
-  const state = Buffer.from(JSON.stringify({ channel: channelUrl, mode, return: returnTo })).toString("base64");
+  const state = await issueOAuthState({ channel: channelUrl, mode, return: returnTo });
   return c.redirect(googleAuthUrl(state, mode));
 });
 
@@ -7462,10 +7519,10 @@ app.post("/api/factory/channels/connect-url", async (c) => {
     }, 400);
   }
   // publish 모드여야 업로드 스코프가 붙는다. analytics 로 연결하면 배포에 못 쓴다.
-  const state = Buffer.from(JSON.stringify({
+  const state = await issueOAuthState({
     channel: b?.channelUrl ?? "", mode: "publish", return: "/register",
     ...(extReturn ? { extReturn } : {}),
-  })).toString("base64");
+  });
   return c.json({ url: googleAuthUrl(state, "publish") });
 });
 
@@ -7638,10 +7695,9 @@ app.post("/api/factory/channels", async (c) => {
   });
 });
 
-const oauthCallback = async (c: Context) => {
+const oauthCallback = oauthStateGuard("error", "/register", async (c, st: OAuthState) => {
   const code = c.req.query("code");
   const error = c.req.query("error");
-  const st = decodeState(c.req.query("state"));
   const returnTo = safeReturn(st.return);
 
   if (error) return c.redirect(`${returnTo}?error=access_denied`);
@@ -7698,7 +7754,7 @@ const oauthCallback = async (c: Context) => {
     console.error("[oauth/callback]", err);
     return c.redirect(`${returnTo}?error=${encodeURIComponent(err.message)}`);
   }
-};
+});
 
 // The path registered in GCP. The bare /callback is kept so links already sent out
 // (and the legacy client config) keep working.
@@ -7737,11 +7793,11 @@ function metaRedirectUri(): string {
   return `${process.env.PUBLIC_URL ?? `http://localhost:${PORT}`}${META_CALLBACK_PATH}`;
 }
 
-app.get("/api/meta/auth", (c) => {
+app.get("/api/meta/auth", async (c) => {
   if (!META_APP_ID) return c.json({ error: "META_APP_ID not configured" }, 500);
   const returnTo = safeReturn(c.req.query("return"));
   const rerequest = c.req.query("rerequest") === "1";
-  const state = Buffer.from(JSON.stringify({ return: returnTo })).toString("base64");
+  const state = await issueOAuthState({ return: returnTo });
   const params = new URLSearchParams({
     client_id: META_APP_ID,
     redirect_uri: metaRedirectUri(),
@@ -7753,14 +7809,10 @@ app.get("/api/meta/auth", (c) => {
   return c.redirect(`${META_OAUTH_DIALOG}?${params}`);
 });
 
-const metaOauthCallback = async (c: Context) => {
+const metaOauthCallback = oauthStateGuard("meta_error", "/publish-channels", async (c, st) => {
   const code = c.req.query("code");
   const error = c.req.query("error");
-  let returnTo = "/publish-channels";
-  try {
-    const st = JSON.parse(Buffer.from(c.req.query("state") ?? "", "base64").toString("utf8"));
-    returnTo = safeReturn(st?.return);
-  } catch {}
+  const returnTo = safeReturn(st.return);
 
   if (error) return c.redirect(`${returnTo}?meta_error=access_denied`);
   if (!code) return c.json({ error: "missing code" }, 400);
@@ -7835,7 +7887,7 @@ const metaOauthCallback = async (c: Context) => {
     console.error("[meta/oauth]", err);
     return c.redirect(`${returnTo}?meta_error=${encodeURIComponent(err.message ?? "unknown")}`);
   }
-};
+});
 app.get(META_CALLBACK_PATH, metaOauthCallback);
 
 app.get("/api/meta/accounts", async (c) => {
@@ -7896,10 +7948,10 @@ function instagramRedirectUri(): string {
   return `${process.env.PUBLIC_URL ?? `http://localhost:${PORT}`}${IG_CALLBACK_PATH}`;
 }
 
-app.get("/api/instagram/auth", (c) => {
+app.get("/api/instagram/auth", async (c) => {
   if (!INSTAGRAM_APP_ID) return c.json({ error: "INSTAGRAM_APP_ID not configured" }, 500);
   const returnTo = safeReturn(c.req.query("return"));
-  const state = Buffer.from(JSON.stringify({ return: returnTo })).toString("base64url");
+  const state = await issueOAuthState({ return: returnTo });
   const params = new URLSearchParams({
     client_id: INSTAGRAM_APP_ID,
     redirect_uri: instagramRedirectUri(),
@@ -7920,15 +7972,11 @@ function maskIgTokens(s: string): string {
     .replace(/(access_token=)[^&\s"']+/g, "$1***");
 }
 
-const instagramOauthCallback = async (c: Context) => {
+const instagramOauthCallback = oauthStateGuard("ig_error", "/publish-channels", async (c, st) => {
   // Instagram 은 리다이렉트에 `#_` 를 붙여 보낸다 — code 끝에 딸려오면 교환이 실패한다.
   const code = c.req.query("code")?.replace(/#_$/, "");
   const error = c.req.query("error");
-  let returnTo = "/publish-channels";
-  try {
-    const st = JSON.parse(Buffer.from(c.req.query("state") ?? "", "base64url").toString("utf8"));
-    returnTo = safeReturn(st?.return);
-  } catch {}
+  const returnTo = safeReturn(st.return);
 
   if (error) return c.redirect(`${returnTo}?ig_error=access_denied`);
   if (!code) return c.json({ error: "missing code" }, 400);
@@ -8006,7 +8054,7 @@ const instagramOauthCallback = async (c: Context) => {
     console.error("[instagram/oauth]", maskIgTokens(String(err?.message ?? err)));
     return c.redirect(`${returnTo}?ig_error=${encodeURIComponent("연결에 실패했습니다 — 다시 시도해 주세요.")}`);
   }
-};
+});
 app.get(IG_CALLBACK_PATH, instagramOauthCallback);
 
 app.get("/api/instagram/accounts", async (c) => {
@@ -8067,10 +8115,11 @@ function tiktokRedirectUri(): string {
   return `${process.env.PUBLIC_URL ?? `http://localhost:${PORT}`}${TIKTOK_CALLBACK_PATH}`;
 }
 
-app.get("/api/tiktok/auth", (c) => {
+app.get("/api/tiktok/auth", async (c) => {
   if (!TIKTOK_CLIENT_KEY) return c.json({ error: "TIKTOK_CLIENT_KEY not configured" }, 500);
   const returnTo = safeReturn(c.req.query("return"));
-  const state = Buffer.from(JSON.stringify({ return: returnTo, nonce: crypto.randomUUID() })).toString("base64url");
+  // 예전엔 nonce 를 넣고도 콜백에서 **읽지 않아** 아무것도 막지 못했다. 이제 서버가 들고 있다.
+  const state = await issueOAuthState({ return: returnTo });
   const params = new URLSearchParams({
     client_key: TIKTOK_CLIENT_KEY,
     redirect_uri: tiktokRedirectUri(),
@@ -8081,14 +8130,10 @@ app.get("/api/tiktok/auth", (c) => {
   return c.redirect(`${TIKTOK_AUTH_URL}?${params}`);
 });
 
-const tiktokOauthCallback = async (c: Context) => {
+const tiktokOauthCallback = oauthStateGuard("tiktok_error", "/publish-channels", async (c, st) => {
   const code = c.req.query("code");
   const error = c.req.query("error");
-  let returnTo = "/publish-channels";
-  try {
-    const st = JSON.parse(Buffer.from(c.req.query("state") ?? "", "base64url").toString("utf8"));
-    returnTo = safeReturn(st?.return);
-  } catch {}
+  const returnTo = safeReturn(st.return);
 
   if (error) return c.redirect(`${returnTo}?tiktok_error=${encodeURIComponent(error)}`);
   if (!code) return c.json({ error: "missing code" }, 400);
@@ -8174,7 +8219,7 @@ const tiktokOauthCallback = async (c: Context) => {
     console.error("[tiktok/oauth]", err);
     return c.redirect(`${returnTo}?tiktok_error=${encodeURIComponent(err.message ?? "unknown")}`);
   }
-};
+});
 app.get(TIKTOK_CALLBACK_PATH, tiktokOauthCallback);
 
 app.get("/api/tiktok/accounts", async (c) => {

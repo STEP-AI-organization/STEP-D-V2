@@ -2801,7 +2801,9 @@ export async function listAssetFolders(): Promise<AssetFolderRow[]> {
 
 export async function insertAssetFolder(path: string, parent: string, name: string): Promise<void> {
   await pool.query(
-    `INSERT INTO asset_folder (path, parent, name) VALUES ($1,$2,$3) ON CONFLICT (path) DO NOTHING`,
+    // ⚠️ 충돌 대상은 **테넌트 포함 PK** 다 — 0021 이 (path) → (tenant_id, path) 로 바꿨다.
+    // (path) 로 두면 그런 제약이 없어 42P10 으로 매번 500 이 난다(폴더 생성 불가).
+    `INSERT INTO asset_folder (path, parent, name) VALUES ($1,$2,$3) ON CONFLICT (tenant_id, path) DO NOTHING`,
     [path, parent, name],
   );
 }
@@ -2987,13 +2989,26 @@ export async function updateAutomationRuleById(r: AutomationRuleRow): Promise<bo
 /**
  * 채널별 오늘(KST) 게시 수 — 하루 할당량 판정. rule_run 은 UTC 저장이라
  * KST 자정( UTC 전날 15:00 ) 기준으로 자른다.
+ *
+ * **채널 단위로 센다(규칙 단위가 아니라).** 화면 라벨이 "하루 N개/채널" 인데 규칙별로 세면,
+ * 같은 채널에 연결된 규칙이 둘이면 그 채널에 두 배가 올라간다 — 도배를 막으려고 넣은 값이
+ * 목적을 잃는다. 프로그램마다 규칙 하나가 기본 구조라 실제로 흔한 형태다.
+ *
+ * 실패한 건은 세지 않는다. 큐에 넣은 시점에 'published' 를 쓰기 때문에, 워커가 그 업로드를
+ * 실패시키면 채널엔 아무것도 없는데 한도만 소진된다("오늘 3건 게시" 인데 채널은 비어 있음).
+ * 같은 클립·같은 계정에 뒤이어 'failed' 가 찍히면 그 슬롯은 되돌린다.
  */
-export async function publishedTodayKst(ruleId: string, accountKey: string): Promise<number> {
+export async function publishedTodayKst(accountKey: string): Promise<number> {
   const { rows } = await pool.query(
-    `SELECT COUNT(*)::int AS n FROM rule_run
-      WHERE rule_id = $1 AND account_key = $2 AND result = 'published'
-        AND at >= date_trunc('day', now() AT TIME ZONE 'Asia/Seoul') AT TIME ZONE 'Asia/Seoul'`,
-    [ruleId, accountKey],
+    `SELECT COUNT(*)::int AS n FROM rule_run r
+      WHERE r.account_key = $1 AND r.result = 'published'
+        AND r.at >= date_trunc('day', now() AT TIME ZONE 'Asia/Seoul') AT TIME ZONE 'Asia/Seoul'
+        AND NOT EXISTS (
+          SELECT 1 FROM rule_run f
+           WHERE f.clip_id IS NOT DISTINCT FROM r.clip_id
+             AND f.account_key IS NOT DISTINCT FROM r.account_key
+             AND f.result = 'failed' AND f.at >= r.at)`,
+    [accountKey],
   );
   return Number((rows[0] as { n: number } | undefined)?.n ?? 0);
 }
@@ -3013,6 +3028,30 @@ export async function appendRuleRun(ev: {
     `INSERT INTO rule_run (rule_id, clip_id, result, detail, account_key) VALUES ($1,$2,$3,$4,$5)`,
     [ev.ruleId ?? null, ev.clipId ?? null, ev.result, ev.detail ?? "", ev.accountKey ?? null],
   );
+}
+
+/**
+ * 이 규칙·클립·계정 조합으로 같은 사유를 이미 남겼는가.
+ *
+ * 자동 순방은 10분마다 돈다 — 상태가 안 변하는 스킵을 매번 적으면 실행 로그가 같은 줄로
+ * 가득 차고, 그러면 아무도 안 읽는다. 처음 한 번만 남기고 이후엔 조용히 넘기려고 쓴다.
+ */
+export async function hasRunNote(
+  ruleId: string, clipId: string | null, accountKey?: string | null,
+  result = "skipped", todayKstOnly = false,
+): Promise<boolean> {
+  const { rows } = await pool.query(
+    `SELECT 1 FROM rule_run
+      WHERE rule_id = $1 AND result = $4
+        AND clip_id IS NOT DISTINCT FROM $2
+        AND account_key IS NOT DISTINCT FROM $3
+        ${todayKstOnly
+          ? "AND at >= date_trunc('day', now() AT TIME ZONE 'Asia/Seoul') AT TIME ZONE 'Asia/Seoul'"
+          : ""}
+      LIMIT 1`,
+    [ruleId, clipId ?? null, accountKey ?? null, result],
+  );
+  return rows.length > 0;
 }
 
 export async function listRuleRuns(limit = 100): Promise<Record<string, unknown>[]> {
@@ -3094,8 +3133,11 @@ export async function getAutomationSetting(key: string): Promise<string | null> 
 
 export async function setAutomationSetting(key: string, value: string): Promise<void> {
   await pool.query(
+    // ⚠️ 충돌 대상은 **테넌트 포함 PK** 다 — 0021 이 (key) → (tenant_id, key) 로 바꿨다.
+    // (key) 로 두면 42P10 으로 매번 500 → "전역 일시정지" 가 저장되지 않아, 눌러도 순방이
+    // 계속 돌고 클립이 계속 나갔다.
     `INSERT INTO automation_setting (key, value) VALUES ($1,$2)
-     ON CONFLICT (key) DO UPDATE SET value = $2`,
+     ON CONFLICT (tenant_id, key) DO UPDATE SET value = $2`,
     [key, value],
   );
 }

@@ -78,7 +78,7 @@ import {
 } from "./upload-gate.ts";
 import { withTikTokToken, uploadDraftToTikTok, TikTokTokenRevokedError } from "./tiktok.ts";
 import {
-  getTikTokAccountByOpenId, updateTikTokTokens, markTikTokAccountDisconnected,
+  getTikTokAccountByOpenId, updateTikTokTokens, markTikTokAccountDisconnected, appendRuleRun,
 } from "./db-pg.ts";
 import { publishInstagramReel } from "./instagram.ts";
 import { publishFacebookReel } from "./facebook.ts";
@@ -1348,6 +1348,18 @@ async function markDistributionFailed(
   if (accountId) value[accountField] = accountId;
   const distributions = upsertDistribution(clip.distributions, channel, value);
   await putEntity("clip", clipId, { ...clip, distributions });
+
+  // 자동 규칙이 만든 클립이면 **자동화 실행 로그에도** 실패를 남긴다.
+  // 순방은 큐에 넣은 시점에 'published' 를 적는다 — 워커가 실패시켜도 그 줄이 남으면
+  // 화면은 "오늘 3건 게시" 라고 말하는데 채널엔 아무것도 없고, 할당량만 소진된다.
+  // 이 줄이 그 슬롯을 되돌리고(publishedTodayKst), 운영자에게 실패를 보이게 한다.
+  if (clip.automationRuleId) {
+    await appendRuleRun({
+      ruleId: String(clip.automationRuleId), clipId, result: "failed",
+      detail: `${channel} 게시 실패 — ${String(error).slice(0, 200)}`,
+      accountKey: accountId ? `${channel}:${accountId}` : null,
+    }).catch(() => { /* 로그 실패가 배포 처리를 막을 이유는 없다 */ });
+  }
 }
 
 /** ISO RFC3339 if `raw` parses to a FUTURE instant, else null (upload immediately). */
