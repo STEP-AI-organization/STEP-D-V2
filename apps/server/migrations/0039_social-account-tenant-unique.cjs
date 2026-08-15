@@ -46,16 +46,15 @@ exports.up = (pgm) => {
         END IF;
 
         -- 이 컬럼 하나로만 걸린 유일 제약을 전부 걷어낸다(이름이 환경마다 다르다).
+        -- 정의 문자열로 찾는다 — conkey 를 풀어 비교하면 array_agg 가 name[] 을 내서
+        -- text[] 와 타입이 안 맞는다(42883, 2026-08-15 실측).
         FOR c IN
           SELECT con.conname
             FROM pg_constraint con
             JOIN pg_class rel ON rel.oid = con.conrelid
            WHERE rel.relname = '${table}'
              AND con.contype = 'u'
-             AND (SELECT array_agg(att.attname ORDER BY att.attname)
-                    FROM unnest(con.conkey) k
-                    JOIN pg_attribute att ON att.attrelid = con.conrelid AND att.attnum = k)
-                 = ARRAY['${col}']
+             AND pg_get_constraintdef(con.oid) = 'UNIQUE (${col})'
         LOOP
           EXECUTE format('ALTER TABLE ${table} DROP CONSTRAINT %I', c.conname);
         END LOOP;
@@ -66,10 +65,8 @@ exports.up = (pgm) => {
             JOIN pg_class i ON i.oid = x.indexrelid
             JOIN pg_class t ON t.oid = x.indrelid
            WHERE t.relname = '${table}' AND x.indisunique AND NOT x.indisprimary
-             AND (SELECT array_agg(att.attname ORDER BY att.attname)
-                    FROM unnest(x.indkey::int[]) k
-                    JOIN pg_attribute att ON att.attrelid = x.indrelid AND att.attnum = k)
-                 = ARRAY['${col}']
+             AND pg_get_indexdef(x.indexrelid) LIKE '%(${col})'
+             AND NOT EXISTS (SELECT 1 FROM pg_constraint pc WHERE pc.conindid = x.indexrelid)
         LOOP
           EXECUTE format('DROP INDEX IF EXISTS %I', c.conname);
         END LOOP;
