@@ -26,6 +26,7 @@ import {
   type AutomationRule,
   type GateSnapshot,
 } from "./automation.ts";
+import { channelPublishMode } from "./publish-guard.ts";
 
 describe("이미 내보낸 구간은 다시 채택하지 않는다 (재분석 중복 배포 방지)", () => {
   // 재분석은 추천을 **새 ID** 로 다시 만든다 — "채택됨" 표식이 사라지므로 구간 겹침으로
@@ -370,16 +371,29 @@ describe("채택 기준 (F6 03단계)", () => {
 });
 
 describe("규칙 생성 분기 (F6)", () => {
-  it("YouTube 만 실행 중, 나머지는 기록만", () => {
-    assert.equal(initialRuleState("youtube"), "running");
-    for (const p of ["instagram", "facebook", "tiktok"]) {
-      assert.equal(initialRuleState(p), "record_only", p);
+  // 상태·문구의 기준은 **실제로 우리가 올리는 채널인가** 다(publish-guard 의 channelPublishMode).
+  // 예전엔 "youtube 아니면 기록만" 으로 못박아, 실제로는 브라우저 자동화로 올라가는 네이버에
+  // "배포 기록만 남습니다" 라고 안내했다 — 안전 문구가 거꾸로 서면 최악이다.
+  it("실업로드 채널은 실행 중 — channelPublishMode 와 같은 목록", () => {
+    // 게이트가 켜졌을 때 실제로 올라가는 채널 전부. 게이트 온오프는 상태가 아니라
+    // 배너(자동화 화면 gates)로 알리는 축이라 여기서는 켠 것으로 놓고 대조한다.
+    const gatesOn = { tiktokUpload: true, instagramUpload: true, facebookUpload: true };
+    for (const p of ["youtube", "navertv", "naverclip", "instagram", "facebook", "tiktok"] as const) {
+      assert.equal(initialRuleState(p), "running", p);
+      assert.equal(channelPublishMode(p, gatesOn), "upload", `${p}: 두 목록이 갈라졌다`);
     }
   });
 
-  it("기록만 하는 채널은 생성 문구가 그 사실을 말한다", () => {
-    assert.match(ruleCreatedNotice("tiktok"), /기록만/);
-    assert.match(ruleCreatedNotice("tiktok"), /직접/);
+  it("상태만 기록하는 채널(SMR 등)은 생성 문구가 그 사실을 말한다", () => {
+    assert.equal(initialRuleState("smr"), "record_only");
+    assert.match(ruleCreatedNotice("smr"), /기록만/);
+    assert.match(ruleCreatedNotice("smr"), /직접/);
+  });
+
+  it("실업로드 채널에는 '기록만' 이라고 말하지 않는다", () => {
+    for (const p of ["navertv", "naverclip", "instagram", "tiktok"]) {
+      assert.doesNotMatch(ruleCreatedNotice(p), /기록만/, p);
+    }
   });
 });
 

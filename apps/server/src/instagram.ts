@@ -39,6 +39,27 @@ async function asJson(res: Response): Promise<any> {
 }
 
 /**
+ * long-lived 토큰 연장 (`ig_refresh_token`).
+ *
+ * IG 비즈니스 로그인 토큰은 **60일짜리**다. 리프레시 토큰이 따로 없고 같은 토큰을 만료 전에
+ * 연장한다 — 만료를 넘기면 재연결밖에 없다. 이 호출이 없으면 연결 60일 뒤 그 워크스페이스의
+ * IG 게시가 전건 실패하는데, 계정 상태는 계속 'active' 라 화면은 멀쩡해 보인다.
+ * (발급 후 24시간이 지나야 연장할 수 있다.)
+ */
+export async function refreshInstagramToken(accessToken: string): Promise<{ accessToken: string; expiresAt: number }> {
+  const url = `${GRAPH}/refresh_access_token?grant_type=ig_refresh_token&access_token=${encodeURIComponent(accessToken)}`;
+  const res = await fetch(url);
+  const body = await asJson(res);
+  if (!res.ok || !body?.access_token) {
+    throw new Error(`Instagram 토큰 연장 실패 (${res.status}): ${String(body?.error?.message ?? "").slice(0, 200)}`);
+  }
+  return {
+    accessToken: String(body.access_token),
+    expiresAt: Date.now() + Number(body.expires_in ?? 60 * 24 * 3600) * 1000,
+  };
+}
+
+/**
  * IG 릴 1건 게시. 실패는 던진다(호출부가 배포 상태에 사유로 남긴다). 멱등은 호출부(잡)에서
  * media_id 존재로 판정한다 — 이 함수는 매번 컨테이너를 새로 만들므로 중복 호출 금지.
  */

@@ -50,7 +50,7 @@ import { checkCredits } from "./credits.ts";
 import { billableMinutes } from "./billing.ts";
 import { probe, captureThumbnail } from "./ffmpeg.ts";
 import {
-  prepareProgramAssets, publishStyleProfile, publishThumbnails, tempAssetRoot,
+  prepareProgramAssets, publishStyleProfile, publishThumbnails, tempAssetRoot, pullPrefix,
 } from "./thumbnail-assets.ts";
 import { uploadFile, uploadPath, thumbPath } from "./storage-gcs.ts";
 import { initQueue, claimJob, completeJob, failJob, requeueStale, heartbeatJob, enqueue, lastDoneJobAt, queueStats, type Job, type JobType } from "./queue.ts";
@@ -80,9 +80,11 @@ import { withTikTokToken, uploadDraftToTikTok, TikTokTokenRevokedError } from ".
 import {
   getTikTokAccountByOpenId, updateTikTokTokens, markTikTokAccountDisconnected, appendRuleRun,
 } from "./db-pg.ts";
-import { publishInstagramReel } from "./instagram.ts";
+import { publishInstagramReel, refreshInstagramToken } from "./instagram.ts";
 import { publishFacebookReel } from "./facebook.ts";
-import { listInstagramAccounts, getMetaAccountByPageId } from "./db-pg.ts";
+import {
+  listInstagramAccounts, getMetaAccountByPageId, updateInstagramToken, parkInstagramAccountExpired,
+} from "./db-pg.ts";
 import { naverUploadEnabled, NAVER_DISABLED_MESSAGE } from "./naver-gate.ts";
 import { hasNaverSession, materializeNaverSession } from "./naver-session.ts";
 import { getNaverAccount, markNaverAccount, getNaverSessionBlob } from "./db-pg.ts";
@@ -181,7 +183,12 @@ const CLAIM_TYPES: JobType[] | undefined =
 /** The channel sweep enqueues YouTube work, so content/gebd-only workers must not run it. */
 // naver 워커도 sweep 을 돌리지 않는다 — 사무실 PC 한 대일 뿐이고, sweep 은
 // youtube 레인이 책임진다. 두 곳에서 돌면 같은 잡을 두 번 되살린다.
-const RUNS_SWEEP = WORKER_JOBS !== "content" && WORKER_JOBS !== "gebd" && WORKER_JOBS !== "naver";
+// ⚠️ **조합 문자열까지 넣어야 한다.** 윈도우2 런처는 WORKER_JOBS 를 "naver,download" 로
+// 못 박는데(worker-naver.mts), 예전 판정은 정확히 "naver" 일 때만 걸러서 사무실 PC 가
+// 자동배포 순방과 채널 스윕까지 돌리고 있었다 — 프로덕션 자동배포 주기가 Cloud Scheduler
+// 가 아니라 그 PC 의 가동 여부에 좌우된다는 뜻이다. CLAIM_TYPES·YT_FREE 와 같은 방식.
+const NO_SWEEP = new Set(["content", "gebd", "naver", "download", "naver,download", "download,naver"]);
+const RUNS_SWEEP = !NO_SWEEP.has(WORKER_JOBS);
 
 let stopping = false;
 
@@ -240,7 +247,11 @@ async function handle(job: Job): Promise<FollowUp | void> {
     case "video.comments":  return handleVideoComments(job);
     case "distribution.publish": return handleDistributionPublish(job);
     case "naver.publish": return handleNaverPublish(job);
-    case "content.analyze": { await runContentAnalyze(String(job.payload.mediaId ?? ""), Boolean(job.payload.fast)); return; }
+    case "content.analyze": {
+      await runContentAnalyze(String(job.payload.mediaId ?? ""), Boolean(job.payload.fast),
+        { n: Number(job.attempts ?? 0), max: Number(job.maxAttempts ?? 0) });
+      return;
+    }
     case "clip.reframe": {
       await runClipReframe({
         clipId: String(job.payload.clipId ?? ""),
@@ -1014,9 +1025,6 @@ async function handleThumbnailGenerate(job: Job): Promise<void> {
   const programId = String(job.payload.programId ?? "");
   if (!mediaId || !programId) throw new Error("mediaId·programId 필요");
 
-  const storage = process.env.STEPD_STORAGE_DIR || path.join(CORE_REPO_ROOT, "tmp", "local-storage");
-  const analysisDir = path.join(storage, "analysis", mediaId);
-  const video = path.join(storage, "uploads", `${mediaId}.mp4`);
   const outDir = path.join(os.tmpdir(), "stepd-thumb-out", mediaId);
 
   // 이 프로그램의 스타일 프로파일·출연자 사진만 내려받는다 (회차마다 전체를 뒤지지 않게).
@@ -1026,6 +1034,35 @@ async function handleThumbnailGenerate(job: Job): Promise<void> {
     throw new Error(`cast_not_registered: ${programId} 에 등록된 출연자 사진이 없습니다`);
   }
 
+  // 분석 산출물(narrative.json 등)과 원본 영상도 **에셋과 같은 배관**으로 내려받는다.
+  // 예전엔 로컬 스토리지 경로를 그대로 파이썬에 넘겼는데, 프로덕션은 GCS 모드라 그 경로가
+  // 컨테이너에 존재하지 않는다 → core/thumbnail 이 narrative.json 을 못 읽고 매번 죽었다.
+  // 사용자 화면엔 '생성 중' 만 남고 후보는 영원히 안 나온다(전형적인 조용한 실패).
+  const analysisDir = path.join(assets.root, "analysis", mediaId);
+  fs.mkdirSync(analysisDir, { recursive: true });
+  const pulled = await pullPrefix(`analysis/${mediaId}`, analysisDir);
+  if (!fs.existsSync(path.join(analysisDir, "narrative.json"))) {
+    fs.rmSync(assets.root, { recursive: true, force: true });
+    throw new Error(`analysis_missing: ${mediaId} 의 분석 산출물(narrative.json)이 없습니다 — 회차 분석을 먼저 끝내야 합니다 (내려받은 파일 ${pulled}개)`);
+  }
+
+  // 배경 프레임 단계는 원본 영상이 필요하다. GCS 모드면 tmp 로 받아 쓰고 끝나면 지운다
+  // (Cloud Run 의 /tmp 는 RAM 이다 — 안 지우면 메모리가 쌓인다).
+  let video = "";
+  try {
+    const media = await getMedia(mediaId);
+    const objPath = media ? parseObjectPath(media.path) : null;
+    if (objPath && await fileExists(objPath)) {
+      const local = path.join(assets.root, `${mediaId}.mp4`);
+      const rs = await createReadStream(objPath);
+      await pipeline(rs, fs.createWriteStream(local));
+      video = local;
+    }
+  } catch (e) {
+    console.warn(`[worker] thumbnail.generate ${mediaId}: 원본 영상 준비 실패 — 배경 프레임 없이 진행`,
+      e instanceof Error ? e.message : e);
+  }
+
   try {
     const result = await runThumbnailCli([
       "generate",
@@ -1033,7 +1070,7 @@ async function handleThumbnailGenerate(job: Job): Promise<void> {
       "--program-id", programId,
       "--title", String(job.payload.title ?? ""),
       "--analysis-dir", analysisDir,
-      "--video", fs.existsSync(video) ? video : "",
+      "--video", video,
       "--out", outDir,
       "--candidates", String(job.payload.candidates ?? 3),
     ], { THUMB_ASSETS_DIR: assets.root });
@@ -1709,6 +1746,27 @@ async function runInstagramPublish(job: Job): Promise<void> {
   if (!acct || acct.status === "disconnected" || !acct.accessToken) {
     await markDistributionFailed(clipId, "instagram", "Instagram 계정이 연결되지 않았거나 재연결이 필요합니다", igUserId);
     return;
+  }
+  // IG 토큰은 **60일짜리**다. 만료 전에 같은 토큰을 연장해야 하고, 넘기면 재연결뿐이다.
+  // 연장을 아무 데서도 안 걸면 어느 날부터 IG 만 조용히 전건 실패한다(계정은 계속 'active'
+  // 로 보인다) — 게시 직전이 확실한 시점이라 여기서 잇는다.
+  const igExpiresAt = Number((acct as any).expiresAt ?? 0);
+  if (igExpiresAt > 0 && igExpiresAt <= Date.now()) {
+    await parkInstagramAccountExpired(igUserId).catch(() => {});
+    await markDistributionFailed(clipId, "instagram",
+      "Instagram 토큰이 만료됐습니다 — 배포채널에서 다시 연결해 주세요", igUserId);
+    return;
+  }
+  if (igExpiresAt > 0 && igExpiresAt - Date.now() < 7 * 24 * 3600_000) {
+    try {
+      const next = await refreshInstagramToken(acct.accessToken);
+      await updateInstagramToken(igUserId, next.accessToken, next.expiresAt);
+      acct.accessToken = next.accessToken;
+      console.log(`[worker] Instagram 토큰 연장 ${igUserId} → ${new Date(next.expiresAt).toISOString()}`);
+    } catch (e) {
+      // 연장 실패는 게시를 막을 이유가 아니다 — 아직 유효한 토큰이 손에 있다.
+      console.warn(`[worker] Instagram 토큰 연장 실패(${igUserId}):`, e instanceof Error ? e.message : e);
+    }
   }
   const mediaId = clip.mediaId;
   if (!mediaId) { await markDistributionFailed(clipId, "instagram", "클립이 아직 렌더되지 않았습니다 (익스포트 필요)", igUserId); return; }

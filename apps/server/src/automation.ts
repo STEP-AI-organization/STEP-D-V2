@@ -96,17 +96,28 @@ export function inActiveWindow(rule: AutomationRule, now = new Date()): boolean 
 }
 
 /**
+ * 실업로드까지 가는 채널인가 — 규칙 상태·안내 문구의 기준.
+ *
+ * **`publish-guard.ts` 의 `channelPublishMode` 와 같은 목록이어야 한다.** 예전엔 여기만
+ * "youtube 아니면 기록만" 이었는데, 네이버는 실제로 브라우저 자동화로 **올라간다**.
+ * 그래서 "배포 기록만 남습니다" 라고 안내한 채널에 영상이 나가는 안전 문구 역전이 됐다.
+ * 게이트가 꺼져 있으면 실제로는 기록만 되지만, 그건 켜고 끄는 축이라 상태가 아니라
+ * 배너로 알린다(자동화 화면 gates).
+ */
+const UPLOAD_PLATFORMS = new Set(["youtube", "navertv", "naverclip", "instagram", "facebook", "tiktok"]);
+
+/**
  * 규칙 생성 시 상태 분기 (F6).
- * YouTube 만 실제로 올라가므로, 그 외 채널의 규칙은 처음부터 `기록만`이라고 말한다.
+ * 실업로드 채널이면 running, 상태 기록만 하는 채널(Meta·SMR 스텁 등)은 `기록만`.
  */
 export function initialRuleState(platform: string, enabled = true): RuleState {
   if (!enabled) return "paused";
-  return platform === "youtube" ? "running" : "record_only";
+  return UPLOAD_PLATFORMS.has(platform) ? "running" : "record_only";
 }
 
 /** 규칙 생성 토스트 문구 (F6 ⚑ — 기록만 하는 채널은 반드시 알린다). */
 export function ruleCreatedNotice(platform: string): string {
-  return platform === "youtube"
+  return UPLOAD_PLATFORMS.has(platform)
     ? "규칙이 실행 중입니다 — 다음 순방부터 적용됩니다."
     : "이 채널은 배포 기록만 남습니다 — 실제 게시는 담당자가 해당 앱에서 직접 해야 합니다.";
 }

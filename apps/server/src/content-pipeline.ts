@@ -31,7 +31,7 @@ import { fileURLToPath } from "node:url";
 import { Readable } from "node:stream";
 
 import {
-  getMedia, saveContentAnalysis, saveTranscript, saveEpisodeCast, listProgramCast,
+  getMedia, getContentAnalysis, saveContentAnalysis, saveTranscript, saveEpisodeCast, listProgramCast,
   getChannelPointProfile, listVideoComments,
   getPool, getEntity, putEntity, upsertSearchSegments,
   recordUsage,
@@ -1210,7 +1210,11 @@ function collectPartial(work: string): Record<string, unknown> | undefined {
 
 /** Run the content pipeline for one uploaded media and persist the result.
  *  `fast`(잡 페이로드 fast:true) — 자막만으로 빠른 추천, 시각 분석 스킵(~10배). 기본 false=풀. */
-export async function runContentAnalyze(mediaId: string, fast = false): Promise<void> {
+export async function runContentAnalyze(
+  mediaId: string, fast = false,
+  /** 이 잡의 시도 횟수 — 마지막 시도면 "재시도 대기" 라고 거짓 안내하지 않기 위해 쓴다. */
+  attempt?: { n: number; max: number },
+): Promise<void> {
   // 잡 페이로드 fast:true 또는 워커 전역 CORE_ANALYZE_FAST=1 이면 빠른 모드. 대량 배치용 전역 스위치.
   fast = fast || process.env.CORE_ANALYZE_FAST === "1";
   const media = await getMedia(mediaId);
@@ -1644,11 +1648,19 @@ export async function runContentAnalyze(mediaId: string, fast = false): Promise<
     // web-reachable), and the Lab shows scenes with broken images. Non-fatal, and only
     // worth doing when something was actually salvaged.
     const stored = partial ? await persistArtifacts(work, mediaId) : null;
+    // ⚠️ **완성본을 partial 로 덮지 않는다.** 재분석(이미 한 번 성공한 회차를 다시 돌리는 것)이
+    // 실패하면 partial 에는 shorts·narrative 가 없어서, 그대로 저장하면 화면에서 추천과
+    // 서사가 통째로 사라진다 — 재시도했을 뿐인데 기존 결과물이 눈앞에서 없어지는 셈이다.
+    // 기존 블롭 위에 얹어, 이번에 건진 것만 갱신한다.
+    const prevData = partial
+      ? ((await getContentAnalysis(mediaId).catch(() => undefined))?.data as Record<string, unknown> | undefined)
+      : undefined;
     await saveContentAnalysis(mediaId, {
       error: String(err?.message ?? err).slice(0, 1000),
       ...(partial
         ? {
             data: {
+              ...(prevData ?? {}),
               ...partial,
               ...(stored ? { framesBase: stored.base, framesStored: stored.frames > 0 } : {}),
             },
@@ -1668,10 +1680,15 @@ export async function runContentAnalyze(mediaId: string, fast = false): Promise<
       // Drain any in-flight throttled progress write first, or it lands AFTER this and
       // the UI shows "AI 분석 중… 40%" instead of the error state until the next retry.
       await chain.catch(() => {});
+      // 자동 재시도가 남았는지에 따라 문구를 가른다 — 소진됐는데 "재시도 대기" 라고 하면
+      // 운영자는 오지 않을 재시도를 기다리며 정작 필요한 조치(분석 다시 시작)를 안 한다.
+      const exhausted = attempt ? attempt.n >= attempt.max : false;
       await setEpisodePipeline(media.episodeId, {
         stage: "analyze",
         stageStatus: "error",
-        blockedReason: "AI 분석 실패 — 재시도 대기 (완료된 단계는 보존됨)",
+        blockedReason: exhausted
+          ? "AI 분석 실패 — 자동 재시도가 끝났습니다. 분석을 다시 시작해 주세요 (완료된 단계는 보존됨)"
+          : "AI 분석 실패 — 재시도 대기 (완료된 단계는 보존됨)",
       }).catch(() => {});
     }
     // Keep the work dir: the queue retry resumes from its checkpoints. The 48h sweep

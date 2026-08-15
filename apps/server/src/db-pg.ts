@@ -1237,6 +1237,17 @@ export async function deleteInstagramAccount(publicId: string): Promise<void> {
   await pool.query("DELETE FROM instagram_accounts WHERE publicId = $1", [publicId]);
 }
 
+/**
+ * 만료된 토큰의 계정을 '재연결 필요' 로 파킹한다 — igUserId 기준(워커가 아는 식별자).
+ * 토큰이 죽었는데 status 가 active 로 남으면 화면은 정상으로 보이고 배포만 매번 실패한다.
+ */
+export async function parkInstagramAccountExpired(igUserId: string): Promise<void> {
+  await pool.query(
+    `UPDATE instagram_accounts SET status = 'disconnected' WHERE igUserId = $1`,
+    [igUserId],
+  );
+}
+
 /** 연동해제 — 토큰을 비우고 행은 남긴다 (youtube 쪽 disconnect 와 같은 의미). */
 export async function disconnectInstagramAccount(publicId: string): Promise<void> {
   await pool.query(

@@ -2743,8 +2743,11 @@ app.get("/api/media/:id/shorts", async (c) => {
         endTime: r.endTime ?? null,
         status: r.status ?? null,
         score100: r.score100 ?? null,
-        reason: r.reason ?? null,
-        clipId: r.clipId ?? null,
+        // ⚠️ 추천 엔티티에는 `reason`·`clipId` 키가 없다 — 사유는 editNote, 채택된 클립은
+        // adoptedClipId 다(content-pipeline recFromShort · adopt.ts). 없는 키를 읽어서
+        // 고객사 응답의 두 필드가 **항상 null** 이었다.
+        reason: r.editNote ?? null,
+        clipId: r.adoptedClipId ?? null,
         thumbnails: Array.isArray(r.thumbnails)
           ? r.thumbnails.map((t: any) => ({ id: t.id, chosen: Boolean(t.chosen), urls: t.urls ?? {} }))
           : [],
@@ -6532,6 +6535,9 @@ app.post("/api/distributions/retry", async (c) => {
       const outcome = await dispatchPublish({
         clipIds: [b.clipId], channel: "instagram",
         igUserId: String(prev.igUserId),
+        // 예약이 있던 건은 예약도 함께 살린다 — 안 넘기면 그 자리에서 **즉시 공개 게시**되고,
+        // 행에는 옛 reserveDate 가 남아 화면만 '예약' 으로 보인다(엠바고 사고).
+        reserveDate: prev.reserveDate, scheduled: Boolean(prev.reserveDate),
         actor, origin: "retry",
       });
       return c.json({ ok: true, ...outcome });
@@ -6547,6 +6553,9 @@ app.post("/api/distributions/retry", async (c) => {
       const outcome = await dispatchPublish({
         clipIds: [b.clipId], channel: "facebook",
         metaPageId: String(prev.metaPageId),
+        // 예약 복원(위 Instagram 과 같은 이유) — FB 는 안 넘기면 video_state 가 PUBLISHED 로
+        // 나가 예약이 통째로 사라진다.
+        reserveDate: prev.reserveDate, scheduled: Boolean(prev.reserveDate),
         actor, origin: "retry",
       });
       return c.json({ ok: true, ...outcome });
