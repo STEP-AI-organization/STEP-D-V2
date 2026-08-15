@@ -20,8 +20,16 @@ import { currentScope } from "./tenant.ts";
 
 const pool = () => getPool();
 
-/** 발급 후 이 시간이 지나면 못 쓴다. 동의 화면에서 머무는 시간을 넉넉히 잡은 값. */
+/**
+ * 발급 후 이 시간이 지나면 못 쓴다. 화면에서 바로 이어지는 연결은 30분이면 충분하다.
+ *
+ * ⚠️ 다만 **외부 채널 주인에게 건네는 링크**(factory connect-url)는 메일·메신저로 전달돼
+ * 며칠 뒤에 열린다 — 거기에 30분을 걸면 채널 주인이 동의를 다 마친 뒤에 튕긴다.
+ * 그런 링크는 발급할 때 TTL 을 직접 준다.
+ */
 const TTL_MS = 30 * 60_000;
+/** 사람 손을 거쳐 전달되는 링크용. */
+export const HANDOFF_TTL_MS = 7 * 24 * 3600_000;
 
 let ready: Promise<void> | undefined;
 function ensureTable(): Promise<void> {
@@ -31,7 +39,10 @@ function ensureTable(): Promise<void> {
       tenant    TEXT NOT NULL,
       payload   JSONB NOT NULL,
       createdAt BIGINT NOT NULL
-    )`).then(() => undefined);
+    )`)
+    .then(() => pool().query(
+      `ALTER TABLE oauth_state ADD COLUMN IF NOT EXISTS expiresAt BIGINT`))
+    .then(() => undefined);
   return ready;
 }
 
@@ -44,15 +55,19 @@ function scopeNow(): string {
  * state 발급. payload 는 콜백에서 되돌려받을 값(복귀 경로·모드 등)이고,
  * **브라우저를 거치지만 브라우저가 못 고친다** — 서버가 들고 있기 때문이다.
  */
-export async function issueOAuthState(payload: Record<string, unknown>): Promise<string> {
+export async function issueOAuthState(
+  payload: Record<string, unknown>, ttlMs = TTL_MS,
+): Promise<string> {
   await ensureTable();
   const state = randomBytes(24).toString("base64url");
+  // 만료 시각을 **행에 적어 둔다** — TTL 상수를 나중에 줄여도 이미 나간 링크가 갑자기
+  // 죽지 않고, 링크마다 다른 수명을 줄 수 있다.
   await pool().query(
-    "INSERT INTO oauth_state (state, tenant, payload, createdAt) VALUES ($1, $2, $3, $4)",
-    [state, scopeNow(), JSON.stringify(payload ?? {}), Date.now()],
+    "INSERT INTO oauth_state (state, tenant, payload, createdAt, expiresAt) VALUES ($1, $2, $3, $4, $5)",
+    [state, scopeNow(), JSON.stringify(payload ?? {}), Date.now(), Date.now() + Math.max(60_000, ttlMs)],
   );
   // 만료분은 여기서 같이 치운다 — 따로 sweep 잡을 만들 양이 아니다.
-  await pool().query("DELETE FROM oauth_state WHERE createdAt < $1", [Date.now() - TTL_MS])
+  await pool().query("DELETE FROM oauth_state WHERE expiresAt < $1", [Date.now()])
     .catch(() => undefined);
   return state;
 }
@@ -64,19 +79,26 @@ export async function issueOAuthState(payload: Record<string, unknown>): Promise
  * (외부 채널 연결 링크는 채널 주인이 연다) 쿠키로 판정하면 안 되고, 링크를 발급한
  * 워크스페이스에 붙여야 한다. 호출부가 이 tenant 로 컨텍스트를 고정한다.
  */
-export type ConsumedState = { tenant: string; data: Record<string, any> };
-export async function consumeOAuthState(raw: string | undefined | null): Promise<ConsumedState | null> {
+export type ConsumedState =
+  | { ok: true; tenant: string; data: Record<string, any> }
+  | { ok: false; reason: "unknown" | "expired" };
+export async function consumeOAuthState(raw: string | undefined | null): Promise<ConsumedState> {
   const state = String(raw ?? "").trim();
-  if (!state) return null;
+  if (!state) return { ok: false, reason: "unknown" };
   await ensureTable();
   const { rows } = await pool().query(
-    "DELETE FROM oauth_state WHERE state = $1 RETURNING tenant, payload, createdAt", [state],
+    "DELETE FROM oauth_state WHERE state = $1 RETURNING tenant, payload, createdAt, expiresAt", [state],
   );
   const row = rows[0];
-  if (!row) return null;
-  if (Number(row.createdat ?? row.createdAt) < Date.now() - TTL_MS) return null;
+  if (!row) return { ok: false, reason: "unknown" };
+  // 옛 행(expiresAt 없음)은 발급 시각 + 기본 TTL 로 본다.
+  const expires = Number(row.expiresat ?? row.expiresAt)
+    || Number(row.createdat ?? row.createdAt) + TTL_MS;
+  // 만료와 위조를 구분해 돌려준다 — 화면이 "다시 시도" 와 "새 링크를 요청" 을 달리 말해야 한다.
+  if (expires < Date.now()) return { ok: false, reason: "expired" };
   const payload = row.payload;
   return {
+    ok: true,
     tenant: String(row.tenant ?? ""),
     data: (typeof payload === "string" ? JSON.parse(payload) : payload) ?? {},
   };

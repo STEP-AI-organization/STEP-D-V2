@@ -282,14 +282,20 @@ export async function runAutomationCycle(): Promise<CycleReport> {
 
         // 실패한 배포는 **자동으로 다시 쏘지 않는다**(F4-4). 실패 행은 위 판정에서 "안 나간
         // 것" 이라 막지 않으면 순방이 10분마다 같은 클립을 재업로드한다 — 업로드가 시작된
-        // 뒤 응답만 유실된 실패면 채널에 같은 영상이 중복으로 올라간다. 사람이 배포 로그의
-        // 재시도 버튼을 눌러야 다시 나간다. 조용히 넘기지 말고 승인 큐에 올려 보이게 한다.
+        // 뒤 응답만 유실된 실패면 채널에 같은 영상이 중복으로 올라간다. 사람이 배포 기록의
+        // 재시도 버튼을 눌러야 다시 나간다.
+        //
+        // ⚠️ 여기서 `holdClip` 을 쓰면 안 된다. rule_hold 는 (규칙, 클립) 키라 **채널 개념이
+        // 없어서**, 유튜브 하나 실패가 같은 규칙의 인스타·틱톡·네이버까지 영원히 막는다.
+        // 게다가 사람이 승인 큐에서 풀어도 다음 순방이 released_at 을 리셋해 해제 버튼이
+        // 무력해진다. 실패의 정본은 **배포 행의 status** 이므로 그걸 근거로 이 채널만 건너뛰고,
+        // 사유는 채널별로 한 번만 남긴다(순방마다 쌓으면 로그가 그 줄로 덮인다).
         if (hasFailedAccountDistribution(clip.distributions, chan.platform, chan.accountId)) {
-          if (!(await isHeldAwaitingHuman(rule.id, clip.id))) {
-            const reason = "직전 배포가 실패했습니다 — 자동 재시도는 하지 않습니다. 배포 기록에서 재시도를 눌러 주세요.";
-            await holdClip(rule.id, clip.id, reason);
-            await appendRuleRun({ ruleId: rule.id, clipId: clip.id, result: "held", detail: reason, accountKey });
-            report.held += 1;
+          if (!(await hasRunNote(rule.id, clip.id, accountKey, "failed"))) {
+            await appendRuleRun({
+              ruleId: rule.id, clipId: clip.id, result: "failed", accountKey,
+              detail: "직전 배포가 실패했습니다 — 자동 재시도는 하지 않습니다. 배포 기록에서 재시도를 눌러 주세요.",
+            });
           }
           continue;
         }

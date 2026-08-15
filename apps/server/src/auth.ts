@@ -20,6 +20,7 @@
 import crypto from "node:crypto";
 import { promisify } from "node:util";
 import { getRawPool, type Queryable } from "./db-pg.ts";
+import { defaultOpsRoleFor, isOpsRole, type OpsRole } from "./ops-role.ts";
 
 const scrypt = promisify(crypto.scrypt) as (
   password: string | Buffer,
@@ -179,6 +180,8 @@ export async function createUser(input: {
   name?: string;
   password: string;
   role?: Role;
+  /** 운영(송출) 역할. 미지정이면 워크스페이스 역할에서 유추한다(owner→cp, 그 외→editor). */
+  opsRole?: OpsRole;
   /**
    * 최소 길이 검사를 건너뛴다. **부트스트랩 CLI 전용** — 운영자가 명시적으로 택한 경우에만.
    * API 경로에서는 절대 쓰지 않는다(약한 비밀번호가 조용히 들어오는 문이 되면 안 된다).
@@ -189,10 +192,16 @@ export async function createUser(input: {
   if (problem) throw new Error(problem);
   const id = `u_${crypto.randomBytes(9).toString("base64url")}`;
   const hash = await hashPassword(input.password);
+  // ⚠️ ops_role 을 **여기서 같이 넣어야 한다.** 컬럼 기본값은 'editor' 인데 editor 는 송출
+  // 권한이 없어서(ops-role.ts), 안 넣으면 새로 만든 워크스페이스의 owner 조차 배포 버튼이
+  // 영구 403 이다 — 그리고 이 값을 바꾸는 화면이 제품에 없어 DB 를 직접 고치는 것 말고는
+  // 복구할 방법이 없었다. 0022 의 백필은 그 시점의 기존 행만 대상이었다.
+  const role = input.role ?? "member";
   const { rows } = await (db ?? getRawPool()).query(
-    `INSERT INTO users (id, tenant_id, email, name, password_hash, role, created_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING ${USER_COLS}`,
-    [id, input.tenantId, input.email.trim(), input.name ?? "", hash, input.role ?? "member", Date.now()],
+    `INSERT INTO users (id, tenant_id, email, name, password_hash, role, ops_role, created_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING ${USER_COLS}`,
+    [id, input.tenantId, input.email.trim(), input.name ?? "", hash, role,
+      input.opsRole ?? defaultOpsRoleFor(role), Date.now()],
   );
   return rows[0] as User;
 }
@@ -397,12 +406,16 @@ export async function countActiveOwners(tenantId: string): Promise<number> {
 export async function updateMember(
   tenantId: string,
   userId: string,
-  patch: { role?: Role; status?: string },
+  patch: { role?: Role; status?: string; opsRole?: string },
 ): Promise<boolean> {
+  // ops_role 도 여기서 바뀌어야 한다 — 이 함수가 멤버를 고치는 유일한 경로이고, 없으면
+  // 송출 권한을 제품 안에서 줄 방법이 아예 없다(DB 직접 수정 말고는).
+  const nextOps = isOpsRole(patch.opsRole) ? patch.opsRole : null;
   const { rowCount } = await getRawPool().query(
-    `UPDATE users SET role = COALESCE($3, role), status = COALESCE($4, status)
+    `UPDATE users SET role = COALESCE($3, role), status = COALESCE($4, status),
+            ops_role = COALESCE($5, ops_role)
       WHERE tenant_id = $1 AND id = $2`,
-    [tenantId, userId, patch.role ?? null, patch.status ?? null],
+    [tenantId, userId, patch.role ?? null, patch.status ?? null, nextOps],
   );
   return (rowCount ?? 0) > 0;
 }

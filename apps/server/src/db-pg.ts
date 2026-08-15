@@ -455,6 +455,46 @@ async function migrate(): Promise<void> {
       connectedAt        BIGINT NOT NULL
     );
   `);
+
+  // 연동 계정 4종의 유일성은 **테넌트 포함**이어야 한다.
+  //
+  // 전역 UNIQUE 로 두면 워크스페이스 A 가 이미 연결한 채널을 B 가 연결할 때, B 에게는 RLS 로
+  // 보이지도 않는 행과 충돌해 OAuth 를 다 끝낸 뒤에 실패한다(0039 가 프로덕션에서 고친 것).
+  // 여기는 그 짝이다 — 마이그레이션 없이 도는 환경(로컬 dev·새 DB)에서도 같은 모양이어야
+  // `ON CONFLICT (tenant_id, …)` 가 성립한다. 두 정의가 갈라지면 한쪽 환경만 조용히 깨진다.
+  for (const [table, col] of [
+    ["youtube_channels", "channelId"], ["meta_accounts", "pageId"],
+    ["tiktok_accounts", "openId"], ["instagram_accounts", "igUserId"],
+  ] as const) {
+    await pool.query(`
+      DO $$
+      DECLARE c RECORD;
+      BEGIN
+        EXECUTE 'ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS tenant_id TEXT';
+        EXECUTE 'ALTER TABLE ${table} ALTER COLUMN tenant_id SET DEFAULT current_setting(''app.tenant_id'', true)';
+        FOR c IN
+          SELECT con.conname FROM pg_constraint con JOIN pg_class rel ON rel.oid = con.conrelid
+           WHERE rel.relname = '${table}' AND con.contype = 'u'
+             AND pg_get_constraintdef(con.oid) = 'UNIQUE (${col.toLowerCase()})'
+        LOOP
+          EXECUTE format('ALTER TABLE ${table} DROP CONSTRAINT %I', c.conname);
+        END LOOP;
+        -- 이미 (tenant_id, col) 유일 제약이 있으면(프로덕션은 0039 가 만들어 뒀다) 그대로 둔다.
+        -- 이름으로 찾으면 같은 제약을 하나 더 만들게 된다 — 정의로 확인한다.
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint con JOIN pg_class rel ON rel.oid = con.conrelid
+           WHERE rel.relname = '${table}' AND con.contype = 'u'
+             AND pg_get_constraintdef(con.oid) = 'UNIQUE (tenant_id, ${col.toLowerCase()})'
+        ) THEN
+          EXECUTE 'ALTER TABLE ${table} ADD CONSTRAINT ${table}_tenant_key UNIQUE (tenant_id, ${col})';
+        END IF;
+      END $$;
+    `).catch((e) => {
+      // 프로덕션은 0039 가 이미 같은 모양을 만들어 뒀다(제약 이름만 다르다) — 여기서
+      // 실패해도 부팅을 막지 않는다. 다만 조용히 넘기지는 않는다.
+      console.warn(`[db] ${table} 테넌트 유일성 정리 건너뜀:`, e instanceof Error ? e.message : e);
+    });
+  }
 }
 
 /**
@@ -2403,8 +2443,13 @@ export async function searchSegments(q: SearchQuery): Promise<SearchHit[]> {
 
   const vec = toVector(q.queryVec);
   const lexExpr = q.queryText ? `similarity(search_text, ${p(q.queryText)})` : `0`;
+  // ⚠️ `COALESCE(..., 0)` 이 없으면 **임베딩 없는 세그먼트가 검색 1위를 싹쓸이한다.**
+  // pgvector 의 `<=>` 는 strict 라 emb 가 NULL 이면 결과도 NULL 이고, 두 컬럼이 모두 NULL 이면
+  // GREATEST 도 NULL → score 가 NULL → `ORDER BY score DESC` 의 기본이 NULLS FIRST 다.
+  // 임베딩이 NULL 인 행은 정상적으로 생긴다(대사·요약이 둘 다 빈 beat, Vertex 배치 실패한 회차).
+  // 설계 의도는 "임베딩 없으면 키워드 축만으로 랭킹" 이므로 0 으로 떨어뜨리는 게 맞다.
   const vecExpr = vec
-    ? `GREATEST(1 - (emb_dialogue <=> ${p(vec)}::vector), 1 - (emb_summary <=> ${p(vec)}::vector))`
+    ? `COALESCE(GREATEST(1 - (emb_dialogue <=> ${p(vec)}::vector), 1 - (emb_summary <=> ${p(vec)}::vector)), 0)`
     : `0`;
   // 가중합 하이브리드. 둘 다 0..1 스케일이라 단순 합이 성립.
   const scoreExpr = `(0.5 * ${lexExpr} + 0.5 * ${vecExpr})`;
@@ -2416,7 +2461,7 @@ export async function searchSegments(q: SearchQuery): Promise<SearchHit[]> {
            ${lexExpr} AS lex, ${vecExpr} AS vec, ${scoreExpr} AS score
       FROM search_segments
       ${where.length ? "WHERE " + where.join(" AND ") : ""}
-     ORDER BY score DESC, highlight_score DESC NULLS LAST, start_sec
+     ORDER BY score DESC NULLS LAST, highlight_score DESC NULLS LAST, start_sec
      LIMIT ${topK}`;
 
   const { rows } = await pool.query(sql, params);

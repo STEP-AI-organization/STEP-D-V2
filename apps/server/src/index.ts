@@ -215,7 +215,7 @@ import {
   type SearchEventKind,
 } from "./db-pg.ts";
 import { hasFfmpeg, probe, captureThumbnail, circleCrop, trimEncode, remuxFaststart, renderShort } from "./ffmpeg.ts";
-import { issueOAuthState, consumeOAuthState } from "./oauth-state.ts";
+import { issueOAuthState, consumeOAuthState, HANDOFF_TTL_MS } from "./oauth-state.ts";
 import { embedQuery } from "./search-embed.ts";
 import { parseQuery } from "./search-parse.ts";
 import { newId } from "./pipeline.ts";
@@ -292,7 +292,7 @@ import {
   readTrack,
 } from "./episode-intake.ts";
 import { dispatchPublish } from "./publish-dispatch.ts";
-import { opsCapabilityOf, canPublish } from "./ops-role.ts";
+import { opsCapabilityOf, canPublish, isOpsRole, OPS_ROLES } from "./ops-role.ts";
 import {
   AUTO_TOPUP_HARD_MAX_KRW_PER_MONTH, AUTO_TOPUP_HARD_MAX_PER_DAY,
   CREDIT_UNIT_LABEL, MANUAL_REASONS, buildTopup, checkCredits, creditPriceKrw,
@@ -718,6 +718,8 @@ app.get("/api/workspace/members", async (c) => {
   return c.json({
     members: members.map((m) => ({
       id: m.id, email: m.email, name: m.name, role: m.role, status: m.status,
+      // 송출 권한(운영 역할)도 함께 — 화면이 현재 값을 못 보여주면 아무도 못 고친다.
+      opsRole: (m as any).opsRole ?? null,
       createdAt: m.createdAt, lastLoginAt: m.lastLoginAt, isMe: m.id === user.id,
     })),
   });
@@ -733,14 +735,20 @@ app.get("/api/workspace/members", async (c) => {
 app.patch("/api/workspace/members/:id", async (c) => {
   const user = requireManager(c);
   const targetId = c.req.param("id");
-  const { role, status } = await c.req.json<{ role?: string; status?: string }>().catch(() => ({}) as any);
+  const { role, status, opsRole } = await c.req
+    .json<{ role?: string; status?: string; opsRole?: string }>().catch(() => ({}) as any);
 
   if (targetId === user.id) {
     return c.json({ error: "cannot_change_self", message: "자기 자신의 권한은 바꿀 수 없습니다." }, 400);
   }
   if (role && !["owner", "admin", "member"].includes(role)) return c.json({ error: "invalid_role" }, 400);
   if (status && !["active", "suspended"].includes(status)) return c.json({ error: "invalid_status" }, 400);
-  if (!role && !status) return c.json({ error: "nothing_to_update" }, 400);
+  // 송출 권한(cp/editor/vendor 등)은 워크스페이스 역할과 **다른 축**이다 — 여기서 안 받으면
+  // 제품 안에 배포 권한을 주는 문이 하나도 없다(새 워크스페이스는 배포가 영구 403이었다).
+  if (opsRole !== undefined && !isOpsRole(opsRole)) {
+    return c.json({ error: "invalid_ops_role", message: `운영 역할은 ${OPS_ROLES.join(" · ")} 중 하나여야 합니다.` }, 400);
+  }
+  if (!role && !status && opsRole === undefined) return c.json({ error: "nothing_to_update" }, 400);
 
   const target = await getMember(user.tenantId, targetId);
   if (!target) return c.json({ error: "not_found" }, 404);
@@ -761,7 +769,7 @@ app.patch("/api/workspace/members/:id", async (c) => {
     }, 400);
   }
 
-  await updateMember(user.tenantId, targetId, { role: role as any, status });
+  await updateMember(user.tenantId, targetId, { role: role as any, status, opsRole });
   // 정지는 세션까지 끊어야 실제로 막힌다 — 안 그러면 이미 열려 있는 창은 계속 돈다.
   if (status === "suspended") await destroyAllSessions(targetId);
   return c.json({ ok: true });
@@ -7475,8 +7483,11 @@ function oauthStateGuard(
 ) {
   return async (c: Context) => {
     const st = await consumeOAuthState(c.req.query("state"));
-    if (!st) {
-      const why = c.req.query("error") ? "access_denied" : "invalid_state";
+    if (!st.ok) {
+      // 만료·위조·사용자 거부를 구분해서 알린다 — "다시 시도" 와 "새 링크를 요청" 은
+      // 사용자가 해야 할 일이 다르다.
+      const why = c.req.query("error") ? "access_denied"
+        : st.reason === "expired" ? "state_expired" : "invalid_state";
       return c.redirect(`${fallbackReturn}?${errorParam}=${why}`);
     }
     const run = () => handler(c, st.data);
@@ -7543,10 +7554,12 @@ app.post("/api/factory/channels/connect-url", async (c) => {
     }, 400);
   }
   // publish 모드여야 업로드 스코프가 붙는다. analytics 로 연결하면 배포에 못 쓴다.
+  // 이 링크는 **채널 주인에게 전달돼 며칠 뒤에 열린다** — 화면 즉시 연결과 같은 30분 TTL 을
+  // 쓰면 동의를 다 마친 뒤에 튕긴다.
   const state = await issueOAuthState({
     channel: b?.channelUrl ?? "", mode: "publish", return: "/register",
     ...(extReturn ? { extReturn } : {}),
-  });
+  }, HANDOFF_TTL_MS);
   return c.json({ url: googleAuthUrl(state, "publish") });
 });
 
