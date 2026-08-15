@@ -3943,6 +3943,92 @@ function hexToAss(hex: string): string {
 function assEscape(text: string): string {
   return String(text ?? "").replace(/\\/g, "\\\\").replace(/[{}]/g, (ch) => "\\" + ch).replace(/\r?\n/g, "\\N");
 }
+
+/**
+ * ASS Fontsize 는 CSS font-size 와 **같은 숫자가 아니다.**
+ *
+ * libass 는 VSFilter 호환으로 폰트를 `FT_SIZE_REQUEST_TYPE_REAL_DIM` 으로 요청한다 —
+ * Fontsize 가 em 이 아니라 **글자 셀 높이**(OS/2 usWinAscent+usWinDescent)가 된다. 그래서
+ * 미리보기(CSS px = em)와 같은 숫자를 넣으면 렌더 글자만 계통적으로 작게 나온다.
+ * 실측 (assets/fonts/Pretendard-{Bold,ExtraBold,Black}.otf — 3종 동일):
+ *   upem 2048 · winAscent 1949 + winDescent 494 = 2443 → em = fs × 2048/2443 = 0.838·fs
+ * 즉 CSS px 를 그대로 쓰면 **16% 작다**. 반대로 곱해서 넣는다.
+ * (폰트를 바꾸면 이 상수도 다시 재야 한다 — 값은 폰트 메트릭에서 나온다.)
+ */
+const ASS_FS_PER_CSS_PX = 2443 / 2048;
+/** 미리보기 CSS px(출력 해상도 환산) → ASS Fontsize. */
+function assFs(cssPx: number): number {
+  return Math.max(12, Math.round(cssPx * ASS_FS_PER_CSS_PX));
+}
+
+/**
+ * Pretendard 문자 폭 근사(em 배수) — 서버가 미리보기와 **같은 자리에서** 줄을 접기 위한 것.
+ * 실측 advance(Pretendard-ExtraBold.otf): 한글 0.864 · 한자 1.0 · 대문자 0.74~0.89 ·
+ * 소문자 0.27~0.61 · 숫자 0.68 · 공백 0.224 · 마침표류 0.29. 클래스 평균으로 뭉갠다 —
+ * 목표는 픽셀 정확도가 아니라 "미리보기와 같은 단어에서 접히는가" 다.
+ */
+function charWidthEm(ch: string): number {
+  const c = ch.codePointAt(0) ?? 0;
+  if (ch === " ") return 0.224;
+  if (c >= 0xac00 && c <= 0xd7a3) return 0.864;   // 한글 음절
+  if (c >= 0x3131 && c <= 0x318e) return 0.864;   // 한글 자모
+  if (c >= 0x4e00 && c <= 0x9fff) return 1.0;     // 한자
+  if (c >= 0x3000 && c <= 0x30ff) return 0.94;    // 일본어·전각 구두점
+  if (c >= 0xff01 && c <= 0xff60) return 1.0;     // 전각
+  if (c >= 0x41 && c <= 0x5a) return 0.76;        // A-Z
+  if (c >= 0x61 && c <= 0x7a) return 0.55;        // a-z
+  if (c >= 0x30 && c <= 0x39) return 0.68;        // 0-9
+  if (".,·:;!'|".includes(ch)) return 0.3;
+  if (c < 0x80) return 0.5;
+  return 0.9;
+}
+function textWidthPx(text: string, fontPx: number): number {
+  let em = 0;
+  for (const ch of String(text ?? "")) em += charWidthEm(ch);
+  return em * fontPx;
+}
+/** 한글·한자·전각은 글자 사이에서도 접힌다(브라우저 기본과 동일). */
+function isWideBreakable(ch: string): boolean {
+  const c = ch.codePointAt(0) ?? 0;
+  return (c >= 0xac00 && c <= 0xd7a3) || (c >= 0x3131 && c <= 0x318e) ||
+    (c >= 0x4e00 && c <= 0x9fff) || (c >= 0x3000 && c <= 0x30ff) || (c >= 0xff01 && c <= 0xff60);
+}
+/**
+ * CSS 자동 줄바꿈 재현 — 미리보기는 블록 폭에서 접히는데 ASS 는 `WrapStyle: 2`(줄바꿈 없음)라
+ * 긴 제목이 **화면 밖으로 나갔다**(2026-08-12 실측). 여기서 미리 접어 넣는다.
+ * 브라우저 기본과 같은 그리디 규칙: 공백에서 접고, 한글·한자는 글자 사이에서도 접는다.
+ */
+function wrapTextToWidth(text: string, maxPx: number, fontPx: number): string[] {
+  const src = String(text ?? "").replace(/\s+/g, " ").trim();
+  if (!src || !(maxPx > 0) || !(fontPx > 0)) return src ? [src] : [];
+  // 토큰 = 공백 · 전각 1글자 · 라틴 단어(끊지 않는다)
+  const tokens: string[] = [];
+  let buf = "";
+  for (const ch of src) {
+    if (ch === " " || isWideBreakable(ch)) {
+      if (buf) { tokens.push(buf); buf = ""; }
+      tokens.push(ch);
+    } else buf += ch;
+  }
+  if (buf) tokens.push(buf);
+
+  const lines: string[] = [];
+  let line = "";
+  let w = 0;
+  for (const tk of tokens) {
+    const tw = textWidthPx(tk, fontPx);
+    if (tk === " ") {
+      if (!line) continue;            // 줄머리 공백은 버린다 (CSS 와 동일)
+      line += tk; w += tw; continue;
+    }
+    if (line && w + tw > maxPx) {
+      lines.push(line.trimEnd());
+      line = tk; w = tw;
+    } else { line += tk; w += tw; }
+  }
+  if (line.trim()) lines.push(line.trimEnd());
+  return lines.length ? lines : [src];
+}
 function assTime(sec: number): string {
   const s = Math.max(0, sec);
   const h = Math.floor(s / 3600);
@@ -4124,6 +4210,80 @@ export function pickKeywordIdx(tokens: string[]): Set<number> {
   return new Set(scored.slice(0, n).map((x) => x.i));
 }
 
+/**
+ * 미리보기 스테이지 px → 출력 px 배율.
+ *
+ * 미리보기 스테이지는 CSS 로 `min(72vh, 640px)` 라 **뷰포트가 낮으면 640 보다 작다** — 그런데
+ * 제목·채널 글자 크기는 절대 px 라, 기준을 640 으로 고정하면 사용자가 본 것보다 작게 굽는다
+ * (실측: 스테이지 553px 에서 16% 차이). 에디터가 실측값(`stagePx`)을 보내면 그걸 쓰고,
+ * 없으면 종전대로 캐논 스테이지로 폴백한다 — 옛 저장분도 그대로 굽힌다.
+ */
+function editorScale(es: any, H: number, stageH: number): number {
+  const measured = Number(es?.stagePx);
+  const eff = Number.isFinite(measured) && measured >= 200 && measured <= 4000 ? measured : stageH;
+  return H / eff;
+}
+
+/**
+ * 채널 뱃지 배치 — 미리보기(editor-preview.tsx)의 흐름 배치를 서버가 그대로 재현한다.
+ *
+ *   가로(기본): [아이콘][gap 8px][이름 + 부가줄]  행 전체를 가운데, 상단이 channelY
+ *   세로:       [아이콘] gap 4px [이름 + 부가줄]  열 전체를 가운데
+ *
+ * 아이콘은 ASS 가 아니라 ffmpeg overlay 로 얹히므로 **좌표를 두 곳에서 따로 계산하면 반드시
+ * 어긋난다** — 여기 한 군데서 만들어 양쪽에 나눠 준다.
+ * `channelIconY` 가 명시된 상태(방송 템플릿 시드)는 아이콘을 흐름에서 빼고 그 자리에 고정한다.
+ */
+type BadgeLine = { text: string; x: number; y: number; an: number; px: number; dim?: boolean };
+type BadgeLayout = { lines: BadgeLine[]; icon: { x: number; y: number } | null };
+function channelBadgeLayout(
+  es: any, W: number, H: number, scale: number, icon: { w: number; h: number } | null,
+): BadgeLayout | null {
+  const name = String(es?.channelName ?? "").trim();
+  if (!es?.showChannel || !name) return null;
+  const labelPx = Math.max(8, Math.min(64, Number(es.channelLabelSize) || 14)) * scale;
+  const chY = ((Number(es.channelY) || 88) / 100) * H;
+  const LEADING = 1.25; // leading-tight
+  const extras = (Array.isArray(es.channelExtraLines) ? es.channelExtraLines : [])
+    .map((l: any) => ({ text: String(l?.text ?? "").trim(), size: Number(l?.size) }))
+    .filter((l: any) => l.text.length > 0)
+    .map((l: any) => {
+      const stagePx = Math.max(6, Math.min(48, l.size > 0 ? l.size : Math.round((labelPx / scale) * 0.75)));
+      return { text: l.text, px: stagePx * scale, marginTop: Math.max(1, Math.round(stagePx * 0.2)) * scale };
+    });
+  const textH = labelPx * LEADING + extras.reduce((s: number, e: any) => s + e.marginTop + e.px * LEADING, 0);
+  const textW = Math.max(textWidthPx(name, labelPx), ...extras.map((e: any) => textWidthPx(e.text, e.px)));
+
+  const vertical = String(es.channelLayout ?? "horizontal") === "vertical";
+  const gap = (vertical ? 4 : 8) * scale; // web gap-1 / gap-2
+  const flowIcon = icon && !(Number(es.channelIconY) > 0) ? icon : null;
+  let textLeft = (W - textW) / 2;
+  let textTop = chY;
+  let iconPos: { x: number; y: number } | null = null;
+  if (flowIcon && !vertical) {
+    const rowW = flowIcon.w + gap + textW;
+    const rowH = Math.max(flowIcon.h, textH);
+    const left = (W - rowW) / 2;
+    iconPos = { x: left, y: chY + (rowH - flowIcon.h) / 2 };
+    textLeft = left + flowIcon.w + gap;
+    textTop = chY + (rowH - textH) / 2;
+  } else if (flowIcon) {
+    iconPos = { x: (W - flowIcon.w) / 2, y: chY };
+    textTop = chY + flowIcon.h + gap;
+  }
+  // 텍스트 블록은 가로 배치에서 items-start(좌측 정렬), 세로 배치에서 items-center.
+  const an = vertical ? 8 : 7;
+  const x = vertical ? W / 2 : textLeft;
+  const lines: BadgeLine[] = [{ text: name, x, y: textTop, an, px: labelPx }];
+  let y = textTop + labelPx * LEADING;
+  for (const e of extras) {
+    y += e.marginTop;
+    lines.push({ text: e.text, x, y, an, px: e.px, dim: true });
+    y += e.px * LEADING;
+  }
+  return { lines, icon: iconPos };
+}
+
 function buildEditorAss(
   es: any,
   W: number,
@@ -4135,9 +4295,11 @@ function buildEditorAss(
     include?: "all" | "decorations" | "captions";
     /** Render-relative windows in which decorative events may appear. */
     visibleIntervals?: Array<{ start: number; end: number }>;
+    /** 실제로 얹힐 채널 아이콘의 출력 px 크기 — 가로 배치의 행 중앙정렬 계산에 쓴다. */
+    channelIcon?: { w: number; h: number } | null;
   } = {},
 ): string | null {
-  const scale = H / stageH;
+  const scale = editorScale(es, H, stageH);
   const decorationEv: string[] = [];
   const captionEv: string[] = [];
   const includeDecorations = options.include !== "captions";
@@ -4176,38 +4338,62 @@ function buildEditorAss(
 
   if (es && typeof es === "object") {
     let yOff = 0;
+    // 미리보기 제목은 **폭 86% 블록**(padding 0 4px)이 titleX% 를 중심으로 놓이고,
+    // 좌/우 정렬은 그 블록 안에서만 움직인다(editor-preview.tsx). 예전엔 \an7/\an9 를
+    // titleX 지점에 그대로 붙여서, 좌·우 정렬 클립이 최대 0.43·W(9:16 에서 464px) 어긋났다.
+    const TITLE_BLOCK = 0.86;
+    const TITLE_PAD_PX = 4;
     for (const t of Array.isArray(es.titleLines) ? es.titleLines : []) {
       if (!t?.text?.trim()) continue;
-      const fs = Math.max(12, Math.round((t.size ?? 30) * scale));
-      const bx = ((es.titleX ?? 50) / 100) * W;
-      const by = ((es.titleY ?? 8) / 100) * H + yOff;
-      const an = es.titleAlign === "left" ? 7 : es.titleAlign === "right" ? 9 : 8;
+      const px = Math.max(6, (t.size ?? 30) * scale);   // 미리보기 CSS px 등가(출력 해상도)
+      const fs = assFs(px);
+      const align = es.titleAlign === "left" ? "left" : es.titleAlign === "right" ? "right" : "center";
+      const an = align === "left" ? 7 : align === "right" ? 9 : 8;
+      const cx = ((es.titleX ?? 50) / 100) * W;         // 블록 중심
+      const half = (TITLE_BLOCK * W) / 2;
+      const pad = TITLE_PAD_PX * scale;
+      const bx = align === "left" ? cx - half + pad : align === "right" ? cx + half - pad : cx;
+      const by0 = ((es.titleY ?? 11) / 100) * H + yOff; // 기본값은 웹 EMPTY_STATE 와 같은 11
       const color = hexToAss(t.color ?? "#FFFFFF");
+      const adv = Math.round(px * 1.15);                // CSS line-height: 1.15
+      // 미리보기에서 접히는 폭에서 서버도 접는다 — ASS 는 자동 줄바꿈이 없다(WrapStyle 2).
+      const rows = wrapTextToWidth(t.text, TITLE_BLOCK * W - 2 * pad, px);
       const win = winFor(t);
       if (win) {
         const kfs: KfPoint[] = Array.isArray(t.keyframes) ? t.keyframes : [];
-        if (kfs.length) {
-          // Title-line keyframe x/y are OFFSETS from the layout (cqw/cqh = % of stage).
-          for (let s = win[0]; s < win[1] - 1e-6; s += SAMPLE_STEP) {
-            const k = sampleKf(kfs, s);
-            const extra = `\\fscx${Math.round(k.scale * 100)}\\fscy${Math.round(k.scale * 100)}${assAlpha(k.opacity)}\\frz${(-k.rotation).toFixed(1)}`;
-            putWin(an, bx + ((k.x ?? 0) / 100) * W, by + ((k.y ?? 0) / 100) * H, fs, color, 2, "&H00000000&", t.text, s, Math.min(win[1], s + SAMPLE_STEP), extra);
+        rows.forEach((row, ri) => {
+          const by = by0 + ri * adv;
+          if (kfs.length) {
+            // Title-line keyframe x/y are OFFSETS from the layout (cqw/cqh = % of stage).
+            for (let s = win[0]; s < win[1] - 1e-6; s += SAMPLE_STEP) {
+              const k = sampleKf(kfs, s);
+              // CSS transform 은 글자 상자 **중심**을 원점으로 돌리고 키운다. ASS 는 \an 앵커
+              // (제목=상단중앙) 기준이라, 회전 원점을 \org 로 중심에 맞추고 확대분의 절반을
+              // 위로 되돌려야 미리보기와 같은 자리에서 자란다.
+              const orgY = Math.round(by + ((k.y ?? 0) / 100) * H + px / 2);
+              const orgX = Math.round(bx + ((k.x ?? 0) / 100) * W);
+              const grow = (k.scale ?? 1) - 1;
+              const yFix = grow * px / 2;
+              // 좌/우 정렬은 가로도 한쪽으로만 자란다(중앙정렬은 대칭이라 보정 불필요).
+              const xFix = an === 8 ? 0 : (an === 7 ? -1 : 1) * grow * textWidthPx(row, px) / 2;
+              const extra = `\\fscx${Math.round(k.scale * 100)}\\fscy${Math.round(k.scale * 100)}${assAlpha(k.opacity)}\\frz${(-k.rotation).toFixed(1)}\\org(${orgX},${orgY})`;
+              putWin(an, bx + ((k.x ?? 0) / 100) * W + xFix, by + ((k.y ?? 0) / 100) * H - yFix, fs, color, 2, "&H00000000&", row, s, Math.min(win[1], s + SAMPLE_STEP), extra);
+            }
+          } else {
+            putWin(an, bx, by, fs, color, 2, "&H00000000&", row, win[0], win[1]);
           }
-        } else {
-          putWin(an, bx, by, fs, color, 2, "&H00000000&", t.text, win[0], win[1]);
-        }
+        });
       }
-      yOff += Math.round(fs * 1.15);
+      yOff += rows.length * adv;
     }
-    if (es.showChannel && es.channelName?.trim()) {
-      // channelLabelSize(에디터 px, 웹 프리뷰와 같은 필드)가 있으면 그걸 쓴다 — 하단 띠를
-      // 크게 채우는 브랜딩용. 기본값은 기존과 동일한 14×1.2.
-      const chPx = Number((es as any).channelLabelSize) > 0
-        ? Number((es as any).channelLabelSize) : 14 * 1.2;
-      const fs = Math.max(12, Math.round(chPx * scale));
-      const chY = Math.round(((es.channelY ?? 82) / 100) * H);
-      // 채널명은 그대로 — 예전엔 "▶ " 를 앞에 굽었는데 지저분해서 뺐다(사용자 2026-08-12).
-      put(8, Math.round(0.5 * W), chY, fs, "&H00FFFFFF&", 2, "&H00000000&", es.channelName);
+    // 채널 뱃지 — 이름 + 부가줄(channelExtraLines). 부가줄은 예전엔 미리보기에만 있고
+    // 서버가 아예 안 구워서 **결과물에서 통째로 증발**했다(소비처 미도달).
+    // 채널명은 그대로 — 예전엔 "▶ " 를 앞에 굽었는데 지저분해서 뺐다(사용자 2026-08-12).
+    const badge = channelBadgeLayout(es, W, H, scale, options.channelIcon ?? null);
+    for (const line of badge?.lines ?? []) {
+      // 부가줄은 미리보기가 text-white/80 (font-medium) — 알파 &H33 로 맞춘다.
+      put(line.an, line.x, line.y, assFs(line.px), line.dim ? "&H33FFFFFF&" : "&H00FFFFFF&",
+        2, "&H00000000&", line.text);
     }
     // 방영시간 박스 라벨 (broadcast-standard) — 파란 박스 + 흰 텍스트. BoxLabel 스타일은
     // BorderStyle=3(박스)이고 박스 색은 인라인 \3c 로 지정한다.
@@ -4215,7 +4401,7 @@ function buildEditorAss(
     if (es.showChannel && boxText) {
       const boxY = Math.round(((Number((es as any).channelBoxY) || 79.5) / 100) * H);
       const boxColor = hexToAss(String((es as any).channelBoxColor || "#3D7BD9"));
-      const fs = Math.max(12, Math.round(22 * scale));
+      const fs = assFs(22 * scale);
       pushDecor(0, durSec, (start, finish) =>
         `Dialogue: 0,${assTime(start)},${assTime(finish)},BoxLabel,,0,0,0,,` +
         `{\\an8\\pos(${Math.round(0.5 * W)},${boxY})\\fs${fs}\\3c${boxColor}\\4c${boxColor}}${assEscape(boxText)}`,
@@ -4223,7 +4409,7 @@ function buildEditorAss(
     }
     for (const el of Array.isArray(es.elements) ? es.elements : []) {
       if (!el?.text?.trim()) continue;
-      const fs = Math.max(12, Math.round((el.size ?? (el.type === "arrow" ? 40 : 14)) * scale));
+      const fs = assFs((el.size ?? (el.type === "arrow" ? 40 : 14)) * scale);
       const win = winFor(el);
       if (!win) continue;
       const kfs: KfPoint[] = Array.isArray(el.keyframes) ? el.keyframes : [];
@@ -4281,20 +4467,23 @@ function buildEditorAss(
             if (j === i) return `{\\1c${keyIdx.has(j) ? capKey : capHi}}${tok}{\\1c${white}}`;
             return tok;
           });
-          captionEv.push(`Dialogue: 0,${assTime(prev)},${assTime(lineEnd)},Caption,,0,0,0,,{\\1c${white}}${parts.join(" ")}`);
+          // \q1 = 그리디 자동 줄바꿈. 스크립트 전역은 WrapStyle 2(줄바꿈 없음)라, 이게 없으면
+          // 긴 문장이 미리보기에선 접히고 렌더에선 화면 밖으로 뻗는다.
+          captionEv.push(`Dialogue: 0,${assTime(prev)},${assTime(lineEnd)},Caption,,0,0,0,,{\\q1\\1c${white}}${parts.join(" ")}`);
           prev = we;
         });
       } else {
-        captionEv.push(`Dialogue: 0,${assTime(cap.start)},${assTime(cap.end)},Caption,,0,0,0,,${assEscape(text)}`);
+        captionEv.push(`Dialogue: 0,${assTime(cap.start)},${assTime(cap.end)},Caption,,0,0,0,,{\\q1}${assEscape(text)}`);
       }
     }
   }
 
   const ev = [...decorationEv, ...captionEv];
   if (!ev.length) return null;
-  const capFs = Math.round(H * 0.042);
   const capMV = Math.round(H * 0.14);
   const capStyle = (es && typeof es === "object" && es.captionStyle) || "korean_pop";
+  // 자막 좌우 여백은 미리보기 컨테이너(px-6 = 스테이지 24px)와 같게 — 이 폭에서 \q1 이 접는다.
+  const capMH = Math.max(8, Math.round(24 * scale));
   return (
     `[Script Info]\nScriptType: v4.00+\nPlayResX: ${W}\nPlayResY: ${H}\nWrapStyle: 2\nScaledBorderAndShadow: yes\n\n` +
     `[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, OutlineColour, BackColour, Bold, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n` +
@@ -4304,7 +4493,7 @@ function buildEditorAss(
     `Style: Default,Pretendard ExtraBold,48,&H00FFFFFF,&H00000000,&H00000000,1,1,2,1,5,20,20,20,1\n` +
     // 방영시간 박스 라벨 — BorderStyle=3(불투명 박스), Outline=박스 패딩. 박스 색은 인라인 \3c.
     `Style: BoxLabel,Pretendard ExtraBold,48,&H00FFFFFF,&H00D97B3D,&H00D97B3D,1,3,14,0,5,20,20,20,1\n` +
-    captionAssStyle(capStyle, capFs, capMV) + "\n\n" +
+    captionAssStyle(capStyle, H, capMV, capMH) + "\n\n" +
     `[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n` +
     ev.join("\n") + "\n"
   );
@@ -4319,43 +4508,61 @@ function buildEditorAss(
  * Fields: Name,Fontname,Fontsize,PrimaryColour,OutlineColour,BackColour,Bold,BorderStyle,
  *         Outline,Shadow,Alignment,MarginL,MarginR,MarginV,Encoding.
  */
-function captionAssStyle(style: string, fs: number, mv: number): string {
+/**
+ * 자막 크기는 **미리보기 표(editor-preview.tsx::captionStyleClasses)의 cqh 값이 정본**이다.
+ * cqh = 스테이지 높이 % 이고 PlayResY = 출력 높이라, 같은 % 를 그대로 쓰면 1:1 로 맞는다.
+ * 예전엔 기준 4.2% × 스타일 배율(0.91~1.10)로 따로 계산해서 최대 0.9% 어긋났다 —
+ * 값을 두 군데서 굴리면 언젠가 갈라진다. 여기 표는 웹 표와 숫자가 같아야 한다.
+ */
+const CAPTION_PCT: Record<string, number> = {
+  news: 4.2, clean: 3.9, yellow_pop: 4.4, cyan_neon: 4.3, pink_bubble: 3.9,
+  outline_bold: 4.6, shadow_soft: 3.9, highlight_bar: 4.1, typewriter: 3.8, korean_pop: 4.4,
+};
+
+function captionAssStyle(style: string, H: number, mv: number, mh: number): string {
+  // 웨이트도 미리보기와 맞춘다 — 설치 폰트는 Bold(700)·ExtraBold(800)·Black(900) 3종이라
+  // font-extrabold 는 "Pretendard ExtraBold", font-black 은 "Pretendard Black" 를 지정해야
+  // 한 단계 얇게 나가지 않는다(가족명 실측: Pretendard / Pretendard ExtraBold / Pretendard Black).
   const font = "Pretendard";
+  const xbold = "Pretendard ExtraBold";
+  const black = "Pretendard Black";
+  const fs = assFs((H * (CAPTION_PCT[style] ?? CAPTION_PCT.korean_pop)) / 100);
   // ASS 필드: Name, Fontname, Fontsize, PrimaryColour, OutlineColour, BackColour, Bold,
   //          BorderStyle(1=outline+shadow, 3=box), Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
   // 색은 &HAABBGGRR (Alpha·B·G·R). 프리뷰(editor-preview.tsx:captionStyleClasses)와 시각 매칭.
   switch (style) {
     case "news":
-      // 뉴스: 흰 텍스트 + 반투명 검은 박스 (프리뷰 rounded bg-black/70)
-      return `Style: Caption,${font},${fs},&H00FFFFFF,&H00000000,&HA0000000,1,3,0,0,2,60,60,${mv},1`;
+      // 뉴스: 흰 텍스트 + 반투명 검은 박스 (프리뷰 rounded bg-black/70 · font-bold)
+      return `Style: Caption,${font},${fs},&H00FFFFFF,&H00000000,&HA0000000,1,3,0,0,2,${mh},${mh},${mv},1`;
     case "clean":
-      // 클린: 흰 텍스트 + 얇은 그림자 (프리뷰 textShadow 0 1px 3px)
-      return `Style: Caption,${font},${Math.round(fs * 0.92)},&H00FFFFFF,&H00000000,&H00000000,1,1,1,0,2,60,60,${mv},1`;
+      // 클린: 흰 텍스트 + 얇은 그림자 (프리뷰 textShadow 0 1px 3px · font-semibold)
+      return `Style: Caption,${font},${fs},&H00FFFFFF,&H00000000,&H00000000,1,1,1,0,2,${mh},${mh},${mv},1`;
     case "yellow_pop":
-      // 노란 팝 (하하 학습 신호): 노랑 #FFD400 (BGR &H0000D4FF) + 검정 스트로크 + 그림자
-      return `Style: Caption,${font},${Math.round(fs * 1.05)},&H0000D4FF,&H00000000,&H80000000,1,1,4,2,2,60,60,${mv},1`;
+      // 노란 팝: 노랑 #FFD400 (BGR &H0000D4FF) + 검정 스트로크 + 그림자 (font-extrabold)
+      return `Style: Caption,${xbold},${fs},&H0000D4FF,&H00000000,&H80000000,1,1,4,2,2,${mh},${mh},${mv},1`;
     case "cyan_neon":
-      // 시안 네온: 시안 #00E5FF (BGR &H00FFE500) + 시안 아웃라인 (네온 그로우 근사, ASS는 진짜 glow 없음)
-      return `Style: Caption,${font},${Math.round(fs * 1.03)},&H00FFE500,&H00CC8500,&H00000000,1,1,3,0,2,60,60,${mv},1`;
+      // 시안 네온: 시안 #00E5FF (BGR &H00FFE500) + 시안 아웃라인 (네온 그로우 근사 · font-extrabold)
+      return `Style: Caption,${xbold},${fs},&H00FFE500,&H00CC8500,&H00000000,1,1,3,0,2,${mh},${mh},${mv},1`;
     case "pink_bubble":
-      // 핑크 버블: 흰 텍스트 + 핑크 박스 #EC4899 (BGR &H009948EC)
-      return `Style: Caption,${font},${Math.round(fs * 0.93)},&H00FFFFFF,&H00000000,&HD09948EC,1,3,0,0,2,60,60,${mv},1`;
+      // 핑크 버블: 흰 텍스트 + 핑크 박스 #EC4899 (BGR &H009948EC · font-bold)
+      return `Style: Caption,${font},${fs},&H00FFFFFF,&H00000000,&HD09948EC,1,3,0,0,2,${mh},${mh},${mv},1`;
     case "outline_bold":
-      // 굵은 아웃라인만: 프리뷰가 transparent + 2px 흰 stroke → 검정 fill + 굵은 흰 스트로크(근사)
-      return `Style: Caption,${font},${Math.round(fs * 1.10)},&H00000000,&H00FFFFFF,&H00000000,1,1,5,0,2,60,60,${mv},1`;
+      // 굵은 아웃라인만: 프리뷰가 transparent + 2px 흰 stroke → 검정 fill + 굵은 흰 스트로크(근사 · font-black)
+      return `Style: Caption,${black},${fs},&H00000000,&H00FFFFFF,&H00000000,1,1,5,0,2,${mh},${mh},${mv},1`;
     case "shadow_soft":
-      // 부드러운 그림자: 흰 텍스트 + 큰 부드러운 그림자 (프리뷰 0 2px 12px)
-      return `Style: Caption,${font},${Math.round(fs * 0.93)},&H00FFFFFF,&H00000000,&H80000000,0,1,0,4,2,60,60,${mv},1`;
+      // 부드러운 그림자: 흰 텍스트 + 큰 부드러운 그림자 (프리뷰 0 2px 12px · font-medium)
+      return `Style: Caption,${font},${fs},&H00FFFFFF,&H00000000,&H80000000,0,1,0,4,2,${mh},${mh},${mv},1`;
     case "highlight_bar":
-      // 형광펜: 검정 텍스트 + 노랑 박스 #FFE066 (BGR &H0066E0FF)
-      return `Style: Caption,${font},${Math.round(fs * 0.98)},&H00000000,&H00000000,&H0066E0FF,1,3,0,0,2,60,60,${mv},1`;
+      // 형광펜: 검정 텍스트 + 노랑 박스 #FFE066 (BGR &H0066E0FF · font-bold)
+      return `Style: Caption,${font},${fs},&H00000000,&H00000000,&H0066E0FF,1,3,0,0,2,${mh},${mh},${mv},1`;
     case "typewriter":
-      // 타자기: 흰 텍스트 + 검정 박스 + 자간 넓게 (Bold=1)
-      return `Style: Caption,Courier New,${Math.round(fs * 0.91)},&H00FFFFFF,&H00000000,&HFF000000,1,3,0,0,2,60,60,${mv},1`;
+      // 타자기: 흰 텍스트 + 검정 박스 + 자간 넓게. ⚠️ Courier New 는 렌더 이미지에 없어
+      // fontconfig 폴백(DejaVu 계열)으로 나간다 — 미리보기(ui-monospace)와 서체가 다르다.
+      return `Style: Caption,Courier New,${fs},&H00FFFFFF,&H00000000,&HFF000000,1,3,0,0,2,${mh},${mh},${mv},1`;
     case "korean_pop":
     default:
-      // 예능 팝 (기본): 흰 텍스트 + 두꺼운 검정 스트로크 + 그림자
-      return `Style: Caption,${font},${Math.round(fs * 1.05)},&H00FFFFFF,&H00000000,&H80000000,1,1,4,2,2,60,60,${mv},1`;
+      // 예능 팝 (기본): 흰 텍스트 + 두꺼운 검정 스트로크 + 그림자 (font-extrabold)
+      return `Style: Caption,${xbold},${fs},&H00FFFFFF,&H00000000,&H80000000,1,1,4,2,2,${mh},${mh},${mv},1`;
   }
 }
 
@@ -4465,22 +4672,6 @@ async function renderClipMedia(opts: {
   let ass: string | null = null;
   let captionAss: string | null = null;
   let decorationAss: string | null = null;
-  if (dynamicReframe) {
-    const fitIntervals = fitIntervalsForPlan(opts.reframePlan!, startTime, endTime);
-    captionAss = buildEditorAss(
-      editorState, W, H, stageH, endTime - startTime, opts.captions,
-      { include: "captions" },
-    );
-    decorationAss = buildEditorAss(
-      editorState, W, H, stageH, endTime - startTime, opts.captions,
-      { include: "decorations", visibleIntervals: fitIntervals },
-    );
-    if (captionAss) fs.writeFileSync(captionAssTmp, captionAss, "utf-8");
-    if (decorationAss) fs.writeFileSync(decorationAssTmp, decorationAss, "utf-8");
-  } else {
-    ass = buildEditorAss(editorState, W, H, stageH, endTime - startTime, opts.captions);
-    if (ass) fs.writeFileSync(assTmp, ass, "utf-8");
-  }
 
   // Bake the main track's colour grade + volume + uniform speed into the render — previously
   // these were preview-only, so the deliverable silently ignored the operator's edits.
@@ -4503,7 +4694,9 @@ async function renderClipMedia(opts: {
   // 하단 브랜딩 아이콘 — **프로그램에서 미리 설정**한 이미지(brandIconDataUrl, 사용자 결정
   // 2026-08-12)를 원형으로 잘라 채널명 위에 얹는다. 없으면 조용히 생략(텍스트 브랜딩만).
   // hookPreroll 경로는 배지 미지원이라 프리롤일 땐 넘기지 않는다.
-  let badge: { path: string; y: number; h: number } | null = null;
+  let badge: { path: string; y: number; h: number; x?: number } | null = null;
+  /** 실제로 얹힐 아이콘 크기 — ASS(이름 위치)와 overlay(아이콘 위치)가 **같은 값**을 봐야 한다. */
+  let iconBox: { w: number; h: number } | null = null;
   if (editorState?.showChannel && !editorState?.channelIconOff && episodeId && !hookPreroll) {
     try {
       // 아이콘 소스 우선순위: 클립별 업로드(에디터 channelIconDataUrl) > 프로그램 기본
@@ -4518,7 +4711,7 @@ async function renderClipMedia(opts: {
       const m = /^data:image\/[\w.+-]+;base64,(.+)$/i.exec(iconSrc);
       if (m) {
         fs.writeFileSync(iconRawTmp, Buffer.from(m[1], "base64"));
-        const scale = H / stageH;
+        const scale = editorScale(editorState, H, stageH);
         // channelIconSize 는 **높이(px, 에디터 기준)** — 가로 워드마크도 세로 아이콘도
         // 높이로 통일해야 크기가 폭주하지 않는다 (2026-08-12 데모에서 정사각 로고가
         // 폭 기준 519px 로 부풀어 시간 박스를 덮었다).
@@ -4529,16 +4722,48 @@ async function renderClipMedia(opts: {
         const shape = String(editorState?.channelIconShape ?? "circle");
         let badgePath = iconRawTmp;
         if (shape === "circle") { await circleCrop(iconRawTmp, iconTmp, iconH); badgePath = iconTmp; }
-        // 위치: channelIconY(%) 명시가 우선, 없으면 채널명 위 (구 broadcast-clean 배치).
+        // 실제로 얹힐 **폭**을 잰다 — 가로 배치에서 이름을 얼마나 밀지가 여기서 정해진다.
+        // (ffmpeg 은 scale=-1:h 로 높이만 맞추므로 폭은 원본 비율에서 나온다.)
+        const dim = await probe(badgePath).catch(() => null);
+        const iconW = dim?.width && dim?.height
+          ? Math.max(1, Math.round(iconH * (dim.width / dim.height))) : iconH;
+        // 배치: 미리보기와 같은 흐름(아이콘+이름 한 행)으로 놓는다. channelIconY 가 명시된
+        // 템플릿 시드는 그 자리를 존중해 종전대로 독립 배치(그때는 이름도 화면 중앙).
+        iconBox = { w: iconW, h: iconH };
         const iconYPct = Number(editorState?.channelIconY);
-        const chY = ((Number(editorState?.channelY) || 82) / 100) * H;
-        const y = iconYPct > 0 ? Math.round((iconYPct / 100) * H) : Math.round(chY - iconH - 28);
-        badge = { path: badgePath, h: iconH, y };
+        const laid = channelBadgeLayout(editorState, W, H, scale, iconBox);
+        const chY = ((Number(editorState?.channelY) || 88) / 100) * H;
+        const y = iconYPct > 0
+          ? Math.round((iconYPct / 100) * H)
+          : Math.round(laid?.icon?.y ?? chY - iconH - 28);
+        const x = iconYPct > 0 || !laid?.icon ? undefined : Math.round(laid.icon.x);
+        badge = { path: badgePath, h: iconH, y, ...(x != null ? { x } : {}) };
       }
     } catch (e) {
       console.warn("[render] 브랜딩 아이콘 준비 실패(생략):", String(e).slice(0, 120));
     }
   }
+
+  // ASS 는 **아이콘 크기를 잰 뒤에** 만든다 — 가로 배치에서 채널명 x 가 아이콘 폭에 걸려
+  // 있어서, 순서가 바뀌면 이름과 아이콘이 서로 다른 기준으로 놓인다.
+  if (dynamicReframe) {
+    const fitIntervals = fitIntervalsForPlan(opts.reframePlan!, startTime, endTime);
+    captionAss = buildEditorAss(
+      editorState, W, H, stageH, endTime - startTime, opts.captions,
+      { include: "captions", channelIcon: iconBox },
+    );
+    decorationAss = buildEditorAss(
+      editorState, W, H, stageH, endTime - startTime, opts.captions,
+      { include: "decorations", visibleIntervals: fitIntervals, channelIcon: iconBox },
+    );
+    if (captionAss) fs.writeFileSync(captionAssTmp, captionAss, "utf-8");
+    if (decorationAss) fs.writeFileSync(decorationAssTmp, decorationAss, "utf-8");
+  } else {
+    ass = buildEditorAss(editorState, W, H, stageH, endTime - startTime, opts.captions,
+      { channelIcon: iconBox });
+    if (ass) fs.writeFileSync(assTmp, ass, "utf-8");
+  }
+
   try {
     if (!dynamicReframe && !ass && !videoFilters && !audioFilter && speed === 1 && aspect === "16:9" && !hookPreroll) {
       // Fast path only when there's genuinely nothing to bake (no overlays, no grade, no

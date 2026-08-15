@@ -202,7 +202,12 @@ export type RenderShortOpts = {
    *  스케일하고 가로는 비율 유지 + 화면 중앙 정렬((W-w)/2 식) — 정사각 아이콘과 가로
    *  워드마크 로고가 같은 코드로 자연스럽게 앉는다. ASS 번인 뒤에 얹는다.
    *  ⚠️ hookPreroll 경로에는 아직 미지원 — 캘러가 프리롤일 땐 넘기지 않는다. */
-  badge?: { path: string; y: number; h: number } | null;
+  /**
+   * 하단 브랜딩 아이콘. `x` 는 미리보기와 같은 흐름 배치(아이콘+채널명 한 행)를 위해 서버가
+   * 계산한 좌표 — 없으면 종전대로 가로 중앙. **ASS 의 채널명 x 와 같은 계산에서 나와야 한다**
+   * (index.ts `channelBadgeLayout`). 두 곳이 따로 계산하면 아이콘과 이름이 어긋난다.
+   */
+  badge?: { path: string; y: number; h: number; x?: number } | null;
   /** AI multi-layout plan. Times are absolute master seconds and tracking centres are
    * normalized source-frame coordinates. The renderer intersects it with startTime/endTime
    * and deterministically fills every uncovered gap with `fit`. */
@@ -309,6 +314,10 @@ const ffNum = (v: number): string => {
   const s = Number(v.toFixed(6)).toString();
   return s === "-0" ? "0" : s;
 };
+
+/** 브랜딩 아이콘의 overlay x — 서버가 흐름 배치로 계산해 줬으면 그 값, 아니면 가로 중앙. */
+const badgeX = (badge: { x?: number }): string =>
+  Number.isFinite(badge.x as number) ? ffNum(Math.round(badge.x as number)) : "(W-w)/2";
 
 /** Piecewise-linear focus expression for ffmpeg's per-frame crop x/y evaluation. */
 export function trackingAxisExpression(
@@ -611,7 +620,7 @@ function buildDynamicBodyGraph(
       .join("+");
     parts.push(`[${badgeInput}:v]scale=-1:${opts.badge.h}[${prefix}badge]`);
     parts.push(
-      `${last}[${prefix}badge]overlay=(W-w)/2:${opts.badge.y}:enable='${enable}'[${prefix}badged]`,
+      `${last}[${prefix}badge]overlay=${badgeX(opts.badge)}:${opts.badge.y}:enable='${enable}'[${prefix}badged]`,
     );
     last = `[${prefix}badged]`;
   }
@@ -813,7 +822,7 @@ export function renderShort(opts: RenderShortOpts): Promise<void> {
   if (opts.badge) {
     const bi = 1 + (fr ? 1 : 0);
     vf += `;[${bi}:v]scale=-1:${opts.badge.h}[bdg]` +
-          `;${last}[bdg]overlay=(W-w)/2:${opts.badge.y}[vbdg]`;
+          `;${last}[bdg]overlay=${badgeX(opts.badge)}:${opts.badge.y}[vbdg]`;
     last = "[vbdg]";
   }
   // Speed LAST — after the burn, so the captions/overlays already baked into the frames
