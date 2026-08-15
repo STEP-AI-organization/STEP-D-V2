@@ -465,7 +465,15 @@ function isPublicPath(path: string): boolean {
  * 기동 시 assertAuthPosture() 가 잡는다 — 사람이 기억하는 데 기대지 않는다.
  */
 async function resolveTenant(c: Context<AppEnv>): Promise<TenantContext> {
-  const rawKey = bearerKey(c.req.header("authorization"));
+  // 키는 두 자리에서 받는다.
+  //   Authorization: Bearer stepd_live_…  → Cloud Run 직통 호출(정석)
+  //   x-api-key: stepd_live_…             → **웹 프록시를 거치는 호출**
+  // 프로덕션 공개 주소(stepd.stepai.kr/api/proxy/…)는 Vercel 프록시가 Cloud Run IAM 용
+  // ID 토큰을 Authorization 에 덮어써서 보낸다 — 고객사가 Bearer 로 키를 실어도 서버까지
+  // 오지 않는다(그 경로로는 단 한 건도 인증되지 않는다). 프록시는 나머지 헤더를 그대로
+  // 통과시키므로, 별도 헤더를 정문으로 함께 열어 둔다.
+  const rawKey = bearerKey(c.req.header("authorization"))
+    ?? bearerKey(`Bearer ${c.req.header("x-api-key") ?? ""}`);
   if (rawKey) {
     const row = await lookupApiKey(hashKey(rawKey));
     const blocked = keyBlockReason(row);

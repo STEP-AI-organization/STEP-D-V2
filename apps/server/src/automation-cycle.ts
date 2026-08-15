@@ -408,6 +408,15 @@ export async function runAutomationCycle(): Promise<CycleReport> {
             description: desc.length >= 10 ? desc : `${desc} 방송 하이라이트 클립입니다`.trim(),
             naverCategory: { primary: "엔터", secondary: "엔터" },
           } : {}),
+          // ⚠️ **공개 범위를 반드시 넘긴다.** 안 넘기면 워커가 "public" 으로 폴백해서,
+          // 방송사 회차에서 뽑은 클립이 사람 눈을 한 번도 안 거치고 전체공개로 나간다
+          // (되돌리려면 채널에서 직접 내려야 하고 노출 이력은 남는다). 채널 규칙에 값이
+          // 있으면 그걸 따르고, 없으면 **unlisted** 로 올린다 — 자동 경로의 기본값은
+          // "링크 아는 사람만" 이어야 하고, 전체공개는 사람이 정하는 일이다.
+          ...(chan.platform === "youtube"
+            ? { privacy: (["public", "unlisted", "private"] as const)
+                .includes((channelRule as any)?.privacy) ? (channelRule as any).privacy : "unlisted" }
+            : {}),
           actor: `automation:${rule.id}`,
           // "factory"(외부 공장 API)와 구분되는 자동 순방 표식 — 화면의 자동/수동 배지가 읽는다.
           origin: "automation",

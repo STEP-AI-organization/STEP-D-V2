@@ -242,6 +242,15 @@ describe("배선 — 키 경로가 같은 출구를 지나는가", () => {
     assert.match(f, /lookupApiKey\(hashKey\(/, "평문으로 조회하면 안 된다 — 해시로 찾는다");
   });
 
+  it("웹 프록시를 거치는 호출도 키를 낼 자리가 있다 (x-api-key)", () => {
+    // 프로덕션 공개 주소는 Vercel 프록시가 Cloud Run IAM 용 ID 토큰을 Authorization 에
+    // **덮어써서** 보낸다 — Bearer 로만 받으면 고객사 키는 서버에 도착조차 못 한다.
+    // (apps/web/src/app/api/proxy/[[...path]]/route.ts 의 headers.set("Authorization", token))
+    const f = fn();
+    assert.match(f, /x-api-key/,
+      "프록시 경유 호출이 키를 실을 자리가 없다 — 고객사는 401 만 받고 원인을 진단할 수 없다");
+  });
+
   it("키 경로도 keyBlockReason 과 checkRoute 를 둘 다 탄다", () => {
     const f = fn();
     assert.match(f, /keyBlockReason\(/, "폐기·정지 검사가 없다");
