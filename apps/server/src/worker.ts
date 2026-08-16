@@ -1422,9 +1422,17 @@ async function resolveClipThumbnail(
   clip: any,
 ): Promise<{ body: Buffer; contentType: string; source: string } | null> {
   const mime = (p: string) => (/\.png$/i.test(p) ? "image/png" : /\.webp$/i.test(p) ? "image/webp" : "image/jpeg");
+  // 유튜브 상한. **여기서 걸러야 한다** — 상한 초과를 업로드 직전에 던지면 그 자리에서
+  // 끝나서(catch 는 경고만) 다음 후보로 못 넘어가고 썸네일이 아예 안 붙는다.
+  // AI 썸네일은 1280×720 PNG 라 2MB 를 넘길 수 있는 반면, 렌더 프레임은 JPEG 라 작다.
+  const MAX_BYTES = 2 * 1024 * 1024;
   const load = async (objPath: string, source: string) => {
     if (!objPath || !(await fileExists(objPath).catch(() => false))) return null;
     const body = await readFile(objPath);
+    if (body.byteLength > MAX_BYTES) {
+      console.warn(`[worker] 썸네일 후보가 2MB 초과 — 건너뜀 (${source} · ${Math.round(body.byteLength / 1024)}KB · ${objPath})`);
+      return null;
+    }
     return { body, contentType: mime(objPath), source };
   };
 
@@ -1443,8 +1451,9 @@ async function resolveClipThumbnail(
       const paths = (await listPrefix(`${thumbnailPrefix(masterId)}/`))
         .filter((p) => /\.(png|jpe?g|webp)$/i.test(p))
         .sort();
-      if (paths.length) {
-        const hit = await load(paths[0], "ai").catch(() => null);
+      // 후보가 여럿이면 하나가 용량 초과여도 다음 것을 본다 — 첫 장만 보고 포기하지 않는다.
+      for (const p of paths) {
+        const hit = await load(p, "ai").catch(() => null);
         if (hit) return hit;
       }
     } catch { /* 목록 조회 실패는 폴백으로 간다 */ }

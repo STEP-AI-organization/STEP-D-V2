@@ -50,6 +50,17 @@ describe("클립 유튜브 썸네일 배선", () => {
     assert.match(fn, /"frame"/, "폴백(렌더 프레임)이 없다 — 셋 다 없으면 썸네일이 안 붙는다");
   });
 
+  it("2MB 초과 후보는 건너뛰고 다음 것을 쓴다", () => {
+    // AI 썸네일은 1280×720 PNG 라 2MB 를 넘길 수 있다. 업로드 직전에 상한을 만나면
+    // 그 자리에서 끝나(catch 가 경고만) 썸네일이 **아예 안 붙는다** — 고르는 단계에서 걸러야
+    // 렌더 프레임(JPEG·작다)으로 떨어진다.
+    const w = read("worker.ts");
+    const fn = /async function resolveClipThumbnail[\s\S]*?\n}/.exec(w)?.[0] ?? "";
+    assert.match(fn, /MAX_BYTES/, "고르는 단계에 용량 검사가 없다");
+    assert.match(fn, /for \(const p of paths\)/,
+      "AI 후보를 첫 장만 보고 포기하면 용량 초과 한 장 때문에 나머지를 못 쓴다");
+  });
+
   it("자동배포가 클립을 채택하면 썸네일 생성을 건다", () => {
     const cyc = read("automation-cycle.ts");
     assert.match(cyc, /enqueue\("thumbnail\.generate"/,
