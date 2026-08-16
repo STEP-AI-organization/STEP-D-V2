@@ -136,5 +136,50 @@ class SignalAwareClips(unittest.TestCase):
                                msg="가장 조용한 경계에서 끊지 않았다")
 
 
+
+class HookWindow(unittest.TestCase):
+    """쇼츠 첫 3초 훅 — 쇼츠 **안에서** 가장 튀는 지점을 결정론으로 고른다.
+
+    사용자 방향(2026-08-16): "숏폼은 금방 넘기니깐, 만든 숏폼 안 소스 중에서 자극적이거나
+    데시벨 큰 곳 찾아서 3초 넣는 것."
+    예전엔 이 값을 LLM 응답에서 받으려 했는데 모델이 안 채워 **실측 5개 중 0개**였고,
+    그래서 에디터 토글이 늘 비활성이었다(hookAvailable = hookTimeSec 존재 여부).
+    """
+
+    @staticmethod
+    def _beats(spans, deltas):
+        return [
+            {"id": i + 1, "start": float(s), "end": float(e),
+             "signals": {"audio_delta": d, "audio_pct": d}}
+            for i, ((s, e), d) in enumerate(zip(spans, deltas))
+        ]
+
+    def test_데시벨이_가장_튀는_beat_을_고른다(self):
+        from core.recommend.recommend import _pick_hook_window
+        spans = [(0, 10), (10, 20), (20, 30)]
+        picked = self._beats(spans, [0.1, 0.9, 0.3])   # 두 번째가 가장 튄다
+        r = _pick_hook_window(picked, 0.0, 30.0, None)
+        self.assertAlmostEqual(r["hook_time_sec"], 10.0, delta=0.01)
+
+    def test_쇼츠_맨_앞은_피한다(self):
+        # 훅이 본편 시작과 같으면 같은 장면이 두 번 나온다(실측에서 5개 중 3개가 그랬다).
+        from core.recommend.recommend import _HOOK_MIN_OFFSET_SEC, _pick_hook_window
+        picked = self._beats([(0, 5), (5, 10)], [0.9, 0.2])   # 맨 앞이 가장 튄다
+        r = _pick_hook_window(picked, 0.0, 10.0, None)
+        self.assertGreaterEqual(r["hook_time_sec"], _HOOK_MIN_OFFSET_SEC)
+
+    def test_자막은_그_시점_실제_대사를_쓴다(self):
+        # 지어내면 영상에 없는 말이 자막으로 나간다.
+        from core.recommend.recommend import _pick_hook_window
+        picked = self._beats([(0, 10), (10, 20)], [0.1, 0.9])
+        tr = [{"start": 10.5, "end": 12.0, "text": "진짜 몰랐어요?"}]
+        r = _pick_hook_window(picked, 0.0, 20.0, tr)
+        self.assertEqual(r["hook_quote"], "진짜 몰랐어요?")
+
+    def test_너무_짧은_쇼츠는_훅을_만들지_않는다(self):
+        from core.recommend.recommend import _pick_hook_window
+        self.assertEqual(_pick_hook_window(self._beats([(0, 2)], [0.9]), 0.0, 2.0, None), {})
+
+
 if __name__ == "__main__":
     unittest.main()

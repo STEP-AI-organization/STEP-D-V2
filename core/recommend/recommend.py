@@ -769,6 +769,81 @@ def beat_signal_percentiles(beats: list[dict]) -> dict:
     return out
 
 
+#: 첫 3초 훅 — 쇼츠 맨 앞에 붙일 '가장 튀는 3초'.
+#:
+#: 왜 필요한가: 숏폼은 첫 1~2초에 넘긴다. 본편이 잔잔하게 시작하면 그 뒤가 아무리 좋아도
+#: 안 본다. 그래서 **쇼츠 안에서** 가장 자극적인 구간을 3초 잘라 앞에 붙인다(사용자 방향
+#: 2026-08-16). 밖에서 가져오지 않는다 — 없는 장면을 예고하면 낚시가 된다.
+#:
+#: 고르는 법은 **결정론**이다. 예전엔 이 값(hook_quote·hook_time_sec)을 LLM 응답에서 받으려
+#: 했는데 모델이 채우지 않아 **실측 산출물에서 5개 중 0개**였다 — 에디터의 "첫 3초 훅"
+#: 토글이 항상 비활성이었던 이유다(hookAvailable = hookTimeSec 존재 여부).
+#: 데시벨 순간 상승(audio_delta)이 웃음·함성·고성의 대리 지표라 그걸 1순위로 쓴다.
+_HOOK_MIN_OFFSET_SEC = 1.5   # 쇼츠 맨 앞과 겹치면 같은 장면이 두 번 나온다
+_HOOK_TAIL_MARGIN_SEC = 1.0  # 끝에 너무 붙으면 3초를 못 채운다
+
+
+def _pick_hook_window(picked_beats: list[dict], sf_start: float, sf_end: float,
+                      transcript: list[dict] | None) -> dict:
+    """쇼츠 안에서 첫 3초 훅으로 쓸 지점 — {hook_time_sec, hook_quote}.
+
+    반환의 `hook_time_sec` 은 **쇼츠 시작 기준 상대 초**다(서버 /export 가 그렇게 읽는다:
+    `hookAbs = clip.startTime + hookTimeSec`).
+    """
+    span = sf_end - sf_start
+    if span <= _HOOK_MIN_OFFSET_SEC + _HOOK_TAIL_MARGIN_SEC:
+        return {}
+    lo = sf_start + _HOOK_MIN_OFFSET_SEC
+    hi = sf_end - _HOOK_TAIL_MARGIN_SEC
+
+    # ⚠️ beat 시작을 lo 로 **클램프하면 안 된다** — 앞쪽 beat 이 전부 1.5초로 몰려서
+    # 훅이 본편 시작과 같은 장면이 되고, 결국 같은 그림이 두 번 나온다(실측에서 5개 중
+    # 3개가 그랬다). 클램프가 아니라 **필터**로 잡는다: 구간 안에서 시작하는 beat 만 후보.
+    cands = []
+    for b in picked_beats:
+        try:
+            bs = float(b["start"])
+        except (TypeError, ValueError, KeyError):
+            continue
+        if lo <= bs <= hi:
+            cands.append((b, bs))
+    if not cands:
+        # 쇼츠가 beat 하나로만 이뤄진 경우 등 — 그때는 앞머리를 살짝 비켜 잡는다.
+        cands = [(b, min(max(float(b.get("start", lo)), lo), hi)) for b in picked_beats[:1]
+                 if isinstance(b.get("start"), (int, float))]
+    if not cands:
+        return {}
+
+    def _key(item):
+        b, _at = item
+        s = b.get("signals") or {}
+        delta = s.get("audio_delta")
+        loud = s.get("audio_pct")
+        return (
+            float(delta) if isinstance(delta, (int, float)) else -1.0,
+            float(loud) if isinstance(loud, (int, float)) else -1.0,
+        )
+
+    best = max(cands, key=_key)
+    at = best[1]
+
+    # 훅 자막은 **그 시점의 실제 대사**를 그대로 쓴다 — 지어내면 영상에 없는 말이 자막으로 나간다.
+    quote = ""
+    for u in (transcript or []):
+        try:
+            us, ue = float(u.get("start")), float(u.get("end"))
+        except (TypeError, ValueError):
+            continue
+        if ue >= at and us <= at + 3.0:
+            quote = str(u.get("text") or "").strip()
+            if quote:
+                break
+    return {
+        "hook_time_sec": round(at - sf_start, 2),
+        **({"hook_quote": quote[:60]} if quote else {}),
+    }
+
+
 def _deterministic_score(picked_beats: list[dict], sec: float, hook: str,
                          sig_pct: dict, transcript: list[dict] | None = None,
                          end: float | None = None,
@@ -3672,6 +3747,8 @@ title (폴백) 은 두 줄 합쳐 한 줄로 자연스럽게.
         # 입력에도 실행마다 달라져 A/B·회귀 판정이 불가능해진다. 예전 7/7/8 하드코딩은
         # 모든 쇼츠가 72.5 로 동일해 변별력이 아예 없었고, 그 사이 단계인 LLM 3축은
         # 재현성을 잃는다 — 둘 다 답이 아니라서 신호 기반으로 간다.
+        # 첫 3초 훅 — 쇼츠 안에서 가장 튀는 지점(데시벨 순간 상승)을 결정론으로 고른다.
+        _hook_pick = _pick_hook_window(picked_beats, sf_start, sf_end, transcript)
         # starred_map 은 beat **인덱스** 키라 id 로 바꿔 넘긴다(점수는 id 로 판정한다).
         _starred_bids = {beats[i].get("id") for i in starred_map if 0 <= i < len(beats)}
         _score100, _score_parts = _deterministic_score(
@@ -3692,10 +3769,16 @@ title (폴백) 은 두 줄 합쳐 한 줄로 자연스럽게.
             "score100": _score100,
             "score_parts": _score_parts,  # 근거 — 점수만 있으면 왜 그런지 못 따진다
             "hook": hook,
-            # 2026-07-31 · 쇼츠 첫 3초 hook intro (docs/plans/shorts-hook-intro-3sec.md).
-            # Gemini 응답 필드를 그대로 흘려보냄. 없으면 빈 값 · 나중에 편집자가 채움.
-            "hook_quote": (s.get("hook_quote") or "").strip()[:60],
-            "hook_time_sec": (float(s["hook_time_sec"]) if isinstance(s.get("hook_time_sec"), (int, float)) else None),
+            # 쇼츠 첫 3초 hook intro (2026-07-31 · docs/plans/shorts-hook-intro-3sec.md).
+            # ⚠️ 예전엔 **Gemini 응답을 그대로 흘려보냈는데 모델이 안 채웠다** — 실측 산출물
+            # 5개 중 hook_time_sec 이 0개라, 에디터의 "첫 3초 훅" 토글이 늘 비활성이었고
+            # 렌더도 프리롤을 붙일 수 없었다(hookAvailable = hookTimeSec 존재 여부).
+            # 이제 **쇼츠 구간 안에서 데시벨이 튀는 지점을 결정론으로 고른다**(_pick_hook_window).
+            # LLM 이 값을 줬으면 그걸 존중하고, 없을 때만 우리가 고른다.
+            **{**_hook_pick, **{k: v for k, v in (
+                ("hook_quote", (s.get("hook_quote") or "").strip()[:60]),
+                ("hook_time_sec", float(s["hook_time_sec"]) if isinstance(s.get("hook_time_sec"), (int, float)) else None),
+            ) if v}},
             "hook_intro_caption": (s.get("hook_intro_caption") or "").strip()[:40],
             "tags": tags,
             "characters": chars_set,
