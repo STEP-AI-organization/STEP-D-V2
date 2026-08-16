@@ -1034,10 +1034,14 @@ async function handleThumbnailGenerate(job: Job): Promise<void> {
   if (!mediaId || !programId) throw new Error("mediaId·programId 필요");
 
   const outDir = path.join(os.tmpdir(), "stepd-thumb-out", mediaId);
+  const thumbMode = String(job.payload.mode ?? "") === "frame" ? "frame" : "ai";
 
   // 이 프로그램의 스타일 프로파일·출연자 사진만 내려받는다 (회차마다 전체를 뒤지지 않게).
   const assets = await prepareProgramAssets(programId, `gen-${mediaId}-${Date.now()}`);
-  if (!assets.castFiles) {
+  // ⚠️ 출연자 사진은 **ai 방식에서만** 전제조건이다. frame 방식은 실제 화면을 그대로 쓰므로
+  // 인물 등록이 필요 없다 — 여기서 같이 막으면 아카이브 회차는 어느 방식으로도 썸네일을
+  // 못 만든다(그게 이 방식을 만든 이유다).
+  if (thumbMode === "ai" && !assets.castFiles) {
     fs.rmSync(assets.root, { recursive: true, force: true });
     throw new Error(`cast_not_registered: ${programId} 에 등록된 출연자 사진이 없습니다`);
   }
@@ -1049,7 +1053,9 @@ async function handleThumbnailGenerate(job: Job): Promise<void> {
   const analysisDir = path.join(assets.root, "analysis", mediaId);
   fs.mkdirSync(analysisDir, { recursive: true });
   const pulled = await pullPrefix(`analysis/${mediaId}`, analysisDir);
-  if (!fs.existsSync(path.join(analysisDir, "narrative.json"))) {
+  // narrative.json 은 **ai 방식의 기획 입력**이다. frame 방식은 자막 한 줄만 있으면 되고
+  // 그건 analysis.json(추천 제목)에서 가져오거나 호출자가 직접 준다.
+  if (thumbMode === "ai" && !fs.existsSync(path.join(analysisDir, "narrative.json"))) {
     fs.rmSync(assets.root, { recursive: true, force: true });
     throw new Error(`analysis_missing: ${mediaId} 의 분석 산출물(narrative.json)이 없습니다 — 회차 분석을 먼저 끝내야 합니다 (내려받은 파일 ${pulled}개)`);
   }
@@ -1081,6 +1087,11 @@ async function handleThumbnailGenerate(job: Job): Promise<void> {
       "--video", video,
       "--out", outDir,
       "--candidates", String(job.payload.candidates ?? 3),
+      // 두 방식(사용자 확정 2026-08-16) — ai=서사+인물 누끼 생성 · frame=실제 프레임+자막.
+      // frame 은 등록 인물이 없어도 되고 얼굴이 원본 그대로라, 캐스트가 안 채워진 아카이브에
+      // 쓸 수 있는 유일한 방식이다.
+      "--mode", thumbMode,
+      ...(job.payload.caption ? ["--caption", String(job.payload.caption)] : []),
     ], { THUMB_ASSETS_DIR: assets.root });
     if (!result.ok) {
       // 인물 미등록은 사람이 고쳐야 하는 것 — 메시지를 그대로 남긴다.

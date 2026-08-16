@@ -324,6 +324,7 @@ import {
   isRuleMediaKind,
   isRuleOrientation,
   isRuleReframe,
+  isRuleThumbnailMode,
   planCycle,
   ruleCreatedNotice,
 } from "./automation.ts";
@@ -5011,6 +5012,10 @@ app.post("/api/automation/rules", async (c) => {
   if (body.reframe === "ai" && body.orientation !== "portrait") {
     return c.json({ error: "AI 리프레임은 세로(portrait) 방향에서만 선택할 수 있습니다." }, 400);
   }
+  // 썸네일 방식(0041) — 'ai'(서사+인물 누끼 생성) | 'frame'(실제 프레임+자막).
+  if (body.thumbnailMode != null && !isRuleThumbnailMode(body.thumbnailMode)) {
+    return c.json({ error: "invalid thumbnailMode" }, 400);
+  }
 
   const row = {
     id: typeof body.id === "string" && body.id ? body.id : newId("ar"),
@@ -5047,6 +5052,9 @@ app.post("/api/automation/rules", async (c) => {
     // 채택 형태(0038) — 순방(automation-cycle)이 수동 채택과 같은 매핑으로 소비한다.
     ...(isRuleOrientation(body.orientation) ? { orientation: body.orientation } : {}),
     ...(isRuleReframe(body.reframe) ? { reframe: body.reframe } : {}),
+    // 썸네일 방식(0041). 미지정이면 순방이 frame 으로 본다 — ai 는 등록 출연자 사진이
+    // 있어야 해서, 기본으로 두면 캐스트 미등록 회차가 통째로 썸네일 없이 나간다.
+    ...(isRuleThumbnailMode(body.thumbnailMode) ? { thumbnailMode: body.thumbnailMode } : {}),
   };
   // id 가 온 저장은 **갱신**이다 — 자연키 upsert 로 흘리면 첫 채널이 바뀌었을 때 새 규칙이
   // 생기고 구 규칙이 살아남아 이중 커버(한도 2배·뺀 채널로 계속 게시)가 된다.
@@ -8836,7 +8844,8 @@ app.delete("/api/programs/:id/cast-photos/:name", async (c) => {
 /** 회차 → 썸네일 후보 생성. 인물이 등록 안 됐으면 워커가 실패로 남긴다. */
 app.post("/api/media/:id/thumbnail", async (c) => {
   const mediaId = c.req.param("id");
-  const body = await c.req.json<{ programId?: string; candidates?: number }>()
+  const body = await c.req
+    .json<{ programId?: string; candidates?: number; mode?: string; caption?: string }>()
     .catch(() => null);
   const media = await getMedia(mediaId);
   if (!media) return c.json({ error: "media_not_found" }, 404);
@@ -8847,11 +8856,18 @@ app.post("/api/media/:id/thumbnail", async (c) => {
   }
   const program = await getEntity<any>("program", programId);
 
+  // 두 방식(사용자 확정 2026-08-16):
+  //   ai    — 서사 기획 + 등록 인물 누끼로 모델이 그린다. 잘 나오지만 **인물 등록이 선행**.
+  //   frame — 실제 영상 프레임 + 자막. 인물 등록이 필요 없고 얼굴이 원본 그대로다.
+  const mode = body?.mode === "frame" ? "frame" : "ai";
   const jobId = await enqueue("thumbnail.generate", {
     mediaId, programId, title: program?.title ?? "",
     candidates: body?.candidates ?? 3,
-  }, { dedupeKey: `thumbnail.generate:${mediaId}` });
-  return c.json({ ok: true, jobId });
+    mode,
+    ...(body?.caption ? { caption: String(body.caption).slice(0, 40) } : {}),
+    // 방식이 다르면 산출물도 다르다 — 같은 회차라도 서로를 막지 않게 dedupe 키를 가른다.
+  }, { dedupeKey: `thumbnail.generate:${mediaId}:${mode}` });
+  return c.json({ ok: true, jobId, mode });
 });
 
 /**

@@ -37,6 +37,15 @@ export const RULE_ORIENTATIONS = ["portrait", "landscape"] as const;
 export type RuleOrientation = (typeof RULE_ORIENTATIONS)[number];
 export const RULE_REFRAMES = ["ai", "none"] as const;
 export type RuleReframe = (typeof RULE_REFRAMES)[number];
+/**
+ * 썸네일 생성 방식 (2026-08-16).
+ *   ai    — 서사 기획 + 등록 인물 누끼로 모델이 그린다. **인물 등록이 선행**돼야 한다.
+ *   frame — 실제 영상 프레임 + 자막. 인물 등록 불필요 · 얼굴이 원본 그대로.
+ * 무인 경로의 기본은 frame 이다 — ai 는 캐스트 미등록 회차에서 한 장도 못 만든다.
+ */
+export const RULE_THUMBNAIL_MODES = ["ai", "frame"] as const;
+export type RuleThumbnailMode = (typeof RULE_THUMBNAIL_MODES)[number];
+export const DEFAULT_RULE_THUMBNAIL_MODE: RuleThumbnailMode = "frame";
 
 export type RuleState = "running" | "record_only" | "paused";
 
@@ -69,6 +78,8 @@ export interface AutomationRule {
   orientation?: RuleOrientation | null;
   /** 'ai' = 세로형 채택 직후 AI 리프레임(clip.reframe) 큐잉. 세로형일 때만 의미. */
   reframe?: RuleReframe | null;
+  /** 썸네일 생성 방식. 미지정 = frame(안전한 쪽 · 인물 등록 없이도 나온다). */
+  thumbnailMode?: RuleThumbnailMode | null;
 }
 
 /** 규칙의 프로그램 목록 — 다중이 있으면 다중, 없으면 단수 폴백. */
@@ -314,4 +325,7 @@ export function isRuleOrientation(v: unknown): v is RuleOrientation {
 }
 export function isRuleReframe(v: unknown): v is RuleReframe {
   return typeof v === "string" && (RULE_REFRAMES as readonly string[]).includes(v);
+}
+export function isRuleThumbnailMode(v: unknown): v is RuleThumbnailMode {
+  return typeof v === "string" && (RULE_THUMBNAIL_MODES as readonly string[]).includes(v);
 }

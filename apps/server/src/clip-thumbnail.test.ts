@@ -65,9 +65,38 @@ describe("클립 유튜브 썸네일 배선", () => {
     const cyc = read("automation-cycle.ts");
     assert.match(cyc, /enqueue\("thumbnail\.generate"/,
       "썸네일 생성 기능이 자동 경로에서 호출되지 않는다");
-    assert.match(cyc, /dedupeKey: `thumbnail\.generate:\$\{master\.id\}`/,
-      "회차당 1회로 묶지 않으면 클립마다 생성이 중복으로 돈다(원가)");
+    assert.match(cyc, /dedupeKey: `thumbnail\.generate:\$\{master\.id\}:\$\{thumbMode\}`/,
+      "회차당·방식당 1회로 묶지 않으면 클립마다 생성이 중복으로 돈다(원가)");
+    // 방식은 규칙이 정하고, 미지정이면 frame — ai 는 등록 출연자 사진이 있어야 해서
+    // 캐스트 미등록(아카이브) 회차에서 전멸한다.
+    assert.match(cyc, /isRuleThumbnailMode\(\(rule as any\)\.thumbnailMode\)/,
+      "규칙의 썸네일 방식을 순방이 안 읽으면 화면에서 고른 값이 저장만 되고 반영되지 않는다");
+    assert.match(cyc, /DEFAULT_RULE_THUMBNAIL_MODE/, "미지정 기본값이 없다");
     // 세로(쇼츠) 규칙에서는 걸지 않는다 — 쇼츠는 커스텀 썸네일을 쓰지 않는다.
     assert.match(cyc, /if \(landscape && master\?\.id/);
+  });
+});
+
+describe("썸네일 방식 두 갈래 (ai · frame)", () => {
+  it("규칙에 방식을 저장·조회한다 (컬럼 유실 금지)", () => {
+    // 0032 의 교훈: JSONB 에 숨기면 upsert 가 컬럼을 몰라 조용히 유실된다 → 실컬럼.
+    const db = read("db-pg.ts");
+    assert.match(db, /thumbnail_mode AS "thumbnailMode"/, "조회 목록에 없다 — 저장해도 안 읽힌다");
+    assert.match(db, /thumbnail_mode = \$19/, "갱신문에 없다 — 바꿔도 반영되지 않는다");
+  });
+
+  it("잘못된 값은 400 으로 막는다 (조용히 버리지 않는다)", () => {
+    const idx = read("index.ts");
+    assert.match(idx, /invalid thumbnailMode/,
+      "모르는 값을 버리면 '저장은 됐는데 반영이 안 된다'가 된다");
+  });
+
+  it("frame 방식은 인물 등록·narrative 를 요구하지 않는다", () => {
+    // 이 방식을 만든 이유 자체다 — 캐스트가 안 채워진 아카이브 회차에서도 나와야 한다.
+    const w = read("worker.ts");
+    assert.match(w, /thumbMode === "ai" && !assets\.castFiles/,
+      "frame 인데 출연자 사진을 요구하면 아카이브 회차는 어느 방식으로도 못 만든다");
+    assert.match(w, /thumbMode === "ai" && !fs\.existsSync\(path\.join\(analysisDir, "narrative\.json"\)\)/,
+      "frame 인데 narrative.json 을 요구하면 같은 이유로 막힌다");
   });
 });

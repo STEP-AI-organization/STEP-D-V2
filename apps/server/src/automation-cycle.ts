@@ -34,9 +34,9 @@ import {
   publishedTodayKst,
 } from "./db-pg.ts";
 import {
-  CREDIT_IDLE_REASON,
-  decidePublish, inActiveWindow, overlapsExistingClip, planCycle, ruleChannels, rulePrograms,
-  selectCandidates,
+  CREDIT_IDLE_REASON, DEFAULT_RULE_THUMBNAIL_MODE,
+  decidePublish, inActiveWindow, isRuleThumbnailMode, overlapsExistingClip, planCycle,
+  ruleChannels, rulePrograms, selectCandidates,
   type AutomationRule,
 } from "./automation.ts";
 import {
@@ -201,9 +201,15 @@ export async function runAutomationCycle(): Promise<CycleReport> {
         // 등록 출연자 사진이 없으면 이 잡은 실패하는데, 그때는 렌더 프레임으로 나간다
         // (resolveClipThumbnail 의 3단 폴백). 썸네일 때문에 배포가 멈추는 게 더 나쁘다.
         if (landscape && master?.id && ep.programId) {
+          // 방식은 **규칙이 정한다**(0041). 미지정이면 frame — ai 는 등록 출연자 사진이
+          // 있어야 하는데 아카이브 회차는 대개 안 채워져 있어 한 장도 못 만든다.
+          // frame 은 실제 화면이라 인물 등록 없이도 되고 얼굴이 원본 그대로다.
+          const thumbMode = isRuleThumbnailMode((rule as any).thumbnailMode)
+            ? (rule as any).thumbnailMode : DEFAULT_RULE_THUMBNAIL_MODE;
           await enqueue("thumbnail.generate",
-            { mediaId: master.id, programId: ep.programId, title: rec.title },
-            { dedupeKey: `thumbnail.generate:${master.id}` }).catch(() => {});
+            { mediaId: master.id, programId: ep.programId, title: rec.title,
+              mode: thumbMode, ...(thumbMode === "frame" ? { caption: rec.title } : {}) },
+            { dedupeKey: `thumbnail.generate:${master.id}:${thumbMode}` }).catch(() => {});
         }
         // AI 리프레임(규칙 옵션) — 수동 채택과 같은 배선: 세로+AI 조합(store.tsx 와 같은
         // 조건식)이면 채택 직후 /clips/:id/reframe(mode=ai_multi)로 분석을 큐잉한다.

@@ -55,10 +55,14 @@ def cmd_style(args) -> int:
 
 
 def cmd_generate(args) -> int:
-    """회차 1건 → 썸네일 후보. 인물은 등록부에서, 배경은 검색 구간에서."""
-    from core.thumbnail.generate import run
+    """회차 1건 → 썸네일 후보.
 
-    result = run(
+    두 방식이 있다(사용자 확정 2026-08-16).
+      ai    : 서사 기획 + **등록 인물 누끼** → 모델이 그린다. 잘 나오지만 인물 등록이 선행돼야 한다.
+      frame : 실제 **영상 프레임 한 장 + 자막**. 인물 등록이 없어도 되고 얼굴이 원본 그대로다.
+    """
+    mode = getattr(args, "mode", "ai") or "ai"
+    common = dict(
         media_id=args.media_id,
         program_id=args.program_id,
         program_title=args.title or "",
@@ -68,6 +72,12 @@ def cmd_generate(args) -> int:
         candidates=args.candidates,
         api_base=args.api_base or None,
     )
+    if mode == "frame":
+        from core.thumbnail.frame_gen import run_frame
+        result = run_frame(**common, caption=getattr(args, "caption", "") or "")
+    else:
+        from core.thumbnail.generate import run
+        result = run(**common)
     _emit(result)
     return 0 if result.get("ok") else 1
 
@@ -98,6 +108,10 @@ def main(argv: list[str] | None = None) -> int:
     g.add_argument("--out", required=True)
     g.add_argument("--candidates", type=int, default=3)
     g.add_argument("--api-base", default="", help="구간 검색 API (기본 STEPD_API_BASE)")
+    g.add_argument("--mode", choices=("ai", "frame"), default="ai",
+                   help="ai=서사+인물 누끼 생성 · frame=실제 프레임+자막 (인물 등록 불필요)")
+    g.add_argument("--caption", default="",
+                   help="frame 모드 자막. 비우면 추천 제목·훅 자막에서 가져온다")
     g.set_defaults(func=cmd_generate)
 
     args = ap.parse_args(argv)
