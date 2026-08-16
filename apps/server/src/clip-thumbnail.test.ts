@@ -100,3 +100,37 @@ describe("썸네일 방식 두 갈래 (ai · frame)", () => {
       "frame 인데 narrative.json 을 요구하면 같은 이유로 막힌다");
   });
 });
+
+describe("쇼츠 첫 3초 훅 — 내레이션(TTS) 배선", () => {
+  it("훅 프리롤에 TTS 를 얹고, 실패해도 훅은 나간다", () => {
+    const idx = read("index.ts");
+    assert.match(idx, /synthesizeHookNarration\(line\)/, "훅에 내레이션을 안 붙인다");
+    // 합성 실패는 null → ttsPath 없이 프리롤이 그대로 나가야 한다(목소리 때문에 영상이
+    // 안 나가는 게 더 나쁘다).
+    assert.match(idx, /\.\.\.\(ttsPath \? \{ ttsPath \} : \{\}\)/,
+      "합성 실패가 훅 자체를 막으면 안 된다");
+  });
+
+  it("읽는 문구는 어그로 카피이지 훅 대사가 아니다", () => {
+    // 훅 구간의 실제 대사는 그 자리에서 이미 들린다 — 같은 말을 두 번 하면 3초가 낭비된다.
+    const idx = read("index.ts");
+    const block = /const line = String\([\s\S]{0,160}?\)\.trim\(\);/.exec(idx)?.[0] ?? "";
+    assert.notEqual(block, "", "내레이션 문구 선택부를 못 찾았다");
+    assert.match(block, /hookIntroCaption/);
+    assert.doesNotMatch(block, /hookQuote/, "훅 대사를 또 읽으면 같은 말이 겹친다");
+  });
+
+  it("원음을 죽이지 않고 덕킹만 한다", () => {
+    // 웃음·환호가 훅의 실체다 — 원음을 0 으로 만들면 껍데기만 남는다.
+    const ff = read("ffmpeg.ts");
+    assert.match(ff, /const HOOK_DUCK_VOL = 0\.35;/);
+    assert.match(ff, /\[0:a\]volume=\$\{HOOK_DUCK_VOL\}\[pd\]/);
+    assert.match(ff, /amix=inputs=2:duration=first/, "TTS 가 길어도 프리롤 길이에서 잘려야 한다");
+  });
+
+  it("내레이션 토글·문구가 렌더 캐시 키에 들어간다", () => {
+    // 안 넣으면 문구를 바꿔도 예전 렌더가 그대로 돌아온다(캐시 히트).
+    const idx = read("index.ts");
+    assert.match(idx, /tts: \(clip\.editorState as any\)\?\.hookTtsOn !== false/);
+  });
+});

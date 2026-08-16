@@ -197,6 +197,11 @@ export type RenderShortOpts = {
     durationSec: number;
     /** 오디오 크로스페이드 포함 여부 (마스터에 오디오 있을 때만 true). */
     hasAudio?: boolean;
+    /**
+     * 훅 내레이션 mp3 경로 (tts.ts). 있으면 프리롤 구간에서 **원음을 덕킹하고** 그 위에 얹는다.
+     * 원음을 완전히 죽이지 않는 이유: 웃음·환호가 훅의 실체라 그걸 지우면 껍데기만 남는다.
+     */
+    ttsPath?: string | null;
   } | null;
   /** 하단 브랜딩 아이콘/로고 — 프로그램에서 미리 설정한 이미지. **높이(h) 기준**으로
    *  스케일하고 가로는 비율 유지 + 화면 중앙 정렬((W-w)/2 식) — 정사각 아이콘과 가로
@@ -362,6 +367,10 @@ export function circleCrop(srcPath: string, dstPath: string, size: number): Prom
 
 /** 프리롤→본문 cross-dissolve 길이(초). 프로토타입(render_shorts.py) 검증값. */
 const HOOK_XFADE_SEC = 0.25;
+/** 훅 내레이션이 깔릴 때 원음을 얼마나 줄일지 — 0 이면 현장감이 사라진다(웃음·환호가 훅의 실체). */
+const HOOK_DUCK_VOL = 0.35;
+/** 내레이션 음량 — 원음 위에서 또렷하게 들려야 하지만 클리핑은 피한다(뒤에 dynaudnorm). */
+const HOOK_TTS_VOL = 1.6;
 
 /**
  * renderShort 의 hook-preroll 분기 — 2입력 xfade.
@@ -421,9 +430,18 @@ function renderShortWithPreroll(opts: RenderShortOpts & { hookPreroll: NonNullab
   vf += `;[prev][bodyv]xfade=transition=fade:duration=${HOOK_XFADE_SEC}:offset=${xfadeOffset}[v]`;
 
   const withAudio = pre.hasAudio === true;
+  // 훅 내레이션(TTS) — 프리롤 원음을 덕킹하고 그 위에 얹는다. 원음을 죽이지 않는 이유는
+  // 웃음·환호가 훅의 실체라서다. TTS 가 3초보다 길면 amix(duration=first)가 잘라낸다.
+  const tts = withAudio && pre.ttsPath ? pre.ttsPath : null;
   if (withAudio) {
     // 본문 오디오에 volume/atempo(속도) 적용 후 · 프리롤 오디오와 크로스페이드.
-    vf += `;[1:a]${audioFilter ? audioFilter : "anull"}[ba];[0:a]anull[pa]`;
+    vf += `;[1:a]${audioFilter ? audioFilter : "anull"}[ba]`;
+    if (tts) {
+      vf += `;[0:a]volume=${HOOK_DUCK_VOL}[pd];[2:a]volume=${HOOK_TTS_VOL},aresample=async=1[tn]`
+        + `;[pd][tn]amix=inputs=2:duration=first:dropout_transition=0,dynaudnorm=f=200[pa]`;
+    } else {
+      vf += `;[0:a]anull[pa]`;
+    }
     vf += `;[pa][ba]acrossfade=d=${HOOK_XFADE_SEC}[a]`;
   }
 
@@ -431,6 +449,7 @@ function renderShortWithPreroll(opts: RenderShortOpts & { hookPreroll: NonNullab
     "-y",
     "-ss", String(preStart), "-to", String(preEnd), "-i", inputPath,
     "-ss", String(startTime), "-to", String(endTime), "-i", inputPath,
+    ...(tts ? ["-i", tts] : []),
     "-filter_complex", vf,
     "-map", "[v]",
     ...(withAudio ? ["-map", "[a]"] : []),

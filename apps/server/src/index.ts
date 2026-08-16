@@ -216,6 +216,7 @@ import {
 } from "./db-pg.ts";
 import { hasFfmpeg, probe, captureThumbnail, circleCrop, trimEncode, remuxFaststart, renderShort } from "./ffmpeg.ts";
 import { issueOAuthState, consumeOAuthState, HANDOFF_TTL_MS } from "./oauth-state.ts";
+import { synthesizeHookNarration } from "./tts.ts";
 import { embedQuery } from "./search-embed.ts";
 import { parseQuery } from "./search-parse.ts";
 import { newId } from "./pipeline.ts";
@@ -7334,7 +7335,12 @@ app.post("/api/clips/:id/export", async (c) => {
       editorState: clip.editorState ?? null,
       captionsFp,
       preset: preset?.key ?? null,
-      hookPreroll: hookPrerollReq ? { t: clip.hookTimeSec } : null,
+      hookPreroll: hookPrerollReq
+        ? { t: clip.hookTimeSec,
+            // 내레이션 토글·문구가 바뀌면 결과물이 달라진다 — revision 에 넣어 캐시를 깬다.
+            tts: (clip.editorState as any)?.hookTtsOn !== false,
+            line: String(clip.hookIntroCaption || clip.titleLine1 || clip.title || "") }
+        : null,
       reframe: reframePlan
         ? { mode: "ai_multi", inputFingerprint: reframe.inputFingerprint, planHash: reframe.planHash }
         : { mode: "basic" },
@@ -7353,14 +7359,28 @@ app.post("/api/clips/:id/export", async (c) => {
   // 첫 3초 hook 프리롤 구간 계산 — hook 대사 절대 시각(= clip.startTime + hookTimeSec)에서 최대 3초.
   // 세그먼트([snappedStart, snappedEnd]) 안으로 클램프하고, 세그먼트가 3초보다 짧으면 그만큼 줄인다.
   // hookTimeSec 은 clip.startTime(=start) 기준 상대이므로 절대 = start + hookTimeSec.
-  let hookPreroll: { startTime: number; durationSec: number; hasAudio?: boolean } | null = null;
+  let hookPreroll:
+    { startTime: number; durationSec: number; hasAudio?: boolean; ttsPath?: string | null } | null = null;
   if (hookPrerollReq) {
     const HOOK_MAX = 3.0;
     const hookAbs = start + Math.max(0, Number(clip.hookTimeSec));
     const preStart = Math.min(Math.max(snappedStart, hookAbs), Math.max(snappedStart, snappedEnd - 0.5));
     const preDur = Math.min(HOOK_MAX, Math.max(0.5, snappedEnd - preStart));
     if (preDur >= 0.5) {
-      hookPreroll = { startTime: preStart, durationSec: Number(preDur.toFixed(3)), hasAudio: master.hasAudio === 1 };
+      // 훅 내레이션(TTS) — 기본 ON, 에디터에서 hookTtsOn:false 로 끌 수 있다.
+      // 읽는 문구는 **어그로 카피 우선**(hookIntroCaption → 제목 첫 줄 → 제목).
+      // 훅 구간의 실제 대사(hookQuote)는 그 자리에서 이미 들리므로 읽지 않는다 — 같은 말을
+      // 두 번 하면 3초가 낭비된다. 합성 실패는 null 이라 훅은 그대로 나간다(TTS 만 생략).
+      const wantTts = (clip.editorState as any)?.hookTtsOn !== false;
+      const line = String(
+        clip.hookIntroCaption || clip.titleLine1 || clip.title || "",
+      ).trim();
+      const ttsPath = wantTts && line ? await synthesizeHookNarration(line) : null;
+      hookPreroll = {
+        startTime: preStart, durationSec: Number(preDur.toFixed(3)),
+        hasAudio: master.hasAudio === 1,
+        ...(ttsPath ? { ttsPath } : {}),
+      };
     }
   }
 
