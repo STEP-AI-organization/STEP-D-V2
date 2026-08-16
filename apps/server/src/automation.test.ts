@@ -223,19 +223,31 @@ describe("채택 형태 순방 배선 — automation-cycle 소스 스캔", () =>
   const src = fs.readFileSync(path.join(SRC, "automation-cycle.ts"), "utf-8");
 
   it("규칙 방향이 클립 aspectRatio 에 수동 채택과 같은 매핑으로 적용된다", () => {
-    assert.match(src, /rule\.orientation === "portrait" \? "9:16-crop-main"/,
-      "portrait → 9:16-crop-main 매핑(adopt 라우트와 동일)이 없다");
-    assert.match(src, /rule\.orientation === "landscape" \? "16:9"/);
+    assert.match(src, /rule\.orientation === "landscape"/,
+      "규칙의 가로 지정이 반영되지 않는다");
+    assert.match(src, /landscape \? "16:9" : "9:16-crop-main"/,
+      "가로/세로 → aspectRatio 매핑(adopt 라우트와 동일)이 없다");
   });
 
-  it("방향 미지정이면 기존 kind 기반 기본값 그대로다 (하위호환)", () => {
-    assert.match(src, /rec\.kind === "short" \? "9:16-crop-main" : "16:9"/);
+  it("방향 미지정이면 추천 종류로 정한다 — 클립(롱폼)은 가로형", () => {
+    // 클립은 본편 화면비를 유지해야 한다(사용자 확정 2026-08-16). 쇼츠만 세로.
+    assert.match(src, /rule\.orientation !== "portrait" && rec\.kind !== "short"/,
+      "방향 미지정 클립이 가로로 안 간다 — 롱폼이 세로로 잘려 나간다");
   });
 
-  it("가로 규칙은 editorState.aspect 도 뒤집는다 — /export 는 editorState 를 최우선으로 읽는다", () => {
+  it("가로면 editorState.aspect 도 뒤집는다 — /export 는 editorState 를 최우선으로 읽는다", () => {
     // autoEditorState 는 쇼츠 전제 aspect 9:16 고정 — 여기서 안 뒤집으면 aspectRatio 에
     // 저장만 되고 렌더에 미도달(이 리포 최빈 실패모드).
-    assert.match(src, /rule\.orientation === "landscape" \? \{ aspect: "16:9" \}/);
+    assert.match(src, /\.\.\.\(landscape \? \{ aspect: "16:9" \} : \{\}\)/);
+  });
+
+  it("클립도 자동배포 후보가 된다 — core 의 type 을 서버가 kind 로 보존한다", () => {
+    // 예전엔 recFromShort 가 전부 kind:"short" 로 못박아, 규칙에서 '클립'을 골라도
+    // selectCandidates(kind !== "short")가 항상 0건이었다 — 클립은 나갈 수가 없었다.
+    const pipeline = fs.readFileSync(path.join(SRC, "content-pipeline.ts"), "utf-8");
+    assert.match(pipeline, /kind: isClip \? "clip" : "short"/,
+      "core 의 type(clip/highlight)이 recommendation.kind 로 넘어오지 않는다");
+    assert.match(pipeline, /s\.type === "clip" \|\| s\.type === "highlight"/);
   });
 
   it("세로+AI 면 채택 직후 리프레임을 수동과 같은 라우트로 큐잉한다", () => {

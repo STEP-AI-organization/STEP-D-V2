@@ -141,9 +141,11 @@ export async function runAutomationCycle(): Promise<CycleReport> {
         const program = ep.programId ? await getEntity<any>("program", ep.programId) : undefined;
         // 채택 형태 — 규칙의 방향 선택을 **수동 채택(adopt 라우트)과 같은 매핑**으로 클립에
         // 적용한다. 미지정이면 기존처럼 추천 kind 로 결정(하위호환 · 리프레임 OFF 시 불변).
-        const aspectRatio = rule.orientation === "portrait" ? "9:16-crop-main"
-          : rule.orientation === "landscape" ? "16:9"
-          : (rec.kind === "short" ? "9:16-crop-main" : "16:9");
+        // 클립(롱폼)은 **가로형이 기본**이다(사용자 확정 2026-08-16) — 본편 화면비를 유지한다.
+        // 규칙이 방향을 명시했으면 그게 우선, 아니면 추천 종류로 정한다.
+        const landscape = rule.orientation === "landscape"
+          || (rule.orientation !== "portrait" && rec.kind !== "short");
+        const aspectRatio = landscape ? "16:9" : "9:16-crop-main";
         const clip = {
           id: clipId,
           episodeId: rec.episodeId,
@@ -173,9 +175,9 @@ export async function runAutomationCycle(): Promise<CycleReport> {
             ...autoEditorState(rec, ep.programTitle ?? "", program,
               (rule as any).templateId, (rule as any).layout),
             // autoEditorState 는 쇼츠 전제로 aspect 9:16 을 박는데, /export 는 editorState.aspect
-            // 를 **최우선**으로 읽는다 — 가로 규칙은 여기서 안 뒤집으면 aspectRatio 에 저장만
-            // 되고 렌더에 미도달(세로로 나간다). 미지정·세로는 기존값 그대로.
-            ...(rule.orientation === "landscape" ? { aspect: "16:9" } : {}),
+            // 를 **최우선**으로 읽는다 — 여기서 안 뒤집으면 aspectRatio 에 저장만 되고 렌더에
+            // 미도달해서 **가로 클립이 세로로 잘려 나간다.** 세로일 때만 기존값 그대로.
+            ...(landscape ? { aspect: "16:9" } : {}),
           },
         };
 

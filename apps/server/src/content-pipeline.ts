@@ -621,6 +621,12 @@ type Short = {
   /** (후보 × 배포처) matrix from core/channels.py apply_channel_fit — absent when the
    *  analysis ran without destinations, or on any pre-matrix run. */
   channel_scores?: Record<string, ChannelScore>;
+  /** 숏폼인가 롱폼인가 — core 가 붙인다. "clip"·"highlight" 는 가로형 본편(3분+). */
+  type?: string;
+  /** 롱폼의 화면비 힌트. core 의 클립은 "16:9". */
+  aspect?: string;
+  /** 8분 이상 = 유튜브 미드롤 광고 가능(2020-07 이후 기준). */
+  monetizable?: boolean;
 };
 
 /** One (candidate × destination) cell — core/channels.py channel_fit(). */
@@ -645,10 +651,18 @@ function recFromShort(episodeId: string, s: Short) {
   const titleCandidates = Array.isArray(s.title_candidates)
     ? Array.from(new Set([titleMain, ...s.title_candidates.filter((t) => typeof t === "string" && t.trim())]))
     : undefined;
+  // ⚠️ core 가 붙인 `type` 을 버리면 **클립이 영원히 안 나간다.** 예전엔 여기서 전부
+  // "short" 로 못박아, 자동배포 규칙에서 미디어 종류를 '클립'으로 골라도 후보가 0건이었다
+  // (automation.ts selectCandidates 가 kind 로 거른다). 롱폼은 가로형이 기본이다.
+  const isClip = s.type === "clip" || s.type === "highlight";
   return {
     id,
     episodeId,
-    kind: "short",
+    kind: isClip ? "clip" : "short",
+    /** 채택 시 렌더 화면비의 출발점 — 클립은 본편 그대로 가로형. */
+    aspectRatio: typeof s.aspect === "string" && s.aspect ? s.aspect : (isClip ? "16:9" : undefined),
+    /** 8분 이상이면 유튜브 미드롤 광고를 붙일 수 있다 — 화면이 이걸 배지로 보여준다. */
+    monetizable: s.monetizable === true ? true : undefined,
     title: titleMain,
     titleCandidates,
     appeal: Math.max(1, Math.min(5, appeal)),

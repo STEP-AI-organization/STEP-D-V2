@@ -3618,6 +3618,118 @@ title (폴백) 은 두 줄 합쳐 한 줄로 자연스럽게.
     return shorts
 
 
+# ── 클립(롱폼) ────────────────────────────────────────────────────────────────
+#
+# 쇼츠와 클립은 **다른 물건**이다. 쇼츠는 한 장면의 펀치라인이고, 클립은 코너·주제 하나가
+# 통째로 들어간 가로형 본편이다. 그래서 클립은 쇼츠를 길게 늘린 게 아니라 **beat 를 이어
+# 붙여** 만든다 — beat 는 편집자가 그대로 쓸 수 있는 완결 단위라, 이어 붙이면 경계가 이미 맞다.
+#
+# 길이 기준 (사용자 확정 2026-08-16):
+#   · 최소 3분 — 이보다 짧으면 '클립'이라 부를 물건이 아니다.
+#   · 8분 이상이면 **유튜브 미드롤 광고**를 붙일 수 있다(2020-07 이후 기준. 그 전이 10분이라
+#     10분으로 기억하는 경우가 많다). 수익화가 목적이면 여기를 노린다.
+#   · 상한 15분 — 더 길면 회차 통짜에 가까워져 '클립'의 의미가 없다.
+CLIP_MIN_SEC = 180.0
+CLIP_MONETIZE_SEC = 480.0
+CLIP_MAX_SEC = 900.0
+#: beat 사이가 이보다 벌어지면 다른 코너로 본다(이어 붙이지 않는다).
+CLIP_GAP_SEC = 45.0
+
+
+def build_clips_from_beats(beats: list[dict], max_clips: int = 3) -> list[dict]:
+    """인접 beat 를 이어 붙여 가로형 클립 후보를 만든다.
+
+    **결정론**이다 — LLM 에 점수·순위를 맡기지 않는다(리포 원칙). 제목·요약은 이미
+    beat annotate 가 붙여 둔 것을 쓰므로 새로 지어내는 hallucination 도 없다.
+
+    쇼츠와 구간이 겹쳐도 괜찮다 — 8분짜리 코너 안에 30초 펀치라인이 들어 있는 것은
+    정상이고, 둘은 서로 다른 배포처로 나간다.
+    """
+    ordered = sorted(
+        [b for b in (beats or []) if isinstance(b, dict)
+         and isinstance(b.get("start"), (int, float)) and isinstance(b.get("end"), (int, float))
+         and float(b["end"]) > float(b["start"])],
+        key=lambda b: float(b["start"]),
+    )
+    if not ordered:
+        return []
+
+    # 1) 끊기지 않고 이어지는 beat 묶음(런)으로 자른다.
+    runs: list[list[dict]] = []
+    cur: list[dict] = []
+    for b in ordered:
+        if not cur:
+            cur = [b]
+            continue
+        gap = float(b["start"]) - float(cur[-1]["end"])
+        span = float(b["end"]) - float(cur[0]["start"])
+        if gap > CLIP_GAP_SEC or span > CLIP_MAX_SEC:
+            runs.append(cur)
+            cur = [b]
+        else:
+            cur.append(b)
+    if cur:
+        runs.append(cur)
+
+    # 2) 런에서 클립을 만든다. 최소 길이를 못 채우는 런은 버린다(억지로 늘리지 않는다).
+    out: list[dict] = []
+    for run in runs:
+        start = float(run[0]["start"])
+        end = float(run[-1]["end"])
+        length = end - start
+        if length < CLIP_MIN_SEC:
+            continue
+        titles = [str(b.get("title") or "").strip() for b in run]
+        titles = [t for t in titles if t]
+        summaries = [str(b.get("summary") or "").strip() for b in run]
+        summaries = [s for s in summaries if s]
+        chars: list[str] = []
+        for b in run:
+            for c in (b.get("characters") or []):
+                c = str(c).strip()
+                if c and c not in chars:
+                    chars.append(c)
+        hooks = [str(b.get("hook") or "").strip() for b in run if str(b.get("hook") or "").strip()]
+        # 점수: 길이(수익화 기준 충족)·구성 beat 수·인물 수 — 전부 관측값이다.
+        monetizable = length >= CLIP_MONETIZE_SEC
+        score = min(100, int(
+            40
+            + (20 if monetizable else 0)
+            + min(20, len(run) * 4)
+            + min(20, len(chars) * 5)
+        ))
+        out.append({
+            "type": "clip",
+            # 클립은 **가로형**이 기본이다(사용자 확정 2026-08-16) — 본편 화면비를 유지한다.
+            "aspect": "16:9",
+            "start": start,
+            "end": end,
+            "title": (titles[0] if titles else "무제 클립"),
+            "reason": " / ".join(summaries[:3])[:400],
+            "story_synopsis": " ".join(summaries[:5])[:600],
+            "appeal": _appeal_from_score100(score),
+            "score100": score,
+            "hook": (hooks[0] if hooks else "기타"),
+            "tags": [],
+            "characters": chars,
+            "beat_ids": [b.get("id") for b in run if b.get("id") is not None],
+            "monetizable": monetizable,
+            "source": "beat_merge",
+        })
+
+    # 3) 긴 것·인물 많은 것 우선. 같은 구간이 여러 번 나가지 않게 겹치면 앞선 것만 남긴다.
+    out.sort(key=lambda c: (-int(c["monetizable"]), -c["score100"], -(c["end"] - c["start"])))
+    picked: list[dict] = []
+    for c in out:
+        if any(min(c["end"], p["end"]) - max(c["start"], p["start"]) > 0 for p in picked):
+            continue
+        picked.append(c)
+        if len(picked) >= max_clips:
+            break
+    picked.sort(key=lambda c: c["start"])
+    return picked
+
+
 def _dedup_beat_overlap(shorts: list[dict], beats: list[dict]) -> list[dict]:
     """같은 beat 를 여러 shorts 에서 재사용 금지 (사용자 방향 2026-07-31: "beat 잘 못 합침").
 
@@ -3918,7 +4030,16 @@ def _recommend_narrative_first_impl(
                 shorts = apply_channel_fit(shorts, scenes or [], channels)
             except Exception as e:
                 print(f"   (채널 적합 건너뜀: {str(e)[:80]})")
-        return {"genre": genre, "shorts": shorts, "mode": "beat_only",
+        # 클립(롱폼·가로형)은 **쇼츠 파이프라인을 태우지 않는다** — 위 정렬·프로파일 적합은
+        # 전부 쇼츠 길이를 전제로 한 손잡이라, 8분짜리를 거기 넣으면 길이 페널티로 죽는다.
+        # beat 를 이어 붙여 따로 만들고 뒤에 붙인다.
+        clips = build_clips_from_beats(beats)
+        for i, c in enumerate(clips, 1):
+            c["rank"] = i
+        if clips:
+            mon = sum(1 for c in clips if c.get("monetizable"))
+            print(f"   클립 {len(clips)}개 (가로형 · 미드롤 가능 {mon}개)")
+        return {"genre": genre, "shorts": shorts + clips, "mode": "beat_only",
                 "beats_count": len(beats)}
 
     # === Fallback (beats 없을 때): 기존 Phase A→B 경로 ===
