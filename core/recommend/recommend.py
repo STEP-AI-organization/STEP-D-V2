@@ -3690,13 +3690,21 @@ def build_clips_from_beats(beats: list[dict], max_clips: int = 3) -> list[dict]:
                 if c and c not in chars:
                     chars.append(c)
         hooks = [str(b.get("hook") or "").strip() for b in run if str(b.get("hook") or "").strip()]
-        # 점수: 길이(수익화 기준 충족)·구성 beat 수·인물 수 — 전부 관측값이다.
+        # 점수는 관측값만으로 만든다(LLM 점수 금지 · 리포 원칙). 축은 셋 — 미드롤 가능
+        # 여부·구성 beat 수·등장 인물 수.
+        #
+        # ⚠️ 자동배포 규칙의 기준(score80/score85)은 **쇼츠 점수 분포에 맞춰 만든 손잡이**다.
+        # 클립을 쇼츠와 같은 척도로 매기면(쇼츠는 90점대가 흔하다) 클립은 상시 탈락해
+        # "규칙은 켰는데 한 건도 안 나가는" 상태가 된다. 그래서 **길이 하한을 통과한 클립은
+        # 이미 쓸 만한 물건**으로 보고 70에서 시작하고, 미드롤 가능(8분+)이면 +20 을 준다.
+        # 결과적으로 `score80` 을 건 클립 규칙은 **"미드롤 가능한 클립만 내보낸다"** 는
+        # 뜻이 된다 — 수익화가 목적인 운영자에게 그게 맞는 손잡이다.
         monetizable = length >= CLIP_MONETIZE_SEC
         score = min(100, int(
-            40
+            70
             + (20 if monetizable else 0)
-            + min(20, len(run) * 4)
-            + min(20, len(chars) * 5)
+            + min(5, len(run))
+            + min(5, len(chars) * 3)
         ))
         out.append({
             "type": "clip",

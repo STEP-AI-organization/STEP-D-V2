@@ -76,7 +76,10 @@ def prepare_checkpoints(
     # refine·recommend는 cast_registry를 프롬프트에 넣으므로 cast 바뀌면 재실행.
     # 2026-08-06: score100 을 LLM 3축 → _deterministic_score(signal·hook·length·closure) 로 교체.
     # 코드만 바꾸면 지문이 그대로라 shorts.json 이 재사용돼 변경이 반영되지 않는다 — 그래서 올린다.
-    RECOMMEND_VER = "2026-08-06-deterministic-score"
+    # 2026-08-16: 쇼츠만 내던 것에 **클립(롱폼·가로형)** 을 추가(build_clips_from_beats).
+    # 여기를 안 올리면 이미 분석한 회차는 옛 shorts.json 을 그대로 재사용해 **클립이 영영
+    # 안 나온다** — 코드는 고쳤는데 결과가 안 바뀌는 정확히 그 함정.
+    RECOMMEND_VER = "2026-08-16-clips"
     REFINE_VER = "2026-07-27-speaker-preserve"
     FACES_VER = "2026-07-29-sample-10s"
     SHOTS_VER = "2026-07-24a"

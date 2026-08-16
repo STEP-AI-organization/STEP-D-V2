@@ -43,7 +43,17 @@ class ClipLengthRules(unittest.TestCase):
         clips = build_clips_from_beats(beats([(0, 300), (300, 600)]))
         self.assertEqual(len(clips), 1)
         self.assertTrue(clips[0]["monetizable"])
-        self.assertGreaterEqual(clips[0]["score100"], 60)
+
+    def test_점수가_자동배포_기준과_맞물린다(self):
+        """`score80` 을 건 클립 규칙 = '미드롤 가능한 클립만' 이어야 한다.
+
+        쇼츠 분포에 맞춘 기준(80)을 클립에 그대로 적용하면서 점수를 낮게 주면,
+        규칙은 켜져 있는데 한 건도 안 나가는 상태가 된다(이 리포 최빈 실패모드).
+        """
+        long_clip = build_clips_from_beats(beats([(0, 300), (300, 600)]))[0]
+        short_clip = build_clips_from_beats(beats([(0, 100), (100, 200)]))[0]
+        self.assertGreaterEqual(long_clip["score100"], 80, "8분+ 클립이 score80 을 못 넘는다")
+        self.assertLess(short_clip["score100"], 80, "3분대 클립까지 score80 을 넘으면 기준이 무의미해진다")
 
     def test_상한을_넘기지_않는다(self):
         spans = [(i * 120, (i + 1) * 120) for i in range(10)]   # 2분 × 10 = 20분
