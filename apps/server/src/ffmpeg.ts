@@ -367,10 +367,20 @@ export function circleCrop(srcPath: string, dstPath: string, size: number): Prom
 
 /** 프리롤→본문 cross-dissolve 길이(초). 프로토타입(render_shorts.py) 검증값. */
 const HOOK_XFADE_SEC = 0.25;
-/** 훅 내레이션이 깔릴 때 원음을 얼마나 줄일지 — 0 이면 현장감이 사라진다(웃음·환호가 훅의 실체). */
-const HOOK_DUCK_VOL = 0.35;
-/** 내레이션 음량 — 원음 위에서 또렷하게 들려야 하지만 클리핑은 피한다(뒤에 dynaudnorm). */
+/** 내레이션 음량 — 원음 위에서 또렷하게 들려야 하지만 클리핑은 피한다. */
 const HOOK_TTS_VOL = 1.6;
+/**
+ * 내레이션 덕킹 — **사이드체인**이다(고정 감쇠가 아니라).
+ *
+ * 실측(2026-08-16 · 3초 훅에 1.5초 내레이션)으로 고른 방식이다:
+ *   고정 감쇠(volume=0.35 + dynaudnorm) → 내레이션이 끝난 뒤에도 원음이 눌린 채 남아
+ *     뒷부분이 원음보다 **9dB 더 조용**해졌다(-37.8 vs 원음 -28.7). 소리가 죽은 것처럼 들린다.
+ *   사이드체인 → 내레이션 중에만 누르고 끝나면 원음이 그대로 돌아온다(-28.7 = 원음과 동일).
+ *
+ * ⚠️ 사이드체인 입력을 **apad 로 늘려야 한다** — 안 그러면 sidechaincompress 가 출력 길이를
+ * 사이드체인 길이(1.48초)로 잘라서 프리롤 오디오가 통째로 짧아진다(실측).
+ */
+const HOOK_DUCK = "sidechaincompress=threshold=0.02:ratio=8:attack=5:release=300";
 
 /**
  * renderShort 의 hook-preroll 분기 — 2입력 xfade.
@@ -437,8 +447,10 @@ function renderShortWithPreroll(opts: RenderShortOpts & { hookPreroll: NonNullab
     // 본문 오디오에 volume/atempo(속도) 적용 후 · 프리롤 오디오와 크로스페이드.
     vf += `;[1:a]${audioFilter ? audioFilter : "anull"}[ba]`;
     if (tts) {
-      vf += `;[0:a]volume=${HOOK_DUCK_VOL}[pd];[2:a]volume=${HOOK_TTS_VOL},aresample=async=1[tn]`
-        + `;[pd][tn]amix=inputs=2:duration=first:dropout_transition=0,dynaudnorm=f=200[pa]`;
+      vf += `;[2:a]volume=${HOOK_TTS_VOL},aresample=async=1,asplit=2[tk][tv]`
+        + `;[tk]apad[tkp]`                       // ⚠️ 없으면 출력이 내레이션 길이로 잘린다
+        + `;[0:a][tkp]${HOOK_DUCK}[pd]`
+        + `;[pd][tv]amix=inputs=2:duration=first:dropout_transition=0[pa]`;
     } else {
       vf += `;[0:a]anull[pa]`;
     }
