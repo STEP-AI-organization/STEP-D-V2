@@ -614,7 +614,28 @@ _AXIS_WEIGHTS = {"hook_strength": 0.40, "payoff": 0.35, "completeness": 0.25}
 #   hook      beat_annot 의 **카테고리 라벨** (0-10 점수가 아니라 분류라 상대적으로 안정)
 #   길이      쇼츠 적정 길이 곡선
 #   완결성    beat 의 is_complete
-_SCORE_W = {"signal": 0.40, "hook": 0.25, "length": 0.20, "closure": 0.15}
+#
+# ⚠️ **길이는 점수축이 아니다** (사용자 확정 2026-08-16). 길이는 품질이 아니라 **제약**이다 —
+# 40초짜리가 70초짜리보다 '좋은' 게 아니라, 배포처가 받아주느냐 마느냐의 문제다. 그건 이미
+# 세 군데가 따로 본다: core/common/channels.py 의 배포처별 min/maxSec(usable 판정),
+# channel-rules.ts 의 채널 규칙 maxSec, 그리고 클립의 미드롤 기준(8분). 점수에까지 넣으면
+# 같은 축을 네 번 세는 셈이고, 무엇보다 **적정 길이 창(25~90초)이 쇼츠 전제**라 롱폼이
+# 구조적으로 깎였다(그래서 클립은 별도 점수식을 써야 했다).
+# 빠진 0.20 은 남은 축에 비례 배분한다.
+#
+# ── Opus Clip 벤치마킹 (사용자 방향 2026-08-16) ────────────────────────────────
+# Opus 의 Virality Score 축은 **Hook · Flow · Value · Trend** 로 전부 의미축이고, 그걸
+# LLM 이 매긴다. 우리는 그 구조를 빌리되 **점수는 결정론으로 낸다**(LLM 점수 금지 원칙 —
+# 매번 값이 바뀌면 A/B·회귀 판정이 성립하지 않는다). 대응은 이렇게 잡았다:
+#   Hook  → hook 축   (beat_annot 이 붙인 9종 카테고리 라벨. 아래에서 LLM 응답 의존을 끊었다)
+#   Flow  → closure 축(끝맺음 여유 — 말허리에서 끊겼는가)
+#   Value → signal 축 (대사 밀도·오디오 — 내용이 실제로 벌어지는가)
+#   Trend → viewer 보너스(실제 시청자가 댓글 타임스탬프로 지목한 구간. 아래 _VIEWER_BONUS)
+_SCORE_W = {"signal": 0.45, "hook": 0.35, "closure": 0.20}
+#: 시청자 지목 보너스(0~이 값). Opus 의 Trend 축 대응 — **우리 것이 더 강한 신호다**(추정
+#: 트렌드가 아니라 그 영상의 실제 시청자 반응이다). 다만 댓글이 없는 회차가 많아 축으로
+#: 넣으면 대부분 중립 0.5 로 희석되므로, **있을 때만 얹는 가산점**으로 둔다.
+_VIEWER_BONUS = 10.0
 
 # 끝맺음 여유 — 쇼츠 끝 뒤에 침묵이 얼마나 있나. 이 값이 0이면 다음 발화가 곧바로 이어지는
 # 지점에서 끊긴 것이라 "말허리 자른" 느낌이 난다.
@@ -654,13 +675,15 @@ _HOOK_W = {
     "기타": 0.34, "": 0.34,
 }
 
-# 쇼츠 적정 길이 — 이 구간이 1.0, 밖으로 갈수록 선형 감쇠.
+# 쇼츠 적정 길이 — **점수축에서 뺐다**(사용자 확정 2026-08-16 · _SCORE_W 주석 참고).
+# 함수는 남긴다: 배포처 적합(core/common/channels.py)·채널 규칙이 길이를 여전히 보고,
+# 화면이 "이 길이가 적정한가" 를 정보로 보여줄 근거가 필요하다. 다만 **점수에는 안 들어간다**.
 _LEN_OK = (25.0, 90.0)
 _LEN_FLOOR = 0.35
 
 
 def _length_fit(sec: float) -> float:
-    """길이 적합도 0..1. 25~90초 = 1.0, 짧거나 길수록 감쇠(하한 0.35)."""
+    """길이 적합도 0..1 (정보용 — score100 에는 반영하지 않는다)."""
     lo, hi = _LEN_OK
     if lo <= sec <= hi:
         return 1.0
@@ -678,7 +701,16 @@ def _length_fit(sec: float) -> float:
 #:   cut_rate          0인 비율 73.8% · 고유값  67                  ← 대부분 0, 사실상 죽은 축
 #: 예전엔 넷을 **단순 평균**해서, 74% 가 0 인 cut_rate 가 신호축의 1/4(총점의 10%)을 먹고
 #: 살아 있는 오디오 신호를 희석했다.
-_SIGNAL_W = {"audio_pct": 0.40, "audio_delta": 0.30, "dialogue_density": 0.20, "cut_rate": 0.10}
+#
+# ⚠️ **오디오를 더 올리지 않는다.** 음량이 곧 하이라이트라는 가설은 이 리포에서 이미 한 번
+# 실측으로 반박됐다 — index_segments.py:179-186 "쇼츠 채택/미채택의 audio_pct 중앙값이
+# 0.525/0.475 로 거의 안 갈렸다", :258-261 "드라마 상위에 **엔딩 크레딧**(음악 큼)이 0.859 로
+# 올라왔다". 즉 음량만 올리면 BGM·크레딧이 먼저 올라온다. 그래서 대사 밀도를 같은 급으로
+# 두고(말이 오가야 내용이다), 아래 _music_guard 로 "큰 소리인데 말이 없는" 구간을 눌러 둔다.
+_SIGNAL_W = {"audio_pct": 0.30, "audio_delta": 0.30, "dialogue_density": 0.30, "cut_rate": 0.10}
+#: 대사 밀도가 이 백분위 미만이면 '말 없는 큰 소리'(음악·크레딧·환경음)로 보고 오디오 기여를 깎는다.
+_MUSIC_GUARD_PCT = 0.20
+_MUSIC_GUARD_DAMP = 0.35
 #: 한 값이 이 비율 이상을 차지하면 그 회차에서는 변별력이 없는 축으로 보고 뺀다.
 #: 프로그램마다 다르다 — 컷이 잦은 예능은 cut_rate 가 살아 있고, 인터뷰 위주는 죽는다.
 #: 하드코딩으로 축을 지우지 않고 **회차 데이터가 스스로 정하게** 한다.
@@ -719,32 +751,54 @@ def beat_signal_percentiles(beats: list[dict]) -> dict:
     out: dict = {}
     for b in beats:
         i = b.get("id")
-        got = [(per_key[k][i], live[k]) for k in keys if k in live and i in per_key[k]]
+        got = [(k, per_key[k][i], live[k]) for k in keys if k in live and i in per_key[k]]
         if not got:
             out[i] = None
             continue
-        wsum = sum(w for _v, w in got)
-        out[i] = round(sum(v * w for v, w in got) / wsum, 4) if wsum > 0 else None
+        # 음악 방어 — 대사가 거의 없는데 소리만 큰 구간(엔딩 크레딧·BGM)은 오디오 축을 깎는다.
+        # 이 방어가 없으면 "음량 상위 = 하이라이트"가 되어 크레딧이 1등으로 올라온다(실측).
+        talk = per_key.get("dialogue_density", {}).get(i)
+        quiet_talk = isinstance(talk, (int, float)) and talk < _MUSIC_GUARD_PCT
+        adj = []
+        for k, v, w in got:
+            if quiet_talk and k in ("audio_pct", "audio_delta"):
+                v = v * _MUSIC_GUARD_DAMP
+            adj.append((v, w))
+        wsum = sum(w for _v, w in adj)
+        out[i] = round(sum(v * w for v, w in adj) / wsum, 4) if wsum > 0 else None
     return out
 
 
 def _deterministic_score(picked_beats: list[dict], sec: float, hook: str,
                          sig_pct: dict, transcript: list[dict] | None = None,
-                         end: float | None = None) -> tuple[float, dict]:
+                         end: float | None = None,
+                         starred_ids: set | None = None) -> tuple[float, dict]:
     """쇼츠 하나의 score100(0-100)과 근거 내역. **LLM 응답을 일절 쓰지 않는다.**"""
     sigs = [sig_pct.get(b.get("id")) for b in picked_beats]
     sigs = [s for s in sigs if isinstance(s, (int, float))]
     signal = sum(sigs) / len(sigs) if sigs else 0.5  # 신호 없으면 중립
-    hook_w = _HOOK_W.get((hook or "").strip(), _HOOK_W["기타"])
-    length = _length_fit(sec)
+    # ⚠️ hook 은 **beat_annot 이 붙인 라벨이 정본**이다. 예전엔 호출부가 LLM 응답의 hook
+    # 문자열을 우선 넘겨서, "점수는 결정론" 이라는 전제가 이 축(지분 최대)에서 깨져 있었다
+    # (temperature 0.3 · enum 제약 없음 → 실행마다 달라진다). 아래 호출부에서 순서를 뒤집었고,
+    # 여기서도 beat 라벨을 다시 확인해 LLM 값이 새어 들어오면 무시한다.
+    beat_hook = next((str(b.get("hook") or "").strip() for b in picked_beats
+                      if str(b.get("hook") or "").strip() in _HOOK_W), "")
+    hook_key = beat_hook or (hook or "").strip()
+    hook_w = _HOOK_W.get(hook_key, _HOOK_W["기타"])
     closure = _closure_fit(transcript, end) if end is not None else 0.5
 
     raw = (_SCORE_W["signal"] * signal + _SCORE_W["hook"] * hook_w
-           + _SCORE_W["length"] * length + _SCORE_W["closure"] * closure)
+           + _SCORE_W["closure"] * closure)
+    # Trend 대응 — 실제 시청자가 댓글에서 지목한 beat 이 들어 있으면 가산(있을 때만).
+    starred = bool(starred_ids) and any(b.get("id") in starred_ids for b in picked_beats)
+    score = max(0.0, min(1.0, raw)) * 100.0 + (_VIEWER_BONUS if starred else 0.0)
     parts = {"signal": round(signal, 4), "hook": hook_w,
-             "length": round(length, 4), "closure": round(closure, 4),
-             "has_signals": bool(sigs)}
-    return round(max(0.0, min(1.0, raw)) * 100.0, 1), parts
+             "closure": round(closure, 4),
+             "viewer": _VIEWER_BONUS if starred else 0.0,
+             "has_signals": bool(sigs),
+             # 화면이 가중치를 하드코딩하지 않게 같이 내려보낸다(지금 shorts-card 는 박아 뒀다).
+             "weights": dict(_SCORE_W)}
+    return round(min(100.0, score), 1), parts
 
 
 def _appeal_from_score100(score100: float) -> int:
@@ -3599,7 +3653,10 @@ title (폴백) 은 두 줄 합쳐 한 줄로 자연스럽게.
             if m:
                 title_line1 = title_line1 or m.group(1).strip()
                 title_line2 = title_line2 or m.group(2).strip()
-        hook = (s.get("hook") or picked_beats[0].get("hook") or "기타").strip()
+        # ⚠️ **beat 라벨이 먼저다.** 예전엔 LLM 응답(s["hook"])을 우선해서, 점수 지분이 가장
+        # 큰 축이 실행마다 달라졌다(temperature 0.3 · enum 제약 없음) — "score100 은 결정론"
+        # 이라는 전제가 거기서 깨져 있었다. LLM 값은 beat 에 라벨이 없을 때만 쓴다(표시용).
+        hook = (picked_beats[0].get("hook") or s.get("hook") or "기타").strip()
         tags = [str(t).strip() for t in (s.get("tags") or []) if str(t).strip()]
         # characters: 조합된 beats의 union
         chars_set: list[str] = []
@@ -3615,8 +3672,11 @@ title (폴백) 은 두 줄 합쳐 한 줄로 자연스럽게.
         # 입력에도 실행마다 달라져 A/B·회귀 판정이 불가능해진다. 예전 7/7/8 하드코딩은
         # 모든 쇼츠가 72.5 로 동일해 변별력이 아예 없었고, 그 사이 단계인 LLM 3축은
         # 재현성을 잃는다 — 둘 다 답이 아니라서 신호 기반으로 간다.
+        # starred_map 은 beat **인덱스** 키라 id 로 바꿔 넘긴다(점수는 id 로 판정한다).
+        _starred_bids = {beats[i].get("id") for i in starred_map if 0 <= i < len(beats)}
         _score100, _score_parts = _deterministic_score(
-            picked_beats, sf_end - sf_start, hook, _sig_pct, transcript, sf_end)
+            picked_beats, sf_end - sf_start, hook, _sig_pct, transcript, sf_end,
+            starred_ids=_starred_bids)
         shorts.append({
             "type": "shortform",
             "start": sf_start,
@@ -3749,12 +3809,7 @@ def build_clips_from_beats(beats: list[dict], max_clips: int = 3,
         # 점수는 관측값만으로 만든다(LLM 점수 금지 · 리포 원칙). 축은 셋 — 미드롤 가능
         # 여부·구성 beat 수·등장 인물 수.
         #
-        # ⚠️ 자동배포 규칙의 기준(score80/score85)은 **쇼츠 점수 분포에 맞춰 만든 손잡이**다.
-        # 클립을 쇼츠와 같은 척도로 매기면(쇼츠는 90점대가 흔하다) 클립은 상시 탈락해
-        # "규칙은 켰는데 한 건도 안 나가는" 상태가 된다. 그래서 **길이 하한을 통과한 클립은
-        # 이미 쓸 만한 물건**으로 보고 70에서 시작하고, 미드롤 가능(8분+)이면 +20 을 준다.
-        # 결과적으로 `score80` 을 건 클립 규칙은 **"미드롤 가능한 클립만 내보낸다"** 는
-        # 뜻이 된다 — 수익화가 목적인 운영자에게 그게 맞는 손잡이다.
+        # 점수는 관측값만으로 만든다(LLM 점수 금지 · 리포 원칙).
         #
         # 신호(오디오 백분위 등)도 본다 — 안 보면 "조용한 8분"과 "웃음이 터지는 8분"이 같은
         # 점수를 받는다. 쇼츠가 쓰는 것과 **같은 축**이라 두 물건의 근거가 갈라지지 않는다.
@@ -3762,10 +3817,15 @@ def build_clips_from_beats(beats: list[dict], max_clips: int = 3,
         sigs = [sig_pct.get(b.get("id")) for b in run] if sig_pct else []
         sigs = [s for s in sigs if isinstance(s, (int, float))]
         signal = sum(sigs) / len(sigs) if sigs else 0.5
+        # ⚠️ 눈금은 **쇼츠와 같아야 한다.** 실측 분포는 드라마 69.8~85.6 · 예능 62.7~84.3 으로
+        # **90점대가 나온 적이 없다**(search-highlight-replan-2026-08-06.md). 앞서 "쇼츠는
+        # 90점대가 흔하다"를 전제로 클립을 70에서 시작시켰는데 전제가 실측과 반대였고, 그러면
+        # 8분+ 클립이 95~100 이 되어 **top3 규칙에서 클립만 뽑힌다.** 같은 구간에 놓는다.
+        # score80 = "미드롤 가능한 클립" 이라는 뜻은 유지된다(3분대 최대 75 · 8분+ 최소 82).
         monetizable = length >= CLIP_MONETIZE_SEC
         score = min(100, int(
-            60
-            + (20 if monetizable else 0)
+            55
+            + (15 if monetizable else 0)
             + round(15 * signal)          # 신호 — 조용한 구간과 터지는 구간을 가른다
             + min(5, len(run))
         ))
