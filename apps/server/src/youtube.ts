@@ -449,6 +449,42 @@ export async function uploadVideoResumable(
   return { videoId: data.id };
 }
 
+/**
+ * 커스텀 썸네일 설정 (`thumbnails.set`).
+ *
+ * **롱폼 클립에는 사실상 필수다.** 쇼츠는 유튜브가 프레임을 알아서 쓰지만, 일반 영상은
+ * 썸네일이 곧 클릭률이라 자동 프레임으로 나가면 아무리 좋은 클립도 안 눌린다.
+ *
+ * 유튜브 제약: 2MB 이하 · jpg/png · 1280x720 권장. **채널이 인증(전화 확인)되어 있어야
+ * 한다** — 미인증 채널은 403 을 준다. 그래서 실패해도 업로드 자체를 되돌리지 않는다
+ * (영상은 이미 올라가 있다). 호출부가 사유만 남기고 진행하게 던지되, 에러 코드를 살려
+ * "인증 안 된 채널" 과 "파일이 큼" 을 구분할 수 있게 한다.
+ */
+export async function setVideoThumbnail(
+  accessToken: string,
+  videoId: string,
+  image: { body: Buffer; contentType?: string },
+): Promise<void> {
+  const MAX_BYTES = 2 * 1024 * 1024;
+  if (image.body.byteLength > MAX_BYTES) {
+    throw new Error(`썸네일이 2MB 를 넘습니다 (${Math.round(image.body.byteLength / 1024)}KB)`);
+  }
+  const res = await fetch(
+    `https://www.googleapis.com/upload/youtube/v3/thumbnails/set?videoId=${encodeURIComponent(videoId)}`,
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": image.contentType || "image/jpeg",
+      },
+      body: image.body,
+    },
+  );
+  if (!res.ok) {
+    throw new YouTubeApiError(res.status, `thumbnails.set 실패 (${res.status}): ${(await res.text()).slice(0, 300)}`);
+  }
+}
+
 // ── Shorts classification ─────────────────────────────────────────────────────────
 //
 // The Data API exposes no "is this a Short?" field, and duration is unreliable (Shorts

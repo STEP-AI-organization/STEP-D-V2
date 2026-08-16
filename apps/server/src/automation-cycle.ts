@@ -195,6 +195,16 @@ export async function runAutomationCycle(): Promise<CycleReport> {
         // 채널별 메타데이터 생성 — 수동 채택(adopt 라우트)과 같은 배선. 안 걸면 자동
         // 클립은 clip.title 폴백으로만 나간다(프로그램 제목 프롬프트·태그 미반영).
         await enqueue("clip.metadata", { clipId }, { dedupeKey: `clip.metadata:${clipId}` }).catch(() => {});
+        // 클립(롱폼)은 **커스텀 썸네일이 있어야 클릭이 난다** — 쇼츠는 유튜브가 프레임을
+        // 쓰지만 일반 영상은 썸네일이 곧 클릭률이다. 썸네일 생성 기능(thumbnail.generate)을
+        // 회차 단위로 한 번 걸어 둔다(dedupe 로 회차당 1회). 게시를 막지는 않는다 —
+        // 등록 출연자 사진이 없으면 이 잡은 실패하는데, 그때는 렌더 프레임으로 나간다
+        // (resolveClipThumbnail 의 3단 폴백). 썸네일 때문에 배포가 멈추는 게 더 나쁘다.
+        if (landscape && master?.id && ep.programId) {
+          await enqueue("thumbnail.generate",
+            { mediaId: master.id, programId: ep.programId, title: rec.title },
+            { dedupeKey: `thumbnail.generate:${master.id}` }).catch(() => {});
+        }
         // AI 리프레임(규칙 옵션) — 수동 채택과 같은 배선: 세로+AI 조합(store.tsx 와 같은
         // 조건식)이면 채택 직후 /clips/:id/reframe(mode=ai_multi)로 분석을 큐잉한다.
         // 리프레임→렌더 순서도 수동과 동일하다: /export 가 플랜 완료 전엔 reframe_not_ready

@@ -64,11 +64,14 @@ import {
   fetchVideosBatch,
   fetchVideoComments,
   uploadVideoResumable,
+  setVideoThumbnail,
   updateVideoPrivacy,
   TokenRevokedError,
   type PersistTokens,
 } from "./youtube.ts";
-import { createReadStream, parseObjectPath, fileExists, signedReadUrl } from "./storage-gcs.ts";
+import {
+  createReadStream, parseObjectPath, fileExists, signedReadUrl, readFile, listPrefix,
+} from "./storage-gcs.ts";
 import { pipeline } from "node:stream/promises";
 import {
   youtubeUploadEnabled, UPLOAD_DISABLED_MESSAGE,
@@ -1404,6 +1407,61 @@ async function markDistributionFailed(
   }
 }
 
+/**
+ * 이 클립으로 유튜브에 올릴 썸네일을 고른다.
+ *
+ * 우선순위 — **사람이 고른 것 → AI 생성물 → 렌더 프레임**.
+ *  1. `clip.thumbnailUrl` : 추천에서 채택할 때 사람이 고른 변형(16:9 우선).
+ *  2. `thumbnails/{masterMediaId}/` : 썸네일 생성 기능(thumbnail.generate)이 만든 후보.
+ *     회차 단위라 클립마다 다르지는 않지만, 자동 프레임보다는 훨씬 낫다.
+ *  3. 렌더된 클립 자체의 대표 프레임(clip media 의 thumbPath) — 항상 있다(export 가 뽑는다).
+ *
+ * 셋 다 없으면 null 을 돌려주고 호출부가 그냥 진행한다 — 썸네일 때문에 배포를 막지 않는다.
+ */
+async function resolveClipThumbnail(
+  clip: any,
+): Promise<{ body: Buffer; contentType: string; source: string } | null> {
+  const mime = (p: string) => (/\.png$/i.test(p) ? "image/png" : /\.webp$/i.test(p) ? "image/webp" : "image/jpeg");
+  const load = async (objPath: string, source: string) => {
+    if (!objPath || !(await fileExists(objPath).catch(() => false))) return null;
+    const body = await readFile(objPath);
+    return { body, contentType: mime(objPath), source };
+  };
+
+  // 1) 사람이 고른 변형. 저장된 값이 URL 형태(/media/... · /api/...)일 수 있어 오브젝트 경로만 받는다.
+  const chosen = String(clip?.thumbnailUrl ?? "");
+  if (chosen && !chosen.startsWith("/") && !/^https?:/i.test(chosen)) {
+    const hit = await load(parseObjectPath(chosen), "chosen").catch(() => null);
+    if (hit) return hit;
+  }
+
+  // 2) 썸네일 생성 기능의 산출물 (회차 단위).
+  const masterId = String(clip?.sourceMediaId ?? "");
+  if (masterId) {
+    try {
+      const { thumbnailPrefix } = await import("./thumbnail-assets.ts");
+      const paths = (await listPrefix(`${thumbnailPrefix(masterId)}/`))
+        .filter((p) => /\.(png|jpe?g|webp)$/i.test(p))
+        .sort();
+      if (paths.length) {
+        const hit = await load(paths[0], "ai").catch(() => null);
+        if (hit) return hit;
+      }
+    } catch { /* 목록 조회 실패는 폴백으로 간다 */ }
+  }
+
+  // 3) 렌더 결과의 대표 프레임 — export 가 항상 하나 뽑아 둔다.
+  const clipMediaId = String(clip?.mediaId ?? "");
+  if (clipMediaId) {
+    const m = await getMedia(clipMediaId).catch(() => null);
+    if (m?.thumbPath) {
+      const hit = await load(parseObjectPath(m.thumbPath), "frame").catch(() => null);
+      if (hit) return hit;
+    }
+  }
+  return null;
+}
+
 /** ISO RFC3339 if `raw` parses to a FUTURE instant, else null (upload immediately). */
 function futurePublishAt(raw: unknown): string | null {
   if (typeof raw !== "string" || !raw) return null;
@@ -1952,6 +2010,21 @@ async function runDistributionPublish(job: Job): Promise<void> {
         },
       ),
     );
+
+    // 커스텀 썸네일 — **롱폼 클립에는 사실상 필수다**(쇼츠는 유튜브가 프레임을 쓴다).
+    // 업로드는 이미 끝났으므로 여기서 실패해도 배포를 실패로 돌리지 않는다. 사유만 남긴다.
+    try {
+      const thumb = await resolveClipThumbnail(clip);
+      if (thumb) {
+        await withChannelToken(ch, (token) => setVideoThumbnail(token, videoId, thumb));
+        console.log(`[worker] youtube 썸네일 설정 ${clipId} → ${videoId} (${thumb.source})`);
+      } else {
+        console.warn(`[worker] youtube 썸네일 없음 ${clipId} — 유튜브 자동 프레임으로 나간다`);
+      }
+    } catch (e) {
+      console.warn(`[worker] youtube 썸네일 설정 실패 ${clipId}:`,
+        e instanceof Error ? e.message.slice(0, 200) : e);
+    }
 
     // A future publishAt means YouTube holds the video private until then — report 'scheduled'.
     const finalStatus = publishAt ? "scheduled" : "published";
