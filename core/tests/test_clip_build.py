@@ -102,5 +102,39 @@ class ClipAssembly(unittest.TestCase):
         self.assertEqual(build_clips_from_beats(bad), [])
 
 
+
+class SignalAwareClips(unittest.TestCase):
+    """오디오 신호가 **점수**와 **경계** 둘 다에 쓰이는가.
+
+    사용자 방향(2026-08-16): "STT 데시벨 점수 좀 넣고 싶어."
+    이미 신호축(audio_pct·audio_delta)은 쇼츠 점수에 있었지만 클립은 길이·beat 수만 봤다.
+    """
+
+    def test_조용한_클립보다_터지는_클립이_앞선다(self):
+        spans = [(i * 120, (i + 1) * 120) for i in range(5)]   # 10분
+        loud = build_clips_from_beats(beats(spans), sig_pct={i + 1: 1.0 for i in range(5)})
+        quiet = build_clips_from_beats(beats(spans), sig_pct={i + 1: 0.0 for i in range(5)})
+        self.assertGreater(loud[0]["score100"], quiet[0]["score100"],
+                           "신호가 점수에 반영되지 않으면 조용한 8분과 터지는 8분이 같은 값을 받는다")
+        self.assertTrue(loud[0]["score_parts"]["has_signals"])
+
+    def test_신호가_없으면_중립으로_진행한다(self):
+        # 옛 회차·ffmpeg 실패로 신호가 없어도 클립은 나와야 한다(막으면 회귀).
+        clips = build_clips_from_beats(beats([(0, 300), (300, 600)]))
+        self.assertEqual(len(clips), 1)
+        self.assertFalse(clips[0]["score_parts"]["has_signals"])
+        self.assertEqual(clips[0]["score_parts"]["signal"], 0.5)
+
+    def test_상한을_넘기면_가장_조용한_지점에서_끊는다(self):
+        # 길이 상한만으로 끊으면 '회차를 N등분한 것'이 된다(실측). 조용한 경계 = 장면 전환.
+        spans = [(i * 60, (i + 1) * 60) for i in range(20)]     # 1분 × 20 = 20분
+        sig = {i + 1: 1.0 for i in range(20)}
+        sig[10] = 0.0                                           # 10분 지점이 가장 조용하다
+        clips = build_clips_from_beats(beats(spans), max_clips=5, sig_pct=sig)
+        self.assertTrue(clips, "클립이 하나도 안 나왔다")
+        self.assertAlmostEqual(clips[0]["end"], 600.0, delta=1.0,
+                               msg="가장 조용한 경계에서 끊지 않았다")
+
+
 if __name__ == "__main__":
     unittest.main()

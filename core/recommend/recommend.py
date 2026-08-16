@@ -669,12 +669,28 @@ def _length_fit(sec: float) -> float:
     return max(_LEN_FLOOR, hi / sec)
 
 
+#: 신호축 안에서의 가중치. **오디오가 절반 이상**이다(사용자 방향 2026-08-16 "데시벨 점수").
+#:
+#: 실측 근거 (나는 SOLO 회차 · beat 298개 · 2026-08-16):
+#:   audio_pct         0인 비율  0.3% · 고유값 298 · 표준편차 0.290  ← 가장 잘 갈린다
+#:   audio_delta       0인 비율  0.0% · 고유값 210 · 표준편차 0.118  ← 웃음·환호의 대리 지표
+#:   dialogue_density  0인 비율  0.7% · 고유값 283 · 표준편차 2.536
+#:   cut_rate          0인 비율 73.8% · 고유값  67                  ← 대부분 0, 사실상 죽은 축
+#: 예전엔 넷을 **단순 평균**해서, 74% 가 0 인 cut_rate 가 신호축의 1/4(총점의 10%)을 먹고
+#: 살아 있는 오디오 신호를 희석했다.
+_SIGNAL_W = {"audio_pct": 0.40, "audio_delta": 0.30, "dialogue_density": 0.20, "cut_rate": 0.10}
+#: 한 값이 이 비율 이상을 차지하면 그 회차에서는 변별력이 없는 축으로 보고 뺀다.
+#: 프로그램마다 다르다 — 컷이 잦은 예능은 cut_rate 가 살아 있고, 인터뷰 위주는 죽는다.
+#: 하드코딩으로 축을 지우지 않고 **회차 데이터가 스스로 정하게** 한다.
+_SIGNAL_DEAD_RATIO = 0.70
+
+
 def beat_signal_percentiles(beats: list[dict]) -> dict:
     """beat id → 신호 백분위(0..1). 회차 내 상대값이라 회차 간 마스터링 차이를 흡수한다.
 
     반환이 결정론적이려면 입력 순서에 의존하면 안 되므로 (값, id) 로 정렬한다.
     """
-    keys = ("audio_pct", "audio_delta", "dialogue_density", "cut_rate")
+    keys = tuple(_SIGNAL_W)
     # ⚠️ 동점 tie-break 를 **리스트 인덱스로 하면 안 된다** — 같은 beat 집합이라도 순서가
     # 다르면 백분위가 달라져 점수가 흔들린다(실측: 셔플 후 score100 불일치). beat id 로
     # 깨야 입력 순서와 무관하게 같은 값이 나온다. 결정론이 이 함수의 존재 이유다.
@@ -683,21 +699,32 @@ def beat_signal_percentiles(beats: list[dict]) -> dict:
         return (0, int(v)) if isinstance(v, (int, float)) else (1, str(v))
 
     per_key: dict[str, dict] = {}
+    live: dict[str, float] = {}
     for k in keys:
         pairs = [(b, (b.get("signals") or {}).get(k)) for b in beats]
         have = [(b, float(v)) for b, v in pairs if isinstance(v, (int, float))]
         ranks: dict = {}
         if have:
-            order = sorted(have, key=lambda bv: (bv[1], _bid(bv[0])))
-            n = len(order)
-            for r, (b, _v) in enumerate(order):
-                ranks[b.get("id")] = (r / max(1, n - 1)) if n > 1 else 0.5
+            # 한 값이 압도적이면(예: cut_rate 가 74% 0) 이 회차에서는 변별력이 없다 —
+            # 넣어 봐야 나머지 축을 희석하기만 한다.
+            vals = [v for _b, v in have]
+            top = max(vals.count(v) for v in set(vals))
+            if top / len(vals) < _SIGNAL_DEAD_RATIO:
+                live[k] = _SIGNAL_W[k]
+                order = sorted(have, key=lambda bv: (bv[1], _bid(bv[0])))
+                n = len(order)
+                for r, (b, _v) in enumerate(order):
+                    ranks[b.get("id")] = (r / max(1, n - 1)) if n > 1 else 0.5
         per_key[k] = ranks
     out: dict = {}
     for b in beats:
         i = b.get("id")
-        got = [per_key[k][i] for k in keys if i in per_key[k]]
-        out[i] = round(sum(got) / len(got), 4) if got else None
+        got = [(per_key[k][i], live[k]) for k in keys if k in live and i in per_key[k]]
+        if not got:
+            out[i] = None
+            continue
+        wsum = sum(w for _v, w in got)
+        out[i] = round(sum(v * w for v, w in got) / wsum, 4) if wsum > 0 else None
     return out
 
 
@@ -3636,7 +3663,8 @@ CLIP_MAX_SEC = 900.0
 CLIP_GAP_SEC = 45.0
 
 
-def build_clips_from_beats(beats: list[dict], max_clips: int = 3) -> list[dict]:
+def build_clips_from_beats(beats: list[dict], max_clips: int = 3,
+                           sig_pct: dict | None = None) -> list[dict]:
     """인접 beat 를 이어 붙여 가로형 클립 후보를 만든다.
 
     **결정론**이다 — LLM 에 점수·순위를 맡기지 않는다(리포 원칙). 제목·요약은 이미
@@ -3655,17 +3683,45 @@ def build_clips_from_beats(beats: list[dict], max_clips: int = 3) -> list[dict]:
         return []
 
     # 1) 끊기지 않고 이어지는 beat 묶음(런)으로 자른다.
+    #
+    # ⚠️ **길이 상한으로만 끊으면 클립이 아니라 '회차를 N등분한 것'이 된다.**
+    # 실측(나는 SOLO · beat 298개 · 평균 6초): beat 이 촘촘해 45초 넘게 벌어지는 지점이
+    # 거의 없어, 상한(15분)에 닿을 때까지 계속 붙어 14.7분·15.0분 두 덩어리가 나왔다.
+    # 그래서 **조용한 지점에서 끊는다** — 오디오 신호가 낮은 beat 경계가 대개 장면 전환이다.
+    # 데시벨을 점수뿐 아니라 **경계 결정**에도 쓰는 셈이다.
     runs: list[list[dict]] = []
     cur: list[dict] = []
+
+    def _quiet_cut(run: list[dict]) -> int:
+        """이 런을 어디서 끊을까 — 목표 길이 구간에서 가장 조용한 경계의 인덱스."""
+        start = float(run[0]["start"])
+        lo, hi = CLIP_MONETIZE_SEC, CLIP_MAX_SEC
+        cands = [
+            (sig_pct.get(b.get("id")) if sig_pct else None, i)
+            for i, b in enumerate(run)
+            if lo <= (float(b["end"]) - start) <= hi
+        ]
+        if not cands:
+            return len(run)          # 목표 구간에 경계가 없다 — 통째로 둔다
+        scored = [(v, i) for v, i in cands if isinstance(v, (int, float))]
+        if not scored:
+            return cands[len(cands) // 2][1] + 1   # 신호가 없으면 가운데에서 끊는다
+        scored.sort(key=lambda x: (x[0], x[1]))    # 가장 조용한 곳 · 동점이면 앞쪽
+        return scored[0][1] + 1
+
     for b in ordered:
         if not cur:
             cur = [b]
             continue
         gap = float(b["start"]) - float(cur[-1]["end"])
         span = float(b["end"]) - float(cur[0]["start"])
-        if gap > CLIP_GAP_SEC or span > CLIP_MAX_SEC:
+        if gap > CLIP_GAP_SEC:
             runs.append(cur)
             cur = [b]
+        elif span > CLIP_MAX_SEC:
+            at = _quiet_cut(cur)
+            runs.append(cur[:at])
+            cur = cur[at:] + [b]
         else:
             cur.append(b)
     if cur:
@@ -3699,12 +3755,19 @@ def build_clips_from_beats(beats: list[dict], max_clips: int = 3) -> list[dict]:
         # 이미 쓸 만한 물건**으로 보고 70에서 시작하고, 미드롤 가능(8분+)이면 +20 을 준다.
         # 결과적으로 `score80` 을 건 클립 규칙은 **"미드롤 가능한 클립만 내보낸다"** 는
         # 뜻이 된다 — 수익화가 목적인 운영자에게 그게 맞는 손잡이다.
+        #
+        # 신호(오디오 백분위 등)도 본다 — 안 보면 "조용한 8분"과 "웃음이 터지는 8분"이 같은
+        # 점수를 받는다. 쇼츠가 쓰는 것과 **같은 축**이라 두 물건의 근거가 갈라지지 않는다.
+        # 신호가 없는 회차(옛 분석·ffmpeg 실패)는 중립 0.5 로 둔다.
+        sigs = [sig_pct.get(b.get("id")) for b in run] if sig_pct else []
+        sigs = [s for s in sigs if isinstance(s, (int, float))]
+        signal = sum(sigs) / len(sigs) if sigs else 0.5
         monetizable = length >= CLIP_MONETIZE_SEC
         score = min(100, int(
-            70
+            60
             + (20 if monetizable else 0)
+            + round(15 * signal)          # 신호 — 조용한 구간과 터지는 구간을 가른다
             + min(5, len(run))
-            + min(5, len(chars) * 3)
         ))
         out.append({
             "type": "clip",
@@ -3722,6 +3785,9 @@ def build_clips_from_beats(beats: list[dict], max_clips: int = 3) -> list[dict]:
             "characters": chars,
             "beat_ids": [b.get("id") for b in run if b.get("id") is not None],
             "monetizable": monetizable,
+            # 점수 근거 — 점수만 있으면 "왜 이게 1등인지" 를 못 따진다(쇼츠 score_parts 와 같은 이유).
+            "score_parts": {"signal": round(signal, 4), "monetizable": monetizable,
+                            "beats": len(run), "has_signals": bool(sigs)},
             "source": "beat_merge",
         })
 
@@ -4041,7 +4107,8 @@ def _recommend_narrative_first_impl(
         # 클립(롱폼·가로형)은 **쇼츠 파이프라인을 태우지 않는다** — 위 정렬·프로파일 적합은
         # 전부 쇼츠 길이를 전제로 한 손잡이라, 8분짜리를 거기 넣으면 길이 페널티로 죽는다.
         # beat 를 이어 붙여 따로 만들고 뒤에 붙인다.
-        clips = build_clips_from_beats(beats)
+        # 쇼츠와 **같은 신호축**을 넘긴다 — 두 물건이 다른 근거로 뽑히면 비교가 성립하지 않는다.
+        clips = build_clips_from_beats(beats, sig_pct=beat_signal_percentiles(beats))
         for i, c in enumerate(clips, 1):
             c["rank"] = i
         if clips:
