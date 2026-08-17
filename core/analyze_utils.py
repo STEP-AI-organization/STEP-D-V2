@@ -81,7 +81,7 @@ def prepare_checkpoints(
     # 안 나온다** — 코드는 고쳤는데 결과가 안 바뀌는 정확히 그 함정.
     # 2026-08-16b: 점수 개편 — 길이축 제거(변별력 0) · hook 을 beat 라벨로(LLM 의존 제거) ·
     # 신호축 가중 + 죽은 축 자동 제외 + 음악 방어 · 시청자 지목 가산 · 클립 눈금 재보정.
-    RECOMMEND_VER = "2026-08-16-hook3s"
+    RECOMMEND_VER = "2026-08-17-hookquote"
     REFINE_VER = "2026-07-27-speaker-preserve"
     FACES_VER = "2026-07-29-sample-10s"
     SHOTS_VER = "2026-07-24a"

@@ -12,6 +12,8 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
 import {
+  COST_KRW_PER_MINUTE,
+  COST_KRW_PER_MINUTE_NO_CHYRON,
   apiKeyPrefix,
   billableMinutes,
   estimatedCostKrw,
@@ -63,17 +65,31 @@ describe("청구 분 — 올림", () => {
   });
 
   it("원가는 실측 기준으로 계산된다", () => {
-    // 2026-08-16 재산정: 60분 ≈ ₩1,510(분당 ₩25.2). chyron(자막 세그먼트마다 Vision 1콜 ·
-    // 회차당 약 800콜)이 그전 계산에서 통째로 빠져 있었다 — 근거 usage.json 이 체크포인트
-    // 재개 실행이라 2개 스테이지만 담겨 있었기 때문(how-it-works.md §7-4). 상수는 26.
-    assert.ok(Math.abs(estimatedCostKrw(59) - 1534) < 1);
+    // 2026-08-17 실측 확정: 60분 ≈ ₩2,385(분당 ₩39.8) → 상수 40.
+    // 32.4분 실회차 전 구간(158콜 ₩450) + chyron 별도 실행(780콜 ₩658)을 합쳐 환산했다.
+    // chyron 을 따로 돌린 이유는 로컬 .env 가 RUN_CHYRON_PER_SEG=0 이라 회차 로그에
+    // 안 담기기 때문이다 — 프로덕션은 기본 ON 이다(how-it-works.md §7-4).
+    assert.ok(Math.abs(estimatedCostKrw(59) - 2360) < 1);
   });
 
-  it("원가가 판매가(크레딧 ₩28/분)보다 낮다 — 역마진 감지", () => {
-    // 이 관계가 깨지면 팔수록 손해다. 상수를 잘못 올렸을 때 바로 걸리라고 둔다.
+  it("자막읽기를 끈 구성은 흑자다 — 흑자로 가는 길이 실재함을 고정", () => {
     const CREDIT_PRICE = 28;
-    assert.ok(estimatedCostKrw(60) < CREDIT_PRICE * 60,
-      `원가 ${estimatedCostKrw(60)} 가 매출 ${CREDIT_PRICE * 60} 이상이다 — 역마진`);
+    assert.ok(COST_KRW_PER_MINUTE_NO_CHYRON < CREDIT_PRICE,
+      `자막읽기 OFF 원가 ${COST_KRW_PER_MINUTE_NO_CHYRON} 가 판매가 ${CREDIT_PRICE} 이상이다`);
+  });
+
+  it("지금 프로덕션 기본 구성은 적자라는 사실을 고정한다", () => {
+    // ⚠️ 보통의 가드와 방향이 반대인 테스트다. 실측 결과 **현재 기본값(자막읽기 ON)은
+    // 편당 적자**이고(₩28 받고 ₩40 씀), 이건 코드 버그가 아니라 아직 안 내려진 제품
+    // 결정이다. 그냥 두면 다음 사람이 상수를 슬쩍 낮춰 흑자로 보이게 만든다 —
+    // 이 파일에서 이미 두 번 일어난 일이다(4.9 · 26).
+    //
+    // **이 테스트가 실패하면** 결정이 내려졌다는 뜻이다: 그때 상수·이 테스트·
+    // how-it-works.md §4 를 같이 갱신할 것. 숫자만 고치고 지나가지 말 것.
+    const CREDIT_PRICE = 28;
+    assert.ok(COST_KRW_PER_MINUTE > CREDIT_PRICE,
+      `원가 ${COST_KRW_PER_MINUTE} 가 판매가 ${CREDIT_PRICE} 이하로 내려왔다 — ` +
+      "구성이 바뀌었으면 how-it-works.md §4 와 함께 갱신하라");
   });
 });
 

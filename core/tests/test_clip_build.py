@@ -181,5 +181,55 @@ class HookWindow(unittest.TestCase):
         self.assertEqual(_pick_hook_window(self._beats([(0, 2)], [0.9]), 0.0, 2.0, None), {})
 
 
+class HookQuoteLocate(unittest.TestCase):
+    """LLM 이 고른 훅 대사의 **시각은 전사에서 찾는다.**
+
+    실측(m_981d7c08 · 32.4분 회차 · 2026-08-17): 모델이 준 `hook_time_sec` 은 20개 중 17개가
+    똑같이 `2.0` 이었고, 그 시각의 실제 대사와 대조하니 **12개가 딴 말**이었다. 그대로 렌더하면
+    훅 3초 동안 그 순간 나오지 않는 말이 자막으로 박힌다. 의미 판단(어느 대사가 자극적인가)은
+    LLM 이 하고, 셈(몇 초인가)은 전사에서 우리가 한다.
+    """
+
+    TR = [
+        {"start": 0.4, "end": 3.0, "text": "자, 다음 순서 갈게요."},
+        {"start": 12.2, "end": 15.4, "text": "저 사실은 한의사예요."},
+        {"start": 40.0, "end": 42.0, "text": "끝인사 하겠습니다."},
+    ]
+
+    def test_인용을_찾아_그_시각을_쓴다(self):
+        from core.recommend.recommend import _locate_quote
+        r = _locate_quote("저 사실은 한의사예요", 0.0, 45.0, self.TR)
+        self.assertAlmostEqual(r["hook_time_sec"], 12.2, delta=0.01)
+        self.assertEqual(r["hook_quote"], "저 사실은 한의사예요.")
+
+    def test_조사_마침표가_달라도_찾는다(self):
+        # 모델은 인용을 다듬는다 — 공백·문장부호로 매칭이 깨지면 매번 폴백으로 떨어진다.
+        from core.recommend.recommend import _locate_quote
+        r = _locate_quote("저 사실 한의사 예요!!", 0.0, 45.0, self.TR)
+        self.assertAlmostEqual(r["hook_time_sec"], 12.2, delta=0.01)
+
+    def test_지어낸_인용은_폴백으로_넘긴다(self):
+        from core.recommend.recommend import _locate_quote
+        self.assertEqual(_locate_quote("영상에 없는 말입니다", 0.0, 45.0, self.TR), {})
+
+    def test_쇼츠_맨앞_대사는_훅으로_안_쓴다(self):
+        # 본편 시작과 같은 그림이 두 번 나오는 것을 막는 하한(_HOOK_MIN_OFFSET_SEC)은
+        # 인용 경로에도 똑같이 걸려야 한다.
+        from core.recommend.recommend import _locate_quote
+        self.assertEqual(_locate_quote("자, 다음 순서 갈게요", 0.0, 45.0, self.TR), {})
+
+    def test_모델_시각은_쓰지_않는다(self):
+        # 응답에 hook_time_sec 이 있어도 산출물엔 전사에서 찾은 값이 들어가야 한다.
+        # (구조상 보증: _locate_quote·_pick_hook_window 만 이 키를 만든다)
+        import inspect
+
+        from core.recommend import recommend as R
+        src = inspect.getsource(R.propose_shorts_beat_only)
+        self.assertNotIn('s["hook_time_sec"]', src,
+                         "모델이 준 hook_time_sec 을 산출물에 다시 끼워 넣었다")
+        self.assertNotIn('s.get("hook_time_sec")', src,
+                         "모델이 준 hook_time_sec 을 산출물에 다시 끼워 넣었다")
+
+
 if __name__ == "__main__":
     unittest.main()

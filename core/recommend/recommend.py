@@ -28,6 +28,7 @@ import os
 import re
 import sys
 from collections import Counter
+from difflib import SequenceMatcher
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Callable, Optional
@@ -842,6 +843,58 @@ def _pick_hook_window(picked_beats: list[dict], sf_start: float, sf_end: float,
         "hook_time_sec": round(at - sf_start, 2),
         **({"hook_quote": quote[:60]} if quote else {}),
     }
+
+
+def _norm_quote(s: str) -> str:
+    """인용 비교용 정규화 — 공백·문장부호를 털어 낸다(모델이 조사·마침표를 자주 바꾼다)."""
+    return re.sub(r"[^0-9A-Za-z가-힣]", "", str(s or ""))
+
+
+def _locate_quote(quote: str, sf_start: float, sf_end: float,
+                  transcript: list[dict] | None) -> dict:
+    """LLM 이 고른 훅 대사가 **전사 어디에 있는지** 찾아 {hook_time_sec, hook_quote} 로 준다.
+
+    역할 분담이 핵심이다. "어느 대사가 자극적인가" 는 의미 판단이라 LLM 이 잘하고(추출),
+    "그게 몇 초인가" 는 전사에 이미 있는 사실이라 **찾으면 되는 것**이다.
+
+    ⚠️ 모델이 준 `hook_time_sec` 숫자는 쓰지 않는다. 실측(m_981d7c08 · 20개)에서 20개 중
+    17개가 똑같이 `2.0` 이었고, 그 시각의 실제 대사와 대조하면 12개가 딴 말이었다 —
+    즉 훅 자막으로 **그 순간 나오지 않는 말**이 3초간 박힌다. 모델은 구간 안 상대 초를
+    셈하지 못한다(전사에 절대 시각만 있다). 셈은 우리가 한다.
+
+    못 찾으면 `{}` — caller 가 데시벨 픽(`_pick_hook_window`)으로 넘어간다.
+    """
+    nq = _norm_quote(quote)
+    if len(nq) < 6:
+        return {}
+    lo = sf_start + _HOOK_MIN_OFFSET_SEC
+    hi = sf_end - _HOOK_TAIL_MARGIN_SEC
+    if hi <= lo:
+        return {}
+    # 완전일치를 요구하면 안 된다 — 모델은 인용을 다듬는다(조사 탈락 "저 사실은"→"저 사실",
+    # 긴 발화 앞부분만 인용, 두 발화 이어 붙이기). 그래서 **부분 일치량**으로 본다:
+    #   공통 블록 총합 / 짧은 쪽 길이 ≥ 0.7  그리고  가장 긴 공통 블록 ≥ 4글자
+    # 뒤 조건이 없으면 한국어 흔한 음절("니다"·"그래서")만 겹쳐도 통과해 엉뚱한 줄을 잡는다.
+    best: tuple[float, str, float] | None = None
+    for u in (transcript or []):
+        try:
+            us = float(u.get("start"))
+        except (TypeError, ValueError):
+            continue
+        if not (lo <= us <= hi):
+            continue
+        nu = _norm_quote(u.get("text"))
+        if not nu:
+            continue
+        blocks = SequenceMatcher(None, nq, nu, autojunk=False).get_matching_blocks()
+        total = sum(b.size for b in blocks)
+        longest = max((b.size for b in blocks), default=0)
+        score = total / max(1, min(len(nq), len(nu)))
+        if longest >= 4 and score >= 0.7 and (best is None or score > best[2]):
+            best = (us, str(u.get("text") or "").strip(), score)
+    if not best:
+        return {}
+    return {"hook_time_sec": round(best[0] - sf_start, 2), "hook_quote": best[1][:60]}
 
 
 def _deterministic_score(picked_beats: list[dict], sec: float, hook: str,
@@ -3747,8 +3800,12 @@ title (폴백) 은 두 줄 합쳐 한 줄로 자연스럽게.
         # 입력에도 실행마다 달라져 A/B·회귀 판정이 불가능해진다. 예전 7/7/8 하드코딩은
         # 모든 쇼츠가 72.5 로 동일해 변별력이 아예 없었고, 그 사이 단계인 LLM 3축은
         # 재현성을 잃는다 — 둘 다 답이 아니라서 신호 기반으로 간다.
-        # 첫 3초 훅 — 쇼츠 안에서 가장 튀는 지점(데시벨 순간 상승)을 결정론으로 고른다.
-        _hook_pick = _pick_hook_window(picked_beats, sf_start, sf_end, transcript)
+        # 첫 3초 훅 — 2단이다.
+        #  1) LLM 이 "자극적인 대사" 로 고른 인용을 **전사에서 찾아** 그 시각을 쓴다.
+        #  2) 못 찾으면(지어냈거나 심하게 의역) 쇼츠 안에서 데시벨이 가장 튀는 지점.
+        # 사용자 의도가 "자극적이거나 데시벨 크거나 어그로 끌 만한 곳" 이라 둘 다 살린다.
+        _hook_pick = _locate_quote(s.get("hook_quote") or "", sf_start, sf_end, transcript) \
+            or _pick_hook_window(picked_beats, sf_start, sf_end, transcript)
         # starred_map 은 beat **인덱스** 키라 id 로 바꿔 넘긴다(점수는 id 로 판정한다).
         _starred_bids = {beats[i].get("id") for i in starred_map if 0 <= i < len(beats)}
         _score100, _score_parts = _deterministic_score(
@@ -3773,12 +3830,12 @@ title (폴백) 은 두 줄 합쳐 한 줄로 자연스럽게.
             # ⚠️ 예전엔 **Gemini 응답을 그대로 흘려보냈는데 모델이 안 채웠다** — 실측 산출물
             # 5개 중 hook_time_sec 이 0개라, 에디터의 "첫 3초 훅" 토글이 늘 비활성이었고
             # 렌더도 프리롤을 붙일 수 없었다(hookAvailable = hookTimeSec 존재 여부).
-            # 이제 **쇼츠 구간 안에서 데시벨이 튀는 지점을 결정론으로 고른다**(_pick_hook_window).
-            # LLM 이 값을 줬으면 그걸 존중하고, 없을 때만 우리가 고른다.
-            **{**_hook_pick, **{k: v for k, v in (
-                ("hook_quote", (s.get("hook_quote") or "").strip()[:60]),
-                ("hook_time_sec", float(s["hook_time_sec"]) if isinstance(s.get("hook_time_sec"), (int, float)) else None),
-            ) if v}},
+            # 이제 **시각은 항상 우리가 정한다**(_locate_quote → _pick_hook_window).
+            # ⚠️ 여기에 모델의 `hook_time_sec` 를 다시 끼워 넣지 말 것 — 예전엔 LLM 값이
+            # 뒤에 와서 우리 픽을 덮었고, 실측에서 20개 중 17개가 일률적으로 2.0 이었다
+            # (= 훅이 본편 시작과 같은 그림 + 자막은 그 시각에 없는 말). 어디를 쓸지 고르는
+            # 건 선별이라 LLM 몫이 아니다.
+            **_hook_pick,
             "hook_intro_caption": (s.get("hook_intro_caption") or "").strip()[:40],
             "tags": tags,
             "characters": chars_set,
