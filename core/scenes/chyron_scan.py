@@ -22,6 +22,9 @@ from pathlib import Path
 
 DEFAULT_SAMPLE_SEC = 3.0
 WORKERS = 6
+#: chyron 프레임 가로 폭 — 화면에 구워진 이름 자막을 읽어야 해서 640 까지는 못 내린다.
+#: 자막이 유난히 작은 프로그램이면 CHYRON_FRAME_WIDTH 로 올린다.
+_FRAME_W = int(os.environ.get("CHYRON_FRAME_WIDTH") or 1280)
 
 GEMINI_PROJECT = os.environ.get("GOOGLE_CLOUD_PROJECT") or "step-d"
 GEMINI_LOCATION = os.environ.get("VERTEX_LOCATION") or "asia-northeast3"
@@ -417,7 +420,15 @@ def scan_per_seg(video_path: str, segments: list[dict], *,
                  "-ss", f"{max(0.0, t):.2f}",
                  "-i", video_path,
                  "-frames:v", "1",
-                 "-vf", "scale=iw-mod(iw\\,2):ih-mod(ih\\,2),format=yuvj420p",
+                 # ⚠️ **회차 원가의 최대 단일 항목이 여기였다.** chyron 은 자막 세그먼트마다
+                 # 1콜씩 부르므로(60분 회차 ≈ 800콜) Vision 콜의 약 75%를 차지하는데, 다른
+                 # Vision 단계(scene_type 640:360 · beat_annot 640 · recommend 640)와 달리
+                 # **혼자만 원본 해상도**로 올리고 있었다. Gemini 는 이미지를 768px 타일로
+                 # 쪼개 타일당 258토큰을 매긴다 — 1920x1080 은 6타일(1,548토큰), 1280x720 은
+                 # 2타일(516토큰). 같은 판정에 3배를 쓰고 있었던 셈이다.
+                 # 640 까지 내리지 않는 이유: 읽어야 하는 게 **화면에 구워진 이름 자막**이라
+                 # 너무 줄이면 글자가 뭉갠다. 720p 가 사람이 읽을 수 있는 하한이다.
+                 "-vf", f"scale='min({_FRAME_W}\\,iw)':-2,format=yuvj420p",
                  "-f", "image2", "-update", "1",
                  str(out)],
                 check=True,

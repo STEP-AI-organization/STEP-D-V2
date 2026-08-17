@@ -56,19 +56,23 @@ export function billableMinutes(durationSec: number): number {
 }
 
 /**
- * 실측 원가 — **분당 ₩17.0** (58.6분 회차 ≈ ₩994 · GEBD·썸네일 OFF 기준).
- * 내역: Gemini ₩728 + Soniox ₩138 + Cloud Run ₩125 + 임베딩 ₩3.
+ * 원가 — **분당 약 ₩25** (60분 회차 ≈ ₩1,510 · GEBD·썸네일 AI 방식 OFF 기준).
+ * 내역: Gemini ₩1,191(장면이해 745 + 화면자막 405 + 서사 41) + Soniox ₩141 +
+ * Cloud Run ₩128 + 렌더 ₩33 + TTS·임베딩 ₩17.
  *
  * **청구액이 아니라 마진 감시용**이다. 판매가는 크레딧 단가(`CREDIT_PRICE_KRW`=28)로 정한다 —
- * 1 크레딧 = 분석 1분이라 이 값과 바로 비교하면 그게 곧 마진이다(현재 ₩28 대비 39%).
+ * 1 크레딧 = 분석 1분이라 이 값과 바로 비교하면 그게 곧 마진이다(현재 ₩28 대비 약 7%).
  *
  * ⚠️ 예전 값 4.9 는 **₩285/회차**라는 틀린 원가에서 나온 것이었다. 그 ₩285 는 `core/common/
  * retry.py` 단가표가 Gemini 2.0 Flash 가격을 2.5 Flash 라벨에 붙여 4.7배 과소계상한 결과다
  * (docs/ops/cost-and-dependencies.md §4). 그대로 두면 대시보드가 "마진 5.7배" 라고 보고하지만
  * 실제는 1.65배다 — **가격 결정은 우연히 옳았고 계측만 고장나 있었다.**
- * 안전쪽으로 19 를 쓴다(실측 17.0 + 렌더·부대 여유).
+ * ⚠️ 한 번 더 정정(같은 날): ₩994 의 근거였던 usage.json 은 **체크포인트 재개 실행**이라
+ * 파이프라인 일부만 담겨 있었다 — 회차당 Gemini 콜의 약 75%를 차지하는 chyron(자막
+ * 세그먼트마다 Vision 1콜 · 60분 ≈ 800콜)이 통째로 빠져 있었다. 포함하면 분당 ₩25.2 다.
+ * **판매가 ₩28/분과 거의 같다 — 지금 가격은 사실상 본전이다**(docs/ops/how-it-works.md §4).
  */
-export const COST_KRW_PER_MINUTE = 19;
+export const COST_KRW_PER_MINUTE = 26;
 
 export function estimatedCostKrw(minutes: number): number {
   return Math.round(minutes * COST_KRW_PER_MINUTE * 100) / 100;
