@@ -484,6 +484,75 @@ def scan_per_seg(video_path: str, segments: list[dict], *,
             except Exception:
                 pass
 
+    def _seg_prompt(seg: dict) -> str:
+        text = (seg.get("text") or "").strip()[:80]
+        return (
+            "이 프레임에 화면 자막(대사 태그) 이 있으면, 대사 옆·앞에 붙은 인물 이름 태그만 name 필드에 짧게 답하라.\n"
+            f"참고 대사(오디오 STT): '{text}'\n"
+            "규칙:\n"
+            "- 이름 태그 없거나 애매하면 name='' 로.\n"
+            "- 조사(은/는/이/가) 붙지 말고 성함만.\n"
+            "- 프로그램 제목·로고·상황자막(경악·헐 등) 은 제외.\n"
+            "- 대사 자체를 이름으로 넣지 마라."
+        )
+
+    def _batch_pass() -> list[tuple[int, str]] | None:
+        """배치 모드 — **원가의 절반.** 이 스테이지가 회차 Gemini 콜의 83%다.
+
+        세그마다 독립 판정이라 잡 하나에 전부 넣을 수 있다(왜 chyron 만 배치인지는
+        core/common/batch.py 헤더). 프레임 추출은 그대로 병렬로 먼저 다 뽑는다 —
+        ffmpeg 는 로컬 I/O 라 배치와 무관하고, `-ss` 를 `-i` 앞에 둔 덕에 780장이 수십 초다.
+
+        실패·타임아웃이면 `None` 을 돌려 **동기 경로로 되돌아간다**(반값을 못 사는 건
+        손해지만 회차가 안 도는 건 사고다).
+        """
+        from core.common import batch as B
+        if not B.batch_enabled():
+            return None
+        from concurrent.futures import ThreadPoolExecutor as _TPE
+        t_ex = _time.time()
+        with _TPE(max_workers=workers) as ex:
+            frames = list(ex.map(
+                lambda p: (p[0], _extract_at(float(p[1].get("start", 0) or 0) + 0.3
+                                             if prefer_start else
+                                             (float(p[1].get("start", 0) or 0) + float(p[1].get("end", 0) or 0)) / 2.0,
+                                             p[0])),
+                list(enumerate(segments))))
+        n_ok = sum(1 for _, f in frames if f)
+        print(f"[chyron-seg] 배치 모드 · 프레임 {n_ok}/{len(segments)}장 추출 {_time.time()-t_ex:.0f}s", flush=True)
+
+        reqs, idx_map = [], []
+        for i, f in frames:
+            if not f:
+                continue
+            try:
+                reqs.append([B.image_part(f.read_bytes()), B.text_part(_seg_prompt(segments[i]))])
+                idx_map.append(i)
+            except Exception:
+                continue
+        gen_cfg = {"temperature": 0, "maxOutputTokens": 64,
+                   "responseMimeType": "application/json",
+                   "responseSchema": {"type": "OBJECT", "properties": {"name": {"type": "STRING"}},
+                                      "required": ["name"]},
+                   "thinkingConfig": {"thinkingBudget": 0}}
+        texts = B.batch_generate(model=MODEL, requests=reqs, gen_config=gen_cfg, label="chyron")
+        for _, f in frames:                      # 프레임은 어느 경로든 지운다
+            try:
+                if f:
+                    f.unlink()
+            except Exception:
+                pass
+        if texts is None:
+            return None
+        out: list[tuple[int, str]] = [(i, "") for i in range(len(segments))]
+        for k, i in enumerate(idx_map):
+            try:
+                data = json.loads(texts[k] or "{}")
+                out[i] = (i, _strip_particle(str(data.get("name") or "").strip()))
+            except Exception:
+                out[i] = (i, "")
+        return out
+
     # 진행률 로그 + 콜당 하드 timeout · 워치독 stall 오판(60분 무응답 kill) 방어.
     # PROGRESS_EVERY 세그마다 stdout 한 줄 · 실제 hang 여부·완료 페이스를 즉시 판정 가능.
     # CALL_TIMEOUT_SEC 초과분은 미부여로 처리 · 전체 스텝이 무한 대기 빠지지 않게.
@@ -492,28 +561,34 @@ def scan_per_seg(video_path: str, segments: list[dict], *,
     PROGRESS_EVERY = 50
     CALL_TIMEOUT_SEC = 60.0
     total = len(segments)
-    print(f"[chyron-seg] {total} 세그 · Vision 병렬(workers={workers}) · timeout={CALL_TIMEOUT_SEC:.0f}s/call", flush=True)
-    results: list[tuple[int, str]] = []
-    done = 0
-    timeouts = 0
-    t0 = _time.time()
-    with ThreadPoolExecutor(max_workers=workers) as ex:
-        fut_to_idx = {ex.submit(_detect_seg_name, (i, s)): i for i, s in enumerate(segments)}
-        for fut in as_completed(fut_to_idx):
-            i = fut_to_idx[fut]
-            try:
-                results.append(fut.result(timeout=CALL_TIMEOUT_SEC))
-            except Exception:
-                timeouts += 1
-                results.append((i, ""))
-            done += 1
-            if done % PROGRESS_EVERY == 0 or done == total:
-                elapsed = _time.time() - t0
-                rate = done / max(elapsed, 0.001)
-                eta = (total - done) / max(rate, 0.001)
-                print(f"[chyron-seg] {done}/{total} · elapsed={elapsed:.0f}s · eta={eta:.0f}s · timeouts={timeouts}", flush=True)
-    # index 순서로 정렬 (as_completed 는 순서 무관)
-    results.sort(key=lambda x: x[0])
+    # 배치 모드가 켜져 있으면 먼저 그쪽으로 — 같은 판정을 절반 값에 산다.
+    # None 이면(꺼짐·버킷없음·잡실패·타임아웃) 아래 동기 경로가 그대로 돈다.
+    _batched = _batch_pass()
+    if _batched is not None:
+        results = _batched
+    else:
+        print(f"[chyron-seg] {total} 세그 · Vision 병렬(workers={workers}) · timeout={CALL_TIMEOUT_SEC:.0f}s/call", flush=True)
+        results: list[tuple[int, str]] = []
+        done = 0
+        timeouts = 0
+        t0 = _time.time()
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            fut_to_idx = {ex.submit(_detect_seg_name, (i, s)): i for i, s in enumerate(segments)}
+            for fut in as_completed(fut_to_idx):
+                i = fut_to_idx[fut]
+                try:
+                    results.append(fut.result(timeout=CALL_TIMEOUT_SEC))
+                except Exception:
+                    timeouts += 1
+                    results.append((i, ""))
+                done += 1
+                if done % PROGRESS_EVERY == 0 or done == total:
+                    elapsed = _time.time() - t0
+                    rate = done / max(elapsed, 0.001)
+                    eta = (total - done) / max(rate, 0.001)
+                    print(f"[chyron-seg] {done}/{total} · elapsed={elapsed:.0f}s · eta={eta:.0f}s · timeouts={timeouts}", flush=True)
+        # index 순서로 정렬 (as_completed 는 순서 무관)
+        results.sort(key=lambda x: x[0])
 
     try:
         tmpdir.rmdir()

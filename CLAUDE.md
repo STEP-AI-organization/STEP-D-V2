@@ -176,6 +176,10 @@ INSTAGRAM_APP_ID / INSTAGRAM_APP_SECRET / INSTAGRAM_REDIRECT_URI Instagram 비�
                       (콘솔 "Instagram API" 제품의 Instagram 앱 ID/시크릿 — Meta 앱 ID와 다름)
 TIKTOK_CLIENT_KEY / TIKTOK_CLIENT_SECRET / TIKTOK_REDIRECT_URI   TikTok OAuth
 AUTO_GEBD / AUTO_THUMBNAIL                분석 완료 후 후속 잡 자동 큐잉 스위치
+GEMINI_BATCH              1 이면 chyron(회차 Gemini 콜의 83%)을 Vertex 배치 예측으로 — **단가 50%**.
+                          오타·빈값·버킷없음은 전부 OFF(=동기로 비싸게 돌지만 돈다).
+GEMINI_BATCH_BUCKET       배치 입출력 GCS 버킷 (없으면 GCS_BUCKET 사용)
+GEMINI_BATCH_TIMEOUT_SEC  기본 1500. 넘기면 동기 폴백 — 워커 DRAIN_MAX_MS(50분) 안에 끝나야 한다
 ```
 core/ 쪽 스위치(파이썬): `RUN_FACES`·`RUN_PPL`·`RUN_REFINE`·`RUN_CHYRON_PER_SEG`·`MIN_BEAT_SEC`·
 `BEAT_ANNOT_WORKERS`·`BEAT_ANNOT_CTX_RECENT`·`GEMINI_*_MODEL`(단계별 모델 오버라이드).

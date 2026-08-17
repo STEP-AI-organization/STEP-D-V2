@@ -4998,7 +4998,16 @@ app.post("/api/automation/rules", async (c) => {
     return c.json({ error: "programId · platform · accountId 가 필요합니다." }, 400);
   }
   if (!isRuleMediaKind(body.mediaKind)) return c.json({ error: "invalid mediaKind" }, 400);
-  if (!isRuleCriterion(body.criterion)) return c.json({ error: "invalid criterion" }, 400);
+  // 기준 미지정이면 **매체별 기본값**을 쓴다 (2026-08-17 사용자 결정: "점수 기준으로 top3").
+  // 근거는 실측이다 — 32.4분 회차 쇼츠 20편의 score100 이 42.1~72.6 이라 `score80` 규칙은
+  // **한 건도 안 내보낸다**(클립은 81~83 이라 통과한다). 점수의 45%를 차지하는 신호축이
+  // 회차 내 백분위라 평균이 0.5 근처로 눌리는 구조 때문이고, 훅·완결은 이미 0.92/1.00 이라
+  // 더 올릴 여지가 없다. 규칙은 켜져 있는데 아무것도 안 나가는 상태가 이 리포 최빈
+  // 실패모드라, 쇼츠 기본을 top3(회차당 상위 3건)로 둔다. 명시 지정은 그대로 존중한다.
+  const criterion = body.criterion == null || body.criterion === ""
+    ? (body.mediaKind === "clip" ? "score80" : "top3")
+    : body.criterion;
+  if (!isRuleCriterion(criterion)) return c.json({ error: "invalid criterion" }, 400);
   if (!isGatePolicy(body.gatePolicy)) return c.json({ error: "invalid gatePolicy" }, 400);
   // 채택 형태 — 수동 채택 다이얼로그와 같은 값 체계(orientation·reframe). 틀린 값은 조용히
   // 버리지 않고 400 — "저장은 됐는데 반영이 안 된다"(이 리포 최빈 실패모드)의 입구를 막는다.
@@ -5021,7 +5030,7 @@ app.post("/api/automation/rules", async (c) => {
   const row = {
     id: typeof body.id === "string" && body.id ? body.id : newId("ar"),
     programId, platform, accountId,
-    mediaKind: body.mediaKind, criterion: body.criterion, gatePolicy: body.gatePolicy,
+    mediaKind: body.mediaKind, criterion, gatePolicy: body.gatePolicy,
     window: typeof body.window === "string" ? body.window.trim() || "수시" : "수시",
     enabled: body.enabled !== false,
     // 렌더 템플릿 — 자동배포 화면에서 선택. 빈 값이면 프로그램 장르 자동 선택.

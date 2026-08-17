@@ -419,6 +419,18 @@ describe("입력 검증", () => {
     assert.equal(isGatePolicy("skip_gate"), false);
   });
 
+  it("기준 미지정이면 매체별 기본값 — 쇼츠는 top3, 클립은 score80", () => {
+    // 2026-08-17 실측: 32.4분 회차 쇼츠 20편의 score100 이 42.1~72.6 이라 score80 규칙은
+    // **한 건도 안 내보낸다**(클립은 81~83 이라 통과). "규칙은 켜져 있는데 아무것도 안 나간다"
+    // 는 이 리포 최빈 실패모드라, 라우트가 매체별 기본값을 채운다. 소스 스캔으로 고정한다 —
+    // 이 분기가 사라지면 쇼츠 자동배포가 조용히 0건이 된다.
+    const src = fs.readFileSync(path.join(SRC, "index.ts"), "utf-8");
+    const m = /body\.criterion == null[\s\S]{0,200}?mediaKind === "clip"\s*\?\s*"(\w+)"\s*:\s*"(\w+)"/.exec(src);
+    assert.ok(m, "규칙 생성 라우트에 매체별 기준 기본값 분기가 없다");
+    assert.equal(m![1], "score80", "클립 기본 기준이 바뀌었다");
+    assert.equal(m![2], "top3", "쇼츠 기본 기준이 바뀌었다 — score 기준이면 0건이 나간다");
+  });
+
   it("게이트를 끄는 정책값이 존재하지 않는다", () => {
     // 정책 목록에 'skip'/'ignore' 류가 생기면 F6 Invariant 가 무너진다.
     const src = fs.readFileSync(path.join(SRC, "automation.ts"), "utf-8");

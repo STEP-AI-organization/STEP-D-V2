@@ -143,3 +143,23 @@ gcloud run services update-traffic stepd-server --to-revisions <리비전>=100 \
 **drain 모드가 비용 구조의 핵심이다** — 상시 폴링 대신 스케줄러가 깨우고 큐가 비면 종료해
 idle 과금이 0 이다. 구조 상세는 [worker-queue.md](worker-queue.md), 인프라 SSOT 는
 [infra.md](infra.md).
+
+### content 잡의 env 는 `cloud.sh worker` 가 매번 덮어쓴다
+
+`stepd-worker-content` 는 배포마다 아래 값을 `--update-env-vars` 로 다시 눌러쓴다.
+Cloud Run Jobs 는 `--remove-env-vars` 가 조용히 무시되므로 **지우는 대신 정답으로 덮는다**.
+
+| env | 값 | 왜 |
+|---|---|---|
+| `CORE_PYTHON` · `CORE_DIR` | `/opt/corevenv/bin/python` · `/app` | 윈도우 경로가 눌러앉아 분석이 `spawn ENOENT` 로 전멸한 사고(2026-08-13·14) 재발 방지 |
+| `GEMINI_BATCH` | `1` | chyron 을 Vertex 배치로 → 그 스테이지 원가 절반(60분 ₩1,218 → ₩609) |
+
+**배치를 급히 끄려면** 재배포 없이 잡 env 만 바꾸면 된다(다음 `cloud.sh worker` 에서 다시 1 로 돌아온다 — 항구적으로 끌 거면 `deploy/cloud.sh` 도 같이 고칠 것):
+
+```bash
+gcloud run jobs update stepd-worker-content --project step-d --region asia-northeast3 \
+  --update-env-vars=GEMINI_BATCH=0
+```
+
+끌 만한 상황은 **분석이 오래 걸려서 곤란할 때**다. 배치는 큐 대기가 붙는다(실측 5분 19초) —
+원가는 내려가고 시간은 늘어난다. 판단 근거는 [how-it-works.md §6](how-it-works.md).

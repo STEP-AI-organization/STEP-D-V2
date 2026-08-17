@@ -68,6 +68,28 @@ def _record_usage(resp):
         pass
 
 
+def record_batch_usage(model: str, in_tokens: int, out_tokens: int, calls: int) -> None:
+    """배치 잡 응답의 토큰을 `{model}:batch` 키로 누적 (단가 50% 적용 · core/common/batch.py).
+
+    동기와 **같은 키에 합치지 않는다.** 섞으면 usage.json 만 보고는 배치가 실제로 걸렸는지
+    알 수 없고, 원가 계산도 절반인지 아닌지 구분이 안 된다. 2026-08-17 원가 감사에서
+    "로그에 안 찍힌 스테이지를 0 으로 셌다" 가 세 번 반복된 게 이런 종류의 눈가림이었다.
+    """
+    key = f"{model}:batch"
+    with _USAGE_LOCK:
+        USAGE["calls"] += calls
+        USAGE["in_tokens"] += in_tokens
+        USAGE["out_tokens"] += out_tokens
+        m = USAGE["by_model"].setdefault(key, {"calls": 0, "in": 0, "out": 0, "cached": 0})
+        m["calls"] += calls
+        m["in"] += in_tokens
+        m["out"] += out_tokens
+
+
+#: 배치 예측 단가 배수. Vertex 배치는 동기 대비 50%.
+BATCH_PRICE_FACTOR = 0.5
+
+
 def usage_summary() -> dict:
     """지금까지 이 프로세스 누적. analyze.py 마지막에 print 하면 회당 실비."""
     with _USAGE_LOCK:
@@ -81,15 +103,18 @@ def usage_summary() -> dict:
         }
     total_krw = 0.0
     for model, v in snap["by_model"].items():
-        base = model.split("-")
+        # `{model}:batch` = 배치 예측 (단가 50%). 접미를 떼고 요율을 찾는다.
+        is_batch = model.endswith(":batch")
+        lookup = model[: -len(":batch")] if is_batch else model
         # 매치되는 요율 찾기 (버전 suffix 무시)
         rate = None
         for key, r in _PRICE_KRW_PER_1M.items():
-            if model.startswith(key):
+            if lookup.startswith(key):
                 rate = r; break
         if rate is None:
             continue
-        total_krw += v["in"] / 1_000_000 * rate["in"] + v["out"] / 1_000_000 * rate["out"]
+        factor = BATCH_PRICE_FACTOR if is_batch else 1.0
+        total_krw += (v["in"] / 1_000_000 * rate["in"] + v["out"] / 1_000_000 * rate["out"]) * factor
     snap["est_krw"] = round(total_krw, 2)
     return snap
 
