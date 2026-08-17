@@ -13,7 +13,7 @@ import { describe, it } from "node:test";
 
 import {
   COST_KRW_PER_MINUTE,
-  COST_KRW_PER_MINUTE_NO_CHYRON,
+  COST_KRW_PER_MINUTE_WITH_CHYRON,
   apiKeyPrefix,
   billableMinutes,
   estimatedCostKrw,
@@ -64,32 +64,28 @@ describe("청구 분 — 올림", () => {
     for (const v of [0, -1, NaN, Infinity]) assert.equal(billableMinutes(v), 0, String(v));
   });
 
-  it("원가는 실측 기준으로 계산된다", () => {
-    // 2026-08-17 실측 확정: 60분 ≈ ₩2,385(분당 ₩39.8) → 상수 40.
-    // 32.4분 실회차 전 구간(158콜 ₩450) + chyron 별도 실행(780콜 ₩658)을 합쳐 환산했다.
-    // chyron 을 따로 돌린 이유는 로컬 .env 가 RUN_CHYRON_PER_SEG=0 이라 회차 로그에
-    // 안 담기기 때문이다 — 프로덕션은 기본 ON 이다(how-it-works.md §7-4).
-    assert.ok(Math.abs(estimatedCostKrw(59) - 2360) < 1);
+  it("원가는 실측 기준으로 계산된다 — 프로덕션 구성(자막읽기 OFF)", () => {
+    // 2026-08-17 실측: 32.4분 실회차 전 구간(158콜 ₩450)을 60분 환산 → ₩834 +
+    // Soniox 141 + Cloud Run 99 + 렌더 33 + TTS·임베딩 17 = ₩1,124 → 분당 ₩18.7 → 상수 19.
+    // 프로덕션 잡(stepd-worker-content) env 에 RUN_CHYRON_PER_SEG=0 이 들어 있다.
+    assert.ok(Math.abs(estimatedCostKrw(59) - 1121) < 1);
   });
 
-  it("자막읽기를 끈 구성은 흑자다 — 흑자로 가는 길이 실재함을 고정", () => {
-    const CREDIT_PRICE = 28;
-    assert.ok(COST_KRW_PER_MINUTE_NO_CHYRON < CREDIT_PRICE,
-      `자막읽기 OFF 원가 ${COST_KRW_PER_MINUTE_NO_CHYRON} 가 판매가 ${CREDIT_PRICE} 이상이다`);
+  it("자막읽기를 켠 값은 두 배 — 두 구성을 나란히 둔다", () => {
+    // 실측 ₩2,385/60분(배치 OFF). 이 값이 상수 자리에 잘못 들어가면 대시보드가
+    // 실제보다 두 배 비싸게 보고한다(2026-08-17 에 실제로 한 번 그렇게 넣었다).
+    assert.equal(COST_KRW_PER_MINUTE_WITH_CHYRON, 40);
+    assert.ok(COST_KRW_PER_MINUTE_WITH_CHYRON > COST_KRW_PER_MINUTE * 2 - 1);
   });
 
-  it("지금 프로덕션 기본 구성은 적자라는 사실을 고정한다", () => {
-    // ⚠️ 보통의 가드와 방향이 반대인 테스트다. 실측 결과 **현재 기본값(자막읽기 ON)은
-    // 편당 적자**이고(₩28 받고 ₩40 씀), 이건 코드 버그가 아니라 아직 안 내려진 제품
-    // 결정이다. 그냥 두면 다음 사람이 상수를 슬쩍 낮춰 흑자로 보이게 만든다 —
-    // 이 파일에서 이미 두 번 일어난 일이다(4.9 · 26).
-    //
-    // **이 테스트가 실패하면** 결정이 내려졌다는 뜻이다: 그때 상수·이 테스트·
-    // how-it-works.md §4 를 같이 갱신할 것. 숫자만 고치고 지나가지 말 것.
+  it("원가가 판매가(크레딧 ₩28/분)보다 낮다 — 역마진 감지", () => {
+    // 이 관계가 깨지면 팔수록 손해다. 상수를 잘못 올렸을 때 바로 걸리라고 둔다.
+    // ⚠️ 자막읽기를 켜기로 결정하면 이 테스트가 실패한다 — 그게 맞다. 그때는 숫자만
+    // 고치지 말고 판매가·배치 모드와 함께 결정하고 how-it-works.md §4 를 같이 갱신할 것
+    // (켜고 배치까지 켜면 분당 ₩28.9 로 거의 본전이다).
     const CREDIT_PRICE = 28;
-    assert.ok(COST_KRW_PER_MINUTE > CREDIT_PRICE,
-      `원가 ${COST_KRW_PER_MINUTE} 가 판매가 ${CREDIT_PRICE} 이하로 내려왔다 — ` +
-      "구성이 바뀌었으면 how-it-works.md §4 와 함께 갱신하라");
+    assert.ok(estimatedCostKrw(60) < CREDIT_PRICE * 60,
+      `원가 ${estimatedCostKrw(60)} 가 매출 ${CREDIT_PRICE * 60} 이상이다 — 역마진`);
   });
 });
 
