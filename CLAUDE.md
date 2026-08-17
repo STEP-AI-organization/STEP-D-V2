@@ -16,8 +16,11 @@
     → content_analysis + search_segments 저장 (산출물 GCS analysis/{mediaId}/ 영구 보존)
       → [사람] 채택/거절 → ffmpeg 트림·인코딩 → 클립 → 편집 → 배포(YouTube/Meta/SMR) → 성과
 ```
-**실측(2026-08-08 · 58.6분 회차):** 964초 · 약 ₩285 · 자막 925 / 장면 12 / beat 245 / 쇼츠 20 /
+**실측(2026-08-08 · 58.6분 회차):** 964초 · 자막 925 / 장면 12 / beat 245 / 쇼츠 20 /
 검색 세그먼트 204. 장르·캐스트는 **사람이 미리 지정**해야 정확하다(미지정 시 자동판정 폴백).
+**원가는 60분 회차 ≈ ₩1,510(분당 ₩25.2)** — 판매가 ₩28/분과 거의 같다(마진 7%).
+⚠️ 리포 곳곳에 돌던 ₩285·₩994 는 **둘 다 틀린 값**이다(단가표 오류 · 로그 일부만 집계).
+정본은 [docs/ops/how-it-works.md](docs/ops/how-it-works.md) §4 하나뿐 — 인용은 거기서만 할 것.
 
 문서 진입점: [docs/README.md](docs/README.md) · 종합 계획: [docs/plans/active/step-d-master-build-plan.md](docs/plans/active/step-d-master-build-plan.md)
 
