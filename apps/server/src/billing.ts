@@ -56,11 +56,19 @@ export function billableMinutes(durationSec: number): number {
 }
 
 /**
- * 실측 원가 (2026-08-08 기준 58.6분 회차 ≈ ₩285 → 분당 약 ₩4.9).
- * **청구액이 아니라 마진 감시용**이다. 판매가는 크레딧 단가(`CREDIT_PRICE_KRW`)로 정한다 —
- * 1 크레딧 = 분석 1분이라 이 값과 바로 비교하면 그게 곧 마진이다.
+ * 실측 원가 — **분당 ₩17.0** (58.6분 회차 ≈ ₩994 · GEBD·썸네일 OFF 기준).
+ * 내역: Gemini ₩728 + Soniox ₩138 + Cloud Run ₩125 + 임베딩 ₩3.
+ *
+ * **청구액이 아니라 마진 감시용**이다. 판매가는 크레딧 단가(`CREDIT_PRICE_KRW`=28)로 정한다 —
+ * 1 크레딧 = 분석 1분이라 이 값과 바로 비교하면 그게 곧 마진이다(현재 ₩28 대비 39%).
+ *
+ * ⚠️ 예전 값 4.9 는 **₩285/회차**라는 틀린 원가에서 나온 것이었다. 그 ₩285 는 `core/common/
+ * retry.py` 단가표가 Gemini 2.0 Flash 가격을 2.5 Flash 라벨에 붙여 4.7배 과소계상한 결과다
+ * (docs/ops/cost-and-dependencies.md §4). 그대로 두면 대시보드가 "마진 5.7배" 라고 보고하지만
+ * 실제는 1.65배다 — **가격 결정은 우연히 옳았고 계측만 고장나 있었다.**
+ * 안전쪽으로 19 를 쓴다(실측 17.0 + 렌더·부대 여유).
  */
-export const COST_KRW_PER_MINUTE = 4.9;
+export const COST_KRW_PER_MINUTE = 19;
 
 export function estimatedCostKrw(minutes: number): number {
   return Math.round(minutes * COST_KRW_PER_MINUTE * 100) / 100;

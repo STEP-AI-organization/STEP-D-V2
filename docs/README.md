@@ -43,6 +43,7 @@
 
 | 문서 | 내용 |
 |---|---|
+| [how-it-works.md](ops/how-it-works.md) | **제품이 어떻게 돌고 한 편에 얼마 드는가** — 그림으로 보는 파이프라인 · 60분 회차 원가 ₩1,060 · 마진 34% · 손익분기 월 101편. 영업·기획용(개발 용어는 뒤로) |
 | [infra.md](ops/infra.md) | **인프라 SSOT** — Cloud Run 서비스·**Cloud Run Jobs**·**GEBD GPU VM**·Cloud SQL·GCS·Vertex·Vercel·시크릿 |
 | [pipeline-current-state.md](ops/pipeline-current-state.md) | **파이프라인 실제 상태** — 스테이지 22개·비용·사각지대 (코드 실측 기준) |
 | [cost-and-dependencies.md](ops/cost-and-dependencies.md) | **원가·의존성 SSOT** — 외부 API 단가·회차당 원가 재산출·고정비·단일장애점. ⚠️ 기존 문서의 ₩285/₩774 는 단가표 오류 |

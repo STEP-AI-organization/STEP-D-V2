@@ -25,12 +25,19 @@ import time
 _USAGE_LOCK = threading.Lock()
 USAGE: dict = {"calls": 0, "in_tokens": 0, "out_tokens": 0, "by_model": {}}
 
-# 대략 요율 · KRW per 1M tokens · Gemini 2.5 flash (asia-northeast3). 실측 후 갱신.
+# KRW per 1M tokens · 환율 ₩1,416/USD (2026-08-11 기준 · docs/ops/cost-and-dependencies.md §3).
+#
+# ⚠️ **여기 숫자가 틀리면 마진 판단이 통째로 틀어진다.** 2026-08-11 감사에서 이 표가
+# **Gemini 2.0 Flash 단가($0.075/$0.30)를 2.5 Flash 라벨에 붙여 놓은 것**으로 확인됐다
+# (× ₩1,333 하면 정확히 100/400 이 나온다). 결과: 입력 4.3배 · 출력 8.9배 **과소계상**.
+# usage.json 의 est_krw 와 그걸 인용한 모든 문서가 같은 배수만큼 틀렸다
+# (58.6분 정본 회차: 코드 보고 ₩154 → 정상단가 재계산 **₩728**).
+# 공시가로 바로잡는다. **단가가 바뀌면 여기와 cost-and-dependencies.md §3 을 같이 고칠 것.**
 _PRICE_KRW_PER_1M = {
-    "gemini-2.5-flash": {"in": 100, "out": 400},
-    "gemini-2.5-flash-lite": {"in": 40, "out": 160},
-    "gemini-2.5-pro": {"in": 1600, "out": 6400},
-    "gemini-3-pro-image": {"in": 5000, "out": 20000},  # nano banana 대략
+    "gemini-2.5-flash": {"in": 425, "out": 3540},        # $0.30 / $2.50
+    "gemini-2.5-flash-lite": {"in": 142, "out": 566},    # $0.10 / $0.40
+    "gemini-2.5-pro": {"in": 1770, "out": 14160},        # $1.25 / $10.00
+    "gemini-3-pro-image": {"in": 5000, "out": 20000},    # nano banana 대략 — 실측 필요
 }
 
 

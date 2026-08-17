@@ -63,8 +63,17 @@ describe("청구 분 — 올림", () => {
   });
 
   it("원가는 실측 기준으로 계산된다", () => {
-    // 2026-08-08 실측: 58.6분 ≈ ₩285 → 분당 약 ₩4.9
-    assert.ok(Math.abs(estimatedCostKrw(59) - 289.1) < 0.5);
+    // 2026-08-11 재산정: 58.6분 ≈ ₩994(분당 ₩17.0) — Gemini 728 + Soniox 138 + Run 125 + 임베딩 3.
+    // 예전 ₩285(분당 4.9)는 retry.py 단가표가 2.0 Flash 가격을 2.5 라벨에 붙여 4.7배
+    // 과소계상한 값이었다(cost-and-dependencies.md §4). 상수는 여유를 둔 19.
+    assert.ok(Math.abs(estimatedCostKrw(59) - 1121) < 1);
+  });
+
+  it("원가가 판매가(크레딧 ₩28/분)보다 낮다 — 역마진 감지", () => {
+    // 이 관계가 깨지면 팔수록 손해다. 상수를 잘못 올렸을 때 바로 걸리라고 둔다.
+    const CREDIT_PRICE = 28;
+    assert.ok(estimatedCostKrw(60) < CREDIT_PRICE * 60,
+      `원가 ${estimatedCostKrw(60)} 가 매출 ${CREDIT_PRICE * 60} 이상이다 — 역마진`);
   });
 });
 
