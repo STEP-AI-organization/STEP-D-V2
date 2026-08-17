@@ -75,16 +75,14 @@ do_worker() {
   # 변환해 정확히 이 오염을 재생산한다(애초의 원인). ⚠️ 단 "*" 로 전부 막으면 gcloud
   # 래퍼가 자기 gcloud.py 경로 변환까지 못 해 **아예 안 뜬다**(2026-08-14 실측 — 이
   # 자가치유가 배포마다 조용히 실패하고 있었다). 값이 든 플래그만 좁혀서 막는다.
-  # GEMINI_BATCH=1 — chyron 을 Vertex 배치 예측으로 (그 스테이지 단가 50% · 60분 회차
-  # ₩1,218 → ₩609). 사용자 결정 2026-08-17. 대가는 시간이고(제출→실행 실측 5분 19초),
-  # 실패·타임아웃이면 잡을 취소하고 동기로 되돌아가므로 회차가 멈추지는 않는다
-  # (docs/ops/how-it-works.md §6). 버킷은 잡에 이미 있는 GCS_BUCKET 을 그대로 쓴다.
-  # ⚠️ 이 잡 env 에는 **RUN_CHYRON_PER_SEG=0** 도 들어 있다(리포 밖에서 설정된 값) —
-  # 그래서 자막읽기를 켜기 전까지 이 스위치는 아무 일도 하지 않는다. 무해하지만,
-  # "배치 켰는데 원가가 안 내려간다" 로 헷갈리지 말 것. 원가는 이미 그만큼 안 나가고 있다.
+  # ⚠️ GEMINI_BATCH 는 **여기서 켜지 않는다.** 2026-08-17 실측: 780건 배치 잡이 제출부터
+  # 종료까지 **5시간 45분**(제출→실행 시작 5분 19초 + 실행 5시간 40분). 단가는 정확히
+  # 절반이었지만(₩657.53 → ₩329.11), 지금 구현은 파이프라인이 폴링하며 기다리는 구조라
+  # 상한(25분)에서 잡을 취소하고 동기로 되돌아간다 — **느리면서 제값을 내는** 최악의 조합.
+  # 쓰려면 "제출하고 끝내기 → 몇 시간 뒤 수거" 2단계로 바꿔야 한다(docs/ops/how-it-works.md §6).
   MSYS2_ARG_CONV_EXCL="--update-env-vars" gcloud run jobs update stepd-worker-content \
     --project="$PROJECT" --region="$REGION" \
-    --update-env-vars=CORE_PYTHON=/opt/corevenv/bin/python,CORE_DIR=/app,GEMINI_BATCH=1 \
+    --update-env-vars=CORE_PYTHON=/opt/corevenv/bin/python,CORE_DIR=/app \
     >/dev/null 2>&1 || log "⚠️ content job env 자가치유 실패 — 수동 확인 필요"
   log "worker 완료"
 }
