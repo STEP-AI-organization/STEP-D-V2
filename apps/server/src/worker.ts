@@ -593,6 +593,12 @@ const YT_DLP = process.env.YT_DLP ?? "yt-dlp";
 // 레이트리밋을 계정 인증으로 우회한다(공개 VM IP는 대량 다운로드 시 곧 403 당한다).
 // 값은 Secret Manager(stepd-ytdlp-cookies)에 있고, worker.env가 파일로 떨군다.
 const YTDLP_COOKIES = process.env.YTDLP_COOKIES ?? "";
+// YouTube 가 기본 player client 의 **미디어 다운로드**를 403 으로 막는다(2026-08-18 실측:
+// 메타데이터·포맷 목록은 되는데 실제 영상 데이터만 "HTTP Error 403: Forbidden"). yt-dlp 를
+// 최신 nightly 로 올려도 동일 — 기본 클라이언트(web/tv/android)가 봇 판정 대상이다.
+// player_client=web_safari 는 PO 토큰·쿠키 없이 통과한다(실측). 이 클라이언트가 다시 막히면
+// env 로 코드 변경 없이 바꾼다(예: "mweb", "web_safari,mweb"). 빈 값이면 붙이지 않는다.
+const YTDLP_PLAYER_CLIENT = process.env.YTDLP_PLAYER_CLIENT ?? "web_safari";
 
 // Failed-forever downloads keep their .part files (see the catch below) so a retry resumes.
 // But once a job exhausts maxAttempts it's dead and nothing ever deletes its (possibly
@@ -634,7 +640,12 @@ function runYtDlp(args: string[]): Promise<void> {
     cookiesTmp = path.join(os.tmpdir(), `ytdlp-cookies-${process.pid}-${Date.now()}.txt`);
     fs.copyFileSync(YTDLP_COOKIES, cookiesTmp);
   }
-  const withCookies = cookiesTmp ? ["--cookies", cookiesTmp, ...args] : args;
+  // player_client 강제(위 주석) — youtube: 로 스코프해 비-유튜브 URL 엔 무해하다.
+  const clientArgs = YTDLP_PLAYER_CLIENT
+    ? ["--extractor-args", `youtube:player_client=${YTDLP_PLAYER_CLIENT}`]
+    : [];
+  const base = [...clientArgs, ...args];
+  const withCookies = cookiesTmp ? ["--cookies", cookiesTmp, ...base] : base;
   return new Promise<void>((resolve, reject) => {
     const child = spawn(YT_DLP, withCookies, { stdio: ["ignore", "ignore", "pipe"] });
     let stderr = "";
