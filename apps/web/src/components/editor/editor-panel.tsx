@@ -13,6 +13,8 @@ import {
   SlidersHorizontal,
   ChevronLeft,
   ChevronRight,
+  ChevronUp,
+  ChevronDown,
   RotateCcw,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -898,6 +900,17 @@ function ElementsTab({ state, update, kf }: { state: EditorState; update: Update
     const el: EditorElement = { id: `e${Date.now()}`, type, x: 50, y: 55, text: ELEMENT_DEFAULTS[type], size: defaultElementSize(type) };
     update({ elements: [...state.elements, el] });
   }
+  // z-order (audit #5) — 그리는 순서 = 배열 순서(미리보기 DOM · 서버 ASS 둘 다 뒤 항목이 위로).
+  // dir +1 = 앞으로(위 레이어), -1 = 뒤로. 배열만 재배치하므로 미리보기=렌더 파리티가 유지된다.
+  function reorder(id: string, dir: 1 | -1) {
+    const arr = state.elements;
+    const i = arr.findIndex((x) => x.id === id);
+    const j = i + dir;
+    if (i < 0 || j < 0 || j >= arr.length) return;
+    const next = arr.slice();
+    [next[i], next[j]] = [next[j], next[i]];
+    update({ elements: next });
+  }
   const buttons: { type: ElementType; label: string }[] = [
     { type: "cta", label: "CTA 버튼" },
     { type: "sticker", label: "스티커" },
@@ -920,7 +933,7 @@ function ElementsTab({ state, update, kf }: { state: EditorState; update: Update
         <div>
           <Label>추가된 요소</Label>
           <div className="space-y-1">
-            {state.elements.map((el) => {
+            {state.elements.map((el, idx) => {
               const kfOpen = kf.kfSel?.target === el.id;
               return (
                 <div key={el.id} className="rounded-md border border-zinc-800 p-2">
@@ -930,6 +943,23 @@ function ElementsTab({ state, update, kf }: { state: EditorState; update: Update
                       onChange={(e) => update({ elements: state.elements.map((x) => (x.id === el.id ? { ...x, text: e.target.value } : x)) })}
                       className={cn(field, "flex-1")}
                     />
+                    {/* 레이어 순서 (z-order) — 겹친 요소끼리 앞/뒤로. */}
+                    <button
+                      onClick={() => reorder(el.id, 1)}
+                      disabled={idx === state.elements.length - 1}
+                      className="shrink-0 text-zinc-500 hover:text-white disabled:opacity-30"
+                      title="앞으로 (위 레이어)"
+                    >
+                      <ChevronUp className="size-4" />
+                    </button>
+                    <button
+                      onClick={() => reorder(el.id, -1)}
+                      disabled={idx === 0}
+                      className="shrink-0 text-zinc-500 hover:text-white disabled:opacity-30"
+                      title="뒤로 (아래 레이어)"
+                    >
+                      <ChevronDown className="size-4" />
+                    </button>
                     <button
                       onClick={() =>
                         kf.setKfSel(

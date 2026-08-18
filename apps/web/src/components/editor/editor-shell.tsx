@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { ArrowLeft, Save, Send, Info, Check, Sparkles, Film, Plus, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen } from "lucide-react";
 import { useAppData } from "@/lib/data/store";
 import { useToast } from "@/components/ui/toast";
@@ -39,6 +40,7 @@ export function EditorShell({ clipId }: { clipId: string }) {
   const {
     clips,
     media,
+    loading,
     recsForEpisode,
     mediaForEpisode,
     saveClipEditor,
@@ -47,6 +49,7 @@ export function EditorShell({ clipId }: { clipId: string }) {
     requestClipReframe,
   } = useAppData();
   const { toast } = useToast();
+  const router = useRouter();
   const clip = clips.find((c) => c.id === clipId);
   const reframe = clip?.reframe;
   const reframeMode = reframe?.mode ?? "basic";
@@ -147,6 +150,7 @@ export function EditorShell({ clipId }: { clipId: string }) {
   const {
     state,
     setState,
+    update: histUpdate,
     undo,
     redo,
     reset,
@@ -263,15 +267,23 @@ export function EditorShell({ clipId }: { clipId: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [clip?.id]);
 
-  async function save() {
-    if (!clip) {
-      setSaved(true);
-      return;
-    }
+  // Always-fresh snapshot of the present state — save()/reframe read it to avoid marking a
+  // stale snapshot as saved when the operator edited mid-request.
+  const latestStateRef = useRef(state);
+  latestStateRef.current = state;
+
+  async function save(): Promise<boolean> {
+    // No clip loaded — never claim "저장됨" for a phantom editor (audit #7). The shell renders
+    // a not-found/loading gate when !clip, so this is only a safety net for callers.
+    if (!clip) return false;
+    const snapshot = state;
     setSaving(true);
     try {
-      await saveClipEditor(clip.id, state);
-      setSaved(true);
+      await saveClipEditor(clip.id, snapshot);
+      // Only mark saved if the operator hasn't edited past this snapshot mid-save — otherwise
+      // the indicator would lie about a newer, still-unsaved edit (same guard as the reframe path).
+      if (latestStateRef.current === snapshot) setSaved(true);
+      return true;
     } catch (e) {
       // A silent failure here means the operator keeps editing on top of unsaved work and
       // loses it on refresh — surface it instead of just resetting the button.
@@ -280,13 +292,23 @@ export function EditorShell({ clipId }: { clipId: string }) {
         description: e instanceof Error ? e.message : "편집 내용을 저장하지 못했습니다.",
         tone: "error",
       });
+      return false;
     } finally {
       setSaving(false);
     }
   }
 
-  const latestStateRef = useRef(state);
-  latestStateRef.current = state;
+  // 저장하지 않은 편집이 있으면 이탈 전에 저장한다(audit #2) — 실패하면 확인 후에만 이동한다.
+  async function navGuarded(href: string) {
+    if (clip && !saved) {
+      const ok = await save();
+      if (!ok && !window.confirm("저장에 실패했습니다. 저장하지 않고 이동하면 편집 내용이 사라집니다. 이동할까요?")) {
+        return;
+      }
+    }
+    router.push(href);
+  }
+
   const reframeRequestInFlightRef = useRef(false);
   const requestedReframeModeRef = useRef<ReframeMode | null>(null);
   const pendingTrimReframeRef = useRef<PendingTrimReframe | null>(null);
@@ -424,6 +446,32 @@ export function EditorShell({ clipId }: { clipId: string }) {
   const saveRef = useRef(save);
   saveRef.current = save;
 
+  // ── Autosave (audit #2) — debounce 2s after the last edit while changes are unsaved.
+  // Gated on canUndo so a never-touched fresh draft isn't silently persisted; the ref stops a
+  // failed save from re-attempting the SAME snapshot in a loop (only a new edit re-arms it).
+  const lastAutosaveStateRef = useRef<EditorState | null>(null);
+  useEffect(() => {
+    if (!clip || saved || saving || !canUndo) return;
+    if (lastAutosaveStateRef.current === state) return;
+    const timer = window.setTimeout(() => {
+      lastAutosaveStateRef.current = state;
+      void saveRef.current();
+    }, 2000);
+    return () => window.clearTimeout(timer);
+  }, [clip, saved, saving, canUndo, state]);
+
+  // Warn before a hard refresh / tab close while edits are unsaved (audit #2). The debounced
+  // autosave above usually clears `saved` within 2s, so this only bites the immediate window.
+  useEffect(() => {
+    if (saved) return;
+    const onBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+    return () => window.removeEventListener("beforeunload", onBeforeUnload);
+  }, [saved]);
+
   // The single expensive render (plan §2.4): everything above was metadata. Persist the
   // latest decisions first so the render (and its revision-hash cache) reflects them.
   async function confirmExport() {
@@ -467,7 +515,12 @@ export function EditorShell({ clipId }: { clipId: string }) {
   }
 
   const update = (patch: Partial<EditorState>) => {
-    setState((s) => ({ ...s, ...patch }));
+    // Route continuous gestures (drag / slider / arrow-nudge) through the history hook's
+    // BATCHED update (audit #1): it collapses a burst of same-field patches within COALESCE_MS
+    // into ONE undo entry (mergeSig = the patch's field set), so Ctrl+Z rewinds a whole gesture
+    // instead of one pixel — and the old spam no longer overflows MAX_HISTORY. Discrete actions
+    // (I/O keys, applyTitle, applyTpl, addTrack) still call setState directly = one entry each.
+    histUpdate(patch);
     setSaved(false);
   };
 
@@ -696,16 +749,46 @@ export function EditorShell({ clipId }: { clipId: string }) {
   // 클립 목록은 미디어 화면으로 합쳐졌다 — 회차를 모를 때 여기로 보낸다.
   const backHref = clip ? `/episodes/${clip.episodeId}?tab=clips` : "/media";
 
+  // 유령 편집기 가드(audit #7) — 스토어에 clip 이 없으면 플레이스홀더(“새 클립”·40초)로 편집
+  // 가능한 척하거나 save()가 거짓 “저장됨”을 내지 않게, 로딩/찾을 수 없음 상태를 명시적으로 렌더한다.
+  // 스토어 loading 으로 “아직 불러오는 중”과 “정말 없음”을 구분한다.
+  if (!clip) {
+    return (
+      <div className="flex h-screen flex-col items-center justify-center gap-3 bg-zinc-950 text-zinc-300">
+        {loading ? (
+          <>
+            <div className="size-6 animate-spin rounded-full border-2 border-zinc-700 border-t-zinc-300" />
+            <p className="text-sm text-zinc-400">클립을 불러오는 중…</p>
+          </>
+        ) : (
+          <>
+            <Film className="size-8 text-zinc-600" />
+            <p className="text-sm font-medium text-zinc-200">클립을 찾을 수 없습니다</p>
+            <p className="text-xs text-zinc-500">삭제되었거나 아직 서버와 동기화되지 않았을 수 있습니다.</p>
+            <Link
+              href={backHref}
+              className="mt-1 inline-flex items-center gap-1.5 rounded-md border border-zinc-700 px-3 py-1.5 text-sm text-zinc-200 hover:bg-zinc-800"
+            >
+              <ArrowLeft className="size-4" /> 돌아가기
+            </Link>
+          </>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div className="flex h-screen flex-col bg-zinc-950 text-zinc-100">
       {/* header */}
       <header className="flex h-14 shrink-0 items-center gap-2 border-b border-zinc-800 px-3 sm:gap-3 sm:px-4">
-        <Link
-          href={backHref}
+        <button
+          type="button"
+          onClick={() => void navGuarded(backHref)}
+          title="나가기 — 저장하지 않은 편집이 있으면 먼저 저장합니다"
           className="inline-flex shrink-0 items-center gap-1.5 text-sm text-zinc-400 transition-colors hover:text-zinc-100"
         >
           <ArrowLeft className="size-4" /> <span className="hidden sm:inline">나가기</span>
-        </Link>
+        </button>
         <span className="min-w-0 flex-1 truncate text-sm font-medium">{title}</span>
 
         <div className="flex shrink-0 items-center gap-2">
@@ -739,8 +822,9 @@ export function EditorShell({ clipId }: { clipId: string }) {
           </select>
           <MetadataButton clipId={clipId} state={state} update={update} />
           <button
-            onClick={save}
+            onClick={() => void save()}
             disabled={saving}
+            title="저장 (Ctrl+S) · 편집 후 2초 뒤 자동 저장됩니다"
             className="inline-flex items-center gap-1.5 rounded-md border border-zinc-700 px-3 py-1.5 text-sm text-zinc-200 hover:bg-zinc-800 disabled:opacity-60"
           >
             {saved ? <Check className="size-4 text-emerald-400" /> : <Save className="size-4" />}
@@ -765,12 +849,14 @@ export function EditorShell({ clipId }: { clipId: string }) {
               ? "진행 중"
               : rendered ? "확정됨" : "확정(렌더)"}
           </button>
-          <Link
-            href="/distribution"
+          <button
+            type="button"
+            onClick={() => void navGuarded("/distribution")}
+            title="배포로 이동 — 저장하지 않은 편집이 있으면 먼저 저장합니다"
             className="inline-flex items-center gap-1.5 rounded-md bg-white px-3 py-1.5 text-sm font-medium text-black hover:bg-zinc-200"
           >
             <Send className="size-4" /> 배포
-          </Link>
+          </button>
         </div>
       </header>
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState, type CSSProperties, type Ref } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type Ref } from "react";
 import { Heart, MessageCircle, Send } from "lucide-react";
 import { ASPECTS, defaultElementSize, filterCss, fontFamilyCss, overlayVisibleAt, sampleKeyframes, type CaptionStyle, type EditorState } from "@/lib/editor/presets";
 import { getAspectPreset } from "@/lib/editor/aspect-presets";
@@ -195,6 +195,55 @@ export function EditorPreview({
     setSelected(null);
     setEditing(null);
   }
+
+  // 선택된 오버레이 키보드 조작 (audit #5) — 방향키 이동(1% · Shift=10%)·Delete 요소 삭제·Esc 해제.
+  // 인라인 편집 중이거나 입력 필드에 포커스가 있으면 무시(네이티브 동작 보존). 모든 변경은 shell 의
+  // batched update 를 거치므로 방향키 연타 한 묶음이 undo 한 번에 되돌아간다.
+  useEffect(() => {
+    if (!selected || editing) return;
+    const onKey = (e: KeyboardEvent) => {
+      const tgt = e.target as HTMLElement | null;
+      if (tgt && (tgt.tagName === "INPUT" || tgt.tagName === "TEXTAREA" || tgt.isContentEditable)) return;
+      const step = e.shiftKey ? 10 : 1;
+      const clamp = (v: number) => Math.max(0, Math.min(100, v));
+      const arrow =
+        e.key === "ArrowLeft" ? ([-step, 0] as const)
+        : e.key === "ArrowRight" ? ([step, 0] as const)
+        : e.key === "ArrowUp" ? ([0, -step] as const)
+        : e.key === "ArrowDown" ? ([0, step] as const)
+        : null;
+      if (arrow) {
+        e.preventDefault();
+        const [dx, dy] = arrow;
+        if (selected === "title") {
+          update({ titleX: clamp(state.titleX + dx), titleY: clamp(state.titleY + dy) });
+        } else if (selected === "channel") {
+          update({ channelY: clamp(state.channelY + dy) }); // 채널 뱃지는 lockX — 세로만 이동
+        } else if (selected.startsWith("el:")) {
+          const id = selected.slice(3);
+          const el = state.elements.find((x) => x.id === id);
+          if (el) {
+            const kf = sampleKeyframes(el.keyframes, localT);
+            moveEl(id, clamp((kf?.x ?? el.x) + dx), clamp((kf?.y ?? el.y) + dy));
+          }
+        }
+        return;
+      }
+      if ((e.key === "Delete" || e.key === "Backspace") && selected.startsWith("el:")) {
+        // 요소만 삭제한다 — 제목/채널은 구조적이라 속성 패널 토글로만 끈다(오삭제 방지).
+        e.preventDefault();
+        const id = selected.slice(3);
+        update({ elements: state.elements.filter((x) => x.id !== id) });
+        setSelected(null);
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        deselect();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selected, editing, state, localT]);
 
   return (
     // w-full 없으면 자식 stage의 width:min(90%, 900px)의 %가 참조할 정의된 폭이 없어

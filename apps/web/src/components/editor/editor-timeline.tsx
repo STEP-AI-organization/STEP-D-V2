@@ -467,9 +467,20 @@ export function EditorTimeline({
 
   return (
     <div className="space-y-3">
+      {/* 키보드 단축키 범례 (audit #4) — AENA 트랜스포트 kbd 줄 이식. 강력한 단축키를 발견 가능하게. */}
+      <div className="hidden flex-wrap items-center gap-x-2.5 gap-y-1 text-[11px] text-zinc-500 md:flex">
+        <span className="inline-flex items-center gap-1"><Kbd>Space</Kbd> 재생</span>
+        <span className="inline-flex items-center gap-1"><Kbd>I</Kbd><Kbd>O</Kbd> 구간 시작·끝</span>
+        <span className="inline-flex items-center gap-1"><Kbd>Ctrl+Z</Kbd> 되돌리기</span>
+        <span className="inline-flex items-center gap-1"><Kbd>Ctrl+S</Kbd> 저장</span>
+        <span className="inline-flex items-center gap-1"><Kbd>↑↓←→</Kbd> 오버레이 이동 <span className="text-zinc-600">(Shift 10×)</span></span>
+        <span className="inline-flex items-center gap-1"><Kbd>Del</Kbd> 요소 삭제</span>
+        <span className="inline-flex items-center gap-1"><Kbd>Esc</Kbd> 선택 해제</span>
+      </div>
       <div className="flex items-center gap-3">
         <button
           onClick={onTogglePlay}
+          title="재생·일시정지 (Space)"
           className="flex size-9 items-center justify-center rounded-full bg-white text-black"
         >
           {playing ? <Pause className="size-4" /> : <Play className="size-4" />}
@@ -961,6 +972,14 @@ export function EditorTimeline({
         </div>
       </div>
     </div>
+  );
+}
+
+function Kbd({ children }: { children: React.ReactNode }) {
+  return (
+    <kbd className="rounded border border-zinc-700 bg-zinc-800 px-1.5 py-0.5 font-sans text-[10px] leading-none text-zinc-300">
+      {children}
+    </kbd>
   );
 }
 
