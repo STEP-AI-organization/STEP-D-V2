@@ -54,6 +54,11 @@ git reset --hard "origin/$Branch" --quiet
 if ($LASTEXITCODE -ne 0) { Say "reset 실패 — 중단"; exit 1 }
 
 Say "의존성 동기화"
+# 윈도우2 는 SSH·작업 스케줄러로 돌아 **TTY 가 없다.** node_modules 가 lockfile 과 어긋나면
+# pnpm 이 modules 디렉토리 삭제를 물어보는데(확인 프롬프트), TTY 가 없으면 거기서 죽는다
+# (ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY) → 코드는 당겨도 워커가 영영 재시작 안 된다
+# (2026-08-18 실측). CI=true 면 pnpm 이 비대화형으로 진행한다.
+$env:CI = "true"
 $pnpmOut = (pnpm install --frozen-lockfile 2>&1) -join "`n"
 if ($LASTEXITCODE -ne 0) {
   # pnpm 은 "빌드 스크립트를 안 돌렸다"는 **경고**로도 exit 1 을 낸다(ERR_PNPM_IGNORED_BUILDS).
