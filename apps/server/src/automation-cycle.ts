@@ -546,11 +546,26 @@ export async function runAutomationCycle(): Promise<CycleReport> {
         if (decision.action === "skip") continue;
 
         // 채널별 메타 없이 게시하지 않는다 — 워커 metaForChannel 폴백(clip.title)으로
-        // 나가면 제목 프롬프트·채널별 태그가 미반영된 채 실업로드된다. 생성 잡을
-        // (재)큐잉하고 이번 순방은 넘긴다 — dedupe 는 pending/running 에만 걸리므로
-        // 잡이 실패했어도 다음 순방이 다시 큐잉한다(조용한 영구 정지 없음).
-        const chanMeta = (clip as any).channelMeta?.[chan.platform];
+        // 나가면 제목 프롬프트·채널별 태그가 미반영된 채 실업로드된다(제목 해시태그도 없다).
+        //
+        // 없으면 **이 자리에서 즉석 생성**한다(requestAutoMetadata · 내부 POST). 예전엔
+        // clip.metadata 잡만 큐잉하고 순방을 통째로 넘겨 다음 순방(최대 15분 뒤)에야 게시됐다 —
+        // 이제는 같은 순방에 생성→게시로 잇는다. 생성은 (클립,채널)당 **한 번만** — channelMeta 가
+        // 이미 있으면 건너뛴다(멱등 · Gemini 원가 반복 방지). generate-metadata 는 전 채널을 한 번에
+        // 만들므로 한 클립에 실제 Gemini 호출은 첫 채널에서 1회뿐이다.
+        let chanMeta = (clip as any).channelMeta?.[chan.platform];
         if (!chanMeta || !(chanMeta.title || chanMeta.description)) {
+          if (await requestAutoMetadata(clip.id, chan.platform)) {
+            // 성공하면 방금 저장된 channelMeta 를 최신 행에서 다시 읽어 이번 순방에 바로 게시한다.
+            const fresh = await getEntity<any>("clip", clip.id);
+            if (fresh) { Object.assign(clip, fresh); chanMeta = (fresh as any).channelMeta?.[chan.platform]; }
+          }
+        }
+        if (!chanMeta || !(chanMeta.title || chanMeta.description)) {
+          // 즉석 생성이 실패했다(대개 입력 부족·모델 오류). **게시를 막아 폴백 제목으로 나가는 걸
+          // 방지**하되, 잡을 (재)큐잉해 두고 이번 순방은 이 채널만 넘긴다 — dedupe 는
+          // pending/running 에만 걸리므로 잡이 실패했어도 다음 순방이 다시 큐잉한다(조용한 영구
+          // 정지 없음). requestAutoMetadata 는 던지지 않으므로 순방 전체는 막히지 않는다.
           await enqueue("clip.metadata", { clipId: clip.id }, { dedupeKey: `clip.metadata:${clip.id}` }).catch(() => {});
           // 렌더 대기와 같은 처방 — 잡이 계속 실패하면 이 상태가 며칠 이어질 수 있어
           // 무가드면 (클립,채널)당 하루 90여 줄이다. 재큐잉은 위에서 매 순방 계속한다.
@@ -817,6 +832,33 @@ async function requestAutoReframe(clipId: string): Promise<boolean> {
     return true;
   } catch (e) {
     console.warn(`[automation] AI 리프레임 요청 실패 ${clipId}: ${String(e).slice(0, 160)}`);
+    return false;
+  }
+}
+
+/**
+ * 채널별 업로드 메타데이터 즉석 생성 — 수동 발행 화면·clip.metadata 잡이 부르는 것과 **같은
+ * 라우트**(POST /api/clips/:id/generate-metadata · 내부 인증은 requestAutoRender 와 동일).
+ * 프롬프트·채널 규칙·저장이 전부 라우트 안에 있으므로 여기서 복제하지 않는다 — 두 벌이 되면
+ * 화면에서 누른 것과 자동 생성이 갈라진다(clip.metadata 워커 핸들러와 같은 이유).
+ *
+ * 라우트는 **전 채널을 한 번에** 만들어 clip.channelMeta 에 저장한다. `channel` 인자는
+ * 로그·호출 의도 표기용이다(한 클립에 실제 Gemini 호출은 채널 무관 1회). 호출부는 channelMeta 가
+ * 없을 때만 부르므로 (클립당) 한 번만 돈다 — 매 순방·매 채널 재생성으로 원가를 태우지 않는다.
+ *
+ * 던지지 않는다: 실패하면 false — 호출부가 clip.metadata 잡 폴백으로 낮춘다(다음 순방 재시도).
+ * requestAutoRender·requestAutoReframe 와 같은 계약이라 순방 전체를 막지 않는다.
+ */
+async function requestAutoMetadata(clipId: string, channel: string): Promise<boolean> {
+  try {
+    const { apiBase, internalHeaders } = await import("./factory.ts");
+    const res = await fetch(`${apiBase()}/api/clips/${clipId}/generate-metadata`, {
+      method: "POST", headers: await internalHeaders(),
+    });
+    if (!res.ok) throw new Error(`generate-metadata ${res.status}`);
+    return true;
+  } catch (e) {
+    console.warn(`[automation] 메타데이터 생성 실패 ${clipId} (${channel}): ${String(e).slice(0, 160)}`);
     return false;
   }
 }

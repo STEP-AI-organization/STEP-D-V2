@@ -68,10 +68,11 @@ export interface ChannelSpec {
 export const CHANNEL_SPECS: Record<MetaChannel, ChannelSpec> = {
   youtube: {
     label: "YouTube", titleMax: 100, descMax: 5000, descMin: 0, tagsMax: 15,
-    // 제목에 프로그램 해시태그를 다는 게 유입의 축이다 (`… #나는솔로`).
-    titleHashtags: 2,
+    // 제목에 프로그램 해시태그를 다는 게 유입의 축이다 (`… #프로그램 #서브 #쇼츠`).
+    // 3 = 레퍼런스 모양(#프로그램 #서브 #쇼츠). #쇼츠 는 소스가 비어도 항상 보장된다(아래 참조).
+    titleHashtags: 3,
     hashtagsInDescription: true, needsCategory: false,
-    note: "제목 100자 · 설명 5000자 · 태그 필드 별도. **제목 끝에 #프로그램 해시태그를 붙인다** — 같은 프로그램 클립끼리 묶인다.",
+    note: "제목 100자 · 설명 5000자 · 태그 필드 별도. **제목 끝에 #프로그램 …#쇼츠 해시태그를 붙인다** — 같은 프로그램 클립끼리 묶인다.",
   },
   navertv: {
     label: "네이버 TV", titleMax: 120, descMax: 3000, descMin: 0, tagsMax: 10,
@@ -380,6 +381,20 @@ export function normalizeForChannel(
   if (spec.titleMax !== null) {
     // 프로그램 해시태그를 최우선으로 — 채널 규칙 템플릿에서 온 것이 그 자리다.
     titleTags = pickTitleHashtags(hashtags, vars.program, spec.titleHashtags);
+    if (spec.titleHashtags > 0) {
+      // ⚠️ **제목은 해시태그 없이 나가면 안 된다**(YouTube 쇼츠 유입축). 규칙 템플릿·Gemini
+      //    해시태그가 둘 다 비고 프로그램조차 없어 titleTags 가 통째로 비면, 클립 자체 데이터로
+      //    채운다 — 하드코딩이 아니라 이 클립에서 나온 것만 쓴다.
+      //    소스 순서: 프로그램명 → base.tags(등록 캐스트·인물명이 녹아 있는 자리). #쇼츠 자리를
+      //    하나 남겨(want-1) 최후의 보루가 항상 들어가게 한다.
+      if (titleTags.length === 0) {
+        titleTags = pickTitleHashtags(base.tags ?? [], vars.program, Math.max(1, spec.titleHashtags - 1));
+      }
+      // #쇼츠 보장 — 이미 있으면 그대로, 없고 자리가 남으면 붙인다(레퍼런스: `#프로그램 #서브 #쇼츠`).
+      // 그래도 비면(프로그램·태그 전무) #쇼츠 하나라도 남긴다 — 관련 해시태그 0개로는 안 나간다.
+      if (!titleTags.includes("#쇼츠") && titleTags.length < spec.titleHashtags) titleTags.push("#쇼츠");
+      if (titleTags.length === 0) titleTags.push("#쇼츠");
+    }
     const suffix = titleTags.length ? ` ${titleTags.join(" ")}` : "";
     const head = prefix ? `${prefix} ` : "";
     const room = spec.titleMax - head.length - suffix.length;

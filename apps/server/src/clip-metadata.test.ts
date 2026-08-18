@@ -136,6 +136,49 @@ describe("YouTube 제목 해시태그 — 유입의 축", () => {
     const m = normalizeForChannel(base, "navertv", {}, { program: "나는SOLO" });
     assert.doesNotMatch(m.title ?? "", /#/, "네이버 TV 제목에 해시태그가 붙었다");
   });
+
+  // ⚠️ 규칙 hashtagTemplate 도 없고 Gemini hashtags 도 비면 예전엔 제목이 해시태그 없이 나갔다.
+  //    YouTube 쇼츠는 해시태그가 유입축이라 **항상 최소 #쇼츠 는 달고 나가야** 한다.
+  const noHashtags: BaseMetadata = {
+    title: "이영자가 젓가락을 놓은 순간",
+    description: "먹방 도중 갑자기 젓가락을 내려놓는다.",
+    tags: ["이영자", "홍현희", "먹방"],
+    hashtags: [],
+  };
+
+  it("해시태그 소스가 하나도 없어도 제목은 #쇼츠 로 끝난다 (프로그램 주어지면 #프로그램도)", () => {
+    const noSource: BaseMetadata = { ...noHashtags, tags: [] };
+    const m = normalizeForChannel(noSource, "youtube", {}, { program: "전참시" });
+    // 예: "이영자가 젓가락을 놓은 순간 #전참시 #쇼츠"
+    assert.match(m.title ?? "", /#전참시/, `프로그램 해시태그가 없다: ${m.title}`);
+    assert.match(m.title ?? "", /#쇼츠$/, `#쇼츠 로 안 끝난다: ${m.title}`);
+    assert.ok((m.title ?? "").length <= CHANNEL_SPECS.youtube.titleMax!, `상한 초과: ${m.title?.length}`);
+  });
+
+  it("프로그램이 없으면 base.tags(등록 캐스트·인물)로 채우고 #쇼츠 를 보루로 둔다", () => {
+    const m = normalizeForChannel(noHashtags, "youtube", {}, {});
+    assert.match(m.title ?? "", /#이영자/, `태그 폴백이 안 됐다: ${m.title}`);
+    assert.match(m.title ?? "", /#쇼츠/, `#쇼츠 보루가 없다: ${m.title}`);
+  });
+
+  it("프로그램·태그가 전무해도 최소 #쇼츠 한 개는 붙는다 — 해시태그 0개로는 안 나간다", () => {
+    const bare: BaseMetadata = { title: "무제", description: "설명", tags: [], hashtags: [] };
+    const m = normalizeForChannel(bare, "youtube", {}, {});
+    assert.match(m.title ?? "", /#쇼츠/, `최후 보루 #쇼츠 가 없다: ${m.title}`);
+  });
+
+  it("소스가 비어 폴백해도 제목 상한을 넘지 않는다", () => {
+    const longNoTags: BaseMetadata = { ...noHashtags, title: "가".repeat(300), tags: [] };
+    const m = normalizeForChannel(longNoTags, "youtube", {}, { program: "전참시" });
+    assert.ok((m.title ?? "").length <= CHANNEL_SPECS.youtube.titleMax!, `상한 초과: ${m.title?.length}`);
+    assert.match(m.title ?? "", /#쇼츠$/, "본문이 상한을 다 써서 #쇼츠 가 날아갔다");
+  });
+
+  it("#쇼츠 보장은 제목 해시태그가 0인 채널에는 적용되지 않는다", () => {
+    // 네이버·인스타 등은 titleHashtags=0 이라 #쇼츠 도 붙지 않는다.
+    const m = normalizeForChannel(noHashtags, "navertv", {}, { program: "전참시" });
+    assert.doesNotMatch(m.title ?? "", /#쇼츠/, "제목 해시태그 관행이 없는 채널에 #쇼츠 가 붙었다");
+  });
 });
 
 describe("장르팩 — AENA 가 품질 핵심이라 지목한 분기", () => {
