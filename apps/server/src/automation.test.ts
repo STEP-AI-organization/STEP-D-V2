@@ -12,19 +12,36 @@ import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
 
 import {
+  AUTO_RENDER_STOPPED_NOTE,
+  CYCLE_PERIOD_MS,
+  RENDER_MAX_ATTEMPTS,
+  RENDER_STUCK_MS,
+  RULE_IDLE_CODES,
+  autoRenderFailedNote,
+  classifyRenderFailure,
   decidePublish,
+  episodeAnalysisState,
   initialRuleState,
   isGatePolicy,
   isRuleCriterion,
   isRuleMediaKind,
   isRuleOrientation,
   isRuleReframe,
+  matchesMediaKind,
+  nextAutoRenderState,
   overlapsExistingClip,
   planCycle,
+  renderFailureAction,
+  renderFailureReason,
   ruleCreatedNotice,
+  ruleIdleNote,
   selectCandidates,
+  shouldRequestAutoRender,
+  type AutoRenderState,
   type AutomationRule,
   type GateSnapshot,
+  type RuleIdleCode,
+  type RuleIdleObservation,
 } from "./automation.ts";
 import { channelPublishMode } from "./publish-guard.ts";
 
@@ -134,6 +151,36 @@ describe("보류된 건은 사람이 확정해야 다시 잡힌다 (F6 Invariant
   it("사람이 확정하면(heldAwaitingHuman=false) 나간다", () => {
     const d = decidePublish({ rule: rule(), gate: PASS, approved: true, heldAwaitingHuman: false });
     assert.equal(d.action, "publish");
+  });
+});
+
+describe("사유 로그 스팸 방지 — db-pg 소스 스캔", () => {
+  const fn = fs.readFileSync(path.join(SRC, "db-pg.ts"), "utf-8")
+    .match(/export async function hasRunNote[\s\S]*?\n\}/)?.[0] ?? "";
+
+  it("rule_id 없는 워크스페이스 사유도 dedupe 된다", () => {
+    // 크레딧 부족은 특정 규칙 탓이 아니라 rule_id 가 NULL 이다. `= $1` 하나로 두면 NULL
+    // 비교가 항상 거짓이라 dedupe 가 통째로 무력해져 그 사유가 매 순방 쌓인다.
+    assert.match(fn, /ruleId: string \| null/, "hasRunNote 가 rule_id 없는 사유를 못 받는다");
+    assert.match(fn, /rule_id IS NULL/,
+      "rule_id NULL 갈래가 없다 — 워크스페이스 사유가 15분마다 쌓인다");
+  });
+
+  it("rule_id 가 있으면 `= $1` 로 인덱스를 탄다", () => {
+    // `IS NOT DISTINCT FROM` 한 줄로 합치면 NULL 은 찾지만 **인덱스를 통째로 잃는다** —
+    // btree 에 그 연산자 전략이 없고, rule_run 인덱스(0019 idx_rule_run_rule ·
+    // 0032 idx_rule_run_quota)는 둘 다 rule_id 선행이라 남는 진입점이 없어 seq scan 이다.
+    // 순방(15분)이 규칙×채널×클립 수만큼 부르는 쿼리라 rule_run 이 자라는 만큼 느려진다.
+    assert.match(fn, /rule_id = \$1/, "rule_id 있을 때의 인덱스 진입점이 없다");
+    assert.doesNotMatch(fn, /rule_id IS NOT DISTINCT FROM/,
+      "rule_id 에 IS NOT DISTINCT FROM 을 쓰면 인덱스를 못 탄다 — 두 갈래로 나눌 것");
+  });
+
+  it("문구까지 같아야 '이미 남겼다'로 본다", () => {
+    // 사유가 여러 가지인 자리에서는 result 만으로는 "다른 사유로 이미 한 줄 남겼다" 와
+    // 구분이 안 돼, 새 사유가 침묵한다.
+    assert.match(fn, /detail\?: string \| null/, "detail 인자가 없다");
+    assert.match(fn, /\$5::text IS NULL OR detail = \$5/, "문구 일치 조건이 없다");
   });
 });
 
@@ -382,6 +429,392 @@ describe("채택 기준 (F6 03단계)", () => {
   });
 });
 
+// ── 순방이 아무것도 안 했을 때: 사유를 남긴다 ───────────────────────────────────
+
+const obs = (over: Partial<RuleIdleObservation> = {}): RuleIdleObservation => ({
+  outOfWindow: false, activeStart: 9, activeEnd: 22,
+  episodes: 1, analyzed: 1, analyzing: 0, analysisFailed: 0, analysisBlocked: 0,
+  pending: 0, kindMatched: 0, overlapped: 0, scoreBlocked: 0, scoreMissing: 0, cappedEpisodes: 0,
+  clipsAllSent: false, adopted: 0,
+  renderStopped: false, gateOff: false, publishFailed: false, heldWaiting: false,
+  vagueAccount: false, channelBlocked: false, quotaDone: false,
+  renderWaiting: false, metaWaiting: false,
+  criterion: "score80", mediaKind: "both",
+  ...over,
+});
+const codeOf = (o: RuleIdleObservation) => ruleIdleNote(o)?.code ?? null;
+
+describe("순방이 아무것도 안 했으면 이유를 남긴다 (ruleIdleNote 순수 판정)", () => {
+  it("일을 했으면 사유가 없다", () => {
+    assert.equal(ruleIdleNote(obs({ adopted: 1 })), null);
+  });
+
+  it("회차가 없으면 회차 없음", () => {
+    assert.equal(codeOf(obs({ episodes: 0 })), "no_episode");
+  });
+
+  it("분석이 안 끝났으면 '추천 없음'이 아니라 '분석 중'이다", () => {
+    // 이게 이 판정의 핵심이다. 분석 미완 회차뿐인데 후보 0건을 그대로 읽으면
+    // "채택할 새 추천이 없습니다" 라는 **틀린 사유**가 나가고, 사용자는 규칙을 의심한다.
+    const o = obs({ analyzed: 0, analyzing: 2 });
+    assert.equal(codeOf(o), "analyzing");
+    assert.notEqual(codeOf(o), "no_pending");
+  });
+
+  it("분석이 실패했으면 분석 실패라고 말한다", () => {
+    assert.equal(codeOf(obs({ analyzed: 0, analysisFailed: 1 })), "analysis_failed");
+  });
+
+  it("분석이 **큐잉조차 안 됐으면** '분석 중'이 아니다 — 기다려도 안 끝난다", () => {
+    // 크레딧 부족으로 잡을 못 건 회차는 큐에 들어간 적이 없다. 이걸 analyzing 으로 세면
+    // "끝나면 다음 확인 때 자동으로 이어집니다" 라고 말하게 되는데, 그 완료는 영원히 안 온다.
+    const n = ruleIdleNote(obs({ analyzed: 0, analysisBlocked: 1 }))!;
+    assert.equal(n.code, "analysis_blocked");
+    assert.match(n.detail, /시작/, "사람이 무엇을 하면 되는지가 없다");
+    assert.doesNotMatch(n.detail, /끝나면 다음 확인/, "오지 않을 완료를 약속한다");
+    // 충전은 아무 잡도 큐잉하지 않는다 — "충전한 뒤에 시작됩니다" 는 **저절로 시작된다**로
+    // 읽혀 사용자가 충전만 하고 기다린다(조용한 정지의 반복).
+    assert.doesNotMatch(n.detail, /충전한 뒤에 시작됩니다/,
+      "충전하면 저절로 시작되는 것처럼 읽힌다 — 사람이 다시 눌러야 한다");
+    assert.match(n.detail, /다시 시작|시작해 주세요/, "사람이 눌러야 한다는 사실이 없다");
+  });
+
+  it("활동 시간창 밖이면 그 사실과 시간을 말한다", () => {
+    const n = ruleIdleNote(obs({ outOfWindow: true, activeStart: 9, activeEnd: 22 }))!;
+    assert.equal(n.code, "off_hours");
+    assert.match(n.detail, /9~22시/, "몇 시부터 몇 시인지가 없으면 사용자가 설정을 못 찾는다");
+  });
+
+  it("게시 단계에서 멈춘 상태도 사유가 된다 — 눌린 로그를 규칙 단위로 이어 준다", () => {
+    // 이 사유들은 (클립,채널)당 한 줄로 눌러 두는데, 눌린 뒤에는 그 규칙이 왜 멈춰
+    // 있는지 아무도 말하지 않는다. 여기가 그 상태를 하루 한 줄로 잇는 자리다.
+    assert.equal(codeOf(obs({ renderStopped: true })), "render_stopped");
+    assert.equal(codeOf(obs({ gateOff: true })), "gate_off");
+    assert.equal(codeOf(obs({ publishFailed: true })), "publish_failed");
+    assert.equal(codeOf(obs({ heldWaiting: true })), "held_waiting");
+    assert.equal(codeOf(obs({ vagueAccount: true })), "vague_account");
+    assert.equal(codeOf(obs({ channelBlocked: true })), "channel_rule");
+    assert.equal(codeOf(obs({ quotaDone: true })), "quota_done");
+    assert.equal(codeOf(obs({ renderWaiting: true })), "render_waiting");
+    assert.equal(codeOf(obs({ metaWaiting: true })), "meta_waiting");
+  });
+
+  it("갈 화면을 지목한다 — 채널 규칙은 배포 채널 화면에서 연다", () => {
+    // 다른 사유는 전부 화면을 말한다(회차 화면·편집기·배포 기록). 여기만 "채널 규칙을
+    // 바꾸세요" 라 사용자가 어디를 열어야 하는지 알 수 없었다.
+    assert.match(ruleIdleNote(obs({ channelBlocked: true }))!.detail, /배포 채널 화면/);
+  });
+
+  it("분석 완료 회차가 전부 상한이면 상한 도달", () => {
+    assert.equal(codeOf(obs({ analyzed: 2, cappedEpisodes: 2, criterion: "top3" })), "top3_cap");
+  });
+
+  it("한 회차라도 상한이 아니면 상한 탓으로 돌리지 않는다", () => {
+    // 과잉 주장(틀린 사유)보다 덜 정확한 기본값이 낫다.
+    assert.notEqual(codeOf(obs({ analyzed: 3, cappedEpisodes: 1, criterion: "top3" })), "top3_cap");
+  });
+
+  it("점수 기준에 걸리면 기준 점수를 문구에 담는다 — 사용자가 무엇을 낮출지 안다", () => {
+    assert.match(ruleIdleNote(obs({ scoreBlocked: 2, criterion: "score80" }))!.detail, /80/);
+    assert.match(ruleIdleNote(obs({ scoreBlocked: 2, criterion: "score85" }))!.detail, /85/);
+    assert.equal(codeOf(obs({ scoreBlocked: 2, criterion: "score85" })), "score_blocked");
+  });
+
+  it("점수가 **없는** 탈락은 기준을 바꿔도 안 잡힌다 — 재분석을 안내한다", () => {
+    // selectCandidates 는 세 기준(80·85·상위 3건) 모두에서 점수 없는 후보를 뺀다.
+    // "기준을 낮추거나 '상위 3건' 으로 바꾸면 잡힙니다" 는 이 경우 지킬 수 없는 안내다 —
+    // 사용자가 그대로 해도 결과는 그대로 0건이다.
+    const all = ruleIdleNote(obs({ scoreBlocked: 3, scoreMissing: 3, criterion: "score80" }))!;
+    assert.equal(all.code, "score_blocked");
+    assert.match(all.detail, /다시 분석/, "재분석해야 풀리는데 안내가 없다");
+    assert.doesNotMatch(all.detail, /기준을 낮추/, "기준을 바꿔도 안 잡히는데 그렇게 안내한다");
+    // top3 도 같다 — 점수 없는 후보만 남으면 상위 N 을 고를 수가 없다.
+    assert.match(ruleIdleNote(obs({ scoreBlocked: 2, criterion: "top3" }))!.detail, /다시 분석/);
+    // 섞여 있으면 두 조치가 다 필요하다.
+    const mixed = ruleIdleNote(obs({ scoreBlocked: 3, scoreMissing: 1, criterion: "score80" }))!;
+    assert.match(mixed.detail, /기준을 낮추/);
+    assert.match(mixed.detail, /다시 분석/);
+    // 전부 점수 미달이면 재분석은 필요 없다 — 노이즈를 붙이지 않는다.
+    assert.doesNotMatch(ruleIdleNote(obs({ scoreBlocked: 3, criterion: "score80" }))!.detail, /다시 분석/);
+  });
+
+  it("종류가 안 맞으면 그 종류를 말한다 — 화면(자동배포 KIND_LABEL)과 같은 어휘로", () => {
+    const n = ruleIdleNote(obs({ pending: 4, kindMatched: 0, mediaKind: "short" }))!;
+    assert.equal(n.code, "kind_mismatch");
+    // 화면은 "숏폼" 이라고 부른다. 같은 설정을 로그가 "쇼츠" 라고 부르면 사용자는 그 사유가
+    // 자기가 고른 설정을 가리키는지조차 모른다.
+    assert.match(n.detail, /숏폼/);
+    assert.doesNotMatch(n.detail, /쇼츠/);
+  });
+
+  it("구간이 전부 겹쳐 제외됐으면 겹침이라고 말한다 (정상 동작임도 함께)", () => {
+    const n = ruleIdleNote(obs({ pending: 3, kindMatched: 3, overlapped: 3 }))!;
+    assert.equal(n.code, "overlap");
+    assert.match(n.detail, /중복/);
+  });
+
+  it("만든 클립이 다 나갔으면 그렇게 말한다 — '추천 없음'과 다른 상태다", () => {
+    assert.equal(codeOf(obs({ clipsAllSent: true })), "all_sent");
+  });
+
+  it("나머지는 추천 없음", () => {
+    assert.equal(codeOf(obs()), "no_pending");
+  });
+});
+
+describe("분석 상태 판정 — '분석 중'과 '큐잉조차 안 됨'은 다른 상태다", () => {
+  /**
+   * 크레딧 부족으로 분석을 못 건 회차는 **잡이 큐에 들어간 적이 없다.** 이걸 analyzing 으로
+   * 세면 순방이 "끝나면 다음 확인 때 자동으로 이어집니다" 라고 말하는데, 그 완료는 영원히
+   * 안 온다 — 이 리포 최빈 실패모드(조용한 정지)의 교과서적 형태다.
+   */
+  it("blockedReason 이 있으면 blocked — 업로드 경로(index.ts)가 남기는 모양", () => {
+    assert.equal(episodeAnalysisState({
+      stageStatus: "warn", note: "크레딧 부족 — 충전 후 분석을 시작하세요",
+      blockedReason: "잔액이 모자랍니다",
+    }), "blocked");
+  });
+
+  it("유튜브 가져오기 경로(worker.ts)는 idle + 사유 문구뿐이다 — 그것도 잡는다", () => {
+    // 이 경로는 blockedReason 을 안 쓰고 note 에만 남긴다. 문구까지 안 보면 정상 대기와
+    // 글자 그대로 구분이 안 된다.
+    assert.equal(episodeAnalysisState({
+      stageStatus: "idle", note: "크레딧 부족 — 충전 후 분석을 시작해 주세요 (잔액 0)",
+    }), "blocked");
+  });
+
+  it("정상 대기·진행은 analyzing, 완료는 analyzed, 실패는 failed", () => {
+    assert.equal(episodeAnalysisState({ stageStatus: "idle", note: "분석 대기" }), "analyzing");
+    assert.equal(episodeAnalysisState({ stageStatus: "progress", note: "AI 분석 중…" }), "analyzing");
+    assert.equal(episodeAnalysisState({ stageStatus: "done", note: "AI 쇼츠 추천 20건" }), "analyzed");
+    assert.equal(episodeAnalysisState({ stageStatus: "warn", note: "일부 경고" }), "analyzed");
+    assert.equal(episodeAnalysisState(undefined), "analyzed");
+  });
+
+  it("분석이 돌다가 실패한 것(error)은 blocked 가 아니다 — 사람이 할 일이 다르다", () => {
+    // content-pipeline 은 error 에도 blockedReason 을 쓴다. 재시작 대상이지 '시작 안 됨'이 아니다.
+    assert.equal(episodeAnalysisState({
+      stageStatus: "error", blockedReason: "AI 분석 실패 — 자동 재시도가 끝났습니다",
+    }), "failed");
+  });
+});
+
+describe("사유는 하나만 — 우선순위 고정", () => {
+  // 순서가 흔들리면 같은 상황에서 로그가 매번 다른 말을 한다. 원칙은
+  // "사람이 규칙을 바꾸면 풀리는 것 먼저, 시간이 저절로 풀어 주는 것은 뒤".
+  const cases: Array<[string, RuleIdleObservation, RuleIdleCode]> = [
+    ["활동 시간 밖이 모든 사유를 이긴다 — 평가 자체를 안 했다",
+      obs({ outOfWindow: true, episodes: 0, renderStopped: true, gateOff: true }), "off_hours"],
+    ["회차 없음이 분석 중을 이긴다", obs({ episodes: 0, analyzed: 0, analyzing: 3 }), "no_episode"],
+    ["분석 미완이 후보 사유를 전부 이긴다",
+      obs({ analyzed: 0, analyzing: 1, pending: 5, overlapped: 5, clipsAllSent: true }), "analyzing"],
+    ["분석 실패가 분석 중을 이긴다", obs({ analyzed: 0, analyzing: 1, analysisFailed: 1 }), "analysis_failed"],
+    ["큐잉 안 됨이 분석 실패·분석 중을 이긴다 — 가장 오래 조용한 상태다",
+      obs({ analyzed: 0, analyzing: 2, analysisFailed: 1, analysisBlocked: 1 }), "analysis_blocked"],
+    ["렌더 확정 실패가 채택 단계 사유를 이긴다 — 만든 게 못 나가는 쪽이 급하다",
+      obs({ renderStopped: true, scoreBlocked: 3, clipsAllSent: true }), "render_stopped"],
+    ["게이트 OFF 가 할당량 소진을 이긴다 — 켜기 전엔 할당량이 의미가 없다",
+      obs({ gateOff: true, quotaDone: true }), "gate_off"],
+    ["배포 실패가 승인 대기를 이긴다 — 이미 실패한 건이 급하다",
+      obs({ publishFailed: true, heldWaiting: true }), "publish_failed"],
+    ["승인 대기가 채널 규칙 미달을 이긴다", obs({ heldWaiting: true, channelBlocked: true }), "held_waiting"],
+    ["할당량 소진이 점수 미달을 이긴다", obs({ quotaDone: true, scoreBlocked: 2 }), "quota_done"],
+    ["상한 도달이 점수 미달을 이긴다",
+      obs({ analyzed: 2, cappedEpisodes: 2, scoreBlocked: 4, criterion: "top3" }), "top3_cap"],
+    ["점수 미달이 종류 불일치를 이긴다",
+      obs({ scoreBlocked: 1, pending: 3, kindMatched: 0 }), "score_blocked"],
+    ["종류 불일치가 겹침을 이긴다",
+      obs({ pending: 3, kindMatched: 0, overlapped: 2 }), "kind_mismatch"],
+    ["겹침이 '다 나감'을 이긴다",
+      obs({ pending: 2, kindMatched: 2, overlapped: 2, clipsAllSent: true }), "overlap"],
+    ["점수 미달(사람 몫)이 렌더 대기(시간 몫)를 이긴다",
+      obs({ scoreBlocked: 2, renderWaiting: true }), "score_blocked"],
+    ["렌더 대기가 '다 나감'을 이긴다", obs({ renderWaiting: true, clipsAllSent: true }), "render_waiting"],
+    ["메타 대기가 '다 나감'을 이긴다", obs({ metaWaiting: true, clipsAllSent: true }), "meta_waiting"],
+    ["'다 나감'이 기본값을 이긴다", obs({ clipsAllSent: true }), "all_sent"],
+  ];
+  for (const [name, o, expected] of cases) {
+    it(name, () => assert.equal(codeOf(o), expected));
+  }
+});
+
+describe("사유 문구는 dedupe 키다 — 변동값이 섞이면 안 된다", () => {
+  /**
+   * hasRunNote 가 detail 일치로 하루 한 줄을 막는다. 문구에 카운트가 들어가면 순방(15분)마다
+   * 문구가 달라져 새 줄이 쌓이고, 실행 로그 창(최근 50건)이 이 줄로만 덮인다 —
+   * 사유를 남기려다 정작 중요한 사유를 가리는 자충수가 된다.
+   */
+  const SAMPLES: Record<RuleIdleCode, [RuleIdleObservation, RuleIdleObservation]> = {
+    // 활동 시간창은 **규칙 설정**이라 하루 안에 안 바뀐다 — 문구에 넣어도 dedupe 가 산다.
+    off_hours: [obs({ outOfWindow: true }), obs({ outOfWindow: true, episodes: 9, analyzing: 4 })],
+    no_episode: [obs({ episodes: 0 }), obs({ episodes: 0, analyzing: 7 })],
+    analysis_blocked: [obs({ analyzed: 0, analysisBlocked: 1 }), obs({ analyzed: 0, analysisBlocked: 12 })],
+    analysis_failed: [obs({ analyzed: 0, analysisFailed: 1 }), obs({ analyzed: 0, analysisFailed: 9 })],
+    analyzing: [obs({ analyzed: 0, analyzing: 1 }), obs({ analyzed: 0, analyzing: 12 })],
+    render_stopped: [obs({ renderStopped: true }), obs({ renderStopped: true, episodes: 4, analyzed: 4 })],
+    gate_off: [obs({ gateOff: true }), obs({ gateOff: true, episodes: 7, analyzed: 7 })],
+    publish_failed: [obs({ publishFailed: true }), obs({ publishFailed: true, episodes: 3, analyzed: 3 })],
+    held_waiting: [obs({ heldWaiting: true }), obs({ heldWaiting: true, pending: 5, kindMatched: 5 })],
+    vague_account: [obs({ vagueAccount: true }), obs({ vagueAccount: true, episodes: 3, analyzed: 3 })],
+    channel_rule: [obs({ channelBlocked: true }), obs({ channelBlocked: true, episodes: 6, analyzed: 6 })],
+    quota_done: [obs({ quotaDone: true }), obs({ quotaDone: true, episodes: 2, analyzed: 2 })],
+    top3_cap: [obs({ analyzed: 1, cappedEpisodes: 1 }), obs({ analyzed: 6, cappedEpisodes: 6 })],
+    score_blocked: [obs({ scoreBlocked: 1 }), obs({ scoreBlocked: 44 })],
+    kind_mismatch: [obs({ pending: 1, kindMatched: 0 }), obs({ pending: 31, kindMatched: 0 })],
+    overlap: [obs({ pending: 2, kindMatched: 2, overlapped: 2 }), obs({ pending: 9, kindMatched: 9, overlapped: 9 })],
+    render_waiting: [obs({ renderWaiting: true }), obs({ renderWaiting: true, episodes: 5, analyzed: 5 })],
+    meta_waiting: [obs({ metaWaiting: true }), obs({ metaWaiting: true, episodes: 5, analyzed: 5 })],
+    all_sent: [obs({ clipsAllSent: true }), obs({ episodes: 8, analyzed: 8, clipsAllSent: true })],
+    no_pending: [obs(), obs({ episodes: 5, analyzed: 5 })],
+  };
+
+  for (const code of RULE_IDLE_CODES) {
+    it(`${code} — 개수가 달라도 문구는 글자 그대로 같다`, () => {
+      const [a, b] = SAMPLES[code];
+      const na = ruleIdleNote(a);
+      const nb = ruleIdleNote(b);
+      assert.equal(na?.code, code);
+      assert.equal(nb?.code, code);
+      assert.ok(na!.detail.length > 0, "빈 사유는 로그에서 아무 말도 안 한다");
+      assert.equal(na!.detail, nb!.detail, "카운트가 문구에 섞였다 — 순방마다 새 줄이 쌓인다");
+    });
+  }
+
+  it("개발자 말이 사용자 문구로 새지 않는다", () => {
+    for (const code of RULE_IDLE_CODES) {
+      const detail = ruleIdleNote(SAMPLES[code][0])!.detail;
+      assert.doesNotMatch(detail, /not_rendered|eligibility|pending|selectCandidates|null|undefined/,
+        `${code}: 개발자 어휘가 화면 문구에 섞였다`);
+    }
+  });
+});
+
+describe("종류 판정은 한 벌이다 (matchesMediaKind)", () => {
+  it("selectCandidates 와 순방 관측치가 같은 함수를 쓴다", () => {
+    // 두 벌이 되면 한쪽만 고쳐져, 로그가 채택과 다른 말을 한다.
+    assert.equal(matchesMediaKind(rule({ mediaKind: "short" }), { id: "x", kind: "short" }), true);
+    assert.equal(matchesMediaKind(rule({ mediaKind: "short" }), { id: "x", kind: "clip" }), false);
+    assert.equal(matchesMediaKind(rule({ mediaKind: "clip" }), { id: "x", kind: "highlight" }), true);
+    assert.equal(matchesMediaKind(rule({ mediaKind: "both" }), { id: "x", kind: "short" }), true);
+    const src = fs.readFileSync(path.join(SRC, "automation.ts"), "utf-8");
+    const fn = src.match(/export function selectCandidates[\s\S]*?\n\}/)?.[0] ?? "";
+    assert.match(fn, /matchesMediaKind\(rule, c\)/, "selectCandidates 가 종류 판정을 따로 갖고 있다");
+  });
+});
+
+describe("유휴 사유 배선 — automation-cycle 소스 스캔", () => {
+  const src = fs.readFileSync(path.join(SRC, "automation-cycle.ts"), "utf-8");
+  const RULE_LOOP = src.slice(
+    src.indexOf("for (const rule of plan.rules)"), src.indexOf("\n  return report;"));
+
+  it("회차 없음이 조용한 continue 로 돌아가지 않는다", () => {
+    assert.ok(RULE_LOOP.length > 1000, "규칙 루프를 못 잘랐다 — 스캔 기준이 깨졌다");
+    assert.doesNotMatch(src, /eps\.length === 0\)\s*continue/,
+      "로그 없는 조용한 continue 가 되살아났다 — 회차가 없다는 사실을 아무도 모른다");
+    assert.match(src, /noteRuleIdle\(rule, obs\)/, "유휴 사유를 남기는 호출이 없다");
+    assert.match(src, /if \(!logged\) await idle\(\)/, "규칙 끝에서 사유를 남기는 배선이 없다");
+  });
+
+  it("규칙 루프 안에서는 실행 로그를 note() 로만 쓴다", () => {
+    // 직접 호출이 하나라도 남으면 logged 플래그가 안 서서 "아무 일도 안 했다" 오진이 난다.
+    assert.doesNotMatch(RULE_LOOP, /appendRuleRun\(/,
+      "규칙 루프 안에 appendRuleRun 직접 호출이 있다 — 전부 note() 를 지나야 한다");
+    assert.match(RULE_LOOP, /await note\(\{/, "note() 래퍼가 쓰이지 않는다");
+  });
+
+  it("유휴 사유는 하루 한 줄로 막되, **판정은 dedupe 와 무관하게** 돌려준다", () => {
+    // 예전엔 dedupe 에 걸리면 return 이 먼저라 배너(idleReason)까지 건너뛰었다 — 그날 첫
+    // 순방에만 배너가 차고, 이후 "지금 확인" 은 유휴인데도 초록색 "미디어 0" 만 보여줬다.
+    const fn = src.match(/async function noteRuleIdle[\s\S]*?\n\}/)?.[0] ?? "";
+    assert.match(fn, /ruleIdleNote\(/, "판정을 순수 함수에 위임하지 않았다");
+    assert.match(fn, /hasRunNote\([\s\S]*?idle\.detail\)/,
+      "문구 일치 dedupe 가 없다 — 순방(15분)마다 같은 사유가 쌓여 로그 창을 덮는다");
+    assert.match(fn, /Promise<string \| null>/, "사유를 돌려주지 않으면 배너가 dedupe 를 따라 사라진다");
+    assert.match(fn, /return idle\.detail;/, "dedupe 여부와 무관하게 사유를 돌려줘야 한다");
+    assert.doesNotMatch(fn, /report/,
+      "규칙 하나의 사유를 순방 전체 리포트에 직접 얹으면 다른 규칙이 일한 순방까지 덮는다");
+  });
+
+  it("배너는 순방 전체가 아무 일도 안 했을 때만 — 규칙 하나가 전체를 덮지 않는다", () => {
+    // 규칙 A 가 3건 채택·2건 게시했는데 규칙 B 가 유휴면, 예전엔 리포트가
+    // {adopted:3, published:2, idleReason:"회차가 없습니다"} 였다. 웹은 이 필드를
+    // "왜 아무 일도 없었나" 로 렌더한다.
+    const tail = src.slice(src.indexOf("if (!logged) await idle()"), src.indexOf("\n  return report;"));
+    assert.match(tail, /report\.adopted === 0 && report\.published === 0 && report\.held === 0/,
+      "일을 한 순방에도 배너가 뜬다");
+    assert.match(tail, /idleReasons\.length === plan\.rules\.length/,
+      "규칙 하나만 유휴여도 배너가 뜬다 — 전부 유휴일 때만이어야 한다");
+  });
+
+  it("크레딧 정지도 로그에 남는다 — 배너는 지나간 시간을 설명하지 못한다", () => {
+    const credit = src.slice(src.indexOf("creditBalance()) <= 0"), src.indexOf("const report: CycleReport"));
+    assert.ok(credit.length > 100 && credit.length < 2000, "크레딧 분기를 못 잘랐다");
+    assert.match(credit, /CREDIT_STOP_NOTE/, "정지 사유 상수를 안 쓴다 — 배너와 로그가 갈라진다");
+    assert.match(credit, /hasRunNote\(/, "하루 한 줄 가드가 없다");
+    assert.match(credit, /appendRuleRun\(/, "로그를 남기지 않는다");
+    // 규칙이 없는 워크스페이스에 "충전하면 다시 시작합니다" 는 지킬 수 없는 약속이다 —
+    // 자동배포를 한 번도 안 쓴 곳에 매일 한 줄씩 쌓였다.
+    assert.match(credit, /plan\.rules\.length > 0/,
+      "규칙이 없어도 크레딧 정지 로그가 쌓인다 — 충전해도 시작될 게 없다");
+    assert.ok(src.indexOf("listAutomationRules()") < src.indexOf("creditBalance()) <= 0"),
+      "규칙 조회가 크레딧 판정보다 뒤면 '규칙이 있을 때만' 을 판단할 수 없다");
+  });
+
+  it("dedupe 로 눌린 줄은 '말했다'가 아니다 — 대신 상태가 유휴 판정에 들어간다", () => {
+    // 평생 dedupe(todayKstOnly=false)를 쓰는 문구가 한 번 걸리면, 예전엔 그 규칙이
+    // **그 뒤로 영원히** 유휴 사유를 안 냈다(logged 를 무조건 세웠으므로).
+    const fn = src.match(/async function writeRun[\s\S]*?\n\}/)?.[0] ?? "";
+    assert.match(fn, /Promise<boolean>/, "실제로 썼는지를 안 돌려준다");
+    assert.match(RULE_LOOP, /if \(await writeRun\(ev, dedupe\)\) logged = true;/,
+      "append 하지 않은 순방에도 logged 가 서면 유휴 사유가 영원히 안 나간다");
+    // 눌린 상태는 관측치로 이어져 규칙 단위 하루 한 줄이 된다.
+    for (const flag of ["obs.renderStopped = true", "obs.renderWaiting = true",
+      "obs.metaWaiting = true", "obs.vagueAccount = true", "obs.gateOff = true",
+      "obs.quotaDone = true", "obs.heldWaiting = true", "obs.channelBlocked = true",
+      "obs.publishFailed = true"]) {
+      assert.ok(RULE_LOOP.includes(flag), `${flag} 이 없다 — 눌린 사유가 어디에도 안 남는다`);
+    }
+  });
+
+  it("매 순방 마주치는 스킵은 전부 dedupe 를 건다 — 실행 로그 50건을 덮지 않는다", () => {
+    // 활동시간 9~22시 · 15분 주기면 무가드 한 줄이 (규칙,채널)당 하루 52줄이다.
+    const gate = src.slice(src.indexOf("if (!upGate.send)"), src.indexOf("const quota ="));
+    assert.match(gate, /hasRunNote\(rule\.id, null, accountKey, "skipped", true, upGate\.offNote\)/,
+      "게이트 OFF 사유가 매 순방 쌓인다");
+    assert.match(src, /detail: META_WAIT_NOTE[\s\S]{0,120}hasRunNote\([\s\S]{0,80}META_WAIT_NOTE\)/,
+      "메타데이터 대기 사유가 매 순방 쌓인다");
+    assert.match(src, /result: "held", detail: decision\.reason[\s\S]{0,120}hasRunNote\(/,
+      "보류는 사람이 확정할 때까지 유지되는 상태다 — 무가드면 하루 90여 줄이다");
+    assert.match(src, /detail: why\.reason[\s\S]{0,120}hasRunNote\([\s\S]{0,80}why\.reason\)/,
+      "채널 규칙 미달 사유가 매 순방 쌓인다");
+  });
+
+  it("활동 시간창 밖에도 하루 한 줄은 남긴다 — 하루 11~14시간이 통째로 비면 안 된다", () => {
+    // 아침에 "밤새 올린 회차가 왜 안 나갔지" 를 볼 때, 순방이 안 돈 건지 워커가 죽은
+    // 건지 구분할 근거가 제품 안에 있어야 한다.
+    const win = src.slice(src.indexOf("if (!inActiveWindow(rule))"), src.indexOf("const renderTried"));
+    assert.match(win, /obs\.outOfWindow = true/, "활동 시간 밖 사유를 관측치에 안 넣는다");
+    assert.match(win, /await idle\(\)/, "활동 시간 밖에서 로그가 0줄이다");
+  });
+
+  it("분석이 큐잉조차 안 된 회차를 '분석 중'으로 세지 않는다", () => {
+    // 크레딧 부족으로 잡을 못 건 회차는 pipeline 에 사유만 남고 큐에는 행이 없다 —
+    // "끝나면 이어집니다" 는 영원히 안 지켜진다.
+    assert.match(src, /episodeAnalysisState\(ep\.pipeline\)/, "분석 상태 판정을 한 벌로 안 쓴다");
+    assert.match(src, /state === "blocked"[\s\S]{0,60}obs\.analysisBlocked/,
+      "큐잉 안 된 회차를 따로 세지 않는다");
+  });
+
+  it("새 result 값을 만들지 않는다 — 웹이 모르는 값은 원문 그대로 노출된다", () => {
+    const results = RULE_LOOP.match(/result: "(\w+)"/g) ?? [];
+    for (const r of results) {
+      const v = /result: "(\w+)"/.exec(r)![1];
+      assert.ok((["published", "recorded", "media_created", "held", "failed", "skipped"] as string[]).includes(v),
+        `모르는 실행 로그 종류: ${v}`);
+    }
+  });
+});
+
 describe("규칙 생성 분기 (F6)", () => {
   // 상태·문구의 기준은 **실제로 우리가 올리는 채널인가** 다(publish-guard 의 channelPublishMode).
   // 예전엔 "youtube 아니면 기록만" 으로 못박아, 실제로는 브라우저 자동화로 올라가는 네이버에
@@ -406,6 +839,246 @@ describe("규칙 생성 분기 (F6)", () => {
     for (const p of ["navertv", "naverclip", "instagram", "tiktok"]) {
       assert.doesNotMatch(ruleCreatedNotice(p), /기록만/, p);
     }
+  });
+});
+
+// ── 렌더 안전벨트 ───────────────────────────────────────────────────────────────
+
+const T0 = Date.UTC(2026, 7, 18, 3, 0, 0); // 2026-08-18 12:00 KST
+const st = (over: Partial<AutoRenderState> = {}): AutoRenderState => ({
+  attempts: 1, firstAt: T0, lastAt: T0,
+  lastError: "500 render failed", lastStatus: 500, lastCode: null,
+  failed: false, ...over,
+});
+const fail = (
+  kind: "permanent" | "waiting" | "retryable",
+  error = "500 render failed", status = 500, code: string | null = null,
+) => ({ ok: false as const, kind, error, status, code });
+
+describe("렌더 실패는 확정된다 (지킬 수 없는 약속을 멈춘다)", () => {
+  it("실패의 성격을 나눈다 — 대기와 영구 실패를 뭉뚱그리지 않는다", () => {
+    assert.equal(classifyRenderFailure(404, null), "permanent");   // 클립 없음
+    assert.equal(classifyRenderFailure(400, null), "permanent");   // 구간 없음
+    assert.equal(classifyRenderFailure(409, "reframe_not_ready"), "waiting");
+    // 원본 소실·ffmpeg 없음(409)·렌더 실패(500)·네트워크(0)는 복구될 수 있다.
+    assert.equal(classifyRenderFailure(409, "no master video or ffmpeg unavailable to render"), "retryable");
+    assert.equal(classifyRenderFailure(500, null), "retryable");
+    assert.equal(classifyRenderFailure(0, null), "retryable");
+  });
+
+  it("플랜 무효(reframe_plan_invalid)는 대기가 아니다 — 아무도 안 잡으면 영구 침묵이다", () => {
+    // 리프레임 강등 벨트의 조건은 `rf.status !== "ready"` 인데, plan_invalid 는
+    // **status=ready 인 채 플랜만 무효**라(index.ts /export: 해시 불일치·정규화 실패)
+    // 벨트를 그대로 통과한다. waiting 으로 두면 카운터도 시계도 안 움직여서 매 순방 409,
+    // autoRender 상태는 생기지도 않고, 로그엔 낙관 문구 한 줄만 평생 남는다.
+    assert.equal(classifyRenderFailure(409, "reframe_plan_invalid"), "retryable");
+    const src = fs.readFileSync(path.join(SRC, "automation-cycle.ts"), "utf-8");
+    assert.match(src, /rf\.status !== "ready"/,
+      "리프레임 벨트 조건이 바뀌었다 — plan_invalid 를 누가 잡는지 다시 정해야 한다");
+  });
+
+  it("첫 실패로 포기하지 않는다", () => {
+    const s = nextAutoRenderState(null, fail("retryable"), T0)!;
+    assert.equal(s.attempts, 1);
+    assert.equal(s.failed, false);
+    assert.equal(s.firstAt, T0);
+  });
+
+  it("3회째에 확정한다 — 15분 주기 × 30분 벨트에서 **실제로 닿는** 값", () => {
+    let s: AutoRenderState | null = null;
+    for (let i = 0; i < RENDER_MAX_ATTEMPTS; i += 1) s = nextAutoRenderState(s, fail("retryable"), T0 + i);
+    assert.equal(s!.attempts, RENDER_MAX_ATTEMPTS);
+    assert.equal(s!.failed, true);
+  });
+
+  it("확정 횟수는 도달 가능해야 한다 — 못 지킬 약속을 문구에 쓰지 않는다", () => {
+    // 렌더 재시도는 클립당 순방 한 번(renderTried)이라 간격이 곧 순방 주기다. 예전 값 5 는
+    // 5회째가 60분인데 30분 벨트가 3회째에 먼저 확정시켜 **절대 도달하지 않았다** —
+    // "렌더가 5회 실패해 멈춥니다" 는 아무도 못 보는 문구였다.
+    assert.ok((RENDER_MAX_ATTEMPTS - 1) * CYCLE_PERIOD_MS <= RENDER_STUCK_MS,
+      `${RENDER_MAX_ATTEMPTS}회는 ${RENDER_STUCK_MS / 60000}분 벨트가 먼저 확정시켜 못 닿는다`);
+  });
+
+  it("횟수가 모자라도 30분째 진행이 없으면 확정한다 (리프레임 벨트와 같은 값)", () => {
+    const s = nextAutoRenderState(st({ attempts: 1 }), fail("retryable"), T0 + RENDER_STUCK_MS)!;
+    assert.equal(s.attempts, 2);
+    assert.equal(s.failed, true);
+    assert.equal(s.firstAt, T0, "첫 실패 시각이 재시도마다 밀리면 정체를 영원히 못 잰다");
+  });
+
+  it("영구 실패(404·400)는 한 번에 확정한다 — 시간이 못 고치는 것을 기다리지 않는다", () => {
+    const s = nextAutoRenderState(null, fail("permanent", "404 clip not found"), T0)!;
+    assert.equal(s.attempts, 1);
+    assert.equal(s.failed, true);
+  });
+
+  it("리프레임 대기는 시도가 아니다 — 카운터도 시계도 안 움직인다", () => {
+    // 시간축이 같은 30분이라, 대기를 실패로 세면 리프레임 벨트가 돌기 전에 렌더가 먼저
+    // 확정 실패로 굳어 **멀쩡한 클립이 죽는다.**
+    const prev = st({ attempts: 3 });
+    assert.deepEqual(nextAutoRenderState(prev, fail("waiting"), T0 + RENDER_STUCK_MS * 2), prev);
+    assert.equal(nextAutoRenderState(null, fail("waiting"), T0), null);
+  });
+
+  it("성공하면 상태를 지운다", () => {
+    assert.equal(nextAutoRenderState(st({ attempts: 4 }), { ok: true }, T0), null);
+  });
+
+  it("확정 뒤에는 그날 다시 때리지 않고, 날이 바뀌면 딱 한 번 본다", () => {
+    // 소스를 복구하면 사람 손 없이 되살아나야 한다. 반대로 주기를 짧게 하면 실패 폭주다.
+    const dead = st({ failed: true, lastAt: T0 });
+    assert.equal(shouldRequestAutoRender(dead, T0 + 60_000), false);
+    assert.equal(shouldRequestAutoRender(dead, T0 + 6 * 3600_000), false); // 같은 KST 날
+    assert.equal(shouldRequestAutoRender(dead, T0 + 24 * 3600_000), true); // 이튿날
+    assert.equal(shouldRequestAutoRender(null, T0), true);
+    assert.equal(shouldRequestAutoRender(st(), T0), true);
+  });
+
+  it("확정 문구는 사람 말로, 다음 행동까지 말한다", () => {
+    const note = autoRenderFailedNote(st({ attempts: 3, failed: true }));
+    assert.match(note, /멈춥니다/);
+    assert.match(note, /확정\(렌더\)/, "사용자가 무엇을 하면 되는지가 없다 — 편집기 버튼 이름으로 말해야 한다");
+    assert.doesNotMatch(AUTO_RENDER_STOPPED_NOTE, /\d/,
+      "매 순방 마주치는 문구에 변동값이 들어가면 dedupe 키가 매번 달라진다");
+  });
+
+  it("조치는 사유마다 다르다 — 못 지킬 안내를 고정으로 붙이지 않는다", () => {
+    // 예전엔 조치가 사유와 무관하게 하나였다("원본 영상이 남아 있는지 확인하고, 편집기에서
+    // 내보내기를 다시 하면…"). 그런데 세로형 리프레임 플랜이 무효면 **편집기 내보내기도 같은
+    // 라우트라 똑같이 409 로 막힌다** — 안내대로 해도 같은 실패를 다시 본다.
+    const plan = autoRenderFailedNote(st({ attempts: 3, failed: true, lastStatus: 409, lastCode: "reframe_plan_invalid" }));
+    assert.match(plan, /리프레임/, "리프레임 사유인데 리프레임 조치가 없다");
+    assert.doesNotMatch(plan, /원본 영상이 남아 있는지/,
+      "리프레임 플랜 무효에 '원본 확인' 을 시킨다 — 원본과 무관한 실패다");
+    // 원본 없음(409)은 반대로 원본 확인이 맞는 조치다.
+    const master = autoRenderFailedNote(st({ attempts: 3, failed: true, lastStatus: 409, lastCode: null }));
+    assert.match(master, /원본 영상/);
+    assert.doesNotMatch(master, /리프레임/);
+    // 변환 실패(500)는 편집기 재시도가 통한다.
+    assert.match(renderFailureAction(500, null), /확정\(렌더\)/);
+    // 조치가 실제로 통하는 경로인지 라우트로 확인한다 — 리프레임은 재분석·끄기 둘 다 열려 있다.
+    const idx = fs.readFileSync(path.join(SRC, "index.ts"), "utf-8");
+    const route = idx.slice(idx.indexOf('app.post("/api/clips/:id/reframe"')).slice(0, 4000);
+    assert.ok(route.length > 1000, "/reframe 라우트를 못 잘랐다");
+    assert.match(route, /body\.mode === "basic"/, "리프레임 끄기 경로가 없다 — 안내가 지킬 수 없는 말이 된다");
+    assert.match(route, /body\.retry === true/, "리프레임 재분석 경로가 없다");
+  });
+
+  it("확정 실패를 '끝나지 않아' 라고 부르지 않는다 — 렌더 대기와 구분이 안 된다", () => {
+    // 바로 옆에 진짜 '렌더 대기'(render_waiting) 사유가 있다. 확정 실패를 진행 중처럼 쓰면
+    // 사용자는 기다리면 되는 줄 알고, 실제로는 아무도 다시 시도하지 않는다.
+    assert.match(AUTO_RENDER_STOPPED_NOTE, /렌더가 실패해/);
+    assert.doesNotMatch(AUTO_RENDER_STOPPED_NOTE, /끝나지 않아/);
+    assert.match(ruleIdleNote(obs({ renderStopped: true }))!.detail, /렌더가 실패해/);
+    assert.doesNotMatch(ruleIdleNote(obs({ renderStopped: true }))!.detail, /끝나지 않아/);
+  });
+
+  it("한 문장에 렌더·영상 변환을 섞지 않는다 — 화면 어휘는 '렌더'·'확정(렌더)' 다", () => {
+    const texts = [
+      AUTO_RENDER_STOPPED_NOTE,
+      ruleIdleNote(obs({ renderStopped: true }))!.detail,
+      ruleIdleNote(obs({ renderWaiting: true }))!.detail,
+      ...[404, 400, 409, 403, 500, 0].flatMap((s) => [renderFailureReason(s, null), renderFailureAction(s, null)]),
+      autoRenderFailedNote(st({ attempts: 3, failed: true })),
+    ];
+    for (const t of texts) {
+      assert.doesNotMatch(t, /영상 변환/, `같은 일을 세 이름으로 부른다: ${t}`);
+      // 편집기에는 "내보내기" 라는 버튼이 없다 — 화면 이름은 "확정(렌더)" 다.
+      assert.doesNotMatch(t, /내보내기/, `화면에 없는 버튼 이름을 시킨다: ${t}`);
+    }
+  });
+
+  it("확정 문구에 개발자 어휘가 새지 않는다 — 방송사 운영자가 읽는 줄이다", () => {
+    // 예전엔 lastError 를 그대로 붙여서 "(마지막 오류: 409 no master video or ffmpeg
+    // unavailable to render)" 가 운영자 화면에 떴다. 원문은 상태에만 남긴다.
+    const cases: Array<[number, string | null]> = [
+      [409, null], [409, "reframe_plan_invalid"], [404, null], [400, null],
+      [500, null], [0, null], [403, null],
+    ];
+    for (const [status, code] of cases) {
+      const note = autoRenderFailedNote(st({
+        attempts: 3, failed: true, lastStatus: status, lastCode: code,
+        lastError: "409 no master video or ffmpeg unavailable to render",
+      }));
+      // 화면이 쓰는 고유명 "AI"(AI 리프레임 패널) 만 허용하고 나머지 로마자는 막는다 —
+      // 예전 사고는 영어 **원문**이 샌 것이지 로마자 자체가 아니었다. 전부 막으면 화면과
+      // 같은 이름을 못 쓰게 되어 "갈 곳은 맞는데 거기 없는 이름" 을 시키게 된다.
+      assert.doesNotMatch(note.replace(/AI/g, ""), /[A-Za-z]/, `${status}/${code}: 영어 원문이 문구로 샜다`);
+      assert.doesNotMatch(note, /\b[1-5]\d\d\b/, `${status}/${code}: HTTP 상태코드가 문구로 샜다`);
+      assert.doesNotMatch(note, /not_rendered|eligibility|null|undefined/,
+        `${status}/${code}: 개발자 어휘가 화면 문구에 섞였다`);
+    }
+  });
+
+  it("사람 말 사유는 상태·코드마다 다르다 — 무엇을 고칠지 갈린다", () => {
+    assert.match(renderFailureReason(409, null), /원본 영상/);
+    assert.match(renderFailureReason(500, null), /렌더/);
+    assert.match(renderFailureReason(0, null), /응답/);
+    assert.match(renderFailureReason(404, null), /클립/);
+    assert.match(renderFailureReason(409, "reframe_plan_invalid"), /리프레임/);
+  });
+
+  it("원문 오류는 상태에 남는다 — 개발자가 볼 곳이 사라지면 안 된다", () => {
+    const s = nextAutoRenderState(null,
+      fail("retryable", "409 no master video or ffmpeg unavailable to render", 409, null), T0)!;
+    assert.match(s.lastError, /no master video/);
+    assert.equal(s.lastStatus, 409);
+  });
+});
+
+describe("렌더 벨트 배선 — automation-cycle 소스 스캔", () => {
+  const src = fs.readFileSync(path.join(SRC, "automation-cycle.ts"), "utf-8");
+  const NOT_RENDERED = src.slice(
+    src.indexOf('why.code === "not_rendered"'), src.indexOf("detail: why.reason"));
+
+  it("확정 실패면 낙관 문구 대신 실패로 넘긴다", () => {
+    assert.ok(NOT_RENDERED.length > 200, "not_rendered 분기를 못 잘랐다");
+    assert.match(NOT_RENDERED, /autoRender/, "렌더 상태를 안 본다 — 낙관 문구가 무조건 나간다");
+    assert.match(NOT_RENDERED, /result: "failed"/, "확정 실패를 사람이 볼 수 있게 남기지 않는다");
+    assert.match(NOT_RENDERED, /AUTO_RENDER_STOPPED_NOTE/);
+  });
+
+  it("렌더 실패 로그에 채널 키를 붙이지 않는다", () => {
+    // 같은 (clip, account) 의 뒤이은 'failed' 행은 publishedTodayKst 의 published 슬롯을
+    // 되돌린다 — 하루 할당량 도배 방지가 조용히 뚫린다. 렌더는 채널 무관한 사실이기도 하다.
+    assert.match(NOT_RENDERED, /accountKey: null/,
+      "렌더 실패에 accountKey 를 붙이면 하루 할당량이 되돌아간다");
+  });
+
+  it("낙관 문구도 (클립,채널)당 한 줄로 막는다", () => {
+    assert.match(NOT_RENDERED, /hasRunNote\([\s\S]*?RENDER_WAIT_NOTE\)/,
+      "렌더 대기 문구가 매 순방·매 채널 쌓인다 — 진짜 사유가 로그 창 밖으로 밀린다");
+  });
+
+  it("보류(holdClip)로 처리하지 않는다 — 해제가 게시 승인으로 읽힌다", () => {
+    assert.doesNotMatch(NOT_RENDERED, /holdClip/,
+      "rule_hold 해제는 approve_first 의 '승인' 근거다 — 렌더 실패를 풀어주는 게 게시 승인이 되면 안 된다");
+  });
+
+  it("클립당 export 는 순방 한 번 — 채널 수만큼 때리면 카운터가 배수로 부푼다", () => {
+    assert.match(src, /const renderTried = new Set<string>\(\)/);
+    assert.match(src, /renderTried\.has\(clip\.id\)/);
+    assert.match(src, /shouldRequestAutoRender\(/, "확정 후에도 매 순방 재요청하면 폭주한다");
+  });
+
+  it("실패를 boolean 으로 삼키지 않는다 — 사유를 읽어 분류한다", () => {
+    assert.match(src, /classifyRenderFailure\(/);
+    assert.match(src, /nextAutoRenderState\(/);
+    // 상태는 클립 엔티티에 — 실행 로그는 일부러 중복을 안 남기므로 횟수를 셀 수 없다.
+    assert.match(src, /merged\.autoRender = next/);
+  });
+});
+
+describe("렌더 실패 분류 어휘가 라우트와 같다 — index.ts 소스 스캔", () => {
+  it("/export 가 실제로 내는 코드·문구를 분류가 알고 있다", () => {
+    // 라우트가 코드/문구를 바꾸면 분류가 조용히 어긋나 '대기' 와 '실패' 가 뒤바뀐다.
+    const idx = fs.readFileSync(path.join(SRC, "index.ts"), "utf-8");
+    const route = idx.slice(idx.indexOf('app.post("/api/clips/:id/export"')).slice(0, 15000);
+    assert.ok(route.length > 5000, "/export 라우트를 못 잘랐다");
+    assert.match(route, /"reframe_not_ready"/);
+    assert.match(route, /"reframe_plan_invalid"/);
+    assert.match(route, /no master video/);
+    assert.match(route, /render failed/);
   });
 });
 

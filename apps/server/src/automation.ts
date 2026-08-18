@@ -93,12 +93,24 @@ export function ruleChannels(rule: AutomationRule): { platform: string; accountI
 }
 
 /**
+ * 규칙의 활동 시간창(KST 시각) — 기본 9~22.
+ *
+ * 판정(inActiveWindow)과 문구(ruleIdleNote 의 off_hours)가 **같은 기본값**을 봐야 한다.
+ * 두 벌이 되면 "9~22시 밖" 이라고 적어 놓고 다른 시간에 도는 일이 생긴다.
+ */
+export function ruleWindow(rule: Pick<AutomationRule, "activeStart" | "activeEnd">): { start: number; end: number } {
+  return {
+    start: Number.isFinite(rule.activeStart) ? Number(rule.activeStart) : 9,
+    end: Number.isFinite(rule.activeEnd) ? Number(rule.activeEnd) : 22,
+  };
+}
+
+/**
  * 지금이 활동 시간창(KST) 안인가. end 는 배타 — 9~22 면 09:00:00 ≤ t < 22:00:00.
  * start·end 가 같으면 24시간으로 본다 (창 없음 의미).
  */
 export function inActiveWindow(rule: AutomationRule, now = new Date()): boolean {
-  const start = Number.isFinite(rule.activeStart) ? Number(rule.activeStart) : 9;
-  const end = Number.isFinite(rule.activeEnd) ? Number(rule.activeEnd) : 22;
+  const { start, end } = ruleWindow(rule);
   if (start === end) return true;
   const hour = Number(new Intl.DateTimeFormat("en-US", {
     timeZone: "Asia/Seoul", hour: "numeric", hour12: false,
@@ -171,6 +183,18 @@ export function overlapsExistingClip(
 }
 
 /**
+ * 이 추천이 규칙의 미디어 종류에 맞는가.
+ *
+ * selectCandidates 안에 인라인으로 있던 판정을 뽑았다 — 순방이 "왜 아무것도 안 했나" 를
+ * 세려면 종류에서 몇 개가 떨어졌는지 알아야 하는데, 거기서 판정을 한 벌 더 쓰면 두 벌이
+ * 갈라져 로그가 채택과 다른 말을 하게 된다.
+ */
+export function matchesMediaKind(rule: AutomationRule, c: Candidate): boolean {
+  if (rule.mediaKind === "both") return true;
+  return rule.mediaKind === "short" ? c.kind === "short" : c.kind !== "short";
+}
+
+/**
  * 규칙 조건을 통과한 추천만 고른다 (F6 03단계).
  * 이미 판단된 것(채택·거절)은 다시 잡지 않는다 — 사람이 거절한 걸 자동이 되살리면 안 된다.
  *
@@ -185,10 +209,7 @@ export function selectCandidates(
 ): Candidate[] {
   const undecided = candidates.filter((c) => (c.status ?? "pending") === "pending");
 
-  const byKind = undecided.filter((c) => {
-    if (rule.mediaKind === "both") return true;
-    return rule.mediaKind === "short" ? c.kind === "short" : c.kind !== "short";
-  });
+  const byKind = undecided.filter((c) => matchesMediaKind(rule, c));
 
   if (rule.criterion === "top3") {
     // 회차당 잔여 상한. 이미 3건 채웠으면 아무것도 뽑지 않는다.
@@ -293,6 +314,533 @@ export function planCycle(input: CycleInput): CyclePlan {
   if (active.length === 0) return { rules: [], idleReason: "실행 중인 규칙이 없습니다." };
   return { rules: active, idleReason: "" };
 }
+
+// ── 순방이 아무것도 안 했을 때: 사유 판정 ────────────────────────────────────────
+
+/**
+ * 크레딧 소진으로 순방이 통째로 멈췄다는 **실행 로그** 문구.
+ *
+ * 배너(`CREDIT_IDLE_REASON`)는 "지금 상태" 라서 지나간 시간을 설명하지 못한다 — 어제 왜
+ * 아무것도 안 나갔는지는 로그에만 남길 수 있다. 두 문구가 같은 어휘로 시작하게 상수를
+ * 이어 붙인다: 배너와 로그가 다른 말을 하면 원인 추적이 두 갈래로 갈라진다.
+ *
+ * ⚠️ 이 문자열 자체가 dedupe 키다(hasRunNote 의 detail 일치). 잔액·시각 같은 변동값을
+ * 넣으면 순방(15분)마다 새 줄이 쌓여 실행 로그 창(최근 50건)을 이 줄로 덮는다.
+ */
+export const CREDIT_STOP_NOTE =
+  `${CREDIT_IDLE_REASON} — 잔액이 0 이하라 이번에는 채택도 게시도 하지 않았습니다.`
+  + " 충전하면 다음 확인 때 자동으로 다시 시작합니다.";
+
+/**
+ * 회차 분석이 지금 어느 상태인가 — 순방이 "왜 아무 일도 안 했나" 를 세는 근거.
+ *
+ * ⚠️ **blocked 를 analyzing 으로 세면 안 된다.** 크레딧이 모자라 분석을 못 건 회차는 잡이
+ * 큐에 들어간 적이 **없어서 영원히 안 끝난다.** 그걸 "분석 중" 으로 세면 순방이
+ * "끝나면 다음 확인 때 자동으로 이어집니다" 라고 말하고, 운영자는 오지 않을 완료를 기다린다 —
+ * 이 리포 최빈 실패모드(조용한 정지)의 교과서적 형태다.
+ *
+ * 판정 근거가 둘인 이유: 업로드 경로(index.ts)는 `pipeline.blockedReason` 에 사유를 남기지만,
+ * 유튜브 가져오기 경로(worker.ts)는 `note` 에만 남기고 stageStatus 는 idle 이라 **정상 대기와
+ * 글자 그대로 구분이 안 된다.** 그래서 사유 문구(크레딧·충전)까지 본다.
+ */
+export type EpisodeAnalysisState = "blocked" | "analyzing" | "failed" | "analyzed";
+
+export function episodeAnalysisState(
+  pipeline?: { stageStatus?: string | null; blockedReason?: string | null; note?: string | null } | null,
+): EpisodeAnalysisState {
+  const stage = String(pipeline?.stageStatus ?? "");
+  // error 는 **분석이 돌다가** 실패한 것이다(content-pipeline 이 blockedReason 도 함께 쓴다) —
+  // 큐잉조차 안 된 blocked 와 사람이 할 일이 다르므로 먼저 가른다.
+  if (stage === "error") return "failed";
+  if (String(pipeline?.blockedReason ?? "").trim()) return "blocked";
+  if ((stage === "idle" || stage === "warn") && /크레딧|충전/.test(String(pipeline?.note ?? ""))) return "blocked";
+  if (stage === "idle" || stage === "progress") return "analyzing";
+  return "analyzed";
+}
+
+/**
+ * 규칙 하나가 이번 순방에 아무 일도 안 한 사유. 하나만 고른다 —
+ * 이유를 여러 개 늘어놓으면 어디부터 손대야 할지 모른다(channel-rules 의 eligibility 와 같은 원칙).
+ *
+ * 게시 단계 사유(render_*·gate_off·quota_done…)가 여기 함께 사는 이유: 그 사유들은 실행
+ * 로그에 (클립,채널)당 한 줄로 눌러 두는데, 눌린 뒤에는 **그 규칙이 왜 멈춰 있는지 아무도
+ * 말하지 않는다.** 규칙 단위 하루 한 줄로 이어 주는 자리가 여기다.
+ */
+export const RULE_IDLE_CODES = [
+  "off_hours",
+  "no_episode", "analysis_blocked", "analysis_failed", "analyzing",
+  "render_stopped", "gate_off", "publish_failed", "held_waiting", "vague_account",
+  "channel_rule", "quota_done",
+  "top3_cap", "score_blocked", "kind_mismatch", "overlap",
+  "render_waiting", "meta_waiting",
+  "all_sent", "no_pending",
+] as const;
+export type RuleIdleCode = (typeof RULE_IDLE_CODES)[number];
+
+/** 규칙 하나를 평가하며 모은 관측치 — 순방(automation-cycle)이 채운다. */
+export interface RuleIdleObservation {
+  /** 지금이 활동 시간창 밖인가 — 참이면 규칙 평가 자체를 건너뛴 것이라 나머지는 0이다. */
+  outOfWindow: boolean;
+  /** 활동 시간창(KST 시각) — 문구에 싣는다. 규칙 설정이라 하루 안에 저절로 안 변한다. */
+  activeStart: number;
+  activeEnd: number;
+  /** 이 규칙의 프로그램에 속한 회차 수. */
+  episodes: number;
+  /** 분석이 끝난(done/warn) 회차 수. */
+  analyzed: number;
+  /** 분석이 아직 도는(idle/progress) 회차 수. */
+  analyzing: number;
+  /** 분석이 error 로 끝난 회차 수. */
+  analysisFailed: number;
+  /** 분석 잡이 **큐잉조차 안 된** 회차 수(크레딧 부족 등) — 기다려도 안 끝난다. */
+  analysisBlocked: number;
+  /** 아직 사람이 판단하지 않은(pending) 추천 수. */
+  pending: number;
+  /** 그중 규칙의 미디어 종류와 맞는 수. */
+  kindMatched: number;
+  /** 종류는 맞지만 기존 클립과 구간이 겹쳐 제외된 수. */
+  overlapped: number;
+  /** 종류·겹침을 통과했지만 채택 기준에 걸린 수. */
+  scoreBlocked: number;
+  /**
+   * 그중 **점수 자체가 없는** 수.
+   *
+   * 점수 없는 추천은 세 기준(80·85·상위 3건) 어디에서도 안 잡힌다(selectCandidates) —
+   * "기준을 낮추면 잡힙니다" 라고 안내하면 사용자가 그대로 해도 그대로 0건이다.
+   * 기준을 바꿔서 풀리는 것과 재분석해야 풀리는 것을 여기서 가른다.
+   */
+  scoreMissing: number;
+  /** top3 회차당 상한에 이미 닿은 회차 수(분석 끝난 회차 중). */
+  cappedEpisodes: number;
+  /** 이 규칙의 클립이 하나 이상 있고, 전부 연결된 채널 전부로 나갔는가. */
+  clipsAllSent: boolean;
+  /** 이번 순방에서 채택한 수. */
+  adopted: number;
+  // ── 게시 단계에서 마주친 상태 (전부 "이번 순방에 하나라도 있었나") ──
+  /** 렌더가 확정 실패해 자동 게시를 멈춘 클립을 만났다. */
+  renderStopped: boolean;
+  /** 실업로드 게이트(env)가 꺼져 있어 보내지 못한 채널이 있다. */
+  gateOff: boolean;
+  /** 직전 배포가 실패해 자동 재시도를 하지 않는 건이 있다(F4-4). */
+  publishFailed: boolean;
+  /** 사람 승인·보류 해제를 기다리는 건이 있다. */
+  heldWaiting: boolean;
+  /** 계정 식별자가 없는 옛 배포 기록 때문에 건너뛴 클립이 있다. */
+  vagueAccount: boolean;
+  /** 채널 규칙(길이·화면비 등)에 맞지 않아 게시하지 못한 클립이 있다. */
+  channelBlocked: boolean;
+  /** 오늘 하루 할당량을 다 쓴 채널이 있다. */
+  quotaDone: boolean;
+  /** 렌더가 끝나기를 기다리는 클립이 있다. */
+  renderWaiting: boolean;
+  /** 채널별 메타데이터 생성을 기다리는 클립이 있다. */
+  metaWaiting: boolean;
+  criterion: RuleCriterion;
+  mediaKind: RuleMediaKind;
+}
+
+/**
+ * 자동화 화면(CRIT_LABEL·KIND_LABEL)과 **같은 어휘**. 로그와 화면이 다른 말을 하면 안 된다.
+ *
+ * ⚠️ 미디어 종류는 화면이 "숏폼" 이라고 부른다(automation/page.tsx KIND_LABEL). 여기만 "쇼츠"
+ * 였던 적이 있는데, 같은 설정을 두 이름으로 부르면 사용자는 로그의 사유가 자기가 고른 설정을
+ * 가리키는지조차 모른다. 화면 표기를 정본으로 삼는다.
+ */
+const CRITERION_LABEL: Record<RuleCriterion, string> = {
+  score80: "점수 80 이상", score85: "점수 85 이상", top3: "상위 3건",
+};
+const MEDIA_KIND_LABEL: Record<RuleMediaKind, string> = {
+  short: "숏폼", clip: "클립", both: "숏폼+클립",
+};
+
+/**
+ * 왜 이 규칙에서 아무 일도 안 났는지 — 한 줄로 고른다. 없으면(=일을 했으면) null.
+ *
+ * **고르는 순서에 근거가 있다.** 순서가 흔들리면 같은 상황에서 로그가 매번 다른 말을 한다.
+ *  ⓪ 활동 시간창 밖이면 평가 자체를 안 했다 — 다른 사유를 말할 근거가 없다.
+ *  ① 채택했으면 사유가 없다 — 할 일을 했다.
+ *  ② 상류가 통째로 비었으면 그것부터(회차 없음). 하류 사유는 존재할 수가 없다.
+ *  ③ **분석이 끝난 회차가 하나도 없으면 하류 사유는 전부 공허하다.** 이 가드가 없으면
+ *     "채택할 추천이 없습니다" 라는 **틀린 사유**가 나간다 — 진짜 원인은 분석 실패/미시작/진행중이다.
+ *  ④ 그다음이 **게시 단계에서 사람 손이 필요한 것**(렌더 확정 실패 · 게이트 OFF · 승인 대기 …).
+ *     이미 만든 클립이 못 나가고 있는데 "채택할 추천이 없습니다" 라고 말하면 정반대를 보게 된다.
+ *  ⑤ 그다음이 **사람이 규칙을 바꾸면 풀리는 것**(상한 → 기준 → 종류 → 겹침).
+ *  ⑥ 시간이 저절로 풀어 주는 사유(렌더·메타 대기)를 사람 몫보다 뒤에 두는 게 이 순서의 근거다.
+ *  ⑦ 마지막이 정상 정지(다 나감) → 기본값(추천 없음).
+ *
+ * ⚠️ detail 문구에 **변동 숫자를 넣지 않는다.** 이 문자열이 곧 dedupe 키라서(hasRunNote),
+ * 카운트가 섞이면 순방마다 새 줄이 쌓여 실행 로그가 이 줄로 덮인다. 문구에 들어가는 숫자는
+ * 규칙 설정(기준 점수·활동 시간 같은)뿐이다 — 하루 안에 저절로 바뀌지 않는다.
+ */
+export function ruleIdleNote(o: RuleIdleObservation): { code: RuleIdleCode; detail: string } | null {
+  // 활동 시간창 밖 — 예전엔 여기서 로그가 **0줄**이라 하루 11~14시간이 통째로 비었다.
+  // 아침에 "밤새 올린 회차가 왜 안 나갔지" 를 볼 때, 순방이 안 돈 건지 워커가 죽은 건지
+  // 구분할 근거가 제품 안에 없었다.
+  if (o.outOfWindow) {
+    // 값이 비면 `활동 시간(undefined~undefined시)` 이 그대로 운영자 화면에 뜬다.
+    // 타입이 막아 주지만, 이 문구는 **로그 dedupe 키**라 한 번 새면 그 모양으로 하루가 굳는다.
+    const win = ruleWindow({ activeStart: o.activeStart, activeEnd: o.activeEnd });
+    return {
+      code: "off_hours",
+      detail: `활동 시간(${win.start}~${win.end}시) 밖이라 이번에는 아무것도 하지 않았습니다`
+        + " — 활동 시간이 되면 자동으로 이어서 확인합니다.",
+    };
+  }
+
+  if (o.adopted > 0) return null;
+
+  if (o.episodes === 0) {
+    return { code: "no_episode", detail: "이 규칙의 프로그램에 회차가 없습니다 — 회차를 올리면 다음 확인 때 잡습니다." };
+  }
+
+  if (o.analyzed === 0) {
+    // 순서 주의: **큐잉조차 안 된 회차(blocked)가 먼저다.** 기다리면 끝나는 것(analyzing)과
+    // 섞으면 영원히 안 오는 완료를 기다리게 된다.
+    if (o.analysisBlocked > 0) {
+      return {
+        code: "analysis_blocked",
+        // ⚠️ "충전한 뒤에 시작됩니다" 라고 쓰면 **충전만 하면 저절로 돈다**로 읽힌다. 충전은
+        // 아무 잡도 큐잉하지 않는다 — 사람이 다시 눌러야 시작한다. 조용한 정지의 반복이다.
+        detail: "회차 분석이 시작되지 않았습니다 — 회차 화면에서 분석을 시작해 주세요."
+          + " 잔액이 모자라면 충전한 뒤 다시 시작해 주세요 (충전만으로는 시작되지 않습니다).",
+      };
+    }
+    return o.analysisFailed > 0
+      ? { code: "analysis_failed", detail: "회차 분석이 실패해 채택할 추천이 없습니다 — 회차 화면에서 분석을 다시 시작해 주세요." }
+      : { code: "analyzing", detail: "회차 분석이 아직 끝나지 않았습니다 — 끝나면 다음 확인 때 자동으로 이어집니다." };
+  }
+
+  // ── 게시 단계: 이미 만든 클립이 못 나가고 있다 (사람 손이 필요한 것부터) ──
+  if (o.renderStopped) {
+    return {
+      code: "render_stopped",
+      // "끝나지 않아" 는 진행 중으로 읽혀 바로 아래 render_waiting(렌더 대기)과 구분이 안 된다.
+      // 이건 **확정 실패**다 — 기다려도 저절로 안 끝난다.
+      detail: "렌더가 실패해 자동 게시를 멈춘 클립이 있습니다"
+        + " — 편집기에서 확정(렌더)이 되는지 확인해 주세요. 되면 다음 확인 때 이어서 게시합니다.",
+    };
+  }
+
+  if (o.gateOff) {
+    return {
+      code: "gate_off",
+      detail: "실제 업로드가 꺼져 있어 이 규칙의 채널로는 보내지 못했습니다"
+        + " — 담당자에게 업로드 설정을 켜 달라고 요청해 주세요.",
+    };
+  }
+
+  if (o.publishFailed) {
+    return {
+      code: "publish_failed",
+      detail: "직전 배포가 실패한 건이 있습니다 — 자동으로 다시 쏘지 않습니다."
+        + " 배포 기록에서 재시도를 눌러 주세요.",
+    };
+  }
+
+  if (o.heldWaiting) {
+    return {
+      code: "held_waiting",
+      detail: "사람 확인을 기다리는 건이 있습니다 — 승인 대기 목록에서 확정하면 다음 확인 때 나갑니다.",
+    };
+  }
+
+  if (o.vagueAccount) {
+    return {
+      code: "vague_account",
+      detail: "어느 계정으로 나갔는지 알 수 없는 옛 배포 기록이 있어 건너뛰었습니다"
+        + " — 이미 나간 건이면 그대로 두고, 아니면 배포 화면에서 계정을 지정해 발행해 주세요.",
+    };
+  }
+
+  if (o.channelBlocked) {
+    return {
+      code: "channel_rule",
+      // 다른 사유는 전부 갈 화면을 지목한다(회차 화면·편집기·배포 기록). 여기만 "채널 규칙을
+      // 바꾸세요" 라고 해서 어디서 여는지가 없었다 — 채널 규칙은 배포 채널 화면에서 연다.
+      detail: "채널 규칙(길이·화면비)에 맞지 않아 게시하지 못한 클립이 있습니다"
+        + " — 배포 채널 화면에서 배포 규칙을 바꾸거나, 클립을 편집기에서 손봐 주세요.",
+    };
+  }
+
+  if (o.quotaDone) {
+    return {
+      code: "quota_done",
+      detail: "오늘 이 규칙 채널의 게시 할당량을 다 썼습니다 — 내일 자정(KST)에 초기화되면 이어서 게시합니다.",
+    };
+  }
+
+  // 상한은 **모든** 분석 완료 회차가 닿았을 때만 사유가 된다. 한 회차라도 다른 이유로
+  // 멈춘 거면 상한 탓이 아니다 — 덜 정확해도 과잉 주장보다 낫다.
+  if (o.cappedEpisodes > 0 && o.cappedEpisodes === o.analyzed) {
+    return {
+      code: "top3_cap",
+      detail: "이 규칙이 각 회차에서 뽑을 수 있는 만큼(상위 3건) 이미 채택했습니다"
+        + " — 더 내보내려면 채택 기준을 점수 기준으로 바꾸거나 새 회차를 올려 주세요.",
+    };
+  }
+
+  if (o.scoreBlocked > 0) {
+    // ⚠️ **점수가 없는 추천은 기준을 바꿔도 안 잡힌다.** selectCandidates 는 세 기준 모두에서
+    // 점수 없는 후보를 뺀다(모르면 안 내보낸다) — 그런데 예전 문구는 그 경우에도
+    // "기준을 낮추거나 '상위 3건' 으로 바꾸면 잡힙니다" 라고 안내했다. 사용자가 그대로 해도
+    // 결과는 그대로 0건이다. 점수 없음(재분석해야 풀림)과 점수 미달(기준을 바꾸면 풀림)을 가른다.
+    if (o.criterion === "top3" || o.scoreMissing >= o.scoreBlocked) {
+      return {
+        code: "score_blocked",
+        detail: "추천에 점수가 없어 채택할 대상을 고르지 못했습니다 — 회차를 다시 분석하면 점수가 채워집니다.",
+      };
+    }
+    return {
+      code: "score_blocked",
+      detail: `채택 기준(${CRITERION_LABEL[o.criterion]})을 넘는 추천이 없습니다`
+        + " — 기준을 낮추거나 '상위 3건' 으로 바꾸면 잡힙니다."
+        // 섞여 있으면 두 조치가 다 필요하다. 이 분기는 **개수가 아니라 종류**라 하루에
+        // 최대 한 줄 더 늘 뿐이다(dedupe 는 산다).
+        + (o.scoreMissing > 0 ? " 점수가 비어 있는 추천은 회차를 다시 분석해야 채워집니다." : ""),
+    };
+  }
+
+  if (o.kindMatched === 0 && o.pending > 0) {
+    return {
+      code: "kind_mismatch",
+      detail: `이 규칙이 만드는 종류(${MEDIA_KIND_LABEL[o.mediaKind]})에 맞는 추천이 없습니다`
+        + " — 규칙의 미디어 종류를 바꾸면 잡힙니다.",
+    };
+  }
+
+  if (o.overlapped > 0) {
+    return {
+      code: "overlap",
+      detail: "새로 뽑을 구간이 이미 만든 클립과 겹쳐 전부 제외됐습니다 — 같은 장면의 중복 배포를 막는 정상 동작입니다.",
+    };
+  }
+
+  // 시간이 저절로 풀어 주는 것 — 사람 몫보다 뒤다.
+  if (o.renderWaiting) {
+    return {
+      code: "render_waiting",
+      detail: "클립 렌더가 끝나기를 기다리는 중입니다 — 끝나면 다음 확인 때 자동으로 게시합니다.",
+    };
+  }
+
+  if (o.metaWaiting) {
+    return {
+      code: "meta_waiting",
+      detail: "채널별 제목·설명을 만드는 중입니다 — 끝나면 다음 확인 때 자동으로 게시합니다.",
+    };
+  }
+
+  if (o.clipsAllSent) {
+    return {
+      code: "all_sent",
+      detail: "이 규칙이 만든 클립은 연결된 채널에 모두 나갔습니다 — 새 회차가 올라오면 이어서 만듭니다.",
+    };
+  }
+
+  return {
+    code: "no_pending",
+    detail: "채택할 새 추천이 없습니다 — 새 회차가 올라오거나 회차를 다시 분석하면 잡습니다.",
+  };
+}
+
+// ── 렌더 안전벨트: 지킬 수 없는 약속을 멈춘다 ──────────────────────────────────
+
+/**
+ * 순방 주기 — 프로덕션은 Cloud Scheduler 가 drain 워커를 15분마다 깨운다(worker.ts 기동 팬아웃).
+ *
+ * 스케줄을 정하는 상수가 아니라 **도달 가능한 재시도 횟수를 계산하는 근거**다. 렌더 재시도는
+ * 클립당 순방 한 번(renderTried)이라 재시도 간격이 곧 이 값이다.
+ */
+export const CYCLE_PERIOD_MS = 15 * 60_000;
+
+/**
+ * 첫 실패로부터 이만큼 지나도 못 끝냈으면 포기한다.
+ * AI 리프레임의 `REFRAME_STUCK_MS` 와 **같은 값·같은 근거**(하트비트 만료 5분보다 넉넉히).
+ */
+export const RENDER_STUCK_MS = 30 * 60_000;
+
+/**
+ * 렌더 요청이 이만큼 실패하면 자동 게시를 포기한다.
+ *
+ * ⚠️ 예전 값 5(큐의 기본 maxAttempts)는 **절대 도달하지 않았다.** 재시도 간격이 순방 주기
+ * (15분)라 5회째는 60분인데, 30분 정체 벨트(RENDER_STUCK_MS)가 3회째에 먼저 확정시킨다 —
+ * 그래서 "렌더가 5회 실패해 멈춥니다" 는 아무도 못 보는 문구였고 테스트도 못 지킬 약속을
+ * 고정하고 있었다. 3 = 15분 × 2 = 30분이라 **두 상한이 같은 순간에 닿는다** — 카운터가
+ * 실제로 세는 뜻을 갖는다. 주기나 벨트를 바꾸면 이 값도 같이 봐야 한다(테스트가 강제).
+ */
+export const RENDER_MAX_ATTEMPTS = 3;
+
+/** 렌더 실패의 성격. 이 셋을 안 나누면 "기다리면 되는 것" 과 "영원히 안 되는 것" 이 뒤섞인다. */
+export type RenderFailureKind = "permanent" | "waiting" | "retryable";
+
+export type RenderOutcome =
+  | { ok: true }
+  | {
+      ok: false; kind: RenderFailureKind;
+      /** 원문(개발자용) — 상태에만 남기고 **사람이 읽는 문구에는 절대 안 넣는다.** */
+      error: string;
+      /** HTTP 상태코드(네트워크 실패는 0) · 라우트가 준 코드 — 사람 말 사유의 근거. */
+      status?: number;
+      code?: string | null;
+    };
+
+/** 렌더 안전벨트가 클립에 얹는 상태. 실행 로그가 아니라 **엔티티**에 산다(아래 주석 참조). */
+export interface AutoRenderState {
+  attempts: number;
+  /** 첫 실패 시각(ms) — 정체 판정의 기준점. 재시도해도 안 밀린다. */
+  firstAt: number;
+  /** 마지막 시각(ms) — 확정 후 "하루 한 번 재확인" 의 근거. */
+  lastAt: number;
+  /** 원문 오류(개발자용). **로그 문구로 새면 안 된다** — 운영자가 읽을 수 없는 말이다. */
+  lastError: string;
+  /** 사람 말 사유를 만드는 근거. 옛 행에는 없어서 optional 이다. */
+  lastStatus?: number;
+  lastCode?: string | null;
+  /** 확정 실패 — 더는 "곧 게시됩니다" 라고 말하지 않는다. */
+  failed: boolean;
+}
+
+/**
+ * `/api/clips/:id/export` 의 실패 표면을 성격으로 나눈다.
+ *
+ * ⚠️ `reframe_not_ready` 는 실패가 아니라 **순서를 기다리는 상태**다 — AI 리프레임에 이미
+ * 30분 정체 강등 벨트가 있는데 시간축이 같은 30분이라, 대기를 실패로 세면 경계에서 렌더가
+ * 먼저 확정 실패로 굳어 멀쩡한 클립이 죽는다.
+ *
+ * ⚠️ 하지만 `reframe_plan_invalid` 는 **대기가 아니다.** 리프레임 벨트의 조건은
+ * `rf.status !== "ready"` 인데 plan_invalid 는 **status=ready 인 채로 플랜만 무효**라
+ * (index.ts /export: 해시 불일치·정규화 실패) 벨트를 그대로 통과한다. waiting 으로 두면
+ * 카운터도 시계도 안 움직여 → 매 순방 409 → autoRender 상태는 생기지도 않고 → 로그엔
+ * "완료되면 자동으로 게시됩니다" 한 줄만 평생 남는 **영구 침묵**이 된다. retryable 로 세어
+ * 3회/30분 벨트가 잡게 한다(RENDER_MAX_ATTEMPTS).
+ */
+export function classifyRenderFailure(status: number, code?: string | null): RenderFailureKind {
+  if (code === "reframe_not_ready") return "waiting";
+  // 404(클립 없음)·400(구간 없음)은 다시 눌러도 같은 답이 온다 — 시간이 못 고친다.
+  if (status === 404 || status === 400) return "permanent";
+  // 409(원본 없음·ffmpeg 없음·플랜 무효)·500(렌더 실패)·네트워크는 복구될 수 있다. 다만
+  // 무한히 낙관하지는 않는다 — 횟수·시간 상한이 아래에서 확정으로 바꾼다.
+  return "retryable";
+}
+
+/**
+ * 렌더 실패를 **운영자가 읽을 수 있는 한 줄**로 옮긴다.
+ *
+ * 예전엔 확정 문구에 `state.lastError` 를 그대로 붙여서, 방송사 운영자 화면에
+ * "(마지막 오류: 409 no master video or ffmpeg unavailable to render)" 가 떴다.
+ * 원문은 상태(autoRender.lastError)에만 남기고 **문구에는 이 매핑만 쓴다.**
+ */
+export function renderFailureReason(status?: number | null, code?: string | null): string {
+  if (code === "reframe_not_ready" || code === "reframe_plan_invalid") {
+    return "AI 리프레임 결과가 아직 준비되지 않았습니다";
+  }
+  const s = Number(status ?? 0);
+  if (s === 404) return "클립을 찾을 수 없습니다";
+  if (s === 400) return "클립의 구간 정보가 없습니다";
+  if (s === 409) return "원본 영상을 찾을 수 없거나 렌더 준비가 안 됐습니다";
+  if (s === 401 || s === 403) return "렌더 요청이 거절됐습니다";
+  if (s >= 500) return "렌더에 실패했습니다";
+  if (s <= 0) return "렌더 요청에 응답이 없었습니다";
+  return "렌더를 시작하지 못했습니다";
+}
+
+/**
+ * **그래서 무엇을 하면 되는가** — 사유마다 다르다.
+ *
+ * 예전엔 확정 문구의 조치가 사유와 무관하게 하나였다: "원본 영상이 남아 있는지 확인하고,
+ * 편집기에서 확정(렌더)을 다시 하면 다음 확인 때 이어서 게시합니다." 그런데 AI 리프레임
+ * 플랜이 무효면(`reframe_plan_invalid`) **편집기 확정(렌더)도 같은 라우트라 똑같이 막힌다**
+ * (index.ts `/api/clips/:id/export`: ai_multi 인데 플랜 해시가 안 맞으면 409). 안내대로 해도
+ * 같은 실패가 반복된다 — 못 지킬 안내는 안내가 아니라 시간 낭비다.
+ *
+ * 조치가 실제로 통하는지는 라우트로 확인했다:
+ *  - 리프레임 재분석 · 리프레임 끄기 → `POST /api/clips/:id/reframe` (`mode:"ai_multi"`+retry
+ *    는 재큐잉, `mode:"basic"` 은 기본 모드로 되돌린다). 기본 모드가 되면 /export 의
+ *    ai_multi 분기를 아예 안 타므로 그 409 가 사라진다. 편집기 AI 패널의 두 버튼이 이 경로다.
+ *  - 원본 없음(409) → 원본이 돌아오면 하루 한 번 재확인(shouldRequestAutoRender)이 집어 간다.
+ *  - 나머지(변환 실패·무응답) → 편집기에서 확정(렌더)을 다시 하면 그 클립은 렌더된 상태가 되고,
+ *    다음 순방이 게시로 잇는다.
+ */
+export function renderFailureAction(status?: number | null, code?: string | null): string {
+  if (code === "reframe_not_ready" || code === "reframe_plan_invalid") {
+    // "AI" 를 쓰지 않는다 — 운영자 문구에 로마자를 섞지 않기로 한 규칙(테스트가 강제).
+    return "편집기 AI 리프레임 패널에서 다시 분석하거나 기본 모드를 선택한 뒤 확정(렌더)해 주세요.";
+  }
+  const s = Number(status ?? 0);
+  if (s === 404) return "이미 지운 클립이면 그대로 두고, 필요하면 회차 화면에서 다시 채택해 주세요.";
+  if (s === 400) return "편집기에서 클립 구간을 다시 지정한 뒤 내보내 주세요.";
+  if (s === 409) return "원본 영상이 남아 있는지 확인해 주세요 — 원본을 되살리면 다음 날 확인에서 다시 시도합니다.";
+  if (s === 401 || s === 403) return "잠시 뒤에도 같으면 담당자에게 문의해 주세요.";
+  return "편집기에서 확정(렌더)을 다시 해 주세요 — 되면 다음 확인 때 이어서 게시합니다.";
+}
+
+/** KST 날짜(YYYY-MM-DD). auto-topup 의 kstDateStamp 와 같은 계산이지만, 그 파일은 db·portone 을 끌어와 순수 모듈에서 import 할 수 없다. */
+function kstDay(ms: number): string {
+  return new Date(ms + 9 * 3600_000).toISOString().slice(0, 10);
+}
+
+/** 이번 렌더 결과를 반영한 다음 상태. null 이면 상태를 지운다(정상). */
+export function nextAutoRenderState(
+  prev: AutoRenderState | null | undefined,
+  outcome: RenderOutcome,
+  now: number,
+): AutoRenderState | null {
+  if (outcome.ok) return null;
+  // 대기는 시도가 아니다 — 카운터도 시계도 건드리지 않는다(리프레임 벨트와 이중 처벌 금지).
+  if (outcome.kind === "waiting") return prev ?? null;
+  const attempts = (prev?.attempts ?? 0) + 1;
+  const firstAt = prev?.firstAt ?? now;
+  return {
+    attempts,
+    firstAt,
+    lastAt: now,
+    lastError: String(outcome.error).slice(0, 200),
+    lastStatus: Number(outcome.status ?? 0),
+    lastCode: outcome.code ?? null,
+    failed: outcome.kind === "permanent"
+      || attempts >= RENDER_MAX_ATTEMPTS
+      || now - firstAt >= RENDER_STUCK_MS,
+  };
+}
+
+/**
+ * 지금 렌더를 (다시) 요청해도 되는가.
+ *
+ * 확정 실패 뒤에도 **KST 날짜가 바뀌면 하루 한 번**은 다시 본다 — 원본을 복구하면 사람이
+ * 편집기에서 다시 내보내지 않아도 되살아난다. 재확인을 빼면 그 클립은 영원히 자동 경로
+ * 밖에 남고, 주기를 짧게 하면 실패 폭주로 되돌아간다.
+ */
+export function shouldRequestAutoRender(
+  state: AutoRenderState | null | undefined,
+  now: number,
+): boolean {
+  if (!state?.failed) return true;
+  return kstDay(now) !== kstDay(state.lastAt);
+}
+
+/**
+ * 확정 순간에 한 번 남기는 사건 기록 — 무엇이 몇 번, 왜 실패했는지, **무엇을 하면 되는지.**
+ *
+ * 사유·조치 모두 **사람 말로만** 적는다(renderFailureReason·renderFailureAction).
+ * 원문(`lastError`)은 클립 상태에 남아 있으니 개발자는 거기서 본다 — 실행 로그는 방송사
+ * 운영자가 읽는 자리다. 조치는 사유마다 다르다: 하나로 고정하면 그 조치가 안 통하는 사유에서
+ * 사용자가 시킨 대로 하고도 같은 실패를 다시 본다.
+ */
+export function autoRenderFailedNote(state: AutoRenderState): string {
+  return `렌더가 ${state.attempts}회 실패해 자동 게시를 멈춥니다`
+    + ` (${renderFailureReason(state.lastStatus, state.lastCode)}).`
+    + ` ${renderFailureAction(state.lastStatus, state.lastCode)}`;
+}
+
+/**
+ * 확정 실패한 클립을 순방이 건너뛸 때의 문구.
+ *
+ * `autoRenderFailedNote` 와 달리 **변동값이 없다** — 이건 매 순방 마주치는 상태라 문구가
+ * 곧 dedupe 키가 되어야 한다(클립당 한 줄). 사건은 위, 상태는 여기.
+ */
+export const AUTO_RENDER_STOPPED_NOTE =
+  "렌더가 실패해 이 클립의 자동 게시를 멈췄습니다"
+  + " — 편집기에서 확정(렌더)이 되는지 확인해 주세요. 되면 다음 확인 때 이어서 게시합니다.";
 
 /** 실행 로그 결과 종류 (F6 실행 로그). */
 export const RUN_RESULTS = ["published", "recorded", "media_created", "held", "failed", "skipped"] as const;

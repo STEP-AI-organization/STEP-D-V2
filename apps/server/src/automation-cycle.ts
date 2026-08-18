@@ -34,10 +34,14 @@ import {
   publishedTodayKst,
 } from "./db-pg.ts";
 import {
-  CREDIT_IDLE_REASON, DEFAULT_RULE_THUMBNAIL_MODE,
-  decidePublish, inActiveWindow, isRuleThumbnailMode, overlapsExistingClip, planCycle,
-  ruleChannels, rulePrograms, selectCandidates,
-  type AutomationRule,
+  AUTO_RENDER_STOPPED_NOTE, CREDIT_IDLE_REASON, CREDIT_STOP_NOTE, DEFAULT_RULE_THUMBNAIL_MODE,
+  TOP3_CAP,
+  autoRenderFailedNote, classifyRenderFailure,
+  decidePublish, episodeAnalysisState, inActiveWindow, isRuleThumbnailMode, matchesMediaKind,
+  nextAutoRenderState,
+  overlapsExistingClip, planCycle,
+  ruleChannels, ruleIdleNote, rulePrograms, ruleWindow, selectCandidates, shouldRequestAutoRender,
+  type AutoRenderState, type AutomationRule, type RenderOutcome, type RuleIdleObservation,
 } from "./automation.ts";
 import {
   youtubeUploadEnabled, tiktokUploadEnabled, instagramUploadEnabled, facebookUploadEnabled,
@@ -56,30 +60,56 @@ import { basicReframeState, effectiveReframeState } from "./reframe.ts";
  */
 const REFRAME_STUCK_MS = 30 * 60_000;
 
+/**
+ * 매 순방 마주치는 상태를 설명하는 문구들 — **문구가 곧 dedupe 키**라 상수로 못박는다.
+ * hasRunNote 에 detail 까지 넘기지 않으면, 같은 (규칙·클립·채널) 키로 쓰는 다른 스킵 사유
+ * (리프레임 강등·메타 대기 등)가 이미 한 줄 남아 있을 때 이 사유가 **한 줄도 안 남는다** —
+ * 침묵 쪽으로 실패하는 가드는 이 파일이 고치려는 병 그 자체다.
+ */
+const RENDER_WAIT_NOTE = "렌더 대기 — 완료되면 다음 확인 때 자동으로 게시됩니다.";
+const META_WAIT_NOTE = "메타데이터 생성 대기 — 완료되면 다음 확인 때 자동으로 게시됩니다.";
+const VAGUE_ACCOUNT_NOTE =
+  "계정 미상 배포 기록이 있어 건너뜁니다 — 이미 나간 건이면 그대로 두고, 아니면 배포 화면에서 계정을 지정해 발행하세요.";
+
 export interface CycleReport {
   tenantScoped: true;
   rulesEvaluated: number;
   adopted: number;
   published: number;
   held: number;
+  /** 이번 순방에 렌더를 확정 실패로 넘긴 클립 수 — 워커 로그·POST /api/automation/run 응답에 실린다. */
+  renderFailed: number;
   idleReason: string;
 }
 
 /** 현재 테넌트의 규칙을 한 바퀴 돈다. */
 export async function runAutomationCycle(): Promise<CycleReport> {
+  // 규칙을 **먼저** 읽는다 — 아래 크레딧 로그가 "충전하면 다시 시작합니다" 라고 약속하는데,
+  // 규칙이 하나도 없으면 충전해도 시작될 게 없다(지킬 수 없는 약속).
+  const paused = (await getAutomationSetting("automation.paused")) === "true";
+  const rules = (await listAutomationRules()) as unknown as AutomationRule[];
+  const plan = planCycle({ paused, rules });
+
   // 크레딧 게이트 — 잔액 0 이하면 채택도 게시도 하지 않는다. 채택은 렌더(원가),
   // 게시는 업로드로 이어져 잔액 없는 워크스페이스가 자동으로 원가를 계속 쓰게 된다.
   // 사유를 리포트에 실어 GET /api/automation 이 화면에 같은 문구를 보여준다.
   if ((await creditBalance()) <= 0) {
+    // 배너만으로는 부족하다 — idleReason 은 "지금 상태" 라서, 지나간 며칠에 왜 아무것도
+    // 안 나갔는지를 로그만 보는 사람은 알 수 없다. rule_id 를 비우는 이유: 크레딧은
+    // 워크스페이스 전체 사정이지 특정 규칙의 사유가 아니다(규칙별 패널이 아니라 전체
+    // 기록 목록에 뜬다 — 그게 맞다). 순방은 15분마다 도니 KST 하루 한 줄로 막는다.
+    //
+    // **이번 순방에 평가할 규칙이 있을 때만 남긴다.** 예전엔 크레딧 판정이 규칙 조회보다
+    // 앞이라, 자동배포를 한 번도 설정 안 한(또는 전부 꺼 둔) 워크스페이스에도 잔액 0 이면
+    // 매일 한 줄씩 쌓였다 — 규칙이 없으니 충전해도 아무것도 시작되지 않는다.
+    if (plan.rules.length > 0 && !(await hasRunNote(null, null, null, "skipped", true, CREDIT_STOP_NOTE))) {
+      await appendRuleRun({ ruleId: null, clipId: null, result: "skipped", detail: CREDIT_STOP_NOTE });
+    }
     return {
-      tenantScoped: true, rulesEvaluated: 0, adopted: 0, published: 0, held: 0,
+      tenantScoped: true, rulesEvaluated: 0, adopted: 0, published: 0, held: 0, renderFailed: 0,
       idleReason: CREDIT_IDLE_REASON,
     };
   }
-
-  const paused = (await getAutomationSetting("automation.paused")) === "true";
-  const rules = (await listAutomationRules()) as unknown as AutomationRule[];
-  const plan = planCycle({ paused, rules });
 
   const report: CycleReport = {
     tenantScoped: true,
@@ -87,6 +117,7 @@ export async function runAutomationCycle(): Promise<CycleReport> {
     adopted: 0,
     published: 0,
     held: 0,
+    renderFailed: 0,
     idleReason: plan.idleReason,
   };
   if (plan.rules.length === 0) return report;
@@ -101,37 +132,106 @@ export async function runAutomationCycle(): Promise<CycleReport> {
   const adoptedCountFor = (ruleId: string, episodeId: string): number =>
     allClips.filter((c) => c.automationRuleId === ruleId && c.episodeId === episodeId).length;
 
-  for (const rule of plan.rules) {
-    // 활동 시간창(KST · 기본 9~22) 밖에서는 아무것도 하지 않는다 — 다음 순방에 다시 본다.
-    if (!inActiveWindow(rule)) {
-      if (!report.idleReason) report.idleReason =
-        `활동 시간(${rule.activeStart ?? 9}~${rule.activeEnd ?? 22}시) 밖 — 대기 중`;
-      continue;
-    }
+  // 규칙별 유휴 사유 — **배너(report.idleReason)는 순방 전체의 사실**이라 여기 모아 두고
+  // 루프가 끝난 뒤에 판단한다. 규칙 하나가 유휴라고 전체 배너를 덮으면, 다른 규칙이 3건
+  // 채택·2건 게시한 순방에도 "회차가 없습니다" 가 뜬다.
+  const idleReasons: string[] = [];
 
+  for (const rule of plan.rules) {
     const programs = rulePrograms(rule);
     const channels = ruleChannels(rule);
+    const win = ruleWindow(rule);
+
+    // 이 규칙이 이번 순방에 실행 로그를 한 줄이라도 **실제로 남겼는가.** 규칙 루프 안의 모든
+    // appendRuleRun 은 아래 note() 를 지나야 한다 — 직접 부르는 게 하나라도 남으면
+    // "아무 일도 안 했다" 오진이 나서 엉뚱한 사유가 로그에 박힌다(스캔 테스트가 강제).
+    let logged = false;
+    /**
+     * dedupe 에 걸려 **아무것도 안 쓴 순방은 "말했다" 가 아니다.** 예전엔 여기서 무조건
+     * logged 를 세웠는데, 평생 dedupe(todayKstOnly=false)를 쓰는 문구(렌더 확정 실패·렌더
+     * 대기·계정 미상)가 한 번 걸리면 그 규칙은 **그 뒤로 영원히** 유휴 사유를 못 냈다.
+     * 대신 눌린 상태는 obs 플래그로 아래 유휴 판정에 들어가, 규칙 단위 하루 한 줄로 이어진다.
+     */
+    const note = async (ev: Parameters<typeof appendRuleRun>[0], dedupe?: Promise<boolean>) => {
+      if (await writeRun(ev, dedupe)) logged = true;
+    };
+    const obs: RuleIdleObservation = {
+      outOfWindow: false, activeStart: win.start, activeEnd: win.end,
+      episodes: 0, analyzed: 0, analyzing: 0, analysisFailed: 0, analysisBlocked: 0,
+      pending: 0, kindMatched: 0, overlapped: 0, scoreBlocked: 0, scoreMissing: 0, cappedEpisodes: 0,
+      clipsAllSent: false, adopted: 0,
+      renderStopped: false, gateOff: false, publishFailed: false, heldWaiting: false,
+      vagueAccount: false, channelBlocked: false, quotaDone: false,
+      renderWaiting: false, metaWaiting: false,
+      criterion: rule.criterion, mediaKind: rule.mediaKind,
+    };
+    /** 유휴 사유 판정 + 하루 한 줄 로그. 사유는 배너 후보로 모은다(dedupe 와 무관하게). */
+    const idle = async () => {
+      const why = await noteRuleIdle(rule, obs);
+      if (why) idleReasons.push(why);
+    };
+
+    // 활동 시간창(KST · 기본 9~22) 밖에서는 아무것도 하지 않는다 — 다음 순방에 다시 본다.
+    // 예전엔 여기서 로그가 **0줄**이라 하루 11~14시간이 통째로 비었다: 아침에 "밤새 올린
+    // 회차가 왜 안 나갔지" 를 볼 때 순방이 안 돈 건지 워커가 죽은 건지 구분할 근거가 없었다.
+    if (!inActiveWindow(rule)) {
+      obs.outOfWindow = true;
+      await idle();
+      continue;
+    }
+    // 렌더 요청은 **클립당 순방 한 번**이다. 아래 게시 루프는 채널마다 도니, 이 가드가
+    // 없으면 채널 N개 = 순방당 export N회 — 실패 카운터가 채널 배수로 부풀어 첫 순방에
+    // 바로 확정 실패가 난다. 채택 직후 건 렌더도 여기 넣어 같은 순방에 두 번 때리지 않는다.
+    const renderTried = new Set<string>();
 
     // 01 회차 수신 — 이 규칙의 프로그램(들) 회차만.
     const eps = episodes.filter((e) => programs.includes(e.programId));
-    if (eps.length === 0) continue;
+    obs.episodes = eps.length;
+    if (eps.length === 0) {
+      await idle();
+      continue;
+    }
 
     // ── 03 미디어 생성 — 프로그램 전체에서 규칙 조건을 통과한 추천을 채택한다 ──
     for (const ep of eps) {
-      // 02 분석 — 끝나지 않았으면 다음 순방에 다시 본다.
-      const stage = ep.pipeline?.stageStatus;
-      if (stage === "idle" || stage === "progress") continue;
+      // 02 분석 — 끝나지 않았으면 다음 순방에 다시 본다. 판정은 순수 함수 한 벌
+      // (episodeAnalysisState)에 맡긴다: "분석 중" 과 "**큐잉조차 안 됨**" 을 여기서
+      // 눈대중으로 가르면 오지 않을 완료를 기다리라는 말이 나간다.
+      const state = episodeAnalysisState(ep.pipeline);
+      if (state === "blocked") { obs.analysisBlocked += 1; continue; }
+      if (state === "analyzing") { obs.analyzing += 1; continue; }
+      // 분석이 error 로 끝난 회차는 추천이 안 생긴다. 이걸 안 세면 후보 0건이 그냥
+      // "추천이 없습니다" 로 읽혀 **틀린 사유**가 나간다 — 진짜 원인은 분석 실패다.
+      // (error 라도 체크포인트로 일부 추천이 남았을 수 있어 아래 스캔은 계속한다.)
+      if (state === "failed") obs.analysisFailed += 1; else obs.analyzed += 1;
 
       // 이 회차의 기존 클립(수동 채택 포함)과 구간이 겹치는 추천은 제외 — 재분석이
       // 추천을 새 ID 로 다시 만들어도 이미 내보낸 구간이 재채택되지 않게(중복 배포 방지).
+      //
+      // 단계를 나눠 세는 이유: 어디서 몇 개가 떨어졌는지 모르면 "추천이 없습니다" 라는
+      // 뭉뚱그린 사유밖에 못 남긴다. 술어가 서로 독립이라 **집합 결과는 예전과 같다**
+      // (selectCandidates 가 pending·종류를 다시 걸러도 멱등이다).
       const epClips = allClips.filter((c) => c.episodeId === ep.id);
-      const cands = recommendations
-        .filter((r) => r.episodeId === ep.id)
-        .filter((r) => !overlapsExistingClip(r, epClips));
+      const epRecs = recommendations.filter((r) => r.episodeId === ep.id);
+      const pend = epRecs.filter((r) => (r.status ?? "pending") === "pending");
+      obs.pending += pend.length;
+      const kindOk = pend.filter((r) => matchesMediaKind(rule, r));
+      obs.kindMatched += kindOk.length;
+      const cands = kindOk.filter((r) => !overlapsExistingClip(r, epClips));
+      obs.overlapped += kindOk.length - cands.length;
       // top3 는 회차당 상한 — 이 규칙이 이 회차에서 이미 채택한 수를 빼고 뽑는다.
-      const pickedIds = new Set(
-        selectCandidates(rule, cands, adoptedCountFor(rule.id, ep.id)).map((r) => r.id));
+      const already = adoptedCountFor(rule.id, ep.id);
+      const atCap = rule.criterion === "top3" && already >= TOP3_CAP;
+      if (atCap) obs.cappedEpisodes += 1;
+      const pickedIds = new Set(selectCandidates(rule, cands, already).map((r) => r.id));
       const picked = cands.filter((r) => pickedIds.has(r.id));
+      // 상한에 닿은 회차의 탈락분은 "기준 미달" 이 아니라 상한 탓이다 — 섞으면 사유가 뒤바뀐다.
+      if (!atCap) {
+        obs.scoreBlocked += cands.length - picked.length;
+        // 점수가 **없는** 탈락분은 기준을 바꿔도 안 잡힌다(selectCandidates 가 세 기준 모두에서
+        // 뺀다) — 재분석해야 풀린다. 따로 세지 않으면 유휴 사유가 못 지킬 조치를 안내한다.
+        obs.scoreMissing += cands.filter((r: any) => typeof r.score100 !== "number").length;
+      }
 
       for (const rec of picked) {
         const master = media.find((m: any) => m.episodeId === rec.episodeId && m.role === "master") as any;
@@ -184,11 +284,12 @@ export async function runAutomationCycle(): Promise<CycleReport> {
         const ok = await commitAndInherit(clipId, clip, rec.id, rec);
         if (!ok) continue; // 다른 요청이 먼저 채택했다
         report.adopted += 1;
+        obs.adopted += 1;
         // 같은 순방 안에서 top3 상한이 정확히 걸리도록 로컬 목록에도 반영한다.
         allClips.push(clip);
         // "렌더 대기"를 사람 말로 남긴다 — 렌더가 늦거나 실패해도 실행 로그만 보면
         // 클립이 어디까지 왔는지 보이게. 조용한 스킵(not_rendered 무한 반복)의 해독제다.
-        await appendRuleRun({
+        await note({
           ruleId: rule.id, clipId, result: "media_created",
           detail: `${rec.title} — 클립 생성 · 렌더 대기`,
         });
@@ -223,7 +324,9 @@ export async function runAutomationCycle(): Promise<CycleReport> {
           // 채택 즉시 렌더를 건다 (아래 requestAutoRender). 여기서 안 걸면 클립이
           // rendered:false 로 남아 eligibility(not_rendered)에 매 순방 걸리고 자동 게시가
           // 영원히 0건이다 — 어떤 경로도 렌더를 요청하지 않았기 때문(2026-08-14 확정).
-          await requestAutoRender(clipId);
+          // 안전벨트의 시계(firstAt)도 여기서 시작한다 — 첫 실패부터 세야 정체를 잰다.
+          renderTried.add(clipId);
+          await attemptAutoRender(rule.id, clip, note, report);
         }
       }
     }
@@ -233,6 +336,10 @@ export async function runAutomationCycle(): Promise<CycleReport> {
     const mine = (await listEntities<any>("clip")).filter(
       (c) => c.automationRuleId === rule.id && epIds.has(c.episodeId),
     );
+    // "만든 건 다 나갔다" 는 흔한 오진("채택할 새 추천이 없습니다")을 막는 관측치다 —
+    // 게시 여부 판정은 upsertDistribution 과 같은 정체성 규칙(publish-guard)을 쓴다.
+    obs.clipsAllSent = mine.length > 0 && mine.every((c) =>
+      channels.every((ch) => hasAccountDistribution(c.distributions, ch.platform, ch.accountId)));
 
     for (const chan of channels) {
       const accountKey = `${chan.platform}:${chan.accountId}`;
@@ -248,7 +355,12 @@ export async function runAutomationCycle(): Promise<CycleReport> {
         const wouldSend = mine.some(
           (c) => !hasAccountDistribution(c.distributions, chan.platform, chan.accountId));
         if (wouldSend) {
-          await appendRuleRun({ ruleId: rule.id, result: "skipped", detail: upGate.offNote, accountKey });
+          obs.gateOff = true;
+          // **하루 한 줄 가드가 필수다.** 게이트 OFF 는 env 를 고치기 전엔 안 변하는 상태라,
+          // 활동시간 9~22시 · 15분 주기면 (규칙,채널)당 하루 52줄이 쌓여 실행 로그 창(50건)을
+          // 이 줄로 덮는다 — 사유를 남기려다 정작 중요한 사유를 가리는 자충수다.
+          await note({ ruleId: rule.id, result: "skipped", detail: upGate.offNote, accountKey },
+            hasRunNote(rule.id, null, accountKey, "skipped", true, upGate.offNote));
         }
         continue;
       }
@@ -257,13 +369,15 @@ export async function runAutomationCycle(): Promise<CycleReport> {
       let remaining = quota - (await publishedTodayKst(accountKey));
       if (remaining <= 0) {
         // 조용히 넘기면 "왜 오늘은 아무것도 안 나갔지" 를 설명할 근거가 로그에 없다.
-        // 채널당 하루 한 줄만 남긴다(순방은 10분마다 돈다).
-        if (!(await hasRunNote(rule.id, null, accountKey, "skipped", true))) {
-          await appendRuleRun({
-            ruleId: rule.id, clipId: null, result: "skipped", accountKey,
-            detail: `오늘 이 채널 할당량(${quota}건)을 다 썼습니다 — 내일 자정(KST)에 초기화됩니다.`,
-          });
-        }
+        // 채널당 하루 한 줄만 남긴다(순방은 15분마다 돈다). 문구까지 맞춰 dedupe 하는 이유:
+        // 같은 (규칙,채널,skipped,오늘) 키를 게이트 OFF 사유도 쓰므로, 문구를 안 보면
+        // 오전에 게이트 OFF 로 한 줄 남은 채널에서 이 사유가 **한 줄도 안 남는다.**
+        // 문구의 숫자는 규칙 설정(할당량)이라 하루 안에 저절로 안 바뀐다.
+        obs.quotaDone = true;
+        const quotaNote = `오늘 이 채널 할당량(${quota}건)을 다 썼습니다 — 내일 자정(KST)에 초기화됩니다.`;
+        await note({
+          ruleId: rule.id, clipId: null, result: "skipped", accountKey, detail: quotaNote,
+        }, hasRunNote(rule.id, null, accountKey, "skipped", true, quotaNote));
         continue; // 오늘 할당량 완료 — 내일 KST 자정에 리셋
       }
 
@@ -289,11 +403,12 @@ export async function runAutomationCycle(): Promise<CycleReport> {
           // "왜 이 클립만 안 나가지" 를 추적할 근거가 제품 안에 없다.
           const vague = (clip.distributions ?? []).some((d: any) =>
             d.channel === chan.platform && d.status !== "failed" && distributionAccountId(d) === null);
-          if (vague && !(await hasRunNote(rule.id, clip.id, accountKey))) {
-            await appendRuleRun({
+          if (vague) {
+            obs.vagueAccount = true;
+            await note({
               ruleId: rule.id, clipId: clip.id, result: "skipped", accountKey,
-              detail: "계정 미상 배포 기록이 있어 건너뜁니다 — 이미 나간 건이면 그대로 두고, 아니면 배포 화면에서 계정을 지정해 발행하세요.",
-            });
+              detail: VAGUE_ACCOUNT_NOTE,
+            }, hasRunNote(rule.id, clip.id, accountKey, "skipped", false, VAGUE_ACCOUNT_NOTE));
           }
           continue;
         }
@@ -309,12 +424,14 @@ export async function runAutomationCycle(): Promise<CycleReport> {
         // 무력해진다. 실패의 정본은 **배포 행의 status** 이므로 그걸 근거로 이 채널만 건너뛰고,
         // 사유는 채널별로 한 번만 남긴다(순방마다 쌓으면 로그가 그 줄로 덮인다).
         if (hasFailedAccountDistribution(clip.distributions, chan.platform, chan.accountId)) {
-          if (!(await hasRunNote(rule.id, clip.id, accountKey, "failed"))) {
-            await appendRuleRun({
-              ruleId: rule.id, clipId: clip.id, result: "failed", accountKey,
-              detail: "직전 배포가 실패했습니다 — 자동 재시도는 하지 않습니다. 배포 기록에서 재시도를 눌러 주세요.",
-            });
-          }
+          // 이 줄도 (클립,채널)당 한 번만 남는다 — 눌린 뒤에도 "왜 이 규칙이 멈춰 있나" 는
+          // 설명돼야 하므로 관측치로 이어 준다. 안 그러면 유휴 판정이 "채택할 새 추천이
+          // 없습니다" 라는 엉뚱한 사유로 떨어진다(진짜 원인은 배포 실패다).
+          obs.publishFailed = true;
+          await note({
+            ruleId: rule.id, clipId: clip.id, result: "failed", accountKey,
+            detail: "직전 배포가 실패했습니다 — 자동 재시도는 하지 않습니다. 배포 기록에서 재시도를 눌러 주세요.",
+          }, hasRunNote(rule.id, clip.id, accountKey, "failed"));
           continue;
         }
 
@@ -333,14 +450,14 @@ export async function runAutomationCycle(): Promise<CycleReport> {
             // 진행 중이라 믿고 기다린다. 되살릴 수 있으면 되살리고, 정체되면 강등한다.
             const stuckMs = Date.now() - Number((rf as any).updatedAt ?? 0);
             if (rf.status === "stale" && await requestAutoReframe(clip.id)) {
-              await appendRuleRun({
+              await note({
                 ruleId: rule.id, clipId: clip.id, result: "skipped",
                 detail: "AI 리프레임 결과가 낡아 다시 분석을 겁니다 — 끝나면 자동으로 게시됩니다.", accountKey,
               });
             } else if (rf.status === "failed" || stuckMs > REFRAME_STUCK_MS) {
               await putEntity("clip", clip.id, { ...clip, reframe: basicReframeState() });
               clip.reframe = basicReframeState();
-              await appendRuleRun({
+              await note({
                 ruleId: rule.id, clipId: clip.id, result: "skipped",
                 detail: rf.status === "failed"
                   ? "AI 리프레임 분석 실패 — 기본(중앙 크롭)으로 렌더를 진행합니다."
@@ -349,9 +466,13 @@ export async function runAutomationCycle(): Promise<CycleReport> {
               });
             }
           }
-          if (await requestAutoRender(clip.id)) {
-            const fresh = await getEntity<any>("clip", clip.id);
-            if (fresh) Object.assign(clip, fresh);
+          // 확정 실패한 클립은 다시 때리지 않는다(하루 한 번만 재확인 — shouldRequestAutoRender).
+          if (!renderTried.has(clip.id) && shouldRequestAutoRender(clip.autoRender, Date.now())) {
+            renderTried.add(clip.id);
+            if (await attemptAutoRender(rule.id, clip, note, report)) {
+              const fresh = await getEntity<any>("clip", clip.id);
+              if (fresh) Object.assign(clip, fresh);
+            }
           }
         }
 
@@ -360,12 +481,37 @@ export async function runAutomationCycle(): Promise<CycleReport> {
           aspectRatio: clip.aspectRatio, rendered: clip.rendered !== false,
         });
         if (!why.ok) {
-          // not_rendered 의 기본 문구는 수동 화면용("내보내기 후…")이라 자동 경로에선
-          // 오독된다 — 사람이 할 일이 없음을 말해 준다.
-          const detail = why.code === "not_rendered"
-            ? "렌더 대기 — 완료되면 다음 순방에 자동으로 게시됩니다."
-            : why.reason;
-          await appendRuleRun({ ruleId: rule.id, clipId: clip.id, result: "skipped", detail, accountKey });
+          if (why.code === "not_rendered") {
+            // ⚠️ **지킬 수 없는 약속을 멈추는 자리다.** 소스 소실·코덱 실패처럼 결정론적으로
+            // 영구 실패면 "완료되면 자동으로 게시됩니다" 는 영원히 안 지켜지는데, 예전엔 그
+            // 낙관 문구를 매 순방·매 채널 무가드로 쌓아 진짜 사유를 로그 창 밖으로 밀어냈다.
+            if ((clip.autoRender as AutoRenderState | undefined)?.failed) {
+              // accountKey 를 붙이면 안 된다 — 같은 (clip, account) 의 뒤이은 'failed' 행이
+              // publishedTodayKst 의 published 슬롯을 되돌려 하루 할당량 도배 방지가 뚫린다.
+              // 렌더는 채널과 무관한 클립 단위 사실이기도 하다. 문구는 고정값이라 곧 dedupe
+              // 키가 된다(클립당 평생 한 줄) — 사건의 상세는 확정 순간에 이미 남겼다.
+              // 평생 dedupe 라 이 줄이 눌린 뒤에도 상태가 사라지면 안 된다 → obs 로 이어 준다.
+              obs.renderStopped = true;
+              await note({
+                ruleId: rule.id, clipId: clip.id, result: "failed", accountKey: null,
+                detail: AUTO_RENDER_STOPPED_NOTE,
+              }, hasRunNote(rule.id, clip.id, null, "failed", false, AUTO_RENDER_STOPPED_NOTE));
+              continue;
+            }
+            // 아직 살아 있는 렌더 — not_rendered 의 기본 문구는 수동 화면용("내보내기 후…")
+            // 이라 자동 경로에선 오독된다. 사람이 할 일이 없음을 말하되 (클립,채널)당 한 줄만.
+            obs.renderWaiting = true;
+            await note({
+              ruleId: rule.id, clipId: clip.id, result: "skipped", accountKey,
+              detail: RENDER_WAIT_NOTE,
+            }, hasRunNote(rule.id, clip.id, accountKey, "skipped", false, RENDER_WAIT_NOTE));
+            continue;
+          }
+          // 채널 규칙(길이·화면비) 미달 — 클립을 고치거나 규칙을 바꾸기 전엔 안 변하는 상태라
+          // 무가드로 두면 매 순방·매 채널 같은 줄이 쌓인다. 문구가 곧 dedupe 키다.
+          obs.channelBlocked = true;
+          await note({ ruleId: rule.id, clipId: clip.id, result: "skipped", detail: why.reason, accountKey },
+            hasRunNote(rule.id, clip.id, accountKey, "skipped", false, why.reason));
           continue;
         }
 
@@ -384,7 +530,12 @@ export async function runAutomationCycle(): Promise<CycleReport> {
 
         if (decision.action === "hold") {
           await holdClip(rule.id, clip.id, decision.reason);
-          await appendRuleRun({ ruleId: rule.id, clipId: clip.id, result: "held", detail: decision.reason, accountKey });
+          // 보류는 **사람이 확정할 때까지 유지되는 상태**다(F6 Invariant) — 무가드로 두면
+          // 승인 대기 건 하나가 15분마다 한 줄씩, 하루 90여 줄을 쌓아 로그 창을 덮는다.
+          // 사유가 곧 dedupe 키라 보류 사유가 바뀌면 새 줄이 남는다.
+          obs.heldWaiting = true;
+          await note({ ruleId: rule.id, clipId: clip.id, result: "held", detail: decision.reason, accountKey },
+            hasRunNote(rule.id, clip.id, accountKey, "held", false, decision.reason));
           report.held += 1;
           continue;
         }
@@ -397,10 +548,13 @@ export async function runAutomationCycle(): Promise<CycleReport> {
         const chanMeta = (clip as any).channelMeta?.[chan.platform];
         if (!chanMeta || !(chanMeta.title || chanMeta.description)) {
           await enqueue("clip.metadata", { clipId: clip.id }, { dedupeKey: `clip.metadata:${clip.id}` }).catch(() => {});
-          await appendRuleRun({
+          // 렌더 대기와 같은 처방 — 잡이 계속 실패하면 이 상태가 며칠 이어질 수 있어
+          // 무가드면 (클립,채널)당 하루 90여 줄이다. 재큐잉은 위에서 매 순방 계속한다.
+          obs.metaWaiting = true;
+          await note({
             ruleId: rule.id, clipId: clip.id, result: "skipped",
-            detail: "메타데이터 생성 대기 — 완료되면 다음 확인 때 자동으로 게시됩니다.", accountKey,
-          });
+            detail: META_WAIT_NOTE, accountKey,
+          }, hasRunNote(rule.id, clip.id, accountKey, "skipped", false, META_WAIT_NOTE));
           continue;
         }
 
@@ -443,13 +597,13 @@ export async function runAutomationCycle(): Promise<CycleReport> {
         if (outcome.skipped.length > 0) {
           const reason = outcome.skipped[0].reason;
           await holdClip(rule.id, clip.id, reason);
-          await appendRuleRun({ ruleId: rule.id, clipId: clip.id, result: "held", detail: reason, accountKey });
+          await note({ ruleId: rule.id, clipId: clip.id, result: "held", detail: reason, accountKey });
           report.held += 1;
         } else {
           const published = outcome.queued.length > 0;
           if (published) remaining -= 1;
           report.published += published ? 1 : 0;
-          await appendRuleRun({
+          await note({
             ruleId: rule.id, clipId: clip.id,
             result: published ? "published" : "recorded",
             // 게이트 OFF 로 record 강등된 채널(TikTok·IG·FB)은 그 사실을 로그에 박는다 —
@@ -460,9 +614,63 @@ export async function runAutomationCycle(): Promise<CycleReport> {
         }
       }
     }
+
+    // 이 규칙이 한 줄도 안 남겼으면 **왜 아무 일도 없었는지**를 남긴다. 조용한 정지는
+    // 이 리포의 최빈 실패모드다 — 규칙은 "실행 중" 인데 아무것도 안 나가는 상태를
+    // 사용자가 추리하게 두지 않는다.
+    if (!logged) await idle();
+  }
+
+  // 배너(idleReason)는 **순방 전체**의 필드다. 규칙 하나의 사유를 여기 얹으면, 규칙 A 가
+  // 3건 채택·2건 게시한 순방에도 규칙 B 탓에 "회차가 없습니다" 가 화면에 뜬다.
+  // 그래서 조건은 둘: (1) 이번 순방이 정말 아무 일도 안 했고(채택·게시·보류 0),
+  // (2) 평가한 규칙이 **전부** 유휴여야 한다. 대표는 첫 규칙의 사유 하나만 싣는다 —
+  // 배너에 여러 줄을 늘어놓으면 어디부터 손대야 할지 모른다(사유는 로그에 규칙별로 남는다).
+  if (!report.idleReason
+    && report.adopted === 0 && report.published === 0 && report.held === 0
+    && idleReasons.length > 0 && idleReasons.length === plan.rules.length) {
+    report.idleReason = idleReasons[0];
   }
 
   return report;
+}
+
+/**
+ * 실행 로그 한 줄 — dedupe 판정이 참이면 쓰지 않는다. **실제로 썼는지**를 돌려준다.
+ *
+ * 규칙 루프 안에서는 **반드시 note() 를 거쳐야** 하므로(logged 플래그) 실제 쓰기는 여기로
+ * 뺐다. 루프 안에 appendRuleRun 직접 호출이 하나라도 남으면 "아무 일도 안 했다" 오진이
+ * 나서 엉뚱한 사유가 로그에 박힌다 — 스캔 테스트가 그 재발을 막는다.
+ */
+async function writeRun(
+  ev: Parameters<typeof appendRuleRun>[0], dedupe?: Promise<boolean>,
+): Promise<boolean> {
+  if (dedupe && await dedupe) return false;
+  await appendRuleRun(ev);
+  return true;
+}
+
+/**
+ * 규칙 하나가 아무 일도 안 한 사유 — **판정은 항상 하고, 로그만 하루 한 줄로 막는다.**
+ * 사유 문구를 돌려준다(배너 후보). 일을 했으면 null.
+ *
+ * ⚠️ 예전엔 dedupe 에 걸리면 여기서 곧장 return 이라 **배너까지 같이 건너뛰었다** — 그래서
+ * 그날 첫 순방에만 배너가 차고, 이후 "지금 확인" 버튼은 유휴인데도 초록색 "규칙 1개 ·
+ * 미디어 0" 만 보여줬다. 로그(하루 1줄)와 배너(매번)는 주기가 다른 별개의 소비처다.
+ *
+ * 스팸 방지는 **문구 자체가 dedupe 키**다(KST 하루 한 줄). 순방은 15분마다 도니 가드가
+ * 없으면 규칙 하나가 하루 90여 줄을 쌓아, 화면이 보여주는 최근 50건이 이 줄로만 덮인다 —
+ * 사유를 남기려다 정작 중요한 사유를 가리는 자충수가 된다.
+ */
+async function noteRuleIdle(
+  rule: AutomationRule, obs: RuleIdleObservation,
+): Promise<string | null> {
+  const idle = ruleIdleNote(obs);
+  if (!idle) return null;
+  if (!(await hasRunNote(rule.id, null, null, "skipped", true, idle.detail))) {
+    await appendRuleRun({ ruleId: rule.id, clipId: null, result: "skipped", detail: idle.detail });
+  }
+  return idle.detail;
 }
 
 /**
@@ -479,21 +687,23 @@ export async function runAutomationCycle(): Promise<CycleReport> {
  */
 function autoUploadGate(platform: string): { send: boolean; recordOnly: boolean; offNote: string } {
   const on = { send: true, recordOnly: false, offNote: "" };
-  const blocked = (env: string) => ({
+  // ⚠️ 사용자 문구에 env 이름을 넣지 않는다 — 운영자가 할 수 있는 조치가 아니다(서버 설정).
+  // 어느 env 인지는 아래 switch 와 upload-gate.ts·CLAUDE.md 가 정본이다.
+  const blocked = () => ({
     send: false, recordOnly: false,
-    offNote: `실제 업로드가 꺼져 있습니다 (${env} 미설정) — 보내지 않음. 게이트를 켜면 다음 순방에 게시됩니다.`,
+    offNote: "실제 업로드가 꺼져 있어 이 채널로 보내지 않았습니다 — 담당자에게 업로드 설정을 켜 달라고 요청해 주세요. 켜지면 다음 확인 때 게시합니다.",
   });
-  const recordOnly = (env: string) => ({
+  const recordOnly = () => ({
     send: true, recordOnly: true,
-    offNote: `실제 업로드 꺼짐 (${env} 미설정) — 기록만 됨`,
+    offNote: "실제 업로드가 꺼져 있어 기록만 남겼습니다 — 담당자에게 업로드 설정을 켜 달라고 요청해 주세요.",
   });
   switch (platform) {
-    case "youtube": return youtubeUploadEnabled() ? on : blocked("YOUTUBE_UPLOAD_ENABLED");
+    case "youtube": return youtubeUploadEnabled() ? on : blocked();
     case "navertv":
-    case "naverclip": return naverUploadEnabled() ? on : blocked("NAVER_UPLOAD_ENABLED");
-    case "tiktok": return tiktokUploadEnabled() ? on : recordOnly("TIKTOK_UPLOAD_ENABLED");
-    case "instagram": return instagramUploadEnabled() ? on : recordOnly("INSTAGRAM_UPLOAD_ENABLED");
-    case "facebook": return facebookUploadEnabled() ? on : recordOnly("FACEBOOK_UPLOAD_ENABLED");
+    case "naverclip": return naverUploadEnabled() ? on : blocked();
+    case "tiktok": return tiktokUploadEnabled() ? on : recordOnly();
+    case "instagram": return instagramUploadEnabled() ? on : recordOnly();
+    case "facebook": return facebookUploadEnabled() ? on : recordOnly();
     default: return on;
   }
 }
@@ -503,23 +713,82 @@ function autoUploadGate(platform: string): { send: boolean; recordOnly: boolean;
  * 렌더 로직이 서버 라우트에 있는 이유(자막·훅 프리롤·썸네일 오버레이가 전부 거기)는
  * factory.ts 렌더 단계 주석과 같다 — 워커에서 복제하면 두 벌이 갈라진다.
  *
- * 던지지 않는다: 실패한 렌더는 다음 순방의 not_rendered 분기가 다시 요청한다.
+ * 던지지 않는다: 실패한 렌더는 다음 순방의 not_rendered 분기가 다시 요청한다 — 단
+ * **영원히는 아니다**(attemptAutoRender 의 안전벨트). 실패를 boolean 으로 삼키면 사유도
+ * 횟수도 어디에도 안 남아, 소스 소실 같은 영구 실패에 "곧 게시됩니다" 를 무한히 약속하게 된다.
  * 중복 렌더 방지(dedupe)는 두 겹 — (1) 순방 잡 자체가 automation.cycle:{tenantId}
  * dedupeKey 로 테넌트당 직렬이고, (2) /export 는 revision 캐시가 있어 이미 렌더된
  * 클립의 재요청은 재인코딩 없이 즉시 돌아온다.
  */
-async function requestAutoRender(clipId: string): Promise<boolean> {
+async function requestAutoRender(clipId: string): Promise<RenderOutcome> {
   try {
     const { apiBase, internalHeaders } = await import("./factory.ts");
     const res = await fetch(`${apiBase()}/api/clips/${clipId}/export`, {
       method: "POST", headers: await internalHeaders(),
     });
-    if (!res.ok) throw new Error(`export ${res.status}`);
-    return true;
+    if (res.ok) return { ok: true };
+    // 라우트가 code/error/message 로 사유를 준다 — 이걸 안 읽으면 "리프레임 대기" 와
+    // "원본 소실" 이 같은 실패로 뭉뚱그려져 멀쩡한 클립이 확정 실패로 죽는다.
+    const body = await res.json().catch(() => ({} as any)) as any;
+    const code = typeof body?.code === "string" ? body.code : (typeof body?.error === "string" ? body.error : null);
+    const msg = String(body?.message ?? body?.error ?? `export ${res.status}`);
+    console.warn(`[automation] 렌더 요청 실패 ${clipId}: ${res.status} ${msg.slice(0, 160)}`);
+    // status·code 를 함께 싣는다 — 사람이 읽는 사유(renderFailureReason)의 근거다.
+    // 영어 원문(error)은 상태에만 남고 실행 로그 문구에는 절대 안 들어간다.
+    return {
+      ok: false, kind: classifyRenderFailure(res.status, code),
+      error: `${res.status} ${msg}`, status: res.status, code,
+    };
   } catch (e) {
+    // 네트워크·타임아웃은 복구될 수 있다 — retryable(상태 0 은 어떤 HTTP 코드도 아니다).
     console.warn(`[automation] 렌더 요청 실패 ${clipId}: ${String(e).slice(0, 160)}`);
-    return false;
+    return {
+      ok: false, kind: classifyRenderFailure(0, null),
+      error: String(e).slice(0, 160), status: 0, code: null,
+    };
   }
+}
+
+/**
+ * 렌더 요청 + 안전벨트. AI 리프레임의 30분 정체 강등(REFRAME_STUCK_MS)과 같은 처방을
+ * 렌더에 건다 — 다만 강등할 대안이 없으니 **확정 실패로 넘겨 사람에게 알린다.**
+ *
+ * 상태는 실행 로그가 아니라 **클립 엔티티(`autoRender`)** 에 둔다. 실행 로그는 hasRunNote 로
+ * 일부러 중복을 안 남기는 사건 기록이라 횟수를 셀 수 없고, 화면에도 최근 50건만 남는다.
+ * 로그=사건, 엔티티=상태. 클립에 자동화 소유 필드(automationRuleId)와 리프레임 상태
+ * (clip.reframe)가 이미 사는 것도 같은 이유다.
+ */
+async function attemptAutoRender(
+  ruleId: string,
+  clip: any,
+  note: (ev: Parameters<typeof appendRuleRun>[0], dedupe?: Promise<boolean>) => Promise<void>,
+  report: CycleReport,
+): Promise<boolean> {
+  const clipId = String(clip.id);
+  const now = Date.now();
+  const prev = (clip.autoRender ?? null) as AutoRenderState | null;
+  const outcome = await requestAutoRender(clipId);
+  const next = nextAutoRenderState(prev, outcome, now);
+
+  if (JSON.stringify(prev ?? null) !== JSON.stringify(next ?? null)) {
+    // putEntity 는 클립 JSON 전체를 덮는다 — /export 가 방금 쓴 rendered:true·mediaId 를
+    // 되돌리지 않으려면 **최신 행 위에** 병합해야 한다(352 의 재조회와 같은 이유).
+    const fresh = (await getEntity<any>("clip", clipId)) ?? clip;
+    const merged: any = { ...fresh };
+    if (next) merged.autoRender = next; else delete merged.autoRender;
+    await putEntity("clip", clipId, merged);
+    Object.assign(clip, merged);
+    if (!next) delete clip.autoRender;
+  }
+
+  // 확정은 **상태 전이에서만** 기록한다. hasRunNote 를 가드로 쓰면 worker.ts 의 배포 실패가
+  // 같은 (규칙, 클립, 계정없음, failed) 키를 이미 점유해 렌더 실패가 한 줄도 안 남는다 —
+  // 침묵 쪽으로 실패하는 가드는 이 벨트가 고치려는 병 그 자체다.
+  if (next?.failed && !prev?.failed) {
+    report.renderFailed += 1;
+    await note({ ruleId, clipId, result: "failed", accountKey: null, detail: autoRenderFailedNote(next) });
+  }
+  return outcome.ok;
 }
 
 /**

@@ -15,15 +15,24 @@ import { describe, it } from "node:test";
 const SRC = path.dirname(fileURLToPath(import.meta.url));
 
 import {
+  AUTO_TOPUP_CODES,
+  AUTO_TOPUP_SEVERITY,
   MAX_TOPUP_CREDITS,
+  autoTopupActionHint,
+  autoTopupAlertExpired,
+  autoTopupNeedsAttention,
   buildTopup,
   checkCredits,
   creditPriceKrw,
+  kstDayKey,
+  liveAutoTopupAlert,
+  nextAutoTopupAlert,
   settleTopup,
   shouldAutoTopup,
   topupDedupeKey,
   topupPaymentId,
   usageDedupeKey,
+  type AutoTopupCode,
   type AutoTopupPolicy,
 } from "./credits.ts";
 
@@ -268,7 +277,11 @@ describe("자동 충전 — 상한이 없으면 못 켠다", () => {
   it("일 한도에 걸리면 멈춘다 — 조용히 계속 긁지 않는다", () => {
     const r = shouldAutoTopup({ ...base, todayCount: 2 });
     assert.equal(r.charge, false);
-    assert.match(r.charge === false ? r.reason : "", /한도/);
+    const reason = r.charge === false ? r.reason : "";
+    assert.match(reason, /한도/);
+    // 이 사유는 이제 사용자 화면(상시 배너)에 그대로 뜬다. "긁다" 는 우리끼리의 설계
+    // 설명이지 방송사 운영자가 읽을 말이 아니다 — 사실 + 다음 행동만 남긴다.
+    assert.doesNotMatch(reason, /긁/, "판정 로직의 설계 설명이 사용자 문구로 샜다");
   });
 
   it("월 한도를 넘기면 멈춘다", () => {
@@ -300,5 +313,170 @@ describe("자동 충전 — 상한이 없으면 못 켠다", () => {
       ...base, policy: { ...policy, maxPerDay: 999 }, todayCount: 10,
     });
     assert.equal(r2.charge, false, "일 절대 상한이 안 걸렸다");
+  });
+
+  it("판정마다 기계 판독 code 를 준다 — 문구가 바뀌어도 소비처가 안 깨진다", () => {
+    // 예전엔 "알려야 할 실패인가" 를 호출부가 사유 **문구 정규식**으로 갈랐다.
+    // 문구는 사람용이라 언제든 바뀐다 — code 가 판정의 정본이어야 한다.
+    const cases: [AutoTopupCode, Parameters<typeof shouldAutoTopup>[0]][] = [
+      ["disabled", { ...base, policy: { ...policy, enabled: false } }],
+      ["bad_policy", { ...base, policy: { ...policy, topupCredits: 60 } }],
+      ["above_threshold", { ...base, balance: 100 }],
+      ["daily_cap", { ...base, todayCount: 2 }],
+      ["monthly_cap", { ...base, monthKrw: 190_000 }],
+    ];
+    for (const [code, input] of cases) {
+      const r = shouldAutoTopup(input);
+      assert.equal(r.charge, false, `${code} 케이스가 통과했다`);
+      assert.equal(r.charge === false ? r.code : "", code);
+    }
+  });
+});
+
+/**
+ * 자동 충전 실패 알림 — **정상 사유는 노이즈다.**
+ *
+ * 실패가 화면에 안 뜨는 것과, 정상 사유까지 다 띄워 경고가 배경음이 되는 것은 같은 구멍의
+ * 양쪽 끝이다. 무엇을 알리고 무엇을 지우는지의 **실행 가능한 정의**를 여기 고정한다.
+ */
+describe("자동 충전 실패 알림", () => {
+  const at = (n: number) => `2026-08-18T0${n}:00:00.000Z`;
+
+  it("정상 사유는 알림을 만들지 않는다 — 꺼짐·잔액 충분·정산됨·충전됨·카드 미등록", () => {
+    for (const code of ["charged", "disabled", "above_threshold", "reconciled", "no_card", "unverified"] as const) {
+      assert.equal(
+        nextAutoTopupAlert(null, { code, reason: "무언가" }, at(1)), null,
+        `${code} 는 사용자가 할 일이 없다 — 알리면 진짜 경고가 묻힌다`,
+      );
+      assert.equal(autoTopupNeedsAttention(code), false);
+    }
+  });
+
+  it("조치가 필요한 실패는 알림 + 할 일(hint) 을 같이 남긴다", () => {
+    // 사유만 있고 할 일이 없으면 사용자는 여전히 카드사에 뭘 물어야 할지 모른다.
+    for (const code of [
+      "card_revoked", "no_buyer_info", "bad_amount", "bad_policy", "price_unset",
+      "daily_cap", "monthly_cap", "charge_declined",
+    ] as const) {
+      const a = nextAutoTopupAlert(null, { code, reason: "실패 사유", balance: 0 }, at(1));
+      assert.ok(a, `${code} 알림이 안 만들어졌다`);
+      assert.equal(a!.code, code);
+      assert.equal(a!.message, "실패 사유");
+      assert.notEqual(a!.hint.trim(), "", `${code} 에 조치 안내가 없다`);
+      assert.equal(a!.firstAt, at(1));
+      assert.equal(a!.count, 1);
+      assert.equal(a!.balance, 0);
+    }
+  });
+
+  it("모든 code 가 심각도로 분류돼 있다 — 미분류가 조용히 생기면 구멍이 재발한다", () => {
+    for (const code of AUTO_TOPUP_CODES) {
+      assert.ok(AUTO_TOPUP_SEVERITY[code], `${code} 가 분류되지 않았다`);
+    }
+    // action_required 는 전부 조치 문구가 있어야 한다(반대로 info/ok 는 없어야 노이즈가 안 된다).
+    for (const code of AUTO_TOPUP_CODES) {
+      const hint = autoTopupActionHint(code);
+      if (AUTO_TOPUP_SEVERITY[code] === "action_required") assert.notEqual(hint, "", `${code} hint 누락`);
+      else assert.equal(hint, "", `${code} 는 알리지 않는데 조치 문구가 있다`);
+    }
+  });
+
+  it("사용자가 못 고치는 실패에 사용자 조치를 시키지 않는다 — 단가 미설정 vs 충전량 오류", () => {
+    // 단가는 **서비스 쪽 설정**이다. 예전엔 둘 다 bad_amount 로 접혀 "자동 충전 설정에서
+    // 충전량을 다시 지정하세요" 라고 안내했는데, 사용자가 충전량을 몇 번을 고쳐도 안 풀린다.
+    const price = autoTopupActionHint("price_unset");
+    assert.match(price, /문의/, "사용자가 못 푸는 실패인데 문의처가 없다");
+    assert.doesNotMatch(price, /충전량/, "충전량을 고치라고 안내한다 — 그래도 안 풀린다");
+    assert.notEqual(price, autoTopupActionHint("bad_amount"), "두 사유가 같은 조치를 안내한다");
+    // 설정 이름(서버 env)은 사용자 화면에 나가지 않는다.
+    for (const code of AUTO_TOPUP_CODES) {
+      assert.doesNotMatch(autoTopupActionHint(code), /[A-Z_]{6,}/, `${code}: 설정 이름이 문구로 샜다`);
+    }
+  });
+
+  it("같은 사유가 반복되면 한 건으로 센다 — firstAt 보존 + count 증가", () => {
+    // 분석이 끝날 때마다 도는 경로라 로그처럼 쌓으면 화면이 같은 줄로 덮인다
+    // (rule_run 의 hasRunNote 와 같은 정신). "언제부터 실패 중인지" 가 보존돼야 한다.
+    let a = nextAutoTopupAlert(null, { code: "charge_declined", reason: "한도초과" }, at(1));
+    a = nextAutoTopupAlert(a, { code: "charge_declined", reason: "한도초과" }, at(2));
+    a = nextAutoTopupAlert(a, { code: "charge_declined", reason: "한도초과" }, at(3));
+    assert.equal(a!.count, 3);
+    assert.equal(a!.firstAt, at(1), "처음 실패한 시각이 덮였다 — 카드사에 물을 근거가 사라진다");
+    assert.equal(a!.lastAt, at(3));
+  });
+
+  it("사유가 바뀌면 새 알림이다 — 옛 시각을 물려주지 않는다", () => {
+    const prev = nextAutoTopupAlert(null, { code: "charge_declined", reason: "한도초과" }, at(1));
+    const next = nextAutoTopupAlert(prev, { code: "monthly_cap", reason: "월 한도" }, at(2));
+    assert.equal(next!.code, "monthly_cap");
+    assert.equal(next!.firstAt, at(2));
+    assert.equal(next!.count, 1);
+  });
+
+  it("해소되면 알림을 지운다 — 해결된 경고가 남으면 다음부터 아무도 안 본다", () => {
+    const prev = nextAutoTopupAlert(null, { code: "charge_declined", reason: "한도초과" }, at(1));
+    assert.ok(prev);
+    // 사용자가 직접 충전(잔액 회복) 하거나, 다음 시도가 성공한 경우.
+    assert.equal(nextAutoTopupAlert(prev, { code: "above_threshold", reason: "잔액이 임계보다 많습니다." }, at(2)), null);
+    assert.equal(nextAutoTopupAlert(prev, { code: "charged", reason: "" }, at(2)), null);
+  });
+});
+
+/**
+ * 상한 알림의 **유효기간** — "오늘" 이라고 쓰려면 정말 오늘이어야 한다.
+ *
+ * 알림을 지우는 유일한 경로가 "다음 maybeAutoTopup 이 정상 판정" 인데, 그 호출부는 분석
+ * 완료뿐이다 — 잔액 0 으로 분석이 멈추면 영영 다시 안 불려 사흘 전 daily_cap 이 그대로
+ * 남는다. 사용자는 사흘 전 기록을 보고 오늘 상한에 걸린 줄 안다.
+ */
+describe("자동 충전 상한 알림은 기간이 지나면 만료된다", () => {
+  const alert = (code: "daily_cap" | "monthly_cap" | "charge_declined", lastAt: string) =>
+    nextAutoTopupAlert(null, { code, reason: "사유" }, lastAt)!;
+
+  it("daily_cap 은 KST 날짜가 바뀌면 만료 — 같은 날이면 유효", () => {
+    const a = alert("daily_cap", "2026-08-15T02:00:00.000Z"); // KST 8/15 11:00
+    assert.equal(a.kstDay, "2026-08-15");
+    assert.equal(autoTopupAlertExpired(a, "2026-08-15T13:00:00.000Z"), false, "같은 KST 날짜인데 만료됐다");
+    assert.equal(autoTopupAlertExpired(a, "2026-08-18T02:00:00.000Z"), true,
+      "사흘 전 기록이 오늘 '오늘 상한 도달' 로 보인다");
+  });
+
+  it("경계는 KST 자정(UTC 15:00) 이다 — 서버 타임존과 무관하게 같은 판정", () => {
+    const a = alert("daily_cap", "2026-08-15T14:59:00.000Z"); // 아직 KST 8/15
+    assert.equal(a.kstDay, "2026-08-15");
+    assert.equal(autoTopupAlertExpired(a, "2026-08-15T14:59:59.000Z"), false);
+    assert.equal(autoTopupAlertExpired(a, "2026-08-15T15:00:00.000Z"), true, "KST 자정을 넘겼는데 그대로다");
+  });
+
+  it("monthly_cap 은 달이 바뀌어야 만료 — 같은 달 다른 날은 유효", () => {
+    const a = alert("monthly_cap", "2026-08-03T02:00:00.000Z");
+    assert.equal(autoTopupAlertExpired(a, "2026-08-28T02:00:00.000Z"), false, "이번 달 상한은 이번 달 내내 참이다");
+    assert.equal(autoTopupAlertExpired(a, "2026-09-01T02:00:00.000Z"), true, "달이 바뀌었는데 '이번 달' 이라고 한다");
+  });
+
+  it("사람이 조치해야 끝나는 사유는 안 늙는다 — 카드 거절은 한 달 뒤에도 유효하다", () => {
+    // 기간으로 지우면 안 되는 쪽이다. 카드가 여전히 막혀 있는데 경고만 사라지면
+    // 자동 충전이 조용히 멈춘 상태로 돌아간다(이 기능이 메우려던 바로 그 구멍).
+    const a = alert("charge_declined", "2026-08-03T02:00:00.000Z");
+    assert.equal(autoTopupAlertExpired(a, "2026-09-30T02:00:00.000Z"), false);
+  });
+
+  it("kstDay 이전에 저장된 알림은 lastAt 으로 판정한다 — 배포 순간의 기존 알림도 늙는다", () => {
+    const legacy = { ...alert("daily_cap", "2026-08-15T02:00:00.000Z"), kstDay: "" };
+    assert.equal(autoTopupAlertExpired(legacy, "2026-08-15T13:00:00.000Z"), false);
+    assert.equal(autoTopupAlertExpired(legacy, "2026-08-18T02:00:00.000Z"), true);
+  });
+
+  it("언제 생긴 건지 못 읽으면 만료로 본다 — 모르면 '오늘' 이라고 주장하지 않는다", () => {
+    const broken = { ...alert("daily_cap", "2026-08-15T02:00:00.000Z"), kstDay: "", lastAt: "깨진 값" };
+    assert.equal(kstDayKey("깨진 값"), "");
+    assert.equal(autoTopupAlertExpired(broken, "2026-08-15T13:00:00.000Z"), true);
+  });
+
+  it("읽는 쪽 게이트(liveAutoTopupAlert)가 만료분을 null 로 만든다", () => {
+    const a = alert("daily_cap", "2026-08-15T02:00:00.000Z");
+    assert.equal(liveAutoTopupAlert(a, "2026-08-15T13:00:00.000Z"), a);
+    assert.equal(liveAutoTopupAlert(a, "2026-08-18T02:00:00.000Z"), null);
+    assert.equal(liveAutoTopupAlert(null, "2026-08-18T02:00:00.000Z"), null);
   });
 });

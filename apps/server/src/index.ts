@@ -46,7 +46,7 @@ import {
 import { audit, clientIp, requireReason, requireSuperadmin, requireOpsAccess, requireOpsOrInternal } from "./admin.ts";
 import { grantDedupeKey, nextTenantId, planOnboarding } from "./onboarding.ts";
 import {
-  billingConfig, cardBlockReason, cardLabel, cardTopupPaymentId, checkCustomer,
+  billingConfig, cardBlockReason, cardLabel, cardTopupPaymentId, checkCustomer, declineMessage,
   extractCardDisplay, issueIdFor, unwrapPayment, verifyCharge,
 } from "./billing-card.ts";
 import { buildInvoice, issuerInfo, monthRange, parseMonth } from "./invoice.ts";
@@ -110,6 +110,7 @@ import {
   openHolds,
   getAutomationSetting,
   setAutomationSetting,
+  getAutoTopupAlert,
   creditBalance,
   addCreditEntry,
   listCreditLedger,
@@ -301,7 +302,9 @@ import {
 } from "./credits.ts";
 import { billableMinutes, portoneConfigured } from "./billing.ts";
 import { chargeWithBillingKey, getBillingKeyInfo, getPayment, verifyWebhook } from "./portone.ts";
-import { maybeAutoTopup } from "./auto-topup.ts";
+// 자동 충전 알림 해제는 **이 한 함수**로만 한다 — 라우트마다 db-pg 의 저장 함수를 직접
+// 부르면 반드시 한 자리가 빠진다(실제로 직접 충전 경로가 빠져 있었다).
+import { clearAutoTopupAlert, maybeAutoTopup } from "./auto-topup.ts";
 import { commitAndInherit } from "./adopt.ts";
 import { runAutomationCycle } from "./automation-cycle.ts";
 import {
@@ -4944,12 +4947,13 @@ async function gateFor(subjectType: GateSubjectType, subjectId: string): Promise
 const PAUSE_KEY = "automation.paused";
 
 app.get("/api/automation", async (c) => {
-  const [rules, runs, holds, paused, balance] = await Promise.all([
+  const [rules, runs, holds, paused, balance, autoTopupAlert] = await Promise.all([
     listAutomationRules(),
     listRuleRuns(50),
     openHolds(),
     getAutomationSetting(PAUSE_KEY),
     creditBalance(),
+    getAutoTopupAlert(),
   ]);
   const plan = planCycle({ paused: paused === "true", rules: rules as any });
   // 규칙×채널별 오늘 게시 수 — 순방이 한도 판정에 쓰는 publishedTodayKst 그대로.
@@ -4975,6 +4979,11 @@ app.get("/api/automation", async (c) => {
     // 순방(runAutomationCycle)이 크레딧 부족으로 정지 중이면 화면도 같은 사유를 보여야
     // 한다 — 규칙이 멀쩡한데 아무것도 안 나가는 상태를 사용자가 추리하게 두지 않는다.
     idleReason: balance <= 0 ? CREDIT_IDLE_REASON : plan.idleReason,
+    // "크레딧 부족" 바로 옆에 **왜 자동 충전이 그걸 못 메웠는지**를 같이 준다. 이게 없으면
+    // 사용자는 잔액이 0 인 것만 보고 카드 문제(한도초과·해지·상한 도달)를 추리해야 한다 —
+    // 자동 충전 실패는 무인 경로라 사용자가 볼 자리가 애초에 없었다. 조치가 필요한 실패일
+    // 때만 값이 있다(정상 사유는 credits.ts 심각도 표에서 걸러진다).
+    autoTopupAlert,
     // 채널별 실업로드 스위치 — 게이트 경고 배너·"기록만" 배지의 생산자. 플랫폼 키 단독
     // (계정 무관 env 스위치라 계정별로 다를 수 없다).
     gates: {
@@ -5341,6 +5350,9 @@ app.post("/api/billing/card", async (c) => {
     issuedBy: actor,
     buyer: who.customer,
   });
+  // 카드 재등록이 곧 조치다 — 옛 실패 사유(해지된 카드·구매자 정보 없음·승인 거절)를 지운다.
+  // 안 지우면 조치한 뒤에도 경고가 남아 화면이 거짓말한다(그 다음부터 아무도 경고를 안 본다).
+  await clearAutoTopupAlert("card-register");
   return c.json({
     ok: true,
     card: {
@@ -5484,8 +5496,13 @@ app.post("/api/credits/topup/card", async (c) => {
       if (alreadyPaid) {
         console.warn(`[billing] 카드충전 already-paid ${paymentId} — 아래 재조회로 정산 시도`);
       } else {
+        // 우리가 만든 "포트원 POST … 실패 (400)" 을 그대로 보여주면 사용자가 할 수 있는 게
+        // 없다 — 진짜 거절 사유(한도초과·정지)는 응답 body 의 pgMessage 다. 자동 충전과
+        // **같은 함수**를 써서 두 경로의 문구가 갈라지지 않게 한다.
+        // 원문은 여기 로그에만 남긴다(declineMessage 는 사람 말만 돌려준다).
+        console.warn(`[billing] 카드충전 거절 ${paymentId}:`, e?.message ?? e);
         await markTopupPaid(paymentId, "failed");
-        return c.json({ error: "charge_failed", message: String(e?.message ?? e) }, 402);
+        return c.json({ error: "charge_failed", message: declineMessage(e) }, 402);
       }
     }
 
@@ -5508,10 +5525,13 @@ app.post("/api/credits/topup/card", async (c) => {
       // failed 로 찍지 않는다 — 응답 모양이 어긋났을 뿐 **돈은 나갔을 수 있다.**
       // pending 으로 두면 포트원 웹훅(실제 승인 사실)이 정산한다. 여기서 failed 로 닫으면
       // 로그가 "안 긁힘" 이라고 거짓말하고, 사용자는 재결제해 이중 청구가 된다.
+      // 원문(결제사 상태값이 들어 있다)은 로그에만 — 자동 충전의 같은 상태(unverified)와
+      // 같은 어휘로 사용자에게 말한다. 두 경로가 다른 말을 하면 같은 사건이 달라 보인다.
       console.warn(`[billing] 카드충전 확인 보류 ${paymentId}: ${verdict.message} — 웹훅 정산 대기`);
       return c.json({
         error: "charge_unverified",
-        message: `결제 확인 중입니다 — ${verdict.message} 승인 여부는 포트원 웹훅으로 정산됩니다. 잠시 후 잔액을 확인하세요.`,
+        message: "결제 확인 중입니다 — 확인되면 크레딧이 자동으로 올라갑니다."
+          + " 잠시 후 잔액을 확인해 주세요. 확인될 때까지 다시 결제하지 마세요.",
       }, 409);
     }
 
@@ -5529,6 +5549,10 @@ app.post("/api/credits/topup/card", async (c) => {
       dedupeKey: topupDedupeKey(paymentId),
     });
     await markTopupPaid(paymentId, "paid");
+    // 직접 충전 성공도 **조치**다 — no_buyer_info 힌트가 "직접 충전 1회로 채워집니다"(위
+    // updateBillingCardBuyer 백필) 라고 안내하고, 상한 도달 힌트도 "지금 필요하면 직접
+    // 충전하세요" 라고 안내한다. 안내한 대로 했는데 경고가 그대로면 화면이 거짓말한다.
+    await clearAutoTopupAlert("manual-topup");
     const balance = await creditBalance();
     return c.json({ ok: true, paymentId, credits: check.credits, amountKrw: check.amountKrw, balance });
   });
@@ -5588,6 +5612,9 @@ app.put("/api/credits/auto-topup", async (c) => {
   const policy = await saveAutoTopupPolicy({
     enabled, thresholdCredits, topupCredits, maxPerDay, maxKrwPerMonth, updatedBy: manager.email,
   });
+  // 설정을 고쳤으면(상한 조정·충전량 수정·끄기) 그 사유로 걸려 있던 알림은 낡은 값이다.
+  // 다음 시도에서 여전히 실패하면 알림이 다시 생긴다 — 남겨두는 쪽이 거짓말이다.
+  await clearAutoTopupAlert("policy-save");
   return c.json({ ok: true, policy });
 });
 
@@ -5601,12 +5628,17 @@ app.post("/api/credits/auto-topup/run", async (c) => {
 
 app.get("/api/credits", async (c) => {
   // "user" 스코프 — PG 취소·실패 이벤트의 delta 0 운영 기록은 사용자 결제 내역이 아니다.
-  const [balance, ledger] = await Promise.all([creditBalance(), listCreditLedger(50, "user")]);
+  const [balance, ledger, autoTopupAlert] = await Promise.all([
+    creditBalance(), listCreditLedger(50, "user"), getAutoTopupAlert(),
+  ]);
   return c.json({
     balance,
     unit: CREDIT_UNIT_LABEL,
     priceKrw: creditPriceKrw(),
     ledger,
+    // 자동 충전이 조치 필요 사유로 실패 중이면 여기서도 보여준다 — /api/automation 은
+    // "왜 안 나가지"를 묻는 자리고, 여기는 실제로 조치(카드 재등록·상한 조정)하는 자리다.
+    autoTopupAlert,
   });
 });
 

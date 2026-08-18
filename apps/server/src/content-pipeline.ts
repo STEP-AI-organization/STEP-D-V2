@@ -40,7 +40,7 @@ import {
 } from "./db-pg.ts";
 import type { TranscriptSegment, SearchSegmentRow } from "./db-pg.ts";
 import { billableMinutes, estimatedCostKrw, usageDedupeKey } from "./billing.ts";
-import { usageDedupeKey as creditUsageKey } from "./credits.ts";
+import { autoTopupNeedsAttention, usageDedupeKey as creditUsageKey } from "./credits.ts";
 import { maybeAutoTopup } from "./auto-topup.ts";
 import { toCoreRegistry, timelineToRows } from "./cast.ts";
 import { createReadStream, parseObjectPath, readFile, uploadFile, useGcs } from "./storage-gcs.ts";
@@ -1638,10 +1638,14 @@ export async function runContentAnalyze(
 
         // 차감으로 잔액이 임계 아래로 떨어졌으면 저장 카드로 자동 충전(정책 켜진 경우만).
         // **best-effort** — 자동 충전 실패가 분석을 깨면 안 되므로 던지지 않고 로그만 남긴다.
+        // 사용자에게 보이는 알림은 maybeAutoTopup 안에서 저장된다(호출부별 배선 금지).
         try {
           const r = await maybeAutoTopup();
           if (r.charged) console.log(`[auto-topup] ${mediaId}: +${r.credits} 크레딧 자동 충전`);
-          else if (r.reason && !/꺼져|임계보다 많|카드가 없/.test(r.reason)) {
+          // ⚠️ 사유 **문구**로 거르지 않는다. 예전엔 여기 정규식이 판정이라, 문구를 고치면
+          // 판정이 깨지고 "미정산 정산했습니다" 같은 정상 결과도 매번 경고로 나갔다.
+          // 판정의 정본은 credits.ts 의 심각도 표 하나뿐이다(화면 알림도 같은 걸 본다).
+          else if (autoTopupNeedsAttention(r.code)) {
             console.warn(`[auto-topup] ${mediaId}: 자동 충전 안 됨 — ${r.reason}`);
           }
         } catch (e) {

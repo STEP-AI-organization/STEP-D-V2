@@ -20,21 +20,32 @@ import {
   autoTopupTodayCount,
   createTopup,
   creditBalance,
+  getAutoTopupAlert,
   getAutoTopupPolicy,
   getBillingCard,
   listUnsettledAutoTopups,
   markTopupPaid,
+  setAutoTopupAlert,
   withTenantLock,
 } from "./db-pg.ts";
-import { cardBlockReason, cardTopupPaymentId, verifyCharge } from "./billing-card.ts";
+import { cardBlock, cardTopupPaymentId, declineMessage, verifyCharge } from "./billing-card.ts";
 import { chargeWithBillingKey, getPayment } from "./portone.ts";
-import { buildTopup, shouldAutoTopup, topupDedupeKey } from "./credits.ts";
+import {
+  buildTopup, creditPriceKrw, nextAutoTopupAlert, shouldAutoTopup, topupDedupeKey,
+  type AutoTopupCode,
+} from "./credits.ts";
 import { currentTenantId } from "./tenant.ts";
 
 export interface AutoTopupResult {
   charged: boolean;
   /** 왜 충전했/안 했는지 — 로그·화면용. 충전했으면 빈 문자열. */
   reason: string;
+  /**
+   * 기계 판독 사유. **필수다** — optional 로 두면 미분류 return 이 조용히 생겨
+   * "조치가 필요한 실패인데 아무 데도 안 보임"(이 기능이 메우려는 구멍)이 재발한다.
+   * 필수라서 return 하나를 빠뜨리면 tsc 가 잡는다.
+   */
+  code: AutoTopupCode;
   credits?: number;
   amountKrw?: number;
   balance?: number;
@@ -59,22 +70,27 @@ export function autoTopupNonce(kstDate: string, slot: number): string {
 /**
  * 필요하면 자동 충전한다. **현재 테넌트 컨텍스트 안에서** 호출할 것.
  * 절대 예외를 밖으로 던지지 않는다 — 자동 충전 실패가 분석 잡을 깨면 안 된다(호출부가 삼킨다).
+ *
+ * 알림 저장은 이걸 감싼 `maybeAutoTopup` 이 한다 — 이 함수는 판정·결제만 한다.
  */
-export async function maybeAutoTopup(): Promise<AutoTopupResult> {
+async function runAutoTopup(): Promise<AutoTopupResult> {
   const policy = await getAutoTopupPolicy();
-  if (!policy || !policy.enabled) return { charged: false, reason: "자동 충전이 꺼져 있습니다." };
+  if (!policy || !policy.enabled) return { charged: false, code: "disabled", reason: "자동 충전이 꺼져 있습니다." };
 
   // 카드가 없으면(미등록·해지) 자동 충전은 성립하지 않는다.
   const card = await getBillingCard();
-  const blocked = cardBlockReason(card);
-  if (blocked) return { charged: false, reason: blocked };
+  const blocked = cardBlock(card);
+  if (blocked) return { charged: false, code: blocked.code, reason: blocked.reason };
 
   // 빌링키 결제의 customer 필수 3종(이니시스). 자동 경로엔 화면 입력 폴백이 없다 —
   // 0037 이전 카드(저장분 없음)는 수동 충전 1회 성공(백필) 또는 카드 재등록이 선행돼야 한다.
   if (!card?.buyerName || !card?.buyerEmail || !card?.buyerPhone) {
     return {
       charged: false,
-      reason: "카드에 구매자 정보가 없어 자동 결제를 보낼 수 없습니다 — 수동 충전 1회 또는 카드 재등록 후 다시 켜집니다.",
+      code: "no_buyer_info",
+      // 같은 조치를 여기선 "수동 충전", 힌트에선 "직접 충전" 이라 불러 화면에 두 이름이 같이
+      // 떴다 — 사용자는 서로 다른 두 가지 방법이 있는 줄 안다. 화면 어휘("직접 충전")로 통일.
+      reason: "카드에 구매자 정보가 없어 자동 결제를 보낼 수 없습니다 — 직접 충전 1회 또는 카드 재등록으로 채워집니다.",
     };
   }
   const customer = { fullName: card.buyerName, email: card.buyerEmail, phoneNumber: card.buyerPhone };
@@ -83,7 +99,17 @@ export async function maybeAutoTopup(): Promise<AutoTopupResult> {
 
   // 충전 금액은 **서버가** 정책의 topupCredits 로 계산한다(단가·최소/최대 검증 포함).
   const check = buildTopup(policy.topupCredits);
-  if (!check.ok) return { charged: false, reason: `자동 충전 금액이 올바르지 않습니다: ${check.reason}` };
+  if (!check.ok) {
+    // ⚠️ **사용자가 고칠 수 있는 실패와 아닌 실패를 가른다.** 예전엔 둘 다 bad_amount 라
+    // 단가 미설정(서비스 쪽 설정)에도 "자동 충전 설정에서 충전량을 다시 지정하세요" 라는
+    // 힌트가 붙었다 — 사용자가 충전량을 몇 번을 고쳐도 절대 안 풀린다. 게다가 buildTopup 의
+    // 원문에는 설정 이름이 들어 있어 그대로 붙이면 그것도 화면에 샌다.
+    if (creditPriceKrw() == null) {
+      console.error("[auto-topup] 크레딧 단가 미설정 — 자동 충전 불가(서버 설정 필요)");
+      return { charged: false, code: "price_unset", reason: "결제 단가가 설정되지 않아 자동 충전을 보낼 수 없습니다." };
+    }
+    return { charged: false, code: "bad_amount", reason: `자동 충전 금액이 올바르지 않습니다: ${check.reason}` };
+  }
 
   // ⚠️ 하루 상한은 **시도** 기준으로 센다(성공분만 세면 안 된다).
   // 카드가 한도초과·정지면 승인은 0건이라 maxPerDay 도 절대상한(10회)도 영원히 안 걸리고,
@@ -104,7 +130,7 @@ export async function maybeAutoTopup(): Promise<AutoTopupResult> {
     monthKrw,
     amountKrw: check.amountKrw,
   });
-  if (!verdict.charge) return { charged: false, reason: verdict.reason, balance };
+  if (!verdict.charge) return { charged: false, code: verdict.code, reason: verdict.reason, balance };
 
   // ── 판정~과금은 테넌트 잠금 안에서 직렬화한다 ────────────────────────────────────
   // 동시 트리거(분석 잡 여러 개가 나란히 차감) 둘이 위 판정을 같이 통과하면 카드가 두 번
@@ -130,7 +156,7 @@ export async function maybeAutoTopup(): Promise<AutoTopupResult> {
       monthKrw: monthKrw2,
       amountKrw: check.amountKrw,
     });
-    if (!verdict2.charge) return { charged: false, reason: verdict2.reason, balance: balance2 };
+    if (!verdict2.charge) return { charged: false, code: verdict2.code, reason: verdict2.reason, balance: balance2 };
 
     // ── 미정산 주문 정산 — 새 결제 **전에** ─────────────────────────────────────────
     // 결제 호출이 승인 뒤 타임아웃으로 끊기면 주문은 pending/failed 인데 카드는 긁혀 있다.
@@ -162,6 +188,7 @@ export async function maybeAutoTopup(): Promise<AutoTopupResult> {
       await markTopupPaid(order.paymentId, "paid");
       return {
         charged: false,
+        code: "reconciled",
         reason: "미정산 자동 충전을 정산했습니다 — 이번 순번은 새 결제 없이 끝냅니다.",
         credits: order.credits,
         amountKrw: order.amountKrw,
@@ -192,8 +219,12 @@ export async function maybeAutoTopup(): Promise<AutoTopupResult> {
         JSON.stringify((e as { body?: unknown })?.body ?? "") + String(e instanceof Error ? e.message : e));
       if (!alreadyPaid) {
         // 진짜 거절(한도·정지 카드 등) — 여기만 failed 가 맞다.
+        // 문구는 declineMessage 로 만든다: 우리가 만든 "포트원 POST … 실패 (400)" 을 그대로
+        // 남기면 사용자가 카드사에 물을 것이 하나도 없다(진짜 사유는 응답 body 의 pgMessage).
         await markTopupPaid(paymentId, "failed").catch(() => {});
-        return { charged: false, reason: `자동 충전 결제 실패: ${e instanceof Error ? e.message : String(e)}` };
+        // 원문은 **로그에만** 남긴다 — 사용자 알림에는 declineMessage 가 만든 사람 말만 간다.
+        console.warn(`[auto-topup] 결제 거절 ${paymentId}:`, e instanceof Error ? e.message : e);
+        return { charged: false, code: "charge_declined", reason: `자동 충전 결제 실패: ${declineMessage(e)}` };
       }
     }
 
@@ -209,7 +240,15 @@ export async function maybeAutoTopup(): Promise<AutoTopupResult> {
       // 다음 트리거의 미정산 정산(위 reconcile)이 진실을 반영한다. 결제 호출이 거절된 것
       // (위 catch)과 확인이 안 된 것은 다른 사건이다 — 같은 failed 로 뭉뚱그리면 기록이
       // 거짓말한다.
-      return { charged: false, reason: `자동 충전 확인 보류: ${ver.message} — 웹훅/재조회가 정산합니다.` };
+      //
+      // 문구에 ver.message 를 붙이면 "결제가 완료되지 않았습니다 (상태 READY)" 처럼 결제사
+      // 상태값이 그대로 뜨고, "웹훅/재조회가 정산합니다" 는 우리끼리 쓰는 말이다.
+      // 원문은 로그로, 사용자에게는 지금 상태와 할 일(=없음)만.
+      console.warn(`[auto-topup] 결제 확인 보류 ${paymentId}: ${ver.message}`);
+      return {
+        charged: false, code: "unverified",
+        reason: "결제 확인 중입니다 — 확인되면 크레딧이 자동으로 올라갑니다. 확인될 때까지 다시 결제하지 않습니다.",
+      };
     }
 
     // ⚠️ **원장 먼저**(멱등 dedupe_key), 상태는 그 사실의 표시로 뒤에. 수동 경로와 같은 순서 —
@@ -227,10 +266,57 @@ export async function maybeAutoTopup(): Promise<AutoTopupResult> {
 
     return {
       charged: true,
+      code: "charged",
       reason: "",
       credits: check.credits,
       amountKrw: check.amountKrw,
       balance: balance2 + check.credits,
     };
   });
+}
+
+/**
+ * 자동 충전 + **결과를 제품 안에 남기기**.
+ *
+ * 예전엔 실패 사유가 호출부의 `console.warn` 하나로 끝나, 카드 한도초과·정지·상한 도달처럼
+ * **사용자가 조치해야 끝나는 실패**가 화면 어디에도 없었다. 잔액이 0 이 되면 순방은
+ * "크레딧 부족" 만 말하고 왜 자동 충전이 그걸 못 메웠는지는 아무도 몰랐다.
+ *
+ * 그래서 저장을 **호출부가 아니라 여기** 한 곳에 둔다 — 분석 완료 경로든 수동 실행
+ * 라우트든 어디로 들어와도 같은 알림이 남는다(호출부마다 배선하면 반드시 한쪽이 빠진다).
+ * 알림 쓰기 실패가 충전 결과를 뒤집으면 안 되므로 삼키되, 조용히 넘기지는 않는다.
+ */
+export async function maybeAutoTopup(): Promise<AutoTopupResult> {
+  const result = await runAutoTopup();
+  try {
+    const prev = await getAutoTopupAlert();
+    const next = nextAutoTopupAlert(prev, result, new Date().toISOString());
+    // 해제(next=null)도 저장한다 — 해결된 경고가 남아 있으면 다음부터 아무도 안 본다.
+    // 애초에 알림이 없고 지금도 없으면 쓰지 않는다(분석마다 도는 경로라 무의미한 왕복 제거).
+    if (next || prev) await setAutoTopupAlert(next);
+  } catch (e) {
+    console.error("[auto-topup] 실패 알림 저장 실패(충전 결과는 유효):", e instanceof Error ? e.message : e);
+  }
+  return result;
+}
+
+/**
+ * 자동 충전 경고를 **해제**한다 — 사용자가 그 문제를 해결한 자리에서 부른다
+ * (카드 재등록 · 자동 충전 설정 저장 · **직접 충전 성공**).
+ *
+ * 해제 지점을 라우트마다 각자 배선하면 반드시 한 곳이 빠진다 — 실제로 직접 충전
+ * (POST /api/credits/topup/card) 이 빠져서, no_buyer_info 힌트가 "직접 충전 1회로 채워집니다"
+ * 라고 안내해 놓고 사용자가 그대로 했는데 경고가 그대로 남았다. 안내한 조치를 했는데 화면이
+ * 안 바뀌면 사용자는 그 다음부터 경고를 안 믿는다.
+ *
+ * 남은 사유가 아직 유효하면 다음 시도가 같은 알림을 다시 만든다 — 지우는 쪽이 안전한 방향이다
+ * (거짓 경고는 진짜 경고를 가리지만, 지워진 경고는 다음 트리거에 되살아난다).
+ * 실패는 삼킨다: 알림은 사후 표시라, 이것 때문에 결제·설정 저장을 되돌리면 손해가 더 크다.
+ */
+export async function clearAutoTopupAlert(where: string): Promise<void> {
+  try {
+    await setAutoTopupAlert(null);
+  } catch (e) {
+    console.warn(`[auto-topup] 알림 해제 실패(${where} · 무시):`, e instanceof Error ? e.message : e);
+  }
 }

@@ -8,6 +8,8 @@ import { randomUUID } from "node:crypto";
 import pg from "pg";
 import { seed } from "./seed.ts";
 import { ALL_TENANTS, DEFAULT_TENANT_ID, currentScope, runAsSystem, runWithTenant } from "./tenant.ts";
+// 자동 충전 알림의 **모양·사유 목록·유효기간은 credits.ts(순수)가 정본**이다 — 여기선 저장만 한다.
+import { AUTO_TOPUP_CODES, liveAutoTopupAlert, type AutoTopupAlert } from "./credits.ts";
 
 const { Pool } = pg;
 
@@ -3097,23 +3099,43 @@ export async function appendRuleRun(ev: {
 /**
  * 이 규칙·클립·계정 조합으로 같은 사유를 이미 남겼는가.
  *
- * 자동 순방은 10분마다 돈다 — 상태가 안 변하는 스킵을 매번 적으면 실행 로그가 같은 줄로
+ * 자동 순방은 15분마다 돈다 — 상태가 안 변하는 스킵을 매번 적으면 실행 로그가 같은 줄로
  * 가득 차고, 그러면 아무도 안 읽는다. 처음 한 번만 남기고 이후엔 조용히 넘기려고 쓴다.
+ *
+ * `ruleId` 가 null 이면 **워크스페이스 전체 사유**다(크레딧 부족 같은, 특정 규칙 탓이
+ * 아닌 것). rule_run.rule_id 는 NULL 허용·FK 없음(0019)이라 그대로 들어간다 — `= $1` 하나로
+ * 두면 NULL 비교가 항상 거짓이라 dedupe 가 통째로 무력해져 그 사유가 매 순방 쌓인다.
+ *
+ * `detail` 을 주면 **문구까지 같아야** 이미 남긴 것으로 본다. 사유가 여러 가지인 자리
+ * (규칙별 유휴 사유)에서는 result 만으로는 "다른 사유로 이미 한 줄 남겼다" 와 구분이 안 된다.
  */
 export async function hasRunNote(
-  ruleId: string, clipId: string | null, accountKey?: string | null,
-  result = "skipped", todayKstOnly = false,
+  ruleId: string | null, clipId: string | null, accountKey?: string | null,
+  result = "skipped", todayKstOnly = false, detail?: string | null,
 ): Promise<boolean> {
+  // ⚠️ rule_id 조건은 **두 갈래로 나눈다.** 한 줄로 합치려고 `IS NOT DISTINCT FROM` 을 쓰면
+  // 이 쿼리가 인덱스를 통째로 잃는다 — PostgreSQL 에 그 연산자의 btree 전략이 없고,
+  // rule_run 의 인덱스는 idx_rule_run_rule(rule_id, at DESC · 0019) ·
+  // idx_rule_run_quota(rule_id, account_key, at DESC · 0032) 둘 다 **rule_id 선행**이라
+  // 그 자리를 못 쓰면 남는 진입점이 없어 매번 seq scan 이다. 순방은 15분마다 이 함수를
+  // 규칙×채널×클립 수만큼 부르므로, rule_run 이 자라는 만큼 그대로 느려진다.
+  //   값이 있으면 `= $1`(인덱스 진입) · null 이면 `rule_id IS NULL`(btree 는 NULL 도
+  //   색인한다) — 워크스페이스 단위 dedupe 는 그대로 산다.
+  // null 갈래에 `$1::text IS NULL` 을 붙이는 건 항등식이라서가 아니라, $1 을 어디서도 안 쓰면
+  // Postgres 가 파라미터 타입을 못 정해 "could not determine data type of parameter $1" 로
+  // 죽기 때문이다(자리 수를 유지해 나머지 $2~$5 를 그대로 쓴다).
+  const ruleCond = ruleId == null ? "rule_id IS NULL AND $1::text IS NULL" : "rule_id = $1";
   const { rows } = await pool.query(
     `SELECT 1 FROM rule_run
-      WHERE rule_id = $1 AND result = $4
+      WHERE ${ruleCond} AND result = $4
         AND clip_id IS NOT DISTINCT FROM $2
         AND account_key IS NOT DISTINCT FROM $3
+        AND ($5::text IS NULL OR detail = $5)
         ${todayKstOnly
           ? "AND at >= date_trunc('day', now() AT TIME ZONE 'Asia/Seoul') AT TIME ZONE 'Asia/Seoul'"
           : ""}
       LIMIT 1`,
-    [ruleId, clipId ?? null, accountKey ?? null, result],
+    [ruleId ?? null, clipId ?? null, accountKey ?? null, result, detail ?? null],
   );
   return rows.length > 0;
 }
@@ -3204,6 +3226,42 @@ export async function setAutomationSetting(key: string, value: string): Promise<
      ON CONFLICT (tenant_id, key) DO UPDATE SET value = $2`,
     [key, value],
   );
+}
+
+// ── 자동 충전 실패 알림 ──────────────────────────────────────────────────────────
+//
+// 테넌트당 **한 행**이라 새 표가 필요 없다 — 이미 테넌트 KV 인 automation_setting 을 쓴다
+// (RLS·tenant_id DEFAULT 를 그대로 물려받아 마이그레이션이 0이다). 표 이름이 automation 인
+// 것과 키가 billing 인 것이 어긋나 보이므로, 표를 직접 만지지 말고 **이름 있는 이 두 함수만**
+// 쓸 것 — 나중에 표를 옮기면 여기 둘만 바뀐다.
+const AUTO_TOPUP_ALERT_KEY = "billing.autoTopupAlert";
+
+/**
+ * 지금 걸려 있는 자동 충전 실패 알림. 없으면 null(해제됨·한 번도 실패 안 함·**유효기간 만료**).
+ *
+ * 만료 판정을 **읽는 이 한 곳**에 둔다 — "오늘 상한 도달" 은 그 날에만 참인데, 알림을 지우는
+ * 유일한 경로(다음 maybeAutoTopup 정상 판정)가 분석 완료에만 달려 있어 잔액 0 이면 영영 안
+ * 불린다. 소비처마다 기간을 따지게 하면 반드시 한쪽이 빠져 사흘 전 기록이 "오늘"로 보인다.
+ */
+export async function getAutoTopupAlert(): Promise<AutoTopupAlert | null> {
+  const raw = await getAutomationSetting(AUTO_TOPUP_ALERT_KEY);
+  if (!raw) return null;
+  try {
+    const a = JSON.parse(raw) as AutoTopupAlert;
+    // 모양이 깨진 값으로 화면을 채우지 않는다 — 코드를 모르면 힌트도 못 만든다.
+    if (!a || typeof a !== "object" || !(AUTO_TOPUP_CODES as readonly string[]).includes(a.code)) return null;
+    return liveAutoTopupAlert(a);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 알림을 남기거나(객체) **지운다**(null). 해제는 빈 문자열 저장이다 —
+ * 게터가 빈 값을 null 로 읽으므로 행을 지울 필요가 없다(DELETE 경합·RLS 걱정 제거).
+ */
+export async function setAutoTopupAlert(alert: AutoTopupAlert | null): Promise<void> {
+  await setAutomationSetting(AUTO_TOPUP_ALERT_KEY, alert ? JSON.stringify(alert) : "");
 }
 
 // ── 과금 원장 (migrations/0023 · billing-portone-plan.md) ──────────────────────

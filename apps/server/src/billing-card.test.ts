@@ -18,7 +18,10 @@ import { describe, it } from "node:test";
 
 import {
   billingConfig,
+  cardBlock,
   cardBlockReason,
+  DECLINE_FALLBACK_MESSAGE,
+  declineMessage,
   cardLabel,
   cardTopupPaymentId,
   checkCustomer,
@@ -28,6 +31,7 @@ import {
   unwrapPayment,
   verifyCharge,
 } from "./billing-card.ts";
+import { PortOneError } from "./portone.ts";
 
 const SRC = path.dirname(fileURLToPath(import.meta.url));
 const INDEX = fs.readFileSync(path.resolve(SRC, "index.ts"), "utf-8");
@@ -109,6 +113,18 @@ describe("카드 상태", () => {
     assert.equal(cardBlockReason({ billingKey: "bk", revokedAt: null }), null);
   });
 
+  it("막는 사유를 code 로 구분한다 — 미등록과 해지는 다른 사건이다", () => {
+    // 자동 충전 알림이 이 둘을 갈라야 한다: 미등록은 사용자가 이미 아는 상태(노이즈),
+    // 해지는 켜 둔 뒤 벌어진 변화(조치 필요)다.
+    assert.equal(cardBlock(null)?.code, "no_card");
+    assert.equal(cardBlock({ billingKey: null, revokedAt: null })?.code, "no_card");
+    assert.equal(cardBlock({ billingKey: "bk", revokedAt: new Date() })?.code, "card_revoked");
+    // 해지는 billing_key 를 비우면서 revoked_at 을 찍는다(revokeBillingCard) — 실제 해지 행이
+    // no_card 로 접히면 "카드를 지워서 자동 충전이 멈췄다" 를 영영 알릴 수 없다.
+    assert.equal(cardBlock({ billingKey: null, revokedAt: new Date() })?.code, "card_revoked");
+    assert.equal(cardBlock({ billingKey: "bk", revokedAt: null }), null);
+  });
+
   it("표시 문구에 카드 번호가 없다", () => {
     assert.equal(cardLabel("신한", "1234"), "신한 ****1234");
     assert.equal(cardLabel(null, null), "등록된 카드");
@@ -120,6 +136,44 @@ describe("카드 상태", () => {
     assert.notEqual(cardTopupPaymentId("1", "n"), cardTopupPaymentId("2", "n"));
     // 같은 입력이면 같은 값 — 재시도 시 멱등키가 유지돼야 중복 결제가 막힌다.
     assert.equal(cardTopupPaymentId("1", "n"), cardTopupPaymentId("1", "n"));
+  });
+});
+
+describe("결제 거절 문구", () => {
+  // 실제 실패 모양: 우리가 만든 message 는 "포트원 POST … 실패 (400)" 이고, 진짜 사유는 body 안에 있다.
+  const err = (body: unknown) => new PortOneError(400, body, "포트원 POST /payments/card_t1_x 실패 (400)");
+
+  it("PG 가 준 거절 사유(pgMessage)를 꺼낸다 — 사용자가 카드사에 물을 수 있어야 한다", () => {
+    assert.equal(declineMessage(err({ type: "PG_PROVIDER_ERROR", pgMessage: "한도초과" })), "한도초과");
+    // pgMessage 가 없으면 포트원 message 로 내려간다.
+    assert.equal(declineMessage(err({ message: "유효하지 않은 카드입니다" })), "유효하지 않은 카드입니다");
+  });
+
+  it("카드사 사유가 없으면 **사람 말 폴백** — 우리 원문을 알림으로 내보내지 않는다", () => {
+    // 예전엔 err.message 로 폴백해서 "포트원 POST /payments/… 실패 (400)" · "fetch failed" 가
+    // 그대로 운영자 알림에 떴다. 이 함수 주석이 막겠다고 선언한 바로 그 문자열이었다.
+    for (const e of [err(null), err({}), new Error("fetch failed"), new Error("네트워크 오류"), null]) {
+      const msg = declineMessage(e);
+      assert.equal(msg, DECLINE_FALLBACK_MESSAGE);
+      assert.doesNotMatch(msg, /[A-Za-z]/, "영어 원문이 사용자 문구로 샜다");
+      assert.doesNotMatch(msg, /\b[1-5]\d\d\b/, "HTTP 상태코드가 사용자 문구로 샜다");
+    }
+    // 원문이 사라지면 안 된다 — 호출부가 서버 로그로 남긴다.
+    for (const [file, tag] of [["auto-topup.ts", "거절"], ["index.ts", "거절"]] as const) {
+      const src = fs.readFileSync(path.join(SRC, file), "utf-8");
+      assert.match(src, new RegExp(`console\\.warn\\([^)]*${tag}`),
+        `${file}: 거절 원문을 로그에도 안 남기면 개발자가 볼 곳이 사라진다`);
+    }
+  });
+
+  it("body 를 통째로 흘리지 않는다 — 빌링키·PG 내부 필드가 화면에 새면 안 된다", () => {
+    const msg = declineMessage(err({ pgMessage: "한도초과", billingKey: "bk_super_secret", request: { billingKey: "bk_super_secret" } }));
+    assert.doesNotMatch(msg, /bk_super_secret/, "화이트리스트가 아니라 stringify 를 쓰고 있다");
+    assert.doesNotMatch(msg, /billingKey/);
+  });
+
+  it("길이를 자른다 — PG 가 장문을 보내도 화면이 무너지지 않는다", () => {
+    assert.equal(declineMessage(err({ pgMessage: "가".repeat(500) })).length, 200);
   });
 });
 

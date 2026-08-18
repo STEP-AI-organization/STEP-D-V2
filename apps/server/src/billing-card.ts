@@ -154,13 +154,57 @@ export interface StoredCard {
 }
 
 /**
- * 이 카드로 결제해도 되는가. 막아야 하면 사유, 아니면 null.
+ * 이 카드로 결제해도 되는가. 막아야 하면 {사유 코드, 문구}, 아니면 null.
  * **모르면 막는다** — 카드가 없거나 해지됐는데 긁으려 들면 안 된다.
+ *
+ * 해지를 **먼저** 본다: `revokeBillingCard`(db-pg)가 해지하면서 billing_key 를 비우기 때문에,
+ * billingKey 부터 보면 모든 해지가 "등록된 카드가 없습니다" 로 접힌다. 그러면 "한 번도 등록
+ * 안 함"(사용자가 이미 아는 상태)과 "켜 둔 뒤 카드를 지움"(자동 충전이 조용히 멈춘 상태)이
+ * 구분되지 않아 자동 충전 알림이 후자를 놓친다. 재등록은 revoked_at 을 NULL 로 되돌리므로
+ * (saveBillingCard) 살아 있는 카드가 여기 걸리는 일은 없다.
  */
-export function cardBlockReason(card: StoredCard | null | undefined): string | null {
-  if (!card || !card.billingKey) return "등록된 카드가 없습니다. 카드를 먼저 등록해 주세요.";
-  if (card.revokedAt) return "해지된 카드입니다. 카드를 다시 등록해 주세요.";
+export function cardBlock(
+  card: StoredCard | null | undefined,
+): { code: "no_card" | "card_revoked"; reason: string } | null {
+  if (card?.revokedAt) return { code: "card_revoked", reason: "해지된 카드입니다. 카드를 다시 등록해 주세요." };
+  if (!card || !card.billingKey) return { code: "no_card", reason: "등록된 카드가 없습니다. 카드를 먼저 등록해 주세요." };
   return null;
+}
+
+/** 문구만 필요한 호출부용 얇은 파생 — 문구 생산은 계속 cardBlock 한 곳이다. */
+export function cardBlockReason(card: StoredCard | null | undefined): string | null {
+  return cardBlock(card)?.reason ?? null;
+}
+
+/**
+ * 카드사 사유가 없을 때 쓰는 **사람 말 폴백**.
+ *
+ * 결제가 실패한 사실과 다음 행동만 말한다. 왜 실패했는지는 우리도 모르는 상태라
+ * 아는 척하지 않는다 — 대신 사용자가 확인할 수 있는 두 곳(카드 상태·다른 카드)을 준다.
+ */
+export const DECLINE_FALLBACK_MESSAGE =
+  "카드 결제가 되지 않았습니다 — 카드 한도·정지 여부를 확인하거나 다른 카드를 등록해 주세요.";
+
+/**
+ * 결제 거절을 **사용자가 조치할 수 있는 문구**로 바꾼다.
+ *
+ * PortOneError.message 는 우리가 만든 `포트원 POST /payments/… 실패 (400)` 이라 조치 정보가 0 이다.
+ * 진짜 거절 사유(한도초과·정지카드)는 응답 body 의 `pgMessage` 에 있는데 아무도 안 꺼내
+ * 자동 충전 실패가 "400" 으로만 남았다.
+ *
+ * body 를 통째로 stringify 하지 않는다 — PG 내부 코드·요청 에코(빌링키 포함)가 화면으로
+ * 샐 수 있다. **pgMessage/message 두 필드만 화이트리스트**로 꺼내고 길이를 자른다.
+ *
+ * ⚠️ **원문(err.message)으로 폴백하지 않는다.** 예전엔 그 폴백 때문에 이 주석이 막겠다고
+ * 선언한 바로 그 문자열("포트원 POST /payments/… 실패 (400)" · "fetch failed")이 카드사
+ * 사유가 없을 때마다 그대로 알림에 떴다 — 방송사 운영자가 읽고 할 수 있는 게 하나도 없다.
+ * 원문이 필요한 건 개발자뿐이라 **호출부가 서버 로그**에 남긴다(auto-topup · index 충전 라우트).
+ */
+export function declineMessage(err: unknown, max = 200): string {
+  const body = (err as { body?: unknown } | null)?.body as Record<string, unknown> | null | undefined;
+  const pick = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : "");
+  const fromBody = body && typeof body === "object" ? pick(body.pgMessage) || pick(body.message) : "";
+  return (fromBody || DECLINE_FALLBACK_MESSAGE).slice(0, max);
 }
 
 /**
