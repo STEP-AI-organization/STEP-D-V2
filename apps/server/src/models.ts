@@ -9,8 +9,12 @@
  *   const resp = await client.generateContent({ model: TEXT, ... });
  */
 
-/** 기본 텍스트/추론 모델. 모든 stage 의 기본값. */
-export const TEXT = process.env.GEMINI_MODEL || "gemini-3.1-flash";
+/** 기본 텍스트/추론 모델. 모든 stage 의 기본값.
+ * ⚠️ "gemini-3.1-flash" 는 존재하지 않는 이름이라 Vertex 가 404("Publisher model … was not
+ * found") 로 죽었다(2026-08-18 편집기 메타데이터 생성 실패). asia-northeast3 실측 결과 이
+ * 프로젝트에서 응답하는 건 gemini-2.5-flash 뿐(2.0-flash·2.5-flash-lite 는 404). 모델을 올릴
+ * 때는 반드시 그 리전에서 200 인지 확인하고 바꿀 것. */
+export const TEXT = process.env.GEMINI_MODEL || "gemini-2.5-flash";
 
 /** Stage 별 오버라이드 · 없으면 TEXT 재사용. */
 export const AUTOFILL = process.env.GEMINI_AUTOFILL_MODEL || TEXT;
