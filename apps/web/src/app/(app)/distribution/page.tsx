@@ -11,7 +11,7 @@
  *    안 올라간다 — 색을 분리한다.
  *  - **실패는 자동 재시도하지 않는다** (F4-4 ⊘). 사람이 셀을 눌러야 다시 간다.
  */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { PublishDialog } from "@/components/publish/publish-dialog";
 import { DistributionMatrix, type MatrixRow } from "@/components/distribution/distribution-matrix";
@@ -22,7 +22,7 @@ import type { DistributionChannel } from "@/lib/constants";
 import { cn } from "@/lib/utils";
 
 export default function DistributionPage() {
-  const { clips, episodes, programs, retryDistribution, loading, serverConnected } = useAppData();
+  const { clips, episodes, programs, retryDistribution, loading, serverConnected, refresh } = useAppData();
   const { toast } = useToast();
   const [publishTarget, setPublishTarget] = useState<string[] | null>(null);
   const [failedOnly, setFailedOnly] = useState(false);
@@ -51,6 +51,34 @@ export default function DistributionPage() {
     }
     return m;
   }, [clips]);
+
+  // 배포 직후 pending → 진행 중 → 게시됨 이 수동 새로고침 없이 반영되도록,
+  // 비종료 상태(pending·scheduled)가 하나라도 있으면 전역 state refresh 를 폴링한다.
+  // 전부 종료(published·recorded·failed)되면 멈춘다. 이 화면에서만 돈다(언마운트 시 정리).
+  const anyInFlight = useMemo(
+    () =>
+      clips.some((c) =>
+        (c.distributions ?? []).some((d) => d.status === "pending" || d.status === "scheduled"),
+      ),
+    [clips],
+  );
+
+  useEffect(() => {
+    if (!anyInFlight || !serverConnected) return;
+    let cancelled = false;
+    let running = false; // 겹침 방지 — 이전 fetch 가 끝나기 전엔 새로 안 쏜다
+    const id = window.setInterval(() => {
+      if (cancelled || running) return;
+      running = true;
+      void refresh().finally(() => {
+        running = false;
+      });
+    }, 5000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [anyInFlight, serverConnected, refresh]);
 
   async function retry(clipId: string, channel: DistributionChannel) {
     if (!serverConnected) {

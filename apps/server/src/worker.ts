@@ -1527,18 +1527,32 @@ function futurePublishAt(raw: unknown): string | null {
  * (기능은 있는데 출력이 소비처에 미도달). 채널 규칙의 titlePrefix·hashtagTemplate 도
  * 그렇게 1년 가까이 아무 데도 안 갔다.
  */
+/**
+ * 발행 텍스트에서 내부 화자 라벨을 지운다. "남성 출연자 2"·"화자 3" 은 STT/화자분리 산출물이라
+ * cast 미등록 프로그램에서는 synopsis/설명에 그대로 남는다 — 시청자용 발행문(유튜브 설명 등)에
+ * 절대 새면 안 된다(2026-08-18 실측: 설명에 "남성 출연자 2가 …" 노출). 주격조사(이/가)는 자-받침에
+ * 맞게 '가'로 정규화한다. 근본 해결은 생성 메타(buildMetadataPrompt)를 발행에 배선하는 것(L2).
+ */
+function stripSpeakerLabels(s: string): string {
+  return String(s)
+    .replace(/(남성|여성)?\s*(출연자|화자)\s*\d+\s*(이|가)/g, "출연자가")
+    .replace(/(남성|여성)?\s*(출연자|화자)\s*\d+/g, "출연자")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
 function metaForChannel(clip: any, channel: string): { title: string; description: string; tags?: string[] } {
   const m = clip?.channelMeta?.[channel];
   if (m && (m.title || m.description)) {
     return {
-      title: String(m.title ?? clip.title ?? "무제 클립"),
-      description: String(m.description ?? ""),
+      title: stripSpeakerLabels(String(m.title ?? clip.title ?? "무제 클립")),
+      description: stripSpeakerLabels(String(m.description ?? "")),
       tags: Array.isArray(m.tags) && m.tags.length ? m.tags : undefined,
     };
   }
   return {
-    title: String(clip?.title ?? "무제 클립"),
-    description: String(clip?.synopsis ?? ""),
+    title: stripSpeakerLabels(String(clip?.title ?? "무제 클립")),
+    description: stripSpeakerLabels(String(clip?.synopsis ?? "")),
     tags: Array.isArray(clip?.tags) ? clip.tags : undefined,
   };
 }

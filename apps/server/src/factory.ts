@@ -505,6 +505,22 @@ export function wrapAutoTitle(raw: string): { lines: string[]; size: number } {
 }
 
 /**
+ * 명시적 2줄 제목(추천이 준 titleLine1/2)의 폰트 크기 — **더 긴 줄이 렌더 폭 한 줄에**
+ * 들어가도록 길수록 축소한다(wrapAutoTitle 의 길이→크기 규칙 확장). 재랩핑하지 않으므로
+ * 여기서 크기를 못 정하면 긴 줄이 화면 밖으로 나간다(렌더러 WrapStyle 2 · 자동 줄바꿈 없음).
+ */
+export function fitTwoLineTitleSize(line1: string, line2: string): number {
+  const maxLen = Math.max([...String(line1)].length, [...String(line2)].length);
+  // 기본 38 (사용자 확정 2026-08-18 — 두 줄 다 38). 줄이 길면 한 줄 폭에 맞게만 축소한다
+  // (렌더는 shrink-to-fit, 에디터는 nowrap 이라 여기서 크기를 안 낮추면 박스를 넘는다).
+  if (maxLen <= 14) return 38;
+  if (maxLen <= 18) return 33;
+  if (maxLen <= 22) return 28;
+  if (maxLen <= 26) return 24;
+  return 20;
+}
+
+/**
  * 무인 자동배포 기본 렌더 시드 (사용자 확정 2026-08-12 · TVING 쇼츠 스타일):
  *   검정 배경에 16:9 원본을 **가운데 레터박스** — 원본 번인 자막이 그대로 보이므로
  *   AI 자막 오버레이는 끈다(겹침 원천 차단) · 상단 띠에 짧은 훅 한 줄 · 하단 띠에
@@ -519,23 +535,25 @@ export function wrapAutoTitle(raw: string): { lines: string[]; size: number } {
 const TEMPLATE_SEEDS: Record<string, {
   accent: string; titleY: number;
   bottom: "logo-box" | "icon-title";
+  // channelY = 채널 뱃지 세로 위치(%) · 에디터 "채널 → 세로 위치" 슬라이더 기본값. 깔끔한 정수 80
+  // 으로 고정한다(E) — px 파생 소수(80.078125 등)가 기본으로 보이지 않게.
   channelY: number; iconShape: "circle" | "square"; iconSize: number;
   iconY?: number; boxY?: number;
 }> = {
   // 표준 (2026-08-12 확정 · 나는 SOLO 쇼츠 레퍼런스): 청록 훅 + 프로그램 로고 + 방영시간 박스
   "broadcast-standard": {
     accent: "#40E0E0", titleY: 11, bottom: "logo-box",
-    channelY: 88, iconShape: "square", iconSize: 50, iconY: 68, boxY: 79.5,
+    channelY: 80, iconShape: "square", iconSize: 50, iconY: 68, boxY: 79.5,
   },
   // 드라마: 번인 자막이 없어 확대 크롭(fit cover)이 산다 — 띠가 좁아 위치가 다르다
   "broadcast-drama": {
     accent: "#40E0E0", titleY: 8, bottom: "logo-box",
-    channelY: 88, iconShape: "square", iconSize: 50, iconY: 77, boxY: 87.5,
+    channelY: 80, iconShape: "square", iconSize: 50, iconY: 77, boxY: 87.5,
   },
   // 구 표준 (TVING 풍 · 보존): 빨강 훅 + 원형 아이콘 + 프로그램명 텍스트
   "broadcast-clean": {
     accent: "#FF4040", titleY: 11, bottom: "icon-title",
-    channelY: 88, iconShape: "circle", iconSize: 40,
+    channelY: 80, iconShape: "circle", iconSize: 40,
   },
 };
 
@@ -547,11 +565,39 @@ export function pickTemplateId(program?: any): string {
 
 export function autoEditorState(
   rec: any, programTitle: string, program?: any, forcedTemplateId?: string,
-  layoutOverride?: { titleY?: number; channelIconY?: number; channelBoxY?: number; channelIconSize?: number },
+  layoutOverride?: {
+    titleY?: number; channelIconY?: number; channelBoxY?: number; channelIconSize?: number;
+    subtitles?: boolean; subtitleY?: number; subtitleSize?: number; subtitleColor?: string;
+  },
 ): Record<string, unknown> {
   const hook = String(rec.hookQuote ?? "").replace(/^['"'"]|['"'"]$/g, "").trim();
-  const headline = hook && hook.length <= 30 ? hook : String(rec.titleLine1 ?? rec.title ?? "");
-  const { lines, size } = wrapAutoTitle(headline);
+  const line1 = String(rec.titleLine1 ?? "").trim();
+  const line2 = String(rec.titleLine2 ?? "").trim();
+  // 훅 치환 의도 보존: 짧고 강한 훅이 있으면 headline 을 훅으로 대체한다(기존 동작 그대로).
+  const useHook = !!hook && hook.length <= 30;
+  // 제목 줄 구성 (D):
+  //  · 훅 치환 → 훅 한 줄(길면 wrapAutoTitle 이 접는다) — 예전과 동일.
+  //  · line1·line2 둘 다 있으면 **시맨틱 2줄 분할을 존중**해 그대로 쓴다(폭 기준 재분할 금지).
+  //    예전엔 line2 를 통째로 버리고 line1 만 wrapAutoTitle 로 폭 분할 → 렌더/에디터가 긴 줄을
+  //    또 접어 3줄이 됐다. 이제 titleLines 줄 수 = 시각 줄 수.
+  //  · 그 외(line2 없음) → 예전처럼 line1(없으면 title)을 wrapAutoTitle 로 접는다.
+  let lines: string[];
+  let size: number;
+  if (useHook) {
+    ({ lines, size } = wrapAutoTitle(hook));
+  } else if (line1 && line2) {
+    lines = [line1, line2];
+    size = fitTwoLineTitleSize(line1, line2);
+  } else {
+    ({ lines, size } = wrapAutoTitle(line1 || String(rec.title ?? "")));
+  }
+  // 채널 아이콘 기본값 = 프로그램 이미지(F). 렌더는 editorState.channelIconDataUrl 를 먼저 읽고
+  // 없으면 program.brandIconDataUrl 로 폴백하므로, 에디터도 같은 이미지를 보이도록 여기서 명시
+  // 시드한다. 브랜딩 아이콘(쇼츠 전용) 우선, 없으면 대표 이미지(포스터), 둘 다 없으면 미설정
+  // (에디터는 'CH' 플레이스홀더 · 렌더는 아이콘 생략 = 기존 generic 폴백).
+  const programImage = String(
+    (program as any)?.brandIconDataUrl ?? (program as any)?.posterImageDataUrl ?? "",
+  ).trim();
   // 자동배포 화면에서 고른 템플릿(policy) > 프로그램 기본(autoPublish 설정) > 장르 자동.
   const templateId = (forcedTemplateId && TEMPLATE_SEEDS[forcedTemplateId] ? forcedTemplateId : null)
     ?? (TEMPLATE_SEEDS[String(program?.autoPublish?.templateId ?? "")] ? String(program.autoPublish.templateId) : null)
@@ -575,6 +621,8 @@ export function autoEditorState(
     karaoke: false,
     hookOn: false,
     showChannel: true,
+    // 채널 아이콘 기본 = 프로그램 이미지(F). 없으면 필드 미설정 → generic 폴백.
+    ...(programImage ? { channelIconDataUrl: programImage } : {}),
     // logo-box 하단은 로고(프로그램 brandIconDataUrl)가 이름을 대신한다 — 텍스트 이름 생략.
     channelName: seed.bottom === "logo-box" ? "" : programTitle,
     channelY: seed.channelY,
@@ -594,6 +642,16 @@ export function autoEditorState(
             .map((k) => [k, layoutOverride[k]]),
         )
       : {}),
+    // 자막 위치·크기·색 — 규칙 layout 의 subtitle* 를 editorState 의 caption* 로 옮긴다.
+    // 미리보기(template-preview)와 서버 렌더(index.ts buildEditorAss)가 **같은 값**을 본다
+    // (overlay-parity.test.ts 가 두 경로가 갈라지지 않게 강제). captionsOn(자막 on/off)은
+    // 여기서 안 켠다 — 공장 경로는 번인 겹침 방지로 계속 false, 자동배포는 automation-cycle 이
+    // rule.layout.subtitles 로 명시 지정한다.
+    ...(layoutOverride && Number.isFinite(layoutOverride.subtitleY) ? { captionY: layoutOverride.subtitleY } : {}),
+    ...(layoutOverride && Number.isFinite(layoutOverride.subtitleSize) ? { captionSize: layoutOverride.subtitleSize } : {}),
+    ...(layoutOverride && typeof layoutOverride.subtitleColor === "string"
+      && /^#[0-9a-fA-F]{6}$/.test(layoutOverride.subtitleColor)
+      ? { captionColor: layoutOverride.subtitleColor } : {}),
   };
 }
 

@@ -49,7 +49,7 @@ import {
   billingConfig, cardBlockReason, cardLabel, cardTopupPaymentId, checkCustomer, declineMessage,
   extractCardDisplay, issueIdFor, unwrapPayment, verifyCharge,
 } from "./billing-card.ts";
-import { buildInvoice, issuerInfo, monthRange, parseMonth } from "./invoice.ts";
+import { buildInvoice, invoiceFromTopup, issuerInfo, monthRange, parseMonth, supplierFromEnv } from "./invoice.ts";
 import { checkProfile, incompleteFields } from "./business.ts";
 import {
   API_SCOPES, bearerKey, checkRoute, generateKey, hashKey, keyBlockReason, keyPrefix,
@@ -305,6 +305,7 @@ import { chargeWithBillingKey, getBillingKeyInfo, getPayment, verifyWebhook } fr
 // 자동 충전 알림 해제는 **이 한 함수**로만 한다 — 라우트마다 db-pg 의 저장 함수를 직접
 // 부르면 반드시 한 자리가 빠진다(실제로 직접 충전 경로가 빠져 있었다).
 import { clearAutoTopupAlert, maybeAutoTopup } from "./auto-topup.ts";
+import { buyerFor, sendInvoiceEmail } from "./invoice-email.ts";
 import { commitAndInherit } from "./adopt.ts";
 import { runAutomationCycle } from "./automation-cycle.ts";
 import {
@@ -4406,7 +4407,6 @@ function buildEditorAss(
     for (const t of Array.isArray(es.titleLines) ? es.titleLines : []) {
       if (!t?.text?.trim()) continue;
       const px = Math.max(6, (t.size ?? 30) * scale);   // 미리보기 CSS px 등가(출력 해상도)
-      const fs = assFs(px);
       const align = es.titleAlign === "left" ? "left" : es.titleAlign === "right" ? "right" : "center";
       const an = align === "left" ? 7 : align === "right" ? 9 : 8;
       const cx = ((es.titleX ?? 50) / 100) * W;         // 블록 중심
@@ -4415,36 +4415,41 @@ function buildEditorAss(
       const bx = align === "left" ? cx - half + pad : align === "right" ? cx + half - pad : cx;
       const by0 = ((es.titleY ?? 11) / 100) * H + yOff; // 기본값은 웹 EMPTY_STATE 와 같은 11
       const color = hexToAss(t.color ?? "#FFFFFF");
-      const adv = Math.round(px * 1.15);                // CSS line-height: 1.15
-      // 미리보기에서 접히는 폭에서 서버도 접는다 — ASS 는 자동 줄바꿈이 없다(WrapStyle 2).
+      const blockW = TITLE_BLOCK * W - 2 * pad;
+      // 제목 줄은 **재접지 않는다** — 각 titleLines[] 항목은 정확히 한 시각 줄이다(D). 추천이
+      // 준 시맨틱 2줄 분할을 렌더가 또 폭 분할해 3줄이 되는 걸 막는다. wrapTextToWidth 로
+      // 넘침만 측정하고(미리보기 파리티 상수 재사용), 접는 대신 폰트를 줄여 한 줄에 맞춘다
+      // (nowrap + shrink-to-fit). 미리보기(whiteSpace:nowrap)와 줄 수가 항상 일치한다.
       const rows = wrapTextToWidth(t.text, TITLE_BLOCK * W - 2 * pad, px);
+      const full = textWidthPx(t.text, px);
+      const fitPx = rows.length > 1 && full > blockW ? Math.max(6, px * (blockW / full)) : px;
+      const fs = assFs(fitPx);
+      const adv = Math.round(fitPx * 1.15);             // CSS line-height: 1.15
       const win = winFor(t);
       if (win) {
         const kfs: KfPoint[] = Array.isArray(t.keyframes) ? t.keyframes : [];
-        rows.forEach((row, ri) => {
-          const by = by0 + ri * adv;
-          if (kfs.length) {
-            // Title-line keyframe x/y are OFFSETS from the layout (cqw/cqh = % of stage).
-            for (let s = win[0]; s < win[1] - 1e-6; s += SAMPLE_STEP) {
-              const k = sampleKf(kfs, s);
-              // CSS transform 은 글자 상자 **중심**을 원점으로 돌리고 키운다. ASS 는 \an 앵커
-              // (제목=상단중앙) 기준이라, 회전 원점을 \org 로 중심에 맞추고 확대분의 절반을
-              // 위로 되돌려야 미리보기와 같은 자리에서 자란다.
-              const orgY = Math.round(by + ((k.y ?? 0) / 100) * H + px / 2);
-              const orgX = Math.round(bx + ((k.x ?? 0) / 100) * W);
-              const grow = (k.scale ?? 1) - 1;
-              const yFix = grow * px / 2;
-              // 좌/우 정렬은 가로도 한쪽으로만 자란다(중앙정렬은 대칭이라 보정 불필요).
-              const xFix = an === 8 ? 0 : (an === 7 ? -1 : 1) * grow * textWidthPx(row, px) / 2;
-              const extra = `\\fscx${Math.round(k.scale * 100)}\\fscy${Math.round(k.scale * 100)}${assAlpha(k.opacity)}\\frz${(-k.rotation).toFixed(1)}\\org(${orgX},${orgY})`;
-              putWin(an, bx + ((k.x ?? 0) / 100) * W + xFix, by + ((k.y ?? 0) / 100) * H - yFix, fs, color, 2, "&H00000000&", row, s, Math.min(win[1], s + SAMPLE_STEP), extra);
-            }
-          } else {
-            putWin(an, bx, by, fs, color, 2, "&H00000000&", row, win[0], win[1]);
+        const by = by0;
+        if (kfs.length) {
+          // Title-line keyframe x/y are OFFSETS from the layout (cqw/cqh = % of stage).
+          for (let s = win[0]; s < win[1] - 1e-6; s += SAMPLE_STEP) {
+            const k = sampleKf(kfs, s);
+            // CSS transform 은 글자 상자 **중심**을 원점으로 돌리고 키운다. ASS 는 \an 앵커
+            // (제목=상단중앙) 기준이라, 회전 원점을 \org 로 중심에 맞추고 확대분의 절반을
+            // 위로 되돌려야 미리보기와 같은 자리에서 자란다.
+            const orgY = Math.round(by + ((k.y ?? 0) / 100) * H + fitPx / 2);
+            const orgX = Math.round(bx + ((k.x ?? 0) / 100) * W);
+            const grow = (k.scale ?? 1) - 1;
+            const yFix = grow * fitPx / 2;
+            // 좌/우 정렬은 가로도 한쪽으로만 자란다(중앙정렬은 대칭이라 보정 불필요).
+            const xFix = an === 8 ? 0 : (an === 7 ? -1 : 1) * grow * textWidthPx(t.text, fitPx) / 2;
+            const extra = `\\fscx${Math.round(k.scale * 100)}\\fscy${Math.round(k.scale * 100)}${assAlpha(k.opacity)}\\frz${(-k.rotation).toFixed(1)}\\org(${orgX},${orgY})`;
+            putWin(an, bx + ((k.x ?? 0) / 100) * W + xFix, by + ((k.y ?? 0) / 100) * H - yFix, fs, color, 2, "&H00000000&", t.text, s, Math.min(win[1], s + SAMPLE_STEP), extra);
           }
-        });
+        } else {
+          putWin(an, bx, by, fs, color, 2, "&H00000000&", t.text, win[0], win[1]);
+        }
       }
-      yOff += rows.length * adv;
+      yOff += adv;
     }
     // 채널 뱃지 — 이름 + 부가줄(channelExtraLines). 부가줄은 예전엔 미리보기에만 있고
     // 서버가 아예 안 구워서 **결과물에서 통째로 증발**했다(소비처 미도달).
@@ -4496,7 +4501,16 @@ function buildEditorAss(
     // Keyword tokens sweep to a distinct colour; default = the highlight colour (so it's a
     // no-op unless the operator picks one), matching CapCut/Opus keyword emphasis.
     const capKey = hexToAss((es && typeof es === "object" && es.keywordColor) || (es && typeof es === "object" && es.highlightColor) || "#FFD400");
-    const white = "&H00FFFFFF&";
+    // 자막 색 오버라이드(captionColor) — 자동배포 규칙의 subtitleColor 가 여기로 온다. 있으면
+    // 자막 기본색을 이 색으로 바꾼다(미리보기 template-preview 의 subtitleColor 와 1:1). 없으면
+    // 기존 흰색. 카라오케 base·비카라오케 문장 모두 같은 base 색을 쓴다.
+    const capColorOverride = es && typeof es === "object"
+      && typeof (es as any).captionColor === "string" && /^#[0-9a-fA-F]{6}$/.test((es as any).captionColor)
+      ? hexToAss((es as any).captionColor) : null;
+    const white = capColorOverride ?? "&H00FFFFFF&";
+    // 인라인 색 태그 — 비카라오케 문장에 얹는다. **별도 변수로 뺀다**: push() 안에 중첩 백틱이
+    // 생기면 overlay-parity 스캔이 자막 이벤트를 못 센다(정규식이 `Dialogue:[^`]*` 로 잡는다).
+    const capColorInline = capColorOverride ? `\\1c${capColorOverride}` : "";
     for (const cap of Array.isArray(captions) ? captions : []) {
       const text = String(cap.text ?? "").trim();
       if (!text || !(cap.end > cap.start)) continue;
@@ -4533,15 +4547,24 @@ function buildEditorAss(
           prev = we;
         });
       } else {
-        captionEv.push(`Dialogue: 0,${assTime(cap.start)},${assTime(cap.end)},Caption,,0,0,0,,{\\q1}${assEscape(text)}`);
+        // 비카라오케 문장 — 색 오버라이드가 있으면 인라인 \1c(capColorInline)로 얹는다(스타일 PrimaryColour 위에).
+        captionEv.push(`Dialogue: 0,${assTime(cap.start)},${assTime(cap.end)},Caption,,0,0,0,,{\\q1${capColorInline}}${assEscape(text)}`);
       }
     }
   }
 
   const ev = [...decorationEv, ...captionEv];
   if (!ev.length) return null;
-  const capMV = Math.round(H * 0.14);
+  // 자막 세로 위치 — editorState.captionY(% · 하단 기준 · \an2)가 있으면 그걸, 없으면 기본 14%.
+  // 자동배포 규칙의 subtitleY 가 여기로 온다(factory.autoEditorState). 미리보기 SUBTITLE_DEFAULTS.y
+  // 와 CAPTION_MV_PCT 가 같아야 결과물 자막이 편집 화면과 같은 높이에 박힌다(파리티 테스트가 강제).
+  const captionYPct = es && typeof es === "object" && Number.isFinite((es as any).captionY)
+    ? Number((es as any).captionY) : CAPTION_MV_PCT;
+  const capMV = Math.round((H * captionYPct) / 100);
   const capStyle = (es && typeof es === "object" && es.captionStyle) || "korean_pop";
+  // 자막 크기 오버라이드(captionSize · % · 화면 높이 기준) — 있으면 그걸, 없으면 스타일 기본(CAPTION_PCT).
+  const capSizePct = es && typeof es === "object" && Number.isFinite((es as any).captionSize) && Number((es as any).captionSize) > 0
+    ? Number((es as any).captionSize) : undefined;
   // 자막 좌우 여백은 미리보기 컨테이너(px-6 = 스테이지 24px)와 같게 — 이 폭에서 \q1 이 접는다.
   const capMH = Math.max(8, Math.round(24 * scale));
   return (
@@ -4553,7 +4576,7 @@ function buildEditorAss(
     `Style: Default,Pretendard ExtraBold,48,&H00FFFFFF,&H00000000,&H00000000,1,1,2,1,5,20,20,20,1\n` +
     // 방영시간 박스 라벨 — BorderStyle=3(불투명 박스), Outline=박스 패딩. 박스 색은 인라인 \3c.
     `Style: BoxLabel,Pretendard ExtraBold,48,&H00FFFFFF,&H00D97B3D,&H00D97B3D,1,3,14,0,5,20,20,20,1\n` +
-    captionAssStyle(capStyle, H, capMV, capMH) + "\n\n" +
+    captionAssStyle(capStyle, H, capMV, capMH, capSizePct) + "\n\n" +
     `[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n` +
     ev.join("\n") + "\n"
   );
@@ -4579,14 +4602,22 @@ const CAPTION_PCT: Record<string, number> = {
   outline_bold: 4.6, shadow_soft: 3.9, highlight_bar: 4.1, typewriter: 3.8, korean_pop: 4.4,
 };
 
-function captionAssStyle(style: string, H: number, mv: number, mh: number): string {
+/**
+ * 자막 기본 세로 위치(% · 화면 하단 기준 · \an2 MarginV). 자동배포 미리보기의
+ * SUBTITLE_DEFAULTS.y(template-preview.tsx)와 **1:1** 이어야 한다 — overlay-parity.test.ts 가 강제.
+ */
+const CAPTION_MV_PCT = 14;
+
+function captionAssStyle(style: string, H: number, mv: number, mh: number, sizePct?: number): string {
   // 웨이트도 미리보기와 맞춘다 — 설치 폰트는 Bold(700)·ExtraBold(800)·Black(900) 3종이라
   // font-extrabold 는 "Pretendard ExtraBold", font-black 은 "Pretendard Black" 를 지정해야
   // 한 단계 얇게 나가지 않는다(가족명 실측: Pretendard / Pretendard ExtraBold / Pretendard Black).
   const font = "Pretendard";
   const xbold = "Pretendard ExtraBold";
   const black = "Pretendard Black";
-  const fs = assFs((H * (CAPTION_PCT[style] ?? CAPTION_PCT.korean_pop)) / 100);
+  // 크기 오버라이드(sizePct · % · 화면 높이 기준)가 있으면 그걸, 없으면 스타일 기본표(CAPTION_PCT).
+  const pct = Number.isFinite(sizePct) && Number(sizePct) > 0 ? Number(sizePct) : (CAPTION_PCT[style] ?? CAPTION_PCT.korean_pop);
+  const fs = assFs((H * pct) / 100);
   // ASS 필드: Name, Fontname, Fontsize, PrimaryColour, OutlineColour, BackColour, Bold,
   //          BorderStyle(1=outline+shadow, 3=box), Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
   // 색은 &HAABBGGRR (Alpha·B·G·R). 프리뷰(editor-preview.tsx:captionStyleClasses)와 시각 매칭.
@@ -5045,12 +5076,20 @@ app.post("/api/automation/rules", async (c) => {
     // 렌더 템플릿 — 자동배포 화면에서 선택. 빈 값이면 프로그램 장르 자동 선택.
     ...(typeof body.templateId === "string" && body.templateId.trim()
       ? { templateId: body.templateId.trim() } : {}),
-    // 위치 미세조정 — 숫자 필드만 통과 (자동배포 화면 슬라이더).
+    // 위치 미세조정 — 숫자 필드만 통과 (자동배포 화면 슬라이더). 자막 오버레이(위치·크기·색·
+    // on/off)도 **이 layout JSONB 안에** 함께 담는다 — automation_rule 에 자막 전용 컬럼을 새로
+    // 두지 않고(마이그레이션 없이) 라운드트립시킨다. 순방은 rule.layout 에서 이 값을 읽어 렌더에 건다.
     ...((() => {
       const l = body.layout as Record<string, unknown> | undefined;
       if (!l || typeof l !== "object") return {};
-      const pick = (k: string) => (typeof l[k] === "number" && Number.isFinite(l[k]) ? { [k]: l[k] } : {});
-      const layout = { ...pick("titleY"), ...pick("channelIconY"), ...pick("channelBoxY"), ...pick("channelIconSize") };
+      const num = (k: string) => (typeof l[k] === "number" && Number.isFinite(l[k]) ? { [k]: l[k] } : {});
+      const layout: Record<string, number | string | boolean> = {
+        ...num("titleY"), ...num("channelIconY"), ...num("channelBoxY"), ...num("channelIconSize"),
+        // 자막 — 위치·크기(숫자) · 색(#RRGGBB) · on/off(불리언).
+        ...num("subtitleY"), ...num("subtitleSize"),
+        ...(typeof l.subtitleColor === "string" && /^#[0-9a-fA-F]{6}$/.test(l.subtitleColor) ? { subtitleColor: l.subtitleColor } : {}),
+        ...(typeof l.subtitles === "boolean" ? { subtitles: l.subtitles } : {}),
+      };
       return Object.keys(layout).length ? { layout } : {};
     })()),
     // 다중 프로그램·채널 (2026-08-12) — 단수 컬럼(programId·platform·accountId)은 첫
@@ -5098,7 +5137,10 @@ app.post("/api/automation/rules", async (c) => {
       throw e;
     }
   }
-  await upsertAutomationRule(row);
+  // 캐스트 이유는 updateAutomationRuleById 호출부와 같다 — row.layout 에 자막 색·on/off 같은
+  // 문자/불리언이 섞여 AutomationRuleRow.layout(숫자 맵) 과 정확히 안 맞지만, layout 은 JSONB 라
+  // 런타임엔 무엇이든 담긴다.
+  await upsertAutomationRule(row as Parameters<typeof upsertAutomationRule>[0]);
   return c.json({
     rule: row,
     state: initialRuleState(platform, row.enabled),
@@ -5539,7 +5581,7 @@ app.post("/api/credits/topup/card", async (c) => {
     // 원장 insert 는 `dedupe_key` 로 멱등이라 몇 번 불려도 안전하지만, 상태를 먼저 'paid' 로
     // 찍고 그 사이에서 던지면 재시도가 `settleTopup` 의 'paid' 가드에 막혀 **크레딧이 영구히
     // 사라진다**. 크레딧을 주는 쪽을 먼저 확정하고, 상태는 그 사실의 표시로만 쓴다.
-    await addCreditEntry({
+    const credited = await addCreditEntry({
       delta: check.credits,
       reason: "topup",
       paymentId,
@@ -5549,6 +5591,8 @@ app.post("/api/credits/topup/card", async (c) => {
       dedupeKey: topupDedupeKey(paymentId),
     });
     await markTopupPaid(paymentId, "paid");
+    // 인보이스 메일 — 이 호출이 실제로 적립한 경우만(웹훅이 먼저 정산했으면 거기서 보냈다).
+    if (credited) void sendInvoiceEmail(paymentId, tenantId);
     // 직접 충전 성공도 **조치**다 — no_buyer_info 힌트가 "직접 충전 1회로 채워집니다"(위
     // updateBillingCardBuyer 백필) 라고 안내하고, 상한 도달 힌트도 "지금 필요하면 직접
     // 충전하세요" 라고 안내한다. 안내한 대로 했는데 경고가 그대로면 화면이 거짓말한다.
@@ -5652,50 +5696,11 @@ app.get("/api/credits", async (c) => {
  */
 app.get("/api/credits/invoices", async (c) => {
   const rows = await listPaidTopups(100);
-  const tenantId = currentTenantId();
-  const [tenant, biz] = await Promise.all([
-    asSystem(async (db) => {
-      const { rows: t } = await db.query(`SELECT name, billing_email AS "billingEmail" FROM tenants WHERE id = $1`, [tenantId]);
-      return (t[0] ?? null) as { name: string; billingEmail: string | null } | null;
-    }),
-    asSystem((db) => getBusinessProfile(db, tenantId)),
-  ]);
-
-  const invoices = rows.map((r) => {
-    const paidAt = r.settledAt ?? r.createdAt;
-    const ymd = String(paidAt).slice(0, 10).replace(/-/g, "");
-    const supply = Math.round(r.amountKrw / 1.1);
-    return {
-      id: r.paymentId,
-      number: `SD-${ymd}-${r.paymentId.slice(-6).toUpperCase()}`,
-      paidAt,
-      credits: r.credits,
-      amountKrw: r.amountKrw,
-      supplyKrw: supply,
-      vatKrw: r.amountKrw - supply,
-      // auto: 접두 actor 는 자동 충전이 만든 결제다 — 문서에 결제 경위로 남긴다.
-      origin: r.requestedBy.startsWith("auto") ? "auto" as const : "manual" as const,
-      description: `STEP-D 크레딧 ${r.credits.toLocaleString("ko-KR")}개 (분석 ${r.credits.toLocaleString("ko-KR")}분)`,
-    };
-  });
-
+  // 빌더는 invoice.ts 하나다 — 이메일 발송과 화면이 같은 번호·역산 값을 쓴다.
   return c.json({
-    invoices,
-    // 공급자(우리) 정보는 env 로 — 비면 화면·PDF 가 그 항목을 그리지 않는다(지어내지 않는다).
-    supplier: {
-      name: String(process.env.BILLING_SUPPLIER_NAME ?? "STEP AI"),
-      bizNo: String(process.env.BILLING_SUPPLIER_BIZNO ?? ""),
-      ceoName: String(process.env.BILLING_SUPPLIER_CEO ?? ""),
-      address: String(process.env.BILLING_SUPPLIER_ADDR ?? ""),
-      email: String(process.env.BILLING_SUPPLIER_EMAIL ?? "contact@stepai.kr"),
-    },
-    buyer: {
-      name: biz?.bizName || tenant?.name || "",
-      bizNo: biz?.bizNo ?? "",
-      ceoName: biz?.ceoName ?? "",
-      address: biz?.address ?? "",
-      email: biz?.contactEmail || tenant?.billingEmail || "",
-    },
+    invoices: rows.map(invoiceFromTopup),
+    supplier: supplierFromEnv(),
+    buyer: await buyerFor(currentTenantId()),
   });
 });
 
@@ -5868,6 +5873,8 @@ app.post("/api/billing/portone/webhook", async (c) => {
       return c.json({ ok: true, credited: false, reason: "이미 적립된 결제입니다(중복 웹훅)." });
     }
     console.log(`[billing] 충전 완료 ${paymentId} · +${settle.credits} 크레딧`);
+    // 인보이스 메일 — 적립이 실제로 일어났을 때만(credited). 실패해도 응답을 막지 않는다.
+    void sendInvoiceEmail(paymentId, owner);
     return c.json({ ok: true, credited: true, credits: settle.credits });
   });
 });

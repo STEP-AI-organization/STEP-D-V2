@@ -16,31 +16,65 @@ export type LayoutState = {
   channelIconY: number;
   channelBoxY: number;
   channelIconSize: number;
+  /** 자막 세로 위치(% · 화면 하단 기준 · 서버 렌더 capMV 와 같은 축). */
+  subtitleY: number;
+  /** 자막 글자 크기(% · 화면 높이 기준 · 서버 CAPTION_PCT 와 같은 축). */
+  subtitleSize: number;
+  /** 자막 색(#RRGGBB). */
+  subtitleColor: string;
 };
+
+/**
+ * 자막 오버레이 기본값 — 서버 렌더(index.ts buildEditorAss)의 자막 기본과 **1:1**.
+ * y = 화면 하단 14%(= 서버 CAPTION_MV_PCT) · size = 화면 높이의 4.4%(= 서버 CAPTION_PCT.korean_pop)
+ * · 색 = 흰색(= 렌더 korean_pop 기본색). overlay-parity.test.ts 가 이 값이 서버와 갈라지지 않게 강제한다.
+ */
+export const SUBTITLE_DEFAULTS = { y: 14, size: 4.4, color: "#FFFFFF" } as const;
 
 /** 소형 카드 기준 폭 — 폰트·패딩은 이 폭 대비 비율로 스케일된다(레이아웃 %좌표는 불변). */
 const BASE_W = 120;
 
-export function TemplatePreview({ template, accent, layout, width = BASE_W }: {
+export function TemplatePreview({ template, accent, layout, frameSrc, subtitlesOn = true, width = BASE_W }: {
   template: FrameTemplate | null;
   accent: string;
   layout: LayoutState;
+  /** 영상 영역 배경으로 깔 실제 샘플 프레임(사용자 최근 회차). 없으면 회색 그라디언트 폴백. */
+  frameSrc?: string;
+  /** 자막 오버레이 표시 여부 — 규칙의 자막 on/off 를 그대로 반영한다(꺼지면 자막이 사라진다). */
+  subtitlesOn?: boolean;
   width?: number;
 }) {
   const s = width / BASE_W;
   const video = template?.video ?? { x: 0, y: 34.2, w: 100, h: 31.7 };
   const iconPct = (layout.channelIconSize * 3 / 1920) * 100; // px(에디터) → 출력높이 → %
+  // 자막 글자 크기 = 화면 높이의 subtitleSize%. 9:16 이라 높이 = width·16/9 (px). 서버 렌더의
+  // fs = H·CAPTION_PCT/100 과 같은 축 — % 값이 같으면 결과물 자막과 같은 크기로 보인다.
+  const subFs = (width * 16 / 9) * layout.subtitleSize / 100;
   return (
     <div className="relative shrink-0 overflow-hidden rounded-md border"
       style={{ width, aspectRatio: "9/16", background: "#000", borderColor: "var(--sd-border)" }}>
-      {/* 영상 영역 */}
-      <div className="absolute" style={{
+      {/* 영상 영역 — 사용자의 최근 회차 프레임(있으면). 없으면 회색 그라디언트 폴백. */}
+      <div className="absolute overflow-hidden" style={{
         left: `${video.x}%`, top: `${video.y}%`, width: `${video.w}%`, height: `${video.h}%`,
-        background: "linear-gradient(135deg,#2a3f4d,#1a2630)",
+        ...(frameSrc
+          ? { backgroundImage: `url(${frameSrc})`, backgroundSize: "cover", backgroundPosition: "center" }
+          : { background: "linear-gradient(135deg,#2a3f4d,#1a2630)" }),
       }} />
-      {/* 제목 2줄 */}
+      {/* 자막 오버레이 — 하단 기준(bottom) · 화면 높이 % 크기 · 색. 서버 렌더(index.ts capMV·\an2)와
+          같은 축이라, 여기서 옮긴 위치·크기·색이 결과물 자막과 그대로 일치한다(파리티 테스트가 강제). */}
+      {subtitlesOn && (
+        <div className="absolute inset-x-0 text-center font-bold leading-tight"
+          style={{
+            bottom: `${layout.subtitleY}%`,
+            fontSize: subFs, color: layout.subtitleColor,
+            textShadow: "0 1px 3px rgba(0,0,0,.85)", paddingInline: 6 * s,
+          }}>
+          예시 자막입니다
+        </div>
+      )}
+      {/* 제목 2줄 — 각 줄은 한 시각 줄로 고정(nowrap · D). 서버 렌더/에디터와 줄 수 일치. */}
       <div className="absolute text-center font-bold leading-tight"
-        style={{ top: `${layout.titleY}%`, left: 4 * s, right: 4 * s, fontSize: 7 * s, color: "#fff" }}>
+        style={{ top: `${layout.titleY}%`, left: 4 * s, right: 4 * s, fontSize: 7 * s, color: "#fff", whiteSpace: "nowrap" }}>
         훅 첫 줄 텍스트
         <div style={{ color: accent }}>둘째 줄 강조</div>
       </div>
@@ -71,20 +105,33 @@ export function LayoutSliders({ layout, onChange, className }: {
   return (
     <div className={className} style={{ color: "var(--sd-fg-dim)" }}>
       {([
-        ["제목 위치", "titleY", 3, 30],
-        ["로고 위치", "channelIconY", 60, 92],
-        ["시간박스 위치", "channelBoxY", 62, 94],
-        ["로고 크기", "channelIconSize", 20, 90],
-      ] as const).map(([label, key, min, max]) => (
+        // [라벨, 키, min, max, step, 단위, 소수자리]
+        ["제목 위치", "titleY", 3, 30, 0.5, "%", 0],
+        ["로고 위치", "channelIconY", 60, 92, 0.5, "%", 0],
+        ["시간박스 위치", "channelBoxY", 62, 94, 0.5, "%", 0],
+        ["로고 크기", "channelIconSize", 20, 90, 0.5, "px", 0],
+        // 자막 — 위치(하단 기준 %)·크기(화면 높이 %). 서버 렌더와 같은 축이라 그대로 결과물에 반영된다.
+        ["자막 위치", "subtitleY", 4, 40, 0.5, "%", 0],
+        ["자막 크기", "subtitleSize", 2.5, 7, 0.1, "%", 1],
+      ] as const).map(([label, key, min, max, step, unit, digits]) => (
         <label key={key} className="block">
-          {label} <span className="opacity-70">{Math.round(layout[key])}{key === "channelIconSize" ? "px" : "%"}</span>
+          {label} <span className="opacity-70">{layout[key].toFixed(digits)}{unit}</span>
           <input
-            type="range" min={min} max={max} step={0.5} value={layout[key]}
+            type="range" min={min} max={max} step={step} value={layout[key]}
             onChange={(e) => onChange({ ...layout, [key]: Number(e.target.value) })}
             className="w-full"
           />
         </label>
       ))}
+      {/* 자막 색 — 슬라이더가 아니라 색상 선택. 서버 렌더의 captionColor(자막 색)로 옮겨진다. */}
+      <label className="flex items-center gap-2">
+        자막 색 <span className="opacity-70">{layout.subtitleColor}</span>
+        <input
+          type="color" value={layout.subtitleColor}
+          onChange={(e) => onChange({ ...layout, subtitleColor: e.target.value })}
+          className="ml-auto h-5 w-8 cursor-pointer"
+        />
+      </label>
     </div>
   );
 }
@@ -95,10 +142,12 @@ export function LayoutSliders({ layout, onChange, className }: {
  * (부모 layout 상태를 그대로 공유 — 다이얼로그 전용 사본을 만들면 닫을 때 유실된다).
  * 관용구는 upload-video-dialog(오버레이 클릭 닫힘) + billing-ui(ESC window keydown).
  */
-export function TemplatePreviewDialog({ template, accent, layout, onLayoutChange, onClose }: {
+export function TemplatePreviewDialog({ template, accent, layout, frameSrc, subtitlesOn = true, onLayoutChange, onClose }: {
   template: FrameTemplate | null;
   accent: string;
   layout: LayoutState;
+  frameSrc?: string;
+  subtitlesOn?: boolean;
   onLayoutChange: (next: LayoutState) => void;
   onClose: () => void;
 }) {
@@ -131,7 +180,7 @@ export function TemplatePreviewDialog({ template, accent, layout, onLayoutChange
         aria-modal="true"
         aria-label="템플릿 대형 미리보기"
       >
-        <TemplatePreview template={template} accent={accent} layout={layout} width={w} />
+        <TemplatePreview template={template} accent={accent} layout={layout} frameSrc={frameSrc} subtitlesOn={subtitlesOn} width={w} />
         <div className="flex min-w-[200px] max-w-[240px] flex-col gap-2 self-stretch">
           <h2 className="sd-serif text-[14px] font-semibold" style={{ color: "var(--sd-fg)" }}>
             {template?.title || template?.name || "템플릿 미리보기"}

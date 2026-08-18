@@ -274,6 +274,10 @@ export async function runAutomationCycle(): Promise<CycleReport> {
           editorState: {
             ...autoEditorState(rec, ep.programTitle ?? "", program,
               (rule as any).templateId, (rule as any).layout),
+            // 자막 on/off — 규칙 기본 ON(true · 하위호환). layout.subtitles === false 일 때만 끈다.
+            // autoEditorState 는 captionsOn:false 를 시드하지만(공장 경로 · 번인 겹침 방지), 자동배포는
+            // 규칙 토글을 따른다 — 드라마처럼 원본 번인 자막이 있는 회차는 규칙에서 자막을 끈다.
+            captionsOn: rule.layout?.subtitles !== false,
             // autoEditorState 는 쇼츠 전제로 aspect 9:16 을 박는데, /export 는 editorState.aspect
             // 를 **최우선**으로 읽는다 — 여기서 안 뒤집으면 aspectRatio 에 저장만 되고 렌더에
             // 미도달해서 **가로 클립이 세로로 잘려 나간다.** 세로일 때만 기존값 그대로.

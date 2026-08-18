@@ -152,7 +152,6 @@ export function EditorShell({ clipId }: { clipId: string }) {
   const [saving, setSaving] = useState(false);
   const [reframeBusy, setReframeBusy] = useState(false);
   const [exporting, setExporting] = useState(false);
-  const [exportElapsed, setExportElapsed] = useState(0);
   // 키프레임 선택 상태 (타임라인 다이아몬드 ↔ 속성 패널 공유, C1).
   const [kfSel, setKfSel] = useState<KfSelection>(null);
   // CapCut 스타일 좌우 패널 접기/펼치기 상태 (기본 펼침 — 처음엔 다 보이게)
@@ -160,18 +159,8 @@ export function EditorShell({ clipId }: { clipId: string }) {
   // 좌측 패널 탭. Opus Clip 처럼 트랜스크립트를 기본으로 — 자막을 읽으며 편집한다.
   const [leftTab, setLeftTab] = useState<"transcript" | "ai">("transcript");
   const [rightOpen, setRightOpen] = useState(true);
-  useEffect(() => {
-    if (!exporting) { setExportElapsed(0); return; }
-    const t0 = Date.now();
-    const id = window.setInterval(() => setExportElapsed(Math.floor((Date.now() - t0) / 1000)), 500);
-    return () => window.clearInterval(id);
-  }, [exporting]);
-  // 서버는 동기 렌더라 실제 진척 미측정. 경과 시간 기반으로 예상 단계 안내(사용자 안심용).
-  // 실측(하하 15~40초 클립): 자막 번인 ~3s · 리프레이밍 ~4s · 인코딩 ~8-15s.
-  const exportStage =
-    exportElapsed < 3 ? "자막 번인 준비"
-    : exportElapsed < 8 ? "리프레이밍(9:16 등)"
-    : "인코딩(H.264)";
+  // 렌더는 서버 동기 처리라 실제 진척을 측정하지 않는다 — 버튼은 "진행 중"만 표시한다(G).
+  // 예전엔 경과 초(…s)와 예상 단계를 보여줬는데, 실측과 무관한 숫자라 오히려 오해를 샀다.
   const rendered = clip?.status === "ready" || clip?.status === "published";
   const aiReframeNotReady = reframeMode === "ai_multi" && reframe?.status !== "ready";
 
@@ -760,7 +749,7 @@ export function EditorShell({ clipId }: { clipId: string }) {
           >
             {rendered ? <Check className="size-4 text-emerald-400" /> : <Film className="size-4" />}
             {exporting
-              ? <span className="tabular-nums">{exportStage} · {exportElapsed}s</span>
+              ? "진행 중"
               : rendered ? "확정됨" : "확정(렌더)"}
           </button>
           <Link

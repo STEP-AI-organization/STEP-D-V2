@@ -327,6 +327,12 @@ export interface EditorState {
   highlightColor: string;
   /** Colour for keyword (content-word) emphasis in captions. Absent = same as highlightColor. */
   keywordColor?: string;
+  /** 자막 세로 위치(% · 화면 하단 기준). 미지정이면 렌더/미리보기 기본 14. 자동배포 규칙이 세팅. */
+  captionY?: number;
+  /** 자막 글자 크기(% · 화면 높이 기준). 미지정이면 captionStyle 기본(CAPTION_PCT). */
+  captionSize?: number;
+  /** 자막 색(#RRGGBB). 미지정이면 captionStyle 기본색. */
+  captionColor?: string;
   showSafeArea: boolean;
   elements: EditorElement[];
   trimIn: number; // seconds
@@ -516,7 +522,8 @@ export function makeInitialEditorState(
     titleY: 11,
     showChannel: true,
     channelName: programTitle || "",
-    channelY: 88,
+    // 채널 뱃지 세로 위치 기본 = 깔끔한 정수 80% (E · 서버 TEMPLATE_SEEDS.channelY 와 동일).
+    channelY: 80,
     channelLabelSize: 30,
     channelIconSize: 40,
     // 방송 원본은 번인 자막이 이미 있다 — AI 자막을 겹쳐 굽지 않는 게 기본.
@@ -620,7 +627,7 @@ export function ensureTracks(state: EditorState, durationSec: number, segmentSta
     // 채널
     showChannel: typeof state.showChannel === "boolean" ? state.showChannel : true,
     channelName: state.channelName ?? "",
-    channelY: typeof state.channelY === "number" ? state.channelY : 82,
+    channelY: typeof state.channelY === "number" ? state.channelY : 80,
     channelIconDataUrl: typeof state.channelIconDataUrl === "string" ? state.channelIconDataUrl : undefined,
     channelBadgeTemplate:
       state.channelBadgeTemplate && CHANNEL_BADGE_PRESETS.some((p) => p.id === state.channelBadgeTemplate)

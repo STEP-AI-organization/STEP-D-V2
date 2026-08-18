@@ -109,3 +109,91 @@ describe("채널 뱃지 — 이름과 아이콘이 같은 계산을 쓴다", () 
       "부가줄을 서버가 안 구우면 편집 화면에만 보이고 결과물엔 없다");
   });
 });
+
+/**
+ * 자동배포 자막 오버레이 파리티 — **자동배포 화면 미리보기(template-preview.tsx)** ↔ 서버 렌더.
+ *
+ * 자막 위치·크기·색을 규칙에서 조절할 수 있게 되면서, 미리보기가 보여준 자리와 결과물 자리가
+ * 갈라질 새 표면이 생겼다. 미리보기는 % 값(하단 기준·화면 높이 비율)으로 그리고, 서버 렌더는
+ * capMV(\an2 하단 기준)·CAPTION_PCT(높이 비율)로 굽는다 — **같은 축·같은 기본값**이어야 한다.
+ * 기본값이 두 파일에서 갈라지는 순간 빨간불이 켜지게 고정한다.
+ */
+const TPL = fs.readFileSync(
+  path.resolve(HERE, "../../web/src/components/automation/template-preview.tsx"), "utf-8");
+
+// 미리보기 자막 기본값: export const SUBTITLE_DEFAULTS = { y: 14, size: 4.4, color: "#FFFFFF" }
+const subBlock = /SUBTITLE_DEFAULTS\s*=\s*\{([\s\S]*?)\}/.exec(TPL);
+const subDefaults: Record<string, string> = {};
+if (subBlock) for (const m of subBlock[1].matchAll(/(\w+):\s*"?([#\w.]+)"?/g)) subDefaults[m[1]] = m[2];
+
+describe("자막 오버레이 기하 — 자동배포 미리보기 자막 기본값이 서버 렌더 기본과 같아야 한다", () => {
+  it("SUBTITLE_DEFAULTS(y·size·color)를 읽을 수 있다", () => {
+    assert.ok(subBlock, "template-preview 의 SUBTITLE_DEFAULTS 를 못 찾았다 — 정규식이 낡았는지 확인");
+    for (const k of ["y", "size", "color"]) assert.ok(subDefaults[k] != null, `SUBTITLE_DEFAULTS.${k} 를 못 읽었다`);
+  });
+
+  it("자막 기본 세로 위치 — 미리보기 y 와 서버 CAPTION_MV_PCT 가 1:1", () => {
+    const mv = /const CAPTION_MV_PCT = ([\d.]+);/.exec(SERVER);
+    assert.ok(mv, "서버 CAPTION_MV_PCT 선언을 못 찾았다 — 자막 기본 세로 위치 상수");
+    assert.equal(Number(subDefaults.y), Number(mv![1]),
+      `자막 기본 위치가 미리보기 ${subDefaults.y}% 인데 렌더는 ${mv![1]}% — 결과물 자막이 다른 높이에 박힌다`);
+  });
+
+  it("자막 기본 크기 — 미리보기 size 와 서버 CAPTION_PCT.korean_pop 이 1:1", () => {
+    const b = /const CAPTION_PCT: Record<string, number> = \{([\s\S]*?)\};/.exec(SERVER);
+    assert.ok(b, "서버 CAPTION_PCT 표를 못 찾았다");
+    const pct: Record<string, number> = {};
+    for (const m of b![1].matchAll(/(\w+):\s*([\d.]+)/g)) pct[m[1]] = Number(m[2]);
+    assert.equal(Number(subDefaults.size), pct.korean_pop,
+      `자막 기본 크기가 미리보기 ${subDefaults.size}% 인데 렌더 기본은 ${pct.korean_pop}% — 글자 크기가 갈라진다`);
+  });
+
+  it("자막 기본색이 흰색 — 렌더 korean_pop 기본색과 일치", () => {
+    assert.equal(String(subDefaults.color).toUpperCase(), "#FFFFFF",
+      "자막 기본색이 흰색이 아니다 — 렌더 korean_pop 기본색(흰색)과 어긋난다");
+  });
+});
+
+/**
+ * 제목 2줄 파리티 (D) — 추천의 **시맨틱 2줄 분할**(titleLine1/titleLine2)이 무인 렌더 시드에서
+ * 폭 기준으로 재분할되면 안 된다. 예전엔 factory 가 line2 를 버리고 line1 하나만 폭 분할해
+ * (wrapAutoTitle), 그 결과를 렌더/에디터가 또 접어 **3줄**이 됐다. 이제 titleLines 줄 수 =
+ * 시각 줄 수여야 한다. 순수 함수로 증명 안 되는 배선 불변식이라 소스 스캔이다.
+ */
+const FACTORY = fs.readFileSync(path.join(HERE, "factory.ts"), "utf-8");
+
+describe("제목 2줄 — factory autoEditorState 가 titleLine1/2 시맨틱 분할을 재랩핑하지 않는다", () => {
+  it("autoEditorState 가 titleLine1·titleLine2 를 둘 다 읽는다", () => {
+    assert.match(FACTORY, /rec\.titleLine1/, "titleLine1 을 안 읽는다");
+    assert.match(FACTORY, /rec\.titleLine2/,
+      "titleLine2 를 안 읽는다 — 추천의 둘째 줄이 버려지면 렌더가 첫 줄을 폭 분할해 3줄이 된다");
+  });
+
+  it("둘 다 있으면 [line1, line2] 를 명시적 두 줄로 쓴다 (폭 기준 재분할 금지)", () => {
+    assert.match(FACTORY, /lines = \[line1, line2\]/,
+      "두 줄이 모두 있을 때 wrapAutoTitle 로 재분할하면 안 된다 — 시맨틱 분할을 그대로 쓴다");
+  });
+
+  it("명시적 2줄은 더 긴 줄이 한 줄에 맞도록 크기를 정한다 (nowrap 전제)", () => {
+    assert.match(FACTORY, /fitTwoLineTitleSize\(line1, line2\)/,
+      "폰트 크기를 최장 줄 기준으로 축소하지 않으면, 재랩핑을 끈 렌더에서 긴 줄이 화면 밖으로 나간다");
+  });
+});
+
+describe("자막 오버레이 배선 — 미리보기와 렌더가 같은 값(위치·크기·색)을 실제로 소비한다", () => {
+  it("서버 렌더가 captionY·captionSize·captionColor 오버라이드를 읽는다", () => {
+    // 안 읽으면 규칙에서 조절한 자막이 결과물에 미도달한다(이 리포 최빈 실패모드).
+    assert.match(SERVER, /captionY/, "렌더가 captionY 를 안 읽으면 자막 세로 위치 조절이 결과물에 미도달한다");
+    assert.match(SERVER, /captionSize/, "렌더가 captionSize 를 안 읽으면 자막 크기 조절이 결과물에 미도달한다");
+    assert.match(SERVER, /captionColor/, "렌더가 captionColor 를 안 읽으면 자막 색 조절이 결과물에 미도달한다");
+  });
+
+  it("미리보기가 자막을 하단 기준(bottom)으로 subtitle* 값에 그린다 — 렌더 capMV(\\an2)와 같은 축", () => {
+    assert.match(TPL, /subtitleY/, "미리보기가 subtitleY 를 안 쓰면 위치 조절이 미리보기에 반영되지 않는다");
+    assert.match(TPL, /subtitleSize/, "미리보기가 subtitleSize 를 안 쓴다");
+    assert.match(TPL, /subtitleColor/, "미리보기가 subtitleColor 를 안 쓴다");
+    // top 으로 그리면 렌더(하단 기준)와 부호가 뒤집혀 자막이 반대편에 뜬다.
+    assert.match(TPL, /bottom:\s*`\$\{[^}]*subtitleY[^}]*\}%`/,
+      "자막을 bottom(하단 기준)으로 안 그리면 렌더의 capMV(하단 기준)와 위치축이 어긋난다");
+  });
+});

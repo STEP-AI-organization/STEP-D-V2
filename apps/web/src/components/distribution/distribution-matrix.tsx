@@ -96,7 +96,7 @@ export function DistributionMatrix({
                       <div className="sd-mono truncate text-[10px]" style={{ color: "var(--sd-mut)" }}>
                         {programTitle}
                         {episodeNumber != null ? ` · ${episodeNumber}화` : ""}
-                        {clip.editKind ? ` · ${EDIT_KIND_LABEL[clip.editKind]}` : ""} · {fmtTime(clip.durationSec)}
+                        {clip.editKind ? ` · ${EDIT_KIND_LABEL[clip.editKind]}` : ""} · {fmtTime(clip.durationSec || Math.max(0, (clip.endTime ?? 0) - (clip.startTime ?? 0)))}
                       </div>
                     </div>
                   </div>
@@ -139,10 +139,7 @@ function Cell({
   onRetry: (clipId: string, channel: DistributionChannel) => void;
 }) {
   const d = clip.distributions?.find((x) => x.channel === channel && x.status !== "none");
-  // 자동/수동 구분 — origin 이 있는 기록만(구 기록은 표기 생략 · 추측 금지).
-  const originLabel =
-    d?.origin === "automation" || d?.origin === "factory" ? "자동"
-    : d?.origin === "manual" || d?.origin === "retry" ? "수동" : null;
+  // 배지는 상태만 보여준다 — origin(수동/자동) 접미는 붙이지 않는다(2026-08-18).
 
   // 아직 이 채널로 안 나감 — 누르면 배포.
   if (!d) {
@@ -183,9 +180,9 @@ function Cell({
         rel="noreferrer"
         className="mx-auto inline-flex items-center gap-1 rounded-[4px] px-1.5 py-0.5 text-[10.5px] font-medium hover:brightness-95"
         style={{ background: s.bg, color: s.fg }}
-        title={originLabel ? `영상 열기 · ${originLabel} 배포` : "영상 열기"}
+        title="영상 열기"
       >
-        ● 게시{originLabel ? ` · ${originLabel}` : ""} ↗
+        ● 게시 ↗
       </a>
     );
   }
@@ -194,9 +191,9 @@ function Cell({
     <span
       className="mx-auto inline-flex items-center gap-1 rounded-[4px] px-1.5 py-0.5 text-[10.5px] font-medium"
       style={{ background: s.bg, color: s.fg }}
-      title={d.reserveDate ? `예약 ${d.reserveDate}` : originLabel ? `${s.label} · ${originLabel} 배포` : s.label}
+      title={d.reserveDate ? `예약 ${d.reserveDate}` : s.label}
     >
-      ● {s.label}{originLabel ? ` · ${originLabel}` : ""}
+      ● {s.label}
     </span>
   );
 }

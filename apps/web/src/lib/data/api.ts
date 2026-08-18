@@ -914,8 +914,22 @@ export interface AutomationRule {
   enabled: boolean;
   /** 렌더 템플릿 (assets/shorts-template 이름). 미지정 = 프로그램 장르 자동. */
   templateId?: string;
-  /** 템플릿 위치 미세조정 — 자동배포 화면 슬라이더 (시드 기본값 위에 덮임). */
-  layout?: { titleY?: number; channelIconY?: number; channelBoxY?: number; channelIconSize?: number };
+  /**
+   * 템플릿 위치 미세조정 — 자동배포 화면 슬라이더 (시드 기본값 위에 덮임).
+   * 자막 오버레이(위치 %·크기 %·색·on/off)도 이 layout JSONB 안에 함께 담긴다
+   * (automation_rule 에 자막 전용 컬럼 없이 라운드트립).
+   */
+  layout?: {
+    titleY?: number; channelIconY?: number; channelBoxY?: number; channelIconSize?: number;
+    /** 자막 세로 위치(% · 화면 하단 기준). */
+    subtitleY?: number;
+    /** 자막 글자 크기(% · 화면 높이 기준). */
+    subtitleSize?: number;
+    /** 자막 색(#RRGGBB). */
+    subtitleColor?: string;
+    /** 자막 켜기 — 기본 true. false 면 자동 클립을 자막 없이 렌더. */
+    subtitles?: boolean;
+  };
   /**
    * 자동 생성 숏폼의 리프레임 — 수동 채택(adopt-dialog)과 같은 값 체계.
    * "ai" = beat별 얼굴 추적 자동 크롭 · "none"(기본) = 중앙 고정 크롭.

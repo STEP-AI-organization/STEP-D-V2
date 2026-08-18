@@ -24,6 +24,7 @@ import { UploadVideoButton } from "@/components/upload-video-dialog";
 import type { AdoptReframe } from "@/components/adopt-dialog";
 import {
   LayoutSliders,
+  SUBTITLE_DEFAULTS,
   TemplatePreview,
   TemplatePreviewDialog,
   type LayoutState,
@@ -52,7 +53,7 @@ import {
 import { useAppData } from "@/lib/data/store";
 import { channelLabel, PIPELINE_STAGES } from "@/lib/constants";
 import type { Clip, Episode } from "@/lib/types";
-import { clipThumbSrc } from "@/lib/media-url";
+import { clipThumbSrc, mediaThumbSrc } from "@/lib/media-url";
 import { cn } from "@/lib/utils";
 
 const KIND_LABEL: Record<RuleMediaKind, string> = { short: "숏폼", clip: "클립", both: "숏폼+클립" };
@@ -137,7 +138,7 @@ function episodeAnalysis(ep: Episode, hasMaster: boolean): {
 }
 
 export default function AutomationPage() {
-  const { programs, episodes, clips, mediaForEpisode } = useAppData();
+  const { programs, episodes, clips, media, mediaForEpisode } = useAppData();
   const { toast } = useToast();
   const actor = useSession().user.name;
 
@@ -194,6 +195,9 @@ export default function AutomationPage() {
   const [templateId, setTemplateId] = useState(""); // "" = 프로그램 장르 자동
   const [templates, setTemplates] = useState<FrameTemplate[]>([]);
   const [layout, setLayout] = useState<LayoutState | null>(null);
+  // 자막 on/off — 규칙 기본 ON(하위호환). 끄면 이 규칙의 자동 클립을 자막 없이 렌더한다.
+  // 저장 시 layout.subtitles 로 담긴다(automation_rule 에 자막 전용 컬럼 없이 라운드트립).
+  const [subtitles, setSubtitles] = useState(true);
   // AI 리프레임 — 수동 채택(adopt-dialog)과 같은 값 체계("ai"|"none")·같은 라벨.
   // 기본 "none" = 중앙 고정 크롭(서버 factory 의 basicReframeState 기본과 동일).
   const [reframe, setReframe] = useState<AdoptReframe>("none");
@@ -210,7 +214,10 @@ export default function AutomationPage() {
   useEffect(() => {
     if (skipLayoutReset.current) { skipLayoutReset.current = false; return; }
     const s = TEMPLATE_SEED_UI[effectiveTemplate] ?? TEMPLATE_SEED_UI["broadcast-standard"];
-    setLayout({ titleY: s.titleY, channelIconY: s.iconY, channelBoxY: s.boxY, channelIconSize: s.iconSize });
+    setLayout({
+      titleY: s.titleY, channelIconY: s.iconY, channelBoxY: s.boxY, channelIconSize: s.iconSize,
+      subtitleY: SUBTITLE_DEFAULTS.y, subtitleSize: SUBTITLE_DEFAULTS.size, subtitleColor: SUBTITLE_DEFAULTS.color,
+    });
   }, [effectiveTemplate]);
 
   // ── ③ 채널 선택지 — 구 규칙 폼의 channelOptions 로직 그대로 ───────────────────────
@@ -286,6 +293,7 @@ export default function AutomationPage() {
     setActiveStart(r.activeStart ?? 9); setActiveEnd(r.activeEnd ?? 22);
     setTemplateId(r.templateId ?? "");
     setReframe(r.reframe ?? "none"); // 구 규칙(필드 없음)은 기본과 같은 "none"
+    setSubtitles(r.layout?.subtitles !== false); // 구 규칙(필드 없음)은 기본 ON
     if (r.layout) {
       const seed = TEMPLATE_SEED_UI[r.templateId || "broadcast-standard"] ?? TEMPLATE_SEED_UI["broadcast-standard"];
       skipLayoutReset.current = true; // 템플릿 리셋 이펙트가 이 값을 덮지 않게
@@ -294,6 +302,9 @@ export default function AutomationPage() {
         channelIconY: r.layout.channelIconY ?? seed.iconY,
         channelBoxY: r.layout.channelBoxY ?? seed.boxY,
         channelIconSize: r.layout.channelIconSize ?? seed.iconSize,
+        subtitleY: r.layout.subtitleY ?? SUBTITLE_DEFAULTS.y,
+        subtitleSize: r.layout.subtitleSize ?? SUBTITLE_DEFAULTS.size,
+        subtitleColor: r.layout.subtitleColor ?? SUBTITLE_DEFAULTS.color,
       });
     }
   }, [selProgram, rules, loading]);
@@ -392,7 +403,9 @@ export default function AutomationPage() {
           : mediaKind === "clip" ? { orientation: "landscape" as const } : {}),
         reframe: mediaKind === "short" ? reframe : "none",
         ...(templateId ? { templateId } : {}),
-        ...(layout ? { layout } : {}),
+        // 자막 위치·크기·색(layout)과 자막 on/off(subtitles)를 layout JSONB 안에 함께 보낸다 —
+        // automation_rule 에 자막 전용 컬럼을 두지 않고 라운드트립시킨다.
+        layout: layout ? { ...layout, subtitles } : { subtitles },
       });
       const r = await runAutomationNow();
       toast({
@@ -459,6 +472,18 @@ export default function AutomationPage() {
         .sort((a, b) => (b.episodeNumber ?? 0) - (a.episodeNumber ?? 0)),
     [episodes, selProgram],
   );
+
+  // 미리보기 영상 배경 = 사용자의 최근 회차 원본 프레임(자동). 선택 프로그램 회차를 우선 쓰고,
+  // 없으면 전체에서 가장 최근 원본을 쓴다. 하나도 없으면 undefined → 미리보기가 회색 그라디언트로 폴백.
+  const sampleFrameSrc = useMemo(() => {
+    const masters = media.filter((m) => m.role === "master");
+    if (masters.length === 0) return undefined;
+    const progEpIds = new Set(episodes.filter((e) => e.programId === selProgram).map((e) => e.id));
+    const byRecent = (a: (typeof masters)[number], b: (typeof masters)[number]) => b.createdAt - a.createdAt;
+    const preferred = masters.filter((m) => m.episodeId && progEpIds.has(m.episodeId)).sort(byRecent)[0];
+    const pick = preferred ?? masters.slice().sort(byRecent)[0];
+    return pick ? mediaThumbSrc(pick.id) : undefined;
+  }, [media, episodes, selProgram]);
 
   // ── ④ 진행 패널 파생값 — 이 프로그램 규칙의 확인 기록 → 클립 → 렌더 → 배포 조인 ──
   const progress = useMemo(() => {
@@ -845,6 +870,8 @@ export default function AutomationPage() {
                       template={templates.find((t) => t.name === effectiveTemplate) ?? null}
                       accent={(TEMPLATE_SEED_UI[effectiveTemplate] ?? TEMPLATE_SEED_UI["broadcast-standard"]).accent}
                       layout={layout}
+                      frameSrc={sampleFrameSrc}
+                      subtitlesOn={subtitles}
                     />
                   </button>
                   <span className="text-center text-[10px]" style={{ color: "var(--sd-mut)" }}>
@@ -854,6 +881,13 @@ export default function AutomationPage() {
                 <LayoutSliders layout={layout} onChange={setLayout} className="flex-1 space-y-2 text-[10.5px]" />
               </div>
             )}
+
+            {/* 자막 켜기 — 규칙 기본 ON. 끄면 이 규칙의 자동 클립을 자막(STT 번인) 없이 렌더한다
+                (드라마 등 원본에 자막이 이미 있는 회차용). 위 미리보기의 자막도 함께 사라진다. */}
+            <label className="flex items-center gap-2 text-[11.5px]" style={{ color: "var(--sd-fg)" }}>
+              <input type="checkbox" checked={subtitles} onChange={(e) => setSubtitles(e.target.checked)} />
+              자막 켜기 (끄면 이 규칙의 자동 클립에 자막을 넣지 않습니다 — 원본에 자막이 이미 있는 회차용)
+            </label>
 
             <label className="flex items-center gap-2 text-[11.5px]" style={{ color: "var(--sd-fg)" }}>
               <input type="checkbox" checked={approveFirst} onChange={(e) => setApproveFirst(e.target.checked)} />
@@ -1179,6 +1213,8 @@ export default function AutomationPage() {
           template={templates.find((t) => t.name === effectiveTemplate) ?? null}
           accent={(TEMPLATE_SEED_UI[effectiveTemplate] ?? TEMPLATE_SEED_UI["broadcast-standard"]).accent}
           layout={layout}
+          frameSrc={sampleFrameSrc}
+          subtitlesOn={subtitles}
           onLayoutChange={setLayout}
           onClose={() => setTplPreviewOpen(false)}
         />

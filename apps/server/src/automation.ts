@@ -62,8 +62,25 @@ export interface AutomationRule {
   enabled: boolean;
   /** 렌더 템플릿 (assets/shorts-template 이름). 미지정 = 프로그램 장르 자동. */
   templateId?: string;
-  /** 템플릿 위치 미세조정(%·px) — 자동배포 화면 슬라이더. 시드 기본값 위에 덮인다. */
-  layout?: { titleY?: number; channelIconY?: number; channelBoxY?: number; channelIconSize?: number };
+  /**
+   * 템플릿 위치 미세조정(%·px) — 자동배포 화면 슬라이더. 시드 기본값 위에 덮인다.
+   *
+   * 자막(subtitle*)·자막 on/off(subtitles)도 **여기 layout JSONB 안에** 함께 산다. automation_rule
+   * 에 자막 전용 컬럼을 새로 두지 않고(마이그레이션 없이 라운드트립) 이 JSONB 로 흘린다 —
+   * layout 은 이미 route→upsert→listAutomationRules→순방까지 통짜로 오간다. 위치·크기·색은
+   * 서버 렌더의 caption* 로 옮겨지고(factory.autoEditorState), on/off 는 captionsOn 이 된다.
+   */
+  layout?: {
+    titleY?: number; channelIconY?: number; channelBoxY?: number; channelIconSize?: number;
+    /** 자막 켜기 — 기본 true(하위호환). false 면 자동 클립이 captionsOn=false 로 렌더된다. */
+    subtitles?: boolean;
+    /** 자막 세로 위치(% · 화면 하단 기준 · 서버 렌더 capMV 와 같은 축). 기본 14. */
+    subtitleY?: number;
+    /** 자막 글자 크기(% · 화면 높이 기준 · 서버 CAPTION_PCT 와 같은 축). 기본 4.4. */
+    subtitleSize?: number;
+    /** 자막 색(#RRGGBB). 기본 #FFFFFF. */
+    subtitleColor?: string;
+  };
   // ── 다중 확장 (2026-08-12) — 배열이 있으면 배열이 정본, 없으면 단수 폴백 ──
   /** 여러 프로그램. 없으면 [programId]. */
   programIds?: string[];
