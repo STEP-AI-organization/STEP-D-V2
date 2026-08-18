@@ -5,7 +5,8 @@ import { Heart, MessageCircle, Send } from "lucide-react";
 import { ASPECTS, defaultElementSize, filterCss, overlayVisibleAt, sampleKeyframes, type CaptionStyle, type EditorState } from "@/lib/editor/presets";
 import { getAspectPreset } from "@/lib/editor/aspect-presets";
 import { Movable, SnapGuides, InlineText, type Guides } from "@/components/editor/editor-overlay";
-import { frameUrl, frameOverlaySrc, type FrameTemplate } from "@/lib/data/api";
+import { frameUrl, frameOverlaySrc, overlayPngSrc, type FrameTemplate } from "@/lib/data/api";
+import { useOverlayPng } from "@/components/editor/use-overlay-png";
 import { sampleReframeFrame } from "@/lib/editor/reframe";
 import type { ClipReframe } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -73,6 +74,7 @@ export function EditorPreview({
   frame,
   reframe,
   masterTime,
+  clipId,
 }: {
   state: EditorState;
   update: (patch: Partial<EditorState>) => void;
@@ -95,6 +97,9 @@ export function EditorPreview({
   /** Ready AI plan. Beat/tracking timestamps use source-master absolute seconds. */
   reframe?: ClipReframe;
   masterTime?: number;
+  /** 클립 id. 주면 정적 오버레이(제목·채널명)를 **서버 렌더 PNG** 로 표시(구조적 WYSIWYG).
+   *  없으면 종전대로 CSS 근사만(무회귀). */
+  clipId?: string;
 }) {
   const poster =
     posterMediaId && posterApiBase != null ? frameUrl(posterApiBase, posterMediaId, posterTime ?? 0) : undefined;
@@ -128,6 +133,20 @@ export function EditorPreview({
   const [selected, setSelected] = useState<string | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
   const [guides, setGuides] = useState<Guides>({});
+
+  // 정적 오버레이 WYSIWYG — 서버가 canvas 로 그린 실제 PNG(제목·채널명) hash. 편집/드래그
+  // 중이 아니고(idle) 제목이 전부 정적(애니메이션·시간창 없음)일 때만 그 PNG 를 `<img>` 로
+  // 보여주고 그 자리의 CSS 텍스트는 투명 처리한다(더블클릭·드래그 히트박스는 유지). 편집을
+  // 시작하면 다시 CSS(편집 가능). PNG 가 없으면(hash null · clipId 없음) 순수 CSS — 무회귀.
+  const overlayHash = useOverlayPng(clipId, state);
+  const allTitlesStatic = (state.titleLines ?? []).every(
+    (l) => !(l.keyframes && l.keyframes.length) && l.startSec == null && l.endSec == null,
+  );
+  const editingTitleOrChannel =
+    editing != null && (editing.startsWith("title:") || editing === "channel");
+  const showOverlayPng =
+    !!clipId && !!overlayHash && !aiFill && allTitlesStatic &&
+    selected !== "title" && selected !== "channel" && !editingTitleOrChannel;
 
   // Keep the blurred cover background roughly in step with the foreground transport (it's
   // decorative + heavily blurred, so a loose sync is invisible).
@@ -363,6 +382,19 @@ export function EditorPreview({
           </div>
         )}
 
+        {/* 정적 오버레이 PNG — 서버 렌더 결과물의 제목·채널 텍스트와 **같은 픽셀**. 전체프레임
+            투명 PNG 라 스테이지에 꽉 채우면(같은 종횡비) 그대로 맞는다. pointer-events-none 이라
+            클릭은 밑의 CSS 오버레이(투명)로 통과 → 더블클릭 편집·드래그가 그대로 동작한다. */}
+        {showOverlayPng && overlayHash && clipId && (
+          <img
+            src={overlayPngSrc(clipId, overlayHash)}
+            alt=""
+            aria-hidden
+            draggable={false}
+            className="pointer-events-none absolute inset-0 size-full"
+          />
+        )}
+
         {!aiFill && <SnapGuides guides={guides} />}
 
         {/* title lines — draggable block, double-click a line to edit. Lines outside their
@@ -401,6 +433,9 @@ export function EditorPreview({
               whiteSpace: "nowrap",
               // display:none (not unmount) keeps resizeBase/onResize index mapping intact.
               display: lineShown ? undefined : "none",
+              // 정적 오버레이 PNG 를 보여줄 땐 CSS 텍스트를 투명 처리(히트박스는 유지 → 더블클릭
+              // 편집·드래그 그대로). editing 이면 showOverlayPng=false 라 다시 보인다.
+              ...(showOverlayPng ? { opacity: 0 } : {}),
               ...(kf
                 ? {
                     opacity: kf.opacity,
@@ -518,6 +553,9 @@ export function EditorPreview({
                       "flex flex-col leading-tight",
                       layout === "vertical" ? "items-center text-center" : "items-start",
                     )}
+                    // 정적 오버레이 PNG 를 보여줄 땐 채널 텍스트를 투명 처리(아이콘은 유지 — PNG 엔
+                    // 아이콘이 없다). 편집/드래그 시엔 showOverlayPng=false 라 다시 CSS 로 보인다.
+                    style={showOverlayPng ? { opacity: 0 } : undefined}
                   >
                     <span
                       className="font-semibold text-white"

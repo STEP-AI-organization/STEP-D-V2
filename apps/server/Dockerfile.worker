@@ -91,6 +91,8 @@ RUN mkdir -p /opt/reframe-models \
 # 렌더 폰트 — 서버 Dockerfile 과 동일 (Pretendard, ASS Fontname 매칭)
 COPY assets/fonts /usr/share/fonts/opentype/pretendard
 RUN fc-cache -f
+# canvas 정적 오버레이 PNG 렌더(overlay-canvas.ts)의 리포 상대경로 폰트 — 서버 Dockerfile 과 동일.
+COPY assets/fonts assets/fonts
 # 인보이스 PDF 폰트 — content 워커도 분석 후 자동충전(maybeAutoTopup)에서 결제·메일을 보낸다.
 COPY assets/invoice-fonts assets/invoice-fonts
 

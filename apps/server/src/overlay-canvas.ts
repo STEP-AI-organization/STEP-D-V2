@@ -1,0 +1,162 @@
+/**
+ * overlay-canvas — 정적 텍스트 오버레이를 **투명 PNG** 로 렌더한다 (AENA 방식 이식).
+ *
+ * STEP-D 의 자막(STT)은 수백 개 시간축 이벤트라 ASS 로 남기지만(하이브리드), 제목·채널명 같은
+ * **정적 오버레이**는 클립 전체에 고정이라 한 장의 PNG 로 표현할 수 있다. 이 PNG 를
+ *   1) 렌더 파이프라인에서 ffmpeg `overlay` 로 합성(ASS 번인 대신)하고
+ *   2) 에디터가 같은 PNG 를 `<img>` 로 표시(구조적 WYSIWYG)
+ * 하는 게 이 모듈의 목적이다.
+ *
+ * 이 모듈은 **좌표를 계산하지 않는다.** 좌표·폰트·색은 전부 index.ts(파리티의 정본)가 계산해
+ * `OverlayTextItem[]` 으로 넘긴다 — 여기선 캔버스에 그리기만 한다. index.ts ↔ overlay-canvas
+ * 순환 의존을 피하고, 파리티 스캔 테스트가 계속 index.ts 를 보게 하려는 의도적 분리다.
+ *
+ * @napi-rs/canvas 는 prebuilt 네이티브 바이너리다. 로드 실패(플랫폼 미지원 등) 시 renderer 는
+ * null 을 반환하고, 호출자(index.ts)는 정적 오버레이를 **ASS 로 폴백**해 결과물에서 사라지지
+ * 않게 한다(무회귀 안전장치).
+ */
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+/** 캔버스에 그릴 한 줄의 텍스트. 좌표(x,y)·폰트 px 는 전부 **출력 해상도(1080×1920 등) 기준**. */
+export type OverlayTextItem = {
+  text: string;
+  /** 앵커 x (align 에 따라 좌/중앙/우 기준점). 출력 px. */
+  x: number;
+  /** 앵커 y. baseline 이 기준(기본 "top" = 글자 상단). 출력 px. */
+  y: number;
+  align: "left" | "center" | "right";
+  baseline?: "top" | "middle" | "alphabetic";
+  /** 폰트 크기(출력 px). */
+  fontPx: number;
+  /** CSS font-weight (700/800/900). 설치 폰트가 3종이라 그 근처로 스냅한다. */
+  weight: number;
+  /** 채움 색 (#rrggbb). */
+  color: string;
+  /** 0~1. 부가줄(text-white/80) 등. */
+  opacity?: number;
+  /** 부드러운 그림자 (미리보기 textShadow 미러). 없으면 그림자 없음. */
+  shadow?: { offsetX?: number; offsetY: number; blur: number; color: string };
+};
+
+export type RenderTextLayerInput = {
+  width: number;
+  height: number;
+  items: OverlayTextItem[];
+};
+
+// ── 폰트 ────────────────────────────────────────────────────────────────────
+//
+// ASS 스타일(index.ts)이 "Pretendard ExtraBold" 로 굽는 것과 **같은 폰트 파일**을 canvas 에
+// 등록해야 PNG 글자가 결과물과 어긋나지 않는다. 설치본은 assets/fonts 의 Bold/ExtraBold/Black
+// 3종(OTF). 웹 미리보기의 semibold/medium 같은 중간 웨이트는 없어서 가장 가까운 Bold 로 스냅한다.
+const FONT_FILES: Record<number, string> = {
+  700: "Pretendard-Bold.otf",
+  800: "Pretendard-ExtraBold.otf",
+  900: "Pretendard-Black.otf",
+};
+const FONT_FAMILY: Record<number, string> = {
+  700: "Pretendard Bold",
+  800: "Pretendard ExtraBold",
+  900: "Pretendard Black",
+};
+
+/**
+ * 폰트 파일 후보 경로 — 로컬(리포 상대)과 컨테이너(fontconfig 설치 경로) 양쪽을 커버.
+ *  1) <repo>/assets/fonts  — shorts-template.ts 와 같은 import.meta.url 상대 규칙(로컬 + /app/assets/fonts)
+ *  2) /usr/share/fonts/opentype/pretendard — Dockerfile 이 이미 COPY + fc-cache 하는 경로(컨테이너 상시 존재)
+ */
+const FONT_DIRS = [
+  path.resolve(fileURLToPath(import.meta.url), "../../../../assets/fonts"),
+  "/usr/share/fonts/opentype/pretendard",
+];
+
+function resolveFontFile(file: string): string | null {
+  for (const dir of FONT_DIRS) {
+    const p = path.join(dir, file);
+    if (fs.existsSync(p)) return p;
+  }
+  return null;
+}
+
+/** weight → 설치된 가장 가까운 웨이트(700/800/900). */
+function snapWeight(weight: number): 700 | 800 | 900 {
+  if (weight >= 900) return 900;
+  if (weight >= 750) return 800;
+  return 700;
+}
+
+type CanvasModule = typeof import("@napi-rs/canvas");
+let canvasModPromise: Promise<CanvasModule | null> | null = null;
+const registered = new Set<number>();
+
+/** @napi-rs/canvas 를 지연 로드하고 Pretendard 폰트를 1회 등록한다. 실패 시 null(→ ASS 폴백). */
+async function loadCanvas(): Promise<CanvasModule | null> {
+  if (!canvasModPromise) {
+    canvasModPromise = import("@napi-rs/canvas")
+      .then((mod) => {
+        for (const w of [700, 800, 900] as const) {
+          if (registered.has(w)) continue;
+          const file = resolveFontFile(FONT_FILES[w]);
+          if (file) {
+            try {
+              mod.GlobalFonts.registerFromPath(file, FONT_FAMILY[w]);
+              registered.add(w);
+            } catch {
+              /* 폰트 등록 실패 — 해당 웨이트는 fallback family 로 나간다 */
+            }
+          }
+        }
+        return mod;
+      })
+      .catch(() => null);
+  }
+  return canvasModPromise;
+}
+
+/** 지금 환경에서 canvas 렌더가 가능한지(네이티브 바이너리 로드 성공). */
+export async function overlayCanvasAvailable(): Promise<boolean> {
+  return (await loadCanvas()) != null;
+}
+
+/**
+ * 텍스트 레이어를 투명 PNG 버퍼로 렌더한다. items 가 비었으면 null(그릴 게 없음).
+ * canvas 로드 실패 시에도 null — 호출자가 ASS 폴백을 타야 한다.
+ */
+export async function renderTextLayerPng(input: RenderTextLayerInput): Promise<Buffer | null> {
+  const { width, height, items } = input;
+  if (!items.length || !(width > 0) || !(height > 0)) return null;
+  const mod = await loadCanvas();
+  if (!mod) return null;
+
+  const canvas = mod.createCanvas(width, height);
+  const ctx = canvas.getContext("2d");
+
+  for (const it of items) {
+    const text = String(it.text ?? "");
+    if (!text) continue;
+    const w = snapWeight(Number(it.weight) || 800);
+    const family = registered.has(w) ? FONT_FAMILY[w] : "sans-serif";
+    // 폰트 스택에 이모지·sans-serif 폴백을 붙여 한글 외 글자도 깨지지 않게.
+    ctx.font = `${Math.max(1, Math.round(it.fontPx))}px "${family}", "Apple Color Emoji", "Noto Color Emoji", sans-serif`;
+    ctx.textAlign = it.align ?? "left";
+    ctx.textBaseline = it.baseline ?? "top";
+    ctx.globalAlpha = it.opacity != null ? Math.max(0, Math.min(1, it.opacity)) : 1;
+    if (it.shadow) {
+      ctx.shadowColor = it.shadow.color;
+      ctx.shadowBlur = Math.max(0, it.shadow.blur);
+      ctx.shadowOffsetX = it.shadow.offsetX ?? 0;
+      ctx.shadowOffsetY = it.shadow.offsetY;
+    } else {
+      ctx.shadowColor = "rgba(0,0,0,0)";
+      ctx.shadowBlur = 0;
+      ctx.shadowOffsetX = 0;
+      ctx.shadowOffsetY = 0;
+    }
+    ctx.fillStyle = it.color || "#ffffff";
+    ctx.fillText(text, it.x, it.y);
+  }
+
+  return canvas.toBuffer("image/png");
+}

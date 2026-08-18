@@ -484,6 +484,37 @@ export async function saveClipEditor(clipId: string, editorState: EditorState): 
   await json<{ ok: boolean }>(res);
 }
 
+/** 서버가 그린 **정적 오버레이 PNG**(제목·채널 텍스트)의 content-hash. null = 그릴 정적
+ *  오버레이 없음(또는 canvas 미지원) → 에디터는 CSS 근사를 그대로 쓴다. */
+export interface OverlayPngResponse {
+  hash: string | null;
+  width: number;
+  height: number;
+}
+
+/**
+ * 현재 editorState 로 정적 오버레이 PNG 를 서버에 렌더 요청하고 hash 를 받는다(AENA 방식).
+ * 같은 입력이면 같은 hash → 서버가 캐시를 재사용한다. 이미지 src 는 프록시를 존중하도록
+ * **클라이언트에서 API_BASE 로 합성**한다(서버가 준 절대경로 url 은 프록시를 안 탐).
+ */
+export async function renderClipOverlayPng(
+  clipId: string,
+  editorState: EditorState,
+  aspect?: string,
+): Promise<OverlayPngResponse> {
+  const res = await fetch(`${API_BASE}/clips/${clipId}/overlay-png`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ editorState, ...(aspect ? { aspect } : {}) }),
+  });
+  return json<OverlayPngResponse>(res);
+}
+
+/** 오버레이 PNG hash → `<img src>` (API_BASE 경유 = 프록시 존중). */
+export function overlayPngSrc(clipId: string, hash: string): string {
+  return `${API_BASE}/clips/${clipId}/overlay-png/${hash}`;
+}
+
 export interface ClipReframeResponse {
   clipId: string;
   reframe: ClipReframe;

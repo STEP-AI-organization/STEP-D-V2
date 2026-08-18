@@ -246,6 +246,7 @@ import {
   type ReframePlan,
 } from "./reframe.ts";
 import { getAspectPreset } from "./aspect-presets.ts";
+import { renderTextLayerPng, overlayCanvasAvailable, type OverlayTextItem } from "./overlay-canvas.ts";
 import {
   syncChannelVideos,
   classifyShorts,
@@ -4360,6 +4361,102 @@ function channelBadgeLayout(
   return { lines, icon: iconPos };
 }
 
+// 제목 블록 기하 상수 — **미리보기(editor-preview.tsx)의 값과 1:1** 이어야 한다
+// (overlay-parity.test.ts 가 강제). 미리보기 제목은 폭 86% 블록(padding 0 4px)이
+// titleX% 를 중심으로 놓이고 좌/우 정렬은 그 블록 안에서만 움직인다.
+const TITLE_BLOCK = 0.86;
+const TITLE_PAD_PX = 4;
+
+/** 제목 한 줄의 배치 결과 — ASS(buildEditorAss)와 canvas-PNG(buildStaticOverlayItems)가
+ *  **같은 숫자**를 쓰도록 공유하는 정본. 좌표·크기는 출력 해상도(W×H) 기준 px. */
+type TitleLineLayout = {
+  t: any;
+  text: string;
+  align: "left" | "center" | "right";
+  an: number;
+  /** 앵커 x (align 에 따라 블록 좌/중앙/우). */
+  bx: number;
+  /** 줄 상단 y (윗줄들 높이 누적 포함). */
+  by: number;
+  /** nowrap+shrink-to-fit 후 폰트 px. */
+  fitPx: number;
+  /** 원본 색 (#rrggbb). ASS 는 hexToAss 로 변환, canvas 는 그대로. */
+  colorHex: string;
+  /** 키프레임·시간창 없는 완전 정적 줄인가 (= canvas-PNG 로 옮겨도 되는가). */
+  isStatic: boolean;
+};
+
+/**
+ * 제목 줄들의 배치 계산 — buildEditorAss 의 옛 인라인 루프를 추출한 **공유 정본**.
+ * 여러 줄은 fitPx*1.15 만큼 세로로 쌓인다(윗줄 높이 누적). 빈 줄은 건너뛰고 누적도 안 한다.
+ * ⚠️ 파리티 테스트가 이 안의 표현식(`align === "left" ? cx - half + pad ...`,
+ *    `wrapTextToWidth(t.text, TITLE_BLOCK * W - 2 * pad, px)`)을 스캔한다 — 형태를 유지할 것.
+ */
+function layoutTitleLines(es: any, W: number, H: number, scale: number): TitleLineLayout[] {
+  const out: TitleLineLayout[] = [];
+  if (!es || typeof es !== "object") return out;
+  let yOff = 0;
+  for (const t of Array.isArray(es.titleLines) ? es.titleLines : []) {
+    if (!t?.text?.trim()) continue;
+    const px = Math.max(6, (t.size ?? 30) * scale);   // 미리보기 CSS px 등가(출력 해상도)
+    const align = es.titleAlign === "left" ? "left" : es.titleAlign === "right" ? "right" : "center";
+    const an = align === "left" ? 7 : align === "right" ? 9 : 8;
+    const cx = ((es.titleX ?? 50) / 100) * W;         // 블록 중심
+    const half = (TITLE_BLOCK * W) / 2;
+    const pad = TITLE_PAD_PX * scale;
+    const bx = align === "left" ? cx - half + pad : align === "right" ? cx + half - pad : cx;
+    const by0 = ((es.titleY ?? 11) / 100) * H + yOff; // 기본값은 웹 EMPTY_STATE 와 같은 11
+    const blockW = TITLE_BLOCK * W - 2 * pad;
+    // 제목 줄은 재접지 않는다(D) — wrapTextToWidth 로 넘침만 측정하고, 접는 대신 폰트를 줄여
+    // 한 줄에 맞춘다(nowrap + shrink-to-fit). 미리보기(whiteSpace:nowrap)와 줄 수가 항상 일치.
+    const rows = wrapTextToWidth(t.text, TITLE_BLOCK * W - 2 * pad, px);
+    const full = textWidthPx(t.text, px);
+    const fitPx = rows.length > 1 && full > blockW ? Math.max(6, px * (blockW / full)) : px;
+    const adv = Math.round(fitPx * 1.15);             // CSS line-height: 1.15
+    const isStatic = !(Array.isArray(t.keyframes) && t.keyframes.length) && t.startSec == null && t.endSec == null;
+    out.push({ t, text: t.text, align, an, bx, by: by0, fitPx, colorHex: t.color ?? "#FFFFFF", isStatic });
+    yOff += adv;
+  }
+  return out;
+}
+
+/**
+ * 정적 오버레이 canvas-PNG 의 그리기 목록 — 제목(완전 정적 줄) + 채널명/부가줄.
+ * 좌표·크기는 layoutTitleLines / channelBadgeLayout 이 계산한 **ASS 와 같은 숫자**를 쓴다
+ * (구조적 파리티). 채널 아이콘·시간박스·요소·자막은 여기 없다 — 각각 별도 overlay / ASS 로 남는다.
+ *
+ * 색·그림자·웨이트는 **미리보기(editor-preview.tsx)를 정본**으로 맞춘다(에디터가 이 PNG 를
+ * 그대로 `<img>` 로 보여주므로). 그림자 offset/blur 는 미리보기 CSS(스테이지 px)를 scale 배해
+ * 출력 해상도로 올린다 — `<img>` 가 다시 스테이지 크기로 줄어들면 CSS 와 같은 시각이 된다.
+ */
+function buildStaticOverlayItems(
+  es: any, W: number, H: number, scale: number, iconBox: { w: number; h: number } | null,
+): OverlayTextItem[] {
+  const items: OverlayTextItem[] = [];
+  if (!es || typeof es !== "object") return items;
+  // 제목 — 미리보기 fontWeight:800 + textShadow "0 2px 6px rgba(0,0,0,.5)", 스트로크 없음.
+  for (const L of layoutTitleLines(es, W, H, scale)) {
+    if (!L.isStatic) continue; // 애니메이션/시간창 있는 줄은 ASS 가 굽는다(PNG 는 정적만).
+    items.push({
+      text: L.text, x: L.bx, y: L.by, align: L.align, baseline: "top",
+      fontPx: L.fitPx, weight: 800, color: L.colorHex, opacity: 1,
+      shadow: { offsetY: 2 * scale, blur: 6 * scale, color: "rgba(0,0,0,0.5)" },
+    });
+  }
+  // 채널명 + 부가줄 — 미리보기: 이름 font-semibold(≈700 스냅)·부가줄 font-medium(≈700)/white-80.
+  // textShadow "0 1px 3px rgba(0,0,0,.6)". an=7(가로,좌상단)/8(세로,상단중앙) → align 좌/중앙.
+  const badge = channelBadgeLayout(es, W, H, scale, iconBox);
+  for (const line of badge?.lines ?? []) {
+    items.push({
+      text: line.text, x: line.x, y: line.y,
+      align: line.an === 8 ? "center" : "left", baseline: "top",
+      fontPx: line.px, weight: 700, color: "#FFFFFF", opacity: line.dim ? 0.8 : 1,
+      shadow: { offsetY: 1 * scale, blur: 3 * scale, color: "rgba(0,0,0,0.6)" },
+    });
+  }
+  return items;
+}
+
 function buildEditorAss(
   es: any,
   W: number,
@@ -4373,6 +4470,10 @@ function buildEditorAss(
     visibleIntervals?: Array<{ start: number; end: number }>;
     /** 실제로 얹힐 채널 아이콘의 출력 px 크기 — 가로 배치의 행 중앙정렬 계산에 쓴다. */
     channelIcon?: { w: number; h: number } | null;
+    /** true 면 **완전 정적 제목 줄·채널명 텍스트를 ASS 에서 생략**한다 — 그건 canvas-PNG
+     *  (buildStaticOverlayItems)로 합성되기 때문. 애니메이션/시간창 제목·요소·시간박스·자막은
+     *  그대로 ASS. false(기본)면 종전대로 전부 ASS 로 굽는다(무회귀·PNG 실패 시 폴백). */
+    staticToPng?: boolean;
   } = {},
 ): string | null {
   const scale = editorScale(es, H, stageH);
@@ -4412,34 +4513,21 @@ function buildEditorAss(
   };
   const SAMPLE_STEP = 0.1; // 10 fps keyframe sampling — smooth enough, cheap for libass
 
+  // staticToPng: 완전 정적 제목 줄·채널명 텍스트는 canvas-PNG 로 옮겼으니 ASS 에서 뺀다
+  // (이중 그리기 방지). 애니메이션/시간창 제목·요소·시간박스·자막은 그대로 ASS.
+  const staticToPng = options.staticToPng === true;
   if (es && typeof es === "object") {
-    let yOff = 0;
-    // 미리보기 제목은 **폭 86% 블록**(padding 0 4px)이 titleX% 를 중심으로 놓이고,
-    // 좌/우 정렬은 그 블록 안에서만 움직인다(editor-preview.tsx). 예전엔 \an7/\an9 를
-    // titleX 지점에 그대로 붙여서, 좌·우 정렬 클립이 최대 0.43·W(9:16 에서 464px) 어긋났다.
-    const TITLE_BLOCK = 0.86;
-    const TITLE_PAD_PX = 4;
-    for (const t of Array.isArray(es.titleLines) ? es.titleLines : []) {
-      if (!t?.text?.trim()) continue;
-      const px = Math.max(6, (t.size ?? 30) * scale);   // 미리보기 CSS px 등가(출력 해상도)
-      const align = es.titleAlign === "left" ? "left" : es.titleAlign === "right" ? "right" : "center";
-      const an = align === "left" ? 7 : align === "right" ? 9 : 8;
-      const cx = ((es.titleX ?? 50) / 100) * W;         // 블록 중심
-      const half = (TITLE_BLOCK * W) / 2;
-      const pad = TITLE_PAD_PX * scale;
-      const bx = align === "left" ? cx - half + pad : align === "right" ? cx + half - pad : cx;
-      const by0 = ((es.titleY ?? 11) / 100) * H + yOff; // 기본값은 웹 EMPTY_STATE 와 같은 11
-      const color = hexToAss(t.color ?? "#FFFFFF");
-      const blockW = TITLE_BLOCK * W - 2 * pad;
-      // 제목 줄은 **재접지 않는다** — 각 titleLines[] 항목은 정확히 한 시각 줄이다(D). 추천이
-      // 준 시맨틱 2줄 분할을 렌더가 또 폭 분할해 3줄이 되는 걸 막는다. wrapTextToWidth 로
-      // 넘침만 측정하고(미리보기 파리티 상수 재사용), 접는 대신 폰트를 줄여 한 줄에 맞춘다
-      // (nowrap + shrink-to-fit). 미리보기(whiteSpace:nowrap)와 줄 수가 항상 일치한다.
-      const rows = wrapTextToWidth(t.text, TITLE_BLOCK * W - 2 * pad, px);
-      const full = textWidthPx(t.text, px);
-      const fitPx = rows.length > 1 && full > blockW ? Math.max(6, px * (blockW / full)) : px;
+    // 제목 줄 배치는 layoutTitleLines(공유 정본)에서 온다 — canvas-PNG 와 같은 숫자.
+    for (const L of layoutTitleLines(es, W, H, scale)) {
+      // 완전 정적 줄은 PNG 가 굽는다(staticToPng). 애니메이션/시간창 줄만 ASS.
+      if (staticToPng && L.isStatic) continue;
+      const t = L.t;
+      const an = L.an;
+      const bx = L.bx;
+      const by0 = L.by;
+      const fitPx = L.fitPx;
+      const color = hexToAss(L.colorHex);
       const fs = assFs(fitPx);
-      const adv = Math.round(fitPx * 1.15);             // CSS line-height: 1.15
       const win = winFor(t);
       if (win) {
         const kfs: KfPoint[] = Array.isArray(t.keyframes) ? t.keyframes : [];
@@ -4464,16 +4552,18 @@ function buildEditorAss(
           putWin(an, bx, by, fs, color, 2, "&H00000000&", t.text, win[0], win[1]);
         }
       }
-      yOff += adv;
     }
     // 채널 뱃지 — 이름 + 부가줄(channelExtraLines). 부가줄은 예전엔 미리보기에만 있고
     // 서버가 아예 안 구워서 **결과물에서 통째로 증발**했다(소비처 미도달).
     // 채널명은 그대로 — 예전엔 "▶ " 를 앞에 굽었는데 지저분해서 뺐다(사용자 2026-08-12).
-    const badge = channelBadgeLayout(es, W, H, scale, options.channelIcon ?? null);
-    for (const line of badge?.lines ?? []) {
-      // 부가줄은 미리보기가 text-white/80 (font-medium) — 알파 &H33 로 맞춘다.
-      put(line.an, line.x, line.y, assFs(line.px), line.dim ? "&H33FFFFFF&" : "&H00FFFFFF&",
-        2, "&H00000000&", line.text);
+    // staticToPng 면 채널명/부가줄은 canvas-PNG 가 그리므로 ASS 에선 건너뛴다(아이콘·시간박스는 별도).
+    if (!staticToPng) {
+      const badge = channelBadgeLayout(es, W, H, scale, options.channelIcon ?? null);
+      for (const line of badge?.lines ?? []) {
+        // 부가줄은 미리보기가 text-white/80 (font-medium) — 알파 &H33 로 맞춘다.
+        put(line.an, line.x, line.y, assFs(line.px), line.dim ? "&H33FFFFFF&" : "&H00FFFFFF&",
+          2, "&H00000000&", line.text);
+      }
     }
     // 방영시간 박스 라벨 (broadcast-standard) — 파란 박스 + 흰 텍스트. BoxLabel 스타일은
     // BorderStyle=3(박스)이고 박스 색은 인라인 \3c 로 지정한다.
@@ -4772,6 +4862,7 @@ async function renderClipMedia(opts: {
   const decorationAssTmp = path.join(tmpDir, `${clipMediaId}_decor.ass`);
   const iconRawTmp = path.join(tmpDir, `${clipMediaId}_icon_raw`);
   const iconTmp = path.join(tmpDir, `${clipMediaId}_icon.png`);
+  const overlayPngTmp = path.join(tmpDir, `${clipMediaId}_overlay.png`);
 
   const { W, H, stageH } = renderDims(aspect);
   const dynamicReframe = opts.reframePlan?.mode === "ai_multi";
@@ -4850,6 +4941,30 @@ async function renderClipMedia(opts: {
     }
   }
 
+  // 정적 오버레이 canvas-PNG (AENA 방식 · 구조적 WYSIWYG) — **basic 단일입력 경로에서만.**
+  // 제목(완전 정적 줄)·채널명 텍스트를 투명 PNG 로 그려 ffmpeg overlay 로 합성하고, ASS 에선
+  // 그 항목을 뺀다(staticToPng). canvas 미지원/실패·그릴 항목 없음이면 overlayPngPath=null →
+  // staticToPng=false 로 폴백해 종전대로 ASS 가 전부 굽는다(무회귀 안전장치).
+  // AI(reframe)·훅 프리롤 경로는 입력 구성이 달라 아직 PNG 를 안 쓴다(전부 ASS 유지).
+  let overlayPngPath: string | null = null;
+  if (!dynamicReframe && !hookPreroll) {
+    try {
+      const scale = editorScale(editorState, H, stageH);
+      const items = buildStaticOverlayItems(editorState, W, H, scale, iconBox);
+      if (items.length && (await overlayCanvasAvailable())) {
+        const buf = await renderTextLayerPng({ width: W, height: H, items });
+        if (buf && buf.length) {
+          fs.writeFileSync(overlayPngTmp, buf);
+          overlayPngPath = overlayPngTmp;
+        }
+      }
+    } catch (e) {
+      console.warn("[render] 정적 오버레이 PNG 실패(ASS 폴백):", String(e).slice(0, 120));
+      overlayPngPath = null;
+    }
+  }
+  const overlayPngActive = overlayPngPath != null;
+
   // ASS 는 **아이콘 크기를 잰 뒤에** 만든다 — 가로 배치에서 채널명 x 가 아이콘 폭에 걸려
   // 있어서, 순서가 바뀌면 이름과 아이콘이 서로 다른 기준으로 놓인다.
   if (dynamicReframe) {
@@ -4866,14 +4981,15 @@ async function renderClipMedia(opts: {
     if (decorationAss) fs.writeFileSync(decorationAssTmp, decorationAss, "utf-8");
   } else {
     ass = buildEditorAss(editorState, W, H, stageH, endTime - startTime, opts.captions,
-      { channelIcon: iconBox });
+      { channelIcon: iconBox, staticToPng: overlayPngActive });
     if (ass) fs.writeFileSync(assTmp, ass, "utf-8");
   }
 
   try {
-    if (!dynamicReframe && !ass && !videoFilters && !audioFilter && speed === 1 && aspect === "16:9" && !hookPreroll) {
-      // Fast path only when there's genuinely nothing to bake (no overlays, no grade, no
-      // volume change, no speed change, native 16:9, no hook preroll). Any edit routes through renderShort.
+    if (!dynamicReframe && !ass && !overlayPngActive && !videoFilters && !audioFilter && speed === 1 && aspect === "16:9" && !hookPreroll) {
+      // Fast path only when there's genuinely nothing to bake (no ASS overlays, no static
+      // overlay PNG, no grade, no volume change, no speed change, native 16:9, no hook
+      // preroll). Any edit — including a canvas-PNG static overlay — routes through renderShort.
       await trimEncode(srcPath, startTime, endTime, tmpPath);
     } else {
       // 채움/크롭 결정 — **종횡비 enum(aspect) 이 정본.** aspect-presets.ts 프리셋 하나가
@@ -4916,6 +5032,8 @@ async function renderClipMedia(opts: {
         assPath: dynamicReframe ? null : ass ? assTmp : null,
         captionAssPath: captionAss ? captionAssTmp : null,
         decorationAssPath: decorationAss ? decorationAssTmp : null,
+        // 정적 오버레이 PNG — renderShort 의 basic 경로가 overlay=0:0 으로 합성한다(ASS 대신).
+        overlayPngPath,
         reframePlan: opts.reframePlan ?? null,
         videoFilters, audioFilter, speed,
         bgType, bgColor, fit, cropRect, frame,
@@ -7498,6 +7616,81 @@ app.post("/api/clips/:id/export", async (c) => {
   };
   await putEntity("clip", clipId, next);
   return c.json({ clipId, clip: next, preset: preset?.key ?? null, capped, hookPreroll: !!hookPreroll });
+});
+
+// ── 정적 오버레이 PNG (에디터 WYSIWYG) ─────────────────────────────────────────
+//
+// 에디터가 제목·채널 텍스트를 CSS 로 근사하는 대신 **서버가 그린 실제 PNG** 를 `<img>` 로
+// 보여주게 하는 엔드포인트(AENA 방식). content-hash 캐시 — 같은 입력이면 같은 hash 라
+// debounce 재요청이 파일을 재생성하지 않는다. 렌더(renderClipMedia)와 **같은
+// buildStaticOverlayItems** 를 써서 편집 화면과 결과물의 정적 오버레이가 구조적으로 일치한다.
+//
+// ⚠️ /tmp 는 Cloud Run 에서 tmpfs(RAM) 다 — 캐시가 무한히 쌓이면 OOM. 쓰기 전에 60분 지난
+//    파일을 정리한다(best-effort). PNG 는 작고(투명·수십 KB) 에디터가 같은 hash 를 재사용한다.
+const OVERLAY_CACHE_DIR = path.resolve("/tmp/stepd-overlay-cache");
+function pruneOverlayCache(maxAgeMs = 60 * 60_000): void {
+  try {
+    const now = Date.now();
+    for (const f of fs.readdirSync(OVERLAY_CACHE_DIR)) {
+      const p = path.join(OVERLAY_CACHE_DIR, f);
+      try {
+        if (now - fs.statSync(p).mtimeMs > maxAgeMs) fs.unlinkSync(p);
+      } catch { /* 경합 삭제 무시 */ }
+    }
+  } catch { /* 디렉토리 없음 등 무시 */ }
+}
+
+/** 에디터 미리보기용 정적 오버레이 아이템 — 렌더의 square-icon 미리보기와 같은 iconBox 를 쓴다. */
+function overlayPreviewItems(es: any, aspect: string): { W: number; H: number; items: OverlayTextItem[] } {
+  const { W, H, stageH } = renderDims(aspect);
+  const scale = editorScale(es, H, stageH);
+  // 미리보기(editor-preview.tsx)는 showChannel 이면 아이콘을 **정사각**(iconPx×iconPx)으로 그린다.
+  // 채널명 x 가 그 정사각 폭에 걸리므로 여기서도 정사각 iconBox 를 준다(에디터 내부 정합).
+  let iconBox: { w: number; h: number } | null = null;
+  if (es?.showChannel) {
+    const iconH = Math.round((Number(es?.channelIconSize) > 0 ? Number(es.channelIconSize) : 24) * scale);
+    iconBox = { w: iconH, h: iconH };
+  }
+  return { W, H, items: buildStaticOverlayItems(es, W, H, scale, iconBox) };
+}
+
+app.post("/api/clips/:id/overlay-png", async (c) => {
+  const clipId = c.req.param("id");
+  const clip = await getEntity<any>("clip", clipId);
+  if (!clip) return c.json({ error: "clip not found" }, 404);
+  const body = await c.req.json<{ editorState?: any; aspect?: string }>().catch(() => ({} as any));
+  const es = body.editorState ?? clip.editorState ?? {};
+  const aspect = String(body.aspect ?? es?.aspect ?? clip.aspectRatio ?? "9:16");
+  const { W, H, items } = overlayPreviewItems(es, aspect);
+  // 그릴 정적 오버레이가 없으면 hash:null — 에디터는 순수 CSS 로 남는다(무회귀).
+  if (!items.length) return c.json({ hash: null, width: W, height: H });
+  if (!(await overlayCanvasAvailable())) return c.json({ hash: null, width: W, height: H, canvas: false });
+
+  const hash = crypto.createHash("sha1").update(JSON.stringify({ W, H, items })).digest("hex");
+  fs.mkdirSync(OVERLAY_CACHE_DIR, { recursive: true });
+  const pngPath = path.join(OVERLAY_CACHE_DIR, `${hash}.png`);
+  if (!fs.existsSync(pngPath)) {
+    pruneOverlayCache();
+    const buf = await renderTextLayerPng({ width: W, height: H, items });
+    if (!buf) return c.json({ hash: null, width: W, height: H, canvas: false });
+    fs.writeFileSync(pngPath, buf);
+  }
+  return c.json({ hash, width: W, height: H, url: `/api/clips/${clipId}/overlay-png/${hash}` });
+});
+
+app.get("/api/clips/:id/overlay-png/:hash", async (c) => {
+  const hash = c.req.param("hash");
+  if (!/^[a-f0-9]{40}$/.test(hash)) return c.json({ error: "bad hash" }, 400);
+  const pngPath = path.join(OVERLAY_CACHE_DIR, `${hash}.png`);
+  if (!fs.existsSync(pngPath)) return c.json({ error: "not found" }, 404);
+  const buf = fs.readFileSync(pngPath);
+  // 해시가 내용 지문이라 영구 캐시 가능 — 내용이 바뀌면 hash 가 바뀐다(immutable).
+  return new Response(new Uint8Array(buf), {
+    headers: {
+      "Content-Type": "image/png",
+      "Cache-Control": "public, max-age=31536000, immutable",
+    },
+  });
 });
 
 // ── YouTube OAuth & channel management ────────────────────────────────────────

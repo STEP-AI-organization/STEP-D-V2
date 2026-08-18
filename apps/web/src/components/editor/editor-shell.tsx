@@ -862,6 +862,7 @@ export function EditorShell({ clipId }: { clipId: string }) {
         {/* 중앙: 프리뷰 (확장 가능) */}
         <div className="flex min-w-0 flex-1 items-center justify-center overflow-auto bg-zinc-900 p-4 sm:p-6">
           <EditorPreview
+            clipId={clipId}
             frame={frame}
             state={displayState}
             update={update}

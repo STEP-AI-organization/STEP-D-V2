@@ -153,6 +153,12 @@ export type RenderShortOpts = {
   height: number;
   /** Optional ASS file to burn (title/channel/overlays). Requires a CJK font in the image. */
   assPath?: string | null;
+  /** 정적 오버레이 PNG (overlay-canvas.ts) — 제목·채널 텍스트를 canvas 로 그린 **투명 전체프레임
+   *  이미지**(W×H). 주면 그 정적 오버레이는 ASS 번인 대신 ffmpeg `overlay=0:0` 으로 합성한다
+   *  (AENA 방식 · 구조적 WYSIWYG). 합성 위치는 그레이드 뒤·ASS(자막/애니메이션 타이틀) 앞이라
+   *  자막이 정적 오버레이 위에 온다. ⚠️ 단일입력 basic 경로에서만 소비된다 — 프리롤·AI(reframe)
+   *  경로는 자체 입력 구성이 복잡해 여전히 ASS 를 쓴다(index.ts 가 그 경우 assPath 로만 굽는다). */
+  overlayPngPath?: string | null;
   /** Optional ffmpeg video-filter fragment (colour grade), e.g. "eq=contrast=1.20,colorbalance=rm=0.15".
    *  Applied to the composited frame before the ASS burn so overlays stay ungraded. */
   videoFilters?: string | null;
@@ -853,6 +859,14 @@ export function renderShort(opts: RenderShortOpts): Promise<void> {
     vf += `;${last}${videoFilters}[vg]`;
     last = "[vg]";
   }
+  // 정적 오버레이 PNG(제목·채널 텍스트) — 그레이드 뒤·ASS 앞에 전체프레임 합성(overlay=0:0).
+  // 이미지 입력은 마지막 -i 라 인덱스는 (소스0 + frame? + badge?) 다음. 1프레임이라
+  // overlay 기본 eof_action=repeat 로 전체 길이에 유지된다. 그레이드 뒤라 자막처럼 안 물든다.
+  if (opts.overlayPngPath) {
+    const ovi = 1 + (fr ? 1 : 0) + (opts.badge ? 1 : 0);
+    vf += `;${last}[${ovi}:v]overlay=0:0[vovl]`;
+    last = "[vovl]";
+  }
   if (assPath) {
     // Escape the path for the filtergraph (backslash, colon, single-quote).
     const esc = assPath.replace(/\\/g, "\\\\").replace(/:/g, "\\:").replace(/'/g, "\\'");
@@ -882,6 +896,8 @@ export function renderShort(opts: RenderShortOpts): Promise<void> {
     ...(fr ? ["-i", fr.overlayPath] : []),
     // 브랜딩 아이콘은 그다음 입력 (fr 유무에 따라 [1:v] 또는 [2:v]).
     ...(opts.badge ? ["-i", opts.badge.path] : []),
+    // 정적 오버레이 PNG 는 **마지막** 입력 — ovi 계산(위)이 이 순서에 의존한다.
+    ...(opts.overlayPngPath ? ["-i", opts.overlayPngPath] : []),
     "-t", String(outDur),
     "-filter_complex", vf,
     "-map", last,

@@ -19,6 +19,8 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SERVER = fs.readFileSync(path.join(HERE, "index.ts"), "utf-8");
 const WEB = path.resolve(HERE, "../../web/src/components/editor/editor-preview.tsx");
 const FONT_DIR = path.resolve(HERE, "../../../assets/fonts");
+const OVERLAY_CANVAS = fs.readFileSync(path.join(HERE, "overlay-canvas.ts"), "utf-8");
+const FF_OVERLAY = fs.readFileSync(path.join(HERE, "ffmpeg.ts"), "utf-8");
 
 describe("자막 크기표 — 웹 cqh 와 서버 CAPTION_PCT 가 같아야 한다", () => {
   it("스타일별 % 가 1:1 로 일치", () => {
@@ -177,6 +179,61 @@ describe("제목 2줄 — factory autoEditorState 가 titleLine1/2 시맨틱 분
   it("명시적 2줄은 더 긴 줄이 한 줄에 맞도록 크기를 정한다 (nowrap 전제)", () => {
     assert.match(FACTORY, /fitTwoLineTitleSize\(line1, line2\)/,
       "폰트 크기를 최장 줄 기준으로 축소하지 않으면, 재랩핑을 끈 렌더에서 긴 줄이 화면 밖으로 나간다");
+  });
+});
+
+/**
+ * 정적 오버레이 canvas→PNG 마이그레이션 (하이브리드 · AENA 방식).
+ *
+ * 제목(완전 정적 줄)·채널명 텍스트는 이제 ASS 번인이 아니라 **canvas 로 그린 투명 PNG** 를
+ * ffmpeg overlay 로 합성한다 → 에디터가 **같은 PNG** 를 `<img>` 로 보여줘 구조적 WYSIWYG.
+ * 시간축이 수백 개인 STT 자막·애니메이션/시간창 제목·요소는 여전히 ASS(하이브리드).
+ *
+ * ⚠️ 정적 오버레이의 "파리티"는 이제 **ASS 기하 손튜닝 일치**가 아니라 **에디터=렌더가 같은
+ * PNG** 로 옮겨갔다. 위쪽 제목/뱃지 ASS 기하 단언은 애니메이션/폴백 경로가 여전히 그 ASS 를
+ * 쓰기 때문에 유효하다(죽은 테스트 아님). 아래는 그 새 PNG 경로가 실제 배선돼 있는지 고정한다.
+ */
+describe("정적 오버레이 canvas-PNG 경로 (하이브리드)", () => {
+  it("overlay-canvas 가 텍스트 레이어 PNG 렌더러를 export 하고 ASS 와 같은 폰트를 등록한다", () => {
+    assert.match(OVERLAY_CANVAS, /export async function renderTextLayerPng/,
+      "PNG 텍스트 레이어 렌더러가 없다");
+    assert.match(OVERLAY_CANVAS, /@napi-rs\/canvas/, "canvas 네이티브 렌더러를 안 쓴다");
+    assert.match(OVERLAY_CANVAS, /Pretendard-ExtraBold\.otf/,
+      "ASS 와 같은 Pretendard 폰트를 canvas 에 등록해야 PNG 글자가 결과물과 일치한다");
+  });
+
+  it("index 가 정적 오버레이 아이템을 만들어 PNG 로 렌더하고 renderShort 에 넘긴다", () => {
+    assert.match(SERVER, /function buildStaticOverlayItems/,
+      "정적 오버레이 그리기 목록(제목·채널명) 생성부가 없다");
+    assert.match(SERVER, /renderTextLayerPng\(/, "index 가 PNG 렌더러를 안 부른다");
+    assert.match(SERVER, /overlayPngPath/,
+      "renderShort 로 overlayPngPath 를 안 넘기면 정적 오버레이 합성이 결과물에 미도달한다");
+  });
+
+  it("buildEditorAss 가 staticToPng 로 정적 제목·채널명을 ASS 에서 뺀다 (이중 그리기 방지)", () => {
+    assert.match(SERVER, /staticToPng/,
+      "정적 항목을 ASS 에서 안 빼면 canvas-PNG 와 이중으로 그려진다");
+    assert.match(SERVER, /if \(staticToPng && L\.isStatic\) continue;/,
+      "정적 제목 줄을 ASS 에서 건너뛰지 않으면 PNG 와 겹친다");
+  });
+
+  it("ffmpeg renderShort 가 overlayPngPath 를 전체프레임 overlay=0:0 으로 합성한다", () => {
+    assert.match(FF_OVERLAY, /overlayPngPath/, "renderShort 가 정적 오버레이 PNG 입력을 안 받는다");
+    assert.match(FF_OVERLAY, /overlay=0:0/,
+      "정적 오버레이 PNG 를 전체프레임 합성하는 필터가 없다");
+  });
+
+  it("자막(시간축 수백 개)은 여전히 ASS Caption 이벤트로 남는다 (하이브리드)", () => {
+    const events = SERVER.match(/captionEv\.push\(/g) ?? [];
+    assert.ok(events.length >= 1,
+      "자막 ASS 이벤트 생성부가 사라졌다 — 시간축 자막은 PNG 로 옮기지 않는다(하이브리드)");
+  });
+
+  it("에디터가 서버 오버레이 PNG 를 content-hash 로 가져올 엔드포인트가 있다", () => {
+    assert.match(SERVER, /app\.post\("\/api\/clips\/:id\/overlay-png"/,
+      "에디터가 정적 오버레이 PNG 를 받을 엔드포인트가 없다(WYSIWYG 미완)");
+    assert.match(SERVER, /app\.get\("\/api\/clips\/:id\/overlay-png\/:hash"/,
+      "해시로 PNG 를 서빙하는 GET 라우트가 없다");
   });
 });
 
