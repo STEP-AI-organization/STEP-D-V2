@@ -23,6 +23,8 @@ function overlayKey(s: EditorState): string {
     titleX: s.titleX, titleY: s.titleY, titleAlign: s.titleAlign,
     titleLines: (s.titleLines ?? []).map((l) => ({
       t: l.text, sz: l.size, c: l.color,
+      f: l.font ?? null,
+      st: l.stroke ? { c: l.stroke.color, w: l.stroke.width } : null,
       kf: (l.keyframes ?? []).length, ss: l.startSec ?? null, es: l.endSec ?? null,
     })),
     showChannel: s.showChannel, channelName: s.channelName, channelY: s.channelY,

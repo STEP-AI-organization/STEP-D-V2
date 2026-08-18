@@ -27,6 +27,7 @@ import {
   COLOR_SWATCHES,
   DEFAULT_FILTERS,
   ELEMENT_DEFAULTS,
+  FONT_FAMILY_OPTIONS,
   defaultElementSize,
   sampleKeyframes,
   type CaptionStyle,
@@ -180,8 +181,12 @@ function Toggle({ on, onChange, label }: { on: boolean; onChange: () => void; la
   );
 }
 function Swatches({ colors, value, onPick }: { colors: string[]; value: string; onPick: (c: string) => void }) {
+  // 값이 프리셋 스와치 중 하나가 아니면(임의 색) 커스텀 색 칩에 링을 준다.
+  const isCustom = !colors.some((c) => c.toLowerCase() === (value ?? "").toLowerCase());
+  // <input type="color"> 는 #rrggbb 만 받는다 — 값이 그 형식이 아니면 흰색으로 폴백(표시용).
+  const inputValue = /^#[0-9a-fA-F]{6}$/.test(value ?? "") ? value : "#FFFFFF";
   return (
-    <div className="flex flex-wrap gap-1.5">
+    <div className="flex flex-wrap items-center gap-1.5">
       {colors.map((c) => (
         <button
           key={c}
@@ -191,6 +196,27 @@ function Swatches({ colors, value, onPick }: { colors: string[]; value: string; 
           aria-label={c}
         />
       ))}
+      {/* 커스텀 색 — 네이티브 색 선택기. 값은 #rrggbb 라 파이프 전체를 그대로 통과(렌더 변경 0). */}
+      <label
+        className={cn(
+          "relative size-6 cursor-pointer overflow-hidden rounded",
+          isCustom ? "ring-2 ring-white ring-offset-1 ring-offset-zinc-900" : "ring-1 ring-zinc-700",
+        )}
+        title="커스텀 색"
+        style={{
+          background: isCustom
+            ? value
+            : "conic-gradient(from 0deg, #f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00)",
+        }}
+      >
+        <input
+          type="color"
+          value={inputValue}
+          onChange={(e) => onPick(e.target.value)}
+          className="absolute inset-0 size-full cursor-pointer opacity-0"
+          aria-label="커스텀 색 선택"
+        />
+      </label>
     </div>
   );
 }
@@ -313,8 +339,57 @@ function TextTab({ state, update, kf }: { state: EditorState; update: Update; kf
                   </button>
                 )}
               </div>
+              {/* 글꼴 — 패밀리 선택. 기본(프리텐다드)은 font 미설정으로 저장(하위호환). */}
+              <div className="mt-2">
+                <select
+                  value={line.font ?? "pretendard"}
+                  onChange={(e) =>
+                    setLine(line.id, { font: e.target.value === "pretendard" ? undefined : e.target.value })
+                  }
+                  className={field}
+                  title="글꼴"
+                >
+                  {FONT_FAMILY_OPTIONS.map((f) => (
+                    <option key={f.id} value={f.id}>
+                      {f.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
               <div className="mt-2">
                 <Swatches colors={COLOR_SWATCHES} value={line.color} onPick={(c) => setLine(line.id, { color: c })} />
+              </div>
+              {/* 외곽선(스트로크) — 배경 영상 위 가독성용. 기본 OFF(하위호환). */}
+              <div className="mt-1">
+                <Toggle
+                  on={!!line.stroke}
+                  onChange={() =>
+                    setLine(line.id, { stroke: line.stroke ? undefined : { color: "#000000", width: 3 } })
+                  }
+                  label="외곽선"
+                />
+                {line.stroke && (
+                  <div className="mt-1 space-y-2">
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="range"
+                        min={1}
+                        max={12}
+                        value={line.stroke.width}
+                        onChange={(e) =>
+                          setLine(line.id, { stroke: { color: line.stroke!.color, width: Number(e.target.value) } })
+                        }
+                        className="flex-1"
+                      />
+                      <span className="w-8 text-right text-xs tabular-nums text-zinc-400">{line.stroke.width}px</span>
+                    </div>
+                    <Swatches
+                      colors={COLOR_SWATCHES}
+                      value={line.stroke.color}
+                      onPick={(c) => setLine(line.id, { stroke: { color: c, width: line.stroke!.width } })}
+                    />
+                  </div>
+                )}
               </div>
               {kfOpen && (
                 <KeyframeSection

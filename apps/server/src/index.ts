@@ -4434,13 +4434,22 @@ function buildStaticOverlayItems(
 ): OverlayTextItem[] {
   const items: OverlayTextItem[] = [];
   if (!es || typeof es !== "object") return items;
-  // 제목 — 미리보기 fontWeight:800 + textShadow "0 2px 6px rgba(0,0,0,.5)", 스트로크 없음.
+  // 제목 — 미리보기 fontWeight:800 + textShadow "0 2px 6px rgba(0,0,0,.5)".
+  // 줄별 글꼴(font)·외곽선(stroke)은 미리보기(editor-preview.tsx)를 정본으로 그대로 실어 보낸다.
+  // 외곽선 폭은 모델이 미리보기 px 이라 scale 배해 출력 해상도로 올린다(그림자 offset 과 같은 규칙).
   for (const L of layoutTitleLines(es, W, H, scale)) {
     if (!L.isStatic) continue; // 애니메이션/시간창 있는 줄은 ASS 가 굽는다(PNG 는 정적만).
+    const st = L.t?.stroke;
+    const stroke =
+      st && typeof st.width === "number" && st.width > 0 && typeof st.color === "string"
+        ? { color: st.color, width: st.width * scale }
+        : undefined;
     items.push({
       text: L.text, x: L.bx, y: L.by, align: L.align, baseline: "top",
-      fontPx: L.fitPx, weight: 800, color: L.colorHex, opacity: 1,
+      fontPx: L.fitPx, weight: 800, font: typeof L.t?.font === "string" ? L.t.font : undefined,
+      color: L.colorHex, opacity: 1,
       shadow: { offsetY: 2 * scale, blur: 6 * scale, color: "rgba(0,0,0,0.5)" },
+      stroke,
     });
   }
   // 채널명 + 부가줄 — 미리보기: 이름 font-semibold(≈700 스냅)·부가줄 font-medium(≈700)/white-80.

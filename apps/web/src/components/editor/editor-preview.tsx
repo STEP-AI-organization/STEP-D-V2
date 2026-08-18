@@ -2,7 +2,7 @@
 
 import { useRef, useState, type CSSProperties, type Ref } from "react";
 import { Heart, MessageCircle, Send } from "lucide-react";
-import { ASPECTS, defaultElementSize, filterCss, overlayVisibleAt, sampleKeyframes, type CaptionStyle, type EditorState } from "@/lib/editor/presets";
+import { ASPECTS, defaultElementSize, filterCss, fontFamilyCss, overlayVisibleAt, sampleKeyframes, type CaptionStyle, type EditorState } from "@/lib/editor/presets";
 import { getAspectPreset } from "@/lib/editor/aspect-presets";
 import { Movable, SnapGuides, InlineText, type Guides } from "@/components/editor/editor-overlay";
 import { frameUrl, frameOverlaySrc, overlayPngSrc, type FrameTemplate } from "@/lib/data/api";
@@ -428,6 +428,12 @@ export function EditorPreview({
               fontWeight: 800,
               lineHeight: 1.15,
               textShadow: "0 2px 6px rgba(0,0,0,.5)",
+              // 글꼴(font)·외곽선(stroke) — 편집 중(PNG 숨김) CSS 근사. 최종 진실은 서버 canvas-PNG
+              // `<img>`(overlay-canvas.ts) 라 브라우저에 글꼴이 없어도 결과물은 정확하다.
+              ...(fontFamilyCss(line.font) ? { fontFamily: fontFamilyCss(line.font) } : {}),
+              ...(line.stroke && line.stroke.width > 0
+                ? { WebkitTextStroke: `${line.stroke.width}px ${line.stroke.color}` }
+                : {}),
               // 각 제목 줄은 한 시각 줄로 고정 — 재접지 않는다(D). 추천의 시맨틱 2줄 분할이
               // 폭 줄바꿈으로 3줄이 되던 버그 차단. 서버 렌더도 nowrap+shrink 라 줄 수 일치.
               whiteSpace: "nowrap",

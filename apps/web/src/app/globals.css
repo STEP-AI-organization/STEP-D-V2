@@ -5,6 +5,70 @@
    Initial theme is resolved by an inline no-flash script in the root layout. */
 @custom-variant dark (&:is(.dark *));
 
+/* 에디터 제목 글꼴 픽커(FONT_FAMILY_OPTIONS)용 GmarketSans — public/fonts 번들.
+   편집 중(PNG 숨김) CSS 미리보기 정확도를 위한 것. 최종 결과물은 서버 canvas-PNG
+   (overlay-canvas.ts)라, 이 @font-face 가 없어도 결과물은 정확하다(진실은 <img>). */
+@font-face {
+  font-family: "GmarketSans";
+  font-weight: 300;
+  font-style: normal;
+  font-display: swap;
+  src: url("/fonts/GmarketSansTTFLight.ttf") format("truetype");
+}
+@font-face {
+  font-family: "GmarketSans";
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+  src: url("/fonts/GmarketSansTTFMedium.ttf") format("truetype");
+}
+@font-face {
+  font-family: "GmarketSans";
+  font-weight: 600 900;
+  font-style: normal;
+  font-display: swap;
+  src: url("/fonts/GmarketSansTTFBold.ttf") format("truetype");
+}
+
+/* 제목 픽커 디스플레이 폰트들(검은고딕·도현·주아·고딕A1) — 위 GmarketSans 와 같은 이유로
+   public/fonts 번들. 서버 canvas-PNG(overlay-canvas.ts FONT_FAMILIES)가 최종 진실이라,
+   이 @font-face 는 편집 중(PNG 숨김) CSS 미리보기 정확도만을 위한 것이다. */
+@font-face {
+  font-family: "Black Han Sans";
+  font-weight: 400 900;
+  font-style: normal;
+  font-display: swap;
+  src: url("/fonts/BlackHanSans-Regular.ttf") format("truetype");
+}
+@font-face {
+  font-family: "Do Hyeon";
+  font-weight: 400 900;
+  font-style: normal;
+  font-display: swap;
+  src: url("/fonts/DoHyeon-Regular.ttf") format("truetype");
+}
+@font-face {
+  font-family: "Jua";
+  font-weight: 400 900;
+  font-style: normal;
+  font-display: swap;
+  src: url("/fonts/Jua-Regular.ttf") format("truetype");
+}
+@font-face {
+  font-family: "GothicA1";
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+  src: url("/fonts/GothicA1-Bold.ttf") format("truetype");
+}
+@font-face {
+  font-family: "GothicA1";
+  font-weight: 800 900;
+  font-style: normal;
+  font-display: swap;
+  src: url("/fonts/GothicA1-Black.ttf") format("truetype");
+}
+
 /*
   Design tokens — 옛 프리미티브(components/ui/*)용.
 

@@ -128,6 +128,12 @@ export interface TitleLine {
   text: string;
   size: number;
   color: string;
+  /** 글꼴 패밀리 id (FONT_FAMILY_OPTIONS / 서버 overlay-canvas.ts FONT_FAMILIES 의 id).
+   *  미설정 = 기본(프리텐다드). 하위호환 — 옛 클립은 값이 없어 종전과 동일하게 렌더된다. */
+  font?: string;
+  /** 외곽선(스트로크). 미리보기 -webkit-text-stroke ↔ 렌더 canvas strokeText. width 는 미리보기 px.
+   *  미설정 = 외곽선 없음(하위호환). */
+  stroke?: { color: string; width: number };
   keyframes?: KeyframePoint[]; // absent/empty = static (backward compat)
   /** Visible window, segment-relative seconds. Omitted = shown for the full clip. */
   startSec?: number;
@@ -393,6 +399,34 @@ export const CAPTION_STYLES: Record<CaptionStyle, string> = {
 
 export const COLOR_SWATCHES = ["#FFFFFF", "#FFD400", "#27E0A0", "#5B8CFF", "#FF49DB", "#16120D"];
 export const BG_SWATCHES = ["#0E0E12", "#10162B", "#FBF3E4", "#FFFFFF"];
+
+// ── 제목 글꼴 패밀리 ────────────────────────────────────────────────────────────
+// 픽커가 보여줄 목록. **id 는 서버 overlay-canvas.ts FONT_FAMILIES 의 id 와 1:1** 이어야
+// 렌더 PNG(결과물)가 픽커 선택과 일치한다. undefined/미설정 = 첫 항목(프리텐다드) = 하위호환.
+// `css` 는 편집 중(PNG 숨김) CSS 미리보기용 — 디스플레이 폰트(GmarketSans·검은고딕·도현·주아·
+// 고딕A1)는 globals.css @font-face 로 로드된다(public/fonts). PNG `<img>` 가 최종 진실이므로
+// css 는 근사여도 무방.
+// 패밀리 추가: 서버 레지스트리 + 폰트 파일 + 여기 항목 3곳.
+export interface FontFamilyOption {
+  id: string;
+  label: string;
+  /** 편집 중 CSS 미리보기 font-family 스택. */
+  css: string;
+}
+export const FONT_FAMILY_OPTIONS: FontFamilyOption[] = [
+  { id: "pretendard", label: "프리텐다드", css: "var(--font-sans)" },
+  { id: "gmarket", label: "지마켓 산스", css: "'GmarketSans', var(--font-sans)" },
+  { id: "blackhansans", label: "검은고딕", css: "'Black Han Sans', var(--font-sans)" },
+  { id: "dohyeon", label: "도현", css: "'Do Hyeon', var(--font-sans)" },
+  { id: "jua", label: "주아", css: "'Jua', var(--font-sans)" },
+  { id: "gothica1", label: "고딕A1", css: "'GothicA1', var(--font-sans)" },
+];
+
+/** 글꼴 id → CSS font-family 스택 (미리보기용). 미설정·미등록 = 기본(프리텐다드 스택). */
+export function fontFamilyCss(id?: string): string | undefined {
+  if (!id) return undefined;
+  return FONT_FAMILY_OPTIONS.find((f) => f.id === id)?.css;
+}
 
 // ── 채널 뱃지 프리셋 ────────────────────────────────────────────────────────────
 // 자주 쓰는 조합을 이름으로 묶는다. 클릭 시 layout·shape·아이콘/라벨 크기가 모두 세팅.

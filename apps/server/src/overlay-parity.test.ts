@@ -49,8 +49,15 @@ describe("자막 크기표 — 웹 cqh 와 서버 CAPTION_PCT 가 같아야 한�
 
 describe("ASS Fontsize 보정 상수 — 실제 폰트 메트릭에서 나와야 한다", () => {
   it("ASS_FS_PER_CSS_PX == (winAscent+winDescent)/unitsPerEm (설치 폰트 실측)", () => {
-    const files = fs.readdirSync(FONT_DIR).filter((f) => /\.otf$|\.ttf$/i.test(f));
-    assert.ok(files.length, "assets/fonts 에 폰트가 없다 — 렌더가 Noto 로 조용히 폴백한다");
+    // ⚠️ **Pretendard 만 스캔한다.** ASS 캡션 스타일(index.ts 의 Default·BoxLabel·
+    // captionAssStyle 는 전부 "Pretendard"/"Pretendard ExtraBold"/"Pretendard Black")은
+    // Pretendard 만 쓰고, ASS_FS_PER_CSS_PX 보정도 Pretendard 메트릭(2443/2048)에서 나왔다.
+    // assets/fonts 의 나머지(BlackHanSans·DoHyeon·Jua·GothicA1)는 **canvas-PNG 정적 제목
+    // 전용** 디스플레이 폰트라 ASS 를 절대 타지 않는다 — 셀높이 비율(예: BlackHanSans 1.02)이
+    // Pretendard(1.193)와 달라도 캡션 크기 파리티와 무관하다. 디렉토리 전체를 스캔하면 그
+    // 무관한 폰트들 때문에 보정 상수를 흔들게 되므로(과잉 일반화), 캡션 폰트만 검사한다.
+    const files = fs.readdirSync(FONT_DIR).filter((f) => /^Pretendard-.*\.(otf|ttf)$/i.test(f));
+    assert.ok(files.length, "assets/fonts 에 Pretendard(ASS 캡션 폰트)가 없다 — 렌더가 Noto 로 조용히 폴백한다");
     for (const f of files) {
       const buf = fs.readFileSync(path.join(FONT_DIR, f));
       const tables: Record<string, number> = {};
@@ -234,6 +241,74 @@ describe("정적 오버레이 canvas-PNG 경로 (하이브리드)", () => {
       "에디터가 정적 오버레이 PNG 를 받을 엔드포인트가 없다(WYSIWYG 미완)");
     assert.match(SERVER, /app\.get\("\/api\/clips\/:id\/overlay-png\/:hash"/,
       "해시로 PNG 를 서빙하는 GET 라우트가 없다");
+  });
+});
+
+/**
+ * 텍스트 스타일 3종(색·글꼴·외곽선) — AENA 채택. 색은 이미 파이프를 통과했고(줄별 color),
+ * 글꼴(font 패밀리 id)·외곽선(stroke)은 이번에 canvas-PNG 경로로 추가됐다. 정적 오버레이의
+ * 파리티는 "에디터=렌더가 같은 PNG" 이므로, 여기선 **세 스타일이 모델→그리기목록→렌더로
+ * 실제 배선됐는지**를 소스 스캔으로 고정한다(생산→저장→소비 3단이 안 끊기게).
+ */
+const PRESETS = fs.readFileSync(path.resolve(HERE, "../../web/src/lib/editor/presets.ts"), "utf-8");
+const PANEL = fs.readFileSync(path.resolve(HERE, "../../web/src/components/editor/editor-panel.tsx"), "utf-8");
+const OVERLAY_PNG_HOOK = fs.readFileSync(path.resolve(HERE, "../../web/src/components/editor/use-overlay-png.ts"), "utf-8");
+const WEB_PREVIEW = fs.readFileSync(WEB, "utf-8");
+
+describe("텍스트 색 — 커스텀 색 입력이 Swatches 프리미티브에 있다(모든 색 컨트롤에 전파)", () => {
+  it("editor-panel Swatches 가 <input type=\"color\"> 를 품는다", () => {
+    assert.match(PANEL, /type="color"/,
+      "Swatches 에 네이티브 색 선택기가 없다 — 고정 스와치 6색만으론 임의 색을 못 넣는다");
+    // 값은 #rrggbb 로 파이프를 그대로 통과 — 렌더/캔버스 변경이 없어야 한다.
+    assert.match(PANEL, /function Swatches/, "Swatches 프리미티브가 사라졌다");
+  });
+});
+
+describe("글꼴(글꼴 변환) — 패밀리가 모델→그리기목록→렌더로 흐른다", () => {
+  it("모델: TitleLine 에 font(패밀리 id) 필드가 있다", () => {
+    assert.match(PRESETS, /interface TitleLine[\s\S]*?font\?:\s*string/,
+      "TitleLine.font 이 없으면 줄별 글꼴을 저장할 곳이 없다");
+    assert.match(PRESETS, /FONT_FAMILY_OPTIONS/,
+      "웹 글꼴 픽커 목록(FONT_FAMILY_OPTIONS)이 없다");
+  });
+  it("렌더: overlay-canvas 가 패밀리 레지스트리로 GmarketSans 를 등록한다", () => {
+    assert.match(OVERLAY_CANVAS, /FONT_FAMILIES/,
+      "패밀리 레지스트리(FONT_FAMILIES)가 없다 — 글꼴 변환할 대상이 없다");
+    assert.match(OVERLAY_CANVAS, /GmarketSans/,
+      "canvas 에 GmarketSans 를 등록하지 않으면 글꼴 변환 결과물이 Pretendard 로 열화된다");
+    assert.match(OVERLAY_CANVAS, /Pretendard-ExtraBold\.otf/,
+      "기본 Pretendard 등록은 유지돼야 한다(하위호환)");
+  });
+  it("배선: buildStaticOverlayItems 가 줄별 font 를 아이템에 실어 보낸다", () => {
+    assert.match(SERVER, /font:\s*typeof L\.t\?\.font === "string" \? L\.t\.font : undefined/,
+      "정본(index.ts)이 font 를 아이템에 안 실으면 픽커 선택이 결과물 PNG 에 미도달한다");
+  });
+  it("PNG 재요청 키가 font 변화를 감지한다(에디터 <img> 가 갱신)", () => {
+    assert.match(OVERLAY_PNG_HOOK, /f:\s*l\.font/,
+      "overlayKey 에 font 가 없으면 글꼴을 바꿔도 PNG 가 재요청되지 않는다");
+  });
+});
+
+describe("외곽선(stroke) — 정적 오버레이 canvas strokeText 배선", () => {
+  it("모델: TitleLine·OverlayTextItem 에 stroke 필드가 있다", () => {
+    assert.match(PRESETS, /interface TitleLine[\s\S]*?stroke\?:\s*\{\s*color:\s*string;\s*width:\s*number\s*\}/,
+      "TitleLine.stroke 이 없으면 외곽선을 저장할 곳이 없다");
+    assert.match(OVERLAY_CANVAS, /stroke\?:\s*\{\s*color:\s*string;\s*width:\s*number\s*\}/,
+      "OverlayTextItem.stroke 이 없으면 그리기 목록이 외곽선을 나를 수 없다");
+  });
+  it("렌더: renderTextLayerPng 가 fill 전에 strokeText 를 호출한다", () => {
+    assert.match(OVERLAY_CANVAS, /ctx\.strokeText\(/,
+      "strokeText 호출이 없으면 외곽선이 결과물에 안 그려진다");
+    assert.match(OVERLAY_CANVAS, /ctx\.lineJoin\s*=\s*"round"/,
+      "lineJoin=round 가 없으면 외곽선 모서리가 뾰족하게 튄다(AENA 방식)");
+  });
+  it("배선: index 가 stroke 를 아이템에 실어 보내고 미리보기(px)를 출력 px 로 scale 한다", () => {
+    assert.match(SERVER, /width:\s*st\.width \* scale/,
+      "stroke.width 를 scale 안 하면 미리보기와 결과물의 외곽선 굵기가 어긋난다");
+  });
+  it("미리보기: 편집 중 -webkit-text-stroke 로 근사한다(자막이 쓰는 패턴)", () => {
+    assert.match(WEB_PREVIEW, /WebkitTextStroke:\s*`\$\{line\.stroke\.width\}px \$\{line\.stroke\.color\}`/,
+      "미리보기가 외곽선을 안 그리면 편집 중(PNG 숨김) 자리와 결과물이 갈라진다");
   });
 });
 
