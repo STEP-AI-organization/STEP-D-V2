@@ -7,7 +7,14 @@
  * shares the renderer's px basis (WYSIWYG). Real ffmpeg/STT bake wires in at M6.
  */
 
-export type AspectKey = "9:16" | "16:9" | "1:1" | "4:5";
+import { type AspectId, normalizeAspectPreset } from "@/lib/editor/aspect-presets";
+
+/**
+ * 에디터 종횡비 키 = **5-값 crop enum(AspectId)** + 구형 정사각/피드(1:1·4:5).
+ * 예전의 `"9:16"|"16:9"|"1:1"|"4:5"` × fit × bgType 곱을 하나의 enum 으로 접었다. 새 픽커는 5값만
+ * 노출하고, 1:1·4:5 는 옛 클립 렌더 호환으로만 남긴다(ensureTracks 가 bare "9:16" 은 enum 으로 승격).
+ */
+export type AspectKey = AspectId | "1:1" | "4:5";
 /**
  * 프레임 템플릿 디렉토리 이름 (`assets/shorts-template/<name>`).
  * 예전 하드코딩 5종("stacked_channel" 등)은 캔바 프레임으로 대체됐다. 문자열로 열어둬야
@@ -359,11 +366,16 @@ export interface EditorState {
   trimBase?: "segment" | "master";
 }
 
+// 컨테이너 라벨·비율. 5-값 enum(세로는 전부 9/16) + 구형 4:5·1:1. 라벨은 aspect-presets 프리셋과
+// 같은 문구를 쓴다(picker 는 ASPECT_PRESETS 를 직접 돈다 — 여기 라벨은 미리보기 비율 계산·폴백용).
 export const ASPECTS: Record<AspectKey, { label: string; ratio: number }> = {
-  "9:16": { label: "세로 9:16", ratio: 9 / 16 },
+  "16:9": { label: "가로 16:9", ratio: 16 / 9 },
+  "9:16-letterbox": { label: "세로 · 전체 담기", ratio: 9 / 16 },
+  "9:16-crop-full": { label: "세로 · 꽉 채우기", ratio: 9 / 16 },
+  "9:16-crop-main": { label: "세로 · 위 자막띠", ratio: 9 / 16 },
+  "9:16-crop-sub": { label: "세로 · 위아래 띠", ratio: 9 / 16 },
   "4:5": { label: "세로 4:5", ratio: 4 / 5 },
   "1:1": { label: "정사각 1:1", ratio: 1 },
-  "16:9": { label: "가로 16:9", ratio: 16 / 9 },
 };
 
 export const CAPTION_STYLES: Record<CaptionStyle, string> = {
@@ -453,13 +465,13 @@ export const TEMPLATE_PRESETS: TemplatePreset[] = [
     id: "stacked_channel",
     label: "상단 제목 + 채널",
     hint: "가로 원본을 쇼츠로 가장 무난하게",
-    patch: { aspect: "9:16", bg: "#0E0E12", accent: "#FFD400", titleAlign: "center", titleY: 8, showChannel: true, channelY: 82, captionStyle: "korean_pop" },
+    patch: { aspect: "9:16-letterbox", bg: "#0E0E12", accent: "#FFD400", titleAlign: "center", titleY: 8, showChannel: true, channelY: 82, captionStyle: "korean_pop" },
   },
   {
     id: "full_bleed",
     label: "풀스크린 세로",
     hint: "이미 세로 영상이면 제일 자연스럽게",
-    patch: { aspect: "9:16", bg: "#000000", accent: "#FFD400", titleAlign: "center", titleY: 6, showChannel: true, channelY: 88, captionStyle: "clean" },
+    patch: { aspect: "9:16-crop-full", bg: "#000000", accent: "#FFD400", titleAlign: "center", titleY: 6, showChannel: true, channelY: 88, captionStyle: "clean" },
   },
   {
     id: "caption_card",
@@ -511,7 +523,8 @@ export function makeInitialEditorState(
     // TVING 쇼츠 스타일이 기본 (2026-08-12): 검정 레터박스 + 상단 훅 + 하단 프로그램명.
     // broadcast-clean 은 assets/shorts-template/ 의 실존 프레임이다.
     templateId: "broadcast-clean",
-    aspect: "9:16",
+    // 종횡비 = 5-값 enum. 레터박스(전체 담기 + 검정 여백) = 위 "검정 레터박스" 의도와 일치.
+    aspect: "9:16-letterbox",
     fit: "contain",
     bgType: "solid",
     bg: "#000000",
@@ -602,6 +615,9 @@ export function ensureTracks(state: EditorState, durationSec: number, segmentSta
     ? state.elements.map((e) => ({ ...e, keyframes: Array.isArray(e.keyframes) ? e.keyframes : [] }))
     : [];
 
+  // 종횡비 정규화(구형 aspect × fit × bgType → 5-값 enum + blur 하위옵션). 아래 aspect·bgType 이 함께 읽는다.
+  const ap = normalizeAspectPreset(state.aspect, state.fit, state.bgType);
+
   // 새 필드 fallback — 옛 클립엔 없을 수 있음. 여기 나열된 것 외에 새 필드가 추가되면 여기에도 추가.
   return {
     ...state,
@@ -613,9 +629,12 @@ export function ensureTracks(state: EditorState, durationSec: number, segmentSta
     captionsOn: typeof state.captionsOn === "boolean" ? state.captionsOn : true,
     highlightColor: state.highlightColor ?? "#FFD400",
     keywordColor: state.keywordColor ?? state.highlightColor ?? "#FFD400",
-    // 종횡비·핏·배경·강조색
-    aspect: state.aspect ?? "9:16",
-    // 구 클립엔 fit 이 없다. contain 이 지금까지의 비프레임 동작(레터박스)과 같아 무회귀.
+    // 종횡비 — 구형 저장분(bare "9:16" + fit + bgType, 1:1/4:5)을 5-값 enum 으로 승격.
+    // aspect-presets.normalizeAspectPreset 이 결과물 무회귀 등가로 접는다(cover→꽉채우기,
+    // contain→레터박스, blur 는 레터박스 하위옵션으로만 유지). 이미 enum 이면 그대로.
+    aspect: ap.aspect,
+    // fit 은 프레임 템플릿 경로(frame.video.fit)에서만 쓰인다. 비프레임 채움은 이제 aspect enum 이
+    // 결정하므로 여기 값은 vestigial — 하위호환으로 유지(구 clip 로드 크래시 방지).
     fit: state.fit ?? "contain",
     bg: state.bg ?? "#0E0E12",
     accent: state.accent ?? "#FFD400",
@@ -645,8 +664,9 @@ export function ensureTracks(state: EditorState, durationSec: number, segmentSta
       state.channelIconShape === "rounded" || state.channelIconShape === "square" || state.channelIconShape === "circle"
         ? state.channelIconShape
         : undefined,
-    // 배경 채우기 방식 — 예전 렌더는 항상 blur cover였으나 UX 정리로 solid를 기본.
-    bgType: state.bgType === "blur" || state.bgType === "image" ? state.bgType : "solid",
+    // 배경 채우기 방식 — 이제 **레터박스 여백 채움 하위옵션**으로만 의미가 있다. blur 는 결과 aspect 가
+    // 레터박스일 때만 유지(그 외 crop-full/rect 는 여백이 없어 무의미 → solid). image 는 하위호환 유지.
+    bgType: ap.blur ? "blur" : state.bgType === "image" ? "image" : "solid",
     bgImageDataUrl: typeof state.bgImageDataUrl === "string" ? state.bgImageDataUrl : undefined,
     bgImageCrop:
       state.bgImageCrop &&
@@ -714,7 +734,9 @@ export function applyTemplate(state: EditorState, id: TemplateId, frame?: Templa
   // 프레임의 fit 을 editorState.fit 시드로 복사한다 — 이후 렌더·미리보기는 editorState.fit 만
   // 읽으므로 두 값이 어긋날 일이 없다(조사 함정 #1). 프레임 fit 이 없으면 contain(레터박스).
   const frameFit = frame?.video?.fit === "cover" ? "cover" : "contain";
-  const base: EditorState = { ...state, templateId: id, aspect: "9:16", fit: frameFit, bgType: "solid", bg: "#000000" };
+  // 프레임 템플릿은 자체 video 사각형·밴드로 채움을 소유한다 — aspect enum 은 세로(레터박스)로만 둔다
+  // (프레임 없을 때의 폴백 의미). renderShort/미리보기는 프레임이 있으면 프레임 기하를 우선한다.
+  const base: EditorState = { ...state, templateId: id, aspect: "9:16-letterbox", fit: frameFit, bgType: "solid", bg: "#000000" };
   if (!frame || !Array.isArray(frame.text)) return base;
 
   const slot = (name: string) => frame.text.find((s) => s.slot === name);

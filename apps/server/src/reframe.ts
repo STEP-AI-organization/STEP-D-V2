@@ -254,7 +254,12 @@ export function canonicalRenderedClipAspect(
   previousAspect: unknown,
 ): string | undefined {
   if (renderAspect === "16:9") return "16:9";
+  // 5-값 세로 enum(9:16-letterbox/crop-full/crop-main/crop-sub) 은 이미 정본 라벨 — 그대로 저장.
+  // (basic 렌더는 editorState.aspect 의 enum 을 그대로 renderAspect 로 받는다.)
+  if (renderAspect.startsWith("9:16-")) return renderAspect;
   if (renderAspect === "9:16") {
+    // AI reframe 은 bare "9:16" 을 강제한다 — 기존 세로 하위분류를 유지하고, 처음 세로가 되는
+    // 렌더는 crop-main 을 기본으로 둔다.
     const previous = typeof previousAspect === "string" ? previousAspect.trim() : "";
     return previous.startsWith("9:16") ? previous : "9:16-crop-main";
   }

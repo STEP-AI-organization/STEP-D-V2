@@ -20,7 +20,6 @@ import { frameOverlaySrc, type FrameTemplate } from "@/lib/data/api";
 import type { ClipReframe, ReframeMode } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import {
-  ASPECTS,
   BG_SWATCHES,
   CAPTION_STYLES,
   CHANNEL_BADGE_PRESETS,
@@ -30,7 +29,6 @@ import {
   ELEMENT_DEFAULTS,
   defaultElementSize,
   sampleKeyframes,
-  type AspectKey,
   type CaptionStyle,
   type EditorElement,
   type EditorState,
@@ -39,6 +37,7 @@ import {
   type KeyframePoint,
   type KfSelection,
 } from "@/lib/editor/presets";
+import { ASPECT_PRESETS } from "@/lib/editor/aspect-presets";
 
 type Update = (patch: Partial<EditorState>) => void;
 type TabKey = "text" | "channel" | "layout" | "captions" | "elements" | "filters";
@@ -713,29 +712,34 @@ function LayoutTab({
         <div className="mt-1 text-[10px] text-zinc-500">아이콘은 프로그램 설정의 "쇼츠 아이콘"에서 등록</div>
       </div>
       <div>
-        <Label>종횡비</Label>
-        <div className="grid grid-cols-2 gap-1">
-          {(Object.keys(ASPECTS) as AspectKey[]).map((a) => (
+        <Label>종횡비 · 크롭</Label>
+        {/* 5-값 enum(aspect-presets.ts) — 한 값이 컨테이너·크롭·밴드를 전부 결정한다.
+            라벨/정의는 프리셋에서 온다(라벨↔동작 1:1). 미리보기(editor-preview)가 같은 프리셋을
+            읽어 정확히 렌더될 모양을 보여준다. */}
+        <div className="grid grid-cols-1 gap-1">
+          {ASPECT_PRESETS.map((p) => (
             <button
-              key={a}
-              onClick={() => update({ aspect: a })}
+              key={p.id}
+              onClick={() => update({ aspect: p.id })}
               disabled={reframe?.mode === "ai_multi"}
-              title={reframe?.mode === "ai_multi" ? "AI 다중 레이아웃은 9:16으로 고정됩니다." : undefined}
+              title={reframe?.mode === "ai_multi" ? "AI 다중 레이아웃은 세로로 고정됩니다." : p.hint}
               className={cn(
-                "rounded-md border py-1.5 text-xs disabled:cursor-not-allowed disabled:opacity-45",
-                state.aspect === a ? "border-zinc-400 bg-zinc-800 text-white" : "border-zinc-700 text-zinc-400",
+                "flex flex-col items-start rounded-md border px-2 py-1.5 text-left disabled:cursor-not-allowed disabled:opacity-45",
+                state.aspect === p.id ? "border-zinc-400 bg-zinc-800 text-white" : "border-zinc-700 text-zinc-400",
               )}
             >
-              {ASPECTS[a].label}
+              <span className="text-xs font-medium">{p.label}</span>
+              <span className="text-[10px] leading-tight text-zinc-500">{p.hint}</span>
             </button>
           ))}
         </div>
       </div>
 
-      {/* ── 레터박스 배경 — 맞춤(contain)이고 프레임이 없을 때만 의미가 있다 ── */}
-      {reframe?.mode !== "ai_multi" && !frameActive && (state.fit ?? "contain") === "contain" && (
+      {/* ── 레터박스 여백 — 세로 전체 담기(9:16-letterbox)이고 프레임이 없을 때만 의미가 있다.
+             검정(기본) / 원본 블러. 다른 값(꽉 채우기·밴드 크롭)은 여백이 없어 표시 안 함. ── */}
+      {reframe?.mode !== "ai_multi" && !frameActive && state.aspect === "9:16-letterbox" && (
       <div>
-        <Label>레터박스 배경</Label>
+        <Label>레터박스 여백</Label>
         <div className="grid grid-cols-2 gap-1">
           {[
             { k: "solid" as const, label: "검정", disabled: false },

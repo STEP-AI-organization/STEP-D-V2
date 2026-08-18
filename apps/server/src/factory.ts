@@ -604,7 +604,10 @@ export function autoEditorState(
     ?? pickTemplateId(program);
   const seed = TEMPLATE_SEEDS[templateId] ?? TEMPLATE_SEEDS["broadcast-standard"];
   return {
-    aspect: "9:16",
+    // 종횡비 = 5-값 enum(aspect-presets.ts). 쇼츠 = 세로 메인 크롭(위 자막띠) 기본 · 클립(롱폼) = 가로.
+    // clip.aspectRatio 배정(adopt/자동배포)과 같은 값이라 라벨↔렌더가 일치한다. 자동배포 경로가
+    // 가로형을 고르면 automation-cycle 이 여기 위에 aspect:"16:9" 를 덮는다.
+    aspect: rec.kind === "short" ? "9:16-crop-main" : "16:9",
     bgType: "solid",
     bg: "#000000",
     templateId,

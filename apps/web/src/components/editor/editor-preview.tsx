@@ -3,6 +3,7 @@
 import { useRef, useState, type CSSProperties, type Ref } from "react";
 import { Heart, MessageCircle, Send } from "lucide-react";
 import { ASPECTS, defaultElementSize, filterCss, overlayVisibleAt, sampleKeyframes, type CaptionStyle, type EditorState } from "@/lib/editor/presets";
+import { getAspectPreset } from "@/lib/editor/aspect-presets";
 import { Movable, SnapGuides, InlineText, type Guides } from "@/components/editor/editor-overlay";
 import { frameUrl, frameOverlaySrc, type FrameTemplate } from "@/lib/data/api";
 import { sampleReframeFrame } from "@/lib/editor/reframe";
@@ -98,6 +99,18 @@ export function EditorPreview({
   const poster =
     posterMediaId && posterApiBase != null ? frameUrl(posterApiBase, posterMediaId, posterTime ?? 0) : undefined;
   const ratio = ASPECTS[state.aspect].ratio;
+  // 종횡비 enum 프리셋(aspect-presets.ts) — **서버 렌더와 같은 숫자**를 읽어 WYSIWYG 파리티를 만든다.
+  //  · fill:"rect"(9:16-crop-main/sub) → 비디오를 캔버스 내 사각형(%)에 앉히고 나머지는 검정 pad
+  //  · fill:"cover"(꽉 채우기) → 전체 object-cover · fill:"contain"(레터박스) → object-contain + 여백
+  const aspectPreset = getAspectPreset(state.aspect);
+  const rectPct = aspectPreset?.fill === "rect" && aspectPreset.rect
+    ? {
+        left: (aspectPreset.rect.x / aspectPreset.canvasW) * 100,
+        top: (aspectPreset.rect.y / aspectPreset.canvasH) * 100,
+        width: (aspectPreset.rect.w / aspectPreset.canvasW) * 100,
+        height: (aspectPreset.rect.h / aspectPreset.canvasH) * 100,
+      }
+    : null;
   // Keyframe times are relative to the clip start (trim-in).
   const localT = (currentTime ?? state.trimIn) - state.trimIn;
   // Overlay show-windows (startSec/endSec) are segment-relative, like trimIn/trimOut.
@@ -108,6 +121,8 @@ export function EditorPreview({
   const aiReady = aiMode && reframe.status === "ready";
   const aiFill = aiReady && reframeFrame.layout === "fill";
   const aiFit = aiMode && !aiFill;
+  // 밴드 크롭 모드 — 프레임 템플릿·AI 가 없을 때만 aspect enum 사각형을 적용한다(둘 다 자체 기하 소유).
+  const rectMode = !aiMode && !frame && !!rectPct;
   const stageRef = useRef<HTMLDivElement | null>(null);
   const bgRef = useRef<HTMLVideoElement | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
@@ -176,7 +191,8 @@ export function EditorPreview({
           height: ratio < 1 ? "min(72vh, 640px)" : undefined,
           width: ratio >= 1 ? "min(90%, 900px)" : undefined,
           maxHeight: "72vh",
-          background: state.bg,
+          // 밴드 크롭은 나머지 여백을 검정 pad 로 렌더한다(renderShort pad 기본색) — 미리보기도 검정.
+          background: rectMode ? "#000000" : state.bg,
           // Size container → caption font can use cqh (% of stage height) to match the
           // render's ASS font (H*0.042), staying exact at any preview size.
           containerType: "size",
@@ -189,7 +205,8 @@ export function EditorPreview({
             프리뷰의 %/px 오버레이 좌표는 ASS 번인과 1:1 (PlayRes = output size). */}
         {videoUrl ? (
           <>
-            {!aiFill && state.bgType === "blur" && (
+            {/* 블러 여백 배경 — **레터박스(전체 담기)** 일 때만. 꽉 채우기·밴드 크롭은 여백이 없다. */}
+            {!aiFill && state.bgType === "blur" && (aspectPreset ? aspectPreset.fill === "contain" : true) && (
               <video
                 aria-hidden
                 ref={bgRef}
@@ -281,6 +298,12 @@ export function EditorPreview({
                   ? "inset-0 size-full object-contain"
                   : frame
                   ? (frame.video.fit === "contain" ? "object-contain" : "object-cover")
+                  : rectMode
+                  ? "object-cover"
+                  : aspectPreset?.fill === "cover"
+                  ? "inset-0 size-full object-cover"
+                  : aspectPreset?.fill === "contain"
+                  ? "inset-0 size-full object-contain"
                   : `inset-0 size-full ${state.fit === "cover" ? "object-cover" : "object-contain"}`,
               )}
               style={
@@ -294,6 +317,13 @@ export function EditorPreview({
                       filter: videoFilter,
                       left: `${frame.video.x}%`, top: `${frame.video.y}%`,
                       width: `${frame.video.w}%`, height: `${frame.video.h}%`,
+                    }
+                  : rectMode && rectPct
+                  ? {
+                      // 캔버스 내 비디오 사각형(%) — 서버 crop,scale,pad 와 같은 프리셋 숫자.
+                      filter: videoFilter,
+                      left: `${rectPct.left}%`, top: `${rectPct.top}%`,
+                      width: `${rectPct.width}%`, height: `${rectPct.height}%`,
                     }
                   : { filter: videoFilter }
               }

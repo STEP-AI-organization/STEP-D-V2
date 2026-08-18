@@ -177,6 +177,11 @@ export type RenderShortOpts = {
    * 프레임이 있으면 frame.video.fit 이 우선이라 이 값은 무시된다.
    */
   fit?: "contain" | "cover";
+  /** 세로 밴드 크롭(9:16-crop-main/sub) — 비디오가 앉을 **캔버스 내 사각형**(px). 주면 fit/bgType 을
+   *  무시하고 `crop=ih*w/h:ih,scale=w:h,pad=W:H:x:y` 경로를 탄다(나머지는 검정 pad = 캡션 밴드).
+   *  프레임(frame)·AI(reframePlan) 경로가 없을 때만 본다 — 둘 다 자체 기하를 소유하므로 우선한다.
+   *  좌표는 aspect-presets.ts CROP 프리셋에서 온다(에디터 미리보기와 같은 숫자 = 파리티). */
+  cropRect?: { x: number; y: number; w: number; h: number } | null;
   /** 프레임 템플릿 기하 (assets/shorts-template/<name>/meta.json).
    *  주면 배경 blur/solid 대신 **프레임 합성 경로**를 탄다: 검정 바탕 → 영상 사각형(cover)
    *  → bands → overlay.png 조각 → over bands. 편집기 미리보기와 같은 순서여야 한다. */
@@ -815,6 +820,12 @@ export function renderShort(opts: RenderShortOpts): Promise<void> {
     });
     const overBoxes = boxes(true);
     vf += overBoxes ? `;[${cur}]${overBoxes}[v0]` : `;[${cur}]copy[v0]`;
+  } else if (opts.cropRect) {
+    // 세로 밴드 크롭(9:16-crop-main/sub) — 소스를 사각형 비율로 중앙 크롭 → 사각형 크기로 스케일
+    // → 캔버스 위 (x,y) 에 검정 pad. 나머지 밴드(위/아래)가 캡션·브랜딩 자리가 된다.
+    // AENA aspect-presets 수식 그대로: crop=ih*vW/vH:ih,scale=vw:vh,pad=W:H:vx:vy (pad 기본 검정).
+    const r = opts.cropRect;
+    vf = `[0:v]crop=ih*${r.w}/${r.h}:ih,scale=${r.w}:${r.h},pad=${W}:${H}:${r.x}:${r.y}[v0]`;
   } else if (opts.fit === "cover") {
     // 축2 "채우기": 프레임 없이 원본을 잘라 컨테이너를 꽉 채운다(레터박스·배경 없음).
     // increase 로 키워 넘치는 부분을 crop. bgType 은 여백이 없으므로 무의미.

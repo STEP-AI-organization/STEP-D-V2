@@ -278,10 +278,10 @@ export async function runAutomationCycle(): Promise<CycleReport> {
             // autoEditorState 는 captionsOn:false 를 시드하지만(공장 경로 · 번인 겹침 방지), 자동배포는
             // 규칙 토글을 따른다 — 드라마처럼 원본 번인 자막이 있는 회차는 규칙에서 자막을 끈다.
             captionsOn: rule.layout?.subtitles !== false,
-            // autoEditorState 는 쇼츠 전제로 aspect 9:16 을 박는데, /export 는 editorState.aspect
-            // 를 **최우선**으로 읽는다 — 여기서 안 뒤집으면 aspectRatio 에 저장만 되고 렌더에
-            // 미도달해서 **가로 클립이 세로로 잘려 나간다.** 세로일 때만 기존값 그대로.
-            ...(landscape ? { aspect: "16:9" } : {}),
+            // editorState.aspect 를 clip.aspectRatio(위 5-값 enum) 와 **일치**시킨다. /export 는
+            // editorState.aspect 를 최우선으로 읽으므로, 여기서 안 맞추면 aspectRatio 에만 저장되고
+            // 렌더에 미도달한다(가로 규칙이 세로로 잘리거나 그 반대). autoEditorState 기본값 위에 덮는다.
+            aspect: aspectRatio,
           },
         };
 

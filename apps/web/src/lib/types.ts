@@ -6,7 +6,7 @@
  * (lib/data/api.ts) satisfy these shapes.
  */
 
-import type { AspectKey, EditorState } from "@/lib/editor/presets";
+import type { EditorState } from "@/lib/editor/presets";
 import type {
   AspectRatio,
   ClipCategory,
@@ -196,10 +196,11 @@ export type RenderChannel = "youtube_shorts" | "instagram_reels" | "naver_tv";
 
 /**
  * What each preset does to the render. Labels/caps are shown in the export selector, and
- * `aspect` is the frame the editor switches to when that destination is picked — it must stay
- * an AspectKey so preview and burn-in agree. Mirrors the server's RENDER_PRESETS.
+ * `aspect` is the destination's **ratio family** ("9:16"/"16:9"); the editor maps it to a
+ * concrete 5-value AspectKey (portrait defaults to crop-main) when that destination is picked,
+ * so preview and burn-in agree. Mirrors the server's RENDER_PRESETS.
  */
-export const RENDER_CHANNELS: Record<RenderChannel, { label: string; aspect: AspectKey; maxSec: number }> = {
+export const RENDER_CHANNELS: Record<RenderChannel, { label: string; aspect: "16:9" | "9:16"; maxSec: number }> = {
   youtube_shorts: { label: "YouTube Shorts", aspect: "9:16", maxSec: 60 },
   instagram_reels: { label: "Instagram Reels", aspect: "9:16", maxSec: 90 },
   naver_tv: { label: "네이버 TV (가로 VOD)", aspect: "16:9", maxSec: 180 },

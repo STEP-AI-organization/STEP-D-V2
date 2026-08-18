@@ -282,10 +282,11 @@ describe("채택 형태 순방 배선 — automation-cycle 소스 스캔", () =>
       "방향 미지정 클립이 가로로 안 간다 — 롱폼이 세로로 잘려 나간다");
   });
 
-  it("가로면 editorState.aspect 도 뒤집는다 — /export 는 editorState 를 최우선으로 읽는다", () => {
-    // autoEditorState 는 쇼츠 전제 aspect 9:16 고정 — 여기서 안 뒤집으면 aspectRatio 에
-    // 저장만 되고 렌더에 미도달(이 리포 최빈 실패모드).
-    assert.match(src, /\.\.\.\(landscape \? \{ aspect: "16:9" \} : \{\}\)/);
+  it("editorState.aspect 를 clip.aspectRatio(5-값 enum)와 일치시킨다 — /export 는 editorState 를 최우선으로 읽는다", () => {
+    // autoEditorState 는 kind 로 aspect 를 시드하지만(short→crop-main), 규칙 방향이 그 위에
+    // 덮인다. editorState.aspect 를 aspectRatio 와 안 맞추면 렌더에 미도달(이 리포 최빈 실패모드).
+    assert.match(src, /aspect: aspectRatio,/,
+      "editorState.aspect 를 clip.aspectRatio 와 일치시키지 않으면 규칙 방향이 렌더에 미도달한다");
   });
 
   it("클립도 자동배포 후보가 된다 — core 의 type 을 서버가 kind 로 보존한다", () => {

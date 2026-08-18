@@ -10,10 +10,12 @@ import {
   applyTemplate,
   ensureTracks,
   makeInitialEditorState,
+  type AspectKey,
   type EditorState,
   type EditorTrack,
   type KfSelection,
 } from "@/lib/editor/presets";
+import { isPortraitAspect, normalizeAspectPreset } from "@/lib/editor/aspect-presets";
 import { useEditorHistory } from "@/lib/editor/useEditorHistory";
 import { EditorPreview } from "@/components/editor/editor-preview";
 import { EditorPanel } from "@/components/editor/editor-panel";
@@ -25,6 +27,13 @@ import {
   type PendingTrimReframe,
 } from "@/lib/editor/reframe";
 import { RENDER_CHANNELS, type ReframeMode, type RenderChannel } from "@/lib/types";
+
+/** 배포처 프리셋의 비율 계열("9:16"/"16:9") → 구체 5-값 enum. 세로면 현재 세로 선택을 유지하고,
+ *  가로→세로 전환이면 위 자막띠(crop-main)를 기본으로 둔다. */
+function presetAspectToEnum(family: "16:9" | "9:16", current: AspectKey): AspectKey {
+  if (family === "16:9") return "16:9";
+  return isPortraitAspect(current) ? current : "9:16-crop-main";
+}
 
 export function EditorShell({ clipId }: { clipId: string }) {
   const {
@@ -192,7 +201,8 @@ export function EditorShell({ clipId }: { clipId: string }) {
   // The server independently enforces 9:16 for ai_multi; this effective state keeps preview
   // and controls honest while preserving state.aspect for a later switch back to Basic.
   const displayState = useMemo(
-    () => (reframeMode === "ai_multi" && state.aspect !== "9:16" ? { ...state, aspect: "9:16" as const } : state),
+    () => (reframeMode === "ai_multi" && !isPortraitAspect(state.aspect)
+      ? { ...state, aspect: "9:16-crop-full" as AspectKey } : state),
     [reframeMode, state],
   );
 
@@ -212,18 +222,20 @@ export function EditorShell({ clipId }: { clipId: string }) {
   // es.aspect is always set, so seeding it to the preset keeps preview == render by default;
   // an explicit operator override is honored by that same precedence, so it stays consistent.
   // No-op while channel is "" — which is why existing clips (no targetChannel) are untouched.
+  const presetEnum = preset ? presetAspectToEnum(preset.aspect, state.aspect) : null;
   useEffect(() => {
     if (reframeMode === "ai_multi") return;
-    if (preset && !aspectOverrideRef.current && state.aspect !== preset.aspect) {
-      update({ aspect: preset.aspect });
+    if (presetEnum && !aspectOverrideRef.current && state.aspect !== presetEnum) {
+      update({ aspect: presetEnum });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [preset?.aspect, reframeMode, state.aspect]);
+  }, [presetEnum, reframeMode, state.aspect]);
 
   // Layout tab writes through this: an aspect patch is an explicit operator override, so it
   // must stick against the preset force-sync. All other patches pass straight through.
   const panelUpdate = (patch: Partial<EditorState>) => {
-    if (reframeMode === "ai_multi" && "aspect" in patch && patch.aspect !== "9:16") return;
+    // AI 다중 레이아웃은 세로 고정 — 가로 종횡비 선택은 무시한다(세로 enum 은 허용).
+    if (reframeMode === "ai_multi" && "aspect" in patch && !isPortraitAspect(patch.aspect)) return;
     if ("aspect" in patch) aspectOverrideRef.current = true;
     update(patch);
   };
@@ -711,7 +723,8 @@ export function EditorShell({ clipId }: { clipId: string }) {
               // (서버는 editorState.aspect 를 clip.aspectRatio 보다 우선한다).
               // 사용자가 레이아웃 탭에서 직접 고른 종횡비는 건드리지 않는다.
               if (!next && !aspectOverrideRef.current) {
-                update({ aspect: clip?.aspectRatio === "16:9" ? "16:9" : "9:16" });
+                // 클립의 채택 종횡비(5-값 enum)로 되돌린다 — 세로면 그 하위분류(crop-main 등)를 보존.
+                update({ aspect: normalizeAspectPreset(clip?.aspectRatio).aspect });
               }
             }}
             title="렌더 프리셋 — 종횡비와 길이 상한이 달라집니다"

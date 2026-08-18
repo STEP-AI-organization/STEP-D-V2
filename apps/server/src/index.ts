@@ -245,6 +245,7 @@ import {
   type ClipReframeState,
   type ReframePlan,
 } from "./reframe.ts";
+import { getAspectPreset } from "./aspect-presets.ts";
 import {
   syncChannelVideos,
   classifyShorts,
@@ -3921,7 +3922,12 @@ function renderDims(aspect: string): { W: number; H: number; stageH: number } {
     case "16:9": return { W: 1920, H: 1080, stageH: (900 * 1080) / 1920 };
     case "1:1":  return { W: 1080, H: 1080, stageH: 900 };
     case "4:5":  return { W: 1080, H: 1350, stageH: 640 };
+    // 세로 계열 — bare "9:16" 과 5-값 enum(레터박스·꽉채우기·메인/서브 크롭) 전부 1080×1920.
     case "9:16":
+    case "9:16-letterbox":
+    case "9:16-crop-full":
+    case "9:16-crop-main":
+    case "9:16-crop-sub":
     default:     return { W: 1080, H: 1920, stageH: 640 };
   }
 }
@@ -3940,17 +3946,26 @@ const RENDER_PRESETS: Record<string, { label: string; aspect: string; maxSec: nu
 };
 
 /**
- * clip.aspectRatio uses the editor's vocabulary ("9:16-crop-main", "9:16-letterbox", "16:9"
- * — constants.ts ASPECT_RATIOS); renderDims uses bare frame ratios. Map between them so an
- * adopted highlight (aspectRatio "16:9", no editorState) doesn't fall through to the 9:16
- * default and get squeezed into a vertical frame it was never selected for.
+ * clip.aspectRatio / editorState.aspect 는 에디터 어휘(5-값 enum: "16:9", "9:16-letterbox",
+ * "9:16-crop-full", "9:16-crop-main", "9:16-crop-sub" — constants.ts ASPECT_RATIOS /
+ * aspect-presets.ts)를 쓴다. renderDims 는 이 enum 을 그대로 받아 W/H 를 낸다.
+ *
+ * ⚠️ 예전엔 여기서 `9:16*` 를 전부 bare "9:16" 으로 뭉갰다 — 그 결과 letterbox·crop-main·crop-sub 가
+ * 렌더에서 구분되지 않았다. 이제 **알려진 enum 은 그대로 통과**시켜 5값이 각기 다르게 렌더된다.
+ * 구형 저장분의 bare "9:16"(fit/bgType 로 채움 결정) 과 정사각/피드(1:1·4:5) 는 그대로 둔다.
  */
 function normalizeAspect(aspectRatio: unknown): string | null {
-  const s = String(aspectRatio ?? "");
+  const s = String(aspectRatio ?? "").trim();
   if (!s) return null;
+  // 5-값 enum 은 verbatim 통과 (crop-main/crop-sub/letterbox/crop-full 이 각기 렌더되게).
+  if (s === "9:16-letterbox" || s === "9:16-crop-full" || s === "9:16-crop-main" || s === "9:16-crop-sub") return s;
+  if (s === "9:16-crop") return "9:16-crop-main"; // 레거시 별칭
+  if (s === "16:9") return "16:9";
+  if (s === "9:16") return "9:16"; // 구형 editorState — 채움은 fit/bgType 폴백
+  if (s === "1:1" || s === "4:5") return s;
+  // 알 수 없는 9:16*/16:9* 변형 → bare 폴백(크래시 방지).
   if (s.startsWith("9:16")) return "9:16";
   if (s.startsWith("16:9")) return "16:9";
-  if (s === "1:1" || s === "4:5") return s;
   return null;
 }
 
@@ -4861,14 +4876,33 @@ async function renderClipMedia(opts: {
       // volume change, no speed change, native 16:9, no hook preroll). Any edit routes through renderShort.
       await trimEncode(srcPath, startTime, endTime, tmpPath);
     } else {
-      // 배경 채우기 방식 — 에디터에서 지정한 bgType(solid/blur/image). image는 아직 렌더 파이프라인
-      // 미지원이라 solid로 폴백(renderShort 내부에서 처리). solid일 때 letterbox 색은 state.bg.
-      const bgType = (editorState?.bgType === "solid" || editorState?.bgType === "image"
-        ? editorState.bgType
-        : "blur") as "solid" | "blur" | "image";
+      // 채움/크롭 결정 — **종횡비 enum(aspect) 이 정본.** aspect-presets.ts 프리셋 하나가
+      // contain(레터박스)·cover(꽉채우기)·rect(밴드 크롭)를 결정한다. 프레임·AI 경로가 없을 때만 적용.
+      //   letterbox → fit:contain + 검정 pad(bgColor=state.bg) · blur 는 letterbox 하위옵션만
+      //   crop-full → fit:cover · crop-main/sub → cropRect(사각형+검정 pad)
+      // 구형 저장분(bare "9:16"/1:1/4:5, 프리셋 없음)은 예전 fit/bgType 폴백을 그대로 써서 무회귀.
+      const aspectPreset = getAspectPreset(aspect);
       const bgColor = typeof editorState?.bg === "string" ? editorState.bg : undefined;
-      const fit = editorState?.fit === "cover" ? "cover" : "contain" as "contain" | "cover";
-      // 축2 핏 — 프레임이 없을 때만 적용된다(있으면 frame.video.fit 우선). cover=잘라 채우기.
+      let fit: "contain" | "cover";
+      let bgType: "solid" | "blur" | "image";
+      let cropRect: { x: number; y: number; w: number; h: number } | null = null;
+      if (aspectPreset) {
+        if (aspectPreset.fill === "rect") {
+          cropRect = aspectPreset.rect ?? null;
+          fit = "contain"; bgType = "solid"; // cropRect 있으면 renderShort 가 fit/bgType 무시
+        } else if (aspectPreset.fill === "cover") {
+          fit = "cover"; bgType = "solid";
+        } else {
+          // 레터박스 — 검정 pad 기본, blur 는 여백 채움 하위옵션(비율 축과 직교).
+          fit = "contain";
+          bgType = aspectPreset.blurCapable && editorState?.bgType === "blur" ? "blur" : "solid";
+        }
+      } else {
+        // 구형 bare "9:16"/1:1/4:5 — 예전 렌더 동작 유지(무회귀). image 는 solid 로 폴백.
+        fit = editorState?.fit === "cover" ? "cover" : "contain";
+        bgType = (editorState?.bgType === "solid" || editorState?.bgType === "image"
+          ? editorState.bgType : "blur") as "solid" | "blur" | "image";
+      }
       // 프레임 템플릿 — editorState.templateId 가 assets/shorts-template 의 디렉토리 이름이다.
       // 목록에 없으면(구 프리셋 id 등) null 이라 기존 blur/solid 경로로 떨어진다.
       const tpl = typeof editorState?.templateId === "string"
@@ -4884,7 +4918,7 @@ async function renderClipMedia(opts: {
         decorationAssPath: decorationAss ? decorationAssTmp : null,
         reframePlan: opts.reframePlan ?? null,
         videoFilters, audioFilter, speed,
-        bgType, bgColor, fit, frame,
+        bgType, bgColor, fit, cropRect, frame,
         hookPreroll,
         badge,
       });

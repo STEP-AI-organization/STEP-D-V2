@@ -44,11 +44,14 @@ export function targetAgeLabel(age: TargetAge): string {
 }
 
 // ── Aspect ratios ────────────────────────────────────────────────────────────
+// 5-값 enum — 컨테이너·크롭·밴드를 한 값이 결정한다(단일 정본: lib/editor/aspect-presets.ts).
+// 예전의 aspect × fit × bgType 곱 + normalizeAspect 뭉갬을 대체한다.
 export const ASPECT_RATIOS = {
   "16:9": "가로 16:9",
-  "9:16-letterbox": "세로 9:16 (레터박스)",
-  "9:16-crop-main": "세로 9:16 (메인 크롭)",
-  "9:16-crop-sub": "세로 9:16 (서브 크롭)",
+  "9:16-letterbox": "세로 · 전체 담기 (레터박스)",
+  "9:16-crop-full": "세로 · 꽉 채우기",
+  "9:16-crop-main": "세로 · 위 자막띠 (메인 크롭)",
+  "9:16-crop-sub": "세로 · 위아래 띠 (서브 크롭)",
 } as const;
 export type AspectRatio = keyof typeof ASPECT_RATIOS;
 
