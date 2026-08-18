@@ -3393,6 +3393,9 @@ export async function listCreditLedger(
 
 export interface TopupRow {
   paymentId: string; credits: number; amountKrw: number; status: string; requestedBy: string;
+  /** 조회 경로에서만 채워진다(createTopup 입력에는 없음) — 인보이스 결제일 표기용. */
+  createdAt?: string;
+  settledAt?: string | null;
 }
 
 // ── 회사 사업자정보 ───────────────────────────────────────────────────────────
@@ -3680,7 +3683,7 @@ export async function createTopup(r: TopupRow): Promise<void> {
 export async function getTopup(paymentId: string): Promise<TopupRow | null> {
   const { rows } = await pool.query<TopupRow>(
     `SELECT payment_id AS "paymentId", credits, amount_krw AS "amountKrw", status,
-            requested_by AS "requestedBy"
+            requested_by AS "requestedBy", created_at AS "createdAt", settled_at AS "settledAt"
        FROM credit_topup WHERE payment_id = $1`,
     [paymentId],
   );

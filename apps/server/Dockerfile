@@ -40,6 +40,9 @@ COPY assets/shorts-template assets/shorts-template
 # 미설치면 libass 가 Noto 로 폴백해 조용히 다른 모양이 나간다 — fc-cache 까지 해야 잡힌다.
 COPY assets/fonts /usr/share/fonts/opentype/pretendard
 RUN fc-cache -f
+# 인보이스 PDF 폰트 — jsPDF 는 TTF 만 임베드한다(Pretendard OTF 는 CFF 라 못 쓴다).
+# invoice.ts 가 리포 상대경로(assets/invoice-fonts)로 읽는다 — 빼먹으면 메일 발송만 조용히 실패.
+COPY assets/invoice-fonts assets/invoice-fonts
 # Overwrite server node_modules from deps layer
 COPY --from=deps /app/apps/server/node_modules /app/apps/server/node_modules
 

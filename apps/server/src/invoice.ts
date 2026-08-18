@@ -151,3 +151,79 @@ export function buildInvoice(input: {
     ...vat,
   };
 }
+
+// ── 결제 건별 인보이스 (2026-08-18) ─────────────────────────────────────────────
+// 위 월별 거래명세서(어드민)와 별개로, **결제 한 건 = 인보이스 한 장**이 제품 화면
+// (/credits 인보이스 다이얼로그)과 결제 완료 메일에 쓰인다. 부가세 역산은 같은 splitVat.
+// PDF·메일 발송(부수효과)은 invoice-email.ts — 이 파일은 순수 모듈로 유지한다.
+
+export interface PaymentInvoice {
+  id: string;
+  /** SD-YYYYMMDD-XXXXXX — 결제 데이터에서 결정적으로 만든다(별도 채번 없음). */
+  number: string;
+  paidAt: string;
+  credits: number;
+  /** 부가세 포함 총액. supply/vat 는 splitVat 역산 — 화면·PDF·메일이 같은 값을 쓴다. */
+  amountKrw: number;
+  supplyKrw: number;
+  vatKrw: number;
+  origin: "auto" | "manual";
+  description: string;
+}
+
+export function invoiceFromTopup(r: {
+  paymentId: string; credits: number; amountKrw: number; requestedBy: string;
+  createdAt?: string; settledAt?: string | null;
+}): PaymentInvoice {
+  const paidAt = String(r.settledAt ?? r.createdAt ?? new Date().toISOString());
+  const vat = splitVat(r.amountKrw);
+  return {
+    id: r.paymentId,
+    number: `SD-${paidAt.slice(0, 10).replace(/-/g, "")}-${r.paymentId.slice(-6).toUpperCase()}`,
+    paidAt,
+    credits: r.credits,
+    amountKrw: vat.totalKrw,
+    supplyKrw: vat.supplyKrw,
+    vatKrw: vat.vatKrw,
+    origin: r.requestedBy.startsWith("auto") ? "auto" : "manual",
+    description: `STEP-D 크레딧 ${r.credits.toLocaleString("ko-KR")}개 (분석 ${r.credits.toLocaleString("ko-KR")}분)`,
+  };
+}
+
+export interface InvoiceParty {
+  name: string;
+  bizNo: string;
+  ceoName: string;
+  address: string;
+  email: string;
+}
+
+/** 공급자(우리) — issuerInfo 와 같은 INVOICE_ISSUER_* env. 비면 문서에서 그 항목을 생략한다. */
+export function supplierFromEnv(env: NodeJS.ProcessEnv = process.env): InvoiceParty {
+  return {
+    name: String(env.INVOICE_ISSUER_NAME ?? "").trim() || "STEP AI",
+    bizNo: String(env.INVOICE_ISSUER_BIZNO ?? "").trim(),
+    ceoName: String(env.INVOICE_ISSUER_CEO ?? "").trim(),
+    address: String(env.INVOICE_ISSUER_ADDRESS ?? "").trim(),
+    email: String(env.INVOICE_ISSUER_CONTACT ?? "").trim() || "contact@stepai.kr",
+  };
+}
+
+/**
+ * 메일 수신자 우선순위 — **결제창에 넣은 이메일이 1순위다** ("영수증 받을 이메일"로 받았다).
+ * 없으면 사업자정보/워크스페이스 청구 이메일. 형식이 아니면 다음 후보로 넘어간다.
+ */
+export function resolveRecipient(candidates: {
+  paymentEmail?: string | null;
+  buyerEmail?: string | null;
+}): string | null {
+  for (const v of [candidates.paymentEmail, candidates.buyerEmail]) {
+    const s = String(v ?? "").trim();
+    if (/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(s)) return s;
+  }
+  return null;
+}
+
+export function smtpConfigured(env: NodeJS.ProcessEnv = process.env): boolean {
+  return Boolean(env.SMTP_HOST && env.SMTP_USER && env.SMTP_PASS);
+}

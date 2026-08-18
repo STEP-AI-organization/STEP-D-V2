@@ -178,6 +178,10 @@ INSTAGRAM_APP_ID / INSTAGRAM_APP_SECRET / INSTAGRAM_REDIRECT_URI Instagram 비�
                       (콘솔 "Instagram API" 제품의 Instagram 앱 ID/시크릿 — Meta 앱 ID와 다름)
 TIKTOK_CLIENT_KEY / TIKTOK_CLIENT_SECRET / TIKTOK_REDIRECT_URI   TikTok OAuth
 AUTO_GEBD / AUTO_THUMBNAIL                분석 완료 후 후속 잡 자동 큐잉 스위치
+SMTP_HOST / SMTP_PORT(587) / SMTP_USER / SMTP_PASS / INVOICE_MAIL_FROM
+                      결제 완료 인보이스 메일 (미설정 = 조용히 건너뜀 · invoice-email.ts)
+INVOICE_ISSUER_NAME / _BIZNO / _CEO / _ADDRESS / _CONTACT   인보이스·거래명세서 발행자 표기
+                      (비면 항목 생략 — 지어내지 않음. 어드민 월별 명세와 같은 namespace)
 GEMINI_BATCH              1 이면 chyron 을 Vertex 배치 예측으로 — 단가 50%. **기본 OFF 로 둘 것**:
                           실측 한 회차 5시간 45분(동기 4분) · 지금 구현은 폴링이라 상한에서
                           취소→동기 폴백 = 느리면서 제값. 오타·빈값·버킷없음도 전부 OFF.

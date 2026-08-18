@@ -29,6 +29,7 @@ import {
   withTenantLock,
 } from "./db-pg.ts";
 import { cardBlock, cardTopupPaymentId, declineMessage, verifyCharge } from "./billing-card.ts";
+import { sendInvoiceEmail } from "./invoice-email.ts";
 import { chargeWithBillingKey, getPayment } from "./portone.ts";
 import {
   buildTopup, creditPriceKrw, nextAutoTopupAlert, shouldAutoTopup, topupDedupeKey,
@@ -176,7 +177,7 @@ async function runAutoTopup(): Promise<AutoTopupResult> {
       const settled = verifyCharge({ response: payment, expectedKrw: order.amountKrw });
       if (!settled.ok) continue; // 미승인(FAILED 등)·금액 불일치는 정산 대상이 아니다
       // 웹훅과 같은 순서: **원장 먼저**(dedupe_key 멱등) → 상태는 그 사실의 표시.
-      await addCreditEntry({
+      const reconCredited = await addCreditEntry({
         delta: order.credits,
         reason: "topup",
         paymentId: order.paymentId,
@@ -186,6 +187,8 @@ async function runAutoTopup(): Promise<AutoTopupResult> {
         dedupeKey: topupDedupeKey(order.paymentId),
       });
       await markTopupPaid(order.paymentId, "paid");
+      // 인보이스 메일 — 이 정산이 실제로 적립했을 때만(웹훅이 먼저 했으면 거기서 보냈다).
+      if (reconCredited) void sendInvoiceEmail(order.paymentId, tenantId);
       return {
         charged: false,
         code: "reconciled",
@@ -253,7 +256,7 @@ async function runAutoTopup(): Promise<AutoTopupResult> {
 
     // ⚠️ **원장 먼저**(멱등 dedupe_key), 상태는 그 사실의 표시로 뒤에. 수동 경로와 같은 순서 —
     // 상태를 먼저 찍고 그 사이에서 던지면 크레딧이 영구 손실될 수 있다.
-    await addCreditEntry({
+    const credited = await addCreditEntry({
       delta: check.credits,
       reason: "topup",
       paymentId,
@@ -263,6 +266,8 @@ async function runAutoTopup(): Promise<AutoTopupResult> {
       dedupeKey: topupDedupeKey(paymentId),
     });
     await markTopupPaid(paymentId, "paid");
+    // 인보이스 메일 — 실제 적립분만. 실패해도 충전 결과에 영향 없다(fire-and-forget).
+    if (credited) void sendInvoiceEmail(paymentId, tenantId);
 
     return {
       charged: true,

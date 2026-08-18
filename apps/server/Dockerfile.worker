@@ -91,6 +91,8 @@ RUN mkdir -p /opt/reframe-models \
 # 렌더 폰트 — 서버 Dockerfile 과 동일 (Pretendard, ASS Fontname 매칭)
 COPY assets/fonts /usr/share/fonts/opentype/pretendard
 RUN fc-cache -f
+# 인보이스 PDF 폰트 — content 워커도 분석 후 자동충전(maybeAutoTopup)에서 결제·메일을 보낸다.
+COPY assets/invoice-fonts assets/invoice-fonts
 
 ENV NODE_ENV=production
 # content-pipeline.ts 가 이 값으로 파이썬을 스폰한다. 지정 안 하면 리포 안 venv 를 찾다가
