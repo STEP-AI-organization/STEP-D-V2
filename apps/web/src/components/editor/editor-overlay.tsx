@@ -186,8 +186,15 @@ export function InlineText({
   const ref = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
-    ref.current?.focus();
-    ref.current?.select();
+    const el = ref.current;
+    if (!el) return;
+    el.focus();
+    // Land the caret at the END of the existing text — NOT select-all. select() highlighted
+    // the whole value, so the first keystroke replaced all of it and an existing title was
+    // wiped on edit. Collapsing the caret to the end lets typing insert/edit in place while
+    // the existing text is preserved (double-click-to-edit still commits via onBlur/Enter).
+    const end = el.value.length;
+    el.setSelectionRange(end, end);
   }, []);
 
   return (
