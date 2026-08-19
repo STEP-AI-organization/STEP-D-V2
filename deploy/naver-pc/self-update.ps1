@@ -20,6 +20,11 @@ param(
   [string]$RepoRoot = (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)),
   [string]$Branch   = "main",
   [string]$TaskWorker = "STEPD-Naver-Worker",
+  # yt-dlp 갱신 채널. **nightly 가 기본이다** — stable 은 릴리스 간격이 길어(2026-08-19 기준
+  # 최신 stable 이 2026.07.04, 6주 전) 그 사이 유튜브가 바꾼 것을 못 따라가 403 이 난다.
+  # 갱신을 아예 끄려면 -YtDlpChannel none.
+  [ValidateSet("nightly", "stable", "none")]
+  [string]$YtDlpChannel = "nightly",
   [switch]$Force
 )
 
@@ -32,8 +37,65 @@ function Say([string]$m) {
   Add-Content -Path $log -Value $line -Encoding utf8
 }
 
+# ── yt-dlp 자가 갱신 ─────────────────────────────────────────────────────────────
+#
+# ⚠️ **리포 변경과 무관하게 매 회차 돈다** — 아래 "변경 없음 → exit" 보다 위에 있는 이유다.
+# 유튜브가 우리 커밋과 상관없이 다운로드를 깨뜨리고, 고침은 yt-dlp 릴리스로 온다. 리포가
+# 조용한 주에도 yt-dlp 는 묵으면 안 된다(2026-08-19: 6주 묵은 stable 이 미디어 데이터에서만
+# 403 → "유튜브 다운로드 계속 실패"의 정체).
+#
+# 실패는 전부 삼킨다 — 갱신을 못 해도 **워커 코드 갱신은 계속돼야** 한다. 다운로드가 깨진
+# 것보다 워커가 통째로 안 도는 게 나쁘다.
+function Update-YtDlp([string]$Channel) {
+  if ($Channel -eq "none") { return }
+  try {
+    $cmd = Get-Command yt-dlp -ErrorAction Stop
+    $exe = $cmd.Source
+  } catch {
+    Say "yt-dlp: PATH 에 없다 — 갱신 건너뜀 (docs/ops/youtube-ingest.md 의 설치 경로 확인)"
+    return
+  }
+  if ($exe -notmatch '\.exe$') {
+    # pip 설치본 등 exe 가 아니면 덮어쓰기가 안 맞는다 — 손대지 않는다.
+    Say "yt-dlp: standalone exe 가 아니라 갱신 건너뜀 ($exe)"
+    return
+  }
+
+  $repo = if ($Channel -eq "nightly") { "yt-dlp/yt-dlp-nightly-builds" } else { "yt-dlp/yt-dlp" }
+  try {
+    $cur = (& $exe --version 2>$null | Select-Object -First 1).Trim()
+    $rel = Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/releases/latest" `
+      -Headers @{ "User-Agent" = "stepd-self-update" } -TimeoutSec 30
+    $latest = [string]$rel.tag_name
+  } catch {
+    Say "yt-dlp: 최신 버전 조회 실패 — 이번 회차 건너뜀 ($($_.Exception.Message))"
+    return
+  }
+  if (-not $latest) { Say "yt-dlp: 릴리스 태그를 못 읽음 — 건너뜀"; return }
+  if ($cur -eq $latest) { Say "yt-dlp: 최신 ($cur)"; return }
+
+  Say "yt-dlp 갱신 $cur → $latest ($Channel)"
+  $tmp = Join-Path $env:TEMP ("yt-dlp-{0}.exe" -f ([guid]::NewGuid().ToString("N")))
+  try {
+    Invoke-WebRequest -Uri "https://github.com/$repo/releases/latest/download/yt-dlp.exe" `
+      -OutFile $tmp -TimeoutSec 300 -UseBasicParsing
+    # 받은 게 진짜 도는지 먼저 확인한다 — 깨진 파일로 덮으면 다운로드가 통째로 죽는다.
+    $probe = (& $tmp --version 2>$null | Select-Object -First 1)
+    if (-not $probe) { throw "받은 exe 가 --version 에 응답하지 않는다" }
+    # 다운로드 잡이 도는 중이면 파일이 잠겨 있다 → 이번 회차는 넘기고 다음에 다시 시도.
+    Move-Item -Path $tmp -Destination $exe -Force -ErrorAction Stop
+    Say "yt-dlp 갱신 완료 → $($probe.Trim())"
+  } catch {
+    Say "yt-dlp 갱신 실패(계속 진행) — $($_.Exception.Message)"
+  } finally {
+    if (Test-Path $tmp) { Remove-Item $tmp -Force -ErrorAction SilentlyContinue }
+  }
+}
+
 Set-Location $RepoRoot
 Say "self-update 시작 — $RepoRoot ($Branch)"
+
+Update-YtDlp $YtDlpChannel
 
 git fetch --quiet origin $Branch
 if ($LASTEXITCODE -ne 0) { Say "fetch 실패 — 네트워크 확인. 이번 회차 건너뜀"; exit 0 }

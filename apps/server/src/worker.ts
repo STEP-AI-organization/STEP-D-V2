@@ -593,12 +593,20 @@ const YT_DLP = process.env.YT_DLP ?? "yt-dlp";
 // 레이트리밋을 계정 인증으로 우회한다(공개 VM IP는 대량 다운로드 시 곧 403 당한다).
 // 값은 Secret Manager(stepd-ytdlp-cookies)에 있고, worker.env가 파일로 떨군다.
 const YTDLP_COOKIES = process.env.YTDLP_COOKIES ?? "";
-// YouTube 가 기본 player client 의 **미디어 다운로드**를 403 으로 막는다(2026-08-18 실측:
-// 메타데이터·포맷 목록은 되는데 실제 영상 데이터만 "HTTP Error 403: Forbidden"). yt-dlp 를
-// 최신 nightly 로 올려도 동일 — 기본 클라이언트(web/tv/android)가 봇 판정 대상이다.
-// player_client=web_safari 는 PO 토큰·쿠키 없이 통과한다(실측). 이 클라이언트가 다시 막히면
-// env 로 코드 변경 없이 바꾼다(예: "mweb", "web_safari,mweb"). 빈 값이면 붙이지 않는다.
-const YTDLP_PLAYER_CLIENT = process.env.YTDLP_PLAYER_CLIENT ?? "web_safari";
+// player_client 오버라이드. **기본은 오버라이드 없음(빈 값)** — yt-dlp 가 알아서 고르게 둔다.
+//
+// 이력: 2026-08-18 에 기본 client 의 미디어 데이터가 403 이라 `web_safari` 를 강제했는데,
+// 2026-08-19 재측정에서 **그 우회가 오히려 원인**이 됐다. 같은 URL 로 로컬(한국 IP) 실측:
+//   yt-dlp 2026.07.04(stable 최신) + 기본 client → 미디어 403        ← 옛 증상 재현
+//   yt-dlp 2026.07.04            + web_safari   → No video formats found
+//   yt-dlp 2026.08.18(nightly)   + web_safari   → No video formats found  ← 이게 지금 실패
+//   yt-dlp 2026.08.18(nightly)   + 기본 client  → **정상 다운로드**
+// 즉 진짜 변수는 client 가 아니라 **yt-dlp 버전**이었다. web_safari·mweb·tv_simply 는 이제
+// GVS PO 토큰을 요구해 포맷이 통째로 비어 나온다. 그래서 강제를 걷고, 대신 워커 PC 가
+// yt-dlp 를 매 회차 nightly 로 자가 갱신한다(deploy/naver-pc/self-update.ps1).
+//   ⚠️ stable 채널은 이 문제에 못 쓴다 — 최신 stable 이 2026.07.04 로 6주 묵어 403 이 난다.
+// 다시 특정 client 가 필요해지면 env(YTDLP_PLAYER_CLIENT)로 코드 변경 없이 되돌린다.
+const YTDLP_PLAYER_CLIENT = process.env.YTDLP_PLAYER_CLIENT ?? "";
 
 // Failed-forever downloads keep their .part files (see the catch below) so a retry resumes.
 // But once a job exhausts maxAttempts it's dead and nothing ever deletes its (possibly

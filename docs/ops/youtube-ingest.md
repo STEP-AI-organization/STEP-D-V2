@@ -24,12 +24,12 @@
 | download 레인 정의 | `apps/server/src/worker.ts` `JOB_LANES.download` | `youtube.download` 하나. **머신 전용 레인** — all/content 워커는 안 집는다 (`worker-lanes.test.ts` 가 강제) |
 | 윈도우2 런처 | `apps/server/scripts/worker-naver.mts` | `WORKER_JOBS=naver,download` **코드 고정** (env 로 못 뒤집음) |
 | 부팅 게이트 예외 | `worker.ts` `YT_FREE` | naver·gebd·download(조합 포함)는 GOOGLE_CLIENT_ID 불요 — 예외에 없으면 **부팅 즉시 exit(1) 인데 작업 스케줄러는 Running 으로 보임** |
-| yt-dlp (윈도우2) | `C:\Users\STEPAI04\tools\node-v24.18.0-win-x64\yt-dlp.exe` | PATH 에 있음. 갱신: 같은 경로에 최신 exe 덮어쓰기 |
+| yt-dlp (윈도우2) | `C:\Users\STEPAI04\tools\node-v24.18.0-win-x64\yt-dlp.exe` | PATH 에 있음. **자가 갱신** — `self-update.ps1` 이 10분마다 nightly 최신과 대조해 덮어쓴다(리포 변경과 무관하게 매 회차). 잠겨 있으면 다음 회차에 재시도 |
 | GCS 쓰기 권한 | `stepd-naver-worker@step-d.iam` → `gs://stepd-media` objectAdmin | 읽기만 있던 SA 라 업로드 403 났었음 (2026-08-14 부여) |
 | 클라우드 yt-dlp (예비) | `apps/server/Dockerfile.worker` — corevenv 에 pip 설치 + deno + `YT_DLP` env | download 레인이 윈도우2로 갔으므로 평시엔 안 쓰이지만, 비상시 레인을 되돌릴 수 있게 유지 |
 | 쿠키 (예비) | 시크릿 `stepd-ytdlp-cookies` → content 잡에 `/secrets/ytdlp/cookies.txt` 마운트, `runYtDlp` 가 **tmp 사본**으로 전달 | 시크릿 마운트는 읽기 전용인데 yt-dlp 는 종료 시 쿠키를 **되쓴다**(EROFS) — 그래서 사본 |
 
-## 밟았던 함정 7개 (재발 방지 포함)
+## 밟았던 함정 8개 (재발 방지 포함)
 
 1. **클라우드 이미지에 yt-dlp 없음** → Dockerfile.worker 에 설치.
 2. **유튜브 봇 판정** — 데이터센터 IP 는 쿠키를 물려도 "Sign in to confirm you're not a bot".
@@ -42,6 +42,22 @@
 5. **윈도우2 부팅 게이트** — `naver,download` 조합이 OAuth 검증 예외에 없어 즉사 → `YT_FREE` 확장.
 6. **윈도우2에도 yt-dlp 없음** → 위 경로에 exe 설치.
 7. **윈도우2 SA 의 GCS 쓰기 권한 없음(403)** → objectAdmin 부여.
+8. **묵은 yt-dlp — "계속 실패"의 정체 (2026-08-19)**. 증상은 두 가지로 갈리는데 뿌리는 하나다:
+   메타데이터·포맷은 되는데 **미디어 데이터만 403**, 또는 **`No video formats found`**.
+   같은 URL·같은 한국 IP 로 실측:
+
+   | yt-dlp | player_client | 결과 |
+   |---|---|---|
+   | 2026.07.04 (stable 최신) | 기본 | 미디어 403 |
+   | 2026.07.04 | `web_safari` | No video formats found |
+   | 2026.08.18 (nightly) | `web_safari` | No video formats found |
+   | 2026.08.18 (nightly) | 기본 | **정상** |
+
+   → 진짜 변수는 client 가 아니라 **버전**이었다. 2026-08-18 에 넣은 `web_safari` 강제는
+   하루 만에 **원인 쪽으로 뒤집혔다**(그 client 들이 이제 GVS PO 토큰을 요구해 포맷이 빈다).
+   그래서 ① `YTDLP_PLAYER_CLIENT` 기본값을 **빈 값**(오버라이드 없음)으로 되돌리고
+   ② 윈도우2 가 yt-dlp 를 **자가 갱신**하게 했다. ⚠️ **stable 채널은 못 쓴다** — 최신 stable 이
+   6주 묵어(2026.07.04) 이 문제를 그대로 안고 있다. nightly 로 따라가야 한다.
 
 ## 안 될 때 보는 순서
 
