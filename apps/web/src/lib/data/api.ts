@@ -503,11 +503,12 @@ export async function renderClipOverlayPng(
   clipId: string,
   editorState: EditorState,
   aspect?: string,
+  layer?: "title" | "channel",
 ): Promise<OverlayPngResponse> {
   const res = await fetch(`${API_BASE}/clips/${clipId}/overlay-png`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ editorState, ...(aspect ? { aspect } : {}) }),
+    body: JSON.stringify({ editorState, ...(aspect ? { aspect } : {}), ...(layer ? { layer } : {}) }),
   });
   return json<OverlayPngResponse>(res);
 }

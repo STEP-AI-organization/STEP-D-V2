@@ -172,7 +172,7 @@ export function EditorShell({ clipId }: { clipId: string }) {
   } = useEditorHistory(() =>
     clip?.editorState
       ? ensureTracks(clip.editorState, duration, previewingMaster ? recStart : 0)
-      : makeInitialEditorState(title, duration, recStart, recEnd, clip?.titleLine1, clip?.titleLine2, clip?.programTitle),
+      : makeInitialEditorState(title, duration, recStart, recEnd, clip?.titleLine1, clip?.titleLine2, clip?.programTitle, clip?.titleLine2Color),
   );
   const [saved, setSaved] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -240,7 +240,7 @@ export function EditorShell({ clipId }: { clipId: string }) {
       reset(restored);
       setSaved(true);
     } else if (!canUndo) {
-      const initial = makeInitialEditorState(clip.title, duration, recStart, recEnd, clip.titleLine1, clip.titleLine2, clip.programTitle);
+      const initial = makeInitialEditorState(clip.title, duration, recStart, recEnd, clip.titleLine1, clip.titleLine2, clip.programTitle, clip.titleLine2Color);
       hydratedTrimSignatureRef.current = `${clip.id}:${initial.trimIn.toFixed(3)}:${initial.trimOut.toFixed(3)}`;
       reset(initial);
     }

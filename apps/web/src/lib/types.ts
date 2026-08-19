@@ -136,6 +136,8 @@ export interface Recommendation {
    *  editor 초기 오버레이 렌더에 사용. 없으면 title 한 줄 폴백. */
   titleLine1?: string;
   titleLine2?: string;
+  /** 둘째 줄 강조색 이름 — recommend 가 고른 톤(blue|red|yellow|green). 없으면 파랑. */
+  titleLine2Color?: string;
   /** 처음 제목 생성 단계에서 뽑힌 대체 제목 후보들 (기본 title 포함/미포함 무관).
    *  에디터의 '제목 후보' 탭이 이 배열을 후보 리스트로 표시한다. 비어 있으면 title 하나만. */
   titleCandidates?: string[];
@@ -281,9 +283,11 @@ export interface Clip {
   /** 편집본 유형(숏폼·클립·하이라이트) — 업로드 때 지정. */
   editKind?: EditKind;
   title: string;
-  /** 두 줄 제목 (2026-07-29): editor 오버레이 · 라인1 흰색 setup · 라인2 파란색 payoff. */
+  /** 두 줄 제목 (2026-07-29): editor 오버레이 · 라인1 흰색 setup · 라인2 강조색 payoff. */
   titleLine1?: string;
   titleLine2?: string;
+  /** 둘째 줄 강조색 이름 — 채택 시 추천에서 승계(blue|red|yellow|green). 없으면 파랑. */
+  titleLine2Color?: string;
   /** 첫 3초 hook intro (2026-08-02 · docs/plans/shorts-hook-intro-3sec.md) — adopt 시 rec 에서 승계.
    *  에디터 "첫 3초 훅" 토글(editorState.hookOn) ON + hookTimeSec 있을 때 /export 가 프리롤로 붙인다. */
   hookQuote?: string;

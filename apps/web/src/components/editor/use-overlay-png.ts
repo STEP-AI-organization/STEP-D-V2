@@ -1,73 +1,138 @@
 "use client";
 
 /**
- * useOverlayPng — 정적 오버레이(제목·채널명)를 서버가 canvas 로 그린 **실제 PNG** 의 hash 를
- * debounce 로 받아온다 (AENA use-overlay-render 이식). 에디터는 이 hash 로 `<img>` 를 띄워
- * CSS 근사 대신 **결과물과 같은 픽셀**을 보여준다(구조적 WYSIWYG).
+ * 서버 canvas 렌더러가 만든 **실제 최종 텍스트 PNG**를 제목·채널 레이어로
+ * 나눠 가져온다. 두 레이어를 분리한 이유는 제목을 끌 때 채널 텍스트까지 같이
+ * 움직이는 문제를 막기 위함이다.
  *
- *  - PNG 에 영향을 주는 정적 필드가 바뀌면: 즉시 hash=null(편집 중 stale PNG 숨김 → CSS 폴백)
- *    → debounce 후 서버 렌더 요청 → 새 hash 저장.
- *  - state 객체 ref 는 매 렌더 바뀌므로(재생 중 currentTime 등) **직렬화 key** 로만 effect 를
- *    재실행한다 — 안 그러면 debounce 타이머가 매 프레임 clear 돼 영영 안 뜬다.
- *  - clipId 가 없으면 항상 null(순수 CSS) — 무회귀.
+ * 중요한 불변식:
+ *  - 입력이 바뀌어도 직전 PNG를 버리지 않는다. CSS 근사본으로 전환하면 폰트
+ *    엔진·커닝·줄높이가 바뀌며 편집 순간에 텍스트가 튀기 때문이다.
+ *  - 새 PNG는 GET 이미지까지 미리 로드한 뒤 교체한다. 네트워크 중간 빈 프레임이 없다.
+ *  - 요청 순서 보호로 느린 이전 응답이 최신 편집을 덮어쓰지 못한다.
  */
 
 import { useEffect, useRef, useState } from "react";
-import { renderClipOverlayPng } from "@/lib/data/api";
+import { overlayPngSrc, renderClipOverlayPng } from "@/lib/data/api";
 import type { EditorState } from "@/lib/editor/presets";
 
-/** PNG 결과에 영향을 주는 정적 오버레이 입력만 직렬화 (이 값이 바뀔 때만 재요청). */
-function overlayKey(s: EditorState): string {
+export type OverlayPngLayer = {
+  hash: string | null;
+  /** 이 PNG가 그려진 당시의 기하. 새 PNG 대기 중 즉시 이동을 계산한다. */
+  x: number;
+  y: number;
+  aspect: string;
+  sizes: number[];
+};
+
+export type OverlayPngLayers = {
+  title: OverlayPngLayer;
+  channel: OverlayPngLayer;
+};
+
+const EMPTY_LAYER: OverlayPngLayer = { hash: null, x: 0, y: 0, aspect: "", sizes: [] };
+
+function titleKey(s: EditorState): string {
   return JSON.stringify({
     aspect: s.aspect,
-    titleX: s.titleX, titleY: s.titleY, titleAlign: s.titleAlign,
-    titleLines: (s.titleLines ?? []).map((l) => ({
+    x: s.titleX, y: s.titleY, align: s.titleAlign,
+    lines: (s.titleLines ?? []).map((l) => ({
       t: l.text, sz: l.size, c: l.color,
       f: l.font ?? null,
       st: l.stroke ? { c: l.stroke.color, w: l.stroke.width } : null,
       kf: (l.keyframes ?? []).length, ss: l.startSec ?? null, es: l.endSec ?? null,
     })),
-    showChannel: s.showChannel, channelName: s.channelName, channelY: s.channelY,
-    channelLabelSize: s.channelLabelSize, channelLayout: s.channelLayout,
-    channelIconSize: s.channelIconSize,
-    channelExtraLines: (s.channelExtraLines ?? []).map((l) => ({ t: l.text, sz: l.size })),
-    // 크기는 출력 px(정규화됨) — 스테이지 실측 stagePx 는 폐기(단일 출력 해상도 좌표계라 불필요).
     coordBasis: s.coordBasis,
   });
+}
+
+function channelKey(s: EditorState): string {
+  return JSON.stringify({
+    aspect: s.aspect,
+    show: s.showChannel, name: s.channelName, y: s.channelY,
+    labelSize: s.channelLabelSize, layout: s.channelLayout,
+    iconSize: s.channelIconSize, iconOff: s.channelIconOff,
+    extras: (s.channelExtraLines ?? []).map((l) => ({ t: l.text, sz: l.size })),
+    coordBasis: s.coordBasis,
+  });
+}
+
+function layerBasis(layer: "title" | "channel", s: EditorState): Omit<OverlayPngLayer, "hash"> {
+  return layer === "title"
+    ? {
+        x: s.titleX ?? 50,
+        y: s.titleY ?? 0,
+        aspect: String(s.aspect),
+        sizes: (s.titleLines ?? []).map((l) => Number(l.size) || 0),
+      }
+    : {
+        x: 50,
+        y: s.channelY ?? 0,
+        aspect: String(s.aspect),
+        sizes: [Number(s.channelLabelSize) || 0, Number(s.channelIconSize) || 0],
+      };
+}
+
+function preload(src: string): Promise<void> {
+  if (typeof Image === "undefined") return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve();
+    img.onerror = () => reject(new Error("overlay PNG preload failed"));
+    img.src = src;
+    if (img.complete && img.naturalWidth > 0) resolve();
+  });
+}
+
+function useOverlayLayerPng(
+  clipId: string | undefined,
+  state: EditorState,
+  layer: "title" | "channel",
+  key: string,
+  debounceMs: number,
+): OverlayPngLayer {
+  const [rendered, setRendered] = useState<OverlayPngLayer>(EMPTY_LAYER);
+  const stateRef = useRef(state);
+  const seq = useRef(0);
+  stateRef.current = state;
+
+  useEffect(() => {
+    const requestSeq = ++seq.current;
+    if (!clipId) {
+      setRendered(EMPTY_LAYER);
+      return;
+    }
+
+    const timer = setTimeout(async () => {
+      const snapshot = stateRef.current;
+      const basis = layerBasis(layer, snapshot);
+      try {
+        const res = await renderClipOverlayPng(clipId, snapshot, String(snapshot.aspect), layer);
+        if (requestSeq !== seq.current) return;
+        if (!res.hash) {
+          setRendered({ hash: null, ...basis });
+          return;
+        }
+        // 이미지를 받기 전에 hash만 교체하면 <img>가 순간 빈다.
+        await preload(overlayPngSrc(clipId, res.hash));
+        if (requestSeq === seq.current) setRendered({ hash: res.hash, ...basis });
+      } catch {
+        // 직전의 정확한 PNG를 유지한다. 일시 요청 실패로 CSS 근사본으로 튀지 않는다.
+      }
+    }, debounceMs);
+
+    return () => clearTimeout(timer);
+  }, [clipId, debounceMs, key, layer]);
+
+  return rendered;
 }
 
 export function useOverlayPng(
   clipId: string | undefined,
   state: EditorState,
-  debounceMs = 350,
-): string | null {
-  const [hash, setHash] = useState<string | null>(null);
-  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const stateRef = useRef(state);
-  stateRef.current = state;
-  const key = clipId ? overlayKey(state) : "";
-
-  useEffect(() => {
-    if (!clipId) {
-      setHash(null);
-      return;
-    }
-    setHash(null); // 편집 중엔 CSS 로 폴백(직전 hash 의 stale 픽셀 플리커 제거)
-    if (timer.current) clearTimeout(timer.current);
-    timer.current = setTimeout(async () => {
-      try {
-        const s = stateRef.current;
-        const res = await renderClipOverlayPng(clipId, s, s.aspect);
-        setHash(res.hash);
-      } catch {
-        setHash(null); // 실패 시 CSS 유지
-      }
-    }, debounceMs);
-    return () => {
-      if (timer.current) clearTimeout(timer.current);
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- key 가 정적 입력 변화를 대표한다
-  }, [clipId, key, debounceMs]);
-
-  return hash;
+  debounceMs = 90,
+): OverlayPngLayers {
+  const title = useOverlayLayerPng(clipId, state, "title", clipId ? titleKey(state) : "", debounceMs);
+  const channel = useOverlayLayerPng(clipId, state, "channel", clipId ? channelKey(state) : "", debounceMs);
+  return { title, channel };
 }

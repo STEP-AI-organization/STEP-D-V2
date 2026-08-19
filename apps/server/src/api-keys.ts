@@ -146,6 +146,9 @@ export const API_KEY_ROUTES: RouteRule[] = [
   { method: "POST", path: /^\/api\/factory\/channels$/, scope: "factory:write" },
   { method: "POST", path: /^\/api\/factory\/channels\/connect-url$/, scope: "factory:write" },
   { method: "GET", path: /^\/api\/factory\/targets$/, scope: "factory:read" },
+  // 목록 — 없으면 고객사는 **자기가 넣은 jobId 를 스스로 보관할 때만** 상태를 볼 수 있다.
+  // 사람이 우리 웹에서 돌린 회차가 고객사 화면에 영영 안 나타나던 구멍(스모크 미해결 #3).
+  { method: "GET", path: /^\/api\/factory\/jobs$/, scope: "factory:read" },
   { method: "GET", path: /^\/api\/factory\/jobs\/[^/]+$/, scope: "factory:read" },
   // 재시도 — 없으면 일시적 실패 하나가 그 회차를 영구 사망시킨다(사람이 DB 를 만져야 했다).
   // 쓰기 스코프를 요구한다: 다시 태우는 것은 읽기가 아니다.

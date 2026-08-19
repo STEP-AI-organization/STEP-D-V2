@@ -18,7 +18,7 @@ import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "rea
 
 import { UploadVideoButton } from "@/components/upload-video-dialog";
 import { useToast } from "@/components/ui/toast";
-import { getStreamUrl } from "@/lib/data/api";
+import { ApiError, getStreamUrl, reanalyzeMedia } from "@/lib/data/api";
 import { useAppData } from "@/lib/data/store";
 import { normalizeProgramStatus } from "@/lib/programs";
 import { PIPELINE_STAGE_LABELS } from "@/lib/constants";
@@ -172,11 +172,13 @@ function EpisodeAnalysis({
   clipCount: number;
   ended: boolean;
 }) {
-  const { mediaForEpisode } = useAppData();
+  const { mediaForEpisode, refresh } = useAppData();
+  const { toast } = useToast();
   const master = mediaForEpisode(episode.id, "master");
   const videoRef = useRef<HTMLVideoElement>(null);
   const [videoSrc, setVideoSrc] = useState<string>();
   const [videoError, setVideoError] = useState<string | null>(null);
+  const [retrying, setRetrying] = useState(false);
 
   // 재생 URL 은 서버가 준다 — 프로덕션은 짧은 수명의 GCS 서명 URL 이라
   // <video> 가 스토리지에서 바로 받는다(바이트가 서버를 안 거친다).
@@ -205,6 +207,38 @@ function EpisodeAnalysis({
   const waiting = episode.pipeline?.stageStatus === "idle";
   // 서버가 분석 잡을 넣지 않은 상태(크레딧 부족 등) — 진행 중도 완료도 아니다.
   const blocked = episode.pipeline?.stageStatus === "warn";
+  const failed = episode.pipeline?.stageStatus === "error";
+
+  /**
+   * 다시 시도 — 보류(크레딧 부족 등)·실패에서 빠져나오는 유일한 출구.
+   *
+   * note 는 **거절당한 시점의 스냅샷**이라 충전해도 저절로 안 바뀐다("크레딧이 7개 모자랍니다
+   * (필요 16 · 보유 9)" 가 잔액 69 인데도 그대로 남는다). 문구는 "충전 후 다시 시도하세요" 라고
+   * 하는데 정작 시도할 버튼이 없었다(2026-08-19 사용자 지적) — 사용자가 할 일을 알려주고도
+   * 그 일을 할 수단을 안 준 상태였다. 서버는 잡을 큐잉만 하면 되므로 재분석 요청이 곧 재시도다.
+   */
+  const retry = useCallback(async () => {
+    if (!master || retrying) return;
+    setRetrying(true);
+    try {
+      const r = await reanalyzeMedia(master.id);
+      toast({
+        title: r.queued ? "분석을 다시 걸었습니다" : "이미 대기 중입니다",
+        description: r.queued ? "잠시 후 진행률이 올라갑니다." : "앞선 요청이 아직 큐에 있어 그대로 둡니다.",
+        tone: "done",
+      });
+      await refresh();
+    } catch (err) {
+      // 402(크레딧 부족)면 서버가 부족분을 문장으로 준다 — 그대로 보여준다(다시 추리하게 두지 않는다).
+      toast({
+        title: err instanceof ApiError && err.status === 402 ? "아직 크레딧이 모자랍니다" : "다시 시도하지 못했습니다",
+        description: err instanceof Error ? err.message : String(err),
+        tone: "error",
+      });
+    } finally {
+      setRetrying(false);
+    }
+  }, [master, retrying, toast, refresh]);
 
   // F2-2 ⊘ — 클라이언트는 97%를 넘기지 않는다. 100%는 서버가 완료를 알릴 때만.
   const pct = Math.min(97, Math.round(episode.pipeline?.progress ?? 0));
@@ -267,7 +301,23 @@ function EpisodeAnalysis({
               {episode.pipeline.note}
             </span>
           )}
-          <Link href={`/episodes/${episode.id}`} className="sd-btn ml-auto">
+          {/* 보류·실패에서 빠져나오는 출구. 이게 없으면 note 의 "충전 후 다시 시도하세요" 가
+              시킬 수 없는 지시가 된다. 원본이 없으면 재분석할 대상이 없어 숨긴다. */}
+          {(blocked || failed) && master && (
+            <button
+              type="button"
+              onClick={() => void retry()}
+              disabled={retrying}
+              className="sd-btn ml-auto"
+              title="분석을 다시 큐에 넣습니다"
+            >
+              {retrying ? "다시 시도 중…" : "다시 시도"}
+            </button>
+          )}
+          <Link
+            href={`/episodes/${episode.id}`}
+            className={cn("sd-btn", !((blocked || failed) && master) && "ml-auto")}
+          >
             회차 상세
           </Link>
         </div>

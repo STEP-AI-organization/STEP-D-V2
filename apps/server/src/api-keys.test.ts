@@ -212,6 +212,7 @@ describe("라우트 화이트리스트 — 기본값은 닫힘", () => {
 
   it("factory 라우트는 factory 스코프로 열린다", () => {
     assert.equal(checkRoute("POST", "/api/factory/ingest", ["factory:write"]).ok, true);
+    assert.equal(checkRoute("GET", "/api/factory/jobs", ["factory:read"]).ok, true);
     assert.equal(checkRoute("GET", "/api/factory/jobs/f_1", ["factory:read"]).ok, true);
     assert.equal(checkRoute("GET", "/api/factory/jobs/f_1/performance", ["factory:read"]).ok, true);
     // 쓰기 스코프 없이 ingest 는 못 부른다

@@ -615,6 +615,13 @@ type Short = {
   hook_quote?: string;         // 실 대사 원문 인용 (STT 그대로 · 30자 이내)
   hook_time_sec?: number | null; // hook 대사 시각 (쇼츠 시작 상대 · 첫 5초 이내 권장)
   hook_intro_caption?: string; // 어그로 편집자막 (20자 · "충격 고백!" 톤)
+  /** 두 줄 제목 — core/recommend 가 **필수로** 뽑는다(title 은 폴백 한 줄).
+   *  line1 = 상단 setup(오해·질문) · line2 = 하단 payoff(반전·정답) · color = line2 톤.
+   *  ⚠️ 이 타입에 없어서 아래 매핑이 못 읽었고(2026-08-19까지), 그래서 추천에 두 줄이
+   *  실리지 않아 제목 편집이 늘 한 줄로 떴다 — 타입 누락이 곧 데이터 유실이었다. */
+  title_line1?: string;
+  title_line2?: string;
+  title_line2_color?: string;  // blue|red|yellow|green
   /** 처음 제목 생성 단계(_retitle_final_windows)에서 뽑힌 대체 제목 후보들.
    *  기본 title을 포함할 수도 있고 아닐 수도 있음 — 프론트는 dedupe 처리. */
   title_candidates?: string[];
@@ -665,6 +672,18 @@ function recFromShort(episodeId: string, s: Short) {
     monetizable: s.monetizable === true ? true : undefined,
     title: titleMain,
     titleCandidates,
+    // 두 줄 제목 (2026-07-29 설계 · 2026-08-19 배선). recommend 가 **필수로** 뽑는데
+    // (core/recommend/recommend.py: "title_line1 + title_line2 를 필수로 뽑는다") 여기서
+    // 안 읽어서 추천 엔티티에 실리지 않았다 → 채택된 클립의 titleLine1/2 가 늘 undefined →
+    // makeInitialEditorState 가 한 줄 분기로 떨어져 **제목 편집에 컴포넌트가 하나만** 떴다.
+    // 소비처(에디터·factory)는 멀쩡한데 생산처에서 끊긴 경우라 파리티 테스트도 초록이었다.
+    // 실측(2026-08-19): shorts.json 8/8 · 20/20 전부 두 줄을 갖고 있었다.
+    titleLine1: typeof s.title_line1 === "string" && s.title_line1.trim() ? s.title_line1.trim() : undefined,
+    titleLine2: typeof s.title_line2 === "string" && s.title_line2.trim() ? s.title_line2.trim() : undefined,
+    // 둘째 줄 강조색(blue|red|yellow|green). 색까지 안 실으면 AI 가 고른 톤(폭로=red 등)이
+    // 사라지고 항상 파랑으로 굳는다 — 줄만 살리고 색을 버리면 같은 종류의 누락이 남는다.
+    titleLine2Color: typeof s.title_line2_color === "string" && s.title_line2_color.trim()
+      ? s.title_line2_color.trim().toLowerCase() : undefined,
     appeal: Math.max(1, Math.min(5, appeal)),
     // 신규 스코어(있으면 그대로 전달). 프론트 카드가 score100 우선 표시.
     score100: typeof s.score100 === "number" ? s.score100 : undefined,

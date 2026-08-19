@@ -173,17 +173,22 @@ export function InlineText({
   value,
   onCommit,
   onCancel,
+  onDraftChange,
   className,
   style,
 }: {
   value: string;
   onCommit: (v: string) => void;
-  onCancel: () => void;
+  onCancel: (originalValue: string) => void;
+  /** 타이핑 중에도 서버 PNG 미리보기를 갱신할 때 사용. */
+  onDraftChange?: (v: string) => void;
   className?: string;
   style?: CSSProperties;
 }) {
   const [text, setText] = useState(value);
   const ref = useRef<HTMLInputElement | null>(null);
+  const initialValue = useRef(value);
+  const cancelled = useRef(false);
 
   useEffect(() => {
     const el = ref.current;
@@ -201,13 +206,21 @@ export function InlineText({
     <input
       ref={ref}
       value={text}
-      onChange={(e) => setText(e.target.value)}
+      onChange={(e) => {
+        setText(e.target.value);
+        onDraftChange?.(e.target.value);
+      }}
       onPointerDown={(e) => e.stopPropagation()}
       onDoubleClick={(e) => e.stopPropagation()}
-      onBlur={() => onCommit(text)}
+      onBlur={() => {
+        if (!cancelled.current) onCommit(text);
+      }}
       onKeyDown={(e) => {
         if (e.key === "Enter") onCommit(text);
-        else if (e.key === "Escape") onCancel();
+        else if (e.key === "Escape") {
+          cancelled.current = true;
+          onCancel(initialValue.current);
+        }
       }}
       className={className}
       style={{

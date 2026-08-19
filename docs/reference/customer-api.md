@@ -47,6 +47,7 @@ Authorization: Bearer stepd_live_...
 | POST `/api/factory/ingest` | factory:write | 공장 진입 — 분석→쇼츠→클립→배포 완주 |
 | POST `/api/factory/channels` · `/channels/connect-url` | factory:write | 배포 채널 연결 |
 | GET `/api/factory/targets` | factory:read | 배포 가능한 채널 목록 |
+| GET `/api/factory/jobs` | factory:read | 실행 **목록** — `?state=active\|terminal\|all&limit=` · 프로그램명·회차명·채널명까지 풀어서 준다 |
 | GET `/api/factory/jobs/:id` (`/performance`) | factory:read | 공장 폴링 · 성과 |
 | GET `/api/media/:id/analysis` | media:read | 분석 결과 전체 (자막·장면·쇼츠 원본) |
 | GET `/api/media/:id/shorts` | media:read | 쇼츠 추천 목록 (점수순) |

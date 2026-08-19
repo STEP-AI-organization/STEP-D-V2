@@ -752,6 +752,24 @@ export const TEMPLATE_PRESETS: TemplatePreset[] = [
  * @param trimIn 마스터 절대 초 — 초기 트림 IN (AI 추천 시작). 미지정 시 0.
  * @param trimOut 마스터 절대 초 — 초기 트림 OUT (AI 추천 끝). 미지정 시 masterDurationSec.
  */
+/**
+ * recommend 가 고른 둘째 줄 톤(이름) → 편집기 색(hex).
+ *
+ * 파이프라인은 `blue|red|yellow|green` 을 준다(core/recommend/recommend.py: red=충격·폭로 ·
+ * blue=진지 정보 · green=긍정). 색 이름을 그대로 쓰면 사용자가 색을 바꾼 뒤 구분이 안 되므로
+ * **초기값으로만** 푼다 — 이후엔 평범한 hex 라 색 픽커가 그대로 편집한다.
+ * 모르는 이름·미지정은 파랑(종전 하드코딩 값과 같은 자리).
+ */
+function titleLine2Hex(name?: string): string {
+  switch ((name ?? "").trim().toLowerCase()) {
+    case "red": return "#FF4040";
+    case "yellow": return "#FFD400";
+    case "green": return "#27E0A0";
+    case "blue":
+    default: return "#3B82F6";   // Tailwind blue-500 — 종전 기본값
+  }
+}
+
 export function makeInitialEditorState(
   title: string,
   masterDurationSec: number,
@@ -760,6 +778,7 @@ export function makeInitialEditorState(
   titleLine1?: string,  // 2026-07-29: 두 줄 제목 (AI가 line1/line2 생성한 경우)
   titleLine2?: string,
   programTitle?: string, // 2026-08-12: 하단 브랜딩 (TVING 풍 기본 템플릿)
+  titleLine2Color?: string, // 2026-08-19: recommend 가 고른 둘째 줄 톤(blue|red|yellow|green)
 ): EditorState {
   const dur = Math.max(1, masterDurationSec);
   const inAbs = Math.max(0, Math.min(trimIn, dur - 0.1));
@@ -769,7 +788,7 @@ export function makeInitialEditorState(
   const initialLines = (titleLine1 && titleLine2)
     ? [
         { id: "t1", text: titleLine1, size: 30, color: "#FFFFFF" },
-        { id: "t2", text: titleLine2, size: 30, color: "#3B82F6" },  // Tailwind blue-500
+        { id: "t2", text: titleLine2, size: 30, color: titleLine2Hex(titleLine2Color) },
       ]
     : [{ id: "t1", text: title, size: 30, color: "#FF4040" }];
   // 시드 크기(30·40 등)는 읽기 쉬운 구 스테이지 px 로 두고, normalizeEditorCoords 가 출력 px 로

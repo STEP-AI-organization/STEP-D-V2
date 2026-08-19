@@ -295,6 +295,50 @@ describe("제목 2줄 — factory autoEditorState 가 titleLine1/2 시맨틱 분
 });
 
 /**
+ * 제목 2줄 — **생산처까지** 이어져 있는가 (2026-08-19).
+ *
+ * ⚠️ 위 describe 는 소비처(factory)가 titleLine1/2 를 *읽는지*만 봤다. 그래서 생산처가
+ * 끊겨 있는 동안에도 **초록이었다** — core/recommend 는 title_line1/2 를 필수로 뽑는데
+ * (실측: shorts.json 8/8 · 20/20 보유) content-pipeline 의 추천 매핑이 그 두 필드를 안 읽어
+ * 추천 엔티티에 실리지 않았고, 결과적으로 제목 편집이 늘 한 줄로 떴다.
+ * 그래서 여기서 **생산(core→추천) → 승계(채택→클립) → 소비(에디터 초기 상태)** 3단을 고정한다.
+ * 소비처만 검사하는 테스트는 이 종류의 결함을 못 잡는다.
+ */
+describe("제목 2줄 — core 산출물이 에디터까지 도달한다", () => {
+  const PIPELINE = fs.readFileSync(path.join(HERE, "content-pipeline.ts"), "utf-8");
+  const PRESETS_SRC = fs.readFileSync(path.resolve(HERE, "../../web/src/lib/editor/presets.ts"), "utf-8");
+  const SHELL = fs.readFileSync(path.resolve(HERE, "../../web/src/components/editor/editor-shell.tsx"), "utf-8");
+
+  it("생산: content-pipeline 이 shorts 의 title_line1/2 를 추천 엔티티에 싣는다", () => {
+    assert.match(PIPELINE, /titleLine1: typeof s\.title_line1 === "string"/,
+      "여기서 안 실으면 추천에 두 줄이 없다 — 아래 소비처가 아무리 멀쩡해도 한 줄로 떨어진다");
+    assert.match(PIPELINE, /titleLine2: typeof s\.title_line2 === "string"/,
+      "둘째 줄이 없으면 makeInitialEditorState 가 한 줄 분기로 간다(둘 다 있어야 2줄)");
+  });
+
+  it("승계: 채택이 추천의 두 줄을 클립으로 넘긴다", () => {
+    assert.match(SERVER, /titleLine1: rec\.titleLine1/, "채택이 titleLine1 을 안 넘기면 클립에서 끊긴다");
+    assert.match(SERVER, /titleLine2: rec\.titleLine2/, "채택이 titleLine2 를 안 넘기면 클립에서 끊긴다");
+  });
+
+  it("소비: 에디터가 두 줄이 다 있을 때만 2줄로 시드한다", () => {
+    assert.match(PRESETS_SRC, /const initialLines = \(titleLine1 && titleLine2\)/,
+      "두 줄 시드 분기가 사라졌다 — 제목 편집이 한 줄로 고정된다");
+    assert.match(SHELL, /clip\?\.titleLine1, clip\?\.titleLine2/,
+      "에디터 셸이 클립의 두 줄을 안 넘기면 시드가 폴백 한 줄로 간다");
+  });
+
+  it("둘째 줄 색도 같은 3단으로 흐른다 (줄만 살리고 색을 버리지 않는다)", () => {
+    assert.match(PIPELINE, /titleLine2Color: typeof s\.title_line2_color === "string"/,
+      "색을 안 실으면 AI 가 고른 톤(폭로=red 등)이 사라지고 항상 파랑으로 굳는다");
+    assert.match(SERVER, /titleLine2Color: rec\.titleLine2Color/, "채택이 색을 안 넘긴다");
+    assert.match(PRESETS_SRC, /function titleLine2Hex/, "색 이름 → hex 변환이 없다");
+    assert.match(PRESETS_SRC, /color: titleLine2Hex\(titleLine2Color\)/,
+      "둘째 줄 색이 하드코딩으로 돌아갔다 — 색을 실어 보내도 소비되지 않는다");
+  });
+});
+
+/**
  * 정적 오버레이 canvas→PNG 마이그레이션 (하이브리드 · AENA 방식).
  *
  * 제목(완전 정적 줄)·채널명 텍스트는 이제 ASS 번인이 아니라 **canvas 로 그린 투명 PNG** 를
@@ -346,6 +390,42 @@ describe("정적 오버레이 canvas-PNG 경로 (하이브리드)", () => {
       "에디터가 정적 오버레이 PNG 를 받을 엔드포인트가 없다(WYSIWYG 미완)");
     assert.match(SERVER, /app\.get\("\/api\/clips\/:id\/overlay-png\/:hash"/,
       "해시로 PNG 를 서빙하는 GET 라우트가 없다");
+  });
+});
+
+describe("편집 중 WYSIWYG — CSS 폰트로 스왑하지 않고 실제 PNG를 유지한다", () => {
+  it("서버가 제목·채널을 독립 레이어로 렌더할 수 있다", () => {
+    assert.match(SERVER, /group:\s*"title"/, "제목 레이어 표식이 없다");
+    assert.match(SERVER, /group:\s*"channel"/, "채널 레이어 표식이 없다");
+    assert.match(SERVER, /preview\.items\.filter\(\(item\) => item\.group === body\.layer\)/,
+      "통합 PNG만 있으면 제목을 끌 때 채널까지 같이 움직인다");
+  });
+
+  it("새 PNG가 완료되기 전에 직전 hash를 null로 버리지 않는다", () => {
+    assert.doesNotMatch(OVERLAY_PNG_HOOK, /setHash\(null\)/,
+      "hash=null 순간 CSS 근사본으로 전환되면 커닝·줄높이가 튀어 오른다");
+    assert.match(OVERLAY_PNG_HOOK, /await preload\(overlayPngSrc\(/,
+      "GET 이미지를 미리 로드하지 않으면 hash 교체 순간 빈 프레임이 난다");
+    assert.match(OVERLAY_PNG_HOOK, /requestSeq !== seq\.current/,
+      "느린 이전 응답이 최신 편집을 덮어쓰면 오버레이가 뒤로 튀다");
+  });
+
+  it("선택·드래그·타이핑 중에도 서버 PNG가 화면의 텍스트다", () => {
+    assert.match(WEB_PREVIEW, /const showTitlePng\s*=/, "제목 PNG 표시 게이트가 없다");
+    assert.match(WEB_PREVIEW, /translate\(\$\{titlePngDx\}px, \$\{titlePngDy\}px\)/,
+      "디바운스 대기 중 제목 PNG를 현재 앵커로 즉시 이동시키지 않는다");
+    assert.match(WEB_PREVIEW, /onDraftChange=\{\(v\) => setLine\(line\.id, \{ text: v \}\)\}/,
+      "타이핑 중 state가 바뀌지 않으면 실제 PNG는 blur 전까지 예전 글자다");
+    assert.match(WEB_PREVIEW, /showTitlePng[\s\S]*?color:\s*"transparent"/,
+      "입력 DOM 글자가 보이면 실제 PNG 위에 CSS 폰트가 이중으로 겹친다");
+  });
+
+  it("채널명 x는 최종 렌더와 같은 실제 아이콘 박스를 쓴다", () => {
+    assert.match(SERVER, /async function previewChannelIconBox/,
+      "미리보기가 가짜 정사각 박스를 쓰면 채널명이 최종 렌더와 가로로 밀린다");
+    assert.match(SERVER, /await measureOverlayImage\(/, "비원형 로고의 실제 폭을 재지 않는다");
+    assert.match(SERVER, /!es\?\.showChannel \|\| es\?\.channelIconOff \|\| !clip\?\.episodeId/,
+      "아이콘을 끄거나 실제 렌더할 수 없어도 텍스트를 가짜 아이콘 폭만큼 밀면 안 된다");
   });
 });
 

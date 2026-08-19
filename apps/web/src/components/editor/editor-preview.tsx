@@ -192,15 +192,24 @@ export function EditorPreview({
   // 중이 아니고(idle) 제목이 전부 정적(애니메이션·시간창 없음)일 때만 그 PNG 를 `<img>` 로
   // 보여주고 그 자리의 CSS 텍스트는 투명 처리한다(더블클릭·드래그 히트박스는 유지). 편집을
   // 시작하면 다시 CSS(편집 가능). PNG 가 없으면(hash null · clipId 없음) 순수 CSS — 무회귀.
-  const overlayHash = useOverlayPng(clipId, state);
+  const overlayPng = useOverlayPng(clipId, state);
   const allTitlesStatic = (state.titleLines ?? []).every(
     (l) => !(l.keyframes && l.keyframes.length) && l.startSec == null && l.endSec == null,
   );
-  const editingTitleOrChannel =
-    editing != null && (editing.startsWith("title:") || editing === "channel");
-  const showOverlayPng =
-    !!clipId && !!overlayHash && !aiFill && allTitlesStatic &&
-    selected !== "title" && selected !== "channel" && !editingTitleOrChannel;
+  // 서버 PNG를 선택·편집 순간에도 숨기지 않는다. CSS 텍스트로 스왑하면
+  // 브라우저와 canvas의 폰트 엔진·커닝 차이가 그대로 위치 튀김이 된다.
+  // AI 리프레임은 최종 경로가 아직 ASS라 canvas PNG를 쓰지 않는다(거짓 WYSIWYG 방지).
+  const showTitlePng =
+    !!clipId && !!overlayPng.title.hash && overlayPng.title.aspect === String(state.aspect) &&
+    !aiMode && allTitlesStatic;
+  const showChannelPng =
+    !!clipId && !!overlayPng.channel.hash && overlayPng.channel.aspect === String(state.aspect) &&
+    !aiMode && state.showChannel;
+  // 디바운스 중에는 직전의 **정확한 픽셀**을 현재 앵커로 즉시 이동시킨다.
+  // 제목·채널을 별도 전체프레임 PNG로 받았기 때문에 다른 레이어는 끌려가지 않는다.
+  const titlePngDx = ((state.titleX - overlayPng.title.x) / 100) * canvasW;
+  const titlePngDy = ((state.titleY - overlayPng.title.y) / 100) * canvasH;
+  const channelPngDy = ((state.channelY - overlayPng.channel.y) / 100) * canvasH;
 
   // Keep the blurred cover background roughly in step with the foreground transport (it's
   // decorative + heavily blurred, so a loose sync is invisible).
@@ -489,16 +498,26 @@ export function EditorPreview({
           </div>
         )}
 
-        {/* 정적 오버레이 PNG — 서버 렌더 결과물의 제목·채널 텍스트와 **같은 픽셀**. 전체프레임
-            투명 PNG 라 스테이지에 꽉 채우면(같은 종횡비) 그대로 맞는다. pointer-events-none 이라
-            클릭은 밑의 CSS 오버레이(투명)로 통과 → 더블클릭 편집·드래그가 그대로 동작한다. */}
-        {showOverlayPng && overlayHash && clipId && (
+        {/* 제목·채널 정적 PNG — 최종 내보내기와 **같은 renderTextLayerPng** 출력.
+            편집 중에도 이 PNG를 유지하고, 투명 CSS 레이어는 히트박스로만 쓴다. */}
+        {showTitlePng && overlayPng.title.hash && clipId && (
           <img
-            src={overlayPngSrc(clipId, overlayHash)}
+            src={overlayPngSrc(clipId, overlayPng.title.hash)}
             alt=""
             aria-hidden
             draggable={false}
             className="pointer-events-none absolute inset-0 size-full"
+            style={{ transform: `translate(${titlePngDx}px, ${titlePngDy}px)` }}
+          />
+        )}
+        {showChannelPng && overlayPng.channel.hash && clipId && (
+          <img
+            src={overlayPngSrc(clipId, overlayPng.channel.hash)}
+            alt=""
+            aria-hidden
+            draggable={false}
+            className="pointer-events-none absolute inset-0 size-full"
+            style={{ transform: `translateY(${channelPngDy}px)` }}
           />
         )}
 
@@ -562,8 +581,8 @@ export function EditorPreview({
               // display:none (not unmount) keeps resizeBase/onResize index mapping intact.
               display: lineShown ? undefined : "none",
               // 정적 오버레이 PNG 를 보여줄 땐 CSS 텍스트를 투명 처리(히트박스는 유지 → 더블클릭
-              // 편집·드래그 그대로). editing 이면 showOverlayPng=false 라 다시 보인다.
-              ...(showOverlayPng ? { opacity: 0 } : {}),
+              // 편집·드래그 그대로). 편집 중에도 표시 텍스트는 실제 PNG고, input은 커서만 보인다.
+              ...(showTitlePng ? { opacity: 0 } : {}),
               ...(kf
                 ? {
                     opacity: kf.opacity,
@@ -577,12 +596,22 @@ export function EditorPreview({
               <InlineText
                 key={line.id}
                 value={line.text}
+                onDraftChange={(v) => setLine(line.id, { text: v })}
                 onCommit={(v) => {
                   setLine(line.id, { text: v });
                   setEditing(null);
                 }}
-                onCancel={() => setEditing(null)}
-                style={{ ...font, width: "100%" }}
+                onCancel={(original) => {
+                  setLine(line.id, { text: original });
+                  setEditing(null);
+                }}
+                style={{
+                  ...font,
+                  width: "100%",
+                  ...(showTitlePng
+                    ? { opacity: 1, color: "transparent", caretColor: line.color, WebkitTextStroke: "0 transparent", textShadow: "none" }
+                    : {}),
+                }}
               />
             ) : (
               <div
@@ -656,12 +685,22 @@ export function EditorPreview({
             {editing === "channel" ? (
               <InlineText
                 value={state.channelName}
+                onDraftChange={(v) => update({ channelName: v })}
                 onCommit={(v) => {
                   update({ channelName: v });
                   setEditing(null);
                 }}
-                onCancel={() => setEditing(null)}
-                style={{ width: 160, textAlign: "center", fontWeight: 600, color: "#fff" }}
+                onCancel={(original) => {
+                  update({ channelName: original });
+                  setEditing(null);
+                }}
+                style={{
+                  width: 160,
+                  textAlign: "center",
+                  fontWeight: 600,
+                  color: showChannelPng ? "transparent" : "#fff",
+                  caretColor: "#fff",
+                }}
               />
             ) : (
               (() => {
@@ -669,7 +708,7 @@ export function EditorPreview({
                 // 슬라이더로 각각 override 가능. 부가 줄들이 있으면 채널명 아래에 이어 렌더.
                 // 크기는 출력 px — 기본값(미설정)·클램프 범위만 opx() 로 설계 px→출력 px 환산
                 // (서버 channelBadgeLayout 와 동일 basis).
-                const iconPx = Math.max(opx(8), Math.min(opx(200), state.channelIconSize ?? opx(24)));
+                const iconPx = Math.max(opx(8), Math.min(opx(200), state.channelIconSize ?? opx(40)));
                 const labelPx = Math.max(opx(8), Math.min(opx(64), state.channelLabelSize ?? opx(14)));
                 const extras = (state.channelExtraLines ?? [])
                   .map((l) => ({ id: l.id, text: (l.text ?? "").trim(), size: l.size }))
@@ -685,9 +724,9 @@ export function EditorPreview({
                       "flex flex-col leading-tight",
                       layout === "vertical" ? "items-center text-center" : "items-start",
                     )}
-                    // 정적 오버레이 PNG 를 보여줄 땐 채널 텍스트를 투명 처리(아이콘은 유지 — PNG 엔
-                    // 아이콘이 없다). 편집/드래그 시엔 showOverlayPng=false 라 다시 CSS 로 보인다.
-                    style={showOverlayPng ? { opacity: 0 } : undefined}
+                    // 정적 오버레이 PNG 를 보여줄 땐 채널 CSS 텍스트를 투명 처리한다.
+                    // 선택·드래그 중에도 실제 PNG를 유지하며 아이콘은 별도 DOM으로 남는다.
+                    style={showChannelPng ? { opacity: 0 } : undefined}
                   >
                     <span
                       className="font-semibold text-white"
@@ -737,16 +776,11 @@ export function EditorPreview({
                         alt=""
                         draggable={false}
                         className={cn("object-cover", shapeCls)}
-                        style={{ width: iconPx, height: iconPx }}
+                        style={shape === "circle"
+                          ? { width: iconPx, height: iconPx }
+                          : { width: "auto", height: iconPx }}
                       />
-                    ) : (
-                      <span
-                        className={cn("flex items-center justify-center bg-white/90 font-bold text-black", shapeCls)}
-                        style={{ width: iconPx, height: iconPx, fontSize: iconPx * 0.42 }}
-                      >
-                        CH
-                      </span>
-                    )}
+                    ) : null}
                     {textBlock}
                   </span>
                 );

@@ -21,6 +21,11 @@ import { fileURLToPath } from "node:url";
 
 /** 캔버스에 그릴 한 줄의 텍스트. 좌표(x,y)·폰트 px 는 전부 **출력 해상도(1080×1920 등) 기준**. */
 export type OverlayTextItem = {
+  /**
+   * 에디터 미리보기에서 제목과 채널을 서로 독립적으로 이동·교체하기 위한 레이어 표식.
+   * canvas 그리기 결과에는 영향이 없고, 미지정은 기존 호출자 하위호환이다.
+   */
+  group?: "title" | "channel";
   text: string;
   /** 앵커 x (align 에 따라 좌/중앙/우 기준점). 출력 px. */
   x: number;
@@ -207,6 +212,18 @@ async function loadCanvas(): Promise<CanvasModule | null> {
 /** 지금 환경에서 canvas 렌더가 가능한지(네이티브 바이너리 로드 성공). */
 export async function overlayCanvasAvailable(): Promise<boolean> {
   return (await loadCanvas()) != null;
+}
+
+/** 오버레이와 같은 canvas 디코더로 이미지 원본 비율을 읽는다. */
+export async function measureOverlayImage(data: Buffer): Promise<{ width: number; height: number } | null> {
+  const mod = await loadCanvas();
+  if (!mod) return null;
+  try {
+    const img = await mod.loadImage(data);
+    return img.width > 0 && img.height > 0 ? { width: img.width, height: img.height } : null;
+  } catch {
+    return null;
+  }
 }
 
 /**

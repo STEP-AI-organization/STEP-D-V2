@@ -250,7 +250,7 @@ import {
   type ReframePlan,
 } from "./reframe.ts";
 import { getAspectPreset } from "./aspect-presets.ts";
-import { renderTextLayerPng, overlayCanvasAvailable, type OverlayTextItem } from "./overlay-canvas.ts";
+import { renderTextLayerPng, overlayCanvasAvailable, measureOverlayImage, type OverlayTextItem } from "./overlay-canvas.ts";
 import {
   syncChannelVideos,
   classifyShorts,
@@ -4498,6 +4498,7 @@ function buildStaticOverlayItems(
         ? { color: st.color, width: st.width } // stroke.width 는 출력 px(정규화됨) — scale 불필요
         : undefined;
     items.push({
+      group: "title",
       text: L.text, x: L.bx, y: L.by, align: L.align, baseline: "top",
       fontPx: L.fitPx, weight: 800, font: typeof L.t?.font === "string" ? L.t.font : undefined,
       color: L.colorHex, opacity: 1,
@@ -4510,6 +4511,7 @@ function buildStaticOverlayItems(
   const badge = channelBadgeLayout(es, W, H, scale, iconBox);
   for (const line of badge?.lines ?? []) {
     items.push({
+      group: "channel",
       text: line.text, x: line.x, y: line.y,
       align: line.an === 8 ? "center" : "left", baseline: "top",
       fontPx: line.px, weight: 700, color: "#FFFFFF", opacity: line.dim ? 0.8 : 1,
@@ -6467,6 +6469,8 @@ app.post("/api/recommendations/:id/adopt", async (c) => {
     // 두 줄 제목 (2026-07-29): recommend 가 뽑은 AI setup/payoff 를 editor 초기 오버레이로 전달.
     titleLine1: rec.titleLine1,
     titleLine2: rec.titleLine2,
+    // 둘째 줄 강조색 이름(blue|red|yellow|green). 에디터가 hex 로 풀어 초기 오버레이에 쓴다.
+    titleLine2Color: rec.titleLine2Color,
     // 첫 3초 hook intro (2026-08-02 · docs/plans/shorts-hook-intro-3sec.md). 에디터의 "첫 3초 훅"
     // 토글(editorState.hookOn)이 켜지면 /export 가 hookTimeSec 지점을 프리롤로 붙인다. 없으면 미동작.
     hookQuote: rec.hookQuote,
@@ -7724,19 +7728,49 @@ function pruneOverlayCache(maxAgeMs = 60 * 60_000): void {
   } catch { /* 디렉토리 없음 등 무시 */ }
 }
 
-/** 에디터 미리보기용 정적 오버레이 아이템 — 렌더의 square-icon 미리보기와 같은 iconBox 를 쓴다. */
-function overlayPreviewItems(es: any, aspect: string): { W: number; H: number; items: OverlayTextItem[] } {
+/**
+ * 최종 렌더와 같은 우선순위로 채널 아이콘을 풀고, 실제 합성 크기를 구한다.
+ * 이 폭이 channelBadgeLayout의 텍스트 x를 결정하므로 "아이콘은 비슷한데
+ * 채널명만 밀림" 문제를 막으려면 미리보기가 최종과 같은 박스를 봐야 한다.
+ */
+async function previewChannelIconBox(
+  es: any,
+  clip: any,
+  scale: number,
+): Promise<{ w: number; h: number } | null> {
+  if (!es?.showChannel || es?.channelIconOff || !clip?.episodeId) return null;
+  let iconSrc = String(es?.channelIconDataUrl ?? "");
+  if (!/^data:image\//i.test(iconSrc)) {
+    const ep = await getEntity<Record<string, unknown>>("episode", String(clip.episodeId)).catch(() => null);
+    const prog = ep?.programId
+      ? await getEntity<Record<string, unknown>>("program", String(ep.programId)).catch(() => null)
+      : null;
+    iconSrc = String(prog?.brandIconDataUrl ?? "");
+  }
+  const m = /^data:image\/[\w.+-]+;base64,(.+)$/i.exec(iconSrc);
+  if (!m) return null;
+  const iconH = Math.round(Number(es?.channelIconSize) > 0 ? Number(es.channelIconSize) : 40 * scale);
+  if (String(es?.channelIconShape ?? "circle") === "circle") return { w: iconH, h: iconH };
+  const dim = await measureOverlayImage(Buffer.from(m[1], "base64"));
+  const iconW = dim?.width && dim?.height
+    ? Math.max(1, Math.round(iconH * (dim.width / dim.height)))
+    : iconH;
+  return { w: iconW, h: iconH };
+}
+
+/** 에디터 미리보기용 정적 오버레이 아이템 — 최종 렌더와 같은 iconBox를 쓴다. */
+async function overlayPreviewItems(
+  es: any,
+  aspect: string,
+  clip: any,
+  layer?: "title" | "channel",
+): Promise<{ W: number; H: number; items: OverlayTextItem[] }> {
   const { W, H, stageH } = renderDims(aspect);
   // 크기를 출력 px 로 정규화(웹이 coordBasis:"output" 로 보내면 no-op · DB 옛 상태면 여기서 올린다).
   es = normalizeEditorCoords(es, aspect);
   const scale = constScale(H, stageH);
-  // 미리보기(editor-preview.tsx)는 showChannel 이면 아이콘을 **정사각**(iconPx×iconPx)으로 그린다.
-  // 채널명 x 가 그 정사각 폭에 걸리므로 여기서도 정사각 iconBox 를 준다(에디터 내부 정합).
-  let iconBox: { w: number; h: number } | null = null;
-  if (es?.showChannel) {
-    const iconH = Math.round(Number(es?.channelIconSize) > 0 ? Number(es.channelIconSize) : 24 * scale); // 출력 px · 기본값만 scale
-    iconBox = { w: iconH, h: iconH };
-  }
+  // 제목만 바꾸는 타이핑 요청에서는 회차·프로그램 조인과 이미지 디코딩을 하지 않는다.
+  const iconBox = layer === "title" ? null : await previewChannelIconBox(es, clip, scale);
   return { W, H, items: buildStaticOverlayItems(es, W, H, scale, iconBox) };
 }
 
@@ -7744,10 +7778,16 @@ app.post("/api/clips/:id/overlay-png", async (c) => {
   const clipId = c.req.param("id");
   const clip = await getEntity<any>("clip", clipId);
   if (!clip) return c.json({ error: "clip not found" }, 404);
-  const body = await c.req.json<{ editorState?: any; aspect?: string }>().catch(() => ({} as any));
+  const body = await c.req.json<{ editorState?: any; aspect?: string; layer?: "title" | "channel" }>().catch(() => ({} as any));
   const es = body.editorState ?? clip.editorState ?? {};
   const aspect = String(body.aspect ?? es?.aspect ?? clip.aspectRatio ?? "9:16");
-  const { W, H, items } = overlayPreviewItems(es, aspect);
+  const preview = await overlayPreviewItems(es, aspect, clip, body.layer);
+  const { W, H } = preview;
+  // 제목과 채널을 별도 PNG로 요청하면 편집기가 현재 조작 중인 레이어만
+  // 즉시 이동시킬 수 있다. layer 미지정은 기존 통합 PNG(최종 렌더와 동일)를 유지한다.
+  const items = body.layer
+    ? preview.items.filter((item) => item.group === body.layer)
+    : preview.items;
   // 그릴 정적 오버레이가 없으면 hash:null — 에디터는 순수 CSS 로 남는다(무회귀).
   if (!items.length) return c.json({ hash: null, width: W, height: H });
   if (!(await overlayCanvasAvailable())) return c.json({ hash: null, width: W, height: H, canvas: false });
@@ -9515,6 +9555,96 @@ app.get("/api/media/:id/factory-run", async (c) => {
       })),
     },
   });
+});
+
+/**
+ * 이 워크스페이스의 공장 실행 목록.
+ *
+ * 없으면 **붙이는 쪽이 자기가 넣은 jobId 를 스스로 보관하고 있을 때만** 상태를 볼 수 있다.
+ * 그래서 사람이 우리 웹에서 돌린 회차는 고객사 화면에 영영 안 나타난다 — "우리 시스템에서
+ * 돌아가는 걸 고객사 화면으로 본다" 는 구도가 목록 하나가 없어서 성립하지 않았다.
+ * (스모크 2026-08-12 미해결 #3 · aena 자동배포 화면용)
+ *
+ * **id 가 아니라 이름을 함께 준다.** 붙이는 쪽 화면에 `p_3f2a` 를 띄우면 실무자는 그게 어느
+ * 프로그램인지 모른다. 프로그램명·회차명·채널명을 여기서 풀어서 내려보낸다.
+ *
+ * RLS 로 테넌트가 이미 스코프되므로 남의 잡은 애초에 조회되지 않는다.
+ */
+app.get("/api/factory/jobs", async (c) => {
+  const limit = Math.min(Math.max(Number(c.req.query("limit")) || 20, 1), 100);
+  // active = 아직 돌고 있는 것만, terminal = 끝난 것만, all = 전부(기본).
+  const filter = String(c.req.query("state") ?? "all");
+
+  const all = (await listEntities<any>("factoryJob"))
+    .sort((a, b) => Number(b.updatedAt ?? 0) - Number(a.updatedAt ?? 0));
+  const filtered = all.filter((j) => {
+    const done = TERMINAL_STATES.includes(j.state);
+    return filter === "active" ? !done : filter === "terminal" ? done : true;
+  });
+  const page = filtered.slice(0, limit);
+
+  // 이름 풀이는 **페이지 안의 것만** 조회한다 — 전량 조회하면 잡이 쌓일수록 느려진다.
+  const channels = await listYouTubeChannels();
+  const channelName = (id: string) =>
+    channels.find((ch: any) => ch.channelId === id)?.channelName ?? null;
+
+  const programIds = [...new Set(page.map((j) => j.programId).filter(Boolean))];
+  const programs = new Map(await Promise.all(programIds.map(async (id: string) =>
+    [id, await getEntity<any>("program", id).catch(() => null)] as const)));
+  const episodeIds = [...new Set(page.map((j) => j.episodeId).filter(Boolean))];
+  const episodes = new Map(await Promise.all(episodeIds.map(async (id: string) =>
+    [id, await getEntity<any>("episode", id).catch(() => null)] as const)));
+
+  const jobs = await Promise.all(page.map(async (job) => {
+    const clips = (await Promise.all((job.clipIds ?? [])
+      .map((id: string) => getEntity<any>("clip", id)))).filter(Boolean);
+    // /jobs/:id 와 **같은 규칙으로 센다** — 두 응답의 숫자가 갈라지면 어느 쪽이 맞는지 알 수 없다.
+    // 살아있는 clip 이 아니라 **clipIds 를 돈다**: 행이 사라진 클립도 "게시 안 됨"으로 세야
+    // published + failed = clips 가 성립하고, 사라진 것이 조용히 빠지지 않는다.
+    const counts = (job.clipIds ?? []).reduce(
+      (acc: { clips: number; published: number; failed: number }, id: string) => {
+        const cl = clips.find((x: any) => x?.id === id);
+        const rows = (cl?.distributions ?? []).filter((d: any) => d.channel === "youtube");
+        acc.clips += 1;
+        if (rows.some((d: any) => d.status === "published" || d.status === "scheduled" || d.externalId)) acc.published += 1;
+        else acc.failed += 1;
+        return acc;
+      }, { clips: 0, published: 0, failed: 0 });
+
+    const ep = job.episodeId ? episodes.get(job.episodeId) : null;
+    return {
+      jobId: job.id,
+      status: job.state,
+      terminal: TERMINAL_STATES.includes(job.state),
+      dryRun: Boolean(job.policy?.dryRun),
+      programId: job.programId,
+      programTitle: programs.get(job.programId)?.title ?? null,
+      mediaId: job.mediaId ?? null,
+      episodeId: job.episodeId ?? null,
+      episodeTitle: (ep as any)?.title ?? null,
+      targets: (job.targets ?? []).map((t: string) => {
+        const channelId = t.startsWith("youtube:") ? t.slice("youtube:".length) : null;
+        return { target: t, channelId, channelName: channelId ? channelName(channelId) : null };
+      }),
+      counts,
+      stalledForMs: Math.max(0, Date.now() - Number(job.updatedAt ?? Date.now())),
+      note: job.note ?? null,
+      error: job.error ?? null,
+      clips: clips.map((cl: any) => ({
+        clipId: cl.id,
+        title: cl.title ?? null,
+        durationSec: cl.durationSec ?? null,
+        rendered: Boolean(cl.rendered),
+        distributions: (cl.distributions ?? []).map((d: any) => ({
+          channel: d.channel, status: d.status, externalId: d.externalId ?? null,
+        })),
+      })),
+      createdAt: job.createdAt,
+      updatedAt: job.updatedAt,
+    };
+  }));
+
+  return c.json({ jobs, total: filtered.length, limit, state: filter });
 });
 
 /** 폴링용 상태 조회. 웹훅은 후순위 — 내부 소비자라 폴링으로 시작한다. */
