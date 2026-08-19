@@ -36,7 +36,7 @@ for _s in (sys.stdout, sys.stderr):
 from google import genai
 from google.genai import types
 
-from core.common.models import TEXT as MODEL
+from core.common.models import BEAT_ANNOT as MODEL
 from core.common.retry import call_with_retry
 
 PROJECT = os.environ.get("GOOGLE_CLOUD_PROJECT") or "step-d"

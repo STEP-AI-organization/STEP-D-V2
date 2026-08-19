@@ -106,9 +106,12 @@ def usage_summary() -> dict:
         # `{model}:batch` = 배치 예측 (단가 50%). 접미를 떼고 요율을 찾는다.
         is_batch = model.endswith(":batch")
         lookup = model[: -len(":batch")] if is_batch else model
-        # 매치되는 요율 찾기 (버전 suffix 무시)
+        # 매치되는 요율 찾기 (버전 suffix 무시).
+        # ⚠️ **긴 키부터** 매칭한다. startswith 라 "gemini-2.5-flash-lite" 가 "gemini-2.5-flash"
+        # 에 먼저 걸리면 flash-lite 를 flash 단가(3배)로 계산해 "flash-lite 는 절감이 없다"는
+        # 거짓 결론이 난다(2026-08-19 발견). 더 구체적인(긴) 키가 우선이어야 한다.
         rate = None
-        for key, r in _PRICE_KRW_PER_1M.items():
+        for key, r in sorted(_PRICE_KRW_PER_1M.items(), key=lambda kv: -len(kv[0])):
             if lookup.startswith(key):
                 rate = r; break
         if rate is None:

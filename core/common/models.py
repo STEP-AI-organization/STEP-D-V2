@@ -28,6 +28,9 @@ STT: str = os.environ.get("GEMINI_STT_MODEL") or TEXT
 REFINE: str = os.environ.get("GEMINI_REFINE_MODEL") or TEXT
 NARRATIVE: str = os.environ.get("GEMINI_NARRATIVE_MODEL") or TEXT
 BEATS: str = os.environ.get("GEMINI_BEATS_MODEL") or TEXT
+# beat_annot(장면이해 본체·회당 최대 비전콜 소비처)만 저가 비전 모델로 분리 가능.
+# 예: GEMINI_BEAT_ANNOT_MODEL=gemini-2.5-flash-lite → 입력 -67% (recommend·narrative 는 TEXT 유지).
+BEAT_ANNOT: str = os.environ.get("GEMINI_BEAT_ANNOT_MODEL") or TEXT
 RECOMMEND: str = os.environ.get("GEMINI_RECOMMEND_MODEL") or TEXT
 TIMELINE: str = os.environ.get("GEMINI_TIMELINE_MODEL") or TEXT
 SCENE_TYPE: str = os.environ.get("GEMINI_SCENE_TYPE_MODEL") or TEXT

@@ -219,6 +219,46 @@ def _levenshtein(a: str, b: str) -> int:
     return prev[-1]
 
 
+def _canonicalize_name_votes(cleaned_results: list[tuple[int, list[str]]],
+                             roster: list[str] | None = None,
+                             minority_ratio: int = 4) -> dict[str, str]:
+    """편집거리 1 유사 이름 병합 맵 {이름: canonical} 을 계산한다 — **OCR 오탐 교정용**(현기→현지).
+
+    ⚠️ 순진한 편집거리 병합은 등록 인물이 유사 가명일 때 서로를 잡아먹는다: 나는SOLO 는
+    영수·영호·영철·영식 이 **서로 다른 사람**인데 전부 편집거리 1 이라 한 명(영자)으로 뭉갠다
+    (실측 2026-08-19). 드라마도 같은 함정. characters 는 검색 인물 필터축이라 오염되면 필터가
+    무의미해진다. 그래서 두 가지로 막는다:
+      (1) 등록 roster 이름은 **절대 병합하지 않는다** — 등록이 인물 판정의 primary 다
+          (cast_registry_primary). roster 에 둘 다 있으면 둘 다 별개로 남는다.
+      (2) roster 밖이라 확신이 없을 땐, 흡수되는 쪽이 **명백한 소수**(대상의 1/ratio 이하)일
+          때만 병합한다 — OCR 오탐은 드물게 뜨고 별개 실명은 둘 다 자주 뜬다는 가정. 단
+          대상(cn)이 등록 인물이면 n 은 그 이름의 오탐일 공산이 커 비율 무관하게 흡수한다.
+    """
+    from collections import Counter as _Counter
+    roster_set = {str(r).strip() for r in (roster or []) if str(r).strip()}
+    name_counts = _Counter(n for _, names in cleaned_results for n in names)
+    canon: dict[str, str] = {}
+    canon_list: list[str] = []
+    for n, c in sorted(name_counts.items(), key=lambda x: (-x[1], x[0])):
+        if n in roster_set:
+            canon_list.append(n)
+            canon[n] = n
+            continue
+        merged = False
+        for cn in canon_list:
+            if abs(len(cn) - len(n)) > 1:
+                continue
+            if _levenshtein(n, cn) <= 1:
+                if cn in roster_set or c * minority_ratio <= name_counts[cn]:
+                    canon[n] = cn
+                    merged = True
+                    break
+        if not merged:
+            canon_list.append(n)
+            canon[n] = n
+    return canon
+
+
 def _canonicalize_similar_names(hits: list[dict], max_edit: int = 1) -> tuple[list[dict], dict[str, str]]:
     """감지된 이름 전체 · vote 집계 · 편집거리 max_edit 이내에서 낮은 vote 이름을 높은 vote 이름으로 흡수.
 
@@ -607,23 +647,12 @@ def scan_per_seg(video_path: str, segments: list[dict], *,
         parts = [_strip_particle(p) for p in _split_multi_name(n)]
         cleaned_results.append((i, [p for p in parts if p]))
 
-    # 후처리 2: 편집거리 1 이내 유사 이름 통합 (낮은 vote → 높은 vote 로)
+    # 후처리 2: 편집거리 1 유사 이름 병합(OCR 오탐 교정). roster 보호 + 소수만 흡수 규칙은
+    # _canonicalize_name_votes 참조(거기에 근거·나는SOLO 함정 주석).
     from collections import Counter as _Counter
+    roster_set = {str(r).strip() for r in (roster or []) if str(r).strip()}
     name_counts: _Counter = _Counter(n for _, names in cleaned_results for n in names)
-    canon: dict[str, str] = {}
-    canon_list: list[str] = []
-    for n, c in sorted(name_counts.items(), key=lambda x: (-x[1], x[0])):
-        merged = False
-        for cn in canon_list:
-            if abs(len(cn) - len(n)) > 1:
-                continue
-            if _levenshtein(n, cn) <= 1:
-                canon[n] = cn
-                merged = True
-                break
-        if not merged:
-            canon_list.append(n)
-            canon[n] = n
+    canon = _canonicalize_name_votes(cleaned_results, roster)
     alias_map = {k: v for k, v in canon.items() if k != v}
     if alias_map:
         print(f"   [chyron-seg] 유사 이름 통합: {alias_map}")
@@ -632,7 +661,7 @@ def scan_per_seg(video_path: str, segments: list[dict], *,
     canon_counts: _Counter = _Counter()
     for n, c in name_counts.items():
         canon_counts[canon.get(n, n)] += c
-    roster_set = {str(r).strip() for r in (roster or []) if str(r).strip()}
+    # roster_set 은 위 후처리 2(canonicalize)에서 이미 계산됨 — 재사용.
     accepted = {n for n, c in canon_counts.items() if c >= min_votes or n in roster_set}
     dropped = {n: c for n, c in canon_counts.items() if n not in accepted}
     if dropped:
