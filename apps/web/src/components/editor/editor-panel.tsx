@@ -460,10 +460,21 @@ function ChannelTab({ state, update }: { state: EditorState; update: Update }) {
         <b>채널 표시 · 채널명 · 세로 위치 · 아이콘 · 글자 크기</b>는 결과물에 그대로 구워집니다.
         <b> 부가 줄</b>만 아직 미리보기 전용입니다.
       </div>
+      {/* 아이콘 끄기 — 렌더는 클립 아이콘이 없으면 **프로그램의 쇼츠 아이콘**으로 폴백하므로
+          (index.ts: channelIconDataUrl > program.brandIconDataUrl), 위 그림을 비우는 것만으론
+          아이콘이 안 사라진다. 이 스위치가 그 폴백까지 끄는 유일한 수단이다. */}
+      <Toggle
+        on={state.channelIconOff !== true}
+        onChange={() => update({ channelIconOff: !state.channelIconOff } as Partial<EditorState>)}
+        label="채널 아이콘 표시"
+      />
       <div>
         <Label>
           채널 아이콘
         </Label>
+        <div className="mb-1.5 text-[10px] text-zinc-500">
+          비워 두면 프로그램 설정의 &quot;쇼츠 아이콘&quot;이 쓰입니다 — 아예 빼려면 위 스위치를 끄세요.
+        </div>
         <ImagePickField
           value={state.channelIconDataUrl}
           onChange={(dataUrl) => update({ channelIconDataUrl: dataUrl })}
@@ -727,72 +738,12 @@ function LayoutTab({
           </div>
         )}
       </div>
-      {/* 상단·하단 스타일 프리셋 — 영상마다 훅/브랜딩 조합을 바로 고른다 (2026-08-12). */}
-      <div>
-        <Label>상단 스타일 (훅)</Label>
-        <div className="grid grid-cols-3 gap-1">
-          {[
-            { k: "hook2", label: "2줄 컬러" },
-            { k: "hook1", label: "한 줄 컬러" },
-            { k: "none", label: "없음" },
-          ].map((o) => (
-            <button
-              key={o.k}
-              onClick={() => {
-                const lines = state.titleLines ?? [];
-                if (o.k === "none") { update({ titleLines: [] }); return; }
-                if (o.k === "hook1") {
-                  const text = lines.map((l) => l.text).join(" ").trim();
-                  // size = 출력 px(정규화된 state). 구 30 스테이지 px × 3 = 90.
-                  update({ titleLines: text ? [{ id: "t1", text, size: 90, color: "#FF4040" }] : [], titleY: 11 });
-                  return;
-                }
-                // hook2 — 줄 유지, 첫 줄 흰색·둘째 줄 강조색 (한 줄뿐이면 통째 강조색)
-                update({
-                  titleLines: lines.map((l, i) => ({
-                    ...l,
-                    color: lines.length === 1 || i === 1 ? "#FF4040" : "#FFFFFF",
-                  })),
-                  titleY: 11,
-                });
-              }}
-              className="rounded-md border border-zinc-700 py-1.5 text-xs text-zinc-300 hover:bg-zinc-800/50"
-            >
-              {o.label}
-            </button>
-          ))}
-        </div>
-      </div>
-      <div>
-        <Label>하단 스타일 (브랜딩)</Label>
-        <div className="grid grid-cols-3 gap-1">
-          {[
-            { k: "icon-title", label: "아이콘+제목" },
-            { k: "title", label: "제목만" },
-            { k: "none", label: "없음" },
-          ].map((o) => (
-            <button
-              key={o.k}
-              onClick={() => {
-                if (o.k === "none") { update({ showChannel: false }); return; }
-                update({
-                  showChannel: true,
-                  channelY: 88,
-                  // 크기 = 출력 px(정규화된 state). 구 30/40 스테이지 px × 3 = 90/120.
-                  channelLabelSize: 90,
-                  channelIconSize: 120,
-                  // 아이콘은 프로그램 설정(brandIconDataUrl)에서 오고, 여기선 켜고 끄기만.
-                  channelIconOff: o.k === "title",
-                } as Partial<EditorState>);
-              }}
-              className="rounded-md border border-zinc-700 py-1.5 text-xs text-zinc-300 hover:bg-zinc-800/50"
-            >
-              {o.label}
-            </button>
-          ))}
-        </div>
-        <div className="mt-1 text-[10px] text-zinc-500">아이콘은 프로그램 설정의 "쇼츠 아이콘"에서 등록</div>
-      </div>
+      {/* 상단·하단 스타일 프리셋(2026-08-12)은 **삭제됐다** (사용자 확정 2026-08-19).
+          한 번 누르면 텍스트/채널 설정을 통째로 덮어써서, 줄별로 잡아둔 글꼴·외곽선·키프레임·
+          시간창이 조용히 날아갔다("한 줄 컬러" 는 줄을 합치며 그 필드들을 통째로 버렸다).
+          같은 값을 텍스트·채널 탭이 이미 개별로 편집한다 — 덮어쓰는 지름길만 없앤 것이다.
+          단 하나, 아이콘 끄기(channelIconOff)는 여기가 유일한 생산자였고 서버 렌더가 읽으므로
+          채널 탭의 아이콘 설정 옆으로 옮겼다. */}
       <div>
         <Label>종횡비 · 크롭</Label>
         {/* 5-값 enum(aspect-presets.ts) — 한 값이 컨테이너·크롭·밴드를 전부 결정한다.

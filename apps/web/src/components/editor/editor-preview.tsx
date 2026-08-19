@@ -304,10 +304,16 @@ export function EditorPreview({
     // 폭이 0으로 붕괴 → 16:9·1:1에서 영상이 사라진다. 9:16·4:5는 height 기준이라 티가 안 났음.
     <div className="flex h-full w-full items-center justify-center">
       {/* viewport — 화면에 보이는 상자(종횡비 고정). 실제 폭을 재서 fit 을 잡는다.
-          overflow-hidden 이 스테이지의 축소본을 둥근 모서리로 자른다. */}
+          overflow-hidden 이 스테이지의 축소본을 잘라낸다.
+
+          ⚠️ **꾸미지 않는다 — 기본 플레이어로 mp4 를 튼 화면과 같아야 한다**(사용자 확정
+          2026-08-19). 예전엔 rounded-lg + shadow-2xl 이 붙어 있었다. 둥근 모서리는 네 귀퉁이에
+          놓인 것(로고·자막 끝·프레임 테두리)을 편집 화면에서만 깎아 보여주고, 그림자는 프레임
+          경계를 실제보다 도드라지게 만든다. 결과물엔 둘 다 없다 — 자리·크기와 같은 계열의
+          파리티 문제라, 여기 장식을 더하지 말 것. */}
       <div
         ref={viewportRef}
-        className="relative overflow-hidden rounded-lg shadow-2xl"
+        className="relative overflow-hidden"
         style={{
           aspectRatio: `${canvasW}/${canvasH}`,
           height: ratio < 1 ? "min(72vh, 640px)" : undefined,
@@ -533,6 +539,14 @@ export function EditorPreview({
               fontSize: line.size,
               fontWeight: 800,
               lineHeight: 1.15,
+              // half-leading 보정 — CSS 라인박스(line-height 1.15)는 첫 줄 글자 상단을
+              // (lineHeight-1em)/2 = (1.15-1)/2 = 0.075em 만큼 anchor 위로 올린다. 반면 서버
+              // canvas 는 textBaseline:"top" 으로 anchor(y=titleY%·H)에 글자 상단을 그대로
+              // 맞춘다(overlay-canvas.ts · index.ts buildStaticOverlayItems). 그래서 편집 CSS 가
+              // 렌더보다 0.075em 위에 뜬다 → 그만큼 아래로 내려 세로 정렬을 렌더와 맞춘다.
+              // (줄 advance 는 서버 round(fitPx*1.15) 와 동일하게 line-height 가 유지한다 — 이
+              //  translateY 는 flow 를 건드리지 않는 순수 시각 보정이라 줄 간격은 그대로.)
+              transform: `translateY(${(1.15 - 1) / 2}em)`,
               // 그림자·외곽선도 출력 px — 서버 canvas 는 offset/blur 를 scale(=opx) 배해 굽고, stroke
               // 는 출력 px 그대로다. 스테이지 fit 축소가 CSS·PNG 를 똑같이 줄인다.
               textShadow: `0 ${opx(2)}px ${opx(6)}px rgba(0,0,0,.5)`,
@@ -553,7 +567,9 @@ export function EditorPreview({
               ...(kf
                 ? {
                     opacity: kf.opacity,
-                    transform: `translate(${kf.x ?? 0}cqw, ${kf.y ?? 0}cqh) scale(${kf.scale}) rotate(${kf.rotation}deg)`,
+                    // kf.transform overrides the base, so re-apply the half-leading translateY
+                    // (leftmost = constant downward nudge, unaffected by the kf scale/rotate).
+                    transform: `translateY(${(1.15 - 1) / 2}em) translate(${kf.x ?? 0}cqw, ${kf.y ?? 0}cqh) scale(${kf.scale}) rotate(${kf.rotation}deg)`,
                   }
                 : {}),
             };
@@ -677,7 +693,10 @@ export function EditorPreview({
                       className="font-semibold text-white"
                       // 채널명 크기·그림자는 출력 px — labelPx 는 출력 px, 그림자 offset 만 opx().
                       // 서버 channelBadgeLayout(labelPx)·canvas shadow(1·3 ×scale)와 동일.
-                      style={{ textShadow: `0 ${opx(1)}px ${opx(3)}px rgba(0,0,0,.6)`, fontSize: labelPx }}
+                      // transform: 제목과 같은 half-leading 보정. 텍스트 블록은 leading-tight
+                      // (line-height 1.25)이고 서버는 baseline:"top"(LEADING 1.25) 이라 CSS 첫 줄이
+                      // (1.25-1)/2 = 0.125em 위로 뜬다 → 그만큼 내려 렌더 세로 정렬과 맞춘다.
+                      style={{ textShadow: `0 ${opx(1)}px ${opx(3)}px rgba(0,0,0,.6)`, fontSize: labelPx, transform: `translateY(${(1.25 - 1) / 2}em)` }}
                     >
                       {/* ▶ 접두사는 뺐다(사용자 2026-08-12 · 지저분함). 렌더도 뺐으니 여전히 일치. */}
                       {state.channelName}
@@ -692,6 +711,8 @@ export function EditorPreview({
                             textShadow: `0 ${opx(1)}px ${opx(3)}px rgba(0,0,0,.6)`,
                             fontSize: size,
                             marginTop: Math.max(opx(1), size * 0.2),
+                            // 채널명과 같은 half-leading 보정(leading-tight 1.25 → 0.125em).
+                            transform: `translateY(${(1.25 - 1) / 2}em)`,
                           }}
                         >
                           {line.text}
@@ -707,7 +728,10 @@ export function EditorPreview({
                     className={cn("flex", layout === "vertical" ? "flex-col items-center" : "items-center")}
                     style={{ gap: opx(layout === "vertical" ? 4 : 8) }}
                   >
-                    {state.channelIconDataUrl ? (
+                    {/* 아이콘 끄기(channelIconOff)는 서버 렌더가 읽는 스위치다(index.ts
+                        buildEditorAss 앞단) — 미리보기도 같이 꺼야 편집 화면과 결과물이 맞는다.
+                        예전엔 미리보기가 이 값을 아예 안 봐서, 꺼도 화면엔 아이콘이 남았다. */}
+                    {state.channelIconOff === true ? null : state.channelIconDataUrl ? (
                       <img
                         src={state.channelIconDataUrl}
                         alt=""

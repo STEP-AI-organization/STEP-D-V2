@@ -104,7 +104,8 @@ function HeldPreview({ clip }: { clip: Clip }) {
       autoPlay
       playsInline
       // 세로 쇼츠가 카드를 삼키지 않게 높이로 묶는다 — 가로폭은 비율이 정한다.
-      className="max-h-[420px] rounded-[4px] bg-black"
+      // 모서리는 각지게 — 결과물이 각진 사각형이라, 둥글리면 귀퉁이 내용이 깎여 보인다.
+      className="max-h-[420px] bg-black"
       style={{ maxWidth: "100%" }}
     />
   );

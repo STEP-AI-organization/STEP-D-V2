@@ -473,3 +473,65 @@ describe("마이그레이션 계수 — 옛 스테이지 px → 출력 px 가 �
     }
   });
 });
+
+/**
+ * 미리보기 프레임에는 장식이 없어야 한다 — **기본 플레이어로 mp4 를 튼 화면과 같아야 한다**
+ * (사용자 확정 2026-08-19).
+ *
+ * 예전엔 스테이지 뷰포트에 `rounded-lg shadow-2xl` 이 붙어 있었다. 둥근 모서리는 네 귀퉁이에
+ * 놓인 것(로고·자막 끝·프레임 테두리)을 **편집 화면에서만** 깎아 보여주고, 그림자는 프레임
+ * 경계를 실제보다 도드라지게 만든다 — 결과물엔 둘 다 없다. 자리·크기 파리티와 같은 계열인데
+ * "다듬기" 로 되돌아오기 쉬운 종류라(순수 CSS 라 아무 테스트도 안 깨진다) 여기서 고정한다.
+ */
+describe("미리보기 프레임 장식 — 결과물엔 없는 것을 화면에 더하지 않는다", () => {
+  /** 스테이지 뷰포트의 className — ref={viewportRef} 바로 뒤 줄. */
+  const viewportCls = (() => {
+    const m = /ref=\{viewportRef\}\s*\n\s*className="([^"]*)"/.exec(WEB_PREVIEW);
+    assert.ok(m, "스테이지 뷰포트(ref={viewportRef})의 className 을 못 찾았다 — 정규식이 낡았는지 확인");
+    return m![1];
+  })();
+
+  it("모서리를 둥글리지 않는다", () => {
+    assert.doesNotMatch(viewportCls, /\brounded/,
+      `뷰포트에 rounded 가 붙었다("${viewportCls}") — 귀퉁이 오버레이가 편집 화면에서만 깎여 보인다`);
+  });
+
+  it("그림자를 넣지 않는다", () => {
+    assert.doesNotMatch(viewportCls, /\bshadow-/,
+      `뷰포트에 shadow 가 붙었다("${viewportCls}") — 결과물에 없는 테두리감이 생긴다`);
+  });
+
+  it("overflow-hidden 은 남아 있어야 한다 (장식이 아니라 스테이지 축소본을 자르는 기능)", () => {
+    assert.match(viewportCls, /\boverflow-hidden\b/,
+      "overflow-hidden 을 지우면 scale 된 스테이지가 뷰포트 밖으로 새어 나온다");
+  });
+});
+
+/**
+ * 아이콘 끄기(channelIconOff) — 미리보기와 렌더가 같이 꺼져야 한다.
+ *
+ * 이 스위치는 **클립 아이콘이 없을 때 프로그램의 쇼츠 아이콘으로 폴백하는 경로까지** 끄는
+ * 유일한 수단이다(index.ts: channelIconDataUrl > program.brandIconDataUrl). 예전엔 레이아웃 탭의
+ * "하단 스타일(브랜딩) → 제목만" 이 유일한 생산자였는데 그 프리셋 뭉치를 걷어내면서
+ * (2026-08-19) 채널 탭으로 옮겼다. 그때 미리보기는 이 값을 아예 안 봐서 꺼도 아이콘이 남았다 —
+ * 생산(토글) → 저장(editorState) → 소비(미리보기·렌더) 3단이 다 이어져 있는지 고정한다.
+ */
+describe("채널 아이콘 끄기 — 토글·미리보기·렌더가 같은 값을 본다", () => {
+  const PANEL_SRC = fs.readFileSync(
+    path.resolve(HERE, "../../web/src/components/editor/editor-panel.tsx"), "utf-8");
+
+  it("생산: 채널 탭에 아이콘 표시 토글이 있다", () => {
+    assert.match(PANEL_SRC, /channelIconOff: !state\.channelIconOff/,
+      "토글이 없으면 아이콘을 끌 방법이 사라진다(서버는 여전히 이 값을 읽는다)");
+  });
+
+  it("소비(미리보기): 꺼져 있으면 아이콘을 그리지 않는다", () => {
+    assert.match(WEB_PREVIEW, /state\.channelIconOff === true \? null :/,
+      "미리보기가 channelIconOff 를 안 보면 꺼도 편집 화면엔 아이콘이 남는다");
+  });
+
+  it("소비(렌더): 꺼져 있으면 아이콘 합성을 건너뛴다", () => {
+    assert.match(SERVER, /if \(editorState\?\.showChannel && !editorState\?\.channelIconOff/,
+      "렌더가 channelIconOff 를 안 보면 결과물에 아이콘이 그대로 박힌다");
+  });
+});
