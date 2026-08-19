@@ -72,6 +72,8 @@ export interface AutomationRule {
    */
   layout?: {
     titleY?: number; channelIconY?: number; channelBoxY?: number; channelIconSize?: number;
+    /** 제목 강조색(#RRGGBB) — 미지정 = 템플릿 accent 색(표준=청록). 렌더 titleLines 강조 줄 색으로. */
+    titleColor?: string;
     /** 자막 켜기 — 기본 true(하위호환). false 면 자동 클립이 captionsOn=false 로 렌더된다. */
     subtitles?: boolean;
     /** 자막 세로 위치(% · 화면 하단 기준 · 서버 렌더 capMV 와 같은 축). 기본 14. */

@@ -567,6 +567,7 @@ export function autoEditorState(
   rec: any, programTitle: string, program?: any, forcedTemplateId?: string,
   layoutOverride?: {
     titleY?: number; channelIconY?: number; channelBoxY?: number; channelIconSize?: number;
+    titleColor?: string;
     subtitles?: boolean; subtitleY?: number; subtitleSize?: number; subtitleColor?: string;
   },
 ): Record<string, unknown> {
@@ -603,6 +604,10 @@ export function autoEditorState(
     ?? (TEMPLATE_SEEDS[String(program?.autoPublish?.templateId ?? "")] ? String(program.autoPublish.templateId) : null)
     ?? pickTemplateId(program);
   const seed = TEMPLATE_SEEDS[templateId] ?? TEMPLATE_SEEDS["broadcast-standard"];
+  // 제목 강조색 — 규칙 layout.titleColor 가 있으면 시드 accent 를 덮는다(#RRGGBB 만 허용,
+  // 아니면 시드값 유지). 편집기·미리보기(template-preview)와 같은 축이라 결과물과 일치한다.
+  const titleAccent = layoutOverride?.titleColor && /^#[0-9a-fA-F]{6}$/.test(layoutOverride.titleColor)
+    ? layoutOverride.titleColor : seed.accent;
   return {
     // 종횡비 = 5-값 enum(aspect-presets.ts). 쇼츠 = 세로 메인 크롭(위 자막띠) 기본 · 클립(롱폼) = 가로.
     // clip.aspectRatio 배정(adopt/자동배포)과 같은 값이라 라벨↔렌더가 일치한다. 자동배포 경로가
@@ -615,7 +620,7 @@ export function autoEditorState(
     // ⚠️ id 를 반드시 넣는다. 없으면 편집기에서 setLine 이 l.id === undefined 로 **두 줄을 다**
     //    매칭해 한 줄로 붕괴하고, React key 도 undefined 로 겹친다(2026-08-12 발견).
     titleLines: lines.map((text, i) => ({
-      id: `t${i}`, text, size, color: lines.length === 1 || i === 1 ? seed.accent : "#FFFFFF",
+      id: `t${i}`, text, size, color: lines.length === 1 || i === 1 ? titleAccent : "#FFFFFF",
     })),
     titleX: 50,
     titleY: seed.titleY,

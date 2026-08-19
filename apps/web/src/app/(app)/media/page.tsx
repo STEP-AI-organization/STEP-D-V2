@@ -12,6 +12,7 @@ import { useMemo, useState } from "react";
 
 import { PublishDialog } from "@/components/publish/publish-dialog";
 import { ClipDetail } from "@/components/media/clip-detail";
+import { deleteClip } from "@/lib/data/api";
 import { useToast } from "@/components/ui/toast";
 import { useSession } from "@/lib/auth";
 import { roleOf } from "@/lib/roles";
@@ -27,7 +28,7 @@ export default function MediaPage() {
 }
 
 function MediaView() {
-  const { clips, episodes, programs, loading } = useAppData();
+  const { clips, episodes, programs, loading, refresh } = useAppData();
   const { toast } = useToast();
   const session = useSession();
   const role = roleOf(session.user.role);
@@ -73,6 +74,19 @@ function MediaView() {
     setPublishTarget(selectedRows.map((c) => c.id));
   }
 
+  /** 미디어 삭제 — 확인 후 서버 삭제 + 목록 갱신. 파괴적이라 확인을 받는다. */
+  async function handleDelete(clip: Clip) {
+    if (!window.confirm(`"${clip.title || "이 미디어"}" 를 삭제할까요?\n이미 채널에 올라간 영상은 내려가지 않습니다.`)) return;
+    try {
+      const r = await deleteClip(clip.id);
+      toast({ title: "삭제했습니다", description: r.notice, tone: "done" });
+      setSelected((prev) => { const n = new Set(prev); n.delete(clip.id); return n; });
+      await refresh();
+    } catch (err) {
+      toast({ title: "삭제 실패", description: err instanceof Error ? err.message : String(err), tone: "error" });
+    }
+  }
+
   return (
     <div className="mx-auto flex max-w-[1240px] flex-col gap-[14px] pb-24">
       {/* 필터 */}
@@ -115,6 +129,7 @@ function MediaView() {
               checked={selected.has(c.id)}
               onToggle={() => toggle(c.id)}
               onOpen={() => setDetailId(c.id)}
+              onDelete={() => handleDelete(c)}
               programTitle={
                 programs.find((p) => p.id === episodes.find((e) => e.id === c.episodeId)?.programId)?.title
                 // 직접 업로드 클립은 회차가 없어 회차→프로그램 조인이 비므로 클립에 박아둔 값으로 폴백.
@@ -181,6 +196,7 @@ function MediaRow({
   checked,
   onToggle,
   onOpen,
+  onDelete,
   programTitle,
   episodeNumber,
 }: {
@@ -189,11 +205,21 @@ function MediaRow({
   onToggle: () => void;
   /** 행을 열어 상세(렌더 영상 + 메타데이터)를 본다. */
   onOpen: () => void;
+  /** 미디어 삭제 (확인은 상위에서 받는다). */
+  onDelete: () => void;
   programTitle: string;
   episodeNumber?: number;
 }) {
   const thumb = clipThumbSrc(clip);
   const isShort = clip.aspectRatio?.startsWith("9:16");
+  // 상태 가시성 (사용자 2026-08-19: "렌더 중인지·배포됐는지 미디어에서 알 수가 없다").
+  // status="encoding" = 렌더 중 · distributions 로 배포/업로드중/실패/기록을 센다.
+  const rendering = clip.status === "encoding";
+  const dists = clip.distributions ?? [];
+  const publishedN = dists.filter((d) => d.status === "published").length;
+  const recordedN = dists.filter((d) => d.status === "recorded").length;
+  const uploadingN = dists.filter((d) => d.status === "pending" || d.status === "scheduled").length;
+  const failedN = dists.filter((d) => d.status === "failed").length;
 
   return (
     <div className="sd-card flex flex-col">
@@ -228,11 +254,20 @@ function MediaRow({
             {programTitle}
             {episodeNumber != null ? ` · 회차 ${episodeNumber}` : ""} · {fmtTime(clip.durationSec)} ·{" "}
             {isShort ? "9:16" : "16:9"}
-            {clip.rendered ? "" : " · 렌더 전"}
           </div>
         </div>
 
-        <div className="flex shrink-0 gap-2">
+        <div className="flex shrink-0 flex-wrap items-center justify-end gap-1.5">
+          {/* 상태 배지 — 렌더 중·렌더 전·배포됨·업로드중·실패·기록됨. "상태가 UI에 닿게". */}
+          {rendering ? (
+            <span className="sd-tag sd-tag--upcoming">● 렌더 중…</span>
+          ) : !clip.rendered ? (
+            <span className="sd-tag">렌더 전</span>
+          ) : null}
+          {publishedN > 0 && <span className="sd-tag sd-tag--airing">배포됨 {publishedN}</span>}
+          {uploadingN > 0 && <span className="sd-tag sd-tag--upcoming">업로드 중 {uploadingN}</span>}
+          {failedN > 0 && <span className="sd-tag sd-tag--danger">배포 실패 {failedN}</span>}
+          {recordedN > 0 && <span className="sd-tag">기록됨 {recordedN}</span>}
           {/* 직접 업로드 완성본은 트림·리프레임 대상이 아니다 — 편집기를 열어 봐야 할 게 없다. */}
           {clip.directUpload ? (
             <span
@@ -244,6 +279,15 @@ function MediaRow({
           ) : (
             <Link href={`/editor/${clip.id}`} className="sd-btn">편집</Link>
           )}
+          <button
+            type="button"
+            className="sd-btn"
+            style={{ color: "var(--sd-danger, #dc2626)" }}
+            onClick={onDelete}
+            title="미디어 삭제"
+          >
+            삭제
+          </button>
         </div>
       </div>
     </div>

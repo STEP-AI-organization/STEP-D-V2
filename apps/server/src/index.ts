@@ -7455,10 +7455,13 @@ app.post("/api/clips/:id/generate-metadata", async (c) => {
       program: program?.title ?? clip.programTitle,
       episode: episode?.title ?? (episode?.episodeNumber ? `${episode.episodeNumber}화` : undefined),
     };
+    // 쇼츠(9:16)면 제목·설명에 #Shorts 를 보장한다(clip-metadata SHORTS_TAG). aspectRatio 가
+    // 없으면 쇼츠로 본다 — 자동배포 기본 산출물이 쇼츠라 안전한 기본값이다.
+    const isShortClip = String(clip.aspectRatio ?? "9:16").startsWith("9:16");
     const byChannel: Record<string, unknown> = {};
     for (const ch of META_CHANNELS) {
       const rule = rules.find((r: any) => r.platform === ch && r.enabled !== false);
-      byChannel[ch] = normalizeForChannel(baseMeta, ch, rule ?? {}, vars);
+      byChannel[ch] = normalizeForChannel(baseMeta, ch, rule ?? {}, vars, isShortClip);
     }
 
     // 사람이 고친 값을 덮지 않는다 — `edited` 가 붙은 채널은 그대로 둔다.
@@ -7479,6 +7482,24 @@ app.post("/api/clips/:id/generate-metadata", async (c) => {
     console.error("[generate-metadata] 실패:", msg);
     return c.json({ error: "generation_failed", message: msg.slice(0, 300) }, 502);
   }
+});
+
+// 미디어(클립) 삭제 — 클립 엔티티 + 렌더 산출물 미디어를 정리한다. RLS 로 테넌트 스코프라
+// 남의 워크스페이스 것은 못 지운다. ⚑ 이미 채널에 올라간 영상은 내려가지 않는다(automation
+// rule 삭제와 같은 원칙) · 원본 마스터(sourceMediaId)는 다른 클립도 쓰므로 건드리지 않는다.
+app.delete("/api/clips/:id", async (c) => {
+  const id = c.req.param("id");
+  const clip = await getEntity<any>("clip", id);
+  if (!clip) return c.json({ ok: false, error: "clip_not_found", message: "미디어를 찾을 수 없습니다." }, 404);
+  await deleteEntityRow("clip", id);
+  if (clip.mediaId && clip.mediaId !== clip.sourceMediaId) {
+    try { await deleteMediaData(clip.mediaId); }
+    catch (e) { console.error("[clips delete] 렌더 미디어 정리 실패(계속):", e); }
+  }
+  return c.json({
+    ok: true,
+    notice: "미디어를 삭제했습니다. 이미 채널에 올라간 영상은 내려가지 않습니다 — 필요하면 채널에서 직접 내려야 합니다.",
+  });
 });
 
 // ── export/render a clip → the single expensive render (plan §2.4) ────────────

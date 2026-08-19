@@ -955,6 +955,8 @@ export interface AutomationRule {
    */
   layout?: {
     titleY?: number; channelIconY?: number; channelBoxY?: number; channelIconSize?: number;
+    /** 제목 강조색(#RRGGBB) — 미지정 = 템플릿 accent 색(표준=청록). */
+    titleColor?: string;
     /** 자막 세로 위치(% · 화면 하단 기준). */
     subtitleY?: number;
     /** 자막 글자 크기(% · 화면 높이 기준). */
@@ -1048,6 +1050,13 @@ export async function saveAutomationRule(
 
 export async function deleteAutomationRule(id: string): Promise<{ notice: string }> {
   const res = await fetch(`${API_BASE}/automation/rules/${id}`, { method: "DELETE" });
+  if (!res.ok) throw new ApiError(res.status, await errorMessageOf(res));
+  return res.json();
+}
+
+/** 미디어(클립) 삭제 — 클립 + 렌더 산출물 정리. 이미 채널에 올라간 영상은 안 내려간다. */
+export async function deleteClip(id: string): Promise<{ notice: string }> {
+  const res = await fetch(`${API_BASE}/clips/${id}`, { method: "DELETE" });
   if (!res.ok) throw new ApiError(res.status, await errorMessageOf(res));
   return res.json();
 }

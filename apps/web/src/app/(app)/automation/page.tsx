@@ -302,6 +302,7 @@ export default function AutomationPage() {
     const s = TEMPLATE_SEED_UI[effectiveTemplate] ?? TEMPLATE_SEED_UI["broadcast-standard"];
     setLayout({
       titleY: s.titleY, channelIconY: s.iconY, channelBoxY: s.boxY, channelIconSize: s.iconSize,
+      titleColor: s.accent,
       subtitleY: SUBTITLE_DEFAULTS.y, subtitleSize: SUBTITLE_DEFAULTS.size, subtitleColor: SUBTITLE_DEFAULTS.color,
     });
   }, [effectiveTemplate]);
@@ -388,6 +389,7 @@ export default function AutomationPage() {
         channelIconY: r.layout.channelIconY ?? seed.iconY,
         channelBoxY: r.layout.channelBoxY ?? seed.boxY,
         channelIconSize: r.layout.channelIconSize ?? seed.iconSize,
+        titleColor: r.layout.titleColor ?? seed.accent,
         subtitleY: r.layout.subtitleY ?? SUBTITLE_DEFAULTS.y,
         subtitleSize: r.layout.subtitleSize ?? SUBTITLE_DEFAULTS.size,
         subtitleColor: r.layout.subtitleColor ?? SUBTITLE_DEFAULTS.color,
@@ -948,6 +950,17 @@ export default function AutomationPage() {
             {starting ? "시작 중…" : "자동 배포 시작"}
           </button>
         </div>
+
+        {/* 렌더 방식(템플릿·미리보기·제목색·위치·자막) — "고급"에 묻지 않고 눈에 보이는 버튼으로.
+            "어떻게 렌더되는지"는 운영자가 당연히 정하고 싶은 1급 결정이라 밖으로 뺀다(사용자 2026-08-19). */}
+        <button
+          type="button"
+          className="sd-btn sd-btn-primary self-start"
+          disabled={!layout}
+          onClick={() => setTplPreviewOpen(true)}
+        >
+          🎬 템플릿 설정 — 미리보기 · 제목 색·위치 · 아이콘 · 자막
+        </button>
 
         {/* 고급 설정 — 구 규칙 폼(점수 기준·한도·시간창·정책·템플릿) 접기로 격하 · 삭제 금지 */}
         <button

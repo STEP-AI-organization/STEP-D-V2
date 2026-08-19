@@ -33,6 +33,12 @@ export type MetaChannel =
 export const META_CHANNELS: MetaChannel[] =
   ["youtube", "navertv", "naverclip", "instagram", "facebook", "tiktok"];
 
+/**
+ * 쇼츠 최소 보장 해시태그 — 쇼츠는 **제목·설명 모두** 최소 이 태그를 단다(사용자 2026-08-19).
+ * `#Shorts` 가 YouTube 가 Short 로 분류하는 표준 태그다. 클립(16:9)에는 붙이지 않는다.
+ */
+export const SHORTS_TAG = "#Shorts";
+
 export interface ChannelSpec {
   label: string;
   /** 제목 최대 길이. **null 이면 그 채널에 제목 필드가 없다**(네이버 클립). */
@@ -272,7 +278,7 @@ export function buildMetadataPrompt(src: MetaSource): string {
     "- title: 가장 강한 한 줄. 40자 이내로 쓴다(채널별 축약은 시스템이 한다).\n" +
     "- description: 3~5문장. 해시태그는 여기 넣지 말고 hashtags 로 분리한다.\n" +
     "- tags: 5~10개. 인물명·프로그램명·상황 키워드. 앞에 # 을 붙이지 않는다.\n" +
-    "- hashtags: 3~5개. # 을 붙인 형태.",
+    "- hashtags: 5~8개(추천 해시태그). # 을 붙인 형태. 프로그램·인물·상황·감정 키워드를 폭넓게.",
   ]);
 }
 
@@ -362,6 +368,8 @@ export function normalizeForChannel(
   channel: MetaChannel,
   rule: MetaRule = {},
   vars: { program?: string; episode?: string } = {},
+  /** 쇼츠(9:16)인가 — 쇼츠면 제목·설명에 SHORTS_TAG 를 보장한다. 클립(16:9)이면 안 붙인다. */
+  isShort = true,
 ): ChannelMetadata {
   const spec = CHANNEL_SPECS[channel];
   const problems: string[] = [];
@@ -390,10 +398,14 @@ export function normalizeForChannel(
       if (titleTags.length === 0) {
         titleTags = pickTitleHashtags(base.tags ?? [], vars.program, Math.max(1, spec.titleHashtags - 1));
       }
-      // #쇼츠 보장 — 이미 있으면 그대로, 없고 자리가 남으면 붙인다(레퍼런스: `#프로그램 #서브 #쇼츠`).
-      // 그래도 비면(프로그램·태그 전무) #쇼츠 하나라도 남긴다 — 관련 해시태그 0개로는 안 나간다.
-      if (!titleTags.includes("#쇼츠") && titleTags.length < spec.titleHashtags) titleTags.push("#쇼츠");
-      if (titleTags.length === 0) titleTags.push("#쇼츠");
+      // #Shorts 보장(쇼츠만) — 이미 있으면 그대로, 없고 자리가 남으면 붙인다(레퍼런스:
+      // `#프로그램 #서브 #Shorts`). 그래도 비면(프로그램·태그 전무) SHORTS_TAG 하나라도 남긴다
+      // — YouTube 쇼츠는 해시태그 0개로 안 나간다. 클립(16:9)이면 이 보장을 걸지 않는다.
+      if (isShort) {
+        const hasShorts = titleTags.some((t) => t.toLowerCase() === SHORTS_TAG.toLowerCase());
+        if (!hasShorts && titleTags.length < spec.titleHashtags) titleTags.push(SHORTS_TAG);
+        if (titleTags.length === 0) titleTags.push(SHORTS_TAG);
+      }
     }
     const suffix = titleTags.length ? ` ${titleTags.join(" ")}` : "";
     const head = prefix ? `${prefix} ` : "";
@@ -404,16 +416,26 @@ export function normalizeForChannel(
   }
 
   // 설명 — 제목 필드가 없는 채널은 제목을 설명 첫 줄로 올린다(안 그러면 그 문구가 사라진다).
-  const parts: string[] = [];
-  if (spec.titleMax === null && base.title.trim()) parts.push(base.title.trim());
-  if (base.description.trim()) parts.push(base.description.trim());
-  if (spec.hashtagsInDescription && hashtags.length) parts.push(hashtags.join(" "));
-  let description = clip(parts.join("\n\n"), spec.descMax);
+  // 쇼츠면 설명 해시태그 맨 앞에 SHORTS_TAG 를 보장한다(제목·설명 모두 · 사용자 2026-08-19).
+  // ⚠️ title 로직이 쓰는 `hashtags` 는 오염하지 않는다(base.tags 폴백이 깨진다) — 설명 전용 리스트.
+  const buildDesc = (tags: string[]) => {
+    const parts: string[] = [];
+    if (spec.titleMax === null && base.title.trim()) parts.push(base.title.trim());
+    if (base.description.trim()) parts.push(base.description.trim());
+    if (spec.hashtagsInDescription && tags.length) parts.push(tags.join(" "));
+    return clip(parts.join("\n\n"), spec.descMax);
+  };
+  const hasShortsTag = hashtags.some((h) => h.toLowerCase() === SHORTS_TAG.toLowerCase());
+  const descHashtags = isShort && !hasShortsTag ? [SHORTS_TAG, ...hashtags] : hashtags;
+  const description = buildDesc(descHashtags);   // 실제 설명 — 쇼츠면 #Shorts 포함
+  // 하한 판정용 — 보장 #Shorts 를 뺀 실내용. 빈 설명이 자동 #Shorts 로 10자를 넘겨 "짧음"
+  // 문제를 가리면 안 된다(사람이 실제 내용을 채우게 한다).
+  const descForMin = buildDesc(hashtags);
 
   // 하한 미달은 **자동으로 채우지 않는다.** 지어낸 문장으로 길이를 맞추면 사실이 흔들린다.
-  if (description.length < spec.descMin) {
+  if (descForMin.length < spec.descMin) {
     problems.push(
-      `${spec.label} 은 설명이 ${spec.descMin}자 이상이어야 합니다 (현재 ${description.length}자).`,
+      `${spec.label} 은 설명이 ${spec.descMin}자 이상이어야 합니다 (현재 ${descForMin.length}자).`,
     );
   }
 

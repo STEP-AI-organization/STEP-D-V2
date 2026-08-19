@@ -16,6 +16,8 @@ export type LayoutState = {
   channelIconY: number;
   channelBoxY: number;
   channelIconSize: number;
+  /** 제목 강조색(#RRGGBB) — 렌더 titleLines 강조 줄 색과 같은 축(factory titleAccent). */
+  titleColor: string;
   /** 자막 세로 위치(% · 화면 하단 기준 · 서버 렌더 capMV 와 같은 축). */
   subtitleY: number;
   /** 자막 글자 크기(% · 화면 높이 기준 · 서버 CAPTION_PCT 와 같은 축). */
@@ -76,7 +78,7 @@ export function TemplatePreview({ template, accent, layout, frameSrc, subtitlesO
       <div className="absolute text-center font-bold leading-tight"
         style={{ top: `${layout.titleY}%`, left: 4 * s, right: 4 * s, fontSize: 7 * s, color: "#fff", whiteSpace: "nowrap" }}>
         훅 첫 줄 텍스트
-        <div style={{ color: accent }}>둘째 줄 강조</div>
+        <div style={{ color: layout.titleColor || accent }}>둘째 줄 강조</div>
       </div>
       {/* 로고 */}
       <div className="absolute left-1/2 -translate-x-1/2 rounded-sm"
@@ -123,6 +125,15 @@ export function LayoutSliders({ layout, onChange, className }: {
           />
         </label>
       ))}
+      {/* 제목 강조색 — 렌더 titleLines 강조 줄 색(편집기·factory titleAccent 와 같은 축). */}
+      <label className="flex items-center gap-2">
+        제목 색 <span className="opacity-70">{layout.titleColor}</span>
+        <input
+          type="color" value={layout.titleColor}
+          onChange={(e) => onChange({ ...layout, titleColor: e.target.value })}
+          className="ml-auto h-5 w-8 cursor-pointer"
+        />
+      </label>
       {/* 자막 색 — 슬라이더가 아니라 색상 선택. 서버 렌더의 captionColor(자막 색)로 옮겨진다. */}
       <label className="flex items-center gap-2">
         자막 색 <span className="opacity-70">{layout.subtitleColor}</span>
