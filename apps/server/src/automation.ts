@@ -300,6 +300,15 @@ export function decidePublish(input: {
  */
 export const CREDIT_IDLE_REASON = "크레딧 부족 — 충전 필요";
 
+/**
+ * 마지막 순방 시각을 담는 automation_setting 키 — runAutomationCycle 이 매 순방 심박을 찍고
+ * GET /api/automation 이 그걸 읽어 "마지막 확인 N분 전 · 다음 예정" 을 그린다. rule_run 은
+ * dedupe·하루한줄 가드 때문에 한 줄도 안 남는 순방이 흔해(유휴·전부 스킵), 로그 최신행만으론
+ * "순방이 언제 돌았는지" 를 알 수 없다 — 순방 자체의 시각을 따로 박는다. 두 벌이 되면 갈라지므로
+ * 여기 한 곳에 둔다(PAUSE_KEY 와 같은 이유).
+ */
+export const LAST_CYCLE_KEY = "automation.lastCycleAt";
+
 export interface CycleInput {
   /** 전역 일시정지 상태. */
   paused: boolean;

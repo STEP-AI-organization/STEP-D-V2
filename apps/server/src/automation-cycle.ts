@@ -29,13 +29,14 @@ import {
   listMedia,
   putEntity,
   getAutomationSetting,
+  setAutomationSetting,
   getChannelRule,
   hasRunNote,
   publishedTodayKst,
 } from "./db-pg.ts";
 import {
   AUTO_RENDER_STOPPED_NOTE, CREDIT_IDLE_REASON, CREDIT_STOP_NOTE, DEFAULT_RULE_THUMBNAIL_MODE,
-  TOP3_CAP,
+  LAST_CYCLE_KEY, TOP3_CAP,
   autoRenderFailedNote, classifyRenderFailure,
   decidePublish, episodeAnalysisState, inActiveWindow, isRuleThumbnailMode, matchesMediaKind,
   nextAutoRenderState,
@@ -84,6 +85,12 @@ export interface CycleReport {
 
 /** 현재 테넌트의 규칙을 한 바퀴 돈다. */
 export async function runAutomationCycle(): Promise<CycleReport> {
+  // 순방 심박 — **이번 순방이 실제로 돌았다**는 시각을 남긴다(화면의 "마지막 확인 N분 전 ·
+  // 다음 예정" 이 이걸 읽는다). rule_run 은 dedupe·유휴 하루한줄 가드 때문에 한 줄도 안 남는
+  // 순방이 흔해서 로그 최신행으론 "언제 돌았나" 를 알 수 없다. 행동에는 영향이 없다(테넌트 KV
+  // 한 줄 upsert). 실패해도 순방을 막지 않는다 — 심박이 빠지는 건 표시가 낡는 것뿐이다.
+  await setAutomationSetting(LAST_CYCLE_KEY, new Date().toISOString()).catch(() => {});
+
   // 규칙을 **먼저** 읽는다 — 아래 크레딧 로그가 "충전하면 다시 시작합니다" 라고 약속하는데,
   // 규칙이 하나도 없으면 충전해도 시작될 게 없다(지킬 수 없는 약속).
   const paused = (await getAutomationSetting("automation.paused")) === "true";

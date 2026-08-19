@@ -321,6 +321,7 @@ import {
 } from "./asset-path.ts";
 import {
   CREDIT_IDLE_REASON,
+  LAST_CYCLE_KEY,
   RULE_CRITERIA,
   RULE_MEDIA_KINDS,
   GATE_POLICIES,
@@ -5138,14 +5139,20 @@ async function gateFor(subjectType: GateSubjectType, subjectId: string): Promise
 
 const PAUSE_KEY = "automation.paused";
 
+// 순방 주기(ms) — 화면의 "다음 확인 예정" 이 마지막 순방 시각에 이걸 더해 추정한다. 워커의
+// CYCLE_EVERY_MS 와 **같은 env·같은 기본값**(10분)을 읽어야 화면이 실제 주기와 안 갈라진다.
+// 0 이면 주기 순방이 꺼진 것(수동 "지금 확인" 만) — 화면이 다음 예정 표시를 숨긴다.
+const AUTOMATION_CYCLE_MS = Number(process.env.AUTOMATION_CYCLE_MS ?? 10 * 60 * 1000);
+
 app.get("/api/automation", async (c) => {
-  const [rules, runs, holds, paused, balance, autoTopupAlert] = await Promise.all([
+  const [rules, runs, holds, paused, balance, autoTopupAlert, lastCycleAt] = await Promise.all([
     listAutomationRules(),
     listRuleRuns(50),
     openHolds(),
     getAutomationSetting(PAUSE_KEY),
     creditBalance(),
     getAutoTopupAlert(),
+    getAutomationSetting(LAST_CYCLE_KEY),
   ]);
   const plan = planCycle({ paused: paused === "true", rules: rules as any });
   // 규칙×채널별 오늘 게시 수 — 순방이 한도 판정에 쓰는 publishedTodayKst 그대로.
@@ -5168,6 +5175,14 @@ app.get("/api/automation", async (c) => {
   return c.json({
     rules: rulesWithToday, runs, holds,
     paused: paused === "true",
+    // ── 상태 헤더(자동배포 대시보드)의 생산자 ──────────────────────────────────
+    // 잔액 — 화면이 "켜짐 / 크레딧 소진" 을 가른다(idleReason 만으론 0 인지 규칙이 없는 건지
+    // 구분이 흐리다). 이 워크스페이스 자기 값이라 노출해도 교차 유출이 아니다.
+    credit: balance,
+    // 마지막 순방 시각(순방 심박 · runAutomationCycle 이 매번 찍는다) + 주기(ms). 화면이
+    // "마지막 확인 N분 전 · 다음 예정 ~M분 후" 를 그린다. 아직 한 번도 안 돌았으면 null.
+    lastCycleAt: lastCycleAt ?? null,
+    cycleEveryMs: AUTOMATION_CYCLE_MS,
     // 순방(runAutomationCycle)이 크레딧 부족으로 정지 중이면 화면도 같은 사유를 보여야
     // 한다 — 규칙이 멀쩡한데 아무것도 안 나가는 상태를 사용자가 추리하게 두지 않는다.
     idleReason: balance <= 0 ? CREDIT_IDLE_REASON : plan.idleReason,

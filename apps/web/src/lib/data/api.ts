@@ -1004,6 +1004,21 @@ export async function fetchAutomation(): Promise<{
   /** 크레딧 부족 등 "왜 아무것도 안 하는지" — 빈 문자열이면 정상 가동. */
   idleReason: string;
   /**
+   * 워크스페이스 크레딧 잔액 (서버 확장분 · 옵셔널). 상태 헤더가 "켜짐 / 크레딧 소진" 을
+   * 가른다. 구버전 서버는 안 내려준다 — 없으면(undefined) 크레딧 사유는 idleReason 으로만.
+   */
+  credit?: number;
+  /**
+   * 마지막 순방(자동 확인) 시각 ISO (서버 확장분 · 옵셔널). 순방 심박이라 rule_run 이 한 줄도
+   * 안 남은 순방도 잡는다. 구버전 서버는 안 내려준다 — 없으면 runs[0].at 폴백.
+   */
+  lastCycleAt?: string | null;
+  /**
+   * 순방 주기(ms · 서버 확장분 · 옵셔널). "다음 확인 예정" = lastCycleAt + cycleEveryMs 추정.
+   * 0 이거나 없으면 다음 예정 표시를 숨긴다(주기 순방 꺼짐 · 수동 확인만).
+   */
+  cycleEveryMs?: number;
+  /**
    * 채널별 실업로드 스위치 (서버 확장분 · 옵셔널). key = "platform:accountId" 또는 platform.
    * **명시적 false 만 "꺼짐"이다** — 키가 없으면 알 수 없음이므로 경고하지 않는다.
    * 구버전 서버는 필드 자체가 없다 — 그때는 게이트 경고를 전부 숨긴다.

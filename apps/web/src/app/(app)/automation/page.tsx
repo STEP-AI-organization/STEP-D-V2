@@ -84,6 +84,26 @@ function originLabelOf(origin: string | undefined): string | null {
 }
 
 /**
+ * 상대 시각 — "방금 / N분 전 / N시간 전 / N일 전", 미래면 "곧 / N분 후". 못 읽으면 null.
+ * now 를 인자로 받아 렌더 때 계산한다(스토어 폴링 재렌더가 갱신 — 전용 타이머를 새로 만들지 않는다).
+ */
+function relTime(iso: string | null | undefined, now: number): string | null {
+  if (!iso) return null;
+  const t = new Date(iso).getTime();
+  if (!Number.isFinite(t)) return null;
+  const diff = t - now;
+  const future = diff > 0;
+  const suffix = future ? "후" : "전";
+  const s = Math.abs(diff) / 1000;
+  if (s < 45) return future ? "곧" : "방금";
+  const m = Math.round(s / 60);
+  if (m < 60) return `${m}분 ${suffix}`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `${h}시간 ${suffix}`;
+  return `${Math.round(h / 24)}일 ${suffix}`;
+}
+
+/**
  * 서버 factory.ts TEMPLATE_SEEDS 의 UI 미러 — 미리보기·슬라이더 초기값용.
  * 서버 시드를 바꾸면 여기도 같이 바꿔야 미리보기가 실제 렌더와 일치한다.
  */
@@ -147,6 +167,11 @@ export default function AutomationPage() {
   const [holds, setHolds] = useState<RuleHold[]>([]);
   const [paused, setPaused] = useState(false);
   const [idleReason, setIdleReason] = useState("");
+  // 상태 헤더용 — 크레딧 잔액 · 마지막 순방 시각 · 순방 주기(ms). 모두 서버 확장분이라
+  // 구버전 서버는 안 내려준다(null = 모름 → 해당 표시만 조용히 숨긴다).
+  const [credit, setCredit] = useState<number | null>(null);
+  const [lastCycleAt, setLastCycleAt] = useState<string | null>(null);
+  const [cycleEveryMs, setCycleEveryMs] = useState<number | null>(null);
   // 채널별 실업로드 스위치 — 구버전 서버는 안 내려준다(null = 모름 → 경고 안 띄움).
   const [gates, setGates] = useState<Record<string, boolean> | null>(null);
   // loading 없이는 fetch 전에 "규칙 없음"이 먼저 보인다 — 로딩/빈/에러 3종을 구분한다.
@@ -160,6 +185,9 @@ export default function AutomationPage() {
       const r = await fetchAutomation();
       setRules(r.rules); setRuns(r.runs); setHolds(r.holds);
       setPaused(r.paused); setIdleReason(r.idleReason);
+      setCredit(typeof r.credit === "number" ? r.credit : null);
+      setLastCycleAt(r.lastCycleAt ?? null);
+      setCycleEveryMs(typeof r.cycleEveryMs === "number" ? r.cycleEveryMs : null);
       setGates(r.gates ?? null);
       setError(null);
     } catch (err) {
@@ -312,7 +340,42 @@ export default function AutomationPage() {
   const toggle = (list: string[], v: string) => list.includes(v) ? list.filter((x) => x !== v) : [...list, v];
 
   // ── 상태바 파생값 ──────────────────────────────────────────────────────────────
-  const running = !paused && rules.some((r) => r.enabled);
+  const hasEnabledRules = rules.some((r) => r.enabled);
+  const running = !paused && hasEnabledRules;
+  // 크레딧 소진 — 순방은 돌지만 채택·게시를 아무것도 하지 않는다(서버가 idleReason 도 세운다).
+  // credit 미수신(구버전)이면 null → "모름" 으로 두고 소진 강조를 하지 않는다.
+  const creditOut = typeof credit === "number" && credit <= 0;
+
+  // 상태 3종 — 일시정지 > 꺼짐(활성 규칙 없음) > 켜짐. 크레딧 소진은 "켜짐이지만 멈춤" 강조.
+  const statusDot = paused
+    ? "var(--sd-idle)"
+    : running ? (creditOut ? "var(--sd-warn)" : "var(--sd-ok)") : "var(--sd-idle)";
+  const statusLabel = loading
+    ? "불러오는 중…"
+    : paused
+      ? "일시정지됨 — 자동 확인을 멈췄습니다"
+      : !hasEnabledRules
+        ? "꺼짐 — 활성 규칙이 없습니다 (아래 ①~④로 시작)"
+        : creditOut
+          ? "켜짐이지만 멈춤 — 크레딧 소진"
+          : "자동 배포 켜짐";
+
+  // 마지막/다음 순방 — 순방 심박(lastCycleAt)이 정본, 없으면 최근 기록(runs[0].at) 폴백.
+  // 다음 예정 = 마지막 + 주기(ms). 주기가 없거나 0(주기 순방 꺼짐)이면 다음 예정은 숨긴다.
+  const nowTs = Date.now();
+  const lastCycleIso = lastCycleAt ?? runs[0]?.at ?? null;
+  const lastRel = relTime(lastCycleIso, nowTs);
+  const nextIso = lastCycleIso && cycleEveryMs && cycleEveryMs > 0
+    ? new Date(new Date(lastCycleIso).getTime() + cycleEveryMs).toISOString()
+    : null;
+  const nextRel = relTime(nextIso, nowTs);
+
+  // 지금 진행 중 — 프로그램 선택과 무관한 전체 집계. 렌더 대기 = 자동 생성됐지만 아직 렌더 전
+  // 클립(automationRuleId 는 서버가 채택 시 저장 · 타입엔 없어 캐스트). 확정 대기 = 보류 건수.
+  const inflightRender = clips.filter(
+    (c) => (c as { automationRuleId?: string }).automationRuleId && !c.rendered,
+  ).length;
+  const heldCount = holds.length;
 
   // 실업로드 채널이 규칙에 있는데 게이트가 꺼져 있으면 — "실행 중"이 착시가 된다.
   const gateBlocked = rules.some(
@@ -541,24 +604,26 @@ export default function AutomationPage() {
         </div>
       )}
 
-      {/* ── 상태 바 — "어떻게 돌아가는지" 를 분명히 ─────────────────────────── */}
+      {/* ── 상태 헤더 — "지금 돌고 있나 · 언제 돌았나 · 왜 안 나가나 · 지금 뭐 하나" ── */}
       <div className="sd-card flex flex-col gap-2 px-3 py-2.5">
-        <div className="flex flex-wrap items-center gap-3">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
           <span
-            className="size-[9px] shrink-0 rounded-full"
-            style={{ background: running ? "var(--sd-ok)" : "var(--sd-idle)" }}
+            className="size-[10px] shrink-0 rounded-full"
+            style={{ background: statusDot }}
             aria-hidden
           />
-          <span className="text-[13px] font-semibold" style={{ color: "var(--sd-fg)" }}>
-            {loading ? "불러오는 중…" : paused ? "일시정지됨" : running ? "자동 확인 켜짐" : "규칙 없음 — 아래 ①~④로 시작"}
+          <span className="text-[14px] font-semibold" style={{ color: "var(--sd-fg)" }}>
+            {statusLabel}
           </span>
-          <span className="sd-mono text-[11px]" style={{ color: "var(--sd-mut)" }}>
-            {runs[0]?.at ? `마지막 확인 ${runs[0].at.slice(0, 16).replace("T", " ")}` : "아직 확인 기록 없음"}
+          {/* 마지막·다음 순방 — 순방 심박(lastCycleAt) 기준 상대 시각. 없으면 최근 기록 폴백. */}
+          <span className="text-[11px]" style={{ color: "var(--sd-mut)" }}>
+            {lastRel ? `마지막 확인 ${lastRel}` : "아직 확인 기록 없음"}
+            {running && nextRel ? <> · 다음 예정 <span style={{ color: "var(--sd-fg-dim)" }}>{nextRel}</span></> : null}
           </span>
           {/* 오늘 합산 — publishedToday 를 내려주는 서버에서만 보인다(구버전은 숨김). */}
           {hasToday && (
             <span className="text-[11px] font-medium" style={{ color: "var(--sd-fg)" }}>
-              오늘 게시 {todayPublished}건 / 한도 {todayQuota}건 · 승인 대기 {holds.length}건
+              오늘 게시 {todayPublished}건 / 한도 {todayQuota}건
             </span>
           )}
           <button type="button" className="sd-btn sd-btn-primary ml-auto" disabled={runningNow} onClick={runNow}>
@@ -568,14 +633,37 @@ export default function AutomationPage() {
             {paused ? "재시작" : "일시정지"}
           </button>
         </div>
+
+        {/* 왜 안 나가는지 — 이 화면 최대 혼란 지점. 서버 idleReason(규칙 없음·크레딧 0·활동
+            시간 밖·할당량 완료·보류 대기)을 눈에 띄게 못박는다(문단 인라인 대신 배너로 승격). */}
+        {!loading && idleReason && (
+          <div
+            className="flex items-start gap-1.5 rounded-[4px] px-2.5 py-1.5 text-[11.5px] font-medium leading-relaxed"
+            style={{ border: "1px solid var(--sd-warn-border)", background: "var(--sd-warn-bg)", color: "var(--sd-warn)" }}
+          >
+            <span aria-hidden>⏸</span>
+            <span>지금 내보내지 않는 이유 — {idleReason}</span>
+          </div>
+        )}
+
+        {/* 지금 진행 중 — 프로그램 선택과 무관한 전체 집계 + 조치 딥링크. */}
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11.5px]" style={{ color: "var(--sd-mut)" }}>
+          <span className="font-semibold" style={{ color: "var(--sd-label)" }}>지금 진행 중</span>
+          <Link href="/clips" className="underline-offset-2 hover:underline">
+            렌더 대기 <b style={{ color: inflightRender ? "var(--sd-fg)" : "var(--sd-mut)" }}>{inflightRender}</b>건
+          </Link>
+          <a href="#holds" className="underline-offset-2 hover:underline">
+            확정 대기(보류) <b style={{ color: heldCount ? "var(--sd-warn)" : "var(--sd-mut)" }}>{heldCount}</b>건
+            {heldCount > 0 ? " — 승인해야 나갑니다" : ""}
+          </a>
+        </div>
+
         {/* 실행 모델을 한 줄로 못박는다 — "어떻게 돌리는지" 가 가장 자주 막히는 지점이다. */}
         <p className="text-[11px] leading-relaxed" style={{ color: "var(--sd-mut)" }}>
           프로그램을 고르고 채널을 연결해 <b style={{ color: "var(--sd-fg)" }}>자동 배포 시작</b>을 누르면,
           <b style={{ color: "var(--sd-fg)" }}> 10분마다 자동 확인</b>해 분석 → 클립 자동 선정 → 렌더 → 배포까지
           이어집니다. 이미 분석이 끝난 회차는 분석을 생략합니다. 결과는 아래{" "}
           <b style={{ color: "var(--sd-fg)" }}>기록</b>에 쌓입니다.
-          {/* idleReason = 서버가 말하는 "왜 안 도는가"(일시정지·크레딧 부족 등) — 눈에 띄게. */}
-          {idleReason ? <b style={{ color: "var(--sd-warn)" }}> · {idleReason}</b> : null}
         </p>
       </div>
 
@@ -942,7 +1030,8 @@ export default function AutomationPage() {
       </section>
 
       {/* ── 승인 대기 — 사람이 확정하는 지점(F6 Invariant) · ④ 아래 유지 ────── */}
-      <section className="flex flex-col gap-2">
+      {/* id="holds" — 상태 헤더의 "확정 대기(보류)" 딥링크 대상. scroll-mt 로 상단 여백. */}
+      <section id="holds" className="flex scroll-mt-4 flex-col gap-2">
         <div className="flex flex-wrap items-center gap-2">
           <h3 className="sd-serif text-[16px] font-semibold" style={{ color: "var(--sd-fg)" }}>승인 대기</h3>
           <span className="text-[11px]" style={{ color: "var(--sd-mut)" }}>
