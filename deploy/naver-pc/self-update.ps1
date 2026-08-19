@@ -136,7 +136,23 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 # Playwright 브라우저는 버전이 올라갈 수 있다. 이미 있으면 즉시 끝난다.
-npx playwright install chromium 2>&1 | Out-Null
+#
+# ⚠️ **여기서 스크립트가 죽으면 안 된다.** PS 5.1 은 네이티브 명령의 stderr 를 NativeCommandError
+# 로 감싸는데, 이 스크립트는 $ErrorActionPreference="Stop" 이라 그게 **종료성 오류**가 된다.
+# npx 는 경고 한 줄만 찍어도 stderr 를 쓴다 → 그 순간 스크립트가 여기서 끝나고 **아래 워커
+# 재시작이 영영 안 돈다**. 증상이 고약하다: 코드는 당겨졌는데(위 reset 은 이미 끝났다) 워커는
+# 옛 프로세스 그대로라, git 으로 보면 최신인데 동작은 옛날이다.
+# (2026-08-19 실측: 윈도우2 가 8/18 12:29 부터 이 지점에서 매번 죽어 워커가 하루 넘게 옛 코드로
+#  돌았다 — 유튜브 다운로드가 계속 실패한 진짜 이유. 로그가 "의존성 동기화" 에서 끊긴 게 표식.)
+# 브라우저 설치는 실패해도 워커 재시작보다 덜 중요하다 — 삼키고 계속 간다.
+try {
+  $ErrorActionPreference = "Continue"
+  npx playwright install chromium 2>&1 | Out-Null
+} catch {
+  Say "playwright install 건너뜀 — $($_.Exception.Message)"
+} finally {
+  $ErrorActionPreference = "Stop"
+}
 
 Say "워커 재시작 ($TaskWorker)"
 # pm2 가 아니라 작업 스케줄러다(Windows 에서 pm2 가 두 번 발목을 잡았다 — install.ps1 주석 참고).
