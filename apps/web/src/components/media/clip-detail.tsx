@@ -13,7 +13,7 @@
  *    설명 10자 이상이 필수다 — 그걸 모르면 발행 시점에야 막힌다.
  *  - **사람이 고친 값은 재생성이 덮지 않는다**(서버가 `edited` 로 보존). 그 사실을 배지로 보여준다.
  */
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
   generateClipMetadata,
@@ -50,10 +50,13 @@ export function ClipDetail({
   clip,
   programTitle,
   onClose,
+  onPublish,
 }: {
   clip: Clip & { channelMeta?: Record<string, ChannelMeta> };
   programTitle?: string;
   onClose: () => void;
+  /** 이 미디어를 배포 모달로 넘긴다 — 메타 검토 후 같은 자리에서 배포(배포 전 메타 설정 플로우). */
+  onPublish?: () => void;
 }) {
   // 스토어를 갱신해 둔다 — 안 하면 닫았다 다시 열었을 때 옛 값이 보인다.
   const { refresh } = useAppData();
@@ -94,6 +97,17 @@ export function ClipDetail({
       setErr(e instanceof Error ? e.message : String(e));
     } finally { setBusy(null); }
   }, [clip.id, refresh]);
+
+  // 열 때 메타가 없으면 한 번 자동 생성한다 — "배포 전에 메타를 만들어 두고 간다"(사용자 2026-08-19).
+  // 실패해도 조용히 둔다(수동 '메타데이터 만들기' 버튼이 그대로 있다).
+  const autoGenTried = useRef(false);
+  useEffect(() => {
+    if (autoGenTried.current || busy) return;
+    if (Object.keys(meta).length === 0) {
+      autoGenTried.current = true;
+      void generate();
+    }
+  }, [meta, busy, generate]);
 
   const save = useCallback(async () => {
     setBusy("save"); setErr(null); setNote(null);
@@ -139,7 +153,12 @@ export function ClipDetail({
               {Math.round(clip.durationSec ?? 0)}초 · {clip.aspectRatio}
             </div>
           </div>
-          <button type="button" className="sd-btn ml-auto" onClick={onClose}>닫기 (Esc)</button>
+          <div className="ml-auto flex items-center gap-2">
+            {onPublish && clip.rendered && (
+              <button type="button" className="sd-btn sd-btn-primary" onClick={onPublish}>배포</button>
+            )}
+            <button type="button" className="sd-btn" onClick={onClose}>닫기 (Esc)</button>
+          </div>
         </div>
 
         {/* 영상 — 발행되는 것은 렌더 결과물이다. 없으면 없다고 말한다. */}

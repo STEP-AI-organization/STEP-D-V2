@@ -176,6 +176,7 @@ function MediaView() {
               programs.find((p) => p.id === episodes.find((e) => e.id === c.episodeId)?.programId)?.title
             }
             onClose={() => setDetailId(null)}
+            onPublish={role.publish ? () => { setDetailId(null); setPublishTarget([c.id]); } : undefined}
           />
         );
       })()}
