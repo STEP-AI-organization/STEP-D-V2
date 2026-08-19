@@ -132,6 +132,8 @@ export interface AnalysisTranscriptSegment {
   appealScore?: number;
   /** STT 화자분리의 익명 라벨(발화자 1, 발화자 2 …). 운영자가 프론트에서 이름을 지정할 수 있다. */
   speaker?: string;
+  /** 단어 타이밍(Soniox·whisper 경로). 자막을 화면 단위로 끊을 때 경계로 쓴다 — 없으면 음절 비례. */
+  words?: { word: string; start: number; end: number }[];
 }
 export interface NarrativeSegment {
   block_index: number;

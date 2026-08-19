@@ -188,6 +188,131 @@ export function synthesizeCaptionWords(text: string, start: number, end: number)
   return out;
 }
 
+/**
+ * 자막 한 화면 최대 글자수(공백 포함) — STT 세그먼트를 통째로 띄우지 않기 위한 상한.
+ *
+ * 9:16 세로 화면에서 자막 기본 크기(화면 높이 4.4%)면 한 줄에 들어가는 한글이 대략 11자다.
+ * STT 한 세그먼트는 40~60자가 예사라 그대로 그리면 4~5줄이 화면 절반을 덮는다.
+ * 18자 = 최대 두 줄. **서버 index.ts::CAPTION_CHUNK_MAX_CHARS 와 같은 숫자여야 한다** —
+ * 갈라지면 편집 화면에서 본 자막 덩어리와 결과물 덩어리가 달라진다(overlay-parity 가 강제).
+ */
+export const CAPTION_CHUNK_MAX_CHARS = 18;
+/** 청크 최소 노출(초). 이보다 짧게 나뉘면 앞 청크에 도로 붙인다 — 깜빡이면 오히려 못 읽는다. */
+export const CAPTION_CHUNK_MIN_SEC = 0.7;
+
+/** 자막 한 조각(초). 서버 Caption 미러. */
+export interface CaptionChunk { start: number; end: number; text: string }
+
+/**
+ * 한 문장을 화면 단위(최대 maxChars)로 끊는다. 서버 index.ts::splitCaptionText 의 미러 —
+ * 같은 입력에 같은 조각이 나와야 미리보기와 결과물의 끊는 자리가 같다.
+ */
+export function splitCaptionText(text: string, maxChars: number): string[] {
+  const tokens = text.trim().split(/\s+/).filter(Boolean);
+  if (!tokens.length) return [];
+  const max = Math.max(6, Math.floor(maxChars));
+  const out: string[] = [];
+  let cur: string[] = [];
+  let len = 0;
+  const flush = () => { if (cur.length) { out.push(cur.join(" ")); cur = []; len = 0; } };
+  for (const tok of tokens) {
+    const tl = [...tok].length;
+    if (cur.length && len + 1 + tl > max) flush();
+    len = cur.length ? len + 1 + tl : tl;
+    cur.push(tok);
+    // 쉼표는 절반은 채웠을 때만 — 안 그러면 "근데," 같은 두 글자짜리 화면이 나온다.
+    if (/[.!?…]$/.test(tok) || (/[,、·]$/.test(tok) && len >= max / 2)) flush();
+  }
+  flush();
+  // 꼬리 한 조각이 너무 짧으면 앞에 붙인다 — 단어 하나가 홀로 깜빡이는 게 제일 눈에 거슬린다.
+  if (out.length >= 2) {
+    const last = out[out.length - 1];
+    const prev = out[out.length - 2];
+    if ([...last].length <= 4 && [...prev].length + 1 + [...last].length <= max + 4) {
+      out.splice(out.length - 2, 2, `${prev} ${last}`);
+    }
+  }
+  return out;
+}
+
+/** 글자수 세기 — 공백·문장부호 제외(refine 이 문장부호를 덧붙이므로 빼야 words 와 맞는다). */
+function coreChars(s: string): number {
+  return [...s.replace(/[\s\p{P}\p{S}]/gu, "")].length;
+}
+
+/**
+ * 조각 경계를 실제 STT 타이밍에 맞춘다 — 서버 caption-chunk.ts::alignChunkEnds 의 미러.
+ * word 입자 크기를 가정하지 않는다(Soniox=음절 · whisper=어절) — 글자수 누적으로 소비한다.
+ */
+function alignChunkEnds(words: CaptionWord[], parts: string[]): number[] | null {
+  if (!Array.isArray(words) || !words.length) return null;
+  const wlen = words.map((w) => coreChars(String(w?.word ?? "")));
+  const totalW = wlen.reduce((a, b) => a + b, 0);
+  const totalP = parts.reduce((a, p) => a + coreChars(p), 0);
+  if (!totalW || !totalP || Math.abs(totalW - totalP) > Math.max(2, totalP * 0.2)) return null;
+  const ends: number[] = [];
+  let wi = 0;
+  let cum = 0;
+  let target = 0;
+  for (const p of parts) {
+    target += coreChars(p);
+    while (wi < words.length && cum < target) { cum += wlen[wi]; wi++; }
+    const e = Number(words[Math.max(0, wi - 1)]?.end);
+    if (!Number.isFinite(e)) return null;
+    ends.push(e);
+  }
+  return ends;
+}
+
+/**
+ * STT 세그먼트 하나를 화면 단위 자막 여러 개로 쪼갠다 (시간 분배 포함).
+ * 서버 caption-chunk.ts::chunkCaption 의 미러 — 미리보기는 word 색 강조를 안 그리므로 words 는
+ * **경계 계산에만** 쓰고 결과엔 싣지 않는다(시간 경계는 서버와 동일하게 나온다).
+ */
+export function chunkCaption(
+  cap: { start: number; end: number; text: string; words?: CaptionWord[] },
+  maxChars: number,
+): CaptionChunk[] {
+  const text = String(cap.text ?? "").trim();
+  const dur = cap.end - cap.start;
+  if (!text || !(dur > 0)) return [];
+  const parts = splitCaptionText(text, maxChars);
+  if (parts.length <= 1) return [{ start: cap.start, end: cap.end, text }];
+
+  const aligned = alignChunkEnds(Array.isArray(cap.words) ? cap.words : [], parts);
+  const weights = parts.map((p) => Math.max(1, [...p.replace(/\s+/g, "")].length));
+  const total = weights.reduce((a, b) => a + b, 0);
+
+  const split: CaptionChunk[] = [];
+  let t = cap.start;
+  parts.forEach((p, i) => {
+    const raw = i === parts.length - 1
+      ? cap.end
+      : aligned
+        ? aligned[i]
+        : t + (weights[i] / total) * dur;
+    const end = Math.max(t + 0.05, Math.min(cap.end, raw));
+    split.push({ start: t, end, text: p });
+    t = end;
+  });
+
+  const merged: CaptionChunk[] = [];
+  for (const c of split) {
+    const prev = merged[merged.length - 1];
+    if (prev && c.end - c.start < CAPTION_CHUNK_MIN_SEC) {
+      prev.end = c.end;
+      prev.text = `${prev.text} ${c.text}`;
+      continue;
+    }
+    merged.push({ ...c });
+  }
+  if (merged.length >= 2 && merged[0].end - merged[0].start < CAPTION_CHUNK_MIN_SEC) {
+    const [a, b] = merged;
+    merged.splice(0, 2, { start: a.start, end: b.end, text: `${a.text} ${b.text}` });
+  }
+  return merged;
+}
+
 /** Keyword (content-word) indices to colour-emphasize.
  *  ⚠️ 위 synthesizeCaptionWords 와 같은 이유로 현재 호출자 0 — 동기화 대상 아님. */
 export function pickKeywordIdx(tokens: string[]): Set<number> {
@@ -346,6 +471,8 @@ export interface EditorState {
   captionSize?: number;
   /** 자막 색(#RRGGBB). 미지정이면 captionStyle 기본색. */
   captionColor?: string;
+  /** 자막 한 화면 최대 글자수. 미지정이면 CAPTION_CHUNK_MAX_CHARS(18). 서버 렌더도 같은 키를 읽는다. */
+  captionMaxChars?: number;
   showSafeArea: boolean;
   elements: EditorElement[];
   trimIn: number; // seconds
@@ -663,6 +790,11 @@ export function ensureTracks(state: EditorState, durationSec: number, segmentSta
     captionsOn: typeof state.captionsOn === "boolean" ? state.captionsOn : true,
     highlightColor: state.highlightColor ?? "#FFD400",
     keywordColor: state.keywordColor ?? state.highlightColor ?? "#FFD400",
+    // 한 화면 글자수 — 6 미만이면 조각이 깜빡이기만 해서 무시하고 기본값으로 돌린다.
+    captionMaxChars:
+      typeof state.captionMaxChars === "number" && state.captionMaxChars >= 6
+        ? Math.round(state.captionMaxChars)
+        : undefined,
     // 종횡비 — 구형 저장분(bare "9:16" + fit + bgType, 1:1/4:5)을 5-값 enum 으로 승격.
     // aspect-presets.normalizeAspectPreset 이 결과물 무회귀 등가로 접는다(cover→꽉채우기,
     // contain→레터박스, blur 는 레터박스 하위옵션으로만 유지). 이미 enum 이면 그대로.

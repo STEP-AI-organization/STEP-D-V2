@@ -52,6 +52,10 @@ import {
 import { buildInvoice, invoiceFromTopup, issuerInfo, monthRange, parseMonth, supplierFromEnv } from "./invoice.ts";
 import { checkProfile, incompleteFields } from "./business.ts";
 import {
+  captionMaxCharsOf, chunkCaption,
+  type Caption as CaptionT, type CaptionWord as CaptionWordT,
+} from "./caption-chunk.ts";
+import {
   API_SCOPES, bearerKey, checkRoute, generateKey, hashKey, keyBlockReason, keyPrefix,
   normalizeScopes, shouldTouchLastUsed,
 } from "./api-keys.ts";
@@ -4118,8 +4122,9 @@ function assTime(sec: number): string {
  * rebase to render-relative seconds (0-based). Keeps only segments that overlap
  * [winStart, winEnd] and carry text — the spoken subtitles that belong on this clip.
  */
-type CaptionWord = { word: string; start: number; end: number };
-type Caption = { start: number; end: number; text: string; words?: CaptionWord[] };
+// 자막 조각 타입·끊기 규칙은 caption-chunk.ts 가 정본(순수 함수라 단위 테스트가 붙는다).
+type CaptionWord = CaptionWordT;
+type Caption = CaptionT;
 
 /**
  * 컷 boundary를 STT word 경계에 스냅한다 — 렌더가 대사 중간에서 시작/끊기는 걸 원천 차단.
@@ -4626,7 +4631,11 @@ function buildEditorAss(
     // 인라인 색 태그 — 비카라오케 문장에 얹는다. **별도 변수로 뺀다**: push() 안에 중첩 백틱이
     // 생기면 overlay-parity 스캔이 자막 이벤트를 못 센다(정규식이 `Dialogue:[^`]*` 로 잡는다).
     const capColorInline = capColorOverride ? `\\1c${capColorOverride}` : "";
-    for (const cap of Array.isArray(captions) ? captions : []) {
+    // 화면 단위로 끊는다 — STT 세그먼트 한 덩어리(40~60자)가 통째로 뜨면 쇼츠에선 화면 절반이
+    // 자막이 된다. 미리보기(editor-shell captionText)가 **같은 함수·같은 상한**으로 끊어 보여준다.
+    const capMaxChars = captionMaxCharsOf(es);
+    const capChunks = (Array.isArray(captions) ? captions : []).flatMap((c) => chunkCaption(c, capMaxChars));
+    for (const cap of capChunks) {
       const text = String(cap.text ?? "").trim();
       if (!text || !(cap.end > cap.start)) continue;
       // ⚠️ 카라오케(단어별 하이라이트)는 **명시적으로 켤 때만** 굽는다(karaoke === true).

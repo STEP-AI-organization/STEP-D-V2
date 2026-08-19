@@ -9,6 +9,8 @@ import { useToast } from "@/components/ui/toast";
 import { getStreamUrl, getMediaAnalysis, generateUploadMetadata, API_BASE, ApiError, type AnalysisTranscriptSegment, type AnalysisScene , fetchShortsTemplates, type FrameTemplate } from "@/lib/data/api";
 import {
   applyTemplate,
+  chunkCaption,
+  CAPTION_CHUNK_MAX_CHARS,
   ensureTracks,
   makeInitialEditorState,
   type AspectKey,
@@ -660,6 +662,9 @@ export function EditorShell({ clipId }: { clipId: string }) {
   const clipStartAbs = previewingMaster
     ? 0
     : Number(sourceRecEarly?.startTime ?? clip?.startTime ?? 0);
+  // 세그먼트는 통째로 띄우지 않는다 — 쇼츠 세로 화면에서 40~60자짜리 STT 한 덩어리는 4~5줄이
+  // 되어 화면 절반을 덮는다(2026-08-19). 렌더(index.ts::chunkCaption)와 **같은 함수·같은 상한**
+  // 으로 끊고 지금 시각의 조각만 그린다 — 편집 화면에서 본 덩어리가 곧 결과물 덩어리가 된다.
   const captionText = useMemo(() => {
     if (!transcript) return undefined;
     const t = videoTime + clipStartAbs + (state.offsetMs || 0) / 1000; // master-absolute seconds
@@ -667,8 +672,16 @@ export function EditorShell({ clipId }: { clipId: string }) {
       (s) => Number(s.start ?? 0) <= t && t < Number(s.end ?? Number(s.start ?? 0) + 3),
     );
     const text = (seg?.text ?? "").trim();
-    return seg && text ? text : undefined;
-  }, [transcript, videoTime, clipStartAbs, state.offsetMs]);
+    if (!seg || !text) return undefined;
+    const segStart = Number(seg.start ?? 0);
+    const chunks = chunkCaption(
+      { start: segStart, end: Number(seg.end ?? segStart + 3), text, words: seg.words },
+      state.captionMaxChars ?? CAPTION_CHUNK_MAX_CHARS,
+    );
+    if (!chunks.length) return undefined;
+    const hit = chunks.find((c) => c.start <= t && t < c.end) ?? chunks[chunks.length - 1];
+    return hit.text || undefined;
+  }, [transcript, videoTime, clipStartAbs, state.offsetMs, state.captionMaxChars]);
 
   const togglePlay = useCallback(() => {
     const v = videoEl;
@@ -676,9 +689,12 @@ export function EditorShell({ clipId }: { clipId: string }) {
     if (v.paused) {
       // Snap into the trim window before playing so the preview matches what the render
       // will cut. trim is in the video's own timeline (master or clip file) — no offset.
-      const lo = state.trimIn;
+      // ⚠️ 유효한 창(hi > lo)일 때만 스냅한다. 퇴화·역전 창(hi ≤ lo)에서 스냅하면 재생 즉시
+      // lo 로 되돌아가고, 타임라인 루프도 매 프레임 lo 로 리셋해 0:00 에 고정된다 — 그 경우엔
+      // 스냅하지 않고 현재 위치에서 그대로 재생시킨다(재생이 반드시 진행되도록).
+      const lo = Math.max(0, state.trimIn);
       const hi = state.trimOut;
-      if (v.currentTime < lo || v.currentTime >= hi - 0.05) v.currentTime = lo;
+      if (hi > lo + 0.05 && (v.currentTime < lo || v.currentTime >= hi - 0.05)) v.currentTime = lo;
       void v.play();
     } else {
       v.pause();

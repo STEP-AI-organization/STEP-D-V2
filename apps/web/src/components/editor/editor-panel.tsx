@@ -23,6 +23,7 @@ import type { ClipReframe, ReframeMode } from "@/lib/types";
 import { Button } from "@/components/ui/button";
 import {
   BG_SWATCHES,
+  CAPTION_CHUNK_MAX_CHARS,
   CAPTION_STYLES,
   CHANNEL_BADGE_PRESETS,
   CHANNEL_ICON_PRESETS,
@@ -877,6 +878,24 @@ function CaptionsTab({ state, update }: { state: EditorState; update: Update }) 
             <option key={k} value={k}>{v}</option>
           ))}
         </select>
+      </div>
+      {/* 한 화면 글자수 — 세그먼트를 통째로 띄우면 쇼츠에선 4~5줄이 화면 절반을 덮는다.
+          미리보기와 렌더가 같은 상한으로 끊는다(presets.ts / index.ts::chunkCaption). */}
+      <div>
+        <Label>
+          한 화면 글자수 {state.captionMaxChars ?? CAPTION_CHUNK_MAX_CHARS}자
+        </Label>
+        <input
+          type="range"
+          min={8}
+          max={40}
+          value={state.captionMaxChars ?? CAPTION_CHUNK_MAX_CHARS}
+          onChange={(e) => update({ captionMaxChars: Number(e.target.value) })}
+          className="w-full"
+        />
+        <div className="mt-1 text-[11px] text-zinc-500">
+          말자막을 이 길이로 끊어 순서대로 띄운다. 세로 화면 한 줄이 대략 11자 — 기본 {CAPTION_CHUNK_MAX_CHARS}자면 최대 두 줄.
+        </div>
       </div>
       <div>
         <Label>강조 색 (현재 단어)</Label>

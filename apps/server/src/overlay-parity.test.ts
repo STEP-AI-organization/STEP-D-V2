@@ -47,6 +47,47 @@ describe("자막 크기표 — 웹 cqh 와 서버 CAPTION_PCT 가 같아야 한�
   });
 });
 
+/**
+ * 자막 끊기(청킹) 파리티 — STT 세그먼트를 화면 단위로 쪼개는 규칙은 미리보기와 렌더가 같아야 한다.
+ *
+ * 세그먼트 한 덩어리(40~60자)를 통째로 띄우면 9:16 에서 4~5줄이 화면 절반을 덮는다. 그래서 양쪽이
+ * 각자 끊는데, **상한이 갈라지면 편집 화면에서 본 덩어리와 결과물 덩어리가 달라진다** — 자리(위치·
+ * 크기)와 똑같은 계열의 파리티 표면이다.
+ */
+describe("자막 청킹 — 웹 상한과 서버 상한이 같아야 한다", () => {
+  const WEB_PRESETS = fs.readFileSync(path.resolve(HERE, "../../web/src/lib/editor/presets.ts"), "utf-8");
+  const CHUNK = fs.readFileSync(path.join(HERE, "caption-chunk.ts"), "utf-8");
+
+  it("CAPTION_CHUNK_MAX_CHARS · CAPTION_CHUNK_MIN_SEC 가 1:1", () => {
+    for (const [name, re] of [
+      ["CAPTION_CHUNK_MAX_CHARS", /CAPTION_CHUNK_MAX_CHARS = ([\d.]+);/],
+      ["CAPTION_CHUNK_MIN_SEC", /CAPTION_CHUNK_MIN_SEC = ([\d.]+);/],
+    ] as const) {
+      const srv = re.exec(CHUNK);
+      const web = re.exec(WEB_PRESETS);
+      assert.ok(srv, `서버 ${name} 선언을 못 찾았다`);
+      assert.ok(web, `웹 ${name} 선언을 못 찾았다`);
+      assert.equal(Number(srv![1]), Number(web![1]),
+        `${name} 가 서버 ${srv![1]} / 웹 ${web![1]} — 미리보기와 결과물의 자막 끊는 자리가 달라진다`);
+    }
+  });
+
+  it("렌더가 실제로 청킹을 거쳐 자막 이벤트를 만든다", () => {
+    // 함수만 있고 배선이 없으면 결과물엔 여전히 세그먼트 통짜가 박힌다(이 리포 최빈 실패모드).
+    assert.match(SERVER, /const capChunks = \(Array\.isArray\(captions\) \? captions : \[\]\)\.flatMap\(\(c\) => chunkCaption\(c, capMaxChars\)\)/,
+      "buildEditorAss 가 captions 를 chunkCaption 으로 안 쪼개면 자막 끊기가 결과물에 미도달한다");
+    assert.match(SERVER, /captionMaxChars/, "렌더가 captionMaxChars 오버라이드를 안 읽는다");
+  });
+
+  it("미리보기가 같은 함수로 끊어 현재 조각만 그린다", () => {
+    const shell = fs.readFileSync(path.resolve(HERE, "../../web/src/components/editor/editor-shell.tsx"), "utf-8");
+    assert.match(shell, /chunkCaption\(/,
+      "미리보기가 세그먼트를 통째로 그리면 편집 화면에서 본 자막 양과 결과물이 갈라진다");
+    assert.match(shell, /state\.captionMaxChars \?\? CAPTION_CHUNK_MAX_CHARS/,
+      "미리보기가 captionMaxChars 오버라이드를 안 읽으면 슬라이더 조절이 화면에 반영되지 않는다");
+  });
+});
+
 describe("ASS Fontsize 보정 상수 — 실제 폰트 메트릭에서 나와야 한다", () => {
   it("ASS_FS_PER_CSS_PX == (winAscent+winDescent)/unitsPerEm (설치 폰트 실측)", () => {
     // ⚠️ **Pretendard 만 스캔한다.** ASS 캡션 스타일(index.ts 의 Default·BoxLabel·
