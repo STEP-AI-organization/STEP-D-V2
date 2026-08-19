@@ -121,8 +121,9 @@ export function EditorPanel({
               key={t.key}
               onClick={() => setTab(t.key)}
               className={cn(
-                "flex flex-1 flex-col items-center gap-1 py-2.5 text-[11px] transition-colors",
-                tab === t.key ? "bg-zinc-800 text-white" : "text-zinc-400 hover:text-white",
+                // P5 — 활성 탭 accent 를 단일 cyan 으로(AENA 밑줄식). 비활성은 투명 테두리로 레이아웃 유지.
+                "flex flex-1 flex-col items-center gap-1 border-b-2 py-2.5 text-[11px] transition-colors",
+                tab === t.key ? "border-cyan-500 bg-zinc-800 text-white" : "border-transparent text-zinc-400 hover:text-white",
               )}
             >
               <Icon className="size-4" />
@@ -312,8 +313,8 @@ function TextTab({ state, update, kf }: { state: EditorState; update: Update; kf
               <div className="mt-2 flex items-center gap-2">
                 <input
                   type="range"
-                  min={16}
-                  max={56}
+                  min={48}
+                  max={168}
                   value={line.size}
                   onChange={(e) => setLine(line.id, { size: Number(e.target.value) })}
                   className="flex-1"
@@ -367,7 +368,7 @@ function TextTab({ state, update, kf }: { state: EditorState; update: Update; kf
                 <Toggle
                   on={!!line.stroke}
                   onChange={() =>
-                    setLine(line.id, { stroke: line.stroke ? undefined : { color: "#000000", width: 3 } })
+                    setLine(line.id, { stroke: line.stroke ? undefined : { color: "#000000", width: 9 } })
                   }
                   label="외곽선"
                 />
@@ -376,8 +377,8 @@ function TextTab({ state, update, kf }: { state: EditorState; update: Update; kf
                     <div className="flex items-center gap-2">
                       <input
                         type="range"
-                        min={1}
-                        max={12}
+                        min={3}
+                        max={36}
                         value={line.stroke.width}
                         onChange={(e) =>
                           setLine(line.id, { stroke: { color: line.stroke!.color, width: Number(e.target.value) } })
@@ -417,7 +418,8 @@ function TextTab({ state, update, kf }: { state: EditorState; update: Update; kf
             update({
               titleLines: [
                 ...state.titleLines,
-                { id: `t${Date.now()}`, text: "새 줄", size: 24, color: "#FFFFFF" },
+                // 크기 = 출력 px(정규화된 state 에 바로 추가). 구 24 스테이지 px × 3 = 72.
+                { id: `t${Date.now()}`, text: "새 줄", size: 72, color: "#FFFFFF" },
               ],
             })
           }
@@ -516,26 +518,26 @@ function ChannelTab({ state, update }: { state: EditorState; update: Update }) {
       </div>
       <div>
         <Label>
-          아이콘 크기 {state.channelIconSize ?? 24}px
+          아이콘 크기 {state.channelIconSize ?? 72}px
         </Label>
         <input
           type="range"
-          min={12}
-          max={120}
-          value={state.channelIconSize ?? 24}
+          min={36}
+          max={360}
+          value={state.channelIconSize ?? 72}
           onChange={(e) => update({ channelIconSize: Number(e.target.value) })}
           className="w-full"
         />
       </div>
       <div>
         <Label>
-          글자 크기 {state.channelLabelSize ?? 14}px
+          글자 크기 {state.channelLabelSize ?? 42}px
         </Label>
         <input
           type="range"
-          min={10}
-          max={40}
-          value={state.channelLabelSize ?? 14}
+          min={30}
+          max={120}
+          value={state.channelLabelSize ?? 42}
           onChange={(e) => update({ channelLabelSize: Number(e.target.value) })}
           className="w-full"
         />
@@ -547,7 +549,7 @@ function ChannelTab({ state, update }: { state: EditorState; update: Update }) {
         </Label>
         <div className="space-y-2">
           {(state.channelExtraLines ?? []).map((line) => {
-            const size = line.size ?? Math.round((state.channelLabelSize ?? 14) * 0.75);
+            const size = line.size ?? Math.round((state.channelLabelSize ?? 42) * 0.75);
             return (
               <div key={line.id} className="rounded-md border border-zinc-800 p-2">
                 <div className="flex items-center gap-1">
@@ -579,8 +581,8 @@ function ChannelTab({ state, update }: { state: EditorState; update: Update }) {
                   <span className="w-16 text-[10px] tabular-nums text-zinc-500">크기 {size}px</span>
                   <input
                     type="range"
-                    min={8}
-                    max={32}
+                    min={24}
+                    max={96}
                     value={size}
                     onChange={(e) =>
                       update({
@@ -741,7 +743,8 @@ function LayoutTab({
                 if (o.k === "none") { update({ titleLines: [] }); return; }
                 if (o.k === "hook1") {
                   const text = lines.map((l) => l.text).join(" ").trim();
-                  update({ titleLines: text ? [{ id: "t1", text, size: 30, color: "#FF4040" }] : [], titleY: 11 });
+                  // size = 출력 px(정규화된 state). 구 30 스테이지 px × 3 = 90.
+                  update({ titleLines: text ? [{ id: "t1", text, size: 90, color: "#FF4040" }] : [], titleY: 11 });
                   return;
                 }
                 // hook2 — 줄 유지, 첫 줄 흰색·둘째 줄 강조색 (한 줄뿐이면 통째 강조색)
@@ -775,8 +778,9 @@ function LayoutTab({
                 update({
                   showChannel: true,
                   channelY: 88,
-                  channelLabelSize: 30,
-                  channelIconSize: 40,
+                  // 크기 = 출력 px(정규화된 state). 구 30/40 스테이지 px × 3 = 90/120.
+                  channelLabelSize: 90,
+                  channelIconSize: 120,
                   // 아이콘은 프로그램 설정(brandIconDataUrl)에서 오고, 여기선 켜고 끄기만.
                   channelIconOff: o.k === "title",
                 } as Partial<EditorState>);

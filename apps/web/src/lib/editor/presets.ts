@@ -332,9 +332,10 @@ export function overlayVisibleAt(o: { startSec?: number; endSec?: number }, t: n
   return true;
 }
 
-/** Default font size (px) for a freshly added element. */
+/** Default font size (**출력 px**) for a freshly added element. 정규화된 state 에 바로 넣는다
+ *  (구 스테이지 px 40/14 × 3(세로 9:16) = 120/42). 크기는 이제 절대 출력 px 라 aspect 무관. */
 export function defaultElementSize(type: ElementType): number {
-  return type === "arrow" ? 40 : 14;
+  return type === "arrow" ? 120 : 42;
 }
 
 /** Speed keyframe: from `time` (track-timeline seconds) onward, play at `speed`. */
@@ -497,6 +498,95 @@ export interface EditorState {
    *    사용자가 AI 추천 창 밖까지 트림을 확장할 수 있게 하면서부터 사용.
    *  ensureTracks가 옛 저장분을 감지해 "master"로 마이그레이션한다. */
   trimBase?: "segment" | "master";
+  /** 크기 좌표 basis 표시.
+   *  - undefined(또는 없음): 옛 저장분·factory 시드 — 크기가 구 ~640 스테이지 px.
+   *  - "output": 새 저장분 — 크기가 출력 해상도 px(1080×1920 등). 미리보기 스테이지가 출력
+   *    해상도 그대로라 편집 화면 = 결과물. normalizeEditorCoords 가 옛 값을 여기로 1회 올린다. */
+  coordBasis?: "output";
+}
+
+// ── 좌표 basis (출력 해상도 px) ───────────────────────────────────────────────
+//
+// **단일 basis = 출력 해상도(1080×1920 등) px.** 오버레이 크기(line.size · channelLabelSize ·
+// stroke.width · channelIconSize · channelExtraLines[].size · element.size)는 전부 출력 px 로
+// 저장·표시·렌더한다 — 미리보기 스테이지가 출력 해상도 그대로라(editor-preview.tsx: 고정 캔버스
+// + 단일 scale transform) 편집 화면 = 결과물(CSS↔PNG 크기 불일치·튐 없음).
+//
+// 예전엔 크기가 ~640px 캐논 스테이지 기준이었고 서버가 렌더 때 ×(H/640) 로 출력 px 로 올렸다 —
+// 그 이중 basis(저장=스테이지px · 렌더=출력px)가 버그의 근원이었다. 이제 저장부터 출력 px 로
+// 통일하고, 옛 저장분·factory 시드(둘 다 스테이지 px)는 **로드/렌더 시 1회 정규화**로 ×outScale
+// 해 결과가 1픽셀도 안 바뀌게 올린다. coordBasis:"output" 마커로 멱등(재적용 안 됨) 보장.
+// ⚠️ designStageH·outputHeight·outputWidth 는 **서버 index.ts renderDims 와 1:1**(overlay-parity 강제).
+
+/** 설계-스테이지 높이(px) — 구 canonicalStageH(= 서버 renderDims.stageH). 출력 px 환산의 분모. */
+export function designStageH(aspect: string): number {
+  switch (aspect) {
+    case "16:9": return (900 * 1080) / 1920; // 506.25
+    case "1:1": return 900;
+    case "4:5": return 640;
+    default: return 640; // 세로 9:16 계열 전부(letterbox·crop-full·crop-main·crop-sub·bare)
+  }
+}
+/** 출력 해상도 높이(px) — 서버 renderDims.H 미러. */
+export function outputHeight(aspect: string): number {
+  switch (aspect) {
+    case "16:9": return 1080;
+    case "1:1": return 1080;
+    case "4:5": return 1350;
+    default: return 1920;
+  }
+}
+/** 출력 해상도 너비(px) — 서버 renderDims.W 미러. */
+export function outputWidth(aspect: string): number {
+  return aspect === "16:9" ? 1920 : 1080;
+}
+/**
+ * 구 스테이지 px → 출력 px 배율 (= 마이그레이션 계수 = 서버 렌더 scale = H/stageH).
+ *   세로 9:16 = 1920/640 = 3 · 16:9 = 1080/506.25 = 2.1333 · 1:1 = 1.2 · 4:5 = 1350/640 = 2.109375
+ */
+export function outScale(aspect: string): number {
+  return outputHeight(aspect) / designStageH(aspect);
+}
+
+/**
+ * editorState 크기 필드를 출력 px basis 로 정규화(멱등). coordBasis:"output" 이면 그대로,
+ * 아니면 모든 크기(제목·채널·요소·외곽선)를 ×outScale(aspect) 해 출력 px 로 올리고 마킹한다.
+ * 위치(%)·시각(초)·자막(%높이 기준 captionY/Size)은 해상도 독립이라 건드리지 않는다.
+ * **옛 저장분·factory 시드(둘 다 스테이지 px · 마커 없음)를 결과 무회귀로 올리는 단일 지점.**
+ */
+export function normalizeEditorCoords<T extends Partial<EditorState>>(state: T): T {
+  if (!state || typeof state !== "object") return state;
+  if ((state as { coordBasis?: string }).coordBasis === "output") return state;
+  const f = outScale(String((state as EditorState).aspect ?? "9:16-letterbox"));
+  const scaleNum = (v: unknown): unknown =>
+    typeof v === "number" && Number.isFinite(v) && v > 0 ? v * f : v;
+  return {
+    ...state,
+    coordBasis: "output",
+    titleLines: Array.isArray(state.titleLines)
+      ? state.titleLines.map((l) => ({
+          ...l,
+          size: typeof l.size === "number" && l.size > 0 ? l.size * f : l.size,
+          ...(l.stroke && typeof l.stroke.width === "number"
+            ? { stroke: { ...l.stroke, width: l.stroke.width * f } }
+            : {}),
+        }))
+      : state.titleLines,
+    channelLabelSize: scaleNum(state.channelLabelSize) as number | undefined,
+    channelIconSize: scaleNum(state.channelIconSize) as number | undefined,
+    channelExtraLines: Array.isArray(state.channelExtraLines)
+      ? state.channelExtraLines.map((l) => ({
+          ...l,
+          size: typeof l.size === "number" && l.size > 0 ? l.size * f : l.size,
+        }))
+      : state.channelExtraLines,
+    elements: Array.isArray(state.elements)
+      ? state.elements.map((e) => ({
+          ...e,
+          size: typeof e.size === "number" && e.size > 0 ? e.size * f : e.size,
+        }))
+      : state.elements,
+  } as T;
 }
 
 // 컨테이너 라벨·비율. 5-값 enum(세로는 전부 9/16) + 구형 4:5·1:1. 라벨은 aspect-presets 프리셋과
@@ -575,13 +665,15 @@ export const CHANNEL_BADGE_PRESETS: ChannelBadgePreset[] = [
     id: "circle_inline",
     label: "원형 배지",
     hint: "가장 무난 · YouTube 기본 스타일",
-    patch: { channelLayout: "horizontal", channelIconShape: "circle", channelIconSize: 24, channelLabelSize: 14 },
+    // 크기는 **출력 px**(정규화된 state 에 바로 패치) — 구 스테이지 px 24/14 × 3 = 72/42.
+    patch: { channelLayout: "horizontal", channelIconShape: "circle", channelIconSize: 72, channelLabelSize: 42 },
   },
   {
     id: "logo_stack",
     label: "로고 블록",
     hint: "아이콘 위·이름 아래 · 프로그램 로고형",
-    patch: { channelLayout: "vertical", channelIconShape: "rounded", channelIconSize: 48, channelLabelSize: 16 },
+    // 구 스테이지 px 48/16 × 3 = 144/48 (출력 px).
+    patch: { channelLayout: "vertical", channelIconShape: "rounded", channelIconSize: 144, channelLabelSize: 48 },
   },
 ];
 
@@ -680,7 +772,9 @@ export function makeInitialEditorState(
         { id: "t2", text: titleLine2, size: 30, color: "#3B82F6" },  // Tailwind blue-500
       ]
     : [{ id: "t1", text: title, size: 30, color: "#FF4040" }];
-  return {
+  // 시드 크기(30·40 등)는 읽기 쉬운 구 스테이지 px 로 두고, normalizeEditorCoords 가 출력 px 로
+  // 올린다(세로 9:16 → ×3). 결과는 coordBasis:"output" 마킹 — 이후 로드에서 재정규화 안 됨.
+  return normalizeEditorCoords({
     // TVING 쇼츠 스타일이 기본 (2026-08-12): 검정 레터박스 + 상단 훅 + 하단 프로그램명.
     // broadcast-clean 은 assets/shorts-template/ 의 실존 프레임이다.
     templateId: "broadcast-clean",
@@ -720,7 +814,7 @@ export function makeInitialEditorState(
     // 2026-07-24 사용자 지적: "살짝 자막이 더 빨라".
     offsetMs: 0,
     trimBase: "master",
-  };
+  });
 }
 
 /** Saved editorState from before multi-track has no `tracks` — hydrate a main track
@@ -780,7 +874,9 @@ export function ensureTracks(state: EditorState, durationSec: number, segmentSta
   const ap = normalizeAspectPreset(state.aspect, state.fit, state.bgType);
 
   // 새 필드 fallback — 옛 클립엔 없을 수 있음. 여기 나열된 것 외에 새 필드가 추가되면 여기에도 추가.
-  return {
+  // normalizeEditorCoords: 옛 저장분(스테이지 px · 마커 없음)의 크기를 출력 px 로 1회 올린다
+  // (결과 무회귀). 이미 coordBasis:"output" 이면 no-op — 재정규화되지 않는다.
+  return normalizeEditorCoords({
     ...state,
     tracks,
     titleLines,
@@ -854,7 +950,7 @@ export function ensureTracks(state: EditorState, durationSec: number, segmentSta
     trimOut,
     // 마이그레이션 완료 표시. 다음 로드부터는 shift 안 됨.
     trimBase: "master" as const,
-  };
+  });
 }
 
 /** 프레임 템플릿의 텍스트 슬롯(서버가 %·px 로 변환해 내려준 것). api.ts FrameTextSlot 미러. */
@@ -923,7 +1019,8 @@ export function applyTemplate(state: EditorState, id: TemplateId, frame?: Templa
     //    그대로 넣으면 좁은 미리보기에서 제목이 2배로 거대해져 프레임을 침범했다(2026-08-12).
     //    위치·정렬·색만 슬롯으로 덮고, 크기는 사용자가 정한 값을 유지한다. 크기 단위 정합은
     //    저장된 클립 전부에 영향을 줘서 별도 작업이다.
-    const lines = state.titleLines.length ? state.titleLines : [{ id: "t1", text: "", size: 30, color: t1.color }];
+    // 빈 줄 시드 크기 = 출력 px(정규화된 state 에 바로 들어감). 구 30 스테이지 px × 3 = 90.
+    const lines = state.titleLines.length ? state.titleLines : [{ id: "t1", text: "", size: 90, color: t1.color }];
     next.titleLines = lines.map((l, i) => {
       const s = i === 0 ? t1 : i === 1 ? (t2 ?? null) : null;
       // 슬롯이 없는 줄(3줄째 등)은 그대로 둔다 — 지우면 사용자 문구가 사라진다.

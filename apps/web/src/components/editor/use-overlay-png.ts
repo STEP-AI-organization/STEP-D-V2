@@ -31,7 +31,8 @@ function overlayKey(s: EditorState): string {
     channelLabelSize: s.channelLabelSize, channelLayout: s.channelLayout,
     channelIconSize: s.channelIconSize,
     channelExtraLines: (s.channelExtraLines ?? []).map((l) => ({ t: l.text, sz: l.size })),
-    stagePx: (s as { stagePx?: number }).stagePx,
+    // 크기는 출력 px(정규화됨) — 스테이지 실측 stagePx 는 폐기(단일 출력 해상도 좌표계라 불필요).
+    coordBasis: s.coordBasis,
   });
 }
 

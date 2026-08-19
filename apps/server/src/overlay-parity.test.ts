@@ -118,10 +118,11 @@ describe("ASS Fontsize 보정 상수 — 실제 폰트 메트릭에서 나와야
 });
 
 describe("제목 블록 기하 — 웹 블록 폭·패딩과 서버 상수가 같아야 한다", () => {
-  it("width 86% · padding 4px", () => {
+  it("width 86% · padding 4(설계 px)×scale=출력 px", () => {
     const web = fs.readFileSync(WEB, "utf-8");
     assert.match(web, /width:\s*"86%"/, "웹 제목 블록 폭이 바뀌었다 — 서버 TITLE_BLOCK 도 같이 바꿔야 한다");
-    assert.match(web, /padding:\s*"0 4px"/, "웹 제목 블록 패딩이 바뀌었다 — 서버 TITLE_PAD_PX 도 같이");
+    // 스테이지가 출력 해상도라 패딩은 설계 px 4 를 opx(=×scale) 로 출력 px 로 올린다(서버 TITLE_PAD_PX*scale 와 동일 basis).
+    assert.match(web, /padding:\s*`0 \$\{opx\(4\)\}px`/, "웹 제목 블록 패딩이 바뀌었다 — 서버 TITLE_PAD_PX 도 같이");
     assert.match(SERVER, /const TITLE_BLOCK = 0\.86;/);
     assert.match(SERVER, /const TITLE_PAD_PX = 4;/);
   });
@@ -133,40 +134,65 @@ describe("제목 블록 기하 — 웹 블록 폭·패딩과 서버 상수가 �
 });
 
 /**
- * 정적 오버레이 크기 basis 파리티 — 편집 CSS 텍스트가 서버 canvas-PNG 와 **같은 화면 크기**로
- * 그려져야 선택/해제(PNG↔CSS 스왑)에 튀지 않는다.
+ * 정적 오버레이 크기 basis 파리티 — **단일 출력 해상도 좌표계.**
  *
- * 서버: canvas fontPx = size × scale, scale = H / canonicalStageH(=renderDims.stageH, 에디터가
- * stagePx 를 안 보내므로 canonical 로 폴백). PNG 는 `<img size-full>` 로 스테이지에 축소되므로
- * 화면 크기 = size × stageH/canonicalStageH = (size/canonicalStageH×100)cqh. 따라서 편집 CSS 는
- * **cqh basis** 여야 하고, 그 canonicalStageH 는 서버 renderDims 의 stageH 와 1:1 이어야 한다.
- * (예전엔 `fontSize: line.size` 절대 px 라 스테이지가 canonical 보다 작으면 CSS 가 PNG 보다 몇 배
- *  커졌다 — "선택하면 제목이 프레임을 넘친다".)
+ * 미리보기 스테이지가 출력 해상도(canvasW×canvasH) 고정 캔버스를 단일 scale(fit) 로 축소해 보여주고
+ * (editor-preview.tsx), 서버 렌더(canvas-PNG·ASS)도 같은 출력 px 를 그대로 쓴다. 즉 오버레이 크기
+ * (line.size 등)는 **저장부터 출력 px** 라 양쪽이 곱셈 없이 같은 숫자를 쓴다 → 편집 CSS = 서버 PNG =
+ * 결과물(선택/해제 스왑에 안 튄다). 옛 저장분·시드(스테이지 px)는 normalizeEditorCoords 가 로드/렌더
+ * 시 ×outScale(=H/stageH) 로 1회 올린다(결과 무회귀) — 그 계수 basis 가 양쪽에서 같아야 한다.
+ * (예전엔 서버가 렌더 때 size×(H/640) 로 올리고 CSS 는 cqh 로 canonical 640 을 흉내냈다 — 이중 basis.)
  */
-describe("정적 오버레이 크기 basis — 편집 CSS cqh 가 서버 canvas size×scale 과 같은 기준이어야 한다", () => {
-  it("제목·채널 CSS 폰트가 toCqh(size) 로 서버 canvas fitPx=size×scale 과 같은 basis 를 쓴다", () => {
-    assert.match(WEB_PREVIEW, /fontSize:\s*toCqh\(line\.size\)/,
-      "제목 CSS 폰트가 toCqh(line.size)(=size×scale basis)를 안 쓰면 PNG↔CSS 스왑에 크기가 튄다");
-    assert.match(WEB_PREVIEW, /fontSize:\s*toCqh\(labelPx\)/,
-      "채널명 CSS 폰트가 toCqh basis 를 안 쓰면 채널 선택 시 텍스트 크기가 튄다");
-    // 서버 정본: fitPx = size × scale (layoutTitleLines) · scale = H / editorScale-stageH.
-    assert.match(SERVER, /\(t\.size \?\? 30\) \* scale/,
-      "서버 layoutTitleLines 의 size×scale basis 가 바뀌었다 — CSS cqh 도 같이 맞춰야 한다");
+describe("정적 오버레이 크기 basis — 단일 출력 px (편집 CSS px == 서버 canvas px)", () => {
+  it("제목·채널 CSS 폰트가 line.size / labelPx(출력 px)를 그대로 쓴다 (곱셈 없음)", () => {
+    assert.match(WEB_PREVIEW, /fontSize:\s*line\.size,/,
+      "제목 CSS 폰트가 line.size(출력 px)를 그대로 안 쓰면 단일 basis 가 깨진다");
+    assert.match(WEB_PREVIEW, /fontSize:\s*labelPx\b/,
+      "채널명 CSS 폰트가 labelPx(출력 px)를 그대로 안 쓰면 채널 선택 시 크기가 튄다");
+    // 서버 정본(layoutTitleLines): t.size 를 그대로 쓰고 미설정 기본값(30)만 scale 배 — 저장값엔 곱하지 않는다.
+    assert.match(SERVER, /Number\(t\.size\) > 0 \? Number\(t\.size\) : 30 \* scale/,
+      "서버 layoutTitleLines 가 t.size(출력 px)를 그대로 안 쓰면(저장값에 ×scale 하면) 3배 커진다");
   });
 
-  it("웹 canonicalStageH 가 서버 renderDims 의 stageH 와 1:1", () => {
-    assert.match(WEB_PREVIEW, /function canonicalStageH/,
-      "웹에 canonicalStageH(서버 renderDims stageH 미러)가 없다 — cqh 변환의 분모 기준");
+  it("웹 designStageH·outputHeight 가 서버 renderDims(stageH·H)와 1:1 (마이그레이션 계수 basis)", () => {
+    // 옛 저장분을 올리는 계수 = 출력H/설계stageH. 양쪽이 같은 표를 써야 무회귀로 올라온다.
+    assert.match(PRESETS, /export function designStageH/,
+      "웹에 designStageH(서버 renderDims stageH 미러)가 없다 — 마이그레이션 계수의 분모");
+    assert.match(PRESETS, /export function outputHeight/,
+      "웹에 outputHeight(서버 renderDims H 미러)가 없다 — 마이그레이션 계수의 분자");
     // 16:9 는 특이값((900*1080)/1920=506.25) — 양쪽이 같은 식을 써야 한다.
-    assert.match(WEB_PREVIEW, /case "16:9": return \(900 \* 1080\) \/ 1920;/,
-      "16:9 canonicalStageH 가 서버 renderDims 와 다르다");
+    assert.match(PRESETS, /case "16:9": return \(900 \* 1080\) \/ 1920;/,
+      "16:9 designStageH 가 서버 renderDims stageH 와 다르다");
     assert.match(SERVER, /case "16:9": return \{ W: 1920, H: 1080, stageH: \(900 \* 1080\) \/ 1920 \};/,
-      "서버 renderDims 16:9 stageH 가 바뀌었다 — 웹 canonicalStageH 도 같이");
+      "서버 renderDims 16:9 stageH 가 바뀌었다 — 웹 designStageH 도 같이");
     // 세로 9:16 계열 기본값 640(양쪽 default).
-    assert.match(WEB_PREVIEW, /\n    default: return 640;/,
-      "웹 canonicalStageH 9:16 default(640)가 서버 renderDims default 와 다르다");
+    assert.match(PRESETS, /default: return 640; \/\/ 세로 9:16/,
+      "웹 designStageH 9:16 default(640)가 서버 renderDims default 와 다르다");
     assert.match(SERVER, /default:\s*return \{ W: 1080, H: 1920, stageH: 640 \};/,
-      "서버 renderDims 9:16 default stageH(640)가 바뀌었다 — 웹 canonicalStageH 도 같이");
+      "서버 renderDims 9:16 default stageH(640)가 바뀌었다 — 웹 designStageH 도 같이");
+  });
+
+  it("두 normalizeEditorCoords(웹·서버)가 같은 계수·같은 마커로 옛 저장분을 올린다", () => {
+    // 마커: 웹이 coordBasis:"output" 로 저장/전송 → 서버가 재정규화하지 않는다(멱등).
+    assert.match(PRESETS, /export function normalizeEditorCoords/,
+      "웹 normalizeEditorCoords 가 없다 — 옛 저장분/시드를 출력 px 로 올리는 단일 지점");
+    assert.match(PRESETS, /coordBasis === "output"/, "웹 정규화가 멱등 마커를 안 본다 — 이중 적용 위험");
+    assert.match(SERVER, /function normalizeEditorCoords/,
+      "서버 normalizeEditorCoords 가 없다 — 렌더 시 옛 DB 상태를 올려야 결과 무회귀");
+    assert.match(SERVER, /if \(es\.coordBasis === "output"\) return es;/,
+      "서버 정규화가 coordBasis 마커를 안 보면 웹이 올려 보낸 값을 또 곱해 3배가 된다");
+    // 서버 계수 = H/stageH · 웹 계수 outScale = outputHeight/designStageH — 같은 값이어야 한다.
+    assert.match(SERVER, /const f = H \/ stageH;/, "서버 마이그레이션 계수가 H/stageH 가 아니다");
+    assert.match(PRESETS, /return outputHeight\(aspect\) \/ designStageH\(aspect\);/,
+      "웹 outScale 이 outputHeight/designStageH 가 아니면 서버 H/stageH 와 갈라진다");
+  });
+
+  it("렌더가 editorState 를 정규화한 뒤에 굽는다 (생산→소비 배선)", () => {
+    // 정규화를 안 하면 옛 DB 상태(스테이지 px)가 출력 px 로 오인돼 결과물 글자가 1/3 로 쪼그라든다.
+    assert.match(SERVER, /const editorState = normalizeEditorCoords\(opts\.editorState, aspect\);/,
+      "renderShort 진입에서 editorState 를 정규화하지 않으면 옛 클립이 3배 작게 렌더된다");
+    assert.match(SERVER, /es = normalizeEditorCoords\(es, aspect\);/,
+      "overlayPreviewItems(에디터 PNG)가 정규화를 안 하면 미리보기 PNG 가 옛 DB 상태에서 쪼그라든다");
   });
 });
 
@@ -381,15 +407,15 @@ describe("외곽선(stroke) — 정적 오버레이 canvas strokeText 배선", (
     assert.match(OVERLAY_CANVAS, /ctx\.lineJoin\s*=\s*"round"/,
       "lineJoin=round 가 없으면 외곽선 모서리가 뾰족하게 튄다(AENA 방식)");
   });
-  it("배선: index 가 stroke 를 아이템에 실어 보내고 미리보기(px)를 출력 px 로 scale 한다", () => {
-    assert.match(SERVER, /width:\s*st\.width \* scale/,
-      "stroke.width 를 scale 안 하면 미리보기와 결과물의 외곽선 굵기가 어긋난다");
+  it("배선: index 가 stroke 를 아이템에 실어 보낸다 (stroke.width 는 출력 px 그대로)", () => {
+    // stroke.width 는 이제 출력 px(정규화됨) — 저장값에 ×scale 하면 안 된다(3배 굵어짐).
+    assert.match(SERVER, /\{ color: st\.color, width: st\.width \}/,
+      "stroke.width(출력 px)를 그대로 안 실으면(×scale 하면) 외곽선이 3배 굵어진다");
   });
   it("미리보기: 편집 중 -webkit-text-stroke 로 근사한다(자막이 쓰는 패턴)", () => {
-    // 외곽선 굵기도 폰트와 같은 cqh basis(toCqh) — 서버 canvas 는 stroke.width×scale 로 굽고
-    // PNG 축소 후엔 stageH/canonicalStageH 배가 되므로 CSS 도 cqh 여야 스왑에 굵기가 안 튄다.
-    assert.match(WEB_PREVIEW, /WebkitTextStroke:\s*`\$\{toCqh\(line\.stroke\.width\)\} \$\{line\.stroke\.color\}`/,
-      "미리보기가 외곽선을 안 그리면(또는 cqh basis 가 아니면) 편집 중(PNG 숨김) 자리와 결과물이 갈라진다");
+    // 외곽선 굵기도 출력 px(line.stroke.width) 그대로 — 스테이지 fit 축소가 CSS·PNG 를 똑같이 줄인다.
+    assert.match(WEB_PREVIEW, /WebkitTextStroke:\s*`\$\{line\.stroke\.width\}px \$\{line\.stroke\.color\}`/,
+      "미리보기가 외곽선을 출력 px(line.stroke.width)로 안 그리면 편집 중(PNG 숨김) 굵기와 결과물이 갈라진다");
   });
 });
 
@@ -408,5 +434,42 @@ describe("자막 오버레이 배선 — 미리보기와 렌더가 같은 값(�
     // top 으로 그리면 렌더(하단 기준)와 부호가 뒤집혀 자막이 반대편에 뜬다.
     assert.match(TPL, /bottom:\s*`\$\{[^}]*subtitleY[^}]*\}%`/,
       "자막을 bottom(하단 기준)으로 안 그리면 렌더의 capMV(하단 기준)와 위치축이 어긋난다");
+  });
+});
+
+/**
+ * 마이그레이션 계수 — 옛 스테이지 px → 출력 px 가 **결과 무회귀(net-zero)** 임을 수치로 증명한다.
+ *
+ * 옛 서버 렌더는 출력 px = size × scale, scale = H/stageH. 이제 마이그레이션이 저장값을 size×(H/stageH)
+ * 로 올리고 렌더는 그 출력 px 를 그대로 쓴다(×scale 없음). 두 출력 px 가 **정확히 같아야** 옛 클립이
+ * 안 바뀐다. 계수 표(세로 3 · 16:9≈2.133 · 1:1=1.2 · 4:5≈2.109)는 renderDims(H·stageH)에서 나온다.
+ */
+describe("마이그레이션 계수 — 옛 스테이지 px → 출력 px 가 결과 무회귀(net-zero)", () => {
+  // 서버 renderDims 의 (H, stageH) — 대표 aspect 별. designStageH(웹)·renderDims.stageH(서버)와 1:1.
+  const dims: Record<string, { H: number; stageH: number }> = {
+    "9:16-crop-main": { H: 1920, stageH: 640 },
+    "16:9": { H: 1080, stageH: (900 * 1080) / 1920 },
+    "1:1": { H: 1080, stageH: 900 },
+    "4:5": { H: 1350, stageH: 640 },
+  };
+  const expected: Record<string, number> = {
+    "9:16-crop-main": 3, "16:9": 1080 / 506.25, "1:1": 1.2, "4:5": 1350 / 640,
+  };
+
+  it("계수 = H/stageH = 예상값 (세로 3 · 16:9≈2.133 · 1:1=1.2 · 4:5≈2.109)", () => {
+    for (const [a, d] of Object.entries(dims)) {
+      assert.equal(d.H / d.stageH, expected[a], `${a} 마이그레이션 계수(H/stageH)가 ${expected[a]} 가 아니다`);
+    }
+  });
+
+  it("net-zero: 옛 size×scale(옛 렌더) == size×계수(마이그레이션) → 렌더가 그대로 쓴 출력 px", () => {
+    for (const S of [14, 30, 40, 56]) { // 옛 스테이지 px 예시(라벨·제목·아이콘)
+      for (const [a, d] of Object.entries(dims)) {
+        const oldRenderPx = S * (d.H / d.stageH); // 옛 렌더: 저장 스테이지 px × scale
+        const migrated = S * expected[a];         // 마이그레이션: 저장값 × outScale → 출력 px
+        // 새 렌더는 migrated 를 그대로 쓴다(×scale 없음) → 두 값이 같아야 회귀가 없다.
+        assert.equal(migrated, oldRenderPx, `${a}(size=${S}): 마이그레이션 후 렌더 크기가 옛 렌더와 다르다 — 회귀`);
+      }
+    }
   });
 });

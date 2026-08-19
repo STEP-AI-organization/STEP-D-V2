@@ -487,7 +487,7 @@ export function EditorTimeline({
         <button
           onClick={onTogglePlay}
           title="재생·일시정지 (Space)"
-          className="flex size-9 items-center justify-center rounded-full bg-white text-black"
+          className="flex size-9 items-center justify-center rounded-full bg-cyan-600 text-white transition-colors hover:bg-cyan-500"
         >
           {playing ? <Pause className="size-4" /> : <Play className="size-4" />}
         </button>

@@ -331,12 +331,20 @@ export function NaverAccounts({ onChange }: { onChange?: (accounts: NaverAccount
                     → ② 뜨는 브라우저에서 STEP D 로그인 → ③ 네이버 로그인. 끝나면 세션이 자동으로
                     여기 등록됩니다. 아이디·비밀번호는 브라우저에만 들어가고 서버로 오지 않습니다.
                   </p>
+                  {/* ⚠️ **계정별로 받아야 한다.** 파일명에 이 계정 키가 박혀 나가고, 도우미가
+                      그걸 읽어 자동 선택한다 — 계정이 둘 이상일 때 도우미가 "어느 계정인가요?"
+                      를 다시 묻지 않게 하는 유일한 연결고리다(잘못 고르면 세션이 남의 계정에
+                      들어간다). account 를 빼면 그 옛 동작으로 돌아간다. */}
                   <a
-                    href={`${process.env.NEXT_PUBLIC_API_URL ?? "/api"}/naver/login-tool`}
+                    href={`${process.env.NEXT_PUBLIC_API_URL ?? "/api"}/naver/login-tool?account=${encodeURIComponent(a.id)}`}
                     className="mt-2 inline-flex items-center gap-1.5 rounded-md border border-border bg-muted px-3 py-1.5 text-xs font-medium text-foreground transition hover:bg-accent/40"
                   >
-                    ⬇ 네이버 로그인 도우미 다운로드 (Windows)
+                    ⬇ &lsquo;{a.label}&rsquo; 로그인 도우미 다운로드 (Windows)
                   </a>
+                  <p className="mt-1.5 text-[11px] leading-relaxed text-muted-foreground">
+                    받은 파일이 이 계정에 묶여 있습니다 — 도우미를 켜면{" "}
+                    <b className="text-foreground">계정: {a.label}</b> 로 바로 진행합니다.
+                  </p>
                   <details className="mt-2">
                     <summary className="cursor-pointer text-[11px] text-muted-foreground">
                       개발자용 — 명령줄 / 세션 파일 등록

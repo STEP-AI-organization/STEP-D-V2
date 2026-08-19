@@ -3081,6 +3081,13 @@ export async function publishedTodayKst(accountKey: string): Promise<number> {
 
 export async function deleteAutomationRule(id: string): Promise<boolean> {
   const r = await pool.query(`DELETE FROM automation_rule WHERE id = $1`, [id]);
+  // 이 규칙의 열린 보류도 같이 지운다. rule_hold 엔 FK·cascade 가 없어(0019) 규칙만 지우면
+  // 보류 행이 남고, 승인 대기 목록에 **아무도 게시하지 않을 영상**이 영원히 뜬다(유령 항목).
+  //
+  // ⚠️ releaseHold(해제 표시)가 아니라 DELETE 다. released_at 이 찍히면 hasReleasedHold 가
+  // 참이 되어, 나중에 다른 규칙이 같은 클립을 잡았을 때 **사람 승인 없이** approve_first 를
+  // 통과한다 — 사람이 봐야 할 게 사람 눈을 거치지 않고 나가는 방향의 실패다.
+  await pool.query(`DELETE FROM rule_hold WHERE rule_id = $1`, [id]);
   return (r.rowCount ?? 0) > 0;
 }
 

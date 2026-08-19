@@ -3919,10 +3919,13 @@ app.post("/api/media/from-youtube", async (c) => {
 
 // ── construct F: editorState → reframe dims + ASS overlay ──────────────────────
 //
-// The web editor authors overlays in a fixed-aspect preview stage (percent positions,
-// px font sizes). To bake WYSIWYG we map: position% → output px, and font px → output px
-// via a canonical stage size (portrait H≈640, landscape W≈900 — the CSS clamps in
-// editor-preview.tsx). ASS PlayRes == output size so \pos maps 1:1.
+// **단일 출력 해상도 좌표계.** 에디터 미리보기 스테이지가 출력 해상도(W×H) 그대로라(웹
+// editor-preview.tsx: 고정 캔버스 + 단일 scale transform), 오버레이 크기(line.size 등)는 저장부터
+// 출력 px 다(normalizeEditorCoords 가 옛 저장분·시드를 여기로 1회 올린다). 렌더는 그 출력 px 를
+// 그대로 쓴다 — position% → 출력 px, ASS PlayRes == 출력 size 라 \pos 1:1.
+// `stageH`(설계 스테이지 높이)는 이제 **좌표 basis 가 아니라** 마이그레이션 계수(H/stageH)와 고정
+// 설계 상수(그림자·패딩·gap)를 출력 px 로 올리는 데만 쓰는 잔여값이다(constScale). 값은 그대로 —
+// 웹 presets.ts designStageH 와 1:1 이어야 옛 클립이 무회귀로 올라온다(overlay-parity 강제).
 function renderDims(aspect: string): { W: number; H: number; stageH: number } {
   switch (aspect) {
     case "16:9": return { W: 1920, H: 1080, stageH: (900 * 1080) / 1920 };
@@ -3936,6 +3939,48 @@ function renderDims(aspect: string): { W: number; H: number; stageH: number } {
     case "9:16-crop-sub":
     default:     return { W: 1080, H: 1920, stageH: 640 };
   }
+}
+
+/**
+ * editorState 크기 필드를 출력 px basis 로 정규화(멱등) — **웹 presets.ts normalizeEditorCoords 미러.**
+ * coordBasis:"output" 이면 그대로(웹이 이미 올려 보냈다). 아니면(옛 저장분·factory 시드 = 스테이지 px)
+ * 모든 크기(제목·채널·요소·외곽선)를 ×(H/stageH) 해 출력 px 로 올린다. 위치(%)·시각(초)·자막(%높이)은
+ * 해상도 독립이라 건드리지 않는다. **결과 무회귀**: 옛 렌더가 size×scale 로 굽던 출력 px 와 정확히 같다.
+ * ⚠️ 계수 H/stageH 는 웹 outScale(aspect)=outputHeight/designStageH 와 1:1 이어야 한다.
+ */
+function normalizeEditorCoords(es: any, aspect: string): any {
+  if (!es || typeof es !== "object") return es;
+  if (es.coordBasis === "output") return es;
+  const { H, stageH } = renderDims(aspect);
+  const f = H / stageH;
+  const num = (v: any) => (typeof v === "number" && Number.isFinite(v) && v > 0 ? v * f : v);
+  return {
+    ...es,
+    coordBasis: "output",
+    titleLines: Array.isArray(es.titleLines)
+      ? es.titleLines.map((l: any) => ({
+          ...l,
+          size: typeof l?.size === "number" && l.size > 0 ? l.size * f : l?.size,
+          ...(l?.stroke && typeof l.stroke.width === "number"
+            ? { stroke: { ...l.stroke, width: l.stroke.width * f } }
+            : {}),
+        }))
+      : es.titleLines,
+    channelLabelSize: num(es.channelLabelSize),
+    channelIconSize: num(es.channelIconSize),
+    channelExtraLines: Array.isArray(es.channelExtraLines)
+      ? es.channelExtraLines.map((l: any) => ({
+          ...l,
+          size: typeof l?.size === "number" && l.size > 0 ? l.size * f : l?.size,
+        }))
+      : es.channelExtraLines,
+    elements: Array.isArray(es.elements)
+      ? es.elements.map((e: any) => ({
+          ...e,
+          size: typeof e?.size === "number" && e.size > 0 ? e.size * f : e?.size,
+        }))
+      : es.elements,
+  };
 }
 
 // ── F3: per-destination render presets ────────────────────────────────────────
@@ -4294,17 +4339,14 @@ export function pickKeywordIdx(tokens: string[]): Set<number> {
 }
 
 /**
- * 미리보기 스테이지 px → 출력 px 배율.
+ * 설계 스테이지 px → 출력 px 배율 (= 마이그레이션 계수 = H/stageH).
  *
- * 미리보기 스테이지는 CSS 로 `min(72vh, 640px)` 라 **뷰포트가 낮으면 640 보다 작다** — 그런데
- * 제목·채널 글자 크기는 절대 px 라, 기준을 640 으로 고정하면 사용자가 본 것보다 작게 굽는다
- * (실측: 스테이지 553px 에서 16% 차이). 에디터가 실측값(`stagePx`)을 보내면 그걸 쓰고,
- * 없으면 종전대로 캐논 스테이지로 폴백한다 — 옛 저장분도 그대로 굽힌다.
+ * ⚠️ **저장 크기(line.size 등)엔 곱하지 않는다** — 그건 이미 출력 px(normalizeEditorCoords 정규화).
+ * 오직 고정 설계 상수(그림자 offset·패딩·gap·박스 폰트)와 미설정 기본값을 출력 px 로 올릴 때만 쓴다.
+ * 예전엔 es.stagePx(에디터 실측)를 봤지만, 스테이지가 출력 해상도로 통일되며 폐기했다(웹 미전송).
  */
-function editorScale(es: any, H: number, stageH: number): number {
-  const measured = Number(es?.stagePx);
-  const eff = Number.isFinite(measured) && measured >= 200 && measured <= 4000 ? measured : stageH;
-  return H / eff;
+function constScale(H: number, stageH: number): number {
+  return H / stageH;
 }
 
 /**
@@ -4324,15 +4366,19 @@ function channelBadgeLayout(
 ): BadgeLayout | null {
   const name = String(es?.channelName ?? "").trim();
   if (!es?.showChannel || !name) return null;
-  const labelPx = Math.max(8, Math.min(64, Number(es.channelLabelSize) || 14)) * scale;
+  // channelLabelSize 는 출력 px(정규화됨) — 그대로 쓰고, 미설정 기본값 14·클램프 범위 8..64 만
+  // scale(설계 px→출력 px) 배한다(웹 editor-preview 와 동일 basis).
+  const labelPx = Math.max(8 * scale, Math.min(64 * scale, Number(es.channelLabelSize) > 0 ? Number(es.channelLabelSize) : 14 * scale));
   const chY = ((Number(es.channelY) || 88) / 100) * H;
   const LEADING = 1.25; // leading-tight
   const extras = (Array.isArray(es.channelExtraLines) ? es.channelExtraLines : [])
     .map((l: any) => ({ text: String(l?.text ?? "").trim(), size: Number(l?.size) }))
     .filter((l: any) => l.text.length > 0)
     .map((l: any) => {
-      const stagePx = Math.max(6, Math.min(48, l.size > 0 ? l.size : Math.round((labelPx / scale) * 0.75)));
-      return { text: l.text, px: stagePx * scale, marginTop: Math.max(1, Math.round(stagePx * 0.2)) * scale };
+      // l.size 는 출력 px. 미설정이면 라벨의 0.75. 클램프·marginedTop 상수만 scale 배.
+      const sizeOut = l.size > 0 ? l.size : labelPx * 0.75;
+      const px = Math.max(6 * scale, Math.min(48 * scale, sizeOut));
+      return { text: l.text, px, marginTop: Math.max(1 * scale, px * 0.2) };
     });
   const textH = labelPx * LEADING + extras.reduce((s: number, e: any) => s + e.marginTop + e.px * LEADING, 0);
   const textW = Math.max(textWidthPx(name, labelPx), ...extras.map((e: any) => textWidthPx(e.text, e.px)));
@@ -4404,7 +4450,8 @@ function layoutTitleLines(es: any, W: number, H: number, scale: number): TitleLi
   let yOff = 0;
   for (const t of Array.isArray(es.titleLines) ? es.titleLines : []) {
     if (!t?.text?.trim()) continue;
-    const px = Math.max(6, (t.size ?? 30) * scale);   // 미리보기 CSS px 등가(출력 해상도)
+    // t.size 는 출력 px(정규화됨) — 그대로. 미설정 기본값 30·최소 6 만 scale(설계 px→출력) 배.
+    const px = Math.max(6 * scale, Number(t.size) > 0 ? Number(t.size) : 30 * scale);
     const align = es.titleAlign === "left" ? "left" : es.titleAlign === "right" ? "right" : "center";
     const an = align === "left" ? 7 : align === "right" ? 9 : 8;
     const cx = ((es.titleX ?? 50) / 100) * W;         // 블록 중심
@@ -4448,7 +4495,7 @@ function buildStaticOverlayItems(
     const st = L.t?.stroke;
     const stroke =
       st && typeof st.width === "number" && st.width > 0 && typeof st.color === "string"
-        ? { color: st.color, width: st.width * scale }
+        ? { color: st.color, width: st.width } // stroke.width 는 출력 px(정규화됨) — scale 불필요
         : undefined;
     items.push({
       text: L.text, x: L.bx, y: L.by, align: L.align, baseline: "top",
@@ -4491,7 +4538,7 @@ function buildEditorAss(
     staticToPng?: boolean;
   } = {},
 ): string | null {
-  const scale = editorScale(es, H, stageH);
+  const scale = constScale(H, stageH);
   const decorationEv: string[] = [];
   const captionEv: string[] = [];
   const includeDecorations = options.include !== "captions";
@@ -4594,7 +4641,8 @@ function buildEditorAss(
     }
     for (const el of Array.isArray(es.elements) ? es.elements : []) {
       if (!el?.text?.trim()) continue;
-      const fs = assFs((el.size ?? (el.type === "arrow" ? 40 : 14)) * scale);
+      // el.size 는 출력 px(정규화됨) — 그대로. 미설정 기본값(arrow 40 / 기타 14)만 scale 배.
+      const fs = assFs(Number(el.size) > 0 ? Number(el.size) : (el.type === "arrow" ? 40 : 14) * scale);
       const win = winFor(el);
       if (!win) continue;
       const kfs: KfPoint[] = Array.isArray(el.keyframes) ? el.keyframes : [];
@@ -4865,8 +4913,11 @@ async function renderClipMedia(opts: {
       cmeta: { durationSec: number; width: number; height: number; codec: string; hasAudio: boolean } }
   | null
 > {
-  const { master, episodeId, startTime, endTime, title, editorState } = opts;
-  const aspect = opts.aspect ?? editorState?.aspect ?? "9:16";
+  const { master, episodeId, startTime, endTime, title } = opts;
+  const aspect = opts.aspect ?? opts.editorState?.aspect ?? "9:16";
+  // editorState 크기를 출력 px basis 로 정규화(옛 저장분·factory 시드 = 스테이지 px · 마커 없음).
+  // 이후 모든 렌더 경로(아이콘·배지·제목·요소)가 출력 px 를 그대로 쓴다(scale 은 상수·기본값 전용).
+  const editorState = normalizeEditorCoords(opts.editorState, aspect);
   const masterObjPath = parseObjectPath(master.path);
   if (!(await fileExists(masterObjPath))) return null;
 
@@ -4927,12 +4978,12 @@ async function renderClipMedia(opts: {
       const m = /^data:image\/[\w.+-]+;base64,(.+)$/i.exec(iconSrc);
       if (m) {
         fs.writeFileSync(iconRawTmp, Buffer.from(m[1], "base64"));
-        const scale = editorScale(editorState, H, stageH);
+        const scale = constScale(H, stageH);
         // channelIconSize 는 **높이(px, 에디터 기준)** — 가로 워드마크도 세로 아이콘도
         // 높이로 통일해야 크기가 폭주하지 않는다 (2026-08-12 데모에서 정사각 로고가
         // 폭 기준 519px 로 부풀어 시간 박스를 덮었다).
-        const iconH = Math.round((Number(editorState?.channelIconSize) > 0
-          ? Number(editorState.channelIconSize) : 40) * scale);
+        const iconH = Math.round(Number(editorState?.channelIconSize) > 0
+          ? Number(editorState.channelIconSize) : 40 * scale); // 출력 px(정규화) · 기본값만 scale
         // 모양: circle 이면 원형 크롭, 그 외(square 등)는 원본 비율 그대로 — 프로그램
         // 로고(가로 워드마크)를 원으로 자르면 깨지기 때문 (broadcast-standard).
         const shape = String(editorState?.channelIconShape ?? "circle");
@@ -4968,7 +5019,7 @@ async function renderClipMedia(opts: {
   let overlayPngPath: string | null = null;
   if (!dynamicReframe && !hookPreroll) {
     try {
-      const scale = editorScale(editorState, H, stageH);
+      const scale = constScale(H, stageH);
       const items = buildStaticOverlayItems(editorState, W, H, scale, iconBox);
       if (items.length && (await overlayCanvasAvailable())) {
         const buf = await renderTextLayerPng({ width: W, height: H, items });
@@ -7676,12 +7727,14 @@ function pruneOverlayCache(maxAgeMs = 60 * 60_000): void {
 /** 에디터 미리보기용 정적 오버레이 아이템 — 렌더의 square-icon 미리보기와 같은 iconBox 를 쓴다. */
 function overlayPreviewItems(es: any, aspect: string): { W: number; H: number; items: OverlayTextItem[] } {
   const { W, H, stageH } = renderDims(aspect);
-  const scale = editorScale(es, H, stageH);
+  // 크기를 출력 px 로 정규화(웹이 coordBasis:"output" 로 보내면 no-op · DB 옛 상태면 여기서 올린다).
+  es = normalizeEditorCoords(es, aspect);
+  const scale = constScale(H, stageH);
   // 미리보기(editor-preview.tsx)는 showChannel 이면 아이콘을 **정사각**(iconPx×iconPx)으로 그린다.
   // 채널명 x 가 그 정사각 폭에 걸리므로 여기서도 정사각 iconBox 를 준다(에디터 내부 정합).
   let iconBox: { w: number; h: number } | null = null;
   if (es?.showChannel) {
-    const iconH = Math.round((Number(es?.channelIconSize) > 0 ? Number(es.channelIconSize) : 24) * scale);
+    const iconH = Math.round(Number(es?.channelIconSize) > 0 ? Number(es.channelIconSize) : 24 * scale); // 출력 px · 기본값만 scale
     iconBox = { w: iconH, h: iconH };
   }
   return { W, H, items: buildStaticOverlayItems(es, W, H, scale, iconBox) };
@@ -8657,12 +8710,34 @@ app.delete("/api/tiktok/accounts/:publicId", async (c) => {
  * 실물은 GCS `tools/stepd-naver-login.exe` (빌드: apps/server/scripts/naver-login-tool.mts
  * 머리의 bun 명령). 세션 로그인 사용자만 받게 둔다 — 공개 배포물이 아니다.
  */
+/**
+ * 로그인 도우미(exe) 다운로드.
+ *
+ * `?account=<naver_account.id>` 를 주면 **파일명에 그 계정 키를 실어** 내려준다
+ * (`stepd-naver-login--nva_abc123.exe`). 도우미는 자기 실행파일 이름에서 그 키를 읽어
+ * 계정을 자동 선택한다 — 계정이 둘 이상일 때 "어느 계정인가요?" 를 다시 묻지 않는다.
+ *
+ * ⚠️ 왜 파일명인가: exe 는 URL 파라미터를 못 받는다. 서버에 '로그인 대상' 상태를 따로 두는
+ * 방법도 있지만(TTL·테이블·엔드포인트 추가), 파일 자체에 실으면 **받은 파일과 계정이 영구히
+ * 묶인다** — 나중에 실행해도, 여러 개를 받아둬도 안 헷갈린다. 브라우저가 중복 이름에 `(1)` 을
+ * 붙여도 키는 정규식으로 그대로 읽힌다.
+ *
+ * 계정 검증은 여기서 한다 — 없는/남의 계정 키가 파일명에 박히면 도우미가 엉뚱한 데 올린다.
+ */
 app.get("/api/naver/login-tool", async (c) => {
   const obj = "tools/stepd-naver-login.exe";
   if (!useGcs() || !(await fileExists(obj))) {
     return c.json({ error: "tool_not_uploaded", message: "도구가 아직 업로드되지 않았습니다 — 운영팀에 문의하세요." }, 404);
   }
-  return c.redirect(await signedReadUrl(obj, 10 * 60_000));
+  const accountId = (c.req.query("account") ?? "").trim();
+  let name: string | undefined;
+  if (accountId) {
+    // getNaverAccount 은 RLS 스코프 안에서 도므로, 남의 워크스페이스 계정은 여기서 not_found 다.
+    const acct = await getNaverAccount(accountId);
+    if (!acct) return c.json({ error: "not_found", message: "계정을 찾을 수 없습니다." }, 404);
+    name = `stepd-naver-login--${acct.accountKey}.exe`;
+  }
+  return c.redirect(await signedReadUrl(obj, 10 * 60_000, name));
 });
 
 app.get("/api/youtube/channels", async (c) => {

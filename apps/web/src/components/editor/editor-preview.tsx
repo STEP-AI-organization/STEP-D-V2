@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState, type CSSProperties, type Ref } from "react";
 import { Heart, MessageCircle, Send } from "lucide-react";
-import { ASPECTS, defaultElementSize, filterCss, fontFamilyCss, overlayVisibleAt, sampleKeyframes, type CaptionStyle, type EditorState } from "@/lib/editor/presets";
+import { ASPECTS, defaultElementSize, filterCss, fontFamilyCss, outScale, outputHeight, outputWidth, overlayVisibleAt, sampleKeyframes, type CaptionStyle, type EditorState } from "@/lib/editor/presets";
 import { getAspectPreset } from "@/lib/editor/aspect-presets";
 import { Movable, SnapGuides, InlineText, type Guides } from "@/components/editor/editor-overlay";
 import { frameUrl, frameOverlaySrc, overlayPngSrc, type FrameTemplate } from "@/lib/data/api";
@@ -58,37 +58,6 @@ function captionStyleClasses(style: CaptionStyle): { cls: string; style: CSSProp
   }
 }
 
-/**
- * 서버 renderDims(index.ts)의 canonical stageH 미러 — 정적 오버레이 PNG 를 그린 scale 의 기준.
- * 서버는 `stagePx`(실측)를 못 받으면(에디터가 안 보낸다) 이 canonical 값으로 scale 을 잡는다:
- *   canvas fontPx = size × (H / canonicalStageH).
- * ⚠️ index.ts `renderDims` 의 stageH 와 **같은 숫자**여야 한다(overlay-parity 가 강제).
- */
-function canonicalStageH(aspect: string): number {
-  switch (aspect) {
-    case "16:9": return (900 * 1080) / 1920; // 506.25
-    case "1:1": return 900;
-    case "4:5": return 640;
-    // 세로 9:16 계열 전부(letterbox·crop-full·crop-main·crop-sub·bare) — renderDims default.
-    default: return 640;
-  }
-}
-
-/**
- * 스테이지 px(서버 canonical 기준) → cqh 문자열 (스테이지 높이 %). **정적 오버레이 크기 파리티의 핵심.**
- *
- * 서버 canvas 는 fontPx = size × scale 로 그리고(scale = H/canonicalStageH), 에디터는 그 PNG 를
- * `<img size-full>` 로 스테이지에 꽉 채운다 → 화면상 크기 = size × scale × (stageH/H)
- *   = size × stageH/canonicalStageH = (size/canonicalStageH × 100)cqh.
- * cqh 는 스테이지(container-type:size)의 실제 높이에 비례하므로, 뷰포트·패널 폭이 어떻든
- * 편집 CSS 텍스트가 서버 PNG 와 **같은 픽셀 크기**로 그려진다 → 선택/해제(PNG↔CSS 스왑)에 튀지 않는다.
- * 예전엔 `fontSize: line.size`(절대 px)라 스테이지가 canonical(예: 640)보다 작으면 CSS 가 PNG 보다
- * 몇 배 커져 프레임을 넘쳤다.
- */
-function stagePxToCqh(px: number, aspect: string): string {
-  return `${(px / canonicalStageH(aspect)) * 100}cqh`;
-}
-
 export function EditorPreview({
   state,
   update,
@@ -139,9 +108,15 @@ export function EditorPreview({
   //  · fill:"rect"(9:16-crop-main/sub) → 비디오를 캔버스 내 사각형(%)에 앉히고 나머지는 검정 pad
   //  · fill:"cover"(꽉 채우기) → 전체 object-cover · fill:"contain"(레터박스) → object-contain + 여백
   const aspectPreset = getAspectPreset(state.aspect);
-  // 정적 오버레이(제목·채널) CSS 크기를 서버 canvas-PNG 와 같은 화면 크기로 맞추는 변환.
-  // 스테이지 px(canonical 기준) → cqh. state.aspect 별 canonicalStageH 를 자동으로 고른다.
-  const toCqh = (px: number) => stagePxToCqh(px, state.aspect);
+  // ── 단일 출력 해상도 좌표계 ────────────────────────────────────────────────
+  // 스테이지는 **출력 해상도(canvasW×canvasH) 고정 div** 를 단일 scale(fit) transform 으로
+  // 축소해 보여준다 → 편집 화면 = 결과물(AENA/CapCut 표준). 오버레이 크기(line.size 등)는
+  // 이미 출력 px(normalizeEditorCoords 정규화)라 그대로 px 로 쓴다. 설계 상수(그림자 offset·
+  // 패딩·gap)만 opx() 로 출력 px 로 올린다(서버 렌더 scale=H/stageH 와 동일한 outScale).
+  const canvasW = outputWidth(state.aspect);
+  const canvasH = outputHeight(state.aspect);
+  const scale = outScale(state.aspect); // 설계 스테이지 px → 출력 px (서버 렌더 scale 미러)
+  const opx = (px: number) => px * scale; // 설계 상수(px) → 출력 px
   const rectPct = aspectPreset?.fill === "rect" && aspectPreset.rect
     ? {
         left: (aspectPreset.rect.x / aspectPreset.canvasW) * 100,
@@ -193,6 +168,25 @@ export function EditorPreview({
   const [selected, setSelected] = useState<string | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
   const [guides, setGuides] = useState<Guides>({});
+
+  // ── 출력 해상도 스테이지 → 화면 맞춤 배율(fit) ─────────────────────────────
+  // viewport(보이는 상자)의 실제 폭을 재서 fit = viewportW / canvasW 로 스테이지를 축소한다
+  // (AENA preview-frame.tsx 방식). 스테이지 내부는 전부 출력 px 라, fit 하나가 편집 화면을
+  // 결과물의 축소본으로 만든다. 뷰포트·패널 폭이 바뀌면 ResizeObserver 가 fit 을 다시 잡는다.
+  const viewportRef = useRef<HTMLDivElement | null>(null);
+  const [fit, setFit] = useState(0.3);
+  useEffect(() => {
+    const el = viewportRef.current;
+    if (!el) return;
+    const recompute = () => {
+      const r = el.getBoundingClientRect();
+      if (r.width > 0) setFit(r.width / canvasW);
+    };
+    recompute();
+    const ro = new ResizeObserver(recompute);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [canvasW]);
 
   // 정적 오버레이 WYSIWYG — 서버가 canvas 로 그린 실제 PNG(제목·채널명) hash. 편집/드래그
   // 중이 아니고(idle) 제목이 전부 정적(애니메이션·시간창 없음)일 때만 그 PNG 를 `<img>` 로
@@ -306,23 +300,34 @@ export function EditorPreview({
   }, [selected, editing, state, localT]);
 
   return (
-    // w-full 없으면 자식 stage의 width:min(90%, 900px)의 %가 참조할 정의된 폭이 없어
-    // container-type:size 컨테인먼트와 겹쳐 폭이 0으로 붕괴 → 16:9·1:1에서 영상이 사라진다.
-    // 9:16·4:5는 height 기준이라 티가 안 났음.
+    // w-full 없으면 자식 viewport 의 width:min(90%, 900px)의 %가 참조할 정의된 폭이 없어
+    // 폭이 0으로 붕괴 → 16:9·1:1에서 영상이 사라진다. 9:16·4:5는 height 기준이라 티가 안 났음.
     <div className="flex h-full w-full items-center justify-center">
+      {/* viewport — 화면에 보이는 상자(종횡비 고정). 실제 폭을 재서 fit 을 잡는다.
+          overflow-hidden 이 스테이지의 축소본을 둥근 모서리로 자른다. */}
       <div
-        ref={stageRef}
-        onPointerDown={deselect}
+        ref={viewportRef}
         className="relative overflow-hidden rounded-lg shadow-2xl"
         style={{
-          aspectRatio: ratio,
+          aspectRatio: `${canvasW}/${canvasH}`,
           height: ratio < 1 ? "min(72vh, 640px)" : undefined,
           width: ratio >= 1 ? "min(90%, 900px)" : undefined,
           maxHeight: "72vh",
+        }}
+      >
+      {/* stage — **출력 해상도(canvasW×canvasH) 고정 캔버스**. 단일 scale(fit) 로 viewport 에
+          맞춘다(transform-origin 0 0). 내부는 전부 출력 px/% → 편집 화면 = 결과물.
+          container-type:size → 자막 cqh(=화면 높이 %)가 서버 ASS(H*%)와 1:1. */}
+      <div
+        ref={stageRef}
+        onPointerDown={deselect}
+        className="absolute left-0 top-0 origin-top-left"
+        style={{
+          width: canvasW,
+          height: canvasH,
+          transform: `scale(${fit})`,
           // 밴드 크롭은 나머지 여백을 검정 pad 로 렌더한다(renderShort pad 기본색) — 미리보기도 검정.
           background: rectMode ? "#000000" : state.bg,
-          // Size container → caption font can use cqh (% of stage height) to match the
-          // render's ASS font (H*0.042), staying exact at any preview size.
           containerType: "size",
         }}
       >
@@ -510,8 +515,10 @@ export function EditorPreview({
           stageRef={stageRef}
           resizable
           resizeBase={state.titleLines.map((l) => l.size)}
+          // 크기(line.size)는 출력 px 라, 화면 드래그 Δ를 fit 으로 나눠 출력 px Δ로 환산한다.
+          resizePxScale={1 / fit}
           onResize={(sizes) => update({ titleLines: state.titleLines.map((l, i) => ({ ...l, size: sizes[i] })) })}
-          style={{ width: "86%", padding: "0 4px", textAlign: state.titleAlign }}
+          style={{ width: "86%", padding: `0 ${opx(4)}px`, textAlign: state.titleAlign }}
         >
           {state.titleLines.map((line) => {
             const key = `title:${line.id}`;
@@ -520,22 +527,20 @@ export function EditorPreview({
             const lineShown = overlayVisibleAt(line, segT) || editing === key;
             const font: CSSProperties = {
               color: line.color,
-              // 크기는 **서버 canvas 와 같은 size×scale** 를 cqh(스테이지 높이 %)로 표현한다 — 서버
-              // fontPx = line.size × (H/canonicalStageH), PNG 축소 후 화면 크기 = line.size ×
-              // stageH/canonicalStageH = toCqh(line.size). 스테이지 크기와 무관하게 PNG 와 동일 픽셀
-              // → 선택/편집 진입(CSS)↔idle(PNG) 스왑이 안 튄다. (예전 `line.size` 절대 px 는 작은
-              //  스테이지에서 몇 배 커져 프레임을 넘쳤다.)
-              fontSize: toCqh(line.size),
+              // 크기 = line.size(출력 px) 그대로. 스테이지가 출력 해상도라 fit 하나가 서버 canvas-PNG
+              // 와 동일 픽셀로 축소한다 → 선택/편집(CSS)↔idle(PNG) 스왑이 안 튄다. (예전엔 cqh 로
+              // canonical 640 기준을 흉내냈는데, 이제 스테이지 자체가 출력 해상도라 불필요.)
+              fontSize: line.size,
               fontWeight: 800,
               lineHeight: 1.15,
-              // 그림자·외곽선도 같은 basis(cqh) — 서버 canvas 는 offset/blur/stroke 를 scale 배하고
-              // PNG 가 스테이지로 축소되면 stageH/canonicalStageH 배(=cqh)가 된다.
-              textShadow: `0 ${toCqh(2)} ${toCqh(6)} rgba(0,0,0,.5)`,
+              // 그림자·외곽선도 출력 px — 서버 canvas 는 offset/blur 를 scale(=opx) 배해 굽고, stroke
+              // 는 출력 px 그대로다. 스테이지 fit 축소가 CSS·PNG 를 똑같이 줄인다.
+              textShadow: `0 ${opx(2)}px ${opx(6)}px rgba(0,0,0,.5)`,
               // 글꼴(font)·외곽선(stroke) — 편집 중(PNG 숨김) CSS 근사. 최종 진실은 서버 canvas-PNG
               // `<img>`(overlay-canvas.ts) 라 브라우저에 글꼴이 없어도 결과물은 정확하다.
               ...(fontFamilyCss(line.font) ? { fontFamily: fontFamilyCss(line.font) } : {}),
               ...(line.stroke && line.stroke.width > 0
-                ? { WebkitTextStroke: `${toCqh(line.stroke.width)} ${line.stroke.color}` }
+                ? { WebkitTextStroke: `${line.stroke.width}px ${line.stroke.color}` }
                 : {}),
               // 각 제목 줄은 한 시각 줄로 고정 — 재접지 않는다(D). 추천의 시맨틱 2줄 분할이
               // 폭 줄바꿈으로 3줄이 되던 버그 차단. 서버 렌더도 nowrap+shrink 라 줄 수 일치.
@@ -646,8 +651,10 @@ export function EditorPreview({
               (() => {
                 // 아이콘과 텍스트를 서로 독립적으로 스케일. 프리셋은 시작점만 세팅하고,
                 // 슬라이더로 각각 override 가능. 부가 줄들이 있으면 채널명 아래에 이어 렌더.
-                const iconPx = Math.max(8, Math.min(200, state.channelIconSize ?? 24));
-                const labelPx = Math.max(8, Math.min(64, state.channelLabelSize ?? 14));
+                // 크기는 출력 px — 기본값(미설정)·클램프 범위만 opx() 로 설계 px→출력 px 환산
+                // (서버 channelBadgeLayout 와 동일 basis).
+                const iconPx = Math.max(opx(8), Math.min(opx(200), state.channelIconSize ?? opx(24)));
+                const labelPx = Math.max(opx(8), Math.min(opx(64), state.channelLabelSize ?? opx(14)));
                 const extras = (state.channelExtraLines ?? [])
                   .map((l) => ({ id: l.id, text: (l.text ?? "").trim(), size: l.size }))
                   .filter((l) => l.text.length > 0);
@@ -668,23 +675,23 @@ export function EditorPreview({
                   >
                     <span
                       className="font-semibold text-white"
-                      // 채널명 크기·그림자도 제목과 같은 cqh basis — 서버 channelBadgeLayout 는
-                      // labelPx×scale 로 굽고 PNG 가 스테이지로 축소되므로 toCqh(labelPx) 가 곧 그 크기.
-                      style={{ textShadow: `0 ${toCqh(1)} ${toCqh(3)} rgba(0,0,0,.6)`, fontSize: toCqh(labelPx) }}
+                      // 채널명 크기·그림자는 출력 px — labelPx 는 출력 px, 그림자 offset 만 opx().
+                      // 서버 channelBadgeLayout(labelPx)·canvas shadow(1·3 ×scale)와 동일.
+                      style={{ textShadow: `0 ${opx(1)}px ${opx(3)}px rgba(0,0,0,.6)`, fontSize: labelPx }}
                     >
                       {/* ▶ 접두사는 뺐다(사용자 2026-08-12 · 지저분함). 렌더도 뺐으니 여전히 일치. */}
                       {state.channelName}
                     </span>
                     {extras.map((line) => {
-                      const size = Math.max(6, Math.min(48, line.size ?? Math.round(labelPx * 0.75)));
+                      const size = Math.max(opx(6), Math.min(opx(48), line.size ?? labelPx * 0.75));
                       return (
                         <span
                           key={line.id}
                           className="font-medium text-white/80"
                           style={{
-                            textShadow: `0 ${toCqh(1)} ${toCqh(3)} rgba(0,0,0,.6)`,
-                            fontSize: toCqh(size),
-                            marginTop: toCqh(Math.max(1, Math.round(size * 0.2))),
+                            textShadow: `0 ${opx(1)}px ${opx(3)}px rgba(0,0,0,.6)`,
+                            fontSize: size,
+                            marginTop: Math.max(opx(1), size * 0.2),
                           }}
                         >
                           {line.text}
@@ -694,11 +701,11 @@ export function EditorPreview({
                   </span>
                 );
                 return (
-                  // 아이콘·간격도 cqh — 배지 전체가 스테이지에 비례해 축소되어 서버가 baked 한 PNG
-                  // 텍스트 자리(scale 기준)와 정렬이 유지된다. gap 은 서버 flow gap(세로 4·가로 8px)과 동일.
+                  // 아이콘·간격은 출력 px — 스테이지 fit 축소로 서버가 baked 한 PNG 텍스트 자리와
+                  // 정렬이 유지된다. gap 은 서버 flow gap(세로 4·가로 8 설계 px → opx)과 동일.
                   <span
                     className={cn("flex", layout === "vertical" ? "flex-col items-center" : "items-center")}
-                    style={{ gap: toCqh(layout === "vertical" ? 4 : 8) }}
+                    style={{ gap: opx(layout === "vertical" ? 4 : 8) }}
                   >
                     {state.channelIconDataUrl ? (
                       <img
@@ -706,12 +713,12 @@ export function EditorPreview({
                         alt=""
                         draggable={false}
                         className={cn("object-cover", shapeCls)}
-                        style={{ width: toCqh(iconPx), height: toCqh(iconPx) }}
+                        style={{ width: iconPx, height: iconPx }}
                       />
                     ) : (
                       <span
                         className={cn("flex items-center justify-center bg-white/90 font-bold text-black", shapeCls)}
-                        style={{ width: toCqh(iconPx), height: toCqh(iconPx), fontSize: toCqh(Math.round(iconPx * 0.42)) }}
+                        style={{ width: iconPx, height: iconPx, fontSize: iconPx * 0.42 }}
                       >
                         CH
                       </span>
@@ -742,6 +749,7 @@ export function EditorPreview({
               stageRef={stageRef}
               resizable
               resizeBase={[el.size ?? defaultElementSize(el.type)]}
+              resizePxScale={1 / fit}
               onResize={([s]) => update({ elements: state.elements.map((e) => (e.id === el.id ? { ...e, size: s } : e)) })}
               onDoubleClick={() => setEditing(key)}
               className="rounded-md px-2 py-1 text-sm font-bold"
@@ -786,6 +794,7 @@ export function EditorPreview({
             </div>
           </>
         )}
+      </div>
       </div>
     </div>
   );

@@ -28,6 +28,7 @@ export function Movable({
   stageRef,
   resizable,
   resizeBase,
+  resizePxScale = 1,
   onResize,
   onDoubleClick,
   className,
@@ -45,6 +46,9 @@ export function Movable({
   stageRef: RefObject<HTMLDivElement | null>;
   resizable?: boolean;
   resizeBase?: number[];
+  /** 화면 px → 크기 단위 배율. 스테이지가 출력 해상도로 scale(fit) 될 때 1/fit 을 주면,
+   *  화면 드래그 Δ가 출력 px Δ로 환산돼 커서를 따라간다. 미지정=1(구 동작). */
+  resizePxScale?: number;
   onResize?: (sizes: number[]) => void;
   onDoubleClick?: () => void;
   className?: string;
@@ -103,8 +107,9 @@ export function Movable({
   }
   function rMove(e: React.PointerEvent) {
     if (!resize.current || !onResize) return;
-    const d = ((e.clientX - resize.current.x + (e.clientY - resize.current.y)) / 2) * 0.4;
-    onResize(resize.current.base.map((b) => Math.max(10, Math.min(96, Math.round(b + d)))));
+    // 화면 px Δ → 크기 Δ. resizePxScale(=1/fit)로 출력 px 로 환산. 크기는 출력 px 라 범위도 넓다.
+    const d = ((e.clientX - resize.current.x + (e.clientY - resize.current.y)) / 2) * 0.4 * resizePxScale;
+    onResize(resize.current.base.map((b) => Math.max(8, Math.min(600, Math.round(b + d)))));
   }
   function rUp(e: React.PointerEvent) {
     resize.current = null;

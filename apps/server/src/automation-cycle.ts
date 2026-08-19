@@ -540,7 +540,11 @@ export async function runAutomationCycle(): Promise<CycleReport> {
         });
 
         if (decision.action === "hold") {
-          await holdClip(rule.id, clip.id, decision.reason);
+          // ⚠️ **이미 열린 보류는 다시 쓰지 않는다.** holdClip 은 ON CONFLICT DO UPDATE 로 사유를
+          // 덮는데, 한 번 보류된 뒤로는 decidePublish 가 "보류 상태입니다 — 사람이 확정해야…"
+          // 라는 동어반복만 돌려준다. 그대로 덮으면 두 번째 순방부터 **최초 사유(권리 확인 등)가
+          // 지워져** 승인 대기 화면이 왜 멈춰 있는지 말해주지 못한다(2026-08-19). 새 보류일 때만 쓴다.
+          if (!held) await holdClip(rule.id, clip.id, decision.reason);
           // 보류는 **사람이 확정할 때까지 유지되는 상태**다(F6 Invariant) — 무가드로 두면
           // 승인 대기 건 하나가 15분마다 한 줄씩, 하루 90여 줄을 쌓아 로그 창을 덮는다.
           // 사유가 곧 dedupe 키라 보류 사유가 바뀌면 새 줄이 남는다.

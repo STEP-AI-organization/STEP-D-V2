@@ -26,7 +26,22 @@ const arg = (n: string) => { const i = process.argv.indexOf(n); return i >= 0 ? 
 const api = (arg("--api") ?? "https://stepd.stepai.kr/api/proxy").replace(/\/$/, "");
 const web = (arg("--web") ?? "https://stepd.stepai.kr").replace(/\/$/, "");
 let sessionCookie = arg("--session") ?? "";
-const accountArg = arg("--account");
+/**
+ * 어느 네이버 계정의 로그인인가 — 우선순위: `--account` 인자 > **실행파일 이름** > 물어보기.
+ *
+ * 파일명 경로가 정상 경로다. 웹의 계정 카드에서 받으면 서버가
+ * `stepd-naver-login--nva_abc123.exe` 로 이름을 박아 내려준다(GET /api/naver/login-tool?account=).
+ * 카드에서 이미 고른 계정을 도우미가 또 묻지 않게 하려는 것 — 계정이 둘 이상이면 그때 번호를
+ * 잘못 눌러 **다른 계정에 세션이 들어가는** 사고가 난다. 브라우저가 `(1)` 을 붙여도 읽힌다.
+ */
+const accountArg = arg("--account") ?? accountKeyFromExeName();
+function accountKeyFromExeName(): string | undefined {
+  try {
+    // bun 컴파일 바이너리에서 execPath 는 exe 자신이다. 소스로 돌릴 땐 bun/node 라 안 잡힌다.
+    const base = path.basename(process.execPath);
+    return /(nva_[a-z0-9]+)/i.exec(base)?.[1];
+  } catch { return undefined; }
+}
 
 const SESSION_COOKIE = "stepd_session";
 
@@ -60,7 +75,13 @@ console.log("──────────────────────�
 console.log("브라우저 창이 뜨면 ① STEP D 로그인 → ② 네이버 로그인 순서로 진행하세요.");
 console.log("아이디·비밀번호는 브라우저에만 들어가고 이 프로그램은 저장하지 않습니다.\n");
 
-if (process.argv.includes("--smoke")) { console.log("[smoke] ok"); process.exit(0); }
+if (process.argv.includes("--smoke")) {
+  // 계정 키 해석 결과를 같이 찍는다 — 파일명 파싱은 **컴파일된 exe 안에서만** 확인되는
+  // 동작이라(process.execPath 가 bun 이 아니라 exe 자신), 이게 없으면 빌드 후 검증할 방법이 없다.
+  console.log(`[smoke] exe=${path.basename(process.execPath)} account=${accountArg ?? "(없음 → 물어봄)"}`);
+  console.log("[smoke] ok");
+  process.exit(0);
+}
 
 // ── 브라우저 spawn + CDP ───────────────────────────────────────────────────────
 
@@ -176,22 +197,39 @@ try {
   }
 
   // ── 2) 어느 네이버 계정에 붙일지 ─────────────────────────────────────────────
-  let accountId = accountArg;
-  if (!accountId) {
-    const { accounts } = await apiJson("/api/naver/accounts");
-    const usable = (accounts ?? []).filter((a: any) => a.status !== "disabled");
-    if (usable.length === 0) {
-      throw new Error("등록된 네이버 계정이 없습니다 — 배포채널 화면에서 '＋ 네이버 계정 추가'를 먼저 하세요.");
+  //
+  // 목록은 **항상** 불러온다 — 계정 키가 있어도 그 계정이 아직 있는지·이름이 뭔지 확인해서
+  // 사람에게 보여줘야 한다. 어느 계정에 붙는지 모른 채 로그인하는 상황을 만들지 않는다.
+  const { accounts } = await apiJson("/api/naver/accounts");
+  const usable = (accounts ?? []).filter((a: any) => a.status !== "disabled");
+  if (usable.length === 0) {
+    throw new Error("등록된 네이버 계정이 없습니다 — 배포채널 화면에서 '＋ 네이버 계정 추가'를 먼저 하세요.");
+  }
+
+  let accountId: string | undefined;
+  if (accountArg) {
+    // id·accountKey 둘 다로 찾는다(현재는 같은 값이지만 갈라져도 안 깨지게).
+    const hit = usable.find((a: any) => a.id === accountArg || a.accountKey === accountArg);
+    if (!hit) {
+      throw new Error(
+        `계정 '${accountArg}' 을(를) 찾을 수 없습니다 — 삭제됐거나 사용 중지됐습니다. ` +
+        `배포채널 화면에서 다시 내려받으세요.`);
     }
-    if (usable.length === 1) {
-      accountId = usable[0].id;
-      console.log(`② 계정: ${usable[0].label}`);
-    } else {
-      console.log("② 어느 계정의 로그인인가요?");
-      usable.forEach((a: any, i: number) => console.log(`   ${i + 1}. ${a.label} (${a.target})`));
-      while (!accountId) {
-        const n = Number((await ask("   번호 입력: ")).trim());
-        if (Number.isInteger(n) && n >= 1 && n <= usable.length) accountId = usable[n - 1].id;
+    accountId = hit.id;
+    console.log(`② 계정: ${hit.label}  ← 웹에서 고른 계정`);
+  } else if (usable.length === 1) {
+    accountId = usable[0].id;
+    console.log(`② 계정: ${usable[0].label}`);
+  } else {
+    // 폴백 — 웹 카드가 아니라 예전 링크·직접 실행으로 받은 경우. 계정이 둘 이상이면
+    // 여기서 잘못 고르면 세션이 엉뚱한 계정에 들어가므로, 고른 이름을 다시 찍어 확인시킨다.
+    console.log("② 어느 계정의 로그인인가요?");
+    usable.forEach((a: any, i: number) => console.log(`   ${i + 1}. ${a.label} (${a.target})`));
+    while (!accountId) {
+      const n = Number((await ask("   번호 입력: ")).trim());
+      if (Number.isInteger(n) && n >= 1 && n <= usable.length) {
+        accountId = usable[n - 1].id;
+        console.log(`   선택: ${usable[n - 1].label}`);
       }
     }
   }

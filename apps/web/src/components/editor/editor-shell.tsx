@@ -4,6 +4,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ArrowLeft, Save, Send, Info, Check, Sparkles, Film, Plus, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen } from "lucide-react";
+import { Group, Panel, Separator } from "react-resizable-panels";
+import { cn, formatTimecode } from "@/lib/utils";
 import { useAppData } from "@/lib/data/store";
 import { useToast } from "@/components/ui/toast";
 import { getStreamUrl, getMediaAnalysis, generateUploadMetadata, API_BASE, ApiError, type AnalysisTranscriptSegment, type AnalysisScene , fetchShortsTemplates, type FrameTemplate } from "@/lib/data/api";
@@ -18,7 +20,7 @@ import {
   type EditorTrack,
   type KfSelection,
 } from "@/lib/editor/presets";
-import { isPortraitAspect, normalizeAspectPreset } from "@/lib/editor/aspect-presets";
+import { isPortraitAspect } from "@/lib/editor/aspect-presets";
 import { useEditorHistory } from "@/lib/editor/useEditorHistory";
 import { EditorPreview } from "@/components/editor/editor-preview";
 import { EditorPanel } from "@/components/editor/editor-panel";
@@ -29,13 +31,22 @@ import {
   resolvePendingTrimReframe,
   type PendingTrimReframe,
 } from "@/lib/editor/reframe";
-import { RENDER_CHANNELS, type ReframeMode, type RenderChannel } from "@/lib/types";
+import { type ReframeMode } from "@/lib/types";
 
-/** 배포처 프리셋의 비율 계열("9:16"/"16:9") → 구체 5-값 enum. 세로면 현재 세로 선택을 유지하고,
- *  가로→세로 전환이면 위 자막띠(crop-main)를 기본으로 둔다. */
-function presetAspectToEnum(family: "16:9" | "9:16", current: AspectKey): AspectKey {
-  if (family === "16:9") return "16:9";
-  return isPortraitAspect(current) ? current : "9:16-crop-main";
+// 좌/우 리사이즈 패널의 반응형 게이트 — 예전 aside 의 `hidden lg:flex`/`hidden md:flex` 를
+// 대체한다(리사이즈 패널은 CSS `hidden` 으로 폭을 회수하지 못해 JS 로 존재 여부를 정한다).
+// 데스크톱-퍼스트: 초기값 true(에디터는 데스크톱 도구). 에디터 셸은 clip 로딩 게이트 뒤에서만
+// 패널을 마운트하므로 SSR 에서 패널이 그려지지 않아 하이드레이션 불일치가 없다.
+function useMinWidth(px: number) {
+  const [wide, setWide] = useState(true);
+  useEffect(() => {
+    const mq = window.matchMedia(`(min-width: ${px}px)`);
+    const sync = () => setWide(mq.matches);
+    sync();
+    mq.addEventListener("change", sync);
+    return () => mq.removeEventListener("change", sync);
+  }, [px]);
+  return wide;
 }
 
 export function EditorShell({ clipId }: { clipId: string }) {
@@ -174,35 +185,29 @@ export function EditorShell({ clipId }: { clipId: string }) {
   // 좌측 패널 탭. Opus Clip 처럼 트랜스크립트를 기본으로 — 자막을 읽으며 편집한다.
   const [leftTab, setLeftTab] = useState<"transcript" | "ai">("transcript");
   const [rightOpen, setRightOpen] = useState(true);
+  // 좌 패널은 lg(1024)↑, 우 패널은 md(768)↑ 에서만 노출 — 예전 aside 반응형과 동일.
+  const lgUp = useMinWidth(1024);
+  const mdUp = useMinWidth(768);
+  const showLeft = leftOpen && lgUp;
+  const showRight = rightOpen && mdUp;
   // 렌더는 서버 동기 처리라 실제 진척을 측정하지 않는다 — 버튼은 "진행 중"만 표시한다(G).
   // 예전엔 경과 초(…s)와 예상 단계를 보여줬는데, 실측과 무관한 숫자라 오히려 오해를 샀다.
   const rendered = clip?.status === "ready" || clip?.status === "published";
   const aiReframeNotReady = reframeMode === "ai_multi" && reframe?.status !== "ready";
 
-  // ── F3: which destination this export renders for ───────────────────────────
+  // ── 렌더 종횡비의 정본은 **레이아웃 탭 하나**다 (사용자 확정 2026-08-19) ───────────
   //
-  // "" = 원본 유지 (no preset): the clip renders at its own aspect over the full segment —
-  // exactly the behaviour that existed before presets. That is deliberately the fallback
-  // default: seeding Shorts for everything would reframe a 16:9 하이라이트 to vertical and
-  // cap it at 60s, silently changing what today's clips produce. A preset only applies when
-  // something actually chose one — the AI matrix at adopt (targetChannel), or the operator here.
-  const [channel, setChannel] = useState<RenderChannel | "">("");
-  const [capped, setCapped] = useState<{ maxSec: number; requestedSec: number } | null>(null);
+  // 예전엔 헤더에 "렌더 프리셋"(YouTube Shorts · Reels · 네이버 TV) 픽커가 따로 있어서,
+  // 같은 것을 정하는 컨트롤이 두 개였다. 게다가 프리셋이 editorState.aspect 를 force-sync 해서
+  // 레이아웃 탭 클릭을 되돌렸고, 그걸 막으려고 override ref 를 하나 더 얹은 상태였다.
+  // 픽커를 없애고 그 뭉치를 걷어낸다 — 종횡비는 레이아웃 탭, 길이는 사용자가 자른 구간.
+  //
+  // 서버는 body.channel 이 빈 문자열이면 프리셋 없음으로 읽는다(resolveRenderPreset —
+  // `channel ?? clip.targetChannel` 라 **빈 문자열은 폴백을 타지 않는다**). api.ts 가 이미
+  // `channel: channel ?? ""` 로 보내므로, 인자를 빼는 것만으로 프리셋이 완전히 꺼진다.
+  // 따라서 배포처 길이 상한(Shorts 60초 등)에 맞춘 **자동 잘라내기도 더 이상 없다** —
+  // 자른 구간이 그대로 나간다. 채널 길이 조건은 배포 단계(자동배포 채널 규칙)가 본다.
 
-  // Seed from the clip's AI-suggested destination once it lands. Once the operator picks a
-  // preset themselves (channelPickedRef), the seed must never clobber it — their choice
-  // outranks the suggestion. The ref resets per clip so a new clip seeds fresh.
-  const channelPickedRef = useRef(false);
-  useEffect(() => {
-    channelPickedRef.current = false;
-  }, [clip?.id]);
-  useEffect(() => {
-    if (channelPickedRef.current) return;
-    setChannel(clip?.targetChannel ?? "");
-    setCapped(null);
-  }, [clip?.id, clip?.targetChannel]);
-
-  const preset = channel ? RENDER_CHANNELS[channel] : null;
   // AI output is always vertical, but that must not overwrite the operator's Basic layout.
   // The server independently enforces 9:16 for ai_multi; this effective state keeps preview
   // and controls honest while preserving state.aspect for a later switch back to Basic.
@@ -212,37 +217,10 @@ export function EditorShell({ clipId }: { clipId: string }) {
     [reframeMode, state],
   );
 
-  // Operator's manual 종횡비 pick beats the preset (aspectOverrideRef). Without this, the
-  // force-sync effect below reverts every layout-tab aspect click instantly, so on the common
-  // path (AI-adopted clips carry a targetChannel → preset) the 레이아웃 탭 종횡비 buttons look
-  // dead. Reset per clip and whenever the operator switches destination — the new preset owns
-  // the frame again until they override it once more.
-  const aspectOverrideRef = useRef(false);
-  useEffect(() => {
-    aspectOverrideRef.current = false;
-  }, [clip?.id, channel]);
-
-  // A chosen destination seeds the frame. This is not cosmetic: the server resolves the render
-  // aspect as editorState.aspect > preset > clip.aspectRatio, and buildEditorAss maps overlay
-  // \pos from the preview stage's aspect — so preview must match what the render will use.
-  // es.aspect is always set, so seeding it to the preset keeps preview == render by default;
-  // an explicit operator override is honored by that same precedence, so it stays consistent.
-  // No-op while channel is "" — which is why existing clips (no targetChannel) are untouched.
-  const presetEnum = preset ? presetAspectToEnum(preset.aspect, state.aspect) : null;
-  useEffect(() => {
-    if (reframeMode === "ai_multi") return;
-    if (presetEnum && !aspectOverrideRef.current && state.aspect !== presetEnum) {
-      update({ aspect: presetEnum });
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [presetEnum, reframeMode, state.aspect]);
-
-  // Layout tab writes through this: an aspect patch is an explicit operator override, so it
-  // must stick against the preset force-sync. All other patches pass straight through.
+  // 레이아웃 탭이 종횡비의 유일한 주인이라, 예전의 force-sync ↔ override ref 줄다리기가
+  // 통째로 없어졌다. 여기 남은 규칙은 하나뿐 — AI 다중 레이아웃은 세로 고정이다.
   const panelUpdate = (patch: Partial<EditorState>) => {
-    // AI 다중 레이아웃은 세로 고정 — 가로 종횡비 선택은 무시한다(세로 enum 은 허용).
     if (reframeMode === "ai_multi" && "aspect" in patch && !isPortraitAspect(patch.aspect)) return;
-    if ("aspect" in patch) aspectOverrideRef.current = true;
     update(patch);
   };
 
@@ -484,10 +462,11 @@ export function EditorShell({ clipId }: { clipId: string }) {
         await saveClipEditor(clip.id, state);
         setSaved(true);
       }
-      const res = await exportClip(clip.id, channel || undefined);
-      setCapped(res.capped);
+      // 프리셋 없이 렌더한다 — 종횡비는 레이아웃 탭(editorState.aspect), 길이는 자른 구간
+      // 그대로. api.ts 가 channel 을 "" 로 보내 서버 프리셋 폴백(clip.targetChannel)까지 끈다.
+      const res = await exportClip(clip.id);
       // The render can take minutes — confirm it actually finished, not just that the
-      // button reset. capped is surfaced separately by the banner below.
+      // button reset.
       toast({
         title: "렌더 완료",
         description: res.hookPreroll
@@ -807,35 +786,15 @@ export function EditorShell({ clipId }: { clipId: string }) {
         </button>
         <span className="min-w-0 flex-1 truncate text-sm font-medium">{title}</span>
 
+        {/* P4 — 자른 구간(IN/OUT) 글랜스 타임코드. 타임라인이 이미 현재/전체를 보여주므로
+            헤더는 "현재 자른 구간"만 상시 노출한다(중복 회피). IN=cyan · OUT=amber(AENA 헤더식). */}
+        <div className="hidden shrink-0 items-center gap-2.5 text-[11px] tabular-nums text-zinc-500 lg:flex">
+          <span className="flex items-center gap-1"><span className="font-medium text-cyan-400">IN</span>{formatTimecode(state.trimIn)}</span>
+          <span className="flex items-center gap-1"><span className="font-medium text-amber-400">OUT</span>{formatTimecode(state.trimOut)}</span>
+          <span className="text-zinc-600">{formatTimecode(Math.max(0, state.trimOut - state.trimIn))}</span>
+        </div>
+
         <div className="flex shrink-0 items-center gap-2">
-          {/* 배포처 선택 — 길이 상한 배너가 "배포처를 바꾸세요"라고 안내하는데 정작 바꿀 UI 가
-              프론트 어디에도 없었다. 여기서 고른 값이 exportClip(channel)로 그대로 간다. */}
-          <select
-            value={channel}
-            onChange={(e) => {
-              const next = e.target.value as RenderChannel | "";
-              channelPickedRef.current = true;
-              setChannel(next);
-              setCapped(null);
-              // "원본 유지"로 되돌릴 때 종횡비도 함께 되돌린다. 위 force-sync 이펙트는
-              // preset 이 null 이면 아무것도 안 해서, 직전 프리셋 프레임이 그대로 남는다
-              // (서버는 editorState.aspect 를 clip.aspectRatio 보다 우선한다).
-              // 사용자가 레이아웃 탭에서 직접 고른 종횡비는 건드리지 않는다.
-              if (!next && !aspectOverrideRef.current) {
-                // 클립의 채택 종횡비(5-값 enum)로 되돌린다 — 세로면 그 하위분류(crop-main 등)를 보존.
-                update({ aspect: normalizeAspectPreset(clip?.aspectRatio).aspect });
-              }
-            }}
-            title="렌더 프리셋 — 종횡비와 길이 상한이 달라집니다"
-            className="hidden rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-sm text-zinc-200 outline-none hover:bg-zinc-800 sm:block"
-          >
-            <option value="">원본 유지</option>
-            {(Object.keys(RENDER_CHANNELS) as RenderChannel[]).map((k) => (
-              <option key={k} value={k}>
-                {RENDER_CHANNELS[k].label}
-              </option>
-            ))}
-          </select>
           <MetadataButton clipId={clipId} state={state} update={update} />
           <button
             onClick={() => void save()}
@@ -853,10 +812,8 @@ export function EditorShell({ clipId }: { clipId: string }) {
               aiReframeNotReady
                 ? "AI 리프레임 분석 완료 후 렌더할 수 있습니다. 실패했다면 AI 패널에서 재분석하거나 기본 모드를 선택하세요."
                 : reframeMode === "ai_multi"
-                  ? `AI 다중 레이아웃을 9:16으로 렌더합니다${preset ? ` · ${preset.label} 최대 ${preset.maxSec}초` : ""}.`
-                : preset
-                ? `${preset.label} 프리셋으로 렌더합니다 — ${preset.aspect}, 최대 ${preset.maxSec}초 (렌더는 여기서 단 한 번 — plan §2.4)`
-                : `현재 종횡비(${state.aspect})로 구간 전체를 렌더합니다 — 길이 상한 없음 (렌더는 여기서 단 한 번 — plan §2.4)`
+                  ? "AI 다중 레이아웃을 9:16으로 렌더합니다."
+                  : `현재 종횡비(${state.aspect})로 구간 전체를 렌더합니다 — 길이 상한 없음 (렌더는 여기서 단 한 번 — plan §2.4)`
             }
             className="inline-flex items-center gap-1.5 rounded-md border border-zinc-700 px-3 py-1.5 text-sm text-zinc-200 hover:bg-zinc-800 disabled:opacity-60"
           >
@@ -869,87 +826,23 @@ export function EditorShell({ clipId }: { clipId: string }) {
             type="button"
             onClick={() => void navGuarded("/distribution")}
             title="배포로 이동 — 저장하지 않은 편집이 있으면 먼저 저장합니다"
-            className="inline-flex items-center gap-1.5 rounded-md bg-white px-3 py-1.5 text-sm font-medium text-black hover:bg-zinc-200"
+            className="inline-flex items-center gap-1.5 rounded-md bg-cyan-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-cyan-500"
           >
             <Send className="size-4" /> 배포
           </button>
         </div>
       </header>
 
-      {/* The preset's length cap shortened the deliverable. The operator picked a longer
-          segment and got a shorter file — say so rather than let it pass unnoticed. */}
-      {capped && (
-        <div
-          role="status"
-          className="flex items-start gap-2 border-b border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-200"
-        >
-          <Info className="mt-0.5 size-4 shrink-0" />
-          <span>
-            {preset?.label ?? "선택한 배포처"}의 길이 상한 {capped.maxSec}초에 맞춰 잘렸습니다 — 고른 구간은{" "}
-            {capped.requestedSec.toFixed(1)}초입니다. 전체를 살리려면 상단 배포처 선택을 바꾸거나 “원본 유지”로 다시 렌더하세요.
-          </span>
-        </div>
-      )}
+      {/* 길이 상한 배너는 프리셋과 함께 없앴다 — 이제 자른 구간이 그대로 나가므로 잘릴 일이
+          없다. 채널별 길이 조건은 배포 단계(자동배포 채널 규칙)가 본다. */}
 
-      {/* body — CapCut 스타일 3열. 좌우 aside는 접었다 폈다 (버튼·아이콘 바). 접히면 프리뷰 확장. */}
+      {/* body — AENA식 3열 리사이즈(react-resizable-panels). 좌/우는 드래그로 폭을 조절하고,
+          접기 토글(아이콘 바)은 그대로 유지한다. 접힌 패널은 Group 밖 고정폭 바로 렌더한다.
+          P1 중앙=검은 플레이어(bg-black·타이트 패딩) · P3 좌(26%)>우(20%) 비대칭. */}
       <div className="flex min-h-0 flex-1">
-        {/* 좌: AI 패널 (접힘 시 얇은 아이콘 바) */}
-        {leftOpen ? (
-          <aside className="hidden w-72 shrink-0 flex-col border-r border-zinc-800 bg-zinc-950 lg:flex xl:w-80">
-            <div className="flex h-8 items-center gap-1 border-b border-zinc-800 px-2 text-[11px] font-medium">
-              {/* Opus 식: 트랜스크립트가 주(主). 제목·장면 후보는 AI 탭. */}
-              <button
-                onClick={() => setLeftTab("transcript")}
-                className={leftTab === "transcript" ? "rounded bg-zinc-800 px-2 py-0.5 text-white" : "px-2 py-0.5 text-zinc-400 hover:text-zinc-200"}
-              >
-                자막
-              </button>
-              <button
-                onClick={() => setLeftTab("ai")}
-                className={leftTab === "ai" ? "rounded bg-zinc-800 px-2 py-0.5 text-white" : "px-2 py-0.5 text-zinc-400 hover:text-zinc-200"}
-              >
-                AI 패널
-              </button>
-              <button
-                onClick={() => setLeftOpen(false)}
-                className="ml-auto rounded p-1 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200"
-                title="접기"
-              >
-                <PanelLeftClose className="size-3.5" />
-              </button>
-            </div>
-            {leftTab === "transcript" ? (
-              <TranscriptView
-                segments={transcript}
-                scenes={scenes}
-                // 재생 위치를 원본 절대초로 — 클립 미리보기는 videoTime 이 클립 상대초라 오프셋을 더한다.
-                currentAbs={videoTime + clipStartAbs}
-                onSeekAbs={(abs) => {
-                  // 절대초 → 재생 좌표. 클립이면 시작 오프셋을 빼고, 트림 창 안으로 클램프.
-                  if (!videoEl) return;
-                  const local = Math.max(0, abs - clipStartAbs);
-                  videoEl.currentTime = local;
-                  setVideoTime(local);
-                }}
-                hookQuote={clip?.hookQuote ?? sourceRecEarly?.hookQuote}
-              />
-            ) : (
-              <EditorAiPanel
-                clipId={clipId}
-                scenes={scenes}
-                scenesState={scenesState}
-                sourceRec={sourceRec}
-                currentTitle={state.titleLines[0]?.text ?? ""}
-                onApplyTitle={applyTitle}
-                reframe={reframe}
-                reframeBusy={reframeBusy}
-                onReanalyze={(retry) => void runReframeRequest("ai_multi", retry)}
-                onUseBasic={() => void runReframeRequest("basic")}
-              />
-            )}
-          </aside>
-        ) : (
-          <div className="hidden w-10 shrink-0 flex-col items-center border-r border-zinc-800 bg-zinc-950 py-2 lg:flex">
+        {/* 좌 접힘 — 얇은 아이콘 바 (Group 밖 고정폭) */}
+        {lgUp && !leftOpen && (
+          <div className="flex w-10 shrink-0 flex-col items-center border-r border-zinc-800 bg-zinc-950 py-2">
             <button
               onClick={() => setLeftOpen(true)}
               className="rounded p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
@@ -961,68 +854,159 @@ export function EditorShell({ clipId }: { clipId: string }) {
           </div>
         )}
 
-        {/* 중앙: 프리뷰 (확장 가능) */}
-        <div className="flex min-w-0 flex-1 items-center justify-center overflow-auto bg-zinc-900 p-4 sm:p-6">
-          <EditorPreview
-            clipId={clipId}
-            frame={frame}
-            state={displayState}
-            update={update}
-            videoUrl={videoUrl}
-            videoRef={setVideoEl}
-            onDuration={handleDuration}
-            onTogglePlay={togglePlay}
-            caption={captionText}
-            hasTranscript={!!transcript}
-            currentTime={videoTime}
-            masterTime={videoTime + clipStartAbs}
-            reframe={reframe}
-            posterMediaId={mediaId}
-            posterApiBase={API_BASE}
-            /* poster는 AI 추천 시작 프레임(마스터 절대 초) 하나로 고정 — trimIn이 바뀔 때마다
-               다시 fetch되면 캐시 무효화 폭탄이라 videoUrl 로드 전까지의 정지 미리보기만 담당. */
-            posterTime={recStart}
-          />
-        </div>
+        <Group orientation="horizontal" className="min-h-0 min-w-0 flex-1">
+          {/* 좌: 자막/AI 패널 */}
+          {showLeft ? (
+            <Panel
+              id="editor-left"
+              defaultSize="26%"
+              minSize="16%"
+              maxSize="38%"
+              className="flex flex-col border-r border-zinc-800 bg-zinc-950"
+            >
+              <div className="flex h-8 shrink-0 items-center gap-1 border-b border-zinc-800 px-2 text-[11px] font-medium">
+                {/* Opus 식: 트랜스크립트가 주(主). 제목·장면 후보는 AI 탭. 활성 탭=AENA cyan 밑줄(P5). */}
+                <button
+                  onClick={() => setLeftTab("transcript")}
+                  className={cn(
+                    "border-b-2 px-2 py-0.5",
+                    leftTab === "transcript" ? "border-cyan-500 text-white" : "border-transparent text-zinc-400 hover:text-zinc-200",
+                  )}
+                >
+                  자막
+                </button>
+                <button
+                  onClick={() => setLeftTab("ai")}
+                  className={cn(
+                    "border-b-2 px-2 py-0.5",
+                    leftTab === "ai" ? "border-cyan-500 text-white" : "border-transparent text-zinc-400 hover:text-zinc-200",
+                  )}
+                >
+                  AI 패널
+                </button>
+                <button
+                  onClick={() => setLeftOpen(false)}
+                  className="ml-auto rounded p-1 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200"
+                  title="접기"
+                >
+                  <PanelLeftClose className="size-3.5" />
+                </button>
+              </div>
+              <div className="flex min-h-0 flex-1 flex-col">
+                {leftTab === "transcript" ? (
+                  <TranscriptView
+                    segments={transcript}
+                    scenes={scenes}
+                    // 재생 위치를 원본 절대초로 — 클립 미리보기는 videoTime 이 클립 상대초라 오프셋을 더한다.
+                    currentAbs={videoTime + clipStartAbs}
+                    onSeekAbs={(abs) => {
+                      // 절대초 → 재생 좌표. 클립이면 시작 오프셋을 빼고, 트림 창 안으로 클램프.
+                      if (!videoEl) return;
+                      const local = Math.max(0, abs - clipStartAbs);
+                      videoEl.currentTime = local;
+                      setVideoTime(local);
+                    }}
+                    hookQuote={clip?.hookQuote ?? sourceRecEarly?.hookQuote}
+                  />
+                ) : (
+                  <EditorAiPanel
+                    clipId={clipId}
+                    scenes={scenes}
+                    scenesState={scenesState}
+                    sourceRec={sourceRec}
+                    currentTitle={state.titleLines[0]?.text ?? ""}
+                    onApplyTitle={applyTitle}
+                    reframe={reframe}
+                    reframeBusy={reframeBusy}
+                    onReanalyze={(retry) => void runReframeRequest("ai_multi", retry)}
+                    onUseBasic={() => void runReframeRequest("basic")}
+                  />
+                )}
+              </div>
+            </Panel>
+          ) : null}
+          {showLeft ? <Separator className="w-1.5 bg-zinc-800 transition-colors hover:bg-cyan-500" /> : null}
 
-        {/* 우: 속성 패널 (접힘 시 얇은 아이콘 바) */}
-        {rightOpen ? (
-          <aside className="hidden w-72 shrink-0 border-l border-zinc-800 bg-zinc-950 md:block xl:w-80">
-            <div className="flex h-8 items-center justify-between border-b border-zinc-800 px-2 text-[11px] font-medium text-zinc-400">
-              <button
-                onClick={() => setRightOpen(false)}
-                className="rounded p-1 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200"
-                title="접기"
-              >
-                <PanelRightClose className="size-3.5" />
-              </button>
-              <span>속성</span>
-            </div>
-            {/* frames·currentTime·onSeek 은 패널이 이미 받는 prop 인데 안 넘겨서 죽어 있었다 —
-                프레임 템플릿 목록·"현재 시간에 키프레임 추가"·키프레임 탐색이 여기에 달려 있다. */}
-            <EditorPanel
+          {/* 중앙: 프리뷰 — P1 검은 플레이어. 스테이지 내부 좌표계는 건드리지 않음(리플로우-세이프). */}
+          <Panel
+            id="editor-center"
+            defaultSize="54%"
+            minSize="38%"
+            className="flex min-w-0 items-center justify-center overflow-auto bg-black p-2 sm:p-3"
+          >
+            <EditorPreview
+              clipId={clipId}
+              frame={frame}
               state={displayState}
-              update={panelUpdate}
-              applyTpl={applyTpl}
-              frames={frames}
-              kfSel={kfSel}
-              setKfSel={setKfSel}
+              update={update}
+              videoUrl={videoUrl}
+              videoRef={setVideoEl}
+              onDuration={handleDuration}
+              onTogglePlay={togglePlay}
+              caption={captionText}
+              hasTranscript={!!transcript}
               currentTime={videoTime}
-              onSeek={(sec) => {
-                if (videoEl) videoEl.currentTime = sec;
-              }}
+              masterTime={videoTime + clipStartAbs}
               reframe={reframe}
-              reframeBusy={reframeBusy}
-              onReframeModeChange={(mode) => {
-                if (mode !== reframeMode) void runReframeRequest(mode);
-                else if (mode === "ai_multi" && (reframe?.status === "failed" || reframe?.status === "stale")) {
-                  void runReframeRequest(mode, reframe.status === "failed");
-                }
-              }}
+              posterMediaId={mediaId}
+              posterApiBase={API_BASE}
+              /* poster는 AI 추천 시작 프레임(마스터 절대 초) 하나로 고정 — trimIn이 바뀔 때마다
+                 다시 fetch되면 캐시 무효화 폭탄이라 videoUrl 로드 전까지의 정지 미리보기만 담당. */
+              posterTime={recStart}
             />
-          </aside>
-        ) : (
-          <div className="hidden w-10 shrink-0 flex-col items-center border-l border-zinc-800 bg-zinc-950 py-2 md:flex">
+          </Panel>
+
+          {/* 우: 속성 패널 */}
+          {showRight ? <Separator className="w-1.5 bg-zinc-800 transition-colors hover:bg-cyan-500" /> : null}
+          {showRight ? (
+            <Panel
+              id="editor-right"
+              defaultSize="20%"
+              minSize="15%"
+              maxSize="30%"
+              className="flex flex-col border-l border-zinc-800 bg-zinc-950"
+            >
+              <div className="flex h-8 shrink-0 items-center justify-between border-b border-zinc-800 px-2 text-[11px] font-medium text-zinc-400">
+                <button
+                  onClick={() => setRightOpen(false)}
+                  className="rounded p-1 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200"
+                  title="접기"
+                >
+                  <PanelRightClose className="size-3.5" />
+                </button>
+                <span>속성</span>
+              </div>
+              {/* frames·currentTime·onSeek 은 패널이 이미 받는 prop 인데 안 넘겨서 죽어 있었다 —
+                  프레임 템플릿 목록·"현재 시간에 키프레임 추가"·키프레임 탐색이 여기에 달려 있다. */}
+              <div className="min-h-0 flex-1">
+                <EditorPanel
+                  state={displayState}
+                  update={panelUpdate}
+                  applyTpl={applyTpl}
+                  frames={frames}
+                  kfSel={kfSel}
+                  setKfSel={setKfSel}
+                  currentTime={videoTime}
+                  onSeek={(sec) => {
+                    if (videoEl) videoEl.currentTime = sec;
+                  }}
+                  reframe={reframe}
+                  reframeBusy={reframeBusy}
+                  onReframeModeChange={(mode) => {
+                    if (mode !== reframeMode) void runReframeRequest(mode);
+                    else if (mode === "ai_multi" && (reframe?.status === "failed" || reframe?.status === "stale")) {
+                      void runReframeRequest(mode, reframe.status === "failed");
+                    }
+                  }}
+                />
+              </div>
+            </Panel>
+          ) : null}
+        </Group>
+
+        {/* 우 접힘 — 얇은 아이콘 바 (Group 밖 고정폭) */}
+        {mdUp && !rightOpen && (
+          <div className="flex w-10 shrink-0 flex-col items-center border-l border-zinc-800 bg-zinc-950 py-2">
             <button
               onClick={() => setRightOpen(true)}
               className="rounded p-1.5 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"

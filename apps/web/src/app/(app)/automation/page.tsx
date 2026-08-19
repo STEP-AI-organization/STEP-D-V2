@@ -35,6 +35,7 @@ import {
   deleteAutomationRule,
   fetchAutomation,
   fetchChannelRules,
+  getStreamUrl,
   fetchNaverAccounts,
   fetchShortsTemplates,
   fetchYouTubeChannels,
@@ -55,6 +56,59 @@ import { channelLabel, PIPELINE_STAGES } from "@/lib/constants";
 import type { Clip, Episode } from "@/lib/types";
 import { clipThumbSrc, mediaThumbSrc } from "@/lib/media-url";
 import { cn } from "@/lib/utils";
+
+/**
+ * 승인 대기 카드의 렌더 결과 미리보기 — **나갈 파일 그대로** 를 그 자리에서 재생한다.
+ *
+ * 예전엔 "미리보기" 가 편집기로 보냈다. 편집기는 원본(마스터)에 오버레이를 얹어 **다시 그리는**
+ * 화면이라, 승인 여부를 판단하려면 결국 결과물을 상상해야 했다(사용자 지적 2026-08-19:
+ * "그래야 승인할지 안 할지 딱 보지"). 여기서 재생하는 건 clip.mediaId — 자막·오버레이가 이미
+ * 구워진 렌더 산출물이다. 편집은 별도 버튼으로 분리했다.
+ */
+function HeldPreview({ clip }: { clip: Clip }) {
+  const [url, setUrl] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    setUrl(null);
+    setErr(null);
+    if (!clip.mediaId) {
+      setErr("아직 렌더된 파일이 없습니다");
+      return;
+    }
+    getStreamUrl(clip.mediaId)
+      .then((u) => { if (alive) setUrl(u); })
+      .catch((e) => { if (alive) setErr(e instanceof Error ? e.message : String(e)); });
+    return () => { alive = false; };
+  }, [clip.mediaId]);
+
+  if (err) {
+    return (
+      <div className="w-full rounded-[4px] px-3 py-2 text-[11px]" style={{ background: "var(--sd-card-sub)", color: "var(--sd-warn)" }}>
+        {err}
+      </div>
+    );
+  }
+  if (!url) {
+    return (
+      <div className="w-full rounded-[4px] px-3 py-2 text-[11px]" style={{ background: "var(--sd-card-sub)", color: "var(--sd-mut)" }}>
+        불러오는 중…
+      </div>
+    );
+  }
+  return (
+    <video
+      src={url}
+      controls
+      autoPlay
+      playsInline
+      // 세로 쇼츠가 카드를 삼키지 않게 높이로 묶는다 — 가로폭은 비율이 정한다.
+      className="max-h-[420px] rounded-[4px] bg-black"
+      style={{ maxWidth: "100%" }}
+    />
+  );
+}
 
 const KIND_LABEL: Record<RuleMediaKind, string> = { short: "숏폼", clip: "클립", both: "숏폼+클립" };
 const CRIT_LABEL: Record<RuleCriterion, string> = { score80: "점수 80 이상", score85: "점수 85 이상", top3: "상위 3건" };
@@ -179,6 +233,9 @@ export default function AutomationPage() {
   const [error, setError] = useState<string | null>(null);
   const [runningNow, setRunningNow] = useState(false);
   const [releasing, setReleasing] = useState<string | null>(null);
+  // 승인 대기 카드에서 렌더 결과를 펼쳐 보고 있는 클립. 하나만 — 여러 개가 동시에 재생되면
+  // 소리가 겹치고 스크롤이 길어져서 "딱 보고 판단" 이 안 된다.
+  const [previewClipId, setPreviewClipId] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -375,7 +432,45 @@ export default function AutomationPage() {
   const inflightRender = clips.filter(
     (c) => (c as { automationRuleId?: string }).automationRuleId && !c.rendered,
   ).length;
-  const heldCount = holds.length;
+  // ── 승인 대기는 **영상 단위**다 (사용자 확정 2026-08-19: "걍 그 영상 하나하나만 떠야지") ──
+  //
+  // 보류 행(rule_hold)은 규칙×클립이라, 같은 영상이 규칙 두 개에 걸리면 두 줄이 된다. 사람이
+  // 보는 단위는 규칙이 아니라 **영상**이다 — 여기서 클립 하나로 접고, 승인은 그 영상에 걸린
+  // 보류를 전부 푼다. 기록 쪽 held 줄도 같은 기준으로 접어야 두 목록의 개수가 맞는다.
+  const heldClips = useMemo(() => {
+    const byClip = new Map<string, { clipId: string; holds: RuleHold[]; heldAt: string; reasons: string[] }>();
+    for (const h of holds) {
+      const cur = byClip.get(h.clipId);
+      if (cur) {
+        cur.holds.push(h);
+        // 대기 시작은 **가장 이른** 시각 — 규칙이 나중에 하나 더 걸렸다고 대기가 리셋되진 않는다.
+        if (h.heldAt && (!cur.heldAt || h.heldAt < cur.heldAt)) cur.heldAt = h.heldAt;
+        if (h.reason && !cur.reasons.includes(h.reason)) cur.reasons.push(h.reason);
+      } else {
+        byClip.set(h.clipId, {
+          clipId: h.clipId, holds: [h], heldAt: h.heldAt, reasons: h.reason ? [h.reason] : [],
+        });
+      }
+    }
+    return [...byClip.values()].sort((a, b) => (b.heldAt ?? "").localeCompare(a.heldAt ?? ""));
+  }, [holds]);
+  const heldCount = heldClips.length;
+
+  // 기록의 '승인 대기' 줄도 같은 기준으로 접는다. 서버는 (규칙×클립×**채널**×사유)마다 한 줄을
+  // 남기므로 채널이 셋인 규칙이면 같은 영상이 여섯 줄까지 뜬다 — 그래서 위 승인 대기 개수와
+  // 기록의 승인 대기 줄 수가 안 맞아 보였다(사용자 지적 2026-08-19). 클립당 **가장 최근 한 줄**만
+  // 남긴다. 나머지 결과(게시·실패)는 그대로 둔다 — 그건 채널별로 봐야 하는 정보다.
+  const visibleRuns = useMemo(() => {
+    const seenHeld = new Set<string>();
+    return runs.filter((run) => {
+      if (run.result !== "held") return true;
+      // clipId 없는 held(규칙 단위 로그)는 접을 근거가 없다 — id 로 각자 남긴다.
+      const key = run.clipId ?? `run:${run.id}`;
+      if (seenHeld.has(key)) return false;
+      seenHeld.add(key);
+      return true;
+    });
+  }, [runs]);
 
   // 실업로드 채널이 규칙에 있는데 게이트가 꺼져 있으면 — "실행 중"이 착시가 된다.
   const gateBlocked = rules.some(
@@ -486,13 +581,24 @@ export default function AutomationPage() {
     }
   }
 
-  async function release(h: RuleHold) {
-    const key = `${h.ruleId}:${h.clipId}`;
+  /** 영상 하나 승인 — 그 영상에 걸린 보류를 **전부** 푼다(규칙이 둘이면 둘 다). 하나라도
+   *  남으면 다음 순방에서 그 규칙이 다시 잡아 승인이 안 먹은 것처럼 보인다. */
+  async function release(entry: { clipId: string; holds: RuleHold[] }) {
     if (releasing) return; // 더블클릭 = 승인 중복 요청
-    setReleasing(key);
+    setReleasing(entry.clipId);
     try {
-      const r = await releaseAutomationHold(h.ruleId, h.clipId, actor);
-      toast({ title: "승인했습니다", description: r.notice, tone: "done" });
+      const results = await Promise.allSettled(
+        entry.holds.map((h) => releaseAutomationHold(h.ruleId, h.clipId, actor)),
+      );
+      const failed = results.filter((r) => r.status === "rejected").length;
+      if (failed === results.length) throw (results[0] as PromiseRejectedResult).reason;
+      const first = results.find((r) => r.status === "fulfilled") as
+        | PromiseFulfilledResult<{ notice?: string }> | undefined;
+      toast({
+        title: failed ? `승인했습니다 — 규칙 ${failed}개는 실패` : "승인했습니다",
+        description: first?.value?.notice ?? "다음 확인 때 게시됩니다.",
+        tone: failed ? "warn" : "done",
+      });
       await load();
     } catch (err) {
       toast({ title: "승인 실패", description: err instanceof Error ? err.message : String(err), tone: "error" });
@@ -501,23 +607,23 @@ export default function AutomationPage() {
     }
   }
 
-  /** 전체 승인 — 서버 API 가 건당이라 순차로 돈다. 실패 건은 남기고 계속 간다. */
+  /** 전체 승인 — 서버 API 가 (규칙,클립) 건당이라 순차로 돈다. 실패 건은 남기고 계속 간다.
+   *  세는 단위는 **영상**이다(버튼 문구와 같아야 한다) — 한 영상의 보류를 다 풀어야 1건. */
   async function releaseAll() {
-    if (releasing || holds.length === 0) return;
+    if (releasing || heldClips.length === 0) return;
     setReleasing("__all__");
     let ok = 0;
     let fail = 0;
     try {
-      for (const h of holds) {
-        try {
-          await releaseAutomationHold(h.ruleId, h.clipId, actor);
-          ok += 1;
-        } catch {
-          fail += 1;
-        }
+      for (const entry of heldClips) {
+        const results = await Promise.allSettled(
+          entry.holds.map((h) => releaseAutomationHold(h.ruleId, h.clipId, actor)),
+        );
+        if (results.every((r) => r.status === "fulfilled")) ok += 1;
+        else fail += 1;
       }
       toast({
-        title: `전체 승인 — ${ok}건 완료${fail ? ` · ${fail}건 실패` : ""}`,
+        title: `전체 승인 — 영상 ${ok}개 완료${fail ? ` · ${fail}개 실패` : ""}`,
         description: "다음 확인 때 게시됩니다.",
         tone: fail ? "warn" : "done",
       });
@@ -1037,18 +1143,18 @@ export default function AutomationPage() {
           <span className="text-[11px]" style={{ color: "var(--sd-mut)" }}>
             사람 확인이 필요한 건입니다 — <b>승인해야 다음 확인 때 게시됩니다.</b> 저절로 나가지 않습니다.
           </span>
-          {holds.length > 0 && (
+          {heldClips.length > 0 && (
             <button
               type="button"
               className="sd-btn ml-auto"
               disabled={releasing !== null}
               onClick={() => void releaseAll()}
             >
-              {releasing === "__all__" ? "전체 승인 중…" : `전체 승인 (${holds.length}건)`}
+              {releasing === "__all__" ? "전체 승인 중…" : `전체 승인 (영상 ${heldClips.length}개)`}
             </button>
           )}
         </div>
-        {holds.length === 0 ? (
+        {heldClips.length === 0 ? (
           <div
             className="sd-ph grid min-h-[80px] place-items-center rounded-[6px] px-6 text-center"
             style={{ border: "1px dashed var(--sd-border)" }}
@@ -1057,15 +1163,16 @@ export default function AutomationPage() {
           </div>
         ) : (
           <div className="flex flex-col gap-1.5">
-            {holds.map((h) => {
+            {heldClips.map((entry) => {
               // 원시 clipId 만으론 판단이 안 된다 — 스토어의 클립·규칙과 조인해 얼굴을 붙인다.
-              const clip = clips.find((c) => c.id === h.clipId);
-              const rule = rules.find((r) => r.id === h.ruleId);
+              const clip = clips.find((c) => c.id === entry.clipId);
+              // 규칙은 부가정보다(사람이 보는 단위는 영상) — 여럿이면 첫 규칙의 프로그램만 쓴다.
+              const rule = rules.find((r) => r.id === entry.holds[0]?.ruleId);
               const ruleProgram = rule
                 ? programs.find((p) => p.id === (rule.programIds?.[0] ?? rule.programId))
                 : undefined;
               const thumb = clip ? clipThumbSrc(clip) : undefined;
-              const key = `${h.ruleId}:${h.clipId}`;
+              const key = entry.clipId;
               return (
                 <div key={key} className="sd-card flex flex-wrap items-center gap-3 px-3 py-2.5">
                   {thumb ? (
@@ -1081,25 +1188,50 @@ export default function AutomationPage() {
                   )}
                   <div className="min-w-[220px] flex-1">
                     <div className="truncate text-[12.5px] font-medium" style={{ color: "var(--sd-fg)" }}>
-                      {clip?.title || h.clipId}
+                      {clip?.title || entry.clipId}
                     </div>
                     <div className="sd-mono text-[10.5px]" style={{ color: "var(--sd-mut)" }}>
                       {clip ? `${Math.round(clip.durationSec)}초 · ` : ""}
                       {ruleProgram?.title ? `규칙 ${ruleProgram.title} · ` : ""}
-                      대기 시작 {h.heldAt?.slice(0, 16).replace("T", " ") || "—"}
+                      {/* 규칙이 둘 이상 걸린 영상은 그 사실만 짧게 — 승인은 어차피 한 번에 다 푼다. */}
+                      {entry.holds.length > 1 ? `규칙 ${entry.holds.length}개 · ` : ""}
+                      대기 시작 {entry.heldAt?.slice(0, 16).replace("T", " ") || "—"}
                     </div>
-                    {/* 사유는 잘리면 판단을 못 한다 — 둘째 줄 전체 폭. */}
-                    <div className="text-[11px] leading-relaxed" style={{ color: "var(--sd-warn)" }}>{h.reason}</div>
+                    {/* 사유는 잘리면 판단을 못 한다 — 둘째 줄 전체 폭. 사유가 여럿이면 다 적는다. */}
+                    <div className="text-[11px] leading-relaxed" style={{ color: "var(--sd-warn)" }}>
+                      {entry.reasons.join(" · ")}
+                    </div>
                   </div>
-                  <Link href={`/editor/${h.clipId}`} className="sd-btn shrink-0">미리보기</Link>
+                  {/* 미리보기 = 나갈 파일 그대로. 승인 버튼이 같은 카드에 남아 있어야
+                      보면서 바로 승인한다 — 그래서 새 화면이 아니라 카드 안에서 편다. */}
+                  <button
+                    type="button"
+                    className="sd-btn shrink-0"
+                    aria-expanded={previewClipId === entry.clipId}
+                    onClick={() => setPreviewClipId(previewClipId === entry.clipId ? null : entry.clipId)}
+                  >
+                    {previewClipId === entry.clipId ? "미리보기 닫기" : "미리보기"}
+                  </button>
+                  <Link href={`/editor/${entry.clipId}`} className="sd-btn shrink-0">편집</Link>
                   <button
                     type="button"
                     className="sd-btn sd-btn-primary shrink-0"
                     disabled={releasing !== null}
-                    onClick={() => void release(h)}
+                    onClick={() => void release(entry)}
                   >
                     {releasing === key ? "승인 중…" : "승인 — 다음 확인 때 게시"}
                   </button>
+                  {previewClipId === entry.clipId && (
+                    <div className="flex w-full justify-center pt-1">
+                      {clip
+                        ? <HeldPreview clip={clip} />
+                        : (
+                          <div className="w-full rounded-[4px] px-3 py-2 text-[11px]" style={{ background: "var(--sd-card-sub)", color: "var(--sd-warn)" }}>
+                            클립 정보를 찾지 못했습니다 — 목록을 새로고침해 주세요
+                          </div>
+                        )}
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -1211,7 +1343,7 @@ export default function AutomationPage() {
             규칙이 <b>자동으로</b> 배포한 것만 — 사람이 누른 배포는 배포 화면에서 봅니다
           </span>
         </div>
-        {runs.length === 0 ? (
+        {visibleRuns.length === 0 ? (
           <div
             className="sd-ph grid min-h-[80px] place-items-center rounded-[6px] px-6 text-center text-[11.5px]"
             style={{ border: "1px dashed var(--sd-border)", color: "var(--sd-mut)" }}
@@ -1220,7 +1352,7 @@ export default function AutomationPage() {
           </div>
         ) : (
           <div className="flex flex-col gap-1">
-            {runs.map((run) => {
+            {visibleRuns.map((run) => {
               const clip = clips.find((c) => c.id === run.clipId);
               // accountKey("platform:accountId") — 구 응답엔 없을 수 있다(없으면 채널
               // 배지·배포 상태 조인만 생략, 나머지는 그대로).

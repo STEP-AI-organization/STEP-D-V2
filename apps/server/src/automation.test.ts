@@ -199,6 +199,66 @@ describe("재보류 유령 방지 — db-pg 소스 스캔", () => {
   });
 });
 
+/**
+ * 승인 대기 = **영상 단위**(사용자 확정 2026-08-19: "걍 그 영상 하나하나만 떠야지").
+ *
+ * 화면의 승인 대기 목록과 자동 배포 기록의 '승인 대기' 줄 수가 안 맞았다. 원인이 하나가 아니라
+ * 셋이었고(채널 곱 · 사유 덮어쓰기 · 규칙 삭제 후 유령), 여기서 각각을 고정한다. 순수 함수로
+ * 증명이 안 되는 배선·SQL 불변식이라 소스 스캔이다.
+ */
+describe("승인 대기는 영상 하나당 한 줄", () => {
+  it("순방은 이미 열린 보류를 다시 쓰지 않는다 — 최초 사유가 보존돼야 한다", () => {
+    // 덮어쓰면 두 번째 순방부터 사유가 "보류 상태입니다 — 사람이 확정해야…" 동어반복으로
+    // 바뀌어, 승인 대기 화면이 **왜** 멈춰 있는지 말해주지 못한다.
+    const src = fs.readFileSync(path.join(SRC, "automation-cycle.ts"), "utf-8");
+    assert.match(src, /if \(!held\) await holdClip\(rule\.id, clip\.id, decision\.reason\)/,
+      "이미 보류 중인데 holdClip 을 다시 부르면 최초 보류 사유가 덮인다");
+  });
+
+  it("규칙을 지우면 그 규칙의 보류도 지운다 — 아무도 게시 안 할 유령 항목 방지", () => {
+    const src = fs.readFileSync(path.join(SRC, "db-pg.ts"), "utf-8");
+    const fn = src.match(/export async function deleteAutomationRule[\s\S]*?\n\}/)?.[0] ?? "";
+    assert.match(fn, /DELETE FROM rule_hold WHERE rule_id = \$1/,
+      "rule_hold 엔 FK·cascade 가 없다(0019) — 규칙만 지우면 보류가 승인 대기에 영원히 남는다");
+    // 해제 표시(UPDATE)로 치우면 hasReleasedHold 가 참이 되어 다음 규칙이 재승인 없이 통과한다.
+    assert.doesNotMatch(fn, /UPDATE rule_hold SET/,
+      "규칙 삭제를 '사람 승인'으로 기록하면 안 된다 — 다음 규칙이 사람 눈을 건너뛴다");
+  });
+
+  it("화면은 보류를 클립 단위로 접고, 승인은 그 영상의 보류를 전부 푼다", () => {
+    const page = fs.readFileSync(
+      path.resolve(SRC, "../../web/src/app/(app)/automation/page.tsx"), "utf-8");
+    assert.match(page, /const heldClips = useMemo/,
+      "보류를 클립 단위로 접지 않으면 규칙 두 개에 걸린 영상이 두 줄로 뜬다");
+    assert.match(page, /const heldCount = heldClips\.length/,
+      "헤더 건수도 영상 단위여야 한다 — 목록과 숫자가 갈라진다");
+    assert.match(page, /entry\.holds\.map\(\(h\) => releaseAutomationHold/,
+      "승인이 보류 하나만 풀면 남은 규칙이 다음 순방에 다시 잡아 승인이 안 먹은 것처럼 보인다");
+  });
+
+  it("미리보기는 렌더 산출물을 재생한다 — 편집기 링크는 '편집' 으로 분리", () => {
+    // 편집기는 원본 위에 오버레이를 **다시 그리는** 화면이라 결과물이 아니다. 승인 여부는
+    // 나갈 파일을 보고 정해야 한다(사용자 2026-08-19). clip.mediaId = 자막·오버레이가 이미
+    // 구워진 렌더 산출물(index.ts /export 가 여기에 clipMediaId 를 넣는다).
+    const page = fs.readFileSync(
+      path.resolve(SRC, "../../web/src/app/(app)/automation/page.tsx"), "utf-8");
+    assert.match(page, /function HeldPreview/, "승인 대기 미리보기 컴포넌트가 없다");
+    assert.match(page, /getStreamUrl\(clip\.mediaId\)/,
+      "sourceMediaId(원본)를 재생하면 자막·오버레이 없는 원본이 나온다 — 승인 판단이 안 된다");
+    assert.match(page, /href=\{`\/editor\/\$\{entry\.clipId\}`\}[\s\S]{0,60}>편집</,
+      "편집기 링크가 '편집' 버튼으로 분리돼 있어야 한다");
+  });
+
+  it("기록의 '승인 대기' 줄도 영상 단위로 접는다 — 서버는 채널마다 한 줄을 남긴다", () => {
+    const page = fs.readFileSync(
+      path.resolve(SRC, "../../web/src/app/(app)/automation/page.tsx"), "utf-8");
+    assert.match(page, /const visibleRuns = useMemo/, "기록 held 줄을 접는 파생값이 없다");
+    assert.match(page, /if \(run\.result !== "held"\) return true/,
+      "held 외 결과(게시·실패)까지 접으면 채널별 결과를 못 본다");
+    assert.match(page, /\{visibleRuns\.map\(\(run\)/, "기록이 접힌 목록을 안 그린다");
+  });
+});
+
 describe("순방 배선 — automation-cycle 소스 스캔", () => {
   const src = fs.readFileSync(path.join(SRC, "automation-cycle.ts"), "utf-8");
 

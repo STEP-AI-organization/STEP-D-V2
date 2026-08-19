@@ -110,13 +110,22 @@ export async function createResumableSession(
  * one frame). Requires the runtime service account to have signBlob permission
  * (roles/iam.serviceAccountTokenCreator on itself) — Cloud Run ADC has no private key.
  */
-export async function signedReadUrl(objectPath: string, ttlMs = 60 * 60 * 1000): Promise<string> {
+export async function signedReadUrl(
+  objectPath: string,
+  ttlMs = 60 * 60 * 1000,
+  /** 내려받을 때 쓸 파일명. 주면 Content-Disposition: attachment 로 그 이름이 강제된다.
+   *  (네이버 로그인 도우미가 이 이름에 계정 키를 실어 보낸다 — index.ts /naver/login-tool) */
+  downloadName?: string,
+): Promise<string> {
   const b = getBucket();
   if (!b) throw new Error("signed URL requires GCS mode (GCS_BUCKET unset)");
   const [url] = await b.file(objectPath).getSignedUrl({
     version: "v4",
     action: "read",
     expires: Date.now() + ttlMs,
+    ...(downloadName
+      ? { responseDisposition: `attachment; filename="${downloadName.replace(/["\\]/g, "")}"` }
+      : {}),
   });
   return url;
 }
