@@ -199,9 +199,14 @@ export function EditorPreview({
   // 서버 PNG를 선택·편집 순간에도 숨기지 않는다. CSS 텍스트로 스왑하면
   // 브라우저와 canvas의 폰트 엔진·커닝 차이가 그대로 위치 튀김이 된다.
   // AI 리프레임은 최종 경로가 아직 ASS라 canvas PNG를 쓰지 않는다(거짓 WYSIWYG 방지).
+  // 편집 중인 제목 줄이 있으면 PNG 를 숨기고 CSS(불투명)로 **즉시** 보여준다 — 타이핑이
+  // PNG 재렌더(90ms 디바운스 + 서버 렌더 + 네트워크 fetch)를 기다리지 않고 바로 반영된다
+  // (사용자 2026-08-19: "타이핑 반응이 굼뜸"). 편집을 끝내면 다시 PNG(결과물 픽셀)로 — half-leading
+  // translateY 보정이 있어 전환이 튀지 않는다. idle·비편집 줄·채널은 그대로 PNG(WYSIWYG 유지).
+  const editingTitle = editing != null && editing.startsWith("title:");
   const showTitlePng =
     !!clipId && !!overlayPng.title.hash && overlayPng.title.aspect === String(state.aspect) &&
-    !aiMode && allTitlesStatic;
+    !aiMode && allTitlesStatic && !editingTitle;
   const showChannelPng =
     !!clipId && !!overlayPng.channel.hash && overlayPng.channel.aspect === String(state.aspect) &&
     !aiMode && state.showChannel;
