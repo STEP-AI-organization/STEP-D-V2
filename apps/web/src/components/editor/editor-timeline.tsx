@@ -153,10 +153,16 @@ export function EditorTimeline({
   }, [video]);
 
   // While playing, advance the playhead from the element and loop within the trim window.
+  // ⚠️ 되돌리기는 **유효한 창(trimOut > trimIn)** 에서만 한다. trimOut ≤ trimIn(퇴화·역전 창)
+  // 인데도 되돌리면 매 프레임 currentTime 이 trimIn 으로 리셋돼 재생이 그 지점(보통 0:00)에
+  // 고정된다 — 이게 "재생이 아예 안 움직임" 의 원인이었다. 창이 유효하지 않으면 되돌리지 않고
+  // 그냥 앞으로 재생시킨다(브라우저가 파일 끝에서 멈춘다).
   useEffect(() => {
     if (!video || !playing) return;
     const loop = () => {
-      if (video.currentTime >= state.trimOut) video.currentTime = state.trimIn;
+      const lo = Math.max(0, state.trimIn);
+      const hi = state.trimOut;
+      if (hi > lo + 0.05 && video.currentTime >= hi) video.currentTime = lo;
       setT(video.currentTime);
       raf.current = requestAnimationFrame(loop);
     };

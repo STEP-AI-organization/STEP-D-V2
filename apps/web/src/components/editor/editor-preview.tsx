@@ -128,6 +128,32 @@ export function EditorPreview({
   const aiFit = aiMode && !aiFill;
   // 밴드 크롭 모드 — 프레임 템플릿·AI 가 없을 때만 aspect enum 사각형을 적용한다(둘 다 자체 기하 소유).
   const rectMode = !aiMode && !frame && !!rectPct;
+
+  // ── AENA 고정 컨테이너 모델 ────────────────────────────────────────────────
+  // 비디오 <video> 는 항상 "크롭 래퍼" 를 꽉 채운다(absolute inset-0 size-full). 종횡비·크롭은
+  // 오직 **래퍼 div 의 위치·크기**(그리고 object-fit)로만 준다 — <video> 엘리먼트 자체는 aspect 가
+  // 바뀌어도 re-key 되지 않고 left/top/width/height 로 재배치되지도 않는다. 그래서 aspect 전환
+  // 중에도 재생이 끊기지 않는다(예전엔 프레임별로 <video> 를 직접 재배치·리스타일해 프리즈에 기여).
+  //  · rect(%) 와 fit 은 **서버 렌더와 같은 aspect-presets 숫자**라 편집기↔렌더 파리티가 유지된다.
+  //  · videoRect=null → 스테이지 전체(inset-0), 남는 여백은 스테이지 배경(검정 pad)이 담당.
+  const videoRect: { left: number; top: number; width: number; height: number } | null =
+    aiFill ? null
+    : (aiFit && frame) ? { left: frame.video.x, top: frame.video.y, width: frame.video.w, height: frame.video.h }
+    : aiFit ? null
+    : frame ? { left: frame.video.x, top: frame.video.y, width: frame.video.w, height: frame.video.h }
+    : rectMode && rectPct ? rectPct
+    : null;
+  const videoObjectFit: "cover" | "contain" =
+    aiFill ? "cover"
+    : aiFit && frame ? "contain"
+    : aiFit ? "contain"
+    : frame ? (frame.video.fit === "contain" ? "contain" : "cover")
+    : rectMode ? "cover"
+    : aspectPreset?.fill === "cover" ? "cover"
+    : aspectPreset?.fill === "contain" ? "contain"
+    : state.fit === "cover" ? "cover" : "contain";
+  const videoObjectPosition = aiFill ? `${reframeFrame.cx * 100}% ${reframeFrame.cy * 100}%` : undefined;
+
   const stageRef = useRef<HTMLDivElement | null>(null);
   const bgRef = useRef<HTMLVideoElement | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
@@ -328,74 +354,61 @@ export function EditorPreview({
                 />
               )
             )}
-            <video
-              key={videoUrl}
-              ref={videoRef}
-              src={videoUrl}
-              playsInline
-              // 'metadata'는 프레임을 안 디코딩해서 사용자가 재생 누르기 전까지 검은 화면.
-              // 'auto'로 편집 진입 즉시 프레임을 뽑아 poster 이후에도 실영상이 이어져 보인다.
-              preload="auto"
-              poster={poster}
-              onLoadedMetadata={(e) => onDuration?.(e.currentTarget.duration, e.currentTarget)}
-              onPlay={(e) => syncBg(e.currentTarget)}
-              onPause={(e) => syncBg(e.currentTarget)}
-              onSeeked={(e) => syncBg(e.currentTarget)}
-              onTimeUpdate={(e) => syncBg(e.currentTarget)}
-              onError={(e) => {
-                const el = e.currentTarget;
-                const err = el.error;
-                // 코드 매핑(MediaError): 1=ABORTED · 2=NETWORK · 3=DECODE · 4=SRC_NOT_SUPPORTED
-                // eslint-disable-next-line no-console
-                console.error("[editor-preview] video load failed", {
-                  src: el.currentSrc || el.src,
-                  code: err?.code,
-                  message: err?.message,
-                  networkState: el.networkState,
-                  readyState: el.readyState,
-                });
-              }}
-              onClick={onTogglePlay}
-              className={cn(
-                "absolute cursor-pointer",
-                aiFill
-                  ? "inset-0 size-full object-cover"
-                  : aiFit && frame
-                  ? "object-contain"
-                  : aiFit
-                  ? "inset-0 size-full object-contain"
-                  : frame
-                  ? (frame.video.fit === "contain" ? "object-contain" : "object-cover")
-                  : rectMode
-                  ? "object-cover"
-                  : aspectPreset?.fill === "cover"
-                  ? "inset-0 size-full object-cover"
-                  : aspectPreset?.fill === "contain"
-                  ? "inset-0 size-full object-contain"
-                  : `inset-0 size-full ${state.fit === "cover" ? "object-cover" : "object-contain"}`,
-              )}
+            {/* 크롭 래퍼 — 고정 스테이지 안에서 aspect 별 위치·크기만 바뀐다. 비디오는 이 래퍼를
+                항상 꽉 채우므로(아래) aspect 전환에도 <video> 는 그대로 재생된다.
+                rect 는 서버 crop,scale,pad 와 같은 프리셋 숫자(% of stage) — 편집기↔렌더 파리티. */}
+            <div
+              className="absolute overflow-hidden"
               style={
-                aiFill
+                videoRect
                   ? {
-                      filter: videoFilter,
-                      objectPosition: `${reframeFrame.cx * 100}% ${reframeFrame.cy * 100}%`,
+                      left: `${videoRect.left}%`,
+                      top: `${videoRect.top}%`,
+                      width: `${videoRect.width}%`,
+                      height: `${videoRect.height}%`,
                     }
-                  : frame
-                  ? {
-                      filter: videoFilter,
-                      left: `${frame.video.x}%`, top: `${frame.video.y}%`,
-                      width: `${frame.video.w}%`, height: `${frame.video.h}%`,
-                    }
-                  : rectMode && rectPct
-                  ? {
-                      // 캔버스 내 비디오 사각형(%) — 서버 crop,scale,pad 와 같은 프리셋 숫자.
-                      filter: videoFilter,
-                      left: `${rectPct.left}%`, top: `${rectPct.top}%`,
-                      width: `${rectPct.width}%`, height: `${rectPct.height}%`,
-                    }
-                  : { filter: videoFilter }
+                  : { inset: 0 }
               }
-            />
+            >
+              <video
+                key={videoUrl}
+                ref={videoRef}
+                src={videoUrl}
+                playsInline
+                // 'metadata'는 프레임을 안 디코딩해서 사용자가 재생 누르기 전까지 검은 화면.
+                // 'auto'로 편집 진입 즉시 프레임을 뽑아 poster 이후에도 실영상이 이어져 보인다.
+                preload="auto"
+                poster={poster}
+                onLoadedMetadata={(e) => onDuration?.(e.currentTarget.duration, e.currentTarget)}
+                onPlay={(e) => syncBg(e.currentTarget)}
+                onPause={(e) => syncBg(e.currentTarget)}
+                onSeeked={(e) => syncBg(e.currentTarget)}
+                onTimeUpdate={(e) => syncBg(e.currentTarget)}
+                onError={(e) => {
+                  const el = e.currentTarget;
+                  const err = el.error;
+                  // 코드 매핑(MediaError): 1=ABORTED · 2=NETWORK · 3=DECODE · 4=SRC_NOT_SUPPORTED
+                  // eslint-disable-next-line no-console
+                  console.error("[editor-preview] video load failed", {
+                    src: el.currentSrc || el.src,
+                    code: err?.code,
+                    message: err?.message,
+                    networkState: el.networkState,
+                    readyState: el.readyState,
+                  });
+                }}
+                onClick={onTogglePlay}
+                // 비디오는 aspect 와 무관하게 항상 래퍼를 꽉 채운다(재배치·re-key 없음).
+                // 종횡비 차이는 object-fit(cover/contain)·objectPosition 으로만 — 순수 페인트 속성이라
+                // 재생을 끊지 않는다.
+                className="absolute inset-0 size-full cursor-pointer"
+                style={{
+                  objectFit: videoObjectFit,
+                  ...(videoObjectPosition ? { objectPosition: videoObjectPosition } : {}),
+                  filter: videoFilter,
+                }}
+              />
+            </div>
             {/* 프레임 레이어 — 서버 meta.json 기하 그대로. 순서는 export 와 동일하게
                 bands(non-over) → overlay 조각 → over bands. 순서가 어긋나면 미리보기에서
                 로고가 지워지거나 캔바 글자가 되살아난다. */}
