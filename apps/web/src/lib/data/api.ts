@@ -1061,6 +1061,14 @@ export async function deleteClip(id: string): Promise<{ notice: string }> {
   return res.json();
 }
 
+/** 하이라이트 훅 재생성 (숏폼 전용) — Gemini 가 클립 자막에서 훅 대사 + 어그로 자막을 새로 뽑는다. */
+export interface HookResult { hookTimeSec: number; hookQuote?: string; hookIntroCaption?: string }
+export async function regenerateClipHook(id: string): Promise<HookResult> {
+  const res = await fetch(`${API_BASE}/clips/${id}/regenerate-hook`, { method: "POST" });
+  if (!res.ok) throw new ApiError(res.status, await errorMessageOf(res));
+  return res.json();
+}
+
 export async function setAutomationPaused(paused: boolean): Promise<{ notice: string }> {
   const res = await fetch(`${API_BASE}/automation/pause`, {
     method: "POST",

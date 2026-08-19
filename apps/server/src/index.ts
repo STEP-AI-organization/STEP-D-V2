@@ -7502,6 +7502,62 @@ app.delete("/api/clips/:id", async (c) => {
   });
 });
 
+// 하이라이트 훅 재생성 — **숏폼(9:16) 전용.** 첫 3초 이탈 방지(시청자 잡기)라 롱폼 클립엔 안 쓴다.
+// Gemini 가 클립 자막에서 가장 후킹되는 대사 1줄 + 어그로 자막을 뽑고, 시각은 전사에서 찾아 확정한다
+// (지어내면 영상에 없는 말이 자막으로 나간다). 구 클립(hookTimeSec 없음)에 훅을 새로 만드는 경로이기도 하다.
+app.post("/api/clips/:id/regenerate-hook", async (c) => {
+  const clipId = c.req.param("id");
+  const clip = await getEntity<any>("clip", clipId);
+  if (!clip) return c.json({ error: "clip_not_found", message: "클립을 찾을 수 없습니다." }, 404);
+  if (!String(clip.aspectRatio ?? "").startsWith("9:16")) {
+    return c.json({ error: "not_short", message: "하이라이트 훅은 숏폼(9:16)에서만 씁니다." }, 400);
+  }
+  const start = Number(clip.startTime ?? 0);
+  const end = Number(clip.endTime ?? start + Number(clip.durationSec ?? 0));
+  if (!(end > start)) return c.json({ error: "no_window", message: "클립 구간 정보가 없습니다." }, 400);
+
+  let caps: { at: number; text: string }[] = [];
+  if (clip.sourceMediaId) {
+    const resolved = await resolveTranscript(clip.sourceMediaId).catch(() => null);
+    if (resolved) {
+      caps = windowCaptions(resolved.segments, start, end)
+        .map((cp: any) => ({ at: Number(cp.start), text: String(cp.text ?? "").trim() }))
+        .filter((cp) => Number.isFinite(cp.at) && cp.text);
+    }
+  }
+  if (caps.length === 0) {
+    return c.json({ error: "no_captions", message: "이 클립엔 대사가 거의 없어 훅을 만들 수 없습니다." }, 422);
+  }
+
+  const list = caps.map((cp, i) => `[${i}] (${(cp.at - start).toFixed(1)}s) ${cp.text.slice(0, 120)}`).join("\n");
+  const prompt =
+    "너는 숏폼(세로 영상) 편집자다. 아래는 한 쇼츠의 자막 목록(번호·시각·대사)이다.\n" +
+    "쇼츠 맨 앞 3초에 붙일 **훅**을 고른다 — 시청자가 스크롤을 멈추게 하는 가장 강한 순간.\n" +
+    "감정 폭발·반전·충격 고백·궁금증 유발이 강한 대사를 고른다. 앞쪽일수록 좋지만 약하면 뒤라도 센 걸 고른다.\n" +
+    "\n아래 JSON 만 출력(설명·코드펜스 금지):\n" +
+    '{"index": <대사 번호>, "caption": "<어그로 편집자막 20자 이내 · 충격 고백! 톤>"}\n' +
+    "- index: 위 목록에서 고른 대사의 번호.\n" +
+    "- caption: 그 순간을 파는 짧고 센 편집자막. 자막에 없는 사실은 만들지 마라.\n" +
+    "\n[자막]\n" + list;
+
+  try {
+    const res = await geminiGenerate(prompt, { temperature: 0.5, maxOutputTokens: 256 });
+    const parsed = parseJsonLoose(res.text) as Record<string, unknown>;
+    let idx = Number(parsed.index);
+    if (!Number.isInteger(idx) || idx < 0 || idx >= caps.length) idx = 0;
+    const chosen = caps[idx];
+    const hookTimeSec = Math.max(0, Math.round((chosen.at - start) * 100) / 100);
+    const hookQuote = chosen.text.slice(0, 60);
+    const hookIntroCaption = String(parsed.caption ?? "").trim().slice(0, 30) || hookQuote.slice(0, 20);
+    await putEntity("clip", clipId, { ...clip, hookTimeSec, hookQuote, hookIntroCaption });
+    return c.json({ ok: true, hookTimeSec, hookQuote, hookIntroCaption });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error("[regenerate-hook] 실패:", msg);
+    return c.json({ error: "generation_failed", message: msg.slice(0, 300) }, 502);
+  }
+});
+
 // ── export/render a clip → the single expensive render (plan §2.4) ────────────
 //
 // The ONLY place ffmpeg bakes the deliverable. Idempotent: a render-revision hash of

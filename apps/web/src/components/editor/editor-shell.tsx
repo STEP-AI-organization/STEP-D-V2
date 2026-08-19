@@ -8,7 +8,7 @@ import { Group, Panel, Separator } from "react-resizable-panels";
 import { cn, formatTimecode } from "@/lib/utils";
 import { useAppData } from "@/lib/data/store";
 import { useToast } from "@/components/ui/toast";
-import { getStreamUrl, getMediaAnalysis, generateUploadMetadata, API_BASE, ApiError, type AnalysisTranscriptSegment, type AnalysisScene , fetchShortsTemplates, type FrameTemplate } from "@/lib/data/api";
+import { getStreamUrl, getMediaAnalysis, generateUploadMetadata, regenerateClipHook, API_BASE, ApiError, type AnalysisTranscriptSegment, type AnalysisScene , fetchShortsTemplates, type FrameTemplate } from "@/lib/data/api";
 import {
   applyTemplate,
   chunkCaption,
@@ -60,6 +60,7 @@ export function EditorShell({ clipId }: { clipId: string }) {
     exportClip,
     refreshClipReframe,
     requestClipReframe,
+    refresh,
   } = useAppData();
   const { toast } = useToast();
   const router = useRouter();
@@ -1020,6 +1021,13 @@ export function EditorShell({ clipId }: { clipId: string }) {
 
       {/* timeline */}
       <footer className="shrink-0 border-t border-zinc-800 p-3">
+        {/* 하이라이트 훅 — 타임라인과 **별개** 영역(사용자 2026-08-19). 쇼츠 전용 · 첫 3초 이탈 방지. */}
+        <HighlightHookCard
+          clip={clip}
+          hookOn={(state as any).hookOn === true}
+          onToggleHook={(v) => update({ hookOn: v } as any)}
+          onRegenerated={refresh}
+        />
         <EditorTimeline
           state={state}
           update={update}
@@ -1050,6 +1058,74 @@ export function EditorShell({ clipId }: { clipId: string }) {
         </button>
         <span className="ml-2 text-[11px] text-zinc-600">다중 트랙 렌더 준비 중</span>
       </footer>
+    </div>
+  );
+}
+
+/**
+ * 하이라이트 훅 카드 — 타임라인과 **별개** 독립 영역(사용자 2026-08-19). **숏폼(9:16) 전용**:
+ * 쇼츠 첫 3초에 붙어 시청자 이탈을 막는 장치라 롱폼 클립엔 안 쓴다(렌더 = null). 훅이 **무엇·어디에**
+ * 들어가는지 보여주고, ON/OFF 토글 + 재생성(Gemini 가 자막에서 새로 뽑기)을 준다. 구 클립
+ * (hookTimeSec 없음)엔 "훅 만들기"로 새로 생성 — 예전에 토글이 죽어 있던(아무 일 없던) 문제를 함께 푼다.
+ */
+function HighlightHookCard({
+  clip,
+  hookOn,
+  onToggleHook,
+  onRegenerated,
+}: {
+  clip: { id: string; aspectRatio?: string; hookTimeSec?: number; hookQuote?: string; hookIntroCaption?: string } | undefined;
+  hookOn: boolean;
+  onToggleHook: (on: boolean) => void;
+  onRegenerated: () => Promise<void> | void;
+}) {
+  const { toast } = useToast();
+  const [busy, setBusy] = useState(false);
+  if (!String(clip?.aspectRatio ?? "").startsWith("9:16")) return null; // 숏폼 전용
+  const timeSec = clip?.hookTimeSec;
+  const available = typeof timeSec === "number";
+
+  async function regen() {
+    if (!clip || busy) return;
+    setBusy(true);
+    try {
+      await regenerateClipHook(clip.id);
+      await onRegenerated(); // 스토어 clip 갱신 → 카드·토글이 새 훅을 반영
+      toast({ title: "하이라이트 훅을 새로 만들었습니다", tone: "done" });
+    } catch (e) {
+      toast({ title: "훅 재생성 실패", description: e instanceof Error ? e.message : String(e), tone: "error" });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-md border border-pink-500/30 bg-pink-500/[0.06] px-3 py-2">
+      <span className="text-[12px] font-semibold text-pink-300">하이라이트 훅</span>
+      <span className="text-[10.5px] text-zinc-400">쇼츠 첫 3초 · 시청자 이탈 방지</span>
+      {available ? (
+        <>
+          <label className="flex items-center gap-1.5 text-[11.5px] text-zinc-200">
+            <input type="checkbox" checked={hookOn} onChange={(e) => onToggleHook(e.target.checked)} />
+            첫 3초 훅 켜기
+          </label>
+          <span className="min-w-0 flex-1 truncate text-[11px] text-zinc-300">
+            {clip?.hookIntroCaption ? <b className="text-pink-300">{clip.hookIntroCaption}</b> : null}
+            {clip?.hookQuote ? <span className="ml-1.5">&ldquo;{clip.hookQuote}&rdquo;</span> : null}
+            <span className="ml-1.5 text-zinc-500">· 시작 +{Number(timeSec).toFixed(1)}s 지점 3초</span>
+          </span>
+        </>
+      ) : (
+        <span className="flex-1 text-[11px] text-zinc-400">훅이 아직 없습니다 — 재생성으로 만드세요.</span>
+      )}
+      <button
+        type="button"
+        className="ml-auto rounded bg-pink-600/80 px-2.5 py-1 text-[11px] font-medium text-white hover:bg-pink-600 disabled:opacity-50"
+        onClick={() => void regen()}
+        disabled={busy}
+      >
+        {busy ? "만드는 중…" : available ? "다시 만들기" : "훅 만들기"}
+      </button>
     </div>
   );
 }
