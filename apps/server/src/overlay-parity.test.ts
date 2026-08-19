@@ -132,6 +132,44 @@ describe("제목 블록 기하 — 웹 블록 폭·패딩과 서버 상수가 �
   });
 });
 
+/**
+ * 정적 오버레이 크기 basis 파리티 — 편집 CSS 텍스트가 서버 canvas-PNG 와 **같은 화면 크기**로
+ * 그려져야 선택/해제(PNG↔CSS 스왑)에 튀지 않는다.
+ *
+ * 서버: canvas fontPx = size × scale, scale = H / canonicalStageH(=renderDims.stageH, 에디터가
+ * stagePx 를 안 보내므로 canonical 로 폴백). PNG 는 `<img size-full>` 로 스테이지에 축소되므로
+ * 화면 크기 = size × stageH/canonicalStageH = (size/canonicalStageH×100)cqh. 따라서 편집 CSS 는
+ * **cqh basis** 여야 하고, 그 canonicalStageH 는 서버 renderDims 의 stageH 와 1:1 이어야 한다.
+ * (예전엔 `fontSize: line.size` 절대 px 라 스테이지가 canonical 보다 작으면 CSS 가 PNG 보다 몇 배
+ *  커졌다 — "선택하면 제목이 프레임을 넘친다".)
+ */
+describe("정적 오버레이 크기 basis — 편집 CSS cqh 가 서버 canvas size×scale 과 같은 기준이어야 한다", () => {
+  it("제목·채널 CSS 폰트가 toCqh(size) 로 서버 canvas fitPx=size×scale 과 같은 basis 를 쓴다", () => {
+    assert.match(WEB_PREVIEW, /fontSize:\s*toCqh\(line\.size\)/,
+      "제목 CSS 폰트가 toCqh(line.size)(=size×scale basis)를 안 쓰면 PNG↔CSS 스왑에 크기가 튄다");
+    assert.match(WEB_PREVIEW, /fontSize:\s*toCqh\(labelPx\)/,
+      "채널명 CSS 폰트가 toCqh basis 를 안 쓰면 채널 선택 시 텍스트 크기가 튄다");
+    // 서버 정본: fitPx = size × scale (layoutTitleLines) · scale = H / editorScale-stageH.
+    assert.match(SERVER, /\(t\.size \?\? 30\) \* scale/,
+      "서버 layoutTitleLines 의 size×scale basis 가 바뀌었다 — CSS cqh 도 같이 맞춰야 한다");
+  });
+
+  it("웹 canonicalStageH 가 서버 renderDims 의 stageH 와 1:1", () => {
+    assert.match(WEB_PREVIEW, /function canonicalStageH/,
+      "웹에 canonicalStageH(서버 renderDims stageH 미러)가 없다 — cqh 변환의 분모 기준");
+    // 16:9 는 특이값((900*1080)/1920=506.25) — 양쪽이 같은 식을 써야 한다.
+    assert.match(WEB_PREVIEW, /case "16:9": return \(900 \* 1080\) \/ 1920;/,
+      "16:9 canonicalStageH 가 서버 renderDims 와 다르다");
+    assert.match(SERVER, /case "16:9": return \{ W: 1920, H: 1080, stageH: \(900 \* 1080\) \/ 1920 \};/,
+      "서버 renderDims 16:9 stageH 가 바뀌었다 — 웹 canonicalStageH 도 같이");
+    // 세로 9:16 계열 기본값 640(양쪽 default).
+    assert.match(WEB_PREVIEW, /\n    default: return 640;/,
+      "웹 canonicalStageH 9:16 default(640)가 서버 renderDims default 와 다르다");
+    assert.match(SERVER, /default:\s*return \{ W: 1080, H: 1920, stageH: 640 \};/,
+      "서버 renderDims 9:16 default stageH(640)가 바뀌었다 — 웹 canonicalStageH 도 같이");
+  });
+});
+
 describe("줄바꿈 — ASS 는 자동 줄바꿈이 없으니 서버가 대신 접는다", () => {
   it("제목은 블록 폭에서 미리 접는다", () => {
     assert.match(SERVER, /wrapTextToWidth\(t\.text, TITLE_BLOCK \* W - 2 \* pad, px\)/,
@@ -348,8 +386,10 @@ describe("외곽선(stroke) — 정적 오버레이 canvas strokeText 배선", (
       "stroke.width 를 scale 안 하면 미리보기와 결과물의 외곽선 굵기가 어긋난다");
   });
   it("미리보기: 편집 중 -webkit-text-stroke 로 근사한다(자막이 쓰는 패턴)", () => {
-    assert.match(WEB_PREVIEW, /WebkitTextStroke:\s*`\$\{line\.stroke\.width\}px \$\{line\.stroke\.color\}`/,
-      "미리보기가 외곽선을 안 그리면 편집 중(PNG 숨김) 자리와 결과물이 갈라진다");
+    // 외곽선 굵기도 폰트와 같은 cqh basis(toCqh) — 서버 canvas 는 stroke.width×scale 로 굽고
+    // PNG 축소 후엔 stageH/canonicalStageH 배가 되므로 CSS 도 cqh 여야 스왑에 굵기가 안 튄다.
+    assert.match(WEB_PREVIEW, /WebkitTextStroke:\s*`\$\{toCqh\(line\.stroke\.width\)\} \$\{line\.stroke\.color\}`/,
+      "미리보기가 외곽선을 안 그리면(또는 cqh basis 가 아니면) 편집 중(PNG 숨김) 자리와 결과물이 갈라진다");
   });
 });
 

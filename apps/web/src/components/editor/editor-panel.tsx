@@ -793,12 +793,18 @@ function LayoutTab({
         <Label>종횡비 · 크롭</Label>
         {/* 5-값 enum(aspect-presets.ts) — 한 값이 컨테이너·크롭·밴드를 전부 결정한다.
             라벨/정의는 프리셋에서 온다(라벨↔동작 1:1). 미리보기(editor-preview)가 같은 프리셋을
-            읽어 정확히 렌더될 모양을 보여준다. */}
+            읽어 정확히 렌더될 모양을 보여준다.
+            ⚠️ 프레임 템플릿이 켜져 있으면 **미리보기·렌더 둘 다** 프레임 기하(video rect·밴드)가
+            종횡비 크롭을 덮는다(ffmpeg.ts renderShort 는 frame 이 있으면 aspect crop 을 무시). 그래서
+            프레임이 활성일 땐 이 버튼이 아무것도 안 바꾸는 것처럼 보였다. 종횡비를 명시적으로 고르면
+            = "프레임 없이 이 크롭" 의도 → templateId 를 비워 프레임을 끈다. 그러면 미리보기가 즉시
+            바뀌고 렌더도 같은 aspect 경로를 타 파리티가 유지된다. 프레임을 다시 원하면 프레임 템플릿을
+            고르면 된다. */}
         <div className="grid grid-cols-1 gap-1">
           {ASPECT_PRESETS.map((p) => (
             <button
               key={p.id}
-              onClick={() => update({ aspect: p.id })}
+              onClick={() => update({ aspect: p.id, templateId: "" })}
               disabled={reframe?.mode === "ai_multi"}
               title={reframe?.mode === "ai_multi" ? "AI 다중 레이아웃은 세로로 고정됩니다." : p.hint}
               className={cn(

@@ -58,6 +58,37 @@ function captionStyleClasses(style: CaptionStyle): { cls: string; style: CSSProp
   }
 }
 
+/**
+ * 서버 renderDims(index.ts)의 canonical stageH 미러 — 정적 오버레이 PNG 를 그린 scale 의 기준.
+ * 서버는 `stagePx`(실측)를 못 받으면(에디터가 안 보낸다) 이 canonical 값으로 scale 을 잡는다:
+ *   canvas fontPx = size × (H / canonicalStageH).
+ * ⚠️ index.ts `renderDims` 의 stageH 와 **같은 숫자**여야 한다(overlay-parity 가 강제).
+ */
+function canonicalStageH(aspect: string): number {
+  switch (aspect) {
+    case "16:9": return (900 * 1080) / 1920; // 506.25
+    case "1:1": return 900;
+    case "4:5": return 640;
+    // 세로 9:16 계열 전부(letterbox·crop-full·crop-main·crop-sub·bare) — renderDims default.
+    default: return 640;
+  }
+}
+
+/**
+ * 스테이지 px(서버 canonical 기준) → cqh 문자열 (스테이지 높이 %). **정적 오버레이 크기 파리티의 핵심.**
+ *
+ * 서버 canvas 는 fontPx = size × scale 로 그리고(scale = H/canonicalStageH), 에디터는 그 PNG 를
+ * `<img size-full>` 로 스테이지에 꽉 채운다 → 화면상 크기 = size × scale × (stageH/H)
+ *   = size × stageH/canonicalStageH = (size/canonicalStageH × 100)cqh.
+ * cqh 는 스테이지(container-type:size)의 실제 높이에 비례하므로, 뷰포트·패널 폭이 어떻든
+ * 편집 CSS 텍스트가 서버 PNG 와 **같은 픽셀 크기**로 그려진다 → 선택/해제(PNG↔CSS 스왑)에 튀지 않는다.
+ * 예전엔 `fontSize: line.size`(절대 px)라 스테이지가 canonical(예: 640)보다 작으면 CSS 가 PNG 보다
+ * 몇 배 커져 프레임을 넘쳤다.
+ */
+function stagePxToCqh(px: number, aspect: string): string {
+  return `${(px / canonicalStageH(aspect)) * 100}cqh`;
+}
+
 export function EditorPreview({
   state,
   update,
@@ -108,6 +139,9 @@ export function EditorPreview({
   //  · fill:"rect"(9:16-crop-main/sub) → 비디오를 캔버스 내 사각형(%)에 앉히고 나머지는 검정 pad
   //  · fill:"cover"(꽉 채우기) → 전체 object-cover · fill:"contain"(레터박스) → object-contain + 여백
   const aspectPreset = getAspectPreset(state.aspect);
+  // 정적 오버레이(제목·채널) CSS 크기를 서버 canvas-PNG 와 같은 화면 크기로 맞추는 변환.
+  // 스테이지 px(canonical 기준) → cqh. state.aspect 별 canonicalStageH 를 자동으로 고른다.
+  const toCqh = (px: number) => stagePxToCqh(px, state.aspect);
   const rectPct = aspectPreset?.fill === "rect" && aspectPreset.rect
     ? {
         left: (aspectPreset.rect.x / aspectPreset.canvasW) * 100,
@@ -486,15 +520,22 @@ export function EditorPreview({
             const lineShown = overlayVisibleAt(line, segT) || editing === key;
             const font: CSSProperties = {
               color: line.color,
-              fontSize: line.size,
+              // 크기는 **서버 canvas 와 같은 size×scale** 를 cqh(스테이지 높이 %)로 표현한다 — 서버
+              // fontPx = line.size × (H/canonicalStageH), PNG 축소 후 화면 크기 = line.size ×
+              // stageH/canonicalStageH = toCqh(line.size). 스테이지 크기와 무관하게 PNG 와 동일 픽셀
+              // → 선택/편집 진입(CSS)↔idle(PNG) 스왑이 안 튄다. (예전 `line.size` 절대 px 는 작은
+              //  스테이지에서 몇 배 커져 프레임을 넘쳤다.)
+              fontSize: toCqh(line.size),
               fontWeight: 800,
               lineHeight: 1.15,
-              textShadow: "0 2px 6px rgba(0,0,0,.5)",
+              // 그림자·외곽선도 같은 basis(cqh) — 서버 canvas 는 offset/blur/stroke 를 scale 배하고
+              // PNG 가 스테이지로 축소되면 stageH/canonicalStageH 배(=cqh)가 된다.
+              textShadow: `0 ${toCqh(2)} ${toCqh(6)} rgba(0,0,0,.5)`,
               // 글꼴(font)·외곽선(stroke) — 편집 중(PNG 숨김) CSS 근사. 최종 진실은 서버 canvas-PNG
               // `<img>`(overlay-canvas.ts) 라 브라우저에 글꼴이 없어도 결과물은 정확하다.
               ...(fontFamilyCss(line.font) ? { fontFamily: fontFamilyCss(line.font) } : {}),
               ...(line.stroke && line.stroke.width > 0
-                ? { WebkitTextStroke: `${line.stroke.width}px ${line.stroke.color}` }
+                ? { WebkitTextStroke: `${toCqh(line.stroke.width)} ${line.stroke.color}` }
                 : {}),
               // 각 제목 줄은 한 시각 줄로 고정 — 재접지 않는다(D). 추천의 시맨틱 2줄 분할이
               // 폭 줄바꿈으로 3줄이 되던 버그 차단. 서버 렌더도 nowrap+shrink 라 줄 수 일치.
@@ -627,7 +668,9 @@ export function EditorPreview({
                   >
                     <span
                       className="font-semibold text-white"
-                      style={{ textShadow: "0 1px 3px rgba(0,0,0,.6)", fontSize: labelPx }}
+                      // 채널명 크기·그림자도 제목과 같은 cqh basis — 서버 channelBadgeLayout 는
+                      // labelPx×scale 로 굽고 PNG 가 스테이지로 축소되므로 toCqh(labelPx) 가 곧 그 크기.
+                      style={{ textShadow: `0 ${toCqh(1)} ${toCqh(3)} rgba(0,0,0,.6)`, fontSize: toCqh(labelPx) }}
                     >
                       {/* ▶ 접두사는 뺐다(사용자 2026-08-12 · 지저분함). 렌더도 뺐으니 여전히 일치. */}
                       {state.channelName}
@@ -639,9 +682,9 @@ export function EditorPreview({
                           key={line.id}
                           className="font-medium text-white/80"
                           style={{
-                            textShadow: "0 1px 3px rgba(0,0,0,.6)",
-                            fontSize: size,
-                            marginTop: Math.max(1, Math.round(size * 0.2)),
+                            textShadow: `0 ${toCqh(1)} ${toCqh(3)} rgba(0,0,0,.6)`,
+                            fontSize: toCqh(size),
+                            marginTop: toCqh(Math.max(1, Math.round(size * 0.2))),
                           }}
                         >
                           {line.text}
@@ -651,19 +694,24 @@ export function EditorPreview({
                   </span>
                 );
                 return (
-                  <span className={cn("flex", layout === "vertical" ? "flex-col items-center gap-1" : "items-center gap-2")}>
+                  // 아이콘·간격도 cqh — 배지 전체가 스테이지에 비례해 축소되어 서버가 baked 한 PNG
+                  // 텍스트 자리(scale 기준)와 정렬이 유지된다. gap 은 서버 flow gap(세로 4·가로 8px)과 동일.
+                  <span
+                    className={cn("flex", layout === "vertical" ? "flex-col items-center" : "items-center")}
+                    style={{ gap: toCqh(layout === "vertical" ? 4 : 8) }}
+                  >
                     {state.channelIconDataUrl ? (
                       <img
                         src={state.channelIconDataUrl}
                         alt=""
                         draggable={false}
                         className={cn("object-cover", shapeCls)}
-                        style={{ width: iconPx, height: iconPx }}
+                        style={{ width: toCqh(iconPx), height: toCqh(iconPx) }}
                       />
                     ) : (
                       <span
                         className={cn("flex items-center justify-center bg-white/90 font-bold text-black", shapeCls)}
-                        style={{ width: iconPx, height: iconPx, fontSize: Math.round(iconPx * 0.42) }}
+                        style={{ width: toCqh(iconPx), height: toCqh(iconPx), fontSize: toCqh(Math.round(iconPx * 0.42)) }}
                       >
                         CH
                       </span>
