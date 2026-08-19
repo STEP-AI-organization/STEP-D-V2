@@ -25,11 +25,13 @@ export default function EditsPage() {
   const session = useSession();
   const role = roleOf(session.user.role);
   const [publishTarget, setPublishTarget] = useState<string[] | null>(null);
+  const [progFilter, setProgFilter] = useState<string>(""); // "" = 전체 프로그램
 
   const rows: MatrixRow[] = useMemo(
     () =>
       clips
         .filter((c) => c.directUpload)
+        .filter((c) => !progFilter || (c.programId ?? episodes.find((e) => e.id === c.episodeId)?.programId) === progFilter)
         .map((c) => ({
           clip: c,
           programTitle:
@@ -38,7 +40,7 @@ export default function EditsPage() {
           episodeNumber:
             c.episodeNumber ?? episodes.find((e) => e.id === c.episodeId)?.episodeNumber ?? undefined,
         })),
-    [clips, programs, episodes],
+    [clips, programs, episodes, progFilter],
   );
 
   async function retry(clipId: string, channel: DistributionChannel) {
@@ -69,7 +71,16 @@ export default function EditsPage() {
           외부에서 편집한 완성 영상을 올려 <b style={{ color: "var(--sd-fg)" }}>여러 채널에 한 번에</b> 배포합니다.
           미디어(분석 파생)와는 별개입니다.
         </p>
-        <UploadClipButton className="sd-btn sd-btn-primary ml-auto" label="완성 영상 업로드" />
+        <select
+          value={progFilter}
+          onChange={(e) => setProgFilter(e.target.value)}
+          className="sd-input ml-auto text-[12px]"
+          aria-label="프로그램 필터"
+        >
+          <option value="">전체 프로그램</option>
+          {programs.map((p) => <option key={p.id} value={p.id}>{p.title}</option>)}
+        </select>
+        <UploadClipButton className="sd-btn sd-btn-primary" label="완성 영상 업로드" />
       </div>
 
       {rows.length === 0 ? (

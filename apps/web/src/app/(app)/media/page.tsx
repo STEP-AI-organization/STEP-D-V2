@@ -34,6 +34,7 @@ function MediaView() {
   const role = roleOf(session.user.role);
 
   const [kind, setKind] = useState<KindFilter>("all");
+  const [progFilter, setProgFilter] = useState<string>(""); // "" = 전체 프로그램
   const [selected, setSelected] = useState<Set<string>>(new Set());
   // 클릭한 행 — AENA 처럼 목록은 한 줄, 상세는 큰 영상 + 메타데이터.
   const [detailId, setDetailId] = useState<string | null>(null);
@@ -46,9 +47,13 @@ function MediaView() {
       const isShort = c.aspectRatio?.startsWith("9:16");
       if (kind === "short" && !isShort) return false;
       if (kind === "clip" && isShort) return false;
+      if (progFilter) {
+        const pid = episodes.find((e) => e.id === c.episodeId)?.programId ?? c.programId;
+        if (pid !== progFilter) return false;
+      }
       return true;
     });
-  }, [clips, kind]);
+  }, [clips, kind, progFilter, episodes]);
 
   const selectedRows = rows.filter((c) => selected.has(c.id));
 
@@ -103,6 +108,15 @@ function MediaView() {
             </button>
           ))}
         </div>
+        <select
+          value={progFilter}
+          onChange={(e) => setProgFilter(e.target.value)}
+          className="sd-input text-[12px]"
+          aria-label="프로그램 필터"
+        >
+          <option value="">전체 프로그램</option>
+          {programs.map((p) => <option key={p.id} value={p.id}>{p.title}</option>)}
+        </select>
         <span className="sd-mono ml-auto text-[11px]" style={{ color: "var(--sd-mut)" }}>
           {rows.length}건
         </span>

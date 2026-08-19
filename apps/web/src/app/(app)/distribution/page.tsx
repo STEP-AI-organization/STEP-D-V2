@@ -26,11 +26,13 @@ export default function DistributionPage() {
   const { toast } = useToast();
   const [publishTarget, setPublishTarget] = useState<string[] | null>(null);
   const [failedOnly, setFailedOnly] = useState(false);
+  const [progFilter, setProgFilter] = useState<string>(""); // "" = 전체 프로그램
 
   const rows: MatrixRow[] = useMemo(() => {
     return clips
       .filter((c) => (c.distributions ?? []).some((d) => d.status !== "none"))
       .filter((c) => !failedOnly || (c.distributions ?? []).some((d) => d.status === "failed"))
+      .filter((c) => !progFilter || (episodes.find((e) => e.id === c.episodeId)?.programId ?? c.programId) === progFilter)
       .map((c) => {
         const ep = episodes.find((e) => e.id === c.episodeId);
         const programTitle =
@@ -104,6 +106,15 @@ export default function DistributionPage() {
           실패만 보기
           <span className="sd-mono ml-1.5 text-[10.5px]" style={{ opacity: 0.7 }}>{counts.get("failed") ?? 0}</span>
         </button>
+        <select
+          value={progFilter}
+          onChange={(e) => setProgFilter(e.target.value)}
+          className="sd-input text-[12px]"
+          aria-label="프로그램 필터"
+        >
+          <option value="">전체 프로그램</option>
+          {programs.map((p) => <option key={p.id} value={p.id}>{p.title}</option>)}
+        </select>
         <span className="sd-mono ml-auto text-[11px]" style={{ color: "var(--sd-mut)" }}>
           게시됨 {counts.get("published") ?? 0} · 기록됨 {counts.get("recorded") ?? 0} ·{" "}
           예약 {counts.get("scheduled") ?? 0} · 진행 중 {counts.get("pending") ?? 0} · 실패 {counts.get("failed") ?? 0}
