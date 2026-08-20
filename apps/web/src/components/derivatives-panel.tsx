@@ -204,8 +204,14 @@ function RecommendTab({
     // start~end 한 덩어리로 잘리므로, 그 제약을 뱃지에 그대로 적는다.
     { key: "highlight", label: "하이라이트", badge: "60분+ 회차 대주제 큐레이션 · 다구간 편집 미지원", items: [] },
   ];
+  // core 추천 스키마(_SHORTS_FROM_BEATS_SCHEMA)엔 type 이 없다 — 예전엔 전부 "shortform" 으로
+  // 떨어져 112초·293초짜리가 40~60초 숏폼 그룹에 섞였다(사용자 2026-08-20). type 이 있으면 그걸,
+  // 없으면 **실제 길이**로 분류: ≤90초=숏폼(core MAX_SHORT_SEC) · ≤10분=클립 · 그 이상=하이라이트.
+  const SHORT_MAX_SEC = 90;
+  const CLIP_MAX_SEC = 600;
   for (const s of shorts) {
-    const t = s.type || "shortform";
+    const dur = (Number(s.end) || 0) - (Number(s.start) || 0);
+    const t = s.type || (dur <= SHORT_MAX_SEC ? "shortform" : dur <= CLIP_MAX_SEC ? "clip" : "highlight");
     const g = groups.find((x) => x.key === t) ?? groups[0];
     g.items.push(s);
   }
