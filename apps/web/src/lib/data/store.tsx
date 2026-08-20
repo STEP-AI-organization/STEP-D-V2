@@ -532,15 +532,31 @@ export function AppDataProvider({
     // revision hash, then returns the rendered (status:"ready") clip. `channel` picks the
     // destination render preset (F3); omitted = 원본 유지 (the clip's own aspect, no cap).
     if (connectedRef.current) {
-      const { clip, capped, hookPreroll } = await exportClipApi(clipId, channel);
-      mutationEpochRef.current++;
-      setState((prev) => ({
-        ...prev,
-        clips: prev.clips.map((c) => (c.id === clipId ? (clip as Clip) : c)),
-      }));
-      // Handed back so the caller can tell the operator the deliverable is shorter than the
-      // segment they picked — a cap must never pass silently.
-      return { capped: capped ?? null, hookPreroll: !!hookPreroll };
+      // 낙관적 "렌더 중": 렌더는 서버에서 수 분 걸린다. 편집기를 나가도(fire-and-forget)
+      // 목록에 즉시 "렌더 중" 배지가 뜨도록 먼저 status=encoding 을 찍는다. 실패하면 되돌린다.
+      let priorStatus: Clip["status"] | undefined;
+      setState((prev) => {
+        priorStatus = prev.clips.find((c) => c.id === clipId)?.status;
+        return { ...prev, clips: prev.clips.map((c) => (c.id === clipId ? ({ ...c, status: "encoding" } as Clip) : c)) };
+      });
+      try {
+        const { clip, capped, hookPreroll } = await exportClipApi(clipId, channel);
+        mutationEpochRef.current++;
+        setState((prev) => ({
+          ...prev,
+          clips: prev.clips.map((c) => (c.id === clipId ? (clip as Clip) : c)),
+        }));
+        // Handed back so the caller can tell the operator the deliverable is shorter than the
+        // segment they picked — a cap must never pass silently.
+        return { capped: capped ?? null, hookPreroll: !!hookPreroll };
+      } catch (e) {
+        // 렌더 실패 — 낙관적 encoding 을 원래 상태로 되돌린다(안 그러면 영원히 "렌더 중").
+        setState((prev) => ({
+          ...prev,
+          clips: prev.clips.map((c) => (c.id === clipId ? ({ ...c, status: priorStatus ?? "editing" } as Clip) : c)),
+        }));
+        throw e;
+      }
     }
     // MOCK: simulate the encode → ready transition so the flow works standalone.
     setState((prev) => ({

@@ -3,12 +3,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, Save, Send, Info, Check, Sparkles, Film, Plus, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen } from "lucide-react";
+import { ArrowLeft, Save, Send, Info, Check, Sparkles, Film, Plus, Play, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen } from "lucide-react";
 import { Group, Panel, Separator } from "react-resizable-panels";
 import { cn, formatTimecode } from "@/lib/utils";
 import { useAppData } from "@/lib/data/store";
 import { useToast } from "@/components/ui/toast";
-import { getStreamUrl, getMediaAnalysis, generateUploadMetadata, regenerateClipHook, API_BASE, ApiError, type AnalysisTranscriptSegment, type AnalysisScene , fetchShortsTemplates, type FrameTemplate } from "@/lib/data/api";
+import { getStreamUrl, getMediaAnalysis, generateUploadMetadata, regenerateClipHook, frameUrl, API_BASE, ApiError, type AnalysisTranscriptSegment, type AnalysisScene , fetchShortsTemplates, type FrameTemplate } from "@/lib/data/api";
 import {
   applyTemplate,
   chunkCaption,
@@ -455,6 +455,9 @@ export function EditorShell({ clipId }: { clipId: string }) {
 
   // The single expensive render (plan §2.4): everything above was metadata. Persist the
   // latest decisions first so the render (and its revision-hash cache) reflects them.
+  // 렌더는 백그라운드로 — 편집기에 가두지 않는다(사용자 2026-08-20). 저장만 마치고 렌더는
+  // 던진 뒤(fire-and-forget) 바로 편집기를 나간다. 진행 상황은 **목록의 "렌더 중" 배지**로 본다
+  // (store.exportClip 이 낙관적 status=encoding 을 찍고, 완료 시 ready 로 바꾼다). 완료·실패는 토스트로 알린다.
   async function confirmExport() {
     if (!clip) return;
     setExporting(true);
@@ -463,37 +466,40 @@ export function EditorShell({ clipId }: { clipId: string }) {
         await saveClipEditor(clip.id, state);
         setSaved(true);
       }
-      // 프리셋 없이 렌더한다 — 종횡비는 레이아웃 탭(editorState.aspect), 길이는 자른 구간
-      // 그대로. api.ts 가 channel 을 "" 로 보내 서버 프리셋 폴백(clip.targetChannel)까지 끈다.
-      const res = await exportClip(clip.id);
-      // The render can take minutes — confirm it actually finished, not just that the
-      // button reset.
-      toast({
-        title: "렌더 완료",
-        description: res.hookPreroll
-          ? "클립이 확정·인코딩되었습니다. 첫 3초 훅 프리롤이 적용됐습니다."
-          : "클립이 확정·인코딩되었습니다.",
-        tone: "done",
-      });
     } catch (e) {
-      if (e instanceof ApiError && e.code === "reframe_not_ready") {
-        await refreshClipReframe(clip.id).catch(() => undefined);
-        setLeftTab("ai");
-        toast({
-          title: "AI 리프레임 분석이 아직 준비되지 않았습니다",
-          description: "분석 완료 후 다시 렌더하거나, AI 패널에서 재분석·기본 모드를 선택해 주세요.",
-          tone: "error",
-        });
-      } else {
-        toast({
-          title: "렌더 실패",
-          description: e instanceof Error ? e.message : "클립 확정(렌더)에 실패했습니다. 다시 시도해 주세요.",
-          tone: "error",
-        });
-      }
-    } finally {
       setExporting(false);
+      toast({ title: "저장 실패", description: e instanceof Error ? e.message : "편집 저장에 실패했습니다.", tone: "error" });
+      return;
     }
+    // 프리셋 없이 렌더 — 종횡비는 레이아웃 탭(editorState.aspect), 길이는 자른 구간 그대로.
+    void exportClip(clip.id)
+      .then((res) => {
+        toast({
+          title: "렌더 완료",
+          description: res.hookPreroll
+            ? "클립이 확정·인코딩되었습니다. 첫 3초 훅 프리롤이 적용됐습니다."
+            : "클립이 확정·인코딩되었습니다.",
+          tone: "done",
+        });
+      })
+      .catch((e) => {
+        if (e instanceof ApiError && e.code === "reframe_not_ready") {
+          toast({
+            title: "AI 리프레임 분석이 아직 준비되지 않았습니다",
+            description: "편집기를 다시 열어 AI 패널에서 재분석하거나 기본 모드로 렌더해 주세요.",
+            tone: "error",
+          });
+        } else {
+          toast({
+            title: "렌더 실패",
+            description: e instanceof Error ? e.message : "클립 확정(렌더)에 실패했습니다. 다시 시도해 주세요.",
+            tone: "error",
+          });
+        }
+      });
+    toast({ title: "렌더를 시작했어요", description: "편집기를 나갑니다 — 목록에서 '렌더 중'으로 진행 상황을 볼 수 있어요.", tone: "done" });
+    setExporting(false);
+    router.back();
   }
 
   const update = (patch: Partial<EditorState>) => {
@@ -584,6 +590,21 @@ export function EditorShell({ clipId }: { clipId: string }) {
   // loaded video (master for draft, clip for rendered), so no offset needed.
   const [videoEl, setVideoEl] = useState<HTMLVideoElement | null>(null);
   const timelineDuration = duration;
+
+  // 하이라이트 훅 재생 — 훅 지점으로 seek 하고 재생한다(사용자 2026-08-20: "여기 누르면 훅 틀어지고").
+  // 좌표 규약은 **AI 리프레임 레인과 동일**: 마스터 미리보기면 videoTime = 마스터 절대초라 훅 지점은
+  // clip.startTime + hookTimeSec. 확정(렌더) 클립이면 프리롤이 결과물 맨 앞(0~3s)이라 0 으로 이동한다.
+  function playHook() {
+    const v = videoEl;
+    if (!v || typeof clip?.hookTimeSec !== "number") return;
+    const target = previewingMaster ? Number(clip.startTime ?? 0) + Number(clip.hookTimeSec) : 0;
+    try {
+      v.currentTime = Math.max(0, target);
+    } catch {
+      /* seek before ready — ignore */
+    }
+    void v.play().catch(() => {});
+  }
 
   // Track the element's position (video-timeline seconds).
   const [videoTime, setVideoTime] = useState(0);
@@ -834,20 +855,9 @@ export function EditorShell({ clipId }: { clipId: string }) {
         </div>
       </header>
 
-      {/* 렌더 진행 오버레이 — 확정(렌더)은 수 분 걸린다. 버튼 라벨("진행 중")만으론 "멈춘 건가"
-          싶어지므로(사용자 2026-08-19) 명확한 전체 오버레이로 "실행 중"을 못박는다. */}
-      {exporting && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60" role="status" aria-live="polite">
-          <div className="flex flex-col items-center gap-3 rounded-lg bg-zinc-900 px-8 py-6 text-center shadow-2xl ring-1 ring-zinc-700">
-            <div className="size-8 animate-spin rounded-full border-2 border-zinc-600 border-t-cyan-400" />
-            <div className="text-[14px] font-semibold text-zinc-100">렌더 중…</div>
-            <div className="text-[11.5px] leading-relaxed text-zinc-400">
-              클립을 인코딩하고 있습니다 — 길이·화질에 따라 몇 분 걸릴 수 있습니다.<br />
-              완료되면 알림이 뜹니다. 이 창을 닫지 마세요.
-            </div>
-          </div>
-        </div>
-      )}
+      {/* 렌더 오버레이 제거(사용자 2026-08-20) — 렌더는 이제 백그라운드다. confirmExport 가
+          던지고 바로 router.back() 으로 편집기를 나가므로 가두는 전체 오버레이가 필요 없다.
+          진행 상황은 목록의 "렌더 중"(status=encoding) 배지로 본다. */}
 
       {/* 길이 상한 배너는 프리셋과 함께 없앴다 — 이제 자른 구간이 그대로 나가므로 잘릴 일이
           없다. 채널별 길이 조건은 배포 단계(자동배포 채널 규칙)가 본다. */}
@@ -1039,9 +1049,14 @@ export function EditorShell({ clipId }: { clipId: string }) {
         {/* 하이라이트 훅 — 타임라인과 **별개** 영역(사용자 2026-08-19). 쇼츠 전용 · 첫 3초 이탈 방지. */}
         <HighlightHookCard
           clip={clip}
+          caption={String((state as any).hookCaption ?? clip?.hookIntroCaption ?? "")}
+          onCaptionChange={(v) => update({ hookCaption: v } as any)}
           hookOn={(state as any).hookOn === true}
           onToggleHook={(v) => update({ hookOn: v } as any)}
           onRegenerated={refresh}
+          onPlayHook={playHook}
+          frameMediaId={transcriptMediaId}
+          apiBase={API_BASE}
         />
         <EditorTimeline
           state={state}
@@ -1059,6 +1074,9 @@ export function EditorShell({ clipId }: { clipId: string }) {
           recWindow={previewingMaster ? { start: recStart, end: recEnd } : undefined}
           // "첫 3초 훅" 토글의 실제 렌더 가능 여부 — clip 에 hook 시각이 있어야 프리롤이 붙는다.
           hookAvailable={typeof clip?.hookTimeSec === "number"}
+          // 타임라인 왼쪽 "하이라이트 훅" 북엔드 클릭 시 훅 지점 재생(사용자 2026-08-20).
+          onPlayHook={playHook}
+          hookCaption={String((state as any).hookCaption ?? clip?.hookIntroCaption ?? "")}
           reframe={reframe}
         />
         {/* 서버 렌더는 tracks[0] 만 합성한다(renderClipMedia·export). 추가 트랙은 저장은 되지만
@@ -1079,33 +1097,54 @@ export function EditorShell({ clipId }: { clipId: string }) {
 
 /**
  * 하이라이트 훅 카드 — 타임라인과 **별개** 독립 영역(사용자 2026-08-19). **숏폼(9:16) 전용**:
- * 쇼츠 첫 3초에 붙어 시청자 이탈을 막는 장치라 롱폼 클립엔 안 쓴다(렌더 = null). 훅이 **무엇·어디에**
- * 들어가는지 보여주고, ON/OFF 토글 + 재생성(Gemini 가 자막에서 새로 뽑기)을 준다. 구 클립
- * (hookTimeSec 없음)엔 "훅 만들기"로 새로 생성 — 예전에 토글이 죽어 있던(아무 일 없던) 문제를 함께 푼다.
+ * 쇼츠 첫 3초에 붙어 시청자 이탈을 막는 장치라 롱폼 클립엔 안 쓴다(렌더 = null).
+ * "쓰기 어렵다·뭐가 붙는지 안 보인다"(사용자 2026-08-20) 를 풀려고 3가지를 준다:
+ *   ① **미니 미리보기** — 훅 지점 프레임(frame 엔드포인트) 위에 훅 자막을 얹어, 첫 3초에 무엇이
+ *      들어가는지 그대로 보여준다(영상 타임라인/seek 은 안 건드림 — 정적 프레임).
+ *   ② **편집 가능한 훅 자막** — editorState.hookCaption 으로 직접 고친다. 저장·렌더가 이 값을
+ *      쓰고(화면 자막 + TTS 내레이션), revision 해시에 editorState 가 들어가 캐시도 자동 무효화.
+ *   ③ ON/OFF 토글 + AI 재생성. 구 클립(hookTimeSec 없음)엔 "훅 만들기"로 새로 생성.
  */
 function HighlightHookCard({
   clip,
+  caption,
+  onCaptionChange,
   hookOn,
   onToggleHook,
   onRegenerated,
+  onPlayHook,
+  frameMediaId,
+  apiBase,
 }: {
-  clip: { id: string; aspectRatio?: string; hookTimeSec?: number; hookQuote?: string; hookIntroCaption?: string } | undefined;
+  clip: { id: string; aspectRatio?: string; hookTimeSec?: number; hookQuote?: string; hookIntroCaption?: string; startTime?: number } | undefined;
+  caption: string;
+  onCaptionChange: (v: string) => void;
   hookOn: boolean;
   onToggleHook: (on: boolean) => void;
   onRegenerated: () => Promise<void> | void;
+  onPlayHook: () => void;
+  frameMediaId?: string;
+  apiBase: string;
 }) {
   const { toast } = useToast();
   const [busy, setBusy] = useState(false);
   if (!String(clip?.aspectRatio ?? "").startsWith("9:16")) return null; // 숏폼 전용
   const timeSec = clip?.hookTimeSec;
   const available = typeof timeSec === "number";
+  // 훅 지점 프레임 = 마스터 절대 시각(clip.startTime + hookTimeSec). frame 엔드포인트로 정적 이미지.
+  const frameSrc =
+    available && frameMediaId
+      ? frameUrl(apiBase, frameMediaId, (clip?.startTime ?? 0) + Number(timeSec))
+      : undefined;
 
   async function regen() {
     if (!clip || busy) return;
     setBusy(true);
     try {
-      await regenerateClipHook(clip.id);
-      await onRegenerated(); // 스토어 clip 갱신 → 카드·토글이 새 훅을 반영
+      const res = await regenerateClipHook(clip.id);
+      // 새 AI 캡션을 편집칸에 채워, 사용자가 이어서 다듬을 수 있게 한다(editorState.hookCaption).
+      onCaptionChange(res.hookIntroCaption ?? "");
+      await onRegenerated(); // 스토어 clip 갱신 → hookTimeSec·프레임 미리보기 반영
       toast({ title: "하이라이트 훅을 새로 만들었습니다", tone: "done" });
     } catch (e) {
       toast({ title: "훅 재생성 실패", description: e instanceof Error ? e.message : String(e), tone: "error" });
@@ -1115,32 +1154,90 @@ function HighlightHookCard({
   }
 
   return (
-    <div className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-md border border-pink-500/30 bg-pink-500/[0.06] px-3 py-2">
-      <span className="text-[12px] font-semibold text-pink-300">하이라이트 훅</span>
-      <span className="text-[10.5px] text-zinc-400">쇼츠 첫 3초 · 시청자 이탈 방지</span>
-      {available ? (
-        <>
-          <label className="flex items-center gap-1.5 text-[11.5px] text-zinc-200">
+    <div className="mb-3 rounded-md border border-pink-500/30 bg-pink-500/[0.06] p-3">
+      <div className="mb-2 flex items-center gap-2">
+        <span className="text-[12px] font-semibold text-pink-300">하이라이트 훅</span>
+        <span className="text-[10.5px] text-zinc-400">쇼츠 첫 3초 · 시청자 이탈 방지</span>
+        {available && (
+          <label className="ml-auto flex items-center gap-1.5 text-[11.5px] text-zinc-200">
             <input type="checkbox" checked={hookOn} onChange={(e) => onToggleHook(e.target.checked)} />
             첫 3초 훅 켜기
           </label>
-          <span className="min-w-0 flex-1 truncate text-[11px] text-zinc-300">
-            {clip?.hookIntroCaption ? <b className="text-pink-300">{clip.hookIntroCaption}</b> : null}
-            {clip?.hookQuote ? <span className="ml-1.5">&ldquo;{clip.hookQuote}&rdquo;</span> : null}
-            <span className="ml-1.5 text-zinc-500">· 시작 +{Number(timeSec).toFixed(1)}s 지점 3초</span>
-          </span>
-        </>
+        )}
+      </div>
+      {available ? (
+        <div className="flex items-start gap-3">
+          {/* ① 미니 9:16 미리보기 — 훅 프레임 + 자막 오버레이. **클릭하면 훅 지점이 재생된다**(사용자 2026-08-20). */}
+          <button
+            type="button"
+            onClick={onPlayHook}
+            title="하이라이트 훅 재생 — 훅 지점으로 이동해 재생합니다"
+            className="group relative w-[56px] shrink-0 overflow-hidden rounded bg-black ring-1 ring-pink-500/30 hover:ring-pink-400"
+            style={{ aspectRatio: "9 / 16" }}
+          >
+            {frameSrc ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img src={frameSrc} alt="" draggable={false} className="absolute inset-0 size-full object-cover" />
+            ) : null}
+            {caption ? (
+              <div className="absolute inset-x-0 top-[14%] px-[2px] text-center leading-tight">
+                <span
+                  className="font-extrabold text-white"
+                  style={{ fontSize: "8px", textShadow: "0 1px 2px #000", WebkitTextStroke: "0.5px rgba(0,0,0,.85)" }}
+                >
+                  {caption}
+                </span>
+              </div>
+            ) : null}
+            {/* 재생 ▶ 오버레이 — 클릭 유도 */}
+            <span className="absolute inset-0 flex items-center justify-center">
+              <span className="flex size-5 items-center justify-center rounded-full bg-black/55 text-white transition-colors group-hover:bg-pink-600/90">
+                <Play className="size-3" fill="currentColor" />
+              </span>
+            </span>
+            <div className="absolute inset-x-0 bottom-0 bg-pink-600/85 py-[1px] text-center text-[7px] font-semibold text-white">
+              첫 3초 ▶
+            </div>
+          </button>
+          {/* ② 편집 가능한 훅 자막 + 정보 + 재생성 */}
+          <div className="min-w-0 flex-1">
+            <label className="mb-1 block text-[10.5px] text-zinc-400">
+              훅 자막 <span className="text-zinc-500">— 화면에 크게 뜨고 TTS 로도 읽어줍니다</span>
+            </label>
+            <input
+              type="text"
+              value={caption}
+              onChange={(e) => onCaptionChange(e.target.value)}
+              placeholder="훅 자막을 입력하세요 (예: 이거 실화냐?)"
+              className="w-full rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-[12.5px] text-zinc-100 placeholder:text-zinc-600 focus:border-pink-500/60 focus:outline-none"
+            />
+            <div className="mt-1.5 flex items-center gap-2 text-[10.5px] text-zinc-500">
+              <span className="shrink-0">시작 +{Number(timeSec).toFixed(1)}s · 3초</span>
+              {clip?.hookQuote ? <span className="min-w-0 truncate">· 대사 &ldquo;{clip.hookQuote}&rdquo;</span> : null}
+              <button
+                type="button"
+                className="ml-auto shrink-0 rounded bg-pink-600/80 px-2 py-0.5 text-[11px] font-medium text-white hover:bg-pink-600 disabled:opacity-50"
+                onClick={() => void regen()}
+                disabled={busy}
+              >
+                {busy ? "생성 중…" : "AI로 다시"}
+              </button>
+            </div>
+          </div>
+        </div>
       ) : (
-        <span className="flex-1 text-[11px] text-zinc-400">훅이 아직 없습니다 — 재생성으로 만드세요.</span>
+        <div className="flex items-center gap-2">
+          <span className="flex-1 text-[11px] text-zinc-400">이 클립엔 훅이 아직 없습니다 — 만들면 첫 3초에 붙습니다.</span>
+          <button
+            type="button"
+            className="shrink-0 rounded bg-pink-600/80 px-2.5 py-1 text-[11px] font-medium text-white hover:bg-pink-600 disabled:opacity-50"
+            onClick={() => void regen()}
+            disabled={busy}
+          >
+            {busy ? "만드는 중…" : "훅 만들기"}
+          </button>
+        </div>
       )}
-      <button
-        type="button"
-        className="ml-auto rounded bg-pink-600/80 px-2.5 py-1 text-[11px] font-medium text-white hover:bg-pink-600 disabled:opacity-50"
-        onClick={() => void regen()}
-        disabled={busy}
-      >
-        {busy ? "만드는 중…" : available ? "다시 만들기" : "훅 만들기"}
-      </button>
     </div>
   );
 }

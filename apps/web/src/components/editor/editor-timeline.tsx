@@ -75,6 +75,8 @@ export function EditorTimeline({
   onTogglePlay,
   recWindow,
   hookAvailable,
+  onPlayHook,
+  hookCaption,
   frameMediaId,
   apiBase,
   reframe,
@@ -96,6 +98,10 @@ export function EditorTimeline({
   /** clip 에 hookTimeSec 이 있어 "첫 3초 훅" 프리롤을 실제로 렌더할 수 있는지. false 면 토글을
    *  켜도 렌더가 no-op 이라 · 토글에 안내 툴팁을 띄운다. */
   hookAvailable?: boolean;
+  /** 타임라인 왼쪽 "하이라이트 훅" 북엔드 클릭 시 훅 지점 재생(editor-shell 이 좌표를 안다). */
+  onPlayHook?: () => void;
+  /** 훅 자막(북엔드 툴팁 표시용). */
+  hookCaption?: string;
   /** Read-only Beat decisions. Segment times are source-master absolute seconds. */
   reframe?: ClipReframe;
 }) {
@@ -601,6 +607,29 @@ export function EditorTimeline({
             );
           })}
         </div>
+        {/* 하이라이트 훅 북엔드 — 타임라인 왼쪽에 훅을 **분리된 블록**으로(사용자 2026-08-20 · 이미지).
+            숏폼(9:16)에 훅 시각이 있을 때만. 클릭하면 훅 지점이 재생된다(onPlayHook). 렌더 반영 여부는
+            위 "첫 3초 훅" 토글이 정한다 — 여기선 미리 들어볼 뿐. */}
+        {String(state.aspect).startsWith("9:16") && hookAvailable && onPlayHook && (
+          <button
+            type="button"
+            onClick={onPlayHook}
+            title={`하이라이트 훅 재생 — 훅 지점으로 이동해 재생${hookCaption ? ` · "${hookCaption}"` : ""}`}
+            className={cn(
+              "mr-1.5 flex w-16 shrink-0 flex-col items-center justify-center gap-0.5 self-stretch rounded-md px-1 text-white ring-1 transition hover:brightness-110",
+              state.hookOn
+                ? "bg-gradient-to-b from-pink-500/85 to-orange-500/70 ring-pink-400/50"
+                : "bg-gradient-to-b from-pink-500/35 to-orange-500/25 ring-pink-400/25",
+            )}
+          >
+            <Sparkles className="size-4" />
+            <span className="text-[10px] font-bold leading-tight">하이라이트</span>
+            <span className="text-[10px] font-bold leading-tight">훅</span>
+            <span className="mt-0.5 inline-flex items-center gap-0.5 text-[8px] font-semibold opacity-95">
+              <Play className="size-2.5" fill="currentColor" /> 첫 3초
+            </span>
+          </button>
+        )}
         <div className="relative min-w-0 flex-1">
           <div ref={scrollRef} className="overflow-x-auto overflow-y-hidden">
             <div

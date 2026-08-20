@@ -213,6 +213,9 @@ export type RenderShortOpts = {
      * 원음을 완전히 죽이지 않는 이유: 웃음·환호가 훅의 실체라 그걸 지우면 껍데기만 남는다.
      */
     ttsPath?: string | null;
+    /** 훅 캡션 ASS 경로 (index.ts buildHookCaptionAss). 있으면 프리롤 화면 상단에 크게 굽는다 —
+     *  편집자가 고친 hookCaption 을 **화면 자막**으로(사용자 2026-08-20). 없으면 자막 없이 프리롤만. */
+    captionAssPath?: string | null;
   } | null;
   /** 하단 브랜딩 아이콘/로고 — 프로그램에서 미리 설정한 이미지. **높이(h) 기준**으로
    *  스케일하고 가로는 비율 유지 + 화면 중앙 정렬((W-w)/2 식) — 정사각 아이콘과 가로
@@ -441,10 +444,11 @@ function renderShortWithPreroll(opts: RenderShortOpts & { hookPreroll: NonNullab
   // 본문 fps/sar 정규화 (xfade 호환).
   vf += `;${last}fps=30,setsar=1[bodyv]`;
 
-  // ── 프리롤(입력0) — punch-in 전체화면 커버 + 살짝 채도·대비 강조 ──
+  // ── 프리롤(입력0) — punch-in 전체화면 커버 + 살짝 채도·대비 강조 (+훅 캡션 ASS) ──
+  const preCapAss = pre.captionAssPath ? `,ass='${escapeAssPath(pre.captionAssPath)}'` : "";
   vf +=
     `;[0:v]scale=${W}:${H}:force_original_aspect_ratio=increase,crop=${W}:${H},` +
-    `eq=saturation=1.20:contrast=1.05,fps=30,setsar=1[prev]`;
+    `eq=saturation=1.20:contrast=1.05${preCapAss},fps=30,setsar=1[prev]`;
 
   // ── xfade: 프리롤 → 본문 (offset = preDur - transition) ──
   const xfadeOffset = Math.max(0, preDur - HOOK_XFADE_SEC).toFixed(3);
@@ -732,10 +736,11 @@ function renderDynamicShortWithPreroll(
   const x = `max(0,min(iw-ow,${ffNum(cx)}*iw-ow/2))`;
   const y = `max(0,min(ih-oh,${ffNum(cy)}*ih-oh/2))`;
   const parts = [body.graph];
+  const preCapAss = pre.captionAssPath ? `,ass='${escapeAssPath(pre.captionAssPath)}'` : "";
   parts.push(
     `[0:v]setpts=PTS-STARTPTS,scale=${opts.width}:${opts.height}:force_original_aspect_ratio=increase,` +
     `crop=${opts.width}:${opts.height}:x='${x}':y='${y}',` +
-    `eq=saturation=1.20:contrast=1.05,fps=30,setsar=1[rfpre]`,
+    `eq=saturation=1.20:contrast=1.05${preCapAss},fps=30,setsar=1[rfpre]`,
   );
   parts.push(`${body.last}fps=30,setsar=1[rfbody]`);
   const xfadeOffset = Math.max(0, preDur - HOOK_XFADE_SEC);

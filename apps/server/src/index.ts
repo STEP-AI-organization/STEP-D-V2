@@ -4760,6 +4760,27 @@ function buildEditorAss(
 }
 
 /**
+ * 훅 프리롤(첫 3초)에 화면 상단으로 크게 굽는 **훅 캡션** ASS. 편집자가 고친 hookCaption
+ * (editorState) 을 시청자 잡는 한 줄로 보여준다(사용자 2026-08-20). 본문 자막과 별개 — 프리롤
+ * 입력([0:v]) 체인에만 ass= 로 적용된다(ffmpeg renderShortWithPreroll / renderDynamicShortWithPreroll).
+ * 폰트·색·외곽선은 본문 Default 스타일과 같은 계열(Pretendard ExtraBold · 흰 글자 + 검은 외곽).
+ */
+function buildHookCaptionAss(caption: string, W: number, H: number, durSec: number): string {
+  const fs2 = Math.round(H * 0.072);              // 큰 훅 헤드라인 (출력 px)
+  const outline = Math.max(3, Math.round(H * 0.005));
+  const mv = Math.round(H * 0.12);                // an8(상단 중앙) 기준 위에서 12%
+  const mh = Math.round(W * 0.08);                // 좌우 여백 = 줄바꿈 폭
+  const dur = Math.max(0.3, durSec);
+  return (
+    `[Script Info]\nScriptType: v4.00+\nPlayResX: ${W}\nPlayResY: ${H}\nWrapStyle: 0\nScaledBorderAndShadow: yes\n\n` +
+    `[V4+ Styles]\nFormat: Name, Fontname, Fontsize, PrimaryColour, OutlineColour, BackColour, Bold, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding\n` +
+    `Style: Hook,Pretendard ExtraBold,${fs2},&H00FFFFFF,&H00000000,&H80000000,1,1,${outline},3,8,${mh},${mh},${mv},1\n\n` +
+    `[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n` +
+    `Dialogue: 0,${assTime(0)},${assTime(dur)},Hook,,0,0,0,,{\\fad(120,0)}${assEscape(caption)}\n`
+  );
+}
+
+/**
  * The Caption ASS style line, branched by editorState.captionStyle so the burn matches the
  * editor preview. Mirror of captionStyleClasses() on the web (editor-preview.tsx):
  *   korean_pop — 예능 팝: thick black outline + shadow, bold, slightly larger (default)
@@ -4912,7 +4933,7 @@ async function renderClipMedia(opts: {
   /** Validated compact AI plan; omitted for the legacy basic Fit render. */
   reframePlan?: ReframePlan | null;
   /** 첫 3초 hook 프리롤 (편집자가 "첫 3초 훅" 토글 ON + clip.hookTimeSec 있을 때만). */
-  hookPreroll?: { startTime: number; durationSec: number; hasAudio?: boolean } | null;
+  hookPreroll?: { startTime: number; durationSec: number; hasAudio?: boolean; caption?: string; captionAssPath?: string | null } | null;
 }): Promise<
   | { clipMediaId: string; clipStored: string; thumbStored: string | null;
       cmeta: { durationSec: number; width: number; height: number; codec: string; hasAudio: boolean } }
@@ -4961,7 +4982,22 @@ async function renderClipMedia(opts: {
   // via HTTP range (-ss before -i) — only the requested segment is fetched, so a multi-hour
   // master never lands in Cloud Run's RAM.
   const srcPath = useGcs() ? await signedReadUrl(masterObjPath) : master.path;
-  const hookPreroll = opts.hookPreroll && opts.hookPreroll.durationSec > 0 ? opts.hookPreroll : null;
+  const hookCaptionAssTmp = path.join(tmpDir, `${clipMediaId}_hook.ass`);
+  let hookPreroll = opts.hookPreroll && opts.hookPreroll.durationSec > 0 ? opts.hookPreroll : null;
+  // 훅 캡션(편집자가 고친 hookCaption)을 프리롤 화면 상단에 크게 굽는다 — ASS 로 만들어 넘긴다.
+  // 실패해도 프리롤(영상+TTS)은 그대로 나간다(자막만 생략).
+  if (hookPreroll?.caption && hookPreroll.caption.trim()) {
+    try {
+      fs.writeFileSync(
+        hookCaptionAssTmp,
+        buildHookCaptionAss(hookPreroll.caption.trim(), W, H, hookPreroll.durationSec),
+        "utf-8",
+      );
+      hookPreroll = { ...hookPreroll, captionAssPath: hookCaptionAssTmp };
+    } catch (e) {
+      console.warn("[render] 훅 캡션 ASS 실패(자막 생략):", String(e).slice(0, 120));
+    }
+  }
 
   // 하단 브랜딩 아이콘 — **프로그램에서 미리 설정**한 이미지(brandIconDataUrl, 사용자 결정
   // 2026-08-12)를 원형으로 잘라 채널명 위에 얹는다. 없으면 조용히 생략(텍스트 브랜딩만).
@@ -7717,7 +7753,7 @@ app.post("/api/clips/:id/export", async (c) => {
         ? { t: clip.hookTimeSec,
             // 내레이션 토글·문구가 바뀌면 결과물이 달라진다 — revision 에 넣어 캐시를 깬다.
             tts: (clip.editorState as any)?.hookTtsOn !== false,
-            line: String(clip.hookIntroCaption || clip.titleLine1 || clip.title || "") }
+            line: String((clip.editorState as any)?.hookCaption || clip.hookIntroCaption || clip.titleLine1 || clip.title || "") }
         : null,
       reframe: reframePlan
         ? { mode: "ai_multi", inputFingerprint: reframe.inputFingerprint, planHash: reframe.planHash }
@@ -7738,25 +7774,27 @@ app.post("/api/clips/:id/export", async (c) => {
   // 세그먼트([snappedStart, snappedEnd]) 안으로 클램프하고, 세그먼트가 3초보다 짧으면 그만큼 줄인다.
   // hookTimeSec 은 clip.startTime(=start) 기준 상대이므로 절대 = start + hookTimeSec.
   let hookPreroll:
-    { startTime: number; durationSec: number; hasAudio?: boolean; ttsPath?: string | null } | null = null;
+    { startTime: number; durationSec: number; hasAudio?: boolean; caption?: string; ttsPath?: string | null } | null = null;
   if (hookPrerollReq) {
     const HOOK_MAX = 3.0;
     const hookAbs = start + Math.max(0, Number(clip.hookTimeSec));
     const preStart = Math.min(Math.max(snappedStart, hookAbs), Math.max(snappedStart, snappedEnd - 0.5));
     const preDur = Math.min(HOOK_MAX, Math.max(0.5, snappedEnd - preStart));
     if (preDur >= 0.5) {
-      // 훅 내레이션(TTS) — 기본 ON, 에디터에서 hookTtsOn:false 로 끌 수 있다.
-      // 읽는 문구는 **어그로 카피 우선**(hookIntroCaption → 제목 첫 줄 → 제목).
+      // 훅 문구 — **화면 자막 + TTS 내레이션이 함께 읽는 한 줄**. 편집자가 고친 hookCaption
+      // (editorState) 우선, 없으면 어그로 카피(hookIntroCaption → 제목 첫 줄 → 제목).
       // 훅 구간의 실제 대사(hookQuote)는 그 자리에서 이미 들리므로 읽지 않는다 — 같은 말을
-      // 두 번 하면 3초가 낭비된다. 합성 실패는 null 이라 훅은 그대로 나간다(TTS 만 생략).
+      // 두 번 하면 3초가 낭비된다. TTS 는 기본 ON(hookTtsOn:false 로 끔) · 합성 실패는 null 이라
+      // 자막·프리롤은 그대로 나간다(TTS 만 생략).
       const wantTts = (clip.editorState as any)?.hookTtsOn !== false;
       const line = String(
-        clip.hookIntroCaption || clip.titleLine1 || clip.title || "",
+        (clip.editorState as any)?.hookCaption || clip.hookIntroCaption || clip.titleLine1 || clip.title || "",
       ).trim();
       const ttsPath = wantTts && line ? await synthesizeHookNarration(line) : null;
       hookPreroll = {
         startTime: preStart, durationSec: Number(preDur.toFixed(3)),
         hasAudio: master.hasAudio === 1,
+        ...(line ? { caption: line } : {}),
         ...(ttsPath ? { ttsPath } : {}),
       };
     }
