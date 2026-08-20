@@ -834,6 +834,21 @@ export function EditorShell({ clipId }: { clipId: string }) {
         </div>
       </header>
 
+      {/* 렌더 진행 오버레이 — 확정(렌더)은 수 분 걸린다. 버튼 라벨("진행 중")만으론 "멈춘 건가"
+          싶어지므로(사용자 2026-08-19) 명확한 전체 오버레이로 "실행 중"을 못박는다. */}
+      {exporting && (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60" role="status" aria-live="polite">
+          <div className="flex flex-col items-center gap-3 rounded-lg bg-zinc-900 px-8 py-6 text-center shadow-2xl ring-1 ring-zinc-700">
+            <div className="size-8 animate-spin rounded-full border-2 border-zinc-600 border-t-cyan-400" />
+            <div className="text-[14px] font-semibold text-zinc-100">렌더 중…</div>
+            <div className="text-[11.5px] leading-relaxed text-zinc-400">
+              클립을 인코딩하고 있습니다 — 길이·화질에 따라 몇 분 걸릴 수 있습니다.<br />
+              완료되면 알림이 뜹니다. 이 창을 닫지 마세요.
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* 길이 상한 배너는 프리셋과 함께 없앴다 — 이제 자른 구간이 그대로 나가므로 잘릴 일이
           없다. 채널별 길이 조건은 배포 단계(자동배포 채널 규칙)가 본다. */}
 
