@@ -233,7 +233,7 @@ export function buildMetadataPrompt(src: MetaSource): string {
     // ④ 프로그램 메타
     joinBlocks([
       src.program ? `[프로그램] ${src.program}` : null,
-      src.episode ? `[회차] ${src.episode}` : null,
+      src.episode ? `[회차] ${src.episode} (맥락 파악용 — 이 회차 번호를 제목·설명에 쓰지 마라)` : null,
       src.durationSec ? `[길이] ${Math.round(src.durationSec)}초` : null,
     ]),
 
@@ -261,6 +261,8 @@ export function buildMetadataPrompt(src: MetaSource): string {
     "[절대 규칙]\n" +
     "- 위에 주어진 것 밖의 사실을 만들지 마라. 인물·장소·수치·행동 전부.\n" +
     "- 등록 출연자 명단에 없는 이름을 쓰지 마라.\n" +
+    "- **회차 번호(○화·○회·'○회차' 등)를 제목·설명에 쓰지 마라.** 시청자는 보통 이 클립 하나만 본다 — " +
+    "회차 번호는 의미도 없고 유입에도 도움이 안 된다. 회차는 맥락 파악에만 쓴다.\n" +
     "- 낚시성 표현으로 내용을 왜곡하지 마라. 안 나온 일을 났다고 쓰면 안 된다.",
 
     // ⑧.5 프로그램별 운영자 지시 — 프로그램 상세에서 운영자가 직접 입력(program.titlePrompt).
