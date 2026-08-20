@@ -899,7 +899,7 @@ function CaptionsTab({ state, update }: { state: EditorState; update: Update }) 
           className="w-full"
         />
         <div className="mt-1 text-[11px] text-zinc-500">
-          말자막을 이 길이로 끊어 순서대로 띄운다. 세로 화면 한 줄이 대략 11자 — 기본 {CAPTION_CHUNK_MAX_CHARS}자면 최대 두 줄.
+          말자막을 이 길이로 끊어 순서대로 띄운다. 세로 화면 한 줄이 대략 11자 — 기본 {CAPTION_CHUNK_MAX_CHARS}자면 **항상 한 줄**. 올리면 두 줄 이상.
         </div>
       </div>
       <div>

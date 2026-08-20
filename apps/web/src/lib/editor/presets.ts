@@ -193,10 +193,11 @@ export function synthesizeCaptionWords(text: string, start: number, end: number)
  *
  * 9:16 세로 화면에서 자막 기본 크기(화면 높이 4.4%)면 한 줄에 들어가는 한글이 대략 11자다.
  * STT 한 세그먼트는 40~60자가 예사라 그대로 그리면 4~5줄이 화면 절반을 덮는다.
- * 18자 = 최대 두 줄. **서버 index.ts::CAPTION_CHUNK_MAX_CHARS 와 같은 숫자여야 한다** —
- * 갈라지면 편집 화면에서 본 자막 덩어리와 결과물 덩어리가 달라진다(overlay-parity 가 강제).
+ * 11자 = **항상 한 줄**(사용자 2026-08-20: "1줄/2줄 왔다갔다 안 되게"). **서버 caption-chunk.ts::
+ * CAPTION_CHUNK_MAX_CHARS 와 같은 숫자여야 한다** — 갈라지면 편집 화면 덩어리와 결과물 덩어리가
+ * 달라진다(overlay-parity 가 강제).
  */
-export const CAPTION_CHUNK_MAX_CHARS = 18;
+export const CAPTION_CHUNK_MAX_CHARS = 11;
 /** 청크 최소 노출(초). 이보다 짧게 나뉘면 앞 청크에 도로 붙인다 — 깜빡이면 오히려 못 읽는다. */
 export const CAPTION_CHUNK_MIN_SEC = 0.7;
 

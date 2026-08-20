@@ -15,9 +15,11 @@ export type Caption = { start: number; end: number; text: string; words?: Captio
 
 /**
  * 자막 한 화면 최대 글자수(공백 포함).
- * 9:16 에서 자막 기본 크기(화면 높이 4.4%)면 한 줄에 들어가는 한글이 대략 11자 — 18자 = 최대 두 줄.
+ * 9:16 에서 자막 기본 크기(화면 높이 4.4%)면 한 줄에 들어가는 한글이 대략 11자 — 11자로 두면
+ * **항상 한 줄**로 통일된다(사용자 2026-08-20: "1줄/2줄 왔다갔다 안 되게"). 예전 18(두 줄)은
+ * 세그먼트 길이에 따라 1~2줄이 갈렸다. (사용자가 슬라이더로 올리면 여러 줄도 가능.)
  */
-export const CAPTION_CHUNK_MAX_CHARS = 18;
+export const CAPTION_CHUNK_MAX_CHARS = 11;
 /** 청크 최소 노출(초). 이보다 짧게 나뉘면 이웃에 도로 붙인다 — 깜빡이면 오히려 못 읽는다. */
 export const CAPTION_CHUNK_MIN_SEC = 0.7;
 
