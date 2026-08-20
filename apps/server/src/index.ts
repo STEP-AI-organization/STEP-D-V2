@@ -339,6 +339,9 @@ import {
   isRuleThumbnailMode,
   planCycle,
   ruleCreatedNotice,
+  ruleWeekdays,
+  ruleSlots,
+  monthlyPublishEstimate,
 } from "./automation.ts";
 import {
   CHANNEL_ROLES,
@@ -5231,7 +5234,10 @@ app.get("/api/automation", async (c) => {
         // 남은 건수가 갈라지지 않는다.
         publishedToday[key] = await publishedTodayKst(key);
       }
-      return { ...rule, publishedToday };
+      // 월 예상 발행 건수 — **순방 판정과 같은 함수**에서 낸다(monthlyPublishEstimate).
+      // 화면이 따로 계산하면 "월 66건" 이라 적어 놓고 실제로는 다른 수가 나가고, 그게 곧
+      // 청구 예상과 어긋난다.
+      return { ...rule, publishedToday, estimate: monthlyPublishEstimate(rule as any) };
     }),
   );
   return c.json({
@@ -5345,6 +5351,13 @@ app.post("/api/automation/rules", async (c) => {
       ? { dailyQuota: Math.min(50, Math.round(Number(body.dailyQuota))) } : {}),
     ...(Number.isFinite(body.activeStart) ? { activeStart: Math.max(0, Math.min(23, Math.round(Number(body.activeStart)))) } : {}),
     ...(Number.isFinite(body.activeEnd) ? { activeEnd: Math.max(0, Math.min(24, Math.round(Number(body.activeEnd)))) } : {}),
+    // 발행 요일·발행 시각 슬롯(0042). **정규화는 automation.ts 한 곳에서** — 화면이 보낸 값을
+    // 그대로 저장하면 순방의 판정과 화면의 월 예상 건수가 다른 값을 보게 된다.
+    // 빈 배열은 미지정(= 매일 / 슬롯 없음)과 같게 null 로 떨어뜨린다.
+    ...(Array.isArray(body.weekdays)
+      ? { weekdays: ruleWeekdays({ weekdays: body.weekdays as number[] }) } : {}),
+    ...(Array.isArray(body.slots)
+      ? { slots: ruleSlots({ slots: body.slots as string[] }) } : {}),
     // 채택 형태(0038) — 순방(automation-cycle)이 수동 채택과 같은 매핑으로 소비한다.
     ...(isRuleOrientation(body.orientation) ? { orientation: body.orientation } : {}),
     ...(isRuleReframe(body.reframe) ? { reframe: body.reframe } : {}),

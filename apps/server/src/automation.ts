@@ -93,6 +93,19 @@ export interface AutomationRule {
   /** 활동 시간창(KST 시각). 기본 9~22 — 밖에서는 배포하지 않는다. */
   activeStart?: number;
   activeEnd?: number;
+  /**
+   * 발행 요일 (ISO · 1=월 … 7=일). 비었으면 **매일**(기존 동작).
+   * 편성이 "월화수목금" 인 프로그램이 주말에도 나가면 채널 성격이 흐려진다.
+   */
+  weekdays?: number[] | null;
+  /**
+   * 발행 시각 슬롯 (KST 벽시계 "HH:MM"). 비었으면 슬롯 없음 = 활동 시간창 + 할당량 방식.
+   *
+   * 슬롯이 있으면 **그 시각이 지나야 그만큼 나간다** — 17:00·20:00·22:00 이면 20:30 에
+   * 오늘 누적 2건까지다. 순방이 5~15분마다 도는 구조 위에서 "정각에 한 건" 을 표현하는
+   * 가장 단순한 방법이고, 순방이 한 번 밀려도 다음 순방이 밀린 몫을 따라잡는다.
+   */
+  slots?: string[] | null;
   /** 채택 방향 — 수동 채택과 같은 값. 미지정 = 기존처럼 추천 kind 로 결정(하위호환). */
   orientation?: RuleOrientation | null;
   /** 'ai' = 세로형 채택 직후 AI 리프레임(clip.reframe) 큐잉. 세로형일 때만 의미. */
@@ -122,6 +135,104 @@ export function ruleWindow(rule: Pick<AutomationRule, "activeStart" | "activeEnd
     start: Number.isFinite(rule.activeStart) ? Number(rule.activeStart) : 9,
     end: Number.isFinite(rule.activeEnd) ? Number(rule.activeEnd) : 22,
   };
+}
+
+// ── 발행 요일 · 발행 시각 슬롯 (2026-08-20) ─────────────────────────────────────
+// 화면이 "월화수목금 · 17:00 20:00 22:00" 을 받는데 순방이 그걸 안 보면, 사용자는 지키지도
+// 않는 편성을 설정하고 지켜진다고 믿는다. 판정을 여기 순수 함수로 두고 순방이 그대로 쓴다.
+
+/** 요일 정규화 — ISO 1..7 만 남기고 오름차순 중복 제거. 비면 null(= 매일). */
+export function ruleWeekdays(rule: Pick<AutomationRule, "weekdays">): number[] | null {
+  const raw = Array.isArray(rule.weekdays) ? rule.weekdays : [];
+  const days = [...new Set(raw.map(Number).filter((d) => Number.isInteger(d) && d >= 1 && d <= 7))]
+    .sort((a, b) => a - b);
+  return days.length ? days : null;
+}
+
+/** KST 기준 오늘의 ISO 요일 (1=월 … 7=일). */
+export function kstWeekday(now = new Date()): number {
+  const short = new Intl.DateTimeFormat("en-US", { timeZone: "Asia/Seoul", weekday: "short" }).format(now);
+  // Intl 의 일요일 시작을 ISO(월=1)로 옮긴다.
+  const iso: Record<string, number> = { Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6, Sun: 7 };
+  return iso[short] ?? 1;
+}
+
+/** 오늘이 이 규칙의 발행 요일인가. 요일 미지정이면 언제나 참(기존 동작). */
+export function isPublishDay(rule: Pick<AutomationRule, "weekdays">, now = new Date()): boolean {
+  const days = ruleWeekdays(rule);
+  return days === null || days.includes(kstWeekday(now));
+}
+
+/** 슬롯 정규화 — "HH:MM" 만 남기고 시각순 중복 제거. 비면 빈 배열(= 슬롯 없음). */
+export function ruleSlots(rule: Pick<AutomationRule, "slots">): string[] {
+  const raw = Array.isArray(rule.slots) ? rule.slots : [];
+  const ok = raw
+    .map((s) => String(s).trim())
+    .filter((s) => /^([01]\d|2[0-3]):[0-5]\d$/.test(s));
+  return [...new Set(ok)].sort();
+}
+
+/** KST 벽시계 분(0~1439). 슬롯 비교의 기준축. */
+export function kstMinutes(now = new Date()): number {
+  const [h, m] = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Asia/Seoul", hour: "2-digit", minute: "2-digit", hour12: false,
+  }).format(now).split(":").map(Number);
+  return h * 60 + m;
+}
+
+/** 오늘 지금까지 지난 슬롯 수 — 그만큼이 오늘 이 시각까지 허용되는 누적 발행 수다. */
+export function slotsElapsed(slots: string[], now = new Date()): number {
+  const cur = kstMinutes(now);
+  return slots.filter((s) => {
+    const [h, m] = s.split(":").map(Number);
+    return h * 60 + m <= cur;
+  }).length;
+}
+
+/**
+ * 오늘 이 채널에 **지금** 허용되는 누적 발행 수.
+ *
+ * 슬롯이 있으면 지난 슬롯 수(정각 편성), 없으면 하루 할당량(기존 동작).
+ * 순방은 여기서 이미 나간 건수를 빼서 남은 몫을 정한다.
+ */
+export function allowedToday(rule: Pick<AutomationRule, "slots" | "dailyQuota">, now = new Date()): number {
+  const slots = ruleSlots(rule);
+  if (slots.length) return slotsElapsed(slots, now);
+  return Number(rule.dailyQuota) > 0 ? Number(rule.dailyQuota) : 3;
+}
+
+/** 하루 발행 수 — 슬롯이 있으면 슬롯 수가 곧 하루 발행 수다. */
+export function perDayCount(rule: Pick<AutomationRule, "slots" | "dailyQuota">): number {
+  const slots = ruleSlots(rule);
+  if (slots.length) return slots.length;
+  return Number(rule.dailyQuota) > 0 ? Number(rule.dailyQuota) : 3;
+}
+
+const WEEKDAY_LABEL = ["", "월", "화", "수", "목", "금", "토", "일"];
+
+/** 요일 배열 → "월화수목금". 비면 "매일" — 문구가 `undefined` 로 새지 않게 여기서 막는다. */
+export function formatWeekdays(days: number[] | null | undefined): string {
+  if (!days?.length) return "매일";
+  return [...days].sort((a, b) => a - b).map((d) => WEEKDAY_LABEL[d] ?? "").join("");
+}
+
+/** 한 달 평균 주 수 — 52주/12개월. 화면의 "월 환산" 이 이 상수를 쓴다. */
+export const WEEKS_PER_MONTH = 52 / 12;
+
+/**
+ * 월 예상 발행 건수 — 요일 수 × 하루 발행 수 × 채널 수 × 월평균 주 수.
+ *
+ * **판정과 같은 함수에서 나와야 한다.** 화면이 따로 계산하면 "월 66건" 이라 적어 놓고
+ * 실제로는 다른 수가 나가는 상태가 되고, 그게 곧 청구 예상과 어긋난다.
+ */
+export function monthlyPublishEstimate(
+  rule: Pick<AutomationRule, "weekdays" | "slots" | "dailyQuota" | "channels" | "platform" | "accountId">,
+): { perWeek: number; perMonth: number; perDay: number; days: number; channels: number } {
+  const days = ruleWeekdays(rule as AutomationRule)?.length ?? 7;
+  const perDay = perDayCount(rule);
+  const channels = Math.max(1, ruleChannels(rule as AutomationRule).length);
+  const perWeek = days * perDay * channels;
+  return { perWeek, perMonth: Math.round(perWeek * WEEKS_PER_MONTH), perDay, days, channels };
 }
 
 /**
@@ -406,7 +517,7 @@ export function episodeAnalysisState(
  * 말하지 않는다.** 규칙 단위 하루 한 줄로 이어 주는 자리가 여기다.
  */
 export const RULE_IDLE_CODES = [
-  "off_hours",
+  "off_hours", "off_day",
   "no_episode", "analysis_blocked", "analysis_failed", "analyzing",
   "render_stopped", "gate_off", "publish_failed", "held_waiting", "vague_account",
   "channel_rule", "quota_done",
@@ -423,6 +534,10 @@ export interface RuleIdleObservation {
   /** 활동 시간창(KST 시각) — 문구에 싣는다. 규칙 설정이라 하루 안에 저절로 안 변한다. */
   activeStart: number;
   activeEnd: number;
+  /** 오늘이 발행 요일이 아닌가 — 참이면 시간창과 마찬가지로 규칙 평가를 통째로 건너뛴 것이다. */
+  offDay?: boolean;
+  /** 설정된 발행 요일(ISO). 문구에 싣는다 — 규칙 설정이라 하루 안에 안 바뀐다. */
+  weekdays?: number[] | null;
   /** 이 규칙의 프로그램에 속한 회차 수. */
   episodes: number;
   /** 분석이 끝난(done/warn) 회차 수. */
@@ -523,6 +638,17 @@ export function ruleIdleNote(o: RuleIdleObservation): { code: RuleIdleCode; deta
       code: "off_hours",
       detail: `활동 시간(${win.start}~${win.end}시) 밖이라 이번에는 아무것도 하지 않았습니다`
         + " — 활동 시간이 되면 자동으로 이어서 확인합니다.",
+    };
+  }
+
+  // 발행 요일이 아닌 날 — 시간창과 같은 이유로 하루 한 줄은 남긴다. 이게 없으면 토요일에
+  // "왜 아무것도 안 나갔지" 를 볼 때 설정 때문인지 고장인지 구분할 근거가 로그에 없다.
+  if (o.offDay) {
+    return {
+      code: "off_day",
+      // ⚠️ 이 문구는 dedupe 키다 — 오늘 요일 같은 **변동 값을 넣지 않는다**(규칙 설정만).
+      detail: `오늘은 발행 요일(${formatWeekdays(o.weekdays)})이 아니라 아무것도 하지 않았습니다`
+        + " — 다음 발행 요일에 자동으로 이어서 확인합니다.",
     };
   }
 

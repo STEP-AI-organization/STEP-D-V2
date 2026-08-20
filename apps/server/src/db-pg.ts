@@ -2983,6 +2983,10 @@ export interface AutomationRuleRow {
   dailyQuota?: number;
   activeStart?: number;
   activeEnd?: number;
+  /** 발행 요일 ISO 1..7 (0042). NULL = 매일. */
+  weekdays?: number[] | null;
+  /** 발행 시각 슬롯 "HH:MM" KST (0042). NULL = 슬롯 없음(할당량 방식). */
+  slots?: string[] | null;
   // 채택 형태 (0038) — 수동 채택 다이얼로그와 같은 값 체계. NULL = 기존(추천 kind 기반).
   orientation?: string | null;
   /** 'ai' 면 세로형 채택 직후 AI 리프레임(clip.reframe) 큐잉. */
@@ -2996,6 +3000,7 @@ const RULE_SEL = `id, program_id AS "programId", platform, account_id AS "accoun
   time_window AS "window", enabled,
   template_id AS "templateId", layout, program_ids AS "programIds", channels,
   daily_quota AS "dailyQuota", active_start AS "activeStart", active_end AS "activeEnd",
+  weekdays, slots,
   orientation, reframe, thumbnail_mode AS "thumbnailMode"`;
 
 export async function listAutomationRules(): Promise<AutomationRuleRow[]> {
@@ -3010,20 +3015,23 @@ export async function upsertAutomationRule(r: AutomationRuleRow): Promise<void> 
     `INSERT INTO automation_rule
        (id, program_id, platform, account_id, media_kind, criterion, gate_policy, time_window, enabled,
         template_id, layout, program_ids, channels, daily_quota, active_start, active_end,
-        orientation, reframe, thumbnail_mode)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12::jsonb,$13::jsonb,$14,$15,$16,$17,$18,$19)
+        orientation, reframe, thumbnail_mode, weekdays, slots)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12::jsonb,$13::jsonb,$14,$15,$16,$17,$18,$19,$20::jsonb,$21::jsonb)
      ON CONFLICT (tenant_id, program_id, platform, account_id) DO UPDATE SET
        media_kind = $5, criterion = $6, gate_policy = $7, time_window = $8, enabled = $9,
        template_id = $10, layout = $11::jsonb, program_ids = $12::jsonb, channels = $13::jsonb,
        daily_quota = $14, active_start = $15, active_end = $16,
-       orientation = $17, reframe = $18, thumbnail_mode = $19`,
+       orientation = $17, reframe = $18, thumbnail_mode = $19,
+       weekdays = $20::jsonb, slots = $21::jsonb`,
     [r.id, r.programId, r.platform, r.accountId, r.mediaKind, r.criterion, r.gatePolicy, r.window, r.enabled,
      r.templateId ?? null,
      r.layout ? JSON.stringify(r.layout) : null,
      r.programIds?.length ? JSON.stringify(r.programIds) : null,
      r.channels?.length ? JSON.stringify(r.channels) : null,
      r.dailyQuota ?? 3, r.activeStart ?? 9, r.activeEnd ?? 22,
-     r.orientation ?? null, r.reframe ?? null, r.thumbnailMode ?? null],
+     r.orientation ?? null, r.reframe ?? null, r.thumbnailMode ?? null,
+     r.weekdays?.length ? JSON.stringify(r.weekdays) : null,
+     r.slots?.length ? JSON.stringify(r.slots) : null],
   );
 }
 
@@ -3039,7 +3047,7 @@ export async function updateAutomationRuleById(r: AutomationRuleRow): Promise<bo
        gate_policy = $7, time_window = $8, enabled = $9, template_id = $10, layout = $11::jsonb,
        program_ids = $12::jsonb, channels = $13::jsonb, daily_quota = $14,
        active_start = $15, active_end = $16, orientation = $17, reframe = $18,
-       thumbnail_mode = $19
+       thumbnail_mode = $19, weekdays = $20::jsonb, slots = $21::jsonb
      WHERE id = $1`,
     [r.id, r.programId, r.platform, r.accountId, r.mediaKind, r.criterion, r.gatePolicy, r.window, r.enabled,
      r.templateId ?? null,
@@ -3047,7 +3055,9 @@ export async function updateAutomationRuleById(r: AutomationRuleRow): Promise<bo
      r.programIds?.length ? JSON.stringify(r.programIds) : null,
      r.channels?.length ? JSON.stringify(r.channels) : null,
      r.dailyQuota ?? 3, r.activeStart ?? 9, r.activeEnd ?? 22,
-     r.orientation ?? null, r.reframe ?? null, r.thumbnailMode ?? null],
+     r.orientation ?? null, r.reframe ?? null, r.thumbnailMode ?? null,
+     r.weekdays?.length ? JSON.stringify(r.weekdays) : null,
+     r.slots?.length ? JSON.stringify(r.slots) : null],
   );
   return (res.rowCount ?? 0) > 0;
 }

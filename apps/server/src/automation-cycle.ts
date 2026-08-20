@@ -38,6 +38,7 @@ import {
   AUTO_RENDER_STOPPED_NOTE, CREDIT_IDLE_REASON, CREDIT_STOP_NOTE, DEFAULT_RULE_THUMBNAIL_MODE,
   LAST_CYCLE_KEY, TOP3_CAP,
   autoRenderFailedNote, classifyRenderFailure,
+  allowedToday, isPublishDay, ruleSlots, ruleWeekdays,
   decidePublish, episodeAnalysisState, inActiveWindow, isRuleThumbnailMode, matchesMediaKind,
   nextAutoRenderState,
   overlapsExistingClip, planCycle,
@@ -183,6 +184,14 @@ export async function runAutomationCycle(): Promise<CycleReport> {
     // 회차가 왜 안 나갔지" 를 볼 때 순방이 안 돈 건지 워커가 죽은 건지 구분할 근거가 없었다.
     if (!inActiveWindow(rule)) {
       obs.outOfWindow = true;
+      await idle();
+      continue;
+    }
+    // 발행 요일이 아닌 날도 마찬가지다 — 편성이 "월화수목금" 인데 토요일에 나가면 채널
+    // 성격이 흐려진다. 요일 미지정 규칙은 매일이라 여기서 걸리지 않는다(기존 동작).
+    if (!isPublishDay(rule)) {
+      obs.offDay = true;
+      obs.weekdays = ruleWeekdays(rule);
       await idle();
       continue;
     }
@@ -376,7 +385,10 @@ export async function runAutomationCycle(): Promise<CycleReport> {
         continue;
       }
 
-      const quota = Number(rule.dailyQuota) > 0 ? Number(rule.dailyQuota) : 3;
+      // 발행 시각 슬롯이 있으면 **지난 슬롯 수**가 지금까지 허용된 누적 발행 수다
+      // (17:00·20:00·22:00 이면 20:30 에 2건). 슬롯이 없으면 예전처럼 하루 할당량.
+      // 판정을 automation.ts 한 곳에 두어 화면의 월 예상 건수와 갈라지지 않게 한다.
+      const quota = allowedToday(rule);
       let remaining = quota - (await publishedTodayKst(accountKey));
       if (remaining <= 0) {
         // 조용히 넘기면 "왜 오늘은 아무것도 안 나갔지" 를 설명할 근거가 로그에 없다.
@@ -385,7 +397,14 @@ export async function runAutomationCycle(): Promise<CycleReport> {
         // 오전에 게이트 OFF 로 한 줄 남은 채널에서 이 사유가 **한 줄도 안 남는다.**
         // 문구의 숫자는 규칙 설정(할당량)이라 하루 안에 저절로 안 바뀐다.
         obs.quotaDone = true;
-        const quotaNote = `오늘 이 채널 할당량(${quota}건)을 다 썼습니다 — 내일 자정(KST)에 초기화됩니다.`;
+        // ⚠️ 이 문구는 dedupe 키다 — **하루 안에 바뀌는 숫자를 넣으면 안 된다.**
+        // 슬롯 방식에서는 허용치가 시각에 따라 1→2→3 으로 커지므로 그 수를 문구에 실으면
+        // 슬롯마다 새 줄이 쌓여 실행 로그(50건 창)를 이 줄로 덮는다. 슬롯 규칙은 숫자를
+        // 빼고 "다음 발행 시각 대기" 라는 고정 문구를 쓴다 — 의미도 그쪽이 정확하다.
+        const slotted = ruleSlots(rule).length > 0;
+        const quotaNote = slotted
+          ? "이 시각까지의 발행을 모두 마쳤습니다 — 다음 발행 시각에 이어서 올라갑니다."
+          : `오늘 이 채널 할당량(${quota}건)을 다 썼습니다 — 내일 자정(KST)에 초기화됩니다.`;
         await note({
           ruleId: rule.id, clipId: null, result: "skipped", accountKey, detail: quotaNote,
         }, hasRunNote(rule.id, null, accountKey, "skipped", true, quotaNote));

@@ -156,6 +156,37 @@ export const API_KEY_ROUTES: RouteRule[] = [
   { method: "GET", path: /^\/api\/factory\/jobs\/[^/]+\/performance$/, scope: "factory:read" },
   // 잔액·사용내역 (읽기만 — 결제·카드는 세션 전용으로 남긴다)
   { method: "GET", path: /^\/api\/credits$/, scope: "billing:read" },
+  { method: "GET", path: /^\/api\/credits\/invoices$/, scope: "billing:read" },
+
+  // ── 콘솔을 통째로 대신하는 클라이언트용 (2026-08-20) ────────────────────────
+  // 고객사(ENA)가 자기 화면을 자기 도메인에서 그린다. 그 화면이 필요로 하는 것을 연다.
+  // **여전히 자기 워크스페이스 안이다** — RLS 가 스코프하므로 남의 데이터는 나가지 않는다.
+
+  // 워크스페이스 상태 — 프로그램·회차·추천·클립·미디어 목록의 **유일한 출처**다
+  // (개별 목록 라우트가 없다. 우리 웹 store.tsx 도 이걸 쓴다).
+  { method: "GET", path: /^\/api\/state$/, scope: "media:read" },
+
+  // 프로그램 — 자동화 라인에 올릴 프로그램을 고객사가 직접 등록·수정한다
+  { method: "GET", path: /^\/api\/programs\/[^/]+$/, scope: "media:read" },
+  { method: "POST", path: /^\/api\/programs$/, scope: "media:write" },
+  { method: "PATCH", path: /^\/api\/programs\/[^/]+$/, scope: "media:write" },
+
+  // 자동배포 규칙 — 발행 계획 화면의 실체
+  { method: "GET", path: /^\/api\/automation$/, scope: "factory:read" },
+  { method: "POST", path: /^\/api\/automation\/rules$/, scope: "factory:write" },
+  { method: "DELETE", path: /^\/api\/automation\/rules\/[^/]+$/, scope: "factory:write" },
+  { method: "POST", path: /^\/api\/automation\/pause$/, scope: "factory:write" },
+  { method: "POST", path: /^\/api\/automation\/holds\/release$/, scope: "factory:write" },
+  { method: "POST", path: /^\/api\/automation\/run$/, scope: "factory:write" },
+  { method: "GET", path: /^\/api\/channel-rules$/, scope: "factory:read" },
+
+  // 검수 — 추천 채택·거절·썸네일 선택, 클립 메타데이터 손질
+  { method: "POST", path: /^\/api\/recommendations\/[^/]+\/adopt$/, scope: "factory:write" },
+  { method: "POST", path: /^\/api\/recommendations\/[^/]+\/reject$/, scope: "factory:write" },
+  { method: "PATCH", path: /^\/api\/recommendations\/[^/]+\/thumbnail$/, scope: "factory:write" },
+  { method: "POST", path: /^\/api\/clips\/[^/]+\/generate-metadata$/, scope: "factory:write" },
+  { method: "POST", path: /^\/api\/clips\/[^/]+\/regenerate-titles$/, scope: "factory:write" },
+  { method: "PATCH", path: /^\/api\/clips\/[^/]+\/metadata\/[^/]+$/, scope: "factory:write" },
 ];
 
 export type RouteVerdict = { ok: true; scope: ApiScope } | { ok: false; reason: string };

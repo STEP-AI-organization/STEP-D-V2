@@ -17,7 +17,14 @@ import {
   RENDER_MAX_ATTEMPTS,
   RENDER_STUCK_MS,
   RULE_IDLE_CODES,
+  allowedToday,
   autoRenderFailedNote,
+  formatWeekdays,
+  isPublishDay,
+  kstWeekday,
+  monthlyPublishEstimate,
+  ruleSlots,
+  ruleWeekdays,
   classifyRenderFailure,
   decidePublish,
   episodeAnalysisState,
@@ -720,6 +727,81 @@ describe("사유는 하나만 — 우선순위 고정", () => {
   }
 });
 
+describe("발행 요일 · 발행 시각 슬롯", () => {
+  /** KST 기준 시각을 만든다 — 판정이 전부 Asia/Seoul 벽시계라 UTC 로 쓰면 하루가 밀린다. */
+  const kst = (iso: string) => new Date(`${iso}+09:00`);
+
+  it("요일 미지정은 매일이다 — 기존 규칙이 이 변경으로 멈추면 안 된다", () => {
+    assert.equal(ruleWeekdays({ weekdays: null }), null);
+    assert.equal(ruleWeekdays({ weekdays: [] }), null);
+    for (const d of ["2026-08-17", "2026-08-22", "2026-08-23"]) {
+      assert.equal(isPublishDay({ weekdays: null }, kst(`${d}T12:00`)), true, d);
+    }
+  });
+
+  it("요일은 ISO(월=1)로 읽는다 — 여기가 하루 밀리면 편성이 통째로 어긋난다", () => {
+    // 2026-08-17 은 월요일, 08-22 토요일, 08-23 일요일.
+    assert.equal(kstWeekday(kst("2026-08-17T12:00")), 1);
+    assert.equal(kstWeekday(kst("2026-08-22T12:00")), 6);
+    assert.equal(kstWeekday(kst("2026-08-23T12:00")), 7);
+    const weekdayOnly = { weekdays: [1, 2, 3, 4, 5] };
+    assert.equal(isPublishDay(weekdayOnly, kst("2026-08-17T12:00")), true, "월요일은 발행");
+    assert.equal(isPublishDay(weekdayOnly, kst("2026-08-22T12:00")), false, "토요일은 미발행");
+  });
+
+  it("KST 경계에서 요일이 갈린다 — UTC 로 읽으면 월요일 아침이 일요일이 된다", () => {
+    // UTC 2026-08-16T15:00 = KST 2026-08-17T00:00 (월요일 자정)
+    assert.equal(kstWeekday(new Date("2026-08-16T15:00:00Z")), 1);
+    assert.equal(kstWeekday(new Date("2026-08-16T14:59:00Z")), 7);
+  });
+
+  it("슬롯은 지난 개수만큼만 허용한다 — 정각 편성을 순방 주기 위에서 표현하는 방법", () => {
+    const rule = { slots: ["17:00", "20:00", "22:00"], dailyQuota: 99 };
+    assert.equal(allowedToday(rule, kst("2026-08-17T09:00")), 0, "첫 슬롯 전에는 0건");
+    assert.equal(allowedToday(rule, kst("2026-08-17T17:00")), 1, "정각은 포함");
+    assert.equal(allowedToday(rule, kst("2026-08-17T20:30")), 2);
+    assert.equal(allowedToday(rule, kst("2026-08-17T23:59")), 3, "슬롯 수를 넘지 않는다");
+  });
+
+  it("슬롯이 없으면 예전처럼 하루 할당량이다", () => {
+    assert.equal(allowedToday({ slots: null, dailyQuota: 5 }, kst("2026-08-17T09:00")), 5);
+    assert.equal(allowedToday({ slots: [], dailyQuota: 0 }, kst("2026-08-17T09:00")), 3, "기본 3");
+  });
+
+  it("망가진 슬롯 값은 버린다 — 화면 입력이 그대로 판정에 들어오면 안 된다", () => {
+    assert.deepEqual(ruleSlots({ slots: ["17:00", "25:00", "7:00", "", "17:00", "09:30"] }),
+      ["09:30", "17:00"]);
+  });
+
+  it("월 예상 건수는 판정과 같은 함수에서 나온다 — 화면 숫자와 실제가 갈라지지 않게", () => {
+    // 목업 기준: 월화수목금 · 하루 3건 · 채널 1개 → 주 15건 · 월 65건(52/12 주 환산).
+    const e = monthlyPublishEstimate({
+      weekdays: [1, 2, 3, 4, 5], slots: ["17:00", "20:00", "22:00"],
+      dailyQuota: 3, platform: "youtube", accountId: "UC1", channels: null,
+    } as never);
+    assert.equal(e.perDay, 3, "슬롯이 있으면 슬롯 수가 하루 발행 수다");
+    assert.equal(e.days, 5);
+    assert.equal(e.perWeek, 15);
+    assert.equal(e.perMonth, Math.round(15 * (52 / 12)));
+  });
+
+  it("채널이 늘면 예상 건수도 는다 — 할당량이 채널당이기 때문", () => {
+    const e = monthlyPublishEstimate({
+      weekdays: [1], slots: [], dailyQuota: 2, platform: "youtube", accountId: "UC1",
+      channels: [{ platform: "youtube", accountId: "UC1" }, { platform: "youtube", accountId: "UC2" }],
+    } as never);
+    assert.equal(e.channels, 2);
+    assert.equal(e.perWeek, 4);
+  });
+
+  it("요일 문구는 설정만 싣는다 — dedupe 키라 오늘 요일 같은 변동값이 들어가면 안 된다", () => {
+    assert.equal(formatWeekdays([1, 2, 3, 4, 5]), "월화수목금");
+    assert.equal(formatWeekdays([7, 6]), "토일");
+    assert.equal(formatWeekdays(null), "매일");
+    assert.equal(formatWeekdays([]), "매일");
+  });
+});
+
 describe("사유 문구는 dedupe 키다 — 변동값이 섞이면 안 된다", () => {
   /**
    * hasRunNote 가 detail 일치로 하루 한 줄을 막는다. 문구에 카운트가 들어가면 순방(15분)마다
@@ -729,6 +811,12 @@ describe("사유 문구는 dedupe 키다 — 변동값이 섞이면 안 된다",
   const SAMPLES: Record<RuleIdleCode, [RuleIdleObservation, RuleIdleObservation]> = {
     // 활동 시간창은 **규칙 설정**이라 하루 안에 안 바뀐다 — 문구에 넣어도 dedupe 가 산다.
     off_hours: [obs({ outOfWindow: true }), obs({ outOfWindow: true, episodes: 9, analyzing: 4 })],
+    // 발행 요일도 **규칙 설정**이라 하루 안에 안 바뀐다 — 문구에 실어도 dedupe 가 산다.
+    // (오늘 요일 같은 변동값을 실으면 안 된다 — 그래서 문구는 설정된 요일만 쓴다.)
+    off_day: [
+      obs({ offDay: true, weekdays: [1, 2, 3, 4, 5] }),
+      obs({ offDay: true, weekdays: [1, 2, 3, 4, 5], episodes: 9, analyzing: 4 }),
+    ],
     no_episode: [obs({ episodes: 0 }), obs({ episodes: 0, analyzing: 7 })],
     analysis_blocked: [obs({ analyzed: 0, analysisBlocked: 1 }), obs({ analyzed: 0, analysisBlocked: 12 })],
     analysis_failed: [obs({ analyzed: 0, analysisFailed: 1 }), obs({ analyzed: 0, analysisFailed: 9 })],

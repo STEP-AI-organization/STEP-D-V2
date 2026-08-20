@@ -140,13 +140,20 @@ describe("라우트 화이트리스트 — 기본값은 닫힘", () => {
   });
 
   it("관리·결제·배포 라우트는 전부 막힌다", () => {
+    // ⚠️ `GET /api/state` 는 2026-08-20 에 **의도적으로 이 목록에서 뺐다.** 고객사(ENA)가
+    //    자기 도메인에서 콘솔을 통째로 그리게 되면서 목록의 유일한 출처가 필요해졌다.
+    //    안전한 이유를 확인하고 열었다: 응답은 programs·episodes·recommendations·clips·
+    //    jobs·media(mediaPublic)·connections 인데 **자격증명이 하나도 없다**
+    //    (connections 는 불리언 4개 · mediaPublic 은 경로·토큰을 뺀 사본), 전부 RLS 로
+    //    자기 워크스페이스에 묶인다. 게다가 그 키는 이미 factory:write 를 들고 있어
+    //    유출 시 "자기 데이터 조회"보다 훨씬 큰 일(채널 게시)이 가능하다.
+    //    반대로 **아래 목록은 계속 막혀야 한다** — 남의 테넌트·결제 수단·계정 토큰이다.
     const forbidden: [string, string][] = [
       ["GET", "/api/superadmin/tenants"],
       ["POST", "/api/superadmin/tenants"],
       ["POST", "/api/credits/topup"],
       ["POST", "/api/distributions/publish"],
       ["POST", "/api/auth/login"],
-      ["GET", "/api/state"],
       ["POST", "/api/admin/reset"],
       ["GET", "/api/youtube/channels"],
     ];
@@ -193,10 +200,12 @@ describe("라우트 화이트리스트 — 기본값은 닫힘", () => {
 
   it("화이트리스트에 관리 경로가 섞여 있지 않다", () => {
     for (const r of API_KEY_ROUTES) {
-      // credits 는 **읽기(GET /api/credits)만** 의도적으로 열었다(billing:read) —
-      // 충전·카드 등 쓰기는 여전히 세션 전용이어야 한다.
-      if (r.path.source === "^\\/api\\/credits$") {
-        assert.equal(r.method, "GET", "credits 는 GET 만 허용된다");
+      // credits 는 **읽기만** 의도적으로 열었다(billing:read · 잔액·인보이스) —
+      // 충전·카드 등 쓰기는 여전히 세션 전용이어야 한다. 경로가 늘어도(예: /credits/invoices)
+      // 이 불변식은 "GET 만" 하나로 유지된다.
+      if (r.path.source.startsWith("^\\/api\\/credits")) {
+        assert.equal(r.method, "GET",
+          "credits 는 조회만 연다 — 충전·카드 등 쓰기는 세션 전용이어야 한다");
         continue;
       }
       assert.doesNotMatch(r.path.source, /superadmin|admin|auth|credits|distributions|youtube/,
@@ -214,6 +223,36 @@ describe("라우트 화이트리스트 — 기본값은 닫힘", () => {
     assert.equal(checkRoute("POST", "/api/factory/ingest", ["factory:write"]).ok, true);
     assert.equal(checkRoute("GET", "/api/factory/jobs", ["factory:read"]).ok, true);
     assert.equal(checkRoute("GET", "/api/factory/jobs/f_1", ["factory:read"]).ok, true);
+  });
+
+  it("고객사 콘솔이 필요로 하는 것이 열려 있다 (자동화·검수·프로그램)", () => {
+    // 고객사가 자기 도메인에서 콘솔을 그린다 — 그 화면이 부르는 것들.
+    assert.equal(checkRoute("GET", "/api/state", ["media:read"]).ok, true, "목록의 유일한 출처");
+    assert.equal(checkRoute("GET", "/api/automation", ["factory:read"]).ok, true);
+    assert.equal(checkRoute("POST", "/api/automation/rules", ["factory:write"]).ok, true);
+    assert.equal(checkRoute("DELETE", "/api/automation/rules/r_1", ["factory:write"]).ok, true);
+    assert.equal(checkRoute("POST", "/api/automation/holds/release", ["factory:write"]).ok, true);
+    assert.equal(checkRoute("POST", "/api/recommendations/r_1/adopt", ["factory:write"]).ok, true);
+    assert.equal(checkRoute("POST", "/api/recommendations/r_1/reject", ["factory:write"]).ok, true);
+    assert.equal(checkRoute("POST", "/api/clips/c_1/generate-metadata", ["factory:write"]).ok, true);
+    assert.equal(checkRoute("POST", "/api/programs", ["media:write"]).ok, true);
+    assert.equal(checkRoute("GET", "/api/credits/invoices", ["billing:read"]).ok, true);
+    // 읽기 스코프만으론 쓰기가 안 열린다 — 스코프 분리가 살아 있는지.
+    assert.equal(checkRoute("POST", "/api/automation/rules", ["factory:read"]).ok, false);
+    assert.equal(checkRoute("POST", "/api/recommendations/r_1/adopt", ["factory:read"]).ok, false);
+  });
+
+  it("결제 수단·충전은 콘솔을 열어도 키로 못 부른다", () => {
+    // 고객사 콘솔용으로 화이트리스트를 크게 넓혔다(2026-08-20). 그때 **같이 열리지 않았는지**
+    // 를 고정한다 — 임의 금액을 카드에서 긁거나 결제 수단을 바꾸는 건 사람이 세션으로 한다.
+    const all = [...API_SCOPES];
+    for (const [m, p] of [
+      ["POST", "/api/credits/topup"], ["POST", "/api/credits/topup/card"],
+      ["POST", "/api/billing/card"], ["POST", "/api/billing/card/prepare"],
+      ["DELETE", "/api/billing/card"], ["PUT", "/api/credits/auto-topup"],
+    ] as [string, string][]) {
+      assert.equal(checkRoute(m, p, all).ok, false, `${m} ${p} 는 키로 열리면 안 된다`);
+    }
     assert.equal(checkRoute("GET", "/api/factory/jobs/f_1/performance", ["factory:read"]).ok, true);
     // 쓰기 스코프 없이 ingest 는 못 부른다
     assert.equal(checkRoute("POST", "/api/factory/ingest", ["factory:read"]).ok, false);
