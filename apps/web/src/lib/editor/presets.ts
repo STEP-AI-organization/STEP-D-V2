@@ -211,13 +211,18 @@ export function splitCaptionText(text: string, maxChars: number): string[] {
   const tokens = text.trim().split(/\s+/).filter(Boolean);
   if (!tokens.length) return [];
   const max = Math.max(6, Math.floor(maxChars));
+  // 균형 분할 — 서버 caption-chunk.ts 미러. greedy 로 첫 조각을 max 까지 채우면 구가 중간에서
+  // 갈라져(사용자 2026-08-20), 균등 목표(target)까지만 채워 고르게 만든다. (문장부호·꼬리병합 유지.)
+  const totalChars = tokens.reduce((a, t) => a + [...t].length, 0) + (tokens.length - 1);
+  const nChunks = Math.max(1, Math.ceil(totalChars / max));
+  const target = Math.max(6, Math.ceil(totalChars / nChunks));
   const out: string[] = [];
   let cur: string[] = [];
   let len = 0;
   const flush = () => { if (cur.length) { out.push(cur.join(" ")); cur = []; len = 0; } };
   for (const tok of tokens) {
     const tl = [...tok].length;
-    if (cur.length && len + 1 + tl > max) flush();
+    if (cur.length && len + 1 + tl > target) flush();
     len = cur.length ? len + 1 + tl : tl;
     cur.push(tok);
     // 쉼표는 절반은 채웠을 때만 — 안 그러면 "근데," 같은 두 글자짜리 화면이 나온다.

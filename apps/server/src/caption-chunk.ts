@@ -29,13 +29,20 @@ export function splitCaptionText(text: string, maxChars: number): string[] {
   const tokens = text.trim().split(/\s+/).filter(Boolean);
   if (!tokens.length) return [];
   const max = Math.max(6, Math.floor(maxChars));
+  // 균형 분할 — greedy 로 첫 조각을 max 까지 꽉 채우면 "…대출업자들은 일정" | "부분의 채무가" 처럼
+  // 구(phrase)가 중간에서 갈라진다(사용자 2026-08-20 실측). 필요한 조각 수(ceil)로 나눈 균등
+  // 목표(target)까지만 채워 조각을 고르게 만들면 구가 덜 갈라지고 꼬리 파편도 준다.
+  // (문장부호 강제 끊기·꼬리 병합·단어 안 자름은 그대로. target 은 max 이하라 상한도 유지.)
+  const totalChars = tokens.reduce((a, t) => a + [...t].length, 0) + (tokens.length - 1);
+  const nChunks = Math.max(1, Math.ceil(totalChars / max));
+  const target = Math.max(6, Math.ceil(totalChars / nChunks));
   const out: string[] = [];
   let cur: string[] = [];
   let len = 0;
   const flush = () => { if (cur.length) { out.push(cur.join(" ")); cur = []; len = 0; } };
   for (const tok of tokens) {
     const tl = [...tok].length;
-    if (cur.length && len + 1 + tl > max) flush();
+    if (cur.length && len + 1 + tl > target) flush();
     len = cur.length ? len + 1 + tl : tl;
     cur.push(tok);
     // 쉼표는 절반은 채웠을 때만 — 안 그러면 "근데," 같은 두 글자짜리 화면이 나온다.

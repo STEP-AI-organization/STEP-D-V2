@@ -1449,6 +1449,15 @@ def validate_shorts(shorts: list[dict], duration: float, n: int,
                     fixed = min(fixed, duration)
                 if fixed > end:
                     end = fixed
+        # ⚠️ 모든 확장(발화·종결어미·서사비트) 뒤 **최종 90초 상한 재적용**. 위 1403 의 클램프는
+        #    서사비트 완결 스냅(_snap_to_beat_closure)이 다음 비트까지 end 를 다시 늘려 무력화됐다 —
+        #    그래서 90초로 자른 게 293초짜리 "숏폼" 으로 다시 커졌다(사용자 2026-08-20 실측).
+        #    운영 상한(MAX_SHORT_SEC=90)은 절대선이라, 완결 스냅도 이 안에서만 허용한다.
+        if end - start > MAX_SHORT_SEC:
+            end = start + MAX_SHORT_SEC
+            if transcript:
+                # 90초 지점을 발화 경계로만 스냅하되 90초를 넘기지 않게 cap — 대사 중간 절단 방지.
+                end = min(_snap_to_speech(start, end, transcript)[1], start + MAX_SHORT_SEC)
         # 3축 정규화 + legacy appeal은 3축에서 산출(모델이 준 값보다 근거값이 우선)
         for k in ("hook_strength", "payoff", "completeness"):
             v = s.get(k)
