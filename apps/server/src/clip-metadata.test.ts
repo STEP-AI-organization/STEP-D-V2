@@ -174,6 +174,21 @@ describe("YouTube 제목 해시태그 — 유입의 축", () => {
     assert.match(m.title ?? "", /#Shorts$/i, "본문이 상한을 다 써서 #Shorts 가 날아갔다");
   });
 
+  it("제목 해시태그 상한이 다른 태그로 다 차도 #Shorts 는 무조건 붙는다 (사용자 2026-08-20)", () => {
+    // AI 가 프로그램+인물+상황으로 titleHashtags(3) 를 꽉 채운 경우 — 예전엔 자리가 없어 #Shorts 가
+    // 조용히 밀려났다. 이제 #Shorts 자리를 예약하므로 반드시 맨 끝에 붙는다.
+    const full: BaseMetadata = { title: "결정적 순간", description: "설명 문장.", tags: [], hashtags: ["#영수", "#영자", "#돌싱글즈"] };
+    const m = normalizeForChannel(full, "youtube", {}, { program: "나는솔로" });
+    assert.match(m.title ?? "", /#Shorts$/i, `태그가 꽉 찼다고 #Shorts 가 빠졌다: ${m.title}`);
+  });
+
+  it("AI 가 한글 #쇼츠 를 뽑아도 표준 #Shorts 하나로 통일된다 (중복 없음)", () => {
+    const kr: BaseMetadata = { title: "순간", description: "설명 문장.", tags: [], hashtags: ["#쇼츠", "#영수"] };
+    const m = normalizeForChannel(kr, "youtube", {}, { program: "나는솔로" });
+    assert.match(m.title ?? "", /#Shorts$/i);
+    assert.doesNotMatch(m.title ?? "", /#쇼츠/, `한글 #쇼츠 가 남았다: ${m.title}`);
+  });
+
   it("#Shorts 보장은 제목 해시태그가 0인 채널에는 적용되지 않는다", () => {
     // 네이버·인스타 등은 titleHashtags=0 이라 #Shorts 도 붙지 않는다.
     const m = normalizeForChannel(noHashtags, "navertv", {}, { program: "전참시" });

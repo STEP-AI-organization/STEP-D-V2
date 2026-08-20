@@ -389,24 +389,25 @@ export function normalizeForChannel(
   let title: string | null = null;
   let titleTags: string[] = [];
   if (spec.titleMax !== null) {
+    // 쇼츠면 **#Shorts 자리를 하나 예약**한다(want = 상한-1) — 다른 해시태그가 상한을 다 채워도
+    // #Shorts 가 밀려나지 않게(사용자 2026-08-20: "제목에 #Shorts 무조건 필수 · 중요"). 예전엔
+    // `length < titleHashtags` 조건이라 태그 3개가 차면 #Shorts 가 조용히 빠졌다. 16:9 클립은 예약 없음.
+    const want = isShort && spec.titleHashtags > 0 ? Math.max(1, spec.titleHashtags - 1) : spec.titleHashtags;
     // 프로그램 해시태그를 최우선으로 — 채널 규칙 템플릿에서 온 것이 그 자리다.
-    titleTags = pickTitleHashtags(hashtags, vars.program, spec.titleHashtags);
+    titleTags = pickTitleHashtags(hashtags, vars.program, want);
     if (spec.titleHashtags > 0) {
       // ⚠️ **제목은 해시태그 없이 나가면 안 된다**(YouTube 쇼츠 유입축). 규칙 템플릿·Gemini
       //    해시태그가 둘 다 비고 프로그램조차 없어 titleTags 가 통째로 비면, 클립 자체 데이터로
       //    채운다 — 하드코딩이 아니라 이 클립에서 나온 것만 쓴다.
-      //    소스 순서: 프로그램명 → base.tags(등록 캐스트·인물명이 녹아 있는 자리). #쇼츠 자리를
-      //    하나 남겨(want-1) 최후의 보루가 항상 들어가게 한다.
       if (titleTags.length === 0) {
-        titleTags = pickTitleHashtags(base.tags ?? [], vars.program, Math.max(1, spec.titleHashtags - 1));
+        titleTags = pickTitleHashtags(base.tags ?? [], vars.program, Math.max(1, want));
       }
-      // #Shorts 보장(쇼츠만) — 이미 있으면 그대로, 없고 자리가 남으면 붙인다(레퍼런스:
-      // `#프로그램 #서브 #Shorts`). 그래도 비면(프로그램·태그 전무) SHORTS_TAG 하나라도 남긴다
-      // — YouTube 쇼츠는 해시태그 0개로 안 나간다. 클립(16:9)이면 이 보장을 걸지 않는다.
+      // #Shorts **무조건 보장**(쇼츠만). 한글 #쇼츠·#쇼트 등 변형은 표준 #Shorts(= YouTube 가
+      //  Short 로 분류하는 태그)로 통일해 맨 끝에 하나만 남긴다. 예약 슬롯 덕에 다른 태그에
+      //  밀려나지 않는다. 16:9 클립엔 붙이지 않는다.
       if (isShort) {
-        const hasShorts = titleTags.some((t) => t.toLowerCase() === SHORTS_TAG.toLowerCase());
-        if (!hasShorts && titleTags.length < spec.titleHashtags) titleTags.push(SHORTS_TAG);
-        if (titleTags.length === 0) titleTags.push(SHORTS_TAG);
+        titleTags = titleTags.filter((t) => !/^#(shorts?|쇼츠|쇼트)$/i.test(t));
+        titleTags.push(SHORTS_TAG);
       }
     }
     const suffix = titleTags.length ? ` ${titleTags.join(" ")}` : "";
