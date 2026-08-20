@@ -840,6 +840,50 @@ function CaptionsTab({ state, update }: { state: EditorState; update: Update }) 
           ))}
         </select>
       </div>
+      {/* 세로 위치·색·크기 — 미리보기(editor-preview)와 렌더(index.ts buildEditorAss)가 **같은
+          captionY/captionColor/captionSize 를 읽는다**. 예전엔 이 컨트롤이 없어 자동배포 규칙만
+          세팅할 수 있었다(사용자 2026-08-20: "위치·컬러 조정이 안 됨"). */}
+      <div>
+        <Label>세로 위치 {Math.round(state.captionY ?? 14)}% <span className="text-zinc-500">(화면 아래에서)</span></Label>
+        <input
+          type="range"
+          min={4}
+          max={80}
+          value={Math.round(state.captionY ?? 14)}
+          onChange={(e) => update({ captionY: Number(e.target.value) })}
+          className="w-full"
+        />
+      </div>
+      <div>
+        <Label>자막 색 <span className="text-zinc-500">(비우면 스타일 기본색)</span></Label>
+        <div className="flex items-center gap-2">
+          <Swatches colors={COLOR_SWATCHES} value={state.captionColor ?? ""} onPick={(c) => update({ captionColor: c })} />
+          {state.captionColor ? (
+            <button
+              type="button"
+              onClick={() => update({ captionColor: undefined })}
+              className="shrink-0 rounded border border-zinc-700 px-1.5 py-0.5 text-[10px] text-zinc-400 hover:bg-zinc-800"
+            >
+              스타일 색
+            </button>
+          ) : null}
+        </div>
+        <div className="mt-1 text-[11px] text-zinc-500">
+          자막 전체 글자색. 아래 <b>강조 색·키워드 색</b>은 <b>말하는 단어만</b> 물들이는 렌더 전용이라 미리보기엔 안 보입니다.
+        </div>
+      </div>
+      <div>
+        <Label>자막 크기 {(state.captionSize ?? 4.2).toFixed(1)} <span className="text-zinc-500">(화면 높이 %)</span></Label>
+        <input
+          type="range"
+          min={2.5}
+          max={7}
+          step={0.1}
+          value={state.captionSize ?? 4.2}
+          onChange={(e) => update({ captionSize: Number(e.target.value) })}
+          className="w-full"
+        />
+      </div>
       {/* 한 화면 글자수 — 세그먼트를 통째로 띄우면 쇼츠에선 4~5줄이 화면 절반을 덮는다.
           미리보기와 렌더가 같은 상한으로 끊는다(presets.ts / index.ts::chunkCaption). */}
       <div>
