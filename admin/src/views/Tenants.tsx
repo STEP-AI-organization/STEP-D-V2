@@ -310,6 +310,7 @@ function ApiKeysPanel({ tenant }: { tenant: Tenant }) {
       <p className="muted" style={{ marginTop: 0, fontSize: 12 }}>
         <strong>{tenant.name}</strong> 의 시스템이 우리 API 를 호출할 때 쓰는 키입니다.
         사람 계정과는 별개이고, 허용한 권한의 정해진 경로만 부를 수 있습니다.
+        <strong>자동화 콘솔</strong>(규칙·검수·잔액·카드)을 쓰려면 <code>factory</code>·<code>billing</code> 권한까지 켜세요 — 아래 <strong>전체 선택</strong>으로 한 번에.
       </p>
 
       {issued && (
@@ -331,7 +332,12 @@ function ApiKeysPanel({ tenant }: { tenant: Tenant }) {
           <input placeholder="사유 (4자 이상)" value={reason} onChange={(e) => setReason(e.target.value)} />
           <button className="primary" disabled={working || scopes.length === 0}>키 발급</button>
         </div>
-        <div className="row" style={{ marginTop: 6 }}>
+        <div className="row" style={{ marginTop: 6, flexWrap: "wrap", alignItems: "center" }}>
+          {available.length > 0 && (
+            <button type="button" onClick={() => setScopes((cur) => cur.length === available.length ? [] : [...available])} style={{ fontSize: 12, padding: "2px 8px" }}>
+              {scopes.length === available.length ? "전체 해제" : "전체 선택"}
+            </button>
+          )}
           {available.map((s) => (
             <label key={s} style={{ fontSize: 12, display: "flex", gap: 4, alignItems: "center" }}>
               <input
