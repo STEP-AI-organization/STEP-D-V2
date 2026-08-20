@@ -89,12 +89,17 @@ describe("스코프", () => {
     assert.deepEqual(normalizeScopes(["nonsense"]), []);
   });
 
-  it("관리 스코프는 아예 없다 · 결제는 읽기(billing:read)만", () => {
+  it("관리 스코프는 아예 없다 · 결제는 조회 + 수단 등록까지만", () => {
     // 있으면 언젠가 누가 붙인다. 고객사 키가 닿을 수 있는 최대치를 여기서 못박는다.
-    // billing:read 는 잔액·사용내역 **조회** 전용으로 의도적으로 열었다 — 쓰기 스코프
-    // (billing:write 류)가 생기는 순간 이 테스트가 잡아야 한다.
+    //
+    // 결제 스코프 2종은 **의도적으로 열려 있다**(2026-08-20 사용자 확정):
+    //   billing:read  — 잔액·사용내역 조회
+    //   billing:write — 결제 **수단 등록**(카드). 돈을 쓰는 게 아니라 수단을 다는 것이다.
+    // 그 밖의 결제 스코프가 생기면(예: billing:charge) 이 테스트가 잡아야 한다.
+    // 실제로 돈이 나가는 경로가 닫혀 있는지는 아래 "돈이 나가는 경로…" 테스트가 지킨다.
+    const ALLOWED_BILLING = new Set(["billing:read", "billing:write"]);
     for (const s of API_SCOPES) {
-      if (s === "billing:read") continue;
+      if (ALLOWED_BILLING.has(s)) continue;
       assert.doesNotMatch(s, /admin|billing|credit|superadmin|publish/, `위험한 스코프: ${s}`);
     }
   });
@@ -213,9 +218,26 @@ describe("라우트 화이트리스트 — 기본값은 닫힘", () => {
     }
   });
 
-  it("결제 쓰기(충전·카드)는 키로 못 부른다", () => {
-    for (const p of ["/api/credits/topup", "/api/credits/topup/card", "/api/billing/card"]) {
-      assert.equal(checkRoute("POST", p, all).ok, false, p);
+  it("결제 수단 **등록**은 billing:write 로만 열린다 (2026-08-20)", () => {
+    // 고객사가 자기 도메인 화면에서 카드를 등록한다. 카드번호는 브라우저→포트원 직행이고
+    // 우리가 받는 건 빌링키뿐이지만, 그게 곧 "이 카드로 긁을 권한"이라 스코프를 따로 뗐다.
+    assert.equal(checkRoute("POST", "/api/billing/card/prepare", ["billing:write"]).ok, true);
+    assert.equal(checkRoute("POST", "/api/billing/card", ["billing:write"]).ok, true);
+    assert.equal(checkRoute("GET", "/api/billing/card", ["billing:read"]).ok, true);
+    // 읽기 스코프만 가진 표준 키로는 등록이 안 된다 — 분리해 둔 이유가 이것이다.
+    assert.equal(checkRoute("POST", "/api/billing/card", ["billing:read"]).ok, false);
+  });
+
+  it("돈이 나가는 경로와 파괴적 경로는 키로 못 부른다 (스코프 전부 줘도)", () => {
+    // 결제 수단 **등록**을 연 뒤에도 이건 닫혀 있어야 한다. 키 유출 시 "남의 카드가 등록됨"과
+    // "회사 카드가 긁힘"·"결제수단이 사라져 라인이 섬"은 피해가 비교가 안 된다.
+    for (const [m, p] of [
+      ["POST", "/api/credits/topup"],        // 임의 금액 즉시 결제
+      ["POST", "/api/credits/topup/card"],   // 저장 카드로 즉시 결제
+      ["PUT", "/api/credits/auto-topup"],    // 자동 결제 한도 변경
+      ["DELETE", "/api/billing/card"],       // 결제수단 제거 = 라인 정지
+    ] as [string, string][]) {
+      assert.equal(checkRoute(m, p, all).ok, false, `${m} ${p} 는 키로 열리면 안 된다`);
     }
   });
 
@@ -242,14 +264,14 @@ describe("라우트 화이트리스트 — 기본값은 닫힘", () => {
     assert.equal(checkRoute("POST", "/api/recommendations/r_1/adopt", ["factory:read"]).ok, false);
   });
 
-  it("결제 수단·충전은 콘솔을 열어도 키로 못 부른다", () => {
-    // 고객사 콘솔용으로 화이트리스트를 크게 넓혔다(2026-08-20). 그때 **같이 열리지 않았는지**
-    // 를 고정한다 — 임의 금액을 카드에서 긁거나 결제 수단을 바꾸는 건 사람이 세션으로 한다.
+  it("콘솔을 넓혀도 충전은 함께 열리지 않았다", () => {
+    // 고객사 콘솔용으로 화이트리스트를 크게 넓혔다(2026-08-20). 그때 **충전이 같이 열리지
+    // 않았는지**를 고정한다. 결제 수단 등록은 그 뒤 별도 스코프로 열었고(위 테스트),
+    // 여기 목록은 그것과 무관하게 계속 닫혀 있어야 하는 것들이다.
     const all = [...API_SCOPES];
     for (const [m, p] of [
       ["POST", "/api/credits/topup"], ["POST", "/api/credits/topup/card"],
-      ["POST", "/api/billing/card"], ["POST", "/api/billing/card/prepare"],
-      ["DELETE", "/api/billing/card"], ["PUT", "/api/credits/auto-topup"],
+      ["POST", "/api/credits/auto-topup/run"],
     ] as [string, string][]) {
       assert.equal(checkRoute(m, p, all).ok, false, `${m} ${p} 는 키로 열리면 안 된다`);
     }

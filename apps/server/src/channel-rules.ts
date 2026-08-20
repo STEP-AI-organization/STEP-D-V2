@@ -36,9 +36,53 @@ export interface ChannelRule {
   hashtagTemplate: string;
   tonePreset: string;
   privacy: "public" | "unlisted" | "private";
+  /**
+   * 공개 유예(분) — 자동 게시를 이만큼 **비공개로 잡아뒀다 공개**한다. 0 = 즉시(종전 동작).
+   *
+   * 유튜브 `status.publishAt` 예약으로 구현한다(유튜브가 private 로 들고 있다가 스스로
+   * 공개 — 우리가 나중에 공개 API 를 부르는 방식은 워커가 죽으면 영원히 비공개로 남는다).
+   * 값의 근거는 "알고리즘이 영상을 이해할 시간"이 아니라 **처리 완료**다: 업로드 직후엔
+   * HD 트랜스코딩이 안 끝났고(초기 시청자가 360p 를 본다) 커스텀 썸네일도 업로드 뒤에 붙는다.
+   * ⚠️ privacy 가 public 일 때만 적용된다 — publishAt 은 결국 공개로 끝나므로, unlisted·
+   * private 목표에 걸면 의도한 공개 범위를 바꿔 버린다.
+   */
+  publishDelayMin: number;
   /** 예약 시간대 (예: "평일 19:00" · 자유 문자열). 비면 예약 기본값 없음. */
   scheduleWindow: string;
   enabled: boolean;
+}
+
+/** 공개 유예 기본값(분). 쇼츠(60초 내외)의 HD 처리는 대개 이 안에 끝난다. */
+export const DEFAULT_PUBLISH_DELAY_MIN = 5;
+
+/**
+ * 예약은 **5분 단위**로만 잡는다 (사용자 2026-08-20: "13분·12분은 안 되고 10분·15분이어야 함").
+ * 유튜브 예약이 5분 격자를 벗어난 시각을 거부·보정하는 사례가 있어, 우리 쪽에서 먼저 맞춘다.
+ * 격자에 맞추는 비용은 몇 분 더 기다리는 것뿐이라, 어긋나서 예약이 깨지는 것보다 싸다.
+ */
+export const PUBLISH_SLOT_MIN = 5;
+
+/**
+ * 저장·수신값 → 유효한 유예(분). 음수·비수치는 기본값, 과대는 상한(6시간).
+ * 0 은 **살린다** — "즉시 공개" 라는 뜻이 있는 값이라 기본값으로 되돌리면 유예를 끌 수 없다.
+ * 양수는 5분 격자로 **올림**한다(내림하면 사용자가 정한 유예보다 짧아진다).
+ */
+export function normalizePublishDelayMin(v: unknown): number {
+  const n = Number(v);
+  if (!Number.isFinite(n) || n < 0) return DEFAULT_PUBLISH_DELAY_MIN;
+  if (n === 0) return 0;
+  return Math.min(360, Math.ceil(n / PUBLISH_SLOT_MIN) * PUBLISH_SLOT_MIN);
+}
+
+/**
+ * 예약 시각을 다음 5분 경계로 **올림**한다 (초·밀리초는 0).
+ *
+ * 유예가 5분이어도 지금이 15:31:10 이면 목표는 15:36:10 이라 격자를 벗어난다 → 15:40 으로 올린다.
+ * 항상 올림이라 **실제 유예는 설정값 이상**이 된다(짧아지는 쪽으로는 절대 안 간다).
+ */
+export function nextPublishSlot(atMs: number): Date {
+  const slot = PUBLISH_SLOT_MIN * 60_000;
+  return new Date(Math.ceil(atMs / slot) * slot);
 }
 
 /** 역할별 기본 규칙 — 새 채널을 붙일 때의 출발점이지 강제가 아니다. */
@@ -49,6 +93,7 @@ export function defaultRuleFor(role: ChannelRole, platform: string): Omit<Channe
     hashtagTemplate: "",
     tonePreset: "기본",
     privacy: "public" as const,
+    publishDelayMin: DEFAULT_PUBLISH_DELAY_MIN,
     scheduleWindow: "",
     enabled: true,
   };

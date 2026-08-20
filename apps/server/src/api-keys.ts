@@ -24,9 +24,21 @@ export const KEY_PREFIX_TEST = "stepd_test_";
 /** 표시·조회용 접두 길이 — `stepd_live_` (11) + 4자. billing.ts apiKeyPrefix 와 같은 길이다. */
 export const PREFIX_LEN = 15;
 
+/**
+ * `billing:write` — 고객사 화면에서 **결제 수단을 등록**하기 위한 스코프 (2026-08-20 사용자 확정).
+ *
+ * 별도 스코프로 뗀 이유: 표준 고객사 키에서 이것만 빼면 "화면은 보여주되 카드는 못 건드린다"가
+ * 성립한다. 기본 6종에는 넣지 않는다 — 필요한 워크스페이스에만 발급 시 체크한다.
+ *
+ * ⚠️ 이 스코프로도 **돈이 움직이는 경로는 열지 않는다**. 계속 세션 전용이다:
+ *   - `POST /api/credits/topup*`      임의 금액을 즉시 카드에서 긁는다
+ *   - `PUT  /api/credits/auto-topup`  자동 결제 한도를 바꾼다
+ *   - `DELETE /api/billing/card`      결제 수단 제거 = 라인 정지(사보타주)
+ * 키가 유출됐을 때 "남의 카드가 등록될 수 있다"와 "회사 카드가 긁힌다"는 피해가 비교가 안 된다.
+ */
 export const API_SCOPES = [
   "media:write", "media:read", "search:read",
-  "factory:write", "factory:read", "billing:read",
+  "factory:write", "factory:read", "billing:read", "billing:write",
 ] as const;
 export type ApiScope = (typeof API_SCOPES)[number];
 
@@ -187,6 +199,13 @@ export const API_KEY_ROUTES: RouteRule[] = [
   { method: "POST", path: /^\/api\/clips\/[^/]+\/generate-metadata$/, scope: "factory:write" },
   { method: "POST", path: /^\/api\/clips\/[^/]+\/regenerate-titles$/, scope: "factory:write" },
   { method: "PATCH", path: /^\/api\/clips\/[^/]+\/metadata\/[^/]+$/, scope: "factory:write" },
+
+  // 결제 수단 **등록만** (2026-08-20). 카드번호는 브라우저 → 포트원으로 직행하고 우리는
+  // 빌링키만 받는다. 아래 셋 외의 결제 경로는 전부 세션 전용으로 남는다 —
+  // 제거(DELETE)·충전(topup)·자동충전 한도(auto-topup)는 여기 없다. 의도적이다.
+  { method: "POST", path: /^\/api\/billing\/card\/prepare$/, scope: "billing:write" },
+  { method: "POST", path: /^\/api\/billing\/card$/, scope: "billing:write" },
+  { method: "GET", path: /^\/api\/billing\/card$/, scope: "billing:read" },
 ];
 
 export type RouteVerdict = { ok: true; scope: ApiScope } | { ok: false; reason: string };

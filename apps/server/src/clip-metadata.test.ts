@@ -263,6 +263,23 @@ describe("⚠️ 만든 것이 실제로 소비된다 — 이 리포의 최빈 �
   const SRC = path.dirname(fileURLToPath(import.meta.url));
   const read = (f: string) => fs.readFileSync(path.join(SRC, f), "utf-8");
 
+  /**
+   * generate-metadata 라우트 본문만 잘라 온다 — **라우트 경계까지**, 고정 길이가 아니라.
+   *
+   * 예전엔 `[\s\S]{0,4000}` 였는데, 그 창은 라우트가 길어지거나 **주석 몇 줄만 늘어도**
+   * 끝이 밀려 나간다. 실제로 2026-08-20 에 주석 3줄을 넣었더니 "edited" 가 창 밖으로 나가
+   * 멀쩡한 코드에 빨간불이 켜졌다 — 테스트가 검사하려던 불변식과 무관한 실패다.
+   * 다음 `app.` 선언 전까지로 끊으면 라우트가 자라도 안 깨지고, 다른 라우트로 새지도 않는다.
+   */
+  const metadataRoute = () => {
+    const idx = read("index.ts");
+    const at = idx.indexOf("generate-metadata");
+    if (at < 0) return "";
+    const rest = idx.slice(at);
+    const end = rest.search(/\napp\.(get|post|put|patch|delete)\(/);
+    return end > 0 ? rest.slice(0, end) : rest;
+  };
+
   it("발행 경로가 채널별 메타를 읽는다", () => {
     const w = read("worker.ts");
     assert.match(w, /metaForChannel\(/, "worker 가 채널별 메타를 꺼내 쓰지 않는다");
@@ -272,22 +289,19 @@ describe("⚠️ 만든 것이 실제로 소비된다 — 이 리포의 최빈 �
   });
 
   it("생성 라우트가 채널 규칙(titlePrefix·hashtagTemplate)을 실제로 넘긴다", () => {
-    const idx = read("index.ts");
-    const block = idx.match(/generate-metadata[\s\S]{0,4000}/)?.[0] ?? "";
+    const block = metadataRoute();
     assert.match(block, /listChannelRules\(/, "채널 규칙을 조회하지 않는다 — 접두어·해시태그가 또 죽는다");
     assert.match(block, /normalizeForChannel\(/, "채널 규격 적용을 안 한다");
   });
 
   it("생성 라우트가 response_schema 를 넘기지 않는다 (AENA 결론)", () => {
-    const idx = read("index.ts");
-    const block = idx.match(/generate-metadata[\s\S]{0,4000}/)?.[0] ?? "";
+    const block = metadataRoute();
     assert.doesNotMatch(block, /schema[,\s]*}/,
       "schema 를 넘기면 MAX_TOKENS 로 잘렸을 때 파싱이 통째로 실패한다");
   });
 
   it("사람이 고친 메타를 재생성이 덮지 않는다", () => {
-    const idx = read("index.ts");
-    const block = idx.match(/generate-metadata[\s\S]{0,4000}/)?.[0] ?? "";
+    const block = metadataRoute();
     assert.match(block, /edited/, "사람이 수정한 채널을 보존하는 처리가 없다");
   });
 

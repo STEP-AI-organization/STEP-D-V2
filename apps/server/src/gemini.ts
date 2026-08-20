@@ -52,6 +52,9 @@ export interface GeminiJsonOpts {
   maxOutputTokens?: number;
   /** e.g. [{ googleSearch: {} }] for web-search grounding. */
   tools?: GeminiTool[];
+  /** 추론(thinking) 토큰 허용 여부. 기본은 **schema 가 있으면 끔** — 아래 주석 참고.
+   *  산문 생성처럼 추론이 결과를 좌우하는 호출만 명시적으로 true 로 켠다. */
+  thinking?: boolean;
 }
 
 export interface GeminiResult {
@@ -59,6 +62,8 @@ export interface GeminiResult {
   text: string;
   /** Grounding source URIs/titles when the googleSearch tool was used. */
   sources: string[];
+  /** 왜 끝났는지 — 빈 text 의 원인 추적용("MAX_TOKENS"·"SAFETY" 등). 호출부가 로그에 싣는다. */
+  finishReason?: string;
 }
 
 /**
@@ -83,6 +88,15 @@ export async function geminiGenerate(prompt: string, opts: GeminiJsonOpts = {}):
     generationConfig.responseMimeType = "application/json";
     generationConfig.responseSchema = opts.schema;
   }
+  // ⚠️ **Gemini 2.5+ 는 thinking 토큰도 maxOutputTokens 안에서 쓴다.** 그래서 예산이 작으면
+  // 추론이 그걸 다 먹고 본문 파트가 **빈 채로** 돌아온다 — 예외도 안 나고 text 가 "" 다.
+  // 실제로 제목 재생성(maxOutputTokens 1024)이 이 경로로 늘 빈손이었고, 화면엔 원인을 알 수
+  // 없는 "no titles generated" 만 떴다(2026-08-20 사용자 지적).
+  // core 는 같은 함정을 이미 겪고 schema JSON 호출의 thinking 을 껐다(beat_annot.py:441
+  // "schema JSON 이라 reasoning 불필요"). 서버도 같은 규칙을 쓴다 —
+  // **구조화 출력(schema)이면 기본 끔**, 산문 생성은 종전대로 둔다(thinking: true 로 복귀).
+  const thinkingOn = opts.thinking ?? !(opts.schema && !opts.tools);
+  if (!thinkingOn) generationConfig.thinkingConfig = { thinkingBudget: 0 };
 
   const body: Record<string, unknown> = {
     contents: [{ role: "user", parts: [{ text: prompt }] }],
@@ -109,7 +123,13 @@ export async function geminiGenerate(prompt: string, opts: GeminiJsonOpts = {}):
     const s = (w?.title || w?.uri || "").trim();
     if (s && !sources.includes(s)) sources.push(s);
   }
-  return { text, sources };
+  // 빈 본문은 조용히 넘기면 호출부가 "모델이 안 만들었다" 로 오해한다 — 실제로는 예산 소진
+  // (MAX_TOKENS)·안전차단(SAFETY)인 경우가 많다. 이유를 같이 올려 로그에서 바로 갈리게 한다.
+  const finishReason = typeof cand?.finishReason === "string" ? cand.finishReason : undefined;
+  if (!text && finishReason) {
+    console.warn(`[gemini] 빈 응답 — finishReason=${finishReason} · thoughts=${data?.usageMetadata?.thoughtsTokenCount ?? "?"}`);
+  }
+  return { text, sources, finishReason };
 }
 
 /** Parse a JSON object out of model text (handles ```json fences / leading prose). */

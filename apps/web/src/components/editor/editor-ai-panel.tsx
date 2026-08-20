@@ -194,8 +194,15 @@ export function EditorAiPanel({
                   </button>
                 )}
               </div>
+              {/* 실패 사유는 사용자가 **다음 행동을 정하는 근거**다(지시를 고칠지, 다시 누를지).
+                  10px 맨텍스트는 그 아래 후보 목록과 구분이 안 돼 상태줄처럼 읽혔다. */}
               {regenError && (
-                <div className="mt-1 text-[10px] text-red-400">{regenError}</div>
+                <div
+                  role="alert"
+                  className="mt-1.5 rounded-md border border-red-500/30 bg-red-500/10 px-2 py-1.5 text-[11px] leading-relaxed text-red-300"
+                >
+                  {regenError}
+                </div>
               )}
             </div>
 

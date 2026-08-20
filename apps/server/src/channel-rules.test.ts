@@ -5,6 +5,9 @@
  * 그냥 못 고르게만 하면 사용자는 왜 안 되는지 몰라 다른 데를 찾아 헤맨다.
  */
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
 
 import {
@@ -14,15 +17,22 @@ import {
   eligibilityForAll,
   frameOf,
   isShortForm,
+  normalizePublishDelayMin,
+  nextPublishSlot,
+  DEFAULT_PUBLISH_DELAY_MIN,
+  PUBLISH_SLOT_MIN,
   type ChannelRule,
   type MediaFacts,
 } from "./channel-rules.ts";
+
+const SRC_DIR = path.dirname(fileURLToPath(import.meta.url));
 
 const rule = (over: Partial<ChannelRule> = {}): ChannelRule => ({
   platform: "youtube",
   accountId: "c1",
   label: "본채널",
   role: "main",
+  publishDelayMin: 5,
   maxSec: null,
   aspect: "any",
   titlePrefix: "",
@@ -172,5 +182,75 @@ describe("프레임 해석", () => {
   it("세로면 숏폼", () => {
     assert.equal(isShortForm(media({ aspectRatio: "9:16-crop-main" })), true);
     assert.equal(isShortForm(media({ aspectRatio: "16:9" })), false);
+  });
+});
+
+/**
+ * 공개 유예 — 자동 게시를 N분 비공개로 잡아뒀다 공개한다(유튜브 publishAt 예약).
+ *
+ * 근거는 "알고리즘이 영상을 이해할 시간"이 아니라 **처리 완료**다: 업로드 직후엔 HD 트랜스
+ * 코딩이 안 끝났고(초기 시청자가 360p 를 본다) 커스텀 썸네일도 업로드 뒤에 붙는다.
+ *
+ * ⚠️ 여기서 제일 중요한 불변식은 **unlisted·private 에는 걸지 않는다** 는 것이다. publishAt
+ * 예약은 결국 **공개로 끝나므로**, 운영자가 "링크 아는 사람만" 으로 둔 채널에 걸면 그 의도를
+ * 조용히 뒤집어 전체공개가 된다 — 되돌리려면 채널에서 직접 내려야 하고 노출 이력이 남는다.
+ */
+describe("공개 유예 (publishDelayMin)", () => {
+  it("값 정규화 — 음수·비수치는 기본 5분, 0 은 즉시로 살린다", () => {
+    assert.equal(normalizePublishDelayMin(undefined), DEFAULT_PUBLISH_DELAY_MIN);
+    assert.equal(normalizePublishDelayMin("abc"), DEFAULT_PUBLISH_DELAY_MIN);
+    assert.equal(normalizePublishDelayMin(-3), DEFAULT_PUBLISH_DELAY_MIN);
+    // 0 은 "즉시 공개" 라는 뜻이 있는 값이다 — 기본값으로 되돌리면 유예를 끌 수가 없다.
+    assert.equal(normalizePublishDelayMin(0), 0);
+    // 5분 격자로 **올림** — 내림하면 사용자가 정한 유예보다 짧아진다.
+    assert.equal(normalizePublishDelayMin("12"), 15);
+    assert.equal(normalizePublishDelayMin(7.6), 10);
+    assert.equal(normalizePublishDelayMin(13), 15, "13분은 격자를 벗어난다 — 15분이어야 한다");
+    assert.equal(normalizePublishDelayMin(10), 10, "이미 격자에 맞으면 그대로 둔다");
+    assert.equal(normalizePublishDelayMin(99999), 360, "예약 상한(6시간)을 넘겨 잡으면 안 된다");
+    assert.equal(360 % PUBLISH_SLOT_MIN, 0, "상한 자체가 격자에 안 맞으면 잘린 값이 예약을 깬다");
+  });
+
+  it("예약 시각은 5분 경계로 올림된다 — 유튜브가 격자 밖 시각을 거부할 수 있다", () => {
+    // 15:31:10 + 5분 = 15:36:10 → 격자 밖. 15:40:00 으로 올린다.
+    const base = Date.parse("2026-08-20T15:31:10.000Z");
+    const at = nextPublishSlot(base + 5 * 60_000);
+    assert.equal(at.toISOString(), "2026-08-20T15:40:00.000Z");
+    assert.equal(at.getUTCMinutes() % PUBLISH_SLOT_MIN, 0, "분이 5의 배수가 아니다");
+    assert.equal(at.getUTCSeconds(), 0, "초가 남아 있으면 격자에 맞지 않는다");
+    // 항상 올림 — 설정한 유예보다 **짧아지지 않는다**.
+    assert.ok(at.getTime() >= base + 5 * 60_000, "올림이 아니라 내림이 됐다");
+    // 이미 경계면 그대로(불필요하게 5분 더 밀지 않는다).
+    const exact = Date.parse("2026-08-20T15:40:00.000Z");
+    assert.equal(nextPublishSlot(exact).toISOString(), "2026-08-20T15:40:00.000Z");
+  });
+
+  it("순방이 예약을 거는 조건 — public 일 때만, 그리고 유예가 0 이 아닐 때만", () => {
+    const src = fs.readFileSync(path.join(SRC_DIR, "automation-cycle.ts"), "utf-8");
+    // ⚠️ `\n\}` 만으로 끊으면 **반환 타입 객체**가 `\n} {` 로 끝나 시그니처에서 잘린다 —
+    //    본문 단언이 전부 헛돈다. 줄 끝까지(`\n}\n`) 봐야 함수 전체가 잡힌다.
+    const fn = src.match(/function youtubeReleasePlan[\s\S]*?\n\}\r?\n/)?.[0] ?? "";
+    assert.ok(fn, "youtubeReleasePlan 을 못 찾았다");
+    assert.match(fn, /if \(privacy !== "public"\) return \{ privacy \};/,
+      "unlisted·private 에 예약을 걸면 운영자가 정한 공개 범위가 전체공개로 뒤집힌다");
+    assert.match(fn, /if \(delayMin <= 0\) return \{ privacy \};/, "0 분이면 예약 없이 즉시여야 한다");
+    // 값이 없을 때의 폴백은 unlisted — 자동 경로가 실수로 전체공개되지 않는 방향.
+    assert.match(fn, /: "unlisted";/, "공개 범위 폴백이 unlisted 가 아니다 — 실수로 공개되는 방향이 된다");
+  });
+
+  it("예약 시각은 오프셋이 박힌 ISO 로 넘긴다 (KST 해석 여지 없이)", () => {
+    const src = fs.readFileSync(path.join(SRC_DIR, "automation-cycle.ts"), "utf-8");
+    // normalizeReserveDate 는 오프셋 없는 문자열을 KST 로 읽는다 — 로컬 포맷을 넘기면 9시간 어긋난다.
+    assert.match(src, /nextPublishSlot\(Date\.now\(\) \+ delayMin \* 60_000\)/,
+      "예약 시각을 5분 격자로 안 올리면 유튜브가 거부할 수 있다");
+    assert.match(src, /reserveDate: at\.toISOString\(\)/,
+      "예약 시각을 ISO(Z) 로 안 넘기면 타임존 해석에서 어긋난다");
+  });
+
+  it("유튜브 업로드가 publishAt 을 받으면 private 로 올린다 (유튜브가 스스로 공개)", () => {
+    // 우리가 N분 뒤 공개 API 를 부르는 방식은 워커가 죽으면 영원히 비공개로 남는다.
+    const yt = fs.readFileSync(path.join(SRC_DIR, "youtube.ts"), "utf-8");
+    assert.match(yt, /privacyStatus: meta\.publishAt \? "private" : meta\.privacyStatus/,
+      "publishAt 을 줬는데 private 로 안 올리면 유튜브가 예약을 거부한다");
   });
 });

@@ -65,6 +65,8 @@ export function ChannelRuleDialog({
     hashtagTemplate: "",
     tonePreset: "기본",
     privacy: "public",
+    // 공개 유예 기본 5분 — 서버 channel-rules.ts::DEFAULT_PUBLISH_DELAY_MIN 과 같은 값.
+    publishDelayMin: 5,
     scheduleWindow: "",
     enabled: true,
   });
@@ -209,6 +211,37 @@ export function ChannelRuleDialog({
               </select>
             </Field>
           </div>
+
+          {/* 공개 유예 — 유튜브 예약(publishAt)으로 구현. 공개 범위가 '공개'일 때만 걸린다
+              (일부공개·비공개는 예약이 결국 공개로 끝나 의도가 바뀐다 — 서버가 막는다). */}
+          {r.platform === "youtube" && (
+            <Field
+              label="공개 유예 (분)"
+              hint={r.privacy === "public" ? "5분 단위 · 0 = 즉시 공개" : "공개 범위가 '공개'일 때만 적용됩니다"}
+            >
+              {/* 5분 단위만 — 유튜브 예약이 격자를 벗어난 시각을 거부·보정하는 사례가 있다.
+                  서버도 올림으로 한 번 더 맞추지만(normalizePublishDelayMin), 고른 값과 실제
+                  동작이 달라지지 않게 여기서부터 격자로 준다. */}
+              <input
+                type="number"
+                min={0}
+                max={360}
+                step={5}
+                value={r.publishDelayMin ?? 5}
+                onChange={(e) => {
+                  const n = Math.max(0, Math.min(360, Number(e.target.value) || 0));
+                  set({ publishDelayMin: n === 0 ? 0 : Math.ceil(n / 5) * 5 });
+                }}
+                disabled={r.privacy !== "public"}
+                className="sd-input w-full"
+              />
+              <p className="mt-1 text-[11px]" style={{ color: "var(--sd-mut)" }}>
+                올린 뒤 이 시간만큼 비공개로 두었다가 유튜브가 스스로 공개합니다. 업로드 직후엔
+                HD 변환이 안 끝나 있고 썸네일도 그 뒤에 붙어서, 바로 공개하면 첫 시청자가
+                저화질·기본 썸네일로 봅니다.
+              </p>
+            </Field>
+          )}
 
           <Field label="예약 시간대" hint="자유 입력">
             <input value={r.scheduleWindow} onChange={(e) => set({ scheduleWindow: e.target.value })} placeholder="예: 방영 익일 10시" className="sd-input w-full" />

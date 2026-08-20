@@ -348,6 +348,7 @@ import {
   defaultRuleFor,
   eligibility,
   isChannelRole,
+  normalizePublishDelayMin,
   type ChannelRule,
 } from "./channel-rules.ts";
 import {
@@ -723,6 +724,26 @@ function requireManager(c: Context<AppEnv>): User {
     throw new HTTPException(403, { message: "워크스페이스 관리는 owner/admin 만 가능합니다." });
   }
   return user;
+}
+
+/**
+ * 결제 수단 **등록** 경로의 행위자. 세션이면 매니저, API 키면 그 키.
+ *
+ * 왜 키를 통과시키는가: 고객사가 자기 도메인 화면에서 카드를 등록한다(2026-08-20 확정).
+ * 키가 여기 도달했다는 건 화이트리스트가 이미 `billing:write` 를 확인했다는 뜻이다
+ * (api-keys.ts `checkRoute`) — 스코프 검사를 여기서 두 벌 하지 않는다.
+ *
+ * ⚠️ **`requireManager` 를 이걸로 갈아치우지 말 것.** 돈이 나가는 경로(충전·자동충전 한도)와
+ * 파괴적 경로(카드 제거)는 계속 세션 전용이어야 한다. 여기 쓰는 자리는 카드 등록 3개뿐이다.
+ *
+ * 행위자 문자열을 키 id 로 남기는 이유: 사람 이메일이 없다고 익명으로 적으면, 나중에
+ * "누가 이 카드를 등록했나" 에 답할 근거가 사라진다.
+ */
+function requireCardActor(c: Context<AppEnv>): string {
+  if (currentContext()?.via === "api-key") {
+    return `api-key:${currentContext()?.apiKeyId ?? "unknown"}`;
+  }
+  return requireManager(c).email;
 }
 
 app.get("/api/workspace", async (c) => {
@@ -5629,8 +5650,8 @@ app.delete("/api/assets", async (c) => {
 app.post("/api/billing/card/prepare", async (c) => {
   // **결제수단은 owner/admin 만 만진다.** member 는 분석을 돌리는 사람이지 회사 카드를
   // 등록·해지하거나 돈을 쓰는 사람이 아니다. 안 막으면 초대받은 외주 편집자가 회사 카드를
-  // 등록하고 긁을 수 있다.
-  requireManager(c);
+  // 등록하고 긁을 수 있다. (고객사 서버 키는 `billing:write` 를 통과한 경우만 — requireCardActor)
+  requireCardActor(c);
   const cfg = billingConfig();
   if (!cfg.ok) return c.json({ error: "billing_unconfigured", message: cfg.message }, 503);
 
@@ -5653,11 +5674,10 @@ app.post("/api/billing/card/prepare", async (c) => {
 
 /** 발급된 빌링키 저장. 회사당 한 장 — 다시 등록하면 덮어쓴다. */
 app.post("/api/billing/card", async (c) => {
-  const manager = requireManager(c);
+  const actor = requireCardActor(c);
   const body = await c.req.json<Record<string, unknown>>().catch(() => ({}) as Record<string, unknown>);
   const billingKey = String(body.billingKey ?? "").trim();
   if (!billingKey) return c.json({ error: "billing_key_required" }, 400);
-  const actor = manager.email;
 
   // 카드 표시정보(브랜드·마스킹 끝자리)는 포트원 빌링키 조회로 채운다 — 브라우저 SDK 응답엔
   // 카드번호가 없기 때문. 조회가 실패해도 카드 저장은 막지 않는다(표시만 못 할 뿐).
@@ -6205,6 +6225,11 @@ app.put("/api/channel-rules/:platform/:accountId", async (c) => {
       ? String(body.privacy)
       : (existing?.privacy ?? base.privacy),
     scheduleWindow: str(body.scheduleWindow, existing?.scheduleWindow ?? base.scheduleWindow),
+    // 공개 유예(분) — 0 도 유효한 값(즉시 공개)이라 `in body` 로 존재 여부를 먼저 본다.
+    // num() 은 0 을 fallback 으로 되돌려서 여기 못 쓴다.
+    publishDelayMin: "publishDelayMin" in body
+      ? normalizePublishDelayMin(body.publishDelayMin)
+      : (existing?.publishDelayMin ?? base.publishDelayMin),
     enabled: typeof body.enabled === "boolean" ? body.enabled : (existing?.enabled ?? true),
   };
   await upsertChannelRule(row);
@@ -7280,7 +7305,12 @@ app.post("/api/clips/:id/regenerate-titles", async (c) => {
 
   const start = Number(clip.startTime ?? 0);
   const end = Number(clip.endTime ?? start + (clip.durationSec ?? 0));
-  if (!(end > start)) return c.json({ error: "clip has no valid segment" }, 400);
+  if (!(end > start)) {
+    return c.json({
+      error: "invalid_segment",
+      message: "클립 구간이 비어 있습니다 — 트림을 확인해 주세요.",
+    }, 400);
+  }
 
   // 소스 미디어의 자막(마스터 절대 초) → 현재 세그먼트 창으로 windowCaptions rebase.
   // 자막이 없으면 제목 근거가 없어 재생성 의미가 없음 → 409.
@@ -7289,7 +7319,10 @@ app.post("/api/clips/:id/regenerate-titles", async (c) => {
     : { segments: [] as unknown[], updatedAt: 0, source: "none" as const };
   const captions = windowCaptions(resolved.segments, start, end);
   if (captions.length === 0) {
-    return c.json({ error: "no captions in clip segment — cannot regenerate titles" }, 409);
+    return c.json({
+      error: "no_captions",
+      message: "이 구간에 자막(대사)이 없어 제목을 만들 근거가 없습니다.",
+    }, 409);
   }
 
   // 자막을 프롬프트에 실을 최대 개수 (지나치게 길면 토큰 낭비, 처음 24개 창은 충분히 대표적).
@@ -7359,9 +7392,16 @@ app.post("/api/clips/:id/regenerate-titles", async (c) => {
     }
     if (titles.length === 0) {
       // 원인 파악을 위해 raw text와 파싱 결과를 로그 + 에러 응답에 실어 반환.
-      console.error("[regenerate-titles] empty result — raw:", res.text?.slice(0, 500));
+      // finishReason 이 MAX_TOKENS 면 thinking 이 예산을 먹은 것이다(gemini.ts 주석 참고).
+      console.error(`[regenerate-titles] empty result — finishReason=${res.finishReason ?? "?"} raw:`,
+        res.text?.slice(0, 500));
       return c.json({
-        error: "no titles generated",
+        error: "no_titles_generated",
+        // ⚠️ **message 가 없으면 이 error 코드가 그대로 화면에 뜬다.** 웹 json() 은
+        // message → nested.message → error 순으로 폴백하는데(api.ts), message 를 빼면
+        // 사용자가 "no titles generated" 라는 영어 코드를 본다(2026-08-20 사용자 지적).
+        // 코드는 기계용, message 는 사람용 — 둘 다 준다.
+        message: "제목을 만들지 못했습니다 — 지시를 조금 더 구체적으로 적고 다시 눌러 보세요.",
         rawText: res.text?.slice(0, 500) ?? "",
         parsedShape: typeof parsed === "object" && parsed ? Object.keys(parsed) : [],
       }, 502);
@@ -7370,7 +7410,13 @@ app.post("/api/clips/:id/regenerate-titles", async (c) => {
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     console.error("[regenerate-titles] failed:", msg);
-    return c.json({ error: "generation failed", message: msg.slice(0, 300) }, 502);
+    // 예외 원문(영어·기술적)을 message 로 그대로 내보내면 화면에 스택 문구가 뜬다 —
+    // 사람용 문장은 message, 원문은 detail 로 나눈다(원인 추적은 로그·detail 로).
+    return c.json({
+      error: "generation_failed",
+      message: "제목 생성에 실패했습니다 — 잠시 후 다시 시도해 주세요.",
+      detail: msg.slice(0, 300),
+    }, 502);
   }
 });
 
@@ -7481,7 +7527,9 @@ app.post("/api/clips/:id/generate-metadata", async (c) => {
   try {
     // ⚠️ schema 를 넘기지 않는다(AENA 결론) — 잘렸을 때 부분 복구가 가능해야 한다.
     //    temperature 는 낮게: 사실을 다루는 작업이라 실행마다 달라질 이유가 없다.
-    const res = await geminiGenerate(prompt, { temperature: 0.4, maxOutputTokens: 2048 });
+    //    thinking:false — JSON 을 뽑는 호출이라 추론이 예산만 먹는다. schema 가 없으면
+    //    gemini.ts 기본이 thinking ON 이므로 여기선 명시해야 한다(2026-08-20).
+    const res = await geminiGenerate(prompt, { temperature: 0.4, maxOutputTokens: 2048, thinking: false });
     const parsed = parseJsonLoose(res.text) as Record<string, unknown>;
     const asList = (v: unknown) => (Array.isArray(v) ? v.map((x) => String(x ?? "").trim()).filter(Boolean) : []);
     const baseMeta = {
@@ -7592,7 +7640,18 @@ app.post("/api/clips/:id/regenerate-hook", async (c) => {
     "\n[자막]\n" + list;
 
   try {
-    const res = await geminiGenerate(prompt, { temperature: 0.5, maxOutputTokens: 256 });
+    // thinking:false — schema 없는 JSON 호출이라 gemini.ts 기본이 thinking ON 이다. 예산이
+    // 256 이라 추론이 그걸 다 먹고 본문이 빈 채로 왔고, 아래 parseJsonLoose("") 가 {} 를
+    // 돌려주는 바람에 idx 가 항상 0 으로 떨어졌다 — **오류 없이 늘 첫 대사를 훅으로 고르는**
+    // 조용한 오답이었다(2026-08-20). 빈 응답을 오답으로 삼키지 않게 아래에서 막는다.
+    const res = await geminiGenerate(prompt, { temperature: 0.5, maxOutputTokens: 256, thinking: false });
+    if (!res.text.trim()) {
+      console.error(`[regenerate-hook] 빈 응답 — finishReason=${res.finishReason ?? "?"}`);
+      return c.json({
+        error: "empty_response",
+        message: "훅을 고르지 못했습니다 — 잠시 후 다시 시도해 주세요.",
+      }, 502);
+    }
     const parsed = parseJsonLoose(res.text) as Record<string, unknown>;
     let idx = Number(parsed.index);
     if (!Number.isInteger(idx) || idx < 0 || idx >= caps.length) idx = 0;

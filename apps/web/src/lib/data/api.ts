@@ -1258,6 +1258,9 @@ export interface ChannelRule {
   hashtagTemplate: string;
   tonePreset: string;
   privacy: "public" | "unlisted" | "private";
+  /** 공개 유예(분) — 자동 게시를 이만큼 비공개로 잡아뒀다 공개한다. 0 = 즉시.
+   *  공개 범위가 '공개'일 때만 적용된다(서버 automation-cycle::youtubeReleasePlan). */
+  publishDelayMin?: number;
   scheduleWindow: string;
   enabled: boolean;
   /** true = 저장된 규칙이 없어 서버가 기본값으로 합성한 것 (연결된 채널이면 규칙 없이도 배포된다). */

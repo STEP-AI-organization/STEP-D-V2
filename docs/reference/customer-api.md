@@ -4,7 +4,12 @@
 영상을 넣으면 AI 분석 → 쇼츠 추천 → 클립 → YouTube 배포까지 API 로 완주하고,
 결과(추천·클립·자막·검색·성과)를 가져간다. 과금은 워크스페이스 선불 크레딧이다.
 
-베이스: `https://stepd.stepai.kr/api` (프로덕션)
+베이스: **`https://stepd.stepai.kr/api/proxy/api`** (프로덕션)
+
+> ⚠️ **`https://stepd.stepai.kr/api` 는 안 된다** — Vercel 404 HTML 이 돌아온다(2026-08-20 실측).
+> `apps/web/next.config.ts` 에 `/api/:path*` → `/api/proxy/api/:path*` rewrite 가 있지만
+> 배포된 웹에는 걸려 있지 않다. 프록시 경로를 **명시적으로** 쓸 것.
+> 이 주소를 잘못 안내하면 고객사는 404 만 받고 "키가 틀렸나" 를 의심하게 된다.
 
 > 구 문서 `factory-api.md`(x-factory-key 방식)는 폐기됐다. 인증이 워크스페이스
 > API 키(Bearer)로 바뀌었고, 모든 데이터는 그 워크스페이스에 귀속된다.

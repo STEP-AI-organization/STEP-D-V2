@@ -293,12 +293,11 @@ describe("배선", () => {
     assert.match(r, /금액 불일치/, "금액 불일치는 알람 로그를 남기고 200 으로 닫아야 한다");
   });
 
-  it("결제수단은 owner/admin 만 만진다", () => {
-    // member 는 분석을 돌리는 사람이지 회사 카드를 등록·해지하거나 돈을 쓰는 사람이 아니다.
-    // 안 막으면 초대받은 외주 편집자가 회사 카드를 등록하고 긁을 수 있다.
+  it("돈이 나가거나 결제수단을 없애는 경로는 owner/admin 세션만", () => {
+    // member 는 분석을 돌리는 사람이지 회사 카드를 해지하거나 돈을 쓰는 사람이 아니다.
+    // 안 막으면 초대받은 외주 편집자가 회사 카드를 긁을 수 있다.
+    // **API 키로도 못 부른다** — 화이트리스트에 없다(api-keys.test.ts 가 지킨다).
     for (const [m, p] of [
-      ["post", "/api/billing/card/prepare"],
-      ["post", "/api/billing/card"],
       ["delete", "/api/billing/card"],
       ["post", "/api/credits/topup/card"],
       // 자동 충전 — 돈이 자동으로 나가는 설정이라 더더욱 owner/admin 만.
@@ -307,6 +306,25 @@ describe("배선", () => {
     ] as [string, string][]) {
       assert.match(route(m, p), /requireManager\(c\)/, `권한 검사 없음: ${m.toUpperCase()} ${p}`);
     }
+  });
+
+  it("카드 **등록**은 세션 매니저 또는 billing:write 키만 (2026-08-20)", () => {
+    // 고객사가 자기 도메인 화면에서 카드를 등록한다. requireManager 를 그냥 뺀 게 아니라
+    // requireCardActor 로 바꿨다 — 여기가 무방비가 되면 로그인 없이도 카드가 갈아끼워진다.
+    for (const [m, p] of [
+      ["post", "/api/billing/card/prepare"],
+      ["post", "/api/billing/card"],
+    ] as [string, string][]) {
+      assert.match(route(m, p), /requireCardActor\(c\)/, `권한 검사 없음: ${m.toUpperCase()} ${p}`);
+    }
+    // 그 헬퍼가 실제로 두 경로만 통과시키는지 — api-key 이거나 세션 매니저.
+    const src = fs.readFileSync(path.resolve(SRC, "index.ts"), "utf-8");
+    const fn = /function requireCardActor[\s\S]*?\n\}/.exec(src)?.[0] ?? "";
+    assert.notEqual(fn, "", "requireCardActor 를 찾지 못했다");
+    assert.match(fn, /via === "api-key"/, "키 경로 판정이 없다");
+    assert.match(fn, /requireManager\(c\)/, "세션 경로가 매니저 검사를 안 거친다");
+    // 행위자를 남긴다 — 안 남기면 "누가 이 카드를 등록했나" 에 답할 근거가 사라진다.
+    assert.match(fn, /apiKeyId/, "키로 등록한 행위자 기록이 없다");
   });
 
   it("자동 충전 결제는 수동 저장카드 충전과 같은 안전 경로를 쓴다", () => {

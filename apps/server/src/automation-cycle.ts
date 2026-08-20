@@ -49,7 +49,7 @@ import {
   youtubeUploadEnabled, tiktokUploadEnabled, instagramUploadEnabled, facebookUploadEnabled,
 } from "./upload-gate.ts";
 import { naverUploadEnabled } from "./naver-gate.ts";
-import { eligibility, type ChannelRule } from "./channel-rules.ts";
+import { eligibility, nextPublishSlot, normalizePublishDelayMin, type ChannelRule } from "./channel-rules.ts";
 import { newId } from "./pipeline.ts";
 import { enqueue } from "./queue.ts";
 import { distributionAccountId, hasAccountDistribution, hasFailedAccountDistribution } from "./publish-guard.ts";
@@ -634,10 +634,7 @@ export async function runAutomationCycle(): Promise<CycleReport> {
           // (되돌리려면 채널에서 직접 내려야 하고 노출 이력은 남는다). 채널 규칙에 값이
           // 있으면 그걸 따르고, 없으면 **unlisted** 로 올린다 — 자동 경로의 기본값은
           // "링크 아는 사람만" 이어야 하고, 전체공개는 사람이 정하는 일이다.
-          ...(chan.platform === "youtube"
-            ? { privacy: (["public", "unlisted", "private"] as const)
-                .includes((channelRule as any)?.privacy) ? (channelRule as any).privacy : "unlisted" }
-            : {}),
+          ...(chan.platform === "youtube" ? youtubeReleasePlan(channelRule) : {}),
           actor: `automation:${rule.id}`,
           // "factory"(외부 공장 API)와 구분되는 자동 순방 표식 — 화면의 자동/수동 배지가 읽는다.
           origin: "automation",
@@ -711,6 +708,39 @@ async function writeRun(
  * 없으면 규칙 하나가 하루 90여 줄을 쌓아, 화면이 보여주는 최근 50건이 이 줄로만 덮인다 —
  * 사유를 남기려다 정작 중요한 사유를 가리는 자충수가 된다.
  */
+/**
+ * YouTube 공개 계획 — 공개 범위 + **공개 유예**를 dispatchPublish 입력으로 푼다.
+ *
+ * ⚠️ **공개 범위를 반드시 넘긴다.** 안 넘기면 워커가 "public" 으로 폴백해서, 방송사 회차에서
+ * 뽑은 클립이 사람 눈을 한 번도 안 거치고 전체공개로 나간다(되돌리려면 채널에서 직접 내려야
+ * 하고 노출 이력은 남는다). 채널 규칙에 값이 있으면 그걸 따르고, 없으면 **unlisted** 로
+ * 올린다 — 자동 경로의 기본값은 "링크 아는 사람만" 이어야 하고, 전체공개는 사람이 정한다.
+ *
+ * 공개 유예(publishDelayMin)는 **목표가 public 일 때만** 건다. 유튜브 `publishAt` 예약은
+ * private 로 잡아뒀다가 **공개로 끝나므로**, unlisted/private 목표에 걸면 운영자가 정한
+ * 공개 범위를 조용히 바꿔 버린다. 유예의 값은 처리 완료(HD 트랜스코딩·커스텀 썸네일)를
+ * 첫 노출 전에 끝내는 데 있다 — 근거는 channel-rules.ts 의 publishDelayMin 주석.
+ */
+function youtubeReleasePlan(channelRule: unknown): {
+  privacy: "public" | "unlisted" | "private";
+  scheduled?: boolean;
+  reserveDate?: string;
+} {
+  const raw = (channelRule as { privacy?: unknown; publishDelayMin?: unknown } | null | undefined) ?? {};
+  const privacy = (["public", "unlisted", "private"] as const).includes(raw.privacy as never)
+    ? (raw.privacy as "public" | "unlisted" | "private")
+    : "unlisted";
+  if (privacy !== "public") return { privacy };
+  const delayMin = normalizePublishDelayMin(raw.publishDelayMin);
+  if (delayMin <= 0) return { privacy };
+  // 예약 시각은 **5분 격자로 올림**한다 — 유튜브 예약이 격자를 벗어난 시각을 거부·보정하는
+  // 사례가 있다(사용자 2026-08-20). 올림이라 실제 유예는 설정값 이상이 된다.
+  // ISO(Z) 로 넘긴다 — normalizeReserveDate 는 오프셋 없는 문자열을 KST 로 해석하므로,
+  // 여기서 명시적 UTC 를 주면 해석 여지가 없다.
+  const at = nextPublishSlot(Date.now() + delayMin * 60_000);
+  return { privacy, scheduled: true, reserveDate: at.toISOString() };
+}
+
 async function noteRuleIdle(
   rule: AutomationRule, obs: RuleIdleObservation,
 ): Promise<string | null> {
