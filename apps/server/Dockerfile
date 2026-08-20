@@ -11,6 +11,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     fonts-noto-cjk \
     fontconfig \
     python3 \
+    python3-venv \
     make \
     g++ \
   && rm -rf /var/lib/apt/lists/*
@@ -33,6 +34,17 @@ WORKDIR /app
 # Copy all monorepo files needed (no node_modules, handled separately)
 COPY package.json ./
 COPY apps/server apps/server
+# ── 프로그램 AI 자동채움 (경량 파이썬) ─────────────────────────────────────────
+# /api/programs/:id/autofill 이 core.common.autofill_program 을 스폰한다. 이 모듈은 **google-genai
+# 만** 쓰는 가벼운 유틸이라(torch·mediapipe 같은 무거운 파이프라인은 워커 이미지 Dockerfile.worker 에만)
+# 서버에도 얹는다. 예전엔 서버 이미지에 core/ 도 google-genai 도 없어 프로덕션에서 autofill 이 조용히
+# 실패했다(사용자 2026-08-20 · 로컬 dev 는 venv 가 있어 됐던 것). REPO_ROOT=/app 이라 core→/app/core,
+# CORE_PYTHON 은 google-genai 만 든 경량 venv. venv 를 core COPY 앞에 둬 레이어 캐시를 살린다.
+RUN python3 -m venv /opt/autofillvenv \
+ && /opt/autofillvenv/bin/pip install --no-cache-dir --upgrade pip \
+ && /opt/autofillvenv/bin/pip install --no-cache-dir google-genai
+ENV CORE_PYTHON=/opt/autofillvenv/bin/python
+COPY core core
 # 쇼츠 프레임 템플릿 — shorts-template.ts 가 /app/assets/shorts-template 에서 읽는다.
 # 빼먹으면 편집기 템플릿 목록이 프로덕션에서만 빈 배열이 된다(로컬은 멀쩡해서 안 보인다).
 COPY assets/shorts-template assets/shorts-template
