@@ -243,7 +243,18 @@ export function selectCandidates(
 
   const floor = rule.criterion === "score85" ? 85 : 80;
   // 점수가 없으면 기준을 만족한다고 볼 수 없다. 모르면 안 내보낸다.
-  return byKind.filter((c) => typeof c.score100 === "number" && (c.score100 as number) >= floor);
+  const scored = byKind.filter((c) => typeof c.score100 === "number");
+  const passed = scored.filter((c) => (c.score100 as number) >= floor);
+  if (passed.length > 0) return passed;
+
+  // ── 폴백: 절대 점수 기준이 한 건도 안 통과 → **한 영상이 통째로 비지 않게 최고 1건 보장** ──
+  // 쇼츠 score100 은 회차 내 백분위라 42~72 대에 눌려 80 을 못 넘는 구조다(POST /api/automation/rules
+  // 주석 · 실측 20편 42.1~72.6). 그래서 사용자가 쇼츠에 score80 을 걸면 그 회차가 통째로 안 나가는
+  // 일이 잦았다(사용자 2026-08-19). **회차당 이미 채택분이 있으면(≥1) 폴백하지 않는다** — 이미 뭔가
+  // 나갔으니 강제하지 않는다. 결과적으로 "점수 하한이되, 회차마다 최소 최고 한 편"이 된다(클립
+  // 81~83 은 정상 통과라 이 폴백을 거의 안 탄다). 점수 없는 후보는 폴백 대상이 아니다(scored 만).
+  if (Math.max(0, Math.trunc(adoptedCount)) > 0 || scored.length === 0) return [];
+  return [scored.reduce((best, c) => ((c.score100 ?? 0) > (best.score100 ?? 0) ? c : best))];
 }
 
 // ── 04 게이트 확인 ───────────────────────────────────────────────────────────────

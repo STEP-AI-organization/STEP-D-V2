@@ -488,6 +488,27 @@ describe("채택 기준 (F6 03단계)", () => {
       ["a", "b"],
     );
   });
+
+  it("절대 점수 기준이 한 건도 안 통과하면 한 영상이 비지 않게 최고 1건은 보장한다", () => {
+    // 쇼츠 score100 은 42~72 대라 score80 이면 아무도 못 넘는 회차가 흔하다(실측). 그 회차도
+    // 통째로 비지 않게 최고 한 편은 나간다.
+    const low = [
+      { id: "x", kind: "short", score100: 72 },
+      { id: "y", kind: "short", score100: 55 },
+      { id: "z", kind: "short", score100: 60 },
+    ];
+    assert.deepEqual(
+      selectCandidates(rule({ mediaKind: "short", criterion: "score80" }), low).map((c) => c.id),
+      ["x"],
+    );
+    // 회차에서 이미 1건(폴백분) 나갔으면 더는 폴백하지 않는다 — 점수 미달을 도배하지 않는다.
+    assert.deepEqual(selectCandidates(rule({ mediaKind: "short", criterion: "score80" }), low, 1), []);
+    // 점수가 아예 없는 후보는 폴백 대상이 아니다(재분석해야 풀린다).
+    assert.deepEqual(
+      selectCandidates(rule({ mediaKind: "short", criterion: "score80" }), [{ id: "q", kind: "short" }]).map((c) => c.id),
+      [],
+    );
+  });
 });
 
 // ── 순방이 아무것도 안 했을 때: 사유를 남긴다 ───────────────────────────────────
