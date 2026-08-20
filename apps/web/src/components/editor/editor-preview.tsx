@@ -645,7 +645,7 @@ export function EditorPreview({
           // 자막 위치·크기·색은 editorState 오버라이드(captionY/Size/Color)가 있으면 그걸 따른다
           // (자동배포 규칙이 세팅) — 없으면 기존 기본(하단 14% · 스타일별 cqh · 스타일색). 서버
           // 렌더(index.ts buildEditorAss)와 **같은 규칙**이라 미리보기=결과물이 유지된다.
-          <div className="absolute inset-x-0 px-6 text-center" style={{ bottom: `${state.captionY ?? 14}%` }}>
+          <div className="absolute inset-x-0 px-6 text-center" style={{ bottom: `${state.captionY ?? 20}%` }}>
             {(() => {
               const cap = captionStyleClasses(state.captionStyle);
               // 한국 방송은 word-by-word 하이라이트를 쓰지 않음(2026-07-24 사용자 지적).
@@ -671,7 +671,7 @@ export function EditorPreview({
             예전엔 확정 클립에서 transcript를 안 담아 실제 대사 대신 이 더미가 떴다 —
             이제 transcript는 항상 로드되므로 이 분기는 STT가 진짜 없는 경우에만 걸린다. */}
         {state.captionsOn && !hasTranscript && (
-          <div className="absolute inset-x-0 px-6 text-center" style={{ bottom: `${state.captionY ?? 14}%` }}>
+          <div className="absolute inset-x-0 px-6 text-center" style={{ bottom: `${state.captionY ?? 20}%` }}>
             <span className="px-1 font-bold" style={{ color: "#fff", opacity: 0.65, textShadow: "0 2px 6px rgba(0,0,0,.6)", fontSize: "3.4cqh" }}>
               이 회차는 아직 자막(STT) 데이터가 없습니다
             </span>

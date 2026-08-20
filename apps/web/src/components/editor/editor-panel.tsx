@@ -844,12 +844,12 @@ function CaptionsTab({ state, update }: { state: EditorState; update: Update }) 
           captionY/captionColor/captionSize 를 읽는다**. 예전엔 이 컨트롤이 없어 자동배포 규칙만
           세팅할 수 있었다(사용자 2026-08-20: "위치·컬러 조정이 안 됨"). */}
       <div>
-        <Label>세로 위치 {Math.round(state.captionY ?? 14)}% <span className="text-zinc-500">(화면 아래에서)</span></Label>
+        <Label>세로 위치 {Math.round(state.captionY ?? 20)}% <span className="text-zinc-500">(화면 아래에서)</span></Label>
         <input
           type="range"
           min={4}
           max={80}
-          value={Math.round(state.captionY ?? 14)}
+          value={Math.round(state.captionY ?? 20)}
           onChange={(e) => update({ captionY: Number(e.target.value) })}
           className="w-full"
         />

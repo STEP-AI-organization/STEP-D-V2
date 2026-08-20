@@ -31,7 +31,7 @@ export type LayoutState = {
  * y = 화면 하단 14%(= 서버 CAPTION_MV_PCT) · size = 화면 높이의 4.4%(= 서버 CAPTION_PCT.korean_pop)
  * · 색 = 흰색(= 렌더 korean_pop 기본색). overlay-parity.test.ts 가 이 값이 서버와 갈라지지 않게 강제한다.
  */
-export const SUBTITLE_DEFAULTS = { y: 14, size: 4.4, color: "#FFFFFF" } as const;
+export const SUBTITLE_DEFAULTS = { y: 20, size: 4.4, color: "#FFFFFF" } as const;
 
 /** 소형 카드 기준 폭 — 폰트·패딩은 이 폭 대비 비율로 스케일된다(레이아웃 %좌표는 불변). */
 const BASE_W = 120;

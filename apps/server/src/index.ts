@@ -4804,7 +4804,9 @@ const CAPTION_PCT: Record<string, number> = {
  * 자막 기본 세로 위치(% · 화면 하단 기준 · \an2 MarginV). 자동배포 미리보기의
  * SUBTITLE_DEFAULTS.y(template-preview.tsx)와 **1:1** 이어야 한다 — overlay-parity.test.ts 가 강제.
  */
-const CAPTION_MV_PCT = 14;
+// 14 → 20 (사용자 2026-08-20): 하단 14% 는 폰 쇼츠 UI(설명·진행바·우측 버튼) 세이프존에 걸려
+// 자막이 가려졌다. 20% 로 올려 UI 위로 뺀다. SUBTITLE_DEFAULTS.y·미리보기 폴백도 같이 20.
+const CAPTION_MV_PCT = 20;
 
 function captionAssStyle(style: string, H: number, mv: number, mh: number, sizePct?: number): string {
   // 웨이트도 미리보기와 맞춘다 — 설치 폰트는 Bold(700)·ExtraBold(800)·Black(900) 3종이라
