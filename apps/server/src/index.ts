@@ -676,9 +676,18 @@ app.post("/api/auth/logout", async (c) => {
   return c.json({ ok: true });
 });
 
-app.get("/api/auth/me", (c) => {
+app.get("/api/auth/me", async (c) => {
   const user = c.get("user") as User | undefined;
   if (!user) return c.json({ user: null, authRequired: authRequired() });
+  // 워크스페이스(테넌트) 이름 — 로그인 후 "어느 회사 워크스페이스인지" 화면에 보여준다
+  // (사용자 2026-08-20: "어느 회사 워크스페이스인지 알 수가 없음"). 본인 테넌트 id 로만 조회하므로
+  // getRawPool 로 시스템 조회해도 남의 데이터를 보지 않는다. 실패는 치명적이지 않다(이름 없이 진행).
+  let tenantName: string | null = null;
+  try {
+    const { rows } = await getRawPool().query<{ name: string }>(
+      "SELECT name FROM tenants WHERE id = $1", [user.tenantId]);
+    tenantName = rows[0]?.name ?? null;
+  } catch { /* 이름 조회 실패는 무시 — 화면은 이름 없이 뜬다 */ }
   return c.json({
     user: {
       id: user.id, email: user.email, name: user.name,
@@ -687,6 +696,7 @@ app.get("/api/auth/me", (c) => {
       opsRole: opsCapabilityOf(user.opsRole).key,
       capabilities: opsCapabilityOf(user.opsRole),
       tenantId: user.tenantId,
+      tenantName,
     },
     authRequired: authRequired(),
   });

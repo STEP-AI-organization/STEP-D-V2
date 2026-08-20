@@ -180,9 +180,14 @@ function CurrentUser() {
   return (
     <div className="mt-3 flex items-center gap-1.5 px-2">
       <div className="min-w-0 flex-1">
-        <div className="truncate text-[11px]" style={{ color: "var(--sd-fg)" }}>{session.user.name}</div>
-        <div className="truncate text-[10px]" style={{ color: "var(--sd-mut)" }}>
-          {roleOf(session.user.role).label}
+        {/* 워크스페이스(회사) 이름 — 로그인 후 "어느 회사 것인지" 바로 알게(사용자 2026-08-20). 없으면 생략. */}
+        {session.workspaceName ? (
+          <div className="truncate text-[11.5px] font-semibold" style={{ color: "var(--sd-fg)" }} title={`워크스페이스: ${session.workspaceName}`}>
+            {session.workspaceName}
+          </div>
+        ) : null}
+        <div className="truncate text-[10.5px]" style={{ color: "var(--sd-mut)" }}>
+          {session.user.name} · {roleOf(session.user.role).label}
         </div>
       </div>
       <button

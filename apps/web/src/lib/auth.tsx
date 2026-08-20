@@ -36,6 +36,8 @@ export interface Session {
   authRequired: boolean;
   /** 아직 /api/auth/me 응답을 못 받았는가. */
   loading: boolean;
+  /** 현재 워크스페이스(테넌트) 이름 — 로그인 후 "어느 회사 것인지" 셸에 표시(사용자 2026-08-20). */
+  workspaceName?: string;
 }
 
 /**
@@ -60,6 +62,7 @@ interface MeResponse {
     role: WorkspaceRole;
     opsRole: Role;
     tenantId: string;
+    tenantName: string | null;
   } | null;
   authRequired: boolean;
 }
@@ -101,6 +104,7 @@ export function SessionProvider({
             : body.authRequired
               ? ANONYMOUS.user
               : { name: "운영자", email: "", role: "cp" as const },
+          workspaceName: body.user?.tenantName ?? undefined,
           authRequired: body.authRequired,
           loading: false,
         });
