@@ -562,6 +562,8 @@ export function EditorPreview({
               // canonical 640 기준을 흉내냈는데, 이제 스테이지 자체가 출력 해상도라 불필요.)
               fontSize: line.size,
               fontWeight: 800,
+              // 외곽선을 채움 아래로 — 제목 스트로크가 글자를 먹지 않게(자막과 동일 · 사용자 2026-08-20).
+              paintOrder: "stroke fill",
               lineHeight: 1.15,
               // half-leading 보정 — CSS 라인박스(line-height 1.15)는 첫 줄 글자 상단을
               // (lineHeight-1em)/2 = (1.15-1)/2 = 0.075em 만큼 anchor 위로 올린다. 반면 서버
@@ -650,6 +652,10 @@ export function EditorPreview({
               // 오히려 하이라이트가 살짝 어긋나 보이는 원인이었음 · segment 통째 표시로 통일.
               const capStyle: CSSProperties = {
                 ...cap.style,
+                // 외곽선을 채움 **아래**로 — 노란 글자가 검은 스트로크에 먹혀 묻히지 않게(사용자 2026-08-20:
+                // "배경보다 레이어가 우선"). CSS 기본은 fill→stroke(스트로크가 글자 위 가운데로 덧그려져
+                // 얇은 글자를 먹는다)라, 서버 ASS(채움이 외곽선 위) 와 어긋났다. paint-order 로 맞춘다.
+                paintOrder: "stroke fill",
                 ...(typeof state.captionSize === "number" ? { fontSize: `${state.captionSize}cqh` } : {}),
                 ...(state.captionColor ? { color: state.captionColor } : {}),
               };

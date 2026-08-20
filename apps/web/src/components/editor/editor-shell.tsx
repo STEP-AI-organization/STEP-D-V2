@@ -1183,7 +1183,7 @@ function HighlightHookCard({
               <div className="absolute inset-x-0 top-[14%] px-[2px] text-center leading-tight">
                 <span
                   className="font-extrabold text-white"
-                  style={{ fontSize: "8px", textShadow: "0 1px 2px #000", WebkitTextStroke: "0.5px rgba(0,0,0,.85)" }}
+                  style={{ fontSize: "8px", textShadow: "0 1px 2px #000", WebkitTextStroke: "0.5px rgba(0,0,0,.85)", paintOrder: "stroke fill" }}
                 >
                   {caption}
                 </span>
