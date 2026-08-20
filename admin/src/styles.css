@@ -1,15 +1,25 @@
+/* STEP D Admin — Google AI Studio 풍 라이트 테마 (사용자 2026-08-20 "깔끔한 AI 스튜디오").
+   흰 콘텐츠 · 연회색 사이드바 · 알약형 네비(활성=블루 필) · 부드러운 그림자 카드 ·
+   블루 프라이머리 · 넉넉한 여백. 클래스명은 그대로라 컴포넌트는 안 바뀐다. */
 :root {
-  --bg: #0e1013;
-  --panel: #16191e;
-  --panel-2: #1c2027;
-  --line: #262c34;
-  --text: #e6e9ee;
-  --muted: #8b95a3;
-  --accent: #6aa9ff;
-  --ok: #4ec98a;
-  --warn: #e8b84b;
-  --bad: #f0736a;
-  color-scheme: dark;
+  --bg: #ffffff;         /* 콘텐츠 영역 */
+  --rail: #f0f4f9;       /* 사이드바 */
+  --panel: #ffffff;      /* 카드·패널 */
+  --panel-2: #f1f3f4;    /* hover·보조면 */
+  --line: #e3e6eb;       /* 경계선 */
+  --line-2: #dadce0;     /* 입력 경계(약간 진하게) */
+  --text: #1f1f1f;
+  --muted: #5f6368;
+  --accent: #0b57d0;         /* Google 블루 */
+  --accent-hover: #0842a0;
+  --accent-soft: #d3e3fd;    /* 활성 네비·선택 배경 */
+  --accent-tint: #e8f0fe;
+  --ok: #1e8e3e;
+  --warn: #e37400;
+  --bad: #d93025;
+  --shadow-1: 0 1px 2px rgba(60,64,67,.08), 0 1px 3px 1px rgba(60,64,67,.06);
+  --shadow-2: 0 1px 3px rgba(60,64,67,.12), 0 4px 8px 2px rgba(60,64,67,.06);
+  color-scheme: light;
 }
 
 * { box-sizing: border-box; }
@@ -18,128 +28,191 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
-  font: 14px/1.55 ui-sans-serif, system-ui, "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+  font: 14px/1.6 "Google Sans Text", "Google Sans", -apple-system, BlinkMacSystemFont,
+        "Segoe UI", Roboto, "Pretendard", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
 }
 
-a { color: var(--accent); }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
 
-.shell { display: flex; min-height: 100vh; }
+/* ── 셸 ─────────────────────────────────────────────────────────────────────── */
+.shell { display: flex; min-height: 100vh; background: var(--rail); }
 
 .side {
-  width: 208px; flex: none; border-right: 1px solid var(--line);
-  padding: 18px 12px; display: flex; flex-direction: column; gap: 4px;
-  background: var(--panel);
+  width: 248px; flex: none;
+  padding: 16px 12px; display: flex; flex-direction: column; gap: 2px;
+  background: var(--rail);
+  position: sticky; top: 0; align-self: flex-start; height: 100vh;
 }
-.brand { font-weight: 700; letter-spacing: .02em; padding: 4px 8px 16px; }
-.brand small { display: block; color: var(--muted); font-weight: 400; font-size: 11px; letter-spacing: .06em; }
+.brand {
+  font-size: 20px; font-weight: 600; letter-spacing: -.01em;
+  padding: 8px 12px 20px; line-height: 1.1;
+  background: linear-gradient(90deg, #4285f4, #9b72cb 55%, #d96570);
+  -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
+}
+.brand small {
+  display: block; margin-top: 4px; color: var(--muted); font-weight: 500; font-size: 11px;
+  letter-spacing: .08em; -webkit-text-fill-color: var(--muted);
+}
 
 .nav {
-  appearance: none; background: none; border: 0; color: var(--muted);
-  text-align: left; padding: 8px 10px; border-radius: 7px; cursor: pointer; font: inherit;
+  appearance: none; background: none; border: 0; color: #444746;
+  text-align: left; padding: 9px 16px; border-radius: 999px; cursor: pointer;
+  font: inherit; font-weight: 500; transition: background .12s, color .12s;
 }
-.nav:hover { background: var(--panel-2); color: var(--text); }
-.nav[data-active="true"] { background: var(--panel-2); color: var(--text); font-weight: 600; }
+.nav:hover { background: #e4e8ee; color: var(--text); }
+.nav[data-active="true"] { background: var(--accent-soft); color: #0842a0; }
 
-.side-foot { margin-top: auto; padding: 10px 8px 0; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }
+.side-foot {
+  margin-top: auto; padding: 14px 12px 4px; border-top: 1px solid var(--line);
+  color: var(--muted); font-size: 12.5px;
+}
 
-.main { flex: 1; min-width: 0; padding: 24px 28px 60px; }
-h1 { font-size: 19px; margin: 0 0 4px; }
-.sub { color: var(--muted); margin: 0 0 20px; font-size: 13px; }
+/* 콘텐츠는 흰 카드 위에 얹혀 사이드바(연회색)와 분리된다 — AI Studio 의 흰 본문 느낌. */
+.main {
+  flex: 1; min-width: 0; padding: 28px 32px 72px;
+  background: var(--bg);
+  border-top-left-radius: 16px; border-bottom-left-radius: 16px;
+  box-shadow: var(--shadow-1);
+  margin: 8px 8px 8px 0;
+}
+h1 { font-size: 22px; font-weight: 600; letter-spacing: -.01em; margin: 0 0 6px; }
+.sub { color: var(--muted); margin: 0 0 24px; font-size: 13.5px; }
 
-.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 24px; }
-.card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 14px 16px; }
-.card .k { color: var(--muted); font-size: 12px; }
-.card .v { font-size: 24px; font-weight: 650; margin-top: 4px; font-variant-numeric: tabular-nums; }
+/* ── KPI 카드 ───────────────────────────────────────────────────────────────── */
+.cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 14px; margin-bottom: 28px; }
+.card {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 18px 20px;
+  box-shadow: var(--shadow-1); transition: box-shadow .15s, border-color .15s;
+}
+.card:hover { box-shadow: var(--shadow-2); }
+.card .k { color: var(--muted); font-size: 12.5px; font-weight: 500; }
+.card .v { font-size: 28px; font-weight: 600; margin-top: 6px; font-variant-numeric: tabular-nums; letter-spacing: -.02em; }
 
-.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
-.panel + .panel { margin-top: 18px; }
-.panel-head { padding: 12px 16px; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 10px; }
-.panel-head h2 { font-size: 14px; margin: 0; }
+/* ── 패널 ───────────────────────────────────────────────────────────────────── */
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; overflow: hidden; box-shadow: var(--shadow-1); }
+.panel + .panel { margin-top: 20px; }
+.panel-head { padding: 16px 20px; border-bottom: 1px solid var(--line); display: flex; align-items: center; gap: 10px; }
+.panel-head h2 { font-size: 15px; font-weight: 600; margin: 0; }
 .panel-head .spacer { flex: 1; }
 
+/* ── 표 ─────────────────────────────────────────────────────────────────────── */
 .tablewrap { overflow-x: auto; }
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
-th, td { text-align: left; padding: 9px 16px; border-bottom: 1px solid var(--line); white-space: nowrap; }
-th { color: var(--muted); font-weight: 500; font-size: 12px; }
+th, td { text-align: left; padding: 12px 20px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+th { color: var(--muted); font-weight: 500; font-size: 12px; letter-spacing: .01em; background: #fafbfc; }
+tbody tr { transition: background .1s; }
+tbody tr:hover td { background: #f8faff; }
 tbody tr:last-child td { border-bottom: 0; }
 td.wrap { white-space: normal; min-width: 220px; }
 .num { font-variant-numeric: tabular-nums; text-align: right; }
 
-.tag { display: inline-block; padding: 1px 7px; border-radius: 999px; font-size: 11px; border: 1px solid var(--line); color: var(--muted); }
-.tag.ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 40%, transparent); }
-.tag.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, transparent); }
-.tag.bad { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 40%, transparent); }
+/* ── 상태 태그 ──────────────────────────────────────────────────────────────── */
+.tag {
+  display: inline-block; padding: 2px 10px; border-radius: 999px; font-size: 11.5px; font-weight: 500;
+  background: var(--panel-2); color: var(--muted); border: 1px solid transparent;
+}
+.tag.ok { color: #0d652d; background: #e6f4ea; }
+.tag.warn { color: #a15c00; background: #fef7e0; }
+.tag.bad { color: #b3261e; background: #fce8e6; }
 
+/* ── 폼 ─────────────────────────────────────────────────────────────────────── */
 input, select, button, textarea { font: inherit; }
 input, select, textarea {
-  background: var(--bg); color: var(--text); border: 1px solid var(--line);
-  border-radius: 7px; padding: 7px 10px; min-width: 0;
+  background: var(--panel); color: var(--text); border: 1px solid var(--line-2);
+  border-radius: 8px; padding: 9px 12px; min-width: 0; transition: border-color .12s, box-shadow .12s;
 }
-input:focus, select:focus, textarea:focus { outline: 1px solid var(--accent); border-color: var(--accent); }
+input:focus, select:focus, textarea:focus {
+  outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-tint);
+}
+input::placeholder, textarea::placeholder { color: #9aa0a6; }
 
 button {
-  background: var(--panel-2); color: var(--text); border: 1px solid var(--line);
-  border-radius: 7px; padding: 7px 12px; cursor: pointer;
+  background: var(--panel); color: var(--text); border: 1px solid var(--line-2);
+  border-radius: 8px; padding: 9px 16px; cursor: pointer; font-weight: 500;
+  transition: background .12s, border-color .12s, box-shadow .12s;
 }
-button:hover:not(:disabled) { border-color: var(--accent); }
+button:hover:not(:disabled) { background: #f8f9fa; border-color: #c4c7cc; box-shadow: var(--shadow-1); }
 button:disabled { opacity: .5; cursor: default; }
-button.primary { background: var(--accent); border-color: var(--accent); color: #08111f; font-weight: 600; }
-button.danger { color: var(--bad); }
+button.primary {
+  background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; box-shadow: none;
+}
+button.primary:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); box-shadow: var(--shadow-1); }
+button.danger { color: var(--bad); border-color: #f3c7c3; background: #fff; }
+button.danger:hover:not(:disabled) { background: #fce8e6; border-color: var(--bad); }
 
 .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-.err { color: var(--bad); margin: 10px 0; }
+.err { color: var(--bad); margin: 10px 0; font-size: 13px; }
 .muted { color: var(--muted); }
-.empty { padding: 28px 16px; text-align: center; color: var(--muted); }
+.empty { padding: 40px 16px; text-align: center; color: var(--muted); }
 
-.login { max-width: 340px; margin: 14vh auto; }
-.login .panel { padding: 22px; }
-.login label { display: block; margin: 12px 0 5px; font-size: 12px; color: var(--muted); }
+/* ── 로그인 ─────────────────────────────────────────────────────────────────── */
+.login { max-width: 380px; margin: 12vh auto; padding: 0 16px; }
+.login .panel { padding: 32px 28px; box-shadow: var(--shadow-2); }
+.login h1 { background: linear-gradient(90deg, #4285f4, #9b72cb 60%, #d96570); -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
+.login label { display: block; margin: 16px 0 6px; font-size: 12.5px; color: var(--muted); font-weight: 500; }
 .login input { width: 100%; }
-.login button { width: 100%; margin-top: 18px; }
+.login button { width: 100%; margin-top: 22px; padding: 11px; }
 
 .banner {
-  background: color-mix(in srgb, var(--bad) 14%, var(--panel));
-  border: 1px solid color-mix(in srgb, var(--bad) 40%, transparent);
-  color: var(--text); border-radius: 9px; padding: 11px 14px; margin-bottom: 18px; font-size: 13px;
+  background: #fef7e0; border: 1px solid #fde293; color: #7a5900;
+  border-radius: 12px; padding: 12px 16px; margin-bottom: 20px; font-size: 13px;
 }
 
 .token {
-  font-family: ui-monospace, "Cascadia Mono", Menlo, monospace; font-size: 12px;
-  background: var(--bg); border: 1px solid var(--line); border-radius: 7px;
-  padding: 9px 11px; word-break: break-all; margin-top: 10px;
+  font-family: "Roboto Mono", ui-monospace, "Cascadia Mono", Menlo, monospace; font-size: 12.5px;
+  background: #f8f9fa; border: 1px solid var(--line); border-radius: 8px;
+  padding: 10px 12px; word-break: break-all; margin-top: 10px; color: var(--text);
 }
 
 .clickrow { cursor: pointer; }
-.clickrow:hover { background: var(--panel-2); }
-.tiny { font-size: 11px; }
-.back { margin-bottom: 14px; }
+.clickrow:hover td { background: #f8faff; }
+.tiny { font-size: 11.5px; }
+.back { margin-bottom: 16px; }
 .company-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 14px; }
-.tabs { display: flex; gap: 6px; border-bottom: 1px solid var(--line); margin: 18px 0; overflow-x: auto; }
-.tabs button { border: 0; border-radius: 0; background: none; color: var(--muted); padding: 9px 12px; white-space: nowrap; }
-.tabs button.active { color: var(--text); border-bottom: 2px solid var(--accent); }
-.formbox, .credential { padding: 16px; border-bottom: 1px solid var(--line); background: color-mix(in srgb, var(--panel-2) 55%, transparent); }
-.formgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; margin-bottom: 12px; }
-.formgrid label { display: grid; gap: 5px; color: var(--muted); font-size: 12px; }
-.inlineform { display: flex; gap: 8px; flex-wrap: wrap; padding: 12px 16px; }
-.inlineform input { flex: 1 1 200px; }
-.credential { margin: 10px 0; border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent); border-radius: 8px; }
-.credential .token { margin-bottom: 10px; }
-.spark { height: 118px; display: flex; gap: 3px; align-items: end; padding: 14px; margin-bottom: 18px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
-.spark span { flex: 1; min-width: 3px; background: var(--accent); border-radius: 2px 2px 0 0; opacity: .8; }
-.timeline { padding: 4px 16px; }
-.event { display: grid; grid-template-columns: minmax(160px, 1fr) minmax(150px, 1fr) auto; gap: 8px; padding: 12px 0; border-bottom: 1px solid var(--line); }
-.event:last-child { border-bottom: 0; }
-.event span, .event p { color: var(--muted); margin: 0; font-size: 12px; }
-@media (max-width: 700px) { .side { width: 150px; } .main { padding: 18px 14px 40px; } .event { grid-template-columns: 1fr; gap: 2px; } }
 
-/* ── 인보이스(거래명세서) ─────────────────────────────────────────────────────
-   PDF 는 서버에서 만들지 않는다. 브라우저 인쇄(Ctrl+P → PDF 저장)로 충분하고,
-   PDF 라이브러리를 넣으면 한글 폰트 임베딩부터 새 문제가 줄줄이 딸려온다.
-   대신 인쇄용 규칙을 둬서 화면 크롬(사이드바·탭·버튼)이 종이에 안 찍히게 한다. */
-.invoice { padding: 4px 16px 16px; }
+/* ── 탭 ─────────────────────────────────────────────────────────────────────── */
+.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin: 20px 0; overflow-x: auto; }
+.tabs button {
+  border: 0; border-radius: 0; background: none; color: var(--muted); padding: 10px 14px;
+  white-space: nowrap; font-weight: 500; border-bottom: 2px solid transparent; margin-bottom: -1px;
+}
+.tabs button:hover { background: none; box-shadow: none; color: var(--text); border-color: var(--line-2); }
+.tabs button.active { color: var(--accent); border-bottom: 2px solid var(--accent); }
+
+.formbox, .credential { padding: 18px 20px; border-bottom: 1px solid var(--line); background: #fafbfc; }
+.formgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 14px; margin-bottom: 14px; }
+.formgrid label { display: grid; gap: 6px; color: var(--muted); font-size: 12.5px; font-weight: 500; }
+.inlineform { display: flex; gap: 8px; flex-wrap: wrap; padding: 16px 20px; }
+.inlineform input { flex: 1 1 220px; }
+.credential { margin: 12px 0; border: 1px solid var(--accent-soft); border-radius: 12px; background: var(--accent-tint); }
+.credential .token { margin-bottom: 10px; }
+
+.spark { height: 124px; display: flex; gap: 3px; align-items: end; padding: 16px; margin-bottom: 20px; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow-1); }
+.spark span { flex: 1; min-width: 3px; background: linear-gradient(180deg, #4285f4, #9b72cb); border-radius: 3px 3px 0 0; opacity: .9; }
+
+.timeline { padding: 6px 20px; }
+.event { display: grid; grid-template-columns: minmax(160px, 1fr) minmax(150px, 1fr) auto; gap: 8px; padding: 14px 0; border-bottom: 1px solid var(--line); }
+.event:last-child { border-bottom: 0; }
+.event strong { font-weight: 600; }
+.event span, .event p { color: var(--muted); margin: 0; font-size: 12.5px; }
+
+@media (max-width: 820px) {
+  .side { width: 76px; }
+  .brand { font-size: 0; padding: 8px; }
+  .brand small { display: none; }
+  .nav { text-align: center; padding: 9px 6px; font-size: 12px; }
+  .main { padding: 20px 16px 48px; border-radius: 12px; margin: 6px 6px 6px 0; }
+  .event { grid-template-columns: 1fr; gap: 2px; }
+}
+
+/* ── 인보이스(거래명세서) — 브라우저 인쇄(Ctrl+P)로 PDF. 화면 크롬은 종이에 안 찍히게. ── */
+.invoice { padding: 6px 20px 20px; }
 .invoice-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; padding: 8px 0 16px; border-bottom: 2px solid var(--line); }
-.invoice-head h2 { margin: 6px 0 2px; font-size: 20px; }
-.invoice-head p { margin: 0; font-size: 11px; }
+.invoice-head h2 { margin: 6px 0 2px; font-size: 20px; font-weight: 600; }
+.invoice-head p { margin: 0; font-size: 11px; color: var(--muted); }
 .invoice-no { text-align: right; font-size: 12px; }
 .invoice-parties { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; padding: 16px 0; }
 .invoice-parties h3 { margin: 0 0 6px; font-size: 12px; color: var(--muted); font-weight: 600; }
@@ -149,11 +222,9 @@ button.danger { color: var(--bad); }
 .invoice-total .grand span { font-weight: 600; }
 
 @media print {
-  /* 종이에는 문서만. 인쇄를 누른 화면이 무엇이든 인보이스만 나온다. */
   .side, .tabs, .no-print, button, input, select { display: none !important; }
-  .shell, .main { display: block; padding: 0; background: #fff; }
+  .shell, .main { display: block; padding: 0; background: #fff; box-shadow: none; margin: 0; border-radius: 0; }
   .panel { border: 0; box-shadow: none; }
-  /* 패널 머리글("인보이스")은 종이에 필요 없다 — 문서에 이미 제목이 있다. */
   .panel-head { display: none; }
   body { background: #fff; color: #000; }
   table { page-break-inside: auto; }
@@ -161,10 +232,9 @@ button.danger { color: var(--bad); }
 }
 
 /* 사업자정보 폼 — 칸이 여덟이라 두 줄짜리 세로 나열은 스크롤이 길어진다. */
-.biz-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
-.biz-field { display: flex; flex-direction: column; gap: 4px; }
-.biz-field > span { font-size: 12px; color: var(--muted); }
+.biz-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 14px; }
+.biz-field { display: flex; flex-direction: column; gap: 5px; }
+.biz-field > span { font-size: 12.5px; color: var(--muted); font-weight: 500; }
 .biz-field > span em { color: var(--bad); font-style: normal; }
 .biz-field small { font-size: 11px; }
-/* 서버가 어느 칸이 문제인지 알려주면 그 칸을 표시한다 — "저장 실패"만 띄우면 어디를 고칠지 모른다. */
-.biz-field input[data-bad] { border-color: var(--bad); }
+.biz-field input[data-bad] { border-color: var(--bad); box-shadow: 0 0 0 3px #fce8e6; }
