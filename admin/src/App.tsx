@@ -15,9 +15,10 @@ import { Operations } from "./views/Operations";
 import { Users } from "./views/Users";
 import { Payments } from "./views/Payments";
 import { Audit } from "./views/Audit";
+import { MetaEdits } from "./views/MetaEdits";
 import { TenantNames } from "./views/tenant-name";
 
-type Tab = "overview" | "tenants" | "users" | "payments" | "jobs" | "audit";
+type Tab = "overview" | "tenants" | "users" | "payments" | "jobs" | "metaEdits" | "audit";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "overview", label: "개요" },
@@ -25,6 +26,7 @@ const TABS: { id: Tab; label: string }[] = [
   { id: "users", label: "사용자" },
   { id: "payments", label: "결제" },
   { id: "jobs", label: "잡" },
+  { id: "metaEdits", label: "메타 수정" },
   { id: "audit", label: "감사 로그" },
 ];
 
@@ -107,6 +109,7 @@ export default function App() {
           {tab === "users" && <Users />}
           {tab === "payments" && <Payments />}
           {tab === "jobs" && <Operations />}
+          {tab === "metaEdits" && <MetaEdits />}
           {tab === "audit" && <Audit />}
         </>}
       </main>

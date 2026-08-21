@@ -92,6 +92,14 @@ export interface UsageSummary {
   byTenant: UsageRow[];
 }
 export interface AuditQuery { tenant?: string; q?: string; from?: string; to?: string; limit?: number }
+/** AI 원본 → 사용자 최종 메타 수정 로그 한 줄(학습 데이터). */
+export interface MetaEditRow {
+  id: number; tenant_id: string | null; clip_id: string; program_id: string | null;
+  genre: string | null; channel: string; field: string;
+  ai_original: string | null; user_final: string | null; was_ai: boolean;
+  editor: string | null; created_at: number;
+}
+export interface MetaEditQuery { tenant?: string; limit?: number }
 
 function auditParams(o: AuditQuery): string {
   const qs = new URLSearchParams();
@@ -246,6 +254,22 @@ export const api = {
     if (!res.ok) throw new ApiError(res.status, `CSV ${res.status}`);
     return res.blob();
   },
+  // 메타 수정 로그 — AI 원본 → 사용자 최종(학습 데이터). was_ai=true 만 순수 AI→사람 페어.
+  metadataEdits: (opts: MetaEditQuery = {}) => {
+    const qs = new URLSearchParams();
+    if (opts.tenant) qs.set("tenant", opts.tenant);
+    if (opts.limit) qs.set("limit", String(opts.limit));
+    return get<{ rows: MetaEditRow[] }>(`/api/superadmin/metadata-edits${qs.size ? `?${qs}` : ""}`);
+  },
+  // CSV 내려받기 — 쿠키 인증 fetch 로 Blob(감사 CSV 와 같은 관용구). 학습 파이프라인은 ?format=jsonl.
+  metadataEditsCsv: async (opts: MetaEditQuery = {}): Promise<Blob> => {
+    const qs = new URLSearchParams({ format: "csv", limit: "50000" });
+    if (opts.tenant) qs.set("tenant", opts.tenant);
+    const res = await fetch(`/api/superadmin/metadata-edits?${qs}`, { credentials: "include" });
+    if (!res.ok) throw new ApiError(res.status, `CSV ${res.status}`);
+    return res.blob();
+  },
+
   // 사용 원가 · 충전 · 마진 (플랫폼/회사별)
   usage: (days = 30) => get<UsageSummary>(`/api/superadmin/usage?days=${days}`),
 };

@@ -1686,6 +1686,40 @@ app.get("/api/superadmin/audit", async (c) => {
 });
 
 /**
+ * 메타데이터 수정 로그 — **AI 원본 → 사용자 최종**(워크스페이스별 학습 데이터 · 사용자 2026-08-21).
+ * 관리 콘솔이 "AI 가 뽑은 값 vs 회사가 고친 값" 을 회사·장르별로 본다. `was_ai=true` 만 순수
+ * AI→사람 페어(재수정분 제외). json(콘솔) · `?format=csv`(엑셀) · `?format=jsonl`(학습). `?tenant=`·`?limit=`.
+ */
+app.get("/api/superadmin/metadata-edits", async (c) => {
+  const actor = requireSuperadmin(c);
+  const tenantId = c.req.query("tenant") || undefined;
+  // 열람도 감사에 남긴다(운영자 견제 · superadmin-guard 테스트 강제). 이 로그는 metadata_edit_log
+  // 를 **읽고** admin_audit 에 쓰므로 /audit 처럼 무한 증식하지 않는다.
+  await audit(actor, { action: "metadata-edits.view", targetTenant: tenantId ?? null }, clientIp(c));
+  const limit = Math.min(50000, Math.max(1, Number(c.req.query("limit")) || 2000));
+  const rows = await runAsSystem(() => listMetadataEdits({ tenantId, limit }));
+  const format = c.req.query("format");
+  if (format === "jsonl") {
+    const body = (rows as Record<string, unknown>[]).map((r) => JSON.stringify(r)).join("\n") + (rows.length ? "\n" : "");
+    return c.body(body, 200, { "content-type": "application/x-ndjson; charset=utf-8" });
+  }
+  if (format === "csv") {
+    const esc = (v: unknown) => { const s = v == null ? "" : String(v); return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+    const head = ["created_at", "tenant_id", "clip_id", "program_id", "genre", "channel", "field", "ai_original", "user_final", "was_ai", "editor"];
+    const lines = [head.join(",")];
+    for (const r of rows as Record<string, any>[]) {
+      lines.push([new Date(Number(r.created_at)).toISOString(), r.tenant_id, r.clip_id, r.program_id, r.genre,
+        r.channel, r.field, r.ai_original, r.user_final, r.was_ai, r.editor].map(esc).join(","));
+    }
+    return c.body("﻿" + lines.join("\r\n"), 200, {
+      "content-type": "text/csv; charset=utf-8",
+      "content-disposition": `attachment; filename="metadata-edits-${Date.now()}.csv"`,
+    });
+  }
+  return c.json({ rows });
+});
+
+/**
  * 사용 원가 · 충전액 · 마진 — 플랫폼/회사별. `usage_events.cost_krw` 는 우리 **실측 원가**
  * (청구액이 아니다)인데 지금까지 어디에도 노출되지 않아 마진을 볼 수 없었다. 충전(credit_topup)과
  * 나란히 두어 회사별 원가/매출/마진을 본다. 두 표 모두 RLS 라 asSystem('*') 로 횡단 집계한다.
@@ -10112,21 +10146,6 @@ app.get("/api/admin/jobs", async (c) => {
   const limit = Number(c.req.query("limit")) || 100;
   const [jobs, stats] = await runAsSystem(() => Promise.all([listJobs(limit), queueStats()]));
   return c.json({ jobs, stats });
-});
-
-/**
- * 메타데이터 수정 로그 내보내기 — **AI 원본 → 사용자 최종**(워크스페이스별 학습 데이터 · 사용자 2026-08-21).
- * ops 전용. 기본 JSONL(학습 파이프라인에 바로 먹임) · `?format=json` 이면 배열 · `?tenant=`·`?limit=`.
- * `was_ai=true` 만 필터하면 "AI 가 뽑은 값 → 사람이 고친 값" 순수 페어다(재수정분 제외).
- */
-app.get("/api/admin/metadata-edits", async (c) => {
-  requireOpsAccess(c);
-  const tenantId = c.req.query("tenant") || undefined;
-  const limit = Number(c.req.query("limit")) || 5000;
-  const rows = await runAsSystem(() => listMetadataEdits({ tenantId, limit }));
-  if (c.req.query("format") === "json") return c.json({ rows });
-  const body = rows.map((r) => JSON.stringify(r)).join("\n") + (rows.length ? "\n" : "");
-  return c.body(body, 200, { "Content-Type": "application/x-ndjson; charset=utf-8" });
 });
 
 /**
