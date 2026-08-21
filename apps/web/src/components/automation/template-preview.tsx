@@ -192,7 +192,10 @@ export function TemplatePreviewDialog({ template, accent, layout, frameSrc, subt
         aria-label="템플릿 대형 미리보기"
       >
         <TemplatePreview template={template} accent={accent} layout={layout} frameSrc={frameSrc} subtitlesOn={subtitlesOn} width={w} />
-        <div className="flex min-w-[200px] max-w-[240px] flex-col gap-2 self-stretch">
+        {/* 컨트롤 컬럼은 **내용 높이**로 둔다. self-stretch 를 걸면 세로로 긴 9:16 프리뷰(≈800px)
+            높이에 맞춰 늘어나고, mt-auto 닫기 버튼이 그 바닥까지 밀려 컨트롤과 버튼 사이에 거대한
+            빈 공간이 생긴다(사용자 2026-08-21 "왜 이래 ㅋㅋ"). 프리뷰 위쪽에 정렬(items-start)해 붙인다. */}
+        <div className="flex min-w-[200px] max-w-[240px] flex-col gap-2">
           <h2 className="sd-serif text-[14px] font-semibold" style={{ color: "var(--sd-fg)" }}>
             {template?.title || template?.name || "템플릿 미리보기"}
           </h2>
@@ -200,7 +203,7 @@ export function TemplatePreviewDialog({ template, accent, layout, frameSrc, subt
             실제 렌더와 같은 % 좌표로 그립니다 — 슬라이더를 움직이면 저장될 위치가 그대로 바뀝니다.
           </p>
           <LayoutSliders layout={layout} onChange={onLayoutChange} className="space-y-2 text-[10.5px]" />
-          <button type="button" className="sd-btn mt-auto self-start" onClick={onClose}>
+          <button type="button" className="sd-btn mt-3 self-start" onClick={onClose}>
             닫기 (ESC)
           </button>
         </div>
