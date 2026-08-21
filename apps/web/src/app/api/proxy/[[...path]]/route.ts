@@ -60,8 +60,13 @@ async function proxy(request: NextRequest, paramsPromise: Promise<{ path?: strin
     headers.delete("content-length");
     headers.set("Authorization", token);
 
-    // body 를 ArrayBuffer 로 미리 버퍼링한다 — 스트림이 아니라서 재시도에 그대로 다시 실린다.
-    const body = request.body ? await request.arrayBuffer() : undefined;
+    // body 를 바이트로 미리 버퍼링한다. ⚠️ **같은 ArrayBuffer 를 재시도에 재사용하면 안 된다** —
+    // undici 가 첫 fetch 에서 그 ArrayBuffer 를 detach 하면, 재시도 fetch 가 detached 버퍼를 만나
+    // `UND_ERR_INVALID_ARG` 로 던진다(사용자 2026-08-21 "채널규칙 fetch failed (UND_ERR_INVALID_ARG)").
+    // 그래서 바이트만 들고, **매 시도마다 새 사본**을 fetch 에 넘긴다(아래 sendBody).
+    // GET/HEAD 는 본문이 있으면 안 된다(undici 가 거부) — 브라우저가 빈 스트림을 줘도 안 싣는다.
+    const rawBody = request.body ? new Uint8Array(await request.arrayBuffer()) : undefined;
+    const hasBody = rawBody !== undefined && request.method !== "GET" && request.method !== "HEAD";
 
     // 연결 오류(RETRYABLE_CODES)면 새 소켓으로 다시 시도한다 — 죽은 keep-alive 소켓 재사용이
     // 원인인 "fetch failed" 를 흡수한다(저장·렌더·채택이 "됐다 안 됐다" 하던 그것).
@@ -78,7 +83,8 @@ async function proxy(request: NextRequest, paramsPromise: Promise<{ path?: strin
         const upstreamRes = await fetch(upstreamUrl, {
           method: request.method,
           headers,
-          body,
+          // 매 시도마다 **새 사본** — 첫 시도에서 detach 돼도 재시도가 멀쩡한 버퍼를 쓴다.
+          body: hasBody ? new Uint8Array(rawBody!) : undefined,
           redirect: "manual",
         });
 

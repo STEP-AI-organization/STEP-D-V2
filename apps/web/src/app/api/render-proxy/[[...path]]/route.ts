@@ -52,7 +52,10 @@ async function proxy(request: NextRequest, paramsPromise: Promise<{ path?: strin
     headers.delete("content-length");
     headers.set("Authorization", token);
 
-    const body = request.body ? await request.arrayBuffer() : undefined;
+    // ⚠️ 재시도에 같은 ArrayBuffer 를 재사용하면 undici 가 detach 한 뒤 UND_ERR_INVALID_ARG 로
+    // 던진다(메인 프록시와 같은 병). 바이트만 들고 매 시도마다 새 사본을 넘긴다.
+    const rawBody = request.body ? new Uint8Array(await request.arrayBuffer()) : undefined;
+    const hasBody = rawBody !== undefined && request.method !== "GET" && request.method !== "HEAD";
 
     let lastErr: unknown;
     for (let attempt = 0; attempt < 3; attempt++) {
@@ -61,7 +64,7 @@ async function proxy(request: NextRequest, paramsPromise: Promise<{ path?: strin
         const upstreamRes = await fetch(upstreamUrl, {
           method: request.method,
           headers,
-          body,
+          body: hasBody ? new Uint8Array(rawBody!) : undefined,   // 매 시도 새 사본
           redirect: "manual",
         });
         const resHeaders = new Headers(upstreamRes.headers);
