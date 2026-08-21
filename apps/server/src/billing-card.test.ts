@@ -300,20 +300,22 @@ describe("배선", () => {
     for (const [m, p] of [
       ["delete", "/api/billing/card"],
       ["post", "/api/credits/topup/card"],
-      // 자동 충전 — 돈이 자동으로 나가는 설정이라 더더욱 owner/admin 만.
-      ["put", "/api/credits/auto-topup"],
+      // 지금 당장 긁어 보는 경로 — 상한 판정을 거치지만 사람이 눌러야 한다.
       ["post", "/api/credits/auto-topup/run"],
     ] as [string, string][]) {
       assert.match(route(m, p), /requireManager\(c\)/, `권한 검사 없음: ${m.toUpperCase()} ${p}`);
     }
   });
 
-  it("카드 **등록**은 세션 매니저 또는 billing:write 키만 (2026-08-20)", () => {
-    // 고객사가 자기 도메인 화면에서 카드를 등록한다. requireManager 를 그냥 뺀 게 아니라
-    // requireCardActor 로 바꿨다 — 여기가 무방비가 되면 로그인 없이도 카드가 갈아끼워진다.
+  it("카드 등록·자동충전 설정은 세션 매니저 또는 billing:write 키만", () => {
+    // 고객사가 자기 도메인 화면에서 카드를 등록하고(2026-08-20), 카드를 등록해 두면
+    // 잔액이 말라 라인이 서지 않게 자동 충전도 켠다(2026-08-21).
+    // requireManager 를 그냥 뺀 게 아니라 requireCardActor 로 바꿨다 — 여기가 무방비가
+    // 되면 로그인 없이도 카드가 갈아끼워지거나 자동 결제가 켜진다.
     for (const [m, p] of [
       ["post", "/api/billing/card/prepare"],
       ["post", "/api/billing/card"],
+      ["put", "/api/credits/auto-topup"],
     ] as [string, string][]) {
       assert.match(route(m, p), /requireCardActor\(c\)/, `권한 검사 없음: ${m.toUpperCase()} ${p}`);
     }

@@ -30,11 +30,15 @@ export const PREFIX_LEN = 15;
  * 별도 스코프로 뗀 이유: 표준 고객사 키에서 이것만 빼면 "화면은 보여주되 카드는 못 건드린다"가
  * 성립한다. 기본 6종에는 넣지 않는다 — 필요한 워크스페이스에만 발급 시 체크한다.
  *
- * ⚠️ 이 스코프로도 **돈이 움직이는 경로는 열지 않는다**. 계속 세션 전용이다:
- *   - `POST /api/credits/topup*`      임의 금액을 즉시 카드에서 긁는다
- *   - `PUT  /api/credits/auto-topup`  자동 결제 한도를 바꾼다
- *   - `DELETE /api/billing/card`      결제 수단 제거 = 라인 정지(사보타주)
- * 키가 유출됐을 때 "남의 카드가 등록될 수 있다"와 "회사 카드가 긁힌다"는 피해가 비교가 안 된다.
+ * ⚠️ 이 스코프로도 **다음은 열지 않는다**. 계속 세션 전용이다:
+ *   - `POST /api/credits/topup*`   임의 금액을 **즉시** 카드에서 긁는다 (상한이 없다)
+ *   - `DELETE /api/billing/card`   결제 수단 제거 = 라인 정지(사보타주)
+ *
+ * `PUT /api/credits/auto-topup` 은 2026-08-21 에 **열었다**(사용자 요구: 카드를 등록해 두면
+ * 자동추천이 STEP-D 에서 끊기지 않고 돌아야 한다). 즉시 결제와 달리 이 경로는 **자기 상한을
+ * 스스로 들고 있다**: 임계·충전량·일일 횟수·월 금액에 더해 절대 상한(AUTO_TOPUP_HARD_MAX_*)
+ * 이 서버에 박혀 있고, 카드가 없으면 켜지지도 않는다. 그래서 유출 시 최악이 "정해진 상한
+ * 안에서 크레딧이 충전된다"지 "임의 금액이 빠져나간다"가 아니다.
  */
 export const API_SCOPES = [
   "media:write", "media:read", "search:read",
@@ -206,6 +210,10 @@ export const API_KEY_ROUTES: RouteRule[] = [
   { method: "POST", path: /^\/api\/billing\/card\/prepare$/, scope: "billing:write" },
   { method: "POST", path: /^\/api\/billing\/card$/, scope: "billing:write" },
   { method: "GET", path: /^\/api\/billing\/card$/, scope: "billing:read" },
+  // 자동 충전 — 카드를 등록해 두면 잔액이 말라 라인이 서지 않게 한다(2026-08-21).
+  // 상한은 서버가 들고 있고(AUTO_TOPUP_HARD_MAX_*) 카드가 없으면 켜지지 않는다.
+  { method: "GET", path: /^\/api\/credits\/auto-topup$/, scope: "billing:read" },
+  { method: "PUT", path: /^\/api\/credits\/auto-topup$/, scope: "billing:write" },
 ];
 
 export type RouteVerdict = { ok: true; scope: ApiScope } | { ok: false; reason: string };

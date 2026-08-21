@@ -743,8 +743,14 @@ function requireManager(c: Context<AppEnv>): User {
  * 키가 여기 도달했다는 건 화이트리스트가 이미 `billing:write` 를 확인했다는 뜻이다
  * (api-keys.ts `checkRoute`) — 스코프 검사를 여기서 두 벌 하지 않는다.
  *
- * ⚠️ **`requireManager` 를 이걸로 갈아치우지 말 것.** 돈이 나가는 경로(충전·자동충전 한도)와
- * 파괴적 경로(카드 제거)는 계속 세션 전용이어야 한다. 여기 쓰는 자리는 카드 등록 3개뿐이다.
+ * ⚠️ **`requireManager` 를 이걸로 갈아치우지 말 것.** 즉시 결제(`/credits/topup*`)와 파괴적
+ * 경로(카드 제거)는 계속 세션 전용이어야 한다. 여기 쓰는 자리는 **카드 등록 2개 + 자동 충전
+ * 정책 1개**뿐이다.
+ *
+ * 자동 충전을 이 목록에 넣은 이유(2026-08-21): 카드를 등록해 두면 잔액이 말라 라인이 서지
+ * 않아야 한다는 요구. 즉시 결제와 달리 자동 충전은 **자기 상한을 스스로 들고 있다** —
+ * 임계·충전량·일일 횟수·월 금액 + 절대 상한(AUTO_TOPUP_HARD_MAX_*), 그리고 카드가 없으면
+ * 켜지지도 않는다. 상한 없는 즉시 결제와는 위험의 성격이 다르다.
  *
  * 행위자 문자열을 키 id 로 남기는 이유: 사람 이메일이 없다고 익명으로 적으면, 나중에
  * "누가 이 카드를 등록했나" 에 답할 근거가 사라진다.
@@ -5933,8 +5939,10 @@ app.get("/api/credits/auto-topup", async (c) => {
 });
 
 app.put("/api/credits/auto-topup", async (c) => {
-  // **돈이 자동으로 나가는 설정**이라 owner/admin 만.
-  const manager = requireManager(c);
+  // **돈이 자동으로 나가는 설정**이라 owner/admin 세션, 또는 `billing:write` 키만
+  // (2026-08-21 · requireCardActor). 상한은 아래 검증이 서버에서 강제한다 —
+  // 호출자가 누구든 절대 상한(AUTO_TOPUP_HARD_MAX_*)을 넘겨 저장할 수 없다.
+  const actor = requireCardActor(c);
   const body = await c.req.json<Record<string, unknown>>().catch(() => ({}) as Record<string, unknown>);
   const int = (v: unknown, d: number) => {
     const n = Math.floor(Number(v));
@@ -5973,7 +5981,7 @@ app.put("/api/credits/auto-topup", async (c) => {
   }
 
   const policy = await saveAutoTopupPolicy({
-    enabled, thresholdCredits, topupCredits, maxPerDay, maxKrwPerMonth, updatedBy: manager.email,
+    enabled, thresholdCredits, topupCredits, maxPerDay, maxKrwPerMonth, updatedBy: actor,
   });
   // 설정을 고쳤으면(상한 조정·충전량 수정·끄기) 그 사유로 걸려 있던 알림은 낡은 값이다.
   // 다음 시도에서 여전히 실패하면 알림이 다시 생긴다 — 남겨두는 쪽이 거짓말이다.

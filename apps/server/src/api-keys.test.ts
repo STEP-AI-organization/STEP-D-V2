@@ -205,12 +205,18 @@ describe("라우트 화이트리스트 — 기본값은 닫힘", () => {
 
   it("화이트리스트에 관리 경로가 섞여 있지 않다", () => {
     for (const r of API_KEY_ROUTES) {
-      // credits 는 **읽기만** 의도적으로 열었다(billing:read · 잔액·인보이스) —
-      // 충전·카드 등 쓰기는 여전히 세션 전용이어야 한다. 경로가 늘어도(예: /credits/invoices)
-      // 이 불변식은 "GET 만" 하나로 유지된다.
+      // credits 아래에서 쓰기가 열린 것은 **자동 충전 정책 하나뿐**이다(2026-08-21).
+      // 그건 금액을 호출자가 정하는 게 아니라 서버 상한 안에서 도는 설정이라 성격이 다르다.
+      // 나머지(잔액·인보이스)는 조회만 — 특히 `/credits/topup*`(즉시 결제)이 이 표에
+      // 들어오는 순간 여기서 걸려야 한다.
+      if (r.path.source === "^\\/api\\/credits\\/auto-topup$") {
+        assert.ok(r.method === "GET" || r.method === "PUT",
+          "자동 충전은 조회·설정만 — 즉시 결제는 여기 없다");
+        continue;
+      }
       if (r.path.source.startsWith("^\\/api\\/credits")) {
         assert.equal(r.method, "GET",
-          "credits 는 조회만 연다 — 충전·카드 등 쓰기는 세션 전용이어야 한다");
+          "credits 는 조회만 연다 — 즉시 충전 같은 쓰기는 세션 전용이어야 한다");
         continue;
       }
       assert.doesNotMatch(r.path.source, /superadmin|admin|auth|credits|distributions|youtube/,
@@ -228,13 +234,23 @@ describe("라우트 화이트리스트 — 기본값은 닫힘", () => {
     assert.equal(checkRoute("POST", "/api/billing/card", ["billing:read"]).ok, false);
   });
 
-  it("돈이 나가는 경로와 파괴적 경로는 키로 못 부른다 (스코프 전부 줘도)", () => {
-    // 결제 수단 **등록**을 연 뒤에도 이건 닫혀 있어야 한다. 키 유출 시 "남의 카드가 등록됨"과
-    // "회사 카드가 긁힘"·"결제수단이 사라져 라인이 섬"은 피해가 비교가 안 된다.
+  it("자동 충전은 billing:write 로 열린다 (2026-08-21)", () => {
+    // 카드를 등록해 두면 잔액이 말라 라인이 서지 않아야 한다는 요구. 즉시 결제와 달리
+    // 이 경로는 **자기 상한을 스스로 들고 있다**(임계·충전량·일일·월 + 절대 상한),
+    // 카드가 없으면 켜지지도 않는다 — 그래서 위험의 성격이 다르다.
+    assert.equal(checkRoute("GET", "/api/credits/auto-topup", ["billing:read"]).ok, true);
+    assert.equal(checkRoute("PUT", "/api/credits/auto-topup", ["billing:write"]).ok, true);
+    // 읽기 스코프만으론 못 바꾼다.
+    assert.equal(checkRoute("PUT", "/api/credits/auto-topup", ["billing:read"]).ok, false);
+  });
+
+  it("상한 없는 즉시 결제와 파괴적 경로는 키로 못 부른다 (스코프 전부 줘도)", () => {
+    // 자동 충전을 연 뒤에도 이건 닫혀 있어야 한다. **차이는 상한의 유무**다:
+    // topup 은 호출자가 금액을 정해 즉시 긁고, auto-topup 은 서버가 정한 상한 안에서만 돈다.
     for (const [m, p] of [
       ["POST", "/api/credits/topup"],        // 임의 금액 즉시 결제
       ["POST", "/api/credits/topup/card"],   // 저장 카드로 즉시 결제
-      ["PUT", "/api/credits/auto-topup"],    // 자동 결제 한도 변경
+      ["POST", "/api/credits/auto-topup/run"], // 지금 당장 긁어 보기
       ["DELETE", "/api/billing/card"],       // 결제수단 제거 = 라인 정지
     ] as [string, string][]) {
       assert.equal(checkRoute(m, p, all).ok, false, `${m} ${p} 는 키로 열리면 안 된다`);
