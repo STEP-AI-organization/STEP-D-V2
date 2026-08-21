@@ -3262,11 +3262,25 @@ export async function holdClip(ruleId: string, clipId: string, reason: string): 
   );
 }
 
-/** 사람이 확정 — 이게 있어야 다음 순방에 다시 잡힌다. */
+/** 사람이 확정(승인) — 이게 있어야 다음 순방에 다시 잡혀 게시된다. 거부된 건은 승인 불가. */
 export async function releaseHold(ruleId: string, clipId: string, actor: string): Promise<boolean> {
   const r = await pool.query(
     `UPDATE rule_hold SET released_by = $3, released_at = now()
-      WHERE rule_id = $1 AND clip_id = $2 AND released_at IS NULL`,
+      WHERE rule_id = $1 AND clip_id = $2 AND released_at IS NULL AND rejected_at IS NULL`,
+    [ruleId, clipId, actor],
+  );
+  return (r.rowCount ?? 0) > 0;
+}
+
+/**
+ * 사람이 **거부** — 이 (규칙·영상)은 나가지 않는다. released_at 과 **별개 상태**다:
+ * released_at 을 쓰면 hasReleasedHold 가 참이 되어 되레 게시된다(거부의 정반대). rejected_at 은
+ * openHolds/isHeldAwaitingHuman 에서 빠지고, 순방이 isRejectedHold 로 보고 건너뛴다(0044).
+ */
+export async function rejectHold(ruleId: string, clipId: string, actor: string): Promise<boolean> {
+  const r = await pool.query(
+    `UPDATE rule_hold SET rejected_by = $3, rejected_at = now()
+      WHERE rule_id = $1 AND clip_id = $2 AND released_at IS NULL AND rejected_at IS NULL`,
     [ruleId, clipId, actor],
   );
   return (r.rowCount ?? 0) > 0;
@@ -3276,17 +3290,26 @@ export async function openHolds(ruleId?: string): Promise<{ ruleId: string; clip
   const { rows } = await pool.query<{ ruleId: string; clipId: string; reason: string; heldAt: string }>(
     `SELECT rule_id AS "ruleId", clip_id AS "clipId", reason, held_at AS "heldAt"
        FROM rule_hold
-      WHERE released_at IS NULL AND ($1::text IS NULL OR rule_id = $1)
+      WHERE released_at IS NULL AND rejected_at IS NULL AND ($1::text IS NULL OR rule_id = $1)
       ORDER BY held_at DESC`,
     [ruleId ?? null],
   );
   return rows;
 }
 
-/** 이 클립이 이 규칙에서 아직 사람 확정을 기다리는가. */
+/** 이 클립이 이 규칙에서 아직 사람 확정을 기다리는가(거부된 건 제외). */
 export async function isHeldAwaitingHuman(ruleId: string, clipId: string): Promise<boolean> {
   const { rows } = await pool.query(
-    `SELECT 1 FROM rule_hold WHERE rule_id = $1 AND clip_id = $2 AND released_at IS NULL`,
+    `SELECT 1 FROM rule_hold WHERE rule_id = $1 AND clip_id = $2 AND released_at IS NULL AND rejected_at IS NULL`,
+    [ruleId, clipId],
+  );
+  return rows.length > 0;
+}
+
+/** 사람이 이 (규칙·영상)을 거부했는가 — 순방이 재선정·게시하지 않고 건너뛰는 근거. */
+export async function isRejectedHold(ruleId: string, clipId: string): Promise<boolean> {
+  const { rows } = await pool.query(
+    `SELECT 1 FROM rule_hold WHERE rule_id = $1 AND clip_id = $2 AND rejected_at IS NOT NULL`,
     [ruleId, clipId],
   );
   return rows.length > 0;

@@ -24,6 +24,7 @@ import {
   hasReleasedHold,
   holdClip,
   isHeldAwaitingHuman,
+  isRejectedHold,
   listAutomationRules,
   listEntities,
   listMedia,
@@ -72,6 +73,7 @@ const RENDER_WAIT_NOTE = "렌더 대기 — 완료되면 다음 확인 때 자�
 const META_WAIT_NOTE = "메타데이터 생성 대기 — 완료되면 다음 확인 때 자동으로 게시됩니다.";
 const VAGUE_ACCOUNT_NOTE =
   "계정 미상 배포 기록이 있어 건너뜁니다 — 이미 나간 건이면 그대로 두고, 아니면 배포 화면에서 계정을 지정해 발행하세요.";
+const REJECTED_NOTE = "사람이 거부한 건입니다 — 이 규칙으로는 나가지 않습니다.";
 
 export interface CycleReport {
   tenantScoped: true;
@@ -542,6 +544,15 @@ export async function runAutomationCycle(): Promise<CycleReport> {
           obs.channelBlocked = true;
           await note({ ruleId: rule.id, clipId: clip.id, result: "skipped", detail: why.reason, accountKey },
             hasRunNote(rule.id, clip.id, accountKey, "skipped", false, why.reason));
+          continue;
+        }
+
+        // 사람이 **거부**한 (규칙·영상)은 재선정도 게시도 하지 않고 건너뛴다(0044). released_at
+        // 과 별개 상태라 approve_first 게이트를 건드리지 않는다(거부가 되레 게시되는 사고 방지).
+        // (규칙,클립)당 사실이라 문구 고정 = dedupe 키 → 채널·순방마다 안 쌓인다.
+        if (await isRejectedHold(rule.id, clip.id)) {
+          await note({ ruleId: rule.id, clipId: clip.id, result: "skipped", accountKey: null, detail: REJECTED_NOTE },
+            hasRunNote(rule.id, clip.id, null, "skipped", false, REJECTED_NOTE));
           continue;
         }
 

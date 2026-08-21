@@ -1122,6 +1122,22 @@ export async function releaseAutomationHold(
   return res.json();
 }
 
+/** 승인 대기 건 거부 — 이 (규칙·영상)은 나가지 않는다(승인과 대칭·반대 · 서버 rejectHold). */
+export async function rejectAutomationHold(
+  ruleId: string, clipId: string, actor: string,
+): Promise<{ ok: boolean; notice: string }> {
+  const res = await fetch(`${API_BASE}/automation/holds/reject`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ruleId, clipId, actor }),
+  });
+  if (!res.ok) {
+    const b = (await res.json().catch(() => null)) as { error?: string } | null;
+    throw new Error(b?.error ?? `${res.status}`);
+  }
+  return res.json();
+}
+
 // ── 썸네일 생성 (FLOWS F7) ──────────────────────────────────────────────────────
 //
 // 결과는 스토리지에 남는다 — 화면을 떠나도, 잡이 끝난 뒤에도. 그래서 완료 알림이 없고

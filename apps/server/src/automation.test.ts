@@ -1252,6 +1252,40 @@ describe("렌더 실패 분류 어휘가 라우트와 같다 — index.ts 소스
   });
 });
 
+describe("승인 대기 거부 — 게시로 변하면 안 된다 (0044)", () => {
+  const DBPG = fs.readFileSync(path.join(SRC, "db-pg.ts"), "utf-8");
+  const CYCLE = fs.readFileSync(path.join(SRC, "automation-cycle.ts"), "utf-8");
+  const IDX = fs.readFileSync(path.join(SRC, "index.ts"), "utf-8");
+
+  it("rejectHold 는 rejected_at 만 세운다 — released_at 을 건드리면 approve_first 가 뚫려 되레 게시된다", () => {
+    const fn = DBPG.slice(DBPG.indexOf("export async function rejectHold")).slice(0, 500);
+    assert.ok(fn.length > 100, "rejectHold 를 못 찾았다");
+    assert.match(fn, /SET rejected_by = \$3, rejected_at = now\(\)/);
+    assert.doesNotMatch(fn, /released_at = now\(\)/, "거부가 released_at 을 세우면 hasReleasedHold 로 게시된다");
+  });
+
+  it("승인 큐(openHolds)·대기 판정(isHeldAwaitingHuman)에서 거부는 빠진다", () => {
+    const open = DBPG.slice(DBPG.indexOf("export async function openHolds")).slice(0, 500);
+    assert.match(open, /rejected_at IS NULL/, "거부한 건이 승인 큐에 남는다");
+    const awaiting = DBPG.slice(DBPG.indexOf("export async function isHeldAwaitingHuman")).slice(0, 400);
+    assert.match(awaiting, /rejected_at IS NULL/);
+  });
+
+  it("순방이 거부된 (규칙·영상)을 게이트 판정 **앞에서** 건너뛴다 — 재선정·게시 안 함", () => {
+    assert.match(CYCLE, /isRejectedHold\(rule\.id, clip\.id\)/, "사이클이 거부를 확인하지 않는다");
+    const rejAt = CYCLE.indexOf("isRejectedHold(rule.id, clip.id)");
+    const gateAt = CYCLE.indexOf("const gate = await clipGate(clip.id)");
+    assert.ok(rejAt > 0 && gateAt > 0 && rejAt < gateAt, "거부 확인이 게이트/발행 판정보다 뒤에 있으면 이미 게시된다");
+  });
+
+  it("거부 라우트가 있고 사람(actor)을 요구한다", () => {
+    const route = IDX.slice(IDX.indexOf('app.post("/api/automation/holds/reject"')).slice(0, 900);
+    assert.ok(route.length > 100, "거부 라우트가 없다");
+    assert.match(route, /rejectHold\(ruleId, clipId, actor\)/);
+    assert.match(route, /actor required/, "거부는 사람이 한다 — actor 강제가 없다");
+  });
+});
+
 describe("입력 검증", () => {
   it("모르는 값을 통과시키지 않는다", () => {
     assert.equal(isRuleMediaKind("both"), true);

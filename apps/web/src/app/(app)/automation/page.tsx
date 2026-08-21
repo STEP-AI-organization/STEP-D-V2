@@ -45,6 +45,7 @@ import {
   fetchYouTubeChannels,
   type FrameTemplate,
   releaseAutomationHold,
+  rejectAutomationHold,
   runAutomationNow,
   saveAutomationRule,
   setAutomationPaused,
@@ -238,6 +239,7 @@ export default function AutomationPage() {
   const [error, setError] = useState<string | null>(null);
   const [runningNow, setRunningNow] = useState(false);
   const [releasing, setReleasing] = useState<string | null>(null);
+  const [rejecting, setRejecting] = useState<string | null>(null);
   // 승인 대기 카드에서 렌더 결과를 펼쳐 보고 있는 클립. 하나만 — 여러 개가 동시에 재생되면
   // 소리가 겹치고 스크롤이 길어져서 "딱 보고 판단" 이 안 된다.
   const [previewClipId, setPreviewClipId] = useState<string | null>(null);
@@ -623,6 +625,31 @@ export default function AutomationPage() {
       toast({ title: "승인 실패", description: err instanceof Error ? err.message : String(err), tone: "error" });
     } finally {
       setReleasing(null);
+    }
+  }
+
+  /** 영상 하나 거부 — 그 영상에 걸린 보류를 **전부** 거부한다(승인과 대칭·반대). 거부하면 이
+   *  규칙으로는 재선정도 게시도 안 된다. 되돌리기 어려우니 확인을 받는다. */
+  async function reject(entry: { clipId: string; holds: RuleHold[] }) {
+    if (releasing || rejecting) return;
+    if (!window.confirm("이 영상을 거부하면 이 규칙으로는 다시 나가지 않습니다. 거부할까요?")) return;
+    setRejecting(entry.clipId);
+    try {
+      const results = await Promise.allSettled(
+        entry.holds.map((h) => rejectAutomationHold(h.ruleId, h.clipId, actor)),
+      );
+      const failed = results.filter((r) => r.status === "rejected").length;
+      if (failed === results.length) throw (results[0] as PromiseRejectedResult).reason;
+      toast({
+        title: failed ? `거부했습니다 — 규칙 ${failed}개는 실패` : "거부했습니다",
+        description: "이 영상은 이 규칙으로 나가지 않습니다.",
+        tone: failed ? "warn" : "done",
+      });
+      await load();
+    } catch (err) {
+      toast({ title: "거부 실패", description: err instanceof Error ? err.message : String(err), tone: "error" });
+    } finally {
+      setRejecting(null);
     }
   }
 
@@ -1299,8 +1326,17 @@ export default function AutomationPage() {
                   <Link href={`/editor/${entry.clipId}`} className="sd-btn shrink-0">편집</Link>
                   <button
                     type="button"
+                    className="sd-btn shrink-0"
+                    disabled={releasing !== null || rejecting !== null}
+                    onClick={() => void reject(entry)}
+                    title="이 영상은 이 규칙으로 내보내지 않습니다"
+                  >
+                    {rejecting === key ? "거부 중…" : "거부"}
+                  </button>
+                  <button
+                    type="button"
                     className="sd-btn sd-btn-primary shrink-0"
-                    disabled={releasing !== null}
+                    disabled={releasing !== null || rejecting !== null}
                     onClick={() => void release(entry)}
                   >
                     {releasing === key ? "승인 중…" : "승인 — 다음 확인 때 게시"}

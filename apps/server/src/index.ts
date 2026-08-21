@@ -111,6 +111,7 @@ import {
   appendRuleRun,
   listRuleRuns,
   releaseHold,
+  rejectHold,
   openHolds,
   getAutomationSetting,
   setAutomationSetting,
@@ -5569,6 +5570,28 @@ app.post("/api/automation/holds/release", async (c) => {
     await appendRuleRun({ ruleId, clipId, result: "skipped", detail: `보류 해제 · ${actor}` });
   }
   return c.json({ ok, notice: ok ? "확정했습니다 — 다음 순방에 다시 잡힙니다." : "이미 해제된 건입니다." });
+});
+
+/**
+ * 승인 대기 건 **거부** — 이 (규칙·영상)은 나가지 않는다(사용자 2026-08-21).
+ *
+ * 승인(release)과 대칭이되 **반대**다: 승인은 다음 순방에 다시 잡혀 게시되고, 거부는 순방이
+ * 재선정도 게시도 하지 않고 건너뛴다(db rejectHold · automation-cycle isRejectedHold). 거부는
+ * released_at 을 건드리지 않으므로 approve_first 게이트가 뚫려 되레 게시되는 사고가 없다.
+ */
+app.post("/api/automation/holds/reject", async (c) => {
+  const body = await c.req.json().catch(() => ({}) as Record<string, unknown>);
+  const ruleId = typeof body.ruleId === "string" ? body.ruleId : "";
+  const clipId = typeof body.clipId === "string" ? body.clipId : "";
+  const actor = typeof body.actor === "string" ? body.actor.trim() : "";
+  if (!ruleId || !clipId) return c.json({ error: "ruleId · clipId 가 필요합니다." }, 400);
+  if (!actor) return c.json({ error: "actor required — 거부는 사람이 합니다." }, 400);
+
+  const ok = await rejectHold(ruleId, clipId, actor);
+  if (ok) {
+    await appendRuleRun({ ruleId, clipId, result: "skipped", detail: `거부 · ${actor}` });
+  }
+  return c.json({ ok, notice: ok ? "거부했습니다 — 이 영상은 이 규칙으로 나가지 않습니다." : "이미 처리된 건입니다." });
 });
 
 // ── 에셋 (FLOWS F8 · README §6) ─────────────────────────────────────────────────
