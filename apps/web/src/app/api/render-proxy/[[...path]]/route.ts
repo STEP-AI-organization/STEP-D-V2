@@ -15,6 +15,7 @@ export const runtime = "nodejs";
  * ⚠️ **하드닝**: 이 프록시는 export 경로 하나만 통과시킨다. stepd-render 는 같은 이미지라 모든
  * 라우트를 갖지만(발행·결제 포함), 여기로는 렌더만 닿게 해 오용을 막는다.
  */
+// stepd-render 서비스 URL (projectnumber 형 — 메인 프록시가 같은 형을 써서 검증됨 · 오디언스로도 통과).
 const RENDER_RUN_URL = (process.env.RENDER_RUN_URL
   || "https://stepd-render-872105344568.us-central1.run.app").replace(/\/$/, "");
 
