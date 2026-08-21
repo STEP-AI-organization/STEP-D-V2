@@ -22,6 +22,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { UploadVideoButton } from "@/components/upload-video-dialog";
 import type { AdoptReframe } from "@/components/adopt-dialog";
+// 순방 판정과 **같은 함수**로 예상 건수를 낸다. 미러(aspect-presets 식 "바이트 동일" 주석)로
+// 두지 않는 이유: 이 숫자는 곧 청구 예상으로 읽히는데, 미러가 한 번 어긋나면 화면이 조용히
+// 거짓 약속을 하게 된다. automation.ts 는 import 0개짜리 순수 모듈이라 그대로 가져올 수 있다.
+import { formatWeekdays, monthlyPublishEstimate } from "@server-pure/automation";
 import {
   LayoutSliders,
   SUBTITLE_DEFAULTS,
@@ -278,6 +282,11 @@ export default function AutomationPage() {
   const [dailyQuota, setDailyQuota] = useState(3);
   const [activeStart, setActiveStart] = useState(9);
   const [activeEnd, setActiveEnd] = useState(22);
+  // 발행 요일(ISO 1=월…7=일) · 발행 시간(KST "HH:MM").
+  // 둘 다 **비우면 기존 동작**이다 — 요일 빈 값 = 매일, 시간 빈 값 = 할당량 방식.
+  // 구 규칙이 조용히 달라지지 않게 기본을 빈 배열로 둔다.
+  const [weekdays, setWeekdays] = useState<number[]>([]);
+  const [slots, setSlots] = useState<string[]>([]);
   const [templateId, setTemplateId] = useState(""); // "" = 프로그램 장르 자동
   const [templates, setTemplates] = useState<FrameTemplate[]>([]);
   const [layout, setLayout] = useState<LayoutState | null>(null);
@@ -378,6 +387,7 @@ export default function AutomationPage() {
     setWin(r.window || "수시");
     setDailyQuota(r.dailyQuota ?? 3);
     setActiveStart(r.activeStart ?? 9); setActiveEnd(r.activeEnd ?? 22);
+    setWeekdays(r.weekdays ?? []); setSlots(r.slots ?? []);
     setTemplateId(r.templateId ?? "");
     setReframe(r.reframe ?? "none"); // 구 규칙(필드 없음)은 기본과 같은 "none"
     setSubtitles(r.layout?.subtitles !== false); // 구 규칙(필드 없음)은 기본 ON
@@ -486,9 +496,12 @@ export default function AutomationPage() {
     (sum, r) => sum + Object.values(r.publishedToday ?? {}).reduce((a, b) => a + b, 0),
     0,
   );
+  // 하루 몇 건인지는 **서버 판정과 같은 함수**로 낸다. 예전엔 여기서 dailyQuota 를 직접
+  // 곱했는데, 발행 시간(슬롯)이 있으면 서버는 dailyQuota 를 무시하고 슬롯 개수를 쓰므로
+  // 화면만 다른 수를 말하게 된다.
   const todayQuota = rules
     .filter((r) => r.enabled)
-    .reduce((sum, r) => sum + (r.dailyQuota ?? 3) * channelsOf(r).length, 0);
+    .reduce((sum, r) => sum + monthlyPublishEstimate(r).perDay * channelsOf(r).length, 0);
 
   async function togglePause() {
     try {
@@ -552,6 +565,9 @@ export default function AutomationPage() {
         programId: selProgram, platform: chans[0].platform, accountId: chans[0].accountId,
         programIds: [selProgram], channels: chans,
         dailyQuota, activeStart, activeEnd,
+        // 슬롯이 있으면 서버는 dailyQuota 를 무시하고 슬롯 개수를 쓴다(perDayCount).
+        // 그래도 값은 보낸다 — 슬롯을 나중에 비웠을 때 되돌아갈 자리가 필요하다.
+        weekdays, slots,
         mediaKind, criterion,
         gatePolicy: approveFirst ? "approve_first" : "hold_on_issue",
         window: win, enabled: true,
@@ -1022,11 +1038,47 @@ export default function AutomationPage() {
               </p>
             </div>
 
+            {/* 발행 요일 — 비우면 매일(구 규칙 동작 그대로). */}
+            <div>
+              <div className="mb-1 flex items-baseline justify-between">
+                <span className="text-[10.5px]" style={{ color: "var(--sd-label)" }}>발행 요일</span>
+                <span className="text-[10.5px]" style={{ color: "var(--sd-fg-dim)" }}>{formatWeekdays(weekdays)}</span>
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {[1, 2, 3, 4, 5, 6, 7].map((d) => {
+                  const on = weekdays.includes(d);
+                  return (
+                    <button
+                      key={d} type="button"
+                      onClick={() => setWeekdays(on ? weekdays.filter((x) => x !== d) : [...weekdays, d].sort((a, b) => a - b))}
+                      className="h-7 w-8 rounded-[5px] text-[11.5px]"
+                      style={on
+                        ? { background: "var(--sd-fg)", color: "var(--sd-bg)" }
+                        : { border: "1px solid var(--sd-border)", color: "var(--sd-fg-dim)" }}
+                    >
+                      {["", "월", "화", "수", "목", "금", "토", "일"][d]}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* 발행 시간 — 하나라도 넣으면 **하루 발행 수 = 시간 개수**가 되고 할당량은 안 쓴다. */}
+            <div>
+              <div className="mb-1 flex items-baseline justify-between">
+                <span className="text-[10.5px]" style={{ color: "var(--sd-label)" }}>발행 시간 (KST)</span>
+                <span className="text-[10.5px]" style={{ color: "var(--sd-fg-dim)" }}>
+                  {slots.length ? `하루 ${slots.length}개 — 할당량 대신 이 시간에 맞춰 나갑니다` : "비우면 아래 할당량 방식"}
+                </span>
+              </div>
+              <SlotPicker slots={slots} onChange={setSlots} />
+            </div>
+
             {/* 하루 할당량 · 활동 시간창 — 할당량이 찰 때까지 시간창 안에서 확인 때마다 계속 배포 */}
-            <div className="grid grid-cols-3 items-end gap-2">
+            <div className="grid grid-cols-3 items-end gap-2" style={slots.length ? { opacity: 0.45 } : undefined}>
               <label className="text-[10.5px]" style={{ color: "var(--sd-label)" }}>
                 채널당 하루 할당량
-                <input type="number" min={1} max={50} value={dailyQuota}
+                <input type="number" min={1} max={50} value={dailyQuota} disabled={slots.length > 0}
                   onChange={(e) => setDailyQuota(Math.max(1, Math.min(50, Number(e.target.value) || 1)))}
                   className="sd-input mt-1 w-full" />
               </label>
@@ -1044,8 +1096,13 @@ export default function AutomationPage() {
               </label>
             </div>
             <p className="text-[10.5px]" style={{ color: "var(--sd-fg-dim)" }}>
-              {activeStart}시~{activeEnd}시(KST) 사이에만 배포하고, 채널마다 하루 {dailyQuota}개를 채우면 다음 날까지 쉽니다.
+              {slots.length
+                ? `${formatWeekdays(weekdays)} · ${slots.join(" ")} 에 맞춰 채널마다 하루 ${slots.length}개를 내보냅니다.`
+                : `${activeStart}시~${activeEnd}시(KST) 사이에만 배포하고, 채널마다 하루 ${dailyQuota}개를 채우면 다음 날까지 쉽니다.`}
             </p>
+
+            {/* 월 예상 — 순방 판정과 같은 함수로 계산한다(파일 상단 import 주석). */}
+            <PublishEstimate weekdays={weekdays} slots={slots} dailyQuota={dailyQuota} channels={chansOf(selChannels)} />
 
             <input value={win} onChange={(e) => setWin(e.target.value)} placeholder="시간대" className="sd-input w-full" />
 
@@ -1097,10 +1154,23 @@ export default function AutomationPage() {
               자막 켜기 (끄면 이 규칙의 자동 클립에 자막을 넣지 않습니다 — 원본에 자막이 이미 있는 회차용)
             </label>
 
-            <label className="flex items-center gap-2 text-[11.5px]" style={{ color: "var(--sd-fg)" }}>
-              <input type="checkbox" checked={approveFirst} onChange={(e) => setApproveFirst(e.target.checked)} />
-              게시 전 사람 승인 (끄면 문제 없는 건은 바로 나가고, 권리 문제만 승인 대기로 빠집니다)
-            </label>
+            {/* 승인 방식 — 체크박스 하나였을 땐 "끄면 어떻게 되는지" 가 문구에 묻혀 있었다.
+                두 갈래를 나란히 놓아 무엇을 고르는 건지 보이게 한다(2026-08-21 요청). */}
+            <div>
+              <div className="mb-1 text-[10.5px]" style={{ color: "var(--sd-label)" }}>승인 방식</div>
+              <div className="grid gap-2 sm:grid-cols-2">
+                <GateCard
+                  on={approveFirst} onClick={() => setApproveFirst(true)}
+                  title="승인 후 발행"
+                  desc="사람이 승인해야 나갑니다. 안전하지만 승인이 밀리면 발행도 밀립니다."
+                />
+                <GateCard
+                  on={!approveFirst} onClick={() => setApproveFirst(false)}
+                  title="자동 발행"
+                  desc="승인 없이 바로 나갑니다. 권리 문제가 감지된 건만 승인 대기로 빠집니다."
+                />
+              </div>
+            </div>
           </div>
         )}
 
@@ -1290,8 +1360,12 @@ export default function AutomationPage() {
                   <span className="sd-tag sd-tag--warn">
                     {r.gatePolicy === "approve_first" ? "게시 전 사람 승인" : "문제 없으면 바로 게시 (권리 문제는 승인 대기로)"}
                   </span>
-                  <span className="sd-tag">하루 {r.dailyQuota ?? 3}개/채널</span>
-                  <span className="sd-tag">{r.activeStart ?? 9}~{r.activeEnd ?? 22}시</span>
+                  <span className="sd-tag">하루 {monthlyPublishEstimate(r).perDay}개/채널</span>
+                  <span className="sd-tag">{formatWeekdays(r.weekdays)}</span>
+                  <span className="sd-tag">
+                    {r.slots?.length ? r.slots.join(" ") : `${r.activeStart ?? 9}~${r.activeEnd ?? 22}시`}
+                  </span>
+                  <span className="sd-tag">월 예상 {monthlyPublishEstimate(r).perMonth}건</span>
                   <span className="sd-tag">{r.templateId ? `템플릿 ${r.templateId}` : "템플릿 자동"}</span>
                   {/* 오늘 게시 수 — 서버가 publishedToday 를 내려줄 때만(구버전은 숨김). */}
                   {r.publishedToday &&
@@ -1455,5 +1529,126 @@ export default function AutomationPage() {
         />
       )}
     </div>
+  );
+}
+
+/**
+ * "platform:accountId" 키 → 채널 객체. **예상 건수 계산용**이라 개수만 맞으면 된다
+ * (저장 경로는 channelOptions 에서 실물을 찾아 쓴다 — 그쪽은 정확한 값이 필요하다).
+ */
+function chansOf(keys: string[]): { platform: string; accountId: string }[] {
+  return keys.map((k) => {
+    const i = k.indexOf(":");
+    return { platform: k.slice(0, i), accountId: k.slice(i + 1) };
+  });
+}
+
+/**
+ * 발행 시간 목록 — 중복은 막고 항상 정렬해 보여 준다(뒤섞이면 사람이 못 읽는다).
+ *
+ * 여기 넣은 개수가 곧 **하루 발행 수**다(서버 `perDayCount`). 그래서 개수를 따로 입력받지
+ * 않는다 — 두 군데서 받으면 화면과 엔진이 다른 수를 믿는 상태가 된다.
+ */
+function SlotPicker({ slots, onChange }: { slots: string[]; onChange: (v: string[]) => void }) {
+  const [adding, setAdding] = useState(false);
+  const [value, setValue] = useState("18:00");
+
+  function add() {
+    if (!/^\d{2}:\d{2}$/.test(value)) return;
+    if (!slots.includes(value)) onChange([...slots, value].sort());
+    setAdding(false);
+  }
+
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      {slots.map((s) => (
+        <span
+          key={s}
+          className="inline-flex h-7 items-center gap-1 rounded-[5px] px-2 text-[11.5px]"
+          style={{ border: "1px solid var(--sd-border)", color: "var(--sd-fg)" }}
+        >
+          {s}
+          <button type="button" onClick={() => onChange(slots.filter((x) => x !== s))}
+            style={{ color: "var(--sd-fg-dim)" }}>×</button>
+        </span>
+      ))}
+      {adding ? (
+        <span className="inline-flex items-center gap-1">
+          <input
+            type="time" value={value} autoFocus
+            onChange={(e) => setValue(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") add(); if (e.key === "Escape") setAdding(false); }}
+            className="sd-input h-7 w-[92px]"
+          />
+          <button type="button" onClick={add} className="sd-btn h-7 px-2 text-[11px]">추가</button>
+        </span>
+      ) : (
+        <button type="button" onClick={() => setAdding(true)}
+          className="h-7 text-[11.5px]" style={{ color: "var(--sd-fg-dim)" }}>+ 시간 추가</button>
+      )}
+    </div>
+  );
+}
+
+/**
+ * 월 예상 발행 — **순방 판정과 같은 함수**(`monthlyPublishEstimate`)로 낸다.
+ *
+ * 화면이 따로 곱하면 "월 66건" 이라 적어 놓고 실제로는 다른 수가 나가는 상태가 되고,
+ * 그게 곧 청구 예상과 어긋난다. 금액은 여기서 말하지 않는다 — 청구는 크레딧 기준이라
+ * 건수에 단가를 곱한 값이 곧 청구액이 아니다.
+ */
+function PublishEstimate({ weekdays, slots, dailyQuota, channels }: {
+  weekdays: number[]; slots: string[]; dailyQuota: number;
+  channels: { platform: string; accountId: string }[];
+}) {
+  // 채널 수 곱하기도 **서버 함수 안에서** 끝낸다 — 밖에서 한 번 더 곱하면 그 순간
+  // 두 벌 계산이 되고, 규칙이 바뀔 때 조용히 어긋난다.
+  // platform·accountId 는 타입상 필요할 뿐 계산엔 안 쓰인다(channels 가 있으면 그쪽이 정본).
+  const est = monthlyPublishEstimate({
+    weekdays, slots, dailyQuota, channels,
+    platform: channels[0]?.platform ?? "", accountId: channels[0]?.accountId ?? "",
+  });
+  const perWeek = est.perWeek;
+  const perMonth = est.perMonth;
+
+  // 채널이 0개면 숫자를 만들지 않는다 — 서버는 최소 1채널로 치므로 그대로 두면
+  // 고르지도 않은 채널의 예상 건수를 보여 주게 된다.
+  if (channels.length === 0) {
+    return (
+      <div className="rounded-[5px] p-2.5 text-[10.5px]"
+        style={{ border: "1px solid var(--sd-border)", color: "var(--sd-fg-dim)" }}>
+        채널을 선택하면 월 예상 발행 건수가 표시됩니다.
+      </div>
+    );
+  }
+
+  return (
+    <div className="rounded-[5px] p-2.5" style={{ border: "1px solid var(--sd-border)" }}>
+      <div className="flex items-baseline justify-between">
+        <span className="text-[10.5px]" style={{ color: "var(--sd-label)" }}>월 예상 발행</span>
+        <span className="text-[15px] font-semibold" style={{ color: "var(--sd-fg)" }}>{perMonth}건</span>
+      </div>
+      <div className="mt-1 text-[10.5px]" style={{ color: "var(--sd-fg-dim)" }}>
+        {formatWeekdays(weekdays)} · 하루 {est.perDay}건 · 채널 {est.channels}개 → 주당 {perWeek}건
+      </div>
+    </div>
+  );
+}
+
+/** 승인 방식 2택 — 무엇을 고르는 건지 나란히 보이게. */
+function GateCard({ on, onClick, title, desc }: {
+  on: boolean; onClick: () => void; title: string; desc: string;
+}) {
+  return (
+    <button
+      type="button" onClick={onClick}
+      className="rounded-[5px] p-2.5 text-left"
+      style={on
+        ? { border: "1px solid var(--sd-fg)", background: "var(--sd-hover)" }
+        : { border: "1px solid var(--sd-border)" }}
+    >
+      <div className="text-[11.5px] font-semibold" style={{ color: "var(--sd-fg)" }}>{title}</div>
+      <div className="mt-0.5 text-[10.5px] leading-relaxed" style={{ color: "var(--sd-fg-dim)" }}>{desc}</div>
+    </button>
   );
 }
