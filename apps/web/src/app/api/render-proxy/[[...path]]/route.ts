@@ -22,7 +22,7 @@ const RENDER_RUN_URL = (process.env.RENDER_RUN_URL
 // 연결 단계 오류(응답 전) — 죽은 keep-alive 소켓 재사용 등. 안전하게 재시도(메인 프록시와 같은 규칙).
 const RETRYABLE_CODES = new Set([
   "ECONNRESET", "ECONNREFUSED", "ENOTFOUND", "EAI_AGAIN", "EPIPE", "ETIMEDOUT",
-  "UND_ERR_SOCKET", "UND_ERR_CONNECT_TIMEOUT",
+  "UND_ERR_SOCKET", "UND_ERR_CONNECT_TIMEOUT", "UND_ERR_INVALID_ARG",
 ]);
 function connErrorCode(e: unknown): string | undefined {
   const cause = (e as { cause?: { code?: string } })?.cause;
@@ -47,19 +47,18 @@ async function proxy(request: NextRequest, paramsPromise: Promise<{ path?: strin
 
   try {
     const token = await getIdToken(RENDER_RUN_URL);   // ← 렌더 서비스 URL 을 오디언스로
-    const headers = new Headers(request.headers);
-    headers.delete("host");
-    headers.delete("content-length");
-    headers.set("Authorization", token);
-
-    // ⚠️ 재시도에 같은 ArrayBuffer 를 재사용하면 undici 가 detach 한 뒤 UND_ERR_INVALID_ARG 로
-    // 던진다(메인 프록시와 같은 병). 바이트만 들고 매 시도마다 새 사본을 넘긴다.
+    // ⚠️ 재시도에 같은 Headers/ArrayBuffer 를 재사용하면 undici 가 2차 시도에서 UND_ERR_INVALID_ARG
+    // 로 던진다(메인 프록시와 같은 병). 바이트만 들고 매 시도마다 headers·body 를 새로 만든다.
     const rawBody = request.body ? new Uint8Array(await request.arrayBuffer()) : undefined;
     const hasBody = rawBody !== undefined && request.method !== "GET" && request.method !== "HEAD";
 
     let lastErr: unknown;
     for (let attempt = 0; attempt < 3; attempt++) {
       if (attempt > 0) await new Promise((r) => setTimeout(r, attempt === 1 ? 120 : 400));
+      const headers = new Headers(request.headers);
+      headers.delete("host");
+      headers.delete("content-length");
+      headers.set("Authorization", token);
       try {
         const upstreamRes = await fetch(upstreamUrl, {
           method: request.method,

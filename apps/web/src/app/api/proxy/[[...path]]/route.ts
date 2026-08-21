@@ -19,6 +19,9 @@ const CLOUD_RUN_URL = (process.env.CLOUD_RUN_URL || "https://stepd-server-872105
 const RETRYABLE_CODES = new Set([
   "ECONNRESET", "ECONNREFUSED", "ENOTFOUND", "EAI_AGAIN", "EPIPE", "ETIMEDOUT",
   "UND_ERR_SOCKET", "UND_ERR_CONNECT_TIMEOUT",
+  // UND_ERR_INVALID_ARG — 재시도 2차에서 재사용 상태로 나던 것. 아래에서 매 시도 headers·body 를
+  // 새로 만들어 근본을 없애되, 혹시 남으면 새 인자로 한 번 더 시도한다(요청은 서버에 안 닿았으니 안전).
+  "UND_ERR_INVALID_ARG",
 ]);
 
 /** undici 는 TypeError("fetch failed") 로 감싸고 실제 원인은 e.cause.code 에 있다. */
@@ -54,37 +57,35 @@ async function proxy(request: NextRequest, paramsPromise: Promise<{ path?: strin
 
   try {
     const token = await getIdToken();
-    const headers = new Headers(request.headers);
-    headers.delete("host");
-    // 본문을 버퍼로 다시 보내므로 원본 길이 헤더는 버린다 — 안 맞으면 업스트림이 끊는다.
-    headers.delete("content-length");
-    headers.set("Authorization", token);
 
-    // body 를 바이트로 미리 버퍼링한다. ⚠️ **같은 ArrayBuffer 를 재시도에 재사용하면 안 된다** —
-    // undici 가 첫 fetch 에서 그 ArrayBuffer 를 detach 하면, 재시도 fetch 가 detached 버퍼를 만나
-    // `UND_ERR_INVALID_ARG` 로 던진다(사용자 2026-08-21 "채널규칙 fetch failed (UND_ERR_INVALID_ARG)").
-    // 그래서 바이트만 들고, **매 시도마다 새 사본**을 fetch 에 넘긴다(아래 sendBody).
-    // GET/HEAD 는 본문이 있으면 안 된다(undici 가 거부) — 브라우저가 빈 스트림을 줘도 안 싣는다.
+    // body 를 바이트로 미리 버퍼링한다. GET/HEAD 는 본문이 있으면 안 된다(undici 가 거부) —
+    // 브라우저가 빈 스트림을 줘도 안 싣는다.
     const rawBody = request.body ? new Uint8Array(await request.arrayBuffer()) : undefined;
     const hasBody = rawBody !== undefined && request.method !== "GET" && request.method !== "HEAD";
 
     // 연결 오류(RETRYABLE_CODES)면 새 소켓으로 다시 시도한다 — 죽은 keep-alive 소켓 재사용이
     // 원인인 "fetch failed" 를 흡수한다(저장·렌더·채택이 "됐다 안 됐다" 하던 그것).
     //
-    // ⚠️ 재시도는 fetch 가 **던졌을 때만** — 응답을 받기 전(연결 단계) 실패다. HTTP 상태
-    // (4xx/5xx)는 서버가 실제로 응답한 것이라 재시도하지 않고 그대로 반환한다(409 게이트·400
-    // 검증 등이 두 번 돌면 안 된다). 죽은 소켓 재사용은 요청을 쓰는 순간 끊겨(ECONNRESET)
-    // 서버엔 닿지 않으므로 재시도가 안전하다. 설령 드물게 서버가 받은 뒤 끊겼더라도, 사용자가
-    // 에러를 보고 손으로 다시 누르는 것과 위험이 같다 — 자동 재시도가 새 위험을 더하지 않는다.
+    // ⚠️ **매 시도 headers·body 를 새로 만든다.** Headers 객체나 버퍼를 재시도에 재사용하면
+    // undici 가 2차 시도에서 `UND_ERR_INVALID_ARG` 로 던진다(사용자 2026-08-21: 채널규칙 POST 가
+    // 재시도 경로에서만 실패 · 첫 시도는 정상 · 외부 curl 로는 재현 안 됨). 시도 간 상태를 아예 안 남긴다.
+    //
+    // ⚠️ 재시도는 fetch 가 **던졌을 때만** — HTTP 4xx/5xx 는 서버가 실제 응답한 것이라 그대로
+    // 반환한다(409 게이트·400 검증이 두 번 돌면 안 된다). 던진 오류는 응답 전 실패라 요청이
+    // 서버에 안 닿았으므로 재시도가 안전하다.
     let lastErr: unknown;
     for (let attempt = 0; attempt < 3; attempt++) {
       if (attempt > 0) await new Promise((r) => setTimeout(r, attempt === 1 ? 120 : 400));
+      // 매 시도 fresh — 재사용 상태 0.
+      const headers = new Headers(request.headers);
+      headers.delete("host");
+      headers.delete("content-length"); // 본문을 버퍼로 다시 보내므로 원본 길이 헤더는 버린다.
+      headers.set("Authorization", token);
       try {
         const upstreamRes = await fetch(upstreamUrl, {
           method: request.method,
           headers,
-          // 매 시도마다 **새 사본** — 첫 시도에서 detach 돼도 재시도가 멀쩡한 버퍼를 쓴다.
-          body: hasBody ? new Uint8Array(rawBody!) : undefined,
+          body: hasBody ? new Uint8Array(rawBody!) : undefined, // 매 시도 새 사본
           redirect: "manual",
         });
 
