@@ -589,7 +589,7 @@ type UploadResult = { episode: { id: string }; media: unknown; recommendations: 
 
 // GCS resumable chunk size. MUST be a multiple of 256 KiB (GCS requirement); 16 MiB = 64×256 KiB.
 const RESUMABLE_CHUNK = 16 * 1024 * 1024;
-const CHUNK_RETRIES = 4;
+const CHUNK_RETRIES = 6;
 
 /**
  * Upload a (possibly multi-hour, multi-GB) master video.
@@ -822,6 +822,12 @@ async function uploadResumable(
         if (committed !== null && committed > offset) {
           offset = committed;
           if (offset >= total) return;
+        }
+        // 지수 백오프 — 즉시 재시도하면 대역폭 포화(4개 동시 GB 업로드) 순간에 재시도가 순식간에
+        // 소진돼 파일이 통째로 실패한다(사용자 2026-08-21 AENA 13GB 배치 중 "Failed to fetch").
+        // 재시도 사이를 벌려(0.6→1.2→2.4→4.8→8s) 혼잡이 풀릴 시간을 준다.
+        if (attempt < CHUNK_RETRIES - 1) {
+          await new Promise((r) => setTimeout(r, Math.min(8000, 600 * 2 ** attempt)));
         }
       }
     }
