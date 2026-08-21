@@ -21,8 +21,9 @@
         │  /api/* rewrite                │ OAuth
         ▼                                ▼
    ┌─────────────────────────────────────────┐
-   │  Cloud Run: stepd-server (하나뿐인 백엔드) │  Node/Hono
+   │  Cloud Run: stepd-server   Node/Hono      │
    │  API 서빙 + 잡 enqueue                     │
+   │  (렌더 export 만 stepd-render 서비스로 · §1-2)│
    └───────────────┬─────────────────────────┘
                    │ job_queue (INSERT)
                    ▼
@@ -70,6 +71,32 @@
 - Cloud SQL 연결: `--add-cloudsql-instances step-d:us-central1:stepd-db` (유닉스 소켓).
 - 빌드 설정 정본은 **루트 `cloudbuild.yaml`**(docker 빌드, `apps/server/Dockerfile`) — `deploy/cloud.sh server` 가 이걸 submit 한다. `apps/server/cloudbuild.yaml`(buildpacks 빌드)도 공존하지만 배포 경로에서 안 쓴다.
 - **자동배포 안 됨** — 두 cloudbuild.yaml 헤더의 "Triggered by GitHub push" 주석은 낡은 서술이고 GitHub 트리거는 없다. 실제 운영은 `deploy/cloud.sh server` 의 수동 `gcloud builds submit` 이 정본.
+
+### 1-2. 렌더 전용 서비스 — `stepd-render` (2026-08-21 신설)
+
+렌더(`POST /api/clips/:id/export` · ffmpeg 인코딩 + 자막 번인 + 리프레임)는 서버가 하는 **가장
+무거운 동기 작업**이다. 예전엔 메인 `stepd-server`(2vCPU · concurrency 10)에서 돌아, 동시 렌더가
+같은 인스턴스에서 2vCPU 를 나눠 써 **둘 다 기어갔다**(사용자 2026-08-21 "동시에 하면 다 느려").
+
+- **같은 이미지**(`stepd-server:latest`)로 뜬 **두 번째 Cloud Run 서비스.** 차이는 리소스뿐:
+  **concurrency=1** · **4vCPU/8Gi** · timeout 900s · min 0 · max 5 · cpu-boost.
+- concurrency=1 이라 Cloud Run 이 **렌더 하나당 인스턴스를 하나씩 서버리스로 팬아웃** → 동시
+  렌더가 서로 CPU 를 안 뺏고, 메인 API 서버는 렌더 부하에 안 눌린다. min 0 이라 **렌더 돌 때만 과금.**
+- **라우팅**: 웹 `apps/web/src/app/api/render-proxy/[[...path]]/route.ts` 가 **`clips/:id/export`
+  하나만** 이 서비스로 보낸다(그 외 경로는 404 — 하드닝). 프론트 `RENDER_BASE`(api.ts)가 export 만
+  이 프록시로 태운다. 나머지 API 는 전부 메인 `/api/proxy` 그대로.
+- **ID 토큰 오디언스**는 렌더 서비스 URL(`getIdToken(RENDER_RUN_URL)`) — 메인과 오디언스가 달라
+  토큰도 따로 발급한다(gcp-auth 오디언스별 캐시).
+- ⚠️ **invoker IAM 바인딩이 필요하다**(신규 서비스). 배포 SA(`stepd-deployer`)는 `setIamPolicy`
+  권한이 없어 **못 건다** — 관리자 계정으로 한 번:
+  ```
+  gcloud run services add-iam-policy-binding stepd-render --project=step-d --region=us-central1 \
+    --member=serviceAccount:stepd-deployer@step-d.iam.gserviceaccount.com --role=roles/run.invoker
+  ```
+  (메인 서버와 동일하게 `domain:stepai.kr` 도 추가 가능. 프록시 SA = `stepd-deployer` 가 핵심.)
+- 코드/이미지는 서버와 **한 몸**이다 — `cloudbuild.yaml` 이 서버 배포 스텝 뒤에서 `stepd-render`
+  도 같이 배포한다. 그래서 `cloud.sh server` 한 번이 둘 다 최신 코드로 맞춘다.
+- URL: `https://stepd-render-nsh6xfqyla-uc.a.run.app` (projectnumber 형도 라우팅됨).
 
 ### 2. 워커 — **Cloud Run Jobs** (2026-08-07 이전 완료)
 
@@ -258,6 +285,7 @@ Balanced PD   $0.100000/GiB·월    SQL RAM   $0.007000/GiB·시간
 | AR 이미지 13.8GB | ₩1,900 |
 | GCS (미디어 + 가중치 1.58GB) | ₩50 |
 | Cloud Run `stepd-server` (min-instances=**0** · 콜드스타트 허용) | ₩0 (유휴 과금 없음) |
+| Cloud Run `stepd-render` (min-instances=**0** · 렌더 돌 때만) | ₩0 (유휴 과금 없음 · 렌더 시간만 사용량 과금) |
 | Cloud Scheduler 2개 (3개까지 무료) | ₩0 |
 | **소계** | **≈ ₩86,500** |
 
