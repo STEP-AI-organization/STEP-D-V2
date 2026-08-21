@@ -28,8 +28,9 @@ import { cn } from "@/lib/utils";
  */
 function captionStyleClasses(style: CaptionStyle): { cls: string; style: CSSProperties } {
   // fontSize in cqh = % of stage height, matching the render's capFs (H*0.042) with the same
-  // per-style multipliers as captionAssStyle() on the server. 새 스타일은 서버 미러 미완 —
-  // 프리뷰 전용(현행 렌더는 korean_pop/clean/news로 폴백). 서버 확장은 별건.
+  // per-style multipliers as captionAssStyle() on the server. 아래 스타일 전부 **서버 렌더도
+  // 대응한다**(index.ts::captionAssStyle 이 같은 case 로 ASS 스타일을 굽는다) — 프리뷰 전용 아님.
+  // 여기 CSS 를 바꾸면 서버 captionAssStyle 도 같이 맞춰야 결과물이 미리보기와 안 어긋난다.
   switch (style) {
     case "news":
       return { cls: "rounded bg-black/70 px-2 py-0.5 font-bold", style: { color: "#fff", fontSize: "4.2cqh" } };
@@ -46,7 +47,20 @@ function captionStyleClasses(style: CaptionStyle): { cls: string; style: CSSProp
     case "shadow_soft":
       return { cls: "px-1 font-medium", style: { color: "#fff", textShadow: "0 2px 12px rgba(0,0,0,.5)", fontSize: "3.9cqh" } };
     case "highlight_bar":
-      return { cls: "px-1.5 font-bold", style: { color: "#111", background: "linear-gradient(180deg, transparent 55%, #FFE066 55%)", fontSize: "4.1cqh" } };
+      // 형광펜 — **꽉 찬 노란 박스 + 검정 글자.** 서버 렌더(index.ts:highlight_bar)가 BorderStyle=3
+      // (불투명 노란 박스 #FFE066)로 굽는 것과 1:1 로 맞춘다. 예전엔 프리뷰만 그라디언트(아래 45%만
+      // 노랑)라, 검은 레터박스 영역에선 글자 위쪽이 배경에 묻혀 파편처럼 깨졌다(사용자 2026-08-21).
+      // box-decoration-break: 두 줄로 접혀도 각 줄이 제 박스를 갖게 한다.
+      return {
+        cls: "px-1.5 font-bold",
+        style: {
+          color: "#111",
+          background: "#FFE066",
+          boxDecorationBreak: "clone",
+          WebkitBoxDecorationBreak: "clone",
+          fontSize: "4.1cqh",
+        },
+      };
     case "typewriter":
       return { cls: "bg-black px-2 py-0.5 font-bold tracking-wide", style: { color: "#fff", fontFamily: "ui-monospace, monospace", fontSize: "3.8cqh" } };
     case "korean_pop":
