@@ -61,8 +61,9 @@
 - **비공개(IAM)** — invoker 바인딩은 `domain:stepai.kr` + `serviceAccount:stepd-deployer@step-d.iam.gserviceaccount.com` 둘뿐, `allUsers` 없음. 직접 URL 익명 접근은 403 (2026-07-16 실측).
   프론트는 Vercel rewrite로 **ID 토큰 프록시** 경유(`apps/web/next.config.ts` → `apps/web/src/app/api/proxy/[[...path]]/route.ts`) — 그래서 `stepd.stepai.kr/api/*`는 익명 200이다(공개면은 Vercel 웹뿐).
 - ⚠️ 함정: 루트 `cloudbuild.yaml:37`과 `apps/server/cloudbuild.yaml:26` 둘 다 `--allow-unauthenticated` 플래그가 남아 있다. 현재는 배포 SA에 IAM 변경 권한이 없어 경고 후 무시되는 것으로 추정 — IAM에 반영되지 않아 실효 없음(실측). 단 권한이 생기는 순간 **매 배포가 서비스를 공개로 뒤집는다** → 플래그 제거 권장.
-- 리소스: cpu 2 / mem 4Gi / timeout 600s / concurrency 10 / **min 1** / max 5 · cpu-boost (cloudbuild.yaml).
-  ⚠️ min-instances=1(상시 웜)이라 **유휴 과금이 있다** — 비용표 참조. 예전 "min 0" 서술은 틀렸다.
+- 리소스: cpu 2 / mem 4Gi / timeout 600s / concurrency 10 / **min 0** / max 5 · cpu-boost (cloudbuild.yaml).
+  2026-08-21: min-instances 1 → **0** 으로 내려 유휴 과금을 없앴다(월 ~₩36~55k 절약). 콜드스타트는
+  첫 요청만 몇 초 느려질 뿐 — 프록시 재시도(2026-08-21)가 연결 오류는 흡수한다. 라이트 워크로드 판단.
 - 서비스계정: `stepd-deployer@step-d.iam.gserviceaccount.com`.
 - env/시크릿(cloudbuild.yaml `--set-secrets`): `DATABASE_URL`=stepd-db-url, `GOOGLE_CLIENT_ID/SECRET`,
   `JWT_SECRET`, `PUBLIC_URL`=stepd-public-url. 평문 env: `NODE_ENV`, `GCS_BUCKET`=stepd-media.
@@ -256,17 +257,13 @@ Balanced PD   $0.100000/GiB·월    SQL RAM   $0.007000/GiB·시간
 | GEBD VM 부팅디스크 100GB pd-balanced (정지 중에도 과금) | ₩13,800 |
 | AR 이미지 13.8GB | ₩1,900 |
 | GCS (미디어 + 가중치 1.58GB) | ₩50 |
-| Cloud Run `stepd-server` (min-instances=**1** · 2vCPU·4Gi 상시 웜) | ⚠️ ~₩36,000~55,000 추정 · 청구서 확인 |
+| Cloud Run `stepd-server` (min-instances=**0** · 콜드스타트 허용) | ₩0 (유휴 과금 없음) |
 | Cloud Scheduler 2개 (3개까지 무료) | ₩0 |
-| **소계 (확정분)** | **≈ ₩86,500** |
-| **소계 (+ Cloud Run min=1 유휴 추정)** | **≈ ₩122,000 ~ 141,000** |
+| **소계** | **≈ ₩86,500** |
 
-> ⚠️ **min-instances=1 은 이번 변경과 무관하게 원래 그랬다** — `cloudbuild.yaml:67` 이 `--min-instances=1`
-> 이고(콜드스타트 방지 · 상시 웜), 이 문서가 예전에 "min 0 → ₩0" 으로 **잘못 적어 누락**했던 것이다.
-> 2vCPU·4Gi 상시 인스턴스의 유휴 과금은 Cloud Run 요금제(유휴 CPU·메모리)로 대략 월 ₩36,000~55,000
-> 로 **추정**되나, 정확한 값은 **Billing 콘솔/`gcloud run services describe` 로 확인**해야 한다
-> (권한 있는 계정 필요). 비싸면 min-instances=0 + 프록시 재시도(2026-08-21)로 콜드스타트를 흡수하는
-> 선택지도 있다.
+> 2026-08-21: min-instances **1 → 0** 으로 내려 유휴 과금(추정 월 ₩36~55k)을 없앴다. 첫 요청
+> 콜드스타트(몇 초)만 감수 — 프록시 재시도(2026-08-21)가 연결 오류는 흡수한다. 다시 상시 웜이
+> 필요하면 `cloudbuild.yaml` 의 `--min-instances` 를 1 로.
 
 ### 사용량비
 
@@ -282,16 +279,15 @@ Balanced PD   $0.100000/GiB·월    SQL RAM   $0.007000/GiB·시간
 
 ### 월 총액
 
-아래는 **확정 고정비(≈₩86,500)** 기준 — Cloud Run min=1 유휴 추정(₩36,000~55,000)은 별도 가산.
-
-| 회차/월 | 합계(확정분) | + min=1 유휴 추정 |
-|---|---|---|
-| **12건** | **≈ ₩99,200** | ≈ ₩135,000 ~ 154,000 |
-| 30건 | ≈ ₩113,100 | ≈ ₩149,000 ~ 168,000 |
-| 100건 | ≈ ₩167,200 | ≈ ₩203,000 ~ 222,000 |
+| 회차/월 | 합계 |
+|---|---|
+| **12건** | **≈ ₩99,200** |
+| 30건 | ≈ ₩113,100 |
+| 100건 | ≈ ₩167,200 |
 
 > 2026-08-21 Cloud SQL 승급(db-custom-1-4096 + 백업/PITR)으로 고정비가 **≈₩51,000 → ≈₩86,500**
-> (+₩35,500) 올랐다. 회차당 사용량비(~₩774)는 그대로 — DB 는 사용량비에 크게 안 잡힌다.
+> (+₩35,500) 올랐고, 같은 날 Cloud Run min-instances 1→0 으로 내려 유휴 과금은 없앴다.
+> 회차당 사용량비(~₩774)는 그대로 — DB 는 사용량비에 크게 안 잡힌다.
 
 > **GPU 는 거의 안 켜서 싸다.** 상시 가동이면 GEBD VM 만 월 $533(₩735,000)이다 —
 > 유휴 자동 종료가 245배를 가른다. 그래서 `--max-run-duration` 하드 안전장치를 같이 건다.
@@ -311,7 +307,8 @@ Balanced PD   $0.100000/GiB·월    SQL RAM   $0.007000/GiB·시간
   → 전용코어(SLA 있음). 월 **$25.55 → $50.59** (+₩34,500).
 - **자동 백업 ON**(꺼져 있던 걸 켬 · 7개 보관) + **PITR ON**(WAL 7일). 백업/WAL 추가비 월 ₩1,000 미만 추정.
 - 고정비 ≈ **₩51,000 → ₩86,500**(확정분). 상향 트리거: CPU 지속 50% 초과 시 db-custom-2-8192.
-- 문서 정정: PostgreSQL **15**(16 아님) · 서버 **min-instances=1**(min 0 서술 오류 · 유휴 과금 존재).
+- 서버 **min-instances 1 → 0** — 유휴 과금(추정 월 ₩36~55k) 제거. 콜드스타트는 프록시 재시도로 흡수.
+- 문서 정정: PostgreSQL **15**(16 아님).
 - 규모 전제: 2~3개사·가벼운 부하. 그 이상이면 워커 즉시트리거·병렬 + 테넌트 가드레일 검토(미착수).
 
 ### 2026-08-07 — 워커 클라우드 이전 + GEBD GPU
