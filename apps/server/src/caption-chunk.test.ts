@@ -117,12 +117,25 @@ describe("chunkCaption — 시간 분배", () => {
     assert.equal(out[0].end, 2.0, "부호 때문에 글자수가 어긋나 비례배분으로 떨어졌다");
   });
 
-  it("짧게 나뉜 조각은 이웃에 병합한다 (최소 노출 보장)", () => {
+  it("짧게 나뉜 조각은 이웃에 병합한다 — 단 한 줄 예산 안에서만 (최소 노출 보장)", () => {
     // 1.2초짜리 발화를 2조각으로 나누면 각 0.6초 — 최소(0.7초) 미달이라 도로 하나가 된다.
-    const out = chunkCaption({ start: 0, end: 1.2, text: "가나다라마바사 아자차카타파하" }, 8);
+    // **병합 결과가 한 줄에 들어갈 때만** 합친다.
+    const out = chunkCaption({ start: 0, end: 1.2, text: "가나다 라마바" }, 6);
     assert.equal(out.length, 1);
-    assert.equal(out[0].text, "가나다라마바사 아자차카타파하");
+    assert.equal(out[0].text, "가나다 라마바");
     assert.ok(out[0].end - out[0].start >= CAPTION_CHUNK_MIN_SEC);
+  });
+
+  it("한 줄 예산을 넘기면 병합하지 않는다 — 짧은 구간도 여러 줄로 뭉치지 않는다 (사용자 2026-08-21)", () => {
+    // 트림인을 걸친 자막: 2.5초 문장이 클립엔 0.4초만 들어오면 예전엔 최소노출 병합이 전부
+    // 뭉쳐 한 덩어리(렌더가 \q1 로 3줄)로 구웠다. 이제는 예산 초과 병합을 막아 **어떤 조각도
+    // 한 줄(max+4)을 넘지 않는다** — 사용자의 "항상 1줄" 이 최소노출보다 우선.
+    const out = chunkCaption({ start: 0, end: 0.4, text: "한 달여 줄다리기 끝에 노사가 다시 손을 잡았습니다" }, CAPTION_CHUNK_MAX_CHARS);
+    const budget = CAPTION_CHUNK_MAX_CHARS + 4;
+    assert.ok(out.length >= 2, "전부 한 덩어리로 뭉쳤다 — 여러 줄이 된다");
+    for (const c of out) {
+      assert.ok([...c.text].length <= budget, `조각이 한 줄 예산 초과(${[...c.text].length}): "${c.text}"`);
+    }
   });
 
   it("빈 텍스트·역전 구간은 아무 것도 만들지 않는다", () => {

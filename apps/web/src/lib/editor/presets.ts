@@ -302,17 +302,22 @@ export function chunkCaption(
     t = end;
   });
 
+  // ⚠️ 짧은 조각을 병합하되 **한 줄 예산을 넘기면서까지 병합하지 않는다**(서버 caption-chunk.ts
+  //    미러). 넘겨 병합하면 다시 여러 줄이 되어 "항상 1줄" 이 깨진다. 예산은 split 꼬리병합과 같은 max+4.
+  const lineBudget = Math.max(6, Math.floor(maxChars)) + 4;
+  const fits = (a: string, b: string) => [...`${a} ${b}`].length <= lineBudget;
   const merged: CaptionChunk[] = [];
   for (const c of split) {
     const prev = merged[merged.length - 1];
-    if (prev && c.end - c.start < CAPTION_CHUNK_MIN_SEC) {
+    if (prev && c.end - c.start < CAPTION_CHUNK_MIN_SEC && fits(prev.text, c.text)) {
       prev.end = c.end;
       prev.text = `${prev.text} ${c.text}`;
       continue;
     }
     merged.push({ ...c });
   }
-  if (merged.length >= 2 && merged[0].end - merged[0].start < CAPTION_CHUNK_MIN_SEC) {
+  if (merged.length >= 2 && merged[0].end - merged[0].start < CAPTION_CHUNK_MIN_SEC
+      && fits(merged[0].text, merged[1].text)) {
     const [a, b] = merged;
     merged.splice(0, 2, { start: a.start, end: b.end, text: `${a.text} ${b.text}` });
   }

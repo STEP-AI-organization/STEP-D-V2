@@ -135,10 +135,15 @@ export function chunkCaption(cap: Caption, maxChars: number): Caption[] {
   });
 
   // 너무 짧은 조각은 앞 조각에 병합(첫 조각은 앞이 없으니 뒤 조각에 병합).
+  // ⚠️ 단 **한 줄 예산을 넘기면서까지 병합하지 않는다.** 넘겨 병합하면 다시 여러 줄이 되어
+  //    "항상 1줄" 이 깨진다(사용자 2026-08-21: 트림인 걸친 첫 자막이 0.4초에 24자로 뭉쳐 렌더가
+  //    3줄로 구웠다). 짧은 깜빡임이 3줄 덩어리보다 낫다. 예산은 split 의 꼬리병합과 같은 max+4.
+  const lineBudget = Math.max(6, Math.floor(maxChars)) + 4;
+  const fits = (a: string, b: string) => [...`${a} ${b}`].length <= lineBudget;
   const merged: Caption[] = [];
   for (const c of split) {
     const prev = merged[merged.length - 1];
-    if (prev && c.end - c.start < CAPTION_CHUNK_MIN_SEC) {
+    if (prev && c.end - c.start < CAPTION_CHUNK_MIN_SEC && fits(prev.text, c.text)) {
       prev.end = c.end;
       prev.text = `${prev.text} ${c.text}`;
       if (prev.words && c.words) prev.words = [...prev.words, ...c.words];
@@ -147,7 +152,8 @@ export function chunkCaption(cap: Caption, maxChars: number): Caption[] {
     }
     merged.push({ ...c });
   }
-  if (merged.length >= 2 && merged[0].end - merged[0].start < CAPTION_CHUNK_MIN_SEC) {
+  if (merged.length >= 2 && merged[0].end - merged[0].start < CAPTION_CHUNK_MIN_SEC
+      && fits(merged[0].text, merged[1].text)) {
     const [a, b] = merged;
     const head: Caption = { start: a.start, end: b.end, text: `${a.text} ${b.text}` };
     if (a.words && b.words) head.words = [...a.words, ...b.words];

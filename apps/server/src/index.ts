@@ -4277,7 +4277,25 @@ function windowCaptions(transcript: unknown, winStart: number, winEnd: number): 
     const rs = Math.max(0, st - winStart);
     const re = Math.min(dur, en - winStart);
     if (re <= rs + 0.05) continue;
-    const cap: Caption = { start: rs, end: re, text };
+    // 세그먼트가 윈도 경계를 걸치면 **텍스트도 노출 구간에 맞춰 자른다.** 시간(rs·re)만 자르고
+    // 전체 문장을 남기면(옛 동작), 2.5초 문장이 클립엔 0.4초만 들어와도 자막은 24자 통짜라
+    // chunkCaption 의 최소노출 병합에 뭉쳐 렌더가 3줄로 구웠다(사용자 2026-08-21 · 첫 프레임).
+    // words 는 이미 아래에서 윈도로 잘리는데 text 만 안 잘린 게 원인. 발화 속도가 대체로 고르므로
+    // 앞/뒤에서 잘려 나간 시간 비율만큼 어절 토큰을 버린다(공백 경계라 한글 깨짐 없이 안전).
+    let capText = text;
+    const segDur = en - st;
+    if (segDur > 0.05 && (st < winStart - 0.05 || en > winEnd + 0.05)) {
+      const toks = text.split(/\s+/).filter(Boolean);
+      if (toks.length > 1) {
+        const headCut = Math.max(0, winStart - st) / segDur;   // 앞에서 잘린 비율
+        const tailCut = Math.max(0, en - winEnd) / segDur;     // 뒤에서 잘린 비율
+        const from = Math.floor(toks.length * headCut);
+        const to = Math.ceil(toks.length * (1 - tailCut));
+        const kept = toks.slice(from, Math.max(from + 1, to));
+        if (kept.length) capText = kept.join(" ");
+      }
+    }
+    const cap: Caption = { start: rs, end: re, text: capText };
     // Word timings (whisper path) → rebase into the window for \k karaoke. Gemini has none.
     const raw = (s as any)?.words;
     if (Array.isArray(raw) && raw.length) {
