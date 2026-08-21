@@ -7518,6 +7518,10 @@ app.post("/api/clips/:id/generate-metadata", async (c) => {
     }
   }
 
+  // 쇼츠(9:16)면 해시태그·태그를 넓게(핵심+인접 확장) 뽑고 제목·설명에 #Shorts 를 보장한다
+  // — 유튜브 추천 유입축(사용자 2026-08-21). aspectRatio 없으면 쇼츠로 본다(자동배포 기본 산출물).
+  const isShortClip = String(clip.aspectRatio ?? "9:16").startsWith("9:16");
+
   const prompt = buildMetadataPrompt({
     program: program?.title ?? clip.programTitle,
     episode: episode?.title ?? (episode?.episodeNumber ? `${episode.episodeNumber}화` : undefined),
@@ -7532,6 +7536,7 @@ app.post("/api/clips/:id/generate-metadata", async (c) => {
     durationSec: end > start ? end - start : clip.durationSec,
     // 프로그램별 운영자 커스텀 제목 지시 — PATCH /api/programs/:id 로 저장된 것.
     titlePrompt: typeof program?.titlePrompt === "string" ? program.titlePrompt : undefined,
+    isShort: isShortClip,
   });
 
   try {
@@ -7564,9 +7569,7 @@ app.post("/api/clips/:id/generate-metadata", async (c) => {
       program: program?.title ?? clip.programTitle,
       episode: episode?.title ?? (episode?.episodeNumber ? `${episode.episodeNumber}화` : undefined),
     };
-    // 쇼츠(9:16)면 제목·설명에 #Shorts 를 보장한다(clip-metadata SHORTS_TAG). aspectRatio 가
-    // 없으면 쇼츠로 본다 — 자동배포 기본 산출물이 쇼츠라 안전한 기본값이다.
-    const isShortClip = String(clip.aspectRatio ?? "9:16").startsWith("9:16");
+    // isShortClip(위에서 계산)이 제목·설명 #Shorts 보장에도 쓰인다(clip-metadata SHORTS_TAG).
     const byChannel: Record<string, unknown> = {};
     for (const ch of META_CHANNELS) {
       const rule = rules.find((r: any) => r.platform === ch && r.enabled !== false);

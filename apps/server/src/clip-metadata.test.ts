@@ -243,6 +243,28 @@ describe("프롬프트 조립", () => {
     assert.doesNotMatch(p, /\n\n\n/, "빈 블록이 그대로 이어져 개행이 3개 이상 생겼다");
   });
 
+  it("쇼츠는 해시태그를 넓게(핵심+인접 확장) 뽑되, 사실 날조는 본문에만 적용된다고 카브아웃한다", () => {
+    // 유튜브 쇼츠는 메타·스크립트 임베딩이 추천 1차 신호 — 같은 주제군 인접 태그를 넓게 단다.
+    const p = buildMetadataPrompt({ program: "직설", genre: "공통", isShort: true });
+    assert.match(p, /15~25개/, "쇼츠인데 해시태그를 넓게 뽑으라고 하지 않았다");
+    assert.match(p, /확장 태그/, "인접 확장 태그 개념이 없다");
+    // 해시태그는 분류 신호 — 제목·설명 본문의 날조 금지와 충돌하면 안 된다.
+    assert.match(p, /검색·추천 분류 신호/, "해시태그 카브아웃(사실 서술 아님)이 없다");
+    // 그렇다고 무관한 인기 키워드까지 허용하면 안 된다.
+    assert.match(p, /전혀 무관한/, "같은 주제군으로 제한하는 문구가 없다");
+  });
+
+  it("16:9 클립은 해시태그를 좁게(5~8개) 유지한다 — 롱폼 추천은 다른 축이다", () => {
+    const p = buildMetadataPrompt({ program: "직설", isShort: false });
+    assert.match(p, /5~8개/, "클립인데 해시태그를 좁게 두지 않았다");
+    assert.doesNotMatch(p, /15~25개/, "클립에 쇼츠용 확장 규칙이 새 들어갔다");
+  });
+
+  it("isShort 미지정이면 쇼츠로 본다 — 자동배포 기본 산출물이 쇼츠", () => {
+    const p = buildMetadataPrompt({ program: "직설" });
+    assert.match(p, /15~25개/, "기본값이 쇼츠(넓게)가 아니다");
+  });
+
   it("titlePrompt(프로그램별 운영자 지시)가 실리고, 없으면 블록 자체가 빠진다", () => {
     const withPrompt = buildMetadataPrompt({ program: "전참시", titlePrompt: "출연자 실명 필수" });
     assert.match(withPrompt, /## 프로그램별 운영자 지시/);
