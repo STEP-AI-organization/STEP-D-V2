@@ -89,6 +89,50 @@ steps:
           --add-cloudsql-instances=$_CLOUD_SQL_INSTANCE \
           --service-account=stepd-deployer@$PROJECT_ID.iam.gserviceaccount.com
 
+  # ── 렌더 전용 서비스 stepd-render ─────────────────────────────────────────────
+  # 같은 이미지·같은 env/secrets 로 두 번째 Cloud Run 서비스를 띄운다. 차이는 **동시성=1**
+  # (렌더 하나당 인스턴스 하나 → 동시 렌더가 서로 CPU 를 안 뺏음 · 서버리스로 인스턴스가 렌더
+  # 수만큼 자동 팬아웃) + 4vCPU/8Gi(무거운 ffmpeg 인코딩) + timeout 900s(긴 클립). min=0 이라
+  # 렌더 돌 때만 과금. 웹의 /api/render-proxy 가 clips/:id/export 만 여기로 보낸다(index 서버는
+  # 안 건드림). env 를 서버와 동일하게 둬 같은 이미지가 동일하게 뜨는 걸 보장한다.
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        gcloud run deploy stepd-render \
+          --image=us-central1-docker.pkg.dev/$PROJECT_ID/stepd-server/stepd-server:latest \
+          --region=$_REGION \
+          --allow-unauthenticated \
+          --cpu=4 \
+          --memory=8Gi \
+          --timeout=900 \
+          --concurrency=1 \
+          --min-instances=0 \
+          --cpu-boost \
+          --max-instances=5 \
+          --set-env-vars=NODE_ENV=production,GCS_BUCKET=$_GCS_BUCKET,FACTORY_ENABLED=1,CREDIT_PRICE_KRW=$_CREDIT_PRICE_KRW,AUTH_REQUIRED=$_AUTH_REQUIRED,NAVER_UPLOAD_ENABLED=1,YOUTUBE_UPLOAD_ENABLED=1,TIKTOK_UPLOAD_ENABLED=1,INSTAGRAM_UPLOAD_ENABLED=1,FACEBOOK_UPLOAD_ENABLED=1,INVOICE_ISSUER_NAME=$_INVOICE_ISSUER_NAME,INVOICE_ISSUER_BIZNO=$_INVOICE_ISSUER_BIZNO,INVOICE_ISSUER_ADDRESS=$_INVOICE_ISSUER_ADDRESS,INVOICE_ISSUER_CONTACT=$_INVOICE_ISSUER_CONTACT \
+          --set-secrets=DATABASE_URL=stepd-db-url:latest \
+          --set-secrets=GOOGLE_CLIENT_ID=stepd-google-client-id:latest \
+          --set-secrets=GOOGLE_CLIENT_SECRET=stepd-google-client-secret:latest \
+          --set-secrets=JWT_SECRET=stepd-jwt-secret:latest \
+          --set-secrets=PUBLIC_URL=stepd-public-url:latest \
+          --set-secrets=INTERNAL_API_TOKEN=stepd-factory-api-key:latest \
+          --set-secrets=TIKTOK_CLIENT_KEY=stepd-tiktok-client-key:latest \
+          --set-secrets=TIKTOK_CLIENT_SECRET=stepd-tiktok-client-secret:latest \
+          --set-secrets=META_APP_ID=stepd-meta-app-id:latest \
+          --set-secrets=META_APP_SECRET=stepd-meta-app-secret:latest \
+          --set-secrets=INSTAGRAM_APP_ID=stepd-instagram-app-id:latest \
+          --set-secrets=INSTAGRAM_APP_SECRET=stepd-instagram-app-secret:latest \
+          --set-secrets=PORTONE_API_SECRET=stepd-portone-api-secret:latest \
+          --set-secrets=PORTONE_STORE_ID=stepd-portone-store-id:latest \
+          --set-secrets=PORTONE_CHANNEL_KEY=stepd-portone-channel-key:latest \
+          --set-secrets=PORTONE_BILLING_CHANNEL_KEY=stepd-portone-billing-channel-key:latest \
+          --set-secrets=PORTONE_WEBHOOK_SECRET=stepd-portone-webhook-secret:latest \
+          --set-secrets=NAVER_SESSION_KEY=stepd-naver-session-key:latest \
+          --add-cloudsql-instances=$_CLOUD_SQL_INSTANCE \
+          --service-account=stepd-deployer@$PROJECT_ID.iam.gserviceaccount.com
+
 options:
   machineType: E2_HIGHCPU_8
   logging: CLOUD_LOGGING_ONLY

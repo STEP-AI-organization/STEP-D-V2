@@ -10,6 +10,16 @@ import type { EditorState } from "@/lib/editor/presets";
 export const API_BASE =
   process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "") || "/api";
 
+/**
+ * 렌더(clips/:id/export) 전용 베이스 — **stepd-render** 서비스로 가는 프록시(/api/render-proxy).
+ * 렌더는 서버가 하는 가장 무거운 작업이라 동시 렌더가 메인 서버 CPU 를 뺏지 않게 전용 서비스
+ * (concurrency=1·4vCPU)로 뺐다(사용자 2026-08-21). 프로덕션(프록시 경유)에서만 갈라지고,
+ * 로컬 직결(NEXT_PUBLIC_API_URL 없음)이면 메인과 동일 — 로컬엔 렌더 서비스가 없다.
+ */
+export const RENDER_BASE =
+  process.env.NEXT_PUBLIC_RENDER_URL?.replace(/\/$/, "")
+  || (process.env.NEXT_PUBLIC_API_URL ? API_BASE.replace("/proxy/", "/render-proxy/") : API_BASE);
+
 /** Absolute URL for a server-relative media path (stream/thumb). */
 export function mediaUrl(relative: string | null | undefined): string | undefined {
   if (!relative) return undefined;
@@ -1771,8 +1781,9 @@ export async function exportClip(
   /** 첫 3초 hook 프리롤이 이 렌더에 적용됐는지 ("첫 3초 훅" 토글 ON + hookTimeSec 존재). */
   hookPreroll?: boolean;
 }> {
+  // 렌더는 전용 서비스(stepd-render)로 — 메인 API 서버 CPU 를 안 뺏게(RENDER_BASE).
   return json(
-    await fetch(`${API_BASE}/clips/${clipId}/export`, {
+    await fetch(`${RENDER_BASE}/clips/${clipId}/export`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ channel: channel ?? "" }),
