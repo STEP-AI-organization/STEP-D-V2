@@ -182,6 +182,8 @@ import {
   saveContentAnalysis,
   getContentAnalysis,
   listContentAnalysisSummary,
+  recordMetadataEdits,
+  listMetadataEdits,
   listEntities,
   getTranscript,
   deleteMediaData,
@@ -7500,6 +7502,41 @@ app.patch("/api/clips/:id/metadata/:channel", async (c) => {
     ...clip,
     channelMeta: { ...(clip.channelMeta ?? {}), [channel]: next },
   });
+
+  // 학습 데이터 — **AI 원본 → 사용자 최종** 을 저장 시점마다 남긴다(사용자 2026-08-21: "나중에
+  // 학습할 때 필요한 데이터"). best-effort: 기록이 깨져도 저장은 성공시킨다(핵심은 사용자 저장).
+  try {
+    const prev = (clip.channelMeta?.[channel] ?? null) as any;   // 이번 저장 직전 값 = 사용자가 본 것
+    const base = (clip.channelMetaBase ?? null) as any;          // 폴백: 채널무관 AI 바탕
+    const wasAi = !prev?.edited;   // 이 채널이 이전에 수정 안 됨 → prev 가 AI 값 그대로(순수 페어)
+    // program/genre 맥락 — 회사·장르별 취향 분리에 쓴다. 없어도 페어는 남긴다(best-effort).
+    let programId: string | null = null, genre: string | null = null;
+    try {
+      const ep = clip.episodeId ? await getEntity<any>("episode", clip.episodeId) : null;
+      const prog = ep?.programId ? await getEntity<any>("program", ep.programId) : null;
+      programId = prog?.id ?? null;
+      genre = prog?.pipelineGenre ?? prog?.section ?? null;
+    } catch { /* 맥락 조회 실패는 무시 */ }
+    const editor = c.get("user")?.email ?? null;
+    const now = Date.now();
+    const fieldsOf = (m: any) => ({
+      title: m?.title == null ? "" : String(m.title),
+      description: m?.description == null ? "" : String(m.description),
+      tags: Array.isArray(m?.tags) ? m.tags.join(", ") : "",
+    });
+    const before = fieldsOf(prev ?? base);
+    const after = fieldsOf(next);
+    const edits = (["title", "description", "tags"] as const)
+      .filter((f) => after[f] && after[f] !== before[f])   // 실제로 바뀐 필드만
+      .map((f) => ({
+        clipId, programId, genre, channel, field: f,
+        aiOriginal: before[f], userFinal: after[f], wasAi, editor, createdAt: now,
+      }));
+    if (edits.length) await recordMetadataEdits(edits);
+  } catch (e) {
+    console.warn("[metadata-edit-log] 기록 실패(저장은 성공):", e instanceof Error ? e.message : e);
+  }
+
   return c.json({ channel, meta: next });
 });
 
@@ -10075,6 +10112,21 @@ app.get("/api/admin/jobs", async (c) => {
   const limit = Number(c.req.query("limit")) || 100;
   const [jobs, stats] = await runAsSystem(() => Promise.all([listJobs(limit), queueStats()]));
   return c.json({ jobs, stats });
+});
+
+/**
+ * 메타데이터 수정 로그 내보내기 — **AI 원본 → 사용자 최종**(워크스페이스별 학습 데이터 · 사용자 2026-08-21).
+ * ops 전용. 기본 JSONL(학습 파이프라인에 바로 먹임) · `?format=json` 이면 배열 · `?tenant=`·`?limit=`.
+ * `was_ai=true` 만 필터하면 "AI 가 뽑은 값 → 사람이 고친 값" 순수 페어다(재수정분 제외).
+ */
+app.get("/api/admin/metadata-edits", async (c) => {
+  requireOpsAccess(c);
+  const tenantId = c.req.query("tenant") || undefined;
+  const limit = Number(c.req.query("limit")) || 5000;
+  const rows = await runAsSystem(() => listMetadataEdits({ tenantId, limit }));
+  if (c.req.query("format") === "json") return c.json({ rows });
+  const body = rows.map((r) => JSON.stringify(r)).join("\n") + (rows.length ? "\n" : "");
+  return c.body(body, 200, { "Content-Type": "application/x-ndjson; charset=utf-8" });
 });
 
 /**

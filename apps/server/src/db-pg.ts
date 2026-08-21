@@ -458,6 +458,29 @@ async function migrate(): Promise<void> {
     );
   `);
 
+  // 메타데이터 수정 로그 — **AI 원본 → 사용자 최종** 을 저장 시점마다 한 줄씩 남긴다(덮어쓰기 X).
+  // 워크스페이스별 취향 학습 데이터(사용자 2026-08-21: "나중에 학습할 때 필요한 데이터").
+  // tenant_id 는 tenant 컨텍스트에서 DEFAULT 로 자동 채움(다른 런타임 테이블과 같은 패턴).
+  // RLS 정책은 두지 않는다(content_analysis 와 같은 결) — 조회는 ops 가 runAsSystem 으로,
+  // 기록은 tenant 컨텍스트의 INSERT 라 tenant_id 가 자동으로 붙는다.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS metadata_edit_log (
+      id          BIGSERIAL PRIMARY KEY,
+      tenant_id   TEXT DEFAULT current_setting('app.tenant_id', true),
+      clip_id     TEXT NOT NULL,
+      program_id  TEXT,
+      genre       TEXT,
+      channel     TEXT NOT NULL,
+      field       TEXT NOT NULL,
+      ai_original TEXT,
+      user_final  TEXT,
+      was_ai      BOOLEAN NOT NULL DEFAULT TRUE,
+      editor      TEXT,
+      created_at  BIGINT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_metadata_edit_log_tenant ON metadata_edit_log (tenant_id, created_at DESC);
+  `);
+
   // 연동 계정 4종의 유일성은 **테넌트 포함**이어야 한다.
   //
   // 전역 UNIQUE 로 두면 워크스페이스 A 가 이미 연결한 채널을 B 가 연결할 때, B 에게는 RLS 로
@@ -530,6 +553,57 @@ async function seedIfEmptyInner(): Promise<void> {
     `INSERT INTO kv (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = excluded.value`,
     ["connections", JSON.stringify(seed.connections)],
   );
+}
+
+// ── 메타데이터 수정 로그 (AI 원본 → 사용자 최종 · 워크스페이스별 학습 데이터) ──────
+
+export type MetadataEditRow = {
+  clipId: string;
+  programId?: string | null;
+  genre?: string | null;
+  channel: string;
+  /** 'title' | 'description' | 'tags' */
+  field: string;
+  aiOriginal: string;
+  userFinal: string;
+  /** ai_original 이 AI 가 뽑은 값 그대로였나(그 채널이 이전에 수정 안 됨). false 면 직전 사용자 값. */
+  wasAi: boolean;
+  editor?: string | null;
+  createdAt: number;
+};
+
+/** 수정 페어를 append 한다. tenant_id 는 DEFAULT 로 자동 — **호출부가 tenant 컨텍스트여야** 한다. */
+export async function recordMetadataEdits(rows: MetadataEditRow[]): Promise<void> {
+  for (const r of rows) {
+    await pool.query(
+      `INSERT INTO metadata_edit_log
+         (clip_id, program_id, genre, channel, field, ai_original, user_final, was_ai, editor, created_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+      [r.clipId, r.programId ?? null, r.genre ?? null, r.channel, r.field,
+       r.aiOriginal, r.userFinal, r.wasAi, r.editor ?? null, r.createdAt],
+    );
+  }
+}
+
+/**
+ * 학습용 조회 — ops 가 `runAsSystem` 으로 전 워크스페이스를 읽거나 tenant 로 필터. 최신순.
+ * 이 테이블엔 RLS 정책이 없어(content_analysis 와 같은 결) 스코프와 무관하게 전 행을 읽는다 —
+ * 그래서 조회 라우트는 **ops 인가 뒤**에만 두고, 워크스페이스 필터는 여기서 명시적으로 건다.
+ */
+export async function listMetadataEdits(opts: { tenantId?: string; limit?: number } = {}): Promise<Array<Record<string, unknown>>> {
+  const limit = Math.min(Math.max(1, opts.limit ?? 1000), 50000);
+  const params: unknown[] = [];
+  let where = "";
+  if (opts.tenantId) { params.push(opts.tenantId); where = "WHERE tenant_id = $1"; }
+  params.push(limit);
+  const { rows } = await pool.query(
+    `SELECT id, tenant_id, clip_id, program_id, genre, channel, field,
+            ai_original, user_final, was_ai, editor, created_at
+       FROM metadata_edit_log ${where}
+      ORDER BY created_at DESC LIMIT $${params.length}`,
+    params,
+  );
+  return rows;
 }
 
 // ── entity helpers ─────────────────────────────────────────────────────────────
