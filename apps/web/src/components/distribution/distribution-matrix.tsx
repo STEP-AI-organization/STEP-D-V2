@@ -172,6 +172,51 @@ function Cell({
     );
   }
 
+  // ── 예약 칸 — **우리가 아는 것만 말한다.** ───────────────────────────────────
+  //
+  // 우리는 업로드하며 예약을 건 시점에 'scheduled' 로 적고 **그 뒤를 다시 확인하지 않는다**.
+  // 그래서 예약 시각이 지나도 화면엔 계속 "예약됨" 이 남아, 유튜브에 가 보면 예약이 없고
+  // 이미 공개돼 있다(2026-08-21 사용자 지적). 지난 건을 "게시됨" 으로 바꾸는 것도 거짓이다 —
+  // 유튜브가 실제로 공개했는지 우리는 모른다(예약 실패·삭제·차단도 가능하다).
+  // 그래서 ① 미래면 **몇 시 예약인지** 보여주고 ② 지나면 **확인이 필요하다**고 말한다.
+  // 둘 다 영상으로 바로 갈 수 있게 링크를 건다 — 사용자가 실제로 하는 행동이 그거다.
+  if (d.status === "scheduled") {
+    const at = d.reserveDate ? Date.parse(d.reserveDate) : NaN;
+    const known = Number.isFinite(at);
+    const past = known && at <= Date.now();
+    const when = known
+      ? new Date(at).toLocaleString("ko-KR", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })
+      : null;
+    const label = !known ? "예약됨" : past ? "게시 확인" : `예약 ${when}`;
+    const tone = past
+      ? { fg: "var(--sd-mut)", bg: "var(--sd-card-sub)" }   // 지난 예약은 '완료' 색을 주지 않는다
+      : { fg: s.fg, bg: s.bg };
+    const title = !known
+      ? "예약 시각을 알 수 없습니다"
+      : past
+        ? `예약 시각(${when})이 지났습니다 — 실제 공개 여부는 채널에서 확인해 주세요. STEP D 는 예약을 건 뒤 상태를 다시 읽지 않습니다.`
+        : `${when} 에 유튜브가 공개합니다 (업로드는 이미 끝났습니다)`;
+    const chip = (
+      <span
+        className="mx-auto inline-flex items-center gap-1 rounded-[4px] px-1.5 py-0.5 text-[10.5px] font-medium"
+        style={{ background: tone.bg, color: tone.fg }}
+        title={title}
+      >
+        ● {label}{channel === "youtube" && d.externalId ? " ↗" : ""}
+      </span>
+    );
+    return channel === "youtube" && d.externalId ? (
+      <a
+        href={`https://www.youtube.com/watch?v=${d.externalId}`}
+        target="_blank"
+        rel="noreferrer"
+        className="mx-auto inline-flex hover:brightness-95"
+      >
+        {chip}
+      </a>
+    ) : chip;
+  }
+
   if (d.status === "published" && channel === "youtube" && d.externalId) {
     return (
       <a

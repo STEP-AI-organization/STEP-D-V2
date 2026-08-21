@@ -297,3 +297,136 @@ describe("관문 우회 불가 (F3 Invariant · FLOWS.md:73)", () => {
     assert.match(src, /clipGate\(/, "워커에 업로드 직전 게이트 재확인이 없다");
   });
 });
+
+/**
+ * 예약 표시의 정직성 (2026-08-21).
+ *
+ * 우리는 업로드하며 예약을 건 시점에 'scheduled' 로 적고 **그 뒤 유튜브 상태를 다시 읽지 않는다.**
+ * 그래서 예약 시각이 지나도 화면은 계속 "예약됨" 이었고, 채널에 가 보면 예약이 없다(이미 공개됐다).
+ * 사용자가 이걸 잡았다 — "하단 예약됨이여서 유튜브 가서 보면 예약이 안 되어 있음".
+ *
+ * 지난 건을 '게시됨' 으로 바꾸는 것도 **거짓이다** — 유튜브가 실제로 공개했는지 우리는 모른다
+ * (예약 실패·삭제·차단도 가능). 그래서 화면은 "아는 것만" 말해야 한다: 미래면 언제인지,
+ * 지났으면 확인이 필요하다고. 이 규칙이 지워지지 않게 소스 스캔으로 고정한다.
+ */
+describe("예약 표시 — 지난 예약을 '예약됨'으로 두지 않는다", () => {
+  const WEB = (f: string) => fs.readFileSync(path.resolve(SRC, "../../web/src", f), "utf-8");
+  const MATRIX = WEB("components/distribution/distribution-matrix.tsx");
+  const PAGE = WEB("app/(app)/distribution/page.tsx");
+
+  it("칸: 예약 시각이 지나면 라벨이 바뀐다", () => {
+    assert.match(MATRIX, /const past = known && at <= Date\.now\(\);/,
+      "지난 예약을 구분하지 않으면 채널엔 없는 예약을 계속 표시한다");
+    assert.match(MATRIX, /past \? "게시 확인"/,
+      "지난 예약에도 '예약' 이라고 쓰면 거짓이다");
+    // '게시됨'으로 단정하지 않는다 — 실제 공개 여부를 우리는 모른다.
+    assert.doesNotMatch(MATRIX, /past \? "게시됨"/,
+      "확인하지 않은 것을 게시됨으로 단정하면 안 된다");
+  });
+
+  it("칸: 미래 예약은 **언제인지**를 보여준다", () => {
+    assert.match(MATRIX, /`예약 \$\{when\}`/, "시각 없이 '예약됨' 만 쓰면 언제인지 알 수 없다");
+  });
+
+  it("요약: 지난 예약을 '예약' 수에 넣지 않는다", () => {
+    assert.match(PAGE, /"scheduled_past"/,
+      "지난 예약을 그대로 세면 상단 요약이 채널 상태와 어긋난다");
+  });
+
+  it("폴링: 지난 예약으로 무한 폴링하지 않는다", () => {
+    // 우리 쪽에서 절대 안 바뀌는 행이라, 진행 중으로 세면 화면이 영원히 서버를 두드린다.
+    assert.match(PAGE, /return Number\.isFinite\(at\) \? at > Date\.now\(\) : false;/,
+      "지난 예약을 진행 중으로 보면 폴링이 멈추지 않는다");
+  });
+});
+
+/**
+ * 예약 시각 오전/오후 함정 (2026-08-21 실측).
+ *
+ * `<input type="datetime-local">` 은 한국어 로캘에서 오전/오후 선택으로 뜨는데
+ * **오전 12시 = 자정(00:00)** 이다. "12시" 를 정오로 생각하고 오전인 채 두면 12시간 어긋난
+ * 예약이 조용히 잡힌다 — 실제로 정오로 걸었다는 예약 2건이 00:00·00:05 로 저장돼 자정에
+ * 지나갔다. 우리 코드엔 12시간 변환이 없다(입력값을 그대로 보낸다) — 그래서 **화면이
+ * 되물어 주는 것** 말고는 막을 방법이 없다. 그 장치를 지우지 않게 고정한다.
+ */
+describe("예약 시각 — 오전 12시(자정) 착오를 화면이 잡아준다", () => {
+  const WEB = (f: string) => fs.readFileSync(path.resolve(SRC, "../../web/src", f), "utf-8");
+  const RESERVE = WEB("lib/reserve-date.ts");
+  const DIALOG = WEB("components/publish/publish-dialog.tsx");
+
+  it("우리 코드는 12시간 변환을 하지 않는다 — 입력값을 그대로 보낸다", () => {
+    // 여기 %12 가 생기면 저장 시각이 실제로 어긋난다. 표시용 변환은 humanReserveVerbose 안에만 있다.
+    const fn = RESERVE.match(/export function nowDatetimeLocal[\s\S]*?\n\}/)?.[0] ?? "";
+    assert.doesNotMatch(fn, /% ?12/, "입력값 생성에 12시간 변환이 섞이면 저장 시각이 어긋난다");
+    assert.match(DIALOG, /\.\.\.\(scheduled && reserveDate \? \{ reserveDate \} : \{\}\)/,
+      "모달이 입력 문자열을 가공 없이 보내야 한다(단일 계약)");
+  });
+
+  it("표시가 오전/오후와 자정·정오를 말로 못 박는다", () => {
+    assert.match(RESERVE, /export function humanReserveVerbose/, "오전/오후 표기 helper 가 없다");
+    assert.match(RESERVE, /h === 0 \? " \(자정\)" : h === 12 \? " \(정오\)" : ""/,
+      "자정·정오를 말로 안 붙이면 24시간제 숫자를 훑고 지나친다");
+    assert.match(DIALOG, /humanReserveVerbose\(reserveDate\)/, "모달이 그 표기를 안 쓴다");
+  });
+
+  it("'몇 시간 뒤'를 같이 보여준다 — 12시간 오차가 여기서 드러난다", () => {
+    assert.match(RESERVE, /export function untilReserve/, "상대 시각 helper 가 없다");
+    assert.match(DIALOG, /untilReserve\(reserveDate\)/, "모달이 상대 시각을 안 보여준다");
+  });
+
+  it("새벽 예약이면 되묻는다 (오전/오후 착오의 전형적 결과)", () => {
+    assert.match(RESERVE, /export function isLateNightReserve/, "새벽 판정 helper 가 없다");
+    assert.match(DIALOG, /isLateNightReserve\(reserveDate\) && \(/, "모달이 새벽 경고를 안 띄운다");
+    assert.match(DIALOG, /오전 12시는 자정/, "무엇을 잘못 골랐는지 말해주지 않으면 또 같은 실수를 한다");
+  });
+});
+
+/**
+ * 예약 게시 확인 (youtube.reconcile) — AENA `youtube-reconcile.job.ts` 이식.
+ *
+ * 예약으로 올린 뒤 상태를 되묻지 않으면 배포 화면이 "예약됨" 에 영구 고정된다. AENA 가 같은
+ * 걸 먼저 겪고(2026-07-21) 고친 방식을 그대로 가져왔다. 옮겨온 **설계 이유 4가지**가 지워지면
+ * quota 폭증·오판·무한 조회로 돌아가므로 여기서 고정한다.
+ */
+describe("예약 게시 확인 — AENA 이식 설계가 유지된다", () => {
+  const W = fs.readFileSync(path.join(SRC, "worker.ts"), "utf-8");
+  const fn = W.match(/async function handleYoutubeReconcile[\s\S]*?\n\}\r?\n/)?.[0] ?? "";
+
+  it("잡이 레인에 등록돼 있다 (레인 밖이면 아무도 안 집는다)", () => {
+    assert.ok(fn, "handleYoutubeReconcile 을 못 찾았다");
+    assert.match(W, /"automation\.cycle", "youtube\.reconcile"\]/, "youtube 레인에 없다");
+    assert.match(W, /case "youtube\.reconcile": return handleYoutubeReconcile\(job\);/, "디스패치에 없다");
+  });
+
+  it("① 폴링 창 — 오래된 예약을 영원히 조회하지 않는다", () => {
+    assert.match(fn, /YT_RECONCILE_LOOKAHEAD_MS|YT_RECONCILE_LOOKBEHIND_MS/,
+      "창 제한이 없으면 지난 예약을 매 주기 계속 조회한다");
+  });
+
+  it("② 채널별 그룹핑 + 배치 — 예약 영상은 소유자 토큰이라야 상태가 보인다", () => {
+    assert.match(fn, /const byChannel = new Map/, "채널별로 안 나누면 남의 채널 영상 상태를 못 읽는다");
+    assert.match(fn, /YT_RECONCILE_BATCH/, "배치 없이 건별 조회하면 quota 가 수 배로 든다");
+    assert.match(fn, /part=status&id=/, "videos.list 배치 조회가 아니다");
+  });
+
+  it("③ 확정 신호일 때만 전환 — 조회 실패·private 는 손대지 않는다", () => {
+    assert.match(fn, /!== "public"\) continue;/,
+      "public 이 아닌데 전환하면 확인되지 않은 것을 게시됨으로 단정하게 된다");
+  });
+
+  it("④ 배치 단위 로그 — 건별 로그는 quota 초과 시 폭증한다", () => {
+    assert.match(fn, /youtube\.reconcile 배치 실패/, "배치 단위 로그가 아니다");
+  });
+
+  it("응답에서 빠진 영상(삭제됨)을 순서로 매칭하지 않는다", () => {
+    // items 순서는 요청 순서와 다르고 삭제분은 응답에서 빠진다 — 인덱스 매칭이면 엉뚱한 클립을 바꾼다.
+    assert.match(fn, /for \(const it of \(data\?\.items \?\? \[\]\) as any\[\]\) if \(it\?\.id\) m\.set\(it\.id/,
+      "id 로 매칭하지 않으면 삭제된 영상 때문에 상태가 밀린다");
+  });
+
+  it("drain 기동에서 팬아웃된다 (프로덕션은 drain 이다)", () => {
+    assert.match(W, /export async function fanOutYoutubeReconcile/, "팬아웃 함수가 없다");
+    assert.match(W, /drain 기동 예약 게시 확인 팬아웃/,
+      "drain 에서 안 부르면 프로덕션에선 아무도 안 돌린다(순방이 겪은 그 함정)");
+  });
+});

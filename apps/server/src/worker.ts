@@ -32,6 +32,7 @@ import {
   upsertVideoComment,
   creditBalance,
   getEntity,
+  listEntities,
   putEntity,
   getMedia,
   updateMediaSource,
@@ -137,7 +138,7 @@ const JOB_LANES: Record<"content" | "youtube" | "gebd" | "naver" | "download", J
   // 게 전부라 짧고, 그 결과가 distribution.publish 로 이어지므로 같은 레인이 자연스럽다.
   youtube: ["channel.analyze", "video.analyze", "video.hotwatch", "video.comments",
             "distribution.publish", "factory.orchestrate", "factory.publicize",
-            "automation.cycle"],
+            "automation.cycle", "youtube.reconcile"],
   // naver 는 **사무실 상시 PC 전용 lane**. 네이버는 공개 업로드 API 가 없어 브라우저
   // 자동화가 유일한데, 해외 데이터센터 IP(Cloud Run) 로 로그인하면 캡차·2차인증에 막힌다.
   // 그래서 한국 가정/사무실 IP 의 놀고 있는 PC 한 대에서만 이 레인을 돌린다.
@@ -271,6 +272,7 @@ async function handle(job: Job): Promise<FollowUp | void> {
     case "match.learn": return handleMatchLearn(job);
     case "gebd.detect": return handleGebdDetect(job);
     case "automation.cycle": return handleAutomationCycle(job);
+    case "youtube.reconcile": return handleYoutubeReconcile(job);
     case "factory.orchestrate": return handleFactoryOrchestrate(job);
     case "factory.publicize": return handleFactoryPublicize(job);
     case "clip.metadata": return handleClipMetadata(job);
@@ -908,6 +910,89 @@ async function handleAutomationCycle(job: Job): Promise<void> {
   }
 }
 
+// ── youtube.reconcile — 예약 게시 확인 (AENA youtube-reconcile.job.ts 이식) ───────
+//
+// 우리는 예약(publishAt)으로 올린 뒤 배포 행을 'scheduled' 로 적고 **다시 확인하지 않았다.**
+// 유튜브가 예약 시각에 실제로 공개해도 화면은 영원히 "예약됨" 이라, 채널에 가 보면 예약이
+// 없는데 우리만 예약이라고 우긴다(2026-08-21 사용자 지적). AENA 가 같은 걸 먼저 겪고
+// (2026-07-21) 고친 방식을 그대로 가져온다 — videos.list 로 실제 privacyStatus 를 되읽는다.
+//
+// AENA 에서 그대로 가져온 설계 4가지(이유가 다 실측에서 나왔다):
+//  ① **폴링 창** — 예약 10분 전 ~ 24시간 후만 본다. 안 그러면 오래된 행을 영원히 조회한다.
+//  ② **채널별 그룹핑 + 배치(50개)** — videos.list 는 id 를 50개까지 묶어 1 unit 이다.
+//     ⚠️ 예약 영상의 privacyStatus 는 **소유자 토큰**이 아니면 안 보인다 → 크로스채널 배치 불가.
+//  ③ **확정 신호(public)일 때만 전환** — 조회 실패·private·unlisted·응답 누락은 상태 유지.
+//     오판해서 '게시됨' 으로 바꾸면 사람이 확인할 기회를 잃는다.
+//  ④ **배치 단위 로그** — 건별로 남기면 quota 초과 시 하루 수백~수천 줄이 된다.
+const YT_RECONCILE_BATCH = 50;
+const YT_RECONCILE_LOOKAHEAD_MS = 10 * 60_000;      // 예약 10분 전부터 본다
+const YT_RECONCILE_LOOKBEHIND_MS = 24 * 3600_000;   // 지난 지 24시간까지만 본다
+
+async function handleYoutubeReconcile(_job: Job): Promise<void> {
+  const clips = await listEntities<any>("clip");
+  const now = Date.now();
+
+  /** 채널별로 (클립, videoId) 를 모은다 — 소유자 토큰으로만 조회할 수 있어서 반드시 채널별. */
+  const byChannel = new Map<string, { clipId: string; videoId: string }[]>();
+  for (const clip of clips) {
+    for (const d of (clip?.distributions ?? []) as any[]) {
+      if (d?.channel !== "youtube" || d?.status !== "scheduled") continue;
+      const videoId = typeof d.externalId === "string" ? d.externalId : "";
+      const channelId = typeof d.youtubeChannelId === "string" ? d.youtubeChannelId : "";
+      if (!videoId || !channelId) continue;
+      // 폴링 창 — reserveDate 를 못 읽으면(형식 이상) 창 제한 없이 본다(AENA 와 동일).
+      const due = typeof d.reserveDate === "string" ? Date.parse(d.reserveDate) : NaN;
+      if (Number.isFinite(due)
+        && (due > now + YT_RECONCILE_LOOKAHEAD_MS || due < now - YT_RECONCILE_LOOKBEHIND_MS)) continue;
+      const arr = byChannel.get(channelId) ?? [];
+      arr.push({ clipId: clip.id, videoId });
+      byChannel.set(channelId, arr);
+    }
+  }
+  if (byChannel.size === 0) return;
+
+  let confirmed = 0;
+  for (const [channelId, items] of byChannel) {
+    const ch = await loadActiveChannel(channelId);
+    if (!ch) continue; // 토큰 없음/철회 — 다음 주기 재시도
+    for (let i = 0; i < items.length; i += YT_RECONCILE_BATCH) {
+      const batch = items.slice(i, i + YT_RECONCILE_BATCH);
+      try {
+        const ids = batch.map((b) => b.videoId).join(",");
+        const statusById = await withChannelToken(ch, async (token) => {
+          const res = await fetch(
+            `https://www.googleapis.com/youtube/v3/videos?part=status&id=${encodeURIComponent(ids)}`,
+            { headers: { Authorization: `Bearer ${token}` } },
+          );
+          const data = await res.json().catch(() => null) as any;
+          if (!res.ok) throw new Error(`videos.list ${res.status}: ${JSON.stringify(data?.error ?? data).slice(0, 200)}`);
+          const m = new Map<string, string | undefined>();
+          // ⚠️ items 순서는 요청 순서와 다르고, 삭제된 영상은 응답에서 **빠진다** — id 로 매칭한다.
+          for (const it of (data?.items ?? []) as any[]) if (it?.id) m.set(it.id, it.status?.privacyStatus);
+          return m;
+        });
+        for (const b of batch) {
+          if (statusById.get(b.videoId) !== "public") continue; // 확정 신호가 아니면 손대지 않는다
+          const fresh = (await getEntity<any>("clip", b.clipId)) ?? null;
+          if (!fresh) continue;
+          await putEntity("clip", b.clipId, {
+            ...fresh,
+            distributions: upsertDistribution(fresh.distributions, "youtube", {
+              status: "published", externalId: b.videoId, youtubeChannelId: channelId,
+            }),
+          });
+          confirmed += 1;
+        }
+      } catch (e) {
+        // 배치 단위 로그 1건 — 건별로 남기면 quota 초과 시 로그가 폭증한다(AENA 실측).
+        console.warn(`[worker] youtube.reconcile 배치 실패 (채널 ${channelId} · ${batch.length}건):`,
+          e instanceof Error ? e.message.slice(0, 200) : e);
+      }
+    }
+  }
+  if (confirmed > 0) console.log(`[worker] youtube.reconcile — 예약 게시 확인 ${confirmed}건 → published`);
+}
+
 /**
  * 순방 팬아웃 — **여기만 시스템 스코프다.** 테넌트 목록을 읽고, 각 테넌트의 컨텍스트
  * *안에서* 잡을 넣는다. 잡 행의 tenant_id 가 그때 정해지고, 워커가 그걸로 다시 컨텍스트를
@@ -924,6 +1009,28 @@ export async function fanOutAutomationCycles(): Promise<number> {
     // dedupeKey 로 같은 테넌트의 순방이 겹쳐 쌓이지 않게 한다.
     const id = await runWithTenant({ scope: tenantId, via: "system" }, () =>
       enqueue("automation.cycle", {}, { dedupeKey: `automation.cycle:${tenantId}`, maxAttempts: 1 }),
+    );
+    if (id) n += 1;
+  }
+  return n;
+}
+
+/**
+ * 예약 게시 확인 팬아웃 — 순방과 같은 자리에서 같은 주기로 돈다.
+ *
+ * 테넌트마다 하나씩 넣는다(순방과 같은 이유 — 격리가 곧 잡 분리다). dedupeKey 로 겹쳐
+ * 쌓이지 않는다. 처리할 예약이 없으면 핸들러가 즉시 끝나므로 빈 순방 비용은 사실상 0 이다.
+ */
+export async function fanOutYoutubeReconcile(): Promise<number> {
+  const tenants = await runAsSystem(async () => {
+    const { rows } = await getRawPool().query("SELECT id FROM tenants");
+    return rows.map((r: { id: string }) => r.id);
+  });
+
+  let n = 0;
+  for (const tenantId of tenants) {
+    const id = await runWithTenant({ scope: tenantId, via: "system" }, () =>
+      enqueue("youtube.reconcile", {}, { dedupeKey: `youtube.reconcile:${tenantId}`, maxAttempts: 1 }),
     );
     if (id) n += 1;
   }
@@ -2147,6 +2254,11 @@ async function loop(): Promise<void> {
       } catch (err) {
         console.error("[worker] 순방 팬아웃 실패(다음 주기에 재시도)", err);
       }
+      try {
+        await fanOutYoutubeReconcile();
+      } catch (err) {
+        console.error("[worker] 예약 확인 팬아웃 실패(다음 주기에 재시도)", err);
+      }
     }
     // drain 모드는 예산 시간이 지나면 **새 잡을 안 집는다**. 남은 건 다음 실행이 가져간다.
     if (DRAIN_MODE && Date.now() - startedAt > DRAIN_MAX_MS) {
@@ -2307,6 +2419,13 @@ async function main(): Promise<void> {
       if (n > 0) console.log(`[worker] drain 기동 자동 배포 순방 팬아웃 — ${n}개 테넌트`);
     } catch (err) {
       console.error("[worker] drain 순방 팬아웃 실패(다음 기동에 재시도)", err);
+    }
+    // 예약 게시 확인도 같이 — 순방과 독립이라 순방이 실패해도 돈다(catch 를 따로 둔 이유).
+    try {
+      const n = await fanOutYoutubeReconcile();
+      if (n > 0) console.log(`[worker] drain 기동 예약 게시 확인 팬아웃 — ${n}개 테넌트`);
+    } catch (err) {
+      console.error("[worker] drain 예약 확인 팬아웃 실패(다음 기동에 재시도)", err);
     }
   }
 

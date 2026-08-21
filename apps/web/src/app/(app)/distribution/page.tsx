@@ -49,7 +49,13 @@ export default function DistributionPage() {
   const counts = useMemo(() => {
     const m = new Map<string, number>();
     for (const c of clips) for (const d of c.distributions ?? []) {
-      if (d.status !== "none") m.set(d.status, (m.get(d.status) ?? 0) + 1);
+      if (d.status === "none") continue;
+      // 예약 시각이 지난 건은 "예약"으로 세지 않는다 — 유튜브는 이미 처리했고 우리만 모른다.
+      // 그대로 세면 상단 요약이 "예약 2" 라고 하는데 채널엔 예약이 없다(2026-08-21 사용자 지적).
+      // 실제 공개 여부는 우리가 다시 읽지 않으므로 '게시됨'으로도 못 옮긴다 → 별도 칸으로 뺀다.
+      const at = d.status === "scheduled" && d.reserveDate ? Date.parse(d.reserveDate) : NaN;
+      const key = Number.isFinite(at) && at <= Date.now() ? "scheduled_past" : d.status;
+      m.set(key, (m.get(key) ?? 0) + 1);
     }
     return m;
   }, [clips]);
@@ -57,10 +63,18 @@ export default function DistributionPage() {
   // 배포 직후 pending → 진행 중 → 게시됨 이 수동 새로고침 없이 반영되도록,
   // 비종료 상태(pending·scheduled)가 하나라도 있으면 전역 state refresh 를 폴링한다.
   // 전부 종료(published·recorded·failed)되면 멈춘다. 이 화면에서만 돈다(언마운트 시 정리).
+  // ⚠️ 지난 예약은 **폴링해도 안 바뀐다.** 우리는 예약을 건 뒤 유튜브 상태를 다시 읽지 않으니
+  //    그 행은 영원히 'scheduled' 다 — 그대로 두면 이 화면이 무한히 서버를 두드린다.
+  //    아직 안 온 예약만 진행 중으로 본다(그건 시각이 되면 우리 쪽 기록도 의미가 생긴다).
   const anyInFlight = useMemo(
     () =>
       clips.some((c) =>
-        (c.distributions ?? []).some((d) => d.status === "pending" || d.status === "scheduled"),
+        (c.distributions ?? []).some((d) => {
+          if (d.status === "pending") return true;
+          if (d.status !== "scheduled") return false;
+          const at = d.reserveDate ? Date.parse(d.reserveDate) : NaN;
+          return Number.isFinite(at) ? at > Date.now() : false;
+        }),
       ),
     [clips],
   );
@@ -118,6 +132,11 @@ export default function DistributionPage() {
         <span className="sd-mono ml-auto text-[11px]" style={{ color: "var(--sd-mut)" }}>
           게시됨 {counts.get("published") ?? 0} · 기록됨 {counts.get("recorded") ?? 0} ·{" "}
           예약 {counts.get("scheduled") ?? 0} · 진행 중 {counts.get("pending") ?? 0} · 실패 {counts.get("failed") ?? 0}
+          {(counts.get("scheduled_past") ?? 0) > 0 && (
+            <span title="예약 시각이 지났습니다 — 실제 공개 여부는 채널에서 확인해 주세요">
+              {" "}· 게시 확인 {counts.get("scheduled_past")}
+            </span>
+          )}
         </span>
       </div>
 

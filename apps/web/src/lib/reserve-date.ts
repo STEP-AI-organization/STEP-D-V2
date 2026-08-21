@@ -38,4 +38,48 @@ export function humanReserve(value: string | undefined | null): string {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
+/**
+ * 오전/오후를 **말로** 붙인 표기 — "8월 21일(금) 오전 12:00 (자정)".
+ *
+ * ⚠️ 이게 필요한 이유: `<input type="datetime-local">` 은 한국어 로캘에서 오전/오후 선택으로
+ * 뜨는데 **오전 12시 = 자정(00:00)** 이다. "12시" 를 정오로 생각하고 오전인 채 두면 12시간
+ * 어긋난 예약이 조용히 잡힌다(2026-08-21 실측: 정오로 걸었다는 예약이 00:00·00:05 로 저장돼
+ * 자정에 지나갔다). 24시간제 숫자만 보여주면 훑고 지나치기 쉬워서, 자정·정오는 말로 못 박는다.
+ */
+export function humanReserveVerbose(value: string | undefined | null): string {
+  if (!value) return "—";
+  const t = Date.parse(value);
+  if (!Number.isFinite(t)) return "—";
+  const d = new Date(t);
+  const h = d.getHours();
+  const m = d.getMinutes();
+  const p = (n: number) => String(n).padStart(2, "0");
+  const ampm = h < 12 ? "오전" : "오후";
+  const h12 = h % 12 === 0 ? 12 : h % 12;
+  const noonish = h === 0 ? " (자정)" : h === 12 ? " (정오)" : "";
+  return `${d.getMonth() + 1}월 ${d.getDate()}일(${WEEKDAYS[d.getDay()]}) ${ampm} ${h12}:${p(m)}${noonish}`;
+}
+
+/** 지금부터 얼마나 남았는지 — "약 12시간 뒤". 12시간 착오는 이 문구에서 바로 드러난다. */
+export function untilReserve(value: string | undefined | null): string {
+  if (!value) return "";
+  const t = Date.parse(value);
+  if (!Number.isFinite(t)) return "";
+  const ms = t - Date.now();
+  if (ms <= 0) return "이미 지난 시각";
+  const min = Math.round(ms / 60_000);
+  if (min < 60) return `약 ${min}분 뒤`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `약 ${hr}시간 ${min % 60 ? `${min % 60}분 ` : ""}뒤`;
+  return `약 ${Math.floor(hr / 24)}일 ${hr % 24 ? `${hr % 24}시간 ` : ""}뒤`;
+}
+
+/** 새벽(00:00~05:59)인가 — 오전/오후를 잘못 고른 전형적 결과라 화면이 한 번 되묻는다. */
+export function isLateNightReserve(value: string | undefined | null): boolean {
+  if (!value) return false;
+  const t = Date.parse(value);
+  if (!Number.isFinite(t)) return false;
+  return new Date(t).getHours() < 6;
+}
+
 export const WEEKDAYS = ["일", "월", "화", "수", "목", "금", "토"] as const;

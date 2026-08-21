@@ -34,7 +34,7 @@ import {
   type PublishOutcome,
 } from "@/lib/data/api";
 import type { DistributionChannel } from "@/lib/constants";
-import { humanReserve, isFutureReserve, nowDatetimeLocal } from "@/lib/reserve-date";
+import { humanReserveVerbose, isFutureReserve, isLateNightReserve, nowDatetimeLocal, untilReserve } from "@/lib/reserve-date";
 import { cn } from "@/lib/utils";
 
 const PLATFORM_LABEL: Record<string, string> = {
@@ -487,10 +487,28 @@ export function PublishDialog({
                   />
                   {/* 서버와 같은 판정(isFutureReserve)으로 예약/즉시를 미리 보여 준다 — 화면이 결과와 어긋나지 않게. */}
                   {isFutureReserve(reserveDate) ? (
-                    <p className="text-[10.5px]" style={{ color: "var(--sd-mut)" }}>
-                      예약: <b>{humanReserve(reserveDate)}</b> — YouTube·네이버·Facebook 은 플랫폼이 그 시각에 공개(네이티브 예약),
-                      Instagram·TikTok 은 그 시각까지 대기했다가 자동 게시합니다.
-                    </p>
+                    <>
+                      {/* 오전/오후를 말로 못 박고 "몇 시간 뒤"를 같이 준다 — 오전 12시(자정)를
+                          정오로 착각하는 12시간 오차가 여기서 바로 드러난다. */}
+                      <p className="text-[11px]" style={{ color: "var(--sd-fg)" }}>
+                        예약: <b>{humanReserveVerbose(reserveDate)}</b>{" "}
+                        <span style={{ color: "var(--sd-mut)" }}>· {untilReserve(reserveDate)}</span>
+                      </p>
+                      {isLateNightReserve(reserveDate) && (
+                        <p
+                          role="alert"
+                          className="rounded-md px-2 py-1.5 text-[10.5px] leading-relaxed"
+                          style={{ color: "var(--sd-warn)", background: "var(--sd-warn-bg)", border: "1px solid var(--sd-warn-border)" }}
+                        >
+                          <b>새벽 시간대입니다.</b> 낮 12시를 원하셨다면 시각 선택에서 <b>오후</b>를 골라야 합니다 —
+                          <b>오전 12시는 자정(00:00)</b>입니다.
+                        </p>
+                      )}
+                      <p className="text-[10.5px]" style={{ color: "var(--sd-mut)" }}>
+                        YouTube·네이버·Facebook 은 플랫폼이 그 시각에 공개(네이티브 예약),
+                        Instagram·TikTok 은 그 시각까지 대기했다가 자동 게시합니다.
+                      </p>
+                    </>
                   ) : (
                     <p className="text-[10.5px]" style={{ color: "var(--sd-warn)" }}>
                       시각이 비었거나 과거예요 — 이대로 배포하면 <b>즉시 발행</b>됩니다.
