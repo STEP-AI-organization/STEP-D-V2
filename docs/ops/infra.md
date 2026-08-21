@@ -1,6 +1,6 @@
 # STEP-D 인프라 (실서비스)
 
-> 전체 인프라의 단일 진실 소스. **바뀌면 여기 갱신한다.** 최종: **2026-08-07**.
+> 전체 인프라의 단일 진실 소스. **바뀌면 여기 갱신한다.** 최종: **2026-08-21**.
 >
 > ⚠️ **2026-08-07 전면 개편.** 워커가 GCE VM → **Cloud Run Jobs** 로 옮겨졌고,
 > GEBD(화면전환 모델)용 **GPU VM** 이 새로 생겼다. 이전 판이 기술하던 `stepd-worker` VM 은
@@ -27,7 +27,7 @@
                    │ job_queue (INSERT)
                    ▼
    ┌─────────────────────────────────────────┐
-   │  Cloud SQL: stepd-db (PostgreSQL 16)      │
+   │  Cloud SQL: stepd-db (PostgreSQL 15)      │
    └───────────────┬─────────────────────────┘
                    │ claim (FOR UPDATE SKIP LOCKED)
                    ▼
@@ -61,7 +61,8 @@
 - **비공개(IAM)** — invoker 바인딩은 `domain:stepai.kr` + `serviceAccount:stepd-deployer@step-d.iam.gserviceaccount.com` 둘뿐, `allUsers` 없음. 직접 URL 익명 접근은 403 (2026-07-16 실측).
   프론트는 Vercel rewrite로 **ID 토큰 프록시** 경유(`apps/web/next.config.ts` → `apps/web/src/app/api/proxy/[[...path]]/route.ts`) — 그래서 `stepd.stepai.kr/api/*`는 익명 200이다(공개면은 Vercel 웹뿐).
 - ⚠️ 함정: 루트 `cloudbuild.yaml:37`과 `apps/server/cloudbuild.yaml:26` 둘 다 `--allow-unauthenticated` 플래그가 남아 있다. 현재는 배포 SA에 IAM 변경 권한이 없어 경고 후 무시되는 것으로 추정 — IAM에 반영되지 않아 실효 없음(실측). 단 권한이 생기는 순간 **매 배포가 서비스를 공개로 뒤집는다** → 플래그 제거 권장.
-- 리소스: cpu 2 / mem 4Gi / timeout 600s / concurrency 10 / min 0 / max 5 (cloudbuild.yaml).
+- 리소스: cpu 2 / mem 4Gi / timeout 600s / concurrency 10 / **min 1** / max 5 · cpu-boost (cloudbuild.yaml).
+  ⚠️ min-instances=1(상시 웜)이라 **유휴 과금이 있다** — 비용표 참조. 예전 "min 0" 서술은 틀렸다.
 - 서비스계정: `stepd-deployer@step-d.iam.gserviceaccount.com`.
 - env/시크릿(cloudbuild.yaml `--set-secrets`): `DATABASE_URL`=stepd-db-url, `GOOGLE_CLIENT_ID/SECRET`,
   `JWT_SECRET`, `PUBLIC_URL`=stepd-public-url. 평문 env: `NODE_ENV`, `GCS_BUCKET`=stepd-media.
@@ -111,24 +112,17 @@ CPU 전용 실행은 9.45초 만에 실패한다(mmaction2 가 CUDA 요구).
 - 아직 `AUTO_GEBD=1` 은 안 켰다. 켜도 **VM 을 깨우는 배선이 없어** 잡만 쌓인다.
 
 ### 3. Cloud SQL — `stepd-db`
-- PostgreSQL 16. 인스턴스 연결명 `step-d:us-central1:stepd-db`. Zonal · 디스크 10GB PD_SSD.
-- **tier `db-g1-small` (공유코어 · 1.7GB)** — 2026-08-07 에 `db-custom-1-4096` 에서 내렸다.
-  월 **$50.59 → $25.55** (절감 $25.04 ≈ ₩34,500 · 인프라비의 37%).
-
-  | | 이전 (1vCPU·4GB) | 현재 (g1-small·1.7GB) |
-  |---|---|---|
-  | 메모리 실사용 | 1.53GB (38%) | **0.70GB (41%)** |
-  | CPU | 평균 9.0% | 평균 9.8% · 최대 17.3% |
-
-  Postgres 는 **데이터가 아니라 인스턴스 크기에 맞춰** 버퍼를 잡는다(`shared_buffers` ≈ RAM 25%).
-  4GB 에서 1.53GB 를 쓰던 게 1.7GB 로 내리자 0.70GB 가 됐다 — 데이터를 지워서가 아니다.
-  **여유 59%.**
-
-  > ⚠️ 공유코어는 **SLA 가 없다**(Google 은 개발/테스트 등급으로 안내). 실사용자가 없는
-  > 지금 단계라 택했다. **영업 시작해서 트래픽이 붙으면 되돌릴 것** — 명령 한 줄 + 재시작 2~5분:
-  > `gcloud sql instances patch stepd-db --project=step-d --tier=db-custom-1-4096`
-  > 판단 기준: 모니터링에서 **CPU 가 지속 50% 초과**면 올린다 (공유코어는 버스트 크레딧이라
-  > 지속 부하에서 스로틀된다).
+- PostgreSQL 15. 인스턴스 연결명 `step-d:us-central1:stepd-db`. Zonal · 디스크 10GB PD_SSD.
+- **tier `db-custom-1-4096` (전용코어 1vCPU · 4GB · SLA 있음)** — 2026-08-21 에 `db-g1-small`
+  에서 **올렸다**(여러 회사·리소스 유입 대비). 월 **$25.55 → $50.59** (+$25.04 ≈ **+₩34,500**).
+  - **자동 백업 ON**(매일 18:00 · 7개 보관) + **PITR ON**(WAL 7일 · 특정 시점 복구). 2026-08-21
+    이전엔 **백업이 꺼져 있었다** — 유료 고객 데이터 공백이라 승급과 함께 켰다. 백업/WAL 추가비는
+    DB 가 작아(데이터 ~0.7GB) **월 ₩1,000 미만 추정**(청구서 확인).
+  - 배경(2026-08-07~08-21 실험): `db-g1-small`(공유코어 1.7GB)로 내려 CPU 9%·메모리 여유 59%
+    로 굴렀지만, 공유코어는 **SLA 가 없고**(Google dev/test 등급) 지속부하에서 버스트 크레딧이
+    소진돼 스로틀된다. 멀티테넌트 진입에 부적합해 되돌렸다.
+  - 다음 상향 트리거: 모니터링에서 **CPU 지속 50% 초과**면 `db-custom-2-8192` 로 —
+    `gcloud sql instances patch stepd-db --project=step-d --tier=db-custom-2-8192`
 
 - 접속: Cloud Run·Cloud Run Jobs = 유닉스 소켓(`--set-cloudsql-instances`),
   외부(개발 PC) = **Cloud SQL Auth Proxy**, 로컬 개발 = 도커 PG 별도(`stepd-pg`).
@@ -257,13 +251,22 @@ Balanced PD   $0.100000/GiB·월    SQL RAM   $0.007000/GiB·시간
 
 | 항목 | 월 |
 |---|---|
-| Cloud SQL `db-g1-small` | **₩35,300** ($25.55) |
+| Cloud SQL `db-custom-1-4096` (전용코어 1vCPU·4GB) | **₩69,800** ($50.59) |
+| Cloud SQL 자동백업 + PITR (WAL·백업 스토리지) | ~₩1,000 (DB 작음 · 청구서 확인) |
 | GEBD VM 부팅디스크 100GB pd-balanced (정지 중에도 과금) | ₩13,800 |
 | AR 이미지 13.8GB | ₩1,900 |
 | GCS (미디어 + 가중치 1.58GB) | ₩50 |
-| Cloud Run 서비스 2개 (min-instances 0) | ₩0 |
+| Cloud Run `stepd-server` (min-instances=**1** · 2vCPU·4Gi 상시 웜) | ⚠️ ~₩36,000~55,000 추정 · 청구서 확인 |
 | Cloud Scheduler 2개 (3개까지 무료) | ₩0 |
-| **소계** | **≈ ₩51,000** |
+| **소계 (확정분)** | **≈ ₩86,500** |
+| **소계 (+ Cloud Run min=1 유휴 추정)** | **≈ ₩122,000 ~ 141,000** |
+
+> ⚠️ **min-instances=1 은 이번 변경과 무관하게 원래 그랬다** — `cloudbuild.yaml:67` 이 `--min-instances=1`
+> 이고(콜드스타트 방지 · 상시 웜), 이 문서가 예전에 "min 0 → ₩0" 으로 **잘못 적어 누락**했던 것이다.
+> 2vCPU·4Gi 상시 인스턴스의 유휴 과금은 Cloud Run 요금제(유휴 CPU·메모리)로 대략 월 ₩36,000~55,000
+> 로 **추정**되나, 정확한 값은 **Billing 콘솔/`gcloud run services describe` 로 확인**해야 한다
+> (권한 있는 계정 필요). 비싸면 min-instances=0 + 프록시 재시도(2026-08-21)로 콜드스타트를 흡수하는
+> 선택지도 있다.
 
 ### 사용량비
 
@@ -279,11 +282,16 @@ Balanced PD   $0.100000/GiB·월    SQL RAM   $0.007000/GiB·시간
 
 ### 월 총액
 
-| 회차/월 | 합계 |
-|---|---|
-| **12건** | **≈ ₩63,700** |
-| 30건 | ≈ ₩77,600 |
-| 100건 | ≈ ₩131,700 |
+아래는 **확정 고정비(≈₩86,500)** 기준 — Cloud Run min=1 유휴 추정(₩36,000~55,000)은 별도 가산.
+
+| 회차/월 | 합계(확정분) | + min=1 유휴 추정 |
+|---|---|---|
+| **12건** | **≈ ₩99,200** | ≈ ₩135,000 ~ 154,000 |
+| 30건 | ≈ ₩113,100 | ≈ ₩149,000 ~ 168,000 |
+| 100건 | ≈ ₩167,200 | ≈ ₩203,000 ~ 222,000 |
+
+> 2026-08-21 Cloud SQL 승급(db-custom-1-4096 + 백업/PITR)으로 고정비가 **≈₩51,000 → ≈₩86,500**
+> (+₩35,500) 올랐다. 회차당 사용량비(~₩774)는 그대로 — DB 는 사용량비에 크게 안 잡힌다.
 
 > **GPU 는 거의 안 켜서 싸다.** 상시 가동이면 GEBD VM 만 월 $533(₩735,000)이다 —
 > 유휴 자동 종료가 245배를 가른다. 그래서 `--max-run-duration` 하드 안전장치를 같이 건다.
@@ -297,6 +305,14 @@ Balanced PD   $0.100000/GiB·월    SQL RAM   $0.007000/GiB·시간
 | VM 을 매번 삭제/재생성 | ₩13,800 | 회차마다 13.8GB 재pull |
 
 ## 변경 이력
+
+### 2026-08-21 — 멀티테넌트 대비 Cloud SQL 승급
+- **Cloud SQL `db-g1-small` → `db-custom-1-4096`** (여러 회사·리소스 유입 대비). 공유코어(SLA 없음)
+  → 전용코어(SLA 있음). 월 **$25.55 → $50.59** (+₩34,500).
+- **자동 백업 ON**(꺼져 있던 걸 켬 · 7개 보관) + **PITR ON**(WAL 7일). 백업/WAL 추가비 월 ₩1,000 미만 추정.
+- 고정비 ≈ **₩51,000 → ₩86,500**(확정분). 상향 트리거: CPU 지속 50% 초과 시 db-custom-2-8192.
+- 문서 정정: PostgreSQL **15**(16 아님) · 서버 **min-instances=1**(min 0 서술 오류 · 유휴 과금 존재).
+- 규모 전제: 2~3개사·가벼운 부하. 그 이상이면 워커 즉시트리거·병렬 + 테넌트 가드레일 검토(미착수).
 
 ### 2026-08-07 — 워커 클라우드 이전 + GEBD GPU
 - 워커: GCE VM(`stepd-worker`) → **Cloud Run Jobs 2종** + Scheduler 15분. 상시 프로세스 제거
