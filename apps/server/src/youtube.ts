@@ -887,6 +887,63 @@ export async function updateVideoPrivacy(
 
 
 /**
+ * 이미 올라간 영상의 현재 categoryId 조회 (videos.list · part=snippet).
+ * videos.update(part=snippet) 이 categoryId 를 **필수**로 요구하는데, 안 넘기거나 바꾸면
+ * 카테고리가 어긋난다 — 기존 값을 유지하려면 먼저 읽어야 한다. 못 읽으면 null(호출자가 기본값).
+ */
+export async function getVideoCategoryId(accessToken: string, videoId: string): Promise<string | null> {
+  const res = await fetch(
+    `https://www.googleapis.com/youtube/v3/videos?part=snippet&id=${encodeURIComponent(videoId)}`,
+    { headers: { Authorization: `Bearer ${accessToken}` } },
+  );
+  if (!res.ok) {
+    throw new YouTubeApiError(res.status,
+      `videos.list(snippet) 실패 (${res.status}): ${(await res.text()).slice(0, 200)}`);
+  }
+  const data = (await res.json()) as { items?: { snippet?: { categoryId?: string } }[] };
+  return data.items?.[0]?.snippet?.categoryId ?? null;
+}
+
+
+/**
+ * 이미 올라간 영상의 제목·설명·태그 수정 (videos.update · part=snippet).
+ *
+ * "이미 발행된 건 재업로드하지 말고 제목만 고친다"(사용자 방향 2026-08-24)의 실제 반영 경로.
+ * ⚠️ part=snippet 은 **통째 교체**다 — title·categoryId 가 필수이고, 안 실은 필드(설명·태그)는
+ *    지워진다. 그래서 호출자는 최종 상태 전부(title·description·tags)를 넘기고, categoryId 는
+ *    현재 영상 것을 유지해 넘겨야 한다(카테고리가 바뀌면 노출 로직이 달라진다).
+ */
+export async function updateVideoMetadata(
+  accessToken: string,
+  videoId: string,
+  meta: { title: string; description?: string; tags?: string[]; categoryId: string },
+): Promise<void> {
+  const snippet: Record<string, unknown> = {
+    // 업로드와 같은 하드캡 — 긴 제목/설명이 전체 update 를 400 시키지 않게.
+    title: (meta.title || "무제 클립").slice(0, 100),
+    description: (meta.description ?? "").slice(0, 5000),
+    categoryId: meta.categoryId,
+  };
+  if (meta.tags?.length) snippet.tags = meta.tags.slice(0, 30);
+  const res = await fetch(
+    "https://www.googleapis.com/youtube/v3/videos?part=snippet",
+    {
+      method: "PUT",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ id: videoId, snippet }),
+    },
+  );
+  if (!res.ok) {
+    throw new YouTubeApiError(res.status,
+      `videos.update(snippet) 실패 (${res.status}): ${(await res.text()).slice(0, 200)}`);
+  }
+}
+
+
+/**
  * 이 채널이 업로드까지 할 수 있는가 — **동의 스코프 판정의 단일 진실**.
  *
  * publish 모드가 실제로 받는 건 `.../auth/youtube`(+force-ssl, memberships)이고

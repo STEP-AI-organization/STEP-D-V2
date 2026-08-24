@@ -34,6 +34,9 @@ export type JobType =
   | "match.learn"
   // Distribution: resumable-upload a rendered clip to a connected YouTube channel.
   | "distribution.publish"
+  // 이미 발행된 영상의 제목·설명·태그를 라이브에 반영 (videos.update · part=snippet).
+  // 재업로드가 아니다 — 발행된 건은 재발행 대신 이걸로만 고친다(중복 공개 방지). youtube 레인.
+  | "distribution.updatemeta"
   // 예약 게시 확인 — 예약(scheduled)으로 올린 영상이 실제로 공개됐는지 유튜브에 되묻는다.
   // 안 되물으면 배포 화면이 "예약됨" 에 영구 고정된다(AENA youtube-reconcile.job 이식).
   | "youtube.reconcile"

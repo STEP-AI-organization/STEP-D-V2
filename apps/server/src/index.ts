@@ -6994,6 +6994,20 @@ app.post("/api/distributions/retry", async (c) => {
   const clip = await getEntity<any>("clip", b.clipId);
   if (!clip) return c.json({ error: "clip not found" }, 404);
 
+  // 이미 발행된 건 재발행하지 않는다 — 재업로드는 **중복 공개**를 만든다(감사 #1 · 사용자 방향
+  // 2026-08-24 "발행됐으면 제목 수정만"). 실패 행이 하나도 없는데 발행된 행이 있으면 되돌릴 게
+  // 없다 → 제목/메타 수정(POST /api/distributions/update-metadata)으로 가라고 막는다.
+  {
+    const chRows = (clip.distributions ?? []).filter((d: any) => d.channel === b.channel);
+    const hasFailed = chRows.some((d: any) => d.status === "failed");
+    const hasPublished = chRows.some((d: any) =>
+      d.externalId || d.status === "published" || d.status === "scheduled");
+    if (!hasFailed && hasPublished) {
+      return c.json({ error: "already_published",
+        message: "이미 발행된 항목입니다. 재발행 대신 제목·메타 수정을 사용하세요." }, 409);
+    }
+  }
+
   // 재시도도 같은 관문을 지난다 — 안 그러면 /retry 가 게이트를 우회하는 뒷문이 된다.
   // **자동 재시도가 아니다.** 사람이 로그 행의 버튼을 눌러야 여기 온다(F4-4 ⊘).
   if (b.channel === "youtube") {
@@ -7005,6 +7019,11 @@ app.post("/api/distributions/retry", async (c) => {
     // pending 으로 되돌려 같은 계정에 중복 업로드된다. 실패한 행을 우선 집는다.
     const ytRows = (clip.distributions ?? []).filter((d: any) => d.channel === "youtube");
     const prev = ytRows.find((d: any) => d.status === "failed") ?? ytRows[0];
+    // 되살릴 행이 이미 발행됐으면(externalId 보유) 재업로드 = 중복 공개다. 막고 메타 수정으로.
+    if (prev?.externalId) {
+      return c.json({ error: "already_published",
+        message: "이미 발행된 유튜브 영상입니다. 재발행 대신 제목 수정을 사용하세요." }, 409);
+    }
     const target = await resolveYouTubePublishChannel(prev?.youtubeChannelId);
     if (!target) {
       return c.json({ error: "no_publish_channel", message: "재시도할 YouTube 채널을 찾을 수 없습니다." }, 409);
@@ -7099,6 +7118,44 @@ app.post("/api/distributions/retry", async (c) => {
     origin: "retry",
   });
   return c.json({ ok: true, ...outcome });
+});
+
+// ── 이미 발행된 영상의 제목·메타를 라이브에 반영 (재발행 아님) ───────────────────
+//
+// 발행된 건은 재업로드하면 중복 공개가 되니(감사 #1), 재발행 대신 여기로 온다. videos.update
+// (part=snippet)로 **기존 영상만** 고친다 — 새 영상이 안 생긴다. 워커(youtube 레인)가 채널 토큰을
+// 쥐므로 여기선 잡만 큐잉한다. 지금은 YouTube 만(네이버=API 없음, Meta/TikTok=게시 후 편집 제약).
+// 트리거는 **명시적**이다(사용자 방향 2026-08-24) — 메타 저장(PATCH)만으론 라이브가 안 바뀐다.
+app.post("/api/distributions/update-metadata", async (c) => {
+  const actor = requirePublisher(c);
+  const b = await c.req.json<{ clipId: string; channel?: string }>().catch(() => null);
+  if (!b || !b.clipId) {
+    return c.json({ error: "bad_request", message: "clipId가 필요합니다." }, 400);
+  }
+  const channel = String(b.channel ?? "youtube");
+  if (channel !== "youtube") {
+    return c.json({ error: "unsupported_channel",
+      message: "라이브 제목/메타 반영은 현재 YouTube만 지원합니다." }, 400);
+  }
+  if (!youtubeUploadEnabled()) {
+    return c.json({ error: UPLOAD_DISABLED_CODE, message: UPLOAD_DISABLED_MESSAGE }, 409);
+  }
+  const clip = await getEntity<any>("clip", b.clipId);
+  if (!clip) return c.json({ error: "clip_not_found", message: "클립을 찾을 수 없습니다." }, 404);
+
+  const row = (clip.distributions ?? []).find((d: any) => d.channel === "youtube" && d.externalId);
+  if (!row?.externalId) {
+    return c.json({ error: "not_published",
+      message: "발행된 YouTube 영상이 없습니다 — 먼저 발행하세요." }, 409);
+  }
+  // dedupeKey 에 videoId 포함 — 같은 영상에 대한 반영이 겹쳐도 하나만 돈다(핸들러가 실행 시점의
+  // 최신 channelMeta 를 읽으므로, 중복 요청이 dedupe 돼도 최신 제목이 반영된다).
+  const jobId = await enqueue(
+    "distribution.updatemeta",
+    { clipId: b.clipId, channel: "youtube", actor },
+    { dedupeKey: `distribution.updatemeta:${b.clipId}:${row.externalId}` },
+  );
+  return c.json({ ok: true, clipId: b.clipId, videoId: row.externalId, jobId });
 });
 
 // ── link a clip to the YouTube video it was published as ──────────────────────

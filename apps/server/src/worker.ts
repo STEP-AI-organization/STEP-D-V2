@@ -67,6 +67,8 @@ import {
   uploadVideoResumable,
   setVideoThumbnail,
   updateVideoPrivacy,
+  updateVideoMetadata,
+  getVideoCategoryId,
   TokenRevokedError,
   type PersistTokens,
 } from "./youtube.ts";
@@ -137,8 +139,8 @@ const JOB_LANES: Record<"content" | "youtube" | "gebd" | "naver" | "download", J
   // automation.cycle 도 youtube 레인 — 순방 한 바퀴는 DB 를 훑고 dispatchPublish 를 부르는
   // 게 전부라 짧고, 그 결과가 distribution.publish 로 이어지므로 같은 레인이 자연스럽다.
   youtube: ["channel.analyze", "video.analyze", "video.hotwatch", "video.comments",
-            "distribution.publish", "factory.orchestrate", "factory.publicize",
-            "automation.cycle", "youtube.reconcile"],
+            "distribution.publish", "distribution.updatemeta", "factory.orchestrate",
+            "factory.publicize", "automation.cycle", "youtube.reconcile"],
   // naver 는 **사무실 상시 PC 전용 lane**. 네이버는 공개 업로드 API 가 없어 브라우저
   // 자동화가 유일한데, 해외 데이터센터 IP(Cloud Run) 로 로그인하면 캡차·2차인증에 막힌다.
   // 그래서 한국 가정/사무실 IP 의 놀고 있는 PC 한 대에서만 이 레인을 돌린다.
@@ -250,6 +252,7 @@ async function handle(job: Job): Promise<FollowUp | void> {
     case "video.hotwatch":  return handleVideoHotwatch(job);
     case "video.comments":  return handleVideoComments(job);
     case "distribution.publish": return handleDistributionPublish(job);
+    case "distribution.updatemeta": return handleDistributionUpdateMeta(job);
     case "naver.publish": return handleNaverPublish(job);
     case "content.analyze": {
       await runContentAnalyze(String(job.payload.mediaId ?? ""), Boolean(job.payload.fast),
@@ -1843,6 +1846,67 @@ async function handleDistributionPublish(job: Job): Promise<void> {
 }
 
 /**
+ * 이미 발행된 YouTube 영상의 제목·설명·태그를 라이브에 반영 (videos.update · part=snippet).
+ *
+ * "발행됐으면 재업로드 말고 제목만 고친다"(사용자 방향 2026-08-24)의 실제 반영 경로. 재업로드가
+ * 아니라 **기존 영상 수정**이라 새 영상이 안 생긴다(중복 없음). YouTube 만 지원 — 네이버는 공개
+ * API 가 없고(Playwright), Meta/TikTok 은 게시 후 편집 제약이 커서 제외. 소스는 사용자가 저장한
+ * 채널 메타(clip.channelMeta.youtube), 없으면 파이프라인 기본 메타(metaForChannel).
+ */
+async function handleDistributionUpdateMeta(job: Job): Promise<void> {
+  const clipId = String(job.payload.clipId ?? "");
+  const channel = String(job.payload.channel ?? "youtube");
+  if (!clipId) { console.warn("[worker] distribution.updatemeta: clipId 누락 — 버림"); return; }
+  if (channel !== "youtube") {
+    console.warn(`[worker] distribution.updatemeta ${clipId}: ${channel} 은 라이브 메타 반영 미지원 — 버림`);
+    return;
+  }
+  // 이미 라이브인 영상 수정이라 새 발행은 아니지만, 외부 쓰기라 발행 게이트와 같은 posture 를 쓴다.
+  if (!youtubeUploadEnabled()) {
+    console.warn(`[worker] distribution.updatemeta ${clipId}: blocked — YouTube 실업로드 비활성`);
+    return;
+  }
+  const clip = await getEntity<any>("clip", clipId);
+  if (!clip) { console.warn(`[worker] distribution.updatemeta: clip ${clipId} gone — dropping`); return; }
+
+  const row = (clip.distributions ?? []).find((d: any) => d.channel === "youtube" && d.externalId);
+  if (!row?.externalId) {
+    console.warn(`[worker] distribution.updatemeta ${clipId}: 발행된 유튜브 영상이 없음(externalId 없음) — 버림`);
+    return;
+  }
+  const videoId = String(row.externalId);
+  const channelId = row.youtubeChannelId ? String(row.youtubeChannelId) : undefined;
+  if (!channelId) {
+    console.warn(`[worker] distribution.updatemeta ${clipId}: youtubeChannelId 없음 — 버림`);
+    return;
+  }
+  const ch = await loadActiveChannel(channelId);
+  if (!ch) {
+    console.warn(`[worker] distribution.updatemeta ${clipId}: 채널 미연결/재연결 필요 (${channelId}) — 버림`);
+    return;
+  }
+
+  // 소스: 사용자가 저장한 채널 메타 우선, 없으면 파이프라인 기본.
+  const saved = clip.channelMeta?.youtube ?? null;
+  const base = metaForChannel(clip, "youtube");
+  const title = (String(saved?.title ?? base.title ?? "").trim()) || base.title;
+  const description = String(saved?.description ?? base.description ?? "");
+  const tags = Array.isArray(saved?.tags) && saved.tags.length ? saved.tags : base.tags;
+
+  try {
+    await withChannelToken(ch, async (token) => {
+      const categoryId = (await getVideoCategoryId(token, videoId)) ?? "22";
+      await updateVideoMetadata(token, videoId, { title, description, tags, categoryId });
+    });
+    console.log(`[worker] distribution.updatemeta ${clipId} → youtube ${videoId} 제목/메타 반영 완료`);
+  } catch (err) {
+    // 재업로드가 아니라 수정이라 실패해도 중복 위험이 없다 — 사유만 남긴다. 자동 재시도 금지(F4-4 ⊘).
+    console.error(`[worker] distribution.updatemeta ${clipId} (${videoId}) 실패(재시도 안 함):`,
+      err instanceof Error ? err.message : err);
+  }
+}
+
+/**
  * TikTok 받은함 드래프트 업로드 — YouTube 경로와 같은 뼈대(게이트 재확인 → 킬스위치 →
  * 계정·클립·파일 검증 → 업로드 → 계정 정체성 포함 기록). 다른 점은 둘이다:
  * ① 파일을 /tmp 로 내려받아 올린다 — **작업 후 반드시 지운다.** Cloud Run 의 /tmp 는
@@ -2157,6 +2221,34 @@ async function runDistributionPublish(job: Job): Promise<void> {
         ? (String(job.payload.privacy) as "public" | "unlisted" | "private")
         : "public");
 
+  // A future publishAt means YouTube holds the video private until then — report 'scheduled'.
+  const finalStatus = publishAt ? "scheduled" : "published";
+
+  // ⚠️ **업로드 성공 후의 이 쓰기가 실패하면 영상은 이미 라이브인데 externalId 를 잃는다** —
+  // 그러면 재시도가 그 실패 행을 다시 올려 **같은 영상을 중복 공개**한다(감사 #1). 그래서
+  // published 기록은 몇 번 재시도하고, 정상 경로와 catch(후속 실패) 양쪽에서 같은 경로로 부른다.
+  const recordPublished = async (videoId: string): Promise<boolean> => {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const fresh = (await getEntity<any>("clip", clipId)) ?? clip;
+        const distributions = upsertDistribution(fresh.distributions, "youtube", {
+          status: finalStatus, externalId: videoId, youtubeChannelId: channelId, error: undefined,
+          ...(publishAt ? { reserveDate: publishAt } : {}),
+        });
+        await putEntity("clip", clipId, {
+          ...fresh, status: "published", publishedVideoId: videoId, distributions,
+        });
+        return true;
+      } catch (e) {
+        console.warn(`[worker] distribution.publish ${clipId}: published 기록 실패(시도 ${attempt + 1}/3):`,
+          e instanceof Error ? e.message.slice(0, 200) : e);
+        await sleep(500 * (attempt + 1));
+      }
+    }
+    return false;
+  };
+
+  let uploadedVideoId: string | undefined;
   try {
     const body = await streamToBuffer(createReadStream(objPath));
     const { videoId } = await withChannelToken(ch, (token) =>
@@ -2170,6 +2262,7 @@ async function runDistributionPublish(job: Job): Promise<void> {
         },
       ),
     );
+    uploadedVideoId = videoId;   // 이 지점 이후의 어떤 실패도 '실패' 로 찍으면 안 된다(영상은 라이브).
 
     // 커스텀 썸네일 — **롱폼 클립에는 사실상 필수다**(쇼츠는 유튜브가 프레임을 쓴다).
     // 업로드는 이미 끝났으므로 여기서 실패해도 배포를 실패로 돌리지 않는다. 사유만 남긴다.
@@ -2186,18 +2279,23 @@ async function runDistributionPublish(job: Job): Promise<void> {
         e instanceof Error ? e.message.slice(0, 200) : e);
     }
 
-    // A future publishAt means YouTube holds the video private until then — report 'scheduled'.
-    const finalStatus = publishAt ? "scheduled" : "published";
-    const fresh = (await getEntity<any>("clip", clipId)) ?? clip;
-    const distributions = upsertDistribution(fresh.distributions, "youtube", {
-      status: finalStatus, externalId: videoId, youtubeChannelId: channelId, error: undefined,
-      ...(publishAt ? { reserveDate: publishAt } : {}),
-    });
-    await putEntity("clip", clipId, {
-      ...fresh, status: "published", publishedVideoId: videoId, distributions,
-    });
+    const ok = await recordPublished(videoId);
+    if (!ok) {
+      console.error(`[worker] distribution.publish ${clipId}: 업로드 성공(${videoId})했으나 published 기록 실패 — `
+        + `externalId 유실 위험(수동 확인 필요). 실패로는 찍지 않는다(중복 업로드 방지).`);
+      return;
+    }
     console.log(`[worker] distribution.publish ${clipId} → youtube ${videoId} (${finalStatus})`);
   } catch (err: any) {
+    // 업로드가 이미 성공했으면(영상이 라이브) **절대 실패로 찍지 않는다** — 실패로 찍으면
+    // 재시도가 같은 영상을 중복 업로드한다(#1). externalId 를 살려 published 로 기록한다.
+    if (uploadedVideoId) {
+      const ok = await recordPublished(uploadedVideoId);
+      console.error(`[worker] distribution.publish ${clipId}: 업로드 성공(${uploadedVideoId}) 후 후속 단계 실패 — `
+        + `published ${ok ? "기록 완료" : "기록도 실패(externalId 유실 위험 · 수동 확인 필요)"}. 재시도 중복 방지.`,
+        err instanceof Error ? err.message.slice(0, 200) : err);
+      return;
+    }
     if (err instanceof TokenRevokedError) {
       // Refresh can never succeed again — park the channel AND surface the failure on the clip.
       await markChannelRevoked(channelId).catch(() => {});
