@@ -89,6 +89,8 @@ export const NAV_GROUPS: NavGroup[] = [
       { href: "/trends", label: "유튜브 트렌드", icon: TrendingUp },
       { href: "/business", label: "사업 운영", icon: Boxes },
       { href: "/ops", label: "운영 진단", icon: Activity },
+      // 내부 비교 뷰어(reframe-compare-viewer-plan §3) — 평가 데이터 구축용. 운영 배포 아님.
+      { href: "/reframe-lab", label: "리프레임 랩", icon: Sparkles },
     ],
   },
 ];
@@ -113,6 +115,7 @@ export const SCREEN_META: Record<string, { title: string; subtitle: string }> = 
   "/trends": { title: "유튜브 트렌드", subtitle: "국가·카테고리별 인기 급상승 영상 — 기획 참고용" },
   "/business": { title: "사업 운영", subtitle: "추천·클립·배포 결과를 프로그램/IP 단위로 — 부서 공유 · 편성 신호 · 승인 리스크" },
   "/ops": { title: "운영 진단", subtitle: "큐가 어떻게 도는지 · 업로드 영상에서 뭐가 나오고 뭐가 깨지는지" },
+  "/reframe-lab": { title: "리프레임 랩", subtitle: "세로 4택 비교 — 후보·점수·타임라인 (내부 평가용)" },
   // 사이드바에 없는 화면도 여기 있어야 한다 — 빠지면 상단바가 "STEP-D" 로 폴백해서
   // 어느 화면인지 제목이 알려주지 못한다(/episodes/:id 는 prefix 매칭으로 걸린다).
   "/episodes": { title: "회차", subtitle: "원본 · 추천 구간 · 파이프라인 진행" },

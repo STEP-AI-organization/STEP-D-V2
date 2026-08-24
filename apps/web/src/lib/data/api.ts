@@ -1083,6 +1083,76 @@ export async function fetchAutomation(): Promise<{
   return json(await fetch(`${API_BASE}/automation`, { cache: "no-store" }));
 }
 
+// ── 세로 4택 리프레임 비교 (reframe-compare-viewer-plan §4 · 내부 뷰어 전용) ──────
+
+export interface ReframeCandidate {
+  layout: string;
+  eligible: boolean;
+  score: number;
+  reasonCodes: string[];
+  cropWidthFraction: number;
+  metrics: Record<string, number> | null;
+  tracking?: { t: number; cx: number; cy: number; confidence?: number }[];
+}
+
+export interface ReframeCompareSegment {
+  beatId: number | string;
+  start: number;
+  end: number;
+  synthetic: boolean;
+  candidates: ReframeCandidate[];
+  selected: string;
+  selectedReasons: string[];
+  final: string;
+  hysteresis: string[];
+}
+
+export interface ReframeCompareResult {
+  clipId: string;
+  compareId: string;
+  status: "ready" | "queued" | "running" | "failed" | "not_found";
+  error?: string;
+  manifest?: {
+    frames: string[];
+    clipStart: number;
+    clipEnd: number;
+    switchesPerMinute: number | null;
+  };
+  candidates?: {
+    layouts: string[];
+    pendingAxes: string[];
+    weights: Record<string, number>;
+    segments: ReframeCompareSegment[];
+    timeline: { start: number; end: number; layout: string }[];
+    switchesPerMinute: number;
+  };
+}
+
+/** 비교 작업 생성 — 같은 입력(트림·beat)이면 서버가 기존 산출물을 재사용한다(멱등). */
+export async function createReframeCompare(
+  clipId: string,
+): Promise<{ compareId: string; status: string; reused: boolean }> {
+  const res = await fetch(`${API_BASE}/clips/${clipId}/reframe/candidates`, { method: "POST" });
+  if (!res.ok) throw new ApiError(res.status, await errorMessageOf(res));
+  return res.json();
+}
+
+export async function fetchReframeCompare(
+  clipId: string, compareId: string,
+): Promise<ReframeCompareResult> {
+  const res = await fetch(
+    `${API_BASE}/clips/${clipId}/reframe/candidates/${compareId}`, { cache: "no-store" },
+  );
+  if (res.status === 404) return { clipId, compareId, status: "not_found" };
+  if (!res.ok) throw new ApiError(res.status, await errorMessageOf(res));
+  return res.json();
+}
+
+/** 비교 산출물 파일 URL — 프록시 경유(API_BASE)라 서버가 준 절대경로 대신 여기서 조립한다. */
+export function reframeCompareFileUrl(clipId: string, compareId: string, name: string): string {
+  return `${API_BASE}/clips/${clipId}/reframe/candidates/${compareId}/file/${name}`;
+}
+
 /** 자동배포 완료 알림 담당자 이메일 저장 — 빈 문자열이면 알림을 끈다. */
 export async function setAutomationNotifyEmail(email: string): Promise<{ notifyEmail: string }> {
   const res = await fetch(`${API_BASE}/automation/notify-email`, {
