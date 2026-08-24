@@ -18,6 +18,7 @@ set -uo pipefail
 
 PROJECT="${PROJECT:-step-d}"
 REGION="${REGION:-us-central1}"
+GCS_UPLOAD_BUCKET="${GCS_UPLOAD_BUCKET:-stepd-upload-seoul}"
 REPO="us-central1-docker.pkg.dev/${PROJECT}/stepd-server/stepd-server"
 SA="stepd-deployer@${PROJECT}.iam.gserviceaccount.com"
 # gcloud 는 항상 deployer SA 로 — 사용자 계정(hkj)은 토큰이 만료되면 비대화형에서
@@ -48,7 +49,9 @@ check_clean() {
 do_server() {
   check_clean
   log "server 빌드 + 배포 (루트 cloudbuild.yaml · :latest 갱신 · Cloud Run 배포까지)"
-  gcloud builds submit --config=cloudbuild.yaml --project="$PROJECT" . || die "server 배포 실패"
+  gcloud builds submit --config=cloudbuild.yaml \
+    --substitutions=_GCS_UPLOAD_BUCKET="$GCS_UPLOAD_BUCKET" \
+    --project="$PROJECT" . || die "server 배포 실패"
   log "server 완료 → $(gcloud run services describe stepd-server --project=$PROJECT --region=$REGION --format='value(status.url)' 2>/dev/null)"
 }
 
@@ -82,7 +85,7 @@ do_worker() {
   # 쓰려면 "제출하고 끝내기 → 몇 시간 뒤 수거" 2단계로 바꿔야 한다(docs/ops/how-it-works.md §6).
   MSYS2_ARG_CONV_EXCL="--update-env-vars" gcloud run jobs update stepd-worker-content \
     --project="$PROJECT" --region="$REGION" \
-    --update-env-vars=CORE_PYTHON=/opt/corevenv/bin/python,CORE_DIR=/app \
+    --update-env-vars=CORE_PYTHON=/opt/corevenv/bin/python,CORE_DIR=/app,GCS_UPLOAD_BUCKET="$GCS_UPLOAD_BUCKET" \
     >/dev/null 2>&1 || log "⚠️ content job env 자가치유 실패 — 수동 확인 필요"
   log "worker 완료"
 }

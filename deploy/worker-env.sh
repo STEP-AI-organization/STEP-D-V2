@@ -41,6 +41,7 @@ APP_DIR="${APP_DIR:-$(dirname "$SCRIPT_DIR")}"
 ENV_FILE="${ENV_FILE:-/etc/stepd/worker.env}"
 PROJECT="${PROJECT:-step-d}"
 GCS_BUCKET="${GCS_BUCKET:-stepd-media}"
+GCS_UPLOAD_BUCKET="${GCS_UPLOAD_BUCKET:-stepd-upload-seoul}"
 VERTEX_LOCATION="${VERTEX_LOCATION:-asia-northeast3}"
 STT_PROVIDER="${STT_PROVIDER:-soniox}"
 
@@ -113,6 +114,7 @@ add_secret GOOGLE_CLIENT_SECRET stepd-google-client-secret
 # exist on the VM. The rest mirror the code's own defaults, set explicitly so the config is
 # inspectable on the box rather than implied.
 add_var GCS_BUCKET           "$GCS_BUCKET"
+add_var GCS_UPLOAD_BUCKET    "$GCS_UPLOAD_BUCKET"
 add_var CORE_PYTHON          "$APP_DIR/core/.venv/bin/python"
 add_var GOOGLE_CLOUD_PROJECT "$PROJECT"
 add_var VERTEX_LOCATION      "$VERTEX_LOCATION"

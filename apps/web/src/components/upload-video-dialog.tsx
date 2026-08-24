@@ -146,7 +146,7 @@ export function UploadDialog({
     sampleRef.current = { t: now, bytes };
   }
 
-  async function submit() {
+  function submit() {
     if (!file || busy || !canSubmit) return;
     setBusy(true);
     setDupError(null);
@@ -154,11 +154,21 @@ export function UploadDialog({
     setSpeed(0);
     sampleRef.current = { t: performance.now(), bytes: 0 };
 
-    // 모달이 닫혀도 살아 있어야 한다 — 추적은 모듈 전역이 한다.
+    // 세션 준비가 끝나면 모달은 즉시 닫힌다. 실제 전송 Promise 는 모듈 전역 tracker 가
+    // 들고 있어 화면을 옮겨도 살아 있고, 탭 새로고침/종료 때는 beforeunload 로 막는다.
     const job = trackUpload(
       uploadVideo(file, programId, {
         title: title || file.name,
         onProgress: handleProgress,
+        onStarted: () => {
+          backgrounded.current = true;
+          toast({
+            title: "백그라운드 업로드를 시작했습니다",
+            description: `회차 ${epNum} · 다른 화면에서 계속 작업해도 됩니다. 탭은 닫지 마세요.`,
+            tone: "progress",
+          });
+          onClose();
+        },
         episodeNumber: epNum,
         broadDate,
         track: track as "variety" | "drama",
@@ -167,19 +177,19 @@ export function UploadDialog({
       }),
     );
 
-    try {
-      const episodeId = await job;
+    void job.then((episodeId) => {
       toast({
         title: `회차 ${epNum} 원본이 올라갔습니다`,
-        description: backgrounded.current
-          ? "분석 대기열에 들어갔습니다. 회차 목록에서 확인하세요."
-          : "분석 대기열에 들어갔습니다.",
+        description: "서버 후처리와 분석 대기열에 들어갔습니다. 회차 목록에서 확인하세요.",
         tone: "done",
       });
-      onClose();
-      // 백그라운드로 돌린 사용자는 다른 일을 하고 있다 — 예고 없이 화면을 옮기지 않는다.
-      if (!backgrounded.current) router.push(`/episodes/${episodeId}`);
-    } catch (err) {
+      // 세션 준비 전에 동기 폴백이 끝난 특수 경우만 화면을 옮긴다. 정상 GCS 업로드는
+      // backgrounded=true 이므로 사용자가 보던 화면을 빼앗지 않는다.
+      if (!backgrounded.current) {
+        onClose();
+        router.push(`/episodes/${episodeId}`);
+      }
+    }).catch((err) => {
       if (err instanceof DuplicateEpisodeError) {
         setDupError(`회차 ${epNum} 은(는) 이 프로그램에 이미 있습니다. 다른 번호를 쓰세요.`);
         // 모달이 이미 닫혔으면(백그라운드 전환) 위 state 는 아무 데도 안 보인다 — 토스트로도 알린다.
@@ -195,22 +205,8 @@ export function UploadDialog({
           tone: "error",
         });
       }
-      setBusy(false);
-    }
-  }
-
-  /**
-   * "백그라운드로 계속" — 모달만 닫고 업로드는 그대로 둔다.
-   * 완료 토스트는 이 클로저가 책임진다(ToastProvider 는 앱 최상단이라 살아 있다).
-   */
-  function continueInBackground() {
-    backgrounded.current = true;
-    toast({
-      title: "백그라운드에서 업로드 중",
-      description: `회차 ${epNum} · 창을 닫아도 계속됩니다. 페이지를 새로고침하면 중단됩니다.`,
-      tone: "progress",
+      if (!backgrounded.current) setBusy(false);
     });
-    onClose();
   }
 
   async function submitYoutube() {
@@ -475,6 +471,11 @@ export function UploadDialog({
               <Notice tone="warn">
                 분석에는 대략 <b>러닝타임 × {ANALYZE_RATIO}</b> 만큼 걸립니다(60분 영상 ≈ 24분).
               </Notice>
+              {!busy && (
+                <Notice>
+                  업로드 시작 후 자동으로 백그라운드 전환됩니다. 다른 화면에서 계속 작업할 수 있습니다.
+                </Notice>
+              )}
 
               {busy && (
                 <div className="space-y-2">
@@ -514,15 +515,9 @@ export function UploadDialog({
               {missing.join(" · ")} 이(가) 필요합니다
             </span>
           )}
-          {busy && mode === "file" ? (
-            <button type="button" className="sd-btn" onClick={continueInBackground}>
-              백그라운드로 계속
-            </button>
-          ) : (
-            <button type="button" className="sd-btn" onClick={onClose} disabled={busy}>
-              취소
-            </button>
-          )}
+          <button type="button" className="sd-btn" onClick={onClose} disabled={busy}>
+            취소
+          </button>
           <button
             type="button"
             className="sd-btn sd-btn-primary"

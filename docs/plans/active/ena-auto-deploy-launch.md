@@ -62,11 +62,16 @@ A 는 AENA 쪽 구현이 필요하고 아래 §2 의 차단 항목이 먼저 닫
 ### AENA 가 지켜야 할 계약 (이번에 확정된 것)
 
 ```
+POST /api/media/upload-init          → 200 {mediaId, objectPath, sessionUrl}
+PUT  <sessionUrl>                    → GCS resumable 업로드
+POST /api/media/finalize             → 202 {media, episode, queued:true}
 POST /api/factory/ingest            → 202 {jobId}          (idempotencyKey 권장)
 GET  /api/factory/jobs/:id          → {status, terminal, counts:{clips,published,failed},
                                         stalledForMs, error, clips[]}
 POST /api/factory/jobs/:id/retry    → 202  (failed·hold·partial 만 · 같은 mediaId 재사용 = 재과금 없음)
 ```
+- 파일 원본이면 `factory/ingest.sourceUrl = finalize.media.id`. finalize 직후 바로 호출해도 된다.
+  서울 스테이징 후처리가 끝날 때까지 공장 잡이 `ingesting`에서 기다린다.
 - **`terminal: true` 일 때만 폴링을 멈춘다.** 상태 문자열 비교로 판단하지 말 것.
 - `status`: `done`(전건 게시) · `partial`(일부 실패) · `failed`(0건) · `hold`(사람 확인 필요).
   `done` 은 **한 건이라도 실제로 게시됐을 때만** 나간다.

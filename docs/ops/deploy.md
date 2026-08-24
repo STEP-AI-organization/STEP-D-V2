@@ -152,7 +152,19 @@ Cloud Run Jobs 는 `--remove-env-vars` 가 조용히 무시되므로 **지우는
 | env | 값 | 왜 |
 |---|---|---|
 | `CORE_PYTHON` · `CORE_DIR` | `/opt/corevenv/bin/python` · `/app` | 윈도우 경로가 눌러앉아 분석이 `spawn ENOENT` 로 전멸한 사고(2026-08-13·14) 재발 방지 |
+| `GCS_UPLOAD_BUCKET` | `stepd-upload-seoul` | 웹·AENA 업로드를 서울에서 받고 `media.prepare`가 운영 버킷으로 비동기 이동 |
 | `GEMINI_BATCH` | `1` | chyron 을 Vertex 배치로 → 그 스테이지 원가 절반(60분 ₩1,218 → ₩609) |
+
+서울 업로드 버킷은 서버·워커보다 먼저 준비한다. 스크립트는 멱등이라 재실행해도 된다.
+
+```bash
+bash deploy/setup-upload-bucket.sh
+bash deploy/cloud.sh server
+bash deploy/cloud.sh worker
+```
+
+서버와 content 워커 둘 중 한쪽에만 `GCS_UPLOAD_BUCKET`이 들어가면 업로드는 성공해도 워커가
+다른 버킷을 찾아 후처리에 실패한다. `cloud.sh`가 두 대상에 같은 기본값을 넣도록 고정돼 있다.
 
 **배치를 급히 끄려면** 재배포 없이 잡 env 만 바꾸면 된다(다음 `cloud.sh worker` 에서 다시 1 로 돌아온다 — 항구적으로 끌 거면 `deploy/cloud.sh` 도 같이 고칠 것):
 

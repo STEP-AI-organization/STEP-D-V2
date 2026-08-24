@@ -587,8 +587,14 @@ export async function generateUploadMetadata(
 
 type UploadResult = { episode: { id: string }; media: unknown; recommendations: unknown[] };
 
-// GCS resumable chunk size. MUST be a multiple of 256 KiB (GCS requirement); 16 MiB = 64×256 KiB.
-const RESUMABLE_CHUNK = 16 * 1024 * 1024;
+// GCS resumable chunk size. MUST be a multiple of 256 KiB (GCS requirement).
+// Long masters use larger chunks: on a 4 GB file, 16 MiB meant 256 sequential HTTP
+// round-trips even on a fast uplink. 64 MiB cuts that to 64 without buffering the file
+// (Blob.slice is a zero-copy view). Smaller uploads keep 16 MiB so a retry does not resend
+// an unnecessarily large slice on an unstable connection.
+const RESUMABLE_CHUNK_SMALL = 16 * 1024 * 1024;
+const RESUMABLE_CHUNK_LARGE = 64 * 1024 * 1024;
+const LARGE_UPLOAD_THRESHOLD = 1024 * 1024 * 1024;
 const CHUNK_RETRIES = 6;
 
 /**
@@ -605,6 +611,8 @@ const CHUNK_RETRIES = 6;
 export interface UploadVideoOptions {
   title?: string;
   onProgress?: (pct: number) => void;
+  /** 업로드 세션이 준비돼 파일 전송이 시작되는 순간. UI가 즉시 백그라운드로 빠질 때 쓴다. */
+  onStarted?: () => void;
   /** true = 빠른 분석(자막만, 시각 분석 스킵). 기본 false=정밀. content.analyze 잡 페이로드로 전달. */
   fast?: boolean;
   /** 회차 번호 (F1 필수 입력). 생략하면 서버가 MAX+1 로 매긴다. */
@@ -630,7 +638,7 @@ export async function uploadVideo(
   programId: string,
   opts: UploadVideoOptions = {},
 ): Promise<UploadResult> {
-  const { title, onProgress, fast, episodeNumber, broadDate, track, hasSubtitle } = opts;
+  const { title, onProgress, onStarted, fast, episodeNumber, broadDate, track, hasSubtitle } = opts;
   const meta = {
     programId,
     title,
@@ -658,8 +666,12 @@ export async function uploadVideo(
     | { mode: "multipart"; mediaId: string; objectPath: string }
   >(initRes);
 
-  if (init.mode === "multipart") return uploadVideoMultipart(file, programId, opts);
+  if (init.mode === "multipart") {
+    onStarted?.();
+    return uploadVideoMultipart(file, programId, opts);
+  }
 
+  onStarted?.();
   await uploadResumable(init.sessionUrl, file, onProgress);
 
   const finalRes = await fetch(`${API_BASE}/media/finalize`, {
@@ -798,17 +810,20 @@ async function uploadResumable(
   onProgress?: (pct: number) => void,
 ): Promise<void> {
   const total = file.size;
+  const chunkSize = total >= LARGE_UPLOAD_THRESHOLD
+    ? RESUMABLE_CHUNK_LARGE
+    : RESUMABLE_CHUNK_SMALL;
   let offset = 0;
 
   while (offset < total) {
-    let end = Math.min(offset + RESUMABLE_CHUNK, total);
+    let end = Math.min(offset + chunkSize, total);
 
     let res: ChunkResponse | null = null;
     let lastErr: unknown = null;
     for (let attempt = 0; attempt < CHUNK_RETRIES; attempt++) {
       // Re-slice from the CURRENT offset each attempt — after a committed-offset resync a
       // stale slice's Content-Range would mismatch and GCS 400s the whole upload.
-      end = Math.min(offset + RESUMABLE_CHUNK, total);
+      end = Math.min(offset + chunkSize, total);
       const chunk = file.slice(offset, end);
       try {
         res = await putChunk(sessionUrl, chunk, offset, end - 1, total, (loaded) => {

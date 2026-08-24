@@ -108,6 +108,18 @@ export interface FactoryJob {
   updatedAt: number;
 }
 
+/**
+ * A freshly finalized direct upload is intentionally a placeholder until media.prepare
+ * promotes it from the regional staging bucket and ffprobe fills its duration. AENA can
+ * submit factory/ingest immediately after finalize, so the orchestrator must wait here
+ * instead of racing content.analyze against an object that is still being promoted.
+ * YouTube imports use the same wait state while youtube.download owns the source.
+ */
+export function mediaNeedsPreparation(media: { path?: unknown; durationSec?: unknown }): boolean {
+  return String(media.path ?? "").startsWith("youtube:")
+    || !(Number(media.durationSec ?? 0) > 0);
+}
+
 function now(): number { return Date.now(); }
 
 /** 워커에서 서버 라우트를 부를 때 쓰는 베이스. */
@@ -316,6 +328,23 @@ export async function advance(factoryJobId: string): Promise<{ job: FactoryJob; 
         // 연산은 스킵해도 recordUsage 가 전체 분수를 다시 차감한다 — 프로덕션 스모크에서
         // 재분석 없는 관통인데 59크레딧이 재차감됐다 (2026-08-12 실측). 분석이 있으면
         // 바로 analyzing 으로 가서 추천 존재 확인만 한다.
+        if (mediaNeedsPreparation(existing as any)) {
+          // finalize 응답 직전 큐 DB가 순간 실패했어도 AENA의 ingest가 복구 출구가 된다.
+          // 진행 중 잡은 dedupe되고, 실패 종료된 잡은 새로 만들어진다.
+          if (String((existing as any).path ?? "").startsWith("gs://")) {
+            await enqueue("media.prepare", { mediaId: (existing as any).id },
+              { dedupeKey: `media.prepare:${(existing as any).id}` });
+          }
+          job = await save({
+            ...job,
+            state: "ingesting",
+            mediaId: (existing as any).id,
+            episodeId: (existing as any).episodeId,
+            note: "원본 업로드 후처리 대기 중",
+          });
+          return { job, retryInMs: 30_000 };
+        }
+
         const { getContentAnalysis } = await import("./db-pg.ts");
         const analysis = await getContentAnalysis((existing as any).id).catch(() => null);
         const analyzed = (analysis as any)?.status === "done";
@@ -341,8 +370,14 @@ export async function advance(factoryJobId: string): Promise<{ job: FactoryJob; 
     case "ingesting": {
       const media = (await listMedia()).find((m: any) => m.id === job.mediaId) as any;
       if (!media) return await fail("미디어가 사라졌다");
-      if (String(media.path ?? "").startsWith("youtube:")) {
-        return { job, retryInMs: 60_000 };   // 아직 다운로드 중
+      if (mediaNeedsPreparation(media)) {
+        // YouTube 다운로드 또는 서울 스테이징→운영 버킷 media.prepare 가 아직 진행 중.
+        // 둘 다 소스 소유 잡이 완료 후 durationSec 을 채우고 분석을 큐잉한다.
+        if (String(media.path ?? "").startsWith("gs://")) {
+          await enqueue("media.prepare", { mediaId: job.mediaId! },
+            { dedupeKey: `media.prepare:${job.mediaId!}` });
+        }
+        return { job, retryInMs: 30_000 };
       }
       // queued 분기와 같은 이유 — 분석이 이미 있으면 재큐잉(=재차감)하지 않는다.
       const { getContentAnalysis } = await import("./db-pg.ts");
@@ -354,7 +389,9 @@ export async function advance(factoryJobId: string): Promise<{ job: FactoryJob; 
         await enqueue("content.analyze", { mediaId: job.mediaId },
           { dedupeKey: `content.analyze:${job.mediaId}` });
       }
-      job = await save({ ...job, state: "analyzing", episodeId: media.episodeId });
+      job = await save({
+        ...job, state: "analyzing", episodeId: media.episodeId, note: undefined,
+      });
       return { job, retryInMs: analyzed ? 0 : 60_000 };
     }
 

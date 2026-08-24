@@ -215,11 +215,14 @@ PostgreSQL RLS로 워크스페이스 격리를 강제합니다. 키는 "누구 �
 <p>대용량 원본은 브라우저·서버에서 <b>GCS로 직접</b> resumable 업로드합니다(서버 바디를 경유하지 않음).</p>
 <pre><code>1) POST /api/media/upload-init          → { mediaId, objectPath, sessionUrl }
 2) PUT  &lt;sessionUrl&gt;  (바이트 직접 업로드 · GCS resumable 프로토콜)
-3) POST /api/media/finalize   { mediaId, objectPath }      → { media, episode }
-4) POST /api/media/&lt;mediaId&gt;/analyze   { fast? }            → { ok, queued }   (비동기)
-5) 폴링 GET /api/media/&lt;mediaId&gt;/analysis  → status: none | running | complete</code></pre>
+3) POST /api/media/finalize   { mediaId, objectPath }      → 202 { media, episode, queued:true }
+4) 선택: POST /api/factory/ingest { sourceUrl: media.id, ... } → 202 { jobId }
+5) 폴링 GET /api/media/&lt;mediaId&gt;/analysis  → status: none | pending | done | failed</code></pre>
 <div class="note"><code>objectPath</code>는 <code>uploads/&lt;mediaId&gt;.&lt;ext&gt;</code> 형식이어야 하고 finalize는
-GCS 모드 전용입니다. 소용량 멀티파트 <code>POST /api/media/upload</code>(~32MB Cloud Run 상한)는
+GCS 모드 전용입니다. finalize 뒤 서울 스테이징→운영 버킷 이동·probe·분석은
+<code>media.prepare</code> 워커가 자동 수행합니다. AENA는 완료를 기다리지 않고 factory ingest를
+호출해도 되며, 공장 잡은 원본 준비가 끝날 때까지 <code>ingesting</code>에서 기다립니다.
+소용량 멀티파트 <code>POST /api/media/upload</code>(~32MB Cloud Run 상한)는
 <b>키 화이트리스트에 없습니다</b>(세션 전용).</div>
 </section>
 
@@ -246,7 +249,7 @@ GCS 모드 전용입니다. 소용량 멀티파트 <code>POST /api/media/upload<
 
 <div class="endpoint">
   <span class="method m-post">POST</span> <span class="path">/api/media/finalize</span> <span class="badge scope">media:write</span>
-  <p>바이트가 GCS에 안착한 뒤 회차·미디어를 등록한다(재프로브+faststart 리먹스). 재호출 멱등.</p>
+  <p>바이트가 서울 GCS 스테이징에 안착한 뒤 회차·미디어를 등록하고 비동기 후처리를 큐잉한다. 재호출 멱등.</p>
   <table>
     <tr><th>본문 필드</th><th>타입</th><th>설명</th></tr>
     <tr><td class="mono">mediaId</td><td>string</td><td><b>필수</b></td></tr>
@@ -258,7 +261,7 @@ GCS 모드 전용입니다. 소용량 멀티파트 <code>POST /api/media/upload<
     <tr><td class="mono">track</td><td>string</td><td>선택 · "variety" | "drama"</td></tr>
     <tr><td class="mono">hasSubtitle, fast</td><td>boolean</td><td>선택</td></tr>
   </table>
-  <pre><code>200 → { "media": {...}, "episode": {...}, "recommendations": [] }</code></pre>
+  <pre><code>202 → { "media": {...}, "episode": {...}, "recommendations": [], "queued": true }</code></pre>
   <p class="muted">400 objectPath 형식/불일치·program not found·upload not found · 409 duplicate episode</p>
 </div>
 

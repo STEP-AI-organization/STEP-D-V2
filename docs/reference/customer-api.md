@@ -84,6 +84,21 @@ Authorization: Bearer stepd_live_...
 5. 산출물: `GET /api/media/:id/shorts` · `/clips` · `/analysis` · `/transcript`
 6. 성과: `GET /api/factory/jobs/:id/performance` (업로드 직후 `hasMetrics:false` 는 정상)
 
+### AENA 파일 원본 업로드
+
+YouTube URL이 아니라 AENA가 가진 영상 파일은 아래 순서로 넣는다. API 서버 바디에는 영상
+바이트를 보내지 않는다.
+
+1. `POST /api/media/upload-init` → `{ mediaId, objectPath, sessionUrl }`
+2. AENA 서버가 `sessionUrl`로 GCS resumable `PUT` — API 키는 GCS 요청에 보내지 않는다.
+3. `POST /api/media/finalize` → `202 { media, episode, queued:true }`
+4. 곧바로 `POST /api/factory/ingest`의 `sourceUrl`에 위 `media.id`를 넣는다.
+
+`finalize` 뒤의 서울 스테이징→운영 버킷 이동·프로브·분석은 `media.prepare` 워커가 비동기로
+처리한다. AENA는 이동 완료를 기다렸다가 ingest할 필요가 없다. 공장 잡이 `ingesting` 상태에서
+원본 준비 완료를 기다린 뒤 분석·쇼츠·배포를 이어간다. 같은 파일 재시도에는 같은
+`idempotencyKey`를 사용한다.
+
 ### 에러
 
 | 코드 | 뜻 | 대응 |

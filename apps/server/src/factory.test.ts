@@ -6,9 +6,10 @@
  * 고정해 둘 수 있다. 자동 배포에서 가장 비싼 사고는 "의도치 않게 켜져 있었다"이기 때문이다.
  */
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import { afterEach, describe, it } from "node:test";
 
-import { dailyCap, factoryEnabled, publicizeDelayMs } from "./factory.ts";
+import { dailyCap, factoryEnabled, mediaNeedsPreparation, publicizeDelayMs } from "./factory.ts";
 
 const KEYS = ["FACTORY_ENABLED", "FACTORY_DAILY_CAP", "FACTORY_PUBLICIZE_DELAY_MIN"] as const;
 const original = Object.fromEntries(KEYS.map((k) => [k, process.env[k]]));
@@ -83,5 +84,34 @@ describe("공개 전환 유예", () => {
       setEnv("FACTORY_PUBLICIZE_DELAY_MIN", v);
       assert.equal(publicizeDelayMs(), 10 * 60_000, `${JSON.stringify(v)} 는 기본값`);
     }
+  });
+});
+
+describe("외부 API 원본 준비 대기", () => {
+  it("AENA가 finalize 직후 ingest해도 duration=0 placeholder는 분석하지 않는다", () => {
+    assert.equal(mediaNeedsPreparation({
+      path: "gs://stepd-upload-seoul/uploads/m_aena.mp4",
+      durationSec: 0,
+    }), true);
+  });
+
+  it("YouTube 다운로드 중인 원본도 같은 ingest 대기 상태를 쓴다", () => {
+    assert.equal(mediaNeedsPreparation({
+      path: "youtube:https://youtu.be/example",
+      durationSec: 3600,
+    }), true);
+  });
+
+  it("media.prepare가 길이와 운영 경로를 채우면 공장 분석을 진행할 수 있다", () => {
+    assert.equal(mediaNeedsPreparation({
+      path: "gs://stepd-media/uploads/m_aena.mp4",
+      durationSec: 3598.4,
+    }), false);
+  });
+
+  it("공장 배선이 준비 전 분석 대신 media.prepare를 복구 큐잉한다", () => {
+    const source = fs.readFileSync(new URL("./factory.ts", import.meta.url), "utf8");
+    assert.match(source, /if \(mediaNeedsPreparation\(existing as any\)\)[\s\S]*?enqueue\("media\.prepare"/);
+    assert.match(source, /case "ingesting":[\s\S]*?mediaNeedsPreparation\(media\)[\s\S]*?enqueue\("media\.prepare"/);
   });
 });

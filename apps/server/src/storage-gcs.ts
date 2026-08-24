@@ -12,12 +12,17 @@ import path from "node:path";
 import { Readable } from "node:stream";
 
 const BUCKET = process.env.GCS_BUCKET;
+// 한국 사용자의 대용량 원본은 서울 리전 버킷으로 먼저 받는다. 비어 있으면 기존 단일
+// 버킷 동작과 완전히 같다. 워커가 promoteUpload() 로 운영 버킷에 서버사이드 복사한 뒤
+// 분석하므로, 사용자는 서울까지만 업로드하면 된다.
+const UPLOAD_BUCKET = process.env.GCS_UPLOAD_BUCKET || BUCKET;
 const DEV_STORAGE = process.env.STEPD_STORAGE_DIR
   ? path.resolve(process.env.STEPD_STORAGE_DIR)
   : path.resolve(process.cwd(), "storage");
 
 let storage: Storage | null = null;
 let bucket: ReturnType<Storage["bucket"]> | null = null;
+let uploadBucket: ReturnType<Storage["bucket"]> | null = null;
 
 function getStorage(): Storage {
   if (!storage) storage = new Storage();
@@ -28,6 +33,12 @@ function getBucket() {
   if (!BUCKET) return null;
   if (!bucket) bucket = getStorage().bucket(BUCKET);
   return bucket;
+}
+
+function getUploadBucket() {
+  if (!UPLOAD_BUCKET) return null;
+  if (!uploadBucket) uploadBucket = getStorage().bucket(UPLOAD_BUCKET);
+  return uploadBucket;
 }
 
 // ── paths ──────────────────────────────────────────────────────────────────────
@@ -95,13 +106,68 @@ export async function createResumableSession(
   contentType: string,
   origin?: string,
 ): Promise<string> {
-  const b = getBucket();
+  const b = getUploadBucket();
   if (!b) throw new Error("resumable upload requires GCS mode (GCS_BUCKET unset)");
   const [uri] = await b.file(objectPath).createResumableUpload({
     metadata: { contentType: contentType || "application/octet-stream" },
     ...(origin ? { origin } : {}),
   });
   return uri;
+}
+
+/** URI of the object in the regional upload/staging bucket. */
+export function uploadGcsUri(objectPath: string): string {
+  return `gs://${UPLOAD_BUCKET}/${objectPath}`;
+}
+
+/** Metadata checks used by /finalize before the object has been promoted. */
+export async function uploadFileSize(objectPath: string): Promise<number> {
+  const b = getUploadBucket();
+  if (b) {
+    const [meta] = await b.file(objectPath).getMetadata();
+    return Number(meta.size);
+  }
+  return fs.statSync(path.join(DEV_STORAGE, objectPath)).size;
+}
+
+export async function uploadFileExists(objectPath: string): Promise<boolean> {
+  const b = getUploadBucket();
+  if (b) {
+    const [exists] = await b.file(objectPath).exists();
+    return exists;
+  }
+  return fs.existsSync(path.join(DEV_STORAGE, objectPath));
+}
+
+/**
+ * Promote a Seoul staging object into the primary processing bucket.
+ *
+ * GCS performs this as a server-side rewrite over Google's backbone; no video bytes pass
+ * through Node. It is idempotent so a worker retry after a successful copy is safe.
+ */
+export async function promoteUpload(objectPath: string): Promise<string> {
+  const source = getUploadBucket();
+  const destination = getBucket();
+  if (!source || !destination) return gcsUri(objectPath);
+  if (UPLOAD_BUCKET === BUCKET) return gcsUri(objectPath);
+
+  const sourceFile = source.file(objectPath);
+  const destinationFile = destination.file(objectPath);
+  const [sourceExists, destinationExists] = await Promise.all([
+    sourceFile.exists().then(([v]) => v),
+    destinationFile.exists().then(([v]) => v),
+  ]);
+  if (!sourceExists) {
+    if (destinationExists) return gcsUri(objectPath);
+    throw new Error(`staged upload not found: gs://${UPLOAD_BUCKET}/${objectPath}`);
+  }
+
+  await sourceFile.copy(destinationFile);
+  await sourceFile.delete({ ignoreNotFound: true }).catch((err) => {
+    // 복사는 끝났다. 정리 실패 때문에 분석 전체를 재시도할 이유는 없다.
+    console.warn(`[gcs] promoted upload cleanup failed: ${String(err)}`);
+  });
+  return gcsUri(objectPath);
 }
 
 /**

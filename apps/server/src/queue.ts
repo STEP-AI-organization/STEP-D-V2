@@ -21,6 +21,7 @@ export type JobType =
   | "video.comments"
   // Content pipeline (uploaded episodes): STT → refine → scenes → vision → shorts.
   // Distinct from the video.* YouTube-analytics jobs above.
+  | "media.prepare"
   | "content.analyze"
   // AI Shorts reframing: clip-only proxy + face/safety planner (content worker).
   | "clip.reframe"

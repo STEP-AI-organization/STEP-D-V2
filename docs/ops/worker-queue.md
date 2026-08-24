@@ -51,7 +51,7 @@ Cloud Run은 **응답이 끝나는 순간 CPU를 throttle**하고 요청을 **60
 | **크래시 복구** | 워커가 죽어 `running`으로 잠긴 잡은 30분 뒤 `requeueStale()`이 회수한다 (기동 시 + 15분 tick마다). |
 | **후속 잡** | 핸들러가 `FollowUp`을 반환하면 현재 잡이 `done`이 된 **뒤에** enqueue한다. 자기 재큐 잡(hotwatch)이 아직 `running`인 자기 자신과 dedupe 충돌하지 않게 하기 위한 장치다. |
 
-## 잡 타입 21종
+## 잡 타입 22종
 
 `queue.ts`의 `JobType` 정의와 `worker.ts`의 `handle()` switch가 처리한다.
 새 잡 타입(렌더링 등)이 들어올 자리도 이 switch다.
@@ -62,6 +62,7 @@ Cloud Run은 **응답이 끝나는 순간 CPU를 throttle**하고 요청을 **60
 | `video.analyze` | 영상별 애널리틱스 + 리텐션 저장 (Analytics 4콜/영상) | channel.analyze 팬아웃 |
 | `video.hotwatch` | 신규 업로드를 게시 후 48시간 동안 1시간 간격으로 조회수 스냅샷. 창이 안 닫혔으면 **자기 자신을 재큐**(FollowUp) | 동기화가 새 업로드를 발견할 때 (`channel-pipeline.ts`) |
 | `video.comments` | fresh 영상의 상위 댓글 100개(1페이지) 수집 | channel.analyze 팬아웃 |
+| `media.prepare` | 서울 업로드 스테이징 버킷의 원본을 운영 버킷으로 서버사이드 복사하고 프로브·썸네일을 만든 뒤 `content.analyze` 큐잉 | `POST /api/media/finalize` |
 | `content.analyze` | 업로드된 회차 영상을 GCS에서 내려받아 파이썬 `core/` 파이프라인(`python -m core.analyze`, STT→정제→장면→비전→이름자막→쇼츠, **Vertex Gemini**)으로 분석 → `content_analysis` 저장 + AI 쇼츠를 회차 추천 보드에 기록. 상세는 [pipeline-current.md](pipeline-current-state.md) | `POST /api/media/upload` (업로드 시), `POST /api/admin/queue/purge`의 재큐 |
 | `youtube.reconcile` | 예약(`scheduled`)으로 올린 영상이 **실제로 공개됐는지** videos.list 로 되읽어 `published` 로 전환. 되묻지 않으면 배포 화면이 "예약됨" 에 영구 고정된다(AENA `youtube-reconcile.job.ts` 이식). 폴링 창(예약 10분 전~24시간 후) · 채널별 배치(50) · `public` 확정 신호일 때만 전환 | 워커 기동 시 테넌트별 팬아웃(`fanOutYoutubeReconcile`) |
 | `clip.reframe` | 현재 클립 구간의 5fps·640px 프록시를 만들고 `python -m core.reframe`으로 Beat별 Fit/Fill·얼굴 추적 플랜 생성. 전체 결과는 `analysis/<mediaId>/reframe/…`, 검증된 compact plan은 `clip.reframe`에 저장. 최대 2회 시도 | `POST /api/clips/:id/reframe` (`mode=ai_multi`) |
@@ -78,7 +79,7 @@ Cloud Run은 **응답이 끝나는 순간 CPU를 throttle**하고 요청을 **60
 | systemd 서비스 | `WORKER_JOBS` | claim하는 타입 | 채널 sweep |
 |---|---|---|---|
 | `stepd-worker-youtube` | `youtube` | channel.analyze · video.analyze · video.hotwatch · video.comments · distribution.publish · automation.cycle · youtube.reconcile | O (15분) |
-| `stepd-worker-content` | `content` | content.analyze · clip.reframe · youtube.download · match.* · thumbnail.* · clip.metadata | X (youtube 일이라 안 함) |
+| `stepd-worker-content` | `content` | media.prepare · content.analyze · clip.reframe · youtube.download · match.* · thumbnail.* · clip.metadata | X (youtube 일이라 안 함) |
 
 - 구현: `queue.ts`의 `claimJob(types?)` 타입 필터 + `worker.ts`의 `WORKER_JOBS` env 분기.
   `SKIP LOCKED`라 두 워커가 같은 테이블을 안전하게 나눠 먹는다 — 사실상 별도 큐, 경합 0.
@@ -87,7 +88,7 @@ Cloud Run은 **응답이 끝나는 순간 CPU를 throttle**하고 요청을 **60
   content 레인만 별도/GPU VM으로 떼면 된다(그 VM만 `WORKER_JOBS=content`로 띄우면 끝).
 
 **content 레인 필수 env** (`/etc/stepd/worker.env`, `worker-vm.sh`가 넣는다):
-`GCS_BUCKET`(GCS 영상 읽기 — 없으면 로컬모드로 못 찾아 ENOENT) · `CORE_PYTHON`(=`/opt/stepd/core/.venv/bin/python`,
+`GCS_BUCKET`(GCS 영상 읽기 — 없으면 로컬모드로 못 찾아 ENOENT) · `GCS_UPLOAD_BUCKET`(선택: 서울 업로드 스테이징, 미설정 시 GCS_BUCKET) · `CORE_PYTHON`(=`/opt/stepd/core/.venv/bin/python`,
 없으면 Windows 기본경로로 폴백해 실패) · `GOOGLE_CLOUD_PROJECT` · `VERTEX_LOCATION` · `STT_PROVIDER=gemini`.
 AI 리프레임은 `REFRAME_FACE_MODEL`도 필요하다. Cloud Run worker 이미지는 SHA-256을 검증한
 MediaPipe 모델을 `/opt/reframe-models/`에 빌드 시 내려받고 이 환경변수를 기본 설정한다.

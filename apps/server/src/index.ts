@@ -284,6 +284,10 @@ import {
   parseObjectPath,
   useGcs,
   createResumableSession,
+  uploadGcsUri,
+  uploadFileSize,
+  uploadFileExists,
+  promoteUpload,
   signedReadUrl,
   deleteFile,
   deletePrefix,
@@ -3656,92 +3660,63 @@ app.post("/api/media/finalize", async (c) => {
     const episode = existing.episodeId
       ? await getEntity<Record<string, unknown>>("episode", existing.episodeId)
       : null;
-    return c.json({ media: mediaPublic(existing), episode, recommendations: [] });
+    // A previous finalize may have committed the rows and lost the response before the
+    // prepare enqueue. Replaying finalize must repair that gap instead of stranding a
+    // duration=0 episode forever. Queue dedupe makes this safe when the job already exists.
+    if (!(existing.durationSec > 0)) {
+      await enqueue(
+        "media.prepare",
+        { mediaId, ...(body.fast === true ? { fast: true } : {}) },
+        { dedupeKey: `media.prepare:${mediaId}` },
+      ).catch((err) => console.error(`[finalize] media.prepare replay enqueue failed ${mediaId}`, err));
+    }
+    return c.json({ media: mediaPublic(existing), episode, recommendations: [], queued: true });
   }
 
-  // Confirm the object actually landed in GCS before we build rows around it.
-  if (!(await fileExists(objectPath))) return c.json({ error: "upload not found in storage" }, 400);
+  // Confirm the object actually landed in the regional upload bucket before we build rows.
+  if (!(await uploadFileExists(objectPath))) return c.json({ error: "upload not found in storage" }, 400);
 
   const filename =
     typeof body.filename === "string" && body.filename ? String(body.filename) : `${mediaId}.mp4`;
   const title = typeof body.title === "string" && body.title ? String(body.title) : filename;
   const mime =
     typeof body.contentType === "string" && body.contentType ? String(body.contentType) : "video/mp4";
-  // Server-authoritative size: the remux gate below is an OOM guard for RAM-backed /tmp,
-  // so it must never trust a client-supplied number (size: 1 on a 10 GB object would pull
-  // the whole remux output into tmpfs). body.size is display-only.
-  let size = await fileSize(objectPath).catch(() => 0);
+  // Server-authoritative size from the staging bucket. body.size is display-only.
+  let size = await uploadFileSize(objectPath).catch(() => 0);
   if (size <= 0 && typeof body.size === "number" && body.size > 0) size = body.size;
-  const storedPath = `gs://${process.env.GCS_BUCKET}/${objectPath}`;
-
-  // Normalize to a browser-streamable progressive mp4. Uploaded files are often fragmented
-  // (fMP4: tiny init moov + moof/mdat fragments) which a plain <video> can't play smoothly.
-  // Remux container-only (-c copy, no re-encode → seconds) to moov-at-front progressive and
-  // replace the object in place. Size-guarded so Cloud Run's RAM-backed /tmp doesn't OOM;
-  // larger masters keep the original (a disk-backed worker remux can cover those later).
-  // The threshold must fit the instance's memory budget (the whole output lives in tmpfs
-  // alongside node + ffmpeg), so it's env-tunable — default 512 MB is safe on a 2 GB
-  // instance; raise REMUX_MAX_MB only if the Cloud Run instance has the RAM to spare.
-  const REMUX_MAX = (Number(process.env.REMUX_MAX_MB) || 512) * 1024 * 1024;
-  const remuxSize = await fileSize(objectPath).catch(() => 0); // never the client's number
-  if (hasFfmpeg() && remuxSize > 0 && remuxSize <= REMUX_MAX) {
-    const tmpDir = path.resolve("/tmp/stepd-uploads");
-    fs.mkdirSync(tmpDir, { recursive: true });
-    const webTmp = path.join(tmpDir, `${mediaId}-web.mp4`);
-    try {
-      const inUrl = await signedReadUrl(objectPath);
-      await remuxFaststart(inUrl, webTmp);
-      await uploadFile(objectPath, webTmp); // overwrite fMP4 with progressive
-      size = fs.statSync(webTmp).size;
-      console.log(`[finalize] remuxed ${mediaId} → progressive mp4 (${size} bytes)`);
-    } catch (e) {
-      console.error("[finalize] remux failed — keeping original (may not stream if fragmented):", e);
-    } finally {
-      try { fs.unlinkSync(webTmp); } catch {}
-    }
-  }
-
-  // Probe + thumbnail by handing ffmpeg a short-lived signed URL. ffmpeg range-reads only
-  // the bytes it needs (header for probe, one frame for the thumb) — no multi-GB download,
-  // so Cloud Run memory stays flat regardless of source length.
-  let meta = { durationSec: 0, width: 0, height: 0, codec: "", hasAudio: false };
-  let thumbStored: string | null = null;
-  if (hasFfmpeg()) {
-    try {
-      const readUrl = await signedReadUrl(objectPath);
-      meta = await probe(readUrl).catch((e) => {
-        console.error("[finalize] probe failed", e);
-        return meta;
-      });
-      const tmpDir = path.resolve("/tmp/stepd-uploads");
-      fs.mkdirSync(tmpDir, { recursive: true });
-      const thumbTmp = path.join(tmpDir, `${mediaId}.jpg`);
-      try {
-        await captureThumbnail(readUrl, Math.max(1, meta.durationSec * 0.1), thumbTmp);
-        thumbStored = await uploadFile(thumbPath(mediaId), thumbTmp);
-      } catch (e) {
-        console.error("[finalize] thumbnail failed", e);
-      } finally {
-        // /tmp is RAM-backed on Cloud Run — clear the thumb temp regardless of outcome.
-        try { fs.unlinkSync(thumbTmp); } catch {}
-      }
-    } catch (err) {
-      // Most likely the runtime SA lacks signBlob — degrade gracefully (duration 0 → default recs).
-      console.error("[finalize] signed-url probe unavailable (grant signBlob to the Cloud Run SA):", err);
-    }
-  }
+  const storedPath = uploadGcsUri(objectPath);
 
   try {
     const result = await buildEpisodeAndMedia({
       mediaId, programId, program, storedPath,
-      filename, title, mime, size, meta, thumbPath: thumbStored,
+      filename, title, mime, size,
+      meta: { durationSec: 0, width: 0, height: 0, codec: "", hasAudio: false },
+      thumbPath: null,
       fast: body.fast === true,
       episodeNumber: readEpisodeNumber(body.episodeNumber),
       broadDate: typeof body.broadDate === "string" ? body.broadDate : undefined,
       track: readTrack(body.track),
       hasSubtitle: body.hasSubtitle !== false,
+      pendingIngestNote: "서울 업로드 완료 · 서버 후처리 대기 중…",
     });
-    return c.json(result);
+    try {
+      await enqueue(
+        "media.prepare",
+        { mediaId, ...(body.fast === true ? { fast: true } : {}) },
+        { dedupeKey: `media.prepare:${mediaId}` },
+      );
+    } catch (err) {
+      const reason = err instanceof Error ? err.message : String(err);
+      console.error(`[finalize] media.prepare 큐잉 실패 ${mediaId}:`, reason);
+      await putEntity("episode", result.episode.id, {
+        ...result.episode,
+        pipeline: {
+          stage: "analyze", stageStatus: "error", progress: 0,
+          note: `업로드 후처리 큐 등록 실패 — 다시 시도해 주세요: ${reason}`,
+        },
+      }).catch(() => {});
+    }
+    return c.json({ ...result, queued: true }, 202);
   } catch (err) {
     if (err instanceof DuplicateEpisodeError) {
       return c.json({ error: "duplicate episode", episodeNumber: err.episodeNumber, programId }, 409);
@@ -3774,7 +3749,10 @@ app.post("/api/media/clip-finalize", async (c) => {
     return c.json({ clip: clip ?? null, media: mediaPublic(existing) });
   }
 
-  if (!(await fileExists(objectPath))) return c.json({ error: "upload not found in storage" }, 400);
+  if (!(await uploadFileExists(objectPath))) return c.json({ error: "upload not found in storage" }, 400);
+  // clip uploads share upload-init, so a separate regional upload bucket must be promoted
+  // before the existing clip preparation path reads from the primary bucket.
+  await promoteUpload(objectPath);
 
   const filename = typeof body.filename === "string" && body.filename ? String(body.filename) : `${mediaId}.mp4`;
   const title = typeof body.title === "string" && body.title ? String(body.title) : filename;

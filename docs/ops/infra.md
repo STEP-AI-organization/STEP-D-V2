@@ -168,7 +168,36 @@ CPU 전용 실행은 9.45초 만에 실패한다(mmaction2 가 CUDA 요구).
   schema.sql만 돌려서 새 DB를 부트스트랩하면 이 셋이 빠진다. 상세: [../reference/data-model.md](../reference/data-model.md).
 
 ### 4. GCS 버킷
-- `stepd-media` — 업로드 영상·썸네일·클립 (`GCS_BUCKET`).
+- `stepd-media` — **운영 원본·썸네일·클립**, `us-central1` (`GCS_BUCKET`).
+- `stepd-upload-seoul` — **업로드 전용 스테이징**, 서울 `asia-northeast3`
+  (`GCS_UPLOAD_BUCKET`). 브라우저와 AENA 서버는 여기까지 resumable 업로드한다.
+  `media.prepare` content 워커가 Google 내부 서버사이드 rewrite로 `stepd-media`에 복사하고,
+  복사 성공 후 서울 원본을 지운 뒤 probe·썸네일·분석을 잇는다. 영상 바이트는 Cloud Run 서버를
+  통과하지 않는다.
+
+서울 버킷의 운영 정책은 `bash deploy/setup-upload-bucket.sh`가 정본이다.
+
+| 항목 | 값 | 이유 |
+|---|---|---|
+| 리전·클래스 | `asia-northeast3` · `STANDARD` | 한국 업로드 RTT·전송속도 개선 |
+| 접근 | Uniform bucket-level access · Public Access Prevention | 공개 객체 금지, 런타임 SA만 접근 |
+| 런타임 권한 | `stepd-deployer@step-d.iam.gserviceaccount.com`에 bucket-level `roles/storage.objectAdmin` | 서버 세션 발급 + 워커 복사·삭제 |
+| CORS | `https://stepd.stepai.kr`, `http://localhost:3000`; `PUT/POST/GET/HEAD/OPTIONS`; `Content-Range` 노출 | 웹 resumable 업로드 |
+| soft delete | 비활성 | 성공 직후 지우는 임시 원본을 7일간 중복 과금하지 않음 |
+| lifecycle | 7일 지난 객체 삭제 | finalize하지 않은 중단·고아 업로드 정리 |
+
+재현·검증:
+
+```bash
+bash deploy/setup-upload-bucket.sh
+gcloud storage buckets describe gs://stepd-upload-seoul --project step-d --format=json
+gcloud storage buckets get-iam-policy gs://stepd-upload-seoul --project step-d
+```
+
+주의: 서울→`us-central1` 복사는 리전 간 네트워크 비용이 생긴다. 사용자 업로드 완료 응답과
+분리돼 체감 대기시간에는 포함되지 않지만 비용 모니터링 대상이다. 장기적으로 분석·운영 버킷까지
+서울로 옮기면 이 복사 비용을 없앨 수 있다. `GCS_UPLOAD_BUCKET`을 비우면 코드는 `GCS_BUCKET`으로
+폴백하지만, 표준 배포값은 `stepd-upload-seoul`이다.
 - `step-d-landing` — 랜딩 영상. `step-d_cloudbuild` — Cloud Build 산출.
 
 ### 5. AI — Vertex AI (Gemini)

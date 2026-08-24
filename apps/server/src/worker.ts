@@ -49,11 +49,11 @@ import {
 import { clipGate } from "./publish-dispatch.ts";
 import { checkCredits } from "./credits.ts";
 import { billableMinutes } from "./billing.ts";
-import { probe, captureThumbnail } from "./ffmpeg.ts";
+import { probe, captureThumbnail, remuxFaststart } from "./ffmpeg.ts";
 import {
   prepareProgramAssets, publishStyleProfile, publishThumbnails, tempAssetRoot, pullPrefix,
 } from "./thumbnail-assets.ts";
-import { uploadFile, uploadPath, thumbPath } from "./storage-gcs.ts";
+import { uploadFile, uploadPath, thumbPath, promoteUpload } from "./storage-gcs.ts";
 import { initQueue, claimJob, completeJob, failJob, requeueStale, heartbeatJob, enqueue, lastDoneJobAt, queueStats, type Job, type JobType } from "./queue.ts";
 import { runWithTenant, runAsSystem, DEFAULT_TENANT_ID } from "./tenant.ts";
 import { runAutomationCycle } from "./automation-cycle.ts";
@@ -73,7 +73,7 @@ import {
   type PersistTokens,
 } from "./youtube.ts";
 import {
-  createReadStream, parseObjectPath, fileExists, signedReadUrl, readFile, listPrefix,
+  createReadStream, parseObjectPath, fileExists, fileSize, signedReadUrl, readFile, listPrefix,
 } from "./storage-gcs.ts";
 import { pipeline } from "node:stream/promises";
 import {
@@ -132,7 +132,7 @@ const JOB_LANES: Record<"content" | "youtube" | "gebd" | "naver" | "download", J
   //    큐잉은 되는데 **아무도 claim 하지 않아 영원히 pending** 이었다. 라우트는 {jobId} 로
   //    성공을 돌려주므로 화면에서는 "생성 중" 으로만 보인다 — 이 리포의 전형적 조용한 실패다.
   //    아래 "모든 JobType 은 실제로 도는 레인에 속한다" 테스트가 재발을 막는다.
-  content: ["content.analyze", "match.align", "match.segment", "match.learn",
+  content: ["media.prepare", "content.analyze", "match.align", "match.segment", "match.learn",
             "thumbnail.style", "thumbnail.generate", "clip.metadata", "clip.reframe"],
   // factory.* 도 youtube 레인 — 상태기계 한 걸음은 DB 몇 번 읽고 재큐하는 게 전부라
   // 짧고, 배포(distribution.publish)와 같은 레인에 있어야 순서가 자연스럽다.
@@ -254,6 +254,7 @@ async function handle(job: Job): Promise<FollowUp | void> {
     case "distribution.publish": return handleDistributionPublish(job);
     case "distribution.updatemeta": return handleDistributionUpdateMeta(job);
     case "naver.publish": return handleNaverPublish(job);
+    case "media.prepare": return handleMediaPrepare(job);
     case "content.analyze": {
       await runContentAnalyze(String(job.payload.mediaId ?? ""), Boolean(job.payload.fast),
         { n: Number(job.attempts ?? 0), max: Number(job.maxAttempts ?? 0) });
@@ -640,6 +641,112 @@ function sweepStaleYoutubeDirs(): void {
     } catch {
       // raced/locked — next sweep gets it
     }
+  }
+}
+
+// ── media.prepare — regional staging → primary bucket → probe/thumb → analysis ─────
+//
+// The browser uploads straight to a Seoul GCS bucket. /media/finalize only creates the
+// placeholder rows and enqueues this job, so its HTTP response is not held open by a
+// cross-region copy or ffprobe. This worker promotes the object over Google's backbone,
+// reads just the ranges needed for metadata/thumbnail, then starts content.analyze.
+async function handleMediaPrepare(job: Job): Promise<void> {
+  const mediaId = String(job.payload.mediaId ?? "");
+  if (!mediaId) throw new Error("media.prepare requires mediaId");
+
+  const media = await getMedia(mediaId);
+  if (!media) {
+    console.warn(`[worker] media.prepare: media ${mediaId} gone — dropping job`);
+    return;
+  }
+  const objectPath = parseObjectPath(media.path);
+  const fast = Boolean(job.payload.fast);
+
+  const setEpisodeNote = async (note: string, stageStatus: string, progress: number) => {
+    if (!media.episodeId) return;
+    const ep = await getEntity<Record<string, unknown>>("episode", media.episodeId);
+    if (ep) {
+      await putEntity("episode", media.episodeId, {
+        ...ep,
+        pipeline: { stage: "analyze", stageStatus, note, progress },
+      });
+    }
+  };
+
+  try {
+    await setEpisodeNote("서울 업로드 완료 · 분석 저장소로 이동 중…", "progress", 10);
+    const storedPath = await promoteUpload(objectPath);
+    const workDir = path.join(os.tmpdir(), "stepd-media-prepare", mediaId);
+    fs.mkdirSync(workDir, { recursive: true });
+
+    // Preserve the old finalize behaviour, but do it off-request. Small fragmented MP4s
+    // become progressive/fast-start files; long masters skip this disk-heavy step and go
+    // straight to range-based probing. The size is storage-authoritative, never client data.
+    let size = await fileSize(objectPath);
+    let readUrl = await signedReadUrl(objectPath);
+    const remuxMax = (Number(process.env.REMUX_MAX_MB) || 512) * 1024 * 1024;
+    if (size > 0 && size <= remuxMax) {
+      const webTmp = path.join(workDir, "web.mp4");
+      try {
+        await remuxFaststart(readUrl, webTmp);
+        await uploadFile(objectPath, webTmp);
+        size = fs.statSync(webTmp).size;
+        readUrl = await signedReadUrl(objectPath);
+        console.log(`[worker] media.prepare ${mediaId}: remuxed progressive (${size} bytes)`);
+      } catch (err) {
+        console.error(`[worker] media.prepare ${mediaId}: remux failed, keeping original`, err);
+      }
+    }
+
+    const meta = await probe(readUrl);
+    if (!(meta.durationSec > 0)) throw new Error(`probe returned duration ${meta.durationSec}`);
+
+    let thumbStored: string | null = null;
+    try {
+      const thumbTmp = path.join(workDir, "thumb.jpg");
+      await captureThumbnail(readUrl, Math.max(1, meta.durationSec * 0.1), thumbTmp);
+      thumbStored = await uploadFile(thumbPath(mediaId), thumbTmp);
+    } catch (err) {
+      // Thumbnail is helpful, not a gate for analysis.
+      console.error(`[worker] media.prepare ${mediaId}: thumbnail failed`, err);
+    } finally {
+      fs.rmSync(workDir, { recursive: true, force: true });
+    }
+
+    await updateMediaSource(mediaId, {
+      path: storedPath,
+      mime: media.mime || "video/mp4",
+      size,
+      durationSec: meta.durationSec,
+      width: meta.width,
+      height: meta.height,
+      codec: meta.codec,
+      hasAudio: meta.hasAudio ? 1 : 0,
+      thumbPath: thumbStored,
+    });
+
+    const verdict = checkCredits({
+      balance: await creditBalance(),
+      needMinutes: billableMinutes(meta.durationSec),
+    });
+    if (!verdict.allow) {
+      await setEpisodeNote(`크레딧 부족 — 충전 후 분석을 시작해 주세요 (${verdict.reason})`, "idle", 0);
+      return;
+    }
+
+    await markContentAnalysisPending(mediaId);
+    await enqueue(
+      "content.analyze",
+      { mediaId, ...(fast ? { fast: true } : {}) },
+      { dedupeKey: `content.analyze:${mediaId}` },
+    );
+    await setEpisodeNote("AI 장면 분석 대기 중…", "progress", 20);
+    console.log(`[worker] media.prepare ${mediaId}: promoted, probed, analysis queued`);
+  } catch (err) {
+    // probe/signing failures can occur before the thumbnail block's normal cleanup.
+    fs.rmSync(path.join(os.tmpdir(), "stepd-media-prepare", mediaId), { recursive: true, force: true });
+    await setEpisodeNote("업로드 후처리 실패 — 자동 재시도 대기", "error", 0).catch(() => {});
+    throw err;
   }
 }
 
