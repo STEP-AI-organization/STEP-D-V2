@@ -178,7 +178,7 @@ const STEPS = [
   { n: "01", title: "회차 수신", desc: "새 회차 원본 감지 · 없으면 스킵" },
   { n: "02", title: "분석", desc: "분석 큐 투입 · 완료까지 다음 확인 때 다시 봄" },
   { n: "03", title: "미디어 생성", desc: "규칙 조건 통과분만 생성 · 미달은 생성 안 함" },
-  { n: "04", title: "업로드 준비", desc: "권리 문제가 있으면 승인 대기로 — 사람이 승인해야 함", amber: true },
+  { n: "04", title: "업로드 준비", desc: "규칙의 배포 방식대로 — 승인 배포는 사람 확정 후, 승인 없이 배포는 권리 문제만 대기", amber: true },
   { n: "05", title: "게시", desc: "채널 규칙 적용 · 실패는 자동 재시도 없음", blue: true },
 ];
 
@@ -1005,6 +1005,25 @@ export default function AutomationPage() {
           </button>
         </div>
 
+        {/* 배포 방식 — **자동배포의 두 갈래.** 고급 설정에 묻혀 있던 승인 방식을 1급 선택지로
+            꺼냈다(사용자 2026-08-24: "자동배포를 두 가지로 나눠줘"). 어떤 규칙인지가 곧 이
+            선택이라, 접힘 속에 있으면 사용자는 기본값(승인 배포)이 전부인 줄 안다. */}
+        <div>
+          <div className="mb-1 text-[10.5px]" style={{ color: "var(--sd-label)" }}>배포 방식</div>
+          <div className="grid gap-2 sm:grid-cols-2">
+            <GateCard
+              on={approveFirst} onClick={() => setApproveFirst(true)}
+              title="승인 배포"
+              desc="클립이 만들어지면 승인 대기에 쌓이고, 사람이 확정해야 채널로 나갑니다."
+            />
+            <GateCard
+              on={!approveFirst} onClick={() => setApproveFirst(false)}
+              title="승인 없이 배포"
+              desc="조건을 통과하면 바로 나갑니다. 권리 문제가 감지된 건만 승인 대기로 빠집니다."
+            />
+          </div>
+        </div>
+
         {/* 렌더 방식(템플릿·미리보기·제목색·위치·자막) — "고급"에 묻지 않고 눈에 보이는 버튼으로.
             "어떻게 렌더되는지"는 운영자가 당연히 정하고 싶은 1급 결정이라 밖으로 뺀다(사용자 2026-08-19). */}
         <button
@@ -1066,7 +1085,7 @@ export default function AutomationPage() {
           style={{ color: "var(--sd-mut)" }}
           onClick={() => setShowAdvanced((v) => !v)}
         >
-          {showAdvanced ? "▾ 고급 설정 접기" : "▸ 고급 설정 (점수 기준 · 한도 · 시간창 · 정책 · 템플릿)"}
+          {showAdvanced ? "▾ 고급 설정 접기" : "▸ 고급 설정 (점수 기준 · 한도 · 시간창 · 템플릿)"}
         </button>
         {showAdvanced && (
           <div className="flex flex-col gap-2.5 rounded-[5px] p-3"
@@ -1235,23 +1254,6 @@ export default function AutomationPage() {
               자막 켜기 (끄면 이 규칙의 자동 클립에 자막을 넣지 않습니다 — 원본에 자막이 이미 있는 회차용)
             </label>
 
-            {/* 승인 방식 — 체크박스 하나였을 땐 "끄면 어떻게 되는지" 가 문구에 묻혀 있었다.
-                두 갈래를 나란히 놓아 무엇을 고르는 건지 보이게 한다(2026-08-21 요청). */}
-            <div>
-              <div className="mb-1 text-[10.5px]" style={{ color: "var(--sd-label)" }}>승인 방식</div>
-              <div className="grid gap-2 sm:grid-cols-2">
-                <GateCard
-                  on={approveFirst} onClick={() => setApproveFirst(true)}
-                  title="승인 후 발행"
-                  desc="사람이 승인해야 나갑니다. 안전하지만 승인이 밀리면 발행도 밀립니다."
-                />
-                <GateCard
-                  on={!approveFirst} onClick={() => setApproveFirst(false)}
-                  title="자동 발행"
-                  desc="승인 없이 바로 나갑니다. 권리 문제가 감지된 건만 승인 대기로 빠집니다."
-                />
-              </div>
-            </div>
           </div>
         )}
 
@@ -1448,7 +1450,7 @@ export default function AutomationPage() {
                   <span className="sd-tag">{KIND_LABEL[r.mediaKind]}</span>
                   <span className="sd-tag">{CRIT_LABEL[r.criterion]}</span>
                   <span className="sd-tag sd-tag--warn">
-                    {r.gatePolicy === "approve_first" ? "게시 전 사람 승인" : "문제 없으면 바로 게시 (권리 문제는 승인 대기로)"}
+                    {r.gatePolicy === "approve_first" ? "승인 배포 — 사람이 확정해야 게시" : "승인 없이 배포 (권리 문제만 승인 대기로)"}
                   </span>
                   <span className="sd-tag">하루 {monthlyPublishEstimate(r).perDay}개/채널</span>
                   <span className="sd-tag">{formatWeekdays(r.weekdays)}</span>
