@@ -1,6 +1,6 @@
 # STEP-D 인프라 (실서비스)
 
-> 전체 인프라의 단일 진실 소스. **바뀌면 여기 갱신한다.** 최종: **2026-08-21**.
+> 전체 인프라의 단일 진실 소스. **바뀌면 여기 갱신한다.** 최종: **2026-08-24**.
 >
 > ⚠️ **2026-08-07 전면 개편.** 워커가 GCE VM → **Cloud Run Jobs** 로 옮겨졌고,
 > GEBD(화면전환 모델)용 **GPU VM** 이 새로 생겼다. 이전 판이 기술하던 `stepd-worker` VM 은
@@ -62,9 +62,11 @@
 - **비공개(IAM)** — invoker 바인딩은 `domain:stepai.kr` + `serviceAccount:stepd-deployer@step-d.iam.gserviceaccount.com` 둘뿐, `allUsers` 없음. 직접 URL 익명 접근은 403 (2026-07-16 실측).
   프론트는 Vercel rewrite로 **ID 토큰 프록시** 경유(`apps/web/next.config.ts` → `apps/web/src/app/api/proxy/[[...path]]/route.ts`) — 그래서 `stepd.stepai.kr/api/*`는 익명 200이다(공개면은 Vercel 웹뿐).
 - ⚠️ 함정: 루트 `cloudbuild.yaml:37`과 `apps/server/cloudbuild.yaml:26` 둘 다 `--allow-unauthenticated` 플래그가 남아 있다. 현재는 배포 SA에 IAM 변경 권한이 없어 경고 후 무시되는 것으로 추정 — IAM에 반영되지 않아 실효 없음(실측). 단 권한이 생기는 순간 **매 배포가 서비스를 공개로 뒤집는다** → 플래그 제거 권장.
-- 리소스: cpu 2 / mem 4Gi / timeout 600s / concurrency 10 / **min 0** / max 5 · cpu-boost (cloudbuild.yaml).
-  2026-08-21: min-instances 1 → **0** 으로 내려 유휴 과금을 없앴다(월 ~₩36~55k 절약). 콜드스타트는
+- 리소스: cpu 2 / mem 4Gi / timeout 600s / concurrency 10 / **min 1** / max 5 · cpu-boost (cloudbuild.yaml).
+  2026-08-21: min-instances 1 → 0 으로 내려 유휴 과금을 없앴다(월 ~₩36~55k 절약). 콜드스타트는
   첫 요청만 몇 초 느려질 뿐 — 프록시 재시도(2026-08-21)가 연결 오류는 흡수한다. 라이트 워크로드 판단.
+  **2026-08-24: min-instances 0 → 1 로 복귀**(e95bab2 · cloudbuild.yaml 에 고정). 콜드스타트발
+  "저장/렌더 fetch failed" 재발을 없애는 쪽을 골랐다 — 유휴 과금(월 ~₩36~55k)이 그 가격이다.
 - 서비스계정: `stepd-deployer@step-d.iam.gserviceaccount.com`.
 - env/시크릿(cloudbuild.yaml `--set-secrets`): `DATABASE_URL`=stepd-db-url, `GOOGLE_CLIENT_ID/SECRET`,
   `JWT_SECRET`, `PUBLIC_URL`=stepd-public-url. 평문 env: `NODE_ENV`, `GCS_BUCKET`=stepd-media.
@@ -312,15 +314,16 @@ Balanced PD   $0.100000/GiB·월    SQL RAM   $0.007000/GiB·시간
 | Cloud SQL 자동백업 + PITR (WAL·백업 스토리지) | ~₩1,000 (DB 작음 · 청구서 확인) |
 | GEBD VM 부팅디스크 100GB pd-balanced (정지 중에도 과금) | ₩13,800 |
 | AR 이미지 13.8GB | ₩1,900 |
-| GCS (미디어 + 가중치 1.58GB) | ₩50 |
-| Cloud Run `stepd-server` (min-instances=**0** · 콜드스타트 허용) | ₩0 (유휴 과금 없음) |
+| GCS (미디어 49.4GiB · 2026-08-24 실측) | ₩1,400 |
+| Cloud Run `stepd-server` (min-instances=**1** · 2026-08-24 복귀 — 콜드스타트 제거) | ₩36,000~55,000 |
 | Cloud Run `stepd-render` (min-instances=**0** · 렌더 돌 때만) | ₩0 (유휴 과금 없음 · 렌더 시간만 사용량 과금) |
 | Cloud Scheduler 2개 (3개까지 무료) | ₩0 |
-| **소계** | **≈ ₩86,500** |
+| **소계** | **≈ ₩125,000~140,000** |
 
-> 2026-08-21: min-instances **1 → 0** 으로 내려 유휴 과금(추정 월 ₩36~55k)을 없앴다. 첫 요청
-> 콜드스타트(몇 초)만 감수 — 프록시 재시도(2026-08-21)가 연결 오류는 흡수한다. 다시 상시 웜이
-> 필요하면 `cloudbuild.yaml` 의 `--min-instances` 를 1 로.
+> 2026-08-21 min 1→0 으로 유휴 과금을 없앴다가, **2026-08-24 콜드스타트발 fetch failed 제거를
+> 위해 min 1 로 복귀**(e95bab2). 되돌리려면 `cloudbuild.yaml` 의 `--min-instances` 를 0 으로.
+> 2026-08-24 실측(Monitoring 30일): 서버 빌러블 217h · 워커 잡 15.6h · GEBD VM 58.8h ·
+> GCP 총 재구성 ≈ ₩24만/30일 — 이 중 레거시 유출(아래 이력)을 정리해 월 ≈₩77,000 을 걷어냈다.
 
 ### 사용량비
 
@@ -358,6 +361,17 @@ Balanced PD   $0.100000/GiB·월    SQL RAM   $0.007000/GiB·시간
 | VM 을 매번 삭제/재생성 | ₩13,800 | 회차마다 13.8GB 재pull |
 
 ## 변경 이력
+
+### 2026-08-24 — 레거시 유출 정리 (월 ≈₩77,000 절감)
+문서상 "폐기·삭제"됐다던 구 시스템(shorts-*)의 **과금 리소스가 실제로는 살아 있었다.**
+Monitoring 30일 실측 중 발견 — 문서가 아니라 청구 축(실사용 메트릭)으로 훑어야 잡히는 종류다.
+- **Cloud SQL `shorts-pg` 삭제** (db-g1-small · 서울 · 30일 접속 0 · 월 ≈₩40,000).
+  최종 백업: `gs://stepd-media/backups/shorts-pg-final-20260824.sql.gz` (12.4KiB — 사실상 빈 DB)
+- **고아 디스크 `shorts-data` 삭제** (100GB pd-ssd · 연결된 VM 없음 · 월 ≈₩27,000).
+  스냅샷 `shorts-data-final-20260824` 로 박제 (실데이터 227MB · 월 몇십 원)
+- **미사용 고정 IP `shorts-api-ip` 반납** (RESERVED 상태 과금 · 월 ≈₩10,000)
+- **레거시 AR 저장소 `stepd-api` 삭제** (구 apps/api 이미지 · 0.4MB)
+- `gs://step-d-landing` 은 **보존** — 소개영상·피치덱이 실사용 중 (월 ~₩200)
 
 ### 2026-08-21 — 멀티테넌트 대비 Cloud SQL 승급
 - **Cloud SQL `db-g1-small` → `db-custom-1-4096`** (여러 회사·리소스 유입 대비). 공유코어(SLA 없음)
