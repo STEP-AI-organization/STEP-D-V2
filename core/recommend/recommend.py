@@ -3696,7 +3696,18 @@ title (폴백) 은 두 줄 합쳐 한 줄로 자연스럽게.
     system += _operator_prompt_block(_CURRENT_PROGRAM_CTX, "recommendPrompt", "추천 구간(beat 조합) 선택")
     system += _operator_prompt_block(_CURRENT_PROGRAM_CTX, "titlePrompt", "제목 작성")
 
-    prompt = "\n".join(lines) + f"\n\n=== 뽑을 쇼츠 수: {n}개 ==="
+    # 개수는 **커버리지**로 자연스럽게 채운다 — 억지 백필(약한 구간 끼워넣기)이 아니라,
+    # "좋은 구간을 놓치지 마라"로 유도한다(사용자 방향 2026-08-24 "억지가 아니라 자연스럽게").
+    # 실패 모드: 모델이 beat 목록 앞부분만 보고 일찍 멈춰 뒤쪽 완결 구간을 통째로 흘린다 →
+    # 회차마다 12~15개로 널뛴다. 전체를 훑게 하되, 질 미달은 빼도 된다고 명시해 padding 을 막는다.
+    prompt = "\n".join(lines) + (
+        f"\n\n=== 목표 쇼츠 수: {n}개 ===\n"
+        "- 위 beat 목록을 **처음부터 끝까지** 훑어라. 앞부분만 보고 멈추지 마라 — 뒤쪽에도\n"
+        "  완결되는 구간이 있다. 흔한 실수가 초반 몇 개만 뽑고 끝내는 것이다.\n"
+        f"- 이 길이 영상이면 보통 {n}개 안팎이 **자연스럽게** 나온다. 완결·비중복 구간이면 적극 포함하라.\n"
+        "- 다만 **억지로 채우지는 마라**: 셋업 없이 결정타만 있거나, 이미 뽑은 구간과 겹치거나,\n"
+        "  완결이 안 되는 약한 구간은 넣지 마라. 좋은 게 적으면 적게 나와도 된다 — 질이 먼저다."
+    )
 
     # 사용자 지시 (2026-07-31 · "AI에게 어떻게 정보를 주는지 나한테 주라"):
     # RECOMMEND_DEBUG_DUMP=<path> env 있으면 system + user prompt 를 파일에 저장.
@@ -3727,7 +3738,13 @@ title (폴백) 은 두 줄 합쳐 한 줄로 자연스럽게.
                 temperature=0.3,
                 response_mime_type="application/json",
                 response_schema=_SHORTS_FROM_BEATS_SCHEMA,
-                max_output_tokens=8192,
+                # ⚠️ 8192 는 잘림 위험대였다. 60분 회차는 n≈18~20 을 요구하는데(위 n 산정),
+                # 각 short 가 beat_ids·2줄 제목·훅 3필드·why·tags 를 채우면 ~400토큰 → 20개면
+                # ~8000토큰이라 8192 에서 배열이 중간에 끊긴다. 잘리면 json.loads 가 실패해
+                # except 로 **빈 리스트**를 반환(:아래) → 쇼츠가 0~몇 개로 폭락(개수 들쑥날쑥의
+                # 큰 축). 상한만 올린다(모델 상한 65536, thinking 0). 실제 생성분만 과금이라
+                # 회차 원가 영향은 사실상 0 — 안 잘리게 하는 안전 여유일 뿐.
+                max_output_tokens=24576,
                 thinking_config=types.ThinkingConfig(thinking_budget=0),
             ),
         ))
