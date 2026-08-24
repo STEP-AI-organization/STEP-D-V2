@@ -5,11 +5,13 @@ const nextConfig: NextConfig = {
   async rewrites() {
     return {
       beforeFiles: [
-        { source: "/api/:path*", destination: "/api/proxy/api/:path*" },
-        // 랜딩 교체(다른 세션 2026-08-24): 정적 public/step-d-landing.html 로 /landing 을 서빙.
-        // ⚠️ 이 rewrite 는 **활성 config 인 next.config.ts** 에 있어야 먹는다 — 예전엔 next.config.mjs
-        //    에 넣어 뒀는데 Next 는 .ts 를 로드해서(프록시 rewrite 가 여기 있고 앱이 붙는 게 증거) 죽은
-        //    설정이었다. .mjs 는 프록시가 없어 활성화되면 앱이 서버에 못 붙으므로 함께 삭제했다.
+        // ⚠️ 여기에 `/api/:path*` → `/api/proxy/api/:path*` rewrite 를 **다시 넣지 말 것.**
+        // 프론트는 NEXT_PUBLIC_API_URL=/api/proxy/api 로 **이미 `/api/proxy/api/*` 를 직접** 부른다.
+        // 그 위에 이 rewrite 를 얹으면 `/api/proxy/api/state` 가 다시 매칭돼
+        // `/api/proxy/api/proxy/api/state` 로 **이중 rewrite** → 프록시가 한 겹만 벗겨
+        // `/api/proxy/api/state` 를 Cloud Run 에 보내 **404**(2026-08-24 실서비스 장애).
+        // 프록시 라우팅은 오직 NEXT_PUBLIC_API_URL 이 한다.
+        // 랜딩 교체(다른 세션 2026-08-24): 정적 public/step-d-landing.html 로 /landing 서빙.
         { source: "/landing", destination: "/step-d-landing.html" },
       ],
     };
