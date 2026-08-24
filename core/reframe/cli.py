@@ -93,6 +93,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--beats", required=True, help="beats.json from source analysis")
     parser.add_argument("--shots", default="", help="optional shots.json (master absolute seconds)")
     parser.add_argument("--output", required=True, help="atomic JSON result destination")
+    parser.add_argument(
+        "--candidates-output", default="",
+        help="optional vertical-candidates-v1 comparison JSON (4-layout compare · plan §1)",
+    )
     parser.add_argument("--model", default="", help="MediaPipe .tflite model; env REFRAME_FACE_MODEL fallback")
     parser.add_argument("--sample-fps", type=float, default=SAMPLE_FPS)
     parser.add_argument("--source-width", type=int, default=0, help="original source width; proxy width fallback")
@@ -137,6 +141,23 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         sample_fps=args.sample_fps,
     )
     write_json_atomic(args.output, plan)
+
+    # 비교 산출물(세로 4택) — 같은 관측으로 한 번 더 계산해 별도 파일로 쓴다.
+    # 정식 plan 과 파일을 분리해, 비교가 정식 경로 소비자를 절대 건드리지 않게 한다.
+    if args.candidates_output:
+        from core.reframe.candidates import build_candidate_plans
+
+        candidates = build_candidate_plans(
+            beats_payload=beats,
+            observations=observations,
+            clip_start=args.clip_start,
+            clip_end=args.clip_end,
+            source_width=args.source_width or width,
+            source_height=args.source_height or height,
+            shot_boundaries=shots,
+            sample_fps=args.sample_fps,
+        )
+        write_json_atomic(args.candidates_output, candidates)
     return plan
 
 

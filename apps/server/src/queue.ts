@@ -25,6 +25,9 @@ export type JobType =
   | "content.analyze"
   // AI Shorts reframing: clip-only proxy + face/safety planner (content worker).
   | "clip.reframe"
+  // 세로 4택 비교(vertical-candidates-v1): 후보 4종 plan + contact sheet + 프록시를
+  // 임시 GCS 경로에 만든다. 정식 clip.reframe 상태는 건드리지 않는다(비교 뷰어 전용).
+  | "reframe.compare"
   // Ingest: yt-dlp a YouTube URL on the worker VM → GCS → content.analyze.
   | "youtube.download"
   // Lab: 선택한 숏폼들이 롱폼의 어느 구간에서 나왔는지 오디오 정렬로 추적.
@@ -128,6 +131,7 @@ export async function initQueue(): Promise<void> {
 const MAX_ATTEMPTS_BY_TYPE: Partial<Record<JobType, number>> = {
   "content.analyze": 2,
   "clip.reframe": 2,
+  "reframe.compare": 2,
   // 이미지 생성은 호출당 과금이라 재시도를 아낀다. 실패는 대개 입력 문제(인물 미등록)라
   // 반복해도 같은 결과다 — 사람이 고쳐야 한다.
   "thumbnail.generate": 2,

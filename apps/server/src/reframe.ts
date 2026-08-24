@@ -301,3 +301,60 @@ function finiteNumber(value: unknown, label: string): number {
   if (!Number.isFinite(n)) throw new Error(`${label} must be finite`);
   return n;
 }
+
+// ── 세로 4택 비교 (vertical-candidates-v1 · 계획 2단계) ────────────────────────
+//
+// 비교 산출물은 정식 clip.reframe 상태와 **분리**된 임시 GCS 경로에 산다
+// (docs/plans/active/reframe-compare-viewer-plan.md §4). 여기 순수 함수들은
+// 라우트·워커가 같은 경로/파일명/프레임 위치를 보게 하는 정본이다.
+
+/** compareId = reframeFingerprint 형식(24 hex). 경로 세그먼트로 쓰므로 형식을 강제한다. */
+export const COMPARE_ID_RE = /^[a-f0-9]{24}$/;
+
+/** 스트리밍 허용 파일명 — 이 밖의 이름은 라우트가 404 로 거른다(경로 탈출 원천 차단). */
+export const COMPARE_FILE_RE = /^(candidates\.json|index\.json|proxy\.mp4|frame-\d{1,9}\.jpg)$/;
+
+export function compareArtifactPrefix(mediaId: string, clipId: string, compareId: string): string {
+  const safeClip = clipId.replace(/[^a-zA-Z0-9_-]/g, "_");
+  return `analysis/${mediaId}/reframe-compare/${safeClip}/${compareId}`;
+}
+
+/**
+ * Contact sheet 프레임 위치(계획 §3): 시작·끝 · 25/50/75% · 샷 경계 · 레이아웃 전환 지점.
+ * 0.2초 이내로 몰린 위치는 하나로 접고, cap 을 넘으면 **샷 경계부터** 버린다
+ * (전환 지점·분위수는 뷰어 판단에 더 중요하다). 반환은 소스 절대초 오름차순.
+ */
+export function contactSheetTimes(input: {
+  start: number;
+  end: number;
+  shots?: number[];
+  layoutSwitches?: number[];
+  cap?: number;
+}): number[] {
+  const { start, end } = input;
+  if (!(end > start)) return [];
+  const cap = Math.max(4, input.cap ?? 24);
+  const span = end - start;
+  const quantiles = [start, start + span * 0.25, start + span * 0.5, start + span * 0.75, end - 0.05];
+  const switches = (input.layoutSwitches ?? []).filter((t) => t > start && t < end);
+  const shots = (input.shots ?? []).filter((t) => t > start && t < end);
+
+  const picked: number[] = [];
+  const push = (t: number) => {
+    const v = Math.min(Math.max(t, start), Math.max(start, end - 0.05));
+    if (picked.some((p) => Math.abs(p - v) < 0.2)) return;
+    picked.push(v);
+  };
+  for (const t of quantiles) push(t);
+  for (const t of switches) push(t);
+  for (const t of shots) {
+    if (picked.length >= cap) break;
+    push(t);
+  }
+  return picked.slice(0, cap).sort((a, b) => a - b).map((t) => Math.round(t * 1000) / 1000);
+}
+
+/** 프레임 파일명 — 소스 절대초(ms 정수)를 이름에 박아 정렬·추적이 자명하게 한다. */
+export function contactFrameName(t: number): string {
+  return `frame-${Math.max(0, Math.round(t * 1000))}.jpg`;
+}

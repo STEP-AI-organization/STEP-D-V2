@@ -247,6 +247,9 @@ import { syncProgramFromFacesForMedia, CORE_PYTHON, CORE_DIR, REPO_ROOT } from "
 import {
   basicReframeState,
   canonicalRenderedClipAspect,
+  COMPARE_FILE_RE,
+  COMPARE_ID_RE,
+  compareArtifactPrefix,
   effectiveReframeState,
   fitIntervalsForPlan,
   normalizeReframePlan,
@@ -7246,6 +7249,112 @@ app.get("/api/clips/:id/reframe", async (c) => {
   const clip = await getEntity<Record<string, unknown>>("clip", clipId);
   if (!clip) return c.json({ error: "clip not found" }, 404);
   return c.json({ clipId, reframe: effectiveReframeState(clip) });
+});
+
+// ── 세로 4택 비교 (vertical-candidates-v1 · reframe-compare-viewer-plan §4) ──────
+//
+// 정식 clip.reframe 상태와 **분리**된 비교 전용 축이다. compareId = 요청 시점의
+// reframeFingerprint — 같은 입력 재요청은 기존 산출물을 그대로 돌려주는 멱등 캐시다.
+// 산출물 존재 판정은 index.json 하나로 한다(워커가 마지막에 올리는 완료 신호).
+
+/** 비교 작업 생성. 이미 산출물이 있으면 큐잉 없이 ready 를 돌려준다. */
+app.post("/api/clips/:id/reframe/candidates", async (c) => {
+  const clipId = c.req.param("id");
+  const clip = await getEntity<Record<string, unknown>>("clip", clipId);
+  if (!clip) return c.json({ error: "clip not found" }, 404);
+  const mediaId = typeof clip.sourceMediaId === "string" ? clip.sourceMediaId : "";
+  if (!mediaId) {
+    return c.json({ error: "source_media_missing", message: "비교할 원본 영상이 없습니다." }, 409);
+  }
+  let compareId: string;
+  try {
+    compareId = reframeFingerprint(clip);
+  } catch (error) {
+    return c.json({
+      error: "invalid_reframe_input",
+      message: error instanceof Error ? error.message : String(error),
+    }, 400);
+  }
+
+  const prefix = compareArtifactPrefix(mediaId, clipId, compareId);
+  if (await fileExists(`${prefix}/index.json`).catch(() => false)) {
+    return c.json({ clipId, compareId, status: "ready", reused: true });
+  }
+  const jobId = await enqueue("reframe.compare", { clipId, compareId }, {
+    dedupeKey: `reframe.compare:${clipId}:${compareId}`,
+  });
+  return c.json({ clipId, compareId, status: "queued", jobId, reused: false });
+});
+
+/** 비교 상태·산출물 조회 — ready 면 manifest + 후보 plan 전체를 함께 준다. */
+app.get("/api/clips/:id/reframe/candidates/:compareId", async (c) => {
+  const clipId = c.req.param("id");
+  const compareId = c.req.param("compareId");
+  if (!COMPARE_ID_RE.test(compareId)) return c.json({ error: "invalid compareId" }, 400);
+  const clip = await getEntity<Record<string, unknown>>("clip", clipId);
+  if (!clip) return c.json({ error: "clip not found" }, 404);
+  const mediaId = typeof clip.sourceMediaId === "string" ? clip.sourceMediaId : "";
+  if (!mediaId) return c.json({ error: "source_media_missing" }, 409);
+
+  const prefix = compareArtifactPrefix(mediaId, clipId, compareId);
+  if (await fileExists(`${prefix}/index.json`).catch(() => false)) {
+    const manifest = JSON.parse((await readFile(`${prefix}/index.json`)).toString("utf8"));
+    const candidates = JSON.parse((await readFile(`${prefix}/candidates.json`)).toString("utf8"));
+    const base = `/api/clips/${clipId}/reframe/candidates/${compareId}/file`;
+    return c.json({
+      clipId,
+      compareId,
+      status: "ready",
+      manifest,
+      candidates,
+      // 뷰어가 그대로 <img>/<video> 에 꽂을 수 있는 스트리밍 URL — GCS 를 직접 노출하지 않는다.
+      urls: {
+        proxy: `${base}/proxy.mp4`,
+        frames: (Array.isArray(manifest.frames) ? manifest.frames : [])
+          .map((name: string) => `${base}/${name}`),
+      },
+    });
+  }
+
+  // 산출물이 아직 없다 — 큐의 잡 상태를 그대로 비춘다(pending/running/failed).
+  const { rows } = await getPool().query<{ status: string; error: string | null }>(
+    `SELECT status, error FROM job_queue
+      WHERE dedupekey = $1 ORDER BY createdat DESC LIMIT 1`,
+    [`reframe.compare:${clipId}:${compareId}`],
+  );
+  const job = rows[0];
+  if (!job) return c.json({ clipId, compareId, status: "not_found" }, 404);
+  return c.json({
+    clipId,
+    compareId,
+    status: job.status === "failed" ? "failed" : job.status === "running" ? "running" : "queued",
+    ...(job.status === "failed" && job.error ? { error: String(job.error).slice(0, 300) } : {}),
+  });
+});
+
+/** 비교 산출물 파일 스트리밍 — 화이트리스트 파일명만(경로 탈출 원천 차단). */
+app.get("/api/clips/:id/reframe/candidates/:compareId/file/:name", async (c) => {
+  const clipId = c.req.param("id");
+  const compareId = c.req.param("compareId");
+  const name = c.req.param("name");
+  if (!COMPARE_ID_RE.test(compareId) || !COMPARE_FILE_RE.test(name)) {
+    return c.json({ error: "not found" }, 404);
+  }
+  const clip = await getEntity<Record<string, unknown>>("clip", clipId);
+  if (!clip) return c.json({ error: "clip not found" }, 404);
+  const mediaId = typeof clip.sourceMediaId === "string" ? clip.sourceMediaId : "";
+  if (!mediaId) return c.json({ error: "source_media_missing" }, 409);
+  const objPath = `${compareArtifactPrefix(mediaId, clipId, compareId)}/${name}`;
+  if (!(await fileExists(objPath).catch(() => false))) return c.json({ error: "not found" }, 404);
+  const body = await readFile(objPath);
+  const type = name.endsWith(".mp4") ? "video/mp4"
+    : name.endsWith(".jpg") ? "image/jpeg"
+    : "application/json";
+  return c.body(body, 200, {
+    "Content-Type": type,
+    // compareId(입력 지문)가 경로에 박혀 있어 내용이 불변 — 뷰어 왕복을 캐시로 줄인다.
+    "Cache-Control": "private, max-age=3600",
+  });
 });
 
 app.post("/api/clips/:id/reframe", async (c) => {

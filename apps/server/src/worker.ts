@@ -60,7 +60,7 @@ import { runWithTenant, runAsSystem, DEFAULT_TENANT_ID } from "./tenant.ts";
 import { notifyAutoPublish } from "./publish-notify.ts";
 import { runAutomationCycle } from "./automation-cycle.ts";
 import { runChannelPipeline } from "./channel-pipeline.ts";
-import { runClipReframe, runContentAnalyze, newestMtimeMs } from "./content-pipeline.ts";
+import { runClipReframe, runContentAnalyze, runReframeCompare, newestMtimeMs } from "./content-pipeline.ts";
 import {
   withAccessToken,
   fetchVideoAnalytics,
@@ -135,7 +135,9 @@ const JOB_LANES: Record<"content" | "youtube" | "gebd" | "naver" | "download", J
   //    성공을 돌려주므로 화면에서는 "생성 중" 으로만 보인다 — 이 리포의 전형적 조용한 실패다.
   //    아래 "모든 JobType 은 실제로 도는 레인에 속한다" 테스트가 재발을 막는다.
   content: ["media.prepare", "content.analyze", "match.align", "match.segment", "match.learn",
-            "thumbnail.style", "thumbnail.generate", "clip.metadata", "clip.reframe"],
+            "thumbnail.style", "thumbnail.generate", "clip.metadata", "clip.reframe",
+            // 세로 4택 비교 — clip.reframe 와 같은 성격(프록시 ffmpeg + 파이썬 비전).
+            "reframe.compare"],
   // factory.* 도 youtube 레인 — 상태기계 한 걸음은 DB 몇 번 읽고 재큐하는 게 전부라
   // 짧고, 배포(distribution.publish)와 같은 레인에 있어야 순서가 자연스럽다.
   // automation.cycle 도 youtube 레인 — 순방 한 바퀴는 DB 를 훑고 dispatchPublish 를 부르는
@@ -269,6 +271,13 @@ async function handle(job: Job): Promise<FollowUp | void> {
         requestId: String(job.payload.requestId ?? ""),
         attempt: job.attempts,
         maxAttempts: job.maxAttempts,
+      });
+      return;
+    }
+    case "reframe.compare": {
+      await runReframeCompare({
+        clipId: String(job.payload.clipId ?? ""),
+        compareId: String(job.payload.compareId ?? ""),
       });
       return;
     }

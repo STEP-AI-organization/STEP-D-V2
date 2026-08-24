@@ -48,6 +48,9 @@ import { createReadStream, parseObjectPath, readFile, uploadFile, useGcs } from 
 import { enqueue } from "./queue.ts";
 import { newId } from "./pipeline.ts";
 import {
+  compareArtifactPrefix,
+  contactFrameName,
+  contactSheetTimes,
   normalizeBeatIds,
   normalizeReframePlan,
   reframeFingerprint,
@@ -313,6 +316,153 @@ async function failClipReframe(
     error: { code, message: message.slice(0, 600), at },
   };
   await compareAndSetClipReframe(input.clipId, input.inputFingerprint, input.requestId, failed);
+}
+
+export interface ReframeCompareJobInput {
+  clipId: string;
+  compareId: string;
+}
+
+/**
+ * 세로 4택 비교 산출물 생성 (vertical-candidates-v1 · reframe-compare-viewer-plan §1·§4).
+ *
+ * 정식 clip.reframe 상태를 **읽지도 쓰지도 않는다** — 산출물(후보 plan·contact sheet·
+ * 프록시)은 임시 GCS 경로 `analysis/{mediaId}/reframe-compare/…/{compareId}/` 에만 산다.
+ * compareId = 요청 시점의 reframeFingerprint 라 같은 입력 재요청은 같은 경로를 덮어쓰는
+ * 멱등이고, 트림·beat 가 바뀌면 fingerprint 불일치로 조용히 끝난다(낡은 산출물 생산 금지).
+ * index.json 은 **마지막에** 올린다 — 존재 자체가 "완료" 신호다(라우트가 이걸 본다).
+ */
+export async function runReframeCompare(input: ReframeCompareJobInput): Promise<void> {
+  const { clipId, compareId } = input;
+  if (!clipId || !compareId) throw new Error("reframe.compare requires clipId and compareId");
+  const clip = await getEntity<Record<string, unknown>>("clip", clipId);
+  if (!clip) throw new Error(`reframe.compare: clip ${clipId} not found`);
+  let currentFingerprint: string;
+  try {
+    currentFingerprint = reframeFingerprint(clip);
+  } catch (error) {
+    throw new Error(`reframe.compare: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  if (currentFingerprint !== compareId) return;
+
+  const mediaId = String(clip.sourceMediaId ?? "");
+  const media = mediaId ? await getMedia(mediaId) : undefined;
+  const clipStart = Number(clip.startTime);
+  const clipEnd = Number(clip.endTime);
+  if (!Number.isFinite(clipStart) || !Number.isFinite(clipEnd) || !(clipEnd > clipStart)) {
+    throw new Error("reframe.compare: clip range must be finite and end after start");
+  }
+  if (!media) throw new Error(`reframe.compare: source media ${mediaId || "(empty)"} not found`);
+
+  const safeClipId = clipId.replace(/[^a-zA-Z0-9_-]/g, "_");
+  const work = await fs.promises.mkdtemp(path.join(os.tmpdir(), `stepd-refcmp-${safeClipId}-`));
+  try {
+    const proxyPath = path.join(work, "proxy.mp4");
+    const beatsPath = path.join(work, "beats.json");
+    const shotsPath = path.join(work, "shots.json");
+    const planPath = path.join(work, "plan.json");
+    const candidatesPath = path.join(work, "candidates.json");
+
+    await materializeAnalysisInput(mediaId, "beats.json", beatsPath);
+    const hasShots = await materializeOptionalAnalysisInput(mediaId, "shots.json", shotsPath);
+    const sourcePath = useGcs() ? await signedProxySource(media.path) : media.path;
+    // clip.reframe 와 같은 프록시 사양(5fps·640px) — 비전 입력과 뷰어 프리뷰를 겸한다.
+    await runChild(
+      "ffmpeg",
+      [
+        "-hide_banner", "-loglevel", "error", "-y",
+        "-ss", clipStart.toFixed(6), "-i", sourcePath, "-t", (clipEnd - clipStart).toFixed(6),
+        "-map", "0:v:0", "-an", "-vf", "fps=5,scale=640:-2:flags=lanczos",
+        "-c:v", "libx264", "-preset", "veryfast", "-crf", "24", "-movflags", "+faststart",
+        proxyPath,
+      ],
+      { label: "reframe compare proxy", timeoutMs: 15 * 60 * 1000 },
+    );
+
+    const args = [
+      "-u", "-m", "core.reframe",
+      "--video", proxyPath,
+      "--clip-start", clipStart.toFixed(6),
+      "--clip-end", clipEnd.toFixed(6),
+      "--beats", beatsPath,
+      "--source-width", String(Math.max(0, Number(media.width) || 0)),
+      "--source-height", String(Math.max(0, Number(media.height) || 0)),
+      "--output", planPath,
+      "--candidates-output", candidatesPath,
+    ];
+    if (hasShots) args.push("--shots", shotsPath);
+    const modelPath = process.env.REFRAME_FACE_MODEL?.trim();
+    if (modelPath) args.push("--model", modelPath);
+    await runChild(CORE_PYTHON, args, {
+      cwd: REPO_ROOT,
+      label: "core.reframe (compare)",
+      timeoutMs: (Number(process.env.REFRAME_TIMEOUT_MIN) || 20) * 60 * 1000,
+      env: { PYTHONPATH: "", PYTHONIOENCODING: "utf-8", PYTHONUTF8: "1" },
+    });
+
+    const candidates = JSON.parse(await fs.promises.readFile(candidatesPath, "utf8")) as {
+      timeline?: Array<{ start: number; end: number; layout: string }>;
+      switchesPerMinute?: number;
+    };
+
+    // ── Contact sheet (§3): 시작·끝·분위수 + 샷 경계 + 레이아웃 전환 지점 ──
+    let shotTimes: number[] = [];
+    if (hasShots) {
+      try {
+        const rawShots = JSON.parse(await fs.promises.readFile(shotsPath, "utf8")) as unknown;
+        const list = Array.isArray(rawShots)
+          ? rawShots
+          : Array.isArray((rawShots as { shots?: unknown[] })?.shots)
+            ? (rawShots as { shots: unknown[] }).shots
+            : [];
+        shotTimes = list.map(Number).filter((t) => Number.isFinite(t));
+      } catch { /* 샷은 보강 정보 — 없어도 시트는 성립한다 */ }
+    }
+    const layoutSwitches = (candidates.timeline ?? []).slice(1).map((run) => Number(run.start));
+    const times = contactSheetTimes({
+      start: clipStart, end: clipEnd, shots: shotTimes, layoutSwitches,
+    });
+    const frameNames: string[] = [];
+    for (const t of times) {
+      const name = contactFrameName(t);
+      const framePath = path.join(work, name);
+      await runChild(
+        "ffmpeg",
+        [
+          "-hide_banner", "-loglevel", "error", "-y",
+          "-ss", Math.max(0, t - clipStart).toFixed(3), "-i", proxyPath,
+          "-frames:v", "1", "-q:v", "4", framePath,
+        ],
+        { label: "compare frame", timeoutMs: 60 * 1000 },
+      );
+      frameNames.push(name);
+    }
+
+    const prefix = compareArtifactPrefix(mediaId, clipId, compareId);
+    await uploadFile(`${prefix}/candidates.json`, candidatesPath);
+    await uploadFile(`${prefix}/proxy.mp4`, proxyPath);
+    for (const name of frameNames) {
+      await uploadFile(`${prefix}/${name}`, path.join(work, name));
+    }
+    const manifestPath = path.join(work, "index.json");
+    await fs.promises.writeFile(manifestPath, JSON.stringify({
+      version: 1,
+      status: "ready",
+      clipId,
+      sourceMediaId: mediaId,
+      compareId,
+      clipStart,
+      clipEnd,
+      generatedAt: Date.now(),
+      frames: frameNames,
+      files: { candidates: "candidates.json", proxy: "proxy.mp4" },
+      switchesPerMinute: candidates.switchesPerMinute ?? null,
+    }, null, 2), "utf8");
+    await uploadFile(`${prefix}/index.json`, manifestPath);
+    console.log(`[worker] reframe.compare ${clipId}: ${frameNames.length} frames → ${prefix}`);
+  } finally {
+    await fs.promises.rm(work, { recursive: true, force: true }).catch(() => {});
+  }
 }
 
 async function materializeAnalysisInput(
