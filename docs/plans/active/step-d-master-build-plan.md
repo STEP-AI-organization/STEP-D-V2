@@ -310,7 +310,7 @@ AI: Vertex Gemini(gemini-3.1-flash) — 서울(asia-northeast3) 리전 고정 (�
 
 ### 8.2 배포 흐름
 - **서버:** `.\deploy\deploy-server.ps1` (typecheck → `git push`(워커가 pull) → `gcloud builds submit --config cloudbuild.yaml` → Cloud Run 배포 → **워커 SSH `git reset --hard` + `systemctl restart stepd-worker`**). **⚠️ Cloud Run은 푸시 자동배포 안 됨** — 스크립트 필수.
-- **웹:** `.\deploy\deploy-web.ps1` (`next build` → `git push` → Vercel 자동). Vercel 프로젝트 `step-d-v2-web`, scope `step-ai`, Root `apps/web`, **`next build --webpack` 강제**(Turbopack이면 자산 404).
+- **웹:** `.\deploy\deploy-web.ps1` (`next build` → `git push` → Vercel 자동). Vercel 프로젝트 `step-d`, scope `step-ai`, Root `apps/web`, **`next build --webpack` 강제**(Turbopack이면 자산 404).
 
 ### 8.3 필요분 (로드맵과 연동)
 | 필요 | 시점 | 내용 |

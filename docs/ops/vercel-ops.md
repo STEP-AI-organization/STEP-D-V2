@@ -11,9 +11,9 @@
 | 항목 | 값 |
 |------|-----|
 | 팀 (scope) | `step-ai` — 표시명 "STEP AI" |
-| 프로젝트 | `step-d-v2-web` |
+| 프로젝트 | `step-d` |
 | 프로덕션 도메인 | **https://stepd.stepai.kr** (DNS: `stepd.stepai.kr` A `76.76.21.21` → Vercel) |
-| .vercel.app URL | https://step-d-v2-web-step-ai.vercel.app — **기본 별칭일 뿐**, 운영 진입점 아님 |
+| .vercel.app URL | https://step-d-git-main-step-ai.vercel.app — **main 별칭일 뿐**, 운영 진입점 아님 |
 | GitHub 리포 | `STEP-AI-organization/STEP-D-V2` (Vercel Git 연동) |
 | Root Directory | `apps/web` |
 | 빌드 명령 | `next build --webpack` (`apps/web/vercel.json`) — 이유는 아래 §1.2 |
@@ -119,7 +119,7 @@ T=$(cat gcp-keys/vercel-token.txt)
 V="vercel --token=$T --scope step-ai"
 
 # 프로젝트 연결 (최초 1회, .vercel/ 생성 — gitignore됨)
-vercel link --token="$T" --scope step-ai --project step-d-v2-web --yes
+vercel link --token="$T" --scope step-ai --project step-d --yes
 
 # 환경변수
 $V env ls
@@ -128,7 +128,7 @@ $V env add  GCP_SERVICE_ACCOUNT_KEY production < gcp-keys/vercel-proxy-key.json
 $V env rm   어떤변수 production --yes
 
 # 배포 상태 / 로그
-$V ls step-d-v2-web                              # 최근 배포 목록 + 상태
+$V ls step-d                                     # 최근 배포 목록 + 상태
 $V inspect <배포URL> --logs                      # 빌드 로그 (실패 원인은 여기서)
 
 # 팀·프로젝트 확인
@@ -197,7 +197,7 @@ CLI가 접근 불가 스코프로 붙으려다 실패한다.
 
 ```bash
 T=$(cat gcp-keys/vercel-token.txt)
-vercel ls step-d-v2-web --token="$T" --scope step-ai        # ● Error 인 배포 URL 확인
+vercel ls step-d --token="$T" --scope step-ai                 # Error 인 배포 URL 확인
 vercel inspect <그URL> --logs --token="$T" --scope step-ai  # 빌드 로그 확인
 ```
 

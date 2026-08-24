@@ -17,7 +17,7 @@
         ▼                              ▼
    Vercel (프론트)                 (외부 유튜버)
    stepd.stepai.kr                 /register
-   step-d-v2-web                        │
+   step-d                               │
         │  /api/* rewrite                │ OAuth
         ▼                                ▼
    ┌─────────────────────────────────────────┐
@@ -209,7 +209,7 @@ gcloud storage buckets get-iam-policy gs://stepd-upload-seoul --project step-d
   서울 리전 없음 때문. 대신 Gemini 오디오 전사(품질·레지던시 우위).
 
 ### 6. Vercel (프론트)
-- 프로젝트 `step-d-v2-web` (팀 `step-ai`). 도메인 `stepd.stepai.kr`.
+- 프로젝트 `step-d` (팀 `step-ai`, Root `apps/web`). 도메인 `stepd.stepai.kr`.
 - `apps/web` 배포. main 푸시 시 자동 빌드. `/api/*`는 rewrite로 Cloud Run 프록시.
 - ⚠️ `apps/web`에서 `npm install` 금지(pnpm 워크스페이스). `NEXT_PUBLIC_API_URL` 비워둬야 프록시 탐.
 - 상세: [vercel-ops.md](vercel-ops.md).

@@ -1,6 +1,6 @@
 ﻿<#
 .SYNOPSIS
-  프론트엔드 배포 — apps/web → Vercel (step-d-v2-web)
+  프론트엔드 배포 — apps/web → Vercel (step-d)
 
 .DESCRIPTION
   Vercel 은 main 푸시를 감지해 자동 빌드한다. 이 스크립트는 그 앞뒤를 책임진다:
@@ -22,7 +22,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-$Project     = "step-d-v2-web"
+$Project     = "step-d"
 $Scope       = "step-ai"
 $PublicUrl   = "https://stepd.stepai.kr"
 $DeployEmail = "contact@stepai.kr"   # Vercel 팀 멤버여야 함 (필수)
