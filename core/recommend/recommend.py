@@ -58,6 +58,20 @@ MIN_SHORT_SEC = 3    # anything shorter is a glitch, not a short
 # 운영 기준: 쇼츠는 완결성을 보존하되 1분 30초를 넘기지 않는다.
 MAX_SHORT_SEC = 90
 
+
+def _target_shorts_count(duration: float) -> int:
+    """영상 길이에 비례한 목표 쇼츠 수. **10분당 3개(≈18/시간), 상한 20.**
+    짧으면 자연히 작아진다 — 개수를 강제하지 않는다(프롬프트가 소프트하게 처리).
+
+    ⚠️ 예전엔 `n = max(들어온 n, …)` 라 워커 기본값 5가 **바닥**이 돼서 2분짜리도 5개를
+    요구했고(억지 픽 유발), 거기에 beat 밀도(len//4)까지 더해 6초 beat 이 촘촘한 짧은 영상을
+    더 부풀렸다. 이제 **길이만** 본다 — 커버리지(자기소개 통째 누락 방지 등)는 개수 뻥튀기가
+    아니라 recommend 프롬프트가 "전체를 훑어라"로 맡는다.
+    사용자 방향 2026-08-24: "짧으면 줄이거나 요구 말라 · 억지가 아니라 자연스럽게."
+    """
+    vid_min = max(0.0, float(duration or 0.0)) / 60.0
+    return max(1, min(20, round(vid_min / 10.0 * 3)))
+
 # ── genre packs ─────────────────────────────────────────────────────────────────
 # What "터지는 구간" means differs by genre; the pack swaps the editorial judgment,
 # the mechanics (완결 단위, 훅, 15~60s) stay shared.
@@ -1979,11 +1993,9 @@ def _recommend_impl(
 ) -> dict:
     client = genai.Client(vertexai=True, project=PROJECT, location=LOCATION)
 
-    # 영상 길이에 맞춰 추천 수를 늘린다. 실측(2026-07-21): 13분 영상에서 편집자는 숏폼 3개를
-    # 뽑았는데 엔진은 n=5 고정이라 후반부 지점을 놓쳤다. 60분이면 편집자가 10개 넘게 만든다 —
-    # 고정 5개는 롱폼일수록 재현율을 떨어뜨린다. 약 10분당 3개, 상한 20개.
-    vid_min = (scenes[-1]["end"]) / 60.0
-    n = max(n, min(20, round(vid_min / 10.0 * 3) or n))
+    # 영상 길이에 비례한 목표 개수(10분당 3개·상한 20). 짧으면 자연히 작아진다 —
+    # 들어온 기본값을 바닥으로 쓰지 않는다(_target_shorts_count 주석 참조).
+    n = _target_shorts_count(scenes[-1]["end"])
 
     if genre == "auto" or genre not in GENRE_PACKS:
         genre = detect_genre(client, scenes)
@@ -3696,18 +3708,27 @@ title (폴백) 은 두 줄 합쳐 한 줄로 자연스럽게.
     system += _operator_prompt_block(_CURRENT_PROGRAM_CTX, "recommendPrompt", "추천 구간(beat 조합) 선택")
     system += _operator_prompt_block(_CURRENT_PROGRAM_CTX, "titlePrompt", "제목 작성")
 
-    # 개수는 **커버리지**로 자연스럽게 채운다 — 억지 백필(약한 구간 끼워넣기)이 아니라,
-    # "좋은 구간을 놓치지 마라"로 유도한다(사용자 방향 2026-08-24 "억지가 아니라 자연스럽게").
-    # 실패 모드: 모델이 beat 목록 앞부분만 보고 일찍 멈춰 뒤쪽 완결 구간을 통째로 흘린다 →
-    # 회차마다 12~15개로 널뛴다. 전체를 훑게 하되, 질 미달은 빼도 된다고 명시해 padding 을 막는다.
-    prompt = "\n".join(lines) + (
-        f"\n\n=== 목표 쇼츠 수: {n}개 ===\n"
-        "- 위 beat 목록을 **처음부터 끝까지** 훑어라. 앞부분만 보고 멈추지 마라 — 뒤쪽에도\n"
-        "  완결되는 구간이 있다. 흔한 실수가 초반 몇 개만 뽑고 끝내는 것이다.\n"
-        f"- 이 길이 영상이면 보통 {n}개 안팎이 **자연스럽게** 나온다. 완결·비중복 구간이면 적극 포함하라.\n"
-        "- 다만 **억지로 채우지는 마라**: 셋업 없이 결정타만 있거나, 이미 뽑은 구간과 겹치거나,\n"
-        "  완결이 안 되는 약한 구간은 넣지 마라. 좋은 게 적으면 적게 나와도 된다 — 질이 먼저다."
-    )
+    # 개수는 **커버리지**로 자연스럽게 채운다 — 억지 백필(약한 구간 끼워넣기)이 아니라
+    # "좋은 구간을 놓치지 마라"로 유도(사용자 방향 2026-08-24 "억지가 아니라 자연스럽게").
+    # n 은 길이 비례(_target_shorts_count) — 짧으면 작다. n<=2(약 7분 이하)면 개수를 아예
+    # 강제하지 않는다: "완결되는 것만, 없으면 0". 그 이상이면 전체를 훑게 해 조기중단(앞부분만
+    # 뽑고 끝내 뒤쪽을 흘리는 실패 모드)을 막되, 질 미달은 빼도 된다고 명시해 padding 을 막는다.
+    if n <= 2:
+        prompt = "\n".join(lines) + (
+            f"\n\n=== 목표 쇼츠 수: 최대 {n}개 (강제 아님) ===\n"
+            "- **짧은 영상이다.** 완결되는 좋은 구간만 골라라. 무리하게 개수를 맞추지 마라 —\n"
+            "  쓸 구간이 적으면 적게, 아예 없으면 0개여도 된다.\n"
+            "- 셋업 없이 결정타만 있거나 완결이 안 되는 약한 구간은 절대 넣지 마라."
+        )
+    else:
+        prompt = "\n".join(lines) + (
+            f"\n\n=== 목표 쇼츠 수: {n}개 ===\n"
+            "- 위 beat 목록을 **처음부터 끝까지** 훑어라. 앞부분만 보고 멈추지 마라 — 뒤쪽에도\n"
+            "  완결되는 구간이 있다. 흔한 실수가 초반 몇 개만 뽑고 끝내는 것이다.\n"
+            f"- 이 길이 영상이면 보통 {n}개 안팎이 **자연스럽게** 나온다. 완결·비중복 구간이면 적극 포함하라.\n"
+            "- 다만 **억지로 채우지는 마라**: 셋업 없이 결정타만 있거나, 이미 뽑은 구간과 겹치거나,\n"
+            "  완결이 안 되는 약한 구간은 넣지 마라. 좋은 게 적으면 적게 나와도 된다 — 질이 먼저다."
+        )
 
     # 사용자 지시 (2026-07-31 · "AI에게 어떻게 정보를 주는지 나한테 주라"):
     # RECOMMEND_DEBUG_DUMP=<path> env 있으면 system + user prompt 를 파일에 저장.
@@ -4275,12 +4296,11 @@ def _recommend_narrative_first_impl(
         duration = float(transcript[-1].get("end", 0))
     else:
         duration = 0.0
-    vid_min = duration / 60.0
-    n = max(n, min(20, round(vid_min / 10.0 * 3) or n))
-    # beat-only 모드에서는 beat 개수 기반으로 n 자동 확장 (자기소개 통째 누락 방지 · 2026-07-28).
-    # 평균 beat 3~4개로 하나의 자기소개+리액션 shorts 구성한다고 가정하면 n ≈ len(beats)/4.
-    if beats:
-        n = max(n, min(20, len(beats) // 4))
+    # 영상 길이에 비례한 목표 개수(10분당 3개·상한 20). 짧으면 자연히 작아지고, 아주 짧으면
+    # 강제하지 않는다(아래 propose 프롬프트가 n<=3 이면 "완결되는 것만, 없으면 0" 으로 소프트).
+    # 예전의 beat 밀도 뻥튀기(len//4)는 뺐다 — 6초 beat 이 촘촘한 짧은 영상을 부풀렸다.
+    # 자기소개 누락 방지 커버리지는 개수가 아니라 프롬프트("전체를 훑어라")가 맡는다.
+    n = _target_shorts_count(duration)
 
     if genre == "auto" or genre not in GENRE_PACKS:
         genre = detect_genre(client, scenes or []) if scenes else DEFAULT_GENRE
