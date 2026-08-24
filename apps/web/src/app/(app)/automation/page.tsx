@@ -243,6 +243,8 @@ export default function AutomationPage() {
   // 승인 대기 카드에서 렌더 결과를 펼쳐 보고 있는 클립. 하나만 — 여러 개가 동시에 재생되면
   // 소리가 겹치고 스크롤이 길어져서 "딱 보고 판단" 이 안 된다.
   const [previewClipId, setPreviewClipId] = useState<string | null>(null);
+  // 최근 처리·진행 접기 — 로그가 길어 기본은 접어 두고, 건수만 헤더에 보여준다.
+  const [showActivity, setShowActivity] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -560,7 +562,11 @@ export default function AutomationPage() {
     return ids;
   }, [visibleRuns, clips]);
   const completedRuns = visibleRuns.filter((run) => completedRunIds.has(run.id));
-  const recentProcessRuns = visibleRuns.filter((run) => !completedRunIds.has(run.id));
+  // 할당량 소진류 "안 보냄" 안내는 화면에서 뺀다(사용자 2026-08-24) — 실패도 대기도 아니고
+  // 자정(KST)에 저절로 풀리는 정상 정지라, 피드에 쌓이면 진짜 실패·대기를 가린다.
+  // 서버 기록(rule_run)은 그대로 남는다 — 순방 dedupe·감사가 그걸 쓴다.
+  const isQuotaNoise = (run: RuleRun) => run.result === "skipped" && /할당량/.test(run.detail ?? "");
+  const recentProcessRuns = visibleRuns.filter((run) => !completedRunIds.has(run.id) && !isQuotaNoise(run));
 
   // 실업로드 채널이 규칙에 있는데 게이트가 꺼져 있으면 — "실행 중"이 착시가 된다.
   const gateBlocked = rules.some(
@@ -1728,14 +1734,27 @@ export default function AutomationPage() {
           </div>
         )}
 
-        {/* 진행·대기·실패 기록. 실제 게시 완료는 아래 완료 영상에 따로 둔다. */}
+        {/* 진행·대기·실패 기록. 실제 게시 완료는 아래 완료 영상에 따로 둔다.
+            로그가 길어 접이식(사용자 2026-08-24) — 기본 접힘, 헤더에 건수를 보여 열 이유를 준다. */}
         <div id="activity" className="mt-4 flex scroll-mt-4 items-baseline gap-2 border-t pt-4" style={{ borderColor: "var(--sd-border)" }}>
-          <h4 className="text-[14px] font-semibold" style={{ color: "var(--sd-fg)" }}>⏳ 최근 처리 · 진행</h4>
+          <button
+            type="button"
+            className="flex items-baseline gap-2"
+            onClick={() => setShowActivity((v) => !v)}
+            aria-expanded={showActivity}
+          >
+            <h4 className="text-[14px] font-semibold" style={{ color: "var(--sd-fg)" }}>
+              {showActivity ? "▾" : "▸"} ⏳ 최근 처리 · 진행
+              <span className="ml-1.5 text-[11px] font-normal" style={{ color: "var(--sd-mut)" }}>
+                {recentProcessRuns.length}건
+              </span>
+            </h4>
+          </button>
           <span className="text-[11px]" style={{ color: "var(--sd-mut)" }}>
             분석·렌더·업로드 시작·대기·실패를 시간순으로 봅니다
           </span>
         </div>
-        {recentProcessRuns.length === 0 ? (
+        {!showActivity ? null : recentProcessRuns.length === 0 ? (
           <div
             className="sd-ph grid min-h-[80px] place-items-center rounded-[6px] px-6 text-center text-[11.5px]"
             style={{ border: "1px dashed var(--sd-border)", color: "var(--sd-mut)" }}
