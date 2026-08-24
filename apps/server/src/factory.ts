@@ -594,6 +594,9 @@ export function autoEditorState(
     titleY?: number; channelIconY?: number; channelBoxY?: number; channelIconSize?: number;
     titleColor?: string;
     subtitles?: boolean; subtitleY?: number; subtitleSize?: number; subtitleColor?: string;
+    // 요소 표시 여부 — **미지정 = 전부 표시**(하위호환). false 인 것만 뺀다.
+    // 고객마다 로고·시간박스·제목을 안 쓰고 싶을 수 있다(사용자 2026-08-24).
+    title?: boolean; logo?: boolean; timebox?: boolean;
   },
   // 자동배포 규칙이 정한 최종 aspect. 없으면 공장 기본(short=세로, clip=가로)을 쓴다.
   forcedAspect?: string,
@@ -652,7 +655,8 @@ export function autoEditorState(
     // 한 줄이면 통째 강조색, 두 줄이면 둘째 줄만 (표준 강조색 = 청록, 레퍼런스 확정).
     // ⚠️ id 를 반드시 넣는다. 없으면 편집기에서 setLine 이 l.id === undefined 로 **두 줄을 다**
     //    매칭해 한 줄로 붕괴하고, React key 도 undefined 로 겹친다(2026-08-12 발견).
-    titleLines: lines.map((text, i) => ({
+    // 규칙에서 제목을 끄면 줄 자체를 비운다 — 렌더·편집기 둘 다 titleLines 가 없으면 안 그린다.
+    titleLines: layoutOverride?.title === false ? [] : lines.map((text, i) => ({
       id: `t${i}`, text,
       size: (i === 0 ? 106 : 107) / titleOutScale,
       color: lines.length === 1 || i === 1 ? titleAccent : "#FFFFFF",
@@ -664,6 +668,9 @@ export function autoEditorState(
     karaoke: false,
     hookOn: false,
     showChannel: true,
+    // 로고 끄기 — showChannel 을 끄면 시간박스까지 같이 죽으므로(index.ts 렌더 조건)
+    // 아이콘만 빼는 기존 축(channelIconOff)을 쓴다. 편집기 채널 설정과 같은 필드다.
+    ...(layoutOverride?.logo === false ? { channelIconOff: true } : {}),
     // 채널 아이콘 기본 = 프로그램 이미지(F). 없으면 필드 미설정 → generic 폴백.
     ...(programImage ? { channelIconDataUrl: programImage } : {}),
     // logo-box 하단은 로고(프로그램 brandIconDataUrl)가 이름을 대신한다 — 텍스트 이름 생략.
@@ -674,7 +681,9 @@ export function autoEditorState(
     channelIconSize: seed.iconSize,
     ...(seed.iconY != null ? { channelIconY: seed.iconY } : {}),
     // 방영시간 박스 — 프로그램 설정의 schedule 그대로 (예: "(수) 밤 10시 30분").
-    ...(seed.bottom === "logo-box" && String(program?.schedule ?? "").trim()
+    // 규칙에서 끄면(timebox=false) schedule 이 있어도 안 넣는다.
+    ...(layoutOverride?.timebox !== false
+        && seed.bottom === "logo-box" && String(program?.schedule ?? "").trim()
       ? { channelBoxText: String(program.schedule).trim(), channelBoxY: seed.boxY }
       : {}),
     // 자동배포 규칙의 위치 미세조정 — 시드 기본값 위에 덮인다 (숫자 필드만).

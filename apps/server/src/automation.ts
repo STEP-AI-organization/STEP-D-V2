@@ -82,6 +82,10 @@ export interface AutomationRule {
     subtitleSize?: number;
     /** 자막 색(#RRGGBB). 기본 #FFFFFF. */
     subtitleColor?: string;
+    /** 요소 표시 여부 — 미지정 = 표시(하위호환). 고객마다 로고·시간박스·제목을 뺄 수 있다. */
+    title?: boolean;
+    logo?: boolean;
+    timebox?: boolean;
   };
   // ── 다중 확장 (2026-08-12) — 배열이 있으면 배열이 정본, 없으면 단수 폴백 ──
   /** 여러 프로그램. 없으면 [programId]. */

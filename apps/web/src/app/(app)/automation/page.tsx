@@ -313,11 +313,13 @@ export default function AutomationPage() {
   useEffect(() => {
     if (skipLayoutReset.current) { skipLayoutReset.current = false; return; }
     const s = TEMPLATE_SEED_UI[effectiveTemplate] ?? TEMPLATE_SEED_UI["broadcast-standard"];
-    setLayout({
+    // 템플릿을 바꿔도 요소 표시 플래그(제목·로고·시간박스)는 유지한다 — 위치만 시드로 리셋.
+    setLayout((prev) => ({
       titleY: s.titleY, channelIconY: s.iconY, channelBoxY: s.boxY, channelIconSize: s.iconSize,
       titleColor: s.accent,
       subtitleY: SUBTITLE_DEFAULTS.y, subtitleSize: SUBTITLE_DEFAULTS.size, subtitleColor: SUBTITLE_DEFAULTS.color,
-    });
+      ...(prev ? { title: prev.title, logo: prev.logo, timebox: prev.timebox } : {}),
+    }));
   }, [effectiveTemplate]);
 
   // ── ③ 채널 선택지 — 구 규칙 폼의 channelOptions 로직 그대로 ───────────────────────
@@ -446,6 +448,8 @@ export default function AutomationPage() {
 
   // 지금 진행 중 — 프로그램 선택과 무관한 전체 집계. 렌더 대기 = 자동 생성됐지만 아직 렌더 전
   // 클립(automationRuleId 는 서버가 채택 시 저장 · 타입엔 없어 캐스트). 확정 대기 = 보류 건수.
+        // 요소 표시 플래그 — 미지정(구 규칙)은 표시. 저장값 그대로 라운드트립.
+        title: r.layout.title, logo: r.layout.logo, timebox: r.layout.timebox,
   const inflightRender = clips.filter(
     (c) => (c as { automationRuleId?: string }).automationRuleId && !c.rendered,
   ).length;
@@ -1271,7 +1275,8 @@ export default function AutomationPage() {
                     클릭해 크게 보기
                   </span>
                 </div>
-                <LayoutSliders layout={layout} onChange={setLayout} className="flex-1 space-y-2 text-[10.5px]" />
+                <LayoutSliders layout={layout} onChange={setLayout} className="flex-1 space-y-2 text-[10.5px]"
+                  subtitlesOn={subtitles} onSubtitlesChange={setSubtitles} />
               </div>
             )}
 
@@ -1346,6 +1351,7 @@ export default function AutomationPage() {
             onClick={() => void startAutoDeploy()}
           >
             {starting ? "시작 중…" : "▶ 자동배포 시작"}
+                      timeboxText={programs.find((p) => p.id === selProgram)?.schedule}
           </button>
           <button type="button" className="sd-btn min-h-10 px-5 text-[12.5px] font-semibold" onClick={resetWizard}>
             ↺ 입력 초기화
@@ -1775,6 +1781,9 @@ function chansOf(keys: string[]): { platform: string; accountId: string }[] {
  *
  * 여기 넣은 개수가 곧 **하루 발행 수**다(서버 `perDayCount`). 그래서 개수를 따로 입력받지
  * 않는다 — 두 군데서 받으면 화면과 엔진이 다른 수를 믿는 상태가 된다.
+          onSubtitlesChange={setSubtitles}
+          // 시간박스 문구 주석은 컴포넌트 prop 정의에 있다 — 선택 프로그램의 편성 문구, 없으면 예시.
+          timeboxText={programs.find((p) => p.id === selProgram)?.schedule}
  */
 function SlotPicker({ slots, onChange }: { slots: string[]; onChange: (v: string[]) => void }) {
   const [adding, setAdding] = useState(false);

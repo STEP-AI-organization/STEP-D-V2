@@ -5468,6 +5468,10 @@ app.post("/api/automation/rules", async (c) => {
         ...num("subtitleY"), ...num("subtitleSize"),
         ...(typeof l.subtitleColor === "string" && /^#[0-9a-fA-F]{6}$/.test(l.subtitleColor) ? { subtitleColor: l.subtitleColor } : {}),
         ...(typeof l.subtitles === "boolean" ? { subtitles: l.subtitles } : {}),
+        // 요소 표시 플래그 — 미지정 = 표시. false 인 것만 의미가 있지만 true 도 라운드트립시킨다.
+        ...(typeof l.title === "boolean" ? { title: l.title } : {}),
+        ...(typeof l.logo === "boolean" ? { logo: l.logo } : {}),
+        ...(typeof l.timebox === "boolean" ? { timebox: l.timebox } : {}),
       };
       return Object.keys(layout).length ? { layout } : {};
     })()),

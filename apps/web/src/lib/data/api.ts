@@ -996,6 +996,10 @@ export interface AutomationRule {
     subtitleColor?: string;
     /** 자막 켜기 — 기본 true. false 면 자동 클립을 자막 없이 렌더. */
     subtitles?: boolean;
+    /** 요소 표시 여부 — 미지정 = 표시. 고객마다 제목·로고·시간박스를 뺄 수 있다. */
+    title?: boolean;
+    logo?: boolean;
+    timebox?: boolean;
   };
   /**
    * 자동 생성 숏폼의 리프레임 — 수동 채택(adopt-dialog)과 같은 값 체계.

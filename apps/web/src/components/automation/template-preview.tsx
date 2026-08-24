@@ -24,6 +24,10 @@ export type LayoutState = {
   subtitleSize: number;
   /** 자막 색(#RRGGBB). */
   subtitleColor: string;
+  /** 요소 표시 여부 — 미지정 = 표시(하위호환·구 규칙 그대로). 서버 렌더(factory)와 같은 축. */
+  title?: boolean;
+  logo?: boolean;
+  timebox?: boolean;
 };
 
 /**
@@ -36,7 +40,7 @@ export const SUBTITLE_DEFAULTS = { y: 26, size: 4.4, color: "#FFFFFF" } as const
 /** 소형 카드 기준 폭 — 폰트·패딩은 이 폭 대비 비율로 스케일된다(레이아웃 %좌표는 불변). */
 const BASE_W = 120;
 
-export function TemplatePreview({ template, accent, layout, frameSrc, subtitlesOn = true, width = BASE_W }: {
+export function TemplatePreview({ template, accent, layout, frameSrc, subtitlesOn = true, timeboxText, width = BASE_W }: {
   template: FrameTemplate | null;
   accent: string;
   layout: LayoutState;
@@ -44,6 +48,8 @@ export function TemplatePreview({ template, accent, layout, frameSrc, subtitlesO
   frameSrc?: string;
   /** 자막 오버레이 표시 여부 — 규칙의 자막 on/off 를 그대로 반영한다(꺼지면 자막이 사라진다). */
   subtitlesOn?: boolean;
+  /** 시간박스 문구 — 실제 렌더는 프로그램 설정의 편성 문구(schedule)를 쓴다. 없으면 예시 표기. */
+  timeboxText?: string;
   width?: number;
 }) {
   const s = width / BASE_W;
@@ -75,22 +81,28 @@ export function TemplatePreview({ template, accent, layout, frameSrc, subtitlesO
         </div>
       )}
       {/* 제목 2줄 — 각 줄은 한 시각 줄로 고정(nowrap · D). 서버 렌더/에디터와 줄 수 일치. */}
-      <div className="absolute text-center font-bold leading-tight"
-        style={{ top: `${layout.titleY}%`, left: 4 * s, right: 4 * s, fontSize: 7 * s, color: "#fff", whiteSpace: "nowrap" }}>
-        훅 첫 줄 텍스트
-        <div style={{ color: layout.titleColor || accent }}>둘째 줄 강조</div>
-      </div>
+      {layout.title !== false && (
+        <div className="absolute text-center font-bold leading-tight"
+          style={{ top: `${layout.titleY}%`, left: 4 * s, right: 4 * s, fontSize: 7 * s, color: "#fff", whiteSpace: "nowrap" }}>
+          훅 첫 줄 텍스트
+          <div style={{ color: layout.titleColor || accent }}>둘째 줄 강조</div>
+        </div>
+      )}
       {/* 로고 */}
-      <div className="absolute left-1/2 -translate-x-1/2 rounded-sm"
-        style={{ top: `${layout.channelIconY}%`, width: `${iconPct * 1.4}%`, height: `${iconPct}%`, background: "#666" }} />
-      {/* 시간 박스 */}
-      <div className="absolute left-1/2 -translate-x-1/2 text-center font-bold"
-        style={{
-          top: `${layout.channelBoxY}%`, fontSize: 5.5 * s, color: "#fff", background: "#3D7BD9",
-          paddingInline: 4 * s, borderRadius: 2 * s,
-        }}>
-        (수) 밤 10시 30분
-      </div>
+      {layout.logo !== false && (
+        <div className="absolute left-1/2 -translate-x-1/2 rounded-sm"
+          style={{ top: `${layout.channelIconY}%`, width: `${iconPct * 1.4}%`, height: `${iconPct}%`, background: "#666" }} />
+      )}
+      {/* 시간 박스 — 문구는 프로그램 설정의 편성 문구(schedule). 미리보기에 프로그램 값이 오면 그걸 쓴다. */}
+      {layout.timebox !== false && (
+        <div className="absolute left-1/2 -translate-x-1/2 text-center font-bold"
+          style={{
+            top: `${layout.channelBoxY}%`, fontSize: 5.5 * s, color: "#fff", background: "#3D7BD9",
+            paddingInline: 4 * s, borderRadius: 2 * s, whiteSpace: "nowrap",
+          }}>
+          {timeboxText || "(수) 밤 10시 30분"}
+        </div>
+      )}
     </div>
   );
 }
@@ -99,13 +111,38 @@ export function TemplatePreview({ template, accent, layout, frameSrc, subtitlesO
  * 위치 조절 슬라이더 — 소형(고급 설정 옆)과 대형 다이얼로그가 같은 목록을 쓴다.
  * min/max 를 두 곳에 복제하면 한쪽만 고치게 된다.
  */
-export function LayoutSliders({ layout, onChange, className }: {
+export function LayoutSliders({ layout, onChange, className, subtitlesOn, onSubtitlesChange }: {
   layout: LayoutState;
   onChange: (next: LayoutState) => void;
   className?: string;
+  /** 자막 on/off — 규칙의 자막 토글과 **같은 상태**를 부모가 넘긴다(두 벌 금지). 없으면 자막 줄 숨김. */
+  subtitlesOn?: boolean;
+  onSubtitlesChange?: (on: boolean) => void;
 }) {
   return (
     <div className={className} style={{ color: "var(--sd-fg-dim)" }}>
+      {/* 요소 표시 — 고객마다 로고·시간박스·제목·자막을 뺄 수 있다(사용자 2026-08-24).
+          체크 해제 = 미리보기에서 즉시 사라지고, 저장 시 rule.layout 플래그로 렌더에도 빠진다. */}
+      <div className="flex flex-wrap gap-x-3 gap-y-1 pb-1">
+        {([["title", "제목"], ["logo", "로고"], ["timebox", "시간박스"]] as const).map(([key, label]) => (
+          <label key={key} className="flex cursor-pointer items-center gap-1">
+            <input
+              type="checkbox" checked={layout[key] !== false}
+              onChange={(e) => onChange({ ...layout, [key]: e.target.checked })}
+            />
+            {label}
+          </label>
+        ))}
+        {onSubtitlesChange && (
+          <label className="flex cursor-pointer items-center gap-1">
+            <input
+              type="checkbox" checked={subtitlesOn !== false}
+              onChange={(e) => onSubtitlesChange(e.target.checked)}
+            />
+            자막
+          </label>
+        )}
+      </div>
       {([
         // [라벨, 키, min, max, step, 단위, 소수자리]
         ["제목 위치", "titleY", 3, 30, 0.5, "%", 0],
@@ -153,12 +190,16 @@ export function LayoutSliders({ layout, onChange, className }: {
  * (부모 layout 상태를 그대로 공유 — 다이얼로그 전용 사본을 만들면 닫을 때 유실된다).
  * 관용구는 upload-video-dialog(오버레이 클릭 닫힘) + billing-ui(ESC window keydown).
  */
-export function TemplatePreviewDialog({ template, accent, layout, frameSrc, subtitlesOn = true, onLayoutChange, onClose }: {
+export function TemplatePreviewDialog({ template, accent, layout, frameSrc, subtitlesOn = true, onSubtitlesChange, timeboxText, onLayoutChange, onClose }: {
   template: FrameTemplate | null;
   accent: string;
   layout: LayoutState;
   frameSrc?: string;
   subtitlesOn?: boolean;
+  /** 자막 토글 콜백 — 부모(자동배포 화면)의 자막 상태를 그대로 조작한다. */
+  onSubtitlesChange?: (on: boolean) => void;
+  /** 시간박스 문구 — 선택한 프로그램의 편성 문구(schedule). 없으면 예시 표기. */
+  timeboxText?: string;
   onLayoutChange: (next: LayoutState) => void;
   onClose: () => void;
 }) {
@@ -191,7 +232,7 @@ export function TemplatePreviewDialog({ template, accent, layout, frameSrc, subt
         aria-modal="true"
         aria-label="템플릿 대형 미리보기"
       >
-        <TemplatePreview template={template} accent={accent} layout={layout} frameSrc={frameSrc} subtitlesOn={subtitlesOn} width={w} />
+        <TemplatePreview template={template} accent={accent} layout={layout} frameSrc={frameSrc} subtitlesOn={subtitlesOn} timeboxText={timeboxText} width={w} />
         {/* 컨트롤 컬럼은 **내용 높이**로 둔다. self-stretch 를 걸면 세로로 긴 9:16 프리뷰(≈800px)
             높이에 맞춰 늘어나고, mt-auto 닫기 버튼이 그 바닥까지 밀려 컨트롤과 버튼 사이에 거대한
             빈 공간이 생긴다(사용자 2026-08-21 "왜 이래 ㅋㅋ"). 프리뷰 위쪽에 정렬(items-start)해 붙인다. */}
@@ -202,7 +243,8 @@ export function TemplatePreviewDialog({ template, accent, layout, frameSrc, subt
           <p className="text-[10.5px] leading-relaxed" style={{ color: "var(--sd-mut)" }}>
             실제 렌더와 같은 % 좌표로 그립니다 — 슬라이더를 움직이면 저장될 위치가 그대로 바뀝니다.
           </p>
-          <LayoutSliders layout={layout} onChange={onLayoutChange} className="space-y-2 text-[10.5px]" />
+          <LayoutSliders layout={layout} onChange={onLayoutChange} className="space-y-2 text-[10.5px]"
+            subtitlesOn={subtitlesOn} onSubtitlesChange={onSubtitlesChange} />
           <button type="button" className="sd-btn mt-3 self-start" onClick={onClose}>
             닫기 (ESC)
           </button>
