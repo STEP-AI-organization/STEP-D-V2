@@ -433,6 +433,13 @@ export const CREDIT_IDLE_REASON = "크레딧 부족 — 충전 필요";
  */
 export const LAST_CYCLE_KEY = "automation.lastCycleAt";
 
+/**
+ * 자동배포 완료 알림을 받을 담당자 이메일이 담긴 automation_setting 키 (워크스페이스당 하나).
+ * 값이 비어 있으면 알림을 보내지 않는다 — 알림도 규칙과 같은 원칙이다: 설정이 없으면
+ * 아무것도 하지 않는다. 발송 지점은 워커의 실업로드 성공 자리(publish-notify.ts) 하나뿐이다.
+ */
+export const NOTIFY_EMAIL_KEY = "automation.notifyEmail";
+
 export interface CycleInput {
   /** 전역 일시정지 상태. */
   paused: boolean;

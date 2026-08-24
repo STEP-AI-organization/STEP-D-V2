@@ -224,6 +224,18 @@ export function resolveRecipient(candidates: {
   return null;
 }
 
+/**
+ * Gmail XOAUTH2 — 비밀번호(SMTP_PASS) 대신 OAuth 3종으로 인증한다.
+ * ⚠️ refresh token 의 스코프가 `https://mail.google.com/` 여야 SMTP 가 열린다 —
+ * `gmail.send` 만으로는 REST API 는 되지만 SMTP XOAUTH2 는 거절된다.
+ */
+export function smtpOAuthConfigured(env: NodeJS.ProcessEnv = process.env): boolean {
+  return Boolean(
+    env.SMTP_USER && env.SMTP_OAUTH_CLIENT_ID
+    && env.SMTP_OAUTH_CLIENT_SECRET && env.SMTP_OAUTH_REFRESH_TOKEN,
+  );
+}
+
 export function smtpConfigured(env: NodeJS.ProcessEnv = process.env): boolean {
-  return Boolean(env.SMTP_HOST && env.SMTP_USER && env.SMTP_PASS);
+  return Boolean(env.SMTP_HOST && env.SMTP_USER && env.SMTP_PASS) || smtpOAuthConfigured(env);
 }

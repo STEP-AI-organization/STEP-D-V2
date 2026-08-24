@@ -1070,8 +1070,24 @@ export async function fetchAutomation(): Promise<{
    * 구버전 서버는 필드 자체가 없다 — 그때는 게이트 경고를 전부 숨긴다.
    */
   gates?: Record<string, boolean>;
+  /**
+   * 자동배포 완료 알림을 받을 담당자 이메일 (서버 확장분 · 옵셔널). 빈 문자열 = 알림 끔.
+   * 실업로드 성공 시 서버(워커)가 영상 제목·URL 을 이 주소로 보낸다.
+   */
+  notifyEmail?: string;
 }> {
   return json(await fetch(`${API_BASE}/automation`, { cache: "no-store" }));
+}
+
+/** 자동배포 완료 알림 담당자 이메일 저장 — 빈 문자열이면 알림을 끈다. */
+export async function setAutomationNotifyEmail(email: string): Promise<{ notifyEmail: string }> {
+  const res = await fetch(`${API_BASE}/automation/notify-email`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email }),
+  });
+  if (!res.ok) throw new ApiError(res.status, await errorMessageOf(res));
+  return res.json();
 }
 
 export async function saveAutomationRule(

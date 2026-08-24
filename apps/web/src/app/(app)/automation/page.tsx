@@ -48,6 +48,7 @@ import {
   rejectAutomationHold,
   runAutomationNow,
   saveAutomationRule,
+  setAutomationNotifyEmail,
   setAutomationPaused,
   type AutomationRule,
   type ChannelRule,
@@ -234,6 +235,10 @@ export default function AutomationPage() {
   const [cycleEveryMs, setCycleEveryMs] = useState<number | null>(null);
   // 채널별 실업로드 스위치 — 구버전 서버는 안 내려준다(null = 모름 → 경고 안 띄움).
   const [gates, setGates] = useState<Record<string, boolean> | null>(null);
+  // 자동배포 완료 알림 담당자 이메일 — saved 는 서버 저장값(입력값과 갈라야 "저장됨" 표시가 정직하다).
+  const [notifyEmail, setNotifyEmail] = useState("");
+  const [notifyEmailSaved, setNotifyEmailSaved] = useState("");
+  const [savingNotify, setSavingNotify] = useState(false);
   // loading 없이는 fetch 전에 "규칙 없음"이 먼저 보인다 — 로딩/빈/에러 3종을 구분한다.
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -253,6 +258,12 @@ export default function AutomationPage() {
       setLastCycleAt(r.lastCycleAt ?? null);
       setCycleEveryMs(typeof r.cycleEveryMs === "number" ? r.cycleEveryMs : null);
       setGates(r.gates ?? null);
+      // 폴링 재로드가 입력 중인 값을 덮지 않게, 서버값 반영은 저장값과 입력값이 같을 때만.
+      setNotifyEmailSaved((prev) => {
+        const next = r.notifyEmail ?? "";
+        setNotifyEmail((cur) => (cur === prev ? next : cur));
+        return next;
+      });
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -1004,6 +1015,49 @@ export default function AutomationPage() {
         >
           🎬 템플릿 설정 — 미리보기 · 제목 색·위치 · 아이콘 · 자막
         </button>
+
+        {/* 담당자 알림 — 자동배포가 실제로 나가면 이 주소로 영상 제목·URL 메일이 간다.
+            규칙이 아니라 워크스페이스 설정이다(어느 규칙이 내보내든 같은 담당자가 받는다). */}
+        <div className="flex flex-wrap items-center gap-2">
+          <label className="text-[11px]" style={{ color: "var(--sd-label)" }}>
+            담당자 이메일 (배포 완료 알림)
+          </label>
+          <input
+            type="email"
+            className="sd-input w-[220px]"
+            placeholder="비우면 알림 없음"
+            value={notifyEmail}
+            onChange={(e) => setNotifyEmail(e.target.value)}
+          />
+          <button
+            type="button"
+            className="sd-btn"
+            disabled={savingNotify || notifyEmail.trim() === notifyEmailSaved}
+            onClick={() => {
+              void (async () => {
+                setSavingNotify(true);
+                try {
+                  const r = await setAutomationNotifyEmail(notifyEmail.trim());
+                  setNotifyEmailSaved(r.notifyEmail);
+                  setNotifyEmail(r.notifyEmail);
+                  toast({
+                    title: r.notifyEmail ? "알림 이메일 저장됨" : "알림 껐습니다",
+                    description: r.notifyEmail
+                      ? `자동배포가 완료되면 ${r.notifyEmail} 로 제목·링크를 보냅니다.`
+                      : "배포 완료 알림 메일을 보내지 않습니다.",
+                    tone: "done",
+                  });
+                } catch (err) {
+                  toast({ title: "저장 실패", description: err instanceof Error ? err.message : String(err), tone: "error" });
+                } finally {
+                  setSavingNotify(false);
+                }
+              })();
+            }}
+          >
+            {savingNotify ? "저장 중…" : notifyEmail.trim() === notifyEmailSaved ? "저장됨" : "저장"}
+          </button>
+        </div>
 
         {/* 고급 설정 — 구 규칙 폼(점수 기준·한도·시간창·정책·템플릿) 접기로 격하 · 삭제 금지 */}
         <button

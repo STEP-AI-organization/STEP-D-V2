@@ -9,8 +9,11 @@
  * 발송 트리거는 "원장에 실제로 적립된 순간"(addCreditEntry 가 true 를 돌려준 곳)뿐이라
  * 중복 웹훅·재시도에도 한 결제당 한 통만 나간다. invoice.test.ts 의 배선 스캔이 강제한다.
  *
- * SMTP env 가 없으면 조용히 건너뛴다(로그만):
- *   SMTP_HOST · SMTP_PORT(기본 587) · SMTP_USER · SMTP_PASS · INVOICE_MAIL_FROM(기본 SMTP_USER)
+ * SMTP env 가 없으면 조용히 건너뛴다(로그만). 인증은 둘 중 하나:
+ *   평문   SMTP_HOST · SMTP_PORT(기본 587) · SMTP_USER · SMTP_PASS
+ *   OAuth  SMTP_USER + SMTP_OAUTH_CLIENT_ID/SECRET/REFRESH_TOKEN (Gmail XOAUTH2 ·
+ *          호스트·포트 생략 시 smtp.gmail.com:465)
+ * 보낸이는 INVOICE_MAIL_FROM(기본 SMTP_USER).
  *
  * PDF 는 jsPDF + GmarketSans TTF(assets/invoice-fonts). 표준 PDF 폰트에는 한글이 없고,
  * 서버 이미지의 Pretendard 는 OTF(CFF)라 jsPDF 가 임베드하지 못한다.
@@ -30,6 +33,7 @@ import {
   type InvoiceParty,
   type PaymentInvoice,
 } from "./invoice.ts";
+import { sendMail } from "./mailer.ts";
 import { getPayment } from "./portone.ts";
 
 /** 구매자 — 사업자정보(business_profile)가 정본, 없으면 워크스페이스 이름만. */
@@ -244,15 +248,7 @@ export async function sendInvoiceEmail(paymentId: string, tenantId: string): Pro
     const invoice = invoiceFromTopup(order);
     const pdf = await renderInvoicePdf(invoice, supplier, buyer);
 
-    const nodemailer = await import("nodemailer");
-    const transport = nodemailer.default.createTransport({
-      host: String(process.env.SMTP_HOST),
-      port: Number(process.env.SMTP_PORT ?? 587),
-      secure: Number(process.env.SMTP_PORT ?? 587) === 465,
-      auth: { user: String(process.env.SMTP_USER), pass: String(process.env.SMTP_PASS) },
-    });
-    await transport.sendMail({
-      from: String(process.env.INVOICE_MAIL_FROM ?? process.env.SMTP_USER),
+    await sendMail({
       to,
       subject: `[STEP-D] 인보이스 ${invoice.number} — ${WON(invoice.amountKrw)} 결제 완료`,
       html: mailHtml(invoice, supplier),

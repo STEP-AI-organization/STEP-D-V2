@@ -182,7 +182,10 @@ INSTAGRAM_APP_ID / INSTAGRAM_APP_SECRET / INSTAGRAM_REDIRECT_URI Instagram 비�
 TIKTOK_CLIENT_KEY / TIKTOK_CLIENT_SECRET / TIKTOK_REDIRECT_URI   TikTok OAuth
 AUTO_GEBD / AUTO_THUMBNAIL                분석 완료 후 후속 잡 자동 큐잉 스위치
 SMTP_HOST / SMTP_PORT(587) / SMTP_USER / SMTP_PASS / INVOICE_MAIL_FROM
-                      결제 완료 인보이스 메일 (미설정 = 조용히 건너뜀 · invoice-email.ts)
+                      결제 완료 인보이스 메일 + 자동배포 완료 알림 (미설정 = 조용히 건너뜀 · mailer.ts)
+SMTP_OAUTH_CLIENT_ID / _SECRET / _REFRESH_TOKEN
+                      SMTP_PASS 대신 Gmail XOAUTH2 (스코프 mail.google.com 필수 · 호스트 생략 시
+                      smtp.gmail.com:465). 자동배포 알림은 워커(stepd-worker-youtube)가 보낸다
 INVOICE_ISSUER_NAME / _BIZNO / _CEO / _ADDRESS / _CONTACT   인보이스·거래명세서 발행자 표기
                       (비면 항목 생략 — 지어내지 않음. 어드민 월별 명세와 같은 namespace)
 GEMINI_BATCH              1 이면 chyron 을 Vertex 배치 예측으로 — 단가 50%. **기본 OFF 로 둘 것**:

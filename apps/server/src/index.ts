@@ -333,6 +333,7 @@ import {
 import {
   CREDIT_IDLE_REASON,
   LAST_CYCLE_KEY,
+  NOTIFY_EMAIL_KEY,
   RULE_CRITERIA,
   RULE_MEDIA_KINDS,
   GATE_POLICIES,
@@ -5318,7 +5319,7 @@ const PAUSE_KEY = "automation.paused";
 const AUTOMATION_CYCLE_MS = Number(process.env.AUTOMATION_CYCLE_MS ?? 10 * 60 * 1000);
 
 app.get("/api/automation", async (c) => {
-  const [rules, runs, holds, paused, balance, autoTopupAlert, lastCycleAt] = await Promise.all([
+  const [rules, runs, holds, paused, balance, autoTopupAlert, lastCycleAt, notifyEmail] = await Promise.all([
     listAutomationRules(),
     listRuleRuns(50),
     openHolds(),
@@ -5326,6 +5327,7 @@ app.get("/api/automation", async (c) => {
     creditBalance(),
     getAutoTopupAlert(),
     getAutomationSetting(LAST_CYCLE_KEY),
+    getAutomationSetting(NOTIFY_EMAIL_KEY),
   ]);
   const plan = planCycle({ paused: paused === "true", rules: rules as any });
   // 규칙×채널별 오늘 게시 수 — 순방이 한도 판정에 쓰는 publishedTodayKst 그대로.
@@ -5378,7 +5380,24 @@ app.get("/api/automation", async (c) => {
       facebook: facebookUploadEnabled(),
     },
     options: { mediaKinds: RULE_MEDIA_KINDS, criteria: RULE_CRITERIA, gatePolicies: GATE_POLICIES },
+    // 자동배포 완료 알림을 받을 담당자 이메일 — 워커의 실업로드 성공 지점(publish-notify.ts)이
+    // 같은 키를 읽는다. 비어 있으면 알림 없음.
+    notifyEmail: (notifyEmail ?? "").trim(),
   });
+});
+
+/**
+ * 자동배포 완료 알림 담당자 이메일 저장. 빈 문자열 = 알림 끔(행 삭제 대신 빈 값 —
+ * getAutoTopupAlert 와 같은 이유로 DELETE 경합을 피한다). 형식이 아니면 400.
+ */
+app.post("/api/automation/notify-email", async (c) => {
+  const body = await c.req.json().catch(() => ({}) as Record<string, unknown>);
+  const email = typeof body.email === "string" ? body.email.trim() : "";
+  if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+    return c.json({ error: "invalid_email", message: "이메일 형식이 아닙니다." }, 400);
+  }
+  await setAutomationSetting(NOTIFY_EMAIL_KEY, email);
+  return c.json({ ok: true, notifyEmail: email });
 });
 
 app.post("/api/automation/rules", async (c) => {

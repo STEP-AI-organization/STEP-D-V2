@@ -56,6 +56,7 @@ import {
 import { uploadFile, uploadPath, thumbPath, promoteUpload } from "./storage-gcs.ts";
 import { initQueue, claimJob, completeJob, failJob, requeueStale, heartbeatJob, enqueue, lastDoneJobAt, queueStats, type Job, type JobType } from "./queue.ts";
 import { runWithTenant, runAsSystem, DEFAULT_TENANT_ID } from "./tenant.ts";
+import { notifyAutoPublish } from "./publish-notify.ts";
 import { runAutomationCycle } from "./automation-cycle.ts";
 import { runChannelPipeline } from "./channel-pipeline.ts";
 import { runClipReframe, runContentAnalyze, newestMtimeMs } from "./content-pipeline.ts";
@@ -2356,6 +2357,12 @@ async function runDistributionPublish(job: Job): Promise<void> {
   };
 
   let uploadedVideoId: string | undefined;
+  const meta = metaForChannel(clip, "youtube");
+  // 자동배포 담당자 알림 — 게시가 **기록까지 끝난 뒤에만** 부른다(성공·후속실패 양쪽 경로).
+  // 던지지 않는 함수라(publish-notify.ts) 배포 상태에는 영향이 없다.
+  const notify = (videoId: string) => notifyAutoPublish({
+    clip, title: meta.title, channel: "youtube", accountId: channelId, videoId, publishAt,
+  });
   try {
     const body = await streamToBuffer(createReadStream(objPath));
     const { videoId } = await withChannelToken(ch, (token) =>
@@ -2363,7 +2370,7 @@ async function runDistributionPublish(job: Job): Promise<void> {
         token,
         { body, contentType: media.mime || "video/mp4" },
         {
-          ...metaForChannel(clip, "youtube"),
+          ...meta,
           privacyStatus: privacy,
           publishAt,
         },
@@ -2393,6 +2400,7 @@ async function runDistributionPublish(job: Job): Promise<void> {
       return;
     }
     console.log(`[worker] distribution.publish ${clipId} → youtube ${videoId} (${finalStatus})`);
+    await notify(videoId);
   } catch (err: any) {
     // 업로드가 이미 성공했으면(영상이 라이브) **절대 실패로 찍지 않는다** — 실패로 찍으면
     // 재시도가 같은 영상을 중복 업로드한다(#1). externalId 를 살려 published 로 기록한다.
@@ -2401,6 +2409,8 @@ async function runDistributionPublish(job: Job): Promise<void> {
       console.error(`[worker] distribution.publish ${clipId}: 업로드 성공(${uploadedVideoId}) 후 후속 단계 실패 — `
         + `published ${ok ? "기록 완료" : "기록도 실패(externalId 유실 위험 · 수동 확인 필요)"}. 재시도 중복 방지.`,
         err instanceof Error ? err.message.slice(0, 200) : err);
+      // 영상은 라이브다 — 담당자 알림도 성공 경로와 똑같이 보낸다(기록이 된 경우에만).
+      if (ok) await notify(uploadedVideoId);
       return;
     }
     if (err instanceof TokenRevokedError) {
