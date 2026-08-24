@@ -33,6 +33,12 @@ substitutions:
   _INVOICE_ISSUER_ADDRESS: ""
   _INVOICE_ISSUER_CONTACT: ""
 
+  # ── 메일 발송 계정 (인보이스 · 자동배포 알림 — mailer.ts) ──────────────────
+  # 인증은 Gmail XOAUTH2 — 비밀 3종은 --set-secrets 의 SMTP_OAUTH_* 참조.
+  # ⚠️ 워커 알림은 stepd-worker-youtube **Job** env 가 따로다(jobs update --update-secrets
+  # 로 이미 연결 · 2026-08-24). cloud.sh worker 는 이미지 태그만 갱신하므로 안 지워진다.
+  _SMTP_USER: "hkj@stepai.kr"
+
 steps:
   - name: gcr.io/cloud-builders/docker
     entrypoint: bash
@@ -68,7 +74,7 @@ steps:
           --min-instances=1 \
           --cpu-boost \
           --max-instances=5 \
-          --set-env-vars=NODE_ENV=production,GCS_BUCKET=$_GCS_BUCKET,GCS_UPLOAD_BUCKET=$_GCS_UPLOAD_BUCKET,FACTORY_ENABLED=1,CREDIT_PRICE_KRW=$_CREDIT_PRICE_KRW,AUTH_REQUIRED=$_AUTH_REQUIRED,NAVER_UPLOAD_ENABLED=1,YOUTUBE_UPLOAD_ENABLED=1,TIKTOK_UPLOAD_ENABLED=1,INSTAGRAM_UPLOAD_ENABLED=1,FACEBOOK_UPLOAD_ENABLED=1,INVOICE_ISSUER_NAME=$_INVOICE_ISSUER_NAME,INVOICE_ISSUER_BIZNO=$_INVOICE_ISSUER_BIZNO,INVOICE_ISSUER_ADDRESS=$_INVOICE_ISSUER_ADDRESS,INVOICE_ISSUER_CONTACT=$_INVOICE_ISSUER_CONTACT \
+          --set-env-vars=NODE_ENV=production,GCS_BUCKET=$_GCS_BUCKET,GCS_UPLOAD_BUCKET=$_GCS_UPLOAD_BUCKET,FACTORY_ENABLED=1,CREDIT_PRICE_KRW=$_CREDIT_PRICE_KRW,AUTH_REQUIRED=$_AUTH_REQUIRED,NAVER_UPLOAD_ENABLED=1,YOUTUBE_UPLOAD_ENABLED=1,TIKTOK_UPLOAD_ENABLED=1,INSTAGRAM_UPLOAD_ENABLED=1,FACEBOOK_UPLOAD_ENABLED=1,INVOICE_ISSUER_NAME=$_INVOICE_ISSUER_NAME,INVOICE_ISSUER_BIZNO=$_INVOICE_ISSUER_BIZNO,INVOICE_ISSUER_ADDRESS=$_INVOICE_ISSUER_ADDRESS,INVOICE_ISSUER_CONTACT=$_INVOICE_ISSUER_CONTACT,SMTP_USER=$_SMTP_USER \
           --set-secrets=DATABASE_URL=stepd-db-url:latest \
           --set-secrets=GOOGLE_CLIENT_ID=stepd-google-client-id:latest \
           --set-secrets=GOOGLE_CLIENT_SECRET=stepd-google-client-secret:latest \
@@ -87,6 +93,9 @@ steps:
           --set-secrets=PORTONE_BILLING_CHANNEL_KEY=stepd-portone-billing-channel-key:latest \
           --set-secrets=PORTONE_WEBHOOK_SECRET=stepd-portone-webhook-secret:latest \
           --set-secrets=NAVER_SESSION_KEY=stepd-naver-session-key:latest \
+          --set-secrets=SMTP_OAUTH_CLIENT_ID=stepd-smtp-oauth-client-id:latest \
+          --set-secrets=SMTP_OAUTH_CLIENT_SECRET=stepd-smtp-oauth-client-secret:latest \
+          --set-secrets=SMTP_OAUTH_REFRESH_TOKEN=stepd-smtp-oauth-refresh-token:latest \
           --add-cloudsql-instances=$_CLOUD_SQL_INSTANCE \
           --service-account=stepd-deployer@$PROJECT_ID.iam.gserviceaccount.com
 
@@ -112,7 +121,7 @@ steps:
           --min-instances=0 \
           --cpu-boost \
           --max-instances=5 \
-          --set-env-vars=NODE_ENV=production,GCS_BUCKET=$_GCS_BUCKET,GCS_UPLOAD_BUCKET=$_GCS_UPLOAD_BUCKET,FACTORY_ENABLED=1,CREDIT_PRICE_KRW=$_CREDIT_PRICE_KRW,AUTH_REQUIRED=$_AUTH_REQUIRED,NAVER_UPLOAD_ENABLED=1,YOUTUBE_UPLOAD_ENABLED=1,TIKTOK_UPLOAD_ENABLED=1,INSTAGRAM_UPLOAD_ENABLED=1,FACEBOOK_UPLOAD_ENABLED=1,INVOICE_ISSUER_NAME=$_INVOICE_ISSUER_NAME,INVOICE_ISSUER_BIZNO=$_INVOICE_ISSUER_BIZNO,INVOICE_ISSUER_ADDRESS=$_INVOICE_ISSUER_ADDRESS,INVOICE_ISSUER_CONTACT=$_INVOICE_ISSUER_CONTACT \
+          --set-env-vars=NODE_ENV=production,GCS_BUCKET=$_GCS_BUCKET,GCS_UPLOAD_BUCKET=$_GCS_UPLOAD_BUCKET,FACTORY_ENABLED=1,CREDIT_PRICE_KRW=$_CREDIT_PRICE_KRW,AUTH_REQUIRED=$_AUTH_REQUIRED,NAVER_UPLOAD_ENABLED=1,YOUTUBE_UPLOAD_ENABLED=1,TIKTOK_UPLOAD_ENABLED=1,INSTAGRAM_UPLOAD_ENABLED=1,FACEBOOK_UPLOAD_ENABLED=1,INVOICE_ISSUER_NAME=$_INVOICE_ISSUER_NAME,INVOICE_ISSUER_BIZNO=$_INVOICE_ISSUER_BIZNO,INVOICE_ISSUER_ADDRESS=$_INVOICE_ISSUER_ADDRESS,INVOICE_ISSUER_CONTACT=$_INVOICE_ISSUER_CONTACT,SMTP_USER=$_SMTP_USER \
           --set-secrets=DATABASE_URL=stepd-db-url:latest \
           --set-secrets=GOOGLE_CLIENT_ID=stepd-google-client-id:latest \
           --set-secrets=GOOGLE_CLIENT_SECRET=stepd-google-client-secret:latest \
@@ -131,6 +140,9 @@ steps:
           --set-secrets=PORTONE_BILLING_CHANNEL_KEY=stepd-portone-billing-channel-key:latest \
           --set-secrets=PORTONE_WEBHOOK_SECRET=stepd-portone-webhook-secret:latest \
           --set-secrets=NAVER_SESSION_KEY=stepd-naver-session-key:latest \
+          --set-secrets=SMTP_OAUTH_CLIENT_ID=stepd-smtp-oauth-client-id:latest \
+          --set-secrets=SMTP_OAUTH_CLIENT_SECRET=stepd-smtp-oauth-client-secret:latest \
+          --set-secrets=SMTP_OAUTH_REFRESH_TOKEN=stepd-smtp-oauth-refresh-token:latest \
           --add-cloudsql-instances=$_CLOUD_SQL_INSTANCE \
           --service-account=stepd-deployer@$PROJECT_ID.iam.gserviceaccount.com
 
