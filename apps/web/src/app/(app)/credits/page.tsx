@@ -28,6 +28,7 @@ import {
   fetchCredits,
   fetchInvoices,
   fetchSavedCard,
+  saveBillingNotifyEmails,
   type AutoTopupPolicy,
   type CreditState,
   type InvoiceList,
@@ -94,10 +95,20 @@ export default function CreditsPage() {
   const [invoiceList, setInvoiceList] = useState<InvoiceList | null>(null);
   const [invoicesFailed, setInvoicesFailed] = useState(false);
   const [pdfBusy, setPdfBusy] = useState<string | null>(null);
+  // 결제 알림 수신자 — saved 는 서버 저장값(입력 중 폴링이 덮지 않게 입력값과 가른다).
+  const [notifyInput, setNotifyInput] = useState("");
+  const [notifySaved, setNotifySaved] = useState<string[]>([]);
+  const [notifyBusy, setNotifyBusy] = useState(false);
 
   const load = useCallback(async () => {
     try {
-      setState(await fetchCredits());
+      const next = await fetchCredits();
+      setState(next);
+      setNotifySaved((prevSaved) => {
+        const list = next.notifyEmails ?? [];
+        setNotifyInput((cur) => (cur === prevSaved.join(", ") ? list.join(", ") : cur));
+        return list;
+      });
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -236,9 +247,76 @@ export default function CreditsPage() {
   }
   const buyerSummary = [buyerName.trim(), email.trim(), phoneDigits].filter(Boolean).join(" · ");
 
+  /** 결제 알림 수신자 저장 — 쉼표·공백 구분 입력을 목록으로. 빈 입력 = 알림 없음. */
+  async function saveNotify() {
+    if (notifyBusy) return;
+    setNotifyBusy(true);
+    try {
+      const emails = notifyInput.split(/[,\s]+/).map((s) => s.trim()).filter(Boolean);
+      const r = await saveBillingNotifyEmails(emails);
+      setNotifySaved(r.notifyEmails);
+      setNotifyInput(r.notifyEmails.join(", "));
+      toast({
+        title: r.notifyEmails.length ? "알림 수신자 저장됨" : "추가 수신자를 껐습니다",
+        description: r.notifyEmails.length
+          ? `인보이스·결제 실패 메일을 ${r.notifyEmails.length}명이 받습니다.`
+          : "결제창에 입력한 이메일로만 인보이스가 갑니다.",
+        tone: "done",
+      });
+    } catch (err) {
+      toast({ title: "저장 실패", description: err instanceof Error ? err.message : String(err), tone: "error" });
+    } finally {
+      setNotifyBusy(false);
+    }
+  }
+
+  const notifyDirty = notifyInput.trim() !== notifySaved.join(", ");
+  const monthUsage = state?.monthUsage ?? null;
+  // 게이지 분모 = 이번달 사용 + 잔액. "이번달 시작 시점 보유분" 근사치 — 목업의 사용/한도 축.
+  const gaugeTotal = state && monthUsage != null ? monthUsage + state.balance : null;
+  const alert = state?.autoTopupAlert ?? null;
+
   return (
     <div className="mx-auto flex max-w-[900px] flex-col gap-[14px]">
       <h2 className="sd-serif text-[16px] font-semibold" style={{ color: "var(--sd-fg)" }}>결제</h2>
+
+      {/* ── 상태 배너 — 서비스가 멈춰 있거나 결제가 실패 중이면 맨 위에서 말한다 ── */}
+      {state && state.balance <= 0 && (
+        <div
+          className="flex items-center gap-2.5 rounded-[6px] px-3.5 py-2.5"
+          style={{ border: "1px solid var(--sd-danger-border)", background: "var(--sd-danger-bg)" }}
+        >
+          <span
+            className="grid h-[20px] w-[20px] shrink-0 place-items-center rounded-full text-[12px] font-extrabold"
+            style={{ background: "var(--sd-danger-strong)", color: "var(--sd-on-danger)" }}
+          >!</span>
+          <div className="text-[12px] font-semibold" style={{ color: "var(--sd-danger-strong)" }}>
+            크레딧이 소진되어 새 분석이 시작되지 않습니다
+            <span className="block text-[11px] font-normal" style={{ color: "var(--sd-danger-strong)", opacity: 0.85 }}>
+              충전(또는 자동 재결제 복구) 후 다시 시작할 수 있습니다 — 이미 완료된 단계는 보존됩니다.
+            </span>
+          </div>
+        </div>
+      )}
+      {alert && (
+        <div
+          className="flex items-center gap-2.5 rounded-[6px] px-3.5 py-2.5"
+          style={{ border: "1px solid var(--sd-danger-border)", background: "var(--sd-danger-bg)" }}
+        >
+          <span
+            className="grid h-[20px] w-[20px] shrink-0 place-items-center rounded-full text-[12px] font-extrabold"
+            style={{ background: "var(--sd-danger-strong)", color: "var(--sd-on-danger)" }}
+          >!</span>
+          <div className="text-[12px] font-semibold" style={{ color: "var(--sd-danger-strong)" }}>
+            자동 결제 실패 — {alert.message}
+            {alert.hint && (
+              <span className="block text-[11px] font-normal" style={{ color: "var(--sd-danger-strong)", opacity: 0.85 }}>
+                {alert.hint}
+              </span>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* ── 히어로 — 잔액 + 구매 진입점 ─────────────────────────────────────── */}
       <BillingCard
@@ -260,6 +338,37 @@ export default function CreditsPage() {
             </span>
           )}
         </div>
+
+        {/* 이번달 사용 게이지 — 목업의 사용/한도 축. 분모 = 이번달 사용 + 현재 잔액. */}
+        {state && monthUsage != null && gaugeTotal != null && gaugeTotal > 0 && (
+          <div>
+            <div className="h-[6px] overflow-hidden rounded-full" style={{ background: "var(--sd-card-sub)" }}>
+              <div
+                className="h-full rounded-full"
+                style={{
+                  width: `${Math.min(100, Math.round((monthUsage / gaugeTotal) * 100))}%`,
+                  background: state.balance <= 0 ? "var(--sd-danger-strong)" : "var(--sd-accent)",
+                }}
+              />
+            </div>
+            <div className="mt-1 flex justify-between text-[10.5px]" style={{ color: "var(--sd-mut)" }}>
+              <span>이번달 {monthUsage.toLocaleString("ko-KR")}개 사용</span>
+              <span>잔액 {state.balance.toLocaleString("ko-KR")}개</span>
+            </div>
+          </div>
+        )}
+
+        {price != null && (
+          <div
+            className="flex items-center justify-between pt-2 text-[11.5px]"
+            style={{ borderTop: "1px solid var(--sd-border)" }}
+          >
+            <span style={{ color: "var(--sd-mut)" }}>크레딧 단가</span>
+            <span className="sd-mono" style={{ color: "var(--sd-fg)" }}>
+              {WON(price)}<span className="ml-1 text-[10.5px]" style={{ color: "var(--sd-mut)" }}>/ 개 (부가세 포함)</span>
+            </span>
+          </div>
+        )}
 
         <p className="text-[11.5px]" style={{ color: "var(--sd-mut)" }}>
           서비스를 계속 이용하려면 크레딧을 구매하세요.
@@ -298,6 +407,54 @@ export default function CreditsPage() {
           크레딧 정보를 불러오지 못했습니다 ({error}).
         </div>
       )}
+
+      {/* ── 자동 재결제 + 결제 알림 — 목업의 "자동 재결제" 카드. 편집은 다이얼로그가 한다. ── */}
+      <BillingCard
+        title="자동 재결제 · 결제 알림"
+        action={<CardAction label="자동 재결제 설정" onClick={() => setDialog("autotopup")} />}
+      >
+        <p className="text-[11.5px]" style={{ color: "var(--sd-fg)" }}>
+          {policy
+            ? policy.enabled
+              ? <>잔액이 <b>{policy.thresholdCredits.toLocaleString("ko-KR")}개</b> 아래로 내려가면 저장 카드로 <b>{policy.topupCredits.toLocaleString("ko-KR")}개
+                  {price != null ? `(${WON(policy.topupCredits * price)})` : ""}</b>를 자동 결제합니다.</>
+              : "꺼져 있습니다 — 잔액이 소진되면 새 분석이 멈춥니다. 켜 두면 저장 카드로 자동 결제합니다."
+            : "설정을 불러오는 중…"}
+        </p>
+        <p className="text-[11px]" style={{ color: "var(--sd-mut)" }}>
+          언제든 끌 수 있습니다 · 일 횟수·월 금액 상한 안에서만 결제됩니다.
+        </p>
+
+        <div className="pt-2" style={{ borderTop: "1px solid var(--sd-border)" }}>
+          <div className="mb-1 text-[11px] font-medium" style={{ color: "var(--sd-label)" }}>결제 알림 이메일</div>
+          <p className="mb-1.5 text-[11px]" style={{ color: "var(--sd-mut)" }}>
+            인보이스(결제 완료)와 자동 결제 실패 알림을 받을 담당자 — 쉼표로 여러 명(최대 5명).
+          </p>
+          <div className="flex flex-wrap items-center gap-2">
+            <input
+              value={notifyInput}
+              onChange={(e) => setNotifyInput(e.target.value)}
+              placeholder="media-ops@company.com, cp@company.com"
+              className="sd-input min-w-[260px] flex-1"
+              aria-label="결제 알림 이메일"
+              disabled={!canManageBilling}
+            />
+            <button
+              type="button"
+              className="sd-btn"
+              disabled={notifyBusy || !notifyDirty || !canManageBilling}
+              onClick={() => void saveNotify()}
+            >
+              {notifyBusy ? "저장 중…" : notifyDirty ? "저장" : "저장됨"}
+            </button>
+          </div>
+          {notifySaved.length > 0 && (
+            <p className="mt-1.5 text-[10.5px]" style={{ color: "var(--sd-mut)" }}>
+              {notifySaved.length}명이 결제 알림 메일을 받고 있습니다.
+            </p>
+          )}
+        </div>
+      </BillingCard>
 
       {/* ── 2열 — 거래 · 결제 옵션 ─────────────────────────────────────────── */}
       <div className="grid items-stretch gap-[14px] md:grid-cols-2">

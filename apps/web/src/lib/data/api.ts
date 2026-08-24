@@ -1469,10 +1469,31 @@ export interface CreditState {
   unit: string;
   priceKrw: number | null;
   ledger: CreditLedgerRow[];
+  /** 자동 충전이 조치 필요 사유로 실패 중이면 온다(서버 확장분 · 옵셔널). 화면 상단 빨간 배너의 생산자. */
+  autoTopupAlert?: {
+    code: string; message: string; hint: string;
+    firstAt: string; lastAt: string; count: number; balance: number | null;
+  } | null;
+  /** 이번 달(KST) 분석 사용량(크레딧 · 서버 확장분). 게이지가 이 값을 그린다. */
+  monthUsage?: number;
+  /** 결제 알림 수신자 — 인보이스·자동 결제 실패 메일이 이 목록으로도 나간다. */
+  notifyEmails?: string[];
 }
 
 export async function fetchCredits(): Promise<CreditState> {
   return json(await fetch(`${API_BASE}/credits`, { cache: "no-store", credentials: "include" }));
+}
+
+/** 결제 알림 수신자 저장(최대 5명) — 빈 배열이면 추가 수신자 없음. 관리자 전용(서버 403). */
+export async function saveBillingNotifyEmails(emails: string[]): Promise<{ notifyEmails: string[] }> {
+  const res = await fetch(`${API_BASE}/billing/notify-emails`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({ emails }),
+  });
+  if (!res.ok) throw new ApiError(res.status, await errorMessageOf(res));
+  return res.json();
 }
 
 // ── 인보이스 — 결제 완료된 충전 건마다 하나. PDF 는 브라우저가 이 데이터로 그린다. ──

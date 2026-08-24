@@ -116,6 +116,9 @@ import {
   getAutomationSetting,
   setAutomationSetting,
   getAutoTopupAlert,
+  getBillingNotifyEmails,
+  setBillingNotifyEmails,
+  monthUsageCredits,
   creditBalance,
   addCreditEntry,
   listCreditLedger,
@@ -6073,8 +6076,9 @@ app.post("/api/credits/auto-topup/run", async (c) => {
 
 app.get("/api/credits", async (c) => {
   // "user" 스코프 — PG 취소·실패 이벤트의 delta 0 운영 기록은 사용자 결제 내역이 아니다.
-  const [balance, ledger, autoTopupAlert] = await Promise.all([
+  const [balance, ledger, autoTopupAlert, monthUsage, notifyEmails] = await Promise.all([
     creditBalance(), listCreditLedger(50, "user"), getAutoTopupAlert(),
+    monthUsageCredits(), getBillingNotifyEmails(),
   ]);
   return c.json({
     balance,
@@ -6084,7 +6088,29 @@ app.get("/api/credits", async (c) => {
     // 자동 충전이 조치 필요 사유로 실패 중이면 여기서도 보여준다 — /api/automation 은
     // "왜 안 나가지"를 묻는 자리고, 여기는 실제로 조치(카드 재등록·상한 조정)하는 자리다.
     autoTopupAlert,
+    // 이번 달(KST) 사용량 — 결제 화면 게이지의 생산자. 원장 슬라이스로 화면이 더하면 빠진다.
+    monthUsage,
+    // 결제 알림 수신자(인보이스·자동 결제 실패 메일) — B2B 담당자 여러 명.
+    notifyEmails,
   });
+});
+
+/**
+ * 결제 알림 수신자 저장 — 인보이스(결제 완료)와 자동 결제 실패 메일이 이 목록으로 나간다.
+ * 빈 배열 = 추가 수신자 없음(결제창 이메일 1순위는 그대로다). 결제 설정이라 관리자만.
+ */
+app.post("/api/billing/notify-emails", async (c) => {
+  requireCardActor(c);
+  const body = await c.req.json().catch(() => ({}) as Record<string, unknown>);
+  const raw: unknown[] = Array.isArray(body.emails) ? body.emails : [];
+  const emails: string[] = [...new Set(raw.map((e: unknown) => String(e).trim().toLowerCase()).filter(Boolean))];
+  if (emails.length > 5) {
+    return c.json({ error: "too_many", message: "알림 수신자는 5명까지 등록할 수 있습니다." }, 400);
+  }
+  const bad = emails.find((e) => !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e));
+  if (bad) return c.json({ error: "invalid_email", message: `이메일 형식이 아닙니다: ${bad}` }, 400);
+  await setBillingNotifyEmails(emails);
+  return c.json({ ok: true, notifyEmails: emails });
 });
 
 /**

@@ -3382,6 +3382,42 @@ export async function setAutoTopupAlert(alert: AutoTopupAlert | null): Promise<v
   await setAutomationSetting(AUTO_TOPUP_ALERT_KEY, alert ? JSON.stringify(alert) : "");
 }
 
+// ── 결제 알림 수신자 (B2B 담당자 여러 명 · 2026-08-24) ─────────────────────────
+//
+// 인보이스(결제 완료)·자동 결제 실패 메일을 받을 추가 이메일 목록. autoTopupAlert 와
+// 같은 이유로 automation_setting KV 를 쓴다(테넌트당 한 행 · 마이그레이션 0) —
+// 표를 직접 만지지 말고 이 두 함수만 쓸 것.
+const BILLING_NOTIFY_EMAILS_KEY = "billing.notifyEmails";
+
+export async function getBillingNotifyEmails(): Promise<string[]> {
+  const raw = await getAutomationSetting(BILLING_NOTIFY_EMAILS_KEY);
+  if (!raw) return [];
+  try {
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr) ? arr.map(String).filter(Boolean) : [];
+  } catch {
+    return [];
+  }
+}
+
+export async function setBillingNotifyEmails(emails: string[]): Promise<void> {
+  await setAutomationSetting(BILLING_NOTIFY_EMAILS_KEY, emails.length ? JSON.stringify(emails) : "");
+}
+
+/**
+ * 이번 달(KST) 분석 사용량 합계(크레딧 = 분). 결제 화면 게이지의 생산자 —
+ * 원장 50건 슬라이스로 화면이 직접 더하면 달이 넘어가는 사용량이 조용히 빠진다.
+ */
+export async function monthUsageCredits(): Promise<number> {
+  const { rows } = await pool.query<{ used: number }>(
+    `SELECT COALESCE(SUM(-delta), 0)::int AS used
+       FROM credit_ledger
+      WHERE reason = 'usage'
+        AND occurred_at >= (date_trunc('month', now() AT TIME ZONE 'Asia/Seoul') AT TIME ZONE 'Asia/Seoul')`,
+  );
+  return rows[0]?.used ?? 0;
+}
+
 // ── 과금 원장 (migrations/0023 · billing-portone-plan.md) ──────────────────────
 
 export interface UsageEventInput {

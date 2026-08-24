@@ -24,7 +24,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { asSystem, getBusinessProfile, getTopup } from "./db-pg.ts";
+import { asSystem, getBillingNotifyEmails, getBusinessProfile, getTopup } from "./db-pg.ts";
 import {
   invoiceFromTopup,
   resolveRecipient,
@@ -239,11 +239,15 @@ export async function sendInvoiceEmail(paymentId: string, tenantId: string): Pro
 
     const buyer = await buyerFor(tenantId);
     const supplier = supplierFromEnv();
-    const to = resolveRecipient({ paymentEmail, buyerEmail: buyer.email });
-    if (!to) {
+    // 수신자 = 결제창 이메일(1순위) + 결제 알림 수신자 목록(B2B 담당자 여러 명 · 결제 화면에서 등록).
+    const primary = resolveRecipient({ paymentEmail, buyerEmail: buyer.email });
+    const extra = await getBillingNotifyEmails().catch(() => [] as string[]);
+    const recipients = [...new Set([primary, ...extra].filter(Boolean))] as string[];
+    if (recipients.length === 0) {
       console.warn(`[invoice] 수신자 이메일 없음 — 메일 안 보냄 (${paymentId})`);
       return;
     }
+    const to = recipients.join(", ");
 
     const invoice = invoiceFromTopup(order);
     const pdf = await renderInvoicePdf(invoice, supplier, buyer);

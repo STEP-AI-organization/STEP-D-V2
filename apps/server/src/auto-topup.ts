@@ -299,6 +299,12 @@ export async function maybeAutoTopup(): Promise<AutoTopupResult> {
     // 해제(next=null)도 저장한다 — 해결된 경고가 남아 있으면 다음부터 아무도 안 본다.
     // 애초에 알림이 없고 지금도 없으면 쓰지 않는다(분석마다 도는 경로라 무의미한 왕복 제거).
     if (next || prev) await setAutoTopupAlert(next);
+    // 담당자 메일 — **같은 사유의 첫 실패에만**(count===1). 판정은 분석마다 돌므로
+    // 매번 보내면 메일이 배경음이 된다. 발송 함수는 절대 던지지 않는다(billing-notify.ts).
+    if (next && next.count === 1) {
+      const { notifyAutoTopupFailure } = await import("./billing-notify.ts");
+      void notifyAutoTopupFailure(next);
+    }
   } catch (e) {
     console.error("[auto-topup] 실패 알림 저장 실패(충전 결과는 유효):", e instanceof Error ? e.message : e);
   }
