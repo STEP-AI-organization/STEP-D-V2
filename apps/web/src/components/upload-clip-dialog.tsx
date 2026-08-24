@@ -130,7 +130,7 @@ function UploadClipDialog({
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/55" onClick={busy ? undefined : onClose} aria-hidden />
       <div
-        className="sd-modal relative flex max-h-[90vh] w-full max-w-[520px] flex-col bg-white"
+        className="sd-modal relative flex max-h-[90vh] w-full max-w-[520px] flex-col bg-[var(--sd-card)]"
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"

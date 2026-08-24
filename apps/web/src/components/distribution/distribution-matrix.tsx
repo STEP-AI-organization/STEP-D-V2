@@ -147,7 +147,7 @@ function Cell({
       <button
         type="button"
         onClick={() => onPublish(clip)}
-        className="mx-auto flex h-6 w-6 items-center justify-center rounded-[4px] text-[13px] leading-none opacity-40 hover:opacity-100"
+        className="mx-auto flex h-6 w-6 items-center justify-center rounded-[4px] text-[13px] leading-none opacity-65 hover:opacity-100"
         style={{ border: "1px dashed var(--sd-border)", color: "var(--sd-mut)" }}
         title={`${SHORT[channel] ?? channel} 로 배포`}
       >

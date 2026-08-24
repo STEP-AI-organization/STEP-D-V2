@@ -277,7 +277,7 @@ export default function AssetsPage() {
         {selected.size > 0 && (
           <div
             className="sticky bottom-4 flex flex-wrap items-center gap-2 rounded-[6px] px-3 py-2.5"
-            style={{ background: "#fff", border: "1px solid var(--sd-border)", boxShadow: "0 2px 10px rgba(0,0,0,.08)" }}
+            style={{ background: "var(--sd-card)", border: "1px solid var(--sd-border)", boxShadow: "0 2px 10px rgba(0,0,0,.18)" }}
           >
             <span className="text-[12.5px]" style={{ color: "var(--sd-fg)" }}>{selected.size}개 선택</span>
             <select

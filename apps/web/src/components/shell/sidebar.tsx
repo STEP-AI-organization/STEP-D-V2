@@ -71,7 +71,7 @@ export function Sidebar() {
                           title="화면 준비 중 — 무엇이 올 자리인지만 표시됩니다"
                           style={
                             active
-                              ? { background: "rgba(255,255,255,.22)", color: "#fff" }
+                              ? { background: "rgba(255,255,255,.22)", color: "var(--sd-on-accent)" }
                               : { background: "var(--sd-card-sub)", color: "var(--sd-mut)" }
                           }
                         >
@@ -157,7 +157,7 @@ function NavBadge({ badgeKey, active }: { badgeKey?: "gateHold" | "distributionF
       className="sd-mono ml-auto shrink-0 rounded-full px-1.5 text-[10px]"
       style={
         active
-          ? { background: "rgba(255,255,255,.22)", color: "#fff" }
+          ? { background: "rgba(255,255,255,.22)", color: "var(--sd-on-accent)" }
           : { background: "var(--sd-danger-bg)", color: "var(--sd-danger-strong)" }
       }
     >

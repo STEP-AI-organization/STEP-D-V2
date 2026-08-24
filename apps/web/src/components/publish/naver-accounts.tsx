@@ -278,7 +278,7 @@ export function NaverAccounts({ onChange }: { onChange?: (accounts: NaverAccount
                   <label
                     className={`rounded-md border border-border px-2 py-1 text-xs text-foreground transition ${
                       storeReady === false || busy === a.id
-                        ? "cursor-not-allowed opacity-50"
+                        ? "cursor-not-allowed opacity-70"
                         : "cursor-pointer hover:bg-accent/40"
                     }`}
                     title="로그인한 브라우저에서 내보낸 세션(storageState) JSON 파일"

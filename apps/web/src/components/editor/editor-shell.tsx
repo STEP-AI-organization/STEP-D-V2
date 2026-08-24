@@ -813,7 +813,7 @@ export function EditorShell({ clipId }: { clipId: string }) {
         <div className="hidden shrink-0 items-center gap-2.5 text-[11px] tabular-nums text-zinc-500 lg:flex">
           <span className="flex items-center gap-1"><span className="font-medium text-cyan-400">IN</span>{formatTimecode(state.trimIn)}</span>
           <span className="flex items-center gap-1"><span className="font-medium text-amber-400">OUT</span>{formatTimecode(state.trimOut)}</span>
-          <span className="text-zinc-600">{formatTimecode(Math.max(0, state.trimOut - state.trimIn))}</span>
+          <span className="text-zinc-500">{formatTimecode(Math.max(0, state.trimOut - state.trimIn))}</span>
         </div>
 
         <div className="flex shrink-0 items-center gap-2">
@@ -822,7 +822,7 @@ export function EditorShell({ clipId }: { clipId: string }) {
             onClick={() => void save()}
             disabled={saving}
             title="저장 (Ctrl+S) · 편집 후 2초 뒤 자동 저장됩니다"
-            className="inline-flex items-center gap-1.5 rounded-md border border-zinc-700 px-3 py-1.5 text-sm text-zinc-200 hover:bg-zinc-800 disabled:opacity-60"
+            className="inline-flex items-center gap-1.5 rounded-md border border-zinc-700 px-3 py-1.5 text-sm text-zinc-200 hover:bg-zinc-800 disabled:opacity-70"
           >
             {saved ? <Check className="size-4 text-emerald-400" /> : <Save className="size-4" />}
             {saving ? "저장 중…" : saved ? "저장됨" : "저장"}
@@ -837,7 +837,7 @@ export function EditorShell({ clipId }: { clipId: string }) {
                   ? "AI 다중 레이아웃을 9:16으로 렌더합니다."
                   : `현재 종횡비(${state.aspect})로 구간 전체를 렌더합니다 — 길이 상한 없음 (렌더는 여기서 단 한 번 — plan §2.4)`
             }
-            className="inline-flex items-center gap-1.5 rounded-md border border-zinc-700 px-3 py-1.5 text-sm text-zinc-200 hover:bg-zinc-800 disabled:opacity-60"
+            className="inline-flex items-center gap-1.5 rounded-md border border-zinc-700 px-3 py-1.5 text-sm text-zinc-200 hover:bg-zinc-800 disabled:opacity-70"
           >
             {rendered ? <Check className="size-4 text-emerald-400" /> : <Film className="size-4" />}
             {exporting
@@ -1085,11 +1085,11 @@ export function EditorShell({ clipId }: { clipId: string }) {
           onClick={addTrack}
           disabled
           title="다중 트랙 렌더 미지원 — 서버가 첫 번째 트랙만 합성합니다."
-          className="mt-2 inline-flex items-center gap-1 rounded-md border border-dashed border-zinc-700 px-2 py-1 text-xs text-zinc-400 disabled:cursor-not-allowed disabled:opacity-50"
+          className="mt-2 inline-flex items-center gap-1 rounded-md border border-dashed border-zinc-700 px-2 py-1 text-xs text-zinc-400 disabled:cursor-not-allowed disabled:opacity-70"
         >
           <Plus className="size-3.5" /> 트랙 추가
         </button>
-        <span className="ml-2 text-[11px] text-zinc-600">다중 트랙 렌더 준비 중</span>
+        <span className="ml-2 text-[11px] text-zinc-500">다중 트랙 렌더 준비 중</span>
       </footer>
     </div>
   );
@@ -1216,7 +1216,7 @@ function HighlightHookCard({
               {clip?.hookQuote ? <span className="min-w-0 truncate">· 대사 &ldquo;{clip.hookQuote}&rdquo;</span> : null}
               <button
                 type="button"
-                className="ml-auto shrink-0 rounded bg-pink-600/80 px-2 py-0.5 text-[11px] font-medium text-white hover:bg-pink-600 disabled:opacity-50"
+                className="ml-auto shrink-0 rounded bg-pink-600/80 px-2 py-0.5 text-[11px] font-medium text-white hover:bg-pink-600 disabled:opacity-70"
                 onClick={() => void regen()}
                 disabled={busy}
               >
@@ -1230,7 +1230,7 @@ function HighlightHookCard({
           <span className="flex-1 text-[11px] text-zinc-400">이 클립엔 훅이 아직 없습니다 — 만들면 첫 3초에 붙습니다.</span>
           <button
             type="button"
-            className="shrink-0 rounded bg-pink-600/80 px-2.5 py-1 text-[11px] font-medium text-white hover:bg-pink-600 disabled:opacity-50"
+            className="shrink-0 rounded bg-pink-600/80 px-2.5 py-1 text-[11px] font-medium text-white hover:bg-pink-600 disabled:opacity-70"
             onClick={() => void regen()}
             disabled={busy}
           >
@@ -1292,7 +1292,7 @@ function MetadataButton({
               <button
                 onClick={generate}
                 disabled={loading}
-                className="inline-flex items-center gap-1 rounded-md bg-amber-500 px-2 py-1 text-[11px] font-semibold text-black hover:bg-amber-400 disabled:opacity-60"
+                className="inline-flex items-center gap-1 rounded-md bg-amber-500 px-2 py-1 text-[11px] font-semibold text-black hover:bg-amber-400 disabled:opacity-70"
               >
                 <Sparkles className="size-3" /> {loading ? "생성 중…" : "AI 생성"}
               </button>

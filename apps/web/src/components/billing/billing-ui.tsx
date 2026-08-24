@@ -57,7 +57,7 @@ export function CardAction({
   return (
     <button
       type="button"
-      className="w-full px-4 py-2.5 text-center text-[12px] font-medium transition-colors hover:bg-[var(--sd-accent-bg)] disabled:opacity-45 disabled:hover:bg-transparent"
+      className="w-full px-4 py-2.5 text-center text-[12px] font-medium transition-colors hover:bg-[var(--sd-accent-bg)] disabled:opacity-70 disabled:hover:bg-transparent"
       style={{ borderTop: "1px solid var(--sd-divider)", color: "var(--sd-accent)" }}
       onClick={onClick}
       disabled={disabled}
@@ -104,7 +104,7 @@ export function BillingDialog({
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/55" onClick={closeDisabled ? undefined : onClose} aria-hidden />
       <div
-        className="sd-modal relative flex max-h-[88vh] w-full flex-col bg-white"
+        className="sd-modal relative flex max-h-[88vh] w-full flex-col bg-[var(--sd-card)]"
         style={{ maxWidth }}
         onClick={(e) => e.stopPropagation()}
         role="dialog"

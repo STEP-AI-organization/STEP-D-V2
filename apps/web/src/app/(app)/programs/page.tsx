@@ -175,10 +175,10 @@ function FilterChip({
       onClick={onClick}
       aria-pressed={on}
       className={cn("sd-btn", on && "sd-btn--on")}
-      style={!on && count === 0 ? { opacity: 0.5 } : undefined}
+      style={!on && count === 0 ? { opacity: 0.78 } : undefined}
     >
       {label}
-      <span className="sd-mono ml-1.5 text-[10.5px]" style={{ opacity: 0.7 }}>
+      <span className="sd-mono ml-1.5 text-[10.5px]" style={{ opacity: 0.9 }}>
         {count}
       </span>
     </button>

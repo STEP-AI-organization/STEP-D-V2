@@ -180,7 +180,7 @@ export function EditorAiPanel({
                 <button
                   onClick={handleRegen}
                   disabled={regenLoading}
-                  className="inline-flex items-center gap-1 rounded-md bg-amber-500 px-2 py-1 text-[11px] font-semibold text-black hover:bg-amber-400 disabled:opacity-60"
+                  className="inline-flex items-center gap-1 rounded-md bg-amber-500 px-2 py-1 text-[11px] font-semibold text-black hover:bg-amber-400 disabled:opacity-70"
                 >
                   {regenLoading ? <Loader2 className="size-3 animate-spin" /> : <Sparkles className="size-3" />}
                   {regenLoading ? "생성 중…" : "생성"}
@@ -315,7 +315,7 @@ function ReframeSummary({
             type="button"
             disabled={busy}
             onClick={() => onReanalyze?.(status === "failed")}
-            className="inline-flex flex-1 items-center justify-center gap-1 rounded-md bg-violet-500 px-2 py-1.5 text-[11px] font-semibold text-white disabled:opacity-60"
+            className="inline-flex flex-1 items-center justify-center gap-1 rounded-md bg-violet-500 px-2 py-1.5 text-[11px] font-semibold text-white disabled:opacity-70"
           >
             <RefreshCw className={cn("size-3", busy && "animate-spin")} /> 재분석
           </button>
@@ -323,7 +323,7 @@ function ReframeSummary({
             type="button"
             disabled={busy}
             onClick={onUseBasic}
-            className="rounded-md border border-zinc-700 px-2 py-1.5 text-[11px] text-zinc-300 disabled:opacity-60"
+            className="rounded-md border border-zinc-700 px-2 py-1.5 text-[11px] text-zinc-300 disabled:opacity-70"
           >
             기본 모드
           </button>

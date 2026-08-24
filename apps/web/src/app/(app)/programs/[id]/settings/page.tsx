@@ -1388,7 +1388,7 @@ function ThumbnailEngineCard({
             />
             <label className={cn(
               "inline-flex cursor-pointer items-center rounded-md border border-border px-3 py-2 text-sm",
-              !castName.trim() && "pointer-events-none opacity-50",
+              !castName.trim() && "pointer-events-none opacity-70",
             )}>
               사진 추가
               <input

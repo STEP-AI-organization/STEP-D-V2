@@ -88,7 +88,7 @@ function NewProgramDialog({ onClose }: { onClose: () => void }) {
           <button
             onClick={onClose}
             disabled={busy}
-            className="text-muted-foreground hover:text-foreground disabled:opacity-40"
+            className="text-muted-foreground hover:text-foreground disabled:opacity-70"
           >
             <X className="size-4" />
           </button>

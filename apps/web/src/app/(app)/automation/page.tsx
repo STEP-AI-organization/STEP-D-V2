@@ -752,7 +752,7 @@ export default function AutomationPage() {
     };
   }, [selProgram, ruleForProgram, runs, clips, holds, programEpisodes, mediaForEpisode]);
 
-  const stepDim = (on: boolean) => (on ? undefined : { opacity: 0.45, pointerEvents: "none" as const });
+  const stepDim = (on: boolean) => (on ? undefined : { opacity: 0.65, pointerEvents: "none" as const });
 
   return (
     <div className="mx-auto flex max-w-[1240px] flex-col gap-[14px]">
@@ -1106,7 +1106,7 @@ export default function AutomationPage() {
             {/* AI 리프레임 — 수동 채택 다이얼로그(adopt-dialog)와 같은 선택지·라벨.
                 숏폼(세로) 전용 옵션이다: 클립(가로)은 크롭이 없고, "둘 다"는 방향이 추천마다
                 달라 orientation 을 못 정한다(서버가 portrait 에서만 AI 허용) — 흐리게 + none 강제. */}
-            <div style={mediaKind !== "short" ? { opacity: 0.45, pointerEvents: "none" } : undefined}>
+            <div style={mediaKind !== "short" ? { opacity: 0.65, pointerEvents: "none" } : undefined}>
               <div className="text-[10.5px]" style={{ color: "var(--sd-label)" }}>
                 AI 리프레임 (숏폼 9:16)
               </div>
@@ -1175,7 +1175,7 @@ export default function AutomationPage() {
             </div>
 
             {/* 하루 할당량 · 활동 시간창 — 할당량이 찰 때까지 시간창 안에서 확인 때마다 계속 배포 */}
-            <div className="grid grid-cols-3 items-end gap-2" style={slots.length ? { opacity: 0.45 } : undefined}>
+            <div className="grid grid-cols-3 items-end gap-2" style={slots.length ? { opacity: 0.65 } : undefined}>
               <label className="text-[10.5px]" style={{ color: "var(--sd-label)" }}>
                 채널당 하루 할당량
                 <input type="number" min={1} max={50} value={dailyQuota} disabled={slots.length > 0}

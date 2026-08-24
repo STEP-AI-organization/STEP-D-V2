@@ -243,7 +243,7 @@ export function ClipDetail({
                       style={{
                         border: "1px solid var(--sd-border)",
                         background: tab === ch ? "var(--sd-fg)" : "transparent",
-                        color: tab === ch ? "#fff" : "var(--sd-fg)",
+                        color: tab === ch ? "var(--sd-on-accent)" : "var(--sd-fg)",
                       }}
                     >
                       {CHANNEL_LABEL[ch]}

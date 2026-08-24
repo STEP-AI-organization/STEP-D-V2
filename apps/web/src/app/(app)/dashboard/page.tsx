@@ -198,8 +198,8 @@ export default function DashboardPage() {
                       {i + 1}
                     </span>
                     <span
-                      className="grid size-[26px] shrink-0 place-items-center rounded-full text-[11px] font-semibold text-white"
-                      style={{ background: "var(--sd-accent)" }}
+                      className="grid size-[26px] shrink-0 place-items-center rounded-full text-[11px] font-semibold"
+                      style={{ background: "var(--sd-accent)", color: "var(--sd-on-accent)" }}
                       aria-hidden
                     >
                       {r.ch.channelName?.[0] ?? "?"}

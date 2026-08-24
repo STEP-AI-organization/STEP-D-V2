@@ -670,7 +670,7 @@ function LayoutTab({
                 disabled={reframeBusy}
                 onClick={() => onReframeModeChange?.(mode)}
                 className={cn(
-                  "rounded-md border px-2 py-2 text-xs transition-colors disabled:cursor-wait disabled:opacity-60",
+                  "rounded-md border px-2 py-2 text-xs transition-colors disabled:cursor-wait disabled:opacity-70",
                   active ? "border-violet-400 bg-violet-500/15 text-violet-100" : "border-zinc-700 text-zinc-400 hover:bg-zinc-800",
                 )}
               >
@@ -763,7 +763,7 @@ function LayoutTab({
               disabled={reframe?.mode === "ai_multi"}
               title={reframe?.mode === "ai_multi" ? "AI 다중 레이아웃은 세로로 고정됩니다." : p.hint}
               className={cn(
-                "flex flex-col items-start rounded-md border px-2 py-1.5 text-left disabled:cursor-not-allowed disabled:opacity-45",
+                "flex flex-col items-start rounded-md border px-2 py-1.5 text-left disabled:cursor-not-allowed disabled:opacity-70",
                 state.aspect === p.id ? "border-zinc-400 bg-zinc-800 text-white" : "border-zinc-700 text-zinc-400",
               )}
             >
@@ -794,7 +794,7 @@ function LayoutTab({
                 className={cn(
                   "rounded-md border py-1.5 text-xs",
                   active ? "border-zinc-400 bg-zinc-800 text-white" : "border-zinc-700 text-zinc-400",
-                  o.disabled && "cursor-not-allowed opacity-45",
+                  o.disabled && "cursor-not-allowed opacity-70",
                 )}
               >
                 {o.label}
@@ -844,12 +844,12 @@ function CaptionsTab({ state, update }: { state: EditorState; update: Update }) 
           captionY/captionColor/captionSize 를 읽는다**. 예전엔 이 컨트롤이 없어 자동배포 규칙만
           세팅할 수 있었다(사용자 2026-08-20: "위치·컬러 조정이 안 됨"). */}
       <div>
-        <Label>세로 위치 {Math.round(state.captionY ?? 20)}% <span className="text-zinc-500">(화면 아래에서)</span></Label>
+        <Label>세로 위치 {Math.round(state.captionY ?? 26)}% <span className="text-zinc-500">(화면 아래에서)</span></Label>
         <input
           type="range"
           min={4}
           max={80}
-          value={Math.round(state.captionY ?? 20)}
+          value={Math.round(state.captionY ?? 26)}
           onChange={(e) => update({ captionY: Number(e.target.value) })}
           className="w-full"
         />
@@ -971,7 +971,7 @@ function ElementsTab({ state, update, kf }: { state: EditorState; update: Update
                     <button
                       onClick={() => reorder(el.id, 1)}
                       disabled={idx === state.elements.length - 1}
-                      className="shrink-0 text-zinc-500 hover:text-white disabled:opacity-30"
+                      className="shrink-0 text-zinc-500 hover:text-white disabled:opacity-60"
                       title="앞으로 (위 레이어)"
                     >
                       <ChevronUp className="size-4" />
@@ -979,7 +979,7 @@ function ElementsTab({ state, update, kf }: { state: EditorState; update: Update
                     <button
                       onClick={() => reorder(el.id, -1)}
                       disabled={idx === 0}
-                      className="shrink-0 text-zinc-500 hover:text-white disabled:opacity-30"
+                      className="shrink-0 text-zinc-500 hover:text-white disabled:opacity-60"
                       title="뒤로 (아래 레이어)"
                     >
                       <ChevronDown className="size-4" />
@@ -1090,7 +1090,7 @@ function KeyframeSection({
           <button
             disabled={keyframes.length === 0 || (pos >= 0 && pos <= 0)}
             onClick={() => select(order[pos <= 0 ? order.length - 1 : pos - 1])}
-            className="rounded p-0.5 text-zinc-400 hover:text-white disabled:opacity-30"
+            className="rounded p-0.5 text-zinc-400 hover:text-white disabled:opacity-60"
             title="이전 키프레임"
           >
             <ChevronLeft className="size-3.5" />
@@ -1101,7 +1101,7 @@ function KeyframeSection({
           <button
             disabled={keyframes.length === 0 || (pos >= 0 && pos >= order.length - 1)}
             onClick={() => select(order[pos < 0 ? 0 : pos + 1])}
-            className="rounded p-0.5 text-zinc-400 hover:text-white disabled:opacity-30"
+            className="rounded p-0.5 text-zinc-400 hover:text-white disabled:opacity-60"
             title="다음 키프레임"
           >
             <ChevronRight className="size-3.5" />

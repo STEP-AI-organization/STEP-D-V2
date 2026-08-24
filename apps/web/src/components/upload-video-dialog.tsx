@@ -259,7 +259,7 @@ export function UploadDialog({
         aria-hidden
       />
       <div
-        className="sd-modal relative flex max-h-[90vh] w-full max-w-[520px] flex-col bg-white"
+        className="sd-modal relative flex max-h-[90vh] w-full max-w-[520px] flex-col bg-[var(--sd-card)]"
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
@@ -284,7 +284,7 @@ export function UploadDialog({
                 disabled={busy}
                 className={cn(
                   "flex items-center justify-center gap-1.5 rounded-[4px] px-3 py-1.5",
-                  mode === m ? "bg-white shadow-sm" : "opacity-60",
+                  mode === m ? "bg-[var(--sd-card)] shadow-sm" : "opacity-75",
                 )}
                 style={{ color: "var(--sd-fg)" }}
               >

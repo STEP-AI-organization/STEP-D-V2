@@ -306,7 +306,7 @@ export function PublishDialog({
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/55" onClick={busy ? undefined : onClose} aria-hidden />
       <div
-        className="sd-modal relative flex max-h-[88vh] w-full max-w-[560px] flex-col bg-white"
+        className="sd-modal relative flex max-h-[88vh] w-full max-w-[560px] flex-col bg-[var(--sd-card)]"
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
@@ -377,7 +377,7 @@ export function PublishDialog({
                         style={{
                           border: `1.5px solid ${on ? "var(--sd-accent-border)" : "var(--sd-border-strong, var(--sd-border))"}`,
                           background: on ? "var(--sd-accent-border)" : "transparent",
-                          color: on ? "#fff" : "transparent",
+                          color: on ? "var(--sd-on-accent)" : "transparent",
                         }}
                       >
                         ✓

@@ -115,7 +115,7 @@
   --secondary: 40 23% 98%; /* --sd-card-sub #faf9f7 */
   --secondary-foreground: 40 5% 12%;
   --muted: 40 23% 98%;
-  --muted-foreground: 40 5% 52%; /* --sd-mut #8b877f */
+  --muted-foreground: 42 5% 39%; /* --sd-mut #69665f · 흰 카드 5.73:1 */
   --accent: 40 23% 98%;
   --accent-foreground: 40 5% 12%;
   --destructive: 5 63% 42%; /* --sd-danger #b03328 */
@@ -130,7 +130,7 @@
   /* Status palette — pipeline / distribution state legibility (design principle §9).
      Single source of truth; consumed via StatusBadge / PipelineStrip.
      idle=neutral · progress=blue · done=green · warn=amber · error=red. */
-  --status-idle: 41 6% 59%; /* --sd-idle #9c988f */
+  --status-idle: 42 5% 39%; /* --sd-idle #69665f · 작은 안내문도 AA */
   --status-progress: 223 64% 57%; /* --sd-chart #4b74d8 — primary 보다 밝게 둬서 "진행 중"이 "확정"과 구분된다 */
   --status-done: 155 63% 29%; /* --sd-ok #1c7a52 */
   --status-warn: 40 85% 32%; /* --sd-warn #96690c */
@@ -156,8 +156,8 @@
   /* Two indigos: #6b74f0 fills primary buttons & active pips (white text);
      #8b93ff (--brand) carries links, eyebrows, active-nav icons on the near-black
      canvas — both clear AA against #0a0a0a. */
-  --primary: 235 82% 68%; /* #6b74f0 */
-  --primary-foreground: 0 0% 100%;
+  --primary: 232 100% 72%; /* #7185ff · 다크 배경 링크 5.96:1 */
+  --primary-foreground: 229 55% 10%; /* #0b1026 · primary 위 5.82:1 */
   --brand: 234 100% 77%; /* #8b93ff */
 
   --secondary: 232 16% 14%; /* secondary 버튼 / hover fill */
@@ -334,10 +334,13 @@
   --sd-accent-border: #bfcffa;
 
   --sd-fg: #1f1e1c;
-  --sd-mut: #8b877f;
-  --sd-label: #8a8880;
+  /* 작은 운영 UI(9.5~12px)가 많아 WCAG AA 4.5:1보다 여유 있게 잡는다.
+     종전 #8b877f/#8a8880는 흰 카드에서 3.6:1 수준이라 실제로 흐렸다. */
+  --sd-mut: #69665f;
+  --sd-label: #625f58;
 
   --sd-card: #ffffff;
+  --sd-bg: #ffffff;
   --sd-card-sub: #faf9f7;
   --sd-border: #e4e2dc;
   --sd-divider: #f2f0eb;
@@ -346,19 +349,76 @@
   --sd-sidebar-border: #e2e5ee;
   --sd-app-bg: #eceae5;
 
+  --sd-nav-fg: #4f4c46;
+  --sd-control: #ffffff;
+  --sd-control-hover: #f7f6f3;
+  --sd-control-border: #cbc8c1;
+  --sd-control-border-hover: #aaa69e;
+  --sd-on-accent: #ffffff;
+  --sd-on-danger: #ffffff;
+  --sd-placeholder-a: #f3f1ec;
+  --sd-placeholder-b: #eae7e1;
+
   --sd-ok: #1c7a52;
   --sd-warn: #96690c;
+  --sd-warn-fg: #715006;
   --sd-warn-bg: #fdf6e5;
   --sd-warn-border: #e8cf95;
   --sd-danger: #b03328;
   --sd-danger-bg: #fdf0ed;
   --sd-danger-border: #f0b5ab;
   --sd-danger-strong: #8f2f24;
-  --sd-idle: #9c988f;
+  --sd-idle: #69665f;
   --sd-chart: #4b74d8;
 
   --sd-serif: "Noto Serif KR", ui-serif, Georgia, serif;
   --sd-mono: ui-monospace, "JetBrains Mono", Menlo, monospace;
+}
+
+/* sd-* 화면도 실제 다크 팔레트를 갖는다. 예전에는 html.dark에서 Tailwind semantic 토큰만
+   다크로 바뀌고 sd 배경은 라이트로 남아, 같은 화면에 흰 글자/밝은 배경이 섞였다. */
+.dark {
+  --sd-accent: #7185ff;
+  --sd-accent-hover: #8b9aff;
+  --sd-accent-ring: #9dacff;
+  --sd-accent-bg: #1b2548;
+  --sd-accent-border: #46568f;
+
+  --sd-fg: #f1f3f8;
+  --sd-mut: #b0b6c3;
+  --sd-label: #9ba4b5;
+
+  --sd-card: #171b28;
+  --sd-bg: #171b28;
+  --sd-card-sub: #111522;
+  --sd-border: #303647;
+  --sd-divider: #252a38;
+
+  --sd-sidebar-bg: #101421;
+  --sd-sidebar-border: #2a3040;
+  --sd-app-bg: #0b0e18;
+
+  --sd-nav-fg: #c7ccd6;
+  --sd-control: #171b28;
+  --sd-control-hover: #202638;
+  --sd-control-border: #3a4255;
+  --sd-control-border-hover: #59647d;
+  --sd-on-accent: #0b1026;
+  --sd-on-danger: #2b0806;
+  --sd-placeholder-a: #151a27;
+  --sd-placeholder-b: #1d2332;
+
+  --sd-ok: #52d6a0;
+  --sd-warn: #f4c55e;
+  --sd-warn-fg: #f4c55e;
+  --sd-warn-bg: #2b2313;
+  --sd-warn-border: #665126;
+  --sd-danger: #ff857c;
+  --sd-danger-bg: #321918;
+  --sd-danger-border: #70403c;
+  --sd-danger-strong: #ff9c94;
+  --sd-idle: #9ca3b2;
+  --sd-chart: #7f9cff;
 }
 
 /* 14px 이상 제목에만 세리프를 쓴다 (README 타이포). */
@@ -378,23 +438,23 @@
 .sd-nav-item {
   display: flex; align-items: center; gap: 7px;
   padding: 7px 10px; border-radius: 4px;
-  font-size: 12.5px; color: #5c5951;
+  font-size: 12.5px; color: var(--sd-nav-fg);
   transition: background .15s, color .15s;
 }
 .sd-nav-item:hover { background: var(--sd-accent-bg); color: var(--sd-accent); }
-.sd-nav-item--active { background: var(--sd-accent); color: #fff; }
-.sd-nav-item--active:hover { background: var(--sd-accent); color: #fff; }
+.sd-nav-item--active { background: var(--sd-accent); color: var(--sd-on-accent); }
+.sd-nav-item--active:hover { background: var(--sd-accent); color: var(--sd-on-accent); }
 
 /* 버튼 프리미티브 */
 .sd-btn {
-  background: #fff; border: 1px solid #cbc8c1; border-radius: 4px;
+  background: var(--sd-control); border: 1px solid var(--sd-control-border); border-radius: 4px;
   padding: 6px 11px; font-size: 11.5px; color: var(--sd-fg);
   transition: background .15s, border-color .15s;
 }
-.sd-btn:hover { background: #f7f6f3; border-color: #b3afa7; }
-.sd-btn:disabled { opacity: .45; cursor: not-allowed; }
+.sd-btn:hover { background: var(--sd-control-hover); border-color: var(--sd-control-border-hover); }
+.sd-btn:disabled { opacity: .85; cursor: not-allowed; }
 .sd-btn-primary {
-  background: var(--sd-accent); border-color: var(--sd-accent); color: #fff;
+  background: var(--sd-accent); border-color: var(--sd-accent); color: var(--sd-on-accent);
 }
 .sd-btn-primary:hover { background: var(--sd-accent-hover); border-color: var(--sd-accent-hover); }
 
@@ -407,13 +467,13 @@
 
 /* 플레이스홀더 — 외부 이미지가 없다. 썸네일 자리는 전부 이 스트라이프다. */
 .sd-ph {
-  background: repeating-linear-gradient(45deg, #f3f1ec 0 6px, #eae7e1 6px 12px);
-  color: #9c988f; font-size: 10.5px;
+  background: repeating-linear-gradient(45deg, var(--sd-placeholder-a) 0 6px, var(--sd-placeholder-b) 6px 12px);
+  color: var(--sd-idle); font-size: 10.5px;
   display: grid; place-items: center;
 }
 
 /* 진행 바 */
-.sd-progress { height: 6px; background: #eae7e1; border-radius: 3px; overflow: hidden; }
+.sd-progress { height: 6px; background: var(--sd-placeholder-b); border-radius: 3px; overflow: hidden; }
 .sd-progress > span { display: block; height: 100%; background: var(--sd-accent); transition: width .5s ease; }
 
 /* 태그 — 상태·섹션·권리 윈도우. 톤이 의미를 나른다(F4: 기록됨을 게시됨처럼 보이면 안 됨). */
@@ -423,8 +483,8 @@
   background: var(--sd-card-sub); font-size: 10.5px; line-height: 1.5;
   color: var(--sd-fg); white-space: nowrap;
 }
-.sd-tag--airing { border-color: #c3d3c6; background: #f0f5f1; }
-.sd-tag--ended { border-color: var(--sd-border); background: #f5f3ef; color: var(--sd-mut); }
+.sd-tag--airing { border-color: color-mix(in srgb, var(--sd-ok) 36%, var(--sd-border)); background: color-mix(in srgb, var(--sd-ok) 9%, var(--sd-card)); }
+.sd-tag--ended { border-color: var(--sd-border); background: var(--sd-card-sub); color: var(--sd-mut); }
 .sd-tag--upcoming { border-color: var(--sd-accent-border); background: var(--sd-accent-bg); }
 .sd-tag--danger {
   border-color: var(--sd-danger-border); background: var(--sd-danger-bg); color: var(--sd-danger-strong);
@@ -435,8 +495,8 @@
 
 /* 입력 */
 .sd-input {
-  height: 32px; padding: 0 11px; border: 1px solid #cbc8c1; border-radius: 4px;
-  font-size: 12.5px; background: #fff; color: var(--sd-fg);
+  height: 32px; padding: 0 11px; border: 1px solid var(--sd-control-border); border-radius: 4px;
+  font-size: 12.5px; background: var(--sd-control); color: var(--sd-fg);
 }
 .sd-input:focus { outline: none; border-color: var(--sd-accent); box-shadow: 0 0 0 3px var(--sd-accent-bg); }
 .sd-input::placeholder { color: var(--sd-idle); }

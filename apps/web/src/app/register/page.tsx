@@ -196,7 +196,7 @@ function IdleCard() {
         <span><span className="text-zinc-300">읽기 권한만</span> 요청 · 영상을 수정·삭제하지 않아요</span>
       </div>
 
-      <p className="mt-4 text-center text-[11px] text-zinc-600 leading-relaxed">
+      <p className="mt-4 text-center text-[11px] text-zinc-400 leading-relaxed">
         계속하면{" "}
         <a href="/terms" className="underline hover:text-zinc-400">이용약관</a>{" "}및{" "}
         <a href="/privacy" className="underline hover:text-zinc-400">개인정보처리방침</a>에 동의하게 됩니다.
@@ -275,7 +275,7 @@ function StepRow({ label, detail, state }: { label: string; detail: string; stat
           "grid place-items-center w-6 h-6 rounded-full shrink-0",
           state === "done" && "bg-emerald-500/15 text-emerald-400",
           state === "active" && "bg-indigo-500/15 text-indigo-400",
-          state === "pending" && "bg-white/5 text-zinc-600",
+          state === "pending" && "bg-white/5 text-zinc-400",
         )}
       >
         {state === "done" ? (
@@ -286,7 +286,7 @@ function StepRow({ label, detail, state }: { label: string; detail: string; stat
           <span className="w-1.5 h-1.5 rounded-full bg-current" />
         )}
       </span>
-      <span className={cn("text-sm", state === "pending" ? "text-zinc-600" : "text-zinc-200")}>{label}</span>
+      <span className={cn("text-sm", state === "pending" ? "text-zinc-400" : "text-zinc-200")}>{label}</span>
       {detail && <span className="ml-auto text-xs text-zinc-500 tabular-nums">{detail}</span>}
     </div>
   );
@@ -299,7 +299,7 @@ function LiveStat({ icon: Icon, label, value, ready }: { icon: typeof Users; lab
         <Icon className="w-3.5 h-3.5" /> {label}
       </div>
       <div className="mt-1 text-lg font-bold tabular-nums">
-        {ready ? <AnimatedNumber value={value} format={formatKor} /> : <span className="text-zinc-600">···</span>}
+        {ready ? <AnimatedNumber value={value} format={formatKor} /> : <span className="text-zinc-400">···</span>}
       </div>
     </div>
   );

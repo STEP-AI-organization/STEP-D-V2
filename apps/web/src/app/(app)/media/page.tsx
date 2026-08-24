@@ -161,7 +161,7 @@ function MediaView() {
       {selectedRows.length > 0 && (
         <div
           className="fixed inset-x-0 bottom-0 z-30 flex flex-wrap items-center gap-3 px-5 py-3"
-          style={{ background: "#fff", borderTop: "1px solid var(--sd-border)", paddingLeft: 226 }}
+          style={{ background: "var(--sd-card)", borderTop: "1px solid var(--sd-border)", paddingLeft: 226 }}
         >
           <span className="text-[12.5px]" style={{ color: "var(--sd-fg)" }}>
             {selectedRows.length}건 선택

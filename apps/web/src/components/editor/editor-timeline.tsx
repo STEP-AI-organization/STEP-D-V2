@@ -485,7 +485,7 @@ export function EditorTimeline({
         <span className="inline-flex items-center gap-1"><Kbd>I</Kbd><Kbd>O</Kbd> 구간 시작·끝</span>
         <span className="inline-flex items-center gap-1"><Kbd>Ctrl+Z</Kbd> 되돌리기</span>
         <span className="inline-flex items-center gap-1"><Kbd>Ctrl+S</Kbd> 저장</span>
-        <span className="inline-flex items-center gap-1"><Kbd>↑↓←→</Kbd> 오버레이 이동 <span className="text-zinc-600">(Shift 10×)</span></span>
+        <span className="inline-flex items-center gap-1"><Kbd>↑↓←→</Kbd> 오버레이 이동 <span className="text-zinc-500">(Shift 10×)</span></span>
         <span className="inline-flex items-center gap-1"><Kbd>Del</Kbd> 요소 삭제</span>
         <span className="inline-flex items-center gap-1"><Kbd>Esc</Kbd> 선택 해제</span>
       </div>
@@ -498,12 +498,12 @@ export function EditorTimeline({
           {playing ? <Pause className="size-4" /> : <Play className="size-4" />}
         </button>
         <span className="tabular-nums text-sm text-zinc-300">
-          {formatTimecode(t)} <span className="text-zinc-600">/ {formatTimecode(duration)}</span>
+          {formatTimecode(t)} <span className="text-zinc-500">/ {formatTimecode(duration)}</span>
         </span>
         <span className="rounded bg-zinc-800 px-2 py-0.5 text-xs text-zinc-400">
           컷 길이 {formatTimecode(trimmedLen)}
         </span>
-        <span className={cn("hidden text-[11px] md:inline", rampMode ? "text-amber-400" : "text-zinc-600")}>
+        <span className={cn("hidden text-[11px] md:inline", rampMode ? "text-amber-400" : "text-zinc-500")}>
           {rampMode ? "클릭: 속도 키프레임 추가 · 드래그↕: 속도 · 우클릭: 삭제" : "휠: 줌 · Shift+휠: 좌우 이동"}
         </span>
 
@@ -965,7 +965,7 @@ export function EditorTimeline({
             offsetMs 는 아직 렌더에 안 들어가므로 미리보기 전용임을 라벨에 박아둔다. */}
         <div className="ml-auto flex items-center gap-1">
           <span title="자막 미리보기 타이밍만 조정합니다 — 확정(렌더) 결과물에는 반영되지 않습니다.">
-            싱크 <span className="text-zinc-600">(미리보기 전용)</span>
+            싱크 <span className="text-zinc-500">(미리보기 전용)</span>
           </span>
           <button onClick={() => update({ offsetMs: state.offsetMs - 100 })}
             title="큰 스텝 -100ms"
@@ -1042,7 +1042,7 @@ function HookToggle({
       className={cn(
         "inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs transition-colors",
         on ? "border-emerald-500/60 bg-emerald-500/15 text-emerald-300" : "border-zinc-700 text-zinc-400 hover:bg-zinc-800",
-        disabled && "cursor-not-allowed opacity-45 hover:bg-transparent",
+        disabled && "cursor-not-allowed opacity-70 hover:bg-transparent",
       )}
     >
       <Icon className="size-3.5" /> {label}

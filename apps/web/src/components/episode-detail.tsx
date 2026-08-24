@@ -108,7 +108,7 @@ export function EpisodeDetail({
             onClick={runDelete}
             disabled={deleting}
             title="이 회차 완전 삭제 (미디어·추천·클립·GCS 파일 포함)"
-            className="inline-flex items-center gap-1 rounded-md border border-status-error/30 px-2 py-1 text-xs font-medium text-status-error opacity-80 transition hover:bg-status-error/10 hover:opacity-100 disabled:opacity-40"
+            className="inline-flex items-center gap-1 rounded-md border border-status-error/30 px-2 py-1 text-xs font-medium text-status-error opacity-90 transition hover:bg-status-error/10 hover:opacity-100 disabled:opacity-70"
           >
             {deleting ? <Loader2 className="size-3.5 animate-spin" /> : <Trash2 className="size-3.5" />}
             {deleting ? "삭제 중…" : "회차 삭제"}

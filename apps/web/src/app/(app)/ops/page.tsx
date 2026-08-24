@@ -109,7 +109,7 @@ export default function OpsPage() {
           type="button"
           onClick={load}
           disabled={refreshing}
-          className="flex h-9 items-center gap-1.5 rounded-md border border-border px-2.5 text-sm transition-colors hover:bg-accent disabled:opacity-60"
+          className="flex h-9 items-center gap-1.5 rounded-md border border-border px-2.5 text-sm transition-colors hover:bg-accent disabled:opacity-75"
         >
           <RefreshCw className={refreshing ? "size-3.5 animate-spin" : "size-3.5"} /> 새로고침
         </button>
