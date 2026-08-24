@@ -1024,6 +1024,49 @@ export default function AutomationPage() {
           </div>
         </div>
 
+        {/* 발행 계획(요일·시간) — 반자동 운영의 핵심 조작이라 고급 설정에서 승격(지시 2026-08-24).
+            판정은 서버 순방과 같은 순수 함수(isPublishDay·slotsElapsed)가 하고, 여기는 값만 편집한다. */}
+        <div className="grid gap-2.5 sm:grid-cols-2">
+          {/* 발행 요일 — 비우면 매일(구 규칙 동작 그대로). */}
+          <div>
+            <div className="mb-1 flex items-baseline justify-between">
+              <span className="text-[10.5px]" style={{ color: "var(--sd-label)" }}>발행 요일</span>
+              <span className="text-[10.5px]" style={{ color: "var(--sd-fg-dim)" }}>{formatWeekdays(weekdays)}</span>
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {[1, 2, 3, 4, 5, 6, 7].map((d) => {
+                const on = weekdays.includes(d);
+                return (
+                  <button
+                    key={d} type="button"
+                    onClick={() => setWeekdays(on ? weekdays.filter((x) => x !== d) : [...weekdays, d].sort((a, b) => a - b))}
+                    className="h-7 w-8 rounded-[5px] text-[11.5px]"
+                    style={on
+                      ? { background: "var(--sd-fg)", color: "var(--sd-bg)" }
+                      : { border: "1px solid var(--sd-border)", color: "var(--sd-fg-dim)" }}
+                  >
+                    {["", "월", "화", "수", "목", "금", "토", "일"][d]}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* 발행 시간 — 하나라도 넣으면 **하루 발행 수 = 시간 개수**가 되고 할당량은 안 쓴다. */}
+          <div>
+            <div className="mb-1 flex items-baseline justify-between">
+              <span className="text-[10.5px]" style={{ color: "var(--sd-label)" }}>발행 시간 (KST)</span>
+              <span className="text-[10.5px]" style={{ color: "var(--sd-fg-dim)" }}>
+                {slots.length ? `하루 ${slots.length}개 — 할당량 대신 이 시간에 맞춰 나갑니다` : "비우면 하루 할당량 방식 (고급 설정)"}
+              </span>
+            </div>
+            <SlotPicker slots={slots} onChange={setSlots} />
+          </div>
+        </div>
+
+        {/* 월 예상 — 순방 판정과 같은 함수로 계산한다(파일 상단 import 주석). 화면에서 직접 곱하지 않는다. */}
+        <PublishEstimate weekdays={weekdays} slots={slots} dailyQuota={dailyQuota} channels={chansOf(selChannels)} />
+
         {/* 렌더 방식(템플릿·미리보기·제목색·위치·자막) — "고급"에 묻지 않고 눈에 보이는 버튼으로.
             "어떻게 렌더되는지"는 운영자가 당연히 정하고 싶은 1급 결정이라 밖으로 뺀다(사용자 2026-08-19). */}
         <button
@@ -1085,7 +1128,7 @@ export default function AutomationPage() {
           style={{ color: "var(--sd-mut)" }}
           onClick={() => setShowAdvanced((v) => !v)}
         >
-          {showAdvanced ? "▾ 고급 설정 접기" : "▸ 고급 설정 (점수 기준 · 한도 · 시간창 · 템플릿)"}
+          {showAdvanced ? "▾ 고급 설정 접기" : "▸ 고급 설정 (점수 기준 · 한도 · 템플릿)"}
         </button>
         {showAdvanced && (
           <div className="flex flex-col gap-2.5 rounded-[5px] p-3"
@@ -1138,41 +1181,8 @@ export default function AutomationPage() {
               </p>
             </div>
 
-            {/* 발행 요일 — 비우면 매일(구 규칙 동작 그대로). */}
-            <div>
-              <div className="mb-1 flex items-baseline justify-between">
-                <span className="text-[10.5px]" style={{ color: "var(--sd-label)" }}>발행 요일</span>
-                <span className="text-[10.5px]" style={{ color: "var(--sd-fg-dim)" }}>{formatWeekdays(weekdays)}</span>
-              </div>
-              <div className="flex flex-wrap gap-1.5">
-                {[1, 2, 3, 4, 5, 6, 7].map((d) => {
-                  const on = weekdays.includes(d);
-                  return (
-                    <button
-                      key={d} type="button"
-                      onClick={() => setWeekdays(on ? weekdays.filter((x) => x !== d) : [...weekdays, d].sort((a, b) => a - b))}
-                      className="h-7 w-8 rounded-[5px] text-[11.5px]"
-                      style={on
-                        ? { background: "var(--sd-fg)", color: "var(--sd-bg)" }
-                        : { border: "1px solid var(--sd-border)", color: "var(--sd-fg-dim)" }}
-                    >
-                      {["", "월", "화", "수", "목", "금", "토", "일"][d]}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* 발행 시간 — 하나라도 넣으면 **하루 발행 수 = 시간 개수**가 되고 할당량은 안 쓴다. */}
-            <div>
-              <div className="mb-1 flex items-baseline justify-between">
-                <span className="text-[10.5px]" style={{ color: "var(--sd-label)" }}>발행 시간 (KST)</span>
-                <span className="text-[10.5px]" style={{ color: "var(--sd-fg-dim)" }}>
-                  {slots.length ? `하루 ${slots.length}개 — 할당량 대신 이 시간에 맞춰 나갑니다` : "비우면 아래 할당량 방식"}
-                </span>
-              </div>
-              <SlotPicker slots={slots} onChange={setSlots} />
-            </div>
+            {/* 발행 요일·발행 시간은 본문(배포 방식 아래)으로 승격 — 지시 2026-08-24.
+                여기 남는 것은 할당량·활동 시간창(한도)뿐이다. */}
 
             {/* 하루 할당량 · 활동 시간창 — 할당량이 찰 때까지 시간창 안에서 확인 때마다 계속 배포 */}
             <div className="grid grid-cols-3 items-end gap-2" style={slots.length ? { opacity: 0.65 } : undefined}>
@@ -1200,9 +1210,6 @@ export default function AutomationPage() {
                 ? `${formatWeekdays(weekdays)} · ${slots.join(" ")} 에 맞춰 채널마다 하루 ${slots.length}개를 내보냅니다.`
                 : `${activeStart}시~${activeEnd}시(KST) 사이에만 배포하고, 채널마다 하루 ${dailyQuota}개를 채우면 다음 날까지 쉽니다.`}
             </p>
-
-            {/* 월 예상 — 순방 판정과 같은 함수로 계산한다(파일 상단 import 주석). */}
-            <PublishEstimate weekdays={weekdays} slots={slots} dailyQuota={dailyQuota} channels={chansOf(selChannels)} />
 
             <input value={win} onChange={(e) => setWin(e.target.value)} placeholder="시간대" className="sd-input w-full" />
 
