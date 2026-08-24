@@ -268,6 +268,7 @@ describe("라우트 화이트리스트 — 기본값은 닫힘", () => {
     assert.equal(checkRoute("GET", "/api/state", ["media:read"]).ok, true, "목록의 유일한 출처");
     assert.equal(checkRoute("GET", "/api/automation", ["factory:read"]).ok, true);
     assert.equal(checkRoute("POST", "/api/automation/rules", ["factory:write"]).ok, true);
+    assert.equal(checkRoute("POST", "/api/automation/notify-email", ["factory:write"]).ok, true);
     assert.equal(checkRoute("DELETE", "/api/automation/rules/r_1", ["factory:write"]).ok, true);
     assert.equal(checkRoute("POST", "/api/automation/holds/release", ["factory:write"]).ok, true);
     assert.equal(checkRoute("POST", "/api/recommendations/r_1/adopt", ["factory:write"]).ok, true);
@@ -275,8 +276,10 @@ describe("라우트 화이트리스트 — 기본값은 닫힘", () => {
     assert.equal(checkRoute("POST", "/api/clips/c_1/generate-metadata", ["factory:write"]).ok, true);
     assert.equal(checkRoute("POST", "/api/programs", ["media:write"]).ok, true);
     assert.equal(checkRoute("GET", "/api/credits/invoices", ["billing:read"]).ok, true);
+    assert.equal(checkRoute("POST", "/api/billing/notify-emails", ["billing:write"]).ok, true);
     // 읽기 스코프만으론 쓰기가 안 열린다 — 스코프 분리가 살아 있는지.
     assert.equal(checkRoute("POST", "/api/automation/rules", ["factory:read"]).ok, false);
+    assert.equal(checkRoute("POST", "/api/automation/notify-email", ["factory:read"]).ok, false);
     assert.equal(checkRoute("POST", "/api/recommendations/r_1/adopt", ["factory:read"]).ok, false);
   });
 
