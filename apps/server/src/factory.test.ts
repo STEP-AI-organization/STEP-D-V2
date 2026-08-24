@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import { afterEach, describe, it } from "node:test";
 
-import { dailyCap, factoryEnabled, mediaNeedsPreparation, publicizeDelayMs } from "./factory.ts";
+import { autoEditorState, dailyCap, factoryEnabled, mediaNeedsPreparation, publicizeDelayMs } from "./factory.ts";
 
 const KEYS = ["FACTORY_ENABLED", "FACTORY_DAILY_CAP", "FACTORY_PUBLICIZE_DELAY_MIN"] as const;
 const original = Object.fromEntries(KEYS.map((k) => [k, process.env[k]]));
@@ -45,6 +45,32 @@ describe("공장 킬 스위치", () => {
       setEnv("FACTORY_ENABLED", v);
       assert.equal(factoryEnabled(), false, `${JSON.stringify(v)} 는 OFF`);
     }
+  });
+});
+
+describe("무편집 렌더 기본 프리셋", () => {
+  it("쇼츠 제목 1·2줄은 출력 기준 106px·107px이고 채널은 세로 82%다", () => {
+    const state = autoEditorState({
+      kind: "short",
+      titleLine1: "첫 번째 제목",
+      titleLine2: "두 번째 제목",
+    }, "STEP-D") as any;
+    assert.equal(state.titleLines[0].size * 3, 106);
+    assert.equal(state.titleLines[1].size * 3, 107);
+    assert.equal(state.channelY, 82);
+  });
+
+  it("자동배포가 가로형을 골라도 제목 출력 크기는 106px·107px로 유지된다", () => {
+    const state = autoEditorState({
+      kind: "short",
+      titleLine1: "첫 번째 제목",
+      titleLine2: "두 번째 제목",
+    }, "STEP-D", undefined, undefined, undefined, "16:9") as any;
+    const scale = 1080 / ((900 * 1080) / 1920);
+    assert.equal(state.aspect, "16:9");
+    assert.equal(state.titleLines[0].size * scale, 106);
+    assert.equal(state.titleLines[1].size * scale, 107);
+    assert.equal(state.channelY, 82);
   });
 });
 

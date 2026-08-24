@@ -477,7 +477,7 @@ export interface EditorState {
   highlightColor: string;
   /** Colour for keyword (content-word) emphasis in captions. Absent = same as highlightColor. */
   keywordColor?: string;
-  /** 자막 세로 위치(% · 화면 하단 기준). 미지정이면 렌더/미리보기 기본 14. 자동배포 규칙이 세팅. */
+  /** 자막 세로 위치(% · 화면 하단 기준). 미지정이면 렌더/미리보기 기본 26. 자동배포 규칙이 세팅. */
   captionY?: number;
   /** 자막 글자 크기(% · 화면 높이 기준). 미지정이면 captionStyle 기본(CAPTION_PCT). */
   captionSize?: number;
@@ -796,13 +796,17 @@ export function makeInitialEditorState(
   const outAbs = Math.min(dur, Math.max(inAbs + 0.1, trimOut ?? dur));
   // 강조색 규칙(사용자 확정 2026-08-12): 두 줄이면 둘째 줄만, 한 줄이면 통째로 색.
   // 서버 자동 렌더 시드(factory.ts autoEditorState)와 같은 모양이어야 한다.
+  // 사용자가 편집기를 전혀 만지지 않아도 그대로 렌더되는 출력 px 기본값.
+  // 초기 객체는 normalizeEditorCoords 가 아래에서 한 번 올리는 구 스테이지 basis 이므로
+  // 9:16 배율로 나눠 시드하고, 반환 상태/UI/최종 렌더에서는 정확히 106px·107px 가 된다.
+  const initialScale = outScale("9:16-letterbox");
   const initialLines = (titleLine1 && titleLine2)
     ? [
-        { id: "t1", text: titleLine1, size: 30, color: "#FFFFFF" },
-        { id: "t2", text: titleLine2, size: 30, color: titleLine2Hex(titleLine2Color) },
+        { id: "t1", text: titleLine1, size: 106 / initialScale, color: "#FFFFFF" },
+        { id: "t2", text: titleLine2, size: 107 / initialScale, color: titleLine2Hex(titleLine2Color) },
       ]
-    : [{ id: "t1", text: title, size: 30, color: "#FF4040" }];
-  // 시드 크기(30·40 등)는 읽기 쉬운 구 스테이지 px 로 두고, normalizeEditorCoords 가 출력 px 로
+    : [{ id: "t1", text: title, size: 106 / initialScale, color: "#FF4040" }];
+  // 시드 크기는 구 스테이지 px 로 두고, normalizeEditorCoords 가 출력 px 로
   // 올린다(세로 9:16 → ×3). 결과는 coordBasis:"output" 마킹 — 이후 로드에서 재정규화 안 됨.
   return normalizeEditorCoords({
     // TVING 쇼츠 스타일이 기본 (2026-08-12): 검정 레터박스 + 상단 훅 + 하단 프로그램명.
@@ -820,13 +824,15 @@ export function makeInitialEditorState(
     titleY: 11,
     showChannel: true,
     channelName: programTitle || "",
-    // 채널 뱃지 세로 위치 기본 = 깔끔한 정수 80% (E · 서버 TEMPLATE_SEEDS.channelY 와 동일).
-    channelY: 80,
+    // 채널 뱃지 세로 위치 기본 = 82% (서버 TEMPLATE_SEEDS.channelY 와 동일).
+    channelY: 82,
     channelLabelSize: 30,
     channelIconSize: 40,
     // 방송 원본은 번인 자막이 이미 있다 — AI 자막을 겹쳐 굽지 않는 게 기본.
     captionsOn: false,
     captionStyle: "korean_pop",
+    // 화면 아래에서 26% — 웹 미리보기·자동배포 미리보기·서버 ASS fallback 과 동일.
+    captionY: 26,
     highlightColor: "#FFD400",
     showSafeArea: false,
     elements: [],
@@ -914,6 +920,7 @@ export function ensureTracks(state: EditorState, durationSec: number, segmentSta
     // 자막 관련 (2026-07-22 확장: 10 스타일)
     captionStyle: state.captionStyle ?? "korean_pop",
     captionsOn: typeof state.captionsOn === "boolean" ? state.captionsOn : true,
+    captionY: typeof state.captionY === "number" ? state.captionY : 26,
     highlightColor: state.highlightColor ?? "#FFD400",
     keywordColor: state.keywordColor ?? state.highlightColor ?? "#FFD400",
     // 한 화면 글자수 — 6 미만이면 조각이 깜빡이기만 해서 무시하고 기본값으로 돌린다.
@@ -938,7 +945,7 @@ export function ensureTracks(state: EditorState, durationSec: number, segmentSta
     // 채널
     showChannel: typeof state.showChannel === "boolean" ? state.showChannel : true,
     channelName: state.channelName ?? "",
-    channelY: typeof state.channelY === "number" ? state.channelY : 80,
+    channelY: typeof state.channelY === "number" ? state.channelY : 82,
     channelIconDataUrl: typeof state.channelIconDataUrl === "string" ? state.channelIconDataUrl : undefined,
     channelBadgeTemplate:
       state.channelBadgeTemplate && CHANNEL_BADGE_PRESETS.some((p) => p.id === state.channelBadgeTemplate)

@@ -235,7 +235,7 @@ describe("채널 뱃지 — 이름과 아이콘이 같은 계산을 쓴다", () 
 const TPL = fs.readFileSync(
   path.resolve(HERE, "../../web/src/components/automation/template-preview.tsx"), "utf-8");
 
-// 미리보기 자막 기본값: export const SUBTITLE_DEFAULTS = { y: 14, size: 4.4, color: "#FFFFFF" }
+// 미리보기 자막 기본값: export const SUBTITLE_DEFAULTS = { y: 26, size: 4.4, color: "#FFFFFF" }
 const subBlock = /SUBTITLE_DEFAULTS\s*=\s*\{([\s\S]*?)\}/.exec(TPL);
 const subDefaults: Record<string, string> = {};
 if (subBlock) for (const m of subBlock[1].matchAll(/(\w+):\s*"?([#\w.]+)"?/g)) subDefaults[m[1]] = m[2];
@@ -275,6 +275,8 @@ describe("자막 오버레이 기하 — 자동배포 미리보기 자막 기본
  * 시각 줄 수여야 한다. 순수 함수로 증명 안 되는 배선 불변식이라 소스 스캔이다.
  */
 const FACTORY = fs.readFileSync(path.join(HERE, "factory.ts"), "utf-8");
+const EDITOR_PRESETS = fs.readFileSync(
+  path.resolve(HERE, "../../web/src/lib/editor/presets.ts"), "utf-8");
 
 describe("제목 2줄 — factory autoEditorState 가 titleLine1/2 시맨틱 분할을 재랩핑하지 않는다", () => {
   it("autoEditorState 가 titleLine1·titleLine2 를 둘 다 읽는다", () => {
@@ -288,9 +290,21 @@ describe("제목 2줄 — factory autoEditorState 가 titleLine1/2 시맨틱 분
       "두 줄이 모두 있을 때 wrapAutoTitle 로 재분할하면 안 된다 — 시맨틱 분할을 그대로 쓴다");
   });
 
-  it("명시적 2줄은 더 긴 줄이 한 줄에 맞도록 크기를 정한다 (nowrap 전제)", () => {
-    assert.match(FACTORY, /fitTwoLineTitleSize\(line1, line2\)/,
-      "폰트 크기를 최장 줄 기준으로 축소하지 않으면, 재랩핑을 끈 렌더에서 긴 줄이 화면 밖으로 나간다");
+  it("무편집 제목은 첫 줄 106px·둘째 줄 107px 출력값을 쓴다", () => {
+    assert.match(FACTORY, /size: \(i === 0 \? 106 : 107\) \/ titleOutScale/,
+      "factory 제목 기본 크기가 106px·107px 출력값과 달라졌다");
+  });
+});
+
+describe("무편집 렌더 기본 프리셋 — 편집기 초기값도 factory와 같다", () => {
+  it("제목 첫 줄 106px·둘째 줄 107px를 출력 basis로 시드한다", () => {
+    assert.match(EDITOR_PRESETS, /size: 106 \/ initialScale/);
+    assert.match(EDITOR_PRESETS, /size: 107 \/ initialScale/);
+  });
+
+  it("채널 세로 위치 82%·자막 세로 위치 26%를 명시한다", () => {
+    assert.match(EDITOR_PRESETS, /channelY: 82/);
+    assert.match(EDITOR_PRESETS, /captionY: 26/);
   });
 });
 

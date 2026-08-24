@@ -350,8 +350,10 @@ describe("채택 형태 순방 배선 — automation-cycle 소스 스캔", () =>
   });
 
   it("editorState.aspect 를 clip.aspectRatio(5-값 enum)와 일치시킨다 — /export 는 editorState 를 최우선으로 읽는다", () => {
-    // autoEditorState 는 kind 로 aspect 를 시드하지만(short→crop-main), 규칙 방향이 그 위에
-    // 덮인다. editorState.aspect 를 aspectRatio 와 안 맞추면 렌더에 미도달(이 리포 최빈 실패모드).
+    // autoEditorState 에도 최종 aspectRatio 를 넘기고, editorState 에 다시 명시한다.
+    // 둘 중 하나라도 빠지면 제목 px basis 또는 실제 렌더 방향이 달라진다.
+    assert.match(src, /autoEditorState\([\s\S]*?\(rule as any\)\.layout, aspectRatio\)/,
+      "자동배포 최종 방향을 factory에 넘기지 않으면 제목 106/107px basis가 어긋난다");
     assert.match(src, /aspect: aspectRatio,/,
       "editorState.aspect 를 clip.aspectRatio 와 일치시키지 않으면 규칙 방향이 렌더에 미도달한다");
   });

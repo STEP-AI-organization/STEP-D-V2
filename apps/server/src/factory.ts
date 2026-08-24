@@ -547,22 +547,6 @@ export function wrapAutoTitle(raw: string): { lines: string[]; size: number } {
 }
 
 /**
- * 명시적 2줄 제목(추천이 준 titleLine1/2)의 폰트 크기 — **더 긴 줄이 렌더 폭 한 줄에**
- * 들어가도록 길수록 축소한다(wrapAutoTitle 의 길이→크기 규칙 확장). 재랩핑하지 않으므로
- * 여기서 크기를 못 정하면 긴 줄이 화면 밖으로 나간다(렌더러 WrapStyle 2 · 자동 줄바꿈 없음).
- */
-export function fitTwoLineTitleSize(line1: string, line2: string): number {
-  const maxLen = Math.max([...String(line1)].length, [...String(line2)].length);
-  // 기본 38 (사용자 확정 2026-08-18 — 두 줄 다 38). 줄이 길면 한 줄 폭에 맞게만 축소한다
-  // (렌더는 shrink-to-fit, 에디터는 nowrap 이라 여기서 크기를 안 낮추면 박스를 넘는다).
-  if (maxLen <= 14) return 38;
-  if (maxLen <= 18) return 33;
-  if (maxLen <= 22) return 28;
-  if (maxLen <= 26) return 24;
-  return 20;
-}
-
-/**
  * 무인 자동배포 기본 렌더 시드 (사용자 확정 2026-08-12 · TVING 쇼츠 스타일):
  *   검정 배경에 16:9 원본을 **가운데 레터박스** — 원본 번인 자막이 그대로 보이므로
  *   AI 자막 오버레이는 끈다(겹침 원천 차단) · 상단 띠에 짧은 훅 한 줄 · 하단 띠에
@@ -577,25 +561,24 @@ export function fitTwoLineTitleSize(line1: string, line2: string): number {
 const TEMPLATE_SEEDS: Record<string, {
   accent: string; titleY: number;
   bottom: "logo-box" | "icon-title";
-  // channelY = 채널 뱃지 세로 위치(%) · 에디터 "채널 → 세로 위치" 슬라이더 기본값. 깔끔한 정수 80
-  // 으로 고정한다(E) — px 파생 소수(80.078125 등)가 기본으로 보이지 않게.
+  // channelY = 채널 뱃지 세로 위치(%) · 에디터 "채널 → 세로 위치" 슬라이더 기본값 82.
   channelY: number; iconShape: "circle" | "square"; iconSize: number;
   iconY?: number; boxY?: number;
 }> = {
   // 표준 (2026-08-12 확정 · 나는 SOLO 쇼츠 레퍼런스): 청록 훅 + 프로그램 로고 + 방영시간 박스
   "broadcast-standard": {
     accent: "#40E0E0", titleY: 11, bottom: "logo-box",
-    channelY: 80, iconShape: "square", iconSize: 50, iconY: 68, boxY: 79.5,
+    channelY: 82, iconShape: "square", iconSize: 50, iconY: 68, boxY: 79.5,
   },
   // 드라마: 번인 자막이 없어 확대 크롭(fit cover)이 산다 — 띠가 좁아 위치가 다르다
   "broadcast-drama": {
     accent: "#40E0E0", titleY: 8, bottom: "logo-box",
-    channelY: 80, iconShape: "square", iconSize: 50, iconY: 77, boxY: 87.5,
+    channelY: 82, iconShape: "square", iconSize: 50, iconY: 77, boxY: 87.5,
   },
   // 구 표준 (TVING 풍 · 보존): 빨강 훅 + 원형 아이콘 + 프로그램명 텍스트
   "broadcast-clean": {
     accent: "#FF4040", titleY: 11, bottom: "icon-title",
-    channelY: 80, iconShape: "circle", iconSize: 40,
+    channelY: 82, iconShape: "circle", iconSize: 40,
   },
 };
 
@@ -612,6 +595,8 @@ export function autoEditorState(
     titleColor?: string;
     subtitles?: boolean; subtitleY?: number; subtitleSize?: number; subtitleColor?: string;
   },
+  // 자동배포 규칙이 정한 최종 aspect. 없으면 공장 기본(short=세로, clip=가로)을 쓴다.
+  forcedAspect?: string,
 ): Record<string, unknown> {
   const hook = String(rec.hookQuote ?? "").replace(/^['"'"]|['"'"]$/g, "").trim();
   const line1 = String(rec.titleLine1 ?? "").trim();
@@ -625,14 +610,12 @@ export function autoEditorState(
   //    또 접어 3줄이 됐다. 이제 titleLines 줄 수 = 시각 줄 수.
   //  · 그 외(line2 없음) → 예전처럼 line1(없으면 title)을 wrapAutoTitle 로 접는다.
   let lines: string[];
-  let size: number;
   if (useHook) {
-    ({ lines, size } = wrapAutoTitle(hook));
+    ({ lines } = wrapAutoTitle(hook));
   } else if (line1 && line2) {
     lines = [line1, line2];
-    size = fitTwoLineTitleSize(line1, line2);
   } else {
-    ({ lines, size } = wrapAutoTitle(line1 || String(rec.title ?? "")));
+    ({ lines } = wrapAutoTitle(line1 || String(rec.title ?? "")));
   }
   // 채널 아이콘 기본값 = 프로그램 이미지(F). 렌더는 editorState.channelIconDataUrl 를 먼저 읽고
   // 없으면 program.brandIconDataUrl 로 폴백하므로, 에디터도 같은 이미지를 보이도록 여기서 명시
@@ -646,6 +629,14 @@ export function autoEditorState(
     ?? (TEMPLATE_SEEDS[String(program?.autoPublish?.templateId ?? "")] ? String(program.autoPublish.templateId) : null)
     ?? pickTemplateId(program);
   const seed = TEMPLATE_SEEDS[templateId] ?? TEMPLATE_SEEDS["broadcast-standard"];
+  const aspect = forcedAspect || (rec.kind === "short" ? "9:16-crop-main" : "16:9");
+  // factory 시드는 아직 구 설계 스테이지 px basis 이고 렌더 직전에 출력 px 로 정규화된다.
+  // 따라서 원하는 무편집 출력값(첫 줄 106px·둘째 줄 107px)을 **최종 aspect** 배율로 나눠
+  // 저장한다. 자동배포가 가로/세로를 바꿔도 최종 렌더 px가 달라지지 않는다.
+  const titleOutScale = aspect === "16:9" ? 1080 / ((900 * 1080) / 1920)
+    : aspect === "1:1" ? 1080 / 900
+    : aspect === "4:5" ? 1350 / 640
+    : 1920 / 640;
   // 제목 강조색 — 규칙 layout.titleColor 가 있으면 시드 accent 를 덮는다(#RRGGBB 만 허용,
   // 아니면 시드값 유지). 편집기·미리보기(template-preview)와 같은 축이라 결과물과 일치한다.
   const titleAccent = layoutOverride?.titleColor && /^#[0-9a-fA-F]{6}$/.test(layoutOverride.titleColor)
@@ -654,7 +645,7 @@ export function autoEditorState(
     // 종횡비 = 5-값 enum(aspect-presets.ts). 쇼츠 = 세로 메인 크롭(위 자막띠) 기본 · 클립(롱폼) = 가로.
     // clip.aspectRatio 배정(adopt/자동배포)과 같은 값이라 라벨↔렌더가 일치한다. 자동배포 경로가
     // 가로형을 고르면 automation-cycle 이 여기 위에 aspect:"16:9" 를 덮는다.
-    aspect: rec.kind === "short" ? "9:16-crop-main" : "16:9",
+    aspect,
     bgType: "solid",
     bg: "#000000",
     templateId,
@@ -662,7 +653,9 @@ export function autoEditorState(
     // ⚠️ id 를 반드시 넣는다. 없으면 편집기에서 setLine 이 l.id === undefined 로 **두 줄을 다**
     //    매칭해 한 줄로 붕괴하고, React key 도 undefined 로 겹친다(2026-08-12 발견).
     titleLines: lines.map((text, i) => ({
-      id: `t${i}`, text, size, color: lines.length === 1 || i === 1 ? titleAccent : "#FFFFFF",
+      id: `t${i}`, text,
+      size: (i === 0 ? 106 : 107) / titleOutScale,
+      color: lines.length === 1 || i === 1 ? titleAccent : "#FFFFFF",
     })),
     titleX: 50,
     titleY: seed.titleY,

@@ -28,10 +28,10 @@ export type LayoutState = {
 
 /**
  * 자막 오버레이 기본값 — 서버 렌더(index.ts buildEditorAss)의 자막 기본과 **1:1**.
- * y = 화면 하단 14%(= 서버 CAPTION_MV_PCT) · size = 화면 높이의 4.4%(= 서버 CAPTION_PCT.korean_pop)
+ * y = 화면 하단 26%(= 서버 CAPTION_MV_PCT) · size = 화면 높이의 4.4%(= 서버 CAPTION_PCT.korean_pop)
  * · 색 = 흰색(= 렌더 korean_pop 기본색). overlay-parity.test.ts 가 이 값이 서버와 갈라지지 않게 강제한다.
  */
-export const SUBTITLE_DEFAULTS = { y: 20, size: 4.4, color: "#FFFFFF" } as const;
+export const SUBTITLE_DEFAULTS = { y: 26, size: 4.4, color: "#FFFFFF" } as const;
 
 /** 소형 카드 기준 폭 — 폰트·패딩은 이 폭 대비 비율로 스케일된다(레이아웃 %좌표는 불변). */
 const BASE_W = 120;
@@ -185,7 +185,7 @@ export function TemplatePreviewDialog({ template, accent, layout, frameSrc, subt
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/55" onClick={onClose} aria-hidden />
       <div
-        className="sd-modal relative flex max-h-[92vh] flex-wrap items-start gap-4 overflow-y-auto bg-white p-4"
+        className="sd-modal relative flex max-h-[92vh] flex-wrap items-start gap-4 overflow-y-auto bg-[var(--sd-card)] p-4"
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"

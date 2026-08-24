@@ -4452,7 +4452,7 @@ function channelBadgeLayout(
   // channelLabelSize 는 출력 px(정규화됨) — 그대로 쓰고, 미설정 기본값 14·클램프 범위 8..64 만
   // scale(설계 px→출력 px) 배한다(웹 editor-preview 와 동일 basis).
   const labelPx = Math.max(8 * scale, Math.min(64 * scale, Number(es.channelLabelSize) > 0 ? Number(es.channelLabelSize) : 14 * scale));
-  const chY = ((Number(es.channelY) || 88) / 100) * H;
+  const chY = ((Number(es.channelY) || 82) / 100) * H;
   const LEADING = 1.25; // leading-tight
   const extras = (Array.isArray(es.channelExtraLines) ? es.channelExtraLines : [])
     .map((l: any) => ({ text: String(l?.text ?? "").trim(), size: Number(l?.size) }))
@@ -4812,7 +4812,7 @@ function buildEditorAss(
 
   const ev = [...decorationEv, ...captionEv];
   if (!ev.length) return null;
-  // 자막 세로 위치 — editorState.captionY(% · 하단 기준 · \an2)가 있으면 그걸, 없으면 기본 14%.
+  // 자막 세로 위치 — editorState.captionY(% · 하단 기준 · \an2)가 있으면 그걸, 없으면 기본 26%.
   // 자동배포 규칙의 subtitleY 가 여기로 온다(factory.autoEditorState). 미리보기 SUBTITLE_DEFAULTS.y
   // 와 CAPTION_MV_PCT 가 같아야 결과물 자막이 편집 화면과 같은 높이에 박힌다(파리티 테스트가 강제).
   const captionYPct = es && typeof es === "object" && Number.isFinite((es as any).captionY)
@@ -4884,9 +4884,8 @@ const CAPTION_PCT: Record<string, number> = {
  * 자막 기본 세로 위치(% · 화면 하단 기준 · \an2 MarginV). 자동배포 미리보기의
  * SUBTITLE_DEFAULTS.y(template-preview.tsx)와 **1:1** 이어야 한다 — overlay-parity.test.ts 가 강제.
  */
-// 14 → 20 (사용자 2026-08-20): 하단 14% 는 폰 쇼츠 UI(설명·진행바·우측 버튼) 세이프존에 걸려
-// 자막이 가려졌다. 20% 로 올려 UI 위로 뺀다. SUBTITLE_DEFAULTS.y·미리보기 폴백도 같이 20.
-const CAPTION_MV_PCT = 20;
+// 26% (사용자 확정 2026-08-24). SUBTITLE_DEFAULTS.y·편집기 미리보기 폴백도 같이 26.
+const CAPTION_MV_PCT = 26;
 
 function captionAssStyle(style: string, H: number, mv: number, mh: number, sizePct?: number): string {
   // 웨이트도 미리보기와 맞춘다 — 설치 폰트는 Bold(700)·ExtraBold(800)·Black(900) 3종이라
@@ -5122,7 +5121,7 @@ async function renderClipMedia(opts: {
         iconBox = { w: iconW, h: iconH };
         const iconYPct = Number(editorState?.channelIconY);
         const laid = channelBadgeLayout(editorState, W, H, scale, iconBox);
-        const chY = ((Number(editorState?.channelY) || 88) / 100) * H;
+        const chY = ((Number(editorState?.channelY) || 82) / 100) * H;
         const y = iconYPct > 0
           ? Math.round((iconYPct / 100) * H)
           : Math.round(laid?.icon?.y ?? chY - iconH - 28);

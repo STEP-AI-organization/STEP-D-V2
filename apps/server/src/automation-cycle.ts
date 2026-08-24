@@ -291,14 +291,14 @@ export async function runAutomationCycle(): Promise<CycleReport> {
           automationRuleId: rule.id,
           editorState: {
             ...autoEditorState(rec, ep.programTitle ?? "", program,
-              (rule as any).templateId, (rule as any).layout),
+              (rule as any).templateId, (rule as any).layout, aspectRatio),
             // 자막 on/off — 규칙 기본 ON(true · 하위호환). layout.subtitles === false 일 때만 끈다.
             // autoEditorState 는 captionsOn:false 를 시드하지만(공장 경로 · 번인 겹침 방지), 자동배포는
             // 규칙 토글을 따른다 — 드라마처럼 원본 번인 자막이 있는 회차는 규칙에서 자막을 끈다.
             captionsOn: rule.layout?.subtitles !== false,
-            // editorState.aspect 를 clip.aspectRatio(위 5-값 enum) 와 **일치**시킨다. /export 는
-            // editorState.aspect 를 최우선으로 읽으므로, 여기서 안 맞추면 aspectRatio 에만 저장되고
-            // 렌더에 미도달한다(가로 규칙이 세로로 잘리거나 그 반대). autoEditorState 기본값 위에 덮는다.
+            // editorState.aspect 를 clip.aspectRatio(위 5-값 enum) 와 **일치**시킨다. 위 factory에도
+            // 같은 값을 넘겨 제목 106/107px의 basis 계산부터 최종 방향과 맞춘다. /export 는
+            // editorState.aspect 를 최우선으로 읽으므로 여기에도 명시해 계약을 고정한다.
             aspect: aspectRatio,
           },
         };
