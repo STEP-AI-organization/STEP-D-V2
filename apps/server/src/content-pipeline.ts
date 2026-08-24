@@ -36,6 +36,7 @@ import {
   getPool, getEntity, putEntity, upsertSearchSegments,
   recordUsage,
   addCreditEntry,
+  creditBalance,
   compareAndSetClipReframe,
 } from "./db-pg.ts";
 import type { TranscriptSegment, SearchSegmentRow } from "./db-pg.ts";
@@ -1654,6 +1655,18 @@ export async function runContentAnalyze(
           actor: "system",
           dedupeKey: creditUsageKey(mediaId),
         });
+
+        // 잔액 사전 경고 — 500분 선을 **이번 차감으로 하향 통과했을 때 한 번**만 담당자
+        // 메일(billing.notifyEmails). 매 차감마다 보내면 알림이 배경음이 된다.
+        try {
+          const after = await creditBalance();
+          const { LOW_BALANCE_WARN_CREDITS, notifyLowBalance } = await import("./billing-notify.ts");
+          if (after < LOW_BALANCE_WARN_CREDITS && after + minutes >= LOW_BALANCE_WARN_CREDITS) {
+            void notifyLowBalance(after);
+          }
+        } catch (e) {
+          console.warn("[billing-notify] 잔액 경고 판정 실패(무시):", e instanceof Error ? e.message : e);
+        }
 
         // 차감으로 잔액이 임계 아래로 떨어졌으면 저장 카드로 자동 충전(정책 켜진 경우만).
         // **best-effort** — 자동 충전 실패가 분석을 깨면 안 되므로 던지지 않고 로그만 남긴다.

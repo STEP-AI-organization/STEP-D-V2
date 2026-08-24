@@ -309,7 +309,12 @@ export async function advance(factoryJobId: string): Promise<{ job: FactoryJob; 
     const need = billableMinutes(durationSec ?? 0);
     if (need <= 0) return null;
     const verdict = checkCredits({ balance: await creditBalance(), needMinutes: need });
-    return verdict.allow ? null : verdict.reason;
+    if (verdict.allow) return null;
+    // 부족 → 저장 카드 자동 충전 시도 후 재판정 (라우트 402 게이트와 같은 방향 · ENA 스펙).
+    const { topupAndRecheck } = await import("./auto-topup.ts");
+    const retried = await topupAndRecheck(need);
+    if (retried?.allow) return null;
+    return (retried ?? verdict).reason;
   };
 
   switch (job.state) {

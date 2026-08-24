@@ -32,8 +32,8 @@ import { cardBlock, cardTopupPaymentId, declineMessage, verifyCharge } from "./b
 import { sendInvoiceEmail } from "./invoice-email.ts";
 import { chargeWithBillingKey, getPayment } from "./portone.ts";
 import {
-  buildTopup, creditPriceKrw, nextAutoTopupAlert, shouldAutoTopup, topupDedupeKey,
-  type AutoTopupCode,
+  buildTopup, checkCredits, creditPriceKrw, nextAutoTopupAlert, shouldAutoTopup, topupDedupeKey,
+  type AutoTopupCode, type CreditVerdict,
 } from "./credits.ts";
 import { currentTenantId } from "./tenant.ts";
 
@@ -74,7 +74,7 @@ export function autoTopupNonce(kstDate: string, slot: number): string {
  *
  * 알림 저장은 이걸 감싼 `maybeAutoTopup` 이 한다 — 이 함수는 판정·결제만 한다.
  */
-async function runAutoTopup(): Promise<AutoTopupResult> {
+async function runAutoTopup(needCredits = 0): Promise<AutoTopupResult> {
   const policy = await getAutoTopupPolicy();
   if (!policy || !policy.enabled) return { charged: false, code: "disabled", reason: "자동 충전이 꺼져 있습니다." };
 
@@ -126,7 +126,10 @@ async function runAutoTopup(): Promise<AutoTopupResult> {
       maxPerDay: policy.maxPerDay,
       maxKrwPerMonth: policy.maxKrwPerMonth,
     },
-    balance,
+    // needCredits = 지금 시작하려는 분석의 필요분. 임계 비교를 "이번 필요분을 뺀 잔액"으로
+    // 한다 — 임계 0(완전 소진 시 충전 · ENA 방식)이어도 "잔액 5분 · 필요 60분" 같은,
+    // 0 에 정확히 닿지 않는 부족이 트리거된다. 알림·반환의 잔액은 실제 잔액 그대로다.
+    balance: balance - needCredits,
     todayCount,
     monthKrw,
     amountKrw: check.amountKrw,
@@ -152,7 +155,7 @@ async function runAutoTopup(): Promise<AutoTopupResult> {
         maxPerDay: policy.maxPerDay,
         maxKrwPerMonth: policy.maxKrwPerMonth,
       },
-      balance: balance2,
+      balance: balance2 - needCredits,
       todayCount: todayCount2,
       monthKrw: monthKrw2,
       amountKrw: check.amountKrw,
@@ -291,8 +294,8 @@ async function runAutoTopup(): Promise<AutoTopupResult> {
  * 라우트든 어디로 들어와도 같은 알림이 남는다(호출부마다 배선하면 반드시 한쪽이 빠진다).
  * 알림 쓰기 실패가 충전 결과를 뒤집으면 안 되므로 삼키되, 조용히 넘기지는 않는다.
  */
-export async function maybeAutoTopup(): Promise<AutoTopupResult> {
-  const result = await runAutoTopup();
+export async function maybeAutoTopup(opts?: { needCredits?: number }): Promise<AutoTopupResult> {
+  const result = await runAutoTopup(Math.max(0, Math.trunc(opts?.needCredits ?? 0)));
   try {
     const prev = await getAutoTopupAlert();
     const next = nextAutoTopupAlert(prev, result, new Date().toISOString());
@@ -309,6 +312,21 @@ export async function maybeAutoTopup(): Promise<AutoTopupResult> {
     console.error("[auto-topup] 실패 알림 저장 실패(충전 결과는 유효):", e instanceof Error ? e.message : e);
   }
   return result;
+}
+
+/**
+ * 부족 판정 직후의 **충전 시도 + 재판정**. 분석 시작 게이트 4곳(analyze 라우트 ·
+ * factory · 워커 media.prepare/youtube.download)이 같은 패턴을 쓴다 —
+ * "잔액이 부족하면 402 로 끝" 이 아니라 "저장 카드로 채우고 바로 시작" (ENA 2026-08-24).
+ *
+ * 충전이 **일어나지 않았으면 null** 을 돌려준다(호출부는 원판정을 유지) — 자동 충전이
+ * 꺼져 있거나 카드가 없거나 상한에 걸린 경우 재판정해 봐야 같은 답이라 왕복만 는다.
+ * 예외는 던지지 않는다(maybeAutoTopup 이 삼킨다).
+ */
+export async function topupAndRecheck(needMinutes: number): Promise<CreditVerdict | null> {
+  const r = await maybeAutoTopup({ needCredits: needMinutes });
+  if (!r.charged) return null;
+  return checkCredits({ balance: await creditBalance(), needMinutes });
 }
 
 /**

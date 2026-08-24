@@ -48,6 +48,7 @@ import {
 } from "./db-pg.ts";
 import { clipGate } from "./publish-dispatch.ts";
 import { checkCredits } from "./credits.ts";
+import { topupAndRecheck } from "./auto-topup.ts";
 import { billableMinutes } from "./billing.ts";
 import { probe, captureThumbnail, remuxFaststart } from "./ffmpeg.ts";
 import {
@@ -726,10 +727,14 @@ async function handleMediaPrepare(job: Job): Promise<void> {
       thumbPath: thumbStored,
     });
 
-    const verdict = checkCredits({
+    let verdict = checkCredits({
       balance: await creditBalance(),
       needMinutes: billableMinutes(meta.durationSec),
     });
+    if (!verdict.allow) {
+      // 부족 → 저장 카드 자동 충전 시도 후 재판정 (라우트 402 게이트와 같은 방향 · ENA 스펙).
+      verdict = (await topupAndRecheck(billableMinutes(meta.durationSec))) ?? verdict;
+    }
     if (!verdict.allow) {
       await setEpisodeNote(`크레딧 부족 — 충전 후 분석을 시작해 주세요 (${verdict.reason})`, "idle", 0);
       return;
@@ -877,10 +882,14 @@ async function handleYoutubeDownload(job: Job): Promise<void> {
     // 막히면 잡 **실패가 아니라 스킵**이다: 다운로드 자체는 성공했고, 여기서 던지면 큐가
     // 백오프 재시도를 돌며 매번 같은 사유로 죽는 재큐잉 루프가 된다. 사유는 에피소드
     // 파이프라인 노트로 사람에게 남긴다 — 충전 후 화면의 '분석 시작'으로 재개하면 된다.
-    const verdict = checkCredits({
+    let verdict = checkCredits({
       balance: await creditBalance(),
       needMinutes: billableMinutes(meta.durationSec),
     });
+    if (!verdict.allow) {
+      // 부족 → 저장 카드 자동 충전 시도 후 재판정 (라우트 402 게이트와 같은 방향 · ENA 스펙).
+      verdict = (await topupAndRecheck(billableMinutes(meta.durationSec))) ?? verdict;
+    }
     if (!verdict.allow) {
       await setEpisodeNote(`크레딧 부족 — 충전 후 분석을 시작해 주세요 (${verdict.reason})`, "idle", 0);
       console.warn(`[worker] youtube.download ${mediaId}: content.analyze 큐잉 스킵 — ${verdict.reason}`);

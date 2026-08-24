@@ -35,6 +35,49 @@ function failureHtml(alert: AutoTopupAlert): string {
   </div>`;
 }
 
+/**
+ * 잔액 사전 경고선(분). **이 선을 하향 통과하는 순간 한 번**만 메일이 간다 —
+ * 발화 판정은 차감 지점(content-pipeline)이 "직전 잔액 ≥ 선 > 차감 후 잔액" 교차로 한다.
+ * 충전으로 선 위로 올라갔다 다시 내려오면 또 알린다(그게 맞는 동작이다).
+ * ENA 확정 스펙(2026-08-24): 500분.
+ */
+export const LOW_BALANCE_WARN_CREDITS = 500;
+
+function lowBalanceHtml(balance: number): string {
+  return `
+  <div style="font-family:'Apple SD Gothic Neo','Malgun Gothic',sans-serif;max-width:520px;margin:0 auto;color:#111;">
+    <h2 style="font-size:17px;border-bottom:2px solid #111;padding-bottom:8px;">STEP-D 잔액 안내</h2>
+    <p style="font-size:13px;line-height:1.6;">
+      크레딧 잔액이 <b>${LOW_BALANCE_WARN_CREDITS.toLocaleString("ko-KR")}분 아래</b>로 내려왔습니다
+      — 현재 <b>${balance.toLocaleString("ko-KR")}분</b>.
+    </p>
+    <p style="font-size:13px;line-height:1.6;color:#5C5E63;">
+      자동 재결제가 켜져 있으면 잔액 소진 시 저장 카드로 자동 결제됩니다.
+      꺼져 있다면 결제 화면(크레딧)에서 미리 충전해 주세요 — 잔액이 없으면 새 분석이 시작되지 않습니다.
+    </p>
+    <p style="font-size:11px;color:#888;line-height:1.6;margin-top:16px;">
+      이 알림은 결제 화면에 등록된 결제 알림 수신자에게 발송됩니다.
+    </p>
+  </div>`;
+}
+
+/** 잔액 사전 경고 메일. **절대 던지지 않는다** — 알림은 부속이고 차감이 본체다. */
+export async function notifyLowBalance(balance: number): Promise<void> {
+  try {
+    if (!mailConfigured()) return;
+    const to = await getBillingNotifyEmails();
+    if (to.length === 0) return;
+    await sendMail({
+      to: to.join(", "),
+      subject: `[STEP-D] 크레딧 잔액 ${balance.toLocaleString("ko-KR")}분 — 충전 시점 안내`,
+      html: lowBalanceHtml(balance),
+    });
+    console.log(`[billing-notify] 잔액 사전 경고 메일 발송 → ${to.length}명 (잔액 ${balance})`);
+  } catch (e) {
+    console.warn("[billing-notify] 잔액 경고 발송 실패(차감은 유효):", e instanceof Error ? e.message : e);
+  }
+}
+
 /** 자동 결제 실패 메일 발송. **절대 던지지 않는다** — 실패는 로그로만 남는다. */
 export async function notifyAutoTopupFailure(alert: AutoTopupAlert): Promise<void> {
   try {

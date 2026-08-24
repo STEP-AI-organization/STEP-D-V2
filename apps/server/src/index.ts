@@ -320,7 +320,7 @@ import { billableMinutes, portoneConfigured } from "./billing.ts";
 import { chargeWithBillingKey, getBillingKeyInfo, getPayment, verifyWebhook } from "./portone.ts";
 // 자동 충전 알림 해제는 **이 한 함수**로만 한다 — 라우트마다 db-pg 의 저장 함수를 직접
 // 부르면 반드시 한 자리가 빠진다(실제로 직접 충전 경로가 빠져 있었다).
-import { clearAutoTopupAlert, maybeAutoTopup } from "./auto-topup.ts";
+import { clearAutoTopupAlert, maybeAutoTopup, topupAndRecheck } from "./auto-topup.ts";
 import { buyerFor, sendInvoiceEmail } from "./invoice-email.ts";
 import { commitAndInherit } from "./adopt.ts";
 import { runAutomationCycle } from "./automation-cycle.ts";
@@ -2944,7 +2944,13 @@ async function creditBlockReason(durationSec: number): Promise<string | null> {
   const need = billableMinutes(durationSec ?? 0);
   if (need <= 0) return null;
   const verdict = checkCredits({ balance: await creditBalance(), needMinutes: need });
-  return verdict.allow ? null : verdict.reason;
+  if (verdict.allow) return null;
+  // 부족하면 402 로 끝내기 전에 **저장 카드 자동 충전을 먼저 시도**한다(ENA "다 쓰면 바로
+  // 채움" · 2026-08-24). 필요분 기준 트리거라 잔액이 0 에 정확히 닿지 않아도 걸린다.
+  // 충전이 안 됐으면(꺼짐·카드 없음·상한) 원판정 그대로 402 — 사유는 자동충전 알림이 따로 남는다.
+  const retried = await topupAndRecheck(need);
+  if (retried?.allow) return null;
+  return (retried ?? verdict).reason;
 }
 
 app.post("/api/media/:id/analyze", async (c) => {
