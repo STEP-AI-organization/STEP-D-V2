@@ -5,7 +5,7 @@
  *
  * 여기서 두 가지가 동시에 걸린다:
  *  1. **게이트** — 권리·심의를 통과하지 않은 미디어는 어느 채널로도 못 나간다(F3).
- *  2. **채널 규칙** — 길이 상한·비율·숏폼 전용은 채널마다 다르다(F4-2).
+ *  2. **채널 판정** — 서버 기본값으로 길이·비율·숏폼 여부를 안전하게 확인한다.
  *
  * 둘 다 **사유를 보여 준다.** 채널을 그냥 회색으로 두면 사용자는 왜 안 되는지 몰라
  * 다른 데를 찾아 헤맨다.
@@ -27,7 +27,7 @@ import {
   fetchMetaAccounts,
   publishClips,
   type ChannelEligibility,
-  type ChannelRule,
+  type ChannelPublishTarget,
   type NaverAccount,
   type InstagramAccountInfo,
   type MetaAccountInfo,
@@ -65,17 +65,17 @@ const MODE_TAG: Record<PublishMode, string | null> = { upload: null, gate: "게�
 type NaverForm = { description: string; primary: string; secondary: string };
 const NAVER_FORM_DEFAULT: NaverForm = { description: "", primary: "엔터", secondary: "엔터" };
 
-/** 규칙·네이버·IG·FB 를 한 줄짜리 '대상' 으로 정규화한다 — 그리기·검증·submit 이 한 모양을 쓴다. */
+/** 서버 판정 대상·네이버·IG·FB 를 한 줄짜리 대상으로 정규화한다. */
 type Target = {
   key: string;
   platform: string;
   channel: DistributionChannel;
   label: string;
-  meta: string[]; // ≤60초 · 9:16 같은 규칙 제약
-  badges: string[]; // 기본 규칙 · 로그인됨
+  meta: string[]; // ≤60초 · 9:16 같은 서버 기본 조건
+  badges: string[]; // 기본 설정 · 로그인됨
   mode: PublishMode;
-  blocked?: string; // 규칙 채널의 부적격 사유 (게이트/길이)
-  rule?: ChannelRule;
+  blocked?: string; // 게이트·길이·화면비 부적격 사유
+  serverTarget?: ChannelPublishTarget;
   naver?: NaverAccount;
   ig?: InstagramAccountInfo;
   fb?: MetaAccountInfo;
@@ -91,14 +91,14 @@ export function PublishDialog({
   onDone?: () => void | Promise<void>;
 }) {
   const { toast } = useToast();
-  const [rules, setRules] = useState<ChannelRule[]>([]);
+  const [serverTargets, setServerTargets] = useState<ChannelPublishTarget[]>([]);
   const [elig, setElig] = useState<Record<string, ChannelEligibility>>({});
   const [loadErr, setLoadErr] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [scheduled, setScheduled] = useState(false);
   const [reserveDate, setReserveDate] = useState("");
   const [busy, setBusy] = useState(false);
-  // 네이버·IG·FB — 세션/계정을 직접 고른다 (채널 규칙이 없어도 배포 가능해야 한다 · 추론 금지).
+  // 네이버·IG·FB — 연결된 세션/계정을 직접 고른다. 서버가 대상 계정을 추측하지 않게 한다.
   const [naverAccounts, setNaverAccounts] = useState<NaverAccount[]>([]);
   const [igAccounts, setIgAccounts] = useState<InstagramAccountInfo[]>([]);
   const [metaPages, setMetaPages] = useState<MetaAccountInfo[]>([]);
@@ -123,9 +123,9 @@ export function PublishDialog({
       try {
         const r = await fetchChannelEligibility(clipIds);
         if (!alive) return;
-        // 네이버 TV 는 제품에서 제외(2026-08-13). instagram·facebook 은 아래에서 **계정 단위**로
-        // 직접 고르므로(추론 금지) 제네릭 규칙 행은 뺀다 — 안 그러면 계정 행과 중복된다.
-        setRules(r.rules.filter((x) => !["navertv", "instagram", "facebook"].includes(x.platform)));
+        // 네이버 TV 는 제품에서 제외(2026-08-13). Instagram·Facebook 은 아래에서 계정 단위로
+        // 직접 고르므로 서버의 일반 대상 목록에서는 뺀다. 그렇지 않으면 같은 계정이 중복된다.
+        setServerTargets(r.rules.filter((x) => !["navertv", "instagram", "facebook"].includes(x.platform)));
         setElig(r.eligibility);
         setLoadErr(null);
       } catch (err) {
@@ -137,27 +137,27 @@ export function PublishDialog({
     };
   }, [clipIds]);
 
-  // 규칙 + 세 계정 목록 → 하나의 대상 리스트. (네이버 TV 는 제외)
+  // 서버 판정 대상 + 연결 계정 → 하나의 대상 리스트. (네이버 TV 는 제외)
   const targets = useMemo<Target[]>(() => {
     const out: Target[] = [];
-    for (const r of rules) {
-      const key = `${r.platform}:${r.accountId}`;
+    for (const target of serverTargets) {
+      const key = `${target.platform}:${target.accountId}`;
       const e = elig[key];
       const meta: string[] = [];
-      if (r.maxSec != null) meta.push(`≤${r.maxSec}초`);
-      if (r.aspect !== "any") meta.push(r.aspect);
+      if (target.maxSec != null) meta.push(`≤${target.maxSec}초`);
+      if (target.aspect !== "any") meta.push(target.aspect);
       const badges: string[] = [];
-      if (r.isDefault) badges.push("기본 규칙");
+      if (target.isDefault) badges.push("기본 설정");
       out.push({
         key,
-        platform: r.platform,
-        channel: r.platform as DistributionChannel,
-        label: r.label,
+        platform: target.platform,
+        channel: target.platform as DistributionChannel,
+        label: target.label,
         meta,
         badges,
-        mode: modeFor(r.platform),
+        mode: modeFor(target.platform),
         blocked: e && !e.ok ? e.reason || "이 채널로는 보낼 수 없습니다." : undefined,
-        rule: r,
+        serverTarget: target,
       });
     }
     for (const a of naverAccounts.filter((a) => a.target !== "tv")) {
@@ -197,7 +197,7 @@ export function PublishDialog({
       });
     }
     return out;
-  }, [rules, elig, naverAccounts, igAccounts, metaPages]);
+  }, [serverTargets, elig, naverAccounts, igAccounts, metaPages]);
 
   // 플랫폼별 그룹 — 고정 순서 먼저, 모르는 플랫폼은 뒤에 그대로.
   const groups = useMemo(() => {
@@ -246,8 +246,10 @@ export function PublishDialog({
       ...(scheduled && reserveDate ? { reserveDate } : {}),
     };
     // 고른 행이 곧 대상 채널·계정이다 — 서버가 추측하지 않게 명시한다(다계정 오배포 방지).
-    if (t.rule?.platform === "youtube") return { ...base, youtubeChannelId: t.rule.accountId };
-    if (t.rule?.platform === "tiktok") return { ...base, ...(t.rule.accountId ? { tiktokOpenId: t.rule.accountId } : {}) };
+    if (t.serverTarget?.platform === "youtube") return { ...base, youtubeChannelId: t.serverTarget.accountId };
+    if (t.serverTarget?.platform === "tiktok") {
+      return { ...base, ...(t.serverTarget.accountId ? { tiktokOpenId: t.serverTarget.accountId } : {}) };
+    }
     if (t.naver) {
       const f = naverForm(t.key);
       return { ...base, naverAccountId: t.naver.id, description: f.description.trim(), naverCategory: { primary: f.primary, secondary: f.secondary } };
@@ -330,15 +332,15 @@ export function PublishDialog({
         <div className="flex-1 space-y-3.5 overflow-y-auto p-4">
           {loadErr && (
             <p className="text-[11.5px]" style={{ color: "var(--sd-danger-strong)" }}>
-              채널 규칙을 불러오지 못했습니다 ({loadErr}).
+              채널 정보를 불러오지 못했습니다 ({loadErr}).
             </p>
           )}
 
-          {/* 서버가 연결된 채널을 기본 규칙으로 합성해 주므로, 여기가 비면 연결 자체가 없는 것이다. */}
+          {/* 서버가 연결된 채널을 안전 기본값과 함께 돌려주므로, 비어 있으면 연결 자체가 없는 것이다. */}
           {empty && (
             <p className="text-[11.5px]" style={{ color: "var(--sd-mut)" }}>
               보낼 수 있는 채널이 없습니다 — 배포 채널 화면에서 채널을 먼저 연결하세요.
-              (규칙은 없어도 됩니다 — 연결만 되면 기본 설정으로 나갑니다.)
+              연결된 채널은 안전한 기본 설정으로 배포됩니다.
             </p>
           )}
 
@@ -389,7 +391,7 @@ export function PublishDialog({
                           </span>
                           {modeTag && <span className="sd-tag">{modeTag}</span>}
                           {t.badges.map((b) => (
-                            <span key={b} className="sd-tag" title={b === "기본 규칙" ? "저장된 규칙이 없어 기본 설정으로 나갑니다" : undefined}>
+                            <span key={b} className="sd-tag" title={b === "기본 설정" ? "채널의 안전한 기본 설정으로 나갑니다" : undefined}>
                               {b}
                             </span>
                           ))}

@@ -1317,14 +1317,20 @@ export function assetRawUrl(id: string): string {
   return `${API_BASE}/assets/${id}/raw`;
 }
 
-// ── 채널별 업로드 규칙 (FLOWS F4-2 · 서버 migrations/0015) ──────────────────────
+// ── 채널별 업로드 판정 (서버 내부 호환 계약) ───────────────────────────────────
 //
 // 판정은 서버가 한다. 화면이 자기 나름대로 계산하면 규칙이 두 벌이 되고, 한쪽만 고치는
 // 순간 "고를 수 있는데 실패하는" 채널이 생긴다.
 
 export type ChannelRole = "main" | "sub" | "shorts_only" | "affiliate";
 
-export interface ChannelRule {
+/**
+ * 배포 모달에서 쓰는 서버 판정 대상.
+ *
+ * 응답 원본은 하위 호환 때문에 `rules` 키를 유지하지만, 프론트에서는 별도 채널 설정으로
+ * 취급하지 않는다. 연결된 계정과 서버 기본 조건을 합친 읽기 전용 대상이다.
+ */
+export interface ChannelPublishTarget {
   platform: string;
   accountId: string;
   label: string;
@@ -1340,7 +1346,7 @@ export interface ChannelRule {
   publishDelayMin?: number;
   scheduleWindow: string;
   enabled: boolean;
-  /** true = 저장된 규칙이 없어 서버가 기본값으로 합성한 것 (연결된 채널이면 규칙 없이도 배포된다). */
+  /** true = 별도 저장값 없이 서버 안전 기본값으로 합성한 대상. */
   isDefault?: boolean;
 }
 
@@ -1351,35 +1357,10 @@ export interface ChannelEligibility {
   blockedClipIds: string[];
 }
 
-export async function fetchChannelRules(): Promise<ChannelRule[]> {
-  const r = await json<{ rules: ChannelRule[] }>(
-    await fetch(`${API_BASE}/channel-rules`, { cache: "no-store" }),
-  );
-  return r.rules;
-}
-
-export async function saveChannelRule(rule: ChannelRule): Promise<ChannelRule> {
-  const r = await json<{ rule: ChannelRule }>(
-    await fetch(`${API_BASE}/channel-rules/${rule.platform}/${encodeURIComponent(rule.accountId)}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(rule),
-    }),
-  );
-  return r.rule;
-}
-
-export async function deleteChannelRule(platform: string, accountId: string): Promise<void> {
-  const res = await fetch(`${API_BASE}/channel-rules/${platform}/${encodeURIComponent(accountId)}`, {
-    method: "DELETE",
-  });
-  if (!res.ok) throw new ApiError(res.status, await errorMessageOf(res));
-}
-
 /** 배포 모달용 — 이 미디어들을 각 채널에 보낼 수 있는지. 키는 `platform:accountId`. */
 export async function fetchChannelEligibility(
   clipIds: string[],
-): Promise<{ rules: ChannelRule[]; eligibility: Record<string, ChannelEligibility> }> {
+): Promise<{ rules: ChannelPublishTarget[]; eligibility: Record<string, ChannelEligibility> }> {
   return json(
     await fetch(`${API_BASE}/channel-rules/eligibility`, {
       method: "POST",

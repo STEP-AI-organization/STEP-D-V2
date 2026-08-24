@@ -20,6 +20,7 @@ import {
   allowedToday,
   autoRenderFailedNote,
   formatWeekdays,
+  findAutomationChannelConflicts,
   isPublishDay,
   kstWeekday,
   monthlyPublishEstimate,
@@ -119,6 +120,53 @@ const rule = (over: Partial<AutomationRule> = {}): AutomationRule => ({
 
 const PASS: GateSnapshot = { allowed: true, state: "pass", reason: "" };
 const HOLD: GateSnapshot = { allowed: false, state: "rights_hold", reason: "미해결 권리 이슈 2건" };
+
+describe("한 채널은 자동배포 하나에만 속한다", () => {
+  const existing = [
+    rule({ id: "r1", programId: "p1", channels: [
+      { platform: "youtube", accountId: "c1" },
+      { platform: "naverclip", accountId: "n1" },
+    ] }),
+    rule({ id: "r2", programId: "p2", platform: "youtube", accountId: "legacy" }),
+  ];
+
+  it("다른 자동배포가 쓰는 배열 채널과 구 단수 채널을 모두 찾는다", () => {
+    assert.deepEqual(findAutomationChannelConflicts(existing, [
+      { platform: "naverclip", accountId: "n1" },
+      { platform: "youtube", accountId: "legacy" },
+    ]), [
+      { platform: "naverclip", accountId: "n1", ruleId: "r1", programId: "p1" },
+      { platform: "youtube", accountId: "legacy", ruleId: "r2", programId: "p2" },
+    ]);
+  });
+
+  it("수정 중인 자기 규칙은 제외해 기존 채널을 유지할 수 있다", () => {
+    assert.deepEqual(findAutomationChannelConflicts(existing, [
+      { platform: "youtube", accountId: "c1" },
+    ], "r1"), []);
+  });
+
+  it("규칙 저장 라우트도 충돌을 409로 막는다 — 외부 API 우회 금지", () => {
+    const src = fs.readFileSync(path.join(SRC, "index.ts"), "utf-8");
+    const route = /app\.post\("\/api\/automation\/rules"[\s\S]*?\n\}\);/.exec(src)?.[0] ?? "";
+    assert.match(route, /findAutomationChannelConflicts\(/);
+    assert.match(route, /automation_channel_in_use/);
+    assert.match(route, /}, 409\)/);
+    assert.match(route, /withTenantLock\(`automation-rule-channels:\$\{currentTenantId\(\)\}`/,
+      "동시 생성 요청 둘이 모두 빈 채널로 판단하지 않게 검사와 저장을 직렬화해야 한다");
+  });
+});
+
+describe("자동 확인은 테넌트당 한 번만 실행된다", () => {
+  it("예약 순방과 지금 확인이 겹쳐도 같은 영상을 두 번 큐잉하지 않는다", () => {
+    const src = fs.readFileSync(path.join(SRC, "automation-cycle.ts"), "utf-8");
+    const entry = src.match(/export async function runAutomationCycle[\s\S]*?\n\}/)?.[0] ?? "";
+    assert.match(entry, /withTenantLock\(`automation-cycle:\$\{tenantId\}`/,
+      "큐 dedupe 만으로는 API 직접 실행과 예약 순방의 동시 실행을 막지 못한다");
+    assert.match(src, /async function runAutomationCycleLocked\(/,
+      "잠금 안에서 전체 평가가 실행돼야 앞 실행의 배포 행을 뒤 실행이 볼 수 있다");
+  });
+});
 
 describe("자동 배포는 게이트를 건너뛰지 않는다 (F6 Invariant)", () => {
   it("게이트 미통과면 어떤 정책에서도 나가지 않는다", () => {
@@ -262,7 +310,9 @@ describe("승인 대기는 영상 하나당 한 줄", () => {
     assert.match(page, /const visibleRuns = useMemo/, "기록 held 줄을 접는 파생값이 없다");
     assert.match(page, /if \(run\.result !== "held"\) return true/,
       "held 외 결과(게시·실패)까지 접으면 채널별 결과를 못 본다");
-    assert.match(page, /\{visibleRuns\.map\(\(run\)/, "기록이 접힌 목록을 안 그린다");
+    assert.match(page, /const recentProcessRuns = visibleRuns\.filter/,
+      "최근 처리 목록이 held 중복을 접은 visibleRuns 에서 파생되지 않는다");
+    assert.match(page, /\{recentProcessRuns\.map\(\(run\)/, "기록이 접힌 목록을 안 그린다");
   });
 });
 
@@ -590,10 +640,10 @@ describe("순방이 아무것도 안 했으면 이유를 남긴다 (ruleIdleNote
     assert.equal(codeOf(obs({ metaWaiting: true })), "meta_waiting");
   });
 
-  it("갈 화면을 지목한다 — 채널 규칙은 배포 채널 화면에서 연다", () => {
-    // 다른 사유는 전부 화면을 말한다(회차 화면·편집기·배포 기록). 여기만 "채널 규칙을
-    // 바꾸세요" 라 사용자가 어디를 열어야 하는지 알 수 없었다.
-    assert.match(ruleIdleNote(obs({ channelBlocked: true }))!.detail, /배포 채널 화면/);
+  it("채널 판정 미달은 사용자가 실제로 해결할 수 있는 편집기로 안내한다", () => {
+    const detail = ruleIdleNote(obs({ channelBlocked: true }))!.detail;
+    assert.match(detail, /편집기/);
+    assert.doesNotMatch(detail, /배포 규칙|채널 규칙/);
   });
 
   it("분석 완료 회차가 전부 상한이면 상한 도달", () => {
@@ -1195,6 +1245,30 @@ describe("렌더 실패는 확정된다 (지킬 수 없는 약속을 멈춘다)"
       fail("retryable", "409 no master video or ffmpeg unavailable to render", 409, null), T0)!;
     assert.match(s.lastError, /no master video/);
     assert.equal(s.lastStatus, 409);
+  });
+});
+
+describe("자동배포 화면 책임 — 설정은 한곳에만 둔다", () => {
+  const automationPage = fs.readFileSync(
+    path.resolve(SRC, "../../web/src/app/(app)/automation/page.tsx"), "utf-8");
+  const channelsPage = fs.readFileSync(
+    path.resolve(SRC, "../../web/src/app/(app)/publish-channels/page.tsx"), "utf-8");
+
+  it("배포 채널 화면은 연결 관리만 하고 별도 설정 UI를 만들지 않는다", () => {
+    assert.doesNotMatch(channelsPage, /ChannelRuleDialog|fetchChannelRules|saveChannelRule|deleteChannelRule/);
+  });
+
+  it("자동배포는 별도 채널 설정에 의존하지 않고 실제 연결 계정을 읽는다", () => {
+    assert.doesNotMatch(automationPage, /fetchChannelRules|ChannelRule/);
+    for (const fetcher of [
+      "fetchYouTubeChannels",
+      "fetchNaverAccounts",
+      "fetchMetaAccounts",
+      "fetchInstagramAccounts",
+      "fetchTikTokAccounts",
+    ]) {
+      assert.match(automationPage, new RegExp(`${fetcher}\\(`), `${fetcher} 연결을 자동배포에서 읽지 않는다`);
+    }
   });
 });
 

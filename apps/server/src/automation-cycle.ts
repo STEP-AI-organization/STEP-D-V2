@@ -34,7 +34,9 @@ import {
   getChannelRule,
   hasRunNote,
   publishedTodayKst,
+  withTenantLock,
 } from "./db-pg.ts";
+import { currentTenantId } from "./tenant.ts";
 import {
   AUTO_RENDER_STOPPED_NOTE, CREDIT_IDLE_REASON, CREDIT_STOP_NOTE, DEFAULT_RULE_THUMBNAIL_MODE,
   LAST_CYCLE_KEY, TOP3_CAP,
@@ -88,6 +90,15 @@ export interface CycleReport {
 
 /** 현재 테넌트의 규칙을 한 바퀴 돈다. */
 export async function runAutomationCycle(): Promise<CycleReport> {
+  // 예약 순방과 사용자의 "지금 확인"/자동배포 시작이 같은 순간 들어오면 둘 다 배포 행이
+  // 생기기 전 상태를 읽고 같은 영상을 두 번 큐잉할 수 있다. 큐 dedupe 는 예약 잡끼리만 막고
+  // API 직접 실행은 막지 못하므로, 실제 평가 전체를 테넌트 단위로 직렬화한다. 뒤 실행은 앞
+  // 실행이 만든 distribution 을 본 뒤 hasAccountDistribution 에서 건너뛴다.
+  const tenantId = currentTenantId();
+  return withTenantLock(`automation-cycle:${tenantId}`, runAutomationCycleLocked);
+}
+
+async function runAutomationCycleLocked(): Promise<CycleReport> {
   // 순방 심박 — **이번 순방이 실제로 돌았다**는 시각을 남긴다(화면의 "마지막 확인 N분 전 ·
   // 다음 예정" 이 이걸 읽는다). rule_run 은 dedupe·유휴 하루한줄 가드 때문에 한 줄도 안 남는
   // 순방이 흔해서 로그 최신행으론 "언제 돌았나" 를 알 수 없다. 행동에는 영향이 없다(테넌트 KV

@@ -1,13 +1,11 @@
 "use client";
 
-import { PageActions } from "@/components/shell/page-actions";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { Youtube } from "lucide-react";
-import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import type {
   YouTubeChannelInfo, MetaAccountInfo, InstagramAccountInfo, TikTokAccountInfo, NaverAccount,
 } from "@/lib/data/api";
@@ -28,9 +26,7 @@ import {
   getTikTokAuthUrl,
   deleteTikTokAccount,
   disconnectTikTokAccount,
-  fetchChannelRules,
 } from "@/lib/data/api";
-import { ChannelRuleDialog } from "@/components/publish/channel-rule-dialog";
 import { NaverAccounts } from "@/components/publish/naver-accounts";
 import { ChannelAnalysis } from "@/components/channel-analysis";
 import {
@@ -78,79 +74,8 @@ const CHANNEL_INFO: Record<DistributionChannel, { desc: string; note?: string }>
   },
 };
 
-/**
- * 연결과 규칙은 다른 것이다 — 단 규칙이 없어도 서버가 기본 규칙을 합성해 배포는 된다
- * (index.ts eligibility). 규칙은 다듬는 도구라서, 상태를 계정 카드에서 바로 보여주고
- * 필요할 때 거기서 바로 만들게 한다.
- */
-function RuleControls({
-  platform,
-  accountId,
-  accountLabel,
-  ruled,
-  unknown,
-  onOpen,
-  prefix = "",
-}: {
-  platform: string;
-  accountId: string;
-  accountLabel: string;
-  ruled: boolean;
-  /** 규칙 목록을 못 읽은 상태 — "규칙 없음"으로 단정하지 않는다. */
-  unknown: boolean;
-  onOpen: (v: { platform: string; id: string; name: string }) => void;
-  /** 한 행에 규칙이 둘 이상일 때(예: FB Page + IG 계정) 구분용 접두어. */
-  prefix?: string;
-}) {
-  return (
-    <>
-      {unknown ? (
-        <span className="rounded-md border border-border px-2 py-1 text-[11px] text-muted-foreground">
-          {prefix}규칙 확인 실패
-        </span>
-      ) : ruled ? (
-        <span className="rounded-md border border-border px-2 py-1 text-[11px] text-muted-foreground">
-          {prefix}배포 규칙 있음
-        </span>
-      ) : (
-        // 규칙 없음은 경고가 아니다 — 서버가 기본 규칙으로 배포한다.
-        <span
-          className="rounded-md border border-border px-2 py-1 text-[11px] text-muted-foreground"
-          title="커스텀 규칙이 없으면 서버 기본 규칙으로 배포됩니다 — 필요하면 옆 버튼으로 만드세요"
-        >
-          {prefix}기본 규칙 사용 중
-        </span>
-      )}
-      <button
-        onClick={() => onOpen({ platform, id: accountId, name: accountLabel })}
-        className="rounded-md border border-border px-2 py-1 text-xs text-foreground transition hover:bg-accent/40"
-        title={`${platform} · ${accountId}`}
-      >
-        {prefix}배포 규칙
-      </button>
-    </>
-  );
-}
-
 export default function PublishChannelsPage() {
   const [channels, setChannels] = useState<YouTubeChannelInfo[]>([]);
-  // 커스텀 배포 규칙이 붙은 계정 — 없어도 서버가 기본 규칙을 합성해 배포는 된다.
-  // 키는 `${platform}:${accountId}` — YouTube 뿐 아니라 Meta·TikTok 도 같은 규칙 체계를 쓴다.
-  const [ruledKeys, setRuledKeys] = useState<Set<string>>(new Set());
-  const [rulesErr, setRulesErr] = useState<string | null>(null);
-  const [ruleFor, setRuleFor] = useState<{ platform: string; id: string; name: string } | null>(null);
-
-  const loadRules = useCallback(async () => {
-    try {
-      const rules = await fetchChannelRules();
-      setRuledKeys(new Set(rules.map((r) => `${r.platform}:${r.accountId}`)));
-      setRulesErr(null);
-    } catch (err) {
-      // 규칙을 못 읽어도 연결 목록은 보여야 한다. 단 "규칙 없음"이라고 단정하면 거짓말이다.
-      setRulesErr(err instanceof Error ? err.message : String(err));
-    }
-  }, []);
-  useEffect(() => { void loadRules(); }, [loadRules]);
   const [metaAccounts, setMetaAccounts] = useState<MetaAccountInfo[]>([]);
   const [igAccounts, setIgAccounts] = useState<InstagramAccountInfo[]>([]);
   const [tiktokAccounts, setTiktokAccounts] = useState<TikTokAccountInfo[]>([]);
@@ -321,17 +246,6 @@ export default function PublishChannelsPage() {
           {banner.text}
         </div>
       )}
-
-      {/* 규칙 목록 화면(/channels)은 사이드바에 없다 — 유일한 진입점이 여기다. */}
-      <PageActions>
-        {rulesErr && (
-          <span className="mr-auto text-[11px] text-status-warn">
-            배포 규칙 목록을 불러오지 못했습니다 ({rulesErr}) — 아래 규칙 배지는 확인 불가입니다.
-          </span>
-        )}
-        {/* 배포 규칙 목록 화면(/channels)은 제거됨 (2026-08-12 사용자 결정 — 규칙은 선택
-            사항이고, 필요한 규칙 편집은 각 채널 행의 "배포 규칙" 버튼으로 충분하다). */}
-      </PageActions>
 
       {/* 플랫폼 개요 그리드 — 모든 채널을 한눈에. YouTube·Meta(FB/IG)·TikTok 은 여기서 바로
           연결하고, 네이버는 절차가 달라(로그인 세션) 아래 전용 섹션으로 보낸다. */}
@@ -548,26 +462,6 @@ export default function PublishChannelsPage() {
                       {a.status === "active" ? "활성"
                         : a.status === "disconnected" ? "연동 끊김 — 재연결 필요" : a.status}
                     </StatusBadge>
-                    <RuleControls
-                      platform="facebook"
-                      accountId={a.pageId}
-                      accountLabel={a.pageName}
-                      ruled={ruledKeys.has(`facebook:${a.pageId}`)}
-                      unknown={rulesErr !== null}
-                      onOpen={setRuleFor}
-                      prefix="FB "
-                    />
-                    {a.igUserId && (
-                      <RuleControls
-                        platform="instagram"
-                        accountId={a.igUserId}
-                        accountLabel={a.igUsername ? `@${a.igUsername}` : a.pageName}
-                        ruled={ruledKeys.has(`instagram:${a.igUserId}`)}
-                        unknown={rulesErr !== null}
-                        onOpen={setRuleFor}
-                        prefix="IG "
-                      />
-                    )}
                     {a.status === "active" && (
                       <button
                         onClick={() => handleDisconnectMeta(a.publicId)}
@@ -666,14 +560,6 @@ export default function PublishChannelsPage() {
                       {a.status === "active" && expiringSoon && (
                         <StatusBadge tone="warn">토큰 만료 임박 — 재연결 권장</StatusBadge>
                       )}
-                      <RuleControls
-                        platform="instagram"
-                        accountId={a.igUserId}
-                        accountLabel={`@${a.username}`}
-                        ruled={ruledKeys.has(`instagram:${a.igUserId}`)}
-                        unknown={rulesErr !== null}
-                        onOpen={setRuleFor}
-                      />
                       {a.status === "active" && (
                         <button
                           onClick={() => handleDisconnectIg(a.publicId)}
@@ -770,14 +656,6 @@ export default function PublishChannelsPage() {
                       {a.status === "active" ? "활성"
                         : a.status === "disconnected" ? "연동 끊김 — 재연결 필요" : a.status}
                     </StatusBadge>
-                    <RuleControls
-                      platform="tiktok"
-                      accountId={a.openId}
-                      accountLabel={a.username ? `@${a.username}` : (a.displayName || a.openId)}
-                      ruled={ruledKeys.has(`tiktok:${a.openId}`)}
-                      unknown={rulesErr !== null}
-                      onOpen={setRuleFor}
-                    />
                     {a.status === "active" && (
                       <button
                         onClick={() => handleDisconnectTiktok(a.publicId)}
@@ -856,14 +734,6 @@ export default function PublishChannelsPage() {
                         : ch.status === "revoked" ? "재연결 필요"
                         : ch.status === "disconnected" ? "연동 끊김 — 재연결 필요" : "오류"}
                     </StatusBadge>
-                    <RuleControls
-                      platform="youtube"
-                      accountId={ch.channelId}
-                      accountLabel={ch.channelName}
-                      ruled={ruledKeys.has(`youtube:${ch.channelId}`)}
-                      unknown={rulesErr !== null}
-                      onOpen={setRuleFor}
-                    />
                     {ch.status === "active" && (
                       <button
                         onClick={() => handleDisconnect(ch.channelId)}
@@ -888,15 +758,6 @@ export default function PublishChannelsPage() {
         )}
       </section>
 
-      {ruleFor && (
-        <ChannelRuleDialog
-          platform={ruleFor.platform}
-          accountId={ruleFor.id}
-          accountLabel={ruleFor.name}
-          onClose={() => setRuleFor(null)}
-          onSaved={loadRules}
-        />
-      )}
     </div>
   );
 }

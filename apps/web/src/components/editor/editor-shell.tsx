@@ -207,7 +207,7 @@ export function EditorShell({ clipId }: { clipId: string }) {
   // `channel ?? clip.targetChannel` 라 **빈 문자열은 폴백을 타지 않는다**). api.ts 가 이미
   // `channel: channel ?? ""` 로 보내므로, 인자를 빼는 것만으로 프리셋이 완전히 꺼진다.
   // 따라서 배포처 길이 상한(Shorts 60초 등)에 맞춘 **자동 잘라내기도 더 이상 없다** —
-  // 자른 구간이 그대로 나간다. 채널 길이 조건은 배포 단계(자동배포 채널 규칙)가 본다.
+  // 자른 구간이 그대로 나간다. 채널 길이 조건은 게시 직전 서버 안전 판정이 확인한다.
 
   // AI output is always vertical, but that must not overwrite the operator's Basic layout.
   // The server independently enforces 9:16 for ai_multi; this effective state keeps preview
@@ -860,7 +860,7 @@ export function EditorShell({ clipId }: { clipId: string }) {
           진행 상황은 목록의 "렌더 중"(status=encoding) 배지로 본다. */}
 
       {/* 길이 상한 배너는 프리셋과 함께 없앴다 — 이제 자른 구간이 그대로 나가므로 잘릴 일이
-          없다. 채널별 길이 조건은 배포 단계(자동배포 채널 규칙)가 본다. */}
+          없다. 채널별 길이 조건은 게시 직전 서버 안전 판정이 확인한다. */}
 
       {/* body — AENA식 3열 리사이즈(react-resizable-panels). 좌/우는 드래그로 폭을 조절하고,
           접기 토글(아이콘 바)은 그대로 유지한다. 접힌 패널은 Group 밖 고정폭 바로 렌더한다.

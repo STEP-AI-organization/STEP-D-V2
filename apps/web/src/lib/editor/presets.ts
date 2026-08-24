@@ -477,7 +477,7 @@ export interface EditorState {
   highlightColor: string;
   /** Colour for keyword (content-word) emphasis in captions. Absent = same as highlightColor. */
   keywordColor?: string;
-  /** 자막 세로 위치(% · 화면 하단 기준). 미지정이면 렌더/미리보기 기본 26. 자동배포 규칙이 세팅. */
+  /** 자막 세로 위치(% · 화면 하단 기준). 미지정이면 렌더/미리보기 기본 26. 자동배포 설정이 세팅. */
   captionY?: number;
   /** 자막 글자 크기(% · 화면 높이 기준). 미지정이면 captionStyle 기본(CAPTION_PCT). */
   captionSize?: number;

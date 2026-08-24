@@ -37,10 +37,12 @@ import { useSession } from "@/lib/auth";
 import {
   deleteAutomationRule,
   fetchAutomation,
-  fetchChannelRules,
+  fetchInstagramAccounts,
+  fetchMetaAccounts,
   getStreamUrl,
   fetchNaverAccounts,
   fetchShortsTemplates,
+  fetchTikTokAccounts,
   fetchYouTubeChannels,
   type FrameTemplate,
   releaseAutomationHold,
@@ -50,11 +52,13 @@ import {
   setAutomationNotifyEmail,
   setAutomationPaused,
   type AutomationRule,
-  type ChannelRule,
+  type InstagramAccountInfo,
+  type MetaAccountInfo,
   type RuleCriterion,
   type RuleHold,
   type RuleMediaKind,
   type RuleRun,
+  type TikTokAccountInfo,
 } from "@/lib/data/api";
 import { useAppData } from "@/lib/data/store";
 import { channelLabel, PIPELINE_STAGES } from "@/lib/constants";
@@ -322,45 +326,62 @@ export default function AutomationPage() {
     }));
   }, [effectiveTemplate]);
 
-  // ── ③ 채널 선택지 — 구 규칙 폼의 channelOptions 로직 그대로 ───────────────────────
-  // 계정 ID 를 자유 입력으로 두면 오타 하나로 규칙이 영원히 아무것도 안 한다(확인이
-  // 채널 규칙을 못 찾으면 skipped 로만 남는다). 실재하는 연결/규칙에서만 고르게 한다.
-  const [channelRules, setChannelRules] = useState<ChannelRule[] | null>(null);
-  const [rulesErr, setRulesErr] = useState<string | null>(null);
+  // ── ③ 채널 선택지 — 실제 연결 계정을 직접 읽는다. ───────────────────────────────
+  // 사용자가 만지는 설정은 이 화면 한곳에만 둔다. 채널 화면은 OAuth·세션 연결만 담당한다.
+  const [channelLoadFailed, setChannelLoadFailed] = useState(false);
+  const [ytChannels, setYtChannels] = useState<{ channelId: string; channelName: string; status: string }[]>([]);
+  const [naverAccts, setNaverAccts] = useState<{ id: string; label: string; target: string; hasSession: boolean }[]>([]);
+  const [metaAccts, setMetaAccts] = useState<MetaAccountInfo[]>([]);
+  const [igAccts, setIgAccts] = useState<InstagramAccountInfo[]>([]);
+  const [tiktokAccts, setTiktokAccts] = useState<TikTokAccountInfo[]>([]);
+
   useEffect(() => {
     let alive = true;
-    void fetchChannelRules()
-      .then((rs) => { if (alive) { setChannelRules(rs); setRulesErr(null); } })
-      .catch((err) => {
-        if (!alive) return;
-        setChannelRules([]);
-        setRulesErr(err instanceof Error ? err.message : String(err));
-      });
+    void (async () => {
+      const [youtube, naver, meta, instagram, tiktok] = await Promise.allSettled([
+        fetchYouTubeChannels(),
+        fetchNaverAccounts(),
+        fetchMetaAccounts(),
+        fetchInstagramAccounts(),
+        fetchTikTokAccounts(),
+      ]);
+      if (!alive) return;
+
+      setYtChannels(youtube.status === "fulfilled"
+        ? youtube.value.filter((channel) => channel.status === "active")
+        : []);
+      setNaverAccts(naver.status === "fulfilled"
+        ? naver.value.accounts.filter((account) =>
+          account.status !== "disabled" && account.hasSession && account.target !== "tv")
+        : []);
+      setMetaAccts(meta.status === "fulfilled"
+        ? meta.value.filter((account) => account.status === "active")
+        : []);
+      setIgAccts(instagram.status === "fulfilled"
+        ? instagram.value.filter((account) =>
+          account.status === "active"
+          && !(account.expiresAt && Number(account.expiresAt) < Date.now()))
+        : []);
+      setTiktokAccts(tiktok.status === "fulfilled"
+        ? tiktok.value.filter((account) => account.status === "active")
+        : []);
+      setChannelLoadFailed([youtube, naver, meta, instagram, tiktok]
+        .some((result) => result.status === "rejected"));
+    })();
     return () => { alive = false; };
   }, []);
 
-  // 배포 규칙이 없어도 배포는 가능해야 한다 — YouTube 는 연결된 게시 가능 채널을 직접 불러온다.
-  const [ytChannels, setYtChannels] = useState<{ channelId: string; channelName: string; status: string }[]>([]);
-  useEffect(() => {
-    void fetchYouTubeChannels()
-      .then((cs) => setYtChannels(cs.filter((c) => c.status === "active")))
-      .catch(() => setYtChannels([]));
-  }, []);
-
-  const [naverAccts, setNaverAccts] = useState<{ id: string; label: string; target: string; hasSession: boolean }[]>([]);
-  useEffect(() => {
-    void fetchNaverAccounts()
-      .then((r) => setNaverAccts(r.accounts.filter((a) => a.status !== "disabled" && a.hasSession && a.target !== "tv")))
-      .catch(() => setNaverAccts([]));
-  }, []);
-
-  // 채널 선택지 = YouTube 연결 채널 + 세션 등록된 네이버 계정(클립만) + (기타 플랫폼) 채널 규칙.
+  // 채널 선택지 = 연결된 계정 자체. 다른 화면에서 추가 설정을 만들 필요가 없다.
   const channelOptions: { platform: string; accountId: string; label: string }[] = useMemo(() => [
     ...ytChannels.map((c) => ({ platform: "youtube", accountId: c.channelId, label: `YouTube · ${c.channelName}` })),
     ...naverAccts.map((a) => ({ platform: "naverclip", accountId: a.id, label: `네이버 클립 · ${a.label}` })),
-    ...(channelRules ?? []).filter((r) => r.platform !== "youtube" && !r.platform.startsWith("naver"))
-      .map((r) => ({ platform: r.platform, accountId: r.accountId, label: `${r.platform} · ${r.label}` })),
-  ], [ytChannels, naverAccts, channelRules]);
+    ...metaAccts.map((a) => ({ platform: "facebook", accountId: a.pageId, label: `Facebook · ${a.pageName}` })),
+    ...igAccts.map((a) => ({ platform: "instagram", accountId: a.igUserId, label: `Instagram · @${a.username}` })),
+    ...tiktokAccts.map((a) => ({
+      platform: "tiktok", accountId: a.openId,
+      label: `TikTok · ${a.username ? `@${a.username}` : a.displayName}`,
+    })),
+  ], [ytChannels, naverAccts, metaAccts, igAccts, tiktokAccts]);
 
   /**
    * 게이트가 **명시적으로 꺼진** 채널인가. "platform:accountId" 키 우선, 플랫폼 키 폴백.
@@ -377,6 +398,24 @@ export default function AutomationPage() {
     () => rules.find((r) => programsOf(r).includes(selProgram)),
     [rules, selProgram],
   );
+
+  // 채널은 자동배포 하나만 소유한다. 현재 수정 중인 규칙의 채널은 그대로 선택할 수 있고,
+  // 다른 규칙이 쓰는 채널만 잠근다. 서버도 같은 불변식을 409로 다시 검사한다.
+  const channelOwners = useMemo(() => {
+    const owners = new Map<string, { ruleId: string; programTitle: string }>();
+    for (const rule of rules) {
+      const programId = programsOf(rule)[0];
+      const programTitle = programs.find((program) => program.id === programId)?.title ?? programId;
+      for (const channel of channelsOf(rule)) {
+        owners.set(`${channel.platform}:${channel.accountId}`, { ruleId: rule.id, programTitle });
+      }
+    }
+    return owners;
+  }, [rules, programs]);
+  const channelOwnerOtherThanCurrent = useCallback((key: string) => {
+    const owner = channelOwners.get(key);
+    return owner && owner.ruleId !== ruleForProgram?.id ? owner : null;
+  }, [channelOwners, ruleForProgram?.id]);
 
   // 프로그램을 고르면 기존 규칙 값으로 ②~④를 프리필한다 — 프로그램당 1회만(폴링이
   // rules 를 갈아끼워도 사용자가 만지던 선택을 덮지 않는다).
@@ -409,6 +448,8 @@ export default function AutomationPage() {
         subtitleY: r.layout.subtitleY ?? SUBTITLE_DEFAULTS.y,
         subtitleSize: r.layout.subtitleSize ?? SUBTITLE_DEFAULTS.size,
         subtitleColor: r.layout.subtitleColor ?? SUBTITLE_DEFAULTS.color,
+        // 요소 표시 플래그 — 미지정(구 규칙)은 표시. 저장값 그대로 라운드트립.
+        title: r.layout.title, logo: r.layout.logo, timebox: r.layout.timebox,
       });
     }
   }, [selProgram, rules, loading]);
@@ -423,15 +464,12 @@ export default function AutomationPage() {
   const creditOut = typeof credit === "number" && credit <= 0;
 
   // 상태 3종 — 일시정지 > 꺼짐(활성 규칙 없음) > 켜짐. 크레딧 소진은 "켜짐이지만 멈춤" 강조.
-  const statusDot = paused
-    ? "var(--sd-idle)"
-    : running ? (creditOut ? "var(--sd-warn)" : "var(--sd-ok)") : "var(--sd-idle)";
   const statusLabel = loading
     ? "불러오는 중…"
     : paused
       ? "일시정지됨 — 자동 확인을 멈췄습니다"
       : !hasEnabledRules
-        ? "꺼짐 — 활성 규칙이 없습니다 (아래 ①~④로 시작)"
+        ? "꺼짐 — 저장된 자동배포 설정이 없습니다"
         : creditOut
           ? "켜짐이지만 멈춤 — 크레딧 소진"
           : "자동 배포 켜짐";
@@ -448,8 +486,6 @@ export default function AutomationPage() {
 
   // 지금 진행 중 — 프로그램 선택과 무관한 전체 집계. 렌더 대기 = 자동 생성됐지만 아직 렌더 전
   // 클립(automationRuleId 는 서버가 채택 시 저장 · 타입엔 없어 캐스트). 확정 대기 = 보류 건수.
-        // 요소 표시 플래그 — 미지정(구 규칙)은 표시. 저장값 그대로 라운드트립.
-        title: r.layout.title, logo: r.layout.logo, timebox: r.layout.timebox,
   const inflightRender = clips.filter(
     (c) => (c as { automationRuleId?: string }).automationRuleId && !c.rendered,
   ).length;
@@ -483,7 +519,16 @@ export default function AutomationPage() {
   // 남긴다. 나머지 결과(게시·실패)는 그대로 둔다 — 그건 채널별로 봐야 하는 정보다.
   const visibleRuns = useMemo(() => {
     const seenHeld = new Set<string>();
+    // 과거에 예약 순방과 "지금 확인"이 겹쳐 남은 동일 로그는 한 줄로 접는다. 서버는 이제
+    // 테넌트 잠금으로 새 중복을 원천 차단하지만, 이미 쌓인 기록까지 화면에 두 줄로 보일
+    // 이유는 없다. 같은 영상·채널·결과·문구가 30초 안에 반복된 경우만 중복으로 본다.
+    const seenExact = new Map<string, number>();
     return runs.filter((run) => {
+      const exactKey = `${run.clipId ?? ""}:${run.accountKey ?? ""}:${run.result}:${run.detail}`;
+      const at = new Date(run.at).getTime();
+      const previous = seenExact.get(exactKey);
+      if (Number.isFinite(at) && previous != null && Math.abs(previous - at) <= 30_000) return false;
+      if (Number.isFinite(at)) seenExact.set(exactKey, at);
       if (run.result !== "held") return true;
       // clipId 없는 held(규칙 단위 로그)는 접을 근거가 없다 — id 로 각자 남긴다.
       const key = run.clipId ?? `run:${run.id}`;
@@ -493,10 +538,64 @@ export default function AutomationPage() {
     });
   }, [runs]);
 
+  // "업로드 시작" 로그와 실제 완료를 섞지 않는다. published 로그 뒤에 해당 채널의
+  // distribution.status=published 까지 확인된 것만 완료 영상으로 따로 보낸다.
+  const completedRunIds = useMemo(() => {
+    const ids = new Set<number>();
+    for (const run of visibleRuns) {
+      if (run.result !== "published" || !run.accountKey) continue;
+      const clip = clips.find((item) => item.id === run.clipId);
+      const split = run.accountKey.indexOf(":");
+      const platform = split >= 0 ? run.accountKey.slice(0, split) : run.accountKey;
+      const accountId = split >= 0 ? run.accountKey.slice(split + 1) : "";
+      const distributions = (clip?.distributions ?? []).filter((distribution) => distribution.channel === platform);
+      const exact = distributions.find((distribution) => {
+        const record = distribution as unknown as Record<string, unknown>;
+        const id = record.youtubeChannelId ?? record.naverAccountId ?? record.tiktokOpenId
+          ?? record.igUserId ?? record.metaPageId;
+        return id != null && String(id) === accountId;
+      });
+      if ((exact ?? distributions[0])?.status === "published") ids.add(run.id);
+    }
+    return ids;
+  }, [visibleRuns, clips]);
+  const completedRuns = visibleRuns.filter((run) => completedRunIds.has(run.id));
+  const recentProcessRuns = visibleRuns.filter((run) => !completedRunIds.has(run.id));
+
   // 실업로드 채널이 규칙에 있는데 게이트가 꺼져 있으면 — "실행 중"이 착시가 된다.
   const gateBlocked = rules.some(
     (r) => r.enabled && channelsOf(r).some((c) => isUploadPlatform(c.platform) && gateOff(c.platform, c.accountId)),
   );
+
+  const latestRun = visibleRuns[0] ?? null;
+  const latestRunClip = latestRun ? clips.find((clip) => clip.id === latestRun.clipId) : undefined;
+  const latestRunRule = latestRun ? rules.find((rule) => rule.id === latestRun.ruleId) : undefined;
+  const latestRunProgramId = latestRunRule ? programsOf(latestRunRule)[0] : null;
+  const latestRunProgram = latestRunProgramId
+    ? programs.find((program) => program.id === latestRunProgramId)?.title ?? latestRunProgramId
+    : null;
+  const cycleDelayed = Boolean(
+    running && lastCycleIso && cycleEveryMs && cycleEveryMs > 0
+    && nowTs - new Date(lastCycleIso).getTime() > Math.max(cycleEveryMs * 2.5, 30 * 60 * 1000),
+  );
+  const health = error
+    ? { label: "상태 확인 실패", color: "var(--sd-danger-strong)", detail: "서버 상태를 다시 불러와 주세요" }
+    : paused
+      ? { label: "일시정지", color: "var(--sd-idle)", detail: "자동 확인을 멈춘 상태입니다" }
+      : !hasEnabledRules
+        ? { label: "설정 필요", color: "var(--sd-idle)", detail: "자동배포를 만들면 확인을 시작합니다" }
+        : creditOut
+          ? { label: "확인 필요", color: "var(--sd-warn)", detail: "크레딧이 없어 처리가 멈췄습니다" }
+          : cycleDelayed
+            ? { label: "확인 지연", color: "var(--sd-warn)", detail: "예정 시간보다 자동 확인이 늦습니다" }
+            : gateBlocked
+              ? { label: "기록만 진행", color: "var(--sd-warn)", detail: "실제 업로드가 꺼진 채널이 있습니다" }
+              : { label: "정상 확인 중", color: "var(--sd-ok)", detail: "자동배포가 주기적으로 새 영상을 확인합니다" };
+  const currentWork = inflightRender > 0
+    ? `영상 ${inflightRender}건을 렌더하고 있습니다`
+    : heldCount > 0
+      ? `영상 ${heldCount}건이 승인을 기다립니다`
+      : idleReason || "새 영상과 배포 시간을 기다리고 있습니다";
 
   // 오늘 게시 합산 — publishedToday 를 내려주는 서버에서만 계산한다(없으면 줄 숨김).
   const hasToday = rules.some((r) => r.publishedToday);
@@ -531,7 +630,7 @@ export default function AutomationPage() {
         title: "확인했습니다",
         description:
           r.idleReason ||
-          `규칙 ${r.rulesEvaluated}개 · 미디어 ${r.adopted} · 게시 ${r.published} · 승인 대기 ${r.held}`,
+          `자동배포 ${r.rulesEvaluated}개 확인 · 미디어 ${r.adopted} · 게시 ${r.published} · 승인 대기 ${r.held}`,
         tone: r.held > 0 ? "warn" : "done",
       });
       await load();
@@ -545,6 +644,16 @@ export default function AutomationPage() {
   /** ④ 자동 배포 시작 — 규칙 upsert(기존 규칙이 있으면 갱신) + 즉시 1회 확인. */
   async function startAutoDeploy() {
     if (starting || !selProgram || selChannels.length === 0) return;
+    const occupied = selChannels.map((key) => ({ key, owner: channelOwnerOtherThanCurrent(key) }))
+      .find((entry) => entry.owner);
+    if (occupied?.owner) {
+      toast({
+        title: "이미 자동배포 중인 채널입니다",
+        description: `${occupied.owner.programTitle} 자동배포에서 먼저 채널을 빼 주세요.`,
+        tone: "error",
+      });
+      return;
+    }
     setStarting(true);
     try {
       const chans = selChannels
@@ -597,7 +706,7 @@ export default function AutomationPage() {
         title: "자동 배포를 시작했습니다",
         description:
           r.idleReason ||
-          `규칙 ${r.rulesEvaluated}개 확인 · 미디어 ${r.adopted} · 게시 ${r.published} · 승인 대기 ${r.held} — 이후 10분마다 자동 확인합니다.`,
+          `자동배포 ${r.rulesEvaluated}개 확인 · 미디어 ${r.adopted} · 게시 ${r.published} · 승인 대기 ${r.held} — 이후 10분마다 자동 확인합니다.`,
         tone: r.held > 0 ? "warn" : "done",
       });
       await load();
@@ -637,7 +746,7 @@ export default function AutomationPage() {
       subtitleColor: SUBTITLE_DEFAULTS.color,
     });
     setShowAdvanced(false);
-    toast({ title: "입력값을 초기화했습니다", description: "저장된 자동배포 규칙은 변경하지 않았습니다.", tone: "done" });
+    toast({ title: "입력값을 초기화했습니다", description: "이미 저장된 자동배포 설정은 변경하지 않았습니다.", tone: "done" });
   }
 
   /** 영상 하나 승인 — 그 영상에 걸린 보류를 **전부** 푼다(규칙이 둘이면 둘 다). 하나라도
@@ -654,7 +763,7 @@ export default function AutomationPage() {
       const first = results.find((r) => r.status === "fulfilled") as
         | PromiseFulfilledResult<{ notice?: string }> | undefined;
       toast({
-        title: failed ? `승인했습니다 — 규칙 ${failed}개는 실패` : "승인했습니다",
+        title: failed ? `승인했습니다 — 연결 ${failed}개는 실패` : "승인했습니다",
         description: first?.value?.notice ?? "다음 확인 때 게시됩니다.",
         tone: failed ? "warn" : "done",
       });
@@ -670,7 +779,7 @@ export default function AutomationPage() {
    *  규칙으로는 재선정도 게시도 안 된다. 되돌리기 어려우니 확인을 받는다. */
   async function reject(entry: { clipId: string; holds: RuleHold[] }) {
     if (releasing || rejecting) return;
-    if (!window.confirm("이 영상을 거부하면 이 규칙으로는 다시 나가지 않습니다. 거부할까요?")) return;
+    if (!window.confirm("이 영상을 거부하면 이 자동배포에서는 다시 나가지 않습니다. 거부할까요?")) return;
     setRejecting(entry.clipId);
     try {
       const results = await Promise.allSettled(
@@ -679,8 +788,8 @@ export default function AutomationPage() {
       const failed = results.filter((r) => r.status === "rejected").length;
       if (failed === results.length) throw (results[0] as PromiseRejectedResult).reason;
       toast({
-        title: failed ? `거부했습니다 — 규칙 ${failed}개는 실패` : "거부했습니다",
-        description: "이 영상은 이 규칙으로 나가지 않습니다.",
+        title: failed ? `거부했습니다 — 연결 ${failed}개는 실패` : "거부했습니다",
+        description: "이 영상은 현재 자동배포에서 제외됩니다.",
         tone: failed ? "warn" : "done",
       });
       await load();
@@ -808,28 +917,26 @@ export default function AutomationPage() {
           className="rounded-[4px] px-3 py-2.5 text-[12px] font-medium leading-relaxed"
           style={{ border: "1px solid var(--sd-warn-border)", background: "var(--sd-warn-bg)", color: "var(--sd-warn)" }}
         >
-          ⚠ 지금은 실제 업로드가 꺼져 있습니다 — 규칙이 돌아도 기록만 남고 채널에는
+          ⚠ 지금은 실제 업로드가 꺼져 있습니다 — 자동배포가 실행돼도 기록만 남고 채널에는
           올라가지 않습니다. (권리 확인의 승인 대기와는 별개인 운영 설정입니다.)
         </div>
       )}
 
-      {/* ── 상태 헤더 — "지금 돌고 있나 · 언제 돌았나 · 왜 안 나가나 · 지금 뭐 하나" ── */}
-      <div className="sd-card flex flex-col gap-2 px-3 py-2.5">
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+      {/* Main.dc.html 처럼 상태·최근 처리·다음 확인을 가벼운 칸으로 분리한다. 긴 기록까지
+          내려가지 않아도 지금 정상인지, 방금 무엇을 했는지, 현재 무엇을 기다리는지 보인다. */}
+      <section className="sd-card overflow-hidden">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3">
           <span
             className="size-[10px] shrink-0 rounded-full"
-            style={{ background: statusDot }}
+            style={{ background: health.color }}
             aria-hidden
           />
           <span className="text-[14px] font-semibold" style={{ color: "var(--sd-fg)" }}>
-            {statusLabel}
+            {health.label}
           </span>
-          {/* 마지막·다음 순방 — 순방 심박(lastCycleAt) 기준 상대 시각. 없으면 최근 기록 폴백. */}
           <span className="text-[11px]" style={{ color: "var(--sd-mut)" }}>
-            {lastRel ? `마지막 확인 ${lastRel}` : "아직 확인 기록 없음"}
-            {running && nextRel ? <> · 다음 예정 <span style={{ color: "var(--sd-fg-dim)" }}>{nextRel}</span></> : null}
+            {health.detail}
           </span>
-          {/* 오늘 합산 — publishedToday 를 내려주는 서버에서만 보인다(구버전은 숨김). */}
           {hasToday && (
             <span className="text-[11px] font-medium" style={{ color: "var(--sd-fg)" }}>
               오늘 게시 {todayPublished}건 / 한도 {todayQuota}건
@@ -843,38 +950,54 @@ export default function AutomationPage() {
           </button>
         </div>
 
-        {/* 왜 안 나가는지 — 이 화면 최대 혼란 지점. 서버 idleReason(규칙 없음·크레딧 0·활동
-            시간 밖·할당량 완료·보류 대기)을 눈에 띄게 못박는다(문단 인라인 대신 배너로 승격). */}
-        {!loading && idleReason && (
-          <div
-            className="flex items-start gap-1.5 rounded-[4px] px-2.5 py-1.5 text-[11.5px] font-medium leading-relaxed"
-            style={{ border: "1px solid var(--sd-warn-border)", background: "var(--sd-warn-bg)", color: "var(--sd-warn)" }}
-          >
-            <span aria-hidden>⏸</span>
-            <span>지금 내보내지 않는 이유 — {idleReason}</span>
+        <div className="grid border-t sm:grid-cols-3" style={{ borderColor: "var(--sd-border)" }}>
+          <div className="p-3.5 sm:border-r" style={{ borderColor: "var(--sd-border)", background: "var(--sd-card-sub)" }}>
+            <div className="text-[10.5px] font-semibold" style={{ color: "var(--sd-label)" }}>지금 하는 일</div>
+            <div className="mt-1 text-[12px] font-medium leading-relaxed" style={{ color: "var(--sd-fg)" }}>
+              {currentWork}
+            </div>
           </div>
-        )}
-
-        {/* 지금 진행 중 — 프로그램 선택과 무관한 전체 집계 + 조치 딥링크. */}
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11.5px]" style={{ color: "var(--sd-mut)" }}>
-          <span className="font-semibold" style={{ color: "var(--sd-label)" }}>지금 진행 중</span>
-          <Link href="/clips" className="underline-offset-2 hover:underline">
-            렌더 대기 <b style={{ color: inflightRender ? "var(--sd-fg)" : "var(--sd-mut)" }}>{inflightRender}</b>건
-          </Link>
-          <a href="#holds" className="underline-offset-2 hover:underline">
-            확정 대기(보류) <b style={{ color: heldCount ? "var(--sd-warn)" : "var(--sd-mut)" }}>{heldCount}</b>건
-            {heldCount > 0 ? " — 승인해야 나갑니다" : ""}
-          </a>
+          <div className="border-t p-3.5 sm:border-r sm:border-t-0" style={{ borderColor: "var(--sd-border)" }}>
+            <div className="flex items-center justify-between gap-2 text-[10.5px] font-semibold" style={{ color: "var(--sd-label)" }}>
+              <span>최근 처리</span>
+              <a href="#activity" className="font-normal underline-offset-2 hover:underline">전체 보기</a>
+            </div>
+            {latestRun ? (
+              <>
+                <div className="mt-1 truncate text-[12px] font-medium" style={{ color: "var(--sd-fg)" }}>
+                  {latestRunClip?.title || latestRunProgram || "자동배포 확인"}
+                </div>
+                <div className="mt-0.5 line-clamp-2 text-[10.5px] leading-relaxed" style={{ color: "var(--sd-mut)" }}>
+                  {RESULT_LABEL[latestRun.result] ?? latestRun.result}
+                  {latestRun.detail ? ` · ${latestRun.detail}` : ""}
+                  {relTime(latestRun.at, nowTs) ? ` · ${relTime(latestRun.at, nowTs)}` : ""}
+                </div>
+              </>
+            ) : (
+              <div className="mt-1 text-[11px]" style={{ color: "var(--sd-mut)" }}>아직 처리 기록이 없습니다</div>
+            )}
+          </div>
+          <div className="border-t p-3.5 sm:border-t-0" style={{ borderColor: "var(--sd-border)", background: "var(--sd-card-sub)" }}>
+            <div className="text-[10.5px] font-semibold" style={{ color: "var(--sd-label)" }}>자동 확인</div>
+            <div className="mt-1 text-[12px] font-medium" style={{ color: "var(--sd-fg)" }}>
+              {lastRel ? `마지막 ${lastRel}` : "아직 확인 기록 없음"}
+            </div>
+            <div className="mt-0.5 text-[10.5px]" style={{ color: "var(--sd-mut)" }}>
+              {running && nextRel ? `다음 확인 ${nextRel}` : paused ? "재시작하면 다시 확인합니다" : "자동 확인 대기 중"}
+            </div>
+          </div>
         </div>
 
-        {/* 실행 모델을 한 줄로 못박는다 — "어떻게 돌리는지" 가 가장 자주 막히는 지점이다. */}
-        <p className="text-[11px] leading-relaxed" style={{ color: "var(--sd-mut)" }}>
-          프로그램을 고르고 채널을 연결해 <b style={{ color: "var(--sd-fg)" }}>자동 배포 시작</b>을 누르면,
-          <b style={{ color: "var(--sd-fg)" }}> 10분마다 자동 확인</b>해 분석 → 클립 자동 선정 → 렌더 → 배포까지
-          이어집니다. 이미 분석이 끝난 회차는 분석을 생략합니다. 결과는 아래{" "}
-          <b style={{ color: "var(--sd-fg)" }}>기록</b>에 쌓입니다.
-        </p>
-      </div>
+        <div className="flex flex-wrap gap-x-4 gap-y-1 border-t px-4 py-2.5 text-[11px]" style={{ borderColor: "var(--sd-border)", color: "var(--sd-mut)" }}>
+          <Link href="/clips" className="underline-offset-2 hover:underline">
+            렌더 중 <b style={{ color: inflightRender ? "var(--sd-fg)" : "var(--sd-mut)" }}>{inflightRender}</b>건
+          </Link>
+          <a href="#holds" className="underline-offset-2 hover:underline">
+            승인 대기 <b style={{ color: heldCount ? "var(--sd-warn)" : "var(--sd-mut)" }}>{heldCount}</b>건
+          </a>
+          {!loading && idleReason && <span>현재 판단 · {idleReason}</span>}
+        </div>
+      </section>
 
       {error && (
         <div
@@ -909,7 +1032,7 @@ export default function AutomationPage() {
             </select>
             {ruleForProgram && (
               <p className="mt-1.5 text-[11px]" style={{ color: "var(--sd-mut)" }}>
-                이미 자동배포 규칙이 있습니다. 아래에서 수정한 뒤 시작하면 기존 규칙이 갱신됩니다.
+                저장된 자동배포 설정이 있습니다. 아래에서 수정한 뒤 시작하면 기존 설정이 갱신됩니다.
               </p>
             )}
           </div>
@@ -983,11 +1106,14 @@ export default function AutomationPage() {
           )}
           {channelOptions.map((o) => {
             const key = `${o.platform}:${o.accountId}`;
+            const occupied = channelOwnerOtherThanCurrent(key);
             return (
-              <label key={key} className="flex flex-wrap items-center gap-1.5 text-[11.5px]" style={{ color: "var(--sd-fg)" }}>
-                <input type="checkbox" checked={selChannels.includes(key)}
+              <label key={key} className="flex flex-wrap items-center gap-1.5 text-[11.5px]"
+                style={{ color: occupied ? "var(--sd-mut)" : "var(--sd-fg)", opacity: occupied ? 0.72 : 1 }}>
+                <input type="checkbox" checked={selChannels.includes(key)} disabled={Boolean(occupied)}
                   onChange={() => setSelChannels(toggle(selChannels, key))} />
                 <span className="truncate">{o.label}</span>
+                {occupied && <span className="sd-tag sd-tag--ended">{occupied.programTitle} 자동배포에서 사용 중</span>}
                 {/* 게이트 OFF = 실업로드 잠금(운영 설정). 명시적 false 일 때만 — 모름은 침묵. */}
                 {isUploadPlatform(o.platform) && gateOff(o.platform, o.accountId) && (
                   <span className="sd-tag sd-tag--warn">실제 업로드 꺼짐 — 기록만 됨</span>
@@ -997,8 +1123,10 @@ export default function AutomationPage() {
             );
           })}
         </div>
-        {rulesErr && (
-          <p className="text-[10.5px]" style={{ color: "var(--sd-warn)" }}>채널 규칙 목록을 못 읽었습니다 ({rulesErr}) — 연결 채널만 표시.</p>
+        {channelLoadFailed && (
+          <p className="text-[10.5px]" style={{ color: "var(--sd-warn)" }}>
+            일부 연결 계정을 불러오지 못했습니다 — 배포 채널 화면에서 연결 상태를 확인해 주세요.
+          </p>
         )}
         {/* ⚑ 채널별 안내 — 만들 때 성격을 말한다 (F6). 실업로드 = YouTube·네이버. */}
         <p
@@ -1015,7 +1143,7 @@ export default function AutomationPage() {
           <h4 className="text-[12.5px] font-semibold" style={{ color: "var(--sd-fg)" }}>배포 계획</h4>
           {ruleForProgram && (
             <span className="text-[11px]" style={{ color: "var(--sd-mut)" }}>
-              이 프로그램의 규칙이 이미 있습니다 — 시작하면 <b>갱신</b>됩니다
+              이 프로그램의 자동배포 설정이 이미 있습니다 — 시작하면 <b>갱신</b>됩니다
             </span>
           )}
         </div>
@@ -1269,6 +1397,7 @@ export default function AutomationPage() {
                       layout={layout}
                       frameSrc={sampleFrameSrc}
                       subtitlesOn={subtitles}
+                      timeboxText={programs.find((p) => p.id === selProgram)?.schedule}
                     />
                   </button>
                   <span className="text-center text-[10px]" style={{ color: "var(--sd-mut)" }}>
@@ -1315,7 +1444,7 @@ export default function AutomationPage() {
               <div className="mt-1 text-[11.5px] leading-relaxed" style={{ color: "var(--sd-fg)" }}>
                 {progress.rule
                   ? `자동 생성 클립 ${progress.createdCount}건`
-                  : "규칙 없음 — 자동 배포 시작을 누르면 만들어집니다"}
+                  : "설정 없음 — 자동배포 시작을 누르면 만들어집니다"}
               </div>
             </div>
             {/* 3) 렌더 — 클립 rendered */}
@@ -1351,7 +1480,6 @@ export default function AutomationPage() {
             onClick={() => void startAutoDeploy()}
           >
             {starting ? "시작 중…" : "▶ 자동배포 시작"}
-                      timeboxText={programs.find((p) => p.id === selProgram)?.schedule}
           </button>
           <button type="button" className="sd-btn min-h-10 px-5 text-[12.5px] font-semibold" onClick={resetWizard}>
             ↺ 입력 초기화
@@ -1443,9 +1571,9 @@ export default function AutomationPage() {
                     </div>
                     <div className="sd-mono text-[10.5px]" style={{ color: "var(--sd-mut)" }}>
                       {clip ? `${Math.round(clip.durationSec)}초 · ` : ""}
-                      {ruleProgram?.title ? `규칙 ${ruleProgram.title} · ` : ""}
+                      {ruleProgram?.title ? `자동배포 ${ruleProgram.title} · ` : ""}
                       {/* 규칙이 둘 이상 걸린 영상은 그 사실만 짧게 — 승인은 어차피 한 번에 다 푼다. */}
-                      {entry.holds.length > 1 ? `규칙 ${entry.holds.length}개 · ` : ""}
+                      {entry.holds.length > 1 ? `채널 연결 ${entry.holds.length}개 · ` : ""}
                       대기 시작 {entry.heldAt?.slice(0, 16).replace("T", " ") || "—"}
                     </div>
                     {/* 사유는 잘리면 판단을 못 한다 — 둘째 줄 전체 폭. 사유가 여럿이면 다 적는다. */}
@@ -1469,7 +1597,7 @@ export default function AutomationPage() {
                     className="sd-btn shrink-0"
                     disabled={releasing !== null || rejecting !== null}
                     onClick={() => void reject(entry)}
-                    title="이 영상은 이 규칙으로 내보내지 않습니다"
+                    title="이 영상을 현재 자동배포에서 제외합니다"
                   >
                     {rejecting === key ? "거부 중…" : "거부"}
                   </button>
@@ -1499,11 +1627,11 @@ export default function AutomationPage() {
         )}
       </section>
 
-      {/* ── 규칙과 결과 — 참고 디자인의 "배포 완료 영상" 영역에 운영 상세를 더한다. ── */}
+      {/* ── 저장 설정 / 최근 처리 / 완료 영상을 Main.dc.html처럼 각각 가볍게 분리한다. ── */}
       <section className="flex flex-col gap-2">
         <div className="flex items-baseline gap-2">
-          <h3 className="text-[15px] font-semibold" style={{ color: "var(--sd-fg)" }}>배포 규칙 · 결과</h3>
-          <span className="text-[11px]" style={{ color: "var(--sd-mut)" }}>실행 중인 규칙과 완료·대기·실패 기록</span>
+          <h3 className="text-[15px] font-semibold" style={{ color: "var(--sd-fg)" }}>저장된 자동배포</h3>
+          <span className="text-[11px]" style={{ color: "var(--sd-mut)" }}>자동배포는 여러 개 만들 수 있고, 채널 하나는 한 곳에만 연결됩니다</span>
         </div>
 
         {/* 규칙 목록 — 무엇이 돌고 있는지의 정본 */}
@@ -1512,7 +1640,7 @@ export default function AutomationPage() {
             className="sd-ph grid min-h-[70px] place-items-center rounded-[6px] px-6 text-center"
             style={{ border: "1px dashed var(--sd-border)" }}
           >
-            {loading ? "불러오는 중…" : error ? "상태를 불러오지 못했습니다" : "규칙이 없습니다 — 자동 배포는 규칙이 있어야만 동작합니다 (기본 동작 없음)"}
+            {loading ? "불러오는 중…" : error ? "상태를 불러오지 못했습니다" : "저장된 자동배포가 없습니다 — 위에서 프로그램과 채널을 선택해 시작하세요"}
           </div>
         ) : (
           <div className="flex flex-col gap-1.5">
@@ -1563,7 +1691,7 @@ export default function AutomationPage() {
                         try {
                           await saveAutomationRule({ ...r, enabled: !r.enabled });
                           toast({
-                            title: r.enabled ? "규칙을 멈췄습니다" : "규칙을 재개했습니다",
+                            title: r.enabled ? "자동배포를 멈췄습니다" : "자동배포를 재개했습니다",
                             description: firstProgram?.title ?? r.programId,
                             tone: "done",
                           });
@@ -1580,10 +1708,10 @@ export default function AutomationPage() {
                       type="button"
                       className="sd-btn"
                       onClick={async () => {
-                        if (!window.confirm("이 규칙을 지웁니다. 이미 게시된 영상은 내려가지 않습니다. 계속할까요?")) return;
+                        if (!window.confirm("이 프로그램의 자동배포 설정을 지웁니다. 이미 게시된 영상은 내려가지 않습니다. 계속할까요?")) return;
                         try {
                           const res = await deleteAutomationRule(r.id);
-                          toast({ title: "규칙을 지웠습니다", description: res.notice, tone: "done" });
+                          toast({ title: "자동배포 설정을 지웠습니다", description: res.notice, tone: "done" });
                         } catch (err) {
                           toast({ title: "삭제 실패", description: err instanceof Error ? err.message : String(err), tone: "error" });
                         } finally {
@@ -1600,23 +1728,23 @@ export default function AutomationPage() {
           </div>
         )}
 
-        {/* 자동 배포 기록 — 규칙이 자동으로 배포한 것. 사람이 누른 배포는 배포 화면에서. */}
-        <div className="mt-1 flex items-baseline gap-2">
-          <h4 className="text-[13px] font-semibold" style={{ color: "var(--sd-fg)" }}>배포 완료 영상 · 처리 기록</h4>
+        {/* 진행·대기·실패 기록. 실제 게시 완료는 아래 완료 영상에 따로 둔다. */}
+        <div id="activity" className="mt-4 flex scroll-mt-4 items-baseline gap-2 border-t pt-4" style={{ borderColor: "var(--sd-border)" }}>
+          <h4 className="text-[14px] font-semibold" style={{ color: "var(--sd-fg)" }}>⏳ 최근 처리 · 진행</h4>
           <span className="text-[11px]" style={{ color: "var(--sd-mut)" }}>
-            규칙이 <b>자동으로</b> 배포한 것만 — 사람이 누른 배포는 배포 화면에서 봅니다
+            분석·렌더·업로드 시작·대기·실패를 시간순으로 봅니다
           </span>
         </div>
-        {visibleRuns.length === 0 ? (
+        {recentProcessRuns.length === 0 ? (
           <div
             className="sd-ph grid min-h-[80px] place-items-center rounded-[6px] px-6 text-center text-[11.5px]"
             style={{ border: "1px dashed var(--sd-border)", color: "var(--sd-mut)" }}
           >
-            {loading ? "불러오는 중…" : error ? "상태를 불러오지 못했습니다" : "아직 자동 배포된 것이 없습니다 — 자동 배포를 시작하면 여기 쌓입니다"}
+            {loading ? "불러오는 중…" : error ? "상태를 불러오지 못했습니다" : "현재 진행 중이거나 확인이 필요한 처리 기록이 없습니다"}
           </div>
         ) : (
           <div className="flex flex-col gap-1">
-            {visibleRuns.map((run) => {
+            {recentProcessRuns.map((run) => {
               const clip = clips.find((c) => c.id === run.clipId);
               // accountKey("platform:accountId") — 구 응답엔 없을 수 있다(없으면 채널
               // 배지·배포 상태 조인만 생략, 나머지는 그대로).
@@ -1680,6 +1808,45 @@ export default function AutomationPage() {
             })}
           </div>
         )}
+
+        <div className="mt-4 flex items-baseline gap-2 border-t pt-4" style={{ borderColor: "var(--sd-border)" }}>
+          <h4 className="text-[14px] font-semibold" style={{ color: "var(--sd-fg)" }}>✅ 배포 완료 영상</h4>
+          <span className="text-[11px]" style={{ color: "var(--sd-mut)" }}>실제 채널 게시까지 확인된 영상만 표시합니다</span>
+        </div>
+        {completedRuns.length === 0 ? (
+          <div className="sd-ph grid min-h-[80px] place-items-center rounded-[6px] px-6 text-center text-[11.5px]"
+            style={{ border: "1px dashed var(--sd-border)", color: "var(--sd-mut)" }}>
+            {loading ? "불러오는 중…" : error ? "상태를 불러오지 못했습니다" : "아직 배포 완료된 영상이 없습니다"}
+          </div>
+        ) : (
+          <div className="flex flex-col gap-1">
+            {completedRuns.map((run) => {
+              const clip = clips.find((item) => item.id === run.clipId);
+              const platform = run.accountKey?.split(":")[0] ?? "";
+              const dist = (clip?.distributions ?? []).find((distribution) => distribution.channel === platform);
+              const externalUrl = platform === "youtube" && dist?.externalId
+                ? `https://www.youtube.com/watch?v=${dist.externalId}`
+                : null;
+              return (
+                <div key={run.id} className="flex flex-wrap items-center gap-3 rounded-[4px] px-3 py-3"
+                  style={{ background: "var(--sd-card-sub)", borderLeft: "3px solid var(--sd-ok)" }}>
+                  <div className="grid size-10 shrink-0 place-items-center rounded-[4px] text-[16px]"
+                    style={{ background: "var(--sd-card)" }} aria-hidden>▶</div>
+                  <div className="min-w-[180px] flex-1">
+                    <div className="truncate text-[12.5px] font-semibold" style={{ color: "var(--sd-fg)" }}>
+                      {clip?.title || run.clipId || "자동배포 영상"}
+                    </div>
+                    <div className="mt-0.5 text-[10.5px]" style={{ color: "var(--sd-mut)" }}>
+                      {run.at?.slice(0, 16).replace("T", " ")}{platform ? ` · ${channelLabel(platform)}` : ""}
+                    </div>
+                  </div>
+                  <span className="sd-tag sd-tag--airing">배포됨</span>
+                  {externalUrl && <a href={externalUrl} target="_blank" rel="noreferrer" className="sd-btn">열기</a>}
+                </div>
+              );
+            })}
+          </div>
+        )}
       </section>
 
       {/* 하단 안내 — 승인 대기 동작. "실제 업로드 잠금"(운영 설정)과 구분해 말한다. */}
@@ -1700,6 +1867,9 @@ export default function AutomationPage() {
           layout={layout}
           frameSrc={sampleFrameSrc}
           subtitlesOn={subtitles}
+          onSubtitlesChange={setSubtitles}
+          // 시간박스 문구 주석은 컴포넌트 prop 정의에 있다 — 선택 프로그램의 편성 문구, 없으면 예시.
+          timeboxText={programs.find((p) => p.id === selProgram)?.schedule}
           onLayoutChange={setLayout}
           onClose={() => setTplPreviewOpen(false)}
         />
@@ -1781,9 +1951,6 @@ function chansOf(keys: string[]): { platform: string; accountId: string }[] {
  *
  * 여기 넣은 개수가 곧 **하루 발행 수**다(서버 `perDayCount`). 그래서 개수를 따로 입력받지
  * 않는다 — 두 군데서 받으면 화면과 엔진이 다른 수를 믿는 상태가 된다.
-          onSubtitlesChange={setSubtitles}
-          // 시간박스 문구 주석은 컴포넌트 prop 정의에 있다 — 선택 프로그램의 편성 문구, 없으면 예시.
-          timeboxText={programs.find((p) => p.id === selProgram)?.schedule}
  */
 function SlotPicker({ slots, onChange }: { slots: string[]; onChange: (v: string[]) => void }) {
   const [adding, setAdding] = useState(false);

@@ -128,6 +128,48 @@ export function ruleChannels(rule: AutomationRule): { platform: string; accountI
   return rule.channels?.length ? rule.channels : [{ platform: rule.platform, accountId: rule.accountId }];
 }
 
+export interface AutomationChannelConflict {
+  platform: string;
+  accountId: string;
+  ruleId: string;
+  programId: string;
+}
+
+/**
+ * 한 채널은 자동배포 하나만 소유한다.
+ *
+ * 화면에서 선택을 막더라도 외부 API(AENA 포함)가 직접 저장할 수 있으므로 서버 저장 직전에
+ * 같은 판정을 다시 쓴다. 규칙을 수정할 때는 자기 id 를 빼야 기존 채널을 그대로 유지할 수 있다.
+ */
+export function findAutomationChannelConflicts(
+  rules: Pick<AutomationRule, "id" | "programId" | "platform" | "accountId" | "channels">[],
+  requested: { platform: string; accountId: string }[],
+  ignoreRuleId?: string,
+): AutomationChannelConflict[] {
+  const requestedKeys = new Set(
+    requested
+      .filter((channel) => channel.platform && channel.accountId)
+      .map((channel) => `${channel.platform}:${channel.accountId}`),
+  );
+  const conflicts: AutomationChannelConflict[] = [];
+  for (const rule of rules) {
+    if (rule.id === ignoreRuleId) continue;
+    const channels = rule.channels?.length
+      ? rule.channels
+      : [{ platform: rule.platform, accountId: rule.accountId }];
+    for (const channel of channels) {
+      if (!requestedKeys.has(`${channel.platform}:${channel.accountId}`)) continue;
+      conflicts.push({
+        platform: channel.platform,
+        accountId: channel.accountId,
+        ruleId: rule.id,
+        programId: rule.programId,
+      });
+    }
+  }
+  return conflicts;
+}
+
 /**
  * 규칙의 활동 시간창(KST 시각) — 기본 9~22.
  *
@@ -731,10 +773,10 @@ export function ruleIdleNote(o: RuleIdleObservation): { code: RuleIdleCode; deta
   if (o.channelBlocked) {
     return {
       code: "channel_rule",
-      // 다른 사유는 전부 갈 화면을 지목한다(회차 화면·편집기·배포 기록). 여기만 "채널 규칙을
-      // 바꾸세요" 라고 해서 어디서 여는지가 없었다 — 채널 규칙은 배포 채널 화면에서 연다.
-      detail: "채널 규칙(길이·화면비)에 맞지 않아 게시하지 못한 클립이 있습니다"
-        + " — 배포 채널 화면에서 배포 규칙을 바꾸거나, 클립을 편집기에서 손봐 주세요.",
+      // 채널 화면은 연결만 관리한다. 판정 조건을 별도 설정처럼 노출하지 말고, 사용자가 실제로
+      // 해결할 수 있는 편집기 조치만 안내한다.
+      detail: "채널의 기본 길이·화면비 조건에 맞지 않아 게시하지 못한 클립이 있습니다"
+        + " — 클립을 편집기에서 해당 채널 형식에 맞게 손봐 주세요.",
     };
   }
 

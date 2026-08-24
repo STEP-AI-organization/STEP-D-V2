@@ -342,6 +342,7 @@ import {
   GATE_POLICIES,
   RULE_DELETED_NOTICE,
   initialRuleState,
+  findAutomationChannelConflicts,
   isGatePolicy,
   isRuleCriterion,
   isRuleMediaKind,
@@ -5504,38 +5505,61 @@ app.post("/api/automation/rules", async (c) => {
     // 있어야 해서, 기본으로 두면 캐스트 미등록 회차가 통째로 썸네일 없이 나간다.
     ...(isRuleThumbnailMode(body.thumbnailMode) ? { thumbnailMode: body.thumbnailMode } : {}),
   };
-  // id 가 온 저장은 **갱신**이다 — 자연키 upsert 로 흘리면 첫 채널이 바뀌었을 때 새 규칙이
-  // 생기고 구 규칙이 살아남아 이중 커버(한도 2배·뺀 채널로 계속 게시)가 된다.
-  if (typeof body.id === "string" && body.id) {
-    try {
-      const updated = await updateAutomationRuleById(row as Parameters<typeof updateAutomationRuleById>[0]);
-      if (updated) {
-        return c.json({
-          rule: row,
-          state: initialRuleState(platform, row.enabled),
-          notice: ruleCreatedNotice(platform),
-        });
-      }
-      // id 를 줬는데 규칙이 없다(그새 삭제됨) — 새로 만드는 아래 경로로 진행.
-    } catch (e: any) {
-      if (String(e?.code) === "23505") {
-        return c.json({
-          error: "duplicate_rule",
-          message: "같은 프로그램·채널 조합의 다른 규칙이 이미 있습니다 — 그 규칙을 수정하거나 삭제하세요.",
-        }, 409);
-      }
-      throw e;
+  // 동시에 두 요청이 같은 빈 채널을 읽고 각각 저장하는 틈도 닫는다. 잠금 안에서 다시 읽고
+  // 저장하므로 뒤 요청은 앞 요청의 규칙을 본 뒤 409가 된다.
+  return withTenantLock(`automation-rule-channels:${currentTenantId()}`, async () => {
+    // 한 채널은 자동배포 하나에만 속한다. 화면 선택 잠금은 안내일 뿐이고, 외부 API/AENA가
+    // 직접 호출해도 우회하지 못하도록 저장 직전 서버에서 다시 검사한다. 수정 중인 자기 규칙은
+    // 제외하므로 기존 채널을 유지하거나 채널 일부를 빼는 갱신은 정상 동작한다.
+    const existingRules = await listAutomationRules();
+    const requestedChannels = row.channels?.length
+      ? row.channels
+      : [{ platform: row.platform, accountId: row.accountId }];
+    const channelConflicts = findAutomationChannelConflicts(
+      existingRules as any,
+      requestedChannels,
+      typeof body.id === "string" ? body.id : undefined,
+    );
+    if (channelConflicts.length > 0) {
+      return c.json({
+        code: "automation_channel_in_use",
+        error: "선택한 채널은 이미 다른 자동배포에서 사용 중입니다. 기존 자동배포에서 채널을 빼거나 설정을 삭제한 뒤 다시 선택해 주세요.",
+        conflicts: channelConflicts,
+      }, 409);
     }
-  }
-  // 캐스트 이유는 updateAutomationRuleById 호출부와 같다 — row.layout 에 자막 색·on/off 같은
-  // 문자/불리언이 섞여 AutomationRuleRow.layout(숫자 맵) 과 정확히 안 맞지만, layout 은 JSONB 라
-  // 런타임엔 무엇이든 담긴다.
-  await upsertAutomationRule(row as Parameters<typeof upsertAutomationRule>[0]);
-  return c.json({
-    rule: row,
-    state: initialRuleState(platform, row.enabled),
-    // ⚑ 기록만 하는 채널은 만들 때 그 사실을 말해야 한다(F6).
-    notice: ruleCreatedNotice(platform),
+    // id 가 온 저장은 **갱신**이다 — 자연키 upsert 로 흘리면 첫 채널이 바뀌었을 때 새 규칙이
+    // 생기고 구 규칙이 살아남아 이중 커버(한도 2배·뺀 채널로 계속 게시)가 된다.
+    if (typeof body.id === "string" && body.id) {
+      try {
+        const updated = await updateAutomationRuleById(row as Parameters<typeof updateAutomationRuleById>[0]);
+        if (updated) {
+          return c.json({
+            rule: row,
+            state: initialRuleState(platform, row.enabled),
+            notice: ruleCreatedNotice(platform),
+          });
+        }
+        // id 를 줬는데 규칙이 없다(그새 삭제됨) — 새로 만드는 아래 경로로 진행.
+      } catch (e: any) {
+        if (String(e?.code) === "23505") {
+          return c.json({
+            error: "duplicate_rule",
+            message: "같은 프로그램·채널 조합의 다른 규칙이 이미 있습니다 — 그 규칙을 수정하거나 삭제하세요.",
+          }, 409);
+        }
+        throw e;
+      }
+    }
+    // 캐스트 이유는 updateAutomationRuleById 호출부와 같다 — row.layout 에 자막 색·on/off 같은
+    // 문자/불리언이 섞여 AutomationRuleRow.layout(숫자 맵) 과 정확히 안 맞지만, layout 은 JSONB 라
+    // 런타임엔 무엇이든 담긴다.
+    await upsertAutomationRule(row as Parameters<typeof upsertAutomationRule>[0]);
+    return c.json({
+      rule: row,
+      state: initialRuleState(platform, row.enabled),
+      // ⚑ 기록만 하는 채널은 만들 때 그 사실을 말해야 한다(F6).
+      notice: ruleCreatedNotice(platform),
+    });
   });
 });
 

@@ -841,7 +841,7 @@ function CaptionsTab({ state, update }: { state: EditorState; update: Update }) 
         </select>
       </div>
       {/* 세로 위치·색·크기 — 미리보기(editor-preview)와 렌더(index.ts buildEditorAss)가 **같은
-          captionY/captionColor/captionSize 를 읽는다**. 예전엔 이 컨트롤이 없어 자동배포 규칙만
+          captionY/captionColor/captionSize 를 읽는다**. 예전엔 이 컨트롤이 없어 자동배포 설정만
           세팅할 수 있었다(사용자 2026-08-20: "위치·컬러 조정이 안 됨"). */}
       <div>
         <Label>세로 위치 {Math.round(state.captionY ?? 26)}% <span className="text-zinc-500">(화면 아래에서)</span></Label>

@@ -7,9 +7,7 @@
  * (CardAction)이다 — 모든 카드가 "본문은 조용히, 행동은 하단 한 줄"로 끝난다.
  * 반복되는 카드 껍데기(BillingCard)와 다이얼로그(BillingDialog)도 여기 모은다.
  *
- * 다이얼로그 관용구는 리포 기존 패턴을 그대로 따른다:
- *   - 오버레이·패널·헤더/본문/푸터 3단: components/publish/channel-rule-dialog.tsx
- *   - ESC 닫기(window keydown): components/media/clip-detail.tsx
+ * 오버레이·패널·헤더/본문/푸터 3단과 ESC 닫기는 리포의 공용 모달 관용구를 따른다.
  * 새 라이브러리 없이 sd-* 토큰만 쓴다.
  */
 import { useEffect } from "react";
@@ -70,7 +68,7 @@ export function CardAction({
 
 /**
  * 결제 화면 다이얼로그 껍데기. 오버레이 클릭·ESC·닫기 버튼으로 닫힌다 —
- * 단 `closeDisabled`(결제 진행 중 등)면 셋 다 막는다(channel-rule-dialog 의 busy 관용구).
+ * 단 `closeDisabled`(결제 진행 중 등)면 셋 다 막는다.
  */
 export function BillingDialog({
   title,

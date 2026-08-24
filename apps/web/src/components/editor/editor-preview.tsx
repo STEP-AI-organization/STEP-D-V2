@@ -656,7 +656,7 @@ export function EditorPreview({
             (ASS \an2, MarginV = H*0.26), so the previewed line lands where it bakes. */}
         {state.captionsOn && hasTranscript && caption && (
           // 자막 위치·크기·색은 editorState 오버라이드(captionY/Size/Color)가 있으면 그걸 따른다
-          // (자동배포 규칙이 세팅) — 없으면 기본(하단 26% · 스타일별 cqh · 스타일색). 서버
+          // (자동배포 설정이 세팅) — 없으면 기본(하단 26% · 스타일별 cqh · 스타일색). 서버
           // 렌더(index.ts buildEditorAss)와 **같은 규칙**이라 미리보기=결과물이 유지된다.
           <div className="absolute inset-x-0 px-6 text-center" style={{ bottom: `${state.captionY ?? 26}%` }}>
             {(() => {

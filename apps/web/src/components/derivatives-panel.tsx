@@ -21,7 +21,7 @@ import { StatusBadge } from "@/components/ui/status-badge";
 import { EmptyState } from "@/components/ui/empty-state";
 import { NarrativeView } from "./narrative-view";
 import { CastView } from "./cast-view";
-// 배포 판정은 서버(채널 규칙 + 게이트)가 한다 — 구 클라 판정 모달은 게이트를 무시해
+// 배포 판정은 서버(채널별 기본 조건 + 게이트)가 한다 — 구 클라 판정 모달은 게이트를 무시해
 // "배포됨"으로 오인시켰다. /media 화면과 같은 모달을 쓴다.
 import { PublishDialog } from "@/components/publish/publish-dialog";
 import { ShortsCard } from "./shorts-card";
