@@ -1,0 +1,442 @@
+<title>STEP-D 시스템 아키텍처</title>
+<style>
+  :root {
+    --sans: system-ui, -apple-system, "Segoe UI", "Apple SD Gothic Neo", "Malgun Gothic", Roboto, sans-serif;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Code", Menlo, Consolas, monospace;
+
+    --bg: #eaeef5;
+    --panel: #ffffff;
+    --panel-2: #f4f7fc;
+    --ink: #101a2b;
+    --ink-2: #4a5a72;
+    --ink-3: #7386a1;
+    --line: #d6dded;
+
+    --accent: #2f63f6;
+    --flow: #0a95b8;
+
+    --z-user:    #6b57e6;
+    --z-front:   #7c5cff;
+    --z-cloud:   #2f63f6;
+    --z-data:    #0a95b8;
+    --z-worker:  #d1810a;
+    --z-gpu:     #c026a6;
+    --z-machine: #d8532a;
+    --z-ext:     #178a56;
+
+    --good: #17915e;
+    --warn: #c77a10;
+
+    --shadow: 0 1px 2px rgba(16,26,43,.05), 0 6px 20px rgba(16,26,43,.06);
+    --radius: 12px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0a0e16;
+      --panel: #131b29;
+      --panel-2: #0f1723;
+      --ink: #e8eef8;
+      --ink-2: #9fb0c8;
+      --ink-3: #6d7f99;
+      --line: #26324a;
+      --accent: #5f8bff;
+      --flow: #2fc2da;
+      --z-user: #9184ff; --z-front: #9d84ff; --z-cloud: #5f8bff; --z-data: #2fc2da;
+      --z-worker: #f0a93a; --z-gpu: #e558c6; --z-machine: #f0784c; --z-ext: #34c489;
+      --good: #34c489; --warn: #f0a93a;
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 26px rgba(0,0,0,.35);
+    }
+  }
+  :root[data-theme="light"] {
+    --bg: #eaeef5; --panel: #ffffff; --panel-2: #f4f7fc;
+    --ink: #101a2b; --ink-2: #4a5a72; --ink-3: #7386a1; --line: #d6dded;
+    --accent: #2f63f6; --flow: #0a95b8;
+    --z-user: #6b57e6; --z-front: #7c5cff; --z-cloud: #2f63f6; --z-data: #0a95b8;
+    --z-worker: #d1810a; --z-gpu: #c026a6; --z-machine: #d8532a; --z-ext: #178a56;
+    --good: #17915e; --warn: #c77a10;
+    --shadow: 0 1px 2px rgba(16,26,43,.05), 0 6px 20px rgba(16,26,43,.06);
+  }
+  :root[data-theme="dark"] {
+    --bg: #0a0e16; --panel: #131b29; --panel-2: #0f1723;
+    --ink: #e8eef8; --ink-2: #9fb0c8; --ink-3: #6d7f99; --line: #26324a;
+    --accent: #5f8bff; --flow: #2fc2da;
+    --z-user: #9184ff; --z-front: #9d84ff; --z-cloud: #5f8bff; --z-data: #2fc2da;
+    --z-worker: #f0a93a; --z-gpu: #e558c6; --z-machine: #f0784c; --z-ext: #34c489;
+    --good: #34c489; --warn: #f0a93a;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 26px rgba(0,0,0,.35);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font-family: var(--sans); line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1140px; margin: 0 auto; padding: 40px 22px 72px; }
+
+  /* ── header ─────────────────────────────── */
+  header { margin-bottom: 30px; }
+  .kicker {
+    font-family: var(--mono); font-size: 11px; letter-spacing: .16em;
+    text-transform: uppercase; color: var(--accent); font-weight: 600;
+  }
+  h1 {
+    font-size: clamp(26px, 4.2vw, 38px); line-height: 1.08; margin: 8px 0 10px;
+    letter-spacing: -.02em; text-wrap: balance; font-weight: 800;
+  }
+  .lede { color: var(--ink-2); max-width: 62ch; font-size: 15px; margin: 0; }
+  .meta { display: flex; flex-wrap: wrap; gap: 8px 16px; margin-top: 16px;
+    font-family: var(--mono); font-size: 11.5px; color: var(--ink-3); }
+  .meta b { color: var(--ink-2); font-weight: 600; }
+
+  /* ── band ─────────────────────────────── */
+  .band { position: relative; }
+  .band-head { display: flex; align-items: center; gap: 9px; margin: 0 0 12px; }
+  .dot { width: 9px; height: 9px; border-radius: 3px; flex: none; background: var(--zc, var(--accent)); }
+  .band-title { font-family: var(--mono); font-size: 12px; letter-spacing: .1em;
+    text-transform: uppercase; font-weight: 600; color: var(--ink); }
+  .band-note { font-size: 12px; color: var(--ink-3); margin-left: auto; text-align: right; }
+
+  .row { display: flex; gap: 14px; flex-wrap: wrap; }
+  .row.scroll { flex-wrap: nowrap; overflow-x: auto; padding-bottom: 6px; }
+
+  /* ── node card ─────────────────────────────── */
+  .node {
+    background: var(--panel); border: 1px solid var(--line);
+    border-left: 3px solid var(--zc, var(--accent));
+    border-radius: var(--radius); padding: 13px 15px; box-shadow: var(--shadow);
+    flex: 1 1 220px; min-width: 208px;
+  }
+  .node.wide { flex-basis: 320px; }
+  .node .n-top { display: flex; align-items: baseline; gap: 8px; justify-content: space-between; }
+  .node .name { font-weight: 700; font-size: 14.5px; letter-spacing: -.01em; }
+  .node .spec { font-family: var(--mono); font-size: 10.5px; color: var(--ink-3);
+    white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .node .desc { font-size: 12.5px; color: var(--ink-2); margin-top: 5px; }
+  .node .tags { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 9px; }
+  .tag { font-family: var(--mono); font-size: 10px; color: var(--ink-2);
+    background: var(--panel-2); border: 1px solid var(--line); border-radius: 5px;
+    padding: 2px 6px; letter-spacing: .01em; }
+
+  .badge { font-family: var(--mono); font-size: 10px; font-weight: 600; letter-spacing: .04em;
+    padding: 2px 7px; border-radius: 20px; border: 1px solid; white-space: nowrap; }
+  .badge.ip { color: var(--z-machine); border-color: color-mix(in srgb, var(--z-machine) 45%, transparent);
+    background: color-mix(in srgb, var(--z-machine) 12%, transparent); }
+  .badge.min0 { color: var(--good); border-color: color-mix(in srgb, var(--good) 45%, transparent);
+    background: color-mix(in srgb, var(--good) 12%, transparent); }
+  .badge.gpu { color: var(--z-gpu); border-color: color-mix(in srgb, var(--z-gpu) 45%, transparent);
+    background: color-mix(in srgb, var(--z-gpu) 12%, transparent); }
+
+  /* ── connector spine ─────────────────────────────── */
+  .link { display: flex; flex-direction: column; align-items: center; gap: 3px; margin: 4px 0; }
+  .link .lbl { font-family: var(--mono); font-size: 10.5px; color: var(--ink-3);
+    background: var(--bg); padding: 0 8px; }
+  .link .stem { width: 2px; height: 20px; background: linear-gradient(var(--line), var(--accent)); position: relative; }
+  .link .stem::after { content: ""; position: absolute; bottom: -1px; left: 50%; transform: translateX(-50%);
+    border: 5px solid transparent; border-top-color: var(--accent); }
+  @media (prefers-reduced-motion: no-preference) {
+    .link .stem { background-size: 100% 200%; background-image: linear-gradient(var(--line), var(--accent), var(--line));
+      animation: flow 2.4s linear infinite; }
+    @keyframes flow { from { background-position: 0 -40px; } to { background-position: 0 40px; } }
+  }
+
+  /* ── cloud region ─────────────────────────────── */
+  .cloud {
+    border: 1.5px dashed color-mix(in srgb, var(--z-cloud) 42%, var(--line));
+    background: color-mix(in srgb, var(--z-cloud) 5%, var(--panel-2));
+    border-radius: 18px; padding: 16px 16px 18px;
+  }
+  .cloud > .cloud-head { display: flex; align-items: center; gap: 9px; margin-bottom: 14px; }
+  .cloud-head .name { font-weight: 800; font-size: 15px; }
+  .cloud-head .region { font-family: var(--mono); font-size: 11px; color: var(--ink-3);
+    border: 1px solid var(--line); border-radius: 6px; padding: 2px 7px; }
+  .sub { margin-top: 14px; }
+  .sub-label { font-family: var(--mono); font-size: 10.5px; letter-spacing: .08em;
+    text-transform: uppercase; color: var(--ink-3); margin: 0 0 8px; display: flex; align-items: center; gap: 7px; }
+  .sub-label::after { content: ""; height: 1px; flex: 1; background: var(--line); }
+
+  /* ── machine (윈도우2) band ─────────────────────────────── */
+  .machine {
+    border: 1px solid color-mix(in srgb, var(--z-machine) 40%, var(--line));
+    background: color-mix(in srgb, var(--z-machine) 6%, var(--panel));
+    border-radius: 16px; padding: 16px; display: grid;
+    grid-template-columns: 1fr 1fr; gap: 14px;
+  }
+  .machine .m-intro { grid-column: 1 / -1; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .machine .m-intro .name { font-weight: 800; font-size: 15px; }
+  .machine .m-intro p { margin: 0; font-size: 12.5px; color: var(--ink-2); flex: 1 1 260px; }
+
+  /* ── pipeline ─────────────────────────────── */
+  .pipe { counter-reset: step; display: grid; gap: 10px; }
+  .pipe-item {
+    display: grid; grid-template-columns: 34px 1fr; gap: 14px; align-items: start;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 15px;
+  }
+  .pipe-item .num { counter-increment: step; font-family: var(--mono); font-weight: 700;
+    font-size: 13px; color: var(--flow); border: 1.5px solid color-mix(in srgb, var(--flow) 45%, var(--line));
+    border-radius: 8px; width: 32px; height: 32px; display: grid; place-items: center; }
+  .pipe-item .num::before { content: counter(step, decimal-leading-zero); }
+  .pipe-item .p-name { font-weight: 700; font-size: 14px; }
+  .pipe-item .p-desc { font-size: 12.5px; color: var(--ink-2); margin-top: 2px; }
+  .pipe-item .p-desc code { font-family: var(--mono); font-size: 11px;
+    background: var(--panel-2); border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; }
+
+  .section-h { display: flex; align-items: center; gap: 10px; margin: 40px 0 16px; }
+  .section-h h2 { font-size: 18px; margin: 0; letter-spacing: -.01em; }
+  .section-h .h-line { flex: 1; height: 1px; background: var(--line); }
+
+  /* ── legend + notes ─────────────────────────────── */
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 14px; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--ink-2); }
+  .legend i { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+
+  .notes { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+  .note { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 13px 15px; }
+  .note h3 { margin: 0 0 5px; font-size: 12.5px; font-family: var(--mono); letter-spacing: .04em;
+    text-transform: uppercase; color: var(--ink); }
+  .note p { margin: 0; font-size: 12.5px; color: var(--ink-2); }
+  .note code { font-family: var(--mono); font-size: 11px; }
+
+  footer { margin-top: 44px; padding-top: 16px; border-top: 1px solid var(--line);
+    font-size: 12px; color: var(--ink-3); font-family: var(--mono); }
+
+  @media (max-width: 560px) {
+    .machine { grid-template-columns: 1fr; }
+    .band-note { display: none; }
+  }
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="kicker">STEP-D · 방송 클립·쇼츠 스튜디오</div>
+    <h1>파이프라인 &amp; 인프라 아키텍처</h1>
+    <p class="lede">긴 영상을 올리면 AI가 쇼츠 구간을 뽑고, 사람이 채택하면 렌더·배포로 이어진다. 무거운 분석은 <b>클라우드</b>가, 한국 IP가 필요한 일(네이버 발행·유튜브 다운로드)은 <b>사무실 PC(윈도우2)</b>가 나눠 맡는다.</p>
+    <div class="meta">
+      <span><b>기준</b> 2026-08-21</span>
+      <span><b>클라우드</b> GCP · us-central1</span>
+      <span><b>AI</b> Vertex Gemini · 서울(asia-northeast3)</span>
+      <span><b>프론트</b> Vercel</span>
+    </div>
+    <div class="legend">
+      <span><i style="background:var(--z-user)"></i>사용자</span>
+      <span><i style="background:var(--z-front)"></i>프론트·프록시</span>
+      <span><i style="background:var(--z-cloud)"></i>Cloud Run</span>
+      <span><i style="background:var(--z-data)"></i>데이터·AI·저장</span>
+      <span><i style="background:var(--z-worker)"></i>워커 잡</span>
+      <span><i style="background:var(--z-gpu)"></i>GPU</span>
+      <span><i style="background:var(--z-machine)"></i>사무실 PC</span>
+      <span><i style="background:var(--z-ext)"></i>외부 채널</span>
+    </div>
+  </header>
+
+  <!-- USERS -->
+  <div class="band">
+    <div class="band-head"><span class="dot" style="--zc:var(--z-user)"></span><span class="band-title">사용자</span>
+      <span class="band-note">누가 시스템에 붙는가</span></div>
+    <div class="row">
+      <div class="node" style="--zc:var(--z-user)">
+        <div class="n-top"><span class="name">운영자</span><span class="spec">브라우저</span></div>
+        <div class="desc">방송사·MCN 운영자. 업로드·검수·채택·편집·배포를 화면에서.</div>
+        <div class="tags"><span class="tag">stepd.stepai.kr</span><span class="tag">ktaena.com · AENA</span></div>
+      </div>
+      <div class="node" style="--zc:var(--z-user)">
+        <div class="n-top"><span class="name">외부 협력자</span><span class="spec">/register</span></div>
+        <div class="desc">유튜버가 자기 채널을 연결(OAuth). 성과·트렌드 수집 대상.</div>
+      </div>
+      <div class="node" style="--zc:var(--z-user)">
+        <div class="n-top"><span class="name">고객사 시스템</span><span class="spec">API 키</span></div>
+        <div class="desc">AENA 등 고객사 시스템이 <code style="font-family:var(--mono)">x-api-key</code>로 연동 — 워크스페이스 + 선불 크레딧.</div>
+      </div>
+      <div class="node" style="--zc:var(--z-user)">
+        <div class="n-top"><span class="name">플랫폼 운영</span><span class="spec">superadmin</span></div>
+        <div class="desc">STEPAI 운영자 콘솔 — 회사·사용자·잡·감사·메타 수정 로그.</div>
+        <div class="tags"><span class="tag">admin.stepd.stepai.kr</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="link"><span class="lbl">HTTPS</span><div class="stem"></div></div>
+
+  <!-- FRONTEND / PROXY -->
+  <div class="band">
+    <div class="band-head"><span class="dot" style="--zc:var(--z-front)"></span><span class="band-title">Vercel — 프론트 &amp; 프록시</span>
+      <span class="band-note">공개 면은 여기뿐 · 클라우드는 비공개(IAM)</span></div>
+    <div class="row">
+      <div class="node wide" style="--zc:var(--z-front)">
+        <div class="n-top"><span class="name">웹 앱</span><span class="spec">Next.js 16</span></div>
+        <div class="desc">운영자 화면 전체. 도메인만 다를 뿐 같은 배포다.</div>
+        <div class="tags"><span class="tag">stepd.stepai.kr</span><span class="tag">ktaena.com</span><span class="tag">admin ·</span></div>
+      </div>
+      <div class="node" style="--zc:var(--z-front)">
+        <div class="n-top"><span class="name">/api/proxy</span><span class="spec">ID 토큰</span></div>
+        <div class="desc">브라우저→서버 관문. Cloud Run이 비공개라 여기서 ID 토큰을 달아 넘긴다.</div>
+      </div>
+      <div class="node" style="--zc:var(--z-front)">
+        <div class="n-top"><span class="name">/api/render-proxy</span><span class="spec">export 전용</span></div>
+        <div class="desc">렌더(clips/:id/export)만 렌더 전용 서비스로. 무거운 인코딩을 API 서버에서 분리.</div>
+      </div>
+    </div>
+    <div class="band-note" style="margin-top:8px;text-align:left;font-family:var(--mono);font-size:11px">↳ 대용량 영상은 프록시를 거치지 않고 브라우저 → GCS로 직접(resumable) 올라간다.</div>
+  </div>
+
+  <div class="link"><span class="lbl">비공개(IAM) · ID 토큰</span><div class="stem"></div></div>
+
+  <!-- CLOUD -->
+  <div class="band">
+    <div class="cloud">
+      <div class="cloud-head"><span class="dot" style="--zc:var(--z-cloud)"></span>
+        <span class="name">GCP 클라우드</span><span class="region">us-central1</span>
+        <span class="band-note" style="margin-left:auto">무거운 일 전부 — API·분석·렌더·저장</span></div>
+
+      <div class="sub">
+        <p class="sub-label">서비스 (Cloud Run · 상시)</p>
+        <div class="row">
+          <div class="node wide" style="--zc:var(--z-cloud)">
+            <div class="n-top"><span class="name">stepd-server</span><span class="spec">2 vCPU · 4Gi</span></div>
+            <div class="desc">Node/Hono 단일 백엔드. API 서빙 + <b>잡 큐잉</b>. 라우트 200여 개.</div>
+            <div class="tags"><span class="badge min0">min 0</span><span class="tag">concurrency 10</span></div>
+          </div>
+          <div class="node wide" style="--zc:var(--z-cloud)">
+            <div class="n-top"><span class="name">stepd-render</span><span class="spec">4 vCPU · 8Gi</span></div>
+            <div class="desc">렌더 전용. <b>동시성 1</b> → 렌더 하나당 인스턴스 하나로 팬아웃, 서로 안 막음.</div>
+            <div class="tags"><span class="badge min0">min 0</span><span class="tag">export만</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="sub">
+        <p class="sub-label">데이터 · AI · 저장</p>
+        <div class="row">
+          <div class="node" style="--zc:var(--z-data)">
+            <div class="n-top"><span class="name">Cloud SQL</span><span class="spec">PG 15 · 1v/4GB</span></div>
+            <div class="desc"><b>job_queue의 심장.</b> 엔티티(JSONB)·분석 결과·검색 세그먼트·채널규칙·크레딧.</div>
+            <div class="tags"><span class="tag">stepd-db</span><span class="tag">테넌트 RLS</span></div>
+          </div>
+          <div class="node" style="--zc:var(--z-data)">
+            <div class="n-top"><span class="name">GCS</span><span class="spec">object</span></div>
+            <div class="desc">업로드 원본·클립·썸네일·분석 산출물(프레임) 영구 보존.</div>
+            <div class="tags"><span class="tag">stepd-media</span></div>
+          </div>
+          <div class="node" style="--zc:var(--z-data)">
+            <div class="n-top"><span class="name">Vertex AI · Gemini</span><span class="spec">서울</span></div>
+            <div class="desc">장면 이해·추천·임베딩. 얼굴·오디오가 개인정보라 <b>국내(서울) 처리</b>.</div>
+            <div class="tags"><span class="tag">asia-northeast3</span></div>
+          </div>
+          <div class="node" style="--zc:var(--z-data)">
+            <div class="n-top"><span class="name">Soniox STT</span><span class="spec">외부</span></div>
+            <div class="desc">프로덕션 자막 전사 + 화자 분리. 회차당 ≈ ₩135.</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="sub">
+        <p class="sub-label">워커 (Cloud Run Jobs · drain 모드 · Scheduler가 15분마다 깨움)</p>
+        <div class="row">
+          <div class="node" style="--zc:var(--z-worker)">
+            <div class="n-top"><span class="name">content 워커</span><span class="spec">4 vCPU · 8Gi</span></div>
+            <div class="desc">무거운 파이프라인. <code style="font-family:var(--mono);font-size:11px">python -m core.analyze</code> · 리프레임 · 썸네일.</div>
+            <div class="tags"><span class="tag">content.analyze</span><span class="tag">match·thumbnail</span></div>
+          </div>
+          <div class="node" style="--zc:var(--z-worker)">
+            <div class="n-top"><span class="name">youtube 워커</span><span class="spec">1 vCPU · 2Gi</span></div>
+            <div class="desc">가볍고 API 위주. 채널·영상 애널리틱스·댓글·발행 확인.</div>
+            <div class="tags"><span class="tag">channel·video.*</span><span class="tag">distribution.publish</span></div>
+          </div>
+          <div class="node" style="--zc:var(--z-gpu)">
+            <div class="n-top"><span class="name">GEBD GPU VM</span><span class="spec">L4 · g2</span></div>
+            <div class="desc">장면 경계 탐지(mmaction2). <b>잡 있을 때만 깨어나</b> 처리하고 스스로 종료.</div>
+            <div class="tags"><span class="badge gpu">GPU 전용</span><span class="tag">gebd.detect</span></div>
+          </div>
+        </div>
+        <div class="band-note" style="margin-top:8px;text-align:left;font-family:var(--mono);font-size:11px">↳ 큐가 비면 즉시 종료 → 유휴 과금 0. 워커는 <code style="font-family:var(--mono)">FOR UPDATE SKIP LOCKED</code>로 job_queue에서 잡을 집는다.</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="link"><span class="lbl">job_queue에서 claim (한국 IP 필요분)</span><div class="stem"></div></div>
+
+  <!-- WINDOWS 2 -->
+  <div class="band">
+    <div class="band-head"><span class="dot" style="--zc:var(--z-machine)"></span><span class="band-title">사무실 PC — 윈도우2</span>
+      <span class="band-note">클라우드가 못 하는 일만</span></div>
+    <div class="machine">
+      <div class="m-intro">
+        <span class="name">윈도우2</span>
+        <span class="badge ip">한국 IP 필수</span>
+        <p>해외 데이터센터 IP(클라우드)로는 봇·캡차에 막힌다. 그래서 <b>한국 가정용 IP를 가진 상시 PC</b>가 이 두 레인만 전담한다. 같은 job_queue에서 자기 레인 잡만 집는다.</p>
+      </div>
+      <div class="node" style="--zc:var(--z-machine)">
+        <div class="n-top"><span class="name">네이버 발행</span><span class="spec">naver.publish</span></div>
+        <div class="desc">네이버 TV·클립은 <b>공개 업로드 API가 없다</b> → Playwright 브라우저 자동화. 로그인 세션 필요.</div>
+      </div>
+      <div class="node" style="--zc:var(--z-machine)">
+        <div class="n-top"><span class="name">유튜브 다운로드</span><span class="spec">youtube.download</span></div>
+        <div class="desc">데이터센터 IP는 봇 판정 → yt-dlp로 받아 GCS로 올리면 분석은 클라우드 content 레인이 잇는다.</div>
+      </div>
+    </div>
+    <div class="band-note" style="margin-top:8px;text-align:left;font-family:var(--mono);font-size:11px">↳ 별개로 <b>윈도우1</b>은 개발·배포 전용(<code style="font-family:var(--mono)">cloud.sh</code> · Vercel 배포). 파이프라인에는 안 낀다.</div>
+  </div>
+
+  <div class="link"><span class="lbl">발행 · 업로드</span><div class="stem"></div></div>
+
+  <!-- EXTERNAL -->
+  <div class="band">
+    <div class="band-head"><span class="dot" style="--zc:var(--z-ext)"></span><span class="band-title">외부 채널 — 배포 대상</span>
+      <span class="band-note">최종 산출물이 나가는 곳</span></div>
+    <div class="row">
+      <div class="node" style="--zc:var(--z-ext)">
+        <div class="n-top"><span class="name">YouTube</span><span class="spec">Data/Analytics</span></div>
+        <div class="desc">쇼츠·클립 업로드(게이트) + 성과·급상승·댓글 수집. 예약 공개(publishAt).</div>
+      </div>
+      <div class="node" style="--zc:var(--z-ext)">
+        <div class="n-top"><span class="name">Meta · Instagram</span><span class="spec">Graph</span></div>
+        <div class="desc">Facebook 페이지 / Instagram 비즈니스 로그인으로 릴스·영상.</div>
+      </div>
+      <div class="node" style="--zc:var(--z-ext)">
+        <div class="n-top"><span class="name">TikTok</span><span class="spec">Content API</span></div>
+        <div class="desc">받은함 드래프트 업로드(게이트).</div>
+      </div>
+      <div class="node" style="--zc:var(--z-ext)">
+        <div class="n-top"><span class="name">네이버 TV·클립</span><span class="spec">via 윈도우2</span></div>
+        <div class="desc">공개 API 없음 → 윈도우2의 Playwright 발행을 경유한다.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- PIPELINE -->
+  <div class="section-h"><h2>데이터 흐름 — 영상 하나의 여정</h2><span class="h-line"></span></div>
+  <div class="pipe">
+    <div class="pipe-item"><span class="num"></span><div>
+      <div class="p-name">업로드</div>
+      <div class="p-desc">브라우저 → <code>GCS resumable</code>로 직접(대용량·수 GB). 청크 재시도·지수 백오프로 끊겨도 재개.</div></div></div>
+    <div class="pipe-item"><span class="num"></span><div>
+      <div class="p-name">분석 큐잉</div>
+      <div class="p-desc">서버가 <code>content.analyze</code>를 job_queue에 넣는다. Cloud Run은 <b>큐잉만</b> 한다.</div></div></div>
+    <div class="pipe-item"><span class="num"></span><div>
+      <div class="p-name">AI 분석 (content 워커)</div>
+      <div class="p-desc">STT(Soniox) → 장면 분할 → <b>GEBD GPU VM</b> 경계 → beat 생성 → 장면 이해(Vision) → 쇼츠 추천 → 검색 인덱싱. 단계별 <b>체크포인트</b>로 실패 시 재개.</div></div></div>
+    <div class="pipe-item"><span class="num"></span><div>
+      <div class="p-name">저장</div>
+      <div class="p-desc"><code>content_analysis</code> + <code>search_segments</code>(pgvector) 저장. 산출물은 GCS에 영구 보존.</div></div></div>
+    <div class="pipe-item"><span class="num"></span><div>
+      <div class="p-name">채택 (사람)</div>
+      <div class="p-desc">운영자가 추천 구간을 채택/거절. 채택이 곧 클립이 된다. <b>평가·판단은 사람 몫.</b></div></div></div>
+    <div class="pipe-item"><span class="num"></span><div>
+      <div class="p-name">렌더 (stepd-render)</div>
+      <div class="p-desc">전용 서비스에서 ffmpeg 트림·리프레임(9:16)·자막 번인. 편집 결정(editorState)을 결과물로 굽는다.</div></div></div>
+    <div class="pipe-item"><span class="num"></span><div>
+      <div class="p-name">배포 &amp; 성과</div>
+      <div class="p-desc">YouTube·Meta·TikTok·네이버로 발행 + 성과 추적. <b>자동배포</b>: 규칙 → 승인 대기 → 승인/거부 → 게시(사람이 확정).</div></div></div>
+  </div>
+
+  <!-- NOTES -->
+  <div class="section-h"><h2>설계 원칙 &amp; 비용</h2><span class="h-line"></span></div>
+  <div class="notes">
+    <div class="note"><h3>비용 구조</h3><p>워커는 <b>큐 비면 종료</b>(drain), 서비스는 <b>min 0</b>. 유휴 과금을 없앤다. 고정비 ≈ ₩86,500/월 · 60분 회차 ≈ <b>₩800</b>(마진 ~51%). 화면자막(chyron) 켜면 ≈ <b>₩1,240</b>(마진 ~21% · 인물 검색축).</p></div>
+    <div class="note"><h3>일의 분담</h3><p><b>클라우드</b> = 무거운 분석·렌더·저장. <b>윈도우2</b> = 한국 IP가 필요한 네이버·다운로드. GPU는 GEBD만.</p></div>
+    <div class="note"><h3>사람 vs 자동</h3><p>"전부 자동"이 아니라 "사람 부담 최소화". 채택·승인·성공 판정은 사람이, 나머지는 파이프라인이 맡는다.</p></div>
+    <div class="note"><h3>안전 기본값</h3><p>실업로드 게이트는 기본 OFF, 발행은 단일 관문 + 테넌트 RLS. 실패의 방향이 "안 나감"이 되게 잡아둔다.</p></div>
+  </div>
+
+  <footer>STEP-D · 정본 문서 docs/ops/infra.md · 기준 2026-08-21</footer>
+</div>

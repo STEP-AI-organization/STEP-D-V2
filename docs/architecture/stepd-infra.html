@@ -1,0 +1,380 @@
+<title>STEP-D 인프라 아키텍처</title>
+<style>
+  :root {
+    --sans: system-ui, -apple-system, "Segoe UI", "Apple SD Gothic Neo", "Malgun Gothic", Roboto, sans-serif;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Code", Menlo, Consolas, monospace;
+
+    --bg: #eaeef5;
+    --panel: #ffffff;
+    --panel-2: #f4f7fc;
+    --ink: #101a2b;
+    --ink-2: #4a5a72;
+    --ink-3: #7386a1;
+    --line: #d6dded;
+
+    --accent: #2f63f6;
+    --flow: #0a95b8;
+
+    --z-user:    #6b57e6;
+    --z-front:   #7c5cff;
+    --z-cloud:   #2f63f6;
+    --z-data:    #0a95b8;
+    --z-worker:  #d1810a;
+    --z-gpu:     #c026a6;
+    --z-machine: #d8532a;
+    --z-ext:     #178a56;
+
+    --good: #17915e;
+    --warn: #c77a10;
+
+    --shadow: 0 1px 2px rgba(16,26,43,.05), 0 6px 20px rgba(16,26,43,.06);
+    --radius: 12px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0a0e16;
+      --panel: #131b29;
+      --panel-2: #0f1723;
+      --ink: #e8eef8;
+      --ink-2: #9fb0c8;
+      --ink-3: #6d7f99;
+      --line: #26324a;
+      --accent: #5f8bff;
+      --flow: #2fc2da;
+      --z-user: #9184ff; --z-front: #9d84ff; --z-cloud: #5f8bff; --z-data: #2fc2da;
+      --z-worker: #f0a93a; --z-gpu: #e558c6; --z-machine: #f0784c; --z-ext: #34c489;
+      --good: #34c489; --warn: #f0a93a;
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 26px rgba(0,0,0,.35);
+    }
+  }
+  :root[data-theme="light"] {
+    --bg: #eaeef5; --panel: #ffffff; --panel-2: #f4f7fc;
+    --ink: #101a2b; --ink-2: #4a5a72; --ink-3: #7386a1; --line: #d6dded;
+    --accent: #2f63f6; --flow: #0a95b8;
+    --z-user: #6b57e6; --z-front: #7c5cff; --z-cloud: #2f63f6; --z-data: #0a95b8;
+    --z-worker: #d1810a; --z-gpu: #c026a6; --z-machine: #d8532a; --z-ext: #178a56;
+    --good: #17915e; --warn: #c77a10;
+    --shadow: 0 1px 2px rgba(16,26,43,.05), 0 6px 20px rgba(16,26,43,.06);
+  }
+  :root[data-theme="dark"] {
+    --bg: #0a0e16; --panel: #131b29; --panel-2: #0f1723;
+    --ink: #e8eef8; --ink-2: #9fb0c8; --ink-3: #6d7f99; --line: #26324a;
+    --accent: #5f8bff; --flow: #2fc2da;
+    --z-user: #9184ff; --z-front: #9d84ff; --z-cloud: #5f8bff; --z-data: #2fc2da;
+    --z-worker: #f0a93a; --z-gpu: #e558c6; --z-machine: #f0784c; --z-ext: #34c489;
+    --good: #34c489; --warn: #f0a93a;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 26px rgba(0,0,0,.35);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font-family: var(--sans); line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { max-width: 1140px; margin: 0 auto; padding: 40px 22px 72px; }
+
+  header { margin-bottom: 30px; }
+  .kicker { font-family: var(--mono); font-size: 11px; letter-spacing: .16em;
+    text-transform: uppercase; color: var(--accent); font-weight: 600; }
+  h1 { font-size: clamp(26px, 4.2vw, 38px); line-height: 1.08; margin: 8px 0 10px;
+    letter-spacing: -.02em; text-wrap: balance; font-weight: 800; }
+  .lede { color: var(--ink-2); max-width: 64ch; font-size: 15px; margin: 0; }
+  .meta { display: flex; flex-wrap: wrap; gap: 8px 16px; margin-top: 16px;
+    font-family: var(--mono); font-size: 11.5px; color: var(--ink-3); }
+  .meta b { color: var(--ink-2); font-weight: 600; }
+
+  .band { position: relative; }
+  .band-head { display: flex; align-items: center; gap: 9px; margin: 0 0 12px; }
+  .dot { width: 9px; height: 9px; border-radius: 3px; flex: none; background: var(--zc, var(--accent)); }
+  .band-title { font-family: var(--mono); font-size: 12px; letter-spacing: .1em;
+    text-transform: uppercase; font-weight: 600; color: var(--ink); }
+  .band-note { font-size: 12px; color: var(--ink-3); margin-left: auto; text-align: right; }
+
+  .row { display: flex; gap: 14px; flex-wrap: wrap; }
+
+  .node { background: var(--panel); border: 1px solid var(--line);
+    border-left: 3px solid var(--zc, var(--accent));
+    border-radius: var(--radius); padding: 13px 15px; box-shadow: var(--shadow);
+    flex: 1 1 220px; min-width: 208px; }
+  .node.wide { flex-basis: 320px; }
+  .node .n-top { display: flex; align-items: baseline; gap: 8px; justify-content: space-between; }
+  .node .name { font-weight: 700; font-size: 14.5px; letter-spacing: -.01em; }
+  .node .spec { font-family: var(--mono); font-size: 10.5px; color: var(--ink-3);
+    white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .node .desc { font-size: 12.5px; color: var(--ink-2); margin-top: 5px; }
+  .node .tags { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 9px; }
+  .tag { font-family: var(--mono); font-size: 10px; color: var(--ink-2);
+    background: var(--panel-2); border: 1px solid var(--line); border-radius: 5px;
+    padding: 2px 6px; letter-spacing: .01em; }
+
+  .badge { font-family: var(--mono); font-size: 10px; font-weight: 600; letter-spacing: .04em;
+    padding: 2px 7px; border-radius: 20px; border: 1px solid; white-space: nowrap; }
+  .badge.ip { color: var(--z-machine); border-color: color-mix(in srgb, var(--z-machine) 45%, transparent);
+    background: color-mix(in srgb, var(--z-machine) 12%, transparent); }
+  .badge.min0 { color: var(--good); border-color: color-mix(in srgb, var(--good) 45%, transparent);
+    background: color-mix(in srgb, var(--good) 12%, transparent); }
+  .badge.gpu { color: var(--z-gpu); border-color: color-mix(in srgb, var(--z-gpu) 45%, transparent);
+    background: color-mix(in srgb, var(--z-gpu) 12%, transparent); }
+  .badge.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, transparent);
+    background: color-mix(in srgb, var(--warn) 12%, transparent); }
+
+  .link { display: flex; flex-direction: column; align-items: center; gap: 3px; margin: 4px 0; }
+  .link .lbl { font-family: var(--mono); font-size: 10.5px; color: var(--ink-3);
+    background: var(--bg); padding: 0 8px; }
+  .link .stem { width: 2px; height: 20px; background: linear-gradient(var(--line), var(--accent)); position: relative; }
+  .link .stem::after { content: ""; position: absolute; bottom: -1px; left: 50%; transform: translateX(-50%);
+    border: 5px solid transparent; border-top-color: var(--accent); }
+  @media (prefers-reduced-motion: no-preference) {
+    .link .stem { background-size: 100% 200%; background-image: linear-gradient(var(--line), var(--accent), var(--line));
+      animation: flow 2.4s linear infinite; }
+    @keyframes flow { from { background-position: 0 -40px; } to { background-position: 0 40px; } }
+  }
+
+  .cloud { border: 1.5px dashed color-mix(in srgb, var(--z-cloud) 42%, var(--line));
+    background: color-mix(in srgb, var(--z-cloud) 5%, var(--panel-2));
+    border-radius: 18px; padding: 16px 16px 18px; }
+  .cloud > .cloud-head { display: flex; align-items: center; gap: 9px; margin-bottom: 14px; flex-wrap: wrap; }
+  .cloud-head .name { font-weight: 800; font-size: 15px; }
+  .cloud-head .region { font-family: var(--mono); font-size: 11px; color: var(--ink-3);
+    border: 1px solid var(--line); border-radius: 6px; padding: 2px 7px; }
+  .sub { margin-top: 14px; }
+  .sub-label { font-family: var(--mono); font-size: 10.5px; letter-spacing: .08em;
+    text-transform: uppercase; color: var(--ink-3); margin: 0 0 8px; display: flex; align-items: center; gap: 7px; }
+  .sub-label::after { content: ""; height: 1px; flex: 1; background: var(--line); }
+
+  .machine { border: 1px solid color-mix(in srgb, var(--z-machine) 40%, var(--line));
+    background: color-mix(in srgb, var(--z-machine) 6%, var(--panel));
+    border-radius: 16px; padding: 16px; display: grid;
+    grid-template-columns: 1fr 1fr; gap: 14px; }
+  .machine .m-intro { grid-column: 1 / -1; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .machine .m-intro .name { font-weight: 800; font-size: 15px; }
+  .machine .m-intro p { margin: 0; font-size: 12.5px; color: var(--ink-2); flex: 1 1 260px; }
+
+  .section-h { display: flex; align-items: center; gap: 10px; margin: 40px 0 16px; }
+  .section-h h2 { font-size: 18px; margin: 0; letter-spacing: -.01em; }
+  .section-h .h-line { flex: 1; height: 1px; background: var(--line); }
+
+  .legend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 14px; }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--ink-2); }
+  .legend i { width: 10px; height: 10px; border-radius: 3px; display: inline-block; }
+
+  .notes { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+  .note { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 13px 15px; }
+  .note h3 { margin: 0 0 5px; font-size: 12.5px; font-family: var(--mono); letter-spacing: .04em;
+    text-transform: uppercase; color: var(--ink); }
+  .note p { margin: 0; font-size: 12.5px; color: var(--ink-2); }
+  .note code, .desc code, .p-desc code { font-family: var(--mono); font-size: 11px;
+    background: var(--panel-2); border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; }
+
+  /* ── cost table ─────────────────────────────── */
+  .tbl-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); box-shadow: var(--shadow); }
+  table.ctable { border-collapse: collapse; width: 100%; min-width: 440px; font-size: 13px; }
+  .ctable th, .ctable td { padding: 9px 14px; text-align: left; border-bottom: 1px solid var(--line); }
+  .ctable thead th { font-family: var(--mono); font-size: 10.5px; letter-spacing: .06em; text-transform: uppercase;
+    color: var(--ink-3); font-weight: 600; background: var(--panel-2); }
+  .ctable td.num, .ctable th.num { text-align: right; font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  .ctable tbody tr:last-child td { border-bottom: none; }
+  .ctable tr.total td { font-weight: 700; color: var(--ink); background: color-mix(in srgb, var(--accent) 6%, var(--panel)); }
+  .ctable td .muted { color: var(--ink-3); font-size: 11.5px; }
+  .cost-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
+  @media (max-width: 760px) { .cost-grid { grid-template-columns: 1fr; } }
+
+  .kv { display: grid; grid-template-columns: auto 1fr; gap: 6px 12px; font-size: 12.5px; }
+  .kv dt { font-family: var(--mono); font-size: 11px; color: var(--ink-3); white-space: nowrap; }
+  .kv dd { margin: 0; color: var(--ink-2); }
+  .kv dd b { color: var(--ink); }
+
+  @media (max-width: 560px) {
+    .machine { grid-template-columns: 1fr; }
+    .band-note { display: none; }
+  }
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="kicker">STEP-D · 인프라 SSOT</div>
+    <h1>인프라 아키텍처</h1>
+    <p class="lede">GCP 한 프로젝트 위에 얹은 실서비스. <b>무거운 일은 클라우드</b>가 서버리스로(유휴 과금 0), <b>한국 IP가 필요한 일</b>은 사무실 PC가 맡는다. 이 문서의 정본은 <code>docs/ops/infra.md</code>.</p>
+    <div class="meta">
+      <span><b>프로젝트</b> step-d · 872105344568</span>
+      <span><b>컴퓨트·SQL·저장</b> us-central1</span>
+      <span><b>AI</b> Vertex Gemini · 서울(asia-northeast3)</span>
+      <span><b>기준</b> 2026-08-21</span>
+    </div>
+    <div class="legend">
+      <span><i style="background:var(--z-front)"></i>Vercel</span>
+      <span><i style="background:var(--z-cloud)"></i>Cloud Run 서비스</span>
+      <span><i style="background:var(--z-data)"></i>데이터·AI·저장</span>
+      <span><i style="background:var(--z-worker)"></i>Cloud Run Jobs</span>
+      <span><i style="background:var(--z-gpu)"></i>GPU VM</span>
+      <span><i style="background:var(--z-machine)"></i>사무실 PC</span>
+    </div>
+  </header>
+
+  <!-- TOPOLOGY -->
+  <div class="section-h"><h2>한눈에 — 요청 하나가 지나는 길</h2><span class="h-line"></span></div>
+
+  <div class="band">
+    <div class="band-head"><span class="dot" style="--zc:var(--z-front)"></span><span class="band-title">Vercel — 유일한 공개 면</span>
+      <span class="band-note">클라우드는 전부 비공개(IAM)</span></div>
+    <div class="row">
+      <div class="node wide" style="--zc:var(--z-front)">
+        <div class="n-top"><span class="name">웹 앱 + 프록시</span><span class="spec">step-d-v2-web</span></div>
+        <div class="desc">Next.js 16. 브라우저 요청에 <b>ID 토큰</b>을 달아 Cloud Run으로 넘긴다(<code>/api/proxy</code>). 렌더만 <code>/api/render-proxy</code>로 분기.</div>
+        <div class="tags"><span class="tag">stepd.stepai.kr</span><span class="tag">ktaena.com</span><span class="tag">git author = contact@stepai.kr</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="link"><span class="lbl">비공개(IAM) · ID 토큰</span><div class="stem"></div></div>
+
+  <div class="band">
+    <div class="cloud">
+      <div class="cloud-head"><span class="dot" style="--zc:var(--z-cloud)"></span>
+        <span class="name">GCP · 프로젝트 step-d</span><span class="region">us-central1</span>
+        <span class="band-note" style="margin-left:auto">서버리스 · min 0 · drain</span></div>
+
+      <div class="sub">
+        <p class="sub-label">서비스 — Cloud Run (요청 있을 때만 뜸)</p>
+        <div class="row">
+          <div class="node wide" style="--zc:var(--z-cloud)">
+            <div class="n-top"><span class="name">stepd-server</span><span class="spec">2 vCPU · 4Gi</span></div>
+            <div class="desc">Node/Hono 단일 백엔드. API 서빙 + <b>잡 큐잉</b>. 라우트 200여 개. concurrency 10 · max 5.</div>
+            <div class="tags"><span class="badge min0">min 0</span><span class="tag">timeout 600s</span><span class="tag">cpu-boost</span></div>
+          </div>
+          <div class="node wide" style="--zc:var(--z-cloud)">
+            <div class="n-top"><span class="name">stepd-render</span><span class="spec">4 vCPU · 8Gi</span></div>
+            <div class="desc">같은 이미지, 리소스만 다름. <b>concurrency 1</b> → 렌더 하나당 인스턴스 하나로 팬아웃. export 경로만 통과(그 외 404).</div>
+            <div class="tags"><span class="badge min0">min 0</span><span class="tag">timeout 900s</span><span class="tag">invoker IAM 수동</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="sub">
+        <p class="sub-label">상태 · AI · 저장</p>
+        <div class="row">
+          <div class="node" style="--zc:var(--z-data)">
+            <div class="n-top"><span class="name">Cloud SQL</span><span class="spec">PG 15</span></div>
+            <div class="desc"><b>db-custom-1-4096</b>(전용 1vCPU·4GB). job_queue·엔티티(JSONB)·분석·검색·크레딧. 자동백업+PITR(7일).</div>
+            <div class="tags"><span class="tag">stepd-db</span><span class="tag">zonal · 10GB SSD</span><span class="tag">유닉스 소켓</span></div>
+          </div>
+          <div class="node" style="--zc:var(--z-data)">
+            <div class="n-top"><span class="name">GCS</span><span class="spec">object</span></div>
+            <div class="desc">업로드 원본·클립·썸네일·분석 산출물. 대용량은 브라우저 → GCS resumable 직행.</div>
+            <div class="tags"><span class="tag">stepd-media</span></div>
+          </div>
+          <div class="node" style="--zc:var(--z-data)">
+            <div class="n-top"><span class="name">Vertex AI · Gemini</span><span class="spec">서울</span></div>
+            <div class="desc">장면 이해·추천·임베딩. 얼굴·오디오가 개인정보라 <b>국내(서울) 처리</b>(데이터 레지던시).</div>
+            <div class="tags"><span class="tag">asia-northeast3</span></div>
+          </div>
+          <div class="node" style="--zc:var(--z-data)">
+            <div class="n-top"><span class="name">Soniox STT</span><span class="spec">외부 API</span></div>
+            <div class="desc">프로덕션 자막 전사 + 화자 분리($0.10/시간). content Job엔 GPU가 없어 STT는 여기로.</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="sub">
+        <p class="sub-label">워커 — Cloud Run Jobs (Cloud Scheduler가 15분마다 깨움 · drain)</p>
+        <div class="row">
+          <div class="node" style="--zc:var(--z-worker)">
+            <div class="n-top"><span class="name">stepd-worker-content</span><span class="spec">4 vCPU · 8Gi</span></div>
+            <div class="desc">무거운 파이프라인. <code>Dockerfile.worker</code>(core/ + 파이썬 venv). <code>python -m core.analyze</code>·리프레임·썸네일.</div>
+            <div class="tags"><span class="tag">content.analyze</span><span class="tag">match·thumbnail</span></div>
+          </div>
+          <div class="node" style="--zc:var(--z-worker)">
+            <div class="n-top"><span class="name">stepd-worker-youtube</span><span class="spec">1 vCPU · 2Gi</span></div>
+            <div class="desc">가볍고 API 위주(잡의 99.98%가 API 대기). 서버 이미지 그대로. 채널·영상·댓글·발행.</div>
+            <div class="tags"><span class="tag">channel·video.*</span><span class="tag">distribution.publish</span></div>
+          </div>
+          <div class="node" style="--zc:var(--z-gpu)">
+            <div class="n-top"><span class="name">stepd-gebd-vm</span><span class="spec">g2 · L4</span></div>
+            <div class="desc">GEBD 화면전환 모델(mmaction2, CUDA 필수). <b>부팅=처리=자체종료</b>. <code>--max-run-duration=3600s</code> 안전장치.</div>
+            <div class="tags"><span class="badge gpu">GPU 전용</span><span class="tag">us-central1-b</span><span class="tag">gebd.detect</span></div>
+          </div>
+        </div>
+        <div class="band-note" style="margin-top:8px;text-align:left;font-family:var(--mono);font-size:11px">↳ 큐가 비면 exit 0 → 유휴 과금 0. <code>DRAIN_MAX_MS</code>(50분) 넘기면 새 잡을 안 집는다(Job 타임아웃 중간 사망 회피).</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="link"><span class="lbl">job_queue에서 claim (한국 IP 필요분만)</span><div class="stem"></div></div>
+
+  <!-- MACHINES -->
+  <div class="band">
+    <div class="band-head"><span class="dot" style="--zc:var(--z-machine)"></span><span class="band-title">사무실 PC — 한국 IP</span>
+      <span class="band-note">클라우드가 못 하는 일</span></div>
+    <div class="machine">
+      <div class="m-intro">
+        <span class="name">윈도우2</span>
+        <span class="badge ip">한국 IP 필수</span>
+        <p>상시 PC. 같은 job_queue에서 <b>자기 레인 잡만</b> 집어 처리하고 GCS로 결과를 올린다. 맥락은 별도 다이어그램(<code>stepd-window2.html</code>).</p>
+      </div>
+      <div class="node" style="--zc:var(--z-machine)">
+        <div class="n-top"><span class="name">네이버 발행</span><span class="spec">naver</span></div>
+        <div class="desc">공개 업로드 API 없음 → Playwright 자동화. 해외 IP는 캡차·2차인증에 막힘.</div>
+      </div>
+      <div class="node" style="--zc:var(--z-machine)">
+        <div class="n-top"><span class="name">유튜브 다운로드</span><span class="spec">download</span></div>
+        <div class="desc">데이터센터 IP는 봇 판정 → yt-dlp로 받아 GCS 업로드, 분석은 클라우드 content 레인이 잇는다.</div>
+      </div>
+    </div>
+    <div class="band-note" style="margin-top:8px;text-align:left;font-family:var(--mono);font-size:11px">↳ <b>윈도우1</b>은 개발·배포 전용(<code>cloud.sh</code> · Vercel). 파이프라인엔 안 낀다.</div>
+  </div>
+
+  <!-- OPS -->
+  <div class="section-h"><h2>배포 · 시크릿 · 리전</h2><span class="h-line"></span></div>
+  <div class="notes">
+    <div class="note"><h3>배포 경로</h3><p><code>bash deploy/cloud.sh &lt;target&gt;</code> — <code>server</code>(server+render 동시) · <code>worker</code> · <code>gebd</code> · <code>migrate</code> · <code>all</code>. 웹은 <code>deploy-web.ps1</code>(Vercel). <b>자동배포 트리거 없음</b> — 수동 <code>gcloud builds submit</code>.</p></div>
+    <div class="note"><h3>시크릿 (Secret Manager)</h3><p><code>stepd-db-url</code>(소켓)·<code>stepd-worker-db-url</code>(TCP)·<code>stepd-google-client-id/secret</code>·<code>stepd-jwt-secret</code>·<code>stepd-public-url</code>·<code>stepd-soniox-api-key</code>. 로컬 <code>.env</code>·<code>gcp-keys/</code>는 gitignore.</p></div>
+    <div class="note"><h3>리전 배치</h3><p>컴퓨트·SQL·GCS는 <b>us-central1</b>(비용). AI만 <b>서울</b> — 얼굴·오디오·자막이 개인정보라 국내 처리. 서울엔 STT Chirp가 없어 전사는 Soniox/Gemini.</p></div>
+    <div class="note"><h3>접근 통제</h3><p>Cloud Run은 <b>비공개(IAM)</b> — invoker는 <code>domain:stepai.kr</code> + <code>stepd-deployer</code> SA 뿐. 익명 직행은 403. 공개 면은 Vercel 웹 하나. 신규 서비스 invoker는 관리자 1회 수동.</p></div>
+  </div>
+
+  <!-- COST -->
+  <div class="section-h"><h2>월 비용</h2><span class="h-line"></span></div>
+  <div class="cost-grid">
+    <div>
+      <p class="sub-label">고정비 — 아무것도 안 돌려도 나감</p>
+      <div class="tbl-wrap">
+        <table class="ctable">
+          <thead><tr><th>항목</th><th class="num">월</th></tr></thead>
+          <tbody>
+            <tr><td>Cloud SQL <span class="muted">db-custom-1-4096</span></td><td class="num">₩69,800</td></tr>
+            <tr><td>자동백업 + PITR <span class="muted">DB 작음</span></td><td class="num">~₩1,000</td></tr>
+            <tr><td>GEBD VM 부팅디스크 <span class="muted">100GB</span></td><td class="num">₩13,800</td></tr>
+            <tr><td>AR 이미지 <span class="muted">13.8GB</span></td><td class="num">₩1,900</td></tr>
+            <tr><td>GCS <span class="muted">미디어+가중치</span></td><td class="num">₩50</td></tr>
+            <tr><td>Cloud Run server·render <span class="muted">min 0</span></td><td class="num">₩0</td></tr>
+            <tr><td>Cloud Scheduler <span class="muted">3개까지 무료</span></td><td class="num">₩0</td></tr>
+            <tr class="total"><td>소계</td><td class="num">≈ ₩86,500</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p style="font-size:11.5px;color:var(--ink-3);margin:8px 2px 0">+ 워커 폴링(회차 무관) Job 2개 × 15분 ≈ 월 ₩3,400.</p>
+    </div>
+    <div>
+      <p class="sub-label">회차당 사용량 — 60분 1건</p>
+      <div class="tbl-wrap">
+        <table class="ctable">
+          <thead><tr><th>구성</th><th class="num">회차당</th></tr></thead>
+          <tbody>
+            <tr><td>chyron OFF <span class="muted">현재 프로덕션</span></td><td class="num">≈ ₩800</td></tr>
+            <tr><td>chyron ON <span class="muted">+인물 검색축</span></td><td class="num">≈ ₩1,240</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <dl class="kv" style="margin-top:14px">
+        <dt>분당</dt><dd><b>₩13.3</b> (chyron OFF)</dd>
+        <dt>판매가</dt><dd>₩28/분 → 마진 <b>~51%</b> (OFF) · <b>~21%</b> (ON)</dd>
+        <dt>내림 레버</dt><dd>beat 주석을 <b>flash-lite</b>로(−72%) → ₩1,124 → ₩800</dd>
+        <dt>정본</dt><dd>원가 인용은 <code>how-it-works.md §4</code>에서만</dd>
+      </dl>
+      <p style="font-size:11.5px;color:var(--ink-3);margin:12px 2px 0"><b>GPU는 거의 안 켜서 싸다.</b> GEBD VM 상시 가동이면 월 $533 — 유휴 자동 종료가 245배를 가른다.</p>
+    </div>
+  </div>
+
+  <footer>STEP-D · 정본 docs/ops/infra.md · 원가 정본 docs/ops/how-it-works.md §4 · 기준 2026-08-21</footer>
+</div>

@@ -1,0 +1,281 @@
+<title>윈도우2 맥락도 — STEP-D</title>
+<style>
+  :root {
+    --sans: system-ui, -apple-system, "Segoe UI", "Apple SD Gothic Neo", "Malgun Gothic", Roboto, sans-serif;
+    --mono: ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Code", Menlo, Consolas, monospace;
+
+    --bg: #eaeef5;
+    --panel: #ffffff;
+    --panel-2: #f4f7fc;
+    --ink: #101a2b;
+    --ink-2: #4a5a72;
+    --ink-3: #7386a1;
+    --line: #d6dded;
+
+    --accent: #2f63f6;
+    --flow: #0a95b8;
+
+    --z-cloud:   #2f63f6;
+    --z-data:    #0a95b8;
+    --z-worker:  #d1810a;
+    --z-machine: #d8532a;
+    --z-ext:     #178a56;
+
+    --good: #17915e;
+    --warn: #c77a10;
+
+    --shadow: 0 1px 2px rgba(16,26,43,.05), 0 6px 20px rgba(16,26,43,.06);
+    --radius: 12px;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0a0e16; --panel: #131b29; --panel-2: #0f1723;
+      --ink: #e8eef8; --ink-2: #9fb0c8; --ink-3: #6d7f99; --line: #26324a;
+      --accent: #5f8bff; --flow: #2fc2da;
+      --z-cloud: #5f8bff; --z-data: #2fc2da; --z-worker: #f0a93a;
+      --z-machine: #f0784c; --z-ext: #34c489;
+      --good: #34c489; --warn: #f0a93a;
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 26px rgba(0,0,0,.35);
+    }
+  }
+  :root[data-theme="light"] {
+    --bg: #eaeef5; --panel: #ffffff; --panel-2: #f4f7fc;
+    --ink: #101a2b; --ink-2: #4a5a72; --ink-3: #7386a1; --line: #d6dded;
+    --accent: #2f63f6; --flow: #0a95b8;
+    --z-cloud: #2f63f6; --z-data: #0a95b8; --z-worker: #d1810a;
+    --z-machine: #d8532a; --z-ext: #178a56;
+    --good: #17915e; --warn: #c77a10;
+    --shadow: 0 1px 2px rgba(16,26,43,.05), 0 6px 20px rgba(16,26,43,.06);
+  }
+  :root[data-theme="dark"] {
+    --bg: #0a0e16; --panel: #131b29; --panel-2: #0f1723;
+    --ink: #e8eef8; --ink-2: #9fb0c8; --ink-3: #6d7f99; --line: #26324a;
+    --accent: #5f8bff; --flow: #2fc2da;
+    --z-cloud: #5f8bff; --z-data: #2fc2da; --z-worker: #f0a93a;
+    --z-machine: #f0784c; --z-ext: #34c489;
+    --good: #34c489; --warn: #f0a93a;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 26px rgba(0,0,0,.35);
+  }
+
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+    font-family: var(--sans); line-height: 1.55; -webkit-font-smoothing: antialiased; }
+  .wrap { max-width: 1000px; margin: 0 auto; padding: 40px 22px 72px; }
+
+  header { margin-bottom: 28px; }
+  .kicker { font-family: var(--mono); font-size: 11px; letter-spacing: .16em;
+    text-transform: uppercase; color: var(--z-machine); font-weight: 600; }
+  h1 { font-size: clamp(26px, 4.2vw, 38px); line-height: 1.08; margin: 8px 0 10px;
+    letter-spacing: -.02em; text-wrap: balance; font-weight: 800; }
+  .lede { color: var(--ink-2); max-width: 64ch; font-size: 15px; margin: 0; }
+  .meta { display: flex; flex-wrap: wrap; gap: 8px 16px; margin-top: 16px;
+    font-family: var(--mono); font-size: 11.5px; color: var(--ink-3); }
+  .meta b { color: var(--ink-2); font-weight: 600; }
+
+  .section-h { display: flex; align-items: center; gap: 10px; margin: 38px 0 16px; }
+  .section-h h2 { font-size: 18px; margin: 0; letter-spacing: -.01em; }
+  .section-h .h-line { flex: 1; height: 1px; background: var(--line); }
+
+  .badge { font-family: var(--mono); font-size: 10px; font-weight: 600; letter-spacing: .04em;
+    padding: 2px 8px; border-radius: 20px; border: 1px solid; white-space: nowrap; }
+  .badge.ip { color: var(--z-machine); border-color: color-mix(in srgb, var(--z-machine) 45%, transparent);
+    background: color-mix(in srgb, var(--z-machine) 12%, transparent); }
+  .badge.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 45%, transparent);
+    background: color-mix(in srgb, var(--warn) 12%, transparent); }
+
+  /* ── reason callout ─────────────────────────────── */
+  .reason { border: 1.5px solid color-mix(in srgb, var(--warn) 42%, var(--line));
+    background: color-mix(in srgb, var(--warn) 7%, var(--panel)); border-radius: 16px; padding: 18px 20px; }
+  .reason .r-head { font-weight: 800; font-size: 16px; margin: 0 0 4px; }
+  .reason .r-sub { font-size: 13px; color: var(--ink-2); margin: 0 0 14px; }
+  .blockers { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .blocker { background: var(--panel); border: 1px solid var(--line);
+    border-left: 3px solid var(--warn); border-radius: 10px; padding: 13px 15px; }
+  .blocker .b-top { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+  .blocker .b-name { font-weight: 700; font-size: 14px; }
+  .blocker .b-tag { font-family: var(--mono); font-size: 10px; color: var(--ink-3); }
+  .blocker p { margin: 6px 0 0; font-size: 12.5px; color: var(--ink-2); }
+  .conclusion { display: flex; align-items: center; gap: 10px; margin-top: 14px;
+    font-size: 13.5px; color: var(--ink); font-weight: 600; }
+  .conclusion .arrow { color: var(--warn); font-family: var(--mono); }
+
+  /* ── spine ─────────────────────────────── */
+  .link { display: flex; flex-direction: column; align-items: center; gap: 3px; margin: 6px 0; }
+  .link .lbl { font-family: var(--mono); font-size: 10.5px; color: var(--ink-3);
+    background: var(--bg); padding: 0 8px; text-align: center; }
+  .link .stem { width: 2px; height: 22px; position: relative;
+    background: linear-gradient(var(--line), var(--z-machine)); }
+  .link .stem::after { content: ""; position: absolute; bottom: -1px; left: 50%; transform: translateX(-50%);
+    border: 5px solid transparent; border-top-color: var(--z-machine); }
+  @media (prefers-reduced-motion: no-preference) {
+    .link .stem { background-size: 100% 200%;
+      background-image: linear-gradient(var(--line), var(--z-machine), var(--line));
+      animation: flow 2.4s linear infinite; }
+    @keyframes flow { from { background-position: 0 -44px; } to { background-position: 0 44px; } }
+  }
+
+  /* ── context tier cards ─────────────────────────────── */
+  .tier { display: grid; grid-template-columns: repeat(auto-fit, minmax(215px, 1fr)); gap: 12px; }
+  .box { background: var(--panel); border: 1px solid var(--line);
+    border-top: 3px solid var(--zc, var(--accent)); border-radius: 12px;
+    padding: 13px 15px; box-shadow: var(--shadow); }
+  .box .b-top { display: flex; align-items: baseline; gap: 8px; justify-content: space-between; }
+  .box .name { font-weight: 700; font-size: 14px; }
+  .box .spec { font-family: var(--mono); font-size: 10px; color: var(--ink-3); white-space: nowrap; }
+  .box .desc { font-size: 12.5px; color: var(--ink-2); margin-top: 5px; }
+  .box .tags { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 9px; }
+  .tag { font-family: var(--mono); font-size: 10px; color: var(--ink-2);
+    background: var(--panel-2); border: 1px solid var(--line); border-radius: 5px; padding: 2px 6px; }
+  code { font-family: var(--mono); font-size: 11px;
+    background: var(--panel-2); border: 1px solid var(--line); border-radius: 4px; padding: 1px 5px; }
+
+  /* ── the machine ─────────────────────────────── */
+  .pc { border: 1.5px solid color-mix(in srgb, var(--z-machine) 45%, var(--line));
+    background: color-mix(in srgb, var(--z-machine) 7%, var(--panel)); border-radius: 18px; padding: 18px; }
+  .pc-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 4px; }
+  .pc-head .name { font-weight: 800; font-size: 17px; }
+  .pc-head .host { font-family: var(--mono); font-size: 11px; color: var(--ink-3);
+    border: 1px solid var(--line); border-radius: 6px; padding: 2px 7px; }
+  .pc-sub { font-size: 12.5px; color: var(--ink-2); margin: 0 0 14px; }
+  .lanes { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  .lane { background: var(--panel); border: 1px solid var(--line);
+    border-left: 3px solid var(--zc, var(--z-machine)); border-radius: 12px; padding: 14px 15px; }
+  .lane .l-top { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
+  .lane .l-name { font-weight: 700; font-size: 14.5px; }
+  .lane .l-job { font-family: var(--mono); font-size: 10.5px; color: var(--z-machine); }
+  .lane .l-desc { font-size: 12.5px; color: var(--ink-2); margin: 7px 0 0; }
+  .steps { list-style: none; margin: 11px 0 0; padding: 0; display: grid; gap: 7px; counter-reset: s; }
+  .steps li { position: relative; padding-left: 26px; font-size: 12px; color: var(--ink-2); }
+  .steps li::before { counter-increment: s; content: counter(s);
+    position: absolute; left: 0; top: 0; width: 17px; height: 17px; border-radius: 5px;
+    display: grid; place-items: center; font-family: var(--mono); font-size: 10px; font-weight: 700;
+    color: var(--z-machine); background: color-mix(in srgb, var(--z-machine) 12%, transparent);
+    border: 1px solid color-mix(in srgb, var(--z-machine) 35%, transparent); }
+  .lane .env { font-family: var(--mono); font-size: 10.5px; color: var(--ink-3); margin-top: 11px;
+    border-top: 1px dashed var(--line); padding-top: 9px; }
+
+  .notes { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+  .note { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 13px 15px; }
+  .note.warn { border-left: 3px solid var(--warn); }
+  .note h3 { margin: 0 0 5px; font-size: 12px; font-family: var(--mono); letter-spacing: .04em;
+    text-transform: uppercase; color: var(--ink); }
+  .note p { margin: 0; font-size: 12.5px; color: var(--ink-2); }
+
+  footer { margin-top: 44px; padding-top: 16px; border-top: 1px solid var(--line);
+    font-size: 12px; color: var(--ink-3); font-family: var(--mono); }
+
+  @media (max-width: 620px) { .blockers, .lanes { grid-template-columns: 1fr; } }
+</style>
+
+<div class="wrap">
+  <header>
+    <div class="kicker">STEP-D · 사무실 PC 맥락도</div>
+    <h1>윈도우2 — 클라우드가 못 하는 일</h1>
+    <p class="lede">파이프라인의 거의 전부는 클라우드가 한다. 딱 두 가지, <b>네이버 발행</b>과 <b>유튜브 다운로드</b>만 한국 IP가 필요해서 상시 켜둔 사무실 PC(윈도우2)가 맡는다. 이 PC가 왜 있고 무엇과 연결되는지를 담았다.</p>
+    <div class="meta">
+      <span><b>머신</b> 윈도우2 · 상시 가동</span>
+      <span><b>레인</b> naver · download</span>
+      <span><b>기준</b> 2026-08-24</span>
+    </div>
+  </header>
+
+  <!-- WHY -->
+  <div class="section-h"><h2>왜 이 PC가 필요한가</h2><span class="h-line"></span></div>
+  <div class="reason">
+    <p class="r-head">해외 데이터센터 IP(클라우드)로는 두 가지가 막힌다</p>
+    <p class="r-sub">클라우드는 미국 리전(us-central1)이다. 두 플랫폼 모두 그 IP를 사람이 아닌 것으로 본다.</p>
+    <div class="blockers">
+      <div class="blocker">
+        <div class="b-top"><span class="b-name">네이버 로그인</span><span class="b-tag">캡차·2차인증</span></div>
+        <p>네이버 TV·클립은 <b>공개 업로드 API가 없어</b> 브라우저 자동화로 로그인해야 하는데, 해외 IP로 로그인하면 캡차·2차인증에 막힌다.</p>
+      </div>
+      <div class="blocker">
+        <div class="b-top"><span class="b-name">유튜브 다운로드</span><span class="b-tag">봇 판정 403</span></div>
+        <p>연구 데이터셋용 다운로드는 데이터센터 IP를 <b>봇으로 판정</b>해 막힌다("Sign in to confirm you're not a bot"). 쿠키를 물려도 상시 실패.</p>
+      </div>
+    </div>
+    <div class="conclusion"><span class="arrow">→</span><span>그래서 <b>한국 가정용 IP를 가진 상시 PC</b> 하나가 이 두 레인만 전담한다.</span></div>
+  </div>
+
+  <!-- UPSTREAM -->
+  <div class="section-h"><h2>맥락 — 무엇과 연결되나</h2><span class="h-line"></span></div>
+  <div class="tier">
+    <div class="box" style="--zc:var(--z-data)">
+      <div class="b-top"><span class="name">Cloud SQL · job_queue</span><span class="spec">claim</span></div>
+      <div class="desc">모든 잡이 여기 있다. 윈도우2는 <code>FOR UPDATE SKIP LOCKED</code>로 <b>자기 레인 잡만</b> 집는다.</div>
+      <div class="tags"><span class="tag">naver.publish</span><span class="tag">youtube.download</span></div>
+    </div>
+    <div class="box" style="--zc:var(--z-worker)">
+      <div class="b-top"><span class="name">작업 스케줄러</span><span class="spec">Windows</span></div>
+      <div class="desc">윈도우2의 Task Scheduler가 워커 프로세스를 주기 기동. 런처 <code>worker:naver</code>가 <code>naver,download</code> 레인을 고정.</div>
+    </div>
+    <div class="box" style="--zc:var(--z-machine)">
+      <div class="b-top"><span class="name">편집자 로그인 exe</span><span class="spec">raw CDP</span></div>
+      <div class="desc">네이버 세션은 사람이 로그인해 만든다. 편집자용 로그인 도구(bun 바이너리 → raw CDP)가 세션을 저장.</div>
+      <div class="tags"><span class="tag">naver-session-store</span></div>
+    </div>
+  </div>
+
+  <div class="link"><span class="lbl">claim (한국 IP 레인)</span><div class="stem"></div></div>
+
+  <!-- THE MACHINE -->
+  <div class="pc">
+    <div class="pc-head">
+      <span class="name">윈도우2</span>
+      <span class="badge ip">한국 IP 필수</span>
+      <span class="host">상시 가동 · 워커 프로세스</span>
+    </div>
+    <p class="pc-sub">한 프로세스가 두 레인을 돌린다. 무거운 분석은 안 한다 — 한국 IP가 꼭 필요한 접점만 처리하고 결과를 클라우드로 넘긴다.</p>
+    <div class="lanes">
+      <div class="lane" style="--zc:var(--z-ext)">
+        <div class="l-top"><span class="l-name">네이버 발행</span><span class="l-job">naver.publish</span></div>
+        <p class="l-desc">공개 업로드 API가 없어 <b>Playwright/CDP 브라우저 자동화</b>로 사람처럼 올린다.</p>
+        <ol class="steps">
+          <li>저장된 네이버 로그인 세션 로드</li>
+          <li>편집 완성본을 브라우저로 업로드</li>
+          <li>결과(게시 URL·상태)를 job_queue에 기록</li>
+        </ol>
+        <div class="env">세션 blob = 그 계정의 전체 권한 → 라우트는 <code>requireManager</code></div>
+      </div>
+      <div class="lane" style="--zc:var(--z-cloud)">
+        <div class="l-top"><span class="l-name">유튜브 다운로드</span><span class="l-job">youtube.download</span></div>
+        <p class="l-desc">연구 데이터셋 수집. <b>yt-dlp</b>로 공개 영상을 받아 GCS로 올린다.</p>
+        <ol class="steps">
+          <li>yt-dlp로 다운로드 <code>player_client=web_safari</code></li>
+          <li>받은 파일을 GCS(stepd-media)에 업로드</li>
+          <li>분석은 클라우드 <b>content 레인</b>이 이어받음</li>
+        </ol>
+        <div class="env">기본 client는 403 봇차단 → <code>web_safari</code>로 회피 · fast=오디오만</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="link"><span class="lbl">업로드 · 발행</span><div class="stem"></div></div>
+
+  <!-- DOWNSTREAM -->
+  <div class="tier">
+    <div class="box" style="--zc:var(--z-data)">
+      <div class="b-top"><span class="name">GCS · stepd-media</span><span class="spec">object</span></div>
+      <div class="desc">다운로드 영상이 여기 올라가면 <b>클라우드 content 워커</b>가 <code>content.analyze</code>로 분석을 잇는다.</div>
+    </div>
+    <div class="box" style="--zc:var(--z-ext)">
+      <div class="b-top"><span class="name">네이버 TV·클립</span><span class="spec">외부 채널</span></div>
+      <div class="desc">최종 산출물이 발행되는 곳. STEP-D에서 네이버로 나가는 <b>유일한 경로</b>가 이 PC다.</div>
+    </div>
+    <div class="box" style="--zc:var(--z-cloud)">
+      <div class="b-top"><span class="name">클라우드 content 레인</span><span class="spec">이어받음</span></div>
+      <div class="desc">다운로드 이후의 STT·장면·추천은 전부 클라우드가. 윈도우2는 <b>진입점</b>만 담당.</div>
+    </div>
+  </div>
+
+  <!-- OPS -->
+  <div class="section-h"><h2>운영 주의</h2><span class="h-line"></span></div>
+  <div class="notes">
+    <div class="note warn"><h3>잡이 안 잡히면</h3><p><code>all</code> 워커는 머신 전용 레인(<code>naver·download</code>)을 <b>안 집는다</b>. 잡이 조용히 안 돌면 윈도우2의 워커 프로세스가 떠 있는지부터 확인.</p></div>
+    <div class="note warn"><h3>self-update 깨짐</h3><p>윈도우2 자동 업데이트가 pnpm no-TTY로 깨져 있어 <b>수동 재시작</b>이 필요하다. 코드 갱신 후 그냥 두면 옛 버전이 돈다.</p></div>
+    <div class="note"><h3>윈도우1과 구분</h3><p><b>윈도우1</b>=개발·배포 전용(<code>desktop-c5bdabc</code> · <code>cloud.sh</code>·Vercel). <b>윈도우2</b>=이 워커 전용. 파이프라인엔 윈도우2만 낀다.</p></div>
+    <div class="note"><h3>봇차단은 연구용에 한정</h3><p>실서비스 영상 수집은 운영자 <b>업로드</b>라 봇차단 위험이 없다. yt-dlp 다운로드는 <b>연구 데이터셋</b> 구축용 — 그래서 이 우회가 필요.</p></div>
+  </div>
+
+  <footer>STEP-D · 근거 docs/ops/infra.md · CLAUDE.md(워커 레인) · 기준 2026-08-24</footer>
+</div>
