@@ -6105,7 +6105,9 @@ app.get("/api/credits", async (c) => {
  * 빈 배열 = 추가 수신자 없음(결제창 이메일 1순위는 그대로다). 결제 설정이라 관리자만.
  */
 app.post("/api/billing/notify-emails", async (c) => {
-  requireCardActor(c);
+  // 내부 토큰(운영 배선)도 허용 — 카드 등록과 달리 알림 수신자 목록은 결제 실행 권한이
+  // 아니라서 위험 성격이 다르다. 사람 경로는 기존 그대로 관리자만(requireCardActor).
+  if (currentContext()?.via !== "internal") requireCardActor(c);
   const body = await c.req.json().catch(() => ({}) as Record<string, unknown>);
   const raw: unknown[] = Array.isArray(body.emails) ? body.emails : [];
   const emails: string[] = [...new Set(raw.map((e: unknown) => String(e).trim().toLowerCase()).filter(Boolean))];
