@@ -1,11 +1,10 @@
 "use client";
 
 /**
- * U12 · 자동 배포 — "반자동 파이프라인 한 장" (README §12 · FLOWS F6 · 2026-08-14 재배치).
+ * U12 · 자동 배포 — 디자인 기준 단일 세로 파이프라인 (Main.dc.html · 2026-08-24).
  *
  * 위에서 아래로 사람이 정하는 것 → 시스템이 하는 것 순서다:
- *   ① 프로그램 선택 → ② 회차·영상(분석 상태 + 영상 등록) → ③ 배포 채널 → ④ 실행(+ 진행)
- *   → 승인 대기 → ⑤ 기록(규칙 + 자동 배포 기록).
+ *   ① 프로그램 선택 → ② 할당 영상 → ③ 배포 설정 → 시작 → 스케줄·대기·완료.
  *
  * 지키는 것(재배치 전과 동일):
  *  - 규칙 하나 = 프로그램 ↔ 채널 연결 하나. **규칙이 없으면 아무것도 하지 않는다.**
@@ -173,14 +172,6 @@ const TEMPLATE_SEED_UI: Record<string, { accent: string; titleY: number; iconY: 
   "broadcast-drama": { accent: "#40E0E0", titleY: 8, iconY: 77, boxY: 87.5, iconSize: 50 },
   "broadcast-clean": { accent: "#FF4040", titleY: 11, iconY: 80, boxY: 92, iconSize: 40 },
 };
-
-const STEPS = [
-  { n: "01", title: "회차 수신", desc: "새 회차 원본 감지 · 없으면 스킵" },
-  { n: "02", title: "분석", desc: "분석 큐 투입 · 완료까지 다음 확인 때 다시 봄" },
-  { n: "03", title: "미디어 생성", desc: "규칙 조건 통과분만 생성 · 미달은 생성 안 함" },
-  { n: "04", title: "업로드 준비", desc: "규칙의 배포 방식대로 — 승인 배포는 사람 확정 후, 승인 없이 배포는 권리 문제만 대기", amber: true },
-  { n: "05", title: "게시", desc: "채널 규칙 적용 · 실패는 자동 재시도 없음", blue: true },
-];
 
 /** 규칙의 채널 목록 — 배열이 정본, 없으면 단수 폴백(구 규칙). */
 const channelsOf = (r: AutomationRule) =>
@@ -613,6 +604,38 @@ export default function AutomationPage() {
     }
   }
 
+  /** 참고 디자인의 "초기화" — 서버 규칙은 지우지 않고 현재 작성 중인 폼만 기본값으로 되돌린다. */
+  function resetWizard() {
+    const seed = TEMPLATE_SEED_UI["broadcast-standard"];
+    prefilledFor.current = null;
+    setSelProgram("");
+    setSelChannels([]);
+    setMediaKind("short");
+    setCriterion("score80");
+    setApproveFirst(true);
+    setWin("방영 익일 10시");
+    setDailyQuota(3);
+    setActiveStart(9);
+    setActiveEnd(22);
+    setWeekdays([]);
+    setSlots([]);
+    setTemplateId("");
+    setReframe("none");
+    setSubtitles(true);
+    setLayout({
+      titleY: seed.titleY,
+      channelIconY: seed.iconY,
+      channelBoxY: seed.boxY,
+      channelIconSize: seed.iconSize,
+      titleColor: seed.accent,
+      subtitleY: SUBTITLE_DEFAULTS.y,
+      subtitleSize: SUBTITLE_DEFAULTS.size,
+      subtitleColor: SUBTITLE_DEFAULTS.color,
+    });
+    setShowAdvanced(false);
+    toast({ title: "입력값을 초기화했습니다", description: "저장된 자동배포 규칙은 변경하지 않았습니다.", tone: "done" });
+  }
+
   /** 영상 하나 승인 — 그 영상에 걸린 보류를 **전부** 푼다(규칙이 둘이면 둘 다). 하나라도
    *  남으면 다음 순방에서 그 규칙이 다시 잡아 승인이 안 먹은 것처럼 보인다. */
   async function release(entry: { clipId: string; holds: RuleHold[] }) {
@@ -755,7 +778,26 @@ export default function AutomationPage() {
   const stepDim = (on: boolean) => (on ? undefined : { opacity: 0.65, pointerEvents: "none" as const });
 
   return (
-    <div className="mx-auto flex max-w-[1240px] flex-col gap-[14px]">
+    <div className="mx-auto flex max-w-[980px] flex-col gap-5 pb-10">
+      {/* 참고 디자인의 헤더 계층을 제품 토큰으로 옮긴다. 상태는 오른쪽에서 바로 확인한다. */}
+      <header
+        className="overflow-hidden rounded-[10px] px-5 py-5 text-white shadow-sm sm:px-6"
+        style={{ background: "linear-gradient(135deg, #4f5fc7 0%, #5b2f8f 100%)" }}
+      >
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <h1 className="text-[22px] font-semibold tracking-[-0.02em]">영상 자동배포 파이프라인</h1>
+            <p className="mt-1 max-w-[620px] text-[13px] leading-relaxed text-white/90">
+              프로그램 영상을 자동 분석하고, 클립·메타데이터를 만든 뒤 선택한 채널과 일정에 맞춰 배포합니다.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2 text-[11px]">
+            <span className="rounded-full bg-white/15 px-2.5 py-1 font-medium">{statusLabel}</span>
+            {lastRel && <span className="rounded-full bg-black/15 px-2.5 py-1">마지막 확인 {lastRel}</span>}
+          </div>
+        </div>
+      </header>
+
       {/* ── 게이트 착시 방지 — 실업로드가 꺼져 있으면 최상단에서 먼저 말한다 ── */}
       {gateBlocked && (
         <div
@@ -839,65 +881,41 @@ export default function AutomationPage() {
         </div>
       )}
 
-      {/* ── 5단계 안내 — 규칙이 하나라도 있으면 자리만 차지한다. 첫 진입에만. ── */}
-      {!loading && rules.length === 0 && (
-        <div className="grid gap-2 [grid-template-columns:repeat(auto-fit,minmax(190px,1fr))]">
-          {STEPS.map((s) => (
-            <div
-              key={s.n}
-              className="sd-card flex flex-col gap-1 p-3"
-              style={
-                s.amber
-                  ? { borderColor: "var(--sd-warn-border)", background: "var(--sd-warn-bg)" }
-                  : s.blue
-                    ? { borderColor: "var(--sd-accent-border)", background: "var(--sd-accent-bg)" }
-                    : undefined
-              }
-            >
-              <span className="sd-eb" style={{ color: "var(--sd-label)" }}>{s.n}</span>
-              <span className="text-[12.5px] font-semibold" style={{ color: "var(--sd-fg)" }}>{s.title}</span>
-              <span className="text-[10.5px] leading-relaxed" style={{ color: "var(--sd-mut)" }}>{s.desc}</span>
-            </div>
-          ))}
-        </div>
-      )}
-
       {/* ── ① 프로그램 선택 ─────────────────────────────────────────────────── */}
-      <section className="sd-card flex flex-col gap-2 p-3">
-        <div className="flex items-baseline gap-2">
-          <span className="sd-eb" style={{ color: "var(--sd-label)" }}>①</span>
-          <h3 className="sd-serif text-[15px] font-semibold" style={{ color: "var(--sd-fg)" }}>프로그램 선택</h3>
-          <span className="text-[11px]" style={{ color: "var(--sd-mut)" }}>고르면 아래 단계가 열립니다</span>
-        </div>
+      <section className="sd-card flex flex-col gap-3 p-4 sm:p-5">
+        <FlowStepHeader step="1" title="프로그램 선택" description="자동배포할 프로그램을 먼저 선택하세요" />
         {programs.length === 0 ? (
           <div className="sd-ph grid min-h-[56px] place-items-center rounded-[6px] px-6 text-center text-[11.5px]"
             style={{ border: "1px dashed var(--sd-border)" }}>
             프로그램이 없습니다 — <Link href="/programs" className="underline">콘텐츠</Link>에서 먼저 만들어 주세요.
           </div>
         ) : (
-          <div className="flex flex-wrap gap-1.5">
-            {programs.map((p) => (
-              <button
-                key={p.id}
-                type="button"
-                className={cn("sd-btn", selProgram === p.id && "sd-btn--on")}
-                onClick={() => setSelProgram(p.id === selProgram ? "" : p.id)}
-              >
-                {p.title}
-              </button>
-            ))}
+          <div>
+            <label htmlFor="automation-program" className="mb-1.5 block text-[12px] font-medium" style={{ color: "var(--sd-label)" }}>
+              배포할 프로그램
+            </label>
+            <select
+              id="automation-program"
+              value={selProgram}
+              onChange={(e) => setSelProgram(e.target.value)}
+              className="sd-input h-10 w-full text-[13px]"
+            >
+              <option value="">프로그램을 선택하세요</option>
+              {programs.map((p) => <option key={p.id} value={p.id}>{p.title}</option>)}
+            </select>
+            {ruleForProgram && (
+              <p className="mt-1.5 text-[11px]" style={{ color: "var(--sd-mut)" }}>
+                이미 자동배포 규칙이 있습니다. 아래에서 수정한 뒤 시작하면 기존 규칙이 갱신됩니다.
+              </p>
+            )}
           </div>
         )}
       </section>
 
       {/* ── ② 회차 · 영상 — 분석 완료는 생략, 없으면 등록 ───────────────────── */}
-      <section className="sd-card flex flex-col gap-2 p-3" style={stepDim(Boolean(selProgram))}>
+      <section className="sd-card flex flex-col gap-3 p-4 sm:p-5" style={stepDim(Boolean(selProgram))}>
         <div className="flex flex-wrap items-center gap-2">
-          <span className="sd-eb" style={{ color: "var(--sd-label)" }}>②</span>
-          <h3 className="sd-serif text-[15px] font-semibold" style={{ color: "var(--sd-fg)" }}>회차 · 영상</h3>
-          <span className="text-[11px]" style={{ color: "var(--sd-mut)" }}>
-            분석이 끝난 회차는 <b>생략</b>하고, 새 영상만 분석에 들어갑니다
-          </span>
+          <FlowStepHeader step="2" title="프로그램 할당 영상" description="등록된 영상은 자동 분석 대기열에 연결됩니다" />
           {/* 기존 업로드 모달 재사용 — 새 업로드 로직을 발명하지 않는다(F1 과 같은 문). */}
           <span className="ml-auto">
             <UploadVideoButton programId={selProgram || undefined} className="sd-btn" label="＋ 영상 등록" />
@@ -918,8 +936,9 @@ export default function AutomationPage() {
             {programEpisodes.map((ep) => {
               const a = episodeAnalysis(ep, Boolean(mediaForEpisode(ep.id, "master")));
               return (
-                <div key={ep.id} className="flex flex-wrap items-center gap-2 rounded-[4px] px-2.5 py-1.5"
-                  style={{ border: "1px solid var(--sd-border)" }}>
+                <div key={ep.id} className="flex flex-wrap items-center gap-2 rounded-[6px] px-3 py-2.5"
+                  style={{ border: "1px solid var(--sd-accent-border)", background: "var(--sd-accent-bg)" }}>
+                  <span className="grid size-8 shrink-0 place-items-center rounded-[5px] text-[14px]" style={{ background: "var(--sd-card)" }} aria-hidden>▶</span>
                   <Link href={`/episodes/${ep.id}`} className="text-[12px] font-medium underline-offset-2 hover:underline"
                     style={{ color: "var(--sd-fg)" }}>
                     {ep.episodeNumber}화
@@ -940,11 +959,13 @@ export default function AutomationPage() {
         )}
       </section>
 
-      {/* ── ③ 배포 채널 ─────────────────────────────────────────────────────── */}
-      <section className="sd-card flex flex-col gap-2 p-3" style={stepDim(Boolean(selProgram))}>
+      {/* ── ③ 자동배포 설정 — 참고 디자인처럼 채널·일정·템플릿·방식을 한 단계로 묶는다. ── */}
+      <section className="sd-card flex flex-col gap-4 p-4 sm:p-5" style={stepDim(Boolean(selProgram))}>
+        <FlowStepHeader step="3" title="자동배포 설정" description="채널, 일정, 배포 방식과 영상 템플릿을 설정하세요" />
+
+        <div className="flex flex-col gap-2 rounded-[6px] p-3" style={{ background: "var(--sd-card-sub)", border: "1px solid var(--sd-border)" }}>
         <div className="flex flex-wrap items-baseline gap-2">
-          <span className="sd-eb" style={{ color: "var(--sd-label)" }}>③</span>
-          <h3 className="sd-serif text-[15px] font-semibold" style={{ color: "var(--sd-fg)" }}>배포 채널</h3>
+          <h4 className="text-[12.5px] font-semibold" style={{ color: "var(--sd-fg)" }}>배포 채널</h4>
           <span className="text-[11px]" style={{ color: "var(--sd-mut)" }}>
             {selChannels.length}개 선택 · 채널당 하루 {dailyQuota}개
           </span>
@@ -983,26 +1004,16 @@ export default function AutomationPage() {
           YouTube·네이버는 실제 파일이 업로드됩니다. Instagram/Facebook/TikTok 은 배포 기록만
           남고 실제 게시는 담당자가 해당 앱에서 직접 해야 합니다.
         </p>
-      </section>
+        </div>
 
-      {/* ── ④ 실행 — 규칙 upsert + 즉시 확인 · 진행 패널 ─────────────────────── */}
-      <section className="sd-card flex flex-col gap-2.5 p-3" style={stepDim(Boolean(selProgram))}>
+        <div className="flex flex-col gap-3">
         <div className="flex flex-wrap items-center gap-2">
-          <span className="sd-eb" style={{ color: "var(--sd-label)" }}>④</span>
-          <h3 className="sd-serif text-[15px] font-semibold" style={{ color: "var(--sd-fg)" }}>실행</h3>
+          <h4 className="text-[12.5px] font-semibold" style={{ color: "var(--sd-fg)" }}>배포 계획</h4>
           {ruleForProgram && (
             <span className="text-[11px]" style={{ color: "var(--sd-mut)" }}>
               이 프로그램의 규칙이 이미 있습니다 — 시작하면 <b>갱신</b>됩니다
             </span>
           )}
-          <button
-            type="button"
-            className="sd-btn sd-btn-primary ml-auto"
-            disabled={starting || !selProgram || selChannels.length === 0}
-            onClick={() => void startAutoDeploy()}
-          >
-            {starting ? "시작 중…" : "자동 배포 시작"}
-          </button>
         </div>
 
         {/* 배포 방식 — **자동배포의 두 갈래.** 고급 설정에 묻혀 있던 승인 방식을 1급 선택지로
@@ -1067,16 +1078,39 @@ export default function AutomationPage() {
         {/* 월 예상 — 순방 판정과 같은 함수로 계산한다(파일 상단 import 주석). 화면에서 직접 곱하지 않는다. */}
         <PublishEstimate weekdays={weekdays} slots={slots} dailyQuota={dailyQuota} channels={chansOf(selChannels)} />
 
-        {/* 렌더 방식(템플릿·미리보기·제목색·위치·자막) — "고급"에 묻지 않고 눈에 보이는 버튼으로.
-            "어떻게 렌더되는지"는 운영자가 당연히 정하고 싶은 1급 결정이라 밖으로 뺀다(사용자 2026-08-19). */}
-        <button
-          type="button"
-          className="sd-btn sd-btn-primary self-start"
-          disabled={!layout}
-          onClick={() => setTplPreviewOpen(true)}
+        {/* 참고 디자인처럼 템플릿 선택과 미리보기를 한 줄에 둔다. 세부 위치 조절은 미리보기에서 한다. */}
+        <div>
+          <label htmlFor="automation-template" className="mb-1.5 block text-[11px] font-medium" style={{ color: "var(--sd-label)" }}>
+            영상 템플릿
+          </label>
+          <div className="flex flex-col gap-2 sm:flex-row">
+            <select
+              id="automation-template"
+              value={templateId}
+              onChange={(e) => setTemplateId(e.target.value)}
+              className="sd-input h-10 min-w-0 flex-1"
+            >
+              <option value="">자동 선택 (드라마=확대 크롭 · 그 외=표준)</option>
+              {templates.map((t) => <option key={t.name} value={t.name}>{t.title || t.name}</option>)}
+            </select>
+            <button
+              type="button"
+              className="sd-btn min-h-10 shrink-0 px-4"
+              disabled={!layout}
+              onClick={() => setTplPreviewOpen(true)}
+            >
+              미리보기 · 세부 조정
+            </button>
+          </div>
+        </div>
+
+        <div
+          className="rounded-[6px] px-3 py-2.5 text-[11.5px] leading-relaxed"
+          style={{ background: "color-mix(in srgb, var(--sd-ok) 9%, var(--sd-card))", borderLeft: "3px solid var(--sd-ok)", color: "var(--sd-fg)" }}
         >
-          🎬 템플릿 설정 — 미리보기 · 제목 색·위치 · 아이콘 · 자막
-        </button>
+          <b>메타데이터 자동생성 · 필수</b>
+          <span style={{ color: "var(--sd-mut)" }}> — 영상을 분석해 채널에 맞는 제목·설명·태그를 자동으로 만듭니다.</span>
+        </div>
 
         {/* 담당자 알림 — 자동배포가 실제로 나가면 이 주소로 영상 제목·URL 메일이 간다.
             규칙이 아니라 워크스페이스 설정이다(어느 규칙이 내보내든 같은 담당자가 받는다). */}
@@ -1128,7 +1162,7 @@ export default function AutomationPage() {
           style={{ color: "var(--sd-mut)" }}
           onClick={() => setShowAdvanced((v) => !v)}
         >
-          {showAdvanced ? "▾ 고급 설정 접기" : "▸ 고급 설정 (점수 기준 · 한도 · 템플릿)"}
+          {showAdvanced ? "▾ 고급 설정 접기" : "▸ 고급 설정 (점수 기준 · 한도 · AI 리프레임)"}
         </button>
         {showAdvanced && (
           <div className="flex flex-col gap-2.5 rounded-[5px] p-3"
@@ -1213,19 +1247,6 @@ export default function AutomationPage() {
 
             <input value={win} onChange={(e) => setWin(e.target.value)} placeholder="시간대" className="sd-input w-full" />
 
-            {/* 렌더 템플릿 — 자동 생성 클립의 기본 모양. 비우면 프로그램 장르로 자동 선택. */}
-            <div>
-              <select value={templateId} onChange={(e) => setTemplateId(e.target.value)} className="sd-input w-full">
-                <option value="">템플릿: 자동 (드라마=확대 크롭 · 그 외=표준)</option>
-                {templates.map((t) => (
-                  <option key={t.name} value={t.name}>템플릿: {t.title || t.name}</option>
-                ))}
-              </select>
-              <p className="mt-1 text-[10.5px]" style={{ color: "var(--sd-fg-dim)" }}>
-                로고·방영시간은 프로그램 설정(쇼츠 아이콘·편성 시간)에서 채워집니다.
-              </p>
-            </div>
-
             {/* 미리보기 + 위치 조절 — 저장되는 렌더 기하와 같은 % 좌표를 그대로 그린다.
                 소형 카드 클릭 = 대형 다이얼로그(같은 TemplatePreview, width 만 다름). */}
             {layout && (
@@ -1266,7 +1287,12 @@ export default function AutomationPage() {
 
         {/* 진행 패널 — 단계별 사실만(개수·상태). 스토어 폴링 + 편승 재조회가 갱신한다. */}
         {selProgram && progress && (
-          <div className="grid gap-2 [grid-template-columns:repeat(auto-fit,minmax(190px,1fr))]">
+          <div className="flex flex-col gap-2 rounded-[6px] p-3" style={{ background: "var(--sd-card-sub)", border: "1px solid var(--sd-border)" }}>
+            <div className="flex items-baseline justify-between gap-2">
+              <h4 className="text-[12.5px] font-semibold" style={{ color: "var(--sd-fg)" }}>배포 대기 목록</h4>
+              <span className="text-[10.5px]" style={{ color: "var(--sd-mut)" }}>분석 → 클립 선정 → 렌더 → 배포</span>
+            </div>
+            <div className="grid gap-2 [grid-template-columns:repeat(auto-fit,minmax(180px,1fr))]">
             {/* 1) 분석 */}
             <div className="rounded-[5px] p-2.5" style={{ border: "1px solid var(--sd-border)" }}>
               <div className="text-[11px] font-semibold" style={{ color: "var(--sd-label)" }}>1 · 분석</div>
@@ -1305,8 +1331,53 @@ export default function AutomationPage() {
                     (progress.heldCount ? ` · 승인 대기 ${progress.heldCount}` : "")}
               </div>
             </div>
+            </div>
           </div>
         )}
+
+        </div>
+
+        {/* 참고 디자인의 명확한 액션 바. 시작/초기화/중단은 설정이 끝난 뒤 한곳에 모은다. */}
+        <div className="flex flex-wrap gap-2 border-t pt-4" style={{ borderColor: "var(--sd-border)" }}>
+          <button
+            type="button"
+            className="sd-btn sd-btn-primary min-h-10 px-5 text-[12.5px] font-semibold"
+            disabled={starting || !selProgram || selChannels.length === 0}
+            onClick={() => void startAutoDeploy()}
+          >
+            {starting ? "시작 중…" : "▶ 자동배포 시작"}
+          </button>
+          <button type="button" className="sd-btn min-h-10 px-5 text-[12.5px] font-semibold" onClick={resetWizard}>
+            ↺ 입력 초기화
+          </button>
+          {(hasEnabledRules || paused) && (
+            <button
+              type="button"
+              className="sd-btn min-h-10 px-5 text-[12.5px] font-semibold"
+              style={{ borderColor: "var(--sd-danger-border)", color: "var(--sd-danger-strong)" }}
+              onClick={togglePause}
+            >
+              {paused ? "▶ 자동배포 재시작" : "■ 자동배포 중단"}
+            </button>
+          )}
+        </div>
+      </section>
+
+      {/* 저장 전에도 선택한 일정이 어떻게 해석되는지 바로 보여 준다. */}
+      <section className="sd-card flex flex-col gap-3 p-4 sm:p-5">
+        <div className="flex items-baseline gap-2">
+          <h3 className="text-[15px] font-semibold" style={{ color: "var(--sd-fg)" }}>배포 스케줄</h3>
+          <span className="text-[11px]" style={{ color: "var(--sd-mut)" }}>선택한 요일·시간·채널 기준</span>
+        </div>
+        <ScheduleSummary
+          ready={Boolean(selProgram && selChannels.length)}
+          weekdays={weekdays}
+          slots={slots}
+          dailyQuota={dailyQuota}
+          activeStart={activeStart}
+          activeEnd={activeEnd}
+          channelCount={selChannels.length}
+        />
       </section>
 
       {/* ── 승인 대기 — 사람이 확정하는 지점(F6 Invariant) · ④ 아래 유지 ────── */}
@@ -1422,11 +1493,11 @@ export default function AutomationPage() {
         )}
       </section>
 
-      {/* ── ⑤ 기록 — 규칙 목록 + 자동 배포 기록 ─────────────────────────────── */}
+      {/* ── 규칙과 결과 — 참고 디자인의 "배포 완료 영상" 영역에 운영 상세를 더한다. ── */}
       <section className="flex flex-col gap-2">
         <div className="flex items-baseline gap-2">
-          <span className="sd-eb" style={{ color: "var(--sd-label)" }}>⑤</span>
-          <h3 className="sd-serif text-[16px] font-semibold" style={{ color: "var(--sd-fg)" }}>기록</h3>
+          <h3 className="text-[15px] font-semibold" style={{ color: "var(--sd-fg)" }}>배포 규칙 · 결과</h3>
+          <span className="text-[11px]" style={{ color: "var(--sd-mut)" }}>실행 중인 규칙과 완료·대기·실패 기록</span>
         </div>
 
         {/* 규칙 목록 — 무엇이 돌고 있는지의 정본 */}
@@ -1525,7 +1596,7 @@ export default function AutomationPage() {
 
         {/* 자동 배포 기록 — 규칙이 자동으로 배포한 것. 사람이 누른 배포는 배포 화면에서. */}
         <div className="mt-1 flex items-baseline gap-2">
-          <h4 className="text-[13px] font-semibold" style={{ color: "var(--sd-fg)" }}>자동 배포 기록</h4>
+          <h4 className="text-[13px] font-semibold" style={{ color: "var(--sd-fg)" }}>배포 완료 영상 · 처리 기록</h4>
           <span className="text-[11px]" style={{ color: "var(--sd-mut)" }}>
             규칙이 <b>자동으로</b> 배포한 것만 — 사람이 누른 배포는 배포 화면에서 봅니다
           </span>
@@ -1627,6 +1698,63 @@ export default function AutomationPage() {
           onClose={() => setTplPreviewOpen(false)}
         />
       )}
+    </div>
+  );
+}
+
+function FlowStepHeader({ step, title, description }: { step: string; title: string; description: string }) {
+  return (
+    <div className="flex min-w-0 flex-1 items-start gap-3">
+      <span
+        className="grid size-7 shrink-0 place-items-center rounded-full text-[12px] font-semibold"
+        style={{ background: "var(--sd-accent-bg)", color: "var(--sd-accent)", border: "1px solid var(--sd-accent-border)" }}
+      >
+        {step}
+      </span>
+      <div className="min-w-0">
+        <h3 className="text-[15px] font-semibold" style={{ color: "var(--sd-fg)" }}>{title}</h3>
+        <p className="mt-0.5 text-[11px] leading-relaxed" style={{ color: "var(--sd-mut)" }}>{description}</p>
+      </div>
+    </div>
+  );
+}
+
+function ScheduleSummary({ ready, weekdays, slots, dailyQuota, activeStart, activeEnd, channelCount }: {
+  ready: boolean;
+  weekdays: number[];
+  slots: string[];
+  dailyQuota: number;
+  activeStart: number;
+  activeEnd: number;
+  channelCount: number;
+}) {
+  if (!ready) {
+    return (
+      <div className="sd-ph grid min-h-[88px] place-items-center rounded-[6px] px-6 text-center text-[11.5px]"
+        style={{ border: "1px dashed var(--sd-border)" }}>
+        프로그램과 배포 채널을 선택하면 스케줄이 표시됩니다
+      </div>
+    );
+  }
+
+  const perDay = slots.length || dailyQuota;
+  const timeLabel = slots.length ? slots.join(" · ") : `${activeStart}:00~${activeEnd}:00 사이 자동 확인`;
+  return (
+    <div className="grid gap-2 sm:grid-cols-3">
+      <div className="rounded-[6px] p-3" style={{ background: "var(--sd-card-sub)", borderLeft: "3px solid var(--sd-ok)" }}>
+        <div className="text-[10.5px] font-medium" style={{ color: "var(--sd-label)" }}>배포 요일</div>
+        <div className="mt-1 text-[13px] font-semibold" style={{ color: "var(--sd-fg)" }}>{formatWeekdays(weekdays)}</div>
+      </div>
+      <div className="rounded-[6px] p-3" style={{ background: "var(--sd-card-sub)", borderLeft: "3px solid var(--sd-accent)" }}>
+        <div className="text-[10.5px] font-medium" style={{ color: "var(--sd-label)" }}>배포 시간</div>
+        <div className="mt-1 text-[13px] font-semibold" style={{ color: "var(--sd-fg)" }}>{timeLabel}</div>
+      </div>
+      <div className="rounded-[6px] p-3" style={{ background: "var(--sd-card-sub)", borderLeft: "3px solid var(--sd-warn)" }}>
+        <div className="text-[10.5px] font-medium" style={{ color: "var(--sd-label)" }}>예정 수량</div>
+        <div className="mt-1 text-[13px] font-semibold" style={{ color: "var(--sd-fg)" }}>
+          하루 {perDay}개 × 채널 {channelCount}곳
+        </div>
+      </div>
     </div>
   );
 }
