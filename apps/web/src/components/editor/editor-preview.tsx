@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useRef, useState, type CSSProperties, type Ref } from "react";
-import { Heart, MessageCircle, Send } from "lucide-react";
 import { ASPECTS, defaultElementSize, filterCss, fontFamilyCss, outScale, outputHeight, outputWidth, overlayVisibleAt, sampleKeyframes, type CaptionStyle, type EditorState } from "@/lib/editor/presets";
 import { getAspectPreset } from "@/lib/editor/aspect-presets";
 import { Movable, SnapGuides, InlineText, type Guides } from "@/components/editor/editor-overlay";
@@ -653,13 +652,13 @@ export function EditorPreview({
         {/* captions — the REAL STT line under the playhead (same transcript + timeline the
             render burns in, so preview = final). Falls back to a sample only when no
             transcript is loaded, so the caption zone never looks empty/broken. */}
-        {/* Caption sits at 14% from the bottom, center — the exact anchor the render uses
-            (ASS \an2, MarginV = H*0.14), so the previewed line lands where it bakes. */}
+        {/* Caption sits at 26% from the bottom, center — the exact anchor the render uses
+            (ASS \an2, MarginV = H*0.26), so the previewed line lands where it bakes. */}
         {state.captionsOn && hasTranscript && caption && (
           // 자막 위치·크기·색은 editorState 오버라이드(captionY/Size/Color)가 있으면 그걸 따른다
-          // (자동배포 규칙이 세팅) — 없으면 기존 기본(하단 14% · 스타일별 cqh · 스타일색). 서버
+          // (자동배포 규칙이 세팅) — 없으면 기본(하단 26% · 스타일별 cqh · 스타일색). 서버
           // 렌더(index.ts buildEditorAss)와 **같은 규칙**이라 미리보기=결과물이 유지된다.
-          <div className="absolute inset-x-0 px-6 text-center" style={{ bottom: `${state.captionY ?? 20}%` }}>
+          <div className="absolute inset-x-0 px-6 text-center" style={{ bottom: `${state.captionY ?? 26}%` }}>
             {(() => {
               const cap = captionStyleClasses(state.captionStyle);
               // 한국 방송은 word-by-word 하이라이트를 쓰지 않음(2026-07-24 사용자 지적).
@@ -685,7 +684,7 @@ export function EditorPreview({
             예전엔 확정 클립에서 transcript를 안 담아 실제 대사 대신 이 더미가 떴다 —
             이제 transcript는 항상 로드되므로 이 분기는 STT가 진짜 없는 경우에만 걸린다. */}
         {state.captionsOn && !hasTranscript && (
-          <div className="absolute inset-x-0 px-6 text-center" style={{ bottom: `${state.captionY ?? 20}%` }}>
+          <div className="absolute inset-x-0 px-6 text-center" style={{ bottom: `${state.captionY ?? 26}%` }}>
             <span className="px-1 font-bold" style={{ color: "#fff", opacity: 0.65, textShadow: "0 2px 6px rgba(0,0,0,.6)", fontSize: "3.4cqh" }}>
               이 회차는 아직 자막(STT) 데이터가 없습니다
             </span>
@@ -866,16 +865,9 @@ export function EditorPreview({
           );
         })}
 
-        {/* safe-area + mock Shorts UI */}
+        {/* safe-area 가이드 — 안전선만 표시(목업 쇼츠 UI 제거 · 2026-08-24 사용자 요청) */}
         {!aiFill && state.showSafeArea && (
-          <>
-            <div className="pointer-events-none absolute inset-[6%] rounded border border-dashed border-white/40" />
-            <div className="absolute bottom-[12%] right-3 flex flex-col items-center gap-3 text-white/80">
-              <Heart className="size-5" />
-              <MessageCircle className="size-5" />
-              <Send className="size-5" />
-            </div>
-          </>
+          <div className="pointer-events-none absolute inset-[6%] rounded border border-dashed border-white/40" />
         )}
       </div>
       </div>
