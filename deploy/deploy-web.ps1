@@ -90,7 +90,9 @@ $ahead = [int]((git rev-list --count "origin/main..HEAD").Trim())
 if ($ahead -le 0) { Ok "이미 최신 — 배포할 커밋 없음"; exit 0 }
 
 git log --oneline "origin/main..HEAD" | ForEach-Object { Write-Host "        $_" }
-if ((Invoke-Native "git" @("push", "origin", "main")) -ne 0) { Die "git push 실패" }
+# 위의 ahead/author 검사는 현재 HEAD 기준이다. push도 같은 HEAD를 보내야 작업 브랜치에서
+# 실행했을 때 로컬의 오래된 main을 잘못 밀거나 "성공했지만 새 배포 없음"이 되지 않는다.
+if ((Invoke-Native "git" @("push", "origin", "HEAD:main")) -ne 0) { Die "git push 실패" }
 Ok "푸시 완료 — Vercel 빌드 시작"
 
 # ── 4. Vercel 빌드 감시 ───────────────────────────────────────────────────────
