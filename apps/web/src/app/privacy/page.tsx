@@ -7,7 +7,7 @@ export const metadata = {
 
 export default function PrivacyPage() {
   return (
-    <LegalPage title="개인정보처리방침" updated="2026년 7월 14일">
+    <LegalPage title="개인정보처리방침" updated="2026년 8월 24일">
       <section>
         <p>
           STEP AI(이하 &ldquo;회사&rdquo;)는 콘텐츠 분석 서비스 STEP D(이하 &ldquo;서비스&rdquo;)를 운영합니다.
@@ -34,6 +34,10 @@ export default function PrivacyPage() {
             <strong>인증 토큰</strong> — Google이 발급한 액세스 토큰 및 갱신(refresh) 토큰.
             이용자를 대신해 위 데이터를 주기적으로 조회하기 위해 보관합니다.
           </li>
+          <li>
+            <strong>발행 콘텐츠</strong> — 이용자의 원본 영상에서 생성한 클립(영상 파일,
+            제목·설명·태그·썸네일·자막)을 이용자의 채널에 업로드·발행합니다.
+          </li>
         </ul>
         <p>
           회사는 <strong>이용자의 Google 계정 비밀번호를 받지도, 보관하지도 않습니다.</strong>
@@ -43,18 +47,24 @@ export default function PrivacyPage() {
 
       <section>
         <h2>2. 요청하는 권한(스코프)</h2>
-        <p>서비스는 채널 분석에 필요한 <strong>읽기 전용</strong> 권한만 요청합니다.</p>
+        <p>서비스는 채널 분석과 콘텐츠 발행에 필요한 다음 권한을 요청합니다.</p>
         <ul>
           <li>
-            <code>youtube.readonly</code> — 채널 및 영상의 메타데이터 조회
+            <code>youtube.readonly</code> — 채널 및 영상 메타데이터 조회
           </li>
           <li>
             <code>yt-analytics.readonly</code> — 채널 분석 지표 조회
           </li>
+          <li>
+            <code>youtube.upload</code> — 이용자의 채널에 영상(클립) 업로드
+          </li>
+          <li>
+            <code>youtube.force-ssl</code> — 업로드한 영상의 제목·설명·태그·썸네일·자막·재생목록 관리
+          </li>
         </ul>
         <p>
-          서비스는 이용자의 영상을 <strong>업로드·수정·삭제할 수 없으며</strong>, 채널에 어떤 변경도
-          가하지 않습니다. 해당 권한을 요청하지 않기 때문입니다.
+          서비스는 이용자가 <strong>요청·승인한 클립만</strong> 업로드·발행하며, 이용자의 기존
+          영상을 임의로 삭제하지 않습니다.
         </p>
       </section>
 
@@ -63,6 +73,7 @@ export default function PrivacyPage() {
         <ul>
           <li>연결된 채널의 성과 분석 리포트 생성</li>
           <li>영상별 성과 비교 및 콘텐츠 추천</li>
+          <li>이용자의 원본 영상에서 생성한 숏폼 클립을 이용자의 채널에 발행</li>
           <li>지표의 시계열 추적을 위한 주기적 동기화</li>
         </ul>
         <p>
