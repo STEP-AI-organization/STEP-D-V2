@@ -196,6 +196,7 @@ export const API_KEY_ROUTES: RouteRule[] = [
   { method: "POST", path: /^\/api\/automation\/run$/, scope: "factory:write" },
   // 외부 자동배포 콘솔 — 완료 알림 담당자 저장 (AENA 연동)
   { method: "POST", path: /^\/api\/automation\/notify-email$/, scope: "factory:write" },
+  { method: "GET", path: /^\/api\/shorts-templates$/, scope: "factory:read" },
   { method: "GET", path: /^\/api\/channel-rules$/, scope: "factory:read" },
 
   // 검수 — 추천 채택·거절·썸네일 선택, 클립 메타데이터 손질

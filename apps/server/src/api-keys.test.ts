@@ -269,6 +269,7 @@ describe("라우트 화이트리스트 — 기본값은 닫힘", () => {
     assert.equal(checkRoute("GET", "/api/automation", ["factory:read"]).ok, true);
     assert.equal(checkRoute("POST", "/api/automation/rules", ["factory:write"]).ok, true);
     assert.equal(checkRoute("POST", "/api/automation/notify-email", ["factory:write"]).ok, true);
+    assert.equal(checkRoute("GET", "/api/shorts-templates", ["factory:read"]).ok, true);
     assert.equal(checkRoute("DELETE", "/api/automation/rules/r_1", ["factory:write"]).ok, true);
     assert.equal(checkRoute("POST", "/api/automation/holds/release", ["factory:write"]).ok, true);
     assert.equal(checkRoute("POST", "/api/recommendations/r_1/adopt", ["factory:write"]).ok, true);
