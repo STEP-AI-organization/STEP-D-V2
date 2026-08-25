@@ -97,7 +97,9 @@ echo "[gebd-vm] HEAD: $(git -C "$REPO_DIR" rev-parse --short HEAD 2>/dev/null) $
 
 command -v node >/dev/null || {
   curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && apt-get install -y nodejs; }
-(cd "$REPO_DIR/apps/server" && npm i -g pnpm >/dev/null 2>&1; pnpm install --no-frozen-lockfile)
+# ⚠️ frozen — no-frozen 은 부팅마다 의존성이 클라우드와 다르게 풀릴 수 있다(버전 드리프트).
+# GEBD 크래시루프(2026-08-25) 조사에서 이 드리프트가 유일한 환경 차이 축이었다.
+(cd "$REPO_DIR/apps/server" && npm i -g pnpm >/dev/null 2>&1; pnpm install --frozen-lockfile || pnpm install --no-frozen-lockfile)
 
 # ── 5. 시크릿 ───────────────────────────────────────────────────────────────
 sec() { gcloud secrets versions access latest --secret="$1" --project="$PROJECT" 2>/dev/null; }

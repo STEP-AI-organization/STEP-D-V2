@@ -1,18 +1,18 @@
 /**
- * 자동 배포 순방 (FLOWS F6). 규칙 하나하나를 5단계로 평가한다.
+ * 자동 배포 순방 (FLOWS F6). 계획 하나하나를 5단계로 평가한다.
  *
  * ⚠️ **테넌트 안에서만 돈다.** 이 함수는 반드시 `runWithTenant(테넌트)` 컨텍스트 안에서
  * 불려야 한다 — 워커가 잡을 집을 때 `job.tenantId` 로 컨텍스트를 세우므로, 순방을
  * **테넌트별 잡**으로 쪼개는 것이 곧 격리다.
  *
- * 시스템 스코프('*')로 돌리면 RLS 가 전 테넌트 행을 보여주고, A 워크스페이스의 규칙이
+ * 시스템 스코프('*')로 돌리면 RLS 가 전 테넌트 행을 보여주고, A 워크스페이스의 계획이
  * B 의 채널로 나갈 수 있다. 그래서 이 파일 어디에도 runAsSystem 이 없다 —
  * 팬아웃(테넌트 목록 읽기)만 워커가 시스템으로 하고, 평가는 전부 테넌트 안이다.
  *
  * 5단계 (FLOWS.md F6):
  *   01 회차 수신   새 회차 감지 · 없으면 스킵
  *   02 분석        완료 전이면 다음 순방에 재확인
- *   03 미디어 생성 규칙 조건 통과분만 채택
+ *   03 미디어 생성 계획 조건 통과분만 채택
  *   04 게이트 확인 막히면 보류 큐로 — 사람이 확정해야 다시 잡힌다
  *   05 게시        채널 규칙 적용해 배포 (실패는 자동 재시도 없음)
  */
@@ -68,7 +68,7 @@ const REFRAME_STUCK_MS = 30 * 60_000;
 
 /**
  * 매 순방 마주치는 상태를 설명하는 문구들 — **문구가 곧 dedupe 키**라 상수로 못박는다.
- * hasRunNote 에 detail 까지 넘기지 않으면, 같은 (규칙·클립·채널) 키로 쓰는 다른 스킵 사유
+ * hasRunNote 에 detail 까지 넘기지 않으면, 같은 (계획·클립·채널) 키로 쓰는 다른 스킵 사유
  * (리프레임 강등·메타 대기 등)가 이미 한 줄 남아 있을 때 이 사유가 **한 줄도 안 남는다** —
  * 침묵 쪽으로 실패하는 가드는 이 파일이 고치려는 병 그 자체다.
  */
@@ -76,7 +76,7 @@ const RENDER_WAIT_NOTE = "렌더 대기 — 완료되면 다음 확인 때 자�
 const META_WAIT_NOTE = "메타데이터 생성 대기 — 완료되면 다음 확인 때 자동으로 게시됩니다.";
 const VAGUE_ACCOUNT_NOTE =
   "계정 미상 배포 기록이 있어 건너뜁니다 — 이미 나간 건이면 그대로 두고, 아니면 배포 화면에서 계정을 지정해 발행하세요.";
-const REJECTED_NOTE = "사람이 거부한 건입니다 — 이 규칙으로는 나가지 않습니다.";
+const REJECTED_NOTE = "사람이 거부한 건입니다 — 이 계획으로는 나가지 않습니다.";
 
 export interface CycleReport {
   tenantScoped: true;
@@ -89,7 +89,7 @@ export interface CycleReport {
   idleReason: string;
 }
 
-/** 현재 테넌트의 규칙을 한 바퀴 돈다. */
+/** 현재 테넌트의 계획을 한 바퀴 돈다. */
 export async function runAutomationCycle(): Promise<CycleReport> {
   // 예약 순방과 사용자의 "지금 확인"/자동배포 시작이 같은 순간 들어오면 둘 다 배포 행이
   // 생기기 전 상태를 읽고 같은 영상을 두 번 큐잉할 수 있다. 큐 dedupe 는 예약 잡끼리만 막고
@@ -106,8 +106,8 @@ async function runAutomationCycleLocked(): Promise<CycleReport> {
   // 한 줄 upsert). 실패해도 순방을 막지 않는다 — 심박이 빠지는 건 표시가 낡는 것뿐이다.
   await setAutomationSetting(LAST_CYCLE_KEY, new Date().toISOString()).catch(() => {});
 
-  // 규칙을 **먼저** 읽는다 — 아래 크레딧 로그가 "충전하면 다시 시작합니다" 라고 약속하는데,
-  // 규칙이 하나도 없으면 충전해도 시작될 게 없다(지킬 수 없는 약속).
+  // 계획을 **먼저** 읽는다 — 아래 크레딧 로그가 "충전하면 다시 시작합니다" 라고 약속하는데,
+  // 계획이 하나도 없으면 충전해도 시작될 게 없다(지킬 수 없는 약속).
   const paused = (await getAutomationSetting("automation.paused")) === "true";
   const rules = (await listAutomationRules()) as unknown as AutomationRule[];
   const plan = planCycle({ paused, rules });
@@ -118,12 +118,12 @@ async function runAutomationCycleLocked(): Promise<CycleReport> {
   if ((await creditBalance()) <= 0) {
     // 배너만으로는 부족하다 — idleReason 은 "지금 상태" 라서, 지나간 며칠에 왜 아무것도
     // 안 나갔는지를 로그만 보는 사람은 알 수 없다. rule_id 를 비우는 이유: 크레딧은
-    // 워크스페이스 전체 사정이지 특정 규칙의 사유가 아니다(규칙별 패널이 아니라 전체
+    // 워크스페이스 전체 사정이지 특정 계획의 사유가 아니다(계획별 패널이 아니라 전체
     // 기록 목록에 뜬다 — 그게 맞다). 순방은 15분마다 도니 KST 하루 한 줄로 막는다.
     //
-    // **이번 순방에 평가할 규칙이 있을 때만 남긴다.** 예전엔 크레딧 판정이 규칙 조회보다
+    // **이번 순방에 평가할 계획이 있을 때만 남긴다.** 예전엔 크레딧 판정이 계획 조회보다
     // 앞이라, 자동배포를 한 번도 설정 안 한(또는 전부 꺼 둔) 워크스페이스에도 잔액 0 이면
-    // 매일 한 줄씩 쌓였다 — 규칙이 없으니 충전해도 아무것도 시작되지 않는다.
+    // 매일 한 줄씩 쌓였다 — 계획이 없으니 충전해도 아무것도 시작되지 않는다.
     if (plan.rules.length > 0 && !(await hasRunNote(null, null, null, "skipped", true, CREDIT_STOP_NOTE))) {
       await appendRuleRun({ ruleId: null, clipId: null, result: "skipped", detail: CREDIT_STOP_NOTE });
     }
@@ -154,8 +154,8 @@ async function runAutomationCycleLocked(): Promise<CycleReport> {
   const adoptedCountFor = (ruleId: string, episodeId: string): number =>
     allClips.filter((c) => c.automationRuleId === ruleId && c.episodeId === episodeId).length;
 
-  // 규칙별 유휴 사유 — **배너(report.idleReason)는 순방 전체의 사실**이라 여기 모아 두고
-  // 루프가 끝난 뒤에 판단한다. 규칙 하나가 유휴라고 전체 배너를 덮으면, 다른 규칙이 3건
+  // 계획별 유휴 사유 — **배너(report.idleReason)는 순방 전체의 사실**이라 여기 모아 두고
+  // 루프가 끝난 뒤에 판단한다. 계획 하나가 유휴라고 전체 배너를 덮으면, 다른 계획이 3건
   // 채택·2건 게시한 순방에도 "회차가 없습니다" 가 뜬다.
   const idleReasons: string[] = [];
 
@@ -164,15 +164,15 @@ async function runAutomationCycleLocked(): Promise<CycleReport> {
     const channels = ruleChannels(rule);
     const win = ruleWindow(rule);
 
-    // 이 규칙이 이번 순방에 실행 로그를 한 줄이라도 **실제로 남겼는가.** 규칙 루프 안의 모든
+    // 이 계획이 이번 순방에 실행 로그를 한 줄이라도 **실제로 남겼는가.** 계획 루프 안의 모든
     // appendRuleRun 은 아래 note() 를 지나야 한다 — 직접 부르는 게 하나라도 남으면
     // "아무 일도 안 했다" 오진이 나서 엉뚱한 사유가 로그에 박힌다(스캔 테스트가 강제).
     let logged = false;
     /**
      * dedupe 에 걸려 **아무것도 안 쓴 순방은 "말했다" 가 아니다.** 예전엔 여기서 무조건
      * logged 를 세웠는데, 평생 dedupe(todayKstOnly=false)를 쓰는 문구(렌더 확정 실패·렌더
-     * 대기·계정 미상)가 한 번 걸리면 그 규칙은 **그 뒤로 영원히** 유휴 사유를 못 냈다.
-     * 대신 눌린 상태는 obs 플래그로 아래 유휴 판정에 들어가, 규칙 단위 하루 한 줄로 이어진다.
+     * 대기·계정 미상)가 한 번 걸리면 그 계획은 **그 뒤로 영원히** 유휴 사유를 못 냈다.
+     * 대신 눌린 상태는 obs 플래그로 아래 유휴 판정에 들어가, 계획 단위 하루 한 줄로 이어진다.
      */
     const note = async (ev: Parameters<typeof appendRuleRun>[0], dedupe?: Promise<boolean>) => {
       if (await writeRun(ev, dedupe)) logged = true;
@@ -208,7 +208,7 @@ async function runAutomationCycleLocked(): Promise<CycleReport> {
       }
     }
     // 발행 요일이 아닌 날도 마찬가지다 — 편성이 "월화수목금" 인데 토요일에 나가면 채널
-    // 성격이 흐려진다. 요일 미지정 규칙은 매일이라 여기서 걸리지 않는다(기존 동작).
+    // 성격이 흐려진다. 요일 미지정 계획은 매일이라 여기서 걸리지 않는다(기존 동작).
     if (!isPublishDay(rule)) {
       obs.offDay = true;
       obs.weekdays = ruleWeekdays(rule);
@@ -220,7 +220,7 @@ async function runAutomationCycleLocked(): Promise<CycleReport> {
     // 바로 확정 실패가 난다. 채택 직후 건 렌더도 여기 넣어 같은 순방에 두 번 때리지 않는다.
     const renderTried = new Set<string>();
 
-    // 01 회차 수신 — 이 규칙의 프로그램(들) 회차만.
+    // 01 회차 수신 — 이 계획의 프로그램(들) 회차만.
     const eps = episodes.filter((e) => programs.includes(e.programId));
     obs.episodes = eps.length;
     if (eps.length === 0) {
@@ -228,7 +228,7 @@ async function runAutomationCycleLocked(): Promise<CycleReport> {
       continue;
     }
 
-    // ── 03 미디어 생성 — 프로그램 전체에서 규칙 조건을 통과한 추천을 채택한다 ──
+    // ── 03 미디어 생성 — 프로그램 전체에서 계획 조건을 통과한 추천을 채택한다 ──
     for (const ep of eps) {
       // 02 분석 — 끝나지 않았으면 다음 순방에 다시 본다. 판정은 순수 함수 한 벌
       // (episodeAnalysisState)에 맡긴다: "분석 중" 과 "**큐잉조차 안 됨**" 을 여기서
@@ -255,7 +255,7 @@ async function runAutomationCycleLocked(): Promise<CycleReport> {
       obs.kindMatched += kindOk.length;
       const cands = kindOk.filter((r) => !overlapsExistingClip(r, epClips));
       obs.overlapped += kindOk.length - cands.length;
-      // top3 는 회차당 상한 — 이 규칙이 이 회차에서 이미 채택한 수를 빼고 뽑는다.
+      // top3 는 회차당 상한 — 이 계획이 이 회차에서 이미 채택한 수를 빼고 뽑는다.
       const already = adoptedCountFor(rule.id, ep.id);
       const atCap = rule.criterion === "top3" && already >= TOP3_CAP;
       if (atCap) obs.cappedEpisodes += 1;
@@ -272,13 +272,13 @@ async function runAutomationCycleLocked(): Promise<CycleReport> {
       for (const rec of picked) {
         const master = media.find((m: any) => m.episodeId === rec.episodeId && m.role === "master") as any;
         const clipId = newId("c");
-        // 무인 렌더 시드 — factory 와 동일한 기본 모양 (규칙의 templateId·layout 최우선).
+        // 무인 렌더 시드 — factory 와 동일한 기본 모양 (계획의 templateId·layout 최우선).
         const { autoEditorState } = await import("./factory.ts");
         const program = ep.programId ? await getEntity<any>("program", ep.programId) : undefined;
-        // 채택 형태 — 규칙의 방향 선택을 **수동 채택(adopt 라우트)과 같은 매핑**으로 클립에
+        // 채택 형태 — 계획의 방향 선택을 **수동 채택(adopt 라우트)과 같은 매핑**으로 클립에
         // 적용한다. 미지정이면 기존처럼 추천 kind 로 결정(하위호환 · 리프레임 OFF 시 불변).
         // 클립(롱폼)은 **가로형이 기본**이다(사용자 확정 2026-08-16) — 본편 화면비를 유지한다.
-        // 규칙이 방향을 명시했으면 그게 우선, 아니면 추천 종류로 정한다.
+        // 계획이 방향을 명시했으면 그게 우선, 아니면 추천 종류로 정한다.
         const landscape = rule.orientation === "landscape"
           || (rule.orientation !== "portrait" && rec.kind !== "short");
         const aspectRatio = landscape ? "16:9" : "9:16-crop-main";
@@ -305,14 +305,14 @@ async function runAutomationCycleLocked(): Promise<CycleReport> {
           sourceRecommendationId: rec.id,
           beatIds: Array.isArray(rec.beatIds) ? rec.beatIds : [],
           distributions: [],
-          /** 어느 규칙이 만든 미디어인지 — 사고 추적·롤백 대상 선별에 쓴다. */
+          /** 어느 계획이 만든 미디어인지 — 사고 추적·롤백 대상 선별에 쓴다. */
           automationRuleId: rule.id,
           editorState: {
             ...autoEditorState(rec, ep.programTitle ?? "", program,
               (rule as any).templateId, (rule as any).layout, aspectRatio),
-            // 자막 on/off — 규칙 기본 ON(true · 하위호환). layout.subtitles === false 일 때만 끈다.
+            // 자막 on/off — 계획 기본 ON(true · 하위호환). layout.subtitles === false 일 때만 끈다.
             // autoEditorState 는 captionsOn:false 를 시드하지만(공장 경로 · 번인 겹침 방지), 자동배포는
-            // 규칙 토글을 따른다 — 드라마처럼 원본 번인 자막이 있는 회차는 규칙에서 자막을 끈다.
+            // 계획 토글을 따른다 — 드라마처럼 원본 번인 자막이 있는 회차는 계획에서 자막을 끈다.
             captionsOn: rule.layout?.subtitles !== false,
             // editorState.aspect 를 clip.aspectRatio(위 5-값 enum) 와 **일치**시킨다. 위 factory에도
             // 같은 값을 넘겨 제목 106/107px의 basis 계산부터 최종 방향과 맞춘다. /export 는
@@ -342,7 +342,7 @@ async function runAutomationCycleLocked(): Promise<CycleReport> {
         // 등록 출연자 사진이 없으면 이 잡은 실패하는데, 그때는 렌더 프레임으로 나간다
         // (resolveClipThumbnail 의 3단 폴백). 썸네일 때문에 배포가 멈추는 게 더 나쁘다.
         if (landscape && master?.id && ep.programId) {
-          // 방식은 **규칙이 정한다**(0041). 미지정이면 frame — ai 는 등록 출연자 사진이
+          // 방식은 **계획이 정한다**(0041). 미지정이면 frame — ai 는 등록 출연자 사진이
           // 있어야 하는데 아카이브 회차는 대개 안 채워져 있어 한 장도 못 만든다.
           // frame 은 실제 화면이라 인물 등록 없이도 되고 얼굴이 원본 그대로다.
           const thumbMode = isRuleThumbnailMode((rule as any).thumbnailMode)
@@ -352,7 +352,7 @@ async function runAutomationCycleLocked(): Promise<CycleReport> {
               mode: thumbMode, ...(thumbMode === "frame" ? { caption: rec.title } : {}) },
             { dedupeKey: `thumbnail.generate:${master.id}:${thumbMode}` }).catch(() => {});
         }
-        // AI 리프레임(규칙 옵션) — 수동 채택과 같은 배선: 세로+AI 조합(store.tsx 와 같은
+        // AI 리프레임(계획 옵션) — 수동 채택과 같은 배선: 세로+AI 조합(store.tsx 와 같은
         // 조건식)이면 채택 직후 /clips/:id/reframe(mode=ai_multi)로 분석을 큐잉한다.
         // 리프레임→렌더 순서도 수동과 동일하다: /export 가 플랜 완료 전엔 reframe_not_ready
         // 409 로 막으므로, 큐잉에 성공한 순방엔 렌더를 걸지 않는다 — rendered:false 는
@@ -377,7 +377,7 @@ async function runAutomationCycleLocked(): Promise<CycleReport> {
       (c) => c.automationRuleId === rule.id && epIds.has(c.episodeId),
     );
     // "만든 건 다 나갔다" 는 흔한 오진("채택할 새 추천이 없습니다")을 막는 관측치다 —
-    // 게시 여부 판정은 upsertDistribution 과 같은 정체성 규칙(publish-guard)을 쓴다.
+    // 게시 여부 판정은 upsertDistribution 과 같은 정체성 계획(publish-guard)을 쓴다.
     obs.clipsAllSent = mine.length > 0 && mine.every((c) =>
       channels.every((ch) => hasAccountDistribution(c.distributions, ch.platform, ch.accountId)));
 
@@ -397,7 +397,7 @@ async function runAutomationCycleLocked(): Promise<CycleReport> {
         if (wouldSend) {
           obs.gateOff = true;
           // **하루 한 줄 가드가 필수다.** 게이트 OFF 는 env 를 고치기 전엔 안 변하는 상태라,
-          // 활동시간 9~22시 · 15분 주기면 (규칙,채널)당 하루 52줄이 쌓여 실행 로그 창(50건)을
+          // 활동시간 9~22시 · 15분 주기면 (계획,채널)당 하루 52줄이 쌓여 실행 로그 창(50건)을
           // 이 줄로 덮는다 — 사유를 남기려다 정작 중요한 사유를 가리는 자충수다.
           await note({ ruleId: rule.id, result: "skipped", detail: upGate.offNote, accountKey },
             hasRunNote(rule.id, null, accountKey, "skipped", true, upGate.offNote));
@@ -416,13 +416,13 @@ async function runAutomationCycleLocked(): Promise<CycleReport> {
       if (remaining <= 0) {
         // 조용히 넘기면 "왜 오늘은 아무것도 안 나갔지" 를 설명할 근거가 로그에 없다.
         // 채널당 하루 한 줄만 남긴다(순방은 15분마다 돈다). 문구까지 맞춰 dedupe 하는 이유:
-        // 같은 (규칙,채널,skipped,오늘) 키를 게이트 OFF 사유도 쓰므로, 문구를 안 보면
+        // 같은 (계획,채널,skipped,오늘) 키를 게이트 OFF 사유도 쓰므로, 문구를 안 보면
         // 오전에 게이트 OFF 로 한 줄 남은 채널에서 이 사유가 **한 줄도 안 남는다.**
-        // 문구의 숫자는 규칙 설정(할당량)이라 하루 안에 저절로 안 바뀐다.
+        // 문구의 숫자는 계획 설정(할당량)이라 하루 안에 저절로 안 바뀐다.
         obs.quotaDone = true;
         // ⚠️ 이 문구는 dedupe 키다 — **하루 안에 바뀌는 숫자를 넣으면 안 된다.**
         // 슬롯 방식에서는 허용치가 시각에 따라 1→2→3 으로 커지므로 그 수를 문구에 실으면
-        // 슬롯마다 새 줄이 쌓여 실행 로그(50건 창)를 이 줄로 덮는다. 슬롯 규칙은 숫자를
+        // 슬롯마다 새 줄이 쌓여 실행 로그(50건 창)를 이 줄로 덮는다. 슬롯 계획은 숫자를
         // 빼고 "다음 발행 시각 대기" 라는 고정 문구를 쓴다 — 의미도 그쪽이 정확하다.
         const slotted = ruleSlots(rule).length > 0;
         const quotaNote = slotted
@@ -434,12 +434,12 @@ async function runAutomationCycleLocked(): Promise<CycleReport> {
         continue; // 오늘 할당량 완료 — 내일 KST 자정에 리셋
       }
 
-      // 채널 규칙이 없어도 배포는 가능해야 한다 (사용자 결정 2026-08-12) — 규칙은
+      // 채널 규칙이 없어도 배포는 가능해야 한다 (사용자 결정 2026-08-12) — 계획은
       // 제한을 더하는 장치지 전제조건이 아니다. 없으면 전부 허용 기본값.
       //
       // ⚠️ 합성 폴백의 privacy 는 "unlisted" 다 — youtubeReleasePlan 의 문서화된 기본값
       // ("자동 경로의 기본값은 '링크 아는 사람만', 전체공개는 사람이 정한다")과 같게.
-      // 예전엔 여기만 "private" 라서, 규칙 행이 아예 없는 채널은 업로드 성공 + 고객사
+      // 예전엔 여기만 "private" 라서, 계획 행이 아예 없는 채널은 업로드 성공 + 고객사
       // 화면 '게시됨' 인데 실제로는 소유자 외 아무도 못 보는 비공개로 올라갔다
       // (2026-08-25 aena 연동 감사에서 발견). private 는 유효값이라 releasePlan 의
       // unlisted 폴백 분기가 발동하지 않아 이 한 줄이 곧 최종 공개범위였다.
@@ -456,7 +456,7 @@ async function runAutomationCycleLocked(): Promise<CycleReport> {
 
         // 이미 **이 계정으로** 나갔으면 건드리지 않는다(중복 게시 방지). 배포 행에
         // 계정 식별자가 없으면(구 데이터) 플랫폼 일치만으로 보수적으로 스킵한다.
-        // 판정은 upsertDistribution 과 같은 정체성 규칙(publish-guard)을 공유한다 —
+        // 판정은 upsertDistribution 과 같은 정체성 계획(publish-guard)을 공유한다 —
         // 두 벌이 되면 한쪽만 고쳐져 매 순방 재업로드가 재발한다.
         if (hasAccountDistribution(clip.distributions, chan.platform, chan.accountId)) {
           // 계정 식별자가 없는 옛 기록 때문에 스킵한 경우는 **로그를 남긴다.** 조용히 넘기면
@@ -478,13 +478,13 @@ async function runAutomationCycleLocked(): Promise<CycleReport> {
         // 뒤 응답만 유실된 실패면 채널에 같은 영상이 중복으로 올라간다. 사람이 배포 기록의
         // 재시도 버튼을 눌러야 다시 나간다.
         //
-        // ⚠️ 여기서 `holdClip` 을 쓰면 안 된다. rule_hold 는 (규칙, 클립) 키라 **채널 개념이
-        // 없어서**, 유튜브 하나 실패가 같은 규칙의 인스타·틱톡·네이버까지 영원히 막는다.
+        // ⚠️ 여기서 `holdClip` 을 쓰면 안 된다. rule_hold 는 (계획, 클립) 키라 **채널 개념이
+        // 없어서**, 유튜브 하나 실패가 같은 계획의 인스타·틱톡·네이버까지 영원히 막는다.
         // 게다가 사람이 승인 큐에서 풀어도 다음 순방이 released_at 을 리셋해 해제 버튼이
         // 무력해진다. 실패의 정본은 **배포 행의 status** 이므로 그걸 근거로 이 채널만 건너뛰고,
         // 사유는 채널별로 한 번만 남긴다(순방마다 쌓으면 로그가 그 줄로 덮인다).
         if (hasFailedAccountDistribution(clip.distributions, chan.platform, chan.accountId)) {
-          // 이 줄도 (클립,채널)당 한 번만 남는다 — 눌린 뒤에도 "왜 이 규칙이 멈춰 있나" 는
+          // 이 줄도 (클립,채널)당 한 번만 남는다 — 눌린 뒤에도 "왜 이 계획이 멈춰 있나" 는
           // 설명돼야 하므로 관측치로 이어 준다. 안 그러면 유휴 판정이 "채택할 새 추천이
           // 없습니다" 라는 엉뚱한 사유로 떨어진다(진짜 원인은 배포 실패다).
           obs.publishFailed = true;
@@ -567,7 +567,7 @@ async function runAutomationCycleLocked(): Promise<CycleReport> {
             }, hasRunNote(rule.id, clip.id, accountKey, "skipped", false, RENDER_WAIT_NOTE));
             continue;
           }
-          // 채널 규칙(길이·화면비) 미달 — 클립을 고치거나 규칙을 바꾸기 전엔 안 변하는 상태라
+          // 채널 규칙(길이·화면비) 미달 — 클립을 고치거나 계획을 바꾸기 전엔 안 변하는 상태라
           // 무가드로 두면 매 순방·매 채널 같은 줄이 쌓인다. 문구가 곧 dedupe 키다.
           obs.channelBlocked = true;
           await note({ ruleId: rule.id, clipId: clip.id, result: "skipped", detail: why.reason, accountKey },
@@ -575,9 +575,9 @@ async function runAutomationCycleLocked(): Promise<CycleReport> {
           continue;
         }
 
-        // 사람이 **거부**한 (규칙·영상)은 재선정도 게시도 하지 않고 건너뛴다(0044). released_at
+        // 사람이 **거부**한 (계획·영상)은 재선정도 게시도 하지 않고 건너뛴다(0044). released_at
         // 과 별개 상태라 approve_first 게이트를 건드리지 않는다(거부가 되레 게시되는 사고 방지).
-        // (규칙,클립)당 사실이라 문구 고정 = dedupe 키 → 채널·순방마다 안 쌓인다.
+        // (계획,클립)당 사실이라 문구 고정 = dedupe 키 → 채널·순방마다 안 쌓인다.
         if (await isRejectedHold(rule.id, clip.id)) {
           await note({ ruleId: rule.id, clipId: clip.id, result: "skipped", accountKey: null, detail: REJECTED_NOTE },
             hasRunNote(rule.id, clip.id, null, "skipped", false, REJECTED_NOTE));
@@ -654,7 +654,7 @@ async function runAutomationCycleLocked(): Promise<CycleReport> {
           clipIds: [clip.id],
           channel: chan.platform,
           // 계정 식별자는 플랫폼에 맞는 필드로만 — 배포 행의 계정 정체성
-          // (distributionAccountId)이 이 필드로 판정된다. 규칙 channels[] 의 accountId 를
+          // (distributionAccountId)이 이 필드로 판정된다. 계획 channels[] 의 accountId 를
           // 플랫폼별 필드로 푼다 — 예전엔 youtube/naver 만 넘겨서 TikTok·IG·FB 는 계정
           // 지정 없는 배포(추론 금지 → record 강등·정체성 없는 행)가 됐다.
           ...(chan.platform === "youtube" ? { youtubeChannelId: chan.accountId } : {}),
@@ -703,17 +703,17 @@ async function runAutomationCycleLocked(): Promise<CycleReport> {
       }
     }
 
-    // 이 규칙이 한 줄도 안 남겼으면 **왜 아무 일도 없었는지**를 남긴다. 조용한 정지는
-    // 이 리포의 최빈 실패모드다 — 규칙은 "실행 중" 인데 아무것도 안 나가는 상태를
+    // 이 계획이 한 줄도 안 남겼으면 **왜 아무 일도 없었는지**를 남긴다. 조용한 정지는
+    // 이 리포의 최빈 실패모드다 — 계획은 "실행 중" 인데 아무것도 안 나가는 상태를
     // 사용자가 추리하게 두지 않는다.
     if (!logged) await idle();
   }
 
-  // 배너(idleReason)는 **순방 전체**의 필드다. 규칙 하나의 사유를 여기 얹으면, 규칙 A 가
-  // 3건 채택·2건 게시한 순방에도 규칙 B 탓에 "회차가 없습니다" 가 화면에 뜬다.
+  // 배너(idleReason)는 **순방 전체**의 필드다. 계획 하나의 사유를 여기 얹으면, 계획 A 가
+  // 3건 채택·2건 게시한 순방에도 계획 B 탓에 "회차가 없습니다" 가 화면에 뜬다.
   // 그래서 조건은 둘: (1) 이번 순방이 정말 아무 일도 안 했고(채택·게시·보류 0),
-  // (2) 평가한 규칙이 **전부** 유휴여야 한다. 대표는 첫 규칙의 사유 하나만 싣는다 —
-  // 배너에 여러 줄을 늘어놓으면 어디부터 손대야 할지 모른다(사유는 로그에 규칙별로 남는다).
+  // (2) 평가한 계획이 **전부** 유휴여야 한다. 대표는 첫 계획의 사유 하나만 싣는다 —
+  // 배너에 여러 줄을 늘어놓으면 어디부터 손대야 할지 모른다(사유는 로그에 계획별로 남는다).
   if (!report.idleReason
     && report.adopted === 0 && report.published === 0 && report.held === 0
     && idleReasons.length > 0 && idleReasons.length === plan.rules.length) {
@@ -726,7 +726,7 @@ async function runAutomationCycleLocked(): Promise<CycleReport> {
 /**
  * 실행 로그 한 줄 — dedupe 판정이 참이면 쓰지 않는다. **실제로 썼는지**를 돌려준다.
  *
- * 규칙 루프 안에서는 **반드시 note() 를 거쳐야** 하므로(logged 플래그) 실제 쓰기는 여기로
+ * 계획 루프 안에서는 **반드시 note() 를 거쳐야** 하므로(logged 플래그) 실제 쓰기는 여기로
  * 뺐다. 루프 안에 appendRuleRun 직접 호출이 하나라도 남으면 "아무 일도 안 했다" 오진이
  * 나서 엉뚱한 사유가 로그에 박힌다 — 스캔 테스트가 그 재발을 막는다.
  */
@@ -739,15 +739,15 @@ async function writeRun(
 }
 
 /**
- * 규칙 하나가 아무 일도 안 한 사유 — **판정은 항상 하고, 로그만 하루 한 줄로 막는다.**
+ * 계획 하나가 아무 일도 안 한 사유 — **판정은 항상 하고, 로그만 하루 한 줄로 막는다.**
  * 사유 문구를 돌려준다(배너 후보). 일을 했으면 null.
  *
  * ⚠️ 예전엔 dedupe 에 걸리면 여기서 곧장 return 이라 **배너까지 같이 건너뛰었다** — 그래서
- * 그날 첫 순방에만 배너가 차고, 이후 "지금 확인" 버튼은 유휴인데도 초록색 "규칙 1개 ·
+ * 그날 첫 순방에만 배너가 차고, 이후 "지금 확인" 버튼은 유휴인데도 초록색 "계획 1개 ·
  * 미디어 0" 만 보여줬다. 로그(하루 1줄)와 배너(매번)는 주기가 다른 별개의 소비처다.
  *
  * 스팸 방지는 **문구 자체가 dedupe 키**다(KST 하루 한 줄). 순방은 15분마다 도니 가드가
- * 없으면 규칙 하나가 하루 90여 줄을 쌓아, 화면이 보여주는 최근 50건이 이 줄로만 덮인다 —
+ * 없으면 계획 하나가 하루 90여 줄을 쌓아, 화면이 보여주는 최근 50건이 이 줄로만 덮인다 —
  * 사유를 남기려다 정작 중요한 사유를 가리는 자충수가 된다.
  */
 /**
@@ -804,7 +804,7 @@ async function noteRuleIdle(
  *   워커가 전부 failed 로 만든다(순방은 이미 'published' 기록+한도 차감). → send:false 로
  *   순방이 아예 보내지 않는다.
  * - tiktok·instagram·facebook 은 게이트 OFF 면 dispatchPublish 가 record 모드로 기록만
- *   남긴다 — 그건 record_only 규칙의 제품 동작("배포 기록만 남습니다")이라 막지 않고,
+ *   남긴다 — 그건 record_only 계획의 제품 동작("배포 기록만 남습니다")이라 막지 않고,
  *   recordOnly 표시로 실행 로그에 '기록만 됨'을 명시한다.
  * - 모르는 플랫폼은 보낸다(dispatchPublish 의 channel_unsupported 가 사유와 함께 거른다 —
  *   여기서 또 거르면 거절 사유가 두 벌이 된다).
@@ -906,7 +906,7 @@ async function attemptAutoRender(
   }
 
   // 확정은 **상태 전이에서만** 기록한다. hasRunNote 를 가드로 쓰면 worker.ts 의 배포 실패가
-  // 같은 (규칙, 클립, 계정없음, failed) 키를 이미 점유해 렌더 실패가 한 줄도 안 남는다 —
+  // 같은 (계획, 클립, 계정없음, failed) 키를 이미 점유해 렌더 실패가 한 줄도 안 남는다 —
   // 침묵 쪽으로 실패하는 가드는 이 벨트가 고치려는 병 그 자체다.
   if (next?.failed && !prev?.failed) {
     report.renderFailed += 1;
@@ -968,7 +968,7 @@ async function requestAutoMetadata(clipId: string, channel: string): Promise<boo
   }
 }
 
-/** 규칙이 이 클립을 만들었는지 — 화면·로그가 자동 생성물을 가려낼 때. */
+/** 계획이 이 클립을 만들었는지 — 화면·로그가 자동 생성물을 가려낼 때. */
 export async function isAutomationClip(clipId: string): Promise<boolean> {
   const clip = await getEntity<any>("clip", clipId);
   return Boolean(clip?.automationRuleId);

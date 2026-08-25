@@ -7,7 +7,7 @@
  *   ① 프로그램 선택 → ② 할당 영상 → ③ 배포 설정 → 시작 → 스케줄·대기·완료.
  *
  * 지키는 것(재배치 전과 동일):
- *  - 규칙 하나 = 프로그램 ↔ 채널 연결 하나. **규칙이 없으면 아무것도 하지 않는다.**
+ *  - 계획 하나 = 프로그램 ↔ 채널 연결 하나. **계획이 없으면 아무것도 하지 않는다.**
  *  - 승인 대기 건은 **사람이 승인해야** 다음 확인 때 게시된다. 저절로 나가지 않는다.
  *  - 문구에서 내부어(순방·워커·게이트)를 쓰지 않는다 — 확인(10분마다 자동)·승인·실제 업로드
  *    잠금/권리 확인으로 말한다.
@@ -176,17 +176,17 @@ const TEMPLATE_SEED_UI: Record<string, { accent: string; titleY: number; iconY: 
   "broadcast-drama": { accent: "#40E0E0", titleY: 8, iconY: 77, boxY: 87.5, iconSize: 50 },
 };
 
-/** 규칙의 채널 목록 — 배열이 정본, 없으면 단수 폴백(구 규칙). */
+/** 계획의 채널 목록 — 배열이 정본, 없으면 단수 폴백(구 계획). */
 const channelsOf = (r: AutomationRule) =>
   r.channels?.length ? r.channels : [{ platform: r.platform, accountId: r.accountId }];
 
-/** 규칙의 프로그램 목록 — 배열이 정본, 없으면 단수 폴백. */
+/** 계획의 프로그램 목록 — 배열이 정본, 없으면 단수 폴백. */
 const programsOf = (r: AutomationRule) => (r.programIds?.length ? r.programIds : [r.programId]);
 
 const ANALYZE_IDX = PIPELINE_STAGES.indexOf("analyze");
 
 /**
- * 회차의 분석 상태 요약 — "완료 → 생략"이 규칙이므로 완료를 명시적으로 말한다.
+ * 회차의 분석 상태 요약 — "완료 → 생략"이 계획이므로 완료를 명시적으로 말한다.
  * pipeline.stage 가 analyze 를 지났으면 분석은 끝난 것이다(추천/편집/배포 단계).
  */
 function episodeAnalysis(ep: Episode, hasMaster: boolean): {
@@ -233,7 +233,7 @@ export default function AutomationPage() {
   const [notifyEmail, setNotifyEmail] = useState("");
   const [notifyEmailSaved, setNotifyEmailSaved] = useState("");
   const [savingNotify, setSavingNotify] = useState(false);
-  // loading 없이는 fetch 전에 "규칙 없음"이 먼저 보인다 — 로딩/빈/에러 3종을 구분한다.
+  // loading 없이는 fetch 전에 "계획 없음"이 먼저 보인다 — 로딩/빈/에러 3종을 구분한다.
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [runningNow, setRunningNow] = useState(false);
@@ -283,7 +283,7 @@ export default function AutomationPage() {
   const [selChannels, setSelChannels] = useState<string[]>([]); // "platform:accountId"
   const [starting, setStarting] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
-  // 고급 설정 (구 규칙 폼 필드 전부 — 격하했을 뿐 삭제하지 않는다)
+  // 고급 설정 (구 계획 폼 필드 전부 — 격하했을 뿐 삭제하지 않는다)
   const [mediaKind, setMediaKind] = useState<RuleMediaKind>("short");
   const [criterion, setCriterion] = useState<RuleCriterion>("score80");
   const [approveFirst, setApproveFirst] = useState(true);
@@ -293,13 +293,13 @@ export default function AutomationPage() {
   const [activeEnd, setActiveEnd] = useState(22);
   // 발행 요일(ISO 1=월…7=일) · 발행 시간(KST "HH:MM").
   // 둘 다 **비우면 기존 동작**이다 — 요일 빈 값 = 매일, 시간 빈 값 = 할당량 방식.
-  // 구 규칙이 조용히 달라지지 않게 기본을 빈 배열로 둔다.
+  // 구 계획이 조용히 달라지지 않게 기본을 빈 배열로 둔다.
   const [weekdays, setWeekdays] = useState<number[]>([]);
   const [slots, setSlots] = useState<string[]>([]);
   const [templateId, setTemplateId] = useState(""); // "" = 프로그램 장르 자동
   const [templates, setTemplates] = useState<FrameTemplate[]>([]);
   const [layout, setLayout] = useState<LayoutState | null>(null);
-  // 자막 on/off — 규칙 기본 ON(하위호환). 끄면 이 규칙의 자동 클립을 자막 없이 렌더한다.
+  // 자막 on/off — 계획 기본 ON(하위호환). 끄면 이 계획의 자동 클립을 자막 없이 렌더한다.
   // 저장 시 layout.subtitles 로 담긴다(automation_rule 에 자막 전용 컬럼 없이 라운드트립).
   const [subtitles, setSubtitles] = useState(true);
   // AI 리프레임 — 수동 채택(adopt-dialog)과 같은 값 체계("ai"|"none")·같은 라벨.
@@ -312,7 +312,7 @@ export default function AutomationPage() {
     void fetchShortsTemplates().then(setTemplates).catch(() => setTemplates([]));
   }, []);
 
-  // 템플릿 바꾸면 슬라이더를 그 템플릿의 시드 기본값으로 리셋 (규칙 프리필 직후 1회는 건너뜀).
+  // 템플릿 바꾸면 슬라이더를 그 템플릿의 시드 기본값으로 리셋 (계획 프리필 직후 1회는 건너뜀).
   const skipLayoutReset = useRef(false);
   const effectiveTemplate = templateId || "broadcast-standard";
   useEffect(() => {
@@ -394,14 +394,14 @@ export default function AutomationPage() {
     return v === false;
   };
 
-  // 선택 프로그램을 이미 커버하는 규칙 — "자동 배포 시작"은 이 규칙의 갱신이 된다(upsert).
+  // 선택 프로그램을 이미 커버하는 계획 — "자동 배포 시작"은 이 계획의 갱신이 된다(upsert).
   const ruleForProgram = useMemo(
     () => rules.find((r) => programsOf(r).includes(selProgram)),
     [rules, selProgram],
   );
 
-  // 채널은 자동배포 하나만 소유한다. 현재 수정 중인 규칙의 채널은 그대로 선택할 수 있고,
-  // 다른 규칙이 쓰는 채널만 잠근다. 서버도 같은 불변식을 409로 다시 검사한다.
+  // 채널은 자동배포 하나만 소유한다. 현재 수정 중인 계획의 채널은 그대로 선택할 수 있고,
+  // 다른 계획이 쓰는 채널만 잠근다. 서버도 같은 불변식을 409로 다시 검사한다.
   const channelOwners = useMemo(() => {
     const owners = new Map<string, { ruleId: string; programTitle: string }>();
     for (const rule of rules) {
@@ -418,12 +418,12 @@ export default function AutomationPage() {
     return owner && owner.ruleId !== ruleForProgram?.id ? owner : null;
   }, [channelOwners, ruleForProgram?.id]);
 
-  // 프로그램을 고르면 기존 규칙 값으로 ②~④를 프리필한다 — 프로그램당 1회만(폴링이
+  // 프로그램을 고르면 기존 계획 값으로 ②~④를 프리필한다 — 프로그램당 1회만(폴링이
   // rules 를 갈아끼워도 사용자가 만지던 선택을 덮지 않는다).
   const prefilledFor = useRef<string | null>(null);
   useEffect(() => {
     if (!selProgram || prefilledFor.current === selProgram) return;
-    if (loading) return; // 규칙을 아직 못 읽었다 — 읽힌 뒤에 프리필
+    if (loading) return; // 계획을 아직 못 읽었다 — 읽힌 뒤에 프리필
     prefilledFor.current = selProgram;
     const r = rules.find((x) => programsOf(x).includes(selProgram));
     if (!r) { setSelChannels([]); return; }
@@ -435,8 +435,8 @@ export default function AutomationPage() {
     setActiveStart(r.activeStart ?? 9); setActiveEnd(r.activeEnd ?? 22);
     setWeekdays(r.weekdays ?? []); setSlots(r.slots ?? []);
     setTemplateId(r.templateId ?? "");
-    setReframe(r.reframe ?? "none"); // 구 규칙(필드 없음)은 기본과 같은 "none"
-    setSubtitles(r.layout?.subtitles !== false); // 구 규칙(필드 없음)은 기본 ON
+    setReframe(r.reframe ?? "none"); // 구 계획(필드 없음)은 기본과 같은 "none"
+    setSubtitles(r.layout?.subtitles !== false); // 구 계획(필드 없음)은 기본 ON
     if (r.layout) {
       const seed = TEMPLATE_SEED_UI[r.templateId || "broadcast-standard"] ?? TEMPLATE_SEED_UI["broadcast-standard"];
       skipLayoutReset.current = true; // 템플릿 리셋 이펙트가 이 값을 덮지 않게
@@ -449,7 +449,7 @@ export default function AutomationPage() {
         subtitleY: r.layout.subtitleY ?? SUBTITLE_DEFAULTS.y,
         subtitleSize: r.layout.subtitleSize ?? SUBTITLE_DEFAULTS.size,
         subtitleColor: r.layout.subtitleColor ?? SUBTITLE_DEFAULTS.color,
-        // 요소 표시 플래그 — 미지정(구 규칙)은 표시. 저장값 그대로 라운드트립.
+        // 요소 표시 플래그 — 미지정(구 계획)은 표시. 저장값 그대로 라운드트립.
         title: r.layout.title, logo: r.layout.logo, timebox: r.layout.timebox,
       });
     }
@@ -464,7 +464,7 @@ export default function AutomationPage() {
   // credit 미수신(구버전)이면 null → "모름" 으로 두고 소진 강조를 하지 않는다.
   const creditOut = typeof credit === "number" && credit <= 0;
 
-  // 상태 3종 — 일시정지 > 꺼짐(활성 규칙 없음) > 켜짐. 크레딧 소진은 "켜짐이지만 멈춤" 강조.
+  // 상태 3종 — 일시정지 > 꺼짐(활성 계획 없음) > 켜짐. 크레딧 소진은 "켜짐이지만 멈춤" 강조.
   const statusLabel = loading
     ? "불러오는 중…"
     : paused
@@ -492,8 +492,8 @@ export default function AutomationPage() {
   ).length;
   // ── 승인 대기는 **영상 단위**다 (사용자 확정 2026-08-19: "걍 그 영상 하나하나만 떠야지") ──
   //
-  // 보류 행(rule_hold)은 규칙×클립이라, 같은 영상이 규칙 두 개에 걸리면 두 줄이 된다. 사람이
-  // 보는 단위는 규칙이 아니라 **영상**이다 — 여기서 클립 하나로 접고, 승인은 그 영상에 걸린
+  // 보류 행(rule_hold)은 계획×클립이라, 같은 영상이 계획 두 개에 걸리면 두 줄이 된다. 사람이
+  // 보는 단위는 계획이 아니라 **영상**이다 — 여기서 클립 하나로 접고, 승인은 그 영상에 걸린
   // 보류를 전부 푼다. 기록 쪽 held 줄도 같은 기준으로 접어야 두 목록의 개수가 맞는다.
   const heldClips = useMemo(() => {
     const byClip = new Map<string, { clipId: string; holds: RuleHold[]; heldAt: string; reasons: string[] }>();
@@ -501,7 +501,7 @@ export default function AutomationPage() {
       const cur = byClip.get(h.clipId);
       if (cur) {
         cur.holds.push(h);
-        // 대기 시작은 **가장 이른** 시각 — 규칙이 나중에 하나 더 걸렸다고 대기가 리셋되진 않는다.
+        // 대기 시작은 **가장 이른** 시각 — 계획이 나중에 하나 더 걸렸다고 대기가 리셋되진 않는다.
         if (h.heldAt && (!cur.heldAt || h.heldAt < cur.heldAt)) cur.heldAt = h.heldAt;
         if (h.reason && !cur.reasons.includes(h.reason)) cur.reasons.push(h.reason);
       } else {
@@ -514,8 +514,8 @@ export default function AutomationPage() {
   }, [holds]);
   const heldCount = heldClips.length;
 
-  // 기록의 '승인 대기' 줄도 같은 기준으로 접는다. 서버는 (규칙×클립×**채널**×사유)마다 한 줄을
-  // 남기므로 채널이 셋인 규칙이면 같은 영상이 여섯 줄까지 뜬다 — 그래서 위 승인 대기 개수와
+  // 기록의 '승인 대기' 줄도 같은 기준으로 접는다. 서버는 (계획×클립×**채널**×사유)마다 한 줄을
+  // 남기므로 채널이 셋인 계획이면 같은 영상이 여섯 줄까지 뜬다 — 그래서 위 승인 대기 개수와
   // 기록의 승인 대기 줄 수가 안 맞아 보였다(사용자 지적 2026-08-19). 클립당 **가장 최근 한 줄**만
   // 남긴다. 나머지 결과(게시·실패)는 그대로 둔다 — 그건 채널별로 봐야 하는 정보다.
   const visibleRuns = useMemo(() => {
@@ -531,7 +531,7 @@ export default function AutomationPage() {
       if (Number.isFinite(at) && previous != null && Math.abs(previous - at) <= 30_000) return false;
       if (Number.isFinite(at)) seenExact.set(exactKey, at);
       if (run.result !== "held") return true;
-      // clipId 없는 held(규칙 단위 로그)는 접을 근거가 없다 — id 로 각자 남긴다.
+      // clipId 없는 held(계획 단위 로그)는 접을 근거가 없다 — id 로 각자 남긴다.
       const key = run.clipId ?? `run:${run.id}`;
       if (seenHeld.has(key)) return false;
       seenHeld.add(key);
@@ -567,7 +567,7 @@ export default function AutomationPage() {
   const isQuotaNoise = (run: RuleRun) => run.result === "skipped" && /할당량/.test(run.detail ?? "");
   const recentProcessRuns = visibleRuns.filter((run) => !completedRunIds.has(run.id) && !isQuotaNoise(run));
 
-  // 실업로드 채널이 규칙에 있는데 게이트가 꺼져 있으면 — "실행 중"이 착시가 된다.
+  // 실업로드 채널이 계획에 있는데 게이트가 꺼져 있으면 — "실행 중"이 착시가 된다.
   const gateBlocked = rules.some(
     (r) => r.enabled && channelsOf(r).some((c) => isUploadPlatform(c.platform) && gateOff(c.platform, c.accountId)),
   );
@@ -625,7 +625,7 @@ export default function AutomationPage() {
     }
   }
 
-  /** 규칙을 만들고 10분을 기다리지 않아도 결과를 본다. */
+  /** 계획을 만들고 10분을 기다리지 않아도 결과를 본다. */
   async function runNow() {
     if (runningNow) return; // 더블클릭 = 확인 중복 실행
     setRunningNow(true);
@@ -646,7 +646,7 @@ export default function AutomationPage() {
     }
   }
 
-  /** ④ 자동 배포 시작 — 규칙 upsert(기존 규칙이 있으면 갱신) + 즉시 1회 확인. */
+  /** ④ 자동 배포 시작 — 계획 upsert(기존 계획이 있으면 갱신) + 즉시 1회 확인. */
   async function startAutoDeploy() {
     if (starting || !selProgram || selChannels.length === 0) return;
     const occupied = selChannels.map((key) => ({ key, owner: channelOwnerOtherThanCurrent(key) }))
@@ -680,8 +680,8 @@ export default function AutomationPage() {
         });
       }
       await saveAutomationRule({
-        // 갱신은 id 가 정본 — 자연키(첫 채널)로 흘리면 첫 채널이 바뀔 때 새 규칙이 생겨
-        // 구 규칙과 이중 커버된다(서버가 id 로 UPDATE).
+        // 갱신은 id 가 정본 — 자연키(첫 채널)로 흘리면 첫 채널이 바뀔 때 새 계획이 생겨
+        // 구 계획과 이중 커버된다(서버가 id 로 UPDATE).
         ...(ruleForProgram?.id ? { id: ruleForProgram.id } : {}),
         // 단수 필드 = 첫 항목 (서버 UNIQUE·구버전 호환). 배열이 정본.
         programId: selProgram, platform: chans[0].platform, accountId: chans[0].accountId,
@@ -693,8 +693,8 @@ export default function AutomationPage() {
         mediaKind, criterion,
         gatePolicy: approveFirst ? "approve_first" : "hold_on_issue",
         window: win, enabled: true,
-        // 리프레임은 9:16 숏폼에만 의미 있다 — 클립 전용 규칙이면 "none" 으로 강제
-        // (수동 채택 다이얼로그가 가로형에서 리프레임 단계를 생략하는 것과 같은 규칙).
+        // 리프레임은 9:16 숏폼에만 의미 있다 — 클립 전용 계획이면 "none" 으로 강제
+        // (수동 채택 다이얼로그가 가로형에서 리프레임 단계를 생략하는 것과 같은 계획).
         // orientation 을 함께 보내야 한다 — 서버는 reframe=ai 를 portrait 에서만 허용하고
         // (400), 순방 소비 조건도 orientation==="portrait" && reframe==="ai" 다. 숏폼=세로,
         // 클립=가로, 둘 다(both)는 추천 kind 기반이라 미지정(+AI 비활성).
@@ -722,7 +722,7 @@ export default function AutomationPage() {
     }
   }
 
-  /** 참고 디자인의 "초기화" — 서버 규칙은 지우지 않고 현재 작성 중인 폼만 기본값으로 되돌린다. */
+  /** 참고 디자인의 "초기화" — 서버 계획은 지우지 않고 현재 작성 중인 폼만 기본값으로 되돌린다. */
   function resetWizard() {
     const seed = TEMPLATE_SEED_UI["broadcast-standard"];
     prefilledFor.current = null;
@@ -754,8 +754,8 @@ export default function AutomationPage() {
     toast({ title: "입력값을 초기화했습니다", description: "이미 저장된 자동배포 설정은 변경하지 않았습니다.", tone: "done" });
   }
 
-  /** 영상 하나 승인 — 그 영상에 걸린 보류를 **전부** 푼다(규칙이 둘이면 둘 다). 하나라도
-   *  남으면 다음 순방에서 그 규칙이 다시 잡아 승인이 안 먹은 것처럼 보인다. */
+  /** 영상 하나 승인 — 그 영상에 걸린 보류를 **전부** 푼다(계획이 둘이면 둘 다). 하나라도
+   *  남으면 다음 순방에서 그 계획이 다시 잡아 승인이 안 먹은 것처럼 보인다. */
   async function release(entry: { clipId: string; holds: RuleHold[] }) {
     if (releasing) return; // 더블클릭 = 승인 중복 요청
     setReleasing(entry.clipId);
@@ -781,7 +781,7 @@ export default function AutomationPage() {
   }
 
   /** 영상 하나 거부 — 그 영상에 걸린 보류를 **전부** 거부한다(승인과 대칭·반대). 거부하면 이
-   *  규칙으로는 재선정도 게시도 안 된다. 되돌리기 어려우니 확인을 받는다. */
+   *  계획으로는 재선정도 게시도 안 된다. 되돌리기 어려우니 확인을 받는다. */
   async function reject(entry: { clipId: string; holds: RuleHold[] }) {
     if (releasing || rejecting) return;
     if (!window.confirm("이 영상을 거부하면 이 자동배포에서는 다시 나가지 않습니다. 거부할까요?")) return;
@@ -805,7 +805,7 @@ export default function AutomationPage() {
     }
   }
 
-  /** 전체 승인 — 서버 API 가 (규칙,클립) 건당이라 순차로 돈다. 실패 건은 남기고 계속 간다.
+  /** 전체 승인 — 서버 API 가 (계획,클립) 건당이라 순차로 돈다. 실패 건은 남기고 계속 간다.
    *  세는 단위는 **영상**이다(버튼 문구와 같아야 한다) — 한 영상의 보류를 다 풀어야 1건. */
   async function releaseAll() {
     if (releasing || heldClips.length === 0) return;
@@ -852,7 +852,7 @@ export default function AutomationPage() {
     return pick ? mediaThumbSrc(pick.id) : undefined;
   }, [media, episodes, selProgram]);
 
-  // ── ④ 진행 패널 파생값 — 이 프로그램 규칙의 확인 기록 → 클립 → 렌더 → 배포 조인 ──
+  // ── ④ 진행 패널 파생값 — 이 프로그램 계획의 확인 기록 → 클립 → 렌더 → 배포 조인 ──
   const progress = useMemo(() => {
     if (!selProgram) return null;
     const rule = ruleForProgram;
@@ -1154,7 +1154,7 @@ export default function AutomationPage() {
         </div>
 
         {/* 배포 방식 — **자동배포의 두 갈래.** 고급 설정에 묻혀 있던 승인 방식을 1급 선택지로
-            꺼냈다(사용자 2026-08-24: "자동배포를 두 가지로 나눠줘"). 어떤 규칙인지가 곧 이
+            꺼냈다(사용자 2026-08-24: "자동배포를 두 가지로 나눠줘"). 어떤 계획인지가 곧 이
             선택이라, 접힘 속에 있으면 사용자는 기본값(승인 배포)이 전부인 줄 안다. */}
         <div>
           <div className="mb-1 text-[10.5px]" style={{ color: "var(--sd-label)" }}>배포 방식</div>
@@ -1199,7 +1199,7 @@ export default function AutomationPage() {
         {/* 발행 계획(요일·시간) — 반자동 운영의 핵심 조작이라 고급 설정에서 승격(지시 2026-08-24).
             판정은 서버 순방과 같은 순수 함수(isPublishDay·slotsElapsed)가 하고, 여기는 값만 편집한다. */}
         <div className="grid gap-2.5 sm:grid-cols-2">
-          {/* 발행 요일 — 비우면 매일(구 규칙 동작 그대로). */}
+          {/* 발행 요일 — 비우면 매일(구 계획 동작 그대로). */}
           <div>
             <div className="mb-1 flex items-baseline justify-between">
               <span className="text-[10.5px]" style={{ color: "var(--sd-label)" }}>발행 요일</span>
@@ -1274,7 +1274,7 @@ export default function AutomationPage() {
         </div>
 
         {/* 담당자 알림 — 자동배포가 실제로 나가면 이 주소로 영상 제목·URL 메일이 간다.
-            규칙이 아니라 워크스페이스 설정이다(어느 규칙이 내보내든 같은 담당자가 받는다). */}
+            계획이 아니라 워크스페이스 설정이다(어느 계획이 내보내든 같은 담당자가 받는다). */}
         <div className="flex flex-wrap items-center gap-2">
           <label className="text-[11px]" style={{ color: "var(--sd-label)" }}>
             담당자 이메일 (배포 완료 알림)
@@ -1316,7 +1316,7 @@ export default function AutomationPage() {
           </button>
         </div>
 
-        {/* 고급 설정 — 구 규칙 폼(점수 기준·한도·시간창·정책·템플릿) 접기로 격하 · 삭제 금지 */}
+        {/* 고급 설정 — 구 계획 폼(점수 기준·한도·시간창·정책·템플릿) 접기로 격하 · 삭제 금지 */}
         <button
           type="button"
           className="self-start text-[11px] underline-offset-2 hover:underline"
@@ -1432,11 +1432,11 @@ export default function AutomationPage() {
               </div>
             )}
 
-            {/* 자막 켜기 — 규칙 기본 ON. 끄면 이 규칙의 자동 클립을 자막(STT 번인) 없이 렌더한다
+            {/* 자막 켜기 — 계획 기본 ON. 끄면 이 계획의 자동 클립을 자막(STT 번인) 없이 렌더한다
                 (드라마 등 원본에 자막이 이미 있는 회차용). 위 미리보기의 자막도 함께 사라진다. */}
             <label className="flex items-center gap-2 text-[11.5px]" style={{ color: "var(--sd-fg)" }}>
               <input type="checkbox" checked={subtitles} onChange={(e) => setSubtitles(e.target.checked)} />
-              자막 켜기 (끄면 이 규칙의 자동 클립에 자막을 넣지 않습니다 — 원본에 자막이 이미 있는 회차용)
+              자막 켜기 (끄면 이 계획의 자동 클립에 자막을 넣지 않습니다 — 원본에 자막이 이미 있는 회차용)
             </label>
 
           </div>
@@ -1566,9 +1566,9 @@ export default function AutomationPage() {
         ) : (
           <div className="flex flex-col gap-1.5">
             {heldClips.map((entry) => {
-              // 원시 clipId 만으론 판단이 안 된다 — 스토어의 클립·규칙과 조인해 얼굴을 붙인다.
+              // 원시 clipId 만으론 판단이 안 된다 — 스토어의 클립·계획과 조인해 얼굴을 붙인다.
               const clip = clips.find((c) => c.id === entry.clipId);
-              // 규칙은 부가정보다(사람이 보는 단위는 영상) — 여럿이면 첫 규칙의 프로그램만 쓴다.
+              // 계획은 부가정보다(사람이 보는 단위는 영상) — 여럿이면 첫 계획의 프로그램만 쓴다.
               const rule = rules.find((r) => r.id === entry.holds[0]?.ruleId);
               const ruleProgram = rule
                 ? programs.find((p) => p.id === (rule.programIds?.[0] ?? rule.programId))
@@ -1595,7 +1595,7 @@ export default function AutomationPage() {
                     <div className="sd-mono text-[10.5px]" style={{ color: "var(--sd-mut)" }}>
                       {clip ? `${Math.round(clip.durationSec)}초 · ` : ""}
                       {ruleProgram?.title ? `자동배포 ${ruleProgram.title} · ` : ""}
-                      {/* 규칙이 둘 이상 걸린 영상은 그 사실만 짧게 — 승인은 어차피 한 번에 다 푼다. */}
+                      {/* 계획이 둘 이상 걸린 영상은 그 사실만 짧게 — 승인은 어차피 한 번에 다 푼다. */}
                       {entry.holds.length > 1 ? `채널 연결 ${entry.holds.length}개 · ` : ""}
                       대기 시작 {entry.heldAt?.slice(0, 16).replace("T", " ") || "—"}
                     </div>
@@ -1657,7 +1657,7 @@ export default function AutomationPage() {
           <span className="text-[11px]" style={{ color: "var(--sd-mut)" }}>자동배포는 여러 개 만들 수 있고, 채널 하나는 한 곳에만 연결됩니다</span>
         </div>
 
-        {/* 규칙 목록 — 무엇이 돌고 있는지의 정본 */}
+        {/* 계획 목록 — 무엇이 돌고 있는지의 정본 */}
         {rules.length === 0 ? (
           <div
             className="sd-ph grid min-h-[70px] place-items-center rounded-[6px] px-6 text-center"
@@ -2065,7 +2065,7 @@ function PublishEstimate({ weekdays, slots, dailyQuota, channels }: {
   channels: { platform: string; accountId: string }[];
 }) {
   // 채널 수 곱하기도 **서버 함수 안에서** 끝낸다 — 밖에서 한 번 더 곱하면 그 순간
-  // 두 벌 계산이 되고, 규칙이 바뀔 때 조용히 어긋난다.
+  // 두 벌 계산이 되고, 계획이 바뀔 때 조용히 어긋난다.
   // platform·accountId 는 타입상 필요할 뿐 계산엔 안 쓰인다(channels 가 있으면 그쪽이 정본).
   const est = monthlyPublishEstimate({
     weekdays, slots, dailyQuota, channels,

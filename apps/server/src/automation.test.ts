@@ -3,7 +3,7 @@
  *
  * 두 문장이 전부다 (FLOWS.md:142):
  *  - 자동 배포는 게이트를 건너뛰지 않는다. 보류된 건은 **사람이 확정해야** 다시 잡힌다.
- *  - 규칙이 없으면 파이프라인은 아무것도 하지 않는다.
+ *  - 계획이 없으면 파이프라인은 아무것도 하지 않는다.
  */
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -140,13 +140,13 @@ describe("한 채널은 자동배포 하나에만 속한다", () => {
     ]);
   });
 
-  it("수정 중인 자기 규칙은 제외해 기존 채널을 유지할 수 있다", () => {
+  it("수정 중인 자기 계획은 제외해 기존 채널을 유지할 수 있다", () => {
     assert.deepEqual(findAutomationChannelConflicts(existing, [
       { platform: "youtube", accountId: "c1" },
     ], "r1"), []);
   });
 
-  it("규칙 저장 라우트도 충돌을 409로 막는다 — 외부 API 우회 금지", () => {
+  it("계획 저장 라우트도 충돌을 409로 막는다 — 외부 API 우회 금지", () => {
     const src = fs.readFileSync(path.join(SRC, "index.ts"), "utf-8");
     const route = /app\.post\("\/api\/automation\/rules"[\s\S]*?\n\}\);/.exec(src)?.[0] ?? "";
     assert.match(route, /findAutomationChannelConflicts\(/);
@@ -214,7 +214,7 @@ describe("사유 로그 스팸 방지 — db-pg 소스 스캔", () => {
     .match(/export async function hasRunNote[\s\S]*?\n\}/)?.[0] ?? "";
 
   it("rule_id 없는 워크스페이스 사유도 dedupe 된다", () => {
-    // 크레딧 부족은 특정 규칙 탓이 아니라 rule_id 가 NULL 이다. `= $1` 하나로 두면 NULL
+    // 크레딧 부족은 특정 계획 탓이 아니라 rule_id 가 NULL 이다. `= $1` 하나로 두면 NULL
     // 비교가 항상 거짓이라 dedupe 가 통째로 무력해져 그 사유가 매 순방 쌓인다.
     assert.match(fn, /ruleId: string \| null/, "hasRunNote 가 rule_id 없는 사유를 못 받는다");
     assert.match(fn, /rule_id IS NULL/,
@@ -225,7 +225,7 @@ describe("사유 로그 스팸 방지 — db-pg 소스 스캔", () => {
     // `IS NOT DISTINCT FROM` 한 줄로 합치면 NULL 은 찾지만 **인덱스를 통째로 잃는다** —
     // btree 에 그 연산자 전략이 없고, rule_run 인덱스(0019 idx_rule_run_rule ·
     // 0032 idx_rule_run_quota)는 둘 다 rule_id 선행이라 남는 진입점이 없어 seq scan 이다.
-    // 순방(15분)이 규칙×채널×클립 수만큼 부르는 쿼리라 rule_run 이 자라는 만큼 느려진다.
+    // 순방(15분)이 계획×채널×클립 수만큼 부르는 쿼리라 rule_run 이 자라는 만큼 느려진다.
     assert.match(fn, /rule_id = \$1/, "rule_id 있을 때의 인덱스 진입점이 없다");
     assert.doesNotMatch(fn, /rule_id IS NOT DISTINCT FROM/,
       "rule_id 에 IS NOT DISTINCT FROM 을 쓰면 인덱스를 못 탄다 — 두 갈래로 나눌 것");
@@ -258,7 +258,7 @@ describe("재보류 유령 방지 — db-pg 소스 스캔", () => {
  * 승인 대기 = **영상 단위**(사용자 확정 2026-08-19: "걍 그 영상 하나하나만 떠야지").
  *
  * 화면의 승인 대기 목록과 자동 배포 기록의 '승인 대기' 줄 수가 안 맞았다. 원인이 하나가 아니라
- * 셋이었고(채널 곱 · 사유 덮어쓰기 · 규칙 삭제 후 유령), 여기서 각각을 고정한다. 순수 함수로
+ * 셋이었고(채널 곱 · 사유 덮어쓰기 · 계획 삭제 후 유령), 여기서 각각을 고정한다. 순수 함수로
  * 증명이 안 되는 배선·SQL 불변식이라 소스 스캔이다.
  */
 describe("승인 대기는 영상 하나당 한 줄", () => {
@@ -270,25 +270,25 @@ describe("승인 대기는 영상 하나당 한 줄", () => {
       "이미 보류 중인데 holdClip 을 다시 부르면 최초 보류 사유가 덮인다");
   });
 
-  it("규칙을 지우면 그 규칙의 보류도 지운다 — 아무도 게시 안 할 유령 항목 방지", () => {
+  it("계획을 지우면 그 계획의 보류도 지운다 — 아무도 게시 안 할 유령 항목 방지", () => {
     const src = fs.readFileSync(path.join(SRC, "db-pg.ts"), "utf-8");
     const fn = src.match(/export async function deleteAutomationRule[\s\S]*?\n\}/)?.[0] ?? "";
     assert.match(fn, /DELETE FROM rule_hold WHERE rule_id = \$1/,
-      "rule_hold 엔 FK·cascade 가 없다(0019) — 규칙만 지우면 보류가 승인 대기에 영원히 남는다");
-    // 해제 표시(UPDATE)로 치우면 hasReleasedHold 가 참이 되어 다음 규칙이 재승인 없이 통과한다.
+      "rule_hold 엔 FK·cascade 가 없다(0019) — 계획만 지우면 보류가 승인 대기에 영원히 남는다");
+    // 해제 표시(UPDATE)로 치우면 hasReleasedHold 가 참이 되어 다음 계획이 재승인 없이 통과한다.
     assert.doesNotMatch(fn, /UPDATE rule_hold SET/,
-      "규칙 삭제를 '사람 승인'으로 기록하면 안 된다 — 다음 규칙이 사람 눈을 건너뛴다");
+      "계획 삭제를 '사람 승인'으로 기록하면 안 된다 — 다음 계획이 사람 눈을 건너뛴다");
   });
 
   it("화면은 보류를 클립 단위로 접고, 승인은 그 영상의 보류를 전부 푼다", () => {
     const page = fs.readFileSync(
       path.resolve(SRC, "../../web/src/app/(app)/automation/page.tsx"), "utf-8");
     assert.match(page, /const heldClips = useMemo/,
-      "보류를 클립 단위로 접지 않으면 규칙 두 개에 걸린 영상이 두 줄로 뜬다");
+      "보류를 클립 단위로 접지 않으면 계획 두 개에 걸린 영상이 두 줄로 뜬다");
     assert.match(page, /const heldCount = heldClips\.length/,
       "헤더 건수도 영상 단위여야 한다 — 목록과 숫자가 갈라진다");
     assert.match(page, /entry\.holds\.map\(\(h\) => releaseAutomationHold/,
-      "승인이 보류 하나만 풀면 남은 규칙이 다음 순방에 다시 잡아 승인이 안 먹은 것처럼 보인다");
+      "승인이 보류 하나만 풀면 남은 계획이 다음 순방에 다시 잡아 승인이 안 먹은 것처럼 보인다");
   });
 
   it("미리보기는 렌더 산출물을 재생한다 — 편집기 링크는 '편집' 으로 분리", () => {
@@ -326,7 +326,7 @@ describe("순방 배선 — automation-cycle 소스 스캔", () => {
       "렌더는 factory 와 같은 경로(/api/clips/:id/export)여야 한다 — 복제하면 두 벌이 갈라진다");
   });
 
-  it("규칙 channels[] 의 계정을 플랫폼별 필드로 풀어 넘긴다", () => {
+  it("계획 channels[] 의 계정을 플랫폼별 필드로 풀어 넘긴다", () => {
     // youtube/naver 만 넘기면 TikTok·IG·FB 는 계정 미지정 배포(record 강등)가 된다.
     assert.match(src, /tiktokOpenId:\s*chan\.accountId/);
     assert.match(src, /igUserId:\s*chan\.accountId/);
@@ -348,14 +348,14 @@ describe("순방 배선 — automation-cycle 소스 스캔", () => {
   });
 });
 
-describe("채택 형태(방향·AI 리프레임) — 규칙 저장 왕복", () => {
+describe("채택 형태(방향·AI 리프레임) — 계획 저장 왕복", () => {
   it("값 체계는 수동 채택 다이얼로그와 동일하다 (orientation·reframe)", () => {
     assert.equal(isRuleOrientation("portrait"), true);
     assert.equal(isRuleOrientation("landscape"), true);
     assert.equal(isRuleOrientation("vertical"), false); // 다른 어휘가 생기면 화면과 갈라진다
     assert.equal(isRuleReframe("ai"), true);
     assert.equal(isRuleReframe("none"), true);
-    assert.equal(isRuleReframe("ai_multi"), false); // 잡 모드명(ai_multi)은 규칙 값이 아니다
+    assert.equal(isRuleReframe("ai_multi"), false); // 잡 모드명(ai_multi)은 계획 값이 아니다
   });
 
   it("db-pg 왕복 — SELECT·INSERT·UPDATE(id) 셋 다 orientation·reframe 를 안다", () => {
@@ -371,12 +371,12 @@ describe("채택 형태(방향·AI 리프레임) — 규칙 저장 왕복", () =
     assert.match(byId, /orientation = \$\d+, reframe = \$\d+/, "id 갱신 경로가 채택 형태를 유실한다");
   });
 
-  it("규칙 라우트가 orientation·reframe 를 검증해 받는다 — 틀린 값 침묵 저장 금지", () => {
+  it("계획 라우트가 orientation·reframe 를 검증해 받는다 — 틀린 값 침묵 저장 금지", () => {
     const src = fs.readFileSync(path.join(SRC, "index.ts"), "utf-8");
     const route = /app\.post\("\/api\/automation\/rules"[\s\S]*?\n\}\);/.exec(src)?.[0] ?? "";
     assert.match(route, /isRuleOrientation\(body\.orientation\)/, "라우트가 orientation 을 안 받는다");
     assert.match(route, /isRuleReframe\(body\.reframe\)/, "라우트가 reframe 을 안 받는다");
-    // 수동 다이얼로그는 세로형일 때만 리프레임을 묻는다 — 규칙도 같은 제약이어야
+    // 수동 다이얼로그는 세로형일 때만 리프레임을 묻는다 — 계획도 같은 제약이어야
     // "AI 켰는데 영영 안 돈다"가 침묵 속에 저장되지 않는다.
     assert.match(route, /body\.reframe === "ai" && body\.orientation !== "portrait"/,
       "가로+AI 조합을 막는 검증이 없다");
@@ -386,9 +386,9 @@ describe("채택 형태(방향·AI 리프레임) — 규칙 저장 왕복", () =
 describe("채택 형태 순방 배선 — automation-cycle 소스 스캔", () => {
   const src = fs.readFileSync(path.join(SRC, "automation-cycle.ts"), "utf-8");
 
-  it("규칙 방향이 클립 aspectRatio 에 수동 채택과 같은 매핑으로 적용된다", () => {
+  it("계획 방향이 클립 aspectRatio 에 수동 채택과 같은 매핑으로 적용된다", () => {
     assert.match(src, /rule\.orientation === "landscape"/,
-      "규칙의 가로 지정이 반영되지 않는다");
+      "계획의 가로 지정이 반영되지 않는다");
     assert.match(src, /landscape \? "16:9" : "9:16-crop-main"/,
       "가로/세로 → aspectRatio 매핑(adopt 라우트와 동일)이 없다");
   });
@@ -405,11 +405,11 @@ describe("채택 형태 순방 배선 — automation-cycle 소스 스캔", () =>
     assert.match(src, /autoEditorState\([\s\S]*?\(rule as any\)\.layout, aspectRatio\)/,
       "자동배포 최종 방향을 factory에 넘기지 않으면 제목 106/107px basis가 어긋난다");
     assert.match(src, /aspect: aspectRatio,/,
-      "editorState.aspect 를 clip.aspectRatio 와 일치시키지 않으면 규칙 방향이 렌더에 미도달한다");
+      "editorState.aspect 를 clip.aspectRatio 와 일치시키지 않으면 계획 방향이 렌더에 미도달한다");
   });
 
   it("클립도 자동배포 후보가 된다 — core 의 type 을 서버가 kind 로 보존한다", () => {
-    // 예전엔 recFromShort 가 전부 kind:"short" 로 못박아, 규칙에서 '클립'을 골라도
+    // 예전엔 recFromShort 가 전부 kind:"short" 로 못박아, 계획에서 '클립'을 골라도
     // selectCandidates(kind !== "short")가 항상 0건이었다 — 클립은 나갈 수가 없었다.
     const pipeline = fs.readFileSync(path.join(SRC, "content-pipeline.ts"), "utf-8");
     assert.match(pipeline, /kind: isClip \? "clip" : "short"/,
@@ -420,7 +420,7 @@ describe("채택 형태 순방 배선 — automation-cycle 소스 스캔", () =>
   it("세로+AI 면 채택 직후 리프레임을 수동과 같은 라우트로 큐잉한다", () => {
     // 조건식은 store.tsx(수동 채택)와 동일: orientation==="portrait" && reframe==="ai".
     assert.match(src, /rule\.orientation === "portrait" && rule\.reframe === "ai"/,
-      "세로+AI 조건이 없다 — 규칙에 저장만 되고 순방이 소비하지 않는다");
+      "세로+AI 조건이 없다 — 계획에 저장만 되고 순방이 소비하지 않는다");
     assert.match(src, /\/api\/clips\/\$\{clipId\}\/reframe/,
       "리프레임은 수동과 같은 라우트(/api/clips/:id/reframe)여야 한다 — 큐잉·dedupe 복제 금지");
     assert.match(src, /"ai_multi"/, "mode=ai_multi 페이로드가 없다");
@@ -459,21 +459,21 @@ describe("승인 정책", () => {
     assert.equal(d.action, "publish");
   });
 
-  it("멈춘 규칙은 아무것도 안 한다", () => {
+  it("멈춘 계획은 아무것도 안 한다", () => {
     const d = decidePublish({ rule: rule({ enabled: false }), gate: PASS, approved: true, heldAwaitingHuman: false });
     assert.equal(d.action, "skip");
   });
 });
 
-describe("규칙이 없으면 아무것도 하지 않는다 (F6 Invariant)", () => {
-  it("빈 규칙 목록을 '전체 대상'으로 해석하지 않는다", () => {
+describe("계획이 없으면 아무것도 하지 않는다 (F6 Invariant)", () => {
+  it("빈 계획 목록을 '전체 대상'으로 해석하지 않는다", () => {
     // 이 실수 한 번이면 손대지 않은 프로그램들이 배포된다.
     const p = planCycle({ paused: false, rules: [] });
     assert.deepEqual(p.rules, []);
     assert.notEqual(p.idleReason, "");
   });
 
-  it("규칙이 전부 꺼져 있어도 아무것도 안 한다", () => {
+  it("계획이 전부 꺼져 있어도 아무것도 안 한다", () => {
     const p = planCycle({ paused: false, rules: [rule({ enabled: false })] });
     assert.deepEqual(p.rules, []);
   });
@@ -484,7 +484,7 @@ describe("규칙이 없으면 아무것도 하지 않는다 (F6 Invariant)", () 
     assert.match(p.idleReason, /일시정지/);
   });
 
-  it("실행 중 규칙만 평가한다", () => {
+  it("실행 중 계획만 평가한다", () => {
     const p = planCycle({ paused: false, rules: [rule({ id: "a" }), rule({ id: "b", enabled: false })] });
     assert.deepEqual(p.rules.map((r) => r.id), ["a"]);
   });
@@ -596,7 +596,7 @@ describe("순방이 아무것도 안 했으면 이유를 남긴다 (ruleIdleNote
 
   it("분석이 안 끝났으면 '추천 없음'이 아니라 '분석 중'이다", () => {
     // 이게 이 판정의 핵심이다. 분석 미완 회차뿐인데 후보 0건을 그대로 읽으면
-    // "채택할 새 추천이 없습니다" 라는 **틀린 사유**가 나가고, 사용자는 규칙을 의심한다.
+    // "채택할 새 추천이 없습니다" 라는 **틀린 사유**가 나가고, 사용자는 계획을 의심한다.
     const o = obs({ analyzed: 0, analyzing: 2 });
     assert.equal(codeOf(o), "analyzing");
     assert.notEqual(codeOf(o), "no_pending");
@@ -626,8 +626,8 @@ describe("순방이 아무것도 안 했으면 이유를 남긴다 (ruleIdleNote
     assert.match(n.detail, /9~22시/, "몇 시부터 몇 시인지가 없으면 사용자가 설정을 못 찾는다");
   });
 
-  it("게시 단계에서 멈춘 상태도 사유가 된다 — 눌린 로그를 규칙 단위로 이어 준다", () => {
-    // 이 사유들은 (클립,채널)당 한 줄로 눌러 두는데, 눌린 뒤에는 그 규칙이 왜 멈춰
+  it("게시 단계에서 멈춘 상태도 사유가 된다 — 눌린 로그를 계획 단위로 이어 준다", () => {
+    // 이 사유들은 (클립,채널)당 한 줄로 눌러 두는데, 눌린 뒤에는 그 계획이 왜 멈춰
     // 있는지 아무도 말하지 않는다. 여기가 그 상태를 하루 한 줄로 잇는 자리다.
     assert.equal(codeOf(obs({ renderStopped: true })), "render_stopped");
     assert.equal(codeOf(obs({ gateOff: true })), "gate_off");
@@ -643,7 +643,7 @@ describe("순방이 아무것도 안 했으면 이유를 남긴다 (ruleIdleNote
   it("채널 판정 미달은 사용자가 실제로 해결할 수 있는 편집기로 안내한다", () => {
     const detail = ruleIdleNote(obs({ channelBlocked: true }))!.detail;
     assert.match(detail, /편집기/);
-    assert.doesNotMatch(detail, /배포 규칙|채널 규칙/);
+    assert.doesNotMatch(detail, /배포 계획|채널 규칙/);
   });
 
   it("분석 완료 회차가 전부 상한이면 상한 도달", () => {
@@ -742,7 +742,7 @@ describe("분석 상태 판정 — '분석 중'과 '큐잉조차 안 됨'은 다
 
 describe("사유는 하나만 — 우선순위 고정", () => {
   // 순서가 흔들리면 같은 상황에서 로그가 매번 다른 말을 한다. 원칙은
-  // "사람이 규칙을 바꾸면 풀리는 것 먼저, 시간이 저절로 풀어 주는 것은 뒤".
+  // "사람이 계획을 바꾸면 풀리는 것 먼저, 시간이 저절로 풀어 주는 것은 뒤".
   const cases: Array<[string, RuleIdleObservation, RuleIdleCode]> = [
     ["활동 시간 밖이 모든 사유를 이긴다 — 평가 자체를 안 했다",
       obs({ outOfWindow: true, episodes: 0, renderStopped: true, gateOff: true }), "off_hours"],
@@ -783,7 +783,7 @@ describe("발행 요일 · 발행 시각 슬롯", () => {
   /** KST 기준 시각을 만든다 — 판정이 전부 Asia/Seoul 벽시계라 UTC 로 쓰면 하루가 밀린다. */
   const kst = (iso: string) => new Date(`${iso}+09:00`);
 
-  it("요일 미지정은 매일이다 — 기존 규칙이 이 변경으로 멈추면 안 된다", () => {
+  it("요일 미지정은 매일이다 — 기존 계획이 이 변경으로 멈추면 안 된다", () => {
     assert.equal(ruleWeekdays({ weekdays: null }), null);
     assert.equal(ruleWeekdays({ weekdays: [] }), null);
     for (const d of ["2026-08-17", "2026-08-22", "2026-08-23"]) {
@@ -861,9 +861,9 @@ describe("사유 문구는 dedupe 키다 — 변동값이 섞이면 안 된다",
    * 사유를 남기려다 정작 중요한 사유를 가리는 자충수가 된다.
    */
   const SAMPLES: Record<RuleIdleCode, [RuleIdleObservation, RuleIdleObservation]> = {
-    // 활동 시간창은 **규칙 설정**이라 하루 안에 안 바뀐다 — 문구에 넣어도 dedupe 가 산다.
+    // 활동 시간창은 **계획 설정**이라 하루 안에 안 바뀐다 — 문구에 넣어도 dedupe 가 산다.
     off_hours: [obs({ outOfWindow: true }), obs({ outOfWindow: true, episodes: 9, analyzing: 4 })],
-    // 발행 요일도 **규칙 설정**이라 하루 안에 안 바뀐다 — 문구에 실어도 dedupe 가 산다.
+    // 발행 요일도 **계획 설정**이라 하루 안에 안 바뀐다 — 문구에 실어도 dedupe 가 산다.
     // (오늘 요일 같은 변동값을 실으면 안 된다 — 그래서 문구는 설정된 요일만 쓴다.)
     off_day: [
       obs({ offDay: true, weekdays: [1, 2, 3, 4, 5] }),
@@ -930,17 +930,17 @@ describe("유휴 사유 배선 — automation-cycle 소스 스캔", () => {
     src.indexOf("for (const rule of plan.rules)"), src.indexOf("\n  return report;"));
 
   it("회차 없음이 조용한 continue 로 돌아가지 않는다", () => {
-    assert.ok(RULE_LOOP.length > 1000, "규칙 루프를 못 잘랐다 — 스캔 기준이 깨졌다");
+    assert.ok(RULE_LOOP.length > 1000, "계획 루프를 못 잘랐다 — 스캔 기준이 깨졌다");
     assert.doesNotMatch(src, /eps\.length === 0\)\s*continue/,
       "로그 없는 조용한 continue 가 되살아났다 — 회차가 없다는 사실을 아무도 모른다");
     assert.match(src, /noteRuleIdle\(rule, obs\)/, "유휴 사유를 남기는 호출이 없다");
-    assert.match(src, /if \(!logged\) await idle\(\)/, "규칙 끝에서 사유를 남기는 배선이 없다");
+    assert.match(src, /if \(!logged\) await idle\(\)/, "계획 끝에서 사유를 남기는 배선이 없다");
   });
 
-  it("규칙 루프 안에서는 실행 로그를 note() 로만 쓴다", () => {
+  it("계획 루프 안에서는 실행 로그를 note() 로만 쓴다", () => {
     // 직접 호출이 하나라도 남으면 logged 플래그가 안 서서 "아무 일도 안 했다" 오진이 난다.
     assert.doesNotMatch(RULE_LOOP, /appendRuleRun\(/,
-      "규칙 루프 안에 appendRuleRun 직접 호출이 있다 — 전부 note() 를 지나야 한다");
+      "계획 루프 안에 appendRuleRun 직접 호출이 있다 — 전부 note() 를 지나야 한다");
     assert.match(RULE_LOOP, /await note\(\{/, "note() 래퍼가 쓰이지 않는다");
   });
 
@@ -954,18 +954,18 @@ describe("유휴 사유 배선 — automation-cycle 소스 스캔", () => {
     assert.match(fn, /Promise<string \| null>/, "사유를 돌려주지 않으면 배너가 dedupe 를 따라 사라진다");
     assert.match(fn, /return idle\.detail;/, "dedupe 여부와 무관하게 사유를 돌려줘야 한다");
     assert.doesNotMatch(fn, /report/,
-      "규칙 하나의 사유를 순방 전체 리포트에 직접 얹으면 다른 규칙이 일한 순방까지 덮는다");
+      "계획 하나의 사유를 순방 전체 리포트에 직접 얹으면 다른 계획이 일한 순방까지 덮는다");
   });
 
-  it("배너는 순방 전체가 아무 일도 안 했을 때만 — 규칙 하나가 전체를 덮지 않는다", () => {
-    // 규칙 A 가 3건 채택·2건 게시했는데 규칙 B 가 유휴면, 예전엔 리포트가
+  it("배너는 순방 전체가 아무 일도 안 했을 때만 — 계획 하나가 전체를 덮지 않는다", () => {
+    // 계획 A 가 3건 채택·2건 게시했는데 계획 B 가 유휴면, 예전엔 리포트가
     // {adopted:3, published:2, idleReason:"회차가 없습니다"} 였다. 웹은 이 필드를
     // "왜 아무 일도 없었나" 로 렌더한다.
     const tail = src.slice(src.indexOf("if (!logged) await idle()"), src.indexOf("\n  return report;"));
     assert.match(tail, /report\.adopted === 0 && report\.published === 0 && report\.held === 0/,
       "일을 한 순방에도 배너가 뜬다");
     assert.match(tail, /idleReasons\.length === plan\.rules\.length/,
-      "규칙 하나만 유휴여도 배너가 뜬다 — 전부 유휴일 때만이어야 한다");
+      "계획 하나만 유휴여도 배너가 뜬다 — 전부 유휴일 때만이어야 한다");
   });
 
   it("크레딧 정지도 로그에 남는다 — 배너는 지나간 시간을 설명하지 못한다", () => {
@@ -974,22 +974,22 @@ describe("유휴 사유 배선 — automation-cycle 소스 스캔", () => {
     assert.match(credit, /CREDIT_STOP_NOTE/, "정지 사유 상수를 안 쓴다 — 배너와 로그가 갈라진다");
     assert.match(credit, /hasRunNote\(/, "하루 한 줄 가드가 없다");
     assert.match(credit, /appendRuleRun\(/, "로그를 남기지 않는다");
-    // 규칙이 없는 워크스페이스에 "충전하면 다시 시작합니다" 는 지킬 수 없는 약속이다 —
+    // 계획이 없는 워크스페이스에 "충전하면 다시 시작합니다" 는 지킬 수 없는 약속이다 —
     // 자동배포를 한 번도 안 쓴 곳에 매일 한 줄씩 쌓였다.
     assert.match(credit, /plan\.rules\.length > 0/,
-      "규칙이 없어도 크레딧 정지 로그가 쌓인다 — 충전해도 시작될 게 없다");
+      "계획이 없어도 크레딧 정지 로그가 쌓인다 — 충전해도 시작될 게 없다");
     assert.ok(src.indexOf("listAutomationRules()") < src.indexOf("creditBalance()) <= 0"),
-      "규칙 조회가 크레딧 판정보다 뒤면 '규칙이 있을 때만' 을 판단할 수 없다");
+      "계획 조회가 크레딧 판정보다 뒤면 '계획이 있을 때만' 을 판단할 수 없다");
   });
 
   it("dedupe 로 눌린 줄은 '말했다'가 아니다 — 대신 상태가 유휴 판정에 들어간다", () => {
-    // 평생 dedupe(todayKstOnly=false)를 쓰는 문구가 한 번 걸리면, 예전엔 그 규칙이
+    // 평생 dedupe(todayKstOnly=false)를 쓰는 문구가 한 번 걸리면, 예전엔 그 계획이
     // **그 뒤로 영원히** 유휴 사유를 안 냈다(logged 를 무조건 세웠으므로).
     const fn = src.match(/async function writeRun[\s\S]*?\n\}/)?.[0] ?? "";
     assert.match(fn, /Promise<boolean>/, "실제로 썼는지를 안 돌려준다");
     assert.match(RULE_LOOP, /if \(await writeRun\(ev, dedupe\)\) logged = true;/,
       "append 하지 않은 순방에도 logged 가 서면 유휴 사유가 영원히 안 나간다");
-    // 눌린 상태는 관측치로 이어져 규칙 단위 하루 한 줄이 된다.
+    // 눌린 상태는 관측치로 이어져 계획 단위 하루 한 줄이 된다.
     for (const flag of ["obs.renderStopped = true", "obs.renderWaiting = true",
       "obs.metaWaiting = true", "obs.vagueAccount = true", "obs.gateOff = true",
       "obs.quotaDone = true", "obs.heldWaiting = true", "obs.channelBlocked = true",
@@ -999,7 +999,7 @@ describe("유휴 사유 배선 — automation-cycle 소스 스캔", () => {
   });
 
   it("매 순방 마주치는 스킵은 전부 dedupe 를 건다 — 실행 로그 50건을 덮지 않는다", () => {
-    // 활동시간 9~22시 · 15분 주기면 무가드 한 줄이 (규칙,채널)당 하루 52줄이다.
+    // 활동시간 9~22시 · 15분 주기면 무가드 한 줄이 (계획,채널)당 하루 52줄이다.
     const gate = src.slice(src.indexOf("if (!upGate.send)"), src.indexOf("const quota ="));
     assert.match(gate, /hasRunNote\(rule\.id, null, accountKey, "skipped", true, upGate\.offNote\)/,
       "게이트 OFF 사유가 매 순방 쌓인다");
@@ -1037,7 +1037,7 @@ describe("유휴 사유 배선 — automation-cycle 소스 스캔", () => {
   });
 });
 
-describe("규칙 생성 분기 (F6)", () => {
+describe("계획 생성 분기 (F6)", () => {
   // 상태·문구의 기준은 **실제로 우리가 올리는 채널인가** 다(publish-guard 의 channelPublishMode).
   // 예전엔 "youtube 아니면 기록만" 으로 못박아, 실제로는 브라우저 자동화로 올라가는 네이버에
   // "배포 기록만 남습니다" 라고 안내했다 — 안전 문구가 거꾸로 서면 최악이다.
@@ -1347,7 +1347,7 @@ describe("승인 대기 거부 — 게시로 변하면 안 된다 (0044)", () =>
     assert.match(awaiting, /rejected_at IS NULL/);
   });
 
-  it("순방이 거부된 (규칙·영상)을 게이트 판정 **앞에서** 건너뛴다 — 재선정·게시 안 함", () => {
+  it("순방이 거부된 (계획·영상)을 게이트 판정 **앞에서** 건너뛴다 — 재선정·게시 안 함", () => {
     assert.match(CYCLE, /isRejectedHold\(rule\.id, clip\.id\)/, "사이클이 거부를 확인하지 않는다");
     const rejAt = CYCLE.indexOf("isRejectedHold(rule.id, clip.id)");
     const gateAt = CYCLE.indexOf("const gate = await clipGate(clip.id)");
@@ -1373,13 +1373,13 @@ describe("입력 검증", () => {
   });
 
   it("기준 미지정이면 매체별 기본값 — 쇼츠는 top3, 클립은 score80", () => {
-    // 2026-08-17 실측: 32.4분 회차 쇼츠 20편의 score100 이 42.1~72.6 이라 score80 규칙은
-    // **한 건도 안 내보낸다**(클립은 81~83 이라 통과). "규칙은 켜져 있는데 아무것도 안 나간다"
+    // 2026-08-17 실측: 32.4분 회차 쇼츠 20편의 score100 이 42.1~72.6 이라 score80 계획은
+    // **한 건도 안 내보낸다**(클립은 81~83 이라 통과). "계획은 켜져 있는데 아무것도 안 나간다"
     // 는 이 리포 최빈 실패모드라, 라우트가 매체별 기본값을 채운다. 소스 스캔으로 고정한다 —
     // 이 분기가 사라지면 쇼츠 자동배포가 조용히 0건이 된다.
     const src = fs.readFileSync(path.join(SRC, "index.ts"), "utf-8");
     const m = /body\.criterion == null[\s\S]{0,200}?mediaKind === "clip"\s*\?\s*"(\w+)"\s*:\s*"(\w+)"/.exec(src);
-    assert.ok(m, "규칙 생성 라우트에 매체별 기준 기본값 분기가 없다");
+    assert.ok(m, "계획 생성 라우트에 매체별 기준 기본값 분기가 없다");
     assert.equal(m![1], "score80", "클립 기본 기준이 바뀌었다");
     assert.equal(m![2], "top3", "쇼츠 기본 기준이 바뀌었다 — score 기준이면 0건이 나간다");
   });

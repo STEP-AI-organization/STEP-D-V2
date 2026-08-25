@@ -549,8 +549,11 @@ async function seedIfEmptyInner(): Promise<void> {
   await put("clip", seed.clips);
   await put("job", seed.jobs);
 
+  // ⚠️ DO UPDATE 금지 — 시드가 **기존 connections 를 덮으면 안 되고**, RLS 하에서 스코프가
+  // 비어 보이는 연결(GEBD VM 실측 2026-08-25 · 42501 크래시루프 11일)에서는 보이지 않는
+  // 기존 행에 UPDATE 를 시도하다 with-check 위반으로 기동 자체가 죽는다. 시드는 "없을 때만".
   await pool.query(
-    `INSERT INTO kv (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = excluded.value`,
+    `INSERT INTO kv (key, value) VALUES ($1, $2) ON CONFLICT (key) DO NOTHING`,
     ["connections", JSON.stringify(seed.connections)],
   );
 }

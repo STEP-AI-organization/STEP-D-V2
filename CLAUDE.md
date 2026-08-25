@@ -244,6 +244,10 @@ core/ 쪽 스위치(파이썬): `RUN_FACES`·`RUN_PPL`·`RUN_REFINE`·`RUN_CHYRO
 | 제품 화면 (`apps/web`) · 오류 메시지 | **워크스페이스** | 사용자는 자기 것 **안에** 있다 |
 | 코드 식별자 · DB · 기술 주석 | `tenantId` · `tenants` · "테넌트 RLS" | 그대로 둔다 — 리네임은 위험만 크고 얻는 게 없다 |
 
+같은 원칙 하나 더 (2026-08-25): 자동배포의 `rule`(automation_rule)은 화면·문구에서
+**"자동배포 계획"(짧게 "계획")** 이라 부른다 — "규칙"은 채널 규칙(channel_rule ·
+길이/화면비 제약)과 헷갈린다. 코드 식별자·DB·API 필드는 rule 그대로.
+
 어드민은 **STEPAI 운영자 전용**이다(superadmin 세션 필수). 고객사는 여기 안 들어온다 —
 고객사 사람은 `stepd.stepai.kr`, 고객사 **시스템**은 API 키로 붙는다.
 

@@ -5550,7 +5550,7 @@ app.post("/api/automation/rules", async (c) => {
         if (String(e?.code) === "23505") {
           return c.json({
             error: "duplicate_rule",
-            message: "같은 프로그램·채널 조합의 다른 규칙이 이미 있습니다 — 그 규칙을 수정하거나 삭제하세요.",
+            message: "같은 프로그램·채널 조합의 다른 자동배포 계획이 이미 있습니다 — 그 계획을 수정하거나 삭제하세요.",
           }, 409);
         }
         throw e;
@@ -5630,7 +5630,7 @@ app.post("/api/automation/holds/reject", async (c) => {
   if (ok) {
     await appendRuleRun({ ruleId, clipId, result: "skipped", detail: `거부 · ${actor}` });
   }
-  return c.json({ ok, notice: ok ? "거부했습니다 — 이 영상은 이 규칙으로 나가지 않습니다." : "이미 처리된 건입니다." });
+  return c.json({ ok, notice: ok ? "거부했습니다 — 이 영상은 이 자동배포 계획으로 나가지 않습니다." : "이미 처리된 건입니다." });
 });
 
 // ── 에셋 (FLOWS F8 · README §6) ─────────────────────────────────────────────────
