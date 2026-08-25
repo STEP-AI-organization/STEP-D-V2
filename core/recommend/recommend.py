@@ -698,7 +698,14 @@ _LEN_FLOOR = 0.35
 
 
 def _length_fit(sec: float) -> float:
-    """길이 적합도 0..1 (정보용 — score100 에는 반영하지 않는다)."""
+    """길이 적합도 0..1 (정보용 — score100 에는 반영하지 않는다).
+
+    ⚠️ **현재 호출부가 없다.** 그리고 앞으로도 점수축으로 되살리지 말 것 — 길이는 취향이
+    아니라 물건의 정의라 **하드 상한**(MAX_SHORT_SEC)으로 지킨다. 2026-08-25 사고가 정확히
+    "길이가 점수에도 필터에도 없어서 3분짜리가 숏폼으로 떴다" 였는데, 그 처방으로 소프트
+    가중치를 넣으면 순위만 내려갈 뿐 **여전히 뜬다.** 상한은 propose_shorts_beat_only 산출부
+    (1차)와 _enforce_shortform_length(최종 관문)에 있다.
+    """
     lo, hi = _LEN_OK
     if lo <= sec <= hi:
         return 1.0
@@ -3240,6 +3247,13 @@ def _semantic_closure_one(client, short: dict, transcript: list[dict] | None,
     if first_switch_ts is not None and (new_end - first_switch_ts) > 4.0:
         return short, f"keep (guard-B · speaker switch @ {first_switch_ts:.1f}s · 확장 {new_end - first_switch_ts:.1f}s 새 turn 침범)"
 
+    # 길이 상한을 넘기는 확장은 승인하지 않는다 (2026-08-25). 여기서 부분만 늘리면 payoff
+    # 에 못 닿은 채 길이만 먹으므로, 늘릴 수 없으면 **원래 끝을 유지**한다.
+    # (이 확장이 상한을 무력화하던 경로다: 88s 짜리가 +20s 로 108s 가 돼도 아무도 안 봤다.)
+    if new_end - start > MAX_SHORT_SEC:
+        return short, (f"keep (길이 상한 · {new_end - start:.0f}s > {MAX_SHORT_SEC}s "
+                       f"이라 확장 거부)")
+
     # 모두 통과 · 확장 승인. 확장 metadata 를 shorts dict 에 저장 (HTML 리뷰·감사용).
     short = dict(short)
     orig_end = end
@@ -3806,8 +3820,36 @@ title (폴백) 은 두 줄 합쳐 한 줄로 자연스럽게.
         sf_end = float(picked_beats[-1]["end"])
         if sf_end <= sf_start:
             continue
-        # 서버측 duration 상·하한 없음 (2026-07-27 사용자 방향): AI 프롬프트에서 40~90s 목표만
-        # 느슨하게 지시하고 결정은 AI에 맡김. 하드 컷은 뒤집혀 있거나(end<=start) invalid ids만.
+        # ── 길이 하드 상한 (2026-08-25) ────────────────────────────────────────────
+        #
+        # ⚠️ 예전 이 자리엔 "서버측 duration 상·하한 없음 · 결정은 AI에 맡김" 이라고 적혀
+        # 있었다(2026-07-27). 그 결과 **3분이 넘는 구간이 그대로 "숏폼" 추천으로 떴다** —
+        # 상한은 프롬프트 문구뿐이었고, 아래 _deterministic_score 에는 길이 축이 아예 없어서
+        # (_SCORE_W = signal·hook·closure) 과길이 후보가 **디랭크조차 되지 않았다.**
+        # 길이는 취향이 아니라 물건의 정의다. 리포 원칙대로 결정론 코드가 지킨다.
+        #
+        # 자르는 방식이 중요하다. 임의 시각에서 하드컷하면 대사 중간이 잘리므로, **뽑힌 beat
+        # 의 앞쪽 접두사**만 남긴다 — beat 은 편집자가 그대로 쓸 수 있는 완결 단위라 경계가
+        # 이미 맞다. 첫 beat 하나가 이미 상한을 넘으면 그건 숏폼이 아니라 롱폼이다:
+        # 후보에서 **제외**한다(가로형 클립은 build_clips_from_beats 가 따로 만든다).
+        if sf_end - sf_start > MAX_SHORT_SEC:
+            over = sf_end - sf_start
+            fitted: list[int] = []
+            for i in ids:                       # ids 는 오름차순 · beat 는 시간순 = 접두사
+                if float(beats[i]["end"]) - sf_start > MAX_SHORT_SEC:
+                    break
+                fitted.append(i)
+            if not fitted:
+                print(f"   (shorts #{idx} 제외 — 첫 beat 하나가 이미 "
+                      f"{float(beats[ids[0]]['end']) - sf_start:.0f}s > {MAX_SHORT_SEC}s "
+                      f"· 숏폼이 아니라 롱폼이다: {str(s.get('title', ''))[:24]})")
+                continue
+            dropped = len(ids) - len(fitted)
+            ids = fitted
+            picked_beats = [beats[i] for i in ids]
+            sf_end = float(picked_beats[-1]["end"])
+            print(f"   (shorts #{idx} 길이 초과 {over:.0f}s → 뒷 beat {dropped}개 제외 · "
+                  f"{sf_end - sf_start:.0f}s: {str(s.get('title', ''))[:24]})")
         title = (s.get("title") or "").strip() or (picked_beats[0].get("title") or "무제")
         # 두 줄 제목 (2026-07-29 사용자 요구): 라인1=setup 라인2=payoff · 라인2 컬러 강조.
         # 예: "헬스장 사장인 줄?" / "7년 차 한의사의 반전" (yellow)
@@ -4082,7 +4124,7 @@ def _dedup_beat_overlap(shorts: list[dict], beats: list[dict]) -> list[dict]:
 
 def _enforce_shortform_length(shorts: list[dict], beats: list[dict],
                               max_sec: float = MAX_SHORT_SEC) -> list[dict]:
-    """shortform 은 **무조건** duration <= max_sec. 초과분은 뒷 beat drop, 그래도 넘으면 하드컷.
+    """shortform 은 **무조건** duration <= max_sec. 뒷 beat 를 덜어 맞추고, 못 맞추면 **제외**.
 
     clip · highlight 는 스킵 (롱폼은 build_clips_from_beats 의 별도 길이 정책).
 
@@ -4095,7 +4137,11 @@ def _enforce_shortform_length(shorts: list[dict], beats: list[dict],
     옛 구현의 구멍 두 개도 같이 막았다:
       · beat_ids 가 없는 short 는 그대로 통과했다 → 이제 start/end 로 하드컷한다.
       · **첫 beat 하나가 이미 max_sec 을 넘으면** 그 beat 을 통째로 남겼다(뒷 beat 만
-        드롭하는 루프라 첫 beat 은 검사 대상이 아니었다) → 이제 하드컷으로 이어진다.
+        드롭하는 루프라 첫 beat 은 검사 대상이 아니었다) → 이제 후보에서 제외한다.
+
+    이 함수는 **최종 관문**이다 — 1차 방어는 propose_shorts_beat_only 의 산출부에 있다.
+    여기까지 상한 초과가 내려오면 그건 중간 단계(경계 스냅·확장) 어딘가가 늘린 것이므로,
+    조용히 자르지 않고 로그를 남기고 뺀다.
     """
     if not shorts:
         return shorts
@@ -4134,10 +4180,13 @@ def _enforce_shortform_length(shorts: list[dict], beats: list[dict],
             if cur_end > st:
                 s["beat_ids"] = kept
                 en = cur_end
-        # 2) 그래도 넘으면(첫 beat 하나가 이미 max_sec 초과) 하드컷한다. beat 경계 보존보다
-        #    "숏폼은 숏폼이다" 가 우선이다 — 넘긴 채 내보내면 배포처가 거부하거나 제멋대로 자른다.
+        # 2) 그래도 넘으면(첫 beat 하나가 이미 max_sec 초과) **후보에서 제외**한다.
+        #    임의 시각 하드컷은 "머리만 남은 롱폼" 을 만든다 — 숏폼이 아니다. 그런 구간은
+        #    가로형 클립(build_clips_from_beats)의 몫이고, 쇼츠 보드에는 뜨면 안 된다.
         if en - st > max_sec:
-            en = st + max_sec
+            print(f"   (길이 상한 제외 {en - st:.0f}s > {max_sec:.0f}s: "
+                  f"{str(s.get('title', ''))[:30]})")
+            continue
         s["start"] = round(st, 3)
         s["end"] = round(en, 3)
         s["_length_capped"] = True
@@ -4206,9 +4255,16 @@ def _build_from_beats(
         if not beat:
             print(f"   (시나리오 {sid} 매칭 beat 없음 · 제외: {sc.get('story_title','')[:24]})")
             continue
-        # A) 숏폼: beat는 편집자가 정돈한 완결 퍼즐 조각이다.
-        # 길이 상·하한이나 core 기준 재단을 절대 적용하지 않고 원래 경계를 그대로 보존한다.
+        # A) 숏폼: beat는 편집자가 정돈한 완결 퍼즐 조각이라 경계를 그대로 보존한다.
+        # 다만 **길이 상한만은 예외**다 (2026-08-25). beat 은 45초에서 강제 분할되지만
+        # (beats.py _force_split_large_beats) 화자 전환점이 없으면 원본이 유지되므로 3분
+        # 넘는 beat 이 존재할 수 있고, 그게 그대로 "숏폼" 이 되던 게 이번 사고의 뿌리다.
+        # ⚠️ 이 경로는 현재 호출부가 없다(_build_from_beats 미사용) — 되살릴 때를 위한 가드다.
         sf_start, sf_end = float(beat["start"]), float(beat["end"])
+        if sf_end - sf_start > MAX_SHORT_SEC:
+            print(f"   (시나리오 {sid} 숏폼 제외 — beat 이 {sf_end - sf_start:.0f}s "
+                  f"> {MAX_SHORT_SEC}s · 롱폼이다)")
+            sf_end = sf_start  # 아래 숏폼 생성 스킵 (클립 분기는 그대로 탄다)
         if sf_end > sf_start:
             # ⚠️ 이 경로(narrative_first 시나리오→beat 매칭)는 **3축 소스가 없다** —
             # _SCENARIOS_SCHEMA 에 축이 없어서다. 그래서 여기 score100 은 여전히 변별력이 없다.
@@ -4363,10 +4419,19 @@ def _recommend_narrative_first_impl(
         # transcript 가 없어 QA 를 건너뛴 회차에도 걸리도록 if 블록 **밖**에 둔다.
         before_cap = len(shorts)
         shorts = _enforce_shortform_length(shorts, beats)
-        n_capped = sum(1 for s in shorts if s.get("_length_capped"))
-        if n_capped or before_cap != len(shorts):
-            print(f"   길이 상한({MAX_SHORT_SEC:.0f}s): {n_capped}개 트림"
-                  f"{f' · {before_cap - len(shorts)}개 제외' if before_cap != len(shorts) else ''}")
+        n_fitted = sum(1 for s in shorts if s.get("_length_capped"))
+        n_dropped = before_cap - len(shorts)
+        if n_fitted or n_dropped:
+            print(f"   길이 상한({MAX_SHORT_SEC:.0f}s) 최종 관문: "
+                  f"{n_fitted}개 beat 축소 · {n_dropped}개 제외")
+        # 사후 조건 — 여기를 지난 쇼츠에 상한 초과는 **하나도 없다**. 스테이지가 늘어나도
+        # 이 줄이 깨지면 바로 보인다(조용히 통과하던 게 이 사고의 본질이었다).
+        _over = [x for x in shorts
+                 if x.get("type") == "shortform"
+                 and float(x.get("end", 0)) - float(x.get("start", 0)) > MAX_SHORT_SEC + 1e-6]
+        assert not _over, (
+            f"숏폼 길이 상한 위반이 최종 관문을 통과했다: "
+            f"{[(round(float(x['end']) - float(x['start']), 1), str(x.get('title', ''))[:20]) for x in _over]}")
         if on_progress:
             on_progress(3, 3)
         def type_order_new(s: dict) -> int:
