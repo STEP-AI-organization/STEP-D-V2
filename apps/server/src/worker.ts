@@ -1782,8 +1782,10 @@ function futurePublishAt(raw: unknown): string | null {
  */
 function stripSpeakerLabels(s: string): string {
   return String(s)
-    .replace(/(남성|여성)?\s*(출연자|화자)\s*\d+\s*(이|가)/g, "출연자가")
-    .replace(/(남성|여성)?\s*(출연자|화자)\s*\d+/g, "출연자")
+    // Diarization labels are internal metadata; never expose them in viewer-facing copy.
+    .replace(/(남성|여성)?\s*(출연자|화자|참가자)\s*\d+\s*(이|가)/g, "출연자가")
+    .replace(/(남성|여성)?\s*(출연자|화자|참가자)\s*\d+/g, "출연자")
+    .replace(/\b(?:speaker|participant|guest)\s*\d+\b/gi, "출연자")
     .replace(/\s{2,}/g, " ")
     .trim();
 }
