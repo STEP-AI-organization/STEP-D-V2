@@ -139,6 +139,15 @@ Adobe 의 Semantic Subject Lock·추적 속도 제어, CapCut 의 장면별 재�
 | beat·shot 입력 | `python -m core.reframe --beats --shots` 계약 확립(소스 절대초 · 샷 없으면 프록시에서 하드컷 자동 감지) |
 | 자동배포 배선 | rule.reframe=ai(portrait 전용 서버 강제)·가로는 기존 경로 — §6 의 "가로 제외" 는 이미 지켜지고 있음 |
 
+### 진행 (2026-08-25)
+
+1~4 완료: `core/reframe/candidates.py`(4택+게이트+히스테리시스) · `reframe.compare` 잡(content
+레인) · API(POST/GET/파일) · `/reframe-lab` 뷰어 — 93화 클립으로 E2E ready 실증.
+**§5 라벨 수집도 배선 완료**: 뷰어 구간마다 "이 구간 정답으로" 1클릭 → `reframe_labels`
+append(그 순간의 후보 점수·게이트·기계 확정 자동 조인 · 저장 후 다음 미라벨 구간 자동 이동).
+원자료 내보내기 `GET /api/superadmin/reframe-labels?format=jsonl`. 남은 것: 코퍼스 20~30클립
+선정·라벨 수집 → 일치율·가중치 분석 md(`docs/research/reframe-corpus-*.md`) → §6 자동배포 연결.
+
 ### 만들어야 하는 것 (착수 순서 제안)
 
 1. **planner 4택 확장** (`core/reframe/planner.py` + 테스트) — 현행은 `fit/fill` 2택·임계 70

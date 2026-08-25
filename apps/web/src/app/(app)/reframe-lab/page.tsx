@@ -4,9 +4,10 @@
  * 리프레임 랩 — 세로 4택 비교 뷰어 (reframe-compare-viewer-plan §3 · 내부 평가용).
  *
  * 클립 하나의 주요 장면을 4개 세로 레이아웃(전체 담기·위아래 띠·위 자막띠·꽉 채우기)으로
- * 나란히 보고, 후보별 점수·탈락 사유·샷별 타임라인을 확인한다. **평가 점수 기록은 여기서
- * 하지 않는다** — 측정 결과는 md 문서(docs/research/reframe-corpus-*.md)로 축적한다는
- * 절충(계획 §9). 이 화면은 비교 재생 전용이다.
+ * 나란히 보고, 후보별 점수·탈락 사유·샷별 타임라인을 확인한다. 구간마다 **"이 장면은 이
+ * 레이아웃" 1클릭 라벨**을 남긴다(계획 §5 · append 전용 · 저장 시 그 순간의 후보 점수·게이트
+ * 스냅샷이 자동으로 조인된다). 통계 분석·가중치 조정 근거는 여전히 md 문서
+ * (docs/research/reframe-corpus-*.md)로 축적한다는 절충(계획 §9) — 이 화면은 수집까지만.
  *
  * 프리뷰 기하 = 서버 산출물(candidates.json)의 cropWidthFraction·tracking 좌표를 CSS 로
  * 그대로 적용한다 — 후보별 영상을 따로 렌더하지 않고 프록시 1개를 4개 창이 나눠 본다
@@ -19,10 +20,13 @@ import { useAppData } from "@/lib/data/store";
 import {
   createReframeCompare,
   fetchReframeCompare,
+  fetchReframeLabels,
   reframeCompareFileUrl,
+  saveReframeLabel,
   type ReframeCandidate,
   type ReframeCompareResult,
   type ReframeCompareSegment,
+  type ReframeLabelRow,
 } from "@/lib/data/api";
 
 /** 레이아웃 표시 메타 — rect 는 aspect-presets(1080×1920)와 같은 값. */
@@ -74,6 +78,10 @@ export default function ReframeLabPage() {
   const [previewT, setPreviewT] = useState(0);
   const [safeZone, setSafeZone] = useState(true);
   const [showTrack, setShowTrack] = useState(true);
+  // 라벨(사람 정답) — 구간별 최신 라벨만 표시에 쓴다. note 는 다음 라벨 클릭에 붙는 선택 메모.
+  const [labels, setLabels] = useState<ReframeLabelRow[]>([]);
+  const [note, setNote] = useState("");
+  const [labeling, setLabeling] = useState(false);
   const videoRefs = useRef<(HTMLVideoElement | null)[]>([]);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -86,7 +94,11 @@ export default function ReframeLabPage() {
     const r = await fetchReframeCompare(cid, cmp);
     setResult(r);
     if (r.status === "ready" || r.status === "failed") stopPoll();
-    if (r.status === "ready" && r.manifest) setPreviewT(r.manifest.clipStart);
+    if (r.status === "ready" && r.manifest) {
+      setPreviewT(r.manifest.clipStart);
+      // 기존 라벨 불러오기 — 이어서 라벨할 때 어디까지 했는지 보여야 한다.
+      setLabels(await fetchReframeLabels(cid, cmp).catch(() => []));
+    }
   }, [stopPoll]);
 
   async function start() {
@@ -130,6 +142,53 @@ export default function ReframeLabPage() {
     setPreviewT(t);
     const rel = Math.max(0, t - clipStart);
     for (const v of videoRefs.current) if (v) v.currentTime = rel;
+  }
+
+  /** 구간의 최신 라벨 — labels 는 최신순 정렬이라 첫 매치가 최신이다(append 전용 · 재라벨 허용). */
+  const labelOf = useCallback(
+    (beatId: unknown) => labels.find((l) => l.beat_id === String(beatId)),
+    [labels],
+  );
+  const labeledCount = useMemo(
+    () => segments.filter((s) => labelOf(s.beatId)).length,
+    [segments, labelOf],
+  );
+
+  /** 1클릭 라벨 저장 — 그 순간의 후보 점수·게이트를 통째로 조인해 남기고, 다음 미라벨 구간으로 이동. */
+  async function label(chosen: string) {
+    if (!segment || labeling) return;
+    setLabeling(true);
+    try {
+      await saveReframeLabel(clipId, {
+        compareId,
+        beatId: String(segment.beatId),
+        segStart: segment.start,
+        segEnd: segment.end,
+        atSec: previewT,
+        chosen,
+        machine: segment.final,
+        context: {
+          candidates: segment.candidates.map((x) => ({
+            layout: x.layout, score: x.score, eligible: x.eligible,
+            reasonCodes: x.reasonCodes, metrics: x.metrics,
+          })),
+          hysteresis: segment.hysteresis,
+          switchesPerMinute: result?.candidates?.switchesPerMinute,
+        },
+        note: note.trim() || undefined,
+      });
+      setNote("");
+      const fresh = await fetchReframeLabels(clipId, compareId).catch(() => labels);
+      setLabels(fresh);
+      // 다음 미라벨 구간으로 자동 이동 — 라벨 노가다의 클릭 수를 반으로 줄인다.
+      const isLabeled = (s: ReframeCompareSegment) => fresh.some((l) => l.beat_id === String(s.beatId));
+      const next = segments.findIndex((s, i) => i > selSeg && !isLabeled(s));
+      if (next >= 0) { setSelSeg(next); seekTo(segments[next].start); }
+    } catch (err) {
+      toast({ title: "라벨 저장 실패", description: err instanceof Error ? err.message : String(err), tone: "error" });
+    } finally {
+      setLabeling(false);
+    }
   }
 
   return (
@@ -177,6 +236,19 @@ export default function ReframeLabPage() {
                 {segment.hysteresis.length > 0 && ` (${segment.hysteresis.map(reasonKo).join(" · ")})`}
                 {" · 전환 "}{result!.candidates!.switchesPerMinute}회/분
               </span>
+              <span className="ml-auto text-[10.5px] font-semibold" style={{ color: labeledCount === segments.length ? "var(--sd-ok)" : "var(--sd-fg)" }}>
+                라벨 {labeledCount}/{segments.length}
+                {(() => {
+                  const l = labelOf(segment.beatId);
+                  return l ? ` · 이 구간: ${LAYOUT_META[l.chosen]?.label}${l.agree ? " (기계 일치)" : " (기계와 다름)"}` : "";
+                })()}
+              </span>
+              <input
+                value={note}
+                onChange={(e) => setNote(e.target.value)}
+                placeholder="메모(선택) — 다음 라벨 클릭에 붙습니다"
+                className="sd-input w-[240px] text-[11px]"
+              />
             </div>
             <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
               {segment.candidates.map((candidate, i) => (
@@ -191,6 +263,8 @@ export default function ReframeLabPage() {
                   showTrack={showTrack}
                   videoRef={(el) => { videoRefs.current[i] = el; }}
                   onTime={i === 0 ? (t) => setPreviewT(clipStart + t) : undefined}
+                  labeled={labelOf(segment.beatId)?.chosen === candidate.layout}
+                  onLabel={labeling ? undefined : () => void label(candidate.layout)}
                 />
               ))}
             </div>
@@ -218,6 +292,8 @@ export default function ReframeLabPage() {
                     background: LAYOUT_META[s.final]?.color ?? "#666",
                     opacity: i === selSeg ? 1 : 0.45,
                     borderRight: "1px solid rgba(0,0,0,.35)",
+                    // 라벨된 구간은 흰 윗줄 — 어디까지 라벨했는지 한눈에.
+                    boxShadow: labelOf(s.beatId) ? "inset 0 3px 0 rgba(255,255,255,.9)" : undefined,
                   }}
                 />
               ))}
@@ -252,7 +328,7 @@ export default function ReframeLabPage() {
 }
 
 /** 후보 한 칸 — 프록시 1개를 레이아웃 기하(rect + cropWidthFraction + tracking)로 잘라 보인다. */
-function CandidatePanel({ candidate, proxyUrl, clipStart, previewT, isFinal, safeZone, showTrack, videoRef, onTime }: {
+function CandidatePanel({ candidate, proxyUrl, clipStart, previewT, isFinal, safeZone, showTrack, videoRef, onTime, labeled, onLabel }: {
   candidate: ReframeCandidate;
   proxyUrl: string;
   clipStart: number;
@@ -262,6 +338,10 @@ function CandidatePanel({ candidate, proxyUrl, clipStart, previewT, isFinal, saf
   showTrack: boolean;
   videoRef: (el: HTMLVideoElement | null) => void;
   onTime?: (relSec: number) => void;
+  /** 이 구간의 사람 정답이 이 레이아웃인가. */
+  labeled?: boolean;
+  /** 1클릭 라벨 — 저장 중엔 부모가 undefined 로 눌러 중복 클릭을 막는다. */
+  onLabel?: () => void;
 }) {
   const meta = LAYOUT_META[candidate.layout];
   const fraction = candidate.cropWidthFraction || 1;
@@ -353,6 +433,15 @@ function CandidatePanel({ candidate, proxyUrl, clipStart, previewT, isFinal, saf
             추적 {(candidate.metrics.trackingStability * 100).toFixed(0)}%
           </div>
         )}
+        <button
+          type="button"
+          className="sd-btn mt-1 w-full text-[10.5px]"
+          disabled={!onLabel}
+          onClick={onLabel}
+          style={labeled ? { borderColor: meta.color, color: meta.color, fontWeight: 600 } : undefined}
+        >
+          {labeled ? "✓ 사람 정답" : "이 구간 정답으로"}
+        </button>
       </div>
     </div>
   );

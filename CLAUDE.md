@@ -55,8 +55,8 @@ docs/          ops(현황·운영) / plans(계획) / reference / research / prot
 
 ## 백엔드 — apps/server
 
-Hono 단일 진입점(index.ts, **~8400줄, 라우트 206개**) + 별도 워커 프로세스 구조.
-(2026-08-13 실측 갱신)
+Hono 단일 진입점(index.ts, **~8700줄, 라우트 231개**) + 별도 워커 프로세스 구조.
+(2026-08-25 실측 갱신)
 
 | 파일 | 역할 |
 |------|------|
@@ -135,7 +135,7 @@ rights · dialogue · chyron · summary · emb_dialogue vector(768) · emb_summa
 `search-embed.ts`(RETRIEVAL_QUERY). Vertex 실패 시 **키워드축(pg_trgm) 단독 폴백** — 한국어는
 키워드 매칭이 강해서 벡터 없이도 검색이 성립한다.
 
-**주요 라우트** — 총 206개 (전체: [docs/reference/api-reference.md](docs/reference/api-reference.md))
+**주요 라우트** — 총 231개 (전체: [docs/reference/api-reference.md](docs/reference/api-reference.md))
 ```
 GET  /health · /api/state · /api/search        # 검색 = 하이브리드(벡터+키워드)
 POST /api/media/upload-init → finalize   # 브라우저→GCS 직접 resumable 업로드 (대용량 표준 경로)

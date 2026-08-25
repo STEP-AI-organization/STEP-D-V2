@@ -188,6 +188,8 @@ import {
   listContentAnalysisSummary,
   recordMetadataEdits,
   listMetadataEdits,
+  recordReframeLabel,
+  listReframeLabels,
   listEntities,
   getTranscript,
   deleteMediaData,
@@ -7358,6 +7360,78 @@ app.get("/api/clips/:id/reframe/candidates/:compareId/file/:name", async (c) => 
     // compareId(입력 지문)가 경로에 박혀 있어 내용이 불변 — 뷰어 왕복을 캐시로 줄인다.
     "Cache-Control": "private, max-age=3600",
   });
+});
+
+// ── 리프레임 라벨 — 비교 뷰어의 "이 장면은 이 레이아웃" 1클릭 정답 수집(계획 §5) ──
+// append 전용. context 는 클라이언트가 보낸 그 순간의 후보 스냅샷을 그대로 보존한다 —
+// 서버가 다시 계산하지 않는 이유: 라벨은 "사람이 그때 화면에서 본 것" 의 기록이다.
+
+const REFRAME_LAYOUT_IDS = new Set([
+  "9:16-letterbox", "9:16-crop-sub", "9:16-crop-main", "9:16-crop-full",
+]);
+
+app.post("/api/clips/:id/reframe/labels", async (c) => {
+  const clipId = c.req.param("id");
+  const clip = await getEntity<Record<string, unknown>>("clip", clipId);
+  if (!clip) return c.json({ error: "clip not found" }, 404);
+  const body = await c.req.json<Record<string, unknown>>().catch(() => null);
+  if (!body) return c.json({ error: "invalid body" }, 400);
+  const compareId = String(body.compareId ?? "");
+  if (!COMPARE_ID_RE.test(compareId)) return c.json({ error: "invalid compareId" }, 400);
+  const chosen = String(body.chosen ?? "");
+  if (!REFRAME_LAYOUT_IDS.has(chosen)) return c.json({ error: "invalid layout" }, 400);
+  const machine = typeof body.machine === "string" && REFRAME_LAYOUT_IDS.has(body.machine)
+    ? body.machine : null;
+  const num = (v: unknown) => (typeof v === "number" && isFinite(v) ? v : null);
+  await recordReframeLabel({
+    clipId,
+    compareId,
+    beatId: typeof body.beatId === "string" || typeof body.beatId === "number" ? String(body.beatId) : null,
+    segStart: num(body.segStart),
+    segEnd: num(body.segEnd),
+    atSec: num(body.atSec),
+    chosen,
+    machine,
+    // 스냅샷은 크기만 상한(라벨 1건이 행 하나를 MB 로 만들지 않게) — 내용은 검증하지 않는다.
+    context: body.context && JSON.stringify(body.context).length < 32_000 ? body.context : null,
+    note: typeof body.note === "string" ? body.note.slice(0, 500) : null,
+    createdAt: Date.now(),
+  });
+  return c.json({ ok: true });
+});
+
+/** 이 클립·비교의 라벨 목록 — 뷰어가 "어느 구간을 이미 라벨했나" 표시에 쓴다. */
+app.get("/api/clips/:id/reframe/labels", async (c) => {
+  const clipId = c.req.param("id");
+  const clip = await getEntity<Record<string, unknown>>("clip", clipId);
+  if (!clip) return c.json({ error: "clip not found" }, 404);
+  const compareId = c.req.query("compareId") || undefined;
+  if (compareId && !COMPARE_ID_RE.test(compareId)) return c.json({ error: "invalid compareId" }, 400);
+  const ctx = currentContext();
+  const rows = await listReframeLabels({
+    clipId, compareId,
+    // RLS 없는 테이블 — 테넌트 컨텍스트면 그 스코프로 명시 필터(횡단 스코프는 필터 없음).
+    tenantId: typeof ctx?.scope === "string" ? ctx.scope : undefined,
+  });
+  return c.json({ rows });
+});
+
+/**
+ * 라벨 전체 내보내기 — 평가 통계·가중치 조정의 원자료. 측정 결과 분석은 md 문서로 한다는
+ * 원칙(계획 §9)의 원천 데이터가 이것이다. json(콘솔) · `?format=jsonl`(분석). `?tenant=`·`?limit=`.
+ */
+app.get("/api/superadmin/reframe-labels", async (c) => {
+  const actor = requireSuperadmin(c);
+  const tenantId = c.req.query("tenant") || undefined;
+  await audit(actor, { action: "reframe-labels.view", targetTenant: tenantId ?? null }, clientIp(c));
+  const limit = Math.min(50000, Math.max(1, Number(c.req.query("limit")) || 5000));
+  const rows = await runAsSystem(() => listReframeLabels({ tenantId, limit }));
+  if (c.req.query("format") === "jsonl") {
+    return c.body(rows.map((r) => JSON.stringify(r)).join("\n"), 200, {
+      "content-type": "application/x-ndjson; charset=utf-8",
+    });
+  }
+  return c.json({ rows });
 });
 
 app.post("/api/clips/:id/reframe", async (c) => {

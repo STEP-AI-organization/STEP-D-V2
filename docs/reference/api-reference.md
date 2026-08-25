@@ -1,6 +1,6 @@
 # @stepd/server HTTP API 레퍼런스
 
-> 실측: **2026-08-13 · 라우트 206개** (GET 88 · POST 80 · DELETE 21 · PATCH 13 · PUT 4) · `apps/server/src/index.ts` 기준 — 라우트 추가 시 이 문서도 갱신.
+> 실측: **2026-08-25 · 라우트 231개** (GET 100 · POST 91 · DELETE 23 · PATCH 13 · PUT 4) · `apps/server/src/index.ts` 기준 — 라우트 추가 시 이 문서도 갱신.
 > 프론트 대응 함수는 `apps/web/src/lib/data/api.ts` 기준. 데이터 구조는 [data-model.md](data-model.md),
 > 큐·워커 동작은 [../ops/worker-queue.md](../ops/worker-queue.md) 참고.
 
@@ -178,6 +178,11 @@ API 키(`api-keys.ts`). **화이트리스트(`API_KEY_ROUTES`)에 올린 라우�
 | `PATCH /api/recommendations/:id/thumbnail` | 생성된 썸네일 변형 중 하나를 선택 | `{ variantId(필수) }` → `{ recommendation }`. **정확히 하나만** chosen으로 마킹돼서, 이후 채택이 안정적·영속적인 결정을 갖는다 | `selectRecommendationThumbnail` |
 | `GET /api/clips/:id/reframe` | 동적 9:16 리프레임 상태 조회. 입력 구간/원본이 바뀌면 `stale`을 보고하며 자동 큐잉하지 않는다 | → `{ clipId, reframe }`. 상태 `idle/queued/running/ready/stale/failed`; plan 시간은 마스터 절대 초, 추적 좌표는 0..1 | `getClipReframe` |
 | `POST /api/clips/:id/reframe` | 기본 Fit 또는 AI Beat별 Fit/Fill 모드 선택·분석 큐잉 | `{ mode:"basic"|"ai_multi", retry? }` → `{ clipId, reframe, reused, queued }`. 동일 입력 ready/진행 중 요청은 재사용하며 실패 재시도는 `retry:true` 필요 | `requestClipReframe` |
+| `POST /api/clips/:id/reframe/candidates` | 세로 4택 비교 잡(reframe.compare) 큐잉 — 정식 reframe 상태와 분리 | → `{ compareId, status, reused }`. compareId=입력 지문이라 같은 트림·beat 면 기존 산출물 재사용(멱등) | `createReframeCompare` |
+| `GET /api/clips/:id/reframe/candidates/:compareId` | 비교 상태·산출물 조회 | ready 면 manifest+후보 4종 plan+스트리밍 URL, 아니면 큐 잡 상태 반영 | `fetchReframeCompare` |
+| `GET /api/clips/:id/reframe/candidates/:compareId/file/:name` | 비교 산출물 스트리밍(프록시·contact sheet) | 파일명 화이트리스트만 — 경로 탈출 차단. 불변 산출물이라 1시간 캐시 | `reframeCompareFileUrl` |
+| `POST /api/clips/:id/reframe/labels` | 비교 뷰어의 "이 장면은 이 레이아웃" 1클릭 정답 라벨 append | `{ compareId, chosen, machine?, beatId?, segStart?, segEnd?, atSec?, context?, note? }` → `{ ok }`. chosen 은 4레이아웃 화이트리스트 | `saveReframeLabel` |
+| `GET /api/clips/:id/reframe/labels` | 이 클립·비교의 라벨 목록 (뷰어 진행 표시) | `?compareId=` → `{ rows }` (테넌트 명시 필터) | `fetchReframeLabels` |
 | `POST /api/clips/:id/export` | **클립 렌더 — ffmpeg가 결과물을 굽는 유일한 지점** | `{ channel? }` → `{ clipId, clip, cached, preset, capped, hookPreroll }`. AI 모드는 현재 입력과 일치하는 ready plan 없이는 `409 reframe_not_ready`; revision에 모드·plan hash가 포함된다 | `exportClip` |
 | `POST /api/clips/:id/regenerate-titles` | 제목 후보 재생성 — 사용자 추가 지시 반영 | `{ prompt }`(예: "더 자극적으로", "이모지 넣지 마") → 후보 4~5개. **저장하지 않는다**(에디터 세션 로컬). 클립에 자막 없으면 409 | `regenerateTitles` |
 | `POST /api/clips/:id/generate-metadata` | 업로드용 title/description/tags를 자막 근거로 생성 | → 메타데이터 객체. **저장 X** — 프론트가 `state.uploadMeta`에 얹는다. 자막 없으면 409 | `generateUploadMetadata` |

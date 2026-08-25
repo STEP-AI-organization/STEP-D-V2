@@ -481,6 +481,33 @@ async function migrate(): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_metadata_edit_log_tenant ON metadata_edit_log (tenant_id, created_at DESC);
   `);
 
+  // 리프레임 라벨 — 비교 뷰어에서 사람이 "이 장면은 이 레이아웃" 을 1클릭으로 남긴 정답
+  // (reframe-compare-viewer-plan §5 · append 전용 · 덮어쓰기 X). context JSONB 에 그 순간의
+  // 후보 4종 점수·게이트·기계 확정을 통째로 조인해 두므로, 나중에 가중치를 조정할 때
+  // "사람이 무엇을 보고 골랐나" 를 재현할 수 있다. RLS 없음 — metadata_edit_log 와 같은 결
+  // (기록은 tenant 컨텍스트 INSERT 로 tenant_id 자동, 조회는 명시 필터).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS reframe_labels (
+      id          BIGSERIAL PRIMARY KEY,
+      tenant_id   TEXT DEFAULT current_setting('app.tenant_id', true),
+      clip_id     TEXT NOT NULL,
+      compare_id  TEXT NOT NULL,
+      beat_id     TEXT,
+      seg_start   DOUBLE PRECISION,
+      seg_end     DOUBLE PRECISION,
+      at_sec      DOUBLE PRECISION,
+      chosen      TEXT NOT NULL,
+      machine     TEXT,
+      agree       BOOLEAN,
+      context     JSONB,
+      note        TEXT,
+      editor      TEXT,
+      created_at  BIGINT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_reframe_labels_tenant ON reframe_labels (tenant_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_reframe_labels_clip ON reframe_labels (clip_id, compare_id);
+  `);
+
   // 연동 계정 4종의 유일성은 **테넌트 포함**이어야 한다.
   //
   // 전역 UNIQUE 로 두면 워크스페이스 A 가 이미 연결한 채널을 B 가 연결할 때, B 에게는 RLS 로
@@ -603,6 +630,65 @@ export async function listMetadataEdits(opts: { tenantId?: string; limit?: numbe
     `SELECT id, tenant_id, clip_id, program_id, genre, channel, field,
             ai_original, user_final, was_ai, editor, created_at
        FROM metadata_edit_log ${where}
+      ORDER BY created_at DESC LIMIT $${params.length}`,
+    params,
+  );
+  return rows;
+}
+
+// ── 리프레임 라벨 (비교 뷰어의 사람 정답 · reframe-compare-viewer-plan §5) ─────────
+
+export type ReframeLabelRow = {
+  clipId: string;
+  compareId: string;
+  beatId?: string | null;
+  segStart?: number | null;
+  segEnd?: number | null;
+  /** 라벨을 찍은 순간의 프리뷰 시각(소스 절대초) — 구간 안 어느 장면을 보고 골랐는지. */
+  atSec?: number | null;
+  /** 사람이 고른 레이아웃 (9:16-letterbox 등 4종 — 라우트가 화이트리스트 검증). */
+  chosen: string;
+  /** 그 구간의 기계 확정 레이아웃 — 일치율(§5 채택 조건) 계산 축. */
+  machine?: string | null;
+  /** 그 순간의 후보 4종 점수·게이트·사유 스냅샷 — 가중치 조정 근거 재현용. */
+  context?: unknown;
+  note?: string | null;
+  editor?: string | null;
+  createdAt: number;
+};
+
+/** 라벨 append. tenant_id 는 DEFAULT 로 자동 — **호출부가 tenant 컨텍스트여야** 한다. */
+export async function recordReframeLabel(r: ReframeLabelRow): Promise<void> {
+  await pool.query(
+    `INSERT INTO reframe_labels
+       (clip_id, compare_id, beat_id, seg_start, seg_end, at_sec, chosen, machine, agree, context, note, editor, created_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb,$11,$12,$13)`,
+    [r.clipId, r.compareId, r.beatId ?? null, r.segStart ?? null, r.segEnd ?? null,
+     r.atSec ?? null, r.chosen, r.machine ?? null,
+     r.machine ? r.chosen === r.machine : null,
+     r.context == null ? null : JSON.stringify(r.context), r.note ?? null, r.editor ?? null, r.createdAt],
+  );
+}
+
+/**
+ * 라벨 조회 — RLS 없는 테이블이라 필터를 여기서 명시적으로 건다(listMetadataEdits 와 같은 결).
+ * 뷰어는 clipId+compareId+tenantId 로, superadmin 내보내기는 runAsSystem + tenant 선택 필터로.
+ */
+export async function listReframeLabels(
+  opts: { clipId?: string; compareId?: string; tenantId?: string; limit?: number } = {},
+): Promise<Array<Record<string, unknown>>> {
+  const limit = Math.min(Math.max(1, opts.limit ?? 1000), 50000);
+  const params: unknown[] = [];
+  const conds: string[] = [];
+  if (opts.clipId) { params.push(opts.clipId); conds.push(`clip_id = $${params.length}`); }
+  if (opts.compareId) { params.push(opts.compareId); conds.push(`compare_id = $${params.length}`); }
+  if (opts.tenantId) { params.push(opts.tenantId); conds.push(`tenant_id = $${params.length}`); }
+  params.push(limit);
+  const where = conds.length ? `WHERE ${conds.join(" AND ")}` : "";
+  const { rows } = await pool.query(
+    `SELECT id, tenant_id, clip_id, compare_id, beat_id, seg_start, seg_end, at_sec,
+            chosen, machine, agree, context, note, editor, created_at
+       FROM reframe_labels ${where}
       ORDER BY created_at DESC LIMIT $${params.length}`,
     params,
   );

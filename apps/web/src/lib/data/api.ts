@@ -1153,6 +1153,52 @@ export function reframeCompareFileUrl(clipId: string, compareId: string, name: s
   return `${API_BASE}/clips/${clipId}/reframe/candidates/${compareId}/file/${name}`;
 }
 
+// ── 리프레임 라벨 — 비교 뷰어의 "이 장면은 이 레이아웃" 1클릭 정답 (계획 §5) ──────
+
+/** 서버 행 그대로(snake_case) — 뷰어 표시용 최소 필드만 쓴다. */
+export interface ReframeLabelRow {
+  id: number;
+  beat_id: string | null;
+  seg_start: number | null;
+  seg_end: number | null;
+  at_sec: number | null;
+  chosen: string;
+  machine: string | null;
+  agree: boolean | null;
+  note: string | null;
+  created_at: number;
+}
+
+export async function saveReframeLabel(clipId: string, label: {
+  compareId: string;
+  beatId?: string;
+  segStart?: number;
+  segEnd?: number;
+  atSec?: number;
+  chosen: string;
+  machine?: string;
+  /** 그 순간의 후보 4종 점수·게이트 스냅샷 — 서버는 검증 없이 보존한다(라벨의 관찰 맥락). */
+  context?: unknown;
+  note?: string;
+}): Promise<void> {
+  const res = await fetch(`${API_BASE}/clips/${clipId}/reframe/labels`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(label),
+  });
+  if (!res.ok) throw new ApiError(res.status, await errorMessageOf(res));
+}
+
+export async function fetchReframeLabels(clipId: string, compareId: string): Promise<ReframeLabelRow[]> {
+  const res = await fetch(
+    `${API_BASE}/clips/${clipId}/reframe/labels?compareId=${encodeURIComponent(compareId)}`,
+    { cache: "no-store" },
+  );
+  if (!res.ok) throw new ApiError(res.status, await errorMessageOf(res));
+  const data = await res.json();
+  return Array.isArray(data?.rows) ? data.rows : [];
+}
+
 /** 자동배포 완료 알림 담당자 이메일 저장 — 빈 문자열이면 알림을 끈다. */
 export async function setAutomationNotifyEmail(email: string): Promise<{ notifyEmail: string }> {
   const res = await fetch(`${API_BASE}/automation/notify-email`, {
