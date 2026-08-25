@@ -2102,7 +2102,7 @@ async function runTikTokDraftPublish(job: Job): Promise<void> {
     if (tiktokDirectPostEnabled()) {
       // 다이렉트 게시 — 채널에 바로 공개(선행조건: 앱 심사 + video.publish 재연결 · upload-gate.ts).
       const meta = metaForChannel(clip, "tiktok");
-      const { publishId, postId } = await withTikTokToken(acct, persist,
+      const { publishId, postId, privacyLevel } = await withTikTokToken(acct, persist,
         (token) => uploadDirectPostToTikTok(token, file, { title: meta.title }));
       const url = postId && acct.username
         ? `https://www.tiktok.com/@${acct.username}/video/${postId}` : undefined;
@@ -2111,11 +2111,14 @@ async function runTikTokDraftPublish(job: Job): Promise<void> {
         ...fresh,
         distributions: upsertDistribution(fresh.distributions, "tiktok", {
           status: "published", tiktokPublishId: publishId, tiktokOpenId: openId,
+          // privacy 를 남긴다 — 미심사(샌드박스) 앱은 SELF_ONLY 로 강제되는데, 기록이 없으면
+          // "게시됐는데 남들에겐 안 보임"의 원인을 나중에 찾을 수 없다.
+          privacy: privacyLevel,
           ...(postId ? { externalId: postId } : {}), ...(url ? { url } : {}),
           publishedAt: Date.now(), error: undefined,
         }),
       });
-      console.log(`[worker] distribution.publish(tiktok) ${clipId} → 다이렉트 게시 ${postId ?? publishId} (@${acct.username ?? acct.displayName})`);
+      console.log(`[worker] distribution.publish(tiktok) ${clipId} → 다이렉트 게시 ${postId ?? publishId} · ${privacyLevel} (@${acct.username ?? acct.displayName})`);
       return;
     }
 

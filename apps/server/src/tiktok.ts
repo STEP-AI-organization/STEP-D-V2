@@ -357,23 +357,59 @@ async function waitForDirectPublish(accessToken: string, publishId: string): Pro
   }
 }
 
+const CREATOR_INFO_URL = "https://open.tiktokapis.com/v2/post/publish/creator_info/query/";
+
+/**
+ * 게시 전 크리에이터 정보 조회 — 틱톡이 다이렉트 게시 전에 **요구하는** 호출이고,
+ * 허용된 공개범위 목록(privacy_level_options)이 여기서 나온다. 미심사(샌드박스) 앱은
+ * SELF_ONLY 만 허용되는데, 그때 PUBLIC 을 하드코딩해 보내면 init 이 통째로 거부된다 —
+ * 목록에서 고르면 샌드박스(SELF_ONLY)→심사 후(PUBLIC) 전환이 코드 수정 없이 따라온다.
+ */
+async function queryCreatorPrivacyOptions(accessToken: string): Promise<string[]> {
+  const res = await fetch(CREATOR_INFO_URL, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json; charset=UTF-8",
+    },
+  });
+  const body = await res.text();
+  if (!res.ok) throw new Error(`TikTok creator_info failed (${res.status}): ${body}`);
+  const data = JSON.parse(body) as {
+    data?: { privacy_level_options?: string[] };
+    error?: { code?: string; message?: string };
+  };
+  if (data.error?.code && data.error.code !== "ok") {
+    throw new Error(`TikTok creator_info error: ${data.error.code} — ${data.error.message ?? body}`);
+  }
+  return Array.isArray(data.data?.privacy_level_options) ? data.data.privacy_level_options : [];
+}
+
 /**
  * 렌더된 클립 하나를 채널에 **바로 게시**한다. 성공 = PUBLISH_COMPLETE.
  *
- * ⚠️ 미심사 앱은 여기 성공해도 SELF_ONLY(본인만 보기)로 강제된다 — 게이트 주석(upload-gate.ts)의
- * 선행조건(앱 심사 + 재연결)을 채운 뒤에만 TIKTOK_DIRECT_POST 를 켤 것.
+ * 공개범위는 creator_info 의 허용 목록에서 고른다 — PUBLIC 이 있으면 PUBLIC, 없으면
+ * (미심사 앱 = SELF_ONLY 만 허용) 첫 허용값. ⚠️ 미심사 앱의 게시물은 본인만 보인다 —
+ * "채널에 안 보임"이 재발하면 앱 심사 상태부터 볼 것(upload-gate.ts 주석).
  */
 export async function uploadDirectPostToTikTok(
   accessToken: string,
   file: { body: Buffer; contentType?: string },
   post: { title: string; privacyLevel?: string },
-): Promise<{ publishId: string; postId?: string }> {
+): Promise<{ publishId: string; postId?: string; privacyLevel: string }> {
   assertTikTokUploadEnabled();
+  let privacyLevel = post.privacyLevel;
+  if (!privacyLevel) {
+    const options = await queryCreatorPrivacyOptions(accessToken);
+    privacyLevel = options.includes("PUBLIC_TO_EVERYONE")
+      ? "PUBLIC_TO_EVERYONE"
+      : (options[0] ?? "SELF_ONLY");
+  }
   const { publishId, uploadUrl } = await initDirectPost(accessToken, file.body.byteLength, {
     title: post.title,
-    privacyLevel: post.privacyLevel ?? "PUBLIC_TO_EVERYONE",
+    privacyLevel,
   });
   await putChunks(uploadUrl, file);
   const postId = await waitForDirectPublish(accessToken, publishId);
-  return { publishId, postId };
+  return { publishId, postId, privacyLevel };
 }
