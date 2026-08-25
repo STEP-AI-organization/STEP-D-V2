@@ -320,7 +320,7 @@ describe("순방 배선 — automation-cycle 소스 스캔", () => {
   const src = fs.readFileSync(path.join(SRC, "automation-cycle.ts"), "utf-8");
 
   it("채택 직후 렌더를 건다 — 안 걸면 not_rendered 로 매 순방 스킵되어 자동 게시가 0건", () => {
-    assert.match(src, /requestAutoRender\(clipId\)/,
+    assert.match(src, /requestAutoRender\(clipId, channel\)/,
       "commitAndInherit 직후 렌더 요청이 없다");
     assert.match(src, /\/api\/clips\/\$\{clipId\}\/export/,
       "렌더는 factory 와 같은 경로(/api/clips/:id/export)여야 한다 — 복제하면 두 벌이 갈라진다");
@@ -575,7 +575,7 @@ describe("채택 기준 (F6 03단계)", () => {
 const obs = (over: Partial<RuleIdleObservation> = {}): RuleIdleObservation => ({
   outOfWindow: false, activeStart: 9, activeEnd: 22,
   episodes: 1, analyzed: 1, analyzing: 0, analysisFailed: 0, analysisBlocked: 0,
-  pending: 0, kindMatched: 0, overlapped: 0, scoreBlocked: 0, scoreMissing: 0, cappedEpisodes: 0,
+  pending: 0, kindMatched: 0, overlapped: 0, tooLong: 0, scoreBlocked: 0, scoreMissing: 0, cappedEpisodes: 0,
   clipsAllSent: false, adopted: 0,
   renderStopped: false, gateOff: false, publishFailed: false, heldWaiting: false,
   vagueAccount: false, channelBlocked: false, quotaDone: false,
@@ -885,6 +885,8 @@ describe("사유 문구는 dedupe 키다 — 변동값이 섞이면 안 된다",
     score_blocked: [obs({ scoreBlocked: 1 }), obs({ scoreBlocked: 44 })],
     kind_mismatch: [obs({ pending: 1, kindMatched: 0 }), obs({ pending: 31, kindMatched: 0 })],
     overlap: [obs({ pending: 2, kindMatched: 2, overlapped: 2 }), obs({ pending: 9, kindMatched: 9, overlapped: 9 })],
+    // 길이 상한 초과는 겹침보다 먼저 말한다 — 겹침은 정상 동작이고 이건 조치가 필요하다.
+    too_long: [obs({ pending: 2, kindMatched: 2, tooLong: 2 }), obs({ pending: 9, kindMatched: 9, tooLong: 9 })],
     render_waiting: [obs({ renderWaiting: true }), obs({ renderWaiting: true, episodes: 5, analyzed: 5 })],
     meta_waiting: [obs({ metaWaiting: true }), obs({ metaWaiting: true, episodes: 5, analyzed: 5 })],
     all_sent: [obs({ clipsAllSent: true }), obs({ episodes: 8, analyzed: 8, clipsAllSent: true })],

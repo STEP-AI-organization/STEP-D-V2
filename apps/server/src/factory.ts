@@ -27,6 +27,7 @@ import { dispatchPublish } from "./publish-dispatch.ts";
 import { newId } from "./pipeline.ts";
 import { enqueue } from "./queue.ts";
 import { basicReframeState } from "./reframe.ts";
+import { SHORTFORM_MAX_SEC, autoRenderChannel, shortformSegmentTooLong } from "./channel-rules.ts";
 
 const TRUTHY = new Set(["1", "true", "yes", "on"]);
 
@@ -154,11 +155,42 @@ export async function internalHeaders(): Promise<Record<string, string>> {
   return h;
 }
 
-async function requestExport(clipId: string): Promise<void> {
+/**
+ * 렌더 요청. **대상 채널의 렌더 프리셋 키를 반드시 함께 넘긴다.**
+ *
+ * 2026-08-25 사고의 절반이 여기였다: 예전엔 본문 없이 POST 만 했고, 라우트의
+ * `resolveRenderPreset(body.channel, clip)` 는 body.channel 도 clip.targetChannel 도 없으면
+ * null 을 준다 → 길이 캡(`capped`)·프리셋이 통째로 비활성 → **원본 구간 길이 그대로** 인코딩.
+ * 공장이 만든 클립은 `targetChannel` 을 안 심으므로(수동 adopt 라우트만 심는다) 이 경로엔
+ * 캡이 걸릴 방법이 아예 없었다.
+ *
+ * 프리셋은 **길이만** 바꾼다 — 종횡비는 라우트가 `editorState.aspect` 를 우선으로 읽고
+ * (`normalizeAspect(es?.aspect) ?? preset?.aspect ?? …`) 공장은 그 값을 항상 시드하므로,
+ * 채널을 넘긴다고 화면비가 바뀌지 않는다(무회귀).
+ */
+async function requestExport(clipId: string, channel?: string | null): Promise<void> {
   const res = await fetch(`${apiBase()}/api/clips/${clipId}/export`, {
-    method: "POST", headers: await internalHeaders(),
+    method: "POST",
+    headers: { ...(await internalHeaders()), "content-type": "application/json" },
+    body: JSON.stringify(channel ? { channel } : {}),
   });
   if (!res.ok) throw new Error(`export ${res.status}`);
+}
+
+/** `"youtube:UC…"` → `"youtube"`. 지금은 YouTube 만 실송출이지만 파싱은 일반형으로 둔다. */
+export function targetPlatforms(targets: readonly string[] | undefined): string[] {
+  return [...new Set((targets ?? [])
+    .map((t) => String(t ?? "").split(":")[0].trim().toLowerCase())
+    .filter(Boolean))];
+}
+
+/**
+ * 공장이 이 추천을 채택하면 어떤 화면비가 되는가 — **채택과 길이 게이트가 같은 식을 본다.**
+ * 두 벌이 되면 "게이트는 가로로 봤는데 채택은 세로로 만드는" 구멍이 생긴다.
+ * (자동배포 계획은 방향을 사람이 고를 수 있어 automation-cycle 의 adoptAspect 가 따로 있다.)
+ */
+export function factoryAspect(rec: { kind?: unknown }): "16:9" | "9:16-crop-main" {
+  return rec.kind === "short" ? "9:16-crop-main" : "16:9";
 }
 
 async function save(job: FactoryJob): Promise<FactoryJob> {
@@ -422,14 +454,31 @@ export async function advance(factoryJobId: string): Promise<{ job: FactoryJob; 
 
       const minConf = job.policy.minConfidence ?? 0;
       const maxShorts = Math.min(job.policy.maxShorts ?? 3, cap - already);
+      // 상한 초과 구간이 "숏폼" 으로 나가는 경로를 **여기서** 끊는다 (2026-08-25).
+      // 렌더 캡(아래 rendering 단계)만으로는 부족하다 — 3분짜리 구간을 세로로 채택하면
+      // 렌더가 60초에서 자르는데 그 결과물은 숏폼이 아니라 머리만 남은 롱폼이다.
+      // 사람이 없는 경로에서는 잘라 내보내는 것보다 **안 만드는 게** 옳다.
+      // (core 가 90초 상한을 지키게 고쳤지만, 그 전에 분석된 회차의 추천이 DB 에 그대로
+      //  남아 있다 — 재분석은 ₩·시간이 드니 서버도 자기 몫을 본다.)
+      let tooLong = 0;
       const picks = (await listEntities<any>("recommendation"))
         .filter((r) => r.episodeId === job.episodeId && r.status === "pending")
         .filter((r) => (r.confidence ?? r.score100 ?? 100) / (r.score100 ? 100 : 1) >= minConf)
+        .filter((r) => {
+          if (!shortformSegmentTooLong(factoryAspect(r), Number(r.endTime) - Number(r.startTime))) return true;
+          tooLong += 1;
+          console.warn(`[factory] 길이 상한 초과로 채택 제외 ${r.id}: `
+            + `${Math.round(Number(r.endTime) - Number(r.startTime))}s > ${SHORTFORM_MAX_SEC}s`);
+          return false;
+        })
         .sort((a, b) => (b.score100 ?? 0) - (a.score100 ?? 0))
         .slice(0, Math.max(0, maxShorts));
 
       if (picks.length === 0) {
-        return await fail("채택 가능한 추천이 없다 (minConfidence 확인)");
+        // 조용한 실패는 원인을 못 찾게 한다 — 상한 때문에 빈 것과 기준 때문에 빈 것을 가른다.
+        return await fail(tooLong > 0
+          ? `채택 가능한 추천이 없다 (${tooLong}건이 숏폼 길이 상한 ${SHORTFORM_MAX_SEC}초 초과 — 회차를 다시 분석하면 상한 안으로 다시 뽑힌다)`
+          : "채택 가능한 추천이 없다 (minConfidence 확인)");
       }
 
       const clipIds: string[] = [];
@@ -449,8 +498,15 @@ export async function advance(factoryJobId: string): Promise<{ job: FactoryJob; 
     case "rendering": {
       const clips = await Promise.all(job.clipIds.map((id) => getEntity<any>("clip", id)));
       const pending = clips.filter((c) => c && !c.rendered);
+      // 대상 채널의 렌더 프리셋(길이·비율)을 **반드시** 넘긴다 — 안 넘기면 라우트의 캡이
+      // 통째로 비활성이라 원본 구간 길이 그대로 인코딩된다(2026-08-25 사고의 절반).
+      const platforms = targetPlatforms(job.targets);
       for (const clip of pending) {
-        await requestExport((clip as any).id).catch((e) => {
+        const channel = autoRenderChannel(
+          platforms,
+          (clip as any).aspectRatio ?? (clip as any).editorState?.aspect,
+        );
+        await requestExport((clip as any).id, channel).catch((e) => {
           console.warn(`[factory] export 요청 실패 ${(clip as any).id}: ${String(e).slice(0, 120)}`);
         });
       }
@@ -636,7 +692,7 @@ export function autoEditorState(
   const programDefault = String(program?.autoPublish?.templateId ?? "").trim();
   const templateId = forced || programDefault || pickTemplateId(program);
   const seed = TEMPLATE_SEEDS[templateId] ?? TEMPLATE_SEEDS["broadcast-standard"];
-  const aspect = forcedAspect || (rec.kind === "short" ? "9:16-crop-main" : "16:9");
+  const aspect = forcedAspect || factoryAspect(rec);
   // factory 시드는 아직 구 설계 스테이지 px basis 이고 렌더 직전에 출력 px 로 정규화된다.
   // 따라서 원하는 무편집 출력값(첫 줄 106px·둘째 줄 107px)을 **최종 aspect** 배율로 나눠
   // 저장한다. 자동배포가 가로/세로를 바꿔도 최종 렌더 px가 달라지지 않는다.
@@ -735,7 +791,7 @@ async function adoptRecommendation(rec: any, job: FactoryJob): Promise<string | 
     hookIntroCaption: rec.hookIntroCaption,
     clipType: rec.kind === "short" ? "T6" : "TZ",
     targetAge: episode?.targetAge ?? 0,
-    aspectRatio: rec.kind === "short" ? "9:16-crop-main" : "16:9",
+    aspectRatio: factoryAspect(rec),
     // 무인 렌더 기본 시드 — 에디터를 안 거쳐도 배포 가능한 모양으로 나가게 한다.
     editorState: autoEditorState(rec, episode?.programTitle ?? "",
       episode?.programId ? await getEntity<any>("program", episode.programId) : undefined,

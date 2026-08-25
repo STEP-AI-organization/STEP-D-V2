@@ -4081,43 +4081,65 @@ def _dedup_beat_overlap(shorts: list[dict], beats: list[dict]) -> list[dict]:
 
 
 def _enforce_shortform_length(shorts: list[dict], beats: list[dict],
-                                max_sec: float = 90.0) -> list[dict]:
-    """shortform type 은 총 duration ≤ max_sec (기본 90s). 초과 시 뒷 beat drop.
+                              max_sec: float = MAX_SHORT_SEC) -> list[dict]:
+    """shortform 은 **무조건** duration <= max_sec. 초과분은 뒷 beat drop, 그래도 넘으면 하드컷.
 
-    남은 beat 가 0 이 되면 그 short drop.
-    clip · highlight 는 스킵 (해당 type 별도 길이 정책).
+    clip · highlight 는 스킵 (롱폼은 build_clips_from_beats 의 별도 길이 정책).
+
+    ⚠️ 2026-08-25 사고: 이 함수는 **정의만 되고 아무도 부르지 않았다.** 그래서 프로덕션
+    기본 경로인 beat-only 추천에는 길이 상한이 프롬프트 문구("총 span … 최대 2분")밖에
+    없었고, 모델이 beat 을 많이 묶은 뒤 semantic closure(end +20s)·beat 경계 재스냅이
+    더 늘리면서 **3분 넘는 "숏폼"** 이 추천 → 자동배포 → 게시까지 갔다.
+    길이 같은 하드 제약은 프롬프트가 아니라 결정론 코드가 지킨다(리포 원칙).
+
+    옛 구현의 구멍 두 개도 같이 막았다:
+      · beat_ids 가 없는 short 는 그대로 통과했다 → 이제 start/end 로 하드컷한다.
+      · **첫 beat 하나가 이미 max_sec 을 넘으면** 그 beat 을 통째로 남겼다(뒷 beat 만
+        드롭하는 루프라 첫 beat 은 검사 대상이 아니었다) → 이제 하드컷으로 이어진다.
     """
-    if not shorts or not beats:
+    if not shorts:
         return shorts
-    beat_by_id = {b.get("id"): b for b in beats}
+    beat_by_id = {b.get("id"): b for b in (beats or []) if isinstance(b, dict)}
     out: list[dict] = []
     for s in shorts:
         if s.get("type") != "shortform":
-            out.append(s); continue
-        ids = list(s.get("beat_ids") or [])
-        if not ids:
-            out.append(s); continue
-        sorted_ids = sorted(ids, key=lambda bid: float((beat_by_id.get(bid) or {}).get("start", 0)))
-        first = beat_by_id.get(sorted_ids[0])
-        if not first:
+            out.append(s)
             continue
-        st = float(first.get("start", 0))
-        kept = [sorted_ids[0]]
-        cur_end = float(first.get("end", 0))
-        for bid in sorted_ids[1:]:
-            b = beat_by_id.get(bid)
-            if not b:
-                continue
-            new_end = float(b.get("end", 0))
-            if (new_end - st) <= max_sec:
-                kept.append(bid); cur_end = new_end
-            else:
-                break
-        if not kept:
+        try:
+            st = float(s.get("start"))
+            en = float(s.get("end"))
+        except (TypeError, ValueError):
             continue
-        s["beat_ids"] = kept
-        s["start"] = st
-        s["end"] = cur_end
+        if en <= st:
+            continue
+        if en - st <= max_sec:
+            out.append(s)
+            continue
+
+        # 1) beat 단위로 뒤에서부터 덜어낸다 — 컷이 beat 경계에 남아야 대사 중간이 안 잘린다.
+        ids = [bid for bid in (s.get("beat_ids") or []) if bid in beat_by_id]
+        if ids:
+            ids.sort(key=lambda bid: float(beat_by_id[bid].get("start", 0)))
+            first = beat_by_id[ids[0]]
+            st = float(first.get("start", st))
+            kept = [ids[0]]
+            cur_end = float(first.get("end", st))
+            for bid in ids[1:]:
+                nb_end = float(beat_by_id[bid].get("end", 0))
+                if nb_end - st <= max_sec:
+                    kept.append(bid)
+                    cur_end = nb_end
+                else:
+                    break
+            if cur_end > st:
+                s["beat_ids"] = kept
+                en = cur_end
+        # 2) 그래도 넘으면(첫 beat 하나가 이미 max_sec 초과) 하드컷한다. beat 경계 보존보다
+        #    "숏폼은 숏폼이다" 가 우선이다 — 넘긴 채 내보내면 배포처가 거부하거나 제멋대로 자른다.
+        if en - st > max_sec:
+            en = st + max_sec
+        s["start"] = round(st, 3)
+        s["end"] = round(en, 3)
         s["_length_capped"] = True
         out.append(s)
     return out
@@ -4333,6 +4355,18 @@ def _recommend_narrative_first_impl(
             )
             # QA 가 end 조정한 뒤 다시 beat 경계로 재스냅 (자유 timestamp 방지)
             shorts = _enforce_beat_alignment(shorts, beats, tol_sec=1.0)
+        # ⚠️ **길이 하드 상한 — 여기가 마지막 관문이다.** 위 semantic closure 는 end 를 최대
+        # +20s 늘리고 _enforce_beat_alignment 는 그 끝을 beat 경계로 다시 벌린다. 그래서 상한은
+        # 모든 확장이 끝난 뒤 한 번 더 걸어야 무력화되지 않는다 — chunk_scan 경로가 2026-08-20
+        # 에 같은 이유로 "모든 확장 뒤 90초 재적용"(위 validate_shorts) 을 넣었는데,
+        # beat-only 경로(프로덕션 기본)에는 그 짝이 없어서 3분 넘는 "숏폼" 이 그대로 나갔다.
+        # transcript 가 없어 QA 를 건너뛴 회차에도 걸리도록 if 블록 **밖**에 둔다.
+        before_cap = len(shorts)
+        shorts = _enforce_shortform_length(shorts, beats)
+        n_capped = sum(1 for s in shorts if s.get("_length_capped"))
+        if n_capped or before_cap != len(shorts):
+            print(f"   길이 상한({MAX_SHORT_SEC:.0f}s): {n_capped}개 트림"
+                  f"{f' · {before_cap - len(shorts)}개 제외' if before_cap != len(shorts) else ''}")
         if on_progress:
             on_progress(3, 3)
         def type_order_new(s: dict) -> int:

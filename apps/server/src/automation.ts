@@ -644,7 +644,7 @@ export const RULE_IDLE_CODES = [
   "no_episode", "analysis_blocked", "analysis_failed", "analyzing",
   "render_stopped", "gate_off", "publish_failed", "held_waiting", "vague_account",
   "channel_rule", "quota_done",
-  "top3_cap", "score_blocked", "kind_mismatch", "overlap",
+  "top3_cap", "score_blocked", "kind_mismatch", "overlap", "too_long",
   "render_waiting", "meta_waiting",
   "all_sent", "no_pending",
 ] as const;
@@ -677,6 +677,13 @@ export interface RuleIdleObservation {
   kindMatched: number;
   /** 종류는 맞지만 기존 클립과 구간이 겹쳐 제외된 수. */
   overlapped: number;
+  /**
+   * 종류·겹침을 통과했지만 **세로 숏폼 길이 상한**을 넘어 제외된 수 (2026-08-25).
+   *
+   * 조용히 빼면 안 된다 — 사용자가 보기엔 "점수 좋은 추천이 있는데 아무것도 안 나간다" 이고,
+   * 기준을 낮춰 봐야 그대로 0건이다. 풀리는 조치가 다르다(회차 재분석 · 방향을 가로형으로).
+   */
+  tooLong?: number;
   /** 종류·겹침을 통과했지만 채택 기준에 걸린 수. */
   scoreBlocked: number;
   /**
@@ -893,6 +900,20 @@ export function ruleIdleNote(o: RuleIdleObservation): { code: RuleIdleCode; deta
       code: "kind_mismatch",
       detail: `이 계획이 만드는 종류(${MEDIA_KIND_LABEL[o.mediaKind]})에 맞는 추천이 없습니다`
         + " — 계획의 미디어 종류를 바꾸면 잡힙니다.",
+    };
+  }
+
+  // 길이 상한 초과 — **겹침보다 먼저** 말한다. 겹침은 정상 동작이지만 이건 조치가 필요하고,
+  // 조치가 다르다(재분석하면 상한 안으로 다시 뽑힌다 · 롱폼으로 낼 거면 방향을 가로형으로).
+  if ((o.tooLong ?? 0) > 0) {
+    return {
+      code: "too_long",
+      // 숫자(상한 초)는 일부러 안 쓴다 — 이 파일은 apps/web 이 함께 타입체크하는 무의존
+      // 순수 모듈이라 channel-rules.ts 의 SHORTFORM_MAX_SEC 를 import 할 수 없고, 손으로
+      // 적으면 정본과 갈라진다. 조치 안내만으로 사용자는 충분히 움직일 수 있다.
+      detail: "숏폼으로 만들기엔 너무 긴 구간뿐이라 채택하지 못했습니다"
+        + " — 회차를 다시 분석하면 상한 안으로 다시 뽑히고, 긴 구간 그대로 내보내려면"
+        + " 계획의 방향을 가로형으로 바꿔 주세요.",
     };
   }
 

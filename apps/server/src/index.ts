@@ -364,6 +364,7 @@ import {
 } from "./automation.ts";
 import {
   CHANNEL_ROLES,
+  capRenderWindow,
   defaultRuleFor,
   eligibility,
   isChannelRole,
@@ -8191,12 +8192,12 @@ app.post("/api/clips/:id/export", async (c) => {
   // The delivered length is the segment scaled by playback speed (2× fast halves it), so the
   // maxSec cap must clamp the OUTPUT length, not the raw segment — otherwise a slowed clip
   // could still overrun YouTube's 60s Shorts limit.
+  // 산수는 channel-rules.ts 의 순수 함수 하나(capRenderWindow)로 모았다 — 라우트 안에 있으면
+  // DB 없이 부를 수가 없어 이 캡을 검증하는 테스트가 한 줄도 없었다(2026-08-25 사고의 배경).
   const spd = uniformSpeed(es);
-  let capped: { maxSec: number; requestedSec: number } | null = null;
-  if (preset && (renderEnd - renderStart) / spd > preset.maxSec) {
-    capped = { maxSec: preset.maxSec, requestedSec: Number(((renderEnd - renderStart) / spd).toFixed(2)) };
-    renderEnd = renderStart + preset.maxSec * spd; // segment length that yields maxSec output
-  }
+  const cap = capRenderWindow(preset?.maxSec, renderStart, renderEnd, spd);
+  const capped = cap.capped;
+  renderEnd = cap.renderEnd;
 
   const allMedia = await listMedia();
   const master =

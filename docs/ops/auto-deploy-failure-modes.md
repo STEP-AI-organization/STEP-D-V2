@@ -90,7 +90,7 @@ flowchart LR
 
 **규칙별 유휴 사유(`ruleIdleNote`) — 규칙 하나가 아무 일도 안 했을 때 딱 한 줄**
 
-사유는 **21개**(`RULE_IDLE_CODES`)이고 그중 **하나만** 고른다. 여럿을 늘어놓으면 어디부터
+사유는 **22개**(`RULE_IDLE_CODES`)이고 그중 **하나만** 고른다. 여럿을 늘어놓으면 어디부터
 손대야 할지 알 수 없다. 고르는 순서에 근거가 있다 — 순서가 흔들리면 같은 상황에서 로그가
 매번 다른 말을 한다.
 
@@ -101,7 +101,7 @@ flowchart LR
 | ② | 상류가 비었음 | `no_episode` | 회차가 없으면 하류 사유는 존재할 수가 없다 |
 | ③ | 분석 완료 0 | `analysis_blocked` → `analysis_failed` → `analyzing` | **분석 끝난 회차가 하나도 없으면 하류 사유는 전부 공허하다.** 안에서도 **큐잉조차 안 된 것**(blocked)이 먼저다 — 기다리면 끝나는 것(analyzing)과 섞으면 영원히 안 오는 완료를 기다리게 된다 |
 | ④ | 게시 단계 · 사람 손 | `render_stopped` → `gate_off` → `publish_failed` → `held_waiting` → `vague_account` → `channel_rule` → `quota_done` | **이미 만든 클립이 못 나가고 있는데** "채택할 추천이 없습니다" 라고 말하면 정반대를 보게 된다 |
-| ⑤ | 규칙을 바꾸면 풀림 | `top3_cap` → `score_blocked` → `kind_mismatch` → `overlap` | 사람이 설정으로 해결할 수 있는 것 |
+| ⑤ | 규칙을 바꾸면 풀림 | `top3_cap` → `score_blocked` → `kind_mismatch` → `too_long` → `overlap` | 사람이 설정으로 해결할 수 있는 것. `too_long`(숏폼 90초 상한 초과 · 2026-08-25)이 `overlap` 보다 앞인 이유는 겹침은 **정상 동작**이고 이건 조치가 필요해서다 — 재분석하면 상한 안으로 다시 뽑히고, 긴 구간 그대로 낼 거면 방향을 가로형으로 바꾼다 |
 | ⑥ | 시간이 풀어 줌 | `render_waiting` → `meta_waiting` | 가만두면 끝난다 — 사람 몫보다 뒤에 두는 게 이 순서의 근거다 |
 | ⑦ | 정상 정지 · 기본값 | `all_sent` → `no_pending` | 마지막 |
 
@@ -217,7 +217,7 @@ flowchart LR
 | 렌더 정체 상한 | 30분 | `RENDER_STUCK_MS` |
 | 회차당 채택 상한 | 3건 | `TOP3_CAP` |
 | 활동 시간창 기본 | 9~22시 | `ruleWindow` |
-| 규칙 유휴 사유 | 21개 | `RULE_IDLE_CODES` |
+| 규칙 유휴 사유 | 22개 | `RULE_IDLE_CODES` |
 | 자동 충전 조치 필요 사유 | 8개 | `AUTO_TOPUP_SEVERITY` |
 
 ⚠️ 앞의 세 값(순방 주기·확정 횟수·정체 상한)은 **서로 묶여 있다.** 렌더 재시도 간격이 곧

@@ -105,6 +105,107 @@ export function defaultRuleFor(role: ChannelRole, platform: string): Omit<Channe
   return { ...base, maxSec: null, aspect: "any" };
 }
 
+// ── 숏폼(세로) 길이 하드 상한 ────────────────────────────────────────────────────
+//
+// 2026-08-25 사고: 자동배포가 **3분(180초)이 넘는 구간을 "숏폼" 으로 렌더·게시**했다.
+// 원인은 두 겹이었다.
+//   (1) core 의 beat-only 추천 경로에 길이 상한이 프롬프트 문구뿐이었다(결정론 코드 없음).
+//   (2) factory·automation-cycle 이 `/api/clips/:id/export` 를 **채널 없이** 불렀다 →
+//       index.ts `resolveRenderPreset` 이 null → 렌더 프리셋의 maxSec 캡(`capped`)이
+//       아예 발동하지 않아 원본 구간 길이 그대로 인코딩됐다.
+// (1)은 core 에서 고쳤고, 여기는 (2)를 위한 순수 어휘다. **무인 경로는 반드시** 대상 채널의
+// 프리셋 키를 넘겨서 렌더가 상한을 강제하게 한다.
+
+/**
+ * 숏폼이라고 부를 수 있는 절대 상한(초) — core/recommend/recommend.py `MAX_SHORT_SEC` 의
+ * 서버 미러. 배포처별 상한(아래 `SHORTS_RENDER_PRESETS`)과는 **다른 축**이다:
+ *   · SHORTFORM_MAX_SEC = "이게 숏폼인가"   (물건의 정의 · 채택 단계에서 본다)
+ *   · 배포처 maxSec      = "이 배포처가 받는가" (배달 규격 · 렌더 단계에서 자른다)
+ * 둘을 하나로 합치면 안 된다. 합치면 90초 숏폼을 60초 배포처 때문에 채택조차 못 하거나(과잉),
+ * 15분 롱폼을 60초로 잘라 "숏폼" 이라며 내보내게 된다(파괴). 그래서 두 자리에서 각각 본다.
+ */
+export const SHORTFORM_MAX_SEC = 90;
+
+/**
+ * 플랫폼 → 세로(숏폼) 렌더 프리셋 키. **index.ts `RENDER_PRESETS` 의 부분 미러**이고
+ * `shortform-cap.test.ts` 가 두 표의 maxSec 일치를 강제한다(한쪽만 고치면 테스트가 깨진다).
+ * 여기 없는 플랫폼(tiktok·naverclip·facebook)은 렌더 프리셋 자체가 없어 null 이 된다 —
+ * 그쪽은 SHORTFORM_MAX_SEC 채택 게이트가 유일한 방어선이다.
+ */
+export const SHORTS_RENDER_PRESETS: Record<string, { key: string; maxSec: number }> = {
+  youtube: { key: "youtube_shorts", maxSec: 60 },
+  instagram: { key: "instagram_reels", maxSec: 90 },
+};
+
+/** 세로(숏폼) 프레임인가. `frameOf` 와 같은 어휘("9:16-crop-main" 등)를 받는다. */
+export function isVerticalAspect(aspectRatio: unknown): boolean {
+  return frameOf(aspectRatio) === "9:16";
+}
+
+/**
+ * 무인 렌더가 `/clips/:id/export` 에 넘길 채널 프리셋 키. 없으면 null(= 프리셋 없음 · 종전 동작).
+ *
+ * 계획 하나가 배포처를 여럿 갖고 있으면 **가장 빡빡한 상한**을 고른다 — 렌더는 클립당 한 번이고
+ * (`/export` 의 revision 캐시), 60초 배포처와 90초 배포처를 동시에 만족하는 길이는 60초뿐이다.
+ * 가로(16:9)는 null 이다: 롱폼은 배포처 길이 규격이 아니라 편성 판단의 대상이고, 여기서 자르면
+ * 15분 클립이 60초 조각이 된다.
+ */
+export function autoRenderChannel(platforms: readonly string[], aspectRatio: unknown): string | null {
+  if (!isVerticalAspect(aspectRatio)) return null;
+  let best: { key: string; maxSec: number } | null = null;
+  for (const p of platforms) {
+    const preset = SHORTS_RENDER_PRESETS[String(p ?? "").trim().toLowerCase()];
+    if (!preset) continue;
+    if (!best || preset.maxSec < best.maxSec) best = preset;
+  }
+  return best?.key ?? null;
+}
+
+/**
+ * 이 구간을 **세로 숏폼으로 채택해도 되는가** — 무인 경로(factory·자동배포) 전용 게이트.
+ *
+ * 렌더 캡이 있으니 채택은 그냥 해도 되지 않나? 아니다. 3분짜리 구간을 세로로 채택하면 렌더가
+ * 60초에서 자르는데, 그 결과물은 숏폼이 아니라 **머리만 남은 롱폼**이다. 사람이 없는 경로에서는
+ * 잘라 내보내는 것보다 안 만드는 게 옳다 — 사람이 편집기에서 직접 고르는 길은 그대로 열려 있다.
+ * 가로(16:9) 채택에는 걸리지 않는다(롱폼은 원래 길다).
+ */
+export function shortformSegmentTooLong(aspectRatio: unknown, segmentSec: unknown): boolean {
+  if (!isVerticalAspect(aspectRatio)) return false;
+  const n = Number(segmentSec);
+  return Number.isFinite(n) && n > SHORTFORM_MAX_SEC;
+}
+
+/**
+ * 렌더 창을 배포처 상한 안으로 자른다 — `/api/clips/:id/export` 의 길이 캡 본체.
+ *
+ * 라우트 안에 인라인으로 있던 세 줄을 **순수 함수로 뽑았다**(동작 동일). 이 리포에서 가장
+ * 비싼 사고가 "3분짜리가 숏폼으로 나갔다" 였는데, 정작 그걸 막는 산수는 테스트가 한 줄도
+ * 없었다 — 라우트 안에 있어서 DB 없이는 부를 수가 없었기 때문이다.
+ *
+ * ⚠️ 상한은 **출력 길이**에 건다. 배속(2× 빠르게)이면 같은 60초 출력에 120초 구간이 필요하고,
+ * 반대로 0.5× 느리게면 60초 출력이 30초 구간이다. 구간 길이에 그냥 걸면 느린 클립이
+ * 유튜브 60초 상한을 넘겨 버린다.
+ *
+ * `capped` 는 null 이 아니면 "요청보다 짧게 나갔다" 는 뜻이다 — 조용히 자르지 않고 돌려준다.
+ */
+export function capRenderWindow(
+  maxSec: number | null | undefined,
+  renderStart: number,
+  renderEnd: number,
+  speed = 1,
+): { renderEnd: number; capped: { maxSec: number; requestedSec: number } | null } {
+  const spd = Number.isFinite(speed) && Number(speed) > 0 ? Number(speed) : 1;
+  const cap = Number(maxSec);
+  if (!Number.isFinite(cap) || cap <= 0) return { renderEnd, capped: null };
+  const outSec = (renderEnd - renderStart) / spd;
+  if (!(outSec > cap)) return { renderEnd, capped: null };
+  return {
+    // 이만큼의 구간이 정확히 maxSec 짜리 출력이 된다.
+    renderEnd: renderStart + cap * spd,
+    capped: { maxSec: cap, requestedSec: Number(outSec.toFixed(2)) },
+  };
+}
+
 export interface MediaFacts {
   id: string;
   durationSec: number;

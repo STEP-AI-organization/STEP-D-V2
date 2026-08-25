@@ -53,7 +53,10 @@ import {
   youtubeUploadEnabled, tiktokUploadEnabled, instagramUploadEnabled, facebookUploadEnabled,
 } from "./upload-gate.ts";
 import { naverUploadEnabled } from "./naver-gate.ts";
-import { eligibility, nextPublishSlot, normalizePublishDelayMin, type ChannelRule } from "./channel-rules.ts";
+import {
+  SHORTFORM_MAX_SEC, autoRenderChannel, eligibility, nextPublishSlot,
+  normalizePublishDelayMin, shortformSegmentTooLong, type ChannelRule,
+} from "./channel-rules.ts";
 import { newId } from "./pipeline.ts";
 import { enqueue } from "./queue.ts";
 import { distributionAccountId, hasAccountDistribution, hasFailedAccountDistribution } from "./publish-guard.ts";
@@ -97,6 +100,20 @@ export async function runAutomationCycle(): Promise<CycleReport> {
   // 실행이 만든 distribution 을 본 뒤 hasAccountDistribution 에서 건너뛴다.
   const tenantId = currentTenantId();
   return withTenantLock(`automation-cycle:${tenantId}`, runAutomationCycleLocked);
+}
+
+/**
+ * 이 계획이 이 추천을 채택하면 어떤 화면비가 되는가 — **채택과 길이 게이트가 같은 식을 본다.**
+ *
+ * 예전엔 이 판정이 채택부에만 인라인으로 있었고, 길이 상한 게이트를 붙이면서 같은 식을 한 번
+ * 더 적을 뻔했다. 두 벌이 되면 "게이트는 가로로 봤는데 채택은 세로로 만드는" 구멍이 생긴다.
+ * 클립(롱폼)은 가로형이 기본이다(사용자 확정 2026-08-16) — 계획이 방향을 명시했으면 그게 우선,
+ * 아니면 추천 종류(kind)로 정한다(하위호환 · 리프레임 OFF 시 불변).
+ */
+function adoptAspect(rule: AutomationRule, rec: { kind?: unknown }): "16:9" | "9:16-crop-main" {
+  const landscape = rule.orientation === "landscape"
+    || (rule.orientation !== "portrait" && rec.kind !== "short");
+  return landscape ? "16:9" : "9:16-crop-main";
 }
 
 async function runAutomationCycleLocked(): Promise<CycleReport> {
@@ -180,7 +197,8 @@ async function runAutomationCycleLocked(): Promise<CycleReport> {
     const obs: RuleIdleObservation = {
       outOfWindow: false, activeStart: win.start, activeEnd: win.end,
       episodes: 0, analyzed: 0, analyzing: 0, analysisFailed: 0, analysisBlocked: 0,
-      pending: 0, kindMatched: 0, overlapped: 0, scoreBlocked: 0, scoreMissing: 0, cappedEpisodes: 0,
+      pending: 0, kindMatched: 0, overlapped: 0, tooLong: 0,
+      scoreBlocked: 0, scoreMissing: 0, cappedEpisodes: 0,
       clipsAllSent: false, adopted: 0,
       renderStopped: false, gateOff: false, publishFailed: false, heldWaiting: false,
       vagueAccount: false, channelBlocked: false, quotaDone: false,
@@ -219,6 +237,10 @@ async function runAutomationCycleLocked(): Promise<CycleReport> {
     // 없으면 채널 N개 = 순방당 export N회 — 실패 카운터가 채널 배수로 부풀어 첫 순방에
     // 바로 확정 실패가 난다. 채택 직후 건 렌더도 여기 넣어 같은 순방에 두 번 때리지 않는다.
     const renderTried = new Set<string>();
+    // 이 계획이 실제로 내보내는 플랫폼들. 세로 클립의 렌더 길이 캡을 여기서 고른다
+    // (여러 배포처면 가장 빡빡한 상한 — 렌더는 클립당 한 번이다). 2026-08-25 이전에는
+    // /export 를 채널 없이 불러 **캡이 아예 안 걸렸다.**
+    const rulePlatforms = channels.map((c) => String(c.platform ?? "").trim().toLowerCase());
 
     // 01 회차 수신 — 이 계획의 프로그램(들) 회차만.
     const eps = episodes.filter((e) => programs.includes(e.programId));
@@ -253,8 +275,20 @@ async function runAutomationCycleLocked(): Promise<CycleReport> {
       obs.pending += pend.length;
       const kindOk = pend.filter((r) => matchesMediaKind(rule, r));
       obs.kindMatched += kindOk.length;
-      const cands = kindOk.filter((r) => !overlapsExistingClip(r, epClips));
-      obs.overlapped += kindOk.length - cands.length;
+      const notOverlapping = kindOk.filter((r) => !overlapsExistingClip(r, epClips));
+      obs.overlapped += kindOk.length - notOverlapping.length;
+      // **세로 숏폼 길이 상한** — 상한 초과 구간이 "숏폼" 으로 나가는 경로를 채택에서 끊는다
+      // (2026-08-25 사고: 3분 넘는 구간이 숏폼으로 렌더·게시됐다). 렌더 캡만으로는 부족하다 —
+      // 3분짜리를 세로로 채택하면 렌더가 60초에서 자르고, 그 결과물은 숏폼이 아니라 머리만
+      // 남은 롱폼이다. 사람 없는 경로에서는 잘라 내보내는 것보다 안 만드는 게 옳다.
+      // 방향 판정은 아래 채택부의 `landscape` 와 **같은 식**이어야 게이트가 실물과 맞는다.
+      const cands = notOverlapping.filter((r) => !shortformSegmentTooLong(
+        adoptAspect(rule, r), Number(r.endTime) - Number(r.startTime)));
+      obs.tooLong = (obs.tooLong ?? 0) + (notOverlapping.length - cands.length);
+      if (notOverlapping.length !== cands.length) {
+        console.warn(`[automation] ${rule.id} ${ep.id}: 숏폼 길이 상한 ${SHORTFORM_MAX_SEC}s 초과로 `
+          + `후보 ${notOverlapping.length - cands.length}건 제외`);
+      }
       // top3 는 회차당 상한 — 이 계획이 이 회차에서 이미 채택한 수를 빼고 뽑는다.
       const already = adoptedCountFor(rule.id, ep.id);
       const atCap = rule.criterion === "top3" && already >= TOP3_CAP;
@@ -279,9 +313,8 @@ async function runAutomationCycleLocked(): Promise<CycleReport> {
         // 적용한다. 미지정이면 기존처럼 추천 kind 로 결정(하위호환 · 리프레임 OFF 시 불변).
         // 클립(롱폼)은 **가로형이 기본**이다(사용자 확정 2026-08-16) — 본편 화면비를 유지한다.
         // 계획이 방향을 명시했으면 그게 우선, 아니면 추천 종류로 정한다.
-        const landscape = rule.orientation === "landscape"
-          || (rule.orientation !== "portrait" && rec.kind !== "short");
-        const aspectRatio = landscape ? "16:9" : "9:16-crop-main";
+        const aspectRatio = adoptAspect(rule, rec);
+        const landscape = aspectRatio === "16:9";
         const clip = {
           id: clipId,
           episodeId: rec.episodeId,
@@ -368,7 +401,8 @@ async function runAutomationCycleLocked(): Promise<CycleReport> {
           // 영원히 0건이다 — 어떤 경로도 렌더를 요청하지 않았기 때문(2026-08-14 확정).
           // 안전벨트의 시계(firstAt)도 여기서 시작한다 — 첫 실패부터 세야 정체를 잰다.
           renderTried.add(clipId);
-          await attemptAutoRender(rule.id, clip, note, report);
+          await attemptAutoRender(rule.id, clip, note, report,
+            autoRenderChannel(rulePlatforms, aspectRatio));
         }
       }
     }
@@ -536,7 +570,8 @@ async function runAutomationCycleLocked(): Promise<CycleReport> {
           // 확정 실패한 클립은 다시 때리지 않는다(하루 한 번만 재확인 — shouldRequestAutoRender).
           if (!renderTried.has(clip.id) && shouldRequestAutoRender(clip.autoRender, Date.now())) {
             renderTried.add(clip.id);
-            if (await attemptAutoRender(rule.id, clip, note, report)) {
+            if (await attemptAutoRender(rule.id, clip, note, report,
+              autoRenderChannel(rulePlatforms, clip.aspectRatio ?? clip.editorState?.aspect))) {
               const fresh = await getEntity<any>("clip", clip.id);
               if (fresh) Object.assign(clip, fresh);
             }
@@ -872,11 +907,16 @@ function autoUploadGate(platform: string): { send: boolean; recordOnly: boolean;
  * dedupeKey 로 테넌트당 직렬이고, (2) /export 는 revision 캐시가 있어 이미 렌더된
  * 클립의 재요청은 재인코딩 없이 즉시 돌아온다.
  */
-async function requestAutoRender(clipId: string): Promise<RenderOutcome> {
+async function requestAutoRender(clipId: string, channel?: string | null): Promise<RenderOutcome> {
   try {
     const { apiBase, internalHeaders } = await import("./factory.ts");
+    // 대상 채널의 렌더 프리셋 키(길이 캡). 없으면 종전대로 프리셋 없음.
+    // 프리셋은 **길이만** 바꾼다 — 종횡비는 라우트가 editorState.aspect 를 우선으로 읽고
+    // 자동배포는 그 값을 항상 명시 시드하므로 화면비는 그대로다(무회귀).
     const res = await fetch(`${apiBase()}/api/clips/${clipId}/export`, {
-      method: "POST", headers: await internalHeaders(),
+      method: "POST",
+      headers: { ...(await internalHeaders()), "content-type": "application/json" },
+      body: JSON.stringify(channel ? { channel } : {}),
     });
     if (res.ok) return { ok: true };
     // 라우트가 code/error/message 로 사유를 준다 — 이걸 안 읽으면 "리프레임 대기" 와
@@ -915,11 +955,12 @@ async function attemptAutoRender(
   clip: any,
   note: (ev: Parameters<typeof appendRuleRun>[0], dedupe?: Promise<boolean>) => Promise<void>,
   report: CycleReport,
+  channel?: string | null,
 ): Promise<boolean> {
   const clipId = String(clip.id);
   const now = Date.now();
   const prev = (clip.autoRender ?? null) as AutoRenderState | null;
-  const outcome = await requestAutoRender(clipId);
+  const outcome = await requestAutoRender(clipId, channel);
   const next = nextAutoRenderState(prev, outcome, now);
 
   if (JSON.stringify(prev ?? null) !== JSON.stringify(next ?? null)) {
