@@ -45,7 +45,8 @@ import {
   decidePublish, episodeAnalysisState, inActiveWindow, isRuleThumbnailMode, matchesMediaKind,
   nextAutoRenderState,
   overlapsExistingClip, planCycle,
-  ruleChannels, ruleIdleNote, rulePrograms, ruleWindow, selectCandidates, shouldRequestAutoRender,
+  ruleChannels, ruleIdleNote, rulePrograms, ruleWindow, scheduledSlotAt,
+  slotsReadyForQueue, selectCandidates, shouldRequestAutoRender,
   type AutoRenderState, type AutomationRule, type RenderOutcome, type RuleIdleObservation,
 } from "./automation.ts";
 import {
@@ -195,10 +196,16 @@ async function runAutomationCycleLocked(): Promise<CycleReport> {
     // 활동 시간창(KST · 기본 9~22) 밖에서는 아무것도 하지 않는다 — 다음 순방에 다시 본다.
     // 예전엔 여기서 로그가 **0줄**이라 하루 11~14시간이 통째로 비었다: 아침에 "밤새 올린
     // 회차가 왜 안 나갔지" 를 볼 때 순방이 안 돈 건지 워커가 죽은 건지 구분할 근거가 없었다.
+    const explicitSlots = ruleSlots(rule);
+    const slotQueueReady = explicitSlots.length > 0 && slotsReadyForQueue(explicitSlots);
     if (!inActiveWindow(rule)) {
-      obs.outOfWindow = true;
-      await idle();
-      continue;
+      // A slot may be queued two hours early even when that early queue time
+      // is outside the display activity window.
+      if (!slotQueueReady) {
+        obs.outOfWindow = true;
+        await idle();
+        continue;
+      }
     }
     // 발행 요일이 아닌 날도 마찬가지다 — 편성이 "월화수목금" 인데 토요일에 나가면 채널
     // 성격이 흐려진다. 요일 미지정 규칙은 매일이라 여기서 걸리지 않는다(기존 동작).
@@ -401,8 +408,11 @@ async function runAutomationCycleLocked(): Promise<CycleReport> {
       // 발행 시각 슬롯이 있으면 **지난 슬롯 수**가 지금까지 허용된 누적 발행 수다
       // (17:00·20:00·22:00 이면 20:30 에 2건). 슬롯이 없으면 예전처럼 하루 할당량.
       // 판정을 automation.ts 한 곳에 두어 화면의 월 예상 건수와 갈라지지 않게 한다.
-      const quota = allowedToday(rule);
-      let remaining = quota - (await publishedTodayKst(accountKey));
+      const slotted = ruleSlots(rule);
+      const publishedToday = await publishedTodayKst(accountKey);
+      // Explicit slots are queued two hours early; YouTube publishes at target time.
+      const quota = slotted.length ? slotsReadyForQueue(slotted) : allowedToday(rule);
+      let remaining = quota - publishedToday;
       if (remaining <= 0) {
         // 조용히 넘기면 "왜 오늘은 아무것도 안 나갔지" 를 설명할 근거가 로그에 없다.
         // 채널당 하루 한 줄만 남긴다(순방은 15분마다 돈다). 문구까지 맞춰 dedupe 하는 이유:
@@ -656,7 +666,10 @@ async function runAutomationCycleLocked(): Promise<CycleReport> {
           // (되돌리려면 채널에서 직접 내려야 하고 노출 이력은 남는다). 채널 규칙에 값이
           // 있으면 그걸 따르고, 없으면 **unlisted** 로 올린다 — 자동 경로의 기본값은
           // "링크 아는 사람만" 이어야 하고, 전체공개는 사람이 정하는 일이다.
-          ...(chan.platform === "youtube" ? youtubeReleasePlan(channelRule) : {}),
+          ...(chan.platform === "youtube" ? youtubeReleasePlan(
+            channelRule,
+            slotted.length ? scheduledSlotAt(slotted, publishedToday + (quota - remaining)) : null,
+          ) : {}),
           actor: `automation:${rule.id}`,
           // "factory"(외부 공장 API)와 구분되는 자동 순방 표식 — 화면의 자동/수동 배지가 읽는다.
           origin: "automation",
@@ -743,7 +756,7 @@ async function writeRun(
  * 공개 범위를 조용히 바꿔 버린다. 유예의 값은 처리 완료(HD 트랜스코딩·커스텀 썸네일)를
  * 첫 노출 전에 끝내는 데 있다 — 근거는 channel-rules.ts 의 publishDelayMin 주석.
  */
-function youtubeReleasePlan(channelRule: unknown): {
+function youtubeReleasePlan(channelRule: unknown, targetAt: Date | null = null): {
   privacy: "public" | "unlisted" | "private";
   scheduled?: boolean;
   reserveDate?: string;
@@ -753,6 +766,9 @@ function youtubeReleasePlan(channelRule: unknown): {
     ? (raw.privacy as "public" | "unlisted" | "private")
     : "unlisted";
   if (privacy !== "public") return { privacy };
+  if (targetAt && targetAt.getTime() > Date.now()) {
+    return { privacy, scheduled: true, reserveDate: targetAt.toISOString() };
+  }
   const delayMin = normalizePublishDelayMin(raw.publishDelayMin);
   if (delayMin <= 0) return { privacy };
   // 예약 시각은 **5분 격자로 올림**한다 — 유튜브 예약이 격자를 벗어난 시각을 거부·보정하는

@@ -220,9 +220,11 @@ export function ruleSlots(rule: Pick<AutomationRule, "slots">): string[] {
 
 /** KST 벽시계 분(0~1439). 슬롯 비교의 기준축. */
 export function kstMinutes(now = new Date()): number {
-  const [h, m] = new Intl.DateTimeFormat("en-GB", {
+  const parts = new Intl.DateTimeFormat("en-GB", {
     timeZone: "Asia/Seoul", hour: "2-digit", minute: "2-digit", hour12: false,
-  }).format(now).split(":").map(Number);
+  }).formatToParts(now);
+  const h = Number(parts.find((p) => p.type === "hour")?.value ?? 0) % 24;
+  const m = Number(parts.find((p) => p.type === "minute")?.value ?? 0);
   return h * 60 + m;
 }
 
@@ -233,6 +235,31 @@ export function slotsElapsed(slots: string[], now = new Date()): number {
     const [h, m] = s.split(":").map(Number);
     return h * 60 + m <= cur;
   }).length;
+}
+
+/** Queue explicit publish slots two hours ahead; YouTube publishes at target time. */
+export const AUTOMATION_QUEUE_LEAD_MIN = 120;
+
+export function slotsReadyForQueue(
+  slots: string[], now = new Date(), leadMin = AUTOMATION_QUEUE_LEAD_MIN,
+): number {
+  const cutoff = kstMinutes(now) + leadMin;
+  return slots.filter((s) => {
+    const [h, m] = s.split(":").map(Number);
+    return h * 60 + m <= cutoff;
+  }).length;
+}
+
+/** Return today's KST slot as an absolute Date for YouTube publishAt. */
+export function scheduledSlotAt(slots: string[], index: number, now = new Date()): Date | null {
+  const slot = slots[index];
+  if (!slot) return null;
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Seoul", year: "numeric", month: "2-digit", day: "2-digit",
+  }).formatToParts(now);
+  const date = ["year", "month", "day"].map((type) => parts.find((p) => p.type === type)?.value).join("-");
+  const at = new Date(`${date}T${slot}:00+09:00`);
+  return Number.isFinite(at.getTime()) ? at : null;
 }
 
 /**
@@ -288,9 +315,7 @@ export function monthlyPublishEstimate(
 export function inActiveWindow(rule: AutomationRule, now = new Date()): boolean {
   const { start, end } = ruleWindow(rule);
   if (start === end) return true;
-  const hour = Number(new Intl.DateTimeFormat("en-US", {
-    timeZone: "Asia/Seoul", hour: "numeric", hour12: false,
-  }).format(now));
+  const hour = Math.floor(kstMinutes(now) / 60);
   return start < end ? hour >= start && hour < end : hour >= start || hour < end;
 }
 
