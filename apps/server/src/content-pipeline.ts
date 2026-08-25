@@ -423,19 +423,26 @@ export async function runReframeCompare(input: ReframeCompareJobInput): Promise<
       start: clipStart, end: clipEnd, shots: shotTimes, layoutSwitches,
     });
     const frameNames: string[] = [];
+    // 5fps 리샘플 프록시는 실제 길이가 (end-start)보다 짧을 수 있다 — 끝 지점 시킹이 EOF 를
+    // 넘어가면 ffmpeg 는 exit 0 인 채 **프레임 0장**을 내고, 업로드가 ENOENT 로 터졌다
+    // (2026-08-25 프로덕션 E2E 실측). 시킹을 끝-0.4초로 조이고, 그래도 빈 출력이면 그 장만
+    // 건너뛴다 — contact sheet 는 보조물이라 한 장 때문에 잡 전체가 죽으면 안 된다.
+    const maxRel = Math.max(0, clipEnd - clipStart - 0.4);
     for (const t of times) {
       const name = contactFrameName(t);
       const framePath = path.join(work, name);
+      const rel = Math.min(Math.max(0, t - clipStart), maxRel);
       await runChild(
         "ffmpeg",
         [
           "-hide_banner", "-loglevel", "error", "-y",
-          "-ss", Math.max(0, t - clipStart).toFixed(3), "-i", proxyPath,
+          "-ss", rel.toFixed(3), "-i", proxyPath,
           "-frames:v", "1", "-q:v", "4", framePath,
         ],
         { label: "compare frame", timeoutMs: 60 * 1000 },
       );
-      frameNames.push(name);
+      if (fs.existsSync(framePath)) frameNames.push(name);
+      else console.warn(`[worker] reframe.compare ${clipId}: 프레임 ${name} 빈 출력 — 건너뜀 (t=${t.toFixed(2)})`);
     }
 
     const prefix = compareArtifactPrefix(mediaId, clipId, compareId);
