@@ -5468,6 +5468,9 @@ app.post("/api/automation/rules", async (c) => {
       const num = (k: string) => (typeof l[k] === "number" && Number.isFinite(l[k]) ? { [k]: l[k] } : {});
       const layout: Record<string, number | string | boolean> = {
         ...num("titleY"), ...num("channelIconY"), ...num("channelBoxY"), ...num("channelIconSize"),
+        // 제목 강조색(#RRGGBB) — 화면·api 타입·시드(factory titleAccent)는 다 있는데 여기만
+        // 빠져 있어서 색 변경이 조용히 유실됐다(2026-08-25 점검). 저장이 곧 반영의 관문이다.
+        ...(typeof l.titleColor === "string" && /^#[0-9a-fA-F]{6}$/.test(l.titleColor) ? { titleColor: l.titleColor } : {}),
         // 자막 — 위치·크기(숫자) · 색(#RRGGBB) · on/off(불리언).
         ...num("subtitleY"), ...num("subtitleSize"),
         ...(typeof l.subtitleColor === "string" && /^#[0-9a-fA-F]{6}$/.test(l.subtitleColor) ? { subtitleColor: l.subtitleColor } : {}),
