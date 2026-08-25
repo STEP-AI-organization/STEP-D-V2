@@ -109,7 +109,7 @@ export interface AutomationRule {
    * 오늘 누적 2건까지다. 순방이 5~15분마다 도는 구조 위에서 "정각에 한 건" 을 표현하는
    * 가장 단순한 방법이고, 순방이 한 번 밀려도 다음 순방이 밀린 몫을 따라잡는다.
    */
-  slots?: string[] | null;
+  slots?: RuleSlotInput[] | null;
   /** 채택 방향 — 수동 채택과 같은 값. 미지정 = 기존처럼 추천 kind 로 결정(하위호환). */
   orientation?: RuleOrientation | null;
   /** 'ai' = 세로형 채택 직후 AI 리프레임(clip.reframe) 큐잉. 세로형일 때만 의미. */
@@ -209,13 +209,42 @@ export function isPublishDay(rule: Pick<AutomationRule, "weekdays">, now = new D
   return days === null || days.includes(kstWeekday(now));
 }
 
-/** 슬롯 정규화 — "HH:MM" 만 남기고 시각순 중복 제거. 비면 빈 배열(= 슬롯 없음). */
-export function ruleSlots(rule: Pick<AutomationRule, "slots">): string[] {
+/**
+ * 슬롯 한 칸 — 시각 + **그 시각에 나가는 개수** (2026-08-25 사용자: "시간대 하나 = 하루
+ * 1개" 의존성 파괴 — 7시 2개·9시 3개처럼). 구형 저장분은 "HH:MM" 문자열(=1개)이다.
+ */
+export interface RuleSlot { time: string; count: number }
+/** 저장·수신 허용 형태 — 구형 문자열과 신형 객체 혼용. ruleSlots() 가 한 형태로 접는다. */
+export type RuleSlotInput = string | { time?: unknown; count?: unknown };
+
+/** 슬롯당 개수 상한 — 오타(300)가 채널을 도배하지 않게. 필요해지면 올린다. */
+export const SLOT_COUNT_MAX = 20;
+
+const SLOT_TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
+
+/**
+ * 슬롯 정규화 — 유효한 "HH:MM" 만 남기고 시각순 정렬. 같은 시각 중복은 **뒤 항목이 이긴다**
+ * (구형 중복 문자열도 자연히 한 칸 count 1 로 접힘 = 종전 동작). count 는 1..SLOT_COUNT_MAX.
+ */
+export function ruleSlots(rule: Pick<AutomationRule, "slots">): RuleSlot[] {
   const raw = Array.isArray(rule.slots) ? rule.slots : [];
-  const ok = raw
-    .map((s) => String(s).trim())
-    .filter((s) => /^([01]\d|2[0-3]):[0-5]\d$/.test(s));
-  return [...new Set(ok)].sort();
+  const byTime = new Map<string, number>();
+  for (const entry of raw) {
+    const time = String((typeof entry === "object" && entry !== null ? entry.time : entry) ?? "").trim();
+    if (!SLOT_TIME_RE.test(time)) continue;
+    const rawCount = typeof entry === "object" && entry !== null ? Number(entry.count) : 1;
+    const count = Number.isFinite(rawCount) && rawCount >= 1
+      ? Math.min(SLOT_COUNT_MAX, Math.floor(rawCount)) : 1;
+    byTime.set(time, count);
+  }
+  return [...byTime.entries()]
+    .map(([time, count]) => ({ time, count }))
+    .sort((a, b) => a.time.localeCompare(b.time));
+}
+
+/** 슬롯 표기 한 조각 — "07:00×2" (1개면 시각만). 서버 로그·웹 표시가 같은 모양을 쓴다. */
+export function slotLabel(s: RuleSlot): string {
+  return s.count > 1 ? `${s.time}×${s.count}` : s.time;
 }
 
 /** KST 벽시계 분(0~1439). 슬롯 비교의 기준축. */
@@ -228,37 +257,46 @@ export function kstMinutes(now = new Date()): number {
   return h * 60 + m;
 }
 
-/** 오늘 지금까지 지난 슬롯 수 — 그만큼이 오늘 이 시각까지 허용되는 누적 발행 수다. */
-export function slotsElapsed(slots: string[], now = new Date()): number {
+/** 오늘 지금까지 지난 슬롯의 개수 합 — 그만큼이 오늘 이 시각까지 허용되는 누적 발행 수다. */
+export function slotsElapsed(slots: RuleSlot[], now = new Date()): number {
   const cur = kstMinutes(now);
-  return slots.filter((s) => {
-    const [h, m] = s.split(":").map(Number);
-    return h * 60 + m <= cur;
-  }).length;
+  return slots.reduce((sum, s) => {
+    const [h, m] = s.time.split(":").map(Number);
+    return h * 60 + m <= cur ? sum + s.count : sum;
+  }, 0);
 }
 
 /** Queue explicit publish slots two hours ahead; YouTube publishes at target time. */
 export const AUTOMATION_QUEUE_LEAD_MIN = 120;
 
 export function slotsReadyForQueue(
-  slots: string[], now = new Date(), leadMin = AUTOMATION_QUEUE_LEAD_MIN,
+  slots: RuleSlot[], now = new Date(), leadMin = AUTOMATION_QUEUE_LEAD_MIN,
 ): number {
   const cutoff = kstMinutes(now) + leadMin;
-  return slots.filter((s) => {
-    const [h, m] = s.split(":").map(Number);
-    return h * 60 + m <= cutoff;
-  }).length;
+  return slots.reduce((sum, s) => {
+    const [h, m] = s.time.split(":").map(Number);
+    return h * 60 + m <= cutoff ? sum + s.count : sum;
+  }, 0);
 }
 
-/** Return today's KST slot as an absolute Date for YouTube publishAt. */
-export function scheduledSlotAt(slots: string[], index: number, now = new Date()): Date | null {
-  const slot = slots[index];
+/**
+ * Return today's KST slot as an absolute Date for YouTube publishAt.
+ * index 는 **발행 순번**이다(슬롯 칸 번호가 아니라) — 7시×2·9시×3 이면 순번 0·1 이 7시,
+ * 2~4 가 9시. 같은 시각 여러 건은 같은 publishAt 으로 나간다(유튜브 예약은 동시각 허용).
+ */
+export function scheduledSlotAt(slots: RuleSlot[], index: number, now = new Date()): Date | null {
+  let cum = 0;
+  let slot: RuleSlot | undefined;
+  for (const s of slots) {
+    cum += s.count;
+    if (index < cum) { slot = s; break; }
+  }
   if (!slot) return null;
   const parts = new Intl.DateTimeFormat("en-CA", {
     timeZone: "Asia/Seoul", year: "numeric", month: "2-digit", day: "2-digit",
   }).formatToParts(now);
   const date = ["year", "month", "day"].map((type) => parts.find((p) => p.type === type)?.value).join("-");
-  const at = new Date(`${date}T${slot}:00+09:00`);
+  const at = new Date(`${date}T${slot.time}:00+09:00`);
   return Number.isFinite(at.getTime()) ? at : null;
 }
 
@@ -274,10 +312,10 @@ export function allowedToday(rule: Pick<AutomationRule, "slots" | "dailyQuota">,
   return Number(rule.dailyQuota) > 0 ? Number(rule.dailyQuota) : 3;
 }
 
-/** 하루 발행 수 — 슬롯이 있으면 슬롯 수가 곧 하루 발행 수다. */
+/** 하루 발행 수 — 슬롯이 있으면 슬롯 개수의 **합**이 곧 하루 발행 수다. */
 export function perDayCount(rule: Pick<AutomationRule, "slots" | "dailyQuota">): number {
   const slots = ruleSlots(rule);
-  if (slots.length) return slots.length;
+  if (slots.length) return slots.reduce((sum, s) => sum + s.count, 0);
   return Number(rule.dailyQuota) > 0 ? Number(rule.dailyQuota) : 3;
 }
 

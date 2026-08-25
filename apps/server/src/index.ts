@@ -359,6 +359,7 @@ import {
   ruleCreatedNotice,
   ruleWeekdays,
   ruleSlots,
+  type RuleSlotInput,
   monthlyPublishEstimate,
 } from "./automation.ts";
 import {
@@ -5506,7 +5507,7 @@ app.post("/api/automation/rules", async (c) => {
     ...(Array.isArray(body.weekdays)
       ? { weekdays: ruleWeekdays({ weekdays: body.weekdays as number[] }) } : {}),
     ...(Array.isArray(body.slots)
-      ? { slots: ruleSlots({ slots: body.slots as string[] }) } : {}),
+      ? { slots: ruleSlots({ slots: body.slots as RuleSlotInput[] }) } : {}),
     // 채택 형태(0038) — 순방(automation-cycle)이 수동 채택과 같은 매핑으로 소비한다.
     ...(isRuleOrientation(body.orientation) ? { orientation: body.orientation } : {}),
     ...(isRuleReframe(body.reframe) ? { reframe: body.reframe } : {}),

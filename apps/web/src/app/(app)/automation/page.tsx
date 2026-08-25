@@ -24,7 +24,7 @@ import type { AdoptReframe } from "@/components/adopt-dialog";
 // 순방 판정과 **같은 함수**로 예상 건수를 낸다. 미러(aspect-presets 식 "바이트 동일" 주석)로
 // 두지 않는 이유: 이 숫자는 곧 청구 예상으로 읽히는데, 미러가 한 번 어긋나면 화면이 조용히
 // 거짓 약속을 하게 된다. automation.ts 는 import 0개짜리 순수 모듈이라 그대로 가져올 수 있다.
-import { formatWeekdays, monthlyPublishEstimate } from "@server-pure/automation";
+import { formatWeekdays, monthlyPublishEstimate, ruleSlots, slotLabel, type RuleSlot } from "@server-pure/automation";
 import {
   LayoutSliders,
   SUBTITLE_DEFAULTS,
@@ -295,7 +295,8 @@ export default function AutomationPage() {
   // 둘 다 **비우면 기존 동작**이다 — 요일 빈 값 = 매일, 시간 빈 값 = 할당량 방식.
   // 구 계획이 조용히 달라지지 않게 기본을 빈 배열로 둔다.
   const [weekdays, setWeekdays] = useState<number[]>([]);
-  const [slots, setSlots] = useState<string[]>([]);
+  // 슬롯 = {time, count} — 시각당 개수(2026-08-25 · "시간대 하나 = 1개" 의존성 파괴).
+  const [slots, setSlots] = useState<RuleSlot[]>([]);
   const [templateId, setTemplateId] = useState(""); // "" = 프로그램 장르 자동
   const [templates, setTemplates] = useState<FrameTemplate[]>([]);
   const [layout, setLayout] = useState<LayoutState | null>(null);
@@ -433,7 +434,8 @@ export default function AutomationPage() {
     setWin(r.window || "수시");
     setDailyQuota(r.dailyQuota ?? 3);
     setActiveStart(r.activeStart ?? 9); setActiveEnd(r.activeEnd ?? 22);
-    setWeekdays(r.weekdays ?? []); setSlots(r.slots ?? []);
+    // 구형(문자열)·신형({time,count}) 혼재를 서버와 같은 정규화로 접는다.
+    setWeekdays(r.weekdays ?? []); setSlots(ruleSlots({ slots: r.slots ?? [] }));
     setTemplateId(r.templateId ?? "");
     setReframe(r.reframe ?? "none"); // 구 계획(필드 없음)은 기본과 같은 "none"
     setSubtitles(r.layout?.subtitles !== false); // 구 계획(필드 없음)은 기본 ON
@@ -1230,7 +1232,9 @@ export default function AutomationPage() {
             <div className="mb-1 flex items-baseline justify-between">
               <span className="text-[10.5px]" style={{ color: "var(--sd-label)" }}>발행 시간 (KST)</span>
               <span className="text-[10.5px]" style={{ color: "var(--sd-fg-dim)" }}>
-                {slots.length ? `하루 ${slots.length}개 — 할당량 대신 이 시간에 맞춰 나갑니다` : "비우면 하루 할당량 방식 (고급 설정)"}
+                {slots.length
+                  ? `하루 ${slots.reduce((n, s) => n + s.count, 0)}개 — 할당량 대신 이 시간에 맞춰 나갑니다`
+                  : "비우면 하루 할당량 방식 (고급 설정)"}
               </span>
             </div>
             <SlotPicker slots={slots} onChange={setSlots} />
@@ -1397,7 +1401,7 @@ export default function AutomationPage() {
             </div>
             <p className="text-[10.5px]" style={{ color: "var(--sd-fg-dim)" }}>
               {slots.length
-                ? `${formatWeekdays(weekdays)} · ${slots.join(" ")} 에 맞춰 채널마다 하루 ${slots.length}개를 내보냅니다.`
+                ? `${formatWeekdays(weekdays)} · ${slots.map(slotLabel).join(" ")} 에 맞춰 채널마다 하루 ${slots.reduce((n, s) => n + s.count, 0)}개를 내보냅니다.`
                 : `${activeStart}시~${activeEnd}시(KST) 사이에만 배포하고, 채널마다 하루 ${dailyQuota}개를 채우면 다음 날까지 쉽니다.`}
             </p>
 
@@ -1695,13 +1699,13 @@ export default function AutomationPage() {
                     발행 계획: <strong style={{ color: "var(--sd-fg)" }}>{formatWeekdays(r.weekdays)}</strong>
                     {" · "}
                     <strong style={{ color: "var(--sd-fg)" }}>
-                      {r.slots?.length ? r.slots.join(" · ") : `${r.activeStart ?? 9}:00~${r.activeEnd ?? 22}:00`}
+                      {r.slots?.length ? ruleSlots(r).map(slotLabel).join(" · ") : `${r.activeStart ?? 9}:00~${r.activeEnd ?? 22}:00`}
                     </strong>
                     {" · "}
-                    {r.slots?.length ? `슬롯 ${r.slots.length}개` : `하루 ${r.dailyQuota ?? 3}개`}
+                    하루 {monthlyPublishEstimate(r).perDay}개
                   </span>
                   <span className="sd-tag">
-                    {r.slots?.length ? r.slots.join(" ") : `${r.activeStart ?? 9}~${r.activeEnd ?? 22}시`}
+                    {r.slots?.length ? ruleSlots(r).map(slotLabel).join(" ") : `${r.activeStart ?? 9}~${r.activeEnd ?? 22}시`}
                   </span>
                   <span className="sd-tag">월 예상 {monthlyPublishEstimate(r).perMonth}건</span>
                   <span className="sd-tag">{r.templateId ? `템플릿 ${r.templateId}` : "템플릿 자동"}</span>
@@ -1961,7 +1965,7 @@ function FlowStepHeader({ step, title, description }: { step: string; title: str
 function ScheduleSummary({ ready, weekdays, slots, dailyQuota, activeStart, activeEnd, channelCount }: {
   ready: boolean;
   weekdays: number[];
-  slots: string[];
+  slots: RuleSlot[];
   dailyQuota: number;
   activeStart: number;
   activeEnd: number;
@@ -1976,8 +1980,8 @@ function ScheduleSummary({ ready, weekdays, slots, dailyQuota, activeStart, acti
     );
   }
 
-  const perDay = slots.length || dailyQuota;
-  const timeLabel = slots.length ? slots.join(" · ") : `${activeStart}:00~${activeEnd}:00 사이 자동 확인`;
+  const perDay = slots.length ? slots.reduce((n, s) => n + s.count, 0) : dailyQuota;
+  const timeLabel = slots.length ? slots.map(slotLabel).join(" · ") : `${activeStart}:00~${activeEnd}:00 사이 자동 확인`;
   return (
     <div className="grid gap-2 sm:grid-cols-3">
       <div className="rounded-[6px] p-3" style={{ background: "var(--sd-card-sub)", borderLeft: "3px solid var(--sd-ok)" }}>
@@ -2012,16 +2016,21 @@ function chansOf(keys: string[]): { platform: string; accountId: string }[] {
 /**
  * 발행 시간 목록 — 중복은 막고 항상 정렬해 보여 준다(뒤섞이면 사람이 못 읽는다).
  *
- * 여기 넣은 개수가 곧 **하루 발행 수**다(서버 `perDayCount`). 그래서 개수를 따로 입력받지
- * 않는다 — 두 군데서 받으면 화면과 엔진이 다른 수를 믿는 상태가 된다.
+ * 시각마다 **개수**를 따로 둔다(2026-08-25 · 7시 2개·9시 3개). 하루 발행 수 = 개수 합이고,
+ * 그 합은 화면이 직접 곱하지 않고 서버와 같은 함수(perDayCount·monthlyPublishEstimate)가 낸다.
  */
-function SlotPicker({ slots, onChange }: { slots: string[]; onChange: (v: string[]) => void }) {
+function SlotPicker({ slots, onChange }: { slots: RuleSlot[]; onChange: (v: RuleSlot[]) => void }) {
   const [adding, setAdding] = useState(false);
   const [value, setValue] = useState("18:00");
 
+  const setCount = (time: string, count: number) =>
+    onChange(slots.map((s) => (s.time === time ? { ...s, count: Math.max(1, Math.min(20, count)) } : s)));
+
   function add() {
     if (!/^\d{2}:\d{2}$/.test(value)) return;
-    if (!slots.includes(value)) onChange([...slots, value].sort());
+    if (!slots.some((s) => s.time === value)) {
+      onChange([...slots, { time: value, count: 1 }].sort((a, b) => a.time.localeCompare(b.time)));
+    }
     setAdding(false);
   }
 
@@ -2029,13 +2038,21 @@ function SlotPicker({ slots, onChange }: { slots: string[]; onChange: (v: string
     <div className="flex flex-wrap items-center gap-1.5">
       {slots.map((s) => (
         <span
-          key={s}
+          key={s.time}
           className="inline-flex h-7 items-center gap-1 rounded-[5px] px-2 text-[11.5px]"
           style={{ border: "1px solid var(--sd-border)", color: "var(--sd-fg)" }}
         >
-          {s}
-          <button type="button" onClick={() => onChange(slots.filter((x) => x !== s))}
-            style={{ color: "var(--sd-fg-dim)" }}>×</button>
+          {s.time}
+          <button type="button" aria-label={`${s.time} 개수 줄이기`} disabled={s.count <= 1}
+            onClick={() => setCount(s.time, s.count - 1)}
+            className="px-0.5" style={{ color: "var(--sd-fg-dim)", opacity: s.count <= 1 ? 0.35 : 1 }}>−</button>
+          <span className="sd-mono">{s.count}개</span>
+          <button type="button" aria-label={`${s.time} 개수 늘리기`}
+            onClick={() => setCount(s.time, s.count + 1)}
+            className="px-0.5" style={{ color: "var(--sd-fg-dim)" }}>＋</button>
+          <button type="button" aria-label={`${s.time} 삭제`}
+            onClick={() => onChange(slots.filter((x) => x.time !== s.time))}
+            className="ml-0.5" style={{ color: "var(--sd-fg-dim)" }}>×</button>
         </span>
       ))}
       {adding ? (
@@ -2064,7 +2081,7 @@ function SlotPicker({ slots, onChange }: { slots: string[]; onChange: (v: string
  * 건수에 단가를 곱한 값이 곧 청구액이 아니다.
  */
 function PublishEstimate({ weekdays, slots, dailyQuota, channels }: {
-  weekdays: number[]; slots: string[]; dailyQuota: number;
+  weekdays: number[]; slots: RuleSlot[]; dailyQuota: number;
   channels: { platform: string; accountId: string }[];
 }) {
   // 채널 수 곱하기도 **서버 함수 안에서** 끝낸다 — 밖에서 한 번 더 곱하면 그 순간

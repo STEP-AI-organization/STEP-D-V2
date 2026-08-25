@@ -1029,7 +1029,8 @@ export interface AutomationRule {
    * 발행 시각 — KST "HH:MM". 하나라도 있으면 **하루 발행 수 = 이 개수**이고
    * `dailyQuota` 는 무시된다(서버 `perDayCount`). `null`·`[]` = 할당량 방식.
    */
-  slots?: string[] | null;
+  /** 발행 시간 슬롯 — 신형 {time,count}(시각당 개수 · 2026-08-25) · 구형 "HH:MM" 문자열(=1개). */
+  slots?: (string | { time: string; count: number })[] | null;
   /**
    * 채널별 오늘 게시 수 — key = "platform:accountId" (서버 확장분 · 옵셔널).
    * 구버전 서버는 안 내려준다 — 없으면 화면은 "오늘 N/한도" 줄을 통째로 숨긴다.
