@@ -72,6 +72,27 @@ describe("무편집 렌더 기본 프리셋", () => {
     assert.equal(state.titleLines[1].size * scale, 107);
     assert.equal(state.channelY, 82);
   });
+
+  it("규칙이 고른 템플릿은 시드 표에 없어도 버리지 않는다 — 새 캔바 템플릿이 조용히 무시되던 구멍", () => {
+    // 렌더는 editorState.templateId 로 자산 디렉토리를 직접 찾는다. 시드(색·위치)만 표준으로
+    // 폴백하면 되고, 사용자가 고른 이름 자체가 살아야 "넣은 템플릿이 나온다"(2026-08-25 점검).
+    const state = autoEditorState({
+      kind: "short", titleLine1: "제목",
+    }, "STEP-D", undefined, "canva-new-template") as any;
+    assert.equal(state.templateId, "canva-new-template");
+    assert.equal(state.channelY, 82); // 위치 시드는 broadcast-standard 폴백
+  });
+
+  it("강제 지정이 없으면 프로그램 기본 → 장르 자동 순서다", () => {
+    const state = autoEditorState({
+      kind: "short", titleLine1: "제목",
+    }, "STEP-D", { autoPublish: { templateId: "broadcast-clean" } }) as any;
+    assert.equal(state.templateId, "broadcast-clean");
+    const auto = autoEditorState({
+      kind: "short", titleLine1: "제목",
+    }, "STEP-D", { pipelineGenre: "drama" }) as any;
+    assert.equal(auto.templateId, "broadcast-drama");
+  });
 });
 
 describe("일일 상한", () => {

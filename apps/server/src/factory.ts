@@ -628,9 +628,14 @@ export function autoEditorState(
     (program as any)?.brandIconDataUrl ?? (program as any)?.posterImageDataUrl ?? "",
   ).trim();
   // 자동배포 화면에서 고른 템플릿(policy) > 프로그램 기본(autoPublish 설정) > 장르 자동.
-  const templateId = (forcedTemplateId && TEMPLATE_SEEDS[forcedTemplateId] ? forcedTemplateId : null)
-    ?? (TEMPLATE_SEEDS[String(program?.autoPublish?.templateId ?? "")] ? String(program.autoPublish.templateId) : null)
-    ?? pickTemplateId(program);
+  // ⚠️ 선택된 템플릿은 시드 표에 없어도 **버리지 않는다.** 예전엔 TEMPLATE_SEEDS(3종 하드코드)에
+  // 있는 것만 인정해서, 캔바에서 새 템플릿을 sync 하면 UI 목록에는 뜨는데(목록 = 자산 디렉토리
+  // 스캔) 여기서 조용히 장르 자동으로 폴백했다 — "넣었는데 다른 템플릿이 나오는" 잠복 구멍
+  // (2026-08-25 점검에서 발견). 렌더는 editorState.templateId 로 자산 디렉토리를 직접 찾으므로
+  // 이름만 살리면 되고, 시드(색·위치)는 아래에서 표준으로 폴백한다.
+  const forced = String(forcedTemplateId ?? "").trim();
+  const programDefault = String(program?.autoPublish?.templateId ?? "").trim();
+  const templateId = forced || programDefault || pickTemplateId(program);
   const seed = TEMPLATE_SEEDS[templateId] ?? TEMPLATE_SEEDS["broadcast-standard"];
   const aspect = forcedAspect || (rec.kind === "short" ? "9:16-crop-main" : "16:9");
   // factory 시드는 아직 구 설계 스테이지 px basis 이고 렌더 직전에 출력 px 로 정규화된다.
