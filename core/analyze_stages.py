@@ -247,6 +247,33 @@ def run_speaker_postproc(
     return refined
 
 
+def run_translate(
+    *,
+    refined: list,
+    out_dir: Path,
+    step: Callable[[str], None],
+    timed: Callable[[str, float], None],
+) -> list:
+    """외국어(중국어·영어 등) 세그먼트를 한국어 번역 "(…)" 으로 치환 — 외국인 출연자의
+    발화가 자막·훅·검색에 원어 그대로 흘러가는 것을 막는다(사용자 2026-08-25).
+    env RUN_TRANSLATE_KO=0 로 스킵. 감지는 결정론이라 외국어가 없으면 LLM 콜 0회.
+    실패해도 refined 원상태 유지(지금 동작과 동일한 방향의 degrade)."""
+    import os
+    if os.environ.get("RUN_TRANSLATE_KO", "1") == "0":
+        return refined
+    ts = time.time()
+    try:
+        from core.stt.translate import translate_segments
+        refined, n = translate_segments(refined)
+        if n:
+            step(f"  외국어 자막 한국어 번역: {n} 줄")
+            save_json(out_dir / "refined.json", refined)
+    except Exception as e:
+        step(f"  (외국어 번역 스킵: {str(e)[:120]})")
+    timed("translate", ts)
+    return refined
+
+
 
 def run_fast_mode(
     *,
@@ -270,6 +297,18 @@ def run_fast_mode(
     from core.recommend.recommend import recommend
 
     step("빠른 모드 — 자막 세그먼트로 추천 (시각 분석 스킵)")
+    # 외국어 자막 번역 — 전체 경로의 run_translate 와 같은 처리를 raw 세그먼트에 직접.
+    # (refined.json 체크포인트는 건드리지 않는다 — 빠른 모드가 전체 경로의 refine 스킵
+    # 판정을 오염시키지 않게.) 실패는 원문 유지.
+    import os as _os
+    if _os.environ.get("RUN_TRANSLATE_KO", "1") != "0":
+        try:
+            from core.stt.translate import translate_segments
+            segments, _n_tr = translate_segments(segments)
+            if _n_tr:
+                step(f"  외국어 자막 한국어 번역: {_n_tr} 줄")
+        except Exception as e:
+            step(f"  (외국어 번역 스킵: {str(e)[:120]})")
     scenes = scenes_from_transcript(segments)
     step(f"  {len(scenes)} 자막 장면")
     progress("recommend", 50, "쇼츠 추천 중 (빠른 모드)")

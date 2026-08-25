@@ -45,7 +45,8 @@ from core.analyze_utils import (
 # 스테이지 함수는 전부 analyze_stages 로. 여기는 orchestrator 만.
 from core.analyze_stages import (
     run_fast_mode, load_viewer_signals, index_search_segments, dump_usage,
-    run_stt, run_refine, run_chyron_per_seg, run_speaker_postproc, run_detect_genre,
+    run_stt, run_refine, run_chyron_per_seg, run_speaker_postproc, run_translate,
+    run_detect_genre,
     join_ppl, run_scenes, run_cast_timeline, run_timeline, run_narrative,
     run_shot_boundary, run_scene_type, run_beats, run_beat_signals, run_beat_annot,
     run_speaker_identity, run_recommend,
@@ -188,6 +189,12 @@ def analyze(
 
     # 2.5) speaker 후처리 — analyze_stages.run_speaker_postproc 로 이동
     refined = run_speaker_postproc(
+        refined=refined, out_dir=out_dir, step=step, timed=timed,
+    )
+
+    # 2.6) 외국어 자막 → 한국어 번역 "(…)" — 병합·rewrite 가 끝난 최종 텍스트에 대해 1회.
+    # 여기서 바꾸면 transcript 저장 → 번인 자막·훅·제목·검색까지 전부 한국어로 흐른다.
+    refined = run_translate(
         refined=refined, out_dir=out_dir, step=step, timed=timed,
     )
 

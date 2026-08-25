@@ -26,6 +26,8 @@ TEXT: str = os.environ.get("GEMINI_MODEL") or "gemini-2.5-flash"
 # ────────────────────────────────────────────────────────────
 STT: str = os.environ.get("GEMINI_STT_MODEL") or TEXT
 REFINE: str = os.environ.get("GEMINI_REFINE_MODEL") or TEXT
+# 외국어 자막 → 한국어 번역 (stt/translate.py). 텍스트 전용·소량이라 lite 로 내려도 된다.
+TRANSLATE: str = os.environ.get("GEMINI_TRANSLATE_MODEL") or TEXT
 NARRATIVE: str = os.environ.get("GEMINI_NARRATIVE_MODEL") or TEXT
 BEATS: str = os.environ.get("GEMINI_BEATS_MODEL") or TEXT
 # beat_annot(장면이해 본체·회당 최대 비전콜 소비처)만 저가 비전 모델로 분리 가능.
