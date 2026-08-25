@@ -73,7 +73,7 @@ export interface ChannelSpec {
  */
 export const CHANNEL_SPECS: Record<MetaChannel, ChannelSpec> = {
   youtube: {
-    label: "YouTube", titleMax: 100, descMax: 5000, descMin: 0, tagsMax: 15,
+    label: "YouTube", titleMax: 100, descMax: 600, descMin: 0, tagsMax: 15,
     // 제목에 프로그램 해시태그를 다는 게 유입의 축이다 (`… #프로그램 #서브 #쇼츠`).
     // 3 = 레퍼런스 모양(#프로그램 #서브 #쇼츠). #쇼츠 는 소스가 비어도 항상 보장된다(아래 참조).
     titleHashtags: 3,
