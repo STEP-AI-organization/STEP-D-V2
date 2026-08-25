@@ -1427,6 +1427,26 @@ export interface ChannelEligibility {
   blockedClipIds: string[];
 }
 
+export async function fetchChannelRules(): Promise<ChannelPublishTarget[]> {
+  const res = await fetch(`${API_BASE}/channel-rules`, { cache: "no-store" });
+  if (!res.ok) throw new ApiError(res.status, await errorMessageOf(res));
+  return (await res.json()).rules as ChannelPublishTarget[];
+}
+
+export async function saveChannelRule(
+  platform: string,
+  accountId: string,
+  patch: Partial<ChannelPublishTarget>,
+): Promise<ChannelPublishTarget> {
+  const res = await fetch(`${API_BASE}/channel-rules/${encodeURIComponent(platform)}/${encodeURIComponent(accountId)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(patch),
+  });
+  if (!res.ok) throw new ApiError(res.status, await errorMessageOf(res));
+  return (await res.json()).rule as ChannelPublishTarget;
+}
+
 /** 배포 모달용 — 이 미디어들을 각 채널에 보낼 수 있는지. 키는 `platform:accountId`. */
 export async function fetchChannelEligibility(
   clipIds: string[],

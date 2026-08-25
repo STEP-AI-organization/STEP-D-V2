@@ -8,6 +8,7 @@ import { Youtube } from "lucide-react";
 import { useEffect, useState } from "react";
 import type {
   YouTubeChannelInfo, MetaAccountInfo, InstagramAccountInfo, TikTokAccountInfo, NaverAccount,
+  ChannelPublishTarget,
 } from "@/lib/data/api";
 import {
   fetchYouTubeChannels,
@@ -26,6 +27,8 @@ import {
   getTikTokAuthUrl,
   deleteTikTokAccount,
   disconnectTikTokAccount,
+  fetchChannelRules,
+  saveChannelRule,
 } from "@/lib/data/api";
 import { NaverAccounts } from "@/components/publish/naver-accounts";
 import { ChannelAnalysis } from "@/components/channel-analysis";
@@ -79,6 +82,8 @@ export default function PublishChannelsPage() {
   const [metaAccounts, setMetaAccounts] = useState<MetaAccountInfo[]>([]);
   const [igAccounts, setIgAccounts] = useState<InstagramAccountInfo[]>([]);
   const [tiktokAccounts, setTiktokAccounts] = useState<TikTokAccountInfo[]>([]);
+  const [channelRules, setChannelRules] = useState<Record<string, ChannelPublishTarget>>({});
+  const [savingRule, setSavingRule] = useState<string | null>(null);
   // 네이버 계정은 아래 NaverAccounts 섹션이 소유한다. 여기서는 상단 카드의 숫자만 쓰려고
   // 사본을 받는다 — 두 곳에서 각자 fetch 하면 추가·삭제 후 숫자가 어긋난다.
   const [naverAccounts, setNaverAccounts] = useState<NaverAccount[]>([]);
@@ -91,19 +96,38 @@ export default function PublishChannelsPage() {
   const loadAll = async () => {
     const failed = { youtube: false, meta: false, ig: false, tiktok: false };
     try {
-      const [chs, ma, ig, tt] = await Promise.all([
+      const [chs, ma, ig, tt, rules] = await Promise.all([
         fetchYouTubeChannels().catch(() => { failed.youtube = true; return [] as YouTubeChannelInfo[]; }),
         fetchMetaAccounts().catch(() => { failed.meta = true; return [] as MetaAccountInfo[]; }),
         fetchInstagramAccounts().catch(() => { failed.ig = true; return [] as InstagramAccountInfo[]; }),
         fetchTikTokAccounts().catch(() => { failed.tiktok = true; return [] as TikTokAccountInfo[]; }),
+        fetchChannelRules().catch(() => [] as ChannelPublishTarget[]),
       ]);
       setChannels(chs);
       setMetaAccounts(ma);
       setIgAccounts(ig);
       setTiktokAccounts(tt);
+      setChannelRules(Object.fromEntries(rules.map((r) => [`${r.platform}:${r.accountId}`, r])));
       setLoadFailed(failed);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handlePrivacyChange = async (channelId: string, privacy: ChannelPublishTarget["privacy"]) => {
+    const key = `youtube:${channelId}`;
+    const current = channelRules[key];
+    setSavingRule(key);
+    try {
+      const rule = await saveChannelRule("youtube", channelId, {
+        ...(current ?? { label: channels.find((c) => c.channelId === channelId)?.channelName ?? channelId }),
+        privacy,
+      });
+      setChannelRules((prev) => ({ ...prev, [key]: rule }));
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "공개범위 저장에 실패했습니다.");
+    } finally {
+      setSavingRule(null);
     }
   };
 
@@ -750,6 +774,32 @@ export default function PublishChannelsPage() {
                     </button>
                   </div>
                 </div>
+
+                {ch.status === "active" && (() => {
+                  const rule = channelRules[`youtube:${ch.channelId}`];
+                  const privacy = rule?.privacy ?? "unlisted";
+                  const privacyLabel = privacy === "public" ? "전체 공개" : privacy === "private" ? "비공개" : "일부 공개";
+                  return (
+                    <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-md border border-border bg-muted/40 px-3 py-2.5">
+                      <div>
+                        <div className="text-xs font-medium text-foreground">자동배포 공개범위</div>
+                        <div className="mt-0.5 text-[11px] text-muted-foreground">
+                          현재 {privacyLabel} · 자동배포 규칙이 이 설정을 사용합니다.
+                        </div>
+                      </div>
+                      <select
+                        value={privacy}
+                        disabled={savingRule === `youtube:${ch.channelId}`}
+                        onChange={(e) => handlePrivacyChange(ch.channelId, e.target.value as ChannelPublishTarget["privacy"])}
+                        className="rounded-md border border-border bg-background px-2.5 py-1.5 text-xs text-foreground"
+                      >
+                        <option value="public">전체 공개</option>
+                        <option value="unlisted">일부 공개</option>
+                        <option value="private">비공개</option>
+                      </select>
+                    </div>
+                  );
+                })()}
 
                 <ChannelAnalysis channelId={ch.channelId} />
               </Card>
