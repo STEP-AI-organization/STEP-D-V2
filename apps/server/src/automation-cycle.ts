@@ -755,15 +755,15 @@ async function writeRun(
 /**
  * YouTube 공개 계획 — 공개 범위 + **공개 유예**를 dispatchPublish 입력으로 푼다.
  *
- * 폴백은 **public(다이렉트 배포)** 이다 — 2026-08-25 사용자 결정. 예전 폴백은 unlisted
- * ("전체공개는 사람이 정한다")였는데, 실사용에서 "게시됨이라고 떠서 채널 갔는데 아무것도
- * 없다"는 혼란만 만들었다 — unlisted 는 채널 페이지에 안 보인다. 사람 검토가 필요한
- * 계획은 **승인배포 모드**가 그 역할을 한다(공개 범위로 검수를 흉내내지 않는다).
- * 채널 규칙에 privacy 를 명시하면 그게 항상 이긴다(unlisted·private 운영도 가능).
+ * ⚠️ **공개 범위를 반드시 넘긴다.** 안 넘기면 워커가 "public" 으로 폴백해서, 방송사 회차에서
+ * 뽑은 클립이 사람 눈을 한 번도 안 거치고 전체공개로 나간다(되돌리려면 채널에서 직접 내려야
+ * 하고 노출 이력은 남는다). 채널 규칙에 값이 있으면 그걸 따르고, 없으면 **unlisted** 로
+ * 올린다 — 자동 경로의 기본값은 "링크 아는 사람만" 이어야 하고, 전체공개는 사람이 정한다.
  *
  * 공개 유예(publishDelayMin)는 **목표가 public 일 때만** 건다. 유튜브 `publishAt` 예약은
  * private 로 잡아뒀다가 **공개로 끝나므로**, unlisted/private 목표에 걸면 운영자가 정한
- * 공개 범위를 조용히 바꿔 버린다. 기본 유예도 0(다이렉트) — channel-rules.ts 주석 참고.
+ * 공개 범위를 조용히 바꿔 버린다. 유예의 값은 처리 완료(HD 트랜스코딩·커스텀 썸네일)를
+ * 첫 노출 전에 끝내는 데 있다 — 근거는 channel-rules.ts 의 publishDelayMin 주석.
  */
 function youtubeReleasePlan(channelRule: unknown, targetAt: Date | null = null): {
   privacy: "public" | "unlisted" | "private";
@@ -773,7 +773,7 @@ function youtubeReleasePlan(channelRule: unknown, targetAt: Date | null = null):
   const raw = (channelRule as { privacy?: unknown; publishDelayMin?: unknown } | null | undefined) ?? {};
   const privacy = (["public", "unlisted", "private"] as const).includes(raw.privacy as never)
     ? (raw.privacy as "public" | "unlisted" | "private")
-    : "public";
+    : "unlisted";
   if (privacy !== "public") return { privacy };
   if (targetAt && targetAt.getTime() > Date.now()) {
     return { privacy, scheduled: true, reserveDate: targetAt.toISOString() };
