@@ -47,7 +47,7 @@ function noticeHtml(n: AutoPublishNotice, url: string): string {
   return `
   <div style="font-family:'Apple SD Gothic Neo','Malgun Gothic',sans-serif;max-width:520px;margin:0 auto;color:#111;">
     <h2 style="font-size:17px;border-bottom:2px solid #111;padding-bottom:8px;">자동배포 ${n.publishAt ? "예약" : "완료"}</h2>
-    <p style="font-size:13px;line-height:1.6;">${n.publishAt ? "자동배포 규칙이 게시를 예약했습니다." : "자동배포 규칙이 영상을 게시했습니다."}</p>
+    <p style="font-size:13px;line-height:1.6;">${n.publishAt ? "자동배포 계획이 게시를 예약했습니다." : "자동배포 계획이 영상을 게시했습니다."}</p>
     <table style="font-size:13px;border-collapse:collapse;">
       ${program ? row("프로그램", program) : ""}
       ${row("제목", n.title)}
@@ -55,9 +55,6 @@ function noticeHtml(n: AutoPublishNotice, url: string): string {
       ${n.publishAt ? row("공개 예정", String(n.publishAt).replace("T", " ").slice(0, 16)) : ""}
       ${row("링크", `<a href="${url}">${url}</a>`)}
     </table>
-    <p style="font-size:11px;color:#888;line-height:1.6;margin-top:16px;">
-      이 알림은 자동배포 화면에 등록된 담당자 이메일로 발송됩니다 — 받지 않으려면 그 화면에서 이메일을 비워 주세요.
-    </p>
   </div>`;
 }
 
