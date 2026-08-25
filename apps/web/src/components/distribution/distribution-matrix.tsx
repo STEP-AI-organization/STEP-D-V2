@@ -141,6 +141,17 @@ function Cell({
   const d = clip.distributions?.find((x) => x.channel === channel && x.status !== "none");
   // 배지는 상태만 보여준다 — origin(수동/자동) 접미는 붙이지 않는다(2026-08-18).
 
+  // 채널별 영상 링크 — 서버가 기록해 둔 것만 쓴다(추측 조립 금지). YouTube 는 videoId 로
+  // 조립, 네이버는 워커가 남긴 url, Instagram·Facebook 은 Graph permalink. TikTok 은
+  // 받은함 드래프트라 담당자가 앱에서 게시하기 전까지 공개 URL 이 존재하지 않는다.
+  const link = d
+    ? channel === "youtube" && d.externalId
+      ? `https://www.youtube.com/watch?v=${d.externalId}`
+      : (typeof d.url === "string" && d.url.startsWith("http") && d.url)
+        || (typeof d.permalink === "string" && d.permalink.startsWith("http") && d.permalink)
+        || null
+    : null;
+
   // 아직 이 채널로 안 나감 — 누르면 배포.
   if (!d) {
     return (
@@ -202,25 +213,22 @@ function Cell({
         style={{ background: tone.bg, color: tone.fg }}
         title={title}
       >
-        ● {label}{channel === "youtube" && d.externalId ? " ↗" : ""}
+        ● {label}{link ? " ↗" : ""}
       </span>
     );
-    return channel === "youtube" && d.externalId ? (
-      <a
-        href={`https://www.youtube.com/watch?v=${d.externalId}`}
-        target="_blank"
-        rel="noreferrer"
-        className="mx-auto inline-flex hover:brightness-95"
-      >
+    return link ? (
+      <a href={link} target="_blank" rel="noreferrer" className="mx-auto inline-flex hover:brightness-95">
         {chip}
       </a>
     ) : chip;
   }
 
-  if (d.status === "published" && channel === "youtube" && d.externalId) {
+  // 게시됨 + 링크 있음 → 영상 열기. 유튜브만이 아니라 네이버·인스타·페북도 같은 대접
+  // (2026-08-25 사용자 "가능하면 다" — 서버는 이미 다 기록하고 있었고 화면만 버리고 있었다).
+  if (d.status === "published" && link) {
     return (
       <a
-        href={`https://www.youtube.com/watch?v=${d.externalId}`}
+        href={link}
         target="_blank"
         rel="noreferrer"
         className="mx-auto inline-flex items-center gap-1 rounded-[4px] px-1.5 py-0.5 text-[10.5px] font-medium hover:brightness-95"
@@ -236,7 +244,11 @@ function Cell({
     <span
       className="mx-auto inline-flex items-center gap-1 rounded-[4px] px-1.5 py-0.5 text-[10.5px] font-medium"
       style={{ background: s.bg, color: s.fg }}
-      title={d.reserveDate ? `예약 ${d.reserveDate}` : s.label}
+      title={
+        d.reserveDate ? `예약 ${d.reserveDate}`
+          : channel === "tiktok" ? `${s.label} — 받은함 드래프트는 담당자가 TikTok 앱에서 게시해야 공개 URL 이 생깁니다`
+          : s.label
+      }
     >
       ● {s.label}
     </span>

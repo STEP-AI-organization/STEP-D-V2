@@ -373,6 +373,10 @@ export interface DistributionState {
   externalId?: string;
   /** YouTube: the connected channel this clip was (or is being) uploaded to. */
   youtubeChannelId?: string;
+  /** 네이버: 게시 완료 후 워커가 기록한 클립/영상 URL. */
+  url?: string;
+  /** Instagram·Facebook: Graph 가 준 게시물 permalink (예약분은 공개 전까지 없을 수 있다). */
+  permalink?: string;
 }
 
 // ── Inbox / action-queue item (home screen) ──────────────────────────────────────
