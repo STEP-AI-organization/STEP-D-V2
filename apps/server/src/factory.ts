@@ -566,9 +566,12 @@ const TEMPLATE_SEEDS: Record<string, {
   iconY?: number; boxY?: number;
 }> = {
   // 표준 (2026-08-12 확정 · 나는 SOLO 쇼츠 레퍼런스): 청록 훅 + 프로그램 로고 + 방영시간 박스
+  // iconY 76·boxY 86.5 (2026-08-25): 구값 68·79.5 는 자막 기본 구간(하단 26% = 화면 69~74%,
+  // 로고 높이 7.8%)과 로고가 겹쳤다 — ENA 실사용 보고. 드라마 시드의 간격(자막→로고 2~3%p,
+  // 로고→박스 ~2.7%p)을 그대로 미러. 웹 TEMPLATE_SEED_UI·aena 미러도 같이 바꿔야 한다.
   "broadcast-standard": {
     accent: "#40E0E0", titleY: 11, bottom: "logo-box",
-    channelY: 82, iconShape: "square", iconSize: 50, iconY: 68, boxY: 79.5,
+    channelY: 82, iconShape: "square", iconSize: 50, iconY: 76, boxY: 86.5,
   },
   // 드라마: 번인 자막이 없어 확대 크롭(fit cover)이 산다 — 띠가 좁아 위치가 다르다
   "broadcast-drama": {

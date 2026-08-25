@@ -4723,7 +4723,7 @@ function buildEditorAss(
     // BorderStyle=3(박스)이고 박스 색은 인라인 \3c 로 지정한다.
     const boxText = String((es as any).channelBoxText ?? "").trim();
     if (es.showChannel && boxText) {
-      const boxY = Math.round(((Number((es as any).channelBoxY) || 79.5) / 100) * H);
+      const boxY = Math.round(((Number((es as any).channelBoxY) || 86.5) / 100) * H);
       const boxColor = hexToAss(String((es as any).channelBoxColor || "#3D7BD9"));
       const fs = assFs(22 * scale);
       pushDecor(0, durSec, (start, finish) =>
