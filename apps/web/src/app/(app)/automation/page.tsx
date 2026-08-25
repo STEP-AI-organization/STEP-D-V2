@@ -1672,6 +1672,15 @@ export default function AutomationPage() {
                   </span>
                   <span className="sd-tag">하루 {monthlyPublishEstimate(r).perDay}개/채널</span>
                   <span className="sd-tag">{formatWeekdays(r.weekdays)}</span>
+                  <span className="basis-full text-[11px]" style={{ color: "var(--sd-fg-dim)" }}>
+                    발행 계획: <strong style={{ color: "var(--sd-fg)" }}>{formatWeekdays(r.weekdays)}</strong>
+                    {" · "}
+                    <strong style={{ color: "var(--sd-fg)" }}>
+                      {r.slots?.length ? r.slots.join(" · ") : `${r.activeStart ?? 9}:00~${r.activeEnd ?? 22}:00`}
+                    </strong>
+                    {" · "}
+                    {r.slots?.length ? `슬롯 ${r.slots.length}개` : `하루 ${r.dailyQuota ?? 3}개`}
+                  </span>
                   <span className="sd-tag">
                     {r.slots?.length ? r.slots.join(" ") : `${r.activeStart ?? 9}~${r.activeEnd ?? 22}시`}
                   </span>
@@ -1690,6 +1699,21 @@ export default function AutomationPage() {
                     })}
 
                   <div className="ml-auto flex gap-2">
+                    <button
+                      type="button"
+                      className="sd-btn"
+                      onClick={() => {
+                        prefilledFor.current = null;
+                        const nextProgram = pids[0] ?? "";
+                        // Re-selecting the same program must still reload the
+                        // saved rule values into the editor.
+                        setSelProgram("");
+                        window.setTimeout(() => setSelProgram(nextProgram), 0);
+                        document.getElementById("automation-program")?.scrollIntoView({ behavior: "smooth", block: "start" });
+                      }}
+                    >
+                      편집
+                    </button>
                     <button
                       type="button"
                       className="sd-btn"
