@@ -436,12 +436,19 @@ async function runAutomationCycleLocked(): Promise<CycleReport> {
 
       // 채널 규칙이 없어도 배포는 가능해야 한다 (사용자 결정 2026-08-12) — 규칙은
       // 제한을 더하는 장치지 전제조건이 아니다. 없으면 전부 허용 기본값.
+      //
+      // ⚠️ 합성 폴백의 privacy 는 "unlisted" 다 — youtubeReleasePlan 의 문서화된 기본값
+      // ("자동 경로의 기본값은 '링크 아는 사람만', 전체공개는 사람이 정한다")과 같게.
+      // 예전엔 여기만 "private" 라서, 규칙 행이 아예 없는 채널은 업로드 성공 + 고객사
+      // 화면 '게시됨' 인데 실제로는 소유자 외 아무도 못 보는 비공개로 올라갔다
+      // (2026-08-25 aena 연동 감사에서 발견). private 는 유효값이라 releasePlan 의
+      // unlisted 폴백 분기가 발동하지 않아 이 한 줄이 곧 최종 공개범위였다.
       const channelRule = ((await getChannelRule(chan.platform, chan.accountId)) as unknown as ChannelRule | null)
         ?? ({
           platform: chan.platform, accountId: chan.accountId, label: chan.accountId,
           role: "main", maxSec: null, aspect: "any",
           titlePrefix: "", hashtagTemplate: "", tonePreset: "",
-          privacy: "private", scheduleWindow: "", enabled: true,
+          privacy: "unlisted", scheduleWindow: "", enabled: true,
         } as unknown as ChannelRule);
 
       for (const clip of mine) {

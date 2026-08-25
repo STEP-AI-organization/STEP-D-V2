@@ -1108,6 +1108,9 @@ async function handleYoutubeReconcile(_job: Job): Promise<void> {
             ...fresh,
             distributions: upsertDistribution(fresh.distributions, "youtube", {
               status: "published", externalId: b.videoId, youtubeChannelId: channelId,
+              // 공개 확정 시각·공개범위 — 고객사 화면 정렬·표기용(2026-08-25 aena 감사).
+              // upsertDistribution 은 merge 라 기존 title·reserveDate 는 보존된다.
+              publishedAt: Date.now(), privacy: "public",
             }),
           });
           confirmed += 1;
@@ -2359,7 +2362,12 @@ async function runDistributionPublish(job: Job): Promise<void> {
         const fresh = (await getEntity<any>("clip", clipId)) ?? clip;
         const distributions = upsertDistribution(fresh.distributions, "youtube", {
           status: finalStatus, externalId: videoId, youtubeChannelId: channelId, error: undefined,
-          ...(publishAt ? { reserveDate: publishAt } : {}),
+          // 고객사 화면(aena)이 "무슨 제목으로·언제·어떤 공개범위로 나갔나"를 배포 행만 보고
+          // 말할 수 있게 기록한다 — clip.title 은 내부 원제라 실제 업로드 제목(channelMeta)과
+          // 다르다(2026-08-25 aena 연동 감사). 타 채널(naver·IG·FB·TikTok)은 이미
+          // publishedAt 을 기록하고 있었는데 유튜브만 빠져 있었다.
+          title: meta.title, privacy,
+          ...(publishAt ? { reserveDate: publishAt } : { publishedAt: Date.now() }),
         });
         await putEntity("clip", clipId, {
           ...fresh, status: "published", publishedVideoId: videoId, distributions,

@@ -194,6 +194,9 @@ export const API_KEY_ROUTES: RouteRule[] = [
   { method: "POST", path: /^\/api\/automation\/pause$/, scope: "factory:write" },
   { method: "POST", path: /^\/api\/automation\/holds\/release$/, scope: "factory:write" },
   { method: "POST", path: /^\/api\/automation\/run$/, scope: "factory:write" },
+  // 실패 배포 재시도 — 순방은 실패 행을 자동 재시도하지 않으므로(F4-4) 고객사 화면(aena)이
+  // 사람 재시도 버튼을 달 수 있어야 한다(2026-08-25 감사: 토큰 재연결 후 복구 수단 부재).
+  { method: "POST", path: /^\/api\/distributions\/retry$/, scope: "factory:write" },
   // 외부 자동배포 콘솔 — 완료 알림 담당자 저장 (AENA 연동)
   { method: "POST", path: /^\/api\/automation\/notify-email$/, scope: "factory:write" },
   { method: "GET", path: /^\/api\/shorts-templates$/, scope: "factory:read" },
