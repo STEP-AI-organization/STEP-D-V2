@@ -269,6 +269,13 @@ export function slotsElapsed(slots: RuleSlot[], now = new Date()): number {
 /** Queue explicit publish slots two hours ahead; YouTube publishes at target time. */
 export const AUTOMATION_QUEUE_LEAD_MIN = 120;
 
+/**
+ * 순방 한 틱의 게시 상한 — 엔진 정지 후 복구 시 놓친 슬롯 몫이 한 번에 몰리는
+ * 연속 게시 폭탄을 페이스로 바꾼다(몫은 소멸하지 않고 다음 틱이 이어간다).
+ * 정상 운영(2시간 선행 큐잉)에서는 이 상한이 보일 일이 없다.
+ */
+export const AUTOMATION_MAX_PUBLISH_PER_TICK = 3;
+
 export function slotsReadyForQueue(
   slots: RuleSlot[], now = new Date(), leadMin = AUTOMATION_QUEUE_LEAD_MIN,
 ): number {

@@ -46,7 +46,7 @@ import {
   nextAutoRenderState,
   overlapsExistingClip, planCycle,
   ruleChannels, ruleIdleNote, rulePrograms, ruleWindow, scheduledSlotAt,
-  slotsReadyForQueue, selectCandidates, shouldRequestAutoRender,
+  slotsReadyForQueue, selectCandidates, shouldRequestAutoRender, AUTOMATION_MAX_PUBLISH_PER_TICK,
   type AutoRenderState, type AutomationRule, type RenderOutcome, type RuleIdleObservation,
 } from "./automation.ts";
 import {
@@ -415,6 +415,11 @@ async function runAutomationCycleLocked(): Promise<CycleReport> {
       // Explicit slots are queued two hours early; YouTube publishes at target time.
       const quota = slotted.length ? slotsReadyForQueue(slotted) : allowedToday(rule);
       let remaining = quota - publishedToday;
+      // 순방 한 번의 게시 상한 — 엔진이 몇 시간 죽었다 살아나면 놓친 슬롯 몫이 한 번에
+      // 몰려 연속 게시 폭탄이 된다(2026-08-25 전면 체크 major). 정상 운영에서는 큐잉이
+      // 슬롯보다 2시간 앞서므로 이 상한이 보일 일이 없고(다음 순방이 이어받음), 복구
+      // 직후에만 틱당 N건으로 페이스가 잡힌다. 몫은 소멸하지 않는다 — 다음 틱이 이어간다.
+      remaining = Math.min(remaining, AUTOMATION_MAX_PUBLISH_PER_TICK);
       if (remaining <= 0) {
         // 조용히 넘기면 "왜 오늘은 아무것도 안 나갔지" 를 설명할 근거가 로그에 없다.
         // 채널당 하루 한 줄만 남긴다(순방은 15분마다 돈다). 문구까지 맞춰 dedupe 하는 이유:
@@ -683,6 +688,14 @@ async function runAutomationCycleLocked(): Promise<CycleReport> {
             channelRule,
             slotted.length ? scheduledSlotAt(slotted, quota - remaining) : null,
           ) : {}),
+          // 유튜브 외 채널도 슬롯 시각을 싣는다 — dispatch 가 채널별 예약 수단(네이버
+          // publishAt · TikTok/IG 잡 지연 · FB 네이티브 예약)으로 풀어낸다. 안 실으면
+          // 이 채널들에선 슬롯이 '최대 2시간 이른 즉시 게시'였다(전면 체크 major).
+          ...(chan.platform !== "youtube" && slotted.length ? (() => {
+            const at = scheduledSlotAt(slotted, quota - remaining);
+            return at && at.getTime() > Date.now()
+              ? { scheduled: true, reserveDate: at.toISOString() } : {};
+          })() : {}),
           actor: `automation:${rule.id}`,
           // "factory"(외부 공장 API)와 구분되는 자동 순방 표식 — 화면의 자동/수동 배지가 읽는다.
           origin: "automation",
@@ -778,7 +791,16 @@ function youtubeReleasePlan(channelRule: unknown, targetAt: Date | null = null):
   const privacy = (["public", "unlisted", "private"] as const).includes(raw.privacy as never)
     ? (raw.privacy as "public" | "unlisted" | "private")
     : "unlisted";
-  if (privacy !== "public") return { privacy };
+  // 비-public 도 **슬롯 시각을 버리지 않는다** — 예전엔 여기서 즉시 반환해, 채널 규칙이
+  // 없는(기본 unlisted) 계획의 슬롯이 발행 시각으로 전혀 작동하지 않고 큐잉 시점(슬롯
+  // 최대 2시간 전, 활동시간창 밖 포함)에 그대로 올라갔다(2026-08-25 전면 체크 major).
+  // dispatch 가 비-public 예약을 유튜브 publishAt(공개 전환 예약)이 아니라 **잡 지연**으로
+  // 풀므로, 공개 범위는 그대로 두고 업로드 시각만 슬롯에 맞는다.
+  if (privacy !== "public") {
+    return targetAt && targetAt.getTime() > Date.now()
+      ? { privacy, scheduled: true, reserveDate: targetAt.toISOString() }
+      : { privacy };
+  }
   if (targetAt && targetAt.getTime() > Date.now()) {
     return { privacy, scheduled: true, reserveDate: targetAt.toISOString() };
   }

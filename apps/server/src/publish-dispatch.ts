@@ -275,15 +275,22 @@ export async function dispatchPublish(input: PublishInput): Promise<PublishOutco
       queued.push(clipId);
     } else if (mode === "upload") {
       // ⚠️ 배포 큐에 넣는 **유일한 지점**. 여기 밖에서 enqueue 하면 게이트를 우회하게 된다.
+      // 예약의 수단이 공개 범위에 따라 갈린다(2026-08-25 전면 체크):
+      //  - public: 유튜브 네이티브 publishAt — private 로 잡아뒀다가 그 시각에 **공개**된다.
+      //  - unlisted/private: publishAt 을 걸면 운영자가 정한 공개 범위가 조용히 public 으로
+      //    바뀐다(youtubeReleasePlan 주석의 그 메커니즘). 대신 **잡 자체를 슬롯 시각까지
+      //    지연**(TikTok/IG 패턴)해 업로드 시각만 맞추고 공개 범위는 그대로 둔다.
+      const nativeSchedule = input.scheduled && input.privacy === "public";
       await enqueue("distribution.publish", {
         clipId,
         channelId: input.youtubeChannelId,
         privacy: input.privacy,
         // 예약은 미래 시각으로 파싱될 때만 효력이 있다. 정규화된 문자열을 넘긴다 —
         // 워커의 futurePublishAt(Date.parse)이 KST 오프셋을 그대로 읽는다.
-        publishAt: input.scheduled ? reserveDate : undefined,
+        publishAt: nativeSchedule ? reserveDate : undefined,
       }, {
         dedupeKey: `distribution.publish:${clipId}:${input.youtubeChannelId ?? "-"}`,
+        ...(input.scheduled && !nativeSchedule ? scheduleDelay(input.scheduled, reserveDate) : {}),
       });
       queued.push(clipId);
     } else {

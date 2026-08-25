@@ -225,17 +225,27 @@ describe("공개 유예 (publishDelayMin)", () => {
     assert.equal(nextPublishSlot(exact).toISOString(), "2026-08-20T15:40:00.000Z");
   });
 
-  it("순방이 예약을 거는 조건 — public 일 때만, 그리고 유예가 0 이 아닐 때만", () => {
+  it("순방 예약 계약 — 비-public 도 슬롯 시각을 보존하고, publishAt(공개 전환)은 public 에만", () => {
     const src = fs.readFileSync(path.join(SRC_DIR, "automation-cycle.ts"), "utf-8");
     // ⚠️ `\n\}` 만으로 끊으면 **반환 타입 객체**가 `\n} {` 로 끝나 시그니처에서 잘린다 —
     //    본문 단언이 전부 헛돈다. 줄 끝까지(`\n}\n`) 봐야 함수 전체가 잡힌다.
     const fn = src.match(/function youtubeReleasePlan[\s\S]*?\n\}\r?\n/)?.[0] ?? "";
     assert.ok(fn, "youtubeReleasePlan 을 못 찾았다");
-    assert.match(fn, /if \(privacy !== "public"\) return \{ privacy \};/,
-      "unlisted·private 에 예약을 걸면 운영자가 정한 공개 범위가 전체공개로 뒤집힌다");
+    // 비-public 도 targetAt(슬롯 시각)을 버리지 않는다 — 버리면 채널 규칙 없는(기본
+    // unlisted) 계획의 슬롯이 발행 시각으로 작동하지 않고 큐잉 시점(슬롯 최대 2시간 전)에
+    // 그대로 올라간다(2026-08-25 전면 체크 major). 공개 범위 보호는 dispatch 가 맡는다.
+    assert.match(fn, /if \(privacy !== "public"\) \{/, "비-public 분기가 사라졌다");
     assert.match(fn, /if \(delayMin <= 0\) return \{ privacy \};/, "0 분이면 예약 없이 즉시여야 한다");
     // 값이 없을 때의 폴백은 unlisted — 자동 경로가 실수로 전체공개되지 않는 방향.
     assert.match(fn, /: "unlisted";/, "공개 범위 폴백이 unlisted 가 아니다 — 실수로 공개되는 방향이 된다");
+    // 공개 범위 뒤집힘 방지의 정본은 dispatch — 유튜브 네이티브 publishAt(private 로
+    // 잡았다가 그 시각에 **공개**로 끝남)은 public 목표에만 걸고, 비-public 예약은
+    // 잡 지연(scheduleDelay)으로 풀어 업로드 시각만 맞춘다.
+    const dispatch = fs.readFileSync(path.join(SRC_DIR, "publish-dispatch.ts"), "utf-8");
+    assert.match(dispatch, /nativeSchedule = input\.scheduled && input\.privacy === "public"/,
+      "publishAt 이 public 목표에만 걸린다는 보증이 사라졌다");
+    assert.match(dispatch, /publishAt: nativeSchedule \? reserveDate : undefined/,
+      "비-public 에 publishAt 을 걸면 운영자가 정한 공개 범위가 전체공개로 뒤집힌다");
   });
 
   it("예약 시각은 오프셋이 박힌 ISO 로 넘긴다 (KST 해석 여지 없이)", () => {
