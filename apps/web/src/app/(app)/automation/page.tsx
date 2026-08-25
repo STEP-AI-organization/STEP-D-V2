@@ -1172,6 +1172,30 @@ export default function AutomationPage() {
           </div>
         </div>
 
+        {/* 미디어 종류 — 숏폼만/클립만/둘 다. 배선은 원래 있었지만(rule.mediaKind →
+            순방 matchesMediaKind 필터) 고급 설정 select 에 묻혀 있었다(사용자 2026-08-25:
+            "진짜로 배선" — 보이게 꺼내는 게 배선의 완성이다). */}
+        <div>
+          <div className="mb-1 text-[10.5px]" style={{ color: "var(--sd-label)" }}>어떤 영상을 내보낼까</div>
+          <div className="grid gap-2 sm:grid-cols-3">
+            <GateCard
+              on={mediaKind === "short"} onClick={() => setMediaKind("short")}
+              title="숏폼만"
+              desc="40~90초 세로 쇼츠만 자동 채택·게시합니다."
+            />
+            <GateCard
+              on={mediaKind === "clip"} onClick={() => setMediaKind("clip")}
+              title="클립만"
+              desc="3~15분 가로 클립만 자동 채택·게시합니다."
+            />
+            <GateCard
+              on={mediaKind === "both"} onClick={() => setMediaKind("both")}
+              title="둘 다"
+              desc="숏폼과 클립을 모두 자동 채택·게시합니다."
+            />
+          </div>
+        </div>
+
         {/* 발행 계획(요일·시간) — 반자동 운영의 핵심 조작이라 고급 설정에서 승격(지시 2026-08-24).
             판정은 서버 순방과 같은 순수 함수(isPublishDay·slotsElapsed)가 하고, 여기는 값만 편집한다. */}
         <div className="grid gap-2.5 sm:grid-cols-2">
@@ -1304,18 +1328,12 @@ export default function AutomationPage() {
         {showAdvanced && (
           <div className="flex flex-col gap-2.5 rounded-[5px] p-3"
             style={{ background: "var(--sd-card-sub)", border: "1px solid var(--sd-border)" }}>
-            <div className="grid grid-cols-2 gap-2">
-              <select value={mediaKind} onChange={(e) => setMediaKind(e.target.value as RuleMediaKind)} className="sd-input">
-                {(Object.keys(KIND_LABEL) as RuleMediaKind[]).map((k) => (
-                  <option key={k} value={k}>{KIND_LABEL[k]}</option>
-                ))}
-              </select>
-              <select value={criterion} onChange={(e) => setCriterion(e.target.value as RuleCriterion)} className="sd-input">
-                {(Object.keys(CRIT_LABEL) as RuleCriterion[]).map((k) => (
-                  <option key={k} value={k}>{CRIT_LABEL[k]}</option>
-                ))}
-              </select>
-            </div>
+            {/* 미디어 종류(숏폼/클립/둘다)는 본문 "어떤 영상을 내보낼까" 카드로 승격 — 여기선 점수 기준만. */}
+            <select value={criterion} onChange={(e) => setCriterion(e.target.value as RuleCriterion)} className="sd-input">
+              {(Object.keys(CRIT_LABEL) as RuleCriterion[]).map((k) => (
+                <option key={k} value={k}>{CRIT_LABEL[k]}</option>
+              ))}
+            </select>
 
             {/* AI 리프레임 — 수동 채택 다이얼로그(adopt-dialog)와 같은 선택지·라벨.
                 숏폼(세로) 전용 옵션이다: 클립(가로)은 크롭이 없고, "둘 다"는 방향이 추천마다
