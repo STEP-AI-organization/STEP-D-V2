@@ -53,11 +53,16 @@ export function TemplatePreview({ template, accent, layout, frameSrc, subtitlesO
   width?: number;
 }) {
   const s = width / BASE_W;
+  const boxH = width * 16 / 9; // 9:16 캔버스 높이(px) — 모든 글자 크기의 기준축
   const video = template?.video ?? { x: 0, y: 34.2, w: 100, h: 31.7 };
   const iconPct = (layout.channelIconSize * 3 / 1920) * 100; // px(에디터) → 출력높이 → %
-  // 자막 글자 크기 = 화면 높이의 subtitleSize%. 9:16 이라 높이 = width·16/9 (px). 서버 렌더의
-  // fs = H·CAPTION_PCT/100 과 같은 축 — % 값이 같으면 결과물 자막과 같은 크기로 보인다.
-  const subFs = (width * 16 / 9) * layout.subtitleSize / 100;
+  // 자막 글자 크기 = 화면 높이의 subtitleSize%. 서버 렌더의 fs = H·CAPTION_PCT/100 과 같은 축.
+  const subFs = boxH * layout.subtitleSize / 100;
+  // 제목·시간박스 글자도 **실렌더 출력 px 비율**로 그린다 — 예전엔 고정 7px 스케일이라
+  // (화면 높이의 ~3.3%) 실렌더(첫 줄 106px/1920 = 5.5%)보다 40% 작게 보였고, 블록 윗변은
+  // 같아도 글자 덩어리가 달라 "미리보기랑 위치가 다르다"는 체감을 만들었다(2026-08-25).
+  const titleFs = boxH * 106 / 1920;      // factory 시드 첫 줄 106px 출력과 동일 비율
+  const timeboxFs = boxH * 66 / 1920;     // 시간박스 22px(설계) × scale 3 = 66px 출력
   return (
     <div className="relative shrink-0 overflow-hidden rounded-md border"
       style={{ width, aspectRatio: "9/16", background: "#000", borderColor: "var(--sd-border)" }}>
@@ -80,10 +85,15 @@ export function TemplatePreview({ template, accent, layout, frameSrc, subtitlesO
           예시 자막입니다
         </div>
       )}
-      {/* 제목 2줄 — 각 줄은 한 시각 줄로 고정(nowrap · D). 서버 렌더/에디터와 줄 수 일치. */}
+      {/* 제목 2줄 — 각 줄은 한 시각 줄로 고정(nowrap · D). 서버 렌더/에디터와 줄 수 일치.
+          상단 앵커(top = titleY%) + 출력 px 비율 크기 + line-height 1.15 = ASS(an8 · adv 1.15)와 동형. */}
       {layout.title !== false && (
-        <div className="absolute text-center font-bold leading-tight"
-          style={{ top: `${layout.titleY}%`, left: 4 * s, right: 4 * s, fontSize: 7 * s, color: "#fff", whiteSpace: "nowrap" }}>
+        <div className="absolute text-center font-extrabold"
+          style={{
+            top: `${layout.titleY}%`, left: 4 * s, right: 4 * s,
+            fontSize: titleFs, lineHeight: 1.15, color: "#fff", whiteSpace: "nowrap",
+            textShadow: "0 2px 6px rgba(0,0,0,.5)",
+          }}>
           훅 첫 줄 텍스트
           <div style={{ color: layout.titleColor || accent }}>둘째 줄 강조</div>
         </div>
@@ -93,11 +103,12 @@ export function TemplatePreview({ template, accent, layout, frameSrc, subtitlesO
         <div className="absolute left-1/2 -translate-x-1/2 rounded-sm"
           style={{ top: `${layout.channelIconY}%`, width: `${iconPct * 1.4}%`, height: `${iconPct}%`, background: "#666" }} />
       )}
-      {/* 시간 박스 — 문구는 프로그램 설정의 편성 문구(schedule). 미리보기에 프로그램 값이 오면 그걸 쓴다. */}
+      {/* 시간 박스 — 문구는 프로그램 설정의 편성 문구(schedule). 미리보기에 프로그램 값이 오면 그걸 쓴다.
+          상단 앵커(top = channelBoxY%)는 ASS \an8\pos 과 동형 · 크기는 출력 66px 비율. */}
       {layout.timebox !== false && (
         <div className="absolute left-1/2 -translate-x-1/2 text-center font-bold"
           style={{
-            top: `${layout.channelBoxY}%`, fontSize: 5.5 * s, color: "#fff", background: "#3D7BD9",
+            top: `${layout.channelBoxY}%`, fontSize: timeboxFs, color: "#fff", background: "#3D7BD9",
             paddingInline: 4 * s, borderRadius: 2 * s, whiteSpace: "nowrap",
           }}>
           {timeboxText || "(수) 밤 10시 30분"}
