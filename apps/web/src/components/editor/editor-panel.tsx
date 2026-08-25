@@ -732,7 +732,8 @@ function LayoutTab({
                   {/* 투명이 아닌 실제 프레임 그래픽이 있으면 그것도 겹쳐 보여준다 */}
                   <img src={frameOverlaySrc(f)} alt="" className="absolute inset-0 size-full object-contain" />
                 </div>
-                <div className="truncate px-1.5 py-1 text-[11px] text-white">{f.name}</div>
+                {/* 한글 제목(meta.canva_title) 우선 — 디렉토리 이름(영문)은 폴백 (사용자 2026-08-25). */}
+                <div className="truncate px-1.5 py-1 text-[11px] text-white">{f.title || f.name}</div>
               </button>
             ))}
           </div>

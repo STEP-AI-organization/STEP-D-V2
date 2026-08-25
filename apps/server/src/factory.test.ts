@@ -86,8 +86,8 @@ describe("무편집 렌더 기본 프리셋", () => {
   it("강제 지정이 없으면 프로그램 기본 → 장르 자동 순서다", () => {
     const state = autoEditorState({
       kind: "short", titleLine1: "제목",
-    }, "STEP-D", { autoPublish: { templateId: "broadcast-clean" } }) as any;
-    assert.equal(state.templateId, "broadcast-clean");
+    }, "STEP-D", { autoPublish: { templateId: "broadcast-drama" } }) as any;
+    assert.equal(state.templateId, "broadcast-drama");
     const auto = autoEditorState({
       kind: "short", titleLine1: "제목",
     }, "STEP-D", { pipelineGenre: "drama" }) as any;

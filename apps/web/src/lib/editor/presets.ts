@@ -810,8 +810,9 @@ export function makeInitialEditorState(
   // 올린다(세로 9:16 → ×3). 결과는 coordBasis:"output" 마킹 — 이후 로드에서 재정규화 안 됨.
   return normalizeEditorCoords({
     // TVING 쇼츠 스타일이 기본 (2026-08-12): 검정 레터박스 + 상단 훅 + 하단 프로그램명.
-    // broadcast-clean 은 assets/shorts-template/ 의 실존 프레임이다.
-    templateId: "broadcast-clean",
+    // broadcast-clean 프레임은 2026-08-25 삭제됨 — 프레임 없이(빈 templateId) 검정 레터박스
+    // 시드만으로 같은 의도를 유지한다(렌더는 빈 값이면 프레임 오버레이를 생략한다).
+    templateId: "",
     // 종횡비 = 5-값 enum. 레터박스(전체 담기 + 검정 여백) = 위 "검정 레터박스" 의도와 일치.
     aspect: "9:16-letterbox",
     fit: "contain",

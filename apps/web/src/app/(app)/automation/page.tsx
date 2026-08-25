@@ -174,7 +174,6 @@ function relTime(iso: string | null | undefined, now: number): string | null {
 const TEMPLATE_SEED_UI: Record<string, { accent: string; titleY: number; iconY: number; boxY: number; iconSize: number }> = {
   "broadcast-standard": { accent: "#40E0E0", titleY: 11, iconY: 68, boxY: 79.5, iconSize: 50 },
   "broadcast-drama": { accent: "#40E0E0", titleY: 8, iconY: 77, boxY: 87.5, iconSize: 50 },
-  "broadcast-clean": { accent: "#FF4040", titleY: 11, iconY: 80, boxY: 92, iconSize: 40 },
 };
 
 /** 규칙의 채널 목록 — 배열이 정본, 없으면 단수 폴백(구 규칙). */

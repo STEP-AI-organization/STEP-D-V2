@@ -575,11 +575,7 @@ const TEMPLATE_SEEDS: Record<string, {
     accent: "#40E0E0", titleY: 8, bottom: "logo-box",
     channelY: 82, iconShape: "square", iconSize: 50, iconY: 77, boxY: 87.5,
   },
-  // 구 표준 (TVING 풍 · 보존): 빨강 훅 + 원형 아이콘 + 프로그램명 텍스트
-  "broadcast-clean": {
-    accent: "#FF4040", titleY: 11, bottom: "icon-title",
-    channelY: 82, iconShape: "circle", iconSize: 40,
-  },
+  // (구 표준 broadcast-clean 은 2026-08-25 사용자 지시로 자산과 함께 삭제 — 2종이면 충분)
 };
 
 /** 프로그램 장르로 템플릿 선택 — 드라마는 확대 크롭, 그 외는 표준. */
