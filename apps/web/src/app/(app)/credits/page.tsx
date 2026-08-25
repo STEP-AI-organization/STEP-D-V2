@@ -28,6 +28,7 @@ import {
   fetchCredits,
   fetchInvoices,
   fetchSavedCard,
+  saveAutoTopup,
   saveBillingNotifyEmails,
   type AutoTopupPolicy,
   type CreditState,
@@ -95,6 +96,8 @@ export default function CreditsPage() {
   const [invoiceList, setInvoiceList] = useState<InvoiceList | null>(null);
   const [invoicesFailed, setInvoicesFailed] = useState(false);
   const [pdfBusy, setPdfBusy] = useState<string | null>(null);
+  // 자동 재결제 토글 in-flight — 연타로 PUT 이 겹치지 않게.
+  const [autoToggleBusy, setAutoToggleBusy] = useState(false);
   // 결제 알림 수신자 — saved 는 서버 저장값(입력 중 폴링이 덮지 않게 입력값과 가른다).
   const [notifyInput, setNotifyInput] = useState("");
   const [notifySaved, setNotifySaved] = useState<string[]>([]);
@@ -246,6 +249,38 @@ export default function CreditsPage() {
     }
   }
   const buyerSummary = [buyerName.trim(), email.trim(), phoneDigits].filter(Boolean).join(" · ");
+
+  /**
+   * 자동 재결제 켜기/끄기 — 나머지 정책값(수량·상한)은 그대로 두고 enabled 만 뒤집는다.
+   * 카드 미등록 등으로 서버가 막으면(409) 사유를 그대로 보여주고, 카드 문제면 등록 화면을 연다.
+   */
+  async function toggleAutoTopup() {
+    if (!policy || autoToggleBusy) return;
+    setAutoToggleBusy(true);
+    try {
+      const next = await saveAutoTopup({
+        enabled: !policy.enabled,
+        thresholdCredits: policy.thresholdCredits,
+        topupCredits: policy.topupCredits,
+        maxPerDay: policy.maxPerDay,
+        maxKrwPerMonth: policy.maxKrwPerMonth,
+      });
+      setPolicy(next);
+      toast({
+        title: next.enabled ? "자동 재결제 켜짐" : "자동 재결제 꺼짐",
+        description: next.enabled
+          ? `잔액이 부족해지면 ${next.topupCredits.toLocaleString("ko-KR")}개를 자동 결제합니다.`
+          : "잔액이 소진되면 새 분석이 멈춥니다 — 직접 충전하거나 다시 켜 주세요.",
+        tone: "done",
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      toast({ title: "자동 재결제 변경 실패", description: message, tone: "error" });
+      if (/카드/.test(message)) setDialog("card");
+    } finally {
+      setAutoToggleBusy(false);
+    }
+  }
 
   /** 결제 알림 수신자 저장 — 쉼표·공백 구분 입력을 목록으로. 빈 입력 = 알림 없음. */
   async function saveNotify() {
@@ -408,22 +443,44 @@ export default function CreditsPage() {
         </div>
       )}
 
-      {/* ── 자동 재결제 + 결제 알림 — 목업의 "자동 재결제" 카드. 편집은 다이얼로그가 한다. ── */}
+      {/* ── 자동 재결제 + 결제 알림 — aena 결제창과 같은 카드 문법(제목+토글 · 굵은 금액 ·
+          시점 설명 · 상세 보기). 토글은 즉시 켜고 끄고, 수량·상한 편집은 상세 보기 다이얼로그. ── */}
       <BillingCard
-        title="자동 재결제 · 결제 알림"
-        action={<CardAction label="자동 재결제 설정" onClick={() => setDialog("autotopup")} />}
+        action={<CardAction label="상세 보기" onClick={() => setDialog("autotopup")} />}
       >
-        <p className="text-[11.5px]" style={{ color: "var(--sd-fg)" }}>
-          {policy
-            ? policy.enabled
-              ? <>잔액이 <b>{policy.thresholdCredits.toLocaleString("ko-KR")}개</b> 아래로 내려가면 저장 카드로 <b>{policy.topupCredits.toLocaleString("ko-KR")}개
-                  {price != null ? `(${WON(policy.topupCredits * price)})` : ""}</b>를 자동 결제합니다.</>
-              : "꺼져 있습니다 — 잔액이 소진되면 새 분석이 멈춥니다. 켜 두면 저장 카드로 자동 결제합니다."
-            : "설정을 불러오는 중…"}
-        </p>
-        <p className="text-[11px]" style={{ color: "var(--sd-mut)" }}>
-          언제든 끌 수 있습니다 · 일 횟수·월 금액 상한 안에서만 결제됩니다.
-        </p>
+        <div className="flex items-start justify-between gap-4">
+          <div className="min-w-0">
+            <div className="text-[13px] font-semibold" style={{ color: "var(--sd-fg)" }}>자동 재결제</div>
+            <p className="mt-1 text-[11.5px]" style={{ color: "var(--sd-fg)" }}>
+              {policy
+                ? <>잔액이 소진되면 <b>{policy.topupCredits.toLocaleString("ko-KR")}개
+                    {price != null ? `(${WON(policy.topupCredits * price)})` : ""}</b>를 자동 결제합니다.</>
+                : "설정을 불러오는 중…"}
+            </p>
+            <p className="mt-0.5 text-[11px]" style={{ color: "var(--sd-mut)" }}>
+              결제 시점은 잔액이 부족해지는 순간입니다. 언제든 끌 수 있고, 일 횟수·월 금액 상한 안에서만 결제됩니다.
+            </p>
+          </div>
+          {/* 토글 — 목업과 같은 pill. 카드 미등록이면 서버가 409 로 막고, 그 사유를 그대로 보여준다. */}
+          <button
+            type="button"
+            role="switch"
+            aria-checked={policy?.enabled ?? false}
+            aria-label="자동 재결제"
+            disabled={!policy || autoToggleBusy || !canManageBilling}
+            onClick={() => void toggleAutoTopup()}
+            className="relative mt-0.5 h-[24px] w-[42px] shrink-0 rounded-full transition-colors"
+            style={{
+              background: policy?.enabled ? "var(--sd-accent)" : "var(--sd-border)",
+              opacity: !policy || autoToggleBusy || !canManageBilling ? 0.5 : 1,
+            }}
+          >
+            <span
+              className="absolute top-[3px] h-[18px] w-[18px] rounded-full bg-white transition-all"
+              style={{ left: policy?.enabled ? 21 : 3, boxShadow: "0 1px 2px rgba(0,0,0,.25)" }}
+            />
+          </button>
+        </div>
 
         <div className="pt-2" style={{ borderTop: "1px solid var(--sd-border)" }}>
           <div className="mb-1 text-[11px] font-medium" style={{ color: "var(--sd-label)" }}>결제 알림 이메일</div>
