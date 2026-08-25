@@ -46,7 +46,7 @@ function noticeHtml(n: AutoPublishNotice, url: string): string {
   const program = String(n.clip.programTitle ?? "").trim();
   return `
   <div style="font-family:'Apple SD Gothic Neo','Malgun Gothic',sans-serif;max-width:520px;margin:0 auto;color:#111;">
-    <h2 style="font-size:17px;border-bottom:2px solid #111;padding-bottom:8px;">STEP-D 자동배포 ${n.publishAt ? "예약" : "완료"}</h2>
+    <h2 style="font-size:17px;border-bottom:2px solid #111;padding-bottom:8px;">자동배포 ${n.publishAt ? "예약" : "완료"}</h2>
     <p style="font-size:13px;line-height:1.6;">${n.publishAt ? "자동배포 규칙이 게시를 예약했습니다." : "자동배포 규칙이 영상을 게시했습니다."}</p>
     <table style="font-size:13px;border-collapse:collapse;">
       ${program ? row("프로그램", program) : ""}
@@ -75,7 +75,9 @@ export async function notifyAutoPublish(n: AutoPublishNotice): Promise<void> {
     const url = `https://youtu.be/${n.videoId}`;
     await sendMail({
       to,
-      subject: `[STEP-D] 자동배포 ${n.publishAt ? "예약" : "완료"} — ${n.title}`,
+      // 브랜드 표기 없이 — 고객사 담당자 수신함에서 우리 제품명이 아니라 내용이 보여야 한다
+      // (사용자 2026-08-25 · 자동배포 메일에서 "STEP-D" 제거).
+      subject: `[자동배포 ${n.publishAt ? "예약" : "완료"}] ${n.title}`,
       html: noticeHtml(n, url),
     });
     console.log(`[notify] 자동배포 알림 발송 → ${to} (${n.videoId})`);
