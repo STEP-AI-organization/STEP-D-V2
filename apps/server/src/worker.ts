@@ -2370,11 +2370,14 @@ async function runDistributionPublish(job: Job): Promise<void> {
   if (!(await fileExists(objPath))) { await markDistributionFailed(clipId, "youtube", "스토리지에 영상 파일이 없습니다", channelId); return; }
 
   const publishAt = futurePublishAt(job.payload.publishAt);
+  // 폴백은 unlisted — "전체공개는 사람이 정하는 일"(automation-cycle 원칙 주석).
+  // 구값 public 은 privacy 를 안 실은 호출(재시도 등)이 전체공개로 승격되는 구멍이었다
+  // (2026-08-25 전면 체크 major — dispatch·retry 에 privacy 배선을 넣으며 함께 봉인).
   const privacy = publishAt
     ? "private"
     : (["public", "unlisted", "private"].includes(String(job.payload.privacy))
         ? (String(job.payload.privacy) as "public" | "unlisted" | "private")
-        : "public");
+        : "unlisted");
 
   // A future publishAt means YouTube holds the video private until then — report 'scheduled'.
   const finalStatus = publishAt ? "scheduled" : "published";

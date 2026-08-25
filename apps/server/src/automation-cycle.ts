@@ -675,9 +675,13 @@ async function runAutomationCycleLocked(): Promise<CycleReport> {
           // (되돌리려면 채널에서 직접 내려야 하고 노출 이력은 남는다). 채널 규칙에 값이
           // 있으면 그걸 따르고, 없으면 **unlisted** 로 올린다 — 자동 경로의 기본값은
           // "링크 아는 사람만" 이어야 하고, 전체공개는 사람이 정하는 일이다.
+          // 슬롯 인덱스 = quota - remaining **단독**이다(발행 순번 0-base). remaining 이
+          // 이미 quota - publishedToday 로 시작하므로 publishedToday 를 또 더하면 이중
+          // 가산 — 틱을 넘긴 2건째부터 인덱스가 배열 밖으로 나가 targetAt null → 슬롯
+          // 예약 대신 즉시 게시됐다(2026-08-25 전면 체크 critical, ENA 실배포 전 발견).
           ...(chan.platform === "youtube" ? youtubeReleasePlan(
             channelRule,
-            slotted.length ? scheduledSlotAt(slotted, publishedToday + (quota - remaining)) : null,
+            slotted.length ? scheduledSlotAt(slotted, quota - remaining) : null,
           ) : {}),
           actor: `automation:${rule.id}`,
           // "factory"(외부 공장 API)와 구분되는 자동 순방 표식 — 화면의 자동/수동 배지가 읽는다.

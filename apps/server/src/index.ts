@@ -7103,6 +7103,11 @@ app.post("/api/distributions/retry", async (c) => {
       reserveDate: prev?.reserveDate,
       scheduled: Boolean(prev?.reserveDate),
       youtubeChannelId: target.channelId,
+      // 공개범위도 함께 살린다 — 안 넘기면 워커 폴백으로 떨어져 unlisted/private 의도
+      // 콘텐츠가 재시도 한 번에 전체공개로 승격됐다(2026-08-25 전면 체크 major).
+      // 행에 privacy 가 없는 구 기록은 자동 경로 기본과 같은 unlisted 로 — 전체공개는
+      // 사람이 정하는 일이다(automation-cycle 의 같은 원칙 주석 참조).
+      privacy: (["public", "unlisted", "private"] as const).find((p) => p === prev?.privacy) ?? "unlisted",
       actor,
       origin: "retry",
     });

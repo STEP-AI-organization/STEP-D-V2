@@ -184,6 +184,10 @@ export async function dispatchPublish(input: PublishInput): Promise<PublishOutco
       // 보수 규칙(null = 모든 계정 일치)이 같은 플랫폼의 **2번째 계정을 영구 스킵**시켰다.
       ...(input.channel === "youtube" && input.youtubeChannelId
         ? { youtubeChannelId: input.youtubeChannelId } : {}),
+      // 의도한 공개범위를 **행에 남긴다** — 실패 후 사람 재시도(/api/distributions/retry)가
+      // 이 값을 되살려 보낸다. 없으면 재시도가 워커 폴백으로 떨어져 unlisted/private 의도
+      // 콘텐츠가 전체공개로 승격되는 사고가 난다(2026-08-25 전면 체크 major).
+      ...(input.channel === "youtube" && input.privacy ? { privacy: input.privacy } : {}),
       // 어느 네이버 계정으로 나갔는지를 배포 기록에 남긴다. B2B 다계정에서 이게 없으면
       // 나중에 "이 클립 어느 채널에 올라갔지?" 를 로그로만 추적해야 한다.
       ...(isNaverChannel(input.channel) && input.naverAccountId
