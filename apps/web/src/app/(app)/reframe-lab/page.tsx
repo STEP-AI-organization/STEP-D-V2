@@ -390,7 +390,10 @@ function CandidatePanel({ candidate, proxyUrl, clipStart, previewT, isFinal, saf
           ) : (
             <video
               ref={videoRef} src={proxyUrl} muted playsInline preload="metadata"
-              className="absolute top-0"
+              // max-w-none 필수 — Tailwind preflight 의 `video{max-width:100%}` 가 확대 폭
+              // (100/fraction% = 161~316%)을 100% 로 클램프해 크롭이 전부 어긋났다(2026-08-25
+              // 실측: f=0.32 창은 통째로 검정). 잘라 보이는 건 부모 overflow-hidden 이 한다.
+              className="absolute top-0 max-w-none"
               style={{ width: `${mediaWidthPct}%`, left: `${mediaLeftPct}%` }}
               onTimeUpdate={onTime ? (e) => onTime(e.currentTarget.currentTime) : undefined}
             />
