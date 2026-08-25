@@ -40,7 +40,7 @@ export const SUBTITLE_DEFAULTS = { y: 26, size: 4.4, color: "#FFFFFF" } as const
 /** 소형 카드 기준 폭 — 폰트·패딩은 이 폭 대비 비율로 스케일된다(레이아웃 %좌표는 불변). */
 const BASE_W = 120;
 
-export function TemplatePreview({ template, accent, layout, frameSrc, subtitlesOn = true, timeboxText, width = BASE_W }: {
+export function TemplatePreview({ template, accent, layout, frameSrc, subtitlesOn = true, timeboxText, iconSrc, width = BASE_W }: {
   template: FrameTemplate | null;
   accent: string;
   layout: LayoutState;
@@ -50,6 +50,9 @@ export function TemplatePreview({ template, accent, layout, frameSrc, subtitlesO
   subtitlesOn?: boolean;
   /** 시간박스 문구 — 실제 렌더는 프로그램 설정의 편성 문구(schedule)를 쓴다. 없으면 예시 표기. */
   timeboxText?: string;
+  /** 로고 이미지 — 프로그램 설정의 쇼츠 아이콘(brandIconDataUrl). 실제 렌더의 아이콘 폴백과
+      같은 소스라, 있으면 회색 자리표시 대신 진짜 로고가 보인다. 없으면 회색 박스 폴백. */
+  iconSrc?: string;
   width?: number;
 }) {
   const s = width / BASE_W;
@@ -98,11 +101,16 @@ export function TemplatePreview({ template, accent, layout, frameSrc, subtitlesO
           <div style={{ color: layout.titleColor || accent }}>둘째 줄 강조</div>
         </div>
       )}
-      {/* 로고 */}
-      {layout.logo !== false && (
+      {/* 로고 — 프로그램의 쇼츠 아이콘이 있으면 그대로 보여준다. 실렌더(index.ts)와 같은 규칙:
+          크기 = 높이 기준, 폭은 이미지 비율을 따른다(가로 워드마크·세로 아이콘 모두 수용). */}
+      {layout.logo !== false && (iconSrc ? (
+        <img src={iconSrc} alt="쇼츠 아이콘"
+          className="absolute left-1/2 max-w-[80%] -translate-x-1/2 object-contain"
+          style={{ top: `${layout.channelIconY}%`, height: `${iconPct}%`, width: "auto" }} />
+      ) : (
         <div className="absolute left-1/2 -translate-x-1/2 rounded-sm"
           style={{ top: `${layout.channelIconY}%`, width: `${iconPct * 1.4}%`, height: `${iconPct}%`, background: "#666" }} />
-      )}
+      ))}
       {/* 시간 박스 — 문구는 프로그램 설정의 편성 문구(schedule). 미리보기에 프로그램 값이 오면 그걸 쓴다.
           상단 앵커(top = channelBoxY%)는 ASS \an8\pos 과 동형 · 크기는 출력 66px 비율. */}
       {layout.timebox !== false && (
@@ -201,7 +209,7 @@ export function LayoutSliders({ layout, onChange, className, subtitlesOn, onSubt
  * (부모 layout 상태를 그대로 공유 — 다이얼로그 전용 사본을 만들면 닫을 때 유실된다).
  * 관용구는 upload-video-dialog(오버레이 클릭 닫힘) + billing-ui(ESC window keydown).
  */
-export function TemplatePreviewDialog({ template, accent, layout, frameSrc, subtitlesOn = true, onSubtitlesChange, timeboxText, onLayoutChange, onClose }: {
+export function TemplatePreviewDialog({ template, accent, layout, frameSrc, subtitlesOn = true, onSubtitlesChange, timeboxText, iconSrc, onLayoutChange, onClose }: {
   template: FrameTemplate | null;
   accent: string;
   layout: LayoutState;
@@ -211,6 +219,8 @@ export function TemplatePreviewDialog({ template, accent, layout, frameSrc, subt
   onSubtitlesChange?: (on: boolean) => void;
   /** 시간박스 문구 — 선택한 프로그램의 편성 문구(schedule). 없으면 예시 표기. */
   timeboxText?: string;
+  /** 로고 이미지 — 선택한 프로그램의 쇼츠 아이콘. TemplatePreview 로 그대로 전달. */
+  iconSrc?: string;
   onLayoutChange: (next: LayoutState) => void;
   onClose: () => void;
 }) {
@@ -243,7 +253,7 @@ export function TemplatePreviewDialog({ template, accent, layout, frameSrc, subt
         aria-modal="true"
         aria-label="템플릿 대형 미리보기"
       >
-        <TemplatePreview template={template} accent={accent} layout={layout} frameSrc={frameSrc} subtitlesOn={subtitlesOn} timeboxText={timeboxText} width={w} />
+        <TemplatePreview template={template} accent={accent} layout={layout} frameSrc={frameSrc} subtitlesOn={subtitlesOn} timeboxText={timeboxText} iconSrc={iconSrc} width={w} />
         {/* 컨트롤 컬럼은 **내용 높이**로 둔다. self-stretch 를 걸면 세로로 긴 9:16 프리뷰(≈800px)
             높이에 맞춰 늘어나고, mt-auto 닫기 버튼이 그 바닥까지 밀려 컨트롤과 버튼 사이에 거대한
             빈 공간이 생긴다(사용자 2026-08-21 "왜 이래 ㅋㅋ"). 프리뷰 위쪽에 정렬(items-start)해 붙인다. */}
