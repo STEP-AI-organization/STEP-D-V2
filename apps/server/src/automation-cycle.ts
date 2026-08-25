@@ -309,7 +309,9 @@ async function runAutomationCycleLocked(): Promise<CycleReport> {
           automationRuleId: rule.id,
           editorState: {
             ...autoEditorState(rec, ep.programTitle ?? "", program,
-              (rule as any).templateId, (rule as any).layout, aspectRatio),
+              (rule as any).templateId,
+              { ...((rule as any).layout ?? {}), logo: (rule as any).layout?.logo ?? false },
+              aspectRatio),
             // 자막 on/off — 계획 기본 ON(true · 하위호환). layout.subtitles === false 일 때만 끈다.
             // autoEditorState 는 captionsOn:false 를 시드하지만(공장 경로 · 번인 겹침 방지), 자동배포는
             // 계획 토글을 따른다 — 드라마처럼 원본 번인 자막이 있는 회차는 계획에서 자막을 끈다.
