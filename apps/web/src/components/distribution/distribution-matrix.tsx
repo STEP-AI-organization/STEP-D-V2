@@ -223,6 +223,22 @@ function Cell({
     ) : chip;
   }
 
+  // 틱톡 받은함 초안 — status 는 published 로 기록되지만 **채널에 공개된 게 아니다**
+  // (계정 주인이 틱톡 앱 받은함에서 편집·게시해야 뜬다). 초록 "게시됨"으로 그리면
+  // "게시됐다는데 채널에 없다"는 혼란이 된다(사용자 2026-08-25). 다이렉트 게시가 켜져
+  // 게시물 링크(url)가 기록된 행만 아래 published 분기로 내려가 초록+링크가 된다.
+  if (d.status === "published" && channel === "tiktok" && !link) {
+    return (
+      <span
+        className="mx-auto inline-flex items-center gap-1 rounded-[4px] px-1.5 py-0.5 text-[10.5px] font-medium"
+        style={{ background: STATUS.scheduled.bg, color: STATUS.scheduled.fg }}
+        title="틱톡 앱 받은함에 초안으로 전송됐습니다 — 계정 주인이 앱(알림·받은함)에서 편집·게시해야 채널에 공개됩니다."
+      >
+        ● 받은함 전송
+      </span>
+    );
+  }
+
   // 게시됨 + 링크 있음 → 영상 열기. 유튜브만이 아니라 네이버·인스타·페북도 같은 대접
   // (2026-08-25 사용자 "가능하면 다" — 서버는 이미 다 기록하고 있었고 화면만 버리고 있었다).
   if (d.status === "published" && link) {

@@ -242,6 +242,7 @@ import {
 import { normalizeCastInput } from "./cast.ts";
 import {
   youtubeUploadEnabled, UPLOAD_DISABLED_CODE, UPLOAD_DISABLED_MESSAGE, tiktokUploadEnabled,
+  tiktokDirectPostEnabled,
   instagramUploadEnabled, facebookUploadEnabled,
 } from "./upload-gate.ts";
 import { geminiGenerate, parseJsonLoose } from "./gemini.ts";
@@ -9212,12 +9213,16 @@ const TIKTOK_TOKEN_URL = "https://open.tiktokapis.com/v2/oauth/token/";
 const TIKTOK_USER_INFO_URL = "https://open.tiktokapis.com/v2/user/info/";
 const TIKTOK_CALLBACK_PATH = "/api/tiktok/oauth/callback";
 // 승인된 scope 만 요청한다 — 미승인 scope 를 섞으면 인증 화면에서 통째로 거부된다.
-// 콘솔(Login Kit·Content Posting API → Scopes)에 세 개 전부 있어야 한다. 거부되면 콘솔부터.
+// 콘솔(Login Kit·Content Posting API → Scopes)에 전부 있어야 한다. 거부되면 콘솔부터.
 // - user.info.profile: 채널 핸들(@username)용 (2026-08-13 — 실명만 떠서 채널 구분 불가 피드백)
 // - video.upload: 받은함 드래프트 업로드용 (tiktok.ts). **이게 빠진 토큰은 게이트를 켜도
 //   inbox init 에서 scope_not_authorized 로 전건 실패한다** — scope 없는 옛 연결은 재연동.
-// video.publish(직접 게시)는 만들지 않았다 — 드래프트만.
-const TIKTOK_SCOPES = ["user.info.basic", "user.info.profile", "video.upload"].join(",");
+// - video.publish: 다이렉트 게시용 — **TIKTOK_DIRECT_POST 를 켰을 때만** 요청한다.
+//   콘솔에 Direct Post 제품 + 심사 승인 전에 섞으면 동의화면이 통째로 깨진다(위와 같은 함정).
+const TIKTOK_SCOPES = [
+  "user.info.basic", "user.info.profile", "video.upload",
+  ...(tiktokDirectPostEnabled() ? ["video.publish"] : []),
+].join(",");
 
 function tiktokRedirectUri(): string {
   const explicit = process.env.TIKTOK_REDIRECT_URI;

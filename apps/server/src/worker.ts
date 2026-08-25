@@ -80,11 +80,11 @@ import {
 import { pipeline } from "node:stream/promises";
 import {
   youtubeUploadEnabled, UPLOAD_DISABLED_MESSAGE,
-  tiktokUploadEnabled, TIKTOK_UPLOAD_DISABLED_MESSAGE,
+  tiktokUploadEnabled, tiktokDirectPostEnabled, TIKTOK_UPLOAD_DISABLED_MESSAGE,
   instagramUploadEnabled, INSTAGRAM_UPLOAD_DISABLED_MESSAGE,
   facebookUploadEnabled, FACEBOOK_UPLOAD_DISABLED_MESSAGE,
 } from "./upload-gate.ts";
-import { withTikTokToken, uploadDraftToTikTok, TikTokTokenRevokedError } from "./tiktok.ts";
+import { withTikTokToken, uploadDraftToTikTok, uploadDirectPostToTikTok, TikTokTokenRevokedError } from "./tiktok.ts";
 import {
   getTikTokAccountByOpenId, updateTikTokTokens, markTikTokAccountDisconnected, appendRuleRun,
 } from "./db-pg.ts";
@@ -2094,12 +2094,33 @@ async function runTikTokDraftPublish(job: Job): Promise<void> {
   try {
     await pipeline(createReadStream(objPath), fs.createWriteStream(tmpPath));
     const body = await fs.promises.readFile(tmpPath);
-    const { publishId } = await withTikTokToken(
-      acct,
-      // targeted 컬럼 write — 잡 시작 스냅샷으로 전체 행을 덮으면 동시 재연결 토큰을 밟는다(B6).
-      (t) => updateTikTokTokens(acct.openId, t.accessToken, t.refreshToken, t.expiresAt, t.refreshExpiresAt),
-      (token) => uploadDraftToTikTok(token, { body, contentType: media.mime || "video/mp4" }),
-    );
+    const file = { body, contentType: media.mime || "video/mp4" };
+    // targeted 컬럼 write — 잡 시작 스냅샷으로 전체 행을 덮으면 동시 재연결 토큰을 밟는다(B6).
+    const persist = (t: { accessToken: string; refreshToken: string; expiresAt: number; refreshExpiresAt: number }) =>
+      updateTikTokTokens(acct.openId, t.accessToken, t.refreshToken, t.expiresAt, t.refreshExpiresAt);
+
+    if (tiktokDirectPostEnabled()) {
+      // 다이렉트 게시 — 채널에 바로 공개(선행조건: 앱 심사 + video.publish 재연결 · upload-gate.ts).
+      const meta = metaForChannel(clip, "tiktok");
+      const { publishId, postId } = await withTikTokToken(acct, persist,
+        (token) => uploadDirectPostToTikTok(token, file, { title: meta.title }));
+      const url = postId && acct.username
+        ? `https://www.tiktok.com/@${acct.username}/video/${postId}` : undefined;
+      const fresh = (await getEntity<any>("clip", clipId)) ?? clip;
+      await putEntity("clip", clipId, {
+        ...fresh,
+        distributions: upsertDistribution(fresh.distributions, "tiktok", {
+          status: "published", tiktokPublishId: publishId, tiktokOpenId: openId,
+          ...(postId ? { externalId: postId } : {}), ...(url ? { url } : {}),
+          publishedAt: Date.now(), error: undefined,
+        }),
+      });
+      console.log(`[worker] distribution.publish(tiktok) ${clipId} → 다이렉트 게시 ${postId ?? publishId} (@${acct.username ?? acct.displayName})`);
+      return;
+    }
+
+    const { publishId } = await withTikTokToken(acct, persist,
+      (token) => uploadDraftToTikTok(token, file));
 
     const fresh = (await getEntity<any>("clip", clipId)) ?? clip;
     await putEntity("clip", clipId, {

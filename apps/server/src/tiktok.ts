@@ -1,9 +1,11 @@
 /**
- * TikTok Content Posting API — **드래프트(inbox) 업로드**.
+ * TikTok Content Posting API — 드래프트(inbox) 업로드 + **다이렉트 게시(옵트인)**.
  *
- * scope 는 video.upload 뿐이다: 파일은 크리에이터 틱톡 앱의 받은함에 **초안**으로 들어가고,
- * 최종 게시는 본인이 앱에서 한다. direct post(video.publish)는 만들지 않는다 — 앱 심사에
- * 필요한 건 드래프트 시연이고, "실수로 공개 게시" 가 원천적으로 불가능한 쪽이 안전하다.
+ * 기본은 드래프트다(scope video.upload): 파일은 크리에이터 틱톡 앱의 받은함에 **초안**으로
+ * 들어가고, 최종 게시는 본인이 앱에서 한다 — "실수로 공개 게시"가 원천적으로 불가능한 쪽.
+ * 다이렉트 게시(video.publish · 채널에 바로 공개)는 `TIKTOK_DIRECT_POST` 게이트 뒤에 있다
+ * (2026-08-25 사용자 "지금 바로 다이렉트 배포" — 단 **앱 심사 통과가 선행조건**이다:
+ * 미심사 앱의 다이렉트 게시는 SELF_ONLY 로 강제된다 · upload-gate.ts 주석 참조).
  *
  * PULL_FROM_URL 이 아니라 FILE_UPLOAD 를 쓴다 — PULL 은 소스 도메인 검증(사이트 소유 확인)이
  * 필요해서 GCS signed URL 로는 통과할 수 없다.
@@ -15,6 +17,7 @@ import { assertTikTokUploadEnabled } from "./upload-gate.ts";
 
 const TOKEN_URL = "https://open.tiktokapis.com/v2/oauth/token/";
 const INBOX_INIT_URL = "https://open.tiktokapis.com/v2/post/publish/inbox/video/init/";
+const DIRECT_INIT_URL = "https://open.tiktokapis.com/v2/post/publish/video/init/";
 const STATUS_FETCH_URL = "https://open.tiktokapis.com/v2/post/publish/status/fetch/";
 
 /** refresh 가 영구히 죽었다(invalid_grant 급) — 재연결만이 해법. youtube TokenRevokedError 와 같은 축. */
@@ -253,4 +256,124 @@ export async function uploadDraftToTikTok(
   await putChunks(uploadUrl, file);
   await waitForInbox(accessToken, publishId);
   return { publishId };
+}
+
+// ── 다이렉트 게시 (video.publish · TIKTOK_DIRECT_POST 게이트) ────────────────────
+
+async function initDirectPost(
+  accessToken: string,
+  videoSize: number,
+  post: { title: string; privacyLevel: string },
+): Promise<{ publishId: string; uploadUrl: string }> {
+  const { chunkSize, totalChunkCount } = planChunks(videoSize);
+  const res = await fetch(DIRECT_INIT_URL, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json; charset=UTF-8",
+    },
+    body: JSON.stringify({
+      post_info: {
+        // 틱톡 캡션 상한 2200자(해시태그 포함) — 넘치면 init 이 400 으로 통째 실패한다.
+        title: post.title.slice(0, 2200),
+        privacy_level: post.privacyLevel,
+        disable_duet: false,
+        disable_comment: false,
+        disable_stitch: false,
+      },
+      source_info: {
+        source: "FILE_UPLOAD",
+        video_size: videoSize,
+        chunk_size: chunkSize,
+        total_chunk_count: totalChunkCount,
+      },
+    }),
+  });
+  const body = await res.text();
+  if (!res.ok) throw new Error(`TikTok direct init failed (${res.status}): ${body}`);
+  const data = JSON.parse(body) as {
+    data?: { publish_id?: string; upload_url?: string };
+    error?: { code?: string; message?: string };
+  };
+  if (data.error?.code && data.error.code !== "ok") {
+    // 미심사 앱이 여기서 걸린다(unaudited_client_*) — 원문을 그대로 실어 운영자가 원인을 본다.
+    throw new Error(`TikTok direct init error: ${data.error.code} — ${data.error.message ?? body}`);
+  }
+  const publishId = data.data?.publish_id;
+  const uploadUrl = data.data?.upload_url;
+  if (!publishId || !uploadUrl) throw new Error(`TikTok direct init: publish_id/upload_url 누락 — ${body}`);
+  return { publishId, uploadUrl };
+}
+
+// 다이렉트 게시는 서버측 검수·발행까지 있어 받은함(3분)보다 길게 본다.
+const DIRECT_POLL_TIMEOUT_MS = 5 * 60_000;
+
+/** 발행 완료까지 폴링. 완료 시 공개 게시물 id(있으면)를 돌려준다 — 게시물 URL 조립용. */
+async function waitForDirectPublish(accessToken: string, publishId: string): Promise<string | undefined> {
+  const deadline = Date.now() + DIRECT_POLL_TIMEOUT_MS;
+  let last = "";
+  for (;;) {
+    const res = await fetch(STATUS_FETCH_URL, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json; charset=UTF-8",
+      },
+      body: JSON.stringify({ publish_id: publishId }),
+    });
+    const body = await res.text();
+    if (res.status === 429) { // 레이트리밋은 결과가 아니다 — waitForInbox 와 같은 처리.
+      if (Date.now() >= deadline) {
+        throw new Error(`TikTok 게시 대기 시간 초과(레이트리밋 지속) — 마지막 상태 ${last || "unknown"}`);
+      }
+      await sleep(POLL_INTERVAL_MS * 2);
+      continue;
+    }
+    if (!res.ok) throw new Error(`TikTok status fetch failed (${res.status}): ${body}`);
+    const data = JSON.parse(body) as {
+      // 필드 철자는 틱톡 API 원문 그대로다(publicaly…) — 고치면 영원히 undefined 를 읽는다.
+      data?: { status?: string; fail_reason?: string; publicaly_available_post_id?: Array<number | string> };
+      error?: { code?: string; message?: string };
+    };
+    if (data.error?.code && data.error.code !== "ok") {
+      throw new Error(`TikTok status fetch error: ${data.error.code} — ${data.error.message ?? body}`);
+    }
+    last = String(data.data?.status ?? "");
+    if (last === "PUBLISH_COMPLETE") {
+      const ids = data.data?.publicaly_available_post_id;
+      return Array.isArray(ids) && ids.length ? String(ids[0]) : undefined;
+    }
+    if (last === "FAILED") {
+      throw new Error(`TikTok direct post failed: ${data.data?.fail_reason ?? body}`);
+    }
+    if (Date.now() >= deadline) {
+      // 처리 중 타임아웃 — 영상이 뒤늦게 게시될 수도 있다. 실패로 던지되 그 가능성을 남긴다.
+      throw new Error(
+        `TikTok 게시 대기 시간 초과(${DIRECT_POLL_TIMEOUT_MS / 60_000}분) — 마지막 상태 ${last || "unknown"}. `
+        + "영상이 뒤늦게 게시될 수 있으니 채널을 확인한 뒤 재시도하세요.",
+      );
+    }
+    await sleep(POLL_INTERVAL_MS);
+  }
+}
+
+/**
+ * 렌더된 클립 하나를 채널에 **바로 게시**한다. 성공 = PUBLISH_COMPLETE.
+ *
+ * ⚠️ 미심사 앱은 여기 성공해도 SELF_ONLY(본인만 보기)로 강제된다 — 게이트 주석(upload-gate.ts)의
+ * 선행조건(앱 심사 + 재연결)을 채운 뒤에만 TIKTOK_DIRECT_POST 를 켤 것.
+ */
+export async function uploadDirectPostToTikTok(
+  accessToken: string,
+  file: { body: Buffer; contentType?: string },
+  post: { title: string; privacyLevel?: string },
+): Promise<{ publishId: string; postId?: string }> {
+  assertTikTokUploadEnabled();
+  const { publishId, uploadUrl } = await initDirectPost(accessToken, file.body.byteLength, {
+    title: post.title,
+    privacyLevel: post.privacyLevel ?? "PUBLIC_TO_EVERYONE",
+  });
+  await putChunks(uploadUrl, file);
+  const postId = await waitForDirectPublish(accessToken, publishId);
+  return { publishId, postId };
 }

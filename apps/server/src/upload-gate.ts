@@ -69,6 +69,19 @@ export function assertTikTokUploadEnabled(): void {
   if (!tiktokUploadEnabled()) throw new UploadDisabledError(TIKTOK_UPLOAD_DISABLED_MESSAGE);
 }
 
+/**
+ * TikTok **다이렉트 게시**(video.publish · 채널에 바로 공개) 스위치. 기본 OFF = 받은함 드래프트.
+ *
+ * ⚠️ 켜기 전 선행조건 둘 — 하나라도 빠지면 켜는 순간 연동이 깨진다:
+ *  1. 틱톡 개발자 콘솔에서 앱에 Direct Post 제품 추가 + **앱 심사(오디트) 통과.**
+ *     승인 전에 video.publish 스코프를 요청하면 OAuth 동의화면 자체가 실패하고,
+ *     미심사 앱의 다이렉트 게시는 SELF_ONLY(본인만 보기)로 강제된다 — "채널에 안 보임"이 재발한다.
+ *  2. 기존 연결 계정 전부 배포채널에서 **재연결**(video.publish 스코프를 새로 받아야 한다).
+ */
+export function tiktokDirectPostEnabled(): boolean {
+  return TRUTHY.has(String(process.env.TIKTOK_DIRECT_POST ?? "").trim().toLowerCase());
+}
+
 // ── Instagram · Facebook (Meta) — 같은 3중 방어, 플랫폼마다 별도 스위치 ─────────────
 // 축이 다르다: YouTube/TikTok 을 켰다고 Meta 로 나가면 안 된다. IG(비즈니스 로그인)와
 // FB(페이지)는 저장소·토큰이 달라 스위치도 따로 둔다. 실패 방향은 동일 — 오타·빈값·미설정 = OFF.
