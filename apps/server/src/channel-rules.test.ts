@@ -196,7 +196,7 @@ describe("프레임 해석", () => {
  * 조용히 뒤집어 전체공개가 된다 — 되돌리려면 채널에서 직접 내려야 하고 노출 이력이 남는다.
  */
 describe("공개 유예 (publishDelayMin)", () => {
-  it("값 정규화 — 음수·비수치는 기본 5분, 0 은 즉시로 살린다", () => {
+  it("값 정규화 — 음수·비수치는 기본값(0=다이렉트), 0 은 즉시로 살린다", () => {
     assert.equal(normalizePublishDelayMin(undefined), DEFAULT_PUBLISH_DELAY_MIN);
     assert.equal(normalizePublishDelayMin("abc"), DEFAULT_PUBLISH_DELAY_MIN);
     assert.equal(normalizePublishDelayMin(-3), DEFAULT_PUBLISH_DELAY_MIN);
@@ -234,8 +234,9 @@ describe("공개 유예 (publishDelayMin)", () => {
     assert.match(fn, /if \(privacy !== "public"\) return \{ privacy \};/,
       "unlisted·private 에 예약을 걸면 운영자가 정한 공개 범위가 전체공개로 뒤집힌다");
     assert.match(fn, /if \(delayMin <= 0\) return \{ privacy \};/, "0 분이면 예약 없이 즉시여야 한다");
-    // 값이 없을 때의 폴백은 unlisted — 자동 경로가 실수로 전체공개되지 않는 방향.
-    assert.match(fn, /: "unlisted";/, "공개 범위 폴백이 unlisted 가 아니다 — 실수로 공개되는 방향이 된다");
+    // 폴백은 public(다이렉트 배포 · 사용자 2026-08-25) — unlisted 폴백은 "게시됨인데 채널에
+    // 안 보인다"는 혼란을 만들었다. 검수는 승인배포 모드의 몫이지 공개 범위의 몫이 아니다.
+    assert.match(fn, /: "public";/, "공개 범위 폴백이 public 이 아니다 — 다이렉트 배포 결정과 어긋난다");
   });
 
   it("예약 시각은 오프셋이 박힌 ISO 로 넘긴다 (KST 해석 여지 없이)", () => {
