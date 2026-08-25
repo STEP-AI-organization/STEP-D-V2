@@ -219,6 +219,14 @@ describe("라우트 화이트리스트 — 기본값은 닫힘", () => {
           "credits 는 조회만 연다 — 즉시 충전 같은 쓰기는 세션 전용이어야 한다");
         continue;
       }
+      // 배포 **재시도**는 예외(2026-08-25) — 이미 게이트를 통과해 나갔다가 실패한 건을 다시
+      // 큐잉할 뿐이고, dispatchPublish 를 다시 지나므로 게이트도 재평가된다. 새 결제·삭제가
+      // 없어 이 금지 목록의 목적(관리·인증·즉시결제·파괴 경로 차단)에 해당하지 않는다.
+      // aena 콘솔이 실패 복구에 쓴다. 그 외 distributions 경로(직접 publish 등)는 여전히 금지.
+      if (r.path.source === "^\\/api\\/distributions\\/retry$") {
+        assert.equal(r.method, "POST", "재시도는 POST 하나뿐이어야 한다");
+        continue;
+      }
       assert.doesNotMatch(r.path.source, /superadmin|admin|auth|credits|distributions|youtube/,
         `화이트리스트에 들어가면 안 되는 경로: ${r.path}`);
     }
