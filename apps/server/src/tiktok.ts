@@ -290,13 +290,21 @@ async function initDirectPost(
     }),
   });
   const body = await res.text();
+  // 미심사(샌드박스) 앱의 정책 벽 — 이 에러는 조치가 명확해서 사람 말로 바꾼다(2026-08-26
+  // 실측: 매트릭스 실패 칸에 영어 원문이 떠서 무엇을 해야 하는지 알 수 없었다).
+  if (body.includes("unaudited_client_can_only_post_to_private_accounts")) {
+    throw new Error(
+      "틱톡 미심사(샌드박스) 앱은 **비공개 계정**에만 바로 게시할 수 있습니다 — "
+      + "틱톡 앱에서 이 계정을 비공개 계정으로 전환(설정→개인정보)하거나, 앱 심사를 통과해야 합니다.",
+    );
+  }
   if (!res.ok) throw new Error(`TikTok direct init failed (${res.status}): ${body}`);
   const data = JSON.parse(body) as {
     data?: { publish_id?: string; upload_url?: string };
     error?: { code?: string; message?: string };
   };
   if (data.error?.code && data.error.code !== "ok") {
-    // 미심사 앱이 여기서 걸린다(unaudited_client_*) — 원문을 그대로 실어 운영자가 원인을 본다.
+    // 그 외 미심사 앱류 에러는 원문을 그대로 실어 운영자가 원인을 본다.
     throw new Error(`TikTok direct init error: ${data.error.code} — ${data.error.message ?? body}`);
   }
   const publishId = data.data?.publish_id;
