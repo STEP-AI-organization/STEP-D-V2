@@ -37,6 +37,7 @@ import {
   withTenantLock,
 } from "./db-pg.ts";
 import { currentTenantId } from "./tenant.ts";
+import { maybeAutoTopup } from "./auto-topup.ts";
 import {
   AUTO_RENDER_STOPPED_NOTE, CREDIT_IDLE_REASON, CREDIT_STOP_NOTE, DEFAULT_RULE_THUMBNAIL_MODE,
   LAST_CYCLE_KEY, TOP3_CAP,
@@ -134,7 +135,16 @@ async function runAutomationCycleLocked(): Promise<CycleReport> {
   // 크레딧 게이트 — 잔액 0 이하면 채택도 게시도 하지 않는다. 채택은 렌더(원가),
   // 게시는 업로드로 이어져 잔액 없는 워크스페이스가 자동으로 원가를 계속 쓰게 된다.
   // 사유를 리포트에 실어 GET /api/automation 이 화면에 같은 문구를 보여준다.
-  if ((await creditBalance()) <= 0) {
+  let balance = await creditBalance();
+  // 멈추기 **전에** 자동 충전을 한 번 시도한다 (2026-08-26). 예전엔 충전 트리거가 분석
+  // 완료 경로뿐이라, 잔액이 0 인 채로 분석이 안 도는 날은 자동 충전도 안 돌았다 —
+  // 카드가 등록돼 있어도 자동배포가 하루 종일 멈춰 있는 교착이다. 꺼져 있거나 카드가
+  // 없으면 maybeAutoTopup 이 조용히 아무것도 안 한다(폭주 방어는 그 안에 있다).
+  if (balance <= 0 && plan.rules.length > 0) {
+    const topup = await maybeAutoTopup().catch(() => null);
+    if (topup?.charged) balance = await creditBalance();
+  }
+  if (balance <= 0) {
     // 배너만으로는 부족하다 — idleReason 은 "지금 상태" 라서, 지나간 며칠에 왜 아무것도
     // 안 나갔는지를 로그만 보는 사람은 알 수 없다. rule_id 를 비우는 이유: 크레딧은
     // 워크스페이스 전체 사정이지 특정 계획의 사유가 아니다(계획별 패널이 아니라 전체
@@ -145,6 +155,11 @@ async function runAutomationCycleLocked(): Promise<CycleReport> {
     // 매일 한 줄씩 쌓였다 — 계획이 없으니 충전해도 아무것도 시작되지 않는다.
     if (plan.rules.length > 0 && !(await hasRunNote(null, null, null, "skipped", true, CREDIT_STOP_NOTE))) {
       await appendRuleRun({ ruleId: null, clipId: null, result: "skipped", detail: CREDIT_STOP_NOTE });
+      // 담당자 메일 — **자동 충전으로 살아난 경우엔 여기 오지 않는다**(위에서 이어감).
+      // 실행 로그와 같은 하루 한 줄 가드 안이라 순방(15분)마다 쌓이지 않는다.
+      // 하루 20건이 도는 계정에서 이 침묵은 곧 하루치 손실이다(사용자 2026-08-26).
+      const { notifyAutomationCreditStop } = await import("./billing-notify.ts");
+      void notifyAutomationCreditStop();
     }
     return {
       tenantScoped: true, rulesEvaluated: 0, adopted: 0, published: 0, held: 0, renderFailed: 0,

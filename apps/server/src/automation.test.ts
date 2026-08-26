@@ -974,8 +974,9 @@ describe("유휴 사유 배선 — automation-cycle 소스 스캔", () => {
   });
 
   it("크레딧 정지도 로그에 남는다 — 배너는 지나간 시간을 설명하지 못한다", () => {
-    const credit = src.slice(src.indexOf("creditBalance()) <= 0"), src.indexOf("const report: CycleReport"));
-    assert.ok(credit.length > 100 && credit.length < 2000, "크레딧 분기를 못 잘랐다");
+    const creditAt = src.indexOf("await creditBalance()");
+    const credit = src.slice(creditAt, src.indexOf("const report: CycleReport"));
+    assert.ok(credit.length > 100 && credit.length < 3000, "크레딧 분기를 못 잘랐다");
     assert.match(credit, /CREDIT_STOP_NOTE/, "정지 사유 상수를 안 쓴다 — 배너와 로그가 갈라진다");
     assert.match(credit, /hasRunNote\(/, "하루 한 줄 가드가 없다");
     assert.match(credit, /appendRuleRun\(/, "로그를 남기지 않는다");
@@ -983,8 +984,23 @@ describe("유휴 사유 배선 — automation-cycle 소스 스캔", () => {
     // 자동배포를 한 번도 안 쓴 곳에 매일 한 줄씩 쌓였다.
     assert.match(credit, /plan\.rules\.length > 0/,
       "계획이 없어도 크레딧 정지 로그가 쌓인다 — 충전해도 시작될 게 없다");
-    assert.ok(src.indexOf("listAutomationRules()") < src.indexOf("creditBalance()) <= 0"),
+    assert.ok(src.indexOf("listAutomationRules()") < creditAt,
       "계획 조회가 크레딧 판정보다 뒤면 '계획이 있을 때만' 을 판단할 수 없다");
+  });
+
+  it("멈추기 전에 자동 충전을 먼저 시도한다 — 충전되면 알리지 않고 이어간다", () => {
+    // 예전엔 충전 트리거가 분석 완료 경로뿐이라, 잔액 0 인 채로 분석이 안 도는 날은
+    // 카드가 등록돼 있어도 자동배포가 하루 종일 멈췄다(교착). 그리고 충전으로 살아난
+    // 경우에까지 "멈췄습니다" 메일이 가면 안 된다(사용자 2026-08-26).
+    const creditAt = src.indexOf("await creditBalance()");
+    const credit = src.slice(creditAt, src.indexOf("const report: CycleReport"));
+    assert.match(credit, /maybeAutoTopup\(\)/, "멈추기 전에 자동 충전을 시도하지 않는다");
+    assert.ok(credit.indexOf("maybeAutoTopup()") < credit.indexOf("CREDIT_STOP_NOTE"),
+      "충전 시도가 정지 처리보다 뒤면 살아날 수 있는 날에도 멈춘다");
+    assert.match(credit, /charged/, "충전 성공 여부를 안 본다 — 성공해도 멈춘다");
+    // 정지 메일은 **하루 한 줄 가드 안**에 있어야 한다 — 밖이면 15분마다 발송된다.
+    const guarded = /hasRunNote\([\s\S]*?notifyAutomationCreditStop/.test(credit);
+    assert.ok(guarded, "정지 메일이 하루 한 줄 가드 밖이다 — 순방마다 메일이 나간다");
   });
 
   it("dedupe 로 눌린 줄은 '말했다'가 아니다 — 대신 상태가 유휴 판정에 들어간다", () => {
