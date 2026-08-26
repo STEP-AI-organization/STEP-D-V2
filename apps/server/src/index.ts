@@ -7186,6 +7186,24 @@ app.post("/api/distributions/retry", async (c) => {
     }
   }
 
+  // 연타 가드 — 실패 행 없이 진행 중(pending)·예약·게시됨 행만 있으면 **일반 경로로 떨어지지
+  // 않는다.** 일반 경로는 계정 정체성 없는 dispatch 라 TikTok·IG·FB 를 '기록됨' 으로 강등해
+  // 그 행을 덮어쓴다 — 업로드가 도는 사이 재시도를 한 번 더 누르자 pending 행이 recorded 로
+  // 둔갑해 화면이 거짓말을 했다(2026-08-26 실측 · 틱톡 다이렉트 게시 테스트).
+  {
+    const chRows = (clip.distributions ?? []).filter((d: any) => d.channel === b.channel);
+    const busy = chRows.find((d: any) =>
+      d.status === "pending" || d.status === "scheduled" || d.status === "published");
+    if (busy && !chRows.some((d: any) => d.status === "failed")) {
+      return c.json({
+        ok: false, error: "retry_not_needed",
+        message: busy.status === "pending"
+          ? "이미 업로드가 진행 중입니다 — 잠시 후 결과가 반영됩니다."
+          : "이미 게시·예약된 클립입니다 — 재시도가 필요 없습니다.",
+      }, 409);
+    }
+  }
+
   const outcome = await dispatchPublish({
     clipIds: [b.clipId], channel: b.channel,
     actor,
