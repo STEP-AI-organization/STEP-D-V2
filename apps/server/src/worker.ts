@@ -2470,7 +2470,9 @@ async function runDistributionPublish(job: Job): Promise<void> {
   // (publish-notify.ts · 2026-08-26 리포트 전환). 던지지 않는 함수라 배포 상태 영향 없음.
   const notify = (videoId: string) => recordAutoPublishForReport({
     clip, title: meta.title, channel: "youtube", accountId: channelId,
-    channelLabel: String((ch as any)?.title ?? "").trim() || undefined,
+    // 채널 행의 사람이 읽는 이름은 channelName 이다 — title 로 읽으면 항상 비어서
+    // accountId(생 채널 ID)가 리포트 제목줄에 그대로 노출됐다(2026-08-26 ENA 메일).
+    channelLabel: String((ch as any)?.channelName ?? "").trim() || undefined,
     videoId, publishAt,
   });
   try {

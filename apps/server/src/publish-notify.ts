@@ -197,15 +197,20 @@ export function buildAutoPublishReportHtml(
   items: AutoReportItem[], now: Date, next: { label: string } | null,
 ): string {
   const programs = [...new Set(items.map((i) => i.program).filter(Boolean))];
-  const channels = [...new Set(items.map((i) => i.channelLabel).filter(Boolean))];
+  // 생 채널 ID(UC…)는 사람이 읽는 자리에 안 올린다 — channelLabel 은 이름이 없으면
+  // accountId 로 폴백하는데, 그 꼴이 제목줄에 그대로 노출됐다(2026-08-26 ENA 메일).
+  // 워커가 이제 channelName 을 싣지만, 이미 버퍼에 쌓인 옛 항목도 여기서 걸러진다.
+  const readable = (s: string) => !/^UC[A-Za-z0-9_-]{20,}$/.test(s);
+  const channels = [...new Set(items.map((i) => i.channelLabel).filter(Boolean).filter(readable))];
   const scheduled = items.filter((i) => i.publishAt);
   const publishedCount = items.length - scheduled.length;
-  const subtitle = `${programs.join(" · ") || "자동배포"} · YouTube ${channels.join(" · ")}`;
+  const subtitle = `${programs.join(" · ") || "자동배포"} · YouTube${channels.length ? ` ${channels.join(" · ")}` : ""}`;
   const stamp = `${kstDate(now).replace(/-/g, ".")} ${kstHm(now)} KST`;
 
   const itemHtml = (i: AutoReportItem, first: boolean) => {
     const at = i.publishAt ? new Date(i.publishAt) : new Date(i.publishedAtMs);
-    const metaBits = [i.channelLabel, fmtDur(i.durationSec), `${kstHm(at)} ${i.publishAt ? "공개 예정" : "게시"}`]
+    const metaBits = [readable(i.channelLabel) ? i.channelLabel : "", fmtDur(i.durationSec),
+      `${kstHm(at)} ${i.publishAt ? "공개 예정" : "게시"}`]
       .filter(Boolean).join(" · ");
     const dot = i.publishAt ? "예약" : "공개";
     return `${first ? "" : `<tr><td class="px" style="padding:30px 40px 0 40px;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td height="1" bgcolor="#E9E8E6" style="height:1px;line-height:1px;font-size:0;">&nbsp;</td></tr></table></td></tr>`}
@@ -245,7 +250,6 @@ export function buildAutoPublishReportHtml(
   <tr><td class="band" bgcolor="#0E0F14" style="background:#0E0F14;border-radius:8px 8px 0 0;padding:34px 40px 44px 40px;">
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>
       <td align="left" style="font-family:${FONT};font-size:16px;font-weight:600;line-height:20px;letter-spacing:-0.01em;color:#FDFCFC;">STEP AI</td>
-      <td align="right" style="font-family:${FONT};font-size:13px;font-weight:600;line-height:20px;letter-spacing:0.06em;color:#5C5E63;"><span style="display:inline-block;width:5px;height:5px;background:#47EBEB;vertical-align:2px;margin-right:8px;font-size:0;line-height:0;">&nbsp;</span>${esc(channels[0] ?? "")}</td>
     </tr></table>
     <div class="slot" style="padding-top:44px;font-family:SFMono-Regular,Consolas,Menlo,'Courier New',monospace;font-size:12px;line-height:18px;letter-spacing:0.08em;color:#5C5E63;">${esc(stamp)}</div>
     <div style="padding-top:14px;font-family:${FONT};font-size:34px;font-weight:600;line-height:44px;mso-line-height-rule:exactly;letter-spacing:-0.02em;color:#FDFCFC;word-break:keep-all;">자동배포 리포트</div>
@@ -276,11 +280,7 @@ ${next ? `  <tr><td class="px" style="padding:32px 40px 0 40px;">
       <div style="padding-top:8px;font-family:${FONT};font-size:16px;font-weight:600;line-height:26px;mso-line-height-rule:exactly;color:#1F2124;">${esc(next.label)}</div>
     </td></tr></table>
   </td></tr>` : ""}
-  <tr><td class="px" style="padding:36px 40px 40px 40px;font-family:${FONT};font-size:12px;font-weight:400;line-height:22px;mso-line-height-rule:exactly;color:#5C5E63;word-break:keep-all;">
-    이 메일은 STEP D 자동배포 시스템${channels[0] ? ` ${esc(channels[0])}` : ""}가 배포 슬롯 종료 시점에 자동 발송합니다.<br>
-    게시 상태는 채널 정책에 따라 변경될 수 있고, 변경 시 별도 리포트로 안내합니다.<br>
-    (주)스텝에이아이
-  </td></tr>
+  <tr><td style="padding:0 40px 40px 40px;font-size:0;line-height:0;">&nbsp;</td></tr>
 </table>
 </td></tr>
 </table>
