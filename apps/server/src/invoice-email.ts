@@ -179,7 +179,7 @@ export async function renderInvoicePdf(
   const fy = 278;
   doc.setDrawColor(210);
   doc.line(M, fy - 6, right, fy - 6);
-  text("본 문서는 STEP-D 결제 내역 확인용 인보이스이며 세금계산서가 아닙니다.", M, fy, { size: 7.5, color: 130 });
+  text("본 문서는 STEP AI 결제 내역 확인용 인보이스이며 세금계산서가 아닙니다.", M, fy, { size: 7.5, color: 130 });
   if (supplier.email) {
     text(`세금계산서 등 증빙 문의: ${supplier.email}`, M, fy + 4, { size: 7.5, color: 130 });
   }
@@ -194,7 +194,7 @@ export function mailHtml(invoice: PaymentInvoice, supplier: InvoiceParty): strin
     `<tr><td style="padding:4px 12px 4px 0;color:#666;">${k}</td><td style="padding:4px 0;color:#111;">${v}</td></tr>`;
   return `
   <div style="font-family:'Apple SD Gothic Neo','Malgun Gothic',sans-serif;max-width:520px;margin:0 auto;color:#111;">
-    <h2 style="font-size:17px;border-bottom:2px solid #111;padding-bottom:8px;">STEP-D 결제 인보이스</h2>
+    <h2 style="font-size:17px;border-bottom:2px solid #111;padding-bottom:8px;">STEP AI 결제 인보이스</h2>
     <p style="font-size:13px;line-height:1.6;">결제가 완료되어 인보이스를 보내드립니다. 상세 내역은 첨부된 PDF 를 확인하세요.</p>
     <table style="font-size:13px;border-collapse:collapse;">
       ${row("인보이스 번호", invoice.number)}
@@ -208,7 +208,7 @@ export function mailHtml(invoice: PaymentInvoice, supplier: InvoiceParty): strin
     <p style="font-size:11px;color:#888;line-height:1.6;margin-top:16px;">
       본 메일과 첨부 문서는 결제 내역 확인용 인보이스이며 세금계산서가 아닙니다.<br/>
       ${supplier.email ? `세금계산서 등 증빙 문의: ${supplier.email}<br/>` : ""}
-      인보이스는 STEP-D 결제 화면(크레딧 → 인보이스)에서도 다시 받을 수 있습니다.
+      인보이스는 STEP AI 결제 화면(크레딧 → 인보이스)에서도 다시 받을 수 있습니다.
     </p>
   </div>`;
 }
@@ -254,7 +254,7 @@ export async function sendInvoiceEmail(paymentId: string, tenantId: string): Pro
 
     await sendMail({
       to,
-      subject: `[STEP-D] 인보이스 ${invoice.number} — ${WON(invoice.amountKrw)} 결제 완료`,
+      subject: `[STEP AI] 인보이스 ${invoice.number} — ${WON(invoice.amountKrw)} 결제 완료`,
       html: mailHtml(invoice, supplier),
       attachments: [{ filename: `${invoice.number}.pdf`, content: pdf, contentType: "application/pdf" }],
     });

@@ -146,7 +146,7 @@ export async function downloadInvoicePdf({ invoice, supplier, buyer }: InvoicePd
   const fy = 278;
   doc.setDrawColor(210);
   doc.line(M, fy - 6, right, fy - 6);
-  text("본 문서는 STEP-D 결제 내역 확인용 인보이스이며 세금계산서가 아닙니다.", M, fy, { size: 7.5, color: 130 });
+  text("본 문서는 STEP AI 결제 내역 확인용 인보이스이며 세금계산서가 아닙니다.", M, fy, { size: 7.5, color: 130 });
   if (supplier.email) {
     text(`세금계산서 등 증빙 문의: ${supplier.email}`, M, fy + 4, { size: 7.5, color: 130 });
   }

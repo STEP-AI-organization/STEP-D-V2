@@ -186,7 +186,7 @@ export function invoiceFromTopup(r: {
     supplyKrw: vat.supplyKrw,
     vatKrw: vat.vatKrw,
     origin: r.requestedBy.startsWith("auto") ? "auto" : "manual",
-    description: `STEP-D 크레딧 ${r.credits.toLocaleString("ko-KR")}개 (분석 ${r.credits.toLocaleString("ko-KR")}분)`,
+    description: `STEP AI 크레딧 ${r.credits.toLocaleString("ko-KR")}개 (분석 ${r.credits.toLocaleString("ko-KR")}분)`,
   };
 }
 
