@@ -1771,33 +1771,12 @@ export async function fetchAutoTopup(): Promise<AutoTopupState> {
   return { policy: r.policy, fixed: r.fixed === true, disabledReason: r.disabledReason ?? null };
 }
 
-export async function saveAutoTopup(policy: {
-  enabled: boolean; thresholdCredits: number; topupCredits: number; maxPerDay: number; maxKrwPerMonth: number;
-}): Promise<AutoTopupPolicy> {
-  const res = await fetch(`${API_BASE}/credits/auto-topup`, {
-    method: "PUT",
-    headers: { "Content-Type": "application/json" },
-    credentials: "include",
-    body: JSON.stringify(policy),
-  });
-  if (!res.ok) {
-    const b = (await res.json().catch(() => null)) as { message?: string; error?: string } | null;
-    throw new Error(b?.message ?? b?.error ?? `${res.status}`);
-  }
-  return ((await res.json()) as { policy: AutoTopupPolicy }).policy;
-}
-
-/** 지금 바로 자동 충전 판정을 실행(설정 테스트용). 조건 안 맞으면 charged:false + 사유. */
-export async function runAutoTopup(): Promise<{
-  charged: boolean; reason: string; credits?: number; amountKrw?: number; balance?: number;
-}> {
-  const res = await fetch(`${API_BASE}/credits/auto-topup/run`, { method: "POST", credentials: "include" });
-  if (!res.ok) {
-    const b = (await res.json().catch(() => null)) as { message?: string; error?: string } | null;
-    throw new Error(b?.message ?? b?.error ?? `${res.status}`);
-  }
-  return res.json();
-}
+/**
+ * 자동 결제 정책은 **고정이라 저장 API 가 없다** (2026-08-26).
+ * 서버 `PUT /api/credits/auto-topup` 은 409 `policy_fixed` 로 닫혀 있고, 끄는 유일한 방법은
+ * 결제 수단(카드) 삭제다 — `deleteSavedCard()` 를 쓸 것. 수동 실행(`/run`)도 설정 화면과
+ * 함께 사라져 호출부가 없으므로 클라이언트 함수를 두지 않는다(죽은 export 금지).
+ */
 
 /**
  * 저장 카드로 충전. **결제창이 없다** — 서버가 바로 긁고 승인까지 확인한 뒤 응답한다.
