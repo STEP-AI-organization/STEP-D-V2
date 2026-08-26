@@ -237,7 +237,7 @@ export function buildAutoPublishReportHtml(
 </style>
 </head>
 <body style="margin:0;padding:0;background:#F0EEEB;-webkit-text-size-adjust:100%;">
-<span style="display:none !important;visibility:hidden;opacity:0;color:transparent;height:0;width:0;overflow:hidden;mso-hide:all;">배포 ${items.length}건 ${scheduled.length ? `(예약 ${scheduled.length}건 포함) ` : ""}처리 완료.</span>
+<span style="display:none !important;visibility:hidden;opacity:0;color:transparent;height:0;width:0;overflow:hidden;mso-hide:all;">배포 ${items.length}건 전부 게시 완료. 확인 필요 항목 없음.</span>
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#F0EEEB;">
 <tr><td class="outer" align="center" style="padding:40px 16px;">
 <table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="width:100%;max-width:600px;background:#FDFCFC;border-radius:8px;">
@@ -262,8 +262,8 @@ export function buildAutoPublishReportHtml(
         <div style="padding-top:10px;font-family:${FONT};font-size:44px;font-weight:600;line-height:46px;mso-line-height-rule:exactly;letter-spacing:-0.03em;color:#1F2124;">${publishedCount}</div>
       </td>
       <td width="34%" align="left" valign="top" style="width:34%;">
-        <div style="font-family:${FONT};font-size:13px;font-weight:600;line-height:18px;color:#5C5E63;">예약</div>
-        <div style="padding-top:10px;font-family:${FONT};font-size:44px;font-weight:600;line-height:46px;mso-line-height-rule:exactly;letter-spacing:-0.03em;color:${scheduled.length ? "#1F2124" : "#5C5E63"};">${scheduled.length}</div>
+        <div style="font-family:${FONT};font-size:13px;font-weight:600;line-height:18px;color:#5C5E63;">확인 필요</div>
+        <div style="padding-top:10px;font-family:${FONT};font-size:44px;font-weight:600;line-height:46px;mso-line-height-rule:exactly;letter-spacing:-0.03em;color:#5C5E63;">0</div>
       </td>
     </tr></table>
   </td></tr>
@@ -277,8 +277,8 @@ ${next ? `  <tr><td class="px" style="padding:32px 40px 0 40px;">
     </td></tr></table>
   </td></tr>` : ""}
   <tr><td class="px" style="padding:36px 40px 40px 40px;font-family:${FONT};font-size:12px;font-weight:400;line-height:22px;mso-line-height-rule:exactly;color:#5C5E63;word-break:keep-all;">
-    이 메일은 STEP D 자동배포 시스템이 배포 슬롯 종료 시점에 자동 발송합니다.<br>
-    게시 상태는 채널 정책에 따라 변경될 수 있습니다.<br>
+    이 메일은 STEP D 자동배포 시스템${channels[0] ? ` ${esc(channels[0])}` : ""}가 배포 슬롯 종료 시점에 자동 발송합니다.<br>
+    게시 상태는 채널 정책에 따라 변경될 수 있고, 변경 시 별도 리포트로 안내합니다.<br>
     (주)스텝에이아이
   </td></tr>
 </table>

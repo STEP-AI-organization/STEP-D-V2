@@ -68,10 +68,10 @@ describe("buildAutoPublishReportHtml — 템플릿 렌더", () => {
     assert.doesNotMatch(html, /<충격>/);
   });
 
-  it("통계 3칸 — 배포 2 · 게시 1 · 예약 1", () => {
+  it("통계 3칸 — 템플릿 그대로 배포·게시·확인 필요 (사용자: '보낸 html 똑같이')", () => {
     assert.match(html, />배포<\/div>[\s\S]*?>2<\/div>/);
     assert.match(html, />게시<\/div>[\s\S]*?>1<\/div>/);
-    assert.match(html, />예약<\/div>[\s\S]*?>1<\/div>/);
+    assert.match(html, />확인 필요<\/div>[\s\S]*?>0<\/div>/);
   });
 
   it("영상 열기 버튼이 항목별 실제 URL 을 단다 — 채널 홈이 아니라 그 영상으로", () => {
