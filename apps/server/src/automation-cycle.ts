@@ -46,7 +46,7 @@ import {
   nextAutoRenderState,
   overlapsExistingClip, planCycle,
   ruleChannels, ruleIdleNote, rulePrograms, ruleWindow, scheduledSlotAt,
-  slotsReadyForQueue, selectCandidates, shouldRequestAutoRender, AUTOMATION_MAX_PUBLISH_PER_TICK,
+  slotsReadyForQueue, selectCandidates, shouldRequestAutoRender, maxPublishPerTick,
   staleMissedSlots,
   type AutoRenderState, type AutomationRule, type RenderOutcome, type RuleIdleObservation,
 } from "./automation.ts";
@@ -174,8 +174,15 @@ async function runAutomationCycleLocked(): Promise<CycleReport> {
   // 이미 만들어진 클립 전부 — top3 의 "회차당 3건" 상한을 세는 근거다. 채택하면 추천이
   // pending 풀에서 빠지므로, 클립 쪽에서 세지 않으면 순방마다 새 상위 3건이 또 뽑힌다.
   const allClips = await listEntities<any>("clip");
+  // 지워진 계획이 만든 클립(고아)은 **현재 계획 몫으로 센다** — 아래 게시 루프가 그것들을
+  // 상속하는 것과 같은 계정이어야 한다(2026-08-26). 안 세면 계획을 지웠다 다시 만들 때마다
+  // top3 상한이 리셋돼 회차당 3건이 6건·9건이 된다(같은 구간은 overlapsExistingClip 이
+  // 막지만, 상한의 뜻인 "회차당 상위 3건" 은 깨진다).
+  const liveRuleIds = new Set(rules.map((r) => r.id));
   const adoptedCountFor = (ruleId: string, episodeId: string): number =>
-    allClips.filter((c) => c.automationRuleId === ruleId && c.episodeId === episodeId).length;
+    allClips.filter((c) => c.episodeId === episodeId
+      && (c.automationRuleId === ruleId
+        || (c.automationRuleId && !liveRuleIds.has(c.automationRuleId)))).length;
 
   // 계획별 유휴 사유 — **배너(report.idleReason)는 순방 전체의 사실**이라 여기 모아 두고
   // 루프가 끝난 뒤에 판단한다. 계획 하나가 유휴라고 전체 배너를 덮으면, 다른 계획이 3건
@@ -420,11 +427,12 @@ async function runAutomationCycleLocked(): Promise<CycleReport> {
     // ENA 실전: 계획을 지웠다 다시 만들자 이전 클립 10건이 조용히 멈춤). 같은 프로그램을
     // 보는 현재 계획이 상속한다 — 단 **존재하는** 다른 계획의 클립은 그 계획 몫이라 안 건드린다.
     // (비활성 계획 포함: 멈춘 계획의 클립을 다른 계획이 집으면 일시정지가 뚫린다.)
-    const knownRuleIds = new Set(rules.map((r) => r.id));
+    // 상속 판정은 위 adoptedCountFor(top3 상한)와 **같은 집합**(liveRuleIds)을 본다 —
+    // 두 벌이 되면 "게시는 상속하는데 상한은 안 세는" 어긋남이 생긴다.
     const mine = (await listEntities<any>("clip"))
       .filter((c) => epIds.has(c.episodeId)
         && (c.automationRuleId === rule.id
-          || (c.automationRuleId && !knownRuleIds.has(c.automationRuleId))))
+          || (c.automationRuleId && !liveRuleIds.has(c.automationRuleId))))
       // listEntities 는 최신 삽입이 먼저다(새 행이 MIN(ord)-1 로 맨 앞에 붙는다) — 그대로
       // 돌면 게시가 **최신 클립부터** 나가, 할당량이 차는 날엔 옛 클립이 계속 밀린다
       // (순서 역전 + 기아 · 2026-08-26 ENA "왜 순서대로 안 가냐"). 만들어진 순서대로 낸다.
@@ -474,7 +482,9 @@ async function runAutomationCycleLocked(): Promise<CycleReport> {
       // 몰려 연속 게시 폭탄이 된다(2026-08-25 전면 체크 major). 정상 운영에서는 큐잉이
       // 슬롯보다 2시간 앞서므로 이 상한이 보일 일이 없고(다음 순방이 이어받음), 복구
       // 직후에만 틱당 N건으로 페이스가 잡힌다. 몫은 소멸하지 않는다 — 다음 틱이 이어간다.
-      remaining = Math.min(remaining, AUTOMATION_MAX_PUBLISH_PER_TICK);
+      // 상한은 **계획의 하루 몫에 비례**한다(maxPublishPerTick) — 고정 3 은 하루 3건
+      // 계획 전제라, 하루 20건이면 7틱(105분)이 필요해 리드 120분을 거의 다 쓴다.
+      remaining = Math.min(remaining, maxPublishPerTick(rule));
       // 발행 순번(0-base) — 슬롯 시각 매핑(scheduledSlotAt)의 인덱스. **산식(quota - remaining)
       // 이 아니라 카운터다**: 산식은 위 틱당 상한이 remaining 을 클램프하면 앞 슬롯을 건너뛰고,
       // 다음 틱이 같은 슬롯 시각을 중복 배정한다(리드 2시간 안에 서로 다른 슬롯 시각 4개+ 엣지).

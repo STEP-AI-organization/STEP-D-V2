@@ -4,8 +4,12 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
 import {
+  AUTOMATION_MAX_PUBLISH_PER_TICK,
+  AUTOMATION_QUEUE_LEAD_MIN,
+  AUTOMATION_TICK_MIN,
   inActiveWindow,
   kstMinutes,
+  maxPublishPerTick,
   ruleSlots,
   scheduledSlotAt,
   slotsElapsed,
@@ -107,5 +111,55 @@ describe("per-slot counts", () => {
       "게시 성공 시 remaining 과 slotIndex 가 함께 움직여야 한다");
     assert.doesNotMatch(src, /scheduledSlotAt\(slotted, (publishedToday|quota)/,
       "산식 기반 순번(옛 형태)이 돌아왔다 — 이중 가산 또는 클램프 건너뜀을 다시 밟는다");
+  });
+});
+
+describe("틱당 게시 상한은 하루 몫에 비례한다 (2026-08-26)", () => {
+  // 고정 3 은 하루 3건 계획 전제였다. 하루 20건이면 20÷3 = 7틱 = 105분이 필요한데
+  // 큐잉 리드가 120분뿐이라, 순방이 한 번만 밀려도 슬롯 시각을 넘긴다 —
+  // 넘기면 예약이 아니라 즉시 게시라 "몇 시에 20개" 라는 약속이 깨진다.
+  const rule = (raw: unknown[], quota?: number) =>
+    ({ slots: raw as never, dailyQuota: quota }) as never;
+
+  it("작은 계획은 종전 그대로 3건/틱", () => {
+    assert.equal(maxPublishPerTick(rule(["09:00"])), AUTOMATION_MAX_PUBLISH_PER_TICK);
+    assert.equal(maxPublishPerTick(rule([], 3)), AUTOMATION_MAX_PUBLISH_PER_TICK);
+  });
+
+  it("하루 20건이면 리드의 절반(60분·4틱) 안에 끝나는 페이스", () => {
+    assert.equal(maxPublishPerTick(rule([{ time: "15:00", count: 20 }])), 5);
+    // 실제로 그 페이스면 리드 안에 끝나는지 — 산식이 아니라 결과로 확인한다.
+    const perTick = maxPublishPerTick(rule([{ time: "15:00", count: 20 }]));
+    assert.ok(Math.ceil(20 / perTick) * AUTOMATION_TICK_MIN <= AUTOMATION_QUEUE_LEAD_MIN / 2,
+      "하루 몫이 리드 절반 안에 안 끝난다 — 슬롯 시각을 넘겨 즉시 게시로 샌다");
+  });
+
+  it("할당량 방식(슬롯 없음)도 같은 산식을 탄다", () => {
+    assert.equal(maxPublishPerTick(rule([], 20)), 5);
+  });
+
+  it("하루 몫을 넘겨 쏟지는 않는다 — 폭탄 방지라는 원래 목적은 그대로", () => {
+    for (const n of [1, 3, 8, 20]) {
+      assert.ok(maxPublishPerTick(rule([{ time: "15:00", count: n }])) <= Math.max(3, n),
+        `틱당 상한이 하루 몫(${n})을 넘는다`);
+    }
+  });
+});
+
+describe("고아 클립 상속 — 게시와 상한이 같은 집합을 본다 (소스 스캔)", () => {
+  const src = fs.readFileSync(
+    path.join(path.dirname(fileURLToPath(import.meta.url)), "automation-cycle.ts"), "utf-8");
+
+  it("지워진 계획의 클립을 현재 계획이 상속한다", () => {
+    // 계획을 지웠다 다시 만들면 옛 클립이 고아가 돼 아무 순방도 안 집었다
+    // (2026-08-26 ENA: 렌더까지 끝난 10건이 조용히 멈춤).
+    assert.match(src, /liveRuleIds/, "상속 판정 집합이 없다");
+    assert.equal([...src.matchAll(/!liveRuleIds\.has\(c\.automationRuleId\)/g)].length, 2,
+      "게시(mine)와 상한(adoptedCountFor) 둘 다 같은 집합으로 상속을 판정해야 한다");
+  });
+
+  it("게시는 만들어진 순서대로 — 최신 우선(엔티티 ord)을 뒤집는다", () => {
+    assert.match(src, /\.reverse\(\)/,
+      "listEntities 는 최신 삽입이 먼저라 뒤집지 않으면 옛 클립이 계속 밀린다");
   });
 });

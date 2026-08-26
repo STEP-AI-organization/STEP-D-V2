@@ -277,6 +277,34 @@ export const AUTOMATION_QUEUE_LEAD_MIN = 120;
 export const AUTOMATION_MAX_PUBLISH_PER_TICK = 3;
 
 /**
+ * 순방 틱 간격(분) — Cloud Scheduler 가 15분마다 워커를 깨운다(stepd-worker-youtube-tick).
+ * 아래 페이스 산식의 근거다 — 스케줄을 바꾸면 이 값도 같이 봐야 한다.
+ */
+export const AUTOMATION_TICK_MIN = 15;
+
+/**
+ * 이 계획의 **틱당 게시 상한** — 하루 몫에 비례해 키운다 (2026-08-26).
+ *
+ * 고정 3 은 하루 3건 계획을 전제한 값이었다. 하루 20건 계획에서는 20÷3 = 7틱 =
+ * **105분**이 필요한데 큐잉 리드가 120분뿐이라, 순방이 한 번만 밀려도 슬롯 시각을
+ * 넘긴다(넘기면 예약이 아니라 즉시 게시라 "몇 시에 20개" 가 안 지켜진다).
+ *
+ * 그래서 **리드 시간의 절반 안에 하루 몫을 끝낼 수 있는 페이스**를 하한으로 준다:
+ * 20건이면 4틱(60분) → 5건/틱. 상한(SLOT_COUNT_MAX=20)이 있어 무한정 커지지 않고,
+ * 폭탄 방지라는 원래 목적(엔진 복구 직후 몰림)은 그대로다 — 하루 몫 자체가 상한이라
+ * 하루치를 넘겨 쏟아지지는 않는다.
+ */
+export function maxPublishPerTick(
+  rule: Pick<AutomationRule, "slots" | "dailyQuota">,
+  leadMin = AUTOMATION_QUEUE_LEAD_MIN,
+  tickMin = AUTOMATION_TICK_MIN,
+): number {
+  const perDay = perDayCount(rule);
+  const ticks = Math.max(1, Math.floor(leadMin / 2 / tickMin));
+  return Math.max(AUTOMATION_MAX_PUBLISH_PER_TICK, Math.ceil(perDay / ticks));
+}
+
+/**
  * 슬롯을 "놓쳤다"고 보는 유예(분) — 순방 틱 간격(10~15분) + 여유. 이 안이면 조금
  * 늦게라도 게시하고, 넘겼으면 그 몫은 **오늘은 포기**한다(내일 그 슬롯에 다시).
  *
