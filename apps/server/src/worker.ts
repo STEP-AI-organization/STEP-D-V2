@@ -1702,8 +1702,10 @@ async function markDistributionFailed(
   const prev = rows.find((d) => d?.channel === channel
     && (!accountId || !d?.[accountField] || String(d[accountField]) === String(accountId)));
   if (prev?.creditCharged === true && typeof prev?.creditChargeKey === "string" && prev.creditChargeKey) {
+    // 환급량 = 차감 시점에 행에 박아둔 값 — 단가가 바뀌어도 옛 차감은 옛 값대로 돌아간다.
+    const refund = Number(prev.creditChargeCredits) > 0 ? Math.floor(Number(prev.creditChargeCredits)) : 1;
     await addCreditEntry({
-      delta: 1, reason: "publish_refund",
+      delta: refund, reason: "publish_refund",
       note: `${channel} 배포 실패 환급 · ${clipId}`,
       actor: "worker", dedupeKey: `${prev.creditChargeKey}:refund`,
     }).catch((e) => console.warn(`[worker] 배포 환급 실패 ${clipId}:`, e instanceof Error ? e.message : e));

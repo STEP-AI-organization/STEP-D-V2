@@ -77,6 +77,17 @@ export function topupPaymentId(tenantId: string, nonce: string): string {
 // ── 충전 주문 ────────────────────────────────────────────────────────────────────
 
 /** 크레딧당 판매가(원). **아직 미정이라 env 로 받는다** — 코드에 숫자를 박지 않는다. */
+/**
+ * 배포 1건(영상×채널) 크레딧 — env PUBLISH_CREDITS, 기본 3 (2026-08-26 사용자 · "1은 너무 적다").
+ * 0 이면 배포 무과금(스위치). 음수·비수치는 기본값.
+ */
+export function publishCredits(env: NodeJS.ProcessEnv = process.env): number {
+  const raw = String(env.PUBLISH_CREDITS ?? "").trim();
+  if (raw === "") return 3;
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 0 ? Math.floor(n) : 3;
+}
+
 export function creditPriceKrw(env: NodeJS.ProcessEnv = process.env): number | null {
   const raw = String(env.CREDIT_PRICE_KRW ?? "").trim();
   if (!raw) return null;

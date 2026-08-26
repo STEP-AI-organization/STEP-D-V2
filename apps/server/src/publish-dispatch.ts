@@ -35,6 +35,7 @@ import {
 } from "./db-pg.ts";
 import { enqueue } from "./queue.ts";
 import { topupAndRecheck } from "./auto-topup.ts";
+import { publishCredits } from "./credits.ts";
 import { tiktokUploadEnabled, instagramUploadEnabled, facebookUploadEnabled } from "./upload-gate.ts";
 
 export interface PublishInput {
@@ -173,8 +174,10 @@ export async function dispatchPublish(input: PublishInput): Promise<PublishOutco
   // 전부 이 값을 쓴다. 채널마다 따로 파싱하면 한 채널만 +9시간 밀리는 반쪽 수정이 된다.
   const reserveDate = normalizeReserveDate(input.reserveDate);
 
-  // 업로드 과금 어휘 — 영상×채널 1크레딧(사용자 2026-08-26). record 모드는 실물이 안
-  // 올라가므로 무과금. 실패하면 워커(markDistributionFailed)가 chargeKey 로 환급한다.
+  // 업로드 과금 어휘 — 영상×채널 3크레딧(사용자 2026-08-26 · "1은 너무 적다" 1→3).
+  // record 모드는 실물이 안 올라가므로 무과금. 실패하면 워커(markDistributionFailed)가
+  // 행에 남긴 chargeKey·차감량으로 환급한다 — 단가가 또 바뀌어도 옛 차감은 옛 값대로 돌아간다.
+  const publishCost = publishCredits();
   const acctField = input.channel === "youtube" ? "youtubeChannelId"
     : input.channel === "tiktok" ? "tiktokOpenId"
     : input.channel === "instagram" ? "igUserId"
@@ -191,27 +194,27 @@ export async function dispatchPublish(input: PublishInput): Promise<PublishOutco
     // 같은 행이 이미 차감된 채 진행 중이면(더블클릭 재디스패치 — 큐는 dedupe 로 하나만 돈다)
     // 다시 물리지 않는다. 실패·신규 행만 차감 — 재시도는 환급 후라 다시 차감되는 게 맞다.
     let chargeKey: string | null = null;
-    if (mode === "upload") {
+    if (mode === "upload" && publishCost > 0) {
       const rows: any[] = Array.isArray(clip.distributions) ? clip.distributions : [];
       const prev = rows.find((d) => d?.channel === input.channel
         && (!acctVal || !d?.[acctField] || String(d[acctField]) === acctVal));
       const alreadyCharged = prev?.creditCharged === true
         && (prev?.status === "pending" || prev?.status === "scheduled");
       if (!alreadyCharged) {
-        if ((await creditBalance()) < 1) {
+        if ((await creditBalance()) < publishCost) {
           // 분석 게이트와 같은 처방 — 완전소진이면 자동충전을 먼저 시도하고 다시 본다.
-          await topupAndRecheck(1).catch(() => null);
+          await topupAndRecheck(publishCost).catch(() => null);
         }
-        if ((await creditBalance()) < 1) {
+        if ((await creditBalance()) < publishCost) {
           skipped.push({
             clipId, code: "credits",
-            reason: "크레딧이 부족해 배포하지 못했습니다 — 배포는 영상·채널당 1크레딧입니다. 충전 후 다시 시도해 주세요.",
+            reason: `크레딧이 부족해 배포하지 못했습니다 — 배포는 영상·채널당 ${publishCost}크레딧입니다. 충전 후 다시 시도해 주세요.`,
           });
           continue; // 행을 건드리지 않는다 — 거부된 요청은 화면을 있던 그대로 둔다.
         }
         chargeKey = `publish:${clipId}:${input.channel}:${acctVal || "-"}:${Date.now()}`;
         await addCreditEntry({
-          delta: -1, reason: "publish",
+          delta: -publishCost, reason: "publish",
           note: `${input.channel} 배포 · ${clipId}`,
           actor: input.actor || input.origin, dedupeKey: chargeKey,
         });
@@ -219,8 +222,9 @@ export async function dispatchPublish(input: PublishInput): Promise<PublishOutco
     }
 
     const value: Record<string, unknown> = {
-      // 과금 흔적 — 실패 환급(워커)이 이 두 값을 본다. 재디스패치(chargeKey null)면 기존 값 유지.
-      ...(chargeKey ? { creditCharged: true, creditChargeKey: chargeKey } : {}),
+      // 과금 흔적 — 실패 환급(워커)이 이 값들을 본다. 재디스패치(chargeKey null)면 기존 값 유지.
+      // 차감량을 행에 박는다 — 단가 변경 후에도 옛 차감은 그 값 그대로 환급된다.
+      ...(chargeKey ? { creditCharged: true, creditChargeKey: chargeKey, creditChargeCredits: publishCost } : {}),
       status,
       error: undefined,
       // 자동/수동 구분을 기록 자체에 남긴다 — 감사 로그(basis)에만 있으면 화면이 못 읽는다.
