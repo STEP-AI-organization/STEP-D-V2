@@ -93,6 +93,14 @@ export function probe(filePath: string): Promise<ProbeResult> {
   });
 }
 
+/**
+ * ffmpeg stderr 버퍼 상한 — Node execFile 기본(1MB)은 경고가 프레임 단위로 반복되는
+ * 렌더에서 넘친다. 넘치면 ERR_CHILD_PROCESS_STDIO_MAXBUFFER 로 프로세스가 **인코딩과
+ * 무관하게** 죽어 "렌더 실패" 가 된다 — 2026-08-26 ENA 실전: 60초 쇼츠 2건이 매 시도
+ * 이걸로만 실패해 자동 게시가 멈췄다. 로그는 버려도 되지만 렌더가 죽으면 안 된다.
+ */
+const FF_MAXBUF = 64 * 1024 * 1024;
+
 export function captureThumbnail(
   inputPath: string,
   timeOffset: number,
@@ -109,7 +117,7 @@ export function captureThumbnail(
         "-q:v", "2",
         outputPath,
       ],
-      { timeout: 30_000 },
+      { timeout: 30_000, maxBuffer: FF_MAXBUF },
       (err) => {
         if (err) return reject(err);
         if (!fs.existsSync(outputPath)) {
@@ -132,7 +140,7 @@ export function remuxFaststart(input: string, outputPath: string): Promise<void>
     execFile(
       "ffmpeg",
       ["-y", "-i", input, "-c", "copy", "-movflags", "+faststart", "-f", "mp4", outputPath],
-      { timeout: 300_000 },
+      { timeout: 300_000, maxBuffer: FF_MAXBUF },
       (err) => {
         if (err) return reject(err);
         if (!fs.existsSync(outputPath)) return reject(new Error("remux output not produced"));
@@ -486,7 +494,7 @@ function renderShortWithPreroll(opts: RenderShortOpts & { hookPreroll: NonNullab
   ];
 
   return new Promise((resolve, reject) => {
-    execFile("ffmpeg", args, { timeout: 300_000 }, (err) => {
+    execFile("ffmpeg", args, { timeout: 300_000, maxBuffer: FF_MAXBUF }, (err) => {
       if (err) return reject(err);
       if (!fs.existsSync(outputPath)) return reject(new Error("Preroll render output not produced"));
       resolve();
@@ -708,7 +716,7 @@ function renderDynamicShort(opts: RenderShortOpts): Promise<void> {
     opts.outputPath,
   ];
   return new Promise((resolve, reject) => {
-    execFile("ffmpeg", args, { timeout: 300_000 }, (err) => {
+    execFile("ffmpeg", args, { timeout: 300_000, maxBuffer: FF_MAXBUF }, (err) => {
       if (err) return reject(err);
       if (!fs.existsSync(opts.outputPath)) return reject(new Error("AI reframe output not produced"));
       resolve();
@@ -766,7 +774,7 @@ function renderDynamicShortWithPreroll(
     opts.outputPath,
   ];
   return new Promise((resolve, reject) => {
-    execFile("ffmpeg", args, { timeout: 300_000 }, (err) => {
+    execFile("ffmpeg", args, { timeout: 300_000, maxBuffer: FF_MAXBUF }, (err) => {
       if (err) return reject(err);
       if (!fs.existsSync(opts.outputPath)) return reject(new Error("AI reframe preroll output not produced"));
       resolve();
@@ -917,7 +925,7 @@ export function renderShort(opts: RenderShortOpts): Promise<void> {
   ];
 
   return new Promise((resolve, reject) => {
-    execFile("ffmpeg", args, { timeout: 300_000 }, (err) => {
+    execFile("ffmpeg", args, { timeout: 300_000, maxBuffer: FF_MAXBUF }, (err) => {
       if (err) return reject(err);
       if (!fs.existsSync(outputPath)) return reject(new Error("Render output not produced"));
       resolve();
@@ -949,7 +957,7 @@ export function trimEncode(
         "-movflags", "+faststart",
         outputPath,
       ],
-      { timeout: 120_000 },
+      { timeout: 120_000, maxBuffer: FF_MAXBUF },
       (err) => {
         if (err) return reject(err);
         if (!fs.existsSync(outputPath)) {
