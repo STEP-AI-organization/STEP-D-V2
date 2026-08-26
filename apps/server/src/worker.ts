@@ -1056,26 +1056,42 @@ async function handleAutomationCycle(job: Job): Promise<void> {
 const YT_RECONCILE_BATCH = 50;
 const YT_RECONCILE_LOOKAHEAD_MS = 10 * 60_000;      // 예약 10분 전부터 본다
 const YT_RECONCILE_LOOKBEHIND_MS = 24 * 3600_000;   // 지난 지 24시간까지만 본다
+// 게시 후 공개범위 되읽기 창 — 사람이 유튜브 스튜디오에서 비공개→공개로 바꿔도 우리 기록은
+// 업로드 시점 값이라 고객사 화면이 계속 '비공개' 배지를 달았다(2026-08-26 ENA 실전).
+// 게시 7일까지만 되읽는다 — 그 뒤 변경은 드물고, 오래된 행을 영원히 조회하면 quota 낭비.
+const YT_PRIVACY_REFRESH_WINDOW_MS = 7 * 24 * 3600_000;
 
 async function handleYoutubeReconcile(_job: Job): Promise<void> {
   const clips = await listEntities<any>("clip");
   const now = Date.now();
 
-  /** 채널별로 (클립, videoId) 를 모은다 — 소유자 토큰으로만 조회할 수 있어서 반드시 채널별. */
-  const byChannel = new Map<string, { clipId: string; videoId: string }[]>();
+  /** 채널별로 (클립, videoId) 를 모은다 — 소유자 토큰으로만 조회할 수 있어서 반드시 채널별.
+   *  kind: scheduled = 예약 공개 확정 감시(기존) · refresh = 게시된 행의 공개범위 되읽기. */
+  const byChannel = new Map<string, {
+    clipId: string; videoId: string; kind: "scheduled" | "refresh"; privacy?: string;
+  }[]>();
   for (const clip of clips) {
     for (const d of (clip?.distributions ?? []) as any[]) {
-      if (d?.channel !== "youtube" || d?.status !== "scheduled") continue;
+      if (d?.channel !== "youtube") continue;
       const videoId = typeof d.externalId === "string" ? d.externalId : "";
       const channelId = typeof d.youtubeChannelId === "string" ? d.youtubeChannelId : "";
       if (!videoId || !channelId) continue;
-      // 폴링 창 — reserveDate 를 못 읽으면(형식 이상) 창 제한 없이 본다(AENA 와 동일).
-      const due = typeof d.reserveDate === "string" ? Date.parse(d.reserveDate) : NaN;
-      if (Number.isFinite(due)
-        && (due > now + YT_RECONCILE_LOOKAHEAD_MS || due < now - YT_RECONCILE_LOOKBEHIND_MS)) continue;
-      const arr = byChannel.get(channelId) ?? [];
-      arr.push({ clipId: clip.id, videoId });
-      byChannel.set(channelId, arr);
+      if (d?.status === "scheduled") {
+        // 폴링 창 — reserveDate 를 못 읽으면(형식 이상) 창 제한 없이 본다(AENA 와 동일).
+        const due = typeof d.reserveDate === "string" ? Date.parse(d.reserveDate) : NaN;
+        if (Number.isFinite(due)
+          && (due > now + YT_RECONCILE_LOOKAHEAD_MS || due < now - YT_RECONCILE_LOOKBEHIND_MS)) continue;
+        const arr = byChannel.get(channelId) ?? [];
+        arr.push({ clipId: clip.id, videoId, kind: "scheduled" });
+        byChannel.set(channelId, arr);
+      } else if (d?.status === "published" && typeof d.privacy === "string") {
+        // 게시 7일 안의 행만 — 스튜디오에서 사람이 바꾼 공개범위를 따라간다.
+        const at = Number(d.publishedAt);
+        if (!Number.isFinite(at) || now - at > YT_PRIVACY_REFRESH_WINDOW_MS) continue;
+        const arr = byChannel.get(channelId) ?? [];
+        arr.push({ clipId: clip.id, videoId, kind: "refresh", privacy: d.privacy });
+        byChannel.set(channelId, arr);
+      }
     }
   }
   if (byChannel.size === 0) return;
@@ -1101,7 +1117,24 @@ async function handleYoutubeReconcile(_job: Job): Promise<void> {
           return m;
         });
         for (const b of batch) {
-          if (statusById.get(b.videoId) !== "public") continue; // 확정 신호가 아니면 손대지 않는다
+          const actual = statusById.get(b.videoId);
+          if (b.kind === "refresh") {
+            // 되읽기 — 실제 privacyStatus 가 기록과 다르면 그대로 따라간다(승격이 아니라
+            // 동기화: public·unlisted·private 어느 방향이든). 응답 누락(삭제·조회 실패)은
+            // 손대지 않는다 — 모르는 걸 지어내지 않는다.
+            if (!actual || actual === b.privacy) continue;
+            const fresh = (await getEntity<any>("clip", b.clipId)) ?? null;
+            if (!fresh) continue;
+            await putEntity("clip", b.clipId, {
+              ...fresh,
+              distributions: upsertDistribution(fresh.distributions, "youtube", {
+                externalId: b.videoId, youtubeChannelId: channelId, privacy: actual,
+              }),
+            });
+            confirmed += 1;
+            continue;
+          }
+          if (actual !== "public") continue; // 확정 신호가 아니면 손대지 않는다
           const fresh = (await getEntity<any>("clip", b.clipId)) ?? null;
           if (!fresh) continue;
           await putEntity("clip", b.clipId, {
