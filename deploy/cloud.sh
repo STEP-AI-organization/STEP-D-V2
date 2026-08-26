@@ -87,6 +87,19 @@ do_worker() {
     --project="$PROJECT" --region="$REGION" \
     --update-env-vars=CORE_PYTHON=/opt/corevenv/bin/python,CORE_DIR=/app,GCS_UPLOAD_BUCKET="$GCS_UPLOAD_BUCKET" \
     >/dev/null 2>&1 || log "⚠️ content job env 자가치유 실패 — 수동 확인 필요"
+
+  # 결제 자격증명 — **자동 충전은 워커 안에서 돈다.** automation-cycle 의 maybeAutoTopup,
+  # content-pipeline 의 topupAndRecheck 가 전부 잡 컨텍스트라, 서비스에만 PORTONE_* 를
+  # 붙여 두면 카드가 등록돼 있어도 결제 호출이 "PORTONE_API_SECRET 미설정" 으로 죽는다
+  # (2026-08-26 실측: 두 잡의 env 에 PORTONE 문자열 0건 · 서비스에는 5종 전부 존재).
+  # 게다가 그 실패가 하루 1회뿐인 시도를 태워 자동배포가 24시간 선다.
+  # 시크릿 참조로만 붙인다 — 값은 어디에도 안 남고, 잡 SA 가 서비스와 동일(stepd-deployer)
+  # 이라 추가 IAM 도 필요 없다. 필요한 3종: 결제 호출(API_SECRET) · 상점(STORE_ID) ·
+  # **빌링 전용 채널**(BILLING_CHANNEL_KEY — 일반결제 채널키로 긁으면 그 MID 에 빌링키가
+  # 없어 실패한다, portone.ts:84 주석).
+  for _job in stepd-worker-youtube stepd-worker-content; do
+    MSYS2_ARG_CONV_EXCL="--update-secrets" gcloud run jobs update "$_job"       --project="$PROJECT" --region="$REGION"       --update-secrets=PORTONE_API_SECRET=stepd-portone-api-secret:latest,PORTONE_STORE_ID=stepd-portone-store-id:latest,PORTONE_BILLING_CHANNEL_KEY=stepd-portone-billing-channel-key:latest       >/dev/null 2>&1 || log "WARN $_job 결제 시크릿 연결 실패 — 자동 충전이 안 된다, 수동 확인 필요"
+  done
   log "worker 완료"
 }
 
