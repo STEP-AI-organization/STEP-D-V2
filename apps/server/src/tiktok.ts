@@ -409,6 +409,9 @@ export async function uploadDirectPostToTikTok(
   let privacyLevel = post.privacyLevel;
   if (!privacyLevel) {
     const options = await queryCreatorPrivacyOptions(accessToken);
+    // 진단 로그 — 미심사 403 을 추적할 때 "틱톡이 이 계정을 공개로 보는가" 가 핵심 증거다
+    // (비공개 계정이면 PUBLIC_TO_EVERYONE 이 목록에서 빠진다 · 2026-08-26 실측 디버깅).
+    console.log(`[tiktok] creator_info privacy options: ${options.join(",") || "(빈 목록)"}`);
     privacyLevel = options.includes("PUBLIC_TO_EVERYONE")
       ? "PUBLIC_TO_EVERYONE"
       : (options[0] ?? "SELF_ONLY");
