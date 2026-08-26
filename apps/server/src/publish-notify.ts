@@ -45,6 +45,8 @@ export interface AutoPublishNotice {
   videoId: string;
   /** 예약 게시면 그 시각(ISO) — 리포트에 '예약' 으로 표기된다. */
   publishAt?: string | null;
+  /** 클립 식별자 — 같은 클립의 앞선 **실패 적립을 성공이 지우는** 축(재시도 성공 시). */
+  clipId?: string;
 }
 
 /** 이 배포가 자동 경로였나 — 큐잉 시점에 dispatchPublish 가 기록한 origin 을 본다. */
@@ -66,6 +68,13 @@ export interface AutoReportItem {
   durationSec: number | null;
   publishedAtMs: number;
   publishAt: string | null; // ISO — 있으면 '예약'
+  /** 실패 항목 — '게시' 가 아니라 '확인 필요' 로 집계되고 재시도 안내가 붙는다 (2026-08-26). */
+  failed?: boolean;
+  /** 실패 사유 — 워커가 배포 행에 남긴 사람 말 그대로. */
+  error?: string;
+  /** 실패 dedupe·성공 시 제거 축 — 같은 (클립·채널·계정) 실패가 재시도마다 안 쌓이게. */
+  clipId?: string;
+  accountKey?: string;
 }
 
 const kstDate = (at: Date = new Date()): string =>
@@ -110,7 +119,11 @@ export async function recordAutoPublishForReport(n: AutoPublishNotice): Promise<
     if (!mailConfigured()) return;
     if (!(await notifyEmail())) return;   // 담당자 이메일 없으면 적립도 안 한다(버퍼 무한성장 방지)
     if (!isAutoOrigin(n)) return;
-    const items = await readBuffer();
+    const accountKey = `${n.channel}:${n.accountId}`;
+    // 같은 (클립·채널) 의 **앞선 실패 항목을 지운다** — 재시도가 성공했는데도 리포트가
+    // "확인 필요" 로 남으면 담당자가 이미 나간 영상을 다시 손댄다(2026-08-26).
+    const items = (await readBuffer())
+      .filter((i) => !(i.failed && i.clipId && i.clipId === n.clipId && i.accountKey === accountKey));
     items.push({
       date: kstDate(),
       title: n.title,
@@ -121,11 +134,61 @@ export async function recordAutoPublishForReport(n: AutoPublishNotice): Promise<
       durationSec: Number.isFinite(Number(n.clip.durationSec)) ? Number(n.clip.durationSec) : null,
       publishedAtMs: Date.now(),
       publishAt: n.publishAt ?? null,
+      ...(n.clipId ? { clipId: n.clipId, accountKey } : {}),
     });
     await setAutomationSetting(REPORT_BUFFER_KEY, JSON.stringify(items.slice(-100)));
     console.log(`[report] 자동배포 적립 ${n.videoId} (${items.length}건 대기)`);
   } catch (e) {
     console.warn("[report] 자동배포 적립 실패:", e instanceof Error ? e.message : e);
+  }
+}
+
+/**
+ * **실패 1건 적립** (2026-08-26). 성공만 적립하던 리포트의 가장 큰 구멍을 막는다.
+ *
+ * 하루 20건이 도는 계정에서 3건이 조용히 실패하면, 예전 리포트는 "17건 게시 · 확인 필요 0"
+ * 이라고 말했다 — 담당자는 20건이 다 나간 줄 안다. 실패는 **자동 재시도를 하지 않는**
+ * 상태(F4-4)라 사람이 배포 화면에서 눌러야 풀리는데, 그 사실이 어디에도 도달하지 않았다.
+ *
+ * 같은 (클립·채널·계정)은 **한 줄만** 유지한다 — 재시도가 또 실패해도 줄이 늘지 않고
+ * 최신 사유로 갱신된다. 성공이 뒤따르면 위 recordAutoPublishForReport 가 이 줄을 지운다.
+ */
+export async function recordAutoPublishFailureForReport(f: {
+  clip: { programTitle?: unknown; durationSec?: unknown; distributions?: unknown };
+  clipId: string;
+  title: string;
+  channel: string;
+  accountId?: string;
+  channelLabel?: string;
+  error: string;
+}): Promise<void> {
+  try {
+    if (!mailConfigured()) return;
+    if (!(await notifyEmail())) return;
+    // 자동 경로만 — 사람이 누른 배포의 실패는 그 화면에서 이미 보인다.
+    if (!isAutoOrigin({ clip: f.clip, channel: f.channel as "youtube", accountId: f.accountId ?? "" })) return;
+    const accountKey = `${f.channel}:${f.accountId ?? ""}`;
+    const items = (await readBuffer())
+      .filter((i) => !(i.failed && i.clipId === f.clipId && i.accountKey === accountKey));
+    items.push({
+      date: kstDate(),
+      title: f.title,
+      program: String(f.clip.programTitle ?? "").trim(),
+      channelLabel: String(f.channelLabel ?? f.accountId ?? "").trim(),
+      videoId: "",
+      url: "",
+      durationSec: Number.isFinite(Number(f.clip.durationSec)) ? Number(f.clip.durationSec) : null,
+      publishedAtMs: Date.now(),
+      publishAt: null,
+      failed: true,
+      error: String(f.error).slice(0, 300),
+      clipId: f.clipId,
+      accountKey,
+    });
+    await setAutomationSetting(REPORT_BUFFER_KEY, JSON.stringify(items.slice(-100)));
+    console.log(`[report] 자동배포 실패 적립 ${f.clipId} (${f.channel})`);
+  } catch (e) {
+    console.warn("[report] 자동배포 실패 적립 실패:", e instanceof Error ? e.message : e);
   }
 }
 
@@ -202,20 +265,50 @@ export function buildAutoPublishReportHtml(
   // 워커가 이제 channelName 을 싣지만, 이미 버퍼에 쌓인 옛 항목도 여기서 걸러진다.
   const readable = (s: string) => !/^UC[A-Za-z0-9_-]{20,}$/.test(s);
   const channels = [...new Set(items.map((i) => i.channelLabel).filter(Boolean).filter(readable))];
-  const scheduled = items.filter((i) => i.publishAt);
-  const publishedCount = items.length - scheduled.length;
+  // 실패는 게시 수에서 빠지고 **'확인 필요'** 로 센다 — 예전엔 성공만 적립돼서 20건 중
+  // 3건이 실패한 날에도 "확인 필요 0" 이 나갔다(2026-08-26). 실패는 자동 재시도가 없으므로
+  // 이 숫자가 곧 사람이 할 일의 개수다.
+  const failedItems = items.filter((i) => i.failed);
+  const okItems = items.filter((i) => !i.failed);
+  const scheduled = okItems.filter((i) => i.publishAt);
+  const publishedCount = okItems.length - scheduled.length;
   const subtitle = `${programs.join(" · ") || "자동배포"} · YouTube${channels.length ? ` ${channels.join(" · ")}` : ""}`;
   const stamp = `${kstDate(now).replace(/-/g, ".")} ${kstHm(now)} KST`;
+  // 실패가 있으면 프리헤더(받은함 미리보기)부터 그 사실을 말한다 — 메일을 열기 전에 보인다.
+  const preheader = failedItems.length
+    ? `배포 ${items.length}건 중 ${failedItems.length}건 확인 필요. 배포 화면에서 재시도해 주세요.`
+    : `배포 ${items.length}건 전부 게시 완료. 확인 필요 항목 없음.`;
 
   const itemHtml = (i: AutoReportItem, first: boolean) => {
+    const sep = first ? "" : `<tr><td class="px" style="padding:30px 40px 0 40px;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td height="1" bgcolor="#E9E8E6" style="height:1px;line-height:1px;font-size:0;">&nbsp;</td></tr></table></td></tr>`;
+    const pad = `padding:${first ? "34px" : "30px"} 40px 0 40px;`;
+    const titleDiv = `<div style="font-family:${FONT};font-size:16px;font-weight:600;line-height:27px;mso-line-height-rule:exactly;letter-spacing:-0.01em;color:#1F2124;word-break:keep-all;">${esc(i.title)}</div>`;
+
+    // 실패 항목 — 열 영상이 없으니 '영상 열기' 대신 **사유와 다음 행동**을 싣는다.
+    // 점 색도 청록(정상)이 아니라 주황이어야 훑어볼 때 눈에 걸린다.
+    if (i.failed) {
+      const metaBits = [readable(i.channelLabel) ? i.channelLabel : "", fmtDur(i.durationSec),
+        `${kstHm(new Date(i.publishedAtMs))} 실패`].filter(Boolean).join(" · ");
+      return `${sep}
+  <tr><td class="px" style="${pad}">
+    ${titleDiv}
+    <div style="padding-top:8px;font-family:${FONT};font-size:13px;font-weight:400;line-height:20px;color:#5C5E63;">${esc(metaBits)}</div>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:14px;" bgcolor="#FBF2EC"><tr><td style="background:#FBF2EC;border-radius:6px;padding:16px 18px;">
+      <div style="font-family:${FONT};font-size:13px;font-weight:600;line-height:20px;color:#B4522A;"><span style="display:inline-block;width:5px;height:5px;background:#E2703A;vertical-align:2px;margin-right:8px;font-size:0;line-height:0;">&nbsp;</span>확인 필요</div>
+      <div style="padding-top:8px;font-family:${FONT};font-size:13px;font-weight:400;line-height:21px;color:#5C5E63;word-break:keep-all;">${esc(i.error ?? "게시에 실패했습니다")}</div>
+      <div style="padding-top:8px;font-family:${FONT};font-size:13px;font-weight:400;line-height:21px;color:#5C5E63;word-break:keep-all;">자동으로 다시 보내지 않습니다 — 배포 화면에서 재시도를 눌러 주세요.</div>
+    </td></tr></table>
+  </td></tr>`;
+    }
+
     const at = i.publishAt ? new Date(i.publishAt) : new Date(i.publishedAtMs);
     const metaBits = [readable(i.channelLabel) ? i.channelLabel : "", fmtDur(i.durationSec),
       `${kstHm(at)} ${i.publishAt ? "공개 예정" : "게시"}`]
       .filter(Boolean).join(" · ");
     const dot = i.publishAt ? "예약" : "공개";
-    return `${first ? "" : `<tr><td class="px" style="padding:30px 40px 0 40px;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td height="1" bgcolor="#E9E8E6" style="height:1px;line-height:1px;font-size:0;">&nbsp;</td></tr></table></td></tr>`}
-  <tr><td class="px" style="padding:${first ? "34px" : "30px"} 40px 0 40px;">
-    <div style="font-family:${FONT};font-size:16px;font-weight:600;line-height:27px;mso-line-height-rule:exactly;letter-spacing:-0.01em;color:#1F2124;word-break:keep-all;">${esc(i.title)}</div>
+    return `${sep}
+  <tr><td class="px" style="${pad}">
+    ${titleDiv}
     <div style="padding-top:8px;font-family:${FONT};font-size:13px;font-weight:400;line-height:20px;color:#5C5E63;">${esc(metaBits)}</div>
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:14px;"><tr>
       <td align="left" valign="middle" style="padding:6px 0;"><span style="font-family:${FONT};font-size:13px;font-weight:600;line-height:32px;color:#1F2124;"><span style="display:inline-block;width:5px;height:5px;background:#47EBEB;vertical-align:2px;margin-right:8px;font-size:0;line-height:0;">&nbsp;</span>${dot}</span></td>
@@ -242,7 +335,7 @@ export function buildAutoPublishReportHtml(
 </style>
 </head>
 <body style="margin:0;padding:0;background:#F0EEEB;-webkit-text-size-adjust:100%;">
-<span style="display:none !important;visibility:hidden;opacity:0;color:transparent;height:0;width:0;overflow:hidden;mso-hide:all;">배포 ${items.length}건 전부 게시 완료. 확인 필요 항목 없음.</span>
+<span style="display:none !important;visibility:hidden;opacity:0;color:transparent;height:0;width:0;overflow:hidden;mso-hide:all;">${esc(preheader)}</span>
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#F0EEEB;">
 <tr><td class="outer" align="center" style="padding:40px 16px;">
 <table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="width:100%;max-width:600px;background:#FDFCFC;border-radius:8px;">
@@ -267,12 +360,12 @@ export function buildAutoPublishReportHtml(
       </td>
       <td width="34%" align="left" valign="top" style="width:34%;">
         <div style="font-family:${FONT};font-size:13px;font-weight:600;line-height:18px;color:#5C5E63;">확인 필요</div>
-        <div style="padding-top:10px;font-family:${FONT};font-size:44px;font-weight:600;line-height:46px;mso-line-height-rule:exactly;letter-spacing:-0.03em;color:#5C5E63;">0</div>
+        <div style="padding-top:10px;font-family:${FONT};font-size:44px;font-weight:600;line-height:46px;mso-line-height-rule:exactly;letter-spacing:-0.03em;color:${failedItems.length ? "#B4522A" : "#5C5E63"};">${failedItems.length}</div>
       </td>
     </tr></table>
   </td></tr>
   <tr><td class="px" style="padding:0 40px;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td height="1" bgcolor="#E9E8E6" style="height:1px;line-height:1px;font-size:0;">&nbsp;</td></tr></table></td></tr>
-${items.map((i, k) => itemHtml(i, k === 0)).join("\n")}
+${[...failedItems, ...okItems].map((i, k) => itemHtml(i, k === 0)).join("\n")}
 <tr><td class="px" style="padding:30px 40px 0 40px;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td height="1" bgcolor="#E9E8E6" style="height:1px;line-height:1px;font-size:0;">&nbsp;</td></tr></table></td></tr>
 ${next ? `  <tr><td class="px" style="padding:32px 40px 0 40px;">
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#F5F3F1" style="background:#F5F3F1;border-radius:6px;"><tr><td style="padding:22px 24px;">

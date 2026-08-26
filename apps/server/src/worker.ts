@@ -58,7 +58,7 @@ import {
 import { uploadFile, uploadPath, thumbPath, promoteUpload } from "./storage-gcs.ts";
 import { initQueue, claimJob, completeJob, failJob, requeueStale, heartbeatJob, enqueue, lastDoneJobAt, queueStats, type Job, type JobType } from "./queue.ts";
 import { runWithTenant, runAsSystem, DEFAULT_TENANT_ID } from "./tenant.ts";
-import { recordAutoPublishForReport } from "./publish-notify.ts";
+import { recordAutoPublishForReport, recordAutoPublishFailureForReport } from "./publish-notify.ts";
 import { runAutomationCycle } from "./automation-cycle.ts";
 import { runChannelPipeline } from "./channel-pipeline.ts";
 import { runClipReframe, runContentAnalyze, runReframeCompare, newestMtimeMs } from "./content-pipeline.ts";
@@ -1725,7 +1725,32 @@ async function markDistributionFailed(
       detail: `${channel} 게시 실패 — ${String(error).slice(0, 200)}`,
       accountKey: accountId ? `${channel}:${accountId}` : null,
     }).catch(() => { /* 로그 실패가 배포 처리를 막을 이유는 없다 */ });
+    // 담당자 메일에도 실린다 — 실행 로그는 화면에 들어와야 보이지만, 리포트는 찾아간다.
+    // 실패는 **자동 재시도가 없는** 상태라(F4-4) 사람이 눌러야 풀리는데, 예전 리포트는
+    // 성공만 적립해 "20건 중 17건 게시 · 확인 필요 0" 이라고 말했다(2026-08-26).
+    // 실패 뒤 재시도가 성공하면 그 적립이 이 줄을 지운다. 던지지 않는 함수다.
+    await recordAutoPublishFailureForReport({
+      clip: { ...clip, distributions }, clipId,
+      title: String(metaForChannel(clip, channel as any)?.title ?? clip.title ?? "").trim() || String(clip.title ?? ""),
+      channel, accountId,
+      channelLabel: accountId ? await publishChannelLabel(channel, accountId) : undefined,
+      error,
+    });
   }
+}
+
+/**
+ * 배포 채널의 **사람이 읽는 이름** — 리포트가 생 계정 ID 대신 쓴다(2026-08-26).
+ * 못 찾으면 undefined 를 돌려 리포트가 계정 ID 를 감추게 둔다. 던지지 않는다.
+ */
+async function publishChannelLabel(channel: string, accountId: string): Promise<string | undefined> {
+  try {
+    if (channel === "youtube") {
+      const ch = await getYouTubeChannelByChannelId(accountId);
+      return String((ch as any)?.channelName ?? "").trim() || undefined;
+    }
+  } catch { /* 이름은 부속 정보 — 실패해도 배포 처리를 막지 않는다 */ }
+  return undefined;
 }
 
 /**
@@ -2473,7 +2498,7 @@ async function runDistributionPublish(job: Job): Promise<void> {
     // 채널 행의 사람이 읽는 이름은 channelName 이다 — title 로 읽으면 항상 비어서
     // accountId(생 채널 ID)가 리포트 제목줄에 그대로 노출됐다(2026-08-26 ENA 메일).
     channelLabel: String((ch as any)?.channelName ?? "").trim() || undefined,
-    videoId, publishAt,
+    videoId, publishAt, clipId,
   });
   try {
     const body = await streamToBuffer(createReadStream(objPath));

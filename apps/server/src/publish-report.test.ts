@@ -93,4 +93,55 @@ describe("buildAutoPublishReportHtml — 템플릿 렌더", () => {
     const noNext = buildAutoPublishReportHtml(items, kst("2026-08-26T09:30"), null);
     assert.doesNotMatch(noNext, /다음 배포/);
   });
+
+  it("생 채널 ID(UC…)는 사람이 읽는 자리에 안 나온다", () => {
+    // channelLabel 은 이름이 없으면 accountId 로 폴백한다 — 그 꼴이 제목줄·항목 메타에
+    // 그대로 노출됐다(2026-08-26 ENA 메일). 렌더가 마지막 방어선이다.
+    const raw = buildAutoPublishReportHtml(
+      items.map((i) => ({ ...i, channelLabel: "UCd39hfW7B7U1IdJxFg9GnCQ" })),
+      kst("2026-08-26T09:30"), null);
+    assert.doesNotMatch(raw, /UCd39hfW7B7U1IdJxFg9GnCQ/);
+  });
+});
+
+describe("리포트는 실패를 숨기지 않는다 (2026-08-26)", () => {
+  // 예전엔 성공만 적립돼, 20건 중 3건이 실패한 날에도 "확인 필요 0" 이 나갔다.
+  // 실패는 자동 재시도가 없는 상태(F4-4)라 이 숫자가 곧 사람이 할 일의 개수다.
+  const ok: AutoReportItem = {
+    date: "2026-08-26", title: "정상 게시분", program: "눈떠보니 OOO",
+    channelLabel: "AENA_TEST", videoId: "ok1", url: "https://youtu.be/ok1",
+    durationSec: 60, publishedAtMs: Date.parse("2026-08-26T15:00:00+09:00"), publishAt: null,
+  };
+  const bad: AutoReportItem = {
+    date: "2026-08-26", title: "실패한 영상", program: "눈떠보니 OOO",
+    channelLabel: "AENA_TEST", videoId: "", url: "",
+    durationSec: 45, publishedAtMs: Date.parse("2026-08-26T15:02:00+09:00"), publishAt: null,
+    failed: true, error: "할당량이 초과되었습니다", clipId: "c_bad", accountKey: "youtube:UC1",
+  };
+  const html = buildAutoPublishReportHtml([ok, bad], kst("2026-08-26T16:30"), null);
+
+  it("통계가 실패를 '확인 필요' 로 세고 '게시' 에서 뺀다", () => {
+    assert.match(html, />배포<\/div>[\s\S]*?>2<\/div>/);
+    assert.match(html, />게시<\/div>[\s\S]*?>1<\/div>/);
+    assert.match(html, />확인 필요<\/div>[\s\S]*?>1<\/div>/);
+  });
+
+  it("실패 사유와 다음 행동이 실린다 — 자동 재시도가 없다는 사실까지", () => {
+    assert.match(html, /할당량이 초과되었습니다/);
+    assert.match(html, /자동으로 다시 보내지 않습니다/);
+    assert.match(html, /배포 화면에서 재시도/);
+  });
+
+  it("실패 항목엔 '영상 열기' 버튼이 없다 — 열 영상이 없다", () => {
+    // 성공분 1건의 버튼만 있어야 한다.
+    assert.equal([...html.matchAll(/영상 열기/g)].length, 1);
+    assert.doesNotMatch(html, /href=""/);
+  });
+
+  it("실패가 있으면 프리헤더가 그 사실부터 말한다 — 열기 전에 보인다", () => {
+    assert.match(html, /1건 확인 필요/);
+    assert.doesNotMatch(html, /전부 게시 완료/);
+    // 실패 없는 날은 종전 문구 그대로.
+    assert.match(buildAutoPublishReportHtml([ok], kst("2026-08-26T16:30"), null), /전부 게시 완료/);
+  });
 });
