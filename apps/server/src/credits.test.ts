@@ -154,8 +154,14 @@ describe("모자라면 시작하지 않는다", () => {
     assert.equal(r.allow === true && r.remainingAfter, 0);
   });
 
-  it("러닝타임을 모르면(0) 막지 않는다", () => {
-    // 프로브 실패로 분석 자체를 못 하게 만드는 것보다 낫다. 차감은 끝난 뒤 실제 길이로.
+  it("러닝타임을 모르면(0) 이 함수는 막지 않는다 — 대신 실행 길목이 막는다", () => {
+    // 이 통과 자체는 유지한다: 프로브 실패로 **큐잉조차** 못 하게 만드는 것보다, 길이를
+    // 알게 되는 지점까지 진행시키는 편이 낫다(차감은 끝난 뒤 실제 길이로).
+    //
+    // ⚠️ 다만 예전엔 이게 **유일한** 판정이라 그대로 구멍이었다 — durationSec 이 0 인
+    // 미디어는 잔액 0 이어도 60분 분석이 시작됐다(2026-08-26 감사). 지금은 분석을 실제로
+    // 시작하는 길목(runContentAnalyze)이 길이가 확정된 뒤 다시 재므로, 이 통과가
+    // "공짜 분석" 으로 이어지지 않는다. 아래 describe 가 그 길목을 고정한다.
     assert.equal(checkCredits({ balance: 0, needMinutes: 0 }).allow, true);
   });
 
@@ -478,5 +484,49 @@ describe("자동 충전 상한 알림은 기간이 지나면 만료된다", () =
     assert.equal(liveAutoTopupAlert(a, "2026-08-15T13:00:00.000Z"), a);
     assert.equal(liveAutoTopupAlert(a, "2026-08-18T02:00:00.000Z"), null);
     assert.equal(liveAutoTopupAlert(null, "2026-08-18T02:00:00.000Z"), null);
+  });
+});
+
+
+/**
+ * **분석은 잔액 ≥ 필요분일 때만 시작한다** (사용자 확정 2026-08-26:
+ * "잔액 40 에 60분 영상이 들어오면 분석에 들어가면 안 된다 — 돈 받고 시작").
+ *
+ * 큐잉 시점 게이트(라우트·factory·media.prepare·youtube.download)만으로는 이 불변식이
+ * 지켜지지 않는다. 셋이 새기 때문이다:
+ *   ① 길이를 모르면 통과(need=0) ② 차감이 분석 완료 후라 큐잉분끼리 같은 잔액을 본다
+ *   ③ 게이트를 안 거치는 큐잉 경로(어드민 큐 정리·GEBD 완료 후 재큐잉)
+ * 그래서 **실제로 분석을 시작하는 한 지점**에서 다시 재야 한다.
+ */
+describe("분석 시작 길목이 잔액을 다시 잰다 (소스 스캔)", () => {
+  const pipe = fs.readFileSync(path.join(SRC, "content-pipeline.ts"), "utf-8");
+  const fn = pipe.match(/export async function runContentAnalyze[\s\S]*?\n\}/)?.[0] ?? "";
+
+  it("runContentAnalyze 가 시작 전에 checkCredits 로 판정한다", () => {
+    assert.notEqual(fn, "", "runContentAnalyze 를 못 잘랐다");
+    assert.match(fn, /checkCredits\(/, "실행 길목에 잔액 판정이 없다 — 큐잉 게이트의 구멍이 그대로 통과한다");
+    assert.match(fn, /billableMinutes\(media\.durationSec/,
+      "필요분을 실제 영상 길이로 재지 않는다");
+  });
+
+  it("판정이 **무거운 일을 시작하기 전**에 선다", () => {
+    // 워크디렉토리 생성·GCS 체크포인트 복원·소스 다운로드보다 앞이어야 원가가 안 나간다.
+    assert.ok(fn.indexOf("checkCredits(") < fn.indexOf("sweepStaleWorkDirs()"),
+      "잔액 판정이 작업 디렉토리 준비보다 뒤에 있다 — 막을 거면 아무것도 시작하기 전에 막아야 한다");
+  });
+
+  it("모자라면 조용히 넘기지 않고 던진다 — 그리고 회차에 사유를 남긴다", () => {
+    assert.match(fn, /throw new Error\(`content\.analyze: 크레딧 부족/,
+      "부족한데 계속 진행하거나 조용히 return 한다");
+    assert.match(fn, /setEpisodePipeline\(/, "회차 화면이 오지 않을 완료를 기다리게 된다");
+    // 자동배포 순방(episodeAnalysisState)이 '크레딧|충전' 문구로 blocked 를 판정한다 —
+    // 문구가 갈라지면 "분석 중" 으로 잘못 세어 오지 않을 완료를 기다린다.
+    assert.match(fn, /크레딧 부족/, "순방이 읽는 어휘(크레딧/충전)가 사유에 없다");
+  });
+
+  it("막기 전에 자동 결제를 먼저 시도한다 — '돈 받고 시작' 의 돈 받는 자리", () => {
+    assert.match(fn, /topupAndRecheck\(/, "카드가 있어도 충전 시도 없이 막는다");
+    assert.ok(fn.indexOf("topupAndRecheck(") < fn.indexOf("throw new Error(`content.analyze: 크레딧 부족"),
+      "충전 시도가 차단보다 뒤면 카드가 있어도 분석이 멈춘다");
   });
 });

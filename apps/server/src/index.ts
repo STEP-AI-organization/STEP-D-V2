@@ -5837,7 +5837,18 @@ app.post("/api/billing/card", async (c) => {
 
   // 구매자 3종은 **저장 시 필수**다 — 빌링키 결제의 customer 필수값(이니시스)이라, 여기서
   // 안 받아두면 결제 때 보낼 값이 없어 저장 카드가 긁히지 않는 장식이 된다(2026-08-14 실측).
-  const who = checkCustomer((body.buyer ?? {}) as Record<string, unknown>);
+  //
+  // ⚠️ 폴백은 **prepare 와 대칭**이어야 한다(2026-08-26). 예전엔 여기만 저장값 폴백이 없어서,
+  // 바디를 비운 호출자(고객사 `billing:write` 키 등)는 prepare 는 폴백으로 통과해 **PG 에서
+  // 빌링키가 실제로 발급된 뒤** 이 저장이 400 으로 떨어졌다 — 카드사에는 정기결제가 걸렸는데
+  // 우리 DB 에는 없는 **고아 빌링키**가 남는다. 두 라우트가 같은 입력을 같게 봐야 그 틈이 없다.
+  const savedBuyer = await getBillingCard();
+  const buyerBody = (body.buyer ?? {}) as Record<string, unknown>;
+  const who = checkCustomer({
+    fullName: String(buyerBody.fullName ?? "").trim() || savedBuyer?.buyerName || "",
+    email: String(buyerBody.email ?? "").trim() || savedBuyer?.buyerEmail || "",
+    phoneNumber: String(buyerBody.phoneNumber ?? "").trim() || savedBuyer?.buyerPhone || "",
+  });
   if (!who.ok) return c.json({ error: "customer_required", message: who.message, missing: who.missing }, 400);
 
   const card = await saveBillingCard({

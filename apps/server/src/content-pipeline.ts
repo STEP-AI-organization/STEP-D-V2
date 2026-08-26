@@ -41,8 +41,8 @@ import {
 } from "./db-pg.ts";
 import type { TranscriptSegment, SearchSegmentRow } from "./db-pg.ts";
 import { billableMinutes, estimatedCostKrw, usageDedupeKey } from "./billing.ts";
-import { autoTopupNeedsAttention, usageDedupeKey as creditUsageKey } from "./credits.ts";
-import { maybeAutoTopup } from "./auto-topup.ts";
+import { autoTopupNeedsAttention, checkCredits, usageDedupeKey as creditUsageKey } from "./credits.ts";
+import { maybeAutoTopup, topupAndRecheck } from "./auto-topup.ts";
 import { toCoreRegistry, timelineToRows } from "./cast.ts";
 import { createReadStream, parseObjectPath, readFile, uploadFile, useGcs } from "./storage-gcs.ts";
 import { enqueue } from "./queue.ts";
@@ -1410,6 +1410,45 @@ export async function runContentAnalyze(
   fast = fast || process.env.CORE_ANALYZE_FAST === "1";
   const media = await getMedia(mediaId);
   if (!media) throw new Error(`content.analyze: media ${mediaId} not found`);
+
+  // ── 크레딧 게이트 — **분석을 시작하는 마지막 길목** (2026-08-26 사용자 확정 규칙) ──
+  //
+  // 규칙: "잔액 40 에 60분 영상이 들어오면 분석에 들어가면 안 된다. 돈 받고 시작."
+  // 즉 불변식은 **잔액 ≥ 이 영상의 필요 크레딧** 이다.
+  //
+  // 큐잉 시점 게이트(라우트·factory·media.prepare·youtube.download)만으로는 이 불변식이
+  // 지켜지지 않았다. 세 가지 구멍이 있었다:
+  //   1. **길이를 모르면 통과**했다 — creditBlockReason 은 need<=0 이면 null 을 돌려주고
+  //      checkCredits 도 need===0 을 allow 로 본다. 프로브 실패·업로드 직후처럼 durationSec 이
+  //      0 인 미디어는 잔액이 0 이어도 60분 분석이 시작됐다.
+  //   2. **큐잉과 실행 사이가 벌어진다** — 차감은 분석이 끝난 뒤라(아래 recordUsage 부근),
+  //      큐잉 때 통과한 영상 여러 개가 전부 같은 잔액을 보고 통과한 뒤 순서대로 실행된다.
+  //   3. **게이트를 안 거치는 큐잉 경로**가 있다(어드민 큐 정리·GEBD 완료 후 재큐잉).
+  //
+  // 여기는 그 셋이 모두 합류하는 **한 지점**이다. 실행 직전이라 길이도 이미 확정돼 있고,
+  // 앞 영상의 차감도 이미 반영돼 있다. 부족하면 자동 결제를 먼저 시도하고(고정 정책),
+  // 그래도 모자라면 **시작하지 않는다** — 던져서 잡을 실패시킨다(조용한 통과 금지).
+  {
+    const need = billableMinutes(media.durationSec ?? 0);
+    if (need > 0) {
+      let verdict = checkCredits({ balance: await creditBalance(), needMinutes: need });
+      if (!verdict.allow) {
+        // 저장 카드가 있으면 여기서 채워진다 — "돈 받고 시작" 의 '돈 받는' 자리.
+        verdict = (await topupAndRecheck(need)) ?? verdict;
+      }
+      if (!verdict.allow) {
+        // 회차 화면이 오지 않을 완료를 기다리지 않게 사유를 남긴다(자동배포 순방의
+        // episodeAnalysisState 가 이 문구의 '크레딧/충전'을 읽어 blocked 로 센다).
+        if (media.episodeId) {
+          await setEpisodePipeline(media.episodeId, {
+            stage: "credit", stageStatus: "warn",
+            note: `크레딧 부족 — ${verdict.reason} 충전 후 다시 시작해 주세요.`,
+          }).catch(() => {});
+        }
+        throw new Error(`content.analyze: 크레딧 부족으로 시작하지 않음 (필요 ${need}분) — ${verdict.reason}`);
+      }
+    }
+  }
 
   sweepStaleWorkDirs();
   const work = workDirFor(mediaId);

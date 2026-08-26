@@ -169,6 +169,12 @@ export default function CreditsPage() {
 
   const emailOk = /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email.trim());
   const phoneDigits = phone.replace(/\D/g, "");
+  // ⚠️ **휴대폰만 허용한다**(유선·대표번호 불가). 서버 검증(billing-card.ts)은 10~11자리만
+  // 보므로 02·070 도 통과하지만, 화면은 일부러 더 좁게 잡는다: 빌링키 **결제** 때 이니시스가
+  // customer.phoneNumber 를 REQUIRED 로 검사하며 거절한 실측이 있고(2026-08-14 · migration 0037),
+  // 유선번호로도 통과하는지는 확인된 바가 없다. 여기서 느슨하게 받으면 "등록은 됐는데
+  // 자동 결제만 실패하는 카드" 가 되고 그건 곧 자동배포 정지다 — 등록 단계에서 막는 편이 낫다.
+  // 그래서 입력칸·오류 문구도 "휴대폰번호" 라고 분명히 말한다(설명 없는 거절 금지).
   const phoneOk = /^01\d{8,9}$/.test(phoneDigits);
   const nameOk = buyerName.trim().length >= 2;
   // KG이니시스 PC 일반결제 필수 3종: fullName · email · phoneNumber (공식 문서 확인, 2026-08-11).
@@ -755,7 +761,7 @@ export default function CreditsPage() {
                     ? "구매자 이름을 입력하세요."
                     : !emailOk
                       ? "이메일 형식을 확인하세요."
-                      : "휴대폰번호를 확인하세요 (01012345678)."}
+                      : "휴대폰번호를 확인하세요 — 010으로 시작하는 휴대폰만 등록됩니다 (예: 01012345678)."}
                 </p>
               )}
 
@@ -866,7 +872,7 @@ export default function CreditsPage() {
                     ? "구매자 이름을 입력하세요."
                     : !emailOk
                       ? "이메일 형식을 확인하세요."
-                      : "휴대폰번호를 확인하세요 (01012345678)."}
+                      : "휴대폰번호를 확인하세요 — 010으로 시작하는 휴대폰만 등록됩니다 (예: 01012345678)."}
                 </p>
               )}
               {/* ⚠️ **동의 시점의 고지.** 자동 재결제는 고정 정책이라 등록하는 순간 켜진다 —
@@ -939,7 +945,7 @@ export default function CreditsPage() {
                 ? "구매자 이름을 입력하세요."
                 : !emailOk
                   ? "이메일 형식을 확인하세요."
-                  : "휴대폰번호를 확인하세요 (01012345678)."}
+                  : "휴대폰번호를 확인하세요 — 010으로 시작하는 휴대폰만 등록됩니다 (예: 01012345678)."}
             </p>
           )}
           <p className="text-[11px]" style={{ color: "var(--sd-mut)" }}>
