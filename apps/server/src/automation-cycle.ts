@@ -58,6 +58,7 @@ import {
   SHORTFORM_MAX_SEC, autoRenderChannel, eligibility, nextPublishSlot,
   normalizePublishDelayMin, shortformSegmentTooLong, type ChannelRule,
 } from "./channel-rules.ts";
+import { maybeFlushAutoPublishReport } from "./publish-notify.ts";
 import { newId } from "./pipeline.ts";
 import { enqueue } from "./queue.ts";
 import { distributionAccountId, hasAccountDistribution, hasFailedAccountDistribution } from "./publish-guard.ts";
@@ -160,7 +161,11 @@ async function runAutomationCycleLocked(): Promise<CycleReport> {
     renderFailed: 0,
     idleReason: plan.idleReason,
   };
-  if (plan.rules.length === 0) return report;
+  if (plan.rules.length === 0) {
+    // 계획이 전부 지워져도 버퍼에 남은 몫은 보낸다 — 안 그러면 마지막 묶음이 영원히 썩는다.
+    await maybeFlushAutoPublishReport();
+    return report;
+  }
 
   // 이 테넌트의 회차·추천만 읽는다(RLS 가 가둔다).
   const episodes = await listEntities<any>("episode");
@@ -785,6 +790,10 @@ async function runAutomationCycleLocked(): Promise<CycleReport> {
     && idleReasons.length > 0 && idleReasons.length === plan.rules.length) {
     report.idleReason = idleReasons[0];
   }
+
+  // 자동배포 리포트 — 오늘 몫이 전부 나갔으면(또는 지난 날 항목이 남았으면) 묶어서 한 통.
+  // 영상별 알림을 대체(2026-08-26). 던지지 않는 함수 — 순방 결과에 영향 없다.
+  await maybeFlushAutoPublishReport();
 
   return report;
 }

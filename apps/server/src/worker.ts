@@ -57,7 +57,7 @@ import {
 import { uploadFile, uploadPath, thumbPath, promoteUpload } from "./storage-gcs.ts";
 import { initQueue, claimJob, completeJob, failJob, requeueStale, heartbeatJob, enqueue, lastDoneJobAt, queueStats, type Job, type JobType } from "./queue.ts";
 import { runWithTenant, runAsSystem, DEFAULT_TENANT_ID } from "./tenant.ts";
-import { notifyAutoPublish } from "./publish-notify.ts";
+import { recordAutoPublishForReport } from "./publish-notify.ts";
 import { runAutomationCycle } from "./automation-cycle.ts";
 import { runChannelPipeline } from "./channel-pipeline.ts";
 import { runClipReframe, runContentAnalyze, runReframeCompare, newestMtimeMs } from "./content-pipeline.ts";
@@ -2446,10 +2446,13 @@ async function runDistributionPublish(job: Job): Promise<void> {
 
   let uploadedVideoId: string | undefined;
   const meta = metaForChannel(clip, "youtube");
-  // 자동배포 담당자 알림 — 게시가 **기록까지 끝난 뒤에만** 부른다(성공·후속실패 양쪽 경로).
-  // 던지지 않는 함수라(publish-notify.ts) 배포 상태에는 영향이 없다.
-  const notify = (videoId: string) => notifyAutoPublish({
-    clip, title: meta.title, channel: "youtube", accountId: channelId, videoId, publishAt,
+  // 자동배포 리포트 적립 — 게시가 **기록까지 끝난 뒤에만** 부른다(성공·후속실패 양쪽 경로).
+  // 메일은 여기서 안 나간다: 순방이 "오늘 몫 완료" 를 판정하면 묶어서 한 통 보낸다
+  // (publish-notify.ts · 2026-08-26 리포트 전환). 던지지 않는 함수라 배포 상태 영향 없음.
+  const notify = (videoId: string) => recordAutoPublishForReport({
+    clip, title: meta.title, channel: "youtube", accountId: channelId,
+    channelLabel: String((ch as any)?.title ?? "").trim() || undefined,
+    videoId, publishAt,
   });
   try {
     const body = await streamToBuffer(createReadStream(objPath));
