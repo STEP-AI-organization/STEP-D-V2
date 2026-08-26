@@ -31,6 +31,7 @@ import {
   getLatestCommentFetchedAt,
   upsertVideoComment,
   creditBalance,
+  addCreditEntry,
   getEntity,
   listEntities,
   putEntity,
@@ -1693,6 +1694,22 @@ async function markDistributionFailed(
     : channel === "facebook" ? "metaPageId"
     : "naverAccountId";
   if (accountId) value[accountField] = accountId;
+
+  // 배포 크레딧 환급 — 차감된 행(dispatch 가 creditChargeKey 를 심는다)이 실패하면 1크레딧을
+  // 돌려준다(사용자 2026-08-26 "실패하면 돌려줘야 함"). dedupe 키가 chargeKey 기반이라 같은
+  // 실패가 두 번 지나가도 원장에는 한 번만 쌓인다. 환급 후 플래그를 내려 재시도가 새로 차감한다.
+  const rows: any[] = Array.isArray(clip.distributions) ? clip.distributions : [];
+  const prev = rows.find((d) => d?.channel === channel
+    && (!accountId || !d?.[accountField] || String(d[accountField]) === String(accountId)));
+  if (prev?.creditCharged === true && typeof prev?.creditChargeKey === "string" && prev.creditChargeKey) {
+    await addCreditEntry({
+      delta: 1, reason: "publish_refund",
+      note: `${channel} 배포 실패 환급 · ${clipId}`,
+      actor: "worker", dedupeKey: `${prev.creditChargeKey}:refund`,
+    }).catch((e) => console.warn(`[worker] 배포 환급 실패 ${clipId}:`, e instanceof Error ? e.message : e));
+    value.creditCharged = false;
+  }
+
   const distributions = upsertDistribution(clip.distributions, channel, value);
   await putEntity("clip", clipId, { ...clip, distributions });
 

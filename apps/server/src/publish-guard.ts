@@ -201,7 +201,7 @@ export function hasFailedAccountDistribution(
 export interface PublishSkip {
   clipId: string;
   /** 기계가 읽는 사유 코드. UI 문구와 분리한다. */
-  code: "not_rendered" | "gate_blocked" | "channel_unsupported" | "not_found";
+  code: "not_rendered" | "gate_blocked" | "channel_unsupported" | "not_found" | "credits";
   /** 사람이 읽는 사유. 토스트에 그대로 쓸 수 있어야 한다. */
   reason: string;
 }

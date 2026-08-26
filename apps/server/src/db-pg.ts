@@ -3499,9 +3499,11 @@ export async function setBillingNotifyEmails(emails: string[]): Promise<void> {
  */
 export async function monthUsageCredits(): Promise<number> {
   const { rows } = await pool.query<{ used: number }>(
+    // 사용 = 분석(usage) + 배포(publish · 2026-08-26 영상×채널 1크레딧). 환급(publish_refund ·
+    // delta +1)은 SUM(-delta)에서 자연히 빠진다 — 실패한 배포는 이번달 사용에 안 잡힌다.
     `SELECT COALESCE(SUM(-delta), 0)::int AS used
        FROM credit_ledger
-      WHERE reason = 'usage'
+      WHERE reason IN ('usage', 'publish', 'publish_refund')
         AND occurred_at >= (date_trunc('month', now() AT TIME ZONE 'Asia/Seoul') AT TIME ZONE 'Asia/Seoul')`,
   );
   return rows[0]?.used ?? 0;
