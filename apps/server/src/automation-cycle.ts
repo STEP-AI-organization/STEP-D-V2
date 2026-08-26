@@ -459,6 +459,12 @@ async function runAutomationCycleLocked(): Promise<CycleReport> {
       // 슬롯보다 2시간 앞서므로 이 상한이 보일 일이 없고(다음 순방이 이어받음), 복구
       // 직후에만 틱당 N건으로 페이스가 잡힌다. 몫은 소멸하지 않는다 — 다음 틱이 이어간다.
       remaining = Math.min(remaining, AUTOMATION_MAX_PUBLISH_PER_TICK);
+      // 발행 순번(0-base) — 슬롯 시각 매핑(scheduledSlotAt)의 인덱스. **산식(quota - remaining)
+      // 이 아니라 카운터다**: 산식은 위 틱당 상한이 remaining 을 클램프하면 앞 슬롯을 건너뛰고,
+      // 다음 틱이 같은 슬롯 시각을 중복 배정한다(리드 2시간 안에 서로 다른 슬롯 시각 4개+ 엣지).
+      // 시작점 = 오늘 포기한 몫(staleMissed) + 이미 게시한 수 — 다음 게시가 **다가오는 슬롯**에
+      // 붙는다. 이후는 게시 성공마다 +1.
+      let slotIndex = staleMissed + publishedToday;
       if (remaining <= 0) {
         // 조용히 넘기면 "왜 오늘은 아무것도 안 나갔지" 를 설명할 근거가 로그에 없다.
         // 채널당 하루 한 줄만 남긴다(순방은 15분마다 돈다). 문구까지 맞춰 dedupe 하는 이유:
@@ -720,19 +726,20 @@ async function runAutomationCycleLocked(): Promise<CycleReport> {
           // (되돌리려면 채널에서 직접 내려야 하고 노출 이력은 남는다). 채널 규칙에 값이
           // 있으면 그걸 따르고, 없으면 **unlisted** 로 올린다 — 자동 경로의 기본값은
           // "링크 아는 사람만" 이어야 하고, 전체공개는 사람이 정하는 일이다.
-          // 슬롯 인덱스 = quota - remaining **단독**이다(발행 순번 0-base). remaining 이
-          // 이미 quota - publishedToday 로 시작하므로 publishedToday 를 또 더하면 이중
-          // 가산 — 틱을 넘긴 2건째부터 인덱스가 배열 밖으로 나가 targetAt null → 슬롯
-          // 예약 대신 즉시 게시됐다(2026-08-25 전면 체크 critical, ENA 실배포 전 발견).
+          // 슬롯 인덱스 = slotIndex 카운터(발행 순번 0-base · publishedToday 에서 시작).
+          // 산식(quota - remaining)으로 쓰면 두 함정이 있(었)다: ① publishedToday 를 또
+          // 더하면 이중 가산 — 틱을 넘긴 2건째부터 배열 밖 → targetAt null → 즉시 게시
+          // (2026-08-25 전면 체크 critical). ② 틱당 상한이 remaining 을 클램프하면 앞
+          // 슬롯을 건너뛰고 다음 틱이 같은 슬롯 시각을 중복 배정한다(2026-08-26 리뷰).
           ...(chan.platform === "youtube" ? youtubeReleasePlan(
             channelRule,
-            slotted.length ? scheduledSlotAt(slotted, staleMissed + (quota - remaining)) : null,
+            slotted.length ? scheduledSlotAt(slotted, slotIndex) : null,
           ) : {}),
           // 유튜브 외 채널도 슬롯 시각을 싣는다 — dispatch 가 채널별 예약 수단(네이버
           // publishAt · TikTok/IG 잡 지연 · FB 네이티브 예약)으로 풀어낸다. 안 실으면
           // 이 채널들에선 슬롯이 '최대 2시간 이른 즉시 게시'였다(전면 체크 major).
           ...(chan.platform !== "youtube" && slotted.length ? (() => {
-            const at = scheduledSlotAt(slotted, staleMissed + (quota - remaining));
+            const at = scheduledSlotAt(slotted, slotIndex);
             return at && at.getTime() > Date.now()
               ? { scheduled: true, reserveDate: at.toISOString() } : {};
           })() : {}),
@@ -748,7 +755,7 @@ async function runAutomationCycleLocked(): Promise<CycleReport> {
           report.held += 1;
         } else {
           const published = outcome.queued.length > 0;
-          if (published) remaining -= 1;
+          if (published) { remaining -= 1; slotIndex += 1; }
           report.published += published ? 1 : 0;
           await note({
             ruleId: rule.id, clipId: clip.id,

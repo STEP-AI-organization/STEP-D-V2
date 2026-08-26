@@ -4135,7 +4135,7 @@ def _enforce_shortform_length(shorts: list[dict], beats: list[dict],
     길이 같은 하드 제약은 프롬프트가 아니라 결정론 코드가 지킨다(리포 원칙).
 
     옛 구현의 구멍 두 개도 같이 막았다:
-      · beat_ids 가 없는 short 는 그대로 통과했다 → 이제 start/end 로 하드컷한다.
+      · beat_ids 가 없는 short 는 그대로 통과했다 → 이제 상한 초과면 후보에서 제외한다.
       · **첫 beat 하나가 이미 max_sec 을 넘으면** 그 beat 을 통째로 남겼다(뒷 beat 만
         드롭하는 루프라 첫 beat 은 검사 대상이 아니었다) → 이제 후보에서 제외한다.
 
