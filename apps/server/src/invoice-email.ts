@@ -189,7 +189,7 @@ export async function renderInvoicePdf(
 
 // ── 이메일 ────────────────────────────────────────────────────────────────────
 
-function mailHtml(invoice: PaymentInvoice, supplier: InvoiceParty): string {
+export function mailHtml(invoice: PaymentInvoice, supplier: InvoiceParty): string {
   const row = (k: string, v: string) =>
     `<tr><td style="padding:4px 12px 4px 0;color:#666;">${k}</td><td style="padding:4px 0;color:#111;">${v}</td></tr>`;
   return `
