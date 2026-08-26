@@ -964,7 +964,6 @@ export async function adoptRec(
 // ── 자동 배포 (FLOWS F6 · 서버 migrations/0019) ──────────────────────────────────
 
 export type RuleMediaKind = "short" | "clip" | "both";
-export type RuleCriterion = "score80" | "score85" | "top3";
 export type GatePolicy = "approve_first" | "hold_on_issue";
 
 export interface AutomationRule {
@@ -973,7 +972,8 @@ export interface AutomationRule {
   platform: string;
   accountId: string;
   mediaKind: RuleMediaKind;
-  criterion: RuleCriterion;
+  /** 채택 기준은 2026-08-26 삭제(점수 순 상위 하나로 고정) — 서버가 항상 "top3" 를 저장한다. */
+  criterion?: string;
   gatePolicy: GatePolicy;
   window: string;
   enabled: boolean;

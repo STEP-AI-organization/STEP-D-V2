@@ -345,13 +345,14 @@ import {
   LAST_CYCLE_KEY,
   NOTIFY_EMAIL_KEY,
   RULE_CRITERIA,
+  type RuleCriterion,
   RULE_MEDIA_KINDS,
   GATE_POLICIES,
   RULE_DELETED_NOTICE,
   initialRuleState,
   findAutomationChannelConflicts,
   isGatePolicy,
-  isRuleCriterion,
+
   isRuleMediaKind,
   isRuleOrientation,
   isRuleReframe,
@@ -5442,10 +5443,10 @@ app.post("/api/automation/rules", async (c) => {
   // 회차 내 백분위라 평균이 0.5 근처로 눌리는 구조 때문이고, 훅·완결은 이미 0.92/1.00 이라
   // 더 올릴 여지가 없다. 규칙은 켜져 있는데 아무것도 안 나가는 상태가 이 리포 최빈
   // 실패모드라, 쇼츠 기본을 top3(회차당 상위 3건)로 둔다. 명시 지정은 그대로 존중한다.
-  const criterion = body.criterion == null || body.criterion === ""
-    ? (body.mediaKind === "clip" ? "score80" : "top3")
-    : body.criterion;
-  if (!isRuleCriterion(criterion)) return c.json({ error: "invalid criterion" }, 400);
+  // 2026-08-26: 점수 하한 축을 없앴다 — 채택은 항상 "점수 순 상위, 회차당 상한까지" 하나다.
+  // 화면은 이제 criterion 을 보내지 않고, **레거시 값(score80·score85)이 와도 400 이 아니라
+  // 정규화**한다 — 저장돼 있던 계획을 편집만 해도 못 저장하게 되는 상황을 막는다.
+  const criterion: RuleCriterion = "top3";
   if (!isGatePolicy(body.gatePolicy)) return c.json({ error: "invalid gatePolicy" }, 400);
   // 채택 형태 — 수동 채택 다이얼로그와 같은 값 체계(orientation·reframe). 틀린 값은 조용히
   // 버리지 않고 400 — "저장은 됐는데 반영이 안 된다"(이 리포 최빈 실패모드)의 입구를 막는다.

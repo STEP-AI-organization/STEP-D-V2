@@ -14,8 +14,16 @@
 export const RULE_MEDIA_KINDS = ["short", "clip", "both"] as const;
 export type RuleMediaKind = (typeof RULE_MEDIA_KINDS)[number];
 
-/** 채택 기준 — 점수 하한 또는 상위 N건. */
-export const RULE_CRITERIA = ["score80", "score85", "top3"] as const;
+/**
+ * 채택 기준 — **"점수 순 상위" 하나뿐이다** (2026-08-26 사용자: 점수 하한 축 제거).
+ *
+ * 예전엔 `score80`·`score85` 하한을 고를 수 있었는데, 쇼츠 score100 은 회차 내 백분위라
+ * 42~72 대에 눌려 80 을 못 넘는 구조다(실측 20편) — 계획은 켜져 있는데 아무것도 안 나가는
+ * 상태가 이 리포 최빈 실패모드였고, 화면에 뜨는 "점수 80 이상" 배지는 그 원인을 사용자에게
+ * 설명해 주지도 못했다. 이제 뽑는 방식은 하나다: **점수 높은 순으로, 회차당 상한까지.**
+ * 값은 DB 컬럼 호환을 위해 남긴다(레거시 행의 score80/score85 는 읽을 때 무시된다).
+ */
+export const RULE_CRITERIA = ["top3"] as const;
 export type RuleCriterion = (typeof RULE_CRITERIA)[number];
 
 /**
@@ -55,7 +63,8 @@ export interface AutomationRule {
   platform: string;
   accountId: string;
   mediaKind: RuleMediaKind;
-  criterion: RuleCriterion;
+  /** DB 컬럼 호환용 잔여 필드 — 엔진은 읽지 않는다(2026-08-26 점수 하한 축 제거). */
+  criterion?: RuleCriterion;
   gatePolicy: GatePolicy;
   /** 시간대 자유 문자열 ("방영 익일 10시" · "수시"). 표시·스케줄 힌트. */
   window: string;
@@ -473,8 +482,21 @@ export interface Candidate {
   status?: string | null;
 }
 
-/** top3 기준의 상한 — **회차(에피소드)당** 총 3건이지, 순방당 3건이 아니다. */
+/** 회차당 채택 상한의 하한선 — **회차(에피소드)당** 총 3건이지, 순방당 3건이 아니다. */
 export const TOP3_CAP = 3;
+
+/**
+ * 이 계획이 **한 회차에서** 채택할 수 있는 최대 건수.
+ *
+ * 하루 발행 수(슬롯 합·할당량)를 따라간다 — 예전엔 3 고정이라, 하루 6개를 걸어 둔 계획이
+ * 회차 하나만 있는 날엔 3건에서 멈췄다(사용자가 정한 개수가 조용히 안 지켜지는 형태의 사고).
+ * 하한 3 은 종전 동작 보존용이다: 하루 1~3개짜리 계획은 예전과 똑같이 회차당 3건까지 본다.
+ *
+ * 상한이 아예 없으면 순방마다 새 후보가 계속 뽑혀 추천 전량이 클립화된다(렌더는 실제 원가다).
+ */
+export function episodeAdoptCap(rule: Pick<AutomationRule, "slots" | "dailyQuota">): number {
+  return Math.max(TOP3_CAP, perDayCount(rule));
+}
 
 /**
  * 이 구간의 쇼츠가 이미 존재하는가 — **재분석 중복 채택 방지.**
@@ -517,9 +539,12 @@ export function matchesMediaKind(rule: AutomationRule, c: Candidate): boolean {
  * 계획 조건을 통과한 추천만 고른다 (F6 03단계).
  * 이미 판단된 것(채택·거절)은 다시 잡지 않는다 — 사람이 거절한 걸 자동이 되살리면 안 된다.
  *
+ * 규칙은 하나다: **종류가 맞는 후보를 점수 높은 순으로, 회차당 상한까지.**
+ * (2026-08-26 점수 하한 축 제거 — 하한은 쇼츠 점수 분포상 전량을 막아 세우는 함정이었다.)
+ *
  * `adoptedCount` = 이 계획이 **같은 회차에서 이미 채택한 수**(클립의 automationRuleId ·
- * episodeId 로 센다). top3 만 본다 — 채택하면 후보가 pending 풀에서 빠지므로, 이걸 안 빼면
- * 순방마다 "새 상위 3건"이 또 뽑혀 상한이 없는 것과 같다(수 시간이면 추천 전량이 클립화).
+ * episodeId 로 센다). 채택하면 후보가 pending 풀에서 빠지므로, 이걸 안 빼면 순방마다
+ * "새 상위 N건"이 또 뽑혀 상한이 없는 것과 같다(수 시간이면 추천 전량이 클립화).
  */
 export function selectCandidates(
   rule: AutomationRule,
@@ -527,34 +552,16 @@ export function selectCandidates(
   adoptedCount = 0,
 ): Candidate[] {
   const undecided = candidates.filter((c) => (c.status ?? "pending") === "pending");
-
   const byKind = undecided.filter((c) => matchesMediaKind(rule, c));
 
-  if (rule.criterion === "top3") {
-    // 회차당 잔여 상한. 이미 3건 채웠으면 아무것도 뽑지 않는다.
-    const remaining = Math.max(0, TOP3_CAP - Math.max(0, Math.trunc(adoptedCount)));
-    if (remaining === 0) return [];
-    // 점수가 없는 후보는 상위 N 에서 뺀다 — 0점으로 치면 아무거나 올라온다.
-    return byKind
-      .filter((c) => typeof c.score100 === "number")
-      .sort((a, b) => (b.score100 ?? 0) - (a.score100 ?? 0))
-      .slice(0, remaining);
-  }
-
-  const floor = rule.criterion === "score85" ? 85 : 80;
-  // 점수가 없으면 기준을 만족한다고 볼 수 없다. 모르면 안 내보낸다.
-  const scored = byKind.filter((c) => typeof c.score100 === "number");
-  const passed = scored.filter((c) => (c.score100 as number) >= floor);
-  if (passed.length > 0) return passed;
-
-  // ── 폴백: 절대 점수 기준이 한 건도 안 통과 → **한 영상이 통째로 비지 않게 최고 1건 보장** ──
-  // 쇼츠 score100 은 회차 내 백분위라 42~72 대에 눌려 80 을 못 넘는 구조다(POST /api/automation/rules
-  // 주석 · 실측 20편 42.1~72.6). 그래서 사용자가 쇼츠에 score80 을 걸면 그 회차가 통째로 안 나가는
-  // 일이 잦았다(사용자 2026-08-19). **회차당 이미 채택분이 있으면(≥1) 폴백하지 않는다** — 이미 뭔가
-  // 나갔으니 강제하지 않는다. 결과적으로 "점수 하한이되, 회차마다 최소 최고 한 편"이 된다(클립
-  // 81~83 은 정상 통과라 이 폴백을 거의 안 탄다). 점수 없는 후보는 폴백 대상이 아니다(scored 만).
-  if (Math.max(0, Math.trunc(adoptedCount)) > 0 || scored.length === 0) return [];
-  return [scored.reduce((best, c) => ((c.score100 ?? 0) > (best.score100 ?? 0) ? c : best))];
+  // 회차당 잔여 상한. 이미 다 채웠으면 아무것도 뽑지 않는다.
+  const remaining = Math.max(0, episodeAdoptCap(rule) - Math.max(0, Math.trunc(adoptedCount)));
+  if (remaining === 0) return [];
+  // 점수가 없는 후보는 상위 N 에서 뺀다 — 0점으로 치면 아무거나 올라온다.
+  return byKind
+    .filter((c) => typeof c.score100 === "number")
+    .sort((a, b) => (b.score100 ?? 0) - (a.score100 ?? 0))
+    .slice(0, remaining);
 }
 
 // ── 04 게이트 확인 ───────────────────────────────────────────────────────────────
@@ -792,7 +799,6 @@ export interface RuleIdleObservation {
   renderWaiting: boolean;
   /** 채널별 메타데이터 생성을 기다리는 클립이 있다. */
   metaWaiting: boolean;
-  criterion: RuleCriterion;
   mediaKind: RuleMediaKind;
 }
 
@@ -803,9 +809,6 @@ export interface RuleIdleObservation {
  * 였던 적이 있는데, 같은 설정을 두 이름으로 부르면 사용자는 로그의 사유가 자기가 고른 설정을
  * 가리키는지조차 모른다. 화면 표기를 정본으로 삼는다.
  */
-const CRITERION_LABEL: Record<RuleCriterion, string> = {
-  score80: "점수 80 이상", score85: "점수 85 이상", top3: "상위 3건",
-};
 const MEDIA_KIND_LABEL: Record<RuleMediaKind, string> = {
   short: "숏폼", clip: "클립", both: "숏폼+클립",
 };
@@ -942,29 +945,20 @@ export function ruleIdleNote(o: RuleIdleObservation): { code: RuleIdleCode; deta
   if (o.cappedEpisodes > 0 && o.cappedEpisodes === o.analyzed) {
     return {
       code: "top3_cap",
-      detail: "이 계획이 각 회차에서 뽑을 수 있는 만큼(상위 3건) 이미 채택했습니다"
-        + " — 더 내보내려면 채택 기준을 점수 기준으로 바꾸거나 새 회차를 올려 주세요.",
+      // 상한은 하루 발행 수를 따라간다(episodeAdoptCap) — 조치는 둘뿐이다: 새 회차를 올리거나,
+      // 하루 발행 수를 늘리거나. "기준을 점수로 바꾸라"는 옛 안내는 그 축이 사라져 지웠다.
+      detail: "이 계획이 각 회차에서 뽑을 수 있는 만큼 이미 채택했습니다"
+        + " — 더 내보내려면 새 회차를 올리거나 하루 발행 수를 늘려 주세요.",
     };
   }
 
   if (o.scoreBlocked > 0) {
-    // ⚠️ **점수가 없는 추천은 기준을 바꿔도 안 잡힌다.** selectCandidates 는 세 기준 모두에서
-    // 점수 없는 후보를 뺀다(모르면 안 내보낸다) — 그런데 예전 문구는 그 경우에도
-    // "기준을 낮추거나 '상위 3건' 으로 바꾸면 잡힙니다" 라고 안내했다. 사용자가 그대로 해도
-    // 결과는 그대로 0건이다. 점수 없음(재분석해야 풀림)과 점수 미달(기준을 바꾸면 풀림)을 가른다.
-    if (o.criterion === "top3" || o.scoreMissing >= o.scoreBlocked) {
-      return {
-        code: "score_blocked",
-        detail: "추천에 점수가 없어 채택할 대상을 고르지 못했습니다 — 회차를 다시 분석하면 점수가 채워집니다.",
-      };
-    }
+    // 점수 하한 축이 사라진 뒤(2026-08-26) 여기 남는 사유는 하나뿐이다: **점수가 없는 추천.**
+    // selectCandidates 가 점수 없는 후보를 빼기 때문이고(모르면 안 내보낸다), 그건 기준을
+    // 바꿔서 풀리는 게 아니라 회차를 다시 분석해야 채워진다.
     return {
       code: "score_blocked",
-      detail: `채택 기준(${CRITERION_LABEL[o.criterion]})을 넘는 추천이 없습니다`
-        + " — 기준을 낮추거나 '상위 3건' 으로 바꾸면 잡힙니다."
-        // 섞여 있으면 두 조치가 다 필요하다. 이 분기는 **개수가 아니라 종류**라 하루에
-        // 최대 한 줄 더 늘 뿐이다(dedupe 는 산다).
-        + (o.scoreMissing > 0 ? " 점수가 비어 있는 추천은 회차를 다시 분석해야 채워집니다." : ""),
+      detail: "추천에 점수가 없어 채택할 대상을 고르지 못했습니다 — 회차를 다시 분석하면 점수가 채워집니다.",
     };
   }
 
@@ -1248,9 +1242,6 @@ export const RULE_DELETED_NOTICE =
 
 export function isRuleMediaKind(v: unknown): v is RuleMediaKind {
   return typeof v === "string" && (RULE_MEDIA_KINDS as readonly string[]).includes(v);
-}
-export function isRuleCriterion(v: unknown): v is RuleCriterion {
-  return typeof v === "string" && (RULE_CRITERIA as readonly string[]).includes(v);
 }
 export function isGatePolicy(v: unknown): v is GatePolicy {
   return typeof v === "string" && (GATE_POLICIES as readonly string[]).includes(v);

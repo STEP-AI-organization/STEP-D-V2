@@ -31,7 +31,6 @@ import {
   episodeAnalysisState,
   initialRuleState,
   isGatePolicy,
-  isRuleCriterion,
   isRuleMediaKind,
   isRuleOrientation,
   isRuleReframe,
@@ -44,6 +43,7 @@ import {
   ruleCreatedNotice,
   ruleIdleNote,
   selectCandidates,
+  episodeAdoptCap,
   shouldRequestAutoRender,
   type AutoRenderState,
   type AutomationRule,
@@ -111,7 +111,6 @@ const rule = (over: Partial<AutomationRule> = {}): AutomationRule => ({
   platform: "youtube",
   accountId: "c1",
   mediaKind: "both",
-  criterion: "score80",
   gatePolicy: "hold_on_issue",
   window: "수시",
   enabled: true,
@@ -502,25 +501,27 @@ describe("채택 기준 (F6 03단계)", () => {
     { id: "f", kind: "short", score100: 99, status: "rejected" }, // 사람이 거절함
   ];
 
-  it("점수 하한을 넘는 것만", () => {
-    assert.deepEqual(selectCandidates(rule({ criterion: "score85" }), cands).map((c) => c.id), ["a", "c"]);
+  it("점수 높은 순으로 뽑고, 점수 없는 후보는 뺀다", () => {
+    // 0점으로 치면 아무거나 상위에 올라온다 — 모르면 안 내보낸다(2026-08-26 점수 하한 축 제거).
+    assert.deepEqual(selectCandidates(rule({}), cands).map((c) => c.id), ["a", "c", "b"]);
+    assert.equal(selectCandidates(rule({}), cands).some((c) => c.id === "e"), false);
   });
 
-  it("점수가 없으면 기준을 만족한다고 보지 않는다", () => {
-    // 모르면 안 내보낸다.
-    assert.equal(selectCandidates(rule({ criterion: "score80" }), cands).some((c) => c.id === "e"), false);
+  it("점수가 낮아도 뽑는다 — 하한이 회차 전량을 막아 세우던 함정을 없앴다", () => {
+    // 쇼츠 score100 은 회차 내 백분위라 42~72 대에 눌린다(실측 20편). 예전 score80 하한이면
+    // 이런 회차가 통째로 0건이었다 — 이제는 그냥 상위부터 나간다.
+    const low = [
+      { id: "x", kind: "short", score100: 72 },
+      { id: "y", kind: "short", score100: 55 },
+      { id: "z", kind: "short", score100: 60 },
+    ];
+    assert.deepEqual(selectCandidates(rule({ mediaKind: "short" }), low).map((c) => c.id), ["x", "z", "y"]);
   });
 
-  it("상위 3건에서도 점수 없는 후보는 뺀다", () => {
-    // 0점으로 치면 아무거나 상위에 올라온다.
-    const got = selectCandidates(rule({ criterion: "top3" }), cands).map((c) => c.id);
-    assert.deepEqual(got, ["a", "c", "b"]);
-  });
-
-  it("top3 는 회차당 상한이다 — 이미 채택한 수만큼 덜 뽑는다", () => {
+  it("회차당 상한 — 이미 채택한 수만큼 덜 뽑는다", () => {
     // 채택하면 후보가 pending 풀에서 빠지므로, 이미 채택한 수를 안 빼면 순방마다
-    // "새 상위 3건"이 또 뽑혀 상한이 없는 것과 같다(수 시간 내 추천 전량 클립화).
-    const r = rule({ criterion: "top3" });
+    // "새 상위 N건"이 또 뽑혀 상한이 없는 것과 같다(수 시간 내 추천 전량 클립화).
+    const r = rule({});
     assert.deepEqual(selectCandidates(r, cands, 2).map((c) => c.id), ["a"]);
     assert.deepEqual(selectCandidates(r, cands, 3), []);
     assert.deepEqual(selectCandidates(r, cands, 99), []);
@@ -528,47 +529,27 @@ describe("채택 기준 (F6 03단계)", () => {
     assert.equal(selectCandidates(r, cands, -5).length, 3);
   });
 
-  it("점수 하한 기준(score80/85)은 채택 수와 무관하다 — 상한은 top3 만의 의미다", () => {
-    assert.deepEqual(
-      selectCandidates(rule({ criterion: "score85" }), cands, 3).map((c) => c.id),
-      ["a", "c"],
-    );
+  it("상한은 하루 발행 수를 따라간다 — 하루 6개 계획은 회차 하나에서 6건까지", () => {
+    // 3 고정이던 시절엔 하루 6개를 걸어도 회차가 하나뿐인 날엔 3건에서 멈췄다(사용자가 정한
+    // 개수가 조용히 안 지켜지는 형태). 하한 3 은 종전 동작 보존용이다.
+    const many = Array.from({ length: 8 }, (_, i) => ({ id: `s${i}`, kind: "short", score100: 90 - i }));
+    const six = rule({ mediaKind: "short", slots: [{ time: "19:00", count: 3 }, { time: "21:00", count: 3 }] });
+    assert.equal(selectCandidates(six, many).length, 6);
+    assert.equal(episodeAdoptCap(six), 6);
+    // 하루 1~2개짜리 계획은 예전과 같은 3.
+    assert.equal(episodeAdoptCap(rule({ slots: null, dailyQuota: 2 })), 3);
+    assert.equal(selectCandidates(rule({ mediaKind: "short", slots: null, dailyQuota: 2 }), many).length, 3);
   });
 
   it("사람이 이미 판단한 것은 다시 잡지 않는다", () => {
     // 사람이 거절한 걸 자동이 되살리면 안 된다.
-    for (const criterion of ["score80", "score85", "top3"] as const) {
-      assert.equal(selectCandidates(rule({ criterion }), cands).some((c) => c.id === "f"), false, criterion);
-    }
+    assert.equal(selectCandidates(rule({}), cands).some((c) => c.id === "f"), false);
   });
 
   it("미디어 종류로 거른다", () => {
-    assert.deepEqual(selectCandidates(rule({ mediaKind: "clip", criterion: "score80" }), cands).map((c) => c.id), ["c"]);
-    assert.deepEqual(
-      selectCandidates(rule({ mediaKind: "short", criterion: "score80" }), cands).map((c) => c.id),
-      ["a", "b"],
-    );
-  });
-
-  it("절대 점수 기준이 한 건도 안 통과하면 한 영상이 비지 않게 최고 1건은 보장한다", () => {
-    // 쇼츠 score100 은 42~72 대라 score80 이면 아무도 못 넘는 회차가 흔하다(실측). 그 회차도
-    // 통째로 비지 않게 최고 한 편은 나간다.
-    const low = [
-      { id: "x", kind: "short", score100: 72 },
-      { id: "y", kind: "short", score100: 55 },
-      { id: "z", kind: "short", score100: 60 },
-    ];
-    assert.deepEqual(
-      selectCandidates(rule({ mediaKind: "short", criterion: "score80" }), low).map((c) => c.id),
-      ["x"],
-    );
-    // 회차에서 이미 1건(폴백분) 나갔으면 더는 폴백하지 않는다 — 점수 미달을 도배하지 않는다.
-    assert.deepEqual(selectCandidates(rule({ mediaKind: "short", criterion: "score80" }), low, 1), []);
-    // 점수가 아예 없는 후보는 폴백 대상이 아니다(재분석해야 풀린다).
-    assert.deepEqual(
-      selectCandidates(rule({ mediaKind: "short", criterion: "score80" }), [{ id: "q", kind: "short" }]).map((c) => c.id),
-      [],
-    );
+    assert.deepEqual(selectCandidates(rule({ mediaKind: "clip" }), cands).map((c) => c.id), ["c"]);
+    // 하한이 없으니 점수 낮은 d(60) 도 상한 안에서 나간다 — 이게 이번 변경의 요점이다.
+    assert.deepEqual(selectCandidates(rule({ mediaKind: "short" }), cands).map((c) => c.id), ["a", "b", "d"]);
   });
 });
 
@@ -582,7 +563,7 @@ const obs = (over: Partial<RuleIdleObservation> = {}): RuleIdleObservation => ({
   renderStopped: false, gateOff: false, publishFailed: false, heldWaiting: false,
   vagueAccount: false, channelBlocked: false, quotaDone: false,
   renderWaiting: false, metaWaiting: false,
-  criterion: "score80", mediaKind: "both",
+  mediaKind: "both",
   ...over,
 });
 const codeOf = (o: RuleIdleObservation) => ruleIdleNote(o)?.code ?? null;
@@ -649,36 +630,30 @@ describe("순방이 아무것도 안 했으면 이유를 남긴다 (ruleIdleNote
   });
 
   it("분석 완료 회차가 전부 상한이면 상한 도달", () => {
-    assert.equal(codeOf(obs({ analyzed: 2, cappedEpisodes: 2, criterion: "top3" })), "top3_cap");
+    assert.equal(codeOf(obs({ analyzed: 2, cappedEpisodes: 2 })), "top3_cap");
   });
 
   it("한 회차라도 상한이 아니면 상한 탓으로 돌리지 않는다", () => {
     // 과잉 주장(틀린 사유)보다 덜 정확한 기본값이 낫다.
-    assert.notEqual(codeOf(obs({ analyzed: 3, cappedEpisodes: 1, criterion: "top3" })), "top3_cap");
+    assert.notEqual(codeOf(obs({ analyzed: 3, cappedEpisodes: 1 })), "top3_cap");
   });
 
-  it("점수 기준에 걸리면 기준 점수를 문구에 담는다 — 사용자가 무엇을 낮출지 안다", () => {
-    assert.match(ruleIdleNote(obs({ scoreBlocked: 2, criterion: "score80" }))!.detail, /80/);
-    assert.match(ruleIdleNote(obs({ scoreBlocked: 2, criterion: "score85" }))!.detail, /85/);
-    assert.equal(codeOf(obs({ scoreBlocked: 2, criterion: "score85" })), "score_blocked");
+  it("탈락 사유는 '점수 없음' 하나뿐 — 기준을 낮추라는 안내는 없다 (2026-08-26 하한 제거)", () => {
+    // 점수 하한 축이 사라져서, 여기 남는 탈락은 **점수가 없는 추천**뿐이다(selectCandidates 가
+    // 뺀다). 예전 문구 "기준을 낮추거나 '상위 3건' 으로 바꾸면 잡힙니다" 는 이제 존재하지 않는
+    // 설정을 가리키는 안내다 — 사용자가 따라 할 수 있는 조치(재분석)만 말한다.
+    const n = ruleIdleNote(obs({ scoreBlocked: 3, scoreMissing: 3 }))!;
+    assert.equal(n.code, "score_blocked");
+    assert.match(n.detail, /다시 분석/, "재분석해야 풀리는데 안내가 없다");
+    assert.doesNotMatch(n.detail, /기준을 낮추/, "없어진 설정을 조치로 안내하면 안 된다");
+    assert.doesNotMatch(n.detail, /점수 8[05]/, "점수 하한 문구가 남아 있다");
   });
 
-  it("점수가 **없는** 탈락은 기준을 바꿔도 안 잡힌다 — 재분석을 안내한다", () => {
-    // selectCandidates 는 세 기준(80·85·상위 3건) 모두에서 점수 없는 후보를 뺀다.
-    // "기준을 낮추거나 '상위 3건' 으로 바꾸면 잡힙니다" 는 이 경우 지킬 수 없는 안내다 —
-    // 사용자가 그대로 해도 결과는 그대로 0건이다.
-    const all = ruleIdleNote(obs({ scoreBlocked: 3, scoreMissing: 3, criterion: "score80" }))!;
-    assert.equal(all.code, "score_blocked");
-    assert.match(all.detail, /다시 분석/, "재분석해야 풀리는데 안내가 없다");
-    assert.doesNotMatch(all.detail, /기준을 낮추/, "기준을 바꿔도 안 잡히는데 그렇게 안내한다");
-    // top3 도 같다 — 점수 없는 후보만 남으면 상위 N 을 고를 수가 없다.
-    assert.match(ruleIdleNote(obs({ scoreBlocked: 2, criterion: "top3" }))!.detail, /다시 분석/);
-    // 섞여 있으면 두 조치가 다 필요하다.
-    const mixed = ruleIdleNote(obs({ scoreBlocked: 3, scoreMissing: 1, criterion: "score80" }))!;
-    assert.match(mixed.detail, /기준을 낮추/);
-    assert.match(mixed.detail, /다시 분석/);
-    // 전부 점수 미달이면 재분석은 필요 없다 — 노이즈를 붙이지 않는다.
-    assert.doesNotMatch(ruleIdleNote(obs({ scoreBlocked: 3, criterion: "score80" }))!.detail, /다시 분석/);
+  it("회차 상한 문구도 없어진 '점수 기준' 을 안내하지 않는다", () => {
+    const n = ruleIdleNote(obs({ analyzed: 2, cappedEpisodes: 2 }))!;
+    assert.equal(n.code, "top3_cap");
+    assert.doesNotMatch(n.detail, /점수 기준/, "없어진 설정을 조치로 안내하면 안 된다");
+    assert.match(n.detail, /새 회차|하루 발행 수/, "실제로 가능한 조치를 말해야 한다");
   });
 
   it("종류가 안 맞으면 그 종류를 말한다 — 화면(자동배포 KIND_LABEL)과 같은 어휘로", () => {
@@ -763,7 +738,7 @@ describe("사유는 하나만 — 우선순위 고정", () => {
     ["승인 대기가 채널 규칙 미달을 이긴다", obs({ heldWaiting: true, channelBlocked: true }), "held_waiting"],
     ["할당량 소진이 점수 미달을 이긴다", obs({ quotaDone: true, scoreBlocked: 2 }), "quota_done"],
     ["상한 도달이 점수 미달을 이긴다",
-      obs({ analyzed: 2, cappedEpisodes: 2, scoreBlocked: 4, criterion: "top3" }), "top3_cap"],
+      obs({ analyzed: 2, cappedEpisodes: 2, scoreBlocked: 4 }), "top3_cap"],
     ["점수 미달이 종류 불일치를 이긴다",
       obs({ scoreBlocked: 1, pending: 3, kindMatched: 0 }), "score_blocked"],
     ["종류 불일치가 겹침을 이긴다",
@@ -1410,22 +1385,20 @@ describe("입력 검증", () => {
   it("모르는 값을 통과시키지 않는다", () => {
     assert.equal(isRuleMediaKind("both"), true);
     assert.equal(isRuleMediaKind("all"), false);
-    assert.equal(isRuleCriterion("score80"), true);
-    assert.equal(isRuleCriterion("score70"), false);
     assert.equal(isGatePolicy("approve_first"), true);
     assert.equal(isGatePolicy("skip_gate"), false);
   });
 
-  it("기준 미지정이면 매체별 기본값 — 쇼츠는 top3, 클립은 score80", () => {
-    // 2026-08-17 실측: 32.4분 회차 쇼츠 20편의 score100 이 42.1~72.6 이라 score80 계획은
-    // **한 건도 안 내보낸다**(클립은 81~83 이라 통과). "계획은 켜져 있는데 아무것도 안 나간다"
-    // 는 이 리포 최빈 실패모드라, 라우트가 매체별 기본값을 채운다. 소스 스캔으로 고정한다 —
-    // 이 분기가 사라지면 쇼츠 자동배포가 조용히 0건이 된다.
-    const src = fs.readFileSync(path.join(SRC, "index.ts"), "utf-8");
-    const m = /body\.criterion == null[\s\S]{0,200}?mediaKind === "clip"\s*\?\s*"(\w+)"\s*:\s*"(\w+)"/.exec(src);
-    assert.ok(m, "계획 생성 라우트에 매체별 기준 기본값 분기가 없다");
-    assert.equal(m![1], "score80", "클립 기본 기준이 바뀌었다");
-    assert.equal(m![2], "top3", "쇼츠 기본 기준이 바뀌었다 — score 기준이면 0건이 나간다");
+  it("점수 하한 축이 코드에서 사라졌다 — 채택은 항상 상위 순 (2026-08-26)", () => {
+    // 2026-08-17 실측: 쇼츠 score100 이 42.1~72.6 이라 score80 계획은 한 건도 안 내보냈다.
+    // "계획은 켜져 있는데 아무것도 안 나간다" 가 이 리포 최빈 실패모드라 축 자체를 없앴다.
+    // 되살아나면(선택지·분기) 같은 사고가 다시 난다 — 소스로 잠근다.
+    const auto = fs.readFileSync(path.join(SRC, "automation.ts"), "utf-8");
+    assert.doesNotMatch(auto, /criterion === "score85"/, "점수 하한 분기가 되살아났다");
+    assert.match(auto, /RULE_CRITERIA = \["top3"\]/, "채택 기준은 하나여야 한다");
+    const route = fs.readFileSync(path.join(SRC, "index.ts"), "utf-8");
+    assert.doesNotMatch(route, /invalid criterion/,
+      "레거시 값(score80)이 400 이 되면 저장된 계획을 편집만 해도 못 저장한다");
   });
 
   it("게이트를 끄는 정책값이 존재하지 않는다", () => {

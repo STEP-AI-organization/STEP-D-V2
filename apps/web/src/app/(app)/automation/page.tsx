@@ -54,7 +54,6 @@ import {
   type AutomationRule,
   type InstagramAccountInfo,
   type MetaAccountInfo,
-  type RuleCriterion,
   type RuleHold,
   type RuleMediaKind,
   type RuleRun,
@@ -121,7 +120,6 @@ function HeldPreview({ clip }: { clip: Clip }) {
 }
 
 const KIND_LABEL: Record<RuleMediaKind, string> = { short: "숏폼", clip: "클립", both: "숏폼+클립" };
-const CRIT_LABEL: Record<RuleCriterion, string> = { score80: "점수 80 이상", score85: "점수 85 이상", top3: "상위 3건" };
 // published 는 큐잉 시점 기록이라 "게시됨"이라 쓰면 거짓말이 된다 — 업로드는 이제 시작.
 // 실제 완료/실패는 클립의 배포 상태(distributions)와 조인해 피드에서 덮어쓴다.
 const RESULT_LABEL: Record<string, string> = {
@@ -285,7 +283,6 @@ export default function AutomationPage() {
   const [showAdvanced, setShowAdvanced] = useState(false);
   // 고급 설정 (구 계획 폼 필드 전부 — 격하했을 뿐 삭제하지 않는다)
   const [mediaKind, setMediaKind] = useState<RuleMediaKind>("short");
-  const [criterion, setCriterion] = useState<RuleCriterion>("score80");
   const [approveFirst, setApproveFirst] = useState(true);
   const [win, setWin] = useState("방영 익일 10시");
   const [dailyQuota, setDailyQuota] = useState(3);
@@ -429,7 +426,7 @@ export default function AutomationPage() {
     const r = rules.find((x) => programsOf(x).includes(selProgram));
     if (!r) { setSelChannels([]); return; }
     setSelChannels(channelsOf(r).map((c) => `${c.platform}:${c.accountId}`));
-    setMediaKind(r.mediaKind); setCriterion(r.criterion);
+    setMediaKind(r.mediaKind);
     setApproveFirst(r.gatePolicy === "approve_first");
     setWin(r.window || "수시");
     setDailyQuota(r.dailyQuota ?? 3);
@@ -692,7 +689,7 @@ export default function AutomationPage() {
         // 슬롯이 있으면 서버는 dailyQuota 를 무시하고 슬롯 개수를 쓴다(perDayCount).
         // 그래도 값은 보낸다 — 슬롯을 나중에 비웠을 때 되돌아갈 자리가 필요하다.
         weekdays, slots,
-        mediaKind, criterion,
+        mediaKind,
         gatePolicy: approveFirst ? "approve_first" : "hold_on_issue",
         window: win, enabled: true,
         // 리프레임은 9:16 숏폼에만 의미 있다 — 클립 전용 계획이면 "none" 으로 강제
@@ -731,7 +728,6 @@ export default function AutomationPage() {
     setSelProgram("");
     setSelChannels([]);
     setMediaKind("short");
-    setCriterion("score80");
     setApproveFirst(true);
     setWin("방영 익일 10시");
     setDailyQuota(3);
@@ -1328,17 +1324,14 @@ export default function AutomationPage() {
           style={{ color: "var(--sd-mut)" }}
           onClick={() => setShowAdvanced((v) => !v)}
         >
-          {showAdvanced ? "▾ 고급 설정 접기" : "▸ 고급 설정 (점수 기준 · 한도 · AI 리프레임)"}
+          {showAdvanced ? "▾ 고급 설정 접기" : "▸ 고급 설정 (한도 · AI 리프레임)"}
         </button>
         {showAdvanced && (
           <div className="flex flex-col gap-2.5 rounded-[5px] p-3"
             style={{ background: "var(--sd-card-sub)", border: "1px solid var(--sd-border)" }}>
-            {/* 미디어 종류(숏폼/클립/둘다)는 본문 "어떤 영상을 내보낼까" 카드로 승격 — 여기선 점수 기준만. */}
-            <select value={criterion} onChange={(e) => setCriterion(e.target.value as RuleCriterion)} className="sd-input">
-              {(Object.keys(CRIT_LABEL) as RuleCriterion[]).map((k) => (
-                <option key={k} value={k}>{CRIT_LABEL[k]}</option>
-              ))}
-            </select>
+            {/* 채택 기준(점수 하한) 선택은 2026-08-26 삭제 — 점수 순 상위 하나로 고정됐다.
+                하한은 쇼츠 점수 분포상 계획 전량을 막아 세우는 함정이었고(서버 주석 참조),
+                화면의 "점수 80 이상" 배지는 그 사실을 사용자에게 설명해 주지도 못했다. */}
 
             {/* AI 리프레임 — 수동 채택 다이얼로그(adopt-dialog)와 같은 선택지·라벨.
                 숏폼(세로) 전용 옵션이다: 클립(가로)은 크롭이 없고, "둘 다"는 방향이 추천마다
@@ -1689,7 +1682,6 @@ export default function AutomationPage() {
                     {!r.enabled ? "멈춤" : uploadChans.length > 0 && uploadLive ? "실행 중" : "기록만"}
                   </span>
                   <span className="sd-tag">{KIND_LABEL[r.mediaKind]}</span>
-                  <span className="sd-tag">{CRIT_LABEL[r.criterion]}</span>
                   <span className="sd-tag sd-tag--warn">
                     {r.gatePolicy === "approve_first" ? "승인 배포 — 사람이 확정해야 게시" : "승인 없이 배포 (권리 문제만 승인 대기로)"}
                   </span>

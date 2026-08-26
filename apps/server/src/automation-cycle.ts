@@ -40,7 +40,7 @@ import { currentTenantId } from "./tenant.ts";
 import { maybeAutoTopup } from "./auto-topup.ts";
 import {
   AUTO_RENDER_STOPPED_NOTE, CREDIT_IDLE_REASON, CREDIT_STOP_NOTE, DEFAULT_RULE_THUMBNAIL_MODE,
-  LAST_CYCLE_KEY, TOP3_CAP,
+  LAST_CYCLE_KEY, episodeAdoptCap,
   autoRenderFailedNote, classifyRenderFailure,
   allowedToday, isPublishDay, ruleSlots, ruleWeekdays,
   decidePublish, episodeAnalysisState, inActiveWindow, isRuleThumbnailMode, matchesMediaKind,
@@ -232,7 +232,7 @@ async function runAutomationCycleLocked(): Promise<CycleReport> {
       renderStopped: false, gateOff: false, publishFailed: false, heldWaiting: false,
       vagueAccount: false, channelBlocked: false, quotaDone: false,
       renderWaiting: false, metaWaiting: false,
-      criterion: rule.criterion, mediaKind: rule.mediaKind,
+      mediaKind: rule.mediaKind,
     };
     /** 유휴 사유 판정 + 하루 한 줄 로그. 사유는 배너 후보로 모은다(dedupe 와 무관하게). */
     const idle = async () => {
@@ -318,17 +318,18 @@ async function runAutomationCycleLocked(): Promise<CycleReport> {
         console.warn(`[automation] ${rule.id} ${ep.id}: 숏폼 길이 상한 ${SHORTFORM_MAX_SEC}s 초과로 `
           + `후보 ${notOverlapping.length - cands.length}건 제외`);
       }
-      // top3 는 회차당 상한 — 이 계획이 이 회차에서 이미 채택한 수를 빼고 뽑는다.
+      // 회차당 상한 — 이 계획이 이 회차에서 이미 채택한 수를 빼고 뽑는다. 상한은 하루 발행
+      // 수를 따라간다(episodeAdoptCap · 하한 3) — 하루 6개 계획이 회차 하나뿐인 날에도 6건까지.
       const already = adoptedCountFor(rule.id, ep.id);
-      const atCap = rule.criterion === "top3" && already >= TOP3_CAP;
+      const atCap = already >= episodeAdoptCap(rule);
       if (atCap) obs.cappedEpisodes += 1;
       const pickedIds = new Set(selectCandidates(rule, cands, already).map((r) => r.id));
       const picked = cands.filter((r) => pickedIds.has(r.id));
       // 상한에 닿은 회차의 탈락분은 "기준 미달" 이 아니라 상한 탓이다 — 섞으면 사유가 뒤바뀐다.
       if (!atCap) {
         obs.scoreBlocked += cands.length - picked.length;
-        // 점수가 **없는** 탈락분은 기준을 바꿔도 안 잡힌다(selectCandidates 가 세 기준 모두에서
-        // 뺀다) — 재분석해야 풀린다. 따로 세지 않으면 유휴 사유가 못 지킬 조치를 안내한다.
+        // 점수가 **없는** 탈락분은 재분석해야 풀린다(selectCandidates 가 점수 없는 후보를 뺀다).
+        // 따로 세지 않으면 유휴 사유가 못 지킬 조치를 안내한다.
         obs.scoreMissing += cands.filter((r: any) => typeof r.score100 !== "number").length;
       }
 
