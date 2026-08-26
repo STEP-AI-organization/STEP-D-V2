@@ -412,8 +412,12 @@ export async function uploadDirectPostToTikTok(
     // 진단 로그 — 미심사 403 을 추적할 때 "틱톡이 이 계정을 공개로 보는가" 가 핵심 증거다
     // (비공개 계정이면 PUBLIC_TO_EVERYONE 이 목록에서 빠진다 · 2026-08-26 실측 디버깅).
     console.log(`[tiktok] creator_info privacy options: ${options.join(",") || "(빈 목록)"}`);
+    // PUBLIC 없으면 **SELF_ONLY** 다 — options[0](FOLLOWER_OF_CREATOR)을 고르면 미심사 앱은
+    // 그것도 403 으로 거부한다(2026-08-26 실측: 비공개 계정 전환 후에도 같은 403 이 났던 원인).
+    // 미심사 앱에 허용되는 조합은 "비공개 계정 + SELF_ONLY 게시" 하나뿐이다.
     privacyLevel = options.includes("PUBLIC_TO_EVERYONE")
       ? "PUBLIC_TO_EVERYONE"
+      : options.includes("SELF_ONLY") ? "SELF_ONLY"
       : (options[0] ?? "SELF_ONLY");
   }
   const { publishId, uploadUrl } = await initDirectPost(accessToken, file.body.byteLength, {
