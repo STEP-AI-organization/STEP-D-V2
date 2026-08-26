@@ -1305,6 +1305,22 @@ describe("렌더 벨트 배선 — automation-cycle 소스 스캔", () => {
   const NOT_RENDERED = src.slice(
     src.indexOf('why.code === "not_rendered"'), src.indexOf("detail: why.reason"));
 
+  it("렌더 선행 준비는 할당량 루프 **밖**에 있다 — 채택되면 미리 렌더된다", () => {
+    // 예전엔 렌더 재요청이 게시 루프 안에만 있어, 오늘 할당량을 다 쓴 계획은
+    // `remaining <= 0` 에서 채널을 통째로 continue 하며 렌더 시도까지 건너뛰었다.
+    // 그러면 오늘 채택분이 내일까지 미렌더로 남고, 그때 실패하면 "렌더가 안 돼서
+    // 못 나갔다" 가 된다 — 사용자가 명시적으로 거부한 실패 모드(2026-08-26).
+    const prepAt = src.indexOf("AUTOMATION_MAX_RENDERS_PER_TICK");
+    const chanLoopAt = src.indexOf("for (const chan of channels)");
+    assert.ok(prepAt > 0, "렌더 선행 준비 패스가 없다");
+    assert.ok(prepAt < chanLoopAt,
+      "렌더 준비가 채널 루프 안이면 할당량 소진일에 렌더가 통째로 건너뛰어진다");
+    const prep = src.slice(src.indexOf("let prepared = 0"), chanLoopAt);
+    assert.match(prep, /clip\.rendered !== false/, "이미 렌더된 클립까지 다시 때린다");
+    assert.match(prep, /shouldRequestAutoRender/, "확정 실패분 쿨다운을 무시한다 — 실패 폭주");
+    assert.match(prep, /renderTried/, "같은 순방에 두 번 렌더를 건다");
+  });
+
   it("확정 실패면 낙관 문구 대신 실패로 넘긴다", () => {
     assert.ok(NOT_RENDERED.length > 200, "not_rendered 분기를 못 잘랐다");
     assert.match(NOT_RENDERED, /autoRender/, "렌더 상태를 안 본다 — 낙관 문구가 무조건 나간다");

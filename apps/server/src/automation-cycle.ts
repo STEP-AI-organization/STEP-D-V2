@@ -48,6 +48,7 @@ import {
   overlapsExistingClip, planCycle,
   ruleChannels, ruleIdleNote, rulePrograms, ruleWindow, scheduledSlotAt,
   slotsReadyForQueue, selectCandidates, shouldRequestAutoRender, maxPublishPerTick,
+  AUTOMATION_MAX_RENDERS_PER_TICK,
   staleMissedSlots,
   type AutoRenderState, type AutomationRule, type RenderOutcome, type RuleIdleObservation,
 } from "./automation.ts";
@@ -456,6 +457,34 @@ async function runAutomationCycleLocked(): Promise<CycleReport> {
     // 게시 여부 판정은 upsertDistribution 과 같은 정체성 계획(publish-guard)을 쓴다.
     obs.clipsAllSent = mine.length > 0 && mine.every((c) =>
       channels.every((ch) => hasAccountDistribution(c.distributions, ch.platform, ch.accountId)));
+
+    // ── 렌더 선행 준비 — **채택된 클립은 발행 시각 전에 이미 렌더돼 있어야 한다** ──
+    //
+    // 예전엔 렌더 재요청이 아래 게시 루프 **안에만** 있어서, 오늘 할당량을 다 쓴 계획은
+    // `remaining <= 0` 에서 채널을 통째로 continue 하며 렌더 시도까지 건너뛰었다.
+    // 그래서 오늘 채택된 클립이 내일 할당량이 열릴 때까지 렌더되지 않은 채 대기하고,
+    // 정작 그때 렌더가 실패하면 "렌더가 안 돼서 못 나갔다" 가 된다 — 사용자 요구는
+    // 정반대다(2026-08-26: "채택 영상들 1차 렌더는 되어 있어야 함").
+    //
+    // 게시 여부·할당량과 **무관하게** 미렌더 클립을 먼저 채운다. 이미 렌더된 클립은
+    // 건드리지 않고(rendered !== false), 확정 실패분은 1시간 쿨다운을 지킨다
+    // (shouldRequestAutoRender). 순방 한 틱이 렌더로만 오래 잡히지 않도록 건수를 막는다.
+    let prepared = 0;
+    for (const clip of mine) {
+      if (prepared >= AUTOMATION_MAX_RENDERS_PER_TICK) break;
+      if (clip.rendered !== false) continue;
+      if (renderTried.has(clip.id)) continue;
+      if (!shouldRequestAutoRender(clip.autoRender, Date.now())) continue;
+      renderTried.add(clip.id);
+      prepared += 1;
+      if (await attemptAutoRender(rule.id, clip, note, report,
+        autoRenderChannel(rulePlatforms, clip.aspectRatio ?? clip.editorState?.aspect))) {
+        // 성공하면 최신 행(rendered:true·mediaId)을 실어 아래 게시 루프가 이번 순방에
+        // 바로 집어 간다 — 다음 순방까지 기다리지 않는다.
+        const fresh = await getEntity<any>("clip", clip.id);
+        if (fresh) Object.assign(clip, fresh);
+      }
+    }
 
     for (const chan of channels) {
       const accountKey = `${chan.platform}:${chan.accountId}`;
