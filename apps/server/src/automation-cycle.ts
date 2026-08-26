@@ -47,6 +47,7 @@ import {
   overlapsExistingClip, planCycle,
   ruleChannels, ruleIdleNote, rulePrograms, ruleWindow, scheduledSlotAt,
   slotsReadyForQueue, selectCandidates, shouldRequestAutoRender, AUTOMATION_MAX_PUBLISH_PER_TICK,
+  staleMissedSlots,
   type AutoRenderState, type AutomationRule, type RenderOutcome, type RuleIdleObservation,
 } from "./automation.ts";
 import {
@@ -447,7 +448,11 @@ async function runAutomationCycleLocked(): Promise<CycleReport> {
       const slotted = ruleSlots(rule);
       const publishedToday = await publishedTodayKst(accountKey);
       // Explicit slots are queued two hours early; YouTube publishes at target time.
-      const quota = slotted.length ? slotsReadyForQueue(slotted) : allowedToday(rule);
+      // 유예(60분)를 넘겨 놓친 슬롯 몫은 **오늘은 포기** — 저녁에 계획을 켜도 아침 슬롯
+      // 몫이 그 자리에서 쏟아지지 않는다(2026-08-26 ENA 실전 사고). 인덱스 계산에도 같은
+      // 수를 더해 다음 게시가 놓친 옛 슬롯이 아니라 **다가오는 슬롯**에 배정되게 한다.
+      const staleMissed = slotted.length ? staleMissedSlots(slotted, publishedToday) : 0;
+      const quota = slotted.length ? slotsReadyForQueue(slotted) - staleMissed : allowedToday(rule);
       let remaining = quota - publishedToday;
       // 순방 한 번의 게시 상한 — 엔진이 몇 시간 죽었다 살아나면 놓친 슬롯 몫이 한 번에
       // 몰려 연속 게시 폭탄이 된다(2026-08-25 전면 체크 major). 정상 운영에서는 큐잉이
@@ -721,13 +726,13 @@ async function runAutomationCycleLocked(): Promise<CycleReport> {
           // 예약 대신 즉시 게시됐다(2026-08-25 전면 체크 critical, ENA 실배포 전 발견).
           ...(chan.platform === "youtube" ? youtubeReleasePlan(
             channelRule,
-            slotted.length ? scheduledSlotAt(slotted, quota - remaining) : null,
+            slotted.length ? scheduledSlotAt(slotted, staleMissed + (quota - remaining)) : null,
           ) : {}),
           // 유튜브 외 채널도 슬롯 시각을 싣는다 — dispatch 가 채널별 예약 수단(네이버
           // publishAt · TikTok/IG 잡 지연 · FB 네이티브 예약)으로 풀어낸다. 안 실으면
           // 이 채널들에선 슬롯이 '최대 2시간 이른 즉시 게시'였다(전면 체크 major).
           ...(chan.platform !== "youtube" && slotted.length ? (() => {
-            const at = scheduledSlotAt(slotted, quota - remaining);
+            const at = scheduledSlotAt(slotted, staleMissed + (quota - remaining));
             return at && at.getTime() > Date.now()
               ? { scheduled: true, reserveDate: at.toISOString() } : {};
           })() : {}),

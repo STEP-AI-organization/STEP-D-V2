@@ -276,6 +276,32 @@ export const AUTOMATION_QUEUE_LEAD_MIN = 120;
  */
 export const AUTOMATION_MAX_PUBLISH_PER_TICK = 3;
 
+/**
+ * 슬롯을 "놓쳤다"고 보는 유예(분) — 순방 틱 간격(10~15분) + 여유. 이 안이면 조금
+ * 늦게라도 게시하고, 넘겼으면 그 몫은 **오늘은 포기**한다(내일 그 슬롯에 다시).
+ *
+ * 예전엔 지나간 슬롯 몫이 하루 종일 살아 있어, 저녁에 계획을 켜면 아침 슬롯 몫이
+ * 그 자리에서 전부 나갔다 — 2026-08-25 ENA 실전: 09:00×3 계획을 20시에 켜자
+ * 3건이 밤 8~9시에 즉시 게시("아침 9시로 정했는데 밤 9시에 나감").
+ */
+export const SLOT_MISS_GRACE_MIN = 60;
+
+/**
+ * 오늘 유예를 넘겨 놓친 슬롯 몫(= 오늘은 포기할 수). 이미 게시된 수(publishedToday)는
+ * **옛 슬롯부터 배정된 것으로 보고** 차감한다 — 제시간에 나간 아침 몫을 '놓침'으로
+ * 오인해 저녁 슬롯 몫까지 깎으면 안 된다.
+ */
+export function staleMissedSlots(
+  slots: RuleSlot[], publishedToday: number, now = new Date(), graceMin = SLOT_MISS_GRACE_MIN,
+): number {
+  const cur = kstMinutes(now);
+  const beyond = slots.reduce((sum, s) => {
+    const [h, m] = s.time.split(":").map(Number);
+    return h * 60 + m < cur - graceMin ? sum + s.count : sum;
+  }, 0);
+  return Math.max(0, beyond - Math.max(0, publishedToday));
+}
+
 export function slotsReadyForQueue(
   slots: RuleSlot[], now = new Date(), leadMin = AUTOMATION_QUEUE_LEAD_MIN,
 ): number {

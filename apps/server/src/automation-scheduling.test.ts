@@ -7,6 +7,7 @@ import {
   scheduledSlotAt,
   slotsElapsed,
   slotsReadyForQueue,
+  staleMissedSlots,
 } from "./automation.ts";
 
 const kst = (value: string) => new Date(`${value}+09:00`);
@@ -72,5 +73,18 @@ describe("per-slot counts", () => {
     assert.equal(iso(2), "2026-08-17T00:00:00.000Z"); // 09:00 KST
     assert.equal(iso(4), "2026-08-17T00:00:00.000Z");
     assert.equal(scheduledSlotAt(twoThree, 5, now), null); // 하루 5건을 넘는 순번은 오늘 슬롯이 없다
+  });
+
+  it("놓친 슬롯 몫은 오늘 포기(staleMissedSlots) — 저녁에 켠 계획이 아침 몫을 쏟지 않는다", () => {
+    // 2026-08-25 ENA 실전: 09:00×3 계획을 20시에 켬 → 예전엔 3건이 밤에 즉시 게시됐다.
+    const nineByThree = ruleSlots({ slots: [{ time: "09:00", count: 3 }] });
+    assert.equal(staleMissedSlots(nineByThree, 0, kst("2026-08-25T20:10")), 3, "저녁이면 아침 몫 전부 포기");
+    // 유예(60분) 안이면 놓친 게 아니다 — 순방이 조금 늦어도 제 몫은 나간다.
+    assert.equal(staleMissedSlots(nineByThree, 0, kst("2026-08-25T09:40")), 0);
+    // 유예를 막 넘긴 경계.
+    assert.equal(staleMissedSlots(nineByThree, 0, kst("2026-08-25T10:01")), 3);
+    // 제시간에 이미 나간 몫은 '놓침'이 아니다 — published 수를 옛 슬롯부터 배정해 차감.
+    assert.equal(staleMissedSlots(twoThree, 2, kst("2026-08-17T11:00")), 3, "07시 2건은 나갔고 09시 3건만 놓침");
+    assert.equal(staleMissedSlots(twoThree, 5, kst("2026-08-17T23:00")), 0, "전부 제시간에 나갔으면 0");
   });
 });
