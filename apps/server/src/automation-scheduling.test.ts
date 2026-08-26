@@ -86,8 +86,10 @@ describe("per-slot counts", () => {
     assert.equal(staleMissedSlots(nineByThree, 0, kst("2026-08-25T09:40")), 0);
     // 유예를 막 넘긴 경계.
     assert.equal(staleMissedSlots(nineByThree, 0, kst("2026-08-25T10:01")), 3);
-    // 제시간에 이미 나간 몫은 '놓침'이 아니다 — published 수를 옛 슬롯부터 배정해 차감.
-    assert.equal(staleMissedSlots(twoThree, 2, kst("2026-08-17T11:00")), 3, "07시 2건은 나갔고 09시 3건만 놓침");
+    // **오늘 한 건이라도 나간 계획의 몫은 버리지 않는다** (2026-08-26 ENA: 15:00×20 중
+    // 8건 나간 뒤 유예가 남은 12건을 소멸 — 사용자가 정한 개수가 안 지켜지는 게 시각이
+    // 밀리는 것보다 더 큰 사고). 포기는 오늘 0건인 계획(위 저녁-켬 사고 형태)에만 적용된다.
+    assert.equal(staleMissedSlots(twoThree, 2, kst("2026-08-17T11:00")), 0, "배달 중인 계획의 남은 몫은 늦게라도 나간다");
     assert.equal(staleMissedSlots(twoThree, 5, kst("2026-08-17T23:00")), 0, "전부 제시간에 나갔으면 0");
   });
 

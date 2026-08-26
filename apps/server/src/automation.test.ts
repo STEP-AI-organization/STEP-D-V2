@@ -402,7 +402,9 @@ describe("채택 형태 순방 배선 — automation-cycle 소스 스캔", () =>
   it("editorState.aspect 를 clip.aspectRatio(5-값 enum)와 일치시킨다 — /export 는 editorState 를 최우선으로 읽는다", () => {
     // autoEditorState 에도 최종 aspectRatio 를 넘기고, editorState 에 다시 명시한다.
     // 둘 중 하나라도 빠지면 제목 px basis 또는 실제 렌더 방향이 달라진다.
-    assert.match(src, /autoEditorState\([\s\S]*?\(rule as any\)\.layout, aspectRatio\)/,
+    // layout 은 73e9bf9 부터 스프레드({ ...layout, logo: … })로 넘어간다 — 정확한 모양이
+    // 아니라 "layout 다음에 aspectRatio 가 같은 호출 안에 온다" 는 배선만 고정한다.
+    assert.match(src, /autoEditorState\([\s\S]*?\(rule as any\)\.layout[\s\S]{0,200}?,\s*aspectRatio\)/,
       "자동배포 최종 방향을 factory에 넘기지 않으면 제목 106/107px basis가 어긋난다");
     assert.match(src, /aspect: aspectRatio,/,
       "editorState.aspect 를 clip.aspectRatio 와 일치시키지 않으면 계획 방향이 렌더에 미도달한다");
@@ -1149,19 +1151,21 @@ describe("렌더 실패는 확정된다 (지킬 수 없는 약속을 멈춘다)"
     assert.equal(nextAutoRenderState(st({ attempts: 4 }), { ok: true }, T0), null);
   });
 
-  it("확정 뒤에는 그날 다시 때리지 않고, 날이 바뀌면 딱 한 번 본다", () => {
-    // 소스를 복구하면 사람 손 없이 되살아나야 한다. 반대로 주기를 짧게 하면 실패 폭주다.
+  it("확정 뒤에는 매 순방 다시 때리지 않고, 한 시간에 한 번 다시 본다", () => {
+    // 일시 장애가 걷히면 사람 손 없이 되살아나야 한다(2026-08-26 ENA: maxBuffer 초과로
+    // 3회 실패 확정 → 옛 동작은 이튿날까지 통째로 대기). 반대로 매 순방 때리면 실패 폭주다.
     const dead = st({ failed: true, lastAt: T0 });
     assert.equal(shouldRequestAutoRender(dead, T0 + 60_000), false);
-    assert.equal(shouldRequestAutoRender(dead, T0 + 6 * 3600_000), false); // 같은 KST 날
-    assert.equal(shouldRequestAutoRender(dead, T0 + 24 * 3600_000), true); // 이튿날
+    assert.equal(shouldRequestAutoRender(dead, T0 + 15 * 60_000), false); // 다음 순방 — 아직
+    assert.equal(shouldRequestAutoRender(dead, T0 + 60 * 60_000), true); // 한 시간 뒤
     assert.equal(shouldRequestAutoRender(null, T0), true);
     assert.equal(shouldRequestAutoRender(st(), T0), true);
   });
 
   it("확정 문구는 사람 말로, 다음 행동까지 말한다", () => {
     const note = autoRenderFailedNote(st({ attempts: 3, failed: true }));
-    assert.match(note, /멈춥니다/);
+    assert.match(note, /실패했습니다/);
+    assert.match(note, /다시 시도/, "자동 재시도가 돈다는 사실이 빠지면 사람이 불필요하게 손을 댄다");
     assert.match(note, /확정\(렌더\)/, "사용자가 무엇을 하면 되는지가 없다 — 편집기 버튼 이름으로 말해야 한다");
     assert.doesNotMatch(AUTO_RENDER_STOPPED_NOTE, /\d/,
       "매 순방 마주치는 문구에 변동값이 들어가면 dedupe 키가 매번 달라진다");
@@ -1258,7 +1262,12 @@ describe("자동배포 화면 책임 — 설정은 한곳에만 둔다", () => {
     path.resolve(SRC, "../../web/src/app/(app)/publish-channels/page.tsx"), "utf-8");
 
   it("배포 채널 화면은 연결 관리만 하고 별도 설정 UI를 만들지 않는다", () => {
-    assert.doesNotMatch(channelsPage, /ChannelRuleDialog|fetchChannelRules|saveChannelRule|deleteChannelRule/);
+    // 예외 하나(2026-08-26): **공개범위 드롭다운**은 이 화면에 산다 — 자동배포 기본
+    // 공개범위(unlisted)를 채널별로 public 으로 올리는 자리가 제품에 없으면 운영자가
+    // 손댈 방법이 없다. fetchChannelRules/saveChannelRule 은 그 저장에만 쓴다.
+    // 길이·화면비 같은 **전체 규칙 설정 UI**(다이얼로그·삭제)는 여전히 금지다.
+    assert.doesNotMatch(channelsPage, /ChannelRuleDialog|deleteChannelRule/);
+    assert.match(channelsPage, /privacy/, "규칙 저장을 쓰면서 공개범위 용도가 아니면 이 예외의 근거가 없다");
   });
 
   it("자동배포는 별도 채널 설정에 의존하지 않고 실제 연결 계정을 읽는다", () => {

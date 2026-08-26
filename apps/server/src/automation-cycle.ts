@@ -415,9 +415,20 @@ async function runAutomationCycleLocked(): Promise<CycleReport> {
 
     // ── 04·05 — 채널마다 **하루 할당량이 찰 때까지** 게시한다 ──────────────────
     const epIds = new Set(eps.map((e) => e.id));
-    const mine = (await listEntities<any>("clip")).filter(
-      (c) => c.automationRuleId === rule.id && epIds.has(c.episodeId),
-    );
+    // 계획을 지우면 그 계획이 만든 클립이 **고아**가 된다 — 어떤 계획의 automationRuleId 와도
+    // 안 맞아 아무 순방도 집지 않고, 렌더까지 끝난 클립이 영영 미게시로 남는다(2026-08-26
+    // ENA 실전: 계획을 지웠다 다시 만들자 이전 클립 10건이 조용히 멈춤). 같은 프로그램을
+    // 보는 현재 계획이 상속한다 — 단 **존재하는** 다른 계획의 클립은 그 계획 몫이라 안 건드린다.
+    // (비활성 계획 포함: 멈춘 계획의 클립을 다른 계획이 집으면 일시정지가 뚫린다.)
+    const knownRuleIds = new Set(rules.map((r) => r.id));
+    const mine = (await listEntities<any>("clip"))
+      .filter((c) => epIds.has(c.episodeId)
+        && (c.automationRuleId === rule.id
+          || (c.automationRuleId && !knownRuleIds.has(c.automationRuleId))))
+      // listEntities 는 최신 삽입이 먼저다(새 행이 MIN(ord)-1 로 맨 앞에 붙는다) — 그대로
+      // 돌면 게시가 **최신 클립부터** 나가, 할당량이 차는 날엔 옛 클립이 계속 밀린다
+      // (순서 역전 + 기아 · 2026-08-26 ENA "왜 순서대로 안 가냐"). 만들어진 순서대로 낸다.
+      .reverse();
     // "만든 건 다 나갔다" 는 흔한 오진("채택할 새 추천이 없습니다")을 막는 관측치다 —
     // 게시 여부 판정은 upsertDistribution 과 같은 정체성 계획(publish-guard)을 쓴다.
     obs.clipsAllSent = mine.length > 0 && mine.every((c) =>
@@ -583,7 +594,7 @@ async function runAutomationCycleLocked(): Promise<CycleReport> {
               });
             }
           }
-          // 확정 실패한 클립은 다시 때리지 않는다(하루 한 번만 재확인 — shouldRequestAutoRender).
+          // 확정 실패한 클립은 매 순방 다시 때리지 않는다(1시간에 한 번 — shouldRequestAutoRender).
           if (!renderTried.has(clip.id) && shouldRequestAutoRender(clip.autoRender, Date.now())) {
             renderTried.add(clip.id);
             if (await attemptAutoRender(rule.id, clip, note, report,

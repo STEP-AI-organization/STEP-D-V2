@@ -290,16 +290,23 @@ export const SLOT_MISS_GRACE_MIN = 60;
  * 오늘 유예를 넘겨 놓친 슬롯 몫(= 오늘은 포기할 수). 이미 게시된 수(publishedToday)는
  * **옛 슬롯부터 배정된 것으로 보고** 차감한다 — 제시간에 나간 아침 몫을 '놓침'으로
  * 오인해 저녁 슬롯 몫까지 깎으면 안 된다.
+ *
+ * ⚠️ **오늘 한 건이라도 나간 계획의 몫은 버리지 않는다** (2026-08-26). 렌더·순방 페이스
+ * 때문에 슬롯 시각을 넘겨 배달 중인 계획에서 유예(60분)가 남은 몫을 소멸시키면,
+ * "15시에 20개" 로 설정한 날 8개만 나가고 12개가 소리 없이 사라진다 — 사용자가 정한
+ * 개수가 안 지켜지는 게 시각이 밀리는 것보다 더 큰 사고다. 포기는 **오늘 0건인 계획**
+ * 에만 적용한다 — 저녁에 켠 계획이 아침 몫을 그 자리에서 쏟는 사고(이 함수가 태어난
+ * 이유 · 09:00×3 을 20시에 켜자 밤에 3건)는 그 조건만으로 그대로 막힌다.
  */
 export function staleMissedSlots(
   slots: RuleSlot[], publishedToday: number, now = new Date(), graceMin = SLOT_MISS_GRACE_MIN,
 ): number {
+  if (publishedToday > 0) return 0;
   const cur = kstMinutes(now);
-  const beyond = slots.reduce((sum, s) => {
+  return slots.reduce((sum, s) => {
     const [h, m] = s.time.split(":").map(Number);
     return h * 60 + m < cur - graceMin ? sum + s.count : sum;
   }, 0);
-  return Math.max(0, beyond - Math.max(0, publishedToday));
 }
 
 export function slotsReadyForQueue(
@@ -836,9 +843,9 @@ export function ruleIdleNote(o: RuleIdleObservation): { code: RuleIdleCode; deta
     return {
       code: "render_stopped",
       // "끝나지 않아" 는 진행 중으로 읽혀 바로 아래 render_waiting(렌더 대기)과 구분이 안 된다.
-      // 이건 **확정 실패**다 — 기다려도 저절로 안 끝난다.
-      detail: "렌더가 실패해 자동 게시를 멈춘 클립이 있습니다"
-        + " — 편집기에서 확정(렌더)이 되는지 확인해 주세요. 되면 다음 확인 때 이어서 게시합니다.",
+      // 이건 **확정 실패**다 — 다만 한 시간에 한 번 자동 재시도가 돈다(2026-08-26).
+      detail: "렌더가 실패해 아직 게시하지 못한 클립이 있습니다"
+        + " — 한 시간에 한 번 자동으로 다시 시도합니다. 편집기에서 확정(렌더)하면 바로 이어집니다.",
     };
   }
 
@@ -1092,7 +1099,7 @@ export function renderFailureReason(status?: number | null, code?: string | null
  *  - 리프레임 재분석 · 리프레임 끄기 → `POST /api/clips/:id/reframe` (`mode:"ai_multi"`+retry
  *    는 재큐잉, `mode:"basic"` 은 기본 모드로 되돌린다). 기본 모드가 되면 /export 의
  *    ai_multi 분기를 아예 안 타므로 그 409 가 사라진다. 편집기 AI 패널의 두 버튼이 이 경로다.
- *  - 원본 없음(409) → 원본이 돌아오면 하루 한 번 재확인(shouldRequestAutoRender)이 집어 간다.
+ *  - 원본 없음(409) → 원본이 돌아오면 한 시간에 한 번 재확인(shouldRequestAutoRender)이 집어 간다.
  *  - 나머지(변환 실패·무응답) → 편집기에서 확정(렌더)을 다시 하면 그 클립은 렌더된 상태가 되고,
  *    다음 순방이 게시로 잇는다.
  */
@@ -1104,15 +1111,20 @@ export function renderFailureAction(status?: number | null, code?: string | null
   const s = Number(status ?? 0);
   if (s === 404) return "이미 지운 클립이면 그대로 두고, 필요하면 회차 화면에서 다시 채택해 주세요.";
   if (s === 400) return "편집기에서 클립 구간을 다시 지정한 뒤 내보내 주세요.";
-  if (s === 409) return "원본 영상이 남아 있는지 확인해 주세요 — 원본을 되살리면 다음 날 확인에서 다시 시도합니다.";
+  if (s === 409) return "원본 영상이 남아 있는지 확인해 주세요 — 원본을 되살리면 한 시간 안에 자동으로 다시 시도합니다.";
   if (s === 401 || s === 403) return "잠시 뒤에도 같으면 담당자에게 문의해 주세요.";
-  return "편집기에서 확정(렌더)을 다시 해 주세요 — 되면 다음 확인 때 이어서 게시합니다.";
+  return "한 시간에 한 번 자동으로 다시 시도합니다 — 편집기에서 확정(렌더)하면 더 빨리 이어집니다.";
 }
 
-/** KST 날짜(YYYY-MM-DD). auto-topup 의 kstDateStamp 와 같은 계산이지만, 그 파일은 db·portone 을 끌어와 순수 모듈에서 import 할 수 없다. */
-function kstDay(ms: number): string {
-  return new Date(ms + 9 * 3600_000).toISOString().slice(0, 10);
-}
+/**
+ * 확정 실패 후 자동 재시도 간격 — **1시간에 한 번** 다시 렌더를 건다.
+ *
+ * 예전엔 KST 날짜가 바뀌어야(하루 1회) 재확인했는데, 일시 장애(2026-08-26 ENA 실전:
+ * stderr maxBuffer 초과)로 3회 실패해 확정되면 **그날 몫이 통째로 하루를 기다렸다** —
+ * 무인 경로에 재시도 누를 사람이 없는데 "편집기에서 다시 확정해 주세요" 만 남는 건
+ * 지킬 수 없는 안내다. 순방(15분)마다 다시 때리면 실패 폭주로 되돌아가므로 간격만 벌린다.
+ */
+export const RENDER_RETRY_COOLDOWN_MS = 60 * 60_000;
 
 /** 이번 렌더 결과를 반영한 다음 상태. null 이면 상태를 지운다(정상). */
 export function nextAutoRenderState(
@@ -1141,16 +1153,16 @@ export function nextAutoRenderState(
 /**
  * 지금 렌더를 (다시) 요청해도 되는가.
  *
- * 확정 실패 뒤에도 **KST 날짜가 바뀌면 하루 한 번**은 다시 본다 — 원본을 복구하면 사람이
- * 편집기에서 다시 내보내지 않아도 되살아난다. 재확인을 빼면 그 클립은 영원히 자동 경로
- * 밖에 남고, 주기를 짧게 하면 실패 폭주로 되돌아간다.
+ * 확정 실패 뒤에도 **1시간에 한 번**은 다시 본다(RENDER_RETRY_COOLDOWN_MS) — 일시
+ * 장애가 걷히거나 원본을 복구하면 사람이 편집기에서 다시 내보내지 않아도 되살아난다.
+ * 재확인을 빼면 그 클립은 영원히 자동 경로 밖에 남고, 매 순방 다시 때리면 실패 폭주다.
  */
 export function shouldRequestAutoRender(
   state: AutoRenderState | null | undefined,
   now: number,
 ): boolean {
   if (!state?.failed) return true;
-  return kstDay(now) !== kstDay(state.lastAt);
+  return now - state.lastAt >= RENDER_RETRY_COOLDOWN_MS;
 }
 
 /**
@@ -1162,7 +1174,7 @@ export function shouldRequestAutoRender(
  * 사용자가 시킨 대로 하고도 같은 실패를 다시 본다.
  */
 export function autoRenderFailedNote(state: AutoRenderState): string {
-  return `렌더가 ${state.attempts}회 실패해 자동 게시를 멈춥니다`
+  return `렌더가 ${state.attempts}회 실패했습니다`
     + ` (${renderFailureReason(state.lastStatus, state.lastCode)}).`
     + ` ${renderFailureAction(state.lastStatus, state.lastCode)}`;
 }
@@ -1174,8 +1186,8 @@ export function autoRenderFailedNote(state: AutoRenderState): string {
  * 곧 dedupe 키가 되어야 한다(클립당 한 줄). 사건은 위, 상태는 여기.
  */
 export const AUTO_RENDER_STOPPED_NOTE =
-  "렌더가 실패해 이 클립의 자동 게시를 멈췄습니다"
-  + " — 편집기에서 확정(렌더)이 되는지 확인해 주세요. 되면 다음 확인 때 이어서 게시합니다.";
+  "렌더가 실패해 이 클립을 아직 게시하지 못했습니다"
+  + " — 한 시간에 한 번 자동으로 다시 시도합니다. 편집기에서 확정(렌더)하면 바로 이어집니다.";
 
 /** 실행 로그 결과 종류 (F6 실행 로그). */
 export const RUN_RESULTS = ["published", "recorded", "media_created", "held", "failed", "skipped"] as const;
