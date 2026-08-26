@@ -530,3 +530,65 @@ describe("분석 시작 길목이 잔액을 다시 잰다 (소스 스캔)", () =
       "충전 시도가 차단보다 뒤면 카드가 있어도 분석이 멈춘다");
   });
 });
+
+/**
+ * **길이 미상(durationSec=0)이 공짜 분석으로 새지 않는다** (2026-08-26 감사에서 발견).
+ *
+ * 실제로 갇히는 경로가 있다: media.prepare 가 바이트를 운영 버킷으로 옮긴(promoteUpload) 뒤
+ * probe 에서 죽으면 DB 는 durationSec=0 인데 파일은 받아진다. 그러면
+ *   게이트 need=0 → 통과 · 차감 billableMinutes(0)=0 → 0
+ * 이 되어 **잔액 0 으로 60분 분석이 돌고 크레딧은 1도 안 빠지며, 재분석마다 반복**된다.
+ * 통과와 차감이 같은 값을 읽으므로 "무료 실행" 이 구조적으로 가능해지는 게 핵심이다.
+ */
+describe("길이를 모르면 통과가 아니라 확정 대상이다 (소스 스캔)", () => {
+  const pipe = fs.readFileSync(path.join(SRC, "content-pipeline.ts"), "utf-8");
+  const fn = pipe.match(/export async function runContentAnalyze[\s\S]*?\n\}/)?.[0] ?? "";
+  const workerSrc = fs.readFileSync(path.join(SRC, "worker.ts"), "utf-8");
+  const indexSrc = fs.readFileSync(path.join(SRC, "index.ts"), "utf-8");
+
+  it("소스를 받은 뒤 길이를 재서 DB 에 백필한다 — 게이트만 통과시키고 정산 0 인 반쪽 금지", () => {
+    assert.notEqual(fn, "", "runContentAnalyze 를 못 잘랐다");
+    assert.match(fn, /updateMediaDuration\(/,
+      "길이를 재측정해도 DB 에 안 쓰면 차감(billableMinutes)이 계속 0 이다");
+    assert.match(fn, /probe\(videoPath\)/, "로컬 소스로 길이를 재는 자리가 없다");
+    // 백필은 **파이썬 파이프라인(회차당 ≈₩800) 앞**이어야 막는 의미가 있다.
+    // 앵커는 `core.analyze` 모듈 인자 — 그게 실제 지출이 시작되는 지점이다.
+    const backfillAt = fn.indexOf("updateMediaDuration(");
+    const spendAt = fn.indexOf("core.analyze");
+    assert.ok(backfillAt >= 0 && spendAt >= 0, "백필 또는 파이프라인 실행 지점을 못 찾았다");
+    assert.ok(backfillAt < spendAt,
+      "길이 백필이 파이프라인 실행보다 뒤에 있다 — 막아도 이미 원가가 나간 뒤다");
+  });
+
+  it("끝내 길이를 모르면 시작하지 않는다 — 모르면 안 내보낸다", () => {
+    assert.match(fn, /영상 길이를 확인하지 못해 시작하지 않음/,
+      "길이 미상이 조용히 통과한다 — 원가는 나가고 차감은 0 인 무료 분석이 된다");
+  });
+
+  it("재측정한 길이로 크레딧을 **다시** 잰다", () => {
+    // 1단(큐잉 길이)만 있으면 durationSec=0 이던 미디어는 판정을 한 번도 안 받는다.
+    assert.match(fn, /gateCredits\([\s\S]{0,40}"실측 길이"\)/,
+      "실측 길이로 재판정하지 않는다 — 길이를 알아내고도 잔액을 안 본다");
+  });
+
+  it("바이트를 옮겼으면 DB 경로도 즉시 쓴다 — 실제 위치와 기록이 어긋나면 안 된다", () => {
+    const prep = workerSrc.match(/async function handleMediaPrepare[\s\S]*?\n\}/)?.[0] ?? "";
+    assert.notEqual(prep, "", "handleMediaPrepare 를 못 잘랐다");
+    const promoteAt = prep.indexOf("promoteUpload(");
+    const pathAt = prep.indexOf("updateMediaPath(");
+    assert.ok(promoteAt >= 0 && pathAt > promoteAt,
+      "promoteUpload 뒤에 경로 기록이 없다 — remux·probe 가 죽으면 DB 가 옛 경로에 갇힌다");
+    // 그 사이에 실패할 수 있는 무거운 단계(remux·probe)가 끼면 안 된다.
+    const between = prep.slice(promoteAt, pathAt);
+    assert.doesNotMatch(between, /await probe\(|remuxFaststart\(/,
+      "경로 기록 전에 실패 가능한 단계가 끼어 있다 — 그 창에서 죽으면 어긋남이 그대로 굳는다");
+  });
+
+  it("길이를 몰라도 잔액 0 이면 큐잉 단계에서 막는다", () => {
+    const gate = indexSrc.match(/async function creditBlockReason[\s\S]*?\n\}/)?.[0] ?? "";
+    assert.notEqual(gate, "", "creditBlockReason 을 못 잘랐다");
+    const zeroBranch = gate.slice(gate.indexOf("need <= 0"), gate.indexOf("checkCredits("));
+    assert.match(zeroBranch, /creditBalance\(\)/,
+      "길이 미상이면 잔액을 아예 안 본다 — 잔액 0 워크스페이스가 다운로드 이그레스부터 태운다");
+  });
+});

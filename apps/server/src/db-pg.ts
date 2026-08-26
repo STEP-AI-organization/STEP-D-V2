@@ -2064,6 +2064,32 @@ export async function updateMediaSource(
   );
 }
 
+/**
+ * 러닝타임만 채운다 — **targeted write**(다른 컬럼을 안 건드린다).
+ *
+ * `updateMediaSource` 는 path·mime·size… 전부를 요구해서 "길이만 알아냈다" 는 상황에 못 쓴다.
+ * 그런데 durationSec=0 에 갇힌 미디어가 실제로 생긴다: handleMediaPrepare 가 바이트를 운영
+ * 버킷으로 옮긴(promoteUpload) 뒤 probe 에서 죽으면 updateMediaSource 까지 못 가기 때문이다.
+ * 그 상태는 자가치유되지 않고(재시도해도 같은 probe 에서 죽는다), 길이가 0 이면 크레딧
+ * 게이트도 차감도 0 이라 **분석이 영구히 공짜로 돈다**(2026-08-26 감사). 분석 워커가 소스를
+ * 내려받은 뒤 여기로 백필해 그 고리를 끊는다.
+ */
+export async function updateMediaDuration(id: string, durationSec: number): Promise<void> {
+  if (!(Number(durationSec) > 0)) return;
+  await pool.query(`UPDATE media SET durationSec = $2 WHERE id = $1`, [id, Number(durationSec)]);
+}
+
+/**
+ * 저장 경로만 갱신한다 — **targeted write**. media.prepare 가 바이트를 운영 버킷으로 옮긴
+ * (promoteUpload) 직후 부른다. 그 뒤 단계(remux·probe)가 죽어도 DB 가 옛 업로드 경로를
+ * 가리킨 채 남지 않게 — 실제 위치와 기록이 어긋나면 "파일은 받아지는데 길이는 0" 인
+ * 상태가 굳는다(2026-08-26 감사).
+ */
+export async function updateMediaPath(id: string, path: string): Promise<void> {
+  if (!String(path ?? "").trim()) return;
+  await pool.query(`UPDATE media SET path = $2 WHERE id = $1`, [id, path]);
+}
+
 // ── assembled state ────────────────────────────────────────────────────────────
 
 export async function getState() {

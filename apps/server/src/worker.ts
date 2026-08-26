@@ -37,6 +37,7 @@ import {
   putEntity,
   getMedia,
   updateMediaSource,
+  updateMediaPath,
   markContentAnalysisPending,
   upsertShortSourceMap,
   listSourceMapsMissingSegment,
@@ -688,6 +689,14 @@ async function handleMediaPrepare(job: Job): Promise<void> {
   try {
     await setEpisodeNote("서울 업로드 완료 · 분석 저장소로 이동 중…", "progress", 10);
     const storedPath = await promoteUpload(objectPath);
+    // ⚠️ **바이트를 옮겼으면 DB 도 즉시 그 사실을 알아야 한다** (2026-08-26 감사).
+    // promoteUpload 는 객체를 운영 버킷으로 옮기는데, 아래 remux·probe 중 하나라도 죽으면
+    // updateMediaSource 까지 못 가서 DB 는 **옛 업로드 경로 + durationSec=0** 인 채로 남는다.
+    // 그런데 다운로드는 항상 운영 버킷을 읽으므로(storage-gcs parseObjectPath/createReadStream)
+    // 분석은 그 파일을 잘 받아 간다 — "길이는 0 인데 파일은 있는" 상태가 굳고, 크레딧 게이트도
+    // 차감도 0 이라 공짜 분석이 반복된다. 경로만 먼저 박아 그 어긋남을 없앤다(targeted write).
+    await updateMediaPath(mediaId, storedPath).catch((e: unknown) =>
+      console.warn(`[worker] media.prepare ${mediaId}: 경로 기록 실패:`, e instanceof Error ? e.message : e));
     const workDir = path.join(os.tmpdir(), "stepd-media-prepare", mediaId);
     fs.mkdirSync(workDir, { recursive: true });
 

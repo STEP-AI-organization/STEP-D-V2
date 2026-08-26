@@ -2952,7 +2952,16 @@ app.get("/api/media/:id/clips", async (c) => {
  */
 async function creditBlockReason(durationSec: number): Promise<string | null> {
   const need = billableMinutes(durationSec ?? 0);
-  if (need <= 0) return null;
+  if (need <= 0) {
+    // **길이를 몰라도 잔액 0 이면 막는다** (2026-08-26). 예전엔 need<=0 이면 잔액을 아예
+    // 조회하지 않고 통과시켜서, durationSec 이 0 인 미디어는 잔액 0 에서도 큐잉됐다.
+    // 정밀 판정은 분석 직전(runContentAnalyze)이 실측 길이로 다시 하지만, 여기서 싼 컷을
+    // 한 번 넣어 두면 잔액 없는 워크스페이스가 다운로드 이그레스부터 태우지 않는다.
+    // 이 판정(`잔액 <= 0`)은 등록 라우트 3곳이 이미 쓰는 것과 같다 — 여기만 빠져 있었다.
+    return (await creditBalance()) <= 0
+      ? "크레딧이 없습니다 — 충전 후 다시 시도하세요."
+      : null;
+  }
   const verdict = checkCredits({ balance: await creditBalance(), needMinutes: need });
   if (verdict.allow) return null;
   // 부족하면 402 로 끝내기 전에 **저장 카드 자동 충전을 먼저 시도**한다(ENA "다 쓰면 바로

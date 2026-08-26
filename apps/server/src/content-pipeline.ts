@@ -38,9 +38,11 @@ import {
   addCreditEntry,
   creditBalance,
   compareAndSetClipReframe,
+  updateMediaDuration,
 } from "./db-pg.ts";
 import type { TranscriptSegment, SearchSegmentRow } from "./db-pg.ts";
 import { billableMinutes, estimatedCostKrw, usageDedupeKey } from "./billing.ts";
+import { probe } from "./ffmpeg.ts";
 import { autoTopupNeedsAttention, checkCredits, usageDedupeKey as creditUsageKey } from "./credits.ts";
 import { maybeAutoTopup, topupAndRecheck } from "./auto-topup.ts";
 import { toCoreRegistry, timelineToRows } from "./cast.ts";
@@ -1428,27 +1430,35 @@ export async function runContentAnalyze(
   // 여기는 그 셋이 모두 합류하는 **한 지점**이다. 실행 직전이라 길이도 이미 확정돼 있고,
   // 앞 영상의 차감도 이미 반영돼 있다. 부족하면 자동 결제를 먼저 시도하고(고정 정책),
   // 그래도 모자라면 **시작하지 않는다** — 던져서 잡을 실패시킨다(조용한 통과 금지).
-  {
-    const need = billableMinutes(media.durationSec ?? 0);
-    if (need > 0) {
-      let verdict = checkCredits({ balance: await creditBalance(), needMinutes: need });
-      if (!verdict.allow) {
-        // 저장 카드가 있으면 여기서 채워진다 — "돈 받고 시작" 의 '돈 받는' 자리.
-        verdict = (await topupAndRecheck(need)) ?? verdict;
-      }
-      if (!verdict.allow) {
-        // 회차 화면이 오지 않을 완료를 기다리지 않게 사유를 남긴다(자동배포 순방의
-        // episodeAnalysisState 가 이 문구의 '크레딧/충전'을 읽어 blocked 로 센다).
-        if (media.episodeId) {
-          await setEpisodePipeline(media.episodeId, {
-            stage: "credit", stageStatus: "warn",
-            note: `크레딧 부족 — ${verdict.reason} 충전 후 다시 시작해 주세요.`,
-          }).catch(() => {});
-        }
-        throw new Error(`content.analyze: 크레딧 부족으로 시작하지 않음 (필요 ${need}분) — ${verdict.reason}`);
-      }
+  //
+  // ⚠️ **길이를 모르는 미디어(durationSec=0)를 그냥 통과시키면 안 된다.** 그 상태에 영구히
+  // 갇히는 실제 경로가 있다: handleMediaPrepare 가 promoteUpload(바이트를 운영 버킷으로)를
+  // updateMediaSource 보다 **먼저** 하므로, 그 사이 probe 실패로 죽으면 DB 는 durationSec=0
+  // 인데 바이트는 운영 버킷에 있다 → 다운로드는 성공하고 → need=0 이라 게이트가 꺼지고 →
+  // 차감도 billableMinutes(0)=0 이라 안 된다. **잔액 0 으로 60분 분석이 공짜로, 재분석마다
+  // 반복해서** 돌아간다(2026-08-26 감사). 그래서 길이를 모르면 통과가 아니라 **여기서 잰다.**
+  const gateCredits = async (durationSec: number, where: string): Promise<void> => {
+    const need = billableMinutes(durationSec ?? 0);
+    if (need <= 0) return;                    // 호출부가 길이 확정 책임을 진다(아래 2단 배선)
+    let verdict = checkCredits({ balance: await creditBalance(), needMinutes: need });
+    if (!verdict.allow) {
+      // 저장 카드가 있으면 여기서 채워진다 — "돈 받고 시작" 의 '돈 받는' 자리.
+      verdict = (await topupAndRecheck(need)) ?? verdict;
     }
-  }
+    if (verdict.allow) return;
+    // 회차 화면이 오지 않을 완료를 기다리지 않게 사유를 남긴다(자동배포 순방의
+    // episodeAnalysisState 가 이 문구의 '크레딧/충전'을 읽어 blocked 로 센다).
+    if (media.episodeId) {
+      await setEpisodePipeline(media.episodeId, {
+        stage: "credit", stageStatus: "warn",
+        note: `크레딧 부족 — ${verdict.reason} 충전 후 다시 시작해 주세요.`,
+      }).catch(() => {});
+    }
+    throw new Error(`content.analyze: 크레딧 부족으로 시작하지 않음 (${where} · 필요 ${need}분) — ${verdict.reason}`);
+  };
+
+  // 1단 — 아는 길이로 먼저 막는다. 여기서 걸리면 다운로드 이그레스도 안 쓴다.
+  await gateCredits(media.durationSec ?? 0, "큐잉 길이");
 
   sweepStaleWorkDirs();
   const work = workDirFor(mediaId);
@@ -1494,6 +1504,37 @@ export async function runContentAnalyze(
       console.log(`[worker] content.analyze ${mediaId}: reusing downloaded source (resume)`);
     } else {
       await downloadToTemp(media.path, videoPath);
+    }
+
+    // ── 2단 크레딧 게이트 — **길이를 모르던 미디어는 여기서 확정하고 다시 잰다** ──
+    //
+    // 소스가 로컬에 있으니 이제 진짜 길이를 알 수 있다. 이 백필이 없으면 durationSec=0 에
+    // 갇힌 미디어는 ① 게이트를 통과하고 ② 차감도 0 이라 **재분석할 때마다 영구히 공짜**다
+    // (2026-08-26 감사 · handleMediaPrepare 의 promote→probe 순서 때문에 실제로 생긴다).
+    // 파이썬 스폰(회차당 ≈₩800) **앞**이라 여기서 막으면 실원가는 다운로드 이그레스뿐이다.
+    // 백필은 실패해도 분석을 막지 않는다 — 다만 그 경우 길이는 여전히 미상이라 아래 가드가 선다.
+    if (!(Number(media.durationSec) > 0)) {
+      let probed = 0;
+      try {
+        probed = Number((await probe(videoPath)).durationSec) || 0;
+      } catch (e) {
+        console.warn(`[worker] content.analyze ${mediaId}: 길이 재측정 실패:`,
+          e instanceof Error ? e.message : e);
+      }
+      if (probed > 0) {
+        // DB 에 박아 둔다 — 차감(billableMinutes)도 이 값을 읽으므로, 백필하지 않으면
+        // 게이트만 통과시키고 정산은 0 으로 하는 반쪽이 된다.
+        await updateMediaDuration(mediaId, probed).catch((e: unknown) =>
+          console.warn(`[worker] content.analyze ${mediaId}: 길이 저장 실패:`, e instanceof Error ? e.message : e));
+        media.durationSec = probed;
+        await gateCredits(probed, "실측 길이");
+      } else {
+        // 길이를 끝내 모르면 **시작하지 않는다.** 모르면 안 내보낸다 — 통과시키면
+        // 원가는 나가는데 차감은 0 인 무료 분석이 된다.
+        throw new Error(
+          `content.analyze: 영상 길이를 확인하지 못해 시작하지 않음 (mediaId=${mediaId}) — 원본이 정상인지 확인해 주세요.`,
+        );
+      }
     }
 
     // GEBD 자동 트리거 (2026-08-06 · 장면전환 모델을 워커에 배선).
