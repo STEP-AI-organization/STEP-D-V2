@@ -314,7 +314,8 @@ export async function maybeFlushAutoPublishReport(now = new Date()): Promise<voi
     const programLabel = programs.length > 1 ? `${programs[0]} 외 ${programs.length - 1}` : (programs[0] ?? "자동배포");
     await sendMail({
       to,
-      subject: `[STEP D] ${programLabel} 자동배포 리포트 · ${kstMdw(now)} ${kstHm(now)} · ${items.length}건`,
+      // 제목 브랜드는 STEP AI (사용자 2026-08-26 — 본문 푸터의 "STEP D 자동배포 시스템"은 템플릿 원문 유지).
+      subject: `[STEP AI] ${programLabel} 자동배포 리포트 · ${kstMdw(now)} ${kstHm(now)} · ${items.length}건`,
       html: buildAutoPublishReportHtml(items, now, next),
     });
     await setAutomationSetting(REPORT_BUFFER_KEY, "");
