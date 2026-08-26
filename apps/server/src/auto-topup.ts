@@ -21,7 +21,6 @@ import {
   createTopup,
   creditBalance,
   getAutoTopupAlert,
-  getAutoTopupPolicy,
   getBillingCard,
   listUnsettledAutoTopups,
   markTopupPaid,
@@ -32,8 +31,8 @@ import { cardBlock, cardTopupPaymentId, declineMessage, verifyCharge } from "./b
 import { sendInvoiceEmail } from "./invoice-email.ts";
 import { chargeWithBillingKey, getPayment } from "./portone.ts";
 import {
-  buildTopup, checkCredits, creditPriceKrw, nextAutoTopupAlert, shouldAutoTopup, topupDedupeKey,
-  type AutoTopupCode, type CreditVerdict,
+  buildTopup, checkCredits, creditPriceKrw, fixedAutoTopupPolicy, nextAutoTopupAlert, shouldAutoTopup,
+  topupDedupeKey, type AutoTopupCode, type CreditVerdict,
 } from "./credits.ts";
 import { currentTenantId } from "./tenant.ts";
 
@@ -75,13 +74,16 @@ export function autoTopupNonce(kstDate: string, slot: number): string {
  * 알림 저장은 이걸 감싼 `maybeAutoTopup` 이 한다 — 이 함수는 판정·결제만 한다.
  */
 async function runAutoTopup(needCredits = 0): Promise<AutoTopupResult> {
-  const policy = await getAutoTopupPolicy();
-  if (!policy || !policy.enabled) return { charged: false, code: "disabled", reason: "자동 충전이 꺼져 있습니다." };
-
-  // 카드가 없으면(미등록·해지) 자동 충전은 성립하지 않는다.
+  // 카드가 없으면(미등록·해지) 자동 충전은 성립하지 않는다. **카드 판정이 곧 켜짐 판정이다**
+  // (2026-08-26 고정 정책) — 저장된 on/off 행을 읽지 않는다. 등록이 곧 동의이므로
+  // "카드는 있는데 자동 결제는 꺼져 있다" 라는 상태 자체가 없다.
   const card = await getBillingCard();
   const blocked = cardBlock(card);
   if (blocked) return { charged: false, code: blocked.code, reason: blocked.reason };
+
+  // 정책은 고정값 한 곳(credits.ts FIXED_AUTO_TOPUP)에서만 나온다 — 화면·서버·메일이
+  // 다른 금액을 말하지 않게. 상한(하루 1회·월 150만원)은 그대로 살아 있다.
+  const policy = fixedAutoTopupPolicy(true);
 
   // 빌링키 결제의 customer 필수 3종(이니시스). 자동 경로엔 화면 입력 폴백이 없다 —
   // 0037 이전 카드(저장분 없음)는 수동 충전 1회 성공(백필) 또는 카드 재등록이 선행돼야 한다.

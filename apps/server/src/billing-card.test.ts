@@ -32,6 +32,9 @@ import {
   verifyCharge,
 } from "./billing-card.ts";
 import { PortOneError } from "./portone.ts";
+import {
+  AUTO_TOPUP_HARD_MAX_KRW_PER_MONTH, AUTO_TOPUP_HARD_MAX_PER_DAY, FIXED_AUTO_TOPUP,
+} from "./credits.ts";
 
 const SRC = path.dirname(fileURLToPath(import.meta.url));
 const INDEX = fs.readFileSync(path.resolve(SRC, "index.ts"), "utf-8");
@@ -275,12 +278,42 @@ describe("배선", () => {
     assert.doesNotMatch(r, /randomBytes/, "랜덤 paymentId 는 포트원 멱등키 보호를 무력화한다");
   });
 
-  it("자동 충전 정책은 절대 상한·임계<충전량 불변식을 라우트에서 막는다", () => {
-    const r = route("put", "/api/credits/auto-topup");
-    assert.match(r, /AUTO_TOPUP_HARD_MAX_PER_DAY/, "일 횟수 절대 상한이 없다");
-    assert.match(r, /AUTO_TOPUP_HARD_MAX_KRW_PER_MONTH/, "월 금액 절대 상한이 없다");
-    assert.match(r, /topupCredits <= thresholdCredits/,
+  it("자동 결제 정책은 고정이고, 그 고정값 자체가 안전 불변식을 만족한다", () => {
+    // 2026-08-26 사용자 확정: 워크스페이스별 설정 없이 "소진되면 5,000크레딧 자동 결제".
+    // 설정 라우트가 사라졌으므로 불변식은 **라우트 검증이 아니라 상수 자체**가 져야 한다.
+    assert.ok(FIXED_AUTO_TOPUP.topupCredits > FIXED_AUTO_TOPUP.thresholdCredits,
       "충전량 ≤ 임계면 충전 후에도 임계 아래라 하루 한도까지 연속 과금된다");
+    assert.ok(FIXED_AUTO_TOPUP.maxPerDay >= 1 && FIXED_AUTO_TOPUP.maxPerDay <= AUTO_TOPUP_HARD_MAX_PER_DAY,
+      "일 횟수가 절대 상한을 벗어난다");
+    assert.ok(FIXED_AUTO_TOPUP.maxKrwPerMonth >= 1
+      && FIXED_AUTO_TOPUP.maxKrwPerMonth <= AUTO_TOPUP_HARD_MAX_KRW_PER_MONTH,
+      "월 금액이 절대 상한을 벗어난다");
+    // 상한이 상한 노릇을 하려면 **월 한도 < 하루 한도 × 31** 이어야 한다 — 아니면 월 한도는
+    // 영원히 안 걸리는 장식이다(하루 한도만 남는다).
+    const priceKrw = 60; // credits.ts 단가 축과 같은 기준(₩60/크레딧 · 2026-08-25 인하)
+    const perCharge = FIXED_AUTO_TOPUP.topupCredits * priceKrw;
+    assert.ok(FIXED_AUTO_TOPUP.maxKrwPerMonth < perCharge * FIXED_AUTO_TOPUP.maxPerDay * 31,
+      "월 한도가 하루 한도×31 이상이라 월 한도가 걸릴 일이 없다 — 안전벨트가 장식이 된다");
+
+    // 설정 저장 경로는 **정직하게 409** 로 닫혀야 한다. 200 으로 받아 무시하면 화면은
+    // 저장된 줄 알고 다른 값을 보여준다 — 돈이 나가는 설정에서 그 불일치는 곧 분쟁이다.
+    const r = route("put", "/api/credits/auto-topup");
+    assert.match(r, /policy_fixed/, "고정 정책 전환 뒤에도 설정 저장이 살아 있다");
+    assert.match(r, /409/, "설정 불가를 정직하게 알리지 않는다");
+    assert.doesNotMatch(r, /saveAutoTopupPolicy\(/, "여전히 정책을 저장한다 — 고정이 아니다");
+  });
+
+  it("자동 결제 켜짐은 저장된 on/off 가 아니라 '쓸 수 있는 카드' 로 판정한다", () => {
+    // 등록이 곧 동의다 — "카드는 있는데 자동 결제는 꺼져 있다" 라는 상태를 두지 않는다.
+    // 저장 행을 읽는 코드가 남아 있으면 두 진실이 갈라진다(화면은 켜짐, 실제는 꺼짐).
+    const auto = fs.readFileSync(path.join(SRC, "auto-topup.ts"), "utf-8");
+    const run = /async function runAutoTopup[\s\S]*?\n\}/.exec(auto)?.[0] ?? "";
+    assert.notEqual(run, "", "runAutoTopup 을 못 잘랐다");
+    assert.match(run, /fixedAutoTopupPolicy\(/, "고정 정책을 쓰지 않는다");
+    assert.doesNotMatch(run, /getAutoTopupPolicy\(/,
+      "여전히 저장된 정책 행을 읽는다 — 고정 정책과 두 진실이 생긴다");
+    assert.ok(run.indexOf("cardBlock(") < run.indexOf("fixedAutoTopupPolicy("),
+      "카드 판정이 정책 판정보다 뒤면 카드 없이 켜진 것으로 취급된다");
   });
 
   it("웹훅은 일시적 실패에만 503 을 돌려 재전송을 살린다", () => {

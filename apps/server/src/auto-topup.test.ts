@@ -151,12 +151,16 @@ describe("자동 충전 실패 노출 — 소스 스캔", () => {
     assert.match(credits, /autoTopupAlert/, "실제로 조치하는 결제 화면에 사유가 안 간다");
   });
 
-  it("조치한 자리에서 알림을 해제한다 — 카드 재등록·정책 저장·직접 충전", () => {
+  it("조치한 자리에서 알림을 해제한다 — 카드 재등록·카드 삭제·직접 충전", () => {
     // 조치했는데 경고가 남아 있으면 화면이 거짓말하고, 그 다음부터 아무도 경고를 안 본다.
     const card = route(/app\.post\("\/api\/billing\/card",[\s\S]*?\n\}\);/);
     assert.match(card, /clearAutoTopupAlert\(/, "카드를 다시 등록해도 옛 사유가 남는다");
-    const policy = route(/app\.put\("\/api\/credits\/auto-topup",[\s\S]*?\n\}\);/);
-    assert.match(policy, /clearAutoTopupAlert\(/, "상한·정책을 고쳐도 옛 사유가 남는다");
+    // '정책 저장' 경로는 2026-08-26 고정 정책 전환으로 사라졌다(PUT 은 409). 자동 결제를
+    // 되돌리는 유일한 조치는 **카드 삭제**이고, 그 자리가 해제 지점을 잇는다 — 지운 뒤에도
+    // 남은 옛 사유는 이미 없는 카드를 가리켜 화면이 거짓말한다.
+    const del = route(/app\.delete\("\/api\/billing\/card",[\s\S]*?\n\}\);/);
+    assert.notEqual(del, "", "DELETE /api/billing/card 라우트를 찾지 못했다");
+    assert.match(del, /clearAutoTopupAlert\(/, "카드를 지워도 옛 사유가 남는다");
     // 직접 충전이 빠져 있었다 — no_buyer_info 힌트가 "직접 충전 1회로 채워집니다" 라고
     // 안내하고 사용자가 그대로 했는데 경고가 남았다. 안내한 조치는 반드시 경고를 지워야 한다.
     const topup = route(/app\.post\("\/api\/credits\/topup\/card",[\s\S]*?\n\}\);/);

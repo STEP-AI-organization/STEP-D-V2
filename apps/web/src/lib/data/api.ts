@@ -1676,6 +1676,13 @@ export interface SavedCard {
   /** 서버에 빌링 채널키가 없으면 false — 등록 버튼을 아예 안 보여준다. */
   available: boolean;
   unavailableReason: string | null;
+  /**
+   * 저장된 구매자 3종 — **카드 등록/변경 화면의 프리필 재료**(2026-08-26).
+   * 카드 관리 권한이 없는 사람에겐 서버가 null 을 준다(전화번호는 개인정보).
+   * 예전엔 이 필드가 없어서, 서버가 전화번호를 갖고 있어도 '카드 변경' 이 빈 칸에서
+   * 다시 시작했고 그 화면엔 입력란도 없어 400 으로 막혔다.
+   */
+  buyer: { fullName: string; email: string; phoneNumber: string } | null;
 }
 
 export async function fetchSavedCard(): Promise<SavedCard> {
@@ -1734,7 +1741,11 @@ export async function deleteSavedCard(): Promise<void> {
   if (!res.ok) throw new ApiError(res.status, await errorMessageOf(res));
 }
 
-/** 자동 충전 정책 — 잔액이 임계 이하로 떨어지면 저장 카드로 자동 결제. */
+/**
+ * 자동 결제 정책 — **고정이다**(2026-08-26). 잔액이 소진되면 저장 카드로 자동 결제한다.
+ * 값은 서버(credits.ts FIXED_AUTO_TOPUP)가 정하고 화면은 **보여주기만** 한다 —
+ * 화면이 자기 상수를 들고 있으면 서버와 다른 금액을 말하게 되고 그게 곧 결제 분쟁이다.
+ */
 export interface AutoTopupPolicy {
   enabled: boolean;
   thresholdCredits: number;
@@ -1745,11 +1756,19 @@ export interface AutoTopupPolicy {
   updatedBy?: string;
 }
 
-export async function fetchAutoTopup(): Promise<AutoTopupPolicy> {
-  const r = await json<{ policy: AutoTopupPolicy }>(
+export interface AutoTopupState {
+  policy: AutoTopupPolicy;
+  /** 고정 정책인가 — 참이면 설정 UI 를 그리지 않는다(설정을 못 찾는 게 아니라 없는 것이다). */
+  fixed: boolean;
+  /** 꺼져 있으면 **왜** 꺼져 있는지(카드 없음·해지). 화면이 조치를 안내한다. */
+  disabledReason: string | null;
+}
+
+export async function fetchAutoTopup(): Promise<AutoTopupState> {
+  const r = await json<{ policy: AutoTopupPolicy; fixed?: boolean; disabledReason?: string | null }>(
     await fetch(`${API_BASE}/credits/auto-topup`, { cache: "no-store", credentials: "include" }),
   );
-  return r.policy;
+  return { policy: r.policy, fixed: r.fixed === true, disabledReason: r.disabledReason ?? null };
 }
 
 export async function saveAutoTopup(policy: {

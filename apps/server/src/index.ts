@@ -46,8 +46,8 @@ import {
 import { audit, clientIp, requireReason, requireSuperadmin, requireOpsAccess, requireOpsOrInternal } from "./admin.ts";
 import { grantDedupeKey, nextTenantId, planOnboarding } from "./onboarding.ts";
 import {
-  billingConfig, cardBlockReason, cardLabel, cardTopupPaymentId, checkCustomer, declineMessage,
-  extractCardDisplay, issueIdFor, unwrapPayment, verifyCharge,
+  billingConfig, cardBlock, cardBlockReason, cardLabel, cardTopupPaymentId, checkCustomer,
+  declineMessage, extractCardDisplay, issueIdFor, unwrapPayment, verifyCharge,
 } from "./billing-card.ts";
 import { buildInvoice, invoiceFromTopup, issuerInfo, monthRange, parseMonth, supplierFromEnv } from "./invoice.ts";
 import { checkProfile, incompleteFields } from "./business.ts";
@@ -318,9 +318,10 @@ import {
 import { dispatchPublish } from "./publish-dispatch.ts";
 import { opsCapabilityOf, canPublish, isOpsRole, OPS_ROLES } from "./ops-role.ts";
 import {
-  AUTO_TOPUP_HARD_MAX_KRW_PER_MONTH, AUTO_TOPUP_HARD_MAX_PER_DAY,
+  AUTO_TOPUP_HARD_MAX_KRW_PER_MONTH, AUTO_TOPUP_HARD_MAX_PER_DAY, FIXED_AUTO_TOPUP,
   CREDIT_UNIT_LABEL, MANUAL_REASONS, buildTopup, checkCredits, creditPriceKrw,
-  manualDedupeKey, planManualCredit, settleTopup, topupDedupeKey, topupPaymentId,
+  fixedAutoTopupPolicy, manualDedupeKey, planManualCredit, settleTopup, topupDedupeKey,
+  topupPaymentId,
 } from "./credits.ts";
 import { billableMinutes, portoneConfigured } from "./billing.ts";
 import { chargeWithBillingKey, getBillingKeyInfo, getPayment, verifyWebhook } from "./portone.ts";
@@ -5793,7 +5794,16 @@ app.post("/api/billing/card/prepare", async (c) => {
   if (!cfg.ok) return c.json({ error: "billing_unconfigured", message: cfg.message }, 503);
 
   const body = await c.req.json<Record<string, unknown>>().catch(() => ({}) as Record<string, unknown>);
-  const who = checkCustomer(body);
+  // 저장된 카드의 구매자 정보를 **폴백**으로 쓴다 — 카드 변경(재등록) 때 사람이 3종을
+  // 다시 타이핑하지 않아도 되게. 같은 폴백이 POST /api/credits/topup/card 에는 이미 있었고
+  // 여기만 빠져 있었다: 그래서 서버가 전화번호를 갖고 있는데도 '카드 변경' 이 400 이었다.
+  // 바디가 우선이다(사용자가 화면에서 고친 값이 정본).
+  const saved = await getBillingCard();
+  const who = checkCustomer({
+    fullName: String(body.fullName ?? "").trim() || saved?.buyerName || "",
+    email: String(body.email ?? "").trim() || saved?.buyerEmail || "",
+    phoneNumber: String(body.phoneNumber ?? "").trim() || saved?.buyerPhone || "",
+  });
   if (!who.ok) return c.json({ error: "customer_required", message: who.message, missing: who.missing }, 400);
 
   const tenantId = currentTenantId();
@@ -5868,6 +5878,16 @@ app.get("/api/billing/card", async (c) => {
     }
   }
   const cfg = billingConfig();
+  // 저장된 구매자 3종을 **카드 관리 권한이 있는 행위자에게만** 내려준다 (2026-08-26).
+  //
+  // 왜 필요한가: 카드 등록/변경 화면이 이 값을 프리필한다. 예전엔 응답에 buyer 가 없어서,
+  // 이미 카드를 등록해 서버가 전화번호를 갖고 있어도 '카드 변경' 을 누르면 빈 칸에서
+  // 다시 시작했고 — 전화번호 입력란이 그 화면에 없어서 — 400 으로 막혔다(ENA 실측).
+  // 왜 권한을 보나: 전화번호는 개인정보다. member 는 카드를 만질 수 없으니(requireCardActor)
+  // 프리필도 필요 없다. 판정이 던지지 않게 감싼다 — 조회 자체는 누구에게나 200 이어야 한다
+  // (화면이 "결제 수단 없음" 과 "권한 없음" 을 구분해 그린다).
+  let canSeeBuyer = false;
+  try { requireCardActor(c); canSeeBuyer = true; } catch { canSeeBuyer = false; }
   return c.json({
     // 빌링키 자체는 절대 내보내지 않는다 — 화면이 알 필요가 없다.
     registered: Boolean(card?.billingKey && !card.revokedAt),
@@ -5878,12 +5898,22 @@ app.get("/api/billing/card", async (c) => {
     createdAt: card?.createdAt ?? null,
     available: cfg.ok,
     unavailableReason: cfg.ok ? null : cfg.message,
+    buyer: canSeeBuyer && card
+      ? {
+          fullName: card.buyerName ?? "",
+          email: card.buyerEmail ?? "",
+          phoneNumber: card.buyerPhone ?? "",
+        }
+      : null,
   });
 });
 
 app.delete("/api/billing/card", async (c) => {
   requireManager(c);
   await revokeBillingCard();
+  // 카드 삭제가 곧 **자동 결제 중단**이다(2026-08-26 고정 정책 — 별도 on/off 가 없다).
+  // 남은 옛 경고는 이미 없는 카드를 가리켜 화면이 거짓말한다: 지운 자리에서 함께 지운다.
+  await clearAutoTopupAlert("card-delete");
   return c.json({ ok: true });
 });
 
@@ -6048,66 +6078,34 @@ app.post("/api/credits/topup/card", async (c) => {
   });
 });
 
-// ── 자동 충전 정책 (잔액 임계 이하 → 저장 카드로 자동 결제) ─────────────────────────
-const AUTO_TOPUP_DEFAULT = {
-  enabled: false, thresholdCredits: 300, topupCredits: 600, maxPerDay: 3, maxKrwPerMonth: 200000,
-};
+// ── 자동 결제 정책 — **고정이다. 워크스페이스별 설정이 없다** (2026-08-26 사용자 확정) ──
+//
+// "잔액이 소진되면 5,000크레딧(₩300,000)을 자동 결제한다." 값은 credits.ts FIXED_AUTO_TOPUP
+// 한 곳에서만 나온다 — 화면·서버·메일이 다른 금액을 말하면 그게 곧 결제 분쟁이다.
+// 켜짐 여부는 저장된 on/off 가 아니라 **쓸 수 있는 카드가 있는가** 다: 등록이 곧 동의라서
+// "카드는 있는데 자동 결제는 꺼져 있다" 라는 상태 자체를 두지 않는다.
 
 app.get("/api/credits/auto-topup", async (c) => {
-  // 조회는 막지 않는다 — 자동 충전이 켜졌는지/상한이 뭔지는 member 도 봐야 "왜 안 막혔지"를 안다.
-  const p = await getAutoTopupPolicy();
-  return c.json({ policy: p ?? { ...AUTO_TOPUP_DEFAULT, updatedAt: null, updatedBy: "" } });
+  // 조회는 막지 않는다 — 자동 결제가 도는지/금액이 얼마인지는 member 도 봐야 한다.
+  const blocked = cardBlock(await getBillingCard());
+  const policy = fixedAutoTopupPolicy(!blocked);
+  return c.json({
+    policy: { ...policy, updatedAt: null, updatedBy: "" },
+    // 정책이 고정이라는 사실 자체를 화면에 알린다 — 설정 UI 를 못 찾는 게 아니라 없는 것이다.
+    fixed: true,
+    // 꺼져 있으면 **왜** 꺼져 있는지(=카드가 없다/해지됐다). 화면이 조치를 안내한다.
+    disabledReason: blocked ? blocked.reason : null,
+  });
 });
 
 app.put("/api/credits/auto-topup", async (c) => {
-  // **돈이 자동으로 나가는 설정**이라 owner/admin 세션, 또는 `billing:write` 키만
-  // (2026-08-21 · requireCardActor). 상한은 아래 검증이 서버에서 강제한다 —
-  // 호출자가 누구든 절대 상한(AUTO_TOPUP_HARD_MAX_*)을 넘겨 저장할 수 없다.
-  const actor = requireCardActor(c);
-  const body = await c.req.json<Record<string, unknown>>().catch(() => ({}) as Record<string, unknown>);
-  const int = (v: unknown, d: number) => {
-    const n = Math.floor(Number(v));
-    return Number.isFinite(n) ? n : d;
-  };
-  const enabled = body.enabled === true;
-  const thresholdCredits = int(body.thresholdCredits, AUTO_TOPUP_DEFAULT.thresholdCredits);
-  const topupCredits = int(body.topupCredits, AUTO_TOPUP_DEFAULT.topupCredits);
-  const maxPerDay = int(body.maxPerDay, AUTO_TOPUP_DEFAULT.maxPerDay);
-  const maxKrwPerMonth = int(body.maxKrwPerMonth, AUTO_TOPUP_DEFAULT.maxKrwPerMonth);
-
-  // 상한이 곧 안전벨트다 — 0 이하로는 못 저장한다(무한 충전 방지). 충전량은 실제 판매 가능한
-  // 크레딧 범위여야 한다(buildTopup 이 단가·최소/최대를 검증한다).
-  if (thresholdCredits < 0) return c.json({ error: "bad_request", message: "임계 크레딧은 0 이상이어야 합니다." }, 400);
-  if (maxPerDay < 1) return c.json({ error: "bad_request", message: "하루 최대 횟수는 1회 이상이어야 합니다." }, 400);
-  if (maxKrwPerMonth < 1) return c.json({ error: "bad_request", message: "월 최대 금액을 정해야 합니다." }, 400);
-  // 상한 자체가 미친 값이면 상한 노릇을 못 한다 — 절대 상한(credits.ts)을 넘는 정책은 저장 불가.
-  if (maxPerDay > AUTO_TOPUP_HARD_MAX_PER_DAY) {
-    return c.json({ error: "bad_request", message: `하루 최대 횟수는 ${AUTO_TOPUP_HARD_MAX_PER_DAY}회를 넘을 수 없습니다.` }, 400);
-  }
-  if (maxKrwPerMonth > AUTO_TOPUP_HARD_MAX_KRW_PER_MONTH) {
-    return c.json({ error: "bad_request", message: `월 최대 금액은 ${AUTO_TOPUP_HARD_MAX_KRW_PER_MONTH.toLocaleString("ko-KR")}원을 넘을 수 없습니다.` }, 400);
-  }
-  // 충전량이 임계 이하면 충전해도 잔액이 임계를 못 넘어 다음 판정에 또 걸린다 —
-  // 하루 한도까지 연속 과금되는 설정이라 저장 자체를 막는다.
-  if (topupCredits <= thresholdCredits) {
-    return c.json({ error: "bad_request", message: "충전량은 임계 크레딧보다 커야 합니다 — 아니면 충전 후에도 임계 아래라 연속 과금됩니다." }, 400);
-  }
-  const amt = buildTopup(topupCredits);
-  if (!amt.ok) return c.json({ error: "bad_request", message: `자동 충전량이 올바르지 않습니다: ${amt.reason}` }, 400);
-
-  // 켜려면 카드가 있어야 한다 — 없으면 켜도 매번 조용히 실패한다. 미리 막는다.
-  if (enabled) {
-    const blocked = cardBlockReason(await getBillingCard());
-    if (blocked) return c.json({ error: "no_card", message: `자동 충전을 켜려면 먼저 카드를 등록하세요. (${blocked})` }, 409);
-  }
-
-  const policy = await saveAutoTopupPolicy({
-    enabled, thresholdCredits, topupCredits, maxPerDay, maxKrwPerMonth, updatedBy: actor,
-  });
-  // 설정을 고쳤으면(상한 조정·충전량 수정·끄기) 그 사유로 걸려 있던 알림은 낡은 값이다.
-  // 다음 시도에서 여전히 실패하면 알림이 다시 생긴다 — 남겨두는 쪽이 거짓말이다.
-  await clearAutoTopupAlert("policy-save");
-  return c.json({ ok: true, policy });
+  // 설정이 사라졌다는 사실을 **정직하게** 알린다. 200 으로 받아 무시하면 화면은 저장된 줄
+  // 알고 다른 값을 보여준다 — 돈이 나가는 설정에서 그 불일치는 그대로 분쟁이 된다.
+  requireCardActor(c);
+  return c.json({
+    error: "policy_fixed",
+    message: `자동 결제는 고정 정책입니다 — 잔액이 소진되면 ${FIXED_AUTO_TOPUP.topupCredits.toLocaleString("ko-KR")}크레딧을 자동 결제합니다. 중단하려면 결제 수단(카드)을 삭제하세요.`,
+  }, 409);
 });
 
 /** 지금 바로 자동 충전 판정을 실행한다(설정 테스트용). 조건 안 맞으면 charged:false + 사유. */

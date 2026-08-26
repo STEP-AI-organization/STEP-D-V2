@@ -6,7 +6,7 @@
  * ## 화면 구조 (2026-08-14 · Google AI Studio 결제 화면 구조로 개편)
  * 페이지에는 조용한 카드 4장만 남기고, 행동은 전부 다이얼로그로 옮겼다:
  *   히어로(잔액)      → [크레딧 구매하기]  → 구매 다이얼로그 (프리셋·구매자 정보·결제 2종)
- *                     → "자동 충전 설정"   → 자동 충전 다이얼로그 (AutoTopupManager)
+ *                     → "결제 수단 관리"   → 카드 등록/변경/삭제 (자동 재결제는 고정 정책이라 설정 없음)
  *   거래              → [거래 보기]        → 전체 내역 다이얼로그
  *   결제 옵션         → [결제 수단 관리]   → 카드 등록/변경/삭제 다이얼로그 (SavedCardManager)
  *   설정              → [설정 관리]        → 구매자 정보(이름·이메일·휴대폰) 다이얼로그
@@ -28,16 +28,14 @@ import {
   fetchCredits,
   fetchInvoices,
   fetchSavedCard,
-  saveAutoTopup,
   saveBillingNotifyEmails,
-  type AutoTopupPolicy,
+  type AutoTopupState,
   type CreditState,
   type InvoiceList,
   type SavedCard,
 } from "@/lib/data/api";
 import { downloadInvoicePdf } from "@/lib/billing/invoice-pdf";
 import { SavedCardChargeButton, SavedCardManager } from "@/components/billing/saved-card";
-import { AutoTopupManager } from "@/components/billing/auto-topup";
 import { BillingCard, BillingDialog, CardAction } from "@/components/billing/billing-ui";
 import { cn } from "@/lib/utils";
 
@@ -51,8 +49,22 @@ const PRESETS = [
 
 const WON = (n: number) => `₩${n.toLocaleString("ko-KR")}`;
 
+/**
+ * 자동 결제 정책 문구 — **한 곳에서만 만든다.**
+ *
+ * 카드 등록 버튼 옆(동의 시점)·히어로·정책 다이얼로그 세 자리에 같은 문장이 떠야 한다.
+ * 자리마다 따로 쓰면 한 곳만 고쳐져 "5,000개"와 "₩300,000"이 서로 다른 값을 말하게 되고,
+ * 돈이 나가는 안내에서 그 불일치는 그대로 결제 분쟁이 된다.
+ * 숫자는 **서버가 준 정책값**으로 만든다(화면 상수 금지 — 서버가 정본).
+ */
+function autoChargeSentence(policy: { topupCredits: number } | null, priceKrw: number | null): string {
+  if (!policy?.topupCredits) return "잔액이 소진되면 등록된 카드로 자동 결제됩니다.";
+  const amount = priceKrw != null ? ` (${WON(policy.topupCredits * priceKrw)})` : "";
+  return `잔액이 소진되면 ${policy.topupCredits.toLocaleString("ko-KR")}크레딧${amount}이 등록된 카드로 자동 결제됩니다.`;
+}
+
 /** 열려 있는 다이얼로그 — 한 번에 하나만. */
-type DialogKind = "topup" | "ledger" | "card" | "autotopup" | "settings" | "invoices" | null;
+type DialogKind = "topup" | "ledger" | "card" | "settings" | "invoices" | null;
 
 const ROLE_KO: Record<string, string> = {
   owner: "소유자", admin: "관리자", member: "구성원", superadmin: "슈퍼관리자",
@@ -75,9 +87,9 @@ export default function CreditsPage() {
   // (등록·삭제) · 자동충전 게이트. 한 번만 조회해 같은 스냅샷을 나눠 준다(따로 조회하면 어긋난다).
   const [card, setCard] = useState<SavedCard | null>(null);
   const [cardLoadFailed, setCardLoadFailed] = useState(false);
-  // 히어로의 "자동 충전: 켜짐/사용 중지" 표시용. 편집·저장은 자동충전 다이얼로그(Manager)가
-  // 자기 스냅샷으로 하고, 저장 성공 시 onPolicySaved 로 여기에도 반영한다.
-  const [policy, setPolicy] = useState<AutoTopupPolicy | null>(null);
+  // 자동 재결제 상태 — **표시 전용**이다(2026-08-26 고정 정책). 켜짐 여부는 카드 등록에서
+  // 파생되므로 화면이 바꿀 수 있는 값이 아니고, 금액도 서버가 정본이다.
+  const [auto, setAuto] = useState<AutoTopupState | null>(null);
   // **PG 가 구매자 이메일을 필수로 요구한다**(이니시스 V2 일반결제). 세션에 있으면 채우고,
   // 없으면 사람이 입력한다 — 지금은 로그인이 강제되지 않아 세션 이메일이 빌 수 있다.
   const [email, setEmail] = useState("");
@@ -96,8 +108,6 @@ export default function CreditsPage() {
   const [invoiceList, setInvoiceList] = useState<InvoiceList | null>(null);
   const [invoicesFailed, setInvoicesFailed] = useState(false);
   const [pdfBusy, setPdfBusy] = useState<string | null>(null);
-  // 자동 재결제 토글 in-flight — 연타로 PUT 이 겹치지 않게.
-  const [autoToggleBusy, setAutoToggleBusy] = useState(false);
   // 결제 알림 수신자 — saved 는 서버 저장값(입력 중 폴링이 덮지 않게 입력값과 가른다).
   const [notifyInput, setNotifyInput] = useState("");
   const [notifySaved, setNotifySaved] = useState<string[]>([]);
@@ -118,17 +128,28 @@ export default function CreditsPage() {
     }
     // 카드 조회 실패가 크레딧 화면을 무너뜨리면 안 된다 — 따로 잡고, 실패 사실만 남긴다.
     try {
-      setCard(await fetchSavedCard());
+      const nextCard = await fetchSavedCard();
+      setCard(nextCard);
       setCardLoadFailed(false);
+      // **저장된 구매자 정보를 되읽어 채운다** (2026-08-26). 휴대폰번호는 세션에도 없고
+      // 어디에도 저장되지 않아 새로고침마다 사라졌다 — 카드가 이미 있는데도 '카드 변경'이
+      // 빈 칸에서 시작해 400 으로 막히던 원인. 서버가 정본이고 화면은 되읽기만 한다.
+      // **입력 중인 값은 덮지 않는다** — 폴링/재조회가 사용자가 방금 친 글자를 지우면 안 된다.
+      const b = nextCard.buyer;
+      if (b) {
+        if (b.fullName) setBuyerName((cur) => cur.trim() ? cur : b.fullName);
+        if (b.email) setEmail((cur) => cur.trim() ? cur : b.email);
+        if (b.phoneNumber) setPhone((cur) => cur.trim() ? cur : b.phoneNumber);
+      }
     } catch {
       setCard(null);
       setCardLoadFailed(true);
     }
     // 자동충전 정책은 히어로 표시용 — 실패해도 조용히 "—" 로 둔다(편집 화면은 자체 재시도 UI).
     try {
-      setPolicy(await fetchAutoTopup());
+      setAuto(await fetchAutoTopup());
     } catch {
-      setPolicy(null);
+      setAuto(null);
     }
     // 인보이스 실패가 잔액 화면을 무너뜨리면 안 된다 — 실패 사실만 남긴다.
     try {
@@ -248,39 +269,13 @@ export default function CreditsPage() {
       setPdfBusy(null);
     }
   }
-  const buyerSummary = [buyerName.trim(), email.trim(), phoneDigits].filter(Boolean).join(" · ");
-
-  /**
-   * 자동 재결제 켜기/끄기 — 나머지 정책값(수량·상한)은 그대로 두고 enabled 만 뒤집는다.
-   * 카드 미등록 등으로 서버가 막으면(409) 사유를 그대로 보여주고, 카드 문제면 등록 화면을 연다.
-   */
-  async function toggleAutoTopup() {
-    if (!policy || autoToggleBusy) return;
-    setAutoToggleBusy(true);
-    try {
-      const next = await saveAutoTopup({
-        enabled: !policy.enabled,
-        thresholdCredits: policy.thresholdCredits,
-        topupCredits: policy.topupCredits,
-        maxPerDay: policy.maxPerDay,
-        maxKrwPerMonth: policy.maxKrwPerMonth,
-      });
-      setPolicy(next);
-      toast({
-        title: next.enabled ? "자동 재결제 켜짐" : "자동 재결제 꺼짐",
-        description: next.enabled
-          ? `잔액이 부족해지면 ${next.topupCredits.toLocaleString("ko-KR")}개를 자동 결제합니다.`
-          : "잔액이 소진되면 새 분석이 멈춥니다 — 직접 충전하거나 다시 켜 주세요.",
-        tone: "done",
-      });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      toast({ title: "자동 재결제 변경 실패", description: message, tone: "error" });
-      if (/카드/.test(message)) setDialog("card");
-    } finally {
-      setAutoToggleBusy(false);
-    }
-  }
+  // ⚠️ **완비되지 않은 구매자 정보를 "채워짐" 으로 보여주면 안 된다.** 세션이 이름·이메일을
+  // 자동으로 채우므로, 예전 요약은 휴대폰번호가 비어 있어도 "홍길동 · a@b.com" 이라고 떴다 —
+  // 사용자는 준비가 끝난 줄 알고 카드 등록을 눌렀다가 400 을 봤다(2026-08-26).
+  // 셋이 다 유효할 때만 요약을 보여주고, 아니면 무엇이 빠졌는지 말한다.
+  const buyerSummary = canPay
+    ? [buyerName.trim(), email.trim(), phoneDigits].join(" · ")
+    : `미입력 (${[!nameOk && "이름", !emailOk && "이메일", !phoneOk && "휴대폰번호"].filter(Boolean).join(" · ")} 필요)`;
 
   /** 결제 알림 수신자 저장 — 쉼표·공백 구분 입력을 목록으로. 빈 입력 = 알림 없음. */
   async function saveNotify() {
@@ -416,15 +411,17 @@ export default function CreditsPage() {
           <span style={{ color: "var(--sd-mut)" }}>·</span>
           <span className="inline-flex items-center gap-1.5">
             <Zap size={13} style={{ color: "var(--sd-mut)" }} aria-hidden />
-            자동 충전: {policy ? (policy.enabled ? "켜짐" : "사용 중지") : "—"}
+            자동 재결제: {auto ? (auto.policy.enabled ? "켜짐" : "꺼짐") : "—"}
           </span>
+          {/* 설정 링크를 두지 않는다 — 고정 정책이라 열어 봐야 바꿀 것이 없다.
+              끄는 유일한 방법(카드 삭제)은 결제 수단 화면에 있으므로 그리로 보낸다. */}
           <button
             type="button"
             className="underline"
             style={{ color: "var(--sd-accent)" }}
-            onClick={() => setDialog("autotopup")}
+            onClick={() => setDialog("card")}
           >
-            자동 충전 설정
+            결제 수단 관리
           </button>
         </div>
 
@@ -443,43 +440,42 @@ export default function CreditsPage() {
         </div>
       )}
 
-      {/* ── 자동 재결제 + 결제 알림 — aena 결제창과 같은 카드 문법(제목+토글 · 굵은 금액 ·
-          시점 설명 · 상세 보기). 토글은 즉시 켜고 끄고, 수량·상한 편집은 상세 보기 다이얼로그. ── */}
-      <BillingCard
-        action={<CardAction label="상세 보기" onClick={() => setDialog("autotopup")} />}
-      >
-        <div className="flex items-start justify-between gap-4">
-          <div className="min-w-0">
+      {/* ── 자동 재결제 + 결제 알림 ──────────────────────────────────────────────
+          자동 결제는 **고정 정책**이다(2026-08-26) — 켜고 끄는 토글도, 금액·임계 설정도 없다.
+          "카드가 등록돼 있으면 소진 시 자동 결제, 없으면 안 함" 이 전부다. 그래서 이 카드는
+          설정 장치가 아니라 **지금 상태를 사실대로 말하는 자리**다: 지금 켜져 있는가,
+          얼마가 나가는가, 끄려면 무엇을 하면 되는가. ── */}
+      <BillingCard>
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
             <div className="text-[13px] font-semibold" style={{ color: "var(--sd-fg)" }}>자동 재결제</div>
-            <p className="mt-1 text-[11.5px]" style={{ color: "var(--sd-fg)" }}>
-              {policy
-                ? <>잔액이 소진되면 <b>{policy.topupCredits.toLocaleString("ko-KR")}개
-                    {price != null ? `(${WON(policy.topupCredits * price)})` : ""}</b>를 자동 결제합니다.</>
-                : "설정을 불러오는 중…"}
-            </p>
-            <p className="mt-0.5 text-[11px]" style={{ color: "var(--sd-mut)" }}>
-              결제 시점은 잔액이 부족해지는 순간입니다. 언제든 끌 수 있고, 일 횟수·월 금액 상한 안에서만 결제됩니다.
-            </p>
-          </div>
-          {/* 토글 — 목업과 같은 pill. 카드 미등록이면 서버가 409 로 막고, 그 사유를 그대로 보여준다. */}
-          <button
-            type="button"
-            role="switch"
-            aria-checked={policy?.enabled ?? false}
-            aria-label="자동 재결제"
-            disabled={!policy || autoToggleBusy || !canManageBilling}
-            onClick={() => void toggleAutoTopup()}
-            className="relative mt-0.5 h-[24px] w-[42px] shrink-0 rounded-full transition-colors"
-            style={{
-              background: policy?.enabled ? "var(--sd-accent)" : "var(--sd-border)",
-              opacity: !policy || autoToggleBusy || !canManageBilling ? 0.5 : 1,
-            }}
-          >
+            {/* 상태 배지 — 토글이 없으니 지금 켜졌는지가 한눈에 보여야 한다. */}
             <span
-              className="absolute top-[3px] h-[18px] w-[18px] rounded-full bg-white transition-all"
-              style={{ left: policy?.enabled ? 21 : 3, boxShadow: "0 1px 2px rgba(0,0,0,.25)" }}
-            />
-          </button>
+              className="rounded-full px-2 py-[1px] text-[10.5px] font-medium"
+              style={
+                auto?.policy.enabled
+                  ? { background: "var(--sd-ok-bg, rgba(45,160,110,.14))", color: "var(--sd-ok)" }
+                  : { background: "var(--sd-border)", color: "var(--sd-mut)" }
+              }
+            >
+              {auto ? (auto.policy.enabled ? "켜짐" : "꺼짐") : "…"}
+            </span>
+          </div>
+          <p className="mt-1 text-[11.5px]" style={{ color: "var(--sd-fg)" }}>
+            {auto ? autoChargeSentence(auto.policy, price) : "정책을 불러오는 중…"}
+          </p>
+          {/* 꺼져 있으면 **왜** 꺼져 있는지 + 무엇을 하면 켜지는지. 조용한 "꺼짐" 은 정보가 아니다. */}
+          {auto && !auto.policy.enabled && (
+            <p className="mt-1 text-[11px]" style={{ color: "var(--sd-warn)" }}>
+              {auto.disabledReason ?? "등록된 카드가 없습니다."} 카드를 등록하면 자동으로 켜집니다 —
+              잔액이 0이 되어도 분석·자동배포가 멈추지 않습니다.
+            </p>
+          )}
+          <p className="mt-0.5 text-[11px]" style={{ color: "var(--sd-mut)" }}>
+            결제 시점은 잔액이 소진되는 순간입니다. 금액·시점은 고정이라 따로 설정할 것이 없고,
+            중단하려면 <b>결제 수단(카드)을 삭제</b>하면 됩니다.
+            {auto?.policy.maxPerDay ? ` 안전장치로 하루 ${auto.policy.maxPerDay}회까지만 결제합니다.` : ""}
+          </p>
         </div>
 
         <div className="pt-2" style={{ borderTop: "1px solid var(--sd-border)" }}>
@@ -639,7 +635,7 @@ export default function CreditsPage() {
           label="크레딧 단가"
           value={price != null ? `${WON(price)} · 부가세 포함` : "단가 미설정"}
         />
-        <SettingRow label="구매자 정보" value={buyerSummary || "미입력"} />
+        <SettingRow label="구매자 정보" value={buyerSummary} />
       </BillingCard>
       </div>
 
@@ -824,29 +820,73 @@ export default function CreditsPage() {
           subtitle="카드 번호는 포트원으로 직접 전달되며 우리 서버에는 저장되지 않습니다."
           onClose={close}
         >
+          {/* ⚠️ **구매자 정보는 이 화면 안에 있어야 한다.**
+              예전엔 이 입력칸이 '구매'·'설정' 다이얼로그에만 있고 여기엔 없었다. 다이얼로그는
+              한 번에 하나만 열리므로, 카드 등록을 누른 사람은 "휴대폰번호가 필요합니다" 라는
+              400 만 보고 **그 화면 안에서 고칠 방법이 없었다**(2026-08-26 ENA 실측 · 카드
+              등록 불가의 실제 원인). 카드사가 요구하는 값이라 등록 직전에 확인시키는 게 맞다. */}
+          {canManageBilling && (
+            <div className="mb-3 flex flex-col gap-2">
+              <div>
+                <div className="text-[11.5px] font-medium" style={{ color: "var(--sd-label)" }}>
+                  구매자 정보
+                </div>
+                <p className="mt-0.5 text-[11px]" style={{ color: "var(--sd-mut)" }}>
+                  카드사(KG이니시스)가 결제할 때마다 요구하는 값입니다 — 카드와 함께 저장되어
+                  다음부터는 다시 입력하지 않습니다.
+                </p>
+              </div>
+              <input
+                value={buyerName}
+                onChange={(e) => setBuyerName(e.target.value)}
+                placeholder="구매자 이름 (필수)"
+                className="sd-input w-full"
+                aria-label="구매자 이름"
+              />
+              <input
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="영수증 받을 이메일 (필수)"
+                className="sd-input w-full"
+                aria-label="구매자 이메일"
+              />
+              <input
+                type="tel"
+                value={phone}
+                onChange={(e) => setPhone(e.target.value)}
+                placeholder="휴대폰번호 (필수 · 01012345678)"
+                className="sd-input w-full"
+                aria-label="구매자 휴대폰번호"
+              />
+              {/* 어느 칸이 왜 막는지 **누르기 전에** 말한다 — 400 토스트로 알게 하지 않는다. */}
+              {!canPay && (
+                <p className="text-[10.5px]" style={{ color: "var(--sd-danger-strong)" }}>
+                  {!nameOk
+                    ? "구매자 이름을 입력하세요."
+                    : !emailOk
+                      ? "이메일 형식을 확인하세요."
+                      : "휴대폰번호를 확인하세요 (01012345678)."}
+                </p>
+              )}
+              {/* ⚠️ **동의 시점의 고지.** 자동 재결제는 고정 정책이라 등록하는 순간 켜진다 —
+                  그 사실을 등록 버튼 바로 위에서 말하지 않으면 "언제 300,000원이 나갔지" 가 된다. */}
+              <p
+                className="rounded-[4px] px-2.5 py-2 text-[11px]"
+                style={{ border: "1px solid var(--sd-border)", background: "var(--sd-subtle, rgba(127,127,127,.06))", color: "var(--sd-fg)" }}
+              >
+                카드를 등록하면 <b>{autoChargeSentence(auto?.policy ?? null, price)}</b>
+                {" "}중단하려면 이 화면에서 카드를 삭제하면 됩니다.
+              </p>
+            </div>
+          )}
           <SavedCardManager
             canManage={canManageBilling}
             buyer={{ fullName: buyerName.trim(), email: email.trim(), phoneNumber: phoneDigits }}
+            buyerReady={canPay}
             card={card}
             loadFailed={cardLoadFailed}
             onReload={load}
-          />
-        </BillingDialog>
-      )}
-
-      {/* 자동 충전 — 저장/실행 분리·dirty 가드·실결제 고지 전부 Manager 안에 있다. */}
-      {dialog === "autotopup" && (
-        <BillingDialog
-          title="자동 충전"
-          subtitle="잔액이 임계 아래로 떨어지면 저장 카드로 자동 결제합니다."
-          onClose={close}
-        >
-          <AutoTopupManager
-            canManage={canManageBilling}
-            hasCard={card?.registered ?? false}
-            priceKrw={price}
-            onCharged={load}
-            onPolicySaved={setPolicy}
           />
         </BillingDialog>
       )}

@@ -431,6 +431,38 @@ export type AutoTopupVerdict =
 export const AUTO_TOPUP_HARD_MAX_KRW_PER_MONTH = 5_000_000;
 export const AUTO_TOPUP_HARD_MAX_PER_DAY = 10;
 
+/**
+ * **고정 자동 결제 정책** (2026-08-26 사용자 확정) — 워크스페이스별 설정 화면이 없다.
+ *
+ * "잔액이 소진되면 5,000크레딧(₩300,000)을 자동 결제한다." 그게 전부다. 임계·충전량·
+ * 상한을 고객이 고르게 하면 고를 것이 늘 뿐 결과는 같고(어차피 소진되면 충전한다),
+ * 잘못 고른 값(충전량 < 임계 등)이 조용한 연속 과금으로 이어질 여지만 남긴다.
+ *
+ * **동의 시점은 카드 등록이다.** 이 정책이 계약서가 아니라 결제 화면에만 있으면 안 되므로,
+ * 카드 등록 UI 가 등록 버튼 옆에서 이 문구를 그대로 보여준다(apps/web billing 화면).
+ * 정책이 여기 한 곳에만 살아야 화면·서버·메일이 다른 금액을 말하지 않는다.
+ *
+ * 상한은 남긴다 — 정책이 고정이어도 안전벨트는 필요하다. 하루 1회·월 ₩1,500,000(=5회)이면
+ * 파이프라인 버그로 크레딧이 비정상적으로 빨리 닳아도 카드가 무한히 긁히지 않고,
+ * 상한에 걸리면 자동배포가 멈추며 담당자에게 메일이 간다(조용한 과금보다 시끄러운 정지).
+ */
+export const FIXED_AUTO_TOPUP = {
+  /** 완전 소진(잔액 0 이하)에만 발동한다 — "소진되면" 이라는 약속 그대로. */
+  thresholdCredits: 0,
+  /** 5,000크레딧 = ₩300,000 (크레딧당 ₩60). 금액은 buildTopup 이 단가로 계산한다. */
+  topupCredits: 5_000,
+  maxPerDay: 1,
+  maxKrwPerMonth: 1_500_000,
+} as const;
+
+/**
+ * 지금 적용되는 자동 결제 정책. **저장된 행을 읽지 않는다** — 정책은 고정이고,
+ * 켜짐 여부는 오직 "쓸 수 있는 카드가 있는가" 다(등록이 곧 동의).
+ */
+export function fixedAutoTopupPolicy(hasUsableCard: boolean): AutoTopupPolicy {
+  return { enabled: hasUsableCard, ...FIXED_AUTO_TOPUP };
+}
+
 /** 지금 자동 충전을 해도 되는가. **상한 중 하나라도 걸리면 멈추고 알린다.** */
 export function shouldAutoTopup(input: {
   policy: AutoTopupPolicy;

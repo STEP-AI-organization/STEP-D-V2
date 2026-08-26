@@ -165,13 +165,20 @@ export function SavedCardChargeButton({
 export function SavedCardManager({
   canManage,
   buyer,
+  buyerReady,
   card,
   loadFailed,
   onReload,
 }: {
   canManage: boolean;
-  /** 구매자 정보 — 충전 카드의 입력값 그대로. 카드 등록(prepareCardIssue)에 필요하다. */
+  /** 구매자 정보 — 카드 등록(prepareCardIssue)에 필요하다. 부모가 같은 화면에서 입력받는다. */
   buyer: { fullName: string; email: string; phoneNumber: string };
+  /**
+   * 구매자 3종이 유효한가 — **버튼을 미리 막는 근거**(2026-08-26).
+   * 예전엔 이 가드가 없어 빈 전화번호로도 눌렸고, 사용자는 서버 400 토스트만 보고
+   * "필요하다는데 넣을 칸이 없다" 는 상태에 갇혔다. 판정은 부모가 한다(같은 규칙 한 벌).
+   */
+  buyerReady?: boolean;
   /** 부모(page)가 조회한 저장 카드 — 충전 카드의 결제 버튼과 같은 스냅샷을 본다. */
   card: SavedCard | null;
   /** 조회 실패 — 패널을 통째로 숨기면 기능이 있는지조차 알 수 없으니 "다시 시도"를 그린다. */
@@ -281,7 +288,13 @@ export function SavedCardManager({
           {canManage && (
             <div className="flex flex-wrap items-center gap-2">
               {/* 결제 버튼은 여기 없다 — 크레딧 구매 다이얼로그(금액 옆)의 SavedCardChargeButton 이 긁는다. */}
-              <button type="button" className="sd-btn ml-auto" disabled={busy !== null} onClick={register}>
+              <button
+                type="button"
+                className="sd-btn ml-auto"
+                disabled={busy !== null || buyerReady === false}
+                title={buyerReady === false ? "위 구매자 정보를 먼저 채워 주세요" : undefined}
+                onClick={register}
+              >
                 {busy === "register" ? "등록 중…" : "카드 변경"}
               </button>
               <button type="button" className="sd-btn" disabled={busy !== null} onClick={remove}>
@@ -310,7 +323,8 @@ export function SavedCardManager({
               <button
                 type="button"
                 className="sd-btn sd-btn-primary ml-auto"
-                disabled={busy !== null}
+                disabled={busy !== null || buyerReady === false}
+                title={buyerReady === false ? "위 구매자 정보를 먼저 채워 주세요" : undefined}
                 onClick={register}
               >
                 {busy === "register" ? "등록 중…" : "카드 등록"}
