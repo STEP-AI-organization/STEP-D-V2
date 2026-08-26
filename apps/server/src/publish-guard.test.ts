@@ -314,12 +314,14 @@ describe("예약 표시 — 지난 예약을 '예약됨'으로 두지 않는다"
   const MATRIX = WEB("components/distribution/distribution-matrix.tsx");
   const PAGE = WEB("app/(app)/distribution/page.tsx");
 
-  it("칸: 예약 시각이 지나면 라벨이 바뀐다", () => {
+  it("칸: 지난 예약을 구분하고, 게시됨으로 단정하지 않는다", () => {
     assert.match(MATRIX, /const past = known && at <= Date\.now\(\);/,
-      "지난 예약을 구분하지 않으면 채널엔 없는 예약을 계속 표시한다");
-    assert.match(MATRIX, /past \? "게시 확인"/,
-      "지난 예약에도 '예약' 이라고 쓰면 거짓이다");
-    // '게시됨'으로 단정하지 않는다 — 실제 공개 여부를 우리는 모른다.
+      "지난 예약을 구분하지 않으면 채널엔 없는 예약 시각을 계속 표시한다");
+    // 2026-08-26 상태 어휘 단순화: 지난 예약의 별도 라벨('게시 확인')은 뺐다 — 실제 공개는
+    // youtube.reconcile 이 되읽어 확정하고 그때 게시됨이 된다. 대신 툴팁이 그 사실을 말한다.
+    assert.match(MATRIX, /실제 공개 여부를 자동 확인 중/,
+      "지난 예약 툴팁이 자동 확인(reconcile)을 설명하지 않으면 '왜 계속 예약이지' 가 된다");
+    // '게시됨'으로 단정하지 않는다 — 실제 공개 여부는 reconcile 확정 전엔 모른다.
     assert.doesNotMatch(MATRIX, /past \? "게시됨"/,
       "확인하지 않은 것을 게시됨으로 단정하면 안 된다");
   });

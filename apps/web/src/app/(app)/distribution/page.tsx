@@ -30,7 +30,8 @@ export default function DistributionPage() {
 
   const rows: MatrixRow[] = useMemo(() => {
     return clips
-      .filter((c) => (c.distributions ?? []).some((d) => d.status !== "none"))
+      // recorded 만 있는 클립은 매트릭스에 안 띄운다 — 셀이 전부 ＋(빈 칸)라 정보가 없다.
+      .filter((c) => (c.distributions ?? []).some((d) => d.status !== "none" && d.status !== "recorded"))
       .filter((c) => !failedOnly || (c.distributions ?? []).some((d) => d.status === "failed"))
       .filter((c) => !progFilter || (episodes.find((e) => e.id === c.episodeId)?.programId ?? c.programId) === progFilter)
       .map((c) => {
@@ -49,7 +50,8 @@ export default function DistributionPage() {
   const counts = useMemo(() => {
     const m = new Map<string, number>();
     for (const c of clips) for (const d of c.distributions ?? []) {
-      if (d.status === "none") continue;
+      // recorded(게이트 OFF 시절 기록)는 파일이 안 올라간 것 — 상태 어휘에서 뺐다(2026-08-26).
+      if (d.status === "none" || d.status === "recorded") continue;
       // 예약 시각이 지난 건은 "예약"으로 세지 않는다 — 유튜브는 이미 처리했고 우리만 모른다.
       // 그대로 세면 상단 요약이 "예약 2" 라고 하는데 채널엔 예약이 없다(2026-08-21 사용자 지적).
       // 실제 공개 여부는 우리가 다시 읽지 않으므로 '게시됨'으로도 못 옮긴다 → 별도 칸으로 뺀다.
@@ -130,25 +132,13 @@ export default function DistributionPage() {
           {programs.map((p) => <option key={p.id} value={p.id}>{p.title}</option>)}
         </select>
         <span className="sd-mono ml-auto text-[11px]" style={{ color: "var(--sd-mut)" }}>
-          게시됨 {counts.get("published") ?? 0} · 기록됨 {counts.get("recorded") ?? 0} ·{" "}
-          예약 {counts.get("scheduled") ?? 0} · 진행 중 {counts.get("pending") ?? 0} · 실패 {counts.get("failed") ?? 0}
-          {(counts.get("scheduled_past") ?? 0) > 0 && (
-            <span title="예약 시각이 지났습니다 — 실제 공개 여부는 채널에서 확인해 주세요">
-              {" "}· 게시 확인 {counts.get("scheduled_past")}
-            </span>
-          )}
+          {/* 상태 어휘 단순화(2026-08-26): 게시됨·예약·실패 + 업로드 도는 몇 분만 '게시 중'.
+              지난 예약("scheduled_past")은 예약 수에 넣지 않는다 — youtube.reconcile 이
+              공개를 확정하면 게시됨으로 넘어간다. */}
+          게시됨 {counts.get("published") ?? 0} · 예약 {counts.get("scheduled") ?? 0} · 실패 {counts.get("failed") ?? 0}
+          {(counts.get("pending") ?? 0) > 0 && <> · 게시 중 {counts.get("pending")}</>}
         </span>
       </div>
-
-      {(counts.get("recorded") ?? 0) > 0 && (
-        <div
-          className="rounded-[4px] px-3 py-2 text-[11.5px] leading-relaxed"
-          style={{ border: "1px solid var(--sd-border)", background: "var(--sd-card-sub)", color: "var(--sd-mut)" }}
-        >
-          <b style={{ color: "var(--sd-fg)" }}>기록됨</b>은 게시가 아닙니다. Instagram·Facebook·TikTok 은
-          파일이 올라가지 않고 우리 쪽 기록만 남습니다 — 실제 게시는 담당자가 해당 앱에서 직접 해야 합니다.
-        </div>
-      )}
 
       {rows.length === 0 ? (
         <div

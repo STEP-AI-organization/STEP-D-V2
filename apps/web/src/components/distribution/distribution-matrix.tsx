@@ -6,11 +6,17 @@
  * 예전 배포 로그는 (클립×채널) 한 줄씩이라, 한 영상을 여러 채널에 올리면 줄이 흩어져
  * "이 영상 어디어디 나갔지?"가 안 보였다. 매트릭스는 그걸 한 행에 모은다.
  *
+ * 상태 어휘는 **넷뿐이다** — 예약됨 · 게시 중(업로드 도는 몇 분만) · 게시됨 · 실패
+ * (사용자 2026-08-26 "딱 이거만 심플하게"). 5개 채널 전부 실업로드가 되면서 '기록됨'과
+ * '받은함 전송' 같은 중간 상태 표기는 뺐다 — recorded 행(게이트 OFF 시절 기록)은 파일이
+ * 어디에도 안 올라간 것이므로 **빈 칸(＋)과 같게** 그린다(F4 "게시처럼 보이지 않기"의 강한 형태).
+ * 지난 예약도 별도 라벨 없이 '예약됨' — 실제 공개는 youtube.reconcile 이 되읽어 확정하면
+ * 그때 게시됨으로 바뀐다(추측 표기 없음).
+ *
  * 셀 동작(작동하는 것만):
- *  - 빈 칸(＋) → 그 영상을 배포(발행 모달). 아직 안 나간 채널로 바로 보낸다.
+ *  - 빈 칸(＋ · recorded 포함) → 그 영상을 배포(발행 모달).
  *  - 실패 칸 → 재시도(자동 재시도 없음 · F4-4).
- *  - YouTube 게시 칸 → 영상 열기(외부 링크).
- *  - 그 외 상태(게시·예약·기록·진행) → 표시만.
+ *  - 게시·예약 칸 → 기록된 링크가 있으면 영상 열기.
  */
 import { DISTRIBUTION_CHANNELS, type DistributionChannel } from "@/lib/constants";
 import { EDIT_KIND_LABEL, type Clip } from "@/lib/types";
@@ -24,12 +30,11 @@ const SHORT: Record<string, string> = {
   tiktok: "TikTok", navertv: "네이버 TV", naverclip: "네이버 클립",
 };
 
-/** 상태별 칩 색. 기록됨은 게시가 아니므로 초록을 주지 않는다(F4 Invariant). */
+/** 상태별 칩 색 — 예약·게시 중·게시됨·실패 넷뿐(recorded 는 칩이 아니라 빈 칸으로 그린다). */
 const STATUS: Record<string, { label: string; fg: string; bg: string }> = {
   published: { label: "게시됨", fg: "var(--sd-ok-strong, #2f7d32)", bg: "var(--sd-ok-bg, #eef7ee)" },
   scheduled: { label: "예약됨", fg: "var(--sd-warn, #8a5a00)", bg: "var(--sd-warn-bg, #fff4e5)" },
-  pending: { label: "진행 중", fg: "var(--sd-accent, #2b6cb0)", bg: "var(--sd-accent-bg, #eaf2fb)" },
-  recorded: { label: "기록됨", fg: "var(--sd-mut)", bg: "var(--sd-card-sub)" },
+  pending: { label: "게시 중", fg: "var(--sd-accent, #2b6cb0)", bg: "var(--sd-accent-bg, #eaf2fb)" },
   failed: { label: "실패", fg: "var(--sd-danger-strong, #a11)", bg: "var(--sd-danger-bg, #fdecec)" },
 };
 
@@ -138,8 +143,10 @@ function Cell({
   onPublish: (clip: Clip) => void;
   onRetry: (clipId: string, channel: DistributionChannel) => void;
 }) {
-  const d = clip.distributions?.find((x) => x.channel === channel && x.status !== "none");
-  // 배지는 상태만 보여준다 — origin(수동/자동) 접미는 붙이지 않는다(2026-08-18).
+  // recorded(게이트 OFF 시절 기록) 는 파일이 어디에도 안 올라간 것 — 빈 칸과 같게 취급해
+  // ＋ 로 그린다(다시 배포하면 그때 진짜 상태가 덮는다). 배지는 상태만 — origin 접미 없음.
+  const d = clip.distributions?.find(
+    (x) => x.channel === channel && x.status !== "none" && x.status !== "recorded");
 
   // 채널별 영상 링크 — 서버가 기록해 둔 것만 쓴다(추측 조립 금지). YouTube 는 videoId 로
   // 조립, 네이버는 워커가 남긴 url, Instagram·Facebook 은 Graph permalink. TikTok 은
@@ -185,12 +192,9 @@ function Cell({
 
   // ── 예약 칸 — **우리가 아는 것만 말한다.** ───────────────────────────────────
   //
-  // 우리는 업로드하며 예약을 건 시점에 'scheduled' 로 적고 **그 뒤를 다시 확인하지 않는다**.
-  // 그래서 예약 시각이 지나도 화면엔 계속 "예약됨" 이 남아, 유튜브에 가 보면 예약이 없고
-  // 이미 공개돼 있다(2026-08-21 사용자 지적). 지난 건을 "게시됨" 으로 바꾸는 것도 거짓이다 —
-  // 유튜브가 실제로 공개했는지 우리는 모른다(예약 실패·삭제·차단도 가능하다).
-  // 그래서 ① 미래면 **몇 시 예약인지** 보여주고 ② 지나면 **확인이 필요하다**고 말한다.
-  // 둘 다 영상으로 바로 갈 수 있게 링크를 건다 — 사용자가 실제로 하는 행동이 그거다.
+  // 미래 예약은 **몇 시인지**를 보여주고, 지난 예약은 시각 없이 '예약됨' 으로 둔다 —
+  // 실제 공개 여부는 youtube.reconcile 이 유튜브 상태를 되읽어 확정하고, 확정되면 이 칸이
+  // 저절로 '게시됨' 이 된다(2026-08-26 상태 어휘 단순화 · 추측으로 '게시됨' 단정은 여전히 금지).
   if (d.status === "scheduled") {
     const at = d.reserveDate ? Date.parse(d.reserveDate) : NaN;
     const known = Number.isFinite(at);
@@ -198,15 +202,15 @@ function Cell({
     const when = known
       ? new Date(at).toLocaleString("ko-KR", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })
       : null;
-    const label = !known ? "예약됨" : past ? "게시 확인" : `예약 ${when}`;
+    const label = known && !past ? `예약 ${when}` : "예약됨";
     const tone = past
       ? { fg: "var(--sd-mut)", bg: "var(--sd-card-sub)" }   // 지난 예약은 '완료' 색을 주지 않는다
       : { fg: s.fg, bg: s.bg };
     const title = !known
       ? "예약 시각을 알 수 없습니다"
       : past
-        ? `예약 시각(${when})이 지났습니다 — 실제 공개 여부는 채널에서 확인해 주세요. STEP D 는 예약을 건 뒤 상태를 다시 읽지 않습니다.`
-        : `${when} 에 유튜브가 공개합니다 (업로드는 이미 끝났습니다)`;
+        ? `예약 시각(${when})이 지났습니다 — 실제 공개 여부를 자동 확인 중입니다(확인되면 게시됨으로 바뀝니다).`
+        : `${when} 에 채널이 공개합니다 (업로드는 이미 끝났습니다)`;
     const chip = (
       <span
         className="mx-auto inline-flex items-center gap-1 rounded-[4px] px-1.5 py-0.5 text-[10.5px] font-medium"
@@ -221,22 +225,6 @@ function Cell({
         {chip}
       </a>
     ) : chip;
-  }
-
-  // 틱톡 받은함 초안 — status 는 published 로 기록되지만 **채널에 공개된 게 아니다**
-  // (계정 주인이 틱톡 앱 받은함에서 편집·게시해야 뜬다). 초록 "게시됨"으로 그리면
-  // "게시됐다는데 채널에 없다"는 혼란이 된다(사용자 2026-08-25). 다이렉트 게시가 켜져
-  // 게시물 링크(url)가 기록된 행만 아래 published 분기로 내려가 초록+링크가 된다.
-  if (d.status === "published" && channel === "tiktok" && !link) {
-    return (
-      <span
-        className="mx-auto inline-flex items-center gap-1 rounded-[4px] px-1.5 py-0.5 text-[10.5px] font-medium"
-        style={{ background: STATUS.scheduled.bg, color: STATUS.scheduled.fg }}
-        title="틱톡 앱 받은함에 초안으로 전송됐습니다 — 계정 주인이 앱(알림·받은함)에서 편집·게시해야 채널에 공개됩니다."
-      >
-        ● 받은함 전송
-      </span>
-    );
   }
 
   // 게시됨 + 링크 있음 → 영상 열기. 유튜브만이 아니라 네이버·인스타·페북도 같은 대접
@@ -260,11 +248,7 @@ function Cell({
     <span
       className="mx-auto inline-flex items-center gap-1 rounded-[4px] px-1.5 py-0.5 text-[10.5px] font-medium"
       style={{ background: s.bg, color: s.fg }}
-      title={
-        d.reserveDate ? `예약 ${d.reserveDate}`
-          : channel === "tiktok" ? `${s.label} — 받은함 드래프트는 담당자가 TikTok 앱에서 게시해야 공개 URL 이 생깁니다`
-          : s.label
-      }
+      title={d.reserveDate ? `예약 ${d.reserveDate}` : s.label}
     >
       ● {s.label}
     </span>
