@@ -97,6 +97,20 @@ export default function CommerceReviewPage() {
     }
   }, [openId, load, toast]);
 
+  /** 아직 링크가 없는 클립의 발급을 건다 — 계정 등록 전에 저장만 돼 있던 쿼리를 처리한다. */
+  const issue = useCallback(async () => {
+    if (!openId) return;
+    setBusy(true);
+    try {
+      await issueCommerceLinks(openId);
+      toast({ title: "발급 요청됨", description: "잠시 뒤 새로고침하면 반영됩니다." });
+    } catch (e) {
+      toast({ title: "발급 실패", description: (e as Error).message, tone: "error" });
+    } finally {
+      setBusy(false);
+    }
+  }, [openId, toast]);
+
   /** 다른 후보로 교체 — 발급은 브라우저 워커가 하므로 비동기다. */
   const swap = useCallback(async (query: string, productId: number) => {
     if (!openId) return;
@@ -208,6 +222,11 @@ export default function CommerceReviewPage() {
                   </div>
                 </div>
                 <div className="flex shrink-0 items-center gap-1.5 text-xs">
+                  {/* 상품은 찾았는데 링크가 없다 = 발급이 아직 안 돌았다(계정 미등록·워커 미가동).
+                      이걸 안 보여주면 "분석은 찾았는데 화면엔 아무것도 없는" 상태가 된다. */}
+                  {row.links.length === 0 && row.queries > 0 && (
+                    <Badge className="bg-sky-500/15 text-sky-600">발급 대기 {row.queries}</Badge>
+                  )}
                   {row.pending > 0 && <Badge className="bg-amber-500/15 text-amber-600">대기 {row.pending}</Badge>}
                   {row.approved > 0 && <Badge className="bg-emerald-500/15 text-emerald-600">붙음 {row.approved}</Badge>}
                   {row.rejected > 0 && <Badge className="bg-muted text-muted-foreground">제외 {row.rejected}</Badge>}
@@ -220,6 +239,31 @@ export default function CommerceReviewPage() {
                     <Skeleton className="h-24 w-full" />
                   ) : (
                     <div className="space-y-4">
+                      {/* 링크가 아직 없다 — 무엇을 찾았는지와, 왜 안 붙었는지를 말해준다. */}
+                      {detail.links.length === 0 && detail.queries.length > 0 && (
+                        <div className="space-y-2 text-sm">
+                          <div className="text-muted-foreground">
+                            상품 {detail.queries.length}건을 찾았지만 아직 링크가 발급되지 않았습니다.
+                          </div>
+                          <ul className="space-y-1">
+                            {detail.queries.map((q) => (
+                              <li key={q.query} className="text-xs">
+                                <strong>{q.query}</strong>
+                                {q.reason && <span className="text-muted-foreground"> — {q.reason}</span>}
+                              </li>
+                            ))}
+                          </ul>
+                          <Button size="xs" variant="outline" disabled={busy || !review?.accountReady}
+                            onClick={() => void issue()}>
+                            <RefreshCw /> 링크 발급
+                          </Button>
+                          {!review?.accountReady && (
+                            <div className="text-xs text-muted-foreground">
+                              계정이 등록돼야 발급할 수 있습니다.
+                            </div>
+                          )}
+                        </div>
+                      )}
                       <div className="space-y-2">
                         {detail.links.map((link) => {
                           const cands = (detail.candidates[link.query] ?? [])

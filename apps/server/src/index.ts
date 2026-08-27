@@ -8104,10 +8104,21 @@ app.post("/api/clips/:id/generate-metadata", async (c) => {
     });
 
     // 발급 잡은 **머신 전용 레인**(commerce)이 집는다 — 로그인된 브라우저가 있는 PC 만
-    // 처리할 수 있다. 게이트가 꺼져 있으면 큐잉 자체를 안 하므로 잡이 고이지 않는다.
+    // 처리할 수 있다. 게이트가 꺼져 있으면 큐잉 자체를 안 한다.
+    //
+    // ⚠️ **계정이 없으면 큐잉도 하지 않는다.** 어차피 워커가 계정을 못 찾아 아무것도 안 하는데,
+    //    그 워커(윈도우2)가 안 떠 있으면 잡이 pending 으로 조용히 쌓인다 — 이 리포의 전형적
+    //    실패 모드다. 할 수 없는 일은 큐에 넣지 않는다. 쿼리는 이미 클립에 저장돼 있으므로,
+    //    나중에 계정을 등록하고 /commerce 에서 "발급" 을 누르면 그때 처리된다.
     if (commerceLinksEnabled() && (commerce as any)?.queries?.length) {
-      void enqueue("commerce.link", { clipId }, { dedupeKey: `commerce.link:${clipId}` })
-        .catch((e) => console.warn("[generate-metadata] commerce.link 큐잉 실패:", e));
+      const acct = await getCommerceAccount("coupang").catch(() => undefined);
+      if (acct && acct.status !== "disabled") {
+        void enqueue("commerce.link", { clipId }, { dedupeKey: `commerce.link:${clipId}` })
+          .catch((e) => console.warn("[generate-metadata] commerce.link 큐잉 실패:", e));
+      } else {
+        console.log(`[generate-metadata] ${clipId}: 상품 쿼리 ${(commerce as any).queries.length}건 저장 — ` +
+          "쿠팡파트너스 계정 미등록이라 발급은 보류합니다(/commerce 에서 계정 등록 후 발급).");
+      }
     }
 
     return c.json({ base: baseMeta, channels: byChannel, commerce: commerce ?? undefined });
@@ -8289,8 +8300,12 @@ app.get("/api/commerce/review", async (c) => {
   const rows = clips
     .map((clip) => {
       const links = usableLinks(clip.commerce?.links, Number.MAX_SAFE_INTEGER);
-      if (links.length === 0) return null;
+      const queries = Array.isArray(clip.commerce?.queries) ? clip.commerce.queries.length : 0;
+      // 링크가 아직 없어도 **상품을 찾아 둔 클립은 보여준다** — 안 그러면 "분석은 상품을
+      // 찾았는데 화면엔 아무것도 없는" 상태가 되고, 계정 미등록·발급 실패를 눈치챌 수 없다.
+      if (links.length === 0 && queries === 0) return null;
       return {
+        queries,
         clipId: clip.id,
         clipTitle: clip.title ?? "무제 클립",
         episodeId: clip.episodeId ?? null,
@@ -8306,10 +8321,15 @@ app.get("/api/commerce/review", async (c) => {
     .filter(Boolean) as any[];
   // 검토가 필요한 것부터 — 대기 건수 많은 순, 그다음 최신순.
   rows.sort((a, b) => b.pending - a.pending || String(b.clipId).localeCompare(String(a.clipId)));
+  const acct = await getCommerceAccount("coupang").catch(() => undefined);
   return c.json({
     enabled: commerceLinksEnabled(),
+    /** 계정이 없으면 발급 자체가 보류된다 — 화면이 그 사실을 말할 수 있게 함께 준다. */
+    accountReady: !!acct && acct.status === "active",
     total: rows.length,
     pendingClips: rows.filter((r) => r.pending > 0).length,
+    /** 상품은 찾았는데 아직 링크가 없는 클립 — 발급이 안 돈 것이다(계정 미등록·워커 미가동). */
+    awaitingIssue: rows.filter((r) => r.links.length === 0 && r.queries > 0).length,
     clips: rows,
   });
 });

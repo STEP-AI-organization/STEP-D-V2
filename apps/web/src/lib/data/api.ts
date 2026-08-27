@@ -3015,6 +3015,8 @@ export interface ClipCommerce {
 }
 
 export interface CommerceReviewRow {
+  /** 이 클립에서 찾은 상품 쿼리 수. 링크가 0인데 이게 >0 이면 **발급이 아직 안 돈 것**이다. */
+  queries: number;
   clipId: string;
   clipTitle: string;
   episodeId: string | null;
@@ -3029,8 +3031,12 @@ export interface CommerceReviewRow {
 
 export interface CommerceReview {
   enabled: boolean;
+  /** 회사 계정이 등록·활성인가. 아니면 발급이 보류된다(커미션 정산이 계정 단위라 폴백이 없다). */
+  accountReady: boolean;
   total: number;
   pendingClips: number;
+  /** 상품은 찾았는데 링크가 아직 없는 클립 수. */
+  awaitingIssue: number;
   clips: CommerceReviewRow[];
 }
 
