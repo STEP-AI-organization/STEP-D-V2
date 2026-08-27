@@ -455,7 +455,9 @@ export function inActiveWindow(rule: AutomationRule, now = new Date()): boolean 
  * 게이트가 꺼져 있으면 실제로는 기록만 되지만, 그건 켜고 끄는 축이라 상태가 아니라
  * 배너로 알린다(자동화 화면 gates).
  */
-const UPLOAD_PLATFORMS = new Set(["youtube", "navertv", "naverclip", "instagram", "facebook", "tiktok"]);
+export const UPLOAD_PLATFORMS = new Set([
+  "youtube", "navertv", "naverclip", "instagram", "facebook", "tiktok",
+]);
 
 /**
  * 계획 생성 시 상태 분기 (F6).

@@ -1273,6 +1273,20 @@ describe("하루 발행 수는 서버와 같은 함수로만 낸다 (화면 스�
     assert.match(page, /perDayCount\(/, "서버 판정 함수를 안 쓴다");
   });
 
+  it("실업로드 채널 목록도 서버 정본을 쓴다 — 안전 문구 역전 재발 금지", () => {
+    // 화면이 `youtube || naver*` 로 좁혀 두고 TikTok·Instagram·Facebook 에는
+    // "기록만 — 실제 게시는 담당자가 직접" 이라고 안내했다. 그런데 프로덕션은 그 셋의
+    // 업로드 게이트가 전부 켜져 있고 틱톡은 채널에 바로 공개된다 — **안 올라간다고 안내한
+    // 채널로 영상이 나갔다**(2026-08-27). automation.ts:449 가 네이버 사례로 경고한 그 형태다.
+    assert.match(page, /UPLOAD_PLATFORMS/, "서버의 실업로드 목록을 안 쓴다");
+    assert.doesNotMatch(page, /p === "youtube" \|\| p\.startsWith\("naver"\)/,
+      "화면이 실업로드 판정 사본을 갖고 있다 — 채널이 늘면 한쪽만 고쳐진다");
+    // 그 목록이 실제로 export 되어 공유되는지도 확인한다(사본 금지의 반대편).
+    const auto = fs.readFileSync(path.join(SRC, "automation.ts"), "utf-8");
+    assert.match(auto, /export const UPLOAD_PLATFORMS/,
+      "서버가 목록을 export 하지 않으면 화면은 사본을 만들 수밖에 없다");
+  });
+
   it("그 함수는 서버의 순수 모듈에서 온다 — 화면이 자기 사본을 두지 않는다", () => {
     assert.match(page, /from "@server-pure\/automation"/,
       "화면이 자기 계산식을 들면 서버와 다른 수를 말하게 된다");

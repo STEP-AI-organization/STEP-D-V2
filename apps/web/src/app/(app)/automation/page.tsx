@@ -25,7 +25,8 @@ import type { AdoptReframe } from "@/components/adopt-dialog";
 // 두지 않는 이유: 이 숫자는 곧 청구 예상으로 읽히는데, 미러가 한 번 어긋나면 화면이 조용히
 // 거짓 약속을 하게 된다. automation.ts 는 import 0개짜리 순수 모듈이라 그대로 가져올 수 있다.
 import {
-  formatWeekdays, monthlyPublishEstimate, perDayCount, ruleSlots, slotLabel, type RuleSlot,
+  UPLOAD_PLATFORMS, formatWeekdays, isPublishDay, monthlyPublishEstimate, perDayCount, ruleSlots,
+  slotLabel, type RuleSlot,
 } from "@server-pure/automation";
 import {
   LayoutSliders,
@@ -137,8 +138,20 @@ const RESULT_TAG: Record<string, string> = {
   skipped: "sd-tag",
 };
 
-/** 실제 파일이 올라가는 플랫폼 — 나머지(Meta·TikTok)는 원래 기록만 남는다. */
-const isUploadPlatform = (p: string) => p === "youtube" || p.startsWith("naver");
+/**
+ * 실제 파일이 올라가는 플랫폼 — **서버 목록을 그대로 쓴다**(UPLOAD_PLATFORMS).
+ *
+ * ⚠️ 예전엔 여기서 `youtube || naver*` 로 좁혀 두고, TikTok·Instagram·Facebook 에는
+ * "기록만 — 실제 게시는 담당자가 직접" 이라고 안내했다. 그런데 프로덕션은 그 셋의
+ * 업로드 게이트가 **전부 켜져 있고**(cloudbuild TIKTOK/INSTAGRAM/FACEBOOK_UPLOAD_ENABLED=1),
+ * 틱톡은 TIKTOK_DIRECT_POST=1 이라 받은함이 아니라 **채널에 바로 공개**된다.
+ * 즉 "안 올라간다" 고 안내한 채널로 영상이 나갔다 — automation.ts:449 가 네이버 사례로
+ * 경고한 **안전 문구 역전**의 재발이다. 사본을 두지 말고 정본 하나만 본다.
+ *
+ * 게이트가 꺼져 있으면 실제로는 기록만 되는데, 그건 상태가 아니라 켜고 끄는 축이라
+ * 아래 gateOff() 배지가 따로 말한다(서버가 /api/automation 의 gates 로 내려준다).
+ */
+const isUploadPlatform = (p: string) => UPLOAD_PLATFORMS.has(p);
 
 /** distribution.origin → 자동/수동 라벨. 없으면(구 기록) null — 표기 생략. */
 function originLabelOf(origin: string | undefined): string | null {
@@ -612,8 +625,11 @@ export default function AutomationPage() {
   // 하루 몇 건인지는 **서버 판정과 같은 함수**로 낸다. 예전엔 여기서 dailyQuota 를 직접
   // 곱했는데, 발행 시간(슬롯)이 있으면 서버는 dailyQuota 를 무시하고 슬롯 개수를 쓰므로
   // 화면만 다른 수를 말하게 된다.
+  // **오늘 발행 요일이 아닌 계획은 세지 않는다.** 순방은 발행 요일이 아니면 계획 전체를
+  // 건너뛰므로(automation-cycle isPublishDay), 요일을 안 보면 월~금 계획이 토요일에도
+  // "한도 40건" 이라고 떠서 "왜 안 나가지" 를 화면으로 판단할 수 없다.
   const todayQuota = rules
-    .filter((r) => r.enabled)
+    .filter((r) => r.enabled && isPublishDay(r))
     .reduce((sum, r) => sum + monthlyPublishEstimate(r).perDay * channelsOf(r).length, 0);
 
   async function togglePause() {
@@ -945,7 +961,11 @@ export default function AutomationPage() {
           </span>
           {hasToday && (
             <span className="text-[11px] font-medium" style={{ color: "var(--sd-fg)" }}>
-              오늘 게시 {todayPublished}건 / 한도 {todayQuota}건
+              {/* 한도 0 은 고장이 아니라 "오늘은 발행 요일이 아님" 이다 — 그렇게 말한다.
+                  숫자만 0 으로 두면 사용자는 계획이 멈춘 줄 안다. */}
+              {todayQuota === 0
+                ? "오늘은 발행 요일이 아닙니다"
+                : `오늘 게시 ${todayPublished}건 / 한도 ${todayQuota}건`}
             </span>
           )}
           <button type="button" className="sd-btn sd-btn-primary ml-auto" disabled={runningNow} onClick={runNow}>
@@ -1134,13 +1154,14 @@ export default function AutomationPage() {
             일부 연결 계정을 불러오지 못했습니다 — 배포 채널 화면에서 연결 상태를 확인해 주세요.
           </p>
         )}
-        {/* ⚑ 채널별 안내 — 만들 때 성격을 말한다 (F6). 실업로드 = YouTube·네이버. */}
+        {/* ⚑ 채널별 안내 — 만들 때 성격을 말한다 (F6). 연결 가능한 채널은 전부 실업로드
+            대상이고, 꺼져 있는지는 위 배지(gateOff)가 채널별로 말한다. */}
         <p
           className="rounded-[4px] px-2.5 py-2 text-[11px] leading-relaxed"
           style={{ border: "1px solid var(--sd-border)", background: "var(--sd-card)", color: "var(--sd-mut)" }}
         >
-          YouTube·네이버는 실제 파일이 업로드됩니다. Instagram/Facebook/TikTok 은 배포 기록만
-          남고 실제 게시는 담당자가 해당 앱에서 직접 해야 합니다.
+          연결한 채널에는 <b>실제 파일이 업로드됩니다</b> — TikTok 은 채널에 바로 공개됩니다.
+          운영 설정으로 꺼져 있는 채널은 위에 &ldquo;실제 업로드 꺼짐&rdquo; 배지가 붙고, 그때만 기록으로 남습니다.
         </p>
         </div>
 
