@@ -195,3 +195,64 @@ describe("소재가 없으면 마감을 기다리지 않는다", () => {
     assert.deepEqual(codes, ["analyzing", "meta_waiting", "render_waiting"]);
   });
 });
+
+/**
+ * 소재 부족 안내 + 업로드·충전 유도 (2026-08-27) — "20건 예정인데 16건" 인 날, 리포트가
+ * 그 사실과 조치를 말한다. 목표에 닿은 날엔 섹션 자체가 없어야 한다(없는 문제를 만들지 않는다).
+ */
+describe("영상이 모자란 날의 안내", () => {
+  const ok: AutoReportItem = {
+    date: "2026-08-27", title: "정상 게시분", program: "눈떠보니 OOO",
+    channelLabel: "AENA_TEST", videoId: "ok1", url: "https://youtu.be/ok1",
+    durationSec: 60, publishedAtMs: Date.parse("2026-08-27T15:01:00+09:00"), publishAt: null,
+  };
+  const short = { target: 20, published: 16, creditBalance: 1292, appUrl: "https://stepd.stepai.kr" };
+  const html = buildAutoPublishReportHtml([ok], kst("2026-08-27T15:32"), null, short);
+
+  it("몇 건 예정 중 몇 건 나갔고 몇 건이 비었는지 말한다", () => {
+    assert.match(html, /영상이 모자랍니다/);
+    assert.match(html, /오늘 20건 예정 중 16건 게시 · 4건은 만들 영상이 없었습니다/);
+  });
+
+  it("조치를 말한다 — 영상 업로드 · 크레딧 잔액과 소모량", () => {
+    assert.match(html, /회차 영상을 올려 주시면/);
+    assert.match(html, /1,292개/);
+    assert.match(html, /60분 회차 한 편에 60개/);
+  });
+
+  it("버튼은 제품 주소가 있을 때만 — 없으면 문구만(주소를 지어내지 않는다)", () => {
+    assert.match(html, /href="https:\/\/stepd\.stepai\.kr\/analyze"/);
+    assert.match(html, /href="https:\/\/stepd\.stepai\.kr\/credits"/);
+    const noUrl = buildAutoPublishReportHtml([ok], kst("2026-08-27T15:32"), null,
+      { ...short, appUrl: null });
+    assert.match(noUrl, /영상이 모자랍니다/);
+    assert.doesNotMatch(noUrl, /영상 올리기/);
+  });
+
+  it("잔액을 못 읽으면 그 줄만 빠진다 — 리포트는 그대로 나간다", () => {
+    const noBal = buildAutoPublishReportHtml([ok], kst("2026-08-27T15:32"), null,
+      { ...short, creditBalance: null });
+    assert.match(noBal, /영상이 모자랍니다/);
+    assert.doesNotMatch(noBal, /남은 크레딧/);
+  });
+
+  it("목표를 채운 날엔 섹션이 아예 없다", () => {
+    const full = buildAutoPublishReportHtml([ok], kst("2026-08-27T15:32"), null,
+      { target: 20, published: 20, creditBalance: 1292, appUrl: "https://stepd.stepai.kr" });
+    assert.doesNotMatch(full, /영상이 모자랍니다/);
+    assert.doesNotMatch(full, /크레딧 충전/);
+    // shortfall 을 안 넘긴 경우(구 호출부)도 마찬가지.
+    assert.doesNotMatch(buildAutoPublishReportHtml([ok], kst("2026-08-27T15:32"), null), /영상이 모자랍니다/);
+  });
+
+  it("프리헤더가 소재 부족을 먼저 말한다 — 열기 전에 보인다", () => {
+    assert.match(html, /오늘 16건 게시 · 영상이 모자라 4건을 못 채웠습니다/);
+  });
+
+  it("발송부가 순방과 같은 함수로 목표를 낸다 (소스 스캔)", () => {
+    const src = fsSync.readFileSync(pathMod.join(SRC_DIR, "publish-notify.ts"), "utf-8");
+    assert.match(src, /target \+= ruleDayTarget\(rule, n, now\)\.target;/,
+      "메일이 순방과 다른 식으로 목표를 세면 두 숫자가 갈라진다");
+    assert.match(src, /buildAutoPublishReportHtml\(items, now, next, shortfall\)/);
+  });
+});

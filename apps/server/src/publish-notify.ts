@@ -20,7 +20,7 @@
  * (rule_run 기준)보다 적립이 늦을 수 있다 — 그 항목은 다음 리포트(지난날 즉시 발송)로 넘어간다.
  */
 import {
-  getAutomationSetting, setAutomationSetting, listAutomationRules, publishedTodayKst,
+  creditBalance, getAutomationSetting, setAutomationSetting, listAutomationRules, publishedTodayKst,
 } from "./db-pg.ts";
 import {
   NOTIFY_EMAIL_KEY, allowedToday, isPublishDay, kstMinutes, perDayCount,
@@ -231,6 +231,27 @@ export function ruleDayTarget(
  * 다시 세면 순방과 갈라진다). 목표 미달이어도 **마지막 슬롯이 지났고 소재가 없으면** 더
  * 기다릴 이유가 없으므로 그때까지 몫으로 보낸다.
  */
+/**
+ * 오늘 계획한 총량과 실제 게시 수 — 리포트의 "영상이 모자랍니다" 섹션 근거.
+ * 여러 계획·채널이면 합산한다(담당자에겐 "오늘 몇 건 예정 중 몇 건" 한 줄이면 된다).
+ * 목표는 순방과 **같은 함수**(ruleDayTarget)로 낸다 — 메일이 다른 수를 말하면 안 된다.
+ */
+async function todaysPlanTotals(now: Date): Promise<{ target: number; published: number }> {
+  const rules = ((await listAutomationRules()) as unknown as AutomationRule[]).filter(
+    (r) => r.enabled !== false && isPublishDay(r, now) && ruleChannels(r).length > 0,
+  );
+  let target = 0;
+  let published = 0;
+  for (const rule of rules) {
+    for (const chan of ruleChannels(rule)) {
+      const n = await publishedTodayKst(`${chan.platform}:${chan.accountId}`);
+      published += n;
+      target += ruleDayTarget(rule, n, now).target;
+    }
+  }
+  return { target, published };
+}
+
 async function todaysPublishingDone(now: Date, exhausted: boolean): Promise<boolean> {
   // DB 행(AutomationRuleRow)은 판정 헬퍼들이 쓰는 필드를 전부 담고 있다 — 순방과 같은 캐스트.
   const rules = ((await listAutomationRules()) as unknown as AutomationRule[]).filter(
@@ -274,8 +295,27 @@ const esc = (s: string) => String(s ?? "")
   .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
 /** 리포트 HTML — final-normal.html(사용자 확정 템플릿)을 데이터로 채운 것. */
+/**
+ * 오늘 목표에 못 미친 사실 + 그 조치 — **소재(영상)가 모자란 날 리포트가 말해 주는 것**
+ * (사용자 2026-08-27 "16개 나갔을 때는 메일로 더 영상을 넣어 달라고 알려주면서 결제 유도").
+ *
+ * 목표는 계획 설정(슬롯 합)이고 실적은 실제 게시분이다. 차이는 대개 "채택할 추천이 없다" —
+ * 회차를 더 올려야 풀린다. 회차를 올리면 분석 크레딧이 드니 잔액도 같이 보여 준다.
+ * ⚠️ 링크는 `PUBLIC_URL` 이 있을 때만 건다 — 없으면 문구만. 주소를 지어내지 않는다.
+ */
+export interface ReportShortfall {
+  /** 오늘 계획 목표(슬롯 합) · 실제 나간 수. target > published 일 때만 섹션이 그려진다. */
+  target: number;
+  published: number;
+  /** 분석에 쓸 수 있는 잔여 크레딧(=분). 모르면 null — 그 줄을 생략한다. */
+  creditBalance: number | null;
+  /** 제품 주소(PUBLIC_URL). 없으면 버튼 없이 문구만. */
+  appUrl: string | null;
+}
+
 export function buildAutoPublishReportHtml(
   items: AutoReportItem[], now: Date, next: { label: string } | null,
+  shortfall: ReportShortfall | null = null,
 ): string {
   const programs = [...new Set(items.map((i) => i.program).filter(Boolean))];
   // 생 채널 ID(UC…)는 사람이 읽는 자리에 안 올린다 — channelLabel 은 이름이 없으면
@@ -292,10 +332,17 @@ export function buildAutoPublishReportHtml(
   const publishedCount = okItems.length - scheduled.length;
   const subtitle = `${programs.join(" · ") || "자동배포"} · YouTube${channels.length ? ` ${channels.join(" · ")}` : ""}`;
   const stamp = `${kstDate(now).replace(/-/g, ".")} ${kstHm(now)} KST`;
-  // 실패가 있으면 프리헤더(받은함 미리보기)부터 그 사실을 말한다 — 메일을 열기 전에 보인다.
+  // 소재 부족 — 오늘 계획한 수를 못 채운 날. 실패(게시 실패)와 다른 축이다: 이건 **만들
+  // 재료가 없어서** 안 나간 것이라 조치도 다르다(회차 업로드 · 그에 필요한 크레딧).
+  const short = shortfall && shortfall.target > shortfall.published
+    ? { ...shortfall, missing: shortfall.target - shortfall.published } : null;
+
+  // 프리헤더(받은함 미리보기) — 열기 전에 오늘의 요점부터. 우선순위: 실패 > 소재 부족 > 정상.
   const preheader = failedItems.length
     ? `배포 ${items.length}건 중 ${failedItems.length}건 확인 필요. 배포 화면에서 재시도해 주세요.`
-    : `배포 ${items.length}건 전부 게시 완료. 확인 필요 항목 없음.`;
+    : short
+      ? `오늘 ${short.published}건 게시 · 영상이 모자라 ${short.missing}건을 못 채웠습니다.`
+      : `배포 ${items.length}건 전부 게시 완료. 확인 필요 항목 없음.`;
 
   const itemHtml = (i: AutoReportItem, first: boolean) => {
     const sep = first ? "" : `<tr><td class="px" style="padding:30px 40px 0 40px;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td height="1" bgcolor="#E9E8E6" style="height:1px;line-height:1px;font-size:0;">&nbsp;</td></tr></table></td></tr>`;
@@ -385,7 +432,23 @@ export function buildAutoPublishReportHtml(
   <tr><td class="px" style="padding:0 40px;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td height="1" bgcolor="#E9E8E6" style="height:1px;line-height:1px;font-size:0;">&nbsp;</td></tr></table></td></tr>
 ${[...failedItems, ...okItems].map((i, k) => itemHtml(i, k === 0)).join("\n")}
 <tr><td class="px" style="padding:30px 40px 0 40px;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td height="1" bgcolor="#E9E8E6" style="height:1px;line-height:1px;font-size:0;">&nbsp;</td></tr></table></td></tr>
-${next ? `  <tr><td class="px" style="padding:32px 40px 0 40px;">
+${short ? `  <tr><td class="px" style="padding:32px 40px 0 40px;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#0E0F14" style="background:#0E0F14;border-radius:6px;"><tr><td style="padding:24px 26px;">
+      <div style="font-family:${FONT};font-size:13px;font-weight:600;line-height:18px;color:#47EBEB;">영상이 모자랍니다</div>
+      <div style="padding-top:10px;font-family:${FONT};font-size:18px;font-weight:600;line-height:28px;mso-line-height-rule:exactly;color:#FDFCFC;word-break:keep-all;">오늘 ${short.target}건 예정 중 ${short.published}건 게시 · ${short.missing}건은 만들 영상이 없었습니다</div>
+      <div style="padding-top:10px;font-family:${FONT};font-size:13px;font-weight:400;line-height:21px;color:#9A9CA1;word-break:keep-all;">회차 영상을 올려 주시면 AI가 분석해 다음 배포 시간에 자동으로 채웁니다.${
+        short.creditBalance != null
+          ? ` 지금 남은 크레딧은 <b style="color:#FDFCFC;">${short.creditBalance.toLocaleString("ko-KR")}개</b>(분석 ${short.creditBalance.toLocaleString("ko-KR")}분)입니다 — 60분 회차 한 편에 60개가 듭니다.`
+          : ""
+      }</div>
+      ${short.appUrl ? `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin-top:18px;"><tr>
+        <td bgcolor="#47EBEB" align="center" style="background:#47EBEB;border-radius:6px;"><a class="btn" href="${esc(short.appUrl)}/analyze" style="display:block;padding:13px 22px;font-family:${FONT};font-size:14px;font-weight:600;line-height:18px;color:#0E0F14;text-decoration:none;">영상 올리기</a></td>
+        <td style="width:10px;font-size:0;line-height:0;">&nbsp;</td>
+        <td align="center" style="border:1px solid #3A3C42;border-radius:6px;"><a class="btn" href="${esc(short.appUrl)}/credits" style="display:block;padding:12px 22px;font-family:${FONT};font-size:14px;font-weight:600;line-height:18px;color:#FDFCFC;text-decoration:none;">크레딧 충전</a></td>
+      </tr></table>` : ""}
+    </td></tr></table>
+  </td></tr>` : ""}
+${next ? `  <tr><td class="px" style="padding:${short ? "16px" : "32px"} 40px 0 40px;">
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#F5F3F1" style="background:#F5F3F1;border-radius:6px;"><tr><td style="padding:22px 24px;">
       <div style="font-family:${FONT};font-size:13px;font-weight:600;line-height:18px;color:#5C5E63;">다음 배포</div>
       <div style="padding-top:8px;font-family:${FONT};font-size:16px;font-weight:600;line-height:26px;mso-line-height-rule:exactly;color:#1F2124;">${esc(next.label)}</div>
@@ -427,13 +490,21 @@ export async function maybeFlushAutoPublishReport(
       return;
     }
     const next = await nextPublishInfo(now).catch(() => null);
+    // 소재 부족 안내 — 오늘 목표에 못 미쳤을 때만 그려진다(그 외엔 null 이라 섹션 자체가 없다).
+    // 잔액·주소는 없으면 그 줄만 빠진다 — 못 읽었다고 리포트를 통째로 미루지 않는다.
+    const totals = await todaysPlanTotals(now).catch(() => null);
+    const balance = await creditBalance().catch(() => null);
+    const appUrl = String(process.env.PUBLIC_URL ?? "").trim().replace(/\/+$/, "") || null;
+    const shortfall: ReportShortfall | null = totals && totals.target > totals.published
+      ? { target: totals.target, published: totals.published, creditBalance: balance, appUrl }
+      : null;
     const programs = [...new Set(items.map((i) => i.program).filter(Boolean))];
     const programLabel = programs.length > 1 ? `${programs[0]} 외 ${programs.length - 1}` : (programs[0] ?? "자동배포");
     await sendMail({
       to,
       // 제목 브랜드는 STEP AI (사용자 2026-08-26 — 본문 푸터의 "STEP D 자동배포 시스템"은 템플릿 원문 유지).
       subject: `[STEP AI] ${programLabel} 자동배포 리포트 · ${kstMdw(now)} ${kstHm(now)} · ${items.length}건`,
-      html: buildAutoPublishReportHtml(items, now, next),
+      html: buildAutoPublishReportHtml(items, now, next, shortfall),
     });
     await setAutomationSetting(REPORT_BUFFER_KEY, "");
     console.log(`[report] 자동배포 리포트 발송 → ${to} (${items.length}건)`);
