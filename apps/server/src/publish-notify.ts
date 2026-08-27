@@ -300,15 +300,13 @@ const esc = (s: string) => String(s ?? "")
  * (사용자 2026-08-27 "16개 나갔을 때는 메일로 더 영상을 넣어 달라고 알려주면서 결제 유도").
  *
  * 목표는 계획 설정(슬롯 합)이고 실적은 실제 게시분이다. 차이는 대개 "채택할 추천이 없다" —
- * 회차를 더 올려야 풀린다. 회차를 올리면 분석 크레딧이 드니 잔액도 같이 보여 준다.
- * ⚠️ 링크는 `PUBLIC_URL` 이 있을 때만 건다 — 없으면 문구만. 주소를 지어내지 않는다.
+ * 회차를 더 올려야 풀린다. **문구만 싣는다** — 잔액·버튼은 사용자 요청으로 뺐다
+ * (2026-08-27 "크레딧 보여줄 필요 없음" · "버튼은 만들지 마").
  */
 export interface ReportShortfall {
   /** 오늘 계획 목표(슬롯 합) · 실제 나간 수. target > published 일 때만 섹션이 그려진다. */
   target: number;
   published: number;
-  /** 제품 주소(PUBLIC_URL). 없으면 버튼 없이 문구만. */
-  appUrl: string | null;
 }
 
 export function buildAutoPublishReportHtml(
@@ -435,11 +433,6 @@ ${short ? `  <tr><td class="px" style="padding:32px 40px 0 40px;">
       <div style="font-family:${FONT};font-size:13px;font-weight:600;line-height:18px;color:#47EBEB;">영상이 모자랍니다</div>
       <div style="padding-top:10px;font-family:${FONT};font-size:18px;font-weight:600;line-height:28px;mso-line-height-rule:exactly;color:#FDFCFC;word-break:keep-all;">오늘 ${short.target}건 예정 중 ${short.published}건 게시 · ${short.missing}건은 만들 영상이 없었습니다</div>
       <div style="padding-top:10px;font-family:${FONT};font-size:13px;font-weight:400;line-height:21px;color:#9A9CA1;word-break:keep-all;">회차 영상을 올려 주시면 AI가 분석해 다음 배포 시간에 자동으로 채웁니다. 크레딧이 넉넉해야 분석이 끊기지 않습니다.</div>
-      ${short.appUrl ? `<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin-top:18px;"><tr>
-        <td bgcolor="#47EBEB" align="center" style="background:#47EBEB;border-radius:6px;"><a class="btn" href="${esc(short.appUrl)}/analyze" style="display:block;padding:13px 22px;font-family:${FONT};font-size:14px;font-weight:600;line-height:18px;color:#0E0F14;text-decoration:none;">영상 올리기</a></td>
-        <td style="width:10px;font-size:0;line-height:0;">&nbsp;</td>
-        <td align="center" style="border:1px solid #3A3C42;border-radius:6px;"><a class="btn" href="${esc(short.appUrl)}/credits" style="display:block;padding:12px 22px;font-family:${FONT};font-size:14px;font-weight:600;line-height:18px;color:#FDFCFC;text-decoration:none;">크레딧 충전</a></td>
-      </tr></table>` : ""}
     </td></tr></table>
   </td></tr>` : ""}
 ${next ? `  <tr><td class="px" style="padding:${short ? "16px" : "32px"} 40px 0 40px;">
@@ -487,9 +480,8 @@ export async function maybeFlushAutoPublishReport(
     // 소재 부족 안내 — 오늘 목표에 못 미쳤을 때만 그려진다(그 외엔 null 이라 섹션 자체가 없다).
     // 잔액·주소는 없으면 그 줄만 빠진다 — 못 읽었다고 리포트를 통째로 미루지 않는다.
     const totals = await todaysPlanTotals(now).catch(() => null);
-    const appUrl = String(process.env.PUBLIC_URL ?? "").trim().replace(/\/+$/, "") || null;
     const shortfall: ReportShortfall | null = totals && totals.target > totals.published
-      ? { target: totals.target, published: totals.published, appUrl }
+      ? { target: totals.target, published: totals.published }
       : null;
     const programs = [...new Set(items.map((i) => i.program).filter(Boolean))];
     const programLabel = programs.length > 1 ? `${programs[0]} 외 ${programs.length - 1}` : (programs[0] ?? "자동배포");

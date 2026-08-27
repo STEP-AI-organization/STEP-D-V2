@@ -206,7 +206,7 @@ describe("영상이 모자란 날의 안내", () => {
     channelLabel: "AENA_TEST", videoId: "ok1", url: "https://youtu.be/ok1",
     durationSec: 60, publishedAtMs: Date.parse("2026-08-27T15:01:00+09:00"), publishAt: null,
   };
-  const short = { target: 20, published: 16, appUrl: "https://stepd.stepai.kr" };
+  const short = { target: 20, published: 16 };
   const html = buildAutoPublishReportHtml([ok], kst("2026-08-27T15:32"), null, short);
 
   it("몇 건 예정 중 몇 건 나갔고 몇 건이 비었는지 말한다", () => {
@@ -221,18 +221,15 @@ describe("영상이 모자란 날의 안내", () => {
     assert.doesNotMatch(html, /남은 크레딧|1,292|\d+개\(분석/);
   });
 
-  it("버튼은 제품 주소가 있을 때만 — 없으면 문구만(주소를 지어내지 않는다)", () => {
-    assert.match(html, /href="https:\/\/stepd\.stepai\.kr\/analyze"/);
-    assert.match(html, /href="https:\/\/stepd\.stepai\.kr\/credits"/);
-    const noUrl = buildAutoPublishReportHtml([ok], kst("2026-08-27T15:32"), null,
-      { ...short, appUrl: null });
-    assert.match(noUrl, /영상이 모자랍니다/);
-    assert.doesNotMatch(noUrl, /영상 올리기/);
+  it("버튼은 넣지 않는다 — 안내는 문구로만 (사용자 2026-08-27)", () => {
+    assert.doesNotMatch(html, /영상 올리기|크레딧 충전/);
+    // 항목의 '영상 열기' 버튼은 그대로다 — 이 절은 소재 부족 안내에만 해당한다.
+    assert.match(html, /영상 열기/);
   });
 
   it("목표를 채운 날엔 섹션이 아예 없다", () => {
     const full = buildAutoPublishReportHtml([ok], kst("2026-08-27T15:32"), null,
-      { target: 20, published: 20, appUrl: "https://stepd.stepai.kr" });
+      { target: 20, published: 20 });
     assert.doesNotMatch(full, /영상이 모자랍니다/);
     assert.doesNotMatch(full, /크레딧 충전/);
     // shortfall 을 안 넘긴 경우(구 호출부)도 마찬가지.
