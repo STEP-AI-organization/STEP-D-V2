@@ -82,7 +82,7 @@ async function runAutoTopup(needCredits = 0): Promise<AutoTopupResult> {
   if (blocked) return { charged: false, code: blocked.code, reason: blocked.reason };
 
   // 정책은 고정값 한 곳(credits.ts FIXED_AUTO_TOPUP)에서만 나온다 — 화면·서버·메일이
-  // 다른 금액을 말하지 않게. 상한(하루 1회·월 150만원)은 그대로 살아 있다.
+  // 다른 금액을 말하지 않게. 상한(하루 1회 · 월 ₩1,650,000 = 건당 ₩330,000 × 5회)은 그대로다.
   const policy = fixedAutoTopupPolicy(true);
 
   // 빌링키 결제의 customer 필수 3종(이니시스). 자동 경로엔 화면 입력 폴백이 없다 —

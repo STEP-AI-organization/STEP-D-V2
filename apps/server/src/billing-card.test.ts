@@ -34,6 +34,7 @@ import {
 import { PortOneError } from "./portone.ts";
 import {
   AUTO_TOPUP_HARD_MAX_KRW_PER_MONTH, AUTO_TOPUP_HARD_MAX_PER_DAY, FIXED_AUTO_TOPUP,
+  buildTopup,
 } from "./credits.ts";
 
 const SRC = path.dirname(fileURLToPath(import.meta.url));
@@ -288,10 +289,18 @@ describe("배선", () => {
     assert.ok(FIXED_AUTO_TOPUP.maxKrwPerMonth >= 1
       && FIXED_AUTO_TOPUP.maxKrwPerMonth <= AUTO_TOPUP_HARD_MAX_KRW_PER_MONTH,
       "월 금액이 절대 상한을 벗어난다");
+    // ⚠️ **건당 금액은 세전이 아니라 청구액이다.** 예전엔 여기서 `크레딧 × 단가`(공급가액)로
+    // 재서, 단가가 부가세 별도로 바뀌며 건당이 300,000 → 330,000 이 됐는데도 이 관문이
+    // 초록으로 통과했다 — 월 상한이 5회에서 4회로 조용히 줄어든 회귀를 못 잡았다(2026-08-27).
+    // 그래서 실제 청구액을 만드는 함수(buildTopup)로 재고, **몇 회가 들어가는지를 숫자로** 박는다.
+    const priced = buildTopup(FIXED_AUTO_TOPUP.topupCredits, { CREDIT_PRICE_KRW: "60" } as NodeJS.ProcessEnv);
+    assert.equal(priced.ok, true);
+    const perCharge = priced.ok === true ? priced.amountKrw : 0;
+    assert.equal(perCharge, 330_000, "건당 청구액이 공급가 300,000 + 부가세 30,000 이 아니다");
+    assert.equal(Math.floor(FIXED_AUTO_TOPUP.maxKrwPerMonth / perCharge), 5,
+      "월 상한에 자동 결제가 5회 들어가야 한다 — 줄면 자동배포가 그만큼 일찍 멈춘다");
     // 상한이 상한 노릇을 하려면 **월 한도 < 하루 한도 × 31** 이어야 한다 — 아니면 월 한도는
     // 영원히 안 걸리는 장식이다(하루 한도만 남는다).
-    const priceKrw = 60; // credits.ts 단가 축과 같은 기준(₩60/크레딧 · 2026-08-25 인하)
-    const perCharge = FIXED_AUTO_TOPUP.topupCredits * priceKrw;
     assert.ok(FIXED_AUTO_TOPUP.maxKrwPerMonth < perCharge * FIXED_AUTO_TOPUP.maxPerDay * 31,
       "월 한도가 하루 한도×31 이상이라 월 한도가 걸릴 일이 없다 — 안전벨트가 장식이 된다");
 

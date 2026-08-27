@@ -28,9 +28,18 @@ describe("결제 건별 인보이스 — 결정적이고 원장과 일치한다"
     settledAt: "2026-08-18T10:00:05",
   };
 
-  it("번호는 결제일+paymentId 꼬리로 결정적이다", () => {
-    assert.equal(invoiceFromTopup(row).number, invoiceFromTopup(row).number);
-    assert.equal(invoiceFromTopup(row).number, "SD-20260818-DEF456");
+  it("번호는 랜덤해 보이되 결제마다 고정이다 (2026-08-27)", () => {
+    // 저장하지 않고 네 자리(메일 제목·PDF 파일명·목록·문서 상단)가 각자 다시 만든다 —
+    // 호출마다 달라지면 같은 결제인데 메일과 PDF 의 번호가 달라 다른 청구서로 오해한다.
+    const n = invoiceFromTopup(row).number;
+    assert.equal(invoiceFromTopup(row).number, n, "같은 결제인데 번호가 바뀐다");
+    assert.match(n, /^[0-9A-HJKMNP-TV-Z]{12}$/, "혼동 글자(I·L·O·U) 없는 12자 토큰이어야 한다");
+    // 내부 식별자·날짜를 드러내지 않는다(옛 형식 SD-YYYYMMDD-<결제ID 꼬리>의 재발 금지).
+    assert.doesNotMatch(n, /^SD-/);
+    assert.ok(!n.includes(row.paymentId.slice(-6).toUpperCase()), "결제 ID 꼬리가 그대로 노출된다");
+    assert.ok(!n.includes("20260818"), "결제일이 번호에 드러난다");
+    // 다른 결제는 다른 번호.
+    assert.notEqual(invoiceFromTopup({ ...row, paymentId: "cr_1_other" }).number, n);
   });
 
   it("공급가액+부가세 = 총액 — splitVat 역산이라 1원도 새지 않는다", () => {

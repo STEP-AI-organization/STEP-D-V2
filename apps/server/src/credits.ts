@@ -13,6 +13,8 @@
  *  4. **잔액은 원장 합계다.** 캐시하지 않는다 — 어긋난 잔액은 조용히 틀린 채로 굴러간다.
  */
 
+
+
 export const CREDIT_UNIT_LABEL = "크레딧 1개 = 분석 1분";
 
 // ── 잔액 ─────────────────────────────────────────────────────────────────────────
@@ -96,7 +98,15 @@ export function creditPriceKrw(env: NodeJS.ProcessEnv = process.env): number | n
 }
 
 export type TopupCheck =
-  | { ok: true; credits: number; amountKrw: number; supplyKrw: number; vatKrw: number; reason: "" }
+  | {
+      ok: true; credits: number;
+      /** **실제로 카드에 긁히는 금액** — 공급가액 + 부가세. settleTopup 이 이 값으로 대조한다. */
+      amountKrw: number;
+      /** 크레딧 × 단가 (부가세 별도 · 2026-08-27). 화면·인보이스가 내역으로 보여준다. */
+      supplyKrw: number;
+      vatKrw: number;
+      reason: "";
+    }
   | { ok: false; reason: string };
 
 /**
@@ -177,6 +187,12 @@ export const MAX_TOPUP_CREDITS = 100_000;
 /**
  * 충전 주문 검증. **금액은 서버가 계산한다** — 브라우저가 보낸 금액을 쓰면
  * 1원에 10만 크레딧을 살 수 있다.
+ *
+ * ⚠️ **단가는 부가세 별도다**(2026-08-27 사용자 확정). `크레딧 × 단가` 는 **공급가액**이고,
+ * 청구액은 거기에 10% 를 더한 값이다 — 5,000개면 공급가 300,000 + 세액 30,000 = 330,000원.
+ * 예전엔 단가가 부가세 포함이라 `크레딧 × 단가` 가 곧 청구액이었다. amountKrw 의 뜻이
+ * 바뀐 게 아니라(**늘 청구액이다**) 그 값을 만드는 식이 바뀐 것이다 — settleTopup 의
+ * 승인액 대조도 그대로 성립한다.
  */
 export function buildTopup(credits: unknown, env: NodeJS.ProcessEnv = process.env): TopupCheck {
   const n = typeof credits === "number" ? credits : Number(credits);
@@ -460,9 +476,15 @@ export const AUTO_TOPUP_HARD_MAX_PER_DAY = 10;
  * 카드 등록 UI 가 등록 버튼 옆에서 이 문구를 그대로 보여준다(apps/web billing 화면).
  * 정책이 여기 한 곳에만 살아야 화면·서버·메일이 다른 금액을 말하지 않는다.
  *
- * 상한은 남긴다 — 정책이 고정이어도 안전벨트는 필요하다. 하루 1회·월 ₩1,500,000(=5회)이면
- * 파이프라인 버그로 크레딧이 비정상적으로 빨리 닳아도 카드가 무한히 긁히지 않고,
- * 상한에 걸리면 자동배포가 멈추며 담당자에게 메일이 간다(조용한 과금보다 시끄러운 정지).
+ * 상한은 남긴다 — 정책이 고정이어도 안전벨트는 필요하다. 하루 1회·월 ₩1,650,000(=건당
+ * ₩330,000 × 5회)이면 파이프라인 버그로 크레딧이 비정상적으로 빨리 닳아도 카드가 무한히
+ * 긁히지 않고, 상한에 걸리면 자동배포가 멈추며 담당자에게 메일이 간다(조용한 과금보다
+ * 시끄러운 정지).
+ *
+ * ⚠️ **월 상한은 '청구액' 축이다** — 단가가 부가세 별도가 된 2026-08-27, 이 값을 그대로
+ * 두면 건당이 300,000 → 330,000 이라 5회가 **4회로 조용히 줄고** ₩180,000 은 어떤 결제도
+ * 안 들어가는 죽은 헤드룸이 된다. 단가·충전량을 바꾸면 이 숫자도 같이 봐야 한다
+ * (billing-card.test.ts 가 '몇 회가 들어가는지'를 숫자로 고정한다).
  */
 export const FIXED_AUTO_TOPUP = {
   /** 완전 소진(잔액 0 이하)에만 발동한다 — "소진되면" 이라는 약속 그대로. */
@@ -470,7 +492,8 @@ export const FIXED_AUTO_TOPUP = {
   /** 5,000크레딧 = 공급가 ₩300,000 + 부가세 ₩30,000 = **₩330,000 청구**(크레딧당 ₩60, 부가세 별도). */
   topupCredits: 5_000,
   maxPerDay: 1,
-  maxKrwPerMonth: 1_500_000,
+  /** 청구액 기준 월 상한 = 330,000 × 5회. 세전(300,000)으로 잡으면 4회에서 막힌다. */
+  maxKrwPerMonth: 1_650_000,
 } as const;
 
 /**

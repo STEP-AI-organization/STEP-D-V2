@@ -8,14 +8,21 @@
  * 그래서 문서에 "세금계산서"라고 쓰지 않는다. 아닌 걸 그렇게 부르면 상대가 그걸로
  * 회계 처리를 하려다 문제가 생긴다.
  *
- * ## 부가세는 총액에서 역산한다
- * 크레딧 단가(`CREDIT_PRICE_KRW`)는 **실제로 카드에서 긁히는 금액**이다. 국내 소비자가
- * 표기 관행상 이 값을 부가세 포함으로 본다. 그래서
+ * ## 부가세 — 만들 때 creditAmounts, 쪼갤 때 splitVat
+ * 크레딧 단가(`CREDIT_PRICE_KRW`)는 **공급가액**이다(2026-08-27 사용자 확정 · 부가세 별도).
+ * 즉 `크레딧 × 단가` 는 청구액이 아니라 공급가액이고, 카드에 긁히는 금액은 거기에 10% 를
+ * 더한 값이다:
  *
- *     공급가액 = round(총액 / 1.1) · 세액 = 총액 − 공급가액
+ *     주문을 만들 때  청구액 = 공급가액 + round(공급가액 × 0.1)   → credits.ts creditAmounts
+ *     문서로 쪼갤 때  공급가액 = round(청구액 / 1.1) · 세액 = 차액  → splitVat (아래)
  *
- * 로 나눈다. 반대로 "단가가 공급가액이고 부가세를 더 받는다"로 잡으면 **실제 결제액과
- * 인보이스 합계가 어긋난다** — 그게 제일 나쁘다. 합계는 언제나 실제 결제액과 같아야 한다.
+ * **둘은 왕복이 맞아야 한다**(splitVat(청구액).supplyKrw === 원래 공급가액) — 어긋나면
+ * 세금계산서의 공급가액이 실제 판매가와 달라진다. 그리고 어느 쪽이든 지켜야 하는 불변식은
+ * 하나다: **문서의 합계는 언제나 실제 결제액과 같아야 한다.**
+ *
+ * ⚠️ 2026-08-27 이전 주문은 단가가 부가세 **포함**이라 `크레딧 × 단가` 가 곧 청구액이었다.
+ * 옛 행도 저장된 청구액을 splitVat 로 되쪼개므로 그때 나간 문서와 같은 숫자가 나온다 —
+ * 과거 인보이스를 다시 뽑아도 값이 변하지 않는다.
  *
  * ## 금액은 원장이 아니라 결제에서 온다
  * 크레딧 원장에는 무상 지급(grant)·정정(adjust)도 섞여 있다. **돈이 오간 건 topup 뿐**이라
@@ -30,7 +37,13 @@ export interface VatSplit {
   totalKrw: number;
 }
 
-/** 총액(부가세 포함) → 공급가액 + 세액. **합계는 반드시 원래 총액과 같다.** */
+/**
+ * 총액(부가세 포함) → 공급가액 + 세액. **합계는 반드시 원래 총액과 같다.**
+ *
+ * 이미 청구된 금액을 문서로 쪼갤 때 쓴다(인보이스·명세서). 새 주문의 금액을 **만들** 때는
+ * credits.ts 의 creditAmounts 를 쓴다 — 단가(CREDIT_PRICE_KRW)는 2026-08-27 부터
+ * **공급가액 기준**이라 청구액은 거기에 10% 를 더한 값이다.
+ */
 export function splitVat(totalKrw: number): VatSplit {
   const total = Math.max(0, Math.round(Number(totalKrw) || 0));
   const supply = Math.round(total / (1 + VAT_RATE));
@@ -157,10 +170,60 @@ export function buildInvoice(input: {
 // (/credits 인보이스 다이얼로그)과 결제 완료 메일에 쓰인다. 부가세 역산은 같은 splitVat.
 // PDF·메일 발송(부수효과)은 invoice-email.ts — 이 파일은 순수 모듈로 유지한다.
 
+/**
+ * 인보이스 번호 — **랜덤해 보이되 결제마다 고정**이다 (2026-08-27 사용자 요청).
+ *
+ * 왜 진짜 난수가 아닌가: 이 번호는 **저장하지 않고 매번 결제 데이터에서 다시 만든다**
+ * (메일 제목·PDF 파일명·목록·문서 상단 네 곳이 각자 만든다). 호출마다 달라지면 같은
+ * 결제인데 메일과 PDF 의 번호가 다르고, 상대는 다른 청구서로 오해한다. 그래서
+ * **결제 ID 해시**로 만든다 — 같은 결제는 영원히 같은 번호, 다른 결제는 다른 번호.
+ *
+ * 예전 형식(`SD-20260818-DEF456`)은 내부 결제 ID 뒤 6자리를 그대로 노출했고 접두사도
+ * 내부 코드명처럼 읽혔다. 지금은 날짜도 내부 ID 도 드러내지 않는다(결제일은 문서 안에
+ * 따로 적힌다). 혼동하기 쉬운 글자(I·L·O·U)를 뺀 32진수라 사람이 받아 적기도 쉽다.
+ */
+const INVOICE_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"; // Crockford base32 (I·L·O·U 제외)
+
+function invoiceHash(seed: string, chars: number): string {
+  const fnv = (offset: number): number => {
+    let h = offset >>> 0;
+    for (let i = 0; i < seed.length; i++) {
+      h ^= seed.charCodeAt(i);
+      h = Math.imul(h, 0x01000193) >>> 0;
+    }
+    return h >>> 0;
+  };
+  let n = (BigInt(fnv(0x811c9dc5)) << 32n) | BigInt(fnv(0x9e3779b9));
+  let out = "";
+  for (let i = 0; i < chars; i++) {
+    out = INVOICE_ALPHABET[Number(n & 31n)] + out;
+    n >>= 5n;
+  }
+  return out;
+}
+
+export function paymentInvoiceNumber(paymentId: string): string {
+  // 32비트 FNV-1a 두 벌(서로 다른 오프셋)로 64비트를 만든다 — 순수 모듈이라 crypto 를
+  // 끌어오지 않는다. 충돌은 결제 건수 규모(연 수천)에서 무시할 수준이다.
+  return invoiceHash(String(paymentId ?? ""), 12);
+}
+
+/**
+ * 영수증 번호 — `RC-YYYYMMDD-XXXXXX` (템플릿 규격). 인보이스 번호와 **다른 값**이어야
+ * 두 줄이 각자 의미를 갖는다(같은 결제의 서로 다른 문서 축). 시드에 소금을 섞어 가른다.
+ * 번호 자체는 인보이스 번호와 같은 이유로 **결제마다 고정**이다(저장하지 않는다).
+ */
+export function paymentReceiptNumber(paymentId: string, paidAt: string): string {
+  const day = String(paidAt ?? "").slice(0, 10).replace(/-/g, "") || "00000000";
+  return `RC-${day}-${invoiceHash(`receipt:${paymentId ?? ""}`, 6)}`;
+}
+
 export interface PaymentInvoice {
   id: string;
-  /** SD-YYYYMMDD-XXXXXX — 결제 데이터에서 결정적으로 만든다(별도 채번 없음). */
+  /** 12자 랜덤형 토큰 — 결제마다 고정(paymentInvoiceNumber). 날짜·내부 ID 를 노출하지 않는다. */
   number: string;
+  /** 영수증 번호 `RC-YYYYMMDD-XXXXXX` — 결제 영수증 메일이 인보이스 번호와 나란히 보여준다. */
+  receiptNumber: string;
   paidAt: string;
   credits: number;
   /** 부가세 포함 총액. supply/vat 는 splitVat 역산 — 화면·PDF·메일이 같은 값을 쓴다. */
@@ -179,7 +242,8 @@ export function invoiceFromTopup(r: {
   const vat = splitVat(r.amountKrw);
   return {
     id: r.paymentId,
-    number: `SD-${paidAt.slice(0, 10).replace(/-/g, "")}-${r.paymentId.slice(-6).toUpperCase()}`,
+    number: paymentInvoiceNumber(r.paymentId),
+    receiptNumber: paymentReceiptNumber(r.paymentId, paidAt),
     paidAt,
     credits: r.credits,
     amountKrw: vat.totalKrw,

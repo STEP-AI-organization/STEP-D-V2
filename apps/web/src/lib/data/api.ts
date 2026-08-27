@@ -1622,7 +1622,7 @@ export async function saveBillingNotifyEmails(emails: string[]): Promise<{ notif
 
 export interface InvoiceRow {
   id: string;
-  /** 표시용 번호 (SD-YYYYMMDD-XXXXXX) — 결제 데이터에서 결정적으로 만든다. */
+  /** 표시용 번호 — 12자 랜덤형 토큰(결제마다 고정 · 날짜·내부 ID 미노출) — 결제 데이터에서 결정적으로 만든다. */
   number: string;
   paidAt: string;
   credits: number;

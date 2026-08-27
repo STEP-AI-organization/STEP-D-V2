@@ -35,6 +35,7 @@ import {
   type AutoTopupCode,
   type AutoTopupPolicy,
 } from "./credits.ts";
+import { splitVat } from "./invoice.ts";
 
 /**
  * ⚠️ 이 describe 는 **비어 있었다**(2026-08-12 발견). 돈의 핵심 불변식이 이름만 있고
@@ -209,6 +210,20 @@ describe("충전 주문 — 금액은 서버가 계산한다", () => {
     const price = Number(env.CREDIT_PRICE_KRW);
     const fixed = buildTopup(5_000, env);
     assert.equal(fixed.ok === true && fixed.amountKrw, 5_000 * price * 1.1);
+  });
+
+  it("청구액을 인보이스가 되쪼갤 때 1원도 안 샌다 — 만들기/쪼개기 왕복", () => {
+    // 인보이스는 **저장된 청구액**을 splitVat 로 되쪼갠다. 만들 때(creditAmounts)와
+    // 쪼갤 때(splitVat)가 어긋나면 세금계산서의 공급가액이 실제 판매가와 달라진다.
+    for (const credits of [1, 7, 60, 600, 5000, 33333]) {
+      const r = buildTopup(credits, env);
+      assert.equal(r.ok, true);
+      if (r.ok !== true) continue;
+      const back = splitVat(r.amountKrw);
+      assert.equal(back.supplyKrw, r.supplyKrw, `${credits}개: 공급가액 왕복 불일치`);
+      assert.equal(back.vatKrw, r.vatKrw, `${credits}개: 세액 왕복 불일치`);
+      assert.equal(r.supplyKrw + r.vatKrw, r.amountKrw, `${credits}개: 합계 불일치`);
+    }
   });
 
   it("단가가 없으면 결제창을 띄우지 않는다", () => {

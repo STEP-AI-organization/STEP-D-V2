@@ -70,14 +70,27 @@ const WON = (n: number) => `₩${n.toLocaleString("ko-KR")}`;
  * 돈이 나가는 안내에서 그 불일치는 그대로 결제 분쟁이 된다.
  * 숫자는 **서버가 준 정책값**으로 만든다(화면 상수 금지 — 서버가 정본).
  */
-function autoChargeSentence(policy: { topupCredits: number } | null, priceKrw: number | null): string {
+function autoChargeSentence(policy: { topupCredits: number } | null): string {
   if (!policy?.topupCredits) return "잔액이 소진되면 등록된 카드로 자동 결제됩니다.";
-  // 단가는 공급가액이다(부가세 별도 · 2026-08-27) — 화면이 말하는 금액은 **실제 청구액**이어야 한다.
-  const supply = priceKrw != null ? policy.topupCredits * priceKrw : null;
-  const amount = supply != null
-    ? ` (공급가액 ${WON(supply)} · 부가세 ${WON(Math.round(supply * 0.1))} · 결제 ${WON(supply + Math.round(supply * 0.1))})`
-    : "";
-  return `잔액이 소진되면 ${policy.topupCredits.toLocaleString("ko-KR")}크레딧${amount}이 등록된 카드로 자동 결제됩니다.`;
+  return `잔액이 소진되면 ${policy.topupCredits.toLocaleString("ko-KR")}개를 자동 결제합니다.`;
+}
+
+/**
+ * 금액 내역 — **단가는 부가세 별도다**(2026-08-27 확정). 총액 하나만 보여주면 사용자는
+ * 그게 공급가액인지 청구액인지 알 수 없고, 카드 명세서 금액과 달라 문의가 된다.
+ * 계산식은 서버(credits.ts creditAmounts)와 같아야 한다 — 다르게 반올림하면 안내와 청구가 어긋난다.
+ */
+function chargeAmounts(credits: number, priceKrw: number | null): { supply: number; vat: number; total: number } | null {
+  if (!(credits > 0) || priceKrw == null) return null;
+  const supply = credits * priceKrw;
+  const vat = Math.round(supply * 0.1);
+  return { supply, vat, total: supply + vat };
+}
+
+function autoChargeAmounts(
+  policy: { topupCredits: number } | null, priceKrw: number | null,
+): { supply: number; vat: number; total: number } | null {
+  return chargeAmounts(policy?.topupCredits ?? 0, priceKrw);
 }
 
 /** 열려 있는 다이얼로그 — 한 번에 하나만. */
@@ -418,7 +431,7 @@ export default function CreditsPage() {
           >
             <span style={{ color: "var(--sd-mut)" }}>크레딧 단가</span>
             <span className="sd-mono" style={{ color: "var(--sd-fg)" }}>
-              {WON(price)}<span className="ml-1 text-[10.5px]" style={{ color: "var(--sd-mut)" }}>/ 개 (부가세 포함)</span>
+              {WON(price)}<span className="ml-1 text-[10.5px]" style={{ color: "var(--sd-mut)" }}>/ 개 (부가세 별도)</span>
             </span>
           </div>
         )}
@@ -486,8 +499,18 @@ export default function CreditsPage() {
             </span>
           </div>
           <p className="mt-1 text-[11.5px]" style={{ color: "var(--sd-fg)" }}>
-            {auto ? autoChargeSentence(auto.policy, price) : "정책을 불러오는 중…"}
+            {auto ? autoChargeSentence(auto.policy) : "정책을 불러오는 중…"}
           </p>
+          {/* 부가세 별도라 **청구액을 따로 말한다** — 총액만 보여주면 카드 명세서 금액과
+              달라 문의가 된다(2026-08-27). */}
+          {(() => {
+            const a = autoChargeAmounts(auto?.policy ?? null, price);
+            return a ? (
+              <p className="mt-0.5 text-[11px]" style={{ color: "var(--sd-mut)" }}>
+                공급가액 {WON(a.supply)} · 부가세 {WON(a.vat)} · <b style={{ color: "var(--sd-fg)" }}>결제 금액 {WON(a.total)}</b>
+              </p>
+            ) : null;
+          })()}
           {/* 꺼져 있으면 **왜** 꺼져 있는지 + 무엇을 하면 켜지는지. 조용한 "꺼짐" 은 정보가 아니다. */}
           {auto && !auto.policy.enabled && (
             <p className="mt-1 text-[11px]" style={{ color: "var(--sd-warn)" }}>
@@ -496,9 +519,7 @@ export default function CreditsPage() {
             </p>
           )}
           <p className="mt-0.5 text-[11px]" style={{ color: "var(--sd-mut)" }}>
-            결제 시점은 잔액이 소진되는 순간입니다. 금액·시점은 고정이라 따로 설정할 것이 없고,
-            중단하려면 <b>결제 수단(카드)을 삭제</b>하면 됩니다.
-            {auto?.policy.maxPerDay ? ` 안전장치로 하루 ${auto.policy.maxPerDay}회까지만 결제합니다.` : ""}
+            결제 시점은 잔액이 소진되는 순간입니다. 중단하려면 <b>결제 수단(카드)을 삭제</b>하면 됩니다.
           </p>
         </div>
 
@@ -657,7 +678,7 @@ export default function CreditsPage() {
         />
         <SettingRow
           label="크레딧 단가"
-          value={price != null ? `${WON(price)} · 부가세 포함` : "단가 미설정"}
+          value={price != null ? `${WON(price)} · 부가세 별도` : "단가 미설정"}
         />
         <SettingRow label="구매자 정보" value={buyerSummary} />
       </BillingCard>
@@ -683,13 +704,16 @@ export default function CreditsPage() {
                   title={canPay ? undefined : "KG이니시스는 이름·이메일·휴대폰번호가 모두 필요합니다"}
                   onClick={topup}
                 >
-                  {busy ? "진행 중…" : `결제창으로 ${WON(credits * price)} 결제`}
+                  {busy ? "진행 중…" : `결제창으로 ${WON(chargeAmounts(credits, price)?.total ?? credits * price)} 결제`}
                 </button>
                 <SavedCardChargeButton
                   card={card}
                   canManage={canManageBilling}
                   credits={credits}
-                  amountKrw={credits * price}
+                  // **실제 청구액**을 넘긴다 — 저장카드는 결제창이 없어서 이 버튼 라벨과
+                  // confirm 이 유일한 금액 확인 관문이다. 공급가액을 넘기면 사용자가 본
+                  // 금액과 카드에 긁히는 금액이 다르다(부가세 별도 · 2026-08-27).
+                  amountKrw={chargeAmounts(credits, price)?.total ?? 0}
                   onCharged={load}
                   onBusyChange={setCardCharging}
                   // 구 카드(구매자 정보 미저장) 폴백 — 화면의 구매자 입력값으로 결제하고
@@ -732,17 +756,16 @@ export default function CreditsPage() {
                   aria-label="충전할 크레딧"
                 />
                 <span className="text-[11.5px]" style={{ color: "var(--sd-mut)" }}>크레딧</span>
+                {/* 큰 숫자는 **실제로 긁히는 금액**이어야 한다 — 단가가 부가세 별도라
+                    `크레딧 × 단가` 는 공급가액일 뿐이다(2026-08-27). 그 숫자를 버튼에
+                    띄우면 카드 명세서와 달라 문의가 된다. 내역은 바로 옆에 적는다. */}
                 <span className="sd-mono text-[15px]" style={{ color: "var(--sd-fg)" }}>
-                  {WON(credits * price)}
+                  {WON(chargeAmounts(credits, price)?.total ?? 0)}
                 </span>
-                <span
-                  className="text-[10.5px]"
-                  style={{ color: "var(--sd-mut)" }}
-                  // 실제 청구액은 `크레딧 × 단가` 다 — 부가세를 따로 더하지 않는다.
-                  // 인보이스도 이 총액에서 역산해 공급가액·세액을 나눈다. 상세는 title 로.
-                  title="실제 청구액은 크레딧 × 단가 그대로입니다. 인보이스는 이 총액에서 공급가액·세액을 역산합니다."
-                >
-                  (크레딧당 {WON(price)} · 부가세 포함)
+                <span className="text-[10.5px]" style={{ color: "var(--sd-mut)" }}>
+                  (크레딧당 {WON(price)} · 부가세 별도 — 공급가액{" "}
+                  {WON(chargeAmounts(credits, price)?.supply ?? 0)} + 부가세{" "}
+                  {WON(chargeAmounts(credits, price)?.vat ?? 0)})
                 </span>
               </div>
 
@@ -899,8 +922,16 @@ export default function CreditsPage() {
                 className="rounded-[4px] px-2.5 py-2 text-[11px]"
                 style={{ border: "1px solid var(--sd-border)", background: "var(--sd-subtle, rgba(127,127,127,.06))", color: "var(--sd-fg)" }}
               >
-                카드를 등록하면 <b>{autoChargeSentence(auto?.policy ?? null, price)}</b>
-                {" "}중단하려면 이 화면에서 카드를 삭제하면 됩니다.
+                {/* **동의 시점의 고지** — 금액을 총액 하나로만 말하면 안 된다. 단가가
+                    부가세 별도라, 공급가액만 보여주면 카드 명세서 금액과 달라진다. */}
+                카드를 등록하면 <b>{autoChargeSentence(auto?.policy ?? null)}</b>
+                {(() => {
+                  const a = autoChargeAmounts(auto?.policy ?? null, price);
+                  return a ? (
+                    <><br />공급가액 {WON(a.supply)} · 부가세 {WON(a.vat)} · <b>결제 금액 {WON(a.total)}</b></>
+                  ) : null;
+                })()}
+                <br />중단하려면 이 화면에서 카드를 삭제하면 됩니다.
               </p>
             </div>
           )}
@@ -967,7 +998,7 @@ export default function CreditsPage() {
             </p>
           )}
           <p className="text-[11px]" style={{ color: "var(--sd-mut)" }}>
-            크레딧 단가: {price != null ? `${WON(price)} · 부가세 포함` : "미설정"} — 단가는 서버 설정
+            크레딧 단가: {price != null ? `${WON(price)} · 부가세 별도` : "미설정"} — 단가는 서버 설정
             (<code>CREDIT_PRICE_KRW</code>)이라 여기서 바꿀 수 없습니다.
           </p>
         </BillingDialog>

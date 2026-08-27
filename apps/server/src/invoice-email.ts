@@ -189,28 +189,154 @@ export async function renderInvoicePdf(
 
 // ── 이메일 ────────────────────────────────────────────────────────────────────
 
-export function mailHtml(invoice: PaymentInvoice, supplier: InvoiceParty): string {
-  const row = (k: string, v: string) =>
-    `<tr><td style="padding:4px 12px 4px 0;color:#666;">${k}</td><td style="padding:4px 0;color:#111;">${v}</td></tr>`;
-  return `
-  <div style="font-family:'Apple SD Gothic Neo','Malgun Gothic',sans-serif;max-width:520px;margin:0 auto;color:#111;">
-    <h2 style="font-size:17px;border-bottom:2px solid #111;padding-bottom:8px;">STEP AI 결제 인보이스</h2>
-    <p style="font-size:13px;line-height:1.6;">결제가 완료되어 인보이스를 보내드립니다. 상세 내역은 첨부된 PDF 를 확인하세요.</p>
-    <table style="font-size:13px;border-collapse:collapse;">
-      ${row("인보이스 번호", invoice.number)}
-      ${row("결제일", invoice.paidAt.slice(0, 10))}
-      ${row("항목", invoice.description)}
-      ${row("공급가액", WON(invoice.supplyKrw))}
-      ${row("부가세 (10%)", WON(invoice.vatKrw))}
-      ${row("<b>합계 (부가세 포함)</b>", `<b>${WON(invoice.amountKrw)}</b>`)}
-      ${row("결제 방식", invoice.origin === "auto" ? "자동 충전" : "카드 결제")}
+/** 결제 영수증 메일에 실리는, 인보이스 밖의 값들. 모르면 그 줄을 통째로 뺀다(빈칸 금지). */
+export interface ReceiptExtras {
+  /** 카드 뒤 4자리. **전체 번호는 어디에도 넣지 않는다.** 모르면 null → 카드 표기 생략. */
+  cardLast4?: string | null;
+  /** 충전 후 잔액(크레딧). 모르면 null → 잔액 블록 생략. */
+  balanceAfter?: number | null;
+}
+
+const KRW = (n: number) => n.toLocaleString("ko-KR");
+
+/** `2026-08-26T…` → `2026년 8월 26일`. 파싱 실패면 날짜 부분을 그대로 쓴다(빈칸보다 낫다). */
+function paidDateKo(iso: string): string {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso ?? ""));
+  if (!m) return String(iso ?? "").slice(0, 10);
+  return `${m[1]}년 ${Number(m[2])}월 ${Number(m[3])}일`;
+}
+
+/**
+ * 결제 영수증 메일 (2026-08-27 사용자 제공 템플릿 이식).
+ *
+ * 템플릿이 못박은 규칙 두 가지를 코드로 지킨다:
+ *  1. **카드 전체 번호는 어디에도 넣지 않는다** — 뒤 4자리만, 그것도 모르면 생략한다.
+ *  2. **내부 제품명을 넣지 않는다** — 문서에 나가는 이름은 "STEP AI"·발행자명뿐이다.
+ *
+ * 값이 없으면 빈칸을 남기지 않고 **그 줄을 통째로 뺀다.** 영수증에 "**** " 나
+ * "잔액  크레딧" 같은 반쪽 문장이 나가면 문서 자체를 못 믿게 된다.
+ */
+export function mailHtml(
+  invoice: PaymentInvoice, supplier: InvoiceParty, extras: ReceiptExtras = {},
+): string {
+  const esc = (v: string) => String(v ?? "")
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  const MONO = "'SFMono-Regular',Consolas,Menlo,monospace";
+  const issuer = supplier.name || "(주)스텝에이아이";
+  const contact = supplier.email || "contact@stepai.kr";
+  const payMethod = invoice.origin === "auto" ? "자동 결제" : "카드 결제";
+  const last4 = String(extras.cardLast4 ?? "").replace(/\D/g, "").slice(-4);
+  const balance = extras.balanceAfter != null && Number.isFinite(Number(extras.balanceAfter))
+    ? Number(extras.balanceAfter) : null;
+
+  const idRow = (label: string, value: string, top: string) => `
+          <tr>
+            <td style="padding:${top} 0 0 0;font-size:14px;color:#5C5E63;line-height:1.6;">${label}</td>
+            <td align="right" style="padding:${top} 0 0 0;font-family:${MONO};font-size:13px;color:#1F2124;line-height:1.6;">${value}</td>
+          </tr>`;
+  const amtRow = (label: string, value: string, top: string, strong: boolean) => `
+          <tr>
+            <td style="padding:${top} 0 0 0;font-size:${strong ? "15px;font-weight:600" : "14px"};color:${strong ? "#1F2124" : "#5C5E63"};line-height:1.6;">${label}</td>
+            <td align="right" style="padding:${top} 0 0 0;font-family:${MONO};font-size:${strong ? "15px;font-weight:600" : "14px"};color:${strong ? "#1F2124" : "#5C5E63"};line-height:1.6;">&#8361;${value}</td>
+          </tr>`;
+
+  const balanceBlock = balance == null ? "" : `
+        <div style="border-top:1px solid rgba(31,33,36,0.08);margin-top:26px;padding-top:22px;">
+          <div style="font-size:13px;color:#5C5E63;line-height:1.5;">크레딧 잔액</div>
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:12px;">
+            <tr>
+              <td style="font-size:15px;font-weight:600;color:#1F2124;line-height:1.6;">충전 후 잔액</td>
+              <td align="right" style="font-family:${MONO};font-size:15px;font-weight:600;color:#1F2124;line-height:1.6;">${KRW(balance)} 크레딧</td>
+            </tr>
+          </table>
+          <div class="kr" style="font-size:12px;color:#5C5E63;line-height:1.7;padding-top:12px;">잔여 크레딧이 모두 소진되면 자동으로 충전됩니다.</div>
+        </div>`;
+
+  return `<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>결제 영수증</title>
+<style>
+  body { margin:0; padding:0; background:#F0EEEB; }
+  table { border-collapse:collapse; }
+  img { border:0; outline:none; text-decoration:none; }
+  a { color:#1F2124; }
+  .kr { word-break:keep-all; }
+  @media only screen and (max-width:620px) {
+    .wrap  { width:100% !important; }
+    .pad   { padding-left:22px !important; padding-right:22px !important; }
+    .amt   { font-size:30px !important; }
+  }
+</style>
+</head>
+<body>
+<div style="display:none;font-size:1px;line-height:1px;max-height:0;max-width:0;opacity:0;overflow:hidden;">${esc(paidDateKo(invoice.paidAt))} 결제가 완료되었습니다. 금액 &#8361;${KRW(invoice.amountKrw)}.</div>
+
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#F0EEEB;">
+<tr><td align="center" style="padding:28px 12px 36px 12px;">
+
+<table role="presentation" class="wrap" width="600" cellpadding="0" cellspacing="0" border="0" style="width:600px;max-width:600px;font-family:-apple-system,BlinkMacSystemFont,'Apple SD Gothic Neo','Malgun Gothic','Pretendard Variable',Pretendard,sans-serif;">
+
+  <tr><td class="pad" style="padding:0 8px 18px 8px;">
+    <span style="font-size:14px;font-weight:600;letter-spacing:0.28em;color:#1F2124;">STEP AI</span>
+    <span style="font-size:13px;color:#5C5E63;padding-left:10px;">${esc(issuer)}</span>
+  </td></tr>
+
+  <tr><td style="padding:0 0 16px 0;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#FDFCFC;border-radius:10px;">
+      <tr><td class="pad" style="padding:30px 34px 30px 34px;">
+
+        <div style="font-size:14px;color:#5C5E63;line-height:1.5;">${esc(issuer)} 결제 영수증</div>
+        <div class="amt" style="font-family:${MONO};font-size:38px;font-weight:600;color:#1F2124;line-height:1.2;padding-top:10px;">&#8361;${KRW(invoice.amountKrw)}</div>
+        <div style="font-size:14px;color:#5C5E63;line-height:1.6;padding-top:10px;">${esc(paidDateKo(invoice.paidAt))} 결제 완료</div>
+
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-top:1px solid rgba(31,33,36,0.08);margin-top:24px;">${idRow("인보이스 번호", esc(invoice.number), "18px")}${idRow("영수증 번호", esc(invoice.receiptNumber), "10px")}
+          <tr>
+            <td style="padding:10px 0 0 0;font-size:14px;color:#5C5E63;line-height:1.6;">결제 방식</td>
+            <td align="right" style="padding:10px 0 0 0;font-size:14px;color:#1F2124;line-height:1.6;">${esc(payMethod)}${last4 ? ` <span style="font-family:${MONO};font-size:13px;">**** ${esc(last4)}</span>` : ""}</td>
+          </tr>
+        </table>
+
+      </td></tr>
     </table>
-    <p style="font-size:11px;color:#888;line-height:1.6;margin-top:16px;">
-      본 메일과 첨부 문서는 결제 내역 확인용 인보이스이며 세금계산서가 아닙니다.<br/>
-      ${supplier.email ? `세금계산서 등 증빙 문의: ${supplier.email}<br/>` : ""}
-      인보이스는 STEP AI 결제 화면(크레딧 → 인보이스)에서도 다시 받을 수 있습니다.
-    </p>
-  </div>`;
+  </td></tr>
+
+  <tr><td style="padding:0;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#FDFCFC;border-radius:10px;">
+      <tr><td class="pad" style="padding:30px 34px 32px 34px;">
+
+        <div style="font-size:16px;font-weight:600;color:#1F2124;line-height:1.5;">영수증 ${esc(invoice.receiptNumber)}</div>
+
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="margin-top:24px;">
+          <tr>
+            <td valign="top" style="font-size:16px;font-weight:600;color:#1F2124;line-height:1.5;">크레딧 ${KRW(invoice.credits)}개</td>
+            <td align="right" valign="top" style="font-family:${MONO};font-size:16px;color:#1F2124;line-height:1.5;">&#8361;${KRW(invoice.supplyKrw)}</td>
+          </tr>
+        </table>
+
+        <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-top:1px solid rgba(31,33,36,0.08);margin-top:24px;">${amtRow("공급가액", KRW(invoice.supplyKrw), "20px", false)}${amtRow("부가세 (10%)", KRW(invoice.vatKrw), "10px", false)}${amtRow("결제 금액", KRW(invoice.amountKrw), "14px", true)}
+        </table>${balanceBlock}
+
+      </td></tr>
+    </table>
+  </td></tr>
+
+  <tr><td class="pad" style="padding:26px 8px 0 8px;">
+    <div style="font-size:13px;color:#5C5E63;line-height:1.7;">문의처 <a href="mailto:${esc(contact)}" style="color:#1F2124;">${esc(contact)}</a></div>
+    <div class="kr" style="font-size:12px;color:#5C5E63;line-height:1.8;padding-top:10px;">
+      본 문서는 결제 내역 확인용입니다. 신용카드 결제분은 카드 매출전표가 적격증빙이며 부가세 매입세액 공제가 가능합니다.<br>
+      카드 결제 건에는 세금계산서가 중복 발행되지 않습니다.
+    </div>
+  </td></tr>
+
+</table>
+</td></tr>
+</table>
+</body>
+</html>`;
 }
 
 /**
@@ -252,10 +378,24 @@ export async function sendInvoiceEmail(paymentId: string, tenantId: string): Pro
     const invoice = invoiceFromTopup(order);
     const pdf = await renderInvoicePdf(invoice, supplier, buyer);
 
+    // 영수증 템플릿의 부가 정보 — **없으면 그 줄을 빼므로** 실패해도 메일은 그대로 나간다.
+    // 카드 뒤 4자리: 저장 카드에서 읽는다(전체 번호는 우리 DB 에 애초에 없다).
+    // 충전 후 잔액: 이 메일은 적립 직후에 나가므로 지금 잔액이 곧 "충전 후" 다.
+    const extras = await asSystem(async (db) => {
+      const [card, bal] = await Promise.all([
+        db.query(`SELECT card_last4 AS "last4" FROM billing_card WHERE tenant_id = $1`, [tenantId]),
+        db.query(`SELECT COALESCE(SUM(delta), 0)::int AS n FROM credit_ledger WHERE tenant_id = $1`, [tenantId]),
+      ]);
+      return {
+        cardLast4: (card.rows[0]?.last4 as string | null) ?? null,
+        balanceAfter: (bal.rows[0]?.n as number | null) ?? null,
+      };
+    }).catch(() => ({ cardLast4: null, balanceAfter: null }));
+
     await sendMail({
       to,
-      subject: `[STEP AI] 인보이스 ${invoice.number} — ${WON(invoice.amountKrw)} 결제 완료`,
-      html: mailHtml(invoice, supplier),
+      subject: `[STEP AI] 결제 영수증 ${invoice.receiptNumber} — ${WON(invoice.amountKrw)} 결제 완료`,
+      html: mailHtml(invoice, supplier, extras),
       attachments: [{ filename: `${invoice.number}.pdf`, content: pdf, contentType: "application/pdf" }],
     });
     console.log(`[invoice] 인보이스 메일 발송 ${invoice.number} → ${to}`);
