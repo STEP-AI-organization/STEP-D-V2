@@ -52,7 +52,7 @@ import { clipGate } from "./publish-dispatch.ts";
 import { checkCredits } from "./credits.ts";
 import { topupAndRecheck } from "./auto-topup.ts";
 import { billableMinutes } from "./billing.ts";
-import { probe, captureThumbnail, remuxFaststart } from "./ffmpeg.ts";
+import { probe, captureThumbnail, remuxFaststart, needsMp4Normalize, normalizeToMp4 } from "./ffmpeg.ts";
 import {
   prepareProgramAssets, publishStyleProfile, publishThumbnails, tempAssetRoot, pullPrefix,
 } from "./thumbnail-assets.ts";
@@ -734,22 +734,53 @@ async function handleMediaPrepare(job: Job): Promise<void> {
     // straight to range-based probing. The size is storage-authoritative, never client data.
     let size = await fileSize(objectPath);
     let readUrl = await signedReadUrl(objectPath);
-    const remuxMax = (Number(process.env.REMUX_MAX_MB) || 512) * 1024 * 1024;
-    if (size > 0 && size <= remuxMax) {
-      const webTmp = path.join(workDir, "web.mp4");
-      try {
-        await remuxFaststart(readUrl, webTmp);
-        await uploadFile(objectPath, webTmp);
-        size = fs.statSync(webTmp).size;
-        readUrl = await signedReadUrl(objectPath);
-        console.log(`[worker] media.prepare ${mediaId}: remuxed progressive (${size} bytes)`);
-      } catch (err) {
-        console.error(`[worker] media.prepare ${mediaId}: remux failed, keeping original`, err);
+    let storedMediaPath = storedPath;
+    let mediaMime = media.mime || "video/mp4";
+
+    // ── 1) 원본을 먼저 재본다 — 무엇을 해야 할지는 프로브 결과가 정한다.
+    let meta = await probe(readUrl);
+    if (!(meta.durationSec > 0)) throw new Error(`probe returned duration ${meta.durationSec}`);
+
+    // ── 2) 웹·파이프라인 공용 mp4 로 정규화 (MXF 등) ────────────────────────────
+    // 사용자 결정 2026-08-27: "웹에서는 오로지 MXF 를 mp4 로 전환 후 다룬다."
+    // 원본은 **지우지 않는다**(방송사 소재) — 같은 폴더에 `.mp4` 를 새로 올리고 DB 만 그쪽을
+    // 가리키게 한다. 그래서 이후 모든 단계(브라우저 재생·core 분석·렌더)가 mp4 하나만 본다.
+    // 입력은 서명 URL 이다 — 20~50GB 를 /tmp(=RAM) 에 내려받으면 그 자체로 OOM 이다.
+    const normalize = needsMp4Normalize(meta);
+    if (normalize.needed) {
+      const mp4Tmp = path.join(workDir, "normalized.mp4");
+      const mp4ObjectPath = objectPath.replace(/\.[^./]+$/, "") + ".mp4";
+      await setEpisodeNote(`원본을 mp4 로 변환 중… (${normalize.reasons.join(" · ")})`, "progress", 15);
+      console.log(`[worker] media.prepare ${mediaId}: mp4 정규화 시작 — ${normalize.reasons.join(" · ")}`);
+      const t0 = Date.now();
+      await normalizeToMp4(readUrl, mp4Tmp, { probe: meta });
+      storedMediaPath = await uploadFile(mp4ObjectPath, mp4Tmp);
+      size = fs.statSync(mp4Tmp).size;
+      mediaMime = "video/mp4";
+      readUrl = await signedReadUrl(mp4ObjectPath);
+      // 변환본 기준으로 메타를 다시 잡는다 — 이후 계산(길이·해상도·fps)은 전부 이 파일 것이다.
+      meta = await probe(readUrl);
+      if (!(meta.durationSec > 0)) throw new Error(`normalized probe returned duration ${meta.durationSec}`);
+      fs.rmSync(mp4Tmp, { force: true });
+      console.log(`[worker] media.prepare ${mediaId}: mp4 정규화 완료 `
+        + `(${Math.round(size / 1e6)}MB · ${Math.round((Date.now() - t0) / 1000)}s · 원본 보존 ${objectPath})`);
+    } else {
+      // 이미 mp4/h264/aac — 종전 경로 그대로(작은 파일만 faststart 리먹스).
+      const remuxMax = (Number(process.env.REMUX_MAX_MB) || 512) * 1024 * 1024;
+      if (size > 0 && size <= remuxMax) {
+        const webTmp = path.join(workDir, "web.mp4");
+        try {
+          await remuxFaststart(readUrl, webTmp);
+          await uploadFile(objectPath, webTmp);
+          size = fs.statSync(webTmp).size;
+          readUrl = await signedReadUrl(objectPath);
+          meta = await probe(readUrl);
+          console.log(`[worker] media.prepare ${mediaId}: remuxed progressive (${size} bytes)`);
+        } catch (err) {
+          console.error(`[worker] media.prepare ${mediaId}: remux failed, keeping original`, err);
+        }
       }
     }
-
-    const meta = await probe(readUrl);
-    if (!(meta.durationSec > 0)) throw new Error(`probe returned duration ${meta.durationSec}`);
 
     let thumbStored: string | null = null;
     try {
@@ -764,8 +795,9 @@ async function handleMediaPrepare(job: Job): Promise<void> {
     }
 
     await updateMediaSource(mediaId, {
-      path: storedPath,
-      mime: media.mime || "video/mp4",
+      // 정규화했으면 **변환본 경로**가 정본이다 — 이후 분석·재생·렌더가 전부 이걸 읽는다.
+      path: storedMediaPath,
+      mime: mediaMime,
       size,
       durationSec: meta.durationSec,
       width: meta.width,

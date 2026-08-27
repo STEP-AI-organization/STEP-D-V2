@@ -379,13 +379,13 @@ export function UploadDialog({
                   <div className="text-[12.5px]" style={{ color: "var(--sd-mut)" }}>
                     영상 파일을 끌어다 놓거나{" "}
                     <span style={{ color: "var(--sd-accent)" }}>클릭해서 선택</span>
-                    <div className="text-[11px]">mp4 · mov · webm · 길이 제한 없음</div>
+                    <div className="text-[11px]">mp4 · mov · MXF · 길이 제한 없음 (방송 원본은 업로드 후 자동으로 mp4 변환)</div>
                   </div>
                 )}
                 <input
                   ref={inputRef}
                   type="file"
-                  accept="video/*"
+                  accept="video/*,.mxf,.mov,.mkv,.avi,.ts,.m2ts,.mpg,.mpeg,.wmv"
                   className="hidden"
                   onChange={(e) => pick(e.target.files?.[0])}
                 />

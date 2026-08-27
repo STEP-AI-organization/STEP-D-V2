@@ -69,7 +69,11 @@ def extract_audio(video_path: str, output_path: Optional[str] = None) -> str:
 # 업로드형 STT(Soniox 등)에 넘길 압축 오디오. 16kHz mono = 음성인식 표준 대역이라
 # 64kbps 면 사실상 투명하다. 실측(58.6분 드라마): mp4 1026MB → mp3 26.8MB.
 _UPLOAD_AUDIO_KBPS = "64"
-_VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v", ".ts", ".mpg", ".mpeg", ".wmv", ".flv"}
+# 방송 컨테이너(.mxf 등)까지 — 여기 없는 확장자는 "이미 오디오" 로 간주돼 **원본이 통째로
+# 업로드된다**(20~50GB → MemoryError). 서버가 mp4 로 정규화해 주지만(worker media.prepare),
+# 로컬 실행·구 경로를 위해 core 도 스스로 방어한다 (2026-08-27 MXF 대응).
+_VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v", ".ts", ".mpg", ".mpeg",
+               ".wmv", ".flv", ".mxf", ".m2ts", ".mts", ".mxf_op1a", ".dv", ".vob"}
 
 
 def extract_audio_for_upload(src: str) -> tuple[str, bool]:

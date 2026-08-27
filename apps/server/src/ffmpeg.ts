@@ -12,6 +12,16 @@ export type ProbeResult = {
   hasAudio: boolean;
   /** Frame rate parsed from r_frame_rate ("30000/1001" → 29.97). 0 when unknown. */
   fps: number;
+  /** ffprobe `format.format_name` ("mov,mp4,m4a,…" · "mxf" · "matroska,webm"). 정규화 판정 축. */
+  formatName: string;
+  /** 첫 오디오 스트림의 코덱("aac"·"pcm_s24le"·"mp2"…). 없으면 "". */
+  audioCodec: string;
+  /** 오디오 스트림 **개수** — 방송 MXF 는 모노 8트랙이 흔하다(믹스·대사·효과). */
+  audioStreams: number;
+  /** 첫 오디오 스트림의 채널 수(1=모노 · 2=스테레오). 0=알 수 없음. */
+  audioChannels: number;
+  /** `field_order` 가 인터레이스(tt·bb·tb·bt)인가 — 방송 원본은 1080i 가 흔하다. */
+  interlaced: boolean;
 };
 
 /** #rrggbb 또는 rrggbb 문자열을 3~6자 안 되면 fallback으로 대체. ffmpeg color 필터에 넘길 값 정규화용. */
@@ -77,6 +87,7 @@ export function probe(filePath: string): Promise<ProbeResult> {
           const rn = parseFloat(rnStr || "0");
           const rd = parseFloat(rdStr || "1");
           const fps = rd > 0 && rn > 0 ? rn / rd : 0;
+          const audios = (data.streams ?? []).filter((s: any) => s.codec_type === "audio");
           resolve({
             durationSec: parseFloat(format.duration ?? "0") || 0,
             width: videoStream?.width ?? 0,
@@ -84,6 +95,14 @@ export function probe(filePath: string): Promise<ProbeResult> {
             codec: videoStream?.codec_name ?? "",
             hasAudio: !!audioStream,
             fps,
+            formatName: String(format.format_name ?? ""),
+            audioCodec: String(audioStream?.codec_name ?? ""),
+            audioStreams: audios.length,
+            audioChannels: Number(audioStream?.channels ?? 0) || 0,
+            // ffprobe 는 progressive 를 "progressive", 인터레이스를 tt/bb/tb/bt 로 준다.
+            // 모르면(unknown·빈 값) **인터레이스가 아니라고 본다** — 아니면 멀쩡한 소스를
+            // 매번 디인터레이스해 화질만 깎는다.
+            interlaced: /^(tt|bb|tb|bt)$/.test(String(videoStream?.field_order ?? "")),
           });
         } catch (e) {
           reject(new Error(`ffprobe parse error: ${e}`));
@@ -147,6 +166,99 @@ export function remuxFaststart(input: string, outputPath: string): Promise<void>
         resolve();
       },
     );
+  });
+}
+
+// ── 원본 정규화 (MXF 등 → mp4) ────────────────────────────────────────────────
+//
+// 사용자 결정 2026-08-27: **"웹에서는 오로지 MXF 를 mp4 로 전환 후 다룬다."**
+// 방송사 원본(MXF/MOV 안의 MPEG-2 422·AVC-Intra·DNxHD·ProRes·PCM, 1080i, 오디오 8트랙,
+// 20~50GB)은 브라우저가 못 재생하고, 파이프라인 곳곳이 mp4 를 전제로 짜여 있다.
+// 그래서 **업로드 직후 한 번** mp4 로 정규화하고, 그 뒤 모든 단계(웹 재생·분석·렌더)는
+// 그 mp4 만 본다. 원본은 GCS 에 그대로 남는다(지우지 않는다 — 방송사 소재다).
+
+/** 정규화가 필요한가 — 순수 판정(테스트가 이 함수를 직접 짚는다). */
+export function needsMp4Normalize(p: Pick<ProbeResult,
+  "formatName" | "codec" | "audioCodec" | "audioStreams" | "interlaced" | "hasAudio">,
+): { needed: boolean; reasons: string[] } {
+  const reasons: string[] = [];
+  const fmt = p.formatName.toLowerCase();
+  // mov/mp4 계열이 아니면 브라우저가 못 연다(mxf·mpegts·mxf_opatom·avi…).
+  if (fmt && !/(^|,)(mov|mp4|m4a|3gp|3g2|mj2)(,|$)/.test(fmt)) reasons.push(`컨테이너 ${fmt}`);
+  // 비디오 코덱: h264 만 안전하다(hevc 는 브라우저·플랫폼 지원이 갈린다).
+  if (p.codec && p.codec.toLowerCase() !== "h264") reasons.push(`비디오 ${p.codec}`);
+  // 오디오 코덱: aac 가 아니면 mp4 로 copy 가 안 되거나 재생이 안 된다(pcm_s24le·mp2…).
+  if (p.hasAudio && p.audioCodec && p.audioCodec.toLowerCase() !== "aac") reasons.push(`오디오 ${p.audioCodec}`);
+  // 오디오 트랙이 여럿이면 하나로 정리해야 한다 — 안 하면 플랫폼이 첫 트랙만 쓰는데
+  // 방송 MXF 의 1번 트랙은 대개 **모노 반쪽**(L 채널)이라 소리가 반만 나간다.
+  if (p.audioStreams > 1) reasons.push(`오디오 트랙 ${p.audioStreams}개`);
+  // 1080i 는 그대로 두면 빗살무늬가 결과물에 그대로 박힌다.
+  if (p.interlaced) reasons.push("인터레이스");
+  return { needed: reasons.length > 0, reasons };
+}
+
+/**
+ * 오디오 매핑 인자 — 방송 원본의 트랙 구성을 하나의 스테레오로 접는다.
+ *
+ * · 트랙 1개              → 그대로 쓴다(`-map 0:a:0`).
+ * · 모노가 2개 이상       → **앞의 두 트랙을 L/R 로 합친다**(방송 표준: 1=L · 2=R).
+ *                           이걸 안 하면 첫 트랙만 잡혀 소리가 한쪽만 나온다.
+ * · 첫 트랙이 스테레오+   → 그 트랙만 쓴다(나머지는 대개 M&E·예비).
+ * 오디오가 없으면 빈 배열(무음 영상도 정규화는 된다).
+ */
+export function audioMapArgs(p: Pick<ProbeResult, "hasAudio" | "audioStreams" | "audioChannels">): string[] {
+  if (!p.hasAudio || p.audioStreams === 0) return ["-an"];
+  if (p.audioStreams > 1 && p.audioChannels === 1) {
+    return ["-filter_complex", "[0:a:0][0:a:1]amerge=inputs=2[aout]", "-map", "[aout]", "-ac", "2"];
+  }
+  return ["-map", "0:a:0", "-ac", "2"];
+}
+
+/** 정규화 출력 상한 — 세로 쇼츠(1080×1920)가 최종이라 소스는 1080p 면 충분하다. */
+export const NORMALIZE_MAX_HEIGHT = 1080;
+
+/**
+ * 원본을 **브라우저·파이프라인 공용 mp4** 로 정규화한다. `input` 은 로컬 경로 또는 서명 URL —
+ * URL 을 그대로 주면 ffmpeg 이 range-read 로 읽어 20~50GB 를 디스크에 안 내려도 된다
+ * (Cloud Run 의 /tmp 는 RAM 이라 원본 다운로드는 그 자체로 OOM 이다).
+ *
+ * 타임아웃은 길이에 비례해 잡는다 — 60분 1080p 트랜스코드는 실기로 10~25분이 걸린다.
+ */
+export function normalizeToMp4(
+  input: string,
+  outputPath: string,
+  opts: { probe: ProbeResult; timeoutMs?: number } = {} as never,
+): Promise<void> {
+  const p = opts.probe;
+  const vf: string[] = [];
+  // 디인터레이스는 인터레이스 소스에만 — yadif 는 progressive 에 걸면 디테일을 깎는다.
+  if (p.interlaced) vf.push("yadif=0:-1:0");
+  if (p.height > NORMALIZE_MAX_HEIGHT) vf.push(`scale=-2:${NORMALIZE_MAX_HEIGHT}`);
+  // 홀수 해상도는 libx264(yuv420p)가 거부한다 — 방송 소스는 1920×1080 이라 보통 무해하지만
+  // 스케일 없이 그대로 갈 때를 위해 항상 짝수로 맞춘다.
+  vf.push("scale=trunc(iw/2)*2:trunc(ih/2)*2");
+
+  const args = [
+    "-y", "-i", input,
+    "-map", "0:v:0",
+    ...audioMapArgs(p),
+    "-vf", vf.join(","),
+    "-c:v", "libx264", "-preset", "veryfast", "-crf", "21",
+    "-pix_fmt", "yuv420p",
+    ...(p.hasAudio ? ["-c:a", "aac", "-b:a", "192k", "-ar", "48000"] : []),
+    "-movflags", "+faststart",
+    "-f", "mp4",
+    outputPath,
+  ];
+  // 실시간의 3배(최소 10분·최대 3시간) — 넘기면 잡이 재시도한다.
+  const timeout = opts.timeoutMs
+    ?? Math.min(3 * 3600_000, Math.max(10 * 60_000, Math.round(p.durationSec * 3) * 1000));
+  return new Promise((resolve, reject) => {
+    execFile("ffmpeg", args, { timeout, maxBuffer: FF_MAXBUF }, (err) => {
+      if (err) return reject(err);
+      if (!fs.existsSync(outputPath)) return reject(new Error("normalize output not produced"));
+      resolve();
+    });
   });
 }
 

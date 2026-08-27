@@ -301,6 +301,17 @@ function guessMime(objectPath: string): string {
     ".png": "image/png",
     ".webm": "video/webm",
     ".mov": "video/quicktime",
+    // 방송 원본 컨테이너 — 브라우저가 못 여는 형식이라도 **정확한 타입**으로 저장한다.
+    // mp4 로 잘못 붙이면 브라우저가 재생을 시도하다 깨지고, 나중에 원인 추적도 어렵다
+    // (2026-08-27 MXF 대응 · 재생은 정규화된 .mp4 가 담당한다).
+    ".mxf": "application/mxf",
+    ".mkv": "video/x-matroska",
+    ".avi": "video/x-msvideo",
+    ".ts": "video/mp2t",
+    ".m2ts": "video/mp2t",
+    ".mpg": "video/mpeg",
+    ".mpeg": "video/mpeg",
+    ".wmv": "video/x-ms-wmv",
   };
   return map[ext] ?? "application/octet-stream";
 }

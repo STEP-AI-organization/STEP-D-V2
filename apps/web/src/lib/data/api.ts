@@ -633,6 +633,25 @@ export class DuplicateEpisodeError extends Error {
   }
 }
 
+/**
+ * 업로드 Content-Type — **브라우저가 모르는 형식은 확장자로 정한다.**
+ *
+ * `.mxf` 같은 방송 컨테이너는 OS 에 MIME 등록이 없어 `File.type` 이 빈 문자열이다. 예전엔
+ * 그때 `"video/mp4"` 로 폴백해서 **MXF 바이트가 video/mp4 로 GCS 에 저장**됐다 — 브라우저가
+ * 재생을 시도하다 깨지고, 나중에 원인 추적도 어려웠다(2026-08-27 MXF 대응).
+ * 재생용 mp4 는 서버가 업로드 직후 따로 만든다(worker media.prepare 정규화).
+ */
+export function uploadContentType(file: File): string {
+  if (file.type) return file.type;
+  const ext = (file.name.match(/\.([^.]+)$/)?.[1] ?? "").toLowerCase();
+  const byExt: Record<string, string> = {
+    mxf: "application/mxf", mov: "video/quicktime", mkv: "video/x-matroska",
+    avi: "video/x-msvideo", ts: "video/mp2t", m2ts: "video/mp2t",
+    mpg: "video/mpeg", mpeg: "video/mpeg", wmv: "video/x-ms-wmv", mp4: "video/mp4",
+  };
+  return byExt[ext] ?? "application/octet-stream";
+}
+
 export async function uploadVideo(
   file: File,
   programId: string,
@@ -653,7 +672,7 @@ export async function uploadVideo(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       filename: file.name,
-      contentType: file.type || "video/mp4",
+      contentType: uploadContentType(file),
       ...meta,
     }),
   });
@@ -681,7 +700,7 @@ export async function uploadVideo(
       mediaId: init.mediaId,
       objectPath: init.objectPath,
       filename: file.name,
-      contentType: file.type || "video/mp4",
+      contentType: uploadContentType(file),
       size: file.size,
       ...(fast ? { fast: true } : {}),
       ...meta,
@@ -726,7 +745,7 @@ export async function uploadFinishedClip(
   const initRes = await fetch(`${API_BASE}/media/upload-init`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ programId, filename: file.name, contentType: file.type || "video/mp4" }),
+    body: JSON.stringify({ programId, filename: file.name, contentType: uploadContentType(file) }),
   });
   const init = await json<
     | { mode: "resumable"; mediaId: string; objectPath: string; sessionUrl: string }
@@ -745,7 +764,7 @@ export async function uploadFinishedClip(
       objectPath: init.objectPath,
       programId,
       filename: file.name,
-      contentType: file.type || "video/mp4",
+      contentType: uploadContentType(file),
       size: file.size,
       title,
       episodeNumber,

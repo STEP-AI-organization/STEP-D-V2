@@ -233,7 +233,7 @@ function UploadClipDialog({
             <input
               ref={inputRef}
               type="file"
-              accept="video/*"
+              accept="video/*,.mxf,.mov,.mkv,.avi,.ts,.m2ts,.mpg,.mpeg,.wmv"
               className="hidden"
               onChange={(e) => pick(e.target.files?.[0])}
             />
