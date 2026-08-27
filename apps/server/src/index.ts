@@ -1784,7 +1784,25 @@ app.get("/api/superadmin/usage", async (c) => {
 });
 
 // ── full state (web InitialData + media) ──────────────────────────────────────
-app.get("/api/state", async (c) => c.json(await getState()));
+//
+// ⚠️ 고객사 API 키 호출에는 **clips[].editorState 를 빼고 준다.**
+// 2026-08-27 실측: 응답 18.9MB 중 17.3MB(92%)가 editorState 였고, 그 때문에 고객사 화면
+// (aena 자동배포)이 뜨는 데 3.5~6.4초가 걸렸다 — 30초 폴링이라 계속 반복된다.
+// editorState 는 **우리 편집기 전용 내부 상태**라 고객사 API 로는 쓸 일이 없다(파트너
+// 응답 계약: 목록·상태·배포 기록). 웹(세션) 호출은 편집기가 그걸로 화면을 그리므로 그대로 둔다.
+app.get("/api/state", async (c) => {
+  const state = await getState();
+  if (currentContext()?.via !== "api-key") return c.json(state);
+  const clips = Array.isArray((state as { clips?: unknown[] }).clips) ? (state as { clips: unknown[] }).clips : [];
+  return c.json({
+    ...state,
+    clips: clips.map((clip) => {
+      if (!clip || typeof clip !== "object") return clip;
+      const { editorState: _drop, ...rest } = clip as Record<string, unknown>;
+      return rest;
+    }),
+  });
+});
 
 // ── 자연어 영상 검색 (search_segments · pgvector) ──────────────────────────────
 // 필터(프로그램·스코프·회차·방영일·인물·장면유형)는 파라미터로, 의미검색은 q로.
