@@ -9,6 +9,9 @@
 
 > 2026-08-14 부터 윈도우2 는 `naver,download` 두 레인을 돈다 — 유튜브 다운로드 배선 전체는
 > [youtube-ingest.md](youtube-ingest.md) 참고 (밟은 함정 7개·점검 순서 포함).
+>
+> 2026-08-27 부터 **`commerce` 레인이 추가**됐다(쿠팡 제휴 링크 발급). 한국 IP + 화면 있는
+> 크롬이 필요해 이 PC 여야 한다 — 아래 "커머스 레인 켜기" 참고.
 
 최초 셋업은 [deploy/naver-pc/README.md](../../deploy/naver-pc/README.md) 다. **이 문서는 그 뒤,
 "코드 고쳤는데 윈도우2 에 어떻게 반영하지?" 하나만 다룬다.**
@@ -77,6 +80,7 @@ ssh STEPAI04@192.168.13.14 "powershell -NoProfile -Command \"cd C:\Users\STEPAI0
 | 작업 스케줄러 등록 내용 (실행 경로·인자) | `install.ps1` 다시 실행 |
 | GCP 서비스 계정 키 | 파일 교체 → 워커 재시작 |
 | 네이버 로그인 세션 | 아래 참고 |
+| **커머스(쿠팡) 레인 추가** | 아래 "커머스 레인 켜기" — env 2개 + 계정 세션 등록 |
 
 `.env` 를 원격에서 고칠 때는 **줄바꿈을 조심할 것.** 개행 없이 append 하면
 `NAVER_MIN_GAP_MS=60000NAVER_SESSION_KEY=...` 처럼 한 줄이 뭉쳐서, 값이 조용히 망가진다
@@ -102,6 +106,62 @@ pnpm --filter @stepd/server naver:login:upload -- --account <nva_xxx> --api <프
 쓰고 있어도 방해되지 않는다. 반대로 **SSH 로는 이 명령을 못 돌린다**(GUI 를 못 띄운다).
 윈도우2 앞에 앉거나 원격데스크톱이 필요하고, 그게 싫으면 윈도우1 에서 돌려도 된다 —
 세션은 어차피 서버로 올라간다.
+
+---
+
+## 커머스 레인 켜기 (쿠팡 제휴 링크 · 2026-08-27 추가)
+
+윈도우2 는 이제 `naver,download,**commerce**` 세 레인을 돈다(런처가 고정). 커머스가 여기인
+이유 둘 — ① **한국 IP**(파트너스 콘솔이 Akamai) ② **화면 있는 크롬**: headless 는 세션이
+유효해도 차단된다(실측 2026-08-27 · Access Denied). 그래서 Cloud Run 에 못 올린다.
+
+코드는 자가 갱신이 당겨오지만 **아래 셋은 사람이 한 번 해야 한다.**
+
+### 1) `.env` 에 두 줄 (윈도우2 에서 직접)
+
+```
+COMMERCE_LINKS_ENABLED=1
+COMMERCE_SESSION_KEY=<Secret Manager stepd-commerce-session-key 와 **같은 값**>
+```
+
+키 값 꺼내기(윈도우1 에서):
+```bash
+CLOUDSDK_CORE_ACCOUNT=stepd-deployer@step-d.iam.gserviceaccount.com \
+  gcloud secrets versions access latest --secret=stepd-commerce-session-key --project step-d
+```
+
+⚠️ **서버와 같은 키여야 한다.** 서버가 봉인한 세션을 워커가 푸는 구조라, 키가 다르면
+복호화가 조용히 실패하고 "세션 없음" 으로 끝난다(에러가 아니라 0건 발급이다).
+⚠️ 개행 없이 append 하면 앞 줄과 뭉쳐 값이 망가진다 — 위 `.env` 주의사항과 같다.
+
+### 2) 회사 계정 세션 등록 (회사마다 한 번)
+
+**회사마다 자기 법인 파트너스 계정을 쓴다** — 커미션 정산이 계정 단위라, 남의 계정으로
+발급하면 수익이 엉뚱한 회사로 귀속된다. 계정이 없으면 서버가 아예 큐잉을 안 한다.
+
+```powershell
+pnpm --filter @stepd/server commerce:login -- --api <서버주소> --web https://stepd.stepai.kr --label "회사이름"
+```
+
+브라우저가 뜨고 **두 번 로그인**한다 — STEP D 에 한 번(어느 워크스페이스인지), 쿠팡파트너스에
+한 번(어느 계정인지). 그러면 세션이 봉인돼 서버에 올라가고 워커가 받아 쓴다.
+네이버와 마찬가지로 **SSH 로는 못 돌린다**(GUI 필요) — 윈도우2 앞이나 원격데스크톱,
+혹은 윈도우1 에서 돌려도 된다(세션은 어차피 서버로 간다).
+
+세션이 만료되면 `/commerce` 화면이 "로그인이 만료됐습니다" 라고 말한다 — 같은 명령을 다시.
+
+### 3) 워커 재시작
+
+```powershell
+ssh STEPAI04@192.168.13.14 "powershell -NoProfile -Command \"Stop-ScheduledTask STEPD-Naver-Worker; Start-ScheduledTask STEPD-Naver-Worker\""
+```
+
+로그에 `lane=naver,download,commerce · claims=naver.publish,youtube.download,commerce.link` 가
+찍히면 된 것이다.
+
+> ⚠️ **크롬이 필요하다.** 발급은 실제 크롬 창을 띄운다(headless 불가). 윈도우2 에 크롬이
+> 설치돼 있어야 하고, **데스크톱 세션이 살아 있어야 한다** — 로그아웃 상태로 두면 창을
+> 못 띄운다. 작업 스케줄러 등록이 "사용자가 로그온한 경우에만 실행" 인지 확인할 것.
 
 ---
 
