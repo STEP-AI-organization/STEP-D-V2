@@ -37,6 +37,10 @@ export interface MediaRow {
   hasAudio: number;
   thumbPath: string | null;
   createdAt: number;
+  /** 프레임 정합 메타(0046) — 초↔프레임 환산·Premiere 대조용. 안 잰 옛 행은 0/"". */
+  fps: number;
+  startTimecode: string;
+  audioStreams: number;
 }
 
 /**
@@ -269,7 +273,12 @@ async function migrate(): Promise<void> {
       codec       TEXT NOT NULL DEFAULT '',
       hasAudio    INTEGER NOT NULL DEFAULT 0,
       thumbPath   TEXT,
-      createdAt   BIGINT NOT NULL
+      createdAt   BIGINT NOT NULL,
+      -- 프레임 정합 메타 (0046) — Premiere 플러그인이 추천 구간을 1프레임 오차로 꽂으려면
+      -- fps·시작 타임코드가 필요하고, 오디오 트랙 수는 정규화 전후 대조에 쓴다.
+      fps            REAL NOT NULL DEFAULT 0,
+      start_timecode TEXT NOT NULL DEFAULT '',
+      audio_streams  INTEGER NOT NULL DEFAULT 0
     );
 
     CREATE TABLE IF NOT EXISTS kv (
@@ -2076,16 +2085,25 @@ export async function insertMedia(m: MediaRow): Promise<void> {
 // node-pg returns BIGINT columns (size, createdAt) as strings — coerce so numeric
 // comparisons (e.g. the content-pipeline resume check) and arithmetic don't misbehave.
 function coerceMediaRow(r: any): MediaRow {
-  return { ...r, size: Number(r.size), createdAt: Number(r.createdAt) } as MediaRow;
+  // fps 는 REAL 이라 드라이버가 문자열로 줄 수 있고, 0046 이전 행은 컬럼 자체가 없다.
+  // 화면·플러그인이 계산에 바로 쓰므로 여기서 숫자로 고정한다.
+  return {
+    ...r,
+    size: Number(r.size),
+    createdAt: Number(r.createdAt),
+    fps: Number(r.fps ?? 0) || 0,
+    startTimecode: String(r.startTimecode ?? ""),
+    audioStreams: Number(r.audioStreams ?? 0) || 0,
+  } as MediaRow;
 }
 
 export async function getMedia(id: string): Promise<MediaRow | undefined> {
-  const { rows } = await pool.query(`SELECT id, episodeid AS "episodeId", role, title, filename, path, mime, size, durationsec AS "durationSec", width, height, codec, hasaudio AS "hasAudio", thumbpath AS "thumbPath", createdat AS "createdAt" FROM media WHERE id = $1`, [id]);
+  const { rows } = await pool.query(`SELECT id, episodeid AS "episodeId", role, title, filename, path, mime, size, durationsec AS "durationSec", width, height, codec, hasaudio AS "hasAudio", thumbpath AS "thumbPath", createdat AS "createdAt", fps, start_timecode AS "startTimecode", audio_streams AS "audioStreams" FROM media WHERE id = $1`, [id]);
   return rows[0] ? coerceMediaRow(rows[0]) : undefined;
 }
 
 export async function listMedia(): Promise<MediaRow[]> {
-  const { rows } = await pool.query(`SELECT id, episodeid AS "episodeId", role, title, filename, path, mime, size, durationsec AS "durationSec", width, height, codec, hasaudio AS "hasAudio", thumbpath AS "thumbPath", createdat AS "createdAt" FROM media ORDER BY createdAt DESC`);
+  const { rows } = await pool.query(`SELECT id, episodeid AS "episodeId", role, title, filename, path, mime, size, durationsec AS "durationSec", width, height, codec, hasaudio AS "hasAudio", thumbpath AS "thumbPath", createdat AS "createdAt", fps, start_timecode AS "startTimecode", audio_streams AS "audioStreams" FROM media ORDER BY createdAt DESC`);
   return rows.map(coerceMediaRow);
 }
 
@@ -2142,13 +2160,19 @@ export async function updateMediaSource(
     codec: string;
     hasAudio: number;
     thumbPath: string | null;
+    /** 프레임 정합 메타(0046) — 미지정이면 기존 값을 유지하지 않고 0/"" 로 덮는다. */
+    fps?: number;
+    startTimecode?: string;
+    audioStreams?: number;
   },
 ): Promise<void> {
   await pool.query(
     `UPDATE media SET path = $2, mime = $3, size = $4, durationSec = $5,
-       width = $6, height = $7, codec = $8, hasAudio = $9, thumbPath = $10
+       width = $6, height = $7, codec = $8, hasAudio = $9, thumbPath = $10,
+       fps = $11, start_timecode = $12, audio_streams = $13
      WHERE id = $1`,
-    [id, m.path, m.mime, m.size, m.durationSec, m.width, m.height, m.codec, m.hasAudio, m.thumbPath],
+    [id, m.path, m.mime, m.size, m.durationSec, m.width, m.height, m.codec, m.hasAudio, m.thumbPath,
+     m.fps ?? 0, m.startTimecode ?? "", m.audioStreams ?? 0],
   );
 }
 

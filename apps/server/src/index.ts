@@ -3373,7 +3373,7 @@ async function buildEpisodeAndMedia(opts: {
   title: string;
   mime: string;
   size: number;
-  meta: { durationSec: number; width: number; height: number; codec: string; hasAudio: boolean };
+  meta: { durationSec: number; width: number; height: number; codec: string; hasAudio: boolean; fps?: number; startTimecode?: string; audioStreams?: number };
   thumbPath: string | null;
   /** Set when the master file isn't in storage yet (YouTube import): replaces the default
    *  pipeline note and skips the content.analyze enqueue — the download job does that
@@ -3436,6 +3436,11 @@ async function buildEpisodeAndMedia(opts: {
     height: meta.height,
     codec: meta.codec,
     hasAudio: meta.hasAudio ? 1 : 0,
+    // 프레임 정합 메타(0046) — 업로드 시점 프로브 값. 정규화(worker media.prepare)가
+    // 돌면 변환본 기준으로 다시 덮인다.
+    fps: meta.fps ?? 0,
+    startTimecode: meta.startTimecode ?? "",
+    audioStreams: meta.audioStreams ?? 0,
     thumbPath: opts.thumbPath,
     createdAt: Date.now(),
   };
@@ -3498,7 +3503,7 @@ async function buildEpisodeAndMedia(opts: {
  */
 async function prepareUploadedObject(mediaId: string, objectPath: string): Promise<{
   size: number;
-  meta: { durationSec: number; width: number; height: number; codec: string; hasAudio: boolean };
+  meta: { durationSec: number; width: number; height: number; codec: string; hasAudio: boolean; fps?: number; startTimecode?: string; audioStreams?: number };
   thumbStored: string | null;
   storedPath: string;
 }> {
@@ -3574,7 +3579,7 @@ async function buildFinishedClip(opts: {
   title: string;
   mime: string;
   size: number;
-  meta: { durationSec: number; width: number; height: number; codec: string; hasAudio: boolean };
+  meta: { durationSec: number; width: number; height: number; codec: string; hasAudio: boolean; fps?: number; startTimecode?: string; audioStreams?: number };
   thumbPath: string | null;
   episodeNumber?: number;
   editKind?: EditKind;
@@ -3607,6 +3612,11 @@ async function buildFinishedClip(opts: {
     height: meta.height,
     codec: meta.codec,
     hasAudio: meta.hasAudio ? 1 : 0,
+    // 프레임 정합 메타(0046) — 업로드 시점 프로브 값. 정규화(worker media.prepare)가
+    // 돌면 변환본 기준으로 다시 덮인다.
+    fps: meta.fps ?? 0,
+    startTimecode: meta.startTimecode ?? "",
+    audioStreams: meta.audioStreams ?? 0,
     thumbPath: opts.thumbPath,
     createdAt: Date.now(),
   };
@@ -5064,7 +5074,7 @@ async function renderClipMedia(opts: {
   hookPreroll?: { startTime: number; durationSec: number; hasAudio?: boolean; caption?: string; captionAssPath?: string | null } | null;
 }): Promise<
   | { clipMediaId: string; clipStored: string; thumbStored: string | null;
-      cmeta: { durationSec: number; width: number; height: number; codec: string; hasAudio: boolean } }
+      cmeta: { durationSec: number; width: number; height: number; codec: string; hasAudio: boolean; fps?: number; startTimecode?: string; audioStreams?: number } }
   | null
 > {
   const { master, episodeId, startTime, endTime, title } = opts;
@@ -5295,6 +5305,8 @@ async function renderClipMedia(opts: {
       size: fs.statSync(tmpPath).size, durationSec: cmeta.durationSec,
       width: cmeta.width, height: cmeta.height, codec: cmeta.codec, hasAudio: cmeta.hasAudio ? 1 : 0,
       thumbPath: thumbStored, createdAt: Date.now(),
+      // 렌더 산출물은 우리가 만든 mp4 라 타임코드가 없다 — fps 만 의미가 있다.
+      fps: (cmeta as { fps?: number }).fps ?? 0, startTimecode: "", audioStreams: cmeta.hasAudio ? 1 : 0,
     };
     await insertMedia(cRow);
     return { clipMediaId, clipStored, thumbStored, cmeta };

@@ -22,6 +22,14 @@ export type ProbeResult = {
   audioChannels: number;
   /** `field_order` 가 인터레이스(tt·bb·tb·bt)인가 — 방송 원본은 1080i 가 흔하다. */
   interlaced: boolean;
+  /**
+   * 소스 시작 타임코드("10:00:00:00"). 없으면 "".
+   *
+   * 방송 원본은 00:00:00:00 이 아니라 10:00:00:00 에서 시작하는 게 표준이다. STEP-D 내부는
+   * **파일 0초 기준**으로 일관되지만(모든 -ss·구간이 그렇다), Premiere·EDL 은 소스 타임코드
+   * 기준이라 이 값을 모르면 편집자 화면에서 10시간 어긋난 자리를 가리킨다.
+   */
+  startTimecode: string;
 };
 
 /** #rrggbb 또는 rrggbb 문자열을 3~6자 안 되면 fallback으로 대체. ffmpeg color 필터에 넘길 값 정규화용. */
@@ -103,6 +111,14 @@ export function probe(filePath: string): Promise<ProbeResult> {
             // 모르면(unknown·빈 값) **인터레이스가 아니라고 본다** — 아니면 멀쩡한 소스를
             // 매번 디인터레이스해 화질만 깎는다.
             interlaced: /^(tt|bb|tb|bt)$/.test(String(videoStream?.field_order ?? "")),
+            // 타임코드는 컨테이너마다 자리가 다르다: MXF·MOV 는 별도 data 스트림 tags,
+            // mp4 는 비디오 스트림 tags, 일부는 format tags. 세 곳을 순서대로 본다.
+            startTimecode: String(
+              videoStream?.tags?.timecode
+              ?? (data.streams ?? []).find((s: any) => s?.tags?.timecode)?.tags?.timecode
+              ?? format.tags?.timecode
+              ?? "",
+            ),
           });
         } catch (e) {
           reject(new Error(`ffprobe parse error: ${e}`));

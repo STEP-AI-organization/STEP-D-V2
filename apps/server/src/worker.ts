@@ -805,6 +805,11 @@ async function handleMediaPrepare(job: Job): Promise<void> {
       codec: meta.codec,
       hasAudio: meta.hasAudio ? 1 : 0,
       thumbPath: thumbStored,
+      // 프레임 정합 메타(0046) — Premiere 플러그인이 추천 구간을 1프레임 오차로 꽂는 근거.
+      // **정규화 후 값**을 저장한다(편집·재생·렌더가 전부 그 파일을 보므로 그게 정본이다).
+      fps: meta.fps,
+      startTimecode: meta.startTimecode,
+      audioStreams: meta.audioStreams,
     });
 
     let verdict = checkCredits({
