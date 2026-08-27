@@ -32,7 +32,7 @@
  * 링크 검증이 필요해도 열지 마라 — 형식 검증은 `commerce.ts` 가 문자열로 한다.
  */
 import { chromium, type Browser, type Page } from "playwright";
-import { isAffiliateUrl, type AffiliateLink } from "./commerce.ts";
+import { isAffiliateUrl, type AffiliateLink, type ProductCandidate } from "./commerce.ts";
 
 /**
  * 로그인된 크롬의 CDP 주소. 그 크롬은 사람이 **한 번** 로그인해 둔 전용 프로필로 떠 있어야 한다:
@@ -61,13 +61,29 @@ export interface CoupangProduct {
   ratingCount?: number;
 }
 
-/** 발급 결과 한 건 — 성공이면 url 이 채워진다. 실패도 사유와 함께 돌려준다(운영 판단용). */
+/** 발급 결과 한 건 — 성공이면 link 가 채워진다. 실패도 사유와 함께 돌려준다(운영 판단용). */
 export interface IssueResult {
   query: string;
   ok: boolean;
-  reason?: string;
+  /** 실패 사유(운영자에게 보여줄 문장). 성공 시 없음. */
+  error?: string;
   link?: AffiliateLink;
+  /**
+   * 같은 검색어의 다른 상품 후보 — **검토 화면에서 갈아끼우라고** 남긴다.
+   * 검색 응답에 이미 36개가 오므로 몇 개 보관하는 건 공짜다. 링크는 고를 때 발급한다
+   * (안 쓸 후보까지 미리 발급하면 링크만 늘어난다).
+   */
+  candidates?: ProductCandidate[];
 }
+
+/** 검색어 + 장면 근거. 근거는 검토 화면이 "왜 이 상품인가" 를 보여주는 데 쓴다. */
+export interface QueryInput {
+  query: string;
+  reason?: string;
+}
+
+/** 검색 결과에서 검토용으로 남길 후보 수. */
+const KEEP_CANDIDATES = 4;
 
 export class PartnersUnavailableError extends Error {
   readonly code = "partners_unavailable";
@@ -100,14 +116,24 @@ function productUrlOf(p: CoupangProduct): string {
   return `https://www.coupang.com/vp/products/${p.productId}`;
 }
 
-/**
- * 검색어 목록 → 제휴 링크. 실패한 건은 `ok:false` 로 함께 돌려준다(전체를 던지지 않는다) —
- * 5개 중 1개가 0건이라고 나머지 4개를 버릴 이유가 없다.
- */
-export async function issueCoupangLinks(queries: string[]): Promise<IssueResult[]> {
-  const wanted = [...new Set(queries.map((q) => String(q ?? "").trim()).filter(Boolean))];
-  if (wanted.length === 0) return [];
+/** 상품 → 검토 화면에 남길 후보 형태. */
+function toCandidate(p: CoupangProduct): ProductCandidate {
+  return {
+    productId: p.productId,
+    itemId: p.itemId,
+    vendorItemId: p.vendorItemId,
+    title: p.title,
+    price: Number(p.salesPrice ?? p.originPrice ?? 0) || undefined,
+    imageUrl: p.image,
+    ratingCount: Number(p.ratingCount ?? 0) || undefined,
+  };
+}
 
+/**
+ * 로그인된 파트너스 페이지를 확보해 콜백에 넘긴다.
+ * 연결·자기클릭 방어선·shim·로그인 확인이 전부 여기 한 번에 있다 — 두 벌이 되면 한쪽만 고쳐진다.
+ */
+async function withPartnersPage<T>(fn: (page: Page) => Promise<T>): Promise<T> {
   let browser: Browser;
   try {
     browser = await chromium.connectOverCDP(CDP_URL, { timeout: 10_000 });
@@ -160,21 +186,70 @@ export async function issueCoupangLinks(queries: string[]): Promise<IssueResult[
       );
     }
 
-    const out: IssueResult[] = [];
-    for (const query of wanted) {
-      try {
-        out.push(await issueOne(page, query));
-      } catch (e) {
-        out.push({ query, ok: false, reason: e instanceof Error ? e.message : String(e) });
-      }
-      await page.waitForTimeout(GAP_MS);
-    }
-    return out;
+    return await fn(page);
   } finally {
     // connectOverCDP 는 **붙은 것**이지 띄운 게 아니다 — close() 는 연결만 끊고
     // 사람이 로그인해 둔 크롬은 그대로 살아 있다(다음 잡이 다시 붙는다).
     await browser.close().catch(() => {});
   }
+}
+
+/**
+ * 검색어 목록 → 제휴 링크 + 대체 후보. 실패한 건은 `ok:false` 로 함께 돌려준다
+ * (전체를 던지지 않는다 — 5개 중 1개가 0건이라고 나머지 4개를 버릴 이유가 없다).
+ *
+ * 발급된 링크는 **status 가 붙지 않은 채로** 나간다 — 승인은 사람이 하는 별개 단계다
+ * (`commerce.ts` 의 `normalizeStatus` 가 그런 링크를 `pending` 으로 읽는다).
+ */
+export async function issueCoupangLinks(queries: (string | QueryInput)[]): Promise<IssueResult[]> {
+  const seen = new Set<string>();
+  const wanted: QueryInput[] = [];
+  for (const q of queries) {
+    const query = String((typeof q === "string" ? q : q?.query) ?? "").trim();
+    if (!query || seen.has(query.toLowerCase())) continue;
+    seen.add(query.toLowerCase());
+    wanted.push({ query, reason: typeof q === "string" ? undefined : q?.reason });
+  }
+  if (wanted.length === 0) return [];
+
+  return withPartnersPage(async (page) => {
+    const out: IssueResult[] = [];
+    for (const q of wanted) {
+      try {
+        out.push(await issueOne(page, q));
+      } catch (e) {
+        out.push({ query: q.query, ok: false, error: e instanceof Error ? e.message : String(e) });
+      }
+      await page.waitForTimeout(GAP_MS);
+    }
+    return out;
+  });
+}
+
+/**
+ * 후보 하나를 지정해 링크를 발급한다 — 검토 화면의 **"이거 말고 저거"**(교체) 경로.
+ * 검색을 다시 하지 않는다: 후보에 발급에 필요한 식별자가 이미 다 들어 있다.
+ */
+export async function issueLinkForCandidate(
+  candidate: ProductCandidate,
+  query: string,
+  reason?: string,
+): Promise<IssueResult> {
+  if (!candidate?.productId || !candidate?.itemId) {
+    return { query, ok: false, error: "후보 상품 정보가 불완전합니다 (productId·itemId 필요)" };
+  }
+  return withPartnersPage(async (page) => {
+    const product: CoupangProduct = {
+      productId: candidate.productId,
+      itemId: candidate.itemId,
+      vendorItemId: candidate.vendorItemId,
+      title: candidate.title,
+      image: candidate.imageUrl,
+      salesPrice: candidate.price,
+      originPrice: candidate.price,
+    };
+    return generateLink(page, product, query, reason);
+  });
 }
 
 /**
@@ -193,8 +268,9 @@ async function installNameShim(page: Page): Promise<void> {
   await page.evaluate("globalThis.__name = globalThis.__name || function (f) { return f; }");
 }
 
-/** 검색어 하나 → 상품 선택 → 링크 발급. 페이지 컨텍스트 안에서 fetch 두 번. */
-async function issueOne(page: Page, query: string): Promise<IssueResult> {
+/** 검색어 하나 → 상품 선택 → 링크 발급 + 대체 후보 보관. 페이지 컨텍스트 안에서 fetch 두 번. */
+async function issueOne(page: Page, input: QueryInput): Promise<IssueResult> {
+  const query = input.query;
   // ⚠️ evaluate 콜백 안에 **이름 붙는 내부 함수를 만들지 마라**(`const post = () => …`).
   //    esbuild 가 __name 래퍼를 씌워 브라우저에서 터진다 — installNameShim 이 방어선이지만,
   //    애초에 안 만드는 쪽이 안전하다. 인자로 넘기는 익명 화살표는 이름이 없어 괜찮다.
@@ -215,11 +291,33 @@ async function issueOne(page: Page, query: string): Promise<IssueResult> {
   }, query);
 
   if (res.status !== 200 || res.rCode !== "0") {
-    return { query, ok: false, reason: `검색 실패 (status ${res.status} · rCode ${res.rCode ?? "?"} ${res.rMessage ?? ""})`.trim() };
+    return { query, ok: false, error: `검색 실패 (status ${res.status} · rCode ${res.rCode ?? "?"} ${res.rMessage ?? ""})`.trim() };
   }
   const product = pickProduct(res.products);
-  if (!product) return { query, ok: false, reason: "검색 결과에 걸 만한 상품이 없습니다" };
+  if (!product) return { query, ok: false, error: "검색 결과에 걸 만한 상품이 없습니다" };
 
+  // 검토 화면이 갈아끼울 수 있게 유효 후보를 남긴다.
+  // ⚠️ **지금 고른 상품도 목록에 포함한다.** 빼면 다른 걸로 바꿨다가 되돌아올 수 없다
+  //    (발급에 필요한 itemId·vendorItemId 를 잃는다). 어느 게 현재인지는 링크의
+  //    productId 로 알 수 있으므로 목록에 남겨 두는 편이 항상 안전하다.
+  const valid = res.products.filter(
+    (p) => p && !p.isAdult && !p.isSoldOut && !p.travel && p.productId && p.itemId && p.title,
+  );
+  const candidates = [product, ...valid.filter((p) => p.productId !== product.productId)]
+    .slice(0, KEEP_CANDIDATES)
+    .map(toCandidate);
+
+  const out = await generateLink(page, product, query, input.reason);
+  return { ...out, candidates };
+}
+
+/** 상품 하나 → 제휴 단축 URL. 검색 없이 발급만 한다(교체 경로도 이걸 쓴다). */
+async function generateLink(
+  page: Page,
+  product: CoupangProduct,
+  query: string,
+  reason?: string,
+): Promise<IssueResult> {
   const gen = await page.evaluate(async (p: CoupangProduct) => {
     const r = await fetch("/api/v1/banner/iframe/url", {
       method: "POST",
@@ -248,12 +346,12 @@ async function issueOne(page: Page, query: string): Promise<IssueResult> {
     return {
       query,
       ok: false,
-      reason: `링크 발급 실패 (status ${gen.status} · rCode ${gen.rCode ?? "?"} ${gen.rMessage ?? ""})`.trim(),
+      error: `링크 발급 실패 (status ${gen.status} · rCode ${gen.rCode ?? "?"} ${gen.rMessage ?? ""})`.trim(),
     };
   }
   // 형식 검증 — 여기를 통과 못 한 값은 절대 설명란으로 못 간다(commerce.ts 가 다시 본다).
   if (!isAffiliateUrl(gen.shortUrl)) {
-    return { query, ok: false, reason: `제휴 링크 형식이 아닙니다: ${String(gen.shortUrl).slice(0, 80)}` };
+    return { query, ok: false, error: `제휴 링크 형식이 아닙니다: ${String(gen.shortUrl).slice(0, 80)}` };
   }
 
   return {
@@ -262,9 +360,14 @@ async function issueOne(page: Page, query: string): Promise<IssueResult> {
     link: {
       provider: "coupang",
       query,
+      reason,
       productName: product.title,
       productUrl: productUrlOf(product),
+      productId: product.productId,
+      price: Number(product.salesPrice ?? product.originPrice ?? 0) || undefined,
+      imageUrl: product.image,
       url: gen.shortUrl,
+      // status 를 붙이지 않는다 — 승인은 사람의 별개 단계다(읽는 쪽이 pending 으로 본다).
       createdAt: Date.now(),
     },
   };

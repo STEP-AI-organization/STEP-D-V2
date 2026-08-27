@@ -309,7 +309,9 @@ import {
   META_CHANNELS, CHANNEL_SPECS, type MetaChannel,
 } from "./clip-metadata.ts";
 import { naverUploadEnabled, NAVER_DISABLED_MESSAGE, DESC_MIN } from "./naver-gate.ts";
-import { commerceLinksEnabled, parseProductQueries } from "./commerce.ts";
+import {
+  commerceLinksEnabled, parseProductQueries, usableLinks, withCommerceLinks, normalizeStatus,
+} from "./commerce.ts";
 import {
   initialPipeline,
   isoDateOrToday,
@@ -8108,6 +8110,130 @@ app.post("/api/clips/:id/generate-metadata", async (c) => {
     console.error("[generate-metadata] 실패:", msg);
     return c.json({ error: "generation_failed", message: msg.slice(0, 300) }, 502);
   }
+});
+
+// ── 커머스 제휴 링크 검토 ─────────────────────────────────────────────────────
+//
+// **이 세 라우트가 "우리가 조절한다"의 실체다.** 파이프라인은 상품을 찾아 링크까지 발급해
+// 두지만, 그건 전부 `pending` 이라 설명란에 안 나간다. 사람이 여기서 보고 승인한 것만 나간다.
+// 자동화가 노동을 지고 판단은 사람이 하는 경계 — 방송사 채널에 엉뚱한 상품이 걸리는 사고를
+// 구조적으로 막는다.
+
+/** 이 클립의 상품·링크·대체 후보 + **실제 설명란 미리보기**. 검토 화면이 읽는 것. */
+app.get("/api/clips/:id/commerce", async (c) => {
+  const clipId = c.req.param("id");
+  const clip = await getEntity<any>("clip", clipId);
+  if (!clip) return c.json({ error: "clip_not_found", message: "클립을 찾을 수 없습니다." }, 404);
+
+  const links = usableLinks(clip.commerce?.links, Number.MAX_SAFE_INTEGER);
+  const base = String(clip.channelMeta?.youtube?.description ?? clip.synopsis ?? "");
+  return c.json({
+    enabled: commerceLinksEnabled(),
+    queries: clip.commerce?.queries ?? [],
+    links,
+    candidates: clip.commerce?.candidates ?? {},
+    linkedAt: clip.commerce?.linkedAt ?? null,
+    // 승인한 것만 반영된 **실제 발행 문구**. 화면이 따로 조립하면 서버와 다른 말을 하게 된다.
+    preview: withCommerceLinks(base, clip.commerce?.links, "youtube"),
+    // 게이트가 꺼져 있으면 승인해도 안 나간다 — 화면이 그걸 말할 수 있게 함께 알린다.
+    note: commerceLinksEnabled() ? null : "커머스 링크 기능이 꺼져 있어 승인해도 발행에 반영되지 않습니다.",
+  });
+});
+
+/** 승인·거절. **여기를 통과한 것만** 발행 설명란에 나간다. */
+app.patch("/api/clips/:id/commerce", async (c) => {
+  const clipId = c.req.param("id");
+  const clip = await getEntity<any>("clip", clipId);
+  if (!clip) return c.json({ error: "clip_not_found", message: "클립을 찾을 수 없습니다." }, 404);
+
+  const b = await c.req.json<{ decisions?: { url?: string; status?: string }[] }>().catch(() => null);
+  if (!b || !Array.isArray(b.decisions)) {
+    return c.json({ error: "bad_request", message: "decisions 배열이 필요합니다." }, 400);
+  }
+  const wanted = new Map<string, string>();
+  for (const d of b.decisions) {
+    if (d?.url) wanted.set(String(d.url), normalizeStatus(d.status));
+  }
+
+  const actor = c.get("user")?.email ?? null;
+  const now = Date.now();
+  const links = usableLinks(clip.commerce?.links, Number.MAX_SAFE_INTEGER).map((l) =>
+    wanted.has(l.url)
+      ? { ...l, status: wanted.get(l.url) as any, decidedBy: actor ?? l.decidedBy, decidedAt: now }
+      : l,
+  );
+  // 승인 개수 상한은 조립 단계(withCommerceLinks)가 지킨다 — 여기서 막으면 사람이 이유를
+  // 모른 채 저장이 실패한다. 대신 미리보기로 무엇이 실제로 나가는지 보여준다.
+  await putEntity("clip", clipId, {
+    ...clip,
+    commerce: { ...(clip.commerce ?? {}), links, reviewedAt: now, reviewedBy: actor },
+  });
+
+  const base = String(clip.channelMeta?.youtube?.description ?? clip.synopsis ?? "");
+  return c.json({ links, preview: withCommerceLinks(base, links, "youtube") });
+});
+
+/**
+ * 링크 발급을 다시 돌린다. 두 가지 용도:
+ *  - 인자 없음: 아직 링크가 없는 쿼리에 대해 발급 (처음 실패했거나 브라우저가 꺼져 있었을 때)
+ *  - `pick`: 검토 화면에서 **다른 후보로 교체** — 그 상품으로 링크를 새로 받아 승인 상태로 바꾼다
+ */
+app.post("/api/clips/:id/commerce/issue", async (c) => {
+  const clipId = c.req.param("id");
+  const clip = await getEntity<any>("clip", clipId);
+  if (!clip) return c.json({ error: "clip_not_found", message: "클립을 찾을 수 없습니다." }, 404);
+  if (!commerceLinksEnabled()) {
+    return c.json({
+      error: "commerce_disabled",
+      message: "커머스 링크 기능이 꺼져 있습니다 (COMMERCE_LINKS_ENABLED 미설정). 발급하지 않았습니다.",
+    }, 409);
+  }
+
+  const b = await c.req.json<{ pick?: { query?: string; productId?: number } }>().catch(() => null);
+  const pick = b?.pick?.query && b?.pick?.productId
+    ? { query: String(b.pick.query), productId: Number(b.pick.productId) }
+    : undefined;
+
+  // dedupeKey 를 교체 대상까지 포함해 만든다 — 서로 다른 교체 요청이 하나로 합쳐지면 안 된다.
+  const dedupeKey = pick
+    ? `commerce.link:${clipId}:${pick.query}:${pick.productId}`
+    : `commerce.link:${clipId}`;
+  const jobId = await enqueue("commerce.link", { clipId, ...(pick ? { pick } : {}) }, { dedupeKey });
+  return c.json({ jobId, queued: true });
+});
+
+/**
+ * 검토 대기 목록 — 클립 하나씩 들어가지 않고 **한 화면에서 훑을 수 있게.**
+ * 실무 동선이 이유다: 회차 하나에 쇼츠가 여러 개고, 승인은 몰아서 하는 일이다.
+ */
+app.get("/api/commerce/review", async (c) => {
+  const clips = await listEntities<any>("clip");
+  const rows = clips
+    .map((clip) => {
+      const links = usableLinks(clip.commerce?.links, Number.MAX_SAFE_INTEGER);
+      if (links.length === 0) return null;
+      return {
+        clipId: clip.id,
+        clipTitle: clip.title ?? "무제 클립",
+        episodeId: clip.episodeId ?? null,
+        programTitle: clip.programTitle ?? null,
+        status: clip.status ?? null,
+        thumbUrl: clip.thumbUrl ?? null,
+        pending: links.filter((l) => l.status === "pending").length,
+        approved: links.filter((l) => l.status === "approved").length,
+        rejected: links.filter((l) => l.status === "rejected").length,
+        links,
+      };
+    })
+    .filter(Boolean) as any[];
+  // 검토가 필요한 것부터 — 대기 건수 많은 순, 그다음 최신순.
+  rows.sort((a, b) => b.pending - a.pending || String(b.clipId).localeCompare(String(a.clipId)));
+  return c.json({
+    enabled: commerceLinksEnabled(),
+    total: rows.length,
+    pendingClips: rows.filter((r) => r.pending > 0).length,
+    clips: rows,
+  });
 });
 
 // 미디어(클립) 삭제 — 클립 엔티티 + 렌더 산출물 미디어를 정리한다. RLS 로 테넌트 스코프라

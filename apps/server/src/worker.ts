@@ -102,8 +102,8 @@ import { openSession } from "./naver-session-store.ts";
 import { uploadToNaver, NAVER_TARGETS, type NaverTarget } from "./naver-tv.ts";
 import { prepareWorkPath, cleanupWorkFile, sweepStaleWorkFiles } from "./naver-workdir.ts";
 import { upsertDistribution } from "./publish-guard.ts";
-import { commerceLinksEnabled, usableLinks, withCommerceLinks } from "./commerce.ts";
-import { issueCoupangLinks, PartnersUnavailableError } from "./coupang-partners.ts";
+import { commerceLinksEnabled, usableLinks, withCommerceLinks, type ProductCandidate } from "./commerce.ts";
+import { issueCoupangLinks, issueLinkForCandidate, PartnersUnavailableError } from "./coupang-partners.ts";
 import {
   FRESH_VIDEO_WINDOW_MS,
   VIDEO_ANALYZE_FRESH_INTERVAL_MS,
@@ -1334,8 +1334,20 @@ async function handleCommerceLink(job: Job): Promise<void> {
   const clip = await getEntity<any>("clip", clipId);
   if (!clip) { console.warn(`[worker] commerce.link: clip ${clipId} 없음 — 버림`); return; }
 
-  const queries: string[] = Array.isArray(clip.commerce?.queries)
-    ? clip.commerce.queries.map((q: any) => String(q?.query ?? q ?? "").trim()).filter(Boolean)
+  // 교체(pick) 경로 — 검토 화면에서 "이거 말고 저거" 를 고른 경우. 검색 없이 그 후보로만 발급한다.
+  const pick = job.payload.pick as { query?: string; productId?: number } | undefined;
+  if (pick?.query && pick?.productId) {
+    await runCommercePick(clipId, clip, String(pick.query), Number(pick.productId));
+    return;
+  }
+
+  const queries: { query: string; reason?: string }[] = Array.isArray(clip.commerce?.queries)
+    ? clip.commerce.queries
+        .map((q: any) => ({
+          query: String(q?.query ?? q ?? "").trim(),
+          reason: q?.reason ? String(q.reason) : undefined,
+        }))
+        .filter((q: any) => q.query)
     : [];
   if (queries.length === 0) {
     console.log(`[worker] commerce.link ${clipId}: 상품 쿼리가 없다 — 할 일 없음`);
@@ -1343,47 +1355,72 @@ async function handleCommerceLink(job: Job): Promise<void> {
   }
 
   // 이미 발급된 쿼리는 건너뛴다 — 재실행이 링크를 중복 생성하지 않게(멱등).
+  // ⚠️ 승인/거절 상태와 무관하다: 사람이 거절한 상품을 재실행이 되살리면 안 된다.
   const existing = usableLinks(clip.commerce?.links, Number.MAX_SAFE_INTEGER);
   const done = new Set(existing.map((l) => l.query.toLowerCase()));
-  const todo = queries.filter((q) => !done.has(q.toLowerCase()));
+  const todo = queries.filter((q) => !done.has(q.query.toLowerCase()));
   if (todo.length === 0) {
     console.log(`[worker] commerce.link ${clipId}: 이미 전부 발급됨 (${existing.length}건)`);
     return;
   }
 
-  let results;
-  try {
-    results = await issueCoupangLinks(todo);
-  } catch (e) {
-    if (e instanceof PartnersUnavailableError) {
-      // 브라우저·로그인 문제는 재시도할 가치가 있다(사람이 크롬을 켜면 다음 시도에 붙는다).
-      // 큐 백오프에 맡기고 던진다 — 대신 사유가 로그에 그대로 남는다.
-      console.error(`[worker] commerce.link ${clipId}: ${e.message}`);
-      throw e;
-    }
-    throw e;
-  }
+  // 브라우저·로그인 문제(PartnersUnavailableError)는 던져서 큐 백오프에 맡긴다 —
+  // 사람이 크롬을 켜면 다음 시도에 붙는다. 사유는 로그에 그대로 남는다.
+  const results = await issueCoupangLinks(todo);
 
   const fresh = (await getEntity<any>("clip", clipId)) ?? clip;
   const merged = [...usableLinks(fresh.commerce?.links, Number.MAX_SAFE_INTEGER)];
   const seen = new Set(merged.map((l) => l.query.toLowerCase()));
+  const candidates: Record<string, ProductCandidate[]> = { ...(fresh.commerce?.candidates ?? {}) };
   for (const r of results) {
+    if (r.candidates?.length) candidates[r.query] = r.candidates;
     if (r.ok && r.link && !seen.has(r.link.query.toLowerCase())) {
-      merged.push(r.link);
+      merged.push(r.link);   // status 없음 = pending. 승인 전에는 설명란에 안 나간다.
       seen.add(r.link.query.toLowerCase());
     }
   }
   await putEntity("clip", clipId, {
     ...fresh,
-    commerce: { ...(fresh.commerce ?? {}), links: merged, linkedAt: Date.now() },
+    commerce: { ...(fresh.commerce ?? {}), links: merged, candidates, linkedAt: Date.now() },
   });
 
   const okCount = results.filter((r) => r.ok).length;
   const failed = results.filter((r) => !r.ok);
   console.log(
-    `[worker] commerce.link ${clipId}: ${okCount}/${todo.length}건 발급 (총 ${merged.length}건)` +
-      (failed.length ? ` · 실패: ${failed.map((f) => `${f.query}(${f.reason})`).join(" / ")}` : ""),
+    `[worker] commerce.link ${clipId}: ${okCount}/${todo.length}건 발급 · 검토 대기 (총 ${merged.length}건)` +
+      (failed.length ? ` · 실패: ${failed.map((f) => `${f.query}(${f.error})`).join(" / ")}` : ""),
   );
+}
+
+/** 검토 화면의 상품 교체 — 저장된 후보 중 productId 로 지목된 것으로 링크를 다시 발급한다. */
+async function runCommercePick(clipId: string, clip: any, query: string, productId: number): Promise<void> {
+  const candidates: ProductCandidate[] = (clip.commerce?.candidates ?? {})[query] ?? [];
+  const chosen = candidates.find((c) => Number(c.productId) === productId);
+  if (!chosen) {
+    console.warn(`[worker] commerce.link ${clipId}: 후보 ${productId} 를 '${query}' 에서 못 찾음 — 버림`);
+    return;
+  }
+  const reason = (clip.commerce?.queries ?? []).find((q: any) => q?.query === query)?.reason;
+  const res = await issueLinkForCandidate(chosen, query, reason ? String(reason) : undefined);
+  if (!res.ok || !res.link) {
+    console.error(`[worker] commerce.link ${clipId} 교체 실패 (${query}): ${res.error}`);
+    return;
+  }
+
+  const fresh = (await getEntity<any>("clip", clipId)) ?? clip;
+  const links = usableLinks(fresh.commerce?.links, Number.MAX_SAFE_INTEGER);
+  const prev = links.find((l) => l.query.toLowerCase() === query.toLowerCase());
+  // 교체는 **명시적 선택**이라 그대로 승인 상태로 둔다 — 고르고 또 승인하게 만들 이유가 없다.
+  const next = links.filter((l) => l.query.toLowerCase() !== query.toLowerCase());
+  next.push({ ...res.link, status: "approved", decidedBy: prev?.decidedBy, decidedAt: Date.now() });
+
+  // 후보 목록은 **건드리지 않는다** — 방금 뺀 상품으로 되돌아갈 수 있어야 하고,
+  // 목록에 현재 상품도 함께 들어 있다(coupang-partners.ts 의 candidates 구성).
+  await putEntity("clip", clipId, {
+    ...fresh,
+    commerce: { ...(fresh.commerce ?? {}), links: next, linkedAt: Date.now() },
+  });
+  console.log(`[worker] commerce.link ${clipId} 교체 완료 (${query}) → ${res.link.productName}`);
 }
 
 async function handleThumbnailStyle(job: Job): Promise<void> {

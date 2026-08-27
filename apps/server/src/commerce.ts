@@ -73,18 +73,56 @@ export interface ProductQuery {
   reason: string;
 }
 
-/** 발급까지 끝난 제휴 링크. 이 모양이 되어야 설명란에 나갈 수 있다. */
+/**
+ * 링크의 승인 상태. **`approved` 만 설명란에 나간다.**
+ *
+ * 기본값이 `pending` 인 것이 이 기능의 안전 방향이다 — 아무도 안 본 링크가 방송사 채널에
+ * 나가는 것보다, 검토가 밀려 링크가 안 붙는 쪽이 낫다. 자동화는 **찾아 놓는 일**까지 하고,
+ * 무엇을 실제로 걸지는 사람이 정한다(부담은 자동이, 판단은 사람이).
+ */
+export type LinkStatus = "pending" | "approved" | "rejected";
+
+/** 발급까지 끝난 제휴 링크. `approved` 여야 설명란에 나간다. */
 export interface AffiliateLink {
   provider: "coupang";
   /** 이 링크를 찾게 한 검색어. */
   query: string;
+  /** 이 검색어가 나온 장면 근거 — 검토 화면에서 "왜 이 상품인가"를 설명한다. */
+  reason?: string;
   /** 실제로 고른 상품명. 설명란에 사람이 읽을 이름으로 나간다. */
   productName: string;
   /** 쿠팡 상품 페이지 URL — 감사·재발급용. 설명란에는 안 나간다(제휴 링크가 아니라 정산이 안 된다). */
   productUrl?: string;
+  /** 상품 식별자 — 후보 교체(pick)와 중복 판정에 쓴다. */
+  productId?: number;
+  /** 판매가·썸네일 — 검토 화면이 "이게 맞나"를 판단할 재료다. 설명란에는 안 나간다. */
+  price?: number;
+  imageUrl?: string;
   /** 제휴 단축 URL. **설명란에 나가는 유일한 URL.** */
   url: string;
+  /** 승인 상태. 없으면 `pending` 으로 본다(옛 데이터 방어 — 모르는 건 안 내보낸다). */
+  status?: LinkStatus;
+  /** 누가 언제 상태를 정했나 — 방송사 채널에 나가는 판단이라 기록이 필요하다. */
+  decidedBy?: string;
+  decidedAt?: number;
   createdAt: number;
+}
+
+/** 검토 화면에서 "이거 말고 저거" 를 고를 수 있게 남겨 두는 후보. 링크는 고를 때 발급한다. */
+export interface ProductCandidate {
+  productId: number;
+  itemId: number;
+  vendorItemId: number;
+  title: string;
+  price?: number;
+  imageUrl?: string;
+  ratingCount?: number;
+}
+
+/** 상태 정규화 — 모르는 값·빈값은 전부 `pending`(= 안 나간다). */
+export function normalizeStatus(v: unknown): LinkStatus {
+  const s = String(v ?? "").trim().toLowerCase();
+  return s === "approved" || s === "rejected" ? s : "pending";
 }
 
 /**
@@ -129,7 +167,11 @@ export function parseProductQueries(raw: unknown): ProductQuery[] {
   return out;
 }
 
-/** 저장된 링크 목록에서 실제로 붙일 수 있는 것만. 형식 검증 + 중복 제거 + 상한. */
+/**
+ * 저장된 링크 목록에서 **형식이 성립하는 것 전부** — 상태는 안 본다.
+ * 검토 화면이 쓰는 목록이다(거절된 것도 보여야 사람이 되돌릴 수 있다).
+ * 실제로 설명란에 나갈 것은 `approvedLinks()` 로 따로 거른다.
+ */
 export function usableLinks(raw: unknown, max = MAX_LINKS_PER_CLIP): AffiliateLink[] {
   if (!Array.isArray(raw)) return [];
   const out: AffiliateLink[] = [];
@@ -141,17 +183,37 @@ export function usableLinks(raw: unknown, max = MAX_LINKS_PER_CLIP): AffiliateLi
     const productName = String((l as any).productName ?? "").replace(/\s+/g, " ").trim();
     if (!productName) continue;
     seen.add(url);
+    const num = (v: unknown) => (Number.isFinite(Number(v)) && Number(v) > 0 ? Number(v) : undefined);
     out.push({
       provider: "coupang",
       query: String((l as any).query ?? "").trim(),
+      reason: (l as any).reason ? String((l as any).reason).slice(0, 200) : undefined,
       productName,
       productUrl: (l as any).productUrl ? String((l as any).productUrl) : undefined,
+      productId: num((l as any).productId),
+      price: num((l as any).price),
+      imageUrl: (l as any).imageUrl ? String((l as any).imageUrl) : undefined,
       url,
+      status: normalizeStatus((l as any).status),
+      decidedBy: (l as any).decidedBy ? String((l as any).decidedBy).slice(0, 120) : undefined,
+      decidedAt: num((l as any).decidedAt),
       createdAt: Number((l as any).createdAt ?? 0),
     });
     if (out.length >= max) break;
   }
   return out;
+}
+
+/**
+ * **설명란에 실제로 나갈 링크.** 승인된 것만.
+ *
+ * 여기가 "우리가 조절한다"의 코드상 실체다. 발급(자동)과 게시(사람 승인)를 갈라 놓아,
+ * 파이프라인이 상품을 잘못 골라도 그게 곧바로 방송사 채널로 나가지 않는다.
+ */
+export function approvedLinks(raw: unknown, max = MAX_LINKS_PER_CLIP): AffiliateLink[] {
+  return usableLinks(raw, Number.MAX_SAFE_INTEGER)
+    .filter((l) => l.status === "approved")
+    .slice(0, max);
 }
 
 /** 상품명이 길면 설명란이 지저분해진다. 옵션·용량 꼬리를 자른다. */
@@ -174,6 +236,9 @@ function shortenProductName(name: string, max = 40): string {
  * **멱등**하다 — 이미 붙어 있으면 다시 붙이지 않는다. `distribution.updatemeta`(발행 후
  * 메타 수정)가 같은 설명을 다시 조립하는 경로가 있어서 필요하다.
  *
+ * **승인된 링크만 붙는다.** 미검토(pending)·거절(rejected)은 없는 것처럼 다룬다 —
+ * 사람이 확인하지 않은 상품이 방송사 채널에 나가지 않게 하는 것이 이 함수의 마지막 방어선이다.
+ *
  * @param channel 채널 id. `COMMERCE_CHANNELS` 밖이면 원문을 그대로 돌려준다.
  */
 export function withCommerceLinks(
@@ -188,7 +253,7 @@ export function withCommerceLinks(
   // 이미 붙어 있다(재조립) — 문구가 두 번 나가면 그것대로 이상하다.
   if (base.includes(COUPANG_DISCLOSURE) || base.includes(COMMERCE_BLOCK_HEADER)) return base;
 
-  const links = usableLinks(rawLinks, opts.maxLinks ?? MAX_LINKS_PER_CLIP);
+  const links = approvedLinks(rawLinks, opts.maxLinks ?? MAX_LINKS_PER_CLIP);
   if (links.length === 0) return base;
 
   const lines = links.map((l) => `· ${shortenProductName(l.productName)} ${l.url}`);

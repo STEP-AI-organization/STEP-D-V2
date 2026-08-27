@@ -55,7 +55,7 @@ docs/          ops(현황·운영) / plans(계획) / reference / research / prot
 
 ## 백엔드 — apps/server
 
-Hono 단일 진입점(index.ts, **~8700줄, 라우트 231개**) + 별도 워커 프로세스 구조.
+Hono 단일 진입점(index.ts, **~8800줄, 라우트 235개**) + 별도 워커 프로세스 구조.
 (2026-08-25 실측 갱신)
 
 | 파일 | 역할 |
@@ -152,6 +152,9 @@ POST /api/programs/:id/autofill · /profile/generate · /thumbnail-style
 GET  /api/programs/:id/thumbnail-style(/thumbs/:name)   # 스타일 프로파일 + 수집 썸네일
                                          # (구 /api/thumbnail-refs/* 레퍼런스 풀은 2026-08-13 삭제)
 POST /api/recommendations/:id/adopt · /reject
+GET/PATCH /api/clips/:id/commerce        # 커머스 상품·링크 검토 — **승인한 것만** 발행 설명란에
+POST /api/clips/:id/commerce/issue       #   붙는다(pending 기본). issue 는 재발급·상품 교체
+GET  /api/commerce/review                #   워크스페이스 검토 대기 목록 (웹 /commerce 화면)
 GET/POST /api/clips/:id/reframe          # AI Beat별 Fit/Fill 분석 상태 조회·큐잉
 POST /api/clips/:id/export · /generate-metadata(채널별 메타) · /regenerate-titles
 POST /api/distributions/publish · /retry # YouTube 실업로드(게이트 OFF) · Meta/SMR 은 상태 기록만
@@ -181,7 +184,8 @@ YOUTUBE_UPLOAD_ENABLED   실업로드 게이트. 미설정·오타·빈값 = OFF
 TIKTOK_UPLOAD_ENABLED    TikTok 받은함 드래프트 업로드 게이트. 기본 OFF · 오타=OFF
 COMMERCE_LINKS_ENABLED   쿠팡 제휴 링크 게이트. 기본 OFF · 오타=OFF. 켜면 ① generate-metadata 가
                       상품 쿼리를 같이 뽑고(추가 원가 ₩0 · 같은 호출) ② commerce.link 잡이
-                      링크를 발급하고 ③ **YouTube 설명란에만** 링크+대가성 문구가 붙는다.
+                      링크를 발급하고 ③ **사람이 /commerce 에서 승인한 것만** YouTube
+                      설명란에 링크+대가성 문구로 붙는다(발급≠게시 · 미승인은 안 나간다).
                       ⚠️ 켤 때 commerce 레인 워커도 같이 띄울 것 — 안 그러면 잡이 조용히 쌓인다
 COUPANG_CDP_URL       로그인된 파트너스 크롬의 CDP 주소 (기본 http://127.0.0.1:9223)
 GEBD_IMAGE / GEBD_MODEL / GEBD_ASSETS / GEBD_CHUNK_SEC(300) / GEBD_CORES(1)   GPU VM

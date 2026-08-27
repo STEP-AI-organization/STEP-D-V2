@@ -19,6 +19,7 @@ import {
   Scissors,
   Search,
   Send,
+  ShoppingBag,
   Sparkles,
   TrendingUp,
   Workflow,
@@ -76,6 +77,8 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { href: "/thumbnails", label: "썸네일 생성", icon: ImageIcon },
       { href: "/automation", label: "자동 배포", icon: Workflow },
+      // 찾은 상품과 **실제로 붙는** 상품을 가르는 자리. 승인 전에는 어디에도 안 나간다.
+      { href: "/commerce", label: "상품 링크", icon: ShoppingBag },
     ],
   },
   /**
@@ -123,6 +126,7 @@ export const SCREEN_META: Record<string, { title: string; subtitle: string }> = 
   "/clips": { title: "클립", subtitle: "구 클립 목록 — 미디어 화면으로 대체됨" },
   "/analytics": { title: "성과 (구)", subtitle: "구 성과 화면 — 성과·프로그램/채널 분석으로 대체됨" },
   "/automation": { title: "자동 배포", subtitle: "프로그램·채널·일정·템플릿을 한곳에서 설정" },
+  "/commerce": { title: "상품 링크", subtitle: "영상에서 찾은 상품 검토 — 승인한 것만 발행 설명란에 붙는다" },
 };
 
 export function screenMetaFor(pathname: string): { title: string; subtitle: string } {

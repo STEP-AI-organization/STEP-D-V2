@@ -17,8 +17,10 @@ import {
   COMMERCE_BLOCK_HEADER,
   COUPANG_DISCLOSURE,
   MAX_LINKS_PER_CLIP,
+  approvedLinks,
   commerceLinksEnabled,
   isAffiliateUrl,
+  normalizeStatus,
   parseProductQueries,
   usableLinks,
   withCommerceLinks,
@@ -30,8 +32,10 @@ const SRC = path.dirname(fileURLToPath(import.meta.url));
 const read = (f: string) => fs.readFileSync(path.join(SRC, f), "utf-8");
 
 const LINK = (n: string) => `https://link.coupang.com/a/${n}`;
-const link = (query: string, productName: string, url: string) =>
-  ({ provider: "coupang" as const, query, productName, url, createdAt: 1 });
+/** 기본이 `approved` 인 이유: 대부분의 테스트가 "붙는 링크" 를 전제로 조립을 검증한다.
+ *  승인 게이트 자체는 아래 "승인한 것만 나간다" 블록이 따로 본다. */
+const link = (query: string, productName: string, url: string, status: string = "approved") =>
+  ({ provider: "coupang" as const, query, productName, url, status, createdAt: 1 });
 
 let saved: string | undefined;
 beforeEach(() => { saved = process.env.COMMERCE_LINKS_ENABLED; });
@@ -146,6 +150,67 @@ describe("설명란 조립", () => {
       "", [link("q", "에이센트 차량용 고체 탈취제 프레쉬 린넨, 1개, 210g", LINK("fff"))], "youtube");
     assert.ok(out.includes(COMMERCE_BLOCK_HEADER));
     assert.equal(out.includes(", 1개, 210g"), false, "옵션 꼬리가 그대로 나갔다");
+  });
+});
+
+describe("승인한 것만 나간다 — 이게 '우리가 조절한다'의 실체다", () => {
+  it("미검토(pending)는 안 붙는다 — 아무도 안 본 상품이 방송사 채널에 나가면 안 된다", () => {
+    gateOn();
+    const out = withCommerceLinks("설명", [link("q", "상품", LINK("p1"), "pending")], "youtube");
+    assert.equal(out, "설명");
+  });
+
+  it("거절(rejected)은 안 붙는다", () => {
+    gateOn();
+    assert.equal(withCommerceLinks("설명", [link("q", "상품", LINK("p2"), "rejected")], "youtube"), "설명");
+  });
+
+  it("**status 가 아예 없는 옛 링크도 안 붙는다** — 모르는 건 안 내보낸다", () => {
+    gateOn();
+    const legacy = [{ provider: "coupang", query: "q", productName: "상품", url: LINK("p3"), createdAt: 1 }];
+    assert.equal(withCommerceLinks("설명", legacy, "youtube"), "설명");
+  });
+
+  it("승인된 것만 골라 붙는다 — 섞여 있어도", () => {
+    gateOn();
+    const out = withCommerceLinks("설명", [
+      link("a", "거절된 상품", LINK("r1"), "rejected"),
+      link("b", "승인된 상품", LINK("ok1"), "approved"),
+      link("c", "미검토 상품", LINK("p4"), "pending"),
+    ], "youtube");
+    assert.ok(out.includes(LINK("ok1")));
+    assert.equal(out.includes(LINK("r1")), false, "거절된 링크가 샜다");
+    assert.equal(out.includes(LINK("p4")), false, "미검토 링크가 샜다");
+    assert.ok(out.includes(COUPANG_DISCLOSURE));
+  });
+
+  it("승인 상한은 승인된 것들 중에서 센다 — 거절이 자리를 잡아먹지 않는다", () => {
+    gateOn();
+    const many = [
+      ...Array.from({ length: 5 }, (_, i) => link(`r${i}`, `거절${i}`, LINK(`rr${i}`), "rejected")),
+      ...Array.from({ length: 5 }, (_, i) => link(`a${i}`, `승인${i}`, LINK(`aa${i}`), "approved")),
+    ];
+    const out = withCommerceLinks("설명", many, "youtube");
+    assert.equal(out.split("link.coupang.com").length - 1, MAX_LINKS_PER_CLIP);
+    assert.equal(out.includes("/a/rr"), false, "거절된 것이 상한을 채웠다");
+  });
+
+  it("normalizeStatus — 모르는 값은 전부 pending", () => {
+    for (const v of [undefined, null, "", "  ", "APPROVE", "ok", "yes", 1, {}]) {
+      assert.equal(normalizeStatus(v), "pending", `${String(v)} 가 pending 이 아니다`);
+    }
+    assert.equal(normalizeStatus("approved"), "approved");
+    assert.equal(normalizeStatus(" REJECTED "), "rejected");
+  });
+
+  it("검토 목록(usableLinks)에는 거절된 것도 남는다 — 사람이 되돌릴 수 있어야 한다", () => {
+    const all = usableLinks([
+      link("a", "승인", LINK("z1"), "approved"),
+      link("b", "거절", LINK("z2"), "rejected"),
+      link("c", "미검토", LINK("z3"), "pending"),
+    ], 99);
+    assert.deepEqual(all.map((l) => l.status), ["approved", "rejected", "pending"]);
+    assert.deepEqual(approvedLinks(all, 99).map((l) => l.query), ["a"]);
   });
 });
 

@@ -2966,3 +2966,115 @@ export async function saveClipMetadata(
   if (!res.ok) throw new ApiError(res.status, await errorMessageOf(res));
   return ((await res.json()) as { meta: ChannelMeta }).meta;
 }
+
+// ── 커머스 제휴 링크 검토 ─────────────────────────────────────────────────────
+//
+// 파이프라인이 상품을 찾아 링크까지 발급해 두지만 전부 `pending` 이라 설명란에 안 나간다.
+// 사람이 보고 승인한 것만 나간다 — 이 함수들이 그 검토 화면의 통로다.
+
+export type CommerceLinkStatus = "pending" | "approved" | "rejected";
+
+export interface CommerceLink {
+  provider: "coupang";
+  query: string;
+  /** 이 상품이 나온 장면 근거 — "왜 이게 붙었나" 를 설명한다. */
+  reason?: string;
+  productName: string;
+  productUrl?: string;
+  productId?: number;
+  price?: number;
+  imageUrl?: string;
+  /** 제휴 단축 URL. ⚠️ **절대 열지 말 것** — 자기 클릭은 계정 정지 사유다. */
+  url: string;
+  status?: CommerceLinkStatus;
+  decidedBy?: string;
+  decidedAt?: number;
+  createdAt: number;
+}
+
+/** 같은 검색어의 다른 상품 — 검토 화면에서 갈아끼울 수 있다. */
+export interface CommerceCandidate {
+  productId: number;
+  itemId: number;
+  vendorItemId: number;
+  title: string;
+  price?: number;
+  imageUrl?: string;
+  ratingCount?: number;
+}
+
+export interface ClipCommerce {
+  enabled: boolean;
+  queries: { query: string; reason?: string }[];
+  links: CommerceLink[];
+  candidates: Record<string, CommerceCandidate[]>;
+  linkedAt: number | null;
+  /** 승인분만 반영된 **실제 발행 설명란**. 화면이 따로 조립하지 않는다(서버가 정본). */
+  preview: string;
+  note: string | null;
+}
+
+export interface CommerceReviewRow {
+  clipId: string;
+  clipTitle: string;
+  episodeId: string | null;
+  programTitle: string | null;
+  status: string | null;
+  thumbUrl: string | null;
+  pending: number;
+  approved: number;
+  rejected: number;
+  links: CommerceLink[];
+}
+
+export interface CommerceReview {
+  enabled: boolean;
+  total: number;
+  pendingClips: number;
+  clips: CommerceReviewRow[];
+}
+
+/** 검토 대기 목록 — 클립을 하나씩 열지 않고 한 화면에서 훑는다. */
+export async function fetchCommerceReview(): Promise<CommerceReview> {
+  const res = await fetch(`${API_BASE}/commerce/review`);
+  if (!res.ok) throw new ApiError(res.status, await errorMessageOf(res));
+  return (await res.json()) as CommerceReview;
+}
+
+/** 클립 하나의 상품·링크·대체 후보 + 발행 미리보기. */
+export async function fetchClipCommerce(clipId: string): Promise<ClipCommerce> {
+  const res = await fetch(`${API_BASE}/clips/${clipId}/commerce`);
+  if (!res.ok) throw new ApiError(res.status, await errorMessageOf(res));
+  return (await res.json()) as ClipCommerce;
+}
+
+/** 승인·거절 저장. 응답에 갱신된 미리보기가 함께 온다. */
+export async function saveCommerceDecisions(
+  clipId: string,
+  decisions: { url: string; status: CommerceLinkStatus }[],
+): Promise<{ links: CommerceLink[]; preview: string }> {
+  const res = await fetch(`${API_BASE}/clips/${clipId}/commerce`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ decisions }),
+  });
+  if (!res.ok) throw new ApiError(res.status, await errorMessageOf(res));
+  return (await res.json()) as { links: CommerceLink[]; preview: string };
+}
+
+/**
+ * 링크 발급을 큐에 넣는다. `pick` 을 주면 그 상품으로 **교체**한다(교체는 곧 승인이다).
+ * 발급은 로그인된 브라우저가 있는 PC 의 워커가 하므로 **비동기** — 잠시 뒤 다시 읽어야 한다.
+ */
+export async function issueCommerceLinks(
+  clipId: string,
+  pick?: { query: string; productId: number },
+): Promise<{ jobId: string; queued: boolean }> {
+  const res = await fetch(`${API_BASE}/clips/${clipId}/commerce/issue`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(pick ? { pick } : {}),
+  });
+  if (!res.ok) throw new ApiError(res.status, await errorMessageOf(res));
+  return (await res.json()) as { jobId: string; queued: boolean };
+}
