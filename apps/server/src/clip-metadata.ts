@@ -208,12 +208,45 @@ export interface MetaSource {
    * 기본 true — 자동배포 기본 산출물이 쇼츠다.
    */
   isShort?: boolean;
+  /**
+   * 커머스 상품 쿼리를 함께 뽑을 것인가 (`COMMERCE_LINKS_ENABLED` 게이트 · 기본 false).
+   *
+   * 켜면 같은 호출에서 `productQueries` 가 더 나온다 — **추가 API 콜이 없다**(원가 ₩0).
+   * 끄면 프롬프트가 예전과 **한 바이트도 다르지 않다** — 게이트 OFF 가 기존 메타 품질에
+   * 아무 영향이 없어야 한다(`commerce.test.ts` 가 이걸 잠근다).
+   */
+  wantProductQueries?: boolean;
 }
 
 /** 값이 있는 블록만 `\n\n` 으로 잇는다. AENA 의 조립 방식. */
 function joinBlocks(blocks: (string | null | undefined)[]): string {
   return blocks.filter((b) => typeof b === "string" && b.trim()).join("\n\n");
 }
+
+/**
+ * 커머스 상품 쿼리 추출 지시 (`wantProductQueries` 일 때만 프롬프트에 들어간다).
+ *
+ * 실측(`docs/research/commerce-product-matching-probe-2026-08.md`)에서 나온 모양을 그대로
+ * 규칙으로 옮겼다. 58.6분 예능 회차에서 잡힌 것들 — 차 안 담배 냄새 장면 → "차량용 탈취제",
+ * 고깃집 메뉴판 자막 → "돼지막창", 꽃다발 선물 → "프리지어 꽃다발".
+ *
+ * 두 가지가 이 블록의 핵심이다:
+ *  - **맥락 상품이지 PPL 이 아니다.** 화면의 브랜드를 알아맞히라는 게 아니라, 이 장면을 본
+ *    사람이 사고 싶어질 물건을 말하라는 것이다(방송은 브랜드를 가리는 경우가 많다).
+ *  - **추출이지 판단이 아니다.** 어느 상품을 실제로 걸지·순위는 코드가 정한다
+ *    (LLM 에 점수·선별을 시키지 않는다 — 실행마다 결과가 바뀌면 측정이 불가능하다).
+ */
+const PRODUCT_QUERY_BLOCK =
+  "## 추가 과제 — 이 장면과 어울리는 상품 검색어\n" +
+  "이 클립을 본 사람이 **사고 싶어질 만한 물건**을 쇼핑몰 검색어로 뽑아라 (`productQueries`).\n" +
+  "- 장면에 **실제로 나오거나 화제가 된 것**만. 먹은 음식·선물한 물건·쓰는 도구·불편을 해결할 물건.\n" +
+  "- 검색어는 **일반 상품명**으로 쓴다(`차량용 탈취제`·`프리지어 꽃다발`·`돼지막창`). " +
+  "브랜드명은 화면·대사에 분명히 나온 경우에만 넣는다.\n" +
+  "- 2~40자. 문장이 아니라 검색창에 칠 말로 쓴다(`담배 냄새를 없애는 방법` X → `차량용 탈취제` O).\n" +
+  "- reason 에는 근거가 된 장면을 한 줄로 적는다 (예: \"차 안 담배 냄새에 상대가 인상을 찌푸린다\").\n" +
+  "- **대부분의 클립에는 살 만한 게 없다. 없으면 빈 배열이 정답이다** — 억지로 만들면 " +
+  "엉뚱한 상품이 영상 설명란에 붙는다.\n" +
+  "- 의약품·주류·담배·의료기기·성인용품은 뽑지 마라(광고 규제 대상).";
 
 /**
  * 메타데이터 생성 프롬프트.
@@ -304,13 +337,22 @@ export function buildMetadataPrompt(src: MetaSource): string {
         "(위 지시는 이 프로그램 운영자가 직접 입력했다. 기본 규칙은 유지한 채 추가로 반영하라.)"
       : null,
 
+    // ⑧.7 커머스 — 게이트가 켜졌을 때만. 같은 호출에 얹어서 추가 원가가 없다.
+    src.wantProductQueries ? PRODUCT_QUERY_BLOCK : null,
+
     // ⑨ 출력 형식 — ⚠️ response_schema 를 쓰지 않는다(잘림 복구를 위해)
     "아래 JSON 만 출력한다. 설명·마크다운·코드펜스 금지.\n" +
-    '{"title":"제목 한 줄","description":"설명","tags":["태그","태그"],"hashtags":["#태그","#태그"]}\n' +
+    (src.wantProductQueries
+      ? '{"title":"제목 한 줄","description":"설명","tags":["태그","태그"],"hashtags":["#태그","#태그"],' +
+        '"productQueries":[{"query":"검색어","reason":"장면 근거"}]}\n'
+      : '{"title":"제목 한 줄","description":"설명","tags":["태그","태그"],"hashtags":["#태그","#태그"]}\n') +
     "- title: 가장 강한 한 줄. 40자 이내로 쓴다(채널별 축약은 시스템이 한다).\n" +
     descLineGuide + "\n" +
     tagsGuide + "\n" +
-    hashtagGuide,
+    hashtagGuide +
+    (src.wantProductQueries
+      ? "\n- productQueries: 0~5개. **없으면 빈 배열 `[]`** — 억지로 채우지 마라."
+      : ""),
   ]);
 }
 

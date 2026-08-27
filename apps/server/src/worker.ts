@@ -102,6 +102,8 @@ import { openSession } from "./naver-session-store.ts";
 import { uploadToNaver, NAVER_TARGETS, type NaverTarget } from "./naver-tv.ts";
 import { prepareWorkPath, cleanupWorkFile, sweepStaleWorkFiles } from "./naver-workdir.ts";
 import { upsertDistribution } from "./publish-guard.ts";
+import { commerceLinksEnabled, usableLinks, withCommerceLinks } from "./commerce.ts";
+import { issueCoupangLinks, PartnersUnavailableError } from "./coupang-partners.ts";
 import {
   FRESH_VIDEO_WINDOW_MS,
   VIDEO_ANALYZE_FRESH_INTERVAL_MS,
@@ -126,7 +128,7 @@ const TICK_INTERVAL_MS = 15 * 60 * 1000;
  * heavy content.analyze (STT/vision, minutes) no longer blocks the flood of light video.*
  * jobs, and vice versa. Unset / "all" keeps the legacy single worker that drains everything.
  */
-const JOB_LANES: Record<"content" | "youtube" | "gebd" | "naver" | "download", JobType[]> = {
+const JOB_LANES: Record<"content" | "youtube" | "gebd" | "naver" | "download" | "commerce", JobType[]> = {
   // match.align도 content 레인 — 파이썬·ffmpeg로 오디오를 돌리는 무거운 잡이라
   // YouTube API 레인(짧고 쿼터 위주)에 섞으면 그쪽을 막는다.
   // thumbnail.* 도 content 레인. 성격이 같다 — core/thumbnail 파이썬을 스폰하고 이미지 생성
@@ -160,6 +162,11 @@ const JOB_LANES: Record<"content" | "youtube" | "gebd" | "naver" | "download", J
   // gebd 는 GPU T4 spot VM 전용 lane. content lane 이 이 잡을 claim 하면 GPU 없는 곳에서
   // Docker mmaction2 를 못 돌린다. 그래서 별도 프로세스 (WORKER_JOBS=gebd) 로만 픽업.
   gebd: ["gebd.detect"],
+  // commerce 도 **머신 전용 lane** — naver 와 같은 이유다. 쿠팡파트너스는 최종승인 전까지
+  // 공개 API 가 없어 로그인된 콘솔을 브라우저로 몰아야 하는데, 그 세션은 특정 PC 의 크롬
+  // 프로필에만 산다(쿠키를 클라우드로 올리지 않는다 — 고객사 자격증명을 우리가 보관하지
+  // 않는다는 원칙). 승인 후 공식 딥링크 API 로 바뀌면 이 레인은 없어지고 클라우드로 간다.
+  commerce: ["commerce.link"],
 };
 /**
  * Drain mode — Cloud Run Jobs 용. 큐가 빌 때까지 처리하고 **종료**한다.
@@ -185,6 +192,7 @@ const CLAIM_TYPES: JobType[] | undefined =
   : WORKER_JOBS === "gebd" ? JOB_LANES.gebd
   : WORKER_JOBS === "naver" ? JOB_LANES.naver
   : WORKER_JOBS === "download" ? JOB_LANES.download
+  : WORKER_JOBS === "commerce" ? JOB_LANES.commerce
   // 윈도우2 는 네이버 발행과 유튜브 다운로드를 한 프로세스로 돌린다(런처가 고정).
   : WORKER_JOBS === "naver,download" || WORKER_JOBS === "download,naver"
     ? [...JOB_LANES.naver, ...JOB_LANES.download]
@@ -199,7 +207,7 @@ const CLAIM_TYPES: JobType[] | undefined =
 // 못 박는데(worker-naver.mts), 예전 판정은 정확히 "naver" 일 때만 걸러서 사무실 PC 가
 // 자동배포 순방과 채널 스윕까지 돌리고 있었다 — 프로덕션 자동배포 주기가 Cloud Scheduler
 // 가 아니라 그 PC 의 가동 여부에 좌우된다는 뜻이다. CLAIM_TYPES·YT_FREE 와 같은 방식.
-const NO_SWEEP = new Set(["content", "gebd", "naver", "download", "naver,download", "download,naver"]);
+const NO_SWEEP = new Set(["content", "gebd", "naver", "download", "naver,download", "download,naver", "commerce"]);
 const RUNS_SWEEP = !NO_SWEEP.has(WORKER_JOBS);
 
 let stopping = false;
@@ -293,6 +301,7 @@ async function handle(job: Job): Promise<FollowUp | void> {
     case "factory.orchestrate": return handleFactoryOrchestrate(job);
     case "factory.publicize": return handleFactoryPublicize(job);
     case "clip.metadata": return handleClipMetadata(job);
+    case "commerce.link": return handleCommerceLink(job);
     case "thumbnail.style": return handleThumbnailStyle(job);
     case "thumbnail.generate": return handleThumbnailGenerate(job);
     default:
@@ -1302,6 +1311,81 @@ async function handleClipMetadata(job: Job): Promise<void> {
   }
 }
 
+/**
+ * 쿠팡 제휴 링크 발급 — 클립의 상품 쿼리(`clip.commerce.queries`)로 링크를 만들어 붙인다.
+ *
+ * **머신 전용 레인**(WORKER_JOBS=commerce). 로그인된 파트너스 콘솔이 뜬 PC 에서만 돈다.
+ * ⚠️ 게이트를 켰는데 이 레인 워커를 안 띄우면 잡이 **조용히 pending 으로 쌓인다** —
+ *    이 리포의 전형적 실패 모드다. 게이트를 켤 때 워커도 같이 띄울 것.
+ *
+ * 발행을 막지 않는 것이 설계 원칙이다: 링크가 늦거나 실패해도 쇼츠는 그대로 나가고
+ * (`withCommerceLinks` 가 링크 없으면 원문을 돌려준다), 나중에 붙으면 그때부터 붙는다.
+ */
+async function handleCommerceLink(job: Job): Promise<void> {
+  const clipId = String(job.payload.clipId ?? "");
+  if (!clipId) { console.error("[worker] commerce.link: clipId 누락 — 버림"); return; }
+
+  // 킬스위치 — 켜져 있는 동안 큐잉됐다가 꺼진 뒤 남은 잡을 막는다. throw 금지(재시도만 쌓인다).
+  if (!commerceLinksEnabled()) {
+    console.warn(`[worker] commerce.link ${clipId}: blocked — 커머스 링크 비활성(COMMERCE_LINKS_ENABLED)`);
+    return;
+  }
+
+  const clip = await getEntity<any>("clip", clipId);
+  if (!clip) { console.warn(`[worker] commerce.link: clip ${clipId} 없음 — 버림`); return; }
+
+  const queries: string[] = Array.isArray(clip.commerce?.queries)
+    ? clip.commerce.queries.map((q: any) => String(q?.query ?? q ?? "").trim()).filter(Boolean)
+    : [];
+  if (queries.length === 0) {
+    console.log(`[worker] commerce.link ${clipId}: 상품 쿼리가 없다 — 할 일 없음`);
+    return;
+  }
+
+  // 이미 발급된 쿼리는 건너뛴다 — 재실행이 링크를 중복 생성하지 않게(멱등).
+  const existing = usableLinks(clip.commerce?.links, Number.MAX_SAFE_INTEGER);
+  const done = new Set(existing.map((l) => l.query.toLowerCase()));
+  const todo = queries.filter((q) => !done.has(q.toLowerCase()));
+  if (todo.length === 0) {
+    console.log(`[worker] commerce.link ${clipId}: 이미 전부 발급됨 (${existing.length}건)`);
+    return;
+  }
+
+  let results;
+  try {
+    results = await issueCoupangLinks(todo);
+  } catch (e) {
+    if (e instanceof PartnersUnavailableError) {
+      // 브라우저·로그인 문제는 재시도할 가치가 있다(사람이 크롬을 켜면 다음 시도에 붙는다).
+      // 큐 백오프에 맡기고 던진다 — 대신 사유가 로그에 그대로 남는다.
+      console.error(`[worker] commerce.link ${clipId}: ${e.message}`);
+      throw e;
+    }
+    throw e;
+  }
+
+  const fresh = (await getEntity<any>("clip", clipId)) ?? clip;
+  const merged = [...usableLinks(fresh.commerce?.links, Number.MAX_SAFE_INTEGER)];
+  const seen = new Set(merged.map((l) => l.query.toLowerCase()));
+  for (const r of results) {
+    if (r.ok && r.link && !seen.has(r.link.query.toLowerCase())) {
+      merged.push(r.link);
+      seen.add(r.link.query.toLowerCase());
+    }
+  }
+  await putEntity("clip", clipId, {
+    ...fresh,
+    commerce: { ...(fresh.commerce ?? {}), links: merged, linkedAt: Date.now() },
+  });
+
+  const okCount = results.filter((r) => r.ok).length;
+  const failed = results.filter((r) => !r.ok);
+  console.log(
+    `[worker] commerce.link ${clipId}: ${okCount}/${todo.length}건 발급 (총 ${merged.length}건)` +
+      (failed.length ? ` · 실패: ${failed.map((f) => `${f.query}(${f.reason})`).join(" / ")}` : ""),
+  );
+}
+
 async function handleThumbnailStyle(job: Job): Promise<void> {
   const programId = String(job.payload.programId ?? "");
   // 재생목록 URL 을 권한다 — 큰 채널은 프로그램·기수가 재생목록으로 나뉘어 있고,
@@ -1877,17 +1961,26 @@ function stripSpeakerLabels(s: string): string {
 }
 
 function metaForChannel(clip: any, channel: string): { title: string; description: string; tags?: string[] } {
+  // 커머스 제휴 링크 + 대가성 문구는 **여기서** 붙는다 — 발행 직전 조립 시점이다.
+  //
+  // 저장된 설명 본문에 미리 구워 넣지 않는 이유가 둘이다:
+  //  ① 대가성 문구는 사람이 지울 수 없어야 한다. 편집 화면에 노출되는 값에 넣으면 언젠가
+  //     지워지고, 그 순간 고객사의 파트너스 계정이 정지된다(누락 = 정지 사유).
+  //  ② 링크 발급이 늦어도 발행이 안 막힌다. 링크가 없으면 원문을 그대로 돌려준다.
+  // 게이트 OFF·링크 없음·YouTube 외 채널이면 아무것도 하지 않는다(commerce.ts).
+  const withLinks = (description: string) => withCommerceLinks(description, clip?.commerce?.links, channel);
+
   const m = clip?.channelMeta?.[channel];
   if (m && (m.title || m.description)) {
     return {
       title: stripSpeakerLabels(String(m.title ?? clip.title ?? "무제 클립")),
-      description: stripSpeakerLabels(String(m.description ?? "")),
+      description: withLinks(stripSpeakerLabels(String(m.description ?? ""))),
       tags: Array.isArray(m.tags) && m.tags.length ? m.tags : undefined,
     };
   }
   return {
     title: stripSpeakerLabels(String(clip?.title ?? "무제 클립")),
-    description: stripSpeakerLabels(String(clip?.synopsis ?? "")),
+    description: withLinks(stripSpeakerLabels(String(clip?.synopsis ?? ""))),
     tags: Array.isArray(clip?.tags) ? clip.tags : undefined,
   };
 }
@@ -2107,7 +2200,11 @@ async function handleDistributionUpdateMeta(job: Job): Promise<void> {
   const saved = clip.channelMeta?.youtube ?? null;
   const base = metaForChannel(clip, "youtube");
   const title = (String(saved?.title ?? base.title ?? "").trim()) || base.title;
-  const description = String(saved?.description ?? base.description ?? "");
+  // ⚠️ 저장본(saved)을 그대로 쓰면 커머스 블록이 **벗겨진다** — metaForChannel 이 붙인 것을
+  //    우회하는 경로이기 때문이다. 이미 붙어 있으면 그냥 통과하므로(멱등) 여기서 한 번 더 건다.
+  //    안 그러면 "발행 땐 링크가 있었는데 제목 수정 한 번에 링크·대가성 문구가 사라지는" 사고가 난다.
+  const description = withCommerceLinks(
+    String(saved?.description ?? base.description ?? ""), clip?.commerce?.links, "youtube");
   const tags = Array.isArray(saved?.tags) && saved.tags.length ? saved.tags : base.tags;
 
   try {

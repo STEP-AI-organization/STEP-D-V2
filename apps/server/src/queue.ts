@@ -57,6 +57,10 @@ export type JobType =
   | "thumbnail.style"
   // 썸네일: 회차 1건 → 후보 N장. 인물은 사람이 등록한 사진에서만 가져온다.
   | "thumbnail.generate"
+  // 커머스: 클립의 상품 쿼리로 쿠팡 제휴 링크를 발급한다 (`COMMERCE_LINKS_ENABLED` 게이트).
+  // 로그인된 파트너스 콘솔을 브라우저로 몰기 때문에 **머신 전용 레인**(commerce)이다.
+  // 최종승인(누적 판매 15만원) 후 공식 딥링크 API 로 바뀌면 클라우드 레인으로 옮긴다.
+  | "commerce.link"
   // GEBD: 장면 경계 탐지 (mmaction2). content.analyze 가 boundaries 필요 구간에 enqueue
   // → GEBD 전용 T4 GPU VM 이 픽업 → boundaries.json GCS 업로드 → content.analyze 재개.
   // 별도 lane (WORKER_JOBS=gebd) · 다른 워커는 이 잡을 claim 하지 않는다.

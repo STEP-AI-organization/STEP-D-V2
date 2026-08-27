@@ -61,7 +61,7 @@ Hono 단일 진입점(index.ts, **~8700줄, 라우트 231개**) + 별도 워커 
 | 파일 | 역할 |
 |------|------|
 | `src/index.ts` | 모든 HTTP 라우트. 여기 한 파일에 유지. **Cloud Run은 잡을 큐잉만 한다.** |
-| `src/worker.ts` | **워커 프로세스 진입점.** 잡 23종 · 레인 4개 · drain 모드 (아래 참조) |
+| `src/worker.ts` | **워커 프로세스 진입점.** 잡 24종 · 레인 6개 · drain 모드 (아래 참조) |
 | `src/queue.ts` | Postgres job_queue (FOR UPDATE SKIP LOCKED · dedupeKey · 지수 백오프 · 5분 하트비트) |
 | `src/channel-pipeline.ts` | channel.analyze — 업로드 동기화 + 채널 애널리틱스/일별 수익 백필 |
 | `src/content-pipeline.ts` | content.analyze — `python -m core.analyze` 스폰, 진행률 파싱(@@PROGRESS→episode.pipeline), 결과+프레임 영구 저장, 추천 배선. 미디어별 고정 작업 디렉토리로 재시도 시 체크포인트 재개 |
@@ -78,7 +78,7 @@ Hono 단일 진입점(index.ts, **~8700줄, 라우트 231개**) + 별도 워커 
 
 `src/pipeline.ts`는 이제 `newId` 헬퍼만 export한다(구 sqlite `db.ts`·`storage.ts`, 휴리스틱 `buildRecommendations()`는 정리 완료). 실제 추천은 core/ AI 파이프라인이 만든다.
 
-### 워커 — 잡 23종 · 레인 4개 · drain 모드
+### 워커 — 잡 24종 · 레인 6개 · drain 모드
 
 프로세스 하나가 다 처리하지 않는다. `WORKER_JOBS` 로 **레인을 갈라** 서로 굶기지 않게 한다.
 
@@ -98,6 +98,11 @@ download: youtube.download
           → 윈도우2(naver 와 같은 PC) 전용 — 2026-08-14 이동. 유튜브가 데이터센터 IP 를
             봇으로 판정해(쿠키 물려도) 다운로드 상시 실패 → 한국 IP 가 받아 GCS 로 올리고
             분석은 클라우드 content 레인이 잇는다. 런처 worker:naver 가 naver,download 고정
+commerce: commerce.link
+          → 로그인된 쿠팡파트너스 콘솔이 뜬 PC 전용 (2026-08-27 추가). 파트너스 공개 API 는
+            **최종승인(누적 판매 15만원) 후에야** 나와서, 그 전까지는 콘솔 내부 API 를
+            CDP 로 붙어 부른다. 세션은 그 PC 전용 크롬 프로필에만 둔다.
+            승인 후 공식 딥링크 API 로 바뀌면 이 레인은 없어지고 클라우드로 간다.
 ⚠️ 2026-08-12 이전에는 thumbnail.* 가 **어느 레인에도 없어** 프로덕션(content·youtube 워커만
    뜬다)에서 아무도 집지 않았다. 잡을 추가하면 반드시 레인에 넣을 것 —
    `worker-lanes.test.ts` 가 강제한다.
@@ -170,10 +175,15 @@ REFRAME_FACE_MODEL / REFRAME_PIPELINE_VERSION   AI 리프레임 모델 경로·�
 STT_PROVIDER          프로덕션 soniox (SONIOX_API_KEY 필요) · gemini · whisper(로컬 GPU)
 GOOGLE_CLOUD_PROJECT(기본 step-d) / VERTEX_LOCATION(기본 asia-northeast3)   Vertex Gemini
 EMBED_MODEL / EMBED_DIM                   검색 임베딩 (기본 text-multilingual-embedding-002 · 768)
-WORKER_JOBS           content | youtube | gebd | all(기본)   ← 레인 선택
+WORKER_JOBS           content | youtube | gebd | naver,download | commerce | all(기본)  ← 레인 선택
 WORKER_MODE           drain 이면 큐 비는 즉시 종료 / DRAIN_MAX_MS(기본 50분)
 YOUTUBE_UPLOAD_ENABLED   실업로드 게이트. 미설정·오타·빈값 = OFF
 TIKTOK_UPLOAD_ENABLED    TikTok 받은함 드래프트 업로드 게이트. 기본 OFF · 오타=OFF
+COMMERCE_LINKS_ENABLED   쿠팡 제휴 링크 게이트. 기본 OFF · 오타=OFF. 켜면 ① generate-metadata 가
+                      상품 쿼리를 같이 뽑고(추가 원가 ₩0 · 같은 호출) ② commerce.link 잡이
+                      링크를 발급하고 ③ **YouTube 설명란에만** 링크+대가성 문구가 붙는다.
+                      ⚠️ 켤 때 commerce 레인 워커도 같이 띄울 것 — 안 그러면 잡이 조용히 쌓인다
+COUPANG_CDP_URL       로그인된 파트너스 크롬의 CDP 주소 (기본 http://127.0.0.1:9223)
 GEBD_IMAGE / GEBD_MODEL / GEBD_ASSETS / GEBD_CHUNK_SEC(300) / GEBD_CORES(1)   GPU VM
 GEBD_VM_NAME / GEBD_VM_ZONE · WORKER_VM_NAME / WORKER_VM_ZONE   /admin/*-vm/wake 대상
 META_APP_ID / META_APP_SECRET / META_REDIRECT_URI                Meta OAuth (Facebook Page 전용)

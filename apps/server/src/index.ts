@@ -309,6 +309,7 @@ import {
   META_CHANNELS, CHANNEL_SPECS, type MetaChannel,
 } from "./clip-metadata.ts";
 import { naverUploadEnabled, NAVER_DISABLED_MESSAGE, DESC_MIN } from "./naver-gate.ts";
+import { commerceLinksEnabled, parseProductQueries } from "./commerce.ts";
 import {
   initialPipeline,
   isoDateOrToday,
@@ -8003,6 +8004,9 @@ app.post("/api/clips/:id/generate-metadata", async (c) => {
     // 프로그램별 운영자 커스텀 제목 지시 — PATCH /api/programs/:id 로 저장된 것.
     titlePrompt: typeof program?.titlePrompt === "string" ? program.titlePrompt : undefined,
     isShort: isShortClip,
+    // 커머스 게이트가 켜졌을 때만 상품 쿼리를 같이 뽑는다 — **같은 호출**이라 추가 원가가 없다.
+    // 꺼져 있으면 프롬프트가 종전과 완전히 동일하다(메타 품질에 영향 없음).
+    wantProductQueries: commerceLinksEnabled(),
   });
 
   try {
@@ -8048,13 +8052,39 @@ app.post("/api/clips/:id/generate-metadata", async (c) => {
       if (prev[ch]?.edited) byChannel[ch] = prev[ch];
     }
 
+    // 커머스 — 게이트가 켜졌을 때만. 같은 응답에 실려 온 상품 쿼리를 클립에 붙이고
+    // 발급 잡을 큐잉한다. **이미 발급된 링크는 살린다** — 메타를 다시 만든다고 브라우저를
+    // 한 번 더 태울 이유가 없다. 다만 쿼리 목록에서 빠진 상품의 링크는 버린다(장면과
+    // 무관해진 상품이 설명란에 남는 게 더 나쁘다).
+    const commerce = commerceLinksEnabled()
+      ? (() => {
+          const queries = parseProductQueries(parsed.productQueries);
+          const keep = new Set(queries.map((q) => q.query.toLowerCase()));
+          const prevLinks = Array.isArray((clip.commerce as any)?.links) ? (clip.commerce as any).links : [];
+          return {
+            queries,
+            links: prevLinks.filter((l: any) => keep.has(String(l?.query ?? "").toLowerCase())),
+            updatedAt: Date.now(),
+          };
+        })()
+      : clip.commerce;
+
     await putEntity("clip", clipId, {
       ...clip,
       channelMeta: byChannel,
       channelMetaBase: baseMeta,
       channelMetaAt: Date.now(),
+      ...(commerce ? { commerce } : {}),
     });
-    return c.json({ base: baseMeta, channels: byChannel });
+
+    // 발급 잡은 **머신 전용 레인**(commerce)이 집는다 — 로그인된 브라우저가 있는 PC 만
+    // 처리할 수 있다. 게이트가 꺼져 있으면 큐잉 자체를 안 하므로 잡이 고이지 않는다.
+    if (commerceLinksEnabled() && (commerce as any)?.queries?.length) {
+      void enqueue("commerce.link", { clipId }, { dedupeKey: `commerce.link:${clipId}` })
+        .catch((e) => console.warn("[generate-metadata] commerce.link 큐잉 실패:", e));
+    }
+
+    return c.json({ base: baseMeta, channels: byChannel, commerce: commerce ?? undefined });
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e);
     console.error("[generate-metadata] 실패:", msg);
