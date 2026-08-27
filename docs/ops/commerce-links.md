@@ -173,15 +173,23 @@ commerce_account (tenant_id · RLS · migrations/0045)
 
 ## 7. 운영
 
-### 회사 하나 붙이기
+### 회사 하나 붙이기 — 웹에서 시작한다
 
 1. 그 회사가 **자기 법인 명의로** 쿠팡파트너스 가입
-2. 윈도우2(또는 GUI 되는 PC)에서
-   ```
-   pnpm --filter @stepd/server commerce:login -- --api <서버> --web https://stepd.stepai.kr --label "회사이름"
-   ```
-   브라우저가 뜨고 **두 번 로그인** — STEP D(어느 워크스페이스인지) · 파트너스(어느 계정인지)
-3. 끝. 그 워크스페이스의 링크는 이제 그 계정으로 발급된다
+2. 웹 `/publish-channels` → 쿠팡파트너스 카드 → **"⬇ 쿠팡 로그인 도우미 다운로드"**
+3. 받은 exe 를 더블클릭 → 브라우저가 뜨고 **두 번 로그인** —
+   STEP D(어느 워크스페이스인지) · 파트너스(어느 계정인지)
+4. 끝. 카드가 "연결됨" 으로 바뀌고, 그 워크스페이스의 링크는 이제 그 계정으로 발급된다
+
+> **왜 exe 를 받아야 하나 — 웹만으로는 불가능하다.** 세션을 받으려면 쿠팡 도메인의 쿠키를
+> 읽어야 하는데, `stepd.stepai.kr` 페이지는 교차 출처라 절대 못 읽는다(iframe 도 막힌다).
+> 브라우저를 우리가 띄워야만 읽을 수 있어서, 네이버가 쓰는 것과 **같은 구조**의 작은
+> 실행파일을 내려준다. pnpm·리포가 없는 PC 에서도 더블클릭으로 끝난다.
+> 개발자는 `pnpm --filter @stepd/server commerce:login` 도 쓸 수 있다(카드의 '개발자용' 접기).
+>
+> 도우미 빌드·배포: `bun build --compile --target=bun-windows-x64 scripts/coupang-login-tool.mts
+> --outfile stepd-coupang-login.exe` → `gs://stepd-media/tools/stepd-coupang-login.exe`
+> (⚠️ 113MB · `.gitignore` 로 커밋 제외. `--smoke`·`--launch-test` 로 빌드 후 검증)
 
 ⚠️ 등록하는 계정이 곧 **커미션을 받는 계정**이다. 워크스페이스와 계정이 짝이 맞는지 확인할 것.
 

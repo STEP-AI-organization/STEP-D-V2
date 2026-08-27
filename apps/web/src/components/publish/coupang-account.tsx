@@ -255,18 +255,33 @@ export function CoupangAccount() {
           {!hasSession && (
             <div className="mt-3 border-t border-border pt-3">
               <p className="text-[11px] leading-relaxed text-muted-foreground">
-                <b className="text-foreground">로그인하는 법.</b> 아래 명령을 실행하면 브라우저가
-                뜹니다 → ① STEP D 로그인(어느 워크스페이스인지) → ② 쿠팡파트너스 로그인(어느
-                계정인지). 끝나면 세션이 자동으로 여기 등록됩니다. 아이디·비밀번호는 브라우저에만
-                들어가고 서버로 오지 않습니다.
+                <b className="text-foreground">로그인하는 법.</b> ① 아래 버튼으로{" "}
+                <b className="text-foreground">로그인 도우미</b>를 내려받아 실행 → ② 뜨는
+                브라우저에서 STEP D 로그인 → ③ 쿠팡파트너스 로그인. 끝나면 세션이 자동으로 여기
+                등록됩니다. 아이디·비밀번호는 브라우저에만 들어가고 서버로 오지 않습니다.
               </p>
-              <code className="mt-2 block overflow-x-auto rounded-md bg-muted px-2.5 py-2 text-[11px] text-foreground">
-                pnpm --filter @stepd/server commerce:login -- --api {cmd.api} --web {cmd.web} --label &quot;{account.label}&quot;
-              </code>
+              <a
+                href={`${process.env.NEXT_PUBLIC_API_URL ?? "/api"}/commerce/login-tool`}
+                className="mt-2 inline-flex items-center gap-1.5 rounded-md border border-border bg-muted px-3 py-1.5 text-xs font-medium text-foreground transition hover:bg-accent/40"
+              >
+                ⬇ 쿠팡 로그인 도우미 다운로드 (Windows)
+              </a>
               <p className="mt-1.5 text-[11px] leading-relaxed text-muted-foreground">
-                ⚠️ 화면이 있는 PC 에서 실행해야 합니다 — 쿠팡은 창 없는 브라우저(headless)를
-                차단합니다. 또는 위 &quot;로그인 세션 등록&quot; 으로 storageState JSON 을 직접 올려도 됩니다.
+                ⚠️ 여기서 로그인한 계정으로 <b className="text-foreground">커미션이 정산</b>됩니다 —
+                이 회사 법인 계정이 맞는지 확인하세요.
               </p>
+              <details className="mt-2">
+                <summary className="cursor-pointer text-[11px] text-muted-foreground">
+                  개발자용 — 명령줄 / 세션 파일 등록
+                </summary>
+                <code className="mt-1.5 block overflow-x-auto rounded-md bg-muted px-2.5 py-2 text-[11px] text-foreground">
+                  pnpm --filter @stepd/server commerce:login -- --api {cmd.api} --web {cmd.web} --label &quot;{account.label}&quot;
+                </code>
+                <p className="mt-1.5 text-[11px] leading-relaxed text-muted-foreground">
+                  또는 위 &quot;로그인 세션 등록&quot; 버튼으로 Playwright storageState JSON 을 직접 올립니다.
+                  ⚠️ 화면이 있는 PC 여야 합니다 — 쿠팡은 창 없는 브라우저(headless)를 차단합니다.
+                </p>
+              </details>
             </div>
           )}
         </Card>

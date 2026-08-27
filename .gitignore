@@ -82,3 +82,6 @@ core/refined_segments.json
 core/refined_transcript.srt
 core/scene_frames/
 core/clips_review/
+
+# 로그인 도우미 빌드 산출물 — 113MB 바이너리다. GCS(tools/)로만 배포하고 커밋하지 않는다.
+apps/server/*.exe

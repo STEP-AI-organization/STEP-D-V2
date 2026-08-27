@@ -8294,6 +8294,21 @@ app.put("/api/commerce/account/session", async (c) => {
   return c.json({ ok: true, id: acct.id, status: "active", sessionUpdatedAt: Date.now() });
 });
 
+/**
+ * 로그인 도우미(exe) 다운로드 — **웹에서 쿠팡 로그인을 시작하는 정상 경로.**
+ *
+ * 웹페이지만으로는 불가능하다: 세션을 받으려면 쿠팡 도메인 쿠키를 읽어야 하는데 교차 출처라
+ * 브라우저가 절대 안 준다. 그래서 브라우저를 우리가 띄우는 작은 실행파일을 내려준다
+ * (네이버가 같은 이유로 같은 구조 — `/api/naver/login-tool`).
+ */
+app.get("/api/commerce/login-tool", async (c) => {
+  const obj = "tools/stepd-coupang-login.exe";
+  if (!useGcs() || !(await fileExists(obj))) {
+    return c.json({ error: "tool_not_uploaded", message: "도구가 아직 업로드되지 않았습니다 — 운영팀에 문의하세요." }, 404);
+  }
+  return c.redirect(await signedReadUrl(obj, 10 * 60_000, "stepd-coupang-login.exe"));
+});
+
 /** 세션 폐기(= 그 계정으로의 발급 중단). 계정 행은 남는다. */
 app.delete("/api/commerce/account/session", async (c) => {
   requireManager(c);
