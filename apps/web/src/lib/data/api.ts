@@ -3103,3 +3103,36 @@ export async function fetchCommerceAccount(): Promise<{
   if (!res.ok) throw new ApiError(res.status, await errorMessageOf(res));
   return (await res.json()) as { account: CommerceAccount | null; sessionKeyReady: boolean; enabled: boolean };
 }
+
+/** 계정 등록·수정(라벨·상태). 자격증명은 여기로 안 들어간다 — 세션은 아래 전용 함수로만. */
+export async function saveCommerceAccount(
+  label: string,
+  status?: CommerceAccount["status"],
+): Promise<{ account: CommerceAccount | null }> {
+  const res = await fetch(`${API_BASE}/commerce/account`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ label, ...(status ? { status } : {}) }),
+  });
+  if (!res.ok) throw new ApiError(res.status, await errorMessageOf(res));
+  return (await res.json()) as { account: CommerceAccount | null };
+}
+
+/**
+ * 로그인 세션(storageState) 등록.
+ * ⚠️ 이 값은 그 계정의 **전체 권한**이다 — 화면 state 에 담지 말고 읽어서 곧장 보낼 것.
+ */
+export async function uploadCommerceSession(storageState: unknown): Promise<void> {
+  const res = await fetch(`${API_BASE}/commerce/account/session`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ storageState }),
+  });
+  if (!res.ok) throw new ApiError(res.status, await errorMessageOf(res));
+}
+
+/** 세션 폐기 = 그 계정으로의 발급 중단. 계정 행은 남는다. */
+export async function clearCommerceSession(): Promise<void> {
+  const res = await fetch(`${API_BASE}/commerce/account/session`, { method: "DELETE" });
+  if (!res.ok) throw new ApiError(res.status, await errorMessageOf(res));
+}

@@ -31,6 +31,7 @@ import {
   saveChannelRule,
 } from "@/lib/data/api";
 import { NaverAccounts } from "@/components/publish/naver-accounts";
+import { CoupangAccount } from "@/components/publish/coupang-account";
 import { ChannelAnalysis } from "@/components/channel-analysis";
 import {
   DISTRIBUTION_CHANNELS,
@@ -400,6 +401,10 @@ export default function PublishChannelsPage() {
       </section>
 
       <NaverAccounts onChange={setNaverAccounts} />
+
+      {/* 쿠팡파트너스 — 네이버와 같은 성격(공개 API 없음 → 로그인 세션).
+          워크스페이스마다 연결됐는지 여기서 보고, 안 됐으면 여기서 로그인한다. */}
+      <CoupangAccount />
 
       {/* Facebook: Meta OAuth — Page 단위. IG 는 아래 전용 섹션(비즈니스 로그인)으로 분리됨. */}
       <section className="mb-10">
