@@ -8,10 +8,16 @@ import { randomUUID } from "node:crypto";
 import pg from "pg";
 import { seed } from "./seed.ts";
 import { ALL_TENANTS, DEFAULT_TENANT_ID, currentScope, runAsSystem, runWithTenant } from "./tenant.ts";
+import { installKstTimestampParser } from "./kst.ts";
 // 자동 충전 알림의 **모양·사유 목록·유효기간은 credits.ts(순수)가 정본**이다 — 여기선 저장만 한다.
 import { AUTO_TOPUP_CODES, liveAutoTopupAlert, type AutoTopupAlert } from "./credits.ts";
 
 const { Pool } = pg;
+
+// 시각은 **서버가 KST 로 내보낸다.** Cloud Run 이 UTC 라, 이걸 안 하면 TIMESTAMPTZ 가
+// `...Z` 로 나가고 화면이 그걸 잘라 쓰면서 9시간 밀린다(실측 2026-08-27 · kst.ts 참고).
+// 표시 지점마다 고치는 대신 여기 한 번으로 끝낸다 — 저장은 그대로라 기록은 안 바뀐다.
+installKstTimestampParser(pg.types);
 
 export type EntityKind = "program" | "episode" | "recommendation" | "clip" | "job" | "factoryJob";
 
