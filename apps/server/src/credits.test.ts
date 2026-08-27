@@ -196,10 +196,19 @@ describe("멱등 — 두 번 충전·두 번 차감 금지", () => {
 describe("충전 주문 — 금액은 서버가 계산한다", () => {
   const env = { CREDIT_PRICE_KRW: "50" } as NodeJS.ProcessEnv;
 
-  it("크레딧 × 단가", () => {
+  it("크레딧 × 단가 — 단가는 공급가액이고 청구액엔 부가세가 붙는다", () => {
+    // 2026-08-27 확정: CREDIT_PRICE_KRW 는 **공급가액**이다(부가세 별도).
+    // 예전엔 총액을 부가세 포함으로 봐서 60원/개가 실수령 54.5원이 됐다.
     const r = buildTopup(600, env);
     assert.equal(r.ok, true);
-    assert.equal(r.ok === true && r.amountKrw, 30000);
+    assert.equal(r.ok === true && r.supplyKrw, 30_000, "공급가액 = 크레딧 × 단가");
+    assert.equal(r.ok === true && r.vatKrw, 3_000, "세액 = 공급가액의 10%");
+    assert.equal(r.ok === true && r.amountKrw, 33_000, "청구액 = 공급가액 + 세액");
+    // 고정 정책 수량(5,000개)도 같은 규칙 — 단가는 픽스처 값을 그대로 따른다
+    // (프로덕션 60원이면 공급가 300,000 + 세액 30,000 = 330,000 청구).
+    const price = Number(env.CREDIT_PRICE_KRW);
+    const fixed = buildTopup(5_000, env);
+    assert.equal(fixed.ok === true && fixed.amountKrw, 5_000 * price * 1.1);
   });
 
   it("단가가 없으면 결제창을 띄우지 않는다", () => {

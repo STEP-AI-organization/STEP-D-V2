@@ -72,7 +72,11 @@ const WON = (n: number) => `₩${n.toLocaleString("ko-KR")}`;
  */
 function autoChargeSentence(policy: { topupCredits: number } | null, priceKrw: number | null): string {
   if (!policy?.topupCredits) return "잔액이 소진되면 등록된 카드로 자동 결제됩니다.";
-  const amount = priceKrw != null ? ` (${WON(policy.topupCredits * priceKrw)})` : "";
+  // 단가는 공급가액이다(부가세 별도 · 2026-08-27) — 화면이 말하는 금액은 **실제 청구액**이어야 한다.
+  const supply = priceKrw != null ? policy.topupCredits * priceKrw : null;
+  const amount = supply != null
+    ? ` (공급가액 ${WON(supply)} · 부가세 ${WON(Math.round(supply * 0.1))} · 결제 ${WON(supply + Math.round(supply * 0.1))})`
+    : "";
   return `잔액이 소진되면 ${policy.topupCredits.toLocaleString("ko-KR")}크레딧${amount}이 등록된 카드로 자동 결제됩니다.`;
 }
 

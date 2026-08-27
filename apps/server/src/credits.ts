@@ -96,8 +96,23 @@ export function creditPriceKrw(env: NodeJS.ProcessEnv = process.env): number | n
 }
 
 export type TopupCheck =
-  | { ok: true; credits: number; amountKrw: number; reason: "" }
+  | { ok: true; credits: number; amountKrw: number; supplyKrw: number; vatKrw: number; reason: "" }
   | { ok: false; reason: string };
+
+/**
+ * 부가세율 — **단가(CREDIT_PRICE_KRW)는 공급가액이다**(사용자 확정 2026-08-27 "부가세 별도").
+ * 그 전에는 총액을 부가세 포함으로 보고 역산했는데, 그러면 60원/개가 실수령 54.5원이 되어
+ * 단가표와 정산이 어긋난다. 이제 청구액 = 공급가액 + 세액이고, 세액은 원 단위 반올림이다
+ * (총액 = supply × 1.1 이라 invoice.ts 의 역산 splitVat 이 같은 값으로 정확히 되돌아온다).
+ */
+export const CREDIT_VAT_RATE = 0.1;
+
+/** 공급가액 → 청구 3종. 화면·인보이스·결제 호출이 전부 이 함수 하나를 쓴다. */
+export function creditAmounts(supplyKrw: number): { supplyKrw: number; vatKrw: number; amountKrw: number }
+{
+  const vat = Math.round(supplyKrw * CREDIT_VAT_RATE);
+  return { supplyKrw, vatKrw: vat, amountKrw: supplyKrw + vat };
+}
 
 /** 한 번에 살 수 있는 상한 — 오타로 0 이 하나 더 붙는 사고를 막는다. */
 // ── 운영자 수동 조정 ──────────────────────────────────────────────────────────
@@ -176,7 +191,10 @@ export function buildTopup(credits: unknown, env: NodeJS.ProcessEnv = process.en
     // 단가를 모르면 결제창을 띄우지 않는다. 0원 결제나 임의 단가보다 낫다.
     return { ok: false, reason: "크레딧 단가가 설정되지 않았습니다 (CREDIT_PRICE_KRW)." };
   }
-  return { ok: true, credits: n, amountKrw: n * price, reason: "" };
+  // 단가는 **공급가액**이다 — 청구액에 부가세를 더한다(2026-08-27 확정).
+  // 5,000개 × 60원 = 공급가 300,000 + 세액 30,000 = **330,000원 청구**.
+  const { supplyKrw, vatKrw, amountKrw } = creditAmounts(n * price);
+  return { ok: true, credits: n, amountKrw, supplyKrw, vatKrw, reason: "" };
 }
 
 // ── 결제 대조 ────────────────────────────────────────────────────────────────────
@@ -449,7 +467,7 @@ export const AUTO_TOPUP_HARD_MAX_PER_DAY = 10;
 export const FIXED_AUTO_TOPUP = {
   /** 완전 소진(잔액 0 이하)에만 발동한다 — "소진되면" 이라는 약속 그대로. */
   thresholdCredits: 0,
-  /** 5,000크레딧 = ₩300,000 (크레딧당 ₩60). 금액은 buildTopup 이 단가로 계산한다. */
+  /** 5,000크레딧 = 공급가 ₩300,000 + 부가세 ₩30,000 = **₩330,000 청구**(크레딧당 ₩60, 부가세 별도). */
   topupCredits: 5_000,
   maxPerDay: 1,
   maxKrwPerMonth: 1_500_000,
