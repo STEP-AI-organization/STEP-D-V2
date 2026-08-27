@@ -379,7 +379,13 @@ export function UploadDialog({
                   <div className="text-[12.5px]" style={{ color: "var(--sd-mut)" }}>
                     영상 파일을 끌어다 놓거나{" "}
                     <span style={{ color: "var(--sd-accent)" }}>클릭해서 선택</span>
-                    <div className="text-[11px]">mp4 · mov · MXF · 길이 제한 없음 (방송 원본은 업로드 후 자동으로 mp4 변환)</div>
+                    {/* 지원 형식은 **정확히** 적는다 — MXF 를 안 적으면 방송 편집자가 못 올린다고
+                        판단하고, 적기만 하고 변환을 안 알리면 "왜 원본과 다르냐"가 된다
+                        (2026-08-27 MXF 대응 · 변환은 worker media.prepare 가 한다). */}
+                    <div className="text-[11px]">MP4 · MOV · <b>MXF</b>(방송 원본) · 길이 제한 없음</div>
+                    <div className="text-[11px]" style={{ opacity: 0.8 }}>
+                      MXF 등 방송 컨테이너는 업로드 후 자동으로 MP4 로 변환됩니다 (원본은 그대로 보관)
+                    </div>
                   </div>
                 )}
                 <input

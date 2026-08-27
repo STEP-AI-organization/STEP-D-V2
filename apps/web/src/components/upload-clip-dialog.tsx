@@ -227,7 +227,9 @@ function UploadClipDialog({
             ) : (
               <div className="text-[12.5px]" style={{ color: "var(--sd-mut)" }}>
                 완성 영상을 끌어다 놓거나 <span style={{ color: "var(--sd-accent)" }}>클릭해서 선택</span>
-                <div className="text-[11px]">mp4 · mov · webm · 세로/가로는 원본대로 유지</div>
+                {/* 완성본 업로드 — 게시본은 MP4 가 정본이다. MXF 도 받아 변환하지만
+                    "완성 영상" 자리에선 MP4 를 권하는 게 맞다(재인코딩 없이 그대로 나간다). */}
+                <div className="text-[11px]">MP4 권장 · MOV · MXF 도 가능(자동으로 MP4 변환) · 세로/가로는 원본대로 유지</div>
               </div>
             )}
             <input
