@@ -931,8 +931,11 @@ describe("유휴 사유 배선 — automation-cycle 소스 스캔", () => {
     assert.match(fn, /ruleIdleNote\(/, "판정을 순수 함수에 위임하지 않았다");
     assert.match(fn, /hasRunNote\([\s\S]*?idle\.detail\)/,
       "문구 일치 dedupe 가 없다 — 순방(15분)마다 같은 사유가 쌓여 로그 창을 덮는다");
-    assert.match(fn, /Promise<string \| null>/, "사유를 돌려주지 않으면 배너가 dedupe 를 따라 사라진다");
-    assert.match(fn, /return idle\.detail;/, "dedupe 여부와 무관하게 사유를 돌려줘야 한다");
+    // 2026-08-27: 반환이 문구 하나 → {code, detail} 로 늘었다. 코드는 리포트의 "오늘은 더
+    // 나올 게 없다" 판정(idleMeansNoMoreToday)이 쓴다 — 문구를 파싱해 추측하지 않게.
+    assert.match(fn, /Promise<\{ code: RuleIdleCode; detail: string \} \| null>/,
+      "사유를 돌려주지 않으면 배너가 dedupe 를 따라 사라진다");
+    assert.match(fn, /return idle;/, "dedupe 여부와 무관하게 사유를 돌려줘야 한다");
     assert.doesNotMatch(fn, /report/,
       "계획 하나의 사유를 순방 전체 리포트에 직접 얹으면 다른 계획이 일한 순방까지 덮는다");
   });

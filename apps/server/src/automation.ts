@@ -732,6 +732,23 @@ export const RULE_IDLE_CODES = [
 ] as const;
 export type RuleIdleCode = (typeof RULE_IDLE_CODES)[number];
 
+/**
+ * **기다리면 풀리는** 유휴 사유 — 이 셋은 "곧 더 나올 수 있다"는 뜻이다(분석 중·렌더 대기·
+ * 메타 대기). 나머지 사유(후보 없음·종류 불일치·겹침·상한·길이 초과·점수 없음 등)는
+ * 오늘 안에는 저절로 안 풀린다 — 새 회차를 올리거나 설정을 바꿔야 한다.
+ *
+ * 자동배포 리포트가 이 구분을 쓴다: 마지막 슬롯이 지났는데 사유가 전부 '안 풀리는' 쪽이면
+ * 마감(+90분)을 기다리지 않고 그때까지 몫으로 보낸다(사용자 2026-08-27 "왜 4시 30분이지").
+ */
+export const WAITING_IDLE_CODES: ReadonlySet<RuleIdleCode> = new Set<RuleIdleCode>([
+  "analyzing", "render_waiting", "meta_waiting",
+]);
+
+/** 이 사유가 "오늘은 더 나올 게 없다"인가 — 기다림형이 아니면 참. */
+export function idleMeansNoMoreToday(code: RuleIdleCode): boolean {
+  return !WAITING_IDLE_CODES.has(code);
+}
+
 /** 계획 하나를 평가하며 모은 관측치 — 순방(automation-cycle)이 채운다. */
 export interface RuleIdleObservation {
   /** 지금이 활동 시간창 밖인가 — 참이면 계획 평가 자체를 건너뛴 것이라 나머지는 0이다. */

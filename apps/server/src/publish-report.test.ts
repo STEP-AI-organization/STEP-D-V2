@@ -10,6 +10,9 @@
  *    + 다음 배포 박스. 제목·URL 은 이스케이프되어 그대로 담긴다.
  */
 import assert from "node:assert/strict";
+import fsSync from "node:fs";
+import pathMod from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
 
 import {
@@ -17,6 +20,7 @@ import {
 } from "./publish-notify.ts";
 
 const kst = (v: string) => new Date(`${v}+09:00`);
+const SRC_DIR = pathMod.dirname(fileURLToPath(import.meta.url));
 
 describe("ruleDayTarget — 오늘 몫과 마감", () => {
   const slotted = { slots: [{ time: "09:00", count: 3 }], dailyQuota: 3, activeEnd: 22 } as never;
@@ -36,6 +40,19 @@ describe("ruleDayTarget — 오늘 몫과 마감", () => {
     const r = ruleDayTarget(slotted, 0, kst("2026-08-26T20:10"));
     assert.equal(r.target, 0, "저녁에 켠 계획의 아침 몫을 기다리면 리포트가 안 나간다");
     assert.equal(r.deadlinePassed, true, "마지막 슬롯 +90분이 지났다");
+  });
+
+  it("소재 고갈 즉시 발송의 전제 — 마지막 슬롯 경과 여부를 따로 알려준다 (2026-08-27)", () => {
+    // 목표(20)에 못 닿아도 **마지막 슬롯이 지났고** 더 뽑을 후보가 없으면 마감(+90분)을
+    // 기다릴 이유가 없다. 슬롯이 여럿이면 마지막 슬롯 전에는 절대 참이면 안 된다 —
+    // 뒤 슬롯 몫이 리포트에서 빠진다.
+    const twoSlots = { slots: [{ time: "09:00", count: 3 }, { time: "15:00", count: 20 }], dailyQuota: 3, activeEnd: 22 } as never;
+    assert.equal(ruleDayTarget(twoSlots, 3, kst("2026-08-27T09:30")).lastSlotPassed, false,
+      "앞 슬롯만 지났는데 마지막이라고 하면 오후 몫이 리포트에서 빠진다");
+    assert.equal(ruleDayTarget(twoSlots, 3, kst("2026-08-27T15:02")).lastSlotPassed, true);
+    // 마감은 여전히 +90분 — 안전장치는 그대로다.
+    assert.equal(ruleDayTarget(twoSlots, 3, kst("2026-08-27T15:02")).deadlinePassed, false);
+    assert.equal(ruleDayTarget(twoSlots, 3, kst("2026-08-27T16:31")).deadlinePassed, true);
   });
 
   it("할당량 계획: 목표 = dailyQuota · 마감 = activeEnd", () => {
@@ -143,5 +160,38 @@ describe("리포트는 실패를 숨기지 않는다 (2026-08-26)", () => {
     assert.doesNotMatch(html, /전부 게시 완료/);
     // 실패 없는 날은 종전 문구 그대로.
     assert.match(buildAutoPublishReportHtml([ok], kst("2026-08-26T16:30"), null), /전부 게시 완료/);
+  });
+});
+
+/**
+ * 소재 고갈 즉시 발송 (2026-08-27) — 배선은 순방이 판정하고 리포트가 받아 쓴다.
+ * 순수 함수로 증명이 안 되는 자리(순방 상태 의존)라 소스 스캔으로 고정한다.
+ */
+describe("소재가 없으면 마감을 기다리지 않는다", () => {
+  const read = (f: string) => fsSync.readFileSync(pathMod.join(SRC_DIR, f), "utf-8");
+
+  it("리포트: exhausted + 마지막 슬롯 경과면 목표 미달이어도 보낸다", () => {
+    const src = read("publish-notify.ts");
+    assert.match(src, /if \(exhausted && lastSlotPassed\) continue;/,
+      "소재 고갈 즉시 발송 분기가 없다 — 고갈된 날 마감(+90분)까지 헛기다린다");
+    assert.match(src, /todaysPublishingDone\(now, opts\.exhausted === true\)/,
+      "순방이 넘긴 판정을 리포트가 안 받고 있다");
+  });
+
+  it("순방: 아무것도 못 했고 사유가 전부 '안 풀리는' 쪽일 때만 exhausted", () => {
+    const src = read("automation-cycle.ts");
+    assert.match(src, /idleCodes\.every\(idleMeansNoMoreToday\)/,
+      "기다림형 사유(분석 중·렌더 대기)를 고갈로 치면 리포트가 너무 일찍 나간다");
+    assert.match(src, /report\.adopted === 0 && report\.published === 0/,
+      "이번 순방이 게시를 했는데 고갈이라고 하면 안 된다");
+    assert.match(src, /maybeFlushAutoPublishReport\(new Date\(\), \{ exhausted \}\)/);
+  });
+
+  it("기다림형 코드 집합은 셋뿐 — 늘리면 리포트가 늦어진다", () => {
+    const src = read("automation.ts");
+    const m = /WAITING_IDLE_CODES[^=]*=\s*new Set<RuleIdleCode>\(\[([\s\S]*?)\]\)/.exec(src);
+    assert.ok(m, "WAITING_IDLE_CODES 를 못 찾았다");
+    const codes = [...m![1].matchAll(/"([\w_]+)"/g)].map((x) => x[1]).sort();
+    assert.deepEqual(codes, ["analyzing", "meta_waiting", "render_waiting"]);
   });
 });

@@ -192,12 +192,20 @@ export async function recordAutoPublishFailureForReport(f: {
   }
 }
 
-/** 한 (계획×채널)의 오늘 목표와 마감 — 순수 판정. 테스트가 이 함수를 직접 짚는다. */
+/**
+ * 한 (계획×채널)의 오늘 목표와 두 시각 — 순수 판정. 테스트가 이 함수를 직접 짚는다.
+ *
+ * `deadlinePassed` 는 **안전장치**다(마지막 슬롯 +90분 · 활동창 끝). 목표에 못 닿아도 언젠가는
+ * 리포트가 나가게 한다 — 확정 실패 1건이 리포트를 영원히 잠그면 안 되기 때문이다.
+ * `lastSlotPassed` 는 **소재 고갈 즉시 발송**의 전제다: 오늘 마지막 슬롯이 이미 지났고 더 뽑을
+ * 후보도 없으면 90분을 더 기다릴 이유가 없다(사용자 2026-08-27 "왜 4시 30분이지").
+ * 슬롯이 여럿이면 마지막 슬롯 전에는 절대 안 보낸다 — 뒤 슬롯 몫이 리포트에서 빠지면 안 된다.
+ */
 export function ruleDayTarget(
   rule: Pick<AutomationRule, "slots" | "dailyQuota" | "activeEnd">,
   published: number,
   now: Date,
-): { target: number; deadlinePassed: boolean } {
+): { target: number; deadlinePassed: boolean; lastSlotPassed: boolean } {
   const slots: RuleSlot[] = ruleSlots(rule);
   if (slots.length) {
     // 오늘 실제로 나가야 할 몫 = 슬롯 총합 − 오늘 포기한 몫(staleMissedSlots · 늦게 켠 계획 등).
@@ -206,16 +214,24 @@ export function ruleDayTarget(
       const [h, mm] = s.time.split(":").map(Number);
       return Math.max(m, h * 60 + mm);
     }, 0);
-    // 마지막 슬롯 +90분이 지나면 목표 미달(확정 실패 등)이어도 마감 — 그때까지 몫으로 보낸다.
-    return { target, deadlinePassed: kstMinutes(now) > lastMin + 90 };
+    const cur = kstMinutes(now);
+    return { target, deadlinePassed: cur > lastMin + 90, lastSlotPassed: cur >= lastMin };
   }
   const target = allowedToday(rule as AutomationRule, now);
   const end = Number((rule as AutomationRule).activeEnd ?? 22);
-  return { target, deadlinePassed: kstMinutes(now) > end * 60 };
+  // 할당량 방식은 활동창 내내 나갈 수 있어 '마지막 슬롯' 이 없다 — 마감(활동창 끝)만 본다.
+  const deadlinePassed = kstMinutes(now) > end * 60;
+  return { target, deadlinePassed, lastSlotPassed: deadlinePassed };
 }
 
-/** 오늘 나갈 몫이 전부 나갔나(또는 전부 마감 지났나) — 하나라도 진행 중이면 false. */
-async function todaysPublishingDone(now: Date): Promise<boolean> {
+/**
+ * 오늘 나갈 몫이 전부 나갔나(또는 더는 나올 게 없나) — 하나라도 진행 중이면 false.
+ *
+ * `exhausted` = 이번 순방이 "채택할 후보가 없다" 고 판정했다(순방이 계산해 넘긴다 — 여기서
+ * 다시 세면 순방과 갈라진다). 목표 미달이어도 **마지막 슬롯이 지났고 소재가 없으면** 더
+ * 기다릴 이유가 없으므로 그때까지 몫으로 보낸다.
+ */
+async function todaysPublishingDone(now: Date, exhausted: boolean): Promise<boolean> {
   // DB 행(AutomationRuleRow)은 판정 헬퍼들이 쓰는 필드를 전부 담고 있다 — 순방과 같은 캐스트.
   const rules = ((await listAutomationRules()) as unknown as AutomationRule[]).filter(
     (r) => r.enabled !== false && isPublishDay(r, now) && ruleChannels(r).length > 0,
@@ -223,8 +239,10 @@ async function todaysPublishingDone(now: Date): Promise<boolean> {
   for (const rule of rules) {
     for (const chan of ruleChannels(rule)) {
       const published = await publishedTodayKst(`${chan.platform}:${chan.accountId}`);
-      const { target, deadlinePassed } = ruleDayTarget(rule, published, now);
-      if (published < target && !deadlinePassed) return false;
+      const { target, deadlinePassed, lastSlotPassed } = ruleDayTarget(rule, published, now);
+      if (published >= target || deadlinePassed) continue;
+      if (exhausted && lastSlotPassed) continue;   // 더 나올 소재가 없다 — 기다림을 끝낸다
+      return false;
     }
   }
   return true;
@@ -384,8 +402,14 @@ ${next ? `  <tr><td class="px" style="padding:32px 40px 0 40px;">
 /**
  * 순방 끝에서 부른다 — 오늘 몫이 다 나갔으면(또는 지난 날 항목이 남았으면) 리포트 발송.
  * **절대 던지지 않는다.** 순방은 리포트보다 중요하다.
+ *
+ * `opts.exhausted` = 이번 순방이 "채택할 후보가 없다"고 판정했다(automation-cycle 이 넘긴다).
+ * 마지막 슬롯이 지난 뒤라면 목표 미달이어도 그때까지 몫으로 보낸다 — 안 그러면 소재가
+ * 고갈된 날 마감(+90분)까지 헛기다린다(사용자 2026-08-27).
  */
-export async function maybeFlushAutoPublishReport(now = new Date()): Promise<void> {
+export async function maybeFlushAutoPublishReport(
+  now = new Date(), opts: { exhausted?: boolean } = {},
+): Promise<void> {
   try {
     if (!mailConfigured()) return;
     const items = await readBuffer();
@@ -394,7 +418,7 @@ export async function maybeFlushAutoPublishReport(now = new Date()): Promise<voi
     const hasStale = items.some((i) => i.date !== today);
     // 오늘 항목뿐이면 "오늘 몫 완료" 판정을 기다린다. 지난 날 항목이 있으면 그건 이미
     // 마감을 넘긴 묶음 — 지금 보낸다(더 기다릴 이유가 없다).
-    if (!hasStale && !(await todaysPublishingDone(now))) return;
+    if (!hasStale && !(await todaysPublishingDone(now, opts.exhausted === true))) return;
 
     const to = await notifyEmail();
     if (!to) {

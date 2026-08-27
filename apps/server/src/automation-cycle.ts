@@ -46,11 +46,11 @@ import {
   decidePublish, episodeAnalysisState, inActiveWindow, isRuleThumbnailMode, matchesMediaKind,
   nextAutoRenderState,
   overlapsExistingClip, planCycle,
-  ruleChannels, ruleIdleNote, rulePrograms, ruleWindow, scheduledSlotAt,
+  ruleChannels, ruleIdleNote, rulePrograms, ruleWindow, scheduledSlotAt, idleMeansNoMoreToday,
   slotsReadyForQueue, selectCandidates, shouldRequestAutoRender, maxPublishPerTick,
   AUTOMATION_MAX_RENDERS_PER_TICK,
   staleMissedSlots,
-  type AutoRenderState, type AutomationRule, type RenderOutcome, type RuleIdleObservation,
+  type AutoRenderState, type AutomationRule, type RenderOutcome, type RuleIdleCode, type RuleIdleObservation,
 } from "./automation.ts";
 import {
   youtubeUploadEnabled, tiktokUploadEnabled, instagramUploadEnabled, facebookUploadEnabled,
@@ -204,6 +204,9 @@ async function runAutomationCycleLocked(): Promise<CycleReport> {
   // 루프가 끝난 뒤에 판단한다. 계획 하나가 유휴라고 전체 배너를 덮으면, 다른 계획이 3건
   // 채택·2건 게시한 순방에도 "회차가 없습니다" 가 뜬다.
   const idleReasons: string[] = [];
+  // 유휴 사유 **코드**도 모은다 — 리포트가 "오늘은 더 나올 게 없다" 를 이 코드로 판정한다
+  // (기다림형: 분석 중·렌더 대기·메타 대기 · automation.ts WAITING_IDLE_CODES).
+  const idleCodes: RuleIdleCode[] = [];
 
   for (const rule of plan.rules) {
     const programs = rulePrograms(rule);
@@ -237,7 +240,7 @@ async function runAutomationCycleLocked(): Promise<CycleReport> {
     /** 유휴 사유 판정 + 하루 한 줄 로그. 사유는 배너 후보로 모은다(dedupe 와 무관하게). */
     const idle = async () => {
       const why = await noteRuleIdle(rule, obs);
-      if (why) idleReasons.push(why);
+      if (why) { idleReasons.push(why.detail); idleCodes.push(why.code); }
     };
 
     // 활동 시간창(KST · 기본 9~22) 밖에서는 아무것도 하지 않는다 — 다음 순방에 다시 본다.
@@ -859,7 +862,15 @@ async function runAutomationCycleLocked(): Promise<CycleReport> {
 
   // 자동배포 리포트 — 오늘 몫이 전부 나갔으면(또는 지난 날 항목이 남았으면) 묶어서 한 통.
   // 영상별 알림을 대체(2026-08-26). 던지지 않는 함수 — 순방 결과에 영향 없다.
-  await maybeFlushAutoPublishReport();
+  //
+  // `exhausted` = 이번 순방이 아무것도 못 했고, 평가한 계획 **전부**가 '기다려도 안 풀리는'
+  // 사유였다(후보 없음·종류 불일치·상한 등). 그러면 마지막 슬롯이 지난 뒤엔 마감(+90분)을
+  // 기다리지 않고 그때까지 몫으로 보낸다 — 소재가 고갈된 날 리포트가 1시간 반 늦던 것
+  // (사용자 2026-08-27 "왜 4시 30분이지"). 판정은 순방이 하고 리포트는 받아 쓴다.
+  const exhausted = report.adopted === 0 && report.published === 0
+    && idleCodes.length > 0 && idleCodes.length === plan.rules.length
+    && idleCodes.every(idleMeansNoMoreToday);
+  await maybeFlushAutoPublishReport(new Date(), { exhausted });
 
   return report;
 }
@@ -938,13 +949,13 @@ function youtubeReleasePlan(channelRule: unknown, targetAt: Date | null = null):
 
 async function noteRuleIdle(
   rule: AutomationRule, obs: RuleIdleObservation,
-): Promise<string | null> {
+): Promise<{ code: RuleIdleCode; detail: string } | null> {
   const idle = ruleIdleNote(obs);
   if (!idle) return null;
   if (!(await hasRunNote(rule.id, null, null, "skipped", true, idle.detail))) {
     await appendRuleRun({ ruleId: rule.id, clipId: null, result: "skipped", detail: idle.detail });
   }
-  return idle.detail;
+  return idle;
 }
 
 /**
