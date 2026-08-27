@@ -16,6 +16,15 @@ substitutions:
   # 초기화된다 — 여기 적어야 유지된다. 끄려면 "0" 으로 바꾸고 재배포(또는 즉시 gcloud update).
   _AUTH_REQUIRED: "1"
 
+  # 커머스 제휴 링크. 켜면 ① generate-metadata 가 상품 쿼리를 같이 뽑고(같은 호출 · 원가 ₩0)
+  # ② commerce.link 잡이 큐잉되고 ③ **사람이 /commerce 에서 승인한 것만** 발행 설명란에 붙는다.
+  # 발급은 윈도우2(commerce 레인 · 한국 IP + 화면 있는 크롬)가 하고, 회사별 계정은
+  # commerce_account 에서 세션을 꺼내 주입한다 — 계정이 없으면 발급 자체를 안 한다.
+  # 끄려면 "0" 으로 바꾸고 재배포. 오타·빈값도 OFF 다(실패 방향이 "안 붙음").
+  # ⚠️ 이 값은 **발행 조립에도 쓰인다**(worker 의 metaForChannel) — 그래서 서버뿐 아니라
+  #    stepd-worker-youtube Job env 에도 같이 있어야 승인된 링크가 실제로 붙는다.
+  _COMMERCE_LINKS_ENABLED: "1"
+
   # ⚠️ 포트원 채널키는 **두 개**다 (아래 --set-secrets 참조):
   #   PORTONE_CHANNEL_KEY          일반결제 — 결제창을 띄워 그 자리에서 긁는다
   #   PORTONE_BILLING_CHANNEL_KEY  빌링    — 카드 저장 + 저장 카드로 서버가 긁는다
@@ -75,7 +84,7 @@ steps:
           --min-instances=1 \
           --cpu-boost \
           --max-instances=5 \
-          --set-env-vars=NODE_ENV=production,GCS_BUCKET=$_GCS_BUCKET,GCS_UPLOAD_BUCKET=$_GCS_UPLOAD_BUCKET,FACTORY_ENABLED=1,CREDIT_PRICE_KRW=$_CREDIT_PRICE_KRW,AUTH_REQUIRED=$_AUTH_REQUIRED,NAVER_UPLOAD_ENABLED=1,YOUTUBE_UPLOAD_ENABLED=1,TIKTOK_UPLOAD_ENABLED=1,TIKTOK_DIRECT_POST=1,INSTAGRAM_UPLOAD_ENABLED=1,FACEBOOK_UPLOAD_ENABLED=1,INVOICE_ISSUER_NAME=$_INVOICE_ISSUER_NAME,INVOICE_ISSUER_BIZNO=$_INVOICE_ISSUER_BIZNO,INVOICE_ISSUER_ADDRESS=$_INVOICE_ISSUER_ADDRESS,INVOICE_ISSUER_CONTACT=$_INVOICE_ISSUER_CONTACT,SMTP_USER=$_SMTP_USER \
+          --set-env-vars=NODE_ENV=production,GCS_BUCKET=$_GCS_BUCKET,GCS_UPLOAD_BUCKET=$_GCS_UPLOAD_BUCKET,FACTORY_ENABLED=1,CREDIT_PRICE_KRW=$_CREDIT_PRICE_KRW,AUTH_REQUIRED=$_AUTH_REQUIRED,NAVER_UPLOAD_ENABLED=1,YOUTUBE_UPLOAD_ENABLED=1,TIKTOK_UPLOAD_ENABLED=1,TIKTOK_DIRECT_POST=1,INSTAGRAM_UPLOAD_ENABLED=1,FACEBOOK_UPLOAD_ENABLED=1,COMMERCE_LINKS_ENABLED=$_COMMERCE_LINKS_ENABLED,INVOICE_ISSUER_NAME=$_INVOICE_ISSUER_NAME,INVOICE_ISSUER_BIZNO=$_INVOICE_ISSUER_BIZNO,INVOICE_ISSUER_ADDRESS=$_INVOICE_ISSUER_ADDRESS,INVOICE_ISSUER_CONTACT=$_INVOICE_ISSUER_CONTACT,SMTP_USER=$_SMTP_USER \
           --set-secrets=DATABASE_URL=stepd-db-url:latest \
           --set-secrets=GOOGLE_CLIENT_ID=stepd-google-client-id:latest \
           --set-secrets=GOOGLE_CLIENT_SECRET=stepd-google-client-secret:latest \
@@ -94,6 +103,7 @@ steps:
           --set-secrets=PORTONE_BILLING_CHANNEL_KEY=stepd-portone-billing-channel-key:latest \
           --set-secrets=PORTONE_WEBHOOK_SECRET=stepd-portone-webhook-secret:latest \
           --set-secrets=NAVER_SESSION_KEY=stepd-naver-session-key:latest \
+          --set-secrets=COMMERCE_SESSION_KEY=stepd-commerce-session-key:latest \
           --set-secrets=SMTP_OAUTH_CLIENT_ID=stepd-smtp-oauth-client-id:latest \
           --set-secrets=SMTP_OAUTH_CLIENT_SECRET=stepd-smtp-oauth-client-secret:latest \
           --set-secrets=SMTP_OAUTH_REFRESH_TOKEN=stepd-smtp-oauth-refresh-token:latest \
@@ -122,7 +132,7 @@ steps:
           --min-instances=0 \
           --cpu-boost \
           --max-instances=5 \
-          --set-env-vars=NODE_ENV=production,GCS_BUCKET=$_GCS_BUCKET,GCS_UPLOAD_BUCKET=$_GCS_UPLOAD_BUCKET,FACTORY_ENABLED=1,CREDIT_PRICE_KRW=$_CREDIT_PRICE_KRW,AUTH_REQUIRED=$_AUTH_REQUIRED,NAVER_UPLOAD_ENABLED=1,YOUTUBE_UPLOAD_ENABLED=1,TIKTOK_UPLOAD_ENABLED=1,TIKTOK_DIRECT_POST=1,INSTAGRAM_UPLOAD_ENABLED=1,FACEBOOK_UPLOAD_ENABLED=1,INVOICE_ISSUER_NAME=$_INVOICE_ISSUER_NAME,INVOICE_ISSUER_BIZNO=$_INVOICE_ISSUER_BIZNO,INVOICE_ISSUER_ADDRESS=$_INVOICE_ISSUER_ADDRESS,INVOICE_ISSUER_CONTACT=$_INVOICE_ISSUER_CONTACT,SMTP_USER=$_SMTP_USER \
+          --set-env-vars=NODE_ENV=production,GCS_BUCKET=$_GCS_BUCKET,GCS_UPLOAD_BUCKET=$_GCS_UPLOAD_BUCKET,FACTORY_ENABLED=1,CREDIT_PRICE_KRW=$_CREDIT_PRICE_KRW,AUTH_REQUIRED=$_AUTH_REQUIRED,NAVER_UPLOAD_ENABLED=1,YOUTUBE_UPLOAD_ENABLED=1,TIKTOK_UPLOAD_ENABLED=1,TIKTOK_DIRECT_POST=1,INSTAGRAM_UPLOAD_ENABLED=1,FACEBOOK_UPLOAD_ENABLED=1,COMMERCE_LINKS_ENABLED=$_COMMERCE_LINKS_ENABLED,INVOICE_ISSUER_NAME=$_INVOICE_ISSUER_NAME,INVOICE_ISSUER_BIZNO=$_INVOICE_ISSUER_BIZNO,INVOICE_ISSUER_ADDRESS=$_INVOICE_ISSUER_ADDRESS,INVOICE_ISSUER_CONTACT=$_INVOICE_ISSUER_CONTACT,SMTP_USER=$_SMTP_USER \
           --set-secrets=DATABASE_URL=stepd-db-url:latest \
           --set-secrets=GOOGLE_CLIENT_ID=stepd-google-client-id:latest \
           --set-secrets=GOOGLE_CLIENT_SECRET=stepd-google-client-secret:latest \
@@ -141,6 +151,7 @@ steps:
           --set-secrets=PORTONE_BILLING_CHANNEL_KEY=stepd-portone-billing-channel-key:latest \
           --set-secrets=PORTONE_WEBHOOK_SECRET=stepd-portone-webhook-secret:latest \
           --set-secrets=NAVER_SESSION_KEY=stepd-naver-session-key:latest \
+          --set-secrets=COMMERCE_SESSION_KEY=stepd-commerce-session-key:latest \
           --set-secrets=SMTP_OAUTH_CLIENT_ID=stepd-smtp-oauth-client-id:latest \
           --set-secrets=SMTP_OAUTH_CLIENT_SECRET=stepd-smtp-oauth-client-secret:latest \
           --set-secrets=SMTP_OAUTH_REFRESH_TOKEN=stepd-smtp-oauth-refresh-token:latest \
