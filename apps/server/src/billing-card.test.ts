@@ -35,6 +35,7 @@ import { PortOneError } from "./portone.ts";
 import {
   AUTO_TOPUP_HARD_MAX_KRW_PER_MONTH, AUTO_TOPUP_HARD_MAX_PER_DAY, FIXED_AUTO_TOPUP,
   buildTopup,
+  shouldAutoTopup,
 } from "./credits.ts";
 
 const SRC = path.dirname(fileURLToPath(import.meta.url));
@@ -284,25 +285,28 @@ describe("배선", () => {
     // 설정 라우트가 사라졌으므로 불변식은 **라우트 검증이 아니라 상수 자체**가 져야 한다.
     assert.ok(FIXED_AUTO_TOPUP.topupCredits > FIXED_AUTO_TOPUP.thresholdCredits,
       "충전량 ≤ 임계면 충전 후에도 임계 아래라 하루 한도까지 연속 과금된다");
-    assert.ok(FIXED_AUTO_TOPUP.maxPerDay >= 1 && FIXED_AUTO_TOPUP.maxPerDay <= AUTO_TOPUP_HARD_MAX_PER_DAY,
-      "일 횟수가 절대 상한을 벗어난다");
-    assert.ok(FIXED_AUTO_TOPUP.maxKrwPerMonth >= 1
-      && FIXED_AUTO_TOPUP.maxKrwPerMonth <= AUTO_TOPUP_HARD_MAX_KRW_PER_MONTH,
-      "월 금액이 절대 상한을 벗어난다");
-    // ⚠️ **건당 금액은 세전이 아니라 청구액이다.** 예전엔 여기서 `크레딧 × 단가`(공급가액)로
-    // 재서, 단가가 부가세 별도로 바뀌며 건당이 300,000 → 330,000 이 됐는데도 이 관문이
-    // 초록으로 통과했다 — 월 상한이 5회에서 4회로 조용히 줄어든 회귀를 못 잡았다(2026-08-27).
-    // 그래서 실제 청구액을 만드는 함수(buildTopup)로 재고, **몇 회가 들어가는지를 숫자로** 박는다.
+    // **상한은 두지 않는다**(2026-08-27 사용자 확정 "리미트 두지마"). 상한으로 막으면 달·날
+    // 중간에 자동 결제가 멈추고 그 순간 분석·자동배포가 통째로 정지한다 — 정책의 존재
+    // 이유와 어긋난다. 0 = 그 축을 안 본다는 뜻이고, shouldAutoTopup 이 그렇게 읽는다.
+    assert.equal(FIXED_AUTO_TOPUP.maxPerDay, 0, "일 횟수 상한이 되살아났다");
+    assert.equal(FIXED_AUTO_TOPUP.maxKrwPerMonth, 0, "월 금액 상한이 되살아났다");
+
+    // 상한이 없으니 **폭주를 막는 건 임계 조건뿐**이다 — 충전이 성공하면 잔액이 임계 위로
+    // 올라가 다음 판정이 above_threshold 로 멈춘다. 이 성질이 깨지면 연속 과금이 된다.
     const priced = buildTopup(FIXED_AUTO_TOPUP.topupCredits, { CREDIT_PRICE_KRW: "60" } as NodeJS.ProcessEnv);
     assert.equal(priced.ok, true);
-    const perCharge = priced.ok === true ? priced.amountKrw : 0;
-    assert.equal(perCharge, 330_000, "건당 청구액이 공급가 300,000 + 부가세 30,000 이 아니다");
-    assert.equal(Math.floor(FIXED_AUTO_TOPUP.maxKrwPerMonth / perCharge), 5,
-      "월 상한에 자동 결제가 5회 들어가야 한다 — 줄면 자동배포가 그만큼 일찍 멈춘다");
-    // 상한이 상한 노릇을 하려면 **월 한도 < 하루 한도 × 31** 이어야 한다 — 아니면 월 한도는
-    // 영원히 안 걸리는 장식이다(하루 한도만 남는다).
-    assert.ok(FIXED_AUTO_TOPUP.maxKrwPerMonth < perCharge * FIXED_AUTO_TOPUP.maxPerDay * 31,
-      "월 한도가 하루 한도×31 이상이라 월 한도가 걸릴 일이 없다 — 안전벨트가 장식이 된다");
+    assert.equal(priced.ok === true ? priced.amountKrw : 0, 330_000,
+      "건당 청구액이 공급가 300,000 + 부가세 30,000 이 아니다");
+
+    const policy = { ...FIXED_AUTO_TOPUP, enabled: true };
+    const base = { policy, todayCount: 99, monthKrw: 99_999_999, amountKrw: 330_000 };
+    // 잔액이 임계 이하면 — 하루 99번을 이미 썼든 이번 달 1억을 썼든 — 막지 않는다.
+    assert.equal(shouldAutoTopup({ ...base, balance: 0 }).charge, true,
+      "상한을 없앴는데도 횟수·금액으로 막힌다");
+    // 충전이 성공해 잔액이 임계 위로 올라가면 스스로 멈춘다(이게 유일한 브레이크다).
+    const after = shouldAutoTopup({ ...base, balance: FIXED_AUTO_TOPUP.topupCredits });
+    assert.equal(after.charge, false, "충전 뒤에도 또 긁는다 — 연속 과금");
+    assert.equal(after.charge === false ? after.code : "", "above_threshold");
 
     // 설정 저장 경로는 **정직하게 409** 로 닫혀야 한다. 200 으로 받아 무시하면 화면은
     // 저장된 줄 알고 다른 값을 보여준다 — 돈이 나가는 설정에서 그 불일치는 곧 분쟁이다.

@@ -252,8 +252,12 @@ export function settleTopup(input: {
  * 잔액이 임계 이하일 때 자동 충전 — **빌링키가 있어야 가능하다.** 일반결제만으로는
  * 저장된 결제수단이 없어 자동으로 긁을 수 없다.
  *
- * 켜기 전에 반드시 있어야 하는 것: 일 최대 횟수 · 월 최대 금액 · 쿨다운.
- * 파이프라인 버그로 크레딧이 빨리 닳으면 **자동으로 계속 긁힌다.** 상한이 없으면 못 켠다.
+ * 상한 필드(maxPerDay·maxKrwPerMonth)는 **0 이면 그 축을 안 본다.** 지금 프로덕션 정책은
+ * 둘 다 0 이다(FIXED_AUTO_TOPUP · 2026-08-27 "리미트 두지마") — 상한으로 막으면 달·날
+ * 중간에 자동 결제가 멈추고 그 순간 분석·자동배포가 통째로 정지하기 때문이다.
+ * 폭주는 상한이 아니라 **임계 조건**이 막는다: 충전이 성공하면 잔액이 임계 위로 올라가
+ * 다음 판정이 above_threshold 로 스스로 멈춘다. 필드는 남긴다 — 값이 있는 정책(테스트·
+ * 과거 저장분)은 종전대로 절대 상한으로 조여 판정한다.
  */
 export interface AutoTopupPolicy {
   enabled: boolean;
@@ -476,24 +480,34 @@ export const AUTO_TOPUP_HARD_MAX_PER_DAY = 10;
  * 카드 등록 UI 가 등록 버튼 옆에서 이 문구를 그대로 보여준다(apps/web billing 화면).
  * 정책이 여기 한 곳에만 살아야 화면·서버·메일이 다른 금액을 말하지 않는다.
  *
- * 상한은 남긴다 — 정책이 고정이어도 안전벨트는 필요하다. 하루 1회·월 ₩1,650,000(=건당
- * ₩330,000 × 5회)이면 파이프라인 버그로 크레딧이 비정상적으로 빨리 닳아도 카드가 무한히
- * 긁히지 않고, 상한에 걸리면 자동배포가 멈추며 담당자에게 메일이 간다(조용한 과금보다
- * 시끄러운 정지).
+ * **상한(일 횟수·월 금액)은 두지 않는다**(2026-08-27 사용자 확정). 상한으로 막으면 달·날
+ * 중간에 자동 결제가 멈추고 그 순간 분석·자동배포가 통째로 정지한다 — "소진되면 무조건
+ * 충전한다"는 이 정책의 존재 이유와 정면으로 어긋난다. 실제로 부가세 별도 전환 때 건당이
+ * 300,000 → 330,000 이 되며 월 상한이 5회를 4회로 조용히 깎은 적이 있다 — 금액으로 잠그면
+ * 단가가 바뀔 때마다 같은 사고가 되풀이된다.
  *
- * ⚠️ **월 상한은 '청구액' 축이다** — 단가가 부가세 별도가 된 2026-08-27, 이 값을 그대로
- * 두면 건당이 300,000 → 330,000 이라 5회가 **4회로 조용히 줄고** ₩180,000 은 어떤 결제도
- * 안 들어가는 죽은 헤드룸이 된다. 단가·충전량을 바꾸면 이 숫자도 같이 봐야 한다
- * (billing-card.test.ts 가 '몇 회가 들어가는지'를 숫자로 고정한다).
+ * 폭주를 막는 것은 상한이 아니라 **임계 조건**이다: 충전은 잔액 0 이하에서만 발동하고,
+ * 충전이 성공하면 잔액이 임계 위로 올라가 다음 판정이 `above_threshold` 로 멈춘다.
+ * 카드 거절처럼 잔액이 안 오르는 경우만 시도가 반복되는데, 그건 상한이 아니라
+ * 알림(autoTopupAlert · 담당자 메일)이 사람을 부르는 자리다.
  */
 export const FIXED_AUTO_TOPUP = {
   /** 완전 소진(잔액 0 이하)에만 발동한다 — "소진되면" 이라는 약속 그대로. */
   thresholdCredits: 0,
   /** 5,000크레딧 = 공급가 ₩300,000 + 부가세 ₩30,000 = **₩330,000 청구**(크레딧당 ₩60, 부가세 별도). */
   topupCredits: 5_000,
-  maxPerDay: 1,
-  /** 청구액 기준 월 상한 = 330,000 × 5회. 세전(300,000)으로 잡으면 4회에서 막힌다. */
-  maxKrwPerMonth: 1_650_000,
+  /**
+   * **상한 없음**(둘 다 0 · 사용자 확정 2026-08-27 "리미트 두지마").
+   *
+   * 폭주를 실제로 막는 것은 상한이 아니라 **임계 조건**이다: 충전은 잔액이 0 이하일
+   * 때만 발동하고(thresholdCredits: 0), 한 번 충전하면 5,000크레딧이 들어와 잔액이
+   * 임계 위로 올라가므로 다음 판정은 `above_threshold` 에서 그냥 멈춘다.
+   *
+   * ⚠️ 예외는 **카드가 거절될 때**다 — 잔액이 안 오르니 트리거마다 승인 시도가 다시
+   * 나간다. 그 경우는 상한이 아니라 알림(autoTopupAlert · 담당자 메일)이 사람을 부른다.
+   */
+  maxPerDay: 0,
+  maxKrwPerMonth: 0,
 } as const;
 
 /**
@@ -523,10 +537,16 @@ export function shouldAutoTopup(input: {
   if (input.balance > p.thresholdCredits) {
     return { charge: false, code: "above_threshold", reason: "잔액이 임계보다 많습니다." };
   }
-  // 정책값이 절대 상한을 넘어도(검증 전 저장분) 실제 판정은 절대 상한으로 조인다.
-  const maxPerDay = Math.min(p.maxPerDay, AUTO_TOPUP_HARD_MAX_PER_DAY);
-  const maxKrwPerMonth = Math.min(p.maxKrwPerMonth, AUTO_TOPUP_HARD_MAX_KRW_PER_MONTH);
-  if (input.todayCount >= maxPerDay) {
+  // **상한 값이 0 이하면 그 축은 없는 것으로 본다**(사용자 확정 2026-08-27 "리미트 두지마").
+  // 상한이 살아 있으면 달·날 중간에 자동 결제가 막히고, 그 순간 분석·자동배포가 통째로
+  // 멈춘다 — "소진되면 무조건 충전한다"는 이 정책의 존재 이유와 정면으로 어긋난다.
+  // 값이 남아 있는 정책(테스트·과거 저장분)은 종전대로 절대 상한으로 조여 판정한다.
+  const dailyCapped = p.maxPerDay > 0;
+  const monthlyCapped = p.maxKrwPerMonth > 0;
+  const maxPerDay = dailyCapped ? Math.min(p.maxPerDay, AUTO_TOPUP_HARD_MAX_PER_DAY) : 0;
+  const maxKrwPerMonth = monthlyCapped
+    ? Math.min(p.maxKrwPerMonth, AUTO_TOPUP_HARD_MAX_KRW_PER_MONTH) : 0;
+  if (dailyCapped && input.todayCount >= maxPerDay) {
     // ⚠️ 이 문구는 이제 사용자 화면(상시 배너)에 그대로 뜬다. "조용히 계속 긁지 않습니다" 는
     // **우리끼리의 설계 설명**이지 사용자 말이 아니다 — 사실 + 다음 행동만 남긴다.
     return {
@@ -534,7 +554,7 @@ export function shouldAutoTopup(input: {
       reason: `오늘 자동 충전 한도(${maxPerDay}회)를 모두 썼습니다 — 오늘은 더 자동 충전하지 않습니다.`,
     };
   }
-  if (input.monthKrw + input.amountKrw > maxKrwPerMonth) {
+  if (monthlyCapped && input.monthKrw + input.amountKrw > maxKrwPerMonth) {
     return { charge: false, code: "monthly_cap", reason: `이번 달 자동 충전 한도(${maxKrwPerMonth.toLocaleString("ko-KR")}원)를 넘습니다.` };
   }
   return { charge: true, reason: "" };

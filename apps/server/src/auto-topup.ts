@@ -10,8 +10,9 @@
  *     (멱등키 dedupe_key · **원장 먼저** · 금액 서버 계산 · 승인 응답 대조).
  *
  * ## 폭주 방어
- * shouldAutoTopup 이 하루 최대 횟수·월 최대 금액을 본다. 충전은 잔액을 임계 위로 올리므로
- * 다음 호출은 자연히 조건에 안 걸린다(잔액이 다시 떨어질 때까지). 상한은 그 위의 안전벨트다.
+ * **상한이 아니라 임계 조건이 막는다**(2026-08-27 상한 제거). 충전은 잔액이 임계 이하일
+ * 때만 발동하고, 충전이 성공하면 잔액이 임계 위로 올라가 다음 호출은 자연히 조건에 안
+ * 걸린다. 잔액이 안 오르는 경우(카드 거절)만 시도가 반복되고, 그건 알림이 사람을 부른다.
  */
 import {
   addCreditEntry,
@@ -82,7 +83,7 @@ async function runAutoTopup(needCredits = 0): Promise<AutoTopupResult> {
   if (blocked) return { charged: false, code: blocked.code, reason: blocked.reason };
 
   // 정책은 고정값 한 곳(credits.ts FIXED_AUTO_TOPUP)에서만 나온다 — 화면·서버·메일이
-  // 다른 금액을 말하지 않게. 상한(하루 1회 · 월 ₩1,650,000 = 건당 ₩330,000 × 5회)은 그대로다.
+  // 다른 금액을 말하지 않게. 상한은 없다 — 잔액이 임계 위로 오르면 판정이 스스로 멈춘다.
   const policy = fixedAutoTopupPolicy(true);
 
   // 빌링키 결제의 customer 필수 3종(이니시스). 자동 경로엔 화면 입력 폴백이 없다 —
