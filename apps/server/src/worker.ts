@@ -52,7 +52,7 @@ import { clipGate } from "./publish-dispatch.ts";
 import { checkCredits } from "./credits.ts";
 import { topupAndRecheck } from "./auto-topup.ts";
 import { billableMinutes } from "./billing.ts";
-import { probe, captureThumbnail, remuxFaststart, needsMp4Normalize, normalizeToMp4 } from "./ffmpeg.ts";
+import { probe, captureThumbnail, remuxFaststart, needsMp4Normalize, normalizeToMp4, extractSourceCaptions } from "./ffmpeg.ts";
 import {
   prepareProgramAssets, publishStyleProfile, publishThumbnails, tempAssetRoot, pullPrefix,
 } from "./thumbnail-assets.ts";
@@ -747,6 +747,10 @@ async function handleMediaPrepare(job: Job): Promise<void> {
     // 가리키게 한다. 그래서 이후 모든 단계(브라우저 재생·core 분석·렌더)가 mp4 하나만 본다.
     // 입력은 서명 URL 이다 — 20~50GB 를 /tmp(=RAM) 에 내려받으면 그 자체로 OOM 이다.
     const normalize = needsMp4Normalize(meta);
+    // 정규화하면 meta·readUrl 이 **변환본**을 가리키게 된다 — 자막·인벤토리는 원본에서
+    // 건져야 하므로 그 전에 붙잡아 둔다.
+    const srcMeta = meta;
+    const srcReadUrl = readUrl;
     if (normalize.needed) {
       const mp4Tmp = path.join(workDir, "normalized.mp4");
       const mp4ObjectPath = objectPath.replace(/\.[^./]+$/, "") + ".mp4";
@@ -764,6 +768,34 @@ async function handleMediaPrepare(job: Job): Promise<void> {
       fs.rmSync(mp4Tmp, { force: true });
       console.log(`[worker] media.prepare ${mediaId}: mp4 정규화 완료 `
         + `(${Math.round(size / 1e6)}MB · ${Math.round((Date.now() - t0) / 1000)}s · 원본 보존 ${objectPath})`);
+
+      // ── 원본 부가 데이터 인벤토리 ────────────────────────────────────────────
+      // MXF 는 "굽기 전 재료" 라 자막·대사 트랙이 따로 들어 있다(사용자 2026-08-27).
+      // 무엇이 들어 있었는지 **로그로 남긴다** — 방송사마다 자막 자리·트랙 배치가 달라서,
+      // 첫 실파일 로그를 보고 STT 대체·트랙 선택을 정한다(추측으로 배선하지 않는다).
+      const inv = srcMeta.sourceStreams
+        .map((st) => `${st.index}:${st.type}/${st.codec}`
+          + (st.channels ? `(${st.channels}ch)` : "")
+          + (st.title || st.language ? `[${st.title ?? st.language}]` : ""))
+        .join(" · ");
+      console.log(`[worker] media.prepare ${mediaId}: 원본 스트림 — ${inv}`);
+
+      // 자막이 있으면 건져 둔다. **있으면 쓰고 없으면 STT** — 실패는 조용히 넘긴다.
+      try {
+        const srtTmp = path.join(workDir, "source-captions.srt");
+        const cap = await extractSourceCaptions(srcReadUrl, srtTmp, srcMeta);
+        if (cap) {
+          await uploadFile(`analysis/${mediaId}/source-captions.srt`, cap.path);
+          console.log(`[worker] media.prepare ${mediaId}: 원본 자막 ${cap.cues}줄 확보 `
+            + `(${cap.source === "stream" ? "자막 트랙" : "영상 임베드 CEA-608"}) — STT 대체 후보`);
+          fs.rmSync(cap.path, { force: true });
+        } else {
+          console.log(`[worker] media.prepare ${mediaId}: 원본 자막 없음 — STT 로 진행`);
+        }
+      } catch (e) {
+        console.warn(`[worker] media.prepare ${mediaId}: 자막 추출 건너뜀 —`,
+          e instanceof Error ? e.message.slice(0, 120) : e);
+      }
     } else {
       // 이미 mp4/h264/aac — 종전 경로 그대로(작은 파일만 faststart 리먹스).
       const remuxMax = (Number(process.env.REMUX_MAX_MB) || 512) * 1024 * 1024;

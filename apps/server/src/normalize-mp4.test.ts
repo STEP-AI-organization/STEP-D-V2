@@ -140,3 +140,47 @@ describe("워커 배선 (소스 스캔)", () => {
     assert.match(src, /remuxFaststart\(readUrl, webTmp\)/);
   });
 });
+
+/**
+ * 원본 부가 데이터 건지기 (2026-08-27 사용자 지적: "MXF 면 자막이나 효과도 따로 떨어지잖아 …
+ * 이 데이터 다 버리고 MP4 로 굽는데, 영상분석에 필요한 건 좀 가져와보자").
+ *
+ * 지금 단계는 **기록과 시도**다 — 방송사마다 자막을 담는 자리(별도 트랙 / 영상 임베드
+ * CEA-608)와 오디오 트랙 배치가 달라서, 첫 실파일 로그를 보기 전에 STT 대체를 배선하면
+ * 어긋난다. 그래서 "있으면 뽑아 두고 없으면 조용히 STT" 가 이 절의 계약이다.
+ */
+describe("원본 스트림 인벤토리·자막 추출", () => {
+  const worker = read("worker.ts");
+  const ff = read("ffmpeg.ts");
+
+  it("정규화 전 원본 메타·URL 을 붙잡아 둔다 — 변환 뒤엔 원본을 못 본다", () => {
+    assert.match(worker, /const srcMeta = meta;\s*\n\s*const srcReadUrl = readUrl;/,
+      "정규화가 meta·readUrl 을 변환본으로 덮으므로, 자막·인벤토리는 그 전에 잡아야 한다");
+    assert.match(worker, /extractSourceCaptions\(srcReadUrl, srtTmp, srcMeta\)/);
+  });
+
+  it("인벤토리를 로그로 남긴다 — 첫 실파일에서 무엇이 들어 있었는지가 판단 근거다", () => {
+    assert.match(worker, /원본 스트림 —/);
+    assert.match(worker, /srcMeta\.sourceStreams/);
+  });
+
+  it("자막은 GCS 에 보관하고, 없으면 STT 로 진행한다고 로그에 남긴다", () => {
+    assert.match(worker, /analysis\/\$\{mediaId\}\/source-captions\.srt/);
+    assert.match(worker, /원본 자막 없음 — STT 로 진행/);
+  });
+
+  it("추출은 두 경로를 순서대로 — 자막 트랙 → 영상 임베드 CEA-608", () => {
+    assert.match(ff, /-map", "0:s:0"/);
+    assert.match(ff, /movie=\$\{esc\}\[out0\+subcc\]/,
+      "임베드 CEA-608 경로가 없으면 방송 원본 자막의 절반을 놓친다");
+  });
+
+  it("빈 결과는 성공으로 치지 않는다 — 0줄이면 파일을 지우고 null", () => {
+    assert.match(ff, /if \(cues > 0\) return \{ path: outSrt, cues, source: "stream" \};/);
+    assert.match(ff, /fs\.rmSync\(outSrt, \{ force: true \}\);/);
+  });
+
+  it("자막 실패가 정규화를 막지 않는다 — try/catch 로 감싼다", () => {
+    assert.match(worker, /자막 추출 건너뜀/);
+  });
+});

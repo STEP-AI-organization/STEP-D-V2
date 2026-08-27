@@ -30,6 +30,26 @@ export type ProbeResult = {
    * 기준이라 이 값을 모르면 편집자 화면에서 10시간 어긋난 자리를 가리킨다.
    */
   startTimecode: string;
+  /**
+   * 원본 부가 스트림 인벤토리 — **MXF 는 "굽기 전 재료"라 자막·대사 트랙이 따로 들어 있다.**
+   * mp4 로 정규화하면서 이걸 통째로 버리고 있었다(사용자 2026-08-27 지적).
+   *
+   * 지금은 **기록만** 한다. 실제 방송사 원본이 자막을 어디에 담는지(비디오 임베드 CEA-608 /
+   * 별도 데이터 트랙 SMPTE-436M), 오디오 트랙을 어떤 순서로 배치하는지가 방송사마다 달라서,
+   * 추측으로 배선하면 어긋난다. 첫 실파일 로그를 보고 STT 대체·트랙 선택을 결정한다.
+   */
+  sourceStreams: SourceStreamInfo[];
+};
+
+/** 원본 스트림 한 줄 — ffprobe 가 준 그대로(추측 없이). */
+export type SourceStreamInfo = {
+  index: number;
+  type: string;      // video · audio · subtitle · data
+  codec: string;     // mpeg2video · pcm_s24le · eia_608 · smpte_436m …
+  channels?: number;
+  /** 트랙 이름·언어 태그 — 방송 MXF 는 여기에 "Dialogue"·"M&E" 같은 라벨을 넣기도 한다. */
+  language?: string;
+  title?: string;
 };
 
 /** #rrggbb 또는 rrggbb 문자열을 3~6자 안 되면 fallback으로 대체. ffmpeg color 필터에 넘길 값 정규화용. */
@@ -113,6 +133,14 @@ export function probe(filePath: string): Promise<ProbeResult> {
             interlaced: /^(tt|bb|tb|bt)$/.test(String(videoStream?.field_order ?? "")),
             // 타임코드는 컨테이너마다 자리가 다르다: MXF·MOV 는 별도 data 스트림 tags,
             // mp4 는 비디오 스트림 tags, 일부는 format tags. 세 곳을 순서대로 본다.
+            sourceStreams: (data.streams ?? []).map((st: any) => ({
+              index: Number(st.index ?? 0),
+              type: String(st.codec_type ?? ""),
+              codec: String(st.codec_name ?? ""),
+              ...(st.channels ? { channels: Number(st.channels) } : {}),
+              ...(st.tags?.language ? { language: String(st.tags.language) } : {}),
+              ...(st.tags?.title ? { title: String(st.tags.title) } : {}),
+            })),
             startTimecode: String(
               videoStream?.tags?.timecode
               ?? (data.streams ?? []).find((s: any) => s?.tags?.timecode)?.tags?.timecode
@@ -276,6 +304,72 @@ export function normalizeToMp4(
       resolve();
     });
   });
+}
+
+// ── 원본 자막 건지기 (MXF 등) ─────────────────────────────────────────────────
+//
+// 방송 원본에는 **사람이 검수한 대본**이 자막으로 들어 있는 경우가 많다. 그걸 STT 로 다시
+// 만들면 회차당 ₩141 을 쓰면서 정확도는 더 낮다(고유명사·프로그램 용어를 틀린다).
+// 그래서 정규화할 때 한 번 건져 본다 — **있으면 쓰고, 없으면 지금처럼 STT.**
+//
+// 자막이 담기는 자리는 방송사마다 다르다:
+//   ① 별도 자막 스트림 (codec_type=subtitle)         → -map 0:s:0 로 바로 뽑힌다
+//   ② 비디오에 임베드된 CEA-608/708 (a53 SEI·VANC)   → lavfi movie 필터의 subcc 로 뽑는다
+// 둘 다 실패하면 조용히 없는 것으로 친다(자막 없는 원본이 더 흔하다).
+
+/** 자막 추출 결과 — `cues` 가 0 이면 "뽑았지만 비었다"(파일은 지운다). */
+export type CaptionExtract = { path: string; cues: number; source: "stream" | "embedded" } | null;
+
+function srtCueCount(file: string): number {
+  try {
+    const text = fs.readFileSync(file, "utf8");
+    // SRT 는 큐마다 "번호\n시간 --> 시간" 이 온다. 화살표 수가 곧 큐 수다.
+    return (text.match(/-->/g) ?? []).length;
+  } catch { return 0; }
+}
+
+function runFfmpeg(args: string[], timeout: number): Promise<void> {
+  return new Promise((resolve, reject) => {
+    execFile("ffmpeg", args, { timeout, maxBuffer: FF_MAXBUF }, (err) => (err ? reject(err) : resolve()));
+  });
+}
+
+/**
+ * 원본에서 자막을 SRT 로 뽑는다. **절대 던지지 않는다** — 자막은 있으면 좋은 것이지
+ * 없다고 정규화를 막을 이유가 없다.
+ *
+ * `input` 은 로컬 경로 또는 서명 URL. `probe` 는 이미 잰 결과(스트림 인벤토리 사용).
+ */
+export async function extractSourceCaptions(
+  input: string, outSrt: string, p: ProbeResult, timeoutMs = 15 * 60_000,
+): Promise<CaptionExtract> {
+  const hasSubtitleStream = p.sourceStreams.some((s) => s.type === "subtitle");
+
+  // ① 별도 자막 스트림
+  if (hasSubtitleStream) {
+    try {
+      await runFfmpeg(["-y", "-v", "error", "-i", input, "-map", "0:s:0", "-c:s", "srt", "-f", "srt", outSrt], timeoutMs);
+      const cues = srtCueCount(outSrt);
+      if (cues > 0) return { path: outSrt, cues, source: "stream" };
+      fs.rmSync(outSrt, { force: true });
+    } catch { fs.rmSync(outSrt, { force: true }); }
+  }
+
+  // ② 비디오에 임베드된 CEA-608/708 — lavfi movie 필터가 subcc 출력으로 뽑아 준다.
+  // 경로 구분자·콜론이 필터 문법과 충돌하므로 이스케이프한다(Windows 로컬 경로·URL 모두).
+  try {
+    const esc = input.replace(/\\/g, "/").replace(/:/g, "\\:").replace(/'/g, "\\'");
+    await runFfmpeg(
+      ["-y", "-v", "error", "-f", "lavfi", "-i", `movie=${esc}[out0+subcc]`,
+       "-map", "0:s:0", "-c:s", "srt", "-f", "srt", outSrt],
+      timeoutMs,
+    );
+    const cues = srtCueCount(outSrt);
+    if (cues > 0) return { path: outSrt, cues, source: "embedded" };
+    fs.rmSync(outSrt, { force: true });
+  } catch { fs.rmSync(outSrt, { force: true }); }
+
+  return null;
 }
 
 export type RenderShortOpts = {
