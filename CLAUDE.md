@@ -186,7 +186,8 @@ WORKER_JOBS           content | youtube | gebd | naver,download | commerce | all
 WORKER_MODE           drain 이면 큐 비는 즉시 종료 / DRAIN_MAX_MS(기본 50분)
 YOUTUBE_UPLOAD_ENABLED   실업로드 게이트. 미설정·오타·빈값 = OFF
 TIKTOK_UPLOAD_ENABLED    TikTok 받은함 드래프트 업로드 게이트. 기본 OFF · 오타=OFF
-COMMERCE_LINKS_ENABLED   쿠팡 제휴 링크 게이트. 기본 OFF · 오타=OFF. 켜면 ① generate-metadata 가
+COMMERCE_LINKS_ENABLED   쿠팡 제휴 링크 게이트 (파이프라인 정본: docs/ops/commerce-links.md).
+                      기본 OFF · 오타=OFF. 켜면 ① generate-metadata 가
                       상품 쿼리를 같이 뽑고(추가 원가 ₩0 · 같은 호출) ② commerce.link 잡이
                       링크를 발급하고 ③ **사람이 /commerce 에서 승인한 것만** YouTube
                       설명란에 링크+대가성 문구로 붙는다(발급≠게시 · 미승인은 안 나간다).
