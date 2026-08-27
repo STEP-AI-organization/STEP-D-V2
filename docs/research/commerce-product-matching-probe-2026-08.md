@@ -119,8 +119,13 @@ POST /api/v1/banner/iframe/url
 곁가지 관찰 (나중에 쓸 것):
 - `GET /api/v1/subId/internal` → `["ha983885"]` — **subId 축이 이미 있다.** 영상별 성과
   추적(어느 쇼츠가 얼마 벌었나)을 붙일 자리다.
-- `GET /api/v1/config` 응답에 `"openApiEnabled":true` — 공개 Open API 발급 가능 여부일 수
-  있다. 사실이면 15만원 대기 없이 공식 API 로 갈 수 있다. **확인 필요**(UI 플래그일 수도).
+- `GET /api/v1/config` 의 `"openApiEnabled":true` 는 **UI 노출 플래그였다**(2026-08-27 확인).
+  콘솔 `#affiliate/ws/tools/open-api` 화면 원문: "API 키 발급 … **API키는 최종 승인된 회원만
+  발급이 가능합니다**". 즉 15만원 대기는 그대로다 — 이 플래그로 우회할 수 없다.
+- ⚠️ **`coupa.ng` 도 자기 클릭 경로다.** 콘솔에서 링크를 만들면 그 화면이 미리보기 배너
+  `<iframe src="https://coupa.ng/...">` 를 렌더하고, 그 로드가 제휴 리다이렉트를 탄다 —
+  리포트에 초기 DOM 실험 횟수만큼 클릭이 찍혔다(구매 0). API 전용 경로로 바꾼 뒤로는 안 늘었다
+  (그 경로는 iframe 을 렌더하지 않는다). 라우트 차단에 두 호스트를 다 넣었다.
 - partners.coupang.com 에도 Akamai 봇 방어가 있다(`sensor_data`·`akam/13/pixel`) —
   서버에서 직접 HTTP 를 치면 막힐 가능성이 높다는 뜻이다. 브라우저 컨텍스트를 쓰는 근거.
 - SPA 해시 라우트라 **같은 해시로 goto 하면 아무 요청도 안 난다**(캡처 0건). 재현하려면 reload.

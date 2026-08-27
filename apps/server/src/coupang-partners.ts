@@ -218,15 +218,17 @@ async function withPartnersPage<T>(
     const page: Page =
       ctx.pages().find((p) => p.url().startsWith(CONSOLE_ORIGIN)) ?? (await ctx.newPage());
 
-    // 방어선 — 제휴 링크로의 **문서 이동**을 아예 막는다. 우리 코드는 goto 하지 않지만,
-    // 콘솔 스크립트나 미래의 실수로도 자기 클릭이 나가지 않게 못을 박는다.
-    await page.route("**://link.coupang.com/**", (route) => {
-      const req = route.request();
-      if (req.isNavigationRequest()) {
-        console.warn("[coupang] 제휴 링크 이동 차단 — 자기 클릭은 계정 정지 사유다:", req.url());
-        return route.abort();
-      }
-      return route.continue();
+    // 방어선 — **제휴 리다이렉트 호스트로 나가는 요청을 통째로 막는다.**
+    //
+    // 우리 코드는 goto 하지 않지만, 콘솔 자신이 링크를 만들면 미리보기 배너 `<iframe
+    // src="https://coupa.ng/...">` 를 렌더한다 — 그 iframe 로드가 곧 제휴 리다이렉트를
+    // 타는 것이라 **클릭으로 집계될 수 있다**(2026-08-27 실측: DOM 방식으로 링크를 만들던
+    // 초기 실험 횟수만큼 리포트에 클릭이 찍혀 있었다. API 전용 경로에서는 안 늘었다).
+    // 자기 클릭은 계정 정지 사유라, 이동뿐 아니라 **하위 리소스 요청까지** 끊는다.
+    // 우리 흐름은 이 호스트가 전혀 필요 없으므로 막아서 잃는 게 없다.
+    await page.route(/(^|\/\/|\.)((link\.coupang\.com)|(coupa\.ng))\//, (route) => {
+      console.warn("[coupang] 제휴 리다이렉트 차단 — 자기 클릭은 계정 정지 사유다:", route.request().url());
+      return route.abort();
     });
 
     if (!page.url().startsWith(CONSOLE_ORIGIN)) {

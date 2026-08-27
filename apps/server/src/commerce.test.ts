@@ -329,11 +329,25 @@ describe("자기 클릭 금지 — 생성된 링크를 절대 열지 않는다",
     assert.deepEqual(offenders, [], `자기 클릭 경로: ${offenders.join(" / ")} — 즉시 계정 정지 사유다`);
   });
 
-  it("발급 모듈이 제휴 링크 이동을 라우트에서도 막는다", () => {
+  it("발급 모듈이 제휴 리다이렉트 요청을 라우트에서 막는다", () => {
     const src = read("coupang-partners.ts");
     assert.match(src, /page\.route\(/, "방어선(라우트 차단)이 없다");
-    assert.match(src, /isNavigationRequest\(\)[\s\S]{0,120}abort\(\)/,
-      "제휴 링크로의 문서 이동을 abort 하지 않는다");
+    assert.match(src, /abort\(\)/, "차단하지 않고 통과시킨다");
+  });
+
+  it("**coupa.ng 도 막는다** — 콘솔 미리보기 iframe 이 클릭으로 집계될 수 있다", () => {
+    // 실측 2026-08-27: DOM 방식으로 링크를 만들면 콘솔이 <iframe src="https://coupa.ng/..">
+    // 를 렌더하고, 그 로드가 제휴 리다이렉트를 탄다. link.coupang.com 만 막으면 이게 샌다.
+    const src = read("coupang-partners.ts");
+    assert.match(src, /coupa\\?\.ng/, "coupa.ng(제휴 단축 리다이렉트)가 차단 목록에 없다");
+  });
+
+  it("이동뿐 아니라 하위 리소스까지 막는다 (iframe 은 navigation 이 아닐 수 있다)", () => {
+    const src = read("coupang-partners.ts");
+    const route = /await page\.route\([\s\S]*?\}\);/.exec(src)?.[0] ?? "";
+    assert.notEqual(route, "", "라우트 핸들러를 못 찾았다");
+    assert.equal(/isNavigationRequest\(\)[\s\S]{0,80}route\.continue\(\)/.test(route), false,
+      "navigation 이 아니면 통과시킨다 — iframe 로드가 그대로 나간다");
   });
 });
 
