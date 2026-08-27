@@ -12,5 +12,12 @@
  */
 // 유튜브 다운로드도 이 PC 몫이다 — 데이터센터 IP 는 유튜브 봇 판정에 상시 걸린다
 // (2026-08-14). 한국 IP 인 이 머신이 받아 GCS 로 올리면 분석은 클라우드가 잇는다.
-process.env.WORKER_JOBS = "naver,download";
+//
+// 쿠팡 제휴 링크 발급(commerce)도 같은 이유로 여기다 (2026-08-27). 이유가 둘이다:
+//  - **한국 IP**: 파트너스 콘솔은 Akamai 를 쓴다. 해외 데이터센터에서 붙으면 막힐 공산이 크다
+//    (네이버·유튜브에서 이미 겪은 그 벽).
+//  - **화면 있는 크롬**: headless 는 세션이 유효해도 차단된다(실측 2026-08-27 · Access Denied).
+//    그래서 데스크톱 세션이 살아 있는 PC 여야 한다 — Cloud Run 에 못 올린다.
+// 회사별 계정은 잡마다 그 테넌트의 세션을 주입해 쓴다(commerce_account · 상시 크롬 N개 불필요).
+process.env.WORKER_JOBS = "naver,download,commerce";
 await import("../src/worker.ts");

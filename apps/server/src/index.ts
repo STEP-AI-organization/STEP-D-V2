@@ -312,6 +312,9 @@ import { naverUploadEnabled, NAVER_DISABLED_MESSAGE, DESC_MIN } from "./naver-ga
 import {
   commerceLinksEnabled, parseProductQueries, usableLinks, withCommerceLinks, normalizeStatus,
 } from "./commerce.ts";
+// `looksLikeStorageState` 는 두 제공자가 같은 검사를 쓴다(session-crypto 공용) — 이미
+// naver-session-store 로 들어와 있어 여기서 또 들이지 않는다.
+import { commerceSessionStoreReady, sealCommerceSession } from "./commerce-session-store.ts";
 import {
   initialPipeline,
   isoDateOrToday,
@@ -392,6 +395,9 @@ import { listNaverAccounts, getNaverAccount, upsertNaverAccount, markNaverAccoun
 import { naverSessionPath } from "./naver-session.ts";
 import { sealSession, sessionStoreReady, looksLikeStorageState } from "./naver-session-store.ts";
 import { setNaverSessionBlob, clearNaverSessionBlob } from "./db-pg.ts";
+import {
+  getCommerceAccount, upsertCommerceAccount, setCommerceSessionBlob, markCommerceSessionExpired,
+} from "./db-pg.ts";
 import {
   CANVA_CALLBACK_PATH, canvaConfigured, canvaConnected, canvaAuthUrl,
   canvaExchangeCode, disconnectCanva, listCanvaDesigns,
@@ -8200,6 +8206,78 @@ app.post("/api/clips/:id/commerce/issue", async (c) => {
     : `commerce.link:${clipId}`;
   const jobId = await enqueue("commerce.link", { clipId, ...(pick ? { pick } : {}) }, { dedupeKey });
   return c.json({ jobId, queued: true });
+});
+
+// ── 커머스 계정 (회사마다 자기 법인 파트너스 계정) ──────────────────────────────
+//
+// 커미션 정산이 **계정 단위**라 회사마다 계정이 달라야 한다. 한 계정에 subId 로 가르면
+// 실적 보고서만 갈리고 돈은 그 계정 하나로 들어와 우리가 지급대행이 된다.
+// 계정이 없으면 발급을 **안 한다** — 공용 계정으로 대신 발급하면 수익이 엉뚱한 회사로 간다.
+
+/** 이 워크스페이스의 계정. 세션 값은 절대 나가지 않는다 — 있다/없다·갱신시각만. */
+app.get("/api/commerce/account", async (c) => {
+  const acct = await getCommerceAccount("coupang");
+  return c.json({
+    account: acct ?? null,
+    sessionKeyReady: commerceSessionStoreReady(),
+    enabled: commerceLinksEnabled(),
+  });
+});
+
+/** 계정 등록·수정(라벨·상태). 자격증명은 여기로 안 들어온다 — 세션은 아래 전용 라우트로만. */
+app.put("/api/commerce/account", async (c) => {
+  requireManager(c);
+  const b = await c.req.json<{ label?: string; status?: string }>().catch(() => null);
+  const label = String(b?.label ?? "").trim();
+  if (!label) return c.json({ error: "bad_request", message: "label 이 필요합니다." }, 400);
+  const existing = await getCommerceAccount("coupang");
+  const status = ["active", "disabled", "session_expired"].includes(String(b?.status))
+    ? (b!.status as any) : (existing?.status ?? "active");
+  await upsertCommerceAccount({
+    id: existing?.id ?? newId("cma"),
+    provider: "coupang",
+    label,
+    status,
+    createdAt: existing?.createdAt ?? Date.now(),
+  });
+  return c.json({ account: await getCommerceAccount("coupang") });
+});
+
+/**
+ * 로그인 세션 등록 — `commerce:login` 스크립트가 사람 로그인 뒤에 올린다.
+ *
+ * ⚠️ 이 값은 그 계정의 **전체 권한**이다(쿠키만 주입해도 로그인된다 · 2차인증 통과 상태).
+ *    아이디·비번보다 즉시 쓸 수 있어 더 위험하다 — 관리자만, 그리고 키가 없으면 저장 거부.
+ */
+app.put("/api/commerce/account/session", async (c) => {
+  requireManager(c);
+  const acct = await getCommerceAccount("coupang");
+  if (!acct) {
+    return c.json({ error: "not_found", message: "먼저 계정을 등록하세요 (PUT /api/commerce/account)." }, 404);
+  }
+  if (!commerceSessionStoreReady()) {
+    return c.json({
+      error: "session_key_missing",
+      message: "COMMERCE_SESSION_KEY 가 설정되지 않아 세션을 저장할 수 없습니다(평문 저장은 하지 않습니다).",
+    }, 503);
+  }
+  const body = await c.req.json<{ storageState?: unknown }>().catch(() => null);
+  const state = body?.storageState;
+  if (!looksLikeStorageState(state)) {
+    return c.json({ error: "invalid_storage_state", message: "cookies 배열이 있는 storageState JSON 이어야 합니다." }, 400);
+  }
+  await setCommerceSessionBlob(acct.id, sealCommerceSession(state));
+  // 값은 절대 되돌려주지 않는다. 있다/없다만.
+  return c.json({ ok: true, id: acct.id, status: "active", sessionUpdatedAt: Date.now() });
+});
+
+/** 세션 폐기(= 그 계정으로의 발급 중단). 계정 행은 남는다. */
+app.delete("/api/commerce/account/session", async (c) => {
+  requireManager(c);
+  const acct = await getCommerceAccount("coupang");
+  if (!acct) return c.json({ error: "not_found" }, 404);
+  await markCommerceSessionExpired(acct.id);
+  return c.json({ ok: true, id: acct.id, status: "session_expired" });
 });
 
 /**

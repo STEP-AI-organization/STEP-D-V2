@@ -103,7 +103,14 @@ import { uploadToNaver, NAVER_TARGETS, type NaverTarget } from "./naver-tv.ts";
 import { prepareWorkPath, cleanupWorkFile, sweepStaleWorkFiles } from "./naver-workdir.ts";
 import { upsertDistribution } from "./publish-guard.ts";
 import { commerceLinksEnabled, usableLinks, withCommerceLinks, type ProductCandidate } from "./commerce.ts";
-import { issueCoupangLinks, issueLinkForCandidate, PartnersUnavailableError } from "./coupang-partners.ts";
+import {
+  issueCoupangLinks, issueLinkForCandidate, PartnersSessionExpiredError,
+} from "./coupang-partners.ts";
+import { openCommerceSession, sealCommerceSession } from "./commerce-session-store.ts";
+import {
+  getCommerceAccount, getCommerceSessionBlob, markCommerceIssued,
+  markCommerceSessionExpired, setCommerceSessionBlob,
+} from "./db-pg.ts";
 import {
   FRESH_VIDEO_WINDOW_MS,
   VIDEO_ANALYZE_FRESH_INTERVAL_MS,
@@ -186,29 +193,42 @@ const DRAIN_MAX_MS = Number(process.env.DRAIN_MAX_MS ?? 50 * 60 * 1000);
 const WORKER_JOBS = (process.env.WORKER_JOBS ?? "all").trim().toLowerCase();
 /** 머신 전용 레인(gebd·naver)을 제외한 전체 타입 — "all" 워커가 집는 범위. */
 const ALL_LANE_TYPES: JobType[] = [...JOB_LANES.content, ...JOB_LANES.youtube];
-const CLAIM_TYPES: JobType[] | undefined =
-  WORKER_JOBS === "content" ? JOB_LANES.content
-  : WORKER_JOBS === "youtube" ? JOB_LANES.youtube
-  : WORKER_JOBS === "gebd" ? JOB_LANES.gebd
-  : WORKER_JOBS === "naver" ? JOB_LANES.naver
-  : WORKER_JOBS === "download" ? JOB_LANES.download
-  : WORKER_JOBS === "commerce" ? JOB_LANES.commerce
-  // 윈도우2 는 네이버 발행과 유튜브 다운로드를 한 프로세스로 돌린다(런처가 고정).
-  : WORKER_JOBS === "naver,download" || WORKER_JOBS === "download,naver"
-    ? [...JOB_LANES.naver, ...JOB_LANES.download]
-  // "all" 은 **머신 전용 레인을 빼고** 전부 집는다. gebd 는 GPU 가, naver 는 Playwright·
-  // 한국 IP·로그인 세션이 있는 PC 가 필요해서, 아무 워커나 집으면 100% 실패한다.
-  // (실측 2026-08-11: all 워커가 naver.publish 를 집어가 재시도만 쌓았다.)
+/**
+ * `WORKER_JOBS` 를 **레인 이름 목록**으로 읽는다 — `"naver,download,commerce"` 처럼 조합을
+ * 그대로 받는다.
+ *
+ * ⚠️ 예전에는 조합마다 정확한 문자열을 하나씩 비교했다(`"naver,download"` · `"download,naver"`).
+ *    레인이 늘 때마다 경우의 수가 곱으로 늘고, **빠뜨린 조합은 조용히 `all` 로 떨어져** 그 PC 가
+ *    남의 레인 잡까지 집어간다. 실제로 그 방식 때문에 사무실 PC 가 자동배포 순방까지 돌린 적이
+ *    있다. 그래서 목록 파싱으로 바꾸고, **모르는 이름은 조용히 넘기지 않고 던진다** —
+ *    오타가 all 워커로 둔갑하는 게 이 자리의 유일한 위험한 실패다.
+ */
+const KNOWN_LANES = Object.keys(JOB_LANES) as (keyof typeof JOB_LANES)[];
+const REQUESTED_LANES = WORKER_JOBS.split(",").map((s) => s.trim()).filter(Boolean);
+if (WORKER_JOBS !== "all") {
+  const unknown = REQUESTED_LANES.filter((l) => !KNOWN_LANES.includes(l as any));
+  if (unknown.length > 0) {
+    throw new Error(
+      `WORKER_JOBS 에 알 수 없는 레인: ${unknown.join(", ")} — 쓸 수 있는 값: ${KNOWN_LANES.join(" · ")} 또는 all. ` +
+      "오타를 조용히 all 로 처리하지 않는다(그러면 이 워커가 남의 레인 잡을 집어 실패시킨다).",
+    );
+  }
+}
+const SELECTED_LANES = REQUESTED_LANES.filter((l): l is keyof typeof JOB_LANES =>
+  KNOWN_LANES.includes(l as any));
+// "all" 은 **머신 전용 레인을 빼고** 전부 집는다. gebd 는 GPU 가, naver·commerce 는 한국 IP·
+// 로그인 세션이 있는 PC 가 필요해서, 아무 워커나 집으면 100% 실패한다.
+// (실측 2026-08-11: all 워커가 naver.publish 를 집어가 재시도만 쌓았다.)
+const CLAIM_TYPES: JobType[] = SELECTED_LANES.length > 0
+  ? [...new Set(SELECTED_LANES.flatMap((l) => JOB_LANES[l]))]
   : ALL_LANE_TYPES;
-/** The channel sweep enqueues YouTube work, so content/gebd-only workers must not run it. */
-// naver 워커도 sweep 을 돌리지 않는다 — 사무실 PC 한 대일 뿐이고, sweep 은
-// youtube 레인이 책임진다. 두 곳에서 돌면 같은 잡을 두 번 되살린다.
-// ⚠️ **조합 문자열까지 넣어야 한다.** 윈도우2 런처는 WORKER_JOBS 를 "naver,download" 로
-// 못 박는데(worker-naver.mts), 예전 판정은 정확히 "naver" 일 때만 걸러서 사무실 PC 가
-// 자동배포 순방과 채널 스윕까지 돌리고 있었다 — 프로덕션 자동배포 주기가 Cloud Scheduler
-// 가 아니라 그 PC 의 가동 여부에 좌우된다는 뜻이다. CLAIM_TYPES·YT_FREE 와 같은 방식.
-const NO_SWEEP = new Set(["content", "gebd", "naver", "download", "naver,download", "download,naver", "commerce"]);
-const RUNS_SWEEP = !NO_SWEEP.has(WORKER_JOBS);
+
+/**
+ * 채널 sweep 은 YouTube 잡을 큐잉하므로 **youtube 레인을 맡은 워커만** 돌린다.
+ * 머신 전용 워커(사무실 PC 등)가 같이 돌리면 자동배포 주기가 그 PC 가동 여부에 좌우된다.
+ * 레인 목록으로 판정하므로 조합이 늘어도 자동으로 맞는다(예전엔 조합 문자열을 빠뜨려 샜다).
+ */
+const RUNS_SWEEP = SELECTED_LANES.length === 0 || SELECTED_LANES.includes("youtube");
 
 let stopping = false;
 
@@ -1334,10 +1354,15 @@ async function handleCommerceLink(job: Job): Promise<void> {
   const clip = await getEntity<any>("clip", clipId);
   if (!clip) { console.warn(`[worker] commerce.link: clip ${clipId} 없음 — 버림`); return; }
 
+  // **어느 회사 계정으로 발급할 것인가** — 이 잡에서 제일 중요한 판정이다.
+  // 커미션 정산이 계정 단위라, 계정을 잘못 고르면 수익이 엉뚱한 회사로 귀속된다.
+  const acct = await resolveCommerceAccount(job, clipId);
+  if (!acct) return;
+
   // 교체(pick) 경로 — 검토 화면에서 "이거 말고 저거" 를 고른 경우. 검색 없이 그 후보로만 발급한다.
   const pick = job.payload.pick as { query?: string; productId?: number } | undefined;
   if (pick?.query && pick?.productId) {
-    await runCommercePick(clipId, clip, String(pick.query), Number(pick.productId));
+    await runCommercePick(clipId, clip, String(pick.query), Number(pick.productId), acct);
     return;
   }
 
@@ -1364,9 +1389,17 @@ async function handleCommerceLink(job: Job): Promise<void> {
     return;
   }
 
-  // 브라우저·로그인 문제(PartnersUnavailableError)는 던져서 큐 백오프에 맡긴다 —
-  // 사람이 크롬을 켜면 다음 시도에 붙는다. 사유는 로그에 그대로 남는다.
-  const results = await issueCoupangLinks(todo);
+  // 브라우저 문제(PartnersUnavailableError)는 던져서 큐 백오프에 맡긴다 — 사람이 PC 를 켜면
+  // 다음 시도에 붙는다. 세션 만료는 재시도해도 영원히 안 되므로 계정에 표시하고 조용히 끝낸다.
+  let results;
+  try {
+    const batch = await issueCoupangLinks(todo, acct.session);
+    results = batch.results;
+    await persistRefreshedSession(acct, batch.storageState);
+  } catch (e) {
+    if (e instanceof PartnersSessionExpiredError) return void (await onSessionExpired(acct, clipId, e));
+    throw e;
+  }
 
   const fresh = (await getEntity<any>("clip", clipId)) ?? clip;
   const merged = [...usableLinks(fresh.commerce?.links, Number.MAX_SAFE_INTEGER)];
@@ -1383,17 +1416,84 @@ async function handleCommerceLink(job: Job): Promise<void> {
     ...fresh,
     commerce: { ...(fresh.commerce ?? {}), links: merged, candidates, linkedAt: Date.now() },
   });
+  await markCommerceIssued(acct.id).catch(() => {});
 
   const okCount = results.filter((r) => r.ok).length;
   const failed = results.filter((r) => !r.ok);
   console.log(
-    `[worker] commerce.link ${clipId}: ${okCount}/${todo.length}건 발급 · 검토 대기 (총 ${merged.length}건)` +
+    `[worker] commerce.link ${clipId}: ${okCount}/${todo.length}건 발급 · 검토 대기 ` +
+      `(총 ${merged.length}건 · 계정 ${acct.label})` +
       (failed.length ? ` · 실패: ${failed.map((f) => `${f.query}(${f.error})`).join(" / ")}` : ""),
   );
 }
 
+/** 이 잡이 쓸 계정 + 세션. 못 정하면 **아무것도 하지 않는다**(공용 계정 폴백 없음). */
+interface ResolvedAccount { id: string; label: string; session: unknown | null }
+
+/**
+ * 어느 회사 계정으로 발급할지 정한다.
+ *
+ * **폴백이 없는 것이 요점이다.** 계정이 없다고 공용 계정으로 흘려보내면 A사 콘텐츠의 커미션이
+ * B사(혹은 우리) 계정으로 들어간다 — 에러가 아니라 "성공" 으로 보이는 종류라 아무도 모른다.
+ * `naver.publish` 가 "A사 클립이 B사 채널에 올라가는 사고를 막는다" 며 하는 대조와 같은 자리다.
+ */
+async function resolveCommerceAccount(job: Job, clipId: string): Promise<ResolvedAccount | null> {
+  const acct = await getCommerceAccount("coupang").catch(() => undefined);
+  if (!acct) {
+    // 개발기 전용 탈출구 — 명시적으로 켰을 때만. 프로덕션에서 조용히 켜지지 않게 기본 OFF.
+    if (String(process.env.COMMERCE_DEV_CDP ?? "").trim() === "1") {
+      console.warn(`[worker] commerce.link ${clipId}: ⚠️ 개발 모드(COMMERCE_DEV_CDP=1) — ` +
+        "이 PC 에 로그인된 크롬 계정으로 발급합니다. 수익 귀속이 그 계정으로 갑니다.");
+      return { id: "dev-cdp", label: "개발기 CDP", session: null };
+    }
+    console.warn(`[worker] commerce.link ${clipId}: 이 워크스페이스에 등록된 쿠팡파트너스 계정이 없습니다 — ` +
+      "발급하지 않습니다(공용 계정으로 대신 발급하면 수익이 엉뚱한 회사로 귀속됩니다).");
+    return null;
+  }
+  if (acct.status === "disabled") {
+    console.warn(`[worker] commerce.link ${clipId}: 계정 '${acct.label}' 이 비활성입니다 — 건너뜁니다.`);
+    return null;
+  }
+  // RLS 가 이미 테넌트로 걸러 주지만, 워커에는 시스템 스코프로 도는 구간이 있어 한 번 더 본다.
+  const jobTenant = job.tenantId || DEFAULT_TENANT_ID;
+  if (acct.tenantId !== jobTenant) {
+    console.error(`[worker] commerce.link ${clipId}: 테넌트 불일치 — 잡(${jobTenant}) vs 계정(${acct.tenantId}). ` +
+      "다른 회사 계정으로 발급할 뻔했습니다.");
+    return null;
+  }
+
+  const blob = await getCommerceSessionBlob(acct.id);
+  const session = openCommerceSession(blob);
+  if (!session) {
+    console.warn(`[worker] commerce.link ${clipId}: 계정 '${acct.label}' 에 쓸 수 있는 세션이 없습니다 — ` +
+      "그 계정으로 다시 로그인해 세션을 등록해야 합니다.");
+    await markCommerceSessionExpired(acct.id).catch(() => {});
+    return null;
+  }
+  return { id: acct.id, label: acct.label, session };
+}
+
+/** 쿠키가 회전하므로 실행 후 세션을 갱신해 둔다 — 안 하면 세션이 일찍 죽는다. */
+async function persistRefreshedSession(acct: ResolvedAccount, state: unknown | null): Promise<void> {
+  if (!state || acct.id === "dev-cdp") return;
+  try {
+    await setCommerceSessionBlob(acct.id, sealCommerceSession(state));
+  } catch (e) {
+    // 키 미설정 등 — 발급 자체는 성공했으므로 잡을 실패시키지 않는다. 다음에 세션이 만료될 뿐.
+    console.warn("[worker] commerce.link: 세션 갱신 저장 실패:", e instanceof Error ? e.message : e);
+  }
+}
+
+/** 세션 만료는 재시도로 안 풀린다 — 계정에 표시해 사람이 보게 하고 잡은 조용히 끝낸다. */
+async function onSessionExpired(acct: ResolvedAccount, clipId: string, e: Error): Promise<void> {
+  console.error(`[worker] commerce.link ${clipId}: ${e.message} (계정 ${acct.label})`);
+  if (acct.id !== "dev-cdp") await markCommerceSessionExpired(acct.id).catch(() => {});
+}
+
 /** 검토 화면의 상품 교체 — 저장된 후보 중 productId 로 지목된 것으로 링크를 다시 발급한다. */
-async function runCommercePick(clipId: string, clip: any, query: string, productId: number): Promise<void> {
+async function runCommercePick(
+  clipId: string, clip: any, query: string, productId: number, acct: ResolvedAccount,
+): Promise<void> {
   const candidates: ProductCandidate[] = (clip.commerce?.candidates ?? {})[query] ?? [];
   const chosen = candidates.find((c) => Number(c.productId) === productId);
   if (!chosen) {
@@ -1401,7 +1501,15 @@ async function runCommercePick(clipId: string, clip: any, query: string, product
     return;
   }
   const reason = (clip.commerce?.queries ?? []).find((q: any) => q?.query === query)?.reason;
-  const res = await issueLinkForCandidate(chosen, query, reason ? String(reason) : undefined);
+  let res;
+  try {
+    const out = await issueLinkForCandidate(chosen, query, reason ? String(reason) : undefined, acct.session);
+    res = out.result;
+    await persistRefreshedSession(acct, out.storageState);
+  } catch (e) {
+    if (e instanceof PartnersSessionExpiredError) return void (await onSessionExpired(acct, clipId, e));
+    throw e;
+  }
   if (!res.ok || !res.link) {
     console.error(`[worker] commerce.link ${clipId} 교체 실패 (${query}): ${res.error}`);
     return;
@@ -2877,8 +2985,11 @@ async function main(): Promise<void> {
   // OAuth 무관), 여기서 막으면 그 머신에 쓰지도 않을 시크릿을 넣어야 워커가 뜬다
   // (2026-08-12 윈도우2 실측 · 2026-08-14 naver,download 조합에서 재발 — 워커가 부팅
   // 즉시 죽는데 작업 스케줄러는 Running 으로 보여 원인이 안 보였다).
-  const YT_FREE = new Set(["naver", "gebd", "download", "naver,download", "download,naver"]);
-  const NEEDS_YT = !YT_FREE.has(WORKER_JOBS);
+  // ⚠️ 레인 **이름**으로 판정한다. 예전엔 WORKER_JOBS 문자열 전체를 집합과 비교해서,
+  //    조합이 하나 늘 때마다("naver,download,commerce") 목록에서 빠지고 그 순간 이 워커가
+  //    쓰지도 않을 YouTube 시크릿을 요구하며 **부팅 즉시 죽었다.**
+  const YT_FREE_LANES = new Set(["naver", "gebd", "download", "commerce"]);
+  const NEEDS_YT = SELECTED_LANES.length === 0 || SELECTED_LANES.some((l) => !YT_FREE_LANES.has(l));
   if (NEEDS_YT && (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET)) {
     console.error("[worker] GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET are required");
     process.exit(1);
@@ -2946,7 +3057,9 @@ async function main(): Promise<void> {
   );
   // naver 레인은 로컬 작업 폴더에 mp4 를 내려받는다. 잡이 중간에 죽으면 파일이 남으므로
   // 기동 시 한 번 훑는다(3일 지난 것). 다른 레인은 이 폴더를 안 쓴다.
-  if (WORKER_JOBS === "naver") {
+  // (레인 이름으로 판정 — 예전 `=== "naver"` 비교는 윈도우2 의 실제 값이 "naver,download" 라
+  //  **한 번도 돌지 않았다.** 그 PC 에 mp4 가 계속 쌓이고 있었다는 뜻이다.)
+  if (SELECTED_LANES.includes("naver")) {
     const swept = sweepStaleWorkFiles();
     if (swept) console.log(`[worker] naver 작업폴더 정리 — 오래된 mp4 ${swept}개 삭제`);
   }

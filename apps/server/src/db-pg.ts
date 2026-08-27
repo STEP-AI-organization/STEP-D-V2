@@ -1279,6 +1279,88 @@ export async function deleteNaverAccount(id: string): Promise<void> {
   await pool.query(`DELETE FROM naver_account WHERE id = $1`, [id]);
 }
 
+// ── 커머스(쿠팡파트너스) 계정 ───────────────────────────────────────────────────
+//
+// **회사마다 자기 법인 계정이다.** 커미션 정산이 계정 단위라, 한 계정에 subId 로 가르면
+// 돈이 우리 계정으로 들어와 지급대행이 된다. 그래서 계정 자체를 테넌트별로 둔다.
+// 스키마·RLS: migrations/0045_commerce-account.cjs
+
+export interface CommerceAccount {
+  id: string;
+  tenantId: string;
+  provider: string;
+  label: string;
+  status: "active" | "session_expired" | "disabled";
+  /** 세션이 올라온 시각. **값(session_blob)은 절대 싣지 않는다** — 있다/없다만. */
+  sessionUpdatedAt: number | null;
+  lastIssuedAt: number | null;
+  createdAt: number;
+}
+
+// ⚠️ session_blob 을 이 목록에 넣지 말 것. 한 번 SELECT 에 들어가면 로그·응답·에러 덤프
+//    어디로든 새어나간다 — 세션 쿠키는 그 계정의 전체 권한이다(주입만으로 로그인된다).
+const COMMERCE_ACCOUNT_COLS = `id, tenant_id AS "tenantId", provider, label, status,
+  session_updated_at AS "sessionUpdatedAt", last_issued_at AS "lastIssuedAt",
+  created_at AS "createdAt"`;
+
+export async function listCommerceAccounts(): Promise<CommerceAccount[]> {
+  const { rows } = await pool.query(
+    `SELECT ${COMMERCE_ACCOUNT_COLS} FROM commerce_account ORDER BY created_at DESC`);
+  return rows as CommerceAccount[];
+}
+
+/**
+ * **이 워크스페이스의 계정.** 잡이 `tenantId` 로 자기 계정을 찾는 유일한 통로다.
+ * RLS 가 걸려 있어 남의 회사 행은 애초에 안 나온다 — 그게 오귀속 방어의 1층이다.
+ */
+export async function getCommerceAccount(provider = "coupang"): Promise<CommerceAccount | undefined> {
+  const { rows } = await pool.query(
+    `SELECT ${COMMERCE_ACCOUNT_COLS} FROM commerce_account WHERE provider = $1`, [provider]);
+  return rows[0] as CommerceAccount | undefined;
+}
+
+export async function upsertCommerceAccount(
+  a: Pick<CommerceAccount, "id" | "provider" | "label" | "status" | "createdAt">,
+): Promise<void> {
+  // sessionUpdatedAt 은 받지 않는다 — 세션은 setCommerceSessionBlob 으로만 들어온다.
+  // (같이 쓰게 두면 "세션 없이 세션 시각만 있는" 행이 만들어진다.)
+  await pool.query(
+    `INSERT INTO commerce_account (id, provider, label, status, created_at)
+     VALUES ($1,$2,$3,$4,$5)
+     ON CONFLICT (tenant_id, provider) DO UPDATE SET
+       label = EXCLUDED.label, status = EXCLUDED.status`,
+    [a.id, a.provider, a.label, a.status, a.createdAt]);
+}
+
+/** 봉인된 세션을 저장한다. blob 은 절대 로그·응답에 싣지 않는다. */
+export async function setCommerceSessionBlob(id: string, blob: string): Promise<void> {
+  await pool.query(
+    `UPDATE commerce_account SET session_blob = $2, session_updated_at = $3, status = 'active'
+       WHERE id = $1`, [id, blob, Date.now()]);
+}
+
+export async function getCommerceSessionBlob(id: string): Promise<string | null> {
+  const { rows } = await pool.query(
+    `SELECT session_blob FROM commerce_account WHERE id = $1`, [id]);
+  return (rows[0]?.session_blob as string | undefined) ?? null;
+}
+
+/** 세션이 죽었다 — 사람이 다시 로그인해야 한다. 잡은 조용히 건너뛴다. */
+export async function markCommerceSessionExpired(id: string): Promise<void> {
+  await pool.query(
+    `UPDATE commerce_account SET session_blob = NULL, session_updated_at = NULL,
+       status = 'session_expired' WHERE id = $1`, [id]);
+}
+
+export async function markCommerceIssued(id: string): Promise<void> {
+  await pool.query(
+    `UPDATE commerce_account SET last_issued_at = $2 WHERE id = $1`, [id, Date.now()]);
+}
+
+export async function deleteCommerceAccount(id: string): Promise<void> {
+  await pool.query(`DELETE FROM commerce_account WHERE id = $1`, [id]);
+}
+
 // ── TikTok accounts ────────────────────────────────────────────────────────────
 
 export interface TikTokAccount {

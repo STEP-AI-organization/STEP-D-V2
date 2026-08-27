@@ -3078,3 +3078,22 @@ export async function issueCommerceLinks(
   if (!res.ok) throw new ApiError(res.status, await errorMessageOf(res));
   return (await res.json()) as { jobId: string; queued: boolean };
 }
+
+/** 이 워크스페이스의 쿠팡파트너스 계정 상태. 세션 값은 서버가 절대 안 준다 — 있다/없다만. */
+export interface CommerceAccount {
+  id: string;
+  label: string;
+  status: "active" | "session_expired" | "disabled";
+  sessionUpdatedAt: number | null;
+  lastIssuedAt: number | null;
+}
+
+export async function fetchCommerceAccount(): Promise<{
+  account: CommerceAccount | null;
+  sessionKeyReady: boolean;
+  enabled: boolean;
+}> {
+  const res = await fetch(`${API_BASE}/commerce/account`);
+  if (!res.ok) throw new ApiError(res.status, await errorMessageOf(res));
+  return (await res.json()) as { account: CommerceAccount | null; sessionKeyReady: boolean; enabled: boolean };
+}

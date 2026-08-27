@@ -31,7 +31,7 @@
  * 이동하지 않고, 방어선으로 `link.coupang.com` 으로의 문서 이동을 라우트 단계에서 막는다.
  * 링크 검증이 필요해도 열지 마라 — 형식 검증은 `commerce.ts` 가 문자열로 한다.
  */
-import { chromium, type Browser, type Page } from "playwright";
+import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { isAffiliateUrl, type AffiliateLink, type ProductCandidate } from "./commerce.ts";
 
 /**
@@ -94,6 +94,31 @@ export class PartnersUnavailableError extends Error {
 }
 
 /**
+ * 주입한 세션이 죽었다 — **사람이 다시 로그인해야 한다.**
+ *
+ * 브라우저가 없어서 못 한 것(`PartnersUnavailableError`, 재시도 가치 있음)과 구분한다.
+ * 이건 재시도해도 영원히 안 되므로, 호출부가 계정을 `session_expired` 로 표시해
+ * 사람에게 보이게 만들어야 한다 — 조용히 0건 발급으로 끝나면 아무도 모른다.
+ */
+export class PartnersSessionExpiredError extends Error {
+  readonly code = "partners_session_expired";
+  constructor(message = "쿠팡파트너스 세션이 만료됐습니다 — 해당 계정으로 다시 로그인해야 합니다.") {
+    super(message);
+    this.name = "PartnersSessionExpiredError";
+  }
+}
+
+/** 한 번의 브라우저 실행 결과. */
+export interface IssueBatch {
+  results: IssueResult[];
+  /**
+   * 실행 후의 세션. 쿠팡이 쿠키를 회전시키므로 **저장해 두면 세션이 더 오래 산다.**
+   * 주입 모드에서만 값이 있다(CDP 모드는 그 크롬의 프로필이 알아서 유지한다).
+   */
+  storageState: unknown | null;
+}
+
+/**
  * 어떤 상품을 고를 것인가 — **결정론.**
  *
  * 검색 응답은 이미 쿠팡랭킹순이라 1위가 곧 플랫폼의 판단이다. 우리는 거기에 규칙만 더한다:
@@ -130,25 +155,66 @@ function toCandidate(p: CoupangProduct): ProductCandidate {
 }
 
 /**
- * 로그인된 파트너스 페이지를 확보해 콜백에 넘긴다.
+ * 파트너스 콘솔을 열어 콜백에 넘긴다. 모드가 둘이다:
+ *
+ *  - **세션 주입(운영 · storageState 있음)** — 크롬을 새로 띄우고 그 회사 세션을 넣는다.
+ *    회사마다 계정이 다르므로(커미션 정산이 계정 단위라 계정 자체를 갈라야 한다) 잡마다
+ *    해당 테넌트의 세션을 주입해 쓴다. 크롬을 N개 상시 띄워 둘 필요가 없다.
+ *    (실측 2026-08-27: 빈 브라우저에 쿠키 37개만 주입하니 그 계정으로 로그인됐다.)
+ *  - **CDP 접속(개발 · storageState 없음)** — 사람이 미리 로그인해 둔 크롬에 붙는다.
+ *    개발기에서 손으로 확인할 때 쓴다.
+ *
+ * ⚠️ **headless 로 돌리지 마라.** 세션이 유효해도 Akamai 가 막는다(실측: 쿠키를 정상 주입한
+ *    headless 크롬이 Access Denied HTML 을 받았고, 같은 세션의 headed 크롬은 통과했다).
+ *    봇 판정은 쿠키가 아니라 브라우저 자체를 본다 — 그래서 이 잡은 화면이 있는 PC 에서만 돈다.
+ *
  * 연결·자기클릭 방어선·shim·로그인 확인이 전부 여기 한 번에 있다 — 두 벌이 되면 한쪽만 고쳐진다.
  */
-async function withPartnersPage<T>(fn: (page: Page) => Promise<T>): Promise<T> {
+async function withPartnersPage<T>(
+  storageState: unknown | null,
+  fn: (page: Page) => Promise<T>,
+): Promise<{ result: T; storageState: unknown | null }> {
+  const inject = storageState != null;
   let browser: Browser;
-  try {
-    browser = await chromium.connectOverCDP(CDP_URL, { timeout: 10_000 });
-  } catch (e) {
-    throw new PartnersUnavailableError(
-      `쿠팡파트너스 브라우저에 붙지 못했습니다 (${CDP_URL}). ` +
-        "전용 프로필 크롬이 --remote-debugging-port 로 떠 있고 파트너스에 로그인돼 있어야 합니다. " +
-        `원인: ${e instanceof Error ? e.message : String(e)}`,
-    );
+  let ctx: BrowserContext;
+  let ownsBrowser = false;
+
+  if (inject) {
+    try {
+      browser = await chromium.launch({
+        channel: "chrome",
+        headless: false,   // ⚠️ 위 주석 참조 — headless 는 세션이 유효해도 차단된다.
+        args: ["--disable-blink-features=AutomationControlled"],
+      });
+      ownsBrowser = true;
+      ctx = await browser.newContext({
+        storageState: storageState as any,
+        locale: "ko-KR",
+        timezoneId: "Asia/Seoul",
+        viewport: { width: 1280, height: 900 },
+      });
+    } catch (e) {
+      throw new PartnersUnavailableError(
+        "크롬을 띄우지 못했습니다. 이 잡은 **화면이 있는 PC**에서만 돕니다(headless 는 봇 차단). " +
+          `원인: ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
+  } else {
+    try {
+      browser = await chromium.connectOverCDP(CDP_URL, { timeout: 10_000 });
+    } catch (e) {
+      throw new PartnersUnavailableError(
+        `쿠팡파트너스 브라우저에 붙지 못했습니다 (${CDP_URL}). ` +
+          "전용 프로필 크롬이 --remote-debugging-port 로 떠 있고 파트너스에 로그인돼 있어야 합니다. " +
+          `원인: ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
+    const existing = browser.contexts()[0];
+    if (!existing) throw new PartnersUnavailableError("브라우저 컨텍스트가 없습니다 (크롬이 막 떴을 수 있습니다).");
+    ctx = existing;
   }
 
   try {
-    const ctx = browser.contexts()[0];
-    if (!ctx) throw new PartnersUnavailableError("브라우저 컨텍스트가 없습니다 (크롬이 막 떴을 수 있습니다).");
-
     const page: Page =
       ctx.pages().find((p) => p.url().startsWith(CONSOLE_ORIGIN)) ?? (await ctx.newPage());
 
@@ -170,26 +236,33 @@ async function withPartnersPage<T>(fn: (page: Page) => Promise<T>): Promise<T> {
 
     await installNameShim(page);
 
-    // 로그인 확인 — 비로그인이면 API 가 200 에 빈 데이터를 주기도 해서 원인이 안 보인다.
-    const signedIn = await page.evaluate(async () => {
+    // 로그인 확인 — 비로그인이면 API 가 200 에 **빈 데이터**를 준다(rCode 는 0 인데 계정 정보가
+    // 없다). 그래서 rCode 만 보면 안 되고 계정 신원(email)이 있는지까지 봐야 한다.
+    const who = await page.evaluate(async () => {
       try {
         const r = await fetch("/api/v1/config", { credentials: "include" });
         const j = (await r.json()) as any;
-        return j?.rCode === "0" && !!j?.data;
+        return { rCode: j?.rCode ?? null, email: j?.data?.settings?.email ?? null };
       } catch {
-        return false;
+        return { rCode: null, email: null };
       }
     });
-    if (!signedIn) {
+    if (!who.email) {
+      // 주입 모드면 세션이 죽은 것이고(사람이 재로그인), CDP 모드면 아직 로그인을 안 한 것이다.
+      if (inject) throw new PartnersSessionExpiredError();
       throw new PartnersUnavailableError(
         "쿠팡파트너스에 로그인돼 있지 않습니다. 전용 프로필 크롬에서 사람이 1회 로그인해야 합니다.",
       );
     }
 
-    return await fn(page);
+    const result = await fn(page);
+    // 쿠키가 회전하므로 실행 후 상태를 돌려준다 — 저장해 두면 세션이 더 오래 산다.
+    const fresh = inject ? await ctx.storageState().catch(() => null) : null;
+    return { result, storageState: fresh };
   } finally {
-    // connectOverCDP 는 **붙은 것**이지 띄운 게 아니다 — close() 는 연결만 끊고
+    // 주입 모드는 우리가 띄웠으니 닫는다. CDP 모드는 **붙은 것**이라 close() 가 연결만 끊고
     // 사람이 로그인해 둔 크롬은 그대로 살아 있다(다음 잡이 다시 붙는다).
+    if (ownsBrowser) await ctx.close().catch(() => {});
     await browser.close().catch(() => {});
   }
 }
@@ -201,7 +274,11 @@ async function withPartnersPage<T>(fn: (page: Page) => Promise<T>): Promise<T> {
  * 발급된 링크는 **status 가 붙지 않은 채로** 나간다 — 승인은 사람이 하는 별개 단계다
  * (`commerce.ts` 의 `normalizeStatus` 가 그런 링크를 `pending` 으로 읽는다).
  */
-export async function issueCoupangLinks(queries: (string | QueryInput)[]): Promise<IssueResult[]> {
+export async function issueCoupangLinks(
+  queries: (string | QueryInput)[],
+  /** 이 회사의 로그인 세션. 없으면 개발용 CDP 모드로 떨어진다. */
+  storageState: unknown | null = null,
+): Promise<IssueBatch> {
   const seen = new Set<string>();
   const wanted: QueryInput[] = [];
   for (const q of queries) {
@@ -210,20 +287,21 @@ export async function issueCoupangLinks(queries: (string | QueryInput)[]): Promi
     seen.add(query.toLowerCase());
     wanted.push({ query, reason: typeof q === "string" ? undefined : q?.reason });
   }
-  if (wanted.length === 0) return [];
+  if (wanted.length === 0) return { results: [], storageState: null };
 
-  return withPartnersPage(async (page) => {
-    const out: IssueResult[] = [];
+  const out = await withPartnersPage(storageState, async (page) => {
+    const acc: IssueResult[] = [];
     for (const q of wanted) {
       try {
-        out.push(await issueOne(page, q));
+        acc.push(await issueOne(page, q));
       } catch (e) {
-        out.push({ query: q.query, ok: false, error: e instanceof Error ? e.message : String(e) });
+        acc.push({ query: q.query, ok: false, error: e instanceof Error ? e.message : String(e) });
       }
       await page.waitForTimeout(GAP_MS);
     }
-    return out;
+    return acc;
   });
+  return { results: out.result, storageState: out.storageState };
 }
 
 /**
@@ -234,11 +312,15 @@ export async function issueLinkForCandidate(
   candidate: ProductCandidate,
   query: string,
   reason?: string,
-): Promise<IssueResult> {
+  storageState: unknown | null = null,
+): Promise<{ result: IssueResult; storageState: unknown | null }> {
   if (!candidate?.productId || !candidate?.itemId) {
-    return { query, ok: false, error: "후보 상품 정보가 불완전합니다 (productId·itemId 필요)" };
+    return {
+      result: { query, ok: false, error: "후보 상품 정보가 불완전합니다 (productId·itemId 필요)" },
+      storageState: null,
+    };
   }
-  return withPartnersPage(async (page) => {
+  return withPartnersPage(storageState, async (page) => {
     const product: CoupangProduct = {
       productId: candidate.productId,
       itemId: candidate.itemId,

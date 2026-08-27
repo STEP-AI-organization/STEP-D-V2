@@ -381,6 +381,94 @@ describe("esbuild __name 회귀 — page.evaluate 가 브라우저에서 터지�
   });
 });
 
+/**
+ * 회사마다 자기 법인 파트너스 계정을 쓴다 — 커미션 **정산이 계정 단위**이기 때문이다.
+ * 계정을 잘못 고르면 A사 콘텐츠의 수익이 B사(혹은 우리) 계정으로 들어간다. 그런데 이 실패는
+ * 에러가 아니라 "발급 성공" 으로 보인다 — 그래서 소스로 잠근다.
+ */
+describe("수익 오귀속 방지 — 어느 회사 계정으로 발급하는가", () => {
+  const w = read("worker.ts");
+  const resolver = /async function resolveCommerceAccount[\s\S]*?\n\}(?=\r?\n)/.exec(w)?.[0] ?? "";
+
+  it("발급 전에 계정을 해석한다", () => {
+    assert.notEqual(resolver, "", "resolveCommerceAccount 를 못 찾았다");
+    const handler = /async function handleCommerceLink[\s\S]*?\n\}(?=\r?\n)/.exec(w)?.[0] ?? "";
+    assert.match(handler, /resolveCommerceAccount\(job/,
+      "잡이 계정을 해석하지 않고 발급한다 — 계정이 하나로 못박히면 수익이 엉뚱한 회사로 귀속된다");
+  });
+
+  it("계정이 없으면 **아무것도 하지 않는다** — 공용 계정 폴백이 없다", () => {
+    assert.match(resolver, /if \(!acct\)/, "계정 없음 분기가 없다");
+    assert.match(resolver, /return null/, "계정이 없을 때 발급을 멈추지 않는다");
+  });
+
+  it("잡 테넌트와 계정 테넌트를 대조한다 (naver.publish 와 같은 가드)", () => {
+    assert.match(resolver, /job\.tenantId/, "잡의 테넌트를 안 본다");
+    assert.match(resolver, /acct\.tenantId !== jobTenant/,
+      "테넌트 불일치를 대조하지 않는다 — 다른 회사 계정으로 발급될 수 있다");
+  });
+
+  it("개발용 공용 계정 탈출구는 명시적 opt-in 이다", () => {
+    assert.match(resolver, /COMMERCE_DEV_CDP/, "개발 탈출구가 없다면 이 테스트를 지울 것");
+    assert.match(resolver, /=== "1"/, "개발 탈출구가 느슨하게 열린다 — 정확한 값에서만 켜져야 한다");
+  });
+
+  it("세션이 없으면 계정을 session_expired 로 표시한다 — 조용히 0건으로 끝나지 않게", () => {
+    assert.match(resolver, /markCommerceSessionExpired/,
+      "세션 없음이 사람에게 안 보인다 — 아무도 재로그인해야 하는 걸 모른다");
+  });
+});
+
+describe("세션 취급 — 그 계정의 전체 권한이다", () => {
+  it("세션 blob 을 SELECT 목록에 넣지 않는다 (로그·응답으로 샌다)", () => {
+    const db = read("db-pg.ts");
+    const cols = /const COMMERCE_ACCOUNT_COLS = `([\s\S]*?)`/.exec(db)?.[1] ?? "";
+    assert.notEqual(cols, "", "COMMERCE_ACCOUNT_COLS 를 못 찾았다");
+    assert.equal(cols.includes("session_blob"), false,
+      "세션 blob 이 공용 SELECT 목록에 있다 — 목록·응답·에러 덤프 어디로든 샌다");
+  });
+
+  it("키가 없으면 저장을 거부한다 — 평문 폴백 없음", () => {
+    const crypto = read("session-crypto.ts");
+    assert.match(crypto, /미설정 — 세션을 저장할 수 없습니다/,
+      "키 없이 저장이 통과하면 평문으로 남는다");
+    // 네이버·커머스가 **같은** 암호 구현을 쓴다(복사본이 두 벌이면 한쪽만 고쳐진다).
+    for (const f of ["naver-session-store.ts", "commerce-session-store.ts"]) {
+      assert.match(read(f), /from "\.\/session-crypto\.ts"/, `${f} 가 공용 암호 계층을 안 쓴다`);
+    }
+  });
+
+  it("제공자별로 키가 다르다 — 하나가 새도 다른 쪽이 안 열린다", () => {
+    assert.match(read("naver-session-store.ts"), /NAVER_SESSION_KEY/);
+    assert.match(read("commerce-session-store.ts"), /COMMERCE_SESSION_KEY/);
+  });
+});
+
+describe("레인 판정 — 조합이 늘어도 조용히 틀리지 않는다", () => {
+  const w = read("worker.ts");
+
+  it("WORKER_JOBS 를 레인 목록으로 파싱한다 (조합 문자열 하드코딩 금지)", () => {
+    assert.match(w, /REQUESTED_LANES/, "레인 목록 파싱이 없다");
+    assert.equal(/WORKER_JOBS === "naver,download"/.test(w), false,
+      "조합 문자열을 다시 하드코딩했다 — 빠뜨린 조합이 조용히 all 워커가 된다");
+  });
+
+  it("모르는 레인 이름은 던진다 — 오타가 all 워커로 둔갑하지 않게", () => {
+    assert.match(w, /알 수 없는 레인/, "오타를 조용히 삼킨다");
+  });
+
+  it("YouTube 자격증명 요구·sweep 도 레인 이름으로 판정한다", () => {
+    assert.match(w, /YT_FREE_LANES/, "YT 자격증명 판정이 아직 문자열 비교다 — 조합이 늘면 워커가 부팅 즉시 죽는다");
+    assert.match(w, /SELECTED_LANES\.includes\("youtube"\)/, "sweep 판정이 레인 기반이 아니다");
+  });
+
+  it("윈도우2 런처가 commerce 레인을 함께 돈다", () => {
+    const launcher = fs.readFileSync(path.join(SRC, "..", "scripts", "worker-naver.mts"), "utf-8");
+    assert.match(launcher, /WORKER_JOBS = "naver,download,commerce"/,
+      "윈도우2 가 커머스 레인을 안 집으면 발급 잡이 영원히 pending 으로 쌓인다");
+  });
+});
+
 describe("usableLinks — 저장된 값에서 쓸 수 있는 것만", () => {
   it("중복 URL·이름 없는 항목·잘못된 형식을 걸러낸다", () => {
     const out = usableLinks([

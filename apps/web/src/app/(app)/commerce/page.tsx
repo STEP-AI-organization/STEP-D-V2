@@ -26,10 +26,12 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { useToast } from "@/components/ui/toast";
 import {
   fetchClipCommerce,
+  fetchCommerceAccount,
   fetchCommerceReview,
   issueCommerceLinks,
   saveCommerceDecisions,
   type ClipCommerce,
+  type CommerceAccount,
   type CommerceLink,
   type CommerceLinkStatus,
   type CommerceReview,
@@ -46,6 +48,7 @@ function StatusChip({ status }: { status?: CommerceLinkStatus }) {
 export default function CommerceReviewPage() {
   const { toast } = useToast();
   const [review, setReview] = useState<CommerceReview | null>(null);
+  const [acct, setAcct] = useState<{ account: CommerceAccount | null; sessionKeyReady: boolean } | null>(null);
   const [loading, setLoading] = useState(true);
   const [openId, setOpenId] = useState<string | null>(null);
   const [detail, setDetail] = useState<ClipCommerce | null>(null);
@@ -54,7 +57,9 @@ export default function CommerceReviewPage() {
 
   const load = useCallback(async () => {
     try {
-      setReview(await fetchCommerceReview());
+      const [r, a] = await Promise.all([fetchCommerceReview(), fetchCommerceAccount()]);
+      setReview(r);
+      setAcct(a);
     } catch (e) {
       toast({ title: "검토 목록을 불러오지 못했습니다", description: (e as Error).message, tone: "error" });
     } finally {
@@ -140,10 +145,41 @@ export default function CommerceReviewPage() {
         </Card>
       )}
 
+      {/*
+        회사마다 **자기 법인 파트너스 계정**을 쓴다 — 커미션 정산이 계정 단위이기 때문이다.
+        계정이 없으면 서버가 아예 발급을 안 하는데(공용 계정으로 대신 발급하면 수익이 엉뚱한
+        회사로 귀속된다), 그 사실을 화면이 말하지 않으면 "왜 아무것도 안 생기지" 로 막힌다.
+      */}
+      {acct && !acct.account && (
+        <Card className="border-amber-500/40 bg-amber-500/5 p-3 text-sm">
+          <div className="font-semibold">쿠팡파트너스 계정이 등록되지 않았습니다</div>
+          <div className="mt-1 text-muted-foreground">
+            커미션은 <strong>등록된 계정으로 정산</strong>되므로, 회사 법인 명의 계정을 한 번
+            연결해야 링크가 발급됩니다. 워커 PC 에서{" "}
+            <code className="rounded bg-muted px-1">pnpm --filter @stepd/server commerce:login</code>{" "}
+            을 실행해 로그인하세요.
+          </div>
+        </Card>
+      )}
+      {acct?.account?.status === "session_expired" && (
+        <Card className="border-amber-500/40 bg-amber-500/5 p-3 text-sm">
+          <strong>{acct.account.label}</strong> 계정의 로그인이 만료됐습니다 — 다시 로그인해야
+          새 링크가 발급됩니다 (<code className="rounded bg-muted px-1">commerce:login</code>).
+          이미 승인된 링크는 그대로 발행됩니다.
+        </Card>
+      )}
+      {acct && !acct.sessionKeyReady && (
+        <Card className="border-destructive/40 bg-destructive/5 p-3 text-sm">
+          서버에 <code>COMMERCE_SESSION_KEY</code> 가 없어 계정 세션을 저장할 수 없습니다
+          (평문 저장은 하지 않습니다).
+        </Card>
+      )}
+
       <div className="flex items-center justify-between gap-3">
         <div className="text-sm text-muted-foreground">
           상품이 붙은 클립 <strong className="text-foreground">{rows.length}</strong>개 ·
           검토 대기 <strong className="text-foreground">{pendingTotal}</strong>건
+          {acct?.account && <span> · 계정 <strong className="text-foreground">{acct.account.label}</strong></span>}
         </div>
         <Button variant="outline" size="sm" onClick={() => void load()}>
           <RefreshCw /> 새로고침

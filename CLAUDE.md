@@ -55,7 +55,7 @@ docs/          ops(현황·운영) / plans(계획) / reference / research / prot
 
 ## 백엔드 — apps/server
 
-Hono 단일 진입점(index.ts, **~8800줄, 라우트 235개**) + 별도 워커 프로세스 구조.
+Hono 단일 진입점(index.ts, **~8900줄, 라우트 239개**) + 별도 워커 프로세스 구조.
 (2026-08-25 실측 갱신)
 
 | 파일 | 역할 |
@@ -99,9 +99,13 @@ download: youtube.download
             봇으로 판정해(쿠키 물려도) 다운로드 상시 실패 → 한국 IP 가 받아 GCS 로 올리고
             분석은 클라우드 content 레인이 잇는다. 런처 worker:naver 가 naver,download 고정
 commerce: commerce.link
-          → 로그인된 쿠팡파트너스 콘솔이 뜬 PC 전용 (2026-08-27 추가). 파트너스 공개 API 는
-            **최종승인(누적 판매 15만원) 후에야** 나와서, 그 전까지는 콘솔 내부 API 를
-            CDP 로 붙어 부른다. 세션은 그 PC 전용 크롬 프로필에만 둔다.
+          → **윈도우2**(naver·download 와 같은 PC · 런처가 naver,download,commerce 고정).
+            파트너스 공개 API 는 최종승인(누적 판매 15만원) 후에야 나와서, 그 전까지는
+            콘솔 내부 API 를 브라우저 컨텍스트에서 부른다. 이 PC 여야 하는 이유 둘 —
+            ① 한국 IP(콘솔이 Akamai) ② **화면 있는 크롬**: headless 는 세션이 유효해도
+            차단된다(실측 2026-08-27). 그래서 Cloud Run 에 못 올린다.
+            **회사마다 계정이 다르다**(커미션 정산이 계정 단위) → 잡마다 그 테넌트의 세션을
+            주입해 쓴다(commerce_account · 상시 크롬 N개 불필요).
             승인 후 공식 딥링크 API 로 바뀌면 이 레인은 없어지고 클라우드로 간다.
 ⚠️ 2026-08-12 이전에는 thumbnail.* 가 **어느 레인에도 없어** 프로덕션(content·youtube 워커만
    뜬다)에서 아무도 집지 않았다. 잡을 추가하면 반드시 레인에 넣을 것 —
@@ -187,7 +191,12 @@ COMMERCE_LINKS_ENABLED   쿠팡 제휴 링크 게이트. 기본 OFF · 오타=OF
                       링크를 발급하고 ③ **사람이 /commerce 에서 승인한 것만** YouTube
                       설명란에 링크+대가성 문구로 붙는다(발급≠게시 · 미승인은 안 나간다).
                       ⚠️ 켤 때 commerce 레인 워커도 같이 띄울 것 — 안 그러면 잡이 조용히 쌓인다
-COUPANG_CDP_URL       로그인된 파트너스 크롬의 CDP 주소 (기본 http://127.0.0.1:9223)
+COMMERCE_SESSION_KEY  커머스 세션 봉인 키 (base64 32바이트 · 없으면 세션 저장 자체를 거부).
+                      **고객사 법인 계정의 전체 권한**이 담기므로 평문 폴백은 없다.
+                      회사별 계정 등록: `pnpm --filter @stepd/server commerce:login`
+COUPANG_CDP_URL       (개발용) 미리 로그인해 둔 파트너스 크롬의 CDP 주소 · 기본 127.0.0.1:9223
+COMMERCE_DEV_CDP      (개발용) 1 이면 계정 행이 없어도 위 CDP 크롬 계정으로 발급한다.
+                      ⚠️ 프로덕션 금지 — 수익이 그 계정으로 귀속된다
 GEBD_IMAGE / GEBD_MODEL / GEBD_ASSETS / GEBD_CHUNK_SEC(300) / GEBD_CORES(1)   GPU VM
 GEBD_VM_NAME / GEBD_VM_ZONE · WORKER_VM_NAME / WORKER_VM_ZONE   /admin/*-vm/wake 대상
 META_APP_ID / META_APP_SECRET / META_REDIRECT_URI                Meta OAuth (Facebook Page 전용)
