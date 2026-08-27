@@ -24,7 +24,9 @@ import type { AdoptReframe } from "@/components/adopt-dialog";
 // 순방 판정과 **같은 함수**로 예상 건수를 낸다. 미러(aspect-presets 식 "바이트 동일" 주석)로
 // 두지 않는 이유: 이 숫자는 곧 청구 예상으로 읽히는데, 미러가 한 번 어긋나면 화면이 조용히
 // 거짓 약속을 하게 된다. automation.ts 는 import 0개짜리 순수 모듈이라 그대로 가져올 수 있다.
-import { formatWeekdays, monthlyPublishEstimate, ruleSlots, slotLabel, type RuleSlot } from "@server-pure/automation";
+import {
+  formatWeekdays, monthlyPublishEstimate, perDayCount, ruleSlots, slotLabel, type RuleSlot,
+} from "@server-pure/automation";
 import {
   LayoutSliders,
   SUBTITLE_DEFAULTS,
@@ -1098,7 +1100,7 @@ export default function AutomationPage() {
         <div className="flex flex-wrap items-baseline gap-2">
           <h4 className="text-[12.5px] font-semibold" style={{ color: "var(--sd-fg)" }}>배포 채널</h4>
           <span className="text-[11px]" style={{ color: "var(--sd-mut)" }}>
-            {selChannels.length}개 선택 · 채널당 하루 {dailyQuota}개
+            {selChannels.length}개 선택 · 채널당 하루 {perDayCount({ slots, dailyQuota })}개
           </span>
         </div>
         <div className="grid max-h-40 grid-cols-1 gap-1 overflow-y-auto rounded-[4px] p-1.5"
@@ -1229,7 +1231,7 @@ export default function AutomationPage() {
               <span className="text-[10.5px]" style={{ color: "var(--sd-label)" }}>발행 시간 (KST)</span>
               <span className="text-[10.5px]" style={{ color: "var(--sd-fg-dim)" }}>
                 {slots.length
-                  ? `하루 ${slots.reduce((n, s) => n + s.count, 0)}개 — 할당량 대신 이 시간에 맞춰 나갑니다`
+                  ? `하루 ${perDayCount({ slots, dailyQuota })}개 — 할당량 대신 이 시간에 맞춰 나갑니다`
                   : "비우면 하루 할당량 방식 (고급 설정)"}
               </span>
             </div>
@@ -1394,7 +1396,7 @@ export default function AutomationPage() {
             </div>
             <p className="text-[10.5px]" style={{ color: "var(--sd-fg-dim)" }}>
               {slots.length
-                ? `${formatWeekdays(weekdays)} · ${slots.map(slotLabel).join(" ")} 에 맞춰 채널마다 하루 ${slots.reduce((n, s) => n + s.count, 0)}개를 내보냅니다.`
+                ? `${formatWeekdays(weekdays)} · ${slots.map(slotLabel).join(" ")} 에 맞춰 채널마다 하루 ${perDayCount({ slots, dailyQuota })}개를 내보냅니다.`
                 : `${activeStart}시~${activeEnd}시(KST) 사이에만 배포하고, 채널마다 하루 ${dailyQuota}개를 채우면 다음 날까지 쉽니다.`}
             </p>
 
@@ -1708,7 +1710,11 @@ export default function AutomationPage() {
                       if (typeof n !== "number") return null;
                       return (
                         <span key={`${c.platform}:${c.accountId}`} className="sd-tag">
-                          오늘: {channelLabel(c.platform)} {n}/{r.dailyQuota ?? 3}
+                          {/* 분모는 **서버 판정과 같은 함수**로 낸다(perDayCount). 예전엔 r.dailyQuota
+                              를 직접 읽어, 발행 시간(슬롯)을 쓰는 계획에서 늘 틀린 수가 떴다 —
+                              15:00×20 계획인데 "0/3" (2026-08-27 사용자 신고). 슬롯이 있으면
+                              서버는 dailyQuota 를 아예 무시하고 슬롯 개수 합을 쓴다. */}
+                          오늘: {channelLabel(c.platform)} {n}/{perDayCount(r)}
                         </span>
                       );
                     })}
@@ -1972,7 +1978,8 @@ function ScheduleSummary({ ready, weekdays, slots, dailyQuota, activeStart, acti
     );
   }
 
-  const perDay = slots.length ? slots.reduce((n, s) => n + s.count, 0) : dailyQuota;
+  // 서버 판정과 **같은 함수**로 낸다 — 슬롯이 있으면 dailyQuota 는 무시된다(perDayCount).
+  const perDay = perDayCount({ slots, dailyQuota });
   const timeLabel = slots.length ? slots.map(slotLabel).join(" · ") : `${activeStart}:00~${activeEnd}:00 사이 자동 확인`;
   return (
     <div className="grid gap-2 sm:grid-cols-3">

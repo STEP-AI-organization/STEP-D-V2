@@ -1246,6 +1246,39 @@ describe("렌더 실패는 확정된다 (지킬 수 없는 약속을 멈춘다)"
   });
 });
 
+/**
+ * **하루 발행 수는 화면이 직접 계산하지 않는다** (2026-08-27 사용자 신고).
+ *
+ * 슬롯(발행 시각)이 있으면 서버는 dailyQuota 를 **아예 무시하고** 슬롯 개수 합을 쓴다
+ * (perDayCount). 그런데 화면 세 자리가 각자 다른 식을 갖고 있었다 — "오늘: YouTube 0/3"
+ * 배지는 `r.dailyQuota ?? 3` 이라, 15:00×20 계획인데 분모가 늘 3 이었다. 사용자가 정한
+ * 개수와 화면이 말하는 개수가 다르면 "안 나가는 건가?" 를 화면으로는 판단할 수 없다.
+ */
+describe("하루 발행 수는 서버와 같은 함수로만 낸다 (화면 스캔)", () => {
+  const page = fs.readFileSync(
+    path.resolve(SRC, "../../web/src/app/(app)/automation/page.tsx"), "utf-8");
+
+  it("dailyQuota 를 표시용으로 직접 읽지 않는다 — 슬롯 계획에서 틀린 수가 된다", () => {
+    // 폼 상태(setDailyQuota·input value·저장 payload)는 정상이다. 금지하는 건
+    // **표시 자리에서 원시 dailyQuota 로 개수를 말하는 것**이다.
+    assert.doesNotMatch(page, /\{r\.dailyQuota \?\? 3\}/,
+      "배지 분모가 원시 dailyQuota 다 — 슬롯 계획에서 늘 틀린 수가 뜬다(0/3 사고)");
+    assert.doesNotMatch(page, /하루 \{dailyQuota\}개/,
+      "채널 요약이 슬롯을 무시하고 dailyQuota 를 그대로 쓴다");
+  });
+
+  it("슬롯 합을 손으로 더하지 않는다 — perDayCount 한 벌만 쓴다", () => {
+    assert.doesNotMatch(page, /slots\.reduce\(\(n, s\) => n \+ s\.count, 0\)/,
+      "같은 합을 화면이 한 번 더 적고 있다 — 두 벌이 되면 한쪽만 고쳐진다");
+    assert.match(page, /perDayCount\(/, "서버 판정 함수를 안 쓴다");
+  });
+
+  it("그 함수는 서버의 순수 모듈에서 온다 — 화면이 자기 사본을 두지 않는다", () => {
+    assert.match(page, /from "@server-pure\/automation"/,
+      "화면이 자기 계산식을 들면 서버와 다른 수를 말하게 된다");
+  });
+});
+
 describe("자동배포 화면 책임 — 설정은 한곳에만 둔다", () => {
   const automationPage = fs.readFileSync(
     path.resolve(SRC, "../../web/src/app/(app)/automation/page.tsx"), "utf-8");
