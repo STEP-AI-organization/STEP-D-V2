@@ -20,11 +20,12 @@
 
 1. **UXP Developer Tool 설치** — Creative Cloud 데스크톱 앱 → 검색창에 `UXP Developer Tool`
    → 설치. (Adobe 계정만 있으면 되고 별도 비용 없다)
-2. **UDT 를 먼저 켜고, 그 다음 Premiere 를 켠다.** ⚠️ 순서가 중요하다 —
-   호스트 앱은 **시작할 때** UXP 개발자 서비스에 붙는다. 프리미어가 먼저 떠 있었다면
-   UDT 를 나중에 켜도 연결되지 않고, Load 가
-   `No applications are connected to the service` 로 실패한다(2026-08-28 실측).
-   이미 프리미어가 떠 있으면 **완전히 종료했다가 다시 켜면** 된다.
+2. **프리미어에서 개발자 모드를 켠다 — 이걸 안 하면 아무것도 안 된다.**
+   `편집(Edit) ▸ 환경 설정/설정 ▸ 플러그인(Plugins)` → **UXP 플러그인** 그룹의
+   **개발자 모드 사용(Enable developer mode)** 체크 → **프리미어 재시작**
+   (설정 화면에도 "다음에 Premiere 를 시작할 때 적용됩니다" 라고 쓰여 있다).
+   근거: `Adobe Premiere Pro 2026\Settings\EveScripts\UXPPluginsPrefsPanel.adam.eve`
+   (`devToolsCheckBox` · `kResDLGEnableDeveloperMode`).
 3. UDT 실행 → 연결 대상이 `Premiere Pro`(26.3.2)로 잡혔는지 확인 → **Add Plugin** →
    이 폴더의 `manifest.json` 선택.
 4. 목록의 `STEP-D` 행에서 **Actions ▸ Load**.
@@ -36,13 +37,23 @@
 
 | 증상 | 원인 | 조치 |
 |---|---|---|
-| `Plugin Load Failed. No applications are connected to the service.` | **프리미어가 UDT 보다 먼저 떠 있었다** (가장 흔함) | 프리미어 완전 종료 → 재실행 → Load 다시 |
+| `Plugin Load Failed. No applications are connected to the service.` | **프리미어 개발자 모드가 꺼져 있다** (2026-08-28 실측 원인) | 위 2번 → 프리미어 재시작 |
+| 위를 켰는데도 같은 오류 | 재시작을 안 했다 | 프리미어 완전 종료 후 재실행 |
 | UDT 목록에 대상 앱이 Photoshop 등으로 잡힘 | 연결된 앱이 여럿 | UDT 에서 대상을 Premiere Pro 로 |
 | Load 는 성공했는데 창 ▸ 확장에 없음 | 패널 등록이 늦게 반영 | 프리미어 재실행 후 다시 Load |
 | Load 자체가 오류 | `manifest.json` 문법·필드 오류 | UDT 행의 오류 메시지 확인 |
 
-연결 상태를 밖에서 확인하려면 프로세스가 둘 다 살아 있는지, 그리고 **어느 쪽이 먼저
-시작됐는지**를 본다(PowerShell `Get-Process` 의 `StartTime`) — 이 순서가 곧 원인이다.
+**밖에서 연결 상태를 확인하는 법** — UDT 는 개발자 서비스를 `127.0.0.1:14001` 에 띄운다.
+프리미어가 붙었는지는 그 포트의 연결을 보면 된다:
+
+```powershell
+Get-NetTCPConnection -LocalPort 14001    # Established 가 UDT 자신(cli) 하나뿐이면 앱 미연결
+```
+
+UDT 로그(`%APPDATA%\Adobe\Adobe UXP Developer Tool\Logs\appLogs-*.log`)에
+`New Server client Connected : Type : cli` 만 있고 앱 연결이 없으면 같은 상태다.
+⚠️ 프리미어와 UDT 의 **실행 순서는 원인이 아니다** — 개발자 모드가 켜져 있으면
+프리미어가 켜질 때 서비스에 붙는다. (처음엔 순서를 의심했으나 로그가 아니라고 말했다)
 
 ## 쓰는 법
 
