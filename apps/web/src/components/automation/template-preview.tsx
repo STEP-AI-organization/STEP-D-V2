@@ -96,6 +96,10 @@ export function TemplatePreview({ template, accent, layout, frameSrc, subtitlesO
             top: `${layout.titleY}%`, left: 4 * s, right: 4 * s,
             fontSize: titleFs, lineHeight: 1.15, color: "#fff", whiteSpace: "nowrap",
             textShadow: "0 2px 6px rgba(0,0,0,.5)",
+            // 제목 글꼴 = 지마켓 산스(고객사 지정 2026-08-28) — factory.ts 가 titleLines 에
+            // font:"gmarket" 을 심고 렌더는 그 파일로 굽는다. 미리보기도 같은 글꼴이어야
+            // "미리보기와 결과물이 다르다" 가 안 생긴다.
+            fontFamily: "'GmarketSans', var(--font-sans)",
           }}>
           훅 첫 줄 텍스트
           <div style={{ color: layout.titleColor || accent }}>둘째 줄 강조</div>

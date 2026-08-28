@@ -626,13 +626,16 @@ const TEMPLATE_SEEDS: Record<string, {
   // iconY 76·boxY 86.5 (2026-08-25): 구값 68·79.5 는 자막 기본 구간(하단 26% = 화면 69~74%,
   // 로고 높이 7.8%)과 로고가 겹쳤다 — ENA 실사용 보고. 드라마 시드의 간격(자막→로고 2~3%p,
   // 로고→박스 ~2.7%p)을 그대로 미러. 웹 TEMPLATE_SEED_UI·aena 미러도 같이 바꿔야 한다.
+  // 강조색 #F3AF4F (2026-08-28): 고객사가 준 레퍼런스 쇼츠에서 **픽셀을 직접 샘플링**한 값이다
+  // (글자 속 화소 median · HSV H35 S0.67 V0.95 — 안티에일리어싱 가장자리를 뺀 값).
+  // 구 청록(#40E0E0)에서 바뀌었다. 계획별로 다르게 하려면 rule.layout.titleColor 로 덮는다.
   "broadcast-standard": {
-    accent: "#40E0E0", titleY: 11, bottom: "logo-box",
+    accent: "#F3AF4F", titleY: 11, bottom: "logo-box",
     channelY: 82, iconShape: "square", iconSize: 50, iconY: 76, boxY: 86.5,
   },
   // 드라마: 번인 자막이 없어 확대 크롭(fit cover)이 산다 — 띠가 좁아 위치가 다르다
   "broadcast-drama": {
-    accent: "#40E0E0", titleY: 8, bottom: "logo-box",
+    accent: "#F3AF4F", titleY: 8, bottom: "logo-box",
     channelY: 82, iconShape: "square", iconSize: 50, iconY: 77, boxY: 87.5,
   },
   // (구 표준 broadcast-clean 은 2026-08-25 사용자 지시로 자산과 함께 삭제 — 2종이면 충분)
@@ -721,7 +724,7 @@ export function autoEditorState(
     bgType: "solid",
     bg: "#000000",
     templateId,
-    // 한 줄이면 통째 강조색, 두 줄이면 둘째 줄만 (표준 강조색 = 청록, 레퍼런스 확정).
+    // 한 줄이면 통째 강조색, 두 줄이면 둘째 줄만 (표준 강조색 = 금빛 #F3AF4F · 고객사 레퍼런스에서 샘플링).
     // ⚠️ id 를 반드시 넣는다. 없으면 편집기에서 setLine 이 l.id === undefined 로 **두 줄을 다**
     //    매칭해 한 줄로 붕괴하고, React key 도 undefined 로 겹친다(2026-08-12 발견).
     // 규칙에서 제목을 끄면 줄 자체를 비운다 — 렌더·편집기 둘 다 titleLines 가 없으면 안 그린다.
@@ -729,9 +732,11 @@ export function autoEditorState(
       id: `t${i}`, text,
       size: (i === 0 ? 106 : 107) / titleOutScale,
       color: lines.length === 1 || i === 1 ? titleAccent : "#FFFFFF",
-      // 글꼴 — 규칙 layout.titleFont(카탈로그 id). overlay-canvas 가 줄마다 이 값을 읽어
-      // 등록된 패밀리로 그린다(familyById). 모르는 id 는 거기서 기본(Pretendard)으로 접힌다.
-      ...(titleFont ? { font: titleFont } : {}),
+      // 글꼴 — 규칙 layout.titleFont(카탈로그 id)가 있으면 그걸, 없으면 **기본 지마켓 산스**
+      // (고객사 지정 2026-08-28). overlay-canvas 가 줄마다 이 값을 읽어 등록된 패밀리로
+      // 그린다(familyById) — 모르는 id 는 거기서 기본(Pretendard)으로 접힌다.
+      // 렌더는 weight 800 을 요청하는데 지마켓은 Medium(500)·Bold(700) 뿐이라 700=Bold 로 스냅된다.
+      font: titleFont || "gmarket",
     })),
     titleX: 50,
     titleY: seed.titleY,

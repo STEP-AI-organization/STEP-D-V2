@@ -97,6 +97,44 @@ describe("폰트가 렌더 이미지 안에 있어야 한다", () => {
   });
 });
 
+/**
+ * 제목(2줄 훅) 서체·강조색 — 고객사 레퍼런스 기준 (2026-08-28).
+ * 강조색 `#F3AF4F` 는 눈대중이 아니라 레퍼런스 쇼츠의 **글자 속 화소를 샘플링한 median** 이다.
+ */
+describe("제목 — 지마켓 산스 + 레퍼런스 강조색", () => {
+  const factory = read("apps/server/src/factory.ts");
+  const webSeed = read("apps/web/src/app/(app)/automation/page.tsx");
+  const ACCENT = "#F3AF4F";
+
+  it("두 템플릿 모두 레퍼런스 강조색을 시드로 갖는다", () => {
+    const accents = [...factory.matchAll(/accent: "(#[0-9A-Fa-f]{6})"/g)].map((m) => m[1]);
+    assert.equal(accents.length, 2, "템플릿 시드가 2개가 아니다 — 추가됐으면 이 테스트도 같이 본다");
+    for (const a of accents) assert.equal(a, ACCENT);
+  });
+
+  it("웹 미러(TEMPLATE_SEED_UI)가 서버 시드와 같은 색이다 — 갈라지면 미리보기가 거짓말한다", () => {
+    const webAccents = [...webSeed.matchAll(/accent: "(#[0-9A-Fa-f]{6})"/g)].map((m) => m[1]);
+    assert.equal(webAccents.length, 2);
+    for (const a of webAccents) assert.equal(a, ACCENT);
+  });
+
+  it("제목 줄 기본 글꼴이 지마켓 — 계획에서 고른 게 있으면 그게 이긴다", () => {
+    assert.match(factory, /font: titleFont \|\| "gmarket",/,
+      "기본값을 지우면 레지스트리 기본(프리텐다드)으로 조용히 돌아간다");
+  });
+
+  it("그 id 가 폰트 레지스트리에 있고 Bold(700) 를 갖는다 — 렌더가 800 을 요청해도 700 으로 스냅된다", () => {
+    const overlay = read("apps/server/src/overlay-canvas.ts");
+    assert.match(overlay, /id: "gmarket"/);
+    assert.match(overlay, /700: \{ file: "GmarketSansTTFBold\.ttf"/);
+  });
+
+  it("자동배포 미리보기도 같은 글꼴로 그린다", () => {
+    const preview = read("apps/web/src/components/automation/template-preview.tsx");
+    assert.match(preview, /fontFamily: "'GmarketSans', var\(--font-sans\)"/);
+  });
+});
+
 describe("미리보기도 같은 서체 — 미리보기와 결과물이 갈라지지 않게", () => {
   it("에디터 자막 미리보기가 GmarketSans 를 쓴다", () => {
     const preview = read("apps/web/src/components/editor/editor-preview.tsx");

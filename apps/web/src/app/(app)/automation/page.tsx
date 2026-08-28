@@ -185,8 +185,9 @@ function relTime(iso: string | null | undefined, now: number): string | null {
  * 서버 시드를 바꾸면 여기도 같이 바꿔야 미리보기가 실제 렌더와 일치한다.
  */
 const TEMPLATE_SEED_UI: Record<string, { accent: string; titleY: number; iconY: number; boxY: number; iconSize: number }> = {
-  "broadcast-standard": { accent: "#40E0E0", titleY: 11, iconY: 76, boxY: 86.5, iconSize: 50 },
-  "broadcast-drama": { accent: "#40E0E0", titleY: 8, iconY: 77, boxY: 87.5, iconSize: 50 },
+  // 강조색 #F3AF4F — 고객사 레퍼런스에서 픽셀 샘플링한 값(2026-08-28 · 서버 시드와 같은 값).
+  "broadcast-standard": { accent: "#F3AF4F", titleY: 11, iconY: 76, boxY: 86.5, iconSize: 50 },
+  "broadcast-drama": { accent: "#F3AF4F", titleY: 8, iconY: 77, boxY: 87.5, iconSize: 50 },
 };
 
 /** 계획의 채널 목록 — 배열이 정본, 없으면 단수 폴백(구 계획). */
