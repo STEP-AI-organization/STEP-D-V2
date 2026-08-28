@@ -462,7 +462,7 @@ async function doUpload() {
     await store.set("stepd.lastProgram", programId);
     setProgress(100);
     const clipTitle = done.clip && done.clip.title ? done.clip.title : picked.name;
-    setStatus($("status"), `업로드 완료 — "${clipTitle}" 이(가) STEP-D 에 등록됐습니다. 배포는 웹에서 진행하세요.`, "ok");
+    setStatus($("status"), `업로드 완료 — "${clipTitle}" 등록됐습니다. 배포는 웹에서 진행하세요.`, "ok");
     picked = null;
     $("fileBox").className = "file";
     $("fileBox").textContent = "렌더한 MP4 를 선택하세요";

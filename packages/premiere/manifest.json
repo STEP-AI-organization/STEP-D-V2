@@ -1,6 +1,6 @@
 {
   "id": "kr.stepai.stepd.premiere",
-  "name": "STEP-D",
+  "name": "STEP AI 스튜디오",
   "version": "0.1.0",
   "main": "index.html",
   "manifestVersion": 5,
@@ -13,11 +13,11 @@
   "entrypoints": [
     {
       "type": "panel",
-      "id": "stepd.upload",
-      "label": { "default": "STEP-D 업로드" },
-      "minimumSize": { "width": 260, "height": 320 },
-      "preferredDockedSize": { "width": 320, "height": 520 },
-      "preferredFloatingSize": { "width": 360, "height": 600 }
+      "id": "stepd.studio",
+      "label": { "default": "STEP AI 스튜디오" },
+      "minimumSize": { "width": 320, "height": 420 },
+      "preferredDockedSize": { "width": 440, "height": 700 },
+      "preferredFloatingSize": { "width": 560, "height": 780 }
     }
   ],
   "requiredPermissions": {

@@ -28,8 +28,8 @@
    (`devToolsCheckBox` · `kResDLGEnableDeveloperMode`).
 3. UDT 실행 → 연결 대상이 `Premiere Pro`(26.3.2)로 잡혔는지 확인 → **Add Plugin** →
    이 폴더의 `manifest.json` 선택.
-4. 목록의 `STEP-D` 행에서 **Actions ▸ Load**.
-5. Premiere 메뉴 **창(Window) ▸ 확장(Extensions) ▸ STEP-D 업로드**.
+4. 목록의 `STEP AI 스튜디오` 행에서 **Actions ▸ Load**.
+5. Premiere 메뉴 **창(Window) ▸ 확장(Extensions) ▸ STEP AI 스튜디오**.
 
 코드를 고친 뒤에는 UDT 에서 **Reload** 만 누르면 된다 (프리미어 재시작 불필요).
 
@@ -61,6 +61,31 @@ UDT 로그(`%APPDATA%\Adobe\Adobe UXP Developer Tool\Logs\appLogs-*.log`)에
 2. 프로그램을 고르고, 프리미어에서 렌더해 둔 MP4 를 선택한다.
 3. **STEP-D 로 업로드** → 끝나면 배포 가능한 클립으로 등록된다. 게시는 웹에서 한다
    (게시는 크레딧·게이트·감사 기록이 걸린 문이라 한 곳에서만 연다).
+
+## `manifest.json` 하나로 패널이 뜨는 원리
+
+프리미어 안에는 **UXP 런타임**(브라우저 비슷한 실행기)이 들어 있다. 우리 패널은 그 위에서
+도는 샌드박스 웹앱이고, `manifest.json` 은 그 앱의 **신분증이자 계약서**다. 프리미어는
+코드를 실행하기 **전에** 이 JSON 만 읽어서 네 가지를 판단한다:
+
+| 선언 | 필드 | 프리미어가 하는 일 |
+|---|---|---|
+| 누구인가 | `id` · `name` · `version` | `id` 로 플러그인을 식별·중복 방지(마켓 등록 후 변경 불가). `name` 이 UDT·설치 목록에 보인다 |
+| 어디에 붙는가 | `host: [{ app: "premierepro", minVersion }]` | 이 앱·버전이 아니면 **아예 목록에 안 띄운다**. 버전이 낮으면 로드 거부 |
+| 무엇을 띄우는가 | `entrypoints: [{ type: "panel", id, label }]` | `label` 이 **창 ▸ 확장 메뉴에 뜨는 이름**. 패널을 열면 `main`(=`index.html`)을 로드하고, 그 안의 `main.js` 가 돈다 |
+| 무엇을 할 수 있는가 | `requiredPermissions` | **선언한 것만 허용.** `network.domains` 에 없는 주소는 fetch 가 막힌다(그래서 GCS 도메인을 적어 뒀다). `localFileSystem: "request"` 는 "사용자가 고른 파일만" 이라는 뜻 |
+
+즉 **JSON 이 플러그인을 띄우는 게 아니라, JSON 이 "무엇을 어디에 어떤 권한으로 띄울지"를
+선언하고 프리미어가 그대로 실행해 주는 것**이다. 코드를 돌려 보지 않고도 호환성과 권한을
+검사할 수 있어야 하니 선언을 코드 밖 JSON 으로 분리해 둔 것이고, 마켓 심사도 이 파일을 본다.
+
+로드 방식 둘은 **결국 같은 절차**다 — 둘 다 이 매니페스트를 읽는다:
+
+- **UDT Load** = "이 폴더에 매니페스트가 있다" 고 프리미어에 알려 주는 임시 등록(개발용)
+- **`.ccx` 설치** = 같은 폴더를 압축·서명한 것 → 영구 설치(배포용)
+
+그래서 개발 중에는 파일만 고치고 **Reload** 하면 되고, 매니페스트를 고쳤을 때만
+언로드→다시 Load 가 필요하다.
 
 ## 인증 — 왜 이렇게 했나
 
