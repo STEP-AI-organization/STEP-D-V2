@@ -240,6 +240,19 @@ describe("영상이 모자란 날의 안내", () => {
     assert.match(html, /오늘 16건 게시 · 영상이 모자라 4건을 못 채웠습니다/);
   });
 
+  it("배너가 **위**에 온다 — 통계·항목 목록보다 앞 (사용자 2026-08-28 \"밑에 두면 사람이 안 봄\")", () => {
+    // 리포트를 여는 사람이 알아야 할 첫 사실은 "몇 건 나갔나" 가 아니라 "왜 계획보다
+    // 적게 나갔나" 다 — 그 조치(회차 영상 올리기)는 오늘 해야 하기 때문이다.
+    const bannerAt = html.indexOf("영상이 모자랍니다");
+    const statsAt = html.indexOf(">배포</div>");
+    const itemsAt = html.indexOf("영상 열기");
+    assert.ok(bannerAt > 0 && statsAt > 0 && itemsAt > 0, "앵커를 못 찾았다");
+    assert.ok(bannerAt < statsAt, "부족 배너가 통계 3칸보다 아래다 — 스크롤해야 보인다");
+    assert.ok(bannerAt < itemsAt, "부족 배너가 항목 목록보다 아래다 — 20건이면 한참 내려야 한다");
+    // 제목(헤더 밴드) 다음이어야 한다 — 밴드보다 위로 올라가면 문서 구조가 깨진다.
+    assert.ok(html.indexOf("자동배포 리포트") < bannerAt, "배너가 제목보다 위에 있다");
+  });
+
   it("발송부가 순방과 같은 함수로 목표를 낸다 (소스 스캔)", () => {
     const src = fsSync.readFileSync(pathMod.join(SRC_DIR, "publish-notify.ts"), "utf-8");
     assert.match(src, /target \+= ruleDayTarget\(rule, n, now\)\.target;/,

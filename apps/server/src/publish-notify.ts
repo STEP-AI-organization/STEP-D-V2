@@ -328,6 +328,9 @@ export function buildAutoPublishReportHtml(
   const publishedCount = okItems.length - scheduled.length;
   const subtitle = `${programs.join(" · ") || "자동배포"} · YouTube${channels.length ? ` ${channels.join(" · ")}` : ""}`;
   const stamp = `${kstDate(now).replace(/-/g, ".")} ${kstHm(now)} KST`;
+  // ⚠️ 이 배너는 **제목 바로 아래**(통계 위)에 그린다 — 아래에 두면 사람이 안 본다
+  //    (사용자 2026-08-28). 리포트를 여는 사람이 알아야 할 첫 사실은 "몇 건 나갔나" 가
+  //    아니라 "왜 계획보다 적게 나갔나" 이고, 그 조치(회차 영상 올리기)는 오늘 해야 한다.
   // 소재 부족 — 오늘 계획한 수를 못 채운 날. 실패(게시 실패)와 다른 축이다: 이건 **만들
   // 재료가 없어서** 안 나간 것이라 조치도 다르다(회차 업로드 · 그에 필요한 크레딧).
   const short = shortfall && shortfall.target > shortfall.published
@@ -409,7 +412,14 @@ export function buildAutoPublishReportHtml(
     <div style="padding-top:14px;font-family:${FONT};font-size:34px;font-weight:600;line-height:44px;mso-line-height-rule:exactly;letter-spacing:-0.02em;color:#FDFCFC;word-break:keep-all;">자동배포 리포트</div>
     <div style="padding-top:12px;font-family:${FONT};font-size:16px;font-weight:400;line-height:27px;mso-line-height-rule:exactly;color:#5C5E63;word-break:keep-all;">${esc(subtitle)}</div>
   </td></tr>
-  <tr><td class="px" style="padding:36px 40px 32px 40px;">
+${short ? `  <tr><td class="px" style="padding:28px 40px 0 40px;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#0E0F14" style="background:#0E0F14;border-radius:6px;"><tr><td style="padding:24px 26px;">
+      <div style="font-family:${FONT};font-size:13px;font-weight:600;line-height:18px;color:#47EBEB;">영상이 모자랍니다</div>
+      <div style="padding-top:10px;font-family:${FONT};font-size:18px;font-weight:600;line-height:28px;mso-line-height-rule:exactly;color:#FDFCFC;word-break:keep-all;">오늘 ${short.target}건 예정 중 ${short.published}건 게시 · ${short.missing}건은 만들 영상이 없었습니다</div>
+      <div style="padding-top:10px;font-family:${FONT};font-size:13px;font-weight:400;line-height:21px;color:#9A9CA1;word-break:keep-all;">회차 영상을 올려 주시면 AI가 분석해 다음 배포 시간에 자동으로 채웁니다. 크레딧이 넉넉해야 분석이 끊기지 않습니다.</div>
+    </td></tr></table>
+  </td></tr>` : ""}
+  <tr><td class="px" style="padding:${short ? "20px" : "36px"} 40px 32px 40px;">
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>
       <td width="33%" align="left" valign="top" style="width:33%;">
         <div style="font-family:${FONT};font-size:13px;font-weight:600;line-height:18px;color:#5C5E63;">배포</div>
@@ -428,14 +438,7 @@ export function buildAutoPublishReportHtml(
   <tr><td class="px" style="padding:0 40px;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td height="1" bgcolor="#E9E8E6" style="height:1px;line-height:1px;font-size:0;">&nbsp;</td></tr></table></td></tr>
 ${[...failedItems, ...okItems].map((i, k) => itemHtml(i, k === 0)).join("\n")}
 <tr><td class="px" style="padding:30px 40px 0 40px;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr><td height="1" bgcolor="#E9E8E6" style="height:1px;line-height:1px;font-size:0;">&nbsp;</td></tr></table></td></tr>
-${short ? `  <tr><td class="px" style="padding:32px 40px 0 40px;">
-    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#0E0F14" style="background:#0E0F14;border-radius:6px;"><tr><td style="padding:24px 26px;">
-      <div style="font-family:${FONT};font-size:13px;font-weight:600;line-height:18px;color:#47EBEB;">영상이 모자랍니다</div>
-      <div style="padding-top:10px;font-family:${FONT};font-size:18px;font-weight:600;line-height:28px;mso-line-height-rule:exactly;color:#FDFCFC;word-break:keep-all;">오늘 ${short.target}건 예정 중 ${short.published}건 게시 · ${short.missing}건은 만들 영상이 없었습니다</div>
-      <div style="padding-top:10px;font-family:${FONT};font-size:13px;font-weight:400;line-height:21px;color:#9A9CA1;word-break:keep-all;">회차 영상을 올려 주시면 AI가 분석해 다음 배포 시간에 자동으로 채웁니다. 크레딧이 넉넉해야 분석이 끊기지 않습니다.</div>
-    </td></tr></table>
-  </td></tr>` : ""}
-${next ? `  <tr><td class="px" style="padding:${short ? "16px" : "32px"} 40px 0 40px;">
+${next ? `  <tr><td class="px" style="padding:32px 40px 0 40px;">
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="#F5F3F1" style="background:#F5F3F1;border-radius:6px;"><tr><td style="padding:22px 24px;">
       <div style="font-family:${FONT};font-size:13px;font-weight:600;line-height:18px;color:#5C5E63;">다음 배포</div>
       <div style="padding-top:8px;font-family:${FONT};font-size:16px;font-weight:600;line-height:26px;mso-line-height-rule:exactly;color:#1F2124;">${esc(next.label)}</div>
