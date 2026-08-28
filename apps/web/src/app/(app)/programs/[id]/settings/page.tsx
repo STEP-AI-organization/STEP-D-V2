@@ -19,6 +19,7 @@ import {
   fetchThumbnailStyle, trainThumbnailStyle, thumbnailStyleImageUrl,
   fetchCastPhotos, uploadCastPhoto,
   deleteCastPhotos, type ThumbnailStyleProfile, type CastPhotoEntry,
+  fetchNaverCategories, type NaverCategory,
 } from "@/lib/data/api";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -126,6 +127,11 @@ function ProgramDetailInner({
   const [pipelineGenre, setPipelineGenre] = useState<"" | "variety" | "drama">(
     program.pipelineGenre ?? "",
   );
+  // 네이버 클립 카테고리 기본값. 빈 값이면 장르에서 유도한다(드라마 → 엔터/드라마).
+  const [naverPrimary, setNaverPrimary] = useState(program.naverCategory?.primary ?? "");
+  const [naverSecondary, setNaverSecondary] = useState(program.naverCategory?.secondary ?? "");
+  const [naverCats, setNaverCats] = useState<NaverCategory[]>([]);
+  const [naverCatErr, setNaverCatErr] = useState<string | null>(null);
   const [rightsUntil, setRightsUntil] = useState(program.rightsUntil ?? "");
   const [rightsNote, setRightsNote] = useState(program.rightsNote ?? "");
   const [endedDate, setEndedDate] = useState(program.endedDate ?? "");
@@ -191,6 +197,8 @@ function ProgramDetailInner({
     setStatus(normalizeProgramStatus(program.status));
     setOwner(program.owner ?? "");
     setPipelineGenre(program.pipelineGenre ?? "");
+    setNaverPrimary(program.naverCategory?.primary ?? "");
+    setNaverSecondary(program.naverCategory?.secondary ?? "");
     setRightsUntil(program.rightsUntil ?? "");
     setRightsNote(program.rightsNote ?? "");
     setEndedDate(program.endedDate ?? "");
@@ -217,8 +225,16 @@ function ProgramDetailInner({
     program.currentInfo, program.director, program.spinoff, program.awards,
     program.titlePrompt, program.recommendPrompt,
     program.moods, program.cast, program.castPhotos, program.posterImageDataUrl,
+    program.naverCategory,
     hydratedRef,
   ]);
+
+  // 네이버 클립 분류표 — 자유입력이면 목록에 없는 값이 저장되고, 그건 발행 직전에야 걸린다.
+  useEffect(() => {
+    void fetchNaverCategories()
+      .then((c) => { setNaverCats(c); setNaverCatErr(null); })
+      .catch((e) => setNaverCatErr(e instanceof Error ? e.message : String(e)));
+  }, []);
 
   const titleError = !title.trim();
   const canSave = !titleError && !busy;
@@ -385,6 +401,11 @@ function ProgramDetailInner({
         // ""(자동 판정)도 그대로 보낸다 — 서버 PATCH 가 variety/drama 이외의 문자열을 받으면
         // pipelineGenre 필드를 삭제한다(= 자동 판정 복귀). 다른 문자열 필드와 같은 시맨틱.
         pipelineGenre,
+        // 둘 다 비면 삭제(= 장르에서 유도). 서버가 저장 시점에 분류표와 대조해 400 을 던진다 —
+        // 발행 때 걸리면 사람은 이미 이 화면을 떠나 있다.
+        naverCategory: naverPrimary && naverSecondary
+          ? { primary: naverPrimary, secondary: naverSecondary }
+          : null,
         rightsUntil: rightsUntil.trim(),
         rightsNote: rightsNote.trim(),
         // 종영일은 종영 상태에서만 의미가 있다 — 상태를 되돌리면 같이 지운다.
@@ -692,6 +713,48 @@ function ProgramDetailInner({
             </select>
           </Field>
         </div>
+
+        {/* 네이버 클립은 1차·2차 카테고리가 필수다. 프로그램마다 한 번 정해 두면 배포 모달이
+            그 값으로 미리 채우고, 자동배포는 그대로 쓴다. 비워 두면 위 트랙(장르)에서 유도한다. */}
+        <div className="mt-3 grid gap-3 md:grid-cols-2">
+          <Field label="네이버 클립 카테고리 1차" hint="비워 두면 파이프라인 트랙에서 유도 (드라마 → 엔터/드라마)">
+            <select
+              value={naverPrimary}
+              onChange={(e) => {
+                setNaverPrimary(e.target.value);
+                // 1차가 바뀌면 2차는 그 1차의 첫 항목으로 — 남겨두면 "엔터/맛집" 같은 조합이 된다.
+                const subs = naverCats.find((c) => c.name === e.target.value)?.subs ?? [];
+                setNaverSecondary(e.target.value ? (subs[0]?.name ?? "") : "");
+              }}
+              className={inputCls}
+              disabled={!naverCats.length}
+            >
+              <option value="">장르에서 유도</option>
+              {naverCats.map((c) => (
+                <option key={c.no} value={c.name}>{c.name}</option>
+              ))}
+            </select>
+          </Field>
+          <Field label="네이버 클립 카테고리 2차" hint="1차를 고르면 그 하위만 나옵니다">
+            <select
+              value={naverSecondary}
+              onChange={(e) => setNaverSecondary(e.target.value)}
+              className={inputCls}
+              disabled={!naverPrimary || !naverCats.length}
+            >
+              {!naverPrimary && <option value="">—</option>}
+              {(naverCats.find((c) => c.name === naverPrimary)?.subs ?? []).map((s) => (
+                <option key={s.no} value={s.name}>{s.name}</option>
+              ))}
+            </select>
+          </Field>
+        </div>
+        {naverCatErr && (
+          <p className="mt-2 text-[11px] text-[var(--sd-danger-strong,#e5484d)]">
+            네이버 카테고리 목록을 불러오지 못했습니다 ({naverCatErr}) — 저장해도 값이 비어
+            장르에서 유도됩니다.
+          </p>
+        )}
 
         <div className="mt-3 grid gap-3 md:grid-cols-2">
           <Field label="디지털 권리 만료일" hint="만료 30일 전부터 카드가 경고 톤">

@@ -18,6 +18,7 @@ import os from "node:os";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { loadNaverSession, saveNaverSession } from "./naver-session.ts";
 import { assertNaverUploadEnabled, DESC_MIN, DESC_MAX } from "./naver-gate.ts";
+import { DEFAULT_CATEGORY } from "./naver-categories.ts";
 
 const LOGIN_URL = "https://nid.naver.com/nidlogin.login";
 
@@ -167,11 +168,10 @@ export async function openNaverContext(
  * 바뀐다. 그래서 dropdownWrap 순서(0=1차, 1=2차)로 잡는다. 옵션은 role=option 이 아니라
  * class*="Option" 이다 — li 로 폴백하면 사이드바 메뉴를 긁는다.
  */
-/**
- * 카테고리 기본값. 프로그램별 사전등록이 붙기 전까지 임시로 쓴다
- * (2026-08-11 사용자 지시 — 1차·2차 모두 "엔터").
- */
-export const DEFAULT_CATEGORY = { primary: "엔터", secondary: "엔터" } as const;
+/** 정규식 특수문자 이스케이프 — 2차 이름에 `,`·`(` 같은 문자가 들어 있다. */
+const reEscape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+/** 화면 텍스트 비교용 — 공백 차이는 무시한다. */
+const flat = (s: string) => s.replace(/\s+/g, "");
 
 async function pickCategory(
   page: Page,
@@ -181,9 +181,10 @@ async function pickCategory(
   // 그냥 first() 를 쓰면 숨겨진 1차의 "엔터" 를 눌러 2차가 빈 채로 남는다(실측 — 증상이
   // "저장 버튼이 계속 비활성" 이라 원인이 안 보인다).
   // hasText 는 부분일치라 "엔터" 가 "엔터테인먼트" 에도 걸린다 — 정확히 일치시킨다.
+  // (`\\s` 로 쓴다: 템플릿 리터럴에서 `\s` 는 그냥 `s` 가 되어 공백을 못 받는다.)
   const OPTS = '[class*="Option"]:visible, [role="option"]:visible';
   const opt = (text: string) =>
-    page.locator(OPTS).filter({ hasText: new RegExp(`^\s*${text}\s*$`) }).first();
+    page.locator(OPTS).filter({ hasText: new RegExp(`^\\s*${reEscape(text)}\\s*$`) }).first();
 
   // 트리거 잡는 법이 사이트마다 다르다:
   //  - 클립: `[class*="dropdownWrap"]` 두 개 (순서 0=1차, 1=2차)
@@ -201,15 +202,29 @@ async function pickCategory(
     await trigger(i).click({ timeout: 20_000 }).catch(() => {});
     await page.waitForTimeout(700);
 
-    // 정확히 같은 항목을 먼저 찾고, 없으면 **첫 항목**으로 간다.
-    // TV 와 클립은 2차 목록이 다르다: 클립의 "엔터/엔터" 가 TV 에는 없어서 2차가 빈 채로
-    // 남고 저장 버튼이 계속 비활성이었다(실측 — 증상이 "저장이 안 눌림" 이라 원인이 안 보인다).
-    const exact = opt(value);
-    const target = (await exact.count().catch(() => 0))
-      ? exact
-      : page.locator(OPTS).first();
+    // ⚠️ **없으면 첫 항목으로 가지 않는다.** 예전엔 그랬는데, 그러면 엉뚱한 분류로 발행되고
+    // 화면은 "발행 완료" 라고 말한다 — 되돌리려면 네이버에서 손으로 고쳐야 한다.
+    // 여기서 멈추면 배포는 실패로 남고 사람이 사유를 읽는다. 그게 훨씬 싸다.
+    const target = opt(value);
+    if (!(await target.count().catch(() => 0))) {
+      const seen = (await page.locator(OPTS).allInnerTexts().catch(() => []))
+        .map((t) => t.trim()).filter(Boolean);
+      throw new Error(
+        `${i === 0 ? "1차" : "2차"} 카테고리 "${value}" 를 목록에서 못 찾았다` +
+          (seen.length ? ` (화면의 값: ${seen.join(" · ")})` : " (목록이 비어 있다)"),
+      );
+    }
     await target.click({ timeout: 15_000 }).catch(() => {});
     await page.waitForTimeout(800);
+
+    // 눌렀다고 골라진 게 아니다. 선택되면 트리거 라벨이 고른 값으로 바뀌므로 되읽어 확인한다.
+    // 이 확인이 없으면 클릭이 빗나가도 조용히 지나가고, 저장 버튼이 비활성인 이유를 못 찾는다.
+    const label = (await trigger(i).innerText().catch(() => "")).trim();
+    if (label && !flat(label).includes(flat(value))) {
+      throw new Error(
+        `${i === 0 ? "1차" : "2차"} 카테고리를 "${value}" 로 못 바꿨다 (화면 표시: "${label}")`,
+      );
+    }
   }
 }
 
@@ -403,6 +418,8 @@ export async function uploadToNaver(input: NaverUploadInput): Promise<NaverUploa
     }
     // 카테고리 1차/2차는 **TV·클립 둘 다 필수**다(2026-08-11 실측).
     // 지정값이 없으면 DEFAULT_CATEGORY("엔터"/"엔터")로 간다.
+    // 목록에 없는 값이면 여기서 던진다 → 아래 catch 가 사유·스크린샷을 담아 실패로 돌려준다.
+    // (호출부는 `naver-categories.ts` 로 미리 걸러 이 지점까지 오지 않게 하는 게 정상 경로다.)
     await pickCategory(page, input.category);
 
     // 태그: 클립은 자유 입력이 아니라 **고정 버튼 목록**(장소·쇼핑·게임 …)이라 임의 문자열을

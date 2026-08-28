@@ -414,6 +414,11 @@ export interface CreateProgramInput {
   rightsNote?: string;
   /** 종영일 (YYYY-MM-DD). */
   endedDate?: string;
+  /**
+   * 네이버 클립 카테고리 기본값. `null` 을 보내면 서버가 필드를 삭제한다
+   * (= 장르에서 유도). 서버가 저장 시점에 분류표와 대조하고, 없는 값이면 400 이다.
+   */
+  naverCategory?: { primary: string; secondary: string } | null;
 }
 
 /** Create a program (content root). Required before any episode/upload can exist. */
@@ -2864,6 +2869,27 @@ export interface NaverAccountsResponse {
    * 화면은 이 값으로 버튼을 미리 막는다 — 올려도 안 되는 버튼을 눌러보게 하는 게 더 나쁘다.
    */
   sessionStoreReady: boolean;
+}
+
+export interface NaverCategory {
+  no: number;
+  code: string;
+  name: string;
+  subs: { no: number; code: string; name: string }[];
+}
+
+/**
+ * 클립 카테고리 분류표(1차 40 / 2차 144). 화면이 자유입력 대신 드롭다운을 그리는 근거다.
+ *
+ * 자유입력이던 시절엔 목록에 없는 문자열이 그대로 발행으로 넘어갔고, 브라우저 쪽에서
+ * **첫 항목으로 조용히 대체**돼 엉뚱한 분류로 올라갔다. 고를 수 있는 값만 보여주면
+ * 그 실수가 애초에 안 생긴다.
+ */
+export async function fetchNaverCategories(): Promise<NaverCategory[]> {
+  const res = await fetch(`${API_BASE}/naver/categories`, { cache: "no-store" });
+  if (!res.ok) throw new Error(await naverError(res));
+  const body = (await res.json()) as { categories?: NaverCategory[] };
+  return body.categories ?? [];
 }
 
 /**

@@ -20,15 +20,18 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { useToast } from "@/components/ui/toast";
+import { useAppData } from "@/lib/data/store";
 import {
   fetchChannelEligibility,
   fetchNaverAccounts,
+  fetchNaverCategories,
   fetchInstagramAccounts,
   fetchMetaAccounts,
   publishClips,
   type ChannelEligibility,
   type ChannelPublishTarget,
   type NaverAccount,
+  type NaverCategory,
   type InstagramAccountInfo,
   type MetaAccountInfo,
   type PublishOutcome,
@@ -91,6 +94,7 @@ export function PublishDialog({
   onDone?: () => void | Promise<void>;
 }) {
   const { toast } = useToast();
+  const { clips, episodes, programs } = useAppData();
   const [serverTargets, setServerTargets] = useState<ChannelPublishTarget[]>([]);
   const [elig, setElig] = useState<Record<string, ChannelEligibility>>({});
   const [loadErr, setLoadErr] = useState<string | null>(null);
@@ -104,8 +108,31 @@ export function PublishDialog({
   const [metaPages, setMetaPages] = useState<MetaAccountInfo[]>([]);
   // 네이버 클립은 계정마다 설명(10자+)·카테고리를 따로 받는다 — 대상 key 로 폼을 보관한다.
   const [naverForms, setNaverForms] = useState<Record<string, NaverForm>>({});
+  // 클립 카테고리 분류표. 실패 사유를 들고 있어야 셀렉트가 "사유 없이 비어 있는" 상태가 안 된다.
+  const [categories, setCategories] = useState<NaverCategory[]>([]);
+  const [catErr, setCatErr] = useState<string | null>(null);
+  const subsOf = (primary: string) =>
+    categories.find((c) => c.name === primary)?.subs ?? [];
+
+  // 프로그램에 정해 둔 카테고리로 미리 채운다. 이게 없으면 모달이 늘 "엔터/엔터" 를 실어
+  // 보내서, 프로그램 설정이 **있어도 절대 안 쓰인다**(페이로드가 항상 이기기 때문).
+  // 여러 프로그램의 클립을 한 번에 보내면 추측하지 않는다 — 사람이 고른다.
+  const programDefault = useMemo(() => {
+    const ids = new Set<string>();
+    for (const id of clipIds) {
+      const clip = clips.find((c) => c.id === id);
+      if (!clip) continue;
+      const pid = clip.programId ?? episodes.find((e) => e.id === clip.episodeId)?.programId;
+      if (pid) ids.add(pid);
+    }
+    if (ids.size !== 1) return null;
+    return programs.find((p) => p.id === [...ids][0])?.naverCategory ?? null;
+  }, [clipIds, clips, episodes, programs]);
 
   useEffect(() => {
+    void fetchNaverCategories()
+      .then((c) => { setCategories(c); setCatErr(null); })
+      .catch((e) => setCatErr(e instanceof Error ? e.message : String(e)));
     void fetchNaverAccounts()
       .then((r) => setNaverAccounts(r.accounts.filter((a) => a.status !== "disabled" && a.hasSession)))
       .catch(() => setNaverAccounts([]));
@@ -219,7 +246,8 @@ export function PublishDialog({
   const chosen = useMemo(() => selectable.filter((t) => selected.has(t.key)), [selectable, selected]);
   const allOn = selectable.length > 0 && chosen.length === selectable.length;
 
-  const naverForm = (key: string) => naverForms[key] ?? NAVER_FORM_DEFAULT;
+  const naverForm = (key: string) =>
+    naverForms[key] ?? { ...NAVER_FORM_DEFAULT, ...(programDefault ?? {}) };
   // 선택된 네이버 클립 중 설명이 10자 미만인 게 하나라도 있으면 막는다.
   const naverShort = chosen.some((t) => t.naver && naverForm(t.key).description.trim().length < 10);
   const canSubmit = chosen.length > 0 && !naverShort && !busy;
@@ -431,24 +459,48 @@ export function PublishDialog({
                             네이버 클립은 설명이 10자 이상이어야 등록됩니다 (현재 {naverForm(t.key).description.trim().length}자).
                           </p>
                         )}
+                        {/* 1차를 고르면 2차 목록이 그 1차의 것으로 바뀐다. 자유입력이던 시절엔
+                            목록에 없는 값이 그대로 넘어가 엉뚱한 분류로 발행됐다. */}
                         <div className="grid grid-cols-2 gap-2">
                           <label className="text-[11.5px]" style={{ color: "var(--sd-fg)" }}>
                             카테고리 1차
-                            <input
+                            <select
                               value={naverForm(t.key).primary}
-                              onChange={(e) => patchNaver(t.key, { primary: e.target.value })}
+                              onChange={(e) => patchNaver(t.key, {
+                                primary: e.target.value,
+                                // 1차가 바뀌면 2차는 반드시 다시 고른다 — 남겨두면 "엔터/맛집"
+                                // 같은 조합이 되고, 그건 발행 직전에야 거부된다.
+                                secondary: subsOf(e.target.value)[0]?.name ?? "",
+                              })}
                               className="sd-input mt-1 w-full"
-                            />
+                              disabled={!categories.length}
+                            >
+                              {categories.map((c) => (
+                                <option key={c.no} value={c.name}>{c.name}</option>
+                              ))}
+                            </select>
                           </label>
                           <label className="text-[11.5px]" style={{ color: "var(--sd-fg)" }}>
                             카테고리 2차
-                            <input
+                            <select
                               value={naverForm(t.key).secondary}
                               onChange={(e) => patchNaver(t.key, { secondary: e.target.value })}
                               className="sd-input mt-1 w-full"
-                            />
+                              disabled={!categories.length}
+                            >
+                              {subsOf(naverForm(t.key).primary).map((s) => (
+                                <option key={s.no} value={s.name}>{s.name}</option>
+                              ))}
+                            </select>
                           </label>
                         </div>
+                        {/* 목록을 못 받아오면 셀렉트가 사유 없이 비어 보인다 — 이유를 적는다. */}
+                        {catErr && (
+                          <p className="text-[10.5px]" style={{ color: "var(--sd-danger-strong)" }}>
+                            카테고리 목록을 불러오지 못했습니다 ({catErr}) — 발행을 진행하면
+                            기본값(엔터/엔터)으로 올라갑니다.
+                          </p>
+                        )}
                         <p className="text-[10.5px]" style={{ color: "var(--sd-mut)" }}>
                           사무실 워커 PC 가 이 계정의 로그인 세션으로 실제 업로드합니다.
                         </p>

@@ -103,6 +103,7 @@ import {
 } from "./db-pg.ts";
 import { openSession, sealSession } from "./naver-session-store.ts";
 import { uploadToNaver, loginWithCredentials, NAVER_TARGETS, type NaverTarget } from "./naver-tv.ts";
+import { resolveCategory, categoryForGenre } from "./naver-categories.ts";
 import { openCredential } from "./naver-cred-store.ts";
 import { prepareWorkPath, cleanupWorkFile, sweepStaleWorkFiles } from "./naver-workdir.ts";
 import { upsertDistribution } from "./publish-guard.ts";
@@ -2369,12 +2370,23 @@ async function handleNaverPublish(job: Job): Promise<void> {
         ? (job.payload.tags as unknown[]).map(String)
         : (Array.isArray(clip.tags) ? clip.tags : undefined);
 
-      // 카테고리는 페이로드 → 프로그램 설정 순으로 본다. 자동 판정하지 않는다
-      // (틀린 분류로 발행되면 되돌리기가 번거롭다 — 사람이 프로그램별로 한 번 정한다).
+      // 카테고리는 **페이로드 → 프로그램 설정 → 장르 유도** 순이다. 영상 내용을 보고
+      // 자동 판정하지 않는다 — 틀린 분류로 발행되면 네이버에서 손으로 고쳐야 한다.
+      // 장르 유도는 추측이 아니라 사람이 프로그램에 지정한 장르를 옮기는 것뿐이다.
       const pc = (job.payload.category ?? {}) as { primary?: string; secondary?: string };
-      const category = pc.primary && pc.secondary
+      const prog = (program?.naverCategory ?? {}) as { primary?: string; secondary?: string };
+      const wanted = pc.primary && pc.secondary
         ? { primary: String(pc.primary), secondary: String(pc.secondary) }
-        : undefined;
+        : prog.primary && prog.secondary
+          ? { primary: String(prog.primary), secondary: String(prog.secondary) }
+          : categoryForGenre(program?.pipelineGenre ?? program?.section);
+
+      // ⚠️ 업로드 **전에** 표와 맞춰 본다. 예전엔 화면에 없는 값이면 목록의 첫 항목으로
+      // 조용히 대체돼서, 엉뚱한 분류로 발행되고도 "발행 완료" 로 보였다. 여기서 멈추면
+      // 영상 다운로드·업로드를 낭비하지 않고 사람이 사유를 그대로 읽는다.
+      const resolved = resolveCategory(wanted.primary, wanted.secondary);
+      if (!resolved.ok) return void (await fail(`카테고리 확인 실패 — ${resolved.reason}`));
+      const category = resolved.category;
 
       // 등록 예약 — 과거 시각은 무시한다(네이버가 거부하고, 무시하면 즉시 등록된다).
       const rawAt = Number(job.payload.publishAt ?? 0);

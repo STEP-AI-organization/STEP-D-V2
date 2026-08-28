@@ -399,6 +399,7 @@ import {
   setNaverCredential, clearNaverCredential, getNaverCredentialState,
 } from "./db-pg.ts";
 import { credStoreReady, sealCredential, maskNaverId } from "./naver-cred-store.ts";
+import { listCategories, CATEGORY_SOURCE, resolveCategory } from "./naver-categories.ts";
 import {
   getCommerceAccount, upsertCommerceAccount, setCommerceSessionBlob, markCommerceSessionExpired,
 } from "./db-pg.ts";
@@ -2294,6 +2295,22 @@ app.patch("/api/programs/:id", async (c) => {
     }
     if (moods.length) next.moods = moods;
     else delete next.moods;
+  }
+  // 네이버 클립 카테고리 기본값 — 이 프로그램의 클립이 어느 분류로 올라갈지.
+  // **저장할 때 분류표와 대조한다.** 발행 시점에야 걸리면 영상을 내려받고 업로드까지 간
+  // 뒤에 실패하고, 사람은 그때 화면을 떠나 있다. 여기서 막으면 즉시 알 수 있다.
+  // null/빈 객체 = 삭제(= 장르에서 유도).
+  if (body.naverCategory !== undefined) {
+    const nc = (body.naverCategory ?? {}) as { primary?: unknown; secondary?: unknown };
+    const p = typeof nc.primary === "string" ? nc.primary.trim() : "";
+    const s = typeof nc.secondary === "string" ? nc.secondary.trim() : "";
+    if (!p && !s) {
+      delete next.naverCategory;
+    } else {
+      const r = resolveCategory(p, s);
+      if (!r.ok) return c.json({ error: r.reason }, 400);
+      next.naverCategory = r.category;
+    }
   }
   // 프로그램 포스터 이미지(data URL) — 빈 문자열이면 삭제, 값 있으면 저장.
   if (typeof body.posterImageDataUrl === "string") {
@@ -9866,9 +9883,22 @@ app.post("/api/youtube/refresh", async (c) => {
 
 // ── 네이버 계정 (B2B 다계정) ──────────────────────────────────────────────────
 //
-// 여기서 하는 건 **등록·조회뿐**이다. 실제 로그인은 워커 PC 에서 사람이 브라우저로
-// 한다(`naver:login --account <key>`) — 서버는 네이버 자격증명을 받지도 저장하지도 않는다.
-// 그래서 이 API 는 "어느 고객사의 어떤 채널을 쓸 것인가" 라는 **메타만** 다룬다.
+// 실제 브라우저 자동화는 워커 PC(윈도우2)가 한다 — 서버는 "어느 고객사의 어떤 채널을
+// 쓸 것인가" 라는 메타와, 봉인된 세션·자격증명의 **보관**만 맡는다.
+//
+// ⚠️ 세션(`session_blob`)과 자격증명(`cred_blob`)은 **어떤 응답에도 싣지 않는다.**
+// 바깥으로 나가는 건 "있다/없다 + 상태 + 갱신시각" 뿐이다. 아래 라우트들이 응답 객체를
+// 필드 단위로 직접 쓰는 이유가 그것 — 엔티티를 통째로 펼치면 언젠가 값이 새어 나간다.
+
+/**
+ * 클립 카테고리 분류표. 화면이 자유입력 대신 드롭다운을 그리는 근거다.
+ *
+ * 자유입력이던 시절엔 목록에 없는 문자열이 들어와도 발행이 진행됐고, 브라우저 쪽에서
+ * **첫 항목으로 조용히 대체**돼 엉뚱한 분류로 올라갔다. 고를 수 있는 값만 보여주면
+ * 그 실수 자체가 없어진다.
+ */
+app.get("/api/naver/categories", async (c) =>
+  c.json({ categories: listCategories(), source: CATEGORY_SOURCE }));
 
 app.get("/api/naver/accounts", async (c) => {
   const accounts = await listNaverAccounts();

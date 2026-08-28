@@ -1,6 +1,6 @@
 # @stepd/server HTTP API 레퍼런스
 
-> 실측: **2026-08-28 · 라우트 245개** (GET 106 · POST 93 · DELETE 25 · PATCH 14 · PUT 7) · `apps/server/src/index.ts` 기준 — 라우트 추가 시 이 문서도 갱신.
+> 실측: **2026-08-28 · 라우트 246개** (GET 107 · POST 93 · DELETE 25 · PATCH 14 · PUT 7) · `apps/server/src/index.ts` 기준 — 라우트 추가 시 이 문서도 갱신.
 > 프론트 대응 함수는 `apps/web/src/lib/data/api.ts` 기준. 데이터 구조는 [data-model.md](data-model.md),
 > 큐·워커 동작은 [../ops/worker-queue.md](../ops/worker-queue.md) 참고.
 
@@ -238,7 +238,8 @@ API 키(`api-keys.ts`). **화이트리스트(`API_KEY_ROUTES`)에 올린 라우�
 
 ## Meta · TikTok — OAuth 계정 연결
 
-배포처 계정 연결까지만 구현돼 있다. **실제 송출은 아직 없다** (YouTube만 실업로드 경로가 있고 그마저 게이트 OFF).
+배포처 계정 연결까지만 구현돼 있다. **Meta·TikTok 송출은 아직 상태 기록만**이다. 실업로드
+경로가 있는 건 YouTube(게이트 OFF)와 네이버 클립(아래) 둘뿐이다.
 
 | 메서드·경로 | 역할 | 요청/응답 요점 | 프론트 함수 |
 |---|---|---|---|
@@ -256,6 +257,38 @@ API 키(`api-keys.ts`). **화이트리스트(`API_KEY_ROUTES`)에 올린 라우�
 
 > TikTok 연동 3대 함정: 미승인 앱은 **sandbox 자격증명**을 써야 하고, `username` 필드를 스코프에
 > 넣으면 스코프 전체가 깨지며, 시크릿은 v1=prod / v2=sandbox로 갈린다.
+
+## 네이버 클립 — 계정 · 세션 · 자격증명 · 카테고리
+
+네이버는 **공개 업로드 API 가 없다.** 그래서 사무실 상시 PC(윈도우2)의 `naver` 레인 워커가
+로그인 세션으로 브라우저를 몰아 실제로 올린다 — 해외 데이터센터 IP 로 로그인하면 캡차·2차
+인증에 막히기 때문에 한국 IP 가 필요하다. 서버가 하는 일은 **보관과 메타뿐**이다.
+
+⚠️ **세션(`session_blob`)과 자격증명(`cred_blob`)은 어떤 응답에도 실리지 않는다.** 바깥으로
+나가는 건 "있다/없다 + 상태 + 갱신시각" 뿐이다. 둘은 **서로 다른 키**로 봉인된다
+(`NAVER_SESSION_KEY` ≠ `NAVER_CRED_KEY`) — 한쪽이 새도 다른 쪽은 안 열린다.
+
+| 메서드·경로 | 역할 | 요청/응답 요점 | 프론트 함수 |
+|---|---|---|---|
+| `GET /api/naver/categories` | 클립 카테고리 분류표 (1차 40 · 2차 144) | → `{ categories, source }`. 화면이 **자유입력 대신 드롭다운**을 그리는 근거 | `fetchNaverCategories` |
+| `GET /api/naver/accounts` | 계정 목록 | → `{ accounts, sessionStoreReady }`. 계정마다 `hasSession`·`status`·`loginCommand` | `fetchNaverAccounts` |
+| `POST /api/naver/accounts` | 계정 등록 (label·target) | 매니저 권한 | `createNaverAccount` |
+| `PATCH /api/naver/accounts/:id` | 라벨·상태 수정 | 매니저 권한 | `updateNaverAccount` |
+| `DELETE /api/naver/accounts/:id` | 계정 삭제 | 매니저 권한 | `deleteNaverAccount` |
+| `PUT /api/naver/accounts/:id/session` | 로그인 세션 등록 (봉인 저장) | 키 미설정이면 503 — 화면이 `sessionStoreReady` 로 미리 막는다 | `uploadNaverSession` |
+| `GET`·`DELETE /api/naver/accounts/:id/session` | 세션 유무 조회 · 삭제 | 값은 안 나간다 | — |
+| `PUT /api/naver/accounts/:id/credentials` | 아이디·비번 저장 (다른 키로 봉인) | 저장 후 워커가 검증한다. **실패한 자격증명은 지운다** — 틀린 비번을 들고 반복 시도하면 계정이 잠긴다 | `saveNaverCredentials` |
+| `GET`·`DELETE /api/naver/accounts/:id/credentials` | 있다/없다·상태 조회 · 삭제 | 아이디는 `ha9***85` 로 마스킹 | `fetchNaverCredentials` |
+| `POST /api/naver/accounts/:id/relogin` | 자격증명으로 재로그인 큐잉 | 세션 만료 시 사람을 안 부르고 워커가 되살린다 | `requestNaverRelogin` |
+| `GET /api/naver/login-tool` | 편집자용 로그인 exe 내려받기 | GCS 서명 URL | — |
+
+**카테고리는 1차·2차 둘 다 필수**다(안 고르면 등록 버튼이 활성화되지 않는다). 값이 정해지는
+순서는 **발행 페이로드 → 프로그램 기본값(`program.naverCategory`) → 장르 유도**(드라마 →
+엔터/드라마)이고, 어느 경로로 왔든 분류표와 대조해 **업로드 전에** 막는다.
+
+> ⚠️ 예전에는 목록에 없는 값이 오면 브라우저가 **첫 항목을 대신 골랐다.** 엉뚱한 분류로
+> 발행되는데 화면은 "발행 완료" 라고 말했고, 되돌리려면 네이버에서 손으로 고쳐야 했다.
+> 지금은 화면(드롭다운) · 저장(PATCH 400) · 발행 직전(워커) 세 곳에서 막는다.
 
 ## 큐 · 파이프라인 트리거
 

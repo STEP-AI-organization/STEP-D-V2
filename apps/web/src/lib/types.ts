@@ -92,6 +92,12 @@ export interface Program {
   titlePrompt?: string;
   /** 추천 구간(BEAT 조합) 생성 시 덧붙는 운영자 추가 지시. 반영 시점은 titlePrompt 와 같다. */
   recommendPrompt?: string;
+  /**
+   * 네이버 클립 카테고리 기본값 (1차/2차). 이 프로그램의 클립이 어느 분류로 올라갈지.
+   * 배포 모달이 이 값으로 미리 채우고, 자동배포는 이 값을 그대로 쓴다.
+   * 비어 있으면 장르(`pipelineGenre`)에서 유도한다 — 드라마 → 엔터/드라마.
+   */
+  naverCategory?: { primary: string; secondary: string };
 }
 
 export interface Episode {
