@@ -262,6 +262,7 @@ import {
   type ReframePlan,
 } from "./reframe.ts";
 import { getAspectPreset } from "./aspect-presets.ts";
+import { layoutFingerprint, restampPendingClips } from "./rule-restamp.ts";
 import { renderTextLayerPng, overlayCanvasAvailable, measureOverlayImage, FONT_FAMILIES, type OverlayTextItem } from "./overlay-canvas.ts";
 import {
   syncChannelVideos,
@@ -5679,12 +5680,32 @@ app.post("/api/automation/rules", async (c) => {
     // 생기고 구 규칙이 살아남아 이중 커버(한도 2배·뺀 채널로 계속 게시)가 된다.
     if (typeof body.id === "string" && body.id) {
       try {
+        // 모양이 바뀌었는지는 **갱신 전에** 봐야 안다 — 뒤에 보면 이미 새 값이라 늘 같다.
+        const before = (await listAutomationRules()).find((r) => r.id === body.id);
+        const shapeChanged = layoutFingerprint(before as any) !== layoutFingerprint(row as any);
         const updated = await updateAutomationRuleById(row as Parameters<typeof updateAutomationRuleById>[0]);
         if (updated) {
+          // 계획의 모양(템플릿·레이아웃)이 바뀌면 **아직 안 나간 클립을 그 모양으로 다시 찍는다.**
+          // editorState 는 채택 시점에 굳으므로, 이게 없으면 화면에서 바꾼 템플릿이 이미 채택된
+          // 클립에는 영영 반영되지 않고 **옛 모양 그대로 고객 채널에 나간다**(2026-08-28 ENA 실사고).
+          // 이미 배포된 클립은 건드리지 않는다 — 채널에 올라간 것과 DB 가 달라지면 안 된다.
+          let restamped = 0;
+          if (shapeChanged) {
+            try {
+              ({ restamped } = await restampPendingClips(row as any));
+            } catch (e) {
+              // 다시 찍기 실패가 계획 저장 자체를 되돌리게 두지 않는다 — 저장은 이미 끝났고,
+              // 여기 실패는 "옛 모양으로 나갈 수 있음" 이므로 로그로 크게 남긴다.
+              console.error("[automation] 계획 모양 변경 후 대기 클립 재적용 실패", e);
+            }
+          }
           return c.json({
             rule: row,
             state: initialRuleState(platform, row.enabled),
             notice: ruleCreatedNotice(platform),
+            // 화면이 "N개 다시 렌더합니다" 를 말할 수 있게 — 조용히 하면 사용자는 방금 바꾼 게
+            // 이미 만들어진 것에도 적용됐는지 알 방법이 없다.
+            restamped,
           });
         }
         // id 를 줬는데 규칙이 없다(그새 삭제됨) — 새로 만드는 아래 경로로 진행.
