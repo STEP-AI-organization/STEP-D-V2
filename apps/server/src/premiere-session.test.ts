@@ -80,6 +80,37 @@ describe("패널 — 업로드 경로 (서버 API 를 복제하지 않는다)", 
   });
 });
 
+/**
+ * 사용자가 원한 주 동선(2026-08-28): "편집 끝났으면 원래 내보내기를 누르는데, 그걸 우리 걸로 —
+ * 딸깍 누르면 지금 편집창에 떠 있는 그 영상이 렌더돼서 올라가면 좋겠다."
+ */
+describe("패널 — 활성 시퀀스 렌더 후 업로드", () => {
+  it("프리미어를 직접 만진다 — 여기부터가 웹 화면이 아니라 플러그인이다", () => {
+    assert.match(panel, /require\("premierepro"\)/);
+    assert.match(panel, /getActiveProject/);
+    assert.match(panel, /getActiveSequence/);
+  });
+
+  it("AME 큐가 아니라 즉시 렌더다 — 큐에 넘기면 언제 끝났는지 몰라 '딸깍' 이 성립하지 않는다", () => {
+    assert.match(panel, /immediateExportType/);
+    assert.match(panel, /exportSequence\(sequence, immediateExportType\(api\), outPath, PRESET_PATH\)/);
+  });
+
+  it("렌더 결과는 파일 선택 경로와 **같은 업로드 본체**로 들어간다 — 업로드 로직이 둘이 되면 갈라진다", () => {
+    assert.match(panel, /await runUpload\(rendered, selectedProgram\(\)\)/);
+    assert.match(panel, /const ok = await runUpload\(picked, selectedProgram\(\)\)/);
+  });
+
+  it("빈 렌더 결과를 성공으로 치지 않는다", () => {
+    assert.match(panel, /렌더 결과 파일이 비어 있습니다/);
+  });
+
+  it("API 이름이 어긋나면 실제 모듈 구성을 콘솔에 쏟는다 — 다음 시도를 추측으로 하지 않으려고", () => {
+    assert.match(panel, /function dumpApi\(/);
+    assert.match(panel, /Object\.keys\(api\)\.join/);
+  });
+});
+
 describe("패널 매니페스트", () => {
   it("UXP manifest v5 · Premiere 25.6+ (UXP 정식 지원 시작 버전)", () => {
     assert.equal(manifest.manifestVersion, 5);

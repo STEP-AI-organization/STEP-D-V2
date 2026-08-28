@@ -368,6 +368,7 @@ async function doLogin() {
     setStatus($("loginStatus"), "");
     show("upload");
     await loadPrograms();
+    await refreshSequenceLabel();
   } catch (err) {
     setStatus($("loginStatus"), err.message, "err");
   } finally {
@@ -399,6 +400,107 @@ async function pickFile() {
   }
 }
 
+// ── 프리미어 제어 (내보내기) ──────────────────────────────────────────────────
+/**
+ * **여기부터가 진짜 플러그인이다.** 위쪽은 프리미어 안에 얹힌 웹 화면일 뿐이지만, 이 절은
+ * 프리미어의 프로젝트·시퀀스를 직접 만진다.
+ *
+ * 사용자가 원하는 동선(2026-08-28): *"편집 끝났으면 원래 내보내기를 누르는데, 그걸 우리
+ * 걸로 — 딸깍 누르면 지금 편집창에 떠 있는 그 영상이 렌더돼서 올라가면 좋겠다."*
+ * 그래서 **활성 시퀀스 → H.264 렌더 → 그대로 업로드**를 한 버튼에 묶는다.
+ * 파일 선택 경로는 폴백으로 남긴다(이미 렌더해 둔 파일, 다른 도구로 만든 완성본).
+ *
+ * ⚠️ UXP 의 프리미어 API 는 버전마다 이름이 조금씩 다르다. 그래서 **호출을 감싸고, 실패하면
+ * 모듈이 실제로 무엇을 갖고 있는지 콘솔에 쏟는다** — 한 번의 실패로 정확한 이름을 알아내려고.
+ */
+function ppro() {
+  try {
+    return require("premierepro");
+  } catch (_) {
+    return null;
+  }
+}
+
+/** Windows 기본 H.264 프리셋 (실측 2026-08-28 · Media Encoder 2026 동봉). */
+const PRESET_PATH =
+  "C:\\Program Files\\Adobe\\Adobe Media Encoder 2026\\MediaIO\\systempresets\\4E49434B_48323634\\YouTube 1080p HD.epr";
+
+/** 값이 함수면 부르고, 아니면 그대로 — `name` 이 속성인 버전과 `getName()` 인 버전이 있다. */
+async function readMaybe(obj, ...names) {
+  for (const n of names) {
+    if (!obj || !(n in obj)) continue;
+    const v = obj[n];
+    return typeof v === "function" ? await v.call(obj) : v;
+  }
+  return null;
+}
+
+async function activeSequence() {
+  const api = ppro();
+  if (!api) throw new Error("이 프리미어에서는 시퀀스 내보내기를 쓸 수 없습니다 (premierepro 모듈 없음).");
+  const project = await readMaybe(api.Project, "getActiveProject");
+  if (!project) throw new Error("열려 있는 프로젝트가 없습니다.");
+  const sequence = await readMaybe(project, "getActiveSequence");
+  if (!sequence) throw new Error("활성 시퀀스가 없습니다 — 타임라인에서 시퀀스를 여세요.");
+  const name = (await readMaybe(sequence, "name", "getName")) || "sequence";
+  return { api, project, sequence, name: String(name) };
+}
+
+/** 내보내기 즉시 실행 상수. 버전에 따라 자리가 달라서 후보를 훑는다. */
+function immediateExportType(api) {
+  const c = api.Constants || api;
+  const t = c.ExportType || c.EXPORT_TYPE || {};
+  const v = t.IMMEDIATELY ?? t.Immediately ?? t.IMMEDIATE ?? t.immediately;
+  return v === undefined ? 0 : v;
+}
+
+/** 실패했을 때 "무엇이 있었는지" 를 남긴다 — 다음 시도를 추측이 아니라 사실로 하려고. */
+function dumpApi(api, sequence) {
+  try {
+    console.log("[STEP-D] premierepro keys:", Object.keys(api).join(", "));
+    if (api.EncoderManager) console.log("[STEP-D] EncoderManager keys:", Object.keys(api.EncoderManager).join(", "));
+    if (api.Constants) console.log("[STEP-D] Constants keys:", Object.keys(api.Constants).join(", "));
+    if (sequence) console.log("[STEP-D] sequence keys:", Object.keys(sequence).join(", "));
+  } catch (err) {
+    console.log("[STEP-D] api dump 실패", err);
+  }
+}
+
+/**
+ * 활성 시퀀스를 임시 폴더에 mp4 로 렌더하고, 그 파일을 업로드 가능한 형태로 돌려준다.
+ * 렌더는 프리미어가 직접 한다(AME 큐에 넘기지 않는다) — 큐에 넘기면 언제 끝났는지 알 수 없어
+ * "딸깍 한 번에 올라간다" 가 성립하지 않는다. 대신 렌더 동안 프리미어가 바쁘다(내보내기와 같다).
+ */
+async function exportActiveSequence(onStage) {
+  const { api, sequence, name } = await activeSequence();
+  onStage(`"${name}" 렌더 준비 중…`);
+
+  const tmp = await localFs.getTemporaryFolder();
+  const safe = name.replace(/[\\/:*?"<>|]/g, "_").slice(0, 80);
+  const outName = `${safe}.mp4`;
+  const outPath = `${tmp.nativePath}\\${outName}`;
+
+  const manager = (await readMaybe(api.EncoderManager, "getManager")) || api.EncoderManager;
+  if (!manager || typeof manager.exportSequence !== "function") {
+    dumpApi(api, sequence);
+    throw new Error("내보내기 API 를 찾지 못했습니다 — UDT 디버그 콘솔의 [STEP-D] 로그를 보내 주세요.");
+  }
+
+  onStage(`"${name}" 렌더 중… (프리미어가 내보내는 동안 잠시 멈춘 것처럼 보입니다)`);
+  try {
+    await manager.exportSequence(sequence, immediateExportType(api), outPath, PRESET_PATH);
+  } catch (err) {
+    dumpApi(api, sequence);
+    throw new Error(`렌더 실패: ${err && err.message ? err.message : err}`);
+  }
+
+  const entry = await tmp.getEntry(outName);
+  const meta = await entry.getMetadata();
+  const size = Number(meta.size) || 0;
+  if (!size) throw new Error("렌더 결과 파일이 비어 있습니다 — 프리셋·시퀀스 설정을 확인하세요.");
+  return { entry, name: outName, size, nativePath: entry.nativePath || outPath };
+}
+
 function contentTypeFor(name) {
   const ext = (name.split(".").pop() || "").toLowerCase();
   if (ext === "mov") return "video/quicktime";
@@ -407,29 +509,21 @@ function contentTypeFor(name) {
   return "video/mp4";
 }
 
-async function doUpload() {
-  if (!picked || busy) return;
-  const programId = $("program").value;
-  if (!programId) return;
-
-  busy = true;
-  syncUploadButton();
-  $("pickBtn").disabled = true;
-  setProgress(0);
-
-  const reader = makeReader(picked.entry, picked.nativePath, picked.size);
+/** 업로드 본체 — 렌더한 파일이든 사람이 고른 파일이든 여기 하나로 모인다. */
+async function runUpload(source, programId) {
+  const reader = makeReader(source.entry, source.nativePath, source.size);
   // 어느 읽기 경로로 갔는지 보여 준다. 큰 파일에서 프리미어까지 느려지면 원인이 대개
   // 이것("전체 읽기" = 파일을 통째로 메모리에)이라, 사후에 묻지 않아도 되게 앞에 띄운다.
   const readMode = reader.mode === "chunked" ? "부분 읽기" : "전체 읽기";
-  console.log(`[STEP-D] upload start · ${picked.name} · ${picked.size} bytes · ${reader.mode}`);
+  console.log(`[STEP-D] upload start · ${source.name} · ${source.size} bytes · ${reader.mode}`);
   try {
     setStatus($("status"), `업로드 세션 여는 중… (${readMode})`);
     const init = await apiJson("/media/upload-init", {
       method: "POST",
       body: JSON.stringify({
         programId,
-        filename: picked.name,
-        contentType: contentTypeFor(picked.name),
+        filename: source.name,
+        contentType: contentTypeFor(source.name),
       }),
     });
 
@@ -438,7 +532,7 @@ async function doUpload() {
     }
 
     setStatus($("status"), `업로드 중… (${readMode})`);
-    await uploadResumable(init.sessionUrl, reader, picked.size, (pct) => {
+    await uploadResumable(init.sessionUrl, reader, source.size, (pct) => {
       setProgress(pct);
       setStatus($("status"), `업로드 중… ${pct}% (${readMode})`);
     });
@@ -452,27 +546,84 @@ async function doUpload() {
         mediaId: init.mediaId,
         objectPath: init.objectPath,
         programId,
-        filename: picked.name,
-        contentType: contentTypeFor(picked.name),
-        size: picked.size,
-        title: picked.name.replace(/\.[^.]+$/, ""),
+        filename: source.name,
+        contentType: contentTypeFor(source.name),
+        size: source.size,
+        title: source.name.replace(/\.[^.]+$/, ""),
       }),
     });
 
     await store.set("stepd.lastProgram", programId);
     setProgress(100);
-    const clipTitle = done.clip && done.clip.title ? done.clip.title : picked.name;
+    const clipTitle = done.clip && done.clip.title ? done.clip.title : source.name;
     setStatus($("status"), `업로드 완료 — "${clipTitle}" 등록됐습니다. 배포는 웹에서 진행하세요.`, "ok");
-    picked = null;
-    $("fileBox").className = "file";
-    $("fileBox").textContent = "렌더한 MP4 를 선택하세요";
-  } catch (err) {
-    setStatus($("status"), `실패: ${err.message}`, "err");
+    return true;
   } finally {
     reader.close();
+  }
+}
+
+/** 공통 진행 잠금 — 렌더든 업로드든 도는 동안 버튼을 다 잠근다. */
+async function withBusy(fn) {
+  busy = true;
+  $("pickBtn").disabled = true;
+  $("exportBtn").disabled = true;
+  syncUploadButton();
+  setProgress(0);
+  try {
+    await fn();
+  } catch (err) {
+    setStatus($("status"), `실패: ${err.message}`, "err");
+    console.log("[STEP-D] 실패", err);
+  } finally {
     busy = false;
     $("pickBtn").disabled = false;
     syncUploadButton();
+    // 내보내기 버튼은 무조건 되살리지 않는다 — 시퀀스가 없으면 다시 잠겨야 한다.
+    void refreshSequenceLabel();
+  }
+}
+
+function selectedProgram() {
+  return $("program").value;
+}
+
+/** ① 사람이 고른 파일 업로드 (이미 렌더해 둔 완성본 · 다른 도구 산출물). */
+async function doUpload() {
+  if (!picked || busy || !selectedProgram()) return;
+  await withBusy(async () => {
+    const ok = await runUpload(picked, selectedProgram());
+    if (ok) {
+      picked = null;
+      $("fileBox").className = "file";
+      $("fileBox").textContent = "렌더한 MP4 를 선택하세요";
+    }
+  });
+}
+
+/** ② 딸깍 — 지금 타임라인에 떠 있는 시퀀스를 렌더해서 그대로 올린다. */
+async function doExportAndUpload() {
+  if (busy || !selectedProgram()) return;
+  await withBusy(async () => {
+    const rendered = await exportActiveSequence((msg) => setStatus($("status"), msg));
+    console.log(`[STEP-D] rendered ${rendered.nativePath} · ${rendered.size} bytes`);
+    await runUpload(rendered, selectedProgram());
+  });
+}
+
+/** 무엇이 올라갈지 미리 보여 준다 — 딸깍 전에 "그 시퀀스가 맞나" 를 눈으로 확인하는 자리. */
+async function refreshSequenceLabel() {
+  const box = $("seqBox");
+  if (!box) return;
+  try {
+    const { name } = await activeSequence();
+    box.textContent = `현재 시퀀스: ${name}`;
+    box.className = "seq ready";
+    $("exportBtn").disabled = busy || !selectedProgram();
+  } catch (err) {
+    box.textContent = err.message;
+    box.className = "seq";
+    $("exportBtn").disabled = true;
   }
 }
 
@@ -490,13 +641,21 @@ async function doLogout() {
   $("password").addEventListener("keydown", (e) => { if (e.key === "Enter") doLogin(); });
   $("pickBtn").addEventListener("click", pickFile);
   $("uploadBtn").addEventListener("click", doUpload);
+  $("exportBtn").addEventListener("click", doExportAndUpload);
   $("logoutBtn").addEventListener("click", doLogout);
-  $("program").addEventListener("change", syncUploadButton);
+  $("program").addEventListener("change", () => {
+    syncUploadButton();
+    void refreshSequenceLabel();
+  });
+  // 시퀀스는 패널 밖에서 바뀐다(사용자가 타임라인에서 다른 걸 연다). 눌러서 다시 읽게 둔다 —
+  // 패널이 계속 폴링하면 편집 중에 괜히 프리미어를 건드린다.
+  $("seqBox").addEventListener("click", () => void refreshSequenceLabel());
 
   const restored = await session.restore();
   if (restored) {
     show("upload");
     await loadPrograms();
+    await refreshSequenceLabel();
   } else {
     show("login");
     const email = await store.get("stepd.email");
