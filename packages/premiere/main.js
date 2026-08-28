@@ -418,8 +418,12 @@ async function doUpload() {
   setProgress(0);
 
   const reader = makeReader(picked.entry, picked.nativePath, picked.size);
+  // 어느 읽기 경로로 갔는지 보여 준다. 큰 파일에서 프리미어까지 느려지면 원인이 대개
+  // 이것("전체 읽기" = 파일을 통째로 메모리에)이라, 사후에 묻지 않아도 되게 앞에 띄운다.
+  const readMode = reader.mode === "chunked" ? "부분 읽기" : "전체 읽기";
+  console.log(`[STEP-D] upload start · ${picked.name} · ${picked.size} bytes · ${reader.mode}`);
   try {
-    setStatus($("status"), "업로드 세션 여는 중…");
+    setStatus($("status"), `업로드 세션 여는 중… (${readMode})`);
     const init = await apiJson("/media/upload-init", {
       method: "POST",
       body: JSON.stringify({
@@ -433,10 +437,10 @@ async function doUpload() {
       throw new Error("이 서버는 대용량 업로드(GCS)가 꺼져 있습니다 — 관리자에게 문의하세요.");
     }
 
-    setStatus($("status"), "업로드 중…");
+    setStatus($("status"), `업로드 중… (${readMode})`);
     await uploadResumable(init.sessionUrl, reader, picked.size, (pct) => {
       setProgress(pct);
-      setStatus($("status"), `업로드 중… ${pct}%`);
+      setStatus($("status"), `업로드 중… ${pct}% (${readMode})`);
     });
 
     setStatus($("status"), "클립 생성 중…");
