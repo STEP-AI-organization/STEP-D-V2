@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getIdToken } from "@/lib/gcp-auth";
+import { HOP_BY_HOP } from "@/lib/proxy-headers";
 
 export const runtime = "nodejs";
 
@@ -41,9 +42,13 @@ async function proxy(request: NextRequest, paramsPromise: Promise<{ path?: strin
     const headers = new Headers(request.headers);
     headers.delete("host");
     headers.delete("content-length");
+    // 홉바이홉 헤더를 지운다 — 메인 프록시와 같은 이유이자 **같은 사고**다. transfer-encoding 이
+    // 그대로 넘어가면 undici 가 UND_ERR_INVALID_ARG 로 던져 렌더 요청이 502 가 된다.
+    // (근거는 메인 프록시 HOP_BY_HOP 주석 — 정본은 거기 하나로 둔다.)
+    for (const h of HOP_BY_HOP) headers.delete(h);
     headers.set("Authorization", token);
-    // 메인 프록시와 같은 이유 — keep-alive 죽은 소켓 재사용("fetch failed"·UND_ERR_INVALID_ARG)을
-    // 원천 차단한다. 매 요청 새 연결(재시도 없음).
+    // 메인 프록시와 같은 이유 — keep-alive 죽은 소켓 재사용(ECONNRESET)을 원천 차단한다.
+    // 매 요청 새 연결(재시도 없음).
     headers.set("connection", "close");
 
     const bytes = request.body ? new Uint8Array(await request.arrayBuffer()) : undefined;
