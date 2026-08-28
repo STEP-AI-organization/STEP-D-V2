@@ -9,16 +9,28 @@
 ## 요구 사항
 
 - Premiere Pro **25.6 이상** (UXP 정식 지원 시작 버전). 개인용 구독으로 충분하다 — 팀/엔터프라이즈 전용 기능을 쓰지 않는다.
-- [Adobe UXP Developer Tool (UDT)](https://developer.adobe.com/photoshop/uxp/2022/guides/devtool/) — 개발 중 로드용.
+- **Adobe UXP Developer Tool (UDT)** — 개발 중 로드용. 무료이고 Creative Cloud 데스크톱 앱에서 설치한다.
+
+> 윈도우1 실측(2026-08-28): Premiere Pro 2026 **26.3.2** 설치됨(조건 충족) · Media Encoder 2026 설치됨
+> (나중에 시퀀스 자동 렌더에 쓴다) · **UDT 는 아직 설치 안 됨**.
 
 ## 개발 중 로드 (지금 단계)
 
-1. Premiere 를 실행해 둔다.
-2. UDT 실행 → **Add Plugin** → 이 폴더의 `manifest.json` 선택.
-3. 목록에서 `STEP-D` 행의 **Actions ▸ Load**.
-4. Premiere 메뉴 **창(Window) ▸ 확장(Extensions) ▸ STEP-D 업로드**.
+플러그인은 폴더에 파일을 둔다고 프리미어가 알아보지 않는다 — **UDT 가 프리미어에 등록해 준다.**
 
-코드를 고친 뒤에는 UDT 에서 **Reload** 만 누르면 된다.
+1. **UXP Developer Tool 설치** — Creative Cloud 데스크톱 앱 → 검색창에 `UXP Developer Tool`
+   → 설치. (Adobe 계정만 있으면 되고 별도 비용 없다)
+2. Premiere 를 실행해 둔다. UDT 는 **떠 있는 앱**에만 붙는다.
+3. UDT 실행 → 연결 대상이 `Premiere Pro`(26.3.2)로 잡혔는지 확인 → **Add Plugin** →
+   이 폴더의 `manifest.json` 선택.
+4. 목록의 `STEP-D` 행에서 **Actions ▸ Load**.
+5. Premiere 메뉴 **창(Window) ▸ 확장(Extensions) ▸ STEP-D 업로드**.
+
+코드를 고친 뒤에는 UDT 에서 **Reload** 만 누르면 된다 (프리미어 재시작 불필요).
+
+**안 뜰 때 보는 곳** — ① UDT 의 대상 앱이 Premiere 인지(Photoshop 으로 잡혀 있으면 목록에
+안 보인다) ② Load 가 실제로 성공했는지(실패하면 UDT 행에 오류가 뜬다 · `manifest.json`
+문법 오류가 대표적) ③ 창 ▸ 확장 메뉴에 항목이 없으면 프리미어를 껐다 켜고 다시 Load.
 
 ## 쓰는 법
 
