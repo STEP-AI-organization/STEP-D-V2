@@ -168,10 +168,19 @@ function makeReader(entry, nativePath, size) {
   let fd = null;
   try {
     nodeFs = require("fs");
-    if (nodeFs && typeof nodeFs.openSync === "function") fd = nodeFs.openSync(nativePath, "r");
-    else nodeFs = null;
+    if (nodeFs && typeof nodeFs.openSync === "function" && typeof nodeFs.readSync === "function") {
+      fd = nodeFs.openSync(nativePath, "r");
+      // **열자마자 한 번 실제로 읽어 본다.** UXP 버전마다 fs 구현이 조금씩 달라서, 여는 데
+      // 성공하고 readSync 에서 처음 터지는 경우가 있다. 그걸 업로드 중간에 만나면 5회
+      // 재시도를 다 태우고 파일을 통째로 실패시킨다 — 여기서 미리 확인하고 물러난다.
+      nodeFs.readSync(fd, new Uint8Array(Math.min(16, Math.max(1, size))), 0, Math.min(16, Math.max(1, size)), 0);
+    } else {
+      nodeFs = null;
+    }
   } catch (_) {
+    if (fd !== null && nodeFs) { try { nodeFs.closeSync(fd); } catch (__) { /* 무시 */ } }
     nodeFs = null;
+    fd = null;
   }
 
   if (nodeFs && fd !== null) {
