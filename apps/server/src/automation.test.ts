@@ -237,6 +237,45 @@ describe("사유 로그 스팸 방지 — db-pg 소스 스캔", () => {
   });
 });
 
+describe("하루 배포 개수는 계획 단위 — publishedTodayKst 소스 스캔", () => {
+  /**
+   * 사용자가 계획마다 적은 개수는 그대로 나가야 한다("A 계획 10개면 10개, B 계획 20개면
+   * 20개 · 2026-08-28"). 한 채널을 여러 계획이 함께 쓸 수 있게 된 뒤로 채널 단위 집계는
+   * **두 계획이 한 카운터를 나눠 갖는** 상태가 된다 — A(10)와 B(20)가 같은 채널이면 채널이
+   * 20에서 멈추고 둘 다 자기 개수를 못 채운다. 사용자가 정한 개수가 안 나가는 것이 이
+   * 제품에서 가장 큰 사고라 소스 스캔으로 고정한다.
+   */
+  const db = fs.readFileSync(path.join(SRC, "db-pg.ts"), "utf-8");
+  const fn = db.match(/export async function publishedTodayKst[\s\S]*?\n\}/)?.[0] ?? "";
+
+  it("ruleId 로 계획 몫만 센다", () => {
+    assert.ok(fn.length > 200, "publishedTodayKst 를 못 잘랐다");
+    assert.match(fn, /ruleId\?: string \| null/, "계획 인자가 없다 — 채널 총합으로 되돌아갔다");
+    assert.match(fn, /r\.rule_id = \$2/, "rule_id 조건이 없다 — 다른 계획 건수가 이 계획 몫을 깎는다");
+  });
+
+  it("인자를 안 주면 채널 전체를 센다 — 표시용 질의의 축은 남긴다", () => {
+    assert.match(fn, /\$2::text IS NULL OR/,
+      "ruleId 생략 시 아무것도 안 세면 기존 호출부가 조용히 0 을 받는다");
+  });
+
+  it("한도를 판정하는 세 호출부가 전부 rule.id 를 넘긴다", () => {
+    // 하나라도 빠지면 화면 숫자·순방 판정·리포트 목표가 서로 다른 축을 세게 된다.
+    const cycle = fs.readFileSync(path.join(SRC, "automation-cycle.ts"), "utf-8");
+    assert.match(cycle, /publishedTodayKst\(accountKey, rule\.id\)/,
+      "순방이 채널 총합으로 한도를 본다 — 계획별 개수가 안 지켜진다");
+    const index = fs.readFileSync(path.join(SRC, "index.ts"), "utf-8");
+    assert.match(index, /publishedTodayKst\(key, rule\.id\)/,
+      "화면의 '오늘 N/M' 이 순방과 다른 수를 보여준다");
+    const notify = fs.readFileSync(path.join(SRC, "publish-notify.ts"), "utf-8");
+    const calls = notify.match(/publishedTodayKst\([^)]*\)/g) ?? [];
+    assert.ok(calls.length >= 2, "리포트의 publishedTodayKst 호출을 못 찾았다");
+    for (const call of calls) {
+      assert.match(call, /rule\.id/, `리포트가 계획 몫이 아닌 수를 목표와 비교한다: ${call}`);
+    }
+  });
+});
+
 describe("재보류 유령 방지 — db-pg 소스 스캔", () => {
   /**
    * holdClip 의 ON CONFLICT DO UPDATE 가 released_at 을 안 되돌리면, 해제 후 재보류된

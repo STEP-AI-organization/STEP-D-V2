@@ -3445,6 +3445,13 @@ export async function updateAutomationRuleById(r: AutomationRuleRow): Promise<bo
  * 실패한 건은 세지 않는다. 큐에 넣은 시점에 'published' 를 쓰기 때문에, 워커가 그 업로드를
  * 실패시키면 채널엔 아무것도 없는데 한도만 소진된다("오늘 3건 게시" 인데 채널은 비어 있음).
  * 같은 클립·같은 계정에 뒤이어 'failed' 가 찍히면 그 슬롯은 되돌린다.
+ *
+ * ⚠️ **되돌림 조건(NOT EXISTS)에는 rule_id 를 넣지 말 것.** 세는 축이 계획이 됐으니 여기도
+ * 맞추고 싶어 보이지만, 두 행의 rule_id 는 원래 다를 수 있다 — 'published' 는 게시한 **살아
+ * 있는** 계획 id 로 쓰이고(automation-cycle), 'failed' 는 워커가 `clip.automationRuleId`,
+ * 즉 그 클립을 **채택한** 계획 id 로 쓴다(worker.ts). 지워진 계획의 고아 클립을 다른 계획이
+ * 이어받아 게시하면 둘이 갈린다. rule_id 를 걸면 그때 되돌림이 죽어 "한도는 깎였는데 채널은
+ * 비어 있음" 이 그대로 돌아온다. (clip, account) 축이 맞다.
  */
 export async function publishedTodayKst(accountKey: string, ruleId?: string | null): Promise<number> {
   const { rows } = await pool.query(

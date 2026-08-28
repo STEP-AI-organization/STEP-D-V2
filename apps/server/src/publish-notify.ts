@@ -234,6 +234,8 @@ export function ruleDayTarget(
 /**
  * 오늘 계획한 총량과 실제 게시 수 — 리포트의 "영상이 모자랍니다" 섹션 근거.
  * 여러 계획·채널이면 합산한다(담당자에겐 "오늘 몇 건 예정 중 몇 건" 한 줄이면 된다).
+ * 계획 단위로 세므로(publishedTodayKst 의 ruleId) 한 채널을 두 계획이 함께 써도 각 계획의
+ * 몫이 따로 잡혀 목표와 실적이 같은 축에서 더해진다.
  * 목표는 순방과 **같은 함수**(ruleDayTarget)로 낸다 — 메일이 다른 수를 말하면 안 된다.
  */
 async function todaysPlanTotals(now: Date): Promise<{ target: number; published: number }> {
@@ -244,7 +246,7 @@ async function todaysPlanTotals(now: Date): Promise<{ target: number; published:
   let published = 0;
   for (const rule of rules) {
     for (const chan of ruleChannels(rule)) {
-      const n = await publishedTodayKst(`${chan.platform}:${chan.accountId}`);
+      const n = await publishedTodayKst(`${chan.platform}:${chan.accountId}`, rule.id);
       published += n;
       target += ruleDayTarget(rule, n, now).target;
     }
@@ -259,7 +261,7 @@ async function todaysPublishingDone(now: Date, exhausted: boolean): Promise<bool
   );
   for (const rule of rules) {
     for (const chan of ruleChannels(rule)) {
-      const published = await publishedTodayKst(`${chan.platform}:${chan.accountId}`);
+      const published = await publishedTodayKst(`${chan.platform}:${chan.accountId}`, rule.id);
       const { target, deadlinePassed, lastSlotPassed } = ruleDayTarget(rule, published, now);
       if (published >= target || deadlinePassed) continue;
       if (exhausted && lastSlotPassed) continue;   // 더 나올 소재가 없다 — 기다림을 끝낸다
