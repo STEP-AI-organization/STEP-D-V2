@@ -4,42 +4,56 @@
   <meta charset="utf-8" />
   <style>
     /* Premiere 패널은 어두운 UI 다 — 그 안에서 튀지 않게 호스트 색을 따른다.
-       UXP 는 CSS 지원이 브라우저보다 좁다: grid/flex 는 되지만 일부 속성은 무시된다. */
+       ⚠️ **UXP 는 브라우저가 아니다.** 컨테이너의 기본 배치가 달라서(브라우저의 block 처럼
+       세로로 쌓이지 않는다) 라벨과 입력칸이 가로로 붙어 버렸다(2026-08-28 실측).
+       그래서 여기서는 **쌓아야 하는 것마다 flex-column 을 명시**하고, 높이도 값으로 준다 —
+       브라우저 기본값에 기대는 CSS 는 UXP 에서 그대로 무너진다. */
     body {
       margin: 0;
       padding: 12px;
+      display: flex;
+      flex-direction: column;
       font-family: "Adobe Clean", -apple-system, "Malgun Gothic", sans-serif;
       font-size: 12px;
       color: #e8e8e8;
       background: #262626;
     }
-    h3 { margin: 0 0 10px 0; font-size: 13px; font-weight: 600; }
-    .row { margin-bottom: 10px; }
-    .label { color: #a0a0a0; font-size: 11px; margin-bottom: 4px; }
+    #loginView, #uploadView { display: flex; flex-direction: column; }
+    h3 { margin: 0 0 12px 0; font-size: 13px; font-weight: 600; }
+    .row { display: flex; flex-direction: column; margin-bottom: 12px; }
+    .label { color: #a0a0a0; font-size: 11px; margin-bottom: 5px; }
     input, select {
-      width: 100%; box-sizing: border-box; padding: 6px 8px;
-      background: #1d1d1d; color: #e8e8e8; border: 1px solid #444; border-radius: 3px;
+      width: 100%;
+      height: 28px;
+      box-sizing: border-box;
+      padding: 0 8px;
+      background: #1d1d1d; color: #e8e8e8; border: 1px solid #4a4a4a; border-radius: 3px;
       font-size: 12px;
     }
     button {
-      width: 100%; padding: 8px; margin-top: 4px;
-      background: #2680eb; color: #fff; border: none; border-radius: 3px;
+      width: 100%;
+      height: 32px;
+      margin-top: 6px;
+      background-color: #2680eb; color: #ffffff; border: none; border-radius: 3px;
       font-size: 12px; font-weight: 600;
     }
-    button:disabled { background: #444; color: #888; }
-    button.secondary { background: transparent; border: 1px solid #555; color: #ccc; font-weight: 400; }
+    button:disabled { background-color: #3a3a3a; color: #808080; }
+    button.secondary {
+      background-color: transparent; border: 1px solid #5a5a5a; color: #cccccc; font-weight: 400;
+    }
     .file {
-      padding: 10px; border: 1px dashed #555; border-radius: 3px; text-align: center;
-      color: #999; font-size: 11px; word-break: break-all;
+      padding: 12px 8px;
+      border: 1px dashed #5a5a5a; border-radius: 3px;
+      text-align: center; color: #999999; font-size: 11px; word-break: break-all;
     }
     .file.picked { border-style: solid; border-color: #2680eb; color: #e8e8e8; }
-    .bar { height: 4px; background: #1d1d1d; border-radius: 2px; overflow: hidden; margin-top: 6px; }
-    .bar > div { height: 100%; width: 0%; background: #2680eb; }
-    .status { font-size: 11px; color: #a0a0a0; margin-top: 8px; line-height: 1.5; word-break: break-all; }
+    .bar { height: 4px; background: #1d1d1d; border-radius: 2px; overflow: hidden; margin-top: 8px; }
+    .bar > div { height: 4px; width: 0%; background-color: #2680eb; }
+    .status { font-size: 11px; color: #a0a0a0; margin-top: 10px; line-height: 1.5; word-break: break-all; }
     .status.err { color: #ec5b62; }
     .status.ok { color: #33ab84; }
     .hidden { display: none; }
-    .muted { color: #777; font-size: 10.5px; margin-top: 10px; line-height: 1.5; }
+    .muted { color: #777777; font-size: 11px; margin-top: 12px; line-height: 1.5; }
   </style>
 </head>
 <body>
