@@ -1,5 +1,8 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   listCategories,
   resolveCategory,
@@ -65,6 +68,22 @@ describe("네이버 클립 카테고리 — 틀린 분류로 발행되지 않는
     assert.equal(categoryForGenre("드라마").secondary, "드라마");
     assert.equal(categoryForGenre("variety").secondary, "예능");
     assert.deepEqual(categoryForGenre("시사교양"), DEFAULT_CATEGORY);
+  });
+
+  // ── 소스 스캔 ──────────────────────────────────────────────────────────────
+  // 순수 함수로는 증명 못 하는 불변식이다: **카테고리를 정하는 곳은 한 군데여야 한다.**
+  // 자동배포가 `엔터/엔터` 를 박아 넘기던 시절엔, 프로그램에 카테고리를 정해 둬도
+  // 자동 경로는 늘 무시했다(페이로드가 프로그램 기본값을 이기니까). 코드를 읽어서는
+  // 안 보이고, 발행된 클립을 네이버에서 봐야만 알 수 있는 종류의 버그다.
+  it("자동배포는 카테고리를 박아 넘기지 않는다 — 워커가 프로그램·장르로 푼다", () => {
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    const src = readFileSync(path.join(here, "automation-cycle.ts"), "utf8");
+    const hardcoded = src.match(/naverCategory\s*:\s*\{[^}]*primary/);
+    assert.equal(
+      hardcoded, null,
+      "automation-cycle.ts 가 naverCategory 를 리터럴로 넘긴다 — 그러면 프로그램 설정이 무시된다. " +
+      "안 넘기면 워커가 프로그램 기본값 → 장르 순으로 푼다.",
+    );
   });
 
   // 제목 톤(장르팩)과 카테고리가 어긋나면 "제목은 드라마인데 분류는 예능" 이 된다.
