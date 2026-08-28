@@ -120,39 +120,38 @@ const rule = (over: Partial<AutomationRule> = {}): AutomationRule => ({
 const PASS: GateSnapshot = { allowed: true, state: "pass", reason: "" };
 const HOLD: GateSnapshot = { allowed: false, state: "rights_hold", reason: "미해결 권리 이슈 2건" };
 
-describe("한 채널은 자동배포 하나에만 속한다", () => {
-  const existing = [
-    rule({ id: "r1", programId: "p1", channels: [
-      { platform: "youtube", accountId: "c1" },
-      { platform: "naverclip", accountId: "n1" },
-    ] }),
-    rule({ id: "r2", programId: "p2", platform: "youtube", accountId: "legacy" }),
-  ];
-
-  it("다른 자동배포가 쓰는 배열 채널과 구 단수 채널을 모두 찾는다", () => {
-    assert.deepEqual(findAutomationChannelConflicts(existing, [
-      { platform: "naverclip", accountId: "n1" },
-      { platform: "youtube", accountId: "legacy" },
-    ]), [
-      { platform: "naverclip", accountId: "n1", ruleId: "r1", programId: "p1" },
-      { platform: "youtube", accountId: "legacy", ruleId: "r2", programId: "p2" },
-    ]);
-  });
-
-  it("수정 중인 자기 계획은 제외해 기존 채널을 유지할 수 있다", () => {
-    assert.deepEqual(findAutomationChannelConflicts(existing, [
-      { platform: "youtube", accountId: "c1" },
-    ], "r1"), []);
-  });
-
-  it("계획 저장 라우트도 충돌을 409로 막는다 — 외부 API 우회 금지", () => {
+/**
+ * **한 채널을 여러 자동배포가 함께 쓸 수 있다** (2026-08-28 사용자 확정 "자유롭게 가자").
+ *
+ * 예전엔 "채널 하나 = 계획 하나" 로 저장을 409 로 막았다. 그런데 A 프로그램을 A 채널로
+ * 내보내는 중에 B 프로그램이 추가돼 같은 채널로 보내고 싶은 건 자연스러운 요구인데,
+ * 그때마다 **돌고 있는 계획을 지워야** 했다(실사용에서 그 직전까지 갔다).
+ *
+ * 풀어도 안전한 근거는 **중복 방지가 다른 층에 있기 때문**이다: 같은 영상이 같은 채널로
+ * 두 번 나가는 것은 계획이 아니라 **배포 행**이 막는다(hasAccountDistribution).
+ * 이 describe 는 그 층이 살아 있는지를 지킨다 — 여기가 뚫리면 제한을 푼 대가가 중복 게시다.
+ */
+describe("채널 제한을 푼 대신 중복은 배포 행이 막는다", () => {
+  it("계획 저장 라우트가 채널 중복을 막지 않는다 — 같은 채널에 계획 여럿 허용", () => {
     const src = fs.readFileSync(path.join(SRC, "index.ts"), "utf-8");
     const route = /app\.post\("\/api\/automation\/rules"[\s\S]*?\n\}\);/.exec(src)?.[0] ?? "";
-    assert.match(route, /findAutomationChannelConflicts\(/);
-    assert.match(route, /automation_channel_in_use/);
-    assert.match(route, /}, 409\)/);
+    assert.notEqual(route, "", "계획 저장 라우트를 못 잘랐다");
+    assert.doesNotMatch(route, /automation_channel_in_use/,
+      "채널 중복 409 가 되살아났다 — 돌던 계획을 지워야만 새 계획을 만들 수 있게 된다");
+    assert.doesNotMatch(route, /findAutomationChannelConflicts\(/,
+      "충돌 검사가 라우트로 돌아왔다");
+    // 갱신 직렬화는 그대로 필요하다 — 같은 계획을 두 창에서 저장하는 틈은 여전히 막는다.
     assert.match(route, /withTenantLock\(`automation-rule-channels:\$\{currentTenantId\(\)\}`/,
-      "동시 생성 요청 둘이 모두 빈 채널로 판단하지 않게 검사와 저장을 직렬화해야 한다");
+      "갱신 직렬화 잠금까지 걷어내면 자연키 upsert 가 갈라진다");
+  });
+
+  it("순방은 **배포 행**으로 중복을 막는다 — 계획이 아니라", () => {
+    // 채널을 공유하는 계획이 둘이어도, 이미 그 계정으로 나간 클립은 다시 안 나간다.
+    const cycle = fs.readFileSync(path.join(SRC, "automation-cycle.ts"), "utf-8");
+    assert.match(cycle, /hasAccountDistribution\(clip\.distributions, chan\.platform, chan\.accountId\)/,
+      "클립 단위 중복 가드가 없으면 채널 공유가 곧 중복 게시가 된다");
+    const guard = fs.readFileSync(path.join(SRC, "publish-guard.ts"), "utf-8");
+    assert.match(guard, /export function hasAccountDistribution/, "중복 판정 정본이 없다");
   });
 });
 

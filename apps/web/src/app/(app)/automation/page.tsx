@@ -694,16 +694,10 @@ export default function AutomationPage() {
   /** ④ 자동 배포 시작 — 계획 upsert(기존 계획이 있으면 갱신) + 즉시 1회 확인. */
   async function startAutoDeploy() {
     if (starting || !selProgram || selChannels.length === 0) return;
-    const occupied = selChannels.map((key) => ({ key, owner: channelOwnerOtherThanCurrent(key) }))
-      .find((entry) => entry.owner);
-    if (occupied?.owner) {
-      toast({
-        title: "이미 자동배포 중인 채널입니다",
-        description: `${occupied.owner.programTitle} 자동배포에서 먼저 채널을 빼 주세요.`,
-        tone: "error",
-      });
-      return;
-    }
+    // 채널이 다른 계획에서 이미 쓰이고 있어도 **막지 않는다**(2026-08-28 "자유롭게 가자").
+    // A 프로그램을 A 채널에 내보내는 중에 B 프로그램도 같은 채널로 보내고 싶은 건 정상적인
+    // 요구인데, 예전엔 그때마다 돌던 계획을 지워야 했다. 같은 영상의 중복 게시는 계획이
+    // 아니라 배포 행(publish-guard)이 막으므로 이 차단이 없어도 안전하다.
     setStarting(true);
     try {
       const chans = selChannels

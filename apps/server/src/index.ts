@@ -356,7 +356,6 @@ import {
   GATE_POLICIES,
   RULE_DELETED_NOTICE,
   initialRuleState,
-  findAutomationChannelConflicts,
   isGatePolicy,
 
   isRuleMediaKind,
@@ -5622,28 +5621,19 @@ app.post("/api/automation/rules", async (c) => {
     // 있어야 해서, 기본으로 두면 캐스트 미등록 회차가 통째로 썸네일 없이 나간다.
     ...(isRuleThumbnailMode(body.thumbnailMode) ? { thumbnailMode: body.thumbnailMode } : {}),
   };
-  // 동시에 두 요청이 같은 빈 채널을 읽고 각각 저장하는 틈도 닫는다. 잠금 안에서 다시 읽고
-  // 저장하므로 뒤 요청은 앞 요청의 규칙을 본 뒤 409가 된다.
+  // 갱신(id 있는 저장)이 동시에 둘 들어오면 마지막이 이기도록 직렬화한다. 채널 중복 검사는
+  // 2026-08-28 에 없앴지만(아래), 잠금은 그대로 둔다 — 같은 계획을 두 창에서 저장할 때
+  // 자연키 upsert 가 갈라지는 틈은 여전히 막아야 한다.
   return withTenantLock(`automation-rule-channels:${currentTenantId()}`, async () => {
-    // 한 채널은 자동배포 하나에만 속한다. 화면 선택 잠금은 안내일 뿐이고, 외부 API/AENA가
-    // 직접 호출해도 우회하지 못하도록 저장 직전 서버에서 다시 검사한다. 수정 중인 자기 규칙은
-    // 제외하므로 기존 채널을 유지하거나 채널 일부를 빼는 갱신은 정상 동작한다.
-    const existingRules = await listAutomationRules();
-    const requestedChannels = row.channels?.length
-      ? row.channels
-      : [{ platform: row.platform, accountId: row.accountId }];
-    const channelConflicts = findAutomationChannelConflicts(
-      existingRules as any,
-      requestedChannels,
-      typeof body.id === "string" ? body.id : undefined,
-    );
-    if (channelConflicts.length > 0) {
-      return c.json({
-        code: "automation_channel_in_use",
-        error: "선택한 채널은 이미 다른 자동배포에서 사용 중입니다. 기존 자동배포에서 채널을 빼거나 설정을 삭제한 뒤 다시 선택해 주세요.",
-        conflicts: channelConflicts,
-      }, 409);
-    }
+    // ⚠️ **한 채널을 여러 자동배포가 함께 쓸 수 있다**(2026-08-28 사용자 확정 "자유롭게 가자").
+    //
+    // 예전엔 "채널 하나 = 계획 하나" 로 막았다. 그런데 A 프로그램을 A 채널에 내보내는 중에
+    // B 프로그램이 추가돼 같은 채널로 내보내고 싶은 건 자연스러운 요구인데, 그때마다 기존
+    // 계획을 지워야 했다 — 지우면 돌던 자동배포가 멈춘다(2026-08-28 실사용에서 그 직전까지 갔다).
+    //
+    // 중복 게시는 이 제한이 막던 게 아니다. 같은 영상이 같은 채널로 두 번 나가는 것은
+    // **클립 단위**로 막힌다(publish-guard hasAccountDistribution — 계획과 무관하게 배포 행을
+    // 본다). 그래서 제한을 풀어도 중복 배포는 그대로 차단된다.
     // id 가 온 저장은 **갱신**이다 — 자연키 upsert 로 흘리면 첫 채널이 바뀌었을 때 새 규칙이
     // 생기고 구 규칙이 살아남아 이중 커버(한도 2배·뺀 채널로 계속 게시)가 된다.
     if (typeof body.id === "string" && body.id) {
