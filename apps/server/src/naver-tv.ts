@@ -205,7 +205,12 @@ async function pickCategory(
     // ⚠️ **없으면 첫 항목으로 가지 않는다.** 예전엔 그랬는데, 그러면 엉뚱한 분류로 발행되고
     // 화면은 "발행 완료" 라고 말한다 — 되돌리려면 네이버에서 손으로 고쳐야 한다.
     // 여기서 멈추면 배포는 실패로 남고 사람이 사유를 읽는다. 그게 훨씬 싸다.
+    //
+    // ⚠️ 다만 **"아직 안 떴다" 와 "없다" 를 구분해야 한다.** count() 는 즉시 조회라,
+    // 위 고정 대기(700ms)보다 드롭다운이 늦게 그려지면 값이 멀쩡히 있어도 0 이 나온다.
+    // 그걸 "없다" 로 보면 타이밍 흔들림이 곧 발행 실패가 된다 — 기다렸다가 판정한다.
     const target = opt(value);
+    await target.waitFor({ state: "visible", timeout: 10_000 }).catch(() => {});
     if (!(await target.count().catch(() => 0))) {
       const seen = (await page.locator(OPTS).allInnerTexts().catch(() => []))
         .map((t) => t.trim()).filter(Boolean);

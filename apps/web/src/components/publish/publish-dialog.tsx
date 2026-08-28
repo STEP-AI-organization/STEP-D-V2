@@ -107,7 +107,8 @@ export function PublishDialog({
   const [igAccounts, setIgAccounts] = useState<InstagramAccountInfo[]>([]);
   const [metaPages, setMetaPages] = useState<MetaAccountInfo[]>([]);
   // 네이버 클립은 계정마다 설명(10자+)·카테고리를 따로 받는다 — 대상 key 로 폼을 보관한다.
-  const [naverForms, setNaverForms] = useState<Record<string, NaverForm>>({});
+  // 값은 **부분**이다 — 사람이 건드린 필드만 들어간다(naverForm() 이 기본값과 합쳐 읽는다).
+  const [naverForms, setNaverForms] = useState<Record<string, Partial<NaverForm>>>({});
   // 클립 카테고리 분류표. 실패 사유를 들고 있어야 셀렉트가 "사유 없이 비어 있는" 상태가 안 된다.
   const [categories, setCategories] = useState<NaverCategory[]>([]);
   const [catErr, setCatErr] = useState<string | null>(null);
@@ -246,8 +247,15 @@ export function PublishDialog({
   const chosen = useMemo(() => selectable.filter((t) => selected.has(t.key)), [selectable, selected]);
   const allOn = selectable.length > 0 && chosen.length === selectable.length;
 
-  const naverForm = (key: string) =>
-    naverForms[key] ?? { ...NAVER_FORM_DEFAULT, ...(programDefault ?? {}) };
+  // ⚠️ 저장하는 건 **사람이 실제로 바꾼 필드뿐**이고, 기본값은 읽을 때 합친다.
+  // 완성본을 통째로 저장하면 첫 입력 때 나머지 필드가 그 시점의 기본값으로 굳는다 —
+  // 설명을 한 글자 치는 순간 프로그램 카테고리가 엔터/엔터로 되돌아갔다(설명은 필수라
+  // 매 발행마다 일어난다). 이렇게 두면 프로그램 목록이 늦게 도착해도 안 건드린 필드는 따라온다.
+  const naverForm = (key: string): NaverForm => ({
+    ...NAVER_FORM_DEFAULT,
+    ...(programDefault ?? {}),
+    ...(naverForms[key] ?? {}),
+  });
   // 선택된 네이버 클립 중 설명이 10자 미만인 게 하나라도 있으면 막는다.
   const naverShort = chosen.some((t) => t.naver && naverForm(t.key).description.trim().length < 10);
   const canSubmit = chosen.length > 0 && !naverShort && !busy;
@@ -265,7 +273,9 @@ export function PublishDialog({
     setSelected(allOn ? new Set() : new Set(selectable.map((t) => t.key)));
   }
   function patchNaver(key: string, patch: Partial<NaverForm>) {
-    setNaverForms((prev) => ({ ...prev, [key]: { ...(prev[key] ?? NAVER_FORM_DEFAULT), ...patch } }));
+    // 기본값을 섞지 않는다 — 여기 들어간 값은 "사람이 정한 것" 이라는 뜻이고,
+    // 나머지는 naverForm() 이 읽을 때 채운다.
+    setNaverForms((prev) => ({ ...prev, [key]: { ...(prev[key] ?? {}), ...patch } }));
   }
 
   function buildOpts(t: Target): Parameters<typeof publishClips>[2] {
