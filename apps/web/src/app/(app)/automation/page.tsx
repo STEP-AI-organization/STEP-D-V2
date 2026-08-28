@@ -532,6 +532,33 @@ export default function AutomationPage() {
   // 남기므로 채널이 셋인 계획이면 같은 영상이 여섯 줄까지 뜬다 — 그래서 위 승인 대기 개수와
   // 기록의 승인 대기 줄 수가 안 맞아 보였다(사용자 지적 2026-08-19). 클립당 **가장 최근 한 줄**만
   // 남긴다. 나머지 결과(게시·실패)는 그대로 둔다 — 그건 채널별로 봐야 하는 정보다.
+  /**
+   * 이 프로그램의 계획들 — 기록을 **선택한 프로그램으로 좁히는** 근거 (2026-08-28).
+   *
+   * 예전엔 기록이 워크스페이스 전체였다. 프로그램을 하나 골라 놔도 다른 프로그램의
+   * 자동배포 로그가 같이 떠서, 화면이 지저분하고 "지금 이 프로그램이 어디까지 왔나" 를
+   * 읽어내기 어려웠다(사용자 2026-08-28 · AENA 는 programRules/programEpisodes 로 좁힌다).
+   */
+  const programRuleIds = useMemo(
+    () => new Set(rules.filter((r) => programsOf(r).includes(selProgram)).map((r) => r.id)),
+    [rules, selProgram],
+  );
+
+  /**
+   * 이 기록을 지금 화면에 보여줄 것인가 — **좁히되 실패는 숨기지 않는다.**
+   *
+   * ⚠️ AENA 가 같은 자리에서 못박아 둔 예외를 그대로 가져온다("실패를 프로그램 필터로
+   * 숨기면 안 된다"). 다른 프로그램에서 배포가 깨졌는데 화면이 조용하면, 그게 이 리포의
+   * 최빈 실패모드(조용한 정지)다. 계획에 안 매인 줄(ruleId=null · 크레딧 정지 등)도
+   * 워크스페이스 전체 사실이라 항상 보여준다.
+   */
+  const inProgramScope = useCallback((run: RuleRun) => {
+    if (!selProgram) return true;                 // 프로그램 미선택 = 전체 보기
+    if (run.result === "failed") return true;     // 실패는 어느 프로그램이든 보여준다
+    if (!run.ruleId) return true;                 // 워크스페이스 전체 사실(크레딧 등)
+    return programRuleIds.has(run.ruleId);
+  }, [selProgram, programRuleIds]);
+
   const visibleRuns = useMemo(() => {
     const seenHeld = new Set<string>();
     // 과거에 예약 순방과 "지금 확인"이 겹쳐 남은 동일 로그는 한 줄로 접는다. 서버는 이제
@@ -539,6 +566,7 @@ export default function AutomationPage() {
     // 이유는 없다. 같은 영상·채널·결과·문구가 30초 안에 반복된 경우만 중복으로 본다.
     const seenExact = new Map<string, number>();
     return runs.filter((run) => {
+      if (!inProgramScope(run)) return false;
       const exactKey = `${run.clipId ?? ""}:${run.accountKey ?? ""}:${run.result}:${run.detail}`;
       const at = new Date(run.at).getTime();
       const previous = seenExact.get(exactKey);
@@ -551,7 +579,7 @@ export default function AutomationPage() {
       seenHeld.add(key);
       return true;
     });
-  }, [runs]);
+  }, [runs, inProgramScope]);
 
   // "업로드 시작" 로그와 실제 완료를 섞지 않는다. published 로그 뒤에 해당 채널의
   // distribution.status=published 까지 확인된 것만 완료 영상으로 따로 보낸다.
@@ -921,9 +949,9 @@ export default function AutomationPage() {
       >
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
-            <h1 className="text-[22px] font-semibold tracking-[-0.02em]">영상 자동배포 파이프라인</h1>
+            <h1 className="text-[22px] font-semibold tracking-[-0.02em]">자동배포</h1>
             <p className="mt-1 max-w-[620px] text-[13px] leading-relaxed text-white/90">
-              프로그램 영상을 자동 분석하고, 클립·메타데이터를 만든 뒤 선택한 채널과 일정에 맞춰 배포합니다.
+              프로그램 영상을 자동 분석 → 쇼츠 생성 → 메타데이터 생성 → 배포합니다.
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2 text-[11px]">
@@ -1035,7 +1063,7 @@ export default function AutomationPage() {
       )}
 
       {/* ── ① 프로그램 선택 ─────────────────────────────────────────────────── */}
-      <section className="sd-card flex flex-col gap-3 p-4 sm:p-5">
+      <section className="flex flex-col gap-3">
         <FlowStepHeader step="1" title="프로그램 선택" description="자동배포할 프로그램을 먼저 선택하세요" />
         {programs.length === 0 ? (
           <div className="sd-ph grid min-h-[56px] place-items-center rounded-[6px] px-6 text-center text-[11.5px]"
@@ -1066,7 +1094,7 @@ export default function AutomationPage() {
       </section>
 
       {/* ── ② 회차 · 영상 — 분석 완료는 생략, 없으면 등록 ───────────────────── */}
-      <section className="sd-card flex flex-col gap-3 p-4 sm:p-5" style={stepDim(Boolean(selProgram))}>
+      <section className="flex flex-col gap-3" style={stepDim(Boolean(selProgram))}>
         <div className="flex flex-wrap items-center gap-2">
           <FlowStepHeader step="2" title="프로그램 할당 영상" description="등록된 영상은 자동 분석 대기열에 연결됩니다" />
           {/* 기존 업로드 모달 재사용 — 새 업로드 로직을 발명하지 않는다(F1 과 같은 문). */}
@@ -1113,7 +1141,7 @@ export default function AutomationPage() {
       </section>
 
       {/* ── ③ 자동배포 설정 — 참고 디자인처럼 채널·일정·템플릿·방식을 한 단계로 묶는다. ── */}
-      <section className="sd-card flex flex-col gap-4 p-4 sm:p-5" style={stepDim(Boolean(selProgram))}>
+      <section className="flex flex-col gap-4" style={stepDim(Boolean(selProgram))}>
         <FlowStepHeader step="3" title="자동배포 설정" description="채널, 일정, 배포 방식과 영상 템플릿을 설정하세요" />
 
         <div className="flex flex-col gap-2 rounded-[6px] p-3" style={{ background: "var(--sd-card-sub)", border: "1px solid var(--sd-border)" }}>
@@ -1810,7 +1838,7 @@ export default function AutomationPage() {
             aria-expanded={showActivity}
           >
             <h4 className="text-[14px] font-semibold" style={{ color: "var(--sd-fg)" }}>
-              {showActivity ? "▾" : "▸"} ⏳ 최근 처리 · 진행
+              {showActivity ? "▾" : "▸"} ⏳ 배포 대기
               <span className="ml-1.5 text-[11px] font-normal" style={{ color: "var(--sd-mut)" }}>
                 {recentProcessRuns.length}건
               </span>
@@ -1964,19 +1992,24 @@ export default function AutomationPage() {
   );
 }
 
+/**
+ * 단계 머리말 — **작은 라벨 + 제목 한 줄**(AENA 자동배포 화면과 같은 형태 · 2026-08-28).
+ *
+ * 예전엔 액센트색 동그라미 배지를 앞에 뒀는데, 단계가 셋이라 화면 위쪽에 색 원이 셋
+ * 쌓여 시선이 분산됐다. AENA 쪽이 더 깔끔하다는 사용자 판단에 맞춰 배지를 걷어내고
+ * "1단계" 를 옅은 라벨로 낮춘다 — 위계는 제목이 지고, 번호는 순서만 알려주면 된다.
+ * (색은 STEP D 토큰 그대로다 — AENA 의 zinc 클래스를 옮기면 다크 테마가 깨진다.)
+ */
 function FlowStepHeader({ step, title, description }: { step: string; title: string; description: string }) {
   return (
-    <div className="flex min-w-0 flex-1 items-start gap-3">
-      <span
-        className="grid size-7 shrink-0 place-items-center rounded-full text-[12px] font-semibold"
-        style={{ background: "var(--sd-accent-bg)", color: "var(--sd-accent)", border: "1px solid var(--sd-accent-border)" }}
-      >
-        {step}
-      </span>
-      <div className="min-w-0">
-        <h3 className="text-[15px] font-semibold" style={{ color: "var(--sd-fg)" }}>{title}</h3>
-        <p className="mt-0.5 text-[11px] leading-relaxed" style={{ color: "var(--sd-mut)" }}>{description}</p>
-      </div>
+    <div className="min-w-0 flex-1">
+      <p className="text-[11px] font-semibold tracking-wide" style={{ color: "var(--sd-mut)" }}>
+        {step}단계
+        <span className="ml-1.5 text-[15px] font-semibold tracking-normal" style={{ color: "var(--sd-fg)" }}>
+          {title}
+        </span>
+      </p>
+      <p className="mt-1 text-[11px] leading-relaxed" style={{ color: "var(--sd-mut)" }}>{description}</p>
     </div>
   );
 }
