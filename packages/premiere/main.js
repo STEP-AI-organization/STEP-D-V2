@@ -446,7 +446,10 @@ async function activeSequence() {
   return { api, project, sequence, name: String(name) };
 }
 
-/** 내보내기 즉시 실행 상수. 버전에 따라 자리가 달라서 후보를 훑는다. */
+/**
+ * 내보내기 즉시 실행 상수 — `Constants.ExportType.IMMEDIATELY`(다른 값은 `QUEUE_TO_AME`).
+ * 버전에 따라 자리가 달라질 수 있어 후보를 훑는다.
+ */
 function immediateExportType(api) {
   const c = api.Constants || api;
   const t = c.ExportType || c.EXPORT_TYPE || {};
@@ -488,7 +491,13 @@ async function exportActiveSequence(onStage) {
 
   onStage(`"${name}" 렌더 중… (프리미어가 내보내는 동안 잠시 멈춘 것처럼 보입니다)`);
   try {
-    await manager.exportSequence(sequence, immediateExportType(api), outPath, PRESET_PATH);
+    // 서명(Adobe UXP 문서 확인 2026-08-28):
+    //   exportSequence(sequence, exportType, outputFile, presetFile, exportFull): Promise<boolean>
+    // ⚠️ 마지막 `exportFull` 을 빼면 **작업 영역(work area)만** 나갈 수 있다 — 편집자가
+    //    "다 올렸는데 앞 5분만 올라갔다" 를 겪는 자리다. 항상 true(시퀀스 전체).
+    // ⚠️ 실패를 예외가 아니라 **false 로** 알린다. 안 보면 0바이트를 업로드하러 간다.
+    const ok = await manager.exportSequence(sequence, immediateExportType(api), outPath, PRESET_PATH, true);
+    if (ok === false) throw new Error("프리미어가 내보내기를 거부했습니다 (프리셋·디스크 공간 확인)");
   } catch (err) {
     dumpApi(api, sequence);
     throw new Error(`렌더 실패: ${err && err.message ? err.message : err}`);
@@ -537,9 +546,12 @@ async function seekActiveSequence(sec) {
   }
   if (pos === null) pos = String(Math.round(sec * TICKS_PER_SECOND));
 
+  // 정본은 `setPlayerPosition(TickTime): Promise<boolean>` (Adobe UXP 문서 확인 2026-08-28).
+  // 뒤의 둘은 옛 이름 폴백이다.
   for (const m of ["setPlayerPosition", "setPlayheadPosition", "setCurrentPosition"]) {
     if (typeof sequence[m] === "function") {
-      await sequence[m](pos);
+      const ok = await sequence[m](pos);
+      if (ok === false) throw new Error("재생위치를 옮기지 못했습니다 — 시퀀스가 열려 있는지 확인하세요.");
       return;
     }
   }

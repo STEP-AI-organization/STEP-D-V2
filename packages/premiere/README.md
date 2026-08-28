@@ -91,6 +91,27 @@ UDT 로그(`%APPDATA%\Adobe\Adobe UXP Developer Tool\Logs\appLogs-*.log`)에
 - ⚠️ 프리미어 UXP API 는 버전마다 이름이 조금씩 다르다. 어긋나면 UDT 디버그 콘솔에
   `[STEP-D] premierepro keys: …` 로 **실제 구성**을 쏟는다 — 그걸 보고 고친다(추측 금지).
 
+### 쓰는 프리미어 API (Adobe 문서 대조 2026-08-28)
+
+| 우리가 부르는 것 | 문서상 서명 |
+|---|---|
+| 활성 프로젝트 | `Project.getActiveProject(): Promise<Project>` |
+| 활성 시퀀스 | `project.getActiveSequence(): Promise<Sequence>` · 이름은 `sequence.name` (읽기 전용 속성) |
+| 내보내기 | `EncoderManager.getManager()` → `exportSequence(sequence, exportType, outputFile, presetFile, exportFull): Promise<boolean>` |
+| 내보내기 방식 | `Constants.ExportType.IMMEDIATELY` (다른 값 `QUEUE_TO_AME`) |
+| 재생위치 | `sequence.setPlayerPosition(TickTime): Promise<boolean>` · `TickTime.createWithSeconds(sec)` |
+
+**여기서 배운 것 둘** —
+① `exportFull` 을 빼면 **작업 영역(work area)만** 나갈 수 있다. 편집자가 "다 올렸는데 앞부분만
+올라갔다" 를 겪는 자리라 항상 `true` 로 넘긴다.
+② 이 API 들은 실패를 예외가 아니라 **`false` 반환**으로 알린다. 안 보면 0바이트 파일을
+업로드하러 간다 — 두 곳 다 반환값을 검사한다.
+
+출처: [EncoderManager](https://developer.adobe.com/premiere-pro/uxp/ppro_reference/classes/encodermanager/) ·
+[Sequence](https://developer.adobe.com/premiere-pro/uxp/ppro_reference/classes/sequence/) ·
+[TickTime](https://developer.adobe.com/premiere-pro/uxp/ppro_reference/classes/ticktime/) ·
+[Project](https://developer.adobe.com/premiere-pro/uxp/ppro_reference/classes/project/)
+
 ## `manifest.json` 하나로 패널이 뜨는 원리
 
 프리미어 안에는 **UXP 런타임**(브라우저 비슷한 실행기)이 들어 있다. 우리 패널은 그 위에서

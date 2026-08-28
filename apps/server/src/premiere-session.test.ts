@@ -93,7 +93,16 @@ describe("패널 — 활성 시퀀스 렌더 후 업로드", () => {
 
   it("AME 큐가 아니라 즉시 렌더다 — 큐에 넘기면 언제 끝났는지 몰라 '딸깍' 이 성립하지 않는다", () => {
     assert.match(panel, /immediateExportType/);
-    assert.match(panel, /exportSequence\(sequence, immediateExportType\(api\), outPath, PRESET_PATH\)/);
+    assert.match(panel, /exportSequence\(sequence, immediateExportType\(api\), outPath, PRESET_PATH, true\)/);
+  });
+
+  it("`exportFull=true` 를 넘긴다 — 빼면 작업 영역만 나가 '앞부분만 올라갔다' 가 된다", () => {
+    assert.match(panel, /PRESET_PATH, true\)/,
+      "Adobe 서명: exportSequence(sequence, exportType, outputFile, presetFile, exportFull)");
+  });
+
+  it("false 반환을 실패로 읽는다 — 안 보면 0바이트를 업로드하러 간다", () => {
+    assert.match(panel, /if \(ok === false\) throw new Error\("프리미어가 내보내기를 거부했습니다/);
   });
 
   it("렌더 결과는 파일 선택 경로와 **같은 업로드 본체**로 들어간다 — 업로드 로직이 둘이 되면 갈라진다", () => {
