@@ -1,0 +1,154 @@
+"use client";
+
+/**
+ * 네이버 자동 로그인 설정 — 계정 카드 안의 한 블록.
+ *
+ * ## 왜 있는가
+ * 네이버 세션은 만료된다(실측 2026-08-28: 9일 된 세션이 죽어 있었고, 그동안 화면은
+ * "로그인됨" 이라고 말했다 — 발행이 실패해야만 상태가 바뀌기 때문). 만료마다 사람이
+ * 브라우저를 여는 게 부담이라, 아이디·비번을 한 번 저장해 두면 **워커가 스스로 되살린다.**
+ *
+ * ## 취급
+ *  - 입력값은 **보내고 즉시 지운다.** state 에 남기지 않는다(devtools·에러리포트로 샌다).
+ *  - 서버는 세션과 **다른 키**로 봉인하고 값을 절대 돌려주지 않는다 — 여기서 볼 수 있는 건
+ *    "있다/없다 + 검증상태" 뿐이다.
+ *  - 저장은 곧 검증이다: 워커가 실제로 로그인해 보고 **틀리면 지운다**(틀린 비번으로 반복
+ *    시도하면 계정이 잠긴다).
+ */
+import { useCallback, useEffect, useState } from "react";
+import { Button } from "@/components/ui/button";
+import { StatusBadge } from "@/components/ui/status-badge";
+import {
+  fetchNaverCredentialState,
+  saveNaverCredentials,
+  clearNaverCredentials,
+  reloginNaverAccount,
+  type NaverCredentialState,
+} from "@/lib/data/api";
+
+function when(ts: number | null): string {
+  if (!ts) return "";
+  return new Date(Number(ts)).toLocaleString("ko-KR", {
+    month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit",
+  });
+}
+
+export function NaverCredentials({ accountId, label }: { accountId: string; label: string }) {
+  const [state, setState] = useState<NaverCredentialState | null>(null);
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [msg, setMsg] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [id, setId] = useState("");
+  const [pw, setPw] = useState("");
+
+  const load = useCallback(async () => {
+    try { setState(await fetchNaverCredentialState(accountId)); }
+    catch { /* 계정 카드가 이미 오류를 보여준다 */ }
+  }, [accountId]);
+  useEffect(() => { void load(); }, [load]);
+
+  const save = async () => {
+    if (!id.trim() || !pw) return;
+    setBusy("save"); setErr(null); setMsg(null);
+    try {
+      const r = await saveNaverCredentials(accountId, id.trim(), pw);
+      // ⚠️ 보내자마자 비운다 — 화면 어디에도 남기지 않는다.
+      setId(""); setPw(""); setOpen(false);
+      setMsg(`${r.maskedId} 저장됨 — 워커가 실제로 로그인해 확인합니다 (잠시 뒤 새로고침).`);
+      await load();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally { setBusy(null); }
+  };
+
+  const drop = async () => {
+    if (!confirm(`'${label}' 의 저장된 아이디·비밀번호를 지울까요?\n\n세션은 남아 발행은 계속되지만, 만료되면 자동 복구가 안 됩니다.`)) return;
+    setBusy("clear");
+    try { await clearNaverCredentials(accountId); setMsg("자격증명을 지웠습니다."); await load(); }
+    catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+    finally { setBusy(null); }
+  };
+
+  const relogin = async () => {
+    setBusy("relogin"); setErr(null);
+    try { await reloginNaverAccount(accountId); setMsg("다시 로그인 요청됨 — 잠시 뒤 새로고침하세요."); }
+    catch (e) { setErr(e instanceof Error ? e.message : String(e)); }
+    finally { setBusy(null); }
+  };
+
+  const badge = () => {
+    if (!state?.hasCred) return <StatusBadge tone="idle">자동 로그인 꺼짐</StatusBadge>;
+    if (state.status === "verified") return <StatusBadge tone="done">자동 로그인 켜짐</StatusBadge>;
+    if (state.status === "failed") return <StatusBadge tone="error">자동 로그인 실패</StatusBadge>;
+    return <StatusBadge tone="progress">확인 중</StatusBadge>;
+  };
+
+  return (
+    <div className="mt-3 border-t border-border pt-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <span className="text-[11px] font-medium text-foreground">자동 로그인</span>
+          {badge()}
+          {state?.hasCred && state.reloginAt && (
+            <span className="text-[11px] text-muted-foreground">{when(state.reloginAt)} 갱신</span>
+          )}
+        </div>
+        <div className="flex items-center gap-1.5">
+          {state?.hasCred && state.status === "verified" && (
+            <Button size="xs" variant="outline" disabled={busy === "relogin"} onClick={() => void relogin()}>
+              {busy === "relogin" ? "요청 중…" : "지금 다시 로그인"}
+            </Button>
+          )}
+          <Button size="xs" variant={state?.hasCred ? "ghost" : "outline"}
+            disabled={state?.credKeyReady === false}
+            onClick={() => setOpen((v) => !v)}>
+            {state?.hasCred ? "아이디·비번 변경" : "아이디·비번 저장"}
+          </Button>
+          {state?.hasCred && (
+            <button onClick={() => void drop()} disabled={busy === "clear"}
+              className="rounded-md px-2 py-1 text-xs text-muted-foreground transition hover:text-status-error">
+              지우기
+            </button>
+          )}
+        </div>
+      </div>
+
+      {state?.credKeyReady === false && (
+        <p className="mt-1.5 text-[11px] text-status-warn">
+          서버에 자격증명 암호화 키(NAVER_CRED_KEY)가 없어 저장할 수 없습니다 (평문 저장은 하지 않습니다).
+        </p>
+      )}
+      {state?.status === "failed" && state.error && (
+        <p className="mt-1.5 text-[11px] text-status-error">{state.error}</p>
+      )}
+      {msg && <p className="mt-1.5 text-[11px] text-muted-foreground">{msg}</p>}
+      {err && <p className="mt-1.5 text-[11px] text-status-error">{err}</p>}
+
+      {open && (
+        <div className="mt-2 flex flex-wrap items-end gap-2">
+          <label className="flex flex-col gap-1">
+            <span className="text-[10.5px] text-muted-foreground">네이버 아이디</span>
+            <input value={id} onChange={(e) => setId(e.target.value)} autoComplete="off"
+              className="w-44 rounded-md border border-border bg-background px-2 py-1 text-xs text-foreground" />
+          </label>
+          <label className="flex flex-col gap-1">
+            <span className="text-[10.5px] text-muted-foreground">비밀번호</span>
+            <input type="password" value={pw} onChange={(e) => setPw(e.target.value)} autoComplete="new-password"
+              className="w-44 rounded-md border border-border bg-background px-2 py-1 text-xs text-foreground" />
+          </label>
+          <Button size="xs" disabled={!id.trim() || !pw || busy === "save"} onClick={() => void save()}>
+            {busy === "save" ? "저장 중…" : "저장하고 로그인 확인"}
+          </Button>
+          <Button size="xs" variant="ghost" onClick={() => { setOpen(false); setId(""); setPw(""); }}>취소</Button>
+        </div>
+      )}
+
+      <p className="mt-1.5 text-[10.5px] leading-relaxed text-muted-foreground">
+        저장해 두면 세션이 만료돼도 <b className="text-foreground">워커가 스스로 다시 로그인</b>합니다.
+        값은 서버에서 암호화되어 다시 조회되지 않고, 로그인에 실패하면 자동으로 삭제됩니다.
+        2차인증이 걸린 계정은 자동 로그인이 안 되니 도우미로 한 번 로그인하세요.
+      </p>
+    </div>
+  );
+}

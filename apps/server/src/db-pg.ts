@@ -1294,6 +1294,65 @@ export async function deleteNaverAccount(id: string): Promise<void> {
   await pool.query(`DELETE FROM naver_account WHERE id = $1`, [id]);
 }
 
+// ── 네이버 자격증명 (자동 재로그인용) ───────────────────────────────────────────
+//
+// ⚠️ cred_blob 은 NAVER_ACCOUNT_COLS 에 **없다.** 세션보다 위험한 값이라(비번은 다른 서비스
+//    에서도 통하고 로그아웃으로 무효화도 안 된다) 전용 함수로만 꺼낸다. 0046 참고.
+
+export type NaverCredStatus = "pending" | "verified" | "failed";
+
+/** 봉인된 자격증명을 저장하고 **검증 대기**로 표시한다. 검증은 워커(naver.login)가 한다. */
+export async function setNaverCredential(id: string, blob: string): Promise<void> {
+  await pool.query(
+    `UPDATE naver_account
+        SET cred_blob = $2, cred_status = 'pending', cred_updated_at = $3, cred_error = NULL
+      WHERE id = $1`,
+    [id, blob, Date.now()]);
+}
+
+export async function getNaverCredentialBlob(id: string): Promise<string | null> {
+  const { rows } = await pool.query(`SELECT cred_blob FROM naver_account WHERE id = $1`, [id]);
+  return (rows[0]?.cred_blob as string | undefined) ?? null;
+}
+
+/**
+ * 검증 결과 반영. **실패하면 blob 을 지운다** — 틀린 비번을 들고 반복 시도하면 계정이 잠긴다
+ * (세션 만료보다 훨씬 나쁜 상태다). 추가 인증(challenge)은 비번이 맞을 수 있으므로 남긴다.
+ */
+export async function markNaverCredential(
+  id: string,
+  status: NaverCredStatus,
+  error?: string | null,
+  opts: { clear?: boolean } = {},
+): Promise<void> {
+  await pool.query(
+    `UPDATE naver_account
+        SET cred_status = $2,
+            cred_error  = $3,
+            cred_blob   = CASE WHEN $4 THEN NULL ELSE cred_blob END,
+            relogin_at  = CASE WHEN $2 = 'verified' THEN $5 ELSE relogin_at END
+      WHERE id = $1`,
+    [id, status, error ?? null, !!opts.clear, Date.now()]);
+}
+
+export async function clearNaverCredential(id: string): Promise<void> {
+  await pool.query(
+    `UPDATE naver_account SET cred_blob = NULL, cred_status = NULL,
+       cred_updated_at = NULL, cred_error = NULL WHERE id = $1`, [id]);
+}
+
+/** 자격증명 상태만 — 값은 절대 안 나간다. 화면이 "저장됨/검증됨/실패"를 보여줄 재료. */
+export async function getNaverCredentialState(id: string): Promise<{
+  hasCred: boolean; status: NaverCredStatus | null; updatedAt: number | null;
+  error: string | null; reloginAt: number | null;
+} | null> {
+  const { rows } = await pool.query(
+    `SELECT (cred_blob IS NOT NULL) AS "hasCred", cred_status AS "status",
+            cred_updated_at AS "updatedAt", cred_error AS "error", relogin_at AS "reloginAt"
+       FROM naver_account WHERE id = $1`, [id]);
+  return rows[0] ?? null;
+}
+
 // ── 커머스(쿠팡파트너스) 계정 ───────────────────────────────────────────────────
 //
 // **회사마다 자기 법인 계정이다.** 커미션 정산이 계정 단위라, 한 계정에 subId 로 가르면

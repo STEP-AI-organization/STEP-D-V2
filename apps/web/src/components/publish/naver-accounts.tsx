@@ -19,6 +19,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { StatusBadge } from "@/components/ui/status-badge";
+import { NaverCredentials } from "@/components/publish/naver-credentials";
 import type { NaverAccount } from "@/lib/data/api";
 import {
   fetchNaverAccounts,
@@ -320,6 +321,9 @@ export function NaverAccounts({ onChange }: { onChange?: (accounts: NaverAccount
                   </button>
                 </div>
               </div>
+
+              {/* 자동 로그인(아이디·비번) — 세션 만료마다 사람이 붙는 걸 없애는 자리. */}
+              <NaverCredentials accountId={a.id} label={a.label} />
 
               {/* 편집자용 정상 경로 — 로그인 도우미 다운로드 (pnpm·리포 불필요, 더블클릭).
                   세션이 이미 있으면 접어둔다. */}

@@ -394,7 +394,11 @@ import { listNaverAccounts, getNaverAccount, upsertNaverAccount, markNaverAccoun
   deleteNaverAccount } from "./db-pg.ts";
 import { naverSessionPath } from "./naver-session.ts";
 import { sealSession, sessionStoreReady, looksLikeStorageState } from "./naver-session-store.ts";
-import { setNaverSessionBlob, clearNaverSessionBlob } from "./db-pg.ts";
+import {
+  setNaverSessionBlob, clearNaverSessionBlob,
+  setNaverCredential, clearNaverCredential, getNaverCredentialState,
+} from "./db-pg.ts";
+import { credStoreReady, sealCredential, maskNaverId } from "./naver-cred-store.ts";
 import {
   getCommerceAccount, upsertCommerceAccount, setCommerceSessionBlob, markCommerceSessionExpired,
 } from "./db-pg.ts";
@@ -9933,6 +9937,72 @@ app.put("/api/naver/accounts/:id/session", async (c) => {
   await setNaverSessionBlob(acct.id, sealSession(state));
   // 값은 절대 되돌려주지 않는다. 있다/없다만.
   return c.json({ ok: true, id: acct.id, status: "active", sessionUpdatedAt: Date.now() });
+});
+
+/**
+ * 네이버 아이디·비번 저장 → **워커가 실제로 로그인해 검증**한다.
+ *
+ * 세션은 만료된다(실측: 9일). 만료마다 사람이 브라우저를 여는 게 이 기능의 원래 부담이었고,
+ * 자격증명이 있으면 워커가 스스로 세션을 되살린다.
+ *
+ * ⚠️ 비밀번호는 세션보다 위험한 자산이다 — 다른 서비스에서도 통하고, 본인이 바꾸기 전엔
+ *    무효화되지 않는다. 그래서 세션과 **다른 키**(NAVER_CRED_KEY)로 봉인하고, 관리자만,
+ *    값은 어떤 응답에도 싣지 않는다. 검증 실패(비번 틀림)면 워커가 **지운다** —
+ *    틀린 비번으로 반복 시도하면 계정이 잠긴다.
+ */
+app.put("/api/naver/accounts/:id/credentials", async (c) => {
+  requireManager(c);
+  const acct = await getNaverAccount(c.req.param("id"));
+  if (!acct) return c.json({ error: "not_found" }, 404);
+  if (!credStoreReady()) {
+    return c.json({
+      error: "cred_key_missing",
+      message: "NAVER_CRED_KEY 가 설정되지 않아 자격증명을 저장할 수 없습니다(평문 저장은 하지 않습니다).",
+    }, 503);
+  }
+  const b = await c.req.json<{ id?: string; pw?: string }>().catch(() => null);
+  const naverId = String(b?.id ?? "").trim();
+  const naverPw = String(b?.pw ?? "");
+  if (!naverId || !naverPw) {
+    return c.json({ error: "bad_request", message: "아이디와 비밀번호가 모두 필요합니다." }, 400);
+  }
+  await setNaverCredential(acct.id, sealCredential({ id: naverId, pw: naverPw }));
+  // 검증은 브라우저가 있는 워커(naver 레인)가 한다 — 여기서 로그인할 수 없다.
+  const jobId = await enqueue("naver.login", { accountId: acct.id },
+    { dedupeKey: `naver.login:${acct.id}` });
+  // 값은 절대 되돌려주지 않는다. 가린 아이디만.
+  return c.json({ ok: true, id: acct.id, maskedId: maskNaverId(naverId), status: "pending", jobId });
+});
+
+/** 자격증명 상태 조회 — 값은 안 나간다. 있다/없다·검증상태·사유만. */
+app.get("/api/naver/accounts/:id/credentials", async (c) => {
+  const acct = await getNaverAccount(c.req.param("id"));
+  if (!acct) return c.json({ error: "not_found" }, 404);
+  const state = await getNaverCredentialState(acct.id);
+  return c.json({ ...(state ?? { hasCred: false, status: null }), credKeyReady: credStoreReady() });
+});
+
+/** 자격증명 폐기. 세션은 남으므로 발행은 계속되고, 자동 재로그인만 꺼진다. */
+app.delete("/api/naver/accounts/:id/credentials", async (c) => {
+  requireManager(c);
+  const acct = await getNaverAccount(c.req.param("id"));
+  if (!acct) return c.json({ error: "not_found" }, 404);
+  await clearNaverCredential(acct.id);
+  return c.json({ ok: true, id: acct.id });
+});
+
+/** 지금 다시 로그인 — 세션이 죽었을 때 사람이 눌러 되살린다(자격증명이 있어야 한다). */
+app.post("/api/naver/accounts/:id/relogin", async (c) => {
+  requireManager(c);
+  const acct = await getNaverAccount(c.req.param("id"));
+  if (!acct) return c.json({ error: "not_found" }, 404);
+  const state = await getNaverCredentialState(acct.id);
+  if (!state?.hasCred) {
+    return c.json({ error: "no_credentials", message: "저장된 아이디·비밀번호가 없습니다." }, 409);
+  }
+  const jobId = await enqueue("naver.login", { accountId: acct.id },
+    { dedupeKey: `naver.login:${acct.id}` });
+  return c.json({ ok: true, jobId });
 });
 
 app.delete("/api/naver/accounts/:id/session", async (c) => {

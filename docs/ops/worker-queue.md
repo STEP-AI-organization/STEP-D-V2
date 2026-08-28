@@ -51,7 +51,7 @@ Cloud Run은 **응답이 끝나는 순간 CPU를 throttle**하고 요청을 **60
 | **크래시 복구** | 워커가 죽어 `running`으로 잠긴 잡은 30분 뒤 `requeueStale()`이 회수한다 (기동 시 + 15분 tick마다). |
 | **후속 잡** | 핸들러가 `FollowUp`을 반환하면 현재 잡이 `done`이 된 **뒤에** enqueue한다. 자기 재큐 잡(hotwatch)이 아직 `running`인 자기 자신과 dedupe 충돌하지 않게 하기 위한 장치다. |
 
-## 잡 타입 24종
+## 잡 타입 25종
 
 `queue.ts`의 `JobType` 정의와 `worker.ts`의 `handle()` switch가 처리한다.
 새 잡 타입(렌더링 등)이 들어올 자리도 이 switch다.
@@ -66,6 +66,7 @@ Cloud Run은 **응답이 끝나는 순간 CPU를 throttle**하고 요청을 **60
 | `content.analyze` | 업로드된 회차 영상을 GCS에서 내려받아 파이썬 `core/` 파이프라인(`python -m core.analyze`, STT→정제→장면→비전→이름자막→쇼츠, **Vertex Gemini**)으로 분석 → `content_analysis` 저장 + AI 쇼츠를 회차 추천 보드에 기록. 상세는 [pipeline-current.md](pipeline-current-state.md) | `POST /api/media/upload` (업로드 시), `POST /api/admin/queue/purge`의 재큐 |
 | `youtube.reconcile` | 예약(`scheduled`)으로 올린 영상이 **실제로 공개됐는지** videos.list 로 되읽어 `published` 로 전환. 되묻지 않으면 배포 화면이 "예약됨" 에 영구 고정된다(AENA `youtube-reconcile.job.ts` 이식). 폴링 창(예약 10분 전~24시간 후) · 채널별 배치(50) · `public` 확정 신호일 때만 전환 | 워커 기동 시 테넌트별 팬아웃(`fanOutYoutubeReconcile`) |
 | `clip.reframe` | 현재 클립 구간의 5fps·640px 프록시를 만들고 `python -m core.reframe`으로 Beat별 Fit/Fill·얼굴 추적 플랜 생성. 전체 결과는 `analysis/<mediaId>/reframe/…`, 검증된 compact plan은 `clip.reframe`에 저장. 최대 2회 시도 | `POST /api/clips/:id/reframe` (`mode=ai_multi`) |
+| `naver.login` | 저장된 아이디·비번으로 **네이버에 자동 로그인**해 세션을 되살린다. 세션은 만료되는데(실측 9일) 그때마다 사람이 브라우저를 여는 게 부담이라 만들었다. 성공하면 세션을 로컬+서버에 저장 · **비번이 틀리면 자격증명을 지운다**(반복 시도 = 계정 잠금) · 캡차·2차인증이면 남기고 사람을 부른다. **naver 레인**(윈도우2 · 한국 IP + 창 있는 브라우저) | `PUT /api/naver/accounts/:id/credentials`(저장 즉시 검증) · `POST .../relogin` · 발행 중 세션 만료 시 자동 |
 | `commerce.link` | 클립의 상품 쿼리(`clip.commerce.queries`)로 **쿠팡 제휴 링크**를 발급해 `clip.commerce.links` 에 붙인다(전부 `pending` — 사람이 승인해야 발행에 나간다). 파트너스 콘솔 내부 API 2개(`/api/v1/search` → `/api/v1/banner/iframe/url`)를 브라우저 컨텍스트에서 부른다 — DOM 조작 없음. **회사마다 계정이 다르므로**(정산이 계정 단위) 잡의 테넌트로 `commerce_account` 를 찾아 그 세션을 주입한다 · 계정이 없으면 **발급하지 않는다**(공용 계정 폴백 없음 = 수익 오귀속 방지). **윈도우2 전용 레인** — 한국 IP + 화면 있는 크롬이 필요(headless 는 세션이 유효해도 차단). 게이트 `COMMERCE_LINKS_ENABLED` 기본 OFF · ⚠️ 생성된 링크를 **절대 열지 않는다**(자기 클릭 = 계정 정지) | `POST /api/clips/:id/generate-metadata` (게이트 ON + 쿼리 있을 때) · `POST /api/clips/:id/commerce/issue`(재발급·상품 교체) |
 | `reframe.compare` | 세로 4택 비교(vertical-candidates-v1): 같은 프록시로 `python -m core.reframe --candidates-output`을 돌려 후보 4종 plan + contact sheet + 프록시를 임시 GCS `analysis/<mediaId>/reframe-compare/…`에 생성. **정식 clip.reframe 상태는 불변**(비교 뷰어 전용) · 최대 2회 시도 | `POST /api/clips/:id/reframe/candidates` |
 

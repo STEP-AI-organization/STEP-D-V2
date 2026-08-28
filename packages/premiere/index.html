@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <style>
+    /* Premiere 패널은 어두운 UI 다 — 그 안에서 튀지 않게 호스트 색을 따른다.
+       UXP 는 CSS 지원이 브라우저보다 좁다: grid/flex 는 되지만 일부 속성은 무시된다. */
+    body {
+      margin: 0;
+      padding: 12px;
+      font-family: "Adobe Clean", -apple-system, "Malgun Gothic", sans-serif;
+      font-size: 12px;
+      color: #e8e8e8;
+      background: #262626;
+    }
+    h3 { margin: 0 0 10px 0; font-size: 13px; font-weight: 600; }
+    .row { margin-bottom: 10px; }
+    .label { color: #a0a0a0; font-size: 11px; margin-bottom: 4px; }
+    input, select {
+      width: 100%; box-sizing: border-box; padding: 6px 8px;
+      background: #1d1d1d; color: #e8e8e8; border: 1px solid #444; border-radius: 3px;
+      font-size: 12px;
+    }
+    button {
+      width: 100%; padding: 8px; margin-top: 4px;
+      background: #2680eb; color: #fff; border: none; border-radius: 3px;
+      font-size: 12px; font-weight: 600;
+    }
+    button:disabled { background: #444; color: #888; }
+    button.secondary { background: transparent; border: 1px solid #555; color: #ccc; font-weight: 400; }
+    .file {
+      padding: 10px; border: 1px dashed #555; border-radius: 3px; text-align: center;
+      color: #999; font-size: 11px; word-break: break-all;
+    }
+    .file.picked { border-style: solid; border-color: #2680eb; color: #e8e8e8; }
+    .bar { height: 4px; background: #1d1d1d; border-radius: 2px; overflow: hidden; margin-top: 6px; }
+    .bar > div { height: 100%; width: 0%; background: #2680eb; }
+    .status { font-size: 11px; color: #a0a0a0; margin-top: 8px; line-height: 1.5; word-break: break-all; }
+    .status.err { color: #ec5b62; }
+    .status.ok { color: #33ab84; }
+    .hidden { display: none; }
+    .muted { color: #777; font-size: 10.5px; margin-top: 10px; line-height: 1.5; }
+  </style>
+</head>
+<body>
+  <!-- ① 로그인 — STEP-D 계정. 세션은 패널에만 남고 프로젝트/디스크에 저장하지 않는다. -->
+  <div id="loginView">
+    <h3>STEP-D 로그인</h3>
+    <div class="row">
+      <div class="label">이메일</div>
+      <input id="email" type="text" autocomplete="off" />
+    </div>
+    <div class="row">
+      <div class="label">비밀번호</div>
+      <input id="password" type="password" />
+    </div>
+    <button id="loginBtn">로그인</button>
+    <div id="loginStatus" class="status"></div>
+    <div class="muted">stepd.stepai.kr 과 같은 계정입니다.</div>
+  </div>
+
+  <!-- ② 업로드 — 프리미어에서 렌더한 완성본을 STEP-D 로 바로 올린다. -->
+  <div id="uploadView" class="hidden">
+    <h3>완성본 업로드</h3>
+    <div class="row">
+      <div class="label">프로그램</div>
+      <select id="program"></select>
+    </div>
+    <div class="row">
+      <div class="label">영상 파일</div>
+      <div id="fileBox" class="file">렌더한 MP4 를 선택하세요</div>
+      <button id="pickBtn" class="secondary">파일 선택</button>
+    </div>
+    <button id="uploadBtn" disabled>STEP-D 로 업로드</button>
+    <div class="bar"><div id="progress"></div></div>
+    <div id="status" class="status"></div>
+    <button id="logoutBtn" class="secondary" style="margin-top:14px;">로그아웃</button>
+  </div>
+
+  <script src="main.js"></script>
+</body>
+</html>

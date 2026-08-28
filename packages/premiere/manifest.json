@@ -1,0 +1,44 @@
+{
+  "id": "kr.stepai.stepd.premiere",
+  "name": "STEP-D",
+  "version": "0.1.0",
+  "main": "index.html",
+  "manifestVersion": 5,
+  "host": [
+    {
+      "app": "premierepro",
+      "minVersion": "25.6.0"
+    }
+  ],
+  "entrypoints": [
+    {
+      "type": "panel",
+      "id": "stepd.upload",
+      "label": { "default": "STEP-D 업로드" },
+      "minimumSize": { "width": 260, "height": 320 },
+      "preferredDockedSize": { "width": 320, "height": 520 },
+      "preferredFloatingSize": { "width": 360, "height": 600 }
+    }
+  ],
+  "requiredPermissions": {
+    "network": {
+      "domains": [
+        "https://stepd.stepai.kr",
+        "https://stepd-server-nsh6xfqyla-uc.a.run.app",
+        "https://storage.googleapis.com"
+      ]
+    },
+    "localFileSystem": "request",
+    "launchProcess": { "schemes": [], "extensions": [] },
+    "allowCodeGenerationFromStrings": false
+  },
+  "icons": [
+    {
+      "width": 23,
+      "height": 23,
+      "path": "icons/icon.png",
+      "scale": [1, 2],
+      "theme": ["darkest", "dark", "medium", "lightest", "light", "all"]
+    }
+  ]
+}

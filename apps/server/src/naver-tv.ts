@@ -506,9 +506,96 @@ export async function uploadToNaver(input: NaverUploadInput): Promise<NaverUploa
   }
 }
 
+/** 자동 로그인 결과. 실패 사유를 구분해야 "재시도할 것"과 "사람을 불러야 할 것"이 갈린다. */
+export type NaverLoginResult =
+  | { ok: true; state: unknown }
+  /** 아이디·비번이 틀렸다 — **자격증명을 지워야 한다**(반복 시도하면 계정이 잠긴다). */
+  | { ok: false; kind: "bad_credentials"; message: string }
+  /** 캡차·2차인증·새기기 확인 — 자격증명은 맞을 수 있다. 사람이 한 번 해줘야 한다. */
+  | { ok: false; kind: "challenge"; message: string }
+  | { ok: false; kind: "error"; message: string };
+
+/**
+ * 아이디/비번으로 자동 로그인 → storageState 반환.
+ *
+ * ## 되긴 된다 (2026-08-28 실측)
+ * 이 리포는 오래 "자격증명은 코드가 절대 만지지 않는다" 였다. 실제로 재보니 **통과했다** —
+ * 한국 IP · 창 있는 브라우저 · 붙여넣기 입력이면 캡차가 안 떴다. 그래서 세션 만료 때마다
+ * 사람을 부르는 대신 워커가 스스로 되살릴 수 있다.
+ *
+ * ## 그래도 조심할 것 두 가지
+ *  - **키 입력을 흉내내야 한다.** `value` 를 직접 넣으면 네이버가 "자바스크립트를 사용할 수
+ *    없습니다" 로 막는다. 클립보드 붙여넣기 → 실패 시 한 글자씩(pressSequentially).
+ *  - **headless 로 돌리지 마라.** 로그인 폼은 자동화 탐지가 제일 센 자리다.
+ *  - 제출은 버튼이 아니라 **엔터**로 한다. 버튼 id 가 배포마다 바뀐다
+ *    (실측: `#log.login` 없음 · 지금은 `#loginBtn_column`/`#loginBtn_row` 두 벌).
+ */
+export async function loginWithCredentials(
+  id: string,
+  pw: string,
+  opts: { timeoutMs?: number } = {},
+): Promise<NaverLoginResult> {
+  const browser = await chromium.launch({
+    headless: false,
+    args: ["--disable-blink-features=AutomationControlled"],
+  });
+  try {
+    const ctx = await browser.newContext({ locale: "ko-KR", timezoneId: "Asia/Seoul" });
+    await ctx.grantPermissions(["clipboard-read", "clipboard-write"], { origin: "https://nid.naver.com" })
+      .catch(() => {});
+    const page = await ctx.newPage();
+    await page.goto(LOGIN_URL, { waitUntil: "domcontentloaded", timeout: opts.timeoutMs ?? 60_000 });
+    await page.waitForTimeout(2500);
+
+    for (const [sel, text] of [["#id", id], ["#pw", pw]] as const) {
+      await page.locator(sel).click();
+      // 브라우저 안에서 도는 코드라 DOM 타입이 없다 — any 로 받는다(naver-tv 는 node 타깃).
+      await page.evaluate((t: string) => (navigator as any).clipboard.writeText(t), text).catch(() => {});
+      await page.keyboard.press("Control+V");
+      await page.waitForTimeout(350);
+      if (!(await page.locator(sel).inputValue().catch(() => ""))) {
+        await page.locator(sel).pressSequentially(text, { delay: 55 });
+      }
+    }
+    await page.locator("#pw").press("Enter");
+    await page.waitForTimeout(7000);
+
+    const cookies = await ctx.cookies();
+    const names = new Set(cookies.filter((c) => c.domain.includes("naver.com")).map((c) => c.name));
+    if (names.has("NID_AUT") && names.has("NID_SES")) {
+      // 로그인만으로는 부족하다 — 발행에 쓸 도메인 쿠키까지 채워야 세션이 쓸모 있다.
+      for (const t of Object.values(NAVER_TARGETS)) {
+        await page.goto(t.uploadUrl, { waitUntil: "domcontentloaded", timeout: 60_000 }).catch(() => {});
+        await page.waitForTimeout(1500);
+      }
+      const state = await ctx.storageState();
+      await ctx.close();
+      return { ok: true, state };
+    }
+
+    // 실패 원인 분류 — 화면 문구로 가른다. 여기서 잘못 분류하면 **틀린 비번을 계속 시도해
+    // 계정이 잠기거나**, 반대로 멀쩡한 비번을 지운다.
+    const body = (await page.evaluate(
+      () => (globalThis as any).document?.body?.innerText ?? "").catch(() => "")).slice(0, 800);
+    await ctx.close();
+    if (/아이디.*비밀번호.*다시|일치하지 않|잘못 입력/.test(body)) {
+      return { ok: false, kind: "bad_credentials", message: "아이디 또는 비밀번호가 맞지 않습니다." };
+    }
+    if (/자동입력 방지|보안 문자|captcha|인증|새로운 기기|이 기기/i.test(body)) {
+      return { ok: false, kind: "challenge",
+        message: "네이버가 추가 인증을 요구했습니다 (캡차·2차인증·새 기기 확인) — 사람이 한 번 로그인해야 합니다." };
+    }
+    return { ok: false, kind: "error", message: `로그인 실패 — 화면: ${body.replace(/\s+/g, " ").slice(0, 160)}` };
+  } catch (e) {
+    return { ok: false, kind: "error", message: e instanceof Error ? e.message : String(e) };
+  } finally {
+    await browser.close().catch(() => {});
+  }
+}
+
 /**
  * 최초 1회 수동 로그인 — 브라우저를 띄우고 **사람이** 아이디/비번/2차인증을 넣는다.
- * 로그인이 끝나면 storageState 를 저장한다. 자격증명은 코드가 절대 만지지 않는다.
+ * 로그인이 끝나면 storageState 를 저장한다. (자동 로그인이 막힌 계정의 폴백 경로다.)
  */
 export async function interactiveNaverLogin(
   waitMs = 5 * 60_000,

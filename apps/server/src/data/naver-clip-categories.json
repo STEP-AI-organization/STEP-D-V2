@@ -1,0 +1,1006 @@
+{
+  "source": "https://clip-service-elb-public.io.naver.com/studio/webapi/editor-meta/categories",
+  "capturedAt": 1787884233183,
+  "categories": [
+    {
+      "no": 11,
+      "code": "PLACE",
+      "name": "플레이스",
+      "subs": [
+        {
+          "no": 99,
+          "code": "PLACE",
+          "name": "플레이스"
+        },
+        {
+          "no": 100,
+          "code": "RESTAURANT",
+          "name": "맛집"
+        },
+        {
+          "no": 101,
+          "code": "CAFE",
+          "name": "카페, 베이커리, 디저트"
+        },
+        {
+          "no": 102,
+          "code": "DININGOUT",
+          "name": "음식점, 주점"
+        },
+        {
+          "no": 103,
+          "code": "LODGING",
+          "name": "국내 숙박"
+        },
+        {
+          "no": 104,
+          "code": "ATTRACTIONS",
+          "name": "국내 어드벤처"
+        },
+        {
+          "no": 105,
+          "code": "LOCALPLACES",
+          "name": "국내 명소"
+        },
+        {
+          "no": 106,
+          "code": "DATESPOTS",
+          "name": "데이트"
+        },
+        {
+          "no": 107,
+          "code": "OVERSEAS",
+          "name": "세계, 해외"
+        }
+      ]
+    },
+    {
+      "no": 14,
+      "code": "TRAVEL",
+      "name": "여행",
+      "subs": [
+        {
+          "no": 116,
+          "code": "TRAVEL",
+          "name": "여행"
+        },
+        {
+          "no": 117,
+          "code": "DTRAVEL",
+          "name": "국내여행"
+        },
+        {
+          "no": 118,
+          "code": "WTRAVEL",
+          "name": "해외여행"
+        },
+        {
+          "no": 119,
+          "code": "FLIGHTS",
+          "name": "항공"
+        },
+        {
+          "no": 120,
+          "code": "HOTEL",
+          "name": "호텔 및 숙소"
+        }
+      ]
+    },
+    {
+      "no": 10,
+      "code": "FOOD",
+      "name": "푸드",
+      "subs": [
+        {
+          "no": 97,
+          "code": "FOOD",
+          "name": "푸드"
+        },
+        {
+          "no": 98,
+          "code": "RECIPE",
+          "name": "요리, 레시피"
+        }
+      ]
+    },
+    {
+      "no": 27,
+      "code": "BLOG",
+      "name": "일상기록",
+      "subs": [
+        {
+          "no": 168,
+          "code": "BLOG",
+          "name": "일상기록"
+        },
+        {
+          "no": 169,
+          "code": "THINKING",
+          "name": "생각"
+        },
+        {
+          "no": 170,
+          "code": "ARTICLE",
+          "name": "좋은글, 이미지"
+        },
+        {
+          "no": 171,
+          "code": "PHOTOGRAPHY",
+          "name": "사진"
+        }
+      ]
+    },
+    {
+      "no": 4,
+      "code": "ENTERTAINMENT",
+      "name": "엔터",
+      "subs": [
+        {
+          "no": 53,
+          "code": "ENTERTAINMENT",
+          "name": "엔터"
+        },
+        {
+          "no": 54,
+          "code": "TVSERIES",
+          "name": "드라마"
+        },
+        {
+          "no": 55,
+          "code": "VARIETYSHOW",
+          "name": "예능"
+        },
+        {
+          "no": 56,
+          "code": "STAR",
+          "name": "스타, 연예인"
+        },
+        {
+          "no": 57,
+          "code": "BROADCASTING",
+          "name": "방송"
+        },
+        {
+          "no": 58,
+          "code": "MOVIE",
+          "name": "영화"
+        },
+        {
+          "no": 59,
+          "code": "ANIMATION",
+          "name": "만화, 애니"
+        },
+        {
+          "no": 60,
+          "code": "CELEBRITY",
+          "name": "유명인"
+        }
+      ]
+    },
+    {
+      "no": 2,
+      "code": "MUSIC",
+      "name": "음악",
+      "subs": [
+        {
+          "no": 44,
+          "code": "MUSIC",
+          "name": "음악"
+        },
+        {
+          "no": 45,
+          "code": "INSTRUMENT",
+          "name": "악기"
+        },
+        {
+          "no": 46,
+          "code": "SINGER",
+          "name": "가수"
+        },
+        {
+          "no": 47,
+          "code": "PERFORMANCE",
+          "name": "공연"
+        }
+      ]
+    },
+    {
+      "no": 8,
+      "code": "BEAUTY",
+      "name": "뷰티",
+      "subs": [
+        {
+          "no": 83,
+          "code": "BEAUTY",
+          "name": "뷰티"
+        },
+        {
+          "no": 84,
+          "code": "SKINCARE",
+          "name": "스킨케어"
+        },
+        {
+          "no": 85,
+          "code": "HAIR",
+          "name": "헤어스타일, 헤어케어"
+        },
+        {
+          "no": 86,
+          "code": "MAKEUP",
+          "name": "메이크업"
+        },
+        {
+          "no": 87,
+          "code": "NAIL",
+          "name": "네일"
+        },
+        {
+          "no": 88,
+          "code": "PERFUME",
+          "name": "향수"
+        },
+        {
+          "no": 89,
+          "code": "MENSBEAUTY",
+          "name": "남성화장품"
+        }
+      ]
+    },
+    {
+      "no": 9,
+      "code": "FASHION",
+      "name": "패션",
+      "subs": [
+        {
+          "no": 90,
+          "code": "FASHION",
+          "name": "패션"
+        },
+        {
+          "no": 91,
+          "code": "WOMENOOTD",
+          "name": "여성 데일리룩"
+        },
+        {
+          "no": 92,
+          "code": "MENSOOTD",
+          "name": "남성 데일리룩"
+        },
+        {
+          "no": 93,
+          "code": "UNDERWEAR",
+          "name": "언더웨어"
+        },
+        {
+          "no": 94,
+          "code": "ACCESSORIES",
+          "name": "잡화, 소품"
+        },
+        {
+          "no": 95,
+          "code": "NAMEBRAND",
+          "name": "브랜드, 디자이너브랜드"
+        },
+        {
+          "no": 96,
+          "code": "LUXURYFASHION",
+          "name": "명품패션, 잡화, 소품"
+        }
+      ]
+    },
+    {
+      "no": 5,
+      "code": "SPORTS",
+      "name": "프로스포츠",
+      "subs": [
+        {
+          "no": 61,
+          "code": "SPORTS",
+          "name": "프로스포츠"
+        },
+        {
+          "no": 62,
+          "code": "BASEBALL",
+          "name": "야구"
+        },
+        {
+          "no": 63,
+          "code": "FOOTBALL",
+          "name": "축구"
+        },
+        {
+          "no": 64,
+          "code": "BASKETBALL",
+          "name": "농구"
+        },
+        {
+          "no": 65,
+          "code": "VOLLEYBALL",
+          "name": "배구"
+        },
+        {
+          "no": 66,
+          "code": "SPORTS_GOLF",
+          "name": "골프"
+        },
+        {
+          "no": 67,
+          "code": "OTHER",
+          "name": "일반"
+        },
+        {
+          "no": 68,
+          "code": "WFOOTBALL",
+          "name": "해외축구"
+        },
+        {
+          "no": 69,
+          "code": "WBASEBALL",
+          "name": "해외야구"
+        }
+      ]
+    },
+    {
+      "no": 6,
+      "code": "OUTDOOR",
+      "name": "아웃도어, 운동",
+      "subs": [
+        {
+          "no": 70,
+          "code": "OUTDOOR",
+          "name": "아웃도어, 운동"
+        },
+        {
+          "no": 71,
+          "code": "WATERACTIVITIES",
+          "name": "수상운동, 레저"
+        },
+        {
+          "no": 72,
+          "code": "WINTERSPORTS",
+          "name": "겨울운동, 레저"
+        },
+        {
+          "no": 73,
+          "code": "BALLGAMES",
+          "name": "구기운동, 레저"
+        },
+        {
+          "no": 74,
+          "code": "BIKES",
+          "name": "자전거, 스쿠터, 오토바이"
+        },
+        {
+          "no": 75,
+          "code": "EXERCISE",
+          "name": "근력운동"
+        },
+        {
+          "no": 76,
+          "code": "SNOWSKATING",
+          "name": "스케이트, 보드"
+        },
+        {
+          "no": 77,
+          "code": "EXTREMESPORTS",
+          "name": "익스트림스포츠"
+        },
+        {
+          "no": 78,
+          "code": "CAMPING",
+          "name": "캠핑, 백패킹"
+        },
+        {
+          "no": 79,
+          "code": "CLIMBING",
+          "name": "등산"
+        },
+        {
+          "no": 80,
+          "code": "FISHING",
+          "name": "낚시"
+        },
+        {
+          "no": 81,
+          "code": "OUTDOOR_GOLF",
+          "name": "골프"
+        }
+      ]
+    },
+    {
+      "no": 1,
+      "code": "FINEARTS",
+      "name": "미술",
+      "subs": [
+        {
+          "no": 41,
+          "code": "FINEARTS",
+          "name": "미술"
+        },
+        {
+          "no": 42,
+          "code": "EXHIBITION",
+          "name": "전시"
+        },
+        {
+          "no": 43,
+          "code": "DESIGN",
+          "name": "디자인"
+        }
+      ]
+    },
+    {
+      "no": 3,
+      "code": "ECONOMY",
+      "name": "경제",
+      "subs": [
+        {
+          "no": 48,
+          "code": "ECONOMY",
+          "name": "경제"
+        },
+        {
+          "no": 49,
+          "code": "STOCKS",
+          "name": "증시"
+        },
+        {
+          "no": 50,
+          "code": "INVESTMENT",
+          "name": "재테크"
+        },
+        {
+          "no": 51,
+          "code": "REALESTATE",
+          "name": "부동산"
+        },
+        {
+          "no": 52,
+          "code": "CRYPTOCURRENCY",
+          "name": "암호화폐"
+        }
+      ]
+    },
+    {
+      "no": 7,
+      "code": "SCIENCE",
+      "name": "과학",
+      "subs": [
+        {
+          "no": 82,
+          "code": "SCIENCE",
+          "name": "과학"
+        }
+      ]
+    },
+    {
+      "no": 12,
+      "code": "LIVING",
+      "name": "리빙, 홈",
+      "subs": [
+        {
+          "no": 108,
+          "code": "LIVING",
+          "name": "리빙, 홈"
+        },
+        {
+          "no": 109,
+          "code": "INTERIOR",
+          "name": "인테리어, DIY"
+        },
+        {
+          "no": 110,
+          "code": "GARDENING",
+          "name": "원예, 재배"
+        },
+        {
+          "no": 111,
+          "code": "HOUSEKEEPING",
+          "name": "공간정리"
+        }
+      ]
+    },
+    {
+      "no": 13,
+      "code": "ANIMALS",
+      "name": "동물",
+      "subs": [
+        {
+          "no": 112,
+          "code": "ANIMALS",
+          "name": "동물"
+        },
+        {
+          "no": 113,
+          "code": "PETS",
+          "name": "반려동물"
+        },
+        {
+          "no": 114,
+          "code": "DOGS",
+          "name": "강아지"
+        },
+        {
+          "no": 115,
+          "code": "CATS",
+          "name": "고양이"
+        }
+      ]
+    },
+    {
+      "no": 15,
+      "code": "LIFESTYLE",
+      "name": "라이프스타일",
+      "subs": [
+        {
+          "no": 121,
+          "code": "LIFESTYLE",
+          "name": "라이프스타일"
+        },
+        {
+          "no": 122,
+          "code": "PARENTING",
+          "name": "육아, 결혼"
+        },
+        {
+          "no": 123,
+          "code": "RELATIONSHIP",
+          "name": "연애"
+        },
+        {
+          "no": 124,
+          "code": "TEENAGE",
+          "name": "10대"
+        },
+        {
+          "no": 125,
+          "code": "SINGLELIFE",
+          "name": "싱글 라이프"
+        },
+        {
+          "no": 126,
+          "code": "FAMILY",
+          "name": "가족"
+        }
+      ]
+    },
+    {
+      "no": 16,
+      "code": "TECH",
+      "name": "테크",
+      "subs": [
+        {
+          "no": 127,
+          "code": "TECH",
+          "name": "테크"
+        },
+        {
+          "no": 128,
+          "code": "INTERNET",
+          "name": "인터넷, AI"
+        },
+        {
+          "no": 129,
+          "code": "IT",
+          "name": "IT, 컴퓨터"
+        },
+        {
+          "no": 130,
+          "code": "MOBILE",
+          "name": "휴대폰 및 액세서리"
+        },
+        {
+          "no": 131,
+          "code": "TECH_CONSOLE",
+          "name": "게임기"
+        }
+      ]
+    },
+    {
+      "no": 17,
+      "code": "LITERATURE",
+      "name": "문학",
+      "subs": [
+        {
+          "no": 132,
+          "code": "LITERATURE",
+          "name": "문학"
+        },
+        {
+          "no": 133,
+          "code": "BOOKS",
+          "name": "책"
+        }
+      ]
+    },
+    {
+      "no": 18,
+      "code": "HUMANITY",
+      "name": "인문, 교양",
+      "subs": [
+        {
+          "no": 134,
+          "code": "HUMANITY",
+          "name": "인문, 교양"
+        }
+      ]
+    },
+    {
+      "no": 19,
+      "code": "ISSUE",
+      "name": "이슈",
+      "subs": [
+        {
+          "no": 135,
+          "code": "ISSUE",
+          "name": "이슈"
+        },
+        {
+          "no": 136,
+          "code": "ISSUE_ECONOMY",
+          "name": "경제"
+        },
+        {
+          "no": 137,
+          "code": "GENERAL",
+          "name": "교양상식"
+        },
+        {
+          "no": 138,
+          "code": "NEWS",
+          "name": "뉴스"
+        },
+        {
+          "no": 139,
+          "code": "SPEECH",
+          "name": "대담"
+        },
+        {
+          "no": 140,
+          "code": "SOCIAL",
+          "name": "사회, 정치"
+        },
+        {
+          "no": 141,
+          "code": "ISSUE_CRIME",
+          "name": "범죄"
+        },
+        {
+          "no": 142,
+          "code": "ISSUE_DISASTERS",
+          "name": "재난"
+        },
+        {
+          "no": 143,
+          "code": "ISSUE_WAR",
+          "name": "전쟁"
+        }
+      ]
+    },
+    {
+      "no": 20,
+      "code": "HEALTHYLIVING",
+      "name": "건강, 의학",
+      "subs": [
+        {
+          "no": 144,
+          "code": "HEALTHYLIVING",
+          "name": "건강, 의학"
+        },
+        {
+          "no": 145,
+          "code": "WELLNESS",
+          "name": "생활건강"
+        },
+        {
+          "no": 146,
+          "code": "WEIGHT",
+          "name": "다이어트"
+        },
+        {
+          "no": 147,
+          "code": "DISEASE",
+          "name": "질병"
+        },
+        {
+          "no": 148,
+          "code": "PLASTICSURGERY",
+          "name": "성형정보"
+        }
+      ]
+    },
+    {
+      "no": 21,
+      "code": "GAME",
+      "name": "게임",
+      "subs": [
+        {
+          "no": 149,
+          "code": "GAME",
+          "name": "게임"
+        },
+        {
+          "no": 150,
+          "code": "GAME_CONSOLE",
+          "name": "콘솔, 비디오게임"
+        },
+        {
+          "no": 151,
+          "code": "ESPORTS",
+          "name": "E 스포츠"
+        },
+        {
+          "no": 152,
+          "code": "MOBILEGAMES",
+          "name": "모바일 게임"
+        },
+        {
+          "no": 153,
+          "code": "PCGAMES",
+          "name": "PC 게임"
+        }
+      ]
+    },
+    {
+      "no": 22,
+      "code": "HUMOR",
+      "name": "유머",
+      "subs": [
+        {
+          "no": 154,
+          "code": "HUMOR",
+          "name": "유머"
+        }
+      ]
+    },
+    {
+      "no": 23,
+      "code": "EDUCATION",
+      "name": "교육",
+      "subs": [
+        {
+          "no": 155,
+          "code": "EDUCATION",
+          "name": "교육"
+        },
+        {
+          "no": 156,
+          "code": "HOBBIES",
+          "name": "자기계발, 취미레슨"
+        },
+        {
+          "no": 157,
+          "code": "ONEDAYCLASSES",
+          "name": "원데이클래스"
+        },
+        {
+          "no": 158,
+          "code": "ARTCLASSES",
+          "name": "예체능레슨"
+        },
+        {
+          "no": 159,
+          "code": "ENTERSCHOOL",
+          "name": "진학"
+        }
+      ]
+    },
+    {
+      "no": 24,
+      "code": "LANGUAGE",
+      "name": "어학, 외국어",
+      "subs": [
+        {
+          "no": 160,
+          "code": "LANGUAGE",
+          "name": "어학, 외국어"
+        }
+      ]
+    },
+    {
+      "no": 25,
+      "code": "CAR",
+      "name": "자동차",
+      "subs": [
+        {
+          "no": 161,
+          "code": "CAR",
+          "name": "자동차"
+        }
+      ]
+    },
+    {
+      "no": 26,
+      "code": "SHOPPING",
+      "name": "쇼핑",
+      "subs": [
+        {
+          "no": 162,
+          "code": "SHOPPING",
+          "name": "쇼핑"
+        },
+        {
+          "no": 163,
+          "code": "DISCOUNT",
+          "name": "할인정보"
+        },
+        {
+          "no": 164,
+          "code": "NEWARRIVALS",
+          "name": "신상정보"
+        },
+        {
+          "no": 165,
+          "code": "GOODSREVIEW",
+          "name": "상품리뷰"
+        },
+        {
+          "no": 166,
+          "code": "ESSENTIALGOODS",
+          "name": "생필품"
+        },
+        {
+          "no": 167,
+          "code": "CONVENIENCESERVICE",
+          "name": "편의서비스"
+        }
+      ]
+    },
+    {
+      "no": 28,
+      "code": "LAW",
+      "name": "법",
+      "subs": [
+        {
+          "no": 172,
+          "code": "LAW",
+          "name": "법"
+        }
+      ]
+    },
+    {
+      "no": 29,
+      "code": "WAR",
+      "name": "전쟁",
+      "subs": [
+        {
+          "no": 173,
+          "code": "WAR",
+          "name": "전쟁"
+        }
+      ]
+    },
+    {
+      "no": 30,
+      "code": "CRIME",
+      "name": "범죄",
+      "subs": [
+        {
+          "no": 174,
+          "code": "CRIME",
+          "name": "범죄"
+        }
+      ]
+    },
+    {
+      "no": 31,
+      "code": "DISASTERS",
+      "name": "재난",
+      "subs": [
+        {
+          "no": 175,
+          "code": "DISASTERS",
+          "name": "재난"
+        }
+      ]
+    },
+    {
+      "no": 32,
+      "code": "RELIGION",
+      "name": "종교",
+      "subs": [
+        {
+          "no": 176,
+          "code": "RELIGION",
+          "name": "종교"
+        }
+      ]
+    },
+    {
+      "no": 33,
+      "code": "POLITICS",
+      "name": "정치",
+      "subs": [
+        {
+          "no": 177,
+          "code": "POLITICS",
+          "name": "정치"
+        }
+      ]
+    },
+    {
+      "no": 34,
+      "code": "CAREERS",
+      "name": "커리어",
+      "subs": [
+        {
+          "no": 178,
+          "code": "CAREERS",
+          "name": "커리어"
+        }
+      ]
+    },
+    {
+      "no": 35,
+      "code": "COMMUNICATION",
+      "name": "커뮤니케이션",
+      "subs": [
+        {
+          "no": 179,
+          "code": "COMMUNICATION",
+          "name": "커뮤니케이션"
+        }
+      ]
+    },
+    {
+      "no": 36,
+      "code": "PRODUCTIVITY",
+      "name": "생산성",
+      "subs": [
+        {
+          "no": 180,
+          "code": "PRODUCTIVITY",
+          "name": "생산성"
+        }
+      ]
+    },
+    {
+      "no": 37,
+      "code": "MAPS",
+      "name": "지도, 네비게이션",
+      "subs": [
+        {
+          "no": 181,
+          "code": "MAPS",
+          "name": "지도, 네비게이션"
+        }
+      ]
+    },
+    {
+      "no": 38,
+      "code": "LIFEEVENTS",
+      "name": "라이프 이벤트",
+      "subs": [
+        {
+          "no": 182,
+          "code": "LIFEEVENTS",
+          "name": "라이프 이벤트"
+        }
+      ]
+    },
+    {
+      "no": 39,
+      "code": "EVENTS",
+      "name": "시상식, 행사",
+      "subs": [
+        {
+          "no": 183,
+          "code": "EVENTS",
+          "name": "시상식, 행사"
+        }
+      ]
+    },
+    {
+      "no": 40,
+      "code": "GENRES",
+      "name": "장르",
+      "subs": [
+        {
+          "no": 184,
+          "code": "GENRES",
+          "name": "장르"
+        }
+      ]
+    }
+  ]
+}

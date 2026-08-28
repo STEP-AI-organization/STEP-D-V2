@@ -3155,3 +3155,53 @@ export async function clearCommerceSession(): Promise<void> {
   const res = await fetch(`${API_BASE}/commerce/account/session`, { method: "DELETE" });
   if (!res.ok) throw new ApiError(res.status, await errorMessageOf(res));
 }
+
+// ── 네이버 자격증명 (자동 재로그인) ────────────────────────────────────────────
+//
+// 세션은 만료된다(실측 9일). 만료마다 사람이 브라우저를 여는 대신, 아이디·비번을 한 번
+// 저장해 두면 워커가 스스로 세션을 되살린다.
+// ⚠️ 값은 서버가 절대 돌려주지 않는다 — 화면이 볼 수 있는 건 있다/없다·검증상태뿐이다.
+
+export interface NaverCredentialState {
+  hasCred: boolean;
+  /** pending=검증 대기 · verified=로그인 성공 확인 · failed=실패(사유는 error) */
+  status: "pending" | "verified" | "failed" | null;
+  updatedAt: number | null;
+  error: string | null;
+  reloginAt: number | null;
+  credKeyReady: boolean;
+}
+
+export async function fetchNaverCredentialState(accountId: string): Promise<NaverCredentialState> {
+  const res = await fetch(`${API_BASE}/naver/accounts/${accountId}/credentials`);
+  if (!res.ok) throw new ApiError(res.status, await errorMessageOf(res));
+  return (await res.json()) as NaverCredentialState;
+}
+
+/**
+ * 아이디·비번 저장 → 서버가 검증 잡을 큐잉한다(워커가 실제로 로그인해 본다).
+ * ⚠️ 값을 화면 state 에 남기지 말 것 — 입력 즉시 보내고 폼을 비운다.
+ */
+export async function saveNaverCredentials(
+  accountId: string, id: string, pw: string,
+): Promise<{ maskedId: string; status: string; jobId: string }> {
+  const res = await fetch(`${API_BASE}/naver/accounts/${accountId}/credentials`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id, pw }),
+  });
+  if (!res.ok) throw new ApiError(res.status, await errorMessageOf(res));
+  return (await res.json()) as { maskedId: string; status: string; jobId: string };
+}
+
+export async function clearNaverCredentials(accountId: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/naver/accounts/${accountId}/credentials`, { method: "DELETE" });
+  if (!res.ok) throw new ApiError(res.status, await errorMessageOf(res));
+}
+
+/** 지금 다시 로그인(세션 복구). 저장된 자격증명이 있어야 한다. */
+export async function reloginNaverAccount(accountId: string): Promise<{ jobId: string }> {
+  const res = await fetch(`${API_BASE}/naver/accounts/${accountId}/relogin`, { method: "POST" });
+  if (!res.ok) throw new ApiError(res.status, await errorMessageOf(res));
+  return (await res.json()) as { jobId: string };
+}

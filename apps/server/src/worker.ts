@@ -96,10 +96,14 @@ import {
   listInstagramAccounts, getMetaAccountByPageId, updateInstagramToken, parkInstagramAccountExpired,
 } from "./db-pg.ts";
 import { naverUploadEnabled, NAVER_DISABLED_MESSAGE } from "./naver-gate.ts";
-import { hasNaverSession, materializeNaverSession } from "./naver-session.ts";
-import { getNaverAccount, markNaverAccount, getNaverSessionBlob } from "./db-pg.ts";
-import { openSession } from "./naver-session-store.ts";
-import { uploadToNaver, NAVER_TARGETS, type NaverTarget } from "./naver-tv.ts";
+import { hasNaverSession, materializeNaverSession, saveNaverSession } from "./naver-session.ts";
+import {
+  getNaverAccount, markNaverAccount, getNaverSessionBlob, setNaverSessionBlob,
+  getNaverCredentialBlob, markNaverCredential,
+} from "./db-pg.ts";
+import { openSession, sealSession } from "./naver-session-store.ts";
+import { uploadToNaver, loginWithCredentials, NAVER_TARGETS, type NaverTarget } from "./naver-tv.ts";
+import { openCredential } from "./naver-cred-store.ts";
 import { prepareWorkPath, cleanupWorkFile, sweepStaleWorkFiles } from "./naver-workdir.ts";
 import { upsertDistribution } from "./publish-guard.ts";
 import { commerceLinksEnabled, usableLinks, withCommerceLinks, type ProductCandidate } from "./commerce.ts";
@@ -160,7 +164,9 @@ const JOB_LANES: Record<"content" | "youtube" | "gebd" | "naver" | "download" | 
   // 자동화가 유일한데, 해외 데이터센터 IP(Cloud Run) 로 로그인하면 캡차·2차인증에 막힌다.
   // 그래서 한국 가정/사무실 IP 의 놀고 있는 PC 한 대에서만 이 레인을 돌린다.
   // 세션(storageState)도 그 PC 로컬에만 둔다 — 쿠키를 클라우드로 올리지 않는다.
-  naver: ["naver.publish"],
+  // naver.login 도 여기 — 로그인 폼은 자동화 탐지가 제일 센 자리라 한국 IP + 창 있는
+  // 브라우저가 필요하다(발행과 같은 조건).
+  naver: ["naver.publish", "naver.login"],
   // download 도 **사무실 PC 전용 lane** (naver 와 같은 머신, 윈도우2). 유튜브가 데이터센터
   // IP(Cloud Run)를 봇으로 판정해 다운로드가 상시 실패한다(2026-08-14 실측: 쿠키를 물려도
   // "Sign in to confirm you're not a bot"). 한국 가정/사무실 IP 에서만 안정적으로 받아지므로
@@ -288,6 +294,7 @@ async function handle(job: Job): Promise<FollowUp | void> {
     case "distribution.publish": return handleDistributionPublish(job);
     case "distribution.updatemeta": return handleDistributionUpdateMeta(job);
     case "naver.publish": return handleNaverPublish(job);
+    case "naver.login": { await handleNaverLogin(job); return; }
     case "media.prepare": return handleMediaPrepare(job);
     case "content.analyze": {
       await runContentAnalyze(String(job.payload.mediaId ?? ""), Boolean(job.payload.fast),
@@ -2199,6 +2206,74 @@ function metaForChannel(clip: any, channel: string): { title: string; descriptio
   };
 }
 
+/**
+ * 네이버 자동 로그인 — 저장된 자격증명으로 세션을 되살린다.
+ *
+ * 두 자리에서 불린다: 사람이 자격증명을 막 저장했을 때(검증), 발행이 세션 만료로 막혔을 때(복구).
+ * **성공하면 세션을 서버에 저장**하므로 다른 워커도 바로 쓴다.
+ *
+ * ⚠️ 실패 종류를 구분해서 다룬다:
+ *  - `bad_credentials` → **자격증명을 지운다.** 틀린 비번으로 반복 시도하면 계정이 잠긴다
+ *    (세션 만료보다 훨씬 나쁘다 — 사람이 네이버에서 직접 풀어야 한다).
+ *  - `challenge`(캡차·2차인증) → 비번은 맞을 수 있으니 남기고, 사람을 부른다.
+ */
+async function handleNaverLogin(job: Job): Promise<boolean> {
+  const accountId = String(job.payload.accountId ?? "");
+  if (!accountId) { console.error("[worker] naver.login: accountId 누락 — 버림"); return false; }
+
+  const acct = await getNaverAccount(accountId);
+  if (!acct) { console.warn(`[worker] naver.login: 계정 ${accountId} 없음 — 버림`); return false; }
+  const jobTenant = job.tenantId || DEFAULT_TENANT_ID;
+  if (acct.tenantId !== jobTenant) {
+    console.error(`[worker] naver.login ${accountId}: 테넌트 불일치 — 잡(${jobTenant}) vs 계정(${acct.tenantId})`);
+    return false;
+  }
+
+  const cred = openCredential(await getNaverCredentialBlob(accountId));
+  if (!cred) {
+    console.warn(`[worker] naver.login ${accountId}: 자격증명이 없거나 못 풀었다 (NAVER_CRED_KEY 확인)`);
+    await markNaverCredential(accountId, "failed", "자격증명을 읽지 못했습니다 (키 불일치 또는 미저장)").catch(() => {});
+    return false;
+  }
+
+  console.log(`[worker] naver.login ${accountId} (${acct.label}) — 자동 로그인 시도`);
+  const res = await loginWithCredentials(cred.id, cred.pw);
+  if (res.ok) {
+    saveNaverSession(res.state, acct.accountKey);                 // 이 PC 가 바로 쓰게
+    await setNaverSessionBlob(accountId, sealSession(res.state));  // 다른 워커도 쓰게
+    await markNaverCredential(accountId, "verified", null);
+    await markNaverAccount(accountId, { status: "active", lastLoginAt: Date.now() }).catch(() => {});
+    console.log(`[worker] naver.login ${accountId}: 성공 — 세션 갱신`);
+    return true;
+  }
+
+  // 실패 — 종류에 따라 자격증명을 지울지 남길지 가른다.
+  const clear = res.kind === "bad_credentials";
+  await markNaverCredential(accountId, "failed", res.message, { clear });
+  await markNaverAccount(accountId, { status: "session_expired" }).catch(() => {});
+  console.error(`[worker] naver.login ${accountId}: ${res.kind} — ${res.message}` +
+    (clear ? " (자격증명 삭제: 반복 시도는 계정 잠금을 부른다)" : " (자격증명 유지: 사람이 한 번 로그인해야 한다)"));
+  return false;
+}
+
+/**
+ * 세션이 죽었을 때 **발행 도중에** 스스로 되살린다. 자격증명이 없으면 그냥 false.
+ *
+ * 재시도를 한 번으로 묶는 게 중요하다 — 실패하는 자격증명으로 발행마다 로그인을 시도하면
+ * 네이버가 계정을 잠근다. 그래서 `naver.login` 이 실패 시 자격증명을 지우고(bad_credentials),
+ * 여기서는 그 결과만 본다.
+ */
+async function tryAutoRelogin(job: Job, acct: { id: string; label: string; accountKey: string }): Promise<boolean> {
+  const blob = await getNaverCredentialBlob(acct.id).catch(() => null);
+  if (!blob) return false;
+  console.log(`[worker] '${acct.label}' 세션 만료 — 저장된 자격증명으로 자동 재로그인 시도`);
+  const ok = await handleNaverLogin({ ...job, payload: { accountId: acct.id } } as Job).catch((e) => {
+    console.error("[worker] 자동 재로그인 실패:", e instanceof Error ? e.message : e);
+    return false;
+  });
+  return ok === true && hasNaverSession(acct.accountKey);
+}
+
 async function handleNaverPublish(job: Job): Promise<void> {
   const clipId = String(job.payload.clipId ?? "");
   if (!clipId) { console.error("[worker] naver.publish: clipId 누락 — 버림"); return; }
@@ -2248,11 +2323,15 @@ async function handleNaverPublish(job: Job): Promise<void> {
         if (state) {
           materializeNaverSession(acct.accountKey, state);
           console.log(`[worker] '${acct.label}' 세션을 서버에서 받아왔다`);
+        } else if (await tryAutoRelogin(job, acct)) {
+          // 자격증명이 있으면 **사람을 부르기 전에 스스로 되살린다.** 세션은 만료되게 마련이고
+          // (실측: 9일), 그때마다 사람이 브라우저를 여는 게 이 기능의 원래 부담이었다.
+          console.log(`[worker] '${acct.label}' 자동 재로그인으로 세션 복구 — 발행 계속`);
         } else {
           await markNaverAccount(acct.id, { status: "session_expired" }).catch(() => {});
           return void (await fail(
-            `'${acct.label}' 세션 없음 — 웹에서 로그인해 세션을 등록하거나, 워커 PC 에서 ` +
-            `\`naver:login --account ${acct.accountKey}\` 를 실행하세요`));
+            `'${acct.label}' 세션 없음 — 웹 배포채널 화면에서 다시 로그인하세요 ` +
+            `(아이디·비번을 저장해 두면 다음부터는 자동으로 복구됩니다)`));
         }
       }
       accountKey = acct.accountKey;
