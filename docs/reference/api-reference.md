@@ -1,6 +1,6 @@
 # @stepd/server HTTP API 레퍼런스
 
-> 실측: **2026-08-28 · 라우트 244개** (GET 105 · POST 93 · DELETE 25 · PATCH 14 · PUT 7) · `apps/server/src/index.ts` 기준 — 라우트 추가 시 이 문서도 갱신.
+> 실측: **2026-08-28 · 라우트 245개** (GET 106 · POST 93 · DELETE 25 · PATCH 14 · PUT 7) · `apps/server/src/index.ts` 기준 — 라우트 추가 시 이 문서도 갱신.
 > 프론트 대응 함수는 `apps/web/src/lib/data/api.ts` 기준. 데이터 구조는 [data-model.md](data-model.md),
 > 큐·워커 동작은 [../ops/worker-queue.md](../ops/worker-queue.md) 참고.
 
@@ -14,7 +14,9 @@
 - **인증 (2026-08-12 갱신 — 이전 판의 "라우트 자체 인증은 없다" 는 낡은 서술이었다).**
   모든 요청은 `resolveTenant` 를 지나며 세 경로 중 하나로 해석된다:
   ① `Authorization: Bearer <API 키>` → 그 키의 회사 + **라우트 화이트리스트**(`api-keys.ts`)
-  ② 세션 쿠키(`stepd_session`) → 그 사용자의 회사
+  ② 세션 쿠키(`stepd_session`) **또는 `x-stepd-session` 헤더** → 그 사용자의 회사
+     (헤더는 쿠키 저장소가 없는 1인칭 클라이언트용 — 프리미어 UXP 패널. 검증은 같은
+     `resolveSession`. 토큰은 로그인 때 `x-stepd-client` 를 보낸 호출자에게만 응답에 실린다)
   ③ 인증 없음 → **`AUTH_REQUIRED` 가 켜져 있으면 401**, 꺼져 있으면 기본 테넌트로 폴백
   프로덕션은 `AUTH_REQUIRED=1` 이다. 그 위에 Postgres **RLS** 가 테넌트 격리를 강제하고,
   발행은 운영 역할(`canPublish`), 파괴적 어드민 라우트는 `requireOpsAccess` 를 요구한다.
@@ -67,6 +69,7 @@ API 키(`api-keys.ts`). **화이트리스트(`API_KEY_ROUTES`)에 올린 라우�
 | 메서드·경로 | 역할 | 요청/응답 요점 | 프론트 함수 |
 |---|---|---|---|
 | `POST /api/programs` | 프로그램 생성 (업로드 전 필수 콘텐츠 루트) | `{ title(필수), section, targetAge, cast, programCode, category, weekdays }` → `{ program }`. SMR 필드는 `smr` 블롭으로 저장 | `createProgram` |
+| `GET /api/programs` | 프로그램 목록 (id·제목·상태만) | → `{ programs: [{ id, title, status }] }`. 드롭다운 하나 채우면 되는 클라이언트(프리미어 패널)용 — `/api/state` 전체를 받지 않게 | (웹은 `fetchState` 사용) |
 | `GET /api/programs/:id` | 프로그램 1개 (이해 프로필 포함) | → `{ program }` / 404 | (`fetchState`로 대체) |
 | `PATCH /api/programs/:id` | 부분 병합 수정 — **body에 있는 필드만** 바뀐다 | `{ title, section, targetAge, cast, castPhotos, category, weekdays, programCode, moods, pipelineGenre, posterImageDataUrl }` → `{ program }` | `updateProgram` |
 | `POST /api/programs/:id/autofill` | 제목만으로 나머지 필드 자동 채움 (Gemini + google_search 그라운딩, 2단계: 검색·수집 → 팩트체크) | → `{ draft }`. **저장하지 않는다** — 사용자가 UI에서 확인 후 저장. 출연자·SMR은 안 채움. 실패 502 | `autofillProgram` |

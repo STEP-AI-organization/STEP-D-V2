@@ -22,23 +22,9 @@
   ],
   "requiredPermissions": {
     "network": {
-      "domains": [
-        "https://stepd.stepai.kr",
-        "https://stepd-server-nsh6xfqyla-uc.a.run.app",
-        "https://storage.googleapis.com"
-      ]
+      "domains": ["https://stepd.stepai.kr", "https://storage.googleapis.com"]
     },
     "localFileSystem": "request",
-    "launchProcess": { "schemes": [], "extensions": [] },
     "allowCodeGenerationFromStrings": false
-  },
-  "icons": [
-    {
-      "width": 23,
-      "height": 23,
-      "path": "icons/icon.png",
-      "scale": [1, 2],
-      "theme": ["darkest", "dark", "medium", "lightest", "light", "all"]
-    }
-  ]
+  }
 }

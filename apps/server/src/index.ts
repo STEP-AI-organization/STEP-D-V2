@@ -529,6 +529,21 @@ function keyError(status: 401 | 403, code: string, message: string): HTTPExcepti
   });
 }
 
+/**
+ * 세션 토큰이 실려 오는 자리 둘.
+ *   Cookie: stepd_session   → 브라우저(웹앱). HttpOnly 라 JS 가 못 읽는다 — 기본 경로다.
+ *   x-stepd-session         → **브라우저가 아닌 1인칭 클라이언트**(프리미어 UXP 패널).
+ *
+ * UXP 는 쿠키 저장소가 없어(fetch 가 Set-Cookie 를 자동 보관·재전송하지 않는다) 쿠키만으로는
+ * 로그인 상태를 이어갈 수 없다. 그래서 같은 세션 토큰을 헤더로도 받는다 — 검증 경로는
+ * `resolveSession` 하나로 같고, 새 자격증명 체계를 만들지 않는다.
+ * API 키(테넌트 단위·라우트 화이트리스트)와 달리 이건 **사람의 세션**이라, 누가 올렸는지가
+ * 그대로 남는다. 토큰은 로그인 응답에서 `x-stepd-client` 를 보낸 호출자에게만 나간다.
+ */
+function sessionToken(c: Context<AppEnv>): string | undefined {
+  return getCookie(c, SESSION_COOKIE) ?? c.req.header("x-stepd-session") ?? undefined;
+}
+
 async function resolveTenant(c: Context<AppEnv>): Promise<TenantContext> {
   // 키는 두 자리에서 받는다.
   //   Authorization: Bearer stepd_live_…  → Cloud Run 직통 호출(정석)
@@ -568,7 +583,7 @@ async function resolveTenant(c: Context<AppEnv>): Promise<TenantContext> {
     return { scope: c.req.header("x-tenant-id") || DEFAULT_TENANT_ID, via: "internal" };
   }
 
-  const user = await resolveSession(getCookie(c, SESSION_COOKIE)).catch(() => null);
+  const user = await resolveSession(sessionToken(c)).catch(() => null);
   if (user) {
     c.set("user", user);
     return { scope: user.tenantId, via: "web" };
@@ -702,11 +717,20 @@ app.post("/api/auth/login", async (c) => {
     ip: c.req.header("x-forwarded-for")?.split(",")[0]?.trim(),
   });
   setCookie(c, SESSION_COOKIE, token, sessionCookieOpts(expiresAt));
-  return c.json({ user: { id: user.id, email: user.email, name: user.name, role: user.role, tenantId: user.tenantId } });
+  const out: Record<string, unknown> = {
+    user: { id: user.id, email: user.email, name: user.name, role: user.role, tenantId: user.tenantId },
+  };
+  // 쿠키를 못 쓰는 클라이언트(프리미어 UXP 패널)에만 토큰을 실어 준다. 웹앱은 이 헤더를
+  // 보내지 않으므로 응답이 그대로고, 토큰이 브라우저 JS 로 새지 않는다(HttpOnly 유지).
+  if ((c.req.header("x-stepd-client") ?? "").trim()) {
+    out.token = token;
+    out.expiresAt = expiresAt;
+  }
+  return c.json(out);
 });
 
 app.post("/api/auth/logout", async (c) => {
-  await destroySession(getCookie(c, SESSION_COOKIE));
+  await destroySession(sessionToken(c));
   deleteCookie(c, SESSION_COOKIE, { path: "/" });
   return c.json({ ok: true });
 });
@@ -749,7 +773,7 @@ app.post("/api/auth/password", async (c) => {
   if (problem) return c.json({ error: "weak_password", message: problem }, 400);
   await setPassword(user.id, next);
   // 비밀번호를 바꿨다는 건 대개 "다른 데서 쓰고 있을지 모른다"는 뜻이다 — 다른 세션은 끊는다.
-  await destroyAllSessions(user.id, getCookie(c, SESSION_COOKIE));
+  await destroyAllSessions(user.id, sessionToken(c));
   return c.json({ ok: true });
 });
 
@@ -2051,6 +2075,17 @@ app.post("/api/programs", async (c) => {
   };
   await prependEntity("program", id, program);
   return c.json({ program });
+});
+
+// ── 프로그램 목록 (id·제목만) ──────────────────────────────────────────────────
+// 프리미어 패널처럼 **드롭다운 하나만 채우면 되는** 클라이언트를 위해 둔다. 지금까지는
+// 목록을 얻는 길이 `/api/state` 뿐이었는데, 그건 클립·배포·분석까지 통째로 실어 와서
+// (회차가 쌓인 워크스페이스는 수 MB) 패널을 열 때마다 그걸 받는 건 낭비다.
+app.get("/api/programs", async (c) => {
+  const rows = await listEntities<{ id: string; title?: string; status?: string }>("program");
+  return c.json({
+    programs: rows.map((p) => ({ id: p.id, title: p.title ?? p.id, status: p.status ?? "active" })),
+  });
 });
 
 // ── get one program (incl. its understanding profile) ──

@@ -95,8 +95,31 @@ Premiere·EDL 은 **소스 타임코드 기준**이라, 둘을 잇는 값이 `me
 ### 다음 단계 (착수 순서)
 
 1. ~~선행 보강 — MXF 정규화 · 프레임 메타 저장~~ **완료**
-2. `packages/premiere` 스캐폴드 — UXP manifest v5 · WebView 패널 골격 · 메시지 브리지 타입(discriminated union)
+2. ~~`packages/premiere` 스캐폴드 + **첫 기능: 완성본 업로드**~~ **완료**(2026-08-28) — 아래 §첫 슬라이스
 3. `stepd.stepai.kr/premiere` 전용 웹 화면 — 로그인·회차 선택·추천 목록(기존 세션 재사용)
 4. 브리지 동작 배선 — `PROJECT_CONTEXT` → `LINK_MEDIA` → `SEEK`/`ADD_MARKERS`
-5. 업로드·게시 — `EXPORT_REQUEST` → `UPLOAD_SESSION` → clip-finalize → publish
-6. 파일럿 배포(.ccx 서명) · 테스트 계획 실행
+5. 내보내기 자동화 — `EXPORT_REQUEST`(AME 프리셋 렌더) → 지금의 업로드 경로에 물리기
+6. 파일럿 배포(.ccx 서명) · 테스트 계획 실행 · 마켓플레이스 등록(절차: `packages/premiere/README.md`)
+
+### 첫 슬라이스 — 완성본 업로드 (2026-08-28 구현)
+
+사용자 지시: *"처음 기능은 프리미어에서 렌더해서 파일 나오면 그거를 우리 서버에 올리고,
+하루 2번 해야 하니까."* 그래서 **파일 선택 → 업로드 → 클립 생성**만 만들었다.
+
+**추진안에서 의도적으로 벗어난 점 하나 — WebView 가 아니라 UXP 네이티브 패널이다.**
+WebView 는 `stepd.stepai.kr/premiere` 웹 화면을 먼저 만들어야 하고, 세션을 WebView↔UXP
+사이로 넘기는 다리도 필요하다. 첫 기능(파일 업로드)에는 둘 다 필요 없다 — 화면이 입력
+세 개(계정·프로그램·파일)뿐이라 패널에서 직접 그리는 편이 짧고, 웹 배포와도 분리된다.
+추천 목록·마커처럼 **화면이 커지는 단계**에서 WebView 로 갈아탄다(그때 이 판단을 다시 본다).
+
+| 무엇 | 어디 |
+|---|---|
+| 패널(매니페스트·UI·업로드 로직) | `packages/premiere/` |
+| 세션 헤더 인증 | `apps/server/src/index.ts` `sessionToken()` · 로그인 응답의 `token`(`x-stepd-client` 를 보낸 호출자에게만) |
+| 프로그램 목록 | `GET /api/programs` (신규 · id·제목만) |
+| 업로드 | 기존 `upload-init` → GCS resumable → `clip-finalize` 그대로 |
+
+**세션 만료는 패널이 스스로 푼다**(사용자 요구: "세션 만료되면 자동으로 인증 · 재로그인해서
+다시 세션 리프레시"). 자격증명을 OS 키체인(UXP `secureStorage`)에 두고, 401 이 오면 한 번
+재로그인해 토큰을 갈고 그 요청을 재시도한다. 30분 업로드를 마친 뒤 `clip-finalize` 한 줄이
+401 로 전부 날아가는 게 가장 뼈아픈 실패라, 방어를 거기 둔 것이다.
