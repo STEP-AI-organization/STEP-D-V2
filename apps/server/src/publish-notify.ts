@@ -6,7 +6,8 @@
  *  1. 워커가 실업로드에 성공할 때마다 `recordAutoPublishForReport` 로 **버퍼에 적립**만 한다
  *     (automation_setting KV · 테넌트 스코프). 메일은 여기서 안 보낸다.
  *  2. 순방(automation-cycle · 15분)이 끝날 때 `maybeFlushAutoPublishReport` 가
- *     "오늘 계획 몫이 전부 나갔나"를 판정하고, 다 나갔으면 리포트 한 통을 보내고 버퍼를 비운다.
+ *     **자동배포 계획마다** "오늘 그 계획 몫이 전부 나갔나"를 판정하고, 다 나간 계획의
+ *     리포트 한 통을 보낸 뒤 그 계획 적립분만 버퍼에서 뺀다(2026-08-28 · 계획당 한 통).
  *     확정 실패 등으로 영영 목표에 못 미치면 마감(마지막 슬롯+90분 · 활동창 끝)에 그때까지
  *     몫으로 보낸다. 지난 날짜 항목이 남아 있으면(어제 마감 후 늦게 올라간 예약분 등)
  *     다음 순방에서 즉시 보낸다 — 묶음이 하루를 넘겨 썩지 않는다.
@@ -34,7 +35,7 @@ export const REPORT_BUFFER_KEY = "automation.report.pending";
 
 export interface AutoPublishNotice {
   /** 배포 기록을 가진 클립 — origin 판정과 프로그램명·길이 표기에 쓴다. */
-  clip: { programTitle?: unknown; durationSec?: unknown; distributions?: unknown };
+  clip: { programTitle?: unknown; durationSec?: unknown; distributions?: unknown; automationRuleId?: unknown };
   /** 실제로 올라간 제목 (워커가 업로드에 쓴 metaForChannel 결과 그대로). */
   title: string;
   channel: "youtube";
@@ -75,7 +76,22 @@ export interface AutoReportItem {
   /** 실패 dedupe·성공 시 제거 축 — 같은 (클립·채널·계정) 실패가 재시도마다 안 쌓이게. */
   clipId?: string;
   accountKey?: string;
+  /**
+   * 어느 자동배포 계획의 건인가 — **메일을 계획마다 따로 보내는 축**(2026-08-28 사용자 지시).
+   *
+   * 클립을 **채택한** 계획 id(clip.automationRuleId)다. 게시한 계획과 다를 수 있다(지워진
+   * 계획의 고아 클립을 다른 계획이 이어받는 경우) — 그때는 이 id 로 계획이 안 찾아지므로
+   * 발송 시점에 "지난 계획" 묶음으로 빠지고, 기다리지 않고 바로 나간다. 값이 없는 옛 항목도
+   * 같은 길로 간다 — 버퍼에 남아 썩는 것보다 낫다.
+   */
+  ruleId?: string;
 }
+
+/** 클립이 속한 계획 id — 없으면 키 자체를 안 넣는다(옛 항목과 같은 꼴로 남는다). */
+const ruleIdOf = (clip: { automationRuleId?: unknown }): { ruleId?: string } => {
+  const id = String(clip?.automationRuleId ?? "").trim();
+  return id ? { ruleId: id } : {};
+};
 
 const kstDate = (at: Date = new Date()): string =>
   new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Seoul", year: "numeric", month: "2-digit", day: "2-digit" }).format(at);
@@ -135,6 +151,7 @@ export async function recordAutoPublishForReport(n: AutoPublishNotice): Promise<
       publishedAtMs: Date.now(),
       publishAt: n.publishAt ?? null,
       ...(n.clipId ? { clipId: n.clipId, accountKey } : {}),
+      ...ruleIdOf(n.clip),
     });
     await setAutomationSetting(REPORT_BUFFER_KEY, JSON.stringify(items.slice(-100)));
     console.log(`[report] 자동배포 적립 ${n.videoId} (${items.length}건 대기)`);
@@ -154,7 +171,7 @@ export async function recordAutoPublishForReport(n: AutoPublishNotice): Promise<
  * 최신 사유로 갱신된다. 성공이 뒤따르면 위 recordAutoPublishForReport 가 이 줄을 지운다.
  */
 export async function recordAutoPublishFailureForReport(f: {
-  clip: { programTitle?: unknown; durationSec?: unknown; distributions?: unknown };
+  clip: { programTitle?: unknown; durationSec?: unknown; distributions?: unknown; automationRuleId?: unknown };
   clipId: string;
   title: string;
   channel: string;
@@ -184,6 +201,7 @@ export async function recordAutoPublishFailureForReport(f: {
       error: String(f.error).slice(0, 300),
       clipId: f.clipId,
       accountKey,
+      ...ruleIdOf(f.clip),
     });
     await setAutomationSetting(REPORT_BUFFER_KEY, JSON.stringify(items.slice(-100)));
     console.log(`[report] 자동배포 실패 적립 ${f.clipId} (${f.channel})`);
@@ -232,41 +250,38 @@ export function ruleDayTarget(
  * 기다릴 이유가 없으므로 그때까지 몫으로 보낸다.
  */
 /**
- * 오늘 계획한 총량과 실제 게시 수 — 리포트의 "영상이 모자랍니다" 섹션 근거.
- * 여러 계획·채널이면 합산한다(담당자에겐 "오늘 몇 건 예정 중 몇 건" 한 줄이면 된다).
- * 계획 단위로 세므로(publishedTodayKst 의 ruleId) 한 채널을 두 계획이 함께 써도 각 계획의
- * 몫이 따로 잡혀 목표와 실적이 같은 축에서 더해진다.
+ * **한 계획의** 오늘 목표와 실제 게시 수 — 리포트의 "영상이 모자랍니다" 섹션 근거.
+ *
+ * 메일이 계획마다 따로 나가므로(2026-08-28) 합산도 그 계획 안에서만 한다. 예전엔 워크스페이스
+ * 전체를 더해서, A 계획이 다 나간 날에도 B 계획의 미달분이 A 메일에 "모자랍니다" 로 실렸다.
+ * 계획 단위로 세므로(publishedTodayKst 의 ruleId) 한 채널을 두 계획이 함께 써도 안 섞인다.
  * 목표는 순방과 **같은 함수**(ruleDayTarget)로 낸다 — 메일이 다른 수를 말하면 안 된다.
  */
-async function todaysPlanTotals(now: Date): Promise<{ target: number; published: number }> {
-  const rules = ((await listAutomationRules()) as unknown as AutomationRule[]).filter(
-    (r) => r.enabled !== false && isPublishDay(r, now) && ruleChannels(r).length > 0,
-  );
+async function rulePlanTotals(rule: AutomationRule, now: Date): Promise<{ target: number; published: number }> {
   let target = 0;
   let published = 0;
-  for (const rule of rules) {
-    for (const chan of ruleChannels(rule)) {
-      const n = await publishedTodayKst(`${chan.platform}:${chan.accountId}`, rule.id);
-      published += n;
-      target += ruleDayTarget(rule, n, now).target;
-    }
+  for (const chan of ruleChannels(rule)) {
+    const n = await publishedTodayKst(`${chan.platform}:${chan.accountId}`, rule.id);
+    published += n;
+    target += ruleDayTarget(rule, n, now).target;
   }
   return { target, published };
 }
 
-async function todaysPublishingDone(now: Date, exhausted: boolean): Promise<boolean> {
-  // DB 행(AutomationRuleRow)은 판정 헬퍼들이 쓰는 필드를 전부 담고 있다 — 순방과 같은 캐스트.
-  const rules = ((await listAutomationRules()) as unknown as AutomationRule[]).filter(
-    (r) => r.enabled !== false && isPublishDay(r, now) && ruleChannels(r).length > 0,
-  );
-  for (const rule of rules) {
-    for (const chan of ruleChannels(rule)) {
-      const published = await publishedTodayKst(`${chan.platform}:${chan.accountId}`, rule.id);
-      const { target, deadlinePassed, lastSlotPassed } = ruleDayTarget(rule, published, now);
-      if (published >= target || deadlinePassed) continue;
-      if (exhausted && lastSlotPassed) continue;   // 더 나올 소재가 없다 — 기다림을 끝낸다
-      return false;
-    }
+/**
+ * **이 계획의** 오늘 몫이 다 나갔나 — 채널 하나라도 진행 중이면 false.
+ *
+ * 계획별 판정이라 A 가 끝나면 A 메일이 바로 나간다. 예전엔 워크스페이스 전체가 끝나야
+ * 보냈다 — 늦게까지 도는 계획 하나가 이미 끝난 계획들의 리포트를 밤까지 붙잡았다.
+ */
+async function rulePublishingDone(rule: AutomationRule, now: Date, exhausted: boolean): Promise<boolean> {
+  if (rule.enabled === false || !isPublishDay(rule, now) || ruleChannels(rule).length === 0) return true;
+  for (const chan of ruleChannels(rule)) {
+    const published = await publishedTodayKst(`${chan.platform}:${chan.accountId}`, rule.id);
+    const { target, deadlinePassed, lastSlotPassed } = ruleDayTarget(rule, published, now);
+    if (published >= target || deadlinePassed) continue;
+    if (exhausted && lastSlotPassed) continue;   // 더 나올 소재가 없다 — 기다림을 끝낸다
+    return false;
   }
   return true;
 }
@@ -469,11 +484,6 @@ export async function maybeFlushAutoPublishReport(
     if (!mailConfigured()) return;
     const items = await readBuffer();
     if (!items.length) return;
-    const today = kstDate(now);
-    const hasStale = items.some((i) => i.date !== today);
-    // 오늘 항목뿐이면 "오늘 몫 완료" 판정을 기다린다. 지난 날 항목이 있으면 그건 이미
-    // 마감을 넘긴 묶음 — 지금 보낸다(더 기다릴 이유가 없다).
-    if (!hasStale && !(await todaysPublishingDone(now, opts.exhausted === true))) return;
 
     const to = await notifyEmail();
     if (!to) {
@@ -481,23 +491,62 @@ export async function maybeFlushAutoPublishReport(
       await setAutomationSetting(REPORT_BUFFER_KEY, "");
       return;
     }
+
+    // ── 계획마다 한 통 (2026-08-28 사용자 지시 "메일도 자동배포계획당으로 나가야 해") ──
+    //
+    // 예전엔 워크스페이스 전체를 한 통에 담았다. 계획이 둘이면 프로그램도 채널도 섞여
+    // "A 외 1" 이라고만 적히고, **워크스페이스의 모든 계획이 끝나야** 발송돼서 늦게까지
+    // 도는 계획 하나가 이미 끝난 계획의 리포트를 붙잡았다. 이제 계획별로 판정하고 보낸다 —
+    // 끝난 계획은 바로 나가고, 각 통의 목표·미달 수치도 그 계획 것만 말한다.
+    const rules = (await listAutomationRules()) as unknown as AutomationRule[];
+    const byRule = new Map<string, AutoReportItem[]>();
+    for (const item of items) {
+      const key = item.ruleId ?? "";
+      const bucket = byRule.get(key);
+      if (bucket) bucket.push(item); else byRule.set(key, [item]);
+    }
+
+    const today = kstDate(now);
     const next = await nextPublishInfo(now).catch(() => null);
-    // 소재 부족 안내 — 오늘 목표에 못 미쳤을 때만 그려진다(그 외엔 null 이라 섹션 자체가 없다).
-    // 잔액·주소는 없으면 그 줄만 빠진다 — 못 읽었다고 리포트를 통째로 미루지 않는다.
-    const totals = await todaysPlanTotals(now).catch(() => null);
-    const shortfall: ReportShortfall | null = totals && totals.target > totals.published
-      ? { target: totals.target, published: totals.published }
-      : null;
-    const programs = [...new Set(items.map((i) => i.program).filter(Boolean))];
-    const programLabel = programs.length > 1 ? `${programs[0]} 외 ${programs.length - 1}` : (programs[0] ?? "자동배포");
-    await sendMail({
-      to,
-      // 제목 브랜드는 STEP AI (사용자 2026-08-26 — 본문 푸터의 "STEP D 자동배포 시스템"은 템플릿 원문 유지).
-      subject: `[STEP AI] ${programLabel} 자동배포 리포트 · ${kstMdw(now)} ${kstHm(now)} · ${items.length}건`,
-      html: buildAutoPublishReportHtml(items, now, next, shortfall),
-    });
-    await setAutomationSetting(REPORT_BUFFER_KEY, "");
-    console.log(`[report] 자동배포 리포트 발송 → ${to} (${items.length}건)`);
+    const kept: AutoReportItem[] = [];
+
+    for (const [ruleId, group] of byRule) {
+      const rule = rules.find((r) => r.id === ruleId);
+      // 지난 날 항목이 섞였으면 이미 마감을 넘긴 묶음이다 — 더 기다릴 이유가 없다.
+      // 계획을 못 찾은 묶음(지워진 계획·ruleId 없는 옛 항목)도 기다릴 근거가 없어 바로 보낸다.
+      const hasStale = group.some((i) => i.date !== today);
+      if (!hasStale && rule && !(await rulePublishingDone(rule, now, opts.exhausted === true))) {
+        kept.push(...group);          // 이 계획은 아직 오늘 몫이 남았다 — 버퍼에 그대로 둔다
+        continue;
+      }
+
+      // 소재 부족 안내 — 이 계획이 오늘 목표에 못 미쳤을 때만 그려진다(그 외엔 null 이라
+      // 섹션 자체가 없다). 계획을 못 찾으면 목표를 알 수 없으므로 섹션 없이 보낸다.
+      const totals = rule ? await rulePlanTotals(rule, now).catch(() => null) : null;
+      const shortfall: ReportShortfall | null = totals && totals.target > totals.published
+        ? { target: totals.target, published: totals.published }
+        : null;
+      const programs = [...new Set(group.map((i) => i.program).filter(Boolean))];
+      const programLabel = programs.length > 1 ? `${programs[0]} 외 ${programs.length - 1}` : (programs[0] ?? "자동배포");
+      try {
+        await sendMail({
+          to,
+          // 제목 브랜드는 STEP AI (사용자 2026-08-26 — 본문 푸터의 "STEP D 자동배포 시스템"은 템플릿 원문 유지).
+          subject: `[STEP AI] ${programLabel} 자동배포 리포트 · ${kstMdw(now)} ${kstHm(now)} · ${group.length}건`,
+          html: buildAutoPublishReportHtml(group, now, next, shortfall),
+        });
+      } catch (e) {
+        // 한 통이 실패해도 나머지는 보낸다. **실패한 묶음만** 버퍼에 남긴다 — 통째로
+        // 던지면 이미 보낸 묶음까지 남아 다음 순방에 두 번 나간다.
+        console.warn(`[report] 계획 ${ruleId || "미상"} 리포트 발송 실패:`, e instanceof Error ? e.message : e);
+        kept.push(...group);
+        continue;
+      }
+      console.log(`[report] 자동배포 리포트 발송 → ${to} (계획 ${ruleId || "미상"} · ${group.length}건)`);
+    }
+
+    // 보낸 묶음만 버퍼에서 뺀다 — 아직 진행 중인 계획의 적립분은 다음 순방까지 살아 있어야 한다.
+    await setAutomationSetting(REPORT_BUFFER_KEY, kept.length ? JSON.stringify(kept) : "");
   } catch (e) {
     console.warn("[report] 자동배포 리포트 발송 실패:", e instanceof Error ? e.message : e);
   }

@@ -174,7 +174,7 @@ describe("소재가 없으면 마감을 기다리지 않는다", () => {
     const src = read("publish-notify.ts");
     assert.match(src, /if \(exhausted && lastSlotPassed\) continue;/,
       "소재 고갈 즉시 발송 분기가 없다 — 고갈된 날 마감(+90분)까지 헛기다린다");
-    assert.match(src, /todaysPublishingDone\(now, opts\.exhausted === true\)/,
+    assert.match(src, /rulePublishingDone\(rule, now, opts\.exhausted === true\)/,
       "순방이 넘긴 판정을 리포트가 안 받고 있다");
   });
 
@@ -257,6 +257,48 @@ describe("영상이 모자란 날의 안내", () => {
     const src = fsSync.readFileSync(pathMod.join(SRC_DIR, "publish-notify.ts"), "utf-8");
     assert.match(src, /target \+= ruleDayTarget\(rule, n, now\)\.target;/,
       "메일이 순방과 다른 식으로 목표를 세면 두 숫자가 갈라진다");
-    assert.match(src, /buildAutoPublishReportHtml\(items, now, next, shortfall\)/);
+    assert.match(src, /buildAutoPublishReportHtml\(group, now, next, shortfall\)/,
+      "메일 본문이 그 계획 몫(group)이 아니라 버퍼 전체를 그린다");
+  });
+});
+
+describe("리포트는 자동배포 계획마다 한 통 (2026-08-28)", () => {
+  // 사용자 지시: "메일 나가는 것도 자동배포계획당으로 나가야 해."
+  // 예전엔 워크스페이스 전체가 한 통이라 ① 프로그램·채널이 섞여 "A 외 1" 로만 적히고
+  // ② **모든 계획이 끝나야** 발송돼, 늦게까지 도는 계획 하나가 이미 끝난 계획의 리포트를
+  // 밤까지 붙잡았다. 순수 함수로 증명 안 되는 구조라 소스 스캔으로 고정한다.
+  const src = fsSync.readFileSync(pathMod.join(SRC_DIR, "publish-notify.ts"), "utf-8");
+  const flush = src.match(/export async function maybeFlushAutoPublishReport[\s\S]*$/)?.[0] ?? "";
+
+  it("적립 항목이 계획 id 를 지닌다 — 없으면 나눌 축이 없다", () => {
+    assert.match(src, /ruleId\?: string;/, "AutoReportItem 에 계획 축이 없다");
+    const records = src.match(/\.\.\.ruleIdOf\(/g) ?? [];
+    assert.equal(records.length, 2, "성공·실패 두 적립 지점 모두에서 계획 id 를 심어야 한다");
+  });
+
+  it("버퍼를 계획별로 나눠 계획마다 보낸다", () => {
+    assert.ok(flush.length > 400, "발송부를 못 잘랐다");
+    assert.match(flush, /byRule/, "계획별로 나누지 않는다 — 한 통에 다 섞인다");
+    assert.match(flush, /for \(const \[ruleId, group\] of byRule\)/,
+      "계획마다 한 통이 아니다");
+  });
+
+  it("아직 진행 중인 계획의 적립분은 버퍼에 남는다 — 보낸 것만 뺀다", () => {
+    // 통째로 비우면 늦게 도는 계획의 오늘 게시분이 리포트에서 통째로 사라진다.
+    assert.match(flush, /kept\.push\(\.\.\.group\)/, "진행 중인 계획 몫을 안 남긴다");
+    assert.match(flush, /REPORT_BUFFER_KEY, kept\.length \? JSON\.stringify\(kept\) : ""/,
+      "버퍼를 통째로 비운다 — 아직 안 보낸 계획의 적립분이 사라진다");
+  });
+
+  it("한 통이 실패해도 나머지는 나가고, 실패분만 남는다", () => {
+    // 발송 루프가 통째로 던지면 이미 보낸 묶음까지 버퍼에 남아 다음 순방에 두 번 나간다.
+    assert.match(flush, /catch \(e\) \{[\s\S]*?kept\.push\(\.\.\.group\);[\s\S]*?continue;/,
+      "개별 발송 실패를 가두지 않는다 — 중복 발송이나 전체 중단이 된다");
+  });
+
+  it("계획을 못 찾은 묶음도 기다리지 않고 나간다", () => {
+    // 지워진 계획의 고아 클립·ruleId 없는 옛 항목. 기다릴 근거가 없는데 붙잡으면 영영 안 나간다.
+    assert.match(flush, /!hasStale && rule && !\(await rulePublishingDone\(/,
+      "계획을 못 찾으면 무한 대기한다 — rule 이 있을 때만 완료를 기다려야 한다");
   });
 });
