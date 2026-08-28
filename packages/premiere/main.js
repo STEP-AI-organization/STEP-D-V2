@@ -501,6 +501,120 @@ async function exportActiveSequence(onStage) {
   return { entry, name: outName, size, nativePath: entry.nativePath || outPath };
 }
 
+// ── 추천 구간 (서버 → 프리미어 방향) ──────────────────────────────────────────
+/**
+ * 여기까지 오면 패널이 "올리는 곳" 에서 "보고 작업하는 곳" 이 된다. 서버가 만든 추천을
+ * 프리미어 안에서 보고, 한 줄을 누르면 **플레이헤드가 그 구간으로 간다.**
+ *
+ * ⚠️ 시간 기준이 둘이라는 걸 잊으면 1프레임씩 어긋난다:
+ *   STEP-D `startTime` = **원본 파일 0초 기준 초**
+ *   Premiere            = **시퀀스 타임라인 기준**
+ * 원본을 통째로 시퀀스에 얹어 편집하는 보통의 경우엔 둘이 같아서 그냥 맞는다. 방송 원본처럼
+ * 시작 타임코드가 01:00:00:00 인 소재를 그대로 얹었으면 어긋나므로, 서버가 함께 주는
+ * `fps`·`startTimecode` 로 환산해야 한다 — **그건 다음 단계다.** 지금은 "같다" 고 보고
+ * 이동하되, 환산이 필요한 회차는 **화면에 그렇다고 적는다**(조용히 틀리지 않게).
+ */
+const TICKS_PER_SECOND = 254016000000;
+
+function fmtTime(sec) {
+  const s = Math.max(0, Math.floor(Number(sec) || 0));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const r = s % 60;
+  const two = (n) => (n < 10 ? `0${n}` : String(n));
+  return h > 0 ? `${h}:${two(m)}:${two(r)}` : `${two(m)}:${two(r)}`;
+}
+
+/** 플레이헤드를 초 위치로 옮긴다. 이름이 버전마다 달라 후보를 훑고, 없으면 구성을 쏟는다. */
+async function seekActiveSequence(sec) {
+  const { api, sequence } = await activeSequence();
+  let pos = null;
+  if (api.TickTime) {
+    if (typeof api.TickTime.createWithSeconds === "function") pos = api.TickTime.createWithSeconds(sec);
+    else if (typeof api.TickTime.createWithTicks === "function") {
+      pos = api.TickTime.createWithTicks(String(Math.round(sec * TICKS_PER_SECOND)));
+    }
+  }
+  if (pos === null) pos = String(Math.round(sec * TICKS_PER_SECOND));
+
+  for (const m of ["setPlayerPosition", "setPlayheadPosition", "setCurrentPosition"]) {
+    if (typeof sequence[m] === "function") {
+      await sequence[m](pos);
+      return;
+    }
+  }
+  dumpApi(api, sequence);
+  throw new Error("재생위치 이동 API 를 찾지 못했습니다 — UDT 콘솔의 [STEP-D] 로그를 보내 주세요.");
+}
+
+let recRows = [];
+
+function renderRecs() {
+  const list = $("recsList");
+  list.innerHTML = "";
+  for (const r of recRows) {
+    const row = document.createElement("div");
+    row.className = "rec";
+
+    const title = document.createElement("div");
+    title.className = "rec-title";
+    title.textContent = r.title || "(제목 없음)";
+
+    const meta = document.createElement("div");
+    meta.className = "rec-meta";
+    const dur = Math.max(0, Math.round(Number(r.endTime) - Number(r.startTime)));
+    const score = r.score100 === null || r.score100 === undefined ? "—" : `${r.score100}점`;
+    const ep = r.episodeNumber ? `${r.episodeNumber}회 · ` : "";
+    // 프레임 메타가 없는 회차는 여기서 밝힌다 — 정합을 못 맞추는 걸 조용히 넘기지 않는다.
+    const warn = r.fps ? "" : " · ⚠ 프레임 정합 불가(원본 메타 없음)";
+    meta.textContent = `${ep}${fmtTime(r.startTime)}–${fmtTime(r.endTime)} · ${dur}초 · ${score}${warn}`;
+
+    row.appendChild(title);
+    row.appendChild(meta);
+    row.addEventListener("click", () => void jumpToRec(r));
+    list.appendChild(row);
+  }
+}
+
+async function jumpToRec(r) {
+  try {
+    setStatus($("recsStatus"), `"${r.title}" 구간으로 이동 중…`);
+    await seekActiveSequence(Number(r.startTime) || 0);
+    setStatus($("recsStatus"), `${fmtTime(r.startTime)} 으로 이동했습니다.`, "ok");
+  } catch (err) {
+    setStatus($("recsStatus"), err.message, "err");
+    console.log("[STEP-D] seek 실패", err);
+  }
+}
+
+async function loadRecs() {
+  const programId = selectedProgram();
+  setStatus($("recsStatus"), "불러오는 중…");
+  try {
+    const q = programId ? `?programId=${encodeURIComponent(programId)}&limit=50` : "?limit=50";
+    const data = await apiJson(`/recommendations${q}`);
+    recRows = Array.isArray(data.recommendations) ? data.recommendations : [];
+    renderRecs();
+    setStatus(
+      $("recsStatus"),
+      recRows.length
+        ? `채택 대기 ${recRows.length}건 · 줄을 누르면 그 구간으로 이동합니다`
+        : "이 프로그램에 채택 대기 중인 추천이 없습니다.",
+    );
+  } catch (err) {
+    setStatus($("recsStatus"), `불러오지 못했습니다: ${err.message}`, "err");
+  }
+}
+
+function showTab(which) {
+  const isRecs = which === "recs";
+  $("uploadPane").className = isRecs ? "hidden" : "";
+  $("recsPane").className = isRecs ? "" : "hidden";
+  $("tabUpload").className = isRecs ? "tab" : "tab active";
+  $("tabRecs").className = isRecs ? "tab active" : "tab";
+  if (isRecs && !recRows.length) void loadRecs();
+}
+
 function contentTypeFor(name) {
   const ext = (name.split(".").pop() || "").toLowerCase();
   if (ext === "mov") return "video/quicktime";
@@ -643,9 +757,16 @@ async function doLogout() {
   $("uploadBtn").addEventListener("click", doUpload);
   $("exportBtn").addEventListener("click", doExportAndUpload);
   $("logoutBtn").addEventListener("click", doLogout);
+  $("tabUpload").addEventListener("click", () => showTab("upload"));
+  $("tabRecs").addEventListener("click", () => showTab("recs"));
+  $("recsReload").addEventListener("click", () => void loadRecs());
   $("program").addEventListener("change", () => {
     syncUploadButton();
     void refreshSequenceLabel();
+    // 프로그램이 바뀌면 추천도 그 프로그램 것이어야 한다 — 비워 두면 남의 목록을 보게 된다.
+    recRows = [];
+    renderRecs();
+    if ($("recsPane").className !== "hidden") void loadRecs();
   });
   // 시퀀스는 패널 밖에서 바뀐다(사용자가 타임라인에서 다른 걸 연다). 눌러서 다시 읽게 둔다 —
   // 패널이 계속 폴링하면 편집 중에 괜히 프리미어를 건드린다.

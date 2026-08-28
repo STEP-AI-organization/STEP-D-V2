@@ -518,7 +518,11 @@ async function runAutomationCycleLocked(): Promise<CycleReport> {
       // (17:00·20:00·22:00 이면 20:30 에 2건). 슬롯이 없으면 예전처럼 하루 할당량.
       // 판정을 automation.ts 한 곳에 두어 화면의 월 예상 건수와 갈라지지 않게 한다.
       const slotted = ruleSlots(rule);
-      const publishedToday = await publishedTodayKst(accountKey);
+      // **계획 단위로 센다.** 사용자가 이 계획에 "하루 10개" 를 적었으면 같은 채널을 쓰는 다른
+      // 계획이 몇 건을 냈든 이 계획은 10개를 낸다(2026-08-28 확정). 채널 단위로 세던 시절엔
+      // 한 채널을 두 계획이 나눠 갖는 순간 둘 다 자기 개수를 못 채웠다 — "사용자가 정한
+      // 개수가 안 나가는 것" 이 이 제품의 가장 큰 사고다.
+      const publishedToday = await publishedTodayKst(accountKey, rule.id);
       // Explicit slots are queued two hours early; YouTube publishes at target time.
       // 유예(60분)를 넘겨 놓친 슬롯 몫은 **오늘은 포기** — 저녁에 계획을 켜도 아침 슬롯
       // 몫이 그 자리에서 쏟아지지 않는다(2026-08-26 ENA 실전 사고). 인덱스 계산에도 같은

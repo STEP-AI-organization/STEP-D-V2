@@ -59,6 +59,24 @@
       margin: 20px 0 12px 0;
       color: #6e6e6e; font-size: 11px; text-align: center;
     }
+    .tabs { display: flex; flex-direction: row; margin-bottom: 16px; }
+    .tab {
+      width: 50%; height: 30px; margin-top: 0;
+      background-color: transparent; color: #999999; font-weight: 400;
+      border-bottom: 2px solid #3a3a3a; border-radius: 0;
+    }
+    .tab.active { color: #ffffff; font-weight: 600; border-bottom: 2px solid #2680eb; }
+    #uploadPane, #recsPane { display: flex; flex-direction: column; }
+    .recs { display: flex; flex-direction: column; }
+    /* 추천 한 줄 — 누르면 그 구간으로 플레이헤드가 간다. */
+    .rec {
+      display: flex; flex-direction: column;
+      padding: 10px; margin-bottom: 8px;
+      background: #1d1d1d; border: 1px solid #3a3a3a; border-left: 3px solid #2680eb;
+      border-radius: 3px;
+    }
+    .rec-title { color: #e8e8e8; font-size: 12px; margin-bottom: 4px; }
+    .rec-meta { color: #8a8a8a; font-size: 11px; }
     .bar { height: 4px; background: #1d1d1d; border-radius: 2px; overflow: hidden; margin-top: 8px; }
     .bar > div { height: 4px; width: 0%; background-color: #2680eb; }
     .status { font-size: 12px; color: #a0a0a0; margin-top: 12px; line-height: 1.5; word-break: break-all; }
@@ -85,31 +103,47 @@
     <div class="muted">stepd.stepai.kr 과 같은 계정입니다.</div>
   </div>
 
-  <!-- ② 업로드 — 프리미어에서 렌더한 완성본을 STEP-D 로 바로 올린다. -->
+  <!-- ② 로그인 후 본 화면 — 프로그램은 두 탭이 함께 쓴다. -->
   <div id="uploadView" class="hidden">
-    <h3>완성본 업로드</h3>
     <div class="row">
       <div class="label">프로그램</div>
       <select id="program"></select>
     </div>
-    <!-- 주 동선 — 편집이 끝났으면 내보내기 대신 이 버튼 하나. -->
-    <div class="row">
-      <div class="label">지금 편집 중인 시퀀스</div>
-      <div id="seqBox" class="seq">확인 중…</div>
-    </div>
-    <button id="exportBtn" disabled>렌더해서 업로드</button>
 
-    <div class="divider">또는 이미 렌더한 파일</div>
-
-    <!-- 폴백 — 다른 도구로 만든 완성본, 이미 뽑아 둔 파일. -->
-    <div class="row">
-      <div id="fileBox" class="file">렌더한 MP4 를 선택하세요</div>
-      <button id="pickBtn" class="secondary">파일 선택</button>
+    <div class="tabs">
+      <button id="tabUpload" class="tab active">업로드</button>
+      <button id="tabRecs" class="tab">추천 구간</button>
     </div>
-    <button id="uploadBtn" class="secondary" disabled>파일 업로드</button>
-    <div class="bar"><div id="progress"></div></div>
-    <div id="status" class="status"></div>
-    <button id="logoutBtn" class="secondary" style="margin-top:14px;">로그아웃</button>
+
+    <!-- ②-A 업로드 — 프리미어에서 렌더한 완성본을 STEP-D 로 바로 올린다. -->
+    <div id="uploadPane">
+      <!-- 주 동선 — 편집이 끝났으면 내보내기 대신 이 버튼 하나. -->
+      <div class="row">
+        <div class="label">지금 편집 중인 시퀀스</div>
+        <div id="seqBox" class="seq">확인 중…</div>
+      </div>
+      <button id="exportBtn" disabled>렌더해서 업로드</button>
+
+      <div class="divider">또는 이미 렌더한 파일</div>
+
+      <!-- 폴백 — 다른 도구로 만든 완성본, 이미 뽑아 둔 파일. -->
+      <div class="row">
+        <div id="fileBox" class="file">렌더한 MP4 를 선택하세요</div>
+        <button id="pickBtn" class="secondary">파일 선택</button>
+      </div>
+      <button id="uploadBtn" class="secondary" disabled>파일 업로드</button>
+      <div class="bar"><div id="progress"></div></div>
+      <div id="status" class="status"></div>
+    </div>
+
+    <!-- ②-B 추천 구간 — 서버가 만든 추천을 프리미어 안에서 보고, 눌러서 그 구간으로 간다. -->
+    <div id="recsPane" class="hidden">
+      <div id="recsList" class="recs"></div>
+      <div id="recsStatus" class="status"></div>
+      <button id="recsReload" class="secondary">목록 새로고침</button>
+    </div>
+
+    <button id="logoutBtn" class="secondary" style="margin-top:16px;">로그아웃</button>
   </div>
 
   <script src="main.js"></script>

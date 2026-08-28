@@ -5452,7 +5452,7 @@ app.get("/api/automation", async (c) => {
     getAutomationSetting(NOTIFY_EMAIL_KEY),
   ]);
   const plan = planCycle({ paused: paused === "true", rules: rules as any });
-  // 규칙×채널별 오늘 게시 수 — 순방이 한도 판정에 쓰는 publishedTodayKst 그대로.
+  // 계획×채널별 오늘 게시 수 — 순방이 한도 판정에 쓰는 publishedTodayKst 그대로.
   // 화면의 "오늘 2/3" 표기가 이 필드를 읽는다(없으면 UI 가 그 줄을 숨긴다 — 생산자가
   // 빠지면 죽은 기능이 되는 걸 검증에서 한 번 잡았다).
   const rulesWithToday = await Promise.all(
@@ -5462,9 +5462,10 @@ app.get("/api/automation", async (c) => {
       const publishedToday: Record<string, number> = {};
       for (const ch of chans) {
         const key = `${ch.platform}:${ch.accountId}`;
-        // 채널 단위 집계 — 순방의 할당량 판정과 **같은 함수**를 써야 화면 숫자와 실제
-        // 남은 건수가 갈라지지 않는다.
-        publishedToday[key] = await publishedTodayKst(key);
+        // **이 계획 몫만** 센다 — 순방의 할당량 판정과 같은 인자(accountKey, rule.id)를 줘야
+        // 화면의 "오늘 2/3" 과 실제 남은 건수가 갈라지지 않는다. 한 채널을 여러 계획이
+        // 함께 쓰면 채널 총합은 이 수보다 클 수 있고, 그게 맞다(계획별 개수를 지킨 결과다).
+        publishedToday[key] = await publishedTodayKst(key, rule.id);
       }
       // 월 예상 발행 건수 — **순방 판정과 같은 함수**에서 낸다(monthlyPublishEstimate).
       // 화면이 따로 계산하면 "월 66건" 이라 적어 놓고 실제로는 다른 수가 나가고, 그게 곧
@@ -6750,6 +6751,64 @@ app.get("/api/gate-audit/:subjectType/:subjectId", async (c) => {
 
 // ── select generated thumbnail ─────────────────────────────────────────────────
 // Exactly one variant is marked chosen so later adoption has a stable, persisted decision.
+// ── 추천 목록 (가벼운 클라이언트용) ────────────────────────────────────────────
+// 지금까지 추천을 얻는 길은 `/api/state` 뿐이었다 — 클립·배포·분석까지 통째로 실어 오므로
+// 프리미어 패널처럼 **목록 하나만 필요한** 곳에는 과하다. 여기서는 구간·점수와, 프리미어로
+// 넘길 때 필요한 것(회차·원본 fps·시작 타임코드)만 골라 준다.
+//
+// ⚠️ `startTime/endTime` 은 **원본 파일 0초 기준 초**다. Premiere·EDL 은 소스 타임코드
+//    기준이라, 둘을 잇는 값이 같이 나가는 `fps`·`startTimecode` 다. 0046 마이그레이션
+//    이전에 올라온 원본은 이 둘이 0/"" 라 환산이 불가능하다 — 클라이언트가 그걸 알아야
+//    "정합을 못 맞춘다" 고 말할 수 있으므로 숨기지 않고 그대로 내보낸다.
+app.get("/api/recommendations", async (c) => {
+  const programId = (c.req.query("programId") ?? "").trim();
+  const status = (c.req.query("status") ?? "pending").trim();
+  const limit = Math.min(200, Math.max(1, Number(c.req.query("limit") ?? 50) || 50));
+
+  const [recs, episodes, media] = await Promise.all([
+    listEntities<Record<string, unknown>>("recommendation"),
+    listEntities<Record<string, unknown>>("episode"),
+    listMedia(),
+  ]);
+  const epById = new Map(episodes.map((e) => [String(e.id), e]));
+  // 회차의 원본(master). 없으면 프레임 메타 없이 나간다 — 목록 자체는 여전히 쓸모 있다.
+  const masterByEpisode = new Map<string, (typeof media)[number]>();
+  for (const m of media) {
+    if (!m.episodeId) continue;
+    if (m.role && m.role !== "master") continue;
+    if (!masterByEpisode.has(m.episodeId)) masterByEpisode.set(m.episodeId, m);
+  }
+
+  const rows = recs
+    .filter((r) => (status === "all" ? true : String(r.status ?? "pending") === status))
+    .map((r) => {
+      const ep = epById.get(String(r.episodeId ?? ""));
+      const master = ep ? masterByEpisode.get(String(ep.id)) : undefined;
+      return { r, ep, master };
+    })
+    .filter(({ ep }) => !programId || (ep && String(ep.programId ?? "") === programId))
+    .map(({ r, ep, master }) => ({
+      id: String(r.id ?? ""),
+      title: String(r.title ?? ""),
+      startTime: Number(r.startTime ?? 0),
+      endTime: Number(r.endTime ?? 0),
+      score100: r.score100 === undefined ? null : Number(r.score100),
+      status: String(r.status ?? "pending"),
+      people: Array.isArray(r.people) ? r.people : [],
+      episodeId: String(r.episodeId ?? ""),
+      episodeNumber: ep ? Number(ep.episodeNumber ?? 0) : null,
+      programId: ep ? String(ep.programId ?? "") : "",
+      programTitle: ep ? String(ep.programTitle ?? "") : "",
+      mediaId: master ? master.id : null,
+      fps: master ? Number(master.fps ?? 0) : 0,
+      startTimecode: master ? String(master.startTimecode ?? "") : "",
+    }))
+    .sort((a, b) => (b.score100 ?? 0) - (a.score100 ?? 0))
+    .slice(0, limit);
+
+  return c.json({ recommendations: rows });
+});
+
 app.patch("/api/recommendations/:id/thumbnail", async (c) => {
   const recId = c.req.param("id");
   const rec = await getEntity<any>("recommendation", recId);

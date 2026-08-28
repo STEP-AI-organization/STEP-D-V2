@@ -3427,28 +3427,37 @@ export async function updateAutomationRuleById(r: AutomationRuleRow): Promise<bo
 }
 
 /**
- * 채널별 오늘(KST) 게시 수 — 하루 할당량 판정. rule_run 은 UTC 저장이라
+ * 오늘(KST) 게시 수 — 하루 배포 개수 판정. rule_run 은 UTC 저장이라
  * KST 자정( UTC 전날 15:00 ) 기준으로 자른다.
  *
- * **채널 단위로 센다(규칙 단위가 아니라).** 화면 라벨이 "하루 N개/채널" 인데 규칙별로 세면,
- * 같은 채널에 연결된 규칙이 둘이면 그 채널에 두 배가 올라간다 — 도배를 막으려고 넣은 값이
- * 목적을 잃는다. 프로그램마다 규칙 하나가 기본 구조라 실제로 흔한 형태다.
+ * **계획(규칙) 단위로 센다** — `ruleId` 를 주면 그 계획의 몫만 센다 (2026-08-28 사용자 확정:
+ * "A 계획 10개면 10개대로, B 계획 20개면 20개대로 나가라. 복수 채널·복수 프로그램은 무시").
+ *
+ * 예전엔 채널 단위였다. 채널 하나에 계획 하나이던 시절엔 같은 말이었지만, 한 채널을 여러
+ * 계획이 함께 쓸 수 있게 되면서(같은 날 제한 해제) 두 계획이 **같은 카운터를 나눠 갖는**
+ * 상태가 됐다 — A(10개)와 B(20개)가 같은 채널이면 채널 전체가 20개에서 멈추고, 사용자가
+ * 계획마다 정한 개수는 그대로 나가지 않는다. "사용자가 정한 개수가 안 지켜지는 것" 은
+ * 이 리포가 오늘만 두 번 데인 사고 형태다.
+ *
+ * ⚠️ `ruleId` 를 안 주면 종전처럼 채널 전체를 센다 — 화면의 "이 채널에 오늘 몇 건 나갔나"
+ * 같은 **표시용** 질의가 그 축을 쓴다. 한도 판정은 반드시 ruleId 를 준다.
  *
  * 실패한 건은 세지 않는다. 큐에 넣은 시점에 'published' 를 쓰기 때문에, 워커가 그 업로드를
  * 실패시키면 채널엔 아무것도 없는데 한도만 소진된다("오늘 3건 게시" 인데 채널은 비어 있음).
  * 같은 클립·같은 계정에 뒤이어 'failed' 가 찍히면 그 슬롯은 되돌린다.
  */
-export async function publishedTodayKst(accountKey: string): Promise<number> {
+export async function publishedTodayKst(accountKey: string, ruleId?: string | null): Promise<number> {
   const { rows } = await pool.query(
     `SELECT COUNT(*)::int AS n FROM rule_run r
       WHERE r.account_key = $1 AND r.result = 'published'
+        AND ($2::text IS NULL OR r.rule_id = $2)
         AND r.at >= date_trunc('day', now() AT TIME ZONE 'Asia/Seoul') AT TIME ZONE 'Asia/Seoul'
         AND NOT EXISTS (
           SELECT 1 FROM rule_run f
            WHERE f.clip_id IS NOT DISTINCT FROM r.clip_id
              AND f.account_key IS NOT DISTINCT FROM r.account_key
              AND f.result = 'failed' AND f.at >= r.at)`,
-    [accountKey],
+    [accountKey, ruleId ?? null],
   );
   return Number((rows[0] as { n: number } | undefined)?.n ?? 0);
 }
