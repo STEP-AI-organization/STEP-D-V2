@@ -665,6 +665,11 @@ export function EditorPreview({
               // 오히려 하이라이트가 살짝 어긋나 보이는 원인이었음 · segment 통째 표시로 통일.
               const capStyle: CSSProperties = {
                 ...cap.style,
+                // 자막 서체 = 지마켓 산스(사용자 확정 2026-08-28) — 서버 ASS(captionAssStyle 의
+                // `Gmarket Sans TTF`)와 같은 글꼴로 미리 보여야 "미리보기와 결과물이 다르다"가
+                // 안 생긴다. 굵기는 각 스타일의 Tailwind font-* 클래스가 정한다(@font-face 는
+                // 500·600~900 을 Medium·Bold 파일로 매핑).
+                fontFamily: "'GmarketSans', var(--font-sans)",
                 // 외곽선을 채움 **아래**로 — 노란 글자가 검은 스트로크에 먹혀 묻히지 않게(사용자 2026-08-20:
                 // "배경보다 레이어가 우선"). CSS 기본은 fill→stroke(스트로크가 글자 위 가운데로 덧그려져
                 // 얇은 글자를 먹는다)라, 서버 ASS(채움이 외곽선 위) 와 어긋났다. paint-order 로 맞춘다.

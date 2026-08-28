@@ -5000,12 +5000,20 @@ const CAPTION_PCT: Record<string, number> = {
 const CAPTION_MV_PCT = 26;
 
 function captionAssStyle(style: string, H: number, mv: number, mh: number, sizePct?: number): string {
-  // 웨이트도 미리보기와 맞춘다 — 설치 폰트는 Bold(700)·ExtraBold(800)·Black(900) 3종이라
-  // font-extrabold 는 "Pretendard ExtraBold", font-black 은 "Pretendard Black" 를 지정해야
-  // 한 단계 얇게 나가지 않는다(가족명 실측: Pretendard / Pretendard ExtraBold / Pretendard Black).
-  const font = "Pretendard";
-  const xbold = "Pretendard ExtraBold";
-  const black = "Pretendard Black";
+  // 자막 서체 = **지마켓 산스 Bold** (사용자 확정 2026-08-28). 바뀌는 건 자막뿐이다 —
+  // 제목·방영시간 박스(위 Default·BoxLabel 스타일)는 그대로 Pretendard ExtraBold 다.
+  //
+  // ⚠️ Fontname 은 **폰트 파일이 실제로 신고하는 패밀리명**이어야 한다. 이 TTF 의 name 테이블
+  //    실측: Family=`Gmarket Sans TTF` · Subfamily=`Bold`. 리포 곳곳의 "GmarketSans Bold" 는
+  //    canvas 등록용 별칭(overlay-canvas.ts)이라 여기 쓰면 안 된다 — 이름이 안 맞으면 libass 가
+  //    **말없이 Noto 로 대체**해서 "폰트를 바꿨는데 결과물은 그대로"가 된다.
+  // ⚠️ 그리고 폰트가 이미지 안에 있어야 한다. 이 파일들은 assets/invoice-fonts 에 있고 예전엔
+  //    fontconfig 경로로 안 갔다 — Dockerfile 에 /usr/share/fonts 복사를 같이 넣었다(세트다).
+  // ⚠️ 웨이트는 Medium(500)·Bold(700) 둘뿐이다. Pretendard 처럼 ExtraBold·Black 이 없으므로
+  //    세 변수를 하나로 접는다 — 굵기는 각 스타일의 Bold 플래그가 정한다(1=Bold, 0=Medium).
+  const font = "Gmarket Sans TTF";
+  const xbold = font;
+  const black = font;
   // 크기 오버라이드(sizePct · % · 화면 높이 기준)가 있으면 그걸, 없으면 스타일 기본표(CAPTION_PCT).
   const pct = Number.isFinite(sizePct) && Number(sizePct) > 0 ? Number(sizePct) : (CAPTION_PCT[style] ?? CAPTION_PCT.korean_pop);
   const fs = assFs((H * pct) / 100);

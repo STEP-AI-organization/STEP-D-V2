@@ -51,6 +51,11 @@ COPY assets/shorts-template assets/shorts-template
 # 렌더 폰트 — Pretendard (OFL). ASS 스타일이 Fontname=Pretendard 로 굽는다.
 # 미설치면 libass 가 Noto 로 폴백해 조용히 다른 모양이 나간다 — fc-cache 까지 해야 잡힌다.
 COPY assets/fonts /usr/share/fonts/opentype/pretendard
+# 자막 서체 — 지마켓 산스(사용자 확정 2026-08-28). 파일은 assets/invoice-fonts 에 있는데,
+# 예전엔 앱 디렉토리로만 복사돼 **fontconfig 가 못 보는 자리**였다. 그 상태로 ASS Fontname 만
+# 바꾸면 libass 가 말없이 Noto 로 대체한다 — 폰트 교체가 조용히 무효가 되는 전형적인 자리라
+# 여기 복사와 captionAssStyle 의 이름은 반드시 세트로 움직인다.
+COPY assets/invoice-fonts /usr/share/fonts/truetype/gmarket
 RUN fc-cache -f
 # canvas(@napi-rs/canvas) 정적 오버레이 PNG 렌더가 리포 상대경로(assets/fonts)로 Pretendard 를
 # 등록한다(overlay-canvas.ts). 미설치면 fontconfig 경로로 폴백하지만, 두 경로가 같은 파일을
