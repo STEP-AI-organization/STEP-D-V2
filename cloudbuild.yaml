@@ -104,6 +104,7 @@ steps:
           --set-secrets=PORTONE_WEBHOOK_SECRET=stepd-portone-webhook-secret:latest \
           --set-secrets=NAVER_SESSION_KEY=stepd-naver-session-key:latest \
           --set-secrets=COMMERCE_SESSION_KEY=stepd-commerce-session-key:latest \
+          --set-secrets=NAVER_CRED_KEY=stepd-naver-cred-key:latest \
           --set-secrets=SMTP_OAUTH_CLIENT_ID=stepd-smtp-oauth-client-id:latest \
           --set-secrets=SMTP_OAUTH_CLIENT_SECRET=stepd-smtp-oauth-client-secret:latest \
           --set-secrets=SMTP_OAUTH_REFRESH_TOKEN=stepd-smtp-oauth-refresh-token:latest \
@@ -152,6 +153,7 @@ steps:
           --set-secrets=PORTONE_WEBHOOK_SECRET=stepd-portone-webhook-secret:latest \
           --set-secrets=NAVER_SESSION_KEY=stepd-naver-session-key:latest \
           --set-secrets=COMMERCE_SESSION_KEY=stepd-commerce-session-key:latest \
+          --set-secrets=NAVER_CRED_KEY=stepd-naver-cred-key:latest \
           --set-secrets=SMTP_OAUTH_CLIENT_ID=stepd-smtp-oauth-client-id:latest \
           --set-secrets=SMTP_OAUTH_CLIENT_SECRET=stepd-smtp-oauth-client-secret:latest \
           --set-secrets=SMTP_OAUTH_REFRESH_TOKEN=stepd-smtp-oauth-refresh-token:latest \
