@@ -262,7 +262,7 @@ import {
   type ReframePlan,
 } from "./reframe.ts";
 import { getAspectPreset } from "./aspect-presets.ts";
-import { renderTextLayerPng, overlayCanvasAvailable, measureOverlayImage, type OverlayTextItem } from "./overlay-canvas.ts";
+import { renderTextLayerPng, overlayCanvasAvailable, measureOverlayImage, FONT_FAMILIES, type OverlayTextItem } from "./overlay-canvas.ts";
 import {
   syncChannelVideos,
   classifyShorts,
@@ -4786,6 +4786,9 @@ function buildEditorAss(
       const by0 = L.by;
       const fitPx = L.fitPx;
       const color = hexToAss(L.colorHex);
+      // 글꼴 — canvas-PNG 경로(overlay-canvas)와 같은 값을 ASS 에도 얹는다. 안 얹으면 이 경로만
+      // Style Default(Pretendard) 로 나가 같은 영상 안에서 줄마다 글꼴이 달라진다.
+      const fnTag = ASS_FONT_BY_ID[String((t as any)?.font ?? "")] ? `\\fn${ASS_FONT_BY_ID[String((t as any).font)]}` : "";
       const fs = assFs(fitPx);
       const win = winFor(t);
       if (win) {
@@ -4805,10 +4808,10 @@ function buildEditorAss(
             // 좌/우 정렬은 가로도 한쪽으로만 자란다(중앙정렬은 대칭이라 보정 불필요).
             const xFix = an === 8 ? 0 : (an === 7 ? -1 : 1) * grow * textWidthPx(t.text, fitPx) / 2;
             const extra = `\\fscx${Math.round(k.scale * 100)}\\fscy${Math.round(k.scale * 100)}${assAlpha(k.opacity)}\\frz${(-k.rotation).toFixed(1)}\\org(${orgX},${orgY})`;
-            putWin(an, bx + ((k.x ?? 0) / 100) * W + xFix, by + ((k.y ?? 0) / 100) * H - yFix, fs, color, 2, "&H00000000&", t.text, s, Math.min(win[1], s + SAMPLE_STEP), extra);
+            putWin(an, bx + ((k.x ?? 0) / 100) * W + xFix, by + ((k.y ?? 0) / 100) * H - yFix, fs, color, 2, "&H00000000&", t.text, s, Math.min(win[1], s + SAMPLE_STEP), extra + fnTag);
           }
         } else {
-          putWin(an, bx, by, fs, color, 2, "&H00000000&", t.text, win[0], win[1]);
+          putWin(an, bx, by, fs, color, 2, "&H00000000&", t.text, win[0], win[1], fnTag);
         }
       }
     }
@@ -4945,7 +4948,9 @@ function buildEditorAss(
     `Style: Default,Pretendard ExtraBold,48,&H00FFFFFF,&H00000000,&H00000000,1,1,2,1,5,20,20,20,1\n` +
     // 방영시간 박스 라벨 — BorderStyle=3(불투명 박스), Outline=박스 패딩. 박스 색은 인라인 \3c.
     `Style: BoxLabel,Pretendard ExtraBold,48,&H00FFFFFF,&H00D97B3D,&H00D97B3D,1,3,14,0,5,20,20,20,1\n` +
-    captionAssStyle(capStyle, H, capMV, capMH, capSizePct) + "\n\n" +
+    captionAssStyle(capStyle, H, capMV, capMH, capSizePct,
+      typeof (es as any)?.captionFont === "string" ? (es as any).captionFont : undefined)
+    + "\n\n" +
     `[Events]\nFormat: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n` +
     ev.join("\n") + "\n"
   );
@@ -4999,7 +5004,24 @@ const CAPTION_PCT: Record<string, number> = {
 // 26% (사용자 확정 2026-08-24). SUBTITLE_DEFAULTS.y·편집기 미리보기 폴백도 같이 26.
 const CAPTION_MV_PCT = 26;
 
-function captionAssStyle(style: string, H: number, mv: number, mh: number, sizePct?: number): string {
+/**
+ * 글꼴 카탈로그 id → **ASS Fontname**.
+ *
+ * ⚠️ 값은 폰트 파일의 name 테이블이 신고하는 패밀리명이어야 한다(2026-08-28 실측).
+ * canvas 등록 별칭(overlay-canvas 의 family)과 다르다 — 별칭을 쓰면 libass 가 말없이 Noto 로
+ * 대체해 "글꼴을 바꿨는데 결과물은 그대로"가 된다. 파일은 Dockerfile 이 /usr/share/fonts 로
+ * 복사하고 fc-cache 를 돌린다(assets/fonts · assets/invoice-fonts).
+ */
+const ASS_FONT_BY_ID: Record<string, string> = {
+  pretendard: "Pretendard ExtraBold",
+  gmarket: "Gmarket Sans TTF",
+  blackhansans: "Black Han Sans",
+  dohyeon: "Do Hyeon",
+  jua: "Jua",
+  gothica1: "Gothic A1",
+};
+
+function captionAssStyle(style: string, H: number, mv: number, mh: number, sizePct?: number, fontId?: string): string {
   // 자막 서체 = **지마켓 산스 Bold** (사용자 확정 2026-08-28). 바뀌는 건 자막뿐이다 —
   // 제목·방영시간 박스(위 Default·BoxLabel 스타일)는 그대로 Pretendard ExtraBold 다.
   //
@@ -5011,7 +5033,9 @@ function captionAssStyle(style: string, H: number, mv: number, mh: number, sizeP
   //    fontconfig 경로로 안 갔다 — Dockerfile 에 /usr/share/fonts 복사를 같이 넣었다(세트다).
   // ⚠️ 웨이트는 Medium(500)·Bold(700) 둘뿐이다. Pretendard 처럼 ExtraBold·Black 이 없으므로
   //    세 변수를 하나로 접는다 — 굵기는 각 스타일의 Bold 플래그가 정한다(1=Bold, 0=Medium).
-  const font = "Gmarket Sans TTF";
+  // 규칙에서 자막 글꼴을 고르면 그 값을 쓴다(카탈로그 id → 실제 패밀리명).
+  // 미지정·모르는 id 는 기본(지마켓 산스)으로 접는다.
+  const font = (fontId && ASS_FONT_BY_ID[fontId]) || "Gmarket Sans TTF";
   const xbold = font;
   const black = font;
   // 크기 오버라이드(sizePct · % · 화면 높이 기준)가 있으면 그걸, 없으면 스타일 기본표(CAPTION_PCT).
@@ -5598,6 +5622,14 @@ app.post("/api/automation/rules", async (c) => {
         ...(typeof l.title === "boolean" ? { title: l.title } : {}),
         ...(typeof l.logo === "boolean" ? { logo: l.logo } : {}),
         ...(typeof l.timebox === "boolean" ? { timebox: l.timebox } : {}),
+        // 글꼴(카탈로그 id) · 방영시간 박스 색 — 2026-08-28 고객사 화면에서 고를 수 있게 열었다.
+        // 여기 없는 키는 **저장 자체가 안 되므로** 화면만 바뀌고 결과물은 그대로가 된다.
+        ...(typeof l.titleFont === "string" && FONT_FAMILIES.some((f) => f.id === l.titleFont)
+          ? { titleFont: l.titleFont } : {}),
+        ...(typeof l.captionFont === "string" && FONT_FAMILIES.some((f) => f.id === l.captionFont)
+          ? { captionFont: l.captionFont } : {}),
+        ...(typeof l.channelBoxColor === "string" && /^#[0-9a-fA-F]{6}$/.test(l.channelBoxColor)
+          ? { channelBoxColor: l.channelBoxColor } : {}),
       };
       return Object.keys(layout).length ? { layout } : {};
     })()),

@@ -56,13 +56,19 @@ describe("자막 서체 — 이름이 파일과 일치해야 한다", () => {
     assert.equal(n.get(2), "Bold");
   });
 
-  it("captionAssStyle 이 그 패밀리명을 그대로 쓴다 — 별칭('GmarketSans Bold')을 쓰면 폴백된다", () => {
+  it("captionAssStyle 이 고른 글꼴을 그대로 쓴다 — 별칭을 쓰면 조용히 폴백된다", () => {
     const src = read("apps/server/src/index.ts");
     const family = fontNames(GMARKET_BOLD).get(1)!;
-    const m = /const font = "([^"]+)";\s*\n\s*const xbold = font;/.exec(src);
+    // 2026-08-28: 자막 글꼴을 규칙에서 고를 수 있게 되면서 기본값이 폴백 자리로 옮겼다.
+    // 가드의 의도(이름이 폰트 파일과 일치)는 그대로 — 기본값과 매핑표 둘 다 본다.
+    const m = /const font = \(fontId && ASS_FONT_BY_ID\[fontId\]\) \|\| "([^"]+)";/.exec(src);
     assert.ok(m, "captionAssStyle 의 자막 서체 선언을 찾지 못했다");
     assert.equal(m![1], family,
       "libass 는 못 찾은 폰트를 오류 없이 Noto 로 바꾼다 — 이름이 틀리면 조용히 무효가 된다");
+    const table = /const ASS_FONT_BY_ID: Record<string, string> = \{([\s\S]*?)\};/.exec(src);
+    assert.ok(table, "글꼴 카탈로그 → ASS 이름 매핑표를 찾지 못했다");
+    assert.match(table![1], new RegExp(`gmarket:\\s*"${family}"`),
+      "매핑표의 지마켓 항목도 폰트 파일이 신고하는 패밀리명이어야 한다");
   });
 
   it("제목·시간박스는 Pretendard 그대로 — 바꾼 건 자막뿐이다", () => {

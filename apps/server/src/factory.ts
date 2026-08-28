@@ -27,6 +27,7 @@ import { dispatchPublish } from "./publish-dispatch.ts";
 import { newId } from "./pipeline.ts";
 import { enqueue } from "./queue.ts";
 import { basicReframeState } from "./reframe.ts";
+import { FONT_FAMILIES } from "./overlay-canvas.ts";
 import { SHORTFORM_MAX_SEC, autoRenderChannel, shortformSegmentTooLong } from "./channel-rules.ts";
 
 const TRUTHY = new Set(["1", "true", "yes", "on"]);
@@ -652,6 +653,10 @@ export function autoEditorState(
     // 요소 표시 여부 — **미지정 = 전부 표시**(하위호환). false 인 것만 뺀다.
     // 고객마다 로고·시간박스·제목을 안 쓰고 싶을 수 있다(사용자 2026-08-24).
     title?: boolean; logo?: boolean; timebox?: boolean;
+    /** 글꼴(카탈로그 id · overlay-canvas FONT_FAMILIES) — 제목·자막 각각(2026-08-28). */
+    titleFont?: string; captionFont?: string;
+    /** 방영시간 박스 배경색(#RRGGBB). */
+    channelBoxColor?: string;
   },
   // 자동배포 규칙이 정한 최종 aspect. 없으면 공장 기본(short=세로, clip=가로)을 쓴다.
   forcedAspect?: string,
@@ -704,6 +709,10 @@ export function autoEditorState(
   // 아니면 시드값 유지). 편집기·미리보기(template-preview)와 같은 축이라 결과물과 일치한다.
   const titleAccent = layoutOverride?.titleColor && /^#[0-9a-fA-F]{6}$/.test(layoutOverride.titleColor)
     ? layoutOverride.titleColor : seed.accent;
+  // 제목 글꼴 — 카탈로그(overlay-canvas FONT_FAMILIES) 에 있는 id 만 통과시킨다. 오타·구값이
+  // 그대로 흘러가면 렌더가 조용히 기본 폰트로 그려서 "바꿨는데 그대로"가 된다.
+  const titleFont = FONT_FAMILIES.some((f) => f.id === layoutOverride?.titleFont)
+    ? String(layoutOverride?.titleFont) : "";
   return {
     // 종횡비 = 5-값 enum(aspect-presets.ts). 쇼츠 = 세로 메인 크롭(위 자막띠) 기본 · 클립(롱폼) = 가로.
     // clip.aspectRatio 배정(adopt/자동배포)과 같은 값이라 라벨↔렌더가 일치한다. 자동배포 경로가
@@ -720,6 +729,9 @@ export function autoEditorState(
       id: `t${i}`, text,
       size: (i === 0 ? 106 : 107) / titleOutScale,
       color: lines.length === 1 || i === 1 ? titleAccent : "#FFFFFF",
+      // 글꼴 — 규칙 layout.titleFont(카탈로그 id). overlay-canvas 가 줄마다 이 값을 읽어
+      // 등록된 패밀리로 그린다(familyById). 모르는 id 는 거기서 기본(Pretendard)으로 접힌다.
+      ...(titleFont ? { font: titleFont } : {}),
     })),
     titleX: 50,
     titleY: seed.titleY,
@@ -764,6 +776,15 @@ export function autoEditorState(
     ...(layoutOverride && typeof layoutOverride.subtitleColor === "string"
       && /^#[0-9a-fA-F]{6}$/.test(layoutOverride.subtitleColor)
       ? { captionColor: layoutOverride.subtitleColor } : {}),
+    // 자막 글꼴 — 카탈로그 id. ASS Fontname 으로 옮기는 건 index.ts(captionAssStyle)가 한다
+    // (패밀리명은 폰트 파일이 신고하는 이름이어야 해서 한 곳에서만 매핑한다).
+    ...(FONT_FAMILIES.some((f) => f.id === layoutOverride?.captionFont)
+      ? { captionFont: String(layoutOverride?.captionFont) } : {}),
+    // 방영시간 박스 색 — 렌더(index.ts BoxLabel)가 es.channelBoxColor 를 읽는데 자동배포
+    // 경로에서만 전달이 빠져 있었다(화면에서 고를 수 없던 이유).
+    ...(layoutOverride && typeof layoutOverride.channelBoxColor === "string"
+      && /^#[0-9a-fA-F]{6}$/.test(layoutOverride.channelBoxColor)
+      ? { channelBoxColor: layoutOverride.channelBoxColor } : {}),
   };
 }
 
