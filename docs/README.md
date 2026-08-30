@@ -31,7 +31,7 @@
 1. [plans/active/step-d-master-build-plan.md](plans/active/step-d-master-build-plan.md) — **종합 빌드 플랜 (정본)**
 2. [plans/active/b2b-workspace-strategy.md](plans/active/b2b-workspace-strategy.md) — **B2B 전략 정본** (워크스페이스 판매 · 고객사 API · KT ENA 연동)
 3. [plans/active/broadcast-station-expansion-goal.md](plans/active/broadcast-station-expansion-goal.md) — 방송국 전사 확장 목표
-4. [plans/active/](plans/active/) — 진행 중 14건 · [plans/onhold/](plans/onhold/) — 보류 8건
+4. [plans/active/](plans/active/) — 진행 중 18건 · [plans/onhold/](plans/onhold/) — 보류 8건
 
 **영업·사업 (고객사에 뭘 말하나)**
 1. [plans/active/b2b-workspace-strategy.md](plans/active/b2b-workspace-strategy.md) — 구조·안전장치·온보딩 체크리스트
@@ -68,7 +68,7 @@
 
 | 폴더 | 뜻 | 개수 |
 |---|---|---|
-| **[active/](plans/active/)** | 진행 중이거나 곧 할 것 | 14 |
+| **[active/](plans/active/)** | 진행 중이거나 곧 할 것 | 18 |
 | [done/](plans/done/) | 구현 완료 — 현황은 `ops/` 문서가 정본 | 9 |
 | [onhold/](plans/onhold/) | 보류 (예산·자원 대기) | 8 |
 | [../archive/plans-2026-07/](archive/plans-2026-07/) | 역사 기록 — **따라하지 말 것** | 7 |
