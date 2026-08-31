@@ -15,8 +15,11 @@ import { describe, it, beforeEach, afterEach } from "node:test";
 
 import {
   COMMERCE_BLOCK_HEADER,
+  COMMERCE_PROVIDERS,
   COUPANG_DISCLOSURE,
   MAX_LINKS_PER_CLIP,
+  providerById,
+  providerOfUrl,
   approvedLinks,
   commerceLinksEnabled,
   isAffiliateUrl,
@@ -494,5 +497,84 @@ describe("usableLinks — 저장된 값에서 쓸 수 있는 것만", () => {
       null, "문자열", 7,
     ]);
     assert.deepEqual(out.map((l) => l.query), ["a", "e"]);
+  });
+});
+
+/**
+ * 제휴 제공자 레지스트리 (2026-08-31) — 토스쇼핑 쉐어링크 검토에서 나왔다.
+ * 토스는 수수료 10%(쿠팡 3~5%)라 붙일 값이 있는데, 쿠팡과 마찬가지로 **공식 API 가 없어**
+ * 브라우저 세션 방식이어야 한다. 발급기는 계정 승인 뒤에 만들고, 지금은 "쿠팡" 이 코드
+ * 곳곳에 박히지 않도록 접점만 한 곳으로 모았다.
+ *
+ * 여기서 지키는 것: **문구와 링크 판정이 제공자를 따라간다.** 이게 어긋나면
+ * 안 쓴 제공자 문구가 나가거나(거짓 고지) 쓴 제공자 문구가 빠진다(미고지) — 둘 다 계정 정지 쪽이다.
+ */
+describe("제휴 제공자 레지스트리", () => {
+  it("모든 제공자가 id·이름·대가성 문구를 갖는다 — 문구 없는 제공자는 넣으면 안 된다", () => {
+    assert.ok(COMMERCE_PROVIDERS.length >= 1);
+    for (const p of COMMERCE_PROVIDERS) {
+      assert.ok(p.id && p.label, `${p.id}: id·label 필요`);
+      assert.ok(p.disclosure.trim().length > 10,
+        `${p.id}: 대가성 문구는 제공자 원문이어야 한다 — 비었거나 우리가 지어낸 값이면 안 된다`);
+    }
+  });
+
+  it("id 가 겹치지 않는다", () => {
+    const ids = COMMERCE_PROVIDERS.map((p) => p.id);
+    assert.equal(new Set(ids).size, ids.length);
+  });
+
+  it("URL 로 제공자를 찾는다", () => {
+    assert.equal(providerOfUrl("https://link.coupang.com/a/abc123")?.id, "coupang");
+    assert.equal(providerById("coupang")?.id, "coupang");
+    assert.equal(providerById("nope"), undefined);
+  });
+
+  it("상품 페이지 URL 은 어느 제공자로도 안 잡힌다 — 정산 안 되는 맨 링크다", () => {
+    assert.equal(providerOfUrl("https://www.coupang.com/vp/products/123"), undefined);
+    assert.equal(providerOfUrl("https://link.coupang.com/a/x y"), undefined); // 공백 = DOM 조각
+    assert.equal(providerOfUrl(`https://link.coupang.com/a/${"x".repeat(300)}`), undefined);
+    assert.equal(providerOfUrl(""), undefined);
+  });
+
+  it("링크의 제공자는 **URL 이 정한다** — 저장된 provider 필드가 틀려도 URL 을 따른다", () => {
+    const out = usableLinks([{
+      url: "https://link.coupang.com/a/abc123", productName: "무선 이어폰",
+      provider: "somethingelse", status: "approved", createdAt: 1,
+    }]);
+    assert.equal(out.length, 1);
+    assert.equal(out[0].provider, "coupang");
+  });
+
+  it("설명란 문구는 레지스트리에서 온다 — 붙은 링크의 제공자 문구만 나간다", () => {
+    process.env.COMMERCE_LINKS_ENABLED = "1";
+    const out = withCommerceLinks("본문", [{
+      url: "https://link.coupang.com/a/abc123", productName: "무선 이어폰",
+      status: "approved", createdAt: 1,
+    }], "youtube");
+    const coupang = providerById("coupang")!;
+    assert.ok(out.includes(coupang.disclosure));
+    // 안 쓴 제공자의 문구는 나오면 안 된다.
+    for (const p of COMMERCE_PROVIDERS) {
+      if (p.id === "coupang") continue;
+      assert.ok(!out.includes(p.disclosure), `${p.id} 문구가 새어 나갔다`);
+    }
+  });
+});
+
+describe("제공자 하드코딩이 밖으로 새지 않는다 (소스 스캔)", () => {
+  const OWNED = /^(commerce\.ts|commerce\.test\.ts|coupang-.*\.ts)$/;
+
+  it("링크 도메인·대가성 문구는 commerce.ts(레지스트리)와 발급기에만 있다", () => {
+    const dir = path.dirname(fileURLToPath(import.meta.url));
+    const offenders: string[] = [];
+    for (const f of fs.readdirSync(dir)) {
+      if (!f.endsWith(".ts") || OWNED.test(f)) continue;
+      const src = fs.readFileSync(path.join(dir, f), "utf-8");
+      if (src.includes("link.coupang.com")) offenders.push(`${f}: 링크 도메인`);
+      if (src.includes("쿠팡 파트너스 활동의 일환")) offenders.push(`${f}: 대가성 문구`);
+    }
+    assert.deepEqual(offenders, [],
+      "제공자를 늘릴 때 여기저기 고치게 된다 — 레지스트리(commerce.ts)를 거쳐 쓸 것");
   });
 });
