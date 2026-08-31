@@ -28,6 +28,8 @@
     "naver:categories": "node --import tsx --env-file-if-exists=.env scripts/naver-categories.mts",
     "naver:e2e-seed": "node --import tsx --env-file .env scripts/naver-e2e-seed.mts",
     "worker:naver": "node --unhandled-rejections=warn --import tsx --env-file-if-exists=.env scripts/worker-naver.mts",
+    "worker:render": "node --unhandled-rejections=warn --import tsx --env-file-if-exists=.env scripts/worker-render.mts",
+    "server:local": "node --unhandled-rejections=warn --import tsx --env-file-if-exists=.env src/index.ts",
     "naver:login:upload": "node --import tsx --env-file-if-exists=.env scripts/naver-login-upload.mts",
     "commerce:login": "node --import tsx --env-file-if-exists=.env scripts/commerce-login-upload.mts"
   },
