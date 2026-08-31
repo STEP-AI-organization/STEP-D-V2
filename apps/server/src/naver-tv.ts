@@ -173,7 +173,7 @@ const reEscape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 /** 화면 텍스트 비교용 — 공백 차이는 무시한다. */
 const flat = (s: string) => s.replace(/\s+/g, "");
 
-async function pickCategory(
+export async function pickCategory(
   page: Page,
   cat?: { primary: string; secondary: string },
 ): Promise<void> {
@@ -241,7 +241,7 @@ async function pickCategory(
  * 실패하면 클릭+옵션선택으로 폴백한다. 실패해도 던지지 않는다: 예약이 안 걸리면 **즉시
  * 등록**되므로, 조용히 지나가면 의도치 않게 바로 공개된다. 그래서 호출부가 결과를 본다.
  */
-async function setSchedule(page: Page, when: Date): Promise<boolean> {
+export async function setSchedule(page: Page, when: Date): Promise<boolean> {
   const pad = (n: number) => String(n).padStart(2, "0");
   const ymd = `${when.getFullYear()}.${pad(when.getMonth() + 1)}.${pad(when.getDate())}`;
   const hh = pad(when.getHours());
