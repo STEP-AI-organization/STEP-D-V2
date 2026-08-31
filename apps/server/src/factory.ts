@@ -683,13 +683,20 @@ export function autoEditorState(
   } else {
     ({ lines } = wrapAutoTitle(line1 || String(rec.title ?? "")));
   }
-  // 채널 아이콘 기본값 = 프로그램 이미지(F). 렌더는 editorState.channelIconDataUrl 를 먼저 읽고
-  // 없으면 program.brandIconDataUrl 로 폴백하므로, 에디터도 같은 이미지를 보이도록 여기서 명시
-  // 시드한다. 브랜딩 아이콘(쇼츠 전용) 우선, 없으면 대표 이미지(포스터), 둘 다 없으면 미설정
-  // (에디터는 'CH' 플레이스홀더 · 렌더는 아이콘 생략 = 기존 generic 폴백).
-  const programImage = String(
-    (program as any)?.brandIconDataUrl ?? (program as any)?.posterImageDataUrl ?? "",
-  ).trim();
+  // 채널 아이콘 기본값 = 프로그램 이미지(F). 브랜딩 아이콘(쇼츠 전용) 우선, 없으면 대표
+  // 이미지(포스터), 둘 다 없으면 미설정(에디터는 'CH' 플레이스홀더 · 렌더는 아이콘 생략).
+  //
+  // ⚠️ **brandIcon 이 있으면 시드하지 않는다.** 렌더가 이미 `program.brandIconDataUrl` 로
+  // 폴백하고(index.ts 두 곳) 미리보기도 같은 폴백을 하므로(editor-shell `programIcon`),
+  // 여기서 또 넣으면 **같은 이미지를 클립마다 base64 로 복사**하는 것뿐이다. 실측(2026-08-31)
+  // ENA 는 그 복사가 `/api/state` 19.4 MB 중 17.7 MB 였다 — 이미지 2개가 클립 51개에.
+  //
+  // poster 는 반대로 **반드시 시드해야 한다** — 렌더 폴백 체인에 poster 가 없어서, 안 넣으면
+  // 발행 영상에서 아이콘이 사라진다(brandIcon 없는 프로그램이 실제로 있다).
+  const brandIcon = String((program as any)?.brandIconDataUrl ?? "").trim();
+  const programImage = brandIcon
+    ? ""                                                        // 렌더·미리보기가 알아서 폴백한다
+    : String((program as any)?.posterImageDataUrl ?? "").trim();
   // 자동배포 화면에서 고른 템플릿(policy) > 프로그램 기본(autoPublish 설정) > 장르 자동.
   // ⚠️ 선택된 템플릿은 시드 표에 없어도 **버리지 않는다.** 예전엔 TEMPLATE_SEEDS(3종 하드코드)에
   // 있는 것만 인정해서, 캔바에서 새 템플릿을 sync 하면 UI 목록에는 뜨는데(목록 = 자산 디렉토리

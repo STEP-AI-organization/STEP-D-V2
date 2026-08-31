@@ -53,6 +53,8 @@ export function EditorShell({ clipId }: { clipId: string }) {
   const {
     clips,
     media,
+    episodes,
+    programs,
     loading,
     recsForEpisode,
     mediaForEpisode,
@@ -212,11 +214,30 @@ export function EditorShell({ clipId }: { clipId: string }) {
   // AI output is always vertical, but that must not overwrite the operator's Basic layout.
   // The server independently enforces 9:16 for ai_multi; this effective state keeps preview
   // and controls honest while preserving state.aspect for a later switch back to Basic.
-  const displayState = useMemo(
-    () => (reframeMode === "ai_multi" && !isPortraitAspect(state.aspect)
-      ? { ...state, aspect: "9:16-crop-full" as AspectKey } : state),
-    [reframeMode, state],
-  );
+  /**
+   * 프로그램의 브랜딩 아이콘 — **채널 아이콘의 기본값**.
+   *
+   * 서버 렌더는 `editorState.channelIconDataUrl` 이 없으면 `program.brandIconDataUrl` 로
+   * 폴백한다(index.ts). 미리보기도 같은 폴백을 해야 편집 화면과 결과물이 맞는다 —
+   * 안 그러면 "미리보기엔 아이콘이 없는데 렌더엔 있는" 불일치가 생긴다.
+   *
+   * 예전엔 팩토리가 이 이미지를 **클립마다 editorState 안에 base64 로 복사**해 둬서 이 폴백이
+   * 필요 없었다. 그 복사가 `/api/state` 의 91%(ENA 기준 17.7 MB)를 차지해서 걷어냈고,
+   * 그 자리를 이 폴백이 메운다. 값은 화면에만 쓰고 **저장 스냅샷에는 안 들어간다**
+   * (저장은 `state`, 미리보기는 `displayState` — 섞으면 복사가 되살아난다).
+   */
+  const programIcon = useMemo(() => {
+    const ep = episodes.find((e) => e.id === clip?.episodeId);
+    const pid = ep?.programId ?? (clip as { programId?: string } | undefined)?.programId;
+    return pid ? programs.find((p) => p.id === pid)?.brandIconDataUrl : undefined;
+  }, [clip, episodes, programs]);
+
+  const displayState = useMemo(() => {
+    const base = reframeMode === "ai_multi" && !isPortraitAspect(state.aspect)
+      ? { ...state, aspect: "9:16-crop-full" as AspectKey } : state;
+    if (base.channelIconDataUrl || !programIcon) return base;
+    return { ...base, channelIconDataUrl: programIcon };
+  }, [reframeMode, state, programIcon]);
 
   // 레이아웃 탭이 종횡비의 유일한 주인이라, 예전의 force-sync ↔ override ref 줄다리기가
   // 통째로 없어졌다. 여기 남은 규칙은 하나뿐 — AI 다중 레이아웃은 세로 고정이다.

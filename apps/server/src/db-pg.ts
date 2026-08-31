@@ -2300,11 +2300,56 @@ export async function getState() {
     programs,
     episodes,
     recommendations,
-    clips,
+    clips: stripRedundantClipIcons(clips, programs, episodes),
     jobs,
     connections,
     media: media.map(mediaPublic),
   };
+}
+
+/**
+ * 클립 `editorState.channelIconDataUrl` 이 **그 프로그램의 brandIcon 과 똑같으면** 뺀다.
+ *
+ * 팩토리가 프로그램 이미지를 클립마다 base64 로 복사해 넣는데(`factory.ts`), 실측(2026-08-31)
+ * ENA 워크스페이스는 `/api/state` 19.4 MB 중 **17.7 MB 가 이 복사본**이었다 — 서로 다른
+ * 이미지는 단 2개인데 클립 51개에 장당 355 KB 씩 들어 있었다.
+ *
+ * ## 왜 이게 안전한가 (출력이 안 바뀐다)
+ *
+ * 서버 렌더는 `editorState.channelIconDataUrl` 이 없으면 `program.brandIconDataUrl` 로
+ * 폴백한다(index.ts 두 곳). 그래서 **brandIcon 과 동일한 값**만 빼면 렌더 결과가 같다.
+ * 미리보기도 같은 폴백을 한다(editor-shell `programIcon`).
+ *
+ * ## 무엇을 안 빼는가
+ *
+ *  - **brandIcon 과 다른 값** — 사람이 클립별로 고른 아이콘이다(실측 STEPAI 7개). 지우면 손실.
+ *  - **poster 로 시드된 값** — 렌더 폴백에는 poster 가 없다. 빼면 발행 영상에서 아이콘이
+ *    사라진다. brandIcon 이 없는 프로그램(실측 STEPAI 4개 중 2개)이 여기 해당한다.
+ *
+ * 저장된 데이터는 그대로다 — **내보낼 때만** 뺀다. 되돌리려면 이 함수만 지우면 된다.
+ */
+export function stripRedundantClipIcons(clips: unknown[], programs: unknown[], episodes: unknown[]): unknown[] {
+  const brandIconOf = new Map<string, string>();
+  for (const p of programs as Record<string, unknown>[]) {
+    const icon = typeof p?.brandIconDataUrl === "string" ? p.brandIconDataUrl : "";
+    if (p?.id && icon) brandIconOf.set(String(p.id), icon);
+  }
+  if (!brandIconOf.size) return clips;
+  const programOfEpisode = new Map<string, string>();
+  for (const e of episodes as Record<string, unknown>[]) {
+    if (e?.id && e?.programId) programOfEpisode.set(String(e.id), String(e.programId));
+  }
+  return clips.map((raw) => {
+    const clip = raw as Record<string, unknown>;
+    const es = clip?.editorState as Record<string, unknown> | undefined;
+    const icon = es?.channelIconDataUrl;
+    if (typeof icon !== "string" || !icon) return raw;
+    const pid = (typeof clip.programId === "string" && clip.programId)
+      || programOfEpisode.get(String(clip.episodeId ?? ""));
+    if (!pid || brandIconOf.get(pid) !== icon) return raw;   // 다르면 사람이 고른 값 — 보존
+    const { channelIconDataUrl: _redundant, ...restEditor } = es!;
+    return { ...clip, editorState: restEditor };
+  });
 }
 
 export function mediaPublic(m: MediaRow) {
