@@ -2103,6 +2103,21 @@ app.get("/api/programs", async (c) => {
   });
 });
 
+// ── 쇼츠 스타일 (프리미어 경로가 서버 값을 그대로 쓰게) ────────────────────────
+// 이중 경로(웹 편집기 / 프리미어)에서 **정본은 서버 하나**다. 프리미어 쪽에 색·글꼴을
+// 복제해 두면 여기서 바꿔도 안 따라와, 같은 프로그램 쇼츠가 경로에 따라 달라진다.
+// 자동배포 계획이 이 프로그램을 덮고 있으면 그 계획의 값이 우선이다(화면에서 고른 값).
+app.get("/api/programs/:id/shorts-style", async (c) => {
+  const id = c.req.param("id");
+  const program = await getEntity<any>("program", id);
+  if (!program) return c.json({ error: "program not found" }, 404);
+  const rules = (await listAutomationRules()) as any[];
+  const rule = rules.find((r) => r.enabled !== false
+    && (r.programId === id || (Array.isArray(r.programIds) && r.programIds.includes(id))));
+  const { shortsStyle } = await import("./factory.ts");
+  return c.json({ style: shortsStyle(program, rule) });
+});
+
 // ── get one program (incl. its understanding profile) ──
 app.get("/api/programs/:id", async (c) => {
   const program = await getEntity<Record<string, unknown>>("program", c.req.param("id"));

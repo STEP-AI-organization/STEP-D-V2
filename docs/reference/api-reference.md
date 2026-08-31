@@ -1,6 +1,6 @@
 # @stepd/server HTTP API 레퍼런스
 
-> 실측: **2026-08-28 · 라우트 251개** (GET 111 · POST 94 · DELETE 25 · PATCH 14 · PUT 7) · `apps/server/src/index.ts` 기준 — 라우트 추가 시 이 문서도 갱신.
+> 실측: **2026-08-28 · 라우트 252개** (GET 112 · POST 94 · DELETE 25 · PATCH 14 · PUT 7) · `apps/server/src/index.ts` 기준 — 라우트 추가 시 이 문서도 갱신.
 > 프론트 대응 함수는 `apps/web/src/lib/data/api.ts` 기준. 데이터 구조는 [data-model.md](data-model.md),
 > 큐·워커 동작은 [../ops/worker-queue.md](../ops/worker-queue.md) 참고.
 
@@ -85,6 +85,7 @@ API 키(`api-keys.ts`). **화이트리스트(`API_KEY_ROUTES`)에 올린 라우�
 |---|---|---|---|
 | `POST /api/programs` | 프로그램 생성 (업로드 전 필수 콘텐츠 루트) | `{ title(필수), section, targetAge, cast, programCode, category, weekdays }` → `{ program }`. SMR 필드는 `smr` 블롭으로 저장 | `createProgram` |
 | `GET /api/programs` | 프로그램 목록 (id·제목·상태만) | → `{ programs: [{ id, title, status }] }`. 드롭다운 하나 채우면 되는 클라이언트(프리미어 패널)용 — `/api/state` 전체를 받지 않게 | (웹은 `fetchState` 사용) |
+| `GET /api/programs/:id/shorts-style` | **쇼츠 스타일 정본** — 제목 강조색·글꼴·세로 위치 | → `{ style: { templateId, accent, titleFont, titleY } }` / 404. 이중 경로(웹 편집기 / 프리미어)에서 프리미어 쪽이 색·글꼴을 **복제하지 않고** 이 값을 받아 쓴다 — 복제하면 서버에서 바꿔도 안 따라와 같은 프로그램 쇼츠가 경로에 따라 달라진다. 이 프로그램을 덮는 활성 자동배포 계획이 있으면 그 계획의 layout 값이 우선 | (프리미어 패널) |
 | `GET /api/programs/:id` | 프로그램 1개 (이해 프로필 포함) | → `{ program }` / 404 | (`fetchState`로 대체) |
 | `PATCH /api/programs/:id` | 부분 병합 수정 — **body에 있는 필드만** 바뀐다 | `{ title, section, targetAge, cast, castPhotos, category, weekdays, programCode, moods, pipelineGenre, posterImageDataUrl }` → `{ program }` | `updateProgram` |
 | `POST /api/programs/:id/autofill` | 제목만으로 나머지 필드 자동 채움 (Gemini + google_search 그라운딩, 2단계: 검색·수집 → 팩트체크) | → `{ draft }`. **저장하지 않는다** — 사용자가 UI에서 확인 후 저장. 출연자·SMR은 안 채움. 실패 502 | `autofillProgram` |
