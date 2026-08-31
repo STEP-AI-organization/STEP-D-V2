@@ -21,6 +21,10 @@ import {
   openNaverContext, NAVER_TARGETS, pickCategory, setSchedule,
 } from "../src/naver-tv.ts";
 import { resolveCategory, DEFAULT_CATEGORY } from "../src/naver-categories.ts";
+import { hasNaverSession, materializeNaverSession } from "../src/naver-session.ts";
+import { getNaverAccount, getNaverSessionBlob } from "../src/db-pg.ts";
+import { openSession } from "../src/naver-session-store.ts";
+import { runAsSystem } from "../src/tenant.ts";
 
 const arg = (name: string): string | undefined => {
   const i = process.argv.indexOf(`--${name}`);
@@ -28,6 +32,8 @@ const arg = (name: string): string | undefined => {
 };
 
 const accountKey = arg("account");
+/** DB 행 id — 세션이 이 PC 에 없어 서버 보관본을 받아야 할 때 쓴다(없으면 account 를 id 로 본다). */
+const accountId = arg("account-id");
 const videoPath = arg("video");
 const primary = arg("primary") ?? "엔터";
 const secondary = arg("secondary") ?? "드라마";
@@ -63,6 +69,26 @@ const note = (step: string, ok: boolean, detail = "") => {
   results.push({ step, ok, detail });
   console.log(`${ok ? "OK  " : "FAIL"} ${step}${detail ? ` — ${detail}` : ""}`);
 };
+
+// 이 PC 에 세션 파일이 없으면 **서버 보관본을 받아 푼다** — 워커(naver.publish)가 하는 것과
+// 같은 순서다. 운영자가 웹에서 로그인해 올린 새 계정은 이 경로로만 이 PC 에 들어온다.
+// 검증이 이 단계를 건너뛰면 "새로 로그인했는데도 만료" 라는 엉뚱한 결론이 나온다.
+if (accountKey && !hasNaverSession(accountKey)) {
+  // 개발 도구라 테넌트 문맥이 없다 — 횡단 스코프로 연다(워커는 잡의 테넌트로 연다).
+  const acct = await runAsSystem(() => getNaverAccount(accountId ?? accountKey));
+  if (!acct) {
+    console.error(`계정을 못 찾았다: ${accountId ?? accountKey}`);
+    console.error("--account 는 세션 키(nva_…), --account-id 는 DB 행 id 다. 둘 중 맞는 쪽을 줄 것.");
+    process.exit(1);
+  }
+  const state = openSession(await runAsSystem(() => getNaverSessionBlob(acct.id)));
+  if (!state) {
+    console.error(`${acct.label}(${acct.accountKey}): 이 PC 에도 서버에도 세션이 없다 — 로그인이 먼저다.`);
+    process.exit(1);
+  }
+  materializeNaverSession(acct.accountKey, state);
+  console.log(`OK   세션 내려받기 — 서버 보관본을 이 PC 에 풀었다 (${acct.label} · ${acct.accountKey})`);
+}
 
 const { browser, ctx } = await openNaverContext(false, accountKey);
 const page = await ctx.newPage();
