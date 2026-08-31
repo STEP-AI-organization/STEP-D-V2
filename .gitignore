@@ -85,3 +85,9 @@ core/clips_review/
 
 # 로그인 도우미 빌드 산출물 — 113MB 바이너리다. GCS(tools/)로만 배포하고 커밋하지 않는다.
 apps/server/*.exe
+
+# 임시 자격증명·스크래치 파일 — 커밋도 빌드 업로드도 되면 안 된다.
+# 2026-08-31: `apps/server/.pgpw.tmp`(44B)가 둘 다에 안 걸려 Cloud Build 소스 tarball 에
+# 그대로 실려 올라갔다. `.env*` 패턴만으로는 이런 이름을 못 막는다.
+*.tmp
+.pgpw*

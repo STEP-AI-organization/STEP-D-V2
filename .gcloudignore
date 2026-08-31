@@ -47,3 +47,7 @@ logs/
 *.pt
 *.pth
 *.pkl
+
+# 임시 자격증명·스크래치 — 빌드 컨텍스트(=GCS 에 남는 tarball)에 실리면 안 된다.
+*.tmp
+.pgpw*
