@@ -831,7 +831,18 @@ async function runAutomationCycleLocked(): Promise<CycleReport> {
         });
 
         if (outcome.skipped.length > 0) {
-          const reason = outcome.skipped[0].reason;
+          const { code, reason } = outcome.skipped[0];
+          // ⚠️ **일시적 사유는 hold 로 굳히지 않는다.** hold 는 "사람이 봐야 한다" 는 뜻이라
+          // 한 번 걸리면 `isHeldAwaitingHuman` 이 참이 되어 다음 순방부터 영원히 hold 다 —
+          // 충전해도 자동으로 안 풀리고 운영자가 클립마다 release 를 눌러야 한다.
+          // 잔액 부족은 게이트 미통과가 아니라 **곧 사라질 상태**이므로 그냥 넘긴다.
+          // (정지 게이트는 `balance <= 0` 만 보므로, 배포 단가 3 에 잔액 1~2 인 구간이
+          //  순방을 통과해 여기까지 온다 — 그 구간이 클립을 하나씩 영구 hold 로 만들었다.)
+          if (code === "credits") {
+            await note({ ruleId: rule.id, clipId: clip.id, result: "skipped", detail: reason, accountKey });
+            // 잔액이 모자라면 이 순방의 남은 클립도 마찬가지다 — 더 돌 이유가 없다.
+            break;
+          }
           await holdClip(rule.id, clip.id, reason);
           await note({ ruleId: rule.id, clipId: clip.id, result: "held", detail: reason, accountKey });
           report.held += 1;

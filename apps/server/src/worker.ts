@@ -102,7 +102,7 @@ import {
   getNaverCredentialBlob, markNaverCredential,
 } from "./db-pg.ts";
 import { openSession, sealSession } from "./naver-session-store.ts";
-import { uploadToNaver, loginWithCredentials, NAVER_TARGETS, type NaverTarget } from "./naver-tv.ts";
+import { uploadToNaver, loginWithCredentials, NaverSessionExpiredError, NAVER_TARGETS, type NaverTarget } from "./naver-tv.ts";
 import { resolveCategory, categoryForGenre } from "./naver-categories.ts";
 import { openCredential } from "./naver-cred-store.ts";
 import { prepareWorkPath, cleanupWorkFile, sweepStaleWorkFiles } from "./naver-workdir.ts";
@@ -2306,7 +2306,8 @@ async function handleNaverPublish(job: Job): Promise<void> {
   };
 
   try {
-    // 게이트는 업로드 직전에도 다시 본다(naver-tv.ts). 여기서는 빨리 걸러 잡을 낭비하지 않는다.
+    // 여기서는 빨리 걸러 잡을 낭비하지 않는다. 권리 게이트 재확인은 아래 clipGate 가 한다
+    // (예전 주석은 "naver-tv.ts 가 다시 본다" 였는데, 거기엔 env 킬스위치뿐이고 권리 검사는 없었다).
     if (!naverUploadEnabled()) return void (await fail(NAVER_DISABLED_MESSAGE));
     const clip = await getEntity<any>("clip", clipId);
     if (!clip) { console.warn(`[worker] naver.publish: clip ${clipId} 없음 — 버림`); return; }
@@ -2314,8 +2315,11 @@ async function handleNaverPublish(job: Job): Promise<void> {
     // B2B 다계정에서 **이 검증이 제일 중요하다** —
     // A사 클립이 B사 채널에 올라가는 사고를 막는다.
     let accountKey: string | undefined;
+    // ⚠️ 블록 밖에 둔다 — 업로드 중 세션 만료를 잡아 재로그인할 때 이 계정이 필요하다.
+    // 예전엔 `if (accountId)` 안의 const 라, 만료 복구 경로에서 계정을 못 봤다.
+    let acct: Awaited<ReturnType<typeof getNaverAccount>> | undefined;
     if (accountId) {
-      const acct = await getNaverAccount(accountId);
+      acct = await getNaverAccount(accountId);
       if (!acct) return void (await fail(`네이버 계정 ${accountId} 없음`));
       if (acct.status === "disabled") return void (await fail(`네이버 계정 '${acct.label}' 이 비활성입니다`));
       // 잡의 테넌트와 계정의 테넌트가 다르면 **절대** 올리지 않는다. RLS 가 이미 막지만,
@@ -2347,6 +2351,23 @@ async function handleNaverPublish(job: Job): Promise<void> {
     } else if (!hasNaverSession()) {
       return void (await fail("네이버 세션이 없습니다 — 워커 PC 에서 `naver:login` 실행"));
     }
+    // ⚠️ **업로드 직전 권리 게이트 재확인.** 큐잉 시점(dispatchPublish)에 통과했어도 그 사이
+    // 담당자가 권리 이슈를 등록했을 수 있다. 네이버 레인은 발행 간격(NAVER_MIN_GAP_MS)이 있고
+    // 워커 PC 가 꺼져 있었으면 몇 시간 뒤에 소비되므로, 그 틈이 다른 레인보다 훨씬 길다.
+    // YouTube·TikTok·IG·FB 는 이미 여기서 멈추는데(handleDistributionPublish) **네이버만
+    // 빠져 있었다** — 차단된 클립이 그대로 올라갔고, 네이버는 지워도 노출 이력이 남는다.
+    // FLOWS F3 "어떤 경로로도 게시되지 않는다" 가 이 한 레인에서 깨져 있었다.
+    const gate = await clipGate(clipId);
+    if (!gate.allowed) {
+      console.warn(`[worker] naver.publish ${clipId}: 게이트 미통과 — ${gate.reason}`);
+      await appendGateAudit({
+        subjectType: "clip", subjectId: clipId, action: "publish.blocked",
+        fromState: gate.state, toState: "blocked", actor: "worker",
+        basis: `업로드 직전 재확인 · ${channel} · ${gate.reason}`,
+      }).catch(() => {});
+      return void (await fail(`권리 게이트 미통과 — ${gate.reason}`));
+    }
+
     if (!clip.mediaId) return void (await fail("클립이 아직 렌더되지 않았습니다 (익스포트 필요)"));
     const media = await getMedia(clip.mediaId);
     if (!media) return void (await fail("렌더된 영상 파일을 찾을 수 없습니다"));
@@ -2401,7 +2422,7 @@ async function handleNaverPublish(job: Job): Promise<void> {
       const rawAt = Number(job.payload.publishAt ?? 0);
       const publishAt = Number.isFinite(rawAt) && rawAt > Date.now() ? rawAt : undefined;
 
-      const r = await uploadToNaver({
+      const upload = () => uploadToNaver({
         target,
         accountKey,
         videoPath: localPath,
@@ -2413,6 +2434,28 @@ async function handleNaverPublish(job: Job): Promise<void> {
         category,
         artifactDir: path.join(os.homedir(), ".stepd", "naver-artifacts"),
       });
+
+      // ⚠️ **만료는 여기서만 잡힌다.** 자동 재로그인은 위쪽에서 "세션 파일이 아예 없을 때"만
+      // 돌았는데, 정작 고치려던 상황(세션이 **있는데 만료됨**)은 파일이 남아 있어 그 분기를
+      // 통과해 버렸다. 만료는 uploadToNaver 가 NaverSessionExpiredError 를 **던지는** 경로로
+      // 빠져서(naver-tv.ts) 바깥 catch 가 그냥 실패로 기록했다 — 자격증명을 저장해 뒀어도
+      // 재로그인은 한 번도 시도되지 않았고, 그날 예약분이 전부 실패했다.
+      // 여기서 한 번만 되살리고 재시도한다(무한 재시도는 계정 잠금 경로다).
+      let r: Awaited<ReturnType<typeof uploadToNaver>>;
+      try {
+        r = await upload();
+      } catch (e) {
+        if (!(e instanceof NaverSessionExpiredError) || !acct) throw e;
+        console.warn(`[worker] naver.publish ${clipId}: 세션 만료 — 자동 재로그인 시도`);
+        if (!(await tryAutoRelogin(job, acct))) {
+          await markNaverAccount(acct.id, { status: "session_expired" }).catch(() => {});
+          return void (await fail(
+            `'${acct.label}' 세션이 만료됐습니다 — 웹 배포채널 화면에서 다시 로그인하세요 ` +
+            `(아이디·비번을 저장해 두면 다음부터는 자동으로 복구됩니다)`));
+        }
+        console.log(`[worker] '${acct.label}' 자동 재로그인 성공 — 업로드 재시도`);
+        r = await upload();
+      }
       if (!r.ok) {
         return void (await fail(`${r.error ?? "업로드 실패"}${r.screenshotPath ? ` (스크린샷: ${r.screenshotPath})` : ""}`));
       }

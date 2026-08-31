@@ -2963,10 +2963,15 @@ app.get("/api/media/:id/segment", async (c) => {
   const eKey = end.toFixed(2).replace(/\./g, "_");
   const objPath = `analysis/${id}/segments/${sKey}_${eKey}.mp4`;
 
+  // ⚠️ **소유자 확인이 캐시 확인보다 먼저다.** 예전엔 이 getMedia() 가 캐시 미스 분기 **안**에
+  // 있어서, 한 번 잘려 저장된 구간은 소유자 확인 없이 누구에게나 mp4 로 나갔다 — 워크스페이스
+  // A 가 만든 캐시를 B 가 같은 URL 로 그대로 받아갔다. RLS 가 걸리는 유일한 지점이 이 호출이라
+  // 캐시 히트 경로에서 건너뛰면 경계가 사라진다(외부 API 키에도 열린 경로다).
+  const m = await getMedia(id);
+  if (!m) return c.json({ error: "media not found" }, 404);
+
   if (!(await fileExists(objPath))) {
     if (!hasFfmpeg()) return c.json({ error: "ffmpeg unavailable" }, 503);
-    const m = await getMedia(id);
-    if (!m) return c.json({ error: "media not found" }, 404);
     const masterObjPath = parseObjectPath(m.path);
     if (!(await fileExists(masterObjPath))) return c.json({ error: "source not found" }, 404);
     const srcPath = useGcs() ? await signedReadUrl(masterObjPath, 60 * 60 * 1000) : m.path;
@@ -3147,6 +3152,10 @@ app.get("/api/media/:id/analysis/frames/:name", async (c) => {
   if (!/^[\w-]+$/.test(id)) return c.json({ error: "bad media id" }, 400);
   if (!/^scene_\d+\.jpg$/.test(name)) return c.json({ error: "bad frame name" }, 400);
 
+  // ⚠️ **소유자 확인이 여기 있어야 한다.** 이 라우트는 GCS 경로를 URL 파라미터로 조립할 뿐
+  // DB 를 안 타므로, RLS 가 개입할 지점이 없다 — getMedia() 가 그 지점을 만든다(없으면 404).
+  // 없으면 mediaId 하나로 남의 워크스페이스 산출물이 열린다(외부 API 키에도 열린 경로다).
+  if (!(await getMedia(id))) return c.json({ error: "media not found" }, 404);
   const objPath = `analysis/${id}/scene_frames/${name}`;
   if (!(await fileExists(objPath))) return c.json({ error: "not found" }, 404);
 
@@ -3164,6 +3173,10 @@ app.get("/api/media/:id/analysis/faces/:name", async (c) => {
   if (!/^[\w-]+$/.test(id)) return c.json({ error: "bad media id" }, 400);
   if (!/^[MF]\d+_\d+\.jpg$/.test(name)) return c.json({ error: "bad face crop name" }, 400);
 
+  // ⚠️ **소유자 확인이 여기 있어야 한다.** 이 라우트는 GCS 경로를 URL 파라미터로 조립할 뿐
+  // DB 를 안 타므로, RLS 가 개입할 지점이 없다 — getMedia() 가 그 지점을 만든다(없으면 404).
+  // 없으면 mediaId 하나로 남의 워크스페이스 산출물이 열린다(외부 API 키에도 열린 경로다).
+  if (!(await getMedia(id))) return c.json({ error: "media not found" }, 404);
   const objPath = `analysis/${id}/face_clusters/${name}`;
   if (!(await fileExists(objPath))) return c.json({ error: "not found" }, 404);
 
@@ -3177,6 +3190,10 @@ app.get("/api/media/:id/analysis/faces/:name", async (c) => {
 app.get("/api/media/:id/faces", async (c) => {
   const id = c.req.param("id");
   if (!/^[\w-]+$/.test(id)) return c.json({ error: "bad media id" }, 400);
+  // ⚠️ **소유자 확인이 여기 있어야 한다.** 이 라우트는 GCS 경로를 URL 파라미터로 조립할 뿐
+  // DB 를 안 타므로, RLS 가 개입할 지점이 없다 — getMedia() 가 그 지점을 만든다(없으면 404).
+  // 없으면 mediaId 하나로 남의 워크스페이스 산출물이 열린다(외부 API 키에도 열린 경로다).
+  if (!(await getMedia(id))) return c.json({ error: "media not found" }, 404);
   const objPath = `analysis/${id}/faces.json`;
   if (!(await fileExists(objPath))) return c.json({ clusters: {}, mapping: {}, labeled_segments: 0 });
   // 로컬 스토리지는 STEPD_STORAGE_DIR 하위 · GCS 모드는 signed URL로 refetch. 여기선 로컬만.
@@ -3193,6 +3210,10 @@ app.get("/api/media/:id/analysis/ppl_frames/:name", async (c) => {
   const name = c.req.param("name");
   if (!/^[\w-]+$/.test(id)) return c.json({ error: "bad media id" }, 400);
   if (!/^[\w-]+_\d+\.jpg$/.test(name)) return c.json({ error: "bad ppl frame name" }, 400);
+  // ⚠️ **소유자 확인이 여기 있어야 한다.** 이 라우트는 GCS 경로를 URL 파라미터로 조립할 뿐
+  // DB 를 안 타므로, RLS 가 개입할 지점이 없다 — getMedia() 가 그 지점을 만든다(없으면 404).
+  // 없으면 mediaId 하나로 남의 워크스페이스 산출물이 열린다(외부 API 키에도 열린 경로다).
+  if (!(await getMedia(id))) return c.json({ error: "media not found" }, 404);
   const objPath = `analysis/${id}/ppl_frames/${name}`;
   if (!(await fileExists(objPath))) return c.json({ error: "not found" }, 404);
   return new Response(createReadStream(objPath), {
@@ -3206,6 +3227,10 @@ app.get("/api/media/:id/analysis/ppl_frames/:name", async (c) => {
 app.get("/api/media/:id/ppl", async (c) => {
   const id = c.req.param("id");
   if (!/^[\w-]+$/.test(id)) return c.json({ error: "bad media id" }, 400);
+  // ⚠️ **소유자 확인이 여기 있어야 한다.** 이 라우트는 GCS 경로를 URL 파라미터로 조립할 뿐
+  // DB 를 안 타므로, RLS 가 개입할 지점이 없다 — getMedia() 가 그 지점을 만든다(없으면 404).
+  // 없으면 mediaId 하나로 남의 워크스페이스 산출물이 열린다(외부 API 키에도 열린 경로다).
+  if (!(await getMedia(id))) return c.json({ error: "media not found" }, 404);
   const objPath = `analysis/${id}/ppl.json`;
   if (!(await fileExists(objPath))) return c.json({ detections: [], brand_summary: {} });
   return new Response(createReadStream(objPath), {
@@ -3224,6 +3249,10 @@ app.patch("/api/media/:id/faces/mapping", async (c) => {
   if (!patchMap || typeof patchMap !== "object" || Array.isArray(patchMap)) {
     return c.json({ error: "mapping (object) required" }, 400);
   }
+  // ⚠️ 소유자 확인 — 이 라우트는 **쓰기**다(얼굴 라벨 이름 변경). 경로를 URL 파라미터로
+  // 조립해 DB 를 안 타므로 RLS 가 개입할 지점이 없다. 없으면 mediaId 하나로 남의 워크스페이스
+  // 분석 결과를 고칠 수 있다. `media-object-access.test.ts` 가 이 규칙을 강제한다.
+  if (!(await getMedia(id))) return c.json({ error: "media not found" }, 404);
   const useGCS = !!process.env.GCS_BUCKET;
   const facesObjectPath = `analysis/${id}/faces.json`;
   const storageBase = process.env.STEPD_STORAGE_DIR
