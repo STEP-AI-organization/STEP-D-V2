@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { stripRedundantClipIcons } from "./db-pg.ts";
+import { stripRedundantClipIcons, stripProgramImages } from "./db-pg.ts";
 
 /**
  * `/api/state` 가 클립마다 복사된 채널 아이콘을 빼는 규칙.
@@ -72,5 +72,47 @@ describe("/api/state — 중복 복사된 채널 아이콘만 뺀다", () => {
   it("brandIcon 을 가진 프로그램이 하나도 없으면 아무것도 안 건드린다", () => {
     const rows = [withIcon(ICON)];
     assert.equal(stripRedundantClipIcons(rows, [{ id: "p2" }], EPISODES)[0], rows[0]);
+  });
+});
+
+/**
+ * 프로그램 base64 이미지도 `/api/state` 에서 뺀다 — 실측(2026-08-31) ENA 기준 1.73 MB 중
+ * **1.33 MB(77%)** 가 포스터·쇼츠 아이콘이었다. 화면은 `/api/programs/:id/image/:kind` 로 받는다.
+ *
+ * ⚠️ **저장은 건드리지 않는다.** 렌더·팩토리는 DB 에서 직접 읽고(getEntity), 설정 화면은
+ * `GET /api/programs/:id` 로 원본을 따로 받는다 — 안 그러면 빈 값을 저장해 이미지를 지운다.
+ */
+describe("/api/state — 프로그램 base64 이미지를 뺀다", () => {
+  const POSTER = "data:image/png;base64,AAAA";
+  const ICON = "data:image/png;base64,BBBB";
+
+  it("두 필드를 빼고 있다/없다만 남긴다", () => {
+    const [p] = stripProgramImages([
+      { id: "p1", title: "x", posterImageDataUrl: POSTER, brandIconDataUrl: ICON },
+    ]) as any[];
+    assert.equal(p.posterImageDataUrl, undefined);
+    assert.equal(p.brandIconDataUrl, undefined);
+    assert.equal(p.hasPosterImage, true);
+    assert.equal(p.hasBrandIcon, true);
+    assert.equal(p.title, "x", "다른 필드는 그대로여야 한다");
+  });
+
+  it("한쪽만 있으면 그쪽 플래그만 선다", () => {
+    const [a] = stripProgramImages([{ id: "p", posterImageDataUrl: POSTER }]) as any[];
+    assert.equal(a.hasPosterImage, true);
+    assert.equal(a.hasBrandIcon, undefined, "없는데 true 면 화면이 매번 404 를 때린다");
+  });
+
+  it("이미지가 없는 프로그램은 손대지 않는다", () => {
+    const rows = [{ id: "p", title: "x" }];
+    assert.equal(stripProgramImages(rows)[0], rows[0]);
+  });
+
+  // castPhotos 는 설정 화면과 얽힘이 커서 이번엔 안 뺐다 — 빼려면 그 화면을 같이 고쳐야 한다.
+  it("castPhotos 는 아직 남긴다 (의도)", () => {
+    const [p] = stripProgramImages([
+      { id: "p", posterImageDataUrl: POSTER, castPhotos: { 홍길동: POSTER } },
+    ]) as any[];
+    assert.deepEqual(p.castPhotos, { 홍길동: POSTER });
   });
 });

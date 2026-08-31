@@ -28,6 +28,7 @@ import {
 } from "@/lib/programs";
 import type { Episode, Program, ProgramStatus } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { programImageUrl } from "@/lib/media-url";
 
 const STATUS_TAG: Record<ProgramStatus, string> = {
   airing: "sd-tag sd-tag--airing",
@@ -209,10 +210,10 @@ function ProgramCard({
         className="sd-ph h-[140px] shrink-0 overflow-hidden"
         style={{ borderBottom: "1px solid var(--sd-border)" }}
       >
-        {program.posterImageDataUrl ? (
+        {program.hasPosterImage ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img
-            src={program.posterImageDataUrl}
+            src={programImageUrl(program.id, "poster")}
             alt=""
             className="size-full object-cover"
           />

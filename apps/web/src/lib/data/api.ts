@@ -452,6 +452,18 @@ export async function createProgram(input: CreateProgramInput): Promise<{ progra
 /** Update a program in place. 서버 PATCH는 지정한 필드만 병합 — 여기 안 넣은 필드는 유지됨.
  *  cast는 전체 재정의(빈 배열로 덮어쓰면 캐스트 없음). 재분석 시 refine 지문에 cast_registry가
  *  들어가 있어, cast 바뀌면 다음 content.analyze에서 refined.json이 자동 재생성됨. */
+/**
+ * 프로그램 1건 — **base64 이미지 원본을 포함한다.**
+ *
+ * `/api/state` 는 응답 크기 때문에 `posterImageDataUrl`·`brandIconDataUrl` 을 빼고
+ * 있다/없다 플래그만 보낸다. 원본이 필요한 곳은 **설정 화면뿐**이라 거기서만 이걸 부른다.
+ * ⚠️ 이 값 없이 저장하면 서버 PATCH 가 빈 문자열을 **삭제**로 받아 이미지가 지워진다.
+ */
+export async function fetchProgram(id: string): Promise<Program> {
+  const res = await fetch(`${API_BASE}/programs/${id}`, { cache: "no-store" });
+  return (await json<{ program: Program }>(res)).program;
+}
+
 export type UpdateProgramInput = Partial<CreateProgramInput>;
 export async function updateProgram(id: string, patch: UpdateProgramInput): Promise<{ program: Program }> {
   return json(

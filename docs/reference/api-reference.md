@@ -1,6 +1,6 @@
 # @stepd/server HTTP API 레퍼런스
 
-> 실측: **2026-08-28 · 라우트 250개** (GET 110 · POST 94 · DELETE 25 · PATCH 14 · PUT 7) · `apps/server/src/index.ts` 기준 — 라우트 추가 시 이 문서도 갱신.
+> 실측: **2026-08-28 · 라우트 251개** (GET 111 · POST 94 · DELETE 25 · PATCH 14 · PUT 7) · `apps/server/src/index.ts` 기준 — 라우트 추가 시 이 문서도 갱신.
 > 프론트 대응 함수는 `apps/web/src/lib/data/api.ts` 기준. 데이터 구조는 [data-model.md](data-model.md),
 > 큐·워커 동작은 [../ops/worker-queue.md](../ops/worker-queue.md) 참고.
 
@@ -43,6 +43,7 @@ API 키(`api-keys.ts`). **화이트리스트(`API_KEY_ROUTES`)에 올린 라우�
 |---|---|---|---|
 | `GET /health` | 서버 생존 + DB/ffmpeg 준비 + **실업로드 게이트 상태** | → `{ ok: dbReady, ffmpeg, youtubeUpload }`. `youtubeUpload`는 비밀이 아니라 게이트 상태 — 배포된 리비전이 송출 불가임을 가장 빨리 확인하는 수단이고, 웹이 publish 액션을 숨기는 근거다 | (웹 미사용) |
 | `GET /api/health` | `/health` 의 `/api` 별칭 — **웹 연결 표시등 전용** | 웹은 `API_BASE`(프로덕션 `/api/proxy/api`) 뒤에 붙여 부르므로 `/api` 밖의 `/health` 를 못 쓴다 | 사이드바 `ConnectionStatus` |
+| `GET /api/programs/:id/image/:kind` | 프로그램 포스터·쇼츠 아이콘을 **바이트로** 서빙 (`kind`=`poster`\|`icon`) | 저장은 그대로 base64 · `/api/state` 는 이 필드를 빼고 `hasPosterImage`·`hasBrandIcon` 만 보낸다 | `programImageUrl` |
 | `GET /api/state` | 웹 InitialData 전체 (엔티티 + 미디어) | → `{ programs, episodes, recommendations, clips, jobs, connections, media }` | `fetchState` |
 
 > ⚠️ **`/api/state` 는 무겁다 — 실측 평균 11 MB/회**(2026-08-31 · 클립마다 `editorState` 가
@@ -50,6 +51,13 @@ API 키(`api-keys.ts`). **화이트리스트(`API_KEY_ROUTES`)에 올린 라우�
 > 사이드바가 연결 표시등을 그리려고 이걸 8초마다 불러서, 탭 하나당 시간당 ~5 GB 가
 > Cloud Run → Vercel 함수로 흘렀다(3시간 34.5 GB · 3,105회). 프로덕션 웹은 `/api/proxy` 를
 > 거치므로 그게 전부 Vercel **Fast Origin Transfer** 로 청구된다. 연결 확인은 `/api/health`.
+>
+> **2026-08-31 슬림화 3종** — 응답에서 빼는 것들(저장은 그대로다):
+> ① `job` 목록 상한 200(영구 누적이라 안 막으면 시간에 비례해 자란다)
+> ② 클립 `editorState.channelIconDataUrl` 중 **프로그램 brandIcon 과 같은 복사본**
+>   (ENA 실측 17.7 MB — 이미지 2개가 클립 51개에 복사돼 있었다)
+> ③ 프로그램 `posterImageDataUrl`·`brandIconDataUrl`(ENA 실측 1.33 MB) → 위 image 라우트로
+> 결과: ENA 기준 **19.4 MB → 약 0.4 MB**. `castPhotos` 는 아직 남아 있다(설정 화면 얽힘).
 
 ## 검색 — 자연어 영상 검색 (`search_segments` · pgvector)
 

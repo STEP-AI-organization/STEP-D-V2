@@ -83,6 +83,12 @@ export interface Program {
   posterImageDataUrl?: string;
   /** 쇼츠 브랜딩 아이콘(data URL) — 자동 렌더 하단 원형 아이콘. 프로그램에서 미리 설정. */
   brandIconDataUrl?: string;
+  /** ⚠️ 위 두 base64 필드는 **`/api/state` 응답에 없다** — 있다/없다만 아래 플래그로 온다.
+   *  실측(2026-08-31) ENA 기준 `/api/state` 1.73 MB 중 1.33 MB(77%)가 이 둘이었다.
+   *  이미지는 `programImageUrl(id, "poster"|"icon")` 로 받는다(브라우저가 캐시한다).
+   *  원본 data URL 이 필요한 곳은 설정 화면뿐이고 `GET /api/programs/:id` 로 따로 받는다. */
+  hasPosterImage?: boolean;
+  hasBrandIcon?: boolean;
   /** 출연자별 인물 이미지 매핑 — cast 배열의 이름을 키로 data URL 저장.
    *  cast에서 이름이 제거되면 해당 키도 정리(서버 PATCH 시). */
   castPhotos?: Record<string, string>;

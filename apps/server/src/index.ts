@@ -2110,6 +2110,38 @@ app.get("/api/programs/:id", async (c) => {
   return c.json({ program });
 });
 
+/**
+ * 프로그램 이미지(포스터·쇼츠 아이콘)를 **바이트로** 서빙한다.
+ *
+ * 저장은 지금도 엔티티 안 base64 data URL 이다. 바꾼 건 **내보내는 방식**뿐 —
+ * `/api/state` 는 이 필드를 빼고(`db-pg.ts stripProgramImages`) 화면은 이 URL 로 그린다.
+ *
+ * 왜: 실측(2026-08-31) ENA 의 `/api/state` 1.73 MB 중 **1.33 MB(77%)가 이 두 필드**였다.
+ * 목록 화면 한 번 여는 데 필요 없는 바이트가 매 호출마다 따라 나왔고, 프로덕션 웹은
+ * `/api/proxy`(Vercel 함수)를 거치므로 그게 그대로 Fast Origin Transfer 로 청구된다.
+ * `<img src>` 로 받으면 브라우저가 캐시하고, 안 보는 화면에서는 아예 안 받는다.
+ *
+ * 캐시 5분: 편집한 사람은 로컬 상태로 즉시 보이고(설정 화면), 다른 화면은 5분 안에 따라온다.
+ * 영구 캐시로 두면 포스터를 바꿔도 안 바뀌는 게 더 나쁘다.
+ */
+app.get("/api/programs/:id/image/:kind", async (c) => {
+  const kind = c.req.param("kind");
+  const field = kind === "poster" ? "posterImageDataUrl"
+    : kind === "icon" ? "brandIconDataUrl" : "";
+  if (!field) return c.json({ error: "kind must be poster|icon" }, 400);
+
+  const program = await getEntity<Record<string, unknown>>("program", c.req.param("id"));
+  if (!program) return c.json({ error: "program not found" }, 404);
+  const raw = typeof program[field] === "string" ? String(program[field]) : "";
+  const m = /^data:(image\/[\w.+-]+);base64,(.+)$/i.exec(raw);
+  if (!m) return c.json({ error: "no image" }, 404);
+
+  return new Response(Buffer.from(m[2], "base64"), {
+    status: 200,
+    headers: { "Content-Type": m[1], "Cache-Control": "private, max-age=300" },
+  });
+});
+
 // ── 얼굴 분석 → program 수동 sync (파이프라인 native crash 우회) ──
 // 워커 python subprocess가 native cleanup crash로 tsx까지 죽어 자동 sync 못 도달하는 경우
 // 사용자가 UI에서 강제 트리거. mediaId 없으면 이 프로그램의 가장 최근 분석 media 자동 선택.

@@ -48,3 +48,15 @@ export function clipVideoSrc(clip: { videoUrl?: string; rendered?: boolean }): s
   if (!clip.rendered || !clip.videoUrl) return undefined;
   return absolute(clip.videoUrl);
 }
+
+/**
+ * 프로그램 이미지 URL. `/api/state` 가 base64 를 빼고 `hasPosterImage`·`hasBrandIcon` 만
+ * 보내므로, 화면은 그 플래그를 보고 이 URL 을 `<img src>` 에 건다.
+ * 없는 프로그램에 걸면 매번 404 를 때려보게 되므로 **플래그를 먼저 확인할 것.**
+ */
+export function programImageUrl(
+  programId: string | undefined,
+  kind: "poster" | "icon",
+): string | undefined {
+  return programId ? `${API_BASE}/programs/${programId}/image/${kind}` : undefined;
+}

@@ -20,6 +20,7 @@ import {
   fetchCastPhotos, uploadCastPhoto,
   deleteCastPhotos, type ThumbnailStyleProfile, type CastPhotoEntry,
   fetchNaverCategories, type NaverCategory,
+  fetchProgram,
 } from "@/lib/data/api";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -152,8 +153,12 @@ function ProgramDetailInner({
   const [cast, setCast] = useState<string[]>(program.cast ?? []);
   const [newName, setNewName] = useState("");
   const [castPhotos, setCastPhotos] = useState<Record<string, string>>(program.castPhotos ?? {});
-  const [posterImageDataUrl, setPosterImageDataUrl] = useState(program.posterImageDataUrl ?? "");
-  const [brandIconDataUrl, setBrandIconDataUrl] = useState(program.brandIconDataUrl ?? "");
+  // ⚠️ **base64 원본은 `/api/state` 에 없다**(응답 크기 때문에 서버가 뺀다) — 이 화면만
+  // `GET /api/programs/:id` 로 따로 받는다. 받기 전에 저장하면 서버 PATCH 가 빈 문자열을
+  // **삭제**로 받아 포스터·아이콘이 지워진다. 그래서 `imagesLoaded` 전에는 payload 에서 뺀다.
+  const [posterImageDataUrl, setPosterImageDataUrl] = useState("");
+  const [brandIconDataUrl, setBrandIconDataUrl] = useState("");
+  const [imagesLoaded, setImagesLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
   // AI 자동 채움 결과 (마지막 실행 · 근거 URL 노출용 · 페이지 새로고침 시 사라짐)
   const [autofilling, setAutofilling] = useState(false);
@@ -215,8 +220,6 @@ function ProgramDetailInner({
     setMoods(program.moods ?? []);
     setCast(program.cast ?? []);
     setCastPhotos(program.castPhotos ?? {});
-    setPosterImageDataUrl(program.posterImageDataUrl ?? "");
-    setBrandIconDataUrl(program.brandIconDataUrl ?? "");
   }, [
     program.id, program.title, program.section, program.targetAge,
     program.status, program.owner, program.pipelineGenre,
@@ -228,6 +231,21 @@ function ProgramDetailInner({
     program.naverCategory,
     hydratedRef,
   ]);
+
+  // 이미지 원본 로드 — 이게 끝나야 저장 payload 에 이미지 필드를 싣는다(위 주석 참고).
+  useEffect(() => {
+    let alive = true;
+    setImagesLoaded(false);
+    void fetchProgram(program.id)
+      .then((full) => {
+        if (!alive) return;
+        setPosterImageDataUrl(full.posterImageDataUrl ?? "");
+        setBrandIconDataUrl(full.brandIconDataUrl ?? "");
+        setImagesLoaded(true);
+      })
+      .catch(() => { /* 실패하면 imagesLoaded 가 false 로 남아 이미지 필드를 안 보낸다 = 안전 */ });
+    return () => { alive = false; };
+  }, [program.id]);
 
   // 네이버 클립 분류표 — 자유입력이면 목록에 없는 값이 저장되고, 그건 발행 직전에야 걸린다.
   useEffect(() => {
@@ -424,8 +442,8 @@ function ProgramDetailInner({
         titlePrompt: titlePrompt.trim(),
         recommendPrompt: recommendPrompt.trim(),
         moods,
-        posterImageDataUrl,
-        brandIconDataUrl,
+        // 원본을 못 받았으면 **보내지 않는다** — 빈 문자열은 서버에서 삭제로 읽힌다.
+        ...(imagesLoaded ? { posterImageDataUrl, brandIconDataUrl } : {}),
         castPhotos,
       });
       onOpenToast({ title: "저장됨", description: title.trim(), tone: "done" });

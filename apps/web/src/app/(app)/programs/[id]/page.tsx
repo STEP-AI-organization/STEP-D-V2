@@ -17,7 +17,7 @@ import { useMemo, useState } from "react";
 import { UploadVideoButton } from "@/components/upload-video-dialog";
 import { useToast } from "@/components/ui/toast";
 import { PIPELINE_STAGE_LABELS } from "@/lib/constants";
-import { clipThumbSrc, mediaThumbSrc } from "@/lib/media-url";
+import { clipThumbSrc, mediaThumbSrc, programImageUrl } from "@/lib/media-url";
 import { useAppData } from "@/lib/data/store";
 import {
   PROGRAM_STATUS_LABEL,
@@ -120,9 +120,9 @@ export default function ProgramHomePage() {
       {/* ── 헤더 ─────────────────────────────────────────────────────────────── */}
       <div className="flex flex-wrap items-start gap-4">
         <div className="sd-ph size-[88px] shrink-0 overflow-hidden rounded-full">
-          {program.posterImageDataUrl ? (
+          {program.hasPosterImage ? (
             // eslint-disable-next-line @next/next/no-img-element
-            <img src={program.posterImageDataUrl} alt="" className="size-full object-cover" />
+            <img src={programImageUrl(program.id, "poster")} alt="" className="size-full object-cover" />
           ) : (
             <span className="text-center leading-tight">
               프로그램

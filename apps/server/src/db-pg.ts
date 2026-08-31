@@ -2297,7 +2297,7 @@ export async function getState() {
     listMedia(),
   ]);
   return {
-    programs,
+    programs: stripProgramImages(programs),
     episodes,
     recommendations,
     clips: stripRedundantClipIcons(clips, programs, episodes),
@@ -2328,6 +2328,36 @@ export async function getState() {
  *
  * 저장된 데이터는 그대로다 — **내보낼 때만** 뺀다. 되돌리려면 이 함수만 지우면 된다.
  */
+/**
+ * 프로그램의 base64 이미지를 **내보낼 때만** 뺀다 — 저장은 그대로다.
+ *
+ * 실측(2026-08-31): ENA 의 `/api/state` 1.73 MB 중 **1.33 MB(77%)가 포스터·쇼츠 아이콘**
+ * base64 였다. 목록 한 번 그리는 데 필요 없는 바이트가 매 호출마다 따라 나왔다.
+ * 화면은 `GET /api/programs/:id/image/:kind` 로 받는다 — 브라우저가 캐시하고, 안 보는
+ * 화면에서는 아예 안 받는다.
+ *
+ * ⚠️ **있다/없다는 남긴다**(`hasPosterImage`·`hasBrandIcon`). 화면이 "이미지가 있는지" 를
+ * 알아야 URL 을 걸지 플레이스홀더를 그릴지 정한다 — 그걸 없애면 매번 404 를 때려 본다.
+ *
+ * ⚠️ 렌더·팩토리는 **DB 에서 직접** 읽으므로(getEntity) 영향이 없다. 설정 화면만은 원본이
+ * 필요해서 `GET /api/programs/:id` 로 따로 받는다 — 안 그러면 빈 값을 저장해 이미지를 지운다.
+ * `castPhotos` 는 아직 안 뺀다(설정 화면과 얽힘이 커서 별건).
+ */
+export function stripProgramImages(programs: unknown[]): unknown[] {
+  return programs.map((raw) => {
+    const p = raw as Record<string, unknown>;
+    const hasPoster = typeof p?.posterImageDataUrl === "string" && p.posterImageDataUrl !== "";
+    const hasIcon = typeof p?.brandIconDataUrl === "string" && p.brandIconDataUrl !== "";
+    if (!hasPoster && !hasIcon) return raw;
+    const { posterImageDataUrl: _p, brandIconDataUrl: _i, ...rest } = p;
+    return {
+      ...rest,
+      ...(hasPoster ? { hasPosterImage: true } : {}),
+      ...(hasIcon ? { hasBrandIcon: true } : {}),
+    };
+  });
+}
+
 export function stripRedundantClipIcons(clips: unknown[], programs: unknown[], episodes: unknown[]): unknown[] {
   const brandIconOf = new Map<string, string>();
   for (const p of programs as Record<string, unknown>[]) {

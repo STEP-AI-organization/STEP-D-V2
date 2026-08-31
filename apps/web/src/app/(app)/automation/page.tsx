@@ -65,7 +65,7 @@ import {
 import { useAppData } from "@/lib/data/store";
 import { channelLabel, PIPELINE_STAGES } from "@/lib/constants";
 import type { Clip, Episode } from "@/lib/types";
-import { clipThumbSrc, mediaThumbSrc } from "@/lib/media-url";
+import { clipThumbSrc, mediaThumbSrc, programImageUrl } from "@/lib/media-url";
 import { cn } from "@/lib/utils";
 
 /**
@@ -1465,7 +1465,7 @@ export default function AutomationPage() {
                       frameSrc={sampleFrameSrc}
                       subtitlesOn={subtitles}
                       timeboxText={programs.find((p) => p.id === selProgram)?.schedule}
-                      iconSrc={programs.find((p) => p.id === selProgram)?.brandIconDataUrl}
+                      iconSrc={programs.find((p) => p.id === selProgram)?.hasBrandIcon ? programImageUrl(selProgram, "icon") : undefined}
                     />
                   </button>
                   <span className="text-center text-[10px]" style={{ color: "var(--sd-mut)" }}>
@@ -1978,7 +1978,7 @@ export default function AutomationPage() {
           onSubtitlesChange={setSubtitles}
           // 시간박스 문구 주석은 컴포넌트 prop 정의에 있다 — 선택 프로그램의 편성 문구, 없으면 예시.
           timeboxText={programs.find((p) => p.id === selProgram)?.schedule}
-          iconSrc={programs.find((p) => p.id === selProgram)?.brandIconDataUrl}
+          iconSrc={programs.find((p) => p.id === selProgram)?.hasBrandIcon ? programImageUrl(selProgram, "icon") : undefined}
           onLayoutChange={setLayout}
           onClose={() => setTplPreviewOpen(false)}
         />

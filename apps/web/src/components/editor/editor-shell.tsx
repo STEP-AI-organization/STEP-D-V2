@@ -32,6 +32,7 @@ import {
   type PendingTrimReframe,
 } from "@/lib/editor/reframe";
 import { type ReframeMode } from "@/lib/types";
+import { programImageUrl } from "@/lib/media-url";
 
 // 좌/우 리사이즈 패널의 반응형 게이트 — 예전 aside 의 `hidden lg:flex`/`hidden md:flex` 를
 // 대체한다(리사이즈 패널은 CSS `hidden` 으로 폭을 회수하지 못해 JS 로 존재 여부를 정한다).
@@ -229,7 +230,9 @@ export function EditorShell({ clipId }: { clipId: string }) {
   const programIcon = useMemo(() => {
     const ep = episodes.find((e) => e.id === clip?.episodeId);
     const pid = ep?.programId ?? (clip as { programId?: string } | undefined)?.programId;
-    return pid ? programs.find((p) => p.id === pid)?.brandIconDataUrl : undefined;
+    const prog = pid ? programs.find((p) => p.id === pid) : undefined;
+    // `/api/state` 는 base64 를 안 보낸다 — 미리보기는 URL 로 받는다(`<img src>` 라 동일하게 그려진다).
+    return prog?.hasBrandIcon ? programImageUrl(prog.id, "icon") : undefined;
   }, [clip, episodes, programs]);
 
   const displayState = useMemo(() => {
