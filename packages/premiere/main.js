@@ -437,6 +437,21 @@ async function readMaybe(obj, ...names) {
   return null;
 }
 
+/**
+ * 열린 **프로젝트**만 필요한 자리 — 시퀀스는 없어도 된다.
+ *
+ * 왜 나눴나: 빈 프로젝트(원본만 가져온 상태)에서 "추천 누르면 시퀀스 만들기" 를 하려는데,
+ * activeSequence() 를 쓰면 *"활성 시퀀스가 없습니다"* 로 먼저 막힌다 — 만들어 주려는
+ * 기능이 시퀀스가 없다는 이유로 못 도는 셈이다.
+ */
+async function activeProject() {
+  const api = ppro();
+  if (!api) throw new Error("이 프리미어에서는 프로젝트를 다룰 수 없습니다 (premierepro 모듈 없음).");
+  const project = await readMaybe(api.Project, "getActiveProject");
+  if (!project) throw new Error("열려 있는 프로젝트가 없습니다.");
+  return { api, project };
+}
+
 async function activeSequence() {
   const api = ppro();
   if (!api) throw new Error("이 프리미어에서는 시퀀스 내보내기를 쓸 수 없습니다 (premierepro 모듈 없음).");
@@ -802,7 +817,7 @@ async function fetchTitlePng(rec, folder, aspect) {
 
 /** 이름으로 프로젝트 항목을 찾아 **그 자리에서** 쓴다(findItemsByRecIds 와 같은 이유). */
 async function findItemsByFileNames(names, use) {
-  const { api, project } = await activeSequence();
+  const { api, project } = await activeProject();
   const want = new Map(names.map((n) => [n, null]));
   const root = await project.getRootItem();
   const queue = [root];
@@ -849,7 +864,7 @@ function subclipName(r) {
 }
 
 async function findMasterItem(filename, use) {
-  const { api, project } = await activeSequence();
+  const { api, project } = await activeProject();
   if (!filename) throw new Error("이 추천에 연결된 원본 파일 정보가 없습니다.");
   const root = await project.getRootItem();
   const wanted = String(filename).toLowerCase();
@@ -1058,7 +1073,7 @@ async function makeSubclipsForRecs(recs, onStage) {
  *    추천 id 를 박아 두고(makeSubclips 와 같은 규칙) 커밋 뒤에 그 이름으로 되찾는다.
  */
 async function findItemsByRecIds(recIds, use) {
-  const { api, project } = await activeSequence();
+  const { api, project } = await activeProject();
   const want = new Map(recIds.map((id) => [String(id), null]));
   const root = await project.getRootItem();
   const queue = [root];
@@ -1580,14 +1595,113 @@ function renderRecs() {
   syncRecButtons();
 }
 
-async function jumpToRec(r) {
+/**
+ * 추천을 누르면 **그 구간만의 세로 시퀀스**를 만들어 연다 (사용자 2026-08-31:
+ * *"누르면 새 시퀀스 만들어서 틀어주자."*).
+ *
+ * 왜 이게 이동보다 나은가: 원본 타임라인에서 그 시각으로 점프해 봐야 **가로 원본**이 보인다.
+ * 편집자가 판단해야 하는 건 "이 구간이 **쇼츠로** 쓸 만한가" 라, 세로 프레임에 제목까지 얹힌
+ * 상태를 봐야 한다. 그래서 누를 때마다 그 구간을 잘라 세로 시퀀스로 만들어 띄운다.
+ *
+ * 두 번째부터는 **다시 만들지 않는다** — 같은 이름의 시퀀스가 이미 있으면 그걸 연다.
+ * (누를 때마다 새로 만들면 프로젝트가 같은 이름 시퀀스로 뒤덮인다)
+ *
+ * ⚠️ **재생 버튼을 대신 눌러 줄 수는 없다.** UXP 에는 트랜스포트(재생/정지) API 가 없다
+ *    (공식 선언 확인 — 있는 건 getPlayerPosition·setPlayerPosition 뿐). 그래서 여기까지가
+ *    한계다: 시퀀스를 열고 재생헤드를 0 에 둔다. 스페이스바는 사람이 누른다.
+ */
+function recSequenceName(r) {
+  return `[STEP-D] ${String(r.title || "추천").slice(0, 40)} · ${r.id}`;
+}
+
+async function openRecSequence(r) {
+  // **활성 시퀀스는 필요 없다** — 우리가 만들 참이다.
+  const { api, project } = await activeProject();
+
+  // ① 이미 만들어 둔 게 있으면 그걸 연다.
+  const name = recSequenceName(r);
+  const existing = await findSequenceByName(project, name);
+  if (existing) {
+    await project.setActiveSequence(existing);
+    try { await existing.setPlayerPosition(api.TickTime.createWithSeconds(0)); } catch (_) { /* 위치는 부가 */ }
+    return { name, reused: true };
+  }
+
+  // ② 없으면 원본에서 그 구간만 잘라 만든다. 원본이 프로젝트에 있어야 한다 —
+  //    없으면 받아오는 데 수 분이 걸리므로 여기서는 시키지 않고 안내만 한다.
+  const filename = String(r.mediaFilename || "");
+  if (!filename) throw new Error("이 추천에 연결된 원본 파일 정보가 없습니다.");
+
+  await findMasterItem(filename, ({ api: api2, project: project2, clip }) => {
+    const ok = project2.executeTransaction((compound) => {
+      compound.addAction(clip.createSubClipAction(
+        subclipName(r),
+        api2.TickTime.createWithSeconds(Number(r.startTime) || 0),
+        api2.TickTime.createWithSeconds(Number(r.endTime) || 0),
+        true,
+      ));
+    }, `STEP-D 미리보기 조각 ${r.id}`);
+    if (ok === false) throw new Error("구간을 자르지 못했습니다 — 원본이 오프라인인지 확인하세요.");
+    return true;
+  });
+
+  return await findItemsByRecIds([r.id], async (found, project2, api2) => {
+    const piece = found.get(String(r.id));
+    if (!piece) throw new Error("자른 조각을 프로젝트에서 찾지 못했습니다.");
+    const seq = await project2.createSequenceFromMedia(name, [piece]);
+    if (!seq) throw new Error("시퀀스를 만들지 못했습니다.");
+    await makeSequenceVertical(api2, project2, seq, (m) => setStatus($("recsStatus"), m));
+    try { await project2.setActiveSequence(seq); } catch (_) { /* 열기 실패는 치명적이지 않다 */ }
+    return { name, reused: false };
+  });
+}
+
+/** 이름으로 시퀀스를 찾는다. 없으면 null — 만들어야 한다는 뜻이다. */
+async function findSequenceByName(project, name) {
   try {
-    setStatus($("recsStatus"), `"${r.title}" 구간으로 이동 중…`);
-    await seekActiveSequence(Number(r.startTime) || 0);
-    setStatus($("recsStatus"), `${fmtTime(r.startTime)} 으로 이동했습니다.`, "ok");
+    const seqs = await project.getSequences();
+    for (const s of seqs || []) {
+      const n = (await readMaybe(s, "name", "getName")) || "";
+      if (String(n) === name) return s;
+    }
+  } catch (_) { /* 목록을 못 읽으면 새로 만든다 */ }
+  return null;
+}
+
+async function jumpToRec(r) {
+  if (busy) return;
+  busy = true;
+  syncRecButtons();
+  try {
+    setStatus($("recsStatus"), `"${r.title}" 미리보기 만드는 중…`);
+    const { name, reused } = await openRecSequence(r);
+
+    // 제목은 **선택적**이다 — 실패해도 구간 미리보기는 이미 열려 있다.
+    let titleNote = "";
+    if (!reused) {
+      try {
+        const placed = await addTitlesForRecs([{ ...r, startTime: 0 }], (m) => setStatus($("recsStatus"), m));
+        titleNote = placed > 0 ? " · 제목 포함" : "";
+      } catch (err) {
+        titleNote = ` · 제목은 건너뜀(${err.message})`;
+        console.log("[STEP-D] 미리보기 제목 실패", err);
+      }
+    }
+    setStatus($("recsStatus"),
+      `"${name}" ${reused ? "를 열었습니다" : "를 만들었습니다"}${titleNote}. 스페이스바로 재생하세요.`, "ok");
   } catch (err) {
-    setStatus($("recsStatus"), err.message, "err");
-    console.log("[STEP-D] seek 실패", err);
+    // 원본이 아직 없거나 프로젝트 밖이면 만들 수 없다 — 그때는 예전처럼 그 시각으로 이동한다.
+    try {
+      await seekActiveSequence(Number(r.startTime) || 0);
+      setStatus($("recsStatus"),
+        `미리보기를 못 만들어(${err.message}) ${fmtTime(r.startTime)} 으로 이동했습니다.`, "err");
+    } catch (_) {
+      setStatus($("recsStatus"), err.message, "err");
+    }
+    console.log("[STEP-D] 미리보기 실패", err);
+  } finally {
+    busy = false;
+    syncRecButtons();
   }
 }
 

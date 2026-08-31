@@ -466,6 +466,40 @@ describe("패널 — 글꼴 확인", () => {
 });
 
 /**
+ * 추천 클릭 → 그 구간만의 세로 시퀀스 (사용자 2026-08-31: **"누르면 새 시퀀스 만들어서 틀어주자."**).
+ *
+ * 원본 타임라인에서 그 시각으로 점프하면 **가로 원본**이 보인다. 판단해야 할 건 "이 구간이
+ * 쇼츠로 쓸 만한가" 라서, 세로 프레임에 제목까지 얹힌 상태를 봐야 한다.
+ */
+describe("패널 — 추천을 누르면 미리보기 시퀀스", () => {
+  it("그 구간만 잘라 세로 시퀀스로 만든다", () => {
+    assert.ok(panel.includes("async function openRecSequence(r)"));
+    assert.ok(panel.includes("createSubClipAction("), "구간을 자르지 않는다");
+    assert.ok(panel.includes("await makeSequenceVertical(api2, project2, seq,"), "세로로 안 만든다");
+  });
+
+  it("두 번째부터는 다시 만들지 않는다 — 같은 이름 시퀀스가 쌓이면 안 된다", () => {
+    assert.ok(panel.includes("const existing = await findSequenceByName(project, name);"));
+    assert.ok(panel.includes("if (existing) {"));
+  });
+
+  it("시퀀스가 없어도 돈다 — 만들어 주려는 기능이 '활성 시퀀스 없음' 으로 막히면 안 된다", () => {
+    assert.ok(panel.includes("async function activeProject()"));
+    assert.ok(panel.includes("const { api, project } = await activeProject();"));
+  });
+
+  it("실패하면 예전처럼 그 시각으로 이동한다 — 아무 일도 안 일어나는 것보다 낫다", () => {
+    assert.ok(panel.includes("await seekActiveSequence(Number(r.startTime) || 0);"));
+    assert.ok(panel.includes("미리보기를 못 만들어("));
+  });
+
+  it("재생은 사람 몫이라고 **말해 준다** — UXP 에 트랜스포트 API 가 없다", () => {
+    assert.ok(panel.includes("스페이스바로 재생하세요"),
+      "재생이 자동일 거라 기대하게 두면 '눌렀는데 안 틀어진다' 가 된다");
+  });
+});
+
+/**
  * 세로 시작 (사용자 2026-08-31: **"영상도 세로형으로 해서 시작해야 함."**).
  *
  * 프레임만 1080×1920 으로 바꾸면 **영상은 가운데 작게 남는다**(위아래 검은 띠). 편집자는
