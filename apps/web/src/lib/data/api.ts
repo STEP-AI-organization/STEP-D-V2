@@ -2048,7 +2048,7 @@ export async function exportClip(
  */
 export async function openInPremiere(payload: {
   programId?: string; episodeId?: string; clipId?: string; mediaId?: string; label?: string;
-}): Promise<void> {
+}): Promise<{ launched: boolean }> {
   const res = await fetch(`${API_BASE}/premiere/handoff`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -2058,9 +2058,22 @@ export async function openInPremiere(payload: {
     const body = (await res.json().catch(() => null)) as { error?: string; message?: string } | null;
     throw new Error(body?.message ?? body?.error ?? `${res.status} ${res.statusText}`);
   }
-  // 스킴이 등록돼 있지 않으면 브라우저가 조용히 무시한다 — 그래도 맥락은 이미 남았으므로
-  // 프리미어를 사람이 직접 켜도 패널이 그 회차로 따라간다.
-  if (typeof window !== "undefined") window.location.href = "stepd://open";
+  if (typeof window === "undefined") return { launched: false };
+
+  // 스킴이 등록 안 된 PC 에서는 브라우저가 `stepd://` 를 **조용히 무시한다** — 눌러도 아무
+  // 일도 안 일어나고, 사용자는 우리 탓인지 자기 PC 탓인지 알 길이 없다. 그래서 떴는지를
+  // 추정한다: 앱이 뜨면(또는 이미 떠 있어 앞으로 나오면) **브라우저가 포커스를 잃는다.**
+  // 1.2초 뒤에도 그대로 앞에 있으면 아무 일도 안 일어난 것으로 본다.
+  // ⚠️ 완벽한 판정은 불가능하다(브라우저가 확인 대화상자를 띄우면 그것도 포커스를 뺏는다).
+  //    그래서 실패 쪽 문구는 단정하지 않고 "안 열렸다면" 으로 안내한다.
+  let left = false;
+  const onBlur = () => { left = true; };
+  window.addEventListener("blur", onBlur, { once: true });
+  window.location.href = "stepd://open";
+  await new Promise((r) => setTimeout(r, 1200));
+  window.removeEventListener("blur", onBlur);
+  // 맥락은 이미 서버에 남았다 — 실행에 실패해도 사람이 프리미어를 직접 켜면 패널이 따라간다.
+  return { launched: left || document.hidden };
 }
 
 export async function rejectRec(recId: string, reason: string): Promise<void> {

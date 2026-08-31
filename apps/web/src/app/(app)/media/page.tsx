@@ -225,6 +225,8 @@ function MediaRow({
   programTitle: string;
   episodeNumber?: number;
 }) {
+  // 프리미어 보내기 결과를 이 행에서 바로 알린다 — 상위로 콜백을 뚫는 대신 훅을 쓴다.
+  const { toast } = useToast();
   const thumb = clipThumbSrc(clip);
   const isShort = clip.aspectRatio?.startsWith("9:16");
   // 상태 가시성 (사용자 2026-08-19: "렌더 중인지·배포됐는지 미디어에서 알 수가 없다").
@@ -301,11 +303,28 @@ function MediaRow({
             className="sd-btn"
             title="프리미어를 열고 이 회차의 추천 구간을 패널에 띄웁니다"
             onClick={() => {
-              void openInPremiere({
-                clipId: clip.id,
-                episodeId: clip.episodeId,
-                label: clip.title,
-              }).catch(() => { /* 실패해도 목록 조작을 막지 않는다 */ });
+              void (async () => {
+                try {
+                  const r = await openInPremiere({
+                    clipId: clip.id,
+                    episodeId: clip.episodeId,
+                    label: clip.title,
+                  });
+                  // 프리미어가 안 뜬 것으로 보이면 **무엇을 해야 하는지**까지 말한다.
+                  // 맥락은 이미 서버에 남았으므로 직접 켜도 패널이 따라간다 — 그걸 알려 준다.
+                  if (r.launched) {
+                    toast({ title: "프리미어로 보냈습니다", description: "패널이 이 회차의 추천 구간을 띄웁니다.", tone: "done" });
+                  } else {
+                    toast({
+                      title: "프리미어가 열리지 않았습니다",
+                      description: "Premiere Pro 25.6 이상이 설치돼 있는지 확인하세요. 설치돼 있는데도 안 열리면 이 PC 에 STEP-D 연결 등록이 필요합니다 — 프리미어를 직접 켜도 패널이 이 회차로 따라갑니다.",
+                      tone: "error",
+                    });
+                  }
+                } catch (err) {
+                  toast({ title: "프리미어로 보내지 못했습니다", description: err instanceof Error ? err.message : String(err), tone: "error" });
+                }
+              })();
             }}
           >
             프리미어
