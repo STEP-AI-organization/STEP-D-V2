@@ -9105,10 +9105,20 @@ const YT_ANALYTICS_SCOPES = [
   "https://www.googleapis.com/auth/yt-analytics-monetary.readonly", // revenue (monetized channels only)
 ].join(" ");
 
+/**
+ * 업로드에 필요한 만큼만. **여기에 스코프를 추가할 때는 그걸 부르는 코드가 먼저 있어야 한다.**
+ *
+ * 2026-08-31 `youtube.channel-memberships.creator` 를 뺐다 — 동의 화면에서 요구하면서
+ * 멤버십 API 는 **어디에서도 부르지 않았다**(전 소스 검색 결과 이 줄이 전부였다).
+ * 유튜브 API 컴플라이언스 심사가 정확히 이 지점을 본다: 기능에 필요한 최소 범위만 요구하는가.
+ * 대응 기능 없는 스코프는 심사 지적이 되고, 사용자에겐 안 쓰는 권한을 내주게 한다.
+ *
+ * 이미 연결된 채널은 그대로 돌아간다 — 업로드 가능 판정은 `youtube` 하나만 본다
+ * (youtube.ts `scopeCanPublish`). 기존 토큰의 저장된 scope 문자열도 건드리지 않는다.
+ */
 const YT_PUBLISH_SCOPES = [
-  "https://www.googleapis.com/auth/youtube",
+  "https://www.googleapis.com/auth/youtube",        // videos.insert/update · thumbnails.set
   "https://www.googleapis.com/auth/youtube.force-ssl",
-  "https://www.googleapis.com/auth/youtube.channel-memberships.creator",
 ].join(" ");
 
 /** Analytics needs this scope; channels connected before the split won't have it. */
