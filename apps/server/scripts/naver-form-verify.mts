@@ -57,6 +57,8 @@ fs.mkdirSync(dir, { recursive: true });
 
 const when = new Date(Date.now() + 3 * 60 * 60_000);   // 3시간 뒤 (분 눈금 때문에 여유를 둔다)
 const results: { step: string; ok: boolean; detail: string }[] = [];
+/** 두 검증까지 못 갔으면 통과로 셀 수 없다 — 중단은 성공이 아니다. */
+let aborted: string | null = null;
 const note = (step: string, ok: boolean, detail = "") => {
   results.push({ step, ok, detail });
   console.log(`${ok ? "OK  " : "FAIL"} ${step}${detail ? ` — ${detail}` : ""}`);
@@ -67,10 +69,17 @@ const page = await ctx.newPage();
 page.setDefaultTimeout(60_000);
 
 try {
-  await page.goto(T.uploadUrl, { waitUntil: "networkidle" });
-  const loggedOut = await page.locator('form[name="frmNIDLogin"], input#id').count();
-  if (loggedOut) {
-    note("로그인", false, "세션 만료 — naver:login 을 다시 돌려야 한다");
+  await page.goto(T.uploadUrl, { waitUntil: "domcontentloaded" });
+
+  // ⚠️ **URL 로도 봐야 한다.** 클립 스튜디오는 껍데기를 먼저 그린 뒤 인증이 깨졌으면
+  //    비동기로 nid.naver.com 으로 넘긴다. 폼 셀렉터만 세면 그 순간엔 0 이라 "진입 성공"
+  //    으로 지나가고, 3분 뒤 "메타 폼이 안 뜬다" 로 엉뚱하게 실패한다(2026-08-31 실측 —
+  //    세션 만료였는데 화면 개편으로 오해할 뻔했다).
+  await page.waitForTimeout(6000);
+  const onLogin = /nid\.naver\.com/.test(page.url())
+    || (await page.locator('form[name="frmNIDLogin"], input#id').count()) > 0;
+  if (onLogin) {
+    note("세션", false, `만료 — 로그인 화면으로 넘어갔다 (${page.url()})`);
     throw new Error("session expired");
   }
   note("업로드 페이지 진입", true, page.url());
@@ -108,16 +117,28 @@ try {
   await page.screenshot({ path: shot, fullPage: true }).catch(() => {});
   console.log(`\n스크린샷: ${shot}`);
 } catch (e) {
+  aborted = e instanceof Error ? e.message : String(e);
   const shot = path.join(dir, `verify-fail-${Date.now()}.png`);
   await page.screenshot({ path: shot, fullPage: true }).catch(() => {});
-  console.error(`\n중단: ${e instanceof Error ? e.message : String(e)}`);
-  console.error(`스크린샷: ${shot}`);
+  console.error(`\n중단: ${aborted}`);
+  console.error(`스크린샷: ${shot} — 무엇이 떠 있었는지는 이 그림이 말한다`);
 } finally {
   // **아무것도 제출하지 않고 닫는다.**
   await ctx.close().catch(() => {});
   await browser.close().catch(() => {});
 }
 
+// ⚠️ 중단했으면 "통과" 를 말하지 않는다. 예전엔 여기서 지나온 단계만 세서, 세션 만료로
+//    폼도 못 본 실행이 "2/2 통과" 라고 끝났다(2026-08-31). 검증 도구가 거짓 초록을 내면
+//    안 한 것만 못하다.
 const failed = results.filter((r) => !r.ok);
+const CHECKS = ["카테고리 선택", "등록 예약"];
+const missing = CHECKS.filter((k) => !results.some((r) => r.step === k));
+if (aborted || missing.length) {
+  console.log(`\n=== 검증 못 함 ===`);
+  if (aborted) console.log(`중단 사유: ${aborted}`);
+  if (missing.length) console.log(`확인 못 한 항목: ${missing.join(" · ")}`);
+  process.exit(1);
+}
 console.log(`\n=== 결과: ${results.length - failed.length}/${results.length} 통과 ===`);
 process.exit(failed.length ? 1 : 0);
