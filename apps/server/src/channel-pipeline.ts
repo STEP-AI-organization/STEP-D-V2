@@ -37,9 +37,9 @@ import { enqueue } from "./queue.ts";
 import { HOTWATCH_POLL_MS, HOTWATCH_WINDOW_MS, SHORTS_PROBE_MAX_PER_SYNC, SHORTS_PROBE_CONCURRENCY } from "./config.ts";
 
 /** Re-sync uploads this often. Each run costs Data API quota, so don't go below this. */
-const VIDEO_SYNC_INTERVAL_MS = 6 * 60 * 60 * 1000;
+export const VIDEO_SYNC_INTERVAL_MS = 6 * 60 * 60 * 1000;
 /** Analytics is day-granular; pulling more often than daily buys nothing. */
-const ANALYTICS_INTERVAL_MS = 24 * 60 * 60 * 1000;
+export const ANALYTICS_INTERVAL_MS = 24 * 60 * 60 * 1000;
 /** YouTube keeps revising recent days, so always re-pull a trailing window. */
 const ANALYTICS_TRAILING_DAYS = 10;
 /** First run for a new channel: pull enough history to be useful immediately. */
@@ -135,9 +135,41 @@ export async function runChannelPipeline(
   }
 }
 
-function isDue(last: number | null | undefined, interval: number, now: number): boolean {
+/** 스윕 게이트도 이 함수를 쓴다 — 상수·판정이 두 벌이 되면 한쪽만 고쳐져 동기화가 조용히 멈춘다. */
+export function isDue(last: number | null | undefined, interval: number, now: number): boolean {
   return last == null || now - last >= interval;
 }
+
+/**
+ * 이 채널을 이번 스윕에서 큐잉할까.
+ *
+ * ## 왜 게이트가 스윕 쪽에 있어야 하나
+ *
+ * 예전엔 신선도 판정이 **잡을 집은 뒤**(channel-pipeline)에만 있었다. 스윕은 15분마다 깨는데
+ * 채널 주기는 6시간이라, **96회 중 92회가 헛돌이**였다(실측 2026-08-31: channel.analyze
+ * 누적 23,121건). 큐 INSERT·claim·complete 와 거기 딸린 팬아웃까지 전부 그 헛일에 붙어 있었다.
+ *
+ * ## 두 가지를 본다
+ *
+ *  1. **연결이 살아 있나** — 예전엔 `revoked` 만 걸렀는데, 실측 12채널 중 **6개가
+ *     `disconnected`**(마지막 동기화 18일 전)인 채로 계속 큐잉되고 있었다. 사람이 일부러
+ *     끊은 채널이라 절대 성공하지 않는다.
+ *  2. **신선도** — 판정 함수·상수는 `channel-pipeline` 에서 가져다 쓴다. 두 벌이 되면 한쪽만
+ *     고쳐져 동기화가 **조용히** 멈춘다(실패 방향이 "안 돎" 이라 눈에 안 띈다).
+ *
+ * ⚠️ `lastAnalyzedAt` 이 `null` 이면 항상 due 다 — 신규 채널이 즉시 도는 근거이자, 동시에
+ * **analytics 스코프 재동의가 필요한 채널이 계속 도는 이유**이기도 하다(실측 2개). 그건
+ * 사람이 재동의해야 풀리는 상태라, 여기서 막으면 재동의 후에도 안 도는 게 더 나쁘다.
+ */
+export function shouldSweepChannel(
+  ch: { status: string; lastSyncedAt: number | null; lastAnalyzedAt: number | null },
+  now: number,
+): boolean {
+  if (ch.status !== "active") return false;
+  return isDue(ch.lastSyncedAt, VIDEO_SYNC_INTERVAL_MS, now)
+    || isDue(ch.lastAnalyzedAt, ANALYTICS_INTERVAL_MS, now);
+}
+
 
 function persistTokensFor(ch: YouTubeChannel): PersistTokens {
   // Targeted two-column write — never a full-row upsert from this snapshot (see B6).

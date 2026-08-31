@@ -1076,12 +1076,22 @@ export async function listYouTubeChannels(): Promise<YouTubeChannel[]> {
  * 스윕은 테넌트를 가리지 않는 게 목적이지만, 그 결과로 만드는 잡은 **각 채널 소유자의 것**이라
  * tenantId 를 같이 돌려줘야 한다. 이걸 안 돌려주면 잡이 무소속으로 만들어져 FK 에서 죽는다.
  */
-export function listChannelsForSweep(): Promise<{ channelId: string; tenantId: string; status: string }[]> {
+/**
+ * 스윕 대상 채널. **due 판정에 필요한 시각까지 같이 읽는다** — 예전엔 status 만 읽어서
+ * 스윕이 신선도를 볼 방법이 없었고, 그래서 15분마다 전 채널을 무조건 큐잉했다
+ * (실측 2026-08-31: channel.analyze 누적 23,121건 중 대부분이 헛돌이).
+ * 같은 쿼리에 컬럼만 더한 것이라 비용은 그대로다.
+ */
+export function listChannelsForSweep(): Promise<
+  { channelId: string; tenantId: string; status: string; lastSyncedAt: number | null; lastAnalyzedAt: number | null }[]
+> {
   return runAsSystem(async () => {
     const { rows } = await pool.query(
-      `SELECT channelid AS "channelId", tenant_id AS "tenantId", status FROM youtube_channels`,
+      `SELECT channelid AS "channelId", tenant_id AS "tenantId", status,
+              lastsyncedat AS "lastSyncedAt", lastanalyzedat AS "lastAnalyzedAt"
+         FROM youtube_channels`,
     );
-    return rows as { channelId: string; tenantId: string; status: string }[];
+    return rows as { channelId: string; tenantId: string; status: string; lastSyncedAt: number | null; lastAnalyzedAt: number | null }[];
   });
 }
 

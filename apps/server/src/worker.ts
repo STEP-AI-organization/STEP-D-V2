@@ -61,7 +61,7 @@ import { initQueue, claimJob, completeJob, failJob, requeueStale, heartbeatJob, 
 import { runWithTenant, runAsSystem, DEFAULT_TENANT_ID } from "./tenant.ts";
 import { recordAutoPublishForReport, recordAutoPublishFailureForReport } from "./publish-notify.ts";
 import { runAutomationCycle } from "./automation-cycle.ts";
-import { runChannelPipeline } from "./channel-pipeline.ts";
+import { runChannelPipeline, shouldSweepChannel } from "./channel-pipeline.ts";
 import { runClipReframe, runContentAnalyze, runReframeCompare, newestMtimeMs } from "./content-pipeline.ts";
 import {
   withAccessToken,
@@ -3074,9 +3074,11 @@ async function sweepDueChannels(): Promise<void> {
   // 테넌트로 만든다** — 시스템 스코프인 채로 enqueue 하면 무소속 잡이 되어 FK 에서 죽는다.
   const channels = await listChannelsForSweep();
   let queued = 0;
+  let skipped = 0;
+  const now = Date.now();
 
   for (const ch of channels) {
-    if (ch.status === "revoked") continue;
+    if (!shouldSweepChannel(ch, now)) { skipped++; continue; }
     const id = await runWithTenant({ scope: ch.tenantId, via: "system" }, () =>
       enqueue("channel.analyze", { channelId: ch.channelId }, {
         dedupeKey: `channel.analyze:${ch.channelId}`,
@@ -3085,7 +3087,9 @@ async function sweepDueChannels(): Promise<void> {
     if (id) queued++;
   }
 
-  if (queued) console.log(`[worker] sweep queued ${queued}/${channels.length} channels`);
+  // 항상 찍는다 — `queued=0` 도 정보다. 이게 없으면 "게이트가 과하게 막고 있는 것"과
+  // "돌 필요가 없는 것"을 구분할 수 없고, 동기화가 멈춘 걸 아무도 모른다.
+  console.log(`[worker] sweep queued ${queued}/${channels.length} (skipped ${skipped}: 비활성·not due)`);
 }
 
 /**
