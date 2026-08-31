@@ -165,6 +165,47 @@ ssh STEPAI04@192.168.13.14 "powershell -NoProfile -Command \"Stop-ScheduledTask 
 
 ---
 
+## 렌더 레인 (2026-08-31 추가 · **셋업 완료**)
+
+윈도우2 가 **클립 렌더(ffmpeg 인코딩)** 를 당겨간다. 다른 레인과 이유가 다르다 — 한국 IP 나
+브라우저가 아니라 **CPU** 다. 렌더는 건당 50~90초로 이 리포에서 CPU 를 통째로 쓰는 유일한
+일이고, 그래서 클라우드 순방이 스스로를 `AUTOMATION_MAX_RENDERS_PER_TICK=8` 로 묶는다.
+이 PC(i7-9700K 8코어 · 32GB)가 놀고 있어 그리로 넘긴다.
+
+**이 PC 에 프로세스가 둘 뜬다** — 워커만으로는 안 된다:
+
+| 작업 | 하는 일 |
+|---|---|
+| `STEPD-Render-Server` | 로컬 서버(`PORT=4100`). **렌더가 실제로 도는 곳** |
+| `STEPD-Render-Worker` | `clip.render` 잡을 집어 `http://127.0.0.1:4100/api/clips/:id/export` 를 부른다 |
+
+왜 워커가 직접 인코딩하지 않는가: 렌더 로직(자막 ASS·훅 프리롤·오버레이 PNG·리프레임 플랜)이
+그 라우트에 있다. 워커로 복제하면 두 벌이 갈라지고, 그 순간부터 "편집기 미리보기와 결과물이
+다르다" 가 시작된다. 그래서 **코드는 한 벌**이고 어느 CPU 가 그걸 실행하느냐만 바꾼다.
+
+`.env` 에 넣은 값 (2026-08-31):
+
+```
+INTERNAL_API_TOKEN=…      # 워커→로컬서버 내부 인증. 클라우드와 같은 값(secret stepd-factory-api-key)
+AUTH_REQUIRED=1           # 프로덕션과 같은 자세
+PORT=4100                 # 로컬 서버 포트
+RENDER_API_BASE=http://127.0.0.1:4100
+```
+
+⚠️ **클라우드 쪽 스위치는 아직 OFF 다.** `stepd-worker-youtube` 에 `RENDER_VIA_QUEUE=1` 을
+줘야 순방이 `/export` 직접 호출 대신 `clip.render` 를 큐에 넣는다. 그 전까지는 종전대로
+클라우드가 굽고, 이 PC 의 두 프로세스는 놀고만 있다(해롭지 않다).
+
+⚠️ **이 PC 가 꺼져도 배포는 나가야 한다**(ENA 는 계약 물량이다). `clip.render` 가
+`RENDER_QUEUE_STALL_MS`(기본 10분) 넘게 방치되면 순방이 감지해 **클라우드가 직접 렌더한다.**
+
+확인 (윈도우2 에서):
+
+```powershell
+Invoke-WebRequest http://127.0.0.1:4100/health -UseBasicParsing   # {"ok":true,"ffmpeg":true,...}
+Get-Content $env:USERPROFILE\.stepd\logs\render-worker.out.log -Tail 5
+```
+
 ## 안 될 때 보는 순서
 
 1. **켜져 있나** — `ping 192.168.13.14`
