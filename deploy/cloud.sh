@@ -59,9 +59,20 @@ do_worker() {
   check_clean
   local tag_y="worker-$STAMP" tag_c="content-$STAMP"
   # 경량 잡 lane 은 core/ 가 필요 없다 (서버 Dockerfile). content lane 은 core/+python 이 필요하다.
-  log "worker 이미지 빌드: $tag_y (경량) · $tag_c (content)"
-  gcloud builds submit --config=deploy/cloudbuild-worker.yaml \
-    --substitutions=_TAG="$tag_y" --project="$PROJECT" . || die "worker 이미지 실패"
+  # ⚠️ 경량 이미지는 **서버와 같은 Dockerfile·같은 소스**다. `all` 로 방금 서버를 빌드했다면
+  # 결과물이 같으므로 다시 만들 이유가 없다 — 태그만 붙인다(수 초 vs 약 5분).
+  # 태그를 붙이는 것이지 `:latest` 를 미는 게 아니다. 잡은 여전히 고정 태그를 가리키므로
+  # 다음 서버 배포가 워커 이미지를 조용히 갈아치우지 않는다(이 파일의 원래 규칙 유지).
+  if [ "${SERVER_JUST_BUILT:-0}" = "1" ]; then
+    log "worker 경량 이미지: 방금 만든 서버 이미지에 태그만 붙인다 ($tag_y)"
+    gcloud artifacts docker tags add "${REPO}:latest" "${REPO}:${tag_y}" \
+      --project="$PROJECT" || die "worker 태그 실패"
+  else
+    log "worker 이미지 빌드: $tag_y (경량)"
+    gcloud builds submit --config=deploy/cloudbuild-worker.yaml \
+      --substitutions=_TAG="$tag_y" --project="$PROJECT" . || die "worker 이미지 실패"
+  fi
+  log "content 이미지 빌드: $tag_c"
   gcloud builds submit --config=deploy/cloudbuild-worker.yaml \
     --substitutions=_TAG="$tag_c",_DOCKERFILE=apps/server/Dockerfile.worker \
     --project="$PROJECT" . || die "content 이미지 실패"
@@ -189,6 +200,8 @@ case "$TARGET" in
   gebd)    do_gebd ;;
   migrate) do_migrate ;;
   status)  do_status ;;
-  all)     do_server && do_worker && do_migrate ;;
+  # 경량 워커 이미지는 서버와 동일하므로 방금 만든 것에 태그만 붙인다(배포 1회당 ~5분 절약).
+  # `worker` 단독 실행에서는 :latest 가 낡았을 수 있으니 그대로 빌드한다.
+  all)     do_server && SERVER_JUST_BUILT=1 do_worker && do_migrate ;;
   *)       sed -n '2,20p' "$0"; exit 1 ;;
 esac
