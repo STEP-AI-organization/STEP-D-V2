@@ -152,6 +152,9 @@
       <div id="recsList" class="recs"></div>
       <div id="recsStatus" class="status"></div>
       <!-- 한 번에 꽂고, 되돌릴 때도 Ctrl+Z 한 번 (트랜잭션 하나에 담는다). -->
+      <!-- 원본 확보를 **눈에 보이는 첫 단계**로 뺀다 — 몇 GB 를 받는 동안 아무 표시가 없으면
+           사용자는 멈춘 줄 안다. 러프컷도 내부적으로 같은 함수를 쓴다(중복 다운로드 없음). -->
+      <button id="fetchSrcBtn" class="secondary" disabled>① 원본 받아서 프로젝트에 넣기</button>
       <!-- 러프컷 — 찾고·자르고·늘어놓기를 통째로. 편집자는 다듬기부터 시작한다. -->
       <button id="roughcutBtn" disabled>러프컷 시퀀스 만들기</button>
       <button id="markersBtn" class="secondary" disabled>타임라인에 마커로 꽂기</button>

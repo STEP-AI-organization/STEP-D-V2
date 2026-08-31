@@ -223,7 +223,7 @@ describe("패널 매니페스트", () => {
  */
 describe("패널 — 추천 구간을 서브클립으로", () => {
   it("원본을 **파일명으로** 찾는다 — 경로는 PC 마다 다르다", () => {
-    assert.match(panel, /async function findMasterItem\(filename\)/);
+    assert.match(panel, /async function findMasterItem\(filename, use\)/);
     assert.match(panel, /getMediaFilePath\(\)/);
     assert.match(panel, /ClipProjectItem\.cast\(item\)/);
   });
@@ -293,7 +293,8 @@ describe("패널 — 러프컷 시퀀스", () => {
   });
 
   it("추천 순서 그대로 늘어놓는다 — 점수 순 목록이 곧 편집 순서다", () => {
-    assert.match(panel, /const ordered = recs\.map\(\(r\) => found\.get\(String\(r\.id\)\)\)\.filter\(Boolean\);/);
+    assert.ok(panel.includes("const ordered = recs.map((r) => found.get(String(r.id))).filter(Boolean);"),
+      "추천 순서를 그대로 쓰지 않고 있다");
   });
 
   it("이름 규칙이 **한 곳**이다 — 두 곳에서 만들면 갈라지는 순간 빈 시퀀스가 나온다", () => {
@@ -333,5 +334,27 @@ describe("패널 화면 전환 — 숨김이 배치를 이겨야 한다", () => 
 
   it("전환은 className 을 통째로 갈아끼운다 — 다른 클래스가 섞이면 이 방식이 깨진다", () => {
     assert.match(panel, /views\.login\(\)\.className = which === "login" \? "" : "hidden";/);
+  });
+});
+
+/**
+ * UXP 함정 — **프리미어에서 받은 객체는 `await` 를 건너면 무효가 된다**
+ * ("The script object is no longer valid" · 2026-08-31 실측). 다운로드처럼 긴 대기를 사이에
+ * 두면 확실히 터진다. 그래서 찾은 객체는 **그 자리에서** 쓰고, 밖으로 돌려주지 않는다.
+ */
+describe("패널 — 호스트 객체를 await 너머로 들고 다니지 않는다", () => {
+  it("원본 클립은 찾은 자리에서 쓴다(콜백) — 돌려주지 않는다", () => {
+    assert.match(panel, /async function findMasterItem\(filename, use\)/);
+    assert.match(panel, /return await use\(\{ api, project, clip, name: item\.name \}\);/);
+  });
+
+  it("ensureMaster 는 **파일명만** 돌려준다 — 다운로드 대기를 건너는 자리라 객체를 못 들고 나온다", () => {
+    assert.match(panel, /const present = await findMasterItem\(filename, \(\) => true\)/);
+    assert.match(panel, /return filename \|\| file\.name;/);
+  });
+
+  it("모은 서브클립도 그 자리에서 시퀀스로 만든다", () => {
+    assert.match(panel, /async function findItemsByRecIds\(recIds, use\)/);
+    assert.match(panel, /return await use\(want, project, api\);/);
   });
 });

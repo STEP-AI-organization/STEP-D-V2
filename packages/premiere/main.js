@@ -656,7 +656,7 @@ function subclipName(r) {
   return `[STEP-D] ${String(r.title || "추천").slice(0, 40)} · ${r.id}`;
 }
 
-async function findMasterItem(filename) {
+async function findMasterItem(filename, use) {
   const { api, project } = await activeSequence();
   if (!filename) throw new Error("이 추천에 연결된 원본 파일 정보가 없습니다.");
   const root = await project.getRootItem();
@@ -684,7 +684,10 @@ async function findMasterItem(filename) {
         const p = String((await clip.getMediaFilePath()) || "").toLowerCase();
         // 경로 전체가 아니라 **파일명으로** 맞춘다 — NAS·로컬 경로가 PC 마다 다르다.
         if (p && (p.endsWith(`\\${wanted}`) || p.endsWith(`/${wanted}`) || p.includes(wanted))) {
-          return { api, project, clip, name: item.name };
+          // ⚠️ **찾자마자 여기서 쓴다.** 객체를 돌려주면 호출부가 await(다운로드·네트워크)를
+          //    건너며 들고 있게 되고, 그 순간 프리미어가 무효화한다
+          //    ("The script object is no longer valid" · 2026-08-31 실측).
+          return await use({ api, project, clip, name: item.name });
         }
       } catch (_) { /* 클립 아님 */ }
     }
@@ -809,28 +812,29 @@ async function downloadMaster(mediaId, filename, onStage) {
  */
 async function ensureMaster(rec, onStage) {
   const filename = rec.mediaFilename || "";
-  try {
-    return await findMasterItem(filename);
-  } catch (_) {
-    // 없다 — 받아서 넣는다.
-  }
-  if (!rec.mediaId) throw new Error("이 추천에 연결된 원본이 없습니다.");
+  // 있는지만 확인한다 — **객체를 들고 나오지 않는다.** 아래 다운로드 대기를 건너는 순간
+  // 무효가 되기 때문이다. 실제 사용은 호출부가 findMasterItem(…, use) 로 그때그때 한다.
+  const present = await findMasterItem(filename, () => true).catch(() => false);
+  if (present) return filename;
 
+  if (!rec.mediaId) throw new Error("이 추천에 연결된 원본이 없습니다.");
   const file = await downloadMaster(rec.mediaId, filename || `${rec.mediaId}.mp4`, onStage);
   onStage("프로젝트에 가져오는 중…");
   const { project } = await activeSequence();
   // suppressUI=true — 가져오기 대화상자가 뜨면 자동 흐름이 사람을 기다리며 멈춘다.
   const ok = await project.importFiles([file.nativePath], true);
   if (ok === false) throw new Error("프로젝트로 가져오지 못했습니다.");
-  return await findMasterItem(filename || file.name);
+  return filename || file.name;
 }
 
 async function makeSubclipsForRecs(recs, onStage) {
   // 원본이 프로젝트에 없으면 **받아서 넣는다** — 편집자 PC 에 파일이 없을 수 있다.
   const withMedia = recs.find((r) => r.mediaFilename || r.mediaId) || recs[0];
   onStage("원본 확인 중…");
-  const { api, project, clip, name } = await ensureMaster(withMedia, onStage);
+  const filename = await ensureMaster(withMedia, onStage);
 
+  // 찾은 객체를 **그 자리에서** 쓴다 — await 를 건너 들고 나가면 무효가 된다.
+  return await findMasterItem(filename, ({ api, project, clip, name }) => {
   onStage(`"${name}" 에서 ${recs.length}개 구간 자르는 중…`);
   const ok = project.executeTransaction((compound) => {
     for (const r of recs) {
@@ -846,6 +850,7 @@ async function makeSubclipsForRecs(recs, onStage) {
 
   if (ok === false) throw new Error("서브클립을 만들지 못했습니다 — 원본이 오프라인인지 확인하세요.");
   return { sourceName: name, count: recs.length };
+  });
 }
 
 // ── 러프컷 — 조각을 순서대로 늘어놓은 초벌 타임라인 ───────────────────────────
@@ -860,7 +865,7 @@ async function makeSubclipsForRecs(recs, onStage) {
  * ⚠️ 서브클립 생성은 **지연 액션**이라 만들어진 항목을 못 돌려받는다. 그래서 이름 끝에
  *    추천 id 를 박아 두고(makeSubclips 와 같은 규칙) 커밋 뒤에 그 이름으로 되찾는다.
  */
-async function findItemsByRecIds(recIds) {
+async function findItemsByRecIds(recIds, use) {
   const { api, project } = await activeSequence();
   const want = new Map(recIds.map((id) => [String(id), null]));
   const root = await project.getRootItem();
@@ -885,44 +890,68 @@ async function findItemsByRecIds(recIds) {
       }
     }
   }
-  return want;
+  // 모은 객체도 **여기서 바로** 넘긴다 — 밖으로 돌려주면 그 사이 await 에 무효가 된다.
+  return await use(want, project, api);
 }
 
 async function buildRoughCut(recs, onStage) {
   const withMedia = recs.find((r) => r.mediaFilename || r.mediaId) || recs[0];
   onStage("원본 확인 중…");
-  const { api, project, clip, name } = await ensureMaster(withMedia, onStage);
+  const filename = await ensureMaster(withMedia, onStage);
 
   // ① 구간마다 조각을 만든다 — 서브클립 버튼과 **같은 규칙**으로 이름 붙인다.
+  //    원본 객체는 **찾은 자리에서 바로** 쓴다(await 를 건너면 무효가 된다).
   onStage(`${recs.length}개 구간 자르는 중…`);
-  const cut = project.executeTransaction((compound) => {
-    for (const r of recs) {
-      compound.addAction(clip.createSubClipAction(
-        subclipName(r),
-        api.TickTime.createWithSeconds(Number(r.startTime) || 0),
-        api.TickTime.createWithSeconds(Number(r.endTime) || 0),
-        true,
-      ));
-    }
-  }, `STEP-D 러프컷 재료 ${recs.length}개`);
-  if (cut === false) throw new Error("구간을 자르지 못했습니다 — 원본이 오프라인인지 확인하세요.");
+  const srcName = await findMasterItem(filename, ({ api, project, clip, name }) => {
+    const cut = project.executeTransaction((compound) => {
+      for (const r of recs) {
+        compound.addAction(clip.createSubClipAction(
+          subclipName(r),
+          api.TickTime.createWithSeconds(Number(r.startTime) || 0),
+          api.TickTime.createWithSeconds(Number(r.endTime) || 0),
+          true,
+        ));
+      }
+    }, `STEP-D 러프컷 재료 ${recs.length}개`);
+    if (cut === false) throw new Error("구간을 자르지 못했습니다 — 원본이 오프라인인지 확인하세요.");
+    return name;
+  });
 
   // ② 방금 만든 조각을 이름으로 되찾는다(지연 액션이라 반환값이 없다).
   onStage("조각 찾는 중…");
-  const found = await findItemsByRecIds(recs.map((r) => r.id));
-  // **추천 순서 그대로** 늘어놓는다 — 점수 순으로 온 목록이라 그게 곧 편집 순서다.
-  const ordered = recs.map((r) => found.get(String(r.id))).filter(Boolean);
-  if (!ordered.length) throw new Error("자른 조각을 프로젝트에서 찾지 못했습니다.");
+  const seqName = `[STEP-D] ${(withMedia.programTitle || srcName || "러프컷").slice(0, 40)} 러프컷`;
+  // ②③ 을 한 흐름으로 — 찾은 조각을 **그 자리에서** 시퀀스로 만든다.
+  return await findItemsByRecIds(recs.map((r) => r.id), async (found, project) => {
+    // **추천 순서 그대로** 늘어놓는다 — 점수 순으로 온 목록이라 그게 곧 편집 순서다.
+    const ordered = recs.map((r) => found.get(String(r.id))).filter(Boolean);
+    if (!ordered.length) throw new Error("자른 조각을 프로젝트에서 찾지 못했습니다.");
 
-  // ③ 시퀀스 생성 + 배치 (한 번에). 시퀀스 설정도 소재에 맞춰진다.
-  onStage("러프컷 시퀀스 만드는 중…");
-  const seqName = `[STEP-D] ${(withMedia.programTitle || name || "러프컷").slice(0, 40)} 러프컷`;
-  const seq = await project.createSequenceFromMedia(seqName, ordered);
-  if (!seq) throw new Error("시퀀스를 만들지 못했습니다.");
-  // 만들고 안 열면 사용자는 "눌렀는데 아무 일도 안 일어났다" 고 느낀다.
-  try { await project.setActiveSequence(seq); } catch (_) { /* 열기 실패는 치명적이지 않다 */ }
+    onStage("러프컷 시퀀스 만드는 중…");
+    const seq = await project.createSequenceFromMedia(seqName, ordered);
+    if (!seq) throw new Error("시퀀스를 만들지 못했습니다.");
+    // 만들고 안 열면 사용자는 "눌렀는데 아무 일도 안 일어났다" 고 느낀다.
+    try { await project.setActiveSequence(seq); } catch (_) { /* 열기 실패는 치명적이지 않다 */ }
 
-  return { seqName, placed: ordered.length, missing: recs.length - ordered.length };
+    return { seqName, placed: ordered.length, missing: recs.length - ordered.length };
+  });
+}
+
+/** ① 원본 확보만 따로 — 러프컷 전에 큰 파일을 미리 받아 두고 진행 상황을 본다. */
+async function doFetchSource() {
+  if (busy || !recRows.length) return;
+  busy = true;
+  $("fetchSrcBtn").disabled = true;
+  try {
+    const withMedia = recRows.find((r) => r.mediaFilename || r.mediaId) || recRows[0];
+    const filename = await ensureMaster(withMedia, (msg) => setStatus($("recsStatus"), msg));
+    setStatus($("recsStatus"), `원본 준비 완료 — ${filename}. 이제 러프컷을 만들 수 있습니다.`, "ok");
+  } catch (err) {
+    setStatus($("recsStatus"), err.message, "err");
+    console.log("[STEP-D] 원본 확보 실패", err);
+  } finally {
+    busy = false;
+    $("fetchSrcBtn").disabled = !recRows.length;
+  }
 }
 
 async function doRoughCut() {
@@ -940,6 +969,7 @@ async function doRoughCut() {
   } finally {
     busy = false;
     $("roughcutBtn").disabled = !recRows.length;
+    $("fetchSrcBtn").disabled = !recRows.length;
   }
 }
 
@@ -1276,6 +1306,7 @@ async function doLogout() {
   $("recsReload").addEventListener("click", () => void loadRecs());
   $("markersBtn").addEventListener("click", () => void doAddMarkers());
   $("roughcutBtn").addEventListener("click", () => void doRoughCut());
+  $("fetchSrcBtn").addEventListener("click", () => void doFetchSource());
   $("subclipBtn").addEventListener("click", () => void doMakeSubclips());
   $("program").addEventListener("change", () => {
     syncUploadButton();
