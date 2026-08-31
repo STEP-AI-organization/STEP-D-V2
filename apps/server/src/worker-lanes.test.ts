@@ -122,3 +122,30 @@ describe("파괴적 어드민 라우트는 인가를 거친다", () => {
     );
   });
 });
+
+/**
+ * YouTube OAuth 자격증명은 **그걸 쓰는 레인에서만** 필요하다. 이 목록에서 레인이 빠지면
+ * 그 워커는 쓰지도 않을 시크릿을 요구하며 **부팅 즉시 죽는다** — 그런데 작업 스케줄러는
+ * Running 으로 보여서 원인이 안 보인다(2026-08-12·08-14 윈도우2 실측, 2026-08-31 render 재발).
+ * 세 번 겪었으면 기계가 봐야 한다.
+ */
+describe("YouTube 시크릿이 필요한 레인 판정", () => {
+  const src = fs.readFileSync(path.join(SRC, "worker.ts"), "utf-8");
+
+  it("youtube 잡이 없는 레인은 전부 YT_FREE_LANES 에 있다", () => {
+    const m = /const YT_FREE_LANES = new Set\(\[([^\]]*)\]\)/.exec(src);
+    assert.ok(m, "YT_FREE_LANES 를 찾지 못했다");
+    const free = new Set([...m![1].matchAll(/"([^"]+)"/g)].map((x) => x[1]));
+
+    const all = lanes();
+    const ytJobs = new Set(all.youtube);
+    for (const [lane, jobs] of Object.entries(all)) {
+      if (lane === "youtube" || lane === "content") continue;   // 클라우드 레인 — 시크릿이 있다
+      const touchesYouTube = jobs.some((j) => ytJobs.has(j));
+      if (!touchesYouTube) {
+        assert.ok(free.has(lane),
+          `레인 '${lane}' 은 YouTube 잡이 없는데 YT_FREE_LANES 에 없다 — 그 워커는 부팅 즉시 죽는다`);
+      }
+    }
+  });
+});

@@ -3187,7 +3187,10 @@ async function main(): Promise<void> {
   // ⚠️ 레인 **이름**으로 판정한다. 예전엔 WORKER_JOBS 문자열 전체를 집합과 비교해서,
   //    조합이 하나 늘 때마다("naver,download,commerce") 목록에서 빠지고 그 순간 이 워커가
   //    쓰지도 않을 YouTube 시크릿을 요구하며 **부팅 즉시 죽었다.**
-  const YT_FREE_LANES = new Set(["naver", "gebd", "download", "commerce"]);
+  // ⚠️ **새 레인을 만들면 여기부터 본다.** render 를 추가한 2026-08-31 에도 똑같이 걸렸다 —
+  //    워커가 부팅 즉시 죽는데 작업 스케줄러는 Running 으로 보인다. worker-lanes.test.ts 가
+  //    "youtube 잡이 없는 레인은 전부 여기 있어야 한다" 를 강제한다.
+  const YT_FREE_LANES = new Set(["naver", "gebd", "download", "commerce", "render"]);
   const NEEDS_YT = SELECTED_LANES.length === 0 || SELECTED_LANES.some((l) => !YT_FREE_LANES.has(l));
   if (NEEDS_YT && (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET)) {
     console.error("[worker] GOOGLE_CLIENT_ID / GOOGLE_CLIENT_SECRET are required");
