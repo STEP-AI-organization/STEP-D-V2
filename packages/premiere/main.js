@@ -647,6 +647,15 @@ async function doAddMarkers() {
  * ⚠️ `createSubClipAction` 은 **지연 액션**이라 만들어진 항목을 돌려주지 않는다. 그래서
  *    이름을 정해진 규칙(`[STEP-D] …`)으로 붙인다 — 다음 단계(시퀀스 조립)가 그 이름으로 찾는다.
  */
+/**
+ * 서브클립 이름 규칙 — **한 곳에서만 만든다.** 러프컷이 이 이름으로 조각을 되찾으므로,
+ * 두 곳에서 각자 만들면 규칙이 갈라지는 순간 조립이 조용히 빈 시퀀스를 낳는다.
+ * 끝에 추천 id 를 두는 것이 계약이다(endsWith 로 찾는다).
+ */
+function subclipName(r) {
+  return `[STEP-D] ${String(r.title || "추천").slice(0, 40)} · ${r.id}`;
+}
+
 async function findMasterItem(filename) {
   const { api, project } = await activeSequence();
   if (!filename) throw new Error("이 추천에 연결된 원본 파일 정보가 없습니다.");
@@ -828,7 +837,7 @@ async function makeSubclipsForRecs(recs, onStage) {
       const start = api.TickTime.createWithSeconds(Number(r.startTime) || 0);
       const end = api.TickTime.createWithSeconds(Number(r.endTime) || 0);
       // 이름에 추천 id 를 넣는다 — 나중에 시퀀스로 조립할 때 이 이름으로 되찾는다.
-      const label = `[STEP-D] ${(r.title || "추천").slice(0, 40)} · ${r.id}`;
+      const label = subclipName(r);
       // hasHardBoundaries=true: 편집자가 실수로 구간 밖까지 늘리지 못하게 한다.
       // AI 가 고른 구간이 바깥 경계라는 계약을 프리미어 쪽에서도 지킨다.
       compound.addAction(clip.createSubClipAction(label, start, end, true));
@@ -837,6 +846,101 @@ async function makeSubclipsForRecs(recs, onStage) {
 
   if (ok === false) throw new Error("서브클립을 만들지 못했습니다 — 원본이 오프라인인지 확인하세요.");
   return { sourceName: name, count: recs.length };
+}
+
+// ── 러프컷 — 조각을 순서대로 늘어놓은 초벌 타임라인 ───────────────────────────
+/**
+ * 서브클립이 "오려둔 조각" 이라면 러프컷은 **이미 순서대로 붙여 놓은 초벌**이다.
+ * 편집자는 다듬기부터 시작한다 — 찾고 자르고 늘어놓는 일이 통째로 없어진다.
+ *
+ * 공식 선언 대조: `project.createSequenceFromMedia(name, clipProjectItems?, targetBin?)`
+ * — 시퀀스 **생성과 배치가 한 번에** 된다(설정도 소재에 맞춰진다). 그래서 트랙 인덱스·삽입
+ * 시각을 우리가 계산하지 않는다. 계산하는 순간 fps·드롭프레임에서 어긋날 자리가 생긴다.
+ *
+ * ⚠️ 서브클립 생성은 **지연 액션**이라 만들어진 항목을 못 돌려받는다. 그래서 이름 끝에
+ *    추천 id 를 박아 두고(makeSubclips 와 같은 규칙) 커밋 뒤에 그 이름으로 되찾는다.
+ */
+async function findItemsByRecIds(recIds) {
+  const { api, project } = await activeSequence();
+  const want = new Map(recIds.map((id) => [String(id), null]));
+  const root = await project.getRootItem();
+  const queue = [root];
+  let visited = 0;
+
+  while (queue.length && visited < 4000) {
+    const folder = queue.shift();
+    let items = [];
+    try { items = await folder.getItems(); } catch (_) { continue; }
+    for (const item of items) {
+      visited += 1;
+      try {
+        const asFolder = api.FolderItem && api.FolderItem.cast ? api.FolderItem.cast(item) : null;
+        if (asFolder && typeof asFolder.getItems === "function") { queue.push(asFolder); continue; }
+      } catch (_) { /* 폴더 아님 */ }
+      const name = String(item.name || "");
+      for (const id of want.keys()) {
+        if (!want.get(id) && name.endsWith(id)) {
+          try { want.set(id, api.ClipProjectItem.cast(item)); } catch (_) { /* 클립 아님 */ }
+        }
+      }
+    }
+  }
+  return want;
+}
+
+async function buildRoughCut(recs, onStage) {
+  const withMedia = recs.find((r) => r.mediaFilename || r.mediaId) || recs[0];
+  onStage("원본 확인 중…");
+  const { api, project, clip, name } = await ensureMaster(withMedia, onStage);
+
+  // ① 구간마다 조각을 만든다 — 서브클립 버튼과 **같은 규칙**으로 이름 붙인다.
+  onStage(`${recs.length}개 구간 자르는 중…`);
+  const cut = project.executeTransaction((compound) => {
+    for (const r of recs) {
+      compound.addAction(clip.createSubClipAction(
+        subclipName(r),
+        api.TickTime.createWithSeconds(Number(r.startTime) || 0),
+        api.TickTime.createWithSeconds(Number(r.endTime) || 0),
+        true,
+      ));
+    }
+  }, `STEP-D 러프컷 재료 ${recs.length}개`);
+  if (cut === false) throw new Error("구간을 자르지 못했습니다 — 원본이 오프라인인지 확인하세요.");
+
+  // ② 방금 만든 조각을 이름으로 되찾는다(지연 액션이라 반환값이 없다).
+  onStage("조각 찾는 중…");
+  const found = await findItemsByRecIds(recs.map((r) => r.id));
+  // **추천 순서 그대로** 늘어놓는다 — 점수 순으로 온 목록이라 그게 곧 편집 순서다.
+  const ordered = recs.map((r) => found.get(String(r.id))).filter(Boolean);
+  if (!ordered.length) throw new Error("자른 조각을 프로젝트에서 찾지 못했습니다.");
+
+  // ③ 시퀀스 생성 + 배치 (한 번에). 시퀀스 설정도 소재에 맞춰진다.
+  onStage("러프컷 시퀀스 만드는 중…");
+  const seqName = `[STEP-D] ${(withMedia.programTitle || name || "러프컷").slice(0, 40)} 러프컷`;
+  const seq = await project.createSequenceFromMedia(seqName, ordered);
+  if (!seq) throw new Error("시퀀스를 만들지 못했습니다.");
+  // 만들고 안 열면 사용자는 "눌렀는데 아무 일도 안 일어났다" 고 느낀다.
+  try { await project.setActiveSequence(seq); } catch (_) { /* 열기 실패는 치명적이지 않다 */ }
+
+  return { seqName, placed: ordered.length, missing: recs.length - ordered.length };
+}
+
+async function doRoughCut() {
+  if (busy || !recRows.length) return;
+  busy = true;
+  $("roughcutBtn").disabled = true;
+  try {
+    const { seqName, placed, missing } = await buildRoughCut(recRows, (m) => setStatus($("recsStatus"), m));
+    setStatus($("recsStatus"),
+      `"${seqName}" 을 만들었습니다 — ${placed}개 구간이 순서대로 놓였습니다.`
+      + (missing > 0 ? ` (${missing}개는 조각을 못 찾아 빠졌습니다)` : ""), "ok");
+  } catch (err) {
+    setStatus($("recsStatus"), err.message, "err");
+    console.log("[STEP-D] 러프컷 실패", err);
+  } finally {
+    busy = false;
+    $("roughcutBtn").disabled = !recRows.length;
+  }
 }
 
 async function doMakeSubclips() {
@@ -853,6 +957,7 @@ async function doMakeSubclips() {
   } finally {
     busy = false;
     $("subclipBtn").disabled = !recRows.length;
+    $("roughcutBtn").disabled = !recRows.length;
   }
 }
 
@@ -1170,6 +1275,7 @@ async function doLogout() {
   });
   $("recsReload").addEventListener("click", () => void loadRecs());
   $("markersBtn").addEventListener("click", () => void doAddMarkers());
+  $("roughcutBtn").addEventListener("click", () => void doRoughCut());
   $("subclipBtn").addEventListener("click", () => void doMakeSubclips());
   $("program").addEventListener("change", () => {
     syncUploadButton();

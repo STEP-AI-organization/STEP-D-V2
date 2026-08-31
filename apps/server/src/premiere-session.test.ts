@@ -282,3 +282,32 @@ describe("패널 — 원본이 없으면 받아서 넣는다", () => {
     assert.ok(manifest.requiredPermissions.network.domains.includes("https://storage.googleapis.com"));
   });
 });
+
+/**
+ * 러프컷 — 서브클립이 "오려둔 조각" 이라면 러프컷은 **이미 순서대로 붙여 놓은 초벌**이다.
+ * 편집자는 다듬기부터 시작한다: 찾고·자르고·늘어놓는 일이 통째로 없어진다.
+ */
+describe("패널 — 러프컷 시퀀스", () => {
+  it("생성과 배치를 한 번에 — 트랙·시각을 우리가 계산하지 않는다", () => {
+    assert.match(panel, /createSequenceFromMedia\(seqName, ordered\)/);
+  });
+
+  it("추천 순서 그대로 늘어놓는다 — 점수 순 목록이 곧 편집 순서다", () => {
+    assert.match(panel, /const ordered = recs\.map\(\(r\) => found\.get\(String\(r\.id\)\)\)\.filter\(Boolean\);/);
+  });
+
+  it("이름 규칙이 **한 곳**이다 — 두 곳에서 만들면 갈라지는 순간 빈 시퀀스가 나온다", () => {
+    assert.match(panel, /function subclipName\(r\) \{/);
+    // 서브클립 버튼도 같은 함수를 쓴다(직접 문자열을 조립하지 않는다).
+    assert.ok(!/const label = `\[STEP-D\] \$\{\(r\.title/.test(panel), "이름을 또 조립하고 있다");
+  });
+
+  it("만든 뒤 시퀀스를 연다 — 안 열면 '눌렀는데 아무 일도 안 일어났다' 가 된다", () => {
+    assert.match(panel, /setActiveSequence\(seq\)/);
+  });
+
+  it("못 찾은 조각 수를 사람에게 말한다 — 조용히 빠지면 안 된다", () => {
+    assert.match(panel, /missing: recs\.length - ordered\.length/);
+    assert.match(panel, /개는 조각을 못 찾아 빠졌습니다/);
+  });
+});
