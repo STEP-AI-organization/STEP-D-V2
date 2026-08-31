@@ -462,3 +462,36 @@ describe("패널 — 글꼴 확인", () => {
     assert.match(ps, /if \(Test-Path \$target\) \{\s*\n\s*Write-Host "이미 있음/);
   });
 });
+
+/**
+ * 제목 그래픽 (.mogrt) — 사용자 요구 2026-08-31: **"사용자가 하는 게 아니라 자동으로 서버에서
+ * 내려서."** .mogrt 는 코드로 만들 수 없는 자산이라, "한 번" 을 편집자마다가 아니라
+ * **우리가 한 번**으로 만든다. 폰트와 같은 방식으로 서버에 두고 패널이 받아 캐시한다.
+ */
+describe("패널 — 제목 그래픽은 서버에서 받아 쓴다", () => {
+  it("서버에서 자동으로 받고 캐시한다 — 편집자는 아무것도 안 만든다", () => {
+    assert.ok(panel.includes("async function ensureMogrt(onStage)"));
+    assert.ok(panel.includes("https://stepd.stepai.kr/mogrt/stepd-title.mogrt"));
+  });
+
+  it("자산이 없으면 **무엇이 없고 어디에 올려야 하는지**까지 말한다", () => {
+    assert.ok(panel.includes("apps/web/public/mogrt/stepd-title.mogrt"));
+  });
+
+  it("색은 서버 값을 채운다 — .mogrt 에 박으면 서버에서 바꿔도 안 따라온다", () => {
+    assert.ok(panel.includes("/shorts-style`)"), "스타일 정본을 안 받아온다");
+    assert.ok(panel.includes("accent: style && style.accent"));
+  });
+
+  it("제목 삽입 실패가 마커까지 버리지 않는다 — 앞의 성과를 지키는 자리다", () => {
+    assert.ok(panel.includes("titleNote = ` · 제목은 건너뜀(${err.message})`;"));
+  });
+
+  it("파라미터 이름을 못 찾으면 실제 목록을 쏟는다 — 추측으로 두 번 고치지 않는다", () => {
+    assert.ok(panel.includes('console.log("[STEP-D] mogrt params:"'));
+  });
+
+  it("제목은 V2 트랙에 올린다 — V1 영상 위에 얹혀야 보인다", () => {
+    assert.ok(panel.includes("insertMogrtFromPath(mogrt.nativePath, at, 2, 0)"));
+  });
+});

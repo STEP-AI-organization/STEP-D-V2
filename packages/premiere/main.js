@@ -687,6 +687,77 @@ function warnIfFontsMissing() {
   }
 }
 
+// ── 제목 그래픽 (.mogrt) ──────────────────────────────────────────────────────
+/**
+ * 제목을 **프리미어 안에서** 그린다 — 이중 경로(웹 편집기 / 프리미어) 중 프리미어 쪽은
+ * "렌더해서 업로드" 가 파일을 그대로 등록하므로 서버가 제목을 얹을 기회가 없다.
+ *
+ * ⚠️ **`.mogrt` 는 코드로 만들 수 없다.** 프리미어에서 사람이 한 번 저장하는 자산이다.
+ *    그래서 "한 번" 을 **편집자마다**가 아니라 **우리가 한 번**으로 만든다 — 폰트와 같은 방식:
+ *    서버에 올려 두고 패널이 자동으로 받아 캐시한다. 편집자는 아무것도 안 만든다.
+ *
+ * ⚠️ 색·글꼴은 .mogrt 에 **박아 두지 않는다.** 서버의 `/programs/:id/shorts-style` 값을
+ *    삽입 시점에 채워 넣는다 — 안 그러면 서버에서 색을 바꿔도 프리미어 경로만 옛 색으로 남는다.
+ */
+const MOGRT_URL = "https://stepd.stepai.kr/mogrt/stepd-title.mogrt";
+const MOGRT_FILE = "stepd-title.mogrt";
+
+async function ensureMogrt(onStage) {
+  const folder = await mediaFolder();          // 원본 저장 폴더를 같이 쓴다(한 번만 묻는다)
+  const cached = await folder.getEntry(MOGRT_FILE).catch(() => null);
+  if (cached) return cached;
+
+  onStage("제목 템플릿 받는 중…");
+  const res = await fetch(MOGRT_URL);
+  if (!res.ok) {
+    // 자산이 아직 없다 — **무엇이 없고 누가 만들어야 하는지**까지 말한다.
+    throw new Error(
+      "제목 템플릿(.mogrt)이 서버에 아직 없습니다. "
+      + "프리미어에서 한 번 만들어 apps/web/public/mogrt/stepd-title.mogrt 로 올리면 "
+      + "이후 모든 PC 가 자동으로 받아 씁니다.",
+    );
+  }
+  const buf = await res.arrayBuffer();
+  const file = await folder.createFile(MOGRT_FILE, { overwrite: true });
+  await file.write(buf, { format: formats.binary });
+  return file;
+}
+
+/**
+ * 삽입된 그래픽의 **노출된 컨트롤**에 값을 채운다.
+ *
+ * 파라미터 이름은 .mogrt 를 만든 사람이 정하므로 우리가 알 수 없다. 그래서 이름으로 **찾고**,
+ * 못 찾으면 실제 목록을 콘솔에 쏟는다 — 추측으로 두 번 고치지 않으려고(내보내기 때와 같은 방식).
+ */
+async function fillTitleGraphic(api, item, { line1, line2, accent }) {
+  const chain = await item.getComponentChain();
+  const count = await chain.getComponentCount();
+  const seen = [];
+  for (let i = 0; i < count; i++) {
+    const comp = await chain.getComponentAtIndex(i);
+    let params = [];
+    try { params = await comp.getParams(); } catch (_) { continue; }
+    for (const p of params) {
+      const name = String(p.displayName || p.name || "");
+      seen.push(name);
+      const lower = name.toLowerCase();
+      try {
+        if (line1 && /(1|첫|line ?1|title ?1)/.test(lower)) await applyParam(api, p, line1);
+        else if (line2 && /(2|둘|line ?2|title ?2)/.test(lower)) await applyParam(api, p, line2);
+        else if (accent && /(color|색)/.test(lower)) await applyParam(api, p, accent);
+      } catch (_) { /* 이 파라미터는 못 쓴다 — 다음 것 */ }
+    }
+  }
+  console.log("[STEP-D] mogrt params:", seen.join(" | "));
+  return seen;
+}
+
+async function applyParam(api, param, value) {
+  if (typeof param.createSetValueAction !== "function") return;
+  const project = (await activeSequence()).project;
+  project.executeTransaction((c) => { c.addAction(param.createSetValueAction(value, true)); }, "STEP-D 제목 값");
+}
+
 // ── 추천 → 서브클립 (프로젝트 패널에 잘라 놓기) ───────────────────────────────
 /**
  * 마커는 "여기가 좋다" 까지다. 서브클립은 **이미 잘라 놓은 조각**을 준다 — 편집자는 끌어다
@@ -1069,6 +1140,36 @@ async function ensureSequenceForMaster(filename, onStage) {
   });
 }
 
+/**
+ * 고른 구간마다 제목 그래픽을 꽂는다. 값(문구·강조색)은 **서버가 정본**이다.
+ * 자산이 없거나 파라미터를 못 찾으면 던진다 — 호출부가 마커까지는 살리고 사유를 보여 준다.
+ */
+async function addTitlesForRecs(recs, onStage) {
+  const programId = selectedProgram();
+  if (!programId) return 0;
+  // 색·글꼴은 서버에서 받는다 — 프리미어 쪽에 복제하면 서버에서 바꿔도 안 따라온다.
+  const { style } = await apiJson(`/programs/${encodeURIComponent(programId)}/shorts-style`);
+  const mogrt = await ensureMogrt(onStage);
+
+  const { api, project, sequence } = await activeSequence();
+  const editor = api.SequenceEditor.getEditor(sequence);
+  let placed = 0;
+  for (const r of recs) {
+    const at = api.TickTime.createWithSeconds(Number(r.startTime) || 0);
+    // V2 트랙에 올린다 — V1 의 영상 위에 얹혀야 제목이 보인다.
+    const items = editor.insertMogrtFromPath(mogrt.nativePath, at, 2, 0);
+    const item = Array.isArray(items) ? items[0] : items;
+    if (!item) continue;
+    await fillTitleGraphic(api, item, {
+      line1: String(r.titleLine1 || r.title || ""),
+      line2: String(r.titleLine2 || ""),
+      accent: style && style.accent,
+    });
+    placed += 1;
+  }
+  return placed;
+}
+
 /** ① 원본 확보 → ② 없으면 타임라인 생성 → ③ 고른 구간에 마커. 편집자는 여기서부터 다듬는다. */
 async function doPrepareAndMark() {
   const picks = chosenRecs();
@@ -1085,8 +1186,20 @@ async function doPrepareAndMark() {
 
     onStage(`마커 ${picks.length}개 꽂는 중…`);
     const { sequenceName, count } = await addMarkersForRecs(picks);
+
+    // 제목 그래픽은 **선택적 단계**다 — 자산(.mogrt)이 아직 없어도 마커까지는 남아야 한다.
+    // 여기서 실패했다고 앞의 성과를 버리면 편집자는 처음부터 다시 해야 한다.
+    let titleNote = "";
+    try {
+      const placed = await addTitlesForRecs(picks, onStage);
+      titleNote = placed > 0 ? ` · 제목 ${placed}개` : "";
+    } catch (err) {
+      titleNote = ` · 제목은 건너뜀(${err.message})`;
+      console.log("[STEP-D] 제목 삽입 건너뜀", err);
+    }
+
     setStatus($("recsStatus"),
-      `"${sequenceName}" 에 마커 ${count}개를 꽂았습니다. 목록에서 제목을 누르면 그 구간으로 이동합니다.`, "ok");
+      `"${sequenceName}" 에 마커 ${count}개${titleNote}. 목록에서 제목을 누르면 그 구간으로 이동합니다.`, "ok");
   } catch (err) {
     setStatus($("recsStatus"), err.message, "err");
     console.log("[STEP-D] 준비+마커 실패", err);
