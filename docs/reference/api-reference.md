@@ -85,7 +85,6 @@ API 키(`api-keys.ts`). **화이트리스트(`API_KEY_ROUTES`)에 올린 라우�
 |---|---|---|---|
 | `POST /api/programs` | 프로그램 생성 (업로드 전 필수 콘텐츠 루트) | `{ title(필수), section, targetAge, cast, programCode, category, weekdays }` → `{ program }`. SMR 필드는 `smr` 블롭으로 저장 | `createProgram` |
 | `GET /api/programs` | 프로그램 목록 (id·제목·상태만) | → `{ programs: [{ id, title, status }] }`. 드롭다운 하나 채우면 되는 클라이언트(프리미어 패널)용 — `/api/state` 전체를 받지 않게 | (웹은 `fetchState` 사용) |
-| `GET /api/programs/:id/shorts-style` | **쇼츠 스타일 정본** — 제목 강조색·글꼴·세로 위치 | → `{ style: { templateId, accent, titleFont, titleY } }` / 404. 이중 경로(웹 편집기 / 프리미어)에서 프리미어 쪽이 색·글꼴을 **복제하지 않고** 이 값을 받아 쓴다 — 복제하면 서버에서 바꿔도 안 따라와 같은 프로그램 쇼츠가 경로에 따라 달라진다. 이 프로그램을 덮는 활성 자동배포 계획이 있으면 그 계획의 layout 값이 우선 | (프리미어 패널) |
 | `GET /api/programs/:id` | 프로그램 1개 (이해 프로필 포함) | → `{ program }` / 404 | (`fetchState`로 대체) |
 | `PATCH /api/programs/:id` | 부분 병합 수정 — **body에 있는 필드만** 바뀐다 | `{ title, section, targetAge, cast, castPhotos, category, weekdays, programCode, moods, pipelineGenre, posterImageDataUrl }` → `{ program }` | `updateProgram` |
 | `POST /api/programs/:id/autofill` | 제목만으로 나머지 필드 자동 채움 (Gemini + google_search 그라운딩, 2단계: 검색·수집 → 팩트체크) | → `{ draft }`. **저장하지 않는다** — 사용자가 UI에서 확인 후 저장. 출연자·SMR은 안 채움. 실패 502 | `autofillProgram` |
@@ -193,6 +192,7 @@ API 키(`api-keys.ts`). **화이트리스트(`API_KEY_ROUTES`)에 올린 라우�
 | 메서드·경로 | 역할 | 요청/응답 요점 | 프론트 함수 |
 |---|---|---|---|
 | `GET /api/recommendations` | 추천 목록 (구간·점수 + 프레임 정합 메타) | 쿼리 `programId, status`(기본 `pending` · `all` 가능), `limit`(기본 50·최대 200) → `{ recommendations: [{ id, title, startTime, endTime, score100, status, people, episodeId, episodeNumber, programId, programTitle, mediaId, fps, startTimecode }] }`. 점수 내림차순. **`startTime/endTime` 은 원본 파일 0초 기준 초** — Premiere·EDL(소스 타임코드 기준)로 넘기려면 같이 오는 `fps`·`startTimecode` 로 환산한다. 0046 이전 원본은 그 둘이 0/"" 이라 환산 불가(숨기지 않고 그대로 내보낸다) | (프리미어 패널 · 웹은 `fetchState`) |
+| `GET /api/recommendations/:id/title.png` | **제목 투명 PNG** — 프리미어 경로가 타임라인에 얹는 그래픽 | 쿼리 `aspect`(`9:16-crop-main` 기본 · `16:9`) → `image/png`(1080×1920 또는 1920×1080) / 404(그릴 제목 없음) / 503(캔버스 미가용). 웹 편집기와 **같은 렌더러**(`buildStaticOverlayItems`+`renderTextLayerPng`)로 그때그때 그린다 — 구 `.mogrt` 자산 방식(2026-08-31 폐기)은 위치·글꼴이 파일에 박제돼 서버에서 템플릿을 바꿔도 프리미어 경로만 옛 모양으로 남았다. 같은 이유로 구 `GET /api/programs/:id/shorts-style`(스타일 값만 내려주던 것)도 함께 삭제됐다 | (프리미어 패널) |
 | `POST /api/premiere/handoff` | **웹 → 프리미어 핸드오프**(맥락 남기기) | `{ programId?, episodeId?, clipId?, mediaId?, label? }`(하나는 필수, 없으면 400) → `{ ok:true }`. 사용자별 1건만 보관 | `openInPremiere` |
 | `GET /api/premiere/handoff` | 프리미어 패널이 집어간다 (5초 폴링) | → `{ handoff }` / `{ handoff:null }`. **읽으면 지운다**(한 번만 소비) · 5분 지난 건 버린다. ⚠️ 브라우저가 UXP 패널에 값을 직접 넘길 수 없어서 서버를 경유한다 — 실행은 `stepd://` 스킴이 맡는다 | (프리미어 패널) |
 | `POST /api/recommendations/:id/adopt` | 추천 채택 → ffmpeg 트림·인코딩으로 실제 클립 생성 | → `{ clipId, clip }`. 마스터 미디어+ffmpeg 있으면 실 인코딩(GCS는 서명 URL로 구간만 fetch), 없으면 메타데이터만 | `adoptRec` |

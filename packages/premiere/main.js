@@ -640,9 +640,9 @@ async function doAddMarkers() {
 /**
  * **지마켓 산스가 이 PC 에 있나.** 사용자 요구 2026-08-31: "안 깔려 있으면 인식해서 깔게끔도."
  *
- * 왜 중요한가: 서버 렌더는 컨테이너에 폰트를 넣어 두지만(Dockerfile) **편집자 PC 는 아무도
- * 안 챙긴다.** 그 상태로 프리미어에서 제목을 얹으면 글꼴만 다른 결과물이 나가고, 아무도
- * 모른 채 몇 회차가 지난다 — 조용히 틀리는 쪽이라 먼저 말해 줘야 한다.
+ * ⚠️ 범위가 바뀌었다: STEP-D 제목은 이제 **서버가 그린 PNG** 라 이 PC 의 글꼴과 무관하다.
+ * 남은 건 편집자가 프리미어에서 **직접 넣는 자막·문구**다 — 그건 로컬 글꼴로 그려지므로,
+ * 없으면 같은 영상 안에서 제목과 자막의 글꼴이 갈린다. 조용히 틀리는 쪽이라 먼저 말해 준다.
  *
  * 설치는 패널이 직접 못 한다(레지스트리 등록이 필요하다). 대신 **한 줄 명령**을 안내한다 —
  * launcher/install-fonts.ps1 은 관리자 권한 없이 사용자 폰트로 넣는다.
@@ -678,7 +678,8 @@ function warnIfFontsMissing() {
   if (!el) return;
   const ok = fontsInstalled();
   if (ok === false) {
-    el.textContent = "⚠ 지마켓 산스가 이 PC 에 없습니다 — 제목 글꼴이 결과물과 달라집니다. "
+    el.textContent = "⚠ 지마켓 산스가 이 PC 에 없습니다 — STEP-D 제목은 서버 그림이라 그대로지만, "
+      + "프리미어에서 직접 넣는 자막·문구는 다른 글꼴로 나갑니다. "
       + "packages/premiere/launcher/install-fonts.ps1 을 한 번 실행하세요 (관리자 권한 불필요 · 이후 프리미어 재시작).";
     el.className = "status err";
   } else {
@@ -687,75 +688,57 @@ function warnIfFontsMissing() {
   }
 }
 
-// ── 제목 그래픽 (.mogrt) ──────────────────────────────────────────────────────
+// ── 제목 그래픽 ──────────────────────────────────────────────────────────────
 /**
- * 제목을 **프리미어 안에서** 그린다 — 이중 경로(웹 편집기 / 프리미어) 중 프리미어 쪽은
- * "렌더해서 업로드" 가 파일을 그대로 등록하므로 서버가 제목을 얹을 기회가 없다.
+ * 제목을 **서버가 그린 투명 PNG** 로 얹는다.
  *
- * ⚠️ **`.mogrt` 는 코드로 만들 수 없다.** 프리미어에서 사람이 한 번 저장하는 자산이다.
- *    그래서 "한 번" 을 **편집자마다**가 아니라 **우리가 한 번**으로 만든다 — 폰트와 같은 방식:
- *    서버에 올려 두고 패널이 자동으로 받아 캐시한다. 편집자는 아무것도 안 만든다.
+ * 사용자 지적 2026-08-31: *"글씨 위치 같은 것도 다 빠질 텐데, 그때그때 생성하면 되지 않을까."*
+ * 맞다 — `.mogrt` 는 위치·크기·글꼴이 파일 안에 **박제**돼서, 서버에서 템플릿을 바꿔도
+ * 프리미어 경로만 옛 모양으로 남는다. 그래서 자산을 두지 않고 **웹 경로가 쓰는 그 렌더러**로
+ * 그때그때 그려 받는다(GET /api/recommendations/:id/title.png).
  *
- * ⚠️ 색·글꼴은 .mogrt 에 **박아 두지 않는다.** 서버의 `/programs/:id/shorts-style` 값을
- *    삽입 시점에 채워 넣는다 — 안 그러면 서버에서 색을 바꿔도 프리미어 경로만 옛 색으로 남는다.
+ * 얻는 것: 글꼴·색·위치가 전부 서버 정본이라 두 경로가 **픽셀 단위로 같다.** 사람이 만들어야
+ * 할 자산도, 파라미터 이름 맞추기도 없다.
+ * 대가: 프리미어에서 글자를 **텍스트로 편집할 수는 없다**(이미지다). 문구를 바꾸려면 STEP-D
+ * 에서 바꾸고 다시 받는다 — 문구의 정본이 서버라는 계약과 같은 방향이라 이게 맞다.
  */
-const MOGRT_URL = "https://stepd.stepai.kr/mogrt/stepd-title.mogrt";
-const MOGRT_FILE = "stepd-title.mogrt";
-
-async function ensureMogrt(onStage) {
-  const folder = await mediaFolder();          // 원본 저장 폴더를 같이 쓴다(한 번만 묻는다)
-  const cached = await folder.getEntry(MOGRT_FILE).catch(() => null);
-  if (cached) return cached;
-
-  onStage("제목 템플릿 받는 중…");
-  const res = await fetch(MOGRT_URL);
+async function fetchTitlePng(rec, folder, aspect) {
+  const q = `?aspect=${encodeURIComponent(aspect)}`;
+  const res = await api(`/recommendations/${encodeURIComponent(rec.id)}/title.png${q}`, { method: "GET" });
   if (!res.ok) {
-    // 자산이 아직 없다 — **무엇이 없고 누가 만들어야 하는지**까지 말한다.
-    throw new Error(
-      "제목 템플릿(.mogrt)이 서버에 아직 없습니다. "
-      + "프리미어에서 한 번 만들어 apps/web/public/mogrt/stepd-title.mogrt 로 올리면 "
-      + "이후 모든 PC 가 자동으로 받아 씁니다.",
-    );
+    if (res.status === 404) return null;          // 그릴 제목이 없다 — 조용히 건너뛴다
+    throw new Error(`제목 이미지를 받지 못했습니다 (${res.status})`);
   }
   const buf = await res.arrayBuffer();
-  const file = await folder.createFile(MOGRT_FILE, { overwrite: true });
+  const file = await folder.createFile(`stepd-title-${rec.id}.png`, { overwrite: true });
   await file.write(buf, { format: formats.binary });
   return file;
 }
 
-/**
- * 삽입된 그래픽의 **노출된 컨트롤**에 값을 채운다.
- *
- * 파라미터 이름은 .mogrt 를 만든 사람이 정하므로 우리가 알 수 없다. 그래서 이름으로 **찾고**,
- * 못 찾으면 실제 목록을 콘솔에 쏟는다 — 추측으로 두 번 고치지 않으려고(내보내기 때와 같은 방식).
- */
-async function fillTitleGraphic(api, item, { line1, line2, accent }) {
-  const chain = await item.getComponentChain();
-  const count = await chain.getComponentCount();
-  const seen = [];
-  for (let i = 0; i < count; i++) {
-    const comp = await chain.getComponentAtIndex(i);
-    let params = [];
-    try { params = await comp.getParams(); } catch (_) { continue; }
-    for (const p of params) {
-      const name = String(p.displayName || p.name || "");
-      seen.push(name);
-      const lower = name.toLowerCase();
+/** 이름으로 프로젝트 항목을 찾아 **그 자리에서** 쓴다(findItemsByRecIds 와 같은 이유). */
+async function findItemsByFileNames(names, use) {
+  const { api, project } = await activeSequence();
+  const want = new Map(names.map((n) => [n, null]));
+  const root = await project.getRootItem();
+  const queue = [root];
+  let visited = 0;
+  while (queue.length && visited < 4000) {
+    const folder = queue.shift();
+    let items = [];
+    try { items = await folder.getItems(); } catch (_) { continue; }
+    for (const item of items) {
+      visited += 1;
       try {
-        if (line1 && /(1|첫|line ?1|title ?1)/.test(lower)) await applyParam(api, p, line1);
-        else if (line2 && /(2|둘|line ?2|title ?2)/.test(lower)) await applyParam(api, p, line2);
-        else if (accent && /(color|색)/.test(lower)) await applyParam(api, p, accent);
-      } catch (_) { /* 이 파라미터는 못 쓴다 — 다음 것 */ }
+        const asFolder = api.FolderItem && api.FolderItem.cast ? api.FolderItem.cast(item) : null;
+        if (asFolder && typeof asFolder.getItems === "function") { queue.push(asFolder); continue; }
+      } catch (_) { /* 폴더 아님 */ }
+      const n = String(item.name || "");
+      if (want.has(n) && !want.get(n)) {
+        try { want.set(n, api.ClipProjectItem.cast(item)); } catch (_) { /* 클립 아님 */ }
+      }
     }
   }
-  console.log("[STEP-D] mogrt params:", seen.join(" | "));
-  return seen;
-}
-
-async function applyParam(api, param, value) {
-  if (typeof param.createSetValueAction !== "function") return;
-  const project = (await activeSequence()).project;
-  project.executeTransaction((c) => { c.addAction(param.createSetValueAction(value, true)); }, "STEP-D 제목 값");
+  return await use(want, project, api);
 }
 
 // ── 추천 → 서브클립 (프로젝트 패널에 잘라 놓기) ───────────────────────────────
@@ -1145,27 +1128,53 @@ async function ensureSequenceForMaster(filename, onStage) {
  * 자산이 없거나 파라미터를 못 찾으면 던진다 — 호출부가 마커까지는 살리고 사유를 보여 준다.
  */
 async function addTitlesForRecs(recs, onStage) {
-  const programId = selectedProgram();
-  if (!programId) return 0;
-  // 색·글꼴은 서버에서 받는다 — 프리미어 쪽에 복제하면 서버에서 바꿔도 안 따라온다.
-  const { style } = await apiJson(`/programs/${encodeURIComponent(programId)}/shorts-style`);
-  const mogrt = await ensureMogrt(onStage);
+  // 지금 열린 타임라인의 **실제 비율**로 받는다. 세로 러프컷에 가로 그림(또는 그 반대)을
+  // 얹으면 프리미어가 프레임에 맞춰 늘리거나 잘라서, 서버 미리보기와 글자 위치가 달라진다.
+  const { sequence: seq0 } = await activeSequence();
+  let aspect = "9:16-crop-main";
+  let tracks = 0;
+  try {
+    const size = await seq0.getFrameSize();
+    if (Number(size.width) >= Number(size.height)) aspect = "16:9";
+  } catch (_) { /* 못 읽으면 쇼츠로 둔다 — 이 패널의 기본 산출물이 세로다 */ }
+  try { tracks = Number(await seq0.getVideoTrackCount()) || 0; } catch (_) { /* 아래에서 판단 */ }
 
-  const { api, project, sequence } = await activeSequence();
-  const editor = api.SequenceEditor.getEditor(sequence);
-  let placed = 0;
+  const folder = await mediaFolder();
+  onStage("제목 이미지 받는 중…");
+
+  // 먼저 **전부 받아서** 한 번에 가져온다 — importFiles 를 건마다 부르면 느리다.
+  const files = [];
   for (const r of recs) {
-    const at = api.TickTime.createWithSeconds(Number(r.startTime) || 0);
-    // V2 트랙에 올린다 — V1 의 영상 위에 얹혀야 제목이 보인다.
-    const items = editor.insertMogrtFromPath(mogrt.nativePath, at, 2, 0);
-    const item = Array.isArray(items) ? items[0] : items;
-    if (!item) continue;
-    await fillTitleGraphic(api, item, {
-      line1: String(r.titleLine1 || r.title || ""),
-      line2: String(r.titleLine2 || ""),
-      accent: style && style.accent,
-    });
-    placed += 1;
+    const f = await fetchTitlePng(r, folder, aspect);
+    if (f) files.push({ rec: r, file: f });
+  }
+  if (!files.length) return 0;
+
+  const { project } = await activeSequence();
+  const ok = await project.importFiles(files.map((f) => f.file.nativePath), true);
+  if (ok === false) throw new Error("제목 이미지를 프로젝트로 가져오지 못했습니다.");
+
+  const byName = new Map(files.map((f) => [f.file.name, f.rec]));
+  const placed = await findItemsByFileNames([...byName.keys()], async (found, project2, api2) => {
+    const sequence = (await activeSequence()).sequence;
+    const editor = api2.SequenceEditor.getEditor(sequence);
+    let n = 0;
+    for (const [name, rec] of byName) {
+      const item = found.get(name);
+      if (!item) continue;
+      const at = api2.TickTime.createWithSeconds(Number(rec.startTime) || 0);
+      // V2(인덱스 1)에 얹는다 — V1 의 영상 위에 있어야 제목이 보인다. 오디오는 없다.
+      const action = editor.createOverwriteItemAction(item, at, 1, 0);
+      const done = project2.executeTransaction((c) => { c.addAction(action); }, `STEP-D 제목 ${name}`);
+      if (done !== false) n += 1;
+    }
+    return n;
+  });
+
+  // 하나도 못 얹었는데 트랙이 하나뿐이면 **그게 이유다.** 프리미어에는 트랙 추가 API 가
+  // 없어서(타입 정의 확인) 우리가 만들어 줄 수 없다 — 사람이 할 일을 정확히 말해 준다.
+  if (placed === 0 && tracks > 0 && tracks < 2) {
+    throw new Error("타임라인에 비디오 트랙이 V1 뿐입니다 — V2 를 하나 추가하고 다시 눌러 주세요.");
   }
   return placed;
 }
@@ -1187,7 +1196,7 @@ async function doPrepareAndMark() {
     onStage(`마커 ${picks.length}개 꽂는 중…`);
     const { sequenceName, count } = await addMarkersForRecs(picks);
 
-    // 제목 그래픽은 **선택적 단계**다 — 자산(.mogrt)이 아직 없어도 마커까지는 남아야 한다.
+    // 제목 그래픽은 **선택적 단계**다 — 서버 렌더가 막혀도(캔버스 미가용 등) 마커까지는 남아야 한다.
     // 여기서 실패했다고 앞의 성과를 버리면 편집자는 처음부터 다시 해야 한다.
     let titleNote = "";
     try {

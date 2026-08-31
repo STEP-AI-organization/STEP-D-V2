@@ -2103,21 +2103,6 @@ app.get("/api/programs", async (c) => {
   });
 });
 
-// ── 쇼츠 스타일 (프리미어 경로가 서버 값을 그대로 쓰게) ────────────────────────
-// 이중 경로(웹 편집기 / 프리미어)에서 **정본은 서버 하나**다. 프리미어 쪽에 색·글꼴을
-// 복제해 두면 여기서 바꿔도 안 따라와, 같은 프로그램 쇼츠가 경로에 따라 달라진다.
-// 자동배포 계획이 이 프로그램을 덮고 있으면 그 계획의 값이 우선이다(화면에서 고른 값).
-app.get("/api/programs/:id/shorts-style", async (c) => {
-  const id = c.req.param("id");
-  const program = await getEntity<any>("program", id);
-  if (!program) return c.json({ error: "program not found" }, 404);
-  const rules = (await listAutomationRules()) as any[];
-  const rule = rules.find((r) => r.enabled !== false
-    && (r.programId === id || (Array.isArray(r.programIds) && r.programIds.includes(id))));
-  const { shortsStyle } = await import("./factory.ts");
-  return c.json({ style: shortsStyle(program, rule) });
-});
-
 // ── get one program (incl. its understanding profile) ──
 app.get("/api/programs/:id", async (c) => {
   const program = await getEntity<Record<string, unknown>>("program", c.req.param("id"));
@@ -9084,6 +9069,58 @@ async function overlayPreviewItems(
   const iconBox = layer === "title" ? null : await previewChannelIconBox(es, clip, scale);
   return { W, H, items: buildStaticOverlayItems(es, W, H, scale, iconBox) };
 }
+
+/**
+ * 추천 하나의 **제목 투명 PNG** — 프리미어 경로가 제목을 얹을 때 쓴다.
+ *
+ * 왜 이 방식인가 (사용자 2026-08-31: "글씨 위치 같은 것도 다 빠질 텐데, 그때그때 생성하면
+ * 되지 않을까"): 맞는 지적이다. `.mogrt` 는 위치·크기·글꼴이 파일 안에 **박제**돼서, 서버에서
+ * 템플릿을 바꿔도 프리미어 경로만 옛 모양으로 남는다.
+ *
+ * 그래서 **웹 경로가 쓰는 바로 그 렌더러**(buildStaticOverlayItems + renderTextLayerPng)로
+ * 그때그때 그려 내려 준다. 글꼴·색·위치가 전부 서버 정본이라 두 경로가 **픽셀 단위로 같다** —
+ * 복제도 없고, 사람이 만들어야 할 자산도 없다.
+ */
+app.get("/api/recommendations/:id/title.png", async (c) => {
+  const rec = await getEntity<any>("recommendation", c.req.param("id"));
+  if (!rec) return c.json({ error: "recommendation not found" }, 404);
+  const ep = rec.episodeId ? await getEntity<any>("episode", rec.episodeId) : null;
+  const program = ep?.programId ? await getEntity<any>("program", ep.programId) : undefined;
+
+  const rules = (await listAutomationRules()) as any[];
+  const rule = ep?.programId
+    ? rules.find((r) => r.enabled !== false
+        && (r.programId === ep.programId
+          || (Array.isArray(r.programIds) && r.programIds.includes(ep.programId))))
+    : undefined;
+
+  // 화면비는 **부르는 쪽 타임라인**을 따른다. 러프컷은 세로(1080×1920), 원본 마스터에
+  // 마커만 꽂은 경우는 가로다 — 다른 비율의 그림을 얹으면 프리미어가 늘리거나 잘라서
+  // 글자 위치가 서버 미리보기와 어긋난다. 기본값은 쇼츠(세로).
+  const want = c.req.query("aspect");
+  const aspect = want === "16:9" ? "16:9" : "9:16-crop-main";
+  const { autoEditorState } = await import("./factory.ts");
+  const es = autoEditorState(
+    rec, ep?.programTitle ?? "", program,
+    (rule as any)?.templateId,
+    { ...((rule as any)?.layout ?? {}), logo: (rule as any)?.layout?.logo ?? false },
+    aspect,
+  );
+  // 제목만 그린다 — 로고·시간박스는 편집자가 프리미어에서 따로 다룬다(이미지 조인도 아낀다).
+  const { W, H, items } = await overlayPreviewItems(es, aspect, null, "title");
+  if (!items.length) return c.json({ error: "no title to draw" }, 404);
+  if (!(await overlayCanvasAvailable())) return c.json({ error: "canvas unavailable" }, 503);
+
+  const buf = await renderTextLayerPng({ width: W, height: H, items });
+  if (!buf || !buf.length) return c.json({ error: "render failed" }, 500);
+  return new Response(new Uint8Array(buf), {
+    headers: {
+      "content-type": "image/png",
+      // 추천 문구가 바뀌면 그림도 바뀐다 — 오래 캐시하지 않는다.
+      "cache-control": "private, max-age=300",
+    },
+  });
+});
 
 app.post("/api/clips/:id/overlay-png", async (c) => {
   const clipId = c.req.param("id");

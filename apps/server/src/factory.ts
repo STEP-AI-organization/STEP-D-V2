@@ -647,31 +647,6 @@ export function pickTemplateId(program?: any): string {
   return /drama|드라마/i.test(g) ? "broadcast-drama" : "broadcast-standard";
 }
 
-/**
- * 이 프로그램의 **쇼츠 스타일 값** — 강조색·제목 글꼴·제목 세로 위치.
- *
- * 왜 밖으로 내보내나: 프리미어 경로(사용자 확정 2026-08-31의 이중 경로)는 제목을 프리미어
- * 안에서 그린다. 그 값을 프리미어 쪽에 **복제해 두면 여기서 색을 바꿔도 안 따라온다** —
- * 같은 프로그램 쇼츠가 경로에 따라 달라진다. 그래서 정본을 여기 하나로 두고 내려 준다.
- * (자동배포 계획이 layout.titleColor·titleFont 로 덮은 값이 있으면 그게 우선이다)
- */
-export function shortsStyle(program?: any, rule?: { templateId?: unknown; layout?: any }): {
-  templateId: string; accent: string; titleFont: string; titleY: number;
-} {
-  const templateId = String(rule?.templateId ?? "").trim()
-    || String(program?.autoPublish?.templateId ?? "").trim()
-    || pickTemplateId(program);
-  const seed = TEMPLATE_SEEDS[templateId] ?? TEMPLATE_SEEDS["broadcast-standard"];
-  const layout = (rule?.layout ?? {}) as Record<string, unknown>;
-  const accent = typeof layout.titleColor === "string" && /^#[0-9a-fA-F]{6}$/.test(layout.titleColor)
-    ? layout.titleColor : seed.accent;
-  // 글꼴 기본은 autoEditorState 가 titleLines 에 심는 것과 **같은 값**이어야 한다 —
-  // 다르면 웹 경로와 프리미어 경로가 서로 다른 글꼴로 그린다.
-  const titleFont = typeof layout.titleFont === "string" && layout.titleFont ? layout.titleFont : "gmarket";
-  const titleY = Number.isFinite(layout.titleY) ? Number(layout.titleY) : seed.titleY;
-  return { templateId, accent, titleFont, titleY };
-}
-
 export function autoEditorState(
   rec: any, programTitle: string, program?: any, forcedTemplateId?: string,
   layoutOverride?: {

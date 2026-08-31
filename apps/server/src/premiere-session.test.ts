@@ -434,7 +434,8 @@ describe("패널 — 주 동선: 원본 받고 마커", () => {
  * 글꼴 (사용자 2026-08-31: "안 깔려 있으면 인식해서 깔게끔도 해줘야 해").
  *
  * 서버 렌더는 컨테이너에 폰트를 넣어 두지만(Dockerfile) **편집자 PC 는 아무도 안 챙긴다.**
- * 그 상태로 프리미어에서 제목을 얹으면 글꼴만 다른 결과물이 나가고 아무도 모른 채 지나간다.
+ * 제목 자체는 서버가 그린 PNG 라 안전하지만(2026-08-31 전환), 편집자가 프리미어에서 직접
+ * 넣는 자막은 로컬 글꼴로 그려진다 — 없으면 한 영상 안에서 제목과 자막의 글꼴이 갈린다.
  */
 describe("패널 — 글꼴 확인", () => {
   it("설치 여부를 사용자·시스템 폰트 폴더에서 본다", () => {
@@ -464,34 +465,44 @@ describe("패널 — 글꼴 확인", () => {
 });
 
 /**
- * 제목 그래픽 (.mogrt) — 사용자 요구 2026-08-31: **"사용자가 하는 게 아니라 자동으로 서버에서
- * 내려서."** .mogrt 는 코드로 만들 수 없는 자산이라, "한 번" 을 편집자마다가 아니라
- * **우리가 한 번**으로 만든다. 폰트와 같은 방식으로 서버에 두고 패널이 받아 캐시한다.
+ * 제목 그래픽 — 사용자 요구 2026-08-31: **"사용자가 하는 게 아니라 자동으로 서버에서 내려서."**
+ * 그리고 이어진 지적: **"글씨 위치 같은 것도 다 빠질 텐데, 그때그때 생성하면 되지 않을까."**
+ *
+ * 그래서 `.mogrt`(위치·글꼴이 파일에 박제되는 자산)를 버리고, **웹 경로가 쓰는 그 렌더러**로
+ * 그때그때 그린 투명 PNG 를 받아 얹는다. 여기 검사는 그 계약이 조용히 되돌아가지 않게 한다 —
+ * 되돌아가면 증상은 "프리미어에서만 옛날 색·옛날 위치" 라 사람이 원인을 못 찾는다.
  */
-describe("패널 — 제목 그래픽은 서버에서 받아 쓴다", () => {
-  it("서버에서 자동으로 받고 캐시한다 — 편집자는 아무것도 안 만든다", () => {
-    assert.ok(panel.includes("async function ensureMogrt(onStage)"));
-    assert.ok(panel.includes("https://stepd.stepai.kr/mogrt/stepd-title.mogrt"));
+describe("패널 — 제목은 서버가 그려 준 PNG 를 얹는다", () => {
+  it("자산이 아니라 렌더 결과를 받는다 — 편집자도 우리도 만들 게 없다", () => {
+    assert.ok(panel.includes("/title.png${q}"), "제목 PNG 를 받아오지 않는다");
+    assert.ok(!panel.includes("insertMogrtFromPath"), ".mogrt 경로가 되살아났다");
   });
 
-  it("자산이 없으면 **무엇이 없고 어디에 올려야 하는지**까지 말한다", () => {
-    assert.ok(panel.includes("apps/web/public/mogrt/stepd-title.mogrt"));
+  it("타임라인 비율대로 받는다 — 세로 러프컷에 가로 그림을 얹으면 위치가 어긋난다", () => {
+    assert.ok(panel.includes("await seq0.getFrameSize()"));
+    assert.ok(panel.includes('if (Number(size.width) >= Number(size.height)) aspect = "16:9";'));
+    assert.ok(panel.includes("aspect=${encodeURIComponent(aspect)}"));
   });
 
-  it("색은 서버 값을 채운다 — .mogrt 에 박으면 서버에서 바꿔도 안 따라온다", () => {
-    assert.ok(panel.includes("/shorts-style`)"), "스타일 정본을 안 받아온다");
-    assert.ok(panel.includes("accent: style && style.accent"));
+  it("서버도 그 비율을 받아 그린다 — 기본은 쇼츠(세로)", () => {
+    assert.ok(index.includes('const want = c.req.query("aspect");'));
+    assert.ok(index.includes('const aspect = want === "16:9" ? "16:9" : "9:16-crop-main";'));
+  });
+
+  it("웹과 **같은 렌더러**를 쓴다 — 복제하면 두 경로가 갈라진다", () => {
+    assert.ok(index.includes('await overlayPreviewItems(es, aspect, null, "title")'));
+    assert.ok(index.includes("renderTextLayerPng({ width: W, height: H, items })"));
   });
 
   it("제목 삽입 실패가 마커까지 버리지 않는다 — 앞의 성과를 지키는 자리다", () => {
     assert.ok(panel.includes("titleNote = ` · 제목은 건너뜀(${err.message})`;"));
   });
 
-  it("파라미터 이름을 못 찾으면 실제 목록을 쏟는다 — 추측으로 두 번 고치지 않는다", () => {
-    assert.ok(panel.includes('console.log("[STEP-D] mogrt params:"'));
+  it("제목은 V2 트랙에 올린다 — V1 영상 위에 얹혀야 보인다", () => {
+    assert.ok(panel.includes("editor.createOverwriteItemAction(item, at, 1, 0)"));
   });
 
-  it("제목은 V2 트랙에 올린다 — V1 영상 위에 얹혀야 보인다", () => {
-    assert.ok(panel.includes("insertMogrtFromPath(mogrt.nativePath, at, 2, 0)"));
+  it("트랙이 V1 뿐이면 **그게 이유라고** 말한다 — 트랙 추가 API 는 없다", () => {
+    assert.ok(panel.includes("타임라인에 비디오 트랙이 V1 뿐입니다"));
   });
 });
