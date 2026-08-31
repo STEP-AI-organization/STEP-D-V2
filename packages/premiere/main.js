@@ -454,7 +454,15 @@ function immediateExportType(api) {
   const c = api.Constants || api;
   const t = c.ExportType || c.EXPORT_TYPE || {};
   const v = t.IMMEDIATELY ?? t.Immediately ?? t.IMMEDIATE ?? t.immediately;
-  return v === undefined ? 0 : v;
+  // ⚠️ **0 으로 폴백하면 안 된다.** 공식 선언(@adobe/premierepro 26.3.0)의 enum 순서가
+  //   QUEUE_TO_AME=0 · QUEUE_TO_APP=1 · IMMEDIATELY=2 라, 상수를 못 찾았을 때 0 을 넘기면
+  //   "즉시 렌더" 가 아니라 **AME 큐로 보낸다.** 그러면 우리는 나오지도 않을 파일을 기다리다
+  //   "렌더 결과 파일이 비어 있습니다" 로 죽는다 — 원인과 증상이 멀어지는 최악의 형태다.
+  //   못 찾으면 조용히 틀린 값을 쓰지 말고 그 자리에서 말한다.
+  if (v === undefined) {
+    throw new Error("내보내기 방식 상수(Constants.ExportType.IMMEDIATELY)를 찾지 못했습니다 — 프리미어 버전을 확인하세요.");
+  }
+  return v;
 }
 
 /** 실패했을 때 "무엇이 있었는지" 를 남긴다 — 다음 시도를 추측이 아니라 사실로 하려고. */
@@ -559,6 +567,72 @@ async function seekActiveSequence(sec) {
   throw new Error("재생위치 이동 API 를 찾지 못했습니다 — UDT 콘솔의 [STEP-D] 로그를 보내 주세요.");
 }
 
+/**
+ * 추천 구간을 **시퀀스 마커**로 꽂는다 — 편집자가 마커를 따라가며 자르기만 하면 되게.
+ *
+ * 공식 선언(@adobe/premierepro 26.3.0) 대조:
+ *   `Markers.getMarkers(sequence): Promise<Markers>`
+ *   `markers.createAddMarkerAction(Name, markerType?, startTime?, duration?, comments?): Action`
+ *   `project.executeTransaction(cb => cb.addAction(action), undoString?): boolean`
+ *
+ * 마커는 **액션 패턴**이다 — 만들기만 하면 아무 일도 안 일어나고, 트랜잭션에 담아 실행해야
+ * 반영된다. 트랜잭션 하나에 다 담는 이유: 편집자가 **Ctrl+Z 한 번으로 전부 되돌릴 수 있다.**
+ * 스무 개를 따로 넣으면 스무 번 눌러야 한다.
+ */
+async function addMarkersForRecs(recs) {
+  const { api, project, sequence, name } = await activeSequence();
+  if (!api.Markers || typeof api.Markers.getMarkers !== "function") {
+    dumpApi(api, sequence);
+    throw new Error("마커 API 를 찾지 못했습니다 — UDT 콘솔의 [STEP-D] 로그를 보내 주세요.");
+  }
+  const markers = await api.Markers.getMarkers(sequence);
+  // 코멘트 마커(기본). 상수를 못 찾으면 문자열 폴백 — 여기서 틀려도 마커가 안 생길 뿐,
+  // 내보내기처럼 엉뚱한 동작을 하지는 않는다.
+  const type = (api.Marker && api.Marker.MARKER_TYPE_COMMENT) || "Comment";
+
+  const ok = project.executeTransaction((compound) => {
+    for (const r of recs) {
+      const startSec = Number(r.startTime) || 0;
+      const durSec = Math.max(0.1, (Number(r.endTime) || 0) - startSec);
+      // 마커 이름은 짧게(타임라인에서 잘린다), 자세한 건 코멘트로.
+      const label = `[STEP-D] ${r.title || "추천"}`.slice(0, 80);
+      const comment = [
+        r.score100 === null || r.score100 === undefined ? null : `점수 ${r.score100}`,
+        r.people && r.people.length ? `인물 ${r.people.join(", ")}` : null,
+        `${fmtTime(startSec)}–${fmtTime(r.endTime)}`,
+        `STEP-D ${r.id}`,   // 어느 추천에서 나온 마커인지 — 나중에 되짚을 유일한 끈이다
+      ].filter(Boolean).join(" · ");
+      compound.addAction(markers.createAddMarkerAction(
+        label, type,
+        api.TickTime.createWithSeconds(startSec),
+        api.TickTime.createWithSeconds(durSec),
+        comment,
+      ));
+    }
+  }, `STEP-D 추천 마커 ${recs.length}개`);
+
+  if (ok === false) throw new Error("마커를 넣지 못했습니다 — 시퀀스가 잠겨 있는지 확인하세요.");
+  return { sequenceName: name, count: recs.length };
+}
+
+async function doAddMarkers() {
+  if (busy || !recRows.length) return;
+  busy = true;
+  $("markersBtn").disabled = true;
+  try {
+    setStatus($("recsStatus"), "마커 넣는 중…");
+    const { sequenceName, count } = await addMarkersForRecs(recRows);
+    setStatus($("recsStatus"),
+      `"${sequenceName}" 에 마커 ${count}개를 넣었습니다. 되돌리려면 Ctrl+Z 한 번.`, "ok");
+  } catch (err) {
+    setStatus($("recsStatus"), err.message, "err");
+    console.log("[STEP-D] 마커 실패", err);
+  } finally {
+    busy = false;
+    $("markersBtn").disabled = !recRows.length;
+  }
+}
+
 let recRows = [];
 
 function renderRecs() {
@@ -607,6 +681,7 @@ async function loadRecs() {
     const data = await apiJson(`/recommendations${q}`);
     recRows = Array.isArray(data.recommendations) ? data.recommendations : [];
     renderRecs();
+    $("markersBtn").disabled = !recRows.length;
     setStatus(
       $("recsStatus"),
       recRows.length
@@ -772,6 +847,7 @@ async function doLogout() {
   $("tabUpload").addEventListener("click", () => showTab("upload"));
   $("tabRecs").addEventListener("click", () => showTab("recs"));
   $("recsReload").addEventListener("click", () => void loadRecs());
+  $("markersBtn").addEventListener("click", () => void doAddMarkers());
   $("program").addEventListener("change", () => {
     syncUploadButton();
     void refreshSequenceLabel();

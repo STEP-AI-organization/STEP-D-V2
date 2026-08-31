@@ -120,6 +120,40 @@ describe("패널 — 활성 시퀀스 렌더 후 업로드", () => {
   });
 });
 
+/**
+ * 추천 → 시퀀스 마커 (2026-08-31). 공식 선언(@adobe/premierepro 26.3.0)으로 서명을 대조하고 짰다.
+ * 이 패키지는 `npm pack @adobe/premierepro` 로 언제든 받아 볼 수 있다 — 추측하지 말 것.
+ */
+describe("패널 — 추천을 타임라인 마커로", () => {
+  it("액션 패턴을 지킨다 — 만들기만 하면 아무 일도 안 일어난다", () => {
+    assert.match(panel, /Markers\.getMarkers\(sequence\)/);
+    assert.match(panel, /markers\.createAddMarkerAction\(/);
+    assert.match(panel, /project\.executeTransaction\(/);
+  });
+
+  it("트랜잭션 **하나**에 다 담는다 — Ctrl+Z 한 번으로 전부 되돌리게", () => {
+    // for 루프가 executeTransaction 콜백 **안**에 있어야 한다. 밖에 있으면 마커마다
+    // 트랜잭션이 하나씩 생겨 되돌리기를 스무 번 눌러야 한다.
+    const m = /executeTransaction\(\(compound\) => \{([\s\S]*?)\n  \}, `STEP-D/.exec(panel);
+    assert.ok(m, "executeTransaction 블록을 찾지 못했다");
+    assert.match(m![1], /for \(const r of recs\)/);
+  });
+
+  it("마커에 STEP-D 추천 id 를 남긴다 — 나중에 되짚을 유일한 끈이다", () => {
+    assert.match(panel, /`STEP-D \$\{r\.id\}`/);
+  });
+});
+
+describe("패널 — 내보내기 방식 상수 (조용히 틀리면 안 되는 자리)", () => {
+  it("상수를 못 찾으면 **던진다** — 0 으로 폴백하면 AME 큐로 가 버린다", () => {
+    // 공식 enum 순서: QUEUE_TO_AME=0 · QUEUE_TO_APP=1 · IMMEDIATELY=2.
+    // 예전 코드는 `v === undefined ? 0 : v` 였다 — 즉 폴백이 곧 "AME 큐로 보내기" 였고,
+    // 우리는 나오지도 않을 파일을 기다리다 엉뚱한 오류로 죽었을 것이다.
+    assert.match(panel, /if \(v === undefined\) \{[\s\S]{0,200}throw new Error\(/);
+    assert.doesNotMatch(panel, /v === undefined \? 0 : v/);
+  });
+});
+
 describe("패널 매니페스트", () => {
   it("UXP manifest v5 · Premiere 25.6+ (UXP 정식 지원 시작 버전)", () => {
     assert.equal(manifest.manifestVersion, 5);
