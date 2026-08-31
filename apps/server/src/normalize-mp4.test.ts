@@ -14,6 +14,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
+import { normalizedMp4Path } from "./ffmpeg.ts";
 
 import { audioMapArgs, needsMp4Normalize, NORMALIZE_MAX_HEIGHT } from "./ffmpeg.ts";
 
@@ -123,9 +124,33 @@ describe("워커 배선 (소스 스캔)", () => {
       "로컬 파일을 입력으로 쓰면 20~50GB 를 tmpfs(RAM) 에 내려받게 된다");
   });
 
-  it("원본을 덮어쓰지 않는다 — 확장자만 바꾼 **새 경로**에 올린다", () => {
-    assert.match(src, /const mp4ObjectPath = objectPath\.replace\(\/\\\.\[\^\.\/\]\+\$\/, ""\) \+ "\.mp4";/,
-      "원본 경로에 덮어쓰면 방송사 소재가 사라진다");
+  // ⚠️ 예전엔 이 자리가 **표현식 문자열**(`objectPath.replace(...) + ".mp4"`)을 고정했다.
+  // 그 표현식이 바로 버그였다 — 업로드가 이미 `.mp4` 면 결과가 원본과 같은 경로가 되어
+  // 방송사 소재를 덮어썼는데, 테스트는 그걸 "정상" 으로 못 박고 있었다.
+  // 패턴이 아니라 **불변식**(원본과 절대 같지 않다)을 증명한다.
+  it("정규화 산출물 경로는 원본과 절대 같지 않다", () => {
+    for (const p of [
+      "uploads/m_ab12cd34.mxf", "uploads/m_ab12cd34.mov", "uploads/m_ab12cd34.mp4",
+      "uploads/m_ab12cd34.mxf_opatom", "uploads/m_ab12cd34", "uploads/2026.08/m_ab12cd34.mp4",
+    ]) {
+      assert.notEqual(normalizedMp4Path(p), p, `${p} 를 덮어쓴다 — 방송사 소재가 사라진다`);
+      assert.match(normalizedMp4Path(p), /\.mp4$/, `${p} → mp4 확장자가 아니다`);
+    }
+  });
+
+  it("확장자가 다르면 종전대로 확장자만 바꾼다", () => {
+    assert.equal(normalizedMp4Path("uploads/m_x.mxf"), "uploads/m_x.mp4");
+    assert.equal(normalizedMp4Path("uploads/m_x.mov"), "uploads/m_x.mp4");
+  });
+
+  // 인터레이스·오디오 2트랙·hevc·비-aac 는 mp4 컨테이너에서도 정규화가 필요하다
+  // (needsMp4Normalize) — 즉 `.mp4` 입력이 실제로 이 분기로 온다.
+  it("이미 .mp4 면 비켜 간다", () => {
+    assert.equal(normalizedMp4Path("uploads/m_x.mp4"), "uploads/m_x.norm.mp4");
+  });
+
+  it("워커가 그 경로로 올린다", () => {
+    assert.match(src, /const mp4ObjectPath = normalizedMp4Path\(objectPath\)/);
     assert.match(src, /uploadFile\(mp4ObjectPath, mp4Tmp\)/);
   });
 

@@ -222,6 +222,23 @@ export function remuxFaststart(input: string, outputPath: string): Promise<void>
 // 그 mp4 만 본다. 원본은 GCS 에 그대로 남는다(지우지 않는다 — 방송사 소재다).
 
 /** 정규화가 필요한가 — 순수 판정(테스트가 이 함수를 직접 짚는다). */
+/**
+ * 정규화 산출물을 올릴 오브젝트 경로. **원본과 절대 같으면 안 된다.**
+ *
+ * ⚠️ 예전엔 `objectPath.replace(/\.[^./]+$/, "") + ".mp4"` 였다. `.mxf`·`.mov` 면 경로가
+ * 갈리지만, **업로드 확장자가 이미 `.mp4` 인데 정규화가 필요한 경우**(1080i · 오디오 트랙
+ * 2개 · hevc · 비-aac — 전부 mp4 컨테이너에서 생긴다, `needsMp4Normalize` 참고) 결과가
+ * 원본과 같은 경로가 되어 **방송사 원본을 변환본으로 덮어썼다.** GCS 업로드는 존재 검사가
+ * 없어 복구가 안 되고, 뒤따르는 원본 자막 추출도 사라진 파일을 읽어 조용히 "자막 없음" 으로
+ * 빠졌다(로그에는 "원본 보존" 이라고 반대로 찍혔다).
+ *
+ * 충돌하면 `.norm.mp4` 로 비킨다 — 방송사 소재는 지우지 않는다는 규칙이 먼저다.
+ */
+export function normalizedMp4Path(objectPath: string): string {
+  const candidate = objectPath.replace(/\.[^./]+$/, "") + ".mp4";
+  return candidate === objectPath ? `${objectPath.replace(/\.[^./]+$/, "")}.norm.mp4` : candidate;
+}
+
 export function needsMp4Normalize(p: Pick<ProbeResult,
   "formatName" | "codec" | "audioCodec" | "audioStreams" | "interlaced" | "hasAudio">,
 ): { needed: boolean; reasons: string[] } {

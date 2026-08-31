@@ -405,6 +405,8 @@ export function AppDataProvider({
   //   · connected but idle                                           → slow heartbeat (45s)
   //   · disconnected                                                 → reconnect probe (15s)
   // Read the latest state through a ref so the self-scheduling loop never re-subscribes.
+  /** 숨은 탭의 재확인 주기 — 요청은 안 보내고 루프만 살려 둔다(돌아오면 즉시 갱신). */
+  const HIDDEN_DELAY = 60_000;
   const stateRef = useRef(state);
   stateRef.current = state;
   useEffect(() => {
@@ -425,15 +427,34 @@ export function AppDataProvider({
         );
       return active ? 8_000 : 45_000;
     };
+    // ⚠️ **숨은 탭에서는 받아오지 않는다.** 이 루프가 부르는 refresh() 는 `/api/state` 전체다.
+    // 아무도 안 보는 탭이 8초마다 그걸 받아오면 그 바이트가 전부 Vercel Fast Origin Transfer 로
+    // 청구된다 — 2026-08-31 에 같은 응답을 8초마다 부르던 표시등이 3시간에 34.5 GB 를 썼다.
+    // 루프는 계속 돌되(돌아왔을 때 곧바로 이어가려고) 요청만 건너뛴다.
+    let inFlight = false;
     const tick = async () => {
-      if (!alive) return;
-      await refresh();
-      if (alive) timer = setTimeout(tick, nextDelay());
+      if (!alive || inFlight) return;
+      inFlight = true;
+      try {
+        if (!document.hidden) await refresh();
+      } finally {
+        inFlight = false;
+      }
+      if (alive) timer = setTimeout(tick, document.hidden ? HIDDEN_DELAY : nextDelay());
     };
     timer = setTimeout(tick, nextDelay());
+    // 탭으로 돌아오면 다음 틱을 기다리지 않고 바로 갱신한다 — 유휴 주기가 45초라
+    // 안 그러면 돌아와서 한참 낡은 화면을 본다.
+    const onVisible = () => {
+      if (!alive || document.hidden) return;
+      clearTimeout(timer);
+      void tick();
+    };
+    document.addEventListener("visibilitychange", onVisible);
     return () => {
       alive = false;
       clearTimeout(timer);
+      document.removeEventListener("visibilitychange", onVisible);
     };
   }, [refresh]);
 

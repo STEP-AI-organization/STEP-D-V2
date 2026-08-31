@@ -52,7 +52,7 @@ import { clipGate } from "./publish-dispatch.ts";
 import { checkCredits } from "./credits.ts";
 import { topupAndRecheck } from "./auto-topup.ts";
 import { billableMinutes } from "./billing.ts";
-import { probe, captureThumbnail, remuxFaststart, needsMp4Normalize, normalizeToMp4, extractSourceCaptions } from "./ffmpeg.ts";
+import { probe, captureThumbnail, remuxFaststart, needsMp4Normalize, normalizedMp4Path, normalizeToMp4, extractSourceCaptions } from "./ffmpeg.ts";
 import {
   prepareProgramAssets, publishStyleProfile, publishThumbnails, tempAssetRoot, pullPrefix,
 } from "./thumbnail-assets.ts";
@@ -768,7 +768,8 @@ async function handleMediaPrepare(job: Job): Promise<void> {
     const srcReadUrl = readUrl;
     if (normalize.needed) {
       const mp4Tmp = path.join(workDir, "normalized.mp4");
-      const mp4ObjectPath = objectPath.replace(/\.[^./]+$/, "") + ".mp4";
+      // 원본과 같은 경로가 나오면 안 된다 — 규칙은 ffmpeg.ts `normalizedMp4Path` 에 있다.
+      const mp4ObjectPath = normalizedMp4Path(objectPath);
       await setEpisodeNote(`원본을 mp4 로 변환 중… (${normalize.reasons.join(" · ")})`, "progress", 15);
       console.log(`[worker] media.prepare ${mediaId}: mp4 정규화 시작 — ${normalize.reasons.join(" · ")}`);
       const t0 = Date.now();
