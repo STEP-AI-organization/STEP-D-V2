@@ -81,7 +81,9 @@
       background: #1d1d1d; border: 1px solid #3a3a3a; border-left: 3px solid #2680eb;
       border-radius: 3px;
     }
-    .rec-title { color: #e8e8e8; font-size: 12px; margin-bottom: 4px; }
+    .rec-head { display: flex; flex-direction: row; margin-bottom: 4px; }
+    .rec-check { width: 18px; height: 18px; margin-right: 8px; flex: 0 0 18px; }
+    .rec-title { color: #e8e8e8; font-size: 12px; flex: 1; }
     .rec-meta { color: #8a8a8a; font-size: 11px; }
     .bar { height: 4px; background: #1d1d1d; border-radius: 2px; overflow: hidden; margin-top: 8px; }
     .bar > div { height: 4px; width: 0%; background-color: #2680eb; }
@@ -149,6 +151,13 @@
 
     <!-- ②-B 추천 구간 — 서버가 만든 추천을 프리미어 안에서 보고, 눌러서 그 구간으로 간다. -->
     <div id="recsPane" class="hidden">
+      <!-- 편집자 동선: 프로그램 → **회차** → 추천을 보고 **골라서**. 회차가 섞이면
+           "3화 만들려는데 1·2화 구간이 같이 들어가는" 도구가 된다. -->
+      <div class="row">
+        <div class="label">회차</div>
+        <select id="episode"></select>
+      </div>
+      <button id="selectAllBtn" class="secondary">전체 선택 / 해제</button>
       <div id="recsList" class="recs"></div>
       <div id="recsStatus" class="status"></div>
       <!-- 한 번에 꽂고, 되돌릴 때도 Ctrl+Z 한 번 (트랜잭션 하나에 담는다). -->

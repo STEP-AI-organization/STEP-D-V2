@@ -617,12 +617,13 @@ async function addMarkersForRecs(recs) {
 }
 
 async function doAddMarkers() {
-  if (busy || !recRows.length) return;
+  const picks = chosenRecs();
+  if (busy || !picks.length) return;
   busy = true;
   $("markersBtn").disabled = true;
   try {
     setStatus($("recsStatus"), "마커 넣는 중…");
-    const { sequenceName, count } = await addMarkersForRecs(recRows);
+    const { sequenceName, count } = await addMarkersForRecs(picks);
     setStatus($("recsStatus"),
       `"${sequenceName}" 에 마커 ${count}개를 넣었습니다. 되돌리려면 Ctrl+Z 한 번.`, "ok");
   } catch (err) {
@@ -630,7 +631,7 @@ async function doAddMarkers() {
     console.log("[STEP-D] 마커 실패", err);
   } finally {
     busy = false;
-    $("markersBtn").disabled = !recRows.length;
+    syncRecButtons();
   }
 }
 
@@ -938,11 +939,12 @@ async function buildRoughCut(recs, onStage) {
 
 /** ① 원본 확보만 따로 — 러프컷 전에 큰 파일을 미리 받아 두고 진행 상황을 본다. */
 async function doFetchSource() {
-  if (busy || !recRows.length) return;
+  const picks = visibleRecs();
+  if (busy || !picks.length) return;
   busy = true;
   $("fetchSrcBtn").disabled = true;
   try {
-    const withMedia = recRows.find((r) => r.mediaFilename || r.mediaId) || recRows[0];
+    const withMedia = picks.find((r) => r.mediaFilename || r.mediaId) || picks[0];
     const filename = await ensureMaster(withMedia, (msg) => setStatus($("recsStatus"), msg));
     setStatus($("recsStatus"), `원본 준비 완료 — ${filename}. 이제 러프컷을 만들 수 있습니다.`, "ok");
   } catch (err) {
@@ -950,16 +952,17 @@ async function doFetchSource() {
     console.log("[STEP-D] 원본 확보 실패", err);
   } finally {
     busy = false;
-    $("fetchSrcBtn").disabled = !recRows.length;
+    syncRecButtons();
   }
 }
 
 async function doRoughCut() {
-  if (busy || !recRows.length) return;
+  const picks = chosenRecs();
+  if (busy || !picks.length) return;
   busy = true;
   $("roughcutBtn").disabled = true;
   try {
-    const { seqName, placed, missing } = await buildRoughCut(recRows, (m) => setStatus($("recsStatus"), m));
+    const { seqName, placed, missing } = await buildRoughCut(picks, (m) => setStatus($("recsStatus"), m));
     setStatus($("recsStatus"),
       `"${seqName}" 을 만들었습니다 — ${placed}개 구간이 순서대로 놓였습니다.`
       + (missing > 0 ? ` (${missing}개는 조각을 못 찾아 빠졌습니다)` : ""), "ok");
@@ -968,17 +971,17 @@ async function doRoughCut() {
     console.log("[STEP-D] 러프컷 실패", err);
   } finally {
     busy = false;
-    $("roughcutBtn").disabled = !recRows.length;
-    $("fetchSrcBtn").disabled = !recRows.length;
+    syncRecButtons();
   }
 }
 
 async function doMakeSubclips() {
-  if (busy || !recRows.length) return;
+  const picks = chosenRecs();
+  if (busy || !picks.length) return;
   busy = true;
   $("subclipBtn").disabled = true;
   try {
-    const { sourceName, count } = await makeSubclipsForRecs(recRows, (m) => setStatus($("recsStatus"), m));
+    const { sourceName, count } = await makeSubclipsForRecs(picks, (m) => setStatus($("recsStatus"), m));
     setStatus($("recsStatus"),
       `"${sourceName}" 에서 ${count}개 구간을 잘라 프로젝트에 넣었습니다. 되돌리려면 Ctrl+Z 한 번.`, "ok");
   } catch (err) {
@@ -986,23 +989,102 @@ async function doMakeSubclips() {
     console.log("[STEP-D] 서브클립 실패", err);
   } finally {
     busy = false;
-    $("subclipBtn").disabled = !recRows.length;
-    $("roughcutBtn").disabled = !recRows.length;
+    syncRecButtons();
   }
 }
 
 let recRows = [];
 
+/**
+ * 편집자 동선(사용자 2026-08-31): *"나는솔로 3화 편집본 만들어야 해"* →
+ * **프로그램 → 회차 → 추천을 보고 골라서** 편집. 그래서 회차로 거르고, 줄마다 체크로 고른다.
+ *
+ * 예전엔 회차가 섞여 나오고 버튼이 **목록 전체**에 작용했다 — 3화를 만들려는데 1·2화 구간이
+ * 같이 잘려 들어갔다. 편집자가 쓸 수 없는 도구다.
+ */
+let selectedIds = new Set();
+
+/** 지금 화면에 보일 추천 — 회차 필터를 지난 것. */
+function visibleRecs() {
+  const ep = $("episode") ? $("episode").value : "";
+  if (!ep) return recRows;
+  return recRows.filter((r) => String(r.episodeId || "") === ep);
+}
+
+/** 실제로 작업할 대상 — 보이는 것 중 **체크된 것만**. */
+function chosenRecs() {
+  return visibleRecs().filter((r) => selectedIds.has(String(r.id)));
+}
+
+/** 회차 드롭다운을 추천 목록에서 만든다(서버 왕복 없이). 최신 회차가 위로. */
+function renderEpisodes() {
+  const sel = $("episode");
+  if (!sel) return;
+  const seen = new Map();
+  for (const r of recRows) {
+    const id = String(r.episodeId || "");
+    if (!id || seen.has(id)) continue;
+    seen.set(id, r.episodeNumber ? `${r.episodeNumber}회` : "회차 미상");
+  }
+  const prev = sel.value;
+  sel.innerHTML = "";
+  const all = document.createElement("option");
+  all.value = ""; all.textContent = `전체 (${recRows.length}건)`;
+  sel.appendChild(all);
+  const entries = [...seen.entries()].sort((a, b) => b[1].localeCompare(a[1], "ko", { numeric: true }));
+  for (const [id, label] of entries) {
+    const n = recRows.filter((r) => String(r.episodeId || "") === id).length;
+    const o = document.createElement("option");
+    o.value = id; o.textContent = `${label} (${n}건)`;
+    sel.appendChild(o);
+  }
+  if (prev && [...sel.options].some((o) => o.value === prev)) sel.value = prev;
+}
+
+function syncRecButtons() {
+  const n = chosenRecs().length;
+  for (const [id, label] of [
+    ["roughcutBtn", "러프컷 시퀀스 만들기"],
+    ["markersBtn", "타임라인에 마커로 꽂기"],
+    ["subclipBtn", "구간을 서브클립으로 자르기"],
+  ]) {
+    const el = $(id);
+    if (!el) continue;
+    el.disabled = busy || n === 0;
+    el.textContent = n > 0 ? `${label} (${n}건)` : label;
+  }
+  const fetchBtn = $("fetchSrcBtn");
+  if (fetchBtn) fetchBtn.disabled = busy || visibleRecs().length === 0;
+}
+
 function renderRecs() {
   const list = $("recsList");
   list.innerHTML = "";
-  for (const r of recRows) {
+  for (const r of visibleRecs()) {
     const row = document.createElement("div");
     row.className = "rec";
+
+    const head = document.createElement("div");
+    head.className = "rec-head";
+
+    // 고르기 — 체크된 것만 작업 대상이다.
+    const box = document.createElement("input");
+    box.type = "checkbox";
+    box.className = "rec-check";
+    box.checked = selectedIds.has(String(r.id));
+    box.addEventListener("change", () => {
+      if (box.checked) selectedIds.add(String(r.id)); else selectedIds.delete(String(r.id));
+      syncRecButtons();
+    });
 
     const title = document.createElement("div");
     title.className = "rec-title";
     title.textContent = r.title || "(제목 없음)";
+    // 제목을 누르면 그 구간으로 이동한다(체크박스와 겹치지 않게 제목에만 건다).
+    title.addEventListener("click", () => void jumpToRec(r));
+
+    head.appendChild(box);
+    head.appendChild(title);
 
     const meta = document.createElement("div");
     meta.className = "rec-meta";
@@ -1013,11 +1095,11 @@ function renderRecs() {
     const warn = r.fps ? "" : " · ⚠ 프레임 정합 불가(원본 메타 없음)";
     meta.textContent = `${ep}${fmtTime(r.startTime)}–${fmtTime(r.endTime)} · ${dur}초 · ${score}${warn}`;
 
-    row.appendChild(title);
+    row.appendChild(head);
     row.appendChild(meta);
-    row.addEventListener("click", () => void jumpToRec(r));
     list.appendChild(row);
   }
+  syncRecButtons();
 }
 
 async function jumpToRec(r) {
@@ -1038,13 +1120,14 @@ async function loadRecs() {
     const q = programId ? `?programId=${encodeURIComponent(programId)}&limit=50` : "?limit=50";
     const data = await apiJson(`/recommendations${q}`);
     recRows = Array.isArray(data.recommendations) ? data.recommendations : [];
+    // 기본은 **전부 선택** — 보통은 다 쓰고, 빼고 싶은 것만 빼는 편이 손이 덜 간다.
+    selectedIds = new Set(recRows.map((r) => String(r.id)));
+    renderEpisodes();
     renderRecs();
-    $("markersBtn").disabled = !recRows.length;
-    $("subclipBtn").disabled = !recRows.length;
     setStatus(
       $("recsStatus"),
       recRows.length
-        ? `채택 대기 ${recRows.length}건 · 줄을 누르면 그 구간으로 이동합니다`
+        ? `채택 대기 ${recRows.length}건 · 회차를 고르고 쓸 것만 체크하세요 (제목을 누르면 그 구간으로 이동)`
         : "이 프로그램에 채택 대기 중인 추천이 없습니다.",
     );
   } catch (err) {
@@ -1304,6 +1387,15 @@ async function doLogout() {
     if (typeof wv.reload === "function") wv.reload(); else wv.src = wv.src;
   });
   $("recsReload").addEventListener("click", () => void loadRecs());
+  $("episode").addEventListener("change", () => renderRecs());
+  $("selectAllBtn").addEventListener("click", () => {
+    const vis = visibleRecs();
+    const allOn = vis.length > 0 && vis.every((r) => selectedIds.has(String(r.id)));
+    for (const r of vis) {
+      if (allOn) selectedIds.delete(String(r.id)); else selectedIds.add(String(r.id));
+    }
+    renderRecs();
+  });
   $("markersBtn").addEventListener("click", () => void doAddMarkers());
   $("roughcutBtn").addEventListener("click", () => void doRoughCut());
   $("fetchSrcBtn").addEventListener("click", () => void doFetchSource());

@@ -358,3 +358,41 @@ describe("패널 — 호스트 객체를 await 너머로 들고 다니지 않는
     assert.match(panel, /return await use\(want, project, api\);/);
   });
 });
+
+/**
+ * 편집자 동선 (사용자 2026-08-31): *"나는솔로 3화 편집본 만들어야 해"* →
+ * **프로그램 → 회차 → 추천을 보고 골라서** 편집.
+ *
+ * 예전엔 회차가 섞여 나오고 버튼이 **목록 전체**에 작용했다 — 3화를 만들려는데 1·2화 구간이
+ * 같이 잘려 들어간다. 편집자가 쓸 수 없는 도구였다.
+ */
+describe("패널 — 회차 고르고, 쓸 것만 고른다", () => {
+  const html = read("packages/premiere/index.html");
+
+  it("회차 드롭다운이 있다", () => {
+    assert.match(html, /<select id="episode"><\/select>/);
+    assert.match(panel, /function renderEpisodes\(\)/);
+  });
+
+  it("작업 대상은 **보이는 것 중 체크된 것**이다 — 목록 전체가 아니다", () => {
+    assert.match(panel, /function visibleRecs\(\)/);
+    assert.match(panel, /function chosenRecs\(\)/);
+    assert.match(panel, /const picks = chosenRecs\(\);/);
+    // 러프컷·마커·서브클립이 전부 picks 를 받는다.
+    assert.match(panel, /buildRoughCut\(picks,/);
+    assert.match(panel, /addMarkersForRecs\(picks\)/);
+    assert.match(panel, /makeSubclipsForRecs\(picks,/);
+  });
+
+  it("회차 필터는 episodeId 로 거른다 — 회차 번호는 프로그램마다 겹친다", () => {
+    assert.match(panel, /String\(r\.episodeId \|\| ""\) === ep/);
+  });
+
+  it("버튼이 선택 건수를 말한다 — 몇 건에 작용하는지 모르고 누르면 안 된다", () => {
+    assert.match(panel, /el\.textContent = n > 0 \? `\$\{label\} \(\$\{n\}건\)` : label;/);
+  });
+
+  it("기본은 전부 선택 — 보통은 다 쓰고 빼는 편이 손이 덜 간다", () => {
+    assert.match(panel, /selectedIds = new Set\(recRows\.map\(\(r\) => String\(r\.id\)\)\);/);
+  });
+});
