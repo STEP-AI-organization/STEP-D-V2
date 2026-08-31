@@ -12,7 +12,7 @@ import { useMemo, useState } from "react";
 
 import { PublishDialog } from "@/components/publish/publish-dialog";
 import { ClipDetail } from "@/components/media/clip-detail";
-import { deleteClip } from "@/lib/data/api";
+import { deleteClip, openInPremiere } from "@/lib/data/api";
 import { useToast } from "@/components/ui/toast";
 import { useSession } from "@/lib/auth";
 import { roleOf } from "@/lib/roles";
@@ -294,6 +294,22 @@ function MediaRow({
           ) : (
             <Link href={`/editor/${clip.id}`} className="sd-btn">편집</Link>
           )}
+          {/* 프리미어로 넘기기 — 맥락을 서버에 남기고 stepd:// 로 앱을 띄운다.
+              패널이 5초 폴링으로 집어가므로, 프리미어가 이미 떠 있으면 스킴 등록 없이도 된다. */}
+          <button
+            type="button"
+            className="sd-btn"
+            title="프리미어를 열고 이 회차의 추천 구간을 패널에 띄웁니다"
+            onClick={() => {
+              void openInPremiere({
+                clipId: clip.id,
+                episodeId: clip.episodeId,
+                label: clip.title,
+              }).catch(() => { /* 실패해도 목록 조작을 막지 않는다 */ });
+            }}
+          >
+            프리미어
+          </button>
           <button
             type="button"
             className="sd-btn"

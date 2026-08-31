@@ -2019,6 +2019,33 @@ export async function exportClip(
   );
 }
 
+/**
+ * 프리미어로 넘긴다 — **맥락을 먼저 서버에 남기고, 그 다음 앱을 띄운다.**
+ *
+ * ⚠️ 브라우저가 실행 중인 프리미어 패널에 값을 직접 건넬 방법이 없다(UXP 는 OS→패널 입력이
+ * 없다). 그래서 둘로 나뉜다: 이 함수가 **맥락**을 서버에 남기고(패널이 5초 폴링으로 집어간다),
+ * `stepd://` 스킴이 **실행**을 맡는다(편집자 PC 에 launcher/install.ps1 로 한 번 등록).
+ *
+ * 순서를 지킨다 — 남기기 전에 앱을 띄우면 패널이 빈손으로 깨어난다.
+ * 프리미어가 이미 떠 있으면 스킴 등록이 없어도 동작한다(폴링만으로 성립).
+ */
+export async function openInPremiere(payload: {
+  programId?: string; episodeId?: string; clipId?: string; mediaId?: string; label?: string;
+}): Promise<void> {
+  const res = await fetch(`${API_BASE}/premiere/handoff`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const body = (await res.json().catch(() => null)) as { error?: string; message?: string } | null;
+    throw new Error(body?.message ?? body?.error ?? `${res.status} ${res.statusText}`);
+  }
+  // 스킴이 등록돼 있지 않으면 브라우저가 조용히 무시한다 — 그래도 맥락은 이미 남았으므로
+  // 프리미어를 사람이 직접 켜도 패널이 그 회차로 따라간다.
+  if (typeof window !== "undefined") window.location.href = "stepd://open";
+}
+
 export async function rejectRec(recId: string, reason: string): Promise<void> {
   const res = await fetch(`${API_BASE}/recommendations/${recId}/reject`, {
     method: "POST",

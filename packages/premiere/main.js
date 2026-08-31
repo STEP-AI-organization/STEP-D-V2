@@ -369,6 +369,7 @@ async function doLogin() {
     show("upload");
     await loadPrograms();
     await refreshSequenceLabel();
+    startHandoffPolling();
   } catch (err) {
     setStatus($("loginStatus"), err.message, "err");
   } finally {
@@ -693,6 +694,63 @@ async function loadRecs() {
   }
 }
 
+// ── 웹 → 프리미어 핸드오프 (패널 쪽) ─────────────────────────────────────────
+/**
+ * 웹에서 "프리미어에서 편집" 을 누르면 그 회차로 따라온다.
+ *
+ * ⚠️ 브라우저가 패널에 값을 직접 넘길 길이 없어서(UXP 는 OS→패널 입력이 없다) **폴링**이다.
+ * 대신 폴링이라서 좋은 점이 하나 있다 — 프리미어가 이미 떠 있으면 **설치물 없이도** 된다.
+ * 프리미어를 띄우는 것만 `stepd://` 프로토콜 핸들러 몫이다(launcher/ 참고).
+ *
+ * 간격은 5초. 더 짧게 하면 편집 중에 서버를 계속 두드리고, 더 길면 "눌렀는데 반응이 없다" 가 된다.
+ */
+const HANDOFF_POLL_MS = 5000;
+let handoffTimer = null;
+
+async function pollHandoff() {
+  // 업로드·렌더 중에는 건너뛴다 — 그 사이 화면을 바꾸면 진행 상황이 가려진다.
+  if (busy || !session.token) return;
+  try {
+    const res = await api("/premiere/handoff", { method: "GET" });
+    if (!res.ok) return;
+    const data = await res.json().catch(() => ({}));
+    const h = data && data.handoff;
+    if (!h) return;
+    console.log("[STEP-D] handoff", h);
+    await applyHandoff(h);
+  } catch (_) {
+    // 네트워크가 잠깐 끊긴 것 — 다음 폴링에서 다시 본다. 조용히 넘어간다.
+  }
+}
+
+async function applyHandoff(h) {
+  const label = h.label || "웹에서 보낸 회차";
+  if (h.programId) {
+    const sel = $("program");
+    const has = Array.from(sel.options).some((o) => o.value === h.programId);
+    if (!has) await loadPrograms();          // 방금 만든 프로그램일 수 있다
+    sel.value = h.programId;
+    await store.set("stepd.lastProgram", h.programId);
+    syncUploadButton();
+    void refreshSequenceLabel();
+  }
+  // 웹에서 "편집" 을 눌렀다는 건 **무엇을 만들지 보러 온 것**이다 — 추천 탭으로 데려간다.
+  showTab("recs");
+  recRows = [];
+  await loadRecs();
+  setStatus($("recsStatus"), `웹에서 열었습니다 — ${label}`, "ok");
+}
+
+function startHandoffPolling() {
+  if (handoffTimer) return;
+  handoffTimer = setInterval(() => void pollHandoff(), HANDOFF_POLL_MS);
+}
+
+function stopHandoffPolling() {
+  if (handoffTimer) clearInterval(handoffTimer);
+  handoffTimer = null;
+}
+
 function showTab(which) {
   const isRecs = which === "recs";
   $("uploadPane").className = isRecs ? "hidden" : "";
@@ -831,6 +889,7 @@ async function refreshSequenceLabel() {
 async function doLogout() {
   await api("/auth/logout", { method: "POST" }).catch(() => {});
   await session.clear();
+  stopHandoffPolling();
   picked = null;
   show("login");
   setStatus($("loginStatus"), "");
@@ -865,6 +924,7 @@ async function doLogout() {
     show("upload");
     await loadPrograms();
     await refreshSequenceLabel();
+    startHandoffPolling();
   } else {
     show("login");
     const email = await store.get("stepd.email");

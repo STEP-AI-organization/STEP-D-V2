@@ -6884,6 +6884,54 @@ app.get("/api/recommendations", async (c) => {
   return c.json({ recommendations: rows });
 });
 
+// ── 웹 → 프리미어 핸드오프 ────────────────────────────────────────────────────
+//
+// 웹에서 "프리미어에서 편집" 을 누르면 프리미어가 그 회차로 열리게 하는 경로.
+//
+// ⚠️ **브라우저가 실행 중인 UXP 패널에 값을 직접 건넬 방법은 없다.** UXP 의 launchProcess 는
+//    패널→OS 방향뿐이고, 반대로 OS 가 패널에 인자를 넘기는 문은 없다(Adobe 문서 확인
+//    2026-08-31). 그래서 둘로 나눈다:
+//      ① **실행**은 커스텀 URL 스킴(`stepd://`)이 맡는다 — 프리미어를 띄우거나 앞으로 가져온다
+//      ② **맥락**은 여기를 지난다 — 웹이 남기고(POST), 패널이 폴링해서 집어간다(GET)
+//    이 분리 덕에 프리미어가 이미 떠 있으면 **설치물 없이도** 동작한다(폴링만으로 성립).
+//
+// 한 번만 소비된다. 오래된 것도 버린다 — 어제 누른 게 오늘 패널을 켤 때 튀어나오면
+// 편집자는 영문을 모른 채 엉뚱한 회차로 끌려간다.
+const HANDOFF_TTL_MS_PREMIERE = 5 * 60_000;
+const premiereHandoffKey = (userId: string) => `premiere.handoff.${userId}`;
+
+app.post("/api/premiere/handoff", async (c) => {
+  const user = requireUser(c);
+  const body = await c.req.json().catch(() => ({}) as Record<string, unknown>);
+  const pick = (k: string) => {
+    const v = body[k];
+    return typeof v === "string" && v.trim() ? v.trim().slice(0, 64) : undefined;
+  };
+  const payload = {
+    programId: pick("programId"), episodeId: pick("episodeId"),
+    clipId: pick("clipId"), mediaId: pick("mediaId"),
+    label: typeof body.label === "string" ? body.label.slice(0, 120) : undefined,
+    at: Date.now(),
+  };
+  if (!payload.programId && !payload.episodeId && !payload.clipId && !payload.mediaId) {
+    return c.json({ error: "programId·episodeId·clipId·mediaId 중 하나는 필요합니다." }, 400);
+  }
+  await setAutomationSetting(premiereHandoffKey(user.id), JSON.stringify(payload));
+  return c.json({ ok: true });
+});
+
+app.get("/api/premiere/handoff", async (c) => {
+  const user = requireUser(c);
+  const raw = await getAutomationSetting(premiereHandoffKey(user.id));
+  if (!raw) return c.json({ handoff: null });
+  let h: { at?: number } | null = null;
+  try { h = JSON.parse(raw); } catch { h = null; }
+  // 소비는 한 번. 읽었으면 지운다 — 안 지우면 패널이 폴링할 때마다 같은 회차로 계속 끌려간다.
+  await setAutomationSetting(premiereHandoffKey(user.id), "");
+  if (!h || Date.now() - Number(h.at ?? 0) > HANDOFF_TTL_MS_PREMIERE) return c.json({ handoff: null });
+  return c.json({ handoff: h });
+});
+
 app.patch("/api/recommendations/:id/thumbnail", async (c) => {
   const recId = c.req.param("id");
   const rec = await getEntity<any>("recommendation", recId);

@@ -1,6 +1,6 @@
 # @stepd/server HTTP API 레퍼런스
 
-> 실측: **2026-08-28 · 라우트 248개** (GET 109 · POST 93 · DELETE 25 · PATCH 14 · PUT 7) · `apps/server/src/index.ts` 기준 — 라우트 추가 시 이 문서도 갱신.
+> 실측: **2026-08-28 · 라우트 250개** (GET 110 · POST 94 · DELETE 25 · PATCH 14 · PUT 7) · `apps/server/src/index.ts` 기준 — 라우트 추가 시 이 문서도 갱신.
 > 프론트 대응 함수는 `apps/web/src/lib/data/api.ts` 기준. 데이터 구조는 [data-model.md](data-model.md),
 > 큐·워커 동작은 [../ops/worker-queue.md](../ops/worker-queue.md) 참고.
 
@@ -184,6 +184,8 @@ API 키(`api-keys.ts`). **화이트리스트(`API_KEY_ROUTES`)에 올린 라우�
 | 메서드·경로 | 역할 | 요청/응답 요점 | 프론트 함수 |
 |---|---|---|---|
 | `GET /api/recommendations` | 추천 목록 (구간·점수 + 프레임 정합 메타) | 쿼리 `programId, status`(기본 `pending` · `all` 가능), `limit`(기본 50·최대 200) → `{ recommendations: [{ id, title, startTime, endTime, score100, status, people, episodeId, episodeNumber, programId, programTitle, mediaId, fps, startTimecode }] }`. 점수 내림차순. **`startTime/endTime` 은 원본 파일 0초 기준 초** — Premiere·EDL(소스 타임코드 기준)로 넘기려면 같이 오는 `fps`·`startTimecode` 로 환산한다. 0046 이전 원본은 그 둘이 0/"" 이라 환산 불가(숨기지 않고 그대로 내보낸다) | (프리미어 패널 · 웹은 `fetchState`) |
+| `POST /api/premiere/handoff` | **웹 → 프리미어 핸드오프**(맥락 남기기) | `{ programId?, episodeId?, clipId?, mediaId?, label? }`(하나는 필수, 없으면 400) → `{ ok:true }`. 사용자별 1건만 보관 | `openInPremiere` |
+| `GET /api/premiere/handoff` | 프리미어 패널이 집어간다 (5초 폴링) | → `{ handoff }` / `{ handoff:null }`. **읽으면 지운다**(한 번만 소비) · 5분 지난 건 버린다. ⚠️ 브라우저가 UXP 패널에 값을 직접 넘길 수 없어서 서버를 경유한다 — 실행은 `stepd://` 스킴이 맡는다 | (프리미어 패널) |
 | `POST /api/recommendations/:id/adopt` | 추천 채택 → ffmpeg 트림·인코딩으로 실제 클립 생성 | → `{ clipId, clip }`. 마스터 미디어+ffmpeg 있으면 실 인코딩(GCS는 서명 URL로 구간만 fetch), 없으면 메타데이터만 | `adoptRec` |
 | `POST /api/recommendations/:id/reject` | 추천 거절 | `{ reason }` (기본 "기타") → `{ ok }` | `rejectRec` |
 | `PATCH /api/recommendations/:id/thumbnail` | 생성된 썸네일 변형 중 하나를 선택 | `{ variantId(필수) }` → `{ recommendation }`. **정확히 하나만** chosen으로 마킹돼서, 이후 채택이 안정적·영속적인 결정을 갖는다 | `selectRecommendationThumbnail` |

@@ -154,6 +154,50 @@ describe("패널 — 내보내기 방식 상수 (조용히 틀리면 안 되는 
   });
 });
 
+/**
+ * 웹 → 프리미어 핸드오프 (2026-08-31 사용자 요구: "웹에서 편집 누르면 딱 프리미어 켜지게").
+ *
+ * 왜 이런 모양인가: **브라우저가 실행 중인 UXP 패널에 값을 직접 건넬 방법이 없다.**
+ * UXP 의 launchProcess 는 패널→OS 방향뿐이고 반대는 없다(Adobe 문서 확인). 그래서
+ * **실행은 `stepd://` 스킴, 맥락은 서버 경유(폴링)** 로 나눴다.
+ */
+describe("웹 → 프리미어 핸드오프", () => {
+  it("남기기·집어가기 두 라우트가 있다", () => {
+    assert.match(index, /app\.post\("\/api\/premiere\/handoff"/);
+    assert.match(index, /app\.get\("\/api\/premiere\/handoff"/);
+  });
+
+  it("**한 번만** 소비된다 — 안 지우면 폴링할 때마다 같은 회차로 계속 끌려간다", () => {
+    assert.match(index, /await setAutomationSetting\(premiereHandoffKey\(user\.id\), ""\);/);
+  });
+
+  it("오래된 핸드오프는 버린다 — 어제 누른 게 오늘 패널에서 튀어나오면 안 된다", () => {
+    assert.match(index, /HANDOFF_TTL_MS_PREMIERE/);
+    assert.match(index, /Date\.now\(\) - Number\(h\.at \?\? 0\) > HANDOFF_TTL_MS_PREMIERE/);
+  });
+
+  it("사용자별로 나뉜다 — 남의 핸드오프를 집어가면 안 된다", () => {
+    assert.match(index, /premiereHandoffKey = \(userId: string\)/);
+    assert.match(index, /const user = requireUser\(c\);/);
+  });
+
+  it("빈 요청은 400 — 뭘 열지 모르는 핸드오프는 만들지 않는다", () => {
+    assert.match(index, /programId·episodeId·clipId·mediaId 중 하나는 필요합니다/);
+  });
+
+  it("패널은 작업 중에 폴링하지 않는다 — 업로드·렌더 화면이 가려진다", () => {
+    assert.match(panel, /if \(busy \|\| !session\.token\) return;/);
+  });
+
+  it("웹은 **남기고 나서** 앱을 띄운다 — 순서가 바뀌면 패널이 빈손으로 깨어난다", () => {
+    const api = read("apps/web/src/lib/data/api.ts");
+    const postAt = api.indexOf("/premiere/handoff");
+    const launchAt = api.indexOf('window.location.href = "stepd://open"');
+    assert.ok(postAt > 0 && launchAt > 0, "핸드오프 함수를 찾지 못했다");
+    assert.ok(postAt < launchAt, "앱을 먼저 띄우면 맥락이 아직 서버에 없다");
+  });
+});
+
 describe("패널 매니페스트", () => {
   it("UXP manifest v5 · Premiere 25.6+ (UXP 정식 지원 시작 버전)", () => {
     assert.equal(manifest.manifestVersion, 5);
