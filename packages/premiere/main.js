@@ -751,13 +751,46 @@ function stopHandoffPolling() {
   handoffTimer = null;
 }
 
+// ── 웹 탭 ─────────────────────────────────────────────────────────────────────
+/**
+ * STEP-D 웹을 패널 안에 그대로 띄운다 — **프리미어와 웹을 왔다갔다 하지 않으려고**
+ * (사용자 2026-08-31: "프리미어랑 STEP-D 웹을 왔다갔다 해야 해서").
+ *
+ * 앱을 새로 만드는 대신 **있는 웹을 그대로** 넣는다. 배포도 지금처럼 웹 배포 한 번이면
+ * 프리미어 안의 화면까지 같이 갱신된다 — 플러그인을 다시 깔 필요가 없다.
+ *
+ * `<webview>` 는 manifest 의 `requiredPermissions.webview` 가 있어야 뜬다(도메인 화이트리스트).
+ * 양방향 메시지(`enableMessageBridge`)도 켜 뒀다 — 나중에 웹에서 "이 구간으로 이동"·"마커 꽂기"
+ * 를 눌러 패널이 프리미어를 조작하게 만들 자리다(아직 배선 안 함).
+ */
+const WEB_HOME = "https://stepd.stepai.kr";
+let webLoaded = false;
+
+function openWebTab() {
+  const wv = $("webview");
+  if (!wv) return;
+  if (!webLoaded) {
+    // 처음 열 때만 로드한다 — 패널을 켜자마자 웹을 띄우면 안 쓰는 사람도 비용을 낸다.
+    wv.src = WEB_HOME;
+    webLoaded = true;
+    setStatus($("webStatus"), "불러오는 중… (패널을 플로팅으로 띄우고 크게 늘리면 편합니다)");
+    // 로그인 유지 여부는 WebView 쿠키 정책에 달렸고 문서에 명시가 없다 — 실제로 보고 정한다.
+    wv.addEventListener("loadstop", () => setStatus($("webStatus"), ""));
+    wv.addEventListener("loaderror", () => setStatus($("webStatus"), "웹을 불러오지 못했습니다 — 네트워크를 확인하세요.", "err"));
+  }
+}
+
 function showTab(which) {
   const isRecs = which === "recs";
-  $("uploadPane").className = isRecs ? "hidden" : "";
+  const isWeb = which === "web";
+  $("uploadPane").className = isRecs || isWeb ? "hidden" : "";
   $("recsPane").className = isRecs ? "" : "hidden";
-  $("tabUpload").className = isRecs ? "tab" : "tab active";
+  $("webPane").className = isWeb ? "" : "hidden";
+  $("tabUpload").className = isRecs || isWeb ? "tab" : "tab active";
   $("tabRecs").className = isRecs ? "tab active" : "tab";
+  $("tabWeb").className = isWeb ? "tab active" : "tab";
   if (isRecs && !recRows.length) void loadRecs();
+  if (isWeb) openWebTab();
 }
 
 function contentTypeFor(name) {
@@ -905,6 +938,13 @@ async function doLogout() {
   $("logoutBtn").addEventListener("click", doLogout);
   $("tabUpload").addEventListener("click", () => showTab("upload"));
   $("tabRecs").addEventListener("click", () => showTab("recs"));
+  $("tabWeb").addEventListener("click", () => showTab("web"));
+  $("webHome").addEventListener("click", () => { $("webview").src = WEB_HOME; });
+  $("webReload").addEventListener("click", () => {
+    const wv = $("webview");
+    // reload() 가 없는 버전이 있어 src 재지정으로 물러난다.
+    if (typeof wv.reload === "function") wv.reload(); else wv.src = wv.src;
+  });
   $("recsReload").addEventListener("click", () => void loadRecs());
   $("markersBtn").addEventListener("click", () => void doAddMarkers());
   $("program").addEventListener("change", () => {

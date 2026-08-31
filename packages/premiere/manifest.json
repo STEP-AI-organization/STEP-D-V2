@@ -25,6 +25,11 @@
       "domains": ["https://stepd.stepai.kr", "https://storage.googleapis.com"]
     },
     "localFileSystem": "request",
-    "allowCodeGenerationFromStrings": false
+    "allowCodeGenerationFromStrings": false,
+    "webview": {
+      "allow": "yes",
+      "domains": ["https://stepd.stepai.kr"],
+      "enableMessageBridge": "localAndRemote"
+    }
   }
 }

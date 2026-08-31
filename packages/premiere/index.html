@@ -67,6 +67,13 @@
     }
     .tab.active { color: #ffffff; font-weight: 600; border-bottom: 2px solid #2680eb; }
     #uploadPane, #recsPane { display: flex; flex-direction: column; }
+    /* 웹 탭은 패널 높이를 꽉 채운다 — 안쪽이 웹앱이라 좁으면 못 쓴다. */
+    #webPane { display: flex; flex-direction: column; flex: 1; min-height: 420px; }
+    #webPane.hidden { display: none; }
+    .webbar { display: flex; flex-direction: row; margin-bottom: 8px; }
+    .webbar button { width: 50%; margin-top: 0; }
+    .webbar button:first-child { margin-right: 6px; }
+    #webview { flex: 1; border: 1px solid #3a3a3a; border-radius: 3px; background: #1d1d1d; }
     .recs { display: flex; flex-direction: column; }
     /* 추천 한 줄 — 누르면 그 구간으로 플레이헤드가 간다. */
     .rec {
@@ -113,6 +120,7 @@
     <div class="tabs">
       <button id="tabUpload" class="tab active">업로드</button>
       <button id="tabRecs" class="tab">추천 구간</button>
+      <button id="tabWeb" class="tab">웹</button>
     </div>
 
     <!-- ②-A 업로드 — 프리미어에서 렌더한 완성본을 STEP-D 로 바로 올린다. -->
@@ -143,6 +151,18 @@
       <!-- 한 번에 꽂고, 되돌릴 때도 Ctrl+Z 한 번 (트랜잭션 하나에 담는다). -->
       <button id="markersBtn" disabled>타임라인에 마커로 꽂기</button>
       <button id="recsReload" class="secondary">목록 새로고침</button>
+    </div>
+
+    <!-- ②-C 웹 — STEP-D 웹을 패널 안에 그대로. 프리미어와 웹을 왔다갔다 하지 않게.
+         패널을 플로팅으로 띄우고 크게 늘려 쓰는 걸 전제로 한다(도킹 폭은 좁다). -->
+    <div id="webPane" class="hidden">
+      <div class="webbar">
+        <button id="webHome" class="secondary">처음으로</button>
+        <button id="webReload" class="secondary">새로고침</button>
+      </div>
+      <!-- src 는 탭을 처음 열 때 넣는다 — 패널을 켜자마자 웹을 로드하면 안 쓰는 사람도 비용을 낸다. -->
+      <webview id="webview" width="100%" height="100%"></webview>
+      <div id="webStatus" class="status"></div>
     </div>
 
     <button id="logoutBtn" class="secondary" style="margin-top:16px;">로그아웃</button>
