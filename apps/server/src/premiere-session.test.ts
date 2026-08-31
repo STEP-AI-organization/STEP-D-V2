@@ -466,6 +466,47 @@ describe("패널 — 글꼴 확인", () => {
 });
 
 /**
+ * 자막 재현 (사용자 2026-08-31: **"자막도 타임스탬프 맞춰서 프리미어에 재현."**).
+ *
+ * 프리미어 **캡션 트랙에는 API 로 얹을 수 없다**(공식 선언에 배치 API 가 없다 — Transcript 는
+ * 마스터 클립에 붙이는 것이고 캡션 트랙 배치는 UI 조작뿐이다). 그래서 줄마다 정지 PNG 를
+ * 줄 길이만큼 V4 에 놓는다 — 글꼴·색·위치·시각이 결과물과 같다.
+ */
+describe("패널 — 자막을 타임스탬프대로", () => {
+  it("렌더와 **같은 줄 나누기**를 쓴다 — 원문을 주면 줄 수가 달라진다", () => {
+    assert.ok(index.includes("async function recCaptionLines(rec: any, esn: any)"));
+    assert.ok(index.includes("windowCaptions(resolved.segments"));
+    assert.ok(index.includes("chunkCaption(c, captionMaxCharsOf(esn))"));
+  });
+
+  it("한 줄을 0초에 놓고 한 프레임 뜬다 — 그래야 그 줄이 그림에 나온다", () => {
+    assert.ok(index.includes("[{ start: 0, end: dur, text: line.text }], { include: \"captions\" }"));
+  });
+
+  it("길이를 먼저 정하고 얹는다 — 안 하면 정지 이미지 기본 길이(5초)로 서로 덮어쓴다", () => {
+    assert.ok(panel.includes("item.createSetInOutPointsAction("));
+    assert.ok(panel.includes("c.addAction(inOut); c.addAction(place);"));
+  });
+
+  it("자막은 V4 — 제목·로고 위 트랙이다", () => {
+    assert.ok(panel.includes("const CAPTION_TRACK = 3;"));
+    assert.ok(panel.includes("createOverwriteItemAction(item, at, CAPTION_TRACK, 0)"));
+  });
+
+  it("상한이 있다 — 회차 전체(수백 줄)를 실수로 얹으면 프리미어가 멎는다", () => {
+    assert.ok(panel.includes("const CAPTION_MAX_LINES = 200;"));
+    assert.ok(panel.includes("jobs.length < CAPTION_MAX_LINES"));
+  });
+
+  it("미리보기에서만 얹는다 — 원본 전체 타임라인에 회차 자막을 깔지 않는다", () => {
+    const fn = panel.slice(panel.indexOf("async function jumpToRec("));
+    assert.ok(fn.indexOf("addCaptionsForRecs(") > 0, "미리보기 경로에 자막이 없다");
+    const bulk = panel.slice(panel.indexOf("async function doPrepareAndMark("), panel.indexOf("async function jumpToRec("));
+    assert.ok(!bulk.includes("addCaptionsForRecs("), "일괄 경로에 자막을 넣으면 수백 줄이 깔린다");
+  });
+});
+
+/**
  * 로고·시간박스 재현 (사용자 2026-08-31: **"로고, 시간박스까지 다 재현."**).
  *
  * 시간박스는 ASS BorderStyle=3 박스, 로고는 ffmpeg 원형 크롭이다. 캔버스로 흉내 내면 두 경로가

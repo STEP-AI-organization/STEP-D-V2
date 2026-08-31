@@ -1440,9 +1440,82 @@ async function addDecorationsForRecs(recs, aspect, onStage) {
   });
 }
 
-/** V1=영상 · V2=제목 · V3=로고/시간박스 (0-based 인덱스). */
+/** V1=영상 · V2=제목 · V3=로고/시간박스 · V4=자막 (0-based 인덱스). */
 const TITLE_TRACK = 1;
 const DECORATION_TRACK = 2;
+const CAPTION_TRACK = 3;
+
+/**
+ * 한 번에 얹는 자막 줄 상한. 60초 쇼츠가 보통 25~35줄이라 넉넉하다 —
+ * 실수로 회차 전체(수백 줄)를 얹어 프리미어가 멎는 걸 막는 안전선이다.
+ */
+const CAPTION_MAX_LINES = 200;
+
+/**
+ * 자막을 **타임스탬프 그대로** 얹는다 (사용자 2026-08-31: "자막도 타임스탬프 맞춰서 재현").
+ *
+ * 줄마다 투명 PNG 한 장이다. 왜 이 모양인가:
+ *  · 자막은 시간축 위에서 바뀌니 한 장으로 못 담는다.
+ *  · 알파 동영상(ProRes 4444)으로 주면 1분에 수 GB 다.
+ *  · 프리미어 **캡션 트랙**에는 API 로 얹을 수 없다(공식 선언에 배치 API 가 없다 —
+ *    Transcript 는 마스터 클립에 붙는 것이고, 캡션 트랙 배치는 UI 조작뿐이다).
+ * 그래서 정지 PNG 를 줄 길이만큼 V4 에 놓는다 — 글꼴·색·위치·시각이 결과물과 같다.
+ *
+ * ⚠️ 카라오케(단어별 색 스윕)는 재현되지 않는다 — 정지 이미지의 한계다.
+ */
+async function addCaptionsForRecs(recs, aspect, onStage) {
+  const folder = await mediaFolder();
+  const jobs = [];
+  for (const rec of recs) {
+    const res = await api(`/recommendations/${encodeURIComponent(rec.id)}/captions?aspect=${encodeURIComponent(aspect)}`, { method: "GET" });
+    if (!res.ok) continue;
+    const data = await res.json().catch(() => null);
+    const lines = data && Array.isArray(data.lines) ? data.lines : [];
+    for (let i = 0; i < lines.length && jobs.length < CAPTION_MAX_LINES; i += 1) {
+      jobs.push({ rec, i, line: lines[i] });
+    }
+  }
+  if (!jobs.length) return 0;
+
+  onStage(`자막 ${jobs.length}줄 받는 중…`);
+  const files = [];
+  for (const job of jobs) {
+    const q = `?i=${job.i}&aspect=${encodeURIComponent(aspect)}`;
+    const res = await api(`/recommendations/${encodeURIComponent(job.rec.id)}/caption.png${q}`, { method: "GET" });
+    if (!res.ok) continue;
+    const buf = await res.arrayBuffer();
+    const file = await folder.createFile(`stepd-cap-${job.rec.id}-${job.i}.png`, { overwrite: true });
+    await file.write(buf, { format: formats.binary });
+    files.push({ ...job, file });
+  }
+  if (!files.length) return 0;
+
+  const { project } = await activeSequence();
+  const ok = await project.importFiles(files.map((f) => f.file.nativePath), true);
+  if (ok === false) return 0;
+
+  onStage(`자막 ${files.length}줄 얹는 중…`);
+  const byName = new Map(files.map((f) => [f.file.name, f]));
+  return await findItemsByFileNames([...byName.keys()], async (found, project2, api2) => {
+    const sequence = (await activeSequence()).sequence;
+    const editor = api2.SequenceEditor.getEditor(sequence);
+    let n = 0;
+    for (const [name, job] of byName) {
+      const item = found.get(name);
+      if (!item) continue;
+      const dur = Math.max(0.2, Number(job.line.end) - Number(job.line.start));
+      const at = api2.TickTime.createWithSeconds((Number(job.rec.startTime) || 0) + (Number(job.line.start) || 0));
+      // **길이를 먼저 정한다.** 안 하면 정지 이미지 기본 길이(환경설정 · 보통 5초)로 들어가
+      // 자막이 서로 덮어써진다.
+      const inOut = item.createSetInOutPointsAction(
+        api2.TickTime.createWithSeconds(0), api2.TickTime.createWithSeconds(dur));
+      const place = editor.createOverwriteItemAction(item, at, CAPTION_TRACK, 0);
+      const done = project2.executeTransaction((c) => { c.addAction(inOut); c.addAction(place); }, `STEP-D 자막 ${name}`);
+      if (done !== false) n += 1;
+    }
+    return n;
+  });
+}
 
 /**
  * 제목을 어떤 모양으로 받아 어디에 얹을지.
@@ -1810,19 +1883,32 @@ async function jumpToRec(r) {
     setStatus($("recsStatus"), `"${r.title}" 미리보기 만드는 중…`);
     const { name, reused } = await openRecSequence(r);
 
-    // 제목은 **선택적**이다 — 실패해도 구간 미리보기는 이미 열려 있다.
-    let titleNote = "";
+    // 오버레이는 **선택적**이다 — 실패해도 구간 미리보기는 이미 열려 있다.
+    let note = "";
     if (!reused) {
+      const onStage = (m) => setStatus($("recsStatus"), m);
+      const layout = await fetchLayout(r);
+      // 미리보기 시퀀스는 그 구간이 0초에서 시작한다 — 시각을 그렇게 옮겨 넘긴다.
+      const local = { ...r, startTime: 0 };
       try {
-        const placed = await addTitlesForRecs([{ ...r, startTime: 0 }], (m) => setStatus($("recsStatus"), m), await fetchLayout(r));
-        titleNote = placed > 0 ? " · 제목 포함" : "";
+        const placed = await addTitlesForRecs([local], onStage, layout);
+        note += placed > 0 ? " · 제목" : "";
       } catch (err) {
-        titleNote = ` · 제목은 건너뜀(${err.message})`;
+        note += ` · 제목 건너뜀(${err.message})`;
         console.log("[STEP-D] 미리보기 제목 실패", err);
+      }
+      // 자막은 **미리보기에서만** 얹는다. 원본 전체 타임라인에 얹으면 회차 하나가 수백 줄이라
+      // 프리미어가 버겁고, 편집자가 보려는 것도 "이 구간이 쇼츠로 어떻게 보이나" 다.
+      try {
+        const caps = await addCaptionsForRecs([local], (layout && layout.aspect) || "9:16-crop-main", onStage);
+        note += caps > 0 ? ` · 자막 ${caps}줄` : "";
+      } catch (err) {
+        note += ` · 자막 건너뜀(${err.message})`;
+        console.log("[STEP-D] 미리보기 자막 실패", err);
       }
     }
     setStatus($("recsStatus"),
-      `"${name}" ${reused ? "를 열었습니다" : "를 만들었습니다"}${titleNote}. 스페이스바로 재생하세요.`, "ok");
+      `"${name}" ${reused ? "를 열었습니다" : "를 만들었습니다"}${note}. 스페이스바로 재생하세요.`, "ok");
   } catch (err) {
     // 원본이 아직 없거나 프로젝트 밖이면 만들 수 없다 — 그때는 예전처럼 그 시각으로 이동한다.
     try {
