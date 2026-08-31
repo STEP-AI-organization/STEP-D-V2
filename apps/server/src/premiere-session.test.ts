@@ -466,6 +466,47 @@ describe("패널 — 글꼴 확인", () => {
 });
 
 /**
+ * 배치 재현 (사용자 2026-08-31: **"영상 꽉 차게 아니고 레이아웃도 받아서 프리미어 재현."**).
+ *
+ * 기본 템플릿 `9:16-crop-main` 은 꽉 채우지 않는다 — 위 440px 은 제목이 앉는 검은 띠고,
+ * 영상은 그 아래 1080×1480 사각형에만 들어간다. 패널이 꽉 채우면 편집자가 본 화면과
+ * 실제 발행물이 다르다. **숫자를 패널에 복제하지 않고** 서버 프리셋을 받아 쓴다.
+ */
+describe("패널 — 영상 배치는 서버 프리셋을 따른다", () => {
+  it("배치를 서버에서 받는다 — 복제하면 프리셋을 고쳐도 프리미어만 옛 배치로 남는다", () => {
+    assert.ok(panel.includes("async function fetchLayout(rec)"));
+    assert.ok(panel.includes("/layout`, { method: \"GET\" })"));
+    assert.ok(index.includes('app.get("/api/recommendations/:id/layout"'));
+  });
+
+  it("서버는 ASPECT_PRESETS 를 그대로 내려 준다 — 여기서 계산을 새로 하지 않는다", () => {
+    assert.ok(index.includes("const preset = getAspectPreset(aspect) ?? getAspectPreset(\"9:16-crop-main\")!;"));
+    assert.ok(index.includes("video: preset.rect"));
+  });
+
+  it("rect 면 그 사각형에 cover, contain 이면 담기 — 배율·위치를 그렇게 계산한다", () => {
+    assert.ok(panel.includes('video.fill === "contain"'));
+    assert.ok(panel.includes("Math.min(box.w / src.w, box.h / src.h)"));
+    assert.ok(panel.includes("Math.max(box.w / src.w, box.h / src.h)"));
+    assert.ok(panel.includes("const posX = (box.x + box.w / 2) / canvas.w;"));
+  });
+
+  it("Motion 의 위치·배율을 **한 트랜잭션**으로 건다 — 되돌리기가 두 번이 되면 안 된다", () => {
+    assert.ok(panel.includes("const MOTION_POSITION_PARAM = 0;"));
+    assert.ok(panel.includes("const MOTION_SCALE_PARAM = 1;"));
+    assert.ok(panel.includes("for (const a of actions) compound.addAction(a);"));
+  });
+
+  it("배치를 못 받으면 예전 동작(꽉 채우기)으로 물러난다 — 여기서 전체가 멈추면 안 된다", () => {
+    assert.ok(panel.includes('const video = (layout && layout.video) || { fill: "cover"'));
+  });
+
+  it("제목 비율도 배치를 따른다 — 프레임만 보면 crop-main/sub 를 구분 못 한다", () => {
+    assert.ok(panel.includes('let aspect = (layout && layout.aspect) || "9:16-crop-main";'));
+  });
+});
+
+/**
  * 추천 클릭 → 그 구간만의 세로 시퀀스 (사용자 2026-08-31: **"누르면 새 시퀀스 만들어서 틀어주자."**).
  *
  * 원본 타임라인에서 그 시각으로 점프하면 **가로 원본**이 보인다. 판단해야 할 건 "이 구간이
@@ -507,7 +548,7 @@ describe("패널 — 추천을 누르면 미리보기 시퀀스", () => {
  */
 describe("패널 — 세로 쇼츠로 시작한다", () => {
   it("마커 경로도 세로다 — 러프컷만 세로면 가로 화면 보며 세로 결과를 상상해야 한다", () => {
-    assert.ok(panel.includes("await makeSequenceVertical(api, project, seq, onStage);"),
+    assert.ok(panel.includes("await makeSequenceVertical(api, project, seq, onStage, layout);"),
       "원본으로 만든 타임라인을 세로로 바꾸지 않는다");
   });
 
@@ -517,8 +558,8 @@ describe("패널 — 세로 쇼츠로 시작한다", () => {
 
   it("영상도 채운다 — 배율은 **바꾸기 전** 프레임 크기(=원본 해상도)에서 계산한다", () => {
     assert.ok(panel.includes("await seq.getFrameSize()"), "원본 해상도를 안 읽는다");
-    assert.ok(panel.includes("Math.max(SHORTS_W / src.w, SHORTS_H / src.h) * 100"),
-      "꽉 채우는 배율(가운데 크롭)이 아니다");
+    assert.ok(panel.includes("if (src) await placeClipsByLayout(api, project, seq, src, layout, onStage);"),
+      "배치를 적용하지 않는다 — 프레임만 세로면 영상은 가운데 작게 남는다");
   });
 
   it("모션 컴포넌트는 **matchName** 으로 찾는다 — 표시 이름은 한국어 프리미어에서 '동작' 이다", () => {
@@ -527,7 +568,7 @@ describe("패널 — 세로 쇼츠로 시작한다", () => {
   });
 
   it("확대 실패는 전체를 실패시키지 않는다 — 시퀀스는 이미 세로다", () => {
-    assert.ok(panel.includes("'프레임 크기로 설정' 을 눌러 주세요"),
+    assert.ok(panel.includes("'동작(Motion)' 에서 직접 맞춰 주세요"),
       "실패해도 사람이 이어서 할 한 수를 알려줘야 한다");
   });
 });
@@ -575,7 +616,7 @@ describe("패널 — 제목은 서버가 찍어 준 .mogrt 를 얹는다", () =>
   });
 
   it("타임라인 비율대로 받는다 — 세로 러프컷에 가로 그림을 얹으면 위치가 어긋난다", () => {
-    assert.ok(panel.includes("async function titleTargetInfo()"));
+    assert.ok(panel.includes("async function titleTargetInfo(layout)"));
     assert.ok(panel.includes('if (Number(size.width) >= Number(size.height)) aspect = "16:9";'));
     assert.ok(panel.includes("aspect=${encodeURIComponent(aspect)}"));
   });

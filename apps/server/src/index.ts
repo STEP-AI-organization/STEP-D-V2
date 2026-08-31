@@ -7132,6 +7132,58 @@ app.get("/api/recommendations/:id/title.mogrt", async (c) => {
   });
 });
 
+/**
+ * 추천 하나의 **레이아웃** — 프리미어가 서버 결과물을 재현할 수 있게.
+ *
+ * 사용자 2026-08-31: *"영상 꽉 차게 아니고 레이아웃도 받아서 프리미어 재현."* 정확한 지적이다.
+ * 패널은 세로 프레임에 영상을 **꽉 채우고** 있었는데, 기본 템플릿(9:16-crop-main)은 꽉 채우지
+ * 않는다 — 위 440px 은 제목이 앉는 **검은 띠**고 영상은 그 아래 1080×1480 사각형에만 들어간다.
+ * 그러니 편집자가 프리미어에서 본 화면과 실제 발행물이 달랐다.
+ *
+ * 그래서 배치의 정본(ASPECT_PRESETS)을 그대로 내려 준다. 패널은 이 값으로 클립의 Motion
+ * (배율·위치)을 잡는다 — 숫자를 패널에 복제하면 프리셋을 고칠 때 프리미어만 옛 배치로 남는다.
+ */
+app.get("/api/recommendations/:id/layout", async (c) => {
+  const rec = await getEntity<any>("recommendation", c.req.param("id"));
+  if (!rec) return c.json({ error: "recommendation not found" }, 404);
+  const ep = rec.episodeId ? await getEntity<any>("episode", rec.episodeId) : null;
+  const program = ep?.programId ? await getEntity<any>("program", ep.programId) : undefined;
+  const rules = (await listAutomationRules()) as any[];
+  const rule = ep?.programId
+    ? rules.find((r) => r.enabled !== false
+        && (r.programId === ep.programId
+          || (Array.isArray(r.programIds) && r.programIds.includes(ep.programId))))
+    : undefined;
+
+  const want = c.req.query("aspect");
+  const aspect = want === "16:9" ? "16:9" : ((rule as any)?.aspect ?? (rec.kind === "short" ? "9:16-crop-main" : "16:9"));
+  const preset = getAspectPreset(aspect) ?? getAspectPreset("9:16-crop-main")!;
+
+  const { autoEditorState } = await import("./factory.ts");
+  const es = autoEditorState(
+    rec, ep?.programTitle ?? "", program,
+    (rule as any)?.templateId,
+    { ...((rule as any)?.layout ?? {}), logo: (rule as any)?.layout?.logo ?? false },
+    String(aspect),
+  );
+  // 제목 외 요소(로고·시간박스)는 프리미어가 재현하지 않는다 — **있다는 사실만** 알려서
+  // 편집자가 "왜 발행물에는 로고가 있지?" 로 놀라지 않게 한다.
+  const all = await overlayPreviewItems(es, String(aspect), null);
+
+  return c.json({
+    aspect: preset.id,
+    canvas: { w: preset.canvasW, h: preset.canvasH },
+    // 영상이 앉는 방식. rect 면 그 사각형에 cover 로 앉고 나머지는 검정이다.
+    video: preset.rect
+      ? { fill: preset.fill, rect: preset.rect }
+      : { fill: preset.fill, rect: { x: 0, y: 0, w: preset.canvasW, h: preset.canvasH } },
+    elements: all.items.map((it) => ({
+      group: it.group ?? "title", text: it.text, x: it.x, y: it.y,
+      align: it.align, fontPx: it.fontPx, color: it.color,
+    })),
+  });
+});
+
 /** 추천 id → 안정적인 UUID 꼴 캡슐 id (같은 추천은 늘 같은 값, 다른 추천과는 다름). */
 function capsuleIdFor(recId: string, aspect: string): string {
   const h = crypto.createHash("sha1").update(`stepd:mogrt:${aspect}:${recId}`).digest("hex");

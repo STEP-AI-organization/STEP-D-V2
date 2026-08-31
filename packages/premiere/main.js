@@ -1115,7 +1115,26 @@ async function findItemsByRecIds(recIds, use) {
 const SHORTS_W = 1080;
 const SHORTS_H = 1920;
 
-async function makeSequenceVertical(api, project, seq, onStage) {
+/**
+ * 이 추천이 **서버에서 어떤 배치로 나가는지** 받아 온다.
+ *
+ * 숫자를 패널에 복제하지 않는다 — 프리셋을 고치면 프리미어 쪽만 옛 배치로 남는다.
+ * 못 받으면 null 을 돌려 예전 동작(세로 꽉 채우기)으로 물러난다. 이것 때문에 전체가
+ * 멈추면 안 된다.
+ */
+async function fetchLayout(rec) {
+  if (!rec || !rec.id) return null;
+  try {
+    const res = await api(`/recommendations/${encodeURIComponent(rec.id)}/layout`, { method: "GET" });
+    if (!res.ok) return null;
+    const data = await res.json();
+    return data && data.canvas && data.video ? data : null;
+  } catch (_) {
+    return null;      // 옛 서버 배포거나 네트워크 문제 — 폴백이 있다
+  }
+}
+
+async function makeSequenceVertical(api, project, seq, onStage, layout) {
   try {
     // ① **바꾸기 전에** 지금 프레임 크기를 읽는다 — 마스터에서 만든 시퀀스라 이 값이 곧
     //    원본 해상도다. 서버에 해상도를 물을 필요가 없다.
@@ -1126,46 +1145,81 @@ async function makeSequenceVertical(api, project, seq, onStage) {
       if (w > 0 && h > 0) src = { w, h };
     } catch (_) { /* 못 읽으면 배율 계산만 건너뛴다 */ }
 
+    const canvas = (layout && layout.canvas) || { w: SHORTS_W, h: SHORTS_H };
     const settings = await seq.getSettings();
     const rect = new api.RectF();
-    rect.width = SHORTS_W;
-    rect.height = SHORTS_H;
+    rect.width = canvas.w;
+    rect.height = canvas.h;
     await settings.setVideoFrameRect(rect);
     const ok = project.executeTransaction(
       (compound) => { compound.addAction(seq.createSetSettingsAction(settings)); },
-      "STEP-D 세로 쇼츠 설정",
+      `STEP-D 프레임 ${canvas.w}×${canvas.h}`,
     );
     if (ok === false) throw new Error("시퀀스 설정을 바꾸지 못했습니다.");
 
-    // ② 프레임만 세로로 만들면 **영상은 그대로 가운데 작게 남는다**(위아래 검은 띠).
-    //    사용자 요구 2026-08-31: "영상도 세로형으로 해서 시작해야 함." 채워 준다.
-    if (src) {
-      const scale = Math.max(SHORTS_W / src.w, SHORTS_H / src.h) * 100;
-      if (Math.abs(scale - 100) > 0.5) await scaleClipsToFill(api, project, seq, scale, onStage);
-    }
+    // ② 프레임만 바꾸면 **영상은 원래 크기 그대로 가운데** 남는다(위아래 검은 띠).
+    //    그렇다고 꽉 채우면 그것도 틀리다 — 기본 템플릿(9:16-crop-main)은 위 440px 이
+    //    제목이 앉는 검은 띠라 영상이 그 아래 사각형에만 들어간다(사용자 2026-08-31:
+    //    "영상 꽉 차게 아니고 레이아웃도 받아서 프리미어 재현"). 그래서 **서버가 준 배치**로.
+    if (src) await placeClipsByLayout(api, project, seq, src, layout, onStage);
     return true;
   } catch (err) {
-    // 세로 전환 실패는 알린다 — 가로로 나온 걸 모르고 편집하면 그게 더 나쁘다.
-    console.log("[STEP-D] 세로 전환 실패", err);
-    onStage(`⚠ 세로(1080×1920) 전환에 실패했습니다 — 시퀀스 설정에서 직접 바꿔 주세요: ${err.message}`);
+    // 전환 실패는 알린다 — 어긋난 채로 편집하면 그게 더 나쁘다.
+    console.log("[STEP-D] 프레임 전환 실패", err);
+    onStage(`⚠ 세로 전환에 실패했습니다 — 시퀀스 설정에서 직접 바꿔 주세요: ${err.message}`);
     return false;
   }
 }
 
 /**
- * V1 의 클립을 **세로 프레임에 꽉 차게** 확대한다(가운데 크롭 = 서버의 9:16-crop-main 과 같은 결).
+ * 서버 배치를 프리미어에서 재현한다 — 영상이 **어디에 얼마나** 앉는지.
  *
- * 어떻게 찾나: 파라미터는 이름 접근자가 없어 **인덱스**로만 잡는다. 대신 컴포넌트는
- * `getMatchName()` 이 `AE.ADBE Motion` 으로 **로케일과 무관**하게 고정이라 그걸로 찾는다
- * (한국어 프리미어에서 표시 이름은 "동작" 이다 — 표시 이름으로 찾으면 조용히 실패한다).
+ * layout 이 없으면(서버가 옛 배포거나 조회 실패) 세로 꽉 채우기로 물러난다. 그게 예전 동작이라
+ * 나빠지지는 않는다.
  *
- * 확대는 **best-effort** 다. 실패해도 시퀀스는 이미 세로라, 편집자가 클립을 골라
- * "프레임 크기로 설정" 한 번 누르면 같은 결과가 된다 — 전체를 실패시킬 이유가 없다.
+ *   fill:"rect"    → rect 사각형에 cover. 배율 = max(rect.w/원본w, rect.h/원본h),
+ *                    위치 = rect 중심. (9:16-crop-main = 위 자막 띠 + 아래 큰 영상)
+ *   fill:"cover"   → 프레임 전체에 cover, 가운데.
+ *   fill:"contain" → 프레임 안에 전부 담기(레터박스), 가운데.
+ */
+async function placeClipsByLayout(api, project, seq, src, layout, onStage) {
+  const canvas = (layout && layout.canvas) || { w: SHORTS_W, h: SHORTS_H };
+  const video = (layout && layout.video) || { fill: "cover", rect: { x: 0, y: 0, w: canvas.w, h: canvas.h } };
+  const box = video.rect || { x: 0, y: 0, w: canvas.w, h: canvas.h };
+
+  const ratio = video.fill === "contain"
+    ? Math.min(box.w / src.w, box.h / src.h)
+    : Math.max(box.w / src.w, box.h / src.h);
+  const scalePct = ratio * 100;
+  // 프리미어의 Motion 위치는 **0..1 정규화**다(0.5,0.5 = 가운데).
+  const posX = (box.x + box.w / 2) / canvas.w;
+  const posY = (box.y + box.h / 2) / canvas.h;
+
+  const moved = Math.abs(posX - 0.5) > 0.001 || Math.abs(posY - 0.5) > 0.001;
+  const resized = Math.abs(scalePct - 100) > 0.5;
+  if (!moved && !resized) return 0;
+
+  return await setMotionOnClips(api, project, seq, {
+    scale: resized ? scalePct : null,
+    position: moved ? { x: posX, y: posY } : null,
+  }, onStage);
+}
+
+/**
+ * V1 클립들의 Motion(배율·위치)을 정한 값으로 맞춘다.
+ *
+ * 어떻게 찾나: 파라미터는 이름 접근자가 없어 **인덱스**로만 잡는다(0=위치 · 1=배율).
+ * 대신 컴포넌트는 `getMatchName()` 이 `AE.ADBE Motion` 으로 **로케일과 무관**하게 고정이라
+ * 그걸로 찾는다 — 한국어 프리미어에서 표시 이름은 "동작" 이라 표시 이름으로 찾으면 조용히 실패한다.
+ *
+ * best-effort 다. 실패해도 시퀀스 프레임은 이미 맞춰져 있고, 편집자가 클립을 골라 손으로
+ * 맞출 수 있다 — 전체를 실패시킬 이유가 없다.
  */
 const MOTION_MATCH_NAME = "AE.ADBE Motion";
-const MOTION_SCALE_PARAM = 1;   // 0=위치 · 1=비율 · 2=가로 비율 · 3=균일 비율 · 4=회전 · 5=기준점
+const MOTION_POSITION_PARAM = 0;
+const MOTION_SCALE_PARAM = 1;
 
-async function scaleClipsToFill(api, project, seq, scalePct, onStage) {
+async function setMotionOnClips(api, project, seq, want, onStage) {
   let touched = 0, seen = 0;
   try {
     const track = await seq.getVideoTrack(0);
@@ -1180,22 +1234,30 @@ async function scaleClipsToFill(api, project, seq, scalePct, onStage) {
         let match = "";
         try { match = await comp.getMatchName(); } catch (_) { continue; }
         if (match !== MOTION_MATCH_NAME) continue;
-        const param = comp.getParam(MOTION_SCALE_PARAM);
-        const kf = param.createKeyframe(scalePct);
-        const action = param.createSetValueAction(kf, true);
+
+        const actions = [];
+        if (want.scale != null) {
+          const p = comp.getParam(MOTION_SCALE_PARAM);
+          actions.push(p.createSetValueAction(p.createKeyframe(want.scale), true));
+        }
+        if (want.position) {
+          const p = comp.getParam(MOTION_POSITION_PARAM);
+          actions.push(p.createSetValueAction(p.createKeyframe(new api.PointF(want.position.x, want.position.y)), true));
+        }
+        if (!actions.length) break;
         const ok = project.executeTransaction(
-          (compound) => { compound.addAction(action); },
-          `STEP-D 세로 채우기 ${Math.round(scalePct)}%`,
+          (compound) => { for (const a of actions) compound.addAction(a); },
+          "STEP-D 영상 배치",
         );
         if (ok !== false) touched += 1;
         break;
       }
     }
   } catch (err) {
-    console.log("[STEP-D] 세로 채우기 실패", err);
+    console.log("[STEP-D] 영상 배치 실패", err);
   }
   if (seen > 0 && touched === 0) {
-    onStage("⚠ 세로 프레임은 됐지만 영상 확대는 못 했습니다 — 클립 선택 후 '프레임 크기로 설정' 을 눌러 주세요.");
+    onStage("⚠ 프레임은 맞췄지만 영상 배치는 못 했습니다 — 클립의 '동작(Motion)' 에서 직접 맞춰 주세요.");
   }
   return touched;
 }
@@ -1224,6 +1286,8 @@ async function buildRoughCut(recs, onStage) {
   });
 
   // ② 방금 만든 조각을 이름으로 되찾는다(지연 액션이라 반환값이 없다).
+  //    배치는 **미리** 받아 둔다 — 아래 콜백 안에서 await 하면 프리미어 객체가 무효가 된다.
+  const layout = await fetchLayout(withMedia);
   onStage("조각 찾는 중…");
   const seqName = `[STEP-D] ${(withMedia.programTitle || srcName || "러프컷").slice(0, 40)} 러프컷`;
   // ②③ 을 한 흐름으로 — 찾은 조각을 **그 자리에서** 시퀀스로 만든다.
@@ -1236,7 +1300,7 @@ async function buildRoughCut(recs, onStage) {
     const seq = await project.createSequenceFromMedia(seqName, ordered);
     if (!seq) throw new Error("시퀀스를 만들지 못했습니다.");
     // **누르자마자 쇼츠 형태**로 보여 준다 — 가로로 주면 최종 프레이밍을 못 본다.
-    const vertical = await makeSequenceVertical(api, project, seq, onStage);
+    const vertical = await makeSequenceVertical(api, project, seq, onStage, layout);
     // 만들고 안 열면 사용자는 "눌렀는데 아무 일도 안 일어났다" 고 느낀다.
     try { await project.setActiveSequence(seq); } catch (_) { /* 열기 실패는 치명적이지 않다 */ }
 
@@ -1274,13 +1338,14 @@ async function doFetchSource() {
  *    없어서 꽂을 데가 없다. 그래서 활성 시퀀스가 없으면 **원본으로 하나 만들어** 준다.
  *    있으면 그걸 쓴다 — 편집자가 이미 작업 중인 타임라인을 빼앗지 않는다.
  */
-async function ensureSequenceForMaster(filename, onStage) {
+async function ensureSequenceForMaster(filename, onStage, rec) {
+  const layout = await fetchLayout(rec);
   const active = await activeSequence().catch(() => null);
   if (active) {
     // 우리가 만든 타임라인이면 세로로 맞춰 준다(이미 세로면 계산상 배율 100% → 아무 일도 안 한다).
     // 편집자 본인의 타임라인은 **건드리지 않는다** — 남의 작업 프레임을 말없이 바꾸면 안 된다.
     if (String(active.name || "").startsWith("[STEP-D] ")) {
-      await makeSequenceVertical(active.api, active.project, active.sequence, onStage);
+      await makeSequenceVertical(active.api, active.project, active.sequence, onStage, layout);
     }
     return active.name;
   }
@@ -1291,7 +1356,7 @@ async function ensureSequenceForMaster(filename, onStage) {
     if (!seq) throw new Error("원본으로 시퀀스를 만들지 못했습니다.");
     // 마커만 꽂는 경로도 **세로로 시작**한다(사용자 2026-08-31) — 러프컷만 세로면
     // 편집자는 가로 화면을 보며 세로 결과물을 상상해야 한다.
-    await makeSequenceVertical(api, project, seq, onStage);
+    await makeSequenceVertical(api, project, seq, onStage, layout);
     try { await project.setActiveSequence(seq); } catch (_) { /* 열기 실패는 치명적이지 않다 */ }
     return name;
   });
@@ -1303,8 +1368,8 @@ async function ensureSequenceForMaster(filename, onStage) {
  * 먼저 편집 가능한 .mogrt 를 시도하고, 그게 안 되면 PNG 로 물러난다. 둘 다 같은 서버 계산에서
  * 나오므로 모양은 같다 — 다른 건 "글자를 고칠 수 있나" 하나뿐이다.
  */
-async function addTitlesForRecs(recs, onStage) {
-  const { aspect, tracks } = await titleTargetInfo();
+async function addTitlesForRecs(recs, onStage, layout) {
+  const { aspect, tracks } = await titleTargetInfo(layout);
 
   // ① 편집 가능한 경로 먼저.
   try {
@@ -1319,17 +1384,24 @@ async function addTitlesForRecs(recs, onStage) {
   return await addTitlePngs(recs, aspect, tracks, onStage);
 }
 
-/** 지금 열린 타임라인의 비율·트랙 수 — 제목을 어떤 모양으로 받아 어디에 얹을지 정한다. */
-async function titleTargetInfo() {
+/**
+ * 제목을 어떤 모양으로 받아 어디에 얹을지.
+ *
+ * 배치를 받아 왔으면 **그 aspect 를 그대로 쓴다** — 타임라인 프레임만 보고 추측하면
+ * 위 자막 띠(crop-main)와 위아래 띠(crop-sub)를 구분하지 못해 제목이 엉뚱한 높이에 앉는다.
+ */
+async function titleTargetInfo(layout) {
   // 세로 러프컷에 가로 그림(또는 그 반대)을 얹으면 프리미어가 프레임에 맞춰 늘리거나 잘라서,
   // 서버 미리보기와 글자 위치가 달라진다.
   const { sequence } = await activeSequence();
-  let aspect = "9:16-crop-main";
+  let aspect = (layout && layout.aspect) || "9:16-crop-main";
   let tracks = 0;
-  try {
-    const size = await sequence.getFrameSize();
-    if (Number(size.width) >= Number(size.height)) aspect = "16:9";
-  } catch (_) { /* 못 읽으면 쇼츠로 둔다 — 이 패널의 기본 산출물이 세로다 */ }
+  if (!(layout && layout.aspect)) {
+    try {
+      const size = await sequence.getFrameSize();
+      if (Number(size.width) >= Number(size.height)) aspect = "16:9";
+    } catch (_) { /* 못 읽으면 쇼츠로 둔다 — 이 패널의 기본 산출물이 세로다 */ }
+  }
   try { tracks = Number(await sequence.getVideoTrackCount()) || 0; } catch (_) { /* 판단 보류 */ }
   return { aspect, tracks };
 }
@@ -1421,7 +1493,7 @@ async function doPrepareAndMark() {
 
     onStage("원본 확인 중…");
     const filename = await ensureMaster(withMedia, onStage);
-    await ensureSequenceForMaster(filename, onStage);
+    await ensureSequenceForMaster(filename, onStage, withMedia);
 
     onStage(`마커 ${picks.length}개 꽂는 중…`);
     const { sequenceName, count } = await addMarkersForRecs(picks);
@@ -1430,7 +1502,7 @@ async function doPrepareAndMark() {
     // 여기서 실패했다고 앞의 성과를 버리면 편집자는 처음부터 다시 해야 한다.
     let titleNote = "";
     try {
-      const placed = await addTitlesForRecs(picks, onStage);
+      const placed = await addTitlesForRecs(picks, onStage, await fetchLayout(withMedia));
       titleNote = placed > 0 ? ` · 제목 ${placed}개` : "";
     } catch (err) {
       titleNote = ` · 제목은 건너뜀(${err.message})`;
@@ -1645,12 +1717,14 @@ async function openRecSequence(r) {
     return true;
   });
 
+  // 배치는 **콜백 밖에서** 미리 받는다 — 안에서 await 하면 프리미어 객체가 무효가 된다.
+  const layout = await fetchLayout(r);
   return await findItemsByRecIds([r.id], async (found, project2, api2) => {
     const piece = found.get(String(r.id));
     if (!piece) throw new Error("자른 조각을 프로젝트에서 찾지 못했습니다.");
     const seq = await project2.createSequenceFromMedia(name, [piece]);
     if (!seq) throw new Error("시퀀스를 만들지 못했습니다.");
-    await makeSequenceVertical(api2, project2, seq, (m) => setStatus($("recsStatus"), m));
+    await makeSequenceVertical(api2, project2, seq, (m) => setStatus($("recsStatus"), m), layout);
     try { await project2.setActiveSequence(seq); } catch (_) { /* 열기 실패는 치명적이지 않다 */ }
     return { name, reused: false };
   });
@@ -1680,7 +1754,7 @@ async function jumpToRec(r) {
     let titleNote = "";
     if (!reused) {
       try {
-        const placed = await addTitlesForRecs([{ ...r, startTime: 0 }], (m) => setStatus($("recsStatus"), m));
+        const placed = await addTitlesForRecs([{ ...r, startTime: 0 }], (m) => setStatus($("recsStatus"), m), await fetchLayout(r));
         titleNote = placed > 0 ? " · 제목 포함" : "";
       } catch (err) {
         titleNote = ` · 제목은 건너뜀(${err.message})`;
