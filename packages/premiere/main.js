@@ -1464,7 +1464,69 @@ const CAPTION_MAX_LINES = 200;
  * ⚠️ 카라오케(단어별 색 스윕)는 재현되지 않는다 — 정지 이미지의 한계다.
  */
 async function addCaptionsForRecs(recs, aspect, onStage) {
+  // ① 편집 가능한 경로 먼저 — 제목과 같은 원칙이다.
+  try {
+    const placed = await addCaptionMogrts(recs, aspect, onStage);
+    if (placed > 0) return placed;
+  } catch (err) {
+    console.log("[STEP-D] 자막 mogrt 실패 — PNG 로 폴백", err);
+  }
+  // ② 폴백: 정지 PNG. 박스형 자막 스타일(서버가 409)도 여기로 온다 — 모양이 정확한 쪽이 낫다.
+  return await addCaptionPngs(recs, aspect, onStage);
+}
+
+/**
+ * 자막 줄마다 **편집 가능한 .mogrt** 를 꽂는다.
+ *
+ * insertMogrtFromPath 는 넣은 트랙 아이템 배열을 돌려준다 — 그걸로 **끝 시각을 줄 길이에 맞춘다**
+ * (안 하면 그래픽 기본 길이로 들어가 자막끼리 겹친다).
+ */
+async function addCaptionMogrts(recs, aspect, onStage) {
   const folder = await mediaFolder();
+  const jobs = await captionJobs(recs, aspect);
+  if (!jobs.length) return 0;
+
+  onStage(`자막 ${jobs.length}줄 받는 중…`);
+  const files = [];
+  for (const job of jobs) {
+    const q = `?i=${job.i}&aspect=${encodeURIComponent(aspect)}`;
+    const res = await api(`/recommendations/${encodeURIComponent(job.rec.id)}/caption.mogrt${q}`, { method: "GET" });
+    if (res.status === 409) return 0;      // 베이스 미등록 · 박스형 스타일 — 통째로 PNG 로 간다
+    if (!res.ok) continue;
+    const buf = await res.arrayBuffer();
+    const file = await folder.createFile(`stepd-cap-${job.rec.id}-${job.i}.mogrt`, { overwrite: true });
+    await file.write(buf, { format: formats.binary });
+    files.push({ ...job, file });
+  }
+  if (!files.length) return 0;
+
+  onStage(`자막 ${files.length}줄 얹는 중…`);
+  const { api: api2, project, sequence } = await activeSequence();
+  const editor = api2.SequenceEditor.getEditor(sequence);
+  let n = 0;
+  for (const job of files) {
+    try {
+      const startSec = (Number(job.rec.startTime) || 0) + (Number(job.line.start) || 0);
+      const dur = Math.max(0.2, Number(job.line.end) - Number(job.line.start));
+      const inserted = await editor.insertMogrtFromPath(
+        job.file.nativePath, api2.TickTime.createWithSeconds(startSec), CAPTION_TRACK, 0);
+      const item = Array.isArray(inserted) ? inserted[0] : inserted;
+      if (!item) continue;
+      // 길이 맞추기 — 넣자마자 그 자리에서(await 를 건너면 객체가 무효가 된다).
+      if (typeof item.createSetEndAction === "function") {
+        const end = api2.TickTime.createWithSeconds(startSec + dur);
+        project.executeTransaction((c) => { c.addAction(item.createSetEndAction(end)); }, `STEP-D 자막 길이 ${job.i}`);
+      }
+      n += 1;
+    } catch (err) {
+      console.log("[STEP-D] 자막 mogrt 삽입 실패", job.i, err);
+    }
+  }
+  return n;
+}
+
+/** 자막 줄 목록을 모아 상한까지 자른다 — mogrt·PNG 두 경로가 **같은 줄**을 쓰게. */
+async function captionJobs(recs, aspect) {
   const jobs = [];
   for (const rec of recs) {
     const res = await api(`/recommendations/${encodeURIComponent(rec.id)}/captions?aspect=${encodeURIComponent(aspect)}`, { method: "GET" });
@@ -1475,9 +1537,15 @@ async function addCaptionsForRecs(recs, aspect, onStage) {
       jobs.push({ rec, i, line: lines[i] });
     }
   }
+  return jobs;
+}
+
+async function addCaptionPngs(recs, aspect, onStage) {
+  const folder = await mediaFolder();
+  const jobs = await captionJobs(recs, aspect);
   if (!jobs.length) return 0;
 
-  onStage(`자막 ${jobs.length}줄 받는 중…`);
+  onStage(`자막 이미지 ${jobs.length}줄 받는 중…`);
   const files = [];
   for (const job of jobs) {
     const q = `?i=${job.i}&aspect=${encodeURIComponent(aspect)}`;

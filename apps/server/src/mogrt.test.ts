@@ -27,6 +27,10 @@ function textBlob(text: string, font: string, size: number, color: number): stri
         mFontName: { mParamValues: [[0, font]] },
         mFontSize: { mParamValues: [[0, size]] },
         mFillColor: { mParamValues: [[0, color]] },
+        mFillOverStroke: { mParamValues: [[0, false]] },
+        mStrokeVisible: { mParamValues: [[0, false]] },
+        mStrokeColor: { mParamValues: [[0, 0xffffff]] },
+        mStrokeWidth: { mParamValues: [[0, 1]] },
       },
     },
     mVersion: 1,
@@ -179,6 +183,30 @@ describe("mogrt — 제목 채우기", () => {
 
   it("레이어가 없으면 던진다", () => {
     assert.throws(() => patchTitleMogrt(fakeMogrt(2), [], META), /layers is empty/);
+  });
+});
+
+describe("mogrt — 자막용 옵션", () => {
+  it("썸네일을 떼면 파일이 확 줄어든다 — 자막은 수십 장을 내린다", () => {
+    const full = patchTitleMogrt(fakeMogrt(1), [layer()], META);
+    const slim = patchTitleMogrt(fakeMogrt(1), [layer()], META, { stripThumbs: true });
+    assert.ok(readBack(full).names.includes("thumb.png"));
+    assert.ok(!readBack(slim).names.includes("thumb.png"), "썸네일이 남아 있다");
+    assert.ok(slim.length < full.length, "줄지 않았다");
+  });
+
+  it("외곽선을 옮긴다 — 자막의 검정 스트로크가 빠지면 배경에 묻힌다", () => {
+    const out = patchTitleMogrt(fakeMogrt(1), [layer({ stroke: { colorInt: 0x000000, width: 4 } })], META);
+    const ss = decodeBlobs(readBack(out).xml)[0].mTextParam.mStyleSheet;
+    assert.equal(ss.mStrokeVisible.mParamValues[0][1], true);
+    assert.equal(ss.mStrokeWidth.mParamValues[0][1], 4);
+    assert.equal(ss.mFillOverStroke.mParamValues[0][1], true, "칠이 선 뒤면 글자가 얇아 보인다");
+  });
+
+  it("stroke 를 안 주면 템플릿 값을 그대로 둔다", () => {
+    const out = patchTitleMogrt(fakeMogrt(1), [layer()], META);
+    const ss = decodeBlobs(readBack(out).xml)[0].mTextParam.mStyleSheet;
+    assert.equal(ss.mStrokeVisible.mParamValues[0][1], false);
   });
 });
 

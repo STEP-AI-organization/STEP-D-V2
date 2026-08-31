@@ -479,6 +479,36 @@ describe("패널 — 자막을 타임스탬프대로", () => {
     assert.ok(index.includes("chunkCaption(c, captionMaxCharsOf(esn))"));
   });
 
+  it("자막도 **편집 가능한 mogrt 가 먼저**다 — PNG 는 폴백이다", () => {
+    assert.ok(index.includes('app.get("/api/recommendations/:id/caption.mogrt"'));
+    const fn = panel.slice(panel.indexOf("async function addCaptionsForRecs("));
+    const a = fn.indexOf("addCaptionMogrts(");
+    const b = fn.indexOf("addCaptionPngs(");
+    assert.ok(a > 0 && b > a, "PNG 가 먼저면 편집 불가가 기본이 된다");
+  });
+
+  it("박스형 자막 스타일은 mogrt 로 안 만든다 — 도형을 못 옮긴다", () => {
+    assert.ok(index.includes('const CAPTION_BOX_STYLES = new Set(["news", "pink_bubble", "highlight_bar", "typewriter"]);'));
+    assert.ok(index.includes('return c.json({ error: "boxed_caption_style" }, 409);'));
+    assert.ok(panel.includes("if (res.status === 409) return 0;"), "409 면 통째로 PNG 로 가야 한다");
+  });
+
+  it("자막 mogrt 는 썸네일을 뗀다 — 수십 장을 내리는 자리다", () => {
+    assert.ok(index.includes("{ stripThumbs: true }"));
+  });
+
+  it("넣은 뒤 **끝 시각을 줄 길이에 맞춘다** — 안 하면 자막끼리 겹친다", () => {
+    assert.ok(panel.includes("item.createSetEndAction(end)"));
+  });
+
+  it("mogrt·PNG 두 경로가 **같은 줄**을 쓴다 — 줄 목록 수집은 한 군데다", () => {
+    assert.ok(panel.includes("async function captionJobs(recs, aspect)"));
+    const mog = panel.slice(panel.indexOf("async function addCaptionMogrts("));
+    const png = panel.slice(panel.indexOf("async function addCaptionPngs("));
+    assert.ok(mog.includes("await captionJobs(recs, aspect)"));
+    assert.ok(png.includes("await captionJobs(recs, aspect)"));
+  });
+
   it("한 줄을 0초에 놓고 한 프레임 뜬다 — 그래야 그 줄이 그림에 나온다", () => {
     assert.ok(index.includes("[{ start: 0, end: dur, text: line.text }], { include: \"captions\" }"));
   });

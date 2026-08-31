@@ -264,7 +264,7 @@ import {
 import { getAspectPreset } from "./aspect-presets.ts";
 import { layoutFingerprint, restampPendingClips } from "./rule-restamp.ts";
 import { renderTextLayerPng, overlayCanvasAvailable, measureOverlayImage, FONT_FAMILIES, postScriptNameFor, type OverlayTextItem } from "./overlay-canvas.ts";
-import { patchTitleMogrt, inspectMogrt, layersFromOverlayItems } from "./mogrt.ts";
+import { patchTitleMogrt, inspectMogrt, layersFromOverlayItems, colorToInt, type MogrtTextLayer } from "./mogrt.ts";
 import {
   syncChannelVideos,
   classifyShorts,
@@ -7178,6 +7178,82 @@ app.get("/api/recommendations/:id/captions", async (c) => {
  *    담을 수 없다. 프리미어에서는 한 줄이 통째로 기본색으로 보이고, 실제 발행물에는 스윕이
  *    들어간다 — 이건 알고 쓰는 차이다.
  */
+/**
+ * 자막 스타일 중 **박스형**은 mogrt 로 옮길 수 없다.
+ *
+ * 박스는 ASS `BorderStyle=3` 이 그리는데, 우리 베이스 템플릿의 텍스트 레이어에는 배경 도형이
+ * 없다(있는 건 칠·외곽선뿐). 억지로 내보내면 프리미어에서만 박스가 사라진 자막이 나온다 —
+ * 그래서 이 스타일들은 **정지 PNG 경로로 남긴다**(모양이 정확한 쪽을 고른다).
+ */
+const CAPTION_BOX_STYLES = new Set(["news", "pink_bubble", "highlight_bar", "typewriter"]);
+
+/** 자막 한 줄을 mogrt 레이어로 — ASS Caption 스타일과 같은 글꼴·크기·색·위치. */
+function captionMogrtLayer(esn: any, W: number, H: number, text: string): MogrtTextLayer | null {
+  const style = String(esn?.captionStyle ?? "korean_pop");
+  if (CAPTION_BOX_STYLES.has(style)) return null;
+  const pct = Number.isFinite(esn?.captionSize) && Number(esn.captionSize) > 0
+    ? Number(esn.captionSize) : (CAPTION_PCT[style] ?? CAPTION_PCT.korean_pop);
+  const yPct = Number.isFinite(esn?.captionY) ? Number(esn.captionY) : CAPTION_MV_PCT;
+  const fontId = typeof esn?.captionFont === "string" && esn.captionFont ? esn.captionFont : "gmarket";
+  const fill = typeof esn?.captionColor === "string" && /^#[0-9a-fA-F]{6}$/.test(esn.captionColor)
+    ? esn.captionColor : (style === "outline_bold" ? "#000000" : "#FFFFFF");
+  // ASS 는 \an2(하단 중앙) + MarginV 라 글자 **아래끝**이 H-mv 에 온다. mogrt Position 은
+  // 기준선이라 근사로 그 자리를 쓴다 — 제목의 TOP_TO_BASELINE 과 같은 성격의 근사치다.
+  return {
+    text,
+    postScriptName: postScriptNameFor(fontId, 700) ?? "",
+    fontPx: Math.round((H * pct) / 100),
+    colorInt: colorToInt(fill),
+    xNorm: 0.5,
+    yNorm: Math.max(0, Math.min(1, (H - (H * yPct) / 100) / H)),
+    alignment: 1,
+    // 외곽선 두께는 ASS Outline 값(스타일표)과 같은 축이 아니라 근사다. 0 이면 안 그린다.
+    stroke: style === "clean" || style === "shadow_soft"
+      ? { colorInt: 0x000000, width: 0 }
+      : { colorInt: style === "outline_bold" ? 0xffffff : 0x000000, width: Math.max(1, Math.round(H * 0.002)) },
+  };
+}
+
+/**
+ * 자막 한 줄을 **편집 가능한 .mogrt** 로 (사용자 2026-08-31: "다 그렇게 해줘").
+ *
+ * PNG 와 같은 값에서 나오지만 글자를 프리미어에서 고칠 수 있다. 썸네일을 떼어(stripThumbs)
+ * 한 장에 30KB 안팎 — 수십 줄을 내려도 부담이 없다.
+ *
+ * 박스형 스타일(news·pink_bubble·highlight_bar·typewriter)은 **409** 로 거절한다.
+ * 도형을 못 옮기기 때문이고, 그때 패널은 PNG 경로로 돌아간다 — 모양이 정확한 쪽이 낫다.
+ */
+app.get("/api/recommendations/:id/caption.mogrt", async (c) => {
+  const rec = await getEntity<any>("recommendation", c.req.param("id"));
+  if (!rec) return c.json({ error: "recommendation not found" }, 404);
+  if (!(await fileExists(PREMIERE_BASE_OBJECT))) return c.json({ error: "base_template_missing" }, 409);
+
+  const ctx = await recRenderContext(rec, c.req.query("aspect"));
+  const lines = await recCaptionLines(rec, ctx.esn);
+  const i = Number(c.req.query("i"));
+  const line = Number.isInteger(i) && i >= 0 && i < lines.length ? lines[i] : null;
+  if (!line) return c.json({ error: "line not found" }, 404);
+
+  const layer = captionMogrtLayer(ctx.esn, ctx.W, ctx.H, line.text);
+  if (!layer) return c.json({ error: "boxed_caption_style" }, 409);
+
+  try {
+    const out = patchTitleMogrt(new Uint8Array(await readFile(PREMIERE_BASE_OBJECT)), [layer], {
+      capsuleId: capsuleIdFor(`${rec.id}#cap${i}`, ctx.aspect),
+      capsuleName: `[STEP-D] 자막 ${i + 1} · ${line.text.slice(0, 20)}`,
+    }, { stripThumbs: true });
+    return new Response(out, {
+      headers: {
+        "content-type": "application/octet-stream",
+        "content-disposition": `attachment; filename="stepd-cap-${rec.id}-${i}.mogrt"`,
+        "cache-control": "private, max-age=300",
+      },
+    });
+  } catch (err) {
+    return c.json({ error: `자막 그래픽을 만들지 못했습니다: ${(err as Error).message}` }, 500);
+  }
+});
+
 app.get("/api/recommendations/:id/caption.png", async (c) => {
   const rec = await getEntity<any>("recommendation", c.req.param("id"));
   if (!rec) return c.json({ error: "recommendation not found" }, 404);

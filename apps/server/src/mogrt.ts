@@ -45,6 +45,8 @@ export type MogrtTextLayer = {
   yNorm: number;
   /** 0=왼쪽 · 1=가운데 · 2=오른쪽 (프리미어 mAlignment). */
   alignment: 0 | 1 | 2;
+  /** 외곽선 — 자막의 검정 스트로크(ASS Outline)를 옮길 때 쓴다. 없으면 템플릿 값 유지. */
+  stroke?: { colorInt: number; width: number } | null;
 };
 
 export type MogrtMeta = {
@@ -96,6 +98,14 @@ function applyLayer(blob: Record<string, any>, layer: MogrtTextLayer): void {
   setFirst(ss.mFontSize, Math.max(1, Math.round(layer.fontPx)));
   setFirst(ss.mFillColor, layer.colorInt >>> 0);
   if (typeof tp.mAlignment === "number") tp.mAlignment = layer.alignment;
+  if (layer.stroke) {
+    setFirst(ss.mStrokeVisible, layer.stroke.width > 0);
+    setFirst(ss.mStrokeColor, layer.stroke.colorInt >>> 0);
+    setFirst(ss.mStrokeWidth, Math.max(0, layer.stroke.width));
+    // 프리미어는 기본이 **칠 위에 선**이다. ASS 는 선이 칠 뒤라 글자가 얇아 보이지 않는다 —
+    // 같은 인상을 내려면 칠을 선 위로 올린다.
+    setFirst(ss.mFillOverStroke, true);
+  }
 }
 
 /**
@@ -105,7 +115,10 @@ function applyLayer(blob: Record<string, any>, layer: MogrtTextLayer): void {
  *  · 줄이 더 많으면 → 남는 줄을 **마지막 레이어에 줄바꿈으로 합친다**(버리지 않는다).
  *  · 레이어가 더 많으면 → 남는 레이어를 **빈 문자열**로 만든다(옛 문구가 남으면 안 된다).
  */
-export function patchTitleMogrt(base: Uint8Array, layers: MogrtTextLayer[], meta: MogrtMeta): Uint8Array {
+export function patchTitleMogrt(
+  base: Uint8Array, layers: MogrtTextLayer[], meta: MogrtMeta,
+  opts: { stripThumbs?: boolean } = {},
+): Uint8Array {
   if (!layers.length) throw new Error("layers is empty");
   const outer = unzipSync(base);
   const graphic = outer["project.prgraphic"];
@@ -173,6 +186,15 @@ export function patchTitleMogrt(base: Uint8Array, layers: MogrtTextLayer[], meta
     if (ctl.value?.strDB) for (const s of ctl.value.strDB) s.str = layer ? layer.text : "";
   }
   outer["definition.json"] = new Uint8Array(Buffer.from(JSON.stringify(def), "utf-8"));
+
+  // 미리보기 썸네일(thumb*.png/mp4)은 **파일 크기의 대부분**이다(622KB 중 ~600KB). 자막처럼
+  // 수십 장을 찍어 내릴 때는 빼서 30KB 안팎으로 만든다 — 목록 아이콘이 비는 대신 전송이 20배 싸다.
+  // 제목처럼 한 장만 쓸 때는 남긴다(필수 그래픽 목록에서 눈으로 찾기 쉽다).
+  if (opts.stripThumbs) {
+    for (const name of Object.keys(outer)) {
+      if (/^thumb/i.test(name)) delete outer[name];
+    }
+  }
 
   return zipSync(outer);
 }
