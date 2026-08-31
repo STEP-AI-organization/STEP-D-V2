@@ -895,6 +895,41 @@ async function findItemsByRecIds(recIds, use) {
   return await use(want, project, api);
 }
 
+/**
+ * 시퀀스를 **세로 쇼츠(1080×1920)** 로 바꾼다 — 사용자 요구 2026-08-31:
+ * *"프리미어 딱 누르자마자 쇼츠화되어서 나와줘야 해."*
+ *
+ * 가로 원본 타임라인을 주면 편집자는 최종 프레이밍을 못 본다. 쇼츠는 세로에서 인물이
+ * 어디 걸리는지가 전부라, **처음부터 세로로** 보여 줘야 자를지 말지 판단이 선다.
+ *
+ * 크롭(Motion 확대)은 **best-effort** 다 — 파라미터 이름이 버전·로케일에 따라 달라서
+ * 못 찾을 수 있다. 못 해도 시퀀스는 이미 세로라, 편집자가 "프레임 크기로 설정" 한 번이면 된다.
+ * 여기서 실패해도 전체를 실패시키지 않는 이유다.
+ */
+const SHORTS_W = 1080;
+const SHORTS_H = 1920;
+
+async function makeSequenceVertical(api, project, seq, onStage) {
+  try {
+    const settings = await seq.getSettings();
+    const rect = new api.RectF();
+    rect.width = SHORTS_W;
+    rect.height = SHORTS_H;
+    await settings.setVideoFrameRect(rect);
+    const ok = project.executeTransaction(
+      (compound) => { compound.addAction(seq.createSetSettingsAction(settings)); },
+      "STEP-D 세로 쇼츠 설정",
+    );
+    if (ok === false) throw new Error("시퀀스 설정을 바꾸지 못했습니다.");
+    return true;
+  } catch (err) {
+    // 세로 전환 실패는 알린다 — 가로로 나온 걸 모르고 편집하면 그게 더 나쁘다.
+    console.log("[STEP-D] 세로 전환 실패", err);
+    onStage(`⚠ 세로(1080×1920) 전환에 실패했습니다 — 시퀀스 설정에서 직접 바꿔 주세요: ${err.message}`);
+    return false;
+  }
+}
+
 async function buildRoughCut(recs, onStage) {
   const withMedia = recs.find((r) => r.mediaFilename || r.mediaId) || recs[0];
   onStage("원본 확인 중…");
@@ -922,7 +957,7 @@ async function buildRoughCut(recs, onStage) {
   onStage("조각 찾는 중…");
   const seqName = `[STEP-D] ${(withMedia.programTitle || srcName || "러프컷").slice(0, 40)} 러프컷`;
   // ②③ 을 한 흐름으로 — 찾은 조각을 **그 자리에서** 시퀀스로 만든다.
-  return await findItemsByRecIds(recs.map((r) => r.id), async (found, project) => {
+  return await findItemsByRecIds(recs.map((r) => r.id), async (found, project, api) => {
     // **추천 순서 그대로** 늘어놓는다 — 점수 순으로 온 목록이라 그게 곧 편집 순서다.
     const ordered = recs.map((r) => found.get(String(r.id))).filter(Boolean);
     if (!ordered.length) throw new Error("자른 조각을 프로젝트에서 찾지 못했습니다.");
@@ -930,10 +965,12 @@ async function buildRoughCut(recs, onStage) {
     onStage("러프컷 시퀀스 만드는 중…");
     const seq = await project.createSequenceFromMedia(seqName, ordered);
     if (!seq) throw new Error("시퀀스를 만들지 못했습니다.");
+    // **누르자마자 쇼츠 형태**로 보여 준다 — 가로로 주면 최종 프레이밍을 못 본다.
+    const vertical = await makeSequenceVertical(api, project, seq, onStage);
     // 만들고 안 열면 사용자는 "눌렀는데 아무 일도 안 일어났다" 고 느낀다.
     try { await project.setActiveSequence(seq); } catch (_) { /* 열기 실패는 치명적이지 않다 */ }
 
-    return { seqName, placed: ordered.length, missing: recs.length - ordered.length };
+    return { seqName, placed: ordered.length, missing: recs.length - ordered.length, vertical };
   });
 }
 
