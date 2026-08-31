@@ -369,6 +369,7 @@ async function doLogin() {
     show("upload");
     await loadPrograms();
     await refreshSequenceLabel();
+    warnIfFontsMissing();
     startHandoffPolling();
   } catch (err) {
     setStatus($("loginStatus"), err.message, "err");
@@ -632,6 +633,57 @@ async function doAddMarkers() {
   } finally {
     busy = false;
     syncRecButtons();
+  }
+}
+
+// ── 글꼴 확인 ─────────────────────────────────────────────────────────────────
+/**
+ * **지마켓 산스가 이 PC 에 있나.** 사용자 요구 2026-08-31: "안 깔려 있으면 인식해서 깔게끔도."
+ *
+ * 왜 중요한가: 서버 렌더는 컨테이너에 폰트를 넣어 두지만(Dockerfile) **편집자 PC 는 아무도
+ * 안 챙긴다.** 그 상태로 프리미어에서 제목을 얹으면 글꼴만 다른 결과물이 나가고, 아무도
+ * 모른 채 몇 회차가 지난다 — 조용히 틀리는 쪽이라 먼저 말해 줘야 한다.
+ *
+ * 설치는 패널이 직접 못 한다(레지스트리 등록이 필요하다). 대신 **한 줄 명령**을 안내한다 —
+ * launcher/install-fonts.ps1 은 관리자 권한 없이 사용자 폰트로 넣는다.
+ */
+const FONT_FILES = ["GmarketSansTTFBold.ttf", "GmarketSansTTFMedium.ttf"];
+
+function fontsInstalled() {
+  let nodeFs = null;
+  try { nodeFs = require("fs"); } catch (_) { return null; }   // 확인 자체가 불가 → 조용히 넘어간다
+  if (!nodeFs || typeof nodeFs.openSync !== "function") return null;
+
+  // 경로는 **슬래시로** 쓴다 — Windows 도 받아 주고, 역슬래시 이스케이프에서 나는 사고가 없다.
+  const env = (typeof process !== "undefined" && process.env) || {};
+  const dirs = [];
+  if (env.LOCALAPPDATA) dirs.push(`${env.LOCALAPPDATA}/Microsoft/Windows/Fonts`);
+  dirs.push(`${env.WINDIR || "C:/Windows"}/Fonts`);
+
+  for (const dir of dirs) {
+    for (const f of FONT_FILES) {
+      try {
+        const fd = nodeFs.openSync(`${dir}/${f}`, "r");
+        nodeFs.closeSync(fd);
+        return true;    // 하나만 있어도 설치된 것으로 본다(Bold 가 제목에 쓰인다)
+      } catch (_) { /* 없다 */ }
+    }
+  }
+  return false;
+}
+
+/** 없으면 화면에 알린다. 판정 불가(null)면 아무 말도 하지 않는다 — 근거 없는 경고는 소음이다. */
+function warnIfFontsMissing() {
+  const el = $("fontWarn");
+  if (!el) return;
+  const ok = fontsInstalled();
+  if (ok === false) {
+    el.textContent = "⚠ 지마켓 산스가 이 PC 에 없습니다 — 제목 글꼴이 결과물과 달라집니다. "
+      + "packages/premiere/launcher/install-fonts.ps1 을 한 번 실행하세요 (관리자 권한 불필요 · 이후 프리미어 재시작).";
+    el.className = "status err";
+  } else {
+    el.textContent = "";
+    el.className = "status";
   }
 }
 
@@ -1507,6 +1559,7 @@ async function doLogout() {
     show("upload");
     await loadPrograms();
     await refreshSequenceLabel();
+    warnIfFontsMissing();
     startHandoffPolling();
   } else {
     show("login");

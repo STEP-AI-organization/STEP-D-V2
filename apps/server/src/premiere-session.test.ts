@@ -429,3 +429,36 @@ describe("패널 — 주 동선: 원본 받고 마커", () => {
     assert.match(panel, /createSequenceFromMedia\(`\[STEP-D\] \$\{String\(name\)\.slice\(0, 60\)\}`, \[clip\]\)/);
   });
 });
+
+/**
+ * 글꼴 (사용자 2026-08-31: "안 깔려 있으면 인식해서 깔게끔도 해줘야 해").
+ *
+ * 서버 렌더는 컨테이너에 폰트를 넣어 두지만(Dockerfile) **편집자 PC 는 아무도 안 챙긴다.**
+ * 그 상태로 프리미어에서 제목을 얹으면 글꼴만 다른 결과물이 나가고 아무도 모른 채 지나간다.
+ */
+describe("패널 — 글꼴 확인", () => {
+  it("설치 여부를 사용자·시스템 폰트 폴더에서 본다", () => {
+    assert.match(panel, /function fontsInstalled\(\)/);
+    assert.ok(panel.includes("/Microsoft/Windows/Fonts"),
+      "경로를 슬래시로 쓰지 않으면 역슬래시 이스케이프에서 조용히 깨진다");
+  });
+
+  it("판정 불가면 **아무 말도 하지 않는다** — 근거 없는 경고는 소음이다", () => {
+    assert.ok(panel.includes("if (ok === false) {"), "false 일 때만 경고해야 한다");
+    assert.ok(panel.includes('typeof nodeFs.openSync !== "function") return null;'),
+      "확인 불가를 null 로 구분하지 않는다 — 그러면 못 읽은 걸 '없다' 로 오인한다");
+  });
+
+  it("설치 스크립트는 관리자 권한 없이 도는 사용자 폰트 설치다", () => {
+    const ps = read("packages/premiere/launcher/install-fonts.ps1");
+    assert.ok(ps.includes("LOCALAPPDATA"), "사용자 폰트 폴더를 안 쓴다");
+    assert.ok(ps.includes(String.raw`HKCU:\Software\Microsoft\Windows NT\CurrentVersion\Fonts`),
+      "HKCU 등록이 없다 — 복사만으로는 앱이 글꼴을 못 찾는다");
+    assert.ok(ps.includes("관리자 권한이 필요 없다"));
+  });
+
+  it("이미 있으면 다시 넣지 않는다 — 중복 등록이면 어느 쪽이 쓰이는지 알 수 없다", () => {
+    const ps = read("packages/premiere/launcher/install-fonts.ps1");
+    assert.match(ps, /if \(Test-Path \$target\) \{\s*\n\s*Write-Host "이미 있음/);
+  });
+});
