@@ -350,6 +350,36 @@ async function requeueStaleInner(): Promise<number> {
  * we last TRY" rather than on data rows a zero-result run never writes (e.g. video.comments
  * on a video with no comments would otherwise be "due" on every sweep forever).
  */
+/**
+ * 완료 잡 보존 기간. 이보다 오래된 `done` 행은 지운다.
+ *
+ * ⚠️ **`lastDoneJobAt` 이 보는 최장 간격보다 넉넉히 길어야 한다.** 지금 최장은
+ * `VIDEO_ANALYZE_AGED_INTERVAL_MS`(7일)다 — 그보다 짧게 자르면 "마지막으로 돌린 시각"을
+ * 잃어버려 잡이 due 로 판정되고, 아낀 것보다 많은 API 호출이 다시 나간다.
+ * 30일은 그 4배 여유다.
+ */
+const DONE_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
+
+/**
+ * 오래된 완료 잡을 지운다. **지우는 코드가 아예 없었다** — 실측(2026-08-31) job_queue 가
+ * 43,231행 / 21MB 였고, 이 표를 훑는 쿼리(queueStats·pendingByType·lastDoneJobAt)가 전부
+ * 시간에 비례해 느려지는 구조였다. 크기가 자라기만 하는 표는 언젠가 반드시 문제가 된다.
+ *
+ * 한 번에 지우는 양을 묶는다(`LIMIT`) — 첫 실행이 4만 행을 한 트랜잭션으로 지우면 그동안
+ * claim 이 락을 기다린다. 여러 번 나눠 수렴시키는 편이 안전하다.
+ *
+ * @returns 지운 행 수
+ */
+export async function pruneDoneJobs(batch = 5_000): Promise<number> {
+  const cutoff = Date.now() - DONE_RETENTION_MS;
+  const { rowCount } = await getPool().query(
+    `DELETE FROM job_queue WHERE id IN (
+       SELECT id FROM job_queue WHERE status = 'done' AND updatedAt < $1 LIMIT $2)`,
+    [cutoff, batch],
+  );
+  return rowCount ?? 0;
+}
+
 export async function lastDoneJobAt(type: JobType, dedupeKey: string): Promise<number | null> {
   const { rows } = await getPool().query(
     `SELECT MAX(updatedAt) AS t FROM job_queue

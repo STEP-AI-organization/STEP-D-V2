@@ -57,7 +57,7 @@ import {
   prepareProgramAssets, publishStyleProfile, publishThumbnails, tempAssetRoot, pullPrefix,
 } from "./thumbnail-assets.ts";
 import { uploadFile, uploadPath, thumbPath, promoteUpload } from "./storage-gcs.ts";
-import { initQueue, claimJob, completeJob, failJob, requeueStale, heartbeatJob, enqueue, lastDoneJobAt, queueStats, type Job, type JobType } from "./queue.ts";
+import { initQueue, claimJob, completeJob, failJob, requeueStale, heartbeatJob, enqueue, lastDoneJobAt, pruneDoneJobs, queueStats, type Job, type JobType } from "./queue.ts";
 import { runWithTenant, runAsSystem, DEFAULT_TENANT_ID } from "./tenant.ts";
 import { recordAutoPublishForReport, recordAutoPublishFailureForReport } from "./publish-notify.ts";
 import { runAutomationCycle } from "./automation-cycle.ts";
@@ -3273,6 +3273,17 @@ async function main(): Promise<void> {
   console.log("[worker] queue:", JSON.stringify(await runAsSystem(queueStats)));
 
   if (RUNS_SWEEP) await sweepDueChannels();
+
+  // 오래된 완료 잡 정리 — 지우는 코드가 아예 없어 43,231행까지 쌓여 있었다(실측 2026-08-31).
+  // 스윕과 같은 레인에서 기동당 한 묶음씩만 지운다: 한 번에 다 지우면 그동안 claim 이 락을
+  // 기다린다. 실패해도 잡 처리를 막지 않는다 — 정리는 부수적인 일이다.
+  if (RUNS_SWEEP) {
+    const pruned = await pruneDoneJobs().catch((e) => {
+      console.warn("[worker] job_queue 정리 실패(무시):", e instanceof Error ? e.message : e);
+      return 0;
+    });
+    if (pruned) console.log(`[worker] job_queue 완료 잡 ${pruned}건 정리`);
+  }
 
   // ── 자동 배포 순방 (drain) ──────────────────────────────────────────────────
   // drain 워커는 Scheduler 가 주기적으로 깨운다. 그때 자동 배포 순방을 **한 번** 팬아웃한다
