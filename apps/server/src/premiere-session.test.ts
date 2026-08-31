@@ -244,3 +244,41 @@ describe("패널 — 추천 구간을 서브클립으로", () => {
     assert.match(panel, /visited < 2000/);
   });
 });
+
+/**
+ * 원본이 **편집자 PC 에 아예 없을 수 있다**(사용자 지적 2026-08-31). 그러면 마커도 서브클립도
+ * 러프컷도 시작조차 못 한다 — 받아서 프로젝트에 넣는 데까지가 한 기능이다.
+ */
+describe("패널 — 원본이 없으면 받아서 넣는다", () => {
+  it("프로젝트에 있으면 그대로, 없으면 받아서 가져온다", () => {
+    assert.match(panel, /async function ensureMaster\(rec, onStage\)/);
+    assert.match(panel, /project\.importFiles\(\[file\.nativePath\], true\)/);
+  });
+
+  it("가져오기 대화상자를 띄우지 않는다 — 뜨면 자동 흐름이 사람을 기다리며 멈춘다", () => {
+    assert.match(panel, /importFiles\(\[file\.nativePath\], true\)/);
+  });
+
+  it("저장 폴더는 **한 번만** 묻고 기억한다 — 회차마다 묻는 도구는 아무도 안 쓴다", () => {
+    assert.match(panel, /createPersistentToken\(folder\)/);
+    assert.match(panel, /getEntryForPersistentToken\(token\)/);
+  });
+
+  it("같은 크기의 파일이 이미 있으면 다시 안 받는다 — 수 GB 를 두 번 받는 건 사고다", () => {
+    assert.match(panel, /if \(meta && Number\(meta\.size\) === total\)/);
+  });
+
+  it("청크로 받아 이어 쓴다 — 통째로 올리면 프리미어까지 같이 죽는다", () => {
+    assert.ok(panel.includes('setRequestHeader("Range"'), "Range 요청이 없다");
+    assert.ok(panel.includes("nodeFs.writeSync(fd, new Uint8Array(buf), 0, buf.byteLength, off)"),
+      "이어 쓰기가 없다 — 통째로 메모리에 올리게 된다");
+  });
+
+  it("이어 쓰기를 못 하는 버전에서는 **큰 파일을 거부**한다 — 조용히 메모리를 터뜨리지 않는다", () => {
+    assert.match(panel, /total > 512 \* 1024 \* 1024/);
+  });
+
+  it("서명 URL 도메인이 매니페스트에 열려 있다", () => {
+    assert.ok(manifest.requiredPermissions.network.domains.includes("https://storage.googleapis.com"));
+  });
+});

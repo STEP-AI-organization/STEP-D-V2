@@ -683,10 +683,144 @@ async function findMasterItem(filename) {
   throw new Error(`프로젝트에서 원본을 찾지 못했습니다 (${filename}) — 먼저 프리미어로 가져오세요.`);
 }
 
+// ── 원본이 이 PC 에 없을 때 — 받아서 프로젝트에 넣는다 ────────────────────────
+/**
+ * 편집자 PC 에 원본이 **아예 없을 수 있다**(사용자 지적 2026-08-31). 그러면 마커도 서브클립도
+ * 러프컷도 시작조차 못 한다. 그래서 없으면 STEP-D 에서 받아 프로젝트에 넣는다.
+ *
+ * 세 가지를 지킨다:
+ *  1. **한 번만 묻는다** — 저장 폴더는 처음에 한 번 고르고 영구 토큰으로 기억한다.
+ *     회차마다 폴더를 묻는 도구는 아무도 안 쓴다.
+ *  2. **이미 받아 둔 건 다시 안 받는다** — 같은 이름·같은 크기면 그대로 쓴다. 수 GB 를
+ *     두 번 받는 건 그 자체로 사고다.
+ *  3. **청크로 받아 이어 쓴다** — 통째로 메모리에 올리면 프리미어까지 같이 죽는다.
+ */
+const DOWNLOAD_CHUNK = 16 * 1024 * 1024;
+
+async function mediaFolder() {
+  const token = await store.get("stepd.mediaFolderToken");
+  if (token) {
+    try { return await localFs.getEntryForPersistentToken(token); } catch (_) { /* 폴더가 사라졌다 */ }
+  }
+  const folder = await localFs.getFolder();
+  if (!folder) throw new Error("원본을 저장할 폴더를 골라야 합니다.");
+  try {
+    await store.set("stepd.mediaFolderToken", await localFs.createPersistentToken(folder));
+  } catch (_) { /* 토큰을 못 만들면 다음에 다시 묻는다 — 동작 자체는 된다 */ }
+  return folder;
+}
+
+/** Range 로 한 조각. 첫 조각의 Content-Range 에서 전체 크기를 얻는다(HEAD 왕복 절약). */
+function fetchRange(url, start, end) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("GET", url);
+    xhr.responseType = "arraybuffer";
+    xhr.setRequestHeader("Range", `bytes=${start}-${end}`);
+    xhr.onload = () => {
+      if (xhr.status !== 206 && xhr.status !== 200) return reject(new Error(`다운로드 실패 ${xhr.status}`));
+      const cr = xhr.getResponseHeader("Content-Range") || "";
+      const total = Number(/\/(\d+)$/.exec(cr)?.[1] ?? 0);
+      resolve({ buffer: xhr.response, total, partial: xhr.status === 206 });
+    };
+    xhr.onerror = () => reject(new Error("네트워크 오류"));
+    xhr.send();
+  });
+}
+
+async function downloadMaster(mediaId, filename, onStage) {
+  const folder = await mediaFolder();
+
+  // 이미 받아 둔 파일이 있으면 그대로 쓴다 — 크기까지 같아야 인정한다(중간에 끊긴 파일 방지).
+  const existing = await folder.getEntry(filename).catch(() => null);
+
+  onStage("STEP-D 에서 원본 주소 받는 중…");
+  const { url } = await apiJson(`/media/${encodeURIComponent(mediaId)}/stream-url`);
+  if (!url) throw new Error("원본 주소를 받지 못했습니다.");
+
+  const first = await fetchRange(url, 0, DOWNLOAD_CHUNK - 1);
+  const total = first.total || first.buffer.byteLength;
+
+  if (existing) {
+    const meta = await existing.getMetadata().catch(() => null);
+    if (meta && Number(meta.size) === total) {
+      onStage("이미 받아 둔 원본을 씁니다.");
+      return existing;
+    }
+  }
+
+  const file = await folder.createFile(filename, { overwrite: true });
+  const nativePath = file.nativePath;
+  let nodeFs = null;
+  let fd = null;
+  try {
+    nodeFs = require("fs");
+    if (nodeFs && typeof nodeFs.openSync === "function") fd = nodeFs.openSync(nativePath, "w");
+    else nodeFs = null;
+  } catch (_) { nodeFs = null; }
+
+  if (!nodeFs || fd === null) {
+    // 이어 쓰기를 못 하면 통째로 받는 수밖에 없다 — 큰 파일은 여기서 막고 사람에게 알린다.
+    // 조용히 메모리를 터뜨리는 것보다 "이 방법으로는 안 된다" 가 낫다.
+    if (total > 512 * 1024 * 1024) {
+      throw new Error("이 프리미어 버전에서는 큰 원본을 받을 수 없습니다 — 파일을 직접 프로젝트에 가져오세요.");
+    }
+    const all = new Uint8Array(total);
+    all.set(new Uint8Array(first.buffer), 0);
+    let off = first.buffer.byteLength;
+    while (off < total) {
+      const { buffer } = await fetchRange(url, off, Math.min(off + DOWNLOAD_CHUNK, total) - 1);
+      all.set(new Uint8Array(buffer), off);
+      off += buffer.byteLength;
+      onStage(`원본 받는 중… ${Math.round((off / total) * 100)}%`);
+    }
+    await file.write(all.buffer, { format: formats.binary });
+    return file;
+  }
+
+  try {
+    let off = 0;
+    let buf = first.buffer;
+    while (off < total) {
+      nodeFs.writeSync(fd, new Uint8Array(buf), 0, buf.byteLength, off);
+      off += buf.byteLength;
+      onStage(`원본 받는 중… ${Math.round((off / total) * 100)}% (${(total / 1073741824).toFixed(1)}GB)`);
+      if (off >= total) break;
+      buf = (await fetchRange(url, off, Math.min(off + DOWNLOAD_CHUNK, total) - 1)).buffer;
+    }
+  } finally {
+    try { nodeFs.closeSync(fd); } catch (_) { /* 이미 닫힘 */ }
+  }
+  return file;
+}
+
+/**
+ * 원본을 **확보**한다 — 프로젝트에 있으면 그걸, 없으면 받아서 넣고 다시 찾는다.
+ * 이게 있어야 "원본이 이미 프로젝트에 있어야 한다" 는 전제가 사라진다.
+ */
+async function ensureMaster(rec, onStage) {
+  const filename = rec.mediaFilename || "";
+  try {
+    return await findMasterItem(filename);
+  } catch (_) {
+    // 없다 — 받아서 넣는다.
+  }
+  if (!rec.mediaId) throw new Error("이 추천에 연결된 원본이 없습니다.");
+
+  const file = await downloadMaster(rec.mediaId, filename || `${rec.mediaId}.mp4`, onStage);
+  onStage("프로젝트에 가져오는 중…");
+  const { project } = await activeSequence();
+  // suppressUI=true — 가져오기 대화상자가 뜨면 자동 흐름이 사람을 기다리며 멈춘다.
+  const ok = await project.importFiles([file.nativePath], true);
+  if (ok === false) throw new Error("프로젝트로 가져오지 못했습니다.");
+  return await findMasterItem(filename || file.name);
+}
+
 async function makeSubclipsForRecs(recs, onStage) {
-  const filename = recs.find((r) => r.mediaFilename)?.mediaFilename || "";
-  onStage(`프로젝트에서 원본 찾는 중… (${filename || "파일명 없음"})`);
-  const { api, project, clip, name } = await findMasterItem(filename);
+  // 원본이 프로젝트에 없으면 **받아서 넣는다** — 편집자 PC 에 파일이 없을 수 있다.
+  const withMedia = recs.find((r) => r.mediaFilename || r.mediaId) || recs[0];
+  onStage("원본 확인 중…");
+  const { api, project, clip, name } = await ensureMaster(withMedia, onStage);
 
   onStage(`"${name}" 에서 ${recs.length}개 구간 자르는 중…`);
   const ok = project.executeTransaction((compound) => {
