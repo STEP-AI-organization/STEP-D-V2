@@ -477,6 +477,17 @@ async function handleChannelAnalyze(job: Job): Promise<void> {
   if (result.error) throw new Error(result.error);
   console.log(`[worker] ${job.type} ${channelId}`, JSON.stringify(result));
 
+  // ⚠️ **채널이 "not due" 면 팬아웃도 건너뛴다.** 예전엔 skip 결과와 무관하게 무조건 돌아서,
+  // 아무것도 안 한 실행에서도 채널의 전 업로드를 훑고 영상마다 DB 를 왕복했다 — 실측
+  // (2026-08-31) 하루 ~26만 쿼리. 스윕이 15분마다 깨우는데 채널 신선도 간격은 6시간이라,
+  // 96회 중 92회가 그 헛일이었다.
+  //
+  // 팬아웃 주기가 15분 → 최대 6시간(VIDEO_SYNC_INTERVAL_MS)이 되지만, 영상 잡 자체의 간격은
+  // 24시간·7일이라 여전히 4배 촘촘하다 — 기능 손실 없음.
+  // ⚠️ 다만 **6시간이 팬아웃의 상한**이 된다: config 의 영상 잡 간격을 6시간 밑으로 내리면
+  // 그 값이 조용히 안 지켜진다(config.ts 상수 옆에도 같은 경고를 적어 뒀다).
+  if (result.skipped === "not due") return;
+
   // Fan out per-video analytics/comments for the recent uploads that are due.
   await enqueueDueVideoJobs(channelId);
 }

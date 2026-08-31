@@ -407,6 +407,10 @@ export function AppDataProvider({
   // Read the latest state through a ref so the self-scheduling loop never re-subscribes.
   /** 숨은 탭의 재확인 주기 — 요청은 안 보내고 루프만 살려 둔다(돌아오면 즉시 갱신). */
   const HIDDEN_DELAY = 60_000;
+  /** 빠른 폴링(8초)을 유지하는 최대 시간. 넘으면 느린 주기로 — 안 끝나는 일에 8초는 낭비다. */
+  const FAST_POLL_MAX_MS = 20 * 60_000;
+  /** 빠른 모드에 들어간 시각(0=아님). 상한을 넘기면 느린 주기로 내려간다. */
+  const fastSinceRef = useRef(0);
   const stateRef = useRef(state);
   stateRef.current = state;
   useEffect(() => {
@@ -425,7 +429,14 @@ export function AppDataProvider({
             e.pipeline?.stageStatus === "progress" ||
             (e.pipeline?.stageStatus === "idle" && e.pipeline?.stage === "analyze"),
         );
-      return active ? 8_000 : 45_000;
+      // ⚠️ **빠른 모드에는 상한이 필요하다.** `running` 잡이나 `progress` 회차가 어떤 이유로든
+      // 안 끝나면(워커가 조용히 죽어 잡이 running 으로 남는 건 이 리포의 기록된 실패 모드다)
+      // 모든 탭이 **24시간 내내 8초 폴링**을 돈다 — 그 자체가 청구서가 된다(2026-08-31 사고의
+      // 원인이 정확히 "표시등이 8초마다 큰 응답을 받아온 것" 이었다).
+      // 오래 걸리는 일이면 8초 해상도로 볼 이유도 없다. 상한을 넘으면 느린 주기로 내려간다.
+      if (!active) { fastSinceRef.current = 0; return 45_000; }
+      if (!fastSinceRef.current) fastSinceRef.current = Date.now();
+      return Date.now() - fastSinceRef.current < FAST_POLL_MAX_MS ? 8_000 : 45_000;
     };
     // ⚠️ **숨은 탭에서는 받아오지 않는다.** 이 루프가 부르는 refresh() 는 `/api/state` 전체다.
     // 아무도 안 보는 탭이 8초마다 그걸 받아오면 그 바이트가 전부 Vercel Fast Origin Transfer 로

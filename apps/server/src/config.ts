@@ -22,6 +22,11 @@ export const SHORTS_PROBE_CONCURRENCY = 8;
 /** Under this age a video is "fresh": polled daily, and its comments are collected. */
 export const FRESH_VIDEO_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
 
+// ⚠️ **아래 간격들의 실효 상한은 채널 신선도 주기(VIDEO_SYNC_INTERVAL_MS, 기본 6시간)다.**
+// 영상 잡을 큐잉하는 유일한 경로가 `enqueueDueVideoJobs` 이고, 그건 채널이 due 일 때만
+// 돌기 때문이다(worker.ts `handleChannelAnalyze`). 여기 값을 6시간 밑으로 내리면 그 값이
+// **조용히 안 지켜진다** — 그때는 채널 주기도 같이 내리거나 팬아웃 경로를 따로 만들 것.
+
 /** Re-pull per-video analytics this often for fresh (<7d) videos. */
 export const VIDEO_ANALYZE_FRESH_INTERVAL_MS = 24 * 60 * 60 * 1000;
 /** …and this often once a video has aged past the fresh window. */

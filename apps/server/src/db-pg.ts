@@ -2286,7 +2286,7 @@ const STATE_JOB_LIMIT = 200;
 
 export async function getState() {
   const [programs, episodes, recommendations, clips, jobs, connections, media] = await Promise.all([
-    listEntities("program"),
+    listProgramsForState(),
     listEntities("episode"),
     listEntities("recommendation"),
     listEntities("clip"),
@@ -2297,13 +2297,50 @@ export async function getState() {
     listMedia(),
   ]);
   return {
-    programs: stripProgramImages(programs),
+    programs,
     episodes,
     recommendations,
     clips: stripRedundantClipIcons(clips, programs, episodes),
     jobs,
     connections,
     media: media.map(mediaPublic),
+  };
+}
+
+/**
+ * `/api/state` 용 프로그램 목록 — **base64 이미지를 DB 에서부터 안 읽는다.**
+ *
+ * JS 에서만 걸러내면 **응답**은 줄어도 Postgres → Node 구간은 그대로 19 MB 를 실어 나르고
+ * JSON.parse 까지 한다(실측 `/api/state` 0.40s — 전 라우트 최댓값). jsonb `-` 연산자로
+ * **읽는 순간에** 빼면 그 구간도 같이 사라진다.
+ *
+ * ⚠️ 저장은 그대로다. 원본이 필요한 곳(설정 화면·렌더·팩토리)은 `getEntity` 로 통째로 읽는다.
+ * ⚠️ 클립 아이콘은 여기서 못 뺀다 — "프로그램 brandIcon 과 같을 때만" 이라는 조건을 SQL 로
+ *    표현하기 어렵고, 잘못 빼면 사람이 고른 아이콘이 사라진다(`stripRedundantClipIcons` 참고).
+ */
+async function listProgramsForState<T = unknown>(): Promise<T[]> {
+  const { rows } = await pool.query(
+    `SELECT (data - 'posterImageDataUrl' - 'brandIconDataUrl') AS data,
+            (data ? 'posterImageDataUrl') AS has_poster,
+            (data ? 'brandIconDataUrl')   AS has_icon
+       FROM entities WHERE kind = 'program' ORDER BY ord ASC`,
+  );
+  return rows.map((r) => withImageFlags(r.data, r.has_poster, r.has_icon) as T);
+}
+
+/**
+ * 뺀 자리에 **있다/없다만** 남긴다. 없으면 플래그 자체를 안 붙인다 — `false` 를 붙여도
+ * 동작은 같지만, 화면이 "없다" 와 "모른다" 를 구분할 수 있게 모양을 좁혀 둔다.
+ * SQL 이 아니라 여기 있는 이유: 순수 함수라야 테스트로 고정된다.
+ */
+export function withImageFlags(
+  data: unknown, hasPoster: boolean, hasIcon: boolean,
+): unknown {
+  if (!hasPoster && !hasIcon) return data;
+  return {
+    ...(data as Record<string, unknown>),
+    ...(hasPoster ? { hasPosterImage: true } : {}),
+    ...(hasIcon ? { hasBrandIcon: true } : {}),
   };
 }
 
@@ -2328,36 +2365,6 @@ export async function getState() {
  *
  * 저장된 데이터는 그대로다 — **내보낼 때만** 뺀다. 되돌리려면 이 함수만 지우면 된다.
  */
-/**
- * 프로그램의 base64 이미지를 **내보낼 때만** 뺀다 — 저장은 그대로다.
- *
- * 실측(2026-08-31): ENA 의 `/api/state` 1.73 MB 중 **1.33 MB(77%)가 포스터·쇼츠 아이콘**
- * base64 였다. 목록 한 번 그리는 데 필요 없는 바이트가 매 호출마다 따라 나왔다.
- * 화면은 `GET /api/programs/:id/image/:kind` 로 받는다 — 브라우저가 캐시하고, 안 보는
- * 화면에서는 아예 안 받는다.
- *
- * ⚠️ **있다/없다는 남긴다**(`hasPosterImage`·`hasBrandIcon`). 화면이 "이미지가 있는지" 를
- * 알아야 URL 을 걸지 플레이스홀더를 그릴지 정한다 — 그걸 없애면 매번 404 를 때려 본다.
- *
- * ⚠️ 렌더·팩토리는 **DB 에서 직접** 읽으므로(getEntity) 영향이 없다. 설정 화면만은 원본이
- * 필요해서 `GET /api/programs/:id` 로 따로 받는다 — 안 그러면 빈 값을 저장해 이미지를 지운다.
- * `castPhotos` 는 아직 안 뺀다(설정 화면과 얽힘이 커서 별건).
- */
-export function stripProgramImages(programs: unknown[]): unknown[] {
-  return programs.map((raw) => {
-    const p = raw as Record<string, unknown>;
-    const hasPoster = typeof p?.posterImageDataUrl === "string" && p.posterImageDataUrl !== "";
-    const hasIcon = typeof p?.brandIconDataUrl === "string" && p.brandIconDataUrl !== "";
-    if (!hasPoster && !hasIcon) return raw;
-    const { posterImageDataUrl: _p, brandIconDataUrl: _i, ...rest } = p;
-    return {
-      ...rest,
-      ...(hasPoster ? { hasPosterImage: true } : {}),
-      ...(hasIcon ? { hasBrandIcon: true } : {}),
-    };
-  });
-}
-
 export function stripRedundantClipIcons(clips: unknown[], programs: unknown[], episodes: unknown[]): unknown[] {
   const brandIconOf = new Map<string, string>();
   for (const p of programs as Record<string, unknown>[]) {

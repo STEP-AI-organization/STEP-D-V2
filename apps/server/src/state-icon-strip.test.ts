@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { stripRedundantClipIcons, stripProgramImages } from "./db-pg.ts";
+import { stripRedundantClipIcons, withImageFlags } from "./db-pg.ts";
 
 /**
  * `/api/state` 가 클립마다 복사된 채널 아이콘을 빼는 규칙.
@@ -76,43 +76,29 @@ describe("/api/state — 중복 복사된 채널 아이콘만 뺀다", () => {
 });
 
 /**
- * 프로그램 base64 이미지도 `/api/state` 에서 뺀다 — 실측(2026-08-31) ENA 기준 1.73 MB 중
- * **1.33 MB(77%)** 가 포스터·쇼츠 아이콘이었다. 화면은 `/api/programs/:id/image/:kind` 로 받는다.
+ * 프로그램 base64 이미지는 **DB 에서부터 안 읽는다**(`listProgramsForState` 의 jsonb `-`).
+ * 실측(2026-08-31) ENA 기준 `/api/state` 1.73 MB 중 **1.33 MB(77%)** 가 포스터·쇼츠 아이콘이었고,
+ * JS 에서만 걸러내면 응답은 줄어도 Postgres→Node 구간은 그대로 19 MB 를 실어 날랐다.
  *
- * ⚠️ **저장은 건드리지 않는다.** 렌더·팩토리는 DB 에서 직접 읽고(getEntity), 설정 화면은
- * `GET /api/programs/:id` 로 원본을 따로 받는다 — 안 그러면 빈 값을 저장해 이미지를 지운다.
+ * 여기서 고정하는 건 SQL 이 뺀 자리에 붙이는 **플래그 모양**이다 — 화면이 이걸 보고
+ * `/api/programs/:id/image/:kind` 를 걸지 플레이스홀더를 그릴지 정한다.
  */
-describe("/api/state — 프로그램 base64 이미지를 뺀다", () => {
-  const POSTER = "data:image/png;base64,AAAA";
-  const ICON = "data:image/png;base64,BBBB";
-
-  it("두 필드를 빼고 있다/없다만 남긴다", () => {
-    const [p] = stripProgramImages([
-      { id: "p1", title: "x", posterImageDataUrl: POSTER, brandIconDataUrl: ICON },
-    ]) as any[];
-    assert.equal(p.posterImageDataUrl, undefined);
-    assert.equal(p.brandIconDataUrl, undefined);
+describe("/api/state — 프로그램 이미지 자리에 있다/없다만 남긴다", () => {
+  it("있으면 플래그를 붙인다", () => {
+    const p = withImageFlags({ id: "p1", title: "x" }, true, true) as any;
     assert.equal(p.hasPosterImage, true);
     assert.equal(p.hasBrandIcon, true);
     assert.equal(p.title, "x", "다른 필드는 그대로여야 한다");
   });
 
-  it("한쪽만 있으면 그쪽 플래그만 선다", () => {
-    const [a] = stripProgramImages([{ id: "p", posterImageDataUrl: POSTER }]) as any[];
-    assert.equal(a.hasPosterImage, true);
-    assert.equal(a.hasBrandIcon, undefined, "없는데 true 면 화면이 매번 404 를 때린다");
+  it("없으면 플래그를 **안 붙인다** — 'false' 와 '모른다' 를 섞지 않는다", () => {
+    const p = withImageFlags({ id: "p" }, true, false) as any;
+    assert.equal(p.hasPosterImage, true);
+    assert.equal(p.hasBrandIcon, undefined);
   });
 
-  it("이미지가 없는 프로그램은 손대지 않는다", () => {
-    const rows = [{ id: "p", title: "x" }];
-    assert.equal(stripProgramImages(rows)[0], rows[0]);
-  });
-
-  // castPhotos 는 설정 화면과 얽힘이 커서 이번엔 안 뺐다 — 빼려면 그 화면을 같이 고쳐야 한다.
-  it("castPhotos 는 아직 남긴다 (의도)", () => {
-    const [p] = stripProgramImages([
-      { id: "p", posterImageDataUrl: POSTER, castPhotos: { 홍길동: POSTER } },
-    ]) as any[];
-    assert.deepEqual(p.castPhotos, { 홍길동: POSTER });
+  it("둘 다 없으면 객체를 새로 만들지도 않는다", () => {
+    const row = { id: "p", title: "x" };
+    assert.equal(withImageFlags(row, false, false), row);
   });
 });
