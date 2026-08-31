@@ -1207,3 +1207,58 @@ export function trimEncode(
     );
   });
 }
+
+/**
+ * **정적 오버레이만** 투명 PNG 한 장으로 굽는다 — 프리미어가 서버 결과물을 재현할 때 쓴다.
+ *
+ * 왜 캔버스로 다시 그리지 않나 (사용자 2026-08-31: "로고, 시간박스까지 다 재현"): 시간박스는
+ * ASS `BorderStyle=3` 박스라 여백·모서리가 libass 규칙으로 정해진다. 그걸 캔버스로 흉내 내면
+ * **두 경로가 미묘하게 어긋나고**, 어긋난 건 나중에 아무도 못 찾는다. 그래서 렌더가 쓰는
+ * 그 ASS·그 아이콘 파일을 **같은 순서로** 합성한다 — 투명 배경 위에.
+ *
+ * 순서는 renderShort 와 같아야 한다: 텍스트 PNG → ASS(시간박스·요소) → 배지(로고).
+ */
+export function renderStaticOverlayPng(opts: {
+  width: number;
+  height: number;
+  /** 제목·채널명 텍스트 canvas PNG (전체 프레임). 없으면 생략. */
+  overlayPngPath?: string | null;
+  /** 시간박스·요소가 든 ASS. 없으면 생략. */
+  assPath?: string | null;
+  /** 브랜딩 아이콘 — renderShort 의 badge 와 같은 모양. */
+  badge?: { path: string; h: number; y: number; x?: number } | null;
+  outputPath: string;
+}): Promise<void> {
+  const { width: W, height: H } = opts;
+  const inputs: string[] = ["-f", "lavfi", "-i", `color=c=black@0.0:s=${W}x${H}:r=1:d=1`];
+  let vf = "[0:v]format=rgba[v0]";
+  let last = "[v0]";
+  let idx = 1;
+
+  if (opts.overlayPngPath) {
+    inputs.push("-i", opts.overlayPngPath);
+    vf += `;${last}[${idx}:v]overlay=0:0[vovl]`;
+    last = "[vovl]";
+    idx += 1;
+  }
+  if (opts.assPath) {
+    const esc = opts.assPath.replace(/\\/g, "\\\\").replace(/:/g, "\\:").replace(/'/g, "\\'");
+    vf += `;${last}ass='${esc}'[vass]`;
+    last = "[vass]";
+  }
+  if (opts.badge) {
+    inputs.push("-i", opts.badge.path);
+    vf += `;[${idx}:v]scale=-1:${opts.badge.h}[bdg];${last}[bdg]overlay=${badgeX(opts.badge)}:${opts.badge.y}[vbdg]`;
+    last = "[vbdg]";
+    idx += 1;
+  }
+
+  const args = ["-y", ...inputs, "-filter_complex", vf, "-map", last, "-frames:v", "1", opts.outputPath];
+  return new Promise((resolve, reject) => {
+    execFile("ffmpeg", args, { timeout: 60_000, maxBuffer: FF_MAXBUF }, (err) => {
+      if (err) return reject(err);
+      if (!fs.existsSync(opts.outputPath)) return reject(new Error("overlay png not produced"));
+      resolve();
+    });
+  });
+}

@@ -1,6 +1,6 @@
 # @stepd/server HTTP API 레퍼런스
 
-> 실측: **2026-08-31 · 라우트 256개** (GET 115 · POST 95 · DELETE 25 · PATCH 14 · PUT 7) · `apps/server/src/index.ts` 기준 — 라우트 추가 시 이 문서도 갱신.
+> 실측: **2026-08-31 · 라우트 257개** (GET 116 · POST 95 · DELETE 25 · PATCH 14 · PUT 7) · `apps/server/src/index.ts` 기준 — 라우트 추가 시 이 문서도 갱신.
 > 프론트 대응 함수는 `apps/web/src/lib/data/api.ts` 기준. 데이터 구조는 [data-model.md](data-model.md),
 > 큐·워커 동작은 [../ops/worker-queue.md](../ops/worker-queue.md) 참고.
 
@@ -195,6 +195,7 @@ API 키(`api-keys.ts`). **화이트리스트(`API_KEY_ROUTES`)에 올린 라우�
 | `GET /api/recommendations/:id/title.png` | **제목 투명 PNG** — 프리미어 경로가 타임라인에 얹는 그래픽 | 쿼리 `aspect`(`9:16-crop-main` 기본 · `16:9`) → `image/png`(1080×1920 또는 1920×1080) / 404(그릴 제목 없음) / 503(캔버스 미가용). 웹 편집기와 **같은 렌더러**(`buildStaticOverlayItems`+`renderTextLayerPng`)로 그때그때 그린다 — 구 `.mogrt` 자산 방식(2026-08-31 폐기)은 위치·글꼴이 파일에 박제돼 서버에서 템플릿을 바꿔도 프리미어 경로만 옛 모양으로 남았다. 같은 이유로 구 `GET /api/programs/:id/shorts-style`(스타일 값만 내려주던 것)도 함께 삭제됐다 | (프리미어 패널) |
 | `GET /api/recommendations/:id/title.mogrt` | **제목 모션그래픽 템플릿** — 프리미어에서 **글자를 고칠 수 있는** 제목 | 쿼리 `aspect` → `.mogrt` 바이트 / 404(제목 없음) / 409 `base_template_missing`(베이스 미등록 — 패널이 올리고 재요청) / 500. PNG 와 **같은 입력**(overlayPreviewItems)에서 나오고, 서버가 베이스 템플릿의 문구·글꼴·크기·색·위치를 갈아 끼워 찍는다. capsuleID 는 추천마다 달라야 한다(같으면 프리미어가 캐시해 첫 제목을 재사용) | (프리미어 패널) |
 | `GET /api/recommendations/:id/layout` | **배치 정본** — 프리미어가 서버 결과물을 재현하도록 | 쿼리 `aspect` → `{ aspect, canvas:{w,h}, video:{fill,rect}, elements:[{group,text,x,y,align,fontPx,color}] }` / 404. `9:16-crop-main` 은 **꽉 채우지 않는다** — 위 440px 은 제목이 앉는 검은 띠고 영상은 그 아래 1080×1480 사각형에 cover 로 앉는다. 패널이 이 값으로 클립 Motion(배율·위치)을 잡는다. 숫자를 패널에 복제하면 프리셋을 고쳐도 프리미어만 옛 배치로 남는다 | (프리미어 패널) |
+| `GET /api/recommendations/:id/decorations.png` | **제목 뺀 정적 오버레이** — 로고·시간박스·채널명 한 장 | 쿼리 `aspect` → 투명 `image/png` / 404(그릴 것 없음) / 503(ffmpeg 없음) / 500. **캔버스로 다시 그리지 않는다** — 시간박스는 ASS BorderStyle=3 박스라 여백·모서리가 libass 규칙으로 정해지고 로고는 ffmpeg 원형 크롭이다. 렌더가 쓰는 그 ASS·그 아이콘을 **같은 순서로**(텍스트 PNG → ASS → 배지) 투명 배경에 합성한다(ffmpeg.renderStaticOverlayPng). 제목만 빠진다 — 그건 고칠 수 있어야 해서 `.mogrt` 로 따로 나간다 | (프리미어 패널) |
 | `GET /api/premiere/base-template` | 제목 .mogrt 의 **베이스 등록 여부** | → `{ have, textLayers?, capsuleName? }` | (프리미어 패널) |
 | `POST /api/premiere/base-template` | 베이스 템플릿 등록 (바이너리 본문 · 최대 8MB) | → `{ ok, textLayers, capsuleName }` / 400(.mogrt 아님·텍스트 레이어 없음) / 413. **리포에 안 넣는 이유**: 그 PC 의 프리미어가 만든 캡슐이라야 그 프리미어에서 열린다(버전 호환) · Adobe 자산 재배포 회피 | (프리미어 패널이 409 를 받으면 자동으로) |
 | `POST /api/premiere/handoff` | **웹 → 프리미어 핸드오프**(맥락 남기기) | `{ programId?, episodeId?, clipId?, mediaId?, label? }`(하나는 필수, 없으면 400) → `{ ok:true }`. 사용자별 1건만 보관 | `openInPremiere` |

@@ -466,6 +466,53 @@ describe("패널 — 글꼴 확인", () => {
 });
 
 /**
+ * 로고·시간박스 재현 (사용자 2026-08-31: **"로고, 시간박스까지 다 재현."**).
+ *
+ * 시간박스는 ASS BorderStyle=3 박스, 로고는 ffmpeg 원형 크롭이다. 캔버스로 흉내 내면 두 경로가
+ * 미묘하게 어긋나고 그 어긋남은 나중에 아무도 못 찾는다 — **렌더가 쓰는 그 ASS·그 아이콘**을 쓴다.
+ */
+describe("패널 — 로고·시간박스까지 재현", () => {
+  it("서버가 렌더와 같은 재료로 합성한다 — 캔버스로 다시 그리지 않는다", () => {
+    assert.ok(index.includes('app.get("/api/recommendations/:id/decorations.png"'));
+    assert.ok(index.includes("await renderStaticOverlayPng({"));
+    assert.ok(index.includes("await circleCrop(iconRaw, iconPng, iconH);"), "로고 원형 크롭이 렌더와 다르다");
+  });
+
+  it("합성 순서가 렌더와 같다 — 텍스트 PNG → ASS → 배지", () => {
+    const ff = read("apps/server/src/ffmpeg.ts");
+    const fn = ff.slice(ff.indexOf("export function renderStaticOverlayPng"));
+    const a = fn.indexOf("opts.overlayPngPath");
+    const b = fn.indexOf("opts.assPath");
+    const c = fn.indexOf("opts.badge");
+    assert.ok(a > 0 && b > a && c > b, "순서가 어긋나면 시간박스가 로고 위로 온다");
+  });
+
+  it("제목은 빠진다 — 그건 고칠 수 있어야 해서 .mogrt 로 나간다", () => {
+    assert.ok(index.includes('.filter((it) => it.group === "channel")'));
+    assert.ok(index.includes('staticToPng: true, include: "decorations"'),
+      "자막·제목을 안 빼면 두 번 그려진다");
+  });
+
+  it("트랙은 제목보다 위다 — 시간박스가 제목 뒤로 가면 안 된다", () => {
+    assert.ok(panel.includes("const TITLE_TRACK = 1;"));
+    assert.ok(panel.includes("const DECORATION_TRACK = 2;"));
+    assert.ok(panel.includes("createOverwriteItemAction(item, at, DECORATION_TRACK, 0)"));
+  });
+
+  it("오버레이 실패가 제목을 되돌리지 않는다 — 앞의 성과를 지킨다", () => {
+    assert.ok(panel.includes('console.log("[STEP-D] 로고·시간박스 실패", err);'));
+  });
+
+  it("/tmp 를 반드시 지운다 — Cloud Run 의 /tmp 는 RAM 이라 쌓이면 OOM 이다", () => {
+    assert.ok(index.includes("const cleanup = () => {"));
+    // 성공·404·예외 세 갈래 모두에서 지워야 한다.
+    const fn = index.slice(index.indexOf('app.get("/api/recommendations/:id/decorations.png"'));
+    const body = fn.slice(0, fn.indexOf("\n});"));
+    assert.ok((body.match(/cleanup\(\);/g) ?? []).length >= 3, "빠져나가는 길마다 지우지 않는다");
+  });
+});
+
+/**
  * 배치 재현 (사용자 2026-08-31: **"영상 꽉 차게 아니고 레이아웃도 받아서 프리미어 재현."**).
  *
  * 기본 템플릿 `9:16-crop-main` 은 꽉 채우지 않는다 — 위 440px 은 제목이 앉는 검은 띠고,
@@ -584,7 +631,7 @@ describe("패널 — 세로 쇼츠로 시작한다", () => {
 describe("패널 — 제목은 서버가 찍어 준 .mogrt 를 얹는다", () => {
   it("편집 가능한 경로가 먼저다 — 사용자 요구: \"편집자가 바꿀 수 있길 원한다\"", () => {
     assert.ok(panel.includes("/title.mogrt${q}"), "제목 mogrt 를 받아오지 않는다");
-    assert.ok(panel.includes("editor.insertMogrtFromPath(file.nativePath, at, 1, 0)"));
+    assert.ok(panel.includes("editor.insertMogrtFromPath(file.nativePath, at, TITLE_TRACK, 0)"));
     const fn = panel.slice(panel.indexOf("async function addTitlesForRecs("));
     const a = fn.indexOf("addTitleMogrts(");
     const b = fn.indexOf("addTitlePngs(");
@@ -636,7 +683,7 @@ describe("패널 — 제목은 서버가 찍어 준 .mogrt 를 얹는다", () =>
   });
 
   it("제목은 V2 트랙에 올린다 — V1 영상 위에 얹혀야 보인다", () => {
-    assert.ok(panel.includes("editor.createOverwriteItemAction(item, at, 1, 0)"));
+    assert.ok(panel.includes("createOverwriteItemAction(item, at, TITLE_TRACK, 0)"));
   });
 
   it("트랙이 V1 뿐이면 **그게 이유라고** 말한다 — 트랙 추가 API 는 없다", () => {

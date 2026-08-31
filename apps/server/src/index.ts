@@ -227,7 +227,7 @@ import {
   type SearchQuery,
   type SearchEventKind,
 } from "./db-pg.ts";
-import { hasFfmpeg, probe, captureThumbnail, circleCrop, trimEncode, remuxFaststart, renderShort } from "./ffmpeg.ts";
+import { hasFfmpeg, probe, captureThumbnail, circleCrop, trimEncode, remuxFaststart, renderShort, renderStaticOverlayPng } from "./ffmpeg.ts";
 import { issueOAuthState, consumeOAuthState, HANDOFF_TTL_MS } from "./oauth-state.ts";
 import { synthesizeHookNarration } from "./tts.ts";
 import { embedQuery } from "./search-embed.ts";
@@ -7182,6 +7182,114 @@ app.get("/api/recommendations/:id/layout", async (c) => {
       align: it.align, fontPx: it.fontPx, color: it.color,
     })),
   });
+});
+
+/**
+ * 제목을 **뺀** 정적 오버레이 한 장 — 로고·시간박스·채널명 (사용자 2026-08-31:
+ * *"로고, 시간박스까지 다 재현."*).
+ *
+ * 왜 캔버스로 다시 그리지 않나: 시간박스는 ASS `BorderStyle=3` 박스라 여백·모서리가 libass
+ * 규칙으로 정해지고, 로고는 ffmpeg 이 원형 크롭해 얹는다. 그걸 다른 코드로 흉내 내면 두 경로가
+ * 미묘하게 어긋나는데, 그 어긋남은 나중에 아무도 못 찾는다. 그래서 **렌더가 쓰는 그 ASS·그
+ * 아이콘 파일을 같은 순서로** 투명 배경 위에 합성한다(ffmpeg.renderStaticOverlayPng).
+ *
+ * 제목만 빠진다 — 그건 프리미어에서 고칠 수 있어야 해서 .mogrt 로 따로 나간다.
+ */
+app.get("/api/recommendations/:id/decorations.png", async (c) => {
+  const rec = await getEntity<any>("recommendation", c.req.param("id"));
+  if (!rec) return c.json({ error: "recommendation not found" }, 404);
+  if (!hasFfmpeg()) return c.json({ error: "ffmpeg unavailable" }, 503);
+
+  const ep = rec.episodeId ? await getEntity<any>("episode", rec.episodeId) : null;
+  const program = ep?.programId ? await getEntity<any>("program", ep.programId) : undefined;
+  const rules = (await listAutomationRules()) as any[];
+  const rule = ep?.programId
+    ? rules.find((r) => r.enabled !== false
+        && (r.programId === ep.programId
+          || (Array.isArray(r.programIds) && r.programIds.includes(ep.programId))))
+    : undefined;
+
+  const want = c.req.query("aspect");
+  const aspect = want === "16:9" ? "16:9" : ((rule as any)?.aspect ?? (rec.kind === "short" ? "9:16-crop-main" : "16:9"));
+  const { autoEditorState } = await import("./factory.ts");
+  const es = autoEditorState(
+    rec, ep?.programTitle ?? "", program,
+    (rule as any)?.templateId,
+    { ...((rule as any)?.layout ?? {}), logo: (rule as any)?.layout?.logo ?? false },
+    String(aspect),
+  ) as any;
+
+  const { W, H, stageH } = renderDims(String(aspect));
+  const scale = constScale(H, stageH);
+  const durSec = Math.max(1, Number(rec.endTime) - Number(rec.startTime) || 10);
+  // ⚠️ Cloud Run 의 /tmp 는 RAM(tmpfs)이다 — 아래 cleanup 이 **반드시** 돌아야 한다.
+  const tmpDir = path.resolve("/tmp/stepd-clips");
+  fs.mkdirSync(tmpDir, { recursive: true });
+  const stem = path.join(tmpDir, `dec_${rec.id}_${Date.now()}`);
+  const textPng = `${stem}_text.png`, assFile = `${stem}.ass`;
+  const iconRaw = `${stem}_icon_raw.png`, iconPng = `${stem}_icon.png`, outPng = `${stem}.png`;
+  const cleanup = () => {
+    for (const p of [textPng, assFile, iconRaw, iconPng, outPng]) { try { fs.unlinkSync(p); } catch { /* 없으면 그만 */ } }
+  };
+
+  try {
+    // ① 로고 — 렌더와 **같은 우선순위·같은 크롭**(클립별 업로드 > 프로그램 기본).
+    let badge: { path: string; h: number; y: number; x?: number } | null = null;
+    let iconBox: { w: number; h: number } | null = null;
+    const iconSrc = /^data:image\//i.test(String(es.channelIconDataUrl ?? ""))
+      ? String(es.channelIconDataUrl) : String(program?.brandIconDataUrl ?? "");
+    const m = /^data:image\/[\w.+-]+;base64,(.+)$/i.exec(iconSrc);
+    if (es.showChannel && !es.channelIconOff && m) {
+      fs.writeFileSync(iconRaw, Buffer.from(m[1], "base64"));
+      const iconH = Math.round(Number(es.channelIconSize) > 0 ? Number(es.channelIconSize) : 40 * scale);
+      let badgePath = iconRaw;
+      if (String(es.channelIconShape ?? "circle") === "circle") {
+        await circleCrop(iconRaw, iconPng, iconH);
+        badgePath = iconPng;
+      }
+      const dim = await probe(badgePath).catch(() => null);
+      const iconW = dim?.width && dim?.height ? Math.max(1, Math.round(iconH * (dim.width / dim.height))) : iconH;
+      iconBox = { w: iconW, h: iconH };
+      const iconYPct = Number(es.channelIconY);
+      const laid = channelBadgeLayout(es, W, H, scale, iconBox);
+      const chY = ((Number(es.channelY) || 82) / 100) * H;
+      const y = iconYPct > 0 ? Math.round((iconYPct / 100) * H) : Math.round(laid?.icon?.y ?? chY - iconH - 28);
+      const x = iconYPct > 0 || !laid?.icon ? undefined : Math.round(laid.icon.x);
+      badge = { path: badgePath, h: iconH, y, ...(x != null ? { x } : {}) };
+    }
+
+    // ② 채널명 텍스트 — 제목은 뺀다(그건 .mogrt 로 나간다).
+    const items = buildStaticOverlayItems(es, W, H, scale, iconBox).filter((it) => it.group === "channel");
+    if (items.length && (await overlayCanvasAvailable())) {
+      const buf = await renderTextLayerPng({ width: W, height: H, items });
+      if (buf?.length) fs.writeFileSync(textPng, buf);
+    }
+
+    // ③ 시간박스·요소 — staticToPng 로 제목·채널명을 빼고, include 로 자막을 뺀다.
+    const ass = buildEditorAss(es, W, H, stageH, durSec, [], {
+      channelIcon: iconBox, staticToPng: true, include: "decorations",
+    });
+    if (ass) fs.writeFileSync(assFile, ass, "utf-8");
+
+    const hasText = fs.existsSync(textPng);
+    if (!hasText && !ass && !badge) { cleanup(); return c.json({ error: "nothing to draw" }, 404); }
+
+    await renderStaticOverlayPng({
+      width: W, height: H,
+      overlayPngPath: hasText ? textPng : null,
+      assPath: ass ? assFile : null,
+      badge,
+      outputPath: outPng,
+    });
+    const out = fs.readFileSync(outPng);
+    cleanup();
+    return new Response(new Uint8Array(out), {
+      headers: { "content-type": "image/png", "cache-control": "private, max-age=300" },
+    });
+  } catch (err) {
+    cleanup();
+    return c.json({ error: `오버레이를 만들지 못했습니다: ${(err as Error).message}` }, 500);
+  }
 });
 
 /** 추천 id → 안정적인 UUID 꼴 캡슐 id (같은 추천은 늘 같은 값, 다른 추천과는 다름). */

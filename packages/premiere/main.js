@@ -1372,17 +1372,77 @@ async function addTitlesForRecs(recs, onStage, layout) {
   const { aspect, tracks } = await titleTargetInfo(layout);
 
   // ① 편집 가능한 경로 먼저.
+  let placed = 0;
   try {
-    const placed = await addTitleMogrts(recs, aspect, onStage);
-    if (placed > 0) return placed;
-    onStage("제목 그래픽을 못 얹어 이미지로 대체합니다…");
+    placed = await addTitleMogrts(recs, aspect, onStage);
+    if (!placed) onStage("제목 그래픽을 못 얹어 이미지로 대체합니다…");
   } catch (err) {
     console.log("[STEP-D] mogrt 제목 실패 — PNG 로 폴백", err);
     onStage(`제목 그래픽 실패(${err.message}) — 이미지로 대체합니다…`);
   }
   // ② 폴백: 픽셀 그대로. 편집은 못 하지만 화면에는 나온다.
-  return await addTitlePngs(recs, aspect, tracks, onStage);
+  if (!placed) placed = await addTitlePngs(recs, aspect, tracks, onStage);
+
+  // ③ 제목 외 정적 오버레이(로고·시간박스·채널명) — 사용자 2026-08-31 "로고, 시간박스까지 다 재현".
+  //    제목 위 트랙에 얹는다. 실패해도 제목은 이미 올라가 있으므로 조용히 넘어간다.
+  try {
+    await addDecorationsForRecs(recs, aspect, onStage);
+  } catch (err) {
+    console.log("[STEP-D] 로고·시간박스 실패", err);
+  }
+  return placed;
 }
+
+/**
+ * 제목을 뺀 정적 오버레이(로고·시간박스·채널명)를 **한 장**으로 받아 얹는다.
+ *
+ * 왜 한 장인가: 서버가 렌더에 쓰는 그 ASS·그 아이콘 파일을 그대로 합성해 준다
+ * (`GET /api/recommendations/:id/decorations.png`). 프리미어에서 도형·이미지를 따로 만들면
+ * 여백·모서리가 미묘하게 달라지고, 그 어긋남은 나중에 아무도 못 찾는다.
+ *
+ * 트랙은 **제목보다 위(V3)** 다 — 시간박스가 제목 뒤로 가면 안 된다.
+ */
+async function addDecorationsForRecs(recs, aspect, onStage) {
+  const folder = await mediaFolder();
+  onStage("로고·시간박스 받는 중…");
+
+  const files = [];
+  for (const r of recs) {
+    const q = `?aspect=${encodeURIComponent(aspect)}`;
+    const res = await api(`/recommendations/${encodeURIComponent(r.id)}/decorations.png${q}`, { method: "GET" });
+    if (res.status === 404 || res.status === 503) continue;   // 그릴 게 없거나 서버가 못 그린다
+    if (!res.ok) continue;
+    const buf = await res.arrayBuffer();
+    const file = await folder.createFile(`stepd-deco-${r.id}.png`, { overwrite: true });
+    await file.write(buf, { format: formats.binary });
+    files.push({ rec: r, file });
+  }
+  if (!files.length) return 0;
+
+  const { project } = await activeSequence();
+  const ok = await project.importFiles(files.map((f) => f.file.nativePath), true);
+  if (ok === false) return 0;
+
+  const byName = new Map(files.map((f) => [f.file.name, f.rec]));
+  return await findItemsByFileNames([...byName.keys()], async (found, project2, api2) => {
+    const sequence = (await activeSequence()).sequence;
+    const editor = api2.SequenceEditor.getEditor(sequence);
+    let n = 0;
+    for (const [name, rec] of byName) {
+      const item = found.get(name);
+      if (!item) continue;
+      const at = api2.TickTime.createWithSeconds(Number(rec.startTime) || 0);
+      const action = editor.createOverwriteItemAction(item, at, DECORATION_TRACK, 0);
+      const done = project2.executeTransaction((c) => { c.addAction(action); }, `STEP-D 오버레이 ${name}`);
+      if (done !== false) n += 1;
+    }
+    return n;
+  });
+}
+
+/** V1=영상 · V2=제목 · V3=로고/시간박스 (0-based 인덱스). */
+const TITLE_TRACK = 1;
+const DECORATION_TRACK = 2;
 
 /**
  * 제목을 어떤 모양으로 받아 어디에 얹을지.
@@ -1431,7 +1491,7 @@ async function addTitleMogrts(recs, aspect, onStage) {
       const at = api.TickTime.createWithSeconds(Number(rec.startTime) || 0);
       // V2(인덱스 1) — V1 영상 위. 오디오 트랙은 안 쓴다.
       // 반환은 **꽂힌 트랙 아이템 배열**이다(Action 이 아니라 즉시 실행) — 비면 실패다.
-      const inserted = await editor.insertMogrtFromPath(file.nativePath, at, 1, 0);
+      const inserted = await editor.insertMogrtFromPath(file.nativePath, at, TITLE_TRACK, 0);
       if (Array.isArray(inserted) ? inserted.length > 0 : inserted != null && inserted !== false) placed += 1;
     } catch (err) {
       console.log("[STEP-D] mogrt 삽입 실패", rec.id, err);
@@ -1466,7 +1526,7 @@ async function addTitlePngs(recs, aspect, tracks, onStage) {
       if (!item) continue;
       const at = api2.TickTime.createWithSeconds(Number(rec.startTime) || 0);
       // V2(인덱스 1)에 얹는다 — V1 의 영상 위에 있어야 제목이 보인다. 오디오는 없다.
-      const action = editor.createOverwriteItemAction(item, at, 1, 0);
+      const action = editor.createOverwriteItemAction(item, at, TITLE_TRACK, 0);
       const done = project2.executeTransaction((c) => { c.addAction(action); }, `STEP-D 제목 ${name}`);
       if (done !== false) n += 1;
     }
