@@ -712,7 +712,22 @@ export async function listReframeLabels(
 
 // ── entity helpers ─────────────────────────────────────────────────────────────
 
-export async function listEntities<T = unknown>(kind: EntityKind): Promise<T[]> {
+/**
+ * 종류별 엔티티 목록.
+ *
+ * `limit` 을 주면 **가장 최근 n 개**만 가져온다(정렬은 그대로 오름차순으로 돌려준다).
+ * 무한히 쌓이는 종류(job)를 `/api/state` 가 통째로 실어 보내면 응답이 시간이 갈수록
+ * 커지기만 한다 — 2026-08-31 에 그 응답이 11 MB 였고, 그걸 8초마다 부르던 폴링이
+ * Vercel 청구서를 태웠다. 크기가 시간에 비례해 자라는 응답은 언젠가 반드시 문제가 된다.
+ */
+export async function listEntities<T = unknown>(kind: EntityKind, limit?: number): Promise<T[]> {
+  if (limit && limit > 0) {
+    const { rows } = await pool.query(
+      "SELECT data FROM (SELECT data, ord FROM entities WHERE kind = $1 ORDER BY ord DESC LIMIT $2) t ORDER BY ord ASC",
+      [kind, limit],
+    );
+    return rows.map((r) => r.data as T);
+  }
   const { rows } = await pool.query(
     "SELECT data FROM entities WHERE kind = $1 ORDER BY ord ASC",
     [kind],
@@ -2263,13 +2278,21 @@ export async function updateMediaPath(id: string, path: string): Promise<void> {
 
 // ── assembled state ────────────────────────────────────────────────────────────
 
+/**
+ * `/api/state` 가 실어 보낼 잡 개수 상한. 잡 센터가 최근 이력을 보여주는 데 필요한 만큼만.
+ * 이 값을 없애면 응답 크기가 운영 기간에 비례해 계속 자란다(되돌아오지 않는 종류의 부채다).
+ */
+const STATE_JOB_LIMIT = 200;
+
 export async function getState() {
   const [programs, episodes, recommendations, clips, jobs, connections, media] = await Promise.all([
     listEntities("program"),
     listEntities("episode"),
     listEntities("recommendation"),
     listEntities("clip"),
-    listEntities("job"),
+    // ⚠️ 잡은 **지우지 않고 영구히 쌓인다.** 상한이 없으면 이 응답이 시간에 비례해 자란다.
+    // 화면(잡 센터)은 최근 것만 보여주므로 오래된 잡을 실어 보낼 이유가 없다.
+    listEntities("job", STATE_JOB_LIMIT),
     getConnections(),
     listMedia(),
   ]);

@@ -26,7 +26,9 @@ function fetchOnce(mediaId: string, p: Poller) {
           p.timer = null;
         }
       } else if (p.timer == null && p.subs.size > 0) {
-        p.timer = window.setInterval(() => fetchOnce(mediaId, p), 20_000);
+        // 숨은 탭에서는 건너뛴다 — 이 응답은 분석 JSON 전체(자막·beat·세그먼트)라 무겁고,
+        // 아무도 안 보는 화면을 20초마다 갱신할 이유가 없다. 돌아오면 다음 틱에 따라잡는다.
+        p.timer = window.setInterval(() => { if (!document.hidden) fetchOnce(mediaId, p); }, 20_000);
       }
     })
     .catch(() => {
@@ -72,7 +74,7 @@ export function useMediaAnalysisPoll(mediaId: string | undefined): {
       const settled = p.last && (p.last.status === "done" || p.last.status === "failed");
       fetchOnce(mediaId, p);
       if (!settled && p.timer == null) {
-        p.timer = window.setInterval(() => fetchOnce(mediaId, p), 20_000);
+        p.timer = window.setInterval(() => { if (!document.hidden) fetchOnce(mediaId, p); }, 20_000);
       }
     }
     return () => {

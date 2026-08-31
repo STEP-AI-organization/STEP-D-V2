@@ -2821,6 +2821,35 @@ app.get("/api/media/:id/stream-url", async (c) => {
 });
 
 // ── thumbnail ─────────────────────────────────────────────────────────────────
+/**
+ * 이미지 오브젝트를 **서명 URL 302 로 넘긴다.** GCS 모드가 아니면 null (호출부가 직접 흘린다).
+ *
+ * ## 왜
+ *
+ * 프로덕션 웹은 `/api/proxy`(Vercel 함수)를 거친다. 그래서 우리가 바이트를 실어 보내면
+ * 그 바이트가 그대로 Vercel **Fast Origin Transfer** 로 청구된다 — 우리 서버 대역폭이
+ * 아니라 남의 요금제 위에서 두 번 흐른다. 썸네일·프레임은 **이미 GCS 에 있는 파일**이라
+ * 우리가 나를 이유가 없다. 302 만 보내면 브라우저가 GCS 에서 직접 받는다.
+ *
+ * 양이 적지 않다: 에디터 필름스트립 20장 · 쇼츠 카드 · 검색 결과 카드가 전부 이 경로다.
+ *
+ * ## 캐시 수명은 서명 만료보다 짧아야 한다
+ *
+ * 리다이렉트 응답을 캐시해 두면 같은 이미지를 다시 그릴 때 함수를 아예 안 부른다. 다만
+ * 캐시가 서명 URL 보다 오래 살면 **만료된 URL 을 계속 재사용해 이미지가 깨진다** —
+ * 그래서 서명 6시간 · 캐시 1시간으로 확실히 벌려 둔다.
+ */
+const IMAGE_SIGN_TTL_MS = 6 * 60 * 60 * 1000;
+async function imageRedirect(objPath: string): Promise<Response | null> {
+  if (!useGcs()) return null;
+  const url = await signedReadUrl(objPath, IMAGE_SIGN_TTL_MS).catch(() => null);
+  if (!url) return null;   // 서명 실패는 치명적이지 않다 — 호출부가 스트리밍으로 폴백한다
+  return new Response(null, {
+    status: 302,
+    headers: { Location: url, "Cache-Control": "private, max-age=3600" },
+  });
+}
+
 app.get("/api/media/:id/thumb", async (c) => {
   const m = await getMedia(c.req.param("id"));
   if (!m || !m.thumbPath) return c.json({ error: "no thumbnail" }, 404);
@@ -2828,6 +2857,10 @@ app.get("/api/media/:id/thumb", async (c) => {
   const objPath = parseObjectPath(m.thumbPath);
   const exists = await fileExists(objPath);
   if (!exists) return c.json({ error: "no thumbnail" }, 404);
+
+  // GCS 면 바이트를 우리가 나르지 않는다 — 서명 URL 로 넘긴다(`redirectToObject` 참조).
+  const signed = await imageRedirect(objPath);
+  if (signed) return signed;
 
   const stream = createReadStream(objPath);
   return new Response(stream, {
@@ -2900,6 +2933,10 @@ app.get("/api/media/:id/frame", async (c) => {
       try { fs.unlinkSync(tmpPath); } catch {}
     }
   }
+
+  // 프레임은 (mediaId, t) 로 **불변**이다 — 서명 URL 로 넘겨 브라우저가 GCS 에서 직접 받는다.
+  const signed = await imageRedirect(objPath);
+  if (signed) return signed;
 
   return new Response(createReadStream(objPath), {
     status: 200,

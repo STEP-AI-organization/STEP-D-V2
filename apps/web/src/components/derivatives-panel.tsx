@@ -404,7 +404,8 @@ function AnalyzeTab({ episodeId }: { episodeId: string }) {
   useEffect(() => {
     if (!masterId) return;
     let alive = true;
-    const load = () => { getMediaFaces(masterId).then((f) => { if (alive) setFaces(f); }).catch(() => {}); };
+    // 숨은 탭에서는 건너뛴다 — 아무도 안 보는 화면을 위해 20초마다 요청을 쏠 이유가 없다.
+    const load = () => { if (document.hidden) return; getMediaFaces(masterId).then((f) => { if (alive) setFaces(f); }).catch(() => {}); };
     load();
     const t = window.setInterval(load, 20000);
     return () => { alive = false; clearInterval(t); };
@@ -414,7 +415,7 @@ function AnalyzeTab({ episodeId }: { episodeId: string }) {
   useEffect(() => {
     if (!masterId) return;
     let alive = true;
-    const load = () => { getMediaPpl(masterId).then((p) => { if (alive) setPpl(p); }).catch(() => {}); };
+    const load = () => { if (document.hidden) return; getMediaPpl(masterId).then((p) => { if (alive) setPpl(p); }).catch(() => {}); };
     load();
     const t = window.setInterval(load, 20000);
     return () => { alive = false; clearInterval(t); };

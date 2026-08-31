@@ -86,7 +86,8 @@ export default function DistributionPage() {
     let cancelled = false;
     let running = false; // 겹침 방지 — 이전 fetch 가 끝나기 전엔 새로 안 쏜다
     const id = window.setInterval(() => {
-      if (cancelled || running) return;
+      // 숨은 탭에서는 건너뛴다 — refresh() 는 /api/state 를 통째로 다시 받는다.
+      if (cancelled || running || document.hidden) return;
       running = true;
       void refresh().finally(() => {
         running = false;

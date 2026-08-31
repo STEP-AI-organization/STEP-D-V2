@@ -224,6 +224,9 @@ function ConnectionStatus() {
     // 프로덕션 웹은 /api/proxy(Vercel 함수)를 거치므로 그게 전부 **Fast Origin Transfer** 로
     // 청구됐다(2026-08-31 실측: 3시간 34.5 GB · /api/state 3,105회). 상태 확인은 상수 크기여야 한다.
     const ping = async () => {
+      // 숨은 탭에서는 건너뛴다 — 아무도 안 보는 표시등을 위해 요청을 쏠 이유가 없다.
+      // (버전 확인은 반대로 숨은 탭에서도 돌아야 한다 — 그게 낡은 탭을 고치는 경로다.)
+      if (document.hidden) return;
       try {
         const res = await fetch(`${API_BASE}/health`, { cache: "no-store" });
         // 이건 **도달성** 표시등이지 그 라우트의 성공 여부가 아니다. 응답이 왔다는 건 서버에
