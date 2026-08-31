@@ -444,6 +444,37 @@ async function readMaybe(obj, ...names) {
  * activeSequence() 를 쓰면 *"활성 시퀀스가 없습니다"* 로 먼저 막힌다 — 만들어 주려는
  * 기능이 시퀀스가 없다는 이유로 못 도는 셈이다.
  */
+/**
+ * 프리미어 호스트 객체는 **await 를 건너면 무효가 된다**("The script object is no longer valid").
+ * 규칙은 하나 — 객체를 들고 다니지 말고 **쓰기 직전에 다시 얻는다.** 그래도 새는 자리가 있어
+ * (프리미어가 우리 모르게 갱신하는 순간들) 한 번은 되풀이해 준다.
+ *
+ * ⚠️ **한 번만** 재시도한다. 진짜로 깨진 상태에서 무한히 돌면 패널이 멈춘 것처럼 보인다.
+ */
+function isStaleObjectError(err) {
+  return /no longer valid|not valid|invalid/i.test(String((err && err.message) || err || ""));
+}
+
+async function retryStale(label, fn) {
+  try {
+    return await fn();
+  } catch (err) {
+    if (!isStaleObjectError(err)) throw err;
+    console.log(`[STEP-D] ${label}: 객체 무효 — 다시 시도`, err);
+    return await fn();
+  }
+}
+
+/** 실패 메시지에 **어느 단계였는지**를 붙인다 — 원문만 보면 어디서 났는지 알 수 없다. */
+async function stage(label, fn) {
+  try {
+    return await fn();
+  } catch (err) {
+    const msg = String((err && err.message) || err);
+    throw new Error(`${label}: ${msg}`);
+  }
+}
+
 async function activeProject() {
   const api = ppro();
   if (!api) throw new Error("이 프리미어에서는 프로젝트를 다룰 수 없습니다 (premierepro 모듈 없음).");
@@ -597,6 +628,10 @@ async function seekActiveSequence(sec) {
  * 스무 개를 따로 넣으면 스무 번 눌러야 한다.
  */
 async function addMarkersForRecs(recs) {
+  return await retryStale("마커", () => addMarkersOnce(recs));
+}
+
+async function addMarkersOnce(recs) {
   const { api, project, sequence, name } = await activeSequence();
   if (!api.Markers || typeof api.Markers.getMarkers !== "function") {
     dumpApi(api, sequence);
@@ -864,39 +899,75 @@ function subclipName(r) {
 }
 
 async function findMasterItem(filename, use) {
+  return await retryStale("원본 찾기", () => findMasterItemOnce(filename, use));
+}
+
+/**
+ * 프로젝트에서 원본 클립을 찾아 **찾은 자리에서** 쓴다.
+ *
+ * ⚠️ 이름부터 맞춘다(2026-08-31 수정). 예전엔 항목마다 `await clip.getMediaFilePath()` 를 불렀는데,
+ *    그 await 하나가 **같은 목록의 남은 항목들을 무효로 만든다**("The script object is no longer
+ *    valid"). 프로젝트에 빈이 늘어나자(모션 그래픽 템플릿 빈이 생기면서) 바로 터졌다.
+ *    항목 이름(`item.name`)은 await 없이 읽히므로, 이름이 맞으면 경로를 물을 이유가 없다.
+ *    이름으로 못 찾은 경우에만 경로 대조를 한 번 돈다(그 경로는 여전히 무효화 위험이 있어
+ *    retryStale 이 감싼다).
+ */
+async function findMasterItemOnce(filename, use) {
   const { api, project } = await activeProject();
   if (!filename) throw new Error("이 추천에 연결된 원본 파일 정보가 없습니다.");
-  const root = await project.getRootItem();
   const wanted = String(filename).toLowerCase();
+  const base = wanted.replace(/\.[^.]+$/, "");
 
-  // 빈을 넓이 우선으로 훑는다. 프로젝트가 큰 경우를 대비해 방문 수를 막아 둔다 —
-  // 못 찾는 것보다 나쁜 건 패널이 멈춘 것처럼 보이는 것이다.
-  const queue = [root];
+  // ① 빈 구조를 먼저 다 읽는다 — getItems 만 await 하고, 그 사이 다른 await 는 섞지 않는다.
+  const groups = [];       // [{ folder, items }]
+  const queue = [await project.getRootItem()];
   let visited = 0;
   while (queue.length && visited < 2000) {
     const folder = queue.shift();
     let items = [];
     try { items = await folder.getItems(); } catch (_) { continue; }
+    const clips = [];
     for (const item of items) {
       visited += 1;
-      // 폴더면 큐에 넣는다(FolderItem.cast 가 실패하면 폴더가 아니다).
       try {
         const asFolder = api.FolderItem && api.FolderItem.cast ? api.FolderItem.cast(item) : null;
         if (asFolder && typeof asFolder.getItems === "function") { queue.push(asFolder); continue; }
-      } catch (_) { /* 폴더 아님 — 아래에서 클립으로 본다 */ }
+      } catch (_) { /* 폴더 아님 */ }
+      clips.push(item);
+    }
+    groups.push(clips);
+  }
 
+  // ② 이름으로 — **await 없이** 판정하고 찾자마자 쓴다.
+  for (const clips of groups) {
+    for (const item of clips) {
+      const n = String(item.name || "").toLowerCase();
+      if (!n) continue;
+      if (n === wanted || n === base || n.startsWith(base + ".") || (base.length > 6 && n.includes(base))) {
+        try {
+          const clip = api.ClipProjectItem.cast(item);
+          if (clip) return await use({ api, project, clip, name: item.name });
+        } catch (_) { /* 클립 아님 — 계속 */ }
+      }
+    }
+  }
+
+  // ③ 이름이 다르면(가져오며 바뀐 경우) 경로로 한 번 더. 여기서만 await 가 목록에 섞인다.
+  for (const clips of groups) {
+    for (const item of clips) {
       try {
         const clip = api.ClipProjectItem.cast(item);
         if (!clip || typeof clip.getMediaFilePath !== "function") continue;
-        const p = String((await clip.getMediaFilePath()) || "").toLowerCase();
+        const path = String((await clip.getMediaFilePath()) || "").toLowerCase();
         // 경로 전체가 아니라 **파일명으로** 맞춘다 — NAS·로컬 경로가 PC 마다 다르다.
-        if (p && (p.endsWith(`\\${wanted}`) || p.endsWith(`/${wanted}`) || p.includes(wanted))) {
-          // ⚠️ **찾자마자 여기서 쓴다.** 객체를 돌려주면 호출부가 await(다운로드·네트워크)를
-          //    건너며 들고 있게 되고, 그 순간 프리미어가 무효화한다
-          //    ("The script object is no longer valid" · 2026-08-31 실측).
-          return await use({ api, project, clip, name: item.name });
+        if (path && (path.endsWith(`\${wanted}`) || path.endsWith(`/${wanted}`) || path.includes(wanted))) {
+          // ⚠️ 찾자마자 여기서 쓴다 — 돌려주면 호출부의 await 를 건너며 무효가 된다.
+          const fresh = api.ClipProjectItem.cast(item);
+          return await use({ api, project, clip: fresh || clip, name: item.name });
         }
-      } catch (_) { /* 클립 아님 */ }
+      } catch (err) {
+        if (isStaleObjectError(err)) throw err;   // 위에서 한 번 다시 돈다
+      }
     }
   }
   throw new Error(`프로젝트에서 원본을 찾지 못했습니다 (${filename}) — 먼저 프리미어로 가져오세요.`);
@@ -1501,11 +1572,12 @@ async function addCaptionMogrts(recs, aspect, onStage) {
   if (!files.length) return 0;
 
   onStage(`자막 ${files.length}줄 얹는 중…`);
-  const { api: api2, project, sequence } = await activeSequence();
-  const editor = api2.SequenceEditor.getEditor(sequence);
   let n = 0;
   for (const job of files) {
     try {
+      // 매 줄마다 다시 얻는다 — 앞 줄의 삽입(await) 이 앞서 얻은 객체를 무효로 만든다.
+      const { api: api2, project, sequence } = await activeSequence();
+      const editor = api2.SequenceEditor.getEditor(sequence);
       const startSec = (Number(job.rec.startTime) || 0) + (Number(job.line.start) || 0);
       const dur = Math.max(0.2, Number(job.line.end) - Number(job.line.start));
       const inserted = await editor.insertMogrtFromPath(
@@ -1624,11 +1696,13 @@ async function addTitleMogrts(recs, aspect, onStage) {
   }
   if (!files.length) return 0;
 
-  const { api, sequence } = await activeSequence();
-  const editor = api.SequenceEditor.getEditor(sequence);
   let placed = 0;
   for (const { rec, file } of files) {
     try {
+      // ⚠️ editor·sequence 를 루프 밖에서 들고 있으면 **첫 삽입 직후 무효**가 된다
+      //    (insertMogrtFromPath 가 await 다). 매번 다시 얻는 게 유일하게 안전한 방법이다.
+      const { api, sequence } = await activeSequence();
+      const editor = api.SequenceEditor.getEditor(sequence);
       const at = api.TickTime.createWithSeconds(Number(rec.startTime) || 0);
       // V2(인덱스 1) — V1 영상 위. 오디오 트랙은 안 쓴다.
       // 반환은 **꽂힌 트랙 아이템 배열**이다(Action 이 아니라 즉시 실행) — 비면 실패다.
@@ -1692,12 +1766,14 @@ async function doPrepareAndMark() {
     const onStage = (m) => setStatus($("recsStatus"), m);
     const withMedia = picks.find((r) => r.mediaFilename || r.mediaId) || picks[0];
 
+    // 단계마다 이름을 붙인다 — 프리미어 오류 원문("The script object is no longer valid")만
+    // 보면 **어디서 났는지** 알 수 없다. 화면에 뜨는 한 줄이 곧 다음 수리의 출발점이다.
     onStage("원본 확인 중…");
-    const filename = await ensureMaster(withMedia, onStage);
-    await ensureSequenceForMaster(filename, onStage, withMedia);
+    const filename = await stage("원본 확인", () => ensureMaster(withMedia, onStage));
+    await stage("타임라인 준비", () => ensureSequenceForMaster(filename, onStage, withMedia));
 
     onStage(`마커 ${picks.length}개 꽂는 중…`);
-    const { sequenceName, count } = await addMarkersForRecs(picks);
+    const { sequenceName, count } = await stage("마커 꽂기", () => addMarkersForRecs(picks));
 
     // 제목 그래픽은 **선택적 단계**다 — 서버 렌더가 막혀도(캔버스 미가용 등) 마커까지는 남아야 한다.
     // 여기서 실패했다고 앞의 성과를 버리면 편집자는 처음부터 다시 해야 한다.
@@ -1949,7 +2025,7 @@ async function jumpToRec(r) {
   syncRecButtons();
   try {
     setStatus($("recsStatus"), `"${r.title}" 미리보기 만드는 중…`);
-    const { name, reused } = await openRecSequence(r);
+    const { name, reused } = await stage("미리보기 시퀀스", () => retryStale("미리보기", () => openRecSequence(r)));
 
     // 오버레이는 **선택적**이다 — 실패해도 구간 미리보기는 이미 열려 있다.
     let note = "";

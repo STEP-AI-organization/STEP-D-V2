@@ -415,9 +415,9 @@ describe("패널 — 주 동선: 원본 받고 마커", () => {
 
   it("원본 확보 → 타임라인 확보 → 마커 순서다", () => {
     const fn = panel.slice(panel.indexOf("async function doPrepareAndMark()"));
-    const a = fn.indexOf("await ensureMaster(");
-    const b = fn.indexOf("await ensureSequenceForMaster(");
-    const c = fn.indexOf("await addMarkersForRecs(");
+    const a = fn.indexOf("ensureMaster(withMedia, onStage)");
+    const b = fn.indexOf("ensureSequenceForMaster(filename, onStage, withMedia)");
+    const c = fn.indexOf("addMarkersForRecs(picks)");
     assert.ok(a > 0 && b > a && c > b, "순서가 어긋나면 꽂을 타임라인이 없다");
   });
 
@@ -462,6 +462,43 @@ describe("패널 — 글꼴 확인", () => {
   it("이미 있으면 다시 넣지 않는다 — 중복 등록이면 어느 쪽이 쓰이는지 알 수 없다", () => {
     const ps = read("packages/premiere/launcher/install-fonts.ps1");
     assert.match(ps, /if \(Test-Path \$target\) \{\s*\n\s*Write-Host "이미 있음/);
+  });
+});
+
+/**
+ * 호스트 객체 무효화 — 실측 2026-08-31: 패널이 *"The script object is no longer valid."* 로 멈췄다.
+ *
+ * 원인은 **목록을 훑는 도중의 await** 다. `await clip.getMediaFilePath()` 하나가 같은 목록의
+ * 남은 항목을 무효로 만든다. 프로젝트에 빈이 늘자(모션 그래픽 템플릿 빈이 생기면서) 터졌다.
+ */
+describe("패널 — 객체 무효화를 견딘다", () => {
+  it("이름으로 먼저 찾는다 — 이름은 await 없이 읽힌다", () => {
+    assert.ok(panel.includes("async function findMasterItemOnce(filename, use)"));
+    const fn = panel.slice(panel.indexOf("async function findMasterItemOnce("));
+    const byName = fn.indexOf("String(item.name || \"\").toLowerCase()");
+    const byPath = fn.indexOf("await clip.getMediaFilePath()");
+    assert.ok(byName > 0 && byPath > byName, "경로부터 물으면 목록이 무효가 된다");
+  });
+
+  it("무효화면 **한 번만** 다시 돈다 — 무한 재시도는 멈춘 것처럼 보인다", () => {
+    assert.ok(panel.includes("async function retryStale(label, fn)"));
+    assert.ok(panel.includes("function isStaleObjectError(err)"));
+    const fn = panel.slice(panel.indexOf("async function retryStale("), panel.indexOf("/** 실패 메시지에"));
+    assert.equal((fn.match(/await fn\(\)/g) ?? []).length, 2, "재시도는 딱 한 번이어야 한다");
+  });
+
+  it("mogrt 는 **줄마다 editor 를 다시 얻는다** — 앞 삽입이 뒤를 무효로 만든다", () => {
+    const t = panel.slice(panel.indexOf("async function addTitleMogrts("), panel.indexOf("async function addTitlePngs("));
+    assert.ok(t.includes("for (const { rec, file } of files) {"));
+    assert.ok(t.indexOf("await activeSequence()") > t.indexOf("for (const { rec, file } of files) {"),
+      "editor 를 루프 밖에서 들고 있다");
+  });
+
+  it("실패 메시지에 **단계 이름**이 붙는다 — 원문만으론 어디서 났는지 모른다", () => {
+    assert.ok(panel.includes("async function stage(label, fn)"));
+    assert.ok(panel.includes('await stage("원본 확인"'));
+    assert.ok(panel.includes('await stage("타임라인 준비"'));
+    assert.ok(panel.includes('await stage("마커 꽂기"'));
   });
 });
 
