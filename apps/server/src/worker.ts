@@ -140,7 +140,7 @@ const TICK_INTERVAL_MS = 15 * 60 * 1000;
  * heavy content.analyze (STT/vision, minutes) no longer blocks the flood of light video.*
  * jobs, and vice versa. Unset / "all" keeps the legacy single worker that drains everything.
  */
-const JOB_LANES: Record<"content" | "youtube" | "gebd" | "naver" | "download" | "commerce", JobType[]> = {
+const JOB_LANES: Record<"content" | "youtube" | "gebd" | "naver" | "download" | "commerce" | "render", JobType[]> = {
   // match.align도 content 레인 — 파이썬·ffmpeg로 오디오를 돌리는 무거운 잡이라
   // YouTube API 레인(짧고 쿼터 위주)에 섞으면 그쪽을 막는다.
   // thumbnail.* 도 content 레인. 성격이 같다 — core/thumbnail 파이썬을 스폰하고 이미지 생성
@@ -181,6 +181,12 @@ const JOB_LANES: Record<"content" | "youtube" | "gebd" | "naver" | "download" | 
   // 프로필에만 산다(쿠키를 클라우드로 올리지 않는다 — 고객사 자격증명을 우리가 보관하지
   // 않는다는 원칙). 승인 후 공식 딥링크 API 로 바뀌면 이 레인은 없어지고 클라우드로 간다.
   commerce: ["commerce.link"],
+  // render 도 **머신 전용 lane** — 다만 이유가 다르다. 한국 IP 나 브라우저가 아니라 **CPU** 다.
+  // 렌더는 건당 50~90초로 이 리포에서 CPU 를 통째로 쓰는 유일한 일이고, 그래서 순방이
+  // AUTOMATION_MAX_RENDERS_PER_TICK 으로 스스로를 묶는다. 노는 사무실 PC(8코어)가 당겨가면
+  // 그 상한이 풀린다. ⚠️ 이 레인이 안 도는 동안 잡이 쌓이면 **순방이 직접 렌더한다**
+  // (automation-cycle 의 정체 감지) — 사무실 PC 가 꺼져 있다고 고객 배포가 멈추면 안 된다.
+  render: ["clip.render"],
 };
 /**
  * Drain mode — Cloud Run Jobs 용. 큐가 빌 때까지 처리하고 **종료**한다.
@@ -293,6 +299,7 @@ async function handle(job: Job): Promise<FollowUp | void> {
     case "video.hotwatch":  return handleVideoHotwatch(job);
     case "video.comments":  return handleVideoComments(job);
     case "distribution.publish": return handleDistributionPublish(job);
+    case "clip.render": return handleClipRender(job);
     case "distribution.updatemeta": return handleDistributionUpdateMeta(job);
     case "naver.publish": return handleNaverPublish(job);
     case "naver.login": { await handleNaverLogin(job); return; }
@@ -2437,6 +2444,37 @@ async function handleNaverPublish(job: Job): Promise<void> {
   } catch (err) {
     await fail(err instanceof Error ? err.message : String(err));
   }
+}
+
+/**
+ * 클립 렌더 — **직접 인코딩하지 않고** 서버의 `/api/clips/:id/export` 를 부른다.
+ *
+ * 왜 복제하지 않는가: 렌더 로직(자막 ASS·훅 프리롤·오버레이 PNG·리프레임 플랜)이 전부 그
+ * 라우트에 있다. 워커에 옮겨 적으면 두 벌이 갈라지고, 갈라진 순간부터 "편집기 미리보기와
+ * 결과물이 다르다" 가 시작된다.
+ *
+ * 그래서 이 잡의 값은 **어느 CPU 가 그 라우트를 실행하느냐**에 있다. `RENDER_API_BASE` 를
+ * 사무실 PC 의 로컬 서버(`http://127.0.0.1:4100`)로 두면 그 PC 가 굽고, 안 두면 종전처럼
+ * 클라우드가 굽는다. 코드는 한 벌 그대로다.
+ */
+async function handleClipRender(job: Job): Promise<void> {
+  const clipId = String(job.payload.clipId ?? "");
+  if (!clipId) throw new Error("clip.render: clipId 없음");
+  const channel = job.payload.channel ? String(job.payload.channel) : null;
+
+  const { apiBase, internalHeaders } = await import("./factory.ts");
+  const base = (process.env.RENDER_API_BASE || "").trim().replace(/\/+$/, "") || apiBase();
+  const res = await fetch(`${base}/api/clips/${clipId}/export`, {
+    method: "POST",
+    headers: { ...(await internalHeaders()), "content-type": "application/json" },
+    body: JSON.stringify(channel ? { channel } : {}),
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    // 던진다 — 큐의 재시도·백오프가 이 잡의 안전망이다(순방이 또 넣지 않는다: dedupeKey).
+    throw new Error(`export ${res.status} ${body.slice(0, 200)}`);
+  }
+  console.log(`[render] ${clipId} 완료 (${base.includes("127.0.0.1") || base.includes("localhost") ? "로컬" : "원격"})`);
 }
 
 async function handleDistributionPublish(job: Job): Promise<void> {

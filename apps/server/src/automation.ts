@@ -326,6 +326,33 @@ export function maxPublishPerTick(
 export const AUTOMATION_MAX_RENDERS_PER_TICK = 8;
 
 /**
+ * 렌더를 **큐로 넘길 것인가**(= 사무실 PC 가 당겨가게) — 기본 OFF.
+ *
+ * 켜면 순방이 `/export` 를 직접 부르는 대신 `clip.render` 잡을 넣는다. 렌더는 이 리포에서
+ * CPU 를 통째로 쓰는 유일한 일이라(건당 50~90초), 노는 사무실 PC(8코어)로 옮기면 위 상한이
+ * 풀리고 클라우드 렌더 비용도 빠진다.
+ *
+ * ⚠️ 실패 방향을 고정한다: 오타·빈값은 전부 OFF = **종전대로 클라우드가 굽는다.**
+ * 잘못된 env 의 결과가 "렌더가 안 나감" 이면 안 된다 — 그건 곧 배포가 멈추는 것이다.
+ */
+export function renderViaQueue(): boolean {
+  const v = String(process.env.RENDER_VIA_QUEUE ?? "").trim().toLowerCase();
+  return v === "1" || v === "true" || v === "yes" || v === "on";
+}
+
+/**
+ * 큐에 넘긴 렌더가 이만큼 방치되면 **클라우드가 대신 굽는다**(기본 10분).
+ *
+ * 사무실 PC 는 꺼질 수 있고, 꺼진 걸 우리가 즉시 알 방법은 없다. 그 사이 고객 배포가
+ * 멈추면 안 되므로(ENA 는 계약 물량이다) 정체를 감지해 스스로 되돌아온다.
+ * 렌더 한 건이 90초라, 10분은 "PC 가 도는데 밀린 것" 과 "PC 가 없는 것" 을 가르는 선이다.
+ */
+export function renderQueueStallMs(): number {
+  const n = Number(process.env.RENDER_QUEUE_STALL_MS);
+  return Number.isFinite(n) && n > 0 ? n : 10 * 60_000;
+}
+
+/**
  * 슬롯을 "놓쳤다"고 보는 유예(분) — 순방 틱 간격(10~15분) + 여유. 이 안이면 조금
  * 늦게라도 게시하고, 넘겼으면 그 몫은 **오늘은 포기**한다(내일 그 슬롯에 다시).
  *

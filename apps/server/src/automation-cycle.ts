@@ -49,6 +49,8 @@ import {
   ruleChannels, ruleIdleNote, rulePrograms, ruleWindow, scheduledSlotAt, idleMeansNoMoreToday,
   slotsReadyForQueue, selectCandidates, shouldRequestAutoRender, maxPublishPerTick,
   AUTOMATION_MAX_RENDERS_PER_TICK,
+  renderQueueStallMs,
+  renderViaQueue,
   staleMissedSlots,
   type AutoRenderState, type AutomationRule, type RenderOutcome, type RuleIdleCode, type RuleIdleObservation,
 } from "./automation.ts";
@@ -62,7 +64,7 @@ import {
 } from "./channel-rules.ts";
 import { maybeFlushAutoPublishReport } from "./publish-notify.ts";
 import { newId } from "./pipeline.ts";
-import { enqueue } from "./queue.ts";
+import { enqueue, oldestPendingAgeForType } from "./queue.ts";
 import { distributionAccountId, hasAccountDistribution, hasFailedAccountDistribution } from "./publish-guard.ts";
 import { clipGate, dispatchPublish } from "./publish-dispatch.ts";
 import { basicReframeState, effectiveReframeState } from "./reframe.ts";
@@ -1013,6 +1015,22 @@ function autoUploadGate(platform: string): { send: boolean; recordOnly: boolean;
  */
 async function requestAutoRender(clipId: string, channel?: string | null): Promise<RenderOutcome> {
   try {
+    // ── 사무실 PC 로 넘기기 (RENDER_VIA_QUEUE · 기본 OFF) ──────────────────────
+    // 렌더는 CPU 를 통째로 쓰는 유일한 일이라 노는 PC 로 옮길 값이 있다. 다만 그 PC 는
+    // 꺼질 수 있으므로 **정체를 감지해 스스로 클라우드로 돌아온다** — 고객 배포가 PC 상태에
+    // 걸리면 안 된다(ENA 는 계약 물량이다).
+    if (renderViaQueue()) {
+      const stalled = await oldestPendingAgeForType("clip.render").catch(() => 0);
+      if (stalled < renderQueueStallMs()) {
+        // dedupeKey 로 같은 클립이 두 번 들어가지 않는다(순방은 매 틱 다시 요청한다).
+        await enqueue("clip.render", { clipId, ...(channel ? { channel } : {}) },
+          { dedupeKey: `clip.render:${clipId}` });
+        return { ok: true };
+      }
+      console.warn(`[automation] clip.render 정체 ${Math.round(stalled / 1000)}초 — 클라우드가 직접 렌더한다`);
+      // 아래로 흘러 종전 경로(직접 /export)를 탄다.
+    }
+
     const { apiBase, internalHeaders } = await import("./factory.ts");
     // 대상 채널의 렌더 프리셋 키(길이 캡). 없으면 종전대로 프리셋 없음.
     // 프리셋은 **길이만** 바꾼다 — 종횡비는 라우트가 editorState.aspect 를 우선으로 읽고

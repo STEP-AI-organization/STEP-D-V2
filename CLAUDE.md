@@ -61,7 +61,7 @@ Hono 단일 진입점(index.ts, **~8900줄, 라우트 250개**) + 별도 워커 
 | 파일 | 역할 |
 |------|------|
 | `src/index.ts` | 모든 HTTP 라우트. 여기 한 파일에 유지. **Cloud Run은 잡을 큐잉만 한다.** |
-| `src/worker.ts` | **워커 프로세스 진입점.** 잡 25종 · 레인 6개 · drain 모드 (아래 참조) |
+| `src/worker.ts` | **워커 프로세스 진입점.** 잡 26종 · 레인 7개 · drain 모드 (아래 참조) |
 | `src/queue.ts` | Postgres job_queue (FOR UPDATE SKIP LOCKED · dedupeKey · 지수 백오프 · 5분 하트비트) |
 | `src/channel-pipeline.ts` | channel.analyze — 업로드 동기화 + 채널 애널리틱스/일별 수익 백필 |
 | `src/content-pipeline.ts` | content.analyze — `python -m core.analyze` 스폰, 진행률 파싱(@@PROGRESS→episode.pipeline), 결과+프레임 영구 저장, 추천 배선. 미디어별 고정 작업 디렉토리로 재시도 시 체크포인트 재개 |
@@ -78,7 +78,7 @@ Hono 단일 진입점(index.ts, **~8900줄, 라우트 250개**) + 별도 워커 
 
 `src/pipeline.ts`는 이제 `newId` 헬퍼만 export한다(구 sqlite `db.ts`·`storage.ts`, 휴리스틱 `buildRecommendations()`는 정리 완료). 실제 추천은 core/ AI 파이프라인이 만든다.
 
-### 워커 — 잡 25종 · 레인 6개 · drain 모드
+### 워커 — 잡 26종 · 레인 7개 · drain 모드
 
 프로세스 하나가 다 처리하지 않는다. `WORKER_JOBS` 로 **레인을 갈라** 서로 굶기지 않게 한다.
 

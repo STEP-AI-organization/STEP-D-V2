@@ -25,6 +25,18 @@ export type JobType =
   | "content.analyze"
   // AI Shorts reframing: clip-only proxy + face/safety planner (content worker).
   | "clip.reframe"
+  /**
+   * 클립 렌더(ffmpeg 인코딩)를 **사무실 PC 로 넘기는** 잡. 2026-08-31 신설.
+   *
+   * 왜 잡인가: 렌더는 CPU 를 통째로 쓰는 유일한 일이고(건당 50~90초), 그래서 순방이
+   * `AUTOMATION_MAX_RENDERS_PER_TICK=8` 로 스스로를 묶고 있다. 노는 사무실 PC(8코어)에
+   * 넘기면 그 상한이 풀린다. **클라우드에서 WIN2 로 밀어넣을 수는 없으므로**(NAT 뒤 ·
+   * deploy-win2.md "밀지 않고 당긴다") 큐에 놓고 당겨가게 한다.
+   *
+   * 핸들러는 렌더를 **직접 하지 않는다** — 로컬 서버의 `/api/clips/:id/export` 를 부른다.
+   * 렌더 로직(자막·훅 프리롤·오버레이)이 그 라우트에 있고, 워커에서 복제하면 두 벌이 갈라진다.
+   */
+  | "clip.render"
   // 세로 4택 비교(vertical-candidates-v1): 후보 4종 plan + contact sheet + 프록시를
   // 임시 GCS 경로에 만든다. 정식 clip.reframe 상태는 건드리지 않는다(비교 뷰어 전용).
   | "reframe.compare"
@@ -390,6 +402,21 @@ export async function pendingByType(): Promise<Record<string, number>> {
 export async function oldestPendingAgeMs(): Promise<number> {
   const { rows } = await getPool().query(
     `SELECT MIN(runAfter)::bigint AS oldest FROM job_queue WHERE status = 'pending'`,
+  );
+  const oldest = Number(rows[0]?.oldest ?? 0);
+  return oldest > 0 ? Math.max(0, Date.now() - oldest) : 0;
+}
+
+/**
+ * 특정 타입의 가장 오래 기다린 대기 잡 나이(ms). 없으면 0.
+ *
+ * 전용 머신에 넘긴 잡이 **아무도 안 집어가고 있는지**를 보는 신호다 — 사무실 PC 가 꺼져
+ * 있으면 `clip.render` 가 쌓이기만 한다. 그때 클라우드가 대신 하도록 판단하는 근거.
+ */
+export async function oldestPendingAgeForType(type: JobType): Promise<number> {
+  const { rows } = await getPool().query(
+    `SELECT MIN(runAfter)::bigint AS oldest FROM job_queue WHERE status = 'pending' AND type = $1`,
+    [type],
   );
   const oldest = Number(rows[0]?.oldest ?? 0);
   return oldest > 0 ? Math.max(0, Date.now() - oldest) : 0;
