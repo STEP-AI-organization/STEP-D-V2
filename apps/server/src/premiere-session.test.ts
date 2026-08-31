@@ -506,14 +506,42 @@ describe("패널 — 세로 쇼츠로 시작한다", () => {
  * 그때그때 그린 투명 PNG 를 받아 얹는다. 여기 검사는 그 계약이 조용히 되돌아가지 않게 한다 —
  * 되돌아가면 증상은 "프리미어에서만 옛날 색·옛날 위치" 라 사람이 원인을 못 찾는다.
  */
-describe("패널 — 제목은 서버가 그려 준 PNG 를 얹는다", () => {
-  it("자산이 아니라 렌더 결과를 받는다 — 편집자도 우리도 만들 게 없다", () => {
-    assert.ok(panel.includes("/title.png${q}"), "제목 PNG 를 받아오지 않는다");
-    assert.ok(!panel.includes("insertMogrtFromPath"), ".mogrt 경로가 되살아났다");
+describe("패널 — 제목은 서버가 찍어 준 .mogrt 를 얹는다", () => {
+  it("편집 가능한 경로가 먼저다 — 사용자 요구: \"편집자가 바꿀 수 있길 원한다\"", () => {
+    assert.ok(panel.includes("/title.mogrt${q}"), "제목 mogrt 를 받아오지 않는다");
+    assert.ok(panel.includes("editor.insertMogrtFromPath(file.nativePath, at, 1, 0)"));
+    const fn = panel.slice(panel.indexOf("async function addTitlesForRecs("));
+    const a = fn.indexOf("addTitleMogrts(");
+    const b = fn.indexOf("addTitlePngs(");
+    assert.ok(a > 0 && b > a, "PNG 가 먼저면 편집 불가 결과가 기본이 된다");
+  });
+
+  it("mogrt 가 막히면 PNG 로 물러난다 — 제목이 아예 안 나오는 것보다 낫다", () => {
+    assert.ok(panel.includes("console.log(\"[STEP-D] mogrt 제목 실패 — PNG 로 폴백\", err);"));
+    assert.ok(panel.includes("/title.png${q}"), "폴백 경로가 사라졌다");
+  });
+
+  it("베이스가 없으면(409) 이 PC 의 기본 템플릿을 올리고 **한 번만** 재시도한다", () => {
+    assert.ok(panel.includes("if (res.status === 409 && allowSetup)"));
+    assert.ok(panel.includes("return fetchTitleMogrt(rec, folder, aspect, onStage, false);"),
+      "무한 재시도가 되면 안 된다");
+    assert.ok(panel.includes("Basic Lower Third.mogrt"), "두 줄짜리 후보를 먼저 찾지 않는다");
+    assert.ok(panel.includes("/Adobe/Common/Motion Graphics Templates"));
+  });
+
+  it("서버는 그 베이스를 검증하고 저장한다 — 텍스트 레이어가 없으면 거절", () => {
+    assert.ok(index.includes('app.post("/api/premiere/base-template"'));
+    assert.ok(index.includes("if (info.textLayers < 1) return c.json"));
+    assert.ok(index.includes("PREMIERE_BASE_MAX"), "크기 상한이 없다");
+  });
+
+  it("캡슐 id 는 추천마다 다르다 — 같으면 두 번째 제목이 첫 문구로 뜬다", () => {
+    assert.ok(index.includes("capsuleId: capsuleIdFor(String(rec.id), aspect)"));
+    assert.ok(index.includes("function capsuleIdFor(recId: string, aspect: string)"));
   });
 
   it("타임라인 비율대로 받는다 — 세로 러프컷에 가로 그림을 얹으면 위치가 어긋난다", () => {
-    assert.ok(panel.includes("await seq0.getFrameSize()"));
+    assert.ok(panel.includes("async function titleTargetInfo()"));
     assert.ok(panel.includes('if (Number(size.width) >= Number(size.height)) aspect = "16:9";'));
     assert.ok(panel.includes("aspect=${encodeURIComponent(aspect)}"));
   });

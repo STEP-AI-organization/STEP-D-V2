@@ -44,6 +44,9 @@ importers:
       '@napi-rs/canvas':
         specifier: ^1.0.7
         version: 1.0.7
+      fflate:
+        specifier: ^0.8.3
+        version: 0.8.3
       google-auth-library:
         specifier: ^9.15.0
         version: 9.15.1

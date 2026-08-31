@@ -263,7 +263,8 @@ import {
 } from "./reframe.ts";
 import { getAspectPreset } from "./aspect-presets.ts";
 import { layoutFingerprint, restampPendingClips } from "./rule-restamp.ts";
-import { renderTextLayerPng, overlayCanvasAvailable, measureOverlayImage, FONT_FAMILIES, type OverlayTextItem } from "./overlay-canvas.ts";
+import { renderTextLayerPng, overlayCanvasAvailable, measureOverlayImage, FONT_FAMILIES, postScriptNameFor, type OverlayTextItem } from "./overlay-canvas.ts";
+import { patchTitleMogrt, inspectMogrt, layersFromOverlayItems } from "./mogrt.ts";
 import {
   syncChannelVideos,
   classifyShorts,
@@ -7032,6 +7033,110 @@ app.get("/api/premiere/handoff", async (c) => {
   if (!h || Date.now() - Number(h.at ?? 0) > HANDOFF_TTL_MS_PREMIERE) return c.json({ handoff: null });
   return c.json({ handoff: h });
 });
+
+// ── 프리미어 제목 그래픽의 **베이스 템플릿** ──────────────────────────────────
+//
+// .mogrt 는 코드로 처음부터 만들 수 없다(그래픽 캡슐이 프리미어 산물이다). 그래서 **껍데기
+// 하나**가 필요한데, 그걸 리포에 박아 두지 않고 **편집자 PC 의 프리미어에 딸려 온 기본
+// 템플릿**을 패널이 한 번 올려 준다. 이유 둘:
+//   ① 버전 호환 — 그 PC 의 프리미어가 만든 캡슐이라 그 프리미어에서 반드시 열린다.
+//      우리가 특정 버전 파일을 박아 두면 다른 버전 고객사에서 조용히 안 열릴 수 있다.
+//   ② Adobe 자산을 우리가 재배포하지 않는다.
+// 올라온 뒤로는 서버가 이걸 고쳐서(mogrt.ts) 회차마다 제목을 찍어 낸다.
+const PREMIERE_BASE_OBJECT = "premiere/base-title.mogrt";
+const PREMIERE_BASE_MAX = 8 * 1024 * 1024;   // 기본 템플릿은 1MB 안팎. 8MB 면 넉넉하다
+
+app.get("/api/premiere/base-template", async (c) => {
+  requireUser(c);
+  if (!(await fileExists(PREMIERE_BASE_OBJECT))) return c.json({ have: false });
+  try {
+    const info = inspectMogrt(new Uint8Array(await readFile(PREMIERE_BASE_OBJECT)));
+    return c.json({ have: true, textLayers: info.textLayers, capsuleName: info.capsuleName });
+  } catch {
+    // 저장된 게 깨졌으면 **없는 것으로 본다** — 패널이 다시 올리게 두는 편이 낫다.
+    return c.json({ have: false });
+  }
+});
+
+app.post("/api/premiere/base-template", async (c) => {
+  requireUser(c);
+  const body = new Uint8Array(await c.req.arrayBuffer());
+  if (!body.length) return c.json({ error: "빈 파일입니다." }, 400);
+  if (body.length > PREMIERE_BASE_MAX) return c.json({ error: "파일이 너무 큽니다." }, 413);
+  let info: { textLayers: number; capsuleName: string };
+  try {
+    info = inspectMogrt(body);
+  } catch (err) {
+    return c.json({ error: `.mogrt 로 읽히지 않습니다: ${(err as Error).message}` }, 400);
+  }
+  // 텍스트 레이어가 없으면 제목을 넣을 자리가 없다 — 받아 두면 나중에 조용히 실패한다.
+  if (info.textLayers < 1) return c.json({ error: "텍스트 레이어가 없는 템플릿입니다." }, 400);
+  await writeFile(PREMIERE_BASE_OBJECT, Buffer.from(body));
+  return c.json({ ok: true, textLayers: info.textLayers, capsuleName: info.capsuleName });
+});
+
+/**
+ * 추천 하나의 **제목 .mogrt** — 프리미어에서 편집자가 글자를 고칠 수 있는 형태.
+ *
+ * PNG(title.png)와 **같은 입력**(overlayPreviewItems)에서 나온다. 그래서 웹 미리보기·서버
+ * 렌더·프리미어가 한 소스를 공유하고, 템플릿을 바꾸면 세 경로가 같이 따라온다.
+ * 다른 점은 결과물 형식뿐이다 — PNG 는 픽셀 그대로, mogrt 는 **고칠 수 있는 텍스트**.
+ */
+app.get("/api/recommendations/:id/title.mogrt", async (c) => {
+  const rec = await getEntity<any>("recommendation", c.req.param("id"));
+  if (!rec) return c.json({ error: "recommendation not found" }, 404);
+  if (!(await fileExists(PREMIERE_BASE_OBJECT))) {
+    // 패널이 이 신호를 받고 자기 PC 의 기본 템플릿을 올린 뒤 다시 부른다.
+    return c.json({ error: "base_template_missing" }, 409);
+  }
+
+  const ep = rec.episodeId ? await getEntity<any>("episode", rec.episodeId) : null;
+  const program = ep?.programId ? await getEntity<any>("program", ep.programId) : undefined;
+  const rules = (await listAutomationRules()) as any[];
+  const rule = ep?.programId
+    ? rules.find((r) => r.enabled !== false
+        && (r.programId === ep.programId
+          || (Array.isArray(r.programIds) && r.programIds.includes(ep.programId))))
+    : undefined;
+
+  const want = c.req.query("aspect");
+  const aspect = want === "16:9" ? "16:9" : "9:16-crop-main";
+  const { autoEditorState } = await import("./factory.ts");
+  const es = autoEditorState(
+    rec, ep?.programTitle ?? "", program,
+    (rule as any)?.templateId,
+    { ...((rule as any)?.layout ?? {}), logo: (rule as any)?.layout?.logo ?? false },
+    aspect,
+  );
+  const { W, H, items } = await overlayPreviewItems(es, aspect, null, "title");
+  if (!items.length) return c.json({ error: "no title to draw" }, 404);
+
+  const layers = layersFromOverlayItems(items, W, H, postScriptNameFor);
+  let out: Uint8Array;
+  try {
+    out = patchTitleMogrt(new Uint8Array(await readFile(PREMIERE_BASE_OBJECT)), layers, {
+      // 캡슐 id 는 **추천마다 달라야** 한다 — 같으면 프리미어가 앞서 넣은 것과 같은 템플릿으로
+      // 보고 캐시를 써서, 두 번째 제목이 첫 번째 문구로 뜬다.
+      capsuleId: capsuleIdFor(String(rec.id), aspect),
+      capsuleName: `[STEP-D] ${String(rec.title ?? rec.id).slice(0, 60)}`,
+    });
+  } catch (err) {
+    return c.json({ error: `제목 그래픽을 만들지 못했습니다: ${(err as Error).message}` }, 500);
+  }
+  return new Response(out, {
+    headers: {
+      "content-type": "application/octet-stream",
+      "content-disposition": `attachment; filename="stepd-title-${rec.id}.mogrt"`,
+      "cache-control": "private, max-age=300",
+    },
+  });
+});
+
+/** 추천 id → 안정적인 UUID 꼴 캡슐 id (같은 추천은 늘 같은 값, 다른 추천과는 다름). */
+function capsuleIdFor(recId: string, aspect: string): string {
+  const h = crypto.createHash("sha1").update(`stepd:mogrt:${aspect}:${recId}`).digest("hex");
+  return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20, 32)}`;
+}
 
 app.patch("/api/recommendations/:id/thumbnail", async (c) => {
   const recId = c.req.param("id");

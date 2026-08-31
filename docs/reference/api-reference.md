@@ -1,6 +1,6 @@
 # @stepd/server HTTP API 레퍼런스
 
-> 실측: **2026-08-28 · 라우트 252개** (GET 112 · POST 94 · DELETE 25 · PATCH 14 · PUT 7) · `apps/server/src/index.ts` 기준 — 라우트 추가 시 이 문서도 갱신.
+> 실측: **2026-08-31 · 라우트 255개** (GET 114 · POST 95 · DELETE 25 · PATCH 14 · PUT 7) · `apps/server/src/index.ts` 기준 — 라우트 추가 시 이 문서도 갱신.
 > 프론트 대응 함수는 `apps/web/src/lib/data/api.ts` 기준. 데이터 구조는 [data-model.md](data-model.md),
 > 큐·워커 동작은 [../ops/worker-queue.md](../ops/worker-queue.md) 참고.
 
@@ -193,6 +193,9 @@ API 키(`api-keys.ts`). **화이트리스트(`API_KEY_ROUTES`)에 올린 라우�
 |---|---|---|---|
 | `GET /api/recommendations` | 추천 목록 (구간·점수 + 프레임 정합 메타) | 쿼리 `programId, status`(기본 `pending` · `all` 가능), `limit`(기본 50·최대 200) → `{ recommendations: [{ id, title, startTime, endTime, score100, status, people, episodeId, episodeNumber, programId, programTitle, mediaId, fps, startTimecode }] }`. 점수 내림차순. **`startTime/endTime` 은 원본 파일 0초 기준 초** — Premiere·EDL(소스 타임코드 기준)로 넘기려면 같이 오는 `fps`·`startTimecode` 로 환산한다. 0046 이전 원본은 그 둘이 0/"" 이라 환산 불가(숨기지 않고 그대로 내보낸다) | (프리미어 패널 · 웹은 `fetchState`) |
 | `GET /api/recommendations/:id/title.png` | **제목 투명 PNG** — 프리미어 경로가 타임라인에 얹는 그래픽 | 쿼리 `aspect`(`9:16-crop-main` 기본 · `16:9`) → `image/png`(1080×1920 또는 1920×1080) / 404(그릴 제목 없음) / 503(캔버스 미가용). 웹 편집기와 **같은 렌더러**(`buildStaticOverlayItems`+`renderTextLayerPng`)로 그때그때 그린다 — 구 `.mogrt` 자산 방식(2026-08-31 폐기)은 위치·글꼴이 파일에 박제돼 서버에서 템플릿을 바꿔도 프리미어 경로만 옛 모양으로 남았다. 같은 이유로 구 `GET /api/programs/:id/shorts-style`(스타일 값만 내려주던 것)도 함께 삭제됐다 | (프리미어 패널) |
+| `GET /api/recommendations/:id/title.mogrt` | **제목 모션그래픽 템플릿** — 프리미어에서 **글자를 고칠 수 있는** 제목 | 쿼리 `aspect` → `.mogrt` 바이트 / 404(제목 없음) / 409 `base_template_missing`(베이스 미등록 — 패널이 올리고 재요청) / 500. PNG 와 **같은 입력**(overlayPreviewItems)에서 나오고, 서버가 베이스 템플릿의 문구·글꼴·크기·색·위치를 갈아 끼워 찍는다. capsuleID 는 추천마다 달라야 한다(같으면 프리미어가 캐시해 첫 제목을 재사용) | (프리미어 패널) |
+| `GET /api/premiere/base-template` | 제목 .mogrt 의 **베이스 등록 여부** | → `{ have, textLayers?, capsuleName? }` | (프리미어 패널) |
+| `POST /api/premiere/base-template` | 베이스 템플릿 등록 (바이너리 본문 · 최대 8MB) | → `{ ok, textLayers, capsuleName }` / 400(.mogrt 아님·텍스트 레이어 없음) / 413. **리포에 안 넣는 이유**: 그 PC 의 프리미어가 만든 캡슐이라야 그 프리미어에서 열린다(버전 호환) · Adobe 자산 재배포 회피 | (프리미어 패널이 409 를 받으면 자동으로) |
 | `POST /api/premiere/handoff` | **웹 → 프리미어 핸드오프**(맥락 남기기) | `{ programId?, episodeId?, clipId?, mediaId?, label? }`(하나는 필수, 없으면 400) → `{ ok:true }`. 사용자별 1건만 보관 | `openInPremiere` |
 | `GET /api/premiere/handoff` | 프리미어 패널이 집어간다 (5초 폴링) | → `{ handoff }` / `{ handoff:null }`. **읽으면 지운다**(한 번만 소비) · 5분 지난 건 버린다. ⚠️ 브라우저가 UXP 패널에 값을 직접 넘길 수 없어서 서버를 경유한다 — 실행은 `stepd://` 스킴이 맡는다 | (프리미어 패널) |
 | `POST /api/recommendations/:id/adopt` | 추천 채택 → ffmpeg 트림·인코딩으로 실제 클립 생성 | → `{ clipId, clip }`. 마스터 미디어+ffmpeg 있으면 실 인코딩(GCS는 서명 URL로 구간만 fetch), 없으면 메타데이터만 | `adoptRec` |

@@ -283,3 +283,60 @@ export async function renderTextLayerPng(input: RenderTextLayerInput): Promise<B
 
   return canvas.toBuffer("image/png");
 }
+
+// ── 글꼴의 PostScript 이름 ────────────────────────────────────────────────────
+/**
+ * 프리미어 그래픽(.mogrt)은 글꼴을 **PostScript 이름**(nameID 6)으로 지목한다 —
+ * canvas 등록 별칭("GmarketSans Bold")도, 패밀리명("Gmarket Sans TTF")도 아니다.
+ * 셋 중 틀린 걸 쓰면 프리미어가 **오류 없이 다른 글꼴로 대체**한다(libass 와 같은 실패 방식).
+ *
+ * 그래서 표를 손으로 들고 있지 않고 **폰트 파일이 신고하는 이름을 그대로 읽는다.** 폰트를
+ * 갈아 끼워도 코드가 따라올 필요가 없다.
+ */
+const psNameCache = new Map<string, string | null>();
+
+function readPostScriptName(file: string): string | null {
+  try {
+    const d = fs.readFileSync(file);
+    const numTables = d.readUInt16BE(4);
+    let nameOff = -1;
+    for (let i = 0; i < numTables; i++) {
+      const rec = 12 + 16 * i;
+      if (d.toString("latin1", rec, rec + 4) === "name") { nameOff = d.readUInt32BE(rec + 8); break; }
+    }
+    if (nameOff < 0) return null;
+    const count = d.readUInt16BE(nameOff + 2);
+    const stringOff = nameOff + d.readUInt16BE(nameOff + 4);
+    let best: string | null = null;
+    for (let i = 0; i < count; i++) {
+      const p = nameOff + 6 + 12 * i;
+      const platformId = d.readUInt16BE(p);
+      const nameId = d.readUInt16BE(p + 6);
+      if (nameId !== 6) continue;
+      const len = d.readUInt16BE(p + 8);
+      const off = d.readUInt16BE(p + 10);
+      const raw = d.subarray(stringOff + off, stringOff + off + len);
+      const text = platformId === 3 ? Buffer.from(raw).swap16().toString("utf16le") : raw.toString("latin1");
+      // Windows(3) 레코드를 우선하되, 없으면 처음 만난 것을 쓴다.
+      if (platformId === 3) return text;
+      if (!best) best = text;
+    }
+    return best;
+  } catch {
+    return null;
+  }
+}
+
+/** 패밀리 id + weight 의 PostScript 이름. 파일이 없으면 null(호출자가 대안을 고른다). */
+export function postScriptNameFor(fontId: string | undefined, weight: number): string | null {
+  const fam = familyById(fontId);
+  const w = snapWeightIn(fam, Number(weight) || 800);
+  const spec = fam.weights[w];
+  if (!spec) return null;
+  const key = spec.file;
+  if (psNameCache.has(key)) return psNameCache.get(key)!;
+  const file = resolveFontFile(spec.file);
+  const name = file ? readPostScriptName(file) : null;
+  psNameCache.set(key, name);
+  return name;
+}

@@ -690,18 +690,103 @@ function warnIfFontsMissing() {
 
 // ── 제목 그래픽 ──────────────────────────────────────────────────────────────
 /**
- * 제목을 **서버가 그린 투명 PNG** 로 얹는다.
+ * 제목은 **서버가 찍어 준 .mogrt** 로 얹는다 — 프리미어에서 글자를 고칠 수 있어야 하니까.
  *
- * 사용자 지적 2026-08-31: *"글씨 위치 같은 것도 다 빠질 텐데, 그때그때 생성하면 되지 않을까."*
- * 맞다 — `.mogrt` 는 위치·크기·글꼴이 파일 안에 **박제**돼서, 서버에서 템플릿을 바꿔도
- * 프리미어 경로만 옛 모양으로 남는다. 그래서 자산을 두지 않고 **웹 경로가 쓰는 그 렌더러**로
- * 그때그때 그려 받는다(GET /api/recommendations/:id/title.png).
+ * 어떻게 여기까지 왔나 (전부 사용자 요구다):
+ *  ① "자동으로 서버에서 내려서"      → 편집자가 자산을 만들지 않는다
+ *  ② "글씨 위치 같은 것도 다 빠질 텐데" → 손으로 만든 .mogrt 는 위치·글꼴이 **박제**된다
+ *  ③ "편집자가 바꿀 수 있길 원하는데" → 그렇다고 PNG 면 글자를 못 고친다
+ *  ④ "우리 서버에서 .MOGRT 만들어서 내려주면 되잖아" ← 이게 셋을 동시에 푼다
  *
- * 얻는 것: 글꼴·색·위치가 전부 서버 정본이라 두 경로가 **픽셀 단위로 같다.** 사람이 만들어야
- * 할 자산도, 파라미터 이름 맞추기도 없다.
- * 대가: 프리미어에서 글자를 **텍스트로 편집할 수는 없다**(이미지다). 문구를 바꾸려면 STEP-D
- * 에서 바꾸고 다시 받는다 — 문구의 정본이 서버라는 계약과 같은 방향이라 이게 맞다.
+ * 그래서 서버가 **요청 때마다** 지금 값(문구·글꼴·크기·색·위치)으로 .mogrt 를 찍어 준다
+ * (`GET /api/recommendations/:id/title.mogrt`). 얻는 것: 편집 가능한 진짜 텍스트 레이어이면서
+ * 스타일 정본은 서버 하나 — 템플릿을 바꾸면 다음에 받는 것부터 따라온다.
+ *
+ * ⚠️ 이미 타임라인에 얹은 클립은 **소급 갱신되지 않는다**(프로젝트 안으로 복사되기 때문).
+ *    서버에서 제목을 바꿨으면 다시 얹어야 한다.
+ *
+ * PNG 경로(title.png)는 폴백으로 남는다 — 베이스 템플릿이 없거나 mogrt 삽입이 막히면
+ * 최소한 제목이 화면에 나오게. 둘 다 **같은 서버 계산**에서 나오므로 모양은 어긋나지 않는다.
  */
+/**
+ * 서버가 .mogrt 를 찍으려면 **껍데기 하나**가 필요하다(그래픽 캡슐은 프리미어 산물이라
+ * 코드로 처음부터 못 만든다). 그 껍데기를 리포에 박아 두지 않고 **이 PC 의 프리미어에 딸려
+ * 온 기본 템플릿**을 한 번 올린다 — 그 프리미어가 만든 캡슐이라 그 프리미어에서 반드시 열린다.
+ *
+ * 왜 하필 `%APPDATA%` 인가: Program Files 아래에도 같은 파일이 있지만, 사용자 폴더 쪽이
+ * 권한 문제가 없고 프리미어가 첫 실행 때 복사해 둔다. 두 줄짜리 하위 3종을 순서대로 찾는다.
+ */
+const BASE_TEMPLATE_CANDIDATES = [
+  "Basic Lower Third.mogrt",                                  // 텍스트 레이어 2개 — 우리 제목 2줄과 맞다
+  "Lower Thirds/Classic Lower Third Two Lines.mogrt",
+  "Lower Thirds/Film Lower Third Left Two Line.mogrt",
+  "Basic Title.mogrt",                                        // 1개 — 두 줄이 한 레이어로 합쳐진다
+];
+
+function readLocalFile(nodeFs, p) {
+  if (typeof nodeFs.readFileSync === "function") {
+    const b = nodeFs.readFileSync(p);
+    return b instanceof ArrayBuffer ? b : new Uint8Array(b).buffer;
+  }
+  // readFileSync 가 없는 UXP 빌드 대비 — 열어서 크기만큼 읽는다.
+  const fd = nodeFs.openSync(p, "r");
+  try {
+    const size = nodeFs.fstatSync ? Number(nodeFs.fstatSync(fd).size) : 4 * 1024 * 1024;
+    const buf = new Uint8Array(size);
+    nodeFs.readSync(fd, buf, 0, size, 0);
+    return buf.buffer;
+  } finally {
+    try { nodeFs.closeSync(fd); } catch (_) { /* 이미 닫힘 */ }
+  }
+}
+
+async function uploadBaseTemplate(onStage) {
+  let nodeFs = null;
+  try { nodeFs = require("fs"); } catch (_) { nodeFs = null; }
+  if (!nodeFs || typeof nodeFs.openSync !== "function") {
+    throw new Error("이 프리미어에서는 기본 템플릿을 읽을 수 없습니다.");
+  }
+  const env = (typeof process !== "undefined" && process.env) || {};
+  const dir = `${env.APPDATA || ""}/Adobe/Common/Motion Graphics Templates`;
+  let last = "";
+  for (const name of BASE_TEMPLATE_CANDIDATES) {
+    try {
+      onStage(`제목 템플릿 준비 중… (${name})`);
+      const buf = readLocalFile(nodeFs, `${dir}/${name}`);
+      const res = await api("/premiere/base-template", {
+        method: "POST",
+        headers: { "content-type": "application/octet-stream" },
+        body: buf,
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) return data;
+      last = data.error || `업로드 실패 (${res.status})`;
+    } catch (err) {
+      last = err.message;
+    }
+  }
+  throw new Error(`제목 템플릿 준비 실패 — ${last}`);
+}
+
+/** 추천 하나의 제목 .mogrt. 서버에 베이스가 없으면 한 번 올리고 다시 부른다. */
+async function fetchTitleMogrt(rec, folder, aspect, onStage, allowSetup = true) {
+  const q = `?aspect=${encodeURIComponent(aspect)}`;
+  const res = await api(`/recommendations/${encodeURIComponent(rec.id)}/title.mogrt${q}`, { method: "GET" });
+  if (res.status === 409 && allowSetup) {
+    await uploadBaseTemplate(onStage);
+    return fetchTitleMogrt(rec, folder, aspect, onStage, false);
+  }
+  if (!res.ok) {
+    if (res.status === 404) return null;          // 그릴 제목이 없다
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || `제목 그래픽을 받지 못했습니다 (${res.status})`);
+  }
+  const buf = await res.arrayBuffer();
+  const file = await folder.createFile(`stepd-title-${rec.id}.mogrt`, { overwrite: true });
+  await file.write(buf, { format: formats.binary });
+  return file;
+}
+
 async function fetchTitlePng(rec, folder, aspect) {
   const q = `?aspect=${encodeURIComponent(aspect)}`;
   const res = await api(`/recommendations/${encodeURIComponent(rec.id)}/title.png${q}`, { method: "GET" });
@@ -1198,21 +1283,77 @@ async function ensureSequenceForMaster(filename, onStage) {
 }
 
 /**
- * 고른 구간마다 제목 그래픽을 꽂는다. 값(문구·강조색)은 **서버가 정본**이다.
- * 자산이 없거나 파라미터를 못 찾으면 던진다 — 호출부가 마커까지는 살리고 사유를 보여 준다.
+ * 고른 구간마다 제목 그래픽을 꽂는다. 값(문구·글꼴·색·위치)은 **서버가 정본**이다.
+ *
+ * 먼저 편집 가능한 .mogrt 를 시도하고, 그게 안 되면 PNG 로 물러난다. 둘 다 같은 서버 계산에서
+ * 나오므로 모양은 같다 — 다른 건 "글자를 고칠 수 있나" 하나뿐이다.
  */
 async function addTitlesForRecs(recs, onStage) {
-  // 지금 열린 타임라인의 **실제 비율**로 받는다. 세로 러프컷에 가로 그림(또는 그 반대)을
-  // 얹으면 프리미어가 프레임에 맞춰 늘리거나 잘라서, 서버 미리보기와 글자 위치가 달라진다.
-  const { sequence: seq0 } = await activeSequence();
+  const { aspect, tracks } = await titleTargetInfo();
+
+  // ① 편집 가능한 경로 먼저.
+  try {
+    const placed = await addTitleMogrts(recs, aspect, onStage);
+    if (placed > 0) return placed;
+    onStage("제목 그래픽을 못 얹어 이미지로 대체합니다…");
+  } catch (err) {
+    console.log("[STEP-D] mogrt 제목 실패 — PNG 로 폴백", err);
+    onStage(`제목 그래픽 실패(${err.message}) — 이미지로 대체합니다…`);
+  }
+  // ② 폴백: 픽셀 그대로. 편집은 못 하지만 화면에는 나온다.
+  return await addTitlePngs(recs, aspect, tracks, onStage);
+}
+
+/** 지금 열린 타임라인의 비율·트랙 수 — 제목을 어떤 모양으로 받아 어디에 얹을지 정한다. */
+async function titleTargetInfo() {
+  // 세로 러프컷에 가로 그림(또는 그 반대)을 얹으면 프리미어가 프레임에 맞춰 늘리거나 잘라서,
+  // 서버 미리보기와 글자 위치가 달라진다.
+  const { sequence } = await activeSequence();
   let aspect = "9:16-crop-main";
   let tracks = 0;
   try {
-    const size = await seq0.getFrameSize();
+    const size = await sequence.getFrameSize();
     if (Number(size.width) >= Number(size.height)) aspect = "16:9";
   } catch (_) { /* 못 읽으면 쇼츠로 둔다 — 이 패널의 기본 산출물이 세로다 */ }
-  try { tracks = Number(await seq0.getVideoTrackCount()) || 0; } catch (_) { /* 아래에서 판단 */ }
+  try { tracks = Number(await sequence.getVideoTrackCount()) || 0; } catch (_) { /* 판단 보류 */ }
+  return { aspect, tracks };
+}
 
+/**
+ * .mogrt 를 구간 시작마다 꽂는다.
+ *
+ * PNG 와 달리 **프로젝트로 import 하지 않는다** — `insertMogrtFromPath` 가 파일 경로를 직접
+ * 받아 시퀀스에 꽂고, 프리미어가 알아서 프로젝트 안으로 복사한다.
+ */
+async function addTitleMogrts(recs, aspect, onStage) {
+  const folder = await mediaFolder();
+  onStage("제목 그래픽 받는 중…");
+
+  const files = [];
+  for (const r of recs) {
+    const f = await fetchTitleMogrt(r, folder, aspect, onStage);
+    if (f) files.push({ rec: r, file: f });
+  }
+  if (!files.length) return 0;
+
+  const { api, sequence } = await activeSequence();
+  const editor = api.SequenceEditor.getEditor(sequence);
+  let placed = 0;
+  for (const { rec, file } of files) {
+    try {
+      const at = api.TickTime.createWithSeconds(Number(rec.startTime) || 0);
+      // V2(인덱스 1) — V1 영상 위. 오디오 트랙은 안 쓴다.
+      // 반환은 **꽂힌 트랙 아이템 배열**이다(Action 이 아니라 즉시 실행) — 비면 실패다.
+      const inserted = await editor.insertMogrtFromPath(file.nativePath, at, 1, 0);
+      if (Array.isArray(inserted) ? inserted.length > 0 : inserted != null && inserted !== false) placed += 1;
+    } catch (err) {
+      console.log("[STEP-D] mogrt 삽입 실패", rec.id, err);
+    }
+  }
+  return placed;
+}
+
+async function addTitlePngs(recs, aspect, tracks, onStage) {
   const folder = await mediaFolder();
   onStage("제목 이미지 받는 중…");
 
