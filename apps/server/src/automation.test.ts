@@ -117,8 +117,6 @@ const rule = (over: Partial<AutomationRule> = {}): AutomationRule => ({
   ...over,
 });
 
-const PASS: GateSnapshot = { allowed: true, state: "pass", reason: "" };
-const HOLD: GateSnapshot = { allowed: false, state: "rights_hold", reason: "미해결 권리 이슈 2건" };
 
 /**
  * **한 채널을 여러 자동배포가 함께 쓸 수 있다** (2026-08-28 사용자 확정 "자유롭게 가자").
@@ -167,42 +165,14 @@ describe("자동 확인은 테넌트당 한 번만 실행된다", () => {
 });
 
 describe("자동 배포는 게이트를 건너뛰지 않는다 (F6 Invariant)", () => {
-  it("게이트 미통과면 어떤 정책에서도 나가지 않는다", () => {
-    for (const gatePolicy of ["approve_first", "hold_on_issue"] as const) {
-      const d = decidePublish({
-        rule: rule({ gatePolicy }),
-        gate: HOLD,
-        approved: true,          // 사람이 승인해도
-        heldAwaitingHuman: false,
-      });
-      assert.equal(d.action, "hold", gatePolicy);
-    }
-  });
 
-  it("사람 승인이 게이트를 이기지 못한다", () => {
-    // 승인은 게이트 **위에** 얹히는 조건이지 게이트를 대신하지 않는다.
-    const d = decidePublish({ rule: rule({ gatePolicy: "approve_first" }), gate: HOLD, approved: true, heldAwaitingHuman: false });
-    assert.equal(d.action, "hold");
-    assert.match(d.reason, /권리/);
-  });
 
-  it("막힌 결정에는 사유가 있다", () => {
-    const d = decidePublish({ rule: rule(), gate: HOLD, approved: false, heldAwaitingHuman: false });
-    assert.notEqual(d.reason, "");
-  });
 });
 
 describe("보류된 건은 사람이 확정해야 다시 잡힌다 (F6 Invariant)", () => {
-  it("게이트가 열려도 보류 상태면 그대로 보류다", () => {
-    // 이게 핵심이다. 이슈를 해제하면 게이트는 열리지만, 그것만으로 자동이 다시 밀어내면
-    // "사람이 확정한다"는 약속이 깨진다.
-    const d = decidePublish({ rule: rule(), gate: PASS, approved: true, heldAwaitingHuman: true });
-    assert.equal(d.action, "hold");
-    assert.equal(d.needsHuman, true);
-  });
 
   it("사람이 확정하면(heldAwaitingHuman=false) 나간다", () => {
-    const d = decidePublish({ rule: rule(), gate: PASS, approved: true, heldAwaitingHuman: false });
+    const d = decidePublish({ rule: rule(), approved: true, heldAwaitingHuman: false });
     assert.equal(d.action, "publish");
   });
 });
@@ -370,13 +340,6 @@ describe("순방 배선 — automation-cycle 소스 스캔", () => {
     assert.match(src, /metaPageId:\s*chan\.accountId/);
   });
 
-  it("순방이 채널 실업로드 게이트를 미리 본다 — OFF 채널로 큐잉·한도 차감 금지", () => {
-    assert.match(src, /youtubeUploadEnabled\(\)/);
-    assert.match(src, /naverUploadEnabled\(\)/);
-    assert.match(src, /tiktokUploadEnabled\(\)/);
-    assert.match(src, /instagramUploadEnabled\(\)/);
-    assert.match(src, /facebookUploadEnabled\(\)/);
-  });
 
   it("크레딧 잔액 0 이하면 순방이 정지하고 사유가 공용 상수다", () => {
     assert.match(src, /creditBalance\(\)/, "순방 시작에 잔액 확인이 없다");
@@ -488,18 +451,14 @@ describe("승인 배선 — automation-cycle 소스 스캔", () => {
 
 describe("승인 정책", () => {
   it("approve_first 는 승인 없이 안 나간다", () => {
-    const d = decidePublish({ rule: rule({ gatePolicy: "approve_first" }), gate: PASS, approved: false, heldAwaitingHuman: false });
+    const d = decidePublish({ rule: rule({ gatePolicy: "approve_first" }), approved: false, heldAwaitingHuman: false });
     assert.equal(d.action, "hold");
     assert.equal(d.needsHuman, true);
   });
 
-  it("hold_on_issue 는 게이트만 통과하면 나간다", () => {
-    const d = decidePublish({ rule: rule({ gatePolicy: "hold_on_issue" }), gate: PASS, approved: false, heldAwaitingHuman: false });
-    assert.equal(d.action, "publish");
-  });
 
   it("멈춘 계획은 아무것도 안 한다", () => {
-    const d = decidePublish({ rule: rule({ enabled: false }), gate: PASS, approved: true, heldAwaitingHuman: false });
+    const d = decidePublish({ rule: rule({ enabled: false }), approved: true, heldAwaitingHuman: false });
     assert.equal(d.action, "skip");
   });
 });
@@ -1454,12 +1413,6 @@ describe("승인 대기 거부 — 게시로 변하면 안 된다 (0044)", () =>
     assert.match(awaiting, /rejected_at IS NULL/);
   });
 
-  it("순방이 거부된 (계획·영상)을 게이트 판정 **앞에서** 건너뛴다 — 재선정·게시 안 함", () => {
-    assert.match(CYCLE, /isRejectedHold\(rule\.id, clip\.id\)/, "사이클이 거부를 확인하지 않는다");
-    const rejAt = CYCLE.indexOf("isRejectedHold(rule.id, clip.id)");
-    const gateAt = CYCLE.indexOf("const gate = await clipGate(clip.id)");
-    assert.ok(rejAt > 0 && gateAt > 0 && rejAt < gateAt, "거부 확인이 게이트/발행 판정보다 뒤에 있으면 이미 게시된다");
-  });
 
   it("거부 라우트가 있고 사람(actor)을 요구한다", () => {
     const route = IDX.slice(IDX.indexOf('app.post("/api/automation/holds/reject"')).slice(0, 900);
@@ -1489,10 +1442,4 @@ describe("입력 검증", () => {
       "레거시 값(score80)이 400 이 되면 저장된 계획을 편집만 해도 못 저장한다");
   });
 
-  it("게이트를 끄는 정책값이 존재하지 않는다", () => {
-    // 정책 목록에 'skip'/'ignore' 류가 생기면 F6 Invariant 가 무너진다.
-    const src = fs.readFileSync(path.join(SRC, "automation.ts"), "utf-8");
-    const list = /GATE_POLICIES = \[([^\]]*)\]/.exec(src)?.[1] ?? "";
-    assert.doesNotMatch(list, /skip|ignore|bypass|off|none/i, `게이트 우회 정책이 생겼다: ${list}`);
-  });
 });

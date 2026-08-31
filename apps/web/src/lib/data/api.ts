@@ -1875,123 +1875,13 @@ export async function createTopupOrder(credits: number, actor: string): Promise<
 
 // ── 게이트: 권리·심의 (FLOWS F3 · 서버 migrations/0012) ─────────────────────────
 //
-// 게이트 상태는 저장돼 있지 않다 — 서버가 매번 계산해서 준다. 화면은 받은 값을 그리기만
-// 하고, 자기 나름대로 "통과일 것 같다"를 만들지 않는다.
-
+// ⚠️ **권리 게이트는 2026-08-31 에 제거됐다**(사용자 결정: "실전에서 필요가 없음").
+// 근거: 운영 시작 이래 rights_issue 0행 · gate_audit 도 allowed 114 대 blocked 1(수동 테스트).
+// 이슈 등록·판정·게이트 조회 함수는 전부 지웠다 — 부르는 화면이 하나도 없었다.
+//
+// **배포 기록(gate-audit)만 남긴다** — "언제 무슨 영상이 어디로 나갔는지" 는 고객사 요구가
+// 있을 수 있다(사용자 2026-08-27). 그건 게이트가 아니라 감사 로그다.
 export type GateSubjectType = "episode" | "recommendation" | "clip";
-export type GateState = "pass" | "rights_hold" | "conditional" | "review_pending" | "blocked";
-export type IssueKind = "music" | "portrait" | "ppl" | "cast_hold" | "brand_blur" | "vod_window";
-export type IssueResolution = "open" | "conditional" | "resolved" | "blocked";
-
-export interface GateResult {
-  state: GateState;
-  label: string;
-  allowed: boolean;
-  reason: string;
-  blocking: { id: string; kind: string; resolution: string }[];
-}
-
-export interface RightsIssue {
-  id: string;
-  subjectType: GateSubjectType;
-  subjectId: string;
-  kind: IssueKind | string;
-  resolution: IssueResolution | string;
-  bandStart: number | null;
-  bandEnd: number | null;
-  note: string;
-  actor: string;
-  createdAt: string;
-  resolvedAt: string | null;
-  resolvedBy: string | null;
-  resolutionNote: string | null;
-  inheritedFrom: string | null;
-}
-
-export async function fetchGate(
-  subjectType: GateSubjectType,
-  subjectId: string,
-): Promise<{ gate: GateResult; issues: RightsIssue[]; judged: boolean }> {
-  return json(await fetch(`${API_BASE}/gate/${subjectType}/${subjectId}`, { cache: "no-store" }));
-}
-
-/**
- * 여러 대상의 게이트를 한 번에 — 목록 화면용.
- * 대상마다 따로 부르면 N+1 이 되고, 느려지면 게이트 표시를 생략하고 싶어진다.
- */
-export async function fetchGateBatch(
-  subjectType: GateSubjectType,
-  subjectIds: string[],
-): Promise<{ gates: Record<string, GateResult>; issues: Record<string, RightsIssue[]> }> {
-  if (subjectIds.length === 0) return { gates: {}, issues: {} };
-  return json(
-    await fetch(`${API_BASE}/gate/batch`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ subjectType, subjectIds }),
-    }),
-  );
-}
-
-/** 이슈 등록 — **사람만.** actor 없이 부르면 서버가 400 을 준다. */
-export async function createRightsIssue(input: {
-  subjectType: GateSubjectType;
-  subjectId: string;
-  kind: IssueKind;
-  resolution: "open" | "conditional" | "blocked";
-  bandStart?: number;
-  bandEnd?: number;
-  note: string;
-  actor: string;
-}): Promise<{ issue: RightsIssue; gate: GateResult }> {
-  return json(
-    await fetch(`${API_BASE}/rights-issues`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(input),
-    }),
-  );
-}
-
-/** 해제/재개. resolved 로 바꿀 땐 근거 문장이 필수다(서버가 막는다). */
-export async function updateRightsIssue(
-  id: string,
-  input: { resolution: IssueResolution; resolutionNote: string; actor: string },
-): Promise<{ issue: RightsIssue; gate: GateResult }> {
-  const res = await fetch(`${API_BASE}/rights-issues/${id}`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(input),
-  });
-  if (!res.ok) {
-    const body = (await res.json().catch(() => null)) as { error?: string } | null;
-    throw new Error(body?.error ?? `${res.status} ${res.statusText}`);
-  }
-  return res.json();
-}
-
-export async function deleteRightsIssue(id: string, actor: string): Promise<void> {
-  const res = await fetch(`${API_BASE}/rights-issues/${id}?actor=${encodeURIComponent(actor)}`, {
-    method: "DELETE",
-  });
-  if (!res.ok) throw new ApiError(res.status, await errorMessageOf(res));
-}
-
-/** "이슈 없음" 판정 — 이것도 사람의 판단이다(F2 Invariant: 미판정과 구분). */
-export async function judgeNoIssues(
-  subjectType: GateSubjectType,
-  subjectId: string,
-  actor: string,
-  note = "",
-): Promise<{ gate: GateResult }> {
-  return json(
-    await fetch(`${API_BASE}/rights-judgement`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ subjectType, subjectId, actor, note }),
-    }),
-  );
-}
 
 export async function fetchGateAudit(
   subjectType: GateSubjectType,

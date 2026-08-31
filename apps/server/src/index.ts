@@ -380,16 +380,6 @@ import {
   normalizePublishDelayMin,
   type ChannelRule,
 } from "./channel-rules.ts";
-import {
-  ISSUE_KINDS,
-  canResolve,
-  evaluateGate,
-  inheritedIssues,
-  isIssueKind,
-  isResolution,
-  type GateResult,
-  type Issue,
-} from "./gate.ts";
 import { listShortsTemplates, getShortsTemplate, toPercent } from "./shorts-template.ts";
 import { listNaverAccounts, getNaverAccount, upsertNaverAccount, markNaverAccount,
   deleteNaverAccount } from "./db-pg.ts";
@@ -5553,27 +5543,6 @@ function sessionActor(c: Context<AppEnv>, fallback: unknown): string {
   return c.get("user")?.email || readActor(fallback);
 }
 
-/** DB 행 → gate.ts 가 보는 모양. */
-function toIssue(r: { id: string; kind: string; resolution: string; bandStart: number | null; bandEnd: number | null; note: string }): Issue {
-  return {
-    id: r.id,
-    kind: r.kind,
-    resolution: r.resolution,
-    bandStart: r.bandStart,
-    bandEnd: r.bandEnd,
-    note: r.note,
-  };
-}
-
-/** 한 대상의 게이트를 계산한다. 저장된 상태를 읽는 게 아니라 매번 계산이다. */
-async function gateFor(subjectType: GateSubjectType, subjectId: string): Promise<GateResult> {
-  const [issues, judged] = await Promise.all([
-    listRightsIssues(subjectType, subjectId),
-    isJudged(subjectType, subjectId),
-  ]);
-  return evaluateGate({ judged, issues: issues.map(toIssue) });
-}
-
 // ── 자동 배포 (FLOWS F6 · README §12) ───────────────────────────────────────────
 //
 // **규칙이 없으면 아무것도 하지 않는다.** 전체 자동 실행 같은 기본 동작이 없다 —
@@ -6748,174 +6717,14 @@ app.post("/api/channel-rules/eligibility", async (c) => {
   return c.json({ rules, eligibility: out });
 });
 
-app.get("/api/gate/:subjectType/:subjectId", async (c) => {
-  const subjectType = readSubjectType(c.req.param("subjectType"));
-  if (!subjectType) return c.json({ error: "invalid subjectType" }, 400);
-  const subjectId = c.req.param("subjectId");
-  const [gate, issues, judged] = await Promise.all([
-    gateFor(subjectType, subjectId),
-    listRightsIssues(subjectType, subjectId),
-    isJudged(subjectType, subjectId),
-  ]);
-  return c.json({ gate, issues, judged });
-});
-
-/**
- * 여러 대상의 게이트를 한 번에 (미디어 목록용).
- *
- * 목록에서 대상마다 /api/gate 를 부르면 N+1 이 된다 — 100건짜리 목록이 100번 왕복하고,
- * 그러면 화면은 "느려서" 게이트 표시를 생략하고 싶어진다. 생략된 게이트가 곧 사고다.
- */
-app.post("/api/gate/batch", async (c) => {
-  const body = await c.req.json().catch(() => ({}) as Record<string, unknown>);
-  const subjectType = readSubjectType(body.subjectType);
-  const rawIds: unknown[] = Array.isArray(body.subjectIds) ? body.subjectIds : [];
-  const ids = rawIds.filter((x): x is string => typeof x === "string");
-  if (!subjectType) return c.json({ error: "invalid subjectType" }, 400);
-  if (ids.length === 0) return c.json({ gates: {}, issues: {} });
-  if (ids.length > 500) return c.json({ error: "too many ids (max 500)" }, 400);
-
-  const [issueMap, judged] = await Promise.all([
-    listRightsIssuesFor(subjectType, ids),
-    judgedSet(subjectType, ids),
-  ]);
-
-  const gates: Record<string, GateResult> = {};
-  const issues: Record<string, unknown[]> = {};
-  for (const id of ids) {
-    const rows = issueMap.get(id) ?? [];
-    gates[id] = evaluateGate({ judged: judged.has(id), issues: rows.map(toIssue) });
-    issues[id] = rows;
-  }
-  return c.json({ gates, issues });
-});
-
-app.get("/api/rights-issues", async (c) => {
-  const subjectType = readSubjectType(c.req.query("subjectType"));
-  const subjectId = c.req.query("subjectId") ?? "";
-  if (!subjectType || !subjectId) return c.json({ error: "subjectType and subjectId required" }, 400);
-  return c.json({ issues: await listRightsIssues(subjectType, subjectId) });
-});
-
-app.post("/api/rights-issues", async (c) => {
-  const body = await c.req.json().catch(() => ({}) as Record<string, unknown>);
-  const subjectType = readSubjectType(body.subjectType);
-  const subjectId = typeof body.subjectId === "string" ? body.subjectId.trim() : "";
-  const actor = sessionActor(c, body.actor);
-  if (!subjectType || !subjectId) return c.json({ error: "subjectType and subjectId required" }, 400);
-  // 등록자가 없는 이슈는 만들지 않는다 — 자동 판정과 구분이 안 된다.
-  if (!actor) return c.json({ error: "actor required — 이슈는 사람이 등록합니다" }, 400);
-  if (!isIssueKind(body.kind)) {
-    return c.json({ error: "invalid kind", allowed: ISSUE_KINDS }, 400);
-  }
-  const resolution = isResolution(body.resolution) ? body.resolution : "open";
-  if (resolution === "resolved") {
-    // 처음부터 해제 상태로 만드는 건 "등록 없이 통과"와 같다.
-    return c.json({ error: "새 이슈를 resolved 로 만들 수 없습니다" }, 400);
-  }
-
-  const bandStart = typeof body.bandStart === "number" ? body.bandStart : null;
-  const bandEnd = typeof body.bandEnd === "number" ? body.bandEnd : null;
-  if ((bandStart === null) !== (bandEnd === null)) {
-    return c.json({ error: "bandStart 와 bandEnd 는 함께 있어야 합니다" }, 400);
-  }
-  if (bandStart !== null && bandEnd !== null && bandEnd <= bandStart) {
-    return c.json({ error: "bandEnd 는 bandStart 보다 커야 합니다" }, 400);
-  }
-
-  const id = newId("ri");
-  await insertRightsIssue({
-    id, subjectType, subjectId,
-    kind: body.kind, resolution, bandStart, bandEnd,
-    note: typeof body.note === "string" ? body.note.trim() : "",
-    actor,
-  });
-  await appendGateAudit({
-    subjectType, subjectId, action: "issue.create",
-    toState: resolution, actor,
-    basis: typeof body.note === "string" ? body.note.trim() : "",
-    issueId: id,
-  });
-  return c.json({ issue: await getRightsIssue(id), gate: await gateFor(subjectType, subjectId) });
-});
-
-app.patch("/api/rights-issues/:id", async (c) => {
-  const id = c.req.param("id");
-  const existing = await getRightsIssue(id);
-  if (!existing) return c.json({ error: "issue not found" }, 404);
-
-  const body = await c.req.json().catch(() => ({}) as Record<string, unknown>);
-  const actor = sessionActor(c, body.actor);
-  if (!actor) return c.json({ error: "actor required — 해제도 사람이 합니다" }, 400);
-  if (!isResolution(body.resolution)) return c.json({ error: "invalid resolution" }, 400);
-
-  const resolutionNote = typeof body.resolutionNote === "string" ? body.resolutionNote : "";
-  if (body.resolution === "resolved") {
-    // "블러 처리 완료" 같은 조치 확인이 있어야 통과로 바뀐다 (FLOWS.md:61).
-    const check = canResolve(toIssue(existing), resolutionNote);
-    if (!check.ok) return c.json({ error: check.reason }, 400);
-  }
-
-  const prev = await updateRightsIssueResolution(id, {
-    resolution: body.resolution,
-    actor,
-    resolutionNote: resolutionNote.trim(),
-  });
-  await appendGateAudit({
-    subjectType: existing.subjectType, subjectId: existing.subjectId,
-    action: body.resolution === "resolved" ? "issue.resolve" : "issue.reopen",
-    fromState: prev, toState: body.resolution, actor,
-    basis: resolutionNote.trim(), issueId: id,
-  });
-  return c.json({
-    issue: await getRightsIssue(id),
-    gate: await gateFor(existing.subjectType, existing.subjectId),
-  });
-});
-
-app.delete("/api/rights-issues/:id", async (c) => {
-  const id = c.req.param("id");
-  const existing = await getRightsIssue(id);
-  if (!existing) return c.json({ error: "issue not found" }, 404);
-  const actor = sessionActor(c, c.req.query("actor"));
-  if (!actor) return c.json({ error: "actor required" }, 400);
-
-  // 삭제 기록을 먼저 남긴다 — 지운 뒤 기록에 실패하면 흔적 없이 사라진다.
-  await appendGateAudit({
-    subjectType: existing.subjectType, subjectId: existing.subjectId,
-    action: "issue.delete", fromState: existing.resolution, actor,
-    basis: `${existing.kind} · ${existing.note}`, issueId: id,
-  });
-  await deleteRightsIssue(id);
-  return c.json({ ok: true, gate: await gateFor(existing.subjectType, existing.subjectId) });
-});
-
-/** "이슈 없음" 판정 — 이것도 사람의 판단이다(F2 Invariant). */
-app.post("/api/rights-judgement", async (c) => {
-  const body = await c.req.json().catch(() => ({}) as Record<string, unknown>);
-  const subjectType = readSubjectType(body.subjectType);
-  const subjectId = typeof body.subjectId === "string" ? body.subjectId.trim() : "";
-  const actor = sessionActor(c, body.actor);
-  if (!subjectType || !subjectId) return c.json({ error: "subjectType and subjectId required" }, 400);
-  if (!actor) return c.json({ error: "actor required" }, 400);
-
-  const note = typeof body.note === "string" ? body.note.trim() : "";
-  await putRightsJudgement(subjectType, subjectId, actor, note);
-  await appendGateAudit({
-    subjectType, subjectId, action: "judge", toState: "judged", actor, basis: note,
-  });
-  return c.json({ gate: await gateFor(subjectType, subjectId) });
-});
-
-/**
- * 순방을 지금 한 번 돈다 — 규칙을 만들고 결과를 바로 보고 싶을 때.
- *
- * **현재 워크스페이스 것만** 평가한다. 요청 컨텍스트가 이미 이 테넌트로 세워져 있고,
- * 순방은 RLS 안에서 돌기 때문에 남의 채널·프로그램이 보이지 않는다.
- */
-app.post("/api/automation/run", async (c) => {
-  return c.json(await runAutomationCycle());
-});
+// ⚠️ **권리 게이트 라우트는 2026-08-31 에 제거됐다**(사용자 결정: "실전에서 필요가 없음").
+// 근거: 운영 시작 이래 `rights_issue` **0행** — 아무도 이슈를 등록한 적이 없고,
+// `gate_audit` 도 `publish.allowed` 114건 대 `publish.blocked` **1건**(수동 판정 테스트)이었다.
+// 실제 콘텐츠를 막은 적이 한 번도 없으면서 발행마다 조회 2건과 "미판정=검수대기" 규칙으로
+// 사람 손을 요구했다. 웹에도 이 라우트를 부르는 화면이 하나도 없었다.
+//
+// **배포 기록(gate-audit)은 남긴다** — "언제 무슨 영상이 어디로 나갔는지" 는 고객사 요구가
+// 있을 수 있다(사용자 2026-08-27). 그건 게이트가 아니라 감사 로그다.
 
 app.get("/api/gate-audit/:subjectType/:subjectId", async (c) => {
   const subjectType = readSubjectType(c.req.param("subjectType"));
@@ -7222,6 +7031,8 @@ app.get("/api/recommendations/:id/decorations.png", async (c) => {
   const { W, H, stageH } = renderDims(String(aspect));
   const scale = constScale(H, stageH);
   const durSec = Math.max(1, Number(rec.endTime) - Number(rec.startTime) || 10);
+  // 렌더 경로와 같은 정규화 — factory 시드는 **스테이지 px** 기준이라 이걸 빼면 크기가 어긋난다.
+  const esn = normalizeEditorCoords(es, String(aspect));
   // ⚠️ Cloud Run 의 /tmp 는 RAM(tmpfs)이다 — 아래 cleanup 이 **반드시** 돌아야 한다.
   const tmpDir = path.resolve("/tmp/stepd-clips");
   fs.mkdirSync(tmpDir, { recursive: true });
@@ -7236,37 +7047,37 @@ app.get("/api/recommendations/:id/decorations.png", async (c) => {
     // ① 로고 — 렌더와 **같은 우선순위·같은 크롭**(클립별 업로드 > 프로그램 기본).
     let badge: { path: string; h: number; y: number; x?: number } | null = null;
     let iconBox: { w: number; h: number } | null = null;
-    const iconSrc = /^data:image\//i.test(String(es.channelIconDataUrl ?? ""))
-      ? String(es.channelIconDataUrl) : String(program?.brandIconDataUrl ?? "");
+    const iconSrc = /^data:image\//i.test(String(esn.channelIconDataUrl ?? ""))
+      ? String(esn.channelIconDataUrl) : String(program?.brandIconDataUrl ?? "");
     const m = /^data:image\/[\w.+-]+;base64,(.+)$/i.exec(iconSrc);
-    if (es.showChannel && !es.channelIconOff && m) {
+    if (esn.showChannel && !esn.channelIconOff && m) {
       fs.writeFileSync(iconRaw, Buffer.from(m[1], "base64"));
-      const iconH = Math.round(Number(es.channelIconSize) > 0 ? Number(es.channelIconSize) : 40 * scale);
+      const iconH = Math.round(Number(esn.channelIconSize) > 0 ? Number(esn.channelIconSize) : 40 * scale);
       let badgePath = iconRaw;
-      if (String(es.channelIconShape ?? "circle") === "circle") {
+      if (String(esn.channelIconShape ?? "circle") === "circle") {
         await circleCrop(iconRaw, iconPng, iconH);
         badgePath = iconPng;
       }
       const dim = await probe(badgePath).catch(() => null);
       const iconW = dim?.width && dim?.height ? Math.max(1, Math.round(iconH * (dim.width / dim.height))) : iconH;
       iconBox = { w: iconW, h: iconH };
-      const iconYPct = Number(es.channelIconY);
-      const laid = channelBadgeLayout(es, W, H, scale, iconBox);
-      const chY = ((Number(es.channelY) || 82) / 100) * H;
+      const iconYPct = Number(esn.channelIconY);
+      const laid = channelBadgeLayout(esn, W, H, scale, iconBox);
+      const chY = ((Number(esn.channelY) || 82) / 100) * H;
       const y = iconYPct > 0 ? Math.round((iconYPct / 100) * H) : Math.round(laid?.icon?.y ?? chY - iconH - 28);
       const x = iconYPct > 0 || !laid?.icon ? undefined : Math.round(laid.icon.x);
       badge = { path: badgePath, h: iconH, y, ...(x != null ? { x } : {}) };
     }
 
     // ② 채널명 텍스트 — 제목은 뺀다(그건 .mogrt 로 나간다).
-    const items = buildStaticOverlayItems(es, W, H, scale, iconBox).filter((it) => it.group === "channel");
+    const items = buildStaticOverlayItems(esn, W, H, scale, iconBox).filter((it) => it.group === "channel");
     if (items.length && (await overlayCanvasAvailable())) {
       const buf = await renderTextLayerPng({ width: W, height: H, items });
       if (buf?.length) fs.writeFileSync(textPng, buf);
     }
 
     // ③ 시간박스·요소 — staticToPng 로 제목·채널명을 빼고, include 로 자막을 뺀다.
-    const ass = buildEditorAss(es, W, H, stageH, durSec, [], {
+    const ass = buildEditorAss(esn, W, H, stageH, durSec, [], {
       channelIcon: iconBox, staticToPng: true, include: "decorations",
     });
     if (ass) fs.writeFileSync(assFile, ass, "utf-8");
@@ -7289,6 +7100,121 @@ app.get("/api/recommendations/:id/decorations.png", async (c) => {
   } catch (err) {
     cleanup();
     return c.json({ error: `오버레이를 만들지 못했습니다: ${(err as Error).message}` }, 500);
+  }
+});
+
+/**
+ * 프리미어 재현 라우트들이 공통으로 필요한 것 — 회차·프로그램·자동배포 계획을 조인해
+ * **렌더와 같은 editorState** 를 만든다.
+ *
+ * 한 군데 모아 둔 이유: 제목(.mogrt/.png)·배치·로고/시간박스·자막이 전부 같은 상태에서 나와야
+ * 한다. 라우트마다 따로 조립하면 하나만 고쳤을 때 그 라우트만 다른 그림을 그린다.
+ */
+async function recRenderContext(rec: any, aspectQuery?: string): Promise<{
+  aspect: string; esn: any; W: number; H: number; stageH: number; scale: number; program: any;
+}> {
+  const ep = rec.episodeId ? await getEntity<any>("episode", rec.episodeId) : null;
+  const program = ep?.programId ? await getEntity<any>("program", ep.programId) : undefined;
+  const rules = (await listAutomationRules()) as any[];
+  const rule = ep?.programId
+    ? rules.find((r) => r.enabled !== false
+        && (r.programId === ep.programId
+          || (Array.isArray(r.programIds) && r.programIds.includes(ep.programId))))
+    : undefined;
+  const aspect = aspectQuery === "16:9"
+    ? "16:9"
+    : String((rule as any)?.aspect ?? (rec.kind === "short" ? "9:16-crop-main" : "16:9"));
+  const { autoEditorState } = await import("./factory.ts");
+  const es = autoEditorState(
+    rec, ep?.programTitle ?? "", program,
+    (rule as any)?.templateId,
+    { ...((rule as any)?.layout ?? {}), logo: (rule as any)?.layout?.logo ?? false },
+    aspect,
+  );
+  const { W, H, stageH } = renderDims(aspect);
+  // factory 시드는 **스테이지 px** 기준이다 — 정규화를 빼면 글자 크기가 결과물과 어긋난다.
+  return { aspect, esn: normalizeEditorCoords(es, aspect), W, H, stageH, scale: constScale(H, stageH), program };
+}
+
+/**
+ * 이 추천의 **자막 줄들** — 시각(구간 상대 초)과 문구 (사용자 2026-08-31:
+ * *"자막도 타임스탬프 맞춰서 프리미어에 재현."*).
+ *
+ * 렌더가 굽는 것과 **같은 줄**이어야 한다. 그래서 원문 세그먼트를 그대로 주지 않고
+ * `windowCaptions`(구간 잘라내기) → `chunkCaption`(한 화면 글자수)까지 **렌더와 같은 두 단계**를
+ * 거친 결과를 준다. 원문을 주면 프리미어에서는 한 줄인 게 결과물에선 세 줄로 갈린다.
+ */
+async function recCaptionLines(rec: any, esn: any): Promise<Caption[]> {
+  const mediaId = String(rec.mediaId ?? "");
+  if (!mediaId) return [];
+  if (esn && esn.captionsOn === false) return [];
+  const resolved = await resolveTranscript(mediaId).catch(() => null);
+  if (!resolved?.segments) return [];
+  const win = windowCaptions(resolved.segments, Number(rec.startTime) || 0, Number(rec.endTime) || 0);
+  // 렌더와 같은 글자수 규칙(captionMaxCharsOf) — 다르면 프리미어에서 한 줄인 게 결과물에선 두 줄이다.
+  return win.flatMap((c) => chunkCaption(c, captionMaxCharsOf(esn)));
+}
+
+app.get("/api/recommendations/:id/captions", async (c) => {
+  const rec = await getEntity<any>("recommendation", c.req.param("id"));
+  if (!rec) return c.json({ error: "recommendation not found" }, 404);
+  const ctx = await recRenderContext(rec, c.req.query("aspect"));
+  const lines = await recCaptionLines(rec, ctx.esn);
+  return c.json({
+    aspect: ctx.aspect,
+    canvas: { w: ctx.W, h: ctx.H },
+    // 문구는 안 보낸다면 패널이 뭘 받았는지 못 밝힌다 — 디버깅 비용이 크다.
+    lines: lines.map((l) => ({ start: l.start, end: l.end, text: l.text })),
+  });
+});
+
+/**
+ * 자막 **한 줄**을 투명 PNG 로. 프리미어가 그 시각에 얹는다.
+ *
+ * 왜 줄마다 한 장인가: 자막은 시간축 위에서 바뀌므로 한 장으로는 못 담는다. 그렇다고 알파
+ * 동영상으로 주면(ProRes 4444) 1분에 수 GB 다 — 줄마다 정지 PNG 가 가장 가볍고 정확하다.
+ *
+ * ⚠️ **카라오케(단어별 색 스윕)는 재현되지 않는다.** 정지 이미지라 시간에 따라 변하는 색을
+ *    담을 수 없다. 프리미어에서는 한 줄이 통째로 기본색으로 보이고, 실제 발행물에는 스윕이
+ *    들어간다 — 이건 알고 쓰는 차이다.
+ */
+app.get("/api/recommendations/:id/caption.png", async (c) => {
+  const rec = await getEntity<any>("recommendation", c.req.param("id"));
+  if (!rec) return c.json({ error: "recommendation not found" }, 404);
+  if (!hasFfmpeg()) return c.json({ error: "ffmpeg unavailable" }, 503);
+
+  const ctx = await recRenderContext(rec, c.req.query("aspect"));
+  const lines = await recCaptionLines(rec, ctx.esn);
+  const i = Number(c.req.query("i"));
+  const line = Number.isInteger(i) && i >= 0 && i < lines.length ? lines[i] : null;
+  if (!line) return c.json({ error: "line not found" }, 404);
+
+  const dur = Math.max(0.2, line.end - line.start);
+  // 그 줄만, **0초부터** 보이게 옮겨 담는다 — 한 프레임을 뜨려면 t=0 에 떠 있어야 한다.
+  // words(단어 타이밍)는 뺀다: 정지 이미지에 카라오케 스윕을 담을 수 없어, 넣으면 첫 단어만
+  // 강조된 어중간한 그림이 된다.
+  const ass = buildEditorAss(ctx.esn, ctx.W, ctx.H, ctx.stageH, dur,
+    [{ start: 0, end: dur, text: line.text }], { include: "captions" });
+  if (!ass) return c.json({ error: "nothing to draw" }, 404);
+
+  const tmpDir = path.resolve("/tmp/stepd-clips");
+  fs.mkdirSync(tmpDir, { recursive: true });
+  const stem = path.join(tmpDir, `cap_${rec.id}_${i}_${Date.now()}`);
+  const assFile = `${stem}.ass`, outPng = `${stem}.png`;
+  const cleanup = () => {
+    for (const p of [assFile, outPng]) { try { fs.unlinkSync(p); } catch { /* 없으면 그만 */ } }
+  };
+  try {
+    fs.writeFileSync(assFile, ass, "utf-8");
+    await renderStaticOverlayPng({ width: ctx.W, height: ctx.H, assPath: assFile, outputPath: outPng });
+    const out = fs.readFileSync(outPng);
+    cleanup();
+    return new Response(new Uint8Array(out), {
+      headers: { "content-type": "image/png", "cache-control": "private, max-age=300" },
+    });
+  } catch (err) {
+    cleanup();
+    return c.json({ error: `자막 이미지를 만들지 못했습니다: ${(err as Error).message}` }, 500);
   }
 });
 
@@ -7411,7 +7337,7 @@ app.post("/api/recommendations/:id/adopt", async (c) => {
   void enqueue("clip.metadata", { clipId }, { dedupeKey: `clip.metadata:${clipId}` })
     .catch((e) => console.error(`[adopt] 메타데이터 잡 큐잉 실패 ${clipId}:`, e));
 
-  return c.json({ clipId, clip, gate: await gateFor("clip", clipId) });
+  return c.json({ clipId, clip });
 });
 
 // ── reject recommendation ─────────────────────────────────────────────────────

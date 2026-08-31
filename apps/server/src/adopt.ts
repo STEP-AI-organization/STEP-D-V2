@@ -13,12 +13,7 @@
 import {
   appendGateAudit,
   commitAdoption,
-  insertRightsIssue,
-  isJudged,
-  listRightsIssues,
-  putRightsJudgement,
 } from "./db-pg.ts";
-import { inheritedIssues, type Issue } from "./gate.ts";
 import { newId } from "./pipeline.ts";
 
 /**
@@ -35,69 +30,8 @@ export async function commitAndInherit(
   const ok = await commitAdoption(clipId, clip, recId, { ...rec, status: "adopted", adoptedClipId: clipId });
   if (!ok) return false;
 
-  await inheritGateToClip({
-    clipId,
-    episodeId: rec.episodeId,
-    recommendationId: recId,
-    segment: { start: rec.startTime, end: rec.endTime },
-  });
+  // ⚠️ 예전엔 여기서 회차·추천의 **권리 이슈를 클립으로 승계**했다. 권리 게이트가
+  // 2026-08-31 에 제거되면서(사용자 결정 · rights_issue 0행) 승계할 대상도 소비처도 없어졌다.
   return true;
 }
 
-/**
- * 회차·추천에 달린 이슈 중 **잘라낸 구간과 겹치는 것**을 미디어로 내린다 (F2-4).
- * 밴드 없는 이슈(대상 전체)는 무조건 따라온다.
- *
- * **판정도 함께 내려온다.** 회차가 "이슈 없음"으로 판정돼 있으면 거기서 잘라낸 미디어도
- * 판정된 것으로 본다 — 안 그러면 채택할 때마다 모든 미디어가 검수 대기로 되돌아가고,
- * 사람이 같은 판단을 회차당 수십 번 반복해야 한다.
- */
-export async function inheritGateToClip(opts: {
-  clipId: string;
-  episodeId: string;
-  recommendationId: string;
-  segment: { start: number; end: number };
-}): Promise<void> {
-  const [epIssues, recIssues, epJudged, recJudged] = await Promise.all([
-    listRightsIssues("episode", opts.episodeId),
-    listRightsIssues("recommendation", opts.recommendationId),
-    isJudged("episode", opts.episodeId),
-    isJudged("recommendation", opts.recommendationId),
-  ]);
-
-  const rows = [...epIssues, ...recIssues];
-  const asIssues: Issue[] = rows.map((r) => ({
-    id: r.id, kind: r.kind, resolution: r.resolution,
-    bandStart: r.bandStart, bandEnd: r.bandEnd, note: r.note,
-  }));
-  const carriedIds = new Set(inheritedIssues(opts.segment, asIssues).map((i) => i.id));
-
-  for (const row of rows) {
-    if (!carriedIds.has(row.id)) continue;
-    await insertRightsIssue({
-      id: newId("ri"),
-      subjectType: "clip",
-      subjectId: opts.clipId,
-      kind: row.kind,
-      resolution: row.resolution,
-      bandStart: row.bandStart,
-      bandEnd: row.bandEnd,
-      note: row.note,
-      actor: row.actor,
-      inheritedFrom: row.id,
-    });
-  }
-
-  if (epJudged || recJudged) {
-    await putRightsJudgement("clip", opts.clipId, "승계", `${opts.recommendationId} 채택 시 판정 승계`);
-  }
-
-  await appendGateAudit({
-    subjectType: "clip",
-    subjectId: opts.clipId,
-    action: "inherit",
-    toState: carriedIds.size > 0 ? "issues" : epJudged || recJudged ? "judged" : "unjudged",
-    actor: "system",
-    basis: `채택 승계 — 이슈 ${carriedIds.size}건 · 판정 ${epJudged || recJudged ? "있음" : "없음"}`,
-  });
-}

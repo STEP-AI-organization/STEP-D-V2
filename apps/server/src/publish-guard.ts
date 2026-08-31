@@ -222,15 +222,14 @@ export interface PublishScreenResult {
  * 그래서 이 함수는 **던지지 않는다.** 한 건이 막혔다고 전체를 실패시키면 명세 위반이고,
  * 제외를 반환값에서 빼면 조용한 제외가 된다. 둘 다 타입으로 막았다.
  *
- * @param gateOf 게이트 판정. **S1b 에서 gate.ts 가 들어오기 전까지는 전부 통과로 넘어온다.**
- *   optional 로 두지 않은 이유: 기본값을 두면 게이트를 빠뜨린 호출이 조용히 통과한다.
+ * ⚠️ **권리 게이트는 2026-08-31 에 제거됐다**(사용자 결정: "실전에서 필요가 없음").
+ * 근거: `rights_issue` 0행 · `gate_audit` 은 allowed 114 대 blocked 1(수동 테스트).
+ * 실제 콘텐츠를 막은 적이 없으면서 발행마다 사람 손을 요구했다. 지금 여기서 거르는 것은
+ * **렌더 여부뿐**이다 — 파일이 없는 클립은 어차피 올릴 게 없다.
  */
 export function screenForPublish(
   clips: Array<{ id: string; rendered?: boolean; mediaId?: unknown; status?: string }>,
-  ctx: {
-    channel: PublishChannel;
-    gateOf: (clipId: string) => { allowed: boolean; reason: string };
-  },
+  ctx: { channel: PublishChannel },
 ): PublishScreenResult {
   const queue: string[] = [];
   const skipped: PublishSkip[] = [];
@@ -241,11 +240,6 @@ export function screenForPublish(
         clipId: clip.id, code: "not_rendered",
         reason: "렌더가 끝나지 않았습니다 — 내보내기 후 다시 시도해 주세요.",
       });
-      continue;
-    }
-    const gate = ctx.gateOf(clip.id);
-    if (!gate.allowed) {
-      skipped.push({ clipId: clip.id, code: "gate_blocked", reason: gate.reason });
       continue;
     }
     queue.push(clip.id);

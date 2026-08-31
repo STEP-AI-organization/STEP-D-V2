@@ -187,30 +187,22 @@ describe("선별 — 조용한 제외도, 전체 실패도 금지 (FLOWS.md:69)"
     { id: "c_blocked", rendered: true },
   ];
 
-  it("통과 건만 진행하고 나머지는 사유와 함께 반환한다", () => {
-    const r = screenForPublish(clips, {
-      channel: "youtube",
-      gateOf: (id) => id === "c_blocked"
-        ? { allowed: false, reason: "권리 홀드 — 음원 미확인" }
-        : PASS(),
-    });
-    assert.deepEqual(r.queue, ["c_ok"]);
-    assert.equal(r.skipped.length, 2);
+  // ⚠️ 권리 게이트는 2026-08-31 에 제거됐다(사용자 결정 · rights_issue 0행).
+  // 남은 관문은 **렌더 여부**뿐이다 — 파일이 없으면 올릴 게 없다.
+  // 아래 불변식(⊘ 조용한 제외 금지 · ⊘ 전체 실패 처리 금지)은 게이트와 무관하게 계속 지킨다.
+  it("렌더된 것만 진행하고 나머지는 사유와 함께 반환한다", () => {
+    const r = screenForPublish(clips, { channel: "youtube" });
+    assert.ok(r.queue.includes("c_ok"));
+    assert.ok(!r.queue.includes("c_raw"), "렌더 안 된 클립이 큐에 들어갔다");
   });
 
   it("⊘ 전체 실패 처리 금지 — 한 건이 막혀도 나머지는 나간다", () => {
-    const r = screenForPublish(clips, {
-      channel: "youtube",
-      gateOf: (id) => id === "c_blocked" ? { allowed: false, reason: "차단" } : PASS(),
-    });
+    const r = screenForPublish(clips, { channel: "youtube" });
     assert.ok(r.queue.length >= 1, "막힌 건 때문에 전체가 죽으면 안 된다");
   });
 
-  it("⊘ 조용한 제외 금지 — 제외된 건은 전부 사유 문자열을 갖는다", () => {
-    const r = screenForPublish(clips, {
-      channel: "youtube",
-      gateOf: (id) => id === "c_blocked" ? { allowed: false, reason: "권리 홀드" } : PASS(),
-    });
+  it("⊘ 조용한 제외 금지 — 제외된 건은 전부 사유와 코드를 갖는다", () => {
+    const r = screenForPublish(clips, { channel: "youtube" });
     for (const s of r.skipped) {
       assert.ok(s.reason.trim().length > 0, `${s.clipId} 에 사유가 없다`);
       assert.ok(s.code, `${s.clipId} 에 사유 코드가 없다`);
@@ -218,20 +210,9 @@ describe("선별 — 조용한 제외도, 전체 실패도 금지 (FLOWS.md:69)"
   });
 
   it("던지지 않는다 — 전부 막혀도 예외가 아니라 빈 queue 다", () => {
-    const r = screenForPublish(clips, {
-      channel: "youtube", gateOf: () => ({ allowed: false, reason: "전부 차단" }),
-    });
+    const r = screenForPublish([{ id: "c_raw" }], { channel: "youtube" });
     assert.deepEqual(r.queue, []);
-    assert.equal(r.skipped.length, 3);
-  });
-
-  it("게이트가 막은 것과 렌더가 안 된 것을 코드로 구분한다", () => {
-    const r = screenForPublish(clips, {
-      channel: "youtube",
-      gateOf: (id) => id === "c_blocked" ? { allowed: false, reason: "권리" } : PASS(),
-    });
-    assert.equal(r.skipped.find((s) => s.clipId === "c_raw")?.code, "not_rendered");
-    assert.equal(r.skipped.find((s) => s.clipId === "c_blocked")?.code, "gate_blocked");
+    assert.equal(r.skipped[0]?.code, "not_rendered");
   });
 });
 
@@ -281,20 +262,12 @@ describe("관문 우회 불가 (F3 Invariant · FLOWS.md:73)", () => {
     );
   });
 
-  /**
-   * 관문을 지나야만 큐에 들어간다는 것과, 관문이 **게이트를 본다**는 것은 다른 명제다.
-   * 후자가 빠지면 관문은 통로일 뿐이다.
-   */
-  it("관문이 게이트 판정을 읽는다", () => {
+  // ⚠️ 예전엔 "관문이 **게이트를 본다**" 와 "워커가 업로드 직전 다시 본다" 를 요구했다.
+  // 권리 게이트는 2026-08-31 에 제거됐다(사용자 결정 · rights_issue 0행 · blocked 1건).
+  // 관문이 **순수 판정을 쓴다**는 명제는 그대로 유효하므로 그것만 남긴다.
+  it("관문이 순수 판정을 쓴다", () => {
     const src = fs.readFileSync(path.join(SRC, "publish-dispatch.ts"), "utf-8");
-    assert.match(src, /evaluateGate|clipGate/, "publish-dispatch 가 게이트를 조회하지 않는다");
     assert.match(src, /screenForPublish/, "publish-dispatch 가 순수 판정을 쓰지 않는다");
-  });
-
-  /** 업로드 직전 재확인 — 큐에 앉아 있는 동안 이슈가 새로 등록될 수 있다. */
-  it("워커가 업로드 직전에 게이트를 다시 본다", () => {
-    const src = fs.readFileSync(path.join(SRC, "worker.ts"), "utf-8");
-    assert.match(src, /clipGate\(/, "워커에 업로드 직전 게이트 재확인이 없다");
   });
 });
 

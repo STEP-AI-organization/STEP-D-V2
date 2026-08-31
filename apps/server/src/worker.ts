@@ -48,7 +48,6 @@ import {
   appendGateAudit,
   getRawPool,
 } from "./db-pg.ts";
-import { clipGate } from "./publish-dispatch.ts";
 import { checkCredits } from "./credits.ts";
 import { topupAndRecheck } from "./auto-topup.ts";
 import { billableMinutes } from "./billing.ts";
@@ -2317,8 +2316,8 @@ async function handleNaverPublish(job: Job): Promise<void> {
   };
 
   try {
-    // 여기서는 빨리 걸러 잡을 낭비하지 않는다. 권리 게이트 재확인은 아래 clipGate 가 한다
-    // (예전 주석은 "naver-tv.ts 가 다시 본다" 였는데, 거기엔 env 킬스위치뿐이고 권리 검사는 없었다).
+    // 여기서는 킬스위치만 빨리 본다 — 잡을 낭비하지 않게.
+    // ⚠️ 권리 게이트는 2026-08-31 에 제거됐다(사용자 결정: "실전에서 필요가 없음").
     if (!naverUploadEnabled()) return void (await fail(NAVER_DISABLED_MESSAGE));
     const clip = await getEntity<any>("clip", clipId);
     if (!clip) { console.warn(`[worker] naver.publish: clip ${clipId} 없음 — 버림`); return; }
@@ -2362,23 +2361,6 @@ async function handleNaverPublish(job: Job): Promise<void> {
     } else if (!hasNaverSession()) {
       return void (await fail("네이버 세션이 없습니다 — 워커 PC 에서 `naver:login` 실행"));
     }
-    // ⚠️ **업로드 직전 권리 게이트 재확인.** 큐잉 시점(dispatchPublish)에 통과했어도 그 사이
-    // 담당자가 권리 이슈를 등록했을 수 있다. 네이버 레인은 발행 간격(NAVER_MIN_GAP_MS)이 있고
-    // 워커 PC 가 꺼져 있었으면 몇 시간 뒤에 소비되므로, 그 틈이 다른 레인보다 훨씬 길다.
-    // YouTube·TikTok·IG·FB 는 이미 여기서 멈추는데(handleDistributionPublish) **네이버만
-    // 빠져 있었다** — 차단된 클립이 그대로 올라갔고, 네이버는 지워도 노출 이력이 남는다.
-    // FLOWS F3 "어떤 경로로도 게시되지 않는다" 가 이 한 레인에서 깨져 있었다.
-    const gate = await clipGate(clipId);
-    if (!gate.allowed) {
-      console.warn(`[worker] naver.publish ${clipId}: 게이트 미통과 — ${gate.reason}`);
-      await appendGateAudit({
-        subjectType: "clip", subjectId: clipId, action: "publish.blocked",
-        fromState: gate.state, toState: "blocked", actor: "worker",
-        basis: `업로드 직전 재확인 · ${channel} · ${gate.reason}`,
-      }).catch(() => {});
-      return void (await fail(`권리 게이트 미통과 — ${gate.reason}`));
-    }
-
     if (!clip.mediaId) return void (await fail("클립이 아직 렌더되지 않았습니다 (익스포트 필요)"));
     const media = await getMedia(clip.mediaId);
     if (!media) return void (await fail("렌더된 영상 파일을 찾을 수 없습니다"));
@@ -2636,18 +2618,6 @@ async function runTikTokDraftPublish(job: Job): Promise<void> {
   }
 
   // 게이트 재확인 — 큐에 앉아 있는 동안 권리 이슈가 새로 등록될 수 있다 (YouTube 와 동일).
-  const gate = await clipGate(clipId);
-  if (!gate.allowed) {
-    console.warn(`[worker] distribution.publish(tiktok) ${clipId}: 게이트 미통과 — ${gate.reason}`);
-    await markDistributionFailed(clipId, "tiktok", gate.reason, openId).catch(() => {});
-    await appendGateAudit({
-      subjectType: "clip", subjectId: clipId, action: "publish.blocked",
-      fromState: gate.state, toState: "blocked", actor: "worker",
-      basis: `업로드 직전 재확인 · ${gate.reason}`,
-    }).catch(() => {});
-    return;
-  }
-
   // 킬스위치 (2/3) — 게이트가 켜진 동안 큐잉됐다가 꺼진 뒤 남은 잡을 막는다.
   // return (throw 금지): 던지면 백오프 재시도가 스위치 꺼진 내내 재시도만 쌓는다.
   if (!tiktokUploadEnabled()) {
@@ -2745,12 +2715,6 @@ async function runInstagramPublish(job: Job): Promise<void> {
   const igUserId = String(job.payload.igUserId ?? "");
   if (!clipId || !igUserId) { console.error("[worker] distribution.publish(instagram): clipId/igUserId 누락 — 버림"); return; }
 
-  const gate = await clipGate(clipId);
-  if (!gate.allowed) {
-    await markDistributionFailed(clipId, "instagram", gate.reason, igUserId).catch(() => {});
-    await appendGateAudit({ subjectType: "clip", subjectId: clipId, action: "publish.blocked", fromState: gate.state, toState: "blocked", actor: "worker", basis: `업로드 직전 재확인 · ${gate.reason}` }).catch(() => {});
-    return;
-  }
   if (!instagramUploadEnabled()) {
     await markDistributionFailed(clipId, "instagram", INSTAGRAM_UPLOAD_DISABLED_MESSAGE, igUserId).catch(() => {});
     return;
@@ -2837,12 +2801,6 @@ async function runFacebookPublish(job: Job): Promise<void> {
   const pageId = String(job.payload.metaPageId ?? "");
   if (!clipId || !pageId) { console.error("[worker] distribution.publish(facebook): clipId/metaPageId 누락 — 버림"); return; }
 
-  const gate = await clipGate(clipId);
-  if (!gate.allowed) {
-    await markDistributionFailed(clipId, "facebook", gate.reason, pageId).catch(() => {});
-    await appendGateAudit({ subjectType: "clip", subjectId: clipId, action: "publish.blocked", fromState: gate.state, toState: "blocked", actor: "worker", basis: `업로드 직전 재확인 · ${gate.reason}` }).catch(() => {});
-    return;
-  }
   if (!facebookUploadEnabled()) {
     await markDistributionFailed(clipId, "facebook", FACEBOOK_UPLOAD_DISABLED_MESSAGE, pageId).catch(() => {});
     return;
@@ -2910,18 +2868,6 @@ async function runDistributionPublish(job: Job): Promise<void> {
   // 게이트 (강제 지점 · 마지막 방어선). 큐에 앉아 있는 동안 권리 이슈가 새로 등록될 수 있다.
   // 관문에서 통과했더라도 **올리기 직전에 다시 본다** — 통과 시점과 업로드 시점 사이가
   // 몇 분에서 몇 시간까지 벌어지기 때문이다.
-  const gate = await clipGate(clipId);
-  if (!gate.allowed) {
-    console.warn(`[worker] distribution.publish ${clipId}: 게이트 미통과 — ${gate.reason}`);
-    await markDistributionFailed(clipId, "youtube", gate.reason, channelId).catch(() => {});
-    await appendGateAudit({
-      subjectType: "clip", subjectId: clipId, action: "publish.blocked",
-      fromState: gate.state, toState: "blocked", actor: "worker",
-      basis: `업로드 직전 재확인 · ${gate.reason}`,
-    }).catch(() => {});
-    return;
-  }
-
   // Gate (2/3): stop before reading the clip, the token, or a single byte of video. This is
   // what catches jobs the route never vetted — ones queued while uploads were enabled and
   // still sitting in job_queue after they were turned off, or queued by any future caller.

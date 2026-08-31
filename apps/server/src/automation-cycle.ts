@@ -66,7 +66,7 @@ import { maybeFlushAutoPublishReport } from "./publish-notify.ts";
 import { newId } from "./pipeline.ts";
 import { enqueue, lastJobByDedupe, oldestPendingAgeForType } from "./queue.ts";
 import { distributionAccountId, hasAccountDistribution, hasFailedAccountDistribution } from "./publish-guard.ts";
-import { clipGate, dispatchPublish } from "./publish-dispatch.ts";
+import { dispatchPublish } from "./publish-dispatch.ts";
 import { basicReframeState, effectiveReframeState } from "./reframe.ts";
 
 /**
@@ -717,18 +717,12 @@ async function runAutomationCycleLocked(): Promise<CycleReport> {
           continue;
         }
 
-        const gate = await clipGate(clip.id);
         const held = await isHeldAwaitingHuman(rule.id, clip.id);
         // 승인 정책은 사람의 보류 해제를 승인으로 본다 — 별도 승인 버튼을 또 만들지 않는다.
         // 단, 근거는 **해제 기록**(released_at)이어야 한다. `!held` 를 승인으로 쓰면
         // 보류된 적 없는 새 클립까지 자동 승인되어 approve_first 가 무력화된다.
         const approved = await hasReleasedHold(rule.id, clip.id);
-        const decision = decidePublish({
-          rule,
-          gate: { allowed: gate.allowed, state: gate.state, reason: gate.reason },
-          approved,
-          heldAwaitingHuman: held,
-        });
+        const decision = decidePublish({ rule, approved, heldAwaitingHuman: held });
 
         if (decision.action === "hold") {
           // ⚠️ **이미 열린 보류는 다시 쓰지 않는다.** holdClip 은 ON CONFLICT DO UPDATE 로 사유를

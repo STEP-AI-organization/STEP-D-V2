@@ -110,14 +110,15 @@ describe("아키텍처 — 미디어를 만드는 경로", () => {
     assert.deepEqual(hits, [], `commitAdoption 을 직접 부르는 곳이 생겼다: ${hits.join(" · ")}`);
   });
 
-  it("채택하면 이슈 승계가 반드시 같이 일어난다", () => {
-    // 커밋만 하고 승계를 안 하는 경로가 F2 Invariant 위반이다.
-    // adopt.ts 안에서 둘이 한 함수로 묶여 있는지 본다.
+  // ⚠️ 예전엔 "채택하면 **이슈 승계**가 같이 일어난다" 를 요구했다(F2 Invariant).
+  // 권리 게이트가 2026-08-31 에 제거되면서 승계할 대상도 그걸 읽는 소비처도 없어졌다
+  // (사용자 결정: "실전에서 필요가 없음" · 근거: rights_issue 0행 · blocked 1건).
+  // 남은 불변식은 **채택이 곧 커밋을 거친다**는 것뿐이다.
+  it("채택은 커밋을 반드시 거친다", () => {
     const src = fs.readFileSync(path.join(SRC, "adopt.ts"), "utf-8");
     const fn = /export async function commitAndInherit[\s\S]*?\n}/.exec(src)?.[0] ?? "";
     assert.notEqual(fn, "", "commitAndInherit 가 없다");
     assert.match(fn, /commitAdoption\s*\(/, "커밋을 안 한다");
-    assert.match(fn, /inheritGateToClip\s*\(/, "승계를 안 한다");
   });
 
   it("채택 경로는 세 곳뿐이다 — 사람 · 공장 · 자동 배포 규칙", () => {
@@ -144,6 +145,5 @@ describe("아키텍처 — 자동 배포 순방은 테넌트 안에서만 돈다
   it("순방은 사람이 누르는 배포와 같은 관문을 쓴다", () => {
     const src = fs.readFileSync(path.join(SRC, "automation-cycle.ts"), "utf-8");
     assert.match(src, /dispatchPublish\s*\(/, "관문을 안 지난다");
-    assert.match(src, /clipGate\s*\(/, "게이트를 안 본다");
   });
 });

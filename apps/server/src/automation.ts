@@ -614,20 +614,18 @@ export type StepDecision =
  */
 export function decidePublish(input: {
   rule: AutomationRule;
-  gate: GateSnapshot;
   /** 사람이 승인했는가 (approve_first 정책에서만 본다). */
   approved: boolean;
   /** 이미 보류 처리됐고 아직 사람이 확정하지 않았는가. */
   heldAwaitingHuman: boolean;
 }): StepDecision {
-  const { rule, gate } = input;
+  const { rule } = input;
 
   if (!rule.enabled) return { action: "skip", reason: "계획이 멈춰 있습니다." };
 
-  // 게이트가 먼저다. 어떤 정책도 이걸 넘지 못한다 (F6 Invariant).
-  if (!gate.allowed) {
-    return { action: "hold", reason: gate.reason || "게이트 미통과", needsHuman: true };
-  }
+  // ⚠️ **권리 게이트 분기는 2026-08-31 에 제거됐다**(사용자 결정: "실전에서 필요가 없음").
+  // 근거: `rights_issue` 0행 · `gate_audit` allowed 114 대 blocked 1(수동 테스트).
+  // 남은 두 관문은 **사람의 결정**이지 자동 판정이 아니다 — 보류 확정과 approve_first.
 
   // 보류된 건은 **사람이 확정해야** 다시 잡힌다. 게이트가 열렸다고 저절로 나가지 않는다.
   if (input.heldAwaitingHuman) {

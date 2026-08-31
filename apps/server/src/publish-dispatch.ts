@@ -13,7 +13,6 @@
  * 큐를 소비하는 쪽이라 여기 대신 자기 앞에서 게이트를 한 번 더 본다 — 큐에 앉아 있는 동안
  * 이슈가 새로 등록될 수 있다).
  */
-import { evaluateGate } from "./gate.ts";
 import {
   channelPublishMode,
   distributionStatusFor,
@@ -29,8 +28,6 @@ import {
   appendGateAudit,
   creditBalance,
   getEntity,
-  isJudged,
-  listRightsIssues,
   putEntity,
 } from "./db-pg.ts";
 import { enqueue } from "./queue.ts";
@@ -87,20 +84,6 @@ export interface PublishOutcome {
   notice: string;
 }
 
-/** 한 클립의 게이트를 DB 에서 읽어 판정한다 (상태를 저장하지 않으므로 매번 계산). */
-export async function clipGate(clipId: string) {
-  const [issues, judged] = await Promise.all([
-    listRightsIssues("clip", clipId),
-    isJudged("clip", clipId),
-  ]);
-  return evaluateGate({
-    judged,
-    issues: issues.map((r) => ({
-      id: r.id, kind: r.kind, resolution: r.resolution,
-      bandStart: r.bandStart, bandEnd: r.bandEnd, note: r.note,
-    })),
-  });
-}
 
 /**
  * 배포 실행. 게이트를 통과한 것만 나간다.
@@ -138,35 +121,23 @@ export async function dispatchPublish(input: PublishInput): Promise<PublishOutco
     loaded.push({ id: clipId, clip });
   }
 
-  // 2) 게이트를 먼저 전부 계산한다(부작용 전에). 막힌 건 상태를 건드리지도 않는다 —
-  //    거부된 요청은 화면을 있던 그대로 두고 나가야 한다.
-  const gates = new Map<string, { allowed: boolean; reason: string; state: string }>();
-  for (const { id } of loaded) {
-    const g = await clipGate(id);
-    gates.set(id, { allowed: g.allowed, reason: g.reason, state: g.state });
-  }
-
+  // 2) 렌더·채널 조건만 본다.
+  //
+  // ⚠️ **권리 게이트는 제거했다**(사용자 결정 2026-08-31: "실전에서 필요가 없음").
+  // 근거 데이터: `rights_issue` **0행** — 운영 시작 이래 아무도 권리 이슈를 등록한 적이 없고,
+  // `gate_audit` 도 `publish.allowed` 114건 대 `publish.blocked` **1건**(수동 판정 테스트에
+  // 딸린 것)이었다. 즉 실제 콘텐츠를 막은 적이 한 번도 없으면서, 발행마다 조회 2건과
+  // "미판정=검수대기" 규칙으로 사람 손을 요구했다.
+  //
+  // 배포 **기록**은 그대로 남는다(`appendGateAudit` 은 게이트가 아니라 db-pg 의 감사 로그다) —
+  // "언제 무슨 영상이 어디로 나갔는지" 는 고객사 요구가 있을 수 있어 유지한다.
   const screen = screenForPublish(
     loaded.map(({ id, clip }) => ({ id, rendered: clip.rendered, mediaId: clip.mediaId, status: clip.status })),
-    {
-      channel: input.channel,
-      gateOf: (clipId) => gates.get(clipId) ?? { allowed: false, reason: "게이트를 확인할 수 없습니다." },
-    },
+    { channel: input.channel },
   );
   skipped.push(...screen.skipped);
 
-  // 3) 막힌 건은 감사 로그에 남긴다 — 무엇이 왜 안 나갔는지가 기록에 있어야 한다.
-  for (const s of screen.skipped) {
-    if (s.code !== "gate_blocked") continue;
-    await appendGateAudit({
-      subjectType: "clip", subjectId: s.clipId, action: "publish.blocked",
-      fromState: gates.get(s.clipId)?.state ?? null, toState: "blocked",
-      actor: input.actor || "unknown",
-      basis: `${input.origin} 배포 시도 · ${input.channel} · ${s.reason}`,
-    });
-  }
-
-  // 4) 통과 건만 진행.
+  // 3) 통과 건만 진행.
   const queued: string[] = [];
   const recorded: string[] = [];
   const status = distributionStatusFor(mode, Boolean(input.scheduled));
