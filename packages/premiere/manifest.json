@@ -20,6 +20,16 @@
       "preferredFloatingSize": { "width": 560, "height": 780 }
     }
   ],
+  "icons": [
+    {
+      "width": 23,
+      "height": 23,
+      "path": "icons/icon.png",
+      "scale": [1, 2],
+      "theme": ["darkest", "dark", "medium", "lightest", "light", "all"],
+      "species": ["generic"]
+    }
+  ],
   "requiredPermissions": {
     "network": {
       "domains": ["https://stepd.stepai.kr", "https://storage.googleapis.com"]
