@@ -396,3 +396,36 @@ describe("패널 — 회차 고르고, 쓸 것만 고른다", () => {
     assert.match(panel, /selectedIds = new Set\(recRows\.map\(\(r\) => String\(r\.id\)\)\);/);
   });
 });
+
+/**
+ * 주 동선 확정 (사용자 2026-08-31): *"원본 받아서 추천 구간에 다 마커 넣어주는 게 제일 좋다.
+ * 추천 구간 앞뒤로 조금 자르거나 조절되면 좋으니까."*
+ *
+ * 왜 마커인가: 서브클립은 경계가 잠겨(hasHardBoundaries) 앞뒤를 못 늘린다. 편집자는 추천
+ * 구간을 조금씩 조절하며 쓰므로 **표시만 하는 마커**가 맞다.
+ */
+describe("패널 — 주 동선: 원본 받고 마커", () => {
+  const html = read("packages/premiere/index.html");
+
+  it("주 버튼이 하나 있고 primary 다 (보조 버튼은 secondary)", () => {
+    assert.match(html, /<button id="prepMarkBtn" disabled>원본 받고 → 추천 구간에 마커 꽂기<\/button>/);
+    assert.match(html, /<button id="roughcutBtn" class="secondary"/);
+    assert.match(html, /<button id="subclipBtn" class="secondary"/);
+  });
+
+  it("원본 확보 → 타임라인 확보 → 마커 순서다", () => {
+    const fn = panel.slice(panel.indexOf("async function doPrepareAndMark()"));
+    const a = fn.indexOf("await ensureMaster(");
+    const b = fn.indexOf("await ensureSequenceForMaster(");
+    const c = fn.indexOf("await addMarkersForRecs(");
+    assert.ok(a > 0 && b > a && c > b, "순서가 어긋나면 꽂을 타임라인이 없다");
+  });
+
+  it("활성 시퀀스가 있으면 그걸 쓴다 — 편집자가 작업 중인 타임라인을 빼앗지 않는다", () => {
+    assert.match(panel, /const active = await activeSequence\(\)\.catch\(\(\) => null\);\s*\n\s*if \(active\) return active\.name;/);
+  });
+
+  it("없으면 원본으로 타임라인을 만든다 — 마커는 시퀀스에 꽂히기 때문이다", () => {
+    assert.match(panel, /createSequenceFromMedia\(`\[STEP-D\] \$\{String\(name\)\.slice\(0, 60\)\}`, \[clip\]\)/);
+  });
+});

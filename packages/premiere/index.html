@@ -161,14 +161,18 @@
       <div id="recsList" class="recs"></div>
       <div id="recsStatus" class="status"></div>
       <!-- 한 번에 꽂고, 되돌릴 때도 Ctrl+Z 한 번 (트랜잭션 하나에 담는다). -->
-      <!-- 원본 확보를 **눈에 보이는 첫 단계**로 뺀다 — 몇 GB 를 받는 동안 아무 표시가 없으면
-           사용자는 멈춘 줄 안다. 러프컷도 내부적으로 같은 함수를 쓴다(중복 다운로드 없음). -->
-      <button id="fetchSrcBtn" class="secondary" disabled>① 원본 받아서 프로젝트에 넣기</button>
-      <!-- 러프컷 — 찾고·자르고·늘어놓기를 통째로. 편집자는 다듬기부터 시작한다. -->
-      <button id="roughcutBtn" disabled>러프컷 시퀀스 만들기</button>
-      <button id="markersBtn" class="secondary" disabled>타임라인에 마커로 꽂기</button>
-      <!-- 마커는 "여기가 좋다" 까지, 서브클립은 이미 잘라 놓은 조각을 준다. -->
+      <!-- **주 동선** (사용자 확정): 원본 받고 → 추천 구간에 마커. 마커는 경계가 안 잠겨
+           앞뒤로 조절하며 쓸 수 있다 — 편집자가 실제로 원하는 형태다. -->
+      <button id="prepMarkBtn" disabled>원본 받고 → 추천 구간에 마커 꽂기</button>
+
+      <div class="divider">필요할 때만</div>
+
+      <!-- 원본만 미리 받아 두고 싶을 때(진행률을 보며). 위 버튼도 같은 함수를 쓴다. -->
+      <button id="fetchSrcBtn" class="secondary" disabled>원본만 받아 두기</button>
+      <!-- 잘라 놓은 조각·초벌 타임라인이 필요할 때. 서브클립은 경계가 잠긴다. -->
+      <button id="roughcutBtn" class="secondary" disabled>러프컷 시퀀스 만들기</button>
       <button id="subclipBtn" class="secondary" disabled>구간을 서브클립으로 자르기</button>
+      <button id="markersBtn" class="secondary" disabled>마커만 꽂기</button>
       <button id="recsReload" class="secondary">목록 새로고침</button>
     </div>
 

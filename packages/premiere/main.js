@@ -956,6 +956,57 @@ async function doFetchSource() {
   }
 }
 
+/**
+ * **주 동선 (사용자 확정 2026-08-31): 원본 받고 → 추천 구간에 마커.**
+ *
+ * 왜 마커가 제일 쓸모 있나: 서브클립은 경계가 잠겨(hasHardBoundaries) 앞뒤를 못 늘린다.
+ * 편집자는 추천 구간을 **앞뒤로 조금씩 조절**하며 쓰므로, 표시만 해 주는 마커가 맞다.
+ * 자른 조각이 필요하면 서브클립·러프컷 버튼이 따로 있다.
+ *
+ * ⚠️ **마커는 시퀀스에 꽂힌다.** 원본을 방금 받아 왔으면 그 원본이 담긴 타임라인이 아직
+ *    없어서 꽂을 데가 없다. 그래서 활성 시퀀스가 없으면 **원본으로 하나 만들어** 준다.
+ *    있으면 그걸 쓴다 — 편집자가 이미 작업 중인 타임라인을 빼앗지 않는다.
+ */
+async function ensureSequenceForMaster(filename, onStage) {
+  const active = await activeSequence().catch(() => null);
+  if (active) return active.name;
+
+  onStage("원본으로 타임라인 만드는 중…");
+  return await findMasterItem(filename, async ({ project, clip, name }) => {
+    const seq = await project.createSequenceFromMedia(`[STEP-D] ${String(name).slice(0, 60)}`, [clip]);
+    if (!seq) throw new Error("원본으로 시퀀스를 만들지 못했습니다.");
+    try { await project.setActiveSequence(seq); } catch (_) { /* 열기 실패는 치명적이지 않다 */ }
+    return name;
+  });
+}
+
+/** ① 원본 확보 → ② 없으면 타임라인 생성 → ③ 고른 구간에 마커. 편집자는 여기서부터 다듬는다. */
+async function doPrepareAndMark() {
+  const picks = chosenRecs();
+  if (busy || !picks.length) return;
+  busy = true;
+  syncRecButtons();
+  try {
+    const onStage = (m) => setStatus($("recsStatus"), m);
+    const withMedia = picks.find((r) => r.mediaFilename || r.mediaId) || picks[0];
+
+    onStage("원본 확인 중…");
+    const filename = await ensureMaster(withMedia, onStage);
+    await ensureSequenceForMaster(filename, onStage);
+
+    onStage(`마커 ${picks.length}개 꽂는 중…`);
+    const { sequenceName, count } = await addMarkersForRecs(picks);
+    setStatus($("recsStatus"),
+      `"${sequenceName}" 에 마커 ${count}개를 꽂았습니다. 목록에서 제목을 누르면 그 구간으로 이동합니다.`, "ok");
+  } catch (err) {
+    setStatus($("recsStatus"), err.message, "err");
+    console.log("[STEP-D] 준비+마커 실패", err);
+  } finally {
+    busy = false;
+    syncRecButtons();
+  }
+}
+
 async function doRoughCut() {
   const picks = chosenRecs();
   if (busy || !picks.length) return;
@@ -1044,8 +1095,9 @@ function renderEpisodes() {
 function syncRecButtons() {
   const n = chosenRecs().length;
   for (const [id, label] of [
+    ["prepMarkBtn", "원본 받고 → 추천 구간에 마커 꽂기"],
     ["roughcutBtn", "러프컷 시퀀스 만들기"],
-    ["markersBtn", "타임라인에 마커로 꽂기"],
+    ["markersBtn", "마커만 꽂기"],
     ["subclipBtn", "구간을 서브클립으로 자르기"],
   ]) {
     const el = $(id);
@@ -1399,6 +1451,7 @@ async function doLogout() {
   $("markersBtn").addEventListener("click", () => void doAddMarkers());
   $("roughcutBtn").addEventListener("click", () => void doRoughCut());
   $("fetchSrcBtn").addEventListener("click", () => void doFetchSource());
+  $("prepMarkBtn").addEventListener("click", () => void doPrepareAndMark());
   $("subclipBtn").addEventListener("click", () => void doMakeSubclips());
   $("program").addEventListener("change", () => {
     syncUploadButton();
