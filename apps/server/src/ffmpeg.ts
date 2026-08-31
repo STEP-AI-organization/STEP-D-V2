@@ -1262,3 +1262,31 @@ export function renderStaticOverlayPng(opts: {
     });
   });
 }
+
+/**
+ * 원본을 **H.264/AAC MP4** 로 다시 굽는다 — 프리미어가 읽을 수 있게.
+ *
+ * 왜 이런 옵션인가:
+ *  · `-c:a copy` — 소리는 그대로 옮긴다. 다시 구워 봐야 STT·싱크에 이득이 없고 손실만 는다.
+ *    (원본 오디오가 mp4 에 못 담기는 형식이면 호출부가 실패를 보고 다시 판단한다)
+ *  · `-crf 20 -preset veryfast` — 편집용 원본이라 화질은 넉넉히, 시간은 짧게. 실측 8~9배속.
+ *  · `+faststart` — 편집자가 스트리밍으로 열 때 첫 프레임이 빨리 뜬다.
+ *  · `yuv420p` — 프리미어·모든 NLE 가 확실히 받는 픽셀 포맷.
+ */
+export function transcodeToH264(inputPath: string, outputPath: string): Promise<void> {
+  const args = [
+    "-y", "-i", inputPath,
+    "-c:v", "libx264", "-crf", "20", "-preset", "veryfast", "-pix_fmt", "yuv420p",
+    "-c:a", "copy",
+    "-movflags", "+faststart",
+    outputPath,
+  ];
+  return new Promise((resolve, reject) => {
+    // 긴 회차(2시간)도 통과해야 한다 — 실측 8~9배속이라 2시간물이 ~15분.
+    execFile("ffmpeg", args, { timeout: 3_600_000, maxBuffer: FF_MAXBUF }, (err) => {
+      if (err) return reject(err);
+      if (!fs.existsSync(outputPath)) return reject(new Error("transcode output not produced"));
+      resolve();
+    });
+  });
+}

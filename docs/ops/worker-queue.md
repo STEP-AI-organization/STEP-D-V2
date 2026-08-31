@@ -51,7 +51,7 @@ Cloud Run은 **응답이 끝나는 순간 CPU를 throttle**하고 요청을 **60
 | **크래시 복구** | 워커가 죽어 `running`으로 잠긴 잡은 30분 뒤 `requeueStale()`이 회수한다 (기동 시 + 15분 tick마다). |
 | **후속 잡** | 핸들러가 `FollowUp`을 반환하면 현재 잡이 `done`이 된 **뒤에** enqueue한다. 자기 재큐 잡(hotwatch)이 아직 `running`인 자기 자신과 dedupe 충돌하지 않게 하기 위한 장치다. |
 
-## 잡 타입 26종
+## 잡 타입 27종
 
 `queue.ts`의 `JobType` 정의와 `worker.ts`의 `handle()` switch가 처리한다.
 새 잡 타입(렌더링 등)이 들어올 자리도 이 switch다.
@@ -70,6 +70,7 @@ Cloud Run은 **응답이 끝나는 순간 CPU를 throttle**하고 요청을 **60
 | `commerce.link` | 클립의 상품 쿼리(`clip.commerce.queries`)로 **쿠팡 제휴 링크**를 발급해 `clip.commerce.links` 에 붙인다(전부 `pending` — 사람이 승인해야 발행에 나간다). 파트너스 콘솔 내부 API 2개(`/api/v1/search` → `/api/v1/banner/iframe/url`)를 브라우저 컨텍스트에서 부른다 — DOM 조작 없음. **회사마다 계정이 다르므로**(정산이 계정 단위) 잡의 테넌트로 `commerce_account` 를 찾아 그 세션을 주입한다 · 계정이 없으면 **발급하지 않는다**(공용 계정 폴백 없음 = 수익 오귀속 방지). **윈도우2 전용 레인** — 한국 IP + 화면 있는 크롬이 필요(headless 는 세션이 유효해도 차단). 게이트 `COMMERCE_LINKS_ENABLED` 기본 OFF · ⚠️ 생성된 링크를 **절대 열지 않는다**(자기 클릭 = 계정 정지) | `POST /api/clips/:id/generate-metadata` (게이트 ON + 쿼리 있을 때) · `POST /api/clips/:id/commerce/issue`(재발급·상품 교체) |
 | `clip.render` | 클립 렌더를 **사무실 PC 로 넘기는** 잡. 직접 인코딩하지 않고 `POST /api/clips/:id/export` 를 부른다 — 렌더 로직(자막 ASS·훅 프리롤·오버레이 PNG)이 그 라우트에 있고 워커에 복제하면 두 벌이 갈라진다. 값은 **어느 CPU 가 그 라우트를 실행하느냐**에 있다: `RENDER_API_BASE` 를 로컬 서버(`http://127.0.0.1:4100`)로 두면 그 PC 가 굽는다. **render 레인 전용**(머신 전용 — 이유는 한국 IP 가 아니라 **CPU**). ⚠️ 이 레인이 안 도는 동안 잡이 쌓이면 **순방이 직접 렌더한다**(`RENDER_QUEUE_STALL_MS` 기본 10분) — 사무실 PC 가 꺼졌다고 고객 배포가 멈추면 안 된다 | 자동배포 순방(`RENDER_VIA_QUEUE=1` 일 때만 · 기본 OFF 는 종전대로 클라우드가 직접 렌더) |
 | `reframe.compare` | 세로 4택 비교(vertical-candidates-v1): 같은 프록시로 `python -m core.reframe --candidates-output`을 돌려 후보 4종 plan + contact sheet + 프록시를 임시 GCS `analysis/<mediaId>/reframe-compare/…`에 생성. **정식 clip.reframe 상태는 불변**(비교 뷰어 전용) · 최대 2회 시도 | `POST /api/clips/:id/reframe/candidates` |
+| `media.transcode` | 원본을 **프리미어가 읽는 코덱(h264)** 으로 다시 굽는다. 대상은 **vp9·vp8 뿐** — 유튜브에서 받은 원본이 VP9-in-MP4 면 ffmpeg·파이프라인은 멀쩡한데 **프리미어가 영상 트랙을 못 읽어** 편집자 화면엔 오디오 파형만 뜬다(실측 2026-08-31). 오디오는 그대로 복사(`-c:a copy`), 화질은 CRF 20, 결과 길이가 원본과 2초 이상 어긋나면 **덮어쓰지 않는다**. 고객사 업로드 원본(h264·ProRes)은 손대지 않는다 — 재인코딩은 되돌릴 수 없다. **render 레인**(CPU 잡 · 실측 8~9배속) | `POST /api/media/:id/transcode` · `POST /api/admin/media/transcode-scan`(일괄) |
 
 ## 워커 레인 분리 (content ↔ youtube)
 

@@ -55,13 +55,13 @@ docs/          ops(현황·운영) / plans(계획) / reference / research / prot
 
 ## 백엔드 — apps/server
 
-Hono 단일 진입점(index.ts, **~9000줄, 라우트 252개**) + 별도 워커 프로세스 구조.
+Hono 단일 진입점(index.ts, **~9000줄, 라우트 254개**) + 별도 워커 프로세스 구조.
 (2026-08-25 실측 갱신)
 
 | 파일 | 역할 |
 |------|------|
 | `src/index.ts` | 모든 HTTP 라우트. 여기 한 파일에 유지. **Cloud Run은 잡을 큐잉만 한다.** |
-| `src/worker.ts` | **워커 프로세스 진입점.** 잡 26종 · 레인 7개 · drain 모드 (아래 참조) |
+| `src/worker.ts` | **워커 프로세스 진입점.** 잡 27종 · 레인 7개 · drain 모드 (아래 참조) |
 | `src/queue.ts` | Postgres job_queue (FOR UPDATE SKIP LOCKED · dedupeKey · 지수 백오프 · 5분 하트비트) |
 | `src/channel-pipeline.ts` | channel.analyze — 업로드 동기화 + 채널 애널리틱스/일별 수익 백필 |
 | `src/content-pipeline.ts` | content.analyze — `python -m core.analyze` 스폰, 진행률 파싱(@@PROGRESS→episode.pipeline), 결과+프레임 영구 저장, 추천 배선. 미디어별 고정 작업 디렉토리로 재시도 시 체크포인트 재개 |
@@ -78,7 +78,7 @@ Hono 단일 진입점(index.ts, **~9000줄, 라우트 252개**) + 별도 워커 
 
 `src/pipeline.ts`는 이제 `newId` 헬퍼만 export한다(구 sqlite `db.ts`·`storage.ts`, 휴리스틱 `buildRecommendations()`는 정리 완료). 실제 추천은 core/ AI 파이프라인이 만든다.
 
-### 워커 — 잡 26종 · 레인 7개 · drain 모드
+### 워커 — 잡 27종 · 레인 7개 · drain 모드
 
 프로세스 하나가 다 처리하지 않는다. `WORKER_JOBS` 로 **레인을 갈라** 서로 굶기지 않게 한다.
 
@@ -107,6 +107,11 @@ commerce: commerce.link
             **회사마다 계정이 다르다**(커미션 정산이 계정 단위) → 잡마다 그 테넌트의 세션을
             주입해 쓴다(commerce_account · 상시 크롬 N개 불필요).
             승인 후 공식 딥링크 API 로 바뀌면 이 레인은 없어지고 클라우드로 간다.
+render  : clip.render · media.transcode
+          → CPU 를 통째로 쓰는 잡. 노는 사무실 PC(윈도우2)가 당겨간다 —
+            렌더는 건당 50~90초, 코덱 변환은 회차당 1~2분(실측 8~9배속)이다.
+            media.transcode 는 **vp9·vp8 원본만** h264 로 바꾼다: 프리미어가 MP4 안의 VP9 를
+            못 읽어 편집자 화면에 오디오만 뜬다(실측 2026-08-31). 고객사 업로드 원본은 안 건드린다.
 ⚠️ 2026-08-12 이전에는 thumbnail.* 가 **어느 레인에도 없어** 프로덕션(content·youtube 워커만
    뜬다)에서 아무도 집지 않았다. 잡을 추가하면 반드시 레인에 넣을 것 —
    `worker-lanes.test.ts` 가 강제한다.

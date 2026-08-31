@@ -6843,6 +6843,53 @@ app.get("/api/premiere/handoff", async (c) => {
   return c.json({ handoff: h });
 });
 
+// ── 원본 코덱 정리 (프리미어가 읽게) ──────────────────────────────────────────
+//
+// 실측 2026-08-31: 유튜브에서 받은 원본이 **VP9-in-MP4** 였다. ffmpeg 도 우리 파이프라인도
+// 멀쩡히 돌지만 **프리미어는 MP4 안의 VP9 를 못 읽어** 편집자 화면엔 오디오 파형만 뜬다.
+// 새 다운로드는 avc1 을 먼저 고르게 고쳤고(worker.ts), 이미 받아 둔 것은 여기서 훑는다.
+//
+// ⚠️ 바꾸는 대상은 **vp9·vp8 뿐이다.** 고객사가 올린 원본(h264·ProRes·MXF)은 손대지 않는다 —
+//    재인코딩은 화질을 한 번 깎는 일이고, 그건 되돌릴 수 없다.
+const PREMIERE_UNREADABLE_CODECS = new Set(["vp9", "vp8"]);
+
+app.post("/api/media/:id/transcode", async (c) => {
+  requireUser(c);
+  const id = c.req.param("id");
+  const media = await getMedia(id);
+  if (!media) return c.json({ error: "media not found" }, 404);
+  const codec = String(media.codec ?? "").toLowerCase();
+  if (!PREMIERE_UNREADABLE_CODECS.has(codec)) {
+    // 이미 읽히는 코덱이면 **큐에 넣지 않는다** — 괜한 재인코딩이 화질만 깎는다.
+    return c.json({ queued: false, codec, reason: "already_readable" });
+  }
+  await enqueue("media.transcode", { mediaId: id }, { dedupeKey: `media.transcode:${id}` });
+  return c.json({ queued: true, codec });
+});
+
+/**
+ * 라이브러리 전체 훑기 — 프리미어가 못 읽는 원본을 전부 큐에 넣는다.
+ * `?dryRun=1` 이면 세기만 한다(무엇이 걸리는지 먼저 보고 결정하라고).
+ */
+app.post("/api/admin/media/transcode-scan", async (c) => {
+  const actor = requireSuperadmin(c);
+  const dryRun = c.req.query("dryRun") === "1";
+  const rows = await listMedia();
+  const targets = rows.filter((m) => PREMIERE_UNREADABLE_CODECS.has(String(m.codec ?? "").toLowerCase()));
+  if (!dryRun) {
+    for (const m of targets) {
+      await enqueue("media.transcode", { mediaId: m.id }, { dedupeKey: `media.transcode:${m.id}` });
+    }
+    await audit(actor, { action: "media.transcode_scan", detail: { count: targets.length } }, clientIp(c));
+  }
+  return c.json({
+    total: rows.length,
+    queued: dryRun ? 0 : targets.length,
+    targets: targets.slice(0, 50).map((m) => ({ id: m.id, codec: m.codec, sizeMB: Math.round(m.size / 1048576) })),
+    dryRun,
+  });
+});
+
 // ── 프리미어 제목 그래픽의 **베이스 템플릿** ──────────────────────────────────
 //
 // .mogrt 는 코드로 처음부터 만들 수 없다(그래픽 캡슐이 프리미어 산물이다). 그래서 **껍데기

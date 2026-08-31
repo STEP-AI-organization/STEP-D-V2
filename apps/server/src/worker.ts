@@ -51,7 +51,7 @@ import {
 import { checkCredits } from "./credits.ts";
 import { topupAndRecheck } from "./auto-topup.ts";
 import { billableMinutes } from "./billing.ts";
-import { probe, captureThumbnail, remuxFaststart, needsMp4Normalize, normalizedMp4Path, normalizeToMp4, extractSourceCaptions } from "./ffmpeg.ts";
+import { probe, captureThumbnail, remuxFaststart, needsMp4Normalize, normalizedMp4Path, normalizeToMp4, extractSourceCaptions, transcodeToH264 } from "./ffmpeg.ts";
 import {
   prepareProgramAssets, publishStyleProfile, publishThumbnails, tempAssetRoot, pullPrefix,
 } from "./thumbnail-assets.ts";
@@ -185,7 +185,7 @@ const JOB_LANES: Record<"content" | "youtube" | "gebd" | "naver" | "download" | 
   // AUTOMATION_MAX_RENDERS_PER_TICK 으로 스스로를 묶는다. 노는 사무실 PC(8코어)가 당겨가면
   // 그 상한이 풀린다. ⚠️ 이 레인이 안 도는 동안 잡이 쌓이면 **순방이 직접 렌더한다**
   // (automation-cycle 의 정체 감지) — 사무실 PC 가 꺼져 있다고 고객 배포가 멈추면 안 된다.
-  render: ["clip.render"],
+  render: ["clip.render", "media.transcode"],
 };
 /**
  * Drain mode — Cloud Run Jobs 용. 큐가 빌 때까지 처리하고 **종료**한다.
@@ -299,6 +299,7 @@ async function handle(job: Job): Promise<FollowUp | void> {
     case "video.comments":  return handleVideoComments(job);
     case "distribution.publish": return handleDistributionPublish(job);
     case "clip.render": return handleClipRender(job);
+    case "media.transcode": return handleMediaTranscode(job);
     case "distribution.updatemeta": return handleDistributionUpdateMeta(job);
     case "naver.publish": return handleNaverPublish(job);
     case "naver.login": { await handleNaverLogin(job); return; }
@@ -968,7 +969,14 @@ async function handleYoutubeDownload(job: Job): Promise<void> {
     await runYtDlp(fast
       ? ["--no-playlist", "--no-progress", "-f", "bestaudio[ext=m4a]/bestaudio/best", "-o", outPath, url]
       : ["--no-playlist", "--no-progress",
-         "-f", "bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/bv*+ba/b",
+         // ⚠️ **H.264(avc1)를 먼저 고른다.** `ext=mp4` 만으로는 부족하다 — 유튜브는 VP9 도
+         //    mp4 컨테이너로 준다. 그 파일은 ffmpeg·우리 파이프라인에서는 멀쩡히 돌지만
+         //    **프리미어가 MP4 안의 VP9 를 못 읽어** 오디오만 있는 파일처럼 보인다
+         //    (2026-08-31 실측: 편집자 화면에 파형만 뜸 · 영상 트랙 없음).
+         //    편집자에게 원본을 넘기는 경로가 생긴 이상 이건 우리 문제다.
+         //    못 찾으면 예전 체인으로 물러난다 — 다운로드 자체가 실패하는 게 더 나쁘다.
+         "-f", "bv*[vcodec^=avc1][ext=mp4]+ba[ext=m4a]/b[ext=mp4][vcodec^=avc1]"
+             + "/bv*[ext=mp4]+ba[ext=m4a]/b[ext=mp4]/bv*+ba/b",
          "--merge-output-format", "mp4", "-o", outPath, url]);
 
     // yt-dlp가 컨테이너에 따라 다른 확장자로 저장할 수 있어(webm 등) 정확 경로가 없으면 glob 폴백.
@@ -2494,6 +2502,70 @@ async function handleNaverPublish(job: Job): Promise<void> {
  * 사무실 PC 의 로컬 서버(`http://127.0.0.1:4100`)로 두면 그 PC 가 굽고, 안 두면 종전처럼
  * 클라우드가 굽는다. 코드는 한 벌 그대로다.
  */
+/**
+ * 원본을 **프리미어가 읽는 코덱**으로 바꾼다 (실측 2026-08-31: VP9-in-MP4 → 오디오만 보임).
+ *
+ * 원칙 셋:
+ *  ① **필요할 때만 손댄다.** 이미 h264 면 아무것도 하지 않는다. 재인코딩은 화질을 한 번 깎는
+ *     일이라, "혹시 몰라서" 돌리면 라이브러리 전체가 한 세대 나빠진다.
+ *  ② 바꾸는 대상은 **유튜브에서 받은 코덱(vp9·vp8)** 뿐이다. 고객사가 올린 원본(ProRes·MXF·
+ *     h264)은 건드리지 않는다 — 그건 되돌릴 수 없는 원본이다.
+ *  ③ 오디오는 **그대로 복사**한다. 소리를 다시 굽는 건 STT·자막 싱크에 아무 이득이 없다.
+ *
+ * 같은 경로에 덮어쓴다. 원본 백업을 남기지 않는 이유: 대상이 유튜브 다운로드본이라 언제든
+ * 다시 받을 수 있고, 사본을 두면 라이브러리 저장 비용이 그대로 두 배가 된다.
+ */
+async function handleMediaTranscode(job: Job): Promise<void> {
+  const mediaId = String(job.payload.mediaId ?? "");
+  if (!mediaId) throw new Error("media.transcode: mediaId 없음");
+  const media = await getMedia(mediaId);
+  if (!media) { console.warn(`[transcode] ${mediaId} 없음 — 건너뜀`); return; }
+
+  const objPath = parseObjectPath(media.path);
+  if (!(await fileExists(objPath))) { console.warn(`[transcode] ${mediaId} 파일 없음 — 건너뜀`); return; }
+
+  const dir = path.join(os.tmpdir(), "stepd-transcode");
+  fs.mkdirSync(dir, { recursive: true });
+  const src = path.join(dir, `${mediaId}-src.mp4`);
+  const out = path.join(dir, `${mediaId}-h264.mp4`);
+  const cleanup = () => { for (const f of [src, out]) { try { fs.unlinkSync(f); } catch { /* 없으면 그만 */ } } };
+
+  try {
+    await pipeline(createReadStream(objPath), fs.createWriteStream(src));
+    const before = await probe(src);
+    const codec = String(before?.codec ?? "").toLowerCase();
+    if (!TRANSCODE_CODECS.has(codec)) {
+      console.log(`[transcode] ${mediaId} codec=${codec || "?"} — 손대지 않음`);
+      cleanup();
+      return;
+    }
+
+    console.log(`[transcode] ${mediaId} ${codec} → h264 시작 (${(media.size / 1048576).toFixed(0)}MB)`);
+    await transcodeToH264(src, out);
+    const after = await probe(out);
+    if (!after || !(after.durationSec > 0)) throw new Error("변환 결과를 읽지 못했습니다");
+    // 길이가 크게 어긋나면 **덮어쓰지 않는다** — 깨진 결과로 원본을 대체하는 게 최악이다.
+    if (before?.durationSec && Math.abs(after.durationSec - before.durationSec) > 2) {
+      throw new Error(`길이 불일치 (원본 ${before.durationSec.toFixed(1)}s → 결과 ${after.durationSec.toFixed(1)}s)`);
+    }
+
+    await uploadFile(objPath, out);
+    await updateMediaSource(mediaId, {
+      path: media.path, mime: "video/mp4", size: fs.statSync(out).size,
+      durationSec: after.durationSec, width: after.width, height: after.height,
+      codec: after.codec, hasAudio: after.hasAudio ? 1 : 0, thumbPath: media.thumbPath ?? null,
+      fps: after.fps ?? 0, startTimecode: after.startTimecode ?? "",
+      audioStreams: after.audioStreams ?? 0,
+    });
+    console.log(`[transcode] ${mediaId} 완료 → ${after.codec} ${after.width}×${after.height}`);
+  } finally {
+    cleanup();
+  }
+}
+
+/** 프리미어가 못 읽는 코덱만 — 이 목록 밖은 손대지 않는다. */
+const TRANSCODE_CODECS = new Set(["vp9", "vp8"]);
+
 async function handleClipRender(job: Job): Promise<void> {
   const clipId = String(job.payload.clipId ?? "");
   if (!clipId) throw new Error("clip.render: clipId 없음");

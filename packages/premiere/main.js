@@ -631,16 +631,44 @@ async function addMarkersForRecs(recs) {
   return await retryStale("마커", () => addMarkersOnce(recs));
 }
 
+/**
+ * 마커 꽂기 — **await 를 최소로, 프로젝트를 맨 마지막에.**
+ *
+ * 실측 2026-08-31: 여기서 "The script object is no longer valid" 가 났다. 이유는 순서였다 —
+ * 예전엔 project 를 먼저 얻고, 그 뒤 `await getMarkers(...)` 를 건너고 나서 그 낡은 project 로
+ * 트랜잭션을 돌았다. **await 하나를 건너면 앞서 얻은 객체는 못 믿는다.**
+ *
+ * 그래서 순서를 뒤집었다: 시퀀스 → 마커 목록 → **프로젝트(마지막)** → 곧바로 트랜잭션.
+ * 트랜잭션 콜백 안은 전부 동기라 그 사이에 무효가 될 틈이 없다.
+ * 각 단계에 이름을 붙여, 또 나면 **어느 호출이** 무효인지 화면에 바로 뜨게 했다.
+ */
 async function addMarkersOnce(recs) {
-  const { api, project, sequence, name } = await activeSequence();
+  const api = ppro();
+  if (!api) throw new Error("이 프리미어에서는 마커를 쓸 수 없습니다 (premierepro 모듈 없음).");
   if (!api.Markers || typeof api.Markers.getMarkers !== "function") {
-    dumpApi(api, sequence);
+    dumpApi(api, null);
     throw new Error("마커 API 를 찾지 못했습니다 — UDT 콘솔의 [STEP-D] 로그를 보내 주세요.");
   }
-  const markers = await api.Markers.getMarkers(sequence);
+
+  const sequence = await stage("활성 시퀀스", async () => {
+    const p = await readMaybe(api.Project, "getActiveProject");
+    if (!p) throw new Error("열려 있는 프로젝트가 없습니다.");
+    const s = await readMaybe(p, "getActiveSequence");
+    if (!s) throw new Error("활성 시퀀스가 없습니다 — 타임라인에서 시퀀스를 여세요.");
+    return s;
+  });
+  // 이름은 **동기 속성**이다(공식 선언: readonly name: string) — 여기서 await 를 쓰면
+  // 방금 얻은 시퀀스를 스스로 무효로 만들 수 있다.
+  const name = typeof sequence.name === "string" && sequence.name ? sequence.name : "sequence";
+
+  const markers = await stage("마커 목록", () => api.Markers.getMarkers(sequence));
   // 코멘트 마커(기본). 상수를 못 찾으면 문자열 폴백 — 여기서 틀려도 마커가 안 생길 뿐,
   // 내보내기처럼 엉뚱한 동작을 하지는 않는다.
   const type = (api.Marker && api.Marker.MARKER_TYPE_COMMENT) || "Comment";
+
+  // **프로젝트는 맨 마지막에.** 이 뒤로는 await 가 없다.
+  const project = await stage("프로젝트", () => readMaybe(api.Project, "getActiveProject"));
+  if (!project) throw new Error("열려 있는 프로젝트가 없습니다.");
 
   const ok = project.executeTransaction((compound) => {
     for (const r of recs) {
@@ -665,25 +693,6 @@ async function addMarkersOnce(recs) {
 
   if (ok === false) throw new Error("마커를 넣지 못했습니다 — 시퀀스가 잠겨 있는지 확인하세요.");
   return { sequenceName: name, count: recs.length };
-}
-
-async function doAddMarkers() {
-  const picks = chosenRecs();
-  if (busy || !picks.length) return;
-  busy = true;
-  $("markersBtn").disabled = true;
-  try {
-    setStatus($("recsStatus"), "마커 넣는 중…");
-    const { sequenceName, count } = await addMarkersForRecs(picks);
-    setStatus($("recsStatus"),
-      `"${sequenceName}" 에 마커 ${count}개를 넣었습니다. 되돌리려면 Ctrl+Z 한 번.`, "ok");
-  } catch (err) {
-    setStatus($("recsStatus"), err.message, "err");
-    console.log("[STEP-D] 마커 실패", err);
-  } finally {
-    busy = false;
-    syncRecButtons();
-  }
 }
 
 // ── 글꼴 확인 ─────────────────────────────────────────────────────────────────
