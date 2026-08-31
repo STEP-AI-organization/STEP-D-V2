@@ -422,7 +422,8 @@ describe("패널 — 주 동선: 원본 받고 마커", () => {
   });
 
   it("활성 시퀀스가 있으면 그걸 쓴다 — 편집자가 작업 중인 타임라인을 빼앗지 않는다", () => {
-    assert.match(panel, /const active = await activeSequence\(\)\.catch\(\(\) => null\);\s*\n\s*if \(active\) return active\.name;/);
+    assert.ok(panel.includes("const active = await activeSequence().catch(() => null);"));
+    assert.ok(panel.includes("    return active.name;"), "있는 타임라인을 두고 새로 만들면 안 된다");
   });
 
   it("없으면 원본으로 타임라인을 만든다 — 마커는 시퀀스에 꽂히기 때문이다", () => {
@@ -461,6 +462,39 @@ describe("패널 — 글꼴 확인", () => {
   it("이미 있으면 다시 넣지 않는다 — 중복 등록이면 어느 쪽이 쓰이는지 알 수 없다", () => {
     const ps = read("packages/premiere/launcher/install-fonts.ps1");
     assert.match(ps, /if \(Test-Path \$target\) \{\s*\n\s*Write-Host "이미 있음/);
+  });
+});
+
+/**
+ * 세로 시작 (사용자 2026-08-31: **"영상도 세로형으로 해서 시작해야 함."**).
+ *
+ * 프레임만 1080×1920 으로 바꾸면 **영상은 가운데 작게 남는다**(위아래 검은 띠). 편집자는
+ * 그 상태로 프레이밍을 판단할 수 없다 — 클립 배율까지 올려서 꽉 채워야 "쇼츠로 시작" 이다.
+ */
+describe("패널 — 세로 쇼츠로 시작한다", () => {
+  it("마커 경로도 세로다 — 러프컷만 세로면 가로 화면 보며 세로 결과를 상상해야 한다", () => {
+    assert.ok(panel.includes("await makeSequenceVertical(api, project, seq, onStage);"),
+      "원본으로 만든 타임라인을 세로로 바꾸지 않는다");
+  });
+
+  it("편집자 본인 타임라인은 건드리지 않는다 — 우리 것만 맞춘다", () => {
+    assert.ok(panel.includes('String(active.name || "").startsWith("[STEP-D] ")'));
+  });
+
+  it("영상도 채운다 — 배율은 **바꾸기 전** 프레임 크기(=원본 해상도)에서 계산한다", () => {
+    assert.ok(panel.includes("await seq.getFrameSize()"), "원본 해상도를 안 읽는다");
+    assert.ok(panel.includes("Math.max(SHORTS_W / src.w, SHORTS_H / src.h) * 100"),
+      "꽉 채우는 배율(가운데 크롭)이 아니다");
+  });
+
+  it("모션 컴포넌트는 **matchName** 으로 찾는다 — 표시 이름은 한국어 프리미어에서 '동작' 이다", () => {
+    assert.ok(panel.includes('const MOTION_MATCH_NAME = "AE.ADBE Motion";'));
+    assert.ok(panel.includes("await comp.getMatchName()"));
+  });
+
+  it("확대 실패는 전체를 실패시키지 않는다 — 시퀀스는 이미 세로다", () => {
+    assert.ok(panel.includes("'프레임 크기로 설정' 을 눌러 주세요"),
+      "실패해도 사람이 이어서 할 한 수를 알려줘야 한다");
   });
 });
 

@@ -1017,6 +1017,15 @@ const SHORTS_H = 1920;
 
 async function makeSequenceVertical(api, project, seq, onStage) {
   try {
+    // ① **바꾸기 전에** 지금 프레임 크기를 읽는다 — 마스터에서 만든 시퀀스라 이 값이 곧
+    //    원본 해상도다. 서버에 해상도를 물을 필요가 없다.
+    let src = null;
+    try {
+      const r = await seq.getFrameSize();
+      const w = Number(r.width) || 0, h = Number(r.height) || 0;
+      if (w > 0 && h > 0) src = { w, h };
+    } catch (_) { /* 못 읽으면 배율 계산만 건너뛴다 */ }
+
     const settings = await seq.getSettings();
     const rect = new api.RectF();
     rect.width = SHORTS_W;
@@ -1027,6 +1036,13 @@ async function makeSequenceVertical(api, project, seq, onStage) {
       "STEP-D 세로 쇼츠 설정",
     );
     if (ok === false) throw new Error("시퀀스 설정을 바꾸지 못했습니다.");
+
+    // ② 프레임만 세로로 만들면 **영상은 그대로 가운데 작게 남는다**(위아래 검은 띠).
+    //    사용자 요구 2026-08-31: "영상도 세로형으로 해서 시작해야 함." 채워 준다.
+    if (src) {
+      const scale = Math.max(SHORTS_W / src.w, SHORTS_H / src.h) * 100;
+      if (Math.abs(scale - 100) > 0.5) await scaleClipsToFill(api, project, seq, scale, onStage);
+    }
     return true;
   } catch (err) {
     // 세로 전환 실패는 알린다 — 가로로 나온 걸 모르고 편집하면 그게 더 나쁘다.
@@ -1034,6 +1050,54 @@ async function makeSequenceVertical(api, project, seq, onStage) {
     onStage(`⚠ 세로(1080×1920) 전환에 실패했습니다 — 시퀀스 설정에서 직접 바꿔 주세요: ${err.message}`);
     return false;
   }
+}
+
+/**
+ * V1 의 클립을 **세로 프레임에 꽉 차게** 확대한다(가운데 크롭 = 서버의 9:16-crop-main 과 같은 결).
+ *
+ * 어떻게 찾나: 파라미터는 이름 접근자가 없어 **인덱스**로만 잡는다. 대신 컴포넌트는
+ * `getMatchName()` 이 `AE.ADBE Motion` 으로 **로케일과 무관**하게 고정이라 그걸로 찾는다
+ * (한국어 프리미어에서 표시 이름은 "동작" 이다 — 표시 이름으로 찾으면 조용히 실패한다).
+ *
+ * 확대는 **best-effort** 다. 실패해도 시퀀스는 이미 세로라, 편집자가 클립을 골라
+ * "프레임 크기로 설정" 한 번 누르면 같은 결과가 된다 — 전체를 실패시킬 이유가 없다.
+ */
+const MOTION_MATCH_NAME = "AE.ADBE Motion";
+const MOTION_SCALE_PARAM = 1;   // 0=위치 · 1=비율 · 2=가로 비율 · 3=균일 비율 · 4=회전 · 5=기준점
+
+async function scaleClipsToFill(api, project, seq, scalePct, onStage) {
+  let touched = 0, seen = 0;
+  try {
+    const track = await seq.getVideoTrack(0);
+    const clipType = (api.Constants && api.Constants.TrackItemType && api.Constants.TrackItemType.CLIP);
+    const items = track.getTrackItems(clipType === undefined ? 1 : clipType, false) || [];
+    for (const item of items) {
+      seen += 1;
+      const chain = await item.getComponentChain();
+      const count = chain.getComponentCount();
+      for (let i = 0; i < count; i += 1) {
+        const comp = chain.getComponentAtIndex(i);
+        let match = "";
+        try { match = await comp.getMatchName(); } catch (_) { continue; }
+        if (match !== MOTION_MATCH_NAME) continue;
+        const param = comp.getParam(MOTION_SCALE_PARAM);
+        const kf = param.createKeyframe(scalePct);
+        const action = param.createSetValueAction(kf, true);
+        const ok = project.executeTransaction(
+          (compound) => { compound.addAction(action); },
+          `STEP-D 세로 채우기 ${Math.round(scalePct)}%`,
+        );
+        if (ok !== false) touched += 1;
+        break;
+      }
+    }
+  } catch (err) {
+    console.log("[STEP-D] 세로 채우기 실패", err);
+  }
+  if (seen > 0 && touched === 0) {
+    onStage("⚠ 세로 프레임은 됐지만 영상 확대는 못 했습니다 — 클립 선택 후 '프레임 크기로 설정' 을 눌러 주세요.");
+  }
+  return touched;
 }
 
 async function buildRoughCut(recs, onStage) {
@@ -1112,12 +1176,22 @@ async function doFetchSource() {
  */
 async function ensureSequenceForMaster(filename, onStage) {
   const active = await activeSequence().catch(() => null);
-  if (active) return active.name;
+  if (active) {
+    // 우리가 만든 타임라인이면 세로로 맞춰 준다(이미 세로면 계산상 배율 100% → 아무 일도 안 한다).
+    // 편집자 본인의 타임라인은 **건드리지 않는다** — 남의 작업 프레임을 말없이 바꾸면 안 된다.
+    if (String(active.name || "").startsWith("[STEP-D] ")) {
+      await makeSequenceVertical(active.api, active.project, active.sequence, onStage);
+    }
+    return active.name;
+  }
 
   onStage("원본으로 타임라인 만드는 중…");
-  return await findMasterItem(filename, async ({ project, clip, name }) => {
+  return await findMasterItem(filename, async ({ api, project, clip, name }) => {
     const seq = await project.createSequenceFromMedia(`[STEP-D] ${String(name).slice(0, 60)}`, [clip]);
     if (!seq) throw new Error("원본으로 시퀀스를 만들지 못했습니다.");
+    // 마커만 꽂는 경로도 **세로로 시작**한다(사용자 2026-08-31) — 러프컷만 세로면
+    // 편집자는 가로 화면을 보며 세로 결과물을 상상해야 한다.
+    await makeSequenceVertical(api, project, seq, onStage);
     try { await project.setActiveSequence(seq); } catch (_) { /* 열기 실패는 치명적이지 않다 */ }
     return name;
   });
