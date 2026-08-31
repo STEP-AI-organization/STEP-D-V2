@@ -215,3 +215,32 @@ describe("패널 매니페스트", () => {
     assert.equal(manifest.id, "kr.stepai.stepd.premiere");
   });
 });
+
+/**
+ * 추천 → 서브클립 (2026-08-31). 마커는 "여기가 좋다" 까지고, 서브클립은 **이미 잘라 놓은
+ * 조각**을 준다 — 편집자는 끌어다 놓기만 하면 된다. 러프컷 시퀀스 조립의 재료이기도 하다.
+ * 서명은 공식 선언(@adobe/premierepro 26.3.0)으로 대조했다.
+ */
+describe("패널 — 추천 구간을 서브클립으로", () => {
+  it("원본을 **파일명으로** 찾는다 — 경로는 PC 마다 다르다", () => {
+    assert.match(panel, /async function findMasterItem\(filename\)/);
+    assert.match(panel, /getMediaFilePath\(\)/);
+    assert.match(panel, /ClipProjectItem\.cast\(item\)/);
+  });
+
+  it("서버가 원본 파일명을 함께 준다 — 없으면 사람이 매번 골라야 한다", () => {
+    assert.match(index, /mediaFilename: master \? String\(master\.filename \?\? ""\) : "",/);
+  });
+
+  it("구간 밖으로 못 늘리게 잠근다(hasHardBoundaries) — AI 가 고른 구간이 바깥 경계다", () => {
+    assert.match(panel, /createSubClipAction\(label, start, end, true\)/);
+  });
+
+  it("이름에 추천 id 를 넣는다 — 지연 액션이라 만들어진 항목을 못 돌려받는다", () => {
+    assert.match(panel, /\$\{r\.id\}`;/);
+  });
+
+  it("빈 탐색에 상한이 있다 — 큰 프로젝트에서 패널이 멈춘 것처럼 보이면 안 된다", () => {
+    assert.match(panel, /visited < 2000/);
+  });
+});

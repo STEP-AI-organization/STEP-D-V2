@@ -634,6 +634,94 @@ async function doAddMarkers() {
   }
 }
 
+// ── 추천 → 서브클립 (프로젝트 패널에 잘라 놓기) ───────────────────────────────
+/**
+ * 마커는 "여기가 좋다" 까지다. 서브클립은 **이미 잘라 놓은 조각**을 준다 — 편집자는 끌어다
+ * 놓기만 하면 된다. 러프컷 시퀀스 조립은 다음 단계이고, 그 재료가 이 서브클립들이다.
+ *
+ * 공식 선언(@adobe/premierepro 26.3.0) 대조:
+ *   `FolderItem.getItems(): Promise<ProjectItem[]>` · `ProjectItem.name`(읽기 전용)
+ *   `ClipProjectItem.cast(projectItem)` · `getMediaFilePath(): Promise<string>`
+ *   `createSubClipAction(name, startTime, endTime, hasHardBoundaries, options?): Action`
+ *
+ * ⚠️ `createSubClipAction` 은 **지연 액션**이라 만들어진 항목을 돌려주지 않는다. 그래서
+ *    이름을 정해진 규칙(`[STEP-D] …`)으로 붙인다 — 다음 단계(시퀀스 조립)가 그 이름으로 찾는다.
+ */
+async function findMasterItem(filename) {
+  const { api, project } = await activeSequence();
+  if (!filename) throw new Error("이 추천에 연결된 원본 파일 정보가 없습니다.");
+  const root = await project.getRootItem();
+  const wanted = String(filename).toLowerCase();
+
+  // 빈을 넓이 우선으로 훑는다. 프로젝트가 큰 경우를 대비해 방문 수를 막아 둔다 —
+  // 못 찾는 것보다 나쁜 건 패널이 멈춘 것처럼 보이는 것이다.
+  const queue = [root];
+  let visited = 0;
+  while (queue.length && visited < 2000) {
+    const folder = queue.shift();
+    let items = [];
+    try { items = await folder.getItems(); } catch (_) { continue; }
+    for (const item of items) {
+      visited += 1;
+      // 폴더면 큐에 넣는다(FolderItem.cast 가 실패하면 폴더가 아니다).
+      try {
+        const asFolder = api.FolderItem && api.FolderItem.cast ? api.FolderItem.cast(item) : null;
+        if (asFolder && typeof asFolder.getItems === "function") { queue.push(asFolder); continue; }
+      } catch (_) { /* 폴더 아님 — 아래에서 클립으로 본다 */ }
+
+      try {
+        const clip = api.ClipProjectItem.cast(item);
+        if (!clip || typeof clip.getMediaFilePath !== "function") continue;
+        const p = String((await clip.getMediaFilePath()) || "").toLowerCase();
+        // 경로 전체가 아니라 **파일명으로** 맞춘다 — NAS·로컬 경로가 PC 마다 다르다.
+        if (p && (p.endsWith(`\\${wanted}`) || p.endsWith(`/${wanted}`) || p.includes(wanted))) {
+          return { api, project, clip, name: item.name };
+        }
+      } catch (_) { /* 클립 아님 */ }
+    }
+  }
+  throw new Error(`프로젝트에서 원본을 찾지 못했습니다 (${filename}) — 먼저 프리미어로 가져오세요.`);
+}
+
+async function makeSubclipsForRecs(recs, onStage) {
+  const filename = recs.find((r) => r.mediaFilename)?.mediaFilename || "";
+  onStage(`프로젝트에서 원본 찾는 중… (${filename || "파일명 없음"})`);
+  const { api, project, clip, name } = await findMasterItem(filename);
+
+  onStage(`"${name}" 에서 ${recs.length}개 구간 자르는 중…`);
+  const ok = project.executeTransaction((compound) => {
+    for (const r of recs) {
+      const start = api.TickTime.createWithSeconds(Number(r.startTime) || 0);
+      const end = api.TickTime.createWithSeconds(Number(r.endTime) || 0);
+      // 이름에 추천 id 를 넣는다 — 나중에 시퀀스로 조립할 때 이 이름으로 되찾는다.
+      const label = `[STEP-D] ${(r.title || "추천").slice(0, 40)} · ${r.id}`;
+      // hasHardBoundaries=true: 편집자가 실수로 구간 밖까지 늘리지 못하게 한다.
+      // AI 가 고른 구간이 바깥 경계라는 계약을 프리미어 쪽에서도 지킨다.
+      compound.addAction(clip.createSubClipAction(label, start, end, true));
+    }
+  }, `STEP-D 추천 서브클립 ${recs.length}개`);
+
+  if (ok === false) throw new Error("서브클립을 만들지 못했습니다 — 원본이 오프라인인지 확인하세요.");
+  return { sourceName: name, count: recs.length };
+}
+
+async function doMakeSubclips() {
+  if (busy || !recRows.length) return;
+  busy = true;
+  $("subclipBtn").disabled = true;
+  try {
+    const { sourceName, count } = await makeSubclipsForRecs(recRows, (m) => setStatus($("recsStatus"), m));
+    setStatus($("recsStatus"),
+      `"${sourceName}" 에서 ${count}개 구간을 잘라 프로젝트에 넣었습니다. 되돌리려면 Ctrl+Z 한 번.`, "ok");
+  } catch (err) {
+    setStatus($("recsStatus"), err.message, "err");
+    console.log("[STEP-D] 서브클립 실패", err);
+  } finally {
+    busy = false;
+    $("subclipBtn").disabled = !recRows.length;
+  }
+}
+
 let recRows = [];
 
 function renderRecs() {
@@ -683,6 +771,7 @@ async function loadRecs() {
     recRows = Array.isArray(data.recommendations) ? data.recommendations : [];
     renderRecs();
     $("markersBtn").disabled = !recRows.length;
+    $("subclipBtn").disabled = !recRows.length;
     setStatus(
       $("recsStatus"),
       recRows.length
@@ -947,6 +1036,7 @@ async function doLogout() {
   });
   $("recsReload").addEventListener("click", () => void loadRecs());
   $("markersBtn").addEventListener("click", () => void doAddMarkers());
+  $("subclipBtn").addEventListener("click", () => void doMakeSubclips());
   $("program").addEventListener("change", () => {
     syncUploadButton();
     void refreshSequenceLabel();

@@ -6941,6 +6941,9 @@ app.get("/api/recommendations", async (c) => {
       programId: ep ? String(ep.programId ?? "") : "",
       programTitle: ep ? String(ep.programTitle ?? "") : "",
       mediaId: master ? master.id : null,
+      // 프리미어가 **프로젝트 안에서 원본을 찾는 근거**. 파일명으로 bin 을 훑어 맞춘다 —
+      // 이게 없으면 "어느 클립이 이 회차인가" 를 사람이 매번 골라야 한다.
+      mediaFilename: master ? String(master.filename ?? "") : "",
       fps: master ? Number(master.fps ?? 0) : 0,
       startTimecode: master ? String(master.startTimecode ?? "") : "",
     }))
