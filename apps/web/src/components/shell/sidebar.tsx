@@ -217,20 +217,28 @@ function ConnectionStatus() {
 
   useEffect(() => {
     let alive = true;
+    // ⚠️ **연결 여부를 묻는 데 데이터를 받아오지 않는다.** 예전엔 `/state` 를 8초마다 불렀는데,
+    // 그 응답이 11 MB 라 초록 점 하나 그리려고 탭당 시간당 ~5 GB 를 Cloud Run 에서 끌어왔다.
+    // 프로덕션 웹은 /api/proxy(Vercel 함수)를 거치므로 그게 전부 **Fast Origin Transfer** 로
+    // 청구됐다(2026-08-31 실측: 3시간 34.5 GB · /api/state 3,105회). 상태 확인은 상수 크기여야 한다.
     const ping = async () => {
       try {
-        const res = await fetch(`${API_BASE}/state`, { cache: "no-store" });
-        if (alive) setOk(res.ok);
+        const res = await fetch(`${API_BASE}/health`, { cache: "no-store" });
+        // 이건 **도달성** 표시등이지 그 라우트의 성공 여부가 아니다. 응답이 왔다는 건 서버에
+        // 닿았다는 뜻이다 — 401(세션 만료)·404(구 리비전이라 라우트 없음)도 "연결됨" 이 맞다.
+        // 프록시가 오리진에 못 닿으면 502 를 만들어 주므로 5xx 만 미연결로 본다.
+        if (alive) setOk(res.status < 500);
       } catch {
         if (alive) setOk(false);
       }
     };
     void ping();
-    const t = setInterval(ping, 8000);
+    // 표시등에 8초는 과하다 — 사람이 서버 상태를 그 해상도로 볼 이유가 없다.
+    const t = setInterval(ping, 30_000);
     return () => { alive = false; clearInterval(t); };
   }, []);
 
-  const label = ok === null ? "연결 확인 중…" : ok ? "서버 연결됨 · 8초 폴링" : "서버 미연결";
+  const label = ok === null ? "연결 확인 중…" : ok ? "서버 연결됨" : "서버 미연결";
   const color = ok === null ? "var(--sd-idle)" : ok ? "var(--sd-ok)" : "var(--sd-danger)";
 
   return (

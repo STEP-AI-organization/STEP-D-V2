@@ -1,6 +1,6 @@
 # @stepd/server HTTP API 레퍼런스
 
-> 실측: **2026-08-28 · 라우트 247개** (GET 108 · POST 93 · DELETE 25 · PATCH 14 · PUT 7) · `apps/server/src/index.ts` 기준 — 라우트 추가 시 이 문서도 갱신.
+> 실측: **2026-08-28 · 라우트 248개** (GET 109 · POST 93 · DELETE 25 · PATCH 14 · PUT 7) · `apps/server/src/index.ts` 기준 — 라우트 추가 시 이 문서도 갱신.
 > 프론트 대응 함수는 `apps/web/src/lib/data/api.ts` 기준. 데이터 구조는 [data-model.md](data-model.md),
 > 큐·워커 동작은 [../ops/worker-queue.md](../ops/worker-queue.md) 참고.
 
@@ -42,7 +42,14 @@ API 키(`api-keys.ts`). **화이트리스트(`API_KEY_ROUTES`)에 올린 라우�
 | 메서드·경로 | 역할 | 요청/응답 요점 | 프론트 함수 |
 |---|---|---|---|
 | `GET /health` | 서버 생존 + DB/ffmpeg 준비 + **실업로드 게이트 상태** | → `{ ok: dbReady, ffmpeg, youtubeUpload }`. `youtubeUpload`는 비밀이 아니라 게이트 상태 — 배포된 리비전이 송출 불가임을 가장 빨리 확인하는 수단이고, 웹이 publish 액션을 숨기는 근거다 | (웹 미사용) |
+| `GET /api/health` | `/health` 의 `/api` 별칭 — **웹 연결 표시등 전용** | 웹은 `API_BASE`(프로덕션 `/api/proxy/api`) 뒤에 붙여 부르므로 `/api` 밖의 `/health` 를 못 쓴다 | 사이드바 `ConnectionStatus` |
 | `GET /api/state` | 웹 InitialData 전체 (엔티티 + 미디어) | → `{ programs, episodes, recommendations, clips, jobs, connections, media }` | `fetchState` |
+
+> ⚠️ **`/api/state` 는 무겁다 — 실측 평균 11 MB/회**(2026-08-31 · 클립마다 `editorState` 가
+> 실리고 그 안에 배경·아이콘이 base64 로 들어 있다). **상태 확인용으로 부르지 말 것.**
+> 사이드바가 연결 표시등을 그리려고 이걸 8초마다 불러서, 탭 하나당 시간당 ~5 GB 가
+> Cloud Run → Vercel 함수로 흘렀다(3시간 34.5 GB · 3,105회). 프로덕션 웹은 `/api/proxy` 를
+> 거치므로 그게 전부 Vercel **Fast Origin Transfer** 로 청구된다. 연결 확인은 `/api/health`.
 
 ## 검색 — 자연어 영상 검색 (`search_segments` · pgvector)
 

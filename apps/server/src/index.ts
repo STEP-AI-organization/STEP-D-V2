@@ -646,6 +646,20 @@ app.get("/health", async (c) => {
   return c.json({ ok: dbReady, ffmpeg: hasFfmpeg(), youtubeUpload: youtubeUploadEnabled() });
 });
 
+/**
+ * `/health` 의 `/api` 별칭 — **웹의 연결 표시등 전용.**
+ *
+ * 웹은 `API_BASE`(프로덕션 `/api/proxy/api`) 뒤에 경로를 붙여 부르므로, `/api` 밖에 있는
+ * `/health` 를 그대로 못 쓴다. 그래서 별칭이 필요하다.
+ *
+ * ⚠️ 이게 없어서 사이드바가 **연결 확인용으로 `/api/state` 를 8초마다 불렀다.** 응답이
+ * 11 MB 라 탭 하나당 시간당 ~5 GB 가 Cloud Run → Vercel 로 흘렀고, 그게 Vercel
+ * **Fast Origin Transfer** 청구서의 정체였다(2026-08-31 실측: 3시간 34.5 GB).
+ * **연결 여부를 묻는 데 데이터를 받아오지 말 것** — 상태 확인은 상수 크기여야 한다.
+ */
+app.get("/api/health", async (c) =>
+  c.json({ ok: dbReady, ffmpeg: hasFfmpeg(), youtubeUpload: youtubeUploadEnabled() }));
+
 // ── 로그인 (이메일+비밀번호 · 초대제) ─────────────────────────────────────────
 // 화면은 apps/web 개편 후에 붙인다. 여기서는 API 만 완성해 둔다.
 
