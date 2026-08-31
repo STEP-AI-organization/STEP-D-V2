@@ -19,6 +19,8 @@ import { roleOf } from "@/lib/roles";
 import { cn } from "@/lib/utils";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "/api/proxy/api";
+/** 이 번들이 빌드된 커밋 — 현재 배포와 다르면 낡은 탭이다(자동 새로고침 판정). */
+const APP_BUILD_SHA = process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA ?? "";
 
 export function Sidebar() {
   const pathname = usePathname();
@@ -232,9 +234,31 @@ function ConnectionStatus() {
         if (alive) setOk(false);
       }
     };
+    /**
+     * 새 배포가 뜨면 **스스로 새로고침한다.**
+     *
+     * 2026-08-31 에 이게 없어서, 코드를 고쳐 배포하고도 이미 열려 있는 탭들이 낡은 스크립트로
+     * 11 MB 폴링을 계속 돌았다. 쓰는 사람이 여럿이면 "각자 새로고침하세요" 는 수단이 아니다.
+     *
+     * ⚠️ **작업 중인 화면은 안 건드린다.** 강제 새로고침은 저장 안 된 편집을 날릴 수 있어서,
+     * 숨은 탭(=비용만 쓰는 탭)이거나 에디터 밖일 때만 한다. 에디터를 열어 둔 사람은 다음에
+     * 나갈 때 갱신된다 — 돈이 새는 건 대부분 켜두고 잊은 탭이다.
+     */
+    const checkVersion = async () => {
+      if (!APP_BUILD_SHA) return;                       // 로컬 빌드 — 비교 대상이 없다
+      try {
+        const res = await fetch("/api/app-version", { cache: "no-store" });
+        if (!res.ok) return;
+        const { sha } = (await res.json()) as { sha?: string };
+        if (!sha || sha === APP_BUILD_SHA) return;
+        if (document.hidden || !location.pathname.startsWith("/editor")) location.reload();
+      } catch { /* 버전 확인 실패로 화면을 방해하지 않는다 */ }
+    };
+
     void ping();
+    void checkVersion();
     // 표시등에 8초는 과하다 — 사람이 서버 상태를 그 해상도로 볼 이유가 없다.
-    const t = setInterval(ping, 30_000);
+    const t = setInterval(() => { void ping(); void checkVersion(); }, 30_000);
     return () => { alive = false; clearInterval(t); };
   }, []);
 

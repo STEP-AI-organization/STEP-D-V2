@@ -29,10 +29,39 @@ export async function DELETE(request: NextRequest, { params }: { params: Promise
   return proxy(request, params);
 }
 
+/**
+ * 낡은 탭이 보낸 `/api/state` 요청인가.
+ *
+ * 2026-08-31: 사이드바 연결 표시등이 이 **11 MB** 엔드포인트를 8초마다 불렀고, 탭 하나당
+ * 시간당 ~5 GB 가 오리진에서 흘러 Vercel **Fast Origin Transfer** 로 청구됐다(3시간 34.5 GB).
+ * 코드는 고쳤지만 **이미 열려 있는 탭에는 새 코드를 밀어 넣을 방법이 없다** — 브라우저는
+ * 새로고침하기 전까지 받아 둔 스크립트를 계속 돈다. 그래서 여기서 끊는다.
+ *
+ * 판별: 살아 있는 번들은 `x-stepd-app` 을 붙인다(fetchState). 없으면 낡은 탭이다.
+ *
+ * ⚠️ **API 키로 붙는 고객사 시스템은 통과시킨다.** 그쪽은 우리 번들이 아니라 헤더가 없고,
+ *    막으면 남의 연동이 끊긴다. 세션 쿠키를 들고 오는 브라우저 요청만 대상으로 한다.
+ */
+function isStaleTabState(request: NextRequest, upstreamPath: string): boolean {
+  if (upstreamPath !== "/api/state") return false;
+  if (request.headers.get("x-stepd-app")) return false;          // 살아 있는 번들
+  if (request.headers.get("authorization")) return false;        // API 키 호출 — 남의 시스템
+  return request.headers.has("cookie");                          // 쿠키 = 브라우저 탭
+}
+
 async function proxy(request: NextRequest, paramsPromise: Promise<{ path?: string[] }>) {
   const { path } = await paramsPromise;
   const upstreamPath = path ? `/${path.join("/")}` : "";
   const upstreamUrl = `${CLOUD_RUN_URL}${upstreamPath}${request.nextUrl.search}`;
+
+  // 오리진을 아예 부르지 않는다 — 요청이 아니라 **11 MB 응답 본문**이 비용이기 때문이다.
+  // 낡은 탭은 이 응답으로 "서버 미연결" 을 띄우고, 그게 사람에게 새로고침하라는 신호가 된다.
+  if (isStaleTabState(request, upstreamPath)) {
+    return NextResponse.json(
+      { error: "stale_client", message: "새 버전이 배포됐습니다 — 새로고침해 주세요." },
+      { status: 503, headers: { "cache-control": "no-store" } },
+    );
+  }
 
   try {
     const token = await getIdToken();

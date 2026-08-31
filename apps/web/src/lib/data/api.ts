@@ -85,9 +85,26 @@ export async function errorMessageOf(res: Response): Promise<string> {
   return body?.message ?? body?.error ?? `${res.status} ${res.statusText}`;
 }
 
-/** Probe + load full state. Rejects (fast) if the server isn't up. */
+/**
+ * 이 번들이 빌드된 커밋. Vercel 이 시스템 env 를 자동 노출하도록 켜 둬서 빌드 시점에 박힌다
+ * (로컬은 빈 문자열). `/api/app-version` 이 주는 **현재 배포**의 값과 비교해 낡은 탭을 판별한다.
+ */
+export const APP_BUILD_SHA = process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA ?? "";
+
+/**
+ * Probe + load full state. Rejects (fast) if the server isn't up.
+ *
+ * ⚠️ `x-stepd-app` 은 **"이 요청은 살아 있는 번들이 보냈다"는 표식**이다. 프록시가 이 헤더
+ * 없는 브라우저 요청을 끊는다 — 2026-08-31 에 낡은 탭들이 이 11 MB 엔드포인트를 8초마다
+ * 불러 Vercel 청구서를 태웠는데, 이미 열린 탭에는 새 코드를 밀어 넣을 방법이 없었다.
+ * 표식이 있으면 서버가 "낡은 탭"을 알아보고 스스로 막을 수 있다.
+ */
 export async function fetchState(signal?: AbortSignal): Promise<ServerState> {
-  const res = await fetch(`${API_BASE}/state`, { signal, cache: "no-store" });
+  const res = await fetch(`${API_BASE}/state`, {
+    signal,
+    cache: "no-store",
+    headers: { "x-stepd-app": APP_BUILD_SHA || "dev" },
+  });
   return json<ServerState>(res);
 }
 
