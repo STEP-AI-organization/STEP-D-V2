@@ -422,6 +422,28 @@ export async function oldestPendingAgeForType(type: JobType): Promise<number> {
   return oldest > 0 ? Math.max(0, Date.now() - oldest) : 0;
 }
 
+/**
+ * 이 dedupeKey 로 **가장 최근에 만들어진** 잡 한 건. 없으면 null.
+ *
+ * 잡으로 넘긴 일의 결과를 넘긴 쪽이 되읽는 통로다. 이게 없으면 "큐에 넣었다" 까지만 알고
+ * **그 뒤에 영구 실패했는지를 영영 모른다** — 넣은 쪽은 성공으로 알고 계속 다시 넣는다
+ * (2026-08-31 clip.render 에서 실제로 그럴 뻔했다).
+ */
+export async function lastJobByDedupe(
+  type: JobType, dedupeKey: string,
+): Promise<{ status: JobStatus; error: string | null; attempts: number; updatedAt: number } | null> {
+  const { rows } = await getPool().query(
+    `SELECT status, error, attempts, updatedAt AS "updatedAt" FROM job_queue
+      WHERE type = $1 AND dedupeKey = $2
+      ORDER BY createdAt DESC LIMIT 1`,
+    [type, dedupeKey],
+  );
+  const r = rows[0];
+  return r
+    ? { status: r.status as JobStatus, error: r.error ?? null, attempts: Number(r.attempts ?? 0), updatedAt: Number(r.updatedAt ?? 0) }
+    : null;
+}
+
 export async function queueStats(): Promise<Record<JobStatus, number>> {
   const { rows } = await getPool().query(
     `SELECT status, COUNT(*)::int AS n FROM job_queue GROUP BY status`,

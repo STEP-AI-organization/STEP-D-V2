@@ -134,3 +134,38 @@ describe("배선 (소스 스캔)", () => {
     assert.match(read("automation-cycle.ts"), /logo: \(rule as any\)\.layout\?\.logo \?\? false/);
   });
 });
+
+/**
+ * 렌더를 큐로 넘겼을 때 **실패가 순방으로 돌아오는가** (2026-08-31).
+ *
+ * 직접 호출 시절엔 응답이 곧 결과였다. 큐로 옮기면 "넣었다" 와 "됐다" 가 갈라지고, 그 사이가
+ * 비면 순방은 성공으로 알고 매 틱 다시 넣는다 — 안전벨트(nextAutoRenderState)는 한 번도
+ * 안 걸리고, 사람은 사유를 못 본 채 클립이 영영 안 나간다. **이 리포 최빈 실패모드의 변종**이다.
+ */
+describe("렌더 큐 — 넣은 일의 결과를 되읽는다", () => {
+  const src = read("automation-cycle.ts");
+
+  it("지난 잡이 failed 면 그 실패를 순방에 돌려준다 — 성공으로 치지 않는다", () => {
+    assert.match(src, /lastJobByDedupe\("clip\.render", dedupeKey\)/);
+    assert.match(src, /if \(last\?\.status === "failed"\) \{/);
+    assert.match(src, /return \{ ok: false, kind: classifyRenderFailure\(status, code\)/);
+  });
+
+  it("실패를 **직접 호출과 같은 분류**에 태운다 — 두 경로가 다른 판정을 내리면 안 된다", () => {
+    // 잡 오류 문자열에서 상태코드·코드를 되살린다(핸들러가 `export {status} {body}` 로 던진다).
+    assert.ok(src.includes(String.raw`/export (\d{3})/`), "상태코드 파싱이 없다");
+    assert.ok(src.includes("(?:code|error)"), "라우트가 준 코드 파싱이 없다");
+  });
+
+  it("결과 확인이 **넣기 전**에 온다 — 뒤에 있으면 방금 넣은 pending 을 보게 된다", () => {
+    const readAt = src.indexOf('lastJobByDedupe("clip.render", dedupeKey)');
+    const enqAt = src.indexOf('await enqueue("clip.render"');
+    assert.ok(readAt > 0 && enqAt > 0);
+    assert.ok(readAt < enqAt, "실패 회수가 enqueue 뒤에 있으면 실패를 영영 못 읽는다");
+  });
+
+  it("워커 핸들러는 실패를 던진다 — 삼키면 잡이 done 이 되어 회수할 실패가 없다", () => {
+    const worker = read("worker.ts");
+    assert.match(worker, /throw new Error\(`export \$\{res\.status\} \$\{body\.slice\(0, 200\)\}`\)/);
+  });
+});

@@ -64,7 +64,7 @@ import {
 } from "./channel-rules.ts";
 import { maybeFlushAutoPublishReport } from "./publish-notify.ts";
 import { newId } from "./pipeline.ts";
-import { enqueue, oldestPendingAgeForType } from "./queue.ts";
+import { enqueue, lastJobByDedupe, oldestPendingAgeForType } from "./queue.ts";
 import { distributionAccountId, hasAccountDistribution, hasFailedAccountDistribution } from "./publish-guard.ts";
 import { clipGate, dispatchPublish } from "./publish-dispatch.ts";
 import { basicReframeState, effectiveReframeState } from "./reframe.ts";
@@ -1020,11 +1020,26 @@ async function requestAutoRender(clipId: string, channel?: string | null): Promi
     // 꺼질 수 있으므로 **정체를 감지해 스스로 클라우드로 돌아온다** — 고객 배포가 PC 상태에
     // 걸리면 안 된다(ENA 는 계약 물량이다).
     if (renderViaQueue()) {
+      const dedupeKey = `clip.render:${clipId}`;
+      // ⚠️ **큐에 넣은 일의 결과를 되읽는다.** 안 읽으면 "넣었다" 까지만 알고 그 뒤에 영구
+      //    실패했는지를 영영 모른다 — 순방은 성공으로 알고 매 틱 다시 넣고, 실패 안전벨트
+      //    (nextAutoRenderState)는 한 번도 안 걸리며, 사람은 사유를 못 본 채 클립이 영영
+      //    안 나간다. 직접 호출 시절엔 응답이 곧 결과였는데 큐로 옮기며 끊긴 고리다.
+      const last = await lastJobByDedupe("clip.render", dedupeKey).catch(() => null);
+      if (last?.status === "failed") {
+        // 잡의 오류 문자열에서 상태코드·코드를 되살려 **직접 호출과 같은 분류**를 태운다.
+        const raw = String(last.error ?? "");
+        const status = Number(/export (\d{3})/.exec(raw)?.[1] ?? 0);
+        const code = /"(?:code|error)"\s*:\s*"([^"]+)"/.exec(raw)?.[1] ?? null;
+        console.warn(`[automation] clip.render 실패 회수 ${clipId}: ${raw.slice(0, 160)}`);
+        return { ok: false, kind: classifyRenderFailure(status, code), error: raw.slice(0, 500), status, code };
+      }
+
       const stalled = await oldestPendingAgeForType("clip.render").catch(() => 0);
       if (stalled < renderQueueStallMs()) {
-        // dedupeKey 로 같은 클립이 두 번 들어가지 않는다(순방은 매 틱 다시 요청한다).
-        await enqueue("clip.render", { clipId, ...(channel ? { channel } : {}) },
-          { dedupeKey: `clip.render:${clipId}` });
+        // dedupeKey 로 같은 클립이 두 번 들어가지 않는다(인덱스가 pending·running 에만 걸려
+        // 있어, 끝난 뒤에는 다시 넣을 수 있다 — 재시도가 막히지 않는다).
+        await enqueue("clip.render", { clipId, ...(channel ? { channel } : {}) }, { dedupeKey });
         return { ok: true };
       }
       console.warn(`[automation] clip.render 정체 ${Math.round(stalled / 1000)}초 — 클라우드가 직접 렌더한다`);
