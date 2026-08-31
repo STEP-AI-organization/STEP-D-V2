@@ -69,7 +69,6 @@
     #uploadPane, #recsPane { display: flex; flex-direction: column; }
     /* 웹 탭은 패널 높이를 꽉 채운다 — 안쪽이 웹앱이라 좁으면 못 쓴다. */
     #webPane { display: flex; flex-direction: column; flex: 1; min-height: 420px; }
-    #webPane.hidden { display: none; }
     .webbar { display: flex; flex-direction: row; margin-bottom: 8px; }
     .webbar button { width: 50%; margin-top: 0; }
     .webbar button:first-child { margin-right: 6px; }
@@ -89,7 +88,11 @@
     .status { font-size: 12px; color: #a0a0a0; margin-top: 12px; line-height: 1.5; word-break: break-all; }
     .status.err { color: #ec5b62; }
     .status.ok { color: #33ab84; }
-    .hidden { display: none; }
+    /* ⚠️ **!important 가 필요하다.** 위에서 #loginView·#uploadPane·#recsPane 을 ID 선택자로
+       display:flex 로 잡는데, ID(특정도 100)가 클래스(10)를 이겨서 `.hidden` 이 무시된다.
+       그래서 로그인 뒤에도 로그인 화면이 안 사라지고 본 화면과 **겹쳐 보였다**(2026-08-31 실측).
+       숨김은 어떤 배치 규칙보다 세야 한다 — 안 그러면 화면이 겹친다. */
+    .hidden { display: none !important; }
     .muted { color: #777777; font-size: 12px; margin-top: 14px; line-height: 1.5; }
   </style>
 </head>

@@ -311,3 +311,27 @@ describe("패널 — 러프컷 시퀀스", () => {
     assert.match(panel, /개는 조각을 못 찾아 빠졌습니다/);
   });
 });
+
+/**
+ * 화면 겹침 (2026-08-31 실측) — 로그인 뒤에도 로그인 화면이 안 사라지고 본 화면과 겹쳐 보였다.
+ * 원인은 CSS 특정도다: `#loginView { display:flex }` 같은 **ID 선택자(100)** 가
+ * `.hidden { display:none }` **클래스(10)** 를 이긴다. 숨김은 어떤 배치 규칙보다 세야 한다.
+ */
+describe("패널 화면 전환 — 숨김이 배치를 이겨야 한다", () => {
+  const html = read("packages/premiere/index.html");
+
+  it("`.hidden` 이 ID 선택자를 이긴다", () => {
+    assert.match(html, /\.hidden \{ display: none !important; \}/,
+      "ID 선택자로 display 를 잡는 컨테이너가 있어 !important 없이는 안 숨겨진다");
+  });
+
+  it("숨기는 컨테이너들이 실제로 ID 로 display 를 잡고 있다 — 그래서 위 규칙이 필요하다", () => {
+    // 이 전제가 사라지면(ID 로 display 를 안 잡으면) 위 !important 도 걷어낼 수 있다.
+    assert.match(html, /#loginView, #uploadView \{ display: flex;/);
+    assert.match(html, /#uploadPane, #recsPane \{ display: flex;/);
+  });
+
+  it("전환은 className 을 통째로 갈아끼운다 — 다른 클래스가 섞이면 이 방식이 깨진다", () => {
+    assert.match(panel, /views\.login\(\)\.className = which === "login" \? "" : "hidden";/);
+  });
+});
