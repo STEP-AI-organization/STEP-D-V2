@@ -230,6 +230,13 @@ function Cell({
   // 게시됨 + 링크 있음 → 영상 열기. 유튜브만이 아니라 네이버·인스타·페북도 같은 대접
   // (2026-08-25 사용자 "가능하면 다" — 서버는 이미 다 기록하고 있었고 화면만 버리고 있었다).
   if (d.status === "published" && link) {
+    // ⚠️ 네이버(TV·클립)의 기록된 url 은 **시청자 링크가 아니라 스튜디오 주소**다.
+    //    클립은 발행 뒤에도 /web/draft/<id> 에 머물고, 시청자용 naver.me 단축 링크는 공개 앱의
+    //    '공유' 를 눌러야만 나와 발행 자동화가 알 수 없다(실측 2026-08-31). 그래서 여기서
+    //    "영상 열기" 라고 부르지 않는다 — 눌렀더니 편집 화면이 뜨면 사람이 잘못 눌렀다고 생각한다.
+    // 이 매트릭스가 그리는 채널에 navertv 는 없다(클립만) — 타입이 그걸 알고 있어
+    // navertv 비교를 넣으면 타입 오류가 난다. 채널이 늘면 여기도 같이 늘려야 한다.
+    const isNaver = channel === "naverclip";
     return (
       <a
         href={link}
@@ -237,7 +244,7 @@ function Cell({
         rel="noreferrer"
         className="mx-auto inline-flex items-center gap-1 rounded-[4px] px-1.5 py-0.5 text-[10.5px] font-medium hover:brightness-95"
         style={{ background: s.bg, color: s.fg }}
-        title="영상 열기"
+        title={isNaver ? "네이버 스튜디오에서 열기 (시청자 링크는 앱의 '공유' 에서 받습니다)" : "영상 열기"}
       >
         ● 게시 ↗
       </a>

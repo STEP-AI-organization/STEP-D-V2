@@ -513,6 +513,14 @@ export async function uploadToNaver(input: NaverUploadInput): Promise<NaverUploa
       },
       { timeout },
     ).catch(() => {});
+    // ⚠️ **이 url 은 시청자용 링크가 아니라 스튜디오(관리) 주소다.** 실측 2026-08-31:
+    //    클립은 즉시 발행이어도 `/web/draft/<id>` 에 머문다(예전 주석의 "즉시 발행은 목록으로
+    //    간다" 는 사실이 아니었다). 시청자용은 `naver.me/xxxxxxx` 단축 링크인데, 그건 **공개
+    //    앱 화면의 '공유' 를 눌러야** 나오고 스튜디오에는 어디에도 없다 — 발행 자동화가 알 수
+    //    있는 값이 아니다(스튜디오의 draft id 와 공개 쪽 seedMediaId 는 서로 다른 축이다).
+    //    그래서 이 값을 그대로 두되, **화면이 '영상 열기' 라고 부르지 않는다**
+    //    (apps/web distribution-matrix.tsx — 네이버는 '스튜디오에서 열기').
+    //    추측으로 공개 URL 을 조립하지 않는다: 틀린 링크는 없는 링크보다 나쁘다.
     const url = page.url();
     return { ok: true, url };
   } catch (e: any) {
