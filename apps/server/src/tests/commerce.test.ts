@@ -566,13 +566,16 @@ describe("제휴 제공자 레지스트리", () => {
 });
 
 describe("제공자 하드코딩이 밖으로 새지 않는다 (소스 스캔)", () => {
-  const OWNED = /^(commerce\.ts|commerce\.test\.ts|coupang-.*\.ts)$/;
+  // ⚠️ 상대 경로로 맞춘다 — 폴더 분리 뒤 파일이 `commerce/commerce.ts` 로 옮겨졌다.
+  const OWNED = /^commerce\/(commerce\.ts|coupang-.*\.ts)$/;
 
   it("링크 도메인·대가성 문구는 commerce.ts(레지스트리)와 발급기에만 있다", () => {
     const dir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
     const offenders: string[] = [];
-    for (const f of fs.readdirSync(dir)) {
-      if (!f.endsWith(".ts") || OWNED.test(f)) continue;
+    // ⚠️ `readdirSync(dir)` 로 최상위만 훑으면 폴더 분리 후 74개 중 10개만 검사한다 —
+    // 초록인 채로 범위만 줄어든다. 재귀 목록은 sources.ts 가 한 곳에서 만든다.
+    for (const f of sourceFiles(dir)) {
+      if (OWNED.test(f)) continue;
       const src = fs.readFileSync(path.join(dir, f), "utf-8");
       if (src.includes("link.coupang.com")) offenders.push(`${f}: 링크 도메인`);
       if (src.includes("쿠팡 파트너스 활동의 일환")) offenders.push(`${f}: 대가성 문구`);

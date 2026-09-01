@@ -384,6 +384,14 @@ const DONE_RETENTION_MS = 30 * 24 * 60 * 60 * 1000;
  * @returns 지운 행 수
  */
 export async function pruneDoneJobs(batch = 5_000): Promise<number> {
+  // ⚠️ `runAsSystem` 이 **반드시** 있어야 한다. job_queue 는 FORCE ROW LEVEL SECURITY 라
+  // 스코프 없이 `getPool()` 을 부르면 프록시가 SQL 을 보내기도 전에 "tenant scope missing"
+  // 으로 던지고, 호출부의 `.catch` 가 그걸 삼켜 **매 기동 조용히 0행**이 된다.
+  // 게다가 이 정리는 원래 전 테넌트를 가로질러야 한다 — 한 테넌트로 스코프를 잡아도 틀린다.
+  return runAsSystem(() => pruneDoneJobsInner(batch));
+}
+
+async function pruneDoneJobsInner(batch: number): Promise<number> {
   const cutoff = Date.now() - DONE_RETENTION_MS;
   const { rowCount } = await getPool().query(
     `DELETE FROM job_queue WHERE id IN (

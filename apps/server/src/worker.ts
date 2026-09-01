@@ -491,7 +491,12 @@ async function handleChannelAnalyze(job: Job): Promise<void> {
   // 24시간·7일이라 여전히 4배 촘촘하다 — 기능 손실 없음.
   // ⚠️ 다만 **6시간이 팬아웃의 상한**이 된다: config 의 영상 잡 간격을 6시간 밑으로 내리면
   // 그 값이 조용히 안 지켜진다(config.ts 상수 옆에도 같은 경고를 적어 뒀다).
-  if (result.skipped === "not due") return;
+  //
+  // ⚠️ "not due" 만 보면 **문제를 만든 채널에서만 헛일이 그대로 남는다.** 스윕 게이트를
+  // 통과해 15분마다 계속 도는 채널이 정확히 `needs re-consent for analytics scope` 상태다
+  // (already running · no refresh token · revoked 도 같다). 그래서 사유를 나열하지 않고
+  // **"아무것도 안 했으면 팬아웃도 안 한다"** 로 판정한다 — 사유가 늘어도 따라온다.
+  if (result.skipped && result.videosSynced === 0 && result.analyticsDays === 0) return;
 
   // Fan out per-video analytics/comments for the recent uploads that are due.
   await enqueueDueVideoJobs(channelId);
@@ -3132,6 +3137,7 @@ async function sweepDueChannels(): Promise<void> {
   const channels = await listChannelsForSweep();
   let queued = 0;
   let skipped = 0;
+  const deduped: string[] = [];   // 큐에 이미 있어 enqueue 가 null 을 준 채널
   const now = Date.now();
 
   for (const ch of channels) {
@@ -3142,11 +3148,20 @@ async function sweepDueChannels(): Promise<void> {
       }),
     );
     if (id) queued++;
+    else deduped.push(ch.channelId);
   }
 
   // 항상 찍는다 — `queued=0` 도 정보다. 이게 없으면 "게이트가 과하게 막고 있는 것"과
   // "돌 필요가 없는 것"을 구분할 수 없고, 동기화가 멈춘 걸 아무도 모른다.
-  console.log(`[worker] sweep queued ${queued}/${channels.length} (skipped ${skipped}: 비활성·not due)`);
+  //
+  // ⚠️ **dedupe 로 안 들어간 채널을 따로 센다.** 예전엔 queued 에도 skipped 에도 안 세어서
+  // "돌 필요가 없음(skipped)" 과 "큐에 이미 박혀 영영 안 돎(deduped)" 이 로그에서 똑같아
+  // 보였다 — 이 로그를 넣은 목적이 바로 그 구분이었다. 셋을 더하면 항상 전체 수가 된다.
+  const tail = deduped.length ? ` · deduped ${deduped.length} [${deduped.slice(0, 5).join(", ")}]` : "";
+  console.log(
+    `[worker] sweep queued ${queued} / skipped ${skipped}(비활성·not due) / deduped ${deduped.length}`
+    + ` = ${channels.length}${tail}`,
+  );
 }
 
 /**
@@ -3335,11 +3350,15 @@ async function main(): Promise<void> {
   // 스윕과 같은 레인에서 기동당 한 묶음씩만 지운다: 한 번에 다 지우면 그동안 claim 이 락을
   // 기다린다. 실패해도 잡 처리를 막지 않는다 — 정리는 부수적인 일이다.
   if (RUNS_SWEEP) {
-    const pruned = await pruneDoneJobs().catch((e) => {
-      console.warn("[worker] job_queue 정리 실패(무시):", e instanceof Error ? e.message : e);
-      return 0;
-    });
-    if (pruned) console.log(`[worker] job_queue 완료 잡 ${pruned}건 정리`);
+    // ⚠️ 결과를 **항상** 찍는다. 예전엔 실패를 warn 으로 삼키고 0건이면 아무것도 안 찍어서,
+    // "정리가 매 기동 예외로 죽고 있다" 와 "지울 게 없다" 가 로그에서 똑같아 보였다.
+    let pruned = 0;
+    try {
+      pruned = await pruneDoneJobs();
+      console.log(`[worker] job_queue 완료 잡 정리 ${pruned}건`);
+    } catch (e) {
+      console.error("[worker] job_queue 정리 실패:", e instanceof Error ? e.message : e);
+    }
   }
 
   // ── 자동 배포 순방 (drain) ──────────────────────────────────────────────────

@@ -66,7 +66,11 @@ class FakeNetwork implements TransferNetwork {
 }
 
 async function waitFor(engine: TransferEngine, predicate: (jobs: NativeUploadJob[]) => boolean): Promise<NativeUploadJob[]> {
-  const deadline = Date.now() + 3000;
+  // ⚠️ 3초였다가 15초로 올렸다(2026-09-01). 잡 저장이 매번 **fsync** 를 하도록 바꾼 뒤로
+  // 실제 디스크 왕복이 생겼고, `pnpm check` 는 서버 테스트 1300여 개와 **동시에** 돈다 —
+  // 그 부하에서 3초를 넘겨 이 파일만 간헐적으로 빨갛게 됐다. 관문이 흔들리면 사람이
+  // 무시하게 되므로, 여유는 넉넉히 두고 실패는 진짜 실패일 때만 나게 한다.
+  const deadline = Date.now() + 15_000;
   while (Date.now() < deadline) {
     const jobs = engine.list();
     if (predicate(jobs)) return jobs;
@@ -219,6 +223,7 @@ test("바이트가 다 올라간 작업은 원본이 없어도 finalize 로 복�
       fingerprint,
       mediaId: "m-test",
       objectPath: "uploads/m-test.mp4",
+      bytesComplete: true,                // GCS 가 객체를 다 받았다고 확인해 준 상태
       request: {
         kind: "episode", programId: "p1", title: "1화", episodeNumber: 1,
         broadDate: "2026-09-01", track: "variety", hasSubtitle: true, fast: false,
@@ -234,6 +239,58 @@ test("바이트가 다 올라간 작업은 원본이 없어도 finalize 로 복�
     assert.equal(jobs[0].status, "completed", "원본이 없다고 FILE_MISSING 이 되면 10GB 를 다시 올리게 된다");
     assert.equal(jobs[0].result?.episodeId, "e-test");
     assert.deepEqual(network.starts, [], "바이트를 다시 올리면 안 된다");
+    await engine.shutdown();
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+/**
+ * 진행률은 **디스크에서 읽어 소켓에 써 넣은 바이트**라 GCS 가 커밋하기 전에 이미 size 에
+ * 닿는다. 그 순간 회선이 끊기면 예외 경로가 부풀려진 값을 저장하는데, 이때 재기동이
+ * "다 올라갔다" 고 오판하면 업로드를 건너뛰고 finalize 만 무한 반복한다 — GCS 에 객체가
+ * 없으니 서버는 영원히 400 을 주고, 남은 바이트는 **영원히 전송되지 않는다.**
+ * 탈출구가 취소 후 전량 재업로드뿐이라 10GB 짜리에선 그대로 손실이다.
+ */
+test("uploadedBytes 가 size 여도 GCS 확인이 없으면 다시 올린다", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "stepd-native-optimistic-"));
+  try {
+    const file = path.join(directory, "episode.mp4");
+    await writeFile(file, Buffer.alloc(4096, 7));
+    const fingerprint = await fingerprintFile(file);
+    const store = new JobStore(path.join(directory, "jobs"), codec);
+    const stamp = new Date().toISOString();
+    await store.save({
+      id: "optimistic-1",
+      kind: "episode",
+      filename: "episode.mp4",
+      contentType: "video/mp4",
+      size: fingerprint.size,
+      uploadedBytes: fingerprint.size,   // ⚠️ 소켓에 써 넣기만 한 값 — GCS 는 아직 아무것도 커밋 안 했다
+      progress: 100,
+      status: "needs_attention",
+      errorCode: "NETWORK",
+      createdAt: stamp,
+      updatedAt: stamp,
+      filePath: file,
+      fingerprint,
+      mediaId: "m-test",
+      objectPath: "uploads/m-test.mp4",
+      // bytesComplete 없음 = 확인된 적 없음
+      request: {
+        kind: "episode", programId: "p1", title: "1화", episodeNumber: 1,
+        broadDate: "2026-09-01", track: "variety", hasSubtitle: true, fast: false,
+      },
+    } as StoredUploadJob);
+
+    const network = new FakeNetwork();   // committed = 0 — GCS 에는 아무것도 없다
+    const engine = new TransferEngine(store, network);
+    await engine.init();
+    const jobs = await waitFor(engine, (all) => ["completed", "needs_attention", "failed"].includes(all[0]?.status ?? ""));
+
+    assert.deepEqual(network.starts, [0], "확인 안 된 바이트는 0부터 다시 올려야 한다");
+    assert.equal(jobs[0].status, "completed");
+    assert.equal(jobs[0].result?.episodeId, "e-test");
     await engine.shutdown();
   } finally {
     await rm(directory, { recursive: true, force: true });

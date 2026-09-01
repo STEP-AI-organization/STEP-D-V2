@@ -194,6 +194,10 @@ function createWindow(browserSession: Electron.Session): BrowserWindow {
   win.once("ready-to-show", () => {
     if (!process.argv.includes("--background")) win.show();
   });
+  // ⚠️ 트레이로 숨긴 창을 다시 열면 **자동 종료 예약을 반드시 푼다.**
+  // 이 창은 전송 위젯이 아니라 제품 전체다. 예약이 남아 있으면 사용자가 메타데이터를
+  // 편집하는 도중 마지막 업로드가 끝나는 순간 앱이 통째로 꺼지고 입력이 사라진다.
+  win.on("show", () => { closeWhenIdle = false; });
   win.on("close", (event) => {
     if (!quitting && engine?.hasUnfinishedJobs()) {
       event.preventDefault();

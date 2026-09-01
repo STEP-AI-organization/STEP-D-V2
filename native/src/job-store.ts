@@ -19,6 +19,17 @@ export interface StoredUploadJob extends NativeUploadJob {
   objectPath?: string;
   encryptedSessionUrl?: string;
   sessionCreatedAt?: string;
+  /**
+   * **GCS 가 객체 전체를 받았다고 확인해 준 경우에만 true.**
+   *
+   * ⚠️ `uploadedBytes` 로는 이걸 판단할 수 없다. 그 값은 진행률 표시용이라
+   * **디스크에서 읽어 소켓에 써 넣은 바이트**를 센다(network.ts `putChunk` 의 `onProgress`) —
+   * 마지막 청크를 다 읽은 순간 GCS 응답이 오기 전에도 `uploadedBytes === size` 가 된다.
+   * 그 상태에서 회선이 끊기면 예외 경로가 **부풀려진 값을 그대로 저장**하고, 재기동 때
+   * "바이트는 다 올라갔다" 고 오판해 업로드를 건너뛴 채 finalize 만 무한 반복하게 된다.
+   * 실제 객체는 커밋되지 않았으므로 서버는 계속 "upload not found in storage" 를 준다.
+   */
+  bytesComplete?: boolean;
 }
 
 const TERMINAL = new Set(["completed", "canceled"]);

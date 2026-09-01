@@ -125,7 +125,9 @@ export class TransferEngine {
    * **한 번만 더 부르면 복구되는데**, 재시도할 프로세스가 스스로 꺼지는 게 문제였다.
    */
   private static bytesLanded(job: StoredUploadJob): boolean {
-    return Boolean(job.mediaId) && !job.result && job.uploadedBytes >= job.size && job.size > 0;
+    // ⚠️ `uploadedBytes >= size` 로 판단하지 않는다 — 그 값은 소켓에 써 넣은 바이트라
+    // GCS 가 커밋하기 전에 이미 size 에 도달한다. job-store.ts `bytesComplete` 주석 참조.
+    return Boolean(job.mediaId) && !job.result && job.bytesComplete === true && job.size > 0;
   }
 
   hasUnfinishedJobs(): boolean {
@@ -205,6 +207,12 @@ export class TransferEngine {
   async cancel(jobId: string): Promise<void> {
     const job = this.requireJob(jobId);
     if (isTerminalJob(job)) return;
+    // ⚠️ finalize 중에는 취소할 수 없다. `controller.abort()` 는 **클라이언트 쪽만** 끊는다 —
+    // 요청은 이미 서버에 도달해 회차·미디어 행을 만들고 분석까지 큐잉하므로(크레딧이 나간다),
+    // 로컬만 canceled 로 지우면 사용자가 모르는 유령 회차가 남는다. 몇 초짜리 구간이니 기다린다.
+    if (job.status === "finalizing") {
+      throw new Error("서버에 등록하는 중이라 지금은 취소할 수 없습니다. 잠시 뒤 다시 시도해 주세요.");
+    }
     job.status = "canceled";
     job.speedBps = undefined;
     job.etaSec = undefined;
@@ -230,6 +238,7 @@ export class TransferEngine {
       job.sessionCreatedAt = undefined;
       job.uploadedBytes = 0;
       job.progress = 0;
+      job.bytesComplete = false;   // 세션을 버렸으니 GCS 객체도 없다
     }
     job.filePath = filePath;
     job.filename = path.basename(filePath);
@@ -254,22 +263,32 @@ export class TransferEngine {
 
   async shutdown(): Promise<void> {
     this.closing = true;
-    if (this.active) {
-      const job = this.jobs.get(this.active.jobId);
-      if (job && ["initializing", "uploading", "finalizing"].includes(job.status)) {
-        job.status = "queued";
-        job.speedBps = undefined;
-        job.etaSec = undefined;
-        job.updatedAt = now();
-        await this.store.save(job);
-      }
-      this.active.controller.abort();
+    const activeId = this.active?.jobId;
+    this.active?.controller.abort();
+    // ⚠️ **끊고 나서 다 풀릴 때까지 기다린 뒤에 저장한다.** 먼저 저장하면 abort 직전에 이미
+    // 걸려 있던 `store.save` 가 나중에 도착해 여기서 쓴 queued 스냅샷을 덮는다 — shutdown 이
+    // "다 저장했다" 고 약속하고 지키지 않는 셈이다.
+    await this.pumpDone?.catch(() => {});
+    if (!activeId) return;
+    const job = this.jobs.get(activeId);
+    if (job && ["initializing", "uploading", "finalizing"].includes(job.status)) {
+      job.status = "queued";
+      job.speedBps = undefined;
+      job.etaSec = undefined;
+      job.updatedAt = now();
+      await this.store.save(job);
     }
   }
 
+  /** 진행 중인 `pump()` — `shutdown()` 이 이걸 기다려야 뒤늦은 저장이 안 새어 나온다. */
+  private pumpDone: Promise<void> | null = null;
+
   private schedulePump(): void {
     if (this.closing || this.pumping) return;
-    queueMicrotask(() => void this.pump());
+    queueMicrotask(() => {
+      if (this.closing || this.pumping) return;
+      this.pumpDone = this.pump();
+    });
   }
 
   private async pump(): Promise<void> {
@@ -321,6 +340,7 @@ export class TransferEngine {
           job.sessionCreatedAt = undefined;
           job.uploadedBytes = 0;
           job.progress = 0;
+          job.bytesComplete = false;   // 만료된 세션의 객체는 없다 — 처음부터 다시
           job.updatedAt = now();
           await this.store.save(job);
           this.emit();
@@ -345,8 +365,15 @@ export class TransferEngine {
       // 상시 재발하는 일시 장애다. 그런데 FINALIZE 를 failed 로 떨구면 ① 재시도 대상에서
       // 빠지고 ② hasUnfinishedJobs 가 "끝났다" 고 봐서 앱이 종료·자동기동 해제까지 한다.
       // 바이트가 이미 GCS 에 있으면 **코드와 무관하게** 사람이 볼 수 있는 상태로 남긴다.
-      const attention = ["AUTH_REQUIRED", "FILE_MISSING", "FILE_CHANGED", "NETWORK", "FINALIZE"]
-        .includes(transferError.code) || TransferEngine.bytesLanded(job);
+      // ⚠️ 회차 번호 중복(409)만은 예외다. 같은 body 로 다시 finalize 해도 **영원히 같은 409** 라
+      // 재시도가 성립하지 않는데, 바이트가 올라갔다는 이유로 needs_attention 에 두면 그 잡이
+      // `hasUnfinishedJobs()` 를 계속 참으로 만들어 ① 창 X 가 앱을 못 끄고 ② 매 로그인마다
+      // 앱이 몰래 뜬다. 사람이 취소하기 전까지 영구히 — 그래서 failed 로 떨군다.
+      const deadEnd = transferError.code === "DUPLICATE_EPISODE";
+      const attention = !deadEnd && (
+        ["AUTH_REQUIRED", "FILE_MISSING", "FILE_CHANGED", "NETWORK", "FINALIZE"]
+          .includes(transferError.code) || TransferEngine.bytesLanded(job)
+      );
       job.status = attention ? "needs_attention" : "failed";
       job.errorCode = transferError.code;
       job.errorMessage = transferError.message;
@@ -519,6 +546,9 @@ export class TransferEngine {
   private async finalize(job: StoredUploadJob, signal: AbortSignal): Promise<void> {
     if (!job.mediaId || !job.objectPath) throw new TransferError("FINALIZE", "업로드 식별자가 없습니다.");
     await this.setStatus(job, "finalizing");
+    // 여기 도달했다는 건 `upload()` 가 모든 청크에 대해 GCS 의 커밋 응답(200/201/308 Range)을
+    // 받고 정상 반환했거나, 이미 확인된 잡이라는 뜻이다 — **이 시점에만** 완료로 기록한다.
+    job.bytesComplete = true;
     job.uploadedBytes = job.size;
     job.progress = 100;
     await this.store.save(job);
@@ -553,7 +583,14 @@ export class TransferEngine {
       clip?: { id?: string } | null;
     }>(endpoint, body, signal);
     if (response.status === 401) throw new TransferError("AUTH_REQUIRED", "업로드 완료 처리를 위해 다시 로그인해 주세요.");
-    if (response.status === 409) throw new TransferError("DUPLICATE_EPISODE", errorMessage(response));
+    // 재시도해도 같은 409 다 — 사용자가 실제로 할 수 있는 일을 문구에 담는다.
+    if (response.status === 409) {
+      throw new TransferError(
+        "DUPLICATE_EPISODE",
+        `${errorMessage(response)} 이미 등록된 회차라 이 전송은 더 진행할 수 없습니다.`
+        + " 취소한 뒤 다른 회차 번호로 다시 올려 주세요.",
+      );
+    }
     if (response.status < 200 || response.status >= 300) {
       throw new TransferError("FINALIZE", `업로드 완료 처리 실패: ${errorMessage(response)}`, true);
     }

@@ -228,7 +228,13 @@ async function assertRlsEnforced(): Promise<void> {
  * 요청이 통째로 실패한다. 트래픽이 늘어야 보이는 종류라 평소엔 조용하다.
  *
  * 5 로 낮추면 같은 상한에서 인스턴스 **16개**까지 버틴다. 우리 질의는 짧아서(대부분 단건
- * 조회) 인스턴스당 5개면 충분하고, 부족하면 풀에서 잠깐 기다릴 뿐 실패하지 않는다.
+ * 조회) 인스턴스당 5개면 충분하고, 부족하면 풀에서 잠깐 기다릴 뿐이다.
+ *
+ * ⚠️ 단, 기다림이 **교착**이 되는 경로가 하나 있다 — `withTenantLock` 은 fn() 이 도는 내내
+ * 커넥션 1개를 쥐고 fn() 은 같은 풀에서 더 꺼낸다(재진입). 잠금 키가 테넌트별이라 서로 다른
+ * 테넌트는 동시에 잠글 수 있어서, 보유자가 POOL_MAX 만큼 쌓이면 전원이 서로를 기다리다
+ * `connectionTimeoutMillis: 10_000` 으로 **실패**한다(카드 결제가 그 경로에 있다).
+ * 그래서 풀을 키우는 대신 **보유자 수에 상한**을 뒀다 — `LOCK_SLOTS` 참고.
  *
  * env 로 뺀 이유: 한계에 부딪혔을 때 **배포 없이** 조절해야 하기 때문이다. 근본 해법은
  * 커넥션 풀러(PgBouncer / Cloud SQL 연결 풀링)지만, 그건 인프라 작업이고 이건 지금 할 수 있다.
@@ -739,8 +745,11 @@ export async function listReframeLabels(
  */
 export async function listEntities<T = unknown>(kind: EntityKind, limit?: number): Promise<T[]> {
   if (limit && limit > 0) {
+    // ⚠️ **최신 = 작은 ord** 다. 엔티티는 전부 `prependEntity`(= `MIN(ord) - 1`)로 쓰기 때문에
+    // ord 는 새로 쓸수록 작아진다. 여기서 `ORDER BY ord DESC LIMIT n` 을 쓰면 "최근 n개" 가
+    // 아니라 **가장 오래된 n개**가 나온다 — 아래 무제한 경로가 ASC 인 것과도 어긋난다.
     const { rows } = await pool.query(
-      "SELECT data FROM (SELECT data, ord FROM entities WHERE kind = $1 ORDER BY ord DESC LIMIT $2) t ORDER BY ord ASC",
+      "SELECT data FROM entities WHERE kind = $1 ORDER BY ord ASC LIMIT $2",
       [kind, limit],
     );
     return rows.map((r) => r.data as T);
@@ -2312,7 +2321,7 @@ export async function updateMediaPath(id: string, path: string): Promise<void> {
 const STATE_JOB_LIMIT = 200;
 
 export async function getState() {
-  const [programs, episodes, recommendations, clips, jobs, connections, media] = await Promise.all([
+  const [programsForState, episodes, recommendations, clips, jobs, connections, media] = await Promise.all([
     listProgramsForState(),
     listEntities("episode"),
     listEntities("recommendation"),
@@ -2324,10 +2333,10 @@ export async function getState() {
     listMedia(),
   ]);
   return {
-    programs,
+    programs: programsForState.programs,
     episodes,
     recommendations,
-    clips: stripRedundantClipIcons(clips, programs, episodes),
+    clips: stripRedundantClipIcons(clips, programsForState.brandIconOf, episodes),
     jobs,
     connections,
     media: media.map(mediaPublic),
@@ -2345,14 +2354,27 @@ export async function getState() {
  * ⚠️ 클립 아이콘은 여기서 못 뺀다 — "프로그램 brandIcon 과 같을 때만" 이라는 조건을 SQL 로
  *    표현하기 어렵고, 잘못 빼면 사람이 고른 아이콘이 사라진다(`stripRedundantClipIcons` 참고).
  */
-async function listProgramsForState<T = unknown>(): Promise<T[]> {
+async function listProgramsForState<T = unknown>(): Promise<{ programs: T[]; brandIconOf: Map<string, string> }> {
   const { rows } = await pool.query(
     `SELECT (data - 'posterImageDataUrl' - 'brandIconDataUrl') AS data,
             (data ? 'posterImageDataUrl') AS has_poster,
-            (data ? 'brandIconDataUrl')   AS has_icon
+            (data ? 'brandIconDataUrl')   AS has_icon,
+            (data ->> 'brandIconDataUrl') AS brand_icon
        FROM entities WHERE kind = 'program' ORDER BY ord ASC`,
   );
-  return rows.map((r) => withImageFlags(r.data, r.has_poster, r.has_icon) as T);
+  // ⚠️ `brand_icon` 은 **응답에 실리지 않는다.** 오직 `stripRedundantClipIcons` 가
+  // "클립 아이콘이 프로그램 것과 같은가" 를 판정하는 데만 쓴다. 이걸 따로 안 꺼내고
+  // 위에서 뺀 `programs` 로 판정하면 맵이 항상 비어 **중복 제거가 통째로 죽는다**
+  // (실측 ENA 19.4MB → 1.8MB 였던 게 다시 19.4MB 로 돌아간다).
+  const brandIconOf = new Map<string, string>();
+  for (const r of rows) {
+    const id = (r.data as Record<string, unknown> | null)?.id;
+    if (id && typeof r.brand_icon === "string" && r.brand_icon) brandIconOf.set(String(id), r.brand_icon);
+  }
+  return {
+    programs: rows.map((r) => withImageFlags(r.data, r.has_poster, r.has_icon) as T),
+    brandIconOf,
+  };
 }
 
 /**
@@ -2392,12 +2414,13 @@ export function withImageFlags(
  *
  * 저장된 데이터는 그대로다 — **내보낼 때만** 뺀다. 되돌리려면 이 함수만 지우면 된다.
  */
-export function stripRedundantClipIcons(clips: unknown[], programs: unknown[], episodes: unknown[]): unknown[] {
-  const brandIconOf = new Map<string, string>();
-  for (const p of programs as Record<string, unknown>[]) {
-    const icon = typeof p?.brandIconDataUrl === "string" ? p.brandIconDataUrl : "";
-    if (p?.id && icon) brandIconOf.set(String(p.id), icon);
-  }
+export function stripRedundantClipIcons(
+  clips: unknown[],
+  // ⚠️ 프로그램 **행**이 아니라 아이콘 **맵**을 받는다. 행을 받으면 호출자가 이미 아이콘을
+  // 빼 버린 배열을 넘겨도 타입이 통과해 조용히 무동작이 된다 — 실제로 그렇게 죽었다.
+  brandIconOf: Map<string, string>,
+  episodes: unknown[],
+): unknown[] {
   if (!brandIconOf.size) return clips;
   const programOfEpisode = new Map<string, string>();
   for (const e of episodes as Record<string, unknown>[]) {
@@ -4246,8 +4269,44 @@ export async function listUnsettledAutoTopups(): Promise<TopupRow[]> {
  * fn 안의 쿼리는 평소처럼 pool 로 나가 즉시 커밋돼도 된다. 경쟁자는 같은 키에서
  * 기다렸다가 앞선 실행이 커밋한 결과를 보고 재판정하게 된다 (자동 충전 이중 결제 방어).
  */
+/**
+ * 동시에 자문 잠금을 쥘 수 있는 호출자 수. **최소 2개는 fn() 몫으로 남긴다.**
+ *
+ * 이게 없으면 재진입이 교착이 된다: 보유자 POOL_MAX 명이 각각 커넥션 1개를 쥔 채 fn() 안에서
+ * 커넥션을 더 달라고 기다리는데, 놓아 줄 사람이 아무도 없다. 상한을 두면 항상 순환하는
+ * 커넥션이 남아 **누군가는 반드시 진행**하므로 교착이 성립하지 않는다(혼잡하면 느려질 뿐).
+ */
+const LOCK_SLOTS = Math.max(1, POOL_MAX - 2);
+let lockHeld = 0;
+const lockWaiters: Array<() => void> = [];
+
+async function acquireLockSlot(): Promise<void> {
+  if (lockHeld < LOCK_SLOTS) { lockHeld += 1; return; }
+  await new Promise<void>((resolve) => lockWaiters.push(resolve));
+  // 깨어난 쪽이 슬롯을 **물려받는다** — release 가 카운트를 안 줄이고 넘기므로 여기서도 안 늘린다.
+}
+
+function releaseLockSlot(): void {
+  const next = lockWaiters.shift();
+  if (next) { next(); return; }
+  lockHeld -= 1;
+}
+
+/**
+ * ⚠️ **재진입 주의.** 이 함수는 fn() 이 끝날 때까지 커넥션 1개를 붙잡고, fn() 은 같은 풀에서
+ * 커넥션을 더 꺼낸다. 그래서 `LOCK_SLOTS` 로 동시 보유자를 묶는다.
+ * → fn() 안에서 **외부 HTTP(결제 등)를 오래 기다리지 말 것.** 커넥션을 쥔 채 대기하는 셈이고,
+ *   그동안 다른 워크스페이스의 잠금까지 슬롯을 못 얻어 밀린다.
+ */
 export async function withTenantLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
-  const client = await pool.connect(); // 스코프 프록시가 app.tenant_id 를 심는다
+  await acquireLockSlot();
+  let client;
+  try {
+    client = await pool.connect(); // 스코프 프록시가 app.tenant_id 를 심는다
+  } catch (e) {
+    releaseLockSlot();
+    throw e;
+  }
   try {
     await client.query("BEGIN");
     await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [key]);
@@ -4259,6 +4318,7 @@ export async function withTenantLock<T>(key: string, fn: () => Promise<T>): Prom
     throw e;
   } finally {
     client.release();
+    releaseLockSlot();   // 커넥션을 놓은 **뒤에** 다음 대기자를 깨운다
   }
 }
 

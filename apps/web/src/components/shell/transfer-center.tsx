@@ -159,7 +159,9 @@ export function TransferCenter() {
                               <Play className="size-3" /> 재개
                             </button>
                           )}
-                          {(["failed", "needs_attention"] as const).includes(job.status as "failed" | "needs_attention") && !canRelink && (
+                          {/* 회차 중복은 같은 body 로 재시도해도 영원히 같은 409 — 버튼을 주지 않는다 */}
+                          {(["failed", "needs_attention"] as const).includes(job.status as "failed" | "needs_attention")
+                            && !canRelink && job.errorCode !== "DUPLICATE_EPISODE" && (
                             <button className="sd-btn flex items-center gap-1 py-1" onClick={() => void act(() => transfers.retryUpload(job.id))}>
                               <RotateCcw className="size-3" /> 재시도
                             </button>
@@ -169,7 +171,9 @@ export function TransferCenter() {
                               <FolderOpen className="size-3" /> 파일 다시 찾기
                             </button>
                           )}
-                          {!(["completed", "canceled"] as const).includes(job.status as "completed" | "canceled") && (
+                          {/* finalizing 은 뺀다 — 서버가 이미 회차를 만들고 있어 취소가 성립하지 않는다 */}
+                          {!(["completed", "canceled", "finalizing"] as const)
+                            .includes(job.status as "completed" | "canceled" | "finalizing") && (
                             <button className="sd-btn flex items-center gap-1 py-1" onClick={() => void act(() => transfers.cancelUpload(job.id))}>
                               <X className="size-3" /> 취소
                             </button>

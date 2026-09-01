@@ -28,10 +28,13 @@ export type RuleCriterion = (typeof RULE_CRITERIA)[number];
 
 /**
  * 게이트 정책 (F6 계획 항목).
- * - `approve_first`: 게시 전 사람 승인. 게이트를 통과해도 사람 손을 한 번 거친다.
- * - `hold_on_issue`: 권리 이슈가 있으면 보류. 통과면 그대로 나간다.
+ * - `approve_first`: 게시 전 사람 승인. 조건을 통과해도 사람 손을 한 번 거친다.
+ * - `hold_on_issue`: **승인 없이 즉시 발행.** 조건만 통과하면 그대로 나간다.
  *
- * ⚠️ 어느 쪽도 "게이트 무시"가 아니다. 둘 다 게이트 위에 얹히는 추가 조건이다.
+ * ⚠️ 이름이 실제 동작과 다르다. 원래는 "권리 이슈가 있으면 보류" 였는데 **권리 게이트가
+ * 2026-08-31 에 제거돼**(사용자 결정: "실전에서 필요가 없음") 보류시킬 조건 자체가 없어졌다.
+ * 값 이름은 DB 에 저장돼 있어 그대로 두지만, 화면·문구에서는 "승인 없이 배포" 라고만 쓴다.
+ * 이 값을 보고 "무언가 걸러 준다" 고 기대하면 안 된다 — 아무것도 안 거른다.
  */
 export const GATE_POLICIES = ["approve_first", "hold_on_issue"] as const;
 export type GatePolicy = (typeof GATE_POLICIES)[number];

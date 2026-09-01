@@ -6756,6 +6756,20 @@ app.post("/api/channel-rules/eligibility", async (c) => {
 // **배포 기록(gate-audit)은 남긴다** — "언제 무슨 영상이 어디로 나갔는지" 는 고객사 요구가
 // 있을 수 있다(사용자 2026-08-27). 그건 게이트가 아니라 감사 로그다.
 
+/**
+ * 순방을 지금 한 번 돈다 — 계획을 만들고 결과를 바로 보고 싶을 때.
+ *
+ * **현재 워크스페이스 것만** 평가한다. 요청 컨텍스트가 이미 이 테넌트로 세워져 있고,
+ * 순방은 RLS 안에서 돌기 때문에 남의 채널·프로그램이 보이지 않는다.
+ *
+ * ⚠️ 이 라우트는 권리 게이트와 **아무 상관이 없다.** 2026-08-31 게이트 제거 때 같은
+ * 덩어리에 있었다는 이유로 함께 지워져, 웹의 [자동 배포 시작]·[지금 확인하기] 가
+ * 매번 404 를 받았다(계획은 저장돼 워커가 실제로 발행하는데 화면은 "시작 실패" 를 띄웠다).
+ */
+app.post("/api/automation/run", async (c) => {
+  return c.json(await runAutomationCycle());
+});
+
 app.get("/api/gate-audit/:subjectType/:subjectId", async (c) => {
   const subjectType = readSubjectType(c.req.param("subjectType"));
   if (!subjectType) return c.json({ error: "invalid subjectType" }, 400);
@@ -7521,7 +7535,7 @@ app.post("/api/recommendations/:id/reject", async (c) => {
 
 /** The upload grant is the plain youtube scope; readonly (analytics) can't upload. */
 // 스코프 판정은 youtube.ts 한 곳에서 — 문자열을 두 벌 두면 어긋난다(2026-08-10 사고).
-const YT_UPLOAD_SCOPE = YT_PUBLISH_SCOPE;
+// 업로드 가능 판정은 youtube.ts `scopeCanPublish` 한 곳에서만 한다(문자열 두 벌 두면 어긋난다).
 
 /**
  * Resolve the connected channel we upload to. A channel can publish only if its consent
@@ -7533,7 +7547,7 @@ const YT_UPLOAD_SCOPE = YT_PUBLISH_SCOPE;
 /** 업로드 가능한 YouTube 채널인가 — eligibility 목록·발행 대상 해석이 같은 기준을 쓴다. */
 function youtubeCanPublish(ch: YouTubeChannel): boolean {
   return ch.status !== "revoked" && Boolean(ch.refreshToken) &&
-    (ch.scope ?? "").split(" ").includes(YT_UPLOAD_SCOPE);
+    scopeCanPublish(ch.scope);
 }
 
 async function resolveYouTubePublishChannel(explicitId?: string): Promise<YouTubeChannel | null> {
@@ -9547,7 +9561,7 @@ const YT_ANALYTICS_SCOPES = [
  * (youtube.ts `scopeCanPublish`). 기존 토큰의 저장된 scope 문자열도 건드리지 않는다.
  */
 const YT_PUBLISH_SCOPES = [
-  "https://www.googleapis.com/auth/youtube",        // videos.insert/update · thumbnails.set
+  "https://www.googleapis.com/auth/youtube.upload",        // videos.insert/update · thumbnails.set
   "https://www.googleapis.com/auth/youtube.force-ssl",
 ].join(" ");
 

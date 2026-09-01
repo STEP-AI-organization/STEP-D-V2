@@ -184,6 +184,9 @@ export const API_KEY_ROUTES: RouteRule[] = [
 
   // 프로그램 — 자동화 라인에 올릴 프로그램을 고객사가 직접 등록·수정한다
   { method: "GET", path: /^\/api\/programs\/[^/]+$/, scope: "media:read" },
+  // 포스터·아이콘 바이트는 2026-08-31 에 `/api/state` 에서 빠져 이 라우트로 옮겼다.
+  // 여기 안 넣으면 API 키로 붙는 고객사 콘솔은 이미지를 가져올 길이 아예 없다.
+  { method: "GET", path: /^\/api\/programs\/[^/]+\/image\/(poster|icon)$/, scope: "media:read" },
   { method: "POST", path: /^\/api\/programs$/, scope: "media:write" },
   { method: "PATCH", path: /^\/api\/programs\/[^/]+$/, scope: "media:write" },
 

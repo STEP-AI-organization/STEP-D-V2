@@ -164,9 +164,34 @@ describe("자동 확인은 테넌트당 한 번만 실행된다", () => {
   });
 });
 
+/**
+ * ⚠️ 이 스위트는 한때 **이름만 남고 비어 있었다.** 권리 게이트를 제거하면서 그 안에 있던
+ * 권리와 **무관한** 불변식 검사까지 같이 지워졌는데, 빈 describe 는 초록으로 통과하므로
+ * 보증이 사라진 걸 아무도 몰랐다. 없는 보증을 있는 것처럼 보이게 하는 게 제일 나쁘다.
+ */
 describe("자동 배포는 게이트를 건너뛰지 않는다 (F6 Invariant)", () => {
+  const cycle = fs.readFileSync(path.join(SRC, "pipeline/automation-cycle.ts"), "utf-8");
 
+  it("채널마다 실업로드 킬스위치를 **먼저** 확인한다", () => {
+    // 게이트가 꺼져 있으면 기록만 남기고 실제 채널로는 안 나간다. 채널이 늘 때
+    // 이 확인을 빠뜨리면 그 채널만 조용히 실업로드된다.
+    const checks = [...cycle.matchAll(/\b\w*[Uu]ploadEnabled\(\)/g)].length;
+    assert.ok(checks >= 5, `실업로드 게이트 확인이 ${checks}개뿐이다 — 채널마다 있어야 한다`);
+  });
 
+  it("거부(rejected)된 건은 발행 호출보다 **앞에서** 걸러진다", () => {
+    const rejected = cycle.indexOf("isRejectedHold(rule.id, clip.id)");
+    const dispatch = cycle.indexOf("dispatchPublish({");
+    assert.ok(rejected > 0, "거부 확인이 없다 — 사람이 반려한 건이 다시 나간다");
+    assert.ok(dispatch > rejected,
+      "발행이 거부 확인보다 먼저다 — 반려해도 나가고 나서 걸러지는 순서다");
+  });
+
+  it("보류 중(heldAwaitingHuman)이면 승인돼 있어도 안 나간다", () => {
+    const d = decidePublish({ rule: rule(), approved: true, heldAwaitingHuman: true });
+    assert.equal(d.action, "hold", "보류가 승인보다 약하면 보류의 의미가 없다");
+    assert.equal(d.needsHuman, true, "사람이 확정해야 풀린다는 표시가 있어야 화면이 대기열에 올린다");
+  });
 });
 
 describe("보류된 건은 사람이 확정해야 다시 잡힌다 (F6 Invariant)", () => {

@@ -10,7 +10,7 @@
  *  - 계획 하나 = 프로그램 ↔ 채널 연결 하나. **계획이 없으면 아무것도 하지 않는다.**
  *  - 승인 대기 건은 **사람이 승인해야** 다음 확인 때 게시된다. 저절로 나가지 않는다.
  *  - 문구에서 내부어(순방·워커·게이트)를 쓰지 않는다 — 확인(10분마다 자동)·승인·실제 업로드
- *    잠금/권리 확인으로 말한다.
+ *    잠금/승인 대기로 말한다.
  *  - 서버 확장 필드(gates·publishedToday·distribution.origin)는 **옵셔널로 읽는다** —
  *    구버전 서버가 안 내려주면 해당 표시만 조용히 숨긴다(경고 오탐보다 미표시가 낫다).
  *  - 폴링을 새로 만들지 않는다 — 스토어의 /api/state 적응 폴링이 clips·episodes 배열을
@@ -963,7 +963,7 @@ export default function AutomationPage() {
           style={{ border: "1px solid var(--sd-warn-border)", background: "var(--sd-warn-bg)", color: "var(--sd-warn)" }}
         >
           ⚠ 지금은 실제 업로드가 꺼져 있습니다 — 자동배포가 실행돼도 기록만 남고 채널에는
-          올라가지 않습니다. (권리 확인의 승인 대기와는 별개인 운영 설정입니다.)
+          올라가지 않습니다. (승인 대기와는 별개인 운영 설정입니다.)
         </div>
       )}
 
@@ -1212,7 +1212,7 @@ export default function AutomationPage() {
             <GateCard
               on={!approveFirst} onClick={() => setApproveFirst(false)}
               title="승인 없이 배포"
-              desc="조건을 통과하면 바로 나갑니다. 권리 문제가 감지된 건만 승인 대기로 빠집니다."
+              desc="조건을 통과하면 사람 확인 없이 바로 나갑니다."
             />
           </div>
         </div>
@@ -1751,7 +1751,7 @@ export default function AutomationPage() {
                   </span>
                   <span className="sd-tag">{KIND_LABEL[r.mediaKind]}</span>
                   <span className="sd-tag sd-tag--warn">
-                    {r.gatePolicy === "approve_first" ? "승인 배포 — 사람이 확정해야 게시" : "승인 없이 배포 (권리 문제만 승인 대기로)"}
+                    {r.gatePolicy === "approve_first" ? "승인 배포 — 사람이 확정해야 게시" : "승인 없이 배포"}
                   </span>
                   <span className="sd-tag">하루 {monthlyPublishEstimate(r).perDay}개/채널</span>
                   <span className="sd-tag">{formatWeekdays(r.weekdays)}</span>
@@ -1984,7 +1984,7 @@ export default function AutomationPage() {
         className="rounded-[4px] px-3 py-2.5 text-[11.5px] leading-relaxed"
         style={{ border: "1px solid var(--sd-warn-border)", background: "var(--sd-warn-bg)", color: "var(--sd-warn)" }}
       >
-        <b>승인 대기 미디어는 저절로 나가지 않습니다.</b> 권리 확인 등으로 승인 대기에 들어온
+        <b>승인 대기 미디어는 저절로 나가지 않습니다.</b> 승인 대기에 들어온
         건은 사람이 승인해야 다음 확인 때 게시됩니다. 실제 업로드 잠금(운영 설정)은 이것과
         별개입니다 — 잠겨 있으면 승인해도 기록만 남습니다.
       </div>

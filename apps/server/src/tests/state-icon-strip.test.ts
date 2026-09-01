@@ -18,7 +18,10 @@ const clip = (o: Record<string, unknown>) => ({ id: "c1", episodeId: "e1", ...o 
 const withIcon = (icon?: string, extra: Record<string, unknown> = {}) =>
   clip({ editorState: { showChannel: true, ...(icon ? { channelIconDataUrl: icon } : {}), ...extra } });
 
-const PROGRAMS = [{ id: "p1", brandIconDataUrl: ICON }, { id: "p2", posterImageDataUrl: OTHER }];
+// 호출자는 프로그램 **행** 이 아니라 아이콘 **맵** 을 넘긴다 — getState 가 응답용으로
+// 아이콘을 빼 버린 배열을 그대로 넘겨 중복 제거가 통째로 죽었던 적이 있어(2026-09-01),
+// 타입으로 그 실수를 막는다.
+const ICONS = new Map<string, string>([["p1", ICON]]);   // p2 는 포스터만 — brandIcon 없음
 const EPISODES = [{ id: "e1", programId: "p1" }, { id: "e2", programId: "p2" }];
 
 const iconOf = (rows: unknown[]) =>
@@ -26,52 +29,52 @@ const iconOf = (rows: unknown[]) =>
 
 describe("/api/state — 중복 복사된 채널 아이콘만 뺀다", () => {
   it("프로그램 brandIcon 과 같으면 뺀다 (렌더가 폴백으로 같은 결과를 낸다)", () => {
-    const out = stripRedundantClipIcons([withIcon(ICON)], PROGRAMS, EPISODES);
+    const out = stripRedundantClipIcons([withIcon(ICON)], ICONS, EPISODES);
     assert.equal(iconOf(out), undefined);
   });
 
   it("editorState 의 다른 값은 건드리지 않는다", () => {
-    const out = stripRedundantClipIcons([withIcon(ICON, { channelName: "ENA" })], PROGRAMS, EPISODES);
+    const out = stripRedundantClipIcons([withIcon(ICON, { channelName: "ENA" })], ICONS, EPISODES);
     assert.equal((out[0] as any).editorState.channelName, "ENA");
     assert.equal((out[0] as any).editorState.showChannel, true);
   });
 
   // ⚠️ 사람이 클립별로 고른 아이콘 — 지우면 그 선택이 사라진다(실측 STEPAI 7개).
   it("brandIcon 과 다르면 보존한다 — 사람이 고른 값이다", () => {
-    const out = stripRedundantClipIcons([withIcon(OTHER)], PROGRAMS, EPISODES);
+    const out = stripRedundantClipIcons([withIcon(OTHER)], ICONS, EPISODES);
     assert.equal(iconOf(out), OTHER);
   });
 
   // ⚠️ 렌더 폴백 체인에는 poster 가 없다. 빼면 발행 영상에서 아이콘이 사라진다.
   it("brandIcon 이 없는 프로그램(포스터 시드)은 보존한다", () => {
     const out = stripRedundantClipIcons(
-      [clip({ episodeId: "e2", editorState: { channelIconDataUrl: OTHER } })], PROGRAMS, EPISODES);
+      [clip({ episodeId: "e2", editorState: { channelIconDataUrl: OTHER } })], ICONS, EPISODES);
     assert.equal(iconOf(out), OTHER);
   });
 
   it("회차가 없어도 clip.programId 로 프로그램을 찾는다", () => {
     const out = stripRedundantClipIcons(
       [clip({ episodeId: undefined, programId: "p1", editorState: { channelIconDataUrl: ICON } })],
-      PROGRAMS, EPISODES);
+      ICONS, EPISODES);
     assert.equal(iconOf(out), undefined);
   });
 
   it("프로그램을 못 찾으면 보존한다 — 모르면 안 지운다", () => {
     const out = stripRedundantClipIcons(
-      [clip({ episodeId: "e_unknown", editorState: { channelIconDataUrl: ICON } })], PROGRAMS, EPISODES);
+      [clip({ episodeId: "e_unknown", editorState: { channelIconDataUrl: ICON } })], ICONS, EPISODES);
     assert.equal(iconOf(out), ICON);
   });
 
   it("아이콘이 없는 클립·editorState 없는 클립은 그대로 통과한다", () => {
     const rows = [withIcon(undefined), clip({}), { id: "c9" }];
-    const out = stripRedundantClipIcons(rows, PROGRAMS, EPISODES);
+    const out = stripRedundantClipIcons(rows, ICONS, EPISODES);
     assert.equal(out.length, 3);
     assert.deepEqual(out[2], { id: "c9" });
   });
 
   it("brandIcon 을 가진 프로그램이 하나도 없으면 아무것도 안 건드린다", () => {
     const rows = [withIcon(ICON)];
-    assert.equal(stripRedundantClipIcons(rows, [{ id: "p2" }], EPISODES)[0], rows[0]);
+    assert.equal(stripRedundantClipIcons(rows, new Map(), EPISODES)[0], rows[0]);
   });
 });
 
