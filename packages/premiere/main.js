@@ -889,6 +889,30 @@ async function fetchTitlePng(rec, folder, aspect) {
   return file;
 }
 
+/**
+ * 찾아 둔 항목들을 한 트랙에 얹는다 — **에디터 얻기부터 트랜잭션까지 한 잠금 안에서.**
+ *
+ * 실측 2026-09-01: 액션 생성만 잠금 안으로 옮겼더니 여전히 "Requires locked access" 였다.
+ * `SequenceEditor.getEditor()` 로 얻은 **에디터 자체가 잠금 밖에서** 만들어졌기 때문이다.
+ * 그래서 잠금 안에서 에디터부터 다시 얻는다. 이 안에는 await 가 하나도 없다.
+ */
+function placeOnTrack(project, api, sequence, byName, found, track, label) {
+  return runLocked(project, () => {
+    const editor = api.SequenceEditor.getEditor(sequence);
+    let n = 0;
+    for (const [name, rec] of byName) {
+      const item = found.get(name);
+      if (!item) continue;
+      const at = api.TickTime.createWithSeconds(Number(rec.startTime) || 0);
+      const done = project.executeTransaction(
+        (c) => { c.addAction(editor.createOverwriteItemAction(item, at, track, 0)); },
+        `STEP-D ${label} ${name}`);
+      if (done !== false) n += 1;
+    }
+    return n;
+  });
+}
+
 /** 이름으로 프로젝트 항목을 찾아 **그 자리에서** 쓴다(findItemsByRecIds 와 같은 이유). */
 async function findItemsByFileNames(names, use) {
   const { api, project } = await activeProject();
@@ -1579,17 +1603,7 @@ async function addDecorationsForRecs(recs, aspect, onStage) {
   const byName = new Map(files.map((f) => [f.file.name, f.rec]));
   return await findItemsByFileNames([...byName.keys()], async (found, project2, api2) => {
     const sequence = (await activeSequence()).sequence;
-    const editor = api2.SequenceEditor.getEditor(sequence);
-    let n = 0;
-    for (const [name, rec] of byName) {
-      const item = found.get(name);
-      if (!item) continue;
-      const at = api2.TickTime.createWithSeconds(Number(rec.startTime) || 0);
-      const action = editor.createOverwriteItemAction(item, at, DECORATION_TRACK, 0);
-      const done = lockedTransaction(project2, (c) => { c.addAction(action); }, `STEP-D 오버레이 ${name}`);
-      if (done !== false) n += 1;
-    }
-    return n;
+    return placeOnTrack(project2, api2, sequence, byName, found, DECORATION_TRACK, "오버레이");
   });
 }
 
@@ -1659,12 +1673,12 @@ async function addCaptionMogrts(recs, aspect, onStage) {
     try {
       // 매 줄마다 다시 얻는다 — 앞 줄의 삽입(await) 이 앞서 얻은 객체를 무효로 만든다.
       const { api: api2, project, sequence } = await activeSequence();
-      const editor = api2.SequenceEditor.getEditor(sequence);
       const startSec = (Number(job.rec.startTime) || 0) + (Number(job.line.start) || 0);
       const dur = Math.max(0.2, Number(job.line.end) - Number(job.line.start));
       // 삽입과 길이 맞추기를 **한 잠금 안에서** — 사이에 await 를 두면 방금 넣은 아이템이
       // 무효가 되고, 잠금 밖에서 부르면 "Requires locked access" 다.
       runLocked(project, () => {
+        const editor = api2.SequenceEditor.getEditor(sequence);   // 잠금 안에서 얻는다
         const inserted = editor.insertMogrtFromPath(
           job.file.nativePath, api2.TickTime.createWithSeconds(startSec), CAPTION_TRACK, 0);
         const item = Array.isArray(inserted) ? inserted[0] : inserted;
@@ -1724,22 +1738,25 @@ async function addCaptionPngs(recs, aspect, onStage) {
   const byName = new Map(files.map((f) => [f.file.name, f]));
   return await findItemsByFileNames([...byName.keys()], async (found, project2, api2) => {
     const sequence = (await activeSequence()).sequence;
-    const editor = api2.SequenceEditor.getEditor(sequence);
-    let n = 0;
-    for (const [name, job] of byName) {
-      const item = found.get(name);
-      if (!item) continue;
-      const dur = Math.max(0.2, Number(job.line.end) - Number(job.line.start));
-      const at = api2.TickTime.createWithSeconds((Number(job.rec.startTime) || 0) + (Number(job.line.start) || 0));
-      // **길이를 먼저 정한다.** 안 하면 정지 이미지 기본 길이(환경설정 · 보통 5초)로 들어가
-      // 자막이 서로 덮어써진다.
-      const inOut = item.createSetInOutPointsAction(
-        api2.TickTime.createWithSeconds(0), api2.TickTime.createWithSeconds(dur));
-      const place = editor.createOverwriteItemAction(item, at, CAPTION_TRACK, 0);
-      const done = lockedTransaction(project2, (c) => { c.addAction(inOut); c.addAction(place); }, `STEP-D 자막 ${name}`);
-      if (done !== false) n += 1;
-    }
-    return n;
+    // 에디터 얻기부터 잠금 안에서(placeOnTrack 과 같은 이유). **길이를 먼저 정한다** —
+    // 안 하면 정지 이미지 기본 길이(보통 5초)로 들어가 자막이 서로 덮어써진다.
+    return runLocked(project2, () => {
+      const editor = api2.SequenceEditor.getEditor(sequence);
+      let n = 0;
+      for (const [name, job] of byName) {
+        const item = found.get(name);
+        if (!item) continue;
+        const dur = Math.max(0.2, Number(job.line.end) - Number(job.line.start));
+        const at = api2.TickTime.createWithSeconds((Number(job.rec.startTime) || 0) + (Number(job.line.start) || 0));
+        const done = project2.executeTransaction((c) => {
+          c.addAction(item.createSetInOutPointsAction(
+            api2.TickTime.createWithSeconds(0), api2.TickTime.createWithSeconds(dur)));
+          c.addAction(editor.createOverwriteItemAction(item, at, CAPTION_TRACK, 0));
+        }, `STEP-D 자막 ${name}`);
+        if (done !== false) n += 1;
+      }
+      return n;
+    });
   });
 }
 
@@ -1787,14 +1804,20 @@ async function addTitleMogrts(recs, aspect, onStage) {
     try {
       // ⚠️ editor·sequence 를 루프 밖에서 들고 있으면 **첫 삽입 직후 무효**가 된다
       //    (insertMogrtFromPath 가 await 다). 매번 다시 얻는 게 유일하게 안전한 방법이다.
-      const { api, sequence } = await activeSequence();
-      const editor = api.SequenceEditor.getEditor(sequence);
+      const { api, project, sequence } = await activeSequence();
       const at = api.TickTime.createWithSeconds(Number(rec.startTime) || 0);
       // V2(인덱스 1) — V1 영상 위. 오디오 트랙은 안 쓴다.
-      // 반환은 **꽂힌 트랙 아이템 배열**이다(Action 이 아니라 즉시 실행) — 비면 실패다.
-      // insertMogrtFromPath 는 **동기**다(공식 선언 반환형이 배열 · Promise 아님) —
-      // 그래서 잠금 안에서 그대로 부를 수 있다. 밖에서 부르면 "Requires locked access".
-      const inserted = runLocked(project, () => editor.insertMogrtFromPath(file.nativePath, at, TITLE_TRACK, 0));
+      // **잠금 안에서 에디터부터** 얻는다 — 밖에서 얻으면 "Requires locked access".
+      // 런타임이 Promise 를 주면 잠금 안에서는 결과를 확인할 수 없다(await 를 넣을 수 없다).
+      // 그때는 억지로 기다리지 않고 PNG 경로로 넘긴다 — 모양은 같고 편집만 못 한다.
+      const inserted = runLocked(project, () => {
+        const editor = api.SequenceEditor.getEditor(sequence);
+        return editor.insertMogrtFromPath(file.nativePath, at, TITLE_TRACK, 0);
+      });
+      if (inserted && typeof inserted.then === "function") {
+        console.log("[STEP-D] insertMogrtFromPath 가 비동기 — 잠금 안에서 확인 불가, PNG 로 간다");
+        return 0;
+      }
       if (Array.isArray(inserted) ? inserted.length > 0 : inserted != null && inserted !== false) placed += 1;
     } catch (err) {
       console.log("[STEP-D] mogrt 삽입 실패", rec.id, err);
@@ -1822,18 +1845,8 @@ async function addTitlePngs(recs, aspect, tracks, onStage) {
   const byName = new Map(files.map((f) => [f.file.name, f.rec]));
   const placed = await findItemsByFileNames([...byName.keys()], async (found, project2, api2) => {
     const sequence = (await activeSequence()).sequence;
-    const editor = api2.SequenceEditor.getEditor(sequence);
-    let n = 0;
-    for (const [name, rec] of byName) {
-      const item = found.get(name);
-      if (!item) continue;
-      const at = api2.TickTime.createWithSeconds(Number(rec.startTime) || 0);
-      // V2(인덱스 1)에 얹는다 — V1 의 영상 위에 있어야 제목이 보인다. 오디오는 없다.
-      const action = editor.createOverwriteItemAction(item, at, TITLE_TRACK, 0);
-      const done = lockedTransaction(project2, (c) => { c.addAction(action); }, `STEP-D 제목 ${name}`);
-      if (done !== false) n += 1;
-    }
-    return n;
+    // V2(인덱스 1)에 얹는다 — V1 의 영상 위에 있어야 제목이 보인다.
+    return placeOnTrack(project2, api2, sequence, byName, found, TITLE_TRACK, "제목");
   });
 
   // 하나도 못 얹었는데 트랙이 하나뿐이면 **그게 이유다.** 프리미어에는 트랙 추가 API 가

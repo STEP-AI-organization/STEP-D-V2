@@ -563,11 +563,11 @@ describe("패널 — 객체 무효화를 견딘다", () => {
     // callback function. Can call executeTransaction while having locked access."
     assert.ok(panel.includes("function lockedTransaction(project, build, label)"));
     assert.ok(panel.includes("project.lockedAccess(() => { out = fn(); });"));
-    // 잠그지 않은 직접 호출이 남아 있으면 거기서 또 난다.
-    // 잠금 밖의 직접 호출이 남아 있으면 거기서 또 난다. 헬퍼(lockedTransaction) 안의 한 번과,
-    // 이미 runLocked 로 감싼 자리(자막 mogrt 길이 맞추기) 정도만 허용한다.
-    const direct = panel.match(/\w+\.executeTransaction\(/g) ?? [];
-    assert.ok(direct.length <= 2, `잠그지 않은 executeTransaction 이 ${direct.length}곳이다`);
+    // 직접 호출은 **전부 runLocked 블록 안**이어야 한다(들여쓰기가 깊다).
+    // 밖에 하나라도 남으면 거기서 또 "Requires locked access" 가 난다.
+    const lines = panel.split(String.fromCharCode(10)).filter((l) => /executeTransaction[(]/.test(l));
+    const outside = lines.filter((l) => !/^\s{6,}/.test(l));
+    assert.equal(outside.length, 1, "헬퍼(lockedTransaction) 안의 한 줄만 남아야 한다");
   });
 
   it("무효화면 **한 번만** 다시 돈다 — 무한 재시도는 멈춘 것처럼 보인다", () => {
@@ -641,8 +641,8 @@ describe("패널 — 자막을 타임스탬프대로", () => {
   });
 
   it("길이를 먼저 정하고 얹는다 — 안 하면 정지 이미지 기본 길이(5초)로 서로 덮어쓴다", () => {
-    assert.ok(panel.includes("item.createSetInOutPointsAction("));
-    assert.ok(panel.includes("c.addAction(inOut); c.addAction(place);"));
+    assert.ok(panel.includes("c.addAction(item.createSetInOutPointsAction("));
+    assert.ok(panel.includes("c.addAction(editor.createOverwriteItemAction(item, at, CAPTION_TRACK, 0));"));
   });
 
   it("자막은 V4 — 제목·로고 위 트랙이다", () => {
@@ -694,7 +694,7 @@ describe("패널 — 로고·시간박스까지 재현", () => {
   it("트랙은 제목보다 위다 — 시간박스가 제목 뒤로 가면 안 된다", () => {
     assert.ok(panel.includes("const TITLE_TRACK = 1;"));
     assert.ok(panel.includes("const DECORATION_TRACK = 2;"));
-    assert.ok(panel.includes("createOverwriteItemAction(item, at, DECORATION_TRACK, 0)"));
+    assert.ok(panel.includes("DECORATION_TRACK, \"오버레이\")"), "오버레이가 제목 트랙에 얹히면 가려진다");
   });
 
   it("오버레이 실패가 제목을 되돌리지 않는다 — 앞의 성과를 지킨다", () => {
@@ -887,7 +887,8 @@ describe("패널 — 제목은 서버가 찍어 준 .mogrt 를 얹는다", () =>
   });
 
   it("제목은 V2 트랙에 올린다 — V1 영상 위에 얹혀야 보인다", () => {
-    assert.ok(panel.includes("createOverwriteItemAction(item, at, TITLE_TRACK, 0)"));
+    assert.ok(panel.includes('TITLE_TRACK, "제목")') || panel.includes("insertMogrtFromPath(file.nativePath, at, TITLE_TRACK, 0)"),
+      "제목이 V2 가 아닌 트랙에 간다");
   });
 
   it("트랙이 V1 뿐이면 **그게 이유라고** 말한다 — 트랙 추가 API 는 없다", () => {
