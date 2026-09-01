@@ -506,6 +506,13 @@ describe("패널 — 세로가 부족해도 손이 닿는다", () => {
     assert.match(html, /overflow-y: auto;/);
   });
 
+  it("패널 요소는 **눌리지 않는다** — 눌리면 상태줄·버튼·목록이 서로 겹친다", () => {
+    // 실측 2026-09-01: 목록에 최대 높이를 준 순간 flex 기본값(shrink:1)이 행을 압축해
+    // 제목과 메타 줄이 포개졌다. 세로가 모자라면 눌러서가 아니라 스크롤로 푼다.
+    assert.match(html, /#uploadPane > \*, #recsPane > \*, #uploadView > \* \{ flex: 0 0 auto; \}/);
+    assert.match(html, /\.rec \{[\s\S]{0,120}flex: 0 0 auto;/);
+  });
+
   it("추천 목록은 **자기 안에서** 스크롤한다 — 20건이 와도 버튼이 밀리지 않게", () => {
     const block = html.slice(html.indexOf(".recs {"), html.indexOf(".recs {") + 320);
     assert.match(block, /max-height: 45vh/, "목록에 상한이 없으면 아래 버튼이 화면 밖으로 간다");

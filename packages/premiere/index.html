@@ -73,6 +73,10 @@
     }
     .tab.active { color: #ffffff; font-weight: 600; border-bottom: 2px solid #2680eb; }
     #uploadPane, #recsPane { display: flex; flex-direction: column; }
+    /* ⚠️ 패널 안의 요소는 **절대 눌리면 안 된다.** 세로 공간이 모자라면 flex 는 자식을
+       줄여서 맞추는데, 그러면 상태줄·버튼·목록이 서로 겹쳐 읽을 수 없게 된다
+       (실측 2026-09-01). 넘치는 건 눌러서가 아니라 **스크롤로** 해결한다(body). */
+    #uploadPane > *, #recsPane > *, #uploadView > * { flex: 0 0 auto; }
     /* 웹 탭은 패널 높이를 꽉 채운다 — 안쪽이 웹앱이라 좁으면 못 쓴다. */
     #webPane { display: flex; flex-direction: column; flex: 1; min-height: 420px; }
     .webbar { display: flex; flex-direction: row; margin-bottom: 8px; }
@@ -85,20 +89,23 @@
       display: flex; flex-direction: column;
       /* 도킹(작다)·플로팅(크다) 둘 다 쓴다 — 고정 px 대신 화면 비율로 잡아
          큰 패널에서는 더 많이 보이게. 최소 높이는 두 건은 보이는 정도. */
-      min-height: 120px; max-height: 45vh; overflow-y: auto;
+      flex: 0 0 auto; min-height: 120px; max-height: 45vh; overflow-y: auto;
       border: 1px solid #333333; border-radius: 3px; padding: 4px;
     }
-    /* 추천 한 줄 — 누르면 그 구간으로 플레이헤드가 간다. */
+    /* 추천 한 줄 — 누르면 그 구간의 미리보기 시퀀스가 열린다.
+       ⚠️ **flex: 0 0 auto 가 필수다.** 목록에 최대 높이를 주는 순간 flex 자식들이 기본
+          `flex-shrink: 1` 로 **눌려서 서로 겹친다**(실측 2026-09-01: 제목과 메타 줄이
+          포개졌다). 스크롤 컨테이너 안의 행은 절대 줄어들면 안 된다. */
     .rec {
-      display: flex; flex-direction: column;
+      display: flex; flex-direction: column; flex: 0 0 auto;
       padding: 10px; margin-bottom: 8px;
       background: #1d1d1d; border: 1px solid #3a3a3a; border-left: 3px solid #2680eb;
       border-radius: 3px;
     }
-    .rec-head { display: flex; flex-direction: row; margin-bottom: 4px; }
+    .rec-head { display: flex; flex-direction: row; flex: 0 0 auto; margin-bottom: 4px; }
     .rec-check { width: 18px; height: 18px; margin-right: 8px; flex: 0 0 18px; }
-    .rec-title { color: #e8e8e8; font-size: 12px; flex: 1; }
-    .rec-meta { color: #8a8a8a; font-size: 11px; }
+    .rec-title { color: #e8e8e8; font-size: 12px; flex: 1; line-height: 1.4; }
+    .rec-meta { color: #8a8a8a; font-size: 11px; flex: 0 0 auto; line-height: 1.4; }
     .bar { height: 4px; background: #1d1d1d; border-radius: 2px; overflow: hidden; margin-top: 8px; }
     .bar > div { height: 4px; width: 0%; background-color: #2680eb; }
     .status { font-size: 12px; color: #a0a0a0; margin-top: 12px; line-height: 1.5; word-break: break-all; }
