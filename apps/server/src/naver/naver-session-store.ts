@@ -10,9 +10,9 @@
  * 키 만들기(32바이트 base64):
  *   node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"
  */
-import { keyReady, openWith, sealWith } from "../session-crypto.ts";
+import { keyReady, openWith, sealWith } from "../auth/session-crypto.ts";
 
-export { looksLikeStorageState } from "../session-crypto.ts";
+export { looksLikeStorageState } from "../auth/session-crypto.ts";
 
 const KEY_ENV = "NAVER_SESSION_KEY";
 

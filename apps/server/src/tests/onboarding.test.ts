@@ -24,7 +24,7 @@ import {
   nextTenantId,
   normalizeKind,
   planOnboarding,
-} from "../onboarding.ts";
+} from "../auth/onboarding.ts";
 
 const SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = (f: string) => fs.readFileSync(path.resolve(SRC, f), "utf-8");

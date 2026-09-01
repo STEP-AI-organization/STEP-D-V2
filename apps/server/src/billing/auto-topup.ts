@@ -35,7 +35,7 @@ import {
   buildTopup, checkCredits, creditPriceKrw, fixedAutoTopupPolicy, nextAutoTopupAlert, shouldAutoTopup,
   topupDedupeKey, type AutoTopupCode, type CreditVerdict,
 } from "./credits.ts";
-import { currentTenantId } from "../tenant.ts";
+import { currentTenantId } from "../auth/tenant.ts";
 
 export interface AutoTopupResult {
   charged: boolean;

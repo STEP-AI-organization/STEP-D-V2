@@ -19,7 +19,7 @@
  */
 import crypto from "node:crypto";
 import { promisify } from "node:util";
-import { getRawPool, type Queryable } from "./db-pg.ts";
+import { getRawPool, type Queryable } from "../db-pg.ts";
 import { defaultOpsRoleFor, isOpsRole, type OpsRole } from "./ops-role.ts";
 
 const scrypt = promisify(crypto.scrypt) as (

@@ -31,7 +31,7 @@ import {
   normalizeScopes,
   shouldTouchLastUsed,
   type ApiKeyRow,
-} from "../api-keys.ts";
+} from "../auth/api-keys.ts";
 
 const SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = (f: string) => fs.readFileSync(path.resolve(SRC, f), "utf-8");

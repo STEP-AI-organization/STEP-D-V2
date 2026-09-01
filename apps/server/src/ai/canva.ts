@@ -10,7 +10,7 @@
  * 계정은 우리 것 하나뿐이라 토큰 테이블도 단일 행(id='default')이다.
  */
 import { randomBytes, createHash } from "node:crypto";
-import { getPool } from "./db-pg.ts";
+import { getPool } from "../db-pg.ts";
 
 const pool = () => getPool();
 

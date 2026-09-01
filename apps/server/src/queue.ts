@@ -10,7 +10,7 @@
  * scaling out is just starting another process.
  */
 import { getPool, getRawPool } from "./db-pg.ts";
-import { runAsSystem } from "./tenant.ts";
+import { runAsSystem } from "./auth/tenant.ts";
 
 export type JobType =
   // 네이버 TV 업로드 — 공개 API 가 없어 브라우저 자동화. `naver` 레인(사무실 PC) 전용.

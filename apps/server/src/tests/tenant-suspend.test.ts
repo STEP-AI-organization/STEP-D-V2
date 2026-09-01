@@ -15,7 +15,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
 
-import { workspaceBlockReason } from "../auth.ts";
+import { workspaceBlockReason } from "../auth/auth.ts";
 
 const SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = (f: string) => fs.readFileSync(path.resolve(SRC, f), "utf-8");
@@ -61,7 +61,7 @@ describe("workspaceBlockReason — 회사 상태 판정", () => {
 
 describe("배선 — 판정을 실제로 부르는가", () => {
   it("resolveSession 이 회사 상태를 읽고 판정한다", () => {
-    const fn = new RegExp("export async function resolveSession[\\s\\S]*?\\n}").exec(read("auth.ts"))?.[0] ?? "";
+    const fn = new RegExp("export async function resolveSession[\\s\\S]*?\\n}").exec(read("auth/auth.ts"))?.[0] ?? "";
     assert.notEqual(fn, "", "resolveSession 을 찾지 못했다");
     assert.match(fn, /LEFT JOIN tenants/, "세션 조회가 tenants 를 안 읽는다");
     assert.match(fn, /workspaceBlockReason\(/, "읽어만 놓고 판정을 안 한다");
@@ -84,7 +84,7 @@ describe("배선 — 판정을 실제로 부르는가", () => {
   });
 
   it("destroyTenantSessions 는 superadmin 세션을 남긴다", () => {
-    const fn = new RegExp("export async function destroyTenantSessions[\\s\\S]*?\\n}").exec(read("auth.ts"))?.[0] ?? "";
+    const fn = new RegExp("export async function destroyTenantSessions[\\s\\S]*?\\n}").exec(read("auth/auth.ts"))?.[0] ?? "";
     assert.notEqual(fn, "", "destroyTenantSessions 를 찾지 못했다");
     assert.match(fn, /superadmin/, "정지를 되돌릴 사람의 세션까지 끊으면 잠긴다");
   });

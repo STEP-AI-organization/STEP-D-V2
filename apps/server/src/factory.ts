@@ -144,7 +144,7 @@ export async function internalHeaders(): Promise<Record<string, string>> {
   const token = process.env.INTERNAL_API_TOKEN;
   if (token) {
     h["x-internal-token"] = token;
-    const { currentTenantId } = await import("./tenant.ts");
+    const { currentTenantId } = await import("./auth/tenant.ts");
     try { h["x-tenant-id"] = currentTenantId(); } catch { /* 컨텍스트 없으면 기본 테넌트 */ }
   }
   const aud = apiBase();

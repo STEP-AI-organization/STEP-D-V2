@@ -15,7 +15,7 @@
  * 4종(YouTube·Meta·Instagram·TikTok)에 맞게 일반화한 것이다.
  */
 import { randomBytes } from "node:crypto";
-import { getPool } from "./db-pg.ts";
+import { getPool } from "../db-pg.ts";
 import { currentScope } from "./tenant.ts";
 
 const pool = () => getPool();

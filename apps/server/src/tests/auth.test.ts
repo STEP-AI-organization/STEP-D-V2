@@ -7,7 +7,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { hashPassword, passwordProblem, verifyPassword } from "../auth.ts";
+import { hashPassword, passwordProblem, verifyPassword } from "../auth/auth.ts";
 
 describe("비밀번호 해시", () => {
   it("맞는 비밀번호는 통과한다", async () => {

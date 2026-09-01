@@ -9,7 +9,7 @@
  * stores a face. See migrations/0003_cast-registry.cjs.
  */
 
-import type { EpisodeCastRow } from "./db-pg.ts";
+import type { EpisodeCastRow } from "../db-pg.ts";
 
 /** What core/cast.py's build_cast_timeline() emits per person (analysis.json → data.cast). */
 export interface CastTimelinePerson {

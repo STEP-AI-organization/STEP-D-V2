@@ -37,7 +37,7 @@ import {
   publishedTodayKst,
   withTenantLock,
 } from "./db-pg.ts";
-import { currentTenantId } from "./tenant.ts";
+import { currentTenantId } from "./auth/tenant.ts";
 import { maybeAutoTopup } from "./billing/auto-topup.ts";
 import {
   AUTO_RENDER_STOPPED_NOTE, CREDIT_IDLE_REASON, CREDIT_STOP_NOTE, DEFAULT_RULE_THUMBNAIL_MODE,

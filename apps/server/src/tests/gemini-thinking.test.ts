@@ -19,7 +19,7 @@ import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
 
 const SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const GEMINI = fs.readFileSync(path.join(SRC, "gemini.ts"), "utf-8");
+const GEMINI = fs.readFileSync(path.join(SRC, "ai/gemini.ts"), "utf-8");
 const INDEX = fs.readFileSync(path.join(SRC, "index.ts"), "utf-8");
 
 describe("thinking 예산 — 구조화 출력 호출은 추론을 끈다", () => {

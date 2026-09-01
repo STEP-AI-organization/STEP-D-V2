@@ -12,7 +12,7 @@
  * 호출부를 옮길 때 "새 테이블에 아직 없는 행" 을 만날 수 있다. 0027 마이그레이션이
  * 백필했지만, 그 뒤 구 경로로 쓴 데이터는 여기 안 보인다 — 라우트를 옮기는 순서가 중요하다.
  */
-import { getPool } from "./db-pg.ts";
+import { getPool } from "../db-pg.ts";
 
 const pool = () => getPool();
 

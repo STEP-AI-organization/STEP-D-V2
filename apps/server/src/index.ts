@@ -14,7 +14,7 @@ import { getCookie, setCookie, deleteCookie } from "hono/cookie";
 import {
   runWithTenant, runAsSystem, currentContext, currentTenantId, DEFAULT_TENANT_ID,
   type TenantContext,
-} from "./tenant.ts";
+} from "./auth/tenant.ts";
 import {
   SESSION_COOKIE,
   authRequired,
@@ -42,9 +42,9 @@ import {
   verifyPassword,
   workspaceBlockReason,
   type User,
-} from "./auth.ts";
-import { audit, clientIp, requireReason, requireSuperadmin, requireOpsAccess, requireOpsOrInternal } from "./admin.ts";
-import { grantDedupeKey, nextTenantId, planOnboarding } from "./onboarding.ts";
+} from "./auth/auth.ts";
+import { audit, clientIp, requireReason, requireSuperadmin, requireOpsAccess, requireOpsOrInternal } from "./auth/admin.ts";
+import { grantDedupeKey, nextTenantId, planOnboarding } from "./auth/onboarding.ts";
 import {
   billingConfig, cardBlock, cardBlockReason, cardLabel, cardTopupPaymentId, checkCustomer,
   declineMessage, extractCardDisplay, issueIdFor, unwrapPayment, verifyCharge,
@@ -58,7 +58,7 @@ import {
 import {
   API_SCOPES, bearerKey, checkRoute, generateKey, hashKey, keyBlockReason, keyPrefix,
   normalizeScopes, shouldTouchLastUsed,
-} from "./api-keys.ts";
+} from "./auth/api-keys.ts";
 import { logger } from "hono/logger";
 import fs from "node:fs";
 import path from "node:path";
@@ -228,24 +228,24 @@ import {
   type SearchEventKind,
 } from "./db-pg.ts";
 import { hasFfmpeg, probe, captureThumbnail, circleCrop, trimEncode, remuxFaststart, renderShort, renderStaticOverlayPng } from "./media/ffmpeg.ts";
-import { issueOAuthState, consumeOAuthState, HANDOFF_TTL_MS } from "./oauth-state.ts";
+import { issueOAuthState, consumeOAuthState, HANDOFF_TTL_MS } from "./auth/oauth-state.ts";
 import { synthesizeHookNarration } from "./media/tts.ts";
-import { embedQuery } from "./search-embed.ts";
-import { parseQuery } from "./search-parse.ts";
+import { embedQuery } from "./ai/search-embed.ts";
+import { parseQuery } from "./ai/search-parse.ts";
 import { newId } from "./pipeline.ts";
 import {
   normalizeProfile,
   promptForMode,
   PROFILE_RESPONSE_SCHEMA,
   type GenerateMode,
-} from "./profile.ts";
-import { normalizeCastInput } from "./cast.ts";
+} from "./ai/profile.ts";
+import { normalizeCastInput } from "./ai/cast.ts";
 import {
   youtubeUploadEnabled, UPLOAD_DISABLED_CODE, UPLOAD_DISABLED_MESSAGE, tiktokUploadEnabled,
   tiktokDirectPostEnabled,
   instagramUploadEnabled, facebookUploadEnabled,
 } from "./upload-gate.ts";
-import { geminiGenerate, parseJsonLoose } from "./gemini.ts";
+import { geminiGenerate, parseJsonLoose } from "./ai/gemini.ts";
 import { syncProgramFromFacesForMedia, CORE_PYTHON, CORE_DIR, REPO_ROOT } from "./content-pipeline.ts";
 import {
   basicReframeState,
@@ -325,7 +325,7 @@ import {
   readTrack,
 } from "./episode-intake.ts";
 import { dispatchPublish } from "./publish-dispatch.ts";
-import { opsCapabilityOf, canPublish, isOpsRole, OPS_ROLES } from "./ops-role.ts";
+import { opsCapabilityOf, canPublish, isOpsRole, OPS_ROLES } from "./auth/ops-role.ts";
 import {
   AUTO_TOPUP_HARD_MAX_KRW_PER_MONTH, AUTO_TOPUP_HARD_MAX_PER_DAY, FIXED_AUTO_TOPUP,
   CREDIT_UNIT_LABEL, MANUAL_REASONS, buildTopup, checkCredits, creditPriceKrw,
@@ -398,7 +398,7 @@ import {
 import {
   CANVA_CALLBACK_PATH, canvaConfigured, canvaConnected, canvaAuthUrl,
   canvaExchangeCode, disconnectCanva, listCanvaDesigns,
-} from "./canva.ts";
+} from "./ai/canva.ts";
 import {
   createJob as createFactoryJob,
   findByIdempotencyKey as findFactoryJobByKey,

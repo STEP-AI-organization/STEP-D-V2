@@ -8,7 +8,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { canManageWorkspace, isWorkspaceOwner, type Role } from "../auth.ts";
+import { canManageWorkspace, isWorkspaceOwner, type Role } from "../auth/auth.ts";
 
 const ROLES: Role[] = ["owner", "admin", "member", "superadmin"];
 

@@ -16,7 +16,7 @@
  */
 import type { Context } from "hono";
 import { HTTPException } from "hono/http-exception";
-import { getRawPool } from "./db-pg.ts";
+import { getRawPool } from "../db-pg.ts";
 import { authRequired, type User } from "./auth.ts";
 
 export function isSuperadmin(user: User | undefined): boolean {

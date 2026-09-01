@@ -57,7 +57,7 @@ import {
 } from "./media/thumbnail-assets.ts";
 import { uploadFile, uploadPath, thumbPath, promoteUpload } from "./media/storage-gcs.ts";
 import { initQueue, claimJob, completeJob, failJob, requeueStale, heartbeatJob, enqueue, lastDoneJobAt, pruneDoneJobs, queueStats, type Job, type JobType } from "./queue.ts";
-import { runWithTenant, runAsSystem, DEFAULT_TENANT_ID } from "./tenant.ts";
+import { runWithTenant, runAsSystem, DEFAULT_TENANT_ID } from "./auth/tenant.ts";
 import { recordAutoPublishForReport, recordAutoPublishFailureForReport } from "./publish-notify.ts";
 import { runAutomationCycle } from "./automation-cycle.ts";
 import { runChannelPipeline, shouldSweepChannel } from "./channel-pipeline.ts";

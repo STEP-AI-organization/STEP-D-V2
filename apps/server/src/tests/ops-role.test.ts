@@ -18,7 +18,7 @@ import {
   defaultOpsRoleFor,
   isOpsRole,
   opsCapabilityOf,
-} from "../ops-role.ts";
+} from "../auth/ops-role.ts";
 
 const SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -87,7 +87,7 @@ describe("세션이 운영 역할을 실제로 실어 나른다", () => {
   // 모든 사용자가 vendor 로 떨어졌다. 판정은 옳은데 입력이 없던 사고 —
   // "모르면 가장 좁은 권한"이 안전장치로 동작한 덕에 권한 초과는 아니었지만,
   // 운영자가 자기 화면에서 배포 버튼을 못 보는 상태로 굳었다.
-  const src = () => fs.readFileSync(path.resolve(SRC, "auth.ts"), "utf-8");
+  const src = () => fs.readFileSync(path.resolve(SRC, "auth/auth.ts"), "utf-8");
 
   it("resolveSession 이 ops_role 을 조회한다", () => {
     assert.match(src(), /ops_role\s+AS\s+"opsRole"/, "SELECT 에 ops_role 이 없다");

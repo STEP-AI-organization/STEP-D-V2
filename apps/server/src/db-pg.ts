@@ -7,7 +7,7 @@
 import { randomUUID } from "node:crypto";
 import pg from "pg";
 import { seed } from "./seed.ts";
-import { ALL_TENANTS, DEFAULT_TENANT_ID, currentScope, runAsSystem, runWithTenant } from "./tenant.ts";
+import { ALL_TENANTS, DEFAULT_TENANT_ID, currentScope, runAsSystem, runWithTenant } from "./auth/tenant.ts";
 import { installKstTimestampParser } from "./kst.ts";
 // 자동 충전 알림의 **모양·사유 목록·유효기간은 credits.ts(순수)가 정본**이다 — 여기선 저장만 한다.
 import { AUTO_TOPUP_CODES, liveAutoTopupAlert, type AutoTopupAlert } from "./billing/credits.ts";
@@ -753,7 +753,7 @@ export async function getEntity<T = unknown>(kind: EntityKind, id: string): Prom
  */
 async function mirrorToDomain(kind: EntityKind, id: string, data: unknown): Promise<void> {
   if (kind !== "program" && kind !== "episode" && kind !== "clip" && kind !== "recommendation") return;
-  const { mirrorEntity } = await import("./domain.ts");
+  const { mirrorEntity } = await import("./auth/domain.ts");
   await mirrorEntity(kind, id, data);
 }
 

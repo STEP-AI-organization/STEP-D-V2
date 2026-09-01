@@ -15,7 +15,7 @@ import {
   runAsSystem,
   runWithTenant,
   tenantWhere,
-} from "../tenant.ts";
+} from "../auth/tenant.ts";
 
 describe("컨텍스트 없음 = 실수 (조용한 폴백 금지)", () => {
   it("컨텍스트 밖에서 currentScope()는 던진다", () => {
