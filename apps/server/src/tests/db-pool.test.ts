@@ -24,8 +24,18 @@ const RESERVED = 30;          // 워커·운영 접속·여유
 
 describe("DB 커넥션 풀 — 인스턴스가 늘어도 고갈되지 않는다", () => {
   it("풀 크기가 env 로 조절된다 — 한계에 부딪혔을 때 배포 없이 바꿔야 한다", () => {
-    assert.match(db, /const POOL_MAX = Math\.max\(1, Number\(process\.env\.PG_POOL_MAX\) \|\| \d+\)/);
+    assert.match(db, /const POOL_MAX = Math\.max\(\d+, Number\(process\.env\.PG_POOL_MAX\) \|\| \d+\)/);
     assert.match(db, /max: POOL_MAX/, "Pool 이 그 값을 안 쓰면 env 는 장식이다");
+  });
+
+  // ⚠️ 하한이 필요하다. LOCK_SLOTS 가 "슬롯 하나 = 커넥션 2개(바깥+중첩)" 를 전제로
+  // (POOL_MAX-1)/2 를 쓰므로, env 로 2 같은 값을 주면 그 전제가 깨져 중첩 안쪽 질의가
+  // 커넥션을 못 잡고 실패한다 — 카드 결제가 그 경로에 있다.
+  it("env 로도 계산이 깨지는 값 아래로는 못 내려간다", () => {
+    const m = /const POOL_MAX = Math\.max\((\d+),/.exec(db);
+    assert.ok(m, "하한을 못 찾았다");
+    assert.ok(Number(m[1]) >= 4,
+      `하한 ${m?.[1]} 이면 중첩 잠금이 쓸 커넥션이 안 남는다 (바깥 1 + 중첩 1 + 여유 1)`);
   });
 
   it("기본값이 인스턴스 10개를 버틴다 — 8개에서 죽던 값(10)으로 되돌아가지 않게", () => {

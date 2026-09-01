@@ -8386,6 +8386,20 @@ app.patch("/api/clips/:id/editor", async (c) => {
   // Master-absolute trim(에디터 새 모델): editorState.trimIn/trimOut이 이미 마스터 절대 초.
   // 세그먼트(=clip.startTime/endTime)를 트림에 맞춰 이동시켜 두면, 아래 /export의 세그먼트
   // 상대 계산이 자연스럽게 trimIn=0, trimOut=segLen인 상태로 굽는다 — 렌더 로직 손 안 대고 통합.
+  // ⚠️ **읽기에서 숨긴 걸 쓰기가 지우지 못하게 한다.**
+  // `/api/state` 는 프로그램 아이콘과 똑같은 클립 아이콘을 응답에서 뺀다(중복 바이트 제거 ·
+  // db-pg.ts `stripRedundantClipIcons`). 그런데 이 라우트는 editorState 를 **통째로 덮으므로**,
+  // 그렇게 뺀 상태로 화면에 간 클립을 편집자가 제목만 고쳐 저장해도 아이콘이 DB 에서 영영
+  // 사라진다 — 응답 최적화가 데이터 손실로 바뀌는 지점이다. 들어온 editorState 에 키가
+  // **아예 없을 때만** 기존 값을 살려 둔다(빈 문자열로 왔으면 "지워 달라" 는 뜻이라 존중한다).
+  const priorEditor = clip.editorState as Record<string, unknown> | undefined;
+  if (
+    priorEditor && typeof priorEditor.channelIconDataUrl === "string" && priorEditor.channelIconDataUrl
+    && body.editorState && !("channelIconDataUrl" in (body.editorState as Record<string, unknown>))
+  ) {
+    (body.editorState as Record<string, unknown>).channelIconDataUrl = priorEditor.channelIconDataUrl;
+  }
+
   const patch: Record<string, unknown> = { editorState: body.editorState };
   if (
     es.trimBase === "master" &&
@@ -9946,7 +9960,14 @@ const oauthCallback = oauthStateGuard("error", "/register", async (c, st: OAuthS
     // Fan out the heavy part — per-video analytics for every upload — to the worker. force
     // is off: if the inline run above already synced, the worker skips the re-sync and just
     // enqueues the per-video jobs; if it failed, the channel is still due so the worker runs it.
-    await enqueue("channel.analyze", { channelId: channel.channelId, force: false }, {
+    //
+    // ⚠️ `fanOut: true` 가 **필수다.** 바로 위 인라인 실행이 lastSyncedAt·lastAnalyzedAt 을
+    // 방금 찍었으므로 이 잡은 워커에서 반드시 "not due"(0/0) 로 떨어진다. 워커의 팬아웃
+    // 가드는 "아무것도 안 한 실행" 을 건너뛰는데, 이 잡은 애초에 **동기화가 아니라 팬아웃을
+    // 시키려고** 넣는 것이라 그 판정에 걸리면 안 된다. 없으면 새로 연결한 채널이 최대 6시간
+    // (VIDEO_SYNC_INTERVAL_MS) 동안 영상별 분석·댓글을 하나도 못 받는다 —
+    // enqueueDueVideoJobs 가 그 잡들을 넣는 **유일한** 경로다.
+    await enqueue("channel.analyze", { channelId: channel.channelId, force: false, fanOut: true }, {
       dedupeKey: `channel.analyze:${channel.channelId}`,
     });
 

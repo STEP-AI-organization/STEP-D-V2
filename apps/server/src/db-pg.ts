@@ -5,7 +5,7 @@
  * Same domain graph + media/youtube schema as the SQLite prototype.
  */
 import { AsyncLocalStorage } from "node:async_hooks";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import pg from "pg";
 import { seed } from "./seed.ts";
 import { ALL_TENANTS, DEFAULT_TENANT_ID, currentScope, runAsSystem, runWithTenant } from "./auth/tenant.ts";
@@ -240,7 +240,11 @@ async function assertRlsEnforced(): Promise<void> {
  * env 로 뺀 이유: 한계에 부딪혔을 때 **배포 없이** 조절해야 하기 때문이다. 근본 해법은
  * 커넥션 풀러(PgBouncer / Cloud SQL 연결 풀링)지만, 그건 인프라 작업이고 이건 지금 할 수 있다.
  */
-const POOL_MAX = Math.max(1, Number(process.env.PG_POOL_MAX) || 5);
+// ⚠️ 하한이 1 이 아니라 4 인 이유: 아래 LOCK_SLOTS 가 "슬롯 하나가 커넥션 2개(바깥+중첩)를
+// 쓴다" 를 전제로 (POOL_MAX-1)/2 를 쓴다. PG_POOL_MAX 를 2 같은 값으로 잘못 주면 그 전제가
+// 깨져 중첩 안쪽 질의가 커넥션을 못 잡고 10초 뒤 실패한다 — 카드 결제가 그 경로다.
+// env 로 줄이는 건 허용하되, 계산이 성립하는 선 아래로는 못 내려가게 막는다.
+const POOL_MAX = Math.max(4, Number(process.env.PG_POOL_MAX) || 5);
 
 export async function initDb(): Promise<void> {
   rawPool = new Pool({
@@ -746,9 +750,18 @@ export async function listReframeLabels(
  */
 export async function listEntities<T = unknown>(kind: EntityKind, limit?: number): Promise<T[]> {
   if (limit && limit > 0) {
-    // ⚠️ **최신 = 작은 ord** 다. 엔티티는 전부 `prependEntity`(= `MIN(ord) - 1`)로 쓰기 때문에
-    // ord 는 새로 쓸수록 작아진다. 여기서 `ORDER BY ord DESC LIMIT n` 을 쓰면 "최근 n개" 가
-    // 아니라 **가장 오래된 n개**가 나온다 — 아래 무제한 경로가 ASC 인 것과도 어긋난다.
+    // ⚠️ `ORDER BY ord ASC` 다 — 아래 무제한 경로와 **같은 정렬**이어야 상한을 걸고 안 걸고가
+    // 같은 목록의 앞부분/전체 관계가 된다. 예전엔 여기만 DESC 라 상한을 거는 순간 목록이
+    // 뒤집혔다.
+    //
+    // 정렬의 의미는 쓰는 쪽이 정한다: `prependEntity` 는 `MIN(ord) - 1` 로 넣으므로 그 경로로
+    // 쌓인 종류는 **작은 ord 가 최신**이고, 그때 ASC 가 곧 "최신 순" 이다. 반면 `putEntity` 의
+    // 기본값은 `ord = 0` 이라 그 경로만 쓰는 종류는 전부 0 으로 묶여 순서가 사실상 삽입 순도
+    // 아니다 — **"엔티티는 전부 prepend 로 쓴다" 는 전제는 사실이 아니다.**
+    // 상한을 새 kind 에 걸 거라면 그 kind 가 어느 경로로 쓰이는지 먼저 확인할 것.
+    //
+    // (2026-09-01 기준 상한을 쓰는 유일한 호출부는 kind='job' 인데 이 kind 의 **생산자가
+    //  리포에 없다** — `/api/state.jobs` 는 늘 빈 배열이라 지금은 이 경로가 실제로 안 돈다.)
     const { rows } = await pool.query(
       "SELECT data FROM entities WHERE kind = $1 ORDER BY ord ASC LIMIT $2",
       [kind, limit],
@@ -2360,17 +2373,21 @@ async function listProgramsForState<T = unknown>(): Promise<{ programs: T[]; bra
     `SELECT (data - 'posterImageDataUrl' - 'brandIconDataUrl') AS data,
             (data ? 'posterImageDataUrl') AS has_poster,
             (data ? 'brandIconDataUrl')   AS has_icon,
-            (data ->> 'brandIconDataUrl') AS brand_icon
+            md5(data ->> 'brandIconDataUrl') AS brand_icon_md5
        FROM entities WHERE kind = 'program' ORDER BY ord ASC`,
   );
-  // ⚠️ `brand_icon` 은 **응답에 실리지 않는다.** 오직 `stripRedundantClipIcons` 가
-  // "클립 아이콘이 프로그램 것과 같은가" 를 판정하는 데만 쓴다. 이걸 따로 안 꺼내고
-  // 위에서 뺀 `programs` 로 판정하면 맵이 항상 비어 **중복 제거가 통째로 죽는다**
-  // (실측 ENA 19.4MB → 1.8MB 였던 게 다시 19.4MB 로 돌아간다).
+  // ⚠️ 아이콘을 **원문이 아니라 md5 로** 꺼낸다. 판정에 필요한 건 "같은가" 뿐인데 원문을
+  // 고르면 방금 jsonb `-` 로 안 읽게 만든 base64 가 Postgres→Node 구간을 그대로 다시 건넌다
+  // (ENA 기준 수백 KB · /api/state 는 폴링되는 경로다). 32자 해시면 충분하다.
+  //
+  // 이걸 따로 안 꺼내고 위에서 이미 아이콘을 뺀 `programs` 로 판정하면 맵이 항상 비어
+  // **중복 제거가 통째로 죽는다**(19.4MB → 1.8MB 였던 게 다시 19.4MB 로 돌아간다).
   const brandIconOf = new Map<string, string>();
   for (const r of rows) {
     const id = (r.data as Record<string, unknown> | null)?.id;
-    if (id && typeof r.brand_icon === "string" && r.brand_icon) brandIconOf.set(String(id), r.brand_icon);
+    if (id && typeof r.brand_icon_md5 === "string" && r.brand_icon_md5) {
+      brandIconOf.set(String(id), r.brand_icon_md5);
+    }
   }
   return {
     programs: rows.map((r) => withImageFlags(r.data, r.has_poster, r.has_icon) as T),
@@ -2412,17 +2429,28 @@ export function withImageFlags(
  *  - **brandIcon 과 다른 값** — 사람이 클립별로 고른 아이콘이다(실측 STEPAI 7개). 지우면 손실.
  *  - **poster 로 시드된 값** — 렌더 폴백에는 poster 가 없다. 빼면 발행 영상에서 아이콘이
  *    사라진다. brandIcon 이 없는 프로그램(실측 STEPAI 4개 중 2개)이 여기 해당한다.
+ *  - **회차가 없는 클립(`episodeId` 빈 값)** — 아래 참고.
  *
- * 저장된 데이터는 그대로다 — **내보낼 때만** 뺀다. 되돌리려면 이 함수만 지우면 된다.
+ * ⚠️ **판정은 렌더가 하는 것과 글자 그대로 같아야 한다.** 렌더(index.ts renderClipMedia)와
+ * 미리보기(previewChannelIconBox)는 둘 다 `episodeId` 가 있을 때만 돌고, 프로그램을
+ * **회차를 거쳐서만** 찾는다 — `clip.programId` 는 보지 않는다. 그래서 여기서 `programId` 로
+ * 찾아 빼면 회차 없는 클립(편집본 업로드는 회차가 안 잡히면 `episodeId = ""` 다)의 아이콘이
+ * **아무도 되살리지 못한 채** 사라져 발행 영상에 안 나온다. 한쪽으로만 틀려야 한다면
+ * 안 빼는 쪽으로 틀린다 — 안 뺀 아이콘은 바이트를 더 쓸 뿐이지만, 잘못 뺀 아이콘은 방송분을 망친다.
+ *
+ * 저장된 데이터는 그대로다 — **내보낼 때만** 뺀다.
+ * ⚠️ 단 "되돌릴 수 있다" 는 건 **응답에 한해서다.** `PATCH /api/clips/:id/editor` 는
+ * editorState 를 통째로 덮으므로, 뺀 상태로 화면에 간 클립을 편집자가 한 번 저장하면 그
+ * 아이콘은 DB 에서도 사라진다. 그래서 그 라우트가 **빠진 키를 보존**하도록 맞춰 뒀다.
  */
 export function stripRedundantClipIcons(
   clips: unknown[],
-  // ⚠️ 프로그램 **행**이 아니라 아이콘 **맵**을 받는다. 행을 받으면 호출자가 이미 아이콘을
-  // 빼 버린 배열을 넘겨도 타입이 통과해 조용히 무동작이 된다 — 실제로 그렇게 죽었다.
-  brandIconOf: Map<string, string>,
+  // ⚠️ 프로그램 **행**이 아니라 아이콘 **맵**(programId → md5)을 받는다. 행을 받으면 호출자가
+  // 이미 아이콘을 빼 버린 배열을 넘겨도 타입이 통과해 조용히 무동작이 된다 — 실제로 그랬다.
+  brandIconMd5Of: Map<string, string>,
   episodes: unknown[],
 ): unknown[] {
-  if (!brandIconOf.size) return clips;
+  if (!brandIconMd5Of.size) return clips;
   const programOfEpisode = new Map<string, string>();
   for (const e of episodes as Record<string, unknown>[]) {
     if (e?.id && e?.programId) programOfEpisode.set(String(e.id), String(e.programId));
@@ -2432,9 +2460,11 @@ export function stripRedundantClipIcons(
     const es = clip?.editorState as Record<string, unknown> | undefined;
     const icon = es?.channelIconDataUrl;
     if (typeof icon !== "string" || !icon) return raw;
-    const pid = (typeof clip.programId === "string" && clip.programId)
-      || programOfEpisode.get(String(clip.episodeId ?? ""));
-    if (!pid || brandIconOf.get(pid) !== icon) return raw;   // 다르면 사람이 고른 값 — 보존
+    // 렌더와 같은 경로로만 프로그램을 찾는다(회차 경유). 위 주석 참고.
+    const pid = programOfEpisode.get(String(clip.episodeId ?? ""));
+    if (!pid) return raw;
+    const digest = createHash("md5").update(icon).digest("hex");
+    if (brandIconMd5Of.get(pid) !== digest) return raw;   // 다르면 사람이 고른 값 — 보존
     const { channelIconDataUrl: _redundant, ...restEditor } = es!;
     return { ...clip, editorState: restEditor };
   });

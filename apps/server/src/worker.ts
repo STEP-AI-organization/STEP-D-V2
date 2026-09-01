@@ -496,7 +496,13 @@ async function handleChannelAnalyze(job: Job): Promise<void> {
   // 통과해 15분마다 계속 도는 채널이 정확히 `needs re-consent for analytics scope` 상태다
   // (already running · no refresh token · revoked 도 같다). 그래서 사유를 나열하지 않고
   // **"아무것도 안 했으면 팬아웃도 안 한다"** 로 판정한다 — 사유가 늘어도 따라온다.
-  if (result.skipped && result.videosSynced === 0 && result.analyticsDays === 0) return;
+  //
+  // ⚠️ 단 `fanOut` 이 붙은 잡은 예외다. "동기화가 이번에 무언가 했는가" 와 "팬아웃할 영상이
+  // 있는가" 는 **다른 질문**이다 — enqueueDueVideoJobs 는 이번 실행 결과가 아니라 DB 의
+  // 영상 목록을 읽는다. OAuth 연결 직후처럼 **팬아웃만 시키려고 넣은 잡**은 정의상 0/0 이라
+  // 이 가드에 걸리는데, 그러면 새 채널이 6시간 동안 영상별 잡을 하나도 못 받는다.
+  // 그래서 추론하지 않고 **넣는 쪽이 의도를 밝히게** 한다.
+  if (!job.payload.fanOut && result.skipped && result.videosSynced === 0 && result.analyticsDays === 0) return;
 
   // Fan out per-video analytics/comments for the recent uploads that are due.
   await enqueueDueVideoJobs(channelId);

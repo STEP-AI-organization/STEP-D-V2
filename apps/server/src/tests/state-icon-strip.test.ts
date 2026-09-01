@@ -1,5 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { stripRedundantClipIcons, withImageFlags } from "../db-pg.ts";
 
 /**
@@ -21,7 +22,10 @@ const withIcon = (icon?: string, extra: Record<string, unknown> = {}) =>
 // 호출자는 프로그램 **행** 이 아니라 아이콘 **맵** 을 넘긴다 — getState 가 응답용으로
 // 아이콘을 빼 버린 배열을 그대로 넘겨 중복 제거가 통째로 죽었던 적이 있어(2026-09-01),
 // 타입으로 그 실수를 막는다.
-const ICONS = new Map<string, string>([["p1", ICON]]);   // p2 는 포스터만 — brandIcon 없음
+// 맵은 아이콘 **원문이 아니라 md5** 를 담는다 — 판정에 필요한 건 "같은가" 뿐이고,
+// 원문을 실으면 방금 DB 에서 안 읽게 만든 base64 가 다시 Postgres→Node 를 건넌다.
+const md5 = (s: string) => createHash("md5").update(s).digest("hex");
+const ICONS = new Map<string, string>([["p1", md5(ICON)]]);   // p2 는 포스터만 — brandIcon 없음
 const EPISODES = [{ id: "e1", programId: "p1" }, { id: "e2", programId: "p2" }];
 
 const iconOf = (rows: unknown[]) =>
@@ -52,11 +56,15 @@ describe("/api/state — 중복 복사된 채널 아이콘만 뺀다", () => {
     assert.equal(iconOf(out), OTHER);
   });
 
-  it("회차가 없어도 clip.programId 로 프로그램을 찾는다", () => {
+  // ⚠️ 렌더(renderClipMedia)와 미리보기는 **회차가 있을 때만** 돌고 프로그램을 회차 경유로만
+  // 찾는다 — clip.programId 는 안 본다. 그래서 여기서 programId 로 빼면 그 아이콘을 되살릴
+  // 주체가 아무도 없어 **발행 영상에서 사라진다.** 편집본 업로드는 회차가 안 잡히면
+  // episodeId 가 빈 문자열이라 실제로 흔한 경우다.
+  it("회차가 없으면 programId 가 같아도 **보존한다** — 렌더가 되살리지 못한다", () => {
     const out = stripRedundantClipIcons(
-      [clip({ episodeId: undefined, programId: "p1", editorState: { channelIconDataUrl: ICON } })],
+      [clip({ episodeId: "", programId: "p1", editorState: { channelIconDataUrl: ICON } })],
       ICONS, EPISODES);
-    assert.equal(iconOf(out), undefined);
+    assert.equal(iconOf(out), ICON);
   });
 
   it("프로그램을 못 찾으면 보존한다 — 모르면 안 지운다", () => {
