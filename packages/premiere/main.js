@@ -907,6 +907,19 @@ function subclipName(r) {
   return `[STEP-D] ${String(r.title || "추천").slice(0, 40)} · ${r.id}`;
 }
 
+/**
+ * 시퀀스·조각 이름 끝에 붙여 둔 추천 id 를 되읽는다.
+ *
+ * 왜 이름에 담나: 프리미어에는 우리가 임의 메타를 붙일 자리가 없다(프로젝트 항목에 커스텀
+ * 필드가 없다). 그래서 **이름이 유일한 끈**이다 — subclipName·recSequenceName 이 같은 규칙으로
+ * 끝에 id 를 둔다. 편집자가 이름을 바꾸면 끈이 끊기는데, 그때는 그냥 연결이 안 될 뿐
+ * 업로드 자체는 된다(끊겨도 망가지지 않는 쪽으로).
+ */
+function recIdFromName(name) {
+  const m = /·\s*([A-Za-z0-9_-]{3,})\s*$/.exec(String(name || ""));
+  return m ? m[1] : null;
+}
+
 async function findMasterItem(filename, use) {
   return await retryStale("원본 찾기", () => findMasterItemOnce(filename, use));
 }
@@ -2208,7 +2221,7 @@ function contentTypeFor(name) {
 }
 
 /** 업로드 본체 — 렌더한 파일이든 사람이 고른 파일이든 여기 하나로 모인다. */
-async function runUpload(source, programId) {
+async function runUpload(source, programId, context) {
   const reader = makeReader(source.entry, source.nativePath, source.size);
   // 어느 읽기 경로로 갔는지 보여 준다. 큰 파일에서 프리미어까지 느려지면 원인이 대개
   // 이것("전체 읽기" = 파일을 통째로 메모리에)이라, 사후에 묻지 않아도 되게 앞에 띄운다.
@@ -2247,7 +2260,13 @@ async function runUpload(source, programId) {
         filename: source.name,
         contentType: contentTypeFor(source.name),
         size: source.size,
-        title: source.name.replace(/\.[^.]+$/, ""),
+        // 제목은 **추천 제목**이 있으면 그걸 쓴다 — 파일명(stepd-export-….mp4)이 그대로
+        // 배포 목록에 뜨면 사람이 뭘 올렸는지 못 알아본다.
+        title: (context && context.title) || source.name.replace(/\.[^.]+$/, ""),
+        // 어느 회차·추천에서 나온 편집본인지. 없으면 예전처럼 프로그램에만 붙는다.
+        ...(context && context.episodeNumber !== undefined ? { episodeNumber: context.episodeNumber } : {}),
+        ...(context && context.recommendationId ? { recommendationId: context.recommendationId } : {}),
+        ...(context && context.editKind ? { editKind: context.editKind } : {}),
       }),
     });
 
@@ -2303,10 +2322,37 @@ async function doUpload() {
 async function doExportAndUpload() {
   if (busy || !selectedProgram()) return;
   await withBusy(async () => {
+    // **무엇을 편집한 것인지** 먼저 알아낸다 — 렌더가 끝난 뒤엔 시퀀스가 바뀌어 있을 수 있다.
+    const context = await exportContext();
     const rendered = await exportActiveSequence((msg) => setStatus($("status"), msg));
-    console.log(`[STEP-D] rendered ${rendered.nativePath} · ${rendered.size} bytes`);
-    await runUpload(rendered, selectedProgram());
+    console.log(`[STEP-D] rendered ${rendered.nativePath} · ${rendered.size} bytes`, context);
+    await runUpload(rendered, selectedProgram(), context);
   });
+}
+
+/**
+ * 지금 내보낼 시퀀스가 **어느 추천의 편집본인지** 찾아 낸다.
+ *
+ * 우리가 만든 미리보기 시퀀스(`[STEP-D] … · <추천id>`)면 그 추천의 제목·회차를 물려준다.
+ * 편집자가 만든 시퀀스면 아무것도 못 찾는데, 그때는 예전처럼 프로그램에만 붙는다 —
+ * **끈이 끊겨도 업로드는 되는 쪽**으로 둔다.
+ */
+async function exportContext() {
+  try {
+    const { name } = await activeSequence();
+    const recId = recIdFromName(name);
+    if (!recId) return null;
+    const rec = recRows.find((r) => String(r.id) === recId);
+    if (!rec) return { recommendationId: recId, editKind: "short" };
+    return {
+      recommendationId: recId,
+      title: rec.title || undefined,
+      episodeNumber: rec.episodeNumber,
+      editKind: "short",
+    };
+  } catch (_) {
+    return null;      // 시퀀스를 못 읽어도 업로드는 막지 않는다
+  }
 }
 
 /** 무엇이 올라갈지 미리 보여 준다 — 딸깍 전에 "그 시퀀스가 맞나" 를 눈으로 확인하는 자리. */

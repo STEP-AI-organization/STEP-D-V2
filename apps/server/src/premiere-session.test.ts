@@ -106,7 +106,7 @@ describe("패널 — 활성 시퀀스 렌더 후 업로드", () => {
   });
 
   it("렌더 결과는 파일 선택 경로와 **같은 업로드 본체**로 들어간다 — 업로드 로직이 둘이 되면 갈라진다", () => {
-    assert.match(panel, /await runUpload\(rendered, selectedProgram\(\)\)/);
+    assert.match(panel, /await runUpload\(rendered, selectedProgram\(\), context\)/);
     assert.match(panel, /const ok = await runUpload\(picked, selectedProgram\(\)\)/);
   });
 
@@ -462,6 +462,41 @@ describe("패널 — 글꼴 확인", () => {
   it("이미 있으면 다시 넣지 않는다 — 중복 등록이면 어느 쪽이 쓰이는지 알 수 없다", () => {
     const ps = read("packages/premiere/launcher/install-fonts.ps1");
     assert.match(ps, /if \(Test-Path \$target\) \{\s*\n\s*Write-Host "이미 있음/);
+  });
+});
+
+/**
+ * 편집본 ↔ 추천 잇기 (2026-09-01). 프리미어에서 다듬어 올린 결과가 **어느 추천에서 나왔는지**
+ * 기록되지 않으면, "어떤 추천이 실제로 편집까지 갔나" 를 나중에 셀 방법이 없다.
+ *
+ * 프리미어에는 임의 메타를 붙일 자리가 없다(프로젝트 항목에 커스텀 필드가 없다).
+ * 그래서 **이름이 유일한 끈**이다 — 우리가 만든 시퀀스·조각은 끝에 추천 id 를 단다.
+ */
+describe("패널 — 편집본을 추천에 잇는다", () => {
+  it("시퀀스 이름에서 추천 id 를 되읽는다 — 만들 때와 같은 규칙", () => {
+    assert.ok(panel.includes("function recIdFromName(name)"));
+    assert.ok(panel.includes("`[STEP-D] ${String(r.title || \"추천\").slice(0, 40)} · ${r.id}`"),
+      "이름 규칙이 바뀌면 되읽기도 같이 바뀌어야 한다");
+  });
+
+  it("맥락은 **렌더 전에** 읽는다 — 렌더가 끝나면 시퀀스가 바뀌어 있을 수 있다", () => {
+    const fn = panel.slice(panel.indexOf("async function doExportAndUpload()"));
+    const ctx = fn.indexOf("await exportContext()");
+    const exp = fn.indexOf("await exportActiveSequence(");
+    assert.ok(ctx > 0 && exp > ctx, "렌더 뒤에 읽으면 엉뚱한 시퀀스를 가리킬 수 있다");
+  });
+
+  it("끈이 끊겨도 업로드는 된다 — 링크 하나 때문에 몇 GB 를 버리지 않는다", () => {
+    assert.ok(panel.includes("return null;      // 시퀀스를 못 읽어도 업로드는 막지 않는다"));
+    assert.ok(index.includes("// 없는 추천 id 는 **조용히 무시**한다"));
+  });
+
+  it("서버가 출처를 클립에 남긴다 — 이게 유일한 기록이다", () => {
+    assert.ok(index.includes("sourceRecommendationId ? { sourceRecommendationId: opts.sourceRecommendationId } : {}"));
+  });
+
+  it("회차 번호를 추천에서 물려받는다 — 편집자가 다시 고르지 않게", () => {
+    assert.ok(index.includes("if (episodeNumber === undefined && rec.episodeId)"));
   });
 });
 

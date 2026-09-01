@@ -3742,6 +3742,8 @@ async function buildFinishedClip(opts: {
   thumbPath: string | null;
   episodeNumber?: number;
   editKind?: EditKind;
+  /** 이 편집본이 나온 추천 (프리미어 경로). 없으면 종전대로 프로그램에만 붙는다. */
+  sourceRecommendationId?: string;
 }) {
   const { mediaId, programId, program, storedPath, filename, title, mime, size, meta } = opts;
 
@@ -3808,6 +3810,9 @@ async function buildFinishedClip(opts: {
     videoUrl: `/media/${mediaId}/stream`,
     // 직접 업로드 완성본 표식 — 편집(트림·리프레임)이 아니라 배포가 목적이다.
     directUpload: true,
+    // 어느 추천을 편집한 것인지. **끊기면 나중에 못 잇는다** — 편집본과 추천을 잇는 유일한
+    // 기록이고, "어떤 추천이 실제로 편집까지 갔나" 를 나중에 세려면 이 필드뿐이다.
+    ...(opts.sourceRecommendationId ? { sourceRecommendationId: opts.sourceRecommendationId } : {}),
     distributions: [] as unknown[],
   };
   await prependEntity("clip", clipId, clip);
@@ -3988,11 +3993,29 @@ app.post("/api/media/clip-finalize", async (c) => {
   let finalSize = size;
   if (finalSize <= 0 && typeof body.size === "number" && body.size > 0) finalSize = body.size;
 
+  // 프리미어 경로는 **어느 추천을 편집했는지** 같이 보낸다(시퀀스 이름에 심어 둔 id).
+  // 있으면 회차 번호를 그 추천에서 물려받는다 — 편집자가 회차를 다시 고르지 않게.
+  let sourceRecommendationId = "";
+  let episodeNumber = readEpisodeNumber(body.episodeNumber);
+  if (typeof body.recommendationId === "string" && body.recommendationId) {
+    const rec = await getEntity<any>("recommendation", String(body.recommendationId));
+    if (rec) {
+      sourceRecommendationId = String(body.recommendationId);
+      if (episodeNumber === undefined && rec.episodeId) {
+        const ep = await getEntity<any>("episode", String(rec.episodeId));
+        if (ep && Number.isFinite(Number(ep.episodeNumber))) episodeNumber = Number(ep.episodeNumber);
+      }
+    }
+    // 없는 추천 id 는 **조용히 무시**한다 — 업로드는 이미 끝났고, 링크 하나 때문에
+    // 몇 GB 를 버리게 하지 않는다.
+  }
+
   const result = await buildFinishedClip({
     mediaId, programId, program, storedPath, filename, title,
     mime, size: finalSize, meta, thumbPath: thumbStored,
-    episodeNumber: readEpisodeNumber(body.episodeNumber),
+    episodeNumber,
     editKind: readEditKind(body.editKind),
+    ...(sourceRecommendationId ? { sourceRecommendationId } : {}),
   });
   return c.json(result);
 });
