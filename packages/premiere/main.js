@@ -2023,7 +2023,11 @@ function renderRecs() {
     const ep = r.episodeNumber ? `${r.episodeNumber}회 · ` : "";
     // 프레임 메타가 없는 회차는 여기서 밝힌다 — 정합을 못 맞추는 걸 조용히 넘기지 않는다.
     const warn = r.fps ? "" : " · ⚠ 프레임 정합 불가(원본 메타 없음)";
-    meta.textContent = `${ep}${fmtTime(r.startTime)}–${fmtTime(r.endTime)} · ${dur}초 · ${score}${warn}`;
+    // 이미 채택한 것도 보여 준다 — 숨기면 패널이 비어 보인다. 대신 **표시**는 한다.
+    const st = String(r.status || "pending");
+    const badge = st === "adopted" ? " · ✔ 채택됨" : st === "rejected" ? " · 거절됨" : "";
+    const long = isShortRec(r) ? "" : " · 회차 통짜";
+    meta.textContent = `${ep}${fmtTime(r.startTime)}–${fmtTime(r.endTime)} · ${dur}초 · ${score}${badge}${long}${warn}`;
 
     row.appendChild(head);
     row.appendChild(meta);
@@ -2157,22 +2161,49 @@ async function jumpToRec(r) {
   }
 }
 
+/**
+ * 쇼츠로 쓸 구간인가.
+ *
+ * `kind` 가 정본이지만 옛 데이터에는 비어 있을 수 있어 길이도 같이 본다 —
+ * 회차 통짜 후보(수백 초)를 쇼츠로 오인하지 않는 게 목적이다.
+ */
+function isShortRec(r) {
+  if (String(r.kind || "") === "short") return true;
+  if (String(r.kind || "") === "clip") return false;
+  const dur = Number(r.endTime) - Number(r.startTime);
+  return Number.isFinite(dur) && dur > 0 && dur <= 180;
+}
+
 async function loadRecs() {
   const programId = selectedProgram();
   setStatus($("recsStatus"), "불러오는 중…");
   try {
-    const q = programId ? `?programId=${encodeURIComponent(programId)}&limit=50` : "?limit=50";
+    // ⚠️ **채택된 것도 가져온다**(status=all). 예전엔 pending 만 받아서, 이미 채택한 회차는
+    //    쇼츠 추천이 3~4건 있어도 화면엔 "회차 통짜 clip 후보" 하나만 떴다(실측 2026-09-01:
+    //    1회 short 3건·2회 short 4건이 전부 adopted 였다). 편집자는 **이미 채택한 구간을**
+    //    프리미어에서 다시 다듬는 일이 오히려 흔하다 — 그걸 숨기면 패널이 비어 보인다.
+    const q = programId ? `?programId=${encodeURIComponent(programId)}&status=all&limit=100`
+                        : "?status=all&limit=100";
     const data = await apiJson(`/recommendations${q}`);
-    recRows = Array.isArray(data.recommendations) ? data.recommendations : [];
-    // 기본은 **전부 선택** — 보통은 다 쓰고, 빼고 싶은 것만 빼는 편이 손이 덜 간다.
-    selectedIds = new Set(recRows.map((r) => String(r.id)));
+    const rows = Array.isArray(data.recommendations) ? data.recommendations : [];
+    // 쇼츠 구간을 먼저, 그다음 점수 순. 회차 통짜(kind=clip · 수백 초)는 이 패널에서 할 일이
+    // 아니라 뒤로 민다 — 지우지는 않는다(가끔 통짜를 다시 자르기도 한다).
+    recRows = rows.slice().sort((a, b) => {
+      const sa = isShortRec(a) ? 0 : 1, sb = isShortRec(b) ? 0 : 1;
+      if (sa !== sb) return sa - sb;
+      return (Number(b.score100) || 0) - (Number(a.score100) || 0);
+    });
+    // 기본 선택은 **쇼츠 구간만.** 통짜 후보까지 체크돼 있으면 "전체 선택" 한 번에
+    // 14분짜리를 마커·러프컷 대상으로 끌고 간다.
+    selectedIds = new Set(recRows.filter(isShortRec).map((r) => String(r.id)));
     renderEpisodes();
     renderRecs();
+    const shorts = recRows.filter(isShortRec).length;
     setStatus(
       $("recsStatus"),
       recRows.length
-        ? `채택 대기 ${recRows.length}건 · 회차를 고르고 쓸 것만 체크하세요 (제목을 누르면 그 구간으로 이동)`
-        : "이 프로그램에 채택 대기 중인 추천이 없습니다.",
+        ? `${recRows.length}건 (쇼츠 구간 ${shorts}건) · 회차를 고르고 쓸 것만 체크하세요 (제목을 누르면 미리보기)`
+        : "이 프로그램에 추천이 없습니다.",
     );
   } catch (err) {
     setStatus($("recsStatus"), `불러오지 못했습니다: ${err.message}`, "err");

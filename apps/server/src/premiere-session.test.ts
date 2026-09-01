@@ -392,8 +392,10 @@ describe("패널 — 회차 고르고, 쓸 것만 고른다", () => {
     assert.match(panel, /el\.textContent = n > 0 \? `\$\{label\} \(\$\{n\}건\)` : label;/);
   });
 
-  it("기본은 전부 선택 — 보통은 다 쓰고 빼는 편이 손이 덜 간다", () => {
-    assert.match(panel, /selectedIds = new Set\(recRows\.map\(\(r\) => String\(r\.id\)\)\);/);
+  it("기본은 **쇼츠 구간 전부** 선택 — 다 쓰고 빼는 편이 손이 덜 간다", () => {
+    // 2026-09-01: 회차 통짜(clip · 수백 초)까지 체크돼 있으면 "전체 선택" 한 번에 14분짜리를
+    // 마커·러프컷 대상으로 끌고 간다. 그래서 기본 선택에서만 뺀다(목록에는 남는다).
+    assert.ok(panel.includes("selectedIds = new Set(recRows.filter(isShortRec).map((r) => String(r.id)));"));
   });
 });
 
@@ -472,6 +474,37 @@ describe("패널 — 글꼴 확인", () => {
   it("이미 있으면 다시 넣지 않는다 — 중복 등록이면 어느 쪽이 쓰이는지 알 수 없다", () => {
     const ps = read("packages/premiere/launcher/install-fonts.ps1");
     assert.match(ps, /if \(Test-Path \$target\) \{\s*\n\s*Write-Host "이미 있음/);
+  });
+});
+
+/**
+ * 추천 목록 (실측 2026-09-01): 패널에 회차당 **1건**만 떴다. 실제로는 1회 short 3건 · 2회 4건이
+ * 있었는데 **전부 채택됨(adopted)** 이라 pending 필터에 걸려 사라졌고, 남은 건 회차 통짜
+ * clip 후보(665·843초) 하나뿐이었다.
+ *
+ * 편집자는 **이미 채택한 구간을 프리미어에서 다시 다듬는** 일이 오히려 흔하다. 숨기면 패널이
+ * 비어 보이고, 사람은 "추천이 없네" 라고 오해한다.
+ */
+describe("패널 — 추천 목록은 채택된 것도 보여 준다", () => {
+  it("status=all 로 받는다 — pending 만 받으면 작업할 게 사라진다", () => {
+    assert.ok(panel.includes("&status=all&limit=100"));
+  });
+
+  it("쇼츠 구간이 먼저, 회차 통짜는 뒤로 — 지우지는 않는다", () => {
+    assert.ok(panel.includes("function isShortRec(r)"));
+    assert.ok(panel.includes("const sa = isShortRec(a) ? 0 : 1, sb = isShortRec(b) ? 0 : 1;"));
+  });
+
+  it("기본 선택은 쇼츠 구간만 — 전체 선택 한 번에 14분짜리를 끌고 가면 안 된다", () => {
+    assert.ok(panel.includes("selectedIds = new Set(recRows.filter(isShortRec).map((r) => String(r.id)));"));
+  });
+
+  it("채택 여부를 **표시**한다 — 숨기는 대신 보여 주고 판단은 사람이", () => {
+    assert.ok(panel.includes('st === "adopted" ? " · ✔ 채택됨"'));
+  });
+
+  it("서버가 kind 를 실어 보낸다 — 패널이 길이로 추측하지 않게", () => {
+    assert.ok(index.includes('kind: String(r.kind ?? ""),'));
   });
 });
 

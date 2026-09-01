@@ -6806,6 +6806,8 @@ app.get("/api/recommendations", async (c) => {
       endTime: Number(r.endTime ?? 0),
       score100: r.score100 === undefined ? null : Number(r.score100),
       status: String(r.status ?? "pending"),
+      // 쇼츠 구간(short)인지 회차 통짜 후보(clip)인지 — 패널이 길이로 추측하지 않게.
+      kind: String(r.kind ?? ""),
       people: Array.isArray(r.people) ? r.people : [],
       episodeId: String(r.episodeId ?? ""),
       episodeNumber: ep ? Number(ep.episodeNumber ?? 0) : null,
