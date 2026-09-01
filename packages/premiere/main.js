@@ -1062,6 +1062,21 @@ async function findMasterItem(filename, use) {
  *    이름으로 못 찾은 경우에만 경로 대조를 한 번 돈다(그 경로는 여전히 무효화 위험이 있어
  *    retryStale 이 감싼다).
  */
+/**
+ * **우리가 만든 것**(시퀀스·빈)인가 — 원본 찾기에서 걸러 낸다.
+ *
+ * 실측 2026-09-01: 마커용 타임라인 이름이 `[STEP-D] m_19db0ad4` 다(원본 파일명에서 딴다).
+ * 그런데 원본 찾기는 `이름에 m_19db0ad4 가 들어가면 그것` 으로 봤다 — 즉 **우리가 만든
+ * 시퀀스가 원본 행세를 했다.** 그래서 원본이 프로젝트에 없는데도 "원본 준비 완료" 가 떴고,
+ * 이어지는 자르기·배치는 시퀀스를 소스로 삼았다(사용자: "원본이 프로젝트 없는데 이래").
+ *
+ * 우리 이름은 우리가 정한다 — 접두사 하나로 확실히 갈린다. 원본 파일명이 `[STEP-D] ` 로
+ * 시작할 일은 없다.
+ */
+function isOurGeneratedName(lowerName) {
+  return lowerName.startsWith("[step-d]");
+}
+
 async function findMasterItemOnce(filename, use) {
   const { api, project } = await activeProject();
   if (!filename) throw new Error("이 추천에 연결된 원본 파일 정보가 없습니다.");
@@ -1092,7 +1107,7 @@ async function findMasterItemOnce(filename, use) {
   for (const clips of groups) {
     for (const item of clips) {
       const n = String(item.name || "").toLowerCase();
-      if (!n) continue;
+      if (!n || isOurGeneratedName(n)) continue;
       if (n === wanted || n === base || n.startsWith(base + ".") || (base.length > 6 && n.includes(base))) {
         try {
           const clip = api.ClipProjectItem.cast(item);
@@ -1106,6 +1121,7 @@ async function findMasterItemOnce(filename, use) {
   for (const clips of groups) {
     for (const item of clips) {
       try {
+        if (isOurGeneratedName(String(item.name || "").toLowerCase())) continue;
         const clip = api.ClipProjectItem.cast(item);
         if (!clip || typeof clip.getMediaFilePath !== "function") continue;
         const path = String((await clip.getMediaFilePath()) || "").toLowerCase();
@@ -1548,11 +1564,24 @@ async function ensureMaster(rec, onStage) {
   if (!rec.mediaId) throw new Error("이 추천에 연결된 원본이 없습니다.");
   const file = await downloadMasterShared(rec.mediaId, filename || `${rec.mediaId}.mp4`, onStage);
   onStage("프로젝트에 가져오는 중…");
-  const { project } = await activeSequence();
+  // ⚠️ **시퀀스를 요구하지 않는다**(2026-09-01 · 사용자: "활성 시퀀스 없으면 원본 영상이
+  //    다운이 안 됨"). 예전엔 `activeSequence()` 를 썼는데, 가져오기에는 시퀀스가 필요 없다.
+  //    빈 프로젝트로 시작하는 게 정상 순서인데("원본부터 받고 시작") 거기서 막혔다.
+  const { project } = await activeProject();
   // suppressUI=true — 가져오기 대화상자가 뜨면 자동 흐름이 사람을 기다리며 멈춘다.
   const ok = await project.importFiles([file.nativePath], true);
   if (ok === false) throw new Error("프로젝트로 가져오지 못했습니다.");
-  return filename || file.name;
+
+  // ⚠️ **가져왔다고 믿지 말고 다시 찾는다.** `importFiles` 는 false 가 아니면 성공처럼 보이는데
+  //    (undefined 를 돌려주는 경로가 있다), 실제로 프로젝트에 안 들어가면 다음 단계가 "원본을
+  //    찾지 못했습니다" 로 엉뚱한 자리에서 터진다. 여기서 확인하면 원인이 있는 자리에서 말한다.
+  const name = filename || file.name;
+  const landed = await findMasterItem(name, () => true).catch(() => false);
+  if (!landed) {
+    throw new Error(`원본을 받았지만 프로젝트에서 못 찾습니다 — ${name}\n`
+      + `받아 둔 위치: ${file.nativePath}\n프로젝트 패널로 이 파일을 직접 끌어다 놓은 뒤 다시 눌러 주세요.`);
+  }
+  return name;
 }
 
 async function makeSubclipsForRecs(recs, onStage) {
@@ -2079,7 +2108,9 @@ async function addDecorationsForRecs(recs, aspect, onStage) {
   }
   if (!files.length) return 0;
 
-  const { project } = await activeSequence();
+  // 가져오기에는 **시퀀스가 필요 없다** — activeSequence 를 쓰면 시퀀스가 없는 프로젝트에서
+  // "활성 시퀀스가 없습니다" 로 막힌다(2026-09-01 실측).
+  const { project } = await activeProject();
   const ok = await project.importFiles(files.map((f) => f.file.nativePath), true);
   if (ok === false) return 0;
 
@@ -2217,7 +2248,9 @@ async function addCaptionPngs(recs, aspect, onStage) {
   }
   if (!files.length) return 0;
 
-  const { project } = await activeSequence();
+  // 가져오기에는 **시퀀스가 필요 없다** — activeSequence 를 쓰면 시퀀스가 없는 프로젝트에서
+  // "활성 시퀀스가 없습니다" 로 막힌다(2026-09-01 실측).
+  const { project } = await activeProject();
   const ok = await project.importFiles(files.map((f) => f.file.nativePath), true);
   if (ok === false) return 0;
 
@@ -2342,7 +2375,9 @@ async function addTitlePngs(recs, aspect, tracks, onStage) {
   }
   if (!files.length) return 0;
 
-  const { project } = await activeSequence();
+  // 가져오기에는 **시퀀스가 필요 없다** — activeSequence 를 쓰면 시퀀스가 없는 프로젝트에서
+  // "활성 시퀀스가 없습니다" 로 막힌다(2026-09-01 실측).
+  const { project } = await activeProject();
   const ok = await project.importFiles(files.map((f) => f.file.nativePath), true);
   if (ok === false) throw new Error("제목 이미지를 프로젝트로 가져오지 못했습니다.");
 
@@ -2363,6 +2398,37 @@ async function addTitlePngs(recs, aspect, tracks, onStage) {
 }
 
 /** ① 원본 확보 → ② 없으면 타임라인 생성 → ③ 고른 구간에 마커. 편집자는 여기서부터 다듬는다. */
+/**
+ * "마커만 꽂기" — **지금 열려 있는 시퀀스에** 고른 구간의 마커만 남긴다.
+ *
+ * `doPrepareAndMark` 와의 차이는 의도적이다: 원본을 임포트하지도, 시퀀스를 만들지도,
+ * 제목 그래픽을 얹지도 않는다. 이미 자기 타임라인을 구성해 둔 편집자가 위치만 표시받고
+ * 싶을 때 쓴다.
+ *
+ * ⚠️ 이 함수는 한동안 **없었다.** 버튼(index.html:222)과 리스너(`markersBtn`)와
+ * `syncRecButtons` 항목은 그대로 남은 채 함수만 지워져, 누르면 ReferenceError 만 나고
+ * 화면엔 아무 반응이 없었다(핸들러 밖이라 catch 도 못 했다). 옆의 `prepMarkBtn` 은 살아
+ * 있어서 "둘 중 하나만 죽은" 상태가 더 헷갈렸다.
+ */
+async function doAddMarkers() {
+  const picks = chosenRecs();
+  if (busy || !picks.length) return;
+  busy = true;
+  syncRecButtons();
+  try {
+    setStatus($("recsStatus"), `마커 ${picks.length}개 꽂는 중…`);
+    const { sequenceName, count } = await stage("마커 꽂기", () => addMarkersForRecs(picks));
+    setStatus($("recsStatus"),
+      `"${sequenceName}" 에 마커 ${count}개. 목록에서 제목을 누르면 그 구간으로 이동합니다.`, "ok");
+  } catch (err) {
+    setStatus($("recsStatus"), err.message, "err");
+    console.log("[STEP-D] 마커 꽂기 실패", err);
+  } finally {
+    busy = false;
+    syncRecButtons();
+  }
+}
+
 async function doPrepareAndMark() {
   const picks = chosenRecs();
   if (busy || !picks.length) return;

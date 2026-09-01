@@ -295,6 +295,37 @@ describe("패널 — 원본이 없으면 받아서 넣는다", () => {
   it("서명 URL 도메인이 매니페스트에 열려 있다", () => {
     assert.ok(manifest.requiredPermissions.network.domains.includes("https://storage.googleapis.com"));
   });
+
+  it("**우리가 만든 시퀀스를 원본으로 착각하지 않는다**", () => {
+    // 실측 2026-09-01: 마커용 타임라인 이름이 `[STEP-D] m_19db0ad4` 다(원본 파일명에서 딴다).
+    // 원본 찾기는 "이름에 m_19db0ad4 가 들어가면 그것" 이었으니 **우리 시퀀스가 원본 행세**를
+    // 했다 — 원본이 프로젝트에 없는데 "원본 준비 완료" 가 떴다.
+    assert.match(panel, /function isOurGeneratedName\(lowerName\)/);
+    assert.ok(panel.includes('lowerName.startsWith("[step-d]")'));
+    const fn = /async function findMasterItemOnce\(filename, use\)[\s\S]*?\n}/.exec(panel)?.[0] ?? "";
+    assert.ok(fn, "findMasterItemOnce 를 못 찾았다");
+    assert.equal((fn.match(/isOurGeneratedName\(/g) || []).length, 2,
+      "이름 패스·경로 패스 **둘 다** 걸러야 한다 — 한쪽만 막으면 다른 쪽으로 들어온다");
+  });
+
+  it("**시퀀스가 없어도 받는다** — 빈 프로젝트로 시작하는 게 정상 순서다", () => {
+    // 사용자 2026-09-01: "활성 시퀀스 없으면 원본 영상이 다운이 안 됨."
+    // 가져오기(importFiles)는 시퀀스가 필요 없는데 activeSequence() 를 쓰고 있었다.
+    for (const m of panel.matchAll(/^.*await project\.importFiles\(.*$/gm)) {
+      const before = panel.slice(Math.max(0, m.index! - 400), m.index!);
+      assert.ok(!/await activeSequence\(\);\s*(\/\/[^\n]*\n\s*)*$/.test(before),
+        `가져오기 직전에 activeSequence 를 요구한다: ${m[0].trim()}`);
+    }
+    assert.ok(!/const \{ project \} = await activeSequence\(\);\s*\n\s*(\/\/[^\n]*\n\s*)*const ok = await project\.importFiles/.test(panel));
+  });
+
+  it("가져온 뒤 **다시 찾아 확인**한다 — importFiles 는 실패해도 false 를 안 줄 수 있다", () => {
+    const fn = /async function ensureMaster\(rec, onStage\)[\s\S]*?\n}/.exec(panel)?.[0] ?? "";
+    assert.ok(fn, "ensureMaster 를 못 찾았다");
+    assert.ok(fn.includes("const landed = await findMasterItem(name, () => true)"),
+      "확인 없이 성공을 알리면 다음 단계가 엉뚱한 자리에서 터진다");
+    assert.ok(fn.includes("받아 둔 위치:"), "실패했을 때 파일이 어디 있는지 알려 줘야 손으로 넣는다");
+  });
 });
 
 /**
@@ -501,7 +532,11 @@ describe("패널 — 호스트 객체를 await 너머로 들고 다니지 않는
 
   it("ensureMaster 는 **파일명만** 돌려준다 — 다운로드 대기를 건너는 자리라 객체를 못 들고 나온다", () => {
     assert.match(panel, /const present = await findMasterItem\(filename, \(\) => true\)/);
-    assert.match(panel, /return filename \|\| file\.name;/);
+    // 2026-09-01: 이름을 `name` 으로 뽑아 **확인까지 한 뒤** 돌려준다(가져오기 검증 추가).
+    assert.match(panel, /const name = filename \|\| file\.name;/);
+    assert.match(panel, /^\s*return name;$/m);
+    assert.ok(!/return .*\bfile\b.*;/.test(/async function ensureMaster[\s\S]*?\n}/.exec(panel)?.[0] ?? ""),
+      "호스트 객체를 돌려주면 다음 await 에서 무효가 된다");
   });
 
   it("모은 서브클립도 그 자리에서 시퀀스로 만든다", () => {
@@ -1154,5 +1189,29 @@ describe("패널 — 제목은 서버가 찍어 준 .mogrt 를 얹는다", () =>
 
   it("트랙이 V1 뿐이면 **그게 이유라고** 말한다 — 트랙 추가 API 는 없다", () => {
     assert.ok(panel.includes("타임라인에 비디오 트랙이 V1 뿐입니다"));
+  });
+});
+
+/**
+ * 버튼은 남고 함수만 지워지는 사고를 막는다.
+ *
+ * 실측(2026-09-01): "마커만 꽂기" 버튼이 삭제된 `doAddMarkers()` 를 부르고 있었다.
+ * `syncRecButtons` 가 버튼을 **활성화**해 두므로 눌리기는 하는데, 리스너 안에서
+ * ReferenceError 가 나고 그 리스너 밖엔 catch 가 없어 `setStatus` 조차 안 돈다 —
+ * UDT 콘솔을 열지 않는 한 편집자에게는 "눌렀는데 아무 일도 안 일어남" 으로만 보인다.
+ * 옆의 `prepMarkBtn` 은 살아 있어서 둘 중 하나만 죽은 상태가 더 헷갈렸다.
+ */
+describe("패널 — 클릭 핸들러가 부르는 함수가 실제로 있다", () => {
+  it("addEventListener 가 부르는 do*() 가 전부 정의돼 있다", () => {
+    const called = new Set<string>();
+    for (const m of panel.matchAll(/addEventListener\(\s*"click"[\s\S]{0,80}?\bvoid\s+(\w+)\s*\(/g)) {
+      called.add(m[1]);
+    }
+    assert.ok(called.size > 5, "핸들러를 못 찾았다 — 스캐너가 죽으면 이 검사는 항상 통과한다");
+    const defined = (fn: string) =>
+      new RegExp(String.raw`function\s+${fn}\s*\(`).test(panel)
+      || new RegExp(String.raw`\b(?:const|let|var)\s+${fn}\s*=`).test(panel);
+    const missing = [...called].filter((fn) => !defined(fn));
+    assert.deepEqual(missing, [], "버튼이 부르는데 정의가 없는 함수다 — 누르면 아무 반응이 없다");
   });
 });

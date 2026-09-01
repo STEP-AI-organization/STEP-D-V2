@@ -109,12 +109,11 @@
     .bar { height: 4px; background: #1d1d1d; border-radius: 2px; overflow: hidden; margin-top: 8px; }
     .bar > div { height: 4px; width: 0%; background-color: #2680eb; }
     /* 저장 위치 한 줄 — 경로가 길어도 줄을 넘기지 않고 앞을 잘라 보여 준다(끝이 중요하다). */
-    .folderline { display: flex; align-items: center; gap: 6px; margin: 4px 0 2px; font-size: 11px; color: #8a8a8a; }
+    /* ⚠️ 잘라 보여 주지 않는다. `direction: rtl` 로 끝을 보이려 했는데 UXP 가 안 먹어서
+       앞부분만 보이고 정작 중요한 끝(…\STEP-D)이 잘렸다 — 그냥 줄바꿈시킨다. */
+    .folderline { display: flex; align-items: baseline; gap: 6px; margin: 4px 0 2px; font-size: 11px; color: #8a8a8a; }
     .folderlabel { flex: 0 0 auto; }
-    .folderpath {
-      flex: 1 1 auto; min-width: 0; overflow: hidden; white-space: nowrap;
-      direction: rtl; text-align: left; text-overflow: ellipsis; color: #c8c8c8;
-    }
+    .folderpath { flex: 1 1 auto; min-width: 0; color: #c8c8c8; word-break: break-all; line-height: 1.4; }
     .linkbtn {
       flex: 0 0 auto; width: auto; margin: 0; padding: 0 2px; border: 0; background: none;
       color: #6aa9ff; font-size: 11px; cursor: pointer; text-decoration: underline;
