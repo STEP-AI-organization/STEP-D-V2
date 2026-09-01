@@ -421,13 +421,23 @@ describe("패널 — 주 동선: 원본 받고 마커", () => {
     assert.ok(a > 0 && b > a && c > b, "순서가 어긋나면 꽂을 타임라인이 없다");
   });
 
-  it("활성 시퀀스가 있으면 그걸 쓴다 — 편집자가 작업 중인 타임라인을 빼앗지 않는다", () => {
-    assert.ok(panel.includes("const active = await activeSequence().catch(() => null);"));
-    assert.ok(panel.includes("    return active.name;"), "있는 타임라인을 두고 새로 만들면 안 된다");
+  it("**그 원본의** 타임라인을 연다 — 열려 있는 남의 시퀀스를 쓰지 않는다", () => {
+    // 실측 2026-09-01: 예전엔 활성 시퀀스가 있으면 그걸 썼다. 그래서 마커가 엉뚱한
+    // 타임라인(다른 녹음 시퀀스)에 꽂히고, 패널은 "됐다" 는데 화면엔 아무 일도 안 일어났다.
+    assert.ok(panel.includes("function masterSequenceName(filename)"));
+    assert.ok(panel.includes("const existing = await findSequenceByName(project, wanted);"));
+    assert.ok(panel.includes("createSequenceFromMedia(wanted, [clip])"),
+      "찾을 때와 만들 때가 같은 이름이어야 한다");
+  });
+
+  it("영상 트랙이 없으면 **말해 준다** — 성공했다면서 아무 일도 안 일어나는 게 제일 나쁘다", () => {
+    assert.ok(panel.includes("async function warnIfNoVideoTrack(sequence, onStage)"));
+    assert.ok(panel.includes("영상 트랙이 없습니다"));
+    assert.ok(panel.includes("await sequence.getVideoTrackCount()"));
   });
 
   it("없으면 원본으로 타임라인을 만든다 — 마커는 시퀀스에 꽂히기 때문이다", () => {
-    assert.match(panel, /createSequenceFromMedia\(`\[STEP-D\] \$\{String\(name\)\.slice\(0, 60\)\}`, \[clip\]\)/);
+    assert.ok(panel.includes("await proj.createSequenceFromMedia(wanted, [clip])"));
   });
 });
 
@@ -753,7 +763,11 @@ describe("패널 — 세로 쇼츠로 시작한다", () => {
   });
 
   it("편집자 본인 타임라인은 건드리지 않는다 — 우리 것만 맞춘다", () => {
-    assert.ok(panel.includes('String(active.name || "").startsWith("[STEP-D] ")'));
+    // 이름으로 **우리가 만든 것**만 찾아 연다(masterSequenceName). 남의 활성 시퀀스를
+    // 세로로 바꾸거나 거기에 마커를 꽂지 않는다.
+    assert.ok(panel.includes('return `[STEP-D] ${String(filename || "원본")'));
+    assert.ok(!panel.includes('String(active.name || "").startsWith("[STEP-D] ")'),
+      "활성 시퀀스를 넘겨받아 쓰던 옛 경로가 남아 있다");
   });
 
   it("영상도 채운다 — 배율은 **바꾸기 전** 프레임 크기(=원본 해상도)에서 계산한다", () => {

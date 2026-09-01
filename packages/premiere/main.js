@@ -1463,26 +1463,57 @@ async function doFetchSource() {
  */
 async function ensureSequenceForMaster(filename, onStage, rec) {
   const layout = await fetchLayout(rec);
-  const active = await activeSequence().catch(() => null);
-  if (active) {
-    // 우리가 만든 타임라인이면 세로로 맞춰 준다(이미 세로면 계산상 배율 100% → 아무 일도 안 한다).
-    // 편집자 본인의 타임라인은 **건드리지 않는다** — 남의 작업 프레임을 말없이 바꾸면 안 된다.
-    if (String(active.name || "").startsWith("[STEP-D] ")) {
-      await makeSequenceVertical(active.api, active.project, active.sequence, onStage, layout);
-    }
-    return active.name;
+  const wanted = masterSequenceName(filename);
+
+  // ① 우리가 이 원본으로 만들어 둔 타임라인이 있으면 그걸 연다.
+  const { project } = await activeProject();
+  const existing = await findSequenceByName(project, wanted);
+  if (existing) {
+    onStage("만들어 둔 타임라인을 엽니다…");
+    try { await project.setActiveSequence(existing); } catch (_) { /* 열기 실패는 치명적이지 않다 */ }
+    const fresh = await activeSequence();
+    await makeSequenceVertical(fresh.api, fresh.project, fresh.sequence, onStage, layout);
+    await warnIfNoVideoTrack(fresh.sequence, onStage);
+    return wanted;
   }
 
+  // ② 없으면 원본으로 만든다. **열려 있는 남의 시퀀스를 쓰지 않는다** —
+  //    예전엔 활성 시퀀스가 있으면 그걸 썼는데, 그러면 마커가 엉뚱한 타임라인(예: 다른
+  //    녹음 시퀀스)에 꽂히고 화면엔 아무 일도 안 일어난 것처럼 보인다(실측 2026-09-01).
   onStage("원본으로 타임라인 만드는 중…");
-  return await findMasterItem(filename, async ({ api, project, clip, name }) => {
-    const seq = await project.createSequenceFromMedia(`[STEP-D] ${String(name).slice(0, 60)}`, [clip]);
+  await findMasterItem(filename, async ({ api, project: proj, clip }) => {
+    const seq = await proj.createSequenceFromMedia(wanted, [clip]);
     if (!seq) throw new Error("원본으로 시퀀스를 만들지 못했습니다.");
-    // 마커만 꽂는 경로도 **세로로 시작**한다(사용자 2026-08-31) — 러프컷만 세로면
-    // 편집자는 가로 화면을 보며 세로 결과물을 상상해야 한다.
-    await makeSequenceVertical(api, project, seq, onStage, layout);
-    try { await project.setActiveSequence(seq); } catch (_) { /* 열기 실패는 치명적이지 않다 */ }
-    return name;
+    await makeSequenceVertical(api, proj, seq, onStage, layout);
+    try { await proj.setActiveSequence(seq); } catch (_) { /* 열기 실패는 치명적이지 않다 */ }
+    return true;
   });
+  const made = await activeSequence();
+  await warnIfNoVideoTrack(made.sequence, onStage);
+  return wanted;
+}
+
+/** 원본 파일명 → 우리가 만드는 타임라인 이름. **찾을 때와 만들 때가 같은 문자열이어야 한다.** */
+function masterSequenceName(filename) {
+  return `[STEP-D] ${String(filename || "원본").replace(/\.[^.]+$/, "").slice(0, 60)}`;
+}
+
+/**
+ * 영상 트랙이 없으면 **바로 말해 준다.**
+ *
+ * 실측 2026-09-01: 유튜브 원본이 VP9 라 프리미어가 영상 트랙을 못 읽었고, 그 상태로도
+ * 시퀀스는 만들어지고 마커도 꽂혀서 패널은 "됐다" 고 말했다 — 편집자 화면에는 아무것도
+ * 없는데. **성공했다고 말하면서 아무 일도 안 일어나는 것**이 제일 나쁜 실패다.
+ */
+async function warnIfNoVideoTrack(sequence, onStage) {
+  try {
+    const n = Number(await sequence.getVideoTrackCount());
+    if (n > 0) return;
+  } catch (_) {
+    return;         // 못 세면 아무 말도 하지 않는다 — 근거 없는 경고는 소음이다
+  }
+  onStage("⚠ 이 원본에 **영상 트랙이 없습니다** — 코덱을 프리미어가 못 읽는 경우입니다"
+    + "(예: 유튜브 VP9). STEP-D 에서 H.264 로 변환한 뒤 다시 받아 주세요.");
 }
 
 /**
