@@ -92,7 +92,7 @@ Vocabulary 는 md 파일로 관리 (`core/action_vocab.md`), 프로덕션은 DB 
 
 ## Part 3 · 검색 파서 확장
 
-지금 `apps/server/src/search-parse.ts` 가 characters 만 파싱. 다음을 슬롯화:
+지금 `apps/server/src/ai/search-parse.ts` 가 characters 만 파싱. 다음을 슬롯화:
 
 - `season` / `episode` — `"23기"`, `"5화"` → 정수
 - `characters` — 이미 있음 · 자동 cast 로 registry 풍부해지면 recall 상승
@@ -129,4 +129,4 @@ LIMIT 20;
 
 - [[chyron-per-seg-hardening]] — chyron 견고화 전제
 - [[pipeline-optimization-findings]] — 비용/시간 실측 근거
-- `core/chyron_scan.py`, `core/autofill_program.py`, `apps/server/src/search-parse.ts`
+- `core/chyron_scan.py`, `core/autofill_program.py`, `apps/server/src/ai/search-parse.ts`

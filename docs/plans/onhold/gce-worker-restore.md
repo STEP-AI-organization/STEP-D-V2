@@ -229,4 +229,4 @@ Cloud VM 이 primary 확정 후:
 - [[stt-diarize-chyron-stack]] · [[production-gpu-10usd-plan]]
 - [[deploy-noninteractive-gcloud]] · [[deploy-ps1-bom-required]]
 - `deploy/worker-vm.sh` · `deploy/worker-env.sh` · `deploy/deploy-server.ps1`
-- `apps/server/src/worker.ts` · `apps/server/src/queue.ts`
+- `apps/server/src/worker.ts` · `apps/server/src/pipeline/queue.ts`

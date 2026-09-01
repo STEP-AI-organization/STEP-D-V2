@@ -76,7 +76,7 @@
 | # | 서비스 | 쓰는 곳 (코드) | 인증 | 과금 | 끊기면 생기는 일 | 폴백 | 락인 |
 |---|---|---|---|---|---|---|---|
 | 1 | **Vertex AI Gemini** | `core/models.py` 경유 17개 스테이지 전부 | ADC / SA | 💰 | **파이프라인 전멸.** refine 은 전부 실패 시 예외로 죽음(설계) | 없음 | **높음** |
-| 2 | **Vertex 임베딩** `text-multilingual-embedding-002` | `core/index_segments.py`(문서축) · `apps/server/src/search-embed.ts`(쿼리축) | ADC / SA | 💰 | 의미검색 소실 | ✅ **pg_trgm 키워드축 단독** | 낮음 |
+| 2 | **Vertex 임베딩** `text-multilingual-embedding-002` | `core/index_segments.py`(문서축) · `apps/server/src/ai/search-embed.ts`(쿼리축) | ADC / SA | 💰 | 의미검색 소실 | ✅ **pg_trgm 키워드축 단독** | 낮음 |
 | 3 | **Soniox STT** | `core/asr.py` (`STT_PROVIDER=soniox`) | `SONIOX_API_KEY` | 💰 | 클라우드 STT 불가 → 파이프라인 0단계에서 정지 | ⚠️ whisper/hybrid 는 **CUDA 필요** — Cloud Run Job 엔 GPU 없음 | **높음** |
 | 4 | **OpenAI Images** `gpt-image-2` | `core/openai_client.py` → `thumbnail/image_gen.py`·`nano_banana.py` | `OPENAI_API_KEY` | 💰 | 썸네일 생성 불가 | 없음 (원본 프레임 사용) | 중간 |
 | 5 | **GCP Cloud Run (서비스)** | `stepd-server` | SA | 💰 | 제품 전체 정지 | 없음 | 중간 |
@@ -89,9 +89,9 @@
 | 12 | **Vercel** | `apps/web` · `admin/` | Git | 🔒 | 프론트 정지 | — | 중간 |
 | 13 | **YouTube Data API v3** | `apps/server/src/youtube.ts` — 채널·영상·댓글·업로드 | OAuth | 🆓 쿼터 | 채널 동기화·실업로드 정지 | 없음 | **높음** |
 | 14 | **YouTube Analytics API** | 성과·수익 지표 | OAuth(+monetary 스코프) | 🆓 쿼터 | 성과 트래킹 정지 | 없음 | **높음** |
-| 15 | **PortOne + KG이니시스** | `src/portone.ts`·`billing.ts`·`credits.ts` | 4종 시크릿 | 💰 **3.20%** | **결제 불가 → 크레딧 충전 불가** | 없음(설정 없으면 결제창 자체를 안 염) | **높음** |
-| 16 | **Canva Connect API** | `src/canva.ts` — 쇼츠 오버레이 템플릿 PNG export | OAuth(PKCE) · 단일 계정 | 🆓 API / 🔒 **Pro 구독** | 템플릿 갱신 불가 (기존 PNG 는 남음) | ⚠️ 무료플랜이면 투명배경 거부 → 마젠타 colorkey 우회 필요 | 중간 |
-| 17 | **네이버 TV / 클립** | `src/naver-tv.ts` + Playwright | **로그인 세션 파일** | 🆓 | 네이버 배포 정지 | 없음 | **매우 높음** |
+| 15 | **PortOne + KG이니시스** | `src/billing/portone.ts`·`billing.ts`·`credits.ts` | 4종 시크릿 | 💰 **3.20%** | **결제 불가 → 크레딧 충전 불가** | 없음(설정 없으면 결제창 자체를 안 염) | **높음** |
+| 16 | **Canva Connect API** | `src/ai/canva.ts` — 쇼츠 오버레이 템플릿 PNG export | OAuth(PKCE) · 단일 계정 | 🆓 API / 🔒 **Pro 구독** | 템플릿 갱신 불가 (기존 PNG 는 남음) | ⚠️ 무료플랜이면 투명배경 거부 → 마젠타 colorkey 우회 필요 | 중간 |
+| 17 | **네이버 TV / 클립** | `src/naver/naver-tv.ts` + Playwright | **로그인 세션 파일** | 🆓 | 네이버 배포 정지 | 없음 | **매우 높음** |
 | 18 | **Meta Graph API** | OAuth 연결만 | `META_APP_*` | 🆓 | — | — | — |
 | 19 | **TikTok API** | OAuth 연결만 | `TIKTOK_*` | 🆓 | — | — | — |
 | 20 | **Hugging Face** (pyannote 3.1) | `core/asr.py` 화자분리 (whisper/hybrid 경로) | `HF_TOKEN` | 🆓 | speaker 필드가 빈 채로 나감 | ✅ 조용히 비움 | 낮음 |
@@ -217,7 +217,7 @@
 
 | 위치 | 값 | 분당 | 판정 |
 |---|---|---|---|
-| `apps/server/src/billing.ts` `COST_KRW_PER_MINUTE` | **4.9** | ₩4.9/분 | ❌ **3.5배 낙관.** 틀린 `retry.py` 표에서 나온 ₩285/회차 기준 |
+| `apps/server/src/billing/billing.ts` `COST_KRW_PER_MINUTE` | **4.9** | ₩4.9/분 | ❌ **3.5배 낙관.** 틀린 `retry.py` 표에서 나온 ₩285/회차 기준 |
 | `cloudbuild.yaml` `_CREDIT_PRICE_KRW` 주석 | 원가 **₩1,200/시간** | ₩20/분 | ✅ **실측(₩17.0/분)과 거의 일치** |
 
 **크레딧 가격 ₩28 은 맞게 잡혔는데, 마진 감시용 상수는 틀렸다.** 지금 상태로는 대시보드가
@@ -402,7 +402,7 @@ _PRICE_KRW_PER_1M = {
 ＋ `usage_summary()` 가 **캐시 토큰을 별도 요율로** 계산하도록 수정
 (지금은 `cached` 를 집계만 하고 원가 계산엔 안 쓴다 → 오히려 과대계상 방향).
 
-### 10-2. ✅ (2026-08-16 완료) `apps/server/src/billing.ts` — `COST_KRW_PER_MINUTE` 4.9 → **26**
+### 10-2. ✅ (2026-08-16 완료) `apps/server/src/billing/billing.ts` — `COST_KRW_PER_MINUTE` 4.9 → **26**
 
 주석의 "58.6분 회차 ≈ ₩285" 근거도 함께 갱신. 이걸 안 고치면 마진 대시보드가 계속 거짓말한다.
 

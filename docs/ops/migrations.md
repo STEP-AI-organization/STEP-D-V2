@@ -47,7 +47,7 @@ UPDATE pgmigrations SET name = '0031_naver-session-blob' WHERE name = '0028_nave
 
 ## 배경 — 왜 baseline인가
 
-프로덕션 스키마는 지금까지 런타임 부트스트랩(`src/db-pg.ts` `migrate()` + `src/queue.ts` `initQueue()`)이
+프로덕션 스키마는 지금까지 런타임 부트스트랩(`src/db-pg.ts` `migrate()` + `src/pipeline/queue.ts` `initQueue()`)이
 전부 `CREATE TABLE IF NOT EXISTS` / `ADD COLUMN IF NOT EXISTS`로 **additive하게만** 만들어 왔다.
 그 최종 상태를 `0001_baseline.cjs`로 그대로 캡처했다. 빈 DB(로컬/CI)에 `migrate up`을 돌리면 프로덕션과
 동일한 스키마가 재현된다.

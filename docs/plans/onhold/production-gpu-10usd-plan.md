@@ -64,7 +64,7 @@
 - `WORKER_JOBS` 목록에 `gebd` lane 추가 (기존 `youtube`/`content` 와 나란히)
 - `gebd.detect` 핸들러: 미디어 다운로드 (GCS→/tmp) → GEBD Docker 호출 → boundaries.json GCS 업로드 → 원 잡 (`content.analyze`) 재개 트리거
 
-**pipeline 분리 (`apps/server/src/content-pipeline.ts`)**:
+**pipeline 분리 (`apps/server/src/pipeline/content-pipeline.ts`)**:
 - 현재 `core/analyze.py` 는 단일 프로세스 · GEBD 단계를 별도 잡으로 분리:
   - **Phase 1** (Cloud Run 워커): STT · refine · scenes 까지
   - **Phase 2** (GEBD VM): boundaries 만
@@ -73,11 +73,11 @@
 
 ## 재사용 지점
 
-- `apps/server/src/queue.ts` — `FOR UPDATE SKIP LOCKED`, dedupeKey, queueStats 그대로
+- `apps/server/src/pipeline/queue.ts` — `FOR UPDATE SKIP LOCKED`, dedupeKey, queueStats 그대로
 - `apps/server/src/worker.ts` — `WORKER_JOBS` env 로 lane 분리 이미 지원, 새 핸들러만 등록
 - `deploy/worker-vm.sh` + `deploy/worker-env.sh` — CloudSQL 프록시 · secret 로딩 재사용
 - `core/boundaries.py` — GEBD JSON 계약 정의됨. Docker 호출부만 새 배선
-- `apps/server/src/storage-gcs.ts` — 미디어·산출물 GCS I/O 그대로
+- `apps/server/src/media/storage-gcs.ts` — 미디어·산출물 GCS I/O 그대로
 
 ## Verification
 

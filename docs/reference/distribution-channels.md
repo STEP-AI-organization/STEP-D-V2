@@ -2,7 +2,7 @@
 
 > 2026-08-13 실측. 다중 배포에서 **예약(스케줄) 처리 방식**이 채널마다 다르다.
 > 이 문서는 "채널마다 실제로 어떻게 나가고, 예약을 누가 잡는가"를 한 장에 고정한다.
-> 코드 정본: `apps/server/src/publish-dispatch.ts`(관문) · `publish-guard.ts`(모드) ·
+> 코드 정본: `apps/server/src/publish/publish-dispatch.ts`(관문) · `publish-guard.ts`(모드) ·
 > `worker.ts`(실행) · `youtube.ts`·`naver-tv.ts`(플랫폼 어댑터).
 
 ---

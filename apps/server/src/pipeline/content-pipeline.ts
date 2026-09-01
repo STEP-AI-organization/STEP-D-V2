@@ -61,7 +61,9 @@ import {
   type ClipReframeState,
 } from "../media/reframe.ts";
 
-export const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+// 깊이 계산은 repo-root.ts 한 곳에만 둔다 — 여기서 세면 폴더 이동에 조용히 깨진다.
+export { REPO_ROOT } from "../repo-root.ts";
+import { REPO_ROOT } from "../repo-root.ts";
 
 /**
  * core/ 파이썬 인터프리터. env 없이도 리포의 venv 를 찾아가므로 CORE_PYTHON 은 선택이다

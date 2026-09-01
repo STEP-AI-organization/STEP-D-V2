@@ -353,10 +353,10 @@ BILLING_ENABLED         실결제 게이트 — 미설정·오타·빈값 = OFF
 > |---|---|---|
 > | `tenants` 테이블 + 23개 테이블 `tenant_id` 백필 | `migrations/0013_tenants.cjs` | 적용됨(로컬) |
 > | RLS 정책 + `FORCE ROW LEVEL SECURITY` | `migrations/0014_tenant_rls.cjs` | 적용됨(로컬) |
-> | 요청·잡 스코프 컨텍스트 (AsyncLocalStorage) | `src/tenant.ts` | 완료 |
+> | 요청·잡 스코프 컨텍스트 (AsyncLocalStorage) | `src/auth/tenant.ts` | 완료 |
 > | 풀 프록시 — 커넥션마다 `app.tenant_id` 주입 | `src/db-pg.ts` | 완료 |
 > | 요청 미들웨어 | `src/index.ts` (`resolveTenant`) | 완료 |
-> | 워커 잡 스코프 (`job.tenantId` → 핸들러) | `src/worker.ts` · `src/queue.ts` | 완료 |
+> | 워커 잡 스코프 (`job.tenantId` → 핸들러) | `src/worker.ts` · `src/pipeline/queue.ts` | 완료 |
 > | 불변식 테스트 | `src/tenant.test.ts` (86 tests pass) | 완료 |
 >
 > **실측 검증** — NOBYPASSRLS 역할로 두 테넌트를 넣고 확인:
@@ -368,7 +368,7 @@ BILLING_ENABLED         실결제 게이트 — 미설정·오타·빈값 = OFF
 >   기동 시 점검해 로컬 외에서는 **기동을 거부**한다(`ALLOW_RLS_BYPASS=1` 로만 우회).
 >   프로덕션 배포 전에 격리 전용 역할을 만들어야 한다.
 > - ~~웹에 로그인이 없다~~ → **백엔드 완료 (2026-08-10)**: 이메일+비밀번호·초대제.
->   `migrations/0017_auth.cjs`(users·sessions·invites) · `src/auth.ts` · `/api/auth/*` 6개 라우트 ·
+>   `migrations/0017_auth.cjs`(users·sessions·invites) · `src/auth/auth.ts` · `/api/auth/*` 6개 라우트 ·
 >   `pnpm user:create`(첫 계정 부트스트랩) · `src/auth.test.ts`.
 >   비밀번호는 scrypt(node:crypto 내장 — 네이티브 의존성 없음), 세션·초대 토큰은 sha256 만 저장.
 >   **로그인 화면은 apps/web 개편 후**에 붙인다.
@@ -436,4 +436,4 @@ BILLING_ENABLED         실결제 게이트 — 미설정·오타·빈값 = OFF
 - [factory-api-plan.md](factory-api-plan.md) — 외부 API 표면. 이 문서가 그 "과금 보류" 항목을 연다
 - [../reference/data-model.md](../../reference/data-model.md) — 현재 스키마
 - [../ops/infra.md](../../ops/infra.md) — 시크릿 저장 위치(Secret Manager)
-- `apps/server/src/upload-gate.ts` — `BILLING_ENABLED` 가 복제할 게이트 패턴
+- `apps/server/src/publish/upload-gate.ts` — `BILLING_ENABLED` 가 복제할 게이트 패턴

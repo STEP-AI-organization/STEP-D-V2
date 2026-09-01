@@ -192,7 +192,7 @@ v1 매핑 우선순위:
 | 1 | `youtube.ts`에 `fetchLiveBroadcasts` 추가 | `apps/server/src/youtube.ts` |
 | 2 | `live_broadcasts` 런타임 테이블과 CRUD 추가 | `apps/server/src/db-pg.ts` |
 | 3 | 기존 YouTube URL 임포트 로직을 내부 함수로 분리 | `apps/server/src/index.ts` 또는 신규 서버 내부 helper |
-| 4 | `live.detect` / `live.import` 잡 타입 추가 | `apps/server/src/queue.ts`, `apps/server/src/worker.ts` |
+| 4 | `live.detect` / `live.import` 잡 타입 추가 | `apps/server/src/pipeline/queue.ts`, `apps/server/src/worker.ts` |
 | 5 | 수동 트리거 API 추가 | `apps/server/src/index.ts` |
 | 6 | `/live` 화면 추가 및 NAV 연결 | `apps/web/src/app/(app)/live/page.tsx`, `apps/web/src/lib/nav.ts` |
 | 7 | 운영 문서 갱신 | `docs/reference/api-reference.md`, `docs/reference/data-model.md`, `docs/ops/worker-queue.md` |

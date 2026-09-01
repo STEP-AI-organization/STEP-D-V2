@@ -10,14 +10,14 @@
   - `shorts_viewer.py` — 렌더된 mp4 embed 하는 HTML 뷰어.
 - **완료 · Phase 2 배선** (2026-08-02):
   - `hook_quote` / `hook_time_sec` / `hook_intro_caption` (Phase 1 · core 생성) 을 소비 측까지 end-to-end 배선:
-    - `apps/server/src/content-pipeline.ts` — `Short` 타입 + `recFromShort()` 가 추천 엔티티로 `hookQuote`/`hookTimeSec`/`hookIntroCaption` 전달.
+    - `apps/server/src/pipeline/content-pipeline.ts` — `Short` 타입 + `recFromShort()` 가 추천 엔티티로 `hookQuote`/`hookTimeSec`/`hookIntroCaption` 전달.
     - `apps/web/src/lib/data/api.ts` — `AnalysisShort` 에 3필드 노출 (`/api/media/:id/analysis`).
     - `apps/web/src/lib/types.ts` — `Recommendation` 에 3필드.
     - `apps/web/src/components/shorts-card.tsx` — 카드에 "첫 3초 훅" 프리뷰 (어그로 자막 + 실 대사 + 상대 시각 마커).
 - **완료 · Phase 3 프리롤 렌더 배선** (2026-08-02):
   - 편집자 승인(export) 후 서버 렌더 경로에 첫 3초 hook 프리롤 배선. 트리거 = 에디터 "첫 3초 훅"
     토글(editorState.hookOn · opt-in 기본 OFF) + clip.hookTimeSec 존재. 시각 소스 = hook_time_sec.
-    - `apps/server/src/ffmpeg.ts` — `renderShort` 에 `hookPreroll` 옵션 + 2입력 xfade 분기
+    - `apps/server/src/media/ffmpeg.ts` — `renderShort` 에 `hookPreroll` 옵션 + 2입력 xfade 분기
       (`renderShortWithPreroll`): 프리롤(punch-in 전체화면 + 살짝 그레이드) → 본문 cross-dissolve.
       프로토타입 `tmp/gebd/scripts/dev/render_shorts.py` 검증 로직 기반. 본문 자막·타이틀·속도·그레이드는
       기존과 동일하게 본문 프레임에만 번인.

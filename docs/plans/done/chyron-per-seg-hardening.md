@@ -86,7 +86,7 @@ chyron.enhance  (별도 잡)
 - chyron 은 회당 몇 분~십수 분 걸리는 무거운 잡 · 별도 잡으로 격리하면 워커 리소스 관리 쉬움.
 
 배선 지점:
-- `apps/server/src/queue.ts` 잡 타입에 `chyron.enhance` 추가.
+- `apps/server/src/pipeline/queue.ts` 잡 타입에 `chyron.enhance` 추가.
 - `apps/server/src/worker.ts` handle 스위치 추가 · workdir 재활용 (`stepd-content/{mediaId}/refined.json` 존재 전제).
 - `content.analyze` 완료 시 자동으로 `chyron.enhance` 큐잉 (dedupeKey `chyron:{mediaId}`).
 - speaker 재작성 후 `search_segments` 의 해당 mediaId row 만 UPDATE (speaker_name 필드).

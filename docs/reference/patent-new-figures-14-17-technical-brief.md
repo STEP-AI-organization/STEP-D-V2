@@ -190,14 +190,14 @@
   - `SAVE_EVERY=20`, `MAX_FRAME_ATTEMPTS=3`: L51~55
   - 이미 분석된 scene skip: L114~148
   - save callback 호출: L189~201
-- `apps/server/src/content-pipeline.ts`
+- `apps/server/src/pipeline/content-pipeline.ts`
   - 미디어별 고정 work dir와 48h TTL: L9~20, L48~67
   - `python -m core.analyze` 실행과 progress 파싱: L135~234
   - 소스 파일 재사용: L869~877
   - 진행률 DB 반영: L879~899
   - partial 수집: L817~850
   - 성공/실패 시 산출물 저장 및 work dir 처리: L1018~1136
-- `apps/server/src/queue.ts`
+- `apps/server/src/pipeline/queue.ts`
   - job queue와 `FOR UPDATE SKIP LOCKED`: L1~11, L108~138
   - dedupe index: L79~86
   - heartbeat/stale lock: L149~170, L203~223
@@ -258,7 +258,7 @@
   - 서버 호출 계약과 `multi_session.json`: L1~8
   - 기본 variant 실행: L44~108
   - `--legacy-layer` 레이어 방식 실행 경로: L111~126
-- `apps/server/src/content-pipeline.ts`
+- `apps/server/src/pipeline/content-pipeline.ts`
   - 썸네일 엔진 호출, variant 3개 생성, GCS 업로드, 추천 엔티티 갱신: L573~707
 - `apps/web/src/components/thumbnail-picker.tsx`
   - 웹에서 썸네일 후보 표시 및 선택: L9~97

@@ -430,7 +430,7 @@ AI: Vertex Gemini(gemini-3.1-flash) — 서울(asia-northeast3) 리전 고정 (�
 |------|------|
 | 서버 진입점(라우트) | `apps/server/src/index.ts` |
 | ID 생성 헬퍼(`newId`) | `apps/server/src/pipeline.ts` |
-| core 호출부 | `apps/server/src/content-pipeline.ts` |
+| core 호출부 | `apps/server/src/pipeline/content-pipeline.ts` |
 | 큐·워커·채널 | `apps/server/src/{queue,worker,channel-pipeline}.ts` |
 | DB(정본) | `apps/server/src/db-pg.ts` · `apps/server/schema.sql` |
 | AI 오케스트레이터(정본) | `core/analyze.py` (+asr/refine/scenes/vision/names/recommend) |

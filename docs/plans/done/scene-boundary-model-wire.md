@@ -13,7 +13,7 @@
 
 ## 이번 변경 (2026-08-06)
 
-`apps/server/src/content-pipeline.ts::runContentAnalyze` 시작 시 자동 트리거:
+`apps/server/src/pipeline/content-pipeline.ts::runContentAnalyze` 시작 시 자동 트리거:
 
 ```ts
 if (process.env.AUTO_GEBD === "1" && process.env.GCS_BUCKET) {

@@ -86,7 +86,7 @@
 - `_synthesize` 후보 생성 시 explicit_timestamps를 강제 후보로 포함
 - 프롬프트 확장분 = **구체 예시** (Exp 12에서 확인한 원칙 · 성과 +70% 방향)
 
-### 4. `apps/server/src/content-pipeline.ts` (~20줄 추가)
+### 4. `apps/server/src/pipeline/content-pipeline.ts` (~20줄 추가)
 - content.analyze 잡에 optional viewer_signals 파라미터
 - 잡 payload에서 viewerYoutubeId 있으면 `--viewer-signals` 전달
 
@@ -156,7 +156,7 @@
 - explicit_timestamps 강제 후보
 - 로컬 검증: 하하 3 홀드아웃 재분석 → 픽 개선 확인
 
-### 커밋 3: `apps/server/src/content-pipeline.ts` 배선 (~20줄)
+### 커밋 3: `apps/server/src/pipeline/content-pipeline.ts` 배선 (~20줄)
 - content.analyze 잡 payload 확장
 - feature flag 가드
 - 배포 · 실 채널 카나리 (하하만 활성)

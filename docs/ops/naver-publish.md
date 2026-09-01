@@ -1,6 +1,6 @@
 # 네이버 TV·클립 발행 — 운영 런북
 
-> 2026-08-11 실측. 코드는 `apps/server/src/naver-tv.ts` · `naver-session.ts` ·
+> 2026-08-11 실측. 코드는 `apps/server/src/naver/naver-tv.ts` · `naver-session.ts` ·
 > `naver-gate.ts` · `naver-workdir.ts`. 작업 지침은 스킬 `/naver-publish`.
 
 > **머신 호칭** — 윈도우1 = 개발·배포 PC(`desktop-c5bdabc`), **윈도우2 = 네이버 워커 전용 PC**.

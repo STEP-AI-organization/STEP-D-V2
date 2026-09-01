@@ -17,7 +17,7 @@
 - `core/ppl.py` · PPL/브랜드/텍스트성 프레임 분석
 - `core/recommend.py` · 쇼츠/클립 추천
 - `core/thumbnail/` · 썸네일 플래너·합성기·캡션 렌더러·CTR 평가기
-- `apps/server/src/content-pipeline.ts` · 분석 실행·결과 저장·추천/썸네일 생성 연결
+- `apps/server/src/pipeline/content-pipeline.ts` · 분석 실행·결과 저장·추천/썸네일 생성 연결
 - `apps/server/src/index.ts` · media/frame/thumb/analysis/faces/recommendation/clip API
 - `apps/web/src/components/thumbnail-picker.tsx` · 썸네일 선택 UI
 - `assets/thumbnail-benchmark/` · MBC/JTBC/Netflix Korea 벤치마크

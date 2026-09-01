@@ -17,7 +17,7 @@
  */
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { assetPath } from "../repo-root.ts";
 
 /** 캔버스에 그릴 한 줄의 텍스트. 좌표(x,y)·폰트 px 는 전부 **출력 해상도(1080×1920 등) 기준**. */
 export type OverlayTextItem = {
@@ -163,9 +163,11 @@ function snapWeightIn(fam: FontFamilyDef, weight: number): number {
  *  2) <repo>/assets/invoice-fonts  — GmarketSans(TTF). Dockerfile 이 이미 COPY(메일 인보이스와 공유)
  *  3) /usr/share/fonts/opentype/pretendard — Dockerfile 이 COPY + fc-cache 하는 경로(컨테이너 상시)
  */
+// ⚠️ 리포 루트는 **repo-root.ts 하나**가 안다. 여기서 깊이를 세면 폴더를 옮길 때마다
+//    조용히 어긋난다(2026-09-01 실측: media/ 로 옮기며 apps/assets/fonts 를 가리켰다).
 const FONT_DIRS = [
-  path.resolve(fileURLToPath(import.meta.url), "../../../../assets/fonts"),
-  path.resolve(fileURLToPath(import.meta.url), "../../../../assets/invoice-fonts"),
+  assetPath("fonts"),
+  assetPath("invoice-fonts"),
   "/usr/share/fonts/opentype/pretendard",
 ];
 

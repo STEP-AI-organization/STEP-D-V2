@@ -9,9 +9,10 @@
  */
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { assetPath } from "../repo-root.ts";
 
-const ROOT = path.resolve(fileURLToPath(import.meta.url), "../../../../assets/shorts-template");
+// 리포 루트는 repo-root.ts 가 안다(폴더를 옮겨도 안 어긋나게).
+const ROOT = assetPath("shorts-template");
 
 export interface Rect { x: number; y: number; w: number; h: number }
 export interface Band extends Rect { color?: string; over?: boolean }

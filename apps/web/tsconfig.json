@@ -35,7 +35,7 @@
     "next-env.d.ts",
     "**/*.ts",
     "**/*.tsx",
-    "../server/src/automation.ts",
+    "../server/src/pipeline/automation.ts",
     ".next/types/**/*.ts",
     ".next/dev/types/**/*.ts"
   ],

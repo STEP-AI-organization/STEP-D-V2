@@ -13,7 +13,7 @@
  *      · "cover"   잘라 꽉 채우기(여백 없음, 중앙 크롭)
  *      · "rect"    비디오가 `rect` 사각형에 앉고 나머지는 검정 pad(캡션 밴드) — AENA crop-main/sub 이식
  *
- * ⚠️ 이 배열 리터럴은 서버 미러(apps/server/src/aspect-presets.ts)와 **바이트 동일**해야 한다.
+ * ⚠️ 이 배열 리터럴은 서버 미러(apps/server/src/media/aspect-presets.ts)와 **바이트 동일**해야 한다.
  *    aspect-parity.test.ts 가 두 파일의 ASPECT_PRESETS 블록이 갈라지는 순간 빨간불을 켠다.
  *    STEP-D 세로 캔버스 = 1080×1920 이라 AENA(동일 캔버스)의 rect 좌표를 그대로 옮겼다.
  */

@@ -11,6 +11,7 @@
  * Run:  pnpm --filter @stepd/server worker
  */
 import { spawn } from "node:child_process";
+import { REPO_ROOT } from "./repo-root.ts";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -1105,7 +1106,7 @@ async function handleYoutubeDownload(job: Job): Promise<void> {
 
 const ALIGN_ROOT = path.join(os.tmpdir(), "stepd-align");
 // content-pipeline과 같은 파이썬/루트를 쓴다 (워커 VM은 CORE_PYTHON을 env로 지정).
-const CORE_REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+const CORE_REPO_ROOT = REPO_ROOT;   // 깊이 계산은 repo-root.ts 한 곳(폴더 이동에 안 깨지게)
 const CORE_PYTHON_BIN =
   process.env.CORE_PYTHON || path.join(CORE_REPO_ROOT, "core", ".venv310", "Scripts", "python.exe");
 
