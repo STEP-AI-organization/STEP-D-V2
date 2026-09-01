@@ -41,25 +41,45 @@ function textBlob(text: string, font: string, size: number, color: number): stri
   return Buffer.concat([head, json]).toString("base64");
 }
 
-function fakeXml(layers: number): string {
+/**
+ * 로케일 판은 **`<Name>` 이 번역돼 있다** (실측: `Position`→`위치`, `Anchor Point`→`기준점`).
+ * 언어와 무관한 열쇠는 `<ParameterID>` 뿐이라(위치=3·기준점=9), 픽스처도 그렇게 만든다 —
+ * 안 그러면 "영어 이름으로 찾는" 회귀를 테스트가 못 잡는다.
+ */
+const NAMES = {
+  en: { text: "Source Text", pos: "Position", anchor: "Anchor Point" },
+  ko: { text: "소스 텍스트", pos: "위치", anchor: "기준점" },
+};
+
+function fakeXml(layers: number, loc: keyof typeof NAMES = "en"): string {
+  const n = NAMES[loc];
   let xml = '<?xml version="1.0" encoding="UTF-8" ?>\n<PremiereData Version="3">\n';
   for (let i = 0; i < layers; i++) {
     xml += `\t<VideoComponentParam ObjectID="${100 + i}">\n`
-      + `\t\t<Name>Source Text</Name>\n`
+      + `\t\t<Name>${n.text}</Name>\n`
       + `\t\t<StartKeyframeValue Encoding="base64" BinaryHash="deadbeef-0000-0000-0000-00000000000${i}">`
       + textBlob(`원래 ${i + 1}행`, "MyriadPro-Regular", 100, 0xffffff)
       + `</StartKeyframeValue>\n\t</VideoComponentParam>\n`
-      + `\t<PointComponentParam ObjectID="${200 + i}">\n`
-      + `\t\t<Name>Position</Name>\n`
+      + `\t<PointComponentParam ObjectID="${200 + i}" ClassID="ca81d347-309b-44d2-acc7-1c572efb973c">\n`
+      + `\t\t<Name>${n.pos}</Name>\n`
       + `\t\t<IsTimeVarying>false</IsTimeVarying>\n`
       + `\t\t<StartKeyframe>-91445760000000000,0.5,0.888888,0,0,0,0,0,0,5,4,0,0,0,0</StartKeyframe>\n`
+      + `\t\t<ParameterID>3</ParameterID>\n`
+      + `\t</PointComponentParam>\n`
+      // 기준점도 같은 PointComponentParam 이다 — 이걸 위치로 착각하면 글자가 엉뚱한 데로 간다.
+      + `\t<PointComponentParam ObjectID="${300 + i}" ClassID="ca81d347-309b-44d2-acc7-1c572efb973c">\n`
+      + `\t\t<Name>${n.anchor}</Name>\n`
+      + `\t\t<StartKeyframe>-91445760000000000,0.777777,0.666666,0,0,0,0,0,0,5,4,0,0,0,0</StartKeyframe>\n`
+      + `\t\t<ParameterID>9</ParameterID>\n`
       + `\t</PointComponentParam>\n`;
   }
   return xml + "</PremiereData>\n";
 }
 
 function fakeMogrt(layers = 2): Uint8Array {
-  const inner = zipSync({ "PPro_Fake.prproj": new Uint8Array(gzipSync(Buffer.from(fakeXml(layers), "utf-8"))) });
+  const graphic = (loc: keyof typeof NAMES) =>
+    zipSync({ "PPro_Fake.prproj": new Uint8Array(gzipSync(Buffer.from(fakeXml(layers, loc), "utf-8"))) });
+  const inner = graphic("en");
   const def = {
     capsuleID: "00000000-0000-0000-0000-000000000000",
     capsuleName: "Fake Base",
@@ -73,15 +93,15 @@ function fakeMogrt(layers = 2): Uint8Array {
     "definition.json": new Uint8Array(Buffer.from(JSON.stringify(def), "utf-8")),
     "project.prgraphic": inner,
     // Adobe 기본 템플릿에는 로케일 판이 함께 들어 있다 — 프리미어는 자기 UI 언어 판을 먼저 읽는다.
-    "project_ko_KR.prgraphic": inner,
+    "project_ko_KR.prgraphic": graphic("ko"),
     "thumb.png": new Uint8Array([1, 2, 3]),
   });
 }
 
 /** 결과 .mogrt 를 도로 뜯어 본다 — 우리가 넣은 값이 실제로 파일에 있나. */
-function readBack(bytes: Uint8Array): { xml: string; def: any; names: string[] } {
+function readBack(bytes: Uint8Array, entry = "project.prgraphic"): { xml: string; def: any; names: string[] } {
   const outer = unzipSync(bytes);
-  const inner = unzipSync(outer["project.prgraphic"]);
+  const inner = unzipSync(outer[entry]);
   const pr = Object.keys(inner).find((n) => n.endsWith(".prproj"))!;
   return {
     xml: Buffer.from(gunzipSync(Buffer.from(inner[pr]))).toString("utf-8"),
@@ -178,11 +198,34 @@ describe("mogrt — 제목 채우기", () => {
     assert.equal(blobs[1].mTextParam.mStyleSheet.mText, "2행\r3행");
   });
 
-  it("**언어별 그래픽 변형을 지운다** — 한국어 프리미어가 원본을 읽어 글자가 안 나왔다", () => {
-    const back = readBack(patchTitleMogrt(fakeMogrt(2), [layer()], META));
-    assert.ok(!back.names.some((n) => /^project_.+\.prgraphic$/i.test(n)),
-      "로케일 판이 남으면 프리미어가 그걸 읽어 우리 글자가 사라진다");
-    assert.ok(back.names.includes("project.prgraphic"), "기본판까지 지우면 안 된다");
+  it("**언어별 그래픽 변형도 같이 고친다** — 한국어 프리미어는 ko_KR 판을 읽는다", () => {
+    // 2026-09-01 두 번 데었다. ① 기본판만 고쳤더니 한국어 프리미어에 옛 문구가 떴고,
+    // ② 로케일 판을 **지웠더니** 그래픽이 통째로 비어서 떴다(기본판으로 안 떨어진다).
+    // 정답은 지우는 것도 하나만 고치는 것도 아니고 **전부 고치는 것**이다.
+    const out = patchTitleMogrt(fakeMogrt(2), [layer({ text: "가" }), layer({ text: "나" })], META);
+    const back = readBack(out, "project_ko_KR.prgraphic");
+    assert.ok(back.names.includes("project_ko_KR.prgraphic"), "로케일 판을 지우면 그래픽이 빈다");
+    const blobs = decodeBlobs(back.xml);
+    assert.equal(blobs[0].mTextParam.mStyleSheet.mText, "가", "ko_KR 판에 우리 글자가 없다");
+    assert.equal(blobs[1].mTextParam.mStyleSheet.mText, "나");
+  });
+
+  it("로케일 판의 **위치**도 들어간다 — `<Name>` 이 번역돼 있어 이름으로 찾으면 못 찾는다", () => {
+    const out = patchTitleMogrt(fakeMogrt(2), [
+      layer({ xNorm: 0.5, yNorm: 0.11 }), layer({ xNorm: 0.25, yNorm: 0.2 }),
+    ], META);
+    const { xml } = readBack(out, "project_ko_KR.prgraphic");
+    assert.ok(xml.includes(",0.5,0.11,"), "ko_KR 판 위치가 안 들어갔다");
+    assert.ok(!xml.includes("0.888888"), "ko_KR 판에 원본 위치가 남아 있다");
+  });
+
+  it("**기준점은 건드리지 않는다** — 같은 PointComponentParam 이라 착각하기 쉽다", () => {
+    const out = patchTitleMogrt(fakeMogrt(2), [layer({ xNorm: 0.5, yNorm: 0.11 })], META);
+    for (const entry of ["project.prgraphic", "project_ko_KR.prgraphic"]) {
+      const { xml } = readBack(out, entry);
+      assert.equal((xml.match(/,0\.777777,0\.666666,/g) || []).length, 2,
+        `${entry}: 기준점이 위치로 덮어써졌다`);
+    }
   });
 
   it("썸네일 등 나머지 항목은 그대로 남는다 — 통째로 새로 만들지 않는다", () => {

@@ -11,7 +11,12 @@
  *     ├ definition.json           = 노출 컨트롤·이름 (평문 JSON)
  *     ├ project.prgraphic         = zip
  *     │   └ *.prproj              = gzip(XML)  ← 그래픽 본체
+ *     ├ project_ko_KR.prgraphic   = **언어별 판** (ja_JP·ru_RU·zh_CN 도 있다)
+ *     │                             프리미어는 자기 UI 언어 판을 먼저 읽는다 → 전부 고친다
  *     └ thumb*.png/mp4            = 미리보기 (안 건드린다)
+ *
+ * ⚠️ 로케일 판은 XML 의 **`<Name>` 이 번역돼 있다**(`Position`→`위치`, `Anchor Point`→`기준점`).
+ *    구조·순서·ObjectID 는 같다. 그래서 파라미터는 이름이 아니라 `<ParameterID>` 로 고른다.
  *
  * XML 안에서 우리가 바꾸는 것 — **전부 평문이거나 JSON 이다.** 바이너리 리버싱이 아니다:
  *   · 문구·글꼴·크기·색 : <StartKeyframeValue Encoding="base64"> = UTF-16LE JSON
@@ -57,7 +62,14 @@ export type MogrtMeta = {
 };
 
 const TEXT_BLOB_RE = /(<StartKeyframeValue Encoding="base64"[^>]*>)([A-Za-z0-9+/=\s]+)(<\/StartKeyframeValue>)/g;
-const POSITION_RE = /(<PointComponentParam[^>]*>\s*<Name>Position<\/Name>[\s\S]*?<StartKeyframe>)(-?\d+),([^,]+),([^,]+)(,)/g;
+/**
+ * 좌표 파라미터 한 덩어리. **이름으로 찾지 않는다** — 로케일 판에서는 `<Name>` 이 번역돼
+ * 있어서(`위치`·`位置`·`Положение`) 영어 이름으로 찾으면 한 개도 안 걸린다.
+ * 언어와 무관한 열쇠는 `<ParameterID>` 다 — 위치=3, 기준점=9 (5개 로케일 전부 확인).
+ */
+const POINT_PARAM_RE = /<PointComponentParam[^>]*>[\s\S]*?<\/PointComponentParam>/g;
+const POSITION_PARAM_ID = 3;
+const START_KEYFRAME_RE = /(<StartKeyframe>)(-?\d+),([^,]+),([^,]+)(,)/;
 
 /** 텍스트 blob 하나 = 길이 8바이트(LE) + UTF-16LE JSON. */
 function decodeTextBlob(b64: string): Record<string, any> | null {
@@ -109,6 +121,57 @@ function applyLayer(blob: Record<string, any>, layer: MogrtTextLayer): void {
 }
 
 /**
+ * `.prgraphic` 하나(= 한 언어 판)를 우리 제목으로 고쳐 제자리에 되쓴다.
+ * 텍스트 레이어를 하나라도 고쳤으면 true.
+ */
+function patchGraphic(outer: Record<string, Uint8Array>, name: string, layers: MogrtTextLayer[]): boolean {
+  const inner = unzipSync(outer[name]);
+  const prName = Object.keys(inner).find((n) => n.endsWith(".prproj"));
+  if (!prName) return false;
+  let xml = Buffer.from(gunzipSync(Buffer.from(inner[prName]))).toString("utf-8");
+
+  // ── ① 텍스트 blob (문구·글꼴·크기·색)
+  let slots = 0;
+  xml = xml.replace(TEXT_BLOB_RE, (whole, open: string, b64: string, close: string) => {
+    const blob = decodeTextBlob(b64);
+    if (!blob) return whole;                       // 텍스트가 아닌 blob 은 손대지 않는다
+    const layer = layers[slots++];
+    if (layer) applyLayer(blob, layer);
+    else applyLayer(blob, { ...layers[0], text: "" });   // 남는 레이어는 비운다
+    return open + encodeTextBlob(blob) + close;
+  });
+  if (!slots) return false;
+
+  // 줄이 레이어보다 많으면 마지막 레이어에 합쳐서 **다시 한 번** 쓴다.
+  if (layers.length > slots) {
+    const merged = layers.slice(slots - 1).map((l) => l.text).join("\r");
+    let seen = 0;
+    xml = xml.replace(TEXT_BLOB_RE, (whole, open: string, b64: string, close: string) => {
+      const blob = decodeTextBlob(b64);
+      if (!blob) return whole;
+      if (seen++ !== slots - 1) return whole;
+      applyLayer(blob, { ...layers[slots - 1], text: merged });
+      return open + encodeTextBlob(blob) + close;
+    });
+  }
+
+  // ── ② 위치 (0..1 정규화 좌표) — ParameterID 로 고른다(이름은 번역돼 있다)
+  let pos = 0;
+  xml = xml.replace(POINT_PARAM_RE, (block: string) => {
+    if (!new RegExp(`<ParameterID>${POSITION_PARAM_ID}</ParameterID>`).test(block)) return block;
+    const layer = layers[pos++];
+    if (!layer) return block;
+    return block.replace(START_KEYFRAME_RE, (_w, head: string, time: string, _x, _y, tail: string) =>
+      `${head}${time},${layer.xNorm},${layer.yNorm}${tail}`);
+  });
+
+  // ── ③ 되감기: gzip → 안쪽 zip → 바깥 zip
+  inner[prName] = new Uint8Array(gzipSync(Buffer.from(xml, "utf-8")));
+  outer[name] = zipSync(inner);
+  return true;
+}
+
+/**
  * 베이스 템플릿을 우리 제목으로 고쳐 새 .mogrt 바이트를 만든다.
  *
  * 레이어 수가 안 맞을 때:
@@ -121,54 +184,22 @@ export function patchTitleMogrt(
 ): Uint8Array {
   if (!layers.length) throw new Error("layers is empty");
   const outer = unzipSync(base);
-  const graphic = outer["project.prgraphic"];
   const defRaw = outer["definition.json"];
-  if (!graphic || !defRaw) throw new Error("not a .mogrt (definition.json / project.prgraphic 없음)");
-
-  const inner = unzipSync(graphic);
-  const prName = Object.keys(inner).find((n) => n.endsWith(".prproj"));
-  if (!prName) throw new Error(".prgraphic 안에 .prproj 가 없다");
-  let xml = Buffer.from(gunzipSync(Buffer.from(inner[prName]))).toString("utf-8");
-
-  // ── ① 텍스트 blob (문구·글꼴·크기·색)
-  const slots: number[] = [];
-  xml = xml.replace(TEXT_BLOB_RE, (whole, open: string, b64: string, close: string) => {
-    const blob = decodeTextBlob(b64);
-    if (!blob) return whole;                       // 텍스트가 아닌 blob 은 손대지 않는다
-    const idx = slots.length;
-    slots.push(idx);
-    const layer = layers[idx];
-    if (layer) applyLayer(blob, layer);
-    else applyLayer(blob, { ...layers[0], text: "" });   // 남는 레이어는 비운다
-    return open + encodeTextBlob(blob) + close;
-  });
-  if (!slots.length) throw new Error("텍스트 레이어를 찾지 못했다 — 베이스 템플릿이 제목용이 아니다");
-
-  // 줄이 레이어보다 많으면 마지막 레이어에 합쳐서 **다시 한 번** 쓴다.
-  if (layers.length > slots.length) {
-    const merged = layers.slice(slots.length - 1).map((l) => l.text).join("\r");
-    let seen = 0;
-    xml = xml.replace(TEXT_BLOB_RE, (whole, open: string, b64: string, close: string) => {
-      const blob = decodeTextBlob(b64);
-      if (!blob) return whole;
-      const idx = seen++;
-      if (idx !== slots.length - 1) return whole;
-      applyLayer(blob, { ...layers[slots.length - 1], text: merged });
-      return open + encodeTextBlob(blob) + close;
-    });
+  if (!outer["project.prgraphic"] || !defRaw) {
+    throw new Error("not a .mogrt (definition.json / project.prgraphic 없음)");
   }
 
-  // ── ② 위치 (0..1 정규화 좌표)
-  let pos = 0;
-  xml = xml.replace(POSITION_RE, (whole, head: string, time: string, _x: string, _y: string, tail: string) => {
-    const layer = layers[pos++];
-    if (!layer) return whole;
-    return `${head}${time},${layer.xNorm},${layer.yNorm}${tail}`;
-  });
-
-  // ── ③ 되감기: gzip → 안쪽 zip → 바깥 zip
-  inner[prName] = new Uint8Array(gzipSync(Buffer.from(xml, "utf-8")));
-  outer["project.prgraphic"] = zipSync(inner);
+  // ⚠️ **로케일 판을 전부 같이 고친다.** Adobe 기본 템플릿에는 `project.prgraphic` 말고
+  //    `project_ko_KR.prgraphic` 같은 언어별 판이 들어 있고, **프리미어는 자기 UI 언어의 판을
+  //    먼저 읽는다.** 기본판만 고치면 한국어 프리미어에는 옛 문구가 뜬다.
+  //    (2026-09-01 1차 시도로 로케일 판을 **지웠더니** 그래픽이 통째로 비어서 떴다 —
+  //     한국어 프리미어는 없는 판을 기본판으로 대체하지 않는다. 지우지 말고 고칠 것.)
+  let patched = 0;
+  for (const name of Object.keys(outer)) {
+    if (!name.endsWith(".prgraphic")) continue;
+    if (patchGraphic(outer, name, layers)) patched += 1;
+  }
+  if (!patched) throw new Error("텍스트 레이어를 찾지 못했다 — 베이스 템플릿이 제목용이 아니다");
 
   // ── ④ 겉이름·id. **id 를 안 바꾸면** 프리미어가 앞서 넣은 템플릿과 같은 것으로 보고
   //     캐시를 써서, 두 번째 제목이 첫 번째 문구로 뜬다.
@@ -186,16 +217,6 @@ export function patchTitleMogrt(
     if (ctl.value?.strDB) for (const s of ctl.value.strDB) s.str = layer ? layer.text : "";
   }
   outer["definition.json"] = new Uint8Array(Buffer.from(JSON.stringify(def), "utf-8"));
-
-  // ⚠️ **언어별 그래픽 변형을 지운다.** Adobe 기본 템플릿에는 `project.prgraphic` 말고
-  //    `project_ko_KR.prgraphic` 같은 로케일 판이 함께 들어 있고, **프리미어는 자기 UI 언어의
-  //    판을 먼저 읽는다.** 우리는 기본판만 고치므로, 한국어 프리미어에서는 우리가 넣은 글자가
-  //    없는 원본이 떴다(실측 2026-09-01: "그래픽에 아무 글씨가 없다").
-  //    변형을 빼면 프리미어가 기본판으로 떨어진다 — 우리 글자는 언어와 무관하게 같은 값이니
-  //    로케일 판을 유지할 이유가 없다.
-  for (const name of Object.keys(outer)) {
-    if (/^project_.+\.prgraphic$/i.test(name)) delete outer[name];
-  }
 
   // 미리보기 썸네일(thumb*.png/mp4)은 **파일 크기의 대부분**이다(622KB 중 ~600KB). 자막처럼
   // 수십 장을 찍어 내릴 때는 빼서 30KB 안팎으로 만든다 — 목록 아이콘이 비는 대신 전송이 20배 싸다.
