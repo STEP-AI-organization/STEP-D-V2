@@ -1193,6 +1193,24 @@ function homeFromDataPath(dataPath) {
 /** 자동 저장 위치가 **왜** 안 됐는지. 빈 문자열이면 성공. 화면에 그대로 보여 준다. */
 let autoFolderReason = "";
 
+/**
+ * 폴더를 **단계마다 만들어 가며** 내려간다 (`mkdir -p` 에 해당).
+ *
+ * 한 단계만 만들면 그 위가 없을 때 그대로 실패한다 — 윈도우 기본 폴더(Videos)도 지울 수 있고,
+ * 계정 설정에 따라 처음부터 없기도 하다. 없으면 만들면 되는 걸 사람에게 시킬 이유가 없다.
+ */
+async function ensureSubfolders(root, names) {
+  let cur = root;
+  for (const name of names) {
+    const found = await cur.getEntry(name).catch(() => null);
+    if (found && found.isFolder) { cur = found; continue; }
+    // 같은 이름의 **파일**이 있으면 폴더를 못 만든다 — 덮어쓰지 않고 사람에게 알린다.
+    if (found) throw new Error(`${cur.nativePath} 안에 "${name}" 이라는 파일이 이미 있습니다`);
+    cur = await cur.createFolder(name);
+  }
+  return cur;
+}
+
 /** 정해진 자리를 만들어 돌려준다. 이 프리미어가 임의 경로를 못 열면 null(→ 묻는다). */
 async function defaultMediaFolder() {
   try {
@@ -1210,21 +1228,17 @@ async function defaultMediaFolder() {
       autoFolderReason = `홈 폴더를 못 찾았습니다 (${(data && data.nativePath) || "경로 없음"})`;
       return null;
     }
-    const base = await localFs.getEntryWithUrl(toFileUrl(`${at.home}${at.sep}${at.videos}`));
-    if (!base) {
-      autoFolderReason = `${at.videos} 폴더를 열지 못했습니다`;
+    // **홈부터 내려가며 없는 단계를 만든다.** `Videos` 가 없는 계정도 있고(윈도우 기본 폴더도
+    // 지울 수 있다), 그때 "Videos 를 못 열었다" 로 끝나면 사람은 폴더를 손으로 만들어야 한다.
+    // 사용자 2026-09-01: *"애초 폴더 생성도 해 줘야 하는 거 아닌가?"* — 맞다.
+    const home = await localFs.getEntryWithUrl(toFileUrl(at.home));
+    if (!home) {
+      autoFolderReason = `홈 폴더를 열지 못했습니다 (${at.home})`;
       return null;
     }
-    // 있으면 쓰고 없으면 만든다 — 같은 이름의 **파일**이 있으면 폴더가 아니므로 거른다.
-    const found = await base.getEntry("STEP-D").catch(() => null);
-    if (found && found.isFolder) { autoFolderReason = ""; return found; }
-    if (found) {
-      autoFolderReason = "STEP-D 라는 **파일**이 이미 있습니다";
-      return null;
-    }
-    const made = await base.createFolder("STEP-D");
+    const folder = await ensureSubfolders(home, [at.videos, "STEP-D"]);
     autoFolderReason = "";
-    return made;
+    return folder;
   } catch (err) {
     // 권한이 없거나 경로를 못 연다 — 부르는 쪽이 사람에게 묻는다.
     // ⚠️ **이유를 남긴다.** 조용히 폴더 선택창으로 돌아가면 "고쳤는데 그대로" 로 보인다.

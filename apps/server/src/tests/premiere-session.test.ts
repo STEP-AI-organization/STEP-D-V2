@@ -334,6 +334,18 @@ describe("패널 — 원본 저장 위치를 묻지 않는다", () => {
     assert.ok(!panel.includes('require("os")'), "node os 에 기대면 안 된다");
   });
 
+  it("**없으면 만든다 — 단계마다.** Videos 가 없는 계정도 있다", () => {
+    // 한 단계만 만들면 그 위가 없을 때 그대로 실패하고, 사람이 탐색기에서 폴더를 만들어야 한다.
+    assert.match(panel, /async function ensureSubfolders\(root, names\)/);
+    assert.ok(panel.includes('ensureSubfolders(home, [at.videos, "STEP-D"])'),
+      "홈부터 내려가며 만들지 않으면 Videos 가 없는 PC 에서 멈춘다");
+    assert.ok(panel.includes("cur = await cur.createFolder(name);"));
+  });
+
+  it("같은 이름의 **파일**이 있으면 덮어쓰지 않고 알린다", () => {
+    assert.ok(panel.includes('이라는 파일이 이미 있습니다'));
+  });
+
   it("임시 폴더에 두지 않는다 — 청소되면 프리미어 링크가 통째로 끊긴다", () => {
     const fn = /async function defaultMediaFolder\(\)[\s\S]*?\n}/.exec(panel)?.[0] ?? "";
     assert.ok(fn, "defaultMediaFolder 를 못 찾았다");
