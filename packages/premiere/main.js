@@ -943,8 +943,14 @@ function placeOnTrack(project, api, sequence, byName, found, track, label, bin) 
     for (const [name, rec] of byName) {
       const item = found.get(name);
       if (!item) continue;
-      const at = api.TickTime.createWithSeconds(Number(rec.startTime) || 0);
+      const start = Number(rec.startTime) || 0;
+      // **구간 시작부터 끝까지** (사용자 2026-09-01: "그래픽은 영상 시작부터 끝 해서 적용").
+      // 안 정하면 정지 이미지 기본 길이(환경설정 · 보통 5초)로 들어가 앞부분에만 얹힌다.
+      const dur = Math.max(0.5, (Number(rec.endTime) || 0) - start);
+      const at = api.TickTime.createWithSeconds(start);
       const done = project.executeTransaction((c) => {
+        c.addAction(item.createSetInOutPointsAction(
+          api.TickTime.createWithSeconds(0), api.TickTime.createWithSeconds(dur)));
         c.addAction(editor.createOverwriteItemAction(item, at, track, 0));
         // 프로젝트 패널 정리 — 같은 트랜잭션에 담아 되돌리기도 한 번에 되게.
         if (bin) c.addAction(bin.createMoveItemAction(item, bin));
@@ -1614,7 +1620,10 @@ async function buildShortForRec(r, onStage) {
  */
 async function addOverlaysForPreview(r, onStage) {
   const layout = await fetchLayout(r);
-  const local = { ...r, startTime: 0 };   // 그 구간이 0초에서 시작하는 시퀀스다
+  // 그 구간이 0초에서 시작하는 시퀀스다 — **끝도 같이 옮긴다.** 안 옮기면 길이가
+  // (원본 절대 끝시각 − 0) 이 되어 그래픽이 시퀀스보다 길게 잡힌다.
+  const dur = Math.max(0.5, (Number(r.endTime) || 0) - (Number(r.startTime) || 0));
+  const local = { ...r, startTime: 0, endTime: dur };
   try {
     await addTitlesForRecs([local], onStage, layout);
   } catch (err) {
@@ -1987,7 +1996,18 @@ async function addTitleMogrts(recs, aspect, onStage) {
         return editor.insertMogrtFromPath(file.nativePath, at, TITLE_TRACK, 0);
       });
       const inserted = started && typeof started.then === "function" ? await started : started;
-      if (Array.isArray(inserted) ? inserted.length > 0 : inserted != null && inserted !== false) placed += 1;
+      const item = Array.isArray(inserted) ? inserted[0] : inserted;
+      if (!(Array.isArray(inserted) ? inserted.length > 0 : inserted != null && inserted !== false)) continue;
+      placed += 1;
+      // **구간 끝까지 늘린다.** mogrt 도 기본 길이(그래픽 기본값)로 들어가서, 안 늘리면
+      // 제목이 앞 몇 초만 떠 있다가 사라진다.
+      const endSec = (Number(rec.startTime) || 0)
+        + Math.max(0.5, (Number(rec.endTime) || 0) - (Number(rec.startTime) || 0));
+      if (item && typeof item.createSetEndAction === "function") {
+        runLocked(project, () => project.executeTransaction(
+          (c) => { c.addAction(item.createSetEndAction(api.TickTime.createWithSeconds(endSec))); },
+          `STEP-D 제목 길이 ${rec.id}`));
+      }
     } catch (err) {
       console.log("[STEP-D] mogrt 삽입 실패", rec.id, err);
     }

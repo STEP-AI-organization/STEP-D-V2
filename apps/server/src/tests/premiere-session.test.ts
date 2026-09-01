@@ -661,6 +661,18 @@ describe("패널 — 자막을 타임스탬프대로", () => {
     assert.ok(index.includes("chunkCaption(c, captionMaxCharsOf(esn))"));
   });
 
+  it("그래픽은 **구간 시작부터 끝까지** 간다 — 기본 길이(5초)로 들어가면 앞부분만 덮는다", () => {
+    // 사용자 2026-09-01: "그래픽은 영상 시작부터 끝 해서 적용".
+    assert.ok(panel.includes("c.addAction(item.createSetInOutPointsAction("),
+      "이미지 오버레이 길이를 안 정하면 정지 이미지 기본 길이로 들어간다");
+    assert.ok(panel.includes("c.addAction(item.createSetEndAction(api.TickTime.createWithSeconds(endSec)));"),
+      "제목 mogrt 를 구간 끝까지 안 늘린다");
+  });
+
+  it("미리보기 rec 은 **끝 시각도** 시퀀스 시간으로 옮긴다 — 안 옮기면 길이가 원본 절대시각이 된다", () => {
+    assert.ok(panel.includes("const local = { ...r, startTime: 0, endTime: dur };"));
+  });
+
   it("mogrt 삽입은 **잠금 안에서 시작하고 잠금 밖에서 기다린다**", () => {
     // 잠금 밖에서 부르면 "Requires locked access", 잠금 콜백은 동기라 안에서 await 불가.
     // 둘을 같이 만족시키는 유일한 방법이고, 실패하면 PNG 로 물러나 **파일이 흩뿌려진다**.
