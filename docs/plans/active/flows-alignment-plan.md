@@ -37,7 +37,7 @@
 | **V11** | F4 Invariant (FLOWS.md:92) `기록됨`을 `게시됨`처럼 보여주지 않는다 | 서버가 **youtube 가 아닌 모든 채널**을 하나의 스텁 분기로 처리해 `status="published"` 를 쓰고 clip 자체도 published 로 승격한다. 타입에 `recorded`/`기록됨` 상태값이 없고, 배포 화면은 채널 구분 없이 초록 `done` 톤 "게시됨" 배지를 그린다 | `apps/server/src/index.ts:2967-2982` · `apps/server/src/index.ts:3020-3022` / `apps/web/src/lib/types.ts:257-259` / `apps/web/src/app/(app)/distribution/page.tsx:20-33` | S2 + U7 |
 | **V12** | F4-4 ⊘ (FLOWS.md:89) 지수 백오프 자동 재시도 금지 | **부분 위반.** 업로드 실패 자체는 `catch → markDistributionFailed` 로 throw 없이 끝나 백오프를 안 탄다(정상). 그러나 업로드 **직전** 사전 단계 예외는 try 밖이라 throw 되고, 큐가 지수 백오프로 최대 5회 자동 재시도한다 | `apps/server/src/worker.ts:1191, :1213, :1216, :1220`(try 는 `:1229` 부터) / `apps/server/src/queue.ts:198-224` | S2 |
 | **V13** | F5 (FLOWS.md:102-106) **의도적으로 없는 기능** — 되돌리기, 전체 속도 램프 | 둘 다 구현돼 있다. 되돌리기는 `useEditorHistory`, 속도 램프는 타임라인 "속도 램핑" 키프레임 UI. **더 나쁜 건 속도 램프가 UI 에만 있고 서버가 무시한다는 점** — `speedPoints` 가 있으면 `uniformSpeed()` 가 1 을 반환해 프리뷰와 렌더가 어긋난다 | `apps/web/src/components/editor/editor-shell.tsx:19, :108` / `apps/web/src/components/editor/editor-timeline.tsx:478, :196-207` / `apps/server/src/index.ts:2301-2312` | U9 |
-| **V14** | F6 Invariant (FLOWS.md:142) 자동 배포는 게이트를 건너뛰지 않는다 | 현재는 "건너뛰는" 게 아니라 **건너뛸 게이트가 없다**. 문제는 구조다 — factory 가 `/api/distributions/publish` 를 부르지 않고 `enqueue("distribution.publish", …)` 를 직접 하므로, **앞으로 라우트에 게이트를 붙여도 factory 경로에는 적용되지 않는다.** 코드가 스스로 미배선을 인정한다: "그 본체(게이트 연동)는 F3 을 세운 뒤에 붙지만" | `apps/server/src/factory.ts:297-305` / `apps/server/src/factory.test.ts:4-6` | S0 + S2 + S4 |
+| **V14** | F6 Invariant (FLOWS.md:142) 자동 배포는 게이트를 건너뛰지 않는다 | 현재는 "건너뛰는" 게 아니라 **건너뛸 게이트가 없다**. 문제는 구조다 — factory 가 `/api/distributions/publish` 를 부르지 않고 `enqueue("distribution.publish", …)` 를 직접 하므로, **앞으로 라우트에 게이트를 붙여도 factory 경로에는 적용되지 않는다.** 코드가 스스로 미배선을 인정한다: "그 본체(게이트 연동)는 F3 을 세운 뒤에 붙지만" | `apps/server/src/factory.ts:297-305` / `apps/server/src/tests/factory.test.ts:4-6` | S0 + S2 + S4 |
 | **V15** | F6 Invariant (FLOWS.md:142) 보류된 건은 사람이 확정해야 다음 순방에 다시 잡힌다 | `hold` 상태는 있으나 **게이트가 아니라 일일 상한** 사유이고, `retryInMs: null` 종료 상태다. 해제 라우트가 없어 사람이 확정해도 다시 잡히지 않는다 | `apps/server/src/factory.ts:53-56, :234-239, :315-319` | S4 |
 
 ### 1.2 미구현이라 불변식을 만족할 수 없는 것 (동급으로 중요)
@@ -146,7 +146,7 @@ FLOWS 는 `3. 업로드→분석(F1,F2)` → `4. 게이트(F3)` 순이다. 그�
 "test:watch": "node --import tsx --test --watch \"src/**/*.test.ts\""
 ```
 - 러너 = Node 내장 `node:test` + `node:assert/strict`. **신규 의존성 0.**
-- 기존 테스트 2개: `apps/server/src/upload-gate.test.ts`, `apps/server/src/factory.test.ts` (둘 다 env 스위치 불변식만 고정).
+- 기존 테스트 2개: `apps/server/src/tests/upload-gate.test.ts`, `apps/server/src/tests/factory.test.ts` (둘 다 env 스위치 불변식만 고정).
 - **지금 손봐야 할 것 2가지**
   1. `apps/server/.dockerignore` 에 `*.test.ts` 추가 — 현재 내용은 `node_modules / dist / .env / .env.* / *.md` 뿐이라 테스트가 프로덕션 이미지에 들어간다(`Dockerfile` 이 `apps/server` 를 통째로 COPY).
   2. DB 필요 테스트 레인 분리. 파일명 규약 `*.db.test.ts` + `{ skip: !process.env.DATABASE_URL && "DATABASE_URL 없음" }`. 부트스트랩은 `initDb()`(migrate+seed 까지 돈다) 대신 `initQueue()` 만.

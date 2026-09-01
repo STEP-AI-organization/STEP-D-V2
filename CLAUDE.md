@@ -295,6 +295,9 @@ core/ 쪽 스위치(파이썬): `RUN_FACES`·`RUN_PPL`·`RUN_REFINE`·`RUN_CHYRO
     `apps/web` `npx next build`
   - `pnpm lint`(웹 eslint)는 **아직 기존 오류가 있어 `check` 에서 뺐다** — 프론트 개편이
     끝나면 합칠 것. 초록이 아닌 관문은 사람이 무시하게 된다.
+  - **테스트는 `apps/server/src/tests/` 에 모여 있다**(2026-09-01 이동 · 63개). 소스와 섞여
+    한 폴더에 138개가 쌓여 있었다. 테스트 안의 `SRC`(또는 HERE·SRC_DIR…)는 여전히
+    **`src/` 를 가리킨다** — 정의에 `".."` 를 붙여 두었으니 소스 스캔 경로는 그대로 쓴다.
   - 테스트 중 상당수는 **소스 스캔 아키텍처 테스트**다(`publish-guard`·`worker-lanes`·
     `docs-drift`·`rls-access`). 순수 함수로 증명 안 되는 불변식 — "큐에 넣는 곳은 한 군데",
     "모든 잡 타입은 도는 레인에 있다", "문서 숫자가 코드와 같다" — 을 고정한다.
