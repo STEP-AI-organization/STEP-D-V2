@@ -661,6 +661,14 @@ describe("패널 — 자막을 타임스탬프대로", () => {
     assert.ok(index.includes("chunkCaption(c, captionMaxCharsOf(esn))"));
   });
 
+  it("PNG 로 물러난 **이유를 화면에** 말한다 — 콘솔에만 남기면 아무도 못 본다", () => {
+    // 실측 2026-09-01: 베이스 템플릿이 한 번도 안 올라가 매번 409 였는데, 화면엔 아무 말이
+    // 없어서 "제목이 왜 이미지지?" 로만 보였다. 조용한 폴백이 제일 나쁘다.
+    assert.ok(panel.includes("let lastTitleFallbackReason"));
+    assert.ok(panel.includes("제목을 이미지로 대체합니다 — ${lastTitleFallbackReason}"));
+    assert.ok(panel.includes("제목 템플릿 등록 실패 — ${err.message}"));
+  });
+
   it("그래픽은 **구간 시작부터 끝까지** 간다 — 기본 길이(5초)로 들어가면 앞부분만 덮는다", () => {
     // 사용자 2026-09-01: "그래픽은 영상 시작부터 끝 해서 적용".
     assert.ok(panel.includes("c.addAction(item.createSetInOutPointsAction("),

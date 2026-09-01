@@ -862,7 +862,14 @@ async function fetchTitleMogrt(rec, folder, aspect, onStage, allowSetup = true) 
   const q = `?aspect=${encodeURIComponent(aspect)}`;
   const res = await api(`/recommendations/${encodeURIComponent(rec.id)}/title.mogrt${q}`, { method: "GET" });
   if (res.status === 409 && allowSetup) {
-    await uploadBaseTemplate(onStage);
+    // 베이스 템플릿이 서버에 없다 — 이 PC 의 프리미어 기본 템플릿을 한 번 올리고 다시 부른다.
+    try {
+      await uploadBaseTemplate(onStage);
+    } catch (err) {
+      // **여기서 조용히 죽으면 매번 PNG 다.** 사유를 남겨 화면에 띄운다.
+      lastTitleFallbackReason = `제목 템플릿 등록 실패 — ${err.message}`;
+      throw err;
+    }
     return fetchTitleMogrt(rec, folder, aspect, onStage, false);
   }
   if (!res.ok) {
@@ -1711,17 +1718,29 @@ async function warnIfNoVideoTrack(sequence, onStage) {
  * 먼저 편집 가능한 .mogrt 를 시도하고, 그게 안 되면 PNG 로 물러난다. 둘 다 같은 서버 계산에서
  * 나오므로 모양은 같다 — 다른 건 "글자를 고칠 수 있나" 하나뿐이다.
  */
+/** 제목이 PNG 로 떨어진 마지막 사유 — 화면에 그대로 보여 준다. */
+let lastTitleFallbackReason = "";
+
 async function addTitlesForRecs(recs, onStage, layout) {
+  lastTitleFallbackReason = "";
   const { aspect, tracks } = await titleTargetInfo(layout);
 
   // ① 편집 가능한 경로 먼저.
+  //
+  // ⚠️ **왜 물러났는지 화면에 남긴다.** 예전엔 console 로만 보내서, 편집자는 "제목이 왜
+  //    이미지지?" 만 알고 이유는 UDT 콘솔을 열어야 보였다(실측 2026-09-01: 베이스 템플릿이
+  //    한 번도 안 올라가 매번 409 였는데 화면엔 아무 말이 없었다).
   let placed = 0;
   try {
     placed = await addTitleMogrts(recs, aspect, onStage);
-    if (!placed) onStage("제목 그래픽을 못 얹어 이미지로 대체합니다…");
+    if (!placed) {
+      lastTitleFallbackReason = lastTitleFallbackReason || "서버가 제목 그래픽을 주지 않았습니다";
+      onStage(`제목을 이미지로 대체합니다 — ${lastTitleFallbackReason}`);
+    }
   } catch (err) {
+    lastTitleFallbackReason = err.message;
     console.log("[STEP-D] mogrt 제목 실패 — PNG 로 폴백", err);
-    onStage(`제목 그래픽 실패(${err.message}) — 이미지로 대체합니다…`);
+    onStage(`제목을 이미지로 대체합니다 — ${err.message}`);
   }
   // ② 폴백: 픽셀 그대로. 편집은 못 하지만 화면에는 나온다.
   if (!placed) placed = await addTitlePngs(recs, aspect, tracks, onStage);
