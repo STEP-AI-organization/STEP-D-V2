@@ -1358,20 +1358,19 @@ async function setMotionOnClips(api, project, seq, want, onStage) {
         try { match = await comp.getMatchName(); } catch (_) { continue; }
         if (match !== MOTION_MATCH_NAME) continue;
 
-        const actions = [];
-        if (want.scale != null) {
-          const p = comp.getParam(MOTION_SCALE_PARAM);
-          actions.push(p.createSetValueAction(p.createKeyframe(want.scale), true));
-        }
-        if (want.position) {
-          const p = comp.getParam(MOTION_POSITION_PARAM);
-          actions.push(p.createSetValueAction(p.createKeyframe(new api.PointF(want.position.x, want.position.y)), true));
-        }
-        if (!actions.length) break;
-        const ok = lockedTransaction(project, 
-          (compound) => { for (const a of actions) compound.addAction(a); },
-          "STEP-D 영상 배치",
-        );
+        if (want.scale == null && !want.position) break;
+        // 액션 **만들기까지** 잠금 안에서 — 밖에서 만들면 "Requires locked access".
+        const ok = lockedTransaction(project, (compound) => {
+          if (want.scale != null) {
+            const p = comp.getParam(MOTION_SCALE_PARAM);
+            compound.addAction(p.createSetValueAction(p.createKeyframe(want.scale), true));
+          }
+          if (want.position) {
+            const p = comp.getParam(MOTION_POSITION_PARAM);
+            compound.addAction(p.createSetValueAction(
+              p.createKeyframe(new api.PointF(want.position.x, want.position.y)), true));
+          }
+        }, "STEP-D 영상 배치");
         if (ok !== false) touched += 1;
         break;
       }
@@ -1663,16 +1662,20 @@ async function addCaptionMogrts(recs, aspect, onStage) {
       const editor = api2.SequenceEditor.getEditor(sequence);
       const startSec = (Number(job.rec.startTime) || 0) + (Number(job.line.start) || 0);
       const dur = Math.max(0.2, Number(job.line.end) - Number(job.line.start));
-      const inserted = await editor.insertMogrtFromPath(
-        job.file.nativePath, api2.TickTime.createWithSeconds(startSec), CAPTION_TRACK, 0);
-      const item = Array.isArray(inserted) ? inserted[0] : inserted;
-      if (!item) continue;
-      // 길이 맞추기 — 넣자마자 그 자리에서(await 를 건너면 객체가 무효가 된다).
-      if (typeof item.createSetEndAction === "function") {
-        const end = api2.TickTime.createWithSeconds(startSec + dur);
-        lockedTransaction(project, (c) => { c.addAction(item.createSetEndAction(end)); }, `STEP-D 자막 길이 ${job.i}`);
-      }
-      n += 1;
+      // 삽입과 길이 맞추기를 **한 잠금 안에서** — 사이에 await 를 두면 방금 넣은 아이템이
+      // 무효가 되고, 잠금 밖에서 부르면 "Requires locked access" 다.
+      runLocked(project, () => {
+        const inserted = editor.insertMogrtFromPath(
+          job.file.nativePath, api2.TickTime.createWithSeconds(startSec), CAPTION_TRACK, 0);
+        const item = Array.isArray(inserted) ? inserted[0] : inserted;
+        if (!item) return;
+        if (typeof item.createSetEndAction === "function") {
+          const end = api2.TickTime.createWithSeconds(startSec + dur);
+          project.executeTransaction((c) => { c.addAction(item.createSetEndAction(end)); },
+            `STEP-D 자막 길이 ${job.i}`);
+        }
+        n += 1;
+      });
     } catch (err) {
       console.log("[STEP-D] 자막 mogrt 삽입 실패", job.i, err);
     }
@@ -1789,7 +1792,9 @@ async function addTitleMogrts(recs, aspect, onStage) {
       const at = api.TickTime.createWithSeconds(Number(rec.startTime) || 0);
       // V2(인덱스 1) — V1 영상 위. 오디오 트랙은 안 쓴다.
       // 반환은 **꽂힌 트랙 아이템 배열**이다(Action 이 아니라 즉시 실행) — 비면 실패다.
-      const inserted = await editor.insertMogrtFromPath(file.nativePath, at, TITLE_TRACK, 0);
+      // insertMogrtFromPath 는 **동기**다(공식 선언 반환형이 배열 · Promise 아님) —
+      // 그래서 잠금 안에서 그대로 부를 수 있다. 밖에서 부르면 "Requires locked access".
+      const inserted = runLocked(project, () => editor.insertMogrtFromPath(file.nativePath, at, TITLE_TRACK, 0));
       if (Array.isArray(inserted) ? inserted.length > 0 : inserted != null && inserted !== false) placed += 1;
     } catch (err) {
       console.log("[STEP-D] mogrt 삽입 실패", rec.id, err);

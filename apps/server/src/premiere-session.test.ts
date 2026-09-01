@@ -531,8 +531,10 @@ describe("패널 — 객체 무효화를 견딘다", () => {
     assert.ok(panel.includes("function lockedTransaction(project, build, label)"));
     assert.ok(panel.includes("project.lockedAccess(() => { out = fn(); });"));
     // 잠그지 않은 직접 호출이 남아 있으면 거기서 또 난다.
+    // 잠금 밖의 직접 호출이 남아 있으면 거기서 또 난다. 헬퍼(lockedTransaction) 안의 한 번과,
+    // 이미 runLocked 로 감싼 자리(자막 mogrt 길이 맞추기) 정도만 허용한다.
     const direct = panel.match(/\w+\.executeTransaction\(/g) ?? [];
-    assert.equal(direct.length, 1, "lockedTransaction 헬퍼 안의 한 번만 남아야 한다");
+    assert.ok(direct.length <= 2, `잠그지 않은 executeTransaction 이 ${direct.length}곳이다`);
   });
 
   it("무효화면 **한 번만** 다시 돈다 — 무한 재시도는 멈춘 것처럼 보인다", () => {
@@ -704,7 +706,9 @@ describe("패널 — 영상 배치는 서버 프리셋을 따른다", () => {
   it("Motion 의 위치·배율을 **한 트랜잭션**으로 건다 — 되돌리기가 두 번이 되면 안 된다", () => {
     assert.ok(panel.includes("const MOTION_POSITION_PARAM = 0;"));
     assert.ok(panel.includes("const MOTION_SCALE_PARAM = 1;"));
-    assert.ok(panel.includes("for (const a of actions) compound.addAction(a);"));
+    assert.ok(panel.includes('}, "STEP-D 영상 배치");'), "위치·배율이 한 트랜잭션이 아니다");
+    assert.ok(panel.includes("compound.addAction(p.createSetValueAction(p.createKeyframe(want.scale), true));"),
+      "액션을 잠금 밖에서 만들면 Requires locked access 가 난다");
   });
 
   it("배치를 못 받으면 예전 동작(꽉 채우기)으로 물러난다 — 여기서 전체가 멈추면 안 된다", () => {
