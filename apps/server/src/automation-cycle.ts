@@ -38,7 +38,7 @@ import {
   withTenantLock,
 } from "./db-pg.ts";
 import { currentTenantId } from "./tenant.ts";
-import { maybeAutoTopup } from "./auto-topup.ts";
+import { maybeAutoTopup } from "./billing/auto-topup.ts";
 import {
   AUTO_RENDER_STOPPED_NOTE, CREDIT_IDLE_REASON, CREDIT_STOP_NOTE, DEFAULT_RULE_THUMBNAIL_MODE,
   LAST_CYCLE_KEY, episodeAdoptCap,
@@ -163,7 +163,7 @@ async function runAutomationCycleLocked(): Promise<CycleReport> {
       // 담당자 메일 — **자동 충전으로 살아난 경우엔 여기 오지 않는다**(위에서 이어감).
       // 실행 로그와 같은 하루 한 줄 가드 안이라 순방(15분)마다 쌓이지 않는다.
       // 하루 20건이 도는 계정에서 이 침묵은 곧 하루치 손실이다(사용자 2026-08-26).
-      const { notifyAutomationCreditStop } = await import("./billing-notify.ts");
+      const { notifyAutomationCreditStop } = await import("./billing/billing-notify.ts");
       void notifyAutomationCreditStop();
     }
     return {

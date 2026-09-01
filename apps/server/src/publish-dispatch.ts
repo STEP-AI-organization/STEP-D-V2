@@ -31,8 +31,8 @@ import {
   putEntity,
 } from "./db-pg.ts";
 import { enqueue } from "./queue.ts";
-import { topupAndRecheck } from "./auto-topup.ts";
-import { publishCredits } from "./credits.ts";
+import { topupAndRecheck } from "./billing/auto-topup.ts";
+import { publishCredits } from "./billing/credits.ts";
 import { tiktokUploadEnabled, instagramUploadEnabled, facebookUploadEnabled } from "./upload-gate.ts";
 
 export interface PublishInput {

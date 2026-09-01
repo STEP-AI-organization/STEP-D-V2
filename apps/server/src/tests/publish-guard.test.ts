@@ -6,6 +6,7 @@
  * 새 경로가 하나 생기면 그만이기 때문이다. 소스 전체를 스캔해 **큐에 넣는 지점이
  * 한 곳뿐**임을 강제하는 형태로만 고정된다.
  */
+import { sourceFiles } from "./sources.ts";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
@@ -241,7 +242,7 @@ describe("관문 우회 불가 (F3 Invariant · FLOWS.md:73)", () => {
    * publish-dispatch 하나로 모은 뒤 todo 를 뗐다.
    */
   it("배포 큐 진입점은 한 파일뿐이어야 한다", () => {
-    const files = fs.readdirSync(SRC).filter((f) => f.endsWith(".ts") && !f.endsWith(".test.ts"));
+    const files = sourceFiles(SRC);
     const hits: string[] = [];
     for (const f of files) {
       const src = fs.readFileSync(path.join(SRC, f), "utf-8");

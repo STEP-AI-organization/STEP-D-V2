@@ -17,6 +17,7 @@
  * 전 회사를 가로질러 읽어야 하면 `asSystem()` / `runAsSystem()` 을 쓴다 —
  * 시스템 스코프('*')는 정책이 명시적으로 허용하는 값이라 우회가 아니라 정문이다.
  */
+import { sourceFiles } from "./sources.ts";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
@@ -70,10 +71,7 @@ describe("RLS 표 목록", () => {
 });
 
 describe("RLS 표를 rawPool 로 만지지 않는다", () => {
-  const FILES = fs
-    .readdirSync(SRC)
-    .filter((f) => f.endsWith(".ts") && !f.endsWith(".test.ts"))
-    .map((f) => ({ name: f, src: read(path.join(SRC, f)) }));
+  const FILES = sourceFiles(SRC).map((f) => ({ name: f, src: read(path.join(SRC, f)) }));
 
   /** 주석을 지운다 — 주석에 적힌 `getRawPool()` 경고문까지 위반으로 잡히면 안 된다. */
   function stripComments(src: string): string {

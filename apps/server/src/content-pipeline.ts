@@ -41,10 +41,10 @@ import {
   updateMediaDuration,
 } from "./db-pg.ts";
 import type { TranscriptSegment, SearchSegmentRow } from "./db-pg.ts";
-import { billableMinutes, estimatedCostKrw, usageDedupeKey } from "./billing.ts";
+import { billableMinutes, estimatedCostKrw, usageDedupeKey } from "./billing/billing.ts";
 import { probe } from "./ffmpeg.ts";
-import { autoTopupNeedsAttention, checkCredits, usageDedupeKey as creditUsageKey } from "./credits.ts";
-import { maybeAutoTopup, topupAndRecheck } from "./auto-topup.ts";
+import { autoTopupNeedsAttention, checkCredits, usageDedupeKey as creditUsageKey } from "./billing/credits.ts";
+import { maybeAutoTopup, topupAndRecheck } from "./billing/auto-topup.ts";
 import { toCoreRegistry, timelineToRows } from "./cast.ts";
 import { createReadStream, parseObjectPath, readFile, uploadFile, useGcs } from "./storage-gcs.ts";
 import { enqueue } from "./queue.ts";
@@ -1897,7 +1897,7 @@ export async function runContentAnalyze(
         // 메일(billing.notifyEmails). 매 차감마다 보내면 알림이 배경음이 된다.
         try {
           const after = await creditBalance();
-          const { LOW_BALANCE_WARN_CREDITS, notifyLowBalance } = await import("./billing-notify.ts");
+          const { LOW_BALANCE_WARN_CREDITS, notifyLowBalance } = await import("./billing/billing-notify.ts");
           if (after < LOW_BALANCE_WARN_CREDITS && after + minutes >= LOW_BALANCE_WARN_CREDITS) {
             void notifyLowBalance(after);
           }

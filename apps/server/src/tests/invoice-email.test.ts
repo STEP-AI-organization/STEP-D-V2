@@ -13,7 +13,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
 
-import { invoiceFromTopup, resolveRecipient, smtpConfigured, supplierFromEnv } from "../invoice.ts";
+import { invoiceFromTopup, resolveRecipient, smtpConfigured, supplierFromEnv } from "../billing/invoice.ts";
 
 const SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = (f: string) => fs.readFileSync(path.join(SRC, f), "utf-8");
@@ -104,7 +104,7 @@ describe("적립 지점마다 인보이스 메일이 배선돼 있다 (소스 �
   });
 
   it("auto-topup.ts — 자동 충전·미정산 정산이 발송을 부른다", () => {
-    const calls = [...read("auto-topup.ts").matchAll(/sendInvoiceEmail\(/g)];
+    const calls = [...read("billing/auto-topup.ts").matchAll(/sendInvoiceEmail\(/g)];
     assert.ok(
       calls.length >= 2,
       `auto-topup.ts 의 sendInvoiceEmail 호출이 ${calls.length}곳뿐이다 — 신규 결제·미정산 정산 두 경로 다 있어야 한다`,
@@ -112,7 +112,7 @@ describe("적립 지점마다 인보이스 메일이 배선돼 있다 (소스 �
   });
 
   it("발송은 전부 fire-and-forget 이다 — await 로 적립 경로를 막지 않는다", () => {
-    for (const f of ["index.ts", "auto-topup.ts"]) {
+    for (const f of ["index.ts", "billing/auto-topup.ts"]) {
       assert.doesNotMatch(
         read(f),
         /await sendInvoiceEmail\(/,

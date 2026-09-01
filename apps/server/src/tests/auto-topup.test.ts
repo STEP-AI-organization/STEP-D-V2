@@ -11,8 +11,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
 
-import { autoTopupNonce, kstDateStamp } from "../auto-topup.ts";
-import { cardTopupPaymentId } from "../billing-card.ts";
+import { autoTopupNonce, kstDateStamp } from "../billing/auto-topup.ts";
+import { cardTopupPaymentId } from "../billing/billing-card.ts";
 
 const SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -42,7 +42,7 @@ describe("자동 충전 paymentId 는 결정적이다", () => {
 });
 
 describe("이중 결제 방어 배선 — 소스 스캔", () => {
-  const src = fs.readFileSync(path.join(SRC, "auto-topup.ts"), "utf-8");
+  const src = fs.readFileSync(path.join(SRC, "billing/auto-topup.ts"), "utf-8");
 
   it("paymentId 에 랜덤을 쓰지 않는다", () => {
     assert.doesNotMatch(src, /randomBytes|randomUUID/,
@@ -79,7 +79,7 @@ describe("이중 결제 방어 배선 — 소스 스캔", () => {
  * 이 리포 최빈 실패모드가 "기능은 있는데 출력이 소비처에 미도달" 이다.
  */
 describe("자동 충전 실패 노출 — 소스 스캔", () => {
-  const auto = fs.readFileSync(path.join(SRC, "auto-topup.ts"), "utf-8");
+  const auto = fs.readFileSync(path.join(SRC, "billing/auto-topup.ts"), "utf-8");
   const pipeline = fs.readFileSync(path.join(SRC, "content-pipeline.ts"), "utf-8");
   const index = fs.readFileSync(path.join(SRC, "index.ts"), "utf-8");
   /** 라우트 블록만 잘라낸다(automation.test.ts 관용구) — 파일 어딘가에 있는 것만으론 부족하다. */

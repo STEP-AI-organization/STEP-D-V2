@@ -19,7 +19,7 @@ import {
   parseMonth,
   splitVat,
   type PaymentRow,
-} from "../invoice.ts";
+} from "../billing/invoice.ts";
 
 const SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const INDEX = fs.readFileSync(path.resolve(SRC, "index.ts"), "utf-8");

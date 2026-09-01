@@ -20,8 +20,8 @@
  *   4. private 업로드   → 유예 후 공개 전환 (factory.publicize). 되돌리기 = 전환 취소
  */
 import { creditBalance, getEntity, putEntity, listEntities, listMedia } from "./db-pg.ts";
-import { checkCredits } from "./credits.ts";
-import { billableMinutes } from "./billing.ts";
+import { checkCredits } from "./billing/credits.ts";
+import { billableMinutes } from "./billing/billing.ts";
 import { commitAndInherit } from "./adopt.ts";
 import { dispatchPublish } from "./publish-dispatch.ts";
 import { newId } from "./pipeline.ts";
@@ -355,7 +355,7 @@ export async function advance(factoryJobId: string): Promise<{ job: FactoryJob; 
     const verdict = checkCredits({ balance: await creditBalance(), needMinutes: need });
     if (verdict.allow) return null;
     // 부족 → 저장 카드 자동 충전 시도 후 재판정 (라우트 402 게이트와 같은 방향 · ENA 스펙).
-    const { topupAndRecheck } = await import("./auto-topup.ts");
+    const { topupAndRecheck } = await import("./billing/auto-topup.ts");
     const retried = await topupAndRecheck(need);
     if (retried?.allow) return null;
     return (retried ?? verdict).reason;

@@ -8,7 +8,7 @@ import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import { describe, it } from "node:test";
 
-import { WEBHOOK_TOLERANCE_SEC, verifyWebhook } from "../portone.ts";
+import { WEBHOOK_TOLERANCE_SEC, verifyWebhook } from "../billing/portone.ts";
 
 const SECRET_RAW = Buffer.from("stepd-webhook-test-secret-0001").toString("base64");
 const SECRET = `whsec_${SECRET_RAW}`;

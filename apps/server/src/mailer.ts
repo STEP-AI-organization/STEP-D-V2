@@ -12,7 +12,7 @@
  * ⚠️ 여기서 던질 수 있다 — **호출부가 베스트 에포트를 결정한다.** 인보이스도 알림도
  * "메일 실패가 본 작업(적립·배포)을 되돌리면 안 된다"는 원칙이라 호출부가 전부 삼킨다.
  */
-import { smtpConfigured, smtpOAuthConfigured } from "./invoice.ts";
+import { smtpConfigured, smtpOAuthConfigured } from "./billing/invoice.ts";
 
 export { smtpConfigured as mailConfigured };
 

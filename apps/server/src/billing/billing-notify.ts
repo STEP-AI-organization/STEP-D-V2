@@ -12,10 +12,10 @@
  *     둘 다 없을 때만 보내지 않는다.
  *  3. **베스트 에포트.** 어떤 실패도 던지지 않는다 — 알림은 부속이고 충전 판정이 본체다.
  */
-import { getAutomationSetting, getBillingNotifyEmails } from "./db-pg.ts";
-import { NOTIFY_EMAIL_KEY } from "./automation.ts";
+import { getAutomationSetting, getBillingNotifyEmails } from "../db-pg.ts";
+import { NOTIFY_EMAIL_KEY } from "../automation.ts";
 import type { AutoTopupAlert } from "./credits.ts";
-import { mailConfigured, sendMail } from "./mailer.ts";
+import { mailConfigured, sendMail } from "../mailer.ts";
 
 /**
  * 결제 경고 수신자 — 결제 알림 목록이 비어 있으면 **자동배포 담당자**에게 보낸다.

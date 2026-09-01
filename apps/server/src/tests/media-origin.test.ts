@@ -5,6 +5,7 @@
  * 증명한다 — 다른 파일이 클립을 새로 만들어 버리면 그만이다. 그래서 소스를 스캔해
  * **클립을 만드는 지점과 채택 경로**를 강제한다.
  */
+import { sourceFiles } from "./sources.ts";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
@@ -19,8 +20,7 @@ import {
 } from "../media-origin.ts";
 
 const SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const sources = () =>
-  fs.readdirSync(SRC).filter((f) => f.endsWith(".ts") && !f.endsWith(".test.ts"));
+const sources = () => sourceFiles(SRC);
 
 /** 주석 줄은 세지 않는다 — 규칙을 문서화한 줄까지 위반으로 잡히면 설명을 못 쓴다. */
 const isComment = (line: string) => /^\s*(\*|\/\/)/.test(line);

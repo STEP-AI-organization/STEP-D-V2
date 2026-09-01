@@ -20,7 +20,7 @@ import {
   isLiveApiKey,
   portoneConfigured,
   usageDedupeKey,
-} from "../billing.ts";
+} from "../billing/billing.ts";
 
 describe("결제 설정 — 빠진 게 있으면 결제 경로를 열지 않는다", () => {
   it("포트원 env 가 하나라도 비면 결제 경로를 열지 않는다", () => {

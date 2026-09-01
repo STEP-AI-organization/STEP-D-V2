@@ -48,9 +48,9 @@ import { grantDedupeKey, nextTenantId, planOnboarding } from "./onboarding.ts";
 import {
   billingConfig, cardBlock, cardBlockReason, cardLabel, cardTopupPaymentId, checkCustomer,
   declineMessage, extractCardDisplay, issueIdFor, unwrapPayment, verifyCharge,
-} from "./billing-card.ts";
-import { buildInvoice, invoiceFromTopup, issuerInfo, monthRange, parseMonth, supplierFromEnv } from "./invoice.ts";
-import { checkProfile, incompleteFields } from "./business.ts";
+} from "./billing/billing-card.ts";
+import { buildInvoice, invoiceFromTopup, issuerInfo, monthRange, parseMonth, supplierFromEnv } from "./billing/invoice.ts";
+import { checkProfile, incompleteFields } from "./billing/business.ts";
 import {
   captionMaxCharsOf, chunkCaption,
   type Caption as CaptionT, type CaptionWord as CaptionWordT,
@@ -314,10 +314,10 @@ import {
 import { naverUploadEnabled, NAVER_DISABLED_MESSAGE, DESC_MIN } from "./naver/naver-gate.ts";
 import {
   commerceLinksEnabled, parseProductQueries, usableLinks, withCommerceLinks, normalizeStatus,
-} from "./commerce.ts";
+} from "./commerce/commerce.ts";
 // `looksLikeStorageState` 는 두 제공자가 같은 검사를 쓴다(session-crypto 공용) — 이미
 // naver-session-store 로 들어와 있어 여기서 또 들이지 않는다.
-import { commerceSessionStoreReady, sealCommerceSession } from "./commerce-session-store.ts";
+import { commerceSessionStoreReady, sealCommerceSession } from "./commerce/commerce-session-store.ts";
 import {
   initialPipeline,
   isoDateOrToday,
@@ -331,13 +331,13 @@ import {
   CREDIT_UNIT_LABEL, MANUAL_REASONS, buildTopup, checkCredits, creditPriceKrw,
   fixedAutoTopupPolicy, manualDedupeKey, planManualCredit, settleTopup, topupDedupeKey,
   topupPaymentId,
-} from "./credits.ts";
-import { billableMinutes, portoneConfigured } from "./billing.ts";
-import { chargeWithBillingKey, getBillingKeyInfo, getPayment, verifyWebhook } from "./portone.ts";
+} from "./billing/credits.ts";
+import { billableMinutes, portoneConfigured } from "./billing/billing.ts";
+import { chargeWithBillingKey, getBillingKeyInfo, getPayment, verifyWebhook } from "./billing/portone.ts";
 // 자동 충전 알림 해제는 **이 한 함수**로만 한다 — 라우트마다 db-pg 의 저장 함수를 직접
 // 부르면 반드시 한 자리가 빠진다(실제로 직접 충전 경로가 빠져 있었다).
-import { clearAutoTopupAlert, maybeAutoTopup, topupAndRecheck } from "./auto-topup.ts";
-import { buyerFor, sendInvoiceEmail } from "./invoice-email.ts";
+import { clearAutoTopupAlert, maybeAutoTopup, topupAndRecheck } from "./billing/auto-topup.ts";
+import { buyerFor, sendInvoiceEmail } from "./billing/invoice-email.ts";
 import { commitAndInherit } from "./adopt.ts";
 import { runAutomationCycle } from "./automation-cycle.ts";
 import {

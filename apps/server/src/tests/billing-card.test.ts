@@ -30,13 +30,13 @@ import {
   normalizePhone,
   unwrapPayment,
   verifyCharge,
-} from "../billing-card.ts";
-import { PortOneError } from "../portone.ts";
+} from "../billing/billing-card.ts";
+import { PortOneError } from "../billing/portone.ts";
 import {
   AUTO_TOPUP_HARD_MAX_KRW_PER_MONTH, AUTO_TOPUP_HARD_MAX_PER_DAY, FIXED_AUTO_TOPUP,
   buildTopup,
   shouldAutoTopup,
-} from "../credits.ts";
+} from "../billing/credits.ts";
 
 const SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const INDEX = fs.readFileSync(path.resolve(SRC, "index.ts"), "utf-8");
@@ -164,7 +164,7 @@ describe("결제 거절 문구", () => {
       assert.doesNotMatch(msg, /\b[1-5]\d\d\b/, "HTTP 상태코드가 사용자 문구로 샜다");
     }
     // 원문이 사라지면 안 된다 — 호출부가 서버 로그로 남긴다.
-    for (const [file, tag] of [["auto-topup.ts", "거절"], ["index.ts", "거절"]] as const) {
+    for (const [file, tag] of [["billing/auto-topup.ts", "거절"], ["index.ts", "거절"]] as const) {
       const src = fs.readFileSync(path.join(SRC, file), "utf-8");
       assert.match(src, new RegExp(`console\\.warn\\([^)]*${tag}`),
         `${file}: 거절 원문을 로그에도 안 남기면 개발자가 볼 곳이 사라진다`);
@@ -319,7 +319,7 @@ describe("배선", () => {
   it("자동 결제 켜짐은 저장된 on/off 가 아니라 '쓸 수 있는 카드' 로 판정한다", () => {
     // 등록이 곧 동의다 — "카드는 있는데 자동 결제는 꺼져 있다" 라는 상태를 두지 않는다.
     // 저장 행을 읽는 코드가 남아 있으면 두 진실이 갈라진다(화면은 켜짐, 실제는 꺼짐).
-    const auto = fs.readFileSync(path.join(SRC, "auto-topup.ts"), "utf-8");
+    const auto = fs.readFileSync(path.join(SRC, "billing/auto-topup.ts"), "utf-8");
     const run = /async function runAutoTopup[\s\S]*?\n\}/.exec(auto)?.[0] ?? "";
     assert.notEqual(run, "", "runAutoTopup 을 못 잘랐다");
     assert.match(run, /fixedAutoTopupPolicy\(/, "고정 정책을 쓰지 않는다");
@@ -378,7 +378,7 @@ describe("배선", () => {
   it("자동 충전 결제는 수동 저장카드 충전과 같은 안전 경로를 쓴다", () => {
     // 자동으로 카드를 긁는 코드다. 멱등키·원장 먼저·자동/수동 구분이 빠지면 이중 충전이나
     // 상한 오집계로 돈 사고가 난다. maybeAutoTopup 이 그 불변식을 지키는지 소스로 고정한다.
-    const auto = fs.readFileSync(path.resolve(SRC, "auto-topup.ts"), "utf-8");
+    const auto = fs.readFileSync(path.resolve(SRC, "billing/auto-topup.ts"), "utf-8");
     assert.match(auto, /topupDedupeKey\(paymentId\)/, "멱등키가 없으면 재시도가 이중 충전이 된다");
     assert.match(auto, /requestedBy: "auto-topup"/, "자동/수동 구분이 없으면 하루·월 상한이 수동 충전까지 센다");
     assert.match(auto, /shouldAutoTopup\(/, "상한·임계 판정을 반드시 거친다");
@@ -450,7 +450,7 @@ describe("빌링키 결제는 발급 채널에서 긁는다", () => {
     // 빌링키는 발급한 채널(MID)에 묶여 있다. 카드 등록은 PORTONE_BILLING_CHANNEL_KEY 로
     // 발급하므로 결제도 같은 채널이어야 긁힌다. 일반결제 채널키로 긁으면 채널 불일치로 실패한다
     // (2026-08-12 · developers.portone.io: 발급 채널과 결제 채널이 일치해야 함).
-    const portone = fs.readFileSync(path.resolve(SRC, "portone.ts"), "utf-8");
+    const portone = fs.readFileSync(path.resolve(SRC, "billing/portone.ts"), "utf-8");
     const fn = /export async function chargeWithBillingKey[\s\S]*?\n\}(?=\r?\n)/.exec(portone)?.[0] ?? "";
     assert.notEqual(fn, "", "chargeWithBillingKey 를 찾지 못했다");
     assert.match(fn, /process\.env\.PORTONE_BILLING_CHANNEL_KEY/, "빌링키는 발급한 빌링 채널에서만 긁힌다");

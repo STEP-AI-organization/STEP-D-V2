@@ -62,7 +62,7 @@ describe("배포 실패 환급 (worker.markDistributionFailed)", () => {
 
 describe("publishCredits — 단가 파싱", () => {
   it("기본 3 · 0 허용(무과금 스위치) · 쓰레기는 기본값", async () => {
-    const { publishCredits } = await import("../credits.ts");
+    const { publishCredits } = await import("../billing/credits.ts");
     assert.equal(publishCredits({} as NodeJS.ProcessEnv), 3);
     assert.equal(publishCredits({ PUBLISH_CREDITS: "5" } as NodeJS.ProcessEnv), 5);
     assert.equal(publishCredits({ PUBLISH_CREDITS: "0" } as NodeJS.ProcessEnv), 0);

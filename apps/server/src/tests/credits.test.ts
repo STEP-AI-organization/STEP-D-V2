@@ -34,8 +34,8 @@ import {
   usageDedupeKey,
   type AutoTopupCode,
   type AutoTopupPolicy,
-} from "../credits.ts";
-import { splitVat } from "../invoice.ts";
+} from "../billing/credits.ts";
+import { splitVat } from "../billing/invoice.ts";
 
 /**
  * ⚠️ 이 describe 는 **비어 있었다**(2026-08-12 발견). 돈의 핵심 불변식이 이름만 있고

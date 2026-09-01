@@ -20,7 +20,7 @@
  * 보낸이는 INVOICE_MAIL_FROM(기본 SMTP_USER).
  */
 
-import { asSystem, getBillingNotifyEmails, getBusinessProfile, getTopup } from "./db-pg.ts";
+import { asSystem, getBillingNotifyEmails, getBusinessProfile, getTopup } from "../db-pg.ts";
 import {
   invoiceFromTopup,
   resolveRecipient,
@@ -29,7 +29,7 @@ import {
   type InvoiceParty,
   type PaymentInvoice,
 } from "./invoice.ts";
-import { sendMail } from "./mailer.ts";
+import { sendMail } from "../mailer.ts";
 import { getPayment } from "./portone.ts";
 
 /** 구매자 — 사업자정보(business_profile)가 정본, 없으면 워크스페이스 이름만. */

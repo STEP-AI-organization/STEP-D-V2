@@ -16,7 +16,7 @@ import {
   MAX_MANUAL_DELTA,
   manualDedupeKey,
   planManualCredit,
-} from "../credits.ts";
+} from "../billing/credits.ts";
 
 const SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const INDEX = fs.readFileSync(path.resolve(SRC, "index.ts"), "utf-8");

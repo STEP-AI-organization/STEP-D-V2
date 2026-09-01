@@ -27,7 +27,7 @@ import {
   markTopupPaid,
   setAutoTopupAlert,
   withTenantLock,
-} from "./db-pg.ts";
+} from "../db-pg.ts";
 import { cardBlock, cardTopupPaymentId, declineMessage, verifyCharge } from "./billing-card.ts";
 import { sendInvoiceEmail } from "./invoice-email.ts";
 import { chargeWithBillingKey, getPayment } from "./portone.ts";
@@ -35,7 +35,7 @@ import {
   buildTopup, checkCredits, creditPriceKrw, fixedAutoTopupPolicy, nextAutoTopupAlert, shouldAutoTopup,
   topupDedupeKey, type AutoTopupCode, type CreditVerdict,
 } from "./credits.ts";
-import { currentTenantId } from "./tenant.ts";
+import { currentTenantId } from "../tenant.ts";
 
 export interface AutoTopupResult {
   charged: boolean;

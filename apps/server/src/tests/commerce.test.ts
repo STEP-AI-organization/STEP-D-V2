@@ -7,6 +7,7 @@
  *    "기능은 있는데 출력이 소비처에 미도달")
  * 그래서 순수 함수 검증 + **소스 스캔으로 배선까지** 잠근다.
  */
+import { sourceFiles } from "./sources.ts";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
@@ -27,8 +28,8 @@ import {
   parseProductQueries,
   usableLinks,
   withCommerceLinks,
-} from "../commerce.ts";
-import { pickProduct, type CoupangProduct } from "../coupang-partners.ts";
+} from "../commerce/commerce.ts";
+import { pickProduct, type CoupangProduct } from "../commerce/coupang-partners.ts";
 import { buildMetadataPrompt } from "../clip-metadata.ts";
 
 const SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -320,7 +321,7 @@ describe("배선 — 만든 링크가 실제로 설명란까지 간다", () => {
 describe("자기 클릭 금지 — 생성된 링크를 절대 열지 않는다", () => {
   it("어떤 소스도 link.coupang.com 으로 이동하지 않는다", () => {
     const offenders: string[] = [];
-    for (const f of fs.readdirSync(SRC).filter((f) => f.endsWith(".ts") && !f.endsWith(".test.ts"))) {
+    for (const f of sourceFiles(SRC)) {
       const src = read(f)
         .replace(/\/\*[\s\S]*?\*\//g, "")
         .replace(/\/\/[^\n]*/g, "");
@@ -333,7 +334,7 @@ describe("자기 클릭 금지 — 생성된 링크를 절대 열지 않는다",
   });
 
   it("발급 모듈이 제휴 리다이렉트 요청을 라우트에서 막는다", () => {
-    const src = read("coupang-partners.ts");
+    const src = read("commerce/coupang-partners.ts");
     assert.match(src, /page\.route\(/, "방어선(라우트 차단)이 없다");
     assert.match(src, /abort\(\)/, "차단하지 않고 통과시킨다");
   });
@@ -341,12 +342,12 @@ describe("자기 클릭 금지 — 생성된 링크를 절대 열지 않는다",
   it("**coupa.ng 도 막는다** — 콘솔 미리보기 iframe 이 클릭으로 집계될 수 있다", () => {
     // 실측 2026-08-27: DOM 방식으로 링크를 만들면 콘솔이 <iframe src="https://coupa.ng/..">
     // 를 렌더하고, 그 로드가 제휴 리다이렉트를 탄다. link.coupang.com 만 막으면 이게 샌다.
-    const src = read("coupang-partners.ts");
+    const src = read("commerce/coupang-partners.ts");
     assert.match(src, /coupa\\?\.ng/, "coupa.ng(제휴 단축 리다이렉트)가 차단 목록에 없다");
   });
 
   it("이동뿐 아니라 하위 리소스까지 막는다 (iframe 은 navigation 이 아닐 수 있다)", () => {
-    const src = read("coupang-partners.ts");
+    const src = read("commerce/coupang-partners.ts");
     const route = /await page\.route\([\s\S]*?\}\);/.exec(src)?.[0] ?? "";
     assert.notEqual(route, "", "라우트 핸들러를 못 찾았다");
     assert.equal(/isNavigationRequest\(\)[\s\S]{0,80}route\.continue\(\)/.test(route), false,
@@ -363,7 +364,7 @@ describe("자기 클릭 금지 — 생성된 링크를 절대 열지 않는다",
  * 처음 구현이 정확히 이 이유로 0건 발급이었다(스크래치 PoC 는 순수 .mjs 라 멀쩡했다).
  */
 describe("esbuild __name 회귀 — page.evaluate 가 브라우저에서 터지지 않는다", () => {
-  const src = read("coupang-partners.ts");
+  const src = read("commerce/coupang-partners.ts");
 
   it("__name shim 을 **문자열** evaluate 로 심는다 (문자열은 변환을 안 거친다)", () => {
     assert.match(src, /page\.evaluate\(\s*["'`]globalThis\.__name/,
@@ -451,7 +452,7 @@ describe("세션 취급 — 그 계정의 전체 권한이다", () => {
       "키 없이 저장이 통과하면 평문으로 남는다");
     // 네이버·커머스가 **같은** 암호 구현을 쓴다(복사본이 두 벌이면 한쪽만 고쳐진다).
     // 경로 깊이는 폴더 정리에 따라 달라진다 — **같은 파일을 부르는지**만 본다.
-    for (const f of ["naver/naver-session-store.ts", "commerce-session-store.ts"]) {
+    for (const f of ["naver/naver-session-store.ts", "commerce/commerce-session-store.ts"]) {
       assert.match(read(f), /from "\.{1,2}\/(?:\.\.\/)?session-crypto\.ts"/,
         `${f} 가 공용 암호 계층을 안 쓴다`);
     }
@@ -459,7 +460,7 @@ describe("세션 취급 — 그 계정의 전체 권한이다", () => {
 
   it("제공자별로 키가 다르다 — 하나가 새도 다른 쪽이 안 열린다", () => {
     assert.match(read("naver/naver-session-store.ts"), /NAVER_SESSION_KEY/);
-    assert.match(read("commerce-session-store.ts"), /COMMERCE_SESSION_KEY/);
+    assert.match(read("commerce/commerce-session-store.ts"), /COMMERCE_SESSION_KEY/);
   });
 });
 

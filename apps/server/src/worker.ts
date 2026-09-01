@@ -48,9 +48,9 @@ import {
   appendGateAudit,
   getRawPool,
 } from "./db-pg.ts";
-import { checkCredits } from "./credits.ts";
-import { topupAndRecheck } from "./auto-topup.ts";
-import { billableMinutes } from "./billing.ts";
+import { checkCredits } from "./billing/credits.ts";
+import { topupAndRecheck } from "./billing/auto-topup.ts";
+import { billableMinutes } from "./billing/billing.ts";
 import { probe, captureThumbnail, remuxFaststart, needsMp4Normalize, normalizedMp4Path, normalizeToMp4, extractSourceCaptions, transcodeToH264 } from "./ffmpeg.ts";
 import {
   prepareProgramAssets, publishStyleProfile, publishThumbnails, tempAssetRoot, pullPrefix,
@@ -106,11 +106,11 @@ import { resolveCategory, categoryForGenre } from "./naver/naver-categories.ts";
 import { openCredential } from "./naver/naver-cred-store.ts";
 import { prepareWorkPath, cleanupWorkFile, sweepStaleWorkFiles } from "./naver/naver-workdir.ts";
 import { upsertDistribution } from "./publish-guard.ts";
-import { commerceLinksEnabled, usableLinks, withCommerceLinks, type ProductCandidate } from "./commerce.ts";
+import { commerceLinksEnabled, usableLinks, withCommerceLinks, type ProductCandidate } from "./commerce/commerce.ts";
 import {
   issueCoupangLinks, issueLinkForCandidate, PartnersSessionExpiredError,
-} from "./coupang-partners.ts";
-import { openCommerceSession, sealCommerceSession } from "./commerce-session-store.ts";
+} from "./commerce/coupang-partners.ts";
+import { openCommerceSession, sealCommerceSession } from "./commerce/commerce-session-store.ts";
 import {
   getCommerceAccount, getCommerceSessionBlob, markCommerceIssued,
   markCommerceSessionExpired, setCommerceSessionBlob,
