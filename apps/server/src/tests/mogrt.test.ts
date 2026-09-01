@@ -272,7 +272,7 @@ describe("mogrt — 오버레이 아이템 → 레이어", () => {
     );
     assert.equal(l.xNorm, 0.5);
     assert.equal(l.yNorm, (200 + 100 * TOP_TO_BASELINE) / 1920);
-    assert.equal(l.alignment, 1);
+    assert.equal(l.alignment, 2, "가운데는 2 다 — 1 은 오른쪽 정렬이라 글자가 왼쪽으로 뻗는다");
     assert.equal(l.colorInt, 0xf3af4f);
     assert.equal(l.postScriptName, "GmarketSansTTFBold");
   });
@@ -310,10 +310,12 @@ describe("mogrt — 색·정렬 변환", () => {
     assert.equal(colorToInt("빨강"), 0xffffff);
   });
 
-  it("align → mAlignment (0 왼쪽 · 1 가운데 · 2 오른쪽)", () => {
+  it("align → mAlignment (0 왼쪽 · **1 오른쪽** · 2 가운데)", () => {
+    // ⚠️ 흔한 순서가 아니다. 애프터이펙트 ParagraphJustification(LEFT·RIGHT·CENTER)과 같다.
+    // 2026-09-01 실측: 가운데를 1 로 넣었더니 글자 끝이 x=0.5 에 붙었다(=오른쪽 정렬).
     assert.equal(alignToMogrt("left"), 0);
-    assert.equal(alignToMogrt("center"), 1);
-    assert.equal(alignToMogrt("right"), 2);
+    assert.equal(alignToMogrt("right"), 1);
+    assert.equal(alignToMogrt("center"), 2);
     assert.equal(alignToMogrt(undefined), 0);
   });
 });

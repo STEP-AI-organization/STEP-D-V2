@@ -938,7 +938,6 @@ describe("패널 — 자막을 타임스탬프대로", () => {
   });
 
   it("자막은 V4 — 제목·로고 위 트랙이다", () => {
-    assert.ok(panel.includes("const CAPTION_TRACK = 3;"));
     assert.ok(panel.includes("createOverwriteItemAction(item, at, CAPTION_TRACK, 0)"));
   });
 
@@ -984,9 +983,19 @@ describe("패널 — 로고·시간박스까지 재현", () => {
       "자막·제목을 안 빼면 두 번 그려진다");
   });
 
-  it("트랙은 제목보다 위다 — 시간박스가 제목 뒤로 가면 안 된다", () => {
-    assert.ok(panel.includes("const TITLE_TRACK = 1;"));
-    assert.ok(panel.includes("const DECORATION_TRACK = 2;"));
+  it("**제목이 장식보다 위** · 자막이 제일 위 — 순서가 곧 겹침 규칙이다", () => {
+    // 2026-09-01 사용자가 타임라인 스크린샷으로 직접 지정했다: 장식(로고·시간박스)이 제목
+    // 위에 있으면 프레임 전체 PNG 라 제목 자리를 덮는다. 절대값이 아니라 **상대 순서**가 계약.
+    const track = (name: string) => {
+      const m = new RegExp(`const ${name} = ([0-9]+);`).exec(panel);
+      assert.ok(m, `${name} 을 못 찾았다`);
+      return Number(m![1]);
+    };
+    const deco = track("DECORATION_TRACK");
+    const title = track("TITLE_TRACK");
+    const caption = track("CAPTION_TRACK");
+    assert.ok(title > deco, `제목(${title})이 장식(${deco})보다 아래면 로고 PNG 에 가려진다`);
+    assert.ok(caption > title, `자막(${caption})이 제목(${title})보다 아래면 제목에 가려진다`);
     assert.ok(panel.includes("DECORATION_TRACK, \"오버레이\""), "오버레이가 제목 트랙에 얹히면 가려진다");
   });
 

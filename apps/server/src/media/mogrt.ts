@@ -48,7 +48,14 @@ export type MogrtTextLayer = {
   /** 위치 — 프레임 대비 0..1. */
   xNorm: number;
   yNorm: number;
-  /** 0=왼쪽 · 1=가운데 · 2=오른쪽 (프리미어 mAlignment). */
+  /**
+   * 프리미어 `mAlignment` — **0=왼쪽 · 1=오른쪽 · 2=가운데.**
+   *
+   * ⚠️ 가운데가 1 이 아니다. 애프터이펙트 `ParagraphJustification`(LEFT·RIGHT·CENTER 순서)을
+   *    그대로 쓴다 — 텍스트 엔진이 같다. 처음엔 흔한 순서(왼·가운데·오른)로 넣었다가
+   *    제목 두 줄이 **가운데에서 왼쪽으로** 뻗는 걸 보고 알았다(2026-09-01 · 오른쪽 정렬이라
+   *    글자 끝이 x=0.5 에 정확히 붙었다).
+   */
   alignment: 0 | 1 | 2;
   /** 외곽선 — 자막의 검정 스트로크(ASS Outline)를 옮길 때 쓴다. 없으면 템플릿 값 유지. */
   stroke?: { colorInt: number; width: number } | null;
@@ -252,9 +259,17 @@ export function colorToInt(hex: string): number {
   return m ? parseInt(m[1], 16) : 0xffffff;
 }
 
-/** 우리 아이템 align → 프리미어 mAlignment. */
+/**
+ * 우리 아이템 align → 프리미어 `mAlignment`.
+ *
+ * **0=왼쪽 · 1=오른쪽 · 2=가운데.** 흔한 순서(왼·가운데·오른)가 아니다 — 애프터이펙트
+ * `ParagraphJustification` 과 같은 순서다(LEFT·RIGHT·CENTER). 텍스트 엔진이 같다.
+ *
+ * 어떻게 알았나(2026-09-01): 가운데를 1 로 넣었더니 제목 두 줄이 화면 가운데에서 **왼쪽으로**
+ * 뻗었다. 글자 끝이 x=0.5 에 정확히 붙어 있었으니 가운데가 아니라 **오른쪽 정렬**이었다.
+ */
 export function alignToMogrt(align: string | undefined): 0 | 1 | 2 {
-  return align === "center" ? 1 : align === "right" ? 2 : 0;
+  return align === "center" ? 2 : align === "right" ? 1 : 0;
 }
 
 /**

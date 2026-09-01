@@ -2123,8 +2123,21 @@ async function addDecorationsForRecs(recs, aspect, onStage) {
 }
 
 /** V1=영상 · V2=제목 · V3=로고/시간박스 · V4=자막 (0-based 인덱스). */
-const TITLE_TRACK = 1;
-const DECORATION_TRACK = 2;
+/**
+ * 트랙 배치 — **위에 있을수록 위에 그려진다.** 순서가 곧 겹침 규칙이다.
+ *
+ * 사용자 2026-09-01(타임라인 스크린샷으로 직접 지정): *"이 배열 줘야 레이어 때문에 영상에
+ * 전부 다 보임."* 장식(로고·시간박스)이 제목 **위**에 있었는데, 장식 PNG 는 프레임 전체
+ * (1080x1920)라 제목 자리를 덮는다. 제목을 위로 올린다.
+ *
+ *     위 ┌ 자막      CAPTION_TRACK
+ *        │ 제목      TITLE_TRACK        ← 장식보다 위여야 한다
+ *     아래└ 장식     DECORATION_TRACK
+ *
+ * ⚠️ 숫자를 바꿀 때는 **셋의 상대 순서**를 지킬 것 — 절대값이 아니라 순서가 계약이다.
+ */
+const DECORATION_TRACK = 1;
+const TITLE_TRACK = 2;
 const CAPTION_TRACK = 3;
 
 /**
