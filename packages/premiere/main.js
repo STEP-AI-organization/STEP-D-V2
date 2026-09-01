@@ -370,6 +370,7 @@ async function doLogin() {
     await loadPrograms();
     await refreshSequenceLabel();
     warnIfFontsMissing();
+    void showMediaFolder();     // 복원 경로와 **같이** 부른다 — 한쪽만 부르면 여기서만 빈다
     startHandoffPolling();
   } catch (err) {
     setStatus($("loginStatus"), err.message, "err");
@@ -1189,22 +1190,63 @@ function homeFromDataPath(dataPath) {
   return null;
 }
 
+/** 자동 저장 위치가 **왜** 안 됐는지. 빈 문자열이면 성공. 화면에 그대로 보여 준다. */
+let autoFolderReason = "";
+
 /** 정해진 자리를 만들어 돌려준다. 이 프리미어가 임의 경로를 못 열면 null(→ 묻는다). */
 async function defaultMediaFolder() {
   try {
-    if (typeof localFs.getEntryWithUrl !== "function" || typeof localFs.getDataFolder !== "function") return null;
+    if (typeof localFs.getDataFolder !== "function") {
+      autoFolderReason = "이 프리미어에는 플러그인 데이터 폴더가 없습니다";
+      return null;
+    }
+    if (typeof localFs.getEntryWithUrl !== "function") {
+      autoFolderReason = "이 프리미어는 임의 경로 열기를 지원하지 않습니다";
+      return null;
+    }
     const data = await localFs.getDataFolder();
     const at = homeFromDataPath(data && data.nativePath);
-    if (!at) return null;
+    if (!at) {
+      autoFolderReason = `홈 폴더를 못 찾았습니다 (${(data && data.nativePath) || "경로 없음"})`;
+      return null;
+    }
     const base = await localFs.getEntryWithUrl(toFileUrl(`${at.home}${at.sep}${at.videos}`));
-    if (!base) return null;
+    if (!base) {
+      autoFolderReason = `${at.videos} 폴더를 열지 못했습니다`;
+      return null;
+    }
     // 있으면 쓰고 없으면 만든다 — 같은 이름의 **파일**이 있으면 폴더가 아니므로 거른다.
     const found = await base.getEntry("STEP-D").catch(() => null);
-    if (found && found.isFolder) return found;
-    if (found) return null;
-    return await base.createFolder("STEP-D");
+    if (found && found.isFolder) { autoFolderReason = ""; return found; }
+    if (found) {
+      autoFolderReason = "STEP-D 라는 **파일**이 이미 있습니다";
+      return null;
+    }
+    const made = await base.createFolder("STEP-D");
+    autoFolderReason = "";
+    return made;
+  } catch (err) {
+    // 권한이 없거나 경로를 못 연다 — 부르는 쪽이 사람에게 묻는다.
+    // ⚠️ **이유를 남긴다.** 조용히 폴더 선택창으로 돌아가면 "고쳤는데 그대로" 로 보인다.
+    autoFolderReason = String((err && err.message) || err);
+    return null;
+  }
+}
+
+/**
+ * 화면에 **띄울 경로**만 계산한다 — 폴더를 만들지도, 묻지도 않는다.
+ *
+ * 표시 함수가 폴더 선택창을 띄우면 안 된다(2026-09-01 실측: `showMediaFolder` 가
+ * `mediaFolder()` 를 부르는 바람에, 자동 경로가 실패한 순간 **패널을 열자마자 선택창이
+ * 열려 대기**했다. 화면에는 "…" 이 그대로 남았다 — 사용자: "이게 안 떠").
+ */
+async function plannedMediaPath() {
+  try {
+    const data = await localFs.getDataFolder();
+    const at = homeFromDataPath(data && data.nativePath);
+    return at ? `${at.home}${at.sep}${at.videos}${at.sep}STEP-D` : null;
   } catch (_) {
-    return null;   // 권한이 없거나 경로를 못 연다 — 부르는 쪽이 사람에게 묻는다
+    return null;
   }
 }
 
@@ -1245,17 +1287,43 @@ async function pickMediaFolder() {
   return folder;
 }
 
-/** 지금 저장 위치를 화면에 보여 준다 — 어디 쌓이는지 모르면 GB 가 조용히 쌓인다. */
+/**
+ * 지금 저장 위치를 화면에 보여 준다 — 어디 쌓이는지 모르면 GB 가 조용히 쌓인다.
+ *
+ * ⚠️ **절대 묻지 않는다.** 표시하러 들어와서 폴더 선택창이 열리면 패널이 그대로 멈춘다.
+ */
 async function showMediaFolder() {
   const el = $("mediaFolderPath");
   if (!el) return;
-  try {
-    const f = await mediaFolder();
-    el.textContent = f.nativePath || "(경로 없음)";
-    el.title = f.nativePath || "";
-  } catch (_) {
-    el.textContent = "(아직 정해지지 않음)";
+  const put = (text, hint) => {
+    el.textContent = text;
+    el.title = hint || text;
+  };
+  put("확인 중…");
+
+  // ① 이미 정해진 폴더(사람이 골랐거나 이번 세션에 만든 것)
+  let folder = cachedMediaFolder;
+  if (!folder) {
+    const token = await store.get("stepd.mediaFolderToken");
+    if (token) folder = await localFs.getEntryForPersistentToken(token).catch(() => null);
+    if (folder) cachedMediaFolder = folder;
   }
+  // ② 없으면 자동 자리를 **지금 만들어 둔다** — 받기 시작한 뒤에 경로를 알아 봐야 늦다.
+  if (!folder) {
+    folder = await defaultMediaFolder();
+    if (folder) cachedMediaFolder = folder;
+  }
+  if (folder) {
+    put(folder.nativePath || "(경로 없음)");
+    return;
+  }
+
+  // ③ 자동이 안 됐다. **왜 안 됐는지**와 어디로 받으려 했는지를 같이 보여 준다.
+  const planned = await plannedMediaPath();
+  const why = autoFolderReason || "알 수 없는 이유";
+  put(planned ? `${planned} (자동 실패 — 받을 때 묻습니다)` : "받을 때 폴더를 묻습니다",
+    `자동 저장 위치 실패: ${why}`);
+  console.log("[STEP-D] 자동 저장 위치 실패", why, planned);
 }
 
 /**

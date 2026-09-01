@@ -340,16 +340,35 @@ describe("패널 — 원본 저장 위치를 묻지 않는다", () => {
     assert.ok(!fn.includes("getTemporaryFolder"));
   });
 
-  it("자동이 안 되면 **조용히 실패하지 않는다** — null 을 돌려 부르는 쪽이 묻게 한다", () => {
+  it("자동이 안 되면 **던지지 않는다** — null 을 돌려 부르는 쪽이 묻게 한다", () => {
     const fn = /async function defaultMediaFolder\(\)[\s\S]*?\n}/.exec(panel)?.[0] ?? "";
-    assert.ok(/catch \(_\) \{\s*\n?\s*return null;/.test(fn) || fn.includes("return null;   //"),
-      "권한이 없을 때 던지면 받기 자체가 막힌다");
+    assert.ok(fn, "defaultMediaFolder 를 못 찾았다");
+    assert.match(fn, /catch \(err\) \{[\s\S]*?return null;/, "권한이 없을 때 던지면 받기 자체가 막힌다");
+    assert.ok(fn.includes("autoFolderReason = String("), "이유를 안 남기면 원인을 못 찾는다");
   });
 
   it("어디 쌓이는지 화면에 보여 준다 — 모르는 자리에 GB 가 쌓이면 그것도 사고다", () => {
     assert.match(panel, /async function showMediaFolder\(\)/);
     assert.ok(html.includes('id="mediaFolderPath"'), "경로 표시 자리가 없다");
     assert.ok(html.includes('id="changeFolderBtn"'), "바꿀 길이 없으면 강제가 된다");
+  });
+
+  it("**표시하러 들어와서 폴더 선택창을 띄우지 않는다** — 패널이 그대로 멈춘다", () => {
+    // 실측 2026-09-01: showMediaFolder 가 mediaFolder() 를 부르는 바람에, 자동 경로가
+    // 실패한 순간 패널을 열자마자 선택창이 열려 대기했다. 화면에는 "…" 이 그대로 남았다.
+    const fn = /async function showMediaFolder\(\)[\s\S]*?\n}/.exec(panel)?.[0] ?? "";
+    assert.ok(fn, "showMediaFolder 를 못 찾았다");
+    assert.ok(!fn.includes("localFs.getFolder()"), "표시 함수가 직접 묻는다");
+    assert.ok(!/await mediaFolder\(\)/.test(fn), "mediaFolder() 는 필요하면 묻는다 — 표시에 쓰면 안 된다");
+  });
+
+  it("자동이 실패하면 **이유를 화면에** 낸다 — 조용히 묻는 걸로 돌아가면 그대로로 보인다", () => {
+    assert.match(panel, /let autoFolderReason = ""/);
+    assert.ok(panel.includes("자동 실패 — 받을 때 묻습니다"), "화면에 안 내면 콘솔만 안다");
+  });
+
+  it("로그인·복원 **양쪽**에서 부른다 — 한쪽만 부르면 그 경로에서만 빈다", () => {
+    assert.equal((panel.match(/void showMediaFolder\(\)/g) || []).length, 2);
   });
 
   it("임의 경로를 열려면 매니페스트가 **fullAccess** 여야 한다", () => {
