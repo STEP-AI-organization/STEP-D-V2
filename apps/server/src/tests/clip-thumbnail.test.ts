@@ -62,7 +62,7 @@ describe("클립 유튜브 썸네일 배선", () => {
   });
 
   it("자동배포가 클립을 채택하면 썸네일 생성을 건다", () => {
-    const cyc = read("automation-cycle.ts");
+    const cyc = read("pipeline/automation-cycle.ts");
     assert.match(cyc, /enqueue\("thumbnail\.generate"/,
       "썸네일 생성 기능이 자동 경로에서 호출되지 않는다");
     assert.match(cyc, /dedupeKey: `thumbnail\.generate:\$\{master\.id\}:\$\{thumbMode\}`/,

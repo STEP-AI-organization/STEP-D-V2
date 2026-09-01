@@ -17,7 +17,7 @@ import { describe, it } from "node:test";
 
 import {
   buildAutoPublishReportHtml, ruleDayTarget, type AutoReportItem,
-} from "../publish-notify.ts";
+} from "../publish/publish-notify.ts";
 
 const kst = (v: string) => new Date(`${v}+09:00`);
 const SRC_DIR = pathMod.resolve(pathMod.dirname(fileURLToPath(import.meta.url)), "..");
@@ -171,7 +171,7 @@ describe("소재가 없으면 마감을 기다리지 않는다", () => {
   const read = (f: string) => fsSync.readFileSync(pathMod.join(SRC_DIR, f), "utf-8");
 
   it("리포트: exhausted + 마지막 슬롯 경과면 목표 미달이어도 보낸다", () => {
-    const src = read("publish-notify.ts");
+    const src = read("publish/publish-notify.ts");
     assert.match(src, /if \(exhausted && lastSlotPassed\) continue;/,
       "소재 고갈 즉시 발송 분기가 없다 — 고갈된 날 마감(+90분)까지 헛기다린다");
     assert.match(src, /rulePublishingDone\(rule, now, opts\.exhausted === true\)/,
@@ -179,7 +179,7 @@ describe("소재가 없으면 마감을 기다리지 않는다", () => {
   });
 
   it("순방: 아무것도 못 했고 사유가 전부 '안 풀리는' 쪽일 때만 exhausted", () => {
-    const src = read("automation-cycle.ts");
+    const src = read("pipeline/automation-cycle.ts");
     assert.match(src, /idleCodes\.every\(idleMeansNoMoreToday\)/,
       "기다림형 사유(분석 중·렌더 대기)를 고갈로 치면 리포트가 너무 일찍 나간다");
     assert.match(src, /report\.adopted === 0 && report\.published === 0/,
@@ -188,7 +188,7 @@ describe("소재가 없으면 마감을 기다리지 않는다", () => {
   });
 
   it("기다림형 코드 집합은 셋뿐 — 늘리면 리포트가 늦어진다", () => {
-    const src = read("automation.ts");
+    const src = read("pipeline/automation.ts");
     const m = /WAITING_IDLE_CODES[^=]*=\s*new Set<RuleIdleCode>\(\[([\s\S]*?)\]\)/.exec(src);
     assert.ok(m, "WAITING_IDLE_CODES 를 못 찾았다");
     const codes = [...m![1].matchAll(/"([\w_]+)"/g)].map((x) => x[1]).sort();
@@ -254,7 +254,7 @@ describe("영상이 모자란 날의 안내", () => {
   });
 
   it("발송부가 순방과 같은 함수로 목표를 낸다 (소스 스캔)", () => {
-    const src = fsSync.readFileSync(pathMod.join(SRC_DIR, "publish-notify.ts"), "utf-8");
+    const src = fsSync.readFileSync(pathMod.join(SRC_DIR, "publish/publish-notify.ts"), "utf-8");
     assert.match(src, /target \+= ruleDayTarget\(rule, n, now\)\.target;/,
       "메일이 순방과 다른 식으로 목표를 세면 두 숫자가 갈라진다");
     assert.match(src, /buildAutoPublishReportHtml\(group, now, next, shortfall\)/,
@@ -267,7 +267,7 @@ describe("리포트는 자동배포 계획마다 한 통 (2026-08-28)", () => {
   // 예전엔 워크스페이스 전체가 한 통이라 ① 프로그램·채널이 섞여 "A 외 1" 로만 적히고
   // ② **모든 계획이 끝나야** 발송돼, 늦게까지 도는 계획 하나가 이미 끝난 계획의 리포트를
   // 밤까지 붙잡았다. 순수 함수로 증명 안 되는 구조라 소스 스캔으로 고정한다.
-  const src = fsSync.readFileSync(pathMod.join(SRC_DIR, "publish-notify.ts"), "utf-8");
+  const src = fsSync.readFileSync(pathMod.join(SRC_DIR, "publish/publish-notify.ts"), "utf-8");
   const flush = src.match(/export async function maybeFlushAutoPublishReport[\s\S]*$/)?.[0] ?? "";
 
   it("적립 항목이 계획 id 를 지닌다 — 없으면 나눌 축이 없다", () => {

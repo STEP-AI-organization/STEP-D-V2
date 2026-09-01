@@ -80,7 +80,7 @@ describe("이중 결제 방어 배선 — 소스 스캔", () => {
  */
 describe("자동 충전 실패 노출 — 소스 스캔", () => {
   const auto = fs.readFileSync(path.join(SRC, "billing/auto-topup.ts"), "utf-8");
-  const pipeline = fs.readFileSync(path.join(SRC, "content-pipeline.ts"), "utf-8");
+  const pipeline = fs.readFileSync(path.join(SRC, "pipeline/content-pipeline.ts"), "utf-8");
   const index = fs.readFileSync(path.join(SRC, "index.ts"), "utf-8");
   /** 라우트 블록만 잘라낸다(automation.test.ts 관용구) — 파일 어딘가에 있는 것만으론 부족하다. */
   const route = (re: RegExp) => re.exec(index)?.[0] ?? "";

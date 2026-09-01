@@ -39,7 +39,7 @@ describe("문서가 코드와 같은 사실을 말한다", () => {
   const indexSrc = read("apps/server/src/index.ts");
   const routeCount = (indexSrc.match(/^app\.(get|post|put|patch|delete)\(/gm) ?? []).length;
   const jobTypes = new Set(
-    [...(read("apps/server/src/queue.ts").match(/export type JobType\s*=([\s\S]*?);/)?.[1] ?? "")
+    [...(read("apps/server/src/pipeline/queue.ts").match(/export type JobType\s*=([\s\S]*?);/)?.[1] ?? "")
       .matchAll(/"([a-z]+\.[a-z]+)"/g)].map((m) => m[1]),
   );
 
@@ -96,7 +96,7 @@ describe("문서가 코드와 같은 사실을 말한다", () => {
 describe("자동배포 실패모드 문서의 임계값이 코드와 같다", () => {
   const DOC = "docs/ops/auto-deploy-failure-modes.md";
   const doc = read(DOC);
-  const automation = read("apps/server/src/automation.ts");
+  const automation = read("apps/server/src/pipeline/automation.ts");
   const credits = read("apps/server/src/billing/credits.ts");
 
   /** 문서 §6 표에서 그 상수를 가리키는 행의 값 칸에 적힌 숫자들. */

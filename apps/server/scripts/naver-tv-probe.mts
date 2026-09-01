@@ -1,6 +1,6 @@
 /** 네이버 TV 크리에이터 스튜디오 — 직접 진입 가능 여부 + 업로드 모달 구조. */
 import path from "node:path"; import os from "node:os"; import fs from "node:fs";
-import { openNaverContext } from "../src/naver-tv.ts";
+import { openNaverContext } from "../src/naver/naver-tv.ts";
 const out = path.join(os.homedir(), ".stepd", "naver-probe");
 fs.mkdirSync(out, { recursive: true });
 const { browser, ctx } = await openNaverContext(false);

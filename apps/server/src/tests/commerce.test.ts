@@ -30,7 +30,7 @@ import {
   withCommerceLinks,
 } from "../commerce/commerce.ts";
 import { pickProduct, type CoupangProduct } from "../commerce/coupang-partners.ts";
-import { buildMetadataPrompt } from "../clip-metadata.ts";
+import { buildMetadataPrompt } from "../pipeline/clip-metadata.ts";
 
 const SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = (f: string) => fs.readFileSync(path.join(SRC, f), "utf-8");

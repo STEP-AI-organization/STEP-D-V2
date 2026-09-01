@@ -13,9 +13,9 @@
  * stdin 으로 받는다:
  *   printf '%s' '비밀번호' | DATABASE_URL=... npx tsx scripts/bootstrap-owner.mts me@stepai.kr "이름"
  */
-import { countUsers, createUser } from "../src/auth.ts";
+import { countUsers, createUser } from "../src/auth/auth.ts";
 import { initDb, closeDb, getRawPool } from "../src/db-pg.ts";
-import { DEFAULT_TENANT_ID, runAsSystem } from "../src/tenant.ts";
+import { DEFAULT_TENANT_ID, runAsSystem } from "../src/auth/tenant.ts";
 
 async function readPassword(): Promise<string> {
   const chunks: Buffer[] = [];

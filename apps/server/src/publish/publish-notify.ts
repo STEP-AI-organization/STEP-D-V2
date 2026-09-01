@@ -22,12 +22,12 @@
  */
 import {
   getAutomationSetting, setAutomationSetting, listAutomationRules, publishedTodayKst,
-} from "./db-pg.ts";
+} from "../db-pg.ts";
 import {
   NOTIFY_EMAIL_KEY, allowedToday, isPublishDay, kstMinutes, perDayCount,
   ruleChannels, ruleSlots, staleMissedSlots, type AutomationRule, type RuleSlot,
-} from "./automation.ts";
-import { mailConfigured, sendMail } from "./mailer.ts";
+} from "../pipeline/automation.ts";
+import { mailConfigured, sendMail } from "../mailer.ts";
 
 const AUTO_ORIGINS = new Set(["automation", "factory"]);
 /** 적립 버퍼 KV 키 — 값은 AutoReportItem[] JSON. 테넌트 스코프(automation_setting PK). */

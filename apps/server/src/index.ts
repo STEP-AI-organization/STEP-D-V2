@@ -232,7 +232,7 @@ import { issueOAuthState, consumeOAuthState, HANDOFF_TTL_MS } from "./auth/oauth
 import { synthesizeHookNarration } from "./media/tts.ts";
 import { embedQuery } from "./ai/search-embed.ts";
 import { parseQuery } from "./ai/search-parse.ts";
-import { newId } from "./pipeline.ts";
+import { newId } from "./ids.ts";
 import {
   normalizeProfile,
   promptForMode,
@@ -244,9 +244,9 @@ import {
   youtubeUploadEnabled, UPLOAD_DISABLED_CODE, UPLOAD_DISABLED_MESSAGE, tiktokUploadEnabled,
   tiktokDirectPostEnabled,
   instagramUploadEnabled, facebookUploadEnabled,
-} from "./upload-gate.ts";
+} from "./publish/upload-gate.ts";
 import { geminiGenerate, parseJsonLoose } from "./ai/gemini.ts";
-import { syncProgramFromFacesForMedia, CORE_PYTHON, CORE_DIR, REPO_ROOT } from "./content-pipeline.ts";
+import { syncProgramFromFacesForMedia, CORE_PYTHON, CORE_DIR, REPO_ROOT } from "./pipeline/content-pipeline.ts";
 import {
   basicReframeState,
   canonicalRenderedClipAspect,
@@ -262,8 +262,8 @@ import {
   type ReframePlan,
 } from "./media/reframe.ts";
 import { getAspectPreset } from "./media/aspect-presets.ts";
-import { SHORTS_DEFAULT_ASPECT } from "./factory.ts";
-import { layoutFingerprint, restampPendingClips } from "./rule-restamp.ts";
+import { SHORTS_DEFAULT_ASPECT } from "./pipeline/factory.ts";
+import { layoutFingerprint, restampPendingClips } from "./pipeline/rule-restamp.ts";
 import { renderTextLayerPng, overlayCanvasAvailable, measureOverlayImage, FONT_FAMILIES, postScriptNameFor, type OverlayTextItem } from "./media/overlay-canvas.ts";
 import { patchTitleMogrt, inspectMogrt, layersFromOverlayItems, colorToInt, type MogrtTextLayer } from "./media/mogrt.ts";
 import {
@@ -281,8 +281,8 @@ import {
   YT_PUBLISH_SCOPE,
 } from "./youtube.ts";
 import { SHORTS_PROBE_MAX_PER_SYNC, SHORTS_PROBE_CONCURRENCY } from "./config.ts";
-import { runChannelPipeline, runDueChannels } from "./channel-pipeline.ts";
-import { initQueue, enqueue, queueStats, listJobs, pendingByType, oldestPendingAgeMs } from "./queue.ts";
+import { runChannelPipeline, runDueChannels } from "./pipeline/channel-pipeline.ts";
+import { initQueue, enqueue, queueStats, listJobs, pendingByType, oldestPendingAgeMs } from "./pipeline/queue.ts";
 import {
   uploadPath,
   thumbPath,
@@ -306,11 +306,11 @@ import {
   listPrefix,
 } from "./media/storage-gcs.ts";
 import { castPrefix, stylePrefix, thumbnailPrefix } from "./media/thumbnail-assets.ts";
-import { isClipRendered, upsertDistribution, isNaverChannel, NAVER_CHANNELS } from "./publish-guard.ts";
+import { isClipRendered, upsertDistribution, isNaverChannel, NAVER_CHANNELS } from "./publish/publish-guard.ts";
 import {
   buildMetadataPrompt, normalizeForChannel, validateForChannel,
   META_CHANNELS, CHANNEL_SPECS, type MetaChannel,
-} from "./clip-metadata.ts";
+} from "./pipeline/clip-metadata.ts";
 import { naverUploadEnabled, NAVER_DISABLED_MESSAGE, DESC_MIN } from "./naver/naver-gate.ts";
 import {
   commerceLinksEnabled, parseProductQueries, usableLinks, withCommerceLinks, normalizeStatus,
@@ -323,8 +323,8 @@ import {
   isoDateOrToday,
   readEpisodeNumber,
   readTrack,
-} from "./episode-intake.ts";
-import { dispatchPublish } from "./publish-dispatch.ts";
+} from "./pipeline/episode-intake.ts";
+import { dispatchPublish } from "./publish/publish-dispatch.ts";
 import { opsCapabilityOf, canPublish, isOpsRole, OPS_ROLES } from "./auth/ops-role.ts";
 import {
   AUTO_TOPUP_HARD_MAX_KRW_PER_MONTH, AUTO_TOPUP_HARD_MAX_PER_DAY, FIXED_AUTO_TOPUP,
@@ -338,8 +338,8 @@ import { chargeWithBillingKey, getBillingKeyInfo, getPayment, verifyWebhook } fr
 // 부르면 반드시 한 자리가 빠진다(실제로 직접 충전 경로가 빠져 있었다).
 import { clearAutoTopupAlert, maybeAutoTopup, topupAndRecheck } from "./billing/auto-topup.ts";
 import { buyerFor, sendInvoiceEmail } from "./billing/invoice-email.ts";
-import { commitAndInherit } from "./adopt.ts";
-import { runAutomationCycle } from "./automation-cycle.ts";
+import { commitAndInherit } from "./pipeline/adopt.ts";
+import { runAutomationCycle } from "./pipeline/automation-cycle.ts";
 import {
   ROOT as ASSET_ROOT,
   canMoveFolder,
@@ -371,7 +371,7 @@ import {
   ruleSlots,
   type RuleSlotInput,
   monthlyPublishEstimate,
-} from "./automation.ts";
+} from "./pipeline/automation.ts";
 import {
   CHANNEL_ROLES,
   capRenderWindow,
@@ -380,7 +380,7 @@ import {
   isChannelRole,
   normalizePublishDelayMin,
   type ChannelRule,
-} from "./channel-rules.ts";
+} from "./publish/channel-rules.ts";
 import { listShortsTemplates, getShortsTemplate, toPercent } from "./media/shorts-template.ts";
 import { listNaverAccounts, getNaverAccount, upsertNaverAccount, markNaverAccount,
   deleteNaverAccount } from "./db-pg.ts";
@@ -405,7 +405,7 @@ import {
   validateTargets as validateFactoryTargets,
   factoryEnabled,
   TERMINAL_STATES,
-} from "./factory.ts";
+} from "./pipeline/factory.ts";
 
 // A stray async error (e.g. a GCS stream 'error' after the response started, or a background
 // promise rejecting) must not kill the whole Cloud Run instance mid-request — same guard the
@@ -6989,7 +6989,7 @@ app.get("/api/recommendations/:id/title.mogrt", async (c) => {
 
   const want = c.req.query("aspect");
   const aspect = want === "16:9" ? "16:9" : SHORTS_DEFAULT_ASPECT;
-  const { autoEditorState } = await import("./factory.ts");
+  const { autoEditorState } = await import("./pipeline/factory.ts");
   const es = autoEditorState(
     rec, ep?.programTitle ?? "", program,
     (rule as any)?.templateId,
@@ -7047,7 +7047,7 @@ app.get("/api/recommendations/:id/layout", async (c) => {
   const aspect = want === "16:9" ? "16:9" : ((rule as any)?.aspect ?? (rec.kind === "short" ? SHORTS_DEFAULT_ASPECT : "16:9"));
   const preset = getAspectPreset(aspect) ?? getAspectPreset(SHORTS_DEFAULT_ASPECT)!;
 
-  const { autoEditorState } = await import("./factory.ts");
+  const { autoEditorState } = await import("./pipeline/factory.ts");
   const es = autoEditorState(
     rec, ep?.programTitle ?? "", program,
     (rule as any)?.templateId,
@@ -7099,7 +7099,7 @@ app.get("/api/recommendations/:id/decorations.png", async (c) => {
 
   const want = c.req.query("aspect");
   const aspect = want === "16:9" ? "16:9" : ((rule as any)?.aspect ?? (rec.kind === "short" ? SHORTS_DEFAULT_ASPECT : "16:9"));
-  const { autoEditorState } = await import("./factory.ts");
+  const { autoEditorState } = await import("./pipeline/factory.ts");
   const es = autoEditorState(
     rec, ep?.programTitle ?? "", program,
     (rule as any)?.templateId,
@@ -7203,7 +7203,7 @@ async function recRenderContext(rec: any, aspectQuery?: string): Promise<{
   const aspect = aspectQuery === "16:9"
     ? "16:9"
     : String((rule as any)?.aspect ?? (rec.kind === "short" ? SHORTS_DEFAULT_ASPECT : "16:9"));
-  const { autoEditorState } = await import("./factory.ts");
+  const { autoEditorState } = await import("./pipeline/factory.ts");
   const es = autoEditorState(
     rec, ep?.programTitle ?? "", program,
     (rule as any)?.templateId,
@@ -9445,7 +9445,7 @@ app.get("/api/recommendations/:id/title.png", async (c) => {
   // 글자 위치가 서버 미리보기와 어긋난다. 기본값은 쇼츠(세로).
   const want = c.req.query("aspect");
   const aspect = want === "16:9" ? "16:9" : SHORTS_DEFAULT_ASPECT;
-  const { autoEditorState } = await import("./factory.ts");
+  const { autoEditorState } = await import("./pipeline/factory.ts");
   const es = autoEditorState(
     rec, ep?.programTitle ?? "", program,
     (rule as any)?.templateId,

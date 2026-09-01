@@ -14,7 +14,7 @@ import {
   isoDateOrToday,
   readEpisodeNumber,
   readTrack,
-} from "../episode-intake.ts";
+} from "../pipeline/episode-intake.ts";
 
 describe("업로드 완료 ≠ 분석 완료 (F1 Invariant)", () => {
   it("회차는 `분석 대기` 로만 들어간다 — 진행 중이 아니다", () => {

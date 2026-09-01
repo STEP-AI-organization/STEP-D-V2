@@ -21,7 +21,7 @@ import {
   isPublishChannel,
   screenForPublish,
   upsertDistribution,
-} from "../publish-guard.ts";
+} from "../publish/publish-guard.ts";
 
 const SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const PASS = () => ({ allowed: true, reason: "" });
@@ -176,7 +176,7 @@ describe("채널명 검증 — 모르는 값이 조용히 record 로 수락되�
   });
 
   it("관문(dispatchPublish)이 이 검증을 쓴다", () => {
-    const src = fs.readFileSync(path.join(SRC, "publish-dispatch.ts"), "utf-8");
+    const src = fs.readFileSync(path.join(SRC, "publish/publish-dispatch.ts"), "utf-8");
     assert.match(src, /isPublishChannel\(/, "publish-dispatch 가 채널명을 검증하지 않는다");
   });
 });
@@ -224,7 +224,7 @@ describe("관문 우회 불가 (F3 Invariant · FLOWS.md:73)", () => {
   });
 
   it("모듈이 force/override/bypass/admin 류를 export 하지 않는다", () => {
-    const src = fs.readFileSync(path.join(SRC, "publish-guard.ts"), "utf-8");
+    const src = fs.readFileSync(path.join(SRC, "publish/publish-guard.ts"), "utf-8");
     const offenders = [...src.matchAll(/export\s+(?:function|const|let|class)\s+(\w+)/g)]
       .map((m) => m[1])
       .filter((n) => /force|override|bypass|admin|skipGate/i.test(n));
@@ -258,7 +258,7 @@ describe("관문 우회 불가 (F3 Invariant · FLOWS.md:73)", () => {
     const filesWithHits = [...new Set(hits.map((h) => h.split(":")[0]))];
     assert.deepEqual(
       filesWithHits,
-      ["publish-dispatch.ts"],
+      ["publish/publish-dispatch.ts"],
       `배포 큐 진입점이 여러 곳이다: ${hits.join(" · ")}`,
     );
   });
@@ -267,7 +267,7 @@ describe("관문 우회 불가 (F3 Invariant · FLOWS.md:73)", () => {
   // 권리 게이트는 2026-08-31 에 제거됐다(사용자 결정 · rights_issue 0행 · blocked 1건).
   // 관문이 **순수 판정을 쓴다**는 명제는 그대로 유효하므로 그것만 남긴다.
   it("관문이 순수 판정을 쓴다", () => {
-    const src = fs.readFileSync(path.join(SRC, "publish-dispatch.ts"), "utf-8");
+    const src = fs.readFileSync(path.join(SRC, "publish/publish-dispatch.ts"), "utf-8");
     assert.match(src, /screenForPublish/, "publish-dispatch 가 순수 판정을 쓰지 않는다");
   });
 });

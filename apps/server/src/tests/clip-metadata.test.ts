@@ -19,7 +19,7 @@ import {
   normalizeForChannel,
   validateForChannel,
   type BaseMetadata,
-} from "../clip-metadata.ts";
+} from "../pipeline/clip-metadata.ts";
 
 const base: BaseMetadata = {
   title: "이영자가 젓가락을 놓은 순간",
@@ -340,7 +340,7 @@ describe("⚠️ 만든 것이 실제로 소비된다 — 이 리포의 최빈 �
     const idx = read("index.ts");
     assert.match(idx, /"titlePrompt", "recommendPrompt"/,
       "PATCH /api/programs/:id 병합 목록에 커스텀 프롬프트 필드가 없다");
-    const cp = read("content-pipeline.ts");
+    const cp = read("pipeline/content-pipeline.ts");
     const ctxBlock = cp.match(/program_context\.json 로 넘겨[\s\S]{0,1500}/)?.[0] ?? cp;
     assert.match(ctxBlock, /"titlePrompt", "recommendPrompt"/,
       "content-pipeline 이 program_context.json 에 커스텀 프롬프트를 안 싣는다 — core 미도달");

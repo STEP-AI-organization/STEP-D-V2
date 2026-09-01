@@ -23,7 +23,7 @@ import {
   type YouTubeChannel,
   type ChannelVideo,
   type ChannelAnalyticsDay,
-} from "./db-pg.ts";
+} from "../db-pg.ts";
 import {
   syncChannelVideos,
   classifyShorts,
@@ -32,9 +32,9 @@ import {
   TokenRevokedError,
   YouTubeApiError,
   type PersistTokens,
-} from "./youtube.ts";
+} from "../youtube.ts";
 import { enqueue } from "./queue.ts";
-import { HOTWATCH_POLL_MS, HOTWATCH_WINDOW_MS, SHORTS_PROBE_MAX_PER_SYNC, SHORTS_PROBE_CONCURRENCY } from "./config.ts";
+import { HOTWATCH_POLL_MS, HOTWATCH_WINDOW_MS, SHORTS_PROBE_MAX_PER_SYNC, SHORTS_PROBE_CONCURRENCY } from "../config.ts";
 
 /** Re-sync uploads this often. Each run costs Data API quota, so don't go below this. */
 export const VIDEO_SYNC_INTERVAL_MS = 6 * 60 * 60 * 1000;

@@ -7,8 +7,8 @@
  * 끝나면 storageState 가 ~/.stepd/naver-storage-state.json 에 저장되고, 워커가 그걸 쓴다.
  * 세션이 만료되면(잡이 NaverSessionExpiredError 로 실패) 이걸 다시 돌리면 된다.
  */
-import { interactiveNaverLogin } from "../src/naver-tv.ts";
-import { naverSessionPath } from "../src/naver-session.ts";
+import { interactiveNaverLogin } from "../src/naver/naver-tv.ts";
+import { naverSessionPath } from "../src/naver/naver-session.ts";
 
 // 고객사가 여럿이면 계정마다 세션이 따로다:
 //   pnpm --filter @stepd/server naver:login --account <accountKey>

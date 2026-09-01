@@ -12,7 +12,7 @@
  *  - 트리거는 클래스 해시가 배포마다 바뀌므로 화면 문구("1차 카테고리")로 잡는다.
  */
 import path from "node:path"; import os from "node:os"; import fs from "node:fs";
-import { openNaverContext, NAVER_TARGETS } from "../src/naver-tv.ts";
+import { openNaverContext, NAVER_TARGETS } from "../src/naver/naver-tv.ts";
 
 const video = process.argv[2];
 if (!video || !fs.existsSync(video)) { console.error("사용: naver:categories <영상경로>"); process.exit(1); }

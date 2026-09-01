@@ -24,7 +24,7 @@ const read = (f: string) => fs.readFileSync(path.join(SRC, f), "utf-8");
 
 /** `queue.ts` 의 JobType 유니온에서 잡 타입 전부를 뽑는다. */
 function declaredJobTypes(): string[] {
-  const src = read("queue.ts");
+  const src = read("pipeline/queue.ts");
   const m = src.match(/export type JobType\s*=([\s\S]*?);/);
   assert.ok(m, "queue.ts 에서 JobType 유니온을 못 찾았다 — 이 테스트의 파싱을 고쳐야 한다");
   return [...new Set([...m![1].matchAll(/"([a-z]+\.[a-z]+)"/g)].map((x) => x[1]))].sort();

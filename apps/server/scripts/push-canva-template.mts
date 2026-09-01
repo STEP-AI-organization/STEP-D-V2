@@ -14,7 +14,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { initDb } from "../src/db-pg.ts";
-import { uploadAssetPng, createDesignFromAsset } from "../src/canva.ts";
+import { uploadAssetPng, createDesignFromAsset } from "../src/ai/canva.ts";
 
 const name = process.argv[2];
 if (!name) {

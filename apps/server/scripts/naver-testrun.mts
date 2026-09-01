@@ -1,5 +1,5 @@
 /** 네이버 클립 1건 실발행 테스트 (개발용). 등록 예약으로 걸어 즉시 공개를 피한다. */
-import { uploadToNaver } from "../src/naver-tv.ts";
+import { uploadToNaver } from "../src/naver/naver-tv.ts";
 import path from "node:path"; import os from "node:os";
 const video = process.argv[2];
 const at = Date.now() + 2 * 60 * 60 * 1000; // 2시간 뒤

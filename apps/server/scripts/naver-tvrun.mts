@@ -1,4 +1,4 @@
-import { uploadToNaver } from "../src/naver-tv.ts";
+import { uploadToNaver } from "../src/naver/naver-tv.ts";
 import path from "node:path"; import os from "node:os";
 const t0 = Date.now();
 const r = await uploadToNaver({

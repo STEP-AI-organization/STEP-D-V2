@@ -5,8 +5,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import { initDb, insertMedia, putEntity } from "../src/db-pg.ts";
-import { initQueue, enqueue } from "../src/queue.ts";
-import { runWithTenant, DEFAULT_TENANT_ID } from "../src/tenant.ts";
+import { initQueue, enqueue } from "../src/pipeline/queue.ts";
+import { runWithTenant, DEFAULT_TENANT_ID } from "../src/auth/tenant.ts";
 
 const src = process.argv[2];
 if (!src || !fs.existsSync(src)) { console.error("사용: naver:e2e-seed <영상경로>"); process.exit(1); }

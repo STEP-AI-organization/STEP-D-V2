@@ -62,21 +62,22 @@ Hono 단일 진입점(index.ts, **~9000줄, 라우트 254개**) + 별도 워커 
 |------|------|
 | `src/index.ts` | 모든 HTTP 라우트. 여기 한 파일에 유지. **Cloud Run은 잡을 큐잉만 한다.** |
 | `src/worker.ts` | **워커 프로세스 진입점.** 잡 27종 · 레인 7개 · drain 모드 (아래 참조) |
-| `src/queue.ts` | Postgres job_queue (FOR UPDATE SKIP LOCKED · dedupeKey · 지수 백오프 · 5분 하트비트) |
-| `src/channel-pipeline.ts` | channel.analyze — 업로드 동기화 + 채널 애널리틱스/일별 수익 백필 |
-| `src/content-pipeline.ts` | content.analyze — `python -m core.analyze` 스폰, 진행률 파싱(@@PROGRESS→episode.pipeline), 결과+프레임 영구 저장, 추천 배선. 미디어별 고정 작업 디렉토리로 재시도 시 체크포인트 재개 |
+| `src/pipeline/queue.ts` | Postgres job_queue (FOR UPDATE SKIP LOCKED · dedupeKey · 지수 백오프 · 5분 하트비트) |
+| `src/pipeline/channel-pipeline.ts` | channel.analyze — 업로드 동기화 + 채널 애널리틱스/일별 수익 백필 |
+| `src/pipeline/content-pipeline.ts` | content.analyze — `python -m core.analyze` 스폰, 진행률 파싱(@@PROGRESS→episode.pipeline), 결과+프레임 영구 저장, 추천 배선. 미디어별 고정 작업 디렉토리로 재시도 시 체크포인트 재개 |
 | `src/db-pg.ts` | PostgreSQL 전부. 엔티티=JSONB(`entities`) + 미디어/YouTube 정규 테이블 |
 | `src/youtube.ts` | YouTube Data/Analytics API, 토큰 리프레시(invalid_grant→revoked), 쇼츠 분류 |
-| `src/storage-gcs.ts` | GCS 어댑터 + resumable 업로드 세션 (GCS_BUCKET 없으면 로컬 폴백) |
-| `src/ffmpeg.ts` | `hasFfmpeg` / `probe` / `captureThumbnail` / `trimEncode` |
-| `src/search-embed.ts` | 검색 **쿼리** 임베딩 (Vertex `text-multilingual-embedding-002` · 768d). 실패 시 null → 키워드축 폴백 |
-| `src/search-parse.ts` | 자연어 질의 → 구조화 필터 (인물·장면·기간) |
-| `src/upload-gate.ts` | **YouTube 실업로드 게이트** — 기본 OFF. 오타·빈값·미설정은 전부 OFF |
-| `src/gemini.ts` · `cast.ts` · `profile.ts` · `thumbnail-assets.ts` | Gemini 호출 · 캐스트 · 프로그램 프로필 · 썸네일 레퍼런스 |
+| `src/media/storage-gcs.ts` | GCS 어댑터 + resumable 업로드 세션 (GCS_BUCKET 없으면 로컬 폴백) |
+| `src/media/ffmpeg.ts` | `hasFfmpeg` / `probe` / `captureThumbnail` / `trimEncode` |
+| `src/ai/search-embed.ts` | 검색 **쿼리** 임베딩 (Vertex `text-multilingual-embedding-002` · 768d). 실패 시 null → 키워드축 폴백 |
+| `src/ai/search-parse.ts` | 자연어 질의 → 구조화 필터 (인물·장면·기간) |
+| `src/publish/upload-gate.ts` | **YouTube 실업로드 게이트** — 기본 OFF. 오타·빈값·미설정은 전부 OFF |
+| `src/ai/gemini.ts` · `ai/cast.ts` · `ai/profile.ts` · `media/thumbnail-assets.ts` | Gemini 호출 · 캐스트 · 프로그램 프로필 · 썸네일 레퍼런스 |
 | `src/seed.ts` | **의도적으로 전부 빈 배열** — 프로덕션은 데모 콘텐츠 없이 시작 |
+| `src/<도메인>/` | **2026-09-01 정리** — 74개가 평평하던 것을 묶었다: `ai` `auth` `billing` `commerce` `media` `naver` `pipeline` `publish` `social` `tests`. 최상위엔 진입점(index·worker)과 공용(db-pg·config·ids·kst·mailer·seed·youtube)만 남는다 |
 | `schema.sql` | 테이블 정의 — 단 **job_queue·content_analysis·channel_analytics·search_segments·meta_accounts·tiktok_accounts는 여기 없고 코드가 런타임 생성** (queue.ts·db-pg.ts). 상세: [docs/reference/data-model.md](docs/reference/data-model.md) |
 
-`src/pipeline.ts`는 이제 `newId` 헬퍼만 export한다(구 sqlite `db.ts`·`storage.ts`, 휴리스틱 `buildRecommendations()`는 정리 완료). 실제 추천은 core/ AI 파이프라인이 만든다.
+`src/ids.ts`(구 pipeline.ts)는 `newId` 헬퍼만 export한다(구 sqlite `db.ts`·`storage.ts`, 휴리스틱 `buildRecommendations()`는 정리 완료). 실제 추천은 core/ AI 파이프라인이 만든다.
 
 ### 워커 — 잡 27종 · 레인 7개 · drain 모드
 

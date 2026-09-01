@@ -1,7 +1,7 @@
 /**
  * YouTube Data API v3 helpers — upload list and video statistics.
  */
-import { assertUploadEnabled } from "./upload-gate.ts";
+import { assertUploadEnabled } from "./publish/upload-gate.ts";
 
 export interface YtVideoItem {
   videoId: string;

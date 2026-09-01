@@ -29,8 +29,8 @@ import {
   capRenderWindow,
   isVerticalAspect,
   shortformSegmentTooLong,
-} from "../channel-rules.ts";
-import { factoryAspect } from "../factory.ts";
+} from "../publish/channel-rules.ts";
+import { factoryAspect } from "../pipeline/factory.ts";
 
 const SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const REPO = path.resolve(SRC, "..", "..", "..");
@@ -177,7 +177,7 @@ describe("렌더 창 클램프 (capRenderWindow) — /export 길이 캡의 본�
 
 describe("무인 렌더는 채널 프리셋 없이 /export 를 부르지 않는다 (소스 스캔)", () => {
   // 이게 이 사고의 절반이다. 본문 없이 POST 하면 라우트가 프리셋 null → 길이 캡 비활성.
-  for (const file of ["factory.ts", "automation-cycle.ts"]) {
+  for (const file of ["pipeline/factory.ts", "pipeline/automation-cycle.ts"]) {
     it(`${file} 의 export 요청이 body 로 channel 을 싣는다`, () => {
       const src = read(file);
       const at = src.indexOf("/api/clips/${clipId}/export");
@@ -201,7 +201,7 @@ describe("무인 렌더는 채널 프리셋 없이 /export 를 부르지 않는�
   });
 
   it("두 무인 경로 모두 채택 단계에서 길이 상한을 본다", () => {
-    for (const file of ["factory.ts", "automation-cycle.ts"]) {
+    for (const file of ["pipeline/factory.ts", "pipeline/automation-cycle.ts"]) {
       assert.match(read(file), /shortformSegmentTooLong\(/,
         `${file}: 채택 게이트가 없으면 3분짜리가 세로로 채택돼 렌더에서 60초로 잘린다 `
         + "— 그건 숏폼이 아니라 머리만 남은 롱폼이다");
@@ -211,7 +211,7 @@ describe("무인 렌더는 채널 프리셋 없이 /export 를 부르지 않는�
   // 게이트가 "가로" 로 본 추천을 채택이 "세로" 로 만들면 상한이 그대로 새 나간다.
   // 두 자리가 **같은 함수**를 부르는지 소스로 고정한다.
   it("factory: 길이 게이트와 채택이 factoryAspect 한 벌을 본다", () => {
-    const src = read("factory.ts");
+    const src = read("pipeline/factory.ts");
     assert.match(src, /shortformSegmentTooLong\(factoryAspect\(r\)/);
     assert.match(src, /aspectRatio: factoryAspect\(rec\)/);
     // 판정식은 factoryAspect 정의 **한 곳**에만 있어야 한다. 세로 값 자체도 상수 하나
@@ -221,7 +221,7 @@ describe("무인 렌더는 채널 프리셋 없이 /export 를 부르지 않는�
   });
 
   it("자동배포: 길이 게이트와 채택이 adoptAspect 한 벌을 본다", () => {
-    const src = read("automation-cycle.ts");
+    const src = read("pipeline/automation-cycle.ts");
     assert.match(src, /shortformSegmentTooLong\(\s*adoptAspect\(rule, r\)/);
     assert.match(src, /const aspectRatio = adoptAspect\(rule, rec\);/);
   });

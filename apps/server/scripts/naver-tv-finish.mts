@@ -1,6 +1,6 @@
 /** 네이버 TV 상세 패널 구조 덤프 — 제출 버튼·카테고리 확인용. */
 import path from "node:path"; import os from "node:os"; import fs from "node:fs";
-import { openNaverContext, NAVER_TARGETS } from "../src/naver-tv.ts";
+import { openNaverContext, NAVER_TARGETS } from "../src/naver/naver-tv.ts";
 const out = path.join(os.homedir(), ".stepd", "naver-probe");
 const { browser, ctx } = await openNaverContext(false);
 const page = await ctx.newPage();

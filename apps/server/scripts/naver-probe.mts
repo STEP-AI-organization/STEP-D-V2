@@ -8,7 +8,7 @@
  * 제출(발행)은 절대 하지 않는다. 그래도 임시저장이 남을 수 있으니 계정을 확인할 것.
  */
 import path from "node:path"; import os from "node:os"; import fs from "node:fs";
-import { openNaverContext, NAVER_TARGETS } from "../src/naver-tv.ts";
+import { openNaverContext, NAVER_TARGETS } from "../src/naver/naver-tv.ts";
 
 const target = (process.argv[2] ?? "clip") as "tv" | "clip";
 const videoPath = process.argv[3];

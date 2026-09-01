@@ -56,12 +56,12 @@ import {
   prepareProgramAssets, publishStyleProfile, publishThumbnails, tempAssetRoot, pullPrefix,
 } from "./media/thumbnail-assets.ts";
 import { uploadFile, uploadPath, thumbPath, promoteUpload } from "./media/storage-gcs.ts";
-import { initQueue, claimJob, completeJob, failJob, requeueStale, heartbeatJob, enqueue, lastDoneJobAt, pruneDoneJobs, queueStats, type Job, type JobType } from "./queue.ts";
+import { initQueue, claimJob, completeJob, failJob, requeueStale, heartbeatJob, enqueue, lastDoneJobAt, pruneDoneJobs, queueStats, type Job, type JobType } from "./pipeline/queue.ts";
 import { runWithTenant, runAsSystem, DEFAULT_TENANT_ID } from "./auth/tenant.ts";
-import { recordAutoPublishForReport, recordAutoPublishFailureForReport } from "./publish-notify.ts";
-import { runAutomationCycle } from "./automation-cycle.ts";
-import { runChannelPipeline, shouldSweepChannel } from "./channel-pipeline.ts";
-import { runClipReframe, runContentAnalyze, runReframeCompare, newestMtimeMs } from "./content-pipeline.ts";
+import { recordAutoPublishForReport, recordAutoPublishFailureForReport } from "./publish/publish-notify.ts";
+import { runAutomationCycle } from "./pipeline/automation-cycle.ts";
+import { runChannelPipeline, shouldSweepChannel } from "./pipeline/channel-pipeline.ts";
+import { runClipReframe, runContentAnalyze, runReframeCompare, newestMtimeMs } from "./pipeline/content-pipeline.ts";
 import {
   withAccessToken,
   fetchVideoAnalytics,
@@ -84,7 +84,7 @@ import {
   tiktokUploadEnabled, tiktokDirectPostEnabled, TIKTOK_UPLOAD_DISABLED_MESSAGE,
   instagramUploadEnabled, INSTAGRAM_UPLOAD_DISABLED_MESSAGE,
   facebookUploadEnabled, FACEBOOK_UPLOAD_DISABLED_MESSAGE,
-} from "./upload-gate.ts";
+} from "./publish/upload-gate.ts";
 import { withTikTokToken, uploadDraftToTikTok, uploadDirectPostToTikTok, TikTokTokenRevokedError } from "./social/tiktok.ts";
 import {
   getTikTokAccountByOpenId, updateTikTokTokens, markTikTokAccountDisconnected, appendRuleRun,
@@ -105,7 +105,7 @@ import { uploadToNaver, loginWithCredentials, NaverSessionExpiredError, NAVER_TA
 import { resolveCategory, categoryForGenre } from "./naver/naver-categories.ts";
 import { openCredential } from "./naver/naver-cred-store.ts";
 import { prepareWorkPath, cleanupWorkFile, sweepStaleWorkFiles } from "./naver/naver-workdir.ts";
-import { upsertDistribution } from "./publish-guard.ts";
+import { upsertDistribution } from "./publish/publish-guard.ts";
 import { commerceLinksEnabled, usableLinks, withCommerceLinks, type ProductCandidate } from "./commerce/commerce.ts";
 import {
   issueCoupangLinks, issueLinkForCandidate, PartnersSessionExpiredError,
@@ -1382,7 +1382,7 @@ async function handleFactoryOrchestrate(job: Job): Promise<void> {
   const factoryJobId = String(job.payload.factoryJobId ?? "");
   if (!factoryJobId) throw new Error("factoryJobId 필요");
 
-  const { advance } = await import("./factory.ts");
+  const { advance } = await import("./pipeline/factory.ts");
   const { job: fj, retryInMs } = await advance(factoryJobId);
   console.log(`[worker] factory.orchestrate ${factoryJobId} → ${fj.state}` +
     (fj.note ? ` (${fj.note})` : "") + (fj.error ? ` ERROR ${fj.error}` : ""));
@@ -1427,7 +1427,7 @@ async function handleFactoryPublicize(job: Job): Promise<void> {
   }
   // 결과는 **실제 배포 행을 세어** 정한다 — 공개 전환 성공 여부와 무관하게 무조건 done 을
   // 찍으면, 업로드가 전멸한 잡도 호출자에게 성공으로 보인다.
-  const { summarizeOutcome } = await import("./factory.ts");
+  const { summarizeOutcome } = await import("./pipeline/factory.ts");
   const out = await summarizeOutcome(fj);
   await putEntity("factoryJob", factoryJobId, {
     ...fj, state: out.state, ...(out.error ? { error: out.error } : {}),
@@ -1453,7 +1453,7 @@ async function handleClipMetadata(job: Job): Promise<void> {
   try {
     // 워커 → 서버 내부 호출. 인증(IAM ID 토큰 + 내부 토큰)은 factory 가 이미 풀어 둔 문제라
     // 복제하지 않고 그대로 쓴다 — 두 벌이 되면 한쪽만 고쳐지는 날이 온다.
-    const { apiBase, internalHeaders } = await import("./factory.ts");
+    const { apiBase, internalHeaders } = await import("./pipeline/factory.ts");
     const res = await fetch(`${apiBase()}/api/clips/${clipId}/generate-metadata`, {
       method: "POST", headers: await internalHeaders(),
     });
@@ -2609,7 +2609,7 @@ async function handleClipRender(job: Job): Promise<void> {
   if (!clipId) throw new Error("clip.render: clipId 없음");
   const channel = job.payload.channel ? String(job.payload.channel) : null;
 
-  const { apiBase, internalHeaders } = await import("./factory.ts");
+  const { apiBase, internalHeaders } = await import("./pipeline/factory.ts");
   const base = (process.env.RENDER_API_BASE || "").trim().replace(/\/+$/, "") || apiBase();
   const res = await fetch(`${base}/api/clips/${clipId}/export`, {
     method: "POST",

@@ -13,7 +13,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
 
-import { normalizeReserveDate } from "../publish-dispatch.ts";
+import { normalizeReserveDate } from "../publish/publish-dispatch.ts";
 
 const SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -58,7 +58,7 @@ describe("예약 문자열은 KST 로 해석한다", () => {
 });
 
 describe("배포 행의 계정 정체성 — dispatchPublish 소스 스캔", () => {
-  const src = fs.readFileSync(path.join(SRC, "publish-dispatch.ts"), "utf-8");
+  const src = fs.readFileSync(path.join(SRC, "publish/publish-dispatch.ts"), "utf-8");
 
   it("정체성 필드에 upload 모드 조건이 없다 — record 행에도 계정이 남아야 한다", () => {
     // `mode === "upload" && input.tiktokOpenId` 류가 되살아나면 게이트 OFF 의 record

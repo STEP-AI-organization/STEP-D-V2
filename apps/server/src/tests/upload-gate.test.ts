@@ -18,7 +18,7 @@ import {
   UPLOAD_DISABLED_CODE,
   UploadDisabledError,
   youtubeUploadEnabled,
-} from "../upload-gate.ts";
+} from "../publish/upload-gate.ts";
 
 const KEY = "YOUTUBE_UPLOAD_ENABLED";
 const original = process.env[KEY];

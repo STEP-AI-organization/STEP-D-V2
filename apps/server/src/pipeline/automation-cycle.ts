@@ -36,9 +36,9 @@ import {
   hasRunNote,
   publishedTodayKst,
   withTenantLock,
-} from "./db-pg.ts";
-import { currentTenantId } from "./auth/tenant.ts";
-import { maybeAutoTopup } from "./billing/auto-topup.ts";
+} from "../db-pg.ts";
+import { currentTenantId } from "../auth/tenant.ts";
+import { maybeAutoTopup } from "../billing/auto-topup.ts";
 import {
   AUTO_RENDER_STOPPED_NOTE, CREDIT_IDLE_REASON, CREDIT_STOP_NOTE, DEFAULT_RULE_THUMBNAIL_MODE,
   LAST_CYCLE_KEY, episodeAdoptCap,
@@ -57,18 +57,18 @@ import {
 } from "./automation.ts";
 import {
   youtubeUploadEnabled, tiktokUploadEnabled, instagramUploadEnabled, facebookUploadEnabled,
-} from "./upload-gate.ts";
-import { naverUploadEnabled } from "./naver/naver-gate.ts";
+} from "../publish/upload-gate.ts";
+import { naverUploadEnabled } from "../naver/naver-gate.ts";
 import {
   SHORTFORM_MAX_SEC, autoRenderChannel, eligibility, nextPublishSlot,
   normalizePublishDelayMin, shortformSegmentTooLong, type ChannelRule,
-} from "./channel-rules.ts";
-import { maybeFlushAutoPublishReport } from "./publish-notify.ts";
-import { newId } from "./pipeline.ts";
+} from "../publish/channel-rules.ts";
+import { maybeFlushAutoPublishReport } from "../publish/publish-notify.ts";
+import { newId } from "../ids.ts";
 import { enqueue, lastJobByDedupe, oldestPendingAgeForType } from "./queue.ts";
-import { distributionAccountId, hasAccountDistribution, hasFailedAccountDistribution } from "./publish-guard.ts";
-import { dispatchPublish } from "./publish-dispatch.ts";
-import { basicReframeState, effectiveReframeState } from "./media/reframe.ts";
+import { distributionAccountId, hasAccountDistribution, hasFailedAccountDistribution } from "../publish/publish-guard.ts";
+import { dispatchPublish } from "../publish/publish-dispatch.ts";
+import { basicReframeState, effectiveReframeState } from "../media/reframe.ts";
 
 /**
  * AI 리프레임이 이만큼 진행이 없으면 죽은 것으로 보고 기본 크롭으로 강등한다.
@@ -163,7 +163,7 @@ async function runAutomationCycleLocked(): Promise<CycleReport> {
       // 담당자 메일 — **자동 충전으로 살아난 경우엔 여기 오지 않는다**(위에서 이어감).
       // 실행 로그와 같은 하루 한 줄 가드 안이라 순방(15분)마다 쌓이지 않는다.
       // 하루 20건이 도는 계정에서 이 침묵은 곧 하루치 손실이다(사용자 2026-08-26).
-      const { notifyAutomationCreditStop } = await import("./billing/billing-notify.ts");
+      const { notifyAutomationCreditStop } = await import("../billing/billing-notify.ts");
       void notifyAutomationCreditStop();
     }
     return {

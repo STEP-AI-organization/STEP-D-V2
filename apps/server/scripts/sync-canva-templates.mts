@@ -14,7 +14,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { initDb } from "../src/db-pg.ts";
-import { listCanvaFolders, listDesignsInFolder, exportDesignPng } from "../src/canva.ts";
+import { listCanvaFolders, listDesignsInFolder, exportDesignPng } from "../src/ai/canva.ts";
 
 const FOLDER_NAME = process.env.CANVA_TEMPLATE_FOLDER ?? "유튜브 쇼츠 템플릿";
 const ROOT = path.resolve(fileURLToPath(import.meta.url), "../../../../assets/shorts-template");

@@ -17,7 +17,7 @@ import {
   isUndecided,
   mediaListFrom,
   recommendationOutcome,
-} from "../media-origin.ts";
+} from "../pipeline/media-origin.ts";
 
 const SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const sources = () => sourceFiles(SRC);
@@ -99,7 +99,7 @@ describe("아키텍처 — 미디어를 만드는 경로", () => {
     // 2026-08-11: index.ts(사람) · factory.ts(공장) 두 벌이던 것을 adopt.ts 로 모았다.
     // 그 전에는 factory 경로가 **이슈 승계를 안 했다** — 경로가 둘이면 한쪽만 고치게 된다.
     const hits = sources()
-      .filter((f) => f !== "adopt.ts") // 유일한 정당 호출처
+      .filter((f) => f !== "pipeline/adopt.ts") // 유일한 정당 호출처
       .flatMap((f) => scan(f, /\bcommitAdoption\s*\(/))
       // db-pg.ts 의 선언부는 호출이 아니다.
       .filter((h) => {
@@ -115,7 +115,7 @@ describe("아키텍처 — 미디어를 만드는 경로", () => {
   // (사용자 결정: "실전에서 필요가 없음" · 근거: rights_issue 0행 · blocked 1건).
   // 남은 불변식은 **채택이 곧 커밋을 거친다**는 것뿐이다.
   it("채택은 커밋을 반드시 거친다", () => {
-    const src = fs.readFileSync(path.join(SRC, "adopt.ts"), "utf-8");
+    const src = fs.readFileSync(path.join(SRC, "pipeline/adopt.ts"), "utf-8");
     const fn = /export async function commitAndInherit[\s\S]*?\n}/.exec(src)?.[0] ?? "";
     assert.notEqual(fn, "", "commitAndInherit 가 없다");
     assert.match(fn, /commitAdoption\s*\(/, "커밋을 안 한다");
@@ -123,12 +123,12 @@ describe("아키텍처 — 미디어를 만드는 경로", () => {
 
   it("채택 경로는 세 곳뿐이다 — 사람 · 공장 · 자동 배포 규칙", () => {
     const hits = sources()
-      .filter((f) => f !== "adopt.ts")
+      .filter((f) => f !== "pipeline/adopt.ts")
       .flatMap((f) => scan(f, /\bcommitAndInherit\s*\(/));
     const files = [...new Set(hits.map((h) => h.split(":")[0]))].sort();
     assert.deepEqual(
       files,
-      ["automation-cycle.ts", "factory.ts", "index.ts"],
+      ["index.ts", "pipeline/automation-cycle.ts", "pipeline/factory.ts"],
       `채택 경로가 달라졌다: ${hits.join(" · ")}`,
     );
   });
@@ -138,12 +138,12 @@ describe("아키텍처 — 자동 배포 순방은 테넌트 안에서만 돈다
   it("순방 평가에 시스템 스코프(runAsSystem)가 없다", () => {
     // 시스템 스코프로 돌리면 RLS 가 전 테넌트 행을 보여주고, A 워크스페이스의 규칙이
     // B 의 채널로 나갈 수 있다. 팬아웃(테넌트 목록 읽기)만 워커가 시스템으로 한다.
-    const hits = scan("automation-cycle.ts", /runAsSystem|ALL_TENANTS/);
+    const hits = scan("pipeline/automation-cycle.ts", /runAsSystem|ALL_TENANTS/);
     assert.deepEqual(hits, [], `순방이 테넌트 격리를 벗어난다: ${hits.join(" · ")}`);
   });
 
   it("순방은 사람이 누르는 배포와 같은 관문을 쓴다", () => {
-    const src = fs.readFileSync(path.join(SRC, "automation-cycle.ts"), "utf-8");
+    const src = fs.readFileSync(path.join(SRC, "pipeline/automation-cycle.ts"), "utf-8");
     assert.match(src, /dispatchPublish\s*\(/, "관문을 안 지난다");
   });
 });

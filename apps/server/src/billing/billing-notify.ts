@@ -13,7 +13,7 @@
  *  3. **베스트 에포트.** 어떤 실패도 던지지 않는다 — 알림은 부속이고 충전 판정이 본체다.
  */
 import { getAutomationSetting, getBillingNotifyEmails } from "../db-pg.ts";
-import { NOTIFY_EMAIL_KEY } from "../automation.ts";
+import { NOTIFY_EMAIL_KEY } from "../pipeline/automation.ts";
 import type { AutoTopupAlert } from "./credits.ts";
 import { mailConfigured, sendMail } from "../mailer.ts";
 

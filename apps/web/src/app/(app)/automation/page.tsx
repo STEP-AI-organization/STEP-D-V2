@@ -27,7 +27,7 @@ import type { AdoptReframe } from "@/components/adopt-dialog";
 import {
   UPLOAD_PLATFORMS, formatWeekdays, isPublishDay, monthlyPublishEstimate, perDayCount, ruleSlots,
   slotLabel, type RuleSlot,
-} from "@server-pure/automation";
+} from "@server-pure/pipeline/automation";
 import {
   LayoutSliders,
   SUBTITLE_DEFAULTS,

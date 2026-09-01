@@ -10,7 +10,7 @@
  */
 import readline from "node:readline";
 import { initDb, getRawPool } from "../src/db-pg.ts";
-import { createUser, findUserByEmail, passwordProblem, setPassword } from "../src/auth.ts";
+import { createUser, findUserByEmail, passwordProblem, setPassword } from "../src/auth/auth.ts";
 
 function arg(name: string): string | undefined {
   const i = process.argv.indexOf(`--${name}`);

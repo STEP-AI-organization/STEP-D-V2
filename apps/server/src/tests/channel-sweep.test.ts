@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { shouldSweepChannel } from "../channel-pipeline.ts";
+import { shouldSweepChannel } from "../pipeline/channel-pipeline.ts";
 
 /**
  * 채널 스윕 게이트 — **15분마다 깨는 스윕이 6시간짜리 주기를 상대로 헛돌지 않게** 한다.

@@ -9,7 +9,7 @@ import {
   categoryForGenre,
   DEFAULT_CATEGORY,
 } from "../naver/naver-categories.ts";
-import { genrePackFor } from "../clip-metadata.ts";
+import { genrePackFor } from "../pipeline/clip-metadata.ts";
 
 describe("네이버 클립 카테고리 — 틀린 분류로 발행되지 않는다", () => {
   it("분류표가 비어 있지 않고, 1차마다 2차가 최소 하나는 있다", () => {
@@ -77,7 +77,7 @@ describe("네이버 클립 카테고리 — 틀린 분류로 발행되지 않는
   // 안 보이고, 발행된 클립을 네이버에서 봐야만 알 수 있는 종류의 버그다.
   it("자동배포는 카테고리를 박아 넘기지 않는다 — 워커가 프로그램·장르로 푼다", () => {
     const here = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-    const src = readFileSync(path.join(here, "automation-cycle.ts"), "utf8");
+    const src = readFileSync(path.join(here, "pipeline/automation-cycle.ts"), "utf8");
     const hardcoded = src.match(/naverCategory\s*:\s*\{[^}]*primary/);
     assert.equal(
       hardcoded, null,

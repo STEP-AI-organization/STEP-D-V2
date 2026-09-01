@@ -523,7 +523,7 @@ describe("자동 충전 상한 알림은 기간이 지나면 만료된다", () =
  * 그래서 **실제로 분석을 시작하는 한 지점**에서 다시 재야 한다.
  */
 describe("분석 시작 길목이 잔액을 다시 잰다 (소스 스캔)", () => {
-  const pipe = fs.readFileSync(path.join(SRC, "content-pipeline.ts"), "utf-8");
+  const pipe = fs.readFileSync(path.join(SRC, "pipeline/content-pipeline.ts"), "utf-8");
   const fn = pipe.match(/export async function runContentAnalyze[\s\S]*?\n\}/)?.[0] ?? "";
 
   it("runContentAnalyze 가 시작 전에 checkCredits 로 판정한다", () => {
@@ -565,7 +565,7 @@ describe("분석 시작 길목이 잔액을 다시 잰다 (소스 스캔)", () =
  * 통과와 차감이 같은 값을 읽으므로 "무료 실행" 이 구조적으로 가능해지는 게 핵심이다.
  */
 describe("길이를 모르면 통과가 아니라 확정 대상이다 (소스 스캔)", () => {
-  const pipe = fs.readFileSync(path.join(SRC, "content-pipeline.ts"), "utf-8");
+  const pipe = fs.readFileSync(path.join(SRC, "pipeline/content-pipeline.ts"), "utf-8");
   const fn = pipe.match(/export async function runContentAnalyze[\s\S]*?\n\}/)?.[0] ?? "";
   const workerSrc = fs.readFileSync(path.join(SRC, "worker.ts"), "utf-8");
   const indexSrc = fs.readFileSync(path.join(SRC, "index.ts"), "utf-8");

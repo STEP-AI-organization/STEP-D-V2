@@ -19,16 +19,16 @@
  *   3. 일일 상한        프로그램당 하루 N개 (기본 5) — 같은 영상 20번 올라가는 사고 방지
  *   4. private 업로드   → 유예 후 공개 전환 (factory.publicize). 되돌리기 = 전환 취소
  */
-import { creditBalance, getEntity, putEntity, listEntities, listMedia } from "./db-pg.ts";
-import { checkCredits } from "./billing/credits.ts";
-import { billableMinutes } from "./billing/billing.ts";
+import { creditBalance, getEntity, putEntity, listEntities, listMedia } from "../db-pg.ts";
+import { checkCredits } from "../billing/credits.ts";
+import { billableMinutes } from "../billing/billing.ts";
 import { commitAndInherit } from "./adopt.ts";
-import { dispatchPublish } from "./publish-dispatch.ts";
-import { newId } from "./pipeline.ts";
+import { dispatchPublish } from "../publish/publish-dispatch.ts";
+import { newId } from "../ids.ts";
 import { enqueue } from "./queue.ts";
-import { basicReframeState } from "./media/reframe.ts";
-import { FONT_FAMILIES } from "./media/overlay-canvas.ts";
-import { SHORTFORM_MAX_SEC, autoRenderChannel, shortformSegmentTooLong } from "./channel-rules.ts";
+import { basicReframeState } from "../media/reframe.ts";
+import { FONT_FAMILIES } from "../media/overlay-canvas.ts";
+import { SHORTFORM_MAX_SEC, autoRenderChannel, shortformSegmentTooLong } from "../publish/channel-rules.ts";
 
 const TRUTHY = new Set(["1", "true", "yes", "on"]);
 
@@ -144,7 +144,7 @@ export async function internalHeaders(): Promise<Record<string, string>> {
   const token = process.env.INTERNAL_API_TOKEN;
   if (token) {
     h["x-internal-token"] = token;
-    const { currentTenantId } = await import("./auth/tenant.ts");
+    const { currentTenantId } = await import("../auth/tenant.ts");
     try { h["x-tenant-id"] = currentTenantId(); } catch { /* 컨텍스트 없으면 기본 테넌트 */ }
   }
   const aud = apiBase();
@@ -218,7 +218,7 @@ async function save(job: FactoryJob): Promise<FactoryJob> {
  * 이 null 이면 경고만 남기고 drop) 공장은 "배포됨"으로 끝나 버린다. 그게 가장 나쁜 실패다.
  */
 export async function validateTargets(targets: string[]): Promise<string[]> {
-  const { listYouTubeChannels } = await import("./db-pg.ts");
+  const { listYouTubeChannels } = await import("../db-pg.ts");
   const channels = await listYouTubeChannels();
   const problems: string[] = [];
 
@@ -231,7 +231,7 @@ export async function validateTargets(targets: string[]): Promise<string[]> {
     if ((ch as any).status !== "active" || !(ch as any).refreshToken) {
       problems.push(`${t}: 연결이 끊겼습니다 (재연동 필요)`); continue;
     }
-    const { scopeCanPublish } = await import("./youtube.ts");
+    const { scopeCanPublish } = await import("../youtube.ts");
     if (!scopeCanPublish((ch as any).scope)) {
       problems.push(`${t}: 업로드 권한 없음 (분석 전용으로 연결됨 — 게시 모드로 재연결 필요)`);
     }
@@ -355,7 +355,7 @@ export async function advance(factoryJobId: string): Promise<{ job: FactoryJob; 
     const verdict = checkCredits({ balance: await creditBalance(), needMinutes: need });
     if (verdict.allow) return null;
     // 부족 → 저장 카드 자동 충전 시도 후 재판정 (라우트 402 게이트와 같은 방향 · ENA 스펙).
-    const { topupAndRecheck } = await import("./billing/auto-topup.ts");
+    const { topupAndRecheck } = await import("../billing/auto-topup.ts");
     const retried = await topupAndRecheck(need);
     if (retried?.allow) return null;
     return (retried ?? verdict).reason;
@@ -394,7 +394,7 @@ export async function advance(factoryJobId: string): Promise<{ job: FactoryJob; 
           return { job, retryInMs: 30_000 };
         }
 
-        const { getContentAnalysis } = await import("./db-pg.ts");
+        const { getContentAnalysis } = await import("../db-pg.ts");
         const analysis = await getContentAnalysis((existing as any).id).catch(() => null);
         const analyzed = (analysis as any)?.status === "done";
         if (!analyzed) {
@@ -429,7 +429,7 @@ export async function advance(factoryJobId: string): Promise<{ job: FactoryJob; 
         return { job, retryInMs: 30_000 };
       }
       // queued 분기와 같은 이유 — 분석이 이미 있으면 재큐잉(=재차감)하지 않는다.
-      const { getContentAnalysis } = await import("./db-pg.ts");
+      const { getContentAnalysis } = await import("../db-pg.ts");
       const analysis = await getContentAnalysis(job.mediaId!).catch(() => null);
       const analyzed = (analysis as any)?.status === "done";
       if (!analyzed) {

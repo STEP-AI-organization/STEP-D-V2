@@ -22,7 +22,7 @@ const SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const claim = () =>
   // 이 리포 파일은 CRLF 라 `}` 다음이 `\r` 이다. `\r?` 를 빼면 아무것도 안 잡힌다.
   new RegExp("async function claimJobInner[\\s\\S]*?\\n\\}(?=\\r?\\n)").exec(
-    fs.readFileSync(path.resolve(SRC, "queue.ts"), "utf-8"),
+    fs.readFileSync(path.resolve(SRC, "pipeline/queue.ts"), "utf-8"),
   )?.[0] ?? "";
 
 describe("claim 정렬", () => {

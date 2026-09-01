@@ -23,7 +23,7 @@ import {
   PUBLISH_SLOT_MIN,
   type ChannelRule,
   type MediaFacts,
-} from "../channel-rules.ts";
+} from "../publish/channel-rules.ts";
 
 const SRC_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -226,7 +226,7 @@ describe("공개 유예 (publishDelayMin)", () => {
   });
 
   it("순방 예약 계약 — 비-public 도 슬롯 시각을 보존하고, publishAt(공개 전환)은 public 에만", () => {
-    const src = fs.readFileSync(path.join(SRC_DIR, "automation-cycle.ts"), "utf-8");
+    const src = fs.readFileSync(path.join(SRC_DIR, "pipeline/automation-cycle.ts"), "utf-8");
     // ⚠️ `\n\}` 만으로 끊으면 **반환 타입 객체**가 `\n} {` 로 끝나 시그니처에서 잘린다 —
     //    본문 단언이 전부 헛돈다. 줄 끝까지(`\n}\n`) 봐야 함수 전체가 잡힌다.
     const fn = src.match(/function youtubeReleasePlan[\s\S]*?\n\}\r?\n/)?.[0] ?? "";
@@ -241,7 +241,7 @@ describe("공개 유예 (publishDelayMin)", () => {
     // 공개 범위 뒤집힘 방지의 정본은 dispatch — 유튜브 네이티브 publishAt(private 로
     // 잡았다가 그 시각에 **공개**로 끝남)은 public 목표에만 걸고, 비-public 예약은
     // 잡 지연(scheduleDelay)으로 풀어 업로드 시각만 맞춘다.
-    const dispatch = fs.readFileSync(path.join(SRC_DIR, "publish-dispatch.ts"), "utf-8");
+    const dispatch = fs.readFileSync(path.join(SRC_DIR, "publish/publish-dispatch.ts"), "utf-8");
     assert.match(dispatch, /nativeSchedule = input\.scheduled && input\.privacy === "public"/,
       "publishAt 이 public 목표에만 걸린다는 보증이 사라졌다");
     assert.match(dispatch, /publishAt: nativeSchedule \? reserveDate : undefined/,
@@ -249,7 +249,7 @@ describe("공개 유예 (publishDelayMin)", () => {
   });
 
   it("예약 시각은 오프셋이 박힌 ISO 로 넘긴다 (KST 해석 여지 없이)", () => {
-    const src = fs.readFileSync(path.join(SRC_DIR, "automation-cycle.ts"), "utf-8");
+    const src = fs.readFileSync(path.join(SRC_DIR, "pipeline/automation-cycle.ts"), "utf-8");
     // normalizeReserveDate 는 오프셋 없는 문자열을 KST 로 읽는다 — 로컬 포맷을 넘기면 9시간 어긋난다.
     assert.match(src, /nextPublishSlot\(Date\.now\(\) \+ delayMin \* 60_000\)/,
       "예약 시각을 5분 격자로 안 올리면 유튜브가 거부할 수 있다");

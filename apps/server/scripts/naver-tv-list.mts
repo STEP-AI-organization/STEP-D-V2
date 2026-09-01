@@ -1,5 +1,5 @@
 /** 네이버 TV 콘텐츠 목록 상태 확인 — 초안인지 공개인지. */
-import { openNaverContext } from "../src/naver-tv.ts";
+import { openNaverContext } from "../src/naver/naver-tv.ts";
 const { browser, ctx } = await openNaverContext(false);
 const page = await ctx.newPage();
 page.setDefaultTimeout(45_000);

@@ -15,7 +15,7 @@
  *  3. **사람이 편집기에서 손댄 값은 보존한다.** 트림·훅 문구는 계획의 모양이 아니라 그 클립의
  *     결정이다. 계획을 바꿨다고 남의 편집을 지우면 안 된다.
  */
-import { getEntity, listEntities, putEntity } from "./db-pg.ts";
+import { getEntity, listEntities, putEntity } from "../db-pg.ts";
 
 /** 계획에서 '모양' 에 해당하는 것들. 이 지문이 바뀔 때만 다시 찍는다. */
 export function layoutFingerprint(rule: {

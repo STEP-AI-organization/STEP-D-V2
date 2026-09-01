@@ -50,8 +50,8 @@ import {
   type GateSnapshot,
   type RuleIdleCode,
   type RuleIdleObservation,
-} from "../automation.ts";
-import { channelPublishMode } from "../publish-guard.ts";
+} from "../pipeline/automation.ts";
+import { channelPublishMode } from "../publish/publish-guard.ts";
 
 describe("이미 내보낸 구간은 다시 채택하지 않는다 (재분석 중복 배포 방지)", () => {
   // 재분석은 추천을 **새 ID** 로 다시 만든다 — "채택됨" 표식이 사라지므로 구간 겹침으로
@@ -82,7 +82,7 @@ describe("이미 내보낸 구간은 다시 채택하지 않는다 (재분석 �
 
   it("순방이 이 가드를 실제로 통과시킨다 — 소스 배선 고정", () => {
     const src = fs.readFileSync(
-      path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "automation-cycle.ts"), "utf-8");
+      path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "pipeline/automation-cycle.ts"), "utf-8");
     assert.match(src, /overlapsExistingClip\(/,
       "automation-cycle 이 구간 겹침 가드를 부르지 않으면 재분석 시 중복 배포가 재발한다");
   });
@@ -90,7 +90,7 @@ describe("이미 내보낸 구간은 다시 채택하지 않는다 (재분석 �
 
 describe("자동 배포도 채널별 메타데이터를 만든 뒤 나간다", () => {
   const src = fs.readFileSync(
-    path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "automation-cycle.ts"), "utf-8");
+    path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "pipeline/automation-cycle.ts"), "utf-8");
 
   it("채택 직후 clip.metadata 잡을 큐잉한다 — 수동 채택과 같은 배선", () => {
     assert.match(src, /enqueue\("clip\.metadata"/,
@@ -145,17 +145,17 @@ describe("채널 제한을 푼 대신 중복은 배포 행이 막는다", () => 
 
   it("순방은 **배포 행**으로 중복을 막는다 — 계획이 아니라", () => {
     // 채널을 공유하는 계획이 둘이어도, 이미 그 계정으로 나간 클립은 다시 안 나간다.
-    const cycle = fs.readFileSync(path.join(SRC, "automation-cycle.ts"), "utf-8");
+    const cycle = fs.readFileSync(path.join(SRC, "pipeline/automation-cycle.ts"), "utf-8");
     assert.match(cycle, /hasAccountDistribution\(clip\.distributions, chan\.platform, chan\.accountId\)/,
       "클립 단위 중복 가드가 없으면 채널 공유가 곧 중복 게시가 된다");
-    const guard = fs.readFileSync(path.join(SRC, "publish-guard.ts"), "utf-8");
+    const guard = fs.readFileSync(path.join(SRC, "publish/publish-guard.ts"), "utf-8");
     assert.match(guard, /export function hasAccountDistribution/, "중복 판정 정본이 없다");
   });
 });
 
 describe("자동 확인은 테넌트당 한 번만 실행된다", () => {
   it("예약 순방과 지금 확인이 겹쳐도 같은 영상을 두 번 큐잉하지 않는다", () => {
-    const src = fs.readFileSync(path.join(SRC, "automation-cycle.ts"), "utf-8");
+    const src = fs.readFileSync(path.join(SRC, "pipeline/automation-cycle.ts"), "utf-8");
     const entry = src.match(/export async function runAutomationCycle[\s\S]*?\n\}/)?.[0] ?? "";
     assert.match(entry, /withTenantLock\(`automation-cycle:\$\{tenantId\}`/,
       "큐 dedupe 만으로는 API 직접 실행과 예약 순방의 동시 실행을 막지 못한다");
@@ -231,13 +231,13 @@ describe("하루 배포 개수는 계획 단위 — publishedTodayKst 소스 스
 
   it("한도를 판정하는 세 호출부가 전부 rule.id 를 넘긴다", () => {
     // 하나라도 빠지면 화면 숫자·순방 판정·리포트 목표가 서로 다른 축을 세게 된다.
-    const cycle = fs.readFileSync(path.join(SRC, "automation-cycle.ts"), "utf-8");
+    const cycle = fs.readFileSync(path.join(SRC, "pipeline/automation-cycle.ts"), "utf-8");
     assert.match(cycle, /publishedTodayKst\(accountKey, rule\.id\)/,
       "순방이 채널 총합으로 한도를 본다 — 계획별 개수가 안 지켜진다");
     const index = fs.readFileSync(path.join(SRC, "index.ts"), "utf-8");
     assert.match(index, /publishedTodayKst\(key, rule\.id\)/,
       "화면의 '오늘 N/M' 이 순방과 다른 수를 보여준다");
-    const notify = fs.readFileSync(path.join(SRC, "publish-notify.ts"), "utf-8");
+    const notify = fs.readFileSync(path.join(SRC, "publish/publish-notify.ts"), "utf-8");
     const calls = notify.match(/publishedTodayKst\([^)]*\)/g) ?? [];
     assert.ok(calls.length >= 2, "리포트의 publishedTodayKst 호출을 못 찾았다");
     for (const call of calls) {
@@ -272,7 +272,7 @@ describe("승인 대기는 영상 하나당 한 줄", () => {
   it("순방은 이미 열린 보류를 다시 쓰지 않는다 — 최초 사유가 보존돼야 한다", () => {
     // 덮어쓰면 두 번째 순방부터 사유가 "보류 상태입니다 — 사람이 확정해야…" 동어반복으로
     // 바뀌어, 승인 대기 화면이 **왜** 멈춰 있는지 말해주지 못한다.
-    const src = fs.readFileSync(path.join(SRC, "automation-cycle.ts"), "utf-8");
+    const src = fs.readFileSync(path.join(SRC, "pipeline/automation-cycle.ts"), "utf-8");
     assert.match(src, /if \(!held\) await holdClip\(rule\.id, clip\.id, decision\.reason\)/,
       "이미 보류 중인데 holdClip 을 다시 부르면 최초 보류 사유가 덮인다");
   });
@@ -324,7 +324,7 @@ describe("승인 대기는 영상 하나당 한 줄", () => {
 });
 
 describe("순방 배선 — automation-cycle 소스 스캔", () => {
-  const src = fs.readFileSync(path.join(SRC, "automation-cycle.ts"), "utf-8");
+  const src = fs.readFileSync(path.join(SRC, "pipeline/automation-cycle.ts"), "utf-8");
 
   it("채택 직후 렌더를 건다 — 안 걸면 not_rendered 로 매 순방 스킵되어 자동 게시가 0건", () => {
     assert.match(src, /requestAutoRender\(clipId, channel\)/,
@@ -384,7 +384,7 @@ describe("채택 형태(방향·AI 리프레임) — 계획 저장 왕복", () =
 });
 
 describe("채택 형태 순방 배선 — automation-cycle 소스 스캔", () => {
-  const src = fs.readFileSync(path.join(SRC, "automation-cycle.ts"), "utf-8");
+  const src = fs.readFileSync(path.join(SRC, "pipeline/automation-cycle.ts"), "utf-8");
 
   it("계획 방향이 클립 aspectRatio 에 수동 채택과 같은 매핑으로 적용된다", () => {
     assert.match(src, /rule\.orientation === "landscape"/,
@@ -418,7 +418,7 @@ describe("채택 형태 순방 배선 — automation-cycle 소스 스캔", () =>
   it("클립도 자동배포 후보가 된다 — core 의 type 을 서버가 kind 로 보존한다", () => {
     // 예전엔 recFromShort 가 전부 kind:"short" 로 못박아, 계획에서 '클립'을 골라도
     // selectCandidates(kind !== "short")가 항상 0건이었다 — 클립은 나갈 수가 없었다.
-    const pipeline = fs.readFileSync(path.join(SRC, "content-pipeline.ts"), "utf-8");
+    const pipeline = fs.readFileSync(path.join(SRC, "pipeline/content-pipeline.ts"), "utf-8");
     assert.match(pipeline, /kind: isClip \? "clip" : "short"/,
       "core 의 type(clip/highlight)이 recommendation.kind 로 넘어오지 않는다");
     assert.match(pipeline, /s\.type === "clip" \|\| s\.type === "highlight"/);
@@ -446,7 +446,7 @@ describe("승인 배선 — automation-cycle 소스 스캔", () => {
    * 승인의 근거는 사람이 보류를 해제한 기록(released_at)이어야 한다.
    */
   it("automation-cycle 는 approved 에 released 기반 값을 넘긴다 (!held 금지)", () => {
-    const src = fs.readFileSync(path.join(SRC, "automation-cycle.ts"), "utf-8");
+    const src = fs.readFileSync(path.join(SRC, "pipeline/automation-cycle.ts"), "utf-8");
     assert.match(src, /hasReleasedHold\(/,
       "automation-cycle 이 보류 해제 기록(hasReleasedHold)을 읽지 않는다");
     assert.doesNotMatch(src, /approved:\s*!\s*held/,
@@ -900,14 +900,14 @@ describe("종류 판정은 한 벌이다 (matchesMediaKind)", () => {
     assert.equal(matchesMediaKind(rule({ mediaKind: "short" }), { id: "x", kind: "clip" }), false);
     assert.equal(matchesMediaKind(rule({ mediaKind: "clip" }), { id: "x", kind: "highlight" }), true);
     assert.equal(matchesMediaKind(rule({ mediaKind: "both" }), { id: "x", kind: "short" }), true);
-    const src = fs.readFileSync(path.join(SRC, "automation.ts"), "utf-8");
+    const src = fs.readFileSync(path.join(SRC, "pipeline/automation.ts"), "utf-8");
     const fn = src.match(/export function selectCandidates[\s\S]*?\n\}/)?.[0] ?? "";
     assert.match(fn, /matchesMediaKind\(rule, c\)/, "selectCandidates 가 종류 판정을 따로 갖고 있다");
   });
 });
 
 describe("유휴 사유 배선 — automation-cycle 소스 스캔", () => {
-  const src = fs.readFileSync(path.join(SRC, "automation-cycle.ts"), "utf-8");
+  const src = fs.readFileSync(path.join(SRC, "pipeline/automation-cycle.ts"), "utf-8");
   const RULE_LOOP = src.slice(
     src.indexOf("for (const rule of plan.rules)"), src.indexOf("\n  return report;"));
 
@@ -1095,7 +1095,7 @@ describe("렌더 실패는 확정된다 (지킬 수 없는 약속을 멈춘다)"
     // 벨트를 그대로 통과한다. waiting 으로 두면 카운터도 시계도 안 움직여서 매 순방 409,
     // autoRender 상태는 생기지도 않고, 로그엔 낙관 문구 한 줄만 평생 남는다.
     assert.equal(classifyRenderFailure(409, "reframe_plan_invalid"), "retryable");
-    const src = fs.readFileSync(path.join(SRC, "automation-cycle.ts"), "utf-8");
+    const src = fs.readFileSync(path.join(SRC, "pipeline/automation-cycle.ts"), "utf-8");
     assert.match(src, /rf\.status !== "ready"/,
       "리프레임 벨트 조건이 바뀌었다 — plan_invalid 를 누가 잡는지 다시 정해야 한다");
   });
@@ -1287,13 +1287,13 @@ describe("하루 발행 수는 서버와 같은 함수로만 낸다 (화면 스�
     assert.doesNotMatch(page, /p === "youtube" \|\| p\.startsWith\("naver"\)/,
       "화면이 실업로드 판정 사본을 갖고 있다 — 채널이 늘면 한쪽만 고쳐진다");
     // 그 목록이 실제로 export 되어 공유되는지도 확인한다(사본 금지의 반대편).
-    const auto = fs.readFileSync(path.join(SRC, "automation.ts"), "utf-8");
+    const auto = fs.readFileSync(path.join(SRC, "pipeline/automation.ts"), "utf-8");
     assert.match(auto, /export const UPLOAD_PLATFORMS/,
       "서버가 목록을 export 하지 않으면 화면은 사본을 만들 수밖에 없다");
   });
 
   it("그 함수는 서버의 순수 모듈에서 온다 — 화면이 자기 사본을 두지 않는다", () => {
-    assert.match(page, /from "@server-pure\/automation"/,
+    assert.match(page, /from "@server-pure\/pipeline\/automation"/,
       "화면이 자기 계산식을 들면 서버와 다른 수를 말하게 된다");
   });
 });
@@ -1328,7 +1328,7 @@ describe("자동배포 화면 책임 — 설정은 한곳에만 둔다", () => {
 });
 
 describe("렌더 벨트 배선 — automation-cycle 소스 스캔", () => {
-  const src = fs.readFileSync(path.join(SRC, "automation-cycle.ts"), "utf-8");
+  const src = fs.readFileSync(path.join(SRC, "pipeline/automation-cycle.ts"), "utf-8");
   const NOT_RENDERED = src.slice(
     src.indexOf('why.code === "not_rendered"'), src.indexOf("detail: why.reason"));
 
@@ -1401,7 +1401,7 @@ describe("렌더 실패 분류 어휘가 라우트와 같다 — index.ts 소스
 
 describe("승인 대기 거부 — 게시로 변하면 안 된다 (0044)", () => {
   const DBPG = fs.readFileSync(path.join(SRC, "db-pg.ts"), "utf-8");
-  const CYCLE = fs.readFileSync(path.join(SRC, "automation-cycle.ts"), "utf-8");
+  const CYCLE = fs.readFileSync(path.join(SRC, "pipeline/automation-cycle.ts"), "utf-8");
   const IDX = fs.readFileSync(path.join(SRC, "index.ts"), "utf-8");
 
   it("rejectHold 는 rejected_at 만 세운다 — released_at 을 건드리면 approve_first 가 뚫려 되레 게시된다", () => {
@@ -1439,7 +1439,7 @@ describe("입력 검증", () => {
     // 2026-08-17 실측: 쇼츠 score100 이 42.1~72.6 이라 score80 계획은 한 건도 안 내보냈다.
     // "계획은 켜져 있는데 아무것도 안 나간다" 가 이 리포 최빈 실패모드라 축 자체를 없앴다.
     // 되살아나면(선택지·분기) 같은 사고가 다시 난다 — 소스로 잠근다.
-    const auto = fs.readFileSync(path.join(SRC, "automation.ts"), "utf-8");
+    const auto = fs.readFileSync(path.join(SRC, "pipeline/automation.ts"), "utf-8");
     assert.doesNotMatch(auto, /criterion === "score85"/, "점수 하한 분기가 되살아났다");
     assert.match(auto, /RULE_CRITERIA = \["top3"\]/, "채택 기준은 하나여야 한다");
     const route = fs.readFileSync(path.join(SRC, "index.ts"), "utf-8");

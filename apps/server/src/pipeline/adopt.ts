@@ -13,8 +13,8 @@
 import {
   appendGateAudit,
   commitAdoption,
-} from "./db-pg.ts";
-import { newId } from "./pipeline.ts";
+} from "../db-pg.ts";
+import { newId } from "../ids.ts";
 
 /**
  * 채택을 커밋하고 이슈를 승계한다.

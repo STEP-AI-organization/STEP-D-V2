@@ -1,6 +1,6 @@
 /** TV 2차 카테고리 드롭다운만 정밀 관찰. */
 import path from "node:path"; import os from "node:os"; import fs from "node:fs";
-import { openNaverContext, NAVER_TARGETS } from "../src/naver-tv.ts";
+import { openNaverContext, NAVER_TARGETS } from "../src/naver/naver-tv.ts";
 const out = path.join(os.homedir(), ".stepd", "naver-probe");
 const { browser, ctx } = await openNaverContext(false);
 const page = await ctx.newPage();

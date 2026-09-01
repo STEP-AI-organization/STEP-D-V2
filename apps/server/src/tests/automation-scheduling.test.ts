@@ -15,7 +15,7 @@ import {
   slotsElapsed,
   slotsReadyForQueue,
   staleMissedSlots,
-} from "../automation.ts";
+} from "../pipeline/automation.ts";
 
 const kst = (value: string) => new Date(`${value}+09:00`);
 // 판정 함수들은 정규화된 슬롯(RuleSlot[])만 받는다 — 테스트도 같은 경로(ruleSlots)로 만든다.
@@ -103,7 +103,7 @@ describe("per-slot counts", () => {
     //    remaining 을 클램프하면 앞 슬롯을 건너뛰고 다음 틱이 같은 시각을 중복 배정(2026-08-26).
     // 순번은 publishedToday 에서 시작해 게시 성공마다 +1 하는 카운터여야 둘 다 안 밟는다.
     const src = fs.readFileSync(
-      path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "automation-cycle.ts"), "utf-8");
+      path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "pipeline/automation-cycle.ts"), "utf-8");
     assert.equal([...src.matchAll(/scheduledSlotAt\(slotted, slotIndex\)/g)].length, 2,
       "유튜브·비유튜브 두 자리 모두 slotIndex 카운터를 써야 한다");
     assert.match(src, /let slotIndex = /, "순번은 산식이 아니라 카운터여야 한다");
@@ -148,7 +148,7 @@ describe("틱당 게시 상한은 하루 몫에 비례한다 (2026-08-26)", () =
 
 describe("고아 클립 상속 — 게시와 상한이 같은 집합을 본다 (소스 스캔)", () => {
   const src = fs.readFileSync(
-    path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "automation-cycle.ts"), "utf-8");
+    path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "pipeline/automation-cycle.ts"), "utf-8");
 
   it("지워진 계획의 클립을 현재 계획이 상속한다", () => {
     // 계획을 지웠다 다시 만들면 옛 클립이 고아가 돼 아무 순방도 안 집었다

@@ -92,7 +92,7 @@ describe("배선 — 판정을 실제로 부르는가", () => {
 
 describe("잡 큐 — 정지된 회사의 잡은 안 돈다", () => {
   const claim = () =>
-    new RegExp("async function claimJobInner[\\s\\S]*?\\n}").exec(read("queue.ts"))?.[0] ?? "";
+    new RegExp("async function claimJobInner[\\s\\S]*?\\n}").exec(read("pipeline/queue.ts"))?.[0] ?? "";
 
   it("claim 이 회사 상태로 거른다", () => {
     const fn = claim();

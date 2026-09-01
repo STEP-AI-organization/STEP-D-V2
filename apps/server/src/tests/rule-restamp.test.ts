@@ -16,7 +16,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
 
-import { isPending, layoutFingerprint, mergeRestamped, PRESERVED_KEYS } from "../rule-restamp.ts";
+import { isPending, layoutFingerprint, mergeRestamped, PRESERVED_KEYS } from "../pipeline/rule-restamp.ts";
 
 const SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = (f: string) => fs.readFileSync(path.join(SRC, f), "utf-8");
@@ -100,7 +100,7 @@ describe("다시 찍기 병합 (mergeRestamped)", () => {
 
 describe("배선 (소스 스캔)", () => {
   const idx = read("index.ts");
-  const mod = read("rule-restamp.ts");
+  const mod = read("pipeline/rule-restamp.ts");
 
   it("갱신 **전에** 옛 모양을 읽는다 — 뒤에 읽으면 늘 같아서 영영 안 돈다", () => {
     const beforeAt = idx.indexOf("const before = (await listAutomationRules())");
@@ -131,7 +131,7 @@ describe("배선 (소스 스캔)", () => {
 
   it("순방과 같은 로고 기본값을 쓴다 — 다르면 '다시 찍었더니 처음과 모양이 다르다'", () => {
     assert.match(mod, /if \(layout\.logo === undefined\) layout\.logo = false;/);
-    assert.match(read("automation-cycle.ts"), /logo: \(rule as any\)\.layout\?\.logo \?\? false/);
+    assert.match(read("pipeline/automation-cycle.ts"), /logo: \(rule as any\)\.layout\?\.logo \?\? false/);
   });
 });
 
@@ -143,7 +143,7 @@ describe("배선 (소스 스캔)", () => {
  * 안 걸리고, 사람은 사유를 못 본 채 클립이 영영 안 나간다. **이 리포 최빈 실패모드의 변종**이다.
  */
 describe("렌더 큐 — 넣은 일의 결과를 되읽는다", () => {
-  const src = read("automation-cycle.ts");
+  const src = read("pipeline/automation-cycle.ts");
 
   it("지난 잡이 failed 면 그 실패를 순방에 돌려준다 — 성공으로 치지 않는다", () => {
     assert.match(src, /lastJobByDedupe\("clip\.render", dedupeKey\)/);

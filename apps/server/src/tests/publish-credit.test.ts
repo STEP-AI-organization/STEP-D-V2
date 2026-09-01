@@ -18,7 +18,7 @@ const SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = (f: string) => fs.readFileSync(path.join(SRC, f), "utf-8");
 
 describe("배포 크레딧 차감 (publish-dispatch)", () => {
-  const src = read("publish-dispatch.ts");
+  const src = read("publish/publish-dispatch.ts");
 
   it("upload 모드만 차감한다 — record(기록만)는 실물이 안 나가므로 무과금 · 0이면 무과금 스위치", () => {
     assert.match(src, /if \(mode === "upload" && publishCost > 0\) \{[\s\S]*?reason: "publish"/,

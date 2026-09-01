@@ -274,7 +274,7 @@ describe("자막 오버레이 기하 — 자동배포 미리보기 자막 기본
  * (wrapAutoTitle), 그 결과를 렌더/에디터가 또 접어 **3줄**이 됐다. 이제 titleLines 줄 수 =
  * 시각 줄 수여야 한다. 순수 함수로 증명 안 되는 배선 불변식이라 소스 스캔이다.
  */
-const FACTORY = fs.readFileSync(path.join(HERE, "factory.ts"), "utf-8");
+const FACTORY = fs.readFileSync(path.join(HERE, "pipeline/factory.ts"), "utf-8");
 const EDITOR_PRESETS = fs.readFileSync(
   path.resolve(HERE, "../../web/src/lib/editor/presets.ts"), "utf-8");
 
@@ -319,7 +319,7 @@ describe("무편집 렌더 기본 프리셋 — 편집기 초기값도 factory�
  * 소비처만 검사하는 테스트는 이 종류의 결함을 못 잡는다.
  */
 describe("제목 2줄 — core 산출물이 에디터까지 도달한다", () => {
-  const PIPELINE = fs.readFileSync(path.join(HERE, "content-pipeline.ts"), "utf-8");
+  const PIPELINE = fs.readFileSync(path.join(HERE, "pipeline/content-pipeline.ts"), "utf-8");
   const PRESETS_SRC = fs.readFileSync(path.resolve(HERE, "../../web/src/lib/editor/presets.ts"), "utf-8");
   const SHELL = fs.readFileSync(path.resolve(HERE, "../../web/src/components/editor/editor-shell.tsx"), "utf-8");
 

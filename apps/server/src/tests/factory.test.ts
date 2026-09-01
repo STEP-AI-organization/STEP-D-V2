@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import { afterEach, describe, it } from "node:test";
 
-import { autoEditorState, dailyCap, factoryEnabled, mediaNeedsPreparation, publicizeDelayMs } from "../factory.ts";
+import { autoEditorState, dailyCap, factoryEnabled, mediaNeedsPreparation, publicizeDelayMs } from "../pipeline/factory.ts";
 
 const KEYS = ["FACTORY_ENABLED", "FACTORY_DAILY_CAP", "FACTORY_PUBLICIZE_DELAY_MIN"] as const;
 const original = Object.fromEntries(KEYS.map((k) => [k, process.env[k]]));
@@ -157,7 +157,7 @@ describe("외부 API 원본 준비 대기", () => {
   });
 
   it("공장 배선이 준비 전 분석 대신 media.prepare를 복구 큐잉한다", () => {
-    const source = fs.readFileSync(new URL("../factory.ts", import.meta.url), "utf8");
+    const source = fs.readFileSync(new URL("../pipeline/factory.ts", import.meta.url), "utf8");
     assert.match(source, /if \(mediaNeedsPreparation\(existing as any\)\)[\s\S]*?enqueue\("media\.prepare"/);
     assert.match(source, /case "ingesting":[\s\S]*?mediaNeedsPreparation\(media\)[\s\S]*?enqueue\("media\.prepare"/);
   });

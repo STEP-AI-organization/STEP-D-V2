@@ -162,7 +162,7 @@ describe("AI reframe server wiring", () => {
     assert.match(db, /jsonb_set\(data, '\{reframe\}'/);
     assert.match(db, /data->'reframe'->>'inputFingerprint' = \$2/);
     assert.match(db, /data->'reframe'->>'requestId' = \$3/);
-    const pipeline = read("content-pipeline.ts");
+    const pipeline = read("pipeline/content-pipeline.ts");
     assert.doesNotMatch(pipeline.slice(0, pipeline.indexOf("async function downloadToTemp")),
       /putEntity\("clip"/,
       "reframe worker must not overwrite the full clip row");

@@ -37,7 +37,7 @@ describe("자동배포 layout — 화면 필드가 저장 화이트리스트에 
 
   it("화이트리스트의 숫자·색 필드는 factory 시드(layoutOverride)도 안다", () => {
     // 저장은 되는데 시드가 안 읽으면 결과물에 반영이 안 된다 — 반대 방향 파리티.
-    const factory = read("apps/server/src/factory.ts");
+    const factory = read("apps/server/src/pipeline/factory.ts");
     const typeBlock = /layoutOverride\?: \{([\s\S]*?)\}/.exec(factory)?.[1];
     assert.ok(typeBlock, "factory.ts 에서 layoutOverride 타입을 못 찾았다");
     for (const field of ["titleY", "channelIconY", "channelBoxY", "channelIconSize",

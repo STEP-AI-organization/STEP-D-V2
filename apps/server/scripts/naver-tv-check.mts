@@ -1,5 +1,5 @@
 /** 제목으로 검색해 공개 상태를 확인한다. */
-import { openNaverContext } from "../src/naver-tv.ts";
+import { openNaverContext } from "../src/naver/naver-tv.ts";
 const { browser, ctx } = await openNaverContext(false);
 const page = await ctx.newPage();
 page.setDefaultTimeout(45_000);

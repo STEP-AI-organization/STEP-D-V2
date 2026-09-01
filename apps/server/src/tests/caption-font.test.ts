@@ -102,7 +102,7 @@ describe("폰트가 렌더 이미지 안에 있어야 한다", () => {
  * 강조색 `#F3AF4F` 는 눈대중이 아니라 레퍼런스 쇼츠의 **글자 속 화소를 샘플링한 median** 이다.
  */
 describe("제목 — 지마켓 산스 + 레퍼런스 강조색", () => {
-  const factory = read("apps/server/src/factory.ts");
+  const factory = read("apps/server/src/pipeline/factory.ts");
   const webSeed = read("apps/web/src/app/(app)/automation/page.tsx");
   const ACCENT = "#F3AF4F";
 

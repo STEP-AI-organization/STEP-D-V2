@@ -19,12 +19,12 @@ import os from "node:os";
 import fs from "node:fs";
 import {
   openNaverContext, NAVER_TARGETS, pickCategory, setSchedule,
-} from "../src/naver-tv.ts";
-import { resolveCategory, DEFAULT_CATEGORY } from "../src/naver-categories.ts";
-import { hasNaverSession, materializeNaverSession } from "../src/naver-session.ts";
+} from "../src/naver/naver-tv.ts";
+import { resolveCategory, DEFAULT_CATEGORY } from "../src/naver/naver-categories.ts";
+import { hasNaverSession, materializeNaverSession } from "../src/naver/naver-session.ts";
 import { getNaverAccount, getNaverSessionBlob } from "../src/db-pg.ts";
-import { openSession } from "../src/naver-session-store.ts";
-import { runAsSystem } from "../src/tenant.ts";
+import { openSession } from "../src/naver/naver-session-store.ts";
+import { runAsSystem } from "../src/auth/tenant.ts";
 
 const arg = (name: string): string | undefined => {
   const i = process.argv.indexOf(`--${name}`);
