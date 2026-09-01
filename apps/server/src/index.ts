@@ -3986,7 +3986,13 @@ app.post("/api/media/clip-finalize", async (c) => {
   await promoteUpload(objectPath);
 
   const filename = typeof body.filename === "string" && body.filename ? String(body.filename) : `${mediaId}.mp4`;
-  const title = typeof body.title === "string" && body.title ? String(body.title) : filename;
+  // 제목 우선순위: 보낸 값 > (프리미어 경로) 그 추천의 제목 > 파일명.
+  // 파일명이 목록에 그대로 뜨면(stepd-export-1788….mp4) 사람이 뭘 올렸는지 못 알아본다.
+  const recForTitle = typeof body.recommendationId === "string" && body.recommendationId
+    ? await getEntity<any>("recommendation", String(body.recommendationId)) : null;
+  const title = typeof body.title === "string" && body.title
+    ? String(body.title)
+    : (recForTitle?.title ? String(recForTitle.title) : filename);
   const mime = typeof body.contentType === "string" && body.contentType ? String(body.contentType) : "video/mp4";
 
   const { size, meta, thumbStored, storedPath } = await prepareUploadedObject(mediaId, objectPath);

@@ -2262,7 +2262,11 @@ async function runUpload(source, programId, context) {
         size: source.size,
         // 제목은 **추천 제목**이 있으면 그걸 쓴다 — 파일명(stepd-export-….mp4)이 그대로
         // 배포 목록에 뜨면 사람이 뭘 올렸는지 못 알아본다.
-        title: (context && context.title) || source.name.replace(/\.[^.]+$/, ""),
+        // 우리가 모르면 **아예 안 보낸다** — 서버가 추천에서 물려받을 기회를 남긴다
+        // (추천 목록을 안 연 채 업로드 탭에서 바로 렌더하는 경우가 그렇다).
+        ...(context && context.title ? { title: context.title }
+            : context && context.recommendationId ? {}
+            : { title: source.name.replace(/\.[^.]+$/, "") }),
         // 어느 회차·추천에서 나온 편집본인지. 없으면 예전처럼 프로그램에만 붙는다.
         ...(context && context.episodeNumber !== undefined ? { episodeNumber: context.episodeNumber } : {}),
         ...(context && context.recommendationId ? { recommendationId: context.recommendationId } : {}),
