@@ -1137,6 +1137,15 @@ async function findMasterItemOnce(filename, use) {
 const DOWNLOAD_CHUNK = 16 * 1024 * 1024;
 
 /**
+ * 동시에 받는 조각 수. **한 줄로 받으면 왕복 지연이 그대로 시간이 된다** —
+ * 1.6GB 는 16MB 조각 100개고, 조각마다 요청→응답을 기다리면 그 대기가 100번 쌓인다.
+ * 4개를 미리 받아 두면 쓰는 동안 다음 조각이 이미 와 있다.
+ */
+const DOWNLOAD_LANES = 4;
+/** 조각 하나당 재시도. GB 단위에서 한 번 튄다고 처음부터 다시 받게 두면 안 된다. */
+const DOWNLOAD_RETRIES = 3;
+
+/**
  * **원본 영상**을 둘 폴더 — 사람이 한 번 고른다.
  *
  * 왜 묻나: 몇백 MB~GB 짜리라 편집자가 어디 쌓이는지 알아야 하고, 나중에 다른 프로젝트에서
@@ -1207,6 +1216,14 @@ function fetchRange(url, start, end) {
   });
 }
 
+/** 남은 시간 표기 — 초를 사람 말로. */
+function etaText(sec) {
+  if (!Number.isFinite(sec) || sec <= 0) return "";
+  if (sec < 60) return `${Math.ceil(sec)}초`;
+  const m = Math.floor(sec / 60);
+  return m < 60 ? `${m}분 ${Math.round(sec % 60)}초` : `${Math.floor(m / 60)}시간 ${m % 60}분`;
+}
+
 async function downloadMaster(mediaId, filename, onStage) {
   const folder = await mediaFolder();
 
@@ -1214,10 +1231,29 @@ async function downloadMaster(mediaId, filename, onStage) {
   const existing = await folder.getEntry(filename).catch(() => null);
 
   onStage("STEP-D 에서 원본 주소 받는 중…");
-  const { url } = await apiJson(`/media/${encodeURIComponent(mediaId)}/stream-url`);
-  if (!url) throw new Error("원본 주소를 받지 못했습니다.");
+  const streamUrl = async () => {
+    const { url } = await apiJson(`/media/${encodeURIComponent(mediaId)}/stream-url`);
+    if (!url) throw new Error("원본 주소를 받지 못했습니다.");
+    return url;
+  };
+  let url = await streamUrl();
 
-  const first = await fetchRange(url, 0, DOWNLOAD_CHUNK - 1);
+  // ⚠️ 서명 URL 은 시간이 지나면 만료된다. GB 단위는 **받는 도중에** 만료될 수 있으므로,
+  //    거절당하면 주소를 새로 받아 그 조각만 다시 받는다(처음부터 다시가 아니다).
+  const getChunk = async (start, end) => {
+    let lastErr = null;
+    for (let attempt = 0; attempt < DOWNLOAD_RETRIES; attempt += 1) {
+      try {
+        return await fetchRange(url, start, end);
+      } catch (err) {
+        lastErr = err;
+        if (/40[13]/.test(String(err.message))) url = await streamUrl();
+      }
+    }
+    throw lastErr || new Error("조각을 받지 못했습니다.");
+  };
+
+  const first = await getChunk(0, DOWNLOAD_CHUNK - 1);
   const total = first.total || first.buffer.byteLength;
 
   if (existing) {
@@ -1238,55 +1274,99 @@ async function downloadMaster(mediaId, filename, onStage) {
     else nodeFs = null;
   } catch (_) { nodeFs = null; }
 
-  if (!nodeFs || fd === null) {
-    // node fs 가 없는 빌드 — **UXP 파일 API 로 조각을 이어 쓴다.**
-    //
-    // 실측 2026-09-01: 이 프리미어에서 `require("fs")` 가 안 된다(같은 이유로 베이스 템플릿
-    // 자동 업로드도 실패했다). 예전 코드는 여기서 파일을 통째로 메모리에 담았고, 512MB 를
-    // 넘으면 아예 거절했다 — 회차 원본은 대부분 그보다 크다. 즉 **이 PC 에서는 원본을 못 받는
-    // 상태**였다.
-    //
-    // UXP File.write 는 `append: true` 를 받는다. 그런데 **지원하지 않는 빌드에서는 조용히
-    // 덮어쓴다** — 그러면 마지막 조각만 든 깨진 파일이 남는다. 그래서 첫 이어쓰기 직후
-    // **파일 크기를 확인**해서, 안 늘어나면 즉시 멈추고 사람에게 알린다.
-    let off = 0;
-    let buf = first.buffer;
-    let verified = false;
-    while (off < total) {
-      const opts = off === 0 ? { format: formats.binary } : { format: formats.binary, append: true };
-      await file.write(buf, opts);
-      off += buf.byteLength;
-
-      if (!verified && off > buf.byteLength) {
-        const meta = await file.getMetadata().catch(() => null);
-        if (meta && Number(meta.size) > 0 && Number(meta.size) < off) {
-          throw new Error("이 프리미어 버전은 파일 이어쓰기를 지원하지 않습니다 — "
-            + "원본을 직접 프로젝트로 가져온 뒤 다시 눌러 주세요.");
-        }
-        verified = true;
-      }
-
-      onStage(`원본 받는 중… ${Math.round((off / total) * 100)}% (${(total / 1073741824).toFixed(1)}GB)`);
-      if (off >= total) break;
-      buf = (await fetchRange(url, off, Math.min(off + DOWNLOAD_CHUNK, total) - 1)).buffer;
+  // 쓰기 두 갈래를 **한 루프**로 합친다 — 예전엔 갈래마다 루프가 따로 있어서, 병렬·재시도·
+  // 진행률 같은 걸 고칠 때마다 두 군데를 똑같이 고쳐야 했다(한쪽만 고치면 조용히 갈라진다).
+  //
+  // node fs 가 없는 빌드가 실재한다(2026-09-01 이 프리미어). 그때는 UXP File.write 의
+  // `append: true` 로 이어 쓴다. 그런데 **지원하지 않는 빌드에서는 조용히 덮어쓴다** —
+  // 마지막 조각만 든 깨진 파일이 남으므로, 첫 이어쓰기 직후 파일 크기를 확인해 즉시 멈춘다.
+  let appendChecked = false;
+  const writeChunk = async (buf, off) => {
+    if (nodeFs && fd !== null) {
+      nodeFs.writeSync(fd, new Uint8Array(buf), 0, buf.byteLength, off);
+      return;
     }
-    return file;
-  }
+    await file.write(buf, off === 0 ? { format: formats.binary } : { format: formats.binary, append: true });
+    if (!appendChecked && off > 0) {
+      const meta = await file.getMetadata().catch(() => null);
+      if (meta && Number(meta.size) > 0 && Number(meta.size) < off + buf.byteLength) {
+        throw new Error("이 프리미어 버전은 파일 이어쓰기를 지원하지 않습니다 — "
+          + "원본을 직접 프로젝트로 가져온 뒤 다시 눌러 주세요.");
+      }
+      appendChecked = true;
+    }
+  };
 
+  // 받을 조각 목록을 먼저 만들고, **앞서서 DOWNLOAD_LANES 개를 띄운다.**
+  // 쓰기는 순서대로 해야 하므로(이어쓰기라 순서를 못 바꾼다) 받기만 앞질러 간다.
+  const offsets = [];
+  for (let o = first.buffer.byteLength; o < total; o += DOWNLOAD_CHUNK) offsets.push(o);
+  const inflight = new Map();
+  let queued = 0;
+  const pump = () => {
+    while (inflight.size < DOWNLOAD_LANES && queued < offsets.length) {
+      const o = offsets[queued++];
+      inflight.set(o, getChunk(o, Math.min(o + DOWNLOAD_CHUNK, total) - 1));
+    }
+  };
+  pump();
+
+  const startedAt = Date.now();
+  const gb = (total / 1073741824).toFixed(1);
   try {
     let off = 0;
     let buf = first.buffer;
-    while (off < total) {
-      nodeFs.writeSync(fd, new Uint8Array(buf), 0, buf.byteLength, off);
+    for (let i = 0; ; i += 1) {
+      await writeChunk(buf, off);
       off += buf.byteLength;
-      onStage(`원본 받는 중… ${Math.round((off / total) * 100)}% (${(total / 1073741824).toFixed(1)}GB)`);
-      if (off >= total) break;
-      buf = (await fetchRange(url, off, Math.min(off + DOWNLOAD_CHUNK, total) - 1)).buffer;
+
+      const sec = (Date.now() - startedAt) / 1000;
+      const mbps = sec > 0 ? off / 1048576 / sec : 0;
+      const eta = mbps > 0 ? etaText((total - off) / 1048576 / mbps) : "";
+      onStage(`원본 받는 중… ${Math.round((off / total) * 100)}% (${gb}GB · ${mbps.toFixed(1)}MB/s`
+        + `${eta ? ` · 남은 ${eta}` : ""})`);
+
+      if (off >= total || i >= offsets.length) break;
+      const o = offsets[i];
+      const pending = inflight.get(o);
+      inflight.delete(o);
+      pump();                                   // 하나 비었으니 다음 것을 띄운다
+      buf = (await pending).buffer;
     }
   } finally {
-    try { nodeFs.closeSync(fd); } catch (_) { /* 이미 닫힘 */ }
+    if (nodeFs && fd !== null) { try { nodeFs.closeSync(fd); } catch (_) { /* 이미 닫힘 */ } }
+    // 남은 요청은 버린다 — 실패해도 여기서 잡아야 처리되지 않은 거부로 안 샌다.
+    for (const p of inflight.values()) p.catch(() => { });
   }
   return file;
+}
+
+/**
+ * **받는 중인 원본** — 한 번에 하나. 두 가지를 동시에 푼다:
+ *
+ *  1. **비동기** (사용자 2026-09-01: *"1시간짜리는 오래 걸리는데 비동기로 될까"*).
+ *     받기는 뒤에서 돌고 패널은 계속 쓸 수 있다. 다 받으면 이어서 하던 일을 계속한다.
+ *  2. **중복 방지.** 예전엔 두 버튼을 누르면 같은 1.6GB 를 **두 번** 받았다. 시간도 두 배지만
+ *     GCS 이그레스가 그대로 두 배 나간다(≈₩165/GB · 1.6GB 면 한 번에 ₩264).
+ *     같은 파일을 부르면 진행 중인 것에 **합류**한다.
+ */
+let activeDownload = null;
+
+function downloadMasterShared(mediaId, filename, onStage) {
+  if (activeDownload && activeDownload.key === `${mediaId}::${filename}`) {
+    activeDownload.listeners.push(onStage);
+    onStage(activeDownload.last || "이미 받는 중입니다 — 이어서 기다립니다.");
+    return activeDownload.promise;
+  }
+  const task = { key: `${mediaId}::${filename}`, listeners: [onStage], last: "" };
+  const fanout = (msg) => {
+    task.last = msg;
+    for (const fn of task.listeners) { try { fn(msg); } catch (_) { /* 한 곳이 죽어도 나머지는 본다 */ } }
+  };
+  task.promise = downloadMaster(mediaId, filename, fanout)
+    .finally(() => { if (activeDownload === task) activeDownload = null; });
+  activeDownload = task;
+  return task.promise;
 }
 
 /**
@@ -1301,7 +1381,7 @@ async function ensureMaster(rec, onStage) {
   if (present) return filename;
 
   if (!rec.mediaId) throw new Error("이 추천에 연결된 원본이 없습니다.");
-  const file = await downloadMaster(rec.mediaId, filename || `${rec.mediaId}.mp4`, onStage);
+  const file = await downloadMasterShared(rec.mediaId, filename || `${rec.mediaId}.mp4`, onStage);
   onStage("프로젝트에 가져오는 중…");
   const { project } = await activeSequence();
   // suppressUI=true — 가져오기 대화상자가 뜨면 자동 흐름이 사람을 기다리며 멈춘다.
@@ -1583,23 +1663,40 @@ async function buildRoughCut(recs, onStage) {
   });
 }
 
-/** ① 원본 확보만 따로 — 러프컷 전에 큰 파일을 미리 받아 두고 진행 상황을 본다. */
-async function doFetchSource() {
+/**
+ * ① 원본 확보만 따로 — **뒤에서 받는다.**
+ *
+ * 사용자 2026-09-01: *"1시간짜리는 오래 걸리는데 비동기로 될까."* 맞다. 1시간 회차는 몇 GB 라
+ * 몇 분이 걸리는데, 그동안 패널 버튼이 전부 잠겨 있으면 그 시간엔 아무것도 못 한다.
+ * 그래서 `busy` 를 잡지 않는다 — 받는 동안에도 다른 회차를 보거나 추천을 고를 수 있다.
+ *
+ * 다 받은 뒤에 "쇼츠 만들기" 를 누르면 이미 파일이 있으니 **받기를 건너뛴다.**
+ * 받는 도중에 눌러도 안전하다 — 같은 파일이면 진행 중인 받기에 합류한다(중복 전송 없음).
+ */
+let bgFetching = false;
+
+function doFetchSource() {
   const picks = visibleRecs();
-  if (busy || !picks.length) return;
-  busy = true;
-  $("fetchSrcBtn").disabled = true;
-  try {
-    const withMedia = picks.find((r) => r.mediaFilename || r.mediaId) || picks[0];
-    const filename = await ensureMaster(withMedia, (msg) => setStatus($("recsStatus"), msg));
-    setStatus($("recsStatus"), `원본 준비 완료 — ${filename}. 이제 러프컷을 만들 수 있습니다.`, "ok");
-  } catch (err) {
-    setStatus($("recsStatus"), err.message, "err");
-    console.log("[STEP-D] 원본 확보 실패", err);
-  } finally {
-    busy = false;
-    syncRecButtons();
+  if (!picks.length) return;
+  if (bgFetching) {
+    setStatus($("recsStatus"), "이미 받는 중입니다 — 끝나면 알려 드립니다.");
+    return;
   }
+  const withMedia = picks.find((r) => r.mediaFilename || r.mediaId) || picks[0];
+  bgFetching = true;
+  syncRecButtons();
+  ensureMaster(withMedia, (msg) => setStatus($("recsStatus"), msg))
+    .then((filename) => {
+      setStatus($("recsStatus"), `원본 준비 완료 — ${filename}. 이제 바로 쇼츠를 만들 수 있습니다.`, "ok");
+    })
+    .catch((err) => {
+      setStatus($("recsStatus"), err.message, "err");
+      console.log("[STEP-D] 원본 확보 실패", err);
+    })
+    .finally(() => {
+      bgFetching = false;
+      syncRecButtons();
+    });
 }
 
 /**
@@ -2241,7 +2338,11 @@ function syncRecButtons() {
     el.textContent = n > 0 ? `${label} (${n}건)` : label;
   }
   const fetchBtn = $("fetchSrcBtn");
-  if (fetchBtn) fetchBtn.disabled = busy || visibleRecs().length === 0;
+  if (fetchBtn) {
+    // ⚠️ 받는 중에는 `busy` 를 안 잡는다(뒤에서 돈다) — 그래서 이 버튼만 따로 잠근다.
+    fetchBtn.disabled = bgFetching || visibleRecs().length === 0;
+    fetchBtn.textContent = bgFetching ? "원본 받는 중…" : "원본만 받아 두기";
+  }
 }
 
 function renderRecs() {

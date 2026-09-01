@@ -290,6 +290,50 @@ describe("패널 — 원본이 없으면 받아서 넣는다", () => {
 });
 
 /**
+ * 큰 원본(1시간 회차 = 수 GB)의 **시간**. 사용자 2026-09-01: "1시간짜리는 오래 걸리는데
+ * 비동기로 될까." 여기서 지키는 건 셋 — 앞서 받기 · 뒤에서 받기 · 두 번 안 받기.
+ */
+describe("패널 — 큰 원본을 오래 기다리지 않는다", () => {
+  it("조각을 **앞서서** 받는다 — 한 줄로 받으면 왕복 지연이 그대로 시간이 된다", () => {
+    assert.match(panel, /const DOWNLOAD_LANES = \d+/);
+    assert.ok(panel.includes("while (inflight.size < DOWNLOAD_LANES && queued < offsets.length)"),
+      "선반입(pump)이 없다 — 조각마다 요청→응답을 기다리게 된다");
+  });
+
+  it("쓰기는 **순서대로** 한다 — 이어쓰기라 순서를 바꾸면 파일이 깨진다", () => {
+    assert.ok(panel.includes("buf = (await pending).buffer;"),
+      "받는 건 앞질러도 쓰는 건 차례대로여야 한다");
+  });
+
+  it("받는 동안 패널이 잠기지 않는다 — 몇 분을 아무것도 못 하고 보낸다", () => {
+    // `busy` 를 잡으면 모든 버튼이 잠긴다. 배경 받기는 자기 버튼만 잠근다.
+    const fn = /function doFetchSource\(\)[\s\S]*?\n}/.exec(panel)?.[0] ?? "";
+    assert.ok(fn, "doFetchSource 를 못 찾았다");
+    assert.ok(!/busy = true/.test(fn), "배경 받기가 busy 를 잡으면 패널이 통째로 잠긴다");
+    assert.ok(fn.includes("bgFetching = true"));
+    assert.ok(panel.includes("fetchBtn.disabled = bgFetching"), "자기 버튼은 잠가야 두 번 안 눌린다");
+  });
+
+  it("같은 파일을 두 번 받지 않는다 — 시간도 두 배, **이그레스도 두 배**다", () => {
+    assert.match(panel, /function downloadMasterShared\(mediaId, filename, onStage\)/);
+    assert.ok(panel.includes("activeDownload.listeners.push(onStage)"), "합류가 아니라 새로 받게 된다");
+    assert.ok(panel.includes("downloadMasterShared(rec.mediaId"),
+      "ensureMaster 가 공유 경로를 안 쓰면 중복 방지가 무의미하다");
+  });
+
+  it("조각 하나가 튀어도 처음부터 다시 받지 않는다 — 서명 URL 은 도중에 만료된다", () => {
+    assert.match(panel, /const DOWNLOAD_RETRIES = \d+/);
+    assert.ok(panel.includes("if (/40[13]/.test(String(err.message))) url = await streamUrl();"),
+      "만료(401·403)에 주소를 새로 받지 않으면 GB 단위 받기가 통째로 날아간다");
+  });
+
+  it("진행률에 **속도와 남은 시간**을 같이 낸다 — %만 보면 기다릴지 말지 못 정한다", () => {
+    assert.ok(panel.includes("MB/s"));
+    assert.match(panel, /function etaText\(sec\)/);
+  });
+});
+
+/**
  * 러프컷 — 서브클립이 "오려둔 조각" 이라면 러프컷은 **이미 순서대로 붙여 놓은 초벌**이다.
  * 편집자는 다듬기부터 시작한다: 찾고·자르고·늘어놓는 일이 통째로 없어진다.
  */
