@@ -274,8 +274,14 @@ describe("패널 — 원본이 없으면 받아서 넣는다", () => {
       "이어 쓰기가 없다 — 통째로 메모리에 올리게 된다");
   });
 
-  it("이어 쓰기를 못 하는 버전에서는 **큰 파일을 거부**한다 — 조용히 메모리를 터뜨리지 않는다", () => {
-    assert.match(panel, /total > 512 \* 1024 \* 1024/);
+  it("메모리에 통째로 담지 않는다 — 회차 원본은 수백 MB~GB 다", () => {
+    // 2026-09-01: 예전엔 node fs 가 없으면 파일을 통째로 메모리에 담고 512MB 초과는 거절했다.
+    // 이 프리미어에서 fs 가 실제로 없었고, 그래서 원본을 아예 못 받았다. 이제 UXP 파일 API 로
+    // 조각을 이어 쓴다 — 어느 경로든 **전체를 메모리에 올리지 않는다.**
+    assert.ok(!panel.includes("const all = new Uint8Array(total);"),
+      "통째로 담던 옛 경로가 남아 있다");
+    assert.ok(panel.includes("nodeFs.writeSync(fd, new Uint8Array(buf), 0, buf.byteLength, off)")
+      || panel.includes('{ format: formats.binary, append: true }'));
   });
 
   it("서명 URL 도메인이 매니페스트에 열려 있다", () => {
@@ -666,6 +672,21 @@ describe("패널 — 자막을 타임스탬프대로", () => {
     assert.ok(index.includes("async function recCaptionLines(rec: any, esn: any)"));
     assert.ok(index.includes("windowCaptions(resolved.segments"));
     assert.ok(index.includes("chunkCaption(c, captionMaxCharsOf(esn))"));
+  });
+
+  it("node fs 가 없어도 큰 원본을 받는다 — UXP 파일 API 로 이어 쓴다", () => {
+    // 실측 2026-09-01: 이 프리미어에서 require("fs") 가 안 됐다. 예전 코드는 파일을 통째로
+    // 메모리에 담고 512MB 를 넘으면 거절했다 — 회차 원본은 대부분 그보다 크다.
+    assert.ok(panel.includes('{ format: formats.binary, append: true }'));
+    assert.ok(!panel.includes("이 프리미어 버전에서는 큰 원본을 받을 수 없습니다"),
+      "크기로 거절하던 옛 경로가 남아 있다");
+    // append 를 지원 안 하는 빌드는 **조용히 덮어쓴다** — 크기로 검증해 즉시 멈춘다.
+    assert.ok(panel.includes("이 프리미어 버전은 파일 이어쓰기를 지원하지 않습니다"));
+  });
+
+  it("템플릿 파일은 UXP 경로를 **먼저** 쓴다 — fs 가 없는 빌드가 실재한다", () => {
+    assert.ok(panel.includes("async function readTemplateFile(absPath)"));
+    assert.ok(panel.includes("localFs.getEntryWithUrl"));
   });
 
   it("PNG 로 물러난 **이유를 화면에** 말한다 — 콘솔에만 남기면 아무도 못 본다", () => {

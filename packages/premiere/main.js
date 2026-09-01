@@ -829,19 +829,37 @@ function readLocalFile(nodeFs, p) {
   }
 }
 
-async function uploadBaseTemplate(onStage) {
+/**
+ * 프리미어 기본 템플릿 파일 하나를 읽는다 — **node fs 가 없는 빌드도 있다.**
+ *
+ * 실측 2026-09-01: 이 PC 의 프리미어에서 `require("fs")` 가 안 됐다(원본 다운로드도 같은
+ * 이유로 막혔다). 그래서 UXP 저장소 API(`getEntryWithUrl`)를 **먼저** 쓰고, 안 되면 node fs
+ * 로 물러난다. 둘 다 안 되면 사유를 그대로 올린다 — 조용히 실패하면 매번 PNG 로 떨어진다.
+ */
+async function readTemplateFile(absPath) {
+  try {
+    if (typeof localFs.getEntryWithUrl === "function") {
+      const url = "file:///" + String(absPath).split("\\").join("/");
+      const entry = await localFs.getEntryWithUrl(url);
+      if (entry) return await entry.read({ format: formats.binary });
+    }
+  } catch (_) { /* 아래 node fs 로 */ }
   let nodeFs = null;
   try { nodeFs = require("fs"); } catch (_) { nodeFs = null; }
   if (!nodeFs || typeof nodeFs.openSync !== "function") {
-    throw new Error("이 프리미어에서는 기본 템플릿을 읽을 수 없습니다.");
+    throw new Error("이 프리미어에서는 템플릿 파일을 읽을 수 없습니다 (fs·getEntryWithUrl 둘 다 불가)");
   }
+  return readLocalFile(nodeFs, absPath);
+}
+
+async function uploadBaseTemplate(onStage) {
   const env = (typeof process !== "undefined" && process.env) || {};
   const dir = `${env.APPDATA || ""}/Adobe/Common/Motion Graphics Templates`;
   let last = "";
   for (const name of BASE_TEMPLATE_CANDIDATES) {
     try {
       onStage(`제목 템플릿 준비 중… (${name})`);
-      const buf = readLocalFile(nodeFs, `${dir}/${name}`);
+      const buf = await readTemplateFile(`${dir}/${name}`);
       const res = await api("/premiere/base-template", {
         method: "POST",
         headers: { "content-type": "application/octet-stream" },
@@ -1221,21 +1239,37 @@ async function downloadMaster(mediaId, filename, onStage) {
   } catch (_) { nodeFs = null; }
 
   if (!nodeFs || fd === null) {
-    // 이어 쓰기를 못 하면 통째로 받는 수밖에 없다 — 큰 파일은 여기서 막고 사람에게 알린다.
-    // 조용히 메모리를 터뜨리는 것보다 "이 방법으로는 안 된다" 가 낫다.
-    if (total > 512 * 1024 * 1024) {
-      throw new Error("이 프리미어 버전에서는 큰 원본을 받을 수 없습니다 — 파일을 직접 프로젝트에 가져오세요.");
-    }
-    const all = new Uint8Array(total);
-    all.set(new Uint8Array(first.buffer), 0);
-    let off = first.buffer.byteLength;
+    // node fs 가 없는 빌드 — **UXP 파일 API 로 조각을 이어 쓴다.**
+    //
+    // 실측 2026-09-01: 이 프리미어에서 `require("fs")` 가 안 된다(같은 이유로 베이스 템플릿
+    // 자동 업로드도 실패했다). 예전 코드는 여기서 파일을 통째로 메모리에 담았고, 512MB 를
+    // 넘으면 아예 거절했다 — 회차 원본은 대부분 그보다 크다. 즉 **이 PC 에서는 원본을 못 받는
+    // 상태**였다.
+    //
+    // UXP File.write 는 `append: true` 를 받는다. 그런데 **지원하지 않는 빌드에서는 조용히
+    // 덮어쓴다** — 그러면 마지막 조각만 든 깨진 파일이 남는다. 그래서 첫 이어쓰기 직후
+    // **파일 크기를 확인**해서, 안 늘어나면 즉시 멈추고 사람에게 알린다.
+    let off = 0;
+    let buf = first.buffer;
+    let verified = false;
     while (off < total) {
-      const { buffer } = await fetchRange(url, off, Math.min(off + DOWNLOAD_CHUNK, total) - 1);
-      all.set(new Uint8Array(buffer), off);
-      off += buffer.byteLength;
-      onStage(`원본 받는 중… ${Math.round((off / total) * 100)}%`);
+      const opts = off === 0 ? { format: formats.binary } : { format: formats.binary, append: true };
+      await file.write(buf, opts);
+      off += buf.byteLength;
+
+      if (!verified && off > buf.byteLength) {
+        const meta = await file.getMetadata().catch(() => null);
+        if (meta && Number(meta.size) > 0 && Number(meta.size) < off) {
+          throw new Error("이 프리미어 버전은 파일 이어쓰기를 지원하지 않습니다 — "
+            + "원본을 직접 프로젝트로 가져온 뒤 다시 눌러 주세요.");
+        }
+        verified = true;
+      }
+
+      onStage(`원본 받는 중… ${Math.round((off / total) * 100)}% (${(total / 1073741824).toFixed(1)}GB)`);
+      if (off >= total) break;
+      buf = (await fetchRange(url, off, Math.min(off + DOWNLOAD_CHUNK, total) - 1)).buffer;
     }
-    await file.write(all.buffer, { format: formats.binary });
     return file;
   }
 
