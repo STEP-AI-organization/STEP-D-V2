@@ -661,6 +661,15 @@ describe("패널 — 자막을 타임스탬프대로", () => {
     assert.ok(index.includes("chunkCaption(c, captionMaxCharsOf(esn))"));
   });
 
+  it("mogrt 삽입은 **잠금 안에서 시작하고 잠금 밖에서 기다린다**", () => {
+    // 잠금 밖에서 부르면 "Requires locked access", 잠금 콜백은 동기라 안에서 await 불가.
+    // 둘을 같이 만족시키는 유일한 방법이고, 실패하면 PNG 로 물러나 **파일이 흩뿌려진다**.
+    assert.ok(panel.includes("const started = runLocked(project, () => {"));
+    assert.ok(panel.includes('const inserted = started && typeof started.then === "function" ? await started : started;'));
+    assert.ok(!panel.includes("비동기 — 잠금 안에서 확인 불가, PNG 로 간다"),
+      "비동기라고 곧장 PNG 로 물러나던 옛 경로가 남아 있다");
+  });
+
   it("자막도 **편집 가능한 mogrt 가 먼저**다 — PNG 는 폴백이다", () => {
     assert.ok(index.includes('app.get("/api/recommendations/:id/caption.mogrt"'));
     const fn = panel.slice(panel.indexOf("async function addCaptionsForRecs("));

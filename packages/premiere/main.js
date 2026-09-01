@@ -1747,7 +1747,9 @@ async function addDecorationsForRecs(recs, aspect, onStage) {
     if (res.status === 404 || res.status === 503) continue;   // 그릴 게 없거나 서버가 못 그린다
     if (!res.ok) continue;
     const buf = await res.arrayBuffer();
-    const file = await folder.createFile(`stepd-deco-${r.id}.png`, { overwrite: true });
+    // 파일 이름이 곧 프로젝트 패널의 항목 이름이다. PNG 오버레이는 프리미어가 반드시
+    // 항목으로 만들기 때문에(가져온 파일은 예외 없다) **알아볼 수 있는 이름**을 준다.
+    const file = await folder.createFile(`[STEP-D] 로고·시간박스 ${r.id}.png`, { overwrite: true });
     await file.write(buf, { format: formats.binary });
     files.push({ rec: r, file });
   }
@@ -1835,19 +1837,22 @@ async function addCaptionMogrts(recs, aspect, onStage) {
       const dur = Math.max(0.2, Number(job.line.end) - Number(job.line.start));
       // 삽입과 길이 맞추기를 **한 잠금 안에서** — 사이에 await 를 두면 방금 넣은 아이템이
       // 무효가 되고, 잠금 밖에서 부르면 "Requires locked access" 다.
-      runLocked(project, () => {
-        const editor = api2.SequenceEditor.getEditor(sequence);   // 잠금 안에서 얻는다
-        const inserted = editor.insertMogrtFromPath(
+      // 삽입은 잠금 안에서 **시작**하고, 비동기면 잠금 밖에서 기다린다(제목과 같은 이유).
+      const started = runLocked(project, () => {
+        const editor = api2.SequenceEditor.getEditor(sequence);
+        return editor.insertMogrtFromPath(
           job.file.nativePath, api2.TickTime.createWithSeconds(startSec), CAPTION_TRACK, 0);
-        const item = Array.isArray(inserted) ? inserted[0] : inserted;
-        if (!item) return;
-        if (typeof item.createSetEndAction === "function") {
-          const end = api2.TickTime.createWithSeconds(startSec + dur);
-          project.executeTransaction((c) => { c.addAction(item.createSetEndAction(end)); },
-            `STEP-D 자막 길이 ${job.i}`);
-        }
-        n += 1;
       });
+      const inserted = started && typeof started.then === "function" ? await started : started;
+      const item = Array.isArray(inserted) ? inserted[0] : inserted;
+      if (!item) continue;
+      n += 1;
+      // 길이 맞추기는 **다시 잠금 안에서** — 안 하면 그래픽 기본 길이로 들어가 자막끼리 겹친다.
+      if (typeof item.createSetEndAction === "function") {
+        const end = api2.TickTime.createWithSeconds(startSec + dur);
+        runLocked(project, () => project.executeTransaction(
+          (c) => { c.addAction(item.createSetEndAction(end)); }, `STEP-D 자막 길이 ${job.i}`));
+      }
     } catch (err) {
       console.log("[STEP-D] 자막 mogrt 삽입 실패", job.i, err);
     }
@@ -1970,14 +1975,18 @@ async function addTitleMogrts(recs, aspect, onStage) {
       // **잠금 안에서 에디터부터** 얻는다 — 밖에서 얻으면 "Requires locked access".
       // 런타임이 Promise 를 주면 잠금 안에서는 결과를 확인할 수 없다(await 를 넣을 수 없다).
       // 그때는 억지로 기다리지 않고 PNG 경로로 넘긴다 — 모양은 같고 편집만 못 한다.
-      const inserted = runLocked(project, () => {
+      // **호출은 잠금 안에서, 기다리기는 잠금 밖에서.**
+      //   · 잠금 밖에서 부르면 "Requires locked access" 로 거절된다.
+      //   · 잠금 콜백은 동기라 안에서 await 할 수 없다.
+      // 둘을 같이 만족시키는 방법은 하나뿐이다 — 잠금 안에서 **시작**하고, 반환된 약속을
+      // 잠금이 풀린 뒤에 기다린다. 작업은 이미 잠금 아래에서 걸렸으므로 안전하다.
+      //   (앞서는 여기서 PNG 로 물러났는데, 그러면 제목 PNG 가 프로젝트 항목으로 남는다.
+      //    사용자 2026-09-01: "3개 파일 흩뿌리지 말고" — mogrt 는 항목을 안 만든다.)
+      const started = runLocked(project, () => {
         const editor = api.SequenceEditor.getEditor(sequence);
         return editor.insertMogrtFromPath(file.nativePath, at, TITLE_TRACK, 0);
       });
-      if (inserted && typeof inserted.then === "function") {
-        console.log("[STEP-D] insertMogrtFromPath 가 비동기 — 잠금 안에서 확인 불가, PNG 로 간다");
-        return 0;
-      }
+      const inserted = started && typeof started.then === "function" ? await started : started;
       if (Array.isArray(inserted) ? inserted.length > 0 : inserted != null && inserted !== false) placed += 1;
     } catch (err) {
       console.log("[STEP-D] mogrt 삽입 실패", rec.id, err);
