@@ -72,6 +72,8 @@ function fakeMogrt(layers = 2): Uint8Array {
   return zipSync({
     "definition.json": new Uint8Array(Buffer.from(JSON.stringify(def), "utf-8")),
     "project.prgraphic": inner,
+    // Adobe 기본 템플릿에는 로케일 판이 함께 들어 있다 — 프리미어는 자기 UI 언어 판을 먼저 읽는다.
+    "project_ko_KR.prgraphic": inner,
     "thumb.png": new Uint8Array([1, 2, 3]),
   });
 }
@@ -174,6 +176,13 @@ describe("mogrt — 제목 채우기", () => {
     const blobs = decodeBlobs(readBack(out).xml);
     assert.equal(blobs[0].mTextParam.mStyleSheet.mText, "1행");
     assert.equal(blobs[1].mTextParam.mStyleSheet.mText, "2행\r3행");
+  });
+
+  it("**언어별 그래픽 변형을 지운다** — 한국어 프리미어가 원본을 읽어 글자가 안 나왔다", () => {
+    const back = readBack(patchTitleMogrt(fakeMogrt(2), [layer()], META));
+    assert.ok(!back.names.some((n) => /^project_.+\.prgraphic$/i.test(n)),
+      "로케일 판이 남으면 프리미어가 그걸 읽어 우리 글자가 사라진다");
+    assert.ok(back.names.includes("project.prgraphic"), "기본판까지 지우면 안 된다");
   });
 
   it("썸네일 등 나머지 항목은 그대로 남는다 — 통째로 새로 만들지 않는다", () => {

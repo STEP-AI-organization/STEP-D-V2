@@ -187,6 +187,16 @@ export function patchTitleMogrt(
   }
   outer["definition.json"] = new Uint8Array(Buffer.from(JSON.stringify(def), "utf-8"));
 
+  // ⚠️ **언어별 그래픽 변형을 지운다.** Adobe 기본 템플릿에는 `project.prgraphic` 말고
+  //    `project_ko_KR.prgraphic` 같은 로케일 판이 함께 들어 있고, **프리미어는 자기 UI 언어의
+  //    판을 먼저 읽는다.** 우리는 기본판만 고치므로, 한국어 프리미어에서는 우리가 넣은 글자가
+  //    없는 원본이 떴다(실측 2026-09-01: "그래픽에 아무 글씨가 없다").
+  //    변형을 빼면 프리미어가 기본판으로 떨어진다 — 우리 글자는 언어와 무관하게 같은 값이니
+  //    로케일 판을 유지할 이유가 없다.
+  for (const name of Object.keys(outer)) {
+    if (/^project_.+\.prgraphic$/i.test(name)) delete outer[name];
+  }
+
   // 미리보기 썸네일(thumb*.png/mp4)은 **파일 크기의 대부분**이다(622KB 중 ~600KB). 자막처럼
   // 수십 장을 찍어 내릴 때는 빼서 30KB 안팎으로 만든다 — 목록 아이콘이 비는 대신 전송이 20배 싸다.
   // 제목처럼 한 장만 쓸 때는 남긴다(필수 그래픽 목록에서 눈으로 찾기 쉽다).
