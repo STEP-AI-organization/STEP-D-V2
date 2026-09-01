@@ -496,6 +496,23 @@ describe("패널 — 글꼴 확인", () => {
  * 편집자는 **이미 채택한 구간을 프리미어에서 다시 다듬는** 일이 오히려 흔하다. 숨기면 패널이
  * 비어 보이고, 사람은 "추천이 없네" 라고 오해한다.
  */
+describe("패널 — 세로가 부족해도 손이 닿는다", () => {
+  const html = read("packages/premiere/index.html");
+
+  // 사용자 2026-09-01: "스크롤 필요해 보여 · 너무 보기가 불편함". 내용이 패널 높이를 넘치면
+  // 아래가 잘려 **버튼을 못 누른다**. UXP 패널은 도킹 시 특히 좁다.
+  it("패널 전체가 스크롤된다 — 넘치는 내용이 잘려 사라지지 않게", () => {
+    assert.match(html, /html, body \{ height: 100%; \}/);
+    assert.match(html, /overflow-y: auto;/);
+  });
+
+  it("추천 목록은 **자기 안에서** 스크롤한다 — 20건이 와도 버튼이 밀리지 않게", () => {
+    const block = html.slice(html.indexOf(".recs {"), html.indexOf(".recs {") + 320);
+    assert.match(block, /max-height: 45vh/, "목록에 상한이 없으면 아래 버튼이 화면 밖으로 간다");
+    assert.match(block, /overflow-y: auto/);
+  });
+});
+
 describe("패널 — 추천 목록은 채택된 것도 보여 준다", () => {
   it("status=all 로 받는다 — pending 만 받으면 작업할 게 사라진다", () => {
     assert.ok(panel.includes("&status=all&limit=100"));

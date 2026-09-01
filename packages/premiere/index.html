@@ -8,9 +8,15 @@
        세로로 쌓이지 않는다) 라벨과 입력칸이 가로로 붙어 버렸다(2026-08-28 실측).
        그래서 여기서는 **쌓아야 하는 것마다 flex-column 을 명시**하고, 높이도 값으로 준다 —
        브라우저 기본값에 기대는 CSS 는 UXP 에서 그대로 무너진다. */
+    /* ⚠️ **패널은 세로가 늘 부족하다.** 내용이 넘치면 아래가 잘려 버튼에 손이 닿지 않는다
+       (사용자 2026-09-01: "스크롤 필요해 보여 · 너무 보기가 불편함"). 그래서 body 를 뷰포트
+       높이에 묶고, 넘치는 건 **스크롤**로 넘긴다. UXP 도 overflow-y:auto 를 지원한다. */
+    html, body { height: 100%; }
     body {
       margin: 0;
       padding: 16px;
+      box-sizing: border-box;
+      overflow-y: auto;
       display: flex;
       flex-direction: column;
       font-family: "Adobe Clean", -apple-system, "Malgun Gothic", sans-serif;
@@ -73,7 +79,15 @@
     .webbar button { width: 50%; margin-top: 0; }
     .webbar button:first-child { margin-right: 6px; }
     #webview { flex: 1; border: 1px solid #3a3a3a; border-radius: 3px; background: #1d1d1d; }
-    .recs { display: flex; flex-direction: column; }
+    /* 목록은 **자기 안에서** 스크롤한다. 추천이 20건이면 목록만으로 패널을 다 먹어
+       아래 버튼이 화면 밖으로 밀린다 — 목록에 상한을 주고 그 안에서 굴린다. */
+    .recs {
+      display: flex; flex-direction: column;
+      /* 도킹(작다)·플로팅(크다) 둘 다 쓴다 — 고정 px 대신 화면 비율로 잡아
+         큰 패널에서는 더 많이 보이게. 최소 높이는 두 건은 보이는 정도. */
+      min-height: 120px; max-height: 45vh; overflow-y: auto;
+      border: 1px solid #333333; border-radius: 3px; padding: 4px;
+    }
     /* 추천 한 줄 — 누르면 그 구간으로 플레이헤드가 간다. */
     .rec {
       display: flex; flex-direction: column;
@@ -167,6 +181,8 @@
            사용자 판단 그대로다 — "마커는 편집자 입장에서 유의미한가 의문". 마커는 11분
            원본에 표시만 남기고 자르기·세로·제목·자막이 전부 사람 몫으로 남는다. 반면
            이 버튼은 그 구간만의 세로 시퀀스에 제목·자막까지 얹어 **다듬기만** 남긴다. -->
+      <!-- 주 버튼은 목록 바로 아래에 둔다. 목록이 자기 안에서 스크롤하므로
+           버튼이 화면 밖으로 밀리지 않는다. -->
       <button id="makeShortsBtn" disabled>고른 구간 쇼츠로 만들기</button>
 
       <div class="divider">필요할 때만</div>
