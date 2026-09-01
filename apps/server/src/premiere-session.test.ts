@@ -520,6 +520,30 @@ describe("패널 — 추천 목록은 채택된 것도 보여 준다", () => {
 });
 
 /**
+ * 폴더 권한 창 (사용자 2026-09-01: **"버튼 누르면 파일 저장창 여러 번 뜨는데 이거 알아서
+ * 저장 못하나"**). 자산까지 `getFolder()` 로 물어서 한 작업에 창이 여섯 번까지 떴다.
+ */
+describe("패널 — 폴더는 한 번만 묻는다", () => {
+  it("우리 자산은 **묻지 않는다** — 권한 없는 플러그인 데이터 폴더에 둔다", () => {
+    assert.ok(panel.includes("async function assetFolder()"));
+    assert.ok(panel.includes("localFs.getDataFolder()"));
+    // 제목·자막·오버레이는 전부 assetFolder 를 쓴다.
+    for (const fn of ["addTitlePngs", "addTitleMogrts", "addCaptionPngs", "addCaptionMogrts", "addDecorationsForRecs"]) {
+      const body = panel.slice(panel.indexOf(`async function ${fn}(`), panel.indexOf(`async function ${fn}(`) + 400);
+      assert.ok(body.includes("await assetFolder()"), `${fn} 이 아직 폴더를 묻는다`);
+    }
+  });
+
+  it("원본 폴더는 세션 캐시 — 토큰이 안 풀려도 창이 반복되지 않는다", () => {
+    assert.ok(panel.includes("let cachedMediaFolder = null;"));
+    assert.ok(panel.includes("if (cachedMediaFolder) return cachedMediaFolder;"));
+    // 원본만 묻는다(용량이 크고 편집자가 어디 쌓이는지 알아야 한다).
+    const dl = panel.slice(panel.indexOf("async function downloadMaster("));
+    assert.ok(dl.slice(0, 200).includes("await mediaFolder()"));
+  });
+});
+
+/**
  * 편집본 ↔ 추천 잇기 (2026-09-01). 프리미어에서 다듬어 올린 결과가 **어느 추천에서 나왔는지**
  * 기록되지 않으면, "어떤 추천이 실제로 편집까지 갔나" 를 나중에 셀 방법이 없다.
  *

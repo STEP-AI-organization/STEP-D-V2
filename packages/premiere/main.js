@@ -1105,17 +1105,57 @@ async function findMasterItemOnce(filename, use) {
  */
 const DOWNLOAD_CHUNK = 16 * 1024 * 1024;
 
+/**
+ * **원본 영상**을 둘 폴더 — 사람이 한 번 고른다.
+ *
+ * 왜 묻나: 몇백 MB~GB 짜리라 편집자가 어디 쌓이는지 알아야 하고, 나중에 다른 프로젝트에서
+ * 다시 쓰기도 한다. 그래서 이건 보이는 자리에 둔다.
+ *
+ * ⚠️ **세션 캐시가 필요하다**(2026-09-01): 예전엔 호출마다 토큰을 다시 풀었는데, 토큰이
+ * 한 번이라도 안 풀리면 **부를 때마다 폴더 선택창이 떴다**. 한 번 작업에 6번까지 떴다
+ * (사용자: "버튼 누르면 파일 저장창 여러 번 뜨는데"). 캐시가 그 반복을 끊는다.
+ */
+let cachedMediaFolder = null;
+
 async function mediaFolder() {
+  if (cachedMediaFolder) return cachedMediaFolder;
   const token = await store.get("stepd.mediaFolderToken");
   if (token) {
-    try { return await localFs.getEntryForPersistentToken(token); } catch (_) { /* 폴더가 사라졌다 */ }
+    try {
+      cachedMediaFolder = await localFs.getEntryForPersistentToken(token);
+      return cachedMediaFolder;
+    } catch (_) { /* 폴더가 사라졌다 — 아래에서 다시 묻는다 */ }
   }
   const folder = await localFs.getFolder();
   if (!folder) throw new Error("원본을 저장할 폴더를 골라야 합니다.");
   try {
     await store.set("stepd.mediaFolderToken", await localFs.createPersistentToken(folder));
-  } catch (_) { /* 토큰을 못 만들면 다음에 다시 묻는다 — 동작 자체는 된다 */ }
+  } catch (_) { /* 토큰을 못 만들면 다음 세션에 다시 묻는다 — 이번 세션은 캐시로 간다 */ }
+  cachedMediaFolder = folder;
   return folder;
+}
+
+/**
+ * **우리가 만든 자산**(제목·자막·오버레이 PNG·mogrt)을 둘 폴더 — **묻지 않는다.**
+ *
+ * 이건 편집자가 관리할 파일이 아니라 배관이다. 플러그인 데이터 폴더는 권한 창 없이 쓸 수
+ * 있으므로 거기 둔다. 자산이 60초 쇼츠 하나에 30장씩 나오는데 그때마다 폴더를 묻는 건
+ * 말이 안 된다.
+ *
+ * 데이터 폴더를 못 쓰는 환경이면 원본 폴더로 물러난다(그때는 한 번 묻는다).
+ */
+let cachedAssetFolder = null;
+
+async function assetFolder() {
+  if (cachedAssetFolder) return cachedAssetFolder;
+  try {
+    if (typeof localFs.getDataFolder === "function") {
+      cachedAssetFolder = await localFs.getDataFolder();
+      if (cachedAssetFolder) return cachedAssetFolder;
+    }
+  } catch (_) { /* 아래로 */ }
+  cachedAssetFolder = await mediaFolder();
+  return cachedAssetFolder;
 }
 
 /** Range 로 한 조각. 첫 조각의 Content-Range 에서 전체 크기를 얻는다(HEAD 왕복 절약). */
@@ -1697,7 +1737,7 @@ async function addTitlesForRecs(recs, onStage, layout) {
  * 트랙은 **제목보다 위(V3)** 다 — 시간박스가 제목 뒤로 가면 안 된다.
  */
 async function addDecorationsForRecs(recs, aspect, onStage) {
-  const folder = await mediaFolder();
+  const folder = await assetFolder();
   onStage("로고·시간박스 받는 중…");
 
   const files = [];
@@ -1767,7 +1807,7 @@ async function addCaptionsForRecs(recs, aspect, onStage) {
  * (안 하면 그래픽 기본 길이로 들어가 자막끼리 겹친다).
  */
 async function addCaptionMogrts(recs, aspect, onStage) {
-  const folder = await mediaFolder();
+  const folder = await assetFolder();
   const jobs = await captionJobs(recs, aspect);
   if (!jobs.length) return 0;
 
@@ -1831,7 +1871,7 @@ async function captionJobs(recs, aspect) {
 }
 
 async function addCaptionPngs(recs, aspect, onStage) {
-  const folder = await mediaFolder();
+  const folder = await assetFolder();
   const jobs = await captionJobs(recs, aspect);
   if (!jobs.length) return 0;
 
@@ -1909,7 +1949,7 @@ async function titleTargetInfo(layout) {
  * 받아 시퀀스에 꽂고, 프리미어가 알아서 프로젝트 안으로 복사한다.
  */
 async function addTitleMogrts(recs, aspect, onStage) {
-  const folder = await mediaFolder();
+  const folder = await assetFolder();
   onStage("제목 그래픽 받는 중…");
 
   const files = [];
@@ -1947,7 +1987,7 @@ async function addTitleMogrts(recs, aspect, onStage) {
 }
 
 async function addTitlePngs(recs, aspect, tracks, onStage) {
-  const folder = await mediaFolder();
+  const folder = await assetFolder();
   onStage("제목 이미지 받는 중…");
 
   // 먼저 **전부 받아서** 한 번에 가져온다 — importFiles 를 건마다 부르면 느리다.
