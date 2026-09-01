@@ -149,7 +149,11 @@ const JOB_LANES: Record<"content" | "youtube" | "gebd" | "naver" | "download" | 
   //    큐잉은 되는데 **아무도 claim 하지 않아 영원히 pending** 이었다. 라우트는 {jobId} 로
   //    성공을 돌려주므로 화면에서는 "생성 중" 으로만 보인다 — 이 리포의 전형적 조용한 실패다.
   //    아래 "모든 JobType 은 실제로 도는 레인에 속한다" 테스트가 재발을 막는다.
-  content: ["media.prepare", "content.analyze", "match.align", "match.segment", "match.learn",
+  // media.transcode 도 content 레인 (2026-09-01 이동 · 원래 render 레인이었다).
+  // 이유는 **돈**이다: 이 잡은 GCS 에서 원본을 받아 다시 올린다. 사무실 PC(render 레인)로
+  // 보내면 인터넷 egress 가 붙어(≈₩165/GB) 회차당 ₩45 인데, 같은 리전 Cloud Run 은
+  // egress 0 원이고 컴퓨트만 ≈₩14 다. **CPU 가 공짜라도 바이트는 공짜가 아니다.**
+  content: ["media.transcode", "media.prepare", "content.analyze", "match.align", "match.segment", "match.learn",
             "thumbnail.style", "thumbnail.generate", "clip.metadata", "clip.reframe",
             // 세로 4택 비교 — clip.reframe 와 같은 성격(프록시 ffmpeg + 파이썬 비전).
             "reframe.compare"],
@@ -185,7 +189,7 @@ const JOB_LANES: Record<"content" | "youtube" | "gebd" | "naver" | "download" | 
   // AUTOMATION_MAX_RENDERS_PER_TICK 으로 스스로를 묶는다. 노는 사무실 PC(8코어)가 당겨가면
   // 그 상한이 풀린다. ⚠️ 이 레인이 안 도는 동안 잡이 쌓이면 **순방이 직접 렌더한다**
   // (automation-cycle 의 정체 감지) — 사무실 PC 가 꺼져 있다고 고객 배포가 멈추면 안 된다.
-  render: ["clip.render", "media.transcode"],
+  render: ["clip.render"],
 };
 /**
  * Drain mode — Cloud Run Jobs 용. 큐가 빌 때까지 처리하고 **종료**한다.
@@ -998,6 +1002,36 @@ async function handleYoutubeDownload(job: Job): Promise<void> {
     } catch (e: any) {
       fs.rmSync(realPath, { force: true });
       throw new Error(`다운로드 파일 손상(probe 실패) — 재시도 시 새로 받습니다: ${String(e?.message ?? e).slice(0, 200)}`);
+    }
+
+    // ⚠️ **프리미어가 읽는 코덱으로 여기서 바꾼다.** 유튜브는 VP9 도 mp4 로 주는데,
+    //    그 파일은 ffmpeg·우리 파이프라인에선 멀쩡하지만 **프리미어가 영상 트랙을 못 읽어**
+    //    편집자 화면엔 오디오 파형만 뜬다(실측 2026-08-31).
+    //
+    //    포맷 선택에서 avc1 을 먼저 고르게 했지만(위 -f), 그게 없는 영상도 있다. 그때 여기서
+    //    굽는다 — **파일이 이미 이 PC 에 있는 유일한 순간**이라 다운로드·전송이 0원이다.
+    //    나중에 media.transcode 로 하면 GCS 에서 다시 받아야 해서 회차당 ₩45 안팎이 든다.
+    if (!fast && PREMIERE_UNREADABLE_CODECS.has(String(meta.codec ?? "").toLowerCase())) {
+      const h264Path = path.join(workDir, "source-h264.mp4");
+      try {
+        console.log(`[youtube.download] ${mediaId} codec=${meta.codec} → h264 변환 (프리미어 호환)`);
+        await transcodeToH264(realPath, h264Path);
+        const after = await probe(h264Path);
+        // 길이가 어긋나면 원본을 쓴다 — 깨진 변환본을 올리는 게 최악이다.
+        if (after.durationSec > 0 && Math.abs(after.durationSec - meta.durationSec) <= 2) {
+          fs.rmSync(realPath, { force: true });
+          realPath = h264Path;
+          meta = after;
+        } else {
+          console.warn(`[youtube.download] ${mediaId} 변환 길이 불일치 — 원본을 그대로 씁니다`);
+          fs.rmSync(h264Path, { force: true });
+        }
+      } catch (e: any) {
+        // 변환 실패는 다운로드를 죽이지 않는다 — 분석은 VP9 로도 돈다. 편집만 불편할 뿐이고,
+        // 그건 나중에 media.transcode 로 따라잡을 수 있다.
+        console.warn(`[youtube.download] ${mediaId} h264 변환 실패(원본 사용): ${String(e?.message ?? e).slice(0, 200)}`);
+        fs.rmSync(h264Path, { force: true });
+      }
     }
 
     let thumbStored: string | null = null;
@@ -2534,7 +2568,7 @@ async function handleMediaTranscode(job: Job): Promise<void> {
     await pipeline(createReadStream(objPath), fs.createWriteStream(src));
     const before = await probe(src);
     const codec = String(before?.codec ?? "").toLowerCase();
-    if (!TRANSCODE_CODECS.has(codec)) {
+    if (!PREMIERE_UNREADABLE_CODECS.has(codec)) {
       console.log(`[transcode] ${mediaId} codec=${codec || "?"} — 손대지 않음`);
       cleanup();
       return;
@@ -2563,8 +2597,12 @@ async function handleMediaTranscode(job: Job): Promise<void> {
   }
 }
 
-/** 프리미어가 못 읽는 코덱만 — 이 목록 밖은 손대지 않는다. */
-const TRANSCODE_CODECS = new Set(["vp9", "vp8"]);
+/**
+ * **프리미어가 못 읽는 코덱**만 — 이 목록 밖은 손대지 않는다.
+ * 서버(index.ts PREMIERE_UNREADABLE_CODECS)와 **같은 목록**이어야 한다. 한쪽만 늘리면
+ * "라우트는 큐에 넣는데 워커가 건너뛰는" 조용한 불일치가 된다.
+ */
+const PREMIERE_UNREADABLE_CODECS = new Set(["vp9", "vp8"]);
 
 async function handleClipRender(job: Job): Promise<void> {
   const clipId = String(job.payload.clipId ?? "");

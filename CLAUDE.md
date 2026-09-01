@@ -83,7 +83,7 @@ Hono 단일 진입점(index.ts, **~9000줄, 라우트 254개**) + 별도 워커 
 프로세스 하나가 다 처리하지 않는다. `WORKER_JOBS` 로 **레인을 갈라** 서로 굶기지 않게 한다.
 
 ```
-content : media.prepare · content.analyze · match.align · match.segment · match.learn
+content : media.prepare · media.transcode · content.analyze · match.align · match.segment · match.learn
           · thumbnail.style · thumbnail.generate · clip.metadata · clip.reframe · reframe.compare
           → 파이썬·ffmpeg·이미지생성 무거운 잡. Cloud Run Job `stepd-worker-content`
 youtube : channel.analyze · video.analyze · video.hotwatch · video.comments · distribution.publish
@@ -107,11 +107,12 @@ commerce: commerce.link
             **회사마다 계정이 다르다**(커미션 정산이 계정 단위) → 잡마다 그 테넌트의 세션을
             주입해 쓴다(commerce_account · 상시 크롬 N개 불필요).
             승인 후 공식 딥링크 API 로 바뀌면 이 레인은 없어지고 클라우드로 간다.
-render  : clip.render · media.transcode
-          → CPU 를 통째로 쓰는 잡. 노는 사무실 PC(윈도우2)가 당겨간다 —
-            렌더는 건당 50~90초, 코덱 변환은 회차당 1~2분(실측 8~9배속)이다.
-            media.transcode 는 **vp9·vp8 원본만** h264 로 바꾼다: 프리미어가 MP4 안의 VP9 를
-            못 읽어 편집자 화면에 오디오만 뜬다(실측 2026-08-31). 고객사 업로드 원본은 안 건드린다.
+render  : clip.render
+          → CPU 를 통째로 쓰는 잡. 노는 사무실 PC(윈도우2)가 당겨간다 — 건당 50~90초.
+⚠️ **사무실 PC 가 공짜인 건 CPU 뿐이다.** GCS 에서 원본을 받아 오는 잡을 거기로 보내면
+   인터넷 egress(≈₩165/GB)가 새로 생긴다 — 같은 리전 Cloud Run 은 그게 0원이다.
+   실측 계산(2026-09-01 · 270MB 원본): WIN2 ₩45 vs Cloud Run ₩14. 그래서 media.transcode 는
+   content 레인(클라우드)에 둔다. **바이트를 옮기는 잡은 클라우드, CPU 만 쓰는 잡은 사무실 PC.**
 ⚠️ 2026-08-12 이전에는 thumbnail.* 가 **어느 레인에도 없어** 프로덕션(content·youtube 워커만
    뜬다)에서 아무도 집지 않았다. 잡을 추가하면 반드시 레인에 넣을 것 —
    `worker-lanes.test.ts` 가 강제한다.
