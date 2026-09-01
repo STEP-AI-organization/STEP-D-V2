@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>STEP-D 연결 실패</title>
+    <style>
+      :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+      body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #eceae5; color: #25231f; }
+      main { width: min(420px, calc(100vw - 48px)); padding: 28px; border: 1px solid #d5d1c9; border-radius: 12px; background: #fff; box-shadow: 0 12px 36px #0001; }
+      h1 { margin: 0 0 8px; font-size: 20px; }
+      p { margin: 0 0 20px; color: #68635a; line-height: 1.55; }
+      button { border: 0; border-radius: 7px; padding: 10px 16px; background: #25231f; color: white; cursor: pointer; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>STEP-D에 연결하지 못했습니다</h1>
+      <p>인터넷 연결을 확인한 뒤 다시 시도해 주세요. 진행 중인 전송 큐는 이 PC에 안전하게 보관됩니다.</p>
+      <button onclick="location.href='stepd://app/reload'">다시 시도</button>
+    </main>
+  </body>
+</html>

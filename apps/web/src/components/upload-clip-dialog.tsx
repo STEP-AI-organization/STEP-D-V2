@@ -21,6 +21,7 @@ import { useToast } from "@/components/ui/toast";
 import { useAppData } from "@/lib/data/store";
 import { EDIT_KIND_LABEL, type EditKind } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { useNativeTransfers } from "@/lib/native-transfers";
 
 export function UploadClipButton({
   programId,
@@ -63,6 +64,7 @@ function UploadClipDialog({
   defaultProgramId?: string;
 }) {
   const { programs, uploadFinishedClip } = useAppData();
+  const nativeTransfers = useNativeTransfers();
   const { toast } = useToast();
 
   const [programId, setProgramId] = useState(defaultProgramId ?? programs[0]?.id ?? "");
@@ -102,6 +104,22 @@ function UploadClipDialog({
     setBusy(true);
     setPct(0);
     try {
+      if (nativeTransfers.available) {
+        await nativeTransfers.enqueueUpload(file, {
+          kind: "finished_clip",
+          programId,
+          title: title || file.name,
+          episodeNumber: epNum,
+          editKind,
+        });
+        toast({
+          title: "네이티브 전송 큐에 추가했습니다",
+          description: "앱을 닫거나 PC를 재시작해도 이어서 전송합니다.",
+          tone: "progress",
+        });
+        onClose();
+        return;
+      }
       await uploadFinishedClip(file, programId, {
         title: title || file.name,
         episodeNumber: epNum,
@@ -273,7 +291,9 @@ function UploadClipDialog({
                 </div>
               )}
               <Notice tone="warn">
-                <b>새로고침·페이지 이동은 업로드를 끊습니다.</b> 완료될 때까지 이 창을 두세요.
+                {nativeTransfers.available
+                  ? <><b>창을 닫거나 PC를 재시작해도 이어집니다.</b> 상단 전송 센터에서 상태를 확인하세요.</>
+                  : <><b>새로고침·페이지 이동은 업로드를 끊습니다.</b> 완료될 때까지 이 창을 두세요.</>}
               </Notice>
             </div>
           )}

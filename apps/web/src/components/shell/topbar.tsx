@@ -13,6 +13,7 @@ import { useState } from "react";
 import { Search } from "lucide-react";
 
 import { WeeklyReportDialog } from "@/components/report/weekly-report-dialog";
+import { TransferCenter } from "@/components/shell/transfer-center";
 import { screenMetaFor } from "@/lib/nav";
 
 export function Topbar({ breadcrumb }: { breadcrumb?: React.ReactNode }) {
@@ -37,6 +38,7 @@ export function Topbar({ breadcrumb }: { breadcrumb?: React.ReactNode }) {
       </div>
 
       <div className="flex shrink-0 items-center gap-1.5">
+        <TransferCenter />
         {/* 커맨드 팔레트가 이 이벤트를 듣고 열린다 — 단축키 말고도 손으로 열 수 있게. */}
         <button
           type="button"

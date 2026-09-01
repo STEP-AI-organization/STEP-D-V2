@@ -7,7 +7,7 @@
 
 | 폴더 | 무엇 |
 |---|---|
-| `apps/web` · `apps/server` · `core/` | **제품 코드** (프론트 · 서버/워커 · AI 파이프라인) |
+| `apps/web` · `apps/server` · `native/` · `core/` | **제품 코드** (프론트 · 서버/워커 · Windows 데스크탑 · AI 파이프라인) |
 | `admin/` | 플랫폼 관리 콘솔 (STEPAI 운영자 전용) |
 | `deploy/` | 배포 — 표준은 `bash deploy/cloud.sh <target>` |
 | [`scripts/`](../scripts/README.md) | 개발·운영·실험 스크립트 (제품 코드 아님) |
@@ -52,6 +52,7 @@
 | [youtube-ingest.md](ops/youtube-ingest.md) | **유튜브 가져오기 배선** — 다운로드=윈도우2(한국 IP·download 레인), 분석=클라우드. 함정 7개와 점검 순서 |
 | [gpu-quota-request.md](ops/gpu-quota-request.md) | GPU 쿼터 상향 신청 절차 |
 | [deploy.md](ops/deploy.md) | 배포 런북 — 서버/워커/웹 배포 스크립트와 검증·롤백 |
+| [native-desktop.md](ops/native-desktop.md) | Windows 데스크탑 앱 — 구조·업로드 재개·개발·패키징·운영 |
 | [deploy-win2.md](ops/deploy-win2.md) | **윈도우2(네이버 워커) 배포** — 윈도우1 에서 갱신·확인·진단. 평소엔 push 만 하면 자동 |
 | [audit-2026-08-12.md](ops/audit-2026-08-12.md) | **전면 점검 결과** — 즉시 수정 20건(완료) + 미해결 우선순위 15건. 이 리포의 실패 유형 분석 |
 | [runbook.md](ops/runbook.md) | 장애 대응 — 증상별 진단·조치, 시크릿 로테이션 |
@@ -104,4 +105,4 @@
 - **현황 문서(ops/·reference/)는 코드가 바뀌면 같이 바꾼다** — 특히 라우트 추가 시 api-reference.md, 테이블 추가 시 data-model.md.
 - 계획 문서(plans/)는 구현이 계획과 달라지면 지우지 말고 **'계획 vs 실제' 표에 기록**한다.
 - 완전히 낡은 문서는 archive/로 옮기지 말고 **삭제**한다 (git 히스토리가 보존; 2026-07-16에 backend-notes·integration-map·step-d-ux-plan·deploy/INFRA·deploy/runbook 삭제 · 2026-07-21에 실현 완료된 쇼츠 계획문서 3편 삭제: channel-domain-adaptation·analysis-pipeline-next·shorts-quality-eval → shorts-engine-성과보고/experiments로 통합 · 2026-07-22에 실현·오래됨 4편 삭제: opencut-integration-plan(Phase 1 완료)·publish-fields-ux-plan(프론트 구현 완료)·editor-gap-analysis-vs-capcut(진단 종료)·investment-analysis-2026-07-17(스냅샷, 이후 대폭 진화)).
-- 검증 커맨드: `apps/server`는 `npx tsc --noEmit`, `apps/web`은 `npx next build`.
+- 검증 커맨드: `apps/server`는 `npx tsc --noEmit`, `apps/web`은 `npx next build`, `native`는 `pnpm test`와 `pnpm dist`.

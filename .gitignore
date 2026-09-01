@@ -16,6 +16,7 @@ node_modules/
 .next-codex-build/
 out/
 dist/
+native/release/
 coverage/
 *.log
 apps/api/assets/fonts/*.zip

@@ -60,6 +60,27 @@ export function humanReserveVerbose(value: string | undefined | null): string {
   return `${d.getMonth() + 1}월 ${d.getDate()}일(${WEEKDAYS[d.getDay()]}) ${ampm} ${h12}:${p(m)}${noonish}`;
 }
 
+/**
+ * 좁은 자리(배포 매트릭스 칸 등)용 짧은 표기 — "8.21 15:00". 빈값·해석불가는 "—".
+ *
+ * ⚠️ **24시간제로 못 박는다.** `toLocaleString("ko-KR", { hour: "2-digit" })` 는 12시간제가
+ * 기본이라 15:00 예약이 "오후 03:00" 으로 찍힌다 — 예약을 15:00 으로 걸어 둔 사람이 목록에서
+ * 03:00 을 보고 "왜 다른 시각이지" 하게 된다(2026-09-01 자매 서비스에서 실제로 이 혼동이
+ * 보고됐다). 이 파일이 예약 표기의 단일 계약인 이유가 그거다 — 화면마다 따로 포맷하면
+ * 같은 함정을 각자 다시 밟는다.
+ *
+ * 자정·정오를 말로 못 박는 `humanReserveVerbose` 와 목적이 다르다: 저건 **입력을 확인**하는
+ * 자리(발행 모달)용이고, 이건 **이미 잡힌 예약을 훑는** 자리용이다.
+ */
+export function shortReserve(value: string | number | undefined | null): string {
+  if (value == null || value === "") return "—";
+  const t = typeof value === "number" ? value : Date.parse(value);
+  if (!Number.isFinite(t)) return "—";
+  const d = new Date(t);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getMonth() + 1}.${d.getDate()} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
 /** 지금부터 얼마나 남았는지 — "약 12시간 뒤". 12시간 착오는 이 문구에서 바로 드러난다. */
 export function untilReserve(value: string | undefined | null): string {
   if (!value) return "";

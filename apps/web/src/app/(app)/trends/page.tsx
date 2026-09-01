@@ -150,7 +150,8 @@ export default function TrendsPage() {
         </div>
         {fetchedAt && (
           <span className="ml-auto text-xs text-muted-foreground">
-            {new Date(fetchedAt).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit" })} 기준
+            {/* 24시간제 고정 — ko-KR 기본값은 12시간제라 "오후 03:02 기준"으로 찍힌다. */}
+            {new Date(fetchedAt).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", hourCycle: "h23" })} 기준
           </span>
         )}
       </Card>

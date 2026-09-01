@@ -21,6 +21,7 @@
 import { DISTRIBUTION_CHANNELS, type DistributionChannel } from "@/lib/constants";
 import { EDIT_KIND_LABEL, type Clip } from "@/lib/types";
 import { clipThumbSrc } from "@/lib/media-url";
+import { shortReserve } from "@/lib/reserve-date";
 import { fmtTime } from "@/lib/utils";
 
 const CHANNELS = Object.keys(DISTRIBUTION_CHANNELS) as DistributionChannel[];
@@ -199,9 +200,10 @@ function Cell({
     const at = d.reserveDate ? Date.parse(d.reserveDate) : NaN;
     const known = Number.isFinite(at);
     const past = known && at <= Date.now();
-    const when = known
-      ? new Date(at).toLocaleString("ko-KR", { month: "numeric", day: "numeric", hour: "2-digit", minute: "2-digit" })
-      : null;
+    // 예약 표기는 **reserve-date 단일 계약**을 쓴다(24시간제). 예전엔 여기서 직접
+    // toLocaleString 을 불렀는데 ko-KR 은 12시간제가 기본이라 15:00 예약이 "오후 03:00" 으로
+    // 찍혔다 — 15:00 으로 걸어 둔 사람이 목록에서 03:00 을 보고 다른 시각으로 읽는다.
+    const when = known ? shortReserve(at) : null;
     const label = known && !past ? `예약 ${when}` : "예약됨";
     const tone = past
       ? { fg: "var(--sd-mut)", bg: "var(--sd-card-sub)" }   // 지난 예약은 '완료' 색을 주지 않는다

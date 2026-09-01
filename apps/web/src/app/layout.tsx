@@ -4,6 +4,7 @@ import { AppDataProvider } from "@/lib/data/store";
 import { seedInitialData } from "@/lib/data/repository";
 import { SessionProvider } from "@/lib/auth";
 import { ToastProvider } from "@/components/ui/toast";
+import { NativeTransferProvider } from "@/lib/native-transfers";
 
 // 로컬 dev 전용 더미데이터. UI/흐름 작업 편의를 위해 항상 화면이 채워지도록 한다.
 // process.env.NODE_ENV는 Next/webpack이 빌드시 인라인 치환 → production 번들에서는
@@ -40,7 +41,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body>
         <SessionProvider>
           <AppDataProvider initial={LOCAL_DUMMY ? seedInitialData() : undefined}>
-            <ToastProvider>{children}</ToastProvider>
+            <ToastProvider>
+              <NativeTransferProvider>{children}</NativeTransferProvider>
+            </ToastProvider>
           </AppDataProvider>
         </SessionProvider>
       </body>

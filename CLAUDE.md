@@ -40,6 +40,8 @@ apps/web/      Next.js 16 (App Router) + React 19 + Tailwind v4 + base-ui  → V
 apps/server/   Hono + PostgreSQL(Cloud SQL) + GCS + ffmpeg                 → Cloud Run (stepd-server)
                + src/worker.ts = 별도 워커 프로세스 → Cloud Run Jobs (stepd-worker-content
                  / stepd-worker-youtube, drain 모드) + GEBD 전용 GPU T4 spot VM
+native/        Electron Windows 데스크탑 셸. 프로덕션 웹을 표시하고 영상 파일을 GCS로
+               직접 전송하는 영속 업로드 큐·트레이·stepd:// 프로토콜을 제공
 core/          Python AI 파이프라인. **워커가 아니다** — 워커(worker.ts)가 자식 프로세스로
                띄운다. 2026-08-12 단계별 하위 패키지로 재편: stt·scenes·beats·recommend·
                search·vision·thumbnail·evaluate·common. 상세 [core/README.md](core/README.md)
@@ -290,10 +292,10 @@ core/ 쪽 스위치(파이썬): `RUN_FACES`·`RUN_PPL`·`RUN_REFINE`·`RUN_CHYRO
 - 프론트 API 함수 추가: `apps/web/src/lib/data/api.ts`에 타입 + 함수 함께.
 - 새 화면 추가: `src/app/(app)/<route>/page.tsx` + `src/lib/nav.ts`의 `NAV` 배열에 항목 추가.
 - 핵심 AI 파이프라인 코드는 `core/`에 (파이썬). 서버에서는 content-pipeline.ts로만 접점 유지.
-- **검증: `pnpm check`** — 전 패키지 타입체크 + 서버 테스트. **커밋 전에 이거 하나면 된다.**
+- **검증: `pnpm check`** — 전 패키지 타입체크 + 네이티브/서버 테스트. **커밋 전에 이거 하나면 된다.**
   (CI 는 없다. 아무도 자동으로 안 돌리므로 사람이 돌려야 한다.)
   - 개별: `apps/server` `npx tsc --noEmit` · `node --import tsx --test "src/**/*.test.ts"` ·
-    `apps/web` `npx next build`
+    `apps/web` `npx next build` · `native` `pnpm test` · `pnpm dist`
   - `pnpm lint`(웹 eslint)는 **아직 기존 오류가 있어 `check` 에서 뺐다** — 프론트 개편이
     끝나면 합칠 것. 초록이 아닌 관문은 사람이 무시하게 된다.
   - **테스트는 `apps/server/src/tests/` 에 모여 있다**(2026-09-01 이동 · 63개). 소스와 섞여

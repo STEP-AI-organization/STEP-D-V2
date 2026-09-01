@@ -1,0 +1,67 @@
+{
+  "name": "@stepd/native",
+  "version": "0.1.0",
+  "private": true,
+  "author": "STEPAI",
+  "type": "module",
+  "description": "STEP-D Windows desktop shell and durable native upload agent",
+  "main": "dist/main.cjs",
+  "exports": {
+    "./contract": {
+      "types": "./src/contract.ts",
+      "default": "./dist/contract.js"
+    }
+  },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "dev": "pnpm build && electron .",
+    "dist": "pnpm build && electron-builder --win nsis",
+    "typecheck": "tsc --noEmit",
+    "test": "node --import tsx --test \"src/**/*.test.ts\""
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "electron": "44.1.0",
+    "electron-builder": "26.15.3",
+    "esbuild": "^0.25.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.7.2"
+  },
+  "build": {
+    "appId": "kr.stepai.stepd",
+    "productName": "STEP-D",
+    "asar": true,
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "assets/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../apps/web/public/brand/stepd-icon-192.png",
+        "to": "icons/stepd.png"
+      }
+    ],
+    "protocols": [
+      {
+        "name": "STEP-D Protocol",
+        "schemes": ["stepd"]
+      }
+    ],
+    "win": {
+      "target": ["nsis"],
+      "icon": "../apps/web/src/app/favicon.ico"
+    },
+    "nsis": {
+      "oneClick": true,
+      "perMachine": false,
+      "allowElevation": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "artifactName": "STEP-D-Setup-${version}.${ext}"
+    }
+  }
+}

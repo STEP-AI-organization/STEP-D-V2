@@ -1269,17 +1269,34 @@ export default function AutomationPage() {
             </div>
           </div>
 
-          {/* 발행 시간 — 하나라도 넣으면 **하루 발행 수 = 시간 개수**가 되고 할당량은 안 쓴다. */}
+          {/* 발행 시간 — 하나라도 넣으면 **하루 발행 수 = 시각당 개수의 합**이 되고 할당량은 안 쓴다. */}
           <div>
             <div className="mb-1 flex items-baseline justify-between">
               <span className="text-[10.5px]" style={{ color: "var(--sd-label)" }}>발행 시간 (KST)</span>
               <span className="text-[10.5px]" style={{ color: "var(--sd-fg-dim)" }}>
-                {slots.length
-                  ? `하루 ${perDayCount({ slots, dailyQuota })}개 — 할당량 대신 이 시간에 맞춰 나갑니다`
-                  : "비우면 하루 할당량 방식 (고급 설정)"}
+                시각을 추가하고, 시각당 올릴 개수를 정하세요
               </span>
             </div>
             <SlotPicker slots={slots} onChange={setSlots} />
+            {/* 하루 발행 수는 **컨트롤이 아니라 결과 표기**다.
+                예전엔 이 수가 위 헤더의 흐린 힌트 안에만 있어서, 시각을 만지는 사람 눈에는
+                자기가 바꾼 값이 어디로 합쳐지는지 보이지 않았다. 개수의 출처(슬롯)와 결과를
+                붙여 두면 두 컨트롤(시각 · 고급의 할당량) 중 뭐가 이기는지 물을 일이 없다.
+                판정은 서버와 **같은 함수**(perDayCount) — 화면이 따로 곱하지 않는다. */}
+            <div
+              className="mt-1.5 flex flex-wrap items-baseline justify-between gap-x-2 gap-y-1 rounded-[6px] px-2 py-1.5"
+              style={{ background: "var(--sd-card-sub)" }}
+            >
+              <span className="text-[10.5px]" style={{ color: "var(--sd-label)" }}>채널당 하루 발행</span>
+              <span className="text-[11px]" style={{ color: "var(--sd-fg)" }}>
+                <b className="sd-mono">{perDayCount({ slots, dailyQuota })}개</b>
+                <span className="ml-1.5 text-[10.5px]" style={{ color: "var(--sd-fg-dim)" }}>
+                  {slots.length
+                    ? "시각당 개수의 합 — 할당량은 쓰지 않습니다"
+                    : `할당량 방식 · ${activeStart}시~${activeEnd}시(KST) 안에서`}
+                </span>
+              </span>
+            </div>
           </div>
         </div>
 
@@ -1419,8 +1436,13 @@ export default function AutomationPage() {
 
             {/* 하루 할당량 · 활동 시간창 — 할당량이 찰 때까지 시간창 안에서 확인 때마다 계속 배포 */}
             <div className="grid grid-cols-3 items-end gap-2" style={slots.length ? { opacity: 0.65 } : undefined}>
+              {/* 비활성 이유를 **컨트롤 옆에** 적는다. 흐리게만 처리하면 "왜 안 눌리지"에서
+                  막힌다 — 아래 설명문은 그리드 전체를 덮는 문장이라 이 칸과 연결이 약하다. */}
               <label className="text-[10.5px]" style={{ color: "var(--sd-label)" }}>
                 채널당 하루 할당량
+                {slots.length > 0 && (
+                  <span className="ml-1" style={{ color: "var(--sd-fg-dim)" }}>· 발행 시간이 있어 사용 안 함</span>
+                )}
                 <input type="number" min={1} max={50} value={dailyQuota} disabled={slots.length > 0}
                   onChange={(e) => setDailyQuota(Math.max(1, Math.min(50, Number(e.target.value) || 1)))}
                   className="sd-input mt-1 w-full" />

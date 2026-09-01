@@ -22,6 +22,7 @@ import { useToast } from "@/components/ui/toast";
 import { DuplicateEpisodeError } from "@/lib/data/api";
 import { useAppData } from "@/lib/data/store";
 import { trackUpload } from "@/lib/upload-tracker";
+import { useNativeTransfers } from "@/lib/native-transfers";
 import { cn } from "@/lib/utils";
 
 /** 분석 소요 추정 배수 — 러닝타임 × 0.4 (F1 고지 문구). */
@@ -85,6 +86,7 @@ export function UploadDialog({
   defaultProgramId?: string;
 }) {
   const { programs, uploadVideo, importYoutube } = useAppData();
+  const nativeTransfers = useNativeTransfers();
   const { toast } = useToast();
   const router = useRouter();
 
@@ -153,6 +155,34 @@ export function UploadDialog({
     setPct(0);
     setSpeed(0);
     sampleRef.current = { t: performance.now(), bytes: 0 };
+
+    if (nativeTransfers.available) {
+      void nativeTransfers.enqueueUpload(file, {
+        kind: "episode",
+        programId,
+        title: title || file.name,
+        episodeNumber: epNum,
+        broadDate,
+        track: track as "variety" | "drama",
+        hasSubtitle: true,
+        fast: false,
+      }).then(() => {
+        toast({
+          title: "네이티브 전송 큐에 추가했습니다",
+          description: `회차 ${epNum} · 앱을 닫거나 PC를 재시작해도 이어서 전송합니다.`,
+          tone: "progress",
+        });
+        onClose();
+      }).catch((err) => {
+        toast({
+          title: "업로드 큐 등록 실패",
+          description: err instanceof Error ? err.message : String(err),
+          tone: "error",
+        });
+        setBusy(false);
+      });
+      return;
+    }
 
     // 세션 준비가 끝나면 모달은 즉시 닫힌다. 실제 전송 Promise 는 모듈 전역 tracker 가
     // 들고 있어 화면을 옮겨도 살아 있고, 탭 새로고침/종료 때는 beforeunload 로 막는다.
@@ -479,7 +509,9 @@ export function UploadDialog({
               </Notice>
               {!busy && (
                 <Notice>
-                  업로드 시작 후 자동으로 백그라운드 전환됩니다. 다른 화면에서 계속 작업할 수 있습니다.
+                  {nativeTransfers.available
+                    ? "데스크톱 전송 큐가 맡습니다. 앱을 닫거나 PC를 재시작해도 이어집니다."
+                    : "업로드 시작 후 자동으로 백그라운드 전환됩니다. 다른 화면에서 계속 작업할 수 있습니다."}
                 </Notice>
               )}
 
@@ -504,7 +536,9 @@ export function UploadDialog({
                     </div>
                   )}
                   <Notice tone="warn">
-                    창을 닫아도 업로드는 계속됩니다. 단 <b>새로고침·페이지 이동은 업로드를 끊습니다.</b>
+                    {nativeTransfers.available
+                      ? <><b>창을 닫거나 PC를 재시작해도 이어집니다.</b> 상단 전송 센터에서 상태를 확인하세요.</>
+                      : <>창을 닫아도 업로드는 계속됩니다. 단 <b>새로고침·페이지 이동은 업로드를 끊습니다.</b></>}
                   </Notice>
                 </div>
               )}

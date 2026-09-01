@@ -44,6 +44,7 @@ Next.js 16 (App Router) · React 19 · TypeScript · **Tailwind v4** · base-ui 
 | `src/components/ui/` | 디자인 시스템 프리미티브 (Card·Button·Table·EmptyState·StatTile·StatusBadge·PageHeader·Toast) |
 | `src/components/shell/` | AppShell·Sidebar·Topbar·JobCenter·CommandPalette |
 | `src/components/editor/` | 에디터 셸 |
+| `src/lib/native-transfers.tsx` | Electron 브리지 감지 + 네이티브 업로드 큐 상태·알림 |
 
 ---
 
@@ -61,6 +62,10 @@ Next.js 16 (App Router) · React 19 · TypeScript · **Tailwind v4** · base-ui 
 `/api/state` 응답으로 확인. 목 데이터가 보인다면 낡은 빌드다.
 
 새 API 함수는 `lib/data/api.ts`에 타입과 함께 추가하고, 화면은 `store.tsx`의 핸들러를 통해 부른다.
+
+Electron에서 열리면 영상 업로드 다이얼로그는 브라우저 XHR 대신 `window.stepdNative`에 파일과
+메타데이터를 넘긴다. 실제 파일 경로·GCS 재개 세션은 웹에 노출하지 않고 `native/`가 보관하며,
+일반 브라우저에서는 기존 업로드 경로를 그대로 사용한다.
 
 ---
 

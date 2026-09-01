@@ -5,13 +5,16 @@
   "description": "STEP-D — UX-first studio (monorepo: web + server). Original STEPD is a separate read-only repo.",
   "scripts": {
     "setup:check": "node scripts/setup-check.mjs",
-    "check": "pnpm -r typecheck && pnpm --filter @stepd/server test",
+    "check": "pnpm -r typecheck && pnpm --filter @stepd/native test && pnpm --filter @stepd/server test",
     "dev": "pnpm -r --parallel dev",
     "dev:web": "pnpm --filter @stepd/web dev",
     "dev:server": "pnpm --filter @stepd/server dev",
+    "dev:native": "pnpm --filter @stepd/native dev",
+    "build:native": "pnpm --filter @stepd/native build",
+    "dist:native": "pnpm --filter @stepd/native dist",
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
-    "test": "pnpm --filter @stepd/server test",
+    "test": "pnpm --filter @stepd/native test && pnpm --filter @stepd/server test",
     "start": "pnpm -r --parallel start",
     "worker:naver": "pnpm --filter @stepd/server worker:naver",
     "lint": "pnpm --filter @stepd/web lint"
