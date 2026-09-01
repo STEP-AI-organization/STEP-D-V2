@@ -214,8 +214,9 @@ describe("무인 렌더는 채널 프리셋 없이 /export 를 부르지 않는�
     const src = read("factory.ts");
     assert.match(src, /shortformSegmentTooLong\(factoryAspect\(r\)/);
     assert.match(src, /aspectRatio: factoryAspect\(rec\)/);
-    // 판정식 리터럴은 factoryAspect 정의 **한 곳**에만 있어야 한다.
-    assert.equal([...src.matchAll(/kind === "short" \? "9:16-crop-main" : "16:9"/g)].length, 1,
+    // 판정식은 factoryAspect 정의 **한 곳**에만 있어야 한다. 세로 값 자체도 상수 하나
+    // (SHORTS_DEFAULT_ASPECT)로 — 문자열을 흩뿌리면 기본값을 바꿀 때 한쪽만 바뀐다.
+    assert.equal([...src.matchAll(/kind === "short" \? SHORTS_DEFAULT_ASPECT : "16:9"/g)].length, 1,
       "화면비 판정이 아직 두 벌이다 — factoryAspect 로 모을 것");
   });
 
@@ -226,7 +227,9 @@ describe("무인 렌더는 채널 프리셋 없이 /export 를 부르지 않는�
   });
 
   it("factoryAspect — 숏폼만 세로", () => {
-    assert.equal(factoryAspect({ kind: "short" }), "9:16-crop-main");
+    // 세로 기본 = 영상 전체 담기(사용자 확정 2026-09-01). 크롭하면 국회·토론처럼 인물이
+    // 화면 양끝에 잡히는 소재에서 사람이 잘려 나간다.
+    assert.equal(factoryAspect({ kind: "short" }), "9:16-letterbox");
     for (const kind of ["clip", "highlight", undefined, null]) {
       assert.equal(factoryAspect({ kind }), "16:9", String(kind));
     }

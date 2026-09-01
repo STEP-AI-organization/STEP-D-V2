@@ -190,8 +190,19 @@ export function targetPlatforms(targets: readonly string[] | undefined): string[
  * 두 벌이 되면 "게이트는 가로로 봤는데 채택은 세로로 만드는" 구멍이 생긴다.
  * (자동배포 계획은 방향을 사람이 고를 수 있어 automation-cycle 의 adoptAspect 가 따로 있다.)
  */
-export function factoryAspect(rec: { kind?: unknown }): "16:9" | "9:16-crop-main" {
-  return rec.kind === "short" ? "9:16-crop-main" : "16:9";
+/**
+ * 쇼츠 기본 화면비 — **영상 전체를 담고 위·아래를 검게** (사용자 확정 2026-09-01).
+ *
+ * 예전 기본은 `9:16-crop-main`(위 자막 띠 + 아래 큰 영상)이라 16:9 원본의 좌우를 **잘랐다.**
+ * 국회·토론처럼 **두 사람이 화면 양끝에 잡히는** 소재에서는 그 크롭이 인물을 잘라 먹는다.
+ * 전체를 담으면 영상이 작아지는 대신 무엇도 잃지 않고, 남는 검은 띠는 제목·시간박스가 쓴다.
+ *
+ * 프로그램별로 다르게 하고 싶으면 자동배포 계획의 `aspect` 가 이걸 덮는다(adoptAspect).
+ */
+export const SHORTS_DEFAULT_ASPECT = "9:16-letterbox" as const;
+
+export function factoryAspect(rec: { kind?: unknown }): "16:9" | typeof SHORTS_DEFAULT_ASPECT {
+  return rec.kind === "short" ? SHORTS_DEFAULT_ASPECT : "16:9";
 }
 
 async function save(job: FactoryJob): Promise<FactoryJob> {

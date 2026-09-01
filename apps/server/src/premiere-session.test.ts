@@ -725,7 +725,7 @@ describe("패널 — 영상 배치는 서버 프리셋을 따른다", () => {
   });
 
   it("서버는 ASPECT_PRESETS 를 그대로 내려 준다 — 여기서 계산을 새로 하지 않는다", () => {
-    assert.ok(index.includes("const preset = getAspectPreset(aspect) ?? getAspectPreset(\"9:16-crop-main\")!;"));
+    assert.ok(index.includes("const preset = getAspectPreset(aspect) ?? getAspectPreset(SHORTS_DEFAULT_ASPECT)!;"));
     assert.ok(index.includes("video: preset.rect"));
   });
 
@@ -874,7 +874,8 @@ describe("패널 — 제목은 서버가 찍어 준 .mogrt 를 얹는다", () =>
 
   it("서버도 그 비율을 받아 그린다 — 기본은 쇼츠(세로)", () => {
     assert.ok(index.includes('const want = c.req.query("aspect");'));
-    assert.ok(index.includes('const aspect = want === "16:9" ? "16:9" : "9:16-crop-main";'));
+    // 세로 기본은 factory.SHORTS_DEFAULT_ASPECT 한 곳에서 온다(2026-09-01 · letterbox 로 변경).
+    assert.ok(index.includes('const aspect = want === "16:9" ? "16:9" : SHORTS_DEFAULT_ASPECT;'));
   });
 
   it("웹과 **같은 렌더러**를 쓴다 — 복제하면 두 경로가 갈라진다", () => {

@@ -262,6 +262,7 @@ import {
   type ReframePlan,
 } from "./reframe.ts";
 import { getAspectPreset } from "./aspect-presets.ts";
+import { SHORTS_DEFAULT_ASPECT } from "./factory.ts";
 import { layoutFingerprint, restampPendingClips } from "./rule-restamp.ts";
 import { renderTextLayerPng, overlayCanvasAvailable, measureOverlayImage, FONT_FAMILIES, postScriptNameFor, type OverlayTextItem } from "./overlay-canvas.ts";
 import { patchTitleMogrt, inspectMogrt, layersFromOverlayItems, colorToInt, type MogrtTextLayer } from "./mogrt.ts";
@@ -6987,7 +6988,7 @@ app.get("/api/recommendations/:id/title.mogrt", async (c) => {
     : undefined;
 
   const want = c.req.query("aspect");
-  const aspect = want === "16:9" ? "16:9" : "9:16-crop-main";
+  const aspect = want === "16:9" ? "16:9" : SHORTS_DEFAULT_ASPECT;
   const { autoEditorState } = await import("./factory.ts");
   const es = autoEditorState(
     rec, ep?.programTitle ?? "", program,
@@ -7043,8 +7044,8 @@ app.get("/api/recommendations/:id/layout", async (c) => {
     : undefined;
 
   const want = c.req.query("aspect");
-  const aspect = want === "16:9" ? "16:9" : ((rule as any)?.aspect ?? (rec.kind === "short" ? "9:16-crop-main" : "16:9"));
-  const preset = getAspectPreset(aspect) ?? getAspectPreset("9:16-crop-main")!;
+  const aspect = want === "16:9" ? "16:9" : ((rule as any)?.aspect ?? (rec.kind === "short" ? SHORTS_DEFAULT_ASPECT : "16:9"));
+  const preset = getAspectPreset(aspect) ?? getAspectPreset(SHORTS_DEFAULT_ASPECT)!;
 
   const { autoEditorState } = await import("./factory.ts");
   const es = autoEditorState(
@@ -7097,7 +7098,7 @@ app.get("/api/recommendations/:id/decorations.png", async (c) => {
     : undefined;
 
   const want = c.req.query("aspect");
-  const aspect = want === "16:9" ? "16:9" : ((rule as any)?.aspect ?? (rec.kind === "short" ? "9:16-crop-main" : "16:9"));
+  const aspect = want === "16:9" ? "16:9" : ((rule as any)?.aspect ?? (rec.kind === "short" ? SHORTS_DEFAULT_ASPECT : "16:9"));
   const { autoEditorState } = await import("./factory.ts");
   const es = autoEditorState(
     rec, ep?.programTitle ?? "", program,
@@ -7201,7 +7202,7 @@ async function recRenderContext(rec: any, aspectQuery?: string): Promise<{
     : undefined;
   const aspect = aspectQuery === "16:9"
     ? "16:9"
-    : String((rule as any)?.aspect ?? (rec.kind === "short" ? "9:16-crop-main" : "16:9"));
+    : String((rule as any)?.aspect ?? (rec.kind === "short" ? SHORTS_DEFAULT_ASPECT : "16:9"));
   const { autoEditorState } = await import("./factory.ts");
   const es = autoEditorState(
     rec, ep?.programTitle ?? "", program,
@@ -7414,9 +7415,9 @@ app.post("/api/recommendations/:id/adopt", async (c) => {
   // AI 리프레임 여부는 세로형일 때만 의미가 있고, 클립 생성 뒤 프론트가 /clips/:id/reframe 로
   // 켠다(basicReframeState 로 만들어 두고, 세로+AI 면 그 라우트가 ai_multi 로 전환·큐잉).
   const body = await c.req.json<{ orientation?: string }>().catch(() => ({} as { orientation?: string }));
-  const aspectRatio = body.orientation === "portrait" ? "9:16-crop-main"
+  const aspectRatio = body.orientation === "portrait" ? SHORTS_DEFAULT_ASPECT
     : body.orientation === "landscape" ? "16:9"
-    : (rec.kind === "short" ? "9:16-crop-main" : "16:9");
+    : (rec.kind === "short" ? SHORTS_DEFAULT_ASPECT : "16:9");
 
   const episode = await getEntity<any>("episode", rec.episodeId);
   const allMedia = await listMedia();
@@ -9443,7 +9444,7 @@ app.get("/api/recommendations/:id/title.png", async (c) => {
   // 마커만 꽂은 경우는 가로다 — 다른 비율의 그림을 얹으면 프리미어가 늘리거나 잘라서
   // 글자 위치가 서버 미리보기와 어긋난다. 기본값은 쇼츠(세로).
   const want = c.req.query("aspect");
-  const aspect = want === "16:9" ? "16:9" : "9:16-crop-main";
+  const aspect = want === "16:9" ? "16:9" : SHORTS_DEFAULT_ASPECT;
   const { autoEditorState } = await import("./factory.ts");
   const es = autoEditorState(
     rec, ep?.programTitle ?? "", program,

@@ -17,6 +17,7 @@
  *   05 게시        채널 규칙 적용해 배포 (실패는 자동 재시도 없음)
  */
 import { commitAndInherit } from "./adopt.ts";
+import { SHORTS_DEFAULT_ASPECT } from "./factory.ts";
 import {
   appendRuleRun,
   creditBalance,
@@ -116,10 +117,11 @@ export async function runAutomationCycle(): Promise<CycleReport> {
  * 클립(롱폼)은 가로형이 기본이다(사용자 확정 2026-08-16) — 계획이 방향을 명시했으면 그게 우선,
  * 아니면 추천 종류(kind)로 정한다(하위호환 · 리프레임 OFF 시 불변).
  */
-function adoptAspect(rule: AutomationRule, rec: { kind?: unknown }): "16:9" | "9:16-crop-main" {
+function adoptAspect(rule: AutomationRule, rec: { kind?: unknown }): "16:9" | typeof SHORTS_DEFAULT_ASPECT {
   const landscape = rule.orientation === "landscape"
     || (rule.orientation !== "portrait" && rec.kind !== "short");
-  return landscape ? "16:9" : "9:16-crop-main";
+  // 세로 기본은 factory 와 **같은 상수**를 쓴다 — 두 곳에 적으면 한쪽만 바뀐다.
+  return landscape ? "16:9" : SHORTS_DEFAULT_ASPECT;
 }
 
 async function runAutomationCycleLocked(): Promise<CycleReport> {
