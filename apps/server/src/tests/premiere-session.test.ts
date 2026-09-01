@@ -205,10 +205,18 @@ describe("패널 매니페스트", () => {
     assert.equal(manifest.host[0].minVersion, "25.6.0");
   });
 
-  it("네트워크는 STEP-D 와 GCS 둘뿐 · 파일 접근은 request — 심사도 이 좁기를 본다", () => {
+  it("네트워크는 STEP-D 와 GCS 둘뿐 — 심사도 이 좁기를 본다", () => {
     assert.deepEqual(manifest.requiredPermissions.network.domains,
       ["https://stepd.stepai.kr", "https://storage.googleapis.com"]);
-    assert.equal(manifest.requiredPermissions.localFileSystem, "request");
+  });
+
+  it("파일 접근은 fullAccess — **넓히는 대신 얻는 것**을 알고 넓혔다", () => {
+    // 2026-09-01 까지는 "request" 였다(심사에서 좁을수록 좋다는 이유). 바꾼 이유:
+    // "request" 로는 임의 경로를 못 열어서 **원본을 어디 둘지 매번 사람에게 물어야 한다.**
+    // 사용자 요구가 정확히 그 반대였다 — "다운로드 위치도 우리가 조절해서 딱 나야."
+    // 넓힌 만큼 쓰는 자리를 좁게 유지한다: 정해진 영상 폴더 하나(+사람이 직접 고른 폴더).
+    // ⚠️ 마켓플레이스에 올릴 때는 이 값이 심사 대상이다 — 그때 근거를 이 주석으로 댈 것.
+    assert.equal(manifest.requiredPermissions.localFileSystem, "fullAccess");
   });
 
   it("플러그인 ID 는 마켓플레이스 등록 후 못 바꾼다 — 지금 값으로 고정", () => {
@@ -286,6 +294,68 @@ describe("패널 — 원본이 없으면 받아서 넣는다", () => {
 
   it("서명 URL 도메인이 매니페스트에 열려 있다", () => {
     assert.ok(manifest.requiredPermissions.network.domains.includes("https://storage.googleapis.com"));
+  });
+});
+
+/**
+ * 저장 위치는 **우리가 정한다.** 사용자 2026-09-01: "다운로드 위치 같은 것도 우리가 조절해서
+ * 딱 나야, 사용자가 사용하기 편할 거임." 처음 쓰는 사람에게 폴더 선택창부터 들이미는 건
+ * 우리가 정할 수 있는 걸 사람에게 떠넘기는 것이다.
+ */
+describe("패널 — 원본 저장 위치를 묻지 않는다", () => {
+  const html = read("packages/premiere/index.html");
+
+  it("정해진 자리를 **먼저** 쓰고, 안 되면 그때 묻는다", () => {
+    const fn = /async function mediaFolder\(\)[\s\S]*?\n}/.exec(panel)?.[0] ?? "";
+    assert.ok(fn, "mediaFolder 를 못 찾았다");
+    const auto = fn.indexOf("await defaultMediaFolder()");
+    const ask = fn.indexOf("await localFs.getFolder()");
+    assert.ok(auto > 0, "자동 경로가 없다 — 첫 사용자에게 폴더 선택창이 뜬다");
+    assert.ok(ask > auto, "묻는 게 먼저면 자동 경로는 죽은 코드다");
+  });
+
+  it("사람이 고른 폴더가 **이긴다** — 미디어 드라이브가 따로 있는 편집실이 있다", () => {
+    const fn = /async function mediaFolder\(\)[\s\S]*?\n}/.exec(panel)?.[0] ?? "";
+    const token = fn.indexOf("getEntryForPersistentToken(token)");
+    assert.ok(token > 0 && token < fn.indexOf("await defaultMediaFolder()"),
+      "저장된 선택보다 자동이 먼저면 사람이 바꾼 게 무시된다");
+    assert.match(panel, /async function pickMediaFolder\(\)/);
+  });
+
+  it("영상 폴더에 둔다 — 문서·바탕화면은 OneDrive 기본 백업이라 GB 가 클라우드로 올라간다", () => {
+    assert.ok(panel.includes('videos: "Videos"') && panel.includes('videos: "Movies"'),
+      "윈도우·맥 각각의 영상 폴더를 써야 한다");
+    assert.ok(!/videos: "(Documents|Desktop|Pictures)"/.test(panel));
+  });
+
+  it("홈은 **데이터 폴더 경로에서 되짚는다** — 이 프리미어에는 node 가 없다", () => {
+    // os.homedir() 를 쓰면 fs 없는 빌드에서 그대로 죽는다(원본 받기가 막혔던 그 원인).
+    assert.match(panel, /function homeFromDataPath\(dataPath\)/);
+    assert.ok(!panel.includes('require("os")'), "node os 에 기대면 안 된다");
+  });
+
+  it("임시 폴더에 두지 않는다 — 청소되면 프리미어 링크가 통째로 끊긴다", () => {
+    const fn = /async function defaultMediaFolder\(\)[\s\S]*?\n}/.exec(panel)?.[0] ?? "";
+    assert.ok(fn, "defaultMediaFolder 를 못 찾았다");
+    assert.ok(!fn.includes("getTemporaryFolder"));
+  });
+
+  it("자동이 안 되면 **조용히 실패하지 않는다** — null 을 돌려 부르는 쪽이 묻게 한다", () => {
+    const fn = /async function defaultMediaFolder\(\)[\s\S]*?\n}/.exec(panel)?.[0] ?? "";
+    assert.ok(/catch \(_\) \{\s*\n?\s*return null;/.test(fn) || fn.includes("return null;   //"),
+      "권한이 없을 때 던지면 받기 자체가 막힌다");
+  });
+
+  it("어디 쌓이는지 화면에 보여 준다 — 모르는 자리에 GB 가 쌓이면 그것도 사고다", () => {
+    assert.match(panel, /async function showMediaFolder\(\)/);
+    assert.ok(html.includes('id="mediaFolderPath"'), "경로 표시 자리가 없다");
+    assert.ok(html.includes('id="changeFolderBtn"'), "바꿀 길이 없으면 강제가 된다");
+  });
+
+  it("임의 경로를 열려면 매니페스트가 **fullAccess** 여야 한다", () => {
+    // "request" 면 getEntryWithUrl 이 막혀 자동 경로가 매번 실패하고, 결국 폴더 선택창으로
+    // 돌아간다 — 겉보기엔 고친 것 같은데 사용자 경험은 그대로다.
+    assert.equal(manifest.requiredPermissions.localFileSystem, "fullAccess");
   });
 });
 

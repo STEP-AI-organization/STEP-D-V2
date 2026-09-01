@@ -108,6 +108,17 @@
     .rec-meta { color: #8a8a8a; font-size: 11px; flex: 0 0 auto; line-height: 1.4; }
     .bar { height: 4px; background: #1d1d1d; border-radius: 2px; overflow: hidden; margin-top: 8px; }
     .bar > div { height: 4px; width: 0%; background-color: #2680eb; }
+    /* 저장 위치 한 줄 — 경로가 길어도 줄을 넘기지 않고 앞을 잘라 보여 준다(끝이 중요하다). */
+    .folderline { display: flex; align-items: center; gap: 6px; margin: 4px 0 2px; font-size: 11px; color: #8a8a8a; }
+    .folderlabel { flex: 0 0 auto; }
+    .folderpath {
+      flex: 1 1 auto; min-width: 0; overflow: hidden; white-space: nowrap;
+      direction: rtl; text-align: left; text-overflow: ellipsis; color: #c8c8c8;
+    }
+    .linkbtn {
+      flex: 0 0 auto; width: auto; margin: 0; padding: 0 2px; border: 0; background: none;
+      color: #6aa9ff; font-size: 11px; cursor: pointer; text-decoration: underline;
+    }
     .status { font-size: 12px; color: #a0a0a0; margin-top: 12px; line-height: 1.5; word-break: break-all; }
     .status.err { color: #ec5b62; }
     .status.ok { color: #33ab84; }
@@ -196,6 +207,13 @@
 
       <!-- 원본만 미리 받아 두고 싶을 때(진행률을 보며). 위 버튼도 같은 함수를 쓴다. -->
       <button id="fetchSrcBtn" class="secondary" disabled>원본만 받아 두기</button>
+      <!-- 저장 위치는 **묻지 않고 우리가 정한다**(Videos\STEP-D). 다만 어디 쌓이는지는
+           보여 준다 — GB 짜리가 모르는 자리에 쌓이면 그것도 사고다. 바꾸고 싶으면 바꾼다. -->
+      <div class="folderline">
+        <span class="folderlabel">원본 저장 위치</span>
+        <span id="mediaFolderPath" class="folderpath">…</span>
+        <button id="changeFolderBtn" class="linkbtn">바꾸기</button>
+      </div>
       <!-- 여러 구간을 한 타임라인에 이어 붙일 때. -->
       <button id="roughcutBtn" class="secondary" disabled>러프컷 시퀀스 만들기</button>
       <!-- 원본 타임라인에 위치만 표시. 구간 앞뒤를 원본 맥락에서 늘릴 때 쓴다. -->

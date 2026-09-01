@@ -34,7 +34,7 @@
     "network": {
       "domains": ["https://stepd.stepai.kr", "https://storage.googleapis.com"]
     },
-    "localFileSystem": "request",
+    "localFileSystem": "fullAccess",
     "allowCodeGenerationFromStrings": false,
     "webview": {
       "allow": "yes",

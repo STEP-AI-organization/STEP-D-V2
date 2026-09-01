@@ -1146,16 +1146,67 @@ const DOWNLOAD_LANES = 4;
 const DOWNLOAD_RETRIES = 3;
 
 /**
- * **원본 영상**을 둘 폴더 — 사람이 한 번 고른다.
+ * **원본 영상**을 둘 폴더.
  *
- * 왜 묻나: 몇백 MB~GB 짜리라 편집자가 어디 쌓이는지 알아야 하고, 나중에 다른 프로젝트에서
- * 다시 쓰기도 한다. 그래서 이건 보이는 자리에 둔다.
+ * 사용자 2026-09-01: *"다운로드 위치 같은 것도 우리가 조절해서 딱 나야, 사용자가 사용하기
+ * 편할 거임."* 맞다. 처음 쓰는 사람에게 폴더 선택창부터 들이미는 건 우리가 정할 수 있는 걸
+ * 사람에게 떠넘기는 것이다. 그래서 **묻지 않고 정해진 자리**에 받는다:
+ *
+ *     Windows : C:\Users\<사람>\Videos\STEP-D
+ *     macOS   : /Users/<사람>/Movies/STEP-D
+ *
+ * 왜 여기인가 — 세 가지를 동시에 만족하는 자리가 여기뿐이다:
+ *  · **찾을 수 있다.** 편집자가 탐색기에서 바로 연다(AppData 안이면 아무도 못 찾는다).
+ *  · **안 지워진다.** 임시 폴더는 청소되고, 그러면 프리미어 링크가 통째로 끊긴다.
+ *  · **동기화에 안 걸린다.** 문서·바탕화면·사진은 OneDrive 기본 백업 대상이라 GB 원본이
+ *    클라우드로 올라간다. 영상(Videos·Movies)은 기본 대상이 아니다.
+ *
+ * 홈 폴더는 **플러그인 데이터 폴더 경로에서 되짚는다** — 이 프리미어에는 node 가 없어서
+ * `os.homedir()` 을 못 쓴다(원본 다운로드가 같은 이유로 막혔던 그 문제다).
+ *
+ * 사람이 직접 고른 폴더가 있으면 **그게 이긴다**(아래 pickMediaFolder). 자동은 기본값이지
+ * 강제가 아니다 — 작업용 미디어 드라이브가 따로 있는 편집실이 실제로 있다.
  *
  * ⚠️ **세션 캐시가 필요하다**(2026-09-01): 예전엔 호출마다 토큰을 다시 풀었는데, 토큰이
  * 한 번이라도 안 풀리면 **부를 때마다 폴더 선택창이 떴다**. 한 번 작업에 6번까지 떴다
  * (사용자: "버튼 누르면 파일 저장창 여러 번 뜨는데"). 캐시가 그 반복을 끊는다.
  */
 let cachedMediaFolder = null;
+
+/** 경로 → file:// URL. UXP 는 슬래시만 받는다. */
+function toFileUrl(nativePath) {
+  const p = String(nativePath).split("\\").join("/");
+  return "file:///" + p.replace(/^\/+/, "");
+}
+
+/** 플러그인 데이터 폴더 경로에서 홈을 되짚는다. 못 짚으면 null. */
+function homeFromDataPath(dataPath) {
+  const p = String(dataPath || "");
+  const win = /^(.*?)[\\/]AppData[\\/]/i.exec(p);
+  if (win) return { home: win[1], sep: "\\", videos: "Videos" };
+  const mac = /^(.*?)\/Library\//.exec(p);
+  if (mac) return { home: mac[1], sep: "/", videos: "Movies" };
+  return null;
+}
+
+/** 정해진 자리를 만들어 돌려준다. 이 프리미어가 임의 경로를 못 열면 null(→ 묻는다). */
+async function defaultMediaFolder() {
+  try {
+    if (typeof localFs.getEntryWithUrl !== "function" || typeof localFs.getDataFolder !== "function") return null;
+    const data = await localFs.getDataFolder();
+    const at = homeFromDataPath(data && data.nativePath);
+    if (!at) return null;
+    const base = await localFs.getEntryWithUrl(toFileUrl(`${at.home}${at.sep}${at.videos}`));
+    if (!base) return null;
+    // 있으면 쓰고 없으면 만든다 — 같은 이름의 **파일**이 있으면 폴더가 아니므로 거른다.
+    const found = await base.getEntry("STEP-D").catch(() => null);
+    if (found && found.isFolder) return found;
+    if (found) return null;
+    return await base.createFolder("STEP-D");
+  } catch (_) {
+    return null;   // 권한이 없거나 경로를 못 연다 — 부르는 쪽이 사람에게 묻는다
+  }
+}
 
 async function mediaFolder() {
   if (cachedMediaFolder) return cachedMediaFolder;
@@ -1164,8 +1215,16 @@ async function mediaFolder() {
     try {
       cachedMediaFolder = await localFs.getEntryForPersistentToken(token);
       return cachedMediaFolder;
-    } catch (_) { /* 폴더가 사라졌다 — 아래에서 다시 묻는다 */ }
+    } catch (_) { /* 폴더가 사라졌다 — 아래로 */ }
   }
+
+  // **묻기 전에** 정해진 자리를 먼저 쓴다.
+  const auto = await defaultMediaFolder();
+  if (auto) {
+    cachedMediaFolder = auto;
+    return auto;
+  }
+
   const folder = await localFs.getFolder();
   if (!folder) throw new Error("원본을 저장할 폴더를 골라야 합니다.");
   try {
@@ -1173,6 +1232,30 @@ async function mediaFolder() {
   } catch (_) { /* 토큰을 못 만들면 다음 세션에 다시 묻는다 — 이번 세션은 캐시로 간다 */ }
   cachedMediaFolder = folder;
   return folder;
+}
+
+/** 사람이 저장 위치를 **직접** 바꾼다 — 기본값을 이긴다. */
+async function pickMediaFolder() {
+  const folder = await localFs.getFolder();
+  if (!folder) return null;
+  try {
+    await store.set("stepd.mediaFolderToken", await localFs.createPersistentToken(folder));
+  } catch (_) { /* 이번 세션만 유지된다 */ }
+  cachedMediaFolder = folder;
+  return folder;
+}
+
+/** 지금 저장 위치를 화면에 보여 준다 — 어디 쌓이는지 모르면 GB 가 조용히 쌓인다. */
+async function showMediaFolder() {
+  const el = $("mediaFolderPath");
+  if (!el) return;
+  try {
+    const f = await mediaFolder();
+    el.textContent = f.nativePath || "(경로 없음)";
+    el.title = f.nativePath || "";
+  } catch (_) {
+    el.textContent = "(아직 정해지지 않음)";
+  }
 }
 
 /**
@@ -2856,6 +2939,10 @@ async function doLogout() {
   $("makeShortsBtn").addEventListener("click", () => void doMakeShorts());
   $("prepMarkBtn").addEventListener("click", () => void doPrepareAndMark());
   $("subclipBtn").addEventListener("click", () => void doMakeSubclips());
+  $("changeFolderBtn").addEventListener("click", () => void (async () => {
+    // 여기서만 폴더 선택창을 띄운다 — 사람이 **직접 눌렀을 때.**
+    if (await pickMediaFolder()) await showMediaFolder();
+  })());
   $("program").addEventListener("change", () => {
     syncUploadButton();
     void refreshSequenceLabel();
@@ -2874,6 +2961,8 @@ async function doLogout() {
     await loadPrograms();
     await refreshSequenceLabel();
     warnIfFontsMissing();
+    // 저장 위치를 **미리** 만들어 보여 준다 — 받기 시작한 뒤에 경로를 알아 봐야 늦다.
+    void showMediaFolder();
     startHandoffPolling();
   } else {
     show("login");
