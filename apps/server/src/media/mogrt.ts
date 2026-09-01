@@ -128,14 +128,96 @@ function applyLayer(blob: Record<string, any>, layer: MogrtTextLayer): void {
 }
 
 /**
+ * ── 레이어 나누기 ────────────────────────────────────────────────────────────
+ *
+ * .prproj XML 은 **평평한 객체 목록**이다(레이어가 서로를 감싸지 않고 ObjectRef 로 가리킨다).
+ * 그런데 파라미터는 문서 순서대로 나오고 **레이어마다 ParameterID 가 1 부터 다시 센다.**
+ * 그래서 "pid 가 1 로 되돌아가면 새 레이어" 로 자르면 레이어 경계가 정확히 나온다.
+ *
+ * 레이어 종류는 **구조로** 알아본다 — `<Name>` 은 로케일 판에서 번역돼 있어 못 쓴다:
+ *   · 텍스트 : 첫 파라미터가 Arb + 그 blob 에 `mTextParam` 이 있다
+ *   · 도형   : 첫 파라미터가 Arb 인데 텍스트가 아니다 (Path·Appearance)
+ *   · 이미지 : 첫 파라미터가 Point(위치) + 반응형 핀(pid 8~11)이 붙어 있다
+ *   · 모션   : 그래픽 전체 변형. 핀이 없다
+ *
+ * 종류마다 pid 배치가 다르다(실측 `Titles/Modern Title.mogrt`):
+ *   텍스트 1=문구 3=위치 8=불투명도 9=기준점
+ *   이미지 1=위치 2=배율 4=균일배율 5=회전 6=불투명도 7=기준점 8~11=핀
+ *   도형   4=위치 9=불투명도
+ */
+type LayerKind = "text" | "shape" | "image" | "motion" | "other";
+
+const PARAM_RE = /<(\w+ComponentParam)\b[^>]*>([\s\S]*?)<\/\1>/g;
+
+/** 이미지 레이어의 pid 배치 (실측 `Titles/Modern Title.mogrt`). */
+const IMAGE_SCALE_ID = 2;
+const IMAGE_HSCALE_ID = 3;
+const IMAGE_UNIFORM_SCALE_ID = 4;
+const IMAGE_ROTATION_ID = 5;
+const IMAGE_OPACITY_ID = 6;
+const IMAGE_ANCHOR_ID = 7;
+/** 도형 레이어의 불투명도 pid — 배치가 이미지와 다르다. */
+const SHAPE_OPACITY_ID = 9;
+
+/** 스칼라 파라미터 값 — `<StartKeyframe>시각,값,…`. */
+function setScalar(block: string, value: string): string {
+  return block.replace(/(<StartKeyframe>)([^,]*),([^,<]*)/, (_w, head, time) => `${head}${time},${value}`);
+}
+
+/** 좌표 파라미터 값 — `<StartKeyframe>시각,x,y,…`. */
+function setPoint(block: string, x: number, y: number): string {
+  return block.replace(START_KEYFRAME_RE, (_w, head: string, time: string, _x, _y, tail: string) =>
+    `${head}${time},${x},${y}${tail}`);
+}
+
+type LayerScan = { tags: string[]; pids: number[]; textish: boolean };
+
+/** 문서 순서대로 파라미터를 훑어 레이어 경계와 종류를 낸다. */
+function scanLayers(xml: string): LayerKind[] {
+  const kinds: LayerKind[] = [];
+  let cur: LayerScan | null = null;
+  const close = (g: LayerScan | null) => {
+    if (!g) return;
+    const first = g.tags[0] ?? "";
+    const hasPins = [8, 9, 10, 11].every((p) => g.pids.includes(p));
+    if (first.startsWith("Arb")) kinds.push(g.textish ? "text" : "shape");
+    else if (first.startsWith("Point")) kinds.push(hasPins && g.pids.length >= 12 ? "image" : "motion");
+    else kinds.push("other");
+  };
+  for (const m of xml.matchAll(PARAM_RE)) {
+    const pid = Number(/<ParameterID>(\d+)</.exec(m[2])?.[1] ?? 0);
+    if (pid === 1 || !cur) { close(cur); cur = { tags: [], pids: [], textish: false }; }
+    cur.tags.push(m[1]);
+    cur.pids.push(pid);
+    if (cur.tags.length === 1 && m[1].startsWith("Arb")) {
+      const b64 = /<StartKeyframeValue Encoding="base64"[^>]*>([A-Za-z0-9+/=\s]+)</.exec(m[2])?.[1] ?? "";
+      cur.textish = Boolean(decodeTextBlob(b64));
+    }
+  }
+  close(cur);
+  return kinds;
+}
+
+/**
  * `.prgraphic` 하나(= 한 언어 판)를 우리 제목으로 고쳐 제자리에 되쓴다.
  * 텍스트 레이어를 하나라도 고쳤으면 true.
  */
-function patchGraphic(outer: Record<string, Uint8Array>, name: string, layers: MogrtTextLayer[]): boolean {
+function patchGraphic(
+  outer: Record<string, Uint8Array>, name: string, layers: MogrtTextLayer[], image?: Uint8Array | null,
+): boolean {
   const inner = unzipSync(outer[name]);
   const prName = Object.keys(inner).find((n) => n.endsWith(".prproj"));
   if (!prName) return false;
   let xml = Buffer.from(gunzipSync(Buffer.from(inner[prName]))).toString("utf-8");
+  const kinds = image ? scanLayers(xml) : [];
+
+  // 그림은 **`.prgraphic` 안에 통째로 들어 있다**(예: `Bracket_A.png`). 그 바이트만 갈아 끼우면
+  // 레이어·참조는 그대로 살아 있다 — 레이어를 새로 만드는 것과 달리 깨질 구석이 없다.
+  if (image) {
+    const media = Object.keys(inner).filter((n) => !n.endsWith(".prproj"));
+    if (!media.length) throw new Error("이 베이스에는 그림 레이어가 없다 — 로고를 넣을 자리가 없다");
+    for (const m of media) inner[m] = image;
+  }
 
   // ── ① 텍스트 blob (문구·글꼴·크기·색)
   let slots = 0;
@@ -172,6 +254,38 @@ function patchGraphic(outer: Record<string, Uint8Array>, name: string, layers: M
       `${head}${time},${layer.xNorm},${layer.yNorm}${tail}`);
   });
 
+  // ── ②-B 이미지 레이어 — **한 장을 화면 전체로, 나머지는 감춘다.**
+  //
+  // 베이스(`Titles/Modern Title`)에는 장식용 이미지 레이어가 **둘**, 도형 레이어가 하나 있다.
+  // 우리는 그중 하나만 우리 그림(로고·시간박스 한 장)으로 쓰고 나머지는 불투명도 0 으로 끈다 —
+  // 지우지 않는 이유: 레이어를 XML 에서 들어내면 참조가 깨진다. **끄는 게 안전하다.**
+  if (kinds.includes("image")) {
+    const firstImage = kinds.indexOf("image");
+    let li = -1;
+    let cur: LayerKind = "other";
+    xml = xml.replace(PARAM_RE, (block: string, _tag: string, body: string) => {
+      const pid = Number(/<ParameterID>(\d+)</.exec(body)?.[1] ?? 0);
+      if (pid === 1 || li < 0) { li += 1; cur = kinds[li] ?? "other"; }
+      if (cur === "shape") return pid === SHAPE_OPACITY_ID ? setScalar(block, "0.") : block;
+      if (cur !== "image") return block;
+      if (li !== firstImage) return pid === IMAGE_OPACITY_ID ? setScalar(block, "0.") : block;
+      switch (pid) {
+        case 1: return setPoint(block, 0.5, 0.5);                  // 화면 한가운데
+        // 원본 크기 = 프레임 크기. 가로 배율도 같이 —  베이스는 둘이 다른 값이라
+        // (한국어 판 실측: 세로 11.59 · 가로 34.09) 하나만 고치면 찌그러진다.
+        case IMAGE_SCALE_ID: return setScalar(block, "100.");
+        case IMAGE_HSCALE_ID: return setScalar(block, "100.");
+        case IMAGE_UNIFORM_SCALE_ID: return setScalar(block, "true");
+        case IMAGE_ROTATION_ID: return setScalar(block, "0.");      // 베이스는 한 장이 180° 다
+        case IMAGE_OPACITY_ID: return setScalar(block, "100.");
+        case IMAGE_ANCHOR_ID: return setPoint(block, 0.5, 0.5);     // 기준점도 한가운데
+        case 8: case 9: case 10: case 11:
+          return setScalar(block, "false");                         // 반응형 핀 해제 — 꽉 채운다
+        default: return block;
+      }
+    });
+  }
+
   // ── ③ 되감기: gzip → 안쪽 zip → 바깥 zip
   inner[prName] = new Uint8Array(gzipSync(Buffer.from(xml, "utf-8")));
   outer[name] = zipSync(inner);
@@ -187,7 +301,7 @@ function patchGraphic(outer: Record<string, Uint8Array>, name: string, layers: M
  */
 export function patchTitleMogrt(
   base: Uint8Array, layers: MogrtTextLayer[], meta: MogrtMeta,
-  opts: { stripThumbs?: boolean } = {},
+  opts: { stripThumbs?: boolean; image?: Uint8Array | null } = {},
 ): Uint8Array {
   if (!layers.length) throw new Error("layers is empty");
   const outer = unzipSync(base);
@@ -204,7 +318,7 @@ export function patchTitleMogrt(
   let patched = 0;
   for (const name of Object.keys(outer)) {
     if (!name.endsWith(".prgraphic")) continue;
-    if (patchGraphic(outer, name, layers)) patched += 1;
+    if (patchGraphic(outer, name, layers, opts.image)) patched += 1;
   }
   if (!patched) throw new Error("텍스트 레이어를 찾지 못했다 — 베이스 템플릿이 제목용이 아니다");
 

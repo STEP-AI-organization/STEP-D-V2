@@ -303,6 +303,124 @@ describe("mogrt — 오버레이 아이템 → 레이어", () => {
   });
 });
 
+/**
+ * 로고까지 한 그래픽에 — 사용자 2026-09-01: *"굳이 2개로 줄 필요가 없."*
+ *
+ * 베이스는 프리미어가 깔아 주는 `Titles/Modern Title.mogrt` 다(텍스트 2 + 이미지 2 + 도형 1).
+ * 아래 픽스처는 그 **구조**를 그대로 흉내 낸다 — 레이어 종류를 `<Name>` 이 아니라 구조로
+ * 알아보는 게 이 코드의 핵심이라, 구조가 다르면 테스트가 아무것도 증명하지 못한다.
+ */
+function paramsFor(kind: "text" | "image" | "shape", i: number): string {
+  const p = (tag: string, pid: number, kf: string) =>
+    `\t<${tag} ObjectID="${900 + i * 20 + pid}">\n\t\t<Name>x</Name>\n`
+    + `\t\t<StartKeyframe>-91445760000000000,${kf}</StartKeyframe>\n`
+    + `\t\t<ParameterID>${pid}</ParameterID>\n\t</${tag}>\n`;
+  if (kind === "text") {
+    return `\t<ArbVideoComponentParam ObjectID="${900 + i * 20 + 1}">\n\t\t<Name>x</Name>\n`
+      + `\t\t<StartKeyframeValue Encoding="base64">${textBlob(`원래 ${i}`, "MyriadPro-Regular", 100, 0xffffff)}</StartKeyframeValue>\n`
+      + `\t\t<ParameterID>1</ParameterID>\n\t</ArbVideoComponentParam>\n`
+      + p("PointComponentParam", 3, "0.9,0.9,0,0,0,0,0,0,5,4,0,0,0,0")
+      + p("VideoComponentParam", 8, "100.,0,0");
+  }
+  if (kind === "shape") {
+    return `\t<ArbVideoComponentParam ObjectID="${900 + i * 20 + 1}">\n\t\t<Name>x</Name>\n`
+      + `\t\t<StartKeyframeValue Encoding="base64">AAAA</StartKeyframeValue>\n`
+      + `\t\t<ParameterID>1</ParameterID>\n\t</ArbVideoComponentParam>\n`
+      + p("VideoComponentParam", 9, "100.,0,0");
+  }
+  // 이미지 — 반응형 핀(8~11)이 붙어 있어야 모션과 구별된다.
+  return p("PointComponentParam", 1, "0.1,0.2,0,0,0,0,0,0,5,4,0,0,0,0")
+    + p("VideoComponentParam", 2, "11.5,0,0")
+    + p("VideoComponentParam", 3, "34.0,0,0")
+    + p("VideoComponentParam", 4, "false,0,0")
+    + p("VideoComponentParam", 5, "180.,0,0")
+    + p("VideoComponentParam", 6, "100.,0,0")
+    + p("PointComponentParam", 7, "0.5,0.5,0,0,0,0,0,0,5,4,0,0,0,0")
+    + p("VideoComponentParam", 8, "true,0,0")
+    + p("VideoComponentParam", 9, "false,0,0")
+    + p("VideoComponentParam", 10, "true,0,0")
+    + p("VideoComponentParam", 11, "false,0,0")
+    + p("VideoComponentParam", 12, "0.,0,0");
+}
+
+function logoMogrt(): Uint8Array {
+  const xml = '<?xml version="1.0" encoding="UTF-8" ?>\n<PremiereData Version="3">\n'
+    + paramsFor("text", 0) + paramsFor("image", 1) + paramsFor("image", 2)
+    + paramsFor("text", 3) + paramsFor("shape", 4)
+    + "</PremiereData>\n";
+  const graphic = zipSync({
+    "Bracket_A.png": new Uint8Array([137, 80, 78, 71, 1, 2, 3]),
+    "PPro_Fake.prproj": new Uint8Array(gzipSync(Buffer.from(xml, "utf-8"))),
+  });
+  return zipSync({
+    "definition.json": new Uint8Array(Buffer.from(JSON.stringify({
+      capsuleID: "0", capsuleName: "Modern Title", clientControls: [],
+    }), "utf-8")),
+    "project.prgraphic": graphic,
+    "project_ko_KR.prgraphic": graphic,
+  });
+}
+
+/** 레이어별 파라미터 값 — 문서 순서대로, pid 가 1 로 되돌아가면 새 레이어. */
+function layerParams(xml: string): Array<Map<number, string>> {
+  const out: Array<Map<number, string>> = [];
+  let cur: Map<number, string> | null = null;
+  for (const m of xml.matchAll(/<(\w+ComponentParam)\b[^>]*>([\s\S]*?)<\/\1>/g)) {
+    const pid = Number(/<ParameterID>(\d+)</.exec(m[2])?.[1] ?? 0);
+    if (pid === 1 || !cur) { cur = new Map(); out.push(cur); }
+    const kf = /<StartKeyframe>[^,]*,([^<]*)</.exec(m[2])?.[1];
+    if (kf) cur.set(pid, kf);
+  }
+  return out;
+}
+
+describe("mogrt — 로고까지 한 그래픽에", () => {
+  const IMG = new Uint8Array([137, 80, 78, 71, 9, 9, 9, 9, 9]);
+
+  it("그림 바이트를 **모든 언어 판**에서 갈아 끼운다", () => {
+    const out = patchTitleMogrt(logoMogrt(), [layer(), layer()], META, { image: IMG });
+    const outer = unzipSync(out);
+    for (const g of ["project.prgraphic", "project_ko_KR.prgraphic"]) {
+      const inner = unzipSync(outer[g]);
+      assert.deepEqual(Array.from(inner["Bracket_A.png"]), Array.from(IMG), `${g}: 그림이 그대로다`);
+    }
+  });
+
+  it("첫 그림 레이어를 **화면 꽉 채우게** 만든다 — 위치·배율·회전·핀까지", () => {
+    const out = patchTitleMogrt(logoMogrt(), [layer(), layer()], META, { image: IMG });
+    const g = layerParams(readBack(out).xml)[1];   // 0=텍스트, 1=첫 그림
+    assert.match(g.get(1)!, /^0\.5,0\.5,/, "가운데가 아니다");
+    assert.equal(g.get(2), "100.,0,0");
+    assert.equal(g.get(3), "100.,0,0", "가로 배율만 남으면 찌그러진다");
+    assert.equal(g.get(4), "true,0,0");
+    assert.equal(g.get(5), "0.,0,0", "베이스는 180° 뒤집혀 있다");
+    assert.equal(g.get(6), "100.,0,0");
+    for (const pin of [8, 9, 10, 11]) assert.equal(g.get(pin), "false,0,0", `핀 ${pin} 이 남아 있다`);
+  });
+
+  it("남는 그림·도형은 **끄기만 한다** — 지우면 참조가 깨진다", () => {
+    const out = patchTitleMogrt(logoMogrt(), [layer(), layer()], META, { image: IMG });
+    const groups = layerParams(readBack(out).xml);
+    assert.equal(groups[2].get(6), "0.,0,0", "두 번째 그림이 그대로 보인다");
+    assert.equal(groups[4].get(9), "0.,0,0", "도형이 그대로 보인다");
+    assert.equal((readBack(out).xml.match(/ComponentParam/g) || []).length,
+      (readBack(patchTitleMogrt(logoMogrt(), [layer(), layer()], META)).xml.match(/ComponentParam/g) || []).length,
+      "레이어를 들어냈다 — 참조가 깨진다");
+  });
+
+  it("그림을 안 주면 **아무것도 안 건드린다** — 기존 제목 경로가 그대로여야 한다", () => {
+    const out = patchTitleMogrt(logoMogrt(), [layer(), layer()], META);
+    const g = layerParams(readBack(out).xml)[1];
+    assert.equal(g.get(2), "11.5,0,0", "그림 레이어를 건드렸다");
+    assert.equal(g.get(6), "100.,0,0");
+  });
+
+  it("그림 레이어가 없는 베이스에 그림을 주면 **던진다** — 조용히 빠지면 로고가 사라진다", () => {
+    assert.throws(() => patchTitleMogrt(fakeMogrt(2), [layer()], META, { image: IMG }),
+      /그림 레이어가 없다/);
+  });
+});
+
 describe("mogrt — 색·정렬 변환", () => {
   it("#rrggbb → 정수, 못 읽으면 흰색", () => {
     assert.equal(colorToInt("#F3AF4F"), 0xf3af4f);
