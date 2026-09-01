@@ -128,14 +128,14 @@ describe("패널 — 추천을 타임라인 마커로", () => {
   it("액션 패턴을 지킨다 — 만들기만 하면 아무 일도 안 일어난다", () => {
     assert.match(panel, /Markers\.getMarkers\(sequence\)/);
     assert.match(panel, /markers\.createAddMarkerAction\(/);
-    assert.match(panel, /project\.executeTransaction\(/);
+    assert.match(panel, /lockedTransaction\(project, /);
   });
 
   it("트랜잭션 **하나**에 다 담는다 — Ctrl+Z 한 번으로 전부 되돌리게", () => {
     // for 루프가 executeTransaction 콜백 **안**에 있어야 한다. 밖에 있으면 마커마다
     // 트랜잭션이 하나씩 생겨 되돌리기를 스무 번 눌러야 한다.
-    const m = /executeTransaction\(\(compound\) => \{([\s\S]*?)\n  \}, `STEP-D/.exec(panel);
-    assert.ok(m, "executeTransaction 블록을 찾지 못했다");
+    const m = /lockedTransaction\(project, \(compound\) => \{([\s\S]*?)\n  \}, `STEP-D/.exec(panel);
+    assert.ok(m, "트랜잭션 블록을 찾지 못했다");
     assert.match(m![1], /for \(const r of recs\)/);
   });
 
@@ -513,6 +513,16 @@ describe("패널 — 객체 무효화를 견딘다", () => {
     const byName = fn.indexOf("String(item.name || \"\").toLowerCase()");
     const byPath = fn.indexOf("await clip.getMediaFilePath()");
     assert.ok(byName > 0 && byPath > byName, "경로부터 물으면 목록이 무효가 된다");
+  });
+
+  it("모든 트랜잭션이 **프로젝트를 잠근 채** 돈다 — 이게 공식 처방이다", () => {
+    // 공식 선언: lockedAccess = "project state will not change during the execution of
+    // callback function. Can call executeTransaction while having locked access."
+    assert.ok(panel.includes("function lockedTransaction(project, build, label)"));
+    assert.ok(panel.includes("project.lockedAccess(() => { out = fn(); });"));
+    // 잠그지 않은 직접 호출이 남아 있으면 거기서 또 난다.
+    const direct = panel.match(/\w+\.executeTransaction\(/g) ?? [];
+    assert.equal(direct.length, 1, "lockedTransaction 헬퍼 안의 한 번만 남아야 한다");
   });
 
   it("무효화면 **한 번만** 다시 돈다 — 무한 재시도는 멈춘 것처럼 보인다", () => {

@@ -621,7 +621,7 @@ async function seekActiveSequence(sec) {
  * 공식 선언(@adobe/premierepro 26.3.0) 대조:
  *   `Markers.getMarkers(sequence): Promise<Markers>`
  *   `markers.createAddMarkerAction(Name, markerType?, startTime?, duration?, comments?): Action`
- *   `project.executeTransaction(cb => cb.addAction(action), undoString?): boolean`
+ *   `lockedTransaction(project, cb => cb.addAction(action), undoString?): boolean`
  *
  * 마커는 **액션 패턴**이다 — 만들기만 하면 아무 일도 안 일어나고, 트랜잭션에 담아 실행해야
  * 반영된다. 트랜잭션 하나에 다 담는 이유: 편집자가 **Ctrl+Z 한 번으로 전부 되돌릴 수 있다.**
@@ -670,7 +670,7 @@ async function addMarkersOnce(recs) {
   const project = await stage("프로젝트", () => readMaybe(api.Project, "getActiveProject"));
   if (!project) throw new Error("열려 있는 프로젝트가 없습니다.");
 
-  const ok = project.executeTransaction((compound) => {
+  const ok = lockedTransaction(project, (compound) => {
     for (const r of recs) {
       const startSec = Number(r.startTime) || 0;
       const durSec = Math.max(0.1, (Number(r.endTime) || 0) - startSec);
@@ -693,6 +693,36 @@ async function addMarkersOnce(recs) {
 
   if (ok === false) throw new Error("마커를 넣지 못했습니다 — 시퀀스가 잠겨 있는지 확인하세요.");
   return { sequenceName: name, count: recs.length };
+}
+
+/**
+ * **프로젝트를 잠근 채** 동기 블록을 돌린다.
+ *
+ * 공식 선언 그대로: *"Get a read/upgrade locked access to Project, project state will not change
+ * during the execution of callback function. **Can call executeTransaction while having locked
+ * access.**"* — 즉 이 API 는 정확히 우리가 맞은 문제("The script object is no longer valid")를
+ * 위해 있다. 앞서 얻어 둔 markers·sequence 핸들이 트랜잭션 도중 프리미어의 내부 갱신으로
+ * 무효가 되는 걸 막는다.
+ *
+ * ⚠️ 콜백은 **동기**여야 한다(반환값 void). 안에서 await 하면 잠금이 풀린 뒤에 돌아온다.
+ * 옛 프리미어에 이 API 가 없으면 그냥 실행한다 — 없다고 기능을 막을 이유는 없다.
+ */
+function runLocked(project, fn) {
+  if (typeof project.lockedAccess !== "function") return fn();
+  let out;
+  project.lockedAccess(() => { out = fn(); });
+  return out;
+}
+
+/**
+ * 잠근 채로 도는 트랜잭션. **패널의 모든 executeTransaction 은 이걸 쓴다.**
+ *
+ * 왜 전부인가: "The script object is no longer valid" 는 마커에서만 난 게 아니라 **구조적**이다.
+ * 트랜잭션을 부르기까지 우리는 늘 await 를 몇 번 건너고(시퀀스·마커·항목 조회), 그 사이
+ * 프리미어가 내부를 갱신하면 앞서 얻은 핸들이 죽는다. 한 군데만 고치면 다음 자리에서 또 난다.
+ */
+function lockedTransaction(project, build, label) {
+  return runLocked(project, () => project.executeTransaction(build, label));
 }
 
 // ── 글꼴 확인 ─────────────────────────────────────────────────────────────────
@@ -1136,7 +1166,7 @@ async function makeSubclipsForRecs(recs, onStage) {
   // 찾은 객체를 **그 자리에서** 쓴다 — await 를 건너 들고 나가면 무효가 된다.
   return await findMasterItem(filename, ({ api, project, clip, name }) => {
   onStage(`"${name}" 에서 ${recs.length}개 구간 자르는 중…`);
-  const ok = project.executeTransaction((compound) => {
+  const ok = lockedTransaction(project, (compound) => {
     for (const r of recs) {
       const start = api.TickTime.createWithSeconds(Number(r.startTime) || 0);
       const end = api.TickTime.createWithSeconds(Number(r.endTime) || 0);
@@ -1244,7 +1274,7 @@ async function makeSequenceVertical(api, project, seq, onStage, layout) {
     rect.width = canvas.w;
     rect.height = canvas.h;
     await settings.setVideoFrameRect(rect);
-    const ok = project.executeTransaction(
+    const ok = lockedTransaction(project, 
       (compound) => { compound.addAction(seq.createSetSettingsAction(settings)); },
       `STEP-D 프레임 ${canvas.w}×${canvas.h}`,
     );
@@ -1338,7 +1368,7 @@ async function setMotionOnClips(api, project, seq, want, onStage) {
           actions.push(p.createSetValueAction(p.createKeyframe(new api.PointF(want.position.x, want.position.y)), true));
         }
         if (!actions.length) break;
-        const ok = project.executeTransaction(
+        const ok = lockedTransaction(project, 
           (compound) => { for (const a of actions) compound.addAction(a); },
           "STEP-D 영상 배치",
         );
@@ -1364,7 +1394,7 @@ async function buildRoughCut(recs, onStage) {
   //    원본 객체는 **찾은 자리에서 바로** 쓴다(await 를 건너면 무효가 된다).
   onStage(`${recs.length}개 구간 자르는 중…`);
   const srcName = await findMasterItem(filename, ({ api, project, clip, name }) => {
-    const cut = project.executeTransaction((compound) => {
+    const cut = lockedTransaction(project, (compound) => {
       for (const r of recs) {
         compound.addAction(clip.createSubClipAction(
           subclipName(r),
@@ -1526,7 +1556,7 @@ async function addDecorationsForRecs(recs, aspect, onStage) {
       if (!item) continue;
       const at = api2.TickTime.createWithSeconds(Number(rec.startTime) || 0);
       const action = editor.createOverwriteItemAction(item, at, DECORATION_TRACK, 0);
-      const done = project2.executeTransaction((c) => { c.addAction(action); }, `STEP-D 오버레이 ${name}`);
+      const done = lockedTransaction(project2, (c) => { c.addAction(action); }, `STEP-D 오버레이 ${name}`);
       if (done !== false) n += 1;
     }
     return n;
@@ -1609,7 +1639,7 @@ async function addCaptionMogrts(recs, aspect, onStage) {
       // 길이 맞추기 — 넣자마자 그 자리에서(await 를 건너면 객체가 무효가 된다).
       if (typeof item.createSetEndAction === "function") {
         const end = api2.TickTime.createWithSeconds(startSec + dur);
-        project.executeTransaction((c) => { c.addAction(item.createSetEndAction(end)); }, `STEP-D 자막 길이 ${job.i}`);
+        lockedTransaction(project, (c) => { c.addAction(item.createSetEndAction(end)); }, `STEP-D 자막 길이 ${job.i}`);
       }
       n += 1;
     } catch (err) {
@@ -1672,7 +1702,7 @@ async function addCaptionPngs(recs, aspect, onStage) {
       const inOut = item.createSetInOutPointsAction(
         api2.TickTime.createWithSeconds(0), api2.TickTime.createWithSeconds(dur));
       const place = editor.createOverwriteItemAction(item, at, CAPTION_TRACK, 0);
-      const done = project2.executeTransaction((c) => { c.addAction(inOut); c.addAction(place); }, `STEP-D 자막 ${name}`);
+      const done = lockedTransaction(project2, (c) => { c.addAction(inOut); c.addAction(place); }, `STEP-D 자막 ${name}`);
       if (done !== false) n += 1;
     }
     return n;
@@ -1764,7 +1794,7 @@ async function addTitlePngs(recs, aspect, tracks, onStage) {
       const at = api2.TickTime.createWithSeconds(Number(rec.startTime) || 0);
       // V2(인덱스 1)에 얹는다 — V1 의 영상 위에 있어야 제목이 보인다. 오디오는 없다.
       const action = editor.createOverwriteItemAction(item, at, TITLE_TRACK, 0);
-      const done = project2.executeTransaction((c) => { c.addAction(action); }, `STEP-D 제목 ${name}`);
+      const done = lockedTransaction(project2, (c) => { c.addAction(action); }, `STEP-D 제목 ${name}`);
       if (done !== false) n += 1;
     }
     return n;
@@ -2004,7 +2034,7 @@ async function openRecSequence(r) {
   if (!filename) throw new Error("이 추천에 연결된 원본 파일 정보가 없습니다.");
 
   await findMasterItem(filename, ({ api: api2, project: project2, clip }) => {
-    const ok = project2.executeTransaction((compound) => {
+    const ok = lockedTransaction(project2, (compound) => {
       compound.addAction(clip.createSubClipAction(
         subclipName(r),
         api2.TickTime.createWithSeconds(Number(r.startTime) || 0),
