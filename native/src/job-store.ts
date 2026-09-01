@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, readdir, rename, unlink, writeFile } from "node:fs/promises";
+import { mkdir, open, readFile, readdir, rename, unlink } from "node:fs/promises";
 import path from "node:path";
 
 import type { NativeUploadJob, NativeUploadRequest } from "./contract.js";
@@ -65,17 +65,58 @@ export class JobStore {
         const parsed = JSON.parse(await readFile(path.join(this.directory, name), "utf8")) as StoredUploadJob;
         if (parsed && typeof parsed.id === "string" && parsed.request && parsed.filePath) jobs.push(parsed);
       } catch (error) {
-        console.error(`[native] 전송 작업 파일을 읽지 못했습니다: ${name}`, error);
+        // ⚠️ 조용히 건너뛰면 그 잡은 화면에서 사라지고, GCS 에 올라간 바이트는 주인을 잃는다.
+        // 지우지 말고 옆으로 치워 둔다 — 사람이 열어봐야 무슨 일이 있었는지 알 수 있다.
+        console.error(`[native] 전송 작업 파일이 손상됐습니다: ${name}`, error);
+        await rename(path.join(this.directory, name), path.join(this.directory, `${name}.corrupt`))
+          .catch(() => {});
       }
     }
     return jobs.sort((a, b) => a.createdAt.localeCompare(b.createdAt));
   }
 
+  /**
+   * 잡별 저장 직렬화.
+   *
+   * ⚠️ 같은 잡에 대한 `save()` 가 겹치면 **나중에 rename 된 쪽이 이긴다.** 각 호출은 서로 다른
+   * 시점의 전체 스냅샷을 쓰기 때문에, 진행률 저장이 취소 저장을 덮으면 재기동 때 **취소한
+   * 10GB 작업이 되살아난다.** 파일이 잡마다 하나라 잡 단위로 줄을 세우면 충분하다.
+   */
+  private readonly writeChain = new Map<string, Promise<void>>();
+
   async save(job: StoredUploadJob): Promise<void> {
+    const snapshot = JSON.stringify(job, null, 2);
+    const previous = this.writeChain.get(job.id) ?? Promise.resolve();
+    const next = previous
+      .catch(() => {})                       // 앞 저장이 실패해도 줄은 계속 선다
+      .then(() => this.writeSnapshot(job.id, snapshot));
+    this.writeChain.set(job.id, next);
+    try {
+      await next;
+    } finally {
+      if (this.writeChain.get(job.id) === next) this.writeChain.delete(job.id);
+    }
+  }
+
+  /**
+   * 임시 파일 → **fsync** → rename.
+   *
+   * ⚠️ fsync 가 없으면 rename 이 원자적이어도 **내용은 아니다.** 전원이 나가면 디렉토리
+   * 엔트리는 새 파일을 가리키는데 그 안이 0바이트이거나 반만 쓰인 JSON 일 수 있다.
+   * 그리고 `list()` 는 파싱 실패한 파일을 건너뛰므로, 그 잡은 화면에서 사라지고 GCS 에
+   * 올라간 바이트는 주인을 잃는다. 10GB 짜리에 그러면 그대로 손실이다.
+   */
+  private async writeSnapshot(jobId: string, snapshot: string): Promise<void> {
     await this.init();
-    const target = this.pathFor(job.id);
+    const target = this.pathFor(jobId);
     const temporary = `${target}.${randomUUID()}.tmp`;
-    await writeFile(temporary, `${JSON.stringify(job, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+    const handle = await open(temporary, "w", 0o600);
+    try {
+      await handle.writeFile(`${snapshot}\n`, "utf8");
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
     await rename(temporary, target);
   }
 
