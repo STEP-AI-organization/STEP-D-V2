@@ -4,6 +4,7 @@
  *
  * Same domain graph + media/youtube schema as the SQLite prototype.
  */
+import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import pg from "pg";
 import { seed } from "./seed.ts";
@@ -4270,15 +4271,25 @@ export async function listUnsettledAutoTopups(): Promise<TopupRow[]> {
  * 기다렸다가 앞선 실행이 커밋한 결과를 보고 재판정하게 된다 (자동 충전 이중 결제 방어).
  */
 /**
- * 동시에 자문 잠금을 쥘 수 있는 호출자 수. **최소 2개는 fn() 몫으로 남긴다.**
+ * 동시에 자문 잠금을 쥘 수 있는 **바깥쪽** 호출자 수.
  *
- * 이게 없으면 재진입이 교착이 된다: 보유자 POOL_MAX 명이 각각 커넥션 1개를 쥔 채 fn() 안에서
- * 커넥션을 더 달라고 기다리는데, 놓아 줄 사람이 아무도 없다. 상한을 두면 항상 순환하는
- * 커넥션이 남아 **누군가는 반드시 진행**하므로 교착이 성립하지 않는다(혼잡하면 느려질 뿐).
+ * 없으면 교착이 난다: 보유자가 각각 커넥션 1개를 쥔 채 fn() 안에서 커넥션을 더 달라고
+ * 기다리는데 놓아 줄 사람이 없다. 상한을 두면 항상 순환하는 커넥션이 남아 **누군가는
+ * 반드시 진행**하므로 교착이 성립하지 않는다(혼잡하면 느려질 뿐이다).
+ *
+ * ⚠️ **잠금은 실제로 중첩된다.** `runAutomationCycleLocked`(automation-cycle 잠금 안)이
+ * `maybeAutoTopup()` 을 부르고 그게 다시 `auto-topup` 잠금을 잡는다. 그래서
+ * ① 중첩 호출은 새 슬롯을 얻지 않고(안 그러면 자기 자신을 기다린다 — 이 세마포어에는
+ *    타임아웃이 없어서 커넥션 풀과 달리 **영구 정지**가 된다)
+ * ② 슬롯 하나가 커넥션을 최대 2개(바깥+중첩) 쓴다고 보고 상한을 절반으로 잡는다.
+ * 남는 커넥션이 최소 1개라 중첩 호출은 언제나 진행할 수 있다.
  */
-const LOCK_SLOTS = Math.max(1, POOL_MAX - 2);
+const LOCK_SLOTS = Math.max(1, Math.floor((POOL_MAX - 1) / 2));
 let lockHeld = 0;
 const lockWaiters: Array<() => void> = [];
+
+/** 이 비동기 문맥이 이미 슬롯을 쥐고 있는가 — 중첩 판정용. */
+const lockSlotHeld = new AsyncLocalStorage<true>();
 
 async function acquireLockSlot(): Promise<void> {
   if (lockHeld < LOCK_SLOTS) { lockHeld += 1; return; }
@@ -4299,14 +4310,18 @@ function releaseLockSlot(): void {
  *   그동안 다른 워크스페이스의 잠금까지 슬롯을 못 얻어 밀린다.
  */
 export async function withTenantLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  // 중첩 호출은 슬롯을 새로 얻지 않는다 — 바깥쪽이 이미 쥐고 있어서 자기 자신을 기다리게 된다.
+  if (lockSlotHeld.getStore()) return await lockBody(key, fn);
   await acquireLockSlot();
-  let client;
   try {
-    client = await pool.connect(); // 스코프 프록시가 app.tenant_id 를 심는다
-  } catch (e) {
+    return await lockSlotHeld.run(true, () => lockBody(key, fn));
+  } finally {
     releaseLockSlot();
-    throw e;
   }
+}
+
+async function lockBody<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  const client = await pool.connect(); // 스코프 프록시가 app.tenant_id 를 심는다
   try {
     await client.query("BEGIN");
     await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [key]);
@@ -4318,7 +4333,6 @@ export async function withTenantLock<T>(key: string, fn: () => Promise<T>): Prom
     throw e;
   } finally {
     client.release();
-    releaseLockSlot();   // 커넥션을 놓은 **뒤에** 다음 대기자를 깨운다
   }
 }
 
