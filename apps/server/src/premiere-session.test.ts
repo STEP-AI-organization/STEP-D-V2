@@ -409,10 +409,21 @@ describe("패널 — 회차 고르고, 쓸 것만 고른다", () => {
 describe("패널 — 주 동선: 원본 받고 마커", () => {
   const html = read("packages/premiere/index.html");
 
-  it("주 버튼이 하나 있고 primary 다 (보조 버튼은 secondary)", () => {
-    assert.match(html, /<button id="prepMarkBtn" disabled>원본 받고 → 추천 구간에 마커 꽂기<\/button>/);
+  it("주 버튼은 **쇼츠 만들기** 하나 — 마커는 보조로 내렸다", () => {
+    // 사용자 판단 2026-09-01: "마커 뜨긴 하는데 이 기능이 유의미한가 의문". 마커는 표시만
+    // 남기고 일이 그대로 남는다. 주 버튼은 다듬기만 남기는 쪽이어야 한다.
+    assert.match(html, /<button id="makeShortsBtn" disabled>고른 구간 쇼츠로 만들기<\/button>/);
+    assert.match(html, /<button id="prepMarkBtn" class="secondary"/);
     assert.match(html, /<button id="roughcutBtn" class="secondary"/);
     assert.match(html, /<button id="subclipBtn" class="secondary"/);
+  });
+
+  it("쇼츠 만들기와 제목 클릭이 **같은 본체**를 쓴다 — 두 벌이면 갈라진다", () => {
+    assert.ok(panel.includes("async function addOverlaysForPreview(r, onStage)"));
+    const make = panel.slice(panel.indexOf("async function buildShortForRec("));
+    assert.ok(make.indexOf("addOverlaysForPreview(r, onStage)") > 0);
+    const jump = panel.slice(panel.indexOf("async function jumpToRec("));
+    assert.ok(jump.indexOf("addOverlaysForPreview(r, onStage)") > 0);
   });
 
   it("원본 확보 → 타임라인 확보 → 마커 순서다", () => {
@@ -565,9 +576,12 @@ describe("패널 — 객체 무효화를 견딘다", () => {
     assert.ok(panel.includes("project.lockedAccess(() => { out = fn(); });"));
     // 직접 호출은 **전부 runLocked 블록 안**이어야 한다(들여쓰기가 깊다).
     // 밖에 하나라도 남으면 거기서 또 "Requires locked access" 가 난다.
+    // 모든 executeTransaction 은 **같은 줄에 runLocked 가 있거나**(헬퍼 형태) 잠금 블록
+    // 안(들여쓰기 6칸 이상)이어야 한다. 하나라도 밖에 있으면 거기서 또 난다.
     const lines = panel.split(String.fromCharCode(10)).filter((l) => /executeTransaction[(]/.test(l));
-    const outside = lines.filter((l) => !/^\s{6,}/.test(l));
-    assert.equal(outside.length, 1, "헬퍼(lockedTransaction) 안의 한 줄만 남아야 한다");
+    const outside = lines.filter((l) => !/runLocked[(]/.test(l) && !/^\s{6,}/.test(l));
+    assert.equal(outside.length, 0, "잠금 밖 executeTransaction 이 남아 있다");
+    assert.ok(lines.length >= 4, "잠금 안 트랜잭션이 사라졌다 — 배치 경로가 빠졌나");
   });
 
   it("무효화면 **한 번만** 다시 돈다 — 무한 재시도는 멈춘 것처럼 보인다", () => {
@@ -656,10 +670,11 @@ describe("패널 — 자막을 타임스탬프대로", () => {
   });
 
   it("미리보기에서만 얹는다 — 원본 전체 타임라인에 회차 자막을 깔지 않는다", () => {
-    const fn = panel.slice(panel.indexOf("async function jumpToRec("));
+    // 자막은 미리보기 오버레이 본체에서만 얹는다.
+    const fn = panel.slice(panel.indexOf("async function addOverlaysForPreview("));
     assert.ok(fn.indexOf("addCaptionsForRecs(") > 0, "미리보기 경로에 자막이 없다");
-    const bulk = panel.slice(panel.indexOf("async function doPrepareAndMark("), panel.indexOf("async function jumpToRec("));
-    assert.ok(!bulk.includes("addCaptionsForRecs("), "일괄 경로에 자막을 넣으면 수백 줄이 깔린다");
+    const bulk = panel.slice(panel.indexOf("async function doPrepareAndMark("), panel.indexOf("async function loadRecs("));
+    assert.ok(!bulk.includes("addCaptionsForRecs("), "마커 경로에 자막을 넣으면 수백 줄이 깔린다");
   });
 });
 
@@ -694,7 +709,7 @@ describe("패널 — 로고·시간박스까지 재현", () => {
   it("트랙은 제목보다 위다 — 시간박스가 제목 뒤로 가면 안 된다", () => {
     assert.ok(panel.includes("const TITLE_TRACK = 1;"));
     assert.ok(panel.includes("const DECORATION_TRACK = 2;"));
-    assert.ok(panel.includes("DECORATION_TRACK, \"오버레이\")"), "오버레이가 제목 트랙에 얹히면 가려진다");
+    assert.ok(panel.includes("DECORATION_TRACK, \"오버레이\""), "오버레이가 제목 트랙에 얹히면 가려진다");
   });
 
   it("오버레이 실패가 제목을 되돌리지 않는다 — 앞의 성과를 지킨다", () => {
@@ -749,7 +764,9 @@ describe("패널 — 영상 배치는 서버 프리셋을 따른다", () => {
   });
 
   it("제목 비율도 배치를 따른다 — 프레임만 보면 crop-main/sub 를 구분 못 한다", () => {
-    assert.ok(panel.includes('let aspect = (layout && layout.aspect) || "9:16-crop-main";'));
+    assert.ok(panel.includes("let aspect = (layout && layout.aspect) || SHORTS_ASPECT_FALLBACK;"));
+    assert.ok(panel.includes('const SHORTS_ASPECT_FALLBACK = "9:16-letterbox";'),
+      "패널 폴백이 서버 기본(SHORTS_DEFAULT_ASPECT)과 다르면 배치가 갈린다");
   });
 });
 

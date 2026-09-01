@@ -163,17 +163,20 @@
       <button id="selectAllBtn" class="secondary">전체 선택 / 해제</button>
       <div id="recsList" class="recs"></div>
       <div id="recsStatus" class="status"></div>
-      <!-- 한 번에 꽂고, 되돌릴 때도 Ctrl+Z 한 번 (트랜잭션 하나에 담는다). -->
-      <!-- **주 동선** (사용자 확정): 원본 받고 → 추천 구간에 마커. 마커는 경계가 안 잠겨
-           앞뒤로 조절하며 쓸 수 있다 — 편집자가 실제로 원하는 형태다. -->
-      <button id="prepMarkBtn" disabled>원본 받고 → 추천 구간에 마커 꽂기</button>
+      <!-- **주 동선** (2026-09-01 재배치): 고른 구간을 **쇼츠 형태로** 만들어 연다.
+           사용자 판단 그대로다 — "마커는 편집자 입장에서 유의미한가 의문". 마커는 11분
+           원본에 표시만 남기고 자르기·세로·제목·자막이 전부 사람 몫으로 남는다. 반면
+           이 버튼은 그 구간만의 세로 시퀀스에 제목·자막까지 얹어 **다듬기만** 남긴다. -->
+      <button id="makeShortsBtn" disabled>고른 구간 쇼츠로 만들기</button>
 
       <div class="divider">필요할 때만</div>
 
       <!-- 원본만 미리 받아 두고 싶을 때(진행률을 보며). 위 버튼도 같은 함수를 쓴다. -->
       <button id="fetchSrcBtn" class="secondary" disabled>원본만 받아 두기</button>
-      <!-- 잘라 놓은 조각·초벌 타임라인이 필요할 때. 서브클립은 경계가 잠긴다. -->
+      <!-- 여러 구간을 한 타임라인에 이어 붙일 때. -->
       <button id="roughcutBtn" class="secondary" disabled>러프컷 시퀀스 만들기</button>
+      <!-- 원본 타임라인에 위치만 표시. 구간 앞뒤를 원본 맥락에서 늘릴 때 쓴다. -->
+      <button id="prepMarkBtn" class="secondary" disabled>원본 받고 → 마커 꽂기</button>
       <button id="subclipBtn" class="secondary" disabled>구간을 서브클립으로 자르기</button>
       <button id="markersBtn" class="secondary" disabled>마커만 꽂기</button>
       <button id="recsReload" class="secondary">목록 새로고침</button>

@@ -890,13 +890,53 @@ async function fetchTitlePng(rec, folder, aspect) {
 }
 
 /**
+ * 우리가 만든 자산(제목·자막·오버레이 PNG)을 담을 **STEP-D 빈**을 확보한다.
+ *
+ * 왜 필요한가 (사용자 지적 2026-09-01: "하나 추천에 3개 임포트되는 거 같은데 헷갈린다"):
+ * 회차당 원본 1 + 시퀀스 1 은 어쩔 수 없지만, 제목은 추천마다 1장이고 **자막은 줄마다 1장**이라
+ * 60초 쇼츠 하나에 30장이 넘는다. 루트에 쏟아지면 편집자가 자기 소재를 못 찾는다.
+ *
+ * 못 만들어도 진행한다 — 정리는 편의고, 얹는 게 본질이다.
+ */
+const STEPD_BIN_NAME = "STEP-D";
+
+async function ensureStepdBin(project, api) {
+  const find = async () => {
+    const root = await project.getRootItem();
+    let items = [];
+    try { items = await root.getItems(); } catch (_) { return null; }
+    for (const it of items) {
+      if (String(it.name || "") !== STEPD_BIN_NAME) continue;
+      try {
+        const f = api.FolderItem.cast(it);
+        if (f && typeof f.getItems === "function") return f;
+      } catch (_) { /* 폴더 아님 */ }
+    }
+    return null;
+  };
+
+  const found = await find();
+  if (found) return found;
+  try {
+    // 루트를 **바로 앞에서** 얻어 잠금 안에서 만든다(그 사이 await 를 두지 않는다).
+    const root = await project.getRootItem();
+    runLocked(project, () => project.executeTransaction(
+      (c) => { c.addAction(root.createBinAction(STEPD_BIN_NAME, false)); }, "STEP-D 빈 만들기"));
+  } catch (err) {
+    console.log("[STEP-D] 빈 만들기 실패(정리 없이 진행)", err);
+    return null;
+  }
+  return await find();
+}
+
+/**
  * 찾아 둔 항목들을 한 트랙에 얹는다 — **에디터 얻기부터 트랜잭션까지 한 잠금 안에서.**
  *
  * 실측 2026-09-01: 액션 생성만 잠금 안으로 옮겼더니 여전히 "Requires locked access" 였다.
  * `SequenceEditor.getEditor()` 로 얻은 **에디터 자체가 잠금 밖에서** 만들어졌기 때문이다.
  * 그래서 잠금 안에서 에디터부터 다시 얻는다. 이 안에는 await 가 하나도 없다.
  */
-function placeOnTrack(project, api, sequence, byName, found, track, label) {
+function placeOnTrack(project, api, sequence, byName, found, track, label, bin) {
   return runLocked(project, () => {
     const editor = api.SequenceEditor.getEditor(sequence);
     let n = 0;
@@ -904,9 +944,11 @@ function placeOnTrack(project, api, sequence, byName, found, track, label) {
       const item = found.get(name);
       if (!item) continue;
       const at = api.TickTime.createWithSeconds(Number(rec.startTime) || 0);
-      const done = project.executeTransaction(
-        (c) => { c.addAction(editor.createOverwriteItemAction(item, at, track, 0)); },
-        `STEP-D ${label} ${name}`);
+      const done = project.executeTransaction((c) => {
+        c.addAction(editor.createOverwriteItemAction(item, at, track, 0));
+        // 프로젝트 패널 정리 — 같은 트랜잭션에 담아 되돌리기도 한 번에 되게.
+        if (bin) c.addAction(bin.createMoveItemAction(item, bin));
+      }, `STEP-D ${label} ${name}`);
       if (done !== false) n += 1;
     }
     return n;
@@ -1474,6 +1516,81 @@ async function doFetchSource() {
 }
 
 /**
+ * **주 동선 (2026-09-01 재배치): 고른 구간을 쇼츠 형태로 만들어 연다.**
+ *
+ * 사용자 판단 그대로다 — *"마커 뜨긴 하는데 이 기능이 유의미한가 의문이 생기긴 하네
+ * 편집자 입장에서."* 맞다. 마커는 11분 원본에 **표시만** 남기고 자르기·세로 전환·제목·자막이
+ * 전부 사람 몫으로 남는다. 이 버튼은 구간마다 세로 시퀀스를 만들어 제목·자막까지 얹으므로
+ * 편집자에게 남는 일이 **다듬기**뿐이다.
+ *
+ * 여러 건을 고르면 **마지막 것을 열어 둔다** — 만들어만 놓고 아무것도 안 열면 "눌렀는데
+ * 아무 일도 안 일어났다" 가 된다.
+ */
+async function doMakeShorts() {
+  const picks = chosenRecs();
+  if (busy || !picks.length) return;
+  busy = true;
+  syncRecButtons();
+  const onStage = (m) => setStatus($("recsStatus"), m);
+  let made = 0;
+  const failed = [];
+  try {
+    for (let i = 0; i < picks.length; i += 1) {
+      const r = picks[i];
+      onStage(`${i + 1}/${picks.length} — "${String(r.title || "").slice(0, 20)}" 만드는 중…`);
+      try {
+        await buildShortForRec(r, onStage);
+        made += 1;
+      } catch (err) {
+        failed.push(`${r.title || r.id}: ${err.message}`);
+        console.log("[STEP-D] 쇼츠 만들기 실패", r.id, err);
+      }
+    }
+    setStatus($("recsStatus"),
+      made > 0
+        ? `쇼츠 ${made}개를 만들었습니다${failed.length ? ` · ${failed.length}개 실패` : ""}. 스페이스바로 재생하세요.`
+        : `만들지 못했습니다 — ${failed[0] || "원인 불명"}`,
+      made > 0 ? "ok" : "err");
+  } finally {
+    busy = false;
+    syncRecButtons();
+  }
+}
+
+/** 추천 하나 → 세로 시퀀스 + 제목 + 자막. 미리보기(제목 클릭)와 **같은 본체**를 쓴다. */
+async function buildShortForRec(r, onStage) {
+  const { name, reused } = await stage("미리보기 시퀀스", () => retryStale("미리보기", () => openRecSequence(r)));
+  if (reused) return name;
+  await addOverlaysForPreview(r, onStage);
+  return name;
+}
+
+/**
+ * 미리보기 시퀀스에 제목·자막을 얹는다. **주 동선과 제목 클릭이 같은 본체를 쓴다.**
+ *
+ * 하나라도 실패해도 시퀀스는 이미 열려 있다 — 오버레이 때문에 앞의 성과를 버리지 않는다.
+ * 자막은 여기서만 얹는다. 원본 전체 타임라인에 깔면 회차 하나가 수백 줄이고, 편집자가
+ * 보려는 것도 "이 구간이 쇼츠로 어떻게 보이나" 다.
+ */
+async function addOverlaysForPreview(r, onStage) {
+  const layout = await fetchLayout(r);
+  const local = { ...r, startTime: 0 };   // 그 구간이 0초에서 시작하는 시퀀스다
+  try {
+    await addTitlesForRecs([local], onStage, layout);
+  } catch (err) {
+    console.log("[STEP-D] 제목 건너뜀", err);
+  }
+  try {
+    await addCaptionsForRecs([local], (layout && layout.aspect) || SHORTS_ASPECT_FALLBACK, onStage);
+  } catch (err) {
+    console.log("[STEP-D] 자막 건너뜀", err);
+  }
+}
+
+/** 서버 배치를 못 받았을 때 쓰는 세로 기본값 — 서버 factory.SHORTS_DEFAULT_ASPECT 와 같은 값. */
+const SHORTS_ASPECT_FALLBACK = "9:16-letterbox";
+
+/**
  * **주 동선 (사용자 확정 2026-08-31): 원본 받고 → 추천 구간에 마커.**
  *
  * 왜 마커가 제일 쓸모 있나: 서브클립은 경계가 잠겨(hasHardBoundaries) 앞뒤를 못 늘린다.
@@ -1603,7 +1720,8 @@ async function addDecorationsForRecs(recs, aspect, onStage) {
   const byName = new Map(files.map((f) => [f.file.name, f.rec]));
   return await findItemsByFileNames([...byName.keys()], async (found, project2, api2) => {
     const sequence = (await activeSequence()).sequence;
-    return placeOnTrack(project2, api2, sequence, byName, found, DECORATION_TRACK, "오버레이");
+    const bin = await ensureStepdBin(project2, api2);
+    return placeOnTrack(project2, api2, sequence, byName, found, DECORATION_TRACK, "오버레이", bin);
   });
 }
 
@@ -1738,6 +1856,7 @@ async function addCaptionPngs(recs, aspect, onStage) {
   const byName = new Map(files.map((f) => [f.file.name, f]));
   return await findItemsByFileNames([...byName.keys()], async (found, project2, api2) => {
     const sequence = (await activeSequence()).sequence;
+    const bin = await ensureStepdBin(project2, api2);
     // 에디터 얻기부터 잠금 안에서(placeOnTrack 과 같은 이유). **길이를 먼저 정한다** —
     // 안 하면 정지 이미지 기본 길이(보통 5초)로 들어가 자막이 서로 덮어써진다.
     return runLocked(project2, () => {
@@ -1752,6 +1871,7 @@ async function addCaptionPngs(recs, aspect, onStage) {
           c.addAction(item.createSetInOutPointsAction(
             api2.TickTime.createWithSeconds(0), api2.TickTime.createWithSeconds(dur)));
           c.addAction(editor.createOverwriteItemAction(item, at, CAPTION_TRACK, 0));
+          if (bin) c.addAction(bin.createMoveItemAction(item, bin));   // 프로젝트 패널 정리
         }, `STEP-D 자막 ${name}`);
         if (done !== false) n += 1;
       }
@@ -1770,7 +1890,7 @@ async function titleTargetInfo(layout) {
   // 세로 러프컷에 가로 그림(또는 그 반대)을 얹으면 프리미어가 프레임에 맞춰 늘리거나 잘라서,
   // 서버 미리보기와 글자 위치가 달라진다.
   const { sequence } = await activeSequence();
-  let aspect = (layout && layout.aspect) || "9:16-crop-main";
+  let aspect = (layout && layout.aspect) || SHORTS_ASPECT_FALLBACK;
   let tracks = 0;
   if (!(layout && layout.aspect)) {
     try {
@@ -1845,8 +1965,9 @@ async function addTitlePngs(recs, aspect, tracks, onStage) {
   const byName = new Map(files.map((f) => [f.file.name, f.rec]));
   const placed = await findItemsByFileNames([...byName.keys()], async (found, project2, api2) => {
     const sequence = (await activeSequence()).sequence;
+    const bin = await ensureStepdBin(project2, api2);
     // V2(인덱스 1)에 얹는다 — V1 의 영상 위에 있어야 제목이 보인다.
-    return placeOnTrack(project2, api2, sequence, byName, found, TITLE_TRACK, "제목");
+    return placeOnTrack(project2, api2, sequence, byName, found, TITLE_TRACK, "제목", bin);
   });
 
   // 하나도 못 얹었는데 트랙이 하나뿐이면 **그게 이유다.** 프리미어에는 트랙 추가 API 가
@@ -1986,7 +2107,8 @@ function renderEpisodes() {
 function syncRecButtons() {
   const n = chosenRecs().length;
   for (const [id, label] of [
-    ["prepMarkBtn", "원본 받고 → 추천 구간에 마커 꽂기"],
+    ["makeShortsBtn", "고른 구간 쇼츠로 만들기"],
+    ["prepMarkBtn", "원본 받고 → 마커 꽂기"],
     ["roughcutBtn", "러프컷 시퀀스 만들기"],
     ["markersBtn", "마커만 꽂기"],
     ["subclipBtn", "구간을 서브클립으로 자르기"],
@@ -2136,25 +2258,9 @@ async function jumpToRec(r) {
     let note = "";
     if (!reused) {
       const onStage = (m) => setStatus($("recsStatus"), m);
-      const layout = await fetchLayout(r);
-      // 미리보기 시퀀스는 그 구간이 0초에서 시작한다 — 시각을 그렇게 옮겨 넘긴다.
-      const local = { ...r, startTime: 0 };
-      try {
-        const placed = await addTitlesForRecs([local], onStage, layout);
-        note += placed > 0 ? " · 제목" : "";
-      } catch (err) {
-        note += ` · 제목 건너뜀(${err.message})`;
-        console.log("[STEP-D] 미리보기 제목 실패", err);
-      }
-      // 자막은 **미리보기에서만** 얹는다. 원본 전체 타임라인에 얹으면 회차 하나가 수백 줄이라
-      // 프리미어가 버겁고, 편집자가 보려는 것도 "이 구간이 쇼츠로 어떻게 보이나" 다.
-      try {
-        const caps = await addCaptionsForRecs([local], (layout && layout.aspect) || "9:16-crop-main", onStage);
-        note += caps > 0 ? ` · 자막 ${caps}줄` : "";
-      } catch (err) {
-        note += ` · 자막 건너뜀(${err.message})`;
-        console.log("[STEP-D] 미리보기 자막 실패", err);
-      }
+      // 제목·자막은 주 동선(doMakeShorts)과 **같은 본체**를 쓴다 — 두 벌이 되면 갈라진다.
+      await addOverlaysForPreview(r, onStage);
+      note = " · 제목·자막";
     }
     setStatus($("recsStatus"),
       `"${name}" ${reused ? "를 열었습니다" : "를 만들었습니다"}${note}. 스페이스바로 재생하세요.`, "ok");
@@ -2524,6 +2630,7 @@ async function doLogout() {
   $("markersBtn").addEventListener("click", () => void doAddMarkers());
   $("roughcutBtn").addEventListener("click", () => void doRoughCut());
   $("fetchSrcBtn").addEventListener("click", () => void doFetchSource());
+  $("makeShortsBtn").addEventListener("click", () => void doMakeShorts());
   $("prepMarkBtn").addEventListener("click", () => void doPrepareAndMark());
   $("subclipBtn").addEventListener("click", () => void doMakeSubclips());
   $("program").addEventListener("change", () => {
