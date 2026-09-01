@@ -219,13 +219,30 @@ async function assertRlsEnforced(): Promise<void> {
   throw new Error(`${cause} 격리 없이 도는 것이 가장 위험하므로 기동을 멈춘다. 의도한 상황이면 ALLOW_RLS_BYPASS=1.`);
 }
 
+/**
+ * 인스턴스 하나가 잡는 커넥션 수.
+ *
+ * ⚠️ **이 값 × 인스턴스 수 < Cloud SQL max_connections** 여야 한다. 실측(2026-09-01):
+ * `max_connections = 100`, 상시 사용 22개(서버 min 1 + 워커 + 운영 접속). 예전 값 10 이면
+ * **Cloud Run 인스턴스가 8개만 떠도 고갈**된다 — 그 순간 새 인스턴스는 DB 를 못 잡고
+ * 요청이 통째로 실패한다. 트래픽이 늘어야 보이는 종류라 평소엔 조용하다.
+ *
+ * 5 로 낮추면 같은 상한에서 인스턴스 **16개**까지 버틴다. 우리 질의는 짧아서(대부분 단건
+ * 조회) 인스턴스당 5개면 충분하고, 부족하면 풀에서 잠깐 기다릴 뿐 실패하지 않는다.
+ *
+ * env 로 뺀 이유: 한계에 부딪혔을 때 **배포 없이** 조절해야 하기 때문이다. 근본 해법은
+ * 커넥션 풀러(PgBouncer / Cloud SQL 연결 풀링)지만, 그건 인프라 작업이고 이건 지금 할 수 있다.
+ */
+const POOL_MAX = Math.max(1, Number(process.env.PG_POOL_MAX) || 5);
+
 export async function initDb(): Promise<void> {
   rawPool = new Pool({
     connectionString: process.env.DATABASE_URL,
-    max: 10,
+    max: POOL_MAX,
     idleTimeoutMillis: 30_000,
     connectionTimeoutMillis: 10_000,
   });
+  console.log(`[db] pool max=${POOL_MAX} (인스턴스 × 이 값 < max_connections 여야 한다)`);
   pool = makeScopedPool(rawPool);
 
   // Test connection
