@@ -51,11 +51,11 @@ import {
 import { checkCredits } from "./billing/credits.ts";
 import { topupAndRecheck } from "./billing/auto-topup.ts";
 import { billableMinutes } from "./billing/billing.ts";
-import { probe, captureThumbnail, remuxFaststart, needsMp4Normalize, normalizedMp4Path, normalizeToMp4, extractSourceCaptions, transcodeToH264 } from "./ffmpeg.ts";
+import { probe, captureThumbnail, remuxFaststart, needsMp4Normalize, normalizedMp4Path, normalizeToMp4, extractSourceCaptions, transcodeToH264 } from "./media/ffmpeg.ts";
 import {
   prepareProgramAssets, publishStyleProfile, publishThumbnails, tempAssetRoot, pullPrefix,
-} from "./thumbnail-assets.ts";
-import { uploadFile, uploadPath, thumbPath, promoteUpload } from "./storage-gcs.ts";
+} from "./media/thumbnail-assets.ts";
+import { uploadFile, uploadPath, thumbPath, promoteUpload } from "./media/storage-gcs.ts";
 import { initQueue, claimJob, completeJob, failJob, requeueStale, heartbeatJob, enqueue, lastDoneJobAt, pruneDoneJobs, queueStats, type Job, type JobType } from "./queue.ts";
 import { runWithTenant, runAsSystem, DEFAULT_TENANT_ID } from "./tenant.ts";
 import { recordAutoPublishForReport, recordAutoPublishFailureForReport } from "./publish-notify.ts";
@@ -77,7 +77,7 @@ import {
 } from "./youtube.ts";
 import {
   createReadStream, parseObjectPath, fileExists, fileSize, signedReadUrl, readFile, listPrefix,
-} from "./storage-gcs.ts";
+} from "./media/storage-gcs.ts";
 import { pipeline } from "node:stream/promises";
 import {
   youtubeUploadEnabled, UPLOAD_DISABLED_MESSAGE,
@@ -85,12 +85,12 @@ import {
   instagramUploadEnabled, INSTAGRAM_UPLOAD_DISABLED_MESSAGE,
   facebookUploadEnabled, FACEBOOK_UPLOAD_DISABLED_MESSAGE,
 } from "./upload-gate.ts";
-import { withTikTokToken, uploadDraftToTikTok, uploadDirectPostToTikTok, TikTokTokenRevokedError } from "./tiktok.ts";
+import { withTikTokToken, uploadDraftToTikTok, uploadDirectPostToTikTok, TikTokTokenRevokedError } from "./social/tiktok.ts";
 import {
   getTikTokAccountByOpenId, updateTikTokTokens, markTikTokAccountDisconnected, appendRuleRun,
 } from "./db-pg.ts";
-import { publishInstagramReel, refreshInstagramToken } from "./instagram.ts";
-import { publishFacebookReel } from "./facebook.ts";
+import { publishInstagramReel, refreshInstagramToken } from "./social/instagram.ts";
+import { publishFacebookReel } from "./social/facebook.ts";
 import {
   listInstagramAccounts, getMetaAccountByPageId, updateInstagramToken, parkInstagramAccountExpired,
 } from "./db-pg.ts";
@@ -2168,7 +2168,7 @@ async function resolveClipThumbnail(
   const masterId = String(clip?.sourceMediaId ?? "");
   if (masterId) {
     try {
-      const { thumbnailPrefix } = await import("./thumbnail-assets.ts");
+      const { thumbnailPrefix } = await import("./media/thumbnail-assets.ts");
       const paths = (await listPrefix(`${thumbnailPrefix(masterId)}/`))
         .filter((p) => /\.(png|jpe?g|webp)$/i.test(p))
         .sort();

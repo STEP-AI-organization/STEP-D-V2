@@ -54,7 +54,7 @@ import { checkProfile, incompleteFields } from "./billing/business.ts";
 import {
   captionMaxCharsOf, chunkCaption,
   type Caption as CaptionT, type CaptionWord as CaptionWordT,
-} from "./caption-chunk.ts";
+} from "./media/caption-chunk.ts";
 import {
   API_SCOPES, bearerKey, checkRoute, generateKey, hashKey, keyBlockReason, keyPrefix,
   normalizeScopes, shouldTouchLastUsed,
@@ -227,9 +227,9 @@ import {
   type SearchQuery,
   type SearchEventKind,
 } from "./db-pg.ts";
-import { hasFfmpeg, probe, captureThumbnail, circleCrop, trimEncode, remuxFaststart, renderShort, renderStaticOverlayPng } from "./ffmpeg.ts";
+import { hasFfmpeg, probe, captureThumbnail, circleCrop, trimEncode, remuxFaststart, renderShort, renderStaticOverlayPng } from "./media/ffmpeg.ts";
 import { issueOAuthState, consumeOAuthState, HANDOFF_TTL_MS } from "./oauth-state.ts";
-import { synthesizeHookNarration } from "./tts.ts";
+import { synthesizeHookNarration } from "./media/tts.ts";
 import { embedQuery } from "./search-embed.ts";
 import { parseQuery } from "./search-parse.ts";
 import { newId } from "./pipeline.ts";
@@ -260,12 +260,12 @@ import {
   reframePlanHash,
   type ClipReframeState,
   type ReframePlan,
-} from "./reframe.ts";
-import { getAspectPreset } from "./aspect-presets.ts";
+} from "./media/reframe.ts";
+import { getAspectPreset } from "./media/aspect-presets.ts";
 import { SHORTS_DEFAULT_ASPECT } from "./factory.ts";
 import { layoutFingerprint, restampPendingClips } from "./rule-restamp.ts";
-import { renderTextLayerPng, overlayCanvasAvailable, measureOverlayImage, FONT_FAMILIES, postScriptNameFor, type OverlayTextItem } from "./overlay-canvas.ts";
-import { patchTitleMogrt, inspectMogrt, layersFromOverlayItems, colorToInt, type MogrtTextLayer } from "./mogrt.ts";
+import { renderTextLayerPng, overlayCanvasAvailable, measureOverlayImage, FONT_FAMILIES, postScriptNameFor, type OverlayTextItem } from "./media/overlay-canvas.ts";
+import { patchTitleMogrt, inspectMogrt, layersFromOverlayItems, colorToInt, type MogrtTextLayer } from "./media/mogrt.ts";
 import {
   syncChannelVideos,
   classifyShorts,
@@ -304,8 +304,8 @@ import {
   deleteFile,
   deletePrefix,
   listPrefix,
-} from "./storage-gcs.ts";
-import { castPrefix, stylePrefix, thumbnailPrefix } from "./thumbnail-assets.ts";
+} from "./media/storage-gcs.ts";
+import { castPrefix, stylePrefix, thumbnailPrefix } from "./media/thumbnail-assets.ts";
 import { isClipRendered, upsertDistribution, isNaverChannel, NAVER_CHANNELS } from "./publish-guard.ts";
 import {
   buildMetadataPrompt, normalizeForChannel, validateForChannel,
@@ -348,7 +348,7 @@ import {
   normalizeFolderPath,
   parentOf,
   validateName,
-} from "./asset-path.ts";
+} from "./media/asset-path.ts";
 import {
   CREDIT_IDLE_REASON,
   LAST_CYCLE_KEY,
@@ -381,7 +381,7 @@ import {
   normalizePublishDelayMin,
   type ChannelRule,
 } from "./channel-rules.ts";
-import { listShortsTemplates, getShortsTemplate, toPercent } from "./shorts-template.ts";
+import { listShortsTemplates, getShortsTemplate, toPercent } from "./media/shorts-template.ts";
 import { listNaverAccounts, getNaverAccount, upsertNaverAccount, markNaverAccount,
   deleteNaverAccount } from "./db-pg.ts";
 import { naverSessionPath } from "./naver/naver-session.ts";

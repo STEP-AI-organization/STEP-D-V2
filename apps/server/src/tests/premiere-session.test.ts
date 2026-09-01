@@ -716,7 +716,7 @@ describe("패널 — 로고·시간박스까지 재현", () => {
   });
 
   it("합성 순서가 렌더와 같다 — 텍스트 PNG → ASS → 배지", () => {
-    const ff = read("apps/server/src/ffmpeg.ts");
+    const ff = read("apps/server/src/media/ffmpeg.ts");
     const fn = ff.slice(ff.indexOf("export function renderStaticOverlayPng"));
     const a = fn.indexOf("opts.overlayPngPath");
     const b = fn.indexOf("opts.assPath");

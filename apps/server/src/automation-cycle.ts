@@ -68,7 +68,7 @@ import { newId } from "./pipeline.ts";
 import { enqueue, lastJobByDedupe, oldestPendingAgeForType } from "./queue.ts";
 import { distributionAccountId, hasAccountDistribution, hasFailedAccountDistribution } from "./publish-guard.ts";
 import { dispatchPublish } from "./publish-dispatch.ts";
-import { basicReframeState, effectiveReframeState } from "./reframe.ts";
+import { basicReframeState, effectiveReframeState } from "./media/reframe.ts";
 
 /**
  * AI 리프레임이 이만큼 진행이 없으면 죽은 것으로 보고 기본 크롭으로 강등한다.

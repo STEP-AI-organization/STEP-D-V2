@@ -7,7 +7,7 @@ import {
   compareArtifactPrefix,
   contactFrameName,
   contactSheetTimes,
-} from "../reframe.ts";
+} from "../media/reframe.ts";
 
 describe("세로 4택 비교 — 산출물 경로·파일명 계약", () => {
   it("compareId 는 fingerprint 형식(24 hex)만 통과한다 — 경로 세그먼트라 형식이 곧 방어다", () => {

@@ -2,7 +2,7 @@ import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import {
   CAPTION_CHUNK_MAX_CHARS, CAPTION_CHUNK_MIN_SEC, captionMaxCharsOf, chunkCaption, splitCaptionText,
-} from "../caption-chunk.ts";
+} from "../media/caption-chunk.ts";
 
 const chars = (s: string) => [...s].length;
 

@@ -97,7 +97,7 @@ describe("자동배포 실패모드 문서의 임계값이 코드와 같다", ()
   const DOC = "docs/ops/auto-deploy-failure-modes.md";
   const doc = read(DOC);
   const automation = read("apps/server/src/automation.ts");
-  const credits = read("apps/server/src/credits.ts");
+  const credits = read("apps/server/src/billing/credits.ts");
 
   /** 문서 §6 표에서 그 상수를 가리키는 행의 값 칸에 적힌 숫자들. */
   function documented(constName: string): number[] {

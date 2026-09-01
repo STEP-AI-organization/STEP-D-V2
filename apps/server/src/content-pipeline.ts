@@ -42,11 +42,11 @@ import {
 } from "./db-pg.ts";
 import type { TranscriptSegment, SearchSegmentRow } from "./db-pg.ts";
 import { billableMinutes, estimatedCostKrw, usageDedupeKey } from "./billing/billing.ts";
-import { probe } from "./ffmpeg.ts";
+import { probe } from "./media/ffmpeg.ts";
 import { autoTopupNeedsAttention, checkCredits, usageDedupeKey as creditUsageKey } from "./billing/credits.ts";
 import { maybeAutoTopup, topupAndRecheck } from "./billing/auto-topup.ts";
 import { toCoreRegistry, timelineToRows } from "./cast.ts";
-import { createReadStream, parseObjectPath, readFile, uploadFile, useGcs } from "./storage-gcs.ts";
+import { createReadStream, parseObjectPath, readFile, uploadFile, useGcs } from "./media/storage-gcs.ts";
 import { enqueue } from "./queue.ts";
 import { newId } from "./pipeline.ts";
 import {
@@ -59,7 +59,7 @@ import {
   reframePlanHash,
   summarizeReframePlan,
   type ClipReframeState,
-} from "./reframe.ts";
+} from "./media/reframe.ts";
 
 export const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 
@@ -500,7 +500,7 @@ async function materializeOptionalAnalysisInput(mediaId: string, name: string, d
 }
 
 async function signedProxySource(storedPath: string): Promise<string> {
-  const { signedReadUrl } = await import("./storage-gcs.ts");
+  const { signedReadUrl } = await import("./media/storage-gcs.ts");
   return signedReadUrl(parseObjectPath(storedPath), 30 * 60 * 1000);
 }
 
@@ -1056,7 +1056,7 @@ async function writeRecommendationsFromShorts(
   ): Promise<void> {
     const path = await import("node:path");
     const fs = await import("node:fs");
-    const { uploadFile } = await import("./storage-gcs.ts");
+    const { uploadFile } = await import("./media/storage-gcs.ts");
     const { getPool, putEntity } = await import("./db-pg.ts");
 
     // workDir 안에 썸네일 출력 폴더
@@ -1067,7 +1067,7 @@ async function writeRecommendationsFromShorts(
     // 로컬 pm2 워커에서도 GCS ADC 로 접근 가능 · assets/thumbnail-reference/ 로컬 파일이 없을 수도 있으니.
     const refsCacheDir = path.join(workDir, "thumbnail-refs");
     try {
-      const { useGcs, readFile, fileExists } = await import("./storage-gcs.ts");
+      const { useGcs, readFile, fileExists } = await import("./media/storage-gcs.ts");
       if (useGcs()) {
         const manifestGcs = "templates/thumbnail/manifest.json";
         if (await fileExists(manifestGcs)) {

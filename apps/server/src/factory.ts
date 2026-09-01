@@ -26,8 +26,8 @@ import { commitAndInherit } from "./adopt.ts";
 import { dispatchPublish } from "./publish-dispatch.ts";
 import { newId } from "./pipeline.ts";
 import { enqueue } from "./queue.ts";
-import { basicReframeState } from "./reframe.ts";
-import { FONT_FAMILIES } from "./overlay-canvas.ts";
+import { basicReframeState } from "./media/reframe.ts";
+import { FONT_FAMILIES } from "./media/overlay-canvas.ts";
 import { SHORTFORM_MAX_SEC, autoRenderChannel, shortformSegmentTooLong } from "./channel-rules.ts";
 
 const TRUTHY = new Set(["1", "true", "yes", "on"]);

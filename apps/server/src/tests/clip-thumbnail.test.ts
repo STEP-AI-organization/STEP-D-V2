@@ -123,7 +123,7 @@ describe("쇼츠 첫 3초 훅 — 내레이션(TTS) 배선", () => {
   it("덕킹은 사이드체인이다 — 내레이션이 끝나면 원음이 돌아온다", () => {
     // 실측: 고정 감쇠는 내레이션이 끝난 뒤에도 원음을 눌러 뒷부분이 원음보다 9dB 더
     // 조용해졌다(-37.8 vs -28.7). 사이드체인은 -28.7 로 원음과 같게 복귀한다.
-    const ff = read("ffmpeg.ts");
+    const ff = read("media/ffmpeg.ts");
     assert.match(ff, /sidechaincompress=threshold=/, "고정 감쇠로 되돌아갔다");
     assert.match(ff, /\[tk\]apad\[tkp\]/,
       "사이드체인을 apad 로 안 늘리면 출력이 내레이션 길이(1.5초)로 잘린다 — 실측");

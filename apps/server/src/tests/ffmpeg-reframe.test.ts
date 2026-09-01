@@ -11,7 +11,7 @@ import {
   renderShort,
   trackingAxisExpression,
   type ReframeRenderPlan,
-} from "../ffmpeg.ts";
+} from "../media/ffmpeg.ts";
 
 describe("AI beat reframe renderer", () => {
   it("sorts/clamps the plan and fills every uncovered range with fit", () => {

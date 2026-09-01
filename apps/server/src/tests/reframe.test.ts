@@ -11,7 +11,7 @@ import {
   reframeFingerprint,
   reframePlanHash,
   summarizeReframePlan,
-} from "../reframe.ts";
+} from "../media/reframe.ts";
 
 const clip = {
   id: "c_1",

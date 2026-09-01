@@ -14,9 +14,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
-import { normalizedMp4Path } from "../ffmpeg.ts";
+import { normalizedMp4Path } from "../media/ffmpeg.ts";
 
-import { audioMapArgs, needsMp4Normalize, NORMALIZE_MAX_HEIGHT } from "../ffmpeg.ts";
+import { audioMapArgs, needsMp4Normalize, NORMALIZE_MAX_HEIGHT } from "../media/ffmpeg.ts";
 
 const SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = (f: string) => fs.readFileSync(path.join(SRC, f), "utf-8");
@@ -97,7 +97,7 @@ describe("오디오 트랙 접기 (audioMapArgs)", () => {
 });
 
 describe("변환 명령의 불변식 (소스 스캔)", () => {
-  const src = read("ffmpeg.ts");
+  const src = read("media/ffmpeg.ts");
 
   it("인터레이스일 때만 yadif — progressive 에 걸면 디테일이 깎인다", () => {
     assert.match(src, /if \(p\.interlaced\) vf\.push\("yadif=0:-1:0"\);/);
@@ -176,7 +176,7 @@ describe("워커 배선 (소스 스캔)", () => {
  */
 describe("원본 스트림 인벤토리·자막 추출", () => {
   const worker = read("worker.ts");
-  const ff = read("ffmpeg.ts");
+  const ff = read("media/ffmpeg.ts");
 
   it("정규화 전 원본 메타·URL 을 붙잡아 둔다 — 변환 뒤엔 원본을 못 본다", () => {
     assert.match(worker, /const srcMeta = meta;\s*\n\s*const srcReadUrl = readUrl;/,

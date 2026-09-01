@@ -19,8 +19,8 @@ const HERE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const SERVER = fs.readFileSync(path.join(HERE, "index.ts"), "utf-8");
 const WEB = path.resolve(HERE, "../../web/src/components/editor/editor-preview.tsx");
 const FONT_DIR = path.resolve(HERE, "../../../assets/fonts");
-const OVERLAY_CANVAS = fs.readFileSync(path.join(HERE, "overlay-canvas.ts"), "utf-8");
-const FF_OVERLAY = fs.readFileSync(path.join(HERE, "ffmpeg.ts"), "utf-8");
+const OVERLAY_CANVAS = fs.readFileSync(path.join(HERE, "media/overlay-canvas.ts"), "utf-8");
+const FF_OVERLAY = fs.readFileSync(path.join(HERE, "media/ffmpeg.ts"), "utf-8");
 
 describe("자막 크기표 — 웹 cqh 와 서버 CAPTION_PCT 가 같아야 한다", () => {
   it("스타일별 % 가 1:1 로 일치", () => {
@@ -56,7 +56,7 @@ describe("자막 크기표 — 웹 cqh 와 서버 CAPTION_PCT 가 같아야 한�
  */
 describe("자막 청킹 — 웹 상한과 서버 상한이 같아야 한다", () => {
   const WEB_PRESETS = fs.readFileSync(path.resolve(HERE, "../../web/src/lib/editor/presets.ts"), "utf-8");
-  const CHUNK = fs.readFileSync(path.join(HERE, "caption-chunk.ts"), "utf-8");
+  const CHUNK = fs.readFileSync(path.join(HERE, "media/caption-chunk.ts"), "utf-8");
 
   it("CAPTION_CHUNK_MAX_CHARS · CAPTION_CHUNK_MIN_SEC 가 1:1", () => {
     for (const [name, re] of [
@@ -214,7 +214,7 @@ describe("채널 뱃지 — 이름과 아이콘이 같은 계산을 쓴다", () 
   it("아이콘 좌표는 channelBadgeLayout 이 만든 것을 overlay 에 넘긴다", () => {
     assert.match(SERVER, /channelBadgeLayout\(editorState, W, H, scale, iconBox\)/,
       "렌더가 배치 함수를 안 쓰면 아이콘과 채널명이 서로 다른 기준으로 놓인다");
-    const ff = fs.readFileSync(path.join(HERE, "ffmpeg.ts"), "utf-8");
+    const ff = fs.readFileSync(path.join(HERE, "media/ffmpeg.ts"), "utf-8");
     assert.match(ff, /badgeX\(opts\.badge\)/, "overlay x 가 고정 중앙이면 가로 배치가 재현되지 않는다");
   });
   it("부가줄(channelExtraLines)이 렌더에도 존재한다", () => {

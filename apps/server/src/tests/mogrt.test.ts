@@ -15,7 +15,7 @@ import { unzipSync, zipSync } from "fflate";
 import {
   patchTitleMogrt, inspectMogrt, colorToInt, alignToMogrt,
   layersFromOverlayItems, TOP_TO_BASELINE, type MogrtTextLayer,
-} from "../mogrt.ts";
+} from "../media/mogrt.ts";
 
 // ── 합성 베이스 템플릿 ────────────────────────────────────────────────────────
 function textBlob(text: string, font: string, size: number, color: number): string {

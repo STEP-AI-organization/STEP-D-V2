@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { renderTextLayerPng, overlayCanvasAvailable, FONT_FAMILIES, type OverlayTextItem } from "../overlay-canvas.ts";
+import { renderTextLayerPng, overlayCanvasAvailable, FONT_FAMILIES, type OverlayTextItem } from "../media/overlay-canvas.ts";
 
 /**
  * canvas→PNG 정적 오버레이 렌더러 스모크. ffmpeg 없이 PNG 경로가 실제로 도는지 증명한다:

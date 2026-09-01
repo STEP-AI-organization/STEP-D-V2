@@ -13,7 +13,7 @@
  * 토큰: access ~24h · refresh ~365d. refresh 응답이 **새 refresh_token 을 줄 수 있다**(회전)
  * — 갱신 시 네 값(access·refresh·만료 둘)을 전부 persist 해야 다음 갱신이 산다.
  */
-import { assertTikTokUploadEnabled } from "./upload-gate.ts";
+import { assertTikTokUploadEnabled } from "../upload-gate.ts";
 
 const TOKEN_URL = "https://open.tiktokapis.com/v2/oauth/token/";
 const INBOX_INIT_URL = "https://open.tiktokapis.com/v2/post/publish/inbox/video/init/";

@@ -124,7 +124,7 @@ describe("제목 — 지마켓 산스 + 레퍼런스 강조색", () => {
   });
 
   it("그 id 가 폰트 레지스트리에 있고 Bold(700) 를 갖는다 — 렌더가 800 을 요청해도 700 으로 스냅된다", () => {
-    const overlay = read("apps/server/src/overlay-canvas.ts");
+    const overlay = read("apps/server/src/media/overlay-canvas.ts");
     assert.match(overlay, /id: "gmarket"/);
     assert.match(overlay, /700: \{ file: "GmarketSansTTFBold\.ttf"/);
   });

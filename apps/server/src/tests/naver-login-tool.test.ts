@@ -20,7 +20,7 @@ import { describe, it } from "node:test";
 const SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const INDEX = fs.readFileSync(path.join(SRC, "index.ts"), "utf-8");
 const TOOL = fs.readFileSync(path.resolve(SRC, "../scripts/naver-login-tool.mts"), "utf-8");
-const STORAGE = fs.readFileSync(path.join(SRC, "storage-gcs.ts"), "utf-8");
+const STORAGE = fs.readFileSync(path.join(SRC, "media/storage-gcs.ts"), "utf-8");
 const WEB = fs.readFileSync(
   path.resolve(SRC, "../../web/src/components/publish/naver-accounts.tsx"), "utf-8");
 

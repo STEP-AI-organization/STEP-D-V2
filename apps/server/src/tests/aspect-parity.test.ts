@@ -15,13 +15,13 @@ import { fileURLToPath } from "node:url";
  * ⚠️ 깨지면 숫자를 지우지 말고 **정본(미리보기 = 사용자가 보는 화면)에 맞춰** 양쪽을 고칠 것.
  */
 const HERE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const SERVER_PRESETS = fs.readFileSync(path.join(HERE, "aspect-presets.ts"), "utf-8");
+const SERVER_PRESETS = fs.readFileSync(path.join(HERE, "media/aspect-presets.ts"), "utf-8");
 const WEB_PRESETS = fs.readFileSync(
   path.resolve(HERE, "../../web/src/lib/editor/aspect-presets.ts"), "utf-8");
 const WEB_PREVIEW = fs.readFileSync(
   path.resolve(HERE, "../../web/src/components/editor/editor-preview.tsx"), "utf-8");
 const INDEX = fs.readFileSync(path.join(HERE, "index.ts"), "utf-8");
-const FFMPEG = fs.readFileSync(path.join(HERE, "ffmpeg.ts"), "utf-8");
+const FFMPEG = fs.readFileSync(path.join(HERE, "media/ffmpeg.ts"), "utf-8");
 
 /** `export const ASPECT_PRESETS: AspectPreset[] = [ ... ];` 배열 리터럴 본문을 뽑는다. */
 function presetsBlock(src: string): string {
