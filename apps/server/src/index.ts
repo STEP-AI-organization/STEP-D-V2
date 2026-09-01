@@ -311,7 +311,7 @@ import {
   buildMetadataPrompt, normalizeForChannel, validateForChannel,
   META_CHANNELS, CHANNEL_SPECS, type MetaChannel,
 } from "./clip-metadata.ts";
-import { naverUploadEnabled, NAVER_DISABLED_MESSAGE, DESC_MIN } from "./naver-gate.ts";
+import { naverUploadEnabled, NAVER_DISABLED_MESSAGE, DESC_MIN } from "./naver/naver-gate.ts";
 import {
   commerceLinksEnabled, parseProductQueries, usableLinks, withCommerceLinks, normalizeStatus,
 } from "./commerce.ts";
@@ -384,14 +384,14 @@ import {
 import { listShortsTemplates, getShortsTemplate, toPercent } from "./shorts-template.ts";
 import { listNaverAccounts, getNaverAccount, upsertNaverAccount, markNaverAccount,
   deleteNaverAccount } from "./db-pg.ts";
-import { naverSessionPath } from "./naver-session.ts";
-import { sealSession, sessionStoreReady, looksLikeStorageState } from "./naver-session-store.ts";
+import { naverSessionPath } from "./naver/naver-session.ts";
+import { sealSession, sessionStoreReady, looksLikeStorageState } from "./naver/naver-session-store.ts";
 import {
   setNaverSessionBlob, clearNaverSessionBlob,
   setNaverCredential, clearNaverCredential, getNaverCredentialState,
 } from "./db-pg.ts";
-import { credStoreReady, sealCredential, maskNaverId } from "./naver-cred-store.ts";
-import { listCategories, CATEGORY_SOURCE, resolveCategory } from "./naver-categories.ts";
+import { credStoreReady, sealCredential, maskNaverId } from "./naver/naver-cred-store.ts";
+import { listCategories, CATEGORY_SOURCE, resolveCategory } from "./naver/naver-categories.ts";
 import {
   getCommerceAccount, upsertCommerceAccount, setCommerceSessionBlob, markCommerceSessionExpired,
 } from "./db-pg.ts";

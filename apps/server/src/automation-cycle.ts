@@ -58,7 +58,7 @@ import {
 import {
   youtubeUploadEnabled, tiktokUploadEnabled, instagramUploadEnabled, facebookUploadEnabled,
 } from "./upload-gate.ts";
-import { naverUploadEnabled } from "./naver-gate.ts";
+import { naverUploadEnabled } from "./naver/naver-gate.ts";
 import {
   SHORTFORM_MAX_SEC, autoRenderChannel, eligibility, nextPublishSlot,
   normalizePublishDelayMin, shortformSegmentTooLong, type ChannelRule,

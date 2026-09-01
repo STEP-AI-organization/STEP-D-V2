@@ -450,13 +450,15 @@ describe("세션 취급 — 그 계정의 전체 권한이다", () => {
     assert.match(crypto, /미설정 — 세션을 저장할 수 없습니다/,
       "키 없이 저장이 통과하면 평문으로 남는다");
     // 네이버·커머스가 **같은** 암호 구현을 쓴다(복사본이 두 벌이면 한쪽만 고쳐진다).
-    for (const f of ["naver-session-store.ts", "commerce-session-store.ts"]) {
-      assert.match(read(f), /from "\.\/session-crypto\.ts"/, `${f} 가 공용 암호 계층을 안 쓴다`);
+    // 경로 깊이는 폴더 정리에 따라 달라진다 — **같은 파일을 부르는지**만 본다.
+    for (const f of ["naver/naver-session-store.ts", "commerce-session-store.ts"]) {
+      assert.match(read(f), /from "\.{1,2}\/(?:\.\.\/)?session-crypto\.ts"/,
+        `${f} 가 공용 암호 계층을 안 쓴다`);
     }
   });
 
   it("제공자별로 키가 다르다 — 하나가 새도 다른 쪽이 안 열린다", () => {
-    assert.match(read("naver-session-store.ts"), /NAVER_SESSION_KEY/);
+    assert.match(read("naver/naver-session-store.ts"), /NAVER_SESSION_KEY/);
     assert.match(read("commerce-session-store.ts"), /COMMERCE_SESSION_KEY/);
   });
 });

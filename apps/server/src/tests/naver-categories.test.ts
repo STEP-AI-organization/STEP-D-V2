@@ -8,7 +8,7 @@ import {
   resolveCategory,
   categoryForGenre,
   DEFAULT_CATEGORY,
-} from "../naver-categories.ts";
+} from "../naver/naver-categories.ts";
 import { genrePackFor } from "../clip-metadata.ts";
 
 describe("네이버 클립 카테고리 — 틀린 분류로 발행되지 않는다", () => {

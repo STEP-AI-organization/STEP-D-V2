@@ -32,7 +32,7 @@ type Snapshot = { source: string; capturedAt: number; categories: NaverCategory[
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SNAPSHOT: Snapshot = JSON.parse(
-  readFileSync(path.join(HERE, "data", "naver-clip-categories.json"), "utf8"),
+  readFileSync(path.join(HERE, "..", "data", "naver-clip-categories.json"), "utf8"),
 );
 
 /** 캡처 원본 정보 — 화면·문서에서 "언제 기준 표인가" 를 보여줄 때 쓴다. */

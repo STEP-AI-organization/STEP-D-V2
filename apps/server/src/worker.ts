@@ -94,17 +94,17 @@ import { publishFacebookReel } from "./facebook.ts";
 import {
   listInstagramAccounts, getMetaAccountByPageId, updateInstagramToken, parkInstagramAccountExpired,
 } from "./db-pg.ts";
-import { naverUploadEnabled, NAVER_DISABLED_MESSAGE } from "./naver-gate.ts";
-import { hasNaverSession, materializeNaverSession, saveNaverSession } from "./naver-session.ts";
+import { naverUploadEnabled, NAVER_DISABLED_MESSAGE } from "./naver/naver-gate.ts";
+import { hasNaverSession, materializeNaverSession, saveNaverSession } from "./naver/naver-session.ts";
 import {
   getNaverAccount, markNaverAccount, getNaverSessionBlob, setNaverSessionBlob,
   getNaverCredentialBlob, markNaverCredential,
 } from "./db-pg.ts";
-import { openSession, sealSession } from "./naver-session-store.ts";
-import { uploadToNaver, loginWithCredentials, NaverSessionExpiredError, NAVER_TARGETS, type NaverTarget } from "./naver-tv.ts";
-import { resolveCategory, categoryForGenre } from "./naver-categories.ts";
-import { openCredential } from "./naver-cred-store.ts";
-import { prepareWorkPath, cleanupWorkFile, sweepStaleWorkFiles } from "./naver-workdir.ts";
+import { openSession, sealSession } from "./naver/naver-session-store.ts";
+import { uploadToNaver, loginWithCredentials, NaverSessionExpiredError, NAVER_TARGETS, type NaverTarget } from "./naver/naver-tv.ts";
+import { resolveCategory, categoryForGenre } from "./naver/naver-categories.ts";
+import { openCredential } from "./naver/naver-cred-store.ts";
+import { prepareWorkPath, cleanupWorkFile, sweepStaleWorkFiles } from "./naver/naver-workdir.ts";
 import { upsertDistribution } from "./publish-guard.ts";
 import { commerceLinksEnabled, usableLinks, withCommerceLinks, type ProductCandidate } from "./commerce.ts";
 import {

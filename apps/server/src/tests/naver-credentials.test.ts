@@ -14,7 +14,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, it, beforeEach, afterEach } from "node:test";
 
-import { maskNaverId, sealCredential, openCredential, credStoreReady } from "../naver-cred-store.ts";
+import { maskNaverId, sealCredential, openCredential, credStoreReady } from "../naver/naver-cred-store.ts";
 
 const SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = (f: string) => fs.readFileSync(path.resolve(SRC, f), "utf-8");
@@ -54,7 +54,7 @@ describe("자격증명 봉인", () => {
   });
 
   it("세션과 **다른 키**를 쓴다 — 하나가 새도 다른 쪽은 안 열린다", () => {
-    const cred = read("naver-cred-store.ts");
+    const cred = read("naver/naver-cred-store.ts");
     assert.match(cred, /NAVER_CRED_KEY/);
     assert.equal(/NAVER_SESSION_KEY/.test(cred), false, "세션 키를 재사용하면 분리가 무의미하다");
   });
@@ -83,7 +83,7 @@ describe("실패 처리 — 계정 잠금을 막는다", () => {
   });
 
   it("추가 인증(캡차·2차)은 자격증명을 남긴다 — 비번은 맞을 수 있다", () => {
-    const tv = read("naver-tv.ts");
+    const tv = read("naver/naver-tv.ts");
     assert.match(tv, /kind: "challenge"/, "추가 인증을 별도로 분류하지 않는다");
   });
 
