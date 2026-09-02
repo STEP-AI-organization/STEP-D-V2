@@ -34,6 +34,7 @@ import {
   setAutomationSetting,
   getChannelRule,
   hasRunNote,
+  publishedBySlotKst,
   publishedTodayKst,
   withTenantLock,
 } from "../db-pg.ts";
@@ -47,7 +48,7 @@ import {
   decidePublish, episodeAnalysisState, inActiveWindow, isRuleThumbnailMode, matchesMediaKind,
   nextAutoRenderState,
   overlapsExistingClip, planCycle,
-  ruleChannels, ruleIdleNote, rulePrograms, ruleWindow, scheduledSlotAt,
+  claimableSlots, ruleChannels, ruleIdleNote, rulePrograms, ruleWindow, slotAtToday,
   slotsReadyForQueue, selectCandidates, shouldRequestAutoRender, maxPublishPerTick,
   AUTOMATION_MAX_RENDERS_PER_TICK,
   renderQueueMaxPending,
@@ -536,13 +537,20 @@ async function runAutomationCycleLocked(): Promise<CycleReport> {
       // 한 채널을 두 계획이 나눠 갖는 순간 둘 다 자기 개수를 못 채웠다 — "사용자가 정한
       // 개수가 안 나가는 것" 이 이 제품의 가장 큰 사고다.
       const publishedToday = await publishedTodayKst(accountKey, rule.id);
-      // Explicit slots are queued two hours early; YouTube publishes at target time.
-      // 유예(60분)를 넘겨 놓친 슬롯 몫은 **오늘은 포기** — 저녁에 계획을 켜도 아침 슬롯
-      // 몫이 그 자리에서 쏟아지지 않는다(2026-08-26 ENA 실전 사고). 인덱스 계산에도 같은
-      // 수를 더해 다음 게시가 놓친 옛 슬롯이 아니라 **다가오는 슬롯**에 배정되게 한다.
-      const staleMissed = slotted.length ? staleMissedSlots(slotted, publishedToday) : 0;
-      const quota = slotted.length ? slotsReadyForQueue(slotted) - staleMissed : allowedToday(rule);
-      let remaining = quota - publishedToday;
+      // ── 슬롯 단위 한도 (2026-09-02) ────────────────────────────────────────────
+      // 사용자: "18시이면 그 시간에 정해둔 개수만 나가고 끝이야."
+      // 예전엔 **하루 누적**이었다 — 지난 슬롯 몫이 살아 있어 06:30×2 + 18:00×2 계획에서
+      // 18시에 4건이 한꺼번에 나갔다(실측). 이제 슬롯마다 창을 두고, 창이 닫히면 그 몫은
+      // 소멸한다(claimableSlots). 배달이 늦어도 **그 슬롯 몫은 안 사라진다** — 창의 끝이
+      // 다음 슬롯이기 때문이다("15시에 20개" 가 증발하던 2026-08-26 사고의 해법).
+      //
+      // 어느 슬롯 몫인지는 게시할 때 rule_run.slot_time 에 적는다(0050). 그게 없던 시절엔
+      // "오늘 2건 나갔다" 를 아침 몫으로 오해해 포기분이 되살아났다.
+      const bySlot = slotted.length ? await publishedBySlotKst(accountKey, rule.id) : {};
+      const claimable = slotted.length ? claimableSlots(slotted, bySlot) : [];
+      let remaining = slotted.length
+        ? claimable.reduce((n, c) => n + c.remaining, 0)
+        : allowedToday(rule) - publishedToday;
       // 순방 한 번의 게시 상한 — 엔진이 몇 시간 죽었다 살아나면 놓친 슬롯 몫이 한 번에
       // 몰려 연속 게시 폭탄이 된다(2026-08-25 전면 체크 major). 정상 운영에서는 큐잉이
       // 슬롯보다 2시간 앞서므로 이 상한이 보일 일이 없고(다음 순방이 이어받음), 복구
@@ -555,7 +563,9 @@ async function runAutomationCycleLocked(): Promise<CycleReport> {
       // 다음 틱이 같은 슬롯 시각을 중복 배정한다(리드 2시간 안에 서로 다른 슬롯 시각 4개+ 엣지).
       // 시작점 = 오늘 포기한 몫(staleMissed) + 이미 게시한 수 — 다음 게시가 **다가오는 슬롯**에
       // 붙는다. 이후는 게시 성공마다 +1.
-      let slotIndex = staleMissed + publishedToday;
+      // 다음 게시가 붙을 슬롯 — **claimable 의 첫 칸**이다. 예전엔 순번(포기분+게시수)으로
+      // 역산했는데, 그 산식이 곧 "지난 슬롯 몫이 살아 있다" 는 뜻이었다.
+      let slotCursor = 0;
       if (remaining <= 0) {
         // 조용히 넘기면 "왜 오늘은 아무것도 안 나갔지" 를 설명할 근거가 로그에 없다.
         // 채널당 하루 한 줄만 남긴다(순방은 15분마다 돈다). 문구까지 맞춰 dedupe 하는 이유:
@@ -570,7 +580,7 @@ async function runAutomationCycleLocked(): Promise<CycleReport> {
         const slotted = ruleSlots(rule).length > 0;
         const quotaNote = slotted
           ? "이 시각까지의 발행을 모두 마쳤습니다 — 다음 발행 시각에 이어서 올라갑니다."
-          : `오늘 이 채널 할당량(${quota}건)을 다 썼습니다 — 내일 자정(KST)에 초기화됩니다.`;
+          : `오늘 이 채널 할당량(${allowedToday(rule)}건)을 다 썼습니다 — 내일 자정(KST)에 초기화됩니다.`;
         await note({
           ruleId: rule.id, clipId: null, result: "skipped", accountKey, detail: quotaNote,
         }, hasRunNote(rule.id, null, accountKey, "skipped", true, quotaNote));
@@ -813,20 +823,18 @@ async function runAutomationCycleLocked(): Promise<CycleReport> {
           // (되돌리려면 채널에서 직접 내려야 하고 노출 이력은 남는다). 채널 규칙에 값이
           // 있으면 그걸 따르고, 없으면 **unlisted** 로 올린다 — 자동 경로의 기본값은
           // "링크 아는 사람만" 이어야 하고, 전체공개는 사람이 정하는 일이다.
-          // 슬롯 인덱스 = slotIndex 카운터(발행 순번 0-base · publishedToday 에서 시작).
-          // 산식(quota - remaining)으로 쓰면 두 함정이 있(었)다: ① publishedToday 를 또
-          // 더하면 이중 가산 — 틱을 넘긴 2건째부터 배열 밖 → targetAt null → 즉시 게시
-          // (2026-08-25 전면 체크 critical). ② 틱당 상한이 remaining 을 클램프하면 앞
-          // 슬롯을 건너뛰고 다음 틱이 같은 슬롯 시각을 중복 배정한다(2026-08-26 리뷰).
+          // 이 건이 붙을 슬롯 — claimable(창이 열린 슬롯) 의 현재 칸이다. 예전엔 순번
+          // (포기분 + 오늘 게시수)으로 역산했는데, 그 산식 자체가 "지난 슬롯 몫이 살아 있다"
+          // 는 뜻이라 아침 몫이 저녁에 배정됐다(2026-09-02). 이제 창 밖 슬롯은 목록에 없다.
           ...(chan.platform === "youtube" ? youtubeReleasePlan(
             channelRule,
-            slotted.length ? scheduledSlotAt(slotted, slotIndex) : null,
+            slotAtToday(claimable[slotCursor]?.time ?? null),
           ) : {}),
           // 유튜브 외 채널도 슬롯 시각을 싣는다 — dispatch 가 채널별 예약 수단(네이버
           // publishAt · TikTok/IG 잡 지연 · FB 네이티브 예약)으로 풀어낸다. 안 실으면
           // 이 채널들에선 슬롯이 '최대 2시간 이른 즉시 게시'였다(전면 체크 major).
           ...(chan.platform !== "youtube" && slotted.length ? (() => {
-            const at = scheduledSlotAt(slotted, slotIndex);
+            const at = slotAtToday(claimable[slotCursor]?.time ?? null);
             return at && at.getTime() > Date.now()
               ? { scheduled: true, reserveDate: at.toISOString() } : {};
           })() : {}),
@@ -853,11 +861,23 @@ async function runAutomationCycleLocked(): Promise<CycleReport> {
           report.held += 1;
         } else {
           const published = outcome.queued.length > 0;
-          if (published) { remaining -= 1; slotIndex += 1; }
+          // 이 건이 어느 슬롯 몫이었는지 — 기록 전에 집어둔다(아래 커서가 전진하기 때문).
+          const usedSlot = claimable[slotCursor]?.time ?? null;
+          if (published) {
+            remaining -= 1;
+            // 그 슬롯의 남은 몫을 하나 줄이고, 다 찼으면 다음 슬롯으로 넘어간다.
+            const cur = claimable[slotCursor];
+            if (cur) {
+              cur.remaining -= 1;
+              if (cur.remaining <= 0) slotCursor += 1;
+            }
+          }
           report.published += published ? 1 : 0;
           await note({
             ruleId: rule.id, clipId: clip.id,
             result: published ? "published" : "recorded",
+            // 슬롯 몫의 근거 — 이 값으로 다음 순방이 "그 슬롯은 다 찼나" 를 센다(0050).
+            ...(published && usedSlot ? { slotTime: usedSlot } : {}),
             // 게이트 OFF 로 record 강등된 채널(TikTok·IG·FB)은 그 사실을 로그에 박는다 —
             // '기록됨'만 보면 게이트 문제인지 채널 성격인지 구분이 안 된다.
             detail: upGate.recordOnly ? `${upGate.offNote} · ${outcome.notice}` : outcome.notice,

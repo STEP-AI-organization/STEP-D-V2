@@ -30,11 +30,12 @@
  * 예전엔 즉시 발송이라 이른 시각에 한 통이 더 오는 것으로 보였다(2026-09-02).
  */
 import {
-  getAutomationSetting, setAutomationSetting, listAutomationRules, publishedTodayKst,
+  getAutomationSetting, setAutomationSetting, listAutomationRules,
+  publishedBySlotKst, publishedTodayKst,
 } from "../db-pg.ts";
 import {
-  NOTIFY_EMAIL_KEY, allowedToday, isPublishDay, kstMinutes, parseNotifyEmails, perDayCount,
-  ruleChannels, ruleSlots, staleMissedSlots, type AutomationRule, type RuleSlot,
+  NOTIFY_EMAIL_KEY, allowedToday, claimableSlots, isPublishDay, kstMinutes, parseNotifyEmails,
+  perDayCount, ruleChannels, ruleSlots, staleMissedSlots, type AutomationRule, type RuleSlot,
 } from "../pipeline/automation.ts";
 import { mailConfigured, sendMail } from "../mailer.ts";
 
@@ -268,12 +269,24 @@ export function ruleDayTarget(
  * 목표는 순방과 **같은 함수**(ruleDayTarget)로 낸다 — 메일이 다른 수를 말하면 안 된다.
  */
 async function rulePlanTotals(rule: AutomationRule, now: Date): Promise<{ target: number; published: number }> {
+  const slots = ruleSlots(rule);
   let target = 0;
   let published = 0;
   for (const chan of ruleChannels(rule)) {
-    const n = await publishedTodayKst(`${chan.platform}:${chan.accountId}`, rule.id);
+    const key = `${chan.platform}:${chan.accountId}`;
+    const n = await publishedTodayKst(key, rule.id);
     published += n;
-    target += ruleDayTarget(rule, n, now).target;
+    if (slots.length) {
+      // ⚠️ 순방과 **같은 어휘**로 센다 (2026-09-02 슬롯 단위 전환). 창이 닫힌 슬롯 몫은
+      // 소멸했으므로 목표에서도 빠져야 한다 — 안 빼면 "20건 예정 중 16건" 처럼 **이미
+      // 포기한 몫을 못 채운 것처럼** 말하고, 메일이 매일 거짓 부족을 띄운다.
+      // 목표 = 이미 나간 수 + 아직 채울 수 있는 수.
+      const bySlot = await publishedBySlotKst(key, rule.id);
+      const open = claimableSlots(slots, bySlot, now).reduce((m, c) => m + c.remaining, 0);
+      target += n + open;
+    } else {
+      target += ruleDayTarget(rule, n, now).target;
+    }
   }
   return { target, published };
 }
@@ -360,8 +373,17 @@ async function nextPublishInfo(now: Date): Promise<{ label: string } | null> {
     const day = new Date(now.getTime() + d * 86_400_000);
     const due = rules.filter((r) => isPublishDay(r, day));
     if (!due.length) continue;
-    const count = due.reduce((n, r) => n + perDayCount(r) * ruleChannels(r).length, 0);
+    // ⚠️ **그 시각에 나갈 개수만 센다** (사용자 2026-09-02: "딱 다음에 나갈 배포 개수만").
+    // 예전엔 하루 전체 합을 적어서 `06:30 · 14건` 처럼 **시각과 개수가 안 맞았다** —
+    // 06:30 에는 2건이 나가는데 14건이라고 예고하면 담당자가 아침에 그만큼을 기다린다.
     const firstSlot = due.flatMap((r) => ruleSlots(r).map((s) => s.time)).sort()[0];
+    const count = firstSlot
+      // 슬롯 계획: 그 시각 슬롯의 개수만 (여러 계획이 같은 시각을 쓰면 합산 · 채널 수만큼 곱)
+      ? due.reduce((n, r) => n + ruleSlots(r)
+          .filter((s) => s.time === firstSlot)
+          .reduce((m, s) => m + s.count, 0) * ruleChannels(r).length, 0)
+      // 할당량 계획은 '시각' 이 없다 — 활동창 안에서 하루치가 흩어지므로 하루 합이 맞다.
+      : due.reduce((n, r) => n + perDayCount(r) * ruleChannels(r).length, 0);
     const time = firstSlot ?? `${String(due[0].activeStart ?? 0).padStart(2, "0")}:00`;
     const p = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Seoul", year: "numeric", month: "2-digit", day: "2-digit" })
       .format(day).replace(/-/g, ". ");

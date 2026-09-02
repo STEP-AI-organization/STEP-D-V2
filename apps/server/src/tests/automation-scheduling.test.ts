@@ -97,20 +97,23 @@ describe("per-slot counts", () => {
     assert.equal(staleMissedSlots(twoThree, 5, kst("2026-08-17T23:00")), 0, "전부 제시간에 나갔으면 0");
   });
 
-  it("순방의 슬롯 순번은 카운터(slotIndex)다 — 산식으로 쓰면 두 번 데였다 (소스 스캔)", () => {
+  it("순방의 슬롯 배정은 카운터다 — 산식으로 쓰면 두 번 데였다 (소스 스캔)", () => {
     // ① publishedToday + (quota - remaining): 이미 게시분이 두 번 더해져 2건째부터 배열 밖
     //    → 예약 없이 즉시 게시(2026-08-25 critical). ② quota - remaining 단독: 틱당 상한이
     //    remaining 을 클램프하면 앞 슬롯을 건너뛰고 다음 틱이 같은 시각을 중복 배정(2026-08-26).
-    // 순번은 publishedToday 에서 시작해 게시 성공마다 +1 하는 카운터여야 둘 다 안 밟는다.
+    //
+    // 2026-09-02: 순번(0-base 인덱스) 대신 **열린 슬롯 목록의 커서**(claimable[slotCursor])로
+    // 바꿨다. 창 밖 슬롯은 목록에 아예 없으므로 "지난 슬롯에 배정" 이 구조적으로 불가능하다.
+    // 카운터라는 성질은 그대로 — 게시 성공마다 그 슬롯 몫을 줄이고 다 차면 다음 칸으로 간다.
     const src = fs.readFileSync(
       path.join(path.dirname(fileURLToPath(import.meta.url)), "..", "pipeline/automation-cycle.ts"), "utf-8");
-    assert.equal([...src.matchAll(/scheduledSlotAt\(slotted, slotIndex\)/g)].length, 2,
-      "유튜브·비유튜브 두 자리 모두 slotIndex 카운터를 써야 한다");
-    assert.match(src, /let slotIndex = /, "순번은 산식이 아니라 카운터여야 한다");
-    assert.match(src, /\{ remaining -= 1; slotIndex \+= 1; \}/,
-      "게시 성공 시 remaining 과 slotIndex 가 함께 움직여야 한다");
-    assert.doesNotMatch(src, /scheduledSlotAt\(slotted, (publishedToday|quota)/,
-      "산식 기반 순번(옛 형태)이 돌아왔다 — 이중 가산 또는 클램프 건너뜀을 다시 밟는다");
+    assert.equal([...src.matchAll(/slotAtToday\(claimable\[slotCursor\]\?\.time \?\? null\)/g)].length, 2,
+      "유튜브·비유튜브 두 자리 모두 같은 커서를 써야 한다 — 갈라지면 채널마다 다른 시각에 나간다");
+    assert.match(src, /let slotCursor = 0;/, "배정은 산식이 아니라 커서여야 한다");
+    assert.match(src, /if \(cur\.remaining <= 0\) slotCursor \+= 1;/,
+      "그 슬롯 몫을 다 채웠을 때만 다음 슬롯으로 넘어가야 한다");
+    assert.doesNotMatch(src, /scheduledSlotAt\(slotted, (publishedToday|quota|slotIndex)/,
+      "산식·순번 기반 배정(옛 형태)이 돌아왔다 — 지난 슬롯 몫이 다시 살아난다");
   });
 });
 
