@@ -315,9 +315,31 @@ describe("리포트는 자동배포 계획마다 한 통 (2026-08-28)", () => {
       "개별 발송 실패를 가두지 않는다 — 중복 발송이나 전체 중단이 된다");
   });
 
-  it("계획을 못 찾은 묶음도 기다리지 않고 나간다", () => {
-    // 지워진 계획의 고아 클립·ruleId 없는 옛 항목. 기다릴 근거가 없는데 붙잡으면 영영 안 나간다.
-    assert.match(flush, /!hasStale && rule && !ruleReportDue\(rule, now\)/,
-      "계획을 못 찾으면 무한 대기한다 — rule 이 있을 때만 마감을 기다려야 한다");
+  it("계획 없는 묶음은 계획들과 **같은 마감**을 기다린다 (2026-09-02)", () => {
+    // 콘텐츠 공장(factory)·지워진 계획의 고아 클립. 예전엔 즉시 발송이라 이른 시각에 한 통이
+    // 더 왔다 — 사용자가 본 "메일 2개" 의 나머지 절반.
+    assert.match(flush, /const due = rule \? ruleReportDue\(rule, now\) : orphanDue;/,
+      "계획 없는 묶음이 즉시 발송으로 되돌아갔다 — 다시 이른 시각에 한 통이 더 간다");
+    assert.match(flush, /if \(!hasStale && !due\)/);
+  });
+
+  it("살아 있는 계획이 없으면 고아 묶음은 즉시 나간다 — 영영 안 나가면 안 된다", () => {
+    const src = fsSync.readFileSync(pathMod.join(SRC_DIR, "publish/publish-notify.ts"), "utf-8");
+    const fn = /function orphanReportDue[\s\S]*?\n\}/.exec(src);
+    assert.ok(fn, "orphanReportDue 를 못 찾았다");
+    assert.match(fn![0], /if \(live\.length === 0\) return true;/,
+      "계획을 다 지운 워크스페이스에서 공장 리포트가 버퍼에 갇힌다");
+    assert.match(fn![0], /live\.every\(\(r\) => ruleDayTarget\(r, 0, now\)\.deadlinePassed\)/,
+      "일부 계획만 보면 아직 도는 계획이 있는데도 고아 묶음이 먼저 나간다");
+  });
+
+  it("제목이 출처를 구분한다 — 두 통이 와도 무엇이 다른지 보인다", () => {
+    const src = fsSync.readFileSync(pathMod.join(SRC_DIR, "publish/publish-notify.ts"), "utf-8");
+    assert.match(src, /자동배포 리포트\$\{sourceTag\(ruleId, rule\)\}/,
+      "제목에 출처 꼬리표가 없다 — 계획 리포트와 공장 리포트가 같은 제목으로 온다");
+    const fn = /function sourceTag[\s\S]*?\n\}/.exec(src)!;
+    assert.match(fn[0], /if \(rule\) return "";/, "계획 리포트 제목은 종전 그대로여야 한다");
+    assert.match(fn[0], /지워진 계획/);
+    assert.match(fn[0], /계획 외 배포/);
   });
 });

@@ -22,8 +22,12 @@
  * 동시에 가질 수 없다.
  *
  * ⚠️ 남는 갈라짐: **마감 뒤에** 확정되는 건(늦은 재시도 성공 등)은 여전히 다음 통으로 간다.
- * 그건 이미 나간 리포트를 고칠 수 없어서지 정책 때문이 아니다. 그리고 콘텐츠 공장(factory)
- * 배포는 클립에 automationRuleId 가 없어 "계획 미상" 묶음으로 따로 나간다 — 별개 사안이다.
+ * 그건 이미 나간 리포트를 고칠 수 없어서지 정책 때문이 아니다.
+ *
+ * 콘텐츠 공장(factory) 배포는 클립에 automationRuleId 가 없어 계획 묶음과 합쳐지지 않는다.
+ * 합치면 계획 수치(오늘 N건 예정 중 M건)가 공장 건까지 세므로 **일부러 따로 둔다.** 대신
+ * 같은 마감을 기다리게 하고(orphanReportDue) 제목에 출처를 붙여(sourceTag) 구분한다 —
+ * 예전엔 즉시 발송이라 이른 시각에 한 통이 더 오는 것으로 보였다(2026-09-02).
  */
 import {
   getAutomationSetting, setAutomationSetting, listAutomationRules, publishedTodayKst,
@@ -298,6 +302,37 @@ function ruleReportDue(rule: AutomationRule, now: Date): boolean {
   return ruleDayTarget(rule, 0, now).deadlinePassed;
 }
 
+/**
+ * **계획이 없는 묶음**의 발송 시각 — 살아 있는 계획들의 마감이 **전부** 지났을 때.
+ *
+ * 이런 묶음이 생기는 경로 둘: ① 콘텐츠 공장(factory)이 올린 건 — origin 은 자동이라 리포트에
+ * 적립되는데 클립에 automationRuleId 가 없다(factory.ts 에 그 필드가 아예 없다) ② 지워진
+ * 계획의 고아 클립.
+ *
+ * 예전엔 계획을 못 찾으면 **즉시** 보냈다. 그래서 공장과 계획이 같은 날 배포한 날에는
+ * 이른 시각에 한 통, 마감에 또 한 통 — 사용자가 본 "가끔 2개로 나눠져서 온다" 의 나머지
+ * 절반이다(2026-09-02). 이제 같은 마감을 기다리므로 **같은 시각에** 나간다.
+ *
+ * ⚠️ 합치지는 않는다. 공장 배포는 계획의 몫이 아니라서 한 통에 담으면 "오늘 20건 예정 중
+ *    16건" 같은 계획 수치가 공장 건까지 세게 된다. 대신 제목에 출처를 붙여 구분한다(sourceTag).
+ * ⚠️ 살아 있는 계획이 하나도 없으면 기다릴 근거가 없다 → 즉시 발송(종전과 같다). 안 그러면
+ *    계획을 다 지운 워크스페이스에서 공장 리포트가 영영 안 나간다.
+ */
+function orphanReportDue(rules: AutomationRule[], now: Date): boolean {
+  const live = rules.filter((r) => r.enabled !== false && isPublishDay(r, now) && ruleChannels(r).length > 0);
+  if (live.length === 0) return true;
+  return live.every((r) => ruleDayTarget(r, 0, now).deadlinePassed);
+}
+
+/**
+ * 제목에 붙는 출처 꼬리표 — **두 통이 왔을 때 무엇이 다른지 한눈에 보이게** 한다.
+ * 계획 리포트는 꼬리표가 없다(종전 제목 그대로 · 대부분의 메일이 이쪽이다).
+ */
+function sourceTag(ruleId: string, rule: AutomationRule | undefined): string {
+  if (rule) return "";
+  return ruleId ? " (지워진 계획)" : " (계획 외 배포)";
+}
+
 /** "다음 배포" 박스 — 내일부터 7일 안에서 첫 발행일과 그날의 예정 건수·첫 시각. */
 async function nextPublishInfo(now: Date): Promise<{ label: string } | null> {
   const rules = ((await listAutomationRules()) as unknown as AutomationRule[]).filter(
@@ -522,13 +557,17 @@ export async function maybeFlushAutoPublishReport(now = new Date()): Promise<voi
     const next = await nextPublishInfo(now).catch(() => null);
     const kept: AutoReportItem[] = [];
 
+    // 계획 없는 묶음이 기다릴 시각 — 살아 있는 계획들의 **마지막 마감**. 아래 참고.
+    const orphanDue = orphanReportDue(rules, now);
+
     for (const [ruleId, group] of byRule) {
       const rule = rules.find((r) => r.id === ruleId);
       // 지난 날 항목이 섞였으면 이미 마감을 넘긴 묶음이다 — 더 기다릴 이유가 없다.
-      // 계획을 못 찾은 묶음(지워진 계획·ruleId 없는 옛 항목)도 기다릴 근거가 없어 바로 보낸다.
       const hasStale = group.some((i) => i.date !== today);
-      if (!hasStale && rule && !ruleReportDue(rule, now)) {
-        kept.push(...group);          // 이 계획은 아직 마감 전이다 — 버퍼에 그대로 둔다
+      // 계획이 있으면 그 계획의 마감, 없으면 워크스페이스 마지막 마감까지 기다린다.
+      const due = rule ? ruleReportDue(rule, now) : orphanDue;
+      if (!hasStale && !due) {
+        kept.push(...group);          // 아직 마감 전이다 — 버퍼에 그대로 둔다
         continue;
       }
 
@@ -544,7 +583,7 @@ export async function maybeFlushAutoPublishReport(now = new Date()): Promise<voi
         await sendMail({
           to,
           // 제목 브랜드는 STEP AI (사용자 2026-08-26 — 본문 푸터의 "STEP D 자동배포 시스템"은 템플릿 원문 유지).
-          subject: `[STEP AI] ${programLabel} 자동배포 리포트 · ${kstMdw(now)} ${kstHm(now)} · ${group.length}건`,
+          subject: `[STEP AI] ${programLabel} 자동배포 리포트${sourceTag(ruleId, rule)} · ${kstMdw(now)} ${kstHm(now)} · ${group.length}건`,
           html: buildAutoPublishReportHtml(group, now, next, shortfall),
         });
       } catch (e) {
