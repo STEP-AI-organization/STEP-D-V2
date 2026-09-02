@@ -42,7 +42,7 @@ describe("유튜브 동의 스코프 — 요구하는 건 전부 쓴다", () => 
   it("쓰기 스코프는 업로드가 실제로 쓰는 둘뿐이다", () => {
     // youtube        → videos.insert/update · thumbnails.set
     // youtube.force-ssl → 위 호출의 전제(HTTPS 강제)
-    assert.deepEqual([...publish].sort(), ["youtube", "youtube.force-ssl"],
+    assert.deepEqual([...publish].sort(), ["youtube.force-ssl", "youtube.upload"],
       "업로드 동의에 스코프를 늘렸다면, 그걸 부르는 코드가 먼저 있어야 한다");
   });
 
@@ -56,9 +56,9 @@ describe("유튜브 동의 스코프 — 요구하는 건 전부 쓴다", () => 
   });
 
   it("업로드 가능 판정은 한 곳에서만 한다 — 문자열을 흩뿌리면 재연동해도 권한 없음이 난다", () => {
-    assert.match(youtube, /export const YT_PUBLISH_SCOPE = "https:\/\/www\.googleapis\.com\/auth\/youtube"/);
+    assert.match(youtube, /export const YT_PUBLISH_SCOPE = "https:\/\/www\.googleapis\.com\/auth\/youtube\.upload"/);
     assert.match(youtube, /export function scopeCanPublish/);
     // 판정이 `youtube` 하나만 보므로, 위에서 스코프를 빼도 **기존 연결 채널은 그대로 돈다**.
-    assert.match(youtube, /includes\(YT_PUBLISH_SCOPE\)/);
+    assert.match(youtube, /YT_PUBLISH_SCOPES_ANY\.some/);
   });
 });

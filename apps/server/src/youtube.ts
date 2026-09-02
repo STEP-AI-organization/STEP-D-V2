@@ -946,12 +946,24 @@ export async function updateVideoMetadata(
 /**
  * 이 채널이 업로드까지 할 수 있는가 — **동의 스코프 판정의 단일 진실**.
  *
- * publish 모드가 실제로 받는 건 `.../auth/youtube`(+force-ssl, memberships)이고
- * `youtube.upload` 는 **받지 않는다.** 문자열을 각자 하드코딩하면 "재연동했는데도
- * 권한 없음"이 난다(2026-08-10 실제로 발생). 판정은 여기 한 곳에서만 한다.
+ * publish 모드가 받는 건 `youtube.upload` + `youtube.force-ssl` 둘이다(index.ts
+ * YT_PUBLISH_SCOPES · 2026-09-02 축소 — 전엔 `.../auth/youtube` 를 통째로 받았다).
+ * 문자열을 각자 하드코딩하면 "재연동했는데도 권한 없음"이 난다(2026-08-10 실제로 발생).
+ * 판정은 여기 한 곳에서만 한다.
+ *
+ * ⚠️ 판정은 **아래 셋 중 하나만 있으면 통과**한다(YT_PUBLISH_SCOPES_ANY). 스코프를 줄이면서
+ *    구 연결(`.../auth/youtube`)을 빼면 이미 연동된 채널이 하루아침에 "권한 없음"이 되고,
+ *    고객사는 아무것도 안 바꿨는데 자동배포가 선다. 그래서 legacy 를 남겨 둔다.
  */
-export const YT_PUBLISH_SCOPE = "https://www.googleapis.com/auth/youtube";
+export const YT_PUBLISH_SCOPE = "https://www.googleapis.com/auth/youtube.upload";
+
+const YT_PUBLISH_SCOPES_ANY = [
+  "https://www.googleapis.com/auth/youtube.upload",
+  "https://www.googleapis.com/auth/youtube",          // legacy (스코프 축소 이전 연결)
+  "https://www.googleapis.com/auth/youtube.force-ssl",
+];
 
 export function scopeCanPublish(scope: string | null | undefined): boolean {
-  return (scope ?? "").split(" ").includes(YT_PUBLISH_SCOPE);
+  const have = (scope ?? "").split(" ");
+  return YT_PUBLISH_SCOPES_ANY.some((s) => have.includes(s));
 }
