@@ -3679,11 +3679,45 @@ export async function appendRuleRun(ev: {
   ruleId?: string | null; clipId?: string | null; result: string; detail?: string;
   /** 채널별 할당량 집계 키 — "youtube:UCxxx" · "naverclip:nva_xxx" 형식. */
   accountKey?: string | null;
+  /**
+   * 이 게시가 **어느 슬롯 몫인가** ("HH:MM" · 0050). 슬롯 없는 계획(할당량 방식)과
+   * 게시가 아닌 기록은 null 이다. 이 값이 있어야 슬롯별 한도를 셀 수 있다 —
+   * 없던 시절엔 "오늘 2건 나갔다" 를 아침 몫으로 오해해 저녁에 4건이 나갔다.
+   */
+  slotTime?: string | null;
 }): Promise<void> {
   await pool.query(
-    `INSERT INTO rule_run (rule_id, clip_id, result, detail, account_key) VALUES ($1,$2,$3,$4,$5)`,
-    [ev.ruleId ?? null, ev.clipId ?? null, ev.result, ev.detail ?? "", ev.accountKey ?? null],
+    `INSERT INTO rule_run (rule_id, clip_id, result, detail, account_key, slot_time)
+     VALUES ($1,$2,$3,$4,$5,$6)`,
+    [ev.ruleId ?? null, ev.clipId ?? null, ev.result, ev.detail ?? "", ev.accountKey ?? null,
+     ev.slotTime ?? null],
   );
+}
+
+/**
+ * 오늘(KST) 이 계획·채널이 **슬롯별로** 게시한 수. 슬롯 한도 판정의 근거다.
+ *
+ * `publishedTodayKst` 와 같은 날짜 경계(KST 자정 = UTC 전날 15:00)를 쓴다 — 둘이 다른
+ * 경계를 쓰면 "하루 총합" 과 "슬롯 합" 이 안 맞는 날이 생긴다.
+ * slot_time 이 NULL 인 행(옛 기록·할당량 방식)은 세지 않는다.
+ */
+export async function publishedBySlotKst(
+  accountKey: string, ruleId: string,
+): Promise<Record<string, number>> {
+  const { rows } = await pool.query<{ slot_time: string; n: number }>(
+    `SELECT slot_time, COUNT(*)::int AS n
+       FROM rule_run
+      WHERE result = 'published'
+        AND account_key = $1
+        AND rule_id = $2
+        AND slot_time IS NOT NULL
+        AND at >= date_trunc('day', (now() AT TIME ZONE 'Asia/Seoul')) AT TIME ZONE 'Asia/Seoul'
+      GROUP BY slot_time`,
+    [accountKey, ruleId],
+  );
+  const out: Record<string, number> = {};
+  for (const r of rows) out[r.slot_time] = Number(r.n);
+  return out;
 }
 
 /**

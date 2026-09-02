@@ -457,13 +457,87 @@ export function slotsReadyForQueue(
  * index 는 **발행 순번**이다(슬롯 칸 번호가 아니라) — 7시×2·9시×3 이면 순번 0·1 이 7시,
  * 2~4 가 9시. 같은 시각 여러 건은 같은 publishAt 으로 나간다(유튜브 예약은 동시각 허용).
  */
-export function scheduledSlotAt(slots: RuleSlot[], index: number, now = new Date()): Date | null {
+/** "HH:MM" → KST 벽시계 분. 슬롯 비교는 전부 이 값으로 한다. */
+function slotMinutes(s: RuleSlot): number {
+  const [h, m] = s.time.split(":").map(Number);
+  return h * 60 + m;
+}
+
+/**
+ * 이 순번(0-base)이 **어느 슬롯 몫인가.** 범위를 넘으면 null.
+ * scheduledSlotAt(시각 계산)과 게시 기록(slot_time)이 **같은 함수**를 봐야 한다 —
+ * 둘이 갈라지면 "예약 시각은 18시인데 기록은 06:30 몫" 같은 상태가 된다.
+ */
+export function slotForIndex(slots: RuleSlot[], index: number): RuleSlot | null {
   let cum = 0;
-  let slot: RuleSlot | undefined;
   for (const s of slots) {
     cum += s.count;
-    if (index < cum) { slot = s; break; }
+    if (index < cum) return s;
   }
+  return null;
+}
+
+/**
+ * **지금 채울 수 있는 슬롯과 남은 몫** — 하루 누적이 아니라 슬롯 단위다
+ * (사용자 2026-09-02: "18시이면 그 시간에 정해둔 개수만 나가고 끝이야").
+ *
+ * ## 슬롯마다 창이 있다
+ *   창 = [슬롯 − 리드(2시간), **다음 슬롯**)   · 마지막 슬롯은 그날 끝까지
+ * 창이 닫히면 남은 몫은 **소멸한다** — 다음 슬롯으로 넘어가지 않는다. 이게 핵심이다.
+ *
+ * ## 이 설계가 고치는 것 둘
+ *  1. **아침 몫이 저녁에 몰려 나가는 것** (2026-09-02 ENA: 06:30×2 + 18:00×2 인데 18시에
+ *     4건). 06:30 창은 18:00 에 이미 닫혀 있어 그 2건은 소멸한다.
+ *  2. **느린 배달이 몫을 삼키는 것** (2026-08-26: "15시에 20개" 인데 렌더가 밀려 8개만 나가고
+ *     12개 증발). 15:00 이 마지막 슬롯이면 창이 그날 끝까지라 20개가 다 나간다.
+ * 예전 코드는 이 둘을 `staleMissedSlots` + `if (publishedToday > 0) return 0` 한 쌍으로
+ * 흉내 냈는데, 게시가 **어느 슬롯 몫인지** 몰라서 2번을 지키려다 1번을 놓쳤다.
+ *
+ * @param publishedBySlot 오늘 이 계획·채널이 **슬롯별로** 이미 게시한 수 ("HH:MM" → n)
+ */
+export function claimableSlots(
+  slots: RuleSlot[],
+  publishedBySlot: Record<string, number>,
+  now = new Date(),
+  leadMin = AUTOMATION_QUEUE_LEAD_MIN,
+  graceMin = SLOT_MISS_GRACE_MIN,
+): { time: string; remaining: number }[] {
+  const cur = kstMinutes(now);
+  const out: { time: string; remaining: number }[] = [];
+  for (let i = 0; i < slots.length; i++) {
+    const s = slots[i];
+    const at = slotMinutes(s);
+    const start = at - leadMin;                              // 리드부터 미리 채운다
+    const done = publishedBySlot[s.time] ?? 0;
+    // 창의 끝은 **배달이 시작됐는지**에 따라 다르다:
+    //  · 한 건도 안 나갔다 → 유예(60분)까지만. 안 그러면 아침 몫이 한낮에 튀어나온다.
+    //  · 배달 중이다      → 다음 슬롯까지(마지막이면 그날 끝). "15시에 20개" 가 밤까지
+    //                       이어져도 남은 몫이 증발하지 않는다(2026-08-26 사고).
+    const nextAt = i + 1 < slots.length ? slotMinutes(slots[i + 1]) : 24 * 60;
+    const end = done > 0 ? nextAt : Math.min(nextAt, at + graceMin);
+    if (cur < start || cur >= end) continue;                 // 창 밖 — 아직이거나 이미 소멸
+    const remaining = s.count - done;
+    if (remaining > 0) out.push({ time: s.time, remaining });
+  }
+  return out;
+}
+
+/**
+ * "HH:MM" → **오늘(KST)** 그 시각의 Date. 시각을 모르면 null(= 즉시 게시).
+ * scheduledSlotAt 과 같은 날짜 계산을 쓴다 — 두 벌이면 자정 근처에서 하루가 어긋난다.
+ */
+export function slotAtToday(time: string | null, now = new Date()): Date | null {
+  if (!time) return null;
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Seoul", year: "numeric", month: "2-digit", day: "2-digit",
+  }).formatToParts(now);
+  const date = ["year", "month", "day"].map((t) => parts.find((p) => p.type === t)?.value).join("-");
+  const at = new Date(`${date}T${time}:00+09:00`);
+  return Number.isFinite(at.getTime()) ? at : null;
+}
+
+export function scheduledSlotAt(slots: RuleSlot[], index: number, now = new Date()): Date | null {
+  const slot = slotForIndex(slots, index);
   if (!slot) return null;
   const parts = new Intl.DateTimeFormat("en-CA", {
     timeZone: "Asia/Seoul", year: "numeric", month: "2-digit", day: "2-digit",
