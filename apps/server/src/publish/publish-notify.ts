@@ -248,9 +248,14 @@ export function ruleDayTarget(
     return { target, deadlinePassed: cur > lastMin + 90, lastSlotPassed: cur >= lastMin };
   }
   const target = allowedToday(rule as AutomationRule, now);
-  const end = Number((rule as AutomationRule).activeEnd ?? 22);
+  const end = Number((rule as AutomationRule).activeEnd ?? 24);
   // 할당량 방식은 활동창 내내 나갈 수 있어 '마지막 슬롯' 이 없다 — 마감(활동창 끝)만 본다.
-  const deadlinePassed = kstMinutes(now) > end * 60;
+  //
+  // ⚠️ 24시간 계획(활동창 0~24 · 2026-09-02 기본)은 끝이 자정이라 `end * 60 = 1440` 인데
+  //    kstMinutes 는 최대 1439 다 — 그대로 두면 **마감이 영영 안 와서 리포트가 하루 늦는다**
+  //    (다음 날 hasStale 경로로만 나간다). 그날 마지막 순방에 나가도록 23:59 로 접는다.
+  const endMin = Math.min(end * 60, 23 * 60 + 59);
+  const deadlinePassed = kstMinutes(now) >= endMin;
   return { target, deadlinePassed, lastSlotPassed: deadlinePassed };
 }
 
@@ -345,7 +350,7 @@ async function nextPublishInfo(now: Date): Promise<{ label: string } | null> {
     if (!due.length) continue;
     const count = due.reduce((n, r) => n + perDayCount(r) * ruleChannels(r).length, 0);
     const firstSlot = due.flatMap((r) => ruleSlots(r).map((s) => s.time)).sort()[0];
-    const time = firstSlot ?? `${String(due[0].activeStart ?? 9).padStart(2, "0")}:00`;
+    const time = firstSlot ?? `${String(due[0].activeStart ?? 0).padStart(2, "0")}:00`;
     const p = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Seoul", year: "numeric", month: "2-digit", day: "2-digit" })
       .format(day).replace(/-/g, ". ");
     const w = KST_WD[new Date(day.toLocaleString("en-US", { timeZone: "Asia/Seoul" })).getDay()];

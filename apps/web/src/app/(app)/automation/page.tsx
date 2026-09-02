@@ -25,7 +25,7 @@ import type { AdoptReframe } from "@/components/adopt-dialog";
 // 두지 않는 이유: 이 숫자는 곧 청구 예상으로 읽히는데, 미러가 한 번 어긋나면 화면이 조용히
 // 거짓 약속을 하게 된다. automation.ts 는 import 0개짜리 순수 모듈이라 그대로 가져올 수 있다.
 import {
-  RULE_ASPECTS, UPLOAD_PLATFORMS, formatWeekdays, isPublishDay, monthlyPublishEstimate, perDayCount, ruleSlots,
+  RULE_ASPECTS, UPLOAD_PLATFORMS, formatWeekdays, isAllDayWindow, isPublishDay, monthlyPublishEstimate, perDayCount, ruleSlots,
   slotLabel, type RuleAspect, type RuleSlot,
 } from "@server-pure/pipeline/automation";
 // 배치 라벨·기하는 편집기 프리셋에서 읽는다(라벨을 여기 다시 적지 않는다 — 편집기와
@@ -305,8 +305,11 @@ export default function AutomationPage() {
   const [approveFirst, setApproveFirst] = useState(true);
   const [win, setWin] = useState("방영 익일 10시");
   const [dailyQuota, setDailyQuota] = useState(3);
-  const [activeStart, setActiveStart] = useState(9);
-  const [activeEnd, setActiveEnd] = useState(22);
+  // 새 계획 기본은 24시간 (2026-09-02) — 서버 기본(ruleWindow 0~24)과 같은 값이어야 한다.
+  const [activeStart, setActiveStart] = useState(0);
+  const [activeEnd, setActiveEnd] = useState(24);
+  // 시간 제한 없음 판정은 서버와 같은 함수로 — 화면이 따로 세면 문구와 동작이 갈라진다.
+  const allDay = isAllDayWindow({ activeStart, activeEnd });
   // 발행 요일(ISO 1=월…7=일) · 발행 시간(KST "HH:MM").
   // 둘 다 **비우면 기존 동작**이다 — 요일 빈 값 = 매일, 시간 빈 값 = 할당량 방식.
   // 구 계획이 조용히 달라지지 않게 기본을 빈 배열로 둔다.
@@ -453,7 +456,7 @@ export default function AutomationPage() {
     setApproveFirst(r.gatePolicy === "approve_first");
     setWin(r.window || "수시");
     setDailyQuota(r.dailyQuota ?? 3);
-    setActiveStart(r.activeStart ?? 9); setActiveEnd(r.activeEnd ?? 22);
+    setActiveStart(r.activeStart ?? 0); setActiveEnd(r.activeEnd ?? 24);
     // 구형(문자열)·신형({time,count}) 혼재를 서버와 같은 정규화로 접는다.
     setWeekdays(r.weekdays ?? []); setSlots(ruleSlots({ slots: r.slots ?? [] }));
     setTemplateId(r.templateId ?? "");
@@ -1305,7 +1308,7 @@ export default function AutomationPage() {
                 <span className="ml-1.5 text-[10.5px]" style={{ color: "var(--sd-fg-dim)" }}>
                   {slots.length
                     ? "시각당 개수의 합 — 할당량은 쓰지 않습니다"
-                    : `할당량 방식 · ${activeStart}시~${activeEnd}시(KST) 안에서`}
+                    : (allDay ? "할당량 방식 · 24시간" : `할당량 방식 · ${activeStart}시~${activeEnd}시(KST) 안에서`)}
                 </span>
               </span>
             </div>
@@ -1525,21 +1528,37 @@ export default function AutomationPage() {
               </label>
               <label className="text-[10.5px]" style={{ color: "var(--sd-label)" }}>
                 시작 (시 · KST)
-                <input type="number" min={0} max={23} value={activeStart}
+                <input type="number" min={0} max={23} value={activeStart} disabled={allDay}
                   onChange={(e) => setActiveStart(Math.max(0, Math.min(23, Number(e.target.value) || 0)))}
                   className="sd-input mt-1 w-full" />
               </label>
               <label className="text-[10.5px]" style={{ color: "var(--sd-label)" }}>
                 종료 (시 · KST)
-                <input type="number" min={1} max={24} value={activeEnd}
-                  onChange={(e) => setActiveEnd(Math.max(1, Math.min(24, Number(e.target.value) || 24)))}
+                <input type="number" min={0} max={24} value={activeEnd} disabled={allDay}
+                  onChange={(e) => setActiveEnd(Math.max(0, Math.min(24, Number(e.target.value) || 24)))}
                   className="sd-input mt-1 w-full" />
               </label>
             </div>
+            {/* 24시간 — 시간 제한을 두지 않는다(2026-09-02 사용자 "9~21 하드리미트 없애자").
+                판정은 서버와 **같은 함수**(isAllDayWindow)를 쓴다. 화면이 따로 계산하면
+                "24시간" 이라 적어 놓고 밤에는 안 나가는 상태가 된다. */}
+            <label className="flex items-center gap-1.5 text-[10.5px]" style={{ color: "var(--sd-label)" }}>
+              <input
+                type="checkbox"
+                checked={allDay}
+                onChange={(e) => {
+                  if (e.target.checked) { setActiveStart(0); setActiveEnd(24); }
+                  else { setActiveStart(9); setActiveEnd(22); }
+                }}
+              />
+              24시간 (시간 제한 없음)
+            </label>
             <p className="text-[10.5px]" style={{ color: "var(--sd-fg-dim)" }}>
               {slots.length
                 ? `${formatWeekdays(weekdays)} · ${slots.map(slotLabel).join(" ")} 에 맞춰 채널마다 하루 ${perDayCount({ slots, dailyQuota })}개를 내보냅니다.`
-                : `${activeStart}시~${activeEnd}시(KST) 사이에만 배포하고, 채널마다 하루 ${dailyQuota}개를 채우면 다음 날까지 쉽니다.`}
+                : allDay
+                  ? `시간 제한 없이(24시간) 배포하고, 채널마다 하루 ${dailyQuota}개를 채우면 다음 날까지 쉽니다.`
+                  : `${activeStart}시~${activeEnd}시(KST) 사이에만 배포하고, 채널마다 하루 ${dailyQuota}개를 채우면 다음 날까지 쉽니다.`}
             </p>
 
             <input value={win} onChange={(e) => setWin(e.target.value)} placeholder="시간대" className="sd-input w-full" />
@@ -1836,13 +1855,13 @@ export default function AutomationPage() {
                     발행 계획: <strong style={{ color: "var(--sd-fg)" }}>{formatWeekdays(r.weekdays)}</strong>
                     {" · "}
                     <strong style={{ color: "var(--sd-fg)" }}>
-                      {r.slots?.length ? ruleSlots(r).map(slotLabel).join(" · ") : `${r.activeStart ?? 9}:00~${r.activeEnd ?? 22}:00`}
+                      {r.slots?.length ? ruleSlots(r).map(slotLabel).join(" · ") : (isAllDayWindow(r) ? "24시간" : `${r.activeStart ?? 0}:00~${r.activeEnd ?? 24}:00`)}
                     </strong>
                     {" · "}
                     하루 {monthlyPublishEstimate(r).perDay}개
                   </span>
                   <span className="sd-tag">
-                    {r.slots?.length ? ruleSlots(r).map(slotLabel).join(" ") : `${r.activeStart ?? 9}~${r.activeEnd ?? 22}시`}
+                    {r.slots?.length ? ruleSlots(r).map(slotLabel).join(" ") : (isAllDayWindow(r) ? "24시간" : `${r.activeStart ?? 0}~${r.activeEnd ?? 24}시`)}
                   </span>
                   <span className="sd-tag">월 예상 {monthlyPublishEstimate(r).perMonth}건</span>
                   <span className="sd-tag">{r.templateId ? `템플릿 ${r.templateId}` : "템플릿 자동"}</span>

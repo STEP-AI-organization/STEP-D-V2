@@ -210,9 +210,13 @@ export function findAutomationChannelConflicts(
  * 두 벌이 되면 "9~22시 밖" 이라고 적어 놓고 다른 시간에 도는 일이 생긴다.
  */
 export function ruleWindow(rule: Pick<AutomationRule, "activeStart" | "activeEnd">): { start: number; end: number } {
+  // 기본은 **24시간**(2026-09-02 사용자 "9~21 하드리미트 없애자"). 예전 기본은 9~22 였고,
+  // 그게 곧 "밤에 올린 회차는 아침까지 안 나간다" 였다. 저장된 계획은 활동창 값을 명시적으로
+  // 들고 있으므로(db-pg 의 active_start·active_end 컬럼) 이 기본값이 바뀌어도 **기존 계획의
+  // 시간대는 그대로다** — 값이 없는 옛 객체만 24시간으로 떨어진다.
   return {
-    start: Number.isFinite(rule.activeStart) ? Number(rule.activeStart) : 9,
-    end: Number.isFinite(rule.activeEnd) ? Number(rule.activeEnd) : 22,
+    start: Number.isFinite(rule.activeStart) ? Number(rule.activeStart) : 0,
+    end: Number.isFinite(rule.activeEnd) ? Number(rule.activeEnd) : 24,
   };
 }
 
@@ -521,9 +525,21 @@ export function monthlyPublishEstimate(
  */
 export function inActiveWindow(rule: AutomationRule, now = new Date()): boolean {
   const { start, end } = ruleWindow(rule);
-  if (start === end) return true;
+  if (isAllDayWindow({ activeStart: start, activeEnd: end })) return true;
   const hour = Math.floor(kstMinutes(now) / 60);
   return start < end ? hour >= start && hour < end : hour >= start || hour < end;
+}
+
+/**
+ * 시간 제한이 없는 계획인가(24시간). 화면 문구와 서버 판정이 **같은 함수**를 봐야 한다 —
+ * 갈라지면 "24시간" 이라 적어 놓고 밤에는 안 나가는 상태가 된다.
+ *
+ * 두 꼴 다 24시간이다: `0~24`(사람이 읽기 쉬운 쪽 · 화면이 저장하는 값) 와
+ * `start === end`(창 없음을 뜻하는 종전 표기 — 옛 계획이 이 꼴일 수 있어 계속 인정한다).
+ */
+export function isAllDayWindow(rule: Pick<AutomationRule, "activeStart" | "activeEnd">): boolean {
+  const { start, end } = ruleWindow(rule);
+  return start === end || (start <= 0 && end >= 24);
 }
 
 /**
