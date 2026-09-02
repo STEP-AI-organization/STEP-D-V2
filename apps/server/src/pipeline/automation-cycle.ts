@@ -53,7 +53,7 @@ import {
   renderQueueStallMs,
   renderViaQueue,
   staleMissedSlots,
-  type AutoRenderState, type AutomationRule, type RenderOutcome, type RuleIdleCode, type RuleIdleObservation,
+  type AutoRenderState, type AutomationRule, type RenderOutcome, type RuleAspect, type RuleIdleCode, type RuleIdleObservation,
 } from "./automation.ts";
 import {
   youtubeUploadEnabled, tiktokUploadEnabled, instagramUploadEnabled, facebookUploadEnabled,
@@ -117,11 +117,13 @@ export async function runAutomationCycle(): Promise<CycleReport> {
  * 클립(롱폼)은 가로형이 기본이다(사용자 확정 2026-08-16) — 계획이 방향을 명시했으면 그게 우선,
  * 아니면 추천 종류(kind)로 정한다(하위호환 · 리프레임 OFF 시 불변).
  */
-function adoptAspect(rule: AutomationRule, rec: { kind?: unknown }): "16:9" | typeof SHORTS_DEFAULT_ASPECT {
+function adoptAspect(rule: AutomationRule, rec: { kind?: unknown }): "16:9" | RuleAspect {
   const landscape = rule.orientation === "landscape"
     || (rule.orientation !== "portrait" && rec.kind !== "short");
-  // 세로 기본은 factory 와 **같은 상수**를 쓴다 — 두 곳에 적으면 한쪽만 바뀐다.
-  return landscape ? "16:9" : SHORTS_DEFAULT_ASPECT;
+  if (landscape) return "16:9";
+  // 계획이 세로 배치를 정했으면 그대로 쓴다(2026-09-02). 정하지 않았으면 factory 와 **같은
+  // 상수**로 떨어진다 — 기본을 여기서 옮기면 이미 돌고 있는 계획의 결과물이 조용히 바뀐다.
+  return rule.aspect ?? SHORTS_DEFAULT_ASPECT;
 }
 
 async function runAutomationCycleLocked(): Promise<CycleReport> {

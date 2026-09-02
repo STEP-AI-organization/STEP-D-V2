@@ -48,6 +48,22 @@ export const RULE_ORIENTATIONS = ["portrait", "landscape"] as const;
 export type RuleOrientation = (typeof RULE_ORIENTATIONS)[number];
 export const RULE_REFRAMES = ["ai", "none"] as const;
 export type RuleReframe = (typeof RULE_REFRAMES)[number];
+
+/**
+ * 세로 영상 배치 (2026-09-02) — 편집기 `aspect-presets` 의 **세로 프리셋 id 그대로**.
+ *
+ * ⚠️ 여기서 `aspect-presets.ts` 를 import 하지 않는다. 이 파일은 **import 0개짜리 순수
+ *    모듈**이고 웹이 `@server-pure/pipeline/automation` 로 그대로 가져다 쓴다(위 파일 주석).
+ *    한 줄만 들여와도 그 계약이 깨진다. 대신 값을 여기 적고 **automation-aspect.test.ts 가
+ *    프리셋의 세로 부분집합과 대조**한다 — 프리셋이 늘면 테스트가 빨간불을 켠다.
+ *
+ * 가로(16:9)는 뺀다. 가로/세로는 이미 `orientation` 이 정하고 있어서, 여기서도 가로를
+ * 받으면 두 필드가 서로 다른 말을 할 수 있다. 이 값은 **세로일 때 어떤 배치인가**만 말한다.
+ */
+export const RULE_ASPECTS = [
+  "9:16-letterbox", "9:16-crop-full", "9:16-crop-main", "9:16-crop-sub",
+] as const;
+export type RuleAspect = (typeof RULE_ASPECTS)[number];
 /**
  * 썸네일 생성 방식 (2026-08-16).
  *   ai    — 서사 기획 + 등록 인물 누끼로 모델이 그린다. **인물 등록이 선행**돼야 한다.
@@ -126,6 +142,11 @@ export interface AutomationRule {
   orientation?: RuleOrientation | null;
   /** 'ai' = 세로형 채택 직후 AI 리프레임(clip.reframe) 큐잉. 세로형일 때만 의미. */
   reframe?: RuleReframe | null;
+  /**
+   * 세로 영상 배치. 미지정 = SHORTS_DEFAULT_ASPECT(레터박스) — **기존 계획의 결과물이
+   * 바뀌지 않도록** 기본을 옮기지 않는다. 가로로 나가는 건에는 의미가 없다.
+   */
+  aspect?: RuleAspect | null;
   /** 썸네일 생성 방식. 미지정 = frame(안전한 쪽 · 인물 등록 없이도 나온다). */
   thumbnailMode?: RuleThumbnailMode | null;
 }
@@ -1301,4 +1322,7 @@ export function isRuleReframe(v: unknown): v is RuleReframe {
 }
 export function isRuleThumbnailMode(v: unknown): v is RuleThumbnailMode {
   return typeof v === "string" && (RULE_THUMBNAIL_MODES as readonly string[]).includes(v);
+}
+export function isRuleAspect(v: unknown): v is RuleAspect {
+  return typeof v === "string" && (RULE_ASPECTS as readonly string[]).includes(v);
 }

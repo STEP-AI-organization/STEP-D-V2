@@ -361,6 +361,7 @@ import {
   initialRuleState,
   isGatePolicy,
 
+  isRuleAspect,
   isRuleMediaKind,
   isRuleOrientation,
   isRuleReframe,
@@ -5703,6 +5704,10 @@ app.post("/api/automation/rules", async (c) => {
   if (body.reframe != null && !isRuleReframe(body.reframe)) {
     return c.json({ error: "invalid reframe" }, 400);
   }
+  // 세로 영상 배치(2026-09-02) — 편집기 프리셋과 같은 id. 가로 id(16:9)는 여기서 받지 않는다.
+  if (body.aspect != null && !isRuleAspect(body.aspect)) {
+    return c.json({ error: "invalid aspect" }, 400);
+  }
   // 수동 다이얼로그는 세로형일 때만 리프레임을 묻는다(가로는 크롭이 없어 오선택 방지) —
   // 규칙도 같은 제약. 여기서 안 막으면 "AI 켰는데 영영 안 돈다"가 침묵 속에 저장된다.
   if (body.reframe === "ai" && body.orientation !== "portrait") {
@@ -5778,6 +5783,8 @@ app.post("/api/automation/rules", async (c) => {
     // 채택 형태(0038) — 순방(automation-cycle)이 수동 채택과 같은 매핑으로 소비한다.
     ...(isRuleOrientation(body.orientation) ? { orientation: body.orientation } : {}),
     ...(isRuleReframe(body.reframe) ? { reframe: body.reframe } : {}),
+    // 세로 영상 배치(0043) — 미지정이면 순방이 SHORTS_DEFAULT_ASPECT(레터박스)로 본다.
+    ...(isRuleAspect(body.aspect) ? { aspect: body.aspect } : {}),
     // 썸네일 방식(0041). 미지정이면 순방이 frame 으로 본다 — ai 는 등록 출연자 사진이
     // 있어야 해서, 기본으로 두면 캐스트 미등록 회차가 통째로 썸네일 없이 나간다.
     ...(isRuleThumbnailMode(body.thumbnailMode) ? { thumbnailMode: body.thumbnailMode } : {}),

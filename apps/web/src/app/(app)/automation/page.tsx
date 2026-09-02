@@ -25,9 +25,12 @@ import type { AdoptReframe } from "@/components/adopt-dialog";
 // 두지 않는 이유: 이 숫자는 곧 청구 예상으로 읽히는데, 미러가 한 번 어긋나면 화면이 조용히
 // 거짓 약속을 하게 된다. automation.ts 는 import 0개짜리 순수 모듈이라 그대로 가져올 수 있다.
 import {
-  UPLOAD_PLATFORMS, formatWeekdays, isPublishDay, monthlyPublishEstimate, perDayCount, ruleSlots,
-  slotLabel, type RuleSlot,
+  RULE_ASPECTS, UPLOAD_PLATFORMS, formatWeekdays, isPublishDay, monthlyPublishEstimate, perDayCount, ruleSlots,
+  slotLabel, type RuleAspect, type RuleSlot,
 } from "@server-pure/pipeline/automation";
+// 배치 라벨·기하는 편집기 프리셋에서 읽는다(라벨을 여기 다시 적지 않는다 — 편집기와
+// 자동배포가 같은 배치를 다른 이름으로 부르면 실무자가 둘을 같은 것으로 못 본다).
+import { ASPECT_PRESETS, getAspectPreset } from "@/lib/editor/aspect-presets";
 import {
   LayoutSliders,
   SUBTITLE_DEFAULTS,
@@ -319,6 +322,9 @@ export default function AutomationPage() {
   // AI 리프레임 — 수동 채택(adopt-dialog)과 같은 값 체계("ai"|"none")·같은 라벨.
   // 기본 "none" = 중앙 고정 크롭(서버 factory 의 basicReframeState 기본과 동일).
   const [reframe, setReframe] = useState<AdoptReframe>("none");
+  // 세로 영상 배치(2026-09-02) — 편집기 프리셋과 같은 id. 기본은 서버 SHORTS_DEFAULT_ASPECT
+  // 와 **같은 값**이어야 한다. 여기만 다른 걸 기본으로 두면 "안 건드렸는데 결과가 달라진다".
+  const [aspect, setAspect] = useState<RuleAspect>("9:16-letterbox");
   // 템플릿 대형 미리보기 — 소형 카드로는 실제 결과감이 안 온다는 피드백(클릭 시 확대).
   const [tplPreviewOpen, setTplPreviewOpen] = useState(false);
 
@@ -451,6 +457,7 @@ export default function AutomationPage() {
     setWeekdays(r.weekdays ?? []); setSlots(ruleSlots({ slots: r.slots ?? [] }));
     setTemplateId(r.templateId ?? "");
     setReframe(r.reframe ?? "none"); // 구 계획(필드 없음)은 기본과 같은 "none"
+    setAspect(r.aspect ?? "9:16-letterbox"); // 구 계획(필드 없음)은 순방 기본과 같은 레터박스
     setSubtitles(r.layout?.subtitles !== false); // 구 계획(필드 없음)은 기본 ON
     if (r.layout) {
       const seed = TEMPLATE_SEED_UI[r.templateId || "broadcast-standard"] ?? TEMPLATE_SEED_UI["broadcast-standard"];
@@ -741,6 +748,9 @@ export default function AutomationPage() {
         ...(mediaKind === "short" ? { orientation: "portrait" as const }
           : mediaKind === "clip" ? { orientation: "landscape" as const } : {}),
         reframe: mediaKind === "short" ? reframe : "none",
+        // 세로 배치도 숏폼에만 의미가 있다 — 클립(가로)엔 안 보내 두 필드가 다투지 않게 한다.
+        // "둘 다"는 추천 kind 로 방향이 갈리므로, 세로로 나가는 건에만 적용되도록 그대로 보낸다.
+        ...(mediaKind === "clip" ? {} : { aspect }),
         ...(templateId ? { templateId } : {}),
         // 자막 위치·크기·색(layout)과 자막 on/off(subtitles)를 layout JSONB 안에 함께 보낸다 —
         // automation_rule 에 자막 전용 컬럼을 두지 않고 라운드트립시킨다.
@@ -1396,6 +1406,41 @@ export default function AutomationPage() {
                 하한은 쇼츠 점수 분포상 계획 전량을 막아 세우는 함정이었고(서버 주석 참조),
                 화면의 "점수 80 이상" 배지는 그 사실을 사용자에게 설명해 주지도 못했다. */}
 
+            {/* 세로 영상 배치 — 편집기 프리셋 4종 그대로(라벨·기하 동일). 클립(가로) 전용
+                계획엔 의미가 없어 흐리게 처리한다. 미지정 계획은 레터박스로 나가고 있었다. */}
+            <div style={mediaKind === "clip" ? { opacity: 0.65, pointerEvents: "none" } : undefined}>
+              <div className="text-[10.5px]" style={{ color: "var(--sd-label)" }}>
+                세로 영상 배치
+              </div>
+              <div className="mt-1 grid grid-cols-2 gap-2">
+                {ASPECT_PRESETS.filter((p) => (RULE_ASPECTS as readonly string[]).includes(p.id)).map((p) => {
+                  const active = aspect === p.id;
+                  return (
+                    <button
+                      key={p.id}
+                      type="button"
+                      onClick={() => setAspect(p.id as RuleAspect)}
+                      className="flex items-center gap-2.5 rounded-[5px] px-3 py-2 text-left transition"
+                      style={{
+                        border: `1px solid ${active ? "var(--sd-accent-border)" : "var(--sd-border)"}`,
+                        background: active ? "var(--sd-accent-bg)" : "var(--sd-card)",
+                      }}
+                    >
+                      <AspectGlyph id={p.id} active={active} />
+                      <span className="min-w-0">
+                        <span className="block text-[12px] font-medium"
+                          style={{ color: active ? "var(--sd-accent)" : "var(--sd-fg)" }}>{p.label}</span>
+                        <span className="block text-[10.5px] leading-snug" style={{ color: "var(--sd-mut)" }}>{p.hint}</span>
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+              <p className="mt-1 text-[10.5px]" style={{ color: "var(--sd-fg-dim)" }}>
+                원본 영상이 세로 화면에 어떻게 앉을지 정합니다 — 편집기의 같은 이름 배치와 결과가 동일합니다
+              </p>
+            </div>
+
             {/* AI 리프레임 — 수동 채택 다이얼로그(adopt-dialog)와 같은 선택지·라벨.
                 숏폼(세로) 전용 옵션이다: 클립(가로)은 크롭이 없고, "둘 다"는 방향이 추천마다
                 달라 orientation 을 못 정한다(서버가 portrait 에서만 AI 허용) — 흐리게 + none 강제. */}
@@ -2017,6 +2062,46 @@ export default function AutomationPage() {
  * "1단계" 를 옅은 라벨로 낮춘다 — 위계는 제목이 지고, 번호는 순서만 알려주면 된다.
  * (색은 STEP D 토큰 그대로다 — AENA 의 zinc 클래스를 옮기면 다크 테마가 깨진다.)
  */
+/**
+ * 배치 미니 도해 — 세로 프레임 안에서 **영상이 실제로 앉는 자리**를 그린다.
+ *
+ * 라벨만으로는 "전체 담기"와 "위 자막띠"가 어떻게 다른지 안 와닿는다(같은 이유로 편집기도
+ * 프리셋을 그림으로 보여준다). 좌표는 프리셋의 `rect` 를 캔버스 비율로 환산해 쓰므로
+ * 프리셋이 바뀌면 도해도 따라간다 — 여기 숫자를 따로 적지 않는다.
+ */
+function AspectGlyph({ id, active }: { id: string; active: boolean }) {
+  const p = getAspectPreset(id);
+  const W = 18, H = 32; // 9:16 미니 프레임(px)
+  // 영상 영역(프레임 대비 %). contain 은 16:9 원본 기준 레터박스, cover 는 꽉 참.
+  const area = (() => {
+    if (!p) return { top: 0, height: 100 };
+    if (p.fill === "rect" && p.rect) {
+      return { top: (p.rect.y / p.canvasH) * 100, height: (p.rect.h / p.canvasH) * 100 };
+    }
+    if (p.fill === "cover") return { top: 0, height: 100 };
+    // contain — 16:9 원본이 1080 폭에 맞으면 높이 607.5 → 세로 중앙 정렬.
+    const h = ((1080 * 9 / 16) / p.canvasH) * 100;
+    return { top: (100 - h) / 2, height: h };
+  })();
+  return (
+    <span
+      aria-hidden
+      className="relative shrink-0 overflow-hidden rounded-[2px]"
+      style={{ width: W, height: H, background: "var(--sd-card-sub)", border: "1px solid var(--sd-border)" }}
+    >
+      <span
+        className="absolute left-0 right-0"
+        style={{
+          top: `${area.top}%`,
+          height: `${area.height}%`,
+          background: active ? "var(--sd-accent)" : "var(--sd-mut)",
+          opacity: active ? 0.85 : 0.45,
+        }}
+      />
+    </span>
+  );
+}
+
 function FlowStepHeader({ step, title, description }: { step: string; title: string; description: string }) {
   return (
     <div className="min-w-0 flex-1">

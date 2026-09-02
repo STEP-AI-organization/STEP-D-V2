@@ -1065,6 +1065,12 @@ export interface AutomationRule {
    * reframe 을 보낼 땐 orientation 도 함께 보내야 한다. 미지정=추천 kind 기반(하위호환).
    */
   orientation?: "portrait" | "landscape";
+  /**
+   * 세로 영상 배치 (2026-09-02) — 편집기 프리셋과 같은 id(가로 16:9 는 제외).
+   * 서버 정본은 `pipeline/automation.ts` 의 RULE_ASPECTS 다. 구 계획엔 없고, 없으면
+   * 순방이 SHORTS_DEFAULT_ASPECT(레터박스)로 본다 — 화면 기본도 같은 값이어야 한다.
+   */
+  aspect?: "9:16-letterbox" | "9:16-crop-full" | "9:16-crop-main" | "9:16-crop-sub";
   /** 다중 프로그램·채널 (2026-08-12). 배열이 있으면 배열이 정본, 없으면 단수 폴백. */
   programIds?: string[];
   channels?: { platform: string; accountId: string }[];

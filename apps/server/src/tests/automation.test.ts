@@ -414,10 +414,14 @@ describe("채택 형태 순방 배선 — automation-cycle 소스 스캔", () =>
   it("계획 방향이 클립 aspectRatio 에 수동 채택과 같은 매핑으로 적용된다", () => {
     assert.match(src, /rule\.orientation === "landscape"/,
       "계획의 가로 지정이 반영되지 않는다");
+    assert.match(src, /if \(landscape\) return "16:9";/,
+      "가로/세로 → aspectRatio 매핑(adopt 라우트와 동일)이 없다");
     // 세로 기본값은 factory.SHORTS_DEFAULT_ASPECT 한 곳에서 온다(2026-09-01). 문자열을
     // 두 곳에 적으면 한쪽만 바뀌어 자동배포와 수동 채택이 다른 화면비로 갈린다.
-    assert.match(src, /landscape \? "16:9" : SHORTS_DEFAULT_ASPECT/,
-      "가로/세로 → aspectRatio 매핑(adopt 라우트와 동일)이 없다");
+    // 2026-09-02: 계획이 배치를 정할 수 있게 됐다(rule.aspect). **기본은 그대로 상수**여야
+    // 한다 — 여기에 문자열을 적으면 계획을 안 건드린 기존 건의 결과물이 조용히 바뀐다.
+    assert.match(src, /rule\.aspect \?\? SHORTS_DEFAULT_ASPECT/,
+      "계획이 정한 세로 배치가 무시되거나, 기본이 공유 상수에서 오지 않는다");
     const index = fs.readFileSync(path.join(SRC, "index.ts"), "utf-8");
     assert.match(index, /: \(rec\.kind === "short" \? SHORTS_DEFAULT_ASPECT : "16:9"\)/,
       "수동 채택이 같은 상수를 쓰지 않는다");
