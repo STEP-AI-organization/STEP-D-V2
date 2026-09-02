@@ -164,28 +164,38 @@ describe("리포트는 실패를 숨기지 않는다 (2026-08-26)", () => {
 });
 
 /**
- * **마감 후 하루 한 통** (정책 2026-09-02 · 사용자 "메일이 2개로 나눠져서 온다").
+ * **갈라질 수 있을 때만 기다린다** (정책 2026-09-02 · 같은 날 두 번 손봤다).
  *
- * 예전(2026-08-27)엔 몫이 다 나가거나 소재가 고갈되면 마지막 슬롯 직후 바로 보냈다. 그러면
- * 리포트가 나간 **뒤에** 확정되는 사실(재시도 성공 · 슬롯 직전 예약 업로드)이 갈 곳이 없어
- * 두 번째 통이 됐다. 조기 발송과 하루 한 통은 동시에 가질 수 없어 후자를 골랐다.
+ * ① 원래는 몫이 다 나가면 즉시 보냈다 → 그 **뒤에** 확정되는 사실(재시도 성공 · 슬롯 직전
+ *    예약분)이 갈 곳이 없어 두 번째 통이 됐다("메일이 2개로 나눠져서 온다").
+ * ② 그래서 마감(마지막 슬롯 +90분)만 보게 했더니 **다 나간 날에도 90분을 기다렸다**
+ *    ("이미 다 나갔는데 왜 +90분").
+ * ③ 지금은 둘을 갈랐다 — 실패 항목이 남아 있거나 목표를 못 채운 동안만 기다리고,
+ *    다 채웠으면 바로 보낸다. 마감은 *목표 미달인 날의* 안전장치로 남는다.
  *
  * ⚠️ 이 블록이 깨지면 **정책이 되돌아간 것**이다. 숫자를 고치지 말고 어느 쪽이 정본인지
- *    먼저 정할 것 — 되돌리려면 publish-notify 의 ruleReportDue 한 함수만 보면 된다.
+ *    먼저 정할 것 — 판정은 publish-notify 의 ruleReportDue 한 함수뿐이다.
  */
-describe("리포트는 마감 후에 한 통으로 나간다", () => {
+describe("리포트 발송 시점 — 갈라질 수 있을 때만 기다린다", () => {
   const read = (f: string) => fsSync.readFileSync(pathMod.join(SRC_DIR, f), "utf-8");
 
-  it("발송 판정이 마감만 본다 — '몫이 다 나갔으면 즉시' 분기가 없다", () => {
+  it("갈라질 수 있을 때만 기다린다 — 네 갈래가 전부 있어야 한다", () => {
     const src = read("publish/publish-notify.ts");
-    assert.match(src, /function ruleReportDue\(rule: AutomationRule, now: Date\): boolean/,
-      "마감 판정 함수가 없다");
-    assert.match(src, /return ruleDayTarget\(rule, 0, now\)\.deadlinePassed;/,
-      "마감 외의 조건으로 보내면 늦게 확정되는 건이 두 번째 통으로 갈라진다");
-    assert.doesNotMatch(src, /published >= target \|\| deadlinePassed/,
-      "'몫이 다 나갔으면 즉시 발송' 분기가 살아 있다 — 정책이 되돌아갔다");
+    const fn = src.slice(src.indexOf("async function ruleReportDue("));
+    assert.ok(fn.length > 200, "ruleReportDue 를 못 찾았다");
+    const body = fn.slice(0, fn.indexOf("\n}") + 2);
+    // ① 마감 = 안전장치 (목표 미달이어도 언젠가는 나간다)
+    assert.match(body, /if \(ruleDayTarget\(rule, 0, now\)\.deadlinePassed\) return true;/);
+    // ② 실패 항목이 남아 있으면 기다린다 — 재시도 성공이 두 번째 통이 되는 걸 막는 실제 축
+    assert.match(body, /if \(items\.some\(\(i\) => i\.failed\)\) return false;/,
+      "이게 빠지면 재시도 성공분이 갈라져 나간다");
+    // ③ 목표를 채웠으면 바로 — 다 나간 날 90분을 헛기다리지 않는다
+    assert.match(body, /totals\.published >= totals\.target/,
+      "목표 달성 판정이 없으면 다 나간 날에도 마감까지 기다린다");
+    // target 0 을 '달성' 으로 치면 늦게 켠 계획이 즉시 발송된다.
+    assert.match(body, /totals\.target > 0/);
     assert.doesNotMatch(src, /exhausted && lastSlotPassed/,
-      "소재 고갈 조기 발송이 살아 있다 — 이것이 갈라짐의 원인이었다");
+      "소재 고갈 조기 발송은 목표 달성 판정이 대신한다");
   });
 
   it("순방이 exhausted 를 더 넘기지 않는다 — 넘길 곳이 없어졌다", () => {
@@ -318,7 +328,7 @@ describe("리포트는 자동배포 계획마다 한 통 (2026-08-28)", () => {
   it("계획 없는 묶음은 계획들과 **같은 마감**을 기다린다 (2026-09-02)", () => {
     // 콘텐츠 공장(factory)·지워진 계획의 고아 클립. 예전엔 즉시 발송이라 이른 시각에 한 통이
     // 더 왔다 — 사용자가 본 "메일 2개" 의 나머지 절반.
-    assert.match(flush, /const due = rule \? ruleReportDue\(rule, now\) : orphanDue;/,
+    assert.match(flush, /const due = rule \? await ruleReportDue\(rule, now, group\) : orphanDue;/,
       "계획 없는 묶음이 즉시 발송으로 되돌아갔다 — 다시 이른 시각에 한 통이 더 간다");
     assert.match(flush, /if \(!hasStale && !due\)/);
   });
