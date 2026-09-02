@@ -2972,8 +2972,13 @@ function stopHandoffPolling() {
  * 프리미어 안의 화면까지 같이 갱신된다 — 플러그인을 다시 깔 필요가 없다.
  *
  * `<webview>` 는 manifest 의 `requiredPermissions.webview` 가 있어야 뜬다(도메인 화이트리스트).
- * 양방향 메시지(`enableMessageBridge`)도 켜 뒀다 — 나중에 웹에서 "이 구간으로 이동"·"마커 꽂기"
- * 를 눌러 패널이 프리미어를 조작하게 만들 자리다(아직 배선 안 함).
+ *
+ * ⚠️ 양방향 메시지(`enableMessageBridge`)는 **닫아 뒀다**(2026-09-02). 웹에서 "이 구간으로
+ * 이동"·"마커 꽂기" 를 눌러 패널이 프리미어를 조작하게 만들 자리인데, 한 곳도 배선하지
+ * 않은 채 권한만 열려 있었다. 마켓 심사가 "기능에 비해 넓은 권한" 을 보는 항목이라,
+ * **쓸 때 열기로** 했다. 되살릴 때 manifest 의 webview 에 다시 넣는다:
+ *   "enableMessageBridge": "localAndRemote"
+ * (패널→웹 `el.postMessage` · 웹→패널 `window.uxpHost.postMessage`)
  */
 const WEB_HOME = "https://stepd.stepai.kr";
 let webLoaded = false;

@@ -38,8 +38,7 @@
     "allowCodeGenerationFromStrings": false,
     "webview": {
       "allow": "yes",
-      "domains": ["https://stepd.stepai.kr"],
-      "enableMessageBridge": "localAndRemote"
+      "domains": ["https://stepd.stepai.kr"]
     }
   }
 }

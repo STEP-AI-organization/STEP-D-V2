@@ -11,8 +11,11 @@
 - Premiere Pro **25.6 이상** (UXP 정식 지원 시작 버전). 개인용 구독으로 충분하다 — 팀/엔터프라이즈 전용 기능을 쓰지 않는다.
 - **Adobe UXP Developer Tool (UDT)** — 개발 중 로드용. 무료이고 Creative Cloud 데스크톱 앱에서 설치한다.
 
-> 윈도우1 실측(2026-08-28): Premiere Pro 2026 **26.3.2** 설치됨(조건 충족) · Media Encoder 2026 설치됨
-> (나중에 시퀀스 자동 렌더에 쓴다) · **UDT 는 아직 설치 안 됨**.
+> 윈도우1 실측(2026-09-02 갱신): Premiere Pro 2026 **26.3.2** 설치됨(조건 충족) ·
+> Media Encoder 2026 설치됨 · **UDT 설치됨**(`C:\Program Files\Adobe\Adobe UXP Developer Tools`).
+> 단 UDT 를 **실행해 두지 않으면** 패널이 프리미어에 로드되지 않는다 — 포트 14001 이 안 열려
+> 있으면 그 상태다. 증상은 "프리미어는 뜨는데 아무 일도 안 일어남" 이다(핸드오프를 집어갈
+> 주체가 없다).
 
 ## 개발 중 로드 (지금 단계)
 
@@ -77,9 +80,12 @@ UDT 로그(`%APPDATA%\Adobe\Adobe UXP Developer Tool\Logs\appLogs-*.log`)에
 - 도킹 폭에서는 좁다 — **패널을 플로팅으로 띄우고 크게 늘려** 쓰는 걸 전제로 한다
 - 탭을 **처음 열 때만** 로드한다(안 쓰는 사람이 비용을 내지 않게)
 - manifest 의 `requiredPermissions.webview` 가 있어야 뜬다(도메인 화이트리스트 · stepd.stepai.kr)
-- 양방향 메시지(`enableMessageBridge: "localAndRemote"`)를 켜 뒀다 — 웹에서 "이 구간으로
-  이동"·"마커 꽂기"·"이 시퀀스 렌더" 를 눌러 패널이 프리미어를 조작하게 만들 자리다.
-  **아직 배선하지 않았다**(패널→웹 `el.postMessage` · 웹→패널 `window.uxpHost.postMessage`)
+- 양방향 메시지(`enableMessageBridge`)는 **닫아 뒀다**(2026-09-02). 웹에서 "이 구간으로
+  이동"·"마커 꽂기"·"이 시퀀스 렌더" 를 눌러 패널이 프리미어를 조작하게 만들 자리인데,
+  한 곳도 배선하지 않은 채 권한만 열려 있었다 — 마켓 심사가 "기능에 비해 넓은 권한" 을 보는
+  항목이라 **쓸 때 열기로** 했다. 되살리려면 manifest 의 `webview` 에
+  `"enableMessageBridge": "localAndRemote"` 를 다시 넣는다
+  (패널→웹 `el.postMessage` · 웹→패널 `window.uxpHost.postMessage`)
 
 ⚠️ **로그인 유지는 확인이 필요하다.** WebView 의 쿠키 보존 정책이 Adobe 문서에 명시돼 있지
 않다. 매번 로그인해야 한다면, 패널이 이미 들고 있는 세션 토큰을 메시지 브리지로 넘겨
@@ -94,7 +100,7 @@ UDT 로그(`%APPDATA%\Adobe\Adobe UXP Developer Tool\Logs\appLogs-*.log`)에
 
 | 무엇 | 어떻게 |
 |---|---|
-| **실행** (앱 띄우기) | `stepd://` 커스텀 URL 스킴 → `launcher/open-premiere.cmd` 가 프리미어 실행 |
+| **실행** (앱 띄우기) | `stepd://` 커스텀 URL 스킴 → 프리미어 실행 (아래 ⚠️ 소유권 주의) |
 | **맥락** (어느 회차인가) | 웹이 `POST /api/premiere/handoff` 로 남기고, 패널이 5초마다 `GET` 으로 집어간다 |
 
 이 분리 덕에 **프리미어가 이미 떠 있으면 설치물 없이도 동작한다** — 폴링만으로 성립한다.
@@ -108,6 +114,12 @@ UDT 로그(`%APPDATA%\Adobe\Adobe UXP Developer Tool\Logs\appLogs-*.log`)에
 ```
 
 확인: 브라우저 주소창에 `stepd://test` → 프리미어가 뜨면 된 것.
+
+⚠️ **STEP-D 데스크톱 앱(`native/`)이 깔린 PC 에서는 이 등록을 하지 말 것**(2026-09-02).
+데스크톱 앱도 같은 `stepd://` 를 잡고(`main.ts` `setAsDefaultProtocolClient`), **스킴 주인은
+하나뿐**이다. 앱이 이미 `stepd://open` 을 받아 프리미어를 띄우므로(`openPremiere()` — 설치된
+최신 Premiere 를 찾아 실행) 런처가 필요 없고, 런처로 덮으면 앱의 딥링크(`stepd://app/...`)가
+죽는다. 이 런처는 **데스크톱 앱을 안 쓰는 PC** 용이다.
 
 핸드오프는 **한 번만 소비**되고 **5분 지나면 버려진다** — 안 그러면 어제 누른 게 오늘
 패널을 켤 때 튀어나와 편집자가 영문도 모르고 엉뚱한 회차로 끌려간다.
@@ -224,7 +236,7 @@ V2 트랙에 올린다. 그 PNG 를 그리는 건 **웹 편집기가 쓰는 바�
 | 누구인가 | `id` · `name` · `version` | `id` 로 플러그인을 식별·중복 방지(마켓 등록 후 변경 불가). `name` 이 UDT·설치 목록에 보인다 |
 | 어디에 붙는가 | `host: [{ app: "premierepro", minVersion }]` | 이 앱·버전이 아니면 **아예 목록에 안 띄운다**. 버전이 낮으면 로드 거부 |
 | 무엇을 띄우는가 | `entrypoints: [{ type: "panel", id, label }]` | `label` 이 **창 ▸ 확장 메뉴에 뜨는 이름**. 패널을 열면 `main`(=`index.html`)을 로드하고, 그 안의 `main.js` 가 돈다 |
-| 무엇을 할 수 있는가 | `requiredPermissions` | **선언한 것만 허용.** `network.domains` 에 없는 주소는 fetch 가 막힌다(그래서 GCS 도메인을 적어 뒀다). `localFileSystem: "request"` 는 "사용자가 고른 파일만" 이라는 뜻 |
+| 무엇을 할 수 있는가 | `requiredPermissions` | **선언한 것만 허용.** `network.domains` 에 없는 주소는 fetch 가 막힌다(그래서 GCS 도메인을 적어 뒀다). `localFileSystem` 은 우리가 `fullAccess` 다 — 아래 참고 |
 
 즉 **JSON 이 플러그인을 띄우는 게 아니라, JSON 이 "무엇을 어디에 어떤 권한으로 띄울지"를
 선언하고 프리미어가 그대로 실행해 주는 것**이다. 코드를 돌려 보지 않고도 호환성과 권한을
@@ -312,8 +324,17 @@ Adobe 플러그인은 세 갈래로 나갈 수 있고, 순서대로 밟는 게 �
    개인정보 처리방침 URL. STEP-D 는 로그인·파일 업로드를 하므로 **처리방침 링크가 사실상 필수**다
    (기존 `stepd.stepai.kr/privacy` 를 쓰되 플러그인이 보내는 데이터를 한 줄 추가해야 한다).
 5. **심사 항목** — 네트워크 도메인이 manifest 에 명시돼 있을 것, 자격증명을 평문 저장하지
-   말 것, 권한이 기능에 비해 넓지 않을 것. 지금 구현은 이 셋을 이미 만족한다
-   (도메인 2개 · secureStorage · `localFileSystem: "request"`).
+   말 것, 권한이 기능에 비해 넓지 않을 것.
+   - 도메인은 2개뿐(stepd.stepai.kr · storage.googleapis.com) · 자격증명은 `secureStorage`
+     (OS 키체인) — 이 둘은 만족한다.
+   - ⚠️ **`localFileSystem` 은 `fullAccess` 다.** 심사가 가장 자주 묻는 자리이므로 이유를
+     준비해 둔다. `"request"`(사용자가 고른 것만)로는 아래 셋이 불가능하다:
+     ① 대용량 원본을 통째로 메모리에 안 올리려고 `require("fs")` 로 **부분 읽기**한다
+     ② 프리미어가 렌더한 출력물을 `nativePath` 로 집어 올린다
+     ③ 다운로드 폴더를 **한 번 고르면 다음 세션에도 계속 쓴다**(매번 다시 고르게 하면
+        "딸깍 한 번" 이 무너진다)
+     줄일 수 있는 값이 아니라 **설명해야 하는 값**이다. 반려되면 이 세 줄이 답변의 근거다.
+   - 양방향 메시지 브리지는 안 쓰므로 닫아 뒀다(2026-09-02) — 넓은 권한을 줄인 실제 사례.
 6. 심사는 보통 **수 영업일**. 반려 사유는 대개 리스팅 자료 미비이지 코드가 아니다.
 
 ⚠️ 마켓플레이스는 **공개 배포**다. ENA 같은 특정 고객사만 쓸 거면 2단계(.ccx/Admin Console)로
