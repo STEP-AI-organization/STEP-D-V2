@@ -3543,6 +3543,11 @@ export interface AutomationRuleRow {
   reframe?: string | null;
   /** 썸네일 생성 방식 (0041) — 'ai'(인물 누끼 생성) | 'frame'(프레임+자막). NULL = frame. */
   thumbnailMode?: string | null;
+  /**
+   * 세로 영상 배치 (0049) — 편집기 프리셋 id. **NULL = 미지정**이고, 그건 "레터박스" 와 다르다:
+   * 미지정이면 순방이 videoAspect 를 아예 안 실어서 렌더가 종전대로 템플릿 창을 쓴다(무회귀).
+   */
+  aspect?: string | null;
 }
 
 const RULE_SEL = `id, program_id AS "programId", platform, account_id AS "accountId",
@@ -3551,7 +3556,7 @@ const RULE_SEL = `id, program_id AS "programId", platform, account_id AS "accoun
   template_id AS "templateId", layout, program_ids AS "programIds", channels,
   daily_quota AS "dailyQuota", active_start AS "activeStart", active_end AS "activeEnd",
   weekdays, slots,
-  orientation, reframe, thumbnail_mode AS "thumbnailMode"`;
+  orientation, reframe, thumbnail_mode AS "thumbnailMode", aspect`;
 
 export async function listAutomationRules(): Promise<AutomationRuleRow[]> {
   const { rows } = await pool.query<AutomationRuleRow>(
@@ -3565,14 +3570,14 @@ export async function upsertAutomationRule(r: AutomationRuleRow): Promise<void> 
     `INSERT INTO automation_rule
        (id, program_id, platform, account_id, media_kind, criterion, gate_policy, time_window, enabled,
         template_id, layout, program_ids, channels, daily_quota, active_start, active_end,
-        orientation, reframe, thumbnail_mode, weekdays, slots)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12::jsonb,$13::jsonb,$14,$15,$16,$17,$18,$19,$20::jsonb,$21::jsonb)
+        orientation, reframe, thumbnail_mode, weekdays, slots, aspect)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12::jsonb,$13::jsonb,$14,$15,$16,$17,$18,$19,$20::jsonb,$21::jsonb,$22)
      ON CONFLICT (tenant_id, program_id, platform, account_id) DO UPDATE SET
        media_kind = $5, criterion = $6, gate_policy = $7, time_window = $8, enabled = $9,
        template_id = $10, layout = $11::jsonb, program_ids = $12::jsonb, channels = $13::jsonb,
        daily_quota = $14, active_start = $15, active_end = $16,
        orientation = $17, reframe = $18, thumbnail_mode = $19,
-       weekdays = $20::jsonb, slots = $21::jsonb`,
+       weekdays = $20::jsonb, slots = $21::jsonb, aspect = $22`,
     [r.id, r.programId, r.platform, r.accountId, r.mediaKind, r.criterion, r.gatePolicy, r.window, r.enabled,
      r.templateId ?? null,
      r.layout ? JSON.stringify(r.layout) : null,
@@ -3581,7 +3586,8 @@ export async function upsertAutomationRule(r: AutomationRuleRow): Promise<void> 
      r.dailyQuota ?? 3, r.activeStart ?? 0, r.activeEnd ?? 24,
      r.orientation ?? null, r.reframe ?? null, r.thumbnailMode ?? null,
      r.weekdays?.length ? JSON.stringify(r.weekdays) : null,
-     r.slots?.length ? JSON.stringify(r.slots) : null],
+     r.slots?.length ? JSON.stringify(r.slots) : null,
+     r.aspect ?? null],
   );
 }
 
@@ -3597,7 +3603,7 @@ export async function updateAutomationRuleById(r: AutomationRuleRow): Promise<bo
        gate_policy = $7, time_window = $8, enabled = $9, template_id = $10, layout = $11::jsonb,
        program_ids = $12::jsonb, channels = $13::jsonb, daily_quota = $14,
        active_start = $15, active_end = $16, orientation = $17, reframe = $18,
-       thumbnail_mode = $19, weekdays = $20::jsonb, slots = $21::jsonb
+       thumbnail_mode = $19, weekdays = $20::jsonb, slots = $21::jsonb, aspect = $22
      WHERE id = $1`,
     [r.id, r.programId, r.platform, r.accountId, r.mediaKind, r.criterion, r.gatePolicy, r.window, r.enabled,
      r.templateId ?? null,
@@ -3607,7 +3613,8 @@ export async function updateAutomationRuleById(r: AutomationRuleRow): Promise<bo
      r.dailyQuota ?? 3, r.activeStart ?? 0, r.activeEnd ?? 24,
      r.orientation ?? null, r.reframe ?? null, r.thumbnailMode ?? null,
      r.weekdays?.length ? JSON.stringify(r.weekdays) : null,
-     r.slots?.length ? JSON.stringify(r.slots) : null],
+     r.slots?.length ? JSON.stringify(r.slots) : null,
+     r.aspect ?? null],
   );
   return (res.rowCount ?? 0) > 0;
 }
