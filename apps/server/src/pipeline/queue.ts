@@ -474,6 +474,24 @@ export async function oldestPendingAgeForType(type: JobType): Promise<number> {
 }
 
 /**
+ * 특정 타입의 **아직 안 끝난** 잡 수(pending + running).
+ *
+ * 전용 머신의 **지금 부하**를 보는 신호다. `oldestPendingAgeForType` 이 "저 PC 가 죽었나"
+ * (시간)를 본다면 이건 "저 PC 가 바쁜가"(깊이)를 본다 — 둘은 다른 질문이라 함께 쓴다.
+ * 렌더 분담(automation-cycle `requestAutoRender`)이 이 수로 사무실 PC 와 클라우드를 가른다.
+ *
+ * ⚠️ `running` 을 반드시 포함한다. pending 만 세면 사무실 PC 가 한 건을 붙잡고 굽는 동안
+ *    깊이가 0 으로 보여서, 순방이 계속 큐에 밀어 넣고 결국 **다시 전부 사무실 PC 행**이 된다.
+ */
+export async function unfinishedCountForType(type: JobType): Promise<number> {
+  const { rows } = await getPool().query(
+    `SELECT COUNT(*)::int AS n FROM job_queue WHERE type = $1 AND status IN ('pending', 'running')`,
+    [type],
+  );
+  return Number(rows[0]?.n ?? 0);
+}
+
+/**
  * 이 dedupeKey 로 **가장 최근에 만들어진** 잡 한 건. 없으면 null.
  *
  * 잡으로 넘긴 일의 결과를 넘긴 쪽이 되읽는 통로다. 이게 없으면 "큐에 넣었다" 까지만 알고

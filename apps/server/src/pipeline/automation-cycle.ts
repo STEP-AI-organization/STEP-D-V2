@@ -50,6 +50,7 @@ import {
   ruleChannels, ruleIdleNote, rulePrograms, ruleWindow, scheduledSlotAt,
   slotsReadyForQueue, selectCandidates, shouldRequestAutoRender, maxPublishPerTick,
   AUTOMATION_MAX_RENDERS_PER_TICK,
+  renderQueueMaxPending,
   renderQueueStallMs,
   renderViaQueue,
   staleMissedSlots,
@@ -65,7 +66,7 @@ import {
 } from "../publish/channel-rules.ts";
 import { maybeFlushAutoPublishReport } from "../publish/publish-notify.ts";
 import { newId } from "../ids.ts";
-import { enqueue, lastJobByDedupe, oldestPendingAgeForType } from "./queue.ts";
+import { enqueue, lastJobByDedupe, oldestPendingAgeForType, unfinishedCountForType } from "./queue.ts";
 import { distributionAccountId, hasAccountDistribution, hasFailedAccountDistribution } from "../publish/publish-guard.ts";
 import { dispatchPublish } from "../publish/publish-dispatch.ts";
 import { basicReframeState, effectiveReframeState } from "../media/reframe.ts";
@@ -1046,14 +1047,24 @@ async function requestAutoRender(clipId: string, channel?: string | null): Promi
         return { ok: false, kind: classifyRenderFailure(status, code), error: raw.slice(0, 500), status, code };
       }
 
-      const stalled = await oldestPendingAgeForType("clip.render").catch(() => 0);
-      if (stalled < renderQueueStallMs()) {
+      // 사무실 PC 와 클라우드가 **나눠서** 굽는다 (2026-09-02). 두 신호를 함께 본다:
+      //   stalled — 저 PC 가 죽었나 (시간) · depth — 저 PC 가 바쁜가 (깊이)
+      // 둘 중 하나라도 걸리면 이 건은 클라우드가 직접 굽는다. 깊이가 있으면 PC 가 꺼졌을 때도
+      // 10분을 기다리지 않는다 — 큐가 즉시 차서 나머지가 클라우드로 흐른다.
+      const [stalled, depth] = await Promise.all([
+        oldestPendingAgeForType("clip.render").catch(() => 0),
+        unfinishedCountForType("clip.render").catch(() => 0),
+      ]);
+      const maxPending = renderQueueMaxPending();
+      if (stalled < renderQueueStallMs() && depth < maxPending) {
         // dedupeKey 로 같은 클립이 두 번 들어가지 않는다(인덱스가 pending·running 에만 걸려
         // 있어, 끝난 뒤에는 다시 넣을 수 있다 — 재시도가 막히지 않는다).
         await enqueue("clip.render", { clipId, ...(channel ? { channel } : {}) }, { dedupeKey });
         return { ok: true };
       }
-      console.warn(`[automation] clip.render 정체 ${Math.round(stalled / 1000)}초 — 클라우드가 직접 렌더한다`);
+      console.warn(stalled >= renderQueueStallMs()
+        ? `[automation] clip.render 정체 ${Math.round(stalled / 1000)}초 — 클라우드가 직접 렌더한다`
+        : `[automation] clip.render 대기 ${depth}건(상한 ${maxPending}) — 이 건은 클라우드가 굽는다`);
       // 아래로 흘러 종전 경로(직접 /export)를 탄다.
     }
 
