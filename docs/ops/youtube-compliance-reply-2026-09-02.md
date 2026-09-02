@@ -28,6 +28,61 @@
 
 ---
 
+## 0-B. 보낸 메일 검증 (2026-09-02 · 데모 계정으로 실제 확인)
+
+사용자가 이미 보낸 회신에 적힌 주소를 **하나씩 눌러 봤다.**
+
+| 메일에 적은 것 | 실제 | 지금 맞는 주소 |
+|---|---|---|
+| `/publish-channels` | **200** ✓ | 그대로 |
+| `/channels` — Channel trends | **404** ❌ | `/trends` |
+| `/analytics` — Analytics | 200 이지만 **"옮겨졌습니다" 안내** ❌ | **`/performance`** |
+| Clips (`/clips`) | 200 이지만 **"옮겨졌습니다" 안내** ❌ | `/edits` |
+| Episodes (`/episodes`) | **404** ❌ | `/programs` 안에서 회차로 들어간다 |
+| `/distribution` | **200** ✓ | 그대로 |
+| `/privacy` · `/terms` | **200** ✓ | 그대로 |
+
+→ **다섯 개 안내 중 넷이 안 열리거나 딴 화면이다. 이게 "page errors across all tabs" 의 정체다.**
+   심사팀은 우리가 준 순서대로 눌러 봤을 뿐이다.
+
+### 스코프도 메일과 코드가 다르다
+
+메일에는 `youtube` (전체 권한)라고 적었는데, **코드는 `youtube.upload` 를 요구한다**
+(`YT_PUBLISH_SCOPES` · 2026-09-02 축소). 실제로는 **메일에 적은 것보다 좁은 권한**을 받고 있다 —
+불리한 방향은 아니지만, **심사팀이 동의 화면과 메일을 대조하면 어긋난다.** 정정해야 한다.
+
+| 메일 | 코드가 실제로 요구하는 것 |
+|---|---|
+| `youtube` | **`youtube.upload`** |
+| `youtube.force-ssl` | 그대로 ✓ |
+| `youtube.readonly` · `yt-analytics.readonly` · `yt-analytics-monetary.readonly` | 그대로 ✓ |
+| (`channel-memberships.creator` 제거했다) | 코드에서도 빠졌다 ✓ (2026-08-31) |
+
+### 잘 돌아가는 것 (심사팀에게 보여 줄 수 있다)
+
+데모 계정으로 직접 확인했다:
+
+- 로그인 **된다**
+- 채널 **2개 연결돼 있다** — `수학밖에 모르는 설공남`(구독 5) · `냥이코코`(구독 0), 둘 다 active
+- **YouTube Analytics 가 실제 숫자를 준다** — 일자별 조회수·시청시간이 들어온다
+  (예: 8/24 조회 17 · 시청 2분 · 평균 시청 19초). `/performance` 는 찬다
+- 수익 스코프도 있다(`hasMonetaryScope: true`)
+
+⚠️ 다만 **구독자 5명·0명짜리 채널**이라 숫자가 아주 작다. 심사에는 문제없지만, 더 큰 채널이
+   있으면 그쪽이 보기 좋다.
+
+### 확인이 필요한 것 두 가지
+
+1. **워크스페이스에 든 콘텐츠.** 이 계정에 프로그램 4개(`한동훈` · `리센느` · `세금 새는 소리` ·
+   `리모와 멜로`) · 회차 17 · 클립 43 이 보인다. 메일에는 *"our own internal workspace"* 라고
+   썼는데, **이 중 고객사 콘텐츠가 있으면 그 말이 틀리고 고객 데이터가 심사팀에 노출된다.**
+   전부 STEP AI 자체 자료가 맞는지 확인할 것.
+2. **낡은 탭 안내가 한국어뿐이다.** 배포 뒤 열려 있던 탭은 `/api/state` 에서
+   *"새 버전이 배포됐습니다 — 새로고침해 주세요"* 를 받는다(프록시의 stale-tab 가드).
+   영어권 심사자에게는 이게 그냥 **오류 화면**으로 읽힌다. 심사 기간에는 영문 병기를 검토할 것.
+
+---
+
 ## 1. 먼저 확인해야 할 것 — 이게 있어야 원인을 좁힌다
 
 1. **심사팀이 보낸 첨부(오류 스크린샷)** — 오류 문구가 원인을 거의 그대로 알려 준다.
@@ -137,6 +192,69 @@ https://stepd.stepai.kr
 이어지는 장면이 있어야 한다.
 
 ⚠️ 화면에 **다른 고객사 데이터가 스치지 않게** 할 것 — 데모 워크스페이스로만 찍는다.
+
+---
+
+## 4-B. **지금 바로 보낼 정정 메일** (영문)
+
+앞 회신에서 준 주소가 틀렸다는 걸 알았으니, 스크린캐스트를 기다리지 말고 **먼저 정정한다.**
+심사팀은 지금 "안 열리는 링크" 를 붙들고 있다.
+
+```
+Subject: Re: YouTube API Services Compliance Review — corrected URLs (Project 872105344568)
+
+Hello YouTube API Services Team,
+
+I am writing to correct my previous message. I have identified the cause of the
+page errors you encountered: several of the URLs I listed were outdated. Our
+application's routes changed in a recent release and I sent you the old paths.
+I apologize for the wasted effort on your side.
+
+The demo credentials are unchanged and working:
+
+    URL:      https://stepd.stepai.kr/login
+    Username: youtube-review@stepai.kr
+    Password: hbFQAc-JrFg7Z-7kT7XV
+
+Corrected list of the screens where our YouTube API usage is visible:
+
+  1. Connected channels and OAuth consent flow
+       https://stepd.stepai.kr/publish-channels          (unchanged)
+  2. Analytics — views, watch time, revenue for the authorized channel
+       https://stepd.stepai.kr/performance               (was /analytics)
+  3. Program-level analytics
+       https://stepd.stepai.kr/program-analytics         (new)
+  4. YouTube trends — channel and video metadata (Data API)
+       https://stepd.stepai.kr/trends                    (was /channels)
+  5. Source videos and derived short-form clips
+       https://stepd.stepai.kr/programs                  (was /episodes, /clips)
+  6. Distribution — uploading a clip to a connected channel
+       https://stepd.stepai.kr/distribution              (unchanged)
+
+I have verified each of these against the demo account today; they load and the
+analytics screens show live data from the two YouTube channels connected to that
+workspace.
+
+Correction to the scope list in my previous message: for uploads we request
+
+    https://www.googleapis.com/auth/youtube.upload
+
+not the broader `youtube` scope. My earlier message listed `youtube` in error;
+the narrower upload scope is what our consent screen actually requests, together
+with youtube.force-ssl for videos.update and thumbnails.set. The read-only scopes
+(youtube.readonly, yt-analytics.readonly, yt-analytics-monetary.readonly) are as
+previously stated.
+
+The screencast showing the consent flow and the resulting analytics will follow
+shortly. Please let me know if you would like anything else prepared.
+
+Best regards,
+하경진 (Kyungjin Ha)
+STEP AI
+```
+
+⚠️ **보내기 전 사람이 할 일 하나** — 위 여섯 주소를 **시크릿 창에서 데모 계정으로** 직접 눌러
+볼 것. 내가 HTTP 상태만 확인했지, 로그인한 뒤 화면에 뭐가 그려지는지는 사람 눈으로 봐야 한다.
 
 ---
 
