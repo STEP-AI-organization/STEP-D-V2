@@ -87,6 +87,18 @@ describe("유튜브 상세 지표 — 모은 것이 화면까지 닿는다", () 
     assert.match(page, /수집/);
   });
 
+  it("**연결이 끊긴 채널도 보여 준다** — 읽는 데 연결이 필요 없다", () => {
+    // 실측 2026-09-02: 성과 화면 코드를 그대로 베껴 `status === "active"` 로 걸렀더니,
+    // 정작 데이터가 제일 많은 채널이 전부 가려졌다(하하 PD: 한 영상에 조회 27.8만 ·
+    // 유입 13 · 시청자 15 · 지속 100포인트). 남은 활성 채널은 구독자 0~8명이라 화면이 "—" 였다.
+    // 성과는 **라이브 조회**라 끊긴 채널을 숨기는 게 맞지만, 여기는 **저장된 걸 읽는다.**
+    const page = read("apps/web/src/app/(app)/channel-analytics/page.tsx");
+    assert.ok(!/filter\(\(c\) => c\.status === "active"\)/.test(page),
+      "연결 상태로 거르면 데이터가 있는 채널이 가려진다");
+    assert.ok(page.includes("연결 끊김"), "끊긴 채널이라는 사실은 표시해야 한다");
+    assert.ok(page.includes("모아 둔 값"), "새로 안 쌓인다는 걸 안 적으면 오래된 값을 지금 값으로 읽는다");
+  });
+
   it("없는 값은 **0 이 아니라 —** 다 (F9 ⊘)", () => {
     const page = read("apps/web/src/app/(app)/channel-analytics/page.tsx");
     assert.ok(page.includes('"—"'), "수집 전과 실제 0 을 구별하지 않는다");

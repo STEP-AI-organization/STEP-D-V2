@@ -77,15 +77,29 @@ export default function ChannelAnalyticsPage() {
   const [queuing, setQueuing] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
 
-  // ① 채널 — 성과 화면과 같은 기준으로 **활성만** 쓴다. 끊긴 채널은 어차피 조회가 실패한다.
+  /**
+   * ① 채널 — **연결이 끊긴 채널도 보여 준다.** 성과 화면과 여기서 기준이 다르다:
+   *
+   *   · 성과(/performance) 는 YouTube 를 **그때그때 조회**한다 → 끊긴 채널은 403 이라 숨기는 게 맞다.
+   *   · 여기는 워커가 **이미 받아 저장해 둔 것**을 읽는다 → 연결 상태와 아무 상관이 없다.
+   *
+   * 실측 2026-09-02: 처음엔 성과 화면 코드를 그대로 베껴 활성만 남겼는데, 그 바람에 정작
+   * 데이터가 제일 많은 채널들이(하하 PD 영상 1건에 조회 27.8만·유입 13·시청자 15·지속 100포인트)
+   * 전부 가려졌다. 남은 활성 채널은 구독자 0~8명이라 화면이 "—" 투성이였다.
+   * **읽기에 연결이 필요 없는데 연결 상태로 거르면 안 된다.**
+   *
+   * 정렬은 활성 먼저, 그 안에서 구독자 많은 순 — 볼 게 있는 채널이 앞에 오게.
+   */
   useEffect(() => {
     let alive = true;
     void fetchYouTubeChannels()
       .then((cs) => {
         if (!alive) return;
-        const active = cs.filter((c) => c.status === "active");
-        setChannels(active);
-        setPickedChannel((p) => p ?? active[0]?.channelId ?? null);
+        const subs = (c: YouTubeChannelInfo) => Number(String(c.subscribers ?? "").replace(/[^0-9]/g, "")) || 0;
+        const sorted = [...cs].sort((a, b) =>
+          (a.status === "active" ? 0 : 1) - (b.status === "active" ? 0 : 1) || subs(b) - subs(a));
+        setChannels(sorted);
+        setPickedChannel((p) => p ?? sorted[0]?.channelId ?? null);
       })
       .catch((e) => { if (alive) setErr(e instanceof Error ? e.message : String(e)); });
     return () => { alive = false; };
@@ -125,6 +139,7 @@ export default function ChannelAnalyticsPage() {
 
   useEffect(() => { void load(); }, [load]);
 
+  const channel = channels.find((c) => c.channelId === pickedChannel) ?? null;
   const video = videos.find((v) => v.videoId === pickedVideo) ?? null;
   const s = data?.summary;
 
@@ -179,10 +194,25 @@ export default function ChannelAnalyticsPage() {
               onClick={() => setPickedChannel(c.channelId)}
             >
               {c.channelName}
+              {c.status !== "active" && (
+                /* 끊긴 채널도 **읽을 수는 있다** — 다만 새로 안 쌓이니 그 사실을 이름 옆에 적는다. */
+                <span className="ml-1.5 text-[10px]" style={{ opacity: 0.7 }}>연결 끊김</span>
+              )}
             </button>
           ))
         )}
       </div>
+
+      {channel && channel.status !== "active" && (
+        <p className="text-[11.5px]" style={{ color: "var(--sd-mut)" }}>
+          이 채널은 연결이 끊겨 있습니다 — 아래는 <b>연결돼 있던 동안 모아 둔 값</b>이고, 새로 쌓이지는
+          않습니다.{" "}
+          <Link href="/publish-channels" className="underline" style={{ color: "var(--sd-accent)" }}>
+            다시 연결
+          </Link>
+          하면 이어서 수집합니다.
+        </p>
+      )}
 
       {pickedChannel && videos.length === 0 && (
         <p className="text-[11.5px]" style={{ color: "var(--sd-mut)" }}>
