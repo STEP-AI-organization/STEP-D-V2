@@ -657,11 +657,42 @@ describe("패널 — 주 동선: 원본 받고 마커", () => {
   });
 
   it("원본 확보 → 타임라인 확보 → 마커 순서다", () => {
-    const fn = panel.slice(panel.indexOf("async function doPrepareAndMark()"));
+    // 앵커에 괄호 안을 넣지 않는다 — 인자가 늘면(2026-09-02 override) 못 찾고 slice(-1) 이 되어
+    // **통과한 것처럼 조용히 무의미해진다.** 실제로 그 사고가 한 번 났다.
+    const fn = panel.slice(panel.indexOf("async function doPrepareAndMark("));
+    assert.ok(fn.length > 200, "doPrepareAndMark 를 못 찾았다 — 앵커가 낡았다");
     const a = fn.indexOf("ensureMaster(withMedia, onStage)");
     const b = fn.indexOf("ensureSequenceForMaster(filename, onStage, withMedia)");
     const c = fn.indexOf("addMarkersForRecs(picks)");
     assert.ok(a > 0 && b > a && c > b, "순서가 어긋나면 꽂을 타임라인이 없다");
+  });
+
+  /**
+   * 웹에서 "프리미어로 넘기기" 를 누르면 **편집을 시작할 수 있는 상태**까지 가야 한다
+   * (사용자 2026-09-02: "실행만 됨 · 영상을 가져오고 편집할 수 있게끔 세팅돼야 함").
+   * 예전엔 프로그램만 고르고 추천 목록만 띄운 채 끝나서, 타임라인이 빈 채로 열렸다.
+   */
+  it("핸드오프가 원본 반입·마커까지 간다 — 목록만 띄우고 끝나지 않는다", () => {
+    const fn = panel.slice(panel.indexOf("async function applyHandoff("));
+    assert.ok(fn.length > 200, "applyHandoff 를 못 찾았다");
+    const body = fn.slice(0, fn.indexOf("\nfunction startHandoffPolling"));
+    assert.match(body, /await doPrepareAndMark\(targets\)/,
+      "버튼과 다른 경로를 만들면 '버튼으로는 되는데 웹에서 열면 다르다' 가 된다");
+    assert.match(body, /if \(!h\.episodeId\) return;/,
+      "회차를 특정 못 하면 자동 실행하면 안 된다 — 남의 회차에 마커를 꽂거나 원본을 멋대로 받는다");
+    assert.match(body, /isShortRec\(r\)/,
+      "회차 통짜(kind=clip)에 마커를 꽂는 건 의미가 없다");
+    assert.match(body, /selectedIds = new Set\(targets\.map/,
+      "무엇을 대상으로 돌았는지 화면에 남아야 편집자가 되돌릴 수 있다");
+  });
+
+  it("웹이 programId 를 함께 넘긴다 — 없으면 패널이 남의 프로그램을 본다", () => {
+    // 패널은 추천을 **프로그램 기준**으로 부른다(loadRecs). episodeId 만 오면 패널이
+    // 마지막에 보던 프로그램을 그대로 써서, 그 회차 추천이 목록에 아예 없을 수 있다.
+    const page = fs.readFileSync(path.join(SRC, "../../web/src/app/(app)/media/page.tsx"), "utf-8");
+    const call = page.slice(page.indexOf("await openInPremiere({"));
+    assert.ok(call.length > 50, "openInPremiere 호출부를 못 찾았다");
+    assert.match(call.slice(0, 400), /programId,/, "핸드오프에 programId 가 빠졌다");
   });
 
   it("**그 원본의** 타임라인을 연다 — 열려 있는 남의 시퀀스를 쓰지 않는다", () => {

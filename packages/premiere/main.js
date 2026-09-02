@@ -2513,8 +2513,15 @@ async function doAddMarkers() {
   }
 }
 
-async function doPrepareAndMark() {
-  const picks = chosenRecs();
+/**
+ * 원본을 반입하고 추천 구간에 마커를 꽂는다.
+ *
+ * `override` 는 **웹에서 넘어온 자동 실행**이 쓴다(applyHandoff) — 그때는 사람이 체크한
+ * 것이 없으므로 대상을 밖에서 준다. 버튼 경로는 종전대로 `chosenRecs()` 다.
+ * 두 경로가 **같은 함수**를 타야 한다 — 갈라지면 "버튼으로는 되는데 웹에서 열면 다르다" 가 된다.
+ */
+async function doPrepareAndMark(override) {
+  const picks = override && override.length ? override : chosenRecs();
   if (busy || !picks.length) return;
   busy = true;
   syncRecButtons();
@@ -2912,6 +2919,38 @@ async function applyHandoff(h) {
   recRows = [];
   await loadRecs();
   setStatus($("recsStatus"), `웹에서 열었습니다 — ${label}`, "ok");
+
+  // ── 여기서 멈추지 않는다 (2026-09-02 사용자: "실행만 됨 · 영상을 가져오고 편집할 수
+  //    있게끔 세팅돼야 함") ────────────────────────────────────────────────────
+  //
+  // 예전엔 프로그램만 고르고 목록을 띄운 뒤 끝났다. 편집자 입장에서는 프리미어가 켜졌을 뿐
+  // 타임라인이 비어 있어서, 결국 손으로 원본을 찾아 넣어야 했다. **버튼과 같은 경로**
+  // (doPrepareAndMark)를 그대로 태워 원본 반입 + 마커까지 간다.
+  //
+  // ⚠️ 회차를 특정할 수 있을 때만 자동으로 돈다. episodeId 가 없으면 대상이 프로그램 전체가
+  //    되는데, 남의 회차에 마커를 꽂거나 몇 GB 원본을 멋대로 받는 건 하면 안 된다.
+  if (!h.episodeId) return;
+
+  // 회차 드롭다운을 그 회차로 맞춘다 — visibleRecs()·chosenRecs() 가 이 값으로 좁힌다.
+  const epSel = $("episode");
+  if (epSel && Array.from(epSel.options).some((o) => o.value === h.episodeId)) {
+    epSel.value = h.episodeId;
+  }
+
+  // 쇼츠 구간만 고른다. 회차 통짜(kind=clip · 수백 초)에 마커를 꽂는 건 의미가 없고,
+  // 그걸 받겠다고 원본 전체를 다시 끌어오는 것도 아니다(원본은 어차피 한 번만 받는다).
+  const targets = recRows.filter((r) => String(r.episodeId || "") === h.episodeId && isShortRec(r));
+  if (!targets.length) {
+    setStatus($("recsStatus"), `웹에서 열었습니다 — ${label} · 이 회차엔 쇼츠 추천이 없습니다`, "ok");
+    return;
+  }
+
+  // 화면에도 체크를 남긴다 — 무엇을 대상으로 돌았는지 편집자가 보고 되돌릴 수 있어야 한다.
+  selectedIds = new Set(targets.map((r) => String(r.id)));
+  renderRecs();
+
+  setStatus($("recsStatus"), `${label} — 원본을 받아 마커 ${targets.length}개를 꽂습니다…`);
+  await doPrepareAndMark(targets);
 }
 
 function startHandoffPolling() {

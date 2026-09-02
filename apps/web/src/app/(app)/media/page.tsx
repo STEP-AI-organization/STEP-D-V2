@@ -152,6 +152,9 @@ function MediaView() {
                 ?? ""
               }
               episodeNumber={episodes.find((e) => e.id === c.episodeId)?.episodeNumber}
+              // programTitle 과 **같은 조인**으로 낸다 — 프리미어 패널이 이 값으로 추천을
+              // 불러오므로, 화면에 보이는 프로그램과 다른 값이 가면 목록이 빈 채로 열린다.
+              programId={episodes.find((e) => e.id === c.episodeId)?.programId ?? c.programId}
             />
           ))}
         </div>
@@ -213,6 +216,7 @@ function MediaRow({
   onOpen,
   onDelete,
   programTitle,
+  programId,
   episodeNumber,
 }: {
   clip: Clip;
@@ -223,6 +227,8 @@ function MediaRow({
   /** 미디어 삭제 (확인은 상위에서 받는다). */
   onDelete: () => void;
   programTitle: string;
+  /** 프리미어 핸드오프에 실어 보낼 프로그램 id — 회차→프로그램 해석은 상위가 한다. */
+  programId?: string;
   episodeNumber?: number;
 }) {
   // 프리미어 보내기 결과를 이 행에서 바로 알린다 — 상위로 콜백을 뚫는 대신 훅을 쓴다.
@@ -308,6 +314,11 @@ function MediaRow({
                   const r = await openInPremiere({
                     clipId: clip.id,
                     episodeId: clip.episodeId,
+                    // ⚠️ programId 를 **반드시** 같이 보낸다. 패널은 추천을 프로그램 기준으로
+                    // 불러오는데(loadRecs), 이게 없으면 패널이 마지막에 보던 프로그램을 그대로
+                    // 쓴다 — 그게 다른 프로그램이면 이 회차의 추천이 목록에 아예 없고,
+                    // 편집자에겐 "프리미어는 떴는데 아무것도 없다" 로 보인다.
+                    programId,
                     label: clip.title,
                   });
                   // 프리미어가 안 뜬 것으로 보이면 **무엇을 해야 하는지**까지 말한다.
