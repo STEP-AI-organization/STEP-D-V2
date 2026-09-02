@@ -13,13 +13,21 @@
 .NOTES
   - 워커 재시작이 핵심이다. 오늘(2026-08-11) 구버전 코드로 5일간 돌던 워커가 잡을
     가로채 계속 실패시켰다 — 코드가 최신이어도 **프로세스가 옛날이면 소용없다.**
+  - 재시작 대상은 **이 PC 의 워커 프로세스 전부**다($TaskRestart) — 네이버 워커 + 렌더
+    서버/워커. 2026-09-02 에 렌더 둘이 빠져 있어 이틀간 옛 코드로 클립을 구웠다.
   - 작업 스케줄러에 10분 간격으로 걸어둔다(설치는 install-task.ps1).
+  - ⚠️ **이 파일을 고친 커밋에서는 한 박자 늦는다.** 첫 실행은 옛 스크립트가 돌아 pull 만
+    하고, 새 재시작 목록은 다음 회차부터다. 급하면 두 번 돌린다(docs/ops/deploy-win2.md).
 #>
 [CmdletBinding()]
 param(
   [string]$RepoRoot = (Split-Path -Parent (Split-Path -Parent $PSScriptRoot)),
   [string]$Branch   = "main",
   [string]$TaskWorker = "STEPD-Naver-Worker",
+  # 코드를 당겼으면 **이 PC 의 모든 워커 프로세스**를 재시작한다 (2026-09-02).
+  # 예전엔 네이버 워커 하나뿐이라 렌더 프로세스가 옛 코드로 남았다 — 아래 재시작 블록 주석 참고.
+  # 등록 안 된 작업은 조용히 건너뛴다(렌더를 안 쓰는 PC 도 있다).
+  [string[]]$TaskRestart = @($TaskWorker, "STEPD-Render-Server", "STEPD-Render-Worker"),
   # yt-dlp 갱신 채널. **nightly 가 기본이다** — stable 은 릴리스 간격이 길어(2026-08-19 기준
   # 최신 stable 이 2026.07.04, 6주 전) 그 사이 유튜브가 바꾼 것을 못 따라가 403 이 난다.
   # 갱신을 아예 끄려면 -YtDlpChannel none.
@@ -154,15 +162,37 @@ try {
   $ErrorActionPreference = "Stop"
 }
 
-Say "워커 재시작 ($TaskWorker)"
+Say "워커 재시작 ($($TaskRestart -join ', '))"
 # pm2 가 아니라 작업 스케줄러다(Windows 에서 pm2 가 두 번 발목을 잡았다 — install.ps1 주석 참고).
-try {
-  Stop-ScheduledTask -TaskName $TaskWorker -ErrorAction SilentlyContinue
-  Start-Sleep -Seconds 2
-  Start-ScheduledTask -TaskName $TaskWorker -ErrorAction Stop
-} catch {
-  Say "워커 재시작 실패 — install.ps1 로 먼저 등록할 것: $($_.Exception.Message)"
+#
+# ⚠️ **렌더 프로세스도 여기 들어간다** (2026-09-02). 예전엔 네이버 워커 하나만 재시작해서,
+#    코드는 최신인데 STEPD-Render-Server·STEPD-Render-Worker 는 옛 프로세스 그대로였다.
+#    이 파일 .NOTES 의 "코드가 최신이어도 프로세스가 옛날이면 소용없다" 가 렌더에도 똑같이
+#    적용되는데, 렌더는 결과물이 조용히 달라져서 더 안 보인다 — 실측(2026-09-02): 렌더 서버가
+#    8/31 코드로 이틀을 돌아 새로 넣은 글꼴 3종이 말없이 프리텐다드로 폴백되고 있었다.
+#    `RENDER_VIA_QUEUE=1` 이라 실제로 고객 클립을 굽는 중이었다.
+$failed = @()
+foreach ($t in $TaskRestart) {
+  if (-not (Get-ScheduledTask -TaskName $t -ErrorAction SilentlyContinue)) {
+    Say "  $t — 등록 안 됨, 건너뜀"
+    continue
+  }
+  try {
+    Stop-ScheduledTask -TaskName $t -ErrorAction SilentlyContinue
+    Start-Sleep -Seconds 2
+    Start-ScheduledTask -TaskName $t -ErrorAction Stop
+    Say "  $t — 재시작"
+  } catch {
+    Say "  $t — 재시작 실패: $($_.Exception.Message)"
+    $failed += $t
+  }
+}
+# 네이버 워커는 이 PC 의 본체라 실패하면 중단한다(종전과 같다). 렌더는 실패해도 계속 —
+# 클라우드가 정체를 감지해 대신 굽기 때문에(renderQueueStallMs) 배포가 멈추지는 않는다.
+if ($failed -contains $TaskWorker) {
+  Say "워커 재시작 실패 — install.ps1 로 먼저 등록할 것"
   exit 1
 }
+if ($failed.Count -gt 0) { Say "일부 작업 재시작 실패(계속 진행): $($failed -join ', ')" }
 
 Say "완료 — $($remote.Substring(0,7))"
