@@ -262,6 +262,7 @@ import {
   type ReframePlan,
 } from "./media/reframe.ts";
 import { getAspectPreset } from "./media/aspect-presets.ts";
+import { bandsAroundVideo, frameVideoForAspect } from "./media/aspect-frame.ts";
 import { SHORTS_DEFAULT_ASPECT } from "./pipeline/factory.ts";
 import { layoutFingerprint, restampPendingClips } from "./pipeline/rule-restamp.ts";
 import { renderTextLayerPng, overlayCanvasAvailable, measureOverlayImage, FONT_FAMILIES, postScriptNameFor, type OverlayTextItem } from "./media/overlay-canvas.ts";
@@ -5506,8 +5507,24 @@ async function renderClipMedia(opts: {
       const tpl = typeof editorState?.templateId === "string"
         ? getShortsTemplate(editorState.templateId)
         : null;
+      // 영상창의 정본 — 계획이 **배치를 지정했으면 배치가 이긴다**(editorState.videoRect).
+      // 템플릿은 제목·자막·박스 스타일을 맡고, 원본이 어디 앉을지는 배치가 정한다.
+      // 예전엔 둘이 같은 것을 두 번 정했고 합성 순서상(if(frame) … else if(cropRect))
+      // 템플릿이 언제나 이겨서, 화면에서 배치를 골라도 결과가 그대로였다(2026-09-02 hkj).
+      // ⚠️ videoAspect 가 없으면(= 배치 미지정 계획 · 수동 편집분) 지금까지대로 템플릿 창을
+      //    쓴다 — 기본값을 여기서 만들면 이미 돌던 계획의 결과물이 조용히 바뀐다.
+      //    (editorState.aspect 는 기본 폴백까지 포함해 **항상** 차 있으므로 그걸 보면 안 된다.)
+      const rectFromRule = frameVideoForAspect(
+        (editorState as { videoAspect?: unknown } | null)?.videoAspect, W, H,
+      );
       const frame = tpl
-        ? { overlayPath: tpl.overlayPath, video: tpl.video, bands: tpl.bands, overlayRegions: tpl.overlayRegions }
+        ? {
+            overlayPath: tpl.overlayPath,
+            video: rectFromRule ?? tpl.video,
+            // 밴드는 영상창의 위·아래 나머지다 — 창이 바뀌면 함께 다시 계산한다.
+            bands: rectFromRule ? bandsAroundVideo(rectFromRule, W, H, tpl.bands[0]?.color) : tpl.bands,
+            overlayRegions: tpl.overlayRegions,
+          }
         : null;
       await renderShort({
         inputPath: srcPath, startTime, endTime, outputPath: tmpPath, width: W, height: H,

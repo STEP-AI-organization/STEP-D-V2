@@ -10,6 +10,7 @@
  */
 import { useEffect, useState } from "react";
 import type { FrameTemplate } from "@/lib/data/api";
+import { getAspectPreset } from "@/lib/editor/aspect-presets";
 
 export type LayoutState = {
   titleY: number;
@@ -40,7 +41,7 @@ export const SUBTITLE_DEFAULTS = { y: 26, size: 4.4, color: "#FFFFFF" } as const
 /** 소형 카드 기준 폭 — 폰트·패딩은 이 폭 대비 비율로 스케일된다(레이아웃 %좌표는 불변). */
 const BASE_W = 120;
 
-export function TemplatePreview({ template, accent, layout, frameSrc, subtitlesOn = true, timeboxText, iconSrc, width = BASE_W }: {
+export function TemplatePreview({ template, accent, layout, frameSrc, subtitlesOn = true, timeboxText, iconSrc, aspect, width = BASE_W }: {
   template: FrameTemplate | null;
   accent: string;
   layout: LayoutState;
@@ -53,11 +54,27 @@ export function TemplatePreview({ template, accent, layout, frameSrc, subtitlesO
   /** 로고 이미지 — 프로그램 설정의 쇼츠 아이콘(brandIconDataUrl). 실제 렌더의 아이콘 폴백과
       같은 소스라, 있으면 회색 자리표시 대신 진짜 로고가 보인다. 없으면 회색 박스 폴백. */
   iconSrc?: string;
+  /**
+   * 세로 영상 배치(aspect-presets 의 id). 주면 **영상 영역을 이 배치로 그린다** —
+   * 배치를 바꿔도 미리보기가 그대로면 고르는 의미가 없다. 없으면 템플릿 meta 를 따른다.
+   */
+  aspect?: string;
   width?: number;
 }) {
   const s = width / BASE_W;
   const boxH = width * 16 / 9; // 9:16 캔버스 높이(px) — 모든 글자 크기의 기준축
-  const video = template?.video ?? { x: 0, y: 34.2, w: 100, h: 31.7 };
+  // 영상 영역: 배치가 정해져 있으면 그것이 정본이다. 프리셋 기하(1080×1920)를 % 로 환산한다 —
+  // 여기에 숫자를 따로 적으면 프리셋이 바뀔 때 미리보기만 옛 자리에 남는다.
+  // 템플릿 meta 기본값({y:34.2,h:31.7})은 레터박스 한 가지뿐이던 시절의 값이라 같은 것을 가리킨다.
+  const preset = getAspectPreset(aspect);
+  const video = preset
+    ? (preset.fill === "rect" && preset.rect
+      ? { x: 0, y: (preset.rect.y / preset.canvasH) * 100, w: 100, h: (preset.rect.h / preset.canvasH) * 100 }
+      : preset.fill === "cover"
+        ? { x: 0, y: 0, w: 100, h: 100 }
+        // contain — 16:9 원본이 폭에 맞으면 높이 607.5 → 세로 중앙 정렬(레터박스).
+        : { x: 0, y: (100 - ((1080 * 9 / 16) / preset.canvasH) * 100) / 2, w: 100, h: ((1080 * 9 / 16) / preset.canvasH) * 100 })
+    : (template?.video ?? { x: 0, y: 34.2, w: 100, h: 31.7 });
   const iconPct = (layout.channelIconSize * 3 / 1920) * 100; // px(에디터) → 출력높이 → %
   // 자막 글자 크기 = 화면 높이의 subtitleSize%. 서버 렌더의 fs = H·CAPTION_PCT/100 과 같은 축.
   const subFs = boxH * layout.subtitleSize / 100;
@@ -213,7 +230,7 @@ export function LayoutSliders({ layout, onChange, className, subtitlesOn, onSubt
  * (부모 layout 상태를 그대로 공유 — 다이얼로그 전용 사본을 만들면 닫을 때 유실된다).
  * 관용구는 upload-video-dialog(오버레이 클릭 닫힘) + billing-ui(ESC window keydown).
  */
-export function TemplatePreviewDialog({ template, accent, layout, frameSrc, subtitlesOn = true, onSubtitlesChange, timeboxText, iconSrc, onLayoutChange, onClose }: {
+export function TemplatePreviewDialog({ template, accent, layout, frameSrc, subtitlesOn = true, onSubtitlesChange, timeboxText, iconSrc, aspect, onLayoutChange, onClose }: {
   template: FrameTemplate | null;
   accent: string;
   layout: LayoutState;
@@ -225,6 +242,8 @@ export function TemplatePreviewDialog({ template, accent, layout, frameSrc, subt
   timeboxText?: string;
   /** 로고 이미지 — 선택한 프로그램의 쇼츠 아이콘. TemplatePreview 로 그대로 전달. */
   iconSrc?: string;
+  /** 세로 영상 배치 — 미리보기의 영상 영역을 이 배치로 그린다. */
+  aspect?: string;
   onLayoutChange: (next: LayoutState) => void;
   onClose: () => void;
 }) {
@@ -257,7 +276,7 @@ export function TemplatePreviewDialog({ template, accent, layout, frameSrc, subt
         aria-modal="true"
         aria-label="템플릿 대형 미리보기"
       >
-        <TemplatePreview template={template} accent={accent} layout={layout} frameSrc={frameSrc} subtitlesOn={subtitlesOn} timeboxText={timeboxText} iconSrc={iconSrc} width={w} />
+        <TemplatePreview template={template} accent={accent} layout={layout} frameSrc={frameSrc} subtitlesOn={subtitlesOn} timeboxText={timeboxText} iconSrc={iconSrc} aspect={aspect} width={w} />
         {/* 컨트롤 컬럼은 **내용 높이**로 둔다. self-stretch 를 걸면 세로로 긴 9:16 프리뷰(≈800px)
             높이에 맞춰 늘어나고, mt-auto 닫기 버튼이 그 바닥까지 밀려 컨트롤과 버튼 사이에 거대한
             빈 공간이 생긴다(사용자 2026-08-21 "왜 이래 ㅋㅋ"). 프리뷰 위쪽에 정렬(items-start)해 붙인다. */}

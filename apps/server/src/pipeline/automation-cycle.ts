@@ -389,6 +389,14 @@ async function runAutomationCycleLocked(): Promise<CycleReport> {
             // 같은 값을 넘겨 제목 106/107px의 basis 계산부터 최종 방향과 맞춘다. /export 는
             // editorState.aspect 를 최우선으로 읽으므로 여기에도 명시해 계약을 고정한다.
             aspect: aspectRatio,
+            // 영상창의 정본이 배치임을 알리는 표시 — **계획이 배치를 명시했을 때만** 싣는다.
+            // 프레임 템플릿이 있으면 합성이 템플릿 창을 쓰는데(ffmpeg.ts if(frame)), 이 값이
+            // 있으면 렌더가 배치로 영상창을 다시 잡는다(index.ts frameVideoForAspect).
+            // ⚠️ `aspectRatio`(기본 폴백 포함)가 아니라 **rule.aspect** 를 본다 — 미지정 계획에
+            //    기본값을 실으면 이미 돌던 계획의 결과물이 조용히 바뀐다(무회귀가 조건이다).
+            //    좌표 계산은 캔버스 크기를 아는 index.ts 가 한다(renderDims 가 거기 있고,
+            //    여기서 가져오면 순환 import 가 된다).
+            ...(rule.aspect ? { videoAspect: rule.aspect } : {}),
           },
         };
 

@@ -322,9 +322,10 @@ export default function AutomationPage() {
   // AI 리프레임 — 수동 채택(adopt-dialog)과 같은 값 체계("ai"|"none")·같은 라벨.
   // 기본 "none" = 중앙 고정 크롭(서버 factory 의 basicReframeState 기본과 동일).
   const [reframe, setReframe] = useState<AdoptReframe>("none");
-  // 세로 영상 배치(2026-09-02) — 편집기 프리셋과 같은 id. 기본은 서버 SHORTS_DEFAULT_ASPECT
-  // 와 **같은 값**이어야 한다. 여기만 다른 걸 기본으로 두면 "안 건드렸는데 결과가 달라진다".
-  const [aspect, setAspect] = useState<RuleAspect>("9:16-letterbox");
+  // 세로 영상 배치(2026-09-02) — 편집기 프리셋과 같은 id. 빈 값 = **자동**(영상 템플릿이 가진
+  // 영상창을 그대로). 특정 배치를 기본으로 두면 계획을 열어 저장만 해도 영상창이 템플릿에서
+  // 배치로 바뀐다 — 드라마 템플릿은 24~76% 꽉 찬 창이라 레터박스로 확 달라진다.
+  const [aspect, setAspect] = useState<RuleAspect | "">("");
   // 템플릿 대형 미리보기 — 소형 카드로는 실제 결과감이 안 온다는 피드백(클릭 시 확대).
   const [tplPreviewOpen, setTplPreviewOpen] = useState(false);
 
@@ -457,7 +458,7 @@ export default function AutomationPage() {
     setWeekdays(r.weekdays ?? []); setSlots(ruleSlots({ slots: r.slots ?? [] }));
     setTemplateId(r.templateId ?? "");
     setReframe(r.reframe ?? "none"); // 구 계획(필드 없음)은 기본과 같은 "none"
-    setAspect(r.aspect ?? "9:16-letterbox"); // 구 계획(필드 없음)은 순방 기본과 같은 레터박스
+    setAspect(r.aspect ?? ""); // 구 계획(필드 없음)은 '자동' — 저장해도 영상창이 안 바뀐다
     setSubtitles(r.layout?.subtitles !== false); // 구 계획(필드 없음)은 기본 ON
     if (r.layout) {
       const seed = TEMPLATE_SEED_UI[r.templateId || "broadcast-standard"] ?? TEMPLATE_SEED_UI["broadcast-standard"];
@@ -749,8 +750,9 @@ export default function AutomationPage() {
           : mediaKind === "clip" ? { orientation: "landscape" as const } : {}),
         reframe: mediaKind === "short" ? reframe : "none",
         // 세로 배치도 숏폼에만 의미가 있다 — 클립(가로)엔 안 보내 두 필드가 다투지 않게 한다.
-        // "둘 다"는 추천 kind 로 방향이 갈리므로, 세로로 나가는 건에만 적용되도록 그대로 보낸다.
-        ...(mediaKind === "clip" ? {} : { aspect }),
+        // **고른 것이 있을 때만** 보낸다. 자동(빈 값)이면 키를 빼서 영상창을 템플릿에 맡긴다 —
+        // 서버가 행을 매번 새로 조립하므로 빼면 기존 값도 지워진다(= 자동으로 되돌리기).
+        ...(mediaKind === "clip" || !aspect ? {} : { aspect }),
         ...(templateId ? { templateId } : {}),
         // 자막 위치·크기·색(layout)과 자막 on/off(subtitles)를 layout JSONB 안에 함께 보낸다 —
         // automation_rule 에 자막 전용 컬럼을 두지 않고 라운드트립시킨다.
@@ -1421,7 +1423,27 @@ export default function AutomationPage() {
               <div className="text-[10.5px]" style={{ color: "var(--sd-label)" }}>
                 세로 영상 배치
               </div>
-              <div className="mt-1 grid grid-cols-2 gap-2">
+              {/* 자동 = 영상 템플릿이 가진 영상창 그대로(지금까지의 동작). 템플릿 셀렉터의
+                  '자동'과 같은 뜻 — 고른 적 없는 계획은 저장해도 결과물이 안 바뀐다. */}
+              <button
+                type="button"
+                onClick={() => setAspect("")}
+                className="mt-1 flex w-full items-center gap-2.5 rounded-[5px] px-3 py-2 text-left transition"
+                style={{
+                  border: `1px solid ${!aspect ? "var(--sd-accent-border)" : "var(--sd-border)"}`,
+                  background: !aspect ? "var(--sd-accent-bg)" : "var(--sd-card)",
+                }}
+              >
+                <span aria-hidden className="shrink-0 rounded-[2px]"
+                  style={{ width: 18, height: 32, background: "var(--sd-card-sub)", border: "1px dashed var(--sd-border)" }} />
+                <span className="min-w-0">
+                  <span className="block text-[12px] font-medium" style={{ color: !aspect ? "var(--sd-accent)" : "var(--sd-fg)" }}>
+                    자동 (영상 템플릿 기본)
+                  </span>
+                  <span className="block text-[10.5px] leading-snug" style={{ color: "var(--sd-mut)" }}>템플릿이 정한 영상창을 그대로 사용</span>
+                </span>
+              </button>
+              <div className="mt-2 grid grid-cols-2 gap-2">
                 {ASPECT_PRESETS.filter((p) => (RULE_ASPECTS as readonly string[]).includes(p.id)).map((p) => {
                   const active = aspect === p.id;
                   return (
@@ -1542,6 +1564,7 @@ export default function AutomationPage() {
                       subtitlesOn={subtitles}
                       timeboxText={programs.find((p) => p.id === selProgram)?.schedule}
                       iconSrc={programs.find((p) => p.id === selProgram)?.hasBrandIcon ? programImageUrl(selProgram, "icon") : undefined}
+                      aspect={aspect}
                     />
                   </button>
                   <span className="text-center text-[10px]" style={{ color: "var(--sd-mut)" }}>
@@ -2055,6 +2078,7 @@ export default function AutomationPage() {
           // 시간박스 문구 주석은 컴포넌트 prop 정의에 있다 — 선택 프로그램의 편성 문구, 없으면 예시.
           timeboxText={programs.find((p) => p.id === selProgram)?.schedule}
           iconSrc={programs.find((p) => p.id === selProgram)?.hasBrandIcon ? programImageUrl(selProgram, "icon") : undefined}
+          aspect={aspect}
           onLayoutChange={setLayout}
           onClose={() => setTplPreviewOpen(false)}
         />
