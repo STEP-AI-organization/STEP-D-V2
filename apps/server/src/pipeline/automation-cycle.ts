@@ -380,7 +380,8 @@ async function runAutomationCycleLocked(): Promise<CycleReport> {
           editorState: {
             ...autoEditorState(rec, ep.programTitle ?? "", program,
               (rule as any).templateId,
-              { ...((rule as any).layout ?? {}), logo: (rule as any).layout?.logo ?? false },
+              // 로고 기본 **표시**(2026-09-02 hkj). 끈 계획은 layout.logo === false 로 저장돼 있다.
+              { ...((rule as any).layout ?? {}), logo: (rule as any).layout?.logo ?? true },
               aspectRatio),
             // 자막 on/off — 계획 기본 ON(true · 하위호환). layout.subtitles === false 일 때만 끈다.
             // autoEditorState 는 captionsOn:false 를 시드하지만(공장 경로 · 번인 겹침 방지), 자동배포는

@@ -7093,7 +7093,7 @@ app.get("/api/recommendations/:id/title.mogrt", async (c) => {
   const es = autoEditorState(
     rec, ep?.programTitle ?? "", program,
     (rule as any)?.templateId,
-    { ...((rule as any)?.layout ?? {}), logo: (rule as any)?.layout?.logo ?? false },
+    { ...((rule as any)?.layout ?? {}), logo: (rule as any)?.layout?.logo ?? true },
     aspect,
   );
   const { W, H, items } = await overlayPreviewItems(es, aspect, null, "title");
@@ -7160,7 +7160,7 @@ app.get("/api/recommendations/:id/layout", async (c) => {
   const es = autoEditorState(
     rec, ep?.programTitle ?? "", program,
     (rule as any)?.templateId,
-    { ...((rule as any)?.layout ?? {}), logo: (rule as any)?.layout?.logo ?? false },
+    { ...((rule as any)?.layout ?? {}), logo: (rule as any)?.layout?.logo ?? true },
     String(aspect),
   );
   // 제목 외 요소(로고·시간박스)는 프리미어가 재현하지 않는다 — **있다는 사실만** 알려서
@@ -7307,7 +7307,7 @@ async function recRenderContext(rec: any, aspectQuery?: string): Promise<{
   const es = autoEditorState(
     rec, ep?.programTitle ?? "", program,
     (rule as any)?.templateId,
-    { ...((rule as any)?.layout ?? {}), logo: (rule as any)?.layout?.logo ?? false },
+    { ...((rule as any)?.layout ?? {}), logo: (rule as any)?.layout?.logo ?? true },
     aspect,
   );
   const { W, H, stageH } = renderDims(aspect);
@@ -9599,7 +9599,7 @@ app.get("/api/recommendations/:id/title.png", async (c) => {
   const es = autoEditorState(
     rec, ep?.programTitle ?? "", program,
     (rule as any)?.templateId,
-    { ...((rule as any)?.layout ?? {}), logo: (rule as any)?.layout?.logo ?? false },
+    { ...((rule as any)?.layout ?? {}), logo: (rule as any)?.layout?.logo ?? true },
     aspect,
   );
   // 제목만 그린다 — 로고·시간박스는 편집자가 프리미어에서 따로 다룬다(이미지 조인도 아낀다).

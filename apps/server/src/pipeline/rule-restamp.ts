@@ -95,9 +95,9 @@ export async function restampPendingClips(rule: {
     };
 
     const layout = { ...((rule as any).layout ?? {}) };
-    // 순방(automation-cycle)과 **같은 기본값**을 쓴다 — 로고는 계획이 명시하지 않으면 끈다.
-    // 여기만 다르면 "다시 찍었더니 처음 채택과 모양이 다르다" 가 된다.
-    if (layout.logo === undefined) layout.logo = false;
+    // 순방(automation-cycle)과 **같은 기본값**을 쓴다 — 로고는 계획이 명시하지 않으면 켠다
+    // (2026-09-02 hkj "로고 디폴트로"). 여기만 다르면 "다시 찍었더니 처음 채택과 모양이 다르다".
+    if (layout.logo === undefined) layout.logo = true;
 
     const fresh = autoEditorState(
       recLike, ep?.programTitle ?? clip.programTitle ?? "", program,

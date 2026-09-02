@@ -347,7 +347,8 @@ export default function AutomationPage() {
       titleY: s.titleY, channelIconY: s.iconY, channelBoxY: s.boxY, channelIconSize: s.iconSize,
       titleColor: s.accent,
       subtitleY: SUBTITLE_DEFAULTS.y, subtitleSize: SUBTITLE_DEFAULTS.size, subtitleColor: SUBTITLE_DEFAULTS.color,
-      ...(prev ? { title: prev.title, logo: prev.logo ?? false, timebox: prev.timebox } : { logo: false }),
+      // 로고 기본 **표시**(2026-09-02) — 서버 렌더 기본(layout?.logo ?? true)과 짝이다.
+      ...(prev ? { title: prev.title, logo: prev.logo ?? true, timebox: prev.timebox } : { logo: true }),
     }));
   }, [effectiveTemplate]);
 
@@ -476,7 +477,7 @@ export default function AutomationPage() {
         subtitleSize: r.layout.subtitleSize ?? SUBTITLE_DEFAULTS.size,
         subtitleColor: r.layout.subtitleColor ?? SUBTITLE_DEFAULTS.color,
         // 요소 표시 플래그 — 미지정(구 계획)은 표시. 저장값 그대로 라운드트립.
-        title: r.layout.title, logo: r.layout.logo ?? false, timebox: r.layout.timebox,
+        title: r.layout.title, logo: r.layout.logo ?? true, timebox: r.layout.timebox,
       });
     }
   }, [selProgram, rules, loading]);
@@ -803,7 +804,7 @@ export default function AutomationPage() {
       subtitleY: SUBTITLE_DEFAULTS.y,
       subtitleSize: SUBTITLE_DEFAULTS.size,
       subtitleColor: SUBTITLE_DEFAULTS.color,
-      logo: false,
+      logo: true,
     });
     setShowAdvanced(false);
     toast({ title: "입력값을 초기화했습니다", description: "이미 저장된 자동배포 설정은 변경하지 않았습니다.", tone: "done" });

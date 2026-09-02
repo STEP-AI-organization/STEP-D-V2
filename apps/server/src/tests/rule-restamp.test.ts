@@ -130,8 +130,10 @@ describe("배선 (소스 스캔)", () => {
   });
 
   it("순방과 같은 로고 기본값을 쓴다 — 다르면 '다시 찍었더니 처음과 모양이 다르다'", () => {
-    assert.match(mod, /if \(layout\.logo === undefined\) layout\.logo = false;/);
-    assert.match(read("pipeline/automation-cycle.ts"), /logo: \(rule as any\)\.layout\?\.logo \?\? false/);
+    // 기본값은 2026-09-02 에 표시(true)로 바뀌었다 — 두 경로가 **같기만** 하면 되는 게
+    // 이 테스트의 뜻이지만, 값을 고정해 둬야 한쪽만 뒤집는 사고를 잡는다.
+    assert.match(mod, /if \(layout\.logo === undefined\) layout\.logo = true;/);
+    assert.match(read("pipeline/automation-cycle.ts"), /logo: \(rule as any\)\.layout\?\.logo \?\? true/);
   });
 });
 
