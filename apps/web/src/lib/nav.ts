@@ -69,7 +69,7 @@ export const NAV_GROUPS: NavGroup[] = [
     label: "분석",
     items: [
       { href: "/program-analytics", label: "프로그램 분석", icon: Activity },
-      { href: "/channel-analytics", label: "채널 분석", icon: TrendingUp, soon: true },
+      { href: "/channel-analytics", label: "채널 분석", icon: TrendingUp },
     ],
   },
   {
