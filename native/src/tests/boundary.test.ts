@@ -19,9 +19,9 @@ import test from "node:test";
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const read = (p: string) => fs.readFileSync(path.resolve(HERE, p), "utf-8");
 
-const contract = read("contract.ts");
-const preload = read("preload.ts");
-const webGuard = read("../../apps/web/src/lib/native-transfers.tsx");
+const contract = read("../contract.ts");
+const preload = read("../preload.ts");
+const webGuard = read("../../../apps/web/src/lib/native-transfers.tsx");
 
 /** contract.ts 가 선언한 브리지 버전. 이 숫자가 배포 결합의 전부다. */
 function contractVersion(): number {
@@ -80,8 +80,8 @@ test("preload 는 신뢰 origin 에서만 브리지를 노출한다", () => {
 
 test("자동 업데이트가 없다는 사실이 문서와 일치한다", () => {
   // 이게 생기면 위 경계 규칙의 무게가 달라진다 — 문서를 같이 고쳐야 한다.
-  const pkg = JSON.parse(read("../package.json")) as { build?: { publish?: unknown } };
-  const doc = read("../CLAUDE.md");
+  const pkg = JSON.parse(read("../../package.json")) as { build?: { publish?: unknown } };
+  const doc = read("../../CLAUDE.md");
   const hasPublish = pkg.build?.publish != null;
   assert.equal(hasPublish, false,
     "build.publish 가 생겼다 — 자동 업데이트를 도입했다면 native/CLAUDE.md 의 '재설치' 서술을 고칠 것");

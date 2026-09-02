@@ -49,7 +49,7 @@ pnpm dev:native
 | 409(회차 중복)를 재시도 불가로 분류 | 재시도가 영원히 같은 409 를 받는데, 그 잡이 '미완료' 로 남아 X 종료와 로그인 자동기동 해제를 영구히 막았다 |
 | `shutdown()` 이 진행 중인 잡을 기다린 뒤 저장 | 늦게 도착한 저장이 종료 스냅샷을 덮었다(재기동 시 `init()` 이 복구하긴 했다) |
 
-회귀 테스트는 `native/src/transfer-engine.test.ts` — 특히
+회귀 테스트는 `native/src/tests/transfer-engine.test.ts` — 특히
 "uploadedBytes 가 size 여도 GCS 확인이 없으면 다시 올린다" 가 첫 번째 항목을 고정한다.
 
 **구하면 할 것:** 윈도우1에서 10GB 이상 MXF 를 올리는 중에 ① 네트워크 차단 ② 앱 강제 종료

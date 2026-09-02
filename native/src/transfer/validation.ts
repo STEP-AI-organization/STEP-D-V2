@@ -1,6 +1,6 @@
 import path from "node:path";
 
-import { isNativeUploadRequest, type NativeUploadRequest } from "./contract.js";
+import { isNativeUploadRequest, type NativeUploadRequest } from "../contract.js";
 import { isSupportedVideoPath } from "./mime.js";
 
 export function validateJobId(value: unknown): string {

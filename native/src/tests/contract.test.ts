@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { isNativeUploadRequest } from "./contract.js";
-import { uploadContentType } from "./mime.js";
-import { parseCommittedOffset } from "./transfer-network.js";
+import { isNativeUploadRequest } from "../contract.js";
+import { uploadContentType } from "../transfer/mime.js";
+import { parseCommittedOffset } from "../transfer/network.js";
 
 test("native upload request validates both supported kinds", () => {
   assert.equal(isNativeUploadRequest({

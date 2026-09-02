@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { fingerprintFile, fingerprintsMatch } from "./fingerprint.js";
+import { fingerprintFile, fingerprintsMatch } from "../transfer/fingerprint.js";
 
 test("file fingerprint detects replacement with the same byte length", async () => {
   const directory = await mkdtemp(path.join(os.tmpdir(), "stepd-native-fingerprint-"));

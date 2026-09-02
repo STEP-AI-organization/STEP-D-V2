@@ -25,14 +25,39 @@
 
 | 능력 | 왜 네이티브여야 하나 | 파일 |
 |---|---|---|
-| 영속 업로드 큐 | 창을 닫아도, 앱을 껐다 켜도 이어받는다. 브라우저 탭은 닫히면 끝 | `transfer-engine.ts` · `job-store.ts` |
+| 영속 업로드 큐 | 창을 닫아도, 앱을 껐다 켜도 이어받는다. 브라우저 탭은 닫히면 끝 | `transfer/engine.ts` · `transfer/job-store.ts` |
 | 로컬 파일 경로 | `webUtils.getPathForFile` — 브라우저는 실제 경로를 안 준다(몇 GB 를 메모리에 안 올리고 부분 읽기하려면 필요) | `preload.ts` |
-| GCS resumable 청크 | 308 이어받기·오프셋 되묻기. XHR 로도 되지만 **탭 생존에 묶인다** | `transfer-engine.ts` · `transfer-network.ts` |
+| GCS resumable 청크 | 308 이어받기·오프셋 되묻기. XHR 로도 되지만 **탭 생존에 묶인다** | `transfer/engine.ts` · `transfer/network.ts` |
 | 트레이 상주 | 창을 닫아도 전송이 계속되고, 끝나면 알아서 종료 | `main.ts` |
 | `stepd://` 프로토콜 | OS 가 브라우저→앱으로 넘기는 문. 웹에서 만들 수 없다 | `main.ts` |
 | 프리미어 실행 | `openPremiere()` — 설치 경로를 훑어 spawn. 브라우저는 프로세스를 못 띄운다 | `main.ts` |
 
 **나머지는 전부 웹이다.** 화면·업무 로직·API 호출·권한·문구 — 여기 넣지 말 것.
+
+### 폴더 (2026-09-02 정리 · 15개가 평평하던 것을 묶었다)
+
+```
+src/
+  main.ts        메인 프로세스 — 창·트레이·프로토콜·IPC
+  preload.ts     렌더러 브리지 — 신뢰 origin 에서만 노출
+  contract.ts    ⭐ 웹과의 계약. **여기만 웹과 맞물린다** (아래 참조)
+  transfer/      업로드 스택 — 브라우저가 못 하는 일의 본체
+    engine.ts            전송 엔진(청크·재개·재시도·finalize)
+    network.ts           포트 — TransferNetwork 인터페이스 + 308 오프셋 해석
+    network-electron.ts  어댑터 — Electron net 구현
+    job-store.ts         작업 영속화(앱을 껐다 켜도 이어받는 근거)
+    fingerprint.ts       같은 크기로 바꿔치기된 파일 탐지
+    mime.ts · errors.ts · validation.ts
+  tests/         *.test.ts (apps/server/src/tests 와 같은 규칙)
+```
+
+⚠️ **최상위 셋은 자리를 지킨다.** `main.ts`·`preload.ts`·`contract.ts` 는 esbuild
+**진입점**이고(`scripts/build.mjs`) 출력이 `dist/main.cjs`·`dist/preload.cjs` 로 나가는데,
+`package.json` 의 `main` 과 `main.ts` 의 `path.join(__dirname, "preload.cjs")` 가 그 경로를
+가리킨다. 옮기려면 빌드 스크립트와 그 둘을 같이 고쳐야 한다. 나머지는 번들되므로 자유롭다.
+
+`network.ts`(포트) / `network-electron.ts`(어댑터) 이름이 갈린 이유는 **테스트가 가짜
+네트워크를 끼워 넣기 때문**이다 — 전송 엔진 테스트가 실제 GCS 없이 308 재개를 검증한다.
 
 ---
 

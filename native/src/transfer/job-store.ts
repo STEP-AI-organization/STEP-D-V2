@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, open, readFile, readdir, rename, unlink } from "node:fs/promises";
 import path from "node:path";
 
-import type { NativeUploadJob, NativeUploadRequest } from "./contract.js";
+import type { NativeUploadJob, NativeUploadRequest } from "../contract.js";
 import type { FileFingerprint } from "./fingerprint.js";
 
 export interface SecretCodec {

@@ -6,7 +6,7 @@ import type {
   NativeUploadJob,
   NativeUploadRequest,
   NativeUploadStatus,
-} from "./contract.js";
+} from "../contract.js";
 import {
   SessionExpiredError,
   TransferAbortedError,
@@ -15,7 +15,7 @@ import {
 import { fingerprintFile, fingerprintsMatch } from "./fingerprint.js";
 import { isTerminalJob, JobStore, toPublicJob, type StoredUploadJob } from "./job-store.js";
 import { uploadContentType } from "./mime.js";
-import { parseCommittedOffset, type ApiResult, type HttpResult, type TransferNetwork } from "./transfer-network.js";
+import { parseCommittedOffset, type ApiResult, type HttpResult, type TransferNetwork } from "./network.js";
 
 const CHUNK_SMALL = 16 * 1024 * 1024;
 const CHUNK_LARGE = 64 * 1024 * 1024;

@@ -1,4 +1,4 @@
-import type { NativeUploadErrorCode } from "./contract.js";
+import type { NativeUploadErrorCode } from "../contract.js";
 
 export class TransferError extends Error {
   constructor(
