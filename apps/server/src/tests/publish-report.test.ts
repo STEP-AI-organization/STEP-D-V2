@@ -164,30 +164,49 @@ describe("리포트는 실패를 숨기지 않는다 (2026-08-26)", () => {
 });
 
 /**
- * 소재 고갈 즉시 발송 (2026-08-27) — 배선은 순방이 판정하고 리포트가 받아 쓴다.
- * 순수 함수로 증명이 안 되는 자리(순방 상태 의존)라 소스 스캔으로 고정한다.
+ * **마감 후 하루 한 통** (정책 2026-09-02 · 사용자 "메일이 2개로 나눠져서 온다").
+ *
+ * 예전(2026-08-27)엔 몫이 다 나가거나 소재가 고갈되면 마지막 슬롯 직후 바로 보냈다. 그러면
+ * 리포트가 나간 **뒤에** 확정되는 사실(재시도 성공 · 슬롯 직전 예약 업로드)이 갈 곳이 없어
+ * 두 번째 통이 됐다. 조기 발송과 하루 한 통은 동시에 가질 수 없어 후자를 골랐다.
+ *
+ * ⚠️ 이 블록이 깨지면 **정책이 되돌아간 것**이다. 숫자를 고치지 말고 어느 쪽이 정본인지
+ *    먼저 정할 것 — 되돌리려면 publish-notify 의 ruleReportDue 한 함수만 보면 된다.
  */
-describe("소재가 없으면 마감을 기다리지 않는다", () => {
+describe("리포트는 마감 후에 한 통으로 나간다", () => {
   const read = (f: string) => fsSync.readFileSync(pathMod.join(SRC_DIR, f), "utf-8");
 
-  it("리포트: exhausted + 마지막 슬롯 경과면 목표 미달이어도 보낸다", () => {
+  it("발송 판정이 마감만 본다 — '몫이 다 나갔으면 즉시' 분기가 없다", () => {
     const src = read("publish/publish-notify.ts");
-    assert.match(src, /if \(exhausted && lastSlotPassed\) continue;/,
-      "소재 고갈 즉시 발송 분기가 없다 — 고갈된 날 마감(+90분)까지 헛기다린다");
-    assert.match(src, /rulePublishingDone\(rule, now, opts\.exhausted === true\)/,
-      "순방이 넘긴 판정을 리포트가 안 받고 있다");
+    assert.match(src, /function ruleReportDue\(rule: AutomationRule, now: Date\): boolean/,
+      "마감 판정 함수가 없다");
+    assert.match(src, /return ruleDayTarget\(rule, 0, now\)\.deadlinePassed;/,
+      "마감 외의 조건으로 보내면 늦게 확정되는 건이 두 번째 통으로 갈라진다");
+    assert.doesNotMatch(src, /published >= target \|\| deadlinePassed/,
+      "'몫이 다 나갔으면 즉시 발송' 분기가 살아 있다 — 정책이 되돌아갔다");
+    assert.doesNotMatch(src, /exhausted && lastSlotPassed/,
+      "소재 고갈 조기 발송이 살아 있다 — 이것이 갈라짐의 원인이었다");
   });
 
-  it("순방: 아무것도 못 했고 사유가 전부 '안 풀리는' 쪽일 때만 exhausted", () => {
+  it("순방이 exhausted 를 더 넘기지 않는다 — 넘길 곳이 없어졌다", () => {
     const src = read("pipeline/automation-cycle.ts");
-    assert.match(src, /idleCodes\.every\(idleMeansNoMoreToday\)/,
-      "기다림형 사유(분석 중·렌더 대기)를 고갈로 치면 리포트가 너무 일찍 나간다");
-    assert.match(src, /report\.adopted === 0 && report\.published === 0/,
-      "이번 순방이 게시를 했는데 고갈이라고 하면 안 된다");
-    assert.match(src, /maybeFlushAutoPublishReport\(new Date\(\), \{ exhausted \}\)/);
+    assert.match(src, /await maybeFlushAutoPublishReport\(\);/,
+      "리포트 호출이 인자를 넘기고 있다 — 조기 발송 배선이 남았다는 뜻");
+    assert.doesNotMatch(src, /idleMeansNoMoreToday/,
+      "쓰지 않는 판정을 계속 계산하면 다음 사람이 그게 동작한다고 믿는다");
   });
 
-  it("기다림형 코드 집합은 셋뿐 — 늘리면 리포트가 늦어진다", () => {
+  it("마감 판정은 게시 수를 세지 않는다 — 발송 경로에서 DB 조회가 빠진다", () => {
+    // ruleDayTarget 의 deadlinePassed 는 시각만 본다. published 를 0 으로 줘도 같아야 한다.
+    const rule = { slots: [{ time: "09:00", count: 1 }, { time: "18:00", count: 2 }] } as never;
+    const at = (hhmm: string) => new Date(`2026-09-02T${hhmm}:00+09:00`);
+    for (const p of [0, 3, 99]) {
+      assert.equal(ruleDayTarget(rule, p, at("19:00")).deadlinePassed, false, "18:00+90분 전");
+      assert.equal(ruleDayTarget(rule, p, at("19:31")).deadlinePassed, true, "18:00+90분 후");
+    }
+  });
+
+  it("기다림형 코드 집합은 셋 그대로 — 어휘는 남겨 뒀다(배선만 걷어냈다)", () => {
     const src = read("pipeline/automation.ts");
     const m = /WAITING_IDLE_CODES[^=]*=\s*new Set<RuleIdleCode>\(\[([\s\S]*?)\]\)/.exec(src);
     assert.ok(m, "WAITING_IDLE_CODES 를 못 찾았다");
@@ -298,7 +317,7 @@ describe("리포트는 자동배포 계획마다 한 통 (2026-08-28)", () => {
 
   it("계획을 못 찾은 묶음도 기다리지 않고 나간다", () => {
     // 지워진 계획의 고아 클립·ruleId 없는 옛 항목. 기다릴 근거가 없는데 붙잡으면 영영 안 나간다.
-    assert.match(flush, /!hasStale && rule && !\(await rulePublishingDone\(/,
-      "계획을 못 찾으면 무한 대기한다 — rule 이 있을 때만 완료를 기다려야 한다");
+    assert.match(flush, /!hasStale && rule && !ruleReportDue\(rule, now\)/,
+      "계획을 못 찾으면 무한 대기한다 — rule 이 있을 때만 마감을 기다려야 한다");
   });
 });

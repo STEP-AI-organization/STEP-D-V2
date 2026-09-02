@@ -836,8 +836,11 @@ export type RuleIdleCode = (typeof RULE_IDLE_CODES)[number];
  * 메타 대기). 나머지 사유(후보 없음·종류 불일치·겹침·상한·길이 초과·점수 없음 등)는
  * 오늘 안에는 저절로 안 풀린다 — 새 회차를 올리거나 설정을 바꿔야 한다.
  *
- * 자동배포 리포트가 이 구분을 쓴다: 마지막 슬롯이 지났는데 사유가 전부 '안 풀리는' 쪽이면
- * 마감(+90분)을 기다리지 않고 그때까지 몫으로 보낸다(사용자 2026-08-27 "왜 4시 30분이지").
+ * ⚠️ **지금은 어디에도 배선돼 있지 않다**(2026-09-02). 예전엔 리포트가 이 구분으로 조기
+ * 발송을 판정했는데(2026-08-27 "왜 4시 30분이지"), 그 조기 발송이 메일을 두 통으로
+ * 가르는 원인이라 마감 후 한 통 정책으로 바꾸면서 배선을 걷어냈다
+ * (publish-notify.ts `ruleReportDue`). 어휘 자체는 유휴 사유를 구분하는 데 쓸모가 있어
+ * 남겨 둔다 — 되살릴 땐 소비처를 함께 만들 것.
  */
 export const WAITING_IDLE_CODES: ReadonlySet<RuleIdleCode> = new Set<RuleIdleCode>([
   "analyzing", "render_waiting", "meta_waiting",

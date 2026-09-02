@@ -254,8 +254,11 @@ describe("하루 배포 개수는 계획 단위 — publishedTodayKst 소스 스
       "ruleId 생략 시 아무것도 안 세면 기존 호출부가 조용히 0 을 받는다");
   });
 
-  it("한도를 판정하는 세 호출부가 전부 rule.id 를 넘긴다", () => {
+  it("게시 수를 세는 호출부가 전부 rule.id 를 넘긴다", () => {
     // 하나라도 빠지면 화면 숫자·순방 판정·리포트 목표가 서로 다른 축을 세게 된다.
+    // 2026-09-02: 리포트 **발송 시점** 판정은 이제 마감(시각)만 보므로 세지 않는다
+    // (publish-notify `ruleReportDue`). 리포트에 남은 집계는 "영상이 모자랍니다" 섹션의
+    // rulePlanTotals 하나뿐이고, 그 하나도 여전히 계획 몫만 세야 한다.
     const cycle = fs.readFileSync(path.join(SRC, "pipeline/automation-cycle.ts"), "utf-8");
     assert.match(cycle, /publishedTodayKst\(accountKey, rule\.id\)/,
       "순방이 채널 총합으로 한도를 본다 — 계획별 개수가 안 지켜진다");
@@ -264,7 +267,7 @@ describe("하루 배포 개수는 계획 단위 — publishedTodayKst 소스 스
       "화면의 '오늘 N/M' 이 순방과 다른 수를 보여준다");
     const notify = fs.readFileSync(path.join(SRC, "publish/publish-notify.ts"), "utf-8");
     const calls = notify.match(/publishedTodayKst\([^)]*\)/g) ?? [];
-    assert.ok(calls.length >= 2, "리포트의 publishedTodayKst 호출을 못 찾았다");
+    assert.ok(calls.length >= 1, "리포트의 publishedTodayKst 호출을 못 찾았다");
     for (const call of calls) {
       assert.match(call, /rule\.id/, `리포트가 계획 몫이 아닌 수를 목표와 비교한다: ${call}`);
     }

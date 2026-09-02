@@ -6,19 +6,24 @@
  *  1. 워커가 실업로드에 성공할 때마다 `recordAutoPublishForReport` 로 **버퍼에 적립**만 한다
  *     (automation_setting KV · 테넌트 스코프). 메일은 여기서 안 보낸다.
  *  2. 순방(automation-cycle · 15분)이 끝날 때 `maybeFlushAutoPublishReport` 가
- *     **자동배포 계획마다** "오늘 그 계획 몫이 전부 나갔나"를 판정하고, 다 나간 계획의
- *     리포트 한 통을 보낸 뒤 그 계획 적립분만 버퍼에서 뺀다(2026-08-28 · 계획당 한 통).
- *     확정 실패 등으로 영영 목표에 못 미치면 마감(마지막 슬롯+90분 · 활동창 끝)에 그때까지
- *     몫으로 보낸다. 지난 날짜 항목이 남아 있으면(어제 마감 후 늦게 올라간 예약분 등)
- *     다음 순방에서 즉시 보낸다 — 묶음이 하루를 넘겨 썩지 않는다.
+ *     **자동배포 계획마다** "그 계획의 마감이 지났나"를 판정하고, 지난 계획의 리포트 한 통을
+ *     보낸 뒤 그 계획 적립분만 버퍼에서 뺀다(2026-08-28 계획당 한 통 · 2026-09-02 마감 후 한 통).
+ *     지난 날짜 항목이 남아 있으면(어제 마감 후 늦게 올라간 예약분 등) 다음 순방에서 즉시
+ *     보낸다 — 묶음이 하루를 넘겨 썩지 않는다.
  *
  * 원칙 (구 영상별 알림에서 계승):
  *  - **자동 경로만**(origin automation·factory). 사람이 누른 배포는 그 사람이 이미 안다.
  *  - **설정 없으면 아무것도 안 한다.** 담당자 이메일(NOTIFY_EMAIL_KEY) 없으면 적립도 안 한다.
  *  - **베스트 에포트.** 게시는 이미 끝난 사실 — 어떤 실패도 던지지 않는다.
  *
- * ⚠️ 알려진 한계(v1): 네이버 등 잡 지연 방식 예약은 업로드가 슬롯 직전이라, 목표 판정
- * (rule_run 기준)보다 적립이 늦을 수 있다 — 그 항목은 다음 리포트(지난날 즉시 발송)로 넘어간다.
+ * ⚠️ **하루 한 통이 되려면 마감까지 기다려야 한다**(2026-09-02 · ruleReportDue 주석 참고).
+ * 몫이 다 나가자마자 보내던 예전 방식에서는, 그 뒤에 확정되는 사실(재시도 성공 · 슬롯 직전에
+ * 올라가는 예약분)이 갈 곳이 없어 두 번째 통으로 갈라졌다. 조기 발송과 하루 한 통은
+ * 동시에 가질 수 없다.
+ *
+ * ⚠️ 남는 갈라짐: **마감 뒤에** 확정되는 건(늦은 재시도 성공 등)은 여전히 다음 통으로 간다.
+ * 그건 이미 나간 리포트를 고칠 수 없어서지 정책 때문이 아니다. 그리고 콘텐츠 공장(factory)
+ * 배포는 클립에 automationRuleId 가 없어 "계획 미상" 묶음으로 따로 나간다 — 별개 사안이다.
  */
 import {
   getAutomationSetting, setAutomationSetting, listAutomationRules, publishedTodayKst,
@@ -246,13 +251,6 @@ export function ruleDayTarget(
 }
 
 /**
- * 오늘 나갈 몫이 전부 나갔나(또는 더는 나올 게 없나) — 하나라도 진행 중이면 false.
- *
- * `exhausted` = 이번 순방이 "채택할 후보가 없다" 고 판정했다(순방이 계산해 넘긴다 — 여기서
- * 다시 세면 순방과 갈라진다). 목표 미달이어도 **마지막 슬롯이 지났고 소재가 없으면** 더
- * 기다릴 이유가 없으므로 그때까지 몫으로 보낸다.
- */
-/**
  * **한 계획의** 오늘 목표와 실제 게시 수 — 리포트의 "영상이 모자랍니다" 섹션 근거.
  *
  * 메일이 계획마다 따로 나가므로(2026-08-28) 합산도 그 계획 안에서만 한다. 예전엔 워크스페이스
@@ -272,21 +270,32 @@ async function rulePlanTotals(rule: AutomationRule, now: Date): Promise<{ target
 }
 
 /**
- * **이 계획의** 오늘 몫이 다 나갔나 — 채널 하나라도 진행 중이면 false.
+ * **이 계획의** 리포트를 지금 보낼 때인가 — **마감이 지났나만 본다** (정책 2026-09-02).
  *
- * 계획별 판정이라 A 가 끝나면 A 메일이 바로 나간다. 예전엔 워크스페이스 전체가 끝나야
- * 보냈다 — 늦게까지 도는 계획 하나가 이미 끝난 계획들의 리포트를 밤까지 붙잡았다.
+ * ## 왜 바꿨나
+ * 예전엔 "오늘 몫이 다 나갔으면" 즉시 보냈다(+소재 고갈 시 마지막 슬롯 직후 조기 발송).
+ * 그래서 **리포트가 나간 뒤에 확정되는 사실**이 갈 곳을 잃고 두 번째 통이 됐다:
+ *   - 실패했던 건의 **재시도 성공**(사람이 배포 화면에서 누른 뒤 워커가 올린다)
+ *   - 슬롯 직전에 올라가는 **예약·지연 업로드**(네이버 등 — 파일 상단 v1 한계로 적어 뒀던 것)
+ * 사용자 2026-09-02: "가끔 자동배포 메일이 2개로 나눠져서 온다" 의 원인이 이것이다.
+ * 마감까지 기다리면 그 사실들이 같은 통에 담긴다.
+ *
+ * ## 무엇을 잃었나 (알고 고른 것)
+ * 몫이 일찍 다 나간 날에도 마감까지 기다린다. **"다 나가면 바로 온다" 와 "하루 한 통" 은
+ * 동시에 가질 수 없다** — 앞의 것이 2026-08-27 결정이었고, 2026-09-02 에 뒤의 것으로 바꿨다.
+ * 되돌리려면 여기 한 함수만 보면 된다.
+ *
+ * ## 마감
+ * 슬롯 계획 = 마지막 슬롯 +90분 · 할당량 계획 = 활동창 끝(activeEnd). 순방과 **같은
+ * 함수**(ruleDayTarget)에서 낸다. 마감은 시각만 보므로 게시 수를 셀 필요가 없다 —
+ * 예전 판정이 채널마다 돌리던 publishedTodayKst 조회가 발송 경로에서 통째로 빠진다.
+ * (게시 수는 여전히 "영상이 모자랍니다" 섹션에서 rulePlanTotals 가 센다.)
+ *
+ * 발행일이 아니거나 꺼진 계획·채널 없는 계획은 기다릴 이유가 없다 → 바로 보낸다.
  */
-async function rulePublishingDone(rule: AutomationRule, now: Date, exhausted: boolean): Promise<boolean> {
+function ruleReportDue(rule: AutomationRule, now: Date): boolean {
   if (rule.enabled === false || !isPublishDay(rule, now) || ruleChannels(rule).length === 0) return true;
-  for (const chan of ruleChannels(rule)) {
-    const published = await publishedTodayKst(`${chan.platform}:${chan.accountId}`, rule.id);
-    const { target, deadlinePassed, lastSlotPassed } = ruleDayTarget(rule, published, now);
-    if (published >= target || deadlinePassed) continue;
-    if (exhausted && lastSlotPassed) continue;   // 더 나올 소재가 없다 — 기다림을 끝낸다
-    return false;
-  }
-  return true;
+  return ruleDayTarget(rule, 0, now).deadlinePassed;
 }
 
 /** "다음 배포" 박스 — 내일부터 7일 안에서 첫 발행일과 그날의 예정 건수·첫 시각. */
@@ -473,16 +482,14 @@ ${next ? `  <tr><td class="px" style="padding:32px 40px 0 40px;">
 }
 
 /**
- * 순방 끝에서 부른다 — 오늘 몫이 다 나갔으면(또는 지난 날 항목이 남았으면) 리포트 발송.
+ * 순방 끝에서 부른다 — **계획의 마감이 지났으면**(또는 지난 날 항목이 남았으면) 리포트 발송.
  * **절대 던지지 않는다.** 순방은 리포트보다 중요하다.
  *
- * `opts.exhausted` = 이번 순방이 "채택할 후보가 없다"고 판정했다(automation-cycle 이 넘긴다).
- * 마지막 슬롯이 지난 뒤라면 목표 미달이어도 그때까지 몫으로 보낸다 — 안 그러면 소재가
- * 고갈된 날 마감(+90분)까지 헛기다린다(사용자 2026-08-27).
+ * 발송 시점 판정은 ruleReportDue 한 곳이다(2026-09-02 마감 후 하루 한 통으로 정책 변경 —
+ * 이유와 대가는 그 함수 주석에). 예전의 `opts.exhausted`(소재 고갈 조기 발송)는 그 정책과
+ * 정면으로 어긋나 제거했다 — 조기 발송이 곧 "두 통으로 갈라짐" 의 원인이었다.
  */
-export async function maybeFlushAutoPublishReport(
-  now = new Date(), opts: { exhausted?: boolean } = {},
-): Promise<void> {
+export async function maybeFlushAutoPublishReport(now = new Date()): Promise<void> {
   try {
     if (!mailConfigured()) return;
     const items = await readBuffer();
@@ -520,8 +527,8 @@ export async function maybeFlushAutoPublishReport(
       // 지난 날 항목이 섞였으면 이미 마감을 넘긴 묶음이다 — 더 기다릴 이유가 없다.
       // 계획을 못 찾은 묶음(지워진 계획·ruleId 없는 옛 항목)도 기다릴 근거가 없어 바로 보낸다.
       const hasStale = group.some((i) => i.date !== today);
-      if (!hasStale && rule && !(await rulePublishingDone(rule, now, opts.exhausted === true))) {
-        kept.push(...group);          // 이 계획은 아직 오늘 몫이 남았다 — 버퍼에 그대로 둔다
+      if (!hasStale && rule && !ruleReportDue(rule, now)) {
+        kept.push(...group);          // 이 계획은 아직 마감 전이다 — 버퍼에 그대로 둔다
         continue;
       }
 
