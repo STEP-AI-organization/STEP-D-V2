@@ -6946,13 +6946,28 @@ app.post("/api/admin/media/transcode-scan", async (c) => {
 //   ② Adobe 자산을 우리가 재배포하지 않는다.
 // 올라온 뒤로는 서버가 이걸 고쳐서(mogrt.ts) 회차마다 제목을 찍어 낸다.
 const PREMIERE_BASE_OBJECT = "premiere/base-title.mogrt";
+/**
+ * **로고까지 한 그래픽에** 담을 때 쓰는 두 번째 껍데기 (사용자 2026-09-01: "굳이 2개로 줄
+ * 필요가 없"). 그림 레이어가 들어 있는 템플릿이라야 한다 — 패널이 `Titles/Modern Title.mogrt`
+ * 를 올린다(텍스트 2 + 그림 2 + 도형 1, 그림이 파일 안에 들어 있다).
+ *
+ * 제목 전용 껍데기와 **따로 둔다.** 하나로 합치면 그림 없는 템플릿이 올라온 순간 로고 경로가
+ * 통째로 죽는데, 그건 "제목은 나오는데 로고만 사라짐" 이라 알아채기 어렵다.
+ */
+const PREMIERE_LOGO_BASE_OBJECT = "premiere/base-title-logo.mogrt";
 const PREMIERE_BASE_MAX = 8 * 1024 * 1024;   // 기본 템플릿은 1MB 안팎. 8MB 면 넉넉하다
+
+/** `?kind=logo` 면 로고용 껍데기. 오타·빈값은 전부 제목용(기존 동작)으로 떨어진다. */
+function premiereBaseObject(kind: string | undefined): string {
+  return kind === "logo" ? PREMIERE_LOGO_BASE_OBJECT : PREMIERE_BASE_OBJECT;
+}
 
 app.get("/api/premiere/base-template", async (c) => {
   requireUser(c);
-  if (!(await fileExists(PREMIERE_BASE_OBJECT))) return c.json({ have: false });
+  const object = premiereBaseObject(c.req.query("kind"));
+  if (!(await fileExists(object))) return c.json({ have: false });
   try {
-    const info = inspectMogrt(new Uint8Array(await readFile(PREMIERE_BASE_OBJECT)));
+    const info = inspectMogrt(new Uint8Array(await readFile(object)));
     return c.json({ have: true, textLayers: info.textLayers, capsuleName: info.capsuleName });
   } catch {
     // 저장된 게 깨졌으면 **없는 것으로 본다** — 패널이 다시 올리게 두는 편이 낫다.
@@ -6962,10 +6977,11 @@ app.get("/api/premiere/base-template", async (c) => {
 
 app.post("/api/premiere/base-template", async (c) => {
   requireUser(c);
+  const kind = c.req.query("kind");
   const body = new Uint8Array(await c.req.arrayBuffer());
   if (!body.length) return c.json({ error: "빈 파일입니다." }, 400);
   if (body.length > PREMIERE_BASE_MAX) return c.json({ error: "파일이 너무 큽니다." }, 413);
-  let info: { textLayers: number; capsuleName: string };
+  let info: { textLayers: number; capsuleName: string; imageLayers: number };
   try {
     info = inspectMogrt(body);
   } catch (err) {
@@ -6973,8 +6989,12 @@ app.post("/api/premiere/base-template", async (c) => {
   }
   // 텍스트 레이어가 없으면 제목을 넣을 자리가 없다 — 받아 두면 나중에 조용히 실패한다.
   if (info.textLayers < 1) return c.json({ error: "텍스트 레이어가 없는 템플릿입니다." }, 400);
-  await writeFile(PREMIERE_BASE_OBJECT, Buffer.from(body));
-  return c.json({ ok: true, textLayers: info.textLayers, capsuleName: info.capsuleName });
+  // 로고용은 **그림 레이어까지** 있어야 한다. 여기서 안 막으면 발급은 되는데 로고만 안 나온다.
+  if (kind === "logo" && info.imageLayers < 1) {
+    return c.json({ error: "그림 레이어가 없는 템플릿입니다 — 로고를 넣을 자리가 없습니다." }, 400);
+  }
+  await writeFile(premiereBaseObject(kind), Buffer.from(body));
+  return c.json({ ok: true, textLayers: info.textLayers, imageLayers: info.imageLayers, capsuleName: info.capsuleName });
 });
 
 /**
@@ -6987,9 +7007,13 @@ app.post("/api/premiere/base-template", async (c) => {
 app.get("/api/recommendations/:id/title.mogrt", async (c) => {
   const rec = await getEntity<any>("recommendation", c.req.param("id"));
   if (!rec) return c.json({ error: "recommendation not found" }, 404);
-  if (!(await fileExists(PREMIERE_BASE_OBJECT))) {
+  // `?logo=1` 이면 **로고·시간박스까지 한 그래픽에** 담는다 (사용자 2026-09-01:
+  // "굳이 2개로 줄 필요가 없"). 그러려면 그림 레이어가 있는 껍데기라야 한다.
+  const withLogo = c.req.query("logo") === "1";
+  const baseObject = withLogo ? PREMIERE_LOGO_BASE_OBJECT : PREMIERE_BASE_OBJECT;
+  if (!(await fileExists(baseObject))) {
     // 패널이 이 신호를 받고 자기 PC 의 기본 템플릿을 올린 뒤 다시 부른다.
-    return c.json({ error: "base_template_missing" }, 409);
+    return c.json({ error: "base_template_missing", kind: withLogo ? "logo" : "title" }, 409);
   }
 
   const ep = rec.episodeId ? await getEntity<any>("episode", rec.episodeId) : null;
@@ -7014,14 +7038,23 @@ app.get("/api/recommendations/:id/title.mogrt", async (c) => {
   if (!items.length) return c.json({ error: "no title to draw" }, 404);
 
   const layers = layersFromOverlayItems(items, W, H, postScriptNameFor);
+  // 로고 그림은 PNG 경로와 **같은 함수**가 굽는다. 그릴 게 없으면(로고 꺼짐·자산 없음) 404 로
+  // 알린다 — 빈 그림을 끼워 넣으면 "합쳤는데 로고가 안 보인다" 가 되고 원인을 못 찾는다.
+  let image: Uint8Array | null = null;
+  if (withLogo) {
+    const png = await buildDecorationsPng(rec, want).catch(() => null);
+    if (!png?.length) return c.json({ error: "no decorations to draw" }, 404);
+    image = new Uint8Array(png);
+  }
   let out: Uint8Array;
   try {
-    out = patchTitleMogrt(new Uint8Array(await readFile(PREMIERE_BASE_OBJECT)), layers, {
+    out = patchTitleMogrt(new Uint8Array(await readFile(baseObject)), layers, {
       // 캡슐 id 는 **추천마다 달라야** 한다 — 같으면 프리미어가 앞서 넣은 것과 같은 템플릿으로
       // 보고 캐시를 써서, 두 번째 제목이 첫 번째 문구로 뜬다.
-      capsuleId: capsuleIdFor(String(rec.id), aspect),
+      // 로고 판은 **다른 id** 여야 한다 — 안 그러면 제목만 판과 캐시가 섞인다.
+      capsuleId: capsuleIdFor(String(rec.id), `${aspect}${withLogo ? "+logo" : ""}`),
       capsuleName: `[STEP-D] ${String(rec.title ?? rec.id).slice(0, 60)}`,
-    });
+    }, { image });
   } catch (err) {
     return c.json({ error: `제목 그래픽을 만들지 못했습니다: ${(err as Error).message}` }, 500);
   }
@@ -7101,41 +7134,35 @@ app.get("/api/recommendations/:id/decorations.png", async (c) => {
   const rec = await getEntity<any>("recommendation", c.req.param("id"));
   if (!rec) return c.json({ error: "recommendation not found" }, 404);
   if (!hasFfmpeg()) return c.json({ error: "ffmpeg unavailable" }, 503);
+  try {
+    // 굽는 일은 buildDecorationsPng 한 곳에서 한다 — .mogrt 경로와 **같은 그림**이어야 한다.
+    const out = await buildDecorationsPng(rec, c.req.query("aspect"));
+    if (!out) return c.json({ error: "nothing to draw" }, 404);
+    return new Response(new Uint8Array(out), {
+      headers: { "content-type": "image/png", "cache-control": "private, max-age=300" },
+    });
+  } catch (err) {
+    return c.json({ error: `오버레이를 만들지 못했습니다: ${(err as Error).message}` }, 500);
+  }
+});
 
-  const ep = rec.episodeId ? await getEntity<any>("episode", rec.episodeId) : null;
-  const program = ep?.programId ? await getEntity<any>("program", ep.programId) : undefined;
-  const rules = (await listAutomationRules()) as any[];
-  const rule = ep?.programId
-    ? rules.find((r) => r.enabled !== false
-        && (r.programId === ep.programId
-          || (Array.isArray(r.programIds) && r.programIds.includes(ep.programId))))
-    : undefined;
-
-  const want = c.req.query("aspect");
-  const aspect = want === "16:9" ? "16:9" : ((rule as any)?.aspect ?? (rec.kind === "short" ? SHORTS_DEFAULT_ASPECT : "16:9"));
-  const { autoEditorState } = await import("./pipeline/factory.ts");
-  const es = autoEditorState(
-    rec, ep?.programTitle ?? "", program,
-    (rule as any)?.templateId,
-    { ...((rule as any)?.layout ?? {}), logo: (rule as any)?.layout?.logo ?? false },
-    String(aspect),
-  ) as any;
-
-  const { W, H, stageH } = renderDims(String(aspect));
-  const scale = constScale(H, stageH);
+/**
+ * **로고·시간박스 한 장** — PNG 로 내려도 되고(decorations.png) .mogrt 안에 넣어도 된다
+ * (title.mogrt?logo=1). 두 경로가 **같은 그림**이어야 해서 여기 한 군데서 굽는다.
+ *
+ * 그릴 게 없으면 `null` — 부르는 쪽이 "로고 없음" 을 정상으로 처리한다.
+ *
+ * ⚠️ Cloud Run 의 `/tmp` 는 RAM(tmpfs)이다. finally 의 청소가 **반드시** 돌아야 한다.
+ */
+async function buildDecorationsPng(rec: any, aspectQuery?: string): Promise<Buffer | null> {
+  if (!hasFfmpeg()) return null;
+  const { esn, W, H, stageH, scale, program } = await recRenderContext(rec, aspectQuery);
   const durSec = Math.max(1, Number(rec.endTime) - Number(rec.startTime) || 10);
-  // 렌더 경로와 같은 정규화 — factory 시드는 **스테이지 px** 기준이라 이걸 빼면 크기가 어긋난다.
-  const esn = normalizeEditorCoords(es, String(aspect));
-  // ⚠️ Cloud Run 의 /tmp 는 RAM(tmpfs)이다 — 아래 cleanup 이 **반드시** 돌아야 한다.
   const tmpDir = path.resolve("/tmp/stepd-clips");
   fs.mkdirSync(tmpDir, { recursive: true });
   const stem = path.join(tmpDir, `dec_${rec.id}_${Date.now()}`);
   const textPng = `${stem}_text.png`, assFile = `${stem}.ass`;
   const iconRaw = `${stem}_icon_raw.png`, iconPng = `${stem}_icon.png`, outPng = `${stem}.png`;
-  const cleanup = () => {
-    for (const p of [textPng, assFile, iconRaw, iconPng, outPng]) { try { fs.unlinkSync(p); } catch { /* 없으면 그만 */ } }
-  };
-
   try {
     // ① 로고 — 렌더와 **같은 우선순위·같은 크롭**(클립별 업로드 > 프로그램 기본).
     let badge: { path: string; h: number; y: number; x?: number } | null = null;
@@ -7162,7 +7189,7 @@ app.get("/api/recommendations/:id/decorations.png", async (c) => {
       badge = { path: badgePath, h: iconH, y, ...(x != null ? { x } : {}) };
     }
 
-    // ② 채널명 텍스트 — 제목은 뺀다(그건 .mogrt 로 나간다).
+    // ② 채널명 텍스트 — 제목은 뺀다(그건 .mogrt 의 텍스트 레이어로 나간다).
     const items = buildStaticOverlayItems(esn, W, H, scale, iconBox).filter((it) => it.group === "channel");
     if (items.length && (await overlayCanvasAvailable())) {
       const buf = await renderTextLayerPng({ width: W, height: H, items });
@@ -7176,7 +7203,7 @@ app.get("/api/recommendations/:id/decorations.png", async (c) => {
     if (ass) fs.writeFileSync(assFile, ass, "utf-8");
 
     const hasText = fs.existsSync(textPng);
-    if (!hasText && !ass && !badge) { cleanup(); return c.json({ error: "nothing to draw" }, 404); }
+    if (!hasText && !ass && !badge) return null;
 
     await renderStaticOverlayPng({
       width: W, height: H,
@@ -7185,16 +7212,13 @@ app.get("/api/recommendations/:id/decorations.png", async (c) => {
       badge,
       outputPath: outPng,
     });
-    const out = fs.readFileSync(outPng);
-    cleanup();
-    return new Response(new Uint8Array(out), {
-      headers: { "content-type": "image/png", "cache-control": "private, max-age=300" },
-    });
-  } catch (err) {
-    cleanup();
-    return c.json({ error: `오버레이를 만들지 못했습니다: ${(err as Error).message}` }, 500);
+    return fs.readFileSync(outPng);
+  } finally {
+    for (const p of [textPng, assFile, iconRaw, iconPng, outPng]) {
+      try { fs.unlinkSync(p); } catch { /* 없으면 그만 */ }
+    }
   }
-});
+}
 
 /**
  * 프리미어 재현 라우트들이 공통으로 필요한 것 — 회차·프로그램·자동배포 계획을 조인해

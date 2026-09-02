@@ -813,6 +813,22 @@ const BASE_TEMPLATE_CANDIDATES = [
   "Basic Title.mogrt",                                        // 1개 — 두 줄이 한 레이어로 합쳐진다
 ];
 
+/**
+ * **로고까지 한 그래픽에** 담을 때 쓰는 껍데기 — 그림 레이어가 있어야 한다.
+ *
+ * 사용자 2026-09-01: *"굳이 2개로 줄 필요가 없."* 제목(.mogrt)과 로고·시간박스(PNG)가 따로
+ * 나가면 타임라인에 그래픽 클립이 둘이다.
+ *
+ * 프리미어가 깔아 주는 템플릿 70여 개를 전부 뜯어 본 결과(2026-09-01), **그림이 파일 안에
+ * 들어 있고 텍스트가 2개**인 건 `Titles/Modern Title.mogrt` 뿐이었다. 나머지 후보는 텍스트가
+ * 하나뿐이라 제목 두 줄이 한 덩어리로 합쳐진다 — 색·크기가 다른 우리 두 줄에는 안 맞는다.
+ */
+const LOGO_BASE_CANDIDATES = [
+  "Titles/Modern Title.mogrt",                                // 텍스트 2 + 그림 2 + 도형 1
+  "Titles/Classic Logo Presents.mogrt",                       // 텍스트 1 — 두 줄이 합쳐진다
+  "Slates/Classic Slate.mogrt",
+];
+
 function readLocalFile(nodeFs, p) {
   if (typeof nodeFs.readFileSync === "function") {
     const b = nodeFs.readFileSync(p);
@@ -853,15 +869,17 @@ async function readTemplateFile(absPath) {
   return readLocalFile(nodeFs, absPath);
 }
 
-async function uploadBaseTemplate(onStage) {
+async function uploadBaseTemplate(onStage, kind = "title") {
   const env = (typeof process !== "undefined" && process.env) || {};
   const dir = `${env.APPDATA || ""}/Adobe/Common/Motion Graphics Templates`;
+  const logo = kind === "logo";
+  const label = logo ? "제목+로고 템플릿" : "제목 템플릿";
   let last = "";
-  for (const name of BASE_TEMPLATE_CANDIDATES) {
+  for (const name of (logo ? LOGO_BASE_CANDIDATES : BASE_TEMPLATE_CANDIDATES)) {
     try {
-      onStage(`제목 템플릿 준비 중… (${name})`);
+      onStage(`${label} 준비 중… (${name})`);
       const buf = await readTemplateFile(`${dir}/${name}`);
-      const res = await api("/premiere/base-template", {
+      const res = await api(`/premiere/base-template${logo ? "?kind=logo" : ""}`, {
         method: "POST",
         headers: { "content-type": "application/octet-stream" },
         body: buf,
@@ -873,32 +891,45 @@ async function uploadBaseTemplate(onStage) {
       last = err.message;
     }
   }
-  throw new Error(`제목 템플릿 준비 실패 — ${last}`);
+  throw new Error(`${label} 준비 실패 — ${last}`);
 }
 
 /** 추천 하나의 제목 .mogrt. 서버에 베이스가 없으면 한 번 올리고 다시 부른다. */
-async function fetchTitleMogrt(rec, folder, aspect, onStage, allowSetup = true) {
-  const q = `?aspect=${encodeURIComponent(aspect)}`;
+/**
+ * 제목 .mogrt 를 받는다. `withLogo` 면 **로고·시간박스까지 한 그래픽에** 담아 받는다.
+ *
+ * 돌려주는 값에 `withLogo` 를 같이 실어 보낸다 — 부르는 쪽이 그걸 보고 장식 PNG 를 **건너뛴다.**
+ * 안 그러면 로고가 그래픽 안에도 있고 PNG 로도 얹혀 두 번 그려진다.
+ */
+async function fetchTitleMogrt(rec, folder, aspect, onStage, allowSetup = true, withLogo = false) {
+  const q = `?aspect=${encodeURIComponent(aspect)}${withLogo ? "&logo=1" : ""}`;
   const res = await api(`/recommendations/${encodeURIComponent(rec.id)}/title.mogrt${q}`, { method: "GET" });
   if (res.status === 409 && allowSetup) {
     // 베이스 템플릿이 서버에 없다 — 이 PC 의 프리미어 기본 템플릿을 한 번 올리고 다시 부른다.
     try {
-      await uploadBaseTemplate(onStage);
+      await uploadBaseTemplate(onStage, withLogo ? "logo" : "title");
     } catch (err) {
       // **여기서 조용히 죽으면 매번 PNG 다.** 사유를 남겨 화면에 띄운다.
-      lastTitleFallbackReason = `제목 템플릿 등록 실패 — ${err.message}`;
+      lastTitleFallbackReason = `${withLogo ? "제목+로고" : "제목"} 템플릿 등록 실패 — ${err.message}`;
+      if (withLogo) return null;                  // 로고 합치기만 포기한다 — 제목은 따로 간다
       throw err;
     }
-    return fetchTitleMogrt(rec, folder, aspect, onStage, false);
+    return fetchTitleMogrt(rec, folder, aspect, onStage, false, withLogo);
   }
   if (!res.ok) {
-    if (res.status === 404) return null;          // 그릴 제목이 없다
+    if (res.status === 404) return null;          // 그릴 제목(또는 로고)이 없다
     const data = await res.json().catch(() => ({}));
+    if (withLogo) {
+      // 합치기 실패는 **치명적이지 않다** — 제목과 로고를 따로 얹는 예전 길로 간다.
+      lastTitleFallbackReason = `로고 합치기 실패 — ${data.error || res.status}`;
+      return null;
+    }
     throw new Error(data.error || `제목 그래픽을 받지 못했습니다 (${res.status})`);
   }
   const buf = await res.arrayBuffer();
   const file = await folder.createFile(`stepd-title-${rec.id}.mogrt`, { overwrite: true });
   await file.write(buf, { format: formats.binary });
+  file.stepdWithLogo = withLogo;
   return file;
 }
 
@@ -2045,9 +2076,12 @@ async function warnIfNoVideoTrack(sequence, onStage) {
  */
 /** 제목이 PNG 로 떨어진 마지막 사유 — 화면에 그대로 보여 준다. */
 let lastTitleFallbackReason = "";
+/** 자막이 PNG 로 물러난 이유 — 제목과 같이 **화면에** 낸다. */
+let lastCaptionFallbackReason = "";
 
 async function addTitlesForRecs(recs, onStage, layout) {
   lastTitleFallbackReason = "";
+  mergedLogoRecs.clear();
   const { aspect, tracks } = await titleTargetInfo(layout);
 
   // ① 편집 가능한 경로 먼저.
@@ -2072,8 +2106,10 @@ async function addTitlesForRecs(recs, onStage, layout) {
 
   // ③ 제목 외 정적 오버레이(로고·시간박스·채널명) — 사용자 2026-08-31 "로고, 시간박스까지 다 재현".
   //    제목 위 트랙에 얹는다. 실패해도 제목은 이미 올라가 있으므로 조용히 넘어간다.
+  //    **그래픽 하나로 합쳐진 건은 뺀다** — 로고가 이미 그 안에 있다.
+  const needDeco = recs.filter((r) => !mergedLogoRecs.has(String(r.id)));
   try {
-    await addDecorationsForRecs(recs, aspect, onStage);
+    if (needDeco.length) await addDecorationsForRecs(needDeco, aspect, onStage);
   } catch (err) {
     console.log("[STEP-D] 로고·시간박스 실패", err);
   }
@@ -2159,14 +2195,18 @@ const CAPTION_MAX_LINES = 200;
  * ⚠️ 카라오케(단어별 색 스윕)는 재현되지 않는다 — 정지 이미지의 한계다.
  */
 async function addCaptionsForRecs(recs, aspect, onStage) {
+  lastCaptionFallbackReason = "";
   // ① 편집 가능한 경로 먼저 — 제목과 같은 원칙이다.
   try {
     const placed = await addCaptionMogrts(recs, aspect, onStage);
     if (placed > 0) return placed;
   } catch (err) {
+    lastCaptionFallbackReason = err.message;
     console.log("[STEP-D] 자막 mogrt 실패 — PNG 로 폴백", err);
   }
   // ② 폴백: 정지 PNG. 박스형 자막 스타일(서버가 409)도 여기로 온다 — 모양이 정확한 쪽이 낫다.
+  //    **왜 물러났는지 화면에 말한다** — 제목에서 겪은 그대로다(콘솔에만 남기면 아무도 못 본다).
+  if (lastCaptionFallbackReason) onStage(`자막을 이미지로 대체합니다 — ${lastCaptionFallbackReason}`);
   return await addCaptionPngs(recs, aspect, onStage);
 }
 
@@ -2176,7 +2216,7 @@ async function addCaptionsForRecs(recs, aspect, onStage) {
  * insertMogrtFromPath 는 넣은 트랙 아이템 배열을 돌려준다 — 그걸로 **끝 시각을 줄 길이에 맞춘다**
  * (안 하면 그래픽 기본 길이로 들어가 자막끼리 겹친다).
  */
-async function addCaptionMogrts(recs, aspect, onStage) {
+async function addCaptionMogrts(recs, aspect, onStage, allowSetup = true) {
   const folder = await assetFolder();
   const jobs = await captionJobs(recs, aspect);
   if (!jobs.length) return 0;
@@ -2186,7 +2226,26 @@ async function addCaptionMogrts(recs, aspect, onStage) {
   for (const job of jobs) {
     const q = `?i=${job.i}&aspect=${encodeURIComponent(aspect)}`;
     const res = await api(`/recommendations/${encodeURIComponent(job.rec.id)}/caption.mogrt${q}`, { method: "GET" });
-    if (res.status === 409) return 0;      // 베이스 미등록 · 박스형 스타일 — 통째로 PNG 로 간다
+    if (res.status === 409) {
+      // ⚠️ 409 는 두 가지다 — **베이스 미등록**과 박스형 자막 스타일(서버가 못 만든다).
+      //    예전엔 둘을 구별 않고 통째로 PNG 로 갔다. 그래서 베이스만 안 올라가 있으면
+      //    **자막이 영영 이미지**로 나왔다(제목은 올려서 되는데 자막만 안 되는 상태 · 2026-09-01).
+      //    제목과 같은 원칙으로, 미등록이면 한 번 올리고 다시 부른다.
+      const why = await res.json().catch(() => ({}));
+      if (allowSetup && String(why.error || "") === "base_template_missing") {
+        try {
+          await uploadBaseTemplate(onStage, "title");
+        } catch (err) {
+          lastCaptionFallbackReason = `자막 템플릿 등록 실패 — ${err.message}`;
+          return 0;
+        }
+        return addCaptionMogrts(recs, aspect, onStage, false);
+      }
+      lastCaptionFallbackReason = why.error === "boxed_caption_style"
+        ? "박스형 자막이라 이미지로 얹습니다 (모양이 정확한 쪽)"
+        : `자막 그래픽을 만들지 못했습니다 (${why.error || 409})`;
+      return 0;
+    }
     if (!res.ok) continue;
     const buf = await res.arrayBuffer();
     const file = await folder.createFile(`stepd-cap-${job.rec.id}-${job.i}.mogrt`, { overwrite: true });
@@ -2318,6 +2377,13 @@ async function titleTargetInfo(layout) {
 }
 
 /**
+ * **로고까지 한 그래픽에 담긴 추천 id.** 여기 든 추천은 장식 PNG 를 따로 안 얹는다 —
+ * 안 그러면 같은 로고가 그래픽 안에도 있고 PNG 로도 얹혀 두 번 그려진다.
+ * 매번 비운다(추천 목록이 바뀌면 지난 판단이 남으면 안 된다).
+ */
+const mergedLogoRecs = new Set();
+
+/**
  * .mogrt 를 구간 시작마다 꽂는다.
  *
  * PNG 와 달리 **프로젝트로 import 하지 않는다** — `insertMogrtFromPath` 가 파일 경로를 직접
@@ -2327,9 +2393,13 @@ async function addTitleMogrts(recs, aspect, onStage) {
   const folder = await assetFolder();
   onStage("제목 그래픽 받는 중…");
 
+  // **로고까지 한 그래픽에** 먼저 시도한다 (사용자 2026-09-01: "굳이 2개로 줄 필요가 없").
+  // 안 되면(그림 레이어 있는 템플릿이 없다·로고가 꺼져 있다) 제목만 받아 예전 길로 간다 —
+  // 그때는 로고가 PNG 로 따로 얹힌다.
   const files = [];
   for (const r of recs) {
-    const f = await fetchTitleMogrt(r, folder, aspect, onStage);
+    let f = await fetchTitleMogrt(r, folder, aspect, onStage, true, true);
+    if (!f) f = await fetchTitleMogrt(r, folder, aspect, onStage);
     if (f) files.push({ rec: r, file: f });
   }
   if (!files.length) return 0;
@@ -2360,6 +2430,7 @@ async function addTitleMogrts(recs, aspect, onStage) {
       const item = Array.isArray(inserted) ? inserted[0] : inserted;
       if (!(Array.isArray(inserted) ? inserted.length > 0 : inserted != null && inserted !== false)) continue;
       placed += 1;
+      if (file.stepdWithLogo) mergedLogoRecs.add(String(rec.id));
       // **구간 끝까지 늘린다.** mogrt 도 기본 길이(그래픽 기본값)로 들어가서, 안 늘리면
       // 제목이 앞 몇 초만 떠 있다가 사라진다.
       const endSec = (Number(rec.startTime) || 0)

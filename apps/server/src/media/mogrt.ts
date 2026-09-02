@@ -351,8 +351,11 @@ export function patchTitleMogrt(
   return zipSync(outer);
 }
 
-/** 베이스로 쓸 수 있는 파일인지 — 텍스트 레이어가 하나라도 있어야 한다. */
-export function inspectMogrt(base: Uint8Array): { textLayers: number; capsuleName: string } {
+/**
+ * 베이스로 쓸 수 있는 파일인지 — 텍스트 레이어가 하나라도 있어야 한다.
+ * 그림 레이어 수도 같이 센다: 로고까지 담으려면 **그림 레이어가 있는 템플릿**이라야 한다.
+ */
+export function inspectMogrt(base: Uint8Array): { textLayers: number; imageLayers: number; capsuleName: string } {
   const outer = unzipSync(base);
   const defRaw = outer["definition.json"];
   const graphic = outer["project.prgraphic"];
@@ -364,7 +367,11 @@ export function inspectMogrt(base: Uint8Array): { textLayers: number; capsuleNam
   const xml = Buffer.from(gunzipSync(Buffer.from(inner[prName]))).toString("utf-8");
   let count = 0;
   for (const m of xml.matchAll(TEXT_BLOB_RE)) if (decodeTextBlob(m[2])) count += 1;
-  return { textLayers: count, capsuleName: String(def.capsuleName ?? "") };
+  // 그림 레이어는 **파일이 함께 들어 있어야** 갈아 끼울 수 있다 — 레이어만 있고 미디어가
+  // 밖에 있으면(경로 참조) 우리가 바꿀 게 없다. 그래서 둘 다 본다.
+  const hasMedia = Object.keys(inner).some((n) => !n.endsWith(".prproj"));
+  const imageLayers = hasMedia ? scanLayers(xml).filter((k) => k === "image").length : 0;
+  return { textLayers: count, imageLayers, capsuleName: String(def.capsuleName ?? "") };
 }
 
 /** #rrggbb → 0xRRGGBB. 못 읽으면 흰색. */

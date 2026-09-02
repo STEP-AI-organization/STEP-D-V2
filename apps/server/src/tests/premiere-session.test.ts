@@ -329,6 +329,50 @@ describe("패널 — 원본이 없으면 받아서 넣는다", () => {
 });
 
 /**
+ * 로고까지 한 그래픽에 · 자막도 편집 가능하게 — 사용자 2026-09-01 "굳이 2개로 줄 필요가 없",
+ * "+ 자막도 배선".
+ */
+describe("패널 — 그래픽을 흩뿌리지 않는다", () => {
+  it("로고용 베이스는 **그림이 든 템플릿**을 올린다 — 텍스트 2개짜리가 우리 제목과 맞는다", () => {
+    assert.ok(panel.includes('"Titles/Modern Title.mogrt"'),
+      "프리미어 기본 템플릿 중 그림 내장 + 텍스트 2개는 이것뿐이다(2026-09-01 전수 확인)");
+    assert.match(panel, /const LOGO_BASE_CANDIDATES = \[/);
+    assert.ok(panel.includes('api(`/premiere/base-template${logo ? "?kind=logo" : ""}`'),
+      "제목용과 **같은 자리**에 덮어쓰면 그림 없는 템플릿이 로고 경로를 죽인다");
+  });
+
+  it("합쳐진 건은 장식 PNG 를 **다시 안 얹는다** — 로고가 두 번 그려진다", () => {
+    assert.match(panel, /const mergedLogoRecs = new Set\(\)/);
+    assert.ok(panel.includes("if (file.stepdWithLogo) mergedLogoRecs.add(String(rec.id));"));
+    assert.ok(panel.includes("const needDeco = recs.filter((r) => !mergedLogoRecs.has(String(r.id)));"));
+    assert.ok(panel.includes("mergedLogoRecs.clear();"), "지난 판단이 남으면 로고가 통째로 빠진다");
+  });
+
+  it("합치기 실패는 **치명적이지 않다** — 제목만 받아 예전 길로 간다", () => {
+    assert.ok(panel.includes("let f = await fetchTitleMogrt(r, folder, aspect, onStage, true, true);"));
+    assert.ok(panel.includes("if (!f) f = await fetchTitleMogrt(r, folder, aspect, onStage);"),
+      "합치기가 안 되면 제목이 통째로 사라진다");
+  });
+
+  it("자막도 **베이스가 없으면 올리고 다시 부른다** — 제목만 되고 자막은 영영 이미지였다", () => {
+    const fn = /async function addCaptionMogrts\([\s\S]*?\n}/.exec(panel)?.[0] ?? "";
+    assert.ok(fn, "addCaptionMogrts 를 못 찾았다");
+    assert.ok(fn.includes('String(why.error || "") === "base_template_missing"'),
+      "409 두 가지(미등록·박스형)를 구별하지 않으면 등록해도 자막은 이미지다");
+    assert.ok(fn.includes('uploadBaseTemplate(onStage, "title")'));
+    assert.ok(fn.includes("return addCaptionMogrts(recs, aspect, onStage, false)"), "무한 재시도 방지");
+  });
+
+  it("자막이 이미지로 물러난 이유도 **화면에** 낸다", () => {
+    assert.match(panel, /let lastCaptionFallbackReason = ""/);
+    assert.ok(panel.includes("자막을 이미지로 대체합니다 —"));
+    // 서버가 실제로 쓰는 문자열과 맞아야 한다 — 다르면 이유가 영영 안 뜬다.
+    assert.ok(panel.includes('why.error === "boxed_caption_style"'));
+    assert.ok(index.includes('return c.json({ error: "boxed_caption_style" }, 409)'));
+  });
+});
+
+/**
  * 저장 위치는 **우리가 정한다.** 사용자 2026-09-01: "다운로드 위치 같은 것도 우리가 조절해서
  * 딱 나야, 사용자가 사용하기 편할 거임." 처음 쓰는 사람에게 폴더 선택창부터 들이미는 건
  * 우리가 정할 수 있는 걸 사람에게 떠넘기는 것이다.
@@ -874,7 +918,7 @@ describe("패널 — 자막을 타임스탬프대로", () => {
     // 없어서 "제목이 왜 이미지지?" 로만 보였다. 조용한 폴백이 제일 나쁘다.
     assert.ok(panel.includes("let lastTitleFallbackReason"));
     assert.ok(panel.includes("제목을 이미지로 대체합니다 — ${lastTitleFallbackReason}"));
-    assert.ok(panel.includes("제목 템플릿 등록 실패 — ${err.message}"));
+    assert.ok(panel.includes('} 템플릿 등록 실패 — ${err.message}'));
   });
 
   it("그래픽은 **구간 시작부터 끝까지** 간다 — 기본 길이(5초)로 들어가면 앞부분만 덮는다", () => {
@@ -909,7 +953,10 @@ describe("패널 — 자막을 타임스탬프대로", () => {
   it("박스형 자막 스타일은 mogrt 로 안 만든다 — 도형을 못 옮긴다", () => {
     assert.ok(index.includes('const CAPTION_BOX_STYLES = new Set(["news", "pink_bubble", "highlight_bar", "typewriter"]);'));
     assert.ok(index.includes('return c.json({ error: "boxed_caption_style" }, 409);'));
-    assert.ok(panel.includes("if (res.status === 409) return 0;"), "409 면 통째로 PNG 로 가야 한다");
+    // 409 는 두 가지다 — 박스형 스타일은 PNG 로, **베이스 미등록은 올리고 재시도**.
+    assert.ok(panel.includes('why.error === "boxed_caption_style"'), "박스형이면 PNG 로 가야 한다");
+    assert.ok(panel.includes('String(why.error || "") === "base_template_missing"'),
+      "미등록까지 PNG 로 보내면 자막은 영영 이미지다");
   });
 
   it("자막 mogrt 는 썸네일을 뗀다 — 수십 장을 내리는 자리다", () => {
@@ -1004,11 +1051,11 @@ describe("패널 — 로고·시간박스까지 재현", () => {
   });
 
   it("/tmp 를 반드시 지운다 — Cloud Run 의 /tmp 는 RAM 이라 쌓이면 OOM 이다", () => {
-    assert.ok(index.includes("const cleanup = () => {"));
-    // 성공·404·예외 세 갈래 모두에서 지워야 한다.
-    const fn = index.slice(index.indexOf('app.get("/api/recommendations/:id/decorations.png"'));
-    const body = fn.slice(0, fn.indexOf("\n});"));
-    assert.ok((body.match(/cleanup\(\);/g) ?? []).length >= 3, "빠져나가는 길마다 지우지 않는다");
+    // 2026-09-02: 굽는 일을 buildDecorationsPng 로 모으면서 **finally 한 곳**으로 바뀌었다.
+    // 갈래마다 cleanup() 을 부르는 것보다 안전하다 — 갈래가 늘어도 빠뜨릴 수 없다.
+    const fn = index.slice(index.indexOf("async function buildDecorationsPng("));
+    const body = fn.slice(0, fn.indexOf("\n}"));
+    assert.match(body, /\} finally \{[\s\S]*?fs\.unlinkSync\(p\)/, "빠져나가는 길에 안 지운다");
   });
 });
 
@@ -1153,7 +1200,7 @@ describe("패널 — 제목은 서버가 찍어 준 .mogrt 를 얹는다", () =>
 
   it("베이스가 없으면(409) 이 PC 의 기본 템플릿을 올리고 **한 번만** 재시도한다", () => {
     assert.ok(panel.includes("if (res.status === 409 && allowSetup)"));
-    assert.ok(panel.includes("return fetchTitleMogrt(rec, folder, aspect, onStage, false);"),
+    assert.ok(panel.includes("return fetchTitleMogrt(rec, folder, aspect, onStage, false, withLogo);"),
       "무한 재시도가 되면 안 된다");
     assert.ok(panel.includes("Basic Lower Third.mogrt"), "두 줄짜리 후보를 먼저 찾지 않는다");
     assert.ok(panel.includes("/Adobe/Common/Motion Graphics Templates"));
@@ -1166,7 +1213,8 @@ describe("패널 — 제목은 서버가 찍어 준 .mogrt 를 얹는다", () =>
   });
 
   it("캡슐 id 는 추천마다 다르다 — 같으면 두 번째 제목이 첫 문구로 뜬다", () => {
-    assert.ok(index.includes("capsuleId: capsuleIdFor(String(rec.id), aspect)"));
+    // 로고 합친 판은 **다른 id** 여야 한다 — 안 그러면 제목만 판과 캐시가 섞인다.
+    assert.ok(index.includes('capsuleIdFor(String(rec.id), `${aspect}${withLogo ? "+logo" : ""}`)'));
     assert.ok(index.includes("function capsuleIdFor(recId: string, aspect: string)"));
   });
 
