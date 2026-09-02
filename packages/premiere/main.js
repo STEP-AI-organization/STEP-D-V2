@@ -476,12 +476,83 @@ async function stage(label, fn) {
   }
 }
 
-async function activeProject() {
+/**
+ * 우리 프로젝트 이름 (사용자 확정 2026-09-02). **찾을 때와 만들 때가 같은 이름**이어야 한다 —
+ * 갈라지면 켤 때마다 새 프로젝트가 하나씩 생긴다(subclipName 에서 이미 겪은 실패 방식).
+ */
+const PROJECT_NAME = "STEP AI 스튜디오";
+
+/**
+ * 파일이 있나. **모르면 null** — 확인할 수단이 없는 것과 "없다" 는 다르다.
+ * 호출부는 null 일 때 열기부터 시도하고 실패하면 만든다(순서로 모호함을 흡수한다).
+ */
+function fileExistsMaybe(nativePath) {
+  let nodeFs = null;
+  try { nodeFs = require("fs"); } catch (_) { return null; }
+  if (!nodeFs || typeof nodeFs.openSync !== "function") return null;
+  try {
+    const fd = nodeFs.openSync(nativePath, "r");
+    nodeFs.closeSync(fd);
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+/**
+ * 작업할 프로젝트를 **확보한다** — 없으면 만든다 (사용자 2026-09-02 "없으면 생성").
+ *
+ * 예전엔 여기서 *"열려 있는 프로젝트가 없습니다"* 로 끝났다. 그런데 이 패널의 주 동선은
+ * 웹에서 `stepd://open` 으로 **프리미어를 방금 띄운** 직후다 — 그때는 열린 프로젝트가 없는 게
+ * 정상이라, 자동 동선이 첫 걸음에서 멈췄다.
+ *
+ * ⚠️ **열려 있는 프로젝트가 있으면 그걸 쓴다.** 이름이 달라도 빼앗지 않는다 — 편집자가 보던
+ *    프로젝트를 우리 것으로 갈아치우면 하던 작업이 사라진 것처럼 보인다. "없으면 생성" 이지
+ *    "항상 우리 것" 이 아니다.
+ * ⚠️ 같은 경로에 파일이 이미 있으면 **연다.** createProject 로 덮으면 지난번 작업이 날아간다.
+ *
+ * 프로젝트 파일은 원본을 받아 두는 폴더(mediaFolder)에 같이 둔다 — 소재와 프로젝트가 흩어지면
+ * 편집자가 나중에 못 찾는다.
+ */
+async function ensureProject(onStage) {
   const api = ppro();
   if (!api) throw new Error("이 프리미어에서는 프로젝트를 다룰 수 없습니다 (premierepro 모듈 없음).");
-  const project = await readMaybe(api.Project, "getActiveProject");
-  if (!project) throw new Error("열려 있는 프로젝트가 없습니다.");
+
+  const open = await readMaybe(api.Project, "getActiveProject");
+  if (open) return { api, project: open };
+
+  // Project.createProject / open 은 **25.6+** 다(manifest minVersion 과 같은 선). 없으면
+  // 자동 생성이 불가능하다는 걸 그대로 말한다 — 조용히 다른 걸 하지 않는다.
+  if (!api.Project || typeof api.Project.createProject !== "function") {
+    throw new Error("열려 있는 프로젝트가 없습니다 — 이 프리미어는 프로젝트 자동 생성을 지원하지 않습니다(25.6 이상 필요).");
+  }
+
+  const folder = await mediaFolder();
+  const dir = folder && folder.nativePath;
+  if (!dir) throw new Error("프로젝트를 만들 폴더를 찾지 못했습니다.");
+  const projectPath = `${dir}\\${PROJECT_NAME}.prproj`;
+
+  if (onStage) onStage(`프로젝트 "${PROJECT_NAME}" 준비 중…`);
+  const exists = fileExistsMaybe(projectPath);
+  const canOpen = typeof api.Project.open === "function";
+
+  let project = null;
+  if (exists !== false && canOpen) {
+    // 있다(또는 모른다) → 열어 본다. 모르는 경우 실패하면 아래에서 만든다.
+    try {
+      project = await api.Project.open(projectPath);
+    } catch (err) {
+      if (exists === true) throw err;      // 있다고 확인됐는데 못 열면 진짜 문제다
+      console.log("[STEP-D] 프로젝트 열기 실패 — 새로 만든다", err);
+    }
+  }
+  if (!project) project = await api.Project.createProject(projectPath);
+  if (!project) throw new Error(`프로젝트를 만들지 못했습니다 (${projectPath}).`);
   return { api, project };
+}
+
+async function activeProject() {
+  return ensureProject();
 }
 
 async function activeSequence() {
