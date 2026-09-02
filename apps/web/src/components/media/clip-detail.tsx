@@ -18,12 +18,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   generateClipMetadata,
   saveClipMetadata,
+  syncLiveMetadata,
   type ChannelMeta,
   type MetaChannel,
 } from "@/lib/data/api";
 import { useAppData } from "@/lib/data/store";
 import { clipVideoSrc, clipThumbSrc } from "@/lib/media-url";
-import type { Clip } from "@/lib/types";
+import { humanReserve } from "@/lib/reserve-date";
+import type { Clip, DistributionState } from "@/lib/types";
 
 /** 화면에 보여줄 채널 순서 — 실제로 파일이 올라가는 곳을 앞에 둔다.
  *  네이버 TV 는 제품에서 제외 (2026-08-13) — 타입(MetaChannel)에는 남아 있지만 그리지 않는다. */
@@ -62,7 +64,7 @@ export function ClipDetail({
   const { refresh } = useAppData();
   const [meta, setMeta] = useState<Record<string, ChannelMeta>>(clip.channelMeta ?? {});
   const [tab, setTab] = useState<MetaChannel>("youtube");
-  const [busy, setBusy] = useState<null | "generate" | "save">(null);
+  const [busy, setBusy] = useState<null | "generate" | "save" | "sync">(null);
   const [err, setErr] = useState<string | null>(null);
   const [note, setNote] = useState<string | null>(null);
 
@@ -109,23 +111,69 @@ export function ClipDetail({
     }
   }, [meta, busy, generate]);
 
+  const persist = useCallback(async () => {
+    const saved = await saveClipMetadata(clip.id, tab, {
+      title: HAS_TITLE[tab] ? draft.title : null,
+      description: draft.description,
+      tags: draft.tags.split(",").map((t) => t.trim()).filter(Boolean),
+    });
+    setMeta((m) => ({ ...m, [tab]: saved }));
+    return saved;
+  }, [clip.id, tab, draft]);
+
   const save = useCallback(async () => {
     setBusy("save"); setErr(null); setNote(null);
     try {
-      const saved = await saveClipMetadata(clip.id, tab, {
-        title: HAS_TITLE[tab] ? draft.title : null,
-        description: draft.description,
-        tags: draft.tags.split(",").map((t) => t.trim()).filter(Boolean),
-      });
-      setMeta((m) => ({ ...m, [tab]: saved }));
+      await persist();
       setNote(`${CHANNEL_LABEL[tab]} 저장됨.`);
       void refresh();
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
     } finally { setBusy(null); }
-  }, [clip.id, tab, draft, refresh]);
+  }, [persist, tab, refresh]);
 
   const problems = useMemo(() => current?.problems ?? [], [current]);
+
+  // ── 이미 발행된 유튜브 영상 — 저장만으로는 채널이 안 바뀐다 ────────────────────
+  //
+  // 여기가 "발행 뒤에 제목을 고치는" 유일한 정상 경로다. 재발행(재업로드)은 같은 영상이
+  // 채널에 하나 더 생기므로 쓰면 안 된다 — 서버도 발행된 건의 /retry 를 막고 이리로 보낸다.
+  const liveRows = useMemo(
+    () => (clip.distributions ?? []).filter(
+      (d): d is DistributionState & { externalId: string } =>
+        d.channel === "youtube" && Boolean(d.externalId)),
+    [clip.distributions],
+  );
+  const live = liveRows[0];
+  const syncing = liveRows.some((d) => d.metaSyncStatus === "pending");
+
+  const saveAndSync = useCallback(async () => {
+    setBusy("sync"); setErr(null); setNote(null);
+    try {
+      await persist();
+      const r = await syncLiveMetadata(clip.id);
+      setNote(r.targets.length > 1
+        ? `저장했습니다. 유튜브 영상 ${r.targets.length}건에 반영을 요청했습니다 — 재업로드가 아니라 기존 영상 수정입니다.`
+        : "저장했습니다. 유튜브 반영을 요청했습니다 — 재업로드가 아니라 기존 영상 수정입니다.");
+      void refresh();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally { setBusy(null); }
+  }, [persist, clip.id, refresh]);
+
+  // 반영은 워커가 한다 — 결과가 올 때까지 이 화면만 잠깐 폴링한다. **상한을 둔다**:
+  // /api/state 는 전체 상태를 다시 받는 응답이라(바이트가 곧 비용) 무한 폴링은 금물이고,
+  // 워커가 자고 있으면 몇 분 뒤에나 돌기 때문에 그건 다시 열어 확인하는 편이 맞다.
+  const [polls, setPolls] = useState(0);
+  useEffect(() => {
+    if (!syncing || polls >= 12) return;
+    const id = window.setTimeout(() => {
+      if (!document.hidden) void refresh();
+      setPolls((n) => n + 1);
+    }, 10_000);
+    return () => window.clearTimeout(id);
+  }, [syncing, polls, refresh]);
+  useEffect(() => { if (!syncing) setPolls(0); }, [syncing]);
 
   return (
     <div className="fixed inset-0 z-40 flex" role="dialog" aria-label="미디어 상세">
@@ -308,26 +356,93 @@ export function ClipDetail({
                   />
                 </label>
 
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   <button
                     type="button"
-                    className="sd-btn sd-btn-primary"
+                    className={tab === "youtube" && live ? "sd-btn" : "sd-btn sd-btn-primary"}
                     onClick={save}
                     disabled={busy !== null}
                   >
                     {busy === "save" ? "저장 중…" : `${CHANNEL_LABEL[tab]} 저장`}
                   </button>
+                  {tab === "youtube" && live && (
+                    <button
+                      type="button"
+                      className="sd-btn sd-btn-primary"
+                      onClick={saveAndSync}
+                      disabled={busy !== null}
+                      title="이미 올라간 영상의 제목·설명·태그를 고칩니다 — 재업로드가 아니라 기존 영상 수정이라 새 영상이 생기지 않습니다."
+                    >
+                      {busy === "sync" ? "반영 요청 중…" : "저장하고 유튜브에 반영"}
+                    </button>
+                  )}
                   {current?.edited && (
                     <span className="text-[11.5px]" style={{ color: "var(--sd-mut)" }}>
                       직접 수정한 채널입니다 — 다시 만들어도 덮어쓰지 않습니다.
                     </span>
                   )}
                 </div>
+
+                {tab === "youtube" && live && <LiveSyncStatus rows={liveRows} />}
               </div>
             </>
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * 발행된 유튜브 영상의 **라이브 반영 상태** — 요청·성공·실패를 그대로 말한다.
+ *
+ * 이 줄이 없으면 사람은 "반영을 눌렀다"까지만 알고 끝난다. 반영 잡은 **자동 재시도가 없어서**
+ * (토큰 만료·권한 회수 등으로) 실패하면 채널엔 옛 제목이 그대로 남는데, 화면은 아무 말도
+ * 하지 않는 상태가 된다. 성공했으면 실제 올라간 제목까지 보여 채널을 열지 않고 확인하게 한다.
+ */
+function LiveSyncStatus({ rows }: { rows: (DistributionState & { externalId: string })[] }) {
+  return (
+    <div className="flex flex-col gap-1.5">
+      {rows.map((d) => {
+        const url = `https://www.youtube.com/watch?v=${d.externalId}`;
+        const failed = d.metaSyncStatus === "failed";
+        const pending = d.metaSyncStatus === "pending";
+        const synced = d.metaSyncStatus === "synced";
+        return (
+          <div
+            key={d.externalId}
+            className="rounded-[6px] px-3 py-2 text-[11.5px]"
+            style={{
+              background: failed ? "var(--sd-danger-bg, #fdecec)" : "var(--sd-card-sub, #f7f6f3)",
+              color: failed ? "var(--sd-danger-strong, #a11)" : "var(--sd-mut)",
+            }}
+          >
+            <span style={{ color: failed ? undefined : "var(--sd-fg)" }}>
+              {failed
+                ? `유튜브 반영 실패 — ${d.metaSyncError ?? "사유 없음"}`
+                : pending
+                  ? "유튜브 반영 대기 중 — 워커가 처리하면 이 줄이 바뀝니다."
+                  : synced
+                    ? `유튜브 반영됨 · ${humanReserve(d.metaSyncAt)}`
+                    : "이 영상은 이미 채널에 올라가 있습니다 — 저장만으로는 채널 제목이 바뀌지 않습니다."}
+            </span>
+            {synced && d.metaSyncTitle && (
+              <div className="mt-0.5 truncate" title={d.metaSyncTitle}>
+                반영된 제목: {d.metaSyncTitle}
+              </div>
+            )}
+            <a
+              href={url}
+              target="_blank"
+              rel="noreferrer"
+              className="mt-0.5 inline-block underline"
+              style={{ color: "var(--sd-mut)" }}
+            >
+              유튜브에서 열기 ↗
+            </a>
+          </div>
+        );
+      })}
     </div>
   );
 }

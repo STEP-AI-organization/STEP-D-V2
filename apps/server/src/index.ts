@@ -7998,7 +7998,11 @@ app.post("/api/distributions/retry", async (c) => {
 // 트리거는 **명시적**이다(사용자 방향 2026-08-24) — 메타 저장(PATCH)만으론 라이브가 안 바뀐다.
 app.post("/api/distributions/update-metadata", async (c) => {
   const actor = requirePublisher(c);
-  const b = await c.req.json<{ clipId: string; channel?: string }>().catch(() => null);
+  const b = await c.req.json<{
+    clipId: string; channel?: string;
+    /** 여러 유튜브 채널에 나간 클립에서 한 채널만 고칠 때. 비우면 나간 곳 전부. */
+    youtubeChannelId?: string;
+  }>().catch(() => null);
   if (!b || !b.clipId) {
     return c.json({ error: "bad_request", message: "clipId가 필요합니다." }, 400);
   }
@@ -8013,19 +8017,51 @@ app.post("/api/distributions/update-metadata", async (c) => {
   const clip = await getEntity<any>("clip", b.clipId);
   if (!clip) return c.json({ error: "clip_not_found", message: "클립을 찾을 수 없습니다." }, 404);
 
-  const row = (clip.distributions ?? []).find((d: any) => d.channel === "youtube" && d.externalId);
-  if (!row?.externalId) {
+  // 한 클립이 유튜브 채널 여럿에 나가 있으면 **전부** 고친다 — 하나만 고치면 나머지 채널엔
+  // 옛 제목이 남는데 화면은 "반영됨" 이라고 말한다. 계정을 지정하면 그 행만.
+  const rows = (clip.distributions ?? []).filter((d: any) =>
+    d.channel === "youtube" && d.externalId
+    && (!b.youtubeChannelId || String(d.youtubeChannelId ?? "") === String(b.youtubeChannelId)));
+  if (rows.length === 0) {
     return c.json({ error: "not_published",
       message: "발행된 YouTube 영상이 없습니다 — 먼저 발행하세요." }, 409);
   }
-  // dedupeKey 에 videoId 포함 — 같은 영상에 대한 반영이 겹쳐도 하나만 돈다(핸들러가 실행 시점의
-  // 최신 channelMeta 를 읽으므로, 중복 요청이 dedupe 돼도 최신 제목이 반영된다).
-  const jobId = await enqueue(
-    "distribution.updatemeta",
-    { clipId: b.clipId, channel: "youtube", actor },
-    { dedupeKey: `distribution.updatemeta:${b.clipId}:${row.externalId}` },
-  );
-  return c.json({ ok: true, clipId: b.clipId, videoId: row.externalId, jobId });
+
+  const targets: { videoId: string; jobId: string | null }[] = [];
+  for (const row of rows) {
+    // dedupeKey 에 videoId 포함 — 같은 영상에 대한 반영이 겹쳐도 하나만 돈다(핸들러가 실행 시점의
+    // 최신 channelMeta 를 읽으므로, 중복 요청이 dedupe 돼도 최신 제목이 반영된다).
+    const jobId = await enqueue(
+      "distribution.updatemeta",
+      {
+        clipId: b.clipId, channel: "youtube", actor,
+        videoId: String(row.externalId),
+        youtubeChannelId: row.youtubeChannelId ? String(row.youtubeChannelId) : undefined,
+      },
+      { dedupeKey: `distribution.updatemeta:${b.clipId}:${row.externalId}` },
+    );
+    targets.push({ videoId: String(row.externalId), jobId });
+  }
+
+  // **큐잉했다는 사실을 행에 적는다.** 안 적으면 화면은 누른 뒤 아무 변화가 없고, 워커가 죽어도
+  // 아무도 모른다(자동 재시도 없는 경로다 · F4-4). 워커가 성공/실패로 이 값을 덮는다.
+  const queuedAt = new Date().toISOString();
+  const fresh = await getEntity<any>("clip", b.clipId);
+  if (fresh) {
+    const ids = new Set(targets.map((t) => t.videoId));
+    const distributions = (fresh.distributions ?? []).map((d: any) =>
+      d?.channel === "youtube" && ids.has(String(d.externalId ?? ""))
+        ? { ...d, metaSyncStatus: "pending", metaSyncQueuedAt: queuedAt, metaSyncError: null }
+        : d);
+    await putEntity("clip", b.clipId, { ...fresh, distributions });
+  }
+
+  return c.json({
+    ok: true, clipId: b.clipId,
+    videoId: targets[0]?.videoId ?? null,   // 단일 채널 호출자 호환
+    jobId: targets[0]?.jobId ?? null,
+    targets,
+  });
 });
 
 // ── link a clip to the YouTube video it was published as ──────────────────────

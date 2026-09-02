@@ -2039,6 +2039,38 @@ export async function publishClips(
   };
 }
 
+/**
+ * 발행된 영상의 **제목·설명·태그를 채널에 반영**한다 (재발행 아님 · YouTube videos.update).
+ *
+ * 저장(PATCH)만으론 라이브가 안 바뀐다 — 반영은 **명시적으로** 누른다. 재업로드가 아니라
+ * 기존 영상 수정이므로 새 영상이 생기지 않는다(중복 게시 위험 없음). 여러 유튜브 채널에
+ * 나간 클립이면 나간 곳 전부에 반영된다(`targets`).
+ */
+export interface LiveMetaSyncResult {
+  clipId: string;
+  videoId: string | null;
+  targets: { videoId: string; jobId: string | null }[];
+}
+
+export async function syncLiveMetadata(
+  clipId: string, opts: { youtubeChannelId?: string } = {},
+): Promise<LiveMetaSyncResult> {
+  const res = await fetch(`${API_BASE}/distributions/update-metadata`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ clipId, channel: "youtube", ...opts }),
+  });
+  const body = (await res.json().catch(() => null)) as
+    | (Partial<LiveMetaSyncResult> & { error?: string; message?: string })
+    | null;
+  if (!res.ok) throw new Error(body?.message ?? body?.error ?? `${res.status} ${res.statusText}`);
+  return {
+    clipId,
+    videoId: body?.videoId ?? null,
+    targets: body?.targets ?? [],
+  };
+}
+
 export async function retryDist(clipId: string, channel: DistributionChannel): Promise<void> {
   const res = await fetch(`${API_BASE}/distributions/retry`, {
     method: "POST",

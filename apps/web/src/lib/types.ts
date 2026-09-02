@@ -389,6 +389,20 @@ export interface DistributionState {
   url?: string;
   /** Instagram·Facebook: Graph 가 준 게시물 permalink (예약분은 공개 전까지 없을 수 있다). */
   permalink?: string;
+
+  // ── 발행 후 제목/설명 수정을 라이브에 반영한 결과 (YouTube · distribution.updatemeta) ──
+  // 재업로드가 아니라 videos.update 다 — 새 영상이 생기지 않는다. **자동 재시도가 없으므로**
+  // 실패를 화면이 말해 주지 않으면 채널엔 옛 제목이 그대로 남는다(2026-09-02).
+  /** "pending" = 반영 요청이 큐에 있음 · "synced" = 채널 반영됨 · "failed" = 실패(사유는 metaSyncError). */
+  metaSyncStatus?: "pending" | "synced" | "failed";
+  /** 워커가 반영을 끝낸(또는 실패한) 시각 — ISO. */
+  metaSyncAt?: string;
+  /** 반영 요청을 큐에 넣은 시각 — ISO. */
+  metaSyncQueuedAt?: string;
+  /** 실제로 채널에 올라간 제목 — 채널을 열지 않고도 무엇이 반영됐는지 알 수 있게. */
+  metaSyncTitle?: string;
+  /** 실패 사유(성공하면 null). */
+  metaSyncError?: string | null;
 }
 
 // ── Inbox / action-queue item (home screen) ──────────────────────────────────────

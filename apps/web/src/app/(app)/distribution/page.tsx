@@ -15,7 +15,9 @@ import { useEffect, useMemo, useState } from "react";
 
 import { PublishDialog } from "@/components/publish/publish-dialog";
 import { DistributionMatrix, type MatrixRow } from "@/components/distribution/distribution-matrix";
+import { ClipDetail } from "@/components/media/clip-detail";
 import { useToast } from "@/components/ui/toast";
+import type { ChannelMeta } from "@/lib/data/api";
 import { useAppData } from "@/lib/data/store";
 import type { Clip } from "@/lib/types";
 import type { DistributionChannel } from "@/lib/constants";
@@ -25,6 +27,8 @@ export default function DistributionPage() {
   const { clips, episodes, programs, retryDistribution, loading, serverConnected, refresh } = useAppData();
   const { toast } = useToast();
   const [publishTarget, setPublishTarget] = useState<string[] | null>(null);
+  /** 발행된 영상의 제목/설명을 고칠 클립 — 미디어 상세(ClipDetail)를 그대로 연다. */
+  const [metaTarget, setMetaTarget] = useState<string | null>(null);
   const [failedOnly, setFailedOnly] = useState(false);
   const [progFilter, setProgFilter] = useState<string>(""); // "" = 전체 프로그램
 
@@ -153,12 +157,27 @@ export default function DistributionPage() {
           rows={rows}
           onPublish={(clip: Clip) => setPublishTarget([clip.id])}
           onRetry={retry}
+          onEditMeta={(clip: Clip) => setMetaTarget(clip.id)}
         />
       )}
 
       {publishTarget && (
         <PublishDialog clipIds={publishTarget} onClose={() => setPublishTarget(null)} onDone={async () => {}} />
       )}
+
+      {/* 발행 뒤 제목/설명 고치기 — 미디어 상세와 **같은 화면**을 연다(편집 자리를 둘로 만들지 않는다).
+          거기서 '저장하고 유튜브에 반영' 을 누르면 videos.update 로 기존 영상만 고쳐진다. */}
+      {metaTarget && (() => {
+        const row = rows.find((r) => r.clip.id === metaTarget);
+        if (!row) return null;
+        return (
+          <ClipDetail
+            clip={row.clip as Clip & { channelMeta?: Record<string, ChannelMeta> }}
+            programTitle={row.programTitle}
+            onClose={() => setMetaTarget(null)}
+          />
+        );
+      })()}
     </div>
   );
 }

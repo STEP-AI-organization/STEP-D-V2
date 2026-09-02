@@ -2665,7 +2665,38 @@ async function handleDistributionPublish(job: Job): Promise<void> {
  * 아니라 **기존 영상 수정**이라 새 영상이 안 생긴다(중복 없음). YouTube 만 지원 — 네이버는 공개
  * API 가 없고(Playwright), Meta/TikTok 은 게시 후 편집 제약이 커서 제외. 소스는 사용자가 저장한
  * 채널 메타(clip.channelMeta.youtube), 없으면 파이프라인 기본 메타(metaForChannel).
+ *
+ * **결과는 배포 행에 남긴다**(metaSync* · 2026-09-02). 예전엔 성공도 실패도 워커 로그로만 갔다 —
+ * 누른 사람은 "반영을 요청했다"까지만 알고, 토큰 만료로 조용히 버려져도 채널에 옛 제목이 그대로
+ * 걸린 걸 며칠 뒤에나 알았다. 자동 재시도가 없는 경로라(F4-4) 실패가 안 보이면 영원히 안 고쳐진다.
  */
+/**
+ * 라이브 메타 반영의 결과를 **그 배포 행에** 적는다 (읽는 쪽: 웹 미디어 상세 · 배포판).
+ *
+ * 클립을 다시 읽어 쓴다 — 반영이 도는 사이 사람이 다른 채널 메타를 저장했을 수 있다.
+ * **행이 없으면 만들지 않는다.** 여기서 push 하면 status 없는 유령 배포 행이 생겨
+ * 배포 매트릭스가 알 수 없는 상태를 그리게 된다(발행되지 않은 영상이 발행된 것처럼 보인다).
+ */
+async function recordMetaSync(
+  clipId: string, youtubeChannelId: string, value: Record<string, unknown>,
+): Promise<void> {
+  try {
+    const fresh = await getEntity<any>("clip", clipId);
+    if (!fresh) return;
+    const rows: any[] = Array.isArray(fresh.distributions) ? fresh.distributions : [];
+    if (!rows.some((d) => d?.channel === "youtube"
+      && String(d?.youtubeChannelId ?? "") === String(youtubeChannelId))) return;
+    await putEntity("clip", clipId, {
+      ...fresh,
+      distributions: upsertDistribution(fresh.distributions, "youtube", { youtubeChannelId, ...value }),
+    });
+  } catch (e) {
+    // 기록 실패가 반영 자체를 되돌리지는 않는다 — 이미 유튜브는 바뀌었다.
+    console.warn(`[worker] distribution.updatemeta ${clipId}: 결과 기록 실패:`,
+      e instanceof Error ? e.message : e);
+  }
+}
+
 async function handleDistributionUpdateMeta(job: Job): Promise<void> {
   const clipId = String(job.payload.clipId ?? "");
   const channel = String(job.payload.channel ?? "youtube");
@@ -2682,7 +2713,13 @@ async function handleDistributionUpdateMeta(job: Job): Promise<void> {
   const clip = await getEntity<any>("clip", clipId);
   if (!clip) { console.warn(`[worker] distribution.updatemeta: clip ${clipId} gone — dropping`); return; }
 
-  const row = (clip.distributions ?? []).find((d: any) => d.channel === "youtube" && d.externalId);
+  // 한 클립이 유튜브 채널 **여럿**에 나가 있을 수 있다 — 잡이 지목한 영상을 고친다.
+  // (지목이 없는 구 잡은 예전대로 첫 발행 행. 옛 큐가 남아 있어도 동작이 바뀌지 않는다.)
+  const wantVideoId = String(job.payload.videoId ?? "");
+  const rows = (clip.distributions ?? []).filter((d: any) => d.channel === "youtube" && d.externalId);
+  const row = wantVideoId
+    ? rows.find((d: any) => String(d.externalId) === wantVideoId)
+    : rows[0];
   if (!row?.externalId) {
     console.warn(`[worker] distribution.updatemeta ${clipId}: 발행된 유튜브 영상이 없음(externalId 없음) — 버림`);
     return;
@@ -2696,6 +2733,11 @@ async function handleDistributionUpdateMeta(job: Job): Promise<void> {
   const ch = await loadActiveChannel(channelId);
   if (!ch) {
     console.warn(`[worker] distribution.updatemeta ${clipId}: 채널 미연결/재연결 필요 (${channelId}) — 버림`);
+    await recordMetaSync(clipId, channelId, {
+      metaSyncStatus: "failed",
+      metaSyncError: "채널이 연결되어 있지 않습니다 — 배포채널에서 다시 연결하세요.",
+      metaSyncAt: new Date().toISOString(),
+    });
     return;
   }
 
@@ -2716,10 +2758,22 @@ async function handleDistributionUpdateMeta(job: Job): Promise<void> {
       await updateVideoMetadata(token, videoId, { title, description, tags, categoryId });
     });
     console.log(`[worker] distribution.updatemeta ${clipId} → youtube ${videoId} 제목/메타 반영 완료`);
+    // 반영된 제목을 같이 남긴다 — 화면이 "무엇이 올라갔는지"를 채널을 열지 않고 말할 수 있어야 한다.
+    await recordMetaSync(clipId, channelId, {
+      metaSyncStatus: "synced",
+      metaSyncAt: new Date().toISOString(),
+      metaSyncTitle: title,
+      metaSyncError: null,
+    });
   } catch (err) {
     // 재업로드가 아니라 수정이라 실패해도 중복 위험이 없다 — 사유만 남긴다. 자동 재시도 금지(F4-4 ⊘).
-    console.error(`[worker] distribution.updatemeta ${clipId} (${videoId}) 실패(재시도 안 함):`,
-      err instanceof Error ? err.message : err);
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[worker] distribution.updatemeta ${clipId} (${videoId}) 실패(재시도 안 함):`, msg);
+    await recordMetaSync(clipId, channelId, {
+      metaSyncStatus: "failed",
+      metaSyncAt: new Date().toISOString(),
+      metaSyncError: msg.slice(0, 300),
+    });
   }
 }
 

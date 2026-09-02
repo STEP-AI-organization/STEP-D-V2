@@ -17,6 +17,7 @@
  *  - 빈 칸(＋ · recorded 포함) → 그 영상을 배포(발행 모달).
  *  - 실패 칸 → 재시도(자동 재시도 없음 · F4-4).
  *  - 게시·예약 칸 → 기록된 링크가 있으면 영상 열기.
+ *  - 유튜브에 나간 행 → '제목수정' 으로 **올라간 영상의 제목/설명을 고쳐 반영**(재발행 아님).
  */
 import { DISTRIBUTION_CHANNELS, type DistributionChannel } from "@/lib/constants";
 import { EDIT_KIND_LABEL, type Clip } from "@/lib/types";
@@ -49,11 +50,18 @@ export function DistributionMatrix({
   rows,
   onPublish,
   onRetry,
+  onEditMeta,
 }: {
   rows: MatrixRow[];
   /** 빈 채널 칸/배포 버튼 → 이 영상을 발행 모달로. */
   onPublish: (clip: Clip) => void;
   onRetry: (clipId: string, channel: DistributionChannel) => void;
+  /**
+   * 이미 유튜브에 올라간 영상의 **제목/설명을 고쳐 채널에 반영**한다 (재발행 아님).
+   * 배포된 뒤에 오타·제목 교체가 생기는 건 흔한데, 여기서 갈 곳이 없으면 사람은
+   * 재발행을 누르거나(같은 영상이 하나 더 생긴다) 유튜브 스튜디오로 나가 버린다.
+   */
+  onEditMeta?: (clip: Clip) => void;
 }) {
   return (
     <div className="overflow-x-auto rounded-[6px]" style={{ border: "1px solid var(--sd-border)" }}>
@@ -76,7 +84,7 @@ export function DistributionMatrix({
                 {SHORT[ch]}
               </th>
             ))}
-            <th style={{ minWidth: 56 }} />
+            <th style={{ minWidth: 132 }} />
           </tr>
         </thead>
         <tbody>
@@ -115,14 +123,27 @@ export function DistributionMatrix({
                 ))}
 
                 <td className="px-2 py-2 text-right">
-                  <button
-                    type="button"
-                    className="sd-btn"
-                    onClick={() => onPublish(clip)}
-                    title="채널 선택해서 배포"
-                  >
-                    배포+
-                  </button>
+                  <div className="flex items-center justify-end gap-1.5">
+                    {onEditMeta && (clip.distributions ?? []).some(
+                      (d) => d.channel === "youtube" && d.externalId) && (
+                      <button
+                        type="button"
+                        className="sd-btn"
+                        onClick={() => onEditMeta(clip)}
+                        title="올라간 영상의 제목·설명을 고쳐 유튜브에 반영 (재업로드 아님)"
+                      >
+                        제목수정
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      className="sd-btn"
+                      onClick={() => onPublish(clip)}
+                      title="채널 선택해서 배포"
+                    >
+                      배포+
+                    </button>
+                  </div>
                 </td>
               </tr>
             );
