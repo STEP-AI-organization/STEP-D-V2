@@ -3,7 +3,7 @@ import { createReadStream } from "node:fs";
 import { net, type ClientRequest, type Session } from "electron";
 
 import { TransferAbortedError } from "./errors.js";
-import type { ApiResult, ChunkInput, HttpResult, TransferNetwork } from "./transfer-network.js";
+import type { ApiResult, ChunkInput, HttpResult, TransferNetwork } from "./network.js";
 
 function headersToRecord(headers: Record<string, string | string[]>): Record<string, string> {
   const result: Record<string, string> = {};

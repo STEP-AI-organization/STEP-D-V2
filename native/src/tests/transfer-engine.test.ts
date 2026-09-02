@@ -4,11 +4,11 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import type { NativeUploadJob } from "./contract.js";
-import { fingerprintFile } from "./fingerprint.js";
-import { JobStore, type SecretCodec, type StoredUploadJob } from "./job-store.js";
-import type { ApiResult, ChunkInput, HttpResult, TransferNetwork } from "./transfer-network.js";
-import { TransferEngine, scrubPaths } from "./transfer-engine.js";
+import type { NativeUploadJob } from "../contract.js";
+import { fingerprintFile } from "../transfer/fingerprint.js";
+import { JobStore, type SecretCodec, type StoredUploadJob } from "../transfer/job-store.js";
+import type { ApiResult, ChunkInput, HttpResult, TransferNetwork } from "../transfer/network.js";
+import { TransferEngine, scrubPaths } from "../transfer/engine.js";
 
 const codec: SecretCodec = {
   async encrypt(value) { return Buffer.from(value).toString("base64"); },

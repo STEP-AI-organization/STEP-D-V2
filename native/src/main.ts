@@ -20,11 +20,11 @@ import {
 } from "electron";
 
 import type { NativeUploadJob } from "./contract.js";
-import { JobStore, type SecretCodec } from "./job-store.js";
-import { ElectronTransferNetwork } from "./network.js";
-import { EncryptionUnavailableError } from "./errors.js";
-import { TransferEngine } from "./transfer-engine.js";
-import { validateJobId, validateUploadInput, validateVideoPath } from "./validation.js";
+import { JobStore, type SecretCodec } from "./transfer/job-store.js";
+import { ElectronTransferNetwork } from "./transfer/network-electron.js";
+import { EncryptionUnavailableError } from "./transfer/errors.js";
+import { TransferEngine } from "./transfer/engine.js";
+import { validateJobId, validateUploadInput, validateVideoPath } from "./transfer/validation.js";
 
 const PRODUCT_URL = "https://stepd.stepai.kr";
 const PARTITION = "persist:stepd";
