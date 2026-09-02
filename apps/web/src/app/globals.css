@@ -69,6 +69,32 @@
   src: url("/fonts/GothicA1-Black.ttf") format("truetype");
 }
 
+/* 2026-09-02 추가분(페이퍼로지·강원교육모두·레코체)은 **woff2** 로 받는다 — 위 .ttf 들과 달리
+   원본이 커서(강원교육모두 TTF 7.8MB) 미리보기 한 줄 그리자고 그대로 내보내면 Vercel 대역폭이
+   그만큼 나간다. woff2 는 같은 글꼴의 1/24(319KB)이고 서버 렌더는 어차피 assets/fonts 의
+   원본(.ttf/.otf)을 쓰므로 결과물엔 영향이 없다. 서버 웨이트가 1종뿐이라 범위도 400~900 한 장. */
+@font-face {
+  font-family: "Paperlogy";
+  font-weight: 400 900;
+  font-style: normal;
+  font-display: swap;
+  src: url("/fonts/Paperlogy-8ExtraBold.woff2") format("woff2");
+}
+@font-face {
+  font-family: "GangwonEduModu";
+  font-weight: 400 900;
+  font-style: normal;
+  font-display: swap;
+  src: url("/fonts/GangwonEduModu-Bold.woff2") format("woff2");
+}
+@font-face {
+  font-family: "Recipekorea";
+  font-weight: 400 900;
+  font-style: normal;
+  font-display: swap;
+  src: url("/fonts/Recipekorea.woff2") format("woff2");
+}
+
 /*
   Design tokens — 옛 프리미티브(components/ui/*)용.
 

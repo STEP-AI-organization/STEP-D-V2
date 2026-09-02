@@ -64,7 +64,7 @@ describe("overlay-canvas — 폰트 패밀리 레지스트리(글꼴 변환)", (
     );
   });
 
-  it("새 디스플레이 패밀리 4종(검은고딕·도현·주아·고딕A1)이 등록되고 파일이 실제로 존재한다", () => {
+  it("디스플레이 패밀리 7종(검은고딕·도현·주아·고딕A1·페이퍼로지·강원교육모두·레코체)이 등록되고 파일이 실제로 존재한다", () => {
     // 픽커에 나오려면 서버 레지스트리에 있어야 하고, canvas 가 등록하려면 파일이 FONT_DIRS 에
     // 실재해야 한다. id 존재 + 웨이트 파일 디스크 존재를 함께 고정한다(선언만 하고 파일이 없으면
     // 렌더가 Noto 로 조용히 폴백해 결과물이 열화된다).
@@ -75,7 +75,7 @@ describe("overlay-canvas — 폰트 패밀리 레지스트리(글꼴 변환)", (
     ];
     const onDisk = (file: string) => FONT_DIRS.some((d) => fs.existsSync(path.join(d, file)));
 
-    for (const id of ["blackhansans", "dohyeon", "jua", "gothica1"]) {
+    for (const id of ["blackhansans", "dohyeon", "jua", "gothica1", "paperlogy", "gangwonedumodu", "recipekorea"]) {
       const fam = FONT_FAMILIES.find((f) => f.id === id);
       assert.ok(fam, `새 패밀리 ${id} 가 레지스트리에 없다 — 픽커에 안 나온다`);
       const weights = Object.keys(fam!.weights).map(Number);
@@ -84,8 +84,8 @@ describe("overlay-canvas — 폰트 패밀리 레지스트리(글꼴 변환)", (
         assert.ok(onDisk(fam!.weights[w].file), `${id}:${w} 폰트 파일(${fam!.weights[w].file})이 FONT_DIRS 에 없다`);
       }
     }
-    // 픽커는 총 6종(기본 프리텐다드 + 지마켓 + 신규 4종)이어야 한다.
-    assert.equal(FONT_FAMILIES.length, 6, `패밀리 수가 6이 아니다(현재 ${FONT_FAMILIES.length}) — 픽커 항목 수 확인`);
+    // 픽커는 총 9종(기본 프리텐다드 + 지마켓 + 디스플레이 7종)이어야 한다.
+    assert.equal(FONT_FAMILIES.length, 9, `패밀리 수가 9가 아니다(현재 ${FONT_FAMILIES.length}) — 픽커 항목 수 확인`);
   });
 });
 

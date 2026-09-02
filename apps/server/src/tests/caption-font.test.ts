@@ -12,6 +12,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
+import { FONT_FAMILIES } from "../media/overlay-canvas.ts";
 
 const SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const REPO = path.resolve(SRC, "../../..");
@@ -132,6 +133,71 @@ describe("제목 — 지마켓 산스 + 레퍼런스 강조색", () => {
   it("자동배포 미리보기도 같은 글꼴로 그린다", () => {
     const preview = read("apps/web/src/components/automation/template-preview.tsx");
     assert.match(preview, /fontFamily: "'GmarketSans', var\(--font-sans\)"/);
+  });
+});
+
+/**
+ * 글꼴 카탈로그 전체 — 위 지마켓 가드를 **모든 패밀리로** 넓힌다.
+ *
+ * 글꼴 하나를 추가하려면 네 군데가 같이 움직여야 한다: 서버 레지스트리(overlay-canvas) ·
+ * ASS 이름표(index.ts) · 웹 픽커(presets.ts) · @font-face(globals.css). 하나만 빠져도
+ * **오류 없이 다른 글꼴이 나간다** — libass 는 Noto 로, 브라우저는 시스템 폰트로 조용히 간다.
+ * 그래서 이름을 문자열끼리 대조하지 않고 **폰트 파일이 신고하는 패밀리명을 읽어** 맞춘다.
+ * (2026-09-02 실측: 강원교육모두 파일의 패밀리는 `GangwonEduAll Bold` — 파일명과 다르다.)
+ */
+describe("글꼴 카탈로그 — 레지스트리·ASS 이름·픽커·@font-face 가 한 줄로 이어진다", () => {
+  const src = read("apps/server/src/index.ts");
+  const presets = read("apps/web/src/lib/editor/presets.ts");
+  const css = read("apps/web/src/app/globals.css");
+
+  /** index.ts 의 id → ASS Fontname 표. 주석 줄은 `id: "..."` 꼴이 아니라 자연히 걸러진다. */
+  const assById: Record<string, string> = (() => {
+    const m = /const ASS_FONT_BY_ID: Record<string, string> = \{([\s\S]*?)\n\};/.exec(src);
+    assert.ok(m, "ASS_FONT_BY_ID 매핑표를 찾지 못했다");
+    const out: Record<string, string> = {};
+    for (const g of m![1].matchAll(/^\s*(\w+):\s*"([^"]+)",/gm)) out[g[1]] = g[2];
+    return out;
+  })();
+
+  const FONT_DIRS = ["assets/fonts", "assets/invoice-fonts"];
+  const resolve = (file: string) =>
+    FONT_DIRS.map((d) => path.resolve(REPO, d, file)).find((p) => fs.existsSync(p)) ?? null;
+
+  it("모든 패밀리의 ASS 이름이 실제 폰트 파일의 패밀리명과 같다", () => {
+    assert.ok(FONT_FAMILIES.length >= 6, "레지스트리를 못 읽었다");
+    for (const fam of FONT_FAMILIES) {
+      const ass = assById[fam.id];
+      assert.ok(ass, `${fam.id} 가 ASS_FONT_BY_ID 에 없다 — 자막·애니메이션 제목만 조용히 폴백한다`);
+      // 제목 줄은 항상 weight 800 으로 그린다(index.ts) — 그때 고르는 파일로 대조한다.
+      const avail = Object.keys(fam.weights).map(Number);
+      const w = avail.reduce((best, x) => (Math.abs(x - 800) < Math.abs(best - 800) ? x : best), avail[0]);
+      const file = resolve(fam.weights[w].file);
+      assert.ok(file, `${fam.id}:${w} 폰트 파일(${fam.weights[w].file})이 assets 에 없다`);
+      assert.equal(fontNames(file!).get(1), ass,
+        `${fam.id}: ASS 이름이 파일이 신고하는 패밀리와 다르다 — libass 가 말없이 Noto 로 바꾼다`);
+    }
+  });
+
+  it("웹 픽커(FONT_FAMILY_OPTIONS)가 서버 레지스트리와 같은 id 집합이다", () => {
+    const block = /export const FONT_FAMILY_OPTIONS: FontFamilyOption\[\] = \[([\s\S]*?)\n\];/.exec(presets);
+    assert.ok(block, "웹 픽커 목록을 찾지 못했다");
+    const ids = [...block![1].matchAll(/\{\s*id:\s*"(\w+)"/g)].map((m) => m[1]);
+    assert.deepEqual(ids, FONT_FAMILIES.map((f) => f.id),
+      "픽커와 서버 레지스트리의 id 가 어긋난다 — 고른 글꼴과 결과물이 갈라진다");
+  });
+
+  it("픽커가 가리키는 @font-face 가 globals.css 에 있고 파일도 실재한다", () => {
+    const block = /export const FONT_FAMILY_OPTIONS: FontFamilyOption\[\] = \[([\s\S]*?)\n\];/.exec(presets)!;
+    for (const m of block[1].matchAll(/id:\s*"(\w+)",\s*label:\s*"[^"]*",\s*css:\s*"'([^']+)'/g)) {
+      assert.match(css, new RegExp(`font-family: "${m[2]}"`),
+        `${m[1]}: 픽커가 '${m[2]}' 를 쓰는데 globals.css 에 @font-face 가 없다 — 편집 중 미리보기만 조용히 폴백한다`);
+    }
+    // css 가 가리키는 웹폰트 파일이 public 에 실제로 있어야 한다(404 면 같은 증상).
+    const urls = [...css.matchAll(/url\("\/fonts\/([^"]+)"\)/g)].map((m) => m[1]);
+    assert.ok(urls.length >= 8, `globals.css 에서 웹폰트 url 을 못 읽었다(${urls.length}개)`);
+    for (const f of urls) {
+      assert.ok(fs.existsSync(path.resolve(REPO, "apps/web/public/fonts", f)), `public/fonts/${f} 가 없다`);
+    }
   });
 });
 

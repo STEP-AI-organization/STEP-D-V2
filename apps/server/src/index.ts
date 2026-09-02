@@ -5153,6 +5153,13 @@ const ASS_FONT_BY_ID: Record<string, string> = {
   dohyeon: "Do Hyeon",
   jua: "Jua",
   gothica1: "Gothic A1",
+  // ⚠️ 아래 셋은 **파일이 신고하는 이름이 파일명과 다르다**(2026-09-02 name 테이블 실측).
+  //    페이퍼로지는 웨이트가 패밀리명에 붙고(nameID 1 = "Paperlogy 8 ExtraBold"), 강원교육모두는
+  //    파일명이 Modu 인데 패밀리는 All 이며, 레코체는 Recipekorea Medium 이다. 짐작해서 적으면
+  //    libass 가 말없이 Noto 로 대체한다 — caption-font.test.ts 가 파일에서 읽어 대조한다.
+  paperlogy: "Paperlogy 8 ExtraBold",
+  gangwonedumodu: "GangwonEduAll Bold",
+  recipekorea: "Recipekorea Medium",
 };
 
 function captionAssStyle(style: string, H: number, mv: number, mh: number, sizePct?: number, fontId?: string): string {

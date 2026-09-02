@@ -648,6 +648,9 @@ export const FONT_FAMILY_OPTIONS: FontFamilyOption[] = [
   { id: "dohyeon", label: "도현", css: "'Do Hyeon', var(--font-sans)" },
   { id: "jua", label: "주아", css: "'Jua', var(--font-sans)" },
   { id: "gothica1", label: "고딕A1", css: "'GothicA1', var(--font-sans)" },
+  { id: "paperlogy", label: "페이퍼로지", css: "'Paperlogy', var(--font-sans)" },
+  { id: "gangwonedumodu", label: "강원교육모두", css: "'GangwonEduModu', var(--font-sans)" },
+  { id: "recipekorea", label: "레코체", css: "'Recipekorea', var(--font-sans)" },
 ];
 
 /** 글꼴 id → CSS font-family 스택 (미리보기용). 미설정·미등록 = 기본(프리텐다드 스택). */

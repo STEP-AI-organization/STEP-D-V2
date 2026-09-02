@@ -131,6 +131,32 @@ export const FONT_FAMILIES: FontFamilyDef[] = [
       900: { file: "GothicA1-Black.ttf", family: "GothicA1 Black" },
     },
   },
+  {
+    // 페이퍼로지(Paperlogy) — 9웨이트 중 **8 ExtraBold 한 종만** 번들. 제목 줄은 항상
+    // weight 800 으로 그려서(index.ts) 나머지 웨이트는 쓰이지 않는다 — 넣으면 이미지만 무거워진다.
+    id: "paperlogy",
+    label: "페이퍼로지",
+    weights: {
+      800: { file: "Paperlogy-8ExtraBold.ttf", family: "Paperlogy ExtraBold" },
+    },
+  },
+  {
+    // 강원교육모두 — Bold 1종(OTF: 4.0MB · 같은 글꼴 TTF 는 7.8MB 라 OTF 를 쓴다).
+    // ⚠️ 파일명은 Modu 인데 폰트가 신고하는 패밀리는 `GangwonEduAll Bold` 다(ASS_FONT_BY_ID 참고).
+    id: "gangwonedumodu",
+    label: "강원교육모두",
+    weights: {
+      700: { file: "GangwonEduModu-Bold.otf", family: "GangwonEduModu Bold" },
+    },
+  },
+  {
+    // 레코체(레시피코리아) — Medium 단일 웨이트. 둥근 손글씨풍 디스플레이.
+    id: "recipekorea",
+    label: "레코체",
+    weights: {
+      500: { file: "Recipekorea.ttf", family: "Recipekorea Medium" },
+    },
+  },
 ];
 
 /** id → 패밀리 정의. 미설정·미등록 id 는 기본(첫 항목 Pretendard). */

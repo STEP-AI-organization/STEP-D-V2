@@ -93,8 +93,8 @@ describe("ASS Fontsize 보정 상수 — 실제 폰트 메트릭에서 나와야
     // ⚠️ **Pretendard 만 스캔한다.** ASS 캡션 스타일(index.ts 의 Default·BoxLabel·
     // captionAssStyle 는 전부 "Pretendard"/"Pretendard ExtraBold"/"Pretendard Black")은
     // Pretendard 만 쓰고, ASS_FS_PER_CSS_PX 보정도 Pretendard 메트릭(2443/2048)에서 나왔다.
-    // assets/fonts 의 나머지(BlackHanSans·DoHyeon·Jua·GothicA1)는 **canvas-PNG 정적 제목
-    // 전용** 디스플레이 폰트라 ASS 를 절대 타지 않는다 — 셀높이 비율(예: BlackHanSans 1.02)이
+    // assets/fonts 의 나머지(검은고딕·도현·주아·고딕A1·페이퍼로지·강원교육모두·레코체)는 사용자가
+    // 골랐을 때만 쓰는 디스플레이 폰트라 이 보정과 무관하다 — 셀높이 비율(예: BlackHanSans 1.02)이
     // Pretendard(1.193)와 달라도 캡션 크기 파리티와 무관하다. 디렉토리 전체를 스캔하면 그
     // 무관한 폰트들 때문에 보정 상수를 흔들게 되므로(과잉 일반화), 캡션 폰트만 검사한다.
     const files = fs.readdirSync(FONT_DIR).filter((f) => /^Pretendard-.*\.(otf|ttf)$/i.test(f));
