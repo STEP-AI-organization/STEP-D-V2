@@ -54,7 +54,6 @@ import {
   renderQueueMaxPending,
   renderQueueStallMs,
   renderViaQueue,
-  staleMissedSlots,
   type AutoRenderState, type AutomationRule, type RenderOutcome, type RuleAspect, type RuleIdleCode, type RuleIdleObservation,
 } from "./automation.ts";
 import {
@@ -558,13 +557,10 @@ async function runAutomationCycleLocked(): Promise<CycleReport> {
       // 상한은 **계획의 하루 몫에 비례**한다(maxPublishPerTick) — 고정 3 은 하루 3건
       // 계획 전제라, 하루 20건이면 7틱(105분)이 필요해 리드 120분을 거의 다 쓴다.
       remaining = Math.min(remaining, maxPublishPerTick(rule));
-      // 발행 순번(0-base) — 슬롯 시각 매핑(scheduledSlotAt)의 인덱스. **산식(quota - remaining)
-      // 이 아니라 카운터다**: 산식은 위 틱당 상한이 remaining 을 클램프하면 앞 슬롯을 건너뛰고,
-      // 다음 틱이 같은 슬롯 시각을 중복 배정한다(리드 2시간 안에 서로 다른 슬롯 시각 4개+ 엣지).
-      // 시작점 = 오늘 포기한 몫(staleMissed) + 이미 게시한 수 — 다음 게시가 **다가오는 슬롯**에
-      // 붙는다. 이후는 게시 성공마다 +1.
-      // 다음 게시가 붙을 슬롯 — **claimable 의 첫 칸**이다. 예전엔 순번(포기분+게시수)으로
-      // 역산했는데, 그 산식이 곧 "지난 슬롯 몫이 살아 있다" 는 뜻이었다.
+      // 다음 게시가 붙을 슬롯 — **claimable 의 현재 칸**이다(창이 열린 슬롯만 들어 있다).
+      // 예전엔 순번(포기분 + 오늘 게시수)으로 역산했는데, 그 산식 자체가 "지난 슬롯 몫이
+      // 살아 있다" 는 뜻이라 아침 몫이 저녁에 배정됐다(2026-09-02). 산식이 아니라 커서여야
+      // 하는 이유는 그대로다 — 위 틱당 상한이 remaining 을 클램프해도 배정이 안 밀린다.
       let slotCursor = 0;
       if (remaining <= 0) {
         // 조용히 넘기면 "왜 오늘은 아무것도 안 나갔지" 를 설명할 근거가 로그에 없다.

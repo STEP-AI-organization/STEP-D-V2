@@ -537,14 +537,8 @@ export function slotAtToday(time: string | null, now = new Date()): Date | null 
 }
 
 export function scheduledSlotAt(slots: RuleSlot[], index: number, now = new Date()): Date | null {
-  const slot = slotForIndex(slots, index);
-  if (!slot) return null;
-  const parts = new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Asia/Seoul", year: "numeric", month: "2-digit", day: "2-digit",
-  }).formatToParts(now);
-  const date = ["year", "month", "day"].map((type) => parts.find((p) => p.type === type)?.value).join("-");
-  const at = new Date(`${date}T${slot.time}:00+09:00`);
-  return Number.isFinite(at.getTime()) ? at : null;
+  // 날짜 계산은 slotAtToday 한 곳에만 둔다 — 두 벌이면 자정 근처에서 하루가 어긋난다.
+  return slotAtToday(slotForIndex(slots, index)?.time ?? null, now);
 }
 
 /**
