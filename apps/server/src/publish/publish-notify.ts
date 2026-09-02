@@ -24,7 +24,7 @@ import {
   getAutomationSetting, setAutomationSetting, listAutomationRules, publishedTodayKst,
 } from "../db-pg.ts";
 import {
-  NOTIFY_EMAIL_KEY, allowedToday, isPublishDay, kstMinutes, perDayCount,
+  NOTIFY_EMAIL_KEY, allowedToday, isPublishDay, kstMinutes, parseNotifyEmails, perDayCount,
   ruleChannels, ruleSlots, staleMissedSlots, type AutomationRule, type RuleSlot,
 } from "../pipeline/automation.ts";
 import { mailConfigured, sendMail } from "../mailer.ts";
@@ -112,9 +112,12 @@ const fmtDur = (sec: number | null): string | null => {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 };
 
-async function notifyEmail(): Promise<string | null> {
-  const to = String((await getAutomationSetting(NOTIFY_EMAIL_KEY)) ?? "").trim();
-  return /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(to) ? to : null;
+/**
+ * 리포트 수신자 목록 (2026-09-02 여러 명). 빈 배열 = 담당자 미설정 = 아무것도 하지 않는다.
+ * 옛 단일 문자열 저장값도 parseNotifyEmails 가 그대로 읽는다(하위호환).
+ */
+async function notifyEmails(): Promise<string[]> {
+  return parseNotifyEmails(await getAutomationSetting(NOTIFY_EMAIL_KEY));
 }
 
 async function readBuffer(): Promise<AutoReportItem[]> {
@@ -133,7 +136,7 @@ async function readBuffer(): Promise<AutoReportItem[]> {
 export async function recordAutoPublishForReport(n: AutoPublishNotice): Promise<void> {
   try {
     if (!mailConfigured()) return;
-    if (!(await notifyEmail())) return;   // 담당자 이메일 없으면 적립도 안 한다(버퍼 무한성장 방지)
+    if (!(await notifyEmails()).length) return;   // 담당자 이메일 없으면 적립도 안 한다(버퍼 무한성장 방지)
     if (!isAutoOrigin(n)) return;
     const accountKey = `${n.channel}:${n.accountId}`;
     // 같은 (클립·채널) 의 **앞선 실패 항목을 지운다** — 재시도가 성공했는데도 리포트가
@@ -181,7 +184,7 @@ export async function recordAutoPublishFailureForReport(f: {
 }): Promise<void> {
   try {
     if (!mailConfigured()) return;
-    if (!(await notifyEmail())) return;
+    if (!(await notifyEmails()).length) return;
     // 자동 경로만 — 사람이 누른 배포의 실패는 그 화면에서 이미 보인다.
     if (!isAutoOrigin({ clip: f.clip, channel: f.channel as "youtube", accountId: f.accountId ?? "" })) return;
     const accountKey = `${f.channel}:${f.accountId ?? ""}`;
@@ -485,12 +488,14 @@ export async function maybeFlushAutoPublishReport(
     const items = await readBuffer();
     if (!items.length) return;
 
-    const to = await notifyEmail();
-    if (!to) {
+    const recipients = await notifyEmails();
+    if (!recipients.length) {
       // 담당자 이메일이 중간에 지워졌다 — 묶음을 비워 좀비 버퍼를 막는다(다음 설정부터 새로).
       await setAutomationSetting(REPORT_BUFFER_KEY, "");
       return;
     }
+    // nodemailer 는 쉼표 구분 문자열을 그대로 받는다(invoice-email.ts 와 같은 방식).
+    const to = recipients.join(", ");
 
     // ── 계획마다 한 통 (2026-08-28 사용자 지시 "메일도 자동배포계획당으로 나가야 해") ──
     //

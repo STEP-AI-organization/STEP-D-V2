@@ -684,8 +684,58 @@ export const LAST_CYCLE_KEY = "automation.lastCycleAt";
  * 자동배포 완료 알림을 받을 담당자 이메일이 담긴 automation_setting 키 (워크스페이스당 하나).
  * 값이 비어 있으면 알림을 보내지 않는다 — 알림도 계획과 같은 원칙이다: 설정이 없으면
  * 아무것도 하지 않는다. 발송 지점은 워커의 실업로드 성공 자리(publish-notify.ts) 하나뿐이다.
+ *
+ * **값의 꼴이 두 가지다**(2026-09-02 여러 명 지원). 아래 parseNotifyEmails 로만 읽을 것:
+ *   - 신규: JSON 배열 `["a@x.com","b@y.com"]` (결제 알림 billing.notifyEmails 와 같은 방식)
+ *   - 구  : 단일 문자열 `a@x.com` — **이미 저장된 워크스페이스가 이 꼴이다.** 여기서
+ *           배열만 읽게 만들면 지금 설정된 담당자가 조용히 빠지고 리포트가 아무에게도 안 간다.
  */
 export const NOTIFY_EMAIL_KEY = "automation.notifyEmail";
+
+/** 수신자 상한. 담당자 목록이지 메일링 리스트가 아니다 — 배포 리포트를 대량 발송으로 쓰지 않는다. */
+export const NOTIFY_EMAIL_MAX = 10;
+
+/** 담당자 이메일 1개의 형식 판정 — 저장 라우트와 발송 지점이 **같은 잣대**를 써야 한다. */
+export function isNotifyEmail(v: unknown): v is string {
+  return typeof v === "string" && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v.trim());
+}
+
+/**
+ * 저장값 → 수신자 목록. 위 두 꼴을 모두 읽고, 형식이 아닌 항목은 버린다.
+ *
+ * 쉼표·세미콜론 구분도 받는다 — 사람이 입력창에 그렇게 넣는 게 자연스럽고, 예전 검증이
+ * 그걸 400 으로 막고 있었다. 중복은 **대소문자 무시**로 제거한다(같은 사람에게 두 통 안 감).
+ * 순수 함수다 — 이 파일은 import 0개 계약을 지킨다(웹이 @server-pure 로 그대로 쓴다).
+ */
+export function parseNotifyEmails(raw: string | null | undefined): string[] {
+  const s = String(raw ?? "").trim();
+  if (!s) return [];
+  let list: unknown[];
+  if (s.startsWith("[")) {
+    try {
+      const parsed = JSON.parse(s);
+      list = Array.isArray(parsed) ? parsed : [];
+    } catch {
+      list = [];   // 깨진 JSON — 알림을 끄는 게 아니라 '수신자 없음' 으로 떨어뜨린다
+    }
+  } else {
+    list = s.split(/[,;]/);
+  }
+  const out: string[] = [];
+  for (const raw1 of list) {
+    const t = String(raw1 ?? "").trim();
+    if (!isNotifyEmail(t)) continue;
+    if (out.some((x) => x.toLowerCase() === t.toLowerCase())) continue;
+    out.push(t);
+    if (out.length >= NOTIFY_EMAIL_MAX) break;
+  }
+  return out;
+}
+
+/** 목록 → 저장값. 빈 목록은 빈 문자열(행 삭제 대신 — DELETE 경합 회피, 종전과 같다). */
+export function serializeNotifyEmails(emails: string[]): string {
+  return emails.length ? JSON.stringify(emails) : "";
+}
 
 export interface CycleInput {
   /** 전역 일시정지 상태. */

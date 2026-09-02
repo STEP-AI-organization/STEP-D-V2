@@ -353,6 +353,10 @@ import {
   CREDIT_IDLE_REASON,
   LAST_CYCLE_KEY,
   NOTIFY_EMAIL_KEY,
+  NOTIFY_EMAIL_MAX,
+  isNotifyEmail,
+  parseNotifyEmails,
+  serializeNotifyEmails,
   RULE_CRITERIA,
   type RuleCriterion,
   RULE_MEDIA_KINDS,
@@ -5658,22 +5662,49 @@ app.get("/api/automation", async (c) => {
     options: { mediaKinds: RULE_MEDIA_KINDS, criteria: RULE_CRITERIA, gatePolicies: GATE_POLICIES },
     // 자동배포 완료 알림을 받을 담당자 이메일 — 워커의 실업로드 성공 지점(publish-notify.ts)이
     // 같은 키를 읽는다. 비어 있으면 알림 없음.
-    notifyEmail: (notifyEmail ?? "").trim(),
+    notifyEmails: parseNotifyEmails(notifyEmail),
+    // 단수 필드는 **옛 웹을 위한 호환**이다(웹·서버 배포 시점이 다르다). 여러 명이면
+    // 쉼표로 이어 붙여 최소한 화면이 빈칸으로 보이지는 않게 한다.
+    notifyEmail: parseNotifyEmails(notifyEmail).join(", "),
   });
 });
 
 /**
- * 자동배포 완료 알림 담당자 이메일 저장. 빈 문자열 = 알림 끔(행 삭제 대신 빈 값 —
- * getAutoTopupAlert 와 같은 이유로 DELETE 경합을 피한다). 형식이 아니면 400.
+ * 자동배포 완료 알림 담당자 이메일 저장 — **여러 명**(2026-09-02 · 상한 NOTIFY_EMAIL_MAX).
+ * 빈 목록 = 알림 끔(행 삭제 대신 빈 값 — getAutoTopupAlert 와 같은 이유로 DELETE 경합을 피한다).
+ *
+ * ⚠️ 입력 꼴 둘을 **모두** 받는다. 웹(Vercel)과 서버(Cloud Run)는 배포 시점이 달라서, 새 서버가
+ *    뜬 뒤에도 한동안 옛 웹이 `{email: "..."}` 를 보낸다. 한쪽만 받게 만들면 그 사이 저장이
+ *    조용히 400 으로 죽는다 — 화면은 눌렀는데 안 바뀌는 꼴이 된다.
+ *      신규: { emails: ["a@x.com", ...] }   구: { email: "a@x.com" }(쉼표 목록도 허용)
+ * 형식이 하나라도 아니면 **어느 것이 문제인지 돌려준다** — "이메일 형식이 아닙니다" 만으론
+ * 5개 중 어느 줄이 틀렸는지 알 수 없다.
  */
 app.post("/api/automation/notify-email", async (c) => {
   const body = await c.req.json().catch(() => ({}) as Record<string, unknown>);
-  const email = typeof body.email === "string" ? body.email.trim() : "";
-  if (email && !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
-    return c.json({ error: "invalid_email", message: "이메일 형식이 아닙니다." }, 400);
+  const raw: string[] = Array.isArray(body.emails)
+    ? body.emails.map((v: unknown) => String(v ?? "").trim())
+    : String(body.email ?? "").split(/[,;]/).map((v) => v.trim());
+  const given = raw.filter(Boolean);
+  const bad = given.filter((e) => !isNotifyEmail(e));
+  if (bad.length) {
+    return c.json({
+      error: "invalid_email",
+      message: `이메일 형식이 아닙니다: ${bad.slice(0, 3).join(", ")}`,
+      invalid: bad,
+    }, 400);
   }
-  await setAutomationSetting(NOTIFY_EMAIL_KEY, email);
-  return c.json({ ok: true, notifyEmail: email });
+  if (given.length > NOTIFY_EMAIL_MAX) {
+    return c.json({
+      error: "too_many",
+      message: `수신자는 최대 ${NOTIFY_EMAIL_MAX}명입니다 (${given.length}명 입력).`,
+    }, 400);
+  }
+  // 중복 제거·상한은 parse 가 정본 — 저장값과 응답이 갈라지지 않게 같은 함수를 통과시킨다.
+  const emails = parseNotifyEmails(JSON.stringify(given));
+  await setAutomationSetting(NOTIFY_EMAIL_KEY, serializeNotifyEmails(emails));
+  // notifyEmail(단수)은 옛 웹이 읽는 필드 — 지우면 그 화면의 저장 표시가 깨진다.
+  return c.json({ ok: true, notifyEmails: emails, notifyEmail: emails.join(", ") });
 });
 
 app.post("/api/automation/rules", async (c) => {

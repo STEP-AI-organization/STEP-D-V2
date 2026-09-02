@@ -55,7 +55,7 @@ import {
   rejectAutomationHold,
   runAutomationNow,
   saveAutomationRule,
-  setAutomationNotifyEmail,
+  setAutomationNotifyEmails,
   setAutomationPaused,
   type AutomationRule,
   type InstagramAccountInfo,
@@ -1348,46 +1348,55 @@ export default function AutomationPage() {
         </div>
 
         {/* 담당자 알림 — 자동배포가 실제로 나가면 이 주소로 영상 제목·URL 메일이 간다.
-            계획이 아니라 워크스페이스 설정이다(어느 계획이 내보내든 같은 담당자가 받는다). */}
-        <div className="flex flex-wrap items-center gap-2">
-          <label className="text-[11px]" style={{ color: "var(--sd-label)" }}>
+            계획이 아니라 워크스페이스 설정이다(어느 계획이 내보내든 같은 담당자가 받는다).
+            2026-09-02: 여러 명. 입력·문구·저장 방식은 결제 알림(/credits)과 같은 꼴로 맞췄다 —
+            같은 성격의 설정이 화면마다 다르게 동작하면 실무자가 매번 다시 배운다. */}
+        <div>
+          <div className="mb-1 text-[11px] font-medium" style={{ color: "var(--sd-label)" }}>
             담당자 이메일 (배포 완료 알림)
-          </label>
-          <input
-            type="email"
-            className="sd-input w-[220px]"
-            placeholder="비우면 알림 없음"
-            value={notifyEmail}
-            onChange={(e) => setNotifyEmail(e.target.value)}
-          />
-          <button
-            type="button"
-            className="sd-btn"
-            disabled={savingNotify || notifyEmail.trim() === notifyEmailSaved}
-            onClick={() => {
-              void (async () => {
-                setSavingNotify(true);
-                try {
-                  const r = await setAutomationNotifyEmail(notifyEmail.trim());
-                  setNotifyEmailSaved(r.notifyEmail);
-                  setNotifyEmail(r.notifyEmail);
-                  toast({
-                    title: r.notifyEmail ? "알림 이메일 저장됨" : "알림 껐습니다",
-                    description: r.notifyEmail
-                      ? `자동배포가 완료되면 ${r.notifyEmail} 로 제목·링크를 보냅니다.`
-                      : "배포 완료 알림 메일을 보내지 않습니다.",
-                    tone: "done",
-                  });
-                } catch (err) {
-                  toast({ title: "저장 실패", description: err instanceof Error ? err.message : String(err), tone: "error" });
-                } finally {
-                  setSavingNotify(false);
-                }
-              })();
-            }}
-          >
-            {savingNotify ? "저장 중…" : notifyEmail.trim() === notifyEmailSaved ? "저장됨" : "저장"}
-          </button>
+          </div>
+          <p className="mb-1.5 text-[11px]" style={{ color: "var(--sd-mut)" }}>
+            자동배포 리포트를 받을 담당자 — 쉼표로 여러 명(최대 10명). 비우면 알림을 보내지 않습니다.
+          </p>
+          <div className="flex flex-wrap items-center gap-2">
+            <input
+              className="sd-input min-w-[260px] flex-1"
+              aria-label="배포 완료 알림 이메일"
+              placeholder="media-ops@company.com, cp@company.com"
+              value={notifyEmail}
+              onChange={(e) => setNotifyEmail(e.target.value)}
+            />
+            <button
+              type="button"
+              className="sd-btn"
+              disabled={savingNotify || notifyEmail.trim() === notifyEmailSaved}
+              onClick={() => {
+                void (async () => {
+                  setSavingNotify(true);
+                  try {
+                    // 쉼표·공백 어느 쪽으로 끊어 넣어도 받는다(결제 화면과 같은 분리 규칙).
+                    const emails = notifyEmail.split(/[,\s]+/).map((s) => s.trim()).filter(Boolean);
+                    const r = await setAutomationNotifyEmails(emails);
+                    setNotifyEmailSaved(r.notifyEmail);
+                    setNotifyEmail(r.notifyEmail);
+                    toast({
+                      title: r.notifyEmails.length ? "알림 이메일 저장됨" : "알림 껐습니다",
+                      description: r.notifyEmails.length
+                        ? `자동배포가 완료되면 ${r.notifyEmails.length}명에게 제목·링크를 보냅니다.`
+                        : "배포 완료 알림 메일을 보내지 않습니다.",
+                      tone: "done",
+                    });
+                  } catch (err) {
+                    toast({ title: "저장 실패", description: err instanceof Error ? err.message : String(err), tone: "error" });
+                  } finally {
+                    setSavingNotify(false);
+                  }
+                })();
+              }}
+            >
+              {savingNotify ? "저장 중…" : notifyEmail.trim() === notifyEmailSaved ? "저장됨" : "저장"}
+            </button>
+          </div>
         </div>
 
         {/* 고급 설정 — 구 계획 폼(점수 기준·한도·시간창·정책·템플릿) 접기로 격하 · 삭제 금지 */}

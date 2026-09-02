@@ -13,7 +13,7 @@
  *  3. **베스트 에포트.** 어떤 실패도 던지지 않는다 — 알림은 부속이고 충전 판정이 본체다.
  */
 import { getAutomationSetting, getBillingNotifyEmails } from "../db-pg.ts";
-import { NOTIFY_EMAIL_KEY } from "../pipeline/automation.ts";
+import { NOTIFY_EMAIL_KEY, parseNotifyEmails } from "../pipeline/automation.ts";
 import type { AutoTopupAlert } from "./credits.ts";
 import { mailConfigured, sendMail } from "../mailer.ts";
 
@@ -30,8 +30,9 @@ import { mailConfigured, sendMail } from "../mailer.ts";
 async function billingAlertRecipients(): Promise<string[]> {
   const billing = await getBillingNotifyEmails();
   if (billing.length > 0) return billing;
-  const fallback = String((await getAutomationSetting(NOTIFY_EMAIL_KEY)) ?? "").trim();
-  return /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(fallback) ? [fallback] : [];
+  // 자동배포 담당자도 여러 명이 될 수 있다(2026-09-02) — 폴백도 목록 전체를 쓴다.
+  // 여기서 단일 문자열만 읽으면 담당자를 늘린 워크스페이스에서 첫 사람만 결제 경고를 받는다.
+  return parseNotifyEmails(await getAutomationSetting(NOTIFY_EMAIL_KEY));
 }
 
 function failureHtml(alert: AutoTopupAlert): string {

@@ -1259,15 +1259,25 @@ export async function fetchReframeLabels(clipId: string, compareId: string): Pro
   return Array.isArray(data?.rows) ? data.rows : [];
 }
 
-/** 자동배포 완료 알림 담당자 이메일 저장 — 빈 문자열이면 알림을 끈다. */
-export async function setAutomationNotifyEmail(email: string): Promise<{ notifyEmail: string }> {
+/**
+ * 자동배포 완료 알림 담당자 이메일 저장 — **여러 명**(2026-09-02 · 최대 10명).
+ * 빈 배열이면 알림을 끈다. 서버가 목록(notifyEmails)과 호환용 단수(notifyEmail)를 함께 준다.
+ */
+export async function setAutomationNotifyEmails(
+  emails: string[],
+): Promise<{ notifyEmails: string[]; notifyEmail: string }> {
   const res = await fetch(`${API_BASE}/automation/notify-email`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email }),
+    body: JSON.stringify({ emails }),
   });
   if (!res.ok) throw new ApiError(res.status, await errorMessageOf(res));
-  return res.json();
+  const data = await res.json();
+  // 옛 서버(단수만 반환)와 섞여 돌 수 있다 — 목록이 없으면 단수에서 만든다.
+  const list: string[] = Array.isArray(data?.notifyEmails)
+    ? data.notifyEmails
+    : String(data?.notifyEmail ?? "").split(",").map((s: string) => s.trim()).filter(Boolean);
+  return { notifyEmails: list, notifyEmail: list.join(", ") };
 }
 
 export async function saveAutomationRule(
