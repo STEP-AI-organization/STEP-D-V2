@@ -16,7 +16,7 @@
 | 확인한 것 | 결과 |
 |---|---|
 | `https://stepd.stepai.kr` | **200** (0.04s) |
-| `https://stepd.stepai.kr/analytics` | **200** (0.53s) |
+| `https://stepd.stepai.kr/analytics` | **200** — 다만 **"옮겨졌습니다" 안내 화면**이다(§2) |
 | `https://stepd.stepai.kr/landing` | **200** (1.20s) |
 | `https://stepd.stepai.kr/api/proxy/api/health` | **401** — 로그인 안 한 상태에선 정상 |
 | 서버 최근 7일 5xx | **0건** (4xx 는 전부 사용자 본인 세션의 정상 403/404) |
@@ -51,18 +51,56 @@ https://stepd.stepai.kr
 로그인이 필요한 B2B SaaS 이므로 **데모 계정이 반드시 같이 가야 한다.** 회신에 링크만 넣고
 계정을 빼면 이번과 같은 "접근이 안 된다" 가 반복된다.
 
-**보내기 전 반드시 사람이 직접 확인할 것** (시크릿 창에서, 처음 보는 사람처럼):
+### ⚠️ 화면 주소가 바뀌었다 — 옛 주소를 주면 그것만으로 "오류" 로 보인다
 
-- [ ] 데모 계정으로 로그인된다
-- [ ] `/publish-channels` 에서 **YouTube 채널이 연결돼 있다** (안 돼 있으면 애널리틱스가 빈다)
-- [ ] `/analytics` 에 숫자가 뜬다
-- [ ] `/channels` 에 채널 트렌드가 뜬다
-- [ ] 탭을 옮겨 다녀도 오류가 없다
+| 옛 주소 | 지금 | 옛 주소로 가면 |
+|---|---|---|
+| `/analytics` | **`/performance`** | "성과 화면이 옮겨졌습니다" 안내만 뜬다 |
+| `/channels` | **`/trends`** (유튜브 트렌드) | 없는 주소 |
+| `/clips` | **`/edits`** (편집본) | "옮겨졌습니다" 안내만 뜬다 |
 
-> 데모 계정에 **연결된 채널이 없으면** 애널리틱스 화면은 비어 보인다. 심사 목적상 이건
-> "기능이 없다" 로 읽히므로, 채널이 연결된 계정을 줘야 한다.
+**심사팀에 옛 주소를 보냈다면 그게 "page error" 의 정체일 수 있다.** 보낸 메일을 확인할 것.
+
+또 하나: 좌측 메뉴의 **채널 분석(`/channel-analytics`)은 아직 껍데기**다("셸·라우팅만 세운
+상태"). 심사팀이 메뉴를 눌러 보다 여기 들어가면 빈 화면을 본다 — **심사 기간에는 이 메뉴를
+감추는 편이 낫다.**
+
+### 심사팀에 안내할 화면 (지금 주소)
+
+```
+/publish-channels   YouTube 채널 연결 (Google OAuth 동의)
+/performance        연결한 채널의 조회수·시청시간·수익  ← 애널리틱스 본체
+/program-analytics  프로그램 단위 분석
+/trends             유튜브 트렌드
+```
 
 ---
+
+## 2-B. 데모 워크스페이스 — 계정만으로는 부족하다
+
+**계정이 아니라 워크스페이스를 따로 만드는 게 맞다.** 이유 둘:
+
+1. **다른 고객사 데이터가 심사팀 화면에 보이면 안 된다.** 기존 워크스페이스에 계정만
+   추가하면 그 회사 프로그램·회차·채널이 그대로 보인다. 이건 심사 위험이자 고객사와의
+   신뢰 문제다.
+2. 심사팀은 **깨끗한 상태에서 처음부터** 보는 게 판단하기 쉽다.
+
+### 만드는 순서
+
+1. **어드민에서 워크스페이스 생성** — `admin.stepd.stepai.kr` (superadmin 세션 필요)
+   · 내부적으로 `POST /api/superadmin/tenants` — 소유자 계정이 같이 만들어진다
+2. 그 워크스페이스로 `stepd.stepai.kr` 로그인
+3. **`/publish-channels` 에서 YouTube 채널 연결**
+   · ⚠️ 반드시 **STEP AI 소유 채널**로. 고객사 채널을 쓰면 그 회사 지표가 심사팀에 넘어간다
+   · ⚠️ **연결 모드가 `analytics` 여야 한다.** 업로드 전용(`publish`)으로 연결하면
+     `/performance` 가 *"구조적으로 데이터가 존재하지 않습니다"* 를 띄운다 — 심사팀 눈에는
+     고장 난 화면이다
+   · ⚠️ 실제 **조회 이력이 있는 채널**이어야 한다. 새로 판 빈 채널은 지표가 전부 "—" 로 뜬다
+4. `/performance` 에서 숫자가 실제로 뜨는지 **눈으로 확인**
+
+> 좋은 소식: `/performance` 는 우리 클립·배포 데이터가 없어도 된다. **연결된 채널의
+> YouTube Analytics 를 직접 읽는다.** 즉 채널 하나만 제대로 연결하면 화면이 찬다 —
+> 데모용 콘텐츠를 따로 만들어 넣을 필요가 없다.
 
 ## 3. 의심 1위 — `/api/proxy`
 
@@ -89,9 +127,9 @@ https://stepd.stepai.kr
 | 1 | 로그인 | 데모 계정으로 로그인 | "This is STEP-D, our API client at stepd.stepai.kr. I am signing in as an authenticated user." |
 | 2 | `/publish-channels` | **Connect YouTube** 클릭 → **Google 동의 화면** → 요청 스코프가 보이게 | "The user authorizes their own YouTube channel through Google OAuth consent. We request youtube.readonly and yt-analytics.readonly for analytics." |
 | 3 | 동의 후 복귀 | 채널 카드에 채널명·구독자 수가 뜨는 것 | "After consent, the connected channel appears here." |
-| 4 | `/analytics` | 조회수·시청 시간·수익 등 **인증 사용자 본인 채널의 수치** | "These analytics come from the YouTube Analytics API for the channel the user authorized. Only the authorized user's own data is shown." |
-| 5 | `/analytics` 상세 | 일자별 추이 그래프 (`analytics/:id/daily`) | "Daily breakdown, retrieved per authorized channel." |
-| 6 | `/channels` | 채널 트렌드 화면 | "Channel-level trends for the same authorized channel." |
+| 4 | `/performance` | 조회수·시청 시간·수익 등 **인증 사용자 본인 채널의 수치** | "These analytics come from the YouTube Analytics API for the channel the user authorized. Only the authorized user's own data is shown." |
+| 5 | `/performance` 상세 | 일자별 추이 그래프 (`analytics/:id/daily`) | "Daily breakdown, retrieved per authorized channel." |
+| 6 | `/program-analytics` | 프로그램 단위 분석 | "Program-level breakdown for the same authorized channel." |
 | 7 | 로그아웃 또는 다른 계정 | (선택) 다른 계정에는 그 데이터가 안 보인다 | "Data is scoped to the authorizing user; another workspace cannot see it." |
 
 ⚠️ **②번(동의 화면)이 이 영상의 핵심이다.** 심사의 요지가 "인증된 사용자의 데이터를
@@ -129,9 +167,9 @@ YouTube channel already connected so that the analytics screens are populated:
     Password: [비밀번호]
 
 After signing in, the YouTube-related screens are:
-    /publish-channels  — connect a YouTube channel via Google OAuth consent
-    /analytics         — analytics for the authorized channel
-    /channels          — channel-level trends
+    /publish-channels   — connect a YouTube channel via Google OAuth consent
+    /performance        — analytics for the authorized channel
+    /program-analytics  — program-level breakdown
 
 2) About the page errors you observed
 ────────────────────────────────────────
