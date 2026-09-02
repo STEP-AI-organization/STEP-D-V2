@@ -686,6 +686,49 @@ describe("패널 — 주 동선: 원본 받고 마커", () => {
       "무엇을 대상으로 돌았는지 화면에 남아야 편집자가 되돌릴 수 있다");
   });
 
+  /**
+   * 프로젝트 자동 생성 (사용자 2026-09-02 "프로젝트 이름은 STEP AI 스튜디오 · 없으면 생성").
+   *
+   * 주 동선은 웹에서 `stepd://open` 으로 **프리미어를 방금 띄운** 직후다 — 그때는 열린
+   * 프로젝트가 없는 게 정상인데, 예전엔 거기서 "열려 있는 프로젝트가 없습니다" 로 끝나
+   * 자동 동선이 첫 걸음에서 멈췄다.
+   */
+  it("프로젝트가 없으면 만든다 — 이름은 한 곳에서만 정한다", () => {
+    assert.match(panel, /const PROJECT_NAME = "STEP AI 스튜디오";/,
+      "이름이 두 곳으로 갈라지면 켤 때마다 새 프로젝트가 하나씩 생긴다");
+    const fn = panel.slice(panel.indexOf("async function ensureProject("));
+    assert.ok(fn.length > 200, "ensureProject 를 못 찾았다");
+    const body = fn.slice(0, fn.indexOf("\nasync function activeProject"));
+    assert.match(body, /\$\{PROJECT_NAME\}\.prproj/, "찾을 때와 만들 때가 같은 이름이어야 한다");
+    assert.match(body, /createProject\(projectPath\)/);
+  });
+
+  it("열려 있는 프로젝트가 있으면 **그걸 쓴다** — 편집자 작업을 빼앗지 않는다", () => {
+    const fn = panel.slice(panel.indexOf("async function ensureProject("));
+    const body = fn.slice(0, fn.indexOf("\nasync function activeProject"));
+    const openAt = body.indexOf('readMaybe(api.Project, "getActiveProject")');
+    const createAt = body.indexOf("createProject(projectPath)");
+    assert.ok(openAt > 0 && createAt > openAt,
+      "활성 프로젝트를 먼저 보지 않으면 편집자가 보던 프로젝트를 갈아치운다");
+    assert.match(body, /if \(open\) return \{ api, project: open \};/);
+  });
+
+  it("같은 파일이 있으면 열고, 없을 때만 만든다 — 덮어쓰면 지난 작업이 날아간다", () => {
+    const fn = panel.slice(panel.indexOf("async function ensureProject("));
+    const body = fn.slice(0, fn.indexOf("\nasync function activeProject"));
+    assert.match(body, /api\.Project\.open\(projectPath\)/, "존재하면 여는 경로가 없다");
+    assert.match(body, /const exists = fileExistsMaybe\(projectPath\)/);
+    // 확인 수단이 없을 때(null)를 "없다"로 단정하면 기존 프로젝트를 덮는다.
+    assert.match(panel, /function fileExistsMaybe\(nativePath\)/);
+    assert.match(body, /exists !== false/,
+      "존재 여부를 모를 때는 열기부터 시도해야 한다 — 모름을 '없음' 으로 치면 덮어쓴다");
+  });
+
+  it("모든 동선이 같은 확보 경로를 쓴다 — activeProject 가 ensureProject 로 위임", () => {
+    assert.match(panel, /async function activeProject\(\) \{\s*return ensureProject\(\);\s*\}/,
+      "일부만 자동 생성되면 '어떤 버튼은 되고 어떤 버튼은 안 된다' 가 된다");
+  });
+
   it("웹이 programId 를 함께 넘긴다 — 없으면 패널이 남의 프로그램을 본다", () => {
     // 패널은 추천을 **프로그램 기준**으로 부른다(loadRecs). episodeId 만 오면 패널이
     // 마지막에 보던 프로그램을 그대로 써서, 그 회차 추천이 목록에 아예 없을 수 있다.
