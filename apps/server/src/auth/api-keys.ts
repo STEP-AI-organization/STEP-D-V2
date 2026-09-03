@@ -226,6 +226,11 @@ export const API_KEY_ROUTES: RouteRule[] = [
   { method: "PUT", path: /^\/api\/credits\/auto-topup$/, scope: "billing:write" },
   // 외부 결제 콘솔 — 인보이스·자동결제 실패 알림 수신자 저장 (AENA 연동)
   { method: "POST", path: /^\/api\/billing\/notify-emails$/, scope: "billing:write" },
+  // 영수증 테스트 발송 — 카드 등록 전에 "실제로 어떤 문서가 나가는지" 볼 유일한 경로.
+  // 세션 전용으로 두면 화면에 버튼이 없어 아무도 못 부른다(만들어 놓고 못 쓰는 상태였다).
+  // ⚠️ 키로 부를 때는 **받는 사람을 지정할 수 없다** — 등록된 알림 수신자에게만 간다.
+  //    임의 주소를 받으면 이 키가 남의 메일함으로 쏘는 발송기가 된다(index.ts 가 강제).
+  { method: "POST", path: /^\/api\/billing\/invoice\/test-email$/, scope: "billing:write" },
 ];
 
 export type RouteVerdict = { ok: true; scope: ApiScope } | { ok: false; reason: string };

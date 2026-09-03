@@ -6708,7 +6708,8 @@ app.post("/api/billing/notify-emails", async (c) => {
  */
 app.post("/api/billing/invoice/test-email", async (c) => {
   const actor = requireCardActor(c);
-  const user = currentContext()?.via === "api-key" ? null : requireUser(c);
+  const viaKey = currentContext()?.via === "api-key";
+  const user = viaKey ? null : requireUser(c);
   if (!mailConfigured()) {
     return c.json({
       error: "mail_not_configured",
@@ -6728,11 +6729,21 @@ app.post("/api/billing/invoice/test-email", async (c) => {
 
   const body = await c.req.json().catch(() => ({}) as Record<string, unknown>);
   // 수신자: 명시한 to → 없으면 결제 알림 수신자 → 그것도 없으면 요청한 사람.
-  const asked = String(body.to ?? "").trim().toLowerCase();
+  //
+  // ⚠️ **API 키로 부를 때는 to 를 무시한다.** 키를 쥔 쪽이 주소를 정할 수 있으면 이 경로가
+  // 남의 메일함으로 우리 도메인에서 메일을 쏘는 발송기가 된다. 키는 "우리 설정이 맞는지"
+  // 확인하려고 부르는 것이지 수신자를 고르려고 부르는 게 아니다.
+  const asked = viaKey ? "" : String(body.to ?? "").trim().toLowerCase();
   const fallback = await getBillingNotifyEmails().catch(() => [] as string[]);
   const to = asked || fallback[0] || (user?.email ?? "");
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(to)) {
-    return c.json({ error: "to_required", message: "받는 사람 이메일이 필요합니다." }, 400);
+    return c.json({
+      error: "to_required",
+      message: viaKey
+        // 키로는 주소를 못 고르므로 "to 를 넣으세요"라고 하면 영원히 못 고치는 안내가 된다.
+        ? "결제 알림 수신자가 등록돼 있지 않습니다. 결제 화면에서 먼저 등록하세요."
+        : "받는 사람 이메일이 필요합니다.",
+    }, 400);
   }
 
   // 표본 결제 — 금액은 **실제 주문과 같은 buildTopup 으로** 만든다. 여기서 `크레딧 × 단가`

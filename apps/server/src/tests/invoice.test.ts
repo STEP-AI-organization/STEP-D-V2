@@ -183,6 +183,13 @@ describe("배선", () => {
     assert.match(r, /issuerInfo\(\)/, "발행자 정보가 비면 보내기 전에 막아야 한다");
   });
 
+  it("API 키로는 받는 사람을 고를 수 없다", () => {
+    // 화이트리스트에 올린 순간 키를 쥔 쪽이 부를 수 있다. to 를 그대로 받으면 우리 도메인에서
+    // 남의 메일함으로 쏘는 발송기가 된다 — 키 호출은 등록된 알림 수신자에게만 간다.
+    const r = new RegExp(`app\\.post\\("/api/billing/invoice/test-email"[\\s\\S]*?\\n\\}\\);`).exec(INDEX)?.[0] ?? "";
+    assert.match(r, /viaKey \? "" : String\(body\.to/, "키 호출은 body.to 를 무시해야 한다");
+  });
+
   it("결제가 있는 달만 고를 수 있다", () => {
     // 빈 달을 고르게 두면 빈 문서가 나오고, 운영자는 그게 오류인지 실제로 없는 건지 모른다.
     assert.match(route("/api/superadmin/tenants/:id/invoice-months"), /HAVING COUNT\(\*\) FILTER \(WHERE status = 'paid'\) > 0/);
