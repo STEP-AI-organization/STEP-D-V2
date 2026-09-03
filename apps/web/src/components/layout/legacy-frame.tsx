@@ -34,7 +34,7 @@ import { Topbar } from "@/components/shell/topbar";
  * 순서는 항상 "페이지 이식 → 여기 추가" 다.
  */
 const MIGRATED: string[] = [
-  // 아직 없음 — 셸만 먼저 옮겼다.
+  "/program-analytics",   // 2026-09-03 · 이식 파일럿
 ];
 
 export function LegacyFrame({ children }: { children: React.ReactNode }) {
