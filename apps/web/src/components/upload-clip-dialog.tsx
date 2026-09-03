@@ -13,7 +13,7 @@
  *  - 모달을 닫아도 업로드는 계속되지 않는다(회차 업로드와 달리 백그라운드 추적을 붙이지 않았다) —
  *    새로고침·페이지 이동은 업로드를 끊는다고 명시한다.
  */
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { AlertTriangle, Film, Info, Loader2, Upload } from "lucide-react";
 
@@ -30,7 +30,8 @@ export function UploadClipButton({
 }: {
   programId?: string;
   className?: string;
-  label?: string;
+  /** 라벨. 아이콘+span 같은 원본 버튼 내용을 그대로 넘길 수 있게 ReactNode 다. */
+  label?: ReactNode;
 } = {}) {
   const { serverConnected } = useAppData();
   const [open, setOpen] = useState(false);

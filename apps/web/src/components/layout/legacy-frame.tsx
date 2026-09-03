@@ -47,6 +47,8 @@ const MIGRATED: string[] = [
   "/business",            // 2026-09-03 · W5
   "/reframe-lab",         // 2026-09-03 · W5
   "/analyze",             // 2026-09-03 · W5
+  "/edits",               // 2026-09-03 · W5
+  "/distribution",        // 2026-09-03 · W5
 ];
 
 /**

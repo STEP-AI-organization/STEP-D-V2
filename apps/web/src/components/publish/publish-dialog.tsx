@@ -17,7 +17,7 @@
  * 판정은 서버가 한다. 이 모달은 서버가 준 결과를 그리고, 최종 결과 문구도 서버가 준
  * notice 를 그대로 쓴다 — 화면이 통과로 본 것이 서버 재판정에서 빠질 수 있기 때문이다.
  */
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { useToast } from "@/components/ui/toast";
 import { useAppData } from "@/lib/data/store";
@@ -88,10 +88,17 @@ export function PublishDialog({
   clipIds,
   onClose,
   onDone,
+  presetPlatform,
 }: {
   clipIds: string[];
   onClose: () => void;
   onDone?: () => void | Promise<void>;
+  /**
+   * 배포 매트릭스의 채널 칸(＋)에서 열렸을 때 그 플랫폼의 적격 대상을 **미리 골라 둔다.**
+   * 열을 나눠 그려 놓고 아무것도 안 골라 주면, 사람은 "Instagram 칸을 눌렀는데 아무것도
+   * 안 골라진" 채로 다시 고르거나 엉뚱한 채널을 고른다. 안 넘기면 종전대로 빈 선택이다.
+   */
+  presetPlatform?: string;
 }) {
   const { toast } = useToast();
   const { clips, episodes, programs } = useAppData();
@@ -245,6 +252,16 @@ export function PublishDialog({
 
   const selectable = useMemo(() => targets.filter((t) => !t.blocked), [targets]);
   const chosen = useMemo(() => selectable.filter((t) => selected.has(t.key)), [selectable, selected]);
+
+  // 채널 칸에서 열렸으면 그 플랫폼의 **적격** 대상만 미리 체크한다. 대상 목록은 서버에서
+  // 늦게 오므로 selectable 이 채워진 뒤 한 번만 — 사람이 그 뒤 푼 선택을 되살리지 않는다.
+  const presetDone = useRef(false);
+  useEffect(() => {
+    if (presetDone.current || !presetPlatform || selectable.length === 0) return;
+    presetDone.current = true;
+    const keys = selectable.filter((t) => t.platform === presetPlatform).map((t) => t.key);
+    if (keys.length) setSelected(new Set(keys));
+  }, [presetPlatform, selectable]);
   const allOn = selectable.length > 0 && chosen.length === selectable.length;
 
   // ⚠️ 저장하는 건 **사람이 실제로 바꾼 필드뿐**이고, 기본값은 읽을 때 합친다.
