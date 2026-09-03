@@ -313,7 +313,10 @@ export async function dispatchPublish(input: PublishInput): Promise<PublishOutco
         publishAt: nativeSchedule ? reserveDate : undefined,
       }, {
         dedupeKey: `distribution.publish:${clipId}:${input.youtubeChannelId ?? "-"}`,
-        ...(input.scheduled && !nativeSchedule ? scheduleDelay(input.scheduled, reserveDate) : {}),
+        // 비-public 은 **리드를 준다** — 올려도 공개되지 않으므로 미리 올리는 게 안전하고,
+        // 슬롯 시각에는 이미 올라가 있어야 편집자가 그때 확인할 수 있다.
+        ...(input.scheduled && !nativeSchedule
+          ? scheduleDelay(input.scheduled, reserveDate, UPLOAD_LEAD_MIN) : {}),
       });
       queued.push(clipId);
     } else {
@@ -357,10 +360,33 @@ function naverPublishAt(scheduled: boolean | undefined, reserveDate: string | un
  * 워커가 발사한다(우리쪽 발사). 큐의 delayMs(= runAfter) 를 쓴다. 과거·해석불가는 지연 없음
  * (= 즉시 발사) — 예약은 못 걸리는 것보다 틀리는 게 나쁘다(YouTube/네이버와 같은 방향).
  */
-function scheduleDelay(scheduled: boolean | undefined, reserveDate: string | undefined): { delayMs?: number } {
+/**
+ * **업로드를 몇 분 일찍 시작하는가** (유튜브 비-public 예약 전용).
+ *
+ * 사용자 2026-09-03: *"private 라도 5분 일찍 올려서 6시에는 편집자가 '올라갔구나' 확인하길
+ * 바라는 마음."* 맞다. 슬롯 시각은 **"업로드를 시작하는 시각"이 아니라 "이미 올라가 있는
+ * 시각"** 이어야 한다. 18:00 에 업로드를 시작하면 편집자가 18:00 에 보는 건 빈 채널이다.
+ *
+ * 5분인 이유: 쇼츠 한 편(수십 MB)은 보통 1분 안에 끝난다. 넉넉히 잡되, 너무 길면 "예약
+ * 시각보다 한참 먼저 올라가 있다" 가 되어 그것대로 헷갈린다.
+ */
+export const UPLOAD_LEAD_MIN = 5;
+
+/**
+ * 예약 시각까지 잡을 지연시킨다.
+ *
+ * ⚠️ **`leadMin` 은 유튜브 비-public 경로에서만 쓴다.** TikTok·Instagram 은 이 잡이 곧
+ *    **게시**라(예약 API 가 없어 우리가 그 시각에 발사한다) 일찍 쏘면 **글이 일찍 올라간다.**
+ *    유튜브 비-public 은 올려도 공개되지 않으니 미리 올리는 게 안전하고, 그게 목적이다.
+ */
+function scheduleDelay(
+  scheduled: boolean | undefined, reserveDate: string | undefined, leadMin = 0,
+): { delayMs?: number } {
   if (!scheduled || !reserveDate) return {};
   const t = Date.parse(reserveDate);
-  const ms = Number.isFinite(t) ? t - Date.now() : 0;
+  if (!Number.isFinite(t)) return {};
+  // 이미 리드 창 안이면 지연 없이 지금 쏜다(음수 지연은 없다).
+  const ms = t - leadMin * 60_000 - Date.now();
   return ms > 0 ? { delayMs: ms } : {};
 }
 
