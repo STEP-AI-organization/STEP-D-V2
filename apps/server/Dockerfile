@@ -45,6 +45,11 @@ RUN python3 -m venv /opt/autofillvenv \
  && /opt/autofillvenv/bin/pip install --no-cache-dir google-genai
 ENV CORE_PYTHON=/opt/autofillvenv/bin/python
 COPY core core
+# 워크스페이스 도우미의 **지식 전부** — chatbot/help.ts 가 /app/docs/help 에서 읽는다.
+# ⚠️ 이 줄이 빠지면 로컬은 멀쩡하고 **프로덕션만** 도우미가 제품을 모른 채 일반론으로
+# 답한다. 에러도 안 나고 응답도 그럴듯해서 아무도 눈치채지 못한다 —
+# `chatbot-help.test.ts` 가 이 COPY 줄의 존재를 검사하는 이유다.
+COPY docs/help docs/help
 # 쇼츠 프레임 템플릿 — shorts-template.ts 가 /app/assets/shorts-template 에서 읽는다.
 # 빼먹으면 편집기 템플릿 목록이 프로덕션에서만 빈 배열이 된다(로컬은 멀쩡해서 안 보인다).
 COPY assets/shorts-template assets/shorts-template

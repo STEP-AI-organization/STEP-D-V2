@@ -1,0 +1,414 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>업무 도우미 챗봇 — 디자인 실측 목업</title>
+<style>
+  /* 실제 제품 토큰 그대로 (apps/web/src/app/globals.css). 값을 지어내지 않았다. */
+  :root{
+    --sd-app-bg:#eceae5; --sd-card:#ffffff; --sd-card-sub:#faf9f7;
+    --sd-border:#e4e2dc; --sd-divider:#f2f0eb;
+    --sd-fg:#1f1e1c; --sd-mut:#69665f; --sd-label:#625f58;
+    --sd-accent:#1f4fd8; --sd-accent-hover:#1a43b8; --sd-accent-bg:#edf2ff; --sd-accent-border:#bfcffa;
+    --sd-control:#ffffff; --sd-control-border:#cbc8c1; --sd-control-hover:#f7f6f3;
+    --sd-ok:#1c7a52; --sd-warn:#96690c; --sd-warn-bg:#fdf6e5; --sd-warn-border:#e8cf95; --sd-warn-fg:#715006;
+    --sd-danger:#b03328; --sd-danger-bg:#fdf0ed; --sd-danger-border:#f0b5ab;
+    --sd-sidebar-bg:#f6f7fa; --sd-sidebar-border:#e2e5ee; --sd-nav-fg:#4f4c46;
+    --sd-serif:"Noto Serif KR",ui-serif,Georgia,serif;
+    --sd-mono:ui-monospace,"JetBrains Mono",Menlo,monospace;
+    --sans:"Pretendard",-apple-system,BlinkMacSystemFont,"Segoe UI","Malgun Gothic",Roboto,sans-serif;
+  }
+  body.dark{
+    --sd-app-bg:#0b0e18; --sd-card:#171b28; --sd-card-sub:#111522;
+    --sd-border:#303647; --sd-divider:#252a38;
+    --sd-fg:#f1f3f8; --sd-mut:#b0b6c3; --sd-label:#9ba4b5;
+    --sd-accent:#7185ff; --sd-accent-hover:#8b9aff; --sd-accent-bg:#1b2548; --sd-accent-border:#46568f;
+    --sd-control:#171b28; --sd-control-border:#3a4255; --sd-control-hover:#202638;
+    --sd-ok:#52d6a0; --sd-warn:#f4c55e; --sd-warn-bg:#2b2313; --sd-warn-border:#665126; --sd-warn-fg:#f4c55e;
+    --sd-danger:#ff857c; --sd-danger-bg:#321918; --sd-danger-border:#70403c;
+    --sd-sidebar-bg:#101421; --sd-sidebar-border:#2a3040; --sd-nav-fg:#c7ccd6;
+  }
+
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--sd-app-bg);color:var(--sd-fg);font-family:var(--sans);
+    font-size:14px;line-height:1.55;padding:40px 32px 80px}
+  .wrap{max-width:1240px;margin:0 auto}
+
+  h1{font-family:var(--sd-serif);font-size:22px;font-weight:700}
+  .sub{font-size:12.5px;color:var(--sd-mut);margin-top:6px}
+  h2{font-family:var(--sd-serif);font-size:16px;font-weight:700;margin-top:38px;
+    padding-bottom:8px;border-bottom:1px solid var(--sd-border)}
+  h2 small{font-family:var(--sans);font-size:11.5px;font-weight:400;color:var(--sd-mut);margin-left:8px}
+  .note{font-size:12px;color:var(--sd-mut);margin-top:10px}
+
+  .toggle{position:fixed;top:16px;right:20px;z-index:50;background:var(--sd-control);
+    border:1px solid var(--sd-control-border);color:var(--sd-fg);border-radius:8px;
+    padding:7px 13px;font-size:12px;font-family:var(--sans);cursor:pointer}
+
+  .row{display:flex;gap:28px;flex-wrap:wrap;align-items:flex-start;margin-top:18px}
+  .cap{font-size:11.5px;color:var(--sd-mut);margin-bottom:8px;font-family:var(--sd-mono)}
+  .cap b{color:var(--sd-fg);font-family:var(--sans)}
+
+  /* ── 위젯 ─────────────────────────────────────────────── */
+  .widget{width:380px;background:var(--sd-card);border:1px solid var(--sd-border);
+    border-radius:14px;overflow:hidden;box-shadow:0 8px 28px rgba(31,30,28,.10)}
+  body.dark .widget{box-shadow:0 8px 28px rgba(0,0,0,.5)}
+  .w-head{display:flex;align-items:center;gap:8px;padding:12px 14px;
+    border-bottom:1px solid var(--sd-divider);background:var(--sd-card-sub)}
+  .w-title{font-family:var(--sd-serif);font-size:14.5px;font-weight:700;flex:1}
+  .w-title span{font-family:var(--sans);font-size:11px;font-weight:400;color:var(--sd-mut);margin-left:6px}
+  .ico{width:28px;height:28px;border-radius:7px;border:1px solid transparent;display:grid;
+    place-items:center;color:var(--sd-mut);font-size:13px;cursor:pointer}
+  .ico:hover{background:var(--sd-control-hover);border-color:var(--sd-border)}
+
+  .w-body{padding:14px;display:flex;flex-direction:column;gap:14px;
+    background:var(--sd-card);max-height:460px;overflow:auto}
+
+  .msg{max-width:88%;font-size:13px;line-height:1.65}
+  .msg.me{align-self:flex-end;background:var(--sd-accent-bg);border:1px solid var(--sd-accent-border);
+    border-radius:12px 12px 4px 12px;padding:9px 12px}
+  body.dark .msg.me{color:#e9edff}
+  .msg.bot{align-self:flex-start;background:var(--sd-card-sub);border:1px solid var(--sd-border);
+    border-radius:12px 12px 12px 4px;padding:10px 12px}
+  .msg.bot b{font-weight:700}
+  .msg ol{margin:6px 0 0 16px}
+  .msg ol li{margin-bottom:3px}
+
+  .links{display:flex;flex-wrap:wrap;gap:6px;margin-top:9px}
+  .link{display:inline-flex;align-items:center;gap:5px;font-size:12px;
+    border:1px solid var(--sd-accent-border);background:var(--sd-card);color:var(--sd-accent);
+    border-radius:999px;padding:4px 11px;text-decoration:none;cursor:pointer}
+  .link:hover{background:var(--sd-accent-bg)}
+  .link::after{content:"→";font-size:11px;opacity:.7}
+
+  .cite{margin-top:8px;font-size:10.5px;color:var(--sd-mut);font-family:var(--sd-mono)}
+
+  .w-foot{border-top:1px solid var(--sd-divider);padding:10px 12px;background:var(--sd-card)}
+  .here{display:inline-flex;align-items:center;gap:5px;font-size:10.5px;color:var(--sd-mut);
+    border:1px solid var(--sd-border);border-radius:999px;padding:2px 8px;margin-bottom:8px;
+    font-family:var(--sd-mono)}
+  .input{display:flex;gap:8px;align-items:center}
+  .input .box{flex:1;border:1px solid var(--sd-control-border);border-radius:10px;
+    padding:9px 12px;font-size:13px;color:var(--sd-mut);background:var(--sd-control)}
+  .send{width:36px;height:36px;flex:none;border-radius:10px;background:var(--sd-accent);
+    color:#fff;display:grid;place-items:center;font-size:14px;cursor:pointer}
+  body.dark .send{color:#0b1026}
+
+  .trigger{width:52px;height:52px;border-radius:999px;background:var(--sd-accent);color:#fff;
+    display:grid;place-items:center;font-size:20px;box-shadow:0 6px 20px rgba(31,79,216,.35);cursor:pointer}
+  body.dark .trigger{color:#0b1026}
+  .badge{position:relative;top:-46px;left:36px;width:18px;height:18px;border-radius:999px;
+    background:var(--sd-danger);color:#fff;font-size:10.5px;display:grid;place-items:center;
+    border:2px solid var(--sd-app-bg)}
+
+  /* 앱 셸 축소도 — 위젯이 실제로 어디에 얹히는지 */
+  .shell{width:560px;height:330px;border:1px solid var(--sd-border);border-radius:12px;
+    overflow:hidden;position:relative;background:var(--sd-app-bg)}
+  .shell .side{position:absolute;left:0;top:0;bottom:0;width:103px;background:var(--sd-sidebar-bg);
+    border-right:1px solid var(--sd-sidebar-border)}
+  .shell .side i{display:block;height:7px;margin:9px 12px;border-radius:3px;background:var(--sd-border);font-style:normal}
+  .shell .top{position:absolute;left:103px;right:0;top:0;height:27px;background:var(--sd-card);
+    border-bottom:1px solid var(--sd-border)}
+  .shell .top i{display:block;height:7px;width:120px;margin:10px 0 0 14px;border-radius:3px;background:var(--sd-border);font-style:normal}
+  .shell .main{position:absolute;left:117px;right:14px;top:41px;bottom:14px}
+  .shell .main i{display:block;height:46px;margin-bottom:10px;border-radius:8px;
+    background:var(--sd-card);border:1px solid var(--sd-border);font-style:normal}
+  .shell .fab{position:absolute;right:12px;bottom:12px;width:38px;height:38px;border-radius:999px;
+    background:var(--sd-accent);box-shadow:0 4px 14px rgba(31,79,216,.35)}
+  .shell .mini{position:absolute;right:12px;bottom:12px;width:190px;height:250px;border-radius:10px;
+    background:var(--sd-card);border:1px solid var(--sd-border);box-shadow:0 8px 24px rgba(31,30,28,.14)}
+  .shell .mini u{display:block;height:22px;border-bottom:1px solid var(--sd-divider);
+    background:var(--sd-card-sub);border-radius:10px 10px 0 0;text-decoration:none}
+  .shell .mini i{display:block;height:12px;margin:9px 10px;border-radius:6px;background:var(--sd-divider);font-style:normal}
+  .shell .mini i.a{width:70%;background:var(--sd-accent-bg);margin-left:auto;margin-right:10px}
+
+  /* 치수 주석 */
+  .dim{position:relative}
+  .dim::after{content:attr(data-dim);position:absolute;top:-11px;right:0;font-size:10px;
+    font-family:var(--sd-mono);color:var(--sd-accent);background:var(--sd-accent-bg);
+    border:1px solid var(--sd-accent-border);border-radius:4px;padding:0 5px}
+
+  /* 스펙 표 */
+  table{width:100%;border-collapse:collapse;font-size:13px;margin-top:14px}
+  th{font-size:11.5px;color:var(--sd-mut);font-weight:600;text-align:left;padding:9px 12px;
+    border-bottom:1px solid var(--sd-border)}
+  td{padding:10px 12px;border-bottom:1px solid var(--sd-divider);vertical-align:top}
+  td:first-child{font-weight:600;white-space:nowrap}
+  code{font-family:var(--sd-mono);font-size:12px;background:var(--sd-card-sub);
+    border:1px solid var(--sd-border);border-radius:4px;padding:1px 5px}
+
+  .swatch{display:inline-block;width:13px;height:13px;border-radius:3px;vertical-align:-2px;
+    margin-right:6px;border:1px solid rgba(0,0,0,.12)}
+
+  .legend{margin-top:20px;background:var(--sd-warn-bg);border:1px solid var(--sd-warn-border);
+    border-radius:10px;padding:16px 18px;font-size:13px;color:var(--sd-warn-fg)}
+  .legend h3{font-size:13px;font-weight:700;margin-bottom:10px}
+  .legend div{display:flex;gap:9px;margin-bottom:8px}
+  .legend div:last-child{margin-bottom:0}
+  .legend .n{flex:none;width:18px;height:18px;border-radius:999px;background:var(--sd-warn);
+    color:var(--sd-warn-bg);display:grid;place-items:center;font-size:11px;font-weight:700;margin-top:2px}
+
+  .pill{display:inline-block;font-size:10.5px;font-family:var(--sd-mono);border-radius:4px;
+    padding:1px 6px;border:1px solid var(--sd-border);color:var(--sd-mut);background:var(--sd-card-sub)}
+  .warnbox{border:1px solid var(--sd-warn-border);background:var(--sd-warn-bg);color:var(--sd-warn-fg);
+    border-radius:9px;padding:9px 11px;font-size:12px;margin-top:9px}
+  .rptcard{border:1px solid var(--sd-border);border-radius:10px;overflow:hidden;margin-top:9px}
+  .rptcard .h{padding:9px 11px;background:var(--sd-card-sub);border-bottom:1px solid var(--sd-divider);
+    font-size:12.5px;font-weight:700}
+  .rptcard .b{padding:10px 11px;font-size:11.5px;color:var(--sd-mut);font-family:var(--sd-mono);line-height:1.5}
+  .rptcard .f{display:flex;gap:6px;padding:9px 11px;border-top:1px solid var(--sd-divider)}
+  .btn{font-size:11.5px;border:1px solid var(--sd-control-border);background:var(--sd-control);
+    color:var(--sd-fg);border-radius:7px;padding:5px 10px;cursor:pointer}
+  .btn.pri{background:var(--sd-accent);border-color:var(--sd-accent);color:#fff}
+  body.dark .btn.pri{color:#0b1026}
+
+  .threads{padding:6px}
+  .thread{padding:9px 11px;border-radius:9px;cursor:pointer}
+  .thread:hover{background:var(--sd-card-sub)}
+  .thread .t{font-size:12.5px;font-weight:600}
+  .thread .m{font-size:10.5px;color:var(--sd-mut);margin-top:2px;font-family:var(--sd-mono)}
+</style>
+</head>
+<body>
+<button class="toggle" onclick="document.body.classList.toggle('dark')">라이트 / 다크</button>
+
+<div class="wrap">
+  <h1>업무 도우미 챗봇 — 디자인 실측</h1>
+  <div class="sub">
+    색·서체·반경은 <b>실제 제품 토큰</b>(<code>apps/web/src/app/globals.css</code>) 그대로다. 지어낸 값 없음.
+    서버는 이미 동작한다 — 이 문서는 <b>화면만</b> 정하기 위한 것이다.
+  </div>
+
+  <!-- ───────────────────────────────────────────────────── -->
+  <h2>1. 어디에 얹히나 <small>사이드바 206px + 상단바 54px 위에, 우하단 고정</small></h2>
+  <div class="row">
+    <div>
+      <div class="cap"><b>닫힘</b> — 트리거만</div>
+      <div class="shell">
+        <div class="side"><i></i><i></i><i></i><i></i><i></i><i></i></div>
+        <div class="top"><i></i></div>
+        <div class="main"><i></i><i></i><i></i></div>
+        <div class="fab"></div>
+      </div>
+    </div>
+    <div>
+      <div class="cap"><b>열림</b> — 본문을 가리지 않는 폭</div>
+      <div class="shell">
+        <div class="side"><i></i><i></i><i></i><i></i><i></i><i></i></div>
+        <div class="top"><i></i></div>
+        <div class="main"><i></i><i></i><i></i></div>
+        <div class="mini"><u></u><i></i><i class="a"></i><i></i><i></i><i class="a"></i><i></i></div>
+      </div>
+    </div>
+    <div>
+      <div class="cap"><b>트리거</b> 52px</div>
+      <div class="trigger">✳</div>
+      <div class="badge">1</div>
+      <div class="note" style="width:150px;margin-top:-8px">
+        배지는 <b>읽지 않은 답</b>이 있을 때만. 광고성 알림은 안 띄운다.
+      </div>
+    </div>
+  </div>
+
+  <!-- ───────────────────────────────────────────────────── -->
+  <h2>2. 기본 대화 <small>안내 + 링크 + 근거</small></h2>
+  <div class="row">
+    <div class="dim" data-dim="380 × 620">
+      <div class="widget">
+        <div class="w-head">
+          <div class="w-title">도우미 <span>STEP D</span></div>
+          <div class="ico">☰</div><div class="ico">✕</div>
+        </div>
+        <div class="w-body">
+          <div class="msg me">자동배포는 어디서 켜요?</div>
+          <div class="msg bot">
+            <b>자동 배포</b> 화면에서 계획을 만들면 됩니다.
+            <ol>
+              <li>프로그램과 채널을 고릅니다</li>
+              <li>요일·시각(또는 하루 할당량)을 정합니다</li>
+              <li>승인 방식을 고르고 저장합니다</li>
+            </ol>
+            처음이라면 <b>승인 후 게시</b>로 두고 며칠 지켜보시길 권합니다.
+            <div class="links"><a class="link">자동 배포</a><a class="link">배포 채널</a></div>
+            <div class="cite">참고 · 60-automation · 40-publish-channels</div>
+          </div>
+          <div class="msg me">채널은 몇 개까지 걸 수 있어요?</div>
+          <div class="msg bot">
+            한 계획에 채널을 여러 개 넣을 수 있고, <b>채널마다 하루 할당량</b>이 따로 적용됩니다(기본 3건).
+            다만 회차 하나에서 나오는 영상 수에 한계가 있어, 계획만 늘린다고 그만큼 나가지는 않습니다.
+            <div class="cite">참고 · 60-automation</div>
+          </div>
+        </div>
+        <div class="w-foot">
+          <div class="here">보는 중 · /automation</div>
+          <div class="input"><div class="box">무엇이든 물어보세요</div><div class="send">↑</div></div>
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <div class="cap"><b>내 데이터로 답할 때</b> — 도구 조회</div>
+      <div class="widget">
+        <div class="w-head">
+          <div class="w-title">도우미</div><div class="ico">☰</div><div class="ico">✕</div>
+        </div>
+        <div class="w-body">
+          <div class="msg me">신병 4화 분석 끝났어?</div>
+          <div class="msg bot">
+            <b>신병4 : 사보타주 4화</b>는 분석이 끝났습니다(원본 58분).
+            숏폼 20개, 클립 3개가 만들어져 있습니다.
+            <div class="links"><a class="link">회차 상세</a><a class="link">미디어</a></div>
+            <div class="cite">조회 · lookup_media</div>
+          </div>
+          <div class="msg me">크레딧 얼마 남았어?</div>
+          <div class="msg bot">
+            지금 <b>1,240개</b> 남아 있습니다(1개 = 분석 1분). 60분짜리 회차 기준 20편 정도 분석할 수 있습니다.
+            <div class="links"><a class="link">크레딧</a></div>
+          </div>
+          <div class="msg me">어제 배포 실패한 거 왜 그래?</div>
+          <div class="msg bot">
+            실패 3건은 모두 유튜브 업로드 한도였습니다 —
+            <span class="pill">exceeded the number of videos</span>
+            채널의 일일 업로드 한도에 걸린 것이라, 오늘 다시 시도하시면 됩니다.
+            <div class="links"><a class="link">배포</a></div>
+            <div class="cite">조회 · recent_failures</div>
+          </div>
+        </div>
+        <div class="w-foot">
+          <div class="input"><div class="box">무엇이든 물어보세요</div><div class="send">↑</div></div>
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <div class="cap"><b>대화 목록</b> — ☰ 를 누르면</div>
+      <div class="widget" style="width:300px">
+        <div class="w-head"><div class="w-title">대화</div><div class="ico">＋</div><div class="ico">✕</div></div>
+        <div class="w-body threads" style="max-height:300px;gap:0">
+          <div class="thread"><div class="t">자동배포는 어디서 켜요?</div><div class="m">방금 · 4개</div></div>
+          <div class="thread"><div class="t">신병 4화 분석 끝났어?</div><div class="m">어제 · 6개</div></div>
+          <div class="thread"><div class="t">인스타 연결이 자꾸 끊겨요</div><div class="m">9월 1일 · 12개</div></div>
+          <div class="thread"><div class="t">8월 실적 정리해줘</div><div class="m">8월 31일 · 3개</div></div>
+        </div>
+        <div class="w-foot"><div class="input"><div class="box">새 대화 시작</div><div class="send">＋</div></div></div>
+      </div>
+      <div class="note" style="width:300px">
+        내 대화만 보인다. 같은 회사 동료 것도 안 보인다(서버가 사람 단위로 막는다).
+      </div>
+    </div>
+  </div>
+
+  <!-- ───────────────────────────────────────────────────── -->
+  <h2>3. 경계 상태 <small>잘 될 때보다 이쪽이 디자인을 정한다</small></h2>
+  <div class="row">
+    <div>
+      <div class="cap"><b>보고서를 만들었을 때</b></div>
+      <div class="widget" style="width:360px">
+        <div class="w-head"><div class="w-title">도우미</div><div class="ico">☰</div><div class="ico">✕</div></div>
+        <div class="w-body" style="max-height:340px">
+          <div class="msg me">9월 실적 정리해줘</div>
+          <div class="msg bot" style="max-width:100%">
+            9월 운영 실적 보고 초안을 만들었습니다. 아래에서 확인해 주세요.
+            <div class="rptcard">
+              <div class="h">9월 운영 실적 보고<br><span style="font-weight:400;font-size:11px;color:var(--sd-mut)">2026-09-01 ~ 09-03</span></div>
+              <div class="b">배포 112건 · 자동 24건<br>분석 완료 18회차 · 실패 6건<br>검산 3/3 통과</div>
+              <div class="f"><span class="btn pri">전체 보기</span><span class="btn">HTML</span><span class="btn">마크다운</span></div>
+            </div>
+          </div>
+        </div>
+        <div class="w-foot"><div class="input"><div class="box">무엇이든 물어보세요</div><div class="send">↑</div></div></div>
+      </div>
+    </div>
+
+    <div>
+      <div class="cap"><b>검산이 어긋났을 때</b> — 내보내기가 잠긴다</div>
+      <div class="widget" style="width:360px">
+        <div class="w-head"><div class="w-title">도우미</div><div class="ico">☰</div><div class="ico">✕</div></div>
+        <div class="w-body" style="max-height:340px">
+          <div class="msg bot" style="max-width:100%">
+            초안은 만들었지만 <b>합계가 맞지 않습니다.</b>
+            <div class="rptcard">
+              <div class="h">8월 채널 성과 보고</div>
+              <div class="b">조회수 1,204,880 · 시청시간 88,120분</div>
+              <div class="f"><span class="btn pri">전체 보기</span>
+                <span class="btn" style="opacity:.45;cursor:not-allowed">HTML</span>
+                <span class="btn" style="opacity:.45;cursor:not-allowed">마크다운</span></div>
+            </div>
+            <div class="warnbox">
+              검산 불일치 — 채널별 조회수 합(1,198,340)이 헤드라인(1,204,880)과 다릅니다.
+              <b>파일로는 내보낼 수 없습니다.</b>
+            </div>
+          </div>
+        </div>
+        <div class="w-foot"><div class="input"><div class="box">무엇이든 물어보세요</div><div class="send">↑</div></div></div>
+      </div>
+      <div class="note" style="width:360px">
+        화면에는 보이고 파일만 막는다 — 무엇이 어긋났는지 알아야 고치므로. 첨부파일이 되어
+        회의에 들어가는 것만 막는 것이 목적이다.
+      </div>
+    </div>
+
+    <div style="width:360px">
+      <div class="cap"><b>모를 때 · 막을 때</b></div>
+      <div class="widget">
+        <div class="w-head"><div class="w-title">도우미</div><div class="ico">☰</div><div class="ico">✕</div></div>
+        <div class="w-body" style="max-height:360px">
+          <div class="msg me">SMR 송출 계약 어떻게 갱신해요?</div>
+          <div class="msg bot">
+            그건 제가 확인할 수 없는 내용입니다. 배포 채널 연결 상태는
+            아래 화면에서 볼 수 있고, 계약은 담당자에게 문의해 주세요.
+            <div class="links"><a class="link">배포 채널</a></div>
+          </div>
+          <div class="msg me">서버 어디 돌아가? 한 편에 원가 얼마야?</div>
+          <div class="msg bot">
+            그 부분은 안내해 드릴 수 없습니다. 대신 이 워크스페이스의
+            <b>크레딧 사용량</b>은 확인하실 수 있습니다.
+            <div class="links"><a class="link">크레딧</a></div>
+          </div>
+          <div class="msg me">ㅋㅋㅋ</div>
+          <div class="msg bot">
+            요청이 너무 잦습니다. 잠시 후 다시 시도해 주세요.
+            <span class="pill">분당 10회</span>
+          </div>
+        </div>
+        <div class="w-foot"><div class="input"><div class="box">무엇이든 물어보세요</div><div class="send">↑</div></div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ───────────────────────────────────────────────────── -->
+  <h2>4. 치수·색 <small>구현이 이 값을 그대로 쓴다</small></h2>
+  <table>
+    <thead><tr><th style="width:150px">항목</th><th style="width:120px">값</th><th>왜 그 값인가</th></tr></thead>
+    <tbody>
+      <tr><td>위젯 폭</td><td><code>380px</code></td><td>사이드바(206) + 본문 최소폭을 가리지 않는 최대치. 표가 있는 화면에서도 본문이 계속 읽힌다</td></tr>
+      <tr><td>위젯 높이</td><td><code>min(620px, 78vh)</code></td><td>노트북(768px 높이)에서도 상단바를 안 덮는다</td></tr>
+      <tr><td>여백</td><td><code>right 24 · bottom 24</code></td><td>본문 우측 패딩(20)보다 크게 둬서 카드에 붙어 보이지 않게</td></tr>
+      <tr><td>트리거</td><td><code>52px</code> 원형</td><td>터치 최소치(44) 이상 · 배지 18px 이 겹쳐도 안 잘린다</td></tr>
+      <tr><td>모서리</td><td><code>14px</code> / 말풍선 <code>12px</code></td><td>제품 카드와 같은 계열. 말풍선은 한 귀퉁이만 4px 로 말하는 쪽을 표시</td></tr>
+      <tr><td>본문 글자</td><td><code>13px</code> / 1.65</td><td>제품 본문(13.5)보다 약간 작게 — 보조 표면임을 크기로 말한다</td></tr>
+      <tr><td>강조색</td><td><span class="swatch" style="background:#1f4fd8"></span><code>#1f4fd8</code></td><td>제품 accent 그대로. 챗봇 전용 색을 새로 만들지 않는다</td></tr>
+      <tr><td>내 말풍선</td><td><span class="swatch" style="background:#edf2ff"></span><code>#edf2ff</code></td><td>accent-bg. 채도를 올리면 대화가 화면 주인공이 된다 — 도우미는 보조다</td></tr>
+      <tr><td>도우미 말풍선</td><td><span class="swatch" style="background:#faf9f7"></span><code>#faf9f7</code></td><td>card-sub. 흰 카드 위에서 한 겹만 눌러 준다</td></tr>
+      <tr><td>링크 칩</td><td><code>999px</code> · 12px</td><td>본문 링크가 아니라 <b>버튼</b>으로 보여야 누른다. 최대 6개</td></tr>
+      <tr><td>근거 캡션</td><td><code>10.5px</code> mono</td><td>답이 어느 문서에서 나왔는지 — 틀렸을 때 어느 문서를 고칠지 바로 안다</td></tr>
+    </tbody>
+  </table>
+
+  <div class="legend">
+    <h3>정해 주셔야 하는 것 — 제가 임의로 못 정합니다</h3>
+    <div><span class="n">1</span><span><b>이름.</b> 지금은 "도우미" 로 뒀습니다. 제품 안에서 부르는 이름이 필요합니다(도우미 · 어시스턴트 · 스텝 · 그 외).</span></div>
+    <div><span class="n">2</span><span><b>근거 표시를 남길지.</b> "참고 · 60-automation" 은 답이 틀렸을 때 어느 문서를 고칠지 바로 알려 주지만, 고객에게는 내부 파일명으로 보입니다. 문서 <b>제목</b>으로 바꾸거나(참고 · 자동 배포 계획 만들기), 아예 뺄 수 있습니다.</span></div>
+    <div><span class="n">3</span><span><b>트리거 배지.</b> 읽지 않은 답에만 띄우는 게 맞는지, 아니면 배지 자체를 빼는지.</span></div>
+    <div><span class="n">4</span><span><b>보고서를 위젯 안에서 다 볼지.</b> 지금 목업은 "전체 보기" 로 넘깁니다. 넘길 화면(<code>/reports</code>)이 아직 없으니, 위젯 안 전체보기로 할지 / 화면을 새로 만들지 결정이 필요합니다.</span></div>
+    <div><span class="n">5</span><span><b>모바일.</b> 380px 고정이면 폰에서 화면을 거의 덮습니다. 전체화면 시트로 바꿀지, 아니면 모바일에서는 아예 안 띄울지.</span></div>
+  </div>
+
+  <div class="note" style="margin-top:26px">
+    같은 폴더의 <code>report-sample.html</code> 은 목업이 아니라 <b>지금 코드(<code>report/render.ts</code>)가
+    실제로 뽑아낸 파일</b>입니다 — 리포트 디자인은 그쪽을 보고 판단해 주세요.
+  </div>
+</div>
+</body>
+</html>

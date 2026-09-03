@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>9월 운영 실적 보고 (2026-09-01 ~ 2026-09-03)</title>
+<style>
+  :root{--line:#e5e5e8;--ink:#1c1c1e;--sub:#8a8a8f;--blue:#3b6ef5}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:#fff;color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,
+    "Apple SD Gothic Neo","Malgun Gothic",sans-serif;font-size:14px;padding:44px 40px;line-height:1.55}
+  .wrap{max-width:1180px;margin:0 auto}
+  h1{font-size:19px;font-weight:800}
+  .meta{font-size:12.5px;color:#555;margin-top:8px}
+  .lead{font-size:13.5px;color:#333;margin-top:18px;line-height:1.75}
+  .panel{border:1px solid var(--line);border-radius:14px;padding:22px 24px;margin-top:22px}
+  .cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px}
+  .kcard{border:1px solid var(--line);border-left:3px solid #d9d9de;border-radius:10px;padding:14px 16px}
+  .kcard.hl{border-left-color:var(--blue)}
+  .kcard .t{font-size:12px;color:#555}
+  .kcard .v{font-size:26px;font-weight:800;margin-top:4px}
+  .kcard .v small{font-size:13px;font-weight:500;color:var(--sub)}
+  .kcard .d{font-size:11.5px;color:var(--sub);margin-top:3px}
+  h2{font-size:14px;font-weight:700;margin-top:26px}
+  table{width:100%;border-collapse:collapse;font-size:13.5px;margin-top:12px}
+  th{font-size:12px;color:var(--sub);font-weight:600;text-align:right;padding:10px 12px;
+    border-bottom:1px solid var(--line)}
+  th:first-child{text-align:left}
+  td{padding:12px;border-bottom:1px solid #f0f0f2;text-align:right;font-variant-numeric:tabular-nums}
+  td:first-child{text-align:left;font-weight:600}
+  tr.total td{border-top:2px solid var(--ink);border-bottom:none;font-weight:700}
+  .warn{margin-top:18px;background:#fff7e6;border:1px solid #f0c36d;border-radius:10px;
+    padding:14px 18px;font-size:13px}
+  .foot{margin-top:20px;color:var(--sub);font-size:12px}
+  @media print{body{padding:0}.panel{break-inside:avoid}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>9월 운영 실적 보고 (2026-09-01 ~ 2026-09-03)</h1>
+  <div class="meta">기간 2026-09-01 ~ 2026-09-03</div>
+  <div class="lead">2026-09-01부터 2026-09-03까지 배포는 112건이었고, 그중 자동 경로가 24건이었습니다. 프로그램별로는 신병4 : 사보타주가 56건으로 가장 많았고, 채널별로는 유튜브가 88건이었습니다. 같은 기간 분석은 18회차가 끝났으며 실패는 6건 기록됐습니다.</div>
+  <div class="panel">
+    <div class="cards">
+      <div class="kcard hl">
+        <div class="t">배포 <small>(영상 × 채널)</small></div>
+        <div class="v">112 <small>건</small></div>
+        
+      </div>
+      <div class="kcard">
+        <div class="t">자동 배포 <small>(위 배포 중 자동 경로)</small></div>
+        <div class="v">24 <small>건</small></div>
+        
+      </div>
+      <div class="kcard">
+        <div class="t">분석 완료</div>
+        <div class="v">18 <small>회차</small></div>
+        
+      </div>
+      <div class="kcard">
+        <div class="t">실패 <small>(모든 작업 종류 합)</small></div>
+        <div class="v">6 <small>건</small></div>
+        
+      </div></div>
+    
+      <h2>프로그램 × 채널 배포</h2>
+      <table>
+        <thead><tr><th>프로그램</th><th>유튜브</th><th>인스타그램</th><th>페이스북</th><th>네이버</th><th>합계</th></tr></thead>
+        <tbody>
+          <tr><td>신병4 : 사보타주</td><td>41</td><td>8</td><td>5</td><td>2</td><td>56</td></tr><tr><td>솔로정보회사</td><td>24</td><td>0</td><td>0</td><td>0</td><td>24</td></tr><tr><td>짐쌀라비움</td><td>11</td><td>4</td><td>3</td><td>2</td><td>20</td></tr><tr><td>엑스 더 리그</td><td>9</td><td>0</td><td>0</td><td>0</td><td>9</td></tr><tr><td>ENA 케이팝업 차트쇼</td><td>3</td><td>0</td><td>0</td><td>0</td><td>3</td></tr>
+          <tr class="total"><td>합계</td><td>88</td><td>12</td><td>8</td><td>4</td><td>112</td></tr>
+        </tbody>
+      </table>
+      <div class="foot">자동 경로 24건 포함</div>
+      <h2>실패 사유</h2>
+      <table>
+        <thead><tr><th>작업</th><th>사유</th><th>건수</th></tr></thead>
+        <tbody>
+          <tr><td>distribution.publish</td><td>The user has exceeded the number of videos they may upload.</td><td>3</td></tr><tr><td>content.analyze</td><td>크레딧이 42개 모자랍니다 (필요 58 · 보유 16).</td><td>2</td></tr><tr><td>clip.render</td><td>ffprobe: moov atom not found</td><td>1</td></tr>
+          
+        </tbody>
+      </table>
+      
+  </div>
+  
+  <div class="foot">
+    데이터 기준 — 배포 기록 (게시 완료 시각 기준): 조회 시점 · 유튜브 채널 지표: 3일 전 기준<br>
+    운영 실적 보고 · 자동 생성 초안입니다. 판단·해석은 작성자가 채워 주세요.
+  </div>
+</div>
+</body>
+</html>

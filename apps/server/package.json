@@ -32,7 +32,10 @@
     "worker:render": "node --unhandled-rejections=warn --import tsx --env-file-if-exists=.env scripts/worker-render.mts",
     "server:local": "node --unhandled-rejections=warn --import tsx --env-file-if-exists=.env src/index.ts",
     "naver:login:upload": "node --import tsx --env-file-if-exists=.env scripts/naver-login-upload.mts",
-    "commerce:login": "node --import tsx --env-file-if-exists=.env scripts/commerce-login-upload.mts"
+    "commerce:login": "node --import tsx --env-file-if-exists=.env scripts/commerce-login-upload.mts",
+    "chatbot:ask": "node --import tsx --env-file .env scripts/chatbot-ask.mts",
+    "eval:make": "node --import tsx scripts/make-evalset.mts",
+    "eval:run": "node --import tsx --env-file .env scripts/run-evalset.mts"
   },
   "dependencies": {
     "@google-cloud/storage": "^7.15.0",
