@@ -156,8 +156,8 @@ export default function OpsPage() {
               const target = (j.payload?.mediaId ?? j.payload?.channelId ?? j.payload?.videoId ?? j.payload?.clipId ?? "") as string;
               return (
                 <TR key={j.id}>
-                  <TD className="font-mono text-xs">{j.type}</TD>
-                  <TD className="max-w-[140px] truncate font-mono text-xs text-muted-foreground" title={target}>
+                  <TD className="sd-mono text-xs">{j.type}</TD>
+                  <TD className="max-w-[140px] truncate sd-mono text-xs text-muted-foreground" title={target}>
                     {target || "—"}
                   </TD>
                   <TD>
@@ -221,7 +221,7 @@ export default function OpsPage() {
                   <TR interactive onClick={() => setExpanded(isOpen ? null : m.mediaId)} className="cursor-pointer">
                     <TD className="max-w-[220px]">
                       <div className="truncate font-medium">{m.title || "(제목 없음)"}</div>
-                      <div className="font-mono text-[11px] text-muted-foreground">{m.mediaId}</div>
+                      <div className="sd-mono text-[11px] text-muted-foreground">{m.mediaId}</div>
                     </TD>
                     <TD>
                       <StatusBadge tone={tone}>{a ? a.status : "미분석"}</StatusBadge>

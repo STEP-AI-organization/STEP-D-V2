@@ -2,8 +2,12 @@
 @import "tw-animate-css";
 
 /* Class-based dark mode: the topbar theme toggle sets `.dark` on <html>.
-   Initial theme is resolved by an inline no-flash script in the root layout. */
-@custom-variant dark (&:is(.dark *));
+   Initial theme is resolved by an inline no-flash script in the root layout.
+
+   2026-09-03: 디자이너 산출물의 정의로 통일했다(`:is` → `:where`). 우리 코드의 `dark:`
+   유틸 사용은 **0건**이라 손실이 없고, 디자이너 화면은 `dark:` 를 쓰므로 산출물과 1:1 인
+   정의를 두는 편이 대조하기 쉽다. `.dark *` 만 있던 옛 정의는 `.dark` **자신**을 안 잡는다. */
+@custom-variant dark (&:where(.dark, .dark *));
 
 /* ── UI 서체 (2026-09-03 · 디자이너 산출물 이식) ──────────────────────────────
    Outfit(영문) + Spoqa Han Sans Neo(한글). 디자이너가 이 조합을 전제로 디자인했고
@@ -169,13 +173,155 @@
   값을 고칠 일이 생기면 여기가 아니라 sd-* 를 먼저 보고 그쪽에 맞출 것.
   다크 테마(.dark)는 sd-* 에 대응이 없어 손대지 않았다 — 옛 값 그대로다.
 */
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   디자이너 산출물 토큰 — **원문 그대로** (STEPD_SaaS_UI_V1/src/app/globals.css:4-122)
+   2026-09-03 이식. 여기부터 `@theme` 닫는 줄까지는 손대지 않는다.
+
+   ⚠️ **`@theme` 을 `@theme inline` 으로 바꾸지 말 것 — 이 병합의 1급 지뢰다.**
+   plain `@theme` 은 `--color-*` 를 `:root` 에 **실제로 방출**하고, `@theme inline`(우리 관례)은
+   방출하지 않고 유틸리티에만 인라인한다. 우리 관례로 "통일" 하면 디자이너 코드가
+   `var(--color-text-primary)` 를 **arbitrary value 로 직접** 읽는 2,600여 곳이 전부 무색이 된다.
+   그런데 타입체크·빌드·테스트는 전부 초록이다 — 눈으로만 보이는 실패다.
+
+   ⚠️ 이름은 우리 것과 **하나도 안 겹친다**(디자이너 --bg- · --text- · --border- 계열 vs
+   우리 --background · --foreground · --sd- 계열). 색 충돌 0건이라 두 체계가 공존한다.
+   겹치는 건 --font-sans/--font-mono 둘뿐이고 아래에서 우리 쪽을 지워 해소했다.
+
+   ⚠️ `--color-blue-500/700`·`--color-navy-900` 은 Tailwind 기본을 덮는 게 **의도**다.
+   "왜 기본색을 덮지?" 로 지우면 브랜드 블루를 쓰는 자리가 표준 블루로 바뀐다.
+   ══════════════════════════════════════════════════════════════════════════════ */
 :root {
-  /* Font stacks — Pretendard body, Space Grotesk display (.grotesk), JetBrains
-     Mono for numerics/timecodes (.mono / font-mono). Matches the Review OS design. */
-  --font-sans: "Pretendard", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
-    "Helvetica Neue", Arial, sans-serif;
-  --font-mono: "JetBrains Mono", "Space Mono", ui-monospace, SFMono-Regular, Menlo,
-    Consolas, monospace;
+  /* Font Family */
+  --font-en: 'Outfit', -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-kr: 'Spoqa Han Sans Neo', 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif;
+  --font-base: 'Outfit', 'Spoqa Han Sans Neo', -apple-system, 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif;
+  --font-mono: 'Outfit', 'Spoqa Han Sans Neo', -apple-system, 'Apple SD Gothic Neo', 'Malgun Gothic', sans-serif;
+
+  /* Font Weights */
+  --fw-bold: 700;
+  --fw-medium: 500;
+  --fw-regular: 400;
+  --fw-light: 300;
+
+  /* Brand Colors & Gradient */
+  --color-navy-900: #0F172A;
+  --color-blue-700: #0D1EB8;
+  --color-blue-500: #1C60FF;
+  --gradient-accent: linear-gradient(135deg, var(--color-navy-900) 0%, var(--color-blue-700) 55%, var(--color-blue-500) 100%);
+
+  /* Light Theme Colors (Default) */
+  --bg-dark: #F8FAFC;
+  --bg-sidebar: #111111;
+  --bg-card: #FFFFFF;
+  --bg-card-hover: #F1F5F9;
+  --bg-input: #FFFFFF;
+  --bg-active: #1C60FF;
+  --bg-accent-subtle: rgba(28, 96, 255, 0.08);
+
+  --border-subtle: #E2E8F0;
+  --border-card: #E2E8F0;
+
+  --text-primary: #111111;
+  --text-secondary: #334155;
+  --text-muted: #64748B;
+  --text-accent: #1C60FF;
+  --text-blue-light: #1C60FF;
+
+  --badge-bg: rgba(28, 96, 255, 0.1);
+  --badge-text: #1C60FF;
+
+  --status-success-bg: rgba(22, 163, 74, 0.14);
+  --status-success-text: #15803D;
+
+  --card-shadow: 0 4px 20px -2px rgba(0, 0, 0, 0.05), 0 2px 6px -1px rgba(0, 0, 0, 0.03);
+}
+
+/* Dark Theme Overrides */
+html.dark {
+  --bg-dark: #111111;
+  --bg-sidebar: #111111;
+  --bg-card: #1C1E24;
+  --bg-card-hover: #252830;
+  --bg-input: #16181D;
+  --bg-active: #1C60FF;
+  --bg-accent-subtle: rgba(28, 96, 255, 0.18);
+
+  --border-subtle: #252830;
+  --border-card: #252830;
+
+  --text-primary: #F8FAFC;
+  --text-secondary: #CBD5E1;
+  --text-muted: #94A3B8;
+  --text-accent: #3B82F6;
+  --text-blue-light: #60A5FA;
+
+  --badge-bg: rgba(28, 96, 255, 0.2);
+  --badge-text: #60A5FA;
+
+  --status-success-bg: rgba(16, 185, 129, 0.1);
+  --status-success-text: #10B981;
+
+  --bg-dark-backdrop: #0F111A;
+  --bg-capsule: #1A1C23;
+  --bg-tag-dark: #282B35;
+  --bg-button-dark: #22252F;
+  --bg-button-hover-dark: #2A2E3B;
+
+  --card-shadow: none;
+}
+
+@theme {
+  --font-sans: var(--font-base);
+  --font-en: var(--font-en);
+  --font-kr: var(--font-kr);
+  --font-mono: var(--font-mono);
+
+  --color-navy-900: var(--color-navy-900);
+  --color-blue-700: var(--color-blue-700);
+  --color-blue-500: var(--color-blue-500);
+
+  --color-bg-dark: var(--bg-dark);
+  --color-bg-sidebar: var(--bg-sidebar);
+  --color-bg-card: var(--bg-card);
+  --color-bg-card-hover: var(--bg-card-hover);
+  --color-bg-input: var(--bg-input);
+  --color-bg-active: var(--bg-active);
+  --color-bg-accent-subtle: var(--bg-accent-subtle);
+
+  --color-bg-dark-backdrop: var(--bg-dark-backdrop);
+  --color-bg-capsule: var(--bg-capsule);
+  --color-bg-tag-dark: var(--bg-tag-dark);
+  --color-bg-button-dark: var(--bg-button-dark);
+  --color-bg-button-hover-dark: var(--bg-button-hover-dark);
+
+  --color-border-subtle: var(--border-subtle);
+  --color-border-card: var(--border-card);
+
+  --color-text-primary: var(--text-primary);
+  --color-text-secondary: var(--text-secondary);
+  --color-text-muted: var(--text-muted);
+  --color-text-accent: var(--text-accent);
+  --color-text-blue-light: var(--text-blue-light);
+
+  --color-badge-bg: var(--badge-bg);
+  --color-badge-text: var(--badge-text);
+
+  --color-status-success-bg: var(--status-success-bg);
+  --color-status-success-text: var(--status-success-text);
+}
+/* ═══ 디자이너 원문 끝 ═══ */
+
+:root {
+  /* Font stacks.
+     ⚠️ 2026-09-03: `--font-sans` · `--font-mono` 선언을 **여기서 지웠다.** 위 디자이너
+     `@theme` 이 같은 이름을 정의하는데, 우리 `:root`(비레이어)가 `@theme`(레이어)를
+     이겨서 그냥 두면 디자이너 화면 전체가 Pretendard 로 바뀐다 — 이식의 전제가 깨진다.
+     이제 두 이름은 **디자이너 값**이다(`--font-base` = Outfit + Spoqa).
+
+     `--font-mono` 는 특히 조심할 것: 디자이너의 그것은 **고정폭이 아니라 산세리프**다
+     (--font-base 와 같은 스택). 우리 쪽 고정폭이 필요한 자리는 `--sd-mono` 를 쓴다 —
+     아래 `.mono` 와 `.sd-mono` 가 그걸 가리킨다. */
   --font-display: "Space Grotesk", var(--font-sans);
 
   /* 아래 값은 전부 sd-* 확정 팔레트의 hex 를 HSL 로 환산한 것이다 — 두 팔레트가
@@ -301,8 +447,9 @@
   --radius-lg: var(--radius);
   --radius-xl: calc(var(--radius) + 4px);
 
-  --font-sans: var(--font-sans);
-  --font-mono: var(--font-mono);
+  /* ⚠️ `--font-sans` · `--font-mono` 매핑도 지웠다(2026-09-03). 여기 남겨 두면
+     `@theme inline` 이 디자이너 `@theme` 뒤에 와서 이름을 되빼앗는다.
+     `font-sans` 유틸은 이제 디자이너 값으로 해석된다. 고정폭은 `.sd-mono` 를 쓸 것. */
   --font-display: var(--font-display);
 
   /* Motion — kept short and uniform (micro-detail §5). */
@@ -365,8 +512,13 @@
      ⚠️ 포커스 링 제거는 접근성 손실이다. 원본에 그 상태가 없어서 맞춘 것이고,
      사용자에게 알린 뒤의 결정이다(2026-09-03). 되돌리려면 이 블록에서 :focus-visible 만 빼면 된다. */
   .sd-ui-font {
-    /* 우리 body 가 거는 렌더 힌트 — 디자이너 프로젝트엔 없다. 획 두께가 달라진다. */
-    -webkit-font-smoothing: auto;
+    /* 디자이너 `layout.tsx` 의 `<body className="antialiased">` 와 **같은 값**이다
+       (Tailwind `antialiased` = 아래 두 줄). 2026-09-03 최초 작성 때 "우리만 거는 힌트"로
+       오판해 `auto` 로 되돌렸다가, 디자이너 layout 을 읽고 바로잡았다 — 되돌리는 쪽이
+       오히려 원본과 달라진다. */
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    /* 이건 진짜로 우리만 건다 — 디자이너는 안 건드리므로 기본값으로. */
     text-rendering: auto;
     /* Outfit·Spoqa 에는 cv11·ss01 자체가 없어 실질 무영향이지만(2026-09-03 폰트 실측),
        나중에 서체가 바뀌어도 조용히 달라지지 않게 명시적으로 끈다. */
@@ -411,8 +563,10 @@
   .grotesk {
     font-family: var(--font-display);
   }
+  /* ⚠️ `--font-mono` 를 안 쓴다 — 디자이너 정의에서 그건 **산세리프**다(--font-base 와 같은 스택).
+     숫자·타임코드를 고정폭으로 세우는 게 이 클래스의 목적이라 `--sd-mono` 를 직접 가리킨다. */
   .mono {
-    font-family: var(--font-mono);
+    font-family: var(--sd-mono);
     font-feature-settings: normal;
   }
 
@@ -630,3 +784,122 @@
 /* 모달 등장 (FLOWS.md:187) */
 @keyframes sd-fade-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 .sd-modal { animation: sd-fade-in .16s ease; border-radius: 8px; box-shadow: 0 18px 50px rgba(0,0,0,.28); }
+
+/* ══════════════════════════════════════════════════════════════════════════════
+   디자이너 산출물 전역 규칙 — 원문(STEPD_SaaS_UI_V1/src/app/globals.css:124-223)
+   2026-09-03 이식. **비레이어**라 우리 `@layer base` 를 알아서 이긴다 — 그게 의도다.
+
+   손댄 곳은 `aside` 셀렉터 **한 곳뿐**이고, 이유는 아래에 적었다.
+   나머지는 한 글자도 바꾸지 않았다.
+   ══════════════════════════════════════════════════════════════════════════════ */
+
+body {
+  background-color: var(--bg-dark);
+  color: var(--text-primary);
+  font-family: var(--font-base);
+  overflow-x: hidden;
+}
+
+/* Synchronized Theme Mode Color Transition Across All Elements */
+*,
+*::before,
+*::after {
+  transition-property: color, background-color, border-color, outline-color, fill, stroke, box-shadow;
+  transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+  transition-duration: 150ms;
+}
+
+/* ⚠️ 원문은 `aside, aside *` 였다. **셀렉터만 좁혔고 디자인 결과는 동일하다.**
+   디자이너 프로젝트에는 `<aside>` 가 사이드바 하나뿐이라 원문 그대로도 같은 결과였지만,
+   우리 리포에는 `<aside>` 가 **6개**다. 4개는 밝은 배경의 콘텐츠 사이드바
+   (assets·thumbnails·analyze·program-analytics)라, 흰색 10% 테두리를 `!important` 로
+   덮으면 라이트 배경(#eceae5) 위에서 **테두리가 통째로 사라진다**. 인라인 스타일도 진다.
+   그래서 대상을 사이드바로 한정한다 — 디자인 변경이 아니라 적용 범위 정정이다.
+   ⚠️ 셸을 이식할 때 디자이너 `<aside>` 에 `stepd-sidebar` 클래스를 **추가**할 것
+   (기존 className 문자열은 그대로 두고 덧붙이기만 한다). 안 붙이면 이 규칙이 죽는다. */
+.stepd-sidebar,
+.stepd-sidebar *,
+.stepd-sidebar *::before,
+.stepd-sidebar *::after {
+  border-color: rgba(255, 255, 255, 0.1) !important;
+}
+
+/* Prevent initial black flash on dashed border elements */
+[class*="border-dashed"],
+.border-dashed {
+  border-color: var(--color-border-subtle);
+}
+
+/* Section Cards Global Soft Shadow & Border Removal */
+/* ⚠️ 클래스 이름 자체가 셀렉터다. 디자이너 코드의 `bg-[var(--color-bg-card)]` 문자열을
+   바꾸면 카드 그림자가 조용히 사라진다 — className 을 건드리지 말라는 규칙의 근거 중 하나. */
+.bg-\[var\(--color-bg-card\)\] {
+  box-shadow: var(--card-shadow);
+}
+
+/* Gradient Utility Classes */
+.text-gradient-accent {
+  background: var(--gradient-accent);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.bg-gradient-accent {
+  background: var(--gradient-accent);
+  color: #FFFFFF;
+}
+
+/* Custom Scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(100, 116, 139, 0.4);
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(100, 116, 139, 0.7);
+}
+
+/* Sidebar Specific Scrollbar Styling */
+.stepd-sidebar ::-webkit-scrollbar-track {
+  background: #111111;
+}
+
+.stepd-sidebar ::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 3px;
+}
+
+.stepd-sidebar ::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.4);
+}
+
+/* Global Soft Unchecked Checkbox Gray Tone */
+input[type="checkbox"] {
+  accent-color: #1C60FF;
+  cursor: pointer;
+  transition: opacity 0.15s ease, border-color 0.15s ease;
+}
+
+input[type="checkbox"]:not(:checked) {
+  opacity: 0.35;
+  border-color: #E2E8F0;
+}
+
+html.dark input[type="checkbox"]:not(:checked) {
+  opacity: 0.25;
+  border-color: #1E293B;
+}
+
+input[type="checkbox"]:hover {
+  opacity: 1;
+}
