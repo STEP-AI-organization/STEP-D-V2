@@ -46,16 +46,18 @@ function LoginInner() {
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   /**
-   * 로그인 상태 유지. 원본은 상태에 안 묶인 uncontrolled 체크박스였고 **기본이 해제**다
-   * (그래서 전역 규칙 `input[type=checkbox]:not(:checked){opacity:.35}` 로 흐리게 보인다).
-   * "디자인 그대로" 원칙에 맞춰 **기본 해제**로 둔다 — 체크로 두면 파랑으로 차서 원본과 다르다.
+   * 로그인 상태 유지. **기본은 유지(체크)다.**
    *
-   * ⚠️ 동작상의 대가: 기본이 해제라 **아무것도 안 누르고 로그인하면 브라우저를 닫을 때
-   * 로그아웃된다**(만료 없는 세션 쿠키). 2026-09-03 이전에는 항상 30일이었다.
-   * 기본을 유지로 되돌리려면 이 한 줄을 `useState(true)` 로 바꾸면 된다 — 대신 체크박스가
-   * 파랑으로 차서 원본과 달라진다. 둘 중 하나는 포기해야 하는 자리다.
+   * 원본 목업은 상태에 안 묶인 uncontrolled 체크박스라 기본이 해제고, 전역 규칙
+   * (`input[type=checkbox]:not(:checked){opacity:.35}`)으로 흐리게 보인다. 잠깐 그렇게 맞췄다가
+   * 되돌렸다 — **되던 게 안 되면 안 된다**(사용자 2026-09-03). 2026-09-03 이전에는 세션이
+   * 항상 30일이었고, 기본을 해제로 두면 아무것도 안 누른 사람이 **브라우저를 닫을 때마다
+   * 로그아웃된다.** 매일 쓰는 사람에게 그건 명백한 퇴행이다.
+   *
+   * 대가는 시각 차이 하나뿐이다: 체크박스가 원본의 흐린 상태가 아니라 파랑으로 차 있다.
+   * 목업엔 "기본값" 이라는 개념이 없었으므로 이건 디자인 결정이 아니라 **빈칸을 채운 것**이다.
    */
-  const [remember, setRemember] = useState(false);
+  const [remember, setRemember] = useState(true);
 
   const [isServiceBtnHovered, setIsServiceBtnHovered] = useState(false);
 
