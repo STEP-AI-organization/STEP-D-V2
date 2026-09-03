@@ -48,9 +48,22 @@ const MIGRATED: string[] = [
   "/reframe-lab",         // 2026-09-03 · W5
 ];
 
+/**
+ * **그 경로 하나만** 이식이 끝난 곳 — 하위 경로는 아직 옛 마크업이라 틀이 필요하다.
+ *
+ * `/programs` 가 그 경우다: 목록은 옮겼지만 `/programs/:id`·`/:id/settings`·`/:id/highlights`
+ * 는 아직 옛 화면이라 `MIGRATED` 에 넣으면 **상단바도 스크롤도 없는 화면**이 된다.
+ * 하위까지 다 옮기면 이 배열에서 빼고 위로 올린다.
+ */
+const MIGRATED_EXACT: string[] = [
+  "/programs",            // 2026-09-03 · W5 (목록만 · 상세는 아직)
+];
+
 export function LegacyFrame({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
-  const migrated = MIGRATED.some((p) => pathname === p || pathname.startsWith(`${p}/`));
+  const migrated =
+    MIGRATED_EXACT.includes(pathname) ||
+    MIGRATED.some((p) => pathname === p || pathname.startsWith(`${p}/`));
 
   if (migrated) return <>{children}</>;
 
