@@ -11,7 +11,7 @@
 | **서버** (`apps/server/`) | `bash deploy/cloud.sh server` | Cloud Run `stepd-server` |
 | **워커** (잡 핸들러) | `bash deploy/cloud.sh worker` | Cloud Run Jobs `stepd-worker-content` · `stepd-worker-youtube` |
 | **DB 스키마** (`migrations/`) | `bash deploy/cloud.sh migrate` | Cloud SQL (Cloud Run Job 으로 접속) |
-| **GEBD** (`deploy/gebd/`) | `bash deploy/cloud.sh gebd` | GPU T4 spot VM 이미지 |
+| **GEBD** (`deploy/gebd/`) | `bash deploy/cloud.sh gebd` | GPU L4 spot VM 이미지 |
 | **프론트** (`apps/web/`) | `.\deploy\deploy-web.ps1` | Vercel (`stepd.stepai.kr`) |
 | **네이버 워커** | `git push origin HEAD:main` 만 | **윈도우2** — 10분 폴링으로 자동 ([deploy-win2.md](deploy-win2.md)) |
 
@@ -137,7 +137,7 @@ gcloud run services update-traffic stepd-server --to-revisions <리비전>=100 \
 |---|---|---|
 | `content` | Cloud Run Job `stepd-worker-content` | Cloud Scheduler `*/15` · drain 모드(큐 비면 종료) |
 | `youtube` | Cloud Run Job `stepd-worker-youtube` | Cloud Scheduler `*/15` · drain 모드 |
-| `gebd` | GPU T4 spot VM `stepd-gebd-vm` | `*/10` wake · idle 시 자동 종료 |
+| `gebd` | GPU L4 spot VM `stepd-gebd-vm` | `*/10` wake · idle 시 자동 종료 |
 | `naver` | **윈도우2** (사무실 상시 PC) | 상주 · [deploy-win2.md](deploy-win2.md) |
 
 **drain 모드가 비용 구조의 핵심이다** — 상시 폴링 대신 스케줄러가 깨우고 큐가 비면 종료해

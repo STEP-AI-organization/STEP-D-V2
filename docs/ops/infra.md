@@ -130,6 +130,12 @@ CPU 전용 실행은 9.45초 만에 실패한다(mmaction2 가 CUDA 요구).
 
 - `g2-standard-8` + **NVIDIA L4** · zone **`us-central1-b`** · 부팅디스크 100GB pd-balanced.
   T4 를 먼저 시도했으나 us-central1 4개 존 전부 STOCKOUT 이었다.
+- 💰 **2026-09-03 SPOT 전환** (`provisioningModel=SPOT` · `preemptible=true` ·
+  `automaticRestart=false`). 그전까지 STANDARD(정가)로 돌고 있었다 — 문서엔 "T4 spot" 이라
+  적혀 있었지만 실물은 **L4 STANDARD** 였다. GEBD 는 청크 단위로 재개되는 작업이라 선점돼도
+  이어서 하므로 spot 이 맞다. 전환 후 실제 기동까지 확인했다(용량 문제 없음).
+  ⚠️ 선점이 잦아 처리가 밀리면 되돌린다:
+  `gcloud compute instances set-scheduling stepd-gebd-vm --zone us-central1-b --no-preemptible --provisioning-model=STANDARD --restart-on-failure` (VM 정지 상태에서만 가능)
 - 이미지: `us-central1-docker.pkg.dev/step-d/stepd/gebd-mmaction2:latest` (**13.8GB** ·
   원본 53.9GB 를 `devel`→`runtime` 베이스로 슬리밍). 가중치 1.58GB 는 이미지에 안 굽고
   `gs://stepd-media/models/gebd/` 에서 받는다.
