@@ -16,9 +16,7 @@
  */
 
 import { useCallback, useEffect, useState } from "react";
-import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
-import { StatusBadge } from "@/components/ui/status-badge";
+import { ChevronDown, ChevronUp, Download } from "lucide-react";
 import { NaverCredentials } from "@/components/publish/naver-credentials";
 import type { NaverAccount } from "@/lib/data/api";
 import {
@@ -29,6 +27,10 @@ import {
   uploadNaverSession,
   clearNaverSession,
 } from "@/lib/data/api";
+
+/** 원본 보조 버튼 / 삭제 버튼 (D:312·318). */
+const BTN = "px-3 py-1.5 rounded-full bg-[var(--color-bg-input)] hover:bg-[var(--color-bg-card-hover)] text-xs text-[var(--color-text-primary)] border border-[var(--color-border-subtle)] font-medium cursor-pointer shadow-none";
+const BTN_DEL = "px-3 py-1.5 rounded-full bg-[var(--color-bg-card)] hover:bg-rose-50 hover:text-rose-600 hover:border-rose-200 dark:hover:bg-rose-950/60 dark:hover:text-rose-400 dark:hover:border-rose-900 text-xs text-[var(--color-text-primary)] border border-[var(--color-border-subtle)] font-medium cursor-pointer transition-colors shadow-none";
 
 const TARGET_LABEL: Record<NaverAccount["target"], string> = {
   both: "네이버 TV + 클립",
@@ -73,6 +75,9 @@ export function NaverAccounts({ onChange }: { onChange?: (accounts: NaverAccount
   const [label, setLabel] = useState("");
   const [target, setTarget] = useState<NaverAccount["target"]>("clip");
   const [busy, setBusy] = useState<string | null>(null);
+  // 원본 드로어는 기본 열림이다(로그인 안내가 그 안에 있다) — 닫은 것만 기억한다.
+  const [closed, setClosed] = useState<Record<string, boolean>>({});
+  const [devOpen, setDevOpen] = useState<Record<string, boolean>>({});
 
   const load = useCallback(async () => {
     try {
@@ -168,205 +173,295 @@ export function NaverAccounts({ onChange }: { onChange?: (accounts: NaverAccount
   };
 
   return (
-    <section id="naver-accounts" className="mb-10 scroll-mt-24">
-      <div className="mb-3 flex items-center gap-2">
-        <h2 className="text-sm font-semibold text-muted-foreground">네이버 연결 계정</h2>
-        <span className="text-[11px] text-muted-foreground/70">
-          (네이버 클립 — 공개 업로드 API 가 없어 로그인 세션으로 발행합니다)
-        </span>
+    <div id="naver-accounts" className="space-y-3 scroll-mt-24">
+      <div className="flex items-center justify-between">
+        <h3 className="text-base font-bold text-[var(--color-text-primary)]">
+          네이버 연동 <span className="text-[11px] text-[var(--color-text-muted)] font-normal">(네이버 클립 — 공개 업로드 API 가 없어 로그인 세션으로 발행합니다)</span>
+        </h3>
       </div>
 
       {msg && (
-        <div className="mb-3 rounded-md border border-border bg-muted px-4 py-3 text-sm text-foreground">
+        <div className="p-3.5 rounded-2xl bg-[var(--color-bg-card)] border-none text-xs text-[var(--color-text-primary)] font-medium shadow-md shadow-slate-900/5 dark:shadow-none">
           {msg}
         </div>
       )}
       {err && (
-        <div className="mb-3 rounded-md border border-status-error/40 bg-status-error/10 px-4 py-3 text-sm text-status-error">
+        <div className="p-3.5 rounded-2xl bg-rose-500/10 border border-rose-500/30 text-xs text-rose-600 dark:text-rose-400 font-medium">
           {err}
         </div>
       )}
       {storeReady === false && (
-        <div className="mb-3 rounded-md border border-status-warn/40 bg-status-warn/10 px-4 py-3 text-sm text-status-warn">
+        <div className="p-3.5 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-xs text-amber-700 dark:text-amber-400 font-medium leading-relaxed">
           서버에 세션 암호화 키(NAVER_SESSION_KEY)가 없어 로그인 세션을 등록할 수 없습니다.
           평문으로 저장하지 않으므로, 키를 설정하기 전까지 등록 버튼은 막혀 있습니다.
         </div>
       )}
 
-      <Card className="mb-3 p-4">
+      {/* Action Banner Card */}
+      <div className="bg-[var(--color-bg-card)] border-none p-3.5 rounded-2xl flex items-center justify-between text-xs shadow-md shadow-slate-900/5 dark:shadow-none">
         {adding ? (
-          <div className="flex flex-wrap items-end gap-3">
+          <div className="flex flex-wrap items-end gap-3 w-full">
             <label className="flex flex-col gap-1">
-              <span className="text-[11px] text-muted-foreground">계정 이름 (우리가 알아볼 이름)</span>
+              <span className="text-[11px] text-[var(--color-text-muted)] font-medium">계정 이름 (우리가 알아볼 이름)</span>
               <input
                 value={label}
                 onChange={(e) => setLabel(e.target.value)}
                 placeholder="예: JTBC 공식 채널"
                 autoFocus
-                className="w-64 rounded-md border border-border bg-background px-2.5 py-1.5 text-sm text-foreground"
+                className="w-64 h-9 px-4 rounded-full bg-[var(--color-bg-input)] border border-[var(--color-border-subtle)] focus:border-[#1C60FF] text-xs text-[var(--color-text-primary)] placeholder-[var(--color-text-muted)] focus:outline-none"
               />
             </label>
             <label className="flex flex-col gap-1">
-              <span className="text-[11px] text-muted-foreground">쓸 곳</span>
+              <span className="text-[11px] text-[var(--color-text-muted)] font-medium">쓸 곳</span>
               {/* 네이버 TV 는 제품에서 제외 (2026-08-13) — 새 계정은 클립 전용으로만 만든다.
                   기존 tv·both 계정은 데이터에 남아 있고 라벨 표시는 유지된다. */}
               <select
                 value={target}
                 onChange={(e) => setTarget(e.target.value as NaverAccount["target"])}
-                className="rounded-md border border-border bg-background px-2.5 py-1.5 text-sm text-foreground"
+                className="h-9 px-4 rounded-full bg-[var(--color-bg-input)] border border-[var(--color-border-subtle)] text-xs text-[var(--color-text-primary)] focus:outline-none"
               >
                 <option value="clip">네이버 클립 전용</option>
               </select>
             </label>
-            <Button size="sm" onClick={handleAdd} disabled={!label.trim() || busy === "add"}>
+            <button
+              type="button"
+              style={{ boxShadow: "none" }}
+              onClick={handleAdd}
+              disabled={!label.trim() || busy === "add"}
+              className="px-3.5 py-2 rounded-full bg-[#222222] hover:bg-black text-white dark:bg-stone-700 dark:hover:bg-stone-600 text-xs font-bold transition-colors cursor-pointer shadow-none border-none disabled:opacity-50 disabled:cursor-not-allowed"
+            >
               {busy === "add" ? "추가 중…" : "추가"}
-            </Button>
-            <Button size="sm" variant="outline" onClick={() => { setAdding(false); setLabel(""); }}>
+            </button>
+            <button
+              type="button"
+              style={{ boxShadow: "none" }}
+              onClick={() => { setAdding(false); setLabel(""); }}
+              className={BTN}
+            >
               취소
-            </Button>
+            </button>
           </div>
         ) : (
-          <div className="flex items-center justify-between gap-3">
-            <div className="text-sm text-muted-foreground">
-              고객사 채널마다 계정을 하나씩 등록합니다. 네이버 아이디·비밀번호는 받지 않습니다 —
-              로그인은 브라우저에서 직접 하고, 그 결과 세션만 등록합니다.
-            </div>
-            <Button size="sm" onClick={() => setAdding(true)}>+ 네이버 계정 추가</Button>
-          </div>
+          <>
+            <span className="text-xs text-[var(--color-text-muted)]">
+              고객사 채널마다 계정을 하나씩 등록합니다. 네이버 아이디·비밀번호는 받지 않습니다 — 로그인은 브라우저에서 직접 하고, 그 결과 세션만 등록합니다.
+            </span>
+            <button
+              type="button"
+              style={{ boxShadow: "none" }}
+              onClick={() => setAdding(true)}
+              className="px-3.5 py-2 rounded-full bg-[#222222] hover:bg-black text-white dark:bg-stone-700 dark:hover:bg-stone-600 text-xs font-bold transition-colors cursor-pointer shadow-none shrink-0 ml-4 border-none"
+            >
+              + 네이버 계정 추가
+            </button>
+          </>
         )}
-      </Card>
+      </div>
 
       {loading ? (
-        <div className="text-sm text-muted-foreground">불러오는 중...</div>
+        <div className="bg-[var(--color-bg-card)] border-none rounded-2xl p-6 shadow-md shadow-slate-900/5 dark:shadow-none text-xs text-center text-[var(--color-text-muted)]">
+          불러오는 중…
+        </div>
       ) : accounts.length === 0 ? (
-        <Card className="p-6">
-          <div className="text-sm text-muted-foreground">
-            등록된 네이버 계정이 없습니다. 위 &quot;+ 네이버 계정 추가&quot; 로 시작하세요.
-          </div>
-        </Card>
+        <div className="bg-[var(--color-bg-card)] border-none rounded-2xl p-6 shadow-md shadow-slate-900/5 dark:shadow-none text-xs text-center text-[var(--color-text-muted)]">
+          등록된 네이버 계정이 없습니다. 위 &quot;+ 네이버 계정 추가&quot; 로 시작하세요.
+        </div>
       ) : (
-        <div className="grid gap-3">
-          {accounts.map((a) => (
-            <Card key={a.id} className="p-4">
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <div className="flex items-center gap-3">
-                  <img
-                    src="/channel-icons/naver.png"
-                    alt="네이버"
-                    className="size-10 rounded-full"
-                    draggable={false}
-                  />
-                  <div>
-                    <div className="text-sm font-medium text-foreground">{a.label}</div>
-                    <div className="text-xs text-muted-foreground">
-                      {TARGET_LABEL[a.target]}
-                      {a.sessionUpdatedAt ? ` · ${when(a.sessionUpdatedAt)} 로그인 등록` : ""}
-                      {a.lastPublishAt ? ` · ${when(a.lastPublishAt)} 발행` : ""}
+        /* Clean Table List Card matching Reference Image 1 & 2 */
+        <div className="bg-[var(--color-bg-card)] border-none rounded-2xl p-4 shadow-md shadow-slate-900/5 dark:shadow-none divide-y divide-[var(--color-border-subtle)]/60 text-xs">
+          {/* List Header */}
+          <div className="hidden sm:grid grid-cols-[38%_16%_22%_24%] items-center text-[11px] font-bold text-[var(--color-text-muted)] pb-2.5 px-3">
+            <div className="text-left">계정 / 채널</div>
+            <div className="text-center">상태</div>
+            <div className="text-center">등록 / 발행 정보</div>
+            <div className="text-right">관리 / 상세 설정</div>
+          </div>
+
+          {accounts.map((a) => {
+            // 원본은 드로어가 기본 열림이다(로그인 안내가 그 안에 있다).
+            const open = !closed[a.id];
+            const toggle = () => setClosed((p) => ({ ...p, [a.id]: !p[a.id] }));
+            return (
+              <div key={a.id} className="py-3.5 first:pt-2 last:pb-0">
+                <div
+                  onClick={toggle}
+                  className="grid grid-cols-1 sm:grid-cols-[38%_16%_22%_24%] items-center gap-2 sm:gap-0 px-3 cursor-pointer hover:bg-[var(--color-bg-input)]/40 rounded-xl py-1.5 transition-colors"
+                >
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className="w-8 h-8 rounded-full overflow-hidden shrink-0 border-none">
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img src="/channel-icons/naver.png" alt="네이버 클립" draggable={false} className="w-full h-full object-cover rounded-full" />
                     </div>
+                    <div className="min-w-0">
+                      <h4 className="font-bold text-sm text-[var(--color-text-primary)] truncate">{a.label}</h4>
+                      <p className="text-[11px] text-[var(--color-text-muted)] truncate">{TARGET_LABEL[a.target]}</p>
+                    </div>
+                  </div>
+
+                  <div className="hidden sm:flex items-center justify-center text-center">
+                    {/* 상태는 "세션이 있는가"가 먼저다 — 세션 없이 활성이라고 하면 거짓말이다. */}
+                    {a.status === "disabled" ? (
+                      <Pill tone="idle" label="비활성" />
+                    ) : a.hasSession ? (
+                      <Pill tone="ok" label="로그인됨" />
+                    ) : (
+                      <Pill tone="warn" label="로그인 필요" />
+                    )}
+                  </div>
+
+                  <div className="hidden sm:flex items-center justify-center text-center text-[11px] text-[var(--color-text-muted)] font-mono truncate">
+                    {a.sessionUpdatedAt ? `${when(a.sessionUpdatedAt)} 등록` : "세션 없음"}
+                    {a.lastPublishAt ? ` · ${when(a.lastPublishAt)} 발행` : ""}
+                  </div>
+
+                  <div className="flex items-center justify-end gap-1.5 shrink-0" onClick={(e) => e.stopPropagation()}>
+                    {/* 세션 파일 등록은 `<label>` 이어야 한다 — 안에 감춘 file input 을 여는 유일한 방법. */}
+                    <label
+                      className={`px-3 py-1.5 rounded-full bg-[var(--color-bg-input)] hover:bg-[var(--color-bg-card-hover)] text-xs text-[var(--color-text-primary)] border border-[var(--color-border-subtle)] font-medium shadow-none ${
+                        storeReady === false || busy === a.id ? "cursor-not-allowed opacity-60" : "cursor-pointer"
+                      }`}
+                      title="로그인한 브라우저에서 내보낸 세션(storageState) JSON 파일"
+                    >
+                      {busy === a.id ? "등록 중…" : a.hasSession ? "세션 갱신" : "로그인 세션 등록"}
+                      <input
+                        type="file"
+                        accept="application/json,.json"
+                        className="hidden"
+                        disabled={storeReady === false || busy === a.id}
+                        onChange={(e) => {
+                          const f = e.target.files?.[0];
+                          // 같은 파일을 다시 골라도 change 가 나게 값을 비운다.
+                          e.target.value = "";
+                          if (f) void handleSession(a, f);
+                        }}
+                      />
+                    </label>
+                    <button type="button" style={{ boxShadow: "none" }} onClick={() => handleDelete(a)} className={BTN_DEL}>
+                      삭제
+                    </button>
+                    <button
+                      type="button"
+                      style={{ boxShadow: "none" }}
+                      onClick={(e) => { e.stopPropagation(); toggle(); }}
+                      title="상세 설정 보기"
+                      className="p-1.5 rounded-full hover:bg-[var(--color-bg-input)] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] transition-colors cursor-pointer shadow-none"
+                    >
+                      {open ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                    </button>
                   </div>
                 </div>
 
-                <div className="flex flex-wrap items-center gap-2">
-                  {/* 상태는 "세션이 있는가"가 먼저다 — 세션 없이 활성이라고 하면 거짓말이다. */}
-                  {a.status === "disabled" ? (
-                    <StatusBadge tone="idle">비활성</StatusBadge>
-                  ) : a.hasSession ? (
-                    <StatusBadge tone="done">로그인됨</StatusBadge>
-                  ) : (
-                    <StatusBadge tone="warn">로그인 필요</StatusBadge>
-                  )}
-
-                  <label
-                    className={`rounded-md border border-border px-2 py-1 text-xs text-foreground transition ${
-                      storeReady === false || busy === a.id
-                        ? "cursor-not-allowed opacity-70"
-                        : "cursor-pointer hover:bg-accent/40"
-                    }`}
-                    title="로그인한 브라우저에서 내보낸 세션(storageState) JSON 파일"
-                  >
-                    {busy === a.id ? "등록 중…" : a.hasSession ? "세션 갱신" : "로그인 세션 등록"}
-                    <input
-                      type="file"
-                      accept="application/json,.json"
-                      className="hidden"
-                      disabled={storeReady === false || busy === a.id}
-                      onChange={(e) => {
-                        const f = e.target.files?.[0];
-                        // 같은 파일을 다시 골라도 change 가 나게 값을 비운다.
-                        e.target.value = "";
-                        if (f) void handleSession(a, f);
-                      }}
+                {/* Expandable Detail Sub-Drawer */}
+                {open && (
+                  <div className="mt-3 p-3.5 rounded-xl bg-[var(--color-bg-input)]/50 border border-[var(--color-border-subtle)] space-y-2 animate-in fade-in duration-150 text-xs">
+                    {/* 자동 로그인(아이디·비번) — 세션 만료마다 사람이 붙는 걸 없애는 자리. */}
+                    <NaverCredentials
+                      accountId={a.id}
+                      label={a.label}
+                      extraActions={
+                        <>
+                          {a.hasSession && (
+                            <button
+                              type="button"
+                              style={{ boxShadow: "none" }}
+                              onClick={() => handleClearSession(a)}
+                              className="px-3 py-1 rounded-full bg-[var(--color-bg-input)] hover:bg-rose-50 hover:text-rose-600 hover:border-rose-200 dark:hover:bg-rose-950/60 dark:hover:text-rose-400 dark:hover:border-rose-900 text-xs text-[var(--color-text-primary)] border border-[var(--color-border-subtle)] font-medium cursor-pointer shadow-none transition-colors"
+                            >
+                              세션 삭제
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            style={{ boxShadow: "none" }}
+                            onClick={() => handleToggleDisabled(a)}
+                            className="px-3 py-1 rounded-full bg-[var(--color-bg-input)] hover:bg-[var(--color-bg-card-hover)] text-xs text-[var(--color-text-primary)] border border-[var(--color-border-subtle)] font-medium cursor-pointer shadow-none"
+                          >
+                            {a.status === "disabled" ? "사용" : "사용 중지"}
+                          </button>
+                        </>
+                      }
                     />
-                  </label>
 
-                  {a.hasSession && (
-                    <button
-                      onClick={() => handleClearSession(a)}
-                      className="rounded-md px-2 py-1 text-xs text-muted-foreground transition hover:text-foreground"
-                    >
-                      세션 삭제
-                    </button>
-                  )}
-                  <button
-                    onClick={() => handleToggleDisabled(a)}
-                    className="rounded-md px-2 py-1 text-xs text-muted-foreground transition hover:text-foreground"
-                  >
-                    {a.status === "disabled" ? "사용" : "사용 중지"}
-                  </button>
-                  <button
-                    onClick={() => handleDelete(a)}
-                    className="rounded-md px-2 py-1 text-xs text-muted-foreground transition hover:text-status-error"
-                  >
-                    삭제
-                  </button>
-                </div>
+                    {/* Login Guide Box — 편집자용 정상 경로. 세션이 이미 있으면 접어둔다. */}
+                    {!a.hasSession && (
+                      <div className="p-4 rounded-2xl bg-slate-100 dark:bg-stone-800/60 border-none space-y-3 shadow-none">
+                        <p className="text-xs text-[#222222] dark:text-slate-200 leading-relaxed">
+                          <span className="font-bold text-xs text-[#222222] dark:text-slate-200">로그인하는 법:</span> ① 아래 버튼으로 <span className="font-bold text-xs text-[#222222] dark:text-slate-200">로그인 도우미</span>를 내려받아 실행 → ② 뜨는 브라우저에서 STEP D 로그인 → ③ 네이버 로그인. 끝나면 세션이 자동으로 여기 등록됩니다. 아이디·비밀번호는 브라우저에만 들어가고 서버로 오지 않습니다.
+                        </p>
+
+                        <div>
+                          {/* ⚠️ **계정별로 받아야 한다.** 파일명에 이 계정 키가 박혀 나가고, 도우미가
+                              그걸 읽어 자동 선택한다 — 계정이 둘 이상일 때 도우미가 "어느 계정인가요?"
+                              를 다시 묻지 않게 하는 유일한 연결고리다(잘못 고르면 세션이 남의 계정에
+                              들어간다). account 를 빼면 그 옛 동작으로 돌아간다. */}
+                          <a
+                            style={{ boxShadow: "none" }}
+                            href={`${process.env.NEXT_PUBLIC_API_URL ?? "/api"}/naver/login-tool?account=${encodeURIComponent(a.id)}`}
+                            className="flex w-fit items-center gap-2 px-4 py-2.5 rounded-full bg-[var(--color-bg-input)] hover:bg-[var(--color-bg-card-hover)] text-xs text-[#222222] dark:text-slate-200 font-bold border border-[var(--color-border-subtle)] cursor-pointer transition-colors shadow-none"
+                          >
+                            <Download className="w-4 h-4 text-[#1C60FF]" />
+                            <span>&lsquo;{a.label}&rsquo; 로그인 도우미 다운로드 (Windows)</span>
+                          </a>
+                        </div>
+
+                        <p className="text-xs text-[#222222] dark:text-slate-200">
+                          받은 파일이 이 계정에 묶여 있습니다 — 도우미를 켜면{" "}
+                          <span className="font-bold text-xs text-[#222222] dark:text-slate-200">계정: {a.label}</span> 로 바로 진행합니다.
+                        </p>
+
+                        {/* Developer Guide Accordion Matching Reference Image 2 */}
+                        <div className="pt-0.5">
+                          <button
+                            type="button"
+                            onClick={() => setDevOpen((p) => ({ ...p, [a.id]: !p[a.id] }))}
+                            className="flex items-center gap-1.5 text-xs text-[#222222] dark:text-slate-200 font-medium hover:opacity-80 transition-opacity cursor-pointer"
+                          >
+                            <span>{devOpen[a.id] ? "▼" : "▶"}</span>
+                            <span>개발자용 — 명령줄 / 세션 파일 등록</span>
+                          </button>
+
+                          {devOpen[a.id] && (
+                            <div className="mt-3 space-y-2 animate-in fade-in duration-150">
+                              <div className="bg-[#0B0F17] p-3.5 rounded-xl border border-stone-800/80 font-mono text-xs overflow-x-auto shadow-none">
+                                <code className="text-slate-200 whitespace-nowrap">
+                                  <span className="text-amber-500 font-bold">pnpm</span> --filter @stepd/server naver:login:upload -- --account {a.id} --api {cmdTargets().api} --web {cmdTargets().web}
+                                </code>
+                              </div>
+                              <p className="text-xs text-[#222222] dark:text-slate-200 leading-normal">
+                                또는 위 &quot;로그인 세션 등록&quot; 버튼으로 Playwright storageState JSON 을 직접 올립니다.
+                              </p>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
-
-              {/* 자동 로그인(아이디·비번) — 세션 만료마다 사람이 붙는 걸 없애는 자리. */}
-              <NaverCredentials accountId={a.id} label={a.label} />
-
-              {/* 편집자용 정상 경로 — 로그인 도우미 다운로드 (pnpm·리포 불필요, 더블클릭).
-                  세션이 이미 있으면 접어둔다. */}
-              {!a.hasSession && (
-                <div className="mt-3 border-t border-border pt-3">
-                  <p className="text-[11px] leading-relaxed text-muted-foreground">
-                    <b className="text-foreground">로그인하는 법.</b>{" "}
-                    ① 아래 버튼으로 <b className="text-foreground">로그인 도우미</b>를 내려받아 실행
-                    → ② 뜨는 브라우저에서 STEP D 로그인 → ③ 네이버 로그인. 끝나면 세션이 자동으로
-                    여기 등록됩니다. 아이디·비밀번호는 브라우저에만 들어가고 서버로 오지 않습니다.
-                  </p>
-                  {/* ⚠️ **계정별로 받아야 한다.** 파일명에 이 계정 키가 박혀 나가고, 도우미가
-                      그걸 읽어 자동 선택한다 — 계정이 둘 이상일 때 도우미가 "어느 계정인가요?"
-                      를 다시 묻지 않게 하는 유일한 연결고리다(잘못 고르면 세션이 남의 계정에
-                      들어간다). account 를 빼면 그 옛 동작으로 돌아간다. */}
-                  <a
-                    href={`${process.env.NEXT_PUBLIC_API_URL ?? "/api"}/naver/login-tool?account=${encodeURIComponent(a.id)}`}
-                    className="mt-2 inline-flex items-center gap-1.5 rounded-md border border-border bg-muted px-3 py-1.5 text-xs font-medium text-foreground transition hover:bg-accent/40"
-                  >
-                    ⬇ &lsquo;{a.label}&rsquo; 로그인 도우미 다운로드 (Windows)
-                  </a>
-                  <p className="mt-1.5 text-[11px] leading-relaxed text-muted-foreground">
-                    받은 파일이 이 계정에 묶여 있습니다 — 도우미를 켜면{" "}
-                    <b className="text-foreground">계정: {a.label}</b> 로 바로 진행합니다.
-                  </p>
-                  <details className="mt-2">
-                    <summary className="cursor-pointer text-[11px] text-muted-foreground">
-                      개발자용 — 명령줄 / 세션 파일 등록
-                    </summary>
-                    <code className="mt-1.5 block overflow-x-auto rounded-md bg-muted px-2.5 py-2 text-[11px] text-foreground">
-                      pnpm --filter @stepd/server naver:login:upload -- --account {a.id}{" "}
-                      --api {cmdTargets().api} --web {cmdTargets().web}
-                    </code>
-                    <p className="mt-1.5 text-[11px] leading-relaxed text-muted-foreground">
-                      또는 위 &quot;로그인 세션 등록&quot; 버튼으로 Playwright storageState JSON 을 직접 올립니다.
-                    </p>
-                  </details>
-                </div>
-              )}
-            </Card>
-          ))}
+            );
+          })}
         </div>
       )}
-    </section>
+    </div>
+  );
+}
+
+/** 원본 상태 알약(D:301). 톤만 갈랐다. */
+function Pill({ label, tone }: { label: string; tone: "ok" | "warn" | "idle" }) {
+  const cls =
+    tone === "ok"
+      ? "bg-[#ECFDF5] text-[#059669] dark:bg-emerald-500/20 dark:text-emerald-400"
+      : tone === "warn"
+        ? "bg-amber-500/15 text-amber-600 dark:bg-amber-500/20 dark:text-amber-400"
+        : "bg-slate-200/80 text-slate-600 dark:bg-[#282B35] dark:text-slate-300";
+  const dot =
+    tone === "ok" ? "bg-[#059669] dark:bg-emerald-400"
+      : tone === "warn" ? "bg-amber-500 dark:bg-amber-400"
+        : "bg-slate-400 dark:bg-slate-500";
+  return (
+    <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-bold border-none ${cls}`}>
+      <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${dot}`} />
+      {label}
+    </span>
   );
 }

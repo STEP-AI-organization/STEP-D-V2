@@ -16,8 +16,7 @@
  *    시도하면 계정이 잠긴다).
  */
 import { useCallback, useEffect, useState } from "react";
-import { Button } from "@/components/ui/button";
-import { StatusBadge } from "@/components/ui/status-badge";
+import type { ReactNode } from "react";
 import {
   fetchNaverCredentialState,
   saveNaverCredentials,
@@ -33,7 +32,20 @@ function when(ts: number | null): string {
   });
 }
 
-export function NaverCredentials({ accountId, label }: { accountId: string; label: string }) {
+/** 원본 드로어의 알약 버튼들 (publish-channels/page.tsx D:348·362). */
+const BTN = "px-3 py-1 rounded-full bg-[var(--color-bg-input)] hover:bg-[var(--color-bg-card-hover)] text-xs text-[var(--color-text-primary)] border border-[var(--color-border-subtle)] font-medium cursor-pointer shadow-none disabled:opacity-50 disabled:cursor-not-allowed";
+const BTN_ALT = "px-3.5 py-1 rounded-full bg-[var(--color-bg-card)] border border-[var(--color-border-subtle)] text-xs text-[var(--color-text-primary)] hover:bg-[var(--color-bg-card-hover)] font-medium cursor-pointer shadow-none disabled:opacity-50 disabled:cursor-not-allowed";
+
+export function NaverCredentials({
+  accountId,
+  label,
+  extraActions,
+}: {
+  accountId: string;
+  label: string;
+  /** 계정 카드가 같은 줄에 얹는 버튼(세션 삭제·사용 중지) — 원본 드로어가 한 줄에 모은다. */
+  extraActions?: ReactNode;
+}) {
   const [state, setState] = useState<NaverCredentialState | null>(null);
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
@@ -77,37 +89,52 @@ export function NaverCredentials({ accountId, label }: { accountId: string; labe
     finally { setBusy(null); }
   };
 
+  /** 원본 배지(D:343)는 회색 하나뿐이다 — 상태 4종으로 톤만 갈랐다. */
   const badge = () => {
-    if (!state?.hasCred) return <StatusBadge tone="idle">자동 로그인 꺼짐</StatusBadge>;
-    if (state.status === "verified") return <StatusBadge tone="done">자동 로그인 켜짐</StatusBadge>;
-    if (state.status === "failed") return <StatusBadge tone="error">자동 로그인 실패</StatusBadge>;
-    return <StatusBadge tone="progress">확인 중</StatusBadge>;
+    const [text, cls] = !state?.hasCred
+      ? ["자동 로그인 꺼짐", "bg-slate-200/70 text-slate-600 dark:bg-stone-700 dark:text-stone-300"]
+      : state.status === "verified"
+        ? ["자동 로그인 켜짐", "bg-emerald-500/15 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-400"]
+        : state.status === "failed"
+          ? ["자동 로그인 실패", "bg-rose-500/15 text-rose-600 dark:bg-rose-500/20 dark:text-rose-400"]
+          : ["확인 중", "bg-[#1C60FF]/10 text-[#1C60FF] dark:text-[#60A5FA]"];
+    return <span className={`px-2 py-0.5 rounded text-[10px] font-medium ${cls}`}>{text}</span>;
   };
 
   return (
-    <div className="mt-3 border-t border-border pt-3">
+    <div className="space-y-2">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2">
-          <span className="text-[11px] font-medium text-foreground">자동 로그인</span>
+          <span className="font-bold text-xs text-[var(--color-text-primary)]">자동 로그인</span>
           {badge()}
           {state?.hasCred && state.reloginAt && (
-            <span className="text-[11px] text-muted-foreground">{when(state.reloginAt)} 갱신</span>
+            <span className="text-[11px] text-[var(--color-text-muted)]">{when(state.reloginAt)} 갱신</span>
           )}
         </div>
-        <div className="flex items-center gap-1.5">
+        <div className="flex flex-wrap items-center gap-2">
+          {extraActions}
           {state?.hasCred && state.status === "verified" && (
-            <Button size="xs" variant="outline" disabled={busy === "relogin"} onClick={() => void relogin()}>
+            <button type="button" style={{ boxShadow: "none" }} disabled={busy === "relogin"} onClick={() => void relogin()} className={BTN}>
               {busy === "relogin" ? "요청 중…" : "지금 다시 로그인"}
-            </Button>
+            </button>
           )}
-          <Button size="xs" variant={state?.hasCred ? "ghost" : "outline"}
+          <button
+            type="button"
+            style={{ boxShadow: "none" }}
             disabled={state?.credKeyReady === false}
-            onClick={() => setOpen((v) => !v)}>
+            onClick={() => setOpen((v) => !v)}
+            className={BTN_ALT}
+          >
             {state?.hasCred ? "아이디·비번 변경" : "아이디·비번 저장"}
-          </Button>
+          </button>
           {state?.hasCred && (
-            <button onClick={() => void drop()} disabled={busy === "clear"}
-              className="rounded-md px-2 py-1 text-xs text-muted-foreground transition hover:text-status-error">
+            <button
+              type="button"
+              style={{ boxShadow: "none" }}
+              onClick={() => void drop()}
+              disabled={busy === "clear"}
+              className="px-3 py-1 rounded-full bg-[var(--color-bg-input)] hover:bg-rose-50 hover:text-rose-600 hover:border-rose-200 dark:hover:bg-rose-950/60 dark:hover:text-rose-400 dark:hover:border-rose-900 text-xs text-[var(--color-text-primary)] border border-[var(--color-border-subtle)] font-medium cursor-pointer shadow-none transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
               지우기
             </button>
           )}
@@ -115,37 +142,48 @@ export function NaverCredentials({ accountId, label }: { accountId: string; labe
       </div>
 
       {state?.credKeyReady === false && (
-        <p className="mt-1.5 text-[11px] text-status-warn">
+        <p className="text-[11px] text-amber-600 dark:text-amber-400 font-medium">
           서버에 자격증명 암호화 키(NAVER_CRED_KEY)가 없어 저장할 수 없습니다 (평문 저장은 하지 않습니다).
         </p>
       )}
       {state?.status === "failed" && state.error && (
-        <p className="mt-1.5 text-[11px] text-status-error">{state.error}</p>
+        <p className="text-[11px] text-rose-600 dark:text-rose-400 font-medium">{state.error}</p>
       )}
-      {msg && <p className="mt-1.5 text-[11px] text-muted-foreground">{msg}</p>}
-      {err && <p className="mt-1.5 text-[11px] text-status-error">{err}</p>}
+      {msg && <p className="text-[11px] text-[var(--color-text-muted)]">{msg}</p>}
+      {err && <p className="text-[11px] text-rose-600 dark:text-rose-400 font-medium">{err}</p>}
 
       {open && (
-        <div className="mt-2 flex flex-wrap items-end gap-2">
+        <div className="flex flex-wrap items-end gap-2 pt-1">
           <label className="flex flex-col gap-1">
-            <span className="text-[10.5px] text-muted-foreground">네이버 아이디</span>
-            <input value={id} onChange={(e) => setId(e.target.value)} autoComplete="off"
-              className="w-44 rounded-md border border-border bg-background px-2 py-1 text-xs text-foreground" />
+            <span className="text-[10.5px] text-[var(--color-text-muted)]">네이버 아이디 ({label})</span>
+            <input
+              value={id}
+              onChange={(e) => setId(e.target.value)}
+              autoComplete="off"
+              className="w-44 h-8 px-3 rounded-full bg-[var(--color-bg-input)] border border-[var(--color-border-subtle)] focus:border-[#1C60FF] text-xs text-[var(--color-text-primary)] focus:outline-none"
+            />
           </label>
           <label className="flex flex-col gap-1">
-            <span className="text-[10.5px] text-muted-foreground">비밀번호</span>
-            <input type="password" value={pw} onChange={(e) => setPw(e.target.value)} autoComplete="new-password"
-              className="w-44 rounded-md border border-border bg-background px-2 py-1 text-xs text-foreground" />
+            <span className="text-[10.5px] text-[var(--color-text-muted)]">비밀번호</span>
+            <input
+              type="password"
+              value={pw}
+              onChange={(e) => setPw(e.target.value)}
+              autoComplete="new-password"
+              className="w-44 h-8 px-3 rounded-full bg-[var(--color-bg-input)] border border-[var(--color-border-subtle)] focus:border-[#1C60FF] text-xs text-[var(--color-text-primary)] focus:outline-none"
+            />
           </label>
-          <Button size="xs" disabled={!id.trim() || !pw || busy === "save"} onClick={() => void save()}>
+          <button type="button" style={{ boxShadow: "none" }} disabled={!id.trim() || !pw || busy === "save"} onClick={() => void save()} className={BTN_ALT}>
             {busy === "save" ? "저장 중…" : "저장하고 로그인 확인"}
-          </Button>
-          <Button size="xs" variant="ghost" onClick={() => { setOpen(false); setId(""); setPw(""); }}>취소</Button>
+          </button>
+          <button type="button" style={{ boxShadow: "none" }} onClick={() => { setOpen(false); setId(""); setPw(""); }} className={BTN}>
+            취소
+          </button>
         </div>
       )}
 
-      <p className="mt-1.5 text-[10.5px] leading-relaxed text-muted-foreground">
-        저장해 두면 세션이 만료돼도 <b className="text-foreground">워커가 스스로 다시 로그인</b>합니다.
+      <p className="text-[11px] text-[var(--color-text-muted)] leading-relaxed">
+        저장해 두면 세션이 만료돼도 <b className="text-[var(--color-text-primary)]">워커가 스스로 다시 로그인</b>합니다.
         값은 서버에서 암호화되어 다시 조회되지 않고, 로그인에 실패하면 자동으로 삭제됩니다.
         2차인증이 걸린 계정은 자동 로그인이 안 되니 도우미로 한 번 로그인하세요.
       </p>
