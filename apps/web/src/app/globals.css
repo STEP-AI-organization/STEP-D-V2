@@ -349,6 +349,41 @@
     background-color: hsl(var(--primary) / 0.2);
   }
 
+  /* ── 이식 화면 baseline 되돌리기 (2026-09-03) ───────────────────────────────
+     디자이너 산출물을 **픽셀까지 그대로** 두기 위한 블록이다(사용자 지시: "그냥 다 그대로").
+     디자이너 프로젝트에는 `@layer base` 가 아예 없고 Tailwind preflight 만 있다. 반면 위의
+     우리 base 규칙들은 앱 전체에 걸려서, 클래스가 같아도 렌더가 미묘하게 달라진다.
+     그래서 이식 화면(`sd-ui-font` 를 단 루트) 안에서만 원본 기준으로 되돌린다.
+
+     **범위를 한정한 이유**: 아직 안 옮긴 화면 23개는 여전히 우리 디자인이다. 전역으로
+     지우면 거기서 포커스 링이 사라져 접근성이 퇴행한다. 화면이 전부 교체되면 이 블록을
+     지우고 위쪽 base 를 디자이너 기준으로 바꾸면 된다 — 그때 이 주석이 이유를 설명한다.
+
+     `@layer base` 안에 두는 게 핵심이다. 레이어 밖에 두면 **유틸리티보다 세서**
+     `border-[#E2E8F0]` 같은 디자인 클래스를 덮어버린다 — 그러면 보존하려다 되레 깨뜨린다.
+
+     ⚠️ 포커스 링 제거는 접근성 손실이다. 원본에 그 상태가 없어서 맞춘 것이고,
+     사용자에게 알린 뒤의 결정이다(2026-09-03). 되돌리려면 이 블록에서 :focus-visible 만 빼면 된다. */
+  .sd-ui-font {
+    /* 우리 body 가 거는 렌더 힌트 — 디자이너 프로젝트엔 없다. 획 두께가 달라진다. */
+    -webkit-font-smoothing: auto;
+    text-rendering: auto;
+    /* Outfit·Spoqa 에는 cv11·ss01 자체가 없어 실질 무영향이지만(2026-09-03 폰트 실측),
+       나중에 서체가 바뀌어도 조용히 달라지지 않게 명시적으로 끈다. */
+    font-feature-settings: normal;
+  }
+  /* Tailwind preflight 기본값(currentColor)으로. 위 `*` 규칙이 우리 토큰 색을 넣고 있어서,
+     테두리 색을 명시 안 한 요소가 원본과 다른 색으로 나온다. */
+  .sd-ui-font *,
+  .sd-ui-font ::before,
+  .sd-ui-font ::after {
+    border-color: currentColor;
+  }
+  .sd-ui-font :focus-visible {
+    outline: none;
+    outline-offset: 0;
+  }
+
   /* Respect reduced-motion: strip transitions/animations (pulse, ping, spin,
      drawer slide). Live states still read via static color/dot. */
   @media (prefers-reduced-motion: reduce) {
