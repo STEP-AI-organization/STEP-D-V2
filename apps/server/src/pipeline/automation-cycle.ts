@@ -488,8 +488,11 @@ async function runAutomationCycleLocked(): Promise<CycleReport> {
     // (shouldRequestAutoRender). 순방 한 틱이 렌더로만 오래 잡히지 않도록 건수를 막는다.
     let prepared = 0;
     for (const clip of mine) {
+      // 렌더가 끝난 클립의 묵은 실패 상태 청소는 **렌더 예산(break)보다 앞에** 둔다 —
+      // 뒤에 두면 예산을 다 쓴 순방에서 청소가 밀려 거짓 경보가 더 오래 남는다.
+      // 렌더된 클립은 어차피 예산을 쓰지 않으므로 순서를 바꿔도 렌더 몫은 그대로다.
+      if (clip.rendered !== false) { await clearStaleAutoRender(clip); continue; }
       if (prepared >= AUTOMATION_MAX_RENDERS_PER_TICK) break;
-      if (clip.rendered !== false) continue;
       if (renderTried.has(clip.id)) continue;
       if (!shouldRequestAutoRender(clip.autoRender, Date.now())) continue;
       renderTried.add(clip.id);
@@ -1158,6 +1161,32 @@ async function attemptAutoRender(
     await note({ ruleId, clipId, result: "failed", accountKey: null, detail: autoRenderFailedNote(next) });
   }
   return outcome.ok;
+}
+
+/**
+ * 렌더된 클립에 남아 있는 실패 상태를 지운다.
+ *
+ * `attemptAutoRender` 가 성공했을 때만 상태를 지우는데, 순방은 `clip.rendered !== false` 인
+ * 클립을 **건너뛰므로 그 자리에 영영 못 온다.** 그래서 렌더가 다른 경로로 끝나면
+ * (편집기 확정, 요청은 실패했지만 렌더는 실제로 완료 등) `autoRender.failed` 가 화석으로
+ * 남는다 — 2026-09-03 실측: 8건이 `rendered:true` 인데 `failed:true`(lastError "fetch failed",
+ * 일시 네트워크 오류)로, AENA 화면에 "렌더 실패 · 운영 확인 필요"가 영구히 떠 있었다.
+ *
+ * 렌더가 끝났다는 건 이 상태가 **사실이 아니게 됐다**는 뜻이다. 거짓 경보는 진짜 경보를
+ * 못 믿게 만든다 — 조치할 게 없는 빨간 줄이 쌓이면 사람은 목록 전체를 안 보게 된다.
+ */
+async function clearStaleAutoRender(clip: any): Promise<void> {
+  if (!clip?.autoRender) return;
+  const clipId = String(clip.id);
+  // putEntity 는 클립 JSON 전체를 덮는다 — 최신 행 위에서 지워야 그 사이 쓰인
+  // rendered·mediaId 를 되돌리지 않는다(attemptAutoRender 와 같은 이유).
+  const fresh = (await getEntity<any>("clip", clipId)) ?? clip;
+  if (!fresh.autoRender) { delete clip.autoRender; return; }
+  const merged: any = { ...fresh };
+  delete merged.autoRender;
+  await putEntity("clip", clipId, merged);
+  Object.assign(clip, merged);
+  delete clip.autoRender;   // Object.assign 은 없는 키를 지우지 않는다
 }
 
 /**

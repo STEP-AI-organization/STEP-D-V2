@@ -151,6 +151,22 @@ describe("채널 제한을 푼 대신 중복은 배포 행이 막는다", () => 
     const guard = fs.readFileSync(path.join(SRC, "publish/publish-guard.ts"), "utf-8");
     assert.match(guard, /export function hasAccountDistribution/, "중복 판정 정본이 없다");
   });
+
+  it("렌더된 클립의 묵은 실패 상태를 지운다", () => {
+    // autoRender 를 지우는 자리는 attemptAutoRender 성공뿐인데, 순방은 렌더된 클립을
+    // 건너뛰므로 거기 못 온다 — 렌더가 다른 경로로 끝나면 failed 가 화석으로 남는다.
+    // 2026-09-03 실측 8건(rendered:true · failed:true · "fetch failed")이 AENA 화면에
+    // "렌더 실패 · 운영 확인 필요"로 영구히 떴다. 조치할 게 없는 빨간 줄은 진짜 경보를 죽인다.
+    const cycle = fs.readFileSync(path.join(SRC, "pipeline/automation-cycle.ts"), "utf-8");
+    assert.match(cycle, /async function clearStaleAutoRender\(/, "청소 함수가 없다");
+    assert.match(cycle, /if \(clip\.rendered !== false\) \{ await clearStaleAutoRender\(clip\); continue; \}/,
+      "렌더된 클립을 건너뛰기 전에 청소해야 화석이 안 남는다");
+    // 예산(break)보다 앞이어야 한다 — 뒤에 두면 렌더가 밀린 순방에서 청소도 같이 밀린다.
+    const loop = cycle.match(/for \(const clip of mine\) \{[\s\S]*?\n {4}\}/)?.[0] ?? "";
+    assert.ok(
+      loop.indexOf("clearStaleAutoRender") < loop.indexOf("AUTOMATION_MAX_RENDERS_PER_TICK"),
+      "청소가 렌더 예산 확인보다 뒤에 있으면 거짓 경보가 더 오래 남는다");
+  });
 });
 
 describe("자동 확인은 테넌트당 한 번만 실행된다", () => {
