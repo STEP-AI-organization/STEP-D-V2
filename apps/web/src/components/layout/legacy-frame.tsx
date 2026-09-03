@@ -44,6 +44,8 @@ const MIGRATED: string[] = [
   "/search",              // 2026-09-03 · W3
   "/dashboard",           // 2026-09-03 · W3
   "/commerce",            // 2026-09-03 · W4
+  "/business",            // 2026-09-03 · W5
+  "/reframe-lab",         // 2026-09-03 · W5
 ];
 
 export function LegacyFrame({ children }: { children: React.ReactNode }) {
