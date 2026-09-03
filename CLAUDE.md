@@ -64,7 +64,7 @@ docs/          ops(현황·운영) / plans(계획) / reference / research / prot
 
 ## 백엔드 — apps/server
 
-Hono 단일 진입점(index.ts, **~9000줄, 라우트 254개**) + 별도 워커 프로세스 구조.
+Hono 단일 진입점(index.ts, **~12,300줄, 라우트 264개**) + 별도 워커 프로세스 구조.
 (2026-08-25 실측 갱신)
 
 | 파일 | 역할 |
@@ -83,7 +83,9 @@ Hono 단일 진입점(index.ts, **~9000줄, 라우트 254개**) + 별도 워커 
 | `src/publish/upload-gate.ts` | **YouTube 실업로드 게이트** — 기본 OFF. 오타·빈값·미설정은 전부 OFF |
 | `src/ai/gemini.ts` · `ai/cast.ts` · `ai/profile.ts` · `media/thumbnail-assets.ts` | Gemini 호출 · 캐스트 · 프로그램 프로필 · 썸네일 레퍼런스 |
 | `src/seed.ts` | **의도적으로 전부 빈 배열** — 프로덕션은 데모 콘텐츠 없이 시작 |
-| `src/<도메인>/` | **2026-09-01 정리** — 74개가 평평하던 것을 묶었다: `ai` `auth` `billing` `commerce` `media` `naver` `pipeline` `publish` `social` `tests`. 최상위엔 진입점(index·worker)과 공용(db-pg·config·ids·kst·mailer·seed·youtube)만 남는다 |
+| `src/chatbot/` | **업무 도우미 챗봇** (2026-09-03) — 제품 사용법 안내 + 워크스페이스 **읽기**. 지식은 `docs/help/*.md` 뿐이고, 링크는 `catalog.ts` 화이트리스트를 통과한 것만 나간다. 실행 기능 없음 |
+| `src/report/` | **보고 리포트 생성** (2026-09-03) — 자연어 → 스펙(모델) → 집계(SQL) → 서술(모델) → md/HTML. **숫자는 집계만 낳는다**(narrate.ts 가 지어낸 수를 잡아 서술을 버린다) |
+| `src/<도메인>/` | **2026-09-01 정리** — 74개가 평평하던 것을 묶었다: `ai` `auth` `billing` `chatbot` `commerce` `media` `naver` `pipeline` `publish` `report` `social` `tests`. 최상위엔 진입점(index·worker)과 공용(db-pg·config·ids·kst·mailer·seed·youtube)만 남는다 |
 | `schema.sql` | 테이블 정의 — 단 **job_queue·content_analysis·channel_analytics·search_segments·meta_accounts·tiktok_accounts는 여기 없고 코드가 런타임 생성** (queue.ts·db-pg.ts). 상세: [docs/reference/data-model.md](docs/reference/data-model.md) |
 
 `src/ids.ts`(구 pipeline.ts)는 `newId` 헬퍼만 export한다(구 sqlite `db.ts`·`storage.ts`, 휴리스틱 `buildRecommendations()`는 정리 완료). 실제 추천은 core/ AI 파이프라인이 만든다.
@@ -160,7 +162,7 @@ rights · dialogue · chyron · summary · emb_dialogue vector(768) · emb_summa
 `search-embed.ts`(RETRIEVAL_QUERY). Vertex 실패 시 **키워드축(pg_trgm) 단독 폴백** — 한국어는
 키워드 매칭이 강해서 벡터 없이도 검색이 성립한다.
 
-**주요 라우트** — 총 231개 (전체: [docs/reference/api-reference.md](docs/reference/api-reference.md))
+**주요 라우트** — 총 264개 (전체: [docs/reference/api-reference.md](docs/reference/api-reference.md))
 ```
 GET  /health · /api/state · /api/search        # 검색 = 하이브리드(벡터+키워드)
 POST /api/media/upload-init → finalize   # 브라우저→GCS 직접 resumable 업로드 (대용량 표준 경로)
@@ -184,6 +186,11 @@ GET  /api/meta/auth · /api/tiktok/auth   # Meta·TikTok OAuth + 계정 연결
 GET  /api/queue/stats · /api/admin/jobs · /api/admin/media-analysis
 POST /api/admin/reset · /queue/purge · /gebd-vm/wake · /worker-vm/wake
 GET  /api/instagram/auth                 # Instagram 비즈니스 로그인 (FB Page 경유 아님 · 2026-08-13 분리)
+POST /api/chatbot/message                # 업무 도우미 — 대화(스레드 유지) · 세션 필수
+GET/DELETE /api/chatbot/threads(/:id)    #   내 대화만 보인다(같은 회사 동료 것도 안 보임)
+POST /api/reports                        # 보고 리포트 초안 — 자연어 요청 → md
+GET  /api/reports(/:id)(/export)         #   export 는 **검산 통과분만** 나간다(409로 막는다)
+POST /api/reports/:id/email              #   SMTP 설정 있을 때만
 ```
 
 **환경변수** (실제 코드가 읽는 것)
@@ -198,6 +205,9 @@ REFRAME_FACE_MODEL / REFRAME_PIPELINE_VERSION   AI 리프레임 모델 경로·�
 STT_PROVIDER          프로덕션 soniox (SONIOX_API_KEY 필요) · gemini · whisper(로컬 GPU)
 GOOGLE_CLOUD_PROJECT(기본 step-d) / VERTEX_LOCATION(기본 asia-northeast3)   Vertex Gemini
 EMBED_MODEL / EMBED_DIM                   검색 임베딩 (기본 text-multilingual-embedding-002 · 768)
+GEMINI_SUPPORT_MODEL / GEMINI_SUPPORT_LOCATION
+                      챗봇·리포트 모델 (기본 gemini-2.5-flash-lite · global). **둘은 세트다** —
+                      asia-northeast3 에서 flash-lite 는 404 라 리전을 안 바꾸면 죽는다(ai/models.ts)
 WORKER_JOBS           content | youtube | gebd | naver,download | commerce | all(기본)  ← 레인 선택
 WORKER_MODE           drain 이면 큐 비는 즉시 종료 / DRAIN_MAX_MS(기본 50분)
 YOUTUBE_UPLOAD_ENABLED   실업로드 게이트. 미설정·오타·빈값 = OFF
@@ -267,6 +277,12 @@ core/ 쪽 스위치(파이썬): `RUN_FACES`·`RUN_PPL`·`RUN_REFINE`·`RUN_CHYRO
   `/deploy` 스킬(`.claude/skills/deploy/`)이 같은 스크립트를 감싼다.
 - **웹**: `.\deploy\deploy-web.ps1` — Vercel. **커밋 author가 contact@stepai.kr이어야 배포됨**
   (Vercel git-author 차단, 스크립트가 강제). 프로덕션 = https://stepd.stepai.kr
+- **어드민**: `cd admin && npx vercel deploy --prod --scope step-ai` — **git 자동배포가 아니다.**
+  푸시해도 안 나가므로 손으로 올려야 한다(2026-09-03: 그래서 21일치가 밀려 있었다).
+  ⚠️ Vercel 에 **이름이 비슷한 프로젝트가 둘** 있다:
+  `stepd-admin`(구 `stepd-lab` · 2026-09-03 개명)이 **진짜**로 admin.stepd.stepai.kr 을 서비스하고,
+  `step-d-admin`(admin.stepd.co.kr · 114일째 방치)은 **버려진 것**이다. 링크는
+  `admin/.vercel`(gitignore)이 projectId 로 들고 있으니 그냥 위 명령을 쓸 것.
 - 구 경로(`deploy-server.ps1`·`deploy-worker.ps1`·`ecosystem.config.cjs`·docker-compose·Caddyfile)는
   **2026-08-12 삭제됐다.** 워커 VM 상시 운영(pm2/systemd) 전제라 현재 배치(Cloud Run Jobs +
   윈도우2 작업 스케줄러)와 맞지 않았고, 남겨두면 처음 보는 사람이 그걸 따라간다.
