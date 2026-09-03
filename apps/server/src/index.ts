@@ -694,13 +694,23 @@ app.get("/api/health", async (c) =>
 // 화면은 apps/web 개편 후에 붙인다. 여기서는 API 만 완성해 둔다.
 
 /** 쿠키 옵션 — HttpOnly 라 JS 가 못 읽고, Lax 라 크로스사이트 POST 에 안 실린다. */
-function sessionCookieOpts(expiresAt: number) {
+/**
+ * 세션 쿠키 옵션.
+ *
+ * `remember` 가 false 면 **`expires` 를 안 붙인다** → 브라우저를 닫으면 사라지는 세션 쿠키가 된다.
+ * 이게 로그인 화면의 "로그인 상태 유지" 체크박스를 **실제로 동작하게** 만드는 지점이다
+ * (2026-09-03 이전에는 체크와 무관하게 항상 30일이었다 — 화면이 거짓말을 하고 있었다).
+ *
+ * 서버의 세션 행 수명(SESSION_TTL_MS · 30일)은 **그대로 둔다.** 쿠키가 먼저 사라지므로
+ * 체크 해제 쪽이 더 짧고, 서버 만료는 상한으로 남는다 — 둘 중 짧은 쪽이 이긴다.
+ */
+function sessionCookieOpts(expiresAt: number, remember = true) {
   return {
     httpOnly: true,
     secure: (process.env.PUBLIC_URL ?? "").startsWith("https://"),
     sameSite: "Lax" as const,
     path: "/",
-    expires: new Date(expiresAt),
+    ...(remember ? { expires: new Date(expiresAt) } : {}),
   };
 }
 
@@ -736,8 +746,13 @@ function requirePublisher(c: Context<AppEnv>): string {
 }
 
 app.post("/api/auth/login", async (c) => {
-  const { email, password } = await c.req.json<{ email?: string; password?: string }>().catch(() => ({}) as any);
+  const { email, password, remember } = await c.req
+    .json<{ email?: string; password?: string; remember?: boolean }>()
+    .catch(() => ({}) as any);
   if (!email || !password) return c.json({ error: "email_and_password_required" }, 400);
+  // 안 보내면 **유지**가 기본이다 — 기존 클라이언트(프리미어 패널·구 웹 빌드)가 이 필드를
+  // 모르는데, 없다고 세션 쿠키로 떨어뜨리면 그들이 브라우저 닫을 때마다 로그아웃된다.
+  const keepSignedIn = remember !== false;
 
   const user = await findUserByEmail(email);
   // 계정이 없어도 **해시 대조를 수행한 것과 같은 시간**을 쓰도록 더미 검증을 돌린다.
@@ -761,7 +776,7 @@ app.post("/api/auth/login", async (c) => {
     userAgent: c.req.header("user-agent"),
     ip: c.req.header("x-forwarded-for")?.split(",")[0]?.trim(),
   });
-  setCookie(c, SESSION_COOKIE, token, sessionCookieOpts(expiresAt));
+  setCookie(c, SESSION_COOKIE, token, sessionCookieOpts(expiresAt, keepSignedIn));
   const out: Record<string, unknown> = {
     user: { id: user.id, email: user.email, name: user.name, role: user.role, tenantId: user.tenantId },
   };

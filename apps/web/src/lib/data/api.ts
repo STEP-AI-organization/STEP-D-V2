@@ -1592,12 +1592,17 @@ export interface AuthUser {
   tenantId: string;
 }
 
-export async function login(email: string, password: string): Promise<AuthUser> {
+/**
+ * @param remember 로그인 상태 유지. `false` 면 서버가 **만료 없는 세션 쿠키**를 내려
+ *   브라우저를 닫을 때 로그아웃된다. 생략하면 유지(기존 동작)다 —
+ *   이 인자를 모르는 클라이언트가 브라우저 닫을 때마다 튕기면 안 된다.
+ */
+export async function login(email: string, password: string, remember = true): Promise<AuthUser> {
   const res = await fetch(`${API_BASE}/auth/login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     credentials: "include",
-    body: JSON.stringify({ email, password }),
+    body: JSON.stringify({ email, password, remember }),
   });
   if (!res.ok) {
     const b = (await res.json().catch(() => null)) as { error?: string; message?: string } | null;
@@ -3237,4 +3242,89 @@ export async function reloginNaverAccount(accountId: string): Promise<{ jobId: s
   const res = await fetch(`${API_BASE}/naver/accounts/${accountId}/relogin`, { method: "POST" });
   if (!res.ok) throw new ApiError(res.status, await errorMessageOf(res));
   return (await res.json()) as { jobId: string };
+}
+
+// ── 업무 도우미 챗봇 (/api/chatbot/*) ─────────────────────────────────────────
+//
+// 세션 쿠키가 필요하다 → 모든 호출에 `credentials: "include"`.
+// 응답은 작다(답변 텍스트 + 링크 몇 개). 스트리밍하지 않는 이유는 서버 쪽 주석 참고.
+
+export interface ChatLink {
+  label: string;
+  href: string;
+}
+
+/** 대화 중에 만들어진 보고서 초안. 링크가 아니라 **내용**으로 온다(리포트 화면이 아직 없다). */
+export interface ChatReport {
+  id: string;
+  title: string;
+  period: string;
+  markdown: string;
+  warnings: string[];
+  /** 위젯이 그리는 것은 이 수치뿐이다 — 380px 폭에 표를 넣으면 아무도 못 읽는다. */
+  headline: { label: string; value: number; unit: string; delta?: number }[];
+}
+
+export interface ChatReply {
+  threadId: string;
+  reply: string;
+  links: ChatLink[];
+  /** 이 답을 만들 때 읽은 도움말 문서 이름 — 답이 틀렸을 때 어느 문서를 고칠지 알려 준다. */
+  usedDocs: string[];
+  report?: ChatReport;
+}
+
+export interface ChatThreadSummary {
+  id: string;
+  title: string;
+  summary: string | null;
+  createdAt: number;
+  lastMessageAt: number;
+  messageCount?: number;
+}
+
+export interface ChatMessage {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  links: ChatLink[];
+  usedDocs: string[];
+  createdAt: number;
+}
+
+export async function sendChatbotMessage(input: {
+  message: string;
+  threadId?: string | null;
+  /** 사용자가 보고 있는 경로 — 그 화면의 도움말이 우선 실린다. */
+  screen?: string | null;
+}): Promise<ChatReply> {
+  return json<ChatReply>(await fetch(`${API_BASE}/chatbot/message`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify(input),
+  }));
+}
+
+export async function fetchChatbotThreads(): Promise<ChatThreadSummary[]> {
+  const out = await json<{ threads: ChatThreadSummary[] }>(
+    await fetch(`${API_BASE}/chatbot/threads`, { cache: "no-store", credentials: "include" }),
+  );
+  return out.threads;
+}
+
+export async function fetchChatbotThread(id: string): Promise<{
+  thread: ChatThreadSummary;
+  messages: ChatMessage[];
+}> {
+  return json(await fetch(`${API_BASE}/chatbot/threads/${id}`, {
+    cache: "no-store", credentials: "include",
+  }));
+}
+
+export async function deleteChatbotThread(id: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/chatbot/threads/${id}`, {
+    method: "DELETE", credentials: "include",
+  });
+  if (!res.ok) throw new ApiError(res.status, await errorMessageOf(res));
 }

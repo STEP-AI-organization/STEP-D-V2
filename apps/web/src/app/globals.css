@@ -5,6 +5,65 @@
    Initial theme is resolved by an inline no-flash script in the root layout. */
 @custom-variant dark (&:is(.dark *));
 
+/* ── UI 서체 (2026-09-03 · 디자이너 산출물 이식) ──────────────────────────────
+   Outfit(영문) + Spoqa Han Sans Neo(한글). 디자이너가 이 조합을 전제로 디자인했고
+   **"디자인 그대로"가 원칙**이라 폰트를 조달해 self-host 한다. 없으면 시스템 폰트로
+   조용히 폴백해서 자간·굵기가 어긋나는데, 다크 화면에서는 눈치채기 어렵다.
+
+   라이선스: Outfit = SIL OFL (Google Fonts) · Spoqa Han Sans Neo = MIT (Spoqa, Inc.)
+   둘 다 상업적 사용·재배포 가능. CDN 이 아니라 번들하는 이유는 프로덕션 CSP·오프라인
+   데스크톱 셸(Electron)에서도 같은 글꼴로 떠야 하기 때문이다.
+
+   Outfit 은 **가변 폰트**라 파일 하나가 300~900 을 전부 커버한다(font-weight 범위 표기). */
+@font-face {
+  font-family: "Outfit";
+  src: url("/fonts/Outfit-latin.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC,
+    U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215,
+    U+FEFF, U+FFFD;
+}
+@font-face {
+  font-family: "Outfit";
+  src: url("/fonts/Outfit-latinext.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304,
+    U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0,
+    U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+@font-face {
+  font-family: "Spoqa Han Sans Neo";
+  src: url("/fonts/SpoqaHanSansNeo-Light.woff2") format("woff2");
+  font-weight: 300; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: "Spoqa Han Sans Neo";
+  src: url("/fonts/SpoqaHanSansNeo-Regular.woff2") format("woff2");
+  font-weight: 400; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: "Spoqa Han Sans Neo";
+  src: url("/fonts/SpoqaHanSansNeo-Medium.woff2") format("woff2");
+  font-weight: 500; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: "Spoqa Han Sans Neo";
+  src: url("/fonts/SpoqaHanSansNeo-Bold.woff2") format("woff2");
+  font-weight: 700; font-style: normal; font-display: swap;
+}
+
+/* 이식한 화면이 디자이너 의도대로 렌더되게 하는 서체 스택.
+   디자이너 globals.css 의 `--font-base` 와 **같은 순서**다(영문 Outfit → 한글 Spoqa).
+   순서를 바꾸면 한글이 Outfit 의 폴백으로 떨어져 자간이 달라진다. */
+@utility sd-ui-font {
+  font-family: "Outfit", "Spoqa Han Sans Neo", -apple-system, "Apple SD Gothic Neo",
+    "Malgun Gothic", sans-serif;
+}
+
 /* 에디터 제목 글꼴 픽커(FONT_FAMILY_OPTIONS)용 GmarketSans — public/fonts 번들.
    편집 중(PNG 숨김) CSS 미리보기 정확도를 위한 것. 최종 결과물은 서버 canvas-PNG
    (overlay-canvas.ts)라, 이 @font-face 가 없어도 결과물은 정확하다(진실은 <img>). */

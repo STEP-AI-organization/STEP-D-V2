@@ -42,8 +42,29 @@ describe("세션 토큰의 두 번째 운반 (x-stepd-session)", () => {
 
   it("토큰은 x-stepd-client 를 보낸 호출자에게만 응답에 실린다 — 웹 응답은 그대로(HttpOnly 유지)", () => {
     assert.match(index, /if \(\(c\.req\.header\("x-stepd-client"\) \?\? ""\)\.trim\(\)\) \{\s*\n\s*out\.token = token;/);
-    assert.match(index, /setCookie\(c, SESSION_COOKIE, token, sessionCookieOpts\(expiresAt\)\)/,
+    // 인자 목록까지 고정하지 않는다 — 2026-09-03 에 "로그인 상태 유지" 를 배선하며
+    // sessionCookieOpts(expiresAt, keepSignedIn) 로 늘었는데, 지키려던 불변식
+    // ("쿠키를 여전히 설정한다")은 그대로였다. 고정할 것은 호출의 **존재**지 시그니처가 아니다.
+    assert.match(index, /setCookie\(c, SESSION_COOKIE, token, sessionCookieOpts\(/,
       "쿠키 설정을 없애면 웹 로그인이 깨진다 — 헤더는 추가지 대체가 아니다");
+  });
+});
+
+describe("로그인 상태 유지 — 체크박스가 실제로 무언가를 한다", () => {
+  // 2026-09-03 이전에는 세션이 **항상 30일**이라 로그인 화면의 체크박스가 아무 일도 안 했다.
+  // 동작하지 않는 컨트롤은 사용자에게 거짓말이다. 배선을 고정한다.
+  it("remember 를 받아 쿠키 수명에 반영한다", () => {
+    assert.match(index, /const keepSignedIn = remember !== false;/,
+      "안 보내면 유지가 기본 — 이 필드를 모르는 구 클라이언트가 브라우저 닫을 때마다 튕기면 안 된다");
+    assert.match(index, /sessionCookieOpts\(expiresAt, keepSignedIn\)/,
+      "받아만 놓고 안 쓰면 체크박스는 여전히 장식이다");
+  });
+
+  it("해제하면 expires 를 안 붙인다 — 그래야 브라우저를 닫을 때 사라진다", () => {
+    const fn = index.slice(index.indexOf("function sessionCookieOpts"));
+    const body = fn.slice(0, fn.indexOf("\n}") + 2);
+    assert.match(body, /remember \? \{ expires: new Date\(expiresAt\) \} : \{\}/,
+      "expires 를 무조건 붙이면 해제해도 30일짜리 영구 쿠키가 나간다");
   });
 });
 
