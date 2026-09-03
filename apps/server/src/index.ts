@@ -6735,21 +6735,19 @@ app.post("/api/billing/invoice/test-email", async (c) => {
     return c.json({ error: "to_required", message: "받는 사람 이메일이 필요합니다." }, 400);
   }
 
-  // 표본 결제 — **실제 단가로** 계산한다. 금액을 지어내면 세액 역산을 확인할 수 없고,
-  // 단가가 없다는 건 실제 결제도 못 한다는 뜻이라 그 사실을 알리는 게 맞다.
-  const priceKrw = creditPriceKrw();
-  if (!priceKrw) {
-    return c.json({
-      error: "price_not_configured",
-      message: "크레딧 단가(CREDIT_PRICE_KRW)가 없어 표본 금액을 만들 수 없습니다.",
-    }, 409);
-  }
+  // 표본 결제 — 금액은 **실제 주문과 같은 buildTopup 으로** 만든다. 여기서 `크레딧 × 단가`
+  // 를 직접 곱으면 안 된다: 단가는 공급가액이라 청구액은 거기에 부가세를 더한 값이다
+  // (5,000개 × 60원 = 공급가 300,000 + 세액 30,000 = **330,000원**). 실제로 2026-09-03
+  // 첫 테스트 발송이 300,000원으로 나가 이 함정을 밟았다 — 검증용 메일이 틀린 금액을
+  // 보여주면 확인이 아니라 오확인이다.
   const credits = Number(body.credits ?? 5000) || 5000;
+  const order = buildTopup(credits);
+  if (!order.ok) return c.json({ error: "price_not_configured", message: order.reason }, 409);
   const paidAt = toKstIso(new Date()) ?? new Date().toISOString();
   const sample = invoiceFromTopup({
     paymentId: "test-email-preview",
-    credits,
-    amountKrw: credits * priceKrw,
+    credits: order.credits,
+    amountKrw: order.amountKrw,
     requestedBy: "auto",
     createdAt: paidAt,
     settledAt: paidAt,

@@ -164,6 +164,25 @@ describe("배선", () => {
     assert.match(route("/api/superadmin/tenants/:id/invoice-months"), /asSystem\(/);
   });
 
+  it("영수증 테스트 발송이 금액을 직접 곱하지 않는다", () => {
+    // 단가는 **공급가액**이라 `크레딧 × 단가` 는 청구액이 아니다(부가세 별도).
+    // 2026-09-03 첫 테스트 발송이 이걸 곱해서 330,000원짜리를 300,000원으로 보냈다.
+    // 검증용 메일이 틀린 금액을 보여주면 확인이 아니라 오확인이다 — 실제 주문과 같은
+    // buildTopup 을 쓰게 못박는다.
+    const r = new RegExp(`app\\.post\\("/api/billing/invoice/test-email"[\\s\\S]*?\\n\\}\\);`).exec(INDEX)?.[0] ?? "";
+    assert.notEqual(r, "", "테스트 발송 라우트를 찾지 못했다");
+    assert.match(r, /buildTopup\(/, "실제 주문과 같은 함수로 금액을 만들어야 한다");
+    assert.doesNotMatch(r, /credits\s*\*\s*price/i, "크레딧 × 단가는 공급가액이지 청구액이 아니다");
+  });
+
+  it("영수증 테스트 발송이 실제 영수증으로 오인될 수 없다", () => {
+    // 결제 없이 만드는 문서다. 번호가 진짜처럼 보이면 회계에 섞여 들어간다.
+    const r = new RegExp(`app\\.post\\("/api/billing/invoice/test-email"[\\s\\S]*?\\n\\}\\);`).exec(INDEX)?.[0] ?? "";
+    assert.match(r, /RC-TEST-000000/, "영수증 번호를 테스트 값으로 못박아야 한다");
+    assert.match(r, /\[테스트\]/, "제목에 테스트 표시가 있어야 한다");
+    assert.match(r, /issuerInfo\(\)/, "발행자 정보가 비면 보내기 전에 막아야 한다");
+  });
+
   it("결제가 있는 달만 고를 수 있다", () => {
     // 빈 달을 고르게 두면 빈 문서가 나오고, 운영자는 그게 오류인지 실제로 없는 건지 모른다.
     assert.match(route("/api/superadmin/tenants/:id/invoice-months"), /HAVING COUNT\(\*\) FILTER \(WHERE status = 'paid'\) > 0/);
