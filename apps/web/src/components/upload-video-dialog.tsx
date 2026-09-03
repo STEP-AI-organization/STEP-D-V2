@@ -13,7 +13,7 @@
  *  - 업로드 완료 ≠ 분석 완료. 회차는 `분석 대기` 로 들어간다(Invariant).
  *  - 권리 정보는 이 단계에서 절대 만들어지지 않는다(Invariant) — 그래서 고지 문구가 필수다.
  */
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { AlertTriangle, Film, Info, Loader2, Upload, Youtube } from "lucide-react";
@@ -40,7 +40,8 @@ export function UploadVideoButton({
   variant?: "outline" | "default";
   /** sd-* 재설계 화면용 — 넘기면 이 클래스로 그린다. */
   className?: string;
-  label?: string;
+  /** 라벨. 아이콘+span 같은 원본 버튼 내용을 그대로 넘길 수 있게 ReactNode 다. */
+  label?: ReactNode;
 } = {}) {
   const { serverConnected } = useAppData();
   const [open, setOpen] = useState(false);

@@ -1,33 +1,80 @@
 "use client";
 
 /**
- * U5 · 영상 분석 (README §4 · FLOWS F2).
+ * 영상 분석 — 디자이너 산출물 이식 (원본 `STEPD_SaaS_UI_V1/src/app/analyze/page.tsx` 734줄).
  *
- * 회차 원본 → 추천 구간 → (사람이 채택) → 미디어.
+ * **마크업·클래스·문구는 원본 그대로.** 바깥 두 겹 래퍼와 `<Sidebar/>` 만 뺐다.
  *
- * 지키는 규칙:
+ * 회차 원본 → 추천 구간 → (사람이 채택) → 미디어. 지키는 규칙:
  *  - 회차 상태는 `분석 대기` → `분석 중` → `분석 완료`. 업로드했다고 분석된 게 아니다.
  *  - 진행률은 **클라이언트에서 97%를 넘기지 않는다.** 100%는 서버 완료 신호로만(F2-2 ⊘).
- *    타이머로 100%를 채우면 아직 도는 작업이 끝난 것처럼 보인다.
  *  - 종영 프로그램은 채택 단계가 없다(F2-5). 아카이브 검색으로 간다.
- *  - `+`(채택)를 누른 것만 미디어가 된다. 안 누른 구간은 여기 남아 있는다.
+ *  - 채택한 것만 미디어가 된다. 안 누른 구간은 여기 남아 있는다.
+ *
+ * ## 좌측 회차 클릭이 제자리 선택으로 돌아왔다
+ * 예전 이 화면은 회차를 누르면 `/episodes/:id` 로 **이탈**했다("회차별 중간 화면은 없앤다").
+ * 디자이너 화면은 좌측에서 고르고 오른쪽에서 보는 구조라, 이탈시키면 선택 하이라이트도
+ * 우측 패널도 의미가 없어진다. 제자리 선택으로 되돌리고, 회차 상세로 가는 길은
+ * **원본에도 있는 `회차 상세` 버튼**이 맡는다. `?program=&episode=` URL 상태는 유지 —
+ * 링크 공유·뒤로가기가 원본 `useState` 로는 안 된다.
+ *
+ * ## 원본이 목이라 사라질 뻔한 것들 (전부 되살렸다)
+ *  - **`보류`·`채택` 버튼에 핸들러가 없다**(373·376). 낙관적 갱신·롤백·토스트를 붙였다.
+ *  - **시각 범위가 버튼이 아니다**(324). 누르면 위 플레이어가 그 지점부터 재생한다 —
+ *    운영자가 구간을 확인하는 유일한 수단이다.
+ *  - **빈 상태를 프로그램 이름으로 판정**한다(`selectedProgram === '리모와 멜로'`, 204·236).
+ *  - **배지가 초록 `분석 완료` 고정**(269). 실제로는 5상태고, 특히 `warn`(크레딧 부족으로
+ *    잡을 아예 안 넣은 상태)이 완료로 보이면 안 된다.
+ *  - **메트릭 23/22/1 · 부제 `미결정 22 · 채택 1` 이 리터럴**이다.
+ *  - **`회차 상세` href 가 하드코딩**(275)이다.
+ *  - `업로드 시작` 은 모달만 닫는다(721) → 우리 `UploadDialog` 를 그대로 띄운다(버튼 픽셀은
+ *    원본 클래스·아이콘 그대로). 모달 마크업 이식은 진입점 3곳 동시 전환 별건이다.
+ *
+ * ## 자막 오버레이(257–259)
+ * 원본은 문자열 리터럴이다. 진짜 자막은 분석 JSON 안에 있는데 **회차 전체**(58.6분 기준
+ * 자막 925개)라 프로덕션에선 `/api/proxy` 를 타고 Vercel FOT 로 과금된다. 그래서
+ * **재생을 시작한 뒤에만** 공유 폴러를 붙이고, 현재 시각에 걸리는 자막이 있을 때만 그린다.
  */
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Upload } from "lucide-react";
 
+import { Footer } from "@/components/layout/footer";
+import { Header } from "@/components/layout/header";
 import { UploadVideoButton } from "@/components/upload-video-dialog";
+import { CustomSelect } from "@/components/ui/custom-select";
 import { useToast } from "@/components/ui/toast";
 import { ApiError, getStreamUrl, reanalyzeMedia } from "@/lib/data/api";
 import { useAppData } from "@/lib/data/store";
+import { useMediaAnalysisPoll } from "@/lib/data/use-media-analysis";
 import { normalizeProgramStatus } from "@/lib/programs";
 import { PIPELINE_STAGE_LABELS } from "@/lib/constants";
 import type { Episode, Recommendation } from "@/lib/types";
-import { cn, fmtTime } from "@/lib/utils";
+import { fmtTime } from "@/lib/utils";
+
+/** 원본 회차 리스트·빈 상태 카드 (203). */
+const LIST_CARD = "bg-white dark:bg-[#1C1E24] border-none shadow-md shadow-slate-900/5 dark:shadow-none rounded-xl p-3 space-y-1";
+/** 원본 우측 빈 상태 카드 (237). */
+const EMPTY_CARD = "p-4 rounded-xl border-none bg-[var(--color-bg-card)] shadow-md shadow-slate-900/5 dark:shadow-none text-xs text-[var(--color-text-muted)]";
+/** 원본 회색 pill (329). */
+const PILL = "px-2.5 py-0.5 rounded-full bg-slate-100 dark:bg-stone-800 text-slate-600 dark:text-slate-300 font-semibold text-[11px] border-none";
+/** 원본 보조 버튼 (276·367·373). */
+const BTN = "h-8 px-4 rounded-full bg-[var(--color-bg-input)] hover:bg-[var(--color-bg-card-hover)] text-[var(--color-text-primary)] border border-[var(--color-border-subtle)] text-xs font-medium transition-colors inline-flex items-center justify-center cursor-pointer";
 
 export default function AnalyzePage() {
   return (
-    <Suspense fallback={<div className="text-[12px]" style={{ color: "var(--sd-mut)" }}>불러오는 중…</div>}>
+    <Suspense
+      fallback={
+        <>
+          <Header title="영상 분석" subtitle="회차 원본 → 추천 구간 → 미디어 생성" />
+          <main className="flex-1 p-6 flex flex-col justify-between overflow-y-auto space-y-4">
+            <div className={EMPTY_CARD}>불러오는 중…</div>
+            <Footer />
+          </main>
+        </>
+      }
+    >
       <AnalyzeInner />
     </Suspense>
   );
@@ -70,82 +117,104 @@ function AnalyzeInner() {
 
   const ended = program ? normalizeProgramStatus(program.status) === "ended" : false;
 
-  // 회차별 "분석(추천구간)" 중간 화면은 없앤다 — 회차를 지정해 들어오면 곧바로 회차 상세로 보낸다.
-  // (좌측 레일에서 회차를 고르면 아래에서 바로 /episodes/:id 로 push 한다.)
-  const episodeParam = params.get("episode");
-  useEffect(() => {
-    if (episodeParam) router.replace(`/episodes/${episodeParam}`);
-  }, [episodeParam, router]);
+  // 원본 셀렉트는 옵션이 이름 문자열이라 동명 프로그램을 구분 못 한다 — value 는 id 로 간다.
+  const programOptions = useMemo(
+    () =>
+      programs.length === 0
+        ? [{ value: "", label: loading ? "불러오는 중…" : "프로그램 없음" }]
+        : programs.map((p) => ({ value: p.id, label: p.title })),
+    [programs, loading],
+  );
 
   return (
-    <div className="flex gap-4">
-      {/* ── 좌측 레일 214px ─────────────────────────────────────────────── */}
-      <aside className="flex w-[214px] shrink-0 flex-col gap-2.5">
-        <select
-          value={programId}
-          onChange={(e) => go({ program: e.target.value })}
-          className="sd-input w-full"
-          aria-label="프로그램 선택"
-        >
-          {programs.length === 0 && <option value="">프로그램 없음</option>}
-          {programs.map((p) => (
-            <option key={p.id} value={p.id}>{p.title}</option>
-          ))}
-        </select>
+    <>
+      <Header title="영상 분석" subtitle="회차 원본 → 추천 구간 → 미디어 생성" />
 
-        <div className="sd-card flex-1 overflow-y-auto p-1.5">
-          {eps.length === 0 ? (
-            <div className="p-3 text-[11.5px]" style={{ color: "var(--sd-mut)" }}>
-              {loading ? "불러오는 중…" : "회차가 없습니다"}
+      {/* Video Analysis Layout (2 Column Split) */}
+      <main className="flex-1 p-6 flex flex-col justify-between overflow-y-auto space-y-4">
+        <div className="space-y-4 flex-1">
+          {/* Top Workspace Split */}
+          <div className="grid grid-cols-12 gap-4">
+            {/* Left Column: Program Select -> Upload Button -> Episode List Section Card */}
+            <div className="col-span-3 space-y-3">
+              {/* 1. Program Select Dropdown with CustomSelect (Equal Height h-10, Floating Shadow) */}
+              <CustomSelect
+                options={programOptions}
+                value={programId}
+                onChange={(v) => go({ program: v })}
+                ariaLabel="프로그램 선택"
+                triggerClassName="h-10 bg-[var(--color-bg-card)] text-[var(--color-text-primary)] font-bold border-none rounded-xl shadow-[0_4px_16px_rgba(0,0,0,0.08)] dark:shadow-[0_4px_16px_rgba(0,0,0,0.4)]"
+              />
+
+              {/* 2. 회차 영상 업로드 Button with Upload Icon (Equal Height h-10, No Border, Soft Shadow) */}
+              <UploadVideoButton
+                programId={programId}
+                className="w-full h-10 rounded-full bg-[var(--color-bg-active)] text-white font-semibold text-xs hover:bg-[#0D1EB8] transition-colors border-none shadow-md shadow-slate-900/5 dark:shadow-none cursor-pointer flex items-center justify-center gap-1.5 disabled:opacity-50 disabled:cursor-not-allowed"
+                label={
+                  <>
+                    <Upload className="w-4 h-4" />
+                    <span>회차 영상 업로드</span>
+                  </>
+                }
+              />
+
+              {/* 3. Single White Section Card for Episode List */}
+              <div className={LIST_CARD}>
+                {eps.length === 0 ? (
+                  <div className="p-4 text-center text-xs text-[var(--color-text-muted)] py-6">
+                    {loading ? "불러오는 중…" : "회차가 없습니다"}
+                  </div>
+                ) : (
+                  eps.map((ep) => {
+                    const isSelected = ep.id === episodeId;
+                    return (
+                      <div
+                        key={ep.id}
+                        onClick={() => go({ episode: ep.id })}
+                        className={`p-2.5 rounded-lg transition-all cursor-pointer text-xs ${
+                          isSelected
+                            ? "bg-[#1C60FF]/10 text-[#1C60FF] font-bold"
+                            : "text-[var(--color-text-muted)] hover:bg-[var(--color-bg-input)] hover:text-[var(--color-text-primary)] font-medium"
+                        }`}
+                      >
+                        <h4 className={`text-xs mb-0.5 ${isSelected ? "font-bold text-[#1C60FF]" : "font-bold text-[var(--color-text-primary)]"}`}>
+                          회차 {ep.episodeNumber}
+                        </h4>
+                        <div className="text-[10px] opacity-80">
+                          {stageLabel(ep)} · {ep.broadDate || "방영일 미등록"}
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
             </div>
-          ) : (
-            <ul className="flex flex-col gap-0.5">
-              {eps.map((e) => (
-                <li key={e.id}>
-                  <button
-                    type="button"
-                    onClick={() => router.push(`/episodes/${e.id}`)}
-                    className={cn(
-                      "flex w-full flex-col gap-0.5 rounded-[4px] px-2 py-1.5 text-left",
-                      e.id === episodeId && "bg-[var(--sd-accent-bg)]",
-                    )}
-                  >
-                    <span className="text-[12px] font-medium" style={{ color: "var(--sd-fg)" }}>
-                      회차 {e.episodeNumber}
-                    </span>
-                    <span className="text-[10.5px]" style={{ color: "var(--sd-mut)" }}>
-                      {stageLabel(e)} · {e.broadDate || "방영일 미등록"}
-                    </span>
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
+
+            {/* Right Column: Video Player Container & Controls OR Empty State Box */}
+            <div className="col-span-9 space-y-4">
+              {!episode ? (
+                <div className={EMPTY_CARD}>
+                  {loading
+                    ? "불러오는 중…"
+                    : "왼쪽에서 회차를 고르세요. 회차가 없으면 원본을 먼저 올려야 합니다."}
+                </div>
+              ) : (
+                <EpisodeAnalysis
+                  key={episode.id}
+                  episode={episode}
+                  recs={recs}
+                  clipCount={clips.filter((c) => c.episodeId === episode.id).length}
+                  ended={ended}
+                />
+              )}
+            </div>
+          </div>
         </div>
 
-        <UploadVideoButton
-          programId={programId}
-          className="sd-btn sd-btn-primary w-full"
-          label="＋ 회차 영상 업로드"
-        />
-      </aside>
-
-      {/* ── 중앙 ─────────────────────────────────────────────────────────── */}
-      <div className="flex min-w-0 flex-1 flex-col gap-4">
-        {!episode ? (
-          <div className="sd-card p-6 text-[12.5px]" style={{ color: "var(--sd-mut)" }}>
-            {loading ? "불러오는 중…" : "왼쪽에서 회차를 고르세요. 회차가 없으면 원본을 먼저 올려야 합니다."}
-          </div>
-        ) : (
-          <EpisodeAnalysis
-            episode={episode}
-            recs={recs}
-            clipCount={clips.filter((c) => c.episodeId === episode.id).length}
-            ended={ended}
-          />
-        )}
-      </div>
-    </div>
+        {/* Footer */}
+        <Footer />
+      </main>
+    </>
   );
 }
 
@@ -160,6 +229,15 @@ function stageLabel(e: Episode): string {
   if (p.stageStatus === "warn") return "분석 보류";
   return "분석 완료";
 }
+
+/** 원본 배지는 초록 하나뿐이다(269–272). 구조는 그대로 두고 색만 상태별로 나눈다. */
+const BADGE_TONE = {
+  done: { pill: "bg-emerald-500/15 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-400", dot: "bg-emerald-600 dark:bg-emerald-400" },
+  run: { pill: "bg-blue-500/15 text-blue-700 dark:bg-blue-500/20 dark:text-blue-400", dot: "bg-blue-600 dark:bg-blue-400" },
+  warn: { pill: "bg-amber-500/15 text-amber-700 dark:bg-amber-500/20 dark:text-amber-400", dot: "bg-amber-600 dark:bg-amber-400" },
+  error: { pill: "bg-rose-500/15 text-rose-700 dark:bg-rose-500/20 dark:text-rose-400", dot: "bg-rose-600 dark:bg-rose-400" },
+  idle: { pill: "bg-slate-200/80 text-slate-700 dark:bg-[#282B35] dark:text-slate-300", dot: "bg-slate-500 dark:bg-slate-400" },
+} as const;
 
 function EpisodeAnalysis({
   episode,
@@ -194,6 +272,17 @@ function EpisodeAnalysis({
     return () => { alive = false; };
   }, [master?.id, master]);
 
+  // 자막은 **재생을 시작한 뒤에만** 받는다 — 분석 JSON 전체라 무겁다(위 주석 참조).
+  const [started, setStarted] = useState(false);
+  const [now, setNow] = useState(0);
+  const { analysis } = useMediaAnalysisPoll(started ? master?.id : undefined);
+  const caption = useMemo(() => {
+    const segs = analysis?.data?.transcript;
+    if (!segs?.length) return null;
+    const hit = segs.find((s) => now >= s.start && now < (s.end ?? s.start + 4));
+    return hit?.text?.trim() || null;
+  }, [analysis, now]);
+
   /** 구간 클릭 → 그 지점으로 이동하고 재생. 검증 흐름의 척추다. */
   const seekTo = useCallback((sec: number) => {
     const v = videoRef.current;
@@ -208,14 +297,15 @@ function EpisodeAnalysis({
   // 서버가 분석 잡을 넣지 않은 상태(크레딧 부족 등) — 진행 중도 완료도 아니다.
   const blocked = episode.pipeline?.stageStatus === "warn";
   const failed = episode.pipeline?.stageStatus === "error";
+  const tone = failed ? "error" : blocked ? "warn" : analyzing ? "run" : waiting ? "idle" : "done";
 
   /**
    * 다시 시도 — 보류(크레딧 부족 등)·실패에서 빠져나오는 유일한 출구.
    *
-   * note 는 **거절당한 시점의 스냅샷**이라 충전해도 저절로 안 바뀐다("크레딧이 7개 모자랍니다
-   * (필요 16 · 보유 9)" 가 잔액 69 인데도 그대로 남는다). 문구는 "충전 후 다시 시도하세요" 라고
-   * 하는데 정작 시도할 버튼이 없었다(2026-08-19 사용자 지적) — 사용자가 할 일을 알려주고도
-   * 그 일을 할 수단을 안 준 상태였다. 서버는 잡을 큐잉만 하면 되므로 재분석 요청이 곧 재시도다.
+   * note 는 **거절당한 시점의 스냅샷**이라 충전해도 저절로 안 바뀐다. 문구는 "충전 후 다시
+   * 시도하세요" 라고 하는데 정작 시도할 버튼이 없었다(2026-08-19 사용자 지적) — 사용자가 할
+   * 일을 알려주고도 그 일을 할 수단을 안 준 상태였다. 서버는 잡을 큐잉만 하면 되므로
+   * 재분석 요청이 곧 재시도다. ⚠️ 재분석은 크레딧을 쓴다(체크포인트 재개라 대개 저렴하다).
    */
   const retry = useCallback(async () => {
     if (!master || retrying) return;
@@ -248,14 +338,9 @@ function EpisodeAnalysis({
 
   return (
     <>
-      {/* 원본 플레이어 + 회차 상태 */}
-      <div className="sd-card overflow-hidden">
-        {/* 16:9 프레임을 폭에 맞춰 잡는다. 프로토타입의 266px 는 목업 자리 높이였지
-            실제 영상의 제약이 아니다 — 고정 높이로 두면 넓은 화면에서 위아래 검은 띠만 커진다. */}
-        <div
-          className="relative w-full"
-          style={{ aspectRatio: "16 / 9", maxHeight: "58vh", background: "#000", borderBottom: "1px solid var(--sd-border)" }}
-        >
+      {/* 1. HTML5 Video Player Container */}
+      <div className="w-full bg-black rounded-xl overflow-hidden relative shadow-md shadow-slate-900/5 dark:shadow-none">
+        <div className="relative aspect-video bg-black flex items-center justify-center">
           {videoSrc ? (
             <video
               ref={videoRef}
@@ -264,43 +349,54 @@ function EpisodeAnalysis({
               controls
               playsInline
               preload="metadata"
-              className="absolute inset-0 size-full object-contain"
-            />
+              onPlay={() => setStarted(true)}
+              onTimeUpdate={(e) => setNow(e.currentTarget.currentTime)}
+              className="w-full h-full object-contain"
+            >
+              <track kind="captions" />
+              브라우저가 비디오 태그를 지원하지 않습니다.
+            </video>
           ) : (
-            <div className="sd-ph absolute inset-0 grid place-items-center text-center">
+            <div className="w-full h-full flex items-center justify-center text-center text-xs text-slate-400 px-6">
               {master ? (videoError ?? "원본을 불러오는 중…") : "이 회차의 원본 파일이 없습니다"}
             </div>
           )}
+
+          {/* Subtitle Overlay (Over video) */}
+          {caption && (
+            <div className="absolute bottom-14 left-1/2 -translate-x-1/2 bg-black/80 px-4 py-1.5 rounded-md text-white text-xs font-semibold tracking-wide border border-white/10 pointer-events-none z-10">
+              {caption}
+            </div>
+          )}
         </div>
-        <div className="flex flex-wrap items-center gap-3 px-3 py-2.5">
-          <span className="sd-serif text-[15px] font-semibold" style={{ color: "var(--sd-fg)" }}>
+      </div>
+
+      {/* 2. Separate Episode Info & Action Section Card */}
+      <div className="bg-[var(--color-bg-card)] border-none shadow-md shadow-slate-900/5 dark:shadow-none rounded-xl p-3.5 flex items-center justify-between text-xs">
+        <div className="flex items-center gap-2.5">
+          <span className="font-bold text-sm text-[var(--color-text-primary)]">
             회차 {episode.episodeNumber}
           </span>
-          <span
-            className={cn(
-              "sd-tag",
-              analyzing && "sd-tag--upcoming",
-              blocked && "sd-tag--warn",
-            )}
-          >
-            {stageLabel(episode)}
+          <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-semibold border-none ${BADGE_TONE[tone].pill}`}>
+            <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${BADGE_TONE[tone].dot}`} />
+            <span>{stageLabel(episode)}</span>
           </span>
           {(analyzing || waiting) && (
             <>
-              <div className="sd-progress w-[160px]">
-                <span style={{ width: `${Math.max(2, pct)}%` }} />
+              <div className="h-1.5 w-[120px] rounded-full bg-[var(--color-bg-input)] overflow-hidden">
+                <div className="h-full rounded-full bg-[var(--color-bg-active)]" style={{ width: `${Math.max(2, pct)}%` }} />
               </div>
-              <span className="sd-mono text-[11px]" style={{ color: "var(--sd-mut)" }}>
+              <span className="font-mono text-[11px] text-[var(--color-text-muted)]">
                 {waiting ? "대기" : `${pct}%`}
               </span>
             </>
           )}
           {/* note 는 보류 상태에서도 보여야 한다 — 왜 안 도는지가 거기 적혀 있다. */}
           {(analyzing || waiting || blocked) && episode.pipeline?.note && (
-            <span className="text-[11.5px]" style={{ color: "var(--sd-mut)" }}>
-              {episode.pipeline.note}
-            </span>
+            <span className="text-[11px] text-[var(--color-text-muted)]">{episode.pipeline.note}</span>
           )}
+        </div>
+        <div className="flex items-center gap-2">
           {/* 보류·실패에서 빠져나오는 출구. 이게 없으면 note 의 "충전 후 다시 시도하세요" 가
               시킬 수 없는 지시가 된다. 원본이 없으면 재분석할 대상이 없어 숨긴다. */}
           {(blocked || failed) && master && (
@@ -308,103 +404,91 @@ function EpisodeAnalysis({
               type="button"
               onClick={() => void retry()}
               disabled={retrying}
-              className="sd-btn ml-auto"
-              title="분석을 다시 큐에 넣습니다"
+              title="분석을 다시 큐에 넣습니다 (크레딧이 듭니다)"
+              className={`${BTN} font-semibold shadow-xs disabled:opacity-50 disabled:cursor-not-allowed`}
             >
               {retrying ? "다시 시도 중…" : "다시 시도"}
             </button>
           )}
-          <Link
-            href={`/episodes/${episode.id}`}
-            className={cn("sd-btn", !((blocked || failed) && master) && "ml-auto")}
-          >
+          <Link href={`/episodes/${episode.id}`} className={`${BTN} font-semibold shadow-xs`}>
             회차 상세
           </Link>
         </div>
       </div>
 
+      {/* 차단 사유 — 원본 모달의 amber 고지 박스(676–683)와 같은 언어. */}
       {episode.pipeline?.blockedReason && (
-        <div
-          className="rounded-[6px] px-3 py-2.5 text-[12.5px]"
-          style={{
-            color: "var(--sd-warn)",
-            background: "var(--sd-warn-bg)",
-            border: "1px solid var(--sd-warn-border)",
-          }}
-        >
-          ⚠ {episode.pipeline.blockedReason}
+        <div className="p-4 rounded-2xl bg-[#FFFBEB] dark:bg-[#282218] border-none flex items-start gap-3 shadow-none">
+          <span className="w-4 h-4 rounded-full border border-amber-500 text-amber-500 flex items-center justify-center text-[10px] font-bold shrink-0 mt-0.5 select-none">
+            i
+          </span>
+          <div className="text-xs text-slate-600 dark:text-slate-400 font-medium leading-relaxed">
+            {episode.pipeline.blockedReason}
+          </div>
         </div>
       )}
 
-      {/* 분석 결과 요약 */}
-      <div className="sd-card flex">
-        <Metric label="추천 구간" value={recs.length} divider />
-        <Metric label="미결정" value={undecided} divider />
+      {/* Single Background Container with Vertical Divider Lines (divide-x) */}
+      <div className="bg-[var(--color-bg-card)] border-none shadow-md shadow-slate-900/5 dark:shadow-none rounded-xl p-4 grid grid-cols-3 divide-x divide-[var(--color-border-subtle)]">
+        <Metric label="추천 구간" value={recs.length} />
+        <Metric label="미결정" value={undecided} />
         <Metric label="미디어 생성" value={clipCount} />
       </div>
 
-      {/* 추천 구간 */}
-      {ended ? (
-        <div className="sd-card px-3 py-2.5 text-[12.5px]" style={{ color: "var(--sd-fg)" }}>
-          종영 프로그램입니다 — 새 회차 분석에서 클립을 만들지 않습니다.{" "}
-          {/* 검색 화면은 아직 쿼리스트링 필터를 읽지 않는다 — ?program= 을 붙이면
-              프로그램이 걸린 것처럼 보여서 뺐다. 검색창에서 직접 골라야 한다. */}
-          <Link href="/search" className="underline" style={{ color: "var(--sd-accent)" }}>
-            아카이브에서 장면 찾기
-          </Link>{" "}
-          <span style={{ color: "var(--sd-mut)" }}>(검색 화면에서 프로그램을 다시 골라야 합니다)</span>
-        </div>
-      ) : recs.length === 0 ? (
-        <div
-          className="sd-ph grid min-h-[140px] place-items-center rounded-[6px] px-6 text-center"
-          style={{ border: "1px dashed var(--sd-border)" }}
-        >
-          {blocked
-            ? (episode.pipeline?.note ?? "분석이 보류됐습니다 — 위 사유를 해결하면 시작됩니다")
-            : analyzing || waiting
-              ? "분석이 끝나면 추천 구간이 여기 나타납니다"
-              : "추천 구간이 없습니다 — 분석 결과가 비어 있습니다"}
-        </div>
-      ) : (
-        <section className="flex flex-col gap-2.5">
-          <div className="flex items-baseline gap-2">
-            <h3 className="sd-serif text-[16px] font-semibold" style={{ color: "var(--sd-fg)" }}>
-              추천 구간
-            </h3>
-            <span className="text-[11px]" style={{ color: "var(--sd-mut)" }}>
-              채택(＋)한 구간만 미디어가 됩니다 · 미결정 {undecided} · 채택 {adopted}
-            </span>
+      {/* Recommendation Section Header (Title 16px, 2x Top Spacing pt-6) */}
+      <div className="space-y-3 pt-6">
+        {ended ? (
+          <div className={EMPTY_CARD}>
+            종영 프로그램입니다 — 새 회차 분석에서 클립을 만들지 않습니다.{" "}
+            {/* 검색 화면은 아직 쿼리스트링 필터를 읽지 않는다 — ?program= 을 붙이면
+                프로그램이 걸린 것처럼 보여서 뺐다. 검색창에서 직접 골라야 한다. */}
+            <Link href="/search" className="underline text-[var(--color-bg-active)]">
+              아카이브에서 장면 찾기
+            </Link>{" "}
+            (검색 화면에서 프로그램을 다시 골라야 합니다)
           </div>
-          {recs.map((r) => (
-            <RecommendationRow key={r.id} rec={r} episodeId={episode.id} onSeek={seekTo} />
-          ))}
-        </section>
-      )}
+        ) : recs.length === 0 ? (
+          <div className={EMPTY_CARD}>
+            {blocked
+              ? (episode.pipeline?.note ?? "분석이 보류됐습니다 — 위 사유를 해결하면 시작됩니다")
+              : analyzing || waiting
+                ? "분석이 끝나면 추천 구간이 여기 나타납니다"
+                : "추천 구간이 없습니다 — 분석 결과가 비어 있습니다"}
+          </div>
+        ) : (
+          <>
+            <div className="flex items-center justify-between text-xs">
+              <h3 className="font-bold text-[16px] text-[var(--color-text-primary)] flex items-center gap-2">
+                <span>추천 구간</span>
+                <span className="text-[11px] text-[var(--color-text-muted)] font-normal">
+                  채택(+)한 구간만 미디어가 됩니다 · 미결정 {undecided} · 채택 {adopted}
+                </span>
+              </h3>
+            </div>
+
+            {/* Recommendation Detail Item Cards List */}
+            <div className="space-y-3">
+              {recs.map((r) => (
+                <RecommendationRow key={r.id} rec={r} onSeek={seekTo} />
+              ))}
+            </div>
+          </>
+        )}
+      </div>
     </>
   );
 }
 
-function Metric({ label, value, divider }: { label: string; value: number; divider?: boolean }) {
+function Metric({ label, value }: { label: string; value: number }) {
   return (
-    <div
-      className="flex-1 px-3 py-[11px]"
-      style={divider ? { borderRight: "1px solid var(--sd-divider)" } : undefined}
-    >
-      <div className="sd-eb" style={{ color: "var(--sd-label)" }}>{label}</div>
-      <div className="sd-mono text-[20px]" style={{ color: "var(--sd-fg)" }}>{value}</div>
+    <div className="flex items-center justify-between px-6 py-1">
+      <span className="font-bold text-sm text-slate-700 dark:text-slate-300">{label}</span>
+      <span className="text-xl font-bold text-[var(--color-text-primary)]">{value}</span>
     </div>
   );
 }
 
-function RecommendationRow({
-  rec,
-  episodeId,
-  onSeek,
-}: {
-  rec: Recommendation;
-  episodeId: string;
-  onSeek: (sec: number) => void;
-}) {
+function RecommendationRow({ rec, onSeek }: { rec: Recommendation; onSeek: (sec: number) => void }) {
   const { adoptRecommendation, rejectRecommendation } = useAppData();
   const { toast } = useToast();
   const [busy, setBusy] = useState(false);
@@ -449,62 +533,81 @@ function RecommendationRow({
   }
 
   return (
-    <div className="sd-card flex flex-col gap-2 px-3 py-2.5">
-      <div className="flex flex-wrap items-center gap-2">
-        {/* 시각을 누르면 위 플레이어가 그 지점으로 간다 */}
-        <button
-          type="button"
-          onClick={() => onSeek(rec.startTime)}
-          className="sd-mono text-[11.5px] underline-offset-2 hover:underline"
-          style={{ color: "var(--sd-accent)" }}
-          title="이 지점부터 재생"
-        >
-          {fmtTime(rec.startTime)} – {fmtTime(rec.endTime)}
-        </button>
-        <span className="sd-tag sd-mono">{Math.round(rec.endTime - rec.startTime)}초</span>
-        {typeof rec.score100 === "number" && (
-          <span className="sd-tag sd-mono">점수 {rec.score100}</span>
-        )}
-        <span className="sd-tag">{rec.kind === "short" ? "숏폼" : "클립"}</span>
-        {rec.status === "adopted" && <span className="sd-tag sd-tag--airing">채택됨</span>}
-        {rec.status === "rejected" && <span className="sd-tag sd-tag--ended">보류함</span>}
-      </div>
+    <div className="p-4 rounded-xl bg-[var(--color-bg-card)] border-none shadow-md shadow-slate-900/5 dark:shadow-none space-y-2 text-xs">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2 text-xs">
+          {/* Time range: Background removed — 누르면 위 플레이어가 그 지점부터 재생한다 */}
+          <button
+            type="button"
+            onClick={() => onSeek(rec.startTime)}
+            title="이 지점부터 재생"
+            className="font-bold text-[#1C60FF] dark:text-[#60A5FA] font-mono text-xs pr-1 cursor-pointer underline-offset-2 hover:underline"
+          >
+            {fmtTime(rec.startTime)} - {fmtTime(rec.endTime)}
+          </button>
 
-      <div className="text-[12.5px] leading-snug" style={{ color: "var(--sd-fg)" }}>
-        {rec.title}
-      </div>
-      {rec.editNote && (
-        <div className="text-[11.5px]" style={{ color: "var(--sd-mut)" }}>
-          근거 · {rec.editNote}
-        </div>
-      )}
+          {/* n초 gray pill tag */}
+          <span className={PILL}>{Math.round(rec.endTime - rec.startTime)}초</span>
 
-      <div className="flex flex-wrap items-center gap-2">
-        <div className="ml-auto flex gap-2">
-          {decided ? (
-            rec.adoptedClipId ? (
-              <Link href={`/editor/${rec.adoptedClipId}`} className="sd-btn">
-                미디어 열기
-              </Link>
-            ) : (
-              <span className="text-[11px]" style={{ color: "var(--sd-mut)" }}>판단 완료</span>
-            )
-          ) : (
-            <>
-              <button
-                type="button"
-                className="sd-btn"
-                disabled={busy}
-                onClick={reject}
-              >
-                보류
-              </button>
-              <button type="button" className="sd-btn sd-btn-primary" disabled={busy} onClick={adopt}>
-                ＋ 채택
-              </button>
-            </>
+          {/* 점수 n gray pill tag — score100 이 없는 옛 회차는 pill 자체를 생략한다("점수 -"는 0점으로 읽힌다) */}
+          {typeof rec.score100 === "number" && <span className={PILL}>점수 {rec.score100}</span>}
+
+          {/* 클립/숏폼 gray pill tag */}
+          <span className={PILL}>{rec.kind === "short" ? "숏폼" : "클립"}</span>
+
+          {/* 채택됨 pill tag */}
+          {rec.status === "adopted" && (
+            <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-400 font-bold text-[11px] border-none">
+              채택됨
+            </span>
+          )}
+          {/* 보류함 — 원본엔 없다. 안 보이면 무엇을 보류했는지 알 수 없다(되돌리는 UI도 없다). */}
+          {rec.status === "rejected" && (
+            <span className="px-2.5 py-0.5 rounded-full bg-slate-200/80 text-slate-700 dark:bg-[#282B35] dark:text-slate-300 font-bold text-[11px] border-none">
+              보류함
+            </span>
           )}
         </div>
+      </div>
+
+      {/* Title */}
+      <h4 className="font-bold text-sm text-[var(--color-text-primary)]">{rec.title}</h4>
+
+      {/* Reason Text (12px) */}
+      {rec.editNote && (
+        <p className="text-[12px] text-[var(--color-text-muted)] leading-relaxed">근거 · {rec.editNote}</p>
+      )}
+
+      {/* Bottom Action Buttons (Standardized height h-8) */}
+      <div className="flex items-center justify-end gap-2 pt-2 border-t border-[var(--color-border-subtle)]/50">
+        {decided ? (
+          rec.adoptedClipId ? (
+            <Link href={`/editor/${rec.adoptedClipId}`} className={BTN}>
+              미디어 열기
+            </Link>
+          ) : (
+            <span className="text-[11px] text-[var(--color-text-muted)]">판단 완료</span>
+          )
+        ) : (
+          <>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={reject}
+              className={`${BTN} disabled:opacity-50 disabled:cursor-not-allowed`}
+            >
+              보류
+            </button>
+            <button
+              type="button"
+              disabled={busy}
+              onClick={adopt}
+              className="h-8 px-4 rounded-full bg-[var(--color-bg-active)] hover:bg-[#0D1EB8] text-white border border-transparent text-xs font-medium cursor-pointer transition-colors shadow-sm inline-flex items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              채택
+            </button>
+          </>
+        )}
       </div>
     </div>
   );
