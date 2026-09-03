@@ -50,6 +50,7 @@ const MIGRATED: string[] = [
   "/edits",               // 2026-09-03 · W5
   "/distribution",        // 2026-09-03 · W5
   "/credits",             // 2026-09-03 · W5
+  "/publish-channels",    // 2026-09-03 · W5
 ];
 
 /**
