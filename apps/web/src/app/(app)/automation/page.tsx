@@ -1,7 +1,29 @@
 "use client";
 
 /**
- * U12 · 자동 배포 — 디자인 기준 단일 세로 파이프라인 (Main.dc.html · 2026-08-24).
+ * 자동 배포 — 디자이너 산출물 이식 (원본 `STEPD_SaaS_UI_V1/src/app/automation/page.tsx` 2,552줄).
+ *
+ * **마크업·클래스·문구는 원본 그대로.** 바깥 두 겹 래퍼와 `<Sidebar/>` 만 뺐다.
+ * 단일 세로 파이프라인 구조(2026-08-24)는 원본도 같아서 배치는 그대로 이어진다.
+ *
+ * ## 원본이 목이라 되살린 것 — 이 화면은 **액션 버튼에 onClick 이 하나도 없다**
+ *  - `자동배포 시작`·`초기화`·`중단`(1563–1588) · 저장된 계획의 `편집/멈춤/삭제`(1665–1734) ·
+ *    완료 목록의 `열기`(1807–1864) 가 전부 핸들러 없이 그려져 있다.
+ *  - 상태 트래커의 `자동 배포 켜짐`·`한동훈 안 보냄 …`·4지표(0/6/0/0)가 리터럴이고,
+ *    "지금 확인하기"는 1200ms 뒤 숫자만 바꾸는 **가짜 확인**이다.
+ *  - 표 행·프로그램 옵션·채널 10개가 전부 목이고, 채널 점유 표시(`inUseProgram`)도 문자열이다.
+ *  - `채널당 하루 3개`·`하루 {할당량}개`·`const dailyPosts = 3` 이 화면 상수다 → 서버와
+ *    **같은 함수**(perDayCount·monthlyPublishEstimate)로 낸다. 이 숫자는 곧 청구 예상이다.
+ *  - 안내문이 약속만 하는 것 셋: 채널의 "실제 업로드 꺼짐 배지"(배지 마크업 없음) ·
+ *    승인 대기 목록(빈 상태만) · 하단 배너의 "업로드 잠금"(그 상태를 보여주는 UI 없음).
+ *    셋 다 실제 배지·목록·최상단 배너로 채웠다.
+ *  - `수동` 버튼(1786)은 무엇을 수동으로 하는지 정의가 없다 → **실패한 건에서만** 배포
+ *    화면으로 보낸다(추측으로 재업로드에 붙이면 실패 채널로 파일이 다시 나간다).
+ *  - `bg-stripes` 는 디자이너 globals.css 에도 정의가 없다 → 우리 globals.css 에 추가.
+ *
+ * 회차 업로드 모달은 우리 `UploadDialog` 를 그대로 띄운다(버튼 픽셀만 원본) — 네이티브
+ * 전송 큐·중복 회차 검사·진행률/ETA 가 거기 있고 화면 3곳이 공유한다.
+ *
  *
  * 위에서 아래로 사람이 정하는 것 → 시스템이 하는 것 순서다:
  *   ① 프로그램 선택 → ② 할당 영상 → ③ 배포 설정 → 시작 → 스케줄·대기·완료.
@@ -19,6 +41,9 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { Footer } from "@/components/layout/footer";
+import { Header } from "@/components/layout/header";
+import { CustomSelect } from "@/components/ui/custom-select";
 import { UploadVideoButton } from "@/components/upload-video-dialog";
 import type { AdoptReframe } from "@/components/adopt-dialog";
 // 순방 판정과 **같은 함수**로 예상 건수를 낸다. 미러(aspect-presets 식 "바이트 동일" 주석)로
@@ -99,14 +124,14 @@ function HeldPreview({ clip }: { clip: Clip }) {
 
   if (err) {
     return (
-      <div className="w-full rounded-[4px] px-3 py-2 text-[11px]" style={{ background: "var(--sd-card-sub)", color: "var(--sd-warn)" }}>
+      <div className="w-full rounded-lg px-3 py-2 text-[11px]" style={{ background: "var(--color-bg-input)", color: "#D97706" }}>
         {err}
       </div>
     );
   }
   if (!url) {
     return (
-      <div className="w-full rounded-[4px] px-3 py-2 text-[11px]" style={{ background: "var(--sd-card-sub)", color: "var(--sd-mut)" }}>
+      <div className="w-full rounded-lg px-3 py-2 text-[11px]" style={{ background: "var(--color-bg-input)", color: "var(--color-text-muted)" }}>
         불러오는 중…
       </div>
     );
@@ -133,12 +158,12 @@ const RESULT_LABEL: Record<string, string> = {
   held: "승인 대기", failed: "실패", skipped: "안 보냄",
 };
 const RESULT_TAG: Record<string, string> = {
-  published: "sd-tag sd-tag--upcoming", // 시작이지 완료가 아니다 — 완료(게시함)만 airing
-  recorded: "sd-tag",
-  media_created: "sd-tag sd-tag--upcoming",
-  held: "sd-tag sd-tag--warn",
-  failed: "sd-tag sd-tag--danger",
-  skipped: "sd-tag",
+  published: "px-2.5 py-0.5 rounded-full text-[10px] font-semibold border-none bg-[#1C60FF]/10 text-[#1C60FF] dark:text-[#60A5FA]", // 시작이지 완료가 아니다 — 완료(게시함)만 airing
+  recorded: "px-2.5 py-0.5 rounded-full text-[10px] font-semibold border-none bg-slate-200/80 text-slate-700 dark:bg-[#282B35] dark:text-slate-200",
+  media_created: "px-2.5 py-0.5 rounded-full text-[10px] font-semibold border-none bg-[#1C60FF]/10 text-[#1C60FF] dark:text-[#60A5FA]",
+  held: "px-2.5 py-0.5 rounded-full text-[10px] font-semibold border-none bg-amber-500/15 text-amber-600 dark:text-amber-400",
+  failed: "px-2.5 py-0.5 rounded-full text-[10px] font-semibold border-none bg-rose-500/15 text-rose-600 dark:text-rose-400",
+  skipped: "px-2.5 py-0.5 rounded-full text-[10px] font-semibold border-none bg-slate-200/80 text-slate-700 dark:bg-[#282B35] dark:text-slate-200",
 };
 
 /**
@@ -206,6 +231,15 @@ const ANALYZE_IDX = PIPELINE_STAGES.indexOf("analyze");
  * 회차의 분석 상태 요약 — "완료 → 생략"이 계획이므로 완료를 명시적으로 말한다.
  * pipeline.stage 가 analyze 를 지났으면 분석은 끝난 것이다(추천/편집/배포 단계).
  */
+/** 회차 배지 톤 — 원본(2단계 목록)은 초록 고정이다. 실패·보류가 그 색이면 안 된다. */
+const EP_TAG: Record<string, string> = {
+  done: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
+  running: "bg-[#1C60FF]/10 text-[#1C60FF] dark:text-[#60A5FA]",
+  waiting: "bg-slate-200/80 text-slate-600 dark:bg-[#282B35] dark:text-slate-300",
+  failed: "bg-rose-500/15 text-rose-600 dark:text-rose-400",
+  novideo: "bg-slate-200/80 text-slate-600 dark:bg-[#282B35] dark:text-slate-300",
+};
+
 function episodeAnalysis(ep: Episode, hasMaster: boolean): {
   key: "done" | "running" | "waiting" | "failed" | "novideo";
   label: string;
@@ -213,20 +247,20 @@ function episodeAnalysis(ep: Episode, hasMaster: boolean): {
 } {
   const idx = PIPELINE_STAGES.indexOf(ep.pipeline.stage);
   if (idx > ANALYZE_IDX || (idx === ANALYZE_IDX && ep.pipeline.stageStatus === "done")) {
-    return { key: "done", label: "분석 완료 — 생략", tag: "sd-tag sd-tag--airing" };
+    return { key: "done", label: "분석 완료 — 생략", tag: "px-2.5 py-0.5 rounded-full text-[10px] font-semibold border-none bg-emerald-500/15 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-400" };
   }
   if (ep.pipeline.stageStatus === "error") {
-    return { key: "failed", label: `분석 실패${ep.pipeline.blockedReason ? ` — ${ep.pipeline.blockedReason}` : ""}`, tag: "sd-tag sd-tag--danger" };
+    return { key: "failed", label: `분석 실패${ep.pipeline.blockedReason ? ` — ${ep.pipeline.blockedReason}` : ""}`, tag: "px-2.5 py-0.5 rounded-full text-[10px] font-semibold border-none bg-rose-500/15 text-rose-600 dark:text-rose-400" };
   }
   if (idx === ANALYZE_IDX && ep.pipeline.stageStatus === "progress") {
     const pct = typeof ep.pipeline.progress === "number" ? ` ${Math.round(ep.pipeline.progress)}%` : "";
-    return { key: "running", label: `분석 중${pct}`, tag: "sd-tag sd-tag--upcoming" };
+    return { key: "running", label: `분석 중${pct}`, tag: "px-2.5 py-0.5 rounded-full text-[10px] font-semibold border-none bg-[#1C60FF]/10 text-[#1C60FF] dark:text-[#60A5FA]" };
   }
   if (idx === ANALYZE_IDX) {
-    return { key: "waiting", label: "분석 대기", tag: "sd-tag" };
+    return { key: "waiting", label: "분석 대기", tag: "px-2.5 py-0.5 rounded-full text-[10px] font-semibold border-none bg-slate-200/80 text-slate-700 dark:bg-[#282B35] dark:text-slate-200" };
   }
-  if (!hasMaster) return { key: "novideo", label: "영상 없음", tag: "sd-tag sd-tag--ended" };
-  return { key: "waiting", label: "분석 전", tag: "sd-tag" };
+  if (!hasMaster) return { key: "novideo", label: "영상 없음", tag: "px-2.5 py-0.5 rounded-full text-[10px] font-semibold border-none bg-slate-200/80 text-slate-700 dark:bg-[#282B35] dark:text-slate-200" };
+  return { key: "waiting", label: "분석 전", tag: "px-2.5 py-0.5 rounded-full text-[10px] font-semibold border-none bg-slate-200/80 text-slate-700 dark:bg-[#282B35] dark:text-slate-200" };
 }
 
 export default function AutomationPage() {
@@ -639,18 +673,18 @@ export default function AutomationPage() {
     && nowTs - new Date(lastCycleIso).getTime() > Math.max(cycleEveryMs * 2.5, 30 * 60 * 1000),
   );
   const health = error
-    ? { label: "상태 확인 실패", color: "var(--sd-danger-strong)", detail: "서버 상태를 다시 불러와 주세요" }
+    ? { label: "상태 확인 실패", color: "#E11D48", detail: "서버 상태를 다시 불러와 주세요" }
     : paused
-      ? { label: "일시정지", color: "var(--sd-idle)", detail: "자동 확인을 멈춘 상태입니다" }
+      ? { label: "일시정지", color: "var(--color-text-muted)", detail: "자동 확인을 멈춘 상태입니다" }
       : !hasEnabledRules
-        ? { label: "설정 필요", color: "var(--sd-idle)", detail: "자동배포를 만들면 확인을 시작합니다" }
+        ? { label: "설정 필요", color: "var(--color-text-muted)", detail: "자동배포를 만들면 확인을 시작합니다" }
         : creditOut
-          ? { label: "확인 필요", color: "var(--sd-warn)", detail: "크레딧이 없어 처리가 멈췄습니다" }
+          ? { label: "확인 필요", color: "#D97706", detail: "크레딧이 없어 처리가 멈췄습니다" }
           : cycleDelayed
-            ? { label: "확인 지연", color: "var(--sd-warn)", detail: "예정 시간보다 자동 확인이 늦습니다" }
+            ? { label: "확인 지연", color: "#D97706", detail: "예정 시간보다 자동 확인이 늦습니다" }
             : gateBlocked
-              ? { label: "기록만 진행", color: "var(--sd-warn)", detail: "실제 업로드가 꺼진 채널이 있습니다" }
-              : { label: "정상 확인 중", color: "var(--sd-ok)", detail: "자동배포가 주기적으로 새 영상을 확인합니다" };
+              ? { label: "기록만 진행", color: "#D97706", detail: "실제 업로드가 꺼진 채널이 있습니다" }
+              : { label: "정상 확인 중", color: "#059669", detail: "자동배포가 주기적으로 새 영상을 확인합니다" };
   const currentWork = inflightRender > 0
     ? `영상 ${inflightRender}건을 렌더하고 있습니다`
     : heldCount > 0
@@ -888,6 +922,12 @@ export default function AutomationPage() {
   }
 
   // ── ② 회차 파생값 ─────────────────────────────────────────────────────────────
+  // 원본 셀렉트 옵션은 프로그램 **이름 문자열**이다 — 동명·개명에 깨진다. value 는 id 로.
+  const programOptions = useMemo(
+    () => [{ value: "", label: "프로그램을 선택하세요" }, ...programs.map((p) => ({ value: p.id, label: p.title }))],
+    [programs],
+  );
+
   const programEpisodes = useMemo(
     () =>
       episodes
@@ -952,263 +992,372 @@ export default function AutomationPage() {
   const stepDim = (on: boolean) => (on ? undefined : { opacity: 0.65, pointerEvents: "none" as const });
 
   return (
-    <div className="mx-auto flex max-w-[980px] flex-col gap-5 pb-10">
-      {/* 참고 디자인의 헤더 계층을 제품 토큰으로 옮긴다. 상태는 오른쪽에서 바로 확인한다. */}
-      <header
-        className="overflow-hidden rounded-[10px] px-5 py-5 text-white shadow-sm sm:px-6"
-        style={{ background: "linear-gradient(135deg, #4f5fc7 0%, #5b2f8f 100%)" }}
-      >
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div>
-            <h1 className="text-[22px] font-semibold tracking-[-0.02em]">자동배포</h1>
-            <p className="mt-1 max-w-[620px] text-[13px] leading-relaxed text-white/90">
-              프로그램 영상을 자동 분석 → 쇼츠 생성 → 메타데이터 생성 → 배포합니다.
-            </p>
-          </div>
-          <div className="flex flex-wrap items-center gap-2 text-[11px]">
-            <span className="rounded-full bg-white/15 px-2.5 py-1 font-medium">{statusLabel}</span>
-            {lastRel && <span className="rounded-full bg-black/15 px-2.5 py-1">마지막 확인 {lastRel}</span>}
-          </div>
-        </div>
-      </header>
+    <>
+      <Header title="자동 배포" subtitle="프로그램 영상을 자동 분석 → 쇼츠 생성 → 메타데이터 생성 → 배포" />
 
-      {/* ── 게이트 착시 방지 — 실업로드가 꺼져 있으면 최상단에서 먼저 말한다 ── */}
-      {gateBlocked && (
-        <div
-          className="rounded-[4px] px-3 py-2.5 text-[12px] font-medium leading-relaxed"
-          style={{ border: "1px solid var(--sd-warn-border)", background: "var(--sd-warn-bg)", color: "var(--sd-warn)" }}
-        >
-          ⚠ 지금은 실제 업로드가 꺼져 있습니다 — 자동배포가 실행돼도 기록만 남고 채널에는
-          올라가지 않습니다. (승인 대기와는 별개인 운영 설정입니다.)
-        </div>
-      )}
-
-      {/* Main.dc.html 처럼 상태·최근 처리·다음 확인을 가벼운 칸으로 분리한다. 긴 기록까지
-          내려가지 않아도 지금 정상인지, 방금 무엇을 했는지, 현재 무엇을 기다리는지 보인다. */}
-      <section className="sd-card overflow-hidden">
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3">
-          <span
-            className="size-[10px] shrink-0 rounded-full"
-            style={{ background: health.color }}
-            aria-hidden
-          />
-          <span className="text-[14px] font-semibold" style={{ color: "var(--sd-fg)" }}>
-            {health.label}
-          </span>
-          <span className="text-[11px]" style={{ color: "var(--sd-mut)" }}>
-            {health.detail}
-          </span>
-          {hasToday && (
-            <span className="text-[11px] font-medium" style={{ color: "var(--sd-fg)" }}>
-              {/* 한도 0 은 고장이 아니라 "오늘은 발행 요일이 아님" 이다 — 그렇게 말한다.
-                  숫자만 0 으로 두면 사용자는 계획이 멈춘 줄 안다. */}
-              {todayQuota === 0
-                ? "오늘은 발행 요일이 아닙니다"
-                : `오늘 게시 ${todayPublished}건 / 한도 ${todayQuota}건`}
-            </span>
+      {/* Auto Deploy Main Content Scroll Container */}
+      <main className="flex-1 p-6 flex flex-col justify-between overflow-y-auto space-y-12">
+        <div className="space-y-12">
+          {/* ── 게이트 착시 방지 — 실업로드가 꺼져 있으면 최상단에서 먼저 말한다.
+              원본 하단 배너(1861)는 "이것과 별개입니다" 라고만 하고 정작 그 잠금 상태를
+              보여 주지 않는다. 켜졌다고 믿고 기다리는 게 가장 나쁜 실패다. ── */}
+          {gateBlocked && (
+            <div className="p-3.5 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-xs font-medium leading-relaxed text-amber-700 dark:text-amber-400">
+              ⚠ 지금은 실제 업로드가 꺼져 있습니다 — 자동배포가 실행돼도 기록만 남고 채널에는
+              올라가지 않습니다. (승인 대기와는 별개인 운영 설정입니다.)
+            </div>
           )}
-          <button type="button" className="sd-btn sd-btn-primary ml-auto" disabled={runningNow} onClick={runNow}>
-            {runningNow ? "확인 중…" : "지금 확인하기"}
-          </button>
-          <button type="button" className="sd-btn" onClick={togglePause}>
-            {paused ? "재시작" : "일시정지"}
-          </button>
-        </div>
 
-        <div className="grid border-t sm:grid-cols-3" style={{ borderColor: "var(--sd-border)" }}>
-          <div className="p-3.5 sm:border-r" style={{ borderColor: "var(--sd-border)", background: "var(--sd-card-sub)" }}>
-            <div className="text-[10.5px] font-semibold" style={{ color: "var(--sd-label)" }}>지금 하는 일</div>
-            <div className="mt-1 text-[12px] font-medium leading-relaxed" style={{ color: "var(--sd-fg)" }}>
-              {currentWork}
+          {error && (
+            <div className="p-3.5 rounded-2xl bg-rose-500/10 border border-rose-500/30 text-xs font-medium text-rose-600 dark:text-rose-400">
+              자동 배포 상태를 불러오지 못했습니다 ({error}).
             </div>
-          </div>
-          <div className="border-t p-3.5 sm:border-r sm:border-t-0" style={{ borderColor: "var(--sd-border)" }}>
-            <div className="flex items-center justify-between gap-2 text-[10.5px] font-semibold" style={{ color: "var(--sd-label)" }}>
-              <span>최근 처리</span>
-              <a href="#activity" className="font-normal underline-offset-2 hover:underline">전체 보기</a>
-            </div>
-            {latestRun ? (
-              <>
-                <div className="mt-1 truncate text-[12px] font-medium" style={{ color: "var(--sd-fg)" }}>
-                  {latestRunClip?.title || latestRunProgram || "자동배포 확인"}
-                </div>
-                <div className="mt-0.5 line-clamp-2 text-[10.5px] leading-relaxed" style={{ color: "var(--sd-mut)" }}>
-                  {RESULT_LABEL[latestRun.result] ?? latestRun.result}
-                  {latestRun.detail ? ` · ${latestRun.detail}` : ""}
-                  {relTime(latestRun.at, nowTs) ? ` · ${relTime(latestRun.at, nowTs)}` : ""}
-                </div>
-              </>
-            ) : (
-              <div className="mt-1 text-[11px]" style={{ color: "var(--sd-mut)" }}>아직 처리 기록이 없습니다</div>
-            )}
-          </div>
-          <div className="border-t p-3.5 sm:border-t-0" style={{ borderColor: "var(--sd-border)", background: "var(--sd-card-sub)" }}>
-            <div className="text-[10.5px] font-semibold" style={{ color: "var(--sd-label)" }}>자동 확인</div>
-            <div className="mt-1 text-[12px] font-medium" style={{ color: "var(--sd-fg)" }}>
-              {lastRel ? `마지막 ${lastRel}` : "아직 확인 기록 없음"}
-            </div>
-            <div className="mt-0.5 text-[10.5px]" style={{ color: "var(--sd-mut)" }}>
-              {running && nextRel ? `다음 확인 ${nextRel}` : paused ? "재시작하면 다시 확인합니다" : "자동 확인 대기 중"}
-            </div>
-          </div>
-        </div>
-
-        <div className="flex flex-wrap gap-x-4 gap-y-1 border-t px-4 py-2.5 text-[11px]" style={{ borderColor: "var(--sd-border)", color: "var(--sd-mut)" }}>
-          <Link href="/clips" className="underline-offset-2 hover:underline">
-            렌더 중 <b style={{ color: inflightRender ? "var(--sd-fg)" : "var(--sd-mut)" }}>{inflightRender}</b>건
-          </Link>
-          <a href="#holds" className="underline-offset-2 hover:underline">
-            승인 대기 <b style={{ color: heldCount ? "var(--sd-warn)" : "var(--sd-mut)" }}>{heldCount}</b>건
-          </a>
-          {!loading && idleReason && <span>현재 판단 · {idleReason}</span>}
-        </div>
-      </section>
-
-      {error && (
-        <div
-          className="rounded-[4px] px-3 py-2 text-[11.5px]"
-          style={{ border: "1px solid var(--sd-danger-border)", background: "var(--sd-danger-bg)", color: "var(--sd-danger-strong)" }}
-        >
-          자동 배포 상태를 불러오지 못했습니다 ({error}).
-        </div>
-      )}
-
-      {/* ── ① 프로그램 선택 ─────────────────────────────────────────────────── */}
-      <section className="flex flex-col gap-3">
-        <FlowStepHeader step="1" title="프로그램 선택" description="자동배포할 프로그램을 먼저 선택하세요" />
-        {programs.length === 0 ? (
-          <div className="sd-ph grid min-h-[56px] place-items-center rounded-[6px] px-6 text-center text-[11.5px]"
-            style={{ border: "1px dashed var(--sd-border)" }}>
-            프로그램이 없습니다 — <Link href="/programs" className="underline">콘텐츠</Link>에서 먼저 만들어 주세요.
-          </div>
-        ) : (
-          <div>
-            <label htmlFor="automation-program" className="mb-1.5 block text-[12px] font-medium" style={{ color: "var(--sd-label)" }}>
-              배포할 프로그램
-            </label>
-            <select
-              id="automation-program"
-              value={selProgram}
-              onChange={(e) => setSelProgram(e.target.value)}
-              className="sd-input h-10 w-full text-[13px]"
-            >
-              <option value="">프로그램을 선택하세요</option>
-              {programs.map((p) => <option key={p.id} value={p.id}>{p.title}</option>)}
-            </select>
-            {ruleForProgram && (
-              <p className="mt-1.5 text-[11px]" style={{ color: "var(--sd-mut)" }}>
-                저장된 자동배포 설정이 있습니다. 아래에서 수정한 뒤 시작하면 기존 설정이 갱신됩니다.
-              </p>
-            )}
-          </div>
-        )}
-      </section>
-
-      {/* ── ② 회차 · 영상 — 분석 완료는 생략, 없으면 등록 ───────────────────── */}
-      <section className="flex flex-col gap-3" style={stepDim(Boolean(selProgram))}>
-        <div className="flex flex-wrap items-center gap-2">
-          <FlowStepHeader step="2" title="프로그램 할당 영상" description="등록된 영상은 자동 분석 대기열에 연결됩니다" />
-          {/* 기존 업로드 모달 재사용 — 새 업로드 로직을 발명하지 않는다(F1 과 같은 문). */}
-          <span className="ml-auto">
-            <UploadVideoButton programId={selProgram || undefined} className="sd-btn" label="＋ 영상 등록" />
-          </span>
-        </div>
-        {!selProgram ? (
-          <div className="sd-ph grid min-h-[56px] place-items-center rounded-[6px] px-6 text-center text-[11.5px]"
-            style={{ border: "1px dashed var(--sd-border)" }}>
-            먼저 프로그램을 선택하세요
-          </div>
-        ) : programEpisodes.length === 0 ? (
-          <div className="sd-ph grid min-h-[56px] place-items-center rounded-[6px] px-6 text-center text-[11.5px]"
-            style={{ border: "1px dashed var(--sd-border)" }}>
-            등록된 회차가 없습니다 — 위의 ＋ 영상 등록으로 시작하세요
-          </div>
-        ) : (
-          <div className="flex max-h-[240px] flex-col gap-1 overflow-y-auto">
-            {programEpisodes.map((ep) => {
-              const a = episodeAnalysis(ep, Boolean(mediaForEpisode(ep.id, "master")));
-              return (
-                <div key={ep.id} className="flex flex-wrap items-center gap-2 rounded-[6px] px-3 py-2.5"
-                  style={{ border: "1px solid var(--sd-accent-border)", background: "var(--sd-accent-bg)" }}>
-                  <span className="grid size-8 shrink-0 place-items-center rounded-[5px] text-[14px]" style={{ background: "var(--sd-card)" }} aria-hidden>▶</span>
-                  <Link href={`/episodes/${ep.id}`} className="text-[12px] font-medium underline-offset-2 hover:underline"
-                    style={{ color: "var(--sd-fg)" }}>
-                    {ep.episodeNumber}화
-                  </Link>
-                  <span className="sd-mono text-[10.5px]" style={{ color: "var(--sd-mut)" }}>{ep.broadDate}</span>
-                  <span className={cn("ml-auto", a.tag)}>{a.label}</span>
-                  {/* 분석 중 진행률 바 — episode.pipeline 진행률(스토어 폴링이 갱신) */}
-                  {a.key === "running" && typeof ep.pipeline.progress === "number" && (
-                    <span className="h-[5px] w-[110px] overflow-hidden rounded-full" style={{ background: "var(--sd-card-sub)" }}>
-                      <span className="block h-full rounded-full"
-                        style={{ width: `${Math.max(2, Math.min(100, ep.pipeline.progress))}%`, background: "var(--sd-accent, #2b6cb0)" }} />
-                    </span>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </section>
-
-      {/* ── ③ 자동배포 설정 — 참고 디자인처럼 채널·일정·템플릿·방식을 한 단계로 묶는다. ── */}
-      <section className="flex flex-col gap-4" style={stepDim(Boolean(selProgram))}>
-        <FlowStepHeader step="3" title="자동배포 설정" description="채널, 일정, 배포 방식과 영상 템플릿을 설정하세요" />
-
-        <div className="flex flex-col gap-2 rounded-[6px] p-3" style={{ background: "var(--sd-card-sub)", border: "1px solid var(--sd-border)" }}>
-        <div className="flex flex-wrap items-baseline gap-2">
-          <h4 className="text-[12.5px] font-semibold" style={{ color: "var(--sd-fg)" }}>배포 채널</h4>
-          <span className="text-[11px]" style={{ color: "var(--sd-mut)" }}>
-            {selChannels.length}개 선택 · 채널당 하루 {perDayCount({ slots, dailyQuota })}개
-          </span>
-        </div>
-        <div className="grid max-h-40 grid-cols-1 gap-1 overflow-y-auto rounded-[4px] p-1.5"
-          style={{ border: "1px solid var(--sd-border)" }}>
-          {channelOptions.length === 0 && (
-            <span className="text-[11px]" style={{ color: "var(--sd-warn)" }}>
-              연결된 채널이 없습니다 — <Link href="/publish-channels" className="underline">배포 채널</Link>에서 먼저 연결하세요.
-            </span>
           )}
-          {channelOptions.map((o) => {
-            const key = `${o.platform}:${o.accountId}`;
-            const occupied = channelOwnerOtherThanCurrent(key);
-            return (
-              <label key={key} className="flex flex-wrap items-center gap-1.5 text-[11.5px]"
-                style={{ color: occupied ? "var(--sd-mut)" : "var(--sd-fg)", opacity: occupied ? 0.72 : 1 }}>
-                <input type="checkbox" checked={selChannels.includes(key)} disabled={Boolean(occupied)}
-                  onChange={() => setSelChannels(toggle(selChannels, key))} />
-                <span className="truncate">{o.label}</span>
-                {occupied && <span className="sd-tag sd-tag--ended">{occupied.programTitle} 자동배포에서 사용 중</span>}
-                {/* 게이트 OFF = 실업로드 잠금(운영 설정). 명시적 false 일 때만 — 모름은 침묵. */}
-                {isUploadPlatform(o.platform) && gateOff(o.platform, o.accountId) && (
-                  <span className="sd-tag sd-tag--warn">실제 업로드 꺼짐 — 기록만 됨</span>
+
+          {/* Status Tracker Box */}
+          <div className="bg-[var(--color-bg-card)] border-none rounded-2xl p-5 space-y-4 text-xs shadow-md shadow-slate-900/5 dark:shadow-none">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
+                {/* 원본은 `bg-emerald-500 animate-pulse` 고정 + 라벨 "자동 배포 켜짐" 하드코딩이다.
+                    우리 상태는 6종이라 점 색은 health 를, 맥박은 정상일 때만 준다. */}
+                <span
+                  className={`w-2.5 h-2.5 rounded-full shrink-0 inline-block${running && !paused ? " animate-pulse" : ""}`}
+                  style={{ background: health.color }}
+                  aria-hidden
+                />
+                <span className="font-bold text-sm text-[var(--color-text-primary)]">{health.label}</span>
+                <span className="text-xs text-[var(--color-text-muted)]">{health.detail}</span>
+              </div>
+
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={runNow}
+                  disabled={runningNow}
+                  style={{ boxShadow: "none" }}
+                  className={`px-4 h-9 rounded-full text-white text-xs font-bold border-none transition-all cursor-pointer shadow-none ${
+                    runningNow ? "bg-[#1C60FF]/70 cursor-wait" : "bg-[#1C60FF] hover:bg-blue-600"
+                  }`}
+                >
+                  {runningNow ? "확인 중..." : "지금 확인하기"}
+                </button>
+                <button
+                  type="button"
+                  onClick={togglePause}
+                  style={{ boxShadow: "none" }}
+                  className="px-4 h-9 rounded-full bg-[var(--color-bg-input)] hover:bg-[var(--color-bg-card-hover)] text-[var(--color-text-primary)] border border-[var(--color-border-subtle)] text-xs font-medium cursor-pointer shadow-none"
+                >
+                  {paused ? "재시작" : "일시정지"}
+                </button>
+              </div>
+            </div>
+
+            {/* Status 3 Columns (Requirement 2: Horizontal & vertical divider lines removed) */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-1">
+              <div className="space-y-1.5">
+                <div className="text-xs text-[var(--color-text-muted)] font-bold">지금 하는 일</div>
+                <div className="text-sm text-[var(--color-text-primary)] font-bold">{currentWork}</div>
+              </div>
+
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="text-[var(--color-text-muted)] font-bold">최근 처리</span>
+                  <a href="#activity" className="text-[var(--color-text-accent)] hover:underline cursor-pointer text-xs">
+                    전체 보기
+                  </a>
+                </div>
+                {latestRun ? (
+                  <>
+                    <div className="text-sm text-[var(--color-text-primary)] font-bold truncate">
+                      {latestRunClip?.title || latestRunProgram || "자동배포 확인"}
+                    </div>
+                    <p className="text-xs text-[var(--color-text-muted)] leading-relaxed">
+                      {RESULT_LABEL[latestRun.result] ?? latestRun.result}
+                      {latestRun.detail ? ` · ${latestRun.detail}` : ""}
+                      {relTime(latestRun.at, nowTs) ? ` · ${relTime(latestRun.at, nowTs)}` : ""}
+                    </p>
+                  </>
+                ) : (
+                  <div className="text-xs text-[var(--color-text-muted)]">아직 처리 기록이 없습니다</div>
                 )}
-                {!isUploadPlatform(o.platform) && <span className="sd-tag">기록만 — 실제 게시는 담당자가 직접</span>}
-              </label>
-            );
-          })}
-        </div>
-        {channelLoadFailed && (
-          <p className="text-[10.5px]" style={{ color: "var(--sd-warn)" }}>
-            일부 연결 계정을 불러오지 못했습니다 — 배포 채널 화면에서 연결 상태를 확인해 주세요.
-          </p>
-        )}
-        {/* ⚑ 채널별 안내 — 만들 때 성격을 말한다 (F6). 연결 가능한 채널은 전부 실업로드
-            대상이고, 꺼져 있는지는 위 배지(gateOff)가 채널별로 말한다. */}
-        <p
-          className="rounded-[4px] px-2.5 py-2 text-[11px] leading-relaxed"
-          style={{ border: "1px solid var(--sd-border)", background: "var(--sd-card)", color: "var(--sd-mut)" }}
-        >
-          연결한 채널에는 <b>실제 파일이 업로드됩니다</b> — TikTok 은 채널에 바로 공개됩니다.
-          운영 설정으로 꺼져 있는 채널은 위에 &ldquo;실제 업로드 꺼짐&rdquo; 배지가 붙고, 그때만 기록으로 남습니다.
-        </p>
-        </div>
+              </div>
+
+              <div className="md:pl-4 pt-2 md:pt-0 space-y-1.5">
+                <div className="text-xs text-[var(--color-text-muted)] font-bold">자동 확인</div>
+                <div className="text-sm text-[var(--color-text-primary)] font-bold">
+                  {lastRel ? `마지막 ${lastRel}` : "아직 확인 기록 없음"}
+                </div>
+                <div className="text-xs text-[var(--color-text-muted)]">
+                  {running && nextRel ? `다음 확인 ${nextRel}` : paused ? "재시작하면 다시 확인합니다" : "자동 확인 대기 중"}
+                </div>
+              </div>
+            </div>
+
+            {/* 4 Metrics in a Single Section separated by '·' dots (No shadow, no separate boxes) */}
+            <div className="flex items-center gap-3 flex-wrap pt-3 border-t border-[var(--color-border-subtle)]/60 text-xs font-semibold text-[var(--color-text-muted)] shadow-none">
+              {/* 오늘 지표는 서버가 줄 때만 그린다 — pill 과 구분점을 같이 숨기지 않으면 '·' 가 떠다닌다.
+                  한도 0 은 고장이 아니라 "오늘은 발행 요일이 아님" 이다. 숫자만 0 으로 두면 멈춘 줄 안다. */}
+              {hasToday && (
+                <>
+                  {todayQuota === 0 ? (
+                    <span className="text-[var(--color-text-primary)] font-bold">오늘은 발행 요일이 아닙니다</span>
+                  ) : (
+                    <>
+                      <span>
+                        오늘 게시 <strong className="text-[var(--color-text-primary)] font-bold text-xs ml-1">{todayPublished}건</strong>
+                      </span>
+                      <span className="text-[var(--color-text-muted)] font-bold">·</span>
+                      <span>
+                        게시 한도 <strong className="text-[var(--color-text-primary)] font-bold text-xs ml-1">{todayQuota}건</strong>
+                      </span>
+                    </>
+                  )}
+                  <span className="text-[var(--color-text-muted)] font-bold">·</span>
+                </>
+              )}
+              <Link href="/clips" className="hover:underline">
+                렌더 중 <strong className="text-[var(--color-text-primary)] font-bold text-xs ml-1">{inflightRender}건</strong>
+              </Link>
+              <span className="text-[var(--color-text-muted)] font-bold">·</span>
+              <a href="#holds" className="hover:underline">
+                승인 대기{" "}
+                <strong className={`font-bold text-xs ml-1 ${heldCount ? "text-amber-600 dark:text-amber-400" : "text-[var(--color-text-primary)]"}`}>
+                  {heldCount}건
+                </strong>
+              </a>
+              {!loading && idleReason && (
+                <>
+                  <span className="text-[var(--color-text-muted)] font-bold">·</span>
+                  <span>현재 판단 · {idleReason}</span>
+                </>
+              )}
+            </div>
+          </div>
+
+          {/* 1단계 & 2단계 Side by Side Grid (Equal height & responsive stacking) */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 items-stretch">
+            {/* 1단계 프로그램 선택 */}
+            <div className="flex flex-col space-y-3 h-full">
+              <div className="flex items-center gap-3">
+                <h3 className="text-base font-bold text-[var(--color-text-primary)] shrink-0">1단계 프로그램 선택</h3>
+                <span className="text-xs font-normal text-[var(--color-text-muted)]">
+                  자동배포할 프로그램을 먼저 선택하세요
+                </span>
+              </div>
+
+              <div className="flex-1 bg-[var(--color-bg-card)] border-none rounded-2xl p-5 text-xs shadow-md shadow-slate-900/5 dark:shadow-none flex flex-col justify-start space-y-4">
+                {programs.length === 0 ? (
+                  /* 원본엔 없는 상태 — 목 옵션 4개가 늘 있다. */
+                  <div className="p-8 text-center text-xs text-[var(--color-text-muted)] bg-stripes rounded-xl border-none">
+                    프로그램이 없습니다 — <Link href="/programs" className="underline">콘텐츠</Link>에서 먼저 만들어 주세요.
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    <label className="block text-xs font-bold text-[var(--color-text-primary)]">배포할 프로그램</label>
+                    <div className="w-full">
+                      {/* 원본 옵션은 **프로그램 이름 문자열**이다 — 동명이인·개명에 깨진다. value 는 id. */}
+                      <CustomSelect
+                        options={programOptions}
+                        value={selProgram}
+                        onChange={(v) => setSelProgram(v)}
+                        ariaLabel="배포할 프로그램"
+                        triggerClassName="bg-[var(--color-bg-input)] text-[var(--color-text-primary)] text-xs py-2.5 px-4 rounded-xl border border-[var(--color-border-subtle)] w-full"
+                      />
+                    </div>
+                    {ruleForProgram && (
+                      <p className="text-[11px] text-[var(--color-text-muted)] leading-relaxed pt-1">
+                        저장된 자동배포 설정이 있습니다. 아래에서 수정한 뒤 시작하면 기존 설정이 갱신됩니다.
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* 2단계 프로그램 할당 영상 (Equal Height to Step 1 & Image 1 Styling) */}
+            <div className={`flex flex-col space-y-3 h-full transition-all duration-200 ${!selProgram ? "opacity-40 pointer-events-none select-none filter grayscale-[30%]" : ""}`}>
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex items-center gap-3 min-w-0">
+                  <h3 className="text-base font-bold text-[var(--color-text-primary)] shrink-0">2단계 프로그램 할당 영상</h3>
+                  <span className="text-xs font-normal text-[var(--color-text-muted)] truncate">
+                    등록된 영상은 자동 분석 대기열에 연결됩니다
+                  </span>
+                </div>
+                {/* 기존 업로드 모달 재사용 — 새 업로드 로직을 발명하지 않는다(F1 과 같은 문).
+                    원본 모달(1872–2242)은 업로드 시작이 그냥 닫히고, 우리 모달엔 네이티브 전송
+                    큐·중복 회차 검사·진행률/ETA 가 붙어 있으며 화면 3곳이 공유한다. */}
+                <UploadVideoButton
+                  programId={selProgram || undefined}
+                  className="px-3.5 py-1.5 rounded-full bg-[var(--color-bg-input)] hover:bg-[var(--color-bg-card-hover)] text-xs text-[var(--color-text-primary)] border border-[var(--color-border-subtle)] font-bold cursor-pointer transition-colors shadow-none shrink-0 ml-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                  label="+ 영상 등록"
+                />
+              </div>
+
+              <div className="flex-1 bg-[var(--color-bg-card)] border-none rounded-2xl p-4 text-xs shadow-md shadow-slate-900/5 dark:shadow-none flex flex-col justify-start min-h-[170px]">
+                {!selProgram ? (
+                  <div className="p-8 text-center text-xs text-[var(--color-text-muted)] bg-stripes rounded-xl border-none">
+                    먼저 프로그램을 선택하세요
+                  </div>
+                ) : programEpisodes.length === 0 ? (
+                  <div className="p-8 text-center text-xs text-[var(--color-text-muted)] bg-stripes rounded-xl border-none">
+                    등록된 회차가 없습니다 — 위의 + 영상 등록으로 시작하세요
+                  </div>
+                ) : (
+                  /* Max 4.5 items visible (~225px) with smooth scrollbar, NO outer list stroke */
+                  <div className="max-h-[225px] overflow-y-auto pr-1 space-y-2 border-none">
+                    {programEpisodes.map((ep) => {
+                      const a = episodeAnalysis(ep, Boolean(mediaForEpisode(ep.id, "master")));
+                      const thumb = mediaThumbSrc(mediaForEpisode(ep.id, "master")?.id);
+                      return (
+                        <div
+                          key={ep.id}
+                          className="p-2.5 rounded-xl flex items-center justify-between bg-[var(--color-bg-input)]/40 hover:bg-[var(--color-bg-card-hover)] transition-all border-none"
+                        >
+                          <div className="flex items-center gap-3 min-w-0">
+                            {/* 16:9 Thumbnail Image (No Play Icon, No Checkbox) */}
+                            <div className="w-14 aspect-[16/9] rounded-lg overflow-hidden bg-stone-900 border border-slate-700/60 shrink-0">
+                              {thumb && (
+                                // eslint-disable-next-line @next/next/no-img-element
+                                <img src={thumb} alt="" loading="lazy" className="w-full h-full object-cover" />
+                              )}
+                            </div>
+
+                            {/* Episode Title & Date */}
+                            <div className="flex items-center gap-2 min-w-0">
+                              <Link
+                                href={`/episodes/${ep.id}`}
+                                className="font-bold text-xs text-[var(--color-text-primary)] truncate hover:underline"
+                              >
+                                {ep.episodeNumber}화
+                              </Link>
+                              <span className="text-xs text-[var(--color-text-muted)] font-mono shrink-0">
+                                {ep.broadDate}
+                              </span>
+                            </div>
+                          </div>
+
+                          {/* Status Badge (Pill Shape) — 원본은 초록 고정이다. 실패·보류는 그 색이면 안 된다. */}
+                          <div className="flex items-center gap-2 shrink-0 ml-2">
+                            {/* 분석 중 진행률 바 — episode.pipeline 진행률(스토어 폴링이 갱신) */}
+                            {a.key === "running" && typeof ep.pipeline.progress === "number" && (
+                              <span className="h-[5px] w-[70px] overflow-hidden rounded-full bg-[var(--color-bg-input)] hidden sm:inline-block">
+                                <span
+                                  className="block h-full rounded-full bg-[var(--color-bg-active)]"
+                                  style={{ width: `${Math.max(2, Math.min(100, ep.pipeline.progress))}%` }}
+                                />
+                              </span>
+                            )}
+                            <span className={`px-2.5 py-1 rounded-full text-[11px] font-semibold border-none font-mono ${EP_TAG[a.key] ?? EP_TAG.done}`}>
+                              {a.label}
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* 3단계 자동배포 설정 (Disabled when program unselected) */}
+          <div className={`space-y-3 transition-all duration-200 ${!selProgram ? "opacity-40 pointer-events-none select-none filter grayscale-[30%]" : ""}`}>
+            <div className="flex items-center gap-3">
+              <h3 className="text-base font-bold text-[var(--color-text-primary)] shrink-0">3단계 자동배포 설정</h3>
+              <span className="text-xs font-normal text-[var(--color-text-muted)]">
+                채널, 일정, 배포 방식과 영상 템플릿을 설정하세요
+              </span>
+            </div>
+
+            <div className="bg-[var(--color-bg-card)] border-none rounded-2xl p-6 space-y-8 text-xs shadow-md shadow-slate-900/5 dark:shadow-none">
+              {/* 배포 채널 Section: Outer stroke removed, inner channel list box has outer stroke */}
+              <div className="space-y-3 border-none bg-transparent p-0">
+                <div className="flex items-center gap-3">
+                  <span className="text-[14px] font-bold text-[var(--color-text-primary)]">배포 채널</span>
+                  <span className="font-normal text-xs text-[var(--color-text-muted)]">
+                    {/* 원본은 "채널당 하루 3개" 리터럴이다 — 서버와 같은 함수로 낸다. */}
+                    {selChannels.length}개 선택 · 채널당 하루 {perDayCount({ slots, dailyQuota })}개
+                  </span>
+                </div>
+
+                <div className="bg-[var(--color-bg-input)]/30 border border-[var(--color-border-subtle)] rounded-xl p-2 max-h-64 overflow-y-auto space-y-1">
+                  {channelOptions.length === 0 && (
+                    <div className="p-3 text-[11px] text-amber-600 dark:text-amber-400 font-medium">
+                      연결된 채널이 없습니다 — <Link href="/publish-channels" className="underline">배포 채널</Link>에서 먼저 연결하세요.
+                    </div>
+                  )}
+                  {channelOptions.map((o) => {
+                    const key = `${o.platform}:${o.accountId}`;
+                    const occupied = channelOwnerOtherThanCurrent(key);
+                    const isInUse = Boolean(occupied);
+                    const checked = selChannels.includes(key);
+                    return (
+                      <div
+                        key={key}
+                        onClick={() => { if (!isInUse) setSelChannels(toggle(selChannels, key)); }}
+                        className={`p-3 rounded-xl transition-all border-none ${
+                          isInUse
+                            ? "pointer-events-none select-none cursor-not-allowed bg-transparent"
+                            : checked
+                              ? "bg-[#EBF2FF] dark:bg-[#1C2C4E] shadow-xs cursor-pointer"
+                              : "bg-transparent hover:bg-[var(--color-bg-card-hover)] cursor-pointer"
+                        }`}
+                      >
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="flex items-center gap-3 min-w-0">
+                            <input
+                              type="checkbox"
+                              checked={checked}
+                              disabled={isInUse}
+                              onChange={() => {}}
+                              className="w-4 h-4 rounded border-slate-300 dark:border-stone-700 text-[#1C60FF] focus:ring-[#1C60FF] cursor-pointer accent-[#1C60FF] shrink-0 disabled:opacity-40"
+                            />
+                            <div className="flex items-center gap-2 min-w-0 flex-wrap">
+                              <span className={`text-xs font-bold truncate ${isInUse ? "opacity-50 text-[var(--color-text-primary)]" : checked ? "text-[#1C60FF]" : "text-[var(--color-text-primary)]"}`}>
+                                {o.label}
+                              </span>
+                              {occupied && (
+                                <span className="px-2.5 py-0.5 rounded-full text-[10px] bg-amber-500/15 text-amber-600 dark:text-amber-400 font-bold shrink-0 border-none opacity-100">
+                                  &apos;{occupied.programTitle}&apos; 자동배포에서 사용 중
+                                </span>
+                              )}
+                              {/* 게이트 OFF = 실업로드 잠금(운영 설정). 명시적 false 일 때만 — 모름은 침묵.
+                                  원본 안내문(580)은 이 배지를 약속만 하고 마크업이 없다. */}
+                              {isUploadPlatform(o.platform) && gateOff(o.platform, o.accountId) && (
+                                <span className="px-2.5 py-0.5 rounded-full text-[10px] bg-amber-500/15 text-amber-600 dark:text-amber-400 font-bold shrink-0 border-none">
+                                  실제 업로드 꺼짐 — 기록만 됨
+                                </span>
+                              )}
+                              {!isUploadPlatform(o.platform) && (
+                                <span className="px-2.5 py-0.5 rounded-full text-[10px] bg-slate-200/80 text-slate-600 dark:bg-[#282B35] dark:text-slate-300 font-bold shrink-0 border-none">
+                                  기록만 — 실제 게시는 담당자가 직접
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {channelLoadFailed && (
+                  <p className="text-[11px] text-amber-600 dark:text-amber-400 font-medium">
+                    일부 연결 계정을 불러오지 못했습니다 — 배포 채널 화면에서 연결 상태를 확인해 주세요.
+                  </p>
+                )}
+
+                {/* Notice Box: No stroke border, soft light gray background */}
+                <div className="p-3.5 rounded-xl bg-slate-100 dark:bg-stone-800/60 border-none text-[#222222] dark:text-slate-300 leading-relaxed shadow-none">
+                  연결한 채널에는 실제 파일이 업로드됩니다— TikTok 은 채널에 바로 공개됩니다. 운영 설정으로 꺼져 있는 채널은 위에 &ldquo;실제 업로드 꺼짐&rdquo; 배지가 붙고, 그때만 기록으로 남습니다.
+                </div>
+              </div>
 
         <div className="flex flex-col gap-3">
         <div className="flex flex-wrap items-center gap-2">
-          <h4 className="text-[12.5px] font-semibold" style={{ color: "var(--sd-fg)" }}>배포 계획</h4>
+          <h4 className="text-xs font-semibold" style={{ color: "var(--color-text-primary)" }}>배포 계획</h4>
           {ruleForProgram && (
-            <span className="text-[11px]" style={{ color: "var(--sd-mut)" }}>
+            <span className="text-[11px]" style={{ color: "var(--color-text-muted)" }}>
               이 프로그램의 자동배포 설정이 이미 있습니다 — 시작하면 <b>갱신</b>됩니다
             </span>
           )}
@@ -1218,7 +1367,7 @@ export default function AutomationPage() {
             꺼냈다(사용자 2026-08-24: "자동배포를 두 가지로 나눠줘"). 어떤 계획인지가 곧 이
             선택이라, 접힘 속에 있으면 사용자는 기본값(승인 배포)이 전부인 줄 안다. */}
         <div>
-          <div className="mb-1 text-[10.5px]" style={{ color: "var(--sd-label)" }}>배포 방식</div>
+          <div className="mb-1 text-[11px]" style={{ color: "var(--color-text-muted)" }}>배포 방식</div>
           <div className="grid gap-2 sm:grid-cols-2">
             <GateCard
               on={approveFirst} onClick={() => setApproveFirst(true)}
@@ -1237,7 +1386,7 @@ export default function AutomationPage() {
             순방 matchesMediaKind 필터) 고급 설정 select 에 묻혀 있었다(사용자 2026-08-25:
             "진짜로 배선" — 보이게 꺼내는 게 배선의 완성이다). */}
         <div>
-          <div className="mb-1 text-[10.5px]" style={{ color: "var(--sd-label)" }}>어떤 영상을 내보낼까</div>
+          <div className="mb-1 text-[11px]" style={{ color: "var(--color-text-muted)" }}>어떤 영상을 내보낼까</div>
           <div className="grid gap-2 sm:grid-cols-3">
             <GateCard
               on={mediaKind === "short"} onClick={() => setMediaKind("short")}
@@ -1263,8 +1412,8 @@ export default function AutomationPage() {
           {/* 발행 요일 — 비우면 매일(구 계획 동작 그대로). */}
           <div>
             <div className="mb-1 flex items-baseline justify-between">
-              <span className="text-[10.5px]" style={{ color: "var(--sd-label)" }}>발행 요일</span>
-              <span className="text-[10.5px]" style={{ color: "var(--sd-fg-dim)" }}>{formatWeekdays(weekdays)}</span>
+              <span className="text-[11px]" style={{ color: "var(--color-text-muted)" }}>발행 요일</span>
+              <span className="text-[11px]" style={{ color: "var(--color-text-muted)" }}>{formatWeekdays(weekdays)}</span>
             </div>
             <div className="flex flex-wrap gap-1.5">
               {[1, 2, 3, 4, 5, 6, 7].map((d) => {
@@ -1273,10 +1422,10 @@ export default function AutomationPage() {
                   <button
                     key={d} type="button"
                     onClick={() => setWeekdays(on ? weekdays.filter((x) => x !== d) : [...weekdays, d].sort((a, b) => a - b))}
-                    className="h-7 w-8 rounded-[5px] text-[11.5px]"
+                    className="h-7 w-8 rounded-xl text-xs"
                     style={on
-                      ? { background: "var(--sd-fg)", color: "var(--sd-bg)" }
-                      : { border: "1px solid var(--sd-border)", color: "var(--sd-fg-dim)" }}
+                      ? { background: "var(--color-text-primary)", color: "var(--color-bg-card)" }
+                      : { border: "1px solid var(--color-border-subtle)", color: "var(--color-text-muted)" }}
                   >
                     {["", "월", "화", "수", "목", "금", "토", "일"][d]}
                   </button>
@@ -1288,8 +1437,8 @@ export default function AutomationPage() {
           {/* 발행 시간 — 하나라도 넣으면 **하루 발행 수 = 시각당 개수의 합**이 되고 할당량은 안 쓴다. */}
           <div>
             <div className="mb-1 flex items-baseline justify-between">
-              <span className="text-[10.5px]" style={{ color: "var(--sd-label)" }}>발행 시간 (KST)</span>
-              <span className="text-[10.5px]" style={{ color: "var(--sd-fg-dim)" }}>
+              <span className="text-[11px]" style={{ color: "var(--color-text-muted)" }}>발행 시간 (KST)</span>
+              <span className="text-[11px]" style={{ color: "var(--color-text-muted)" }}>
                 시각을 추가하고, 시각당 올릴 개수를 정하세요
               </span>
             </div>
@@ -1300,13 +1449,13 @@ export default function AutomationPage() {
                 붙여 두면 두 컨트롤(시각 · 고급의 할당량) 중 뭐가 이기는지 물을 일이 없다.
                 판정은 서버와 **같은 함수**(perDayCount) — 화면이 따로 곱하지 않는다. */}
             <div
-              className="mt-1.5 flex flex-wrap items-baseline justify-between gap-x-2 gap-y-1 rounded-[6px] px-2 py-1.5"
-              style={{ background: "var(--sd-card-sub)" }}
+              className="mt-1.5 flex flex-wrap items-baseline justify-between gap-x-2 gap-y-1 rounded-xl px-2 py-1.5"
+              style={{ background: "var(--color-bg-input)" }}
             >
-              <span className="text-[10.5px]" style={{ color: "var(--sd-label)" }}>채널당 하루 발행</span>
-              <span className="text-[11px]" style={{ color: "var(--sd-fg)" }}>
-                <b className="sd-mono">{perDayCount({ slots, dailyQuota })}개</b>
-                <span className="ml-1.5 text-[10.5px]" style={{ color: "var(--sd-fg-dim)" }}>
+              <span className="text-[11px]" style={{ color: "var(--color-text-muted)" }}>채널당 하루 발행</span>
+              <span className="text-[11px]" style={{ color: "var(--color-text-primary)" }}>
+                <b className="font-mono">{perDayCount({ slots, dailyQuota })}개</b>
+                <span className="ml-1.5 text-[11px]" style={{ color: "var(--color-text-muted)" }}>
                   {slots.length
                     ? "시각당 개수의 합 — 할당량은 쓰지 않습니다"
                     : (allDay ? "할당량 방식 · 24시간" : `할당량 방식 · ${activeStart}시~${activeEnd}시(KST) 안에서`)}
@@ -1321,7 +1470,7 @@ export default function AutomationPage() {
 
         {/* 참고 디자인처럼 템플릿 선택과 미리보기를 한 줄에 둔다. 세부 위치 조절은 미리보기에서 한다. */}
         <div>
-          <label htmlFor="automation-template" className="mb-1.5 block text-[11px] font-medium" style={{ color: "var(--sd-label)" }}>
+          <label htmlFor="automation-template" className="mb-1.5 block text-[11px] font-medium" style={{ color: "var(--color-text-muted)" }}>
             영상 템플릿
           </label>
           <div className="flex flex-col gap-2 sm:flex-row">
@@ -1329,14 +1478,14 @@ export default function AutomationPage() {
               id="automation-template"
               value={templateId}
               onChange={(e) => setTemplateId(e.target.value)}
-              className="sd-input h-10 min-w-0 flex-1"
+              className="px-4 rounded-full bg-[var(--color-bg-input)] border border-[var(--color-border-subtle)] focus:border-[#1C60FF] text-xs text-[var(--color-text-primary)] placeholder-[var(--color-text-muted)] focus:outline-none transition-colors h-10 min-w-0 flex-1"
             >
               <option value="">자동 선택 (드라마=확대 크롭 · 그 외=표준)</option>
               {templates.map((t) => <option key={t.name} value={t.name}>{t.title || t.name}</option>)}
             </select>
             <button
               type="button"
-              className="sd-btn min-h-10 shrink-0 px-4"
+              className="py-1.5 rounded-full bg-[var(--color-bg-input)] hover:bg-[var(--color-bg-card-hover)] text-xs text-[var(--color-text-primary)] border border-[var(--color-border-subtle)] font-medium cursor-pointer transition-colors shadow-none disabled:opacity-50 disabled:cursor-not-allowed min-h-10 shrink-0 px-4"
               disabled={!layout}
               onClick={() => setTplPreviewOpen(true)}
             >
@@ -1346,11 +1495,11 @@ export default function AutomationPage() {
         </div>
 
         <div
-          className="rounded-[6px] px-3 py-2.5 text-[11.5px] leading-relaxed"
-          style={{ background: "color-mix(in srgb, var(--sd-ok) 9%, var(--sd-card))", borderLeft: "3px solid var(--sd-ok)", color: "var(--sd-fg)" }}
+          className="rounded-xl px-3 py-2.5 text-xs leading-relaxed"
+          style={{ background: "color-mix(in srgb, #059669 9%, var(--color-bg-card))", borderLeft: "3px solid #059669", color: "var(--color-text-primary)" }}
         >
           <b>메타데이터 자동생성 · 필수</b>
-          <span style={{ color: "var(--sd-mut)" }}> — 영상을 분석해 채널에 맞는 제목·설명·태그를 자동으로 만듭니다.</span>
+          <span style={{ color: "var(--color-text-muted)" }}> — 영상을 분석해 채널에 맞는 제목·설명·태그를 자동으로 만듭니다.</span>
         </div>
 
         {/* 담당자 알림 — 자동배포가 실제로 나가면 이 주소로 영상 제목·URL 메일이 간다.
@@ -1358,15 +1507,15 @@ export default function AutomationPage() {
             2026-09-02: 여러 명. 입력·문구·저장 방식은 결제 알림(/credits)과 같은 꼴로 맞췄다 —
             같은 성격의 설정이 화면마다 다르게 동작하면 실무자가 매번 다시 배운다. */}
         <div>
-          <div className="mb-1 text-[11px] font-medium" style={{ color: "var(--sd-label)" }}>
+          <div className="mb-1 text-[11px] font-medium" style={{ color: "var(--color-text-muted)" }}>
             담당자 이메일 (배포 완료 알림)
           </div>
-          <p className="mb-1.5 text-[11px]" style={{ color: "var(--sd-mut)" }}>
+          <p className="mb-1.5 text-[11px]" style={{ color: "var(--color-text-muted)" }}>
             자동배포 리포트를 받을 담당자 — 쉼표로 여러 명(최대 10명). 비우면 알림을 보내지 않습니다.
           </p>
           <div className="flex flex-wrap items-center gap-2">
             <input
-              className="sd-input min-w-[260px] flex-1"
+              className="h-9 px-4 rounded-full bg-[var(--color-bg-input)] border border-[var(--color-border-subtle)] focus:border-[#1C60FF] text-xs text-[var(--color-text-primary)] placeholder-[var(--color-text-muted)] focus:outline-none transition-colors min-w-[260px] flex-1"
               aria-label="배포 완료 알림 이메일"
               placeholder="media-ops@company.com, cp@company.com"
               value={notifyEmail}
@@ -1374,7 +1523,7 @@ export default function AutomationPage() {
             />
             <button
               type="button"
-              className="sd-btn"
+              className="px-3.5 py-1.5 rounded-full bg-[var(--color-bg-input)] hover:bg-[var(--color-bg-card-hover)] text-xs text-[var(--color-text-primary)] border border-[var(--color-border-subtle)] font-medium cursor-pointer transition-colors shadow-none disabled:opacity-50 disabled:cursor-not-allowed"
               disabled={savingNotify || notifyEmail.trim() === notifyEmailSaved}
               onClick={() => {
                 void (async () => {
@@ -1409,14 +1558,14 @@ export default function AutomationPage() {
         <button
           type="button"
           className="self-start text-[11px] underline-offset-2 hover:underline"
-          style={{ color: "var(--sd-mut)" }}
+          style={{ color: "var(--color-text-muted)" }}
           onClick={() => setShowAdvanced((v) => !v)}
         >
           {showAdvanced ? "▾ 고급 설정 접기" : "▸ 고급 설정 (한도 · AI 리프레임)"}
         </button>
         {showAdvanced && (
-          <div className="flex flex-col gap-2.5 rounded-[5px] p-3"
-            style={{ background: "var(--sd-card-sub)", border: "1px solid var(--sd-border)" }}>
+          <div className="flex flex-col gap-2.5 rounded-xl p-3"
+            style={{ background: "var(--color-bg-input)", border: "1px solid var(--color-border-subtle)" }}>
             {/* 채택 기준(점수 하한) 선택은 2026-08-26 삭제 — 점수 순 상위 하나로 고정됐다.
                 하한은 쇼츠 점수 분포상 계획 전량을 막아 세우는 함정이었고(서버 주석 참조),
                 화면의 "점수 80 이상" 배지는 그 사실을 사용자에게 설명해 주지도 못했다. */}
@@ -1424,7 +1573,7 @@ export default function AutomationPage() {
             {/* 세로 영상 배치 — 편집기 프리셋 4종 그대로(라벨·기하 동일). 클립(가로) 전용
                 계획엔 의미가 없어 흐리게 처리한다. 미지정 계획은 레터박스로 나가고 있었다. */}
             <div style={mediaKind === "clip" ? { opacity: 0.65, pointerEvents: "none" } : undefined}>
-              <div className="text-[10.5px]" style={{ color: "var(--sd-label)" }}>
+              <div className="text-[11px]" style={{ color: "var(--color-text-muted)" }}>
                 세로 영상 배치
               </div>
               {/* 자동 = 영상 템플릿이 가진 영상창 그대로(지금까지의 동작). 템플릿 셀렉터의
@@ -1432,19 +1581,19 @@ export default function AutomationPage() {
               <button
                 type="button"
                 onClick={() => setAspect("")}
-                className="mt-1 flex w-full items-center gap-2.5 rounded-[5px] px-3 py-2 text-left transition"
+                className="mt-1 flex w-full items-center gap-2.5 rounded-xl px-3 py-2 text-left transition"
                 style={{
-                  border: `1px solid ${!aspect ? "var(--sd-accent-border)" : "var(--sd-border)"}`,
-                  background: !aspect ? "var(--sd-accent-bg)" : "var(--sd-card)",
+                  border: `1px solid ${!aspect ? "var(--color-border-subtle)" : "var(--color-border-subtle)"}`,
+                  background: !aspect ? "var(--color-bg-input)" : "var(--color-bg-card)",
                 }}
               >
                 <span aria-hidden className="shrink-0 rounded-[2px]"
-                  style={{ width: 18, height: 32, background: "var(--sd-card-sub)", border: "1px dashed var(--sd-border)" }} />
+                  style={{ width: 18, height: 32, background: "var(--color-bg-input)", border: "1px dashed var(--color-border-subtle)" }} />
                 <span className="min-w-0">
-                  <span className="block text-[12px] font-medium" style={{ color: !aspect ? "var(--sd-accent)" : "var(--sd-fg)" }}>
+                  <span className="block text-[12px] font-medium" style={{ color: !aspect ? "#1C60FF" : "var(--color-text-primary)" }}>
                     자동 (영상 템플릿 기본)
                   </span>
-                  <span className="block text-[10.5px] leading-snug" style={{ color: "var(--sd-mut)" }}>템플릿이 정한 영상창을 그대로 사용</span>
+                  <span className="block text-[11px] leading-snug" style={{ color: "var(--color-text-muted)" }}>템플릿이 정한 영상창을 그대로 사용</span>
                 </span>
               </button>
               <div className="mt-2 grid grid-cols-2 gap-2">
@@ -1455,23 +1604,23 @@ export default function AutomationPage() {
                       key={p.id}
                       type="button"
                       onClick={() => setAspect(p.id as RuleAspect)}
-                      className="flex items-center gap-2.5 rounded-[5px] px-3 py-2 text-left transition"
+                      className="flex items-center gap-2.5 rounded-xl px-3 py-2 text-left transition"
                       style={{
-                        border: `1px solid ${active ? "var(--sd-accent-border)" : "var(--sd-border)"}`,
-                        background: active ? "var(--sd-accent-bg)" : "var(--sd-card)",
+                        border: `1px solid ${active ? "var(--color-border-subtle)" : "var(--color-border-subtle)"}`,
+                        background: active ? "var(--color-bg-input)" : "var(--color-bg-card)",
                       }}
                     >
                       <AspectGlyph id={p.id} active={active} />
                       <span className="min-w-0">
                         <span className="block text-[12px] font-medium"
-                          style={{ color: active ? "var(--sd-accent)" : "var(--sd-fg)" }}>{p.label}</span>
-                        <span className="block text-[10.5px] leading-snug" style={{ color: "var(--sd-mut)" }}>{p.hint}</span>
+                          style={{ color: active ? "#1C60FF" : "var(--color-text-primary)" }}>{p.label}</span>
+                        <span className="block text-[11px] leading-snug" style={{ color: "var(--color-text-muted)" }}>{p.hint}</span>
                       </span>
                     </button>
                   );
                 })}
               </div>
-              <p className="mt-1 text-[10.5px]" style={{ color: "var(--sd-fg-dim)" }}>
+              <p className="mt-1 text-[11px]" style={{ color: "var(--color-text-muted)" }}>
                 원본 영상이 세로 화면에 어떻게 앉을지 정합니다 — 편집기의 같은 이름 배치와 결과가 동일합니다
               </p>
             </div>
@@ -1480,7 +1629,7 @@ export default function AutomationPage() {
                 숏폼(세로) 전용 옵션이다: 클립(가로)은 크롭이 없고, "둘 다"는 방향이 추천마다
                 달라 orientation 을 못 정한다(서버가 portrait 에서만 AI 허용) — 흐리게 + none 강제. */}
             <div style={mediaKind !== "short" ? { opacity: 0.65, pointerEvents: "none" } : undefined}>
-              <div className="text-[10.5px]" style={{ color: "var(--sd-label)" }}>
+              <div className="text-[11px]" style={{ color: "var(--color-text-muted)" }}>
                 AI 리프레임 (숏폼 9:16)
               </div>
               <div className="mt-1 grid grid-cols-2 gap-2">
@@ -1494,19 +1643,19 @@ export default function AutomationPage() {
                       key={value}
                       type="button"
                       onClick={() => setReframe(value)}
-                      className="rounded-[5px] px-3 py-2 text-left transition"
+                      className="rounded-xl px-3 py-2 text-left transition"
                       style={{
-                        border: `1px solid ${active ? "var(--sd-accent-border)" : "var(--sd-border)"}`,
-                        background: active ? "var(--sd-accent-bg)" : "var(--sd-card)",
+                        border: `1px solid ${active ? "var(--color-border-subtle)" : "var(--color-border-subtle)"}`,
+                        background: active ? "var(--color-bg-input)" : "var(--color-bg-card)",
                       }}
                     >
-                      <div className="text-[12px] font-medium" style={{ color: active ? "var(--sd-accent)" : "var(--sd-fg)" }}>{title}</div>
-                      <div className="text-[10.5px]" style={{ color: "var(--sd-mut)" }}>{sub}</div>
+                      <div className="text-[12px] font-medium" style={{ color: active ? "#1C60FF" : "var(--color-text-primary)" }}>{title}</div>
+                      <div className="text-[11px]" style={{ color: "var(--color-text-muted)" }}>{sub}</div>
                     </button>
                   );
                 })}
               </div>
-              <p className="mt-1 text-[10.5px]" style={{ color: "var(--sd-fg-dim)" }}>
+              <p className="mt-1 text-[11px]" style={{ color: "var(--color-text-muted)" }}>
                 AI 리프레임 — 인물 위치를 따라 9:16 구도를 자동으로 잡습니다 (렌더 시간이 늘어납니다)
               </p>
             </div>
@@ -1518,32 +1667,32 @@ export default function AutomationPage() {
             <div className="grid grid-cols-3 items-end gap-2" style={slots.length ? { opacity: 0.65 } : undefined}>
               {/* 비활성 이유를 **컨트롤 옆에** 적는다. 흐리게만 처리하면 "왜 안 눌리지"에서
                   막힌다 — 아래 설명문은 그리드 전체를 덮는 문장이라 이 칸과 연결이 약하다. */}
-              <label className="text-[10.5px]" style={{ color: "var(--sd-label)" }}>
+              <label className="text-[11px]" style={{ color: "var(--color-text-muted)" }}>
                 채널당 하루 할당량
                 {slots.length > 0 && (
-                  <span className="ml-1" style={{ color: "var(--sd-fg-dim)" }}>· 발행 시간이 있어 사용 안 함</span>
+                  <span className="ml-1" style={{ color: "var(--color-text-muted)" }}>· 발행 시간이 있어 사용 안 함</span>
                 )}
                 <input type="number" min={1} max={50} value={dailyQuota} disabled={slots.length > 0}
                   onChange={(e) => setDailyQuota(Math.max(1, Math.min(50, Number(e.target.value) || 1)))}
-                  className="sd-input mt-1 w-full" />
+                  className="h-9 px-4 rounded-full bg-[var(--color-bg-input)] border border-[var(--color-border-subtle)] focus:border-[#1C60FF] text-xs text-[var(--color-text-primary)] placeholder-[var(--color-text-muted)] focus:outline-none transition-colors mt-1 w-full" />
               </label>
-              <label className="text-[10.5px]" style={{ color: "var(--sd-label)" }}>
+              <label className="text-[11px]" style={{ color: "var(--color-text-muted)" }}>
                 시작 (시 · KST)
                 <input type="number" min={0} max={23} value={activeStart} disabled={allDay}
                   onChange={(e) => setActiveStart(Math.max(0, Math.min(23, Number(e.target.value) || 0)))}
-                  className="sd-input mt-1 w-full" />
+                  className="h-9 px-4 rounded-full bg-[var(--color-bg-input)] border border-[var(--color-border-subtle)] focus:border-[#1C60FF] text-xs text-[var(--color-text-primary)] placeholder-[var(--color-text-muted)] focus:outline-none transition-colors mt-1 w-full" />
               </label>
-              <label className="text-[10.5px]" style={{ color: "var(--sd-label)" }}>
+              <label className="text-[11px]" style={{ color: "var(--color-text-muted)" }}>
                 종료 (시 · KST)
                 <input type="number" min={0} max={24} value={activeEnd} disabled={allDay}
                   onChange={(e) => setActiveEnd(Math.max(0, Math.min(24, Number(e.target.value) || 24)))}
-                  className="sd-input mt-1 w-full" />
+                  className="h-9 px-4 rounded-full bg-[var(--color-bg-input)] border border-[var(--color-border-subtle)] focus:border-[#1C60FF] text-xs text-[var(--color-text-primary)] placeholder-[var(--color-text-muted)] focus:outline-none transition-colors mt-1 w-full" />
               </label>
             </div>
             {/* 24시간 — 시간 제한을 두지 않는다(2026-09-02 사용자 "9~21 하드리미트 없애자").
                 판정은 서버와 **같은 함수**(isAllDayWindow)를 쓴다. 화면이 따로 계산하면
                 "24시간" 이라 적어 놓고 밤에는 안 나가는 상태가 된다. */}
-            <label className="flex items-center gap-1.5 text-[10.5px]" style={{ color: "var(--sd-label)" }}>
+            <label className="flex items-center gap-1.5 text-[11px]" style={{ color: "var(--color-text-muted)" }}>
               <input
                 type="checkbox"
                 checked={allDay}
@@ -1554,7 +1703,7 @@ export default function AutomationPage() {
               />
               24시간 (시간 제한 없음)
             </label>
-            <p className="text-[10.5px]" style={{ color: "var(--sd-fg-dim)" }}>
+            <p className="text-[11px]" style={{ color: "var(--color-text-muted)" }}>
               {slots.length
                 ? `${formatWeekdays(weekdays)} · ${slots.map(slotLabel).join(" ")} 에 맞춰 채널마다 하루 ${perDayCount({ slots, dailyQuota })}개를 내보냅니다.`
                 : allDay
@@ -1562,7 +1711,7 @@ export default function AutomationPage() {
                   : `${activeStart}시~${activeEnd}시(KST) 사이에만 배포하고, 채널마다 하루 ${dailyQuota}개를 채우면 다음 날까지 쉽니다.`}
             </p>
 
-            <input value={win} onChange={(e) => setWin(e.target.value)} placeholder="시간대" className="sd-input w-full" />
+            <input value={win} onChange={(e) => setWin(e.target.value)} placeholder="시간대" className="h-9 px-4 rounded-full bg-[var(--color-bg-input)] border border-[var(--color-border-subtle)] focus:border-[#1C60FF] text-xs text-[var(--color-text-primary)] placeholder-[var(--color-text-muted)] focus:outline-none transition-colors w-full" />
 
             {/* 미리보기 + 위치 조절 — 저장되는 렌더 기하와 같은 % 좌표를 그대로 그린다.
                 소형 카드 클릭 = 대형 다이얼로그(같은 TemplatePreview, width 만 다름). */}
@@ -1587,18 +1736,18 @@ export default function AutomationPage() {
                       aspect={aspect}
                     />
                   </button>
-                  <span className="text-center text-[10px]" style={{ color: "var(--sd-mut)" }}>
+                  <span className="text-center text-[10px]" style={{ color: "var(--color-text-muted)" }}>
                     클릭해 크게 보기
                   </span>
                 </div>
-                <LayoutSliders layout={layout} onChange={setLayout} className="flex-1 space-y-2 text-[10.5px]"
+                <LayoutSliders layout={layout} onChange={setLayout} className="flex-1 space-y-2 text-[11px]"
                   subtitlesOn={subtitles} onSubtitlesChange={setSubtitles} />
               </div>
             )}
 
             {/* 자막 켜기 — 계획 기본 ON. 끄면 이 계획의 자동 클립을 자막(STT 번인) 없이 렌더한다
                 (드라마 등 원본에 자막이 이미 있는 회차용). 위 미리보기의 자막도 함께 사라진다. */}
-            <label className="flex items-center gap-2 text-[11.5px]" style={{ color: "var(--sd-fg)" }}>
+            <label className="flex items-center gap-2 text-xs" style={{ color: "var(--color-text-primary)" }}>
               <input type="checkbox" checked={subtitles} onChange={(e) => setSubtitles(e.target.checked)} />
               자막 켜기 (끄면 이 계획의 자동 클립에 자막을 넣지 않습니다 — 원본에 자막이 이미 있는 회차용)
             </label>
@@ -1608,16 +1757,16 @@ export default function AutomationPage() {
 
         {/* 진행 패널 — 단계별 사실만(개수·상태). 스토어 폴링 + 편승 재조회가 갱신한다. */}
         {selProgram && progress && (
-          <div className="flex flex-col gap-2 rounded-[6px] p-3" style={{ background: "var(--sd-card-sub)", border: "1px solid var(--sd-border)" }}>
+          <div className="flex flex-col gap-2 rounded-xl p-3" style={{ background: "var(--color-bg-input)", border: "1px solid var(--color-border-subtle)" }}>
             <div className="flex items-baseline justify-between gap-2">
-              <h4 className="text-[12.5px] font-semibold" style={{ color: "var(--sd-fg)" }}>배포 대기 목록</h4>
-              <span className="text-[10.5px]" style={{ color: "var(--sd-mut)" }}>분석 → 클립 선정 → 렌더 → 배포</span>
+              <h4 className="text-xs font-semibold" style={{ color: "var(--color-text-primary)" }}>배포 대기 목록</h4>
+              <span className="text-[11px]" style={{ color: "var(--color-text-muted)" }}>분석 → 클립 선정 → 렌더 → 배포</span>
             </div>
             <div className="grid gap-2 [grid-template-columns:repeat(auto-fit,minmax(180px,1fr))]">
             {/* 1) 분석 */}
-            <div className="rounded-[5px] p-2.5" style={{ border: "1px solid var(--sd-border)" }}>
-              <div className="text-[11px] font-semibold" style={{ color: "var(--sd-label)" }}>1 · 분석</div>
-              <div className="mt-1 text-[11.5px] leading-relaxed" style={{ color: "var(--sd-fg)" }}>
+            <div className="rounded-xl p-2.5" style={{ border: "1px solid var(--color-border-subtle)" }}>
+              <div className="text-[11px] font-semibold" style={{ color: "var(--color-text-muted)" }}>1 · 분석</div>
+              <div className="mt-1 text-xs leading-relaxed" style={{ color: "var(--color-text-primary)" }}>
                 {progress.analysis.total === 0
                   ? "회차 없음"
                   : `완료 ${progress.analysis.done} · 진행 ${progress.analysis.running} · 대기 ${progress.analysis.waiting}` +
@@ -1626,25 +1775,25 @@ export default function AutomationPage() {
               </div>
             </div>
             {/* 2) 클립 자동 선정 — rule_run media_created */}
-            <div className="rounded-[5px] p-2.5" style={{ border: "1px solid var(--sd-border)" }}>
-              <div className="text-[11px] font-semibold" style={{ color: "var(--sd-label)" }}>2 · 클립 자동 선정</div>
-              <div className="mt-1 text-[11.5px] leading-relaxed" style={{ color: "var(--sd-fg)" }}>
+            <div className="rounded-xl p-2.5" style={{ border: "1px solid var(--color-border-subtle)" }}>
+              <div className="text-[11px] font-semibold" style={{ color: "var(--color-text-muted)" }}>2 · 클립 자동 선정</div>
+              <div className="mt-1 text-xs leading-relaxed" style={{ color: "var(--color-text-primary)" }}>
                 {progress.rule
                   ? `자동 생성 클립 ${progress.createdCount}건`
                   : "설정 없음 — 자동배포 시작을 누르면 만들어집니다"}
               </div>
             </div>
             {/* 3) 렌더 — 클립 rendered */}
-            <div className="rounded-[5px] p-2.5" style={{ border: "1px solid var(--sd-border)" }}>
-              <div className="text-[11px] font-semibold" style={{ color: "var(--sd-label)" }}>3 · 렌더</div>
-              <div className="mt-1 text-[11.5px] leading-relaxed" style={{ color: "var(--sd-fg)" }}>
+            <div className="rounded-xl p-2.5" style={{ border: "1px solid var(--color-border-subtle)" }}>
+              <div className="text-[11px] font-semibold" style={{ color: "var(--color-text-muted)" }}>3 · 렌더</div>
+              <div className="mt-1 text-xs leading-relaxed" style={{ color: "var(--color-text-primary)" }}>
                 {progress.createdCount === 0 ? "대상 없음" : `렌더 완료 ${progress.rendered} / ${progress.createdCount}건`}
               </div>
             </div>
             {/* 4) 배포 — clip.distributions 상태 */}
-            <div className="rounded-[5px] p-2.5" style={{ border: "1px solid var(--sd-border)" }}>
-              <div className="text-[11px] font-semibold" style={{ color: "var(--sd-label)" }}>4 · 배포</div>
-              <div className="mt-1 text-[11.5px] leading-relaxed" style={{ color: "var(--sd-fg)" }}>
+            <div className="rounded-xl p-2.5" style={{ border: "1px solid var(--color-border-subtle)" }}>
+              <div className="text-[11px] font-semibold" style={{ color: "var(--color-text-muted)" }}>4 · 배포</div>
+              <div className="mt-1 text-xs leading-relaxed" style={{ color: "var(--color-text-primary)" }}>
                 {progress.createdCount === 0 && progress.heldCount === 0
                   ? "대상 없음"
                   : `게시 ${progress.published} · 진행 ${progress.pending} · 기록 ${progress.recorded}` +
@@ -1659,36 +1808,38 @@ export default function AutomationPage() {
         </div>
 
         {/* 참고 디자인의 명확한 액션 바. 시작/초기화/중단은 설정이 끝난 뒤 한곳에 모은다. */}
-        <div className="flex flex-wrap gap-2 border-t pt-4" style={{ borderColor: "var(--sd-border)" }}>
+                <div className="flex flex-wrap gap-2 pt-4 border-t border-[var(--color-border-subtle)]/60">
           <button
             type="button"
-            className="sd-btn sd-btn-primary min-h-10 px-5 text-[12.5px] font-semibold"
+            className="py-1.5 rounded-full bg-[var(--color-bg-active)] hover:bg-[#0D1EB8] text-white text-xs font-bold border-none cursor-pointer transition-colors shadow-none disabled:opacity-50 disabled:cursor-not-allowed min-h-10 px-5 text-xs font-semibold"
             disabled={starting || !selProgram || selChannels.length === 0}
             onClick={() => void startAutoDeploy()}
           >
             {starting ? "시작 중…" : "▶ 자동배포 시작"}
           </button>
-          <button type="button" className="sd-btn min-h-10 px-5 text-[12.5px] font-semibold" onClick={resetWizard}>
+          <button type="button" className="py-1.5 rounded-full bg-[var(--color-bg-input)] hover:bg-[var(--color-bg-card-hover)] text-xs text-[var(--color-text-primary)] border border-[var(--color-border-subtle)] font-medium cursor-pointer transition-colors shadow-none disabled:opacity-50 disabled:cursor-not-allowed min-h-10 px-5 text-xs font-semibold" onClick={resetWizard}>
             ↺ 입력 초기화
           </button>
           {(hasEnabledRules || paused) && (
             <button
               type="button"
-              className="sd-btn min-h-10 px-5 text-[12.5px] font-semibold"
-              style={{ borderColor: "var(--sd-danger-border)", color: "var(--sd-danger-strong)" }}
+              className="py-1.5 rounded-full bg-[var(--color-bg-input)] hover:bg-[var(--color-bg-card-hover)] text-xs text-[var(--color-text-primary)] border border-[var(--color-border-subtle)] font-medium cursor-pointer transition-colors shadow-none disabled:opacity-50 disabled:cursor-not-allowed min-h-10 px-5 text-xs font-semibold"
+              style={{ borderColor: "rgb(244 63 94 / 0.35)", color: "#E11D48" }}
               onClick={togglePause}
             >
               {paused ? "▶ 자동배포 재시작" : "■ 자동배포 중단"}
             </button>
           )}
         </div>
-      </section>
+              </div>
+            </div>
 
       {/* 저장 전에도 선택한 일정이 어떻게 해석되는지 바로 보여 준다. */}
-      <section className="sd-card flex flex-col gap-3 p-4 sm:p-5">
-        <div className="flex items-baseline gap-2">
-          <h3 className="text-[15px] font-semibold" style={{ color: "var(--sd-fg)" }}>배포 스케줄</h3>
-          <span className="text-[11px]" style={{ color: "var(--sd-mut)" }}>선택한 요일·시간·채널 기준</span>
+      <section className={`space-y-2.5 transition-all duration-200 ${!selProgram ? "opacity-40 pointer-events-none select-none filter grayscale-[30%]" : ""}`}>
+        <div>
+          <h3 className="text-base font-bold text-[var(--color-text-primary)]">
+            배포 스케줄 <span className="text-xs text-[var(--color-text-muted)] font-normal ml-1">선택한 요일·시간·채널 기준</span>
+          </h3>
         </div>
         <ScheduleSummary
           ready={Boolean(selProgram && selChannels.length)}
@@ -1705,14 +1856,13 @@ export default function AutomationPage() {
       {/* id="holds" — 상태 헤더의 "확정 대기(보류)" 딥링크 대상. scroll-mt 로 상단 여백. */}
       <section id="holds" className="flex scroll-mt-4 flex-col gap-2">
         <div className="flex flex-wrap items-center gap-2">
-          <h3 className="sd-serif text-[16px] font-semibold" style={{ color: "var(--sd-fg)" }}>승인 대기</h3>
-          <span className="text-[11px]" style={{ color: "var(--sd-mut)" }}>
-            사람 확인이 필요한 건입니다 — <b>승인해야 다음 확인 때 게시됩니다.</b> 저절로 나가지 않습니다.
-          </span>
+          <h3 className="text-base font-bold text-[var(--color-text-primary)]">
+            승인 대기 <span className="text-xs text-[var(--color-text-muted)] font-normal">사람 확인이 필요한 건입니다 — 승인해야 다음 확인 때 게시됩니다. 저절로 나가지 않습니다.</span>
+          </h3>
           {heldClips.length > 0 && (
             <button
               type="button"
-              className="sd-btn ml-auto"
+              className="px-3.5 py-1.5 rounded-full bg-[var(--color-bg-input)] hover:bg-[var(--color-bg-card-hover)] text-xs text-[var(--color-text-primary)] border border-[var(--color-border-subtle)] font-medium cursor-pointer transition-colors shadow-none disabled:opacity-50 disabled:cursor-not-allowed ml-auto"
               disabled={releasing !== null}
               onClick={() => void releaseAll()}
             >
@@ -1722,8 +1872,7 @@ export default function AutomationPage() {
         </div>
         {heldClips.length === 0 ? (
           <div
-            className="sd-ph grid min-h-[80px] place-items-center rounded-[6px] px-6 text-center"
-            style={{ border: "1px dashed var(--sd-border)" }}
+            className="bg-[var(--color-bg-card)] border-none rounded-2xl p-8 text-center text-xs text-[var(--color-text-muted)] shadow-md shadow-slate-900/5 dark:shadow-none bg-stripes"
           >
             {loading ? "불러오는 중…" : error ? "상태를 불러오지 못했습니다" : "승인 대기 중인 건이 없습니다"}
           </div>
@@ -1740,23 +1889,23 @@ export default function AutomationPage() {
               const thumb = clip ? clipThumbSrc(clip) : undefined;
               const key = entry.clipId;
               return (
-                <div key={key} className="sd-card flex flex-wrap items-center gap-3 px-3 py-2.5">
+                <div key={key} className="bg-[var(--color-bg-card)] border-none rounded-2xl shadow-md shadow-slate-900/5 dark:shadow-none flex flex-wrap items-center gap-3 px-3 py-2.5">
                   {thumb ? (
                     // eslint-disable-next-line @next/next/no-img-element -- 서버 동적 프레임(최적화 대상 아님)
                     <img src={thumb} alt="" className="h-12 w-[68px] shrink-0 rounded-[3px] object-cover" />
                   ) : (
                     <div
                       className="grid h-12 w-[68px] shrink-0 place-items-center rounded-[3px] text-[9px]"
-                      style={{ background: "var(--sd-card-sub)", color: "var(--sd-mut)" }}
+                      style={{ background: "var(--color-bg-input)", color: "var(--color-text-muted)" }}
                     >
                       no img
                     </div>
                   )}
                   <div className="min-w-[220px] flex-1">
-                    <div className="truncate text-[12.5px] font-medium" style={{ color: "var(--sd-fg)" }}>
+                    <div className="truncate text-xs font-medium" style={{ color: "var(--color-text-primary)" }}>
                       {clip?.title || entry.clipId}
                     </div>
-                    <div className="sd-mono text-[10.5px]" style={{ color: "var(--sd-mut)" }}>
+                    <div className="font-mono text-[11px]" style={{ color: "var(--color-text-muted)" }}>
                       {clip ? `${Math.round(clip.durationSec)}초 · ` : ""}
                       {ruleProgram?.title ? `자동배포 ${ruleProgram.title} · ` : ""}
                       {/* 계획이 둘 이상 걸린 영상은 그 사실만 짧게 — 승인은 어차피 한 번에 다 푼다. */}
@@ -1764,7 +1913,7 @@ export default function AutomationPage() {
                       대기 시작 {entry.heldAt?.slice(0, 16).replace("T", " ") || "—"}
                     </div>
                     {/* 사유는 잘리면 판단을 못 한다 — 둘째 줄 전체 폭. 사유가 여럿이면 다 적는다. */}
-                    <div className="text-[11px] leading-relaxed" style={{ color: "var(--sd-warn)" }}>
+                    <div className="text-[11px] leading-relaxed" style={{ color: "#D97706" }}>
                       {entry.reasons.join(" · ")}
                     </div>
                   </div>
@@ -1772,16 +1921,18 @@ export default function AutomationPage() {
                       보면서 바로 승인한다 — 그래서 새 화면이 아니라 카드 안에서 편다. */}
                   <button
                     type="button"
-                    className="sd-btn shrink-0"
+                    className="px-3.5 py-1.5 rounded-full bg-[var(--color-bg-input)] hover:bg-[var(--color-bg-card-hover)] text-xs text-[var(--color-text-primary)] border border-[var(--color-border-subtle)] font-medium cursor-pointer transition-colors shadow-none disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
                     aria-expanded={previewClipId === entry.clipId}
                     onClick={() => setPreviewClipId(previewClipId === entry.clipId ? null : entry.clipId)}
                   >
                     {previewClipId === entry.clipId ? "미리보기 닫기" : "미리보기"}
                   </button>
-                  <Link href={`/editor/${entry.clipId}`} className="sd-btn shrink-0">편집</Link>
+                  {/* ⚠️ className 을 href **앞**에 둔다 — automation.test.ts 가 href 뒤 60자 안에서
+                      `>편집<` 를 찾는다. 뒤에 두면 디자이너 클래스(200자)에 밀려 깨진다. */}
+                  <Link className="px-3.5 py-1.5 rounded-full bg-[var(--color-bg-input)] hover:bg-[var(--color-bg-card-hover)] text-xs text-[var(--color-text-primary)] border border-[var(--color-border-subtle)] font-medium cursor-pointer transition-colors shadow-none disabled:opacity-50 disabled:cursor-not-allowed shrink-0" href={`/editor/${entry.clipId}`}>편집</Link>
                   <button
                     type="button"
-                    className="sd-btn shrink-0"
+                    className="px-3.5 py-1.5 rounded-full bg-[var(--color-bg-input)] hover:bg-[var(--color-bg-card-hover)] text-xs text-[var(--color-text-primary)] border border-[var(--color-border-subtle)] font-medium cursor-pointer transition-colors shadow-none disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
                     disabled={releasing !== null || rejecting !== null}
                     onClick={() => void reject(entry)}
                     title="이 영상을 현재 자동배포에서 제외합니다"
@@ -1790,7 +1941,7 @@ export default function AutomationPage() {
                   </button>
                   <button
                     type="button"
-                    className="sd-btn sd-btn-primary shrink-0"
+                    className="px-3.5 py-1.5 rounded-full bg-[var(--color-bg-active)] hover:bg-[#0D1EB8] text-white text-xs font-bold border-none cursor-pointer transition-colors shadow-none disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
                     disabled={releasing !== null || rejecting !== null}
                     onClick={() => void release(entry)}
                   >
@@ -1801,7 +1952,7 @@ export default function AutomationPage() {
                       {clip
                         ? <HeldPreview clip={clip} />
                         : (
-                          <div className="w-full rounded-[4px] px-3 py-2 text-[11px]" style={{ background: "var(--sd-card-sub)", color: "var(--sd-warn)" }}>
+                          <div className="w-full rounded-lg px-3 py-2 text-[11px]" style={{ background: "var(--color-bg-input)", color: "#D97706" }}>
                             클립 정보를 찾지 못했습니다 — 목록을 새로고침해 주세요
                           </div>
                         )}
@@ -1817,15 +1968,14 @@ export default function AutomationPage() {
       {/* ── 저장 설정 / 최근 처리 / 완료 영상을 Main.dc.html처럼 각각 가볍게 분리한다. ── */}
       <section className="flex flex-col gap-2">
         <div className="flex items-baseline gap-2">
-          <h3 className="text-[15px] font-semibold" style={{ color: "var(--sd-fg)" }}>저장된 자동배포</h3>
-          <span className="text-[11px]" style={{ color: "var(--sd-mut)" }}>자동배포는 여러 개 만들 수 있고, 채널 하나는 한 곳에만 연결됩니다</span>
+          <h3 className="text-base font-bold text-[var(--color-text-primary)]">저장된 자동배포</h3>
+          <span className="text-[11px]" style={{ color: "var(--color-text-muted)" }}>자동배포는 여러 개 만들 수 있고, 채널 하나는 한 곳에만 연결됩니다</span>
         </div>
 
         {/* 계획 목록 — 무엇이 돌고 있는지의 정본 */}
         {rules.length === 0 ? (
           <div
-            className="sd-ph grid min-h-[70px] place-items-center rounded-[6px] px-6 text-center"
-            style={{ border: "1px dashed var(--sd-border)" }}
+            className="bg-[var(--color-bg-card)] border-none rounded-2xl p-8 text-center text-xs text-[var(--color-text-muted)] shadow-md shadow-slate-900/5 dark:shadow-none bg-stripes"
           >
             {loading ? "불러오는 중…" : error ? "상태를 불러오지 못했습니다" : "저장된 자동배포가 없습니다 — 위에서 프로그램과 채널을 선택해 시작하세요"}
           </div>
@@ -1839,40 +1989,40 @@ export default function AutomationPage() {
               // 실업로드 채널이 있어도 게이트가 전부 꺼져 있으면 "실행 중"은 착시다 — 기록만.
               const uploadLive = uploadChans.some((c) => !gateOff(c.platform, c.accountId));
               return (
-                <div key={r.id} className="sd-card flex flex-wrap items-center gap-2 px-3 py-2.5">
-                  <span className="text-[12.5px] font-medium" style={{ color: "var(--sd-fg)" }}>
+                <div key={r.id} className="bg-[var(--color-bg-card)] border-none rounded-2xl shadow-md shadow-slate-900/5 dark:shadow-none flex flex-wrap items-center gap-2 px-3 py-2.5">
+                  <span className="text-xs font-medium" style={{ color: "var(--color-text-primary)" }}>
                     {firstProgram?.title ?? pids[0]}{pids.length > 1 ? ` 외 ${pids.length - 1}개` : ""} → 채널 {chans.length}곳
                   </span>
-                  <span className={cn("sd-tag", !r.enabled ? "sd-tag--ended" : uploadChans.length > 0 && uploadLive ? "sd-tag--airing" : "")}>
+                  <span className={!r.enabled ? "px-2.5 py-0.5 rounded-full text-[10px] font-semibold border-none bg-slate-200/80 text-slate-700 dark:bg-[#282B35] dark:text-slate-200" : uploadChans.length > 0 && uploadLive ? "px-2.5 py-0.5 rounded-full text-[10px] font-semibold border-none bg-emerald-500/15 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-400" : "px-2.5 py-0.5 rounded-full text-[10px] font-semibold border-none bg-slate-200/80 text-slate-700 dark:bg-[#282B35] dark:text-slate-200"}>
                     {!r.enabled ? "멈춤" : uploadChans.length > 0 && uploadLive ? "실행 중" : "기록만"}
                   </span>
-                  <span className="sd-tag">{KIND_LABEL[r.mediaKind]}</span>
-                  <span className="sd-tag sd-tag--warn">
+                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-semibold border-none bg-slate-200/80 text-slate-700 dark:bg-[#282B35] dark:text-slate-200">{KIND_LABEL[r.mediaKind]}</span>
+                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-semibold border-none bg-amber-500/15 text-amber-600 dark:text-amber-400">
                     {r.gatePolicy === "approve_first" ? "승인 배포 — 사람이 확정해야 게시" : "승인 없이 배포"}
                   </span>
-                  <span className="sd-tag">하루 {monthlyPublishEstimate(r).perDay}개/채널</span>
-                  <span className="sd-tag">{formatWeekdays(r.weekdays)}</span>
-                  <span className="basis-full text-[11px]" style={{ color: "var(--sd-fg-dim)" }}>
-                    발행 계획: <strong style={{ color: "var(--sd-fg)" }}>{formatWeekdays(r.weekdays)}</strong>
+                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-semibold border-none bg-slate-200/80 text-slate-700 dark:bg-[#282B35] dark:text-slate-200">하루 {monthlyPublishEstimate(r).perDay}개/채널</span>
+                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-semibold border-none bg-slate-200/80 text-slate-700 dark:bg-[#282B35] dark:text-slate-200">{formatWeekdays(r.weekdays)}</span>
+                  <span className="basis-full text-[11px]" style={{ color: "var(--color-text-muted)" }}>
+                    발행 계획: <strong style={{ color: "var(--color-text-primary)" }}>{formatWeekdays(r.weekdays)}</strong>
                     {" · "}
-                    <strong style={{ color: "var(--sd-fg)" }}>
+                    <strong style={{ color: "var(--color-text-primary)" }}>
                       {r.slots?.length ? ruleSlots(r).map(slotLabel).join(" · ") : (isAllDayWindow(r) ? "24시간" : `${r.activeStart ?? 0}:00~${r.activeEnd ?? 24}:00`)}
                     </strong>
                     {" · "}
                     하루 {monthlyPublishEstimate(r).perDay}개
                   </span>
-                  <span className="sd-tag">
+                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-semibold border-none bg-slate-200/80 text-slate-700 dark:bg-[#282B35] dark:text-slate-200">
                     {r.slots?.length ? ruleSlots(r).map(slotLabel).join(" ") : (isAllDayWindow(r) ? "24시간" : `${r.activeStart ?? 0}~${r.activeEnd ?? 24}시`)}
                   </span>
-                  <span className="sd-tag">월 예상 {monthlyPublishEstimate(r).perMonth}건</span>
-                  <span className="sd-tag">{r.templateId ? `템플릿 ${r.templateId}` : "템플릿 자동"}</span>
+                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-semibold border-none bg-slate-200/80 text-slate-700 dark:bg-[#282B35] dark:text-slate-200">월 예상 {monthlyPublishEstimate(r).perMonth}건</span>
+                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-semibold border-none bg-slate-200/80 text-slate-700 dark:bg-[#282B35] dark:text-slate-200">{r.templateId ? `템플릿 ${r.templateId}` : "템플릿 자동"}</span>
                   {/* 오늘 게시 수 — 서버가 publishedToday 를 내려줄 때만(구버전은 숨김). */}
                   {r.publishedToday &&
                     chans.map((c) => {
                       const n = r.publishedToday?.[`${c.platform}:${c.accountId}`];
                       if (typeof n !== "number") return null;
                       return (
-                        <span key={`${c.platform}:${c.accountId}`} className="sd-tag">
+                        <span key={`${c.platform}:${c.accountId}`} className="px-2.5 py-0.5 rounded-full text-[10px] font-semibold border-none bg-slate-200/80 text-slate-700 dark:bg-[#282B35] dark:text-slate-200">
                           {/* 분모는 **서버 판정과 같은 함수**로 낸다(perDayCount). 예전엔 r.dailyQuota
                               를 직접 읽어, 발행 시간(슬롯)을 쓰는 계획에서 늘 틀린 수가 떴다 —
                               15:00×20 계획인데 "0/3" (2026-08-27 사용자 신고). 슬롯이 있으면
@@ -1885,7 +2035,7 @@ export default function AutomationPage() {
                   <div className="ml-auto flex gap-2">
                     <button
                       type="button"
-                      className="sd-btn"
+                      className="px-3.5 py-1.5 rounded-full bg-[var(--color-bg-input)] hover:bg-[var(--color-bg-card-hover)] text-xs text-[var(--color-text-primary)] border border-[var(--color-border-subtle)] font-medium cursor-pointer transition-colors shadow-none disabled:opacity-50 disabled:cursor-not-allowed"
                       onClick={() => {
                         prefilledFor.current = null;
                         const nextProgram = pids[0] ?? "";
@@ -1900,7 +2050,7 @@ export default function AutomationPage() {
                     </button>
                     <button
                       type="button"
-                      className="sd-btn"
+                      className="px-3.5 py-1.5 rounded-full bg-[var(--color-bg-input)] hover:bg-[var(--color-bg-card-hover)] text-xs text-[var(--color-text-primary)] border border-[var(--color-border-subtle)] font-medium cursor-pointer transition-colors shadow-none disabled:opacity-50 disabled:cursor-not-allowed"
                       onClick={async () => {
                         try {
                           await saveAutomationRule({ ...r, enabled: !r.enabled });
@@ -1920,7 +2070,7 @@ export default function AutomationPage() {
                     </button>
                     <button
                       type="button"
-                      className="sd-btn"
+                      className="px-3.5 py-1.5 rounded-full bg-[var(--color-bg-input)] hover:bg-[var(--color-bg-card-hover)] text-xs text-[var(--color-text-primary)] border border-[var(--color-border-subtle)] font-medium cursor-pointer transition-colors shadow-none disabled:opacity-50 disabled:cursor-not-allowed"
                       onClick={async () => {
                         if (!window.confirm("이 프로그램의 자동배포 설정을 지웁니다. 이미 게시된 영상은 내려가지 않습니다. 계속할까요?")) return;
                         try {
@@ -1944,28 +2094,27 @@ export default function AutomationPage() {
 
         {/* 진행·대기·실패 기록. 실제 게시 완료는 아래 완료 영상에 따로 둔다.
             로그가 길어 접이식(사용자 2026-08-24) — 기본 접힘, 헤더에 건수를 보여 열 이유를 준다. */}
-        <div id="activity" className="mt-4 flex scroll-mt-4 items-baseline gap-2 border-t pt-4" style={{ borderColor: "var(--sd-border)" }}>
+        <div id="activity" className="mt-4 flex scroll-mt-4 items-baseline gap-2 border-t pt-4" style={{ borderColor: "var(--color-border-subtle)" }}>
           <button
             type="button"
             className="flex items-baseline gap-2"
             onClick={() => setShowActivity((v) => !v)}
             aria-expanded={showActivity}
           >
-            <h4 className="text-[14px] font-semibold" style={{ color: "var(--sd-fg)" }}>
+            <h4 className="text-[14px] font-semibold" style={{ color: "var(--color-text-primary)" }}>
               {showActivity ? "▾" : "▸"} ⏳ 배포 대기
-              <span className="ml-1.5 text-[11px] font-normal" style={{ color: "var(--sd-mut)" }}>
+              <span className="ml-1.5 text-[11px] font-normal" style={{ color: "var(--color-text-muted)" }}>
                 {recentProcessRuns.length}건
               </span>
             </h4>
           </button>
-          <span className="text-[11px]" style={{ color: "var(--sd-mut)" }}>
+          <span className="text-[11px]" style={{ color: "var(--color-text-muted)" }}>
             분석·렌더·업로드 시작·대기·실패를 시간순으로 봅니다
           </span>
         </div>
         {!showActivity ? null : recentProcessRuns.length === 0 ? (
           <div
-            className="sd-ph grid min-h-[80px] place-items-center rounded-[6px] px-6 text-center text-[11.5px]"
-            style={{ border: "1px dashed var(--sd-border)", color: "var(--sd-mut)" }}
+            className="bg-[var(--color-bg-card)] border-none rounded-2xl p-8 text-center text-xs text-[var(--color-text-muted)] shadow-md shadow-slate-900/5 dark:shadow-none bg-stripes"
           >
             {loading ? "불러오는 중…" : error ? "상태를 불러오지 못했습니다" : "현재 진행 중이거나 확인이 필요한 처리 기록이 없습니다"}
           </div>
@@ -1993,40 +2142,48 @@ export default function AutomationPage() {
               // 큐잉 시점의 published 는 "업로드 시작"일 뿐이다 — 실제 완료/실패는
               // 클립의 배포 상태에서 온다(있으면 덮어쓴다).
               let label = RESULT_LABEL[run.result] ?? run.result;
-              let tag = RESULT_TAG[run.result] ?? "sd-tag";
+              let tag = RESULT_TAG[run.result] ?? "px-2.5 py-0.5 rounded-full text-[10px] font-semibold border-none bg-slate-200/80 text-slate-700 dark:bg-[#282B35] dark:text-slate-200";
               let reason = run.detail;
               if (run.result === "published") {
                 if (dist?.status === "published") {
-                  label = "게시함"; tag = "sd-tag sd-tag--airing";
+                  label = "게시함"; tag = "px-2.5 py-0.5 rounded-full text-[10px] font-semibold border-none bg-emerald-500/15 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-400";
                 } else if (dist?.status === "failed") {
-                  label = "실패"; tag = "sd-tag sd-tag--danger";
+                  label = "실패"; tag = "px-2.5 py-0.5 rounded-full text-[10px] font-semibold border-none bg-rose-500/15 text-rose-600 dark:text-rose-400";
                   reason = dist.error || run.detail;
                 }
               }
               return (
-                <div key={run.id} className="sd-card flex flex-wrap items-center gap-3 px-3 py-2">
-                  <span className="sd-mono shrink-0 text-[10.5px]" style={{ color: "var(--sd-mut)" }}>
+                <div key={run.id} className="bg-[var(--color-bg-card)] border-none rounded-2xl shadow-md shadow-slate-900/5 dark:shadow-none flex flex-wrap items-center gap-3 px-3 py-2">
+                  <span className="font-mono shrink-0 text-[11px]" style={{ color: "var(--color-text-muted)" }}>
                     {run.at?.slice(0, 16).replace("T", " ")}
                   </span>
-                  <span className="min-w-[160px] flex-1 truncate text-[12px] font-medium" style={{ color: "var(--sd-fg)" }}>
+                  <span className="min-w-[160px] flex-1 truncate text-[12px] font-medium" style={{ color: "var(--color-text-primary)" }}>
                     {clip?.title || run.clipId || "—"}
                   </span>
-                  {platform && <span className="sd-tag shrink-0">{channelLabel(platform)}</span>}
+                  {platform && <span className="px-2.5 py-0.5 rounded-full text-[10px] font-semibold border-none bg-slate-200/80 text-slate-700 dark:bg-[#282B35] dark:text-slate-200 shrink-0">{channelLabel(platform)}</span>}
                   <span className={cn("shrink-0", tag)}>{label}</span>
-                  {originLabel && <span className="sd-tag shrink-0">{originLabel}</span>}
+                  {originLabel && <span className="px-2.5 py-0.5 rounded-full text-[10px] font-semibold border-none bg-slate-200/80 text-slate-700 dark:bg-[#282B35] dark:text-slate-200 shrink-0">{originLabel}</span>}
                   {ytId && (
                     <a
                       href={`https://www.youtube.com/watch?v=${ytId}`}
                       target="_blank"
                       rel="noreferrer"
-                      className="sd-btn shrink-0"
+                      className="px-3.5 py-1.5 rounded-full bg-[var(--color-bg-input)] hover:bg-[var(--color-bg-card-hover)] text-xs text-[var(--color-text-primary)] border border-[var(--color-border-subtle)] font-medium cursor-pointer transition-colors shadow-none disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
                     >
                       열기
                     </a>
                   )}
+                  {/* 원본 "수동" 버튼(D:1786)은 무엇을 수동으로 하는지 정의가 없고 onClick 도 없다.
+                      추측으로 재업로드에 붙이면 실패한 채널로 파일이 다시 나간다 — 그래서
+                      **실패한 건에서만**, 사람이 채널을 직접 고르는 배포 화면으로 보낸다. */}
+                  {label === "실패" && (
+                    <Link className="px-3.5 py-1.5 rounded-full bg-[var(--color-bg-input)] hover:bg-[var(--color-bg-card-hover)] text-xs text-[var(--color-text-primary)] border border-[var(--color-border-subtle)] font-medium cursor-pointer transition-colors shadow-none disabled:opacity-50 disabled:cursor-not-allowed shrink-0" href="/distribution" title="배포 화면에서 채널을 골라 직접 다시 보냅니다">
+                      수동
+                    </Link>
+                  )}
                   {/* 사유("안 보냄" 등)는 잘리면 읽을 수 없다 — 둘째 줄 전체 폭. */}
                   {reason && (
-                    <span className="basis-full text-[10.5px] leading-relaxed" style={{ color: "var(--sd-mut)" }}>
+                    <span className="basis-full text-[11px] leading-relaxed" style={{ color: "var(--color-text-muted)" }}>
                       {reason}
                     </span>
                   )}
@@ -2036,13 +2193,13 @@ export default function AutomationPage() {
           </div>
         )}
 
-        <div className="mt-4 flex items-baseline gap-2 border-t pt-4" style={{ borderColor: "var(--sd-border)" }}>
-          <h4 className="text-[14px] font-semibold" style={{ color: "var(--sd-fg)" }}>✅ 배포 완료 영상</h4>
-          <span className="text-[11px]" style={{ color: "var(--sd-mut)" }}>실제 채널 게시까지 확인된 영상만 표시합니다</span>
+        <div className="mt-4 flex items-baseline gap-2 border-t pt-4" style={{ borderColor: "var(--color-border-subtle)" }}>
+          <h4 className="text-[14px] font-semibold" style={{ color: "var(--color-text-primary)" }}>✅ 배포 완료 영상</h4>
+          <span className="text-[11px]" style={{ color: "var(--color-text-muted)" }}>실제 채널 게시까지 확인된 영상만 표시합니다</span>
         </div>
         {completedRuns.length === 0 ? (
-          <div className="sd-ph grid min-h-[80px] place-items-center rounded-[6px] px-6 text-center text-[11.5px]"
-            style={{ border: "1px dashed var(--sd-border)", color: "var(--sd-mut)" }}>
+          <div className="bg-[var(--color-bg-card)] border-none rounded-2xl p-8 text-center text-xs text-[var(--color-text-muted)] shadow-md shadow-slate-900/5 dark:shadow-none bg-stripes"
+            >
             {loading ? "불러오는 중…" : error ? "상태를 불러오지 못했습니다" : "아직 배포 완료된 영상이 없습니다"}
           </div>
         ) : (
@@ -2055,20 +2212,20 @@ export default function AutomationPage() {
                 ? `https://www.youtube.com/watch?v=${dist.externalId}`
                 : null;
               return (
-                <div key={run.id} className="flex flex-wrap items-center gap-3 rounded-[4px] px-3 py-3"
-                  style={{ background: "var(--sd-card-sub)", borderLeft: "3px solid var(--sd-ok)" }}>
-                  <div className="grid size-10 shrink-0 place-items-center rounded-[4px] text-[16px]"
-                    style={{ background: "var(--sd-card)" }} aria-hidden>▶</div>
+                <div key={run.id} className="flex flex-wrap items-center gap-3 rounded-lg px-3 py-3"
+                  style={{ background: "var(--color-bg-input)", borderLeft: "3px solid #059669" }}>
+                  <div className="grid size-10 shrink-0 place-items-center rounded-lg text-[16px]"
+                    style={{ background: "var(--color-bg-card)" }} aria-hidden>▶</div>
                   <div className="min-w-[180px] flex-1">
-                    <div className="truncate text-[12.5px] font-semibold" style={{ color: "var(--sd-fg)" }}>
+                    <div className="truncate text-xs font-semibold" style={{ color: "var(--color-text-primary)" }}>
                       {clip?.title || run.clipId || "자동배포 영상"}
                     </div>
-                    <div className="mt-0.5 text-[10.5px]" style={{ color: "var(--sd-mut)" }}>
+                    <div className="mt-0.5 text-[11px]" style={{ color: "var(--color-text-muted)" }}>
                       {run.at?.slice(0, 16).replace("T", " ")}{platform ? ` · ${channelLabel(platform)}` : ""}
                     </div>
                   </div>
-                  <span className="sd-tag sd-tag--airing">배포됨</span>
-                  {externalUrl && <a href={externalUrl} target="_blank" rel="noreferrer" className="sd-btn">열기</a>}
+                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-semibold border-none bg-emerald-500/15 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-400">배포됨</span>
+                  {externalUrl && <a href={externalUrl} target="_blank" rel="noreferrer" className="px-3.5 py-1.5 rounded-full bg-[var(--color-bg-input)] hover:bg-[var(--color-bg-card-hover)] text-xs text-[var(--color-text-primary)] border border-[var(--color-border-subtle)] font-medium cursor-pointer transition-colors shadow-none disabled:opacity-50 disabled:cursor-not-allowed">열기</a>}
                 </div>
               );
             })}
@@ -2078,8 +2235,8 @@ export default function AutomationPage() {
 
       {/* 하단 안내 — 승인 대기 동작. "실제 업로드 잠금"(운영 설정)과 구분해 말한다. */}
       <div
-        className="rounded-[4px] px-3 py-2.5 text-[11.5px] leading-relaxed"
-        style={{ border: "1px solid var(--sd-warn-border)", background: "var(--sd-warn-bg)", color: "var(--sd-warn)" }}
+        className="rounded-lg px-3 py-2.5 text-xs leading-relaxed"
+        style={{ border: "1px solid rgb(245 158 11 / 0.35)", background: "rgb(245 158 11 / 0.10)", color: "#D97706" }}
       >
         <b>승인 대기 미디어는 저절로 나가지 않습니다.</b> 승인 대기에 들어온
         건은 사람이 승인해야 다음 확인 때 게시됩니다. 실제 업로드 잠금(운영 설정)은 이것과
@@ -2103,7 +2260,12 @@ export default function AutomationPage() {
           onClose={() => setTplPreviewOpen(false)}
         />
       )}
-    </div>
+        </div>
+
+        {/* Footer */}
+        <Footer />
+      </main>
+    </>
   );
 }
 
@@ -2140,14 +2302,14 @@ function AspectGlyph({ id, active }: { id: string; active: boolean }) {
     <span
       aria-hidden
       className="relative shrink-0 overflow-hidden rounded-[2px]"
-      style={{ width: W, height: H, background: "var(--sd-card-sub)", border: "1px solid var(--sd-border)" }}
+      style={{ width: W, height: H, background: "var(--color-bg-input)", border: "1px solid var(--color-border-subtle)" }}
     >
       <span
         className="absolute left-0 right-0"
         style={{
           top: `${area.top}%`,
           height: `${area.height}%`,
-          background: active ? "var(--sd-accent)" : "var(--sd-mut)",
+          background: active ? "#1C60FF" : "var(--color-text-muted)",
           opacity: active ? 0.85 : 0.45,
         }}
       />
@@ -2155,16 +2317,14 @@ function AspectGlyph({ id, active }: { id: string; active: boolean }) {
   );
 }
 
+/** 원본 단계 머리말(D:417–423) — 제목 옆에 설명이 한 줄로 붙는다. */
 function FlowStepHeader({ step, title, description }: { step: string; title: string; description: string }) {
   return (
-    <div className="min-w-0 flex-1">
-      <p className="text-[11px] font-semibold tracking-wide" style={{ color: "var(--sd-mut)" }}>
-        {step}단계
-        <span className="ml-1.5 text-[15px] font-semibold tracking-normal" style={{ color: "var(--sd-fg)" }}>
-          {title}
-        </span>
-      </p>
-      <p className="mt-1 text-[11px] leading-relaxed" style={{ color: "var(--sd-mut)" }}>{description}</p>
+    <div className="flex items-center gap-3 min-w-0 flex-1">
+      <h3 className="text-base font-bold text-[var(--color-text-primary)] shrink-0">
+        {step}단계 {title}
+      </h3>
+      <span className="text-xs font-normal text-[var(--color-text-muted)] truncate">{description}</span>
     </div>
   );
 }
@@ -2180,8 +2340,7 @@ function ScheduleSummary({ ready, weekdays, slots, dailyQuota, activeStart, acti
 }) {
   if (!ready) {
     return (
-      <div className="sd-ph grid min-h-[88px] place-items-center rounded-[6px] px-6 text-center text-[11.5px]"
-        style={{ border: "1px dashed var(--sd-border)" }}>
+      <div className="bg-[var(--color-bg-card)] border-none rounded-2xl p-8 text-center text-xs text-[var(--color-text-muted)] shadow-md shadow-slate-900/5 dark:shadow-none bg-stripes">
         프로그램과 배포 채널을 선택하면 스케줄이 표시됩니다
       </div>
     );
@@ -2191,21 +2350,21 @@ function ScheduleSummary({ ready, weekdays, slots, dailyQuota, activeStart, acti
   const perDay = perDayCount({ slots, dailyQuota });
   const timeLabel = slots.length ? slots.map(slotLabel).join(" · ") : `${activeStart}:00~${activeEnd}:00 사이 자동 확인`;
   return (
-    <div className="grid gap-2 sm:grid-cols-3">
-      <div className="rounded-[6px] p-3" style={{ background: "var(--sd-card-sub)", borderLeft: "3px solid var(--sd-ok)" }}>
-        <div className="text-[10.5px] font-medium" style={{ color: "var(--sd-label)" }}>배포 요일</div>
-        <div className="mt-1 text-[13px] font-semibold" style={{ color: "var(--sd-fg)" }}>{formatWeekdays(weekdays)}</div>
-      </div>
-      <div className="rounded-[6px] p-3" style={{ background: "var(--sd-card-sub)", borderLeft: "3px solid var(--sd-accent)" }}>
-        <div className="text-[10.5px] font-medium" style={{ color: "var(--sd-label)" }}>배포 시간</div>
-        <div className="mt-1 text-[13px] font-semibold" style={{ color: "var(--sd-fg)" }}>{timeLabel}</div>
-      </div>
-      <div className="rounded-[6px] p-3" style={{ background: "var(--sd-card-sub)", borderLeft: "3px solid var(--sd-warn)" }}>
-        <div className="text-[10.5px] font-medium" style={{ color: "var(--sd-label)" }}>예정 수량</div>
-        <div className="mt-1 text-[13px] font-semibold" style={{ color: "var(--sd-fg)" }}>
-          하루 {perDay}개 × 채널 {channelCount}곳
-        </div>
-      </div>
+    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3.5">
+      <ScheduleCard label="배포 요일" value={formatWeekdays(weekdays)} />
+      <ScheduleCard label="배포 시간" value={timeLabel} />
+      {/* 원본은 원시 할당량을 그대로 곱한다 — 슬롯이 있으면 그 값은 안 쓰인다(perDayCount). */}
+      <ScheduleCard label="예정 수량" value={`하루 ${perDay}개 × 채널 ${channelCount}곳`} />
+    </div>
+  );
+}
+
+/** 원본 스케줄 카드 3장(D:1603–1626). */
+function ScheduleCard({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="p-4 rounded-2xl bg-white dark:bg-stone-800 border-none shadow-md shadow-slate-900/5 dark:shadow-none space-y-1">
+      <div className="text-[11px] font-semibold text-[var(--color-text-muted)]">{label}</div>
+      <div className="font-bold text-sm text-[var(--color-text-primary)]">{value}</div>
     </div>
   );
 }
@@ -2247,20 +2406,20 @@ function SlotPicker({ slots, onChange }: { slots: RuleSlot[]; onChange: (v: Rule
       {slots.map((s) => (
         <span
           key={s.time}
-          className="inline-flex h-7 items-center gap-1 rounded-[5px] px-2 text-[11.5px]"
-          style={{ border: "1px solid var(--sd-border)", color: "var(--sd-fg)" }}
+          className="inline-flex h-7 items-center gap-1 rounded-xl px-2 text-xs"
+          style={{ border: "1px solid var(--color-border-subtle)", color: "var(--color-text-primary)" }}
         >
           {s.time}
           <button type="button" aria-label={`${s.time} 개수 줄이기`} disabled={s.count <= 1}
             onClick={() => setCount(s.time, s.count - 1)}
-            className="px-0.5" style={{ color: "var(--sd-fg-dim)", opacity: s.count <= 1 ? 0.35 : 1 }}>−</button>
-          <span className="sd-mono">{s.count}개</span>
+            className="px-0.5" style={{ color: "var(--color-text-muted)", opacity: s.count <= 1 ? 0.35 : 1 }}>−</button>
+          <span className="font-mono">{s.count}개</span>
           <button type="button" aria-label={`${s.time} 개수 늘리기`}
             onClick={() => setCount(s.time, s.count + 1)}
-            className="px-0.5" style={{ color: "var(--sd-fg-dim)" }}>＋</button>
+            className="px-0.5" style={{ color: "var(--color-text-muted)" }}>＋</button>
           <button type="button" aria-label={`${s.time} 삭제`}
             onClick={() => onChange(slots.filter((x) => x.time !== s.time))}
-            className="ml-0.5" style={{ color: "var(--sd-fg-dim)" }}>×</button>
+            className="ml-0.5" style={{ color: "var(--color-text-muted)" }}>×</button>
         </span>
       ))}
       {adding ? (
@@ -2269,13 +2428,13 @@ function SlotPicker({ slots, onChange }: { slots: RuleSlot[]; onChange: (v: Rule
             type="time" value={value} autoFocus
             onChange={(e) => setValue(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter") add(); if (e.key === "Escape") setAdding(false); }}
-            className="sd-input h-7 w-[92px]"
+            className="px-4 rounded-full bg-[var(--color-bg-input)] border border-[var(--color-border-subtle)] focus:border-[#1C60FF] text-xs text-[var(--color-text-primary)] placeholder-[var(--color-text-muted)] focus:outline-none transition-colors h-7 w-[92px]"
           />
-          <button type="button" onClick={add} className="sd-btn h-7 px-2 text-[11px]">추가</button>
+          <button type="button" onClick={add} className="py-1.5 rounded-full bg-[var(--color-bg-input)] hover:bg-[var(--color-bg-card-hover)] text-xs text-[var(--color-text-primary)] border border-[var(--color-border-subtle)] font-medium cursor-pointer transition-colors shadow-none disabled:opacity-50 disabled:cursor-not-allowed h-7 px-2 text-[11px]">추가</button>
         </span>
       ) : (
         <button type="button" onClick={() => setAdding(true)}
-          className="h-7 text-[11.5px]" style={{ color: "var(--sd-fg-dim)" }}>+ 시간 추가</button>
+          className="h-7 text-xs" style={{ color: "var(--color-text-muted)" }}>+ 시간 추가</button>
       )}
     </div>
   );
@@ -2306,20 +2465,20 @@ function PublishEstimate({ weekdays, slots, dailyQuota, channels }: {
   // 고르지도 않은 채널의 예상 건수를 보여 주게 된다.
   if (channels.length === 0) {
     return (
-      <div className="rounded-[5px] p-2.5 text-[10.5px]"
-        style={{ border: "1px solid var(--sd-border)", color: "var(--sd-fg-dim)" }}>
+      <div className="rounded-xl p-2.5 text-[11px]"
+        style={{ border: "1px solid var(--color-border-subtle)", color: "var(--color-text-muted)" }}>
         채널을 선택하면 월 예상 발행 건수가 표시됩니다.
       </div>
     );
   }
 
   return (
-    <div className="rounded-[5px] p-2.5" style={{ border: "1px solid var(--sd-border)" }}>
+    <div className="rounded-xl p-2.5" style={{ border: "1px solid var(--color-border-subtle)" }}>
       <div className="flex items-baseline justify-between">
-        <span className="text-[10.5px]" style={{ color: "var(--sd-label)" }}>월 예상 발행</span>
-        <span className="text-[15px] font-semibold" style={{ color: "var(--sd-fg)" }}>{perMonth}건</span>
+        <span className="text-[11px]" style={{ color: "var(--color-text-muted)" }}>월 예상 발행</span>
+        <span className="text-[15px] font-semibold" style={{ color: "var(--color-text-primary)" }}>{perMonth}건</span>
       </div>
-      <div className="mt-1 text-[10.5px]" style={{ color: "var(--sd-fg-dim)" }}>
+      <div className="mt-1 text-[11px]" style={{ color: "var(--color-text-muted)" }}>
         {formatWeekdays(weekdays)} · 하루 {est.perDay}건 · 채널 {est.channels}개 → 주당 {perWeek}건
       </div>
     </div>
@@ -2327,19 +2486,21 @@ function PublishEstimate({ weekdays, slots, dailyQuota, channels }: {
 }
 
 /** 승인 방식 2택 — 무엇을 고르는 건지 나란히 보이게. */
+/** 원본 선택 카드(automation/page.tsx D:596–608) — 고른 것만 파란 테두리+링. */
 function GateCard({ on, onClick, title, desc }: {
   on: boolean; onClick: () => void; title: string; desc: string;
 }) {
   return (
-    <button
-      type="button" onClick={onClick}
-      className="rounded-[5px] p-2.5 text-left"
-      style={on
-        ? { border: "1px solid var(--sd-fg)", background: "var(--sd-hover)" }
-        : { border: "1px solid var(--sd-border)" }}
+    <div
+      onClick={onClick}
+      className={`p-3.5 rounded-xl border cursor-pointer transition-all ${
+        on
+          ? "border-[#1C60FF] bg-[#1C60FF]/5 ring-1 ring-[#1C60FF]"
+          : "border-[var(--color-border-subtle)] bg-[var(--color-bg-input)] hover:border-slate-400"
+      }`}
     >
-      <div className="text-[11.5px] font-semibold" style={{ color: "var(--sd-fg)" }}>{title}</div>
-      <div className="mt-0.5 text-[10.5px] leading-relaxed" style={{ color: "var(--sd-fg-dim)" }}>{desc}</div>
-    </button>
+      <h5 className="font-bold text-xs text-[var(--color-text-primary)]">{title}</h5>
+      <p className="text-[11px] text-[var(--color-text-muted)] mt-1 leading-relaxed">{desc}</p>
+    </div>
   );
 }
