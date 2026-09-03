@@ -225,7 +225,20 @@ export function CompanyPage({ tenantId, onClose }: { tenantId: string; onClose: 
 function TenantStatusControls({ tenant, onChanged }: { tenant: CompanyDetail["tenant"]; onChanged: () => void }) {
   const [busy, setBusy] = useState(false);
   async function setStatus(status: string, label: string) {
-    const why = window.prompt(`${tenant.name} 을(를) ${label} 합니다. 사유(4자 이상, 감사에 남습니다):`);
+    /**
+     * ⚠️ **정지는 되돌리기 어렵다** — 세션이 끊기고 돌던 잡이 멈춘다. 그래서 무엇이 멈추는지
+     * **누르기 전에** 보여 준다(개선안 §2-6). 예전엔 실행한 뒤 응답으로만 알 수 있었다.
+     * 미리보기가 실패해도 조작은 막지 않는다 — 곁가지가 운영을 멈추면 안 된다.
+     */
+    let impact = "";
+    if (status === "suspended") {
+      const p = await api.suspendPreview(tenant.id).catch(() => null);
+      if (p) {
+        impact = `\n\n지금 멈추는 것: 세션 ${p.activeSessions}개 · 실행 중 작업 ${p.runningJobs}건`
+          + ` · 대기 작업 ${p.queuedJobs}건`;
+      }
+    }
+    const why = window.prompt(`${tenant.name} 을(를) ${label} 합니다.${impact}\n\n사유(4자 이상, 감사에 남습니다):`);
     if (why === null) return;
     if (why.trim().length < 4) { alert("사유는 4자 이상이어야 합니다."); return; }
     if (!confirm(`정말 ${label} 할까요? — ${tenant.name}`)) return;
@@ -310,6 +323,26 @@ function Members({ tenantId, members, onChanged }: { tenantId: string; members: 
   const [adding, setAdding] = useState(false); const [credential, setCredential] = useState<{ email: string; password: string } | null>(null);
   async function reset(member: AdminUser) { try { const r = await api.resetMemberPassword(member.id); setCredential({ email: member.email, password: r.temporaryPassword }); } catch (e) { alert(e instanceof Error ? e.message : String(e)); } }
   async function remove(member: AdminUser) { if (!confirm(`${member.email} 계정을 삭제할까요?`)) return; try { await api.deleteMember(member.id); onChanged(); } catch (e) { alert(e instanceof Error ? e.message : String(e)); } }
+  /**
+   * 역할 변경 (§2-5) — **owner 가 없는 회사**를 고치는 액션. owner 가 없으면 그 회사는 사람을
+   * 초대할 수도 결제를 손볼 수도 없는데, 지금까지 고칠 길이 없었다(라우트 자체가 없었다).
+   *
+   * superadmin 은 여기서 못 만든다(서버가 막는다) — 콘솔 권한을 콘솔로 나눠 주면 감사가 의미를 잃는다.
+   */
+  async function changeRole(member: AdminUser) {
+    const next = window.prompt(`${member.email} 의 역할을 무엇으로 바꿀까요? (owner / admin / member)`, member.role);
+    if (next === null) return;
+    const role = next.trim();
+    if (!["owner", "admin", "member"].includes(role)) { alert("owner · admin · member 중 하나여야 합니다."); return; }
+    if (role === member.role) return;
+    const why = window.prompt(`${member.email} 을(를) ${member.role} → ${role} 로 바꿉니다. 사유(4자 이상):`);
+    if (why === null) return;
+    if (why.trim().length < 4) { alert("사유는 4자 이상이어야 합니다."); return; }
+    try {
+      await api.setUserRole(member.id, role as "owner" | "admin" | "member", why.trim());
+      onChanged();
+    } catch (e) { alert(e instanceof Error ? e.message : String(e)); }
+  }
   async function toggleStatus(member: AdminUser) {
     const next = member.status === "active" ? "suspended" : "active"; const label = next === "suspended" ? "정지" : "활성화";
     const why = window.prompt(`${member.email} 을(를) ${label} 합니다. 사유(4자 이상):`);
@@ -320,7 +353,7 @@ function Members({ tenantId, members, onChanged }: { tenantId: string; members: 
   return <><Panel title="멤버" actions={<button className="primary" onClick={() => setAdding(true)}>계정 추가</button>}>
     {adding && <MemberCreate tenantId={tenantId} onDone={(x) => { setCredential(x); setAdding(false); onChanged(); }} onClose={() => setAdding(false)} />}
     {credential && <Credential email={credential.email} password={credential.password} onClose={() => setCredential(null)} />}
-    <div className="tablewrap"><table><thead><tr><th>이름</th><th>이메일</th><th>역할</th><th>상태</th><th>최근 로그인</th><th /></tr></thead><tbody>{members.map((member) => <tr key={member.id}><td>{member.name || "—"}</td><td>{member.email}</td><td>{member.role}</td><td><StatusTag status={member.status} /></td><td className="muted">{when(member.lastLoginAt)}</td><td className="row">{member.role !== "superadmin" && <><button className={member.status === "active" ? "danger" : ""} onClick={() => void toggleStatus(member)}>{member.status === "active" ? "정지" : "활성화"}</button><button onClick={() => void reset(member)}>비밀번호 재설정</button><button className="danger" onClick={() => void remove(member)}>삭제</button></>}</td></tr>)}</tbody></table></div>
+    <div className="tablewrap"><table><thead><tr><th>이름</th><th>이메일</th><th>역할</th><th>상태</th><th>최근 로그인</th><th /></tr></thead><tbody>{members.map((member) => <tr key={member.id}><td>{member.name || "—"}</td><td>{member.email}</td><td>{member.role}</td><td><StatusTag status={member.status} /></td><td className="muted">{when(member.lastLoginAt)}</td><td className="row">{member.role !== "superadmin" && <><button onClick={() => void changeRole(member)}>역할</button><button className={member.status === "active" ? "danger" : ""} onClick={() => void toggleStatus(member)}>{member.status === "active" ? "정지" : "활성화"}</button><button onClick={() => void reset(member)}>비밀번호 재설정</button><button className="danger" onClick={() => void remove(member)}>삭제</button></>}</td></tr>)}</tbody></table></div>
   </Panel></>;
 }
 function MemberCreate({ tenantId, onDone, onClose }: { tenantId: string; onDone: (credential: { email: string; password: string }) => void; onClose: () => void }) {

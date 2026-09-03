@@ -138,6 +138,20 @@ export interface MetaEditRow {
   editor: string | null; created_at: number;
 }
 export interface MetaEditQuery { tenant?: string; limit?: number }
+/**
+ * 메타 수정 **집계**. `total`·`wasAiPairs` 는 분자다 — **비율이 아니다.**
+ * "AI 값을 그대로 쓴 건" 은 로그에 안 남아 분모가 없다(개선안 §3-3).
+ */
+export interface MetaEditStats {
+  total: number;
+  wasAiPairs: number;
+  /** 고친 것들 **안에서의** 분포. 전체 대비 비율이 아니다. */
+  byField: Array<{ field: string; n: number }>;
+  byGenre: Array<{ genre: string; n: number }>;
+  byTenant: Array<{ tenantId: string; n: number }>;
+}
+/** 정지하면 무엇이 멈추는지 — **누르기 전에** 본다. */
+export interface SuspendPreview { activeSessions: number; runningJobs: number; queuedJobs: number }
 
 function auditParams(o: AuditQuery): string {
   const qs = new URLSearchParams();
@@ -279,6 +293,19 @@ export const api = {
     get<{ jobs: AdminJob[] }>(
       `/api/superadmin/jobs${tenant ? `?tenant=${encodeURIComponent(tenant)}` : ""}`),
   retryJob: (id: string) => post<{ ok: true }>(`/api/superadmin/jobs/${encodeURIComponent(id)}/retry`),
+  /**
+   * 벌크 재시도 — **사유 한 번**으로 여러 건. 서버가 재시도 불가한 건을 걸러 `skipped` 로
+   * 왜 걸렀는지 돌려준다(조용히 빼면 사람은 다 된 줄 안다).
+   */
+  retryJobs: (ids: string[], reason?: string) =>
+    post<{ retried: number; skipped: Array<{ id: string; why: string }> }>(
+      "/api/superadmin/jobs/retry", { ids, reason }),
+  /** 역할 변경 — owner 없는 회사를 고치는 액션. superadmin 은 여기서 못 만든다. */
+  setUserRole: (id: string, role: "owner" | "admin" | "member", reason?: string) =>
+    post<{ ok: true; role: string }>(`/api/superadmin/users/${encodeURIComponent(id)}/role`, { role, reason }),
+  /** 정지 사전 영향 — 되돌리기 어려운 조작의 결과를 **먼저** 보여 준다. */
+  suspendPreview: (tenantId: string) =>
+    get<SuspendPreview>(`/api/superadmin/tenants/${encodeURIComponent(tenantId)}/suspend-preview`),
   removeJob: (id: string) => del<{ ok: true }>(`/api/superadmin/jobs/${encodeURIComponent(id)}`),
   // 감사 로그는 필터(회사·검색·기간) 없이는 "누가 우리 회사를 봤나" 를 못 찾는다.
   audit: (opts: AuditQuery = {}) => {
@@ -299,6 +326,9 @@ export const api = {
     if (opts.limit) qs.set("limit", String(opts.limit));
     return get<{ rows: MetaEditRow[] }>(`/api/superadmin/metadata-edits${qs.size ? `?${qs}` : ""}`);
   },
+  /** 메타 수정 집계 — 최근 N건 프런트 집계는 **최근 편향**이라 서버가 전체를 센다. */
+  metadataEditStats: (tenant?: string) =>
+    get<MetaEditStats>(`/api/superadmin/metadata-edits/stats${tenant ? `?tenant=${encodeURIComponent(tenant)}` : ""}`),
   // CSV 내려받기 — 쿠키 인증 fetch 로 Blob(감사 CSV 와 같은 관용구). 학습 파이프라인은 ?format=jsonl.
   metadataEditsCsv: async (opts: MetaEditQuery = {}): Promise<Blob> => {
     const qs = new URLSearchParams({ format: "csv", limit: "50000" });

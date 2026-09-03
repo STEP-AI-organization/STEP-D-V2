@@ -1402,6 +1402,117 @@ app.delete("/api/superadmin/users/:id", async (c) => {
   return c.json({ ok: true });
 });
 
+/**
+ * **벌크 재시도** (개선안 §2-4) — 인박스의 "N건 전부 재시도".
+ *
+ * 예전엔 프런트가 N번 불렀다. 그러면 감사 로그에 같은 사유가 N줄로 쌓이고, 중간에 하나가
+ * 실패하면 어디까지 됐는지 화면이 모른다. 여기서 **사유 한 번**을 받고 회사별로 감사를 쓴다.
+ *
+ * ⚠️ **재시도 가능한 것만 돌린다.** 댓글 꺼진 영상 404 처럼 다시 눌러도 같은 실패인 잡을
+ *    벌크로 밀면 유튜브 쿼터만 태운다(실측: 그 187건이 이미 5회씩 헛돌았다).
+ *    거른 건 `skipped` 로 **왜 걸렀는지** 같이 돌려준다 — 조용히 빼면 사람은 다 된 줄 안다.
+ *
+ * ⚠️ 상한 200. 실수로 전체를 미는 걸 막는다(목록 자체가 200건이다).
+ */
+app.post("/api/superadmin/jobs/retry", async (c) => {
+  const actor = requireSuperadmin(c);
+  const body = await c.req.json<{ ids?: unknown; reason?: string }>().catch(() => ({}) as any);
+  const ids = Array.isArray(body.ids) ? body.ids.map((v: unknown) => String(v)).slice(0, 200) : [];
+  if (!ids.length) return c.json({ error: "ids_required" }, 400);
+
+  const { rows } = await asSystem((db) => db.query(
+    `SELECT id, tenant_id AS "tenantId", type, status, error FROM job_queue WHERE id = ANY($1::text[])`,
+    [ids],
+  ));
+
+  const retried: string[] = [];
+  const skipped: Array<{ id: string; why: string }> = [];
+  // 회사가 섞인 벌크라 **사유는 회사마다** 확인한다 — requireReason 이 회사 단위다.
+  // (자기 회사면 null 을 돌려준다 — 사유가 필요 없는 자리다. 그래서 값이 `string | null`.)
+  const reasonBy = new Map<string, string | null>();
+  for (const j of rows as any[]) {
+    if (j.status !== "failed") { skipped.push({ id: j.id, why: `상태가 ${j.status}` }); continue; }
+    if (!classifyJobError(j.error).retryable) {
+      skipped.push({ id: j.id, why: "재시도해도 같은 실패" });
+      continue;
+    }
+    if (!reasonBy.has(j.tenantId)) {
+      reasonBy.set(j.tenantId, requireReason(actor, j.tenantId, body.reason ?? "admin_job_retry_bulk"));
+    }
+    const changed = await asSystem((db) => db.query(
+      `UPDATE job_queue SET status='pending', attempts=0, error=NULL, lockedat=NULL, runafter=$2, updatedat=$2
+        WHERE id = $1 AND status='failed'`, [j.id, Date.now()]));
+    if (changed.rowCount) retried.push(j.id);
+    else skipped.push({ id: j.id, why: "그 사이 상태가 바뀜" });
+  }
+  // 감사는 **회사별로 한 줄** — 200줄을 쓰면 로그를 사람이 못 읽는다.
+  for (const [tenantId, reason] of reasonBy) {
+    const mine = (rows as any[]).filter((j) => j.tenantId === tenantId && retried.includes(j.id));
+    if (!mine.length) continue;
+    await audit(actor, {
+      action: "job.retry.bulk", targetTenant: tenantId, reason,
+      detail: { count: mine.length, types: [...new Set(mine.map((j) => j.type))] },
+    }, clientIp(c));
+  }
+  return c.json({ retried: retried.length, skipped });
+});
+
+/**
+ * **역할 변경** (개선안 §2-5) — 인박스의 "owner 없는 회사" 를 고치는 액션.
+ *
+ * 지금까지 `status`·`password`·`DELETE` 만 있었다. owner 가 없으면 그 회사는 사람을 초대할
+ * 수도, 결제를 손볼 수도 없는데 고칠 길이 없었다.
+ *
+ * ⚠️ **superadmin 은 여기서 못 만든다.** 콘솔 권한을 콘솔로 나눠 주면 감사가 의미를 잃는다.
+ * ⚠️ superadmin 계정의 역할은 **못 바꾼다** — 실수로 자기 권한을 내리면 복구할 길이 없다.
+ */
+app.post("/api/superadmin/users/:id/role", async (c) => {
+  const actor = requireSuperadmin(c);
+  const id = c.req.param("id");
+  const body = await c.req.json<{ role?: string; reason?: string }>().catch(() => ({}) as any);
+  const role = String(body.role ?? "");
+  if (!["owner", "admin", "member"].includes(role)) return c.json({ error: "invalid_role" }, 400);
+
+  const { rows } = await asSystem((db) => db.query(
+    `SELECT tenant_id AS "tenantId", email, role FROM users WHERE id = $1`, [id]));
+  if (!rows[0]) return c.json({ error: "not_found" }, 404);
+  if (rows[0].role === "superadmin") return c.json({ error: "cannot_change_superadmin" }, 409);
+
+  const reason = requireReason(actor, rows[0].tenantId, body.reason);
+  await asSystem((db) => db.query(`UPDATE users SET role = $2 WHERE id = $1`, [id, role]));
+  await audit(actor, {
+    action: "user.role.change", targetTenant: rows[0].tenantId, targetId: id, reason,
+    detail: { email: rows[0].email, from: rows[0].role, to: role },
+  }, clientIp(c));
+  return c.json({ ok: true, role });
+});
+
+/**
+ * **정지 사전 영향** (개선안 §2-6) — "정지하면 무엇이 멈추나" 를 **누르기 전에** 보여 준다.
+ *
+ * `PATCH /tenants/:id` 는 세션 취소 수를 **실행한 뒤에야** 돌려준다. 되돌리기 어려운 조작에서
+ * 결과를 나중에 아는 건 순서가 틀렸다.
+ */
+app.get("/api/superadmin/tenants/:id/suspend-preview", async (c) => {
+  const actor = requireSuperadmin(c);
+  const tenantId = c.req.param("id");
+  await audit(actor, { action: "tenant.suspend.preview", targetTenant: tenantId }, clientIp(c));
+  const [ses, jobs] = await asSystem((db) => Promise.all([
+    // ⚠️ `expires_at` 은 **BIGINT(epoch ms)** 다 — `now()` 와 비교하면 타입이 안 맞아 터진다.
+    db.query(`SELECT count(*)::int AS n FROM sessions WHERE tenant_id = $1 AND expires_at > $2`,
+      [tenantId, Date.now()]),
+    db.query(
+      `SELECT count(*) FILTER (WHERE status='running')::int AS running,
+              count(*) FILTER (WHERE status='pending')::int AS queued
+         FROM job_queue WHERE tenant_id = $1`, [tenantId]),
+  ]));
+  return c.json({
+    activeSessions: (ses.rows as any[])[0]?.n ?? 0,
+    runningJobs: (jobs.rows as any[])[0]?.running ?? 0,
+    queuedJobs: (jobs.rows as any[])[0]?.queued ?? 0,
+  });
+});
+
 app.post("/api/superadmin/jobs/:id/retry", async (c) => {
   const actor = requireSuperadmin(c);
   const id = c.req.param("id");
@@ -1795,6 +1906,47 @@ app.get("/api/superadmin/audit", async (c) => {
  * 관리 콘솔이 "AI 가 뽑은 값 vs 회사가 고친 값" 을 회사·장르별로 본다. `was_ai=true` 만 순수
  * AI→사람 페어(재수정분 제외). json(콘솔) · `?format=csv`(엑셀) · `?format=jsonl`(학습). `?tenant=`·`?limit=`.
  */
+/**
+ * 메타 수정 **집계** (개선안 §2-3).
+ *
+ * 지금까지 콘솔이 최근 N건을 받아 프런트에서 셌다. 상한이 있으니 "가장 많이 고치는 필드" 가
+ * **최근 편향**된다 — 어제 제목만 몰아 고쳤으면 "제목 90%" 로 뜬다. 전체를 SQL 로 센다.
+ *
+ * ⚠️ **"수정률" 은 여기서도 못 낸다** (핸드오프 §3-3 이 지적한 그대로). `metadata_edit_log` 는
+ *    **고쳤을 때만** 행이 생기므로 "AI 값을 그대로 쓴 건" 이 어디에도 없다 — 분모가 없다.
+ *    그래서 비율 대신 **분자만** 돌려준다(`total`·`wasAiPairs`). 화면도 그렇게 적는다.
+ *    분모를 만들려면 "메타 확정된 클립 수" 를 팀이 정의해야 하고, 그건 코드가 정할 일이 아니다.
+ *
+ * 분포(byField·byGenre)는 **"고친 것들 안에서의 분포"** 라는 뜻이다 — 라벨을 그렇게 읽히게 둔다.
+ */
+app.get("/api/superadmin/metadata-edits/stats", async (c) => {
+  const actor = requireSuperadmin(c);
+  const tenantId = c.req.query("tenant") || null;
+  await audit(actor, { action: "metadata-edits.stats", targetTenant: tenantId }, clientIp(c));
+  const where = tenantId ? "WHERE tenant_id = $1" : "";
+  const args = tenantId ? [tenantId] : [];
+  const [tot, byField, byGenre, byTenant] = await asSystem((db) => Promise.all([
+    db.query(
+      `SELECT count(*)::int AS total, count(*) FILTER (WHERE was_ai)::int AS "wasAiPairs"
+         FROM metadata_edit_log ${where}`, args),
+    db.query(
+      `SELECT field, count(*)::int AS n FROM metadata_edit_log ${where}
+        GROUP BY field ORDER BY n DESC`, args),
+    db.query(
+      `SELECT COALESCE(genre, '(미지정)') AS genre, count(*)::int AS n FROM metadata_edit_log ${where}
+        GROUP BY 1 ORDER BY n DESC LIMIT 12`, args),
+    db.query(
+      `SELECT tenant_id AS "tenantId", count(*)::int AS n FROM metadata_edit_log ${where}
+        GROUP BY 1 ORDER BY n DESC LIMIT 12`, args),
+  ]));
+  const t = (tot.rows as any[])[0] ?? { total: 0, wasAiPairs: 0 };
+  return c.json({
+    total: t.total, wasAiPairs: t.wasAiPairs,
+    byField: byField.rows, byGenre: byGenre.rows, byTenant: byTenant.rows,
+    note: "분포는 **고친 것들 안에서의** 분포다. 안 고친 건이 로그에 없어 '수정률'은 낼 수 없다.",
+  });
+});
+
 app.get("/api/superadmin/metadata-edits", async (c) => {
   const actor = requireSuperadmin(c);
   const tenantId = c.req.query("tenant") || undefined;

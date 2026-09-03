@@ -41,22 +41,29 @@ export function Operations() {
     try { await api.removeJob(id); await reload(); } catch (e) { alert(String(e)); }
   }
   /**
-   * 벌크 재시도 — 서버에 벌크 라우트가 없어 **N번 부른다**(개선안 §2-4 는 아직 없음).
-   * 그래서 ① 재시도 가능한 것만 보내고 ② 한 건이 실패해도 나머지를 계속한다.
+   * 벌크 재시도 — **한 번의 호출**로 보낸다(§2-4). 예전엔 프런트가 N번 불렀는데, 그러면
+   * 감사 로그에 같은 사유가 N줄로 쌓이고 중간에 실패하면 어디까지 됐는지 화면이 모른다.
+   *
+   * 서버가 재시도 불가한 건을 **걸러서 왜 걸렀는지** 돌려준다 — 조용히 빼면 사람은 다 된 줄 안다.
    */
   async function retryAll(key: string, list: AdminJob[]) {
     const targets = list.filter((j) => j.status === "failed" && j.retryable);
     if (!targets.length) return;
     if (!window.confirm(`${targets.length}건을 재시도할까요?`)) return;
     setWorking(key);
-    let ok = 0;
-    const failedIds: string[] = [];
-    for (const j of targets) {
-      try { await api.retryJob(j.id); ok += 1; } catch { failedIds.push(j.id); }
+    try {
+      const r = await api.retryJobs(targets.map((j) => j.id));
+      if (r.skipped.length) {
+        const NL = String.fromCharCode(10);
+        alert(`${r.retried}건 재시도 · ${r.skipped.length}건 건너뜀${NL}${NL}`
+          + r.skipped.slice(0, 5).map((x) => `· ${x.why}`).join(NL));
+      }
+    } catch (e) {
+      alert(e instanceof Error ? e.message : String(e));
+    } finally {
+      setWorking(null);
+      await reload();
     }
-    setWorking(null);
-    await reload();
-    if (failedIds.length) alert(`${ok}건 재시도 · ${failedIds.length}건 실패`);
   }
 
   return <>
