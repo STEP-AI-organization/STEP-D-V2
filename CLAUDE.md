@@ -39,7 +39,7 @@ env 를 실제로 조회했는지**(`gcloud run jobs describe stepd-worker-conte
 apps/web/      Next.js 16 (App Router) + React 19 + Tailwind v4 + base-ui  → Vercel (stepd.stepai.kr)
 apps/server/   Hono + PostgreSQL(Cloud SQL) + GCS + ffmpeg                 → Cloud Run (stepd-server)
                + src/worker.ts = 별도 워커 프로세스 → Cloud Run Jobs (stepd-worker-content
-                 / stepd-worker-youtube, drain 모드) + GEBD 전용 GPU T4 spot VM
+                 / stepd-worker-youtube, drain 모드) + GEBD 전용 GPU L4 spot VM
 native/        Electron Windows 데스크탑 셸. 프로덕션 웹을 표시하고 영상 파일을 GCS로
                직접 전송하는 영속 업로드 큐·트레이·stepd:// 프로토콜을 제공
 core/          Python AI 파이프라인. **워커가 아니다** — 워커(worker.ts)가 자식 프로세스로
@@ -93,7 +93,7 @@ youtube : channel.analyze · video.analyze · video.hotwatch · video.comments �
           · youtube.reconcile(예약 게시 확인 — 예약분이 실제로 공개됐는지 되읽어 상태 갱신)
           → 짧고 API 쿼터 위주. Cloud Run Job `stepd-worker-youtube`
 gebd    : gebd.detect
-          → GPU T4 spot VM 전용. GPU 없는 데서 claim 하면 Docker mmaction2 를 못 돌린다
+          → GPU L4 spot VM 전용. GPU 없는 데서 claim 하면 Docker mmaction2 를 못 돌린다
 naver   : naver.publish · naver.login
           → 사무실 상시 PC 전용. 네이버는 공개 업로드 API 가 없어 Playwright 자동화인데,
             해외 데이터센터 IP 로 로그인하면 캡차·2차인증에 막힌다 → 한국 IP 필요

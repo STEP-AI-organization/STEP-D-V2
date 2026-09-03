@@ -315,7 +315,7 @@ flowchart LR
        ├─ STT            core/stt/          Soniox v5 + PyAnnote 화자분리
        ├─ shot boundary  core/scenes/       ffmpeg scene-score
        ├─ scene_type     core/scenes/
-       ├─ (옵션) GEBD    GPU T4 spot VM     장면경계 정밀화 · AUTO_GEBD
+       ├─ (옵션) GEBD    GPU L4 spot VM     장면경계 정밀화 · AUTO_GEBD
        ├─ beat 생성      core/beats/        최소 6초 · 회차당 약 245개
        ├─ beat annotate  core/beats/        Vision · 맥락 누적
        ├─ 신호 추출      core/recommend/signals.py   오디오 RMS·컷·대사밀도 (API ₩0)
