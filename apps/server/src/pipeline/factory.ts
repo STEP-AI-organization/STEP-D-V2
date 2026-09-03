@@ -594,6 +594,30 @@ export async function advance(factoryJobId: string): Promise<{ job: FactoryJob; 
  * 못박는다. 규칙: 2줄 이하 · 넘치면 말줄임 · 길수록 폰트 축소 (렌더러는 자동 줄바꿈이
  * 없어서(WrapStyle 2) 시드가 안 감싸면 화면 밖으로 나간다 — 2026-08-12 실측).
  */
+/**
+ * **화면에 얹는 제목에서 마침표·쉼표·느낌표를 뺀다.**
+ *
+ * 고객 피드백(2026-09-03): *"오버레이되는 곳에 `,` `!` `.` 넣지 말라 — AI 틱하다."* 맞는 지적이다.
+ * 사람이 만든 예능 자막은 짧은 문구에 종결 부호를 안 붙인다 — 붙는 순간 문장처럼 보이고,
+ * 그게 기계가 쓴 티다.
+ *
+ * ⚠️ **유튜브 제목·설명에는 손대지 않는다.** 거기는 문장이 자연스럽고, 어그로 톤을 위해
+ *    일부러 부호를 쓰기로 한 자리다([title-prompt] 2026-07-28). 이 함수는 **화면에 그리는 줄**
+ *    에만 쓴다 — 같은 rec.title 에서 나오지만 소비처가 다르다.
+ *
+ * ⚠️ **물음표는 남긴다.** 피드백에 없고, "경찰의 거짓말?" 처럼 뜻을 바꾸는 부호다.
+ *
+ * ⚠️ **숫자 사이의 `.` `,` 는 살린다.** 통째로 지우면 `1,000명`→`1000명`(읽을 만함)은 넘어가도
+ *    `3.5초`→`35초` 는 **뜻이 달라진다.** 그래서 앞뒤가 숫자인 경우만 남긴다.
+ */
+export function cleanOverlayText(raw: string): string {
+  return String(raw ?? "")
+    .replace(/!/g, "")                              // 느낌표는 숫자와 무관 — 항상 뺀다
+    .replace(/(?<![0-9])[.,]|[.,](?![0-9])/g, "")   // 마침표·쉼표는 **숫자 사이일 때만** 남긴다
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
 export function wrapAutoTitle(raw: string): { lines: string[]; size: number } {
   const text = String(raw ?? "").replace(/\s+/g, " ").trim();
   if (!text) return { lines: [], size: 32 };
@@ -675,9 +699,12 @@ export function autoEditorState(
   // 자동배포 규칙이 정한 최종 aspect. 없으면 공장 기본(short=세로, clip=가로)을 쓴다.
   forcedAspect?: string,
 ): Record<string, unknown> {
-  const hook = String(rec.hookQuote ?? "").replace(/^['"'"]|['"'"]$/g, "").trim();
-  const line1 = String(rec.titleLine1 ?? "").trim();
-  const line2 = String(rec.titleLine2 ?? "").trim();
+  // 화면에 얹는 줄은 **부호를 털고** 시작한다 (cleanOverlayText · 고객 피드백 2026-09-03).
+  // 길이 판정(훅 30자·wrap 14자)보다 **먼저** 털어야 한다 — 나중에 털면 부호까지 세어
+  // 줄을 접어 놓고 정작 화면에는 짧은 줄이 뜬다.
+  const hook = cleanOverlayText(String(rec.hookQuote ?? "").replace(/^['"'"]|['"'"]$/g, ""));
+  const line1 = cleanOverlayText(rec.titleLine1);
+  const line2 = cleanOverlayText(rec.titleLine2);
   // 훅 치환 의도 보존: 짧고 강한 훅이 있으면 headline 을 훅으로 대체한다(기존 동작 그대로).
   const useHook = !!hook && hook.length <= 30;
   // 제목 줄 구성 (D):
@@ -692,7 +719,7 @@ export function autoEditorState(
   } else if (line1 && line2) {
     lines = [line1, line2];
   } else {
-    ({ lines } = wrapAutoTitle(line1 || String(rec.title ?? "")));
+    ({ lines } = wrapAutoTitle(line1 || cleanOverlayText(rec.title)));
   }
   // 채널 아이콘 기본값 = 프로그램 이미지(F). 브랜딩 아이콘(쇼츠 전용) 우선, 없으면 대표
   // 이미지(포스터), 둘 다 없으면 미설정(에디터는 'CH' 플레이스홀더 · 렌더는 아이콘 생략).
