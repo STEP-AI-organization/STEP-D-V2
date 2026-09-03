@@ -85,10 +85,24 @@ export interface Overview {
 export interface UsageRow {
   tenantId: string; minutes: number; events: number;
   costKrw: number; revenueKrw: number; marginKrw: number;
+  /** 실측(usage.json)으로 기록된 건수 — 나머지는 상수 폴백이다. */
+  measuredEvents: number;
+  measuredCostKrw: number;
+  /** 실측 행만으로 계산한 단가. 실측 표본이 없으면 null. */
+  costPerMinuteKrw: number | null;
+  costPer60minKrw: number | null;
 }
 export interface UsageSummary {
   days: number;
-  totals: { minutes: number; costKrw: number; revenueKrw: number; marginKrw: number };
+  totals: {
+    minutes: number; costKrw: number; revenueKrw: number; marginKrw: number;
+    events: number; measuredEvents: number; measuredCostKrw: number;
+    /** 지금 60분 원가 — 마진 감시의 본체(인프라 제외 · 벤더 실비). */
+    costPerMinuteKrw: number | null;
+    costPer60minKrw: number | null;
+    /** 0~1. 낮으면 위 단가는 표본이 얇다는 뜻이다. */
+    measuredRatio: number;
+  };
   byTenant: UsageRow[];
 }
 export interface AuditQuery { tenant?: string; q?: string; from?: string; to?: string; limit?: number }

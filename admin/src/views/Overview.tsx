@@ -59,9 +59,20 @@ function UsagePanel() {
           <>
             <div className="cards" style={{ padding: "12px 16px" }}>
               <Card k={`분석(분) · ${days}일`} v={Math.round(data.totals.minutes)} />
-              <MoneyCard k="실측 원가" v={won(t!.costKrw)} />
+              <MoneyCard k="원가" v={won(t!.costKrw)} />
               <MoneyCard k="충전액(매출)" v={won(t!.revenueKrw)} />
               <MoneyCard k="마진" v={won(t!.marginKrw)} tone={t!.marginKrw < 0 ? "bad" : "ok"} />
+              {/* 마진 감시의 본체는 총액이 아니라 **단가**다. 총액은 물량이 늘면 같이 늘어서
+                  구성 변화(모델 교체·스테이지 on/off)를 가린다. */}
+              <MoneyCard
+                k="60분당 원가 (실측)"
+                v={t!.costPer60minKrw != null ? won(t!.costPer60minKrw) : "—"}
+              />
+              <MoneyCard
+                k="실측 비중"
+                v={`${Math.round(t!.measuredRatio * 100)}%`}
+                tone={t!.measuredRatio < 0.5 ? "bad" : "ok"}
+              />
             </div>
             {data.byTenant.length === 0 ? (
               <div className="empty">기간 내 사용·충전 기록이 없습니다.</div>
@@ -71,6 +82,7 @@ function UsagePanel() {
                   <thead>
                     <tr>
                       <th>회사</th><th className="num">분석(분)</th><th className="num">원가</th>
+                      <th className="num">60분당</th>
                       <th className="num">충전</th><th className="num">마진</th>
                     </tr>
                   </thead>
@@ -80,6 +92,7 @@ function UsagePanel() {
                         <td><TenantName id={r.tenantId} /></td>
                         <td className="num">{Math.round(r.minutes).toLocaleString("ko-KR")}</td>
                         <td className="num">{won(r.costKrw)}</td>
+                        <td className="num">{r.costPer60minKrw != null ? won(r.costPer60minKrw) : "—"}</td>
                         <td className="num">{won(r.revenueKrw)}</td>
                         <td className="num" style={r.marginKrw < 0 ? { color: "var(--bad)" } : undefined}>{won(r.marginKrw)}</td>
                       </tr>
@@ -89,7 +102,11 @@ function UsagePanel() {
               </div>
             )}
             <p className="muted" style={{ fontSize: 11, padding: "0 16px 10px" }}>
-              원가 = usage_events(실측) · 매출 = 기간 내 충전 결제(선불이라 사용 시점과 정확히 일치하진 않음).
+              원가 = usage_events · 매출 = 기간 내 충전 결제(선불이라 사용 시점과 정확히 일치하진 않음).
+              <br />
+              <b>60분당 원가</b>는 <b>인프라 제외</b>(Gemini·받아쓰기 등 벤더 실비)이고, core 가 회차마다 남긴
+              usage.json 실측으로 기록된 행만으로 계산한다 — 서버·GPU VM 같은 고정비는 여기 없다.
+              <b>실측 비중</b>이 낮으면 나머지는 상수 폴백이라 단가 표본이 얇다는 뜻이다(옛 회차는 소급하지 않는다).
             </p>
           </>
         )}
