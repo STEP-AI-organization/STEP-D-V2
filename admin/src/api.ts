@@ -68,9 +68,19 @@ export interface AdminUser {
   id: string; tenantId: string; email: string; name: string; role: string;
   status: string; createdAt: number; lastLoginAt: number | null;
 }
+/** 잡 오류 원인 — 서버(`pipeline/job-cause.ts`)가 분류한다. 프런트에서 정규식을 다시 짜지 말 것. */
+export type JobCause =
+  | "quota" | "not_found" | "auth" | "credits" | "timeout"
+  | "ffmpeg" | "missing_file" | "config" | "vendor_5xx" | "unknown";
 export interface AdminJob {
   id: string; type: string; status: string; attempts: number;
   tenantId: string; error: string | null; createdAt: number; updatedAt: number;
+  /** 인박스가 "원인이 같은 건 한 줄로" 묶는 축. */
+  cause: JobCause;
+  causeLabel: string;
+  causeHint: string;
+  /** false 면 **재시도 버튼을 숨긴다** — 눌러 봐야 같은 실패다(댓글 꺼진 영상 404 등). */
+  retryable: boolean;
 }
 export interface AuditEntry {
   id: number; actorEmail: string; action: string; targetTenant: string | null;
@@ -104,6 +114,20 @@ export interface UsageSummary {
     measuredRatio: number;
   };
   byTenant: UsageRow[];
+}
+/** 하루치 점. `costPer60minKrw` 가 null 이면 그날 실측 표본이 없었다는 뜻(0 이 아니다). */
+export interface UsageTrendPoint {
+  day: string; minutes: number; costKrw: number; revenueKrw: number; marginKrw: number;
+  costPer60minKrw: number | null; measuredRatio: number;
+}
+export interface UsageTrend {
+  days: number;
+  bucket: "day";
+  points: UsageTrendPoint[];
+  /** 직전 **같은 길이** 구간 합계 — "vs 이전 기간" 델타의 근거. */
+  previous: { minutes: number; costKrw: number; revenueKrw: number; marginKrw: number; costPer60minKrw: number | null };
+  /** `byTenant=1` 로 부를 때만 온다 (회사 카드 스파크라인). */
+  byTenant?: Record<string, Array<{ day: string; minutes: number; costKrw: number }>>;
 }
 export interface AuditQuery { tenant?: string; q?: string; from?: string; to?: string; limit?: number }
 /** AI 원본 → 사용자 최종 메타 수정 로그 한 줄(학습 데이터). */
@@ -286,4 +310,10 @@ export const api = {
 
   // 사용 원가 · 충전 · 마진 (플랫폼/회사별)
   usage: (days = 30) => get<UsageSummary>(`/api/superadmin/usage?days=${days}`),
+  /**
+   * 사용량 **시계열** — 추이 차트 · 카드 스파크라인 · "vs 이전 기간" 이 전부 이 하나로 산다.
+   * 회사별 시계열은 무거우니 필요한 화면에서만 `byTenant: true` 로 부른다.
+   */
+  usageTrend: (days = 30, byTenant = false) =>
+    get<UsageTrend>(`/api/superadmin/usage/trend?days=${days}${byTenant ? "&byTenant=1" : ""}`),
 };

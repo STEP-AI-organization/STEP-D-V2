@@ -41,6 +41,7 @@ import {
   setPassword,
   verifyPassword,
   workspaceBlockReason,
+  type Role,
   type User,
 } from "./auth/auth.ts";
 import { audit, clientIp, requireReason, requireSuperadmin, requireOpsAccess, requireOpsOrInternal } from "./auth/admin.ts";
@@ -246,6 +247,14 @@ import {
   instagramUploadEnabled, facebookUploadEnabled,
 } from "./publish/upload-gate.ts";
 import { geminiGenerate, parseJsonLoose } from "./ai/gemini.ts";
+import { ask as chatbotAsk, ChatbotError } from "./chatbot/agent.ts";
+import {
+  deleteThread as chatDeleteThread, getThread as chatGetThread,
+  listMessages as chatListMessages, listThreads as chatListThreads,
+} from "./chatbot/store.ts";
+import { buildReport, crosscheckFailures, toHtml } from "./report/index.ts";
+import { getReport, listReports } from "./report/store.ts";
+import { mailConfigured, sendMail } from "./mailer.ts";
 import { syncProgramFromFacesForMedia, CORE_PYTHON, CORE_DIR, REPO_ROOT } from "./pipeline/content-pipeline.ts";
 import {
   basicReframeState,
@@ -284,6 +293,7 @@ import {
 import { SHORTS_PROBE_MAX_PER_SYNC, SHORTS_PROBE_CONCURRENCY } from "./config.ts";
 import { runChannelPipeline, runDueChannels } from "./pipeline/channel-pipeline.ts";
 import { initQueue, enqueue, queueStats, listJobs, pendingByType, oldestPendingAgeMs } from "./pipeline/queue.ts";
+import { classifyJobError } from "./pipeline/job-cause.ts";
 import {
   uploadPath,
   thumbPath,
@@ -437,7 +447,28 @@ type AppEnv = { Variables: { user?: User } };
 
 const app = new Hono<AppEnv>();
 app.use("*", logger());
-app.use("/api/*", cors({ origin: (o) => o ?? "*", credentials: false }));
+/**
+ * CORS — **쿠키는 로컬 개발에서만** 크로스오리진으로 오간다.
+ *
+ * 프로덕션은 웹과 서버가 같은 출처다(`/api/proxy` 경유). 그래서 쿠키를 허용할 이유가 없고,
+ * 허용하면 남의 페이지가 사용자의 세션으로 우리 API 를 부를 수 있다 — 그래서 기본은 꺼짐이다.
+ *
+ * 반대로 **로컬은 웹(:3000)과 서버(:4100)가 다른 출처**라, 이걸 안 열면 세션이 필요한
+ * 라우트가 브라우저에서 전부 막힌다. 실제로 그 상태였다(실측 2026-09-03: 로컬에서
+ * `/api/auth/me`·`/api/credits` 가 CORS 로 차단 — 챗봇을 붙이다 발견했다).
+ *
+ * 켜지는 조건은 둘 다 만족할 때뿐이다: **배포 이미지가 아니고**(Dockerfile 이
+ * `NODE_ENV=production` 을 박는다) **출처가 localhost** 일 때. 실패 방향이 "로컬에서 안 됨"
+ * 이지 "프로덕션에서 열림" 이 아니게 잡아 둔다.
+ */
+const LOCAL_ORIGIN = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/;
+const DEV_CORS = process.env.NODE_ENV !== "production";
+const corsDefault = cors({ origin: (o) => o ?? "*", credentials: false });
+const corsLocalDev = cors({ origin: (o) => (o && LOCAL_ORIGIN.test(o) ? o : "*"), credentials: true });
+app.use("/api/*", (c, next) => {
+  const origin = c.req.header("origin") ?? "";
+  return DEV_CORS && LOCAL_ORIGIN.test(origin) ? corsLocalDev(c, next) : corsDefault(c, next);
+});
 
 // JSON 응답 gzip — /api/state 같은 큰 페이로드의 전송을 줄인다 (Cloud Run 은 자동 압축이
 // 없다). 바이너리·스트림 경로는 제외 — 이미 압축된 포맷(jpg/mp4)이고, Range 스트리밍에
@@ -1408,7 +1439,10 @@ app.get("/api/superadmin/jobs", async (c) => {
       ORDER BY updatedAt DESC LIMIT 200`,
     tenant ? [tenant] : [],
   ));
-  return c.json({ jobs: rows });
+  // **원인 분류는 서버가 한다.** 어드민 인박스가 "원인이 같은 건 한 줄로" 묶는데, 그 규칙이
+  // 프런트에 있으면 나중에 알림·리포트가 각자 규칙을 갖고 조금씩 갈린다(job-cause.ts).
+  const jobs = (rows as any[]).map((j) => ({ ...j, ...classifyJobError(j.error) }));
+  return c.json({ jobs });
 });
 
 // ── 회사별 API 키 (다회사 3단계) ──────────────────────────────────────────────
@@ -1872,6 +1906,119 @@ app.get("/api/superadmin/usage", async (c) => {
     // 인프라 월 고정비는 docs/ops/infra.md 에서 따로 본다.
     note: "costKrw = 벤더 실비(인프라 제외) · measured 행만 단가 계산에 쓴다",
     byTenant,
+  });
+});
+
+/**
+ * **사용량 시계열** — 추이 차트 · 회사 카드 스파크라인 · "vs 이전 기간" 델타가 전부 이 하나로 산다.
+ *
+ * 기존 `/usage` 는 **기간 합계**만 준다. 합계로는 "지난주보다 원가가 올랐나" 를 못 본다 —
+ * 물량이 늘면 총액도 같이 늘어서 구성 변화를 가린다. 그래서 날짜로 쪼갠다.
+ *
+ * ⚠️ **날짜는 KST 로 자른다.** `date_trunc('day', occurred_at)` 을 그냥 쓰면 UTC 기준이라
+ *    한국 새벽 0~9시 작업이 **전날로 붙는다**. 어드민은 한국 사람이 보는 화면이다.
+ *
+ * ⚠️ **단가(costPer60minKrw)는 `measured` 행에서만 낸다.** 상수로 채운 행을 섞으면 그건
+ *    "우리가 짐작한 값" 을 그래프로 그린 것이지 실측 추이가 아니다. 실측 행이 없는 날은
+ *    **0 이 아니라 null** — 없는 것과 0 은 다르다.
+ */
+app.get("/api/superadmin/usage/trend", async (c) => {
+  const actor = requireSuperadmin(c);
+  const days = Math.min(365, Math.max(1, Number(c.req.query("days")) || 30));
+  const wantByTenant = c.req.query("byTenant") === "1";
+  await audit(actor, { action: "usage.trend.view", detail: { days, byTenant: wantByTenant } }, clientIp(c));
+
+  // KST 로 자른 날짜 문자열. 한 군데서만 쓰도록 상수로 둔다 — 두 쿼리가 다른 기준으로
+  // 자르면 합계와 추이가 안 맞는다.
+  const KST_DAY = `to_char(occurred_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD')`;
+  const iv = `${days} days`;
+  const prevIv = `${days * 2} days`;
+
+  const [pts, prev, rev, prevRev, byT] = await asSystem((db) => Promise.all([
+    db.query(
+      `SELECT ${KST_DAY} AS day,
+              COALESCE(SUM(quantity) FILTER (WHERE kind='analyze_minutes'),0)::float AS minutes,
+              COALESCE(SUM(cost_krw),0)::float AS "costKrw",
+              COUNT(*)::int AS events,
+              COUNT(*) FILTER (WHERE cost_source='measured')::int AS "measuredEvents",
+              COALESCE(SUM(cost_krw) FILTER (WHERE cost_source='measured'),0)::float AS "measuredCostKrw",
+              COALESCE(SUM(quantity) FILTER (WHERE kind='analyze_minutes' AND cost_source='measured'),0)::float AS "measuredMinutes"
+         FROM usage_events WHERE occurred_at >= now() - $1::interval
+        GROUP BY 1 ORDER BY 1`, [iv]),
+    // 직전 **같은 길이** 구간 — 카드의 "+12% vs 이전 기간" 이 이 값이다.
+    db.query(
+      `SELECT COALESCE(SUM(quantity) FILTER (WHERE kind='analyze_minutes'),0)::float AS minutes,
+              COALESCE(SUM(cost_krw),0)::float AS "costKrw",
+              COALESCE(SUM(cost_krw) FILTER (WHERE cost_source='measured'),0)::float AS "measuredCostKrw",
+              COALESCE(SUM(quantity) FILTER (WHERE kind='analyze_minutes' AND cost_source='measured'),0)::float AS "measuredMinutes"
+         FROM usage_events
+        WHERE occurred_at >= now() - $1::interval AND occurred_at < now() - $2::interval`, [prevIv, iv]),
+    db.query(
+      `SELECT to_char(created_at AT TIME ZONE 'Asia/Seoul', 'YYYY-MM-DD') AS day,
+              COALESCE(SUM(amount_krw),0)::float AS "revenueKrw"
+         FROM credit_topup WHERE status='paid' AND created_at >= now() - $1::interval
+        GROUP BY 1`, [iv]),
+    db.query(
+      `SELECT COALESCE(SUM(amount_krw),0)::float AS "revenueKrw"
+         FROM credit_topup
+        WHERE status='paid' AND created_at >= now() - $1::interval AND created_at < now() - $2::interval`,
+      [prevIv, iv]),
+    wantByTenant
+      ? db.query(
+        `SELECT tenant_id AS "tenantId", ${KST_DAY} AS day,
+                COALESCE(SUM(quantity) FILTER (WHERE kind='analyze_minutes'),0)::float AS minutes,
+                COALESCE(SUM(cost_krw),0)::float AS "costKrw"
+           FROM usage_events WHERE occurred_at >= now() - $1::interval
+          GROUP BY 1,2 ORDER BY 2`, [iv])
+      : Promise.resolve({ rows: [] as any[] }),
+  ]));
+
+  const revByDay = new Map<string, number>((rev.rows as any[]).map((r) => [r.day, Number(r.revenueKrw)]));
+  const per60 = (measuredCost: number, measuredMin: number) =>
+    measuredMin > 0 ? Math.round((measuredCost / measuredMin) * 60) : null;
+
+  const points = (pts.rows as any[]).map((r) => {
+    const costKrw = Number(r.costKrw);
+    const revenueKrw = revByDay.get(r.day) ?? 0;
+    revByDay.delete(r.day);
+    return {
+      day: r.day,
+      minutes: Number(r.minutes),
+      costKrw, revenueKrw,
+      marginKrw: revenueKrw - costKrw,
+      costPer60minKrw: per60(Number(r.measuredCostKrw), Number(r.measuredMinutes)),
+      // 그 날 표본이 얼마나 실측인지 — 낮으면 위 단가는 얇은 표본이다.
+      measuredRatio: r.events > 0 ? Math.round((r.measuredEvents / r.events) * 100) / 100 : 0,
+    };
+  });
+  // 원가는 없고 충전만 있는 날도 점으로 남긴다 — 매출 그래프에 구멍이 나면 안 된다.
+  for (const [day, revenueKrw] of revByDay) {
+    points.push({ day, minutes: 0, costKrw: 0, revenueKrw, marginKrw: revenueKrw, costPer60minKrw: null, measuredRatio: 0 });
+  }
+  points.sort((a, b) => a.day.localeCompare(b.day));
+
+  const p = (prev.rows as any[])[0] ?? {};
+  const prevRevenue = Number(((prevRev.rows as any[])[0] ?? {}).revenueKrw ?? 0);
+  const prevCost = Number(p.costKrw ?? 0);
+
+  const byTenant: Record<string, Array<{ day: string; minutes: number; costKrw: number }>> = {};
+  for (const r of byT.rows as any[]) {
+    (byTenant[r.tenantId] ??= []).push({ day: r.day, minutes: Number(r.minutes), costKrw: Number(r.costKrw) });
+  }
+
+  return c.json({
+    days,
+    bucket: "day",
+    points,
+    previous: {
+      minutes: Number(p.minutes ?? 0),
+      costKrw: prevCost,
+      revenueKrw: prevRevenue,
+      marginKrw: prevRevenue - prevCost,
+      costPer60minKrw: per60(Number(p.measuredCostKrw ?? 0), Number(p.measuredMinutes ?? 0)),
+    },
+    ...(wantByTenant ? { byTenant } : {}),
+    note: "day 는 KST 기준 · costPer60minKrw 는 measured 행만 (없으면 null)",
   });
 });
 
@@ -12149,6 +12296,187 @@ app.delete("/api/youtube/videos/:videoId", async (c) => {
   await deleteChannelVideo(c.req.param("videoId"));
   return c.json({ ok: true });
 });
+// ── 챗봇 (업무 도우미) ────────────────────────────────────────────────────────
+//
+// 세션이 있어야 한다(`requireUser`) — 챗봇은 **그 사람의 워크스페이스 상태**를 읽어 답하고,
+// 대화도 사람 단위로 남는다. API 키(회사 단위)로 열지 않는 이유가 그것이다.
+//
+// 스트리밍하지 않는다. 프로덕션 웹은 `/api/proxy` 를 거치므로 서버가 보내는 바이트가 그대로
+// 과금되는데(2026-08-31 하루 276GB 사고), 1~3초짜리 응답에 SSE 를 붙일 값이 없다.
+
+/**
+ * 챗봇·리포트의 행위자.
+ *
+ * 세션이 있으면 그 사람이다. **없고 인증이 꺼져 있으면** 로컬 개발 자세이므로 기본
+ * 워크스페이스의 공용 행위자로 돈다 — 이 리포의 다른 라우트 전부가 이미 그렇게 동작한다
+ * (`resolveTenant` 3번 경로). 여기만 401 을 내면 로컬에서 챗봇만 안 뜨고, 그 이유를
+ * 다음 사람이 한참 찾는다.
+ *
+ * 이 폴백이 안전한 근거는 챗봇에 있지 않다 — **기동 시 `assertAuthPosture()` 가
+ * "테넌트 2개 이상 + 인증 꺼짐" 조합을 아예 서빙하지 않는다.** 프로덕션은 AUTH_REQUIRED=1
+ * 이라 늘 진짜 세션이다. 그 전제가 깨지면 서버가 통째로 503 이 되지, 여기가 새지 않는다.
+ */
+function chatbotActor(c: Context<AppEnv>): { id: string; tenantId: string; role: Role } {
+  const user = c.get("user");
+  if (user) return { id: user.id, tenantId: user.tenantId, role: user.role };
+  if (authRequired()) throw new HTTPException(401, { message: "login required" });
+  return { id: "local", tenantId: currentTenantId(), role: "owner" };
+}
+
+/** 챗봇 오류 → 상태 코드. 사유를 기계가 읽을 코드로도 준다(위 keyError 와 같은 이유). */
+function chatbotStatus(code: ChatbotError["code"]): 400 | 404 | 409 | 429 {
+  if (code === "rate_limited") return 429;
+  if (code === "thread_not_found") return 404;
+  if (code === "thread_full") return 409;
+  return 400;
+}
+
+app.post("/api/chatbot/message", async (c) => {
+  const user = chatbotActor(c);
+  const body = await c.req.json().catch(() => ({}) as Record<string, unknown>);
+  try {
+    const out = await chatbotAsk({
+      user,
+      threadId: typeof body.threadId === "string" ? body.threadId : null,
+      message: String(body.message ?? ""),
+      screen: typeof body.screen === "string" ? body.screen : null,
+    });
+    return c.json(out);
+  } catch (e) {
+    if (e instanceof ChatbotError) return c.json({ error: e.code, message: e.message }, chatbotStatus(e.code));
+    throw e;
+  }
+});
+
+app.get("/api/chatbot/threads", async (c) => {
+  const user = chatbotActor(c);
+  return c.json({ threads: await chatListThreads(user) });
+});
+
+app.get("/api/chatbot/threads/:id", async (c) => {
+  const user = chatbotActor(c);
+  const thread = await chatGetThread(user, c.req.param("id"));
+  // 남의 대화와 없는 대화를 **같은 응답으로** 다룬다 — 존재 여부도 알려 주지 않는다.
+  if (!thread) return c.json({ error: "not_found", message: "대화를 찾을 수 없습니다." }, 404);
+  return c.json({ thread, messages: await chatListMessages(thread.id) });
+});
+
+app.delete("/api/chatbot/threads/:id", async (c) => {
+  const user = chatbotActor(c);
+  const ok = await chatDeleteThread(user, c.req.param("id"));
+  if (!ok) return c.json({ error: "not_found", message: "대화를 찾을 수 없습니다." }, 404);
+  return c.json({ ok: true });
+});
+
+// ── 보고 리포트 ───────────────────────────────────────────────────────────────
+
+/**
+ * 보고서 초안 생성. 대화를 거치지 않고 바로 부를 수도 있다(화면의 "보고서 만들기" 버튼).
+ * 숫자는 전부 집계가 낳고 모델은 문장만 쓴다 — support/report/index.ts 주석 참고.
+ */
+app.post("/api/reports", async (c) => {
+  const user = chatbotActor(c);
+  const body = await c.req.json().catch(() => ({}) as Record<string, unknown>);
+  const request = String(body.request ?? "").trim();
+  if (!request) return c.json({ error: "request_required", message: "무엇을 뽑을지 적어 주세요." }, 400);
+  if (request.length > 500) return c.json({ error: "too_long", message: "요청이 너무 깁니다." }, 400);
+
+  const built = await buildReport(user, request, {
+    threadId: typeof body.threadId === "string" ? body.threadId : null,
+  });
+  // 응답에 `data`(집계 원본)를 싣지 않는다 — 표를 다시 그릴 일이 없고, 그대로 실으면
+  // 목록·재조회마다 수십 KB 가 프록시를 지난다. 필요하면 상세 조회에서 받는다.
+  return c.json({
+    reportId: built.reportId, spec: built.spec, markdown: built.markdown, warnings: built.warnings,
+  });
+});
+
+app.get("/api/reports", async (c) => {
+  const user = chatbotActor(c);
+  return c.json({ reports: await listReports(user) });
+});
+
+app.get("/api/reports/:id", async (c) => {
+  const user = chatbotActor(c);
+  const r = await getReport(user, c.req.param("id"));
+  if (!r) return c.json({ error: "not_found", message: "보고서를 찾을 수 없습니다." }, 404);
+  return c.json(r);
+});
+
+/**
+ * 내보내기. **검산이 어긋난 보고서는 파일로 나가지 않는다.**
+ *
+ * 화면에서는 보인다(무엇이 어긋났는지 알아야 고친다). 막는 것은 첨부파일이 되는 경로다 —
+ * 한 번 파일이 되면 그게 회의 자료가 되고, 그 안의 합계가 표와 다르면 아무도 눈치채지 못한다.
+ */
+app.get("/api/reports/:id/export", async (c) => {
+  const user = chatbotActor(c);
+  const r = await getReport(user, c.req.param("id"));
+  if (!r) return c.json({ error: "not_found", message: "보고서를 찾을 수 없습니다." }, 404);
+
+  const data = r.data;
+  const failures = data?.crosscheck ? crosscheckFailures(data) : [];
+  if (failures.length) {
+    return c.json({
+      error: "crosscheck_failed",
+      message: `검산이 맞지 않아 내보낼 수 없습니다 — ${failures.join(" / ")}`,
+    }, 409);
+  }
+
+  const format = c.req.query("format") === "html" ? "html" : "md";
+  const stamp = `${r.spec?.from ?? ""}_${r.spec?.to ?? ""}`.replace(/[^0-9_-]/g, "");
+  // 파일 이름에 한글을 쓰면 브라우저·메일 클라이언트마다 깨진다. 제목은 문서 안에 있다.
+  const filename = `report_${stamp || r.id}.${format}`;
+  const body = format === "html"
+    ? toHtml(data, "", new Date(r.createdAt))
+    : r.markdown;
+
+  return new Response(body, {
+    headers: {
+      "content-type": format === "html" ? "text/html; charset=utf-8" : "text/markdown; charset=utf-8",
+      "content-disposition": `attachment; filename="${filename}"`,
+    },
+  });
+});
+
+/** 메일로 보내기. SMTP 가 설정돼 있을 때만 — 없으면 조용히 성공한 척하지 않는다. */
+app.post("/api/reports/:id/email", async (c) => {
+  const user = chatbotActor(c);
+  if (!mailConfigured()) {
+    return c.json({ error: "mail_not_configured", message: "메일 발송이 설정되지 않았습니다." }, 409);
+  }
+  const r = await getReport(user, c.req.param("id"));
+  if (!r) return c.json({ error: "not_found", message: "보고서를 찾을 수 없습니다." }, 404);
+
+  const data = r.data;
+  const failures = data?.crosscheck ? crosscheckFailures(data) : [];
+  if (failures.length) {
+    return c.json({
+      error: "crosscheck_failed",
+      message: `검산이 맞지 않아 보낼 수 없습니다 — ${failures.join(" / ")}`,
+    }, 409);
+  }
+
+  const body = await c.req.json().catch(() => ({}) as Record<string, unknown>);
+  const raw: unknown[] = Array.isArray(body.to) ? body.to : [];
+  const to = [...new Set(raw.map((v) => String(v).trim().toLowerCase()).filter(Boolean))];
+  if (!to.length) return c.json({ error: "to_required", message: "받는 사람이 필요합니다." }, 400);
+  if (to.length > 5) return c.json({ error: "too_many", message: "받는 사람은 5명까지입니다." }, 400);
+  const bad = to.find((e) => !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e));
+  if (bad) return c.json({ error: "invalid_email", message: `이메일 형식이 아닙니다: ${bad}` }, 400);
+
+  const html = toHtml(data, "", new Date(r.createdAt));
+  const subject = r.spec?.title ?? "보고서";
+  const sent: string[] = [];
+  for (const addr of to) {
+    // 한 명이 실패해도 나머지는 보낸다 — 전부 되돌리면 이미 간 메일과 어긋난다.
+    try { await sendMail({ to: addr, subject, html }); sent.push(addr); }
+    catch (e) { console.warn(`[support] 리포트 메일 실패 (${addr}):`, e); }
+  }
+  if (!sent.length) return c.json({ error: "send_failed", message: "메일을 보내지 못했습니다." }, 502);
+  return c.json({ ok: true, sent });
+});
+
 // ── start ─────────────────────────────────────────────────────────────────────
 serve({ fetch: app.fetch, port: PORT }, (info) => {
   console.log(`[stepd-server] listening on http://localhost:${info.port}`);
