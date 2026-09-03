@@ -40,6 +40,7 @@ const MIGRATED: string[] = [
   "/ops",                 // 2026-09-03 · W2
   "/assets",              // 2026-09-03 · W2
   "/media",               // 2026-09-03 · W2
+  "/thumbnails",          // 2026-09-03 · W4
 ];
 
 export function LegacyFrame({ children }: { children: React.ReactNode }) {

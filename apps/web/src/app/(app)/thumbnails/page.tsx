@@ -1,86 +1,67 @@
 "use client";
 
 /**
- * U11 · 썸네일 생성 (README §11 · FLOWS F7).
+ * 썸네일 생성 — 디자이너 산출물 이식 (원본 `STEPD_SaaS_UI_V1/src/app/thumbnails/page.tsx` 203줄).
  *
- * 좌: 대상 미디어 그리드(라디오, **숏폼 제외**) · 우 400px: 프롬프트 + 비율 + 결과 3안.
+ * **마크업·클래스·문구는 원본 그대로.** 바깥 두 겹 래퍼와 `<Sidebar/>` 만 뺐다.
  *
- * 지키는 것:
- *  - 대상이 있어야 생성 버튼이 눌린다(F7-2).
- *    프롬프트·비율은 **서버가 아직 읽지 않는다**(POST /api/media/:id/thumbnail 은 programId·
- *    candidates 만 본다) — 그래서 입력을 필수로 걸지 않고 비활성 + 사유로 표기한다.
- *    필수로 걸면 "내가 쓴 문장이 반영됐다"고 믿게 된다.
- *  - 대상을 바꾸면 이전 결과는 초기화된다(F7-4).
- *  - **완료 알림이 없다.** 다른 화면으로 가도 결과는 미디어에 남는다 — 그 점을 문구로
- *    명시한다(F7-5). 알림을 만들면 "알림을 놓치면 결과도 사라진다"고 오해하게 된다.
+ * | 원본(목업) | 이식본 |
+ * |---|---|
+ * | `MOCK_MEDIA_ITEMS` 1건 | `useAppData().clips` 중 **가로(16:9)만** |
+ * | `alert('썸네일 생성이 시작되었습니다.')` | `generateThumbnails()` + 토스트 |
+ * | 결과 패널 "결과가 없습니다" 고정 | `fetchThumbnailCandidates()` — 후보 3안 + 대표 지정 |
+ * | 새로고침 버튼 핸들러 없음 | 후보 재조회 |
+ *
+ * ## 원본에 없어서 지킨 것
+ *  - **숏폼 제외** — 세로 미디어는 대상이 아니다(원본도 그렇게 *적어* 뒀지만 목이 1건뿐이라 필터가 없었다).
+ *  - **대상이 바뀌면 이전 결과를 버린다** — 안 버리면 다른 미디어의 결과를 이 미디어 것으로 착각한다.
+ *  - **늦게 온 응답이 현재 화면을 덮지 않게** 요청 시점 mediaId 를 기억해 대조한다(A 조회 중 B 선택 경합).
+ *  - **후보 선택(대표 지정)** — 원본 결과 패널엔 후보를 고르는 수단이 아예 없다.
+ *    "3안 중 대표 지정" 이 이 화면 부제인데 목업엔 그 기능이 없었다.
+ *  - `alert` 대신 토스트. 생성 요청은 "시작했다" 고 단정하지 않는다 — 서버가 같은 미디어의
+ *    진행 중 잡을 dedupe 로 삼켜서, 200 이어도 새 잡이 안 뜰 수 있다.
+ *
+ * 프롬프트 입력과 9:16 은 **원본 그대로 비활성 안내를 유지**한다("배선 전", "현재 16:9 만").
+ * 서버가 실제로 그렇다 — 화면이 사실을 말하고 있으므로 고칠 게 없다.
  */
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import Link from "next/link";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { RefreshCw } from "lucide-react";
 
+import { Footer } from "@/components/layout/footer";
+import { Header } from "@/components/layout/header";
 import { useToast } from "@/components/ui/toast";
 import {
   fetchThumbnailCandidates,
-  fetchThumbnailStyle,
   generateThumbnails,
   selectThumbnailCandidate,
-  thumbnailStyleImageUrl,
   type ThumbnailCandidateFile,
-  type ThumbnailStyleProfile,
 } from "@/lib/data/api";
 import { useAppData } from "@/lib/data/store";
-import { fmtTime } from "@/lib/utils";
 import { clipThumbSrc } from "@/lib/media-url";
 import type { Clip } from "@/lib/types";
-import { cn } from "@/lib/utils";
+import { fmtTime } from "@/lib/utils";
 
-export default function ThumbnailsPage() {
+export default function ThumbnailGenPage() {
   const { clips, episodes, programs, loading } = useAppData();
   const { toast } = useToast();
 
-  const [targetId, setTargetId] = useState<string | null>(null);
-  const [prompt, setPrompt] = useState("");
-  const [aspect, setAspect] = useState<"16:9" | "9:16">("16:9");
+  const [selectedMediaId, setSelectedMediaId] = useState<string | null>(null);
+  const [promptText, setPromptText] = useState("");
   const [candidates, setCandidates] = useState<ThumbnailCandidateFile[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
-  // 후보 조회 중 표시 — 없으면 로딩 중에도 "결과 없음"으로 보인다.
   const [candLoading, setCandLoading] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // 숏폼은 생성 대상이 아니다 (F7-1). 세로 미디어는 목록에서 아예 뺀다.
+  // 숏폼은 대상이 아니다 — 원본도 그렇게 적어 뒀지만 목이 1건뿐이라 필터가 없었다.
   const targets = useMemo(() => clips.filter((c) => !c.aspectRatio?.startsWith("9:16")), [clips]);
-  const target = targets.find((c) => c.id === targetId) ?? null;
+  const selectedMedia = targets.find((c) => c.id === selectedMediaId) ?? null;
 
   const mediaIdOf = (c: Clip) => c.mediaId ?? c.sourceMediaId ?? "";
-  const targetMediaId = target ? mediaIdOf(target) : "";
+  const targetMediaId = selectedMedia ? mediaIdOf(selectedMedia) : "";
 
-  // 생성 정책 = 프로그램 스타일 프로파일. 대상을 고르면 그 프로그램의 대표 썸네일과
-  // 분석 결과를 함께 보여 준다 — 뭘 근거로 생성될지 누르기 전에 보인다.
-  const targetProgramId = useMemo(() => {
-    const ep = episodes.find((e) => e.id === target?.episodeId);
-    return ep?.programId ?? "";
-  }, [episodes, target]);
-  const targetProgram = programs.find((p) => p.id === targetProgramId) ?? null;
-  const [style, setStyle] = useState<ThumbnailStyleProfile | null>(null);
-  const [styleLoading, setStyleLoading] = useState(false);
-
-  useEffect(() => {
-    let alive = true;
-    setStyle(null);
-    if (!targetProgramId) { setStyleLoading(false); return; }
-    setStyleLoading(true);
-    void fetchThumbnailStyle(targetProgramId)
-      .catch(() => null)
-      .then((s) => {
-        if (!alive) return;
-        setStyle(s);
-        setStyleLoading(false);
-      });
-    return () => { alive = false; };
-  }, [targetProgramId]);
-
-  // 늦게 도착한 이전 대상의 응답이 현재 대상 화면을 덮지 않게, 요청 시점의 mediaId 를 기억해
-  // 도착 시 현재 값과 대조한다 (대상 A 조회 중 B 로 바꾸는 경합).
+  // 늦게 도착한 이전 대상의 응답이 현재 대상 화면을 덮지 않게, 요청 시점의 mediaId 를
+  // 기억해 도착 시 대조한다 (대상 A 조회 중 B 로 바꾸는 경합).
   const candReqRef = useRef<string>("");
   const loadCandidates = useCallback(async (mediaId: string) => {
     candReqRef.current = mediaId;
@@ -101,35 +82,33 @@ export default function ThumbnailsPage() {
     }
   }, []);
 
-  // 대상이 바뀌면 이전 결과를 버린다 (F7-4). 남겨 두면 다른 미디어의 결과를
-  // 이 미디어 것으로 착각한다.
-  // 의존성은 원시값만 — target **객체**를 넣으면 store 폴링마다 아이덴티티가 바뀌어
-  // 몇십 초마다 결과가 초기화된다.
+  // 대상이 바뀌면 이전 결과를 버린다 — 남겨 두면 다른 미디어의 결과를 이 미디어 것으로 착각한다.
+  // 의존성은 원시값만 — clip **객체**를 넣으면 store 폴링마다 아이덴티티가 바뀌어 초기화된다.
   useEffect(() => {
     setCandidates([]);
     setSelected(null);
     setError(null);
     void loadCandidates(targetMediaId);
-  }, [targetId, targetMediaId, loadCandidates]);
-
-  const canGenerate = Boolean(target) && !busy;
+  }, [selectedMediaId, targetMediaId, loadCandidates]);
 
   async function generate() {
-    if (!target || !canGenerate) return;
-    const mediaId = mediaIdOf(target);
-    const ep = episodes.find((e) => e.id === target.episodeId);
-    const programId = ep?.programId ?? "";
+    if (!selectedMedia) {
+      toast({ title: "왼쪽에서 미디어를 먼저 선택해주세요.", tone: "error" });
+      return;
+    }
+    const mediaId = mediaIdOf(selectedMedia);
+    const programId = episodes.find((e) => e.id === selectedMedia.episodeId)?.programId ?? "";
     if (!mediaId || !programId) {
       toast({ title: "생성할 수 없습니다", description: "이 미디어의 원본·프로그램을 찾을 수 없습니다.", tone: "error" });
       return;
     }
     setBusy(true);
     try {
-      await generateThumbnails(mediaId, { programId, prompt: prompt.trim(), aspect, candidates: 3 });
+      await generateThumbnails(mediaId, { programId, prompt: promptText.trim(), aspect: "16:9", candidates: 3 });
       toast({
         title: "생성을 요청했습니다",
         // 서버가 같은 미디어의 진행 중 잡을 dedupe 로 삼킨다(요청은 200 이지만 새 잡이 안 뜬다).
-        // 그래서 "시작했습니다"라고 단정하지 않는다.
+        // 그래서 "시작했습니다" 라고 단정하지 않는다.
         description: "이미 생성 중이면 이 요청은 무시됩니다. 완료 알림은 없습니다 — 결과는 이 미디어에 남습니다.",
         tone: "progress",
       });
@@ -141,252 +120,229 @@ export default function ThumbnailsPage() {
   }
 
   async function choose(path: string) {
-    if (!target) return;
+    if (!selectedMedia) return;
     try {
-      await selectThumbnailCandidate(mediaIdOf(target), path);
+      await selectThumbnailCandidate(mediaIdOf(selectedMedia), path);
       setSelected(path);
-      toast({ title: "대표 썸네일로 지정했습니다", description: target.title, tone: "done" });
+      toast({ title: "대표 썸네일로 지정했습니다", description: selectedMedia.title, tone: "done" });
     } catch (err) {
       toast({ title: "지정 실패", description: err instanceof Error ? err.message : String(err), tone: "error" });
     }
   }
 
   return (
-    // 좁은 화면에서 사이드가 아래로 내려가게 wrap — 고정폭 사이드가 가로 오버플로를 만들지 않게.
-    <div className="flex flex-wrap gap-4">
-      {/* ── 대상 그리드 ───────────────────────────────────────────────────── */}
-      <div className="flex min-w-0 flex-1 flex-col gap-2.5">
-        <div className="flex items-baseline gap-2">
-          <h3 className="sd-serif text-[16px] font-semibold" style={{ color: "var(--sd-fg)" }}>대상 선택</h3>
-          <span className="text-[11px]" style={{ color: "var(--sd-mut)" }}>
-            숏폼은 대상이 아닙니다 — 세로 미디어는 목록에 없습니다
-          </span>
-        </div>
+    <>
+      {/* Header */}
+      <Header title="썸네일 생성" subtitle="대상 선택 → 프롬프트 → 3안 중 대표 지정" />
 
-        {targets.length === 0 ? (
-          <div
-            className="sd-ph grid min-h-[200px] place-items-center rounded-[6px] px-6 text-center"
-            style={{ border: "1px dashed var(--sd-border)" }}
-          >
-            {loading ? "불러오는 중…" : "가로(16:9) 미디어가 없습니다 — 영상 분석에서 클립을 채택하면 여기 나타납니다"}
-          </div>
-        ) : (
-          <div className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(200px,1fr))]">
-            {targets.map((c) => {
-              const ep = episodes.find((e) => e.id === c.episodeId);
-              const pg = programs.find((p) => p.id === ep?.programId);
-              const on = targetId === c.id;
-              return (
-                <button
-                  key={c.id}
-                  type="button"
-                  onClick={() => setTargetId(c.id)}
-                  className="sd-card flex flex-col overflow-hidden text-left"
-                  style={on ? { outline: "2px solid var(--sd-accent)", outlineOffset: -1 } : undefined}
-                >
-                  <div className="sd-ph h-[112px]" style={{ borderBottom: "1px solid var(--sd-border)" }}>
-                    {clipThumbSrc(c) ? (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img src={clipThumbSrc(c)} alt="" loading="lazy" className="size-full object-cover" />
-                    ) : (
-                      "썸네일 없음"
-                    )}
-                  </div>
-                  <div className="flex flex-col gap-1 px-2.5 py-2">
-                    <span className="line-clamp-2 text-[11.5px] leading-snug" style={{ color: "var(--sd-fg)" }}>
-                      {c.title}
+      {/* Thumbnail Gen Main Body */}
+      <main className="flex-1 p-6 flex flex-col justify-between overflow-hidden">
+        <div className="space-y-4 flex-1 flex flex-col min-h-0 mb-3">
+          {/* Top Workspace 2-Column Split */}
+          <div className="grid grid-cols-12 gap-4 flex-1 min-h-0">
+            {/* Left Column: Target Select Area */}
+            <div className="col-span-8 bg-[var(--color-bg-card)] border-none rounded-xl p-5 flex flex-col min-h-0 shadow-md shadow-slate-900/5 dark:shadow-none">
+              <div className="space-y-3 mb-4">
+                <h3 className="text-base font-bold text-[var(--color-text-primary)] flex items-center gap-2">
+                  <span>대상 선택</span>
+                  <span className="text-[11px] text-[var(--color-text-muted)] font-normal">
+                    숏폼은 대상이 아닙니다(세로 미디어는 목록에 없습니다)
+                  </span>
+                </h3>
+              </div>
+
+              {/* Media Cards Grid */}
+              {targets.length === 0 ? (
+                // 원본엔 없는 상태 — 목은 항상 1건이었다.
+                <div className="flex-1 border border-dashed border-[var(--color-border-subtle)] rounded-xl flex items-center justify-center text-center p-6 text-xs text-[var(--color-text-muted)] leading-relaxed">
+                  {loading
+                    ? "불러오는 중…"
+                    : "가로(16:9) 미디어가 없습니다 — 영상 분석에서 클립을 채택하면 여기 나타납니다"}
+                </div>
+              ) : (
+                <div className="grid grid-cols-3 gap-4 overflow-y-auto p-1.5">
+                  {targets.map((item) => {
+                    const isSelected = selectedMediaId === item.id;
+                    const thumb = clipThumbSrc(item);
+                    const ep = episodes.find((e) => e.id === item.episodeId);
+                    const prog = programs.find((p) => p.id === ep?.programId);
+                    const meta = [
+                      prog?.title ?? item.programTitle ?? "",
+                      ep?.episodeNumber != null ? `회차 ${ep.episodeNumber}` : null,
+                      fmtTime(item.durationSec),
+                    ].filter(Boolean).join(" · ");
+                    return (
+                      <div
+                        key={item.id}
+                        onClick={() => setSelectedMediaId(item.id)}
+                        className={`p-[2.5px] rounded-xl transition-all cursor-pointer aspect-[16/9] ${
+                          isSelected
+                            ? "bg-[#1C60FF] shadow-md shadow-[#1C60FF]/25"
+                            : "bg-transparent shadow-md shadow-slate-900/5 dark:shadow-none"
+                        }`}
+                      >
+                        <div className="relative w-full h-full rounded-[9px] overflow-hidden group bg-slate-900">
+                          {thumb ? (
+                            // eslint-disable-next-line @next/next/no-img-element -- 내부 미디어 프레임
+                            <img
+                              src={thumb}
+                              alt={item.title}
+                              loading="lazy"
+                              className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                            />
+                          ) : null}
+                          <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent p-3 flex flex-col justify-end">
+                            <h4 className="text-xs font-bold text-white leading-snug line-clamp-1">
+                              {item.title}
+                            </h4>
+                            <p className="text-[10.5px] text-slate-300">{meta}</p>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            {/* Right Column: Prompt & Action Controls */}
+            <div className="col-span-4 space-y-4 flex flex-col min-h-0 overflow-y-auto">
+              {/* Prompt Card Panel */}
+              <div className="bg-[var(--color-bg-card)] border-none rounded-xl p-4 space-y-4 text-xs shadow-md shadow-slate-900/5 dark:shadow-none">
+                <div>
+                  <h4 className="font-bold text-[var(--color-text-muted)] text-[11px] mb-1">
+                    선택된 미디어
+                  </h4>
+                  <p className="text-base text-[var(--color-text-primary)] font-bold">
+                    {selectedMedia ? selectedMedia.title : "왼쪽에서 하나 고르세요."}
+                  </p>
+                </div>
+
+                {/* Prompt Textarea Section */}
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <h4 className="font-bold text-[var(--color-text-primary)] text-xs">
+                      프롬프트
+                    </h4>
+                    <span className="text-[11px] text-[var(--color-text-muted)]">
+                      배선 전 — 입력해도 반영되지 않습니다
                     </span>
-                    <span className="sd-mono truncate text-[10px]" style={{ color: "var(--sd-mut)" }}>
-                      {pg?.title ?? ""}{ep ? ` · 회차 ${ep.episodeNumber}` : ""} · {fmtTime(c.durationSec)}
+                  </div>
+                  <div className="relative">
+                    <textarea
+                      value={promptText}
+                      onChange={(e) => setPromptText(e.target.value)}
+                      placeholder="아직 서버가 프롬프트를 받지 않습니다 — 프로그램 스타일 프로파일과 투입 출연자 사진으로만 생성됩니다."
+                      rows={3}
+                      className="w-full bg-[var(--color-bg-input)] border border-[var(--color-border-subtle)] p-3 rounded-xl text-xs text-[var(--color-text-primary)] placeholder:text-[var(--color-text-muted)] focus:outline-none focus:border-[#1C60FF] resize-none leading-relaxed transition-colors"
+                    />
+                  </div>
+                </div>
+
+                {/* Ratio Selector Tabs (16:9 & 9:16) */}
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <h4 className="font-bold text-[var(--color-text-primary)] text-xs">
+                      비율
+                    </h4>
+                    <span className="text-[11px] text-[var(--color-text-muted)]">
+                      현재 16:9 만 생성됩니다
                     </span>
                   </div>
-                </button>
-              );
-            })}
-          </div>
-        )}
-      </div>
+                  <div className="flex items-center gap-1.5 bg-slate-200/70 dark:bg-stone-800/80 p-1 rounded-full border-none shadow-none">
+                    <button
+                      type="button"
+                      className="flex-1 py-1.5 rounded-full text-xs font-bold transition-all cursor-pointer select-none bg-[#1C60FF] text-white shadow-sm"
+                    >
+                      16:9
+                    </button>
+                    <button
+                      type="button"
+                      disabled
+                      className="flex-1 py-1.5 rounded-full text-xs font-bold transition-all cursor-not-allowed select-none opacity-40 text-slate-500 dark:text-slate-400 font-medium"
+                      title="현재 16:9만 가능합니다"
+                    >
+                      9:16
+                    </button>
+                  </div>
+                </div>
 
-      {/* ── 우측 400px ────────────────────────────────────────────────────── */}
-      <aside className="flex w-full min-w-0 flex-col gap-2.5 lg:w-[400px] lg:shrink-0">
-        <div className="sd-card flex flex-col gap-2.5 p-3">
-          <div className="sd-eb" style={{ color: "var(--sd-label)" }}>선택한 미디어</div>
-          {target ? (
-            <div className="text-[12.5px]" style={{ color: "var(--sd-fg)" }}>{target.title}</div>
-          ) : (
-            <div className="text-[11.5px]" style={{ color: "var(--sd-mut)" }}>왼쪽에서 하나 고르세요.</div>
-          )}
+                {/* Notice Alert Box */}
+                <div className="p-3.5 rounded-xl bg-[var(--color-bg-input)]/60 border border-[var(--color-border-subtle)] text-[11px] text-[var(--color-text-muted)] leading-relaxed space-y-1">
+                  <p>
+                    생성에는 몇 분이 걸립니다. <strong className="text-[var(--color-text-primary)]">완료 알림도, 실패 알림도 없습니다</strong> — 다른 화면으로 가도 결과는 이 미디어에 남아 있고, 이 화면에서 다시 볼 수 있습니다. 출연자 사진이 등록돼 있지 않으면 생성에 실패하는데, 그 경우 몇 분 뒤에도 결과가 비어 있습니다.
+                  </p>
+                </div>
 
-          <div>
-            <div className="mb-1 flex items-baseline gap-1.5">
-              <span className="text-[11.5px] font-semibold" style={{ color: "var(--sd-mut)" }}>프롬프트</span>
-              <span className="text-[10.5px]" style={{ color: "var(--sd-mut)" }}>배선 전 — 입력해도 반영되지 않습니다</span>
-            </div>
-            <textarea
-              value={prompt}
-              onChange={(e) => setPrompt(e.target.value)}
-              disabled
-              placeholder="아직 서버가 프롬프트를 받지 않습니다 — 프로그램 스타일 프로파일과 등록 출연자 사진으로만 생성됩니다."
-              title="서버가 아직 프롬프트를 받지 않습니다"
-              className="sd-input h-[92px] w-full resize-none py-2 leading-relaxed"
-            />
-          </div>
-
-          <div>
-            <div className="mb-1 flex items-baseline gap-1.5">
-              <span className="text-[11.5px] font-semibold" style={{ color: "var(--sd-mut)" }}>비율</span>
-              <span className="text-[10.5px]" style={{ color: "var(--sd-mut)" }}>현재 16:9 만 생성됩니다</span>
-            </div>
-            <div className="flex gap-[3px]">
-              {(["16:9", "9:16"] as const).map((a) => (
+                {/* Thumbnail Gen Primary Action Button */}
                 <button
-                  key={a}
                   type="button"
-                  disabled
-                  title="비율 선택은 아직 서버로 전달되지 않습니다"
-                  className={cn("sd-btn", aspect === a && "sd-btn--on")}
-                  onClick={() => setAspect(a)}
+                  onClick={() => { void generate(); }}
+                  disabled={busy}
+                  className="w-full py-2.5 rounded-full bg-[#1C60FF] text-white font-bold text-xs hover:bg-[#0D1EB8] transition-colors border-none shadow-md shadow-slate-900/5 dark:shadow-none cursor-pointer flex items-center justify-center gap-1.5 mt-2 disabled:cursor-not-allowed disabled:opacity-70"
                 >
-                  {a}
+                  <span>{busy ? "요청 중…" : "썸네일 생성"}</span>
                 </button>
-              ))}
-            </div>
-          </div>
+              </div>
 
-          {/* F7-5 ⚑ — 알림이 없다는 것을 먼저 말해 둔다. */}
-          <p
-            className="rounded-[4px] px-2.5 py-2 text-[11px] leading-relaxed"
-            style={{ border: "1px solid var(--sd-border)", background: "var(--sd-card-sub)", color: "var(--sd-mut)" }}
-          >
-            생성에는 몇 분이 걸립니다. <b style={{ color: "var(--sd-fg)" }}>완료 알림도, 실패 알림도 없습니다</b> —
-            다른 화면으로 가도 결과는 이 미디어에 남아 있고, 이 화면에서 다시 볼 수 있습니다.
-            출연자 사진이 등록돼 있지 않으면 생성이 실패하는데, 그 경우 몇 분 뒤에도 결과가 비어 있습니다.
-          </p>
+              {/* Result Area Panel */}
+              <div className="bg-[var(--color-bg-card)] border-none rounded-xl p-4 space-y-3 flex-1 flex flex-col min-h-[160px] shadow-md shadow-slate-900/5 dark:shadow-none">
+                <div className="flex items-center justify-between border-b border-[var(--color-border-subtle)] pb-2">
+                  <h4 className="font-bold text-[var(--color-text-primary)] text-xs">
+                    결과
+                  </h4>
+                  <button
+                    onClick={() => { void loadCandidates(targetMediaId); }}
+                    disabled={!targetMediaId || candLoading}
+                    className="flex items-center gap-1 text-[11px] text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] cursor-pointer transition-colors disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    <RefreshCw className={`w-3 h-3 ${candLoading ? "animate-spin" : ""}`} />
+                    <span>새로고침</span>
+                  </button>
+                </div>
 
-          <button
-            type="button"
-            className="sd-btn sd-btn-primary"
-            disabled={!canGenerate}
-            title={!target ? "대상을 고르세요" : undefined}
-            onClick={generate}
-          >
-            {busy ? "요청 중…" : "썸네일 생성"}
-          </button>
-        </div>
-
-        {/* 프로그램 스타일 — 생성 정책의 근거. 뭘 보고 만들지 누르기 전에 보여 준다. */}
-        {target && targetProgramId && (
-          <div className="sd-card flex flex-col gap-2.5 p-3">
-            <div className="flex items-center gap-2">
-              <span className="sd-eb" style={{ color: "var(--sd-label)" }}>프로그램 스타일</span>
-              <span className="sd-mono ml-auto truncate text-[10px]" style={{ color: "var(--sd-mut)" }}>
-                {targetProgram?.title ?? ""}
-              </span>
-            </div>
-            {styleLoading ? (
-              <div className="text-[11.5px]" style={{ color: "var(--sd-mut)" }}>불러오는 중…</div>
-            ) : style ? (
-              <>
-                {(style.refs ?? []).length > 0 && (
-                  <div>
-                    <div className="mb-1 text-[10.5px]" style={{ color: "var(--sd-mut)" }}>
-                      대표 썸네일 — 이 채널의 전형으로 뽑힌 {style.refs.length}장
-                    </div>
-                    <div className="grid grid-cols-2 gap-1.5">
-                      {style.refs.map((n) => (
-                        // eslint-disable-next-line @next/next/no-img-element
-                        <img
-                          key={n}
-                          src={thumbnailStyleImageUrl(targetProgramId, n)}
-                          alt={n}
-                          className="aspect-video w-full rounded-[4px] object-cover"
-                          style={{ border: "1px solid var(--sd-border)" }}
-                        />
-                      ))}
-                    </div>
+                {candidates.length > 0 ? (
+                  // 원본엔 후보를 고르는 수단이 아예 없었다 — 부제가 "3안 중 대표 지정" 인데도.
+                  <div className="flex-1 grid grid-cols-3 gap-2 content-start">
+                    {candidates.map((c) => {
+                      const isPicked = selected === c.name;
+                      return (
+                        <button
+                          key={c.id}
+                          type="button"
+                          onClick={() => { void choose(c.name); }}
+                          title={isPicked ? "대표 썸네일" : "대표로 지정"}
+                          className={`p-[2.5px] rounded-lg transition-all cursor-pointer aspect-[16/9] ${
+                            isPicked ? "bg-[#1C60FF] shadow-md shadow-[#1C60FF]/25" : "bg-transparent"
+                          }`}
+                        >
+                          <div className="w-full h-full rounded-[7px] overflow-hidden bg-slate-900">
+                            {/* eslint-disable-next-line @next/next/no-img-element -- 생성 결과 이미지 */}
+                            <img src={c.url} alt={c.name} className="w-full h-full object-cover" />
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="flex-1 border border-dashed border-[var(--color-border-subtle)] rounded-xl flex items-center justify-center text-center p-4 text-xs text-[var(--color-text-muted)]">
+                    {error
+                      ? `결과를 불러오지 못했습니다 (${error})`
+                      : candLoading
+                        ? "불러오는 중…"
+                        : selectedMedia
+                          ? "기존 썸네일 생성 결과가 없습니다."
+                          : "대상을 고르면 기존 결과가 여기 보입니다"}
                   </div>
                 )}
-                <p className="text-[11px] leading-relaxed" style={{ color: "var(--sd-mut)" }}>
-                  {style.prompt || "분석 문장이 없습니다."}
-                </p>
-                <Link
-                  href={`/programs/${targetProgramId}/settings`}
-                  className="text-[10.5px] underline underline-offset-2"
-                  style={{ color: "var(--sd-accent)" }}
-                >
-                  프로그램 설정에서 다시 학습 · 수집 썸네일 전체 보기
-                </Link>
-              </>
-            ) : (
-              <p className="text-[11.5px] leading-relaxed" style={{ color: "var(--sd-mut)" }}>
-                이 프로그램은 아직 스타일 학습 전입니다 — 생성이 프로그램 톤을 반영하지 못합니다.{" "}
-                <Link
-                  href={`/programs/${targetProgramId}/settings`}
-                  className="underline underline-offset-2"
-                  style={{ color: "var(--sd-accent)" }}
-                >
-                  프로그램 설정에서 학습하기
-                </Link>
-              </p>
-            )}
-          </div>
-        )}
-
-        <div className="sd-card flex flex-col gap-2.5 p-3">
-          <div className="flex items-center gap-2">
-            <span className="sd-eb" style={{ color: "var(--sd-label)" }}>결과</span>
-            <button
-              type="button"
-              className="sd-btn ml-auto"
-              onClick={() => void loadCandidates(targetMediaId)}
-              disabled={!target}
-            >
-              새로고침
-            </button>
-          </div>
-
-          {error && (
-            <p className="text-[11.5px]" style={{ color: "var(--sd-danger-strong)" }}>
-              결과를 불러오지 못했습니다 ({error}).
-            </p>
-          )}
-
-          {candidates.length === 0 ? (
-            <div
-              className="sd-ph grid min-h-[120px] place-items-center rounded-[5px] px-4 text-center"
-              style={{ border: "1px dashed var(--sd-border)" }}
-            >
-              {candLoading ? "불러오는 중…" : target ? "아직 생성된 결과가 없습니다" : "대상을 고르면 기존 결과가 여기 보입니다"}
+              </div>
             </div>
-          ) : (
-            <div className="grid grid-cols-1 gap-2">
-              {candidates.map((cand) => (
-                <button
-                  key={cand.id}
-                  type="button"
-                  onClick={() => void choose(cand.id)}
-                  className="overflow-hidden rounded-[5px] text-left"
-                  style={{
-                    border: `1px solid ${selected === cand.id ? "var(--sd-accent)" : "var(--sd-border)"}`,
-                    outline: selected === cand.id ? "1px solid var(--sd-accent)" : undefined,
-                  }}
-                >
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src={cand.url} alt={cand.name} className="w-full object-cover" />
-                  <div className="flex items-center gap-2 px-2 py-1.5">
-                    <span className="sd-mono truncate text-[10px]" style={{ color: "var(--sd-mut)" }}>{cand.name}</span>
-                    {selected === cand.id ? (
-                      <span className="sd-tag sd-tag--airing ml-auto">대표</span>
-                    ) : (
-                      <span className="ml-auto text-[10.5px]" style={{ color: "var(--sd-accent)" }}>대표로 지정</span>
-                    )}
-                  </div>
-                </button>
-              ))}
-            </div>
-          )}
+          </div>
         </div>
-      </aside>
-    </div>
+
+        {/* Footer */}
+        <Footer />
+      </main>
+    </>
   );
 }
