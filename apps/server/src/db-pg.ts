@@ -1848,6 +1848,72 @@ export async function listChannelVideos(channelId: string): Promise<ChannelVideo
   return rows as unknown as ChannelVideo[];
 }
 
+/**
+ * 화면 오버레이 말투 참조 — **이 워크스페이스에서 실제로 터진 쇼츠 제목** (2026-09-03).
+ *
+ * 왜 필요한가: 오버레이 두 줄이 "정직하다"는 피드백을 받아 프롬프트를 갈아엎었는데, 말투를
+ * 내가 지정하면(예: "끝에 ㄷㄷ 붙여라") 모델이 그걸 남발한다 — 실측 8클립 중 7개에 붙었다.
+ * 정작 조회수 상위 40개 실제 제목엔 **ㄷㄷ 가 한 건도 없었다.** 그래서 말투를 지정하는 대신
+ * 실제로 터진 제목을 보여주고 거기서 가져가게 한다.
+ *
+ * **조회수 원본이 아니라 "제 채널 중앙값 대비 몇 배" 로 고른다.** 구독자 많은 채널의 평범한
+ * 영상이 상위를 다 먹으면 배울 게 없다 — 우리가 알고 싶은 건 "같은 채널에서 **유독** 터진
+ * 제목이 뭐가 다른가" 다.
+ *
+ * ⚠️ 테넌트 경계는 RLS 가 강제한다(pool 이 커넥션마다 app.tenant_id 를 심는다). 다른 회사
+ * 채널 제목이 이 워크스페이스 프롬프트로 새지 않는다 — 공개 제목이라도 섞지 않는다.
+ * 자기 채널이 아직 없는 워크스페이스는 빈 배열이 나가고, core 는 참조 없는 프롬프트를 쓴다.
+ */
+export function cleanHookTitles(titles: Array<{ title: string }>, limit = 120): string[] {
+  // 제목 같지만 **말투가 없는** 것들을 떨궈낸다. 실측으로 걸러낸 패턴 —
+  // "하하X아이브"(콜라보 태그) · "EP.260"(회차 표기) · "…모음.zip" · "(fix ver.)".
+  // 이런 게 참조에 섞이면 모델이 오버레이에 회차 번호나 콜라보 표기를 베낀다.
+  //
+  // ⚠️ `\b` 를 한글 뒤에 쓰면 안 잡힌다 — JS 의 `\w` 는 ASCII 라 "3회" 끝에 경계가 서지 않는다
+  //    (실측: "…응징 | 3회" 가 그대로 통과했다). 뒤따르는 글자로 직접 막는다.
+  const JUNK = /(\bEP\.?\s*\d|\d+\s*회(?![가-힣])|모음|\.zip|ver\.|full(?![a-z])|다시보기|예고|티저|하이라이트)/i;
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const r of titles) {
+    const t = String(r.title ?? "")
+      .replace(/#\S+/g, "")          // 해시태그 (#shorts · #닥터섬보이)
+      .replace(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}]/gu, "")  // 이모지
+      .replace(/\s{2,}/g, " ")
+      .trim()
+      .replace(/^[\s·\-|]+|[\s·\-|]+$/g, "");
+    if (t.length < 8 || t.length > 40) continue;   // 너무 짧으면 콜라보 태그, 길면 참조가 안 된다
+    if (JUNK.test(t)) continue;
+    if (/^[^가-힣]*$/.test(t)) continue;            // 한글이 하나도 없으면 말투 참조가 못 된다
+    const key = t.replace(/\s/g, "");
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(t);
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
+export async function listHookTitleRefs(limit = 120): Promise<string[]> {
+  const { rows } = await pool.query(
+    `WITH med AS (
+       SELECT channelid,
+              percentile_cont(0.5) WITHIN GROUP (ORDER BY viewcount) AS m
+         FROM channel_videos
+        WHERE isshort = TRUE AND viewcount > 0
+        GROUP BY channelid
+     )
+     SELECT v.title, (v.viewcount::numeric / NULLIF(med.m, 0)) AS lift
+       FROM channel_videos v
+       JOIN med ON med.channelid = v.channelid
+      WHERE v.isshort = TRUE AND v.viewcount > 0 AND med.m > 0
+        AND v.viewcount >= med.m * 1.5
+        AND v.viewcount >= 1000
+      ORDER BY lift DESC
+      LIMIT 400`,
+  );
+  return cleanHookTitles(rows as Array<{ title: string }>, limit);
+}
+
 export async function getChannelVideoByVideoId(videoId: string): Promise<ChannelVideo | undefined> {
   const { rows } = await pool.query(
     `SELECT id, channelid AS "channelId", videoid AS "videoId", title, description, publishedat AS "publishedAt", durationsec AS "durationSec", thumbnail, viewcount AS "viewCount", likecount AS "likeCount", commentcount AS "commentCount", lastsynced AS "lastSynced", isshort AS "isShort" FROM channel_videos WHERE videoId = $1`,

@@ -132,6 +132,85 @@ def _pack(genre: str) -> dict[str, str]:
 HOOK_KEYS = ("반전", "감정고조", "돌직구", "질문", "정보성", "웃음", "갈등", "공감")
 
 
+def _overlay_block(genre: str, refs: list[str] | None, seed: int = 0) -> str:
+    """화면 오버레이 두 줄(title_line1·title_line2)의 작법 블록.
+
+    2026-09-03 교체. 그 전 프롬프트는 line1 을 "오해·질문·기대", line2 를 **"반전·정답·핵심"**
+    으로 시켰다 — 1줄이 묻고 2줄이 답해 버려서 두 줄만 읽으면 볼 이유가 사라졌다.
+    사용자에게 온 피드백이 정확히 그것이다: "제목이 좀 정직하다."
+
+    실측으로 정한 것 셋 (샘플 = 실제 프로덕션 추천 · flash-lite · 같은 클립에 변형 비교):
+
+    ① **장르로 가른다.** 뉴스/시사에 구어체 말투를 주면 `성과급 딴 데도? / 이거 실화냐` 처럼
+       무게가 빠진다. 뉴스는 사실 자체가 후킹이라 정직한 쪽이 낫다. 사람이 지정한 genre 로
+       가르는 것이지 모델에게 판단시키지 않는다 (모델이 매번 다르게 갈라 측정이 깨진다).
+
+    ② **말투는 추측하지 않고 근거를 보여준다.** 조회수가 실제로 나온 우리 쇼츠 제목을 붙여
+       주면 거기서 어미를 가져온다. 내가 고른 유행어 목록("ㄷㄷ 붙여라")을 주면 남발한다 —
+       실측 7/8 클립에 ㄷㄷ 가 붙었고, 정작 **상위 40개 실제 제목엔 ㄷㄷ 가 한 건도 없었다.**
+
+    ③ **고정 목록은 버릇을 만든다.** 같은 목록을 매번 보여주니 모델이 몇 개에 들러붙었다
+       (서로 다른 두 클립에 "N차인생" 이 똑같이 나왔다). 그래서 회차마다 목록을 돌린다.
+       ⚠️ 한 번의 호출이 쇼츠 N개를 한꺼번에 만들기 때문에 **클립 단위 회전은 불가능하다** —
+       회차 단위로 돌리고, 회차 안에서는 "쇼츠끼리 표현이 겹치지 마라"로 막는다.
+    """
+    # 뉴스·시사는 정직형. 그 외(예능·드라마·스포츠·음악·다큐)는 말투형.
+    if genre == "news":
+        return """**title_line1** (상단 · 흰색 톤다운): 무슨 일인지 — 짧게
+**title_line2** (하단 · 컬러 강조): 규모·정도·파장
+
+이 장르는 **사실 자체가 후킹**이다. 숨기거나 비틀면 오히려 시시해진다. 사실을 크게 써라.
+    좋은 예: "가계 빚 1993조" (9자) / "역대 최대 규모" (8자)
+    좋은 예: "성과급 논란 확산" (8자) / "다른 업종도 촉각" (8자)
+
+**구어체 감탄·초성 반응(ㄷㄷ ㅋㅋ ㄹㅇ)·유행어를 쓰지 마라.** 무게가 빠지면 시사가 아니게 된다.
+    나쁜 예: "성과급 딴 데도?" / "이거 실화냐…"   ← 이 말투를 시사에 쓰면 실패
+**title_line2_color**: 기본 "blue" · "red" (충격·폭로) · "yellow" (강조)"""
+
+    # 해시태그(#shorts · #닥터섬보이)는 떼고 쓴다 — 참조에 남으면 오버레이에 그대로 베낀다.
+    pool, _seen_pool = [], set()
+    for t in (refs or []):
+        t = re.sub(r"#\S+", "", str(t or "")).strip(" ·-|")
+        t = re.sub(r"\s{2,}", " ", t)
+        if 4 <= len(t) <= 40 and t not in _seen_pool:
+            _seen_pool.add(t)
+            pool.append(t)
+
+    ref_block = ""
+    if pool:
+        # 회차마다 **창을 옮겨** 보여준다. 13 칸씩 밀고 15개를 뜨므로 이웃 회차와 2개만 겹친다
+        # (앞서 쓰던 stride 방식은 절반이 겹쳐 회전이 사실상 안 됐다 — 실측 24/35줄 동일).
+        take = min(15, len(pool))
+        start = (seed * 13) % len(pool)
+        picked = [pool[(start + k) % len(pool)] for k in range(take)]
+        ref_block = (
+            "\n**아래는 실제로 조회수가 터진 쇼츠 제목이다. 여기서 어미와 표현을 가져와 써라.**\n"
+            + "\n".join(f"    · {t}" for t in picked)
+            + "\n\n목록에 없는 유행어를 억지로 만들지 마라. **쇼츠마다 서로 다른 표현**을 골라 쓴다 —\n"
+              "같은 어미를 두 쇼츠에 반복하면 싸구려가 된다.\n"
+        )
+
+    # ⚠️ 지시문을 **자막처럼 읽히게 쓰면 모델이 그대로 베낀다.** 실측 2026-09-03:
+    #    line1 설명을 "가장 센 조각을 앞에" 라고 적었더니 그 문장이 그대로 자막으로 나왔다.
+    #    역할 설명은 괄호 안에 두고, 아래 "지시어를 담지 마라" 가드를 반드시 함께 둘 것.
+    return f"""**title_line1** (상단 · 흰색 톤다운) — 장면에서 가장 센 조각을 앞에 놓는다
+**title_line2** (하단 · 컬러 강조) — **답을 쓰지 않는다.** 말줄임(…)이나 의문으로 닫는다
+
+**가장 중요한 규칙: 두 줄을 합쳐도 결말이 드러나면 안 된다.**
+    나쁨: "코끼리 코가 손이다?" / "말도 잘 듣는 코끼리"   ← 2줄이 답을 써 버림
+    좋음: "코가 손이라더니" / "진짜로 잡았다…"            ← 궁금증이 남음
+    나쁨: "미야노 힙합 댄스" / "존경할 만한 친구"          ← 둘 다 설명
+    좋음: "지휘하고 싶다더니" / "이걸 진짜 함"             ← 뒷말을 안 알려줌
+
+방송국 말투로 쓰면 실패다. "~합니다" "~했습니다" "~하는 그녀" 같은 설명체는 쓰지 마라.
+대사를 쓸 거면 **가장 센 대여섯 글자만** 자른다. 문장을 통째로 옮기지 마라.
+초성 반응(ㄷㄷ ㅋㅋ ㄹㅇ)은 **한 쇼츠에 최대 하나 · 안 붙여도 된다.** 없는 게 나은 경우가 많다.
+{ref_block}
+**위 설명 문장을 자막으로 쓰지 마라.** "가장 센 조각을 앞에" 같은 **지시어를 출력에 담지 마라** —
+자막은 이 클립의 장면에서 나온 말이어야 한다.
+**title_line2_color**: 기본 "yellow" · "red" (충격·폭로) · "blue" (진지 정보) · "green" (긍정)"""
+
+
 def _profile_block(profile: dict | None) -> str:
     """A steering block appended to the system prompt when a program profile is set —
     watch-points, taboos, tone, target length, and which hooks this program prizes.
@@ -3340,6 +3419,7 @@ def recommend_narrative_first(
     video_path: str | None = None,
     program_context: dict | None = None,
     beats: list[dict] | None = None,
+    title_refs: list[str] | None = None,
 ) -> dict:
     """narrative-first 파이프라인. Phase A(pool) → Phase B(select) → refine_boundaries → 반환.
     beats(선택): AI-정돈 편집 최소 완결 단위 리스트. 있으면 Phase B가 자유 시각 뽑기 대신
@@ -3424,6 +3504,7 @@ def propose_shorts_beat_only(
     client, beats: list[dict], transcript: list[dict] | None,
     genre: str, n: int, cast_registry: list[dict] | None,
     profile: dict | None = None,
+    title_refs: list[str] | None = None,
 ) -> list[dict]:
     """오로지 beat 목록만 입력으로 shorts N개 생성 (2026-07-27).
 
@@ -3440,6 +3521,9 @@ def propose_shorts_beat_only(
     if not beats:
         return []
     pack = _pack(genre)
+    # 참조 목록을 회차마다 돌리는 씨앗. 랜덤이 아니라 **beat 구성에서 뽑는다** — 같은 회차를
+    # 재시도(체크포인트 재개)하면 같은 프롬프트가 나와야 결과를 비교할 수 있다.
+    _overlay_seed = (len(beats) * 31 + int(float(beats[0].get("start") or 0))) % 997
 
     # beat 목록 + 각 beat 구간의 실제 대사 (grounding — summary만으론 hallucination 방지 부족)
     def _beat_dialogue(b: dict, max_chars: int = 300) -> str:
@@ -3625,17 +3709,7 @@ title 은 폴백용 한 줄 · **title_line1 + title_line2** 를 필수로 뽑�
 - **shorts 화면 좁아서 15자 넘어가면 잘림.** 20자 절대 X.
 - 인용문·조사·군더더기 삭제. 짧고 강한 단어만.
 
-**title_line1** (상단 · 흰색 톤다운): **오해·질문·기대** — 짧게
-    예: "헬스장 사장인 줄?" (9자) · "개그맨인 줄 알았지" (10자) · "10년차 배우?" (7자)
-**title_line2** (하단 · 컬러 강조): **반전·정답·핵심**
-    예: "7년차 한의사의 반전" (10자) · "삐끼 최홍만도 홀렸다" (11자) · "예술고 강사로 리셋" (10자)
-**title_line2_color**: 기본 "yellow" · "red" (충격·폭로) · "blue" (진지 정보) · "green" (긍정)
-
-**두 줄 title 좋은 예 (짧고 강함)**:
-- "헬스장 사장인 줄?" (9자) / "7년차 한의사의 반전" (10자) - yellow
-- "개그맨인 줄 알았지" (10자) / "삐끼 최홍만도 홀렸다" (11자) - yellow
-- "10년 연기 끝" (7자) / "예술고 강사 인생 2막" (11자) - blue
-- "저 지금도 못 잊어" (9자) / "믿기 힘든 실화" (8자) - red
+{_overlay_block(genre, title_refs, _overlay_seed)}
 
 **나쁜 예 (너무 김 · 절대 X)**:
 - "예술고에서 친구들을 가르치는 그녀의 정체는?" (21자 ❌)
@@ -3657,8 +3731,8 @@ title (폴백) 은 두 줄 합쳐 한 줄로 자연스럽게.
 
 **반환 형식** (JSON):
 {{"shorts":[
-  {{"beat_ids":[3,4], "title":"헬스장 사장인 줄? 7년 차 한의사의 반전",
-    "title_line1":"헬스장 사장인 줄?", "title_line2":"7년 차 한의사의 반전", "title_line2_color":"yellow",
+  {{"beat_ids":[3,4], "title":"헬스장 사장인 줄 알았는데 한마디에 스튜디오가 얼어붙었다",
+    "title_line1":"헬스장 사장인 줄", "title_line2":"한마디에 얼어붙음", "title_line2_color":"yellow",
     "hook":"반전",
     "hook_quote":"저 사실 한의사예요", "hook_time_sec":2.4, "hook_intro_caption":"충격 고백!",
     "tags":["직업공개","한의사"],
@@ -4393,6 +4467,7 @@ def _recommend_narrative_first_impl(
             on_progress(2, 3)
         shorts = propose_shorts_beat_only(
             client, beats, transcript, genre, n, cast_registry, profile,
+            title_refs=title_refs,
         )
         # 계획서 5번 · beat 밖 자유 timestamp 금지. propose 산출을 강제 스냅.
         before = len(shorts)

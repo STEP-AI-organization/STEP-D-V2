@@ -1052,6 +1052,7 @@ def run_recommend(
     out_dir: Path,
     step: Callable[[str], None],
     timed: Callable[[str, float], None],
+    title_refs: list[str] | None = None,
 ) -> dict:
     """두 파이프라인 스위칭 (RECOMMEND_MODE=narrative_first default · chunk_scan fallback).
     반환: {"shorts": [...], "genre": ...}"""
@@ -1073,6 +1074,7 @@ def run_recommend(
                 ppl_detections=(ppl or {}).get("detections") if isinstance(ppl, dict) else None,
                 video_path=str(video_path), program_context=program_context,
                 beats=(beats_data or {}).get("beats") or [],
+                title_refs=title_refs,
                 on_progress=lambda done, total: progress(
                     "recommend", 85 + 10 * done / max(1, total), f"쇼츠 pool·선정 {done}/{total}"),
             )

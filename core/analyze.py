@@ -67,6 +67,7 @@ def analyze(
     fast: bool = False,
     program_context: dict | None = None,
     media_id: str = "",
+    title_refs: list[str] | None = None,
 ) -> dict:
     """Run all stages (skipping checkpointed ones). Returns the analysis dict.
     `cast_registry` (프로그램 출연자 목록) normalizes on-screen name captions into a
@@ -357,7 +358,7 @@ def analyze(
         narrative=narrative, faces=faces, ppl=ppl, beats_data=beats_data,
         profile=profile, channels=channels, video_path=video_path,
         program_context=program_context, shorts_n=shorts_n, genre=genre,
-        out_dir=out_dir, step=step, timed=timed,
+        out_dir=out_dir, step=step, timed=timed, title_refs=title_refs,
     )
     shorts = rec["shorts"]
 

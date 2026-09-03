@@ -32,6 +32,7 @@ import { Readable } from "node:stream";
 
 import {
   getMedia, getContentAnalysis, saveContentAnalysis, saveTranscript, saveEpisodeCast, listProgramCast,
+  listHookTitleRefs,
   getChannelPointProfile, listVideoComments,
   getPool, getEntity, putEntity, upsertSearchSegments,
   recordUsage,
@@ -590,12 +591,16 @@ function runAnalyze(
   programContextPath?: string,
   genre?: string,
   mediaId?: string,
+  titleRefsPath?: string,
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     const args = ["-u", "-m", "core.analyze", videoPath, "--out", outDir];
     if (mediaId) args.push("--media", mediaId);  // 검색 세그먼트 id 프리픽스 정합
     if (profilePath) args.push("--profile", profilePath);
     if (castPath) args.push("--cast", castPath);
+    // 화면 오버레이 말투 참조 — 이 워크스페이스에서 실제로 터진 쇼츠 제목(2026-09-03).
+    // 없으면 core 가 참조 없는 프롬프트를 쓴다(그래도 "정직함"·초성 남발은 프롬프트가 잡는다).
+    if (titleRefsPath) args.push("--title-refs", titleRefsPath);
     // 사용자가 프로그램 정보(시놉시스·태그·크레딧 등)를 입력해두면 recommend/retitle
     // 프롬프트에 컨텍스트 블록으로 주입 → AI가 이 프로그램의 결에 맞게 판단.
     if (programContextPath) args.push("--program-context", programContextPath);
@@ -1767,9 +1772,26 @@ export async function runContentAnalyze(
     // 파이썬이 즉시 죽으면(venv 소실·CUDA·import OOM) 지난 회차의 analysis.json 이 그대로
     // 남아 있어, 크래시가 경고로 강등되고 **옛 분석이 새 분석으로 저장되며 크레딧까지 차감**됐다.
     // 시작 시각보다 새로운 파일만 "이번 산출물" 로 인정한다.
+    // 화면 오버레이 말투 참조 — 이 워크스페이스에서 유독 터진 쇼츠 제목(2026-09-03).
+    // 실패해도 분석은 그대로 간다: 참조가 없으면 core 가 참조 없는 프롬프트를 쓸 뿐이다.
+    let titleRefsPath: string | undefined;
+    try {
+      const refs = await listHookTitleRefs();
+      // 몇 건 안 되면 오히려 그 몇 개에 들러붙는다 — 회전이 안 되면 안 주는 게 낫다.
+      if (refs.length >= 15) {
+        titleRefsPath = path.join(work, "title_refs.json");
+        fs.writeFileSync(titleRefsPath, JSON.stringify(refs), "utf-8");
+        console.log(`[worker] content.analyze ${mediaId}: 오버레이 말투 참조 ${refs.length}건`);
+      } else {
+        console.log(`[worker] content.analyze ${mediaId}: 말투 참조 ${refs.length}건뿐 — 미주입(참조 없는 프롬프트 사용)`);
+      }
+    } catch (e) {
+      console.warn(`[worker] content.analyze ${mediaId}: 말투 참조 조회 실패, 무시:`, e);
+    }
+
     const runStartedAt = Date.now();
     try {
-      await runAnalyze(videoPath, work, onProgress, profilePath, castPath, fast, programContextPath, pipelineGenre, mediaId);
+      await runAnalyze(videoPath, work, onProgress, profilePath, castPath, fast, programContextPath, pipelineGenre, mediaId, titleRefsPath);
     } catch (e) {
       const analysisPath = path.join(work, "analysis.json");
       if (!fs.existsSync(analysisPath)) throw e;

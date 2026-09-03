@@ -16,7 +16,7 @@ def main() -> None:
     if len(sys.argv) < 2:
         print("Usage: python -m core.analyze <video> [--out <dir>] [--shorts N] "
               "[--genre auto|variety|talk|drama|sports|news|music|documentary] "
-              "[--profile <profile.json>] [--cast <registry.json>] "
+              "[--profile <profile.json>] [--cast <registry.json>] [--title-refs <titles.json>] "
               "[--channels youtube_shorts,instagram_reels,smr] [--no-resume] [--fast]")
         sys.exit(1)
 
@@ -53,6 +53,19 @@ def main() -> None:
             except Exception as e:
                 print(f"[cast] 자동 로드 실패, 무시: {str(e)[:80]}")
 
+    # Optional 화면 오버레이 말투 참조 (--title-refs <titles.json>) — 실제로 조회수가 나온
+    # 쇼츠 제목 목록. 오버레이 두 줄의 **어미와 표현을 여기서 가져온다**(2026-09-03).
+    # 내가 고른 유행어 목록을 주면 모델이 그걸 남발하지만(실측 7/8 클립에 "ㄷㄷ"),
+    # 실제로 터진 제목을 보여주면 거기서 자연스럽게 가져온다. 없으면 조용히 건너뛴다.
+    title_refs = None
+    if "--title-refs" in sys.argv:
+        try:
+            _tr = json.loads(Path(sys.argv[sys.argv.index("--title-refs") + 1]).read_text(encoding="utf-8"))
+            title_refs = [str(t).strip() for t in _tr if str(t or "").strip()] if isinstance(_tr, list) else None
+            print(f"[title] 말투 참조 {len(title_refs or [])}건 로드")
+        except Exception as e:
+            print(f"   (말투 참조 로드 실패, 무시: {str(e)[:80]})")
+
     # Optional destination filter (--channels a,b) → per-channel fit matrix. Default: all.
     channels = None
     if "--channels" in sys.argv:
@@ -71,7 +84,7 @@ def main() -> None:
 
     result = analyze(video, out_dir, shorts_n=n, genre=genre, resume=resume, profile=profile,
                      cast_registry=cast_registry, channels=channels, fast=fast,
-                     program_context=program_context, media_id=media_id)
+                     program_context=program_context, media_id=media_id, title_refs=title_refs)
     cast = result.get("cast") or {}
     print(f"\n=== 요약 ===")
     print(f"  {len(result['transcript'])} 자막 · {len(result['scenes'])} 장면 · {len(result['shorts'])} 쇼츠 · "
