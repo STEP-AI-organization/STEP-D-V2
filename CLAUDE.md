@@ -257,8 +257,13 @@ core/ 쪽 스위치(파이썬): `RUN_FACES`·`RUN_PPL`·`RUN_REFINE`·`RUN_CHYRO
 
 상세: [apps/web/CLAUDE.md](apps/web/CLAUDE.md). 요점만:
 
-- 화면: `(app)` 그룹 9개(/, programs, episodes/:id, recommendations, clips, distribution, analytics,
-  channels, publish-channels) + `(editor)` 풀스크린 에디터 + landing/register/terms/privacy.
+- 화면: **총 35개** — `(app)` **27개** + `(editor)` 풀스크린 에디터 + 공개 7개(landing·login·
+  register·invite·terms·privacy·data-deletion). 목록 정본은
+  [docs/plans/active/frontend-redesign-handoff.md](docs/plans/active/frontend-redesign-handoff.md) §6.
+  ⚠️ 여기 오래 "9개(…recommendations, channels…)" 로 적혀 있었는데 **셋 다 틀렸다** —
+  개수도, 없어진 화면 이름도. 개편 범위를 3분의 1로 잡게 만드는 종류의 오류라 실물로 바꿨다.
+- **프론트 재개편 진행 중**(디자이너 산출물 이식) — 규격·이식 절차·건드리면 안 되는 글루는
+  위 문서 하나로 본다. 리포 분리는 **검토 후 안 하기로 했다**(같은 문서 §7).
 - **데이터 레이어:** `store.tsx`는 빈 상태(EMPTY_STATE)로 시작해 기동 시 `fetchState()`가 성공하면
   서버 상태로 교체한다. 실패하면 **빈 상태를 유지한다 (목 폴백은 제거됨)** — 빈 화면이면
   "서버 미연결"인지 "데이터 없음"인지 `/api/state` 응답으로 구분할 것.
