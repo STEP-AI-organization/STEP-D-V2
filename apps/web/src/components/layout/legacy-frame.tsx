@@ -37,6 +37,7 @@ const MIGRATED: string[] = [
   "/program-analytics",   // 2026-09-03 · 이식 파일럿 (W1)
   "/performance",         // 2026-09-03 · W2
   "/trends",              // 2026-09-03 · W2
+  "/ops",                 // 2026-09-03 · W2
 ];
 
 export function LegacyFrame({ children }: { children: React.ReactNode }) {
