@@ -128,7 +128,11 @@ function Test-ServerBoots([string]$RepoRoot) {
   $node = (Get-Command node -ErrorAction SilentlyContinue).Source
   if (-not $node) { Say "부팅 검증: node 를 못 찾음 — 건너뜀"; return $true }
 
-  $out = Join-Path $env:TEMP ("stepd-boot-{0}.log" -f ([guid]::NewGuid().ToString("N")))
+  # ⚠️ 파일명에 GUID 를 넣는다 — 고정 이름이면 **지난 회차의 로그**를 읽고 통과해 버린다
+  #    (검증 함수가 거짓 통과하는 게 검증이 없는 것보다 나쁘다).
+  $g = [guid]::NewGuid().ToString("N")
+  $out    = Join-Path $env:TEMP ("stepd-boot-$g.log")
+  $outErr = Join-Path $env:TEMP ("stepd-boot-$g.err")
   $prevPort = $env:PORT
   $env:PORT = "4399"                      # 실서버(4100)와 겹치지 않는 임시 포트
   $proc = $null
@@ -136,8 +140,13 @@ function Test-ServerBoots([string]$RepoRoot) {
     $proc = Start-Process -FilePath $node `
       -ArgumentList "--unhandled-rejections=warn", "--import", "tsx", "--env-file-if-exists=.env", "src/index.ts" `
       -WorkingDirectory $server -PassThru -NoNewWindow `
-      -RedirectStandardOutput $out -RedirectStandardError "$out.err"
-    # 90초 안에 "listening" 이 나오면 성공. DB 연결까지 하므로 넉넉히 준다.
+      -RedirectStandardOutput $out -RedirectStandardError $outErr
+    # 90초 안에 "listening" 이 나오면 성공.
+    #
+    # ⚠️ **DB 준비까지 기다리지 않는다.** 서버는 "listening" 을 먼저 찍고 그 다음에
+    #    "database + queue ready" 를 찍는다(Cloud Run 로그 실측). DB 까지 조건에 넣으면
+    #    DB 가 잠깐 느린 날 **거짓 실패**로 갱신이 영영 멈춘다 — 그 손해가 훨씬 크다.
+    #    이 검증이 잡으려는 건 모듈 해석 실패다(그건 "listening" 전에 죽는다).
     for ($i = 0; $i -lt 90; $i++) {
       Start-Sleep -Seconds 1
       if ($proc.HasExited) { break }
@@ -145,7 +154,7 @@ function Test-ServerBoots([string]$RepoRoot) {
       if ($text -and $text -match "listening on") { return $true }
     }
     # 여기 왔다는 건 죽었거나 90초 안에 못 떴다는 뜻이다.
-    $err = ((Get-Content "$out.err" -Raw -ErrorAction SilentlyContinue) + "`n" +
+    $err = ((Get-Content $outErr -Raw -ErrorAction SilentlyContinue) + "`n" +
             (Get-Content $out -Raw -ErrorAction SilentlyContinue))
     Say "부팅 검증 실패 — 새 코드가 뜨지 않는다:"
     Say (($err -split "`n" | Where-Object { $_.Trim() } | Select-Object -First 6) -join "`n")
@@ -156,7 +165,7 @@ function Test-ServerBoots([string]$RepoRoot) {
   } finally {
     if ($proc -and -not $proc.HasExited) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue }
     $env:PORT = $prevPort
-    Remove-Item $out, "$out.err" -Force -ErrorAction SilentlyContinue
+    Remove-Item $out, $outErr -Force -ErrorAction SilentlyContinue
   }
 }
 
