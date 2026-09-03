@@ -65,6 +65,7 @@ import {
   normalizePublishDelayMin, shortformSegmentTooLong, type ChannelRule,
 } from "../publish/channel-rules.ts";
 import { maybeFlushAutoPublishReport } from "../publish/publish-notify.ts";
+import { noteRenderOutcome } from "../publish/render-alert.ts";
 import { newId } from "../ids.ts";
 import { enqueue, lastJobByDedupe, oldestPendingAgeForType, unfinishedCountForType } from "./queue.ts";
 import { distributionAccountId, hasAccountDistribution, hasFailedAccountDistribution } from "../publish/publish-guard.ts";
@@ -912,6 +913,11 @@ async function runAutomationCycleLocked(): Promise<CycleReport> {
   // 바꾸면서 배선을 걷어냈다. 발송 시점 판정은 publish-notify 의 ruleReportDue 한 곳이다.
   await maybeFlushAutoPublishReport();
 
+  // ⚠️ **렌더 고장은 마감까지 기다리지 않는다.** 리포트 메일은 슬롯 마감(+90분)에 나가는데,
+  //    렌더가 죽으면 그 사이 내내 아무것도 안 올라간다 — 2026-09-03 에 1시간 45분을 그렇게
+  //    보냈다(감지는 rule_run 에 정확히 적히고 있었는데 도달만 안 했다).
+  await noteRenderOutcome(report.renderFailed, report.published);
+
   return report;
 }
 
@@ -1063,9 +1069,26 @@ async function requestAutoRender(clipId: string, channel?: string | null): Promi
         const raw = String(last.error ?? "");
         const status = Number(/export (\d{3})/.exec(raw)?.[1] ?? 0);
         const code = /"(?:code|error)"\s*:\s*"([^"]+)"/.exec(raw)?.[1] ?? null;
-        console.warn(`[automation] clip.render 실패 회수 ${clipId}: ${raw.slice(0, 160)}`);
-        return { ok: false, kind: classifyRenderFailure(status, code), error: raw.slice(0, 500), status, code };
-      }
+        // ⚠️ **워커에 못 닿아 실패한 건 클라우드가 직접 굽는다** (사용자 2026-09-03:
+        //    "실패하면 클라우드라도 렌더해줘야지").
+        //
+        //    2026-09-03 사고에서 이 고리가 비어 있었다. 아래 정체 감지는 "PC 가 죽었나(시간)"
+        //    와 "PC 가 바쁜가(깊이)" 만 본다. 그런데 그날 PC 는 **살아서 즉시 실패**했다 —
+        //    잡을 바로 집어 `fetch failed` 로 끝냈으니 대기 시간도 깊이도 안 쌓였고, 두 신호
+        //    다 안 걸렸다. 그래서 클립 16건이 클라우드로 넘어가지 못하고 그대로 탔다.
+        //
+        //    구분이 핵심이다: **경로가 고장 났나, 클립이 고장 났나.**
+        //      · 응답 자체가 없다(status<=0) → 렌더 경로 문제 → 클라우드가 대신 구우면 된다
+        //      · 404·400·409 처럼 서버가 답을 준 실패 → 클립 문제 → 클라우드도 똑같이 실패한다
+        //    그래서 **응답이 없었을 때만** 아래로 흘려보낸다(무한 우회가 되지 않게).
+        if (status <= 0 && !code) {
+          console.warn(`[automation] clip.render 응답 없음 ${clipId} — 클라우드가 직접 렌더한다: ${raw.slice(0, 120)}`);
+          // 아래로 흘러 종전 경로(직접 /export)를 탄다.
+        } else {
+          console.warn(`[automation] clip.render 실패 회수 ${clipId}: ${raw.slice(0, 160)}`);
+          return { ok: false, kind: classifyRenderFailure(status, code), error: raw.slice(0, 500), status, code };
+        }
+      } else {
 
       // 사무실 PC 와 클라우드가 **나눠서** 굽는다 (2026-09-02). 두 신호를 함께 본다:
       //   stalled — 저 PC 가 죽었나 (시간) · depth — 저 PC 가 바쁜가 (깊이)
@@ -1086,6 +1109,7 @@ async function requestAutoRender(clipId: string, channel?: string | null): Promi
         ? `[automation] clip.render 정체 ${Math.round(stalled / 1000)}초 — 클라우드가 직접 렌더한다`
         : `[automation] clip.render 대기 ${depth}건(상한 ${maxPending}) — 이 건은 클라우드가 굽는다`);
       // 아래로 흘러 종전 경로(직접 /export)를 탄다.
+      }
     }
 
     const { apiBase, internalHeaders } = await import("./factory.ts");
