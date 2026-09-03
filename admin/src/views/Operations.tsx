@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react";
 import { api, type AdminJob } from "../api";
-import { Panel, State, useLoad, when } from "./common";
-import { TenantName } from "./tenant-name";
+import { Avatar, Panel, State, useLoad, when } from "./common";
+import { TenantName, useTenantNames } from "./tenant-name";
 
 /**
  * 운영 인박스 — **원인이 같은 건 한 줄로 묶는다** (개선안 §1-1).
@@ -19,6 +19,7 @@ import { TenantName } from "./tenant-name";
 type GroupBy = "cause" | "tenant";
 
 export function Operations() {
+  const { names } = useTenantNames();
   const [tenant, setTenant] = useState("");
   const [applied, setApplied] = useState("");
   const [groupBy, setGroupBy] = useState<GroupBy>("cause");
@@ -86,62 +87,79 @@ export function Operations() {
       <State busy={busy} error={error} empty={!jobs.length}>
         <div className="inbox">
           {groups.map((g) => (
-            <div className="inbox-group" key={g.key}>
-              <div className="inbox-head">
-                <div>
-                  <div className="inbox-title">
-                    {groupBy === "cause" ? g.label : <TenantName id={g.key} />}
-                    <span className="inbox-count">{g.jobs.length}건</span>
-                    {/* 재시도해도 같은 실패인 묶음은 그렇게 말한다 — 안 적으면 계속 누른다. */}
-                    {!g.retryable && <span className="tag">재시도 불가</span>}
-                  </div>
-                  {g.hint && <div className="inbox-hint">{g.hint}</div>}
-                </div>
-                <div className="spacer" />
+            <section className="ibox" key={g.key}>
+              <div className="ibox-head">
+                {/* 점 색이 곧 "누구 일인가" 다 — 빨강=재시도로 풀림, 주황=우리가 고쳐야 함,
+                    회색=우리 일이 아님(충전·재연동·정리). */}
+                <span className="ibox-dot" style={{ background: g.dot }} />
+                <h2>{groupBy === "cause" ? g.label : <TenantName id={g.key} />}</h2>
+                <span className="ibox-count">{g.jobs.length}건</span>
+                <span className="ibox-note">{g.hint}</span>
                 {g.retryable && g.jobs.some((j) => j.status === "failed") && (
                   <button
+                    className="primary pill sm"
                     disabled={working === g.key}
-                    onClick={() => void retryAll(g.key, g.jobs)}
+                    onClick={(e) => { e.stopPropagation(); void retryAll(g.key, g.jobs); }}
                   >
-                    {working === g.key ? "재시도 중…" : `${g.jobs.filter((j) => j.status === "failed").length}건 전부 재시도`}
+                    {working === g.key
+                      ? "재시도 중…"
+                      : `${g.jobs.filter((j) => j.status === "failed").length}건 전부 재시도`}
                   </button>
                 )}
               </div>
 
-              <div className="inbox-rows">
-                {g.jobs.map((j) => (
-                  <div className="inbox-row" key={j.id}>
-                    <div className="inbox-row-main">
+              {g.jobs.map((j) => (
+                <div className="ibox-row" key={j.id}>
+                  <Avatar id={j.tenantId} name={names[j.tenantId] ?? j.tenantId} size={26} />
+                  <div className="ibox-main">
+                    <div className="ibox-title">
                       <span className="mono">{j.type}</span>
                       <span className="muted"> · </span>
-                      <TenantName id={j.tenantId} />
-                      {groupBy === "tenant" && <span className="tag">{j.causeLabel}</span>}
+                      <TenantName id={j.tenantId} plain />
                     </div>
-                    <div className="inbox-row-meta muted">
+                    <div className="ibox-meta">
                       {j.attempts}회 시도 · {when(j.updatedAt)}
-                      {j.error && <> · <span className="wrap">{j.error.slice(0, 160)}</span></>}
-                    </div>
-                    <div className="row">
-                      {/* 재시도 가능한 실패만 버튼을 준다. 실행 중인 건 건드리지 않는다. */}
-                      {j.status === "failed" && j.retryable && (
-                        <button onClick={() => void retry(j.id)}>재시도</button>
-                      )}
-                      {j.status !== "running" && (
-                        <button className="danger" onClick={() => void remove(j.id)}>제거</button>
-                      )}
+                      {j.error && ` · ${j.error.replace(/\s+/g, " ").slice(0, 120)}`}
                     </div>
                   </div>
-                ))}
-              </div>
-            </div>
+                  {groupBy === "tenant" && <span className="tag">{j.causeLabel}</span>}
+                  <div className="ibox-act">
+                    {/* 재시도 가능한 실패만 버튼을 준다. 실행 중인 건 건드리지 않는다. */}
+                    {j.status === "failed" && j.retryable && (
+                      <button onClick={() => void retry(j.id)}>재시도</button>
+                    )}
+                    {j.status !== "running" && (
+                      <button className="danger" onClick={() => void remove(j.id)}>제거</button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </section>
           ))}
+          <p className="muted" style={{ fontSize: 12, margin: "6px 0 0" }}>
+            완료된 잡·정상 회사는 여기 오지 않습니다 — 조치가 끝나면 줄이 사라지고, 사유는 감사 로그에 남습니다.
+          </p>
         </div>
       </State>
     </Panel>
   </>;
 }
 
-type Group = { key: string; label: string; hint: string; retryable: boolean; jobs: AdminJob[] };
+type Group = { key: string; label: string; hint: string; retryable: boolean; dot: string; jobs: AdminJob[] };
+
+/**
+ * 묶음 점 색 = **누가 처리해야 하는가.**
+ *   빨강  재시도하면 풀린다 (쿼터·시간초과·외부장애·임시파일)
+ *   주황  우리가 고쳐야 한다 (ffmpeg·실행환경)
+ *   회색  우리 일이 아니다 — 충전·재연동·정리 (크레딧·권한·404)
+ * 심각도가 아니라 **다음 행동**으로 색을 나눈다. 빨강이 많은 게 나쁜 게 아니라, 회색이 쌓이는
+ * 게 나쁘다(아무도 안 치운다는 뜻이라서).
+ */
+function causeDot(cause: string, retryable: boolean): string {
+  if (cause === "ffmpeg" || cause === "config") return "#e37400";
+  if (cause === "credits" || cause === "auth" || cause === "not_found") return "#5f6368";
+  return retryable ? "#d93025" : "#5f6368";
+}
 
 /**
  * 묶기. 큰 묶음이 위로 온다 — 한 번에 정리되는 게 먼저 보여야 한다.
@@ -158,6 +176,7 @@ function groupJobs(jobs: AdminJob[], by: GroupBy): Group[] {
       label: by === "cause" ? (j.causeLabel || "원인 미분류") : key,
       hint: by === "cause" ? (j.causeHint || "") : "",
       retryable: true,
+      dot: causeDot(j.cause ?? "unknown", j.retryable !== false),
       jobs: [],
     };
     g.jobs.push(j);

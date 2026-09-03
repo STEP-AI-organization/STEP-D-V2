@@ -59,3 +59,39 @@ export function State({ busy, error, empty, children }: {
   if (empty) return <div className="empty">아직 없습니다.</div>;
   return <>{children}</>;
 }
+
+/** 원화 표기. 세 화면이 각자 만들고 있었다 — 한 곳에 둔다. */
+export const won = (n: number) => `₩${Math.round(n).toLocaleString("ko-KR")}`;
+
+/**
+ * 아바타 색 — id 로 **결정론적으로** 고른다. 무작위면 새로고침마다 색이 바뀌어
+ * "색으로 회사를 기억하는" 게 안 된다.
+ */
+const AVATAR_COLORS = ["#0b57d0", "#1e8e3e", "#e37400", "#9334e6", "#c5221f", "#00838f"];
+export function avatarColor(id: string): string {
+  let h = 0;
+  for (let i = 0; i < id.length; i += 1) h = (h * 31 + id.charCodeAt(i)) >>> 0;
+  return AVATAR_COLORS[h % AVATAR_COLORS.length];
+}
+
+/** 이름 앞 두 글자(한글은 두 자도 넓어 한 자만). 빈 이름은 `#`. */
+export function initials(name: string): string {
+  const t = String(name ?? "").trim();
+  if (!t) return "#";
+  return /[가-힣]/.test(t[0]) ? t.slice(0, 2) : t.slice(0, 2).toUpperCase();
+}
+
+/** 회사 아바타 — 목록·인박스가 같은 모양을 쓴다(같은 회사는 어디서나 같은 색). */
+export function Avatar({ id, name, size = 36 }: { id: string; name: string; size?: number }) {
+  return (
+    <span
+      className="avatar"
+      style={{
+        background: avatarColor(id), width: size, height: size,
+        borderRadius: size >= 32 ? 11 : 8, fontSize: size >= 32 ? 13 : 10,
+      }}
+    >
+      {initials(name)}
+    </span>
+  );
+}

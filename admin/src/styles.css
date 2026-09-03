@@ -239,38 +239,95 @@ button.danger:hover:not(:disabled) { background: #fce8e6; border-color: var(--ba
 .biz-field small { font-size: 11px; }
 .biz-field input[data-bad] { border-color: var(--bad); box-shadow: 0 0 0 3px #fce8e6; }
 
-/* ── 인박스 (원인별 묶음) ─────────────────────────────────────────────────────
-   실패 잡을 한 줄씩 뿌리던 표를 대체한다. 실측 2026-09-03: 실패 189건 중 187건이 같은
-   원인이라, 표로 뿌리면 같은 줄을 187번 읽게 된다. 묶음 머리글이 곧 "할 일" 이다. */
+/* ── 인박스 (원인별 묶음 · 목업 규격 그대로) ────────────────────────────────────
+   실측 2026-09-03: 실패 189건 중 187건이 같은 원인이라, 표로 뿌리면 같은 줄을 187번 읽게
+   된다. 묶음 머리글이 곧 "할 일" 이고, 점 색이 "누가 처리하나" 다. */
 .inbox { display: flex; flex-direction: column; gap: 14px; padding: 4px 20px 20px; }
-.inbox-group { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
-.inbox-head {
-  display: flex; align-items: flex-start; gap: 12px;
-  padding: 12px 16px; background: #fafbfc; border-bottom: 1px solid var(--line);
+.ibox { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; overflow: hidden; }
+.ibox-head { display: flex; align-items: center; gap: 10px; padding: 14px 18px; border-bottom: 1px solid var(--line); }
+.ibox-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.ibox-head h2 { font-size: 14px; font-weight: 600; margin: 0; white-space: nowrap; }
+.ibox-count {
+  font-size: 11.5px; font-weight: 600; padding: 1px 8px; border-radius: 999px;
+  background: var(--panel-2); color: var(--muted); font-variant-numeric: tabular-nums;
 }
-.inbox-head .spacer { flex: 1; }
-.inbox-title { display: flex; align-items: center; gap: 8px; font-weight: 500; font-size: 13.5px; }
-.inbox-count { color: var(--muted); font-weight: 400; font-variant-numeric: tabular-nums; }
 /* 힌트는 "그래서 뭘 하면 되나" 한 줄. 원인만 알려 주면 다음 수를 사람이 또 찾아야 한다. */
-.inbox-hint { margin-top: 3px; font-size: 12px; color: var(--muted); }
-.inbox-rows { display: flex; flex-direction: column; }
-.inbox-row {
-  display: grid; grid-template-columns: 1fr auto; align-items: center;
-  gap: 4px 12px; padding: 10px 16px; border-bottom: 1px solid var(--line);
+.ibox-note {
+  font-size: 12.5px; color: var(--muted); flex: 1; min-width: 0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.inbox-row:last-child { border-bottom: 0; }
-.inbox-row:hover { background: #f8faff; }
-.inbox-row-main { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-/* 오류 문구는 길다 — 줄을 넘기되 행 높이를 폭발시키지 않게 두 줄에서 자른다. */
-.inbox-row-meta {
-  grid-column: 1; font-size: 12px; overflow: hidden;
-  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
-}
-.inbox-row .row { grid-row: 1 / span 2; grid-column: 2; }
-.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12.5px; }
+.ibox-row { display: flex; align-items: center; gap: 14px; padding: 13px 18px; border-bottom: 1px solid var(--panel-2); }
+.ibox-row:last-child { border-bottom: 0; }
+.ibox-row:hover { background: #f8faff; }
+.ibox-main { min-width: 0; flex: 1; }
+.ibox-title { font-size: 13.5px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* 오류 문구는 길다 — 한 줄로 자른다. 전문은 잡 상세에서 본다. */
+.ibox-meta { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ibox-act { display: flex; gap: 6px; flex: none; }
+.ibox-act button { padding: 6px 13px; border-radius: 8px; font-size: 12.5px; font-weight: 500; }
+.mono { font-family: "Roboto Mono", ui-monospace, Menlo, monospace; font-size: 12.5px; }
+
+/* 회사 아바타 — 목록·인박스가 같은 모양을 쓴다(같은 회사는 어디서나 같은 색). */
+.avatar { flex: none; display: grid; place-items: center; font-weight: 700; color: #fff; }
 
 /* 토글 버튼(원인별 / 회사별) — nav 와 같은 활성 표시를 쓴다. */
 button[data-active="true"] { background: var(--accent-soft); color: var(--accent-hover); border-color: transparent; }
 
-/* 카드의 "vs 이전 기간" 델타 — 값 밑에 한 줄. 없는 비교(이전 0)는 아예 안 그린다. */
-.card .delta { margin-top: 4px; font-size: 11.5px; font-variant-numeric: tabular-nums; }
+/* ── 회사 카드 (개선안 §1-2 · 목업 수치 그대로) ─────────────────────────────────
+   표는 "회사가 살아 있나" 를 못 보여 준다. 카드 한 장이 회사 하나의 건강 상태다. */
+.cardgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 14px; padding: 4px 20px 20px; }
+.cc {
+  display: flex; flex-direction: column; gap: 12px; text-align: left; width: 100%;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 16px;
+  padding: 16px 18px 14px; cursor: pointer; color: inherit; font: inherit;
+  transition: box-shadow .15s, border-color .15s;
+}
+.cc:hover {
+  box-shadow: 0 1px 3px rgba(60,64,67,.12), 0 4px 8px 2px rgba(60,64,67,.06);
+  border-color: var(--line-2);
+}
+.cc-head { display: flex; align-items: flex-start; gap: 11px; }
+.cc-avatar {
+  width: 36px; height: 36px; border-radius: 11px; flex: none; display: grid; place-items: center;
+  font-size: 13px; font-weight: 700; color: #fff;
+}
+.cc-name { min-width: 0; flex: 1; display: flex; flex-direction: column; }
+.cc-title { font-size: 15px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.cc-sub { font-size: 11.5px; color: var(--muted); }
+/* 스파크라인 — 머리글 바로 아래. 숫자보다 먼저 "추세" 가 눈에 들어와야 한다. */
+.cc-spark { display: flex; align-items: flex-end; gap: 3px; height: 38px; }
+.cc-spark > span {
+  flex: 1; min-width: 2px; border-radius: 2px 2px 0 0; opacity: .85;
+  background: linear-gradient(180deg, #4285f4, #9b72cb);
+}
+.cc-spark-empty { height: 38px; display: flex; align-items: center; font-size: 11.5px; color: var(--muted); }
+.cc-nums { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
+.cc-nums > span { display: flex; flex-direction: column; }
+.cc-k { font-size: 11px; color: var(--muted); }
+.cc-v { font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.cc-bar { display: block; height: 5px; border-radius: 999px; background: var(--panel-2); overflow: hidden; }
+.cc-bar > span { display: block; height: 100%; border-radius: 999px; }
+.cc-foot { display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: var(--muted); }
+.cc-foot .cc-gap { flex: 1; }
+/* 경고는 파생 문장이다(런웨이 + 막힌 작업). 별도 필드가 아니다. */
+.cc-alert {
+  display: flex; align-items: center; gap: 8px; padding: 8px 11px; border-radius: 10px;
+  font-size: 12px; background: #fef7e0; color: #a15c00;
+}
+.cc-alert b { font-weight: 700; }
+
+/* 알약형 입력·버튼 (목업 헤더) */
+.pill { border-radius: 999px; }
+input.pill { padding: 8px 12px; width: 220px; }
+button.pill { padding: 9px 18px; font-weight: 600; white-space: nowrap; }
+
+/* 작은 알약 버튼 (묶음 머리글의 "전부 재시도") */
+button.pill.sm { padding: 7px 14px; font-size: 13px; }
+
+/* 기간 전환 알약 묶음 (목업) — 셀렉트보다 현재 구간이 눈에 바로 든다. */
+.segmented { display: flex; gap: 2px; padding: 3px; border-radius: 999px; background: var(--panel-2); }
+.segmented button {
+  border: 0; background: transparent; border-radius: 999px; padding: 6px 14px;
+  font-size: 13px; font-weight: 500; color: var(--muted); cursor: pointer;
+}
+.segmented button[data-active="true"] { background: var(--panel); color: var(--text); box-shadow: var(--shadow-1); }

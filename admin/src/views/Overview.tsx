@@ -1,9 +1,7 @@
 import { useState } from "react";
 import { api, type UsageTrendPoint } from "../api";
-import { Panel, State, useLoad } from "./common";
+import { Panel, State, useLoad, won } from "./common";
 import { TenantName } from "./tenant-name";
-
-const won = (n: number) => `₩${Math.round(n).toLocaleString("ko-KR")}`;
 
 export function Overview() {
   const { data, error, busy } = useLoad(() => api.overview());
@@ -54,11 +52,12 @@ function UsagePanel() {
     <Panel
       title="사용 원가 · 마진"
       actions={
-        <select value={days} onChange={(e) => setDays(Number(e.target.value))}>
-          <option value={7}>최근 7일</option>
-          <option value={30}>최근 30일</option>
-          <option value={90}>최근 90일</option>
-        </select>
+        // 기간 전환은 알약 묶음(목업) — 셀렉트보다 현재 구간이 눈에 바로 든다.
+        <div className="segmented">
+          {[7, 30, 90].map((d) => (
+            <button key={d} data-active={days === d} onClick={() => setDays(d)}>{d}일</button>
+          ))}
+        </div>
       }
     >
       <State busy={busy} error={error}>

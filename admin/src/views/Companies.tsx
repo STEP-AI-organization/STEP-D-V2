@@ -1,35 +1,174 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api, type AdminUser, type ApiKey, type CompanyDetail, type Tenant } from "../api";
-import { Panel, State, StatusTag, useLoad, when } from "./common";
+import { Avatar, Panel, State, StatusTag, useLoad, when, won } from "./common";
 import { Invoice } from "./Invoice";
 import { BusinessProfileForm } from "./BusinessProfile";
 
+/**
+ * 회사 — **표 대신 카드**(개선안 §1-2 · 목업 디자인 그대로).
+ *
+ * 표는 "회사가 살아 있나" 를 못 보여 준다. 잔액 4,200 이 넉넉한지 위험한지 표에서는 알 수 없다 —
+ * 선불제라 0 이 되면 그 회사 큐가 통째로 멈추는데 그 예고가 없었다.
+ * 카드는 **잔액 · 소진 속도 · 남은 기간 · 마진 · 지금 막힌 것**을 한 장에 모은다.
+ *
+ * 네 곳에서 모아 조인한다. **어느 하나가 실패해도 카드는 뜬다** — 곁가지가 목록을 막지 않는다:
+ *   `tenants`      이름·상태·잔액·멤버
+ *   `usage/trend`  회사별 14일 시계열 (스파크라인 · 런웨이의 분모)
+ *   `usage`        회사별 30일 마진
+ *   `jobs`         회사별 막힌 작업 수
+ */
 export function Companies({ onOpen }: { onOpen: (id: string) => void }) {
   const { data, error, busy, reload } = useLoad(() => api.tenants());
+  // 런웨이는 **최근 14일 평균**으로 낸다. 개선안이 제안한 "이번 달 사용 ÷ 경과일" 은 월초에
+  // 표본이 1~2 일이라 크게 튄다(1일에 한 번 돌린 회사가 "3일 남음" 으로 뜬다).
+  const trend = useLoad(() => api.usageTrend(14, true), []);
+  const usage = useLoad(() => api.usage(30), []);
+  const jobs = useLoad(() => api.jobs(), []);
   const [creating, setCreating] = useState(false);
+  const [q, setQ] = useState("");
+
+  const marginBy = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const r of usage.data?.byTenant ?? []) m.set(r.tenantId, r.marginKrw);
+    return m;
+  }, [usage.data]);
+
+  // 회사별 막힌 작업 수 — 완료가 아닌 것만 센다.
+  const stuckBy = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const j of jobs.data?.jobs ?? []) {
+      if (j.status === "done") continue;
+      m.set(j.tenantId, (m.get(j.tenantId) ?? 0) + 1);
+    }
+    return m;
+  }, [jobs.data]);
+
+  const list = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    const all = data?.tenants ?? [];
+    if (!needle) return all;
+    return all.filter((t) =>
+      t.name.toLowerCase().includes(needle) || t.id.toLowerCase().includes(needle));
+  }, [data, q]);
+
   return <>
     <h1>회사</h1>
-    <p className="sub">회사를 열어 멤버, 성과, 결제, API 키와 운영 상태를 한곳에서 관리합니다.</p>
-    <Panel title="회사 목록" actions={<button className="primary" onClick={() => setCreating(true)}>회사 추가</button>}>
+    <p className="sub">카드 하나가 회사 하나의 건강 상태입니다 — 잔액, 이번 달 사용, 마진, 지금 막힌 것.</p>
+    <Panel
+      title={`회사 ${list.length}곳`}
+      actions={<div className="row">
+        <input className="pill" placeholder="회사명·id 로 걸러내기" value={q} onChange={(e) => setQ(e.target.value)} />
+        <button className="primary pill" onClick={() => setCreating(true)}>회사 추가</button>
+      </div>}
+    >
       {creating && <CompanyCreate onDone={() => { setCreating(false); void reload(); }} onClose={() => setCreating(false)} />}
-      <State busy={busy} error={error} empty={!data?.tenants.length}>
-        <div className="tablewrap"><table><thead><tr>
-          <th>회사</th><th>상태</th><th className="num">멤버</th><th className="num">잔액</th><th className="num">이번 달 사용</th><th>최근 로그인</th>
-        </tr></thead><tbody>{data?.tenants.map((tenant) => <CompanyRow key={tenant.id} tenant={tenant} onOpen={onOpen} />)}</tbody></table></div>
+      <State busy={busy} error={error} empty={!list.length}>
+        <div className="cardgrid">
+          {list.map((t) => (
+            <CompanyCard
+              key={t.id} tenant={t} onOpen={onOpen}
+              series={trend.data?.byTenant?.[t.id] ?? []}
+              marginKrw={marginBy.get(t.id) ?? null}
+              stuck={stuckBy.get(t.id) ?? 0}
+            />
+          ))}
+        </div>
       </State>
     </Panel>
   </>;
 }
 
-function CompanyRow({ tenant, onOpen }: { tenant: Tenant; onOpen: (id: string) => void }) {
-  return <tr className="clickrow" onClick={() => onOpen(tenant.id)}>
-    <td><strong>{tenant.name}</strong><div className="muted tiny">#{tenant.id}</div></td>
-    <td><StatusTag status={tenant.status} /></td>
-    <td className="num">{tenant.userCount}</td>
-    <td className="num" style={tenant.credits <= 0 ? { color: "var(--bad)" } : undefined}>{tenant.credits.toLocaleString("ko-KR")}</td>
-    <td className="num muted">{tenant.usedThisMonth.toLocaleString("ko-KR")}</td>
-    <td className="muted">{tenant.lastLoginAt ? when(tenant.lastLoginAt) : "없음"}</td>
-  </tr>;
+/** 하루 평균 소진 → 남은 일수. 소진이 없으면 **null**(무한이 아니라 "알 수 없음"). */
+function runwayDays(credits: number, series: Array<{ minutes: number }>): number | null {
+  if (credits <= 0) return 0;
+  if (!series.length) return null;
+  const used = series.reduce((n, d) => n + (Number(d.minutes) || 0), 0);
+  if (used <= 0) return null;                 // 기간 내 사용이 없다 — 속도를 모른다
+  return credits / (used / series.length);
+}
+
+function runwayText(days: number | null): string {
+  if (days === null) return "사용 기록 없음 — 속도 미상";
+  if (days <= 0) return "잔액 0 — 새 분석이 큐에서 멈춤";
+  if (days < 14) return `현 속도로 약 ${Math.max(1, Math.round(days))}일 남음`;
+  if (days < 120) return `현 속도로 약 ${Math.round(days / 7)}주 남음`;
+  return "여유 있음";
+}
+
+function CompanyCard({ tenant, onOpen, series, marginKrw, stuck }: {
+  tenant: Tenant; onOpen: (id: string) => void;
+  series: Array<{ day: string; minutes: number; costKrw: number }>;
+  marginKrw: number | null; stuck: number;
+}) {
+  const days = runwayDays(tenant.credits, series);
+  // 게이지는 **60일을 가득**으로 본다 — 두 달 치가 있으면 걱정할 게 아니라는 뜻이다.
+  const pct = days === null ? 0 : Math.max(0, Math.min(100, (days / 60) * 100));
+  const danger = days !== null && days < 14;
+  const max = Math.max(1, ...series.map((d) => Number(d.minutes) || 0));
+
+  // 카드 하단 한 줄 — 위 값들의 조합이다(별도 필드가 아니다).
+  const warn: string[] = [];
+  if (days !== null && days <= 0) warn.push("잔액 0 — 새 분석이 큐에서 멈춤");
+  else if (danger) warn.push(runwayText(days));
+  if (stuck > 0) warn.push(`막힌 작업 ${stuck}건`);
+  if (tenant.status !== "active") warn.push(`상태 ${tenant.status}`);
+
+  return (
+    <button type="button" className="cc" onClick={() => onOpen(tenant.id)}>
+      <div className="cc-head">
+        <Avatar id={tenant.id} name={tenant.name} />
+        <span className="cc-name">
+          <span className="cc-title">{tenant.name}</span>
+          <span className="cc-sub">#{tenant.id} · {tenant.kind}</span>
+        </span>
+        <StatusTag status={tenant.status} />
+      </div>
+
+      {/* 14일 사용 추이. 데이터가 없으면 **빈 칸 대신 그렇게 적는다** — 빈 칸은 장애처럼 보인다. */}
+      {series.length ? (
+        <span className="cc-spark">
+          {series.map((d) => (
+            <span key={d.day} title={`${d.day} · ${Math.round(d.minutes)}분`}
+              style={{ height: `${Math.max(6, (Number(d.minutes) || 0) / max * 100)}%` }} />
+          ))}
+        </span>
+      ) : <span className="cc-spark-empty">최근 14일 사용 없음</span>}
+
+      <span className="cc-nums">
+        <span>
+          <span className="cc-k">잔액</span>
+          <span className="cc-v" style={tenant.credits <= 0 ? { color: "var(--bad)" } : undefined}>
+            {tenant.credits.toLocaleString("ko-KR")}
+          </span>
+        </span>
+        <span>
+          <span className="cc-k">이번 달 사용</span>
+          <span className="cc-v">{tenant.usedThisMonth.toLocaleString("ko-KR")}</span>
+        </span>
+        <span>
+          <span className="cc-k">30일 마진</span>
+          {/* 아직 못 받았으면 "0" 이 아니라 "—" 다 — 없는 것과 0 은 다르다. */}
+          <span className="cc-v" style={marginKrw != null && marginKrw < 0 ? { color: "var(--bad)" } : undefined}>
+            {marginKrw == null ? "—" : won(marginKrw)}
+          </span>
+        </span>
+      </span>
+
+      {/* 런웨이 — 잔액만으로는 위험한지 알 수 없다. 남은 기간이 있어야 판단이 된다. */}
+      <span className="cc-bar">
+        <span style={{ width: `${pct}%`, background: danger ? "var(--bad)" : "var(--ok)" }} />
+      </span>
+      <span className="cc-foot">
+        <span>{runwayText(days)}</span>
+        <span className="cc-gap" />
+        <span>멤버 {tenant.userCount}</span>
+      </span>
+
+      {warn.length > 0 && (
+        <span className="cc-alert"><b>!</b><span>{warn.join(" · ")}</span></span>
+      )}
+    </button>
+  );
 }
 
 function CompanyCreate({ onDone, onClose }: { onDone: () => void; onClose: () => void }) {
