@@ -132,6 +132,124 @@ export async function geminiGenerate(prompt: string, opts: GeminiJsonOpts = {}):
   return { text, sources, finishReason };
 }
 
+// ── 멀티턴 + 함수호출 (워크스페이스 도우미) ──────────────────────────────────────
+//
+// 위 `geminiGenerate` 는 **프롬프트 문자열 하나짜리** 라 대화를 이어갈 수도, 도구를 부를
+// 수도 없다. 도우미는 둘 다 필요해서 형제 함수를 하나 더 둔다 — 인증·URL 조립·에러 처리는
+// 같은 것을 쓰고, 다른 것은 요청 본문뿐이다. (위 함수는 손대지 않는다: 부르는 곳이
+// 프로그램 프로필·제목 생성 등 여럿이고, 그쪽은 지금 형태로 충분하다.)
+
+export type ChatPart =
+  | { text: string }
+  | { functionCall: { name: string; args: Record<string, unknown> } }
+  | { functionResponse: { name: string; response: Record<string, unknown> } };
+
+export interface ChatTurn {
+  /** Vertex 규약: 모델의 발화는 `"model"` 이다(`"assistant"` 가 아니다). */
+  role: "user" | "model";
+  parts: ChatPart[];
+}
+
+export interface GeminiFunctionTool {
+  functionDeclarations: unknown[];
+}
+
+export interface GeminiChatOpts {
+  /** 시스템 지시. 매 턴 같은 내용이라 대화 이력에 섞지 않고 여기로 준다. */
+  system?: string;
+  tools?: GeminiFunctionTool[];
+  /** 모델·리전 오버라이드. **둘은 세트다**(models.ts SUPPORT 주석 참고). */
+  model?: string;
+  location?: string;
+  temperature?: number;
+  maxOutputTokens?: number;
+  /** 기본 끔. 대화형 응답은 속도가 곧 품질이고, 추론 토큰은 예산만 먹는다. */
+  thinking?: boolean;
+  /** 구조화 출력. tools 와 함께 쓸 수 없다(Vertex 가 거부한다). */
+  schema?: unknown;
+}
+
+export interface GeminiChatResult {
+  text: string;
+  /** 모델이 부르자고 한 도구들. 비어 있으면 그냥 답한 것이다. */
+  calls: { name: string; args: Record<string, unknown> }[];
+  finishReason?: string;
+  /** 원가를 실측으로 말할 수 있게 그대로 올린다 — 추정으로 적지 않기 위해. */
+  usage?: { input: number; output: number };
+}
+
+/**
+ * Vertex 호스트. **`global` 은 리전 접두사가 없다** — `global-aiplatform.googleapis.com`
+ * 이라는 호스트는 존재하지 않아서, 접두사를 붙이면 DNS 단계에서 죽는다.
+ */
+function vertexHost(location: string): string {
+  return location === "global" ? "aiplatform.googleapis.com" : `${location}-aiplatform.googleapis.com`;
+}
+
+/**
+ * 멀티턴 한 번. **루프를 돌지 않는다** — 도구를 부르자고 하면 그 사실만 돌려주고,
+ * 실제로 부르고 다시 물어보는 것은 호출부(support/agent.ts)가 한다. 여기서 루프를 돌면
+ * "몇 번까지 도는가" 라는 정책이 클라이언트 안에 숨는다.
+ */
+export async function geminiChat(turns: ChatTurn[], opts: GeminiChatOpts = {}): Promise<GeminiChatResult> {
+  const client = await auth().getClient();
+  const token = (await client.getAccessToken()).token;
+  if (!token) throw new Error("no ADC access token (Vertex auth failed)");
+
+  const model = opts.model || MODEL;
+  const location = opts.location || LOCATION;
+  const url =
+    `https://${vertexHost(location)}/v1/projects/${PROJECT}` +
+    `/locations/${location}/publishers/google/models/${model}:generateContent`;
+
+  const generationConfig: Record<string, unknown> = {
+    temperature: opts.temperature ?? 0.2,
+    maxOutputTokens: opts.maxOutputTokens ?? 2048,
+  };
+  if (opts.schema && !opts.tools?.length) {
+    generationConfig.responseMimeType = "application/json";
+    generationConfig.responseSchema = opts.schema;
+  }
+  // 기본 끔 — 위 geminiGenerate 주석의 함정(추론이 예산을 다 먹고 본문이 빈 채 온다)이
+  // 대화에서는 더 자주 터진다. 예산이 2048 로 작기 때문이다.
+  if (!(opts.thinking ?? false)) generationConfig.thinkingConfig = { thinkingBudget: 0 };
+
+  const body: Record<string, unknown> = { contents: turns, generationConfig };
+  if (opts.system) body.systemInstruction = { parts: [{ text: opts.system }] };
+  if (opts.tools?.length) body.tools = opts.tools;
+
+  const resp = await fetch(url, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!resp.ok) {
+    const detail = await resp.text().catch(() => "");
+    throw new Error(`Vertex generateContent(${model}@${location}) ${resp.status}: ${detail.slice(0, 300)}`);
+  }
+
+  const data = (await resp.json()) as any;
+  const cand = data?.candidates?.[0];
+  const parts: any[] = cand?.content?.parts ?? [];
+  const text = parts.map((p) => p?.text ?? "").join("").trim();
+  const calls = parts
+    .filter((p) => p?.functionCall?.name)
+    .map((p) => ({ name: String(p.functionCall.name), args: (p.functionCall.args ?? {}) as Record<string, unknown> }));
+
+  const usage = data?.usageMetadata
+    ? {
+        input: Number(data.usageMetadata.promptTokenCount ?? 0),
+        output: Number(data.usageMetadata.candidatesTokenCount ?? 0),
+      }
+    : undefined;
+
+  const finishReason = typeof cand?.finishReason === "string" ? cand.finishReason : undefined;
+  if (!text && !calls.length && finishReason) {
+    console.warn(`[gemini] 도우미 빈 응답 — finishReason=${finishReason} · model=${model}@${location}`);
+  }
+  return { text, calls, finishReason, usage };
+}
+
 /** Parse a JSON object out of model text (handles ```json fences / leading prose). */
 export function parseJsonLoose(text: string): unknown {
   const t = (text || "").trim();
