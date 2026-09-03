@@ -10,7 +10,20 @@
  *   거래              → [거래 보기]        → 전체 내역 다이얼로그
  *   결제 옵션         → [결제 수단 관리]   → 카드 등록/변경/삭제 + **구매자 정보 입력**
  *   설정              → [설정 관리]        → 구매자 정보(이름·이메일·휴대폰) 다이얼로그
- * 카드 하단의 "border-top + 중앙 정렬 + 액센트 텍스트"(CardAction)가 이 디자인의 시그니처다.
+ * 카드 하단의 꽉 찬 알약 버튼(거래 보기·결제 수단 관리·인보이스 보기·설정 관리)이 시그니처다.
+ *
+ * ## 화면 본문은 디자이너 산출물 이식본이다 (원본 `STEPD_SaaS_UI_V1/src/app/credits/page.tsx` 745줄)
+ * 마크업·클래스·문구는 원본 그대로. **다이얼로그 5종은 우리 것을 그대로 쓴다** — 결제
+ * 로직(멱등키 보존·409 "확인 중" 분기·저장카드 confirm·닫기 차단)이 거기 들어 있어
+ * 마크업만 갈아끼우면 이중 청구가 난다. 모달 이식은 그 로직을 헤드리스로 뽑은 뒤 별건으로.
+ *
+ * 원본에서 되살린 것 — **이 화면은 목업에서 결제가 통째로 없었다**:
+ *  - `크레딧 구매하기` 에 onClick 이 없다. 그대로면 이 제품은 돈을 못 받는다
+ *  - `handleSaveEmail` 은 `setIsSaved(true)` 뿐 — 저장했다고 화면만 거짓말한다
+ *  - `5,000개`·`₩300,000/₩30,000/₩330,000` 이 화면 상수다 → 서버 정책값으로 만든다
+ *  - `자동 재결제: 켜짐` 이 고정이다 → 카드가 없으면 안 도는데 초록으로 보인다
+ *  - 구매자 정보 요약이 세 값을 무조건 이어 붙인다 → 휴대폰이 비어도 "채워짐"으로 보였다
+ *  - 잔액 0·자동결제 실패·조회 실패·카드 미등록 같은 상태가 하나도 없다
  *
  * ## 자동 재결제는 **고정 정책**이다 (2026-08-26)
  * "잔액이 소진되면 5,000크레딧(₩300,000)을 등록 카드로 자동 결제." 임계·금액·on/off 를
@@ -31,7 +44,10 @@
  * 화면이 하는 일은 **잔액을 다시 조회하는 것뿐**이고, 아직 안 올라왔으면 "확인 중"이라고 말한다.
  */
 import { useCallback, useEffect, useState } from "react";
-import { CreditCard, Zap } from "lucide-react";
+import { CreditCard, RefreshCw } from "lucide-react";
+
+import { Footer } from "@/components/layout/footer";
+import { Header } from "@/components/layout/header";
 
 import { useToast } from "@/components/ui/toast";
 import { useSession } from "@/lib/auth";
@@ -49,7 +65,7 @@ import {
 } from "@/lib/data/api";
 import { downloadInvoicePdf } from "@/lib/billing/invoice-pdf";
 import { SavedCardChargeButton, SavedCardManager } from "@/components/billing/saved-card";
-import { BillingCard, BillingDialog, CardAction } from "@/components/billing/billing-ui";
+import { BillingDialog } from "@/components/billing/billing-ui";
 import { cn } from "@/lib/utils";
 
 /** 자주 쓰는 충전량. 시간 단위로 생각하는 게 자연스럽다(1크레딧=1분). */
@@ -343,346 +359,385 @@ export default function CreditsPage() {
   const alert = state?.autoTopupAlert ?? null;
 
   return (
-    <div className="mx-auto flex max-w-[900px] flex-col gap-[14px]">
-      <h2 className="sd-serif text-[16px] font-semibold" style={{ color: "var(--sd-fg)" }}>결제</h2>
+    <>
+      <Header title="크레딧" subtitle="잔액 · 충전 · 사용 내역" />
 
-      {/* ── 상태 배너 — 서비스가 멈춰 있거나 결제가 실패 중이면 맨 위에서 말한다 ── */}
-      {state && state.balance <= 0 && (
-        <div
-          className="flex items-center gap-2.5 rounded-[6px] px-3.5 py-2.5"
-          style={{ border: "1px solid var(--sd-danger-border)", background: "var(--sd-danger-bg)" }}
-        >
-          <span
-            className="grid h-[20px] w-[20px] shrink-0 place-items-center rounded-full text-[12px] font-extrabold"
-            style={{ background: "var(--sd-danger-strong)", color: "var(--sd-on-danger)" }}
-          >!</span>
-          <div className="text-[12px] font-semibold" style={{ color: "var(--sd-danger-strong)" }}>
-            크레딧이 소진되어 새 분석이 시작되지 않습니다
-            <span className="block text-[11px] font-normal" style={{ color: "var(--sd-danger-strong)", opacity: 0.85 }}>
-              충전(또는 자동 재결제 복구) 후 다시 시작할 수 있습니다 — 이미 완료된 단계는 보존됩니다.
-            </span>
-          </div>
-        </div>
-      )}
-      {alert && (
-        <div
-          className="flex items-center gap-2.5 rounded-[6px] px-3.5 py-2.5"
-          style={{ border: "1px solid var(--sd-danger-border)", background: "var(--sd-danger-bg)" }}
-        >
-          <span
-            className="grid h-[20px] w-[20px] shrink-0 place-items-center rounded-full text-[12px] font-extrabold"
-            style={{ background: "var(--sd-danger-strong)", color: "var(--sd-on-danger)" }}
-          >!</span>
-          <div className="text-[12px] font-semibold" style={{ color: "var(--sd-danger-strong)" }}>
-            자동 결제 실패 — {alert.message}
-            {alert.hint && (
-              <span className="block text-[11px] font-normal" style={{ color: "var(--sd-danger-strong)", opacity: 0.85 }}>
-                {alert.hint}
-              </span>
-            )}
-          </div>
-        </div>
-      )}
+      {/* Credits Content Main */}
+      <main className="flex-1 p-6 flex flex-col justify-between overflow-y-auto space-y-5">
+        <div className="space-y-5 max-w-6xl w-full mx-auto">
+          {/* Title Label */}
+          <h2 className="font-bold text-lg text-[var(--color-text-primary)]">결제</h2>
 
-      {/* ── 히어로 — 잔액 + 구매 진입점 ─────────────────────────────────────── */}
-      <BillingCard
-        action={<CardAction label="크레딧 구매하기" onClick={() => setDialog("topup")} />}
-      >
-        <div className="flex flex-wrap items-start justify-between gap-2">
-          <div className="sd-eb" style={{ color: "var(--sd-label)" }}>크레딧 잔액</div>
-          {awaiting && <span className="sd-tag sd-tag--warn">결제 확인 중…</span>}
-        </div>
-
-        <div className="flex flex-wrap items-baseline gap-2.5">
-          <span className="sd-mono text-[34px] leading-none" style={{ color: "var(--sd-fg)" }}>
-            {state ? state.balance.toLocaleString("ko-KR") : "—"}
-          </span>
-          {state && (
-            <span className="text-[11px]" style={{ color: "var(--sd-mut)" }}>
-              {price != null ? `≈ ${WON(state.balance * price)} · ` : ""}
-              약 {Math.floor(state.balance / 60)}시간 {state.balance % 60}분 분석 가능
-            </span>
-          )}
-        </div>
-
-        {/* 이번달 사용 게이지 — 목업의 사용/한도 축. 분모 = 이번달 사용 + 현재 잔액. */}
-        {state && monthUsage != null && gaugeTotal != null && gaugeTotal > 0 && (
-          <div>
-            <div className="h-[6px] overflow-hidden rounded-full" style={{ background: "var(--sd-card-sub)" }}>
-              <div
-                className="h-full rounded-full"
-                style={{
-                  width: `${Math.min(100, Math.round((monthUsage / gaugeTotal) * 100))}%`,
-                  background: state.balance <= 0 ? "var(--sd-danger-strong)" : "var(--sd-accent)",
-                }}
-              />
-            </div>
-            <div className="mt-1 flex justify-between text-[10.5px]" style={{ color: "var(--sd-mut)" }}>
-              <span>이번달 {monthUsage.toLocaleString("ko-KR")}개 사용</span>
-              <span>잔액 {state.balance.toLocaleString("ko-KR")}개</span>
-            </div>
-          </div>
-        )}
-
-        {price != null && (
-          <div
-            className="flex items-center justify-between pt-2 text-[11.5px]"
-            style={{ borderTop: "1px solid var(--sd-border)" }}
-          >
-            <span style={{ color: "var(--sd-mut)" }}>크레딧 단가</span>
-            <span className="sd-mono" style={{ color: "var(--sd-fg)" }}>
-              {WON(price)}<span className="ml-1 text-[10.5px]" style={{ color: "var(--sd-mut)" }}>/ 개 (부가세 별도)</span>
-            </span>
-          </div>
-        )}
-
-        <p className="text-[11.5px]" style={{ color: "var(--sd-mut)" }}>
-          서비스를 계속 이용하려면 크레딧을 구매하세요.
-        </p>
-
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11.5px]" style={{ color: "var(--sd-fg)" }}>
-          <span className="inline-flex items-center gap-1.5">
-            <CreditCard size={13} style={{ color: "var(--sd-mut)" }} aria-hidden /> 선불
-          </span>
-          <span style={{ color: "var(--sd-mut)" }}>·</span>
-          <span className="inline-flex items-center gap-1.5">
-            <Zap size={13} style={{ color: "var(--sd-mut)" }} aria-hidden />
-            자동 재결제: {auto ? (auto.policy.enabled ? "켜짐" : "꺼짐") : "—"}
-          </span>
-          {/* 설정 링크를 두지 않는다 — 고정 정책이라 열어 봐야 바꿀 것이 없다.
-              끄는 유일한 방법(카드 삭제)은 결제 수단 화면에 있으므로 그리로 보낸다. */}
-          <button
-            type="button"
-            className="underline"
-            style={{ color: "var(--sd-accent)" }}
-            onClick={() => setDialog("card")}
-          >
-            결제 수단 관리
-          </button>
-        </div>
-
-        <p className="text-[11px]" style={{ color: "var(--sd-mut)" }}>
-          {state?.unit ?? "크레딧 1개 = 분석 1분"} · 선불 결제이며, 승인 후 서버 확인이 끝나야
-          잔액에 반영됩니다. 크레딧은 <b>분석에 쓰인 분</b>과 <b>배포한 영상×채널</b>만큼 차감됩니다
-          (배포 실패 시 되돌려 드립니다).
-        </p>
-      </BillingCard>
-
-      {error && (
-        <div
-          className="rounded-[4px] px-3 py-2 text-[11.5px]"
-          style={{ border: "1px solid var(--sd-danger-border)", background: "var(--sd-danger-bg)", color: "var(--sd-danger-strong)" }}
-        >
-          크레딧 정보를 불러오지 못했습니다 ({error}).
-        </div>
-      )}
-
-      {/* ── 자동 재결제 + 결제 알림 ──────────────────────────────────────────────
-          자동 결제는 **고정 정책**이다(2026-08-26) — 켜고 끄는 토글도, 금액·임계 설정도 없다.
-          "카드가 등록돼 있으면 소진 시 자동 결제, 없으면 안 함" 이 전부다. 그래서 이 카드는
-          설정 장치가 아니라 **지금 상태를 사실대로 말하는 자리**다: 지금 켜져 있는가,
-          얼마가 나가는가, 끄려면 무엇을 하면 되는가. ── */}
-      <BillingCard>
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            <div className="text-[13px] font-semibold" style={{ color: "var(--sd-fg)" }}>자동 재결제</div>
-            {/* 상태 배지 — 토글이 없으니 지금 켜졌는지가 한눈에 보여야 한다. */}
-            <span
-              className="rounded-full px-2 py-[1px] text-[10.5px] font-medium"
-              style={
-                auto?.policy.enabled
-                  ? { background: "var(--sd-ok-bg, rgba(45,160,110,.14))", color: "var(--sd-ok)" }
-                  : { background: "var(--sd-border)", color: "var(--sd-mut)" }
-              }
-            >
-              {auto ? (auto.policy.enabled ? "켜짐" : "꺼짐") : "…"}
-            </span>
-          </div>
-          <p className="mt-1 text-[11.5px]" style={{ color: "var(--sd-fg)" }}>
-            {auto ? autoChargeSentence(auto.policy) : "정책을 불러오는 중…"}
-          </p>
-          {/* 부가세 별도라 **청구액을 따로 말한다** — 총액만 보여주면 카드 명세서 금액과
-              달라 문의가 된다(2026-08-27). */}
-          {(() => {
-            const a = autoChargeAmounts(auto?.policy ?? null, price);
-            return a ? (
-              <p className="mt-0.5 text-[11px]" style={{ color: "var(--sd-mut)" }}>
-                공급가액 {WON(a.supply)} · 부가세 {WON(a.vat)} · <b style={{ color: "var(--sd-fg)" }}>결제 금액 {WON(a.total)}</b>
-              </p>
-            ) : null;
-          })()}
-          {/* 꺼져 있으면 **왜** 꺼져 있는지 + 무엇을 하면 켜지는지. 조용한 "꺼짐" 은 정보가 아니다. */}
-          {auto && !auto.policy.enabled && (
-            <p className="mt-1 text-[11px]" style={{ color: "var(--sd-warn)" }}>
-              {auto.disabledReason ?? "등록된 카드가 없습니다."} 카드를 등록하면 자동으로 켜집니다 —
-              잔액이 0이 되어도 분석·자동배포가 멈추지 않습니다.
-            </p>
-          )}
-          <p className="mt-0.5 text-[11px]" style={{ color: "var(--sd-mut)" }}>
-            결제 시점은 잔액이 소진되는 순간입니다. 중단하려면 <b>결제 수단(카드)을 삭제</b>하면 됩니다.
-          </p>
-        </div>
-
-        <div className="pt-2" style={{ borderTop: "1px solid var(--sd-border)" }}>
-          <div className="mb-1 text-[11px] font-medium" style={{ color: "var(--sd-label)" }}>결제 알림 이메일</div>
-          <p className="mb-1.5 text-[11px]" style={{ color: "var(--sd-mut)" }}>
-            인보이스(결제 완료)와 자동 결제 실패 알림을 받을 담당자 — 쉼표로 여러 명(최대 5명).
-          </p>
-          <div className="flex flex-wrap items-center gap-2">
-            <input
-              value={notifyInput}
-              onChange={(e) => setNotifyInput(e.target.value)}
-              placeholder="media-ops@company.com, cp@company.com"
-              className="sd-input min-w-[260px] flex-1"
-              aria-label="결제 알림 이메일"
-              disabled={!canManageBilling}
+          {/* ── 상태 배너 — 서비스가 멈춰 있거나 결제가 실패 중이면 맨 위에서 말한다.
+              원본에는 없다(항상 정상 상태). rose 는 원본이 이미 쓰는 색이다. ── */}
+          {state && state.balance <= 0 && (
+            <Banner
+              title="크레딧이 소진되어 새 분석이 시작되지 않습니다"
+              hint="충전(또는 자동 재결제 복구) 후 다시 시작할 수 있습니다 — 이미 완료된 단계는 보존됩니다."
             />
-            <button
-              type="button"
-              className="sd-btn"
-              disabled={notifyBusy || !notifyDirty || !canManageBilling}
-              onClick={() => void saveNotify()}
-            >
-              {notifyBusy ? "저장 중…" : notifyDirty ? "저장" : "저장됨"}
-            </button>
-          </div>
-          {notifySaved.length > 0 && (
-            <p className="mt-1.5 text-[10.5px]" style={{ color: "var(--sd-mut)" }}>
-              {notifySaved.length}명이 결제 알림 메일을 받고 있습니다.
-            </p>
           )}
-        </div>
-      </BillingCard>
+          {alert && (
+            <Banner title={`자동 결제 실패 — ${alert.message}`} hint={alert.hint} />
+          )}
+          {error && <Banner title={`크레딧 정보를 불러오지 못했습니다 (${error}).`} />}
 
-      {/* ── 2열 — 거래 · 결제 옵션 ─────────────────────────────────────────── */}
-      <div className="grid items-stretch gap-[14px] md:grid-cols-2">
-        <BillingCard
-          title="거래"
-          action={<CardAction label="거래 보기" onClick={() => setDialog("ledger")} disabled={!state} />}
-        >
-          {!state ? (
-            <p className="text-[11.5px]" style={{ color: "var(--sd-mut)" }}>불러오는 중…</p>
-          ) : recent.length === 0 ? (
-            <p className="text-[11.5px]" style={{ color: "var(--sd-mut)" }}>아직 거래가 없습니다.</p>
-          ) : (
-            <div className="flex flex-col gap-1.5">
-              {recent.map((l) => (
-                <div key={l.id} className="flex items-center gap-2.5">
-                  <span className="sd-mono w-[76px] shrink-0 text-[10.5px]" style={{ color: "var(--sd-mut)" }}>
-                    {l.occurredAt?.slice(5, 16).replace("T", " ")}
+          {/* Block 1: 크레딧 잔액 Section Card */}
+          <div className="bg-[var(--color-bg-card)] border-none rounded-xl p-5 shadow-md shadow-slate-900/5 dark:shadow-none space-y-4">
+            <div className="space-y-1">
+              <div className="text-xs text-[var(--color-text-muted)] font-semibold flex items-center gap-2">
+                <span>크레딧 잔액</span>
+                {/* 결제 승인은 났는데 서버 반영을 기다리는 중 — 원본엔 없는 상태다. */}
+                {awaiting && (
+                  <span className="px-2 py-0.5 rounded-full text-[10px] bg-amber-500/15 text-amber-600 dark:bg-amber-500/20 dark:text-amber-400 font-bold">
+                    결제 확인 중…
                   </span>
-                  <span className="min-w-0 flex-1 truncate text-[11.5px]" style={{ color: "var(--sd-fg)" }}>
-                    {reasonLabel(l.reason)}
+                )}
+              </div>
+              <div className="flex items-baseline gap-2 flex-wrap">
+                <span className="text-4xl font-extrabold text-[var(--color-text-primary)]">
+                  {state ? state.balance.toLocaleString("ko-KR") : "—"}
+                </span>
+                {state && (
+                  <span className="text-xs text-[var(--color-text-muted)] font-normal">
+                    {/* 단가가 미설정이면 환산 금액을 통째로 뺀다 — 지어내지 않는다. */}
+                    {price != null ? `≈ ${WON(state.balance * price)} · ` : ""}
+                    약 {Math.floor(state.balance / 60)}시간 {state.balance % 60}분 분석 가능
                   </span>
-                  <span
-                    className="sd-mono w-[56px] shrink-0 text-right text-[11.5px]"
-                    style={{ color: l.delta >= 0 ? "var(--sd-ok)" : "var(--sd-fg)" }}
-                  >
-                    {l.delta >= 0 ? "+" : ""}{l.delta.toLocaleString("ko-KR")}
-                  </span>
-                </div>
-              ))}
+                )}
+              </div>
             </div>
-          )}
-        </BillingCard>
 
-        <BillingCard
-          title="결제 옵션"
-          action={<CardAction label="결제 수단 관리" onClick={() => setDialog("card")} />}
-        >
-          {cardLoadFailed ? (
-            <p className="text-[11.5px]" style={{ color: "var(--sd-mut)" }}>
-              결제수단 정보를 불러오지 못했습니다.{" "}
-              <button type="button" className="underline" onClick={() => void load()}>다시 시도</button>
-            </p>
-          ) : !card ? (
-            <p className="text-[11.5px]" style={{ color: "var(--sd-mut)" }}>불러오는 중…</p>
-          ) : (
-            <>
-              <p className="text-[11.5px]" style={{ color: "var(--sd-fg)" }}>
-                저장된 결제 수단이 {card.registered ? 1 : 0}개 있습니다.
-              </p>
-              {card.registered ? (
-                <p className="sd-mono text-[12px] tracking-[0.08em]" style={{ color: "var(--sd-mut)" }}>
-                  {card.brand || "카드"} •••• •••• •••• {card.last4 || "••••"}
-                </p>
-              ) : (
-                <p className="text-[11px]" style={{ color: "var(--sd-mut)" }}>
-                  카드를 등록해 두면 결제창 없이 버튼 한 번으로 충전합니다.
-                </p>
-              )}
-              {!card.available && (
-                <p className="text-[11px]" style={{ color: "var(--sd-mut)" }}>
-                  카드 저장이 아직 준비되지 않았습니다. {card.unavailableReason ?? ""}
-                </p>
-              )}
-            </>
-          )}
-        </BillingCard>
-      </div>
+            <div className="flex items-center justify-between text-xs py-2.5 border-t border-b border-[var(--color-border-subtle)]/40 font-medium">
+              <span className="text-[var(--color-text-muted)]">
+                {monthUsage != null ? `이번달 ${monthUsage.toLocaleString("ko-KR")}개 사용` : "이번달 사용량 집계 중"}
+              </span>
+              <span className="text-[var(--color-text-primary)] font-bold">
+                잔액 {state ? state.balance.toLocaleString("ko-KR") : "—"}개
+              </span>
+            </div>
 
-      {/* ── 2열 — 인보이스 · 설정 ──────────────────────────────────────────── */}
-      <div className="grid items-stretch gap-[14px] md:grid-cols-2">
-      <BillingCard
-        title="인보이스"
-        action={
-          <CardAction
-            label="인보이스 보기"
-            onClick={() => setDialog("invoices")}
-            disabled={!invoiceList || invoiceList.invoices.length === 0}
-          />
-        }
-      >
-        {invoicesFailed ? (
-          <p className="text-[11.5px]" style={{ color: "var(--sd-mut)" }}>
-            인보이스를 불러오지 못했습니다.{" "}
-            <button type="button" className="underline" onClick={() => void load()}>다시 시도</button>
-          </p>
-        ) : !invoiceList ? (
-          <p className="text-[11.5px]" style={{ color: "var(--sd-mut)" }}>불러오는 중…</p>
-        ) : invoiceList.invoices.length === 0 ? (
-          <p className="text-[11.5px]" style={{ color: "var(--sd-mut)" }}>
-            아직 결제된 내역이 없습니다 — 결제가 완료되면 건마다 인보이스가 쌓이고 PDF 로 받을 수 있습니다.
-          </p>
-        ) : (
-          <div className="flex flex-col gap-1.5">
-            {recentInvoices.map((inv) => (
-              <div key={inv.id} className="flex items-center gap-2.5">
-                <span className="sd-mono w-[76px] shrink-0 text-[10.5px]" style={{ color: "var(--sd-mut)" }}>
-                  {inv.paidAt.slice(0, 10)}
-                </span>
-                <span className="sd-mono min-w-0 flex-1 truncate text-[11px]" style={{ color: "var(--sd-fg)" }}>
-                  {inv.number}
-                </span>
-                <span className="sd-mono shrink-0 text-right text-[11.5px]" style={{ color: "var(--sd-fg)" }}>
-                  {WON(inv.amountKrw)}
+            <div className="space-y-2 text-xs">
+              <div className="flex items-center justify-between">
+                <span className="text-[var(--color-text-muted)] font-semibold">크레딧 단가</span>
+                <span className="text-[var(--color-text-primary)] font-bold">
+                  {price != null ? `${WON(price)} / 개 (부가세 별도)` : "단가 미설정"}
                 </span>
               </div>
-            ))}
-          </div>
-        )}
-      </BillingCard>
 
-      <BillingCard
-        title="설정"
-        action={<CardAction label="설정 관리" onClick={() => setDialog("settings")} />}
-      >
-        <SettingRow
-          label="워크스페이스"
-          // 세션에 워크스페이스 이름이 없다(계정·역할만 온다) — 있는 것을 정직하게 보여준다.
-          value={
-            session.user.name
-              ? `${session.user.name}${session.user.workspaceRole ? ` · ${ROLE_KO[session.user.workspaceRole] ?? session.user.workspaceRole}` : ""}`
-              : "—"
-          }
-        />
-        <SettingRow
-          label="크레딧 단가"
-          value={price != null ? `${WON(price)} · 부가세 별도` : "단가 미설정"}
-        />
-        <SettingRow label="구매자 정보" value={buyerSummary} />
-      </BillingCard>
-      </div>
+              <div className="flex items-center justify-between pt-1">
+                <div className="flex items-center gap-2 text-[var(--color-text-primary)] font-medium">
+                  <span className="flex items-center gap-1.5">
+                    <CreditCard className="w-4 h-4 text-[var(--color-text-muted)]" />
+                    <span>선불</span>
+                  </span>
+                  <span>·</span>
+                  {/* 원본은 초록 '켜짐' 고정이다. 카드가 없으면 자동충전이 안 도는데
+                      초록으로 그리면 사용자는 켜져 있다고 믿는다 → 꺼짐은 회색으로. */}
+                  <span
+                    className={`flex items-center gap-1 font-bold ${
+                      auto?.policy.enabled
+                        ? "text-emerald-600 dark:text-emerald-400"
+                        : "text-[var(--color-text-muted)]"
+                    }`}
+                  >
+                    <RefreshCw className="w-3.5 h-3.5 stroke-[2.5]" />
+                    <span>자동 재결제: {auto ? (auto.policy.enabled ? "켜짐" : "꺼짐") : "—"}</span>
+                  </span>
+                </div>
+                {/* 설정 링크를 두지 않는다 — 고정 정책이라 열어 봐야 바꿀 것이 없다.
+                    끄는 유일한 방법(카드 삭제)은 결제 수단 화면에 있으므로 그리로 보낸다. */}
+                <button
+                  type="button"
+                  onClick={() => setDialog("card")}
+                  className="text-xs font-bold text-[#1C60FF] hover:underline cursor-pointer"
+                >
+                  결제 수단 관리
+                </button>
+              </div>
+
+              <p className="text-[11px] text-[var(--color-text-muted)] leading-relaxed pt-2">
+                {state?.unit ?? "크레딧 1개 = 분석 1분"} · 선불 결제이며, 승인 후 서버 확인이 끝나야 잔액에 반영됩니다. 크레딧은 분석에 쓰인 분과 배포한 영상×채널만큼 차감됩니다 (배포 실패 시 되돌려 드립니다).
+              </p>
+            </div>
+
+            <div className="pt-2">
+              {/* ⚠️ 원본 버튼에는 onClick 이 **없다** — 그대로 옮기면 이 제품은 돈을 못 받는다. */}
+              <button
+                type="button"
+                onClick={() => setDialog("topup")}
+                className="w-full h-10 rounded-full bg-[var(--color-bg-active)] hover:bg-[#0D1EB8] text-white text-xs font-bold transition-colors cursor-pointer shadow-md shadow-slate-900/5 dark:shadow-none flex items-center justify-center gap-1.5"
+              >
+                <CreditCard className="w-4 h-4" />
+                <span>크레딧 구매하기</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Block 2: 자동 재결제 Section Card ─────────────────────────────────
+              자동 결제는 **고정 정책**이다(2026-08-26) — 켜고 끄는 토글도, 금액·임계 설정도
+              없다. "카드가 등록돼 있으면 소진 시 자동 결제, 없으면 안 함" 이 전부라, 이 카드는
+              설정 장치가 아니라 지금 상태를 사실대로 말하는 자리다. */}
+          <div className="bg-[var(--color-bg-card)] border-none rounded-xl p-5 shadow-md shadow-slate-900/5 dark:shadow-none space-y-4">
+            <div className="flex items-center gap-2">
+              <h3 className="font-bold text-base text-[var(--color-text-primary)]">자동 재결제</h3>
+              <span
+                className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
+                  auto?.policy.enabled
+                    ? "bg-emerald-500/15 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-400"
+                    : "bg-slate-200/80 text-slate-600 dark:bg-[#282B35] dark:text-slate-300"
+                }`}
+              >
+                {auto ? (auto.policy.enabled ? "켜짐" : "꺼짐") : "…"}
+              </span>
+            </div>
+
+            <div className="space-y-1 text-xs">
+              {/* 숫자는 **서버 정책값**으로 만든다 — 화면 상수(5,000개·₩330,000)를 박으면
+                  서버가 바뀔 때 틀린 금액으로 동의를 받는다. */}
+              <div className="font-bold text-[var(--color-text-primary)]">
+                {auto ? autoChargeSentence(auto.policy) : "정책을 불러오는 중…"}
+              </div>
+              {(() => {
+                const a = autoChargeAmounts(auto?.policy ?? null, price);
+                return a ? (
+                  <div>
+                    <span className="text-[var(--color-text-muted)] font-medium">
+                      공급가액 {WON(a.supply)} · 부가세 {WON(a.vat)} ·{" "}
+                    </span>
+                    <span className="text-[var(--color-text-primary)] font-bold">결제 금액 {WON(a.total)}</span>
+                  </div>
+                ) : null;
+              })()}
+              {/* 꺼져 있으면 **왜** 꺼져 있는지 + 무엇을 하면 켜지는지. 조용한 "꺼짐" 은 정보가 아니다. */}
+              {auto && !auto.policy.enabled && (
+                <div className="text-amber-600 dark:text-amber-400 font-medium">
+                  {auto.disabledReason ?? "등록된 카드가 없습니다."} 카드를 등록하면 자동으로 켜집니다 — 잔액이 0이 되어도 분석·자동배포가 멈추지 않습니다.
+                </div>
+              )}
+              <div className="text-[var(--color-text-muted)] pt-0.5">
+                결제 시점은 잔액이 소진되는 순간입니다. 중단하려면 결제 수단(카드)을 삭제하면 됩니다.
+              </div>
+            </div>
+
+            <div className="pt-2 space-y-2">
+              <div>
+                <label className="text-sm font-bold text-[var(--color-text-primary)] block mb-1">
+                  결제 알림 이메일
+                </label>
+                <div className="text-xs text-[var(--color-text-muted)] mb-2">
+                  인보이스(결제 완료)와 자동 결제 실패 알림을 받을 담당자 — 쉼표로 여러 명(최대 5명).
+                </div>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={notifyInput}
+                    placeholder="media-ops@company.com, cp@company.com"
+                    onChange={(e) => setNotifyInput(e.target.value)}
+                    aria-label="결제 알림 이메일"
+                    disabled={!canManageBilling}
+                    className="flex-1 h-10 px-4 rounded-full bg-[var(--color-bg-input)] border border-[var(--color-border-subtle)] focus:border-[#1C60FF] text-xs font-normal text-[var(--color-text-primary)] placeholder-[var(--color-text-muted)] focus:outline-none transition-colors shadow-none disabled:opacity-50 disabled:cursor-not-allowed"
+                  />
+                  {/* ⚠️ 원본 handleSaveEmail 은 setIsSaved(true) 뿐이다 — 저장했다고 화면만
+                      거짓말한다. 실제 저장은 서버가 형식·최대 5명을 검사한다. */}
+                  <button
+                    type="button"
+                    onClick={() => void saveNotify()}
+                    disabled={notifyBusy || !notifyDirty || !canManageBilling}
+                    className={`h-10 px-5 rounded-full text-xs font-bold transition-colors cursor-pointer border shrink-0 disabled:cursor-not-allowed ${
+                      !notifyDirty
+                        ? "bg-[var(--color-bg-input)] border-[var(--color-border-subtle)] text-[var(--color-text-primary)]"
+                        : "bg-[var(--color-bg-active)] hover:bg-[#0D1EB8] text-white border-transparent"
+                    }`}
+                  >
+                    {notifyBusy ? "저장 중…" : notifyDirty ? "저장" : "저장됨"}
+                  </button>
+                </div>
+                {notifySaved.length > 0 && (
+                  <div className="mt-1.5 text-[11px] text-[var(--color-text-muted)]">
+                    {notifySaved.length}명이 결제 알림 메일을 받고 있습니다.
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+
+          {/* Block 3: Lower 2x2 Grid */}
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {/* Card 3: 거래 */}
+            <div className="bg-[var(--color-bg-card)] border-none rounded-xl p-5 shadow-md shadow-slate-900/5 dark:shadow-none flex flex-col justify-between space-y-4">
+              <div className="space-y-3">
+                <h3 className="font-bold text-base text-[var(--color-text-primary)]">거래</h3>
+                {!state ? (
+                  <p className="text-xs text-[var(--color-text-muted)]">불러오는 중…</p>
+                ) : recent.length === 0 ? (
+                  <p className="text-xs text-[var(--color-text-muted)]">아직 거래가 없습니다.</p>
+                ) : (
+                  <div className="divide-y divide-[var(--color-border-subtle)]/40 text-xs font-mono">
+                    {recent.map((l) => (
+                      <div key={l.id} className="py-2.5 flex items-center justify-between gap-3">
+                        <div className="flex items-center gap-3 text-[var(--color-text-muted)] min-w-0">
+                          <span className="shrink-0">{l.occurredAt?.slice(5, 16).replace("T", " ")}</span>
+                          <span className="font-sans font-medium text-[var(--color-text-primary)] truncate">
+                            {reasonLabel(l.reason)}
+                          </span>
+                        </div>
+                        <span
+                          className={`font-bold shrink-0 ${
+                            l.delta >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-rose-500"
+                          }`}
+                        >
+                          {l.delta >= 0 ? "+" : ""}{l.delta.toLocaleString("ko-KR")}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setDialog("ledger")}
+                disabled={!state}
+                className="w-full h-9 rounded-full bg-[var(--color-bg-input)] hover:bg-[var(--color-bg-card-hover)] text-[#1C60FF] text-xs font-bold transition-colors cursor-pointer border border-[var(--color-border-subtle)] disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                거래 보기
+              </button>
+            </div>
+
+            {/* Card 4: 결제 옵션 */}
+            <div className="bg-[var(--color-bg-card)] border-none rounded-xl p-5 shadow-md shadow-slate-900/5 dark:shadow-none flex flex-col justify-between space-y-4">
+              <div className="space-y-3">
+                <h3 className="font-bold text-base text-[var(--color-text-primary)]">결제 옵션</h3>
+                <div className="space-y-3 text-xs">
+                  {cardLoadFailed ? (
+                    <div className="text-[var(--color-text-muted)]">
+                      결제수단 정보를 불러오지 못했습니다.{" "}
+                      <button type="button" className="underline cursor-pointer" onClick={() => void load()}>
+                        다시 시도
+                      </button>
+                    </div>
+                  ) : !card ? (
+                    <div className="text-[var(--color-text-muted)]">불러오는 중…</div>
+                  ) : (
+                    <>
+                      <div className="font-semibold text-[var(--color-text-primary)]">
+                        저장된 결제 수단이 {card.registered ? 1 : 0}개 있습니다.
+                      </div>
+                      {card.registered ? (
+                        <div className="p-3.5 rounded-xl bg-[var(--color-bg-input)]/70 border border-[var(--color-border-subtle)] font-mono text-[var(--color-text-muted)] font-bold flex items-center justify-between">
+                          <span className="text-[var(--color-text-primary)]">{card.brand || "카드"}</span>
+                          <span>····  ····  ····  {card.last4 || "····"}</span>
+                        </div>
+                      ) : (
+                        <div className="text-[var(--color-text-muted)]">
+                          카드를 등록해 두면 결제창 없이 버튼 한 번으로 충전합니다.
+                        </div>
+                      )}
+                      {!card.available && (
+                        <div className="text-[var(--color-text-muted)]">
+                          카드 저장이 아직 준비되지 않았습니다. {card.unavailableReason ?? ""}
+                        </div>
+                      )}
+                    </>
+                  )}
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setDialog("card")}
+                className="w-full h-9 rounded-full bg-[var(--color-bg-input)] hover:bg-[var(--color-bg-card-hover)] text-[#1C60FF] text-xs font-bold transition-colors cursor-pointer border border-[var(--color-border-subtle)]"
+              >
+                결제 수단 관리
+              </button>
+            </div>
+
+            {/* Card 5: 인보이스 */}
+            <div className="bg-[var(--color-bg-card)] border-none rounded-xl p-5 shadow-md shadow-slate-900/5 dark:shadow-none flex flex-col justify-between space-y-4">
+              <div className="space-y-3">
+                <h3 className="font-bold text-base text-[var(--color-text-primary)]">인보이스</h3>
+                {invoicesFailed ? (
+                  <p className="text-xs text-[var(--color-text-muted)]">
+                    인보이스를 불러오지 못했습니다.{" "}
+                    <button type="button" className="underline cursor-pointer" onClick={() => void load()}>
+                      다시 시도
+                    </button>
+                  </p>
+                ) : !invoiceList ? (
+                  <p className="text-xs text-[var(--color-text-muted)]">불러오는 중…</p>
+                ) : invoiceList.invoices.length === 0 ? (
+                  <p className="text-xs text-[var(--color-text-muted)]">
+                    아직 결제된 내역이 없습니다 — 결제가 완료되면 건마다 인보이스가 쌓이고 PDF 로 받을 수 있습니다.
+                  </p>
+                ) : (
+                  <div className="divide-y divide-[var(--color-border-subtle)]/40 text-xs font-mono">
+                    {recentInvoices.map((inv) => (
+                      <div key={inv.id} className="py-2.5 flex items-center justify-between gap-2">
+                        <span className="text-[var(--color-text-muted)] shrink-0">{inv.paidAt.slice(0, 10)}</span>
+                        <span className="text-[var(--color-text-primary)] font-bold truncate">{inv.number}</span>
+                        <span className="font-bold text-[var(--color-text-primary)] shrink-0">
+                          {WON(inv.amountKrw)}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setDialog("invoices")}
+                disabled={!invoiceList || invoiceList.invoices.length === 0}
+                className="w-full h-9 rounded-full bg-[var(--color-bg-input)] hover:bg-[var(--color-bg-card-hover)] text-[#1C60FF] text-xs font-bold transition-colors cursor-pointer border border-[var(--color-border-subtle)] disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                인보이스 보기
+              </button>
+            </div>
+
+            {/* Card 6: 설정 */}
+            <div className="bg-[var(--color-bg-card)] border-none rounded-xl p-5 shadow-md shadow-slate-900/5 dark:shadow-none flex flex-col justify-between space-y-4">
+              <div className="space-y-3">
+                <h3 className="font-bold text-base text-[var(--color-text-primary)]">설정</h3>
+                <div className="space-y-2.5 text-xs">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[var(--color-text-muted)] font-medium">워크스페이스</span>
+                    {/* 세션에 워크스페이스 이름이 없다(계정·역할만 온다) — 있는 것을 정직하게. */}
+                    <span className="font-bold text-[var(--color-text-primary)]">
+                      {session.user.name
+                        ? `${session.user.name}${session.user.workspaceRole ? ` · ${ROLE_KO[session.user.workspaceRole] ?? session.user.workspaceRole}` : ""}`
+                        : "—"}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-[var(--color-text-muted)] font-medium">크레딧 단가</span>
+                    <span className="font-bold text-[var(--color-text-primary)]">
+                      {price != null ? `${WON(price)} · 부가세 별도` : "단가 미설정"}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between gap-4">
+                    <span className="text-[var(--color-text-muted)] font-medium shrink-0">구매자 정보</span>
+                    {/* ⚠️ 원본은 세 값을 무조건 이어 붙인다. 세션이 이름·이메일을 자동으로 채워
+                        휴대폰번호가 비어도 "채워짐"으로 보였고, 사용자는 준비된 줄 알고 등록을
+                        눌렀다가 400 을 받았다(2026-08-26 ENA). buyerSummary 는 무엇이 빠졌는지 말한다. */}
+                    <span className="font-bold text-[var(--color-text-primary)] text-right">{buyerSummary}</span>
+                  </div>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setDialog("settings")}
+                className="w-full h-9 rounded-full bg-[var(--color-bg-input)] hover:bg-[var(--color-bg-card-hover)] text-[#1C60FF] text-xs font-bold transition-colors cursor-pointer border border-[var(--color-border-subtle)]"
+              >
+                설정 관리
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {/* Footer */}
+        <Footer />
+      </main>
 
       {/* ══ 다이얼로그들 ══════════════════════════════════════════════════════ */}
 
@@ -1054,20 +1109,23 @@ export default function CreditsPage() {
           )}
         </BillingDialog>
       )}
+    </>
+  );
+}
+
+/**
+ * 상태 배너 — 원본에는 없는 자리다(항상 정상 상태를 그린다).
+ * rose 는 원본이 모달의 필수 표시(`text-rose-500`)에서 이미 쓰는 색이라 새 색이 아니다.
+ */
+function Banner({ title, hint }: { title: string; hint?: string }) {
+  return (
+    <div className="p-4 rounded-xl bg-rose-500/10 border border-rose-500/30 text-xs">
+      <div className="font-bold text-rose-600 dark:text-rose-400">{title}</div>
+      {hint && <div className="mt-0.5 text-rose-600/80 dark:text-rose-400/80 font-medium">{hint}</div>}
     </div>
   );
 }
 
-function SettingRow({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex items-baseline justify-between gap-3">
-      <span className="shrink-0 text-[11px]" style={{ color: "var(--sd-mut)" }}>{label}</span>
-      <span className="min-w-0 truncate text-right text-[11.5px]" style={{ color: "var(--sd-fg)" }} title={value}>
-        {value}
-      </span>
-    </div>
-  );
-}
 
 function SettingField({ label, children }: { label: string; children: React.ReactNode }) {
   return (
