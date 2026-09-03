@@ -24,6 +24,38 @@ from core.analyze_utils import save_json, load_json, progress
 # 자기완결적 · refined 는 각자 output 을 반환해 caller 가 assign 하는 스타일.
 
 
+def _record_stt_cost(*, video_path: str, stt: dict, step: Callable[[str], None]) -> None:
+    """받아쓰기 실비 기록. 실패해도 파이프라인은 계속한다 — 계측이 본작업을 죽이면 안 된다.
+
+    로컬 whisper 는 우리 GPU 라 벤더 청구가 없다(원가는 전기·감가라 여기 축이 아니다).
+    """
+    try:
+        provider = (os.environ.get("STT_PROVIDER") or "soniox").lower()
+        if provider not in ("soniox",):
+            return
+        dur = 0.0
+        try:
+            import cv2
+            cap = cv2.VideoCapture(str(video_path))
+            fps = cap.get(cv2.CAP_PROP_FPS) or 0
+            fn = cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0
+            cap.release()
+            if fps > 0 and fn > 0:
+                dur = fn / fps
+        except Exception:
+            pass
+        if dur <= 0:  # 폴백 — 마지막 발화 끝. 뒤쪽 무음만큼 과소계상된다.
+            segs = stt.get("segments") or []
+            dur = float(segs[-1].get("end") or 0) if segs else 0.0
+        if dur <= 0:
+            return
+        from core.common.retry import record_external
+        record_external(provider, qty=dur / 60.0, unit="min")
+        step(f"[usage] {provider} {dur / 60:.1f}분 기록")
+    except Exception as e:
+        step(f"[usage] STT 원가 기록 실패(무시): {str(e)[:80]}")
+
+
 def run_stt(
     *,
     video_path: str,
@@ -66,6 +98,10 @@ def run_stt(
                 "영상의 오디오를 확인하고 다시 시도하세요(빈 결과를 체크포인트로 저장하지 않았습니다)."
             )
         save_json(out_dir / "stt.json", stt)
+        # 받아쓰기 실비를 원장에 남긴다. **인식이 실제로 돈 회차에만** 기록한다 —
+        # 위 체크포인트 재사용 분기는 돈을 안 썼다. 회차 누적은 dump_usage 가 합산한다.
+        # Soniox 는 제출한 오디오 길이로 과금하므로 발화 끝(마지막 세그)이 아니라 **영상 길이**다.
+        _record_stt_cost(video_path=video_path, stt=stt, step=step)
     segments = get_segments(stt)
     step(f"  {len(segments)} 세그먼트")
     timed("stt", ts)
@@ -1062,15 +1098,53 @@ def run_recommend(
 
 
 def dump_usage(*, out_dir: Path, step: Callable[[str], None]) -> None:
-    """Gemini usage 실측 dump — 회당 실비 관측 (2026-08-06). retry.py 가 hook 해서 누적.
-    호출은 analyze() 마지막에서 한 번."""
+    """실비 dump — 회차 원가의 정본 (2026-08-06 · 2026-09-03 누적화). analyze() 끝에서 한 번.
+
+    ⚠️ **이전 회차분에 더한다.** 작업 디렉토리는 미디어별로 고정이라 실패·재시도가 같은
+    자리에서 재개된다. 그때 이 프로세스의 누적(`usage_summary`)은 **이번에 실제로 돈
+    스테이지만** 담는다 — 덮어쓰면 재개 회차의 usage.json 이 "₩30" 이 되고, 그걸 읽는
+    원장이 그대로 과소계상한다. 한 편의 진짜 원가는 **버린 재시도까지 포함한 합**이다.
+    (이 리포에서 원가를 네 번 틀린 뿌리가 정확히 이것 — CLAUDE.md 상단 경고 참조.)
+    """
     try:
         from core.common.retry import usage_summary
         u = usage_summary()
+        prev = load_json(out_dir / "usage.json")
+        if isinstance(prev, dict) and prev.get("est_krw") is not None:
+            u = _merge_usage(prev, u)
+            step(f"[usage] 이전 시도분 합산 (누적 {u.get('runs', 1)}회)")
+        else:
+            u["runs"] = 1
         step(f"[usage] calls={u['calls']} · in={u['in_tokens']:,} out={u['out_tokens']:,} "
-             f"토큰 · 대략 ₩{u['est_krw']:.0f}")
+             f"토큰 · ₩{u['est_krw']:.0f} (Gemini ₩{u.get('gemini_krw', 0):.0f} "
+             f"+ 외부 ₩{u.get('external_krw', 0):.0f})")
         for m, v in u.get("by_model", {}).items():
             step(f"  · {m}: {v['calls']} calls · in={v['in']:,} out={v['out']:,}")
+        for vendor, v in (u.get("external") or {}).items():
+            step(f"  · {vendor}: {v.get('qty', 0):.1f}{v.get('unit', '')} · ₩{v.get('krw', 0):.0f}")
         save_json(out_dir / "usage.json", u)
     except Exception as e:
         step(f"[usage] dump 실패(무시): {str(e)[:120]}")
+
+
+def _merge_usage(prev: dict, cur: dict) -> dict:
+    """usage 스냅샷 둘을 더한다 (이전 시도 + 이번 시도)."""
+    out = dict(cur)
+    for k in ("calls", "in_tokens", "out_tokens", "cached_tokens", "cached_calls"):
+        out[k] = (prev.get(k) or 0) + (cur.get(k) or 0)
+    for k in ("gemini_krw", "external_krw", "est_krw"):
+        out[k] = round((prev.get(k) or 0) + (cur.get(k) or 0), 2)
+    models = {m: dict(v) for m, v in (prev.get("by_model") or {}).items()}
+    for m, v in (cur.get("by_model") or {}).items():
+        t = models.setdefault(m, {"calls": 0, "in": 0, "out": 0, "cached": 0})
+        for f in ("calls", "in", "out", "cached"):
+            t[f] = (t.get(f) or 0) + (v.get(f) or 0)
+    out["by_model"] = models
+    ext = {n: dict(v) for n, v in (prev.get("external") or {}).items()}
+    for n, v in (cur.get("external") or {}).items():
+        t = ext.setdefault(n, {"unit": v.get("unit", ""), "qty": 0.0, "krw": 0.0, "calls": 0})
+        for f in ("qty", "krw", "calls"):
+            t[f] = (t.get(f) or 0) + (v.get(f) or 0)
+    out["external"] = ext
+    out["runs"] = (prev.get("runs") or 1) + 1
+    return out

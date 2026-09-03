@@ -56,12 +56,19 @@ export function billableMinutes(durationSec: number): number {
 }
 
 /**
- * 원가 — **분당 약 ₩19** (60분 회차 ≈ ₩1,124).
+ * 원가 **폴백** — 분당 ₩13.3 (60분 회차 ≈ ₩800).
+ *
+ * ⚠️ **이제 이건 폴백이다.** 원장(`usage_events.cost_krw`)에 들어가는 정상 경로는 core 가
+ * 회차마다 남기는 `usage.json` 실측이고(`cost_source='measured'`), 이 상수는 그 파일을
+ * 못 읽었을 때만 쓴다(`'estimated'`). 상수 곱은 구성이 바뀌면 조용히 틀리기 때문이다 —
+ * 2026-09-03 에 실제로 그랬다: 여기 `19` 가 flash-lite 전환(2026-08-19) 전 값이라
+ * 30일 원장이 원가를 **43% 부풀려** 마진을 실제보다 나쁘게 보고하고 있었다.
  *
  * **지금 프로덕션 구성 기준이다**: 화면 자막 읽기 OFF · GEBD OFF · 썸네일 프레임 방식.
  * `stepd-worker-content` 잡 env 에 `RUN_CHYRON_PER_SEG=0` 이 들어 있다(2026-08-17 확인).
- * 내역(60분 환산): Gemini ₩834(장면이해·구간선정·서사) + Soniox ₩141 + Cloud Run ₩99 +
- * 렌더 ₩33 + TTS·임베딩 ₩17. → 판매가 ₩28/분 대비 **마진 31%**.
+ * 내역(60분 환산 · how-it-works.md §4): Gemini ₩510(장면이해 flash-lite·구간선정·서사)
+ * + Soniox ₩141 + Cloud Run ₩99 + 렌더 ₩33 + TTS·임베딩 ₩17 = **₩800**.
+ * → 판매가 ₩60/분 대비 **마진 ~78%**.
  *
  * **청구액이 아니라 마진 감시용**이다. 판매가는 크레딧 단가(`CREDIT_PRICE_KRW` · 2026-08-25 부터 60)로 정한다 —
  * 1 크레딧 = 분석 1분이라 이 값과 바로 비교하면 그게 곧 마진이다.
@@ -76,14 +83,19 @@ export function billableMinutes(durationSec: number): number {
  * → **19**(프로덕션 잡 env 를 실제로 조회 · chyron OFF 확인). 원가를 인용하기 전에
  * **어느 구성의 값인지**를 먼저 말할 것 — 네 번 다 여기서 틀렸다.
  */
-export const COST_KRW_PER_MINUTE = 19;
+export const COST_KRW_PER_MINUTE = 13.3;
 
 /**
- * 화면 자막 읽기를 **켠** 구성의 원가 — 분당 ₩39.8 (60분 ≈ ₩2,385 · 배치 OFF).
- * 배치 모드까지 켜면 분당 ₩28.9. 두 값을 나란히 둬야 "켜면 얼마 드는지" 를 매번
- * 다시 계산하지 않는다. 대시보드는 `COST_KRW_PER_MINUTE` 를 쓴다.
+ * 화면 자막 읽기를 **켠** 구성의 원가 — 분당 ₩21.4 (60분 ≈ ₩1,283 · flash-lite 기준).
+ *
+ * 두 값을 나란히 둬야 "켜면 얼마 드는지" 를 매번 다시 계산하지 않는다.
+ * 판매가 ₩60/분 대비 켜도 **마진 ~64%** 라 비용은 더 이상 켜지 못할 이유가 아니다 —
+ * 판단 근거는 품질이다(화자분리 교정 → 인물 검색축 · how-it-works.md §4).
+ *
+ * ⚠️ 2026-09-03 까지 여기가 40 이었다. 그건 beat_annot 이 flash 이던 시절 값으로,
+ * flash-lite 전환(2026-08-19) 뒤엔 "켜면 적자" 라는 **틀린 결론**을 만들었다.
  */
-export const COST_KRW_PER_MINUTE_WITH_CHYRON = 40;
+export const COST_KRW_PER_MINUTE_WITH_CHYRON = 21.4;
 
 export function estimatedCostKrw(minutes: number): number {
   return Math.round(minutes * COST_KRW_PER_MINUTE * 100) / 100;

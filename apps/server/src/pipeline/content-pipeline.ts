@@ -91,7 +91,10 @@ const WORK_DIR_TTL_MS = 48 * 60 * 60 * 1000;
 /** Stage outputs core/analyze.py checkpoints into the work dir (upload order). */
 // 워커가 GCS 로 왕복시키는 체크포인트. 여기 빠지면 재실행 때 그 스테이지를 다시 돈다 —
 // chyron.json 은 재생성이 회당 ₩150 이라 특히 중요. (signals/genre 는 ₩0 이지만 일관성 위해 포함)
-const CHECKPOINT_FILES = ["analysis.json", "scenes.json", "cast.json", "timeline.json", "narrative.json", "shorts.json", "refined.json", "faces.json", "ppl.json", "stt.json", "manifest.json", "comments.json", "viewer_signals.json", "beats.json", "boundaries.json", "shots.json", "scene_type.json", "signals.json", "genre.json", "chyron.json"];
+const CHECKPOINT_FILES = ["analysis.json", "scenes.json", "cast.json", "timeline.json", "narrative.json", "shorts.json", "refined.json", "faces.json", "ppl.json", "stt.json", "manifest.json", "comments.json", "viewer_signals.json", "beats.json", "boundaries.json", "shots.json", "scene_type.json", "signals.json", "genre.json", "chyron.json",
+  // 스테이지가 아니라 **원가 증빙**이다. 여기 넣어야 ① 작업 디렉토리가 날아가도 누적 원가가
+  // 살아남고(재개 회차가 과소계상되지 않는다) ② 나중에 "그 편이 왜 비쌌나" 를 되짚을 수 있다.
+  "usage.json"];
 
 /**
  * Watchdog: kill the python child after this long with NO stdout output. A hung Vertex
@@ -1258,6 +1261,44 @@ async function setEpisodePipeline(episodeId: string, pipeline: Record<string, un
 }
 
 /**
+ * 이 회차가 실제로 쓴 **벤더 원가**를 core 의 `usage.json` 에서 읽는다 (2026-09-03).
+ *
+ * 담기는 것: Gemini(장면이해·구간선정·서사) + 받아쓰기(Soniox). 즉 **인프라 제외 원가**다 —
+ * Cloud Run·GCS·GPU VM 은 회차가 아니라 시간에 붙는 고정비라 여기 섞으면 편당 원가가
+ * 트래픽에 따라 흔들린다. 인프라는 별도 집계한다(docs/ops/infra.md).
+ *
+ * `usage.json` 은 재시도분까지 **누적**돼 있다(analyze_stages.dump_usage) — 체크포인트로
+ * 재개된 회차가 "₩30" 으로 보고되던 과소계상을 그쪽에서 막는다.
+ *
+ * 못 읽으면 null → 호출부가 상수로 폴백하고 `costSource='estimated'` 로 표시한다.
+ * 원가를 0 으로 두지 않는 게 중요하다: 0 은 마진을 100% 로 보이게 만든다.
+ */
+function readRunCost(work: string): { costKrw: number; detail: Record<string, unknown> } | null {
+  try {
+    const p = path.join(work, "usage.json");
+    if (!fs.existsSync(p)) return null;
+    const u = JSON.parse(fs.readFileSync(p, "utf-8")) as Record<string, unknown>;
+    const total = Number(u.est_krw);
+    if (!Number.isFinite(total) || total < 0) return null;
+    return {
+      costKrw: Math.round(total * 100) / 100,
+      detail: {
+        geminiKrw: Number(u.gemini_krw) || 0,
+        externalKrw: Number(u.external_krw) || 0,
+        calls: Number(u.calls) || 0,
+        inTokens: Number(u.in_tokens) || 0,
+        outTokens: Number(u.out_tokens) || 0,
+        runs: Number(u.runs) || 1,
+        byModel: u.by_model ?? {},
+        external: u.external ?? {},
+      },
+    };
+  } catch {
+    return null;   // 계측 실패가 분석을 되돌리면 안 된다
+  }
+}
+
+/**
  * Upload the run's artifacts (stage outputs + scene frames) to storage under
  * analysis/{mediaId}/ so they outlive the work dir. Returns the object-path base,
  * or null if nothing could be uploaded — persistence failure must not fail the job.
@@ -1873,11 +1914,18 @@ export async function runContentAnalyze(
     try {
       const minutes = billableMinutes(media.durationSec ?? 0);
       if (minutes > 0) {
+        // 원가는 **이 회차가 실제로 쓴 값**을 쓴다(core 가 남긴 usage.json). 상수 곱은
+        // 구성이 바뀌면 조용히 틀리는데, 이 리포는 그걸로 네 번 틀렸다 — 2026-09-03 실측:
+        // 원장은 분당 ₩19 로 쌓고 있었고 실제는 ₩13.3 이라 원가를 43% 부풀리고 있었다.
+        // 파일이 없거나(옛 회차·덤프 실패) 깨졌으면 상수로 폴백한다.
+        const measured = readRunCost(work);
         await recordUsage({
           kind: "analyze_minutes",
           quantity: minutes,
           mediaId,
-          costKrw: estimatedCostKrw(minutes),
+          costKrw: measured?.costKrw ?? estimatedCostKrw(minutes),
+          costSource: measured ? "measured" : "estimated",
+          costDetail: measured?.detail ?? null,
           source: "web",
           dedupeKey: usageDedupeKey("analyze_minutes", mediaId),
         });
