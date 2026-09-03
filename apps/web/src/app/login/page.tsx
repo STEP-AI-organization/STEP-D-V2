@@ -45,9 +45,17 @@ function LoginInner() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
-  // 원본은 체크박스가 상태에 안 묶여 있었다(목업). 서버가 remember 를 받으므로 묶는다 —
-  // 해제하면 만료 없는 세션 쿠키라 브라우저를 닫을 때 로그아웃된다.
-  const [remember, setRemember] = useState(true);
+  /**
+   * 로그인 상태 유지. 원본은 상태에 안 묶인 uncontrolled 체크박스였고 **기본이 해제**다
+   * (그래서 전역 규칙 `input[type=checkbox]:not(:checked){opacity:.35}` 로 흐리게 보인다).
+   * "디자인 그대로" 원칙에 맞춰 **기본 해제**로 둔다 — 체크로 두면 파랑으로 차서 원본과 다르다.
+   *
+   * ⚠️ 동작상의 대가: 기본이 해제라 **아무것도 안 누르고 로그인하면 브라우저를 닫을 때
+   * 로그아웃된다**(만료 없는 세션 쿠키). 2026-09-03 이전에는 항상 30일이었다.
+   * 기본을 유지로 되돌리려면 이 한 줄을 `useState(true)` 로 바꾸면 된다 — 대신 체크박스가
+   * 파랑으로 차서 원본과 달라진다. 둘 중 하나는 포기해야 하는 자리다.
+   */
+  const [remember, setRemember] = useState(false);
 
   const [isServiceBtnHovered, setIsServiceBtnHovered] = useState(false);
 

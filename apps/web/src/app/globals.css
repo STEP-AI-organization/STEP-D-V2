@@ -18,11 +18,16 @@
    둘 다 상업적 사용·재배포 가능. CDN 이 아니라 번들하는 이유는 프로덕션 CSP·오프라인
    데스크톱 셸(Electron)에서도 같은 글꼴로 떠야 하기 때문이다.
 
-   Outfit 은 **가변 폰트**라 파일 하나가 300~900 을 전부 커버한다(font-weight 범위 표기). */
+   Outfit 은 **가변 폰트**라 파일 하나가 여러 굵기를 커버한다.
+   ⚠️ 범위를 **300~800 으로 좁힌 게 의도**다. 폰트 축 자체는 100~900 이지만(fvar 실측),
+   디자이너는 Google Fonts 에 `wght@300;400;500;600;700;800` 만 요청한다 — 즉 900 짜리
+   페이스가 없어서 `font-black`(900)이 **800 으로 눌려** 렌더된다. 우리가 100~900 을 열어
+   두면 같은 클래스가 진짜 900 으로 나와 **로고·헤드라인이 더 굵어진다**(2026-09-03 사용자
+   지적 "로그인 페이지 OS 가 약간 달라"의 원인). 굵기를 맞추려면 여기를 넓히지 말 것. */
 @font-face {
   font-family: "Outfit";
   src: url("/fonts/Outfit-latin.woff2") format("woff2");
-  font-weight: 100 900;
+  font-weight: 300 800;
   font-style: normal;
   font-display: swap;
   unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC,
@@ -32,7 +37,7 @@
 @font-face {
   font-family: "Outfit";
   src: url("/fonts/Outfit-latinext.woff2") format("woff2");
-  font-weight: 100 900;
+  font-weight: 300 800;
   font-style: normal;
   font-display: swap;
   unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304,
