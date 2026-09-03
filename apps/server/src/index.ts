@@ -1805,7 +1805,11 @@ app.get("/api/superadmin/usage", async (c) => {
       `SELECT tenant_id AS "tenantId",
               COALESCE(SUM(quantity) FILTER (WHERE kind='analyze_minutes'),0)::float AS minutes,
               COALESCE(SUM(cost_krw),0)::float AS "costKrw",
-              COUNT(*)::int AS events
+              COUNT(*)::int AS events,
+              -- 실측 비중. 이게 낮으면 아래 marginKrw 는 상수 곱이라 믿을 값이 아니다.
+              COUNT(*) FILTER (WHERE cost_source='measured')::int AS "measuredEvents",
+              COALESCE(SUM(cost_krw) FILTER (WHERE cost_source='measured'),0)::float AS "measuredCostKrw",
+              COALESCE(SUM(quantity) FILTER (WHERE kind='analyze_minutes' AND cost_source='measured'),0)::float AS "measuredMinutes"
          FROM usage_events WHERE occurred_at >= now() - $1::interval
         GROUP BY tenant_id`, [iv]),
     db.query(
@@ -1818,18 +1822,57 @@ app.get("/api/superadmin/usage", async (c) => {
     const revenueKrw = revBy.get(r.tenantId) ?? 0;
     revBy.delete(r.tenantId);
     const costKrw = Number(r.costKrw);
-    return { tenantId: r.tenantId, minutes: Number(r.minutes), events: r.events, costKrw, revenueKrw, marginKrw: revenueKrw - costKrw };
+    const measuredMinutes = Number(r.measuredMinutes);
+    return {
+      tenantId: r.tenantId, minutes: Number(r.minutes), events: r.events, costKrw, revenueKrw,
+      marginKrw: revenueKrw - costKrw,
+      measuredEvents: r.measuredEvents,
+      measuredCostKrw: Number(r.measuredCostKrw),
+      // **분당·60분당 실측 원가.** 마진을 잡으려면 총액이 아니라 이 단가를 봐야 한다 —
+      // 총액은 물량이 늘면 같이 늘어서 구성 변화를 가린다. 실측 행만으로 계산한다.
+      costPerMinuteKrw: measuredMinutes > 0
+        ? Math.round((Number(r.measuredCostKrw) / measuredMinutes) * 100) / 100 : null,
+      costPer60minKrw: measuredMinutes > 0
+        ? Math.round((Number(r.measuredCostKrw) / measuredMinutes) * 60) : null,
+    };
   });
   // 원가는 없고 충전만 있는 회사도 포함(순마진 플러스로).
   for (const [tenantId, revenueKrw] of revBy) {
-    byTenant.push({ tenantId, minutes: 0, events: 0, costKrw: 0, revenueKrw, marginKrw: revenueKrw });
+    byTenant.push({
+      tenantId, minutes: 0, events: 0, costKrw: 0, revenueKrw, marginKrw: revenueKrw,
+      measuredEvents: 0, measuredCostKrw: 0, costPerMinuteKrw: null, costPer60minKrw: null,
+    });
   }
   byTenant.sort((a, b) => b.costKrw - a.costKrw);
   const totals = byTenant.reduce(
-    (t, r) => ({ minutes: t.minutes + r.minutes, costKrw: t.costKrw + r.costKrw, revenueKrw: t.revenueKrw + r.revenueKrw }),
-    { minutes: 0, costKrw: 0, revenueKrw: 0 },
+    (t, r) => ({
+      minutes: t.minutes + r.minutes, costKrw: t.costKrw + r.costKrw, revenueKrw: t.revenueKrw + r.revenueKrw,
+      events: t.events + r.events, measuredEvents: t.measuredEvents + r.measuredEvents,
+      measuredCostKrw: t.measuredCostKrw + r.measuredCostKrw,
+    }),
+    { minutes: 0, costKrw: 0, revenueKrw: 0, events: 0, measuredEvents: 0, measuredCostKrw: 0 },
   );
-  return c.json({ days, totals: { ...totals, marginKrw: totals.revenueKrw - totals.costKrw }, byTenant });
+  // 플랫폼 전체 실측 분 — 회사별 합이 아니라 다시 센다(회사별에는 안 실린 kind 가 있다).
+  const measuredMinutes = (cost.rows as any[]).reduce((n, r) => n + Number(r.measuredMinutes), 0);
+  return c.json({
+    days,
+    totals: {
+      ...totals,
+      marginKrw: totals.revenueKrw - totals.costKrw,
+      // 원가 단가 — 마진 감시의 본체. `measuredRatio` 가 낮으면 이 값은 표본이 얇다는 뜻이다.
+      costPerMinuteKrw: measuredMinutes > 0
+        ? Math.round((totals.measuredCostKrw / measuredMinutes) * 100) / 100 : null,
+      costPer60minKrw: measuredMinutes > 0
+        ? Math.round((totals.measuredCostKrw / measuredMinutes) * 60) : null,
+      measuredRatio: totals.events > 0
+        ? Math.round((totals.measuredEvents / totals.events) * 100) / 100 : 0,
+    },
+    // ⚠️ 여기 원가는 **인프라 제외**다(벤더 실비만: Gemini·받아쓰기). Cloud Run·GCS·GPU VM 은
+    // 회차가 아니라 시간에 붙는 고정비라 편당 원가에 섞으면 트래픽에 따라 흔들린다.
+    // 인프라 월 고정비는 docs/ops/infra.md 에서 따로 본다.
+    note: "costKrw = 벤더 실비(인프라 제외) · measured 행만 단가 계산에 쓴다",
+    byTenant,
+  });
 });
 
 // ── full state (web InitialData + media) ──────────────────────────────────────

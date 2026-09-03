@@ -9,7 +9,12 @@
  * 함께 지웠다. 크레딧 판정은 credits.test.ts 가 본다.
  */
 import assert from "node:assert/strict";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
+
+const SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 import {
   COST_KRW_PER_MINUTE,
@@ -64,26 +69,40 @@ describe("청구 분 — 올림", () => {
     for (const v of [0, -1, NaN, Infinity]) assert.equal(billableMinutes(v), 0, String(v));
   });
 
-  it("원가는 실측 기준으로 계산된다 — 프로덕션 구성(자막읽기 OFF)", () => {
-    // 2026-08-17 실측: 32.4분 실회차 전 구간(158콜 ₩450)을 60분 환산 → ₩834 +
-    // Soniox 141 + Cloud Run 99 + 렌더 33 + TTS·임베딩 17 = ₩1,124 → 분당 ₩18.7 → 상수 19.
-    // 프로덕션 잡(stepd-worker-content) env 에 RUN_CHYRON_PER_SEG=0 이 들어 있다.
-    assert.ok(Math.abs(estimatedCostKrw(59) - 1121) < 1);
+  it("폴백 상수가 정본 원가와 같다 — 프로덕션 구성(flash-lite · 자막읽기 OFF)", () => {
+    // 정본: how-it-works.md §4 — 60분 ≈₩800(AI 510 + 받아쓰기 141 + 서버연산 99 +
+    // 렌더 33 + 음성합성·검색 17) → 분당 ₩13.3.
+    // ⚠️ 2026-09-03 까지 여기가 19(= flash-lite 전환 **전** 값)여서 원장이 원가를 43%
+    // 부풀리고 있었다. 구성을 바꾸면 상수·정본 문서·이 테스트를 **함께** 고칠 것.
+    assert.equal(COST_KRW_PER_MINUTE, 13.3);
+    assert.ok(Math.abs(estimatedCostKrw(60) - 798) < 1, `60분 ${estimatedCostKrw(60)}`);
   });
 
-  it("자막읽기를 켠 값은 두 배 — 두 구성을 나란히 둔다", () => {
-    // 실측 ₩2,385/60분(배치 OFF). 이 값이 상수 자리에 잘못 들어가면 대시보드가
-    // 실제보다 두 배 비싸게 보고한다(2026-08-17 에 실제로 한 번 그렇게 넣었다).
-    assert.equal(COST_KRW_PER_MINUTE_WITH_CHYRON, 40);
-    assert.ok(COST_KRW_PER_MINUTE_WITH_CHYRON > COST_KRW_PER_MINUTE * 2 - 1);
+  it("폴백은 폴백일 뿐 — 원장의 정상 경로는 실측(usage.json)이다", () => {
+    // 상수 곱이 원장에 그대로 들어가면 구성이 바뀌어도 아무도 모른다(위 사고).
+    // content-pipeline 은 core 가 남긴 usage.json 을 먼저 읽고, 못 읽을 때만 이 상수를 쓴다.
+    const src = fs.readFileSync(path.join(SRC, "pipeline/content-pipeline.ts"), "utf-8");
+    assert.match(src, /costKrw: measured\?\.costKrw \?\? estimatedCostKrw\(minutes\)/,
+      "실측 우선 · 상수 폴백 구조가 사라졌다");
+    assert.match(src, /costSource: measured \? "measured" : "estimated"/,
+      "실측/추정 표시가 없으면 둘이 섞여 단가를 못 믿는다");
   });
 
-  it("원가가 판매가(크레딧 ₩28/분)보다 낮다 — 역마진 감지", () => {
+  it("자막읽기를 켠 값을 나란히 둔다 — 켜면 얼마인지 매번 다시 계산하지 않게", () => {
+    // 정본 ₩1,283/60분 = 분당 ₩21.4 (flash-lite). 이 값이 상수 자리에 잘못 들어가면
+    // 대시보드가 실제보다 비싸게 보고한다(2026-08-17 에 실제로 한 번 그렇게 넣었다).
+    assert.equal(COST_KRW_PER_MINUTE_WITH_CHYRON, 21.4);
+    assert.ok(COST_KRW_PER_MINUTE_WITH_CHYRON > COST_KRW_PER_MINUTE,
+      "켜는 쪽이 더 싸게 잡히면 판단이 뒤집힌다");
+    // 켜도 판매가(₩60/분) 밑이다 — "비싸서 못 켠다" 는 결론이 다시 나오면 안 된다.
+    assert.ok(COST_KRW_PER_MINUTE_WITH_CHYRON < 60);
+  });
+
+  it("원가가 판매가(크레딧 ₩60/분)보다 낮다 — 역마진 감지", () => {
     // 이 관계가 깨지면 팔수록 손해다. 상수를 잘못 올렸을 때 바로 걸리라고 둔다.
-    // ⚠️ 자막읽기를 켜기로 결정하면 이 테스트가 실패한다 — 그게 맞다. 그때는 숫자만
-    // 고치지 말고 판매가·배치 모드와 함께 결정하고 how-it-works.md §4 를 같이 갱신할 것
-    // (켜고 배치까지 켜면 분당 ₩28.9 로 거의 본전이다).
-    const CREDIT_PRICE = 28;
+    // ⚠️ 자막읽기를 켜기로 결정하면 원가가 분당 ₩21.4 로 오른다 — ₩60 판매가에선
+    // 여전히 흑자다(마진 ~64%). 그때도 숫자만 고치지 말고 how-it-works.md §4 를 같이 갱신할 것.
+    const CREDIT_PRICE = 60;   // 2026-08-25 인하 (28→150→60)
     assert.ok(estimatedCostKrw(60) < CREDIT_PRICE * 60,
       `원가 ${estimatedCostKrw(60)} 가 매출 ${CREDIT_PRICE * 60} 이상이다 — 역마진`);
   });

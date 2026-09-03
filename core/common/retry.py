@@ -25,6 +25,12 @@ import time
 _USAGE_LOCK = threading.Lock()
 USAGE: dict = {"calls": 0, "in_tokens": 0, "out_tokens": 0, "by_model": {}}
 
+# Gemini 가 **아닌** 벤더의 실비 (받아쓰기 등). 여기 없으면 usage.json 이 원가의 일부만
+# 보고하고, 그걸 읽는 원장이 같은 만큼 과소계상한다 — 마진이 실제보다 좋아 보인다.
+# 60분 회차에서 Soniox 는 ₩141 로 Gemini 다음가는 소비처다(how-it-works.md §4).
+# 형태: {vendor: {"unit": "min", "qty": float, "krw": float, "calls": int}}
+EXTERNAL: dict = {}
+
 # KRW per 1M tokens · 환율 ₩1,416/USD (2026-08-11 기준 · docs/ops/cost-and-dependencies.md §3).
 #
 # ⚠️ **여기 숫자가 틀리면 마진 판단이 통째로 틀어진다.** 2026-08-11 감사에서 이 표가
@@ -39,6 +45,32 @@ _PRICE_KRW_PER_1M = {
     "gemini-2.5-pro": {"in": 1770, "out": 14160},        # $1.25 / $10.00
     "gemini-3-pro-image": {"in": 5000, "out": 20000},    # nano banana 대략 — 실측 필요
 }
+
+# 토큰이 아니라 **시간**으로 파는 벤더. 분당 원 (환율 ₩1,416/USD · 위 표와 같은 기준).
+# Soniox v5 = $0.10/시간 → 분당 $0.001667 → ₩2.36. 60분이면 ₩141 — 정본과 같은 값이다
+# (docs/ops/how-it-works.md §4 "받아쓰기 ₩141"). **단가가 바뀌면 거기와 같이 고칠 것.**
+_PRICE_KRW_PER_MIN = {
+    "soniox": 141.6 / 60,
+}
+
+
+def record_external(vendor: str, *, qty: float, unit: str = "min", krw: float | None = None) -> None:
+    """Gemini 가 아닌 벤더의 실비를 누적한다 (받아쓰기 등).
+
+    `krw` 를 안 주면 `_PRICE_KRW_PER_MIN` 에서 찾아 계산한다. 표에 없는 벤더는 **양만
+    기록하고 원가는 0** 으로 둔다 — 모르는 값을 지어내면 원장이 조용히 틀린다.
+    체크포인트로 스테이지를 건너뛴 회차에서는 **호출되지 않는 게 맞다** (그 회차는 실제로
+    그 돈을 안 썼다). 회차 누적은 `dump_usage` 가 파일을 합산해 맡는다.
+    """
+    if qty <= 0:
+        return
+    rate = _PRICE_KRW_PER_MIN.get(vendor) if unit == "min" else None
+    cost = float(krw) if krw is not None else (qty * rate if rate is not None else 0.0)
+    with _USAGE_LOCK:
+        e = EXTERNAL.setdefault(vendor, {"unit": unit, "qty": 0.0, "krw": 0.0, "calls": 0})
+        e["qty"] += float(qty)
+        e["krw"] += float(cost)
+        e["calls"] += 1
 
 
 def _record_usage(resp):
@@ -100,6 +132,7 @@ def usage_summary() -> dict:
             "cached_tokens": USAGE.get("cached_tokens", 0),
             "cached_calls": USAGE.get("cached_calls", 0),
             "by_model": {k: dict(v) for k, v in USAGE["by_model"].items()},
+            "external": {k: dict(v) for k, v in EXTERNAL.items()},
         }
     total_krw = 0.0
     for model, v in snap["by_model"].items():
@@ -118,7 +151,12 @@ def usage_summary() -> dict:
             continue
         factor = BATCH_PRICE_FACTOR if is_batch else 1.0
         total_krw += (v["in"] / 1_000_000 * rate["in"] + v["out"] / 1_000_000 * rate["out"]) * factor
-    snap["est_krw"] = round(total_krw, 2)
+    # 벤더별로 나눠 둔다. 합계만 있으면 "왜 올랐나" 를 다시 계산해야 하고, 그 재계산이
+    # 이 리포에서 네 번 틀렸다(CLAUDE.md 원가 경고). est_krw = 이 회차가 실제로 쓴 전부.
+    ext_krw = sum(float(v.get("krw") or 0) for v in snap["external"].values())
+    snap["gemini_krw"] = round(total_krw, 2)
+    snap["external_krw"] = round(ext_krw, 2)
+    snap["est_krw"] = round(total_krw + ext_krw, 2)
     return snap
 
 # 예외 메시지/타입명에 이 표식이 있으면 일시(transient) 오류로 본다.

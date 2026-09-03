@@ -29,6 +29,13 @@
 env 를 실제로 조회했는지**(`gcloud run jobs describe stepd-worker-content --region us-central1`).
 정본은 [docs/ops/how-it-works.md](docs/ops/how-it-works.md) §4 하나뿐 — 인용은 거기서만 할 것.
 
+**2026-09-03 부터 추측할 필요가 없다.** core 가 회차마다 `usage.json`(토큰·받아쓰기 시간 실측 ·
+**재시도분 누적**)을 남기고 서버가 그걸 `usage_events.cost_krw` 에 넣는다(`cost_source='measured'`).
+지금 단가는 `GET /api/superadmin/usage` → `totals.costPer60minKrw` 로 조회한다. 상수
+(`COST_KRW_PER_MINUTE`)는 파일을 못 읽었을 때의 폴백일 뿐이다 — 그 상수가 한 세대 낡아
+(19 = flash-lite 전환 전 값) 원장이 원가를 **43% 부풀리고 있던 걸** 2026-09-03 에 잡았다.
+**인프라 뺀 벤더 원가는 60분 ≈₩668(분당 ₩11.1)** · 인프라 포함 ₩800. 배선: §4 "이 숫자를 계속 재는 법".
+
 문서 진입점: [docs/README.md](docs/README.md) · 종합 계획: [docs/plans/active/step-d-master-build-plan.md](docs/plans/active/step-d-master-build-plan.md)
 
 ---

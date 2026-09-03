@@ -3957,6 +3957,14 @@ export interface UsageEventInput {
   mediaId?: string | null;
   jobId?: string | null;
   costKrw?: number | null;
+  /**
+   * 원가가 **실측인지 추정인지**. 섞어 두면 "분당 ₩13.3" 이 어디서 온 값인지 알 수 없고,
+   * 구성이 바뀌어 상수가 낡아도 아무도 모른다 — 이 리포가 원가를 네 번 틀린 방식이다.
+   * `measured` = core 가 남긴 usage.json(토큰·시간 실측) · `estimated` = 상수 곱 폴백.
+   */
+  costSource?: "measured" | "estimated" | null;
+  /** 벤더별 내역(geminiKrw·externalKrw·byModel…). "왜 올랐나" 를 재계산 없이 답하게 한다. */
+  costDetail?: Record<string, unknown> | null;
   source?: "web" | "api";
   dedupeKey: string;
 }
@@ -3968,15 +3976,34 @@ export interface UsageEventInput {
  * @returns 새로 기록됐으면 true, 이미 있으면 false.
  */
 export async function recordUsage(ev: UsageEventInput): Promise<boolean> {
-  const { rows } = await pool.query(
-    `INSERT INTO usage_events (kind, quantity, media_id, job_id, cost_krw, source, dedupe_key)
-     VALUES ($1,$2,$3,$4,$5,$6,$7)
-     ON CONFLICT (dedupe_key) DO NOTHING
-     RETURNING id`,
-    [ev.kind, ev.quantity, ev.mediaId ?? null, ev.jobId ?? null, ev.costKrw ?? null,
-     ev.source ?? "web", ev.dedupeKey],
-  );
-  return rows.length > 0;
+  const base = [ev.kind, ev.quantity, ev.mediaId ?? null, ev.jobId ?? null, ev.costKrw ?? null,
+    ev.source ?? "web", ev.dedupeKey];
+  try {
+    const { rows } = await pool.query(
+      `INSERT INTO usage_events (kind, quantity, media_id, job_id, cost_krw, cost_source, cost_detail, source, dedupe_key)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+       ON CONFLICT (dedupe_key) DO NOTHING
+       RETURNING id`,
+      [...base.slice(0, 5), ev.costSource ?? null,
+       ev.costDetail ? JSON.stringify(ev.costDetail) : null, ...base.slice(5)],
+    );
+    return rows.length > 0;
+  } catch (e) {
+    // 42703 = undefined_column. 마이그레이션(0052)보다 서버가 **먼저** 뜬 창에서만 난다.
+    // 이 함수의 호출부는 사용량 기록과 **크레딧 차감을 같은 try 에 담고 있어서**, 여기서
+    // 던지면 차감이 통째로 건너뛰어진다 — 분석은 했는데 잔액이 안 줄어드는 과금 사고다.
+    // 계측 컬럼 하나 때문에 돈 계산을 멈추지 않는다: 옛 형태로 한 번 더 시도한다.
+    if ((e as { code?: string })?.code !== "42703") throw e;
+    console.warn("[usage] cost_source/cost_detail 컬럼 없음 — 마이그레이션 0052 이전 스키마로 기록");
+    const { rows } = await pool.query(
+      `INSERT INTO usage_events (kind, quantity, media_id, job_id, cost_krw, source, dedupe_key)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)
+       ON CONFLICT (dedupe_key) DO NOTHING
+       RETURNING id`,
+      base,
+    );
+    return rows.length > 0;
+  }
 }
 
 /** 이번 기간에 쓴 양 — 쿼터 판정 입력. */

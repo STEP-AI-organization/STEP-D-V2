@@ -89,6 +89,15 @@ def _vertex_embed(texts: list[str], task_type: str) -> list[list[float]]:
             output_dimensionality=DIM,
         ),
     )
+    # 임베딩은 `generate_content` 가 아니라서 retry.py 의 usage 훅을 안 탄다 → usage.json 이
+    # 이 비용을 통째로 빠뜨린다(60분 회차 기준 ₩17 수준 · "음성합성·검색" 항목).
+    # **단가표에 없으므로 원가는 0 으로 두고 물량만 남긴다** — 모르는 단가를 지어내면
+    # 원장이 조용히 틀린다. 물량이 남아 있으면 나중에 청구서로 소급 검산할 수 있다.
+    try:
+        from core.common.retry import record_external
+        record_external("vertex-embed", qty=len(texts), unit="text")
+    except Exception:
+        pass
     return [list(e.values) for e in resp.embeddings]
 
 

@@ -129,6 +129,36 @@ pie showData
 > 콜당 입력 1,943 토큰인데 그중 **1,806 이 이미지 값**이다(프롬프트는 134). 그래서
 > 프롬프트를 줄이거나 여러 장을 묶어 보내는 절감은 거의 효과가 없다(§6).
 
+### 이 숫자를 계속 재는 법 (2026-09-03 배선)
+
+위 표는 **한 번 잰 값이 아니라 계속 재지는 값**이다. 구성이 바뀌면 문서가 아니라 원장이 먼저 안다.
+
+```
+core (회차마다)                          서버 (분석 완료 시)              조회
+─────────────────────────────────────────────────────────────────────────────
+retry.py  Gemini 토큰 누적          →   content-pipeline.readRunCost()  →  GET /api/superadmin/usage
+record_external('soniox', 분)           usage.json 읽어                    totals.costPer60minKrw
+        ↓                               usage_events.cost_krw 에 기록       totals.measuredRatio
+  usage.json  (재시도분 누적)           cost_source='measured'             byTenant[].costPerMinuteKrw
+```
+
+- **실측 우선 · 상수는 폴백.** 파일을 못 읽으면 `COST_KRW_PER_MINUTE`(₩13.3) 로 떨어지고
+  `cost_source='estimated'` 로 표시된다. 둘은 섞이지 않으며 단가 계산에는 **measured 행만** 쓴다.
+- **재시도분은 더해진다.** 작업 디렉토리가 미디어별로 고정이라 재개 회차의 프로세스 누적은
+  "이번에 돈 스테이지" 만 담는다. 덮어쓰면 한 편이 ₩30 이 되므로 `dump_usage` 가 파일을 합산한다
+  (`runs` 필드 = 시도 횟수). **이 리포가 원가를 네 번 틀린 뿌리가 정확히 이 과소계상이다.**
+- **여기 원가는 인프라 제외다** — 벤더 실비만(Gemini·받아쓰기). Cloud Run·GCS·GPU VM 은 회차가
+  아니라 시간에 붙는 고정비라 섞으면 편당 원가가 트래픽에 따라 흔들린다 → [infra.md](infra.md).
+- **알려진 누락 ~2%**: 검색 임베딩은 `embed_content` 라 토큰 훅을 안 탄다. 단가를 지어내지 않고
+  **물량만**(`external['vertex-embed']`) 남긴다 — 청구서로 소급 검산할 수 있게.
+
+| 무엇을 보나 | 어디서 |
+|---|---|
+| 지금 60분 원가 (실측) | `GET /api/superadmin/usage` → `totals.costPer60minKrw` |
+| 그 값이 믿을 만한가 | `totals.measuredRatio` (1.0 에 가까울수록 실측 표본) |
+| 회사별 마진 | `byTenant[].marginKrw` (충전액 − 원가) |
+| 그 편이 왜 비쌌나 | `usage_events.cost_detail` (모델별 토큰 · 벤더별 물량 · `runs`) |
+
 ### 이 돈으로 무엇을 사는가 — 화면 자막 읽기의 값
 
 32.4분 회차에서 780콜을 써서 **54개 세그먼트에 실명이 붙었다**(6.9%). 적어 보이지만
