@@ -195,6 +195,12 @@ hex 리터럴을 grep** 할 것.
 ⚠️ CLAUDE.md 에는 오래 "(app) 그룹 9개" 로 적혀 있었다. **실제는 (app) 27개**다.
 개편 범위를 9개로 잡으면 3분의 1만 보고 계획하는 셈이라 여기 실물을 박아둔다.
 
+> **화면별로 어떤 API 를 쓰는지**는 코드에서 자동 추출한 대조표가 따로 있다:
+> [docs/reference/frontend-screen-api-map.md](../../reference/frontend-screen-api-map.md).
+> 목 데이터를 실제 호출로 바꾸는 §4-5 단계에서 그 표를 보면 찾는 시간이 사라진다.
+> ⚠️ 27개 중 **3개(`/analytics`·`/clips`·`/`)는 화면이 아니다** — 리다이렉트·이전 안내
+> 스텁이라 개편 대상이 아니다. **실제 화면은 24개.**
+
 **(app) 27** — `/` · analytics · analyze · assets · automation · business ·
 channel-analytics · clips · commerce · credits · dashboard · distribution · edits ·
 `episodes/[id]` · media · ops · performance · program-analytics · programs ·
