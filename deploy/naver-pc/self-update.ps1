@@ -16,6 +16,10 @@
   - 재시작 대상은 **이 PC 의 워커 프로세스 전부**다($TaskRestart) — 네이버 워커 + 렌더
     서버/워커. 2026-09-02 에 렌더 둘이 빠져 있어 이틀간 옛 코드로 클립을 구웠다.
   - 작업 스케줄러에 10분 간격으로 걸어둔다(설치는 install-task.ps1).
+  - **재시작 전에 새 코드가 실제로 뜨는지 확인한다**(Test-ServerBoots · 2026-09-03).
+    안 뜨면 아무것도 재시작하지 않는다 — 돌던 프로세스는 메모리에 옛 코드를 들고 있어
+    그대로 일한다. 깨진 코드로 재시작하면 그때부터 아무 일도 안 되는데, 로그에는
+    "재시작" 이라고 찍혀서 죽은 걸 아무도 모른다(그날 렌더 16건이 그렇게 탔다).
   - ⚠️ **이 파일을 고친 커밋에서는 한 박자 늦는다.** 첫 실행은 옛 스크립트가 돌아 pull 만
     하고, 새 재시작 목록은 다음 회차부터다. 급하면 두 번 돌린다(docs/ops/deploy-win2.md).
 #>
@@ -100,6 +104,62 @@ function Update-YtDlp([string]$Channel) {
   }
 }
 
+# ── 부팅 검증 ────────────────────────────────────────────────────────────────────
+#
+# ⚠️ **깨진 코드로는 재시작하지 않는다** (사용자 2026-09-03: "빌드가 깨지면 그거를 올리면 안 돼").
+#
+# 2026-09-03 실측: `index.ts` 가 `./chatbot/agent.ts` 를 import 하도록 커밋됐는데 그 폴더는
+# 커밋이 안 돼 있었다. 이 PC 는 git 에서 받아 **소스로** 도니까 그 순간 렌더 서버가 부팅에
+# 실패했다. 그런데 이 스크립트는 pull·install 만 보고 **그대로 재시작**했고, 로그에는
+# "재시작" 이라고만 찍혔다 — 죽은 걸 아무도 몰랐다. 렌더 워커는 살아서 잡을 계속 집었고
+# `fetch failed` 로 16건이 탔다.
+#
+# 그래서 **재시작 전에 새 코드가 실제로 뜨는지 본다.** 안 뜨면 돌던 프로세스를 건드리지
+# 않는다 — 돌고 있는 옛 프로세스는 메모리에 옛 코드를 들고 있어서 그대로 멀쩡히 일한다.
+# **옛 코드로 도는 것이 죽어 있는 것보다 낫다.**
+#
+# 포트는 실제 서버와 겹치지 않는 값을 쓴다(실서비스에 붙지 않는다).
+function Test-ServerBoots([string]$RepoRoot) {
+  $server = Join-Path $RepoRoot "apps\server"
+  if (-not (Test-Path (Join-Path $server "src\index.ts"))) {
+    Say "부팅 검증: apps/server 가 없다 — 건너뜀"
+    return $true
+  }
+  $node = (Get-Command node -ErrorAction SilentlyContinue).Source
+  if (-not $node) { Say "부팅 검증: node 를 못 찾음 — 건너뜀"; return $true }
+
+  $out = Join-Path $env:TEMP ("stepd-boot-{0}.log" -f ([guid]::NewGuid().ToString("N")))
+  $prevPort = $env:PORT
+  $env:PORT = "4399"                      # 실서버(4100)와 겹치지 않는 임시 포트
+  $proc = $null
+  try {
+    $proc = Start-Process -FilePath $node `
+      -ArgumentList "--unhandled-rejections=warn", "--import", "tsx", "--env-file-if-exists=.env", "src/index.ts" `
+      -WorkingDirectory $server -PassThru -NoNewWindow `
+      -RedirectStandardOutput $out -RedirectStandardError "$out.err"
+    # 90초 안에 "listening" 이 나오면 성공. DB 연결까지 하므로 넉넉히 준다.
+    for ($i = 0; $i -lt 90; $i++) {
+      Start-Sleep -Seconds 1
+      if ($proc.HasExited) { break }
+      $text = (Get-Content $out -Raw -ErrorAction SilentlyContinue)
+      if ($text -and $text -match "listening on") { return $true }
+    }
+    # 여기 왔다는 건 죽었거나 90초 안에 못 떴다는 뜻이다.
+    $err = ((Get-Content "$out.err" -Raw -ErrorAction SilentlyContinue) + "`n" +
+            (Get-Content $out -Raw -ErrorAction SilentlyContinue))
+    Say "부팅 검증 실패 — 새 코드가 뜨지 않는다:"
+    Say (($err -split "`n" | Where-Object { $_.Trim() } | Select-Object -First 6) -join "`n")
+    return $false
+  } catch {
+    Say "부팅 검증 중 오류(검증 불가로 보고 계속) — $($_.Exception.Message)"
+    return $true
+  } finally {
+    if ($proc -and -not $proc.HasExited) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue }
+    $env:PORT = $prevPort
+    Remove-Item $out, "$out.err" -Force -ErrorAction SilentlyContinue
+  }
+}
+
 Set-Location $RepoRoot
 Say "self-update 시작 — $RepoRoot ($Branch)"
 
@@ -160,6 +220,13 @@ try {
   Say "playwright install 건너뜀 — $($_.Exception.Message)"
 } finally {
   $ErrorActionPreference = "Stop"
+}
+
+# **재시작 전 마지막 관문.** 여기서 막으면 돌던 프로세스가 그대로 산다.
+if (-not (Test-ServerBoots $RepoRoot)) {
+  Say "재시작하지 않는다 — 돌던 프로세스를 그대로 둔다(옛 코드가 죽은 것보다 낫다)."
+  Say "고친 커밋이 올라오면 다음 회차에 자동으로 다시 시도한다."
+  exit 1
 }
 
 Say "워커 재시작 ($($TaskRestart -join ', '))"
