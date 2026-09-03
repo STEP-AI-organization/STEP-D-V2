@@ -229,6 +229,27 @@ export function mailHtml(
 }
 
 /**
+ * 영수증 템플릿의 부가 정보 — **없으면 그 줄을 빼므로** 실패해도 메일은 그대로 나간다.
+ * 카드 뒤 4자리: 저장 카드에서 읽는다(전체 번호는 우리 DB 에 애초에 없다).
+ * 충전 후 잔액: 이 메일은 적립 직후에 나가므로 지금 잔액이 곧 "충전 후" 다.
+ *
+ * 실제 발송과 테스트 발송(`/api/billing/invoice/test-email`)이 **같은 조회를 쓴다** —
+ * 테스트가 자기만의 값을 만들면 "테스트는 멀쩡한데 실제는 깨지는" 상태를 못 잡는다.
+ */
+export async function receiptExtrasFor(tenantId: string): Promise<ReceiptExtras> {
+  return await asSystem(async (db) => {
+    const [card, bal] = await Promise.all([
+      db.query(`SELECT card_last4 AS "last4" FROM billing_card WHERE tenant_id = $1`, [tenantId]),
+      db.query(`SELECT COALESCE(SUM(delta), 0)::int AS n FROM credit_ledger WHERE tenant_id = $1`, [tenantId]),
+    ]);
+    return {
+      cardLast4: (card.rows[0]?.last4 as string | null) ?? null,
+      balanceAfter: (bal.rows[0]?.n as number | null) ?? null,
+    };
+  }).catch(() => ({ cardLast4: null, balanceAfter: null }));
+}
+
+/**
  * 결제 완료 이메일 — **적립이 실제로 일어난 자리에서만** fire-and-forget 으로 부른다.
  * 어떤 실패도 던지지 않는다 — 크레딧 적립은 이미 끝난 사실이고 메일은 부속이다.
  */
@@ -266,19 +287,7 @@ export async function sendInvoiceEmail(paymentId: string, tenantId: string): Pro
 
     const invoice = invoiceFromTopup(order);
 
-    // 영수증 템플릿의 부가 정보 — **없으면 그 줄을 빼므로** 실패해도 메일은 그대로 나간다.
-    // 카드 뒤 4자리: 저장 카드에서 읽는다(전체 번호는 우리 DB 에 애초에 없다).
-    // 충전 후 잔액: 이 메일은 적립 직후에 나가므로 지금 잔액이 곧 "충전 후" 다.
-    const extras = await asSystem(async (db) => {
-      const [card, bal] = await Promise.all([
-        db.query(`SELECT card_last4 AS "last4" FROM billing_card WHERE tenant_id = $1`, [tenantId]),
-        db.query(`SELECT COALESCE(SUM(delta), 0)::int AS n FROM credit_ledger WHERE tenant_id = $1`, [tenantId]),
-      ]);
-      return {
-        cardLast4: (card.rows[0]?.last4 as string | null) ?? null,
-        balanceAfter: (bal.rows[0]?.n as number | null) ?? null,
-      };
-    }).catch(() => ({ cardLast4: null, balanceAfter: null }));
+    const extras = await receiptExtrasFor(tenantId);
 
     await sendMail({
       to,

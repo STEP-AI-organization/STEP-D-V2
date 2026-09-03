@@ -348,7 +348,8 @@ import { chargeWithBillingKey, getBillingKeyInfo, getPayment, verifyWebhook } fr
 // 자동 충전 알림 해제는 **이 한 함수**로만 한다 — 라우트마다 db-pg 의 저장 함수를 직접
 // 부르면 반드시 한 자리가 빠진다(실제로 직접 충전 경로가 빠져 있었다).
 import { clearAutoTopupAlert, maybeAutoTopup, topupAndRecheck } from "./billing/auto-topup.ts";
-import { buyerFor, sendInvoiceEmail } from "./billing/invoice-email.ts";
+import { buyerFor, mailHtml, receiptExtrasFor, sendInvoiceEmail } from "./billing/invoice-email.ts";
+import { toKstIso } from "./kst.ts";
 import { commitAndInherit } from "./pipeline/adopt.ts";
 import { runAutomationCycle } from "./pipeline/automation-cycle.ts";
 import {
@@ -6687,6 +6688,90 @@ app.post("/api/billing/notify-emails", async (c) => {
   if (bad) return c.json({ error: "invalid_email", message: `이메일 형식이 아닙니다: ${bad}` }, 400);
   await setBillingNotifyEmails(emails);
   return c.json({ ok: true, notifyEmails: emails });
+});
+
+/**
+ * 영수증 메일 **테스트 발송** — 결제를 만들지 않고 실제 템플릿·실제 SMTP 로 한 통 보낸다.
+ *
+ * 왜 필요한가: 영수증은 첫 결제가 끝난 뒤에야 처음 나간다. 그 순간 발행자 정보가 비어
+ * 있거나 SMTP 가 죽어 있으면 **고객이 받아본 뒤에** 안다 — 이미 나간 문서는 못 되돌린다.
+ * 카드 등록 전에 여기로 한 통 보내 눈으로 확인하는 게 유일한 사전 점검이다.
+ *
+ * 지키는 것:
+ *  - 원장·결제·인보이스에 **아무것도 쓰지 않는다.** 렌더 + 발송뿐이다.
+ *  - 번호를 `TEST-…`/`RC-TEST-…` 로 못박는다 — 실제 영수증으로 오인·유용될 수 없다.
+ *    본문 레이아웃·계산은 실제와 같은 mailHtml 이다(확인하려는 게 그 본문이라서).
+ *  - 카드 뒤 4자리·잔액도 실제 발송과 **같은 조회**(receiptExtrasFor)를 쓴다.
+ *  - 발행자 정보(사업자번호 등)가 비어 있으면 **보내기 전에 막는다.** 사업자번호 없는
+ *    영수증을 "발송 성공"으로 확인해 버리면 테스트가 오히려 사고를 승인해 준다.
+ *  - 아무 주소로나 쏘는 발송기가 되지 않게 관리자 인증(requireCardActor)을 건다.
+ */
+app.post("/api/billing/invoice/test-email", async (c) => {
+  const actor = requireCardActor(c);
+  const user = currentContext()?.via === "api-key" ? null : requireUser(c);
+  if (!mailConfigured()) {
+    return c.json({
+      error: "mail_not_configured",
+      message: "SMTP 가 설정되지 않아 영수증 메일이 나가지 않습니다. SMTP_USER·OAuth 3종을 확인하세요.",
+    }, 409);
+  }
+
+  // 발행자 정보 점검이 이 테스트의 절반이다 — 비어 있으면 보내지 말고 무엇이 없는지 알린다.
+  const issuer = issuerInfo();
+  if (!issuer.ok) {
+    return c.json({
+      error: "issuer_incomplete",
+      message: `발행자 정보가 비어 있어 보내지 않았습니다: ${issuer.missing.join(", ")}`,
+      missing: issuer.missing,
+    }, 400);
+  }
+
+  const body = await c.req.json().catch(() => ({}) as Record<string, unknown>);
+  // 수신자: 명시한 to → 없으면 결제 알림 수신자 → 그것도 없으면 요청한 사람.
+  const asked = String(body.to ?? "").trim().toLowerCase();
+  const fallback = await getBillingNotifyEmails().catch(() => [] as string[]);
+  const to = asked || fallback[0] || (user?.email ?? "");
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(to)) {
+    return c.json({ error: "to_required", message: "받는 사람 이메일이 필요합니다." }, 400);
+  }
+
+  // 표본 결제 — **실제 단가로** 계산한다. 금액을 지어내면 세액 역산을 확인할 수 없고,
+  // 단가가 없다는 건 실제 결제도 못 한다는 뜻이라 그 사실을 알리는 게 맞다.
+  const priceKrw = creditPriceKrw();
+  if (!priceKrw) {
+    return c.json({
+      error: "price_not_configured",
+      message: "크레딧 단가(CREDIT_PRICE_KRW)가 없어 표본 금액을 만들 수 없습니다.",
+    }, 409);
+  }
+  const credits = Number(body.credits ?? 5000) || 5000;
+  const paidAt = toKstIso(new Date()) ?? new Date().toISOString();
+  const sample = invoiceFromTopup({
+    paymentId: "test-email-preview",
+    credits,
+    amountKrw: credits * priceKrw,
+    requestedBy: "auto",
+    createdAt: paidAt,
+    settledAt: paidAt,
+  });
+  const invoice: typeof sample = { ...sample, number: "TEST-SAMPLE", receiptNumber: "RC-TEST-000000" };
+
+  const supplier = supplierFromEnv();
+  const extras = user ? await receiptExtrasFor(user.tenantId) : {};
+  try {
+    await sendMail({
+      to,
+      // 제목에 [테스트]를 박는다 — 받은 사람이 실제 결제로 오해하면 안 된다.
+      subject: `[테스트] [STEP AI] 결제 영수증 ${invoice.receiptNumber} — ₩${invoice.amountKrw.toLocaleString("ko-KR")} 결제 완료`,
+      html: mailHtml(invoice, supplier, extras),
+    });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    console.error(`[invoice] 테스트 발송 실패 (${to}):`, msg);
+    return c.json({ error: "send_failed", message: `메일을 보내지 못했습니다: ${msg}` }, 502);
+  }
+  console.log(`[invoice] 영수증 테스트 발송 → ${to} (요청: ${actor})`);
+  return c.json({ ok: true, to, supplier, sample: invoice });
 });
 
 /**
