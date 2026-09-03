@@ -23,7 +23,7 @@
  * 계정 열거는 서버가 막는다(없는 이메일에도 더미 해시로 같은 시간을 쓴다). 화면도 같은
  * 태도라 "없는 계정"과 "비밀번호 틀림"을 구분하지 않는다 — 문구는 api.ts 가 정한다.
  */
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import { AlertCircle, ArrowRight, Eye, EyeOff } from "lucide-react";
 import { Suspense, useState } from "react";
 
@@ -39,7 +39,6 @@ export default function LoginPage() {
 }
 
 function LoginInner() {
-  const router = useRouter();
   const params = useSearchParams();
   const next = params.get("next") || "/dashboard";
 
@@ -136,7 +135,13 @@ function LoginInner() {
             <div className="pt-2">
               <button
                 type="button"
-                onClick={() => router.push("/landing")}
+                // ⚠️ `router.push` 를 쓰지 않는다. `/landing` 은 라우트가 아니라
+                // **정적 HTML 리라이트**다(next.config.ts `beforeFiles` → step-d-landing.html · 4.2MB).
+                // 클라이언트 라우팅은 RSC 를 먼저 부르는데 그 응답도 같은 4.2MB HTML 이라,
+                // 페이로드가 아님을 깨닫고 하드 내비게이션으로 폴백한다 — **4.2MB 를 두 번** 받는다.
+                // 프로덕션 웹은 /api/proxy 경유라 바이트가 곧 과금이다(2026-08-31 하루 276GB 사고).
+                // 처음부터 전체 이동으로 보낸다. (`<Link>` 는 더 나쁘다 — 프리페치까지 붙는다.)
+                onClick={() => { window.location.href = "/landing"; }}
                 onMouseEnter={() => setIsServiceBtnHovered(true)}
                 onMouseLeave={() => setIsServiceBtnHovered(false)}
                 style={{
