@@ -109,6 +109,26 @@ export function mailHtml(
             <td align="right" style="padding:${top} 0 0 0;font-family:${MONO};font-size:${strong ? "15px;font-weight:600" : "14px"};color:${strong ? "#1F2124" : "#5C5E63"};line-height:1.6;">&#8361;${value}</td>
           </tr>`;
 
+  /**
+   * 공급자(우리) 표기 — **사업자등록번호가 없으면 상대가 회계 처리에 쓸 수 없다.**
+   * 예전엔 이 메일이 상호·문의처만 실어서, env 에 사업자정보를 채워도 정작 고객이 받는
+   * 문서에는 안 나왔다(2026-09-03 렌더 실측: bizNo·대표자·주소 0회).
+   *
+   * 이 파일의 규칙대로 **값이 없으면 그 줄을 통째로 뺀다** — "사업자등록번호 " 같은
+   * 반쪽 문장이 나가면 문서 자체를 못 믿게 된다. 전부 비면 블록도 안 나온다.
+   */
+  const bizLine = [
+    supplier.bizNo ? `사업자등록번호 ${esc(supplier.bizNo)}` : "",
+    supplier.ceoName ? `대표 ${esc(supplier.ceoName)}` : "",
+  ].filter(Boolean).join(" &nbsp;|&nbsp; ");
+  const supplierLines = [
+    supplier.name ? `<div style="font-weight:600;color:#1F2124;">${esc(supplier.name)}</div>` : "",
+    bizLine ? `<div>${bizLine}</div>` : "",
+    supplier.address ? `<div>${esc(supplier.address)}</div>` : "",
+  ].filter(Boolean).join("");
+  const supplierBlock = !supplierLines ? "" : `
+    <div class="kr" style="font-size:12px;color:#5C5E63;line-height:1.8;padding-bottom:14px;margin-bottom:14px;border-bottom:1px solid rgba(31,33,36,0.08);">${supplierLines}</div>`;
+
   const balanceBlock = balance == null ? "" : `
         <div style="border-top:1px solid rgba(31,33,36,0.08);margin-top:26px;padding-top:22px;">
           <div style="font-size:13px;color:#5C5E63;line-height:1.5;">크레딧 잔액</div>
@@ -193,7 +213,7 @@ export function mailHtml(
     </table>
   </td></tr>
 
-  <tr><td class="pad" style="padding:26px 8px 0 8px;">
+  <tr><td class="pad" style="padding:26px 8px 0 8px;">${supplierBlock}
     <div style="font-size:13px;color:#5C5E63;line-height:1.7;">문의처 <a href="mailto:${esc(contact)}" style="color:#1F2124;">${esc(contact)}</a></div>
     <div class="kr" style="font-size:12px;color:#5C5E63;line-height:1.8;padding-top:10px;">
       본 문서는 결제 내역 확인용입니다. 신용카드 결제분은 카드 매출전표가 적격증빙이며 부가세 매입세액 공제가 가능합니다.<br>
