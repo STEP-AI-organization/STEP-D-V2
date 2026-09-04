@@ -286,6 +286,7 @@ import { renderTextLayerPng, overlayCanvasAvailable, measureOverlayImage, FONT_F
 import { patchTitleMogrt, inspectMogrt, layersFromOverlayItems, colorToInt, type MogrtTextLayer } from "./media/mogrt.ts";
 import {
   syncChannelVideos,
+  fetchChannelBrief,
   resolveChannelIdByHandle,
   classifyShorts,
   fetchChannelAnalytics,
@@ -12618,6 +12619,50 @@ app.get("/api/harvest/sources", async (c) => {
 });
 
 /**
+ * **채널 미리보기** — 등록 전에 "이 채널이 맞나" 를 눈으로 본다.
+ *
+ * ⚠️ 이게 없으면 **URL 을 잘못 쳐도 알 방법이 없다**(2026-09-04 사용자 지적). `UC…` 는 사람이
+ * 읽을 수 없는 문자열이고 핸들도 오타가 나기 쉬운데, 지금은 등록이 그대로 성공한다 —
+ * 틀렸다는 사실은 **엉뚱한 채널 영상이 우리 채널에 올라간 뒤에야** 드러난다.
+ * 되돌릴 수 없는 쪽(내려받기·배포)에 서기 전에 이름과 얼굴을 보여준다.
+ *
+ * 등록 라우트와 **같은 해석기**(`parseChannelRef` + `resolveChannelIdByHandle`)를 쓴다.
+ * 미리보기가 다른 채널을 보여주고 등록이 또 다른 채널을 잡으면, 확인 자체가 거짓이 된다.
+ */
+app.get("/api/harvest/preview", async (c) => {
+  const ref = parseChannelRef(String(c.req.query("url") ?? ""));
+  if (!ref) {
+    return c.json({
+      error: "bad_channel",
+      message: "유튜브 채널 주소를 확인해 주세요 (예: youtube.com/@이름 또는 /channel/UC…).",
+    }, 400);
+  }
+
+  const connected = await listYouTubeChannels();
+  const lender = connected.find((ch) => ch.status !== "disconnected" && ch.refreshToken);
+  if (!lender || !GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET) {
+    // 미리보기를 못 하는 것이 등록을 막지는 않는다 — 화면이 "확인할 수 없음" 으로 표시한다.
+    return c.json({ error: "no_lender", message: "채널 정보를 읽으려면 연결된 유튜브 채널이 하나 필요합니다." }, 400);
+  }
+
+  const brief = await withAccessToken(
+    GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, lender, persistTokensFor(lender),
+    async (token) => {
+      const id = ref.kind === "id" ? ref.id : await resolveChannelIdByHandle(token, ref.handle);
+      return id ? await fetchChannelBrief(token, id) : null;
+    },
+  ).catch(() => null);
+
+  if (!brief) return c.json({ error: "not_found", message: "그 주소의 채널을 찾지 못했습니다." }, 404);
+
+  // 이미 등록된 채널이면 그것도 여기서 알려 준다 — 등록을 눌러 409 를 받기 전에.
+  const already = (await listHarvestSources()).some((s) => s.sourceChannelId === brief.channelId);
+  // 우리가 연결한 채널인지 = 권리 확인 없이 바로 도는지. 등록 버튼 옆 문구가 이걸로 갈린다.
+  const owned = connected.some((ch) => ch.channelId === brief.channelId && ch.status !== "disconnected");
+  return c.json({ channel: brief, already, owned });
+});
+
+/**
  * 수집원 등록. **입력은 둘이다 — 수집 채널과 배포 채널.**
  *
  * 핸들(`@이름`)은 **등록 시점에 한 번 해석해 `UC…` 로 못박는다** — 핸들은 주인이 바꿀 수
@@ -12644,28 +12689,39 @@ app.post("/api/harvest/sources", async (c) => {
     }, 400);
   }
 
-  // 연결된 채널 목록은 두 가지에 쓰인다 — 핸들 해석용 토큰을 빌리고, 권리 게이트를 판정한다.
+  // 연결된 채널 목록은 두 가지에 쓰인다 — 조회용 토큰을 빌리고, 권리 게이트를 판정한다.
   const connected = await listYouTubeChannels();
-  let channelId = "";
-  if (ref.kind === "id") {
-    channelId = ref.id;
-  } else {
-    const lender = connected.find((ch) => ch.status !== "disconnected" && ch.refreshToken);
-    if (!lender || !GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET) {
-      return c.json({
-        error: "handle_unresolved",
-        message: "핸들을 채널 주소로 바꾸려면 연결된 유튜브 채널이 하나 필요합니다. " +
-          "배포 채널을 먼저 연결하거나, /channel/UC… 형태의 주소를 넣어 주세요.",
-      }, 400);
-    }
-    const resolved = await withAccessToken(
+  const lender = connected.find((ch) => ch.status !== "disconnected" && ch.refreshToken);
+
+  // **채널 이름을 유튜브에서 읽어 온다.** 예전엔 우리가 연결한 채널일 때만 이름을 알았고,
+  // 아니면 프로그램이 `UCxxxx…` 라는 이름으로 만들어졌다(2026-09-04 사용자 지적 "프로그램
+  // 이름이 이상하게 지어짐"). 미리보기와 **같은 함수**를 쓴다 — 화면에 보여준 이름과 실제로
+  // 저장되는 이름이 다르면 확인이 확인이 아니다.
+  let channelId = ref.kind === "id" ? ref.id : "";
+  let fetchedTitle = "";
+  if (lender && GOOGLE_CLIENT_ID && GOOGLE_CLIENT_SECRET) {
+    const brief = await withAccessToken(
       GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, lender, persistTokensFor(lender),
-      (token) => resolveChannelIdByHandle(token, ref.handle),
+      async (token) => {
+        const id = ref.kind === "id" ? ref.id : await resolveChannelIdByHandle(token, ref.handle);
+        return id ? await fetchChannelBrief(token, id) : null;
+      },
     ).catch(() => null);
-    if (!resolved) {
-      return c.json({ error: "handle_unresolved", message: `채널을 찾지 못했습니다: @${ref.handle}` }, 404);
+    if (brief) {
+      channelId = brief.channelId;
+      fetchedTitle = brief.title;
     }
-    channelId = resolved;
+  }
+  if (!channelId) {
+    // 핸들은 API 없이 해석할 방법이 없다. `UC…` 주소는 조회에 실패해도 그대로 쓴다 —
+    // 이름만 모를 뿐 어느 채널인지는 확실하다.
+    return c.json({
+      error: "handle_unresolved",
+      message: ref.kind === "handle" && !lender
+        ? "핸들을 채널 주소로 바꾸려면 연결된 유튜브 채널이 하나 필요합니다. "
+          + "배포 채널을 먼저 연결하거나, /channel/UC… 형태의 주소를 넣어 주세요."
+        : `채널을 찾지 못했습니다: @${ref.kind === "handle" ? ref.handle : ref.id}`,
+    }, ref.kind === "handle" && !lender ? 400 : 404);
   }
 
   // 배포 설정 — **부수효과를 내기 전에 전부 검증한다.** 프로그램·수집원을 만든 뒤에 여기서
@@ -12689,7 +12745,12 @@ app.post("/api/harvest/sources", async (c) => {
   // 프로그램 — 주면 검증하고, 없으면 채널 이름으로 하나 만든다(사용자는 채널만 지정한다).
   let programId = typeof body.programId === "string" ? body.programId.trim() : "";
   const owned = connected.find((ch) => ch.channelId === channelId && ch.status !== "disconnected");
-  const channelTitle = String(body.title ?? owned?.channelName ?? "").trim() || channelId;
+  // 이름의 우선순위: 사람이 준 것 → 유튜브에서 읽은 것 → 우리가 연결한 채널의 이름 →
+  // (다 없으면) 채널 id. 마지막은 **정말 마지막**이다 — 프로그램 이름이 UC… 로 남는다.
+  const channelTitle = String(body.title ?? "").trim()
+    || fetchedTitle
+    || String(owned?.channelName ?? "").trim()
+    || channelId;
   if (programId) {
     if (!(await getEntity("program", programId))) return c.json({ error: "program_not_found" }, 404);
   } else {

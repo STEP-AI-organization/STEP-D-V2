@@ -3425,6 +3425,35 @@ export async function updateHarvestSource(id: string, patch: {
   return out.source;
 }
 
+/** 등록 전에 보는 채널 한 줄. **URL 오타를 여기서 잡는다.** */
+export interface HarvestPreview {
+  channel: {
+    channelId: string;
+    title: string;
+    thumbnail: string | null;
+    /** 구독자를 숨긴 채널이면 null — 0 이 아니다. */
+    subscribers: number | null;
+    videoCount: number | null;
+    description: string;
+    url: string;
+  };
+  /** 이미 등록된 채널인가. */
+  already: boolean;
+  /** 우리가 연결한 채널인가 = 권리 확인 없이 바로 도는가. */
+  owned: boolean;
+}
+
+/**
+ * 채널 미리보기. 등록 라우트와 **같은 해석기**를 쓰므로, 여기 보이는 채널이 곧 등록될 채널이다.
+ * 실패해도 등록을 막지 않는다 — 화면이 "확인할 수 없음" 으로 표시한다.
+ */
+export async function previewHarvestChannel(url: string): Promise<HarvestPreview> {
+  return json(await fetch(
+    `${API_BASE}/harvest/preview?url=${encodeURIComponent(url)}`,
+    { cache: "no-store", credentials: "include" },
+  ));
+}
+
 /**
  * **권리 확인** — 우리가 연결하지 않은 채널을 이 워크스페이스에서 쓰겠다고 확정한다.
  *

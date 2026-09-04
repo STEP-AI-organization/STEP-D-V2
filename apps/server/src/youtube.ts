@@ -352,6 +352,64 @@ export async function resolveChannelIdByHandle(accessToken: string, handle: stri
   return typeof id === "string" && id.startsWith("UC") ? id : null;
 }
 
+/** 채널 한 줄 미리보기 — **등록 전에 "이 채널이 맞나" 를 눈으로 확인**하는 값. */
+export interface YtChannelBrief {
+  channelId: string;
+  title: string;
+  thumbnail: string | null;
+  /** 유튜브가 숨긴 채널이면 null. */
+  subscribers: number | null;
+  videoCount: number | null;
+  description: string;
+  url: string;
+}
+
+/**
+ * 채널 id 하나로 이름·프로필 사진을 읽는다.
+ *
+ * ⚠️ 이게 없으면 **URL 을 잘못 쳐도 알 방법이 없다.** `UC…` 는 사람이 읽을 수 없는 문자열이라
+ * 한 글자 틀린 주소도 그대로 등록되고, 그 사실은 **엉뚱한 채널 영상이 우리 채널에 올라간
+ * 뒤에야** 드러난다(2026-09-04 사용자 지적). 되돌릴 수 없는 쪽에 서기 전에 보여줘야 한다.
+ *
+ * 토큰 주인과 대상이 같을 필요는 없다 — 채널 공개 정보다.
+ */
+export async function fetchChannelBrief(
+  accessToken: string, channelId: string,
+): Promise<YtChannelBrief | null> {
+  const url = `https://www.googleapis.com/youtube/v3/channels`
+    + `?part=snippet,statistics&id=${encodeURIComponent(channelId)}`;
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+  if (!res.ok) return null;
+  const data = (await res.json()) as {
+    items?: {
+      id?: string;
+      snippet?: {
+        title?: string; description?: string; customUrl?: string;
+        thumbnails?: { high?: { url?: string }; medium?: { url?: string }; default?: { url?: string } };
+      };
+      statistics?: { subscriberCount?: string; hiddenSubscriberCount?: boolean; videoCount?: string };
+    }[];
+  };
+  const item = data.items?.[0];
+  if (!item?.id) return null;
+  const t = item.snippet?.thumbnails;
+  // 구독자를 숨긴 채널은 0 이 아니라 **모른다**(null). 0 으로 적으면 "구독자 없는 채널"로 읽힌다.
+  const hidden = item.statistics?.hiddenSubscriberCount === true;
+  const subs = Number(item.statistics?.subscriberCount ?? NaN);
+  return {
+    channelId: item.id,
+    title: item.snippet?.title ?? item.id,
+    thumbnail: t?.high?.url ?? t?.medium?.url ?? t?.default?.url ?? null,
+    subscribers: hidden || !Number.isFinite(subs) ? null : subs,
+    videoCount: Number.isFinite(Number(item.statistics?.videoCount))
+      ? Number(item.statistics?.videoCount) : null,
+    description: (item.snippet?.description ?? "").slice(0, 200),
+    url: item.snippet?.customUrl
+      ? `https://www.youtube.com/${item.snippet.customUrl}`
+      : `https://www.youtube.com/channel/${item.id}`,
+  };
+}
+
 export async function fetchChannelUploads(accessToken: string, channelId: string): Promise<YtVideoItem[]> {
   const uploadsPlaylistId = await getUploadsPlaylistId(accessToken, channelId);
   const playlistItems = await fetchPlaylistItems(accessToken, uploadsPlaylistId);

@@ -48,8 +48,8 @@ import {
 } from "@server-pure/pipeline/automation";
 import {
   approveHarvestSource, createHarvestSource, deleteHarvestSource, fetchHarvestSources,
-  fetchShortsTemplates, fetchYouTubeChannels, runHarvest, updateHarvestSource,
-  type FrameTemplate, type HarvestSource, type YouTubeChannelInfo,
+  fetchShortsTemplates, fetchYouTubeChannels, previewHarvestChannel, runHarvest, updateHarvestSource,
+  type FrameTemplate, type HarvestPreview, type HarvestSource, type YouTubeChannelInfo,
 } from "@/lib/data/api";
 
 const CARD = "bg-[var(--color-bg-card)] rounded-2xl shadow-md shadow-slate-900/5 dark:shadow-none";
@@ -89,6 +89,11 @@ export default function FullAutoPage() {
   const [slots, setSlots] = useState<RuleSlot[]>([]);
   const [templates, setTemplates] = useState<FrameTemplate[]>([]);
   const [templateId, setTemplateId] = useState("");
+  // 채널 미리보기 — **URL 오타를 등록 전에 잡는 유일한 수단**이다. UC… 는 사람이 못 읽고,
+  // 핸들도 한 글자 틀리면 그대로 등록된다(2026-09-04 사용자 지적).
+  const [preview, setPreview] = useState<HarvestPreview | null>(null);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  const [previewing, setPreviewing] = useState(false);
 
   const load = useCallback(async () => {
     setError(null);
@@ -111,6 +116,26 @@ export default function FullAutoPage() {
       .catch(() => setChannels([]));
     void fetchShortsTemplates().then(setTemplates).catch(() => setTemplates([]));
   }, []);
+
+  // 주소를 치는 동안 채널을 찾아 보여준다. 400ms 디바운스 — 글자마다 부르면 유튜브 쿼터를
+  // 태운다. 마지막 요청만 반영한다(빠르게 지우고 다시 치면 옛 응답이 늦게 도착한다).
+  useEffect(() => {
+    const v = url.trim();
+    if (!v) { setPreview(null); setPreviewError(null); return; }
+    let alive = true;
+    setPreviewing(true);
+    const t = setTimeout(() => {
+      void previewHarvestChannel(v)
+        .then((p) => { if (alive) { setPreview(p); setPreviewError(null); } })
+        .catch((e) => {
+          if (!alive) return;
+          setPreview(null);
+          setPreviewError(e instanceof Error ? e.message : "채널을 확인하지 못했습니다.");
+        })
+        .finally(() => { if (alive) setPreviewing(false); });
+    }, 400);
+    return () => { alive = false; clearTimeout(t); setPreviewing(false); clearTimeout(t); };
+  }, [url]);
 
   /** 하루 몇 개가 나가는지 — **서버 순방과 같은 함수**로 낸다(화면이 곱하지 않는다). */
   const perDay = useMemo(() => perDayCount({ slots, dailyQuota: 3 }), [slots]);
@@ -154,6 +179,7 @@ export default function FullAutoPage() {
           : {}),
       });
       setUrl("");
+      setPreview(null);
       await load();
       // **등록하면 그 자리에서 한 번 돈다.** 새벽 2시까지 기다려야 아무 일이 일어나는지
       // 알 수 있으면 사용자는 기능이 고장 났다고 판단한다. 상한은 그대로라 여기서
@@ -256,6 +282,16 @@ export default function FullAutoPage() {
                 과거 영상까지
               </label>
             </div>
+
+            {/* 채널 미리보기 — **주소가 맞는지 확인할 수 있는 유일한 자리.** UC… 는 사람이 못
+                읽고 핸들도 오타가 나기 쉬운데, 틀렸다는 사실은 엉뚱한 채널 영상이 우리
+                채널에 올라간 뒤에야 드러난다. 되돌릴 수 없는 쪽에 서기 전에 얼굴을 보여준다. */}
+            <ChannelPreview
+              busy={previewing}
+              preview={preview}
+              error={previewError}
+              show={Boolean(url.trim())}
+            />
 
             {/* 배포 설정 — 자동 배포 화면과 같은 컨트롤(발행 요일·발행 시간·템플릿). */}
             <div className="pt-4 border-t border-[var(--color-border-subtle)]/50 space-y-4">
@@ -535,6 +571,66 @@ function PublishLine({ publish }: { publish: HarvestSource["publish"] }) {
       {formatWeekdays(publish.weekdays)} 하루 {publish.perDay}개
       {publish.slots.length ? ` · ${publish.slots.map(slotLabel).join(" ")}` : ""}
       {publish.templateId ? ` · 템플릿 ${publish.templateId}` : " · 템플릿 자동"}
+    </div>
+  );
+}
+
+/**
+ * 등록 전 채널 확인 — **이름과 얼굴.**
+ *
+ * 숫자(구독자·영상 수)까지 붙이는 이유: 이름이 비슷한 채널이 흔해서 이름만으로는 못 가른다.
+ * 구독자를 숨긴 채널은 `null` 이라 "0명" 으로 적지 않는다 — 없는 게 아니라 모르는 것이다.
+ */
+function ChannelPreview({ busy, preview, error, show }: {
+  busy: boolean; preview: HarvestPreview | null; error: string | null; show: boolean;
+}) {
+  if (!show) return null;
+
+  if (busy && !preview) {
+    return (
+      <div className={`flex items-center gap-2 text-[11px] ${MUTED}`}>
+        <Loader2 className="w-3.5 h-3.5 animate-spin" />
+        채널을 찾는 중…
+      </div>
+    );
+  }
+
+  // 확인에 실패해도 **등록을 막지는 않는다**(연결된 채널이 없으면 조회 자체가 안 된다).
+  // 다만 "확인하지 못했다" 와 "확인했더니 이 채널이다" 는 분명히 다르게 보여야 한다.
+  if (error || !preview) {
+    return (
+      <div className="flex items-start gap-2 rounded-xl px-3 py-2.5 text-[11px] leading-relaxed bg-amber-500/10 text-[var(--color-text-primary)]">
+        <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5 text-amber-500" />
+        <span>{error ?? "채널을 확인하지 못했습니다."} — 주소를 다시 확인해 주세요.</span>
+      </div>
+    );
+  }
+
+  const ch = preview.channel;
+  return (
+    <div className="flex items-center gap-3 rounded-xl px-3 py-2.5 bg-[var(--color-bg-input)]">
+      {/* 유튜브 CDN 이미지라 next/image 최적화 대상이 아니다(외부 호스트) — 그대로 띄운다. */}
+      {ch.thumbnail
+        // eslint-disable-next-line @next/next/no-img-element
+        ? <img src={ch.thumbnail} alt="" className="w-10 h-10 rounded-full shrink-0" />
+        : <div className="w-10 h-10 rounded-full shrink-0 bg-[var(--color-bg-card)]" />}
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2">
+          <a
+            href={ch.url} target="_blank" rel="noreferrer"
+            className="font-bold text-[13px] text-[var(--color-text-primary)] truncate hover:underline"
+          >
+            {ch.title}
+          </a>
+          {preview.owned && <span className="text-[10.5px] font-bold text-emerald-500">연결된 채널</span>}
+          {preview.already && <span className="text-[10.5px] font-bold text-amber-500">이미 등록됨</span>}
+        </div>
+        <div className={`text-[11px] ${MUTED}`}>
+          {ch.subscribers === null ? "구독자 비공개" : `구독자 ${ch.subscribers.toLocaleString("ko-KR")}명`}
+          {ch.videoCount !== null && ` · 영상 ${ch.videoCount.toLocaleString("ko-KR")}개`}
+        </div>
+      </div>
+      <span className={`text-[10.5px] shrink-0 ${MUTED}`}>이 채널이 맞습니까?</span>
     </div>
   );
 }
