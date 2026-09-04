@@ -335,16 +335,34 @@ export function clampMinDuration(v: unknown): number {
  * 엉뚱한 채널을 수확하게 된다.
  */
 export function parseChannelRef(input: string): { kind: "id"; id: string } | { kind: "handle"; handle: string } | null {
-  const s = String(input ?? "").trim();
+  const s = decodeOnce(String(input ?? "").trim());
   if (!s) return null;
 
   const id = /(?:^|channel\/)(UC[\w-]{20,})/.exec(s)?.[1];
   if (id) return { kind: "id", id };
 
-  const handle = /(?:^|youtube\.com\/)@([\w.\-가-힣]{2,})/.exec(s)?.[1];
-  if (handle) return { kind: "handle", handle };
+  // ⚠️ **핸들은 조각이 아니라 통째로 본다.** 예전엔 허용 문자만 앞에서부터 긁어서,
+  //    `@하하ㅔ`(오타)가 `하하` 로 **조용히 잘렸다** — 그리고 그건 실제로 존재하는 다른
+  //    채널이다(2026-09-04 프로덕션 실측). 확인하라고 만든 미리보기가 그럴듯한 오답을
+  //    보여주는 최악의 형태라, 남는 글자가 있으면 **못 읽은 것으로 처리한다.**
+  const seg = /(?:^|youtube\.com\/)@([^/?#\s]+)/.exec(s)?.[1];
+  if (seg && /^[\w.\-가-힣]{2,}$/.test(seg)) return { kind: "handle", handle: seg };
 
   return null;
+}
+
+/**
+ * 퍼센트 인코딩된 주소를 한 번만 되돌린다 — 브라우저 주소창에서 복사하면 한글이
+ * `%ED%95%98…` 로 붙는다. 실패하면 원문 그대로 둔다(깨진 입력이 예외로 번지지 않게).
+ * 한 번만 하는 이유: 여러 번 풀면 `%2520` 같은 값이 의도치 않게 경로로 바뀔 수 있다.
+ */
+function decodeOnce(s: string): string {
+  if (!s.includes("%")) return s;
+  try {
+    return decodeURIComponent(s);
+  } catch {
+    return s;
+  }
 }
 
 /**

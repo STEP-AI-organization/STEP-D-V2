@@ -399,3 +399,35 @@ describe("멈춘 편", () => {
     assert.equal(STUCK_AFTER_MS, 24 * 60 * 60 * 1000);
   });
 });
+
+/**
+ * 주소 해석의 **오답 금지** — 확인하라고 만든 미리보기가 그럴듯한 오답을 보여주면
+ * 확인이 없느니만 못하다(2026-09-04 프로덕션 실측: `@하하ㅔ` 오타가 `하하` 로 잘려
+ * **실제로 존재하는 다른 채널**을 가리켰다).
+ */
+describe("채널 주소 해석 — 조용히 다른 채널이 되지 않는다", () => {
+  it("핸들에 못 읽는 글자가 섞이면 잘라 쓰지 않고 못 읽었다고 한다", () => {
+    // ㅔ 는 완성형 한글(가-힣)이 아니다 — 예전엔 여기서 끊어 '하하' 로 읽었다.
+    assert.equal(parseChannelRef("https://www.youtube.com/@하하ㅔ"), null);
+  });
+
+  it("멀쩡한 핸들은 그대로 읽는다", () => {
+    assert.deepEqual(parseChannelRef("https://www.youtube.com/@하하PD"), { kind: "handle", handle: "하하PD" });
+  });
+
+  it("경로·질의가 뒤에 붙어도 핸들만 뽑는다", () => {
+    assert.deepEqual(parseChannelRef("https://www.youtube.com/@abc_pd/videos"), { kind: "handle", handle: "abc_pd" });
+    assert.deepEqual(parseChannelRef("https://www.youtube.com/@abc_pd?si=x"), { kind: "handle", handle: "abc_pd" });
+  });
+
+  it("주소창에서 복사한 퍼센트 인코딩도 읽는다 — 사람이 붙여넣는 실제 모양이다", () => {
+    assert.deepEqual(
+      parseChannelRef("https://www.youtube.com/@%ED%95%98%ED%95%98PD"),
+      { kind: "handle", handle: "하하PD" },
+    );
+  });
+
+  it("깨진 인코딩은 예외로 번지지 않는다", () => {
+    assert.doesNotThrow(() => parseChannelRef("https://www.youtube.com/@%E0%A4%A"));
+  });
+});

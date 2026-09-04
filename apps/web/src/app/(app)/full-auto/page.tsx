@@ -224,10 +224,14 @@ export default function FullAutoPage() {
     try {
       await approveHarvestSource(s.id);
       await load();
+      // **확인 직후 한 번 돈다.** 등록 직후의 자동 실행은 이 채널에겐 언제나 헛돈다 —
+      // 그때는 아직 '확인 필요' 라 첫 관문에서 튕긴다(2026-09-04 실측 9ms). 확인이 곧
+      // "이제 돌아도 된다" 는 뜻이므로, 순회를 다시 돌릴 자리는 여기다.
+      await run();
     } catch (e) {
       setError(e instanceof Error ? e.message : "확인하지 못했습니다.");
     }
-  }, [load]);
+  }, [load, run]);
 
   const remove = useCallback(async (id: string) => {
     setError(null);
