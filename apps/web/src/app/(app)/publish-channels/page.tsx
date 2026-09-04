@@ -92,6 +92,9 @@ const CHANNEL_INFO: Record<DistributionChannel, { desc: string; note?: string }>
   },
 };
 
+/** 원본 채널 아바타 색 — 목업이 채널마다 다른 색을 쓴다(D:1042·1127·1212 + 첫 행 red). */
+const AVATAR_BG = ["bg-red-600", "bg-emerald-600", "bg-indigo-600", "bg-blue-700"];
+
 /** 원본 리스트 카드 (D:586). */
 const LIST_CARD = "bg-[var(--color-bg-card)] border-none rounded-2xl p-4 shadow-md shadow-slate-900/5 dark:shadow-none divide-y divide-[var(--color-border-subtle)]/60 text-xs";
 /** 원본 4분할 행 (D:588·596). */
@@ -769,7 +772,7 @@ export default function PublishChannelsPage() {
                   <div className="text-right">관리 / 공개범위 / 통계</div>
                 </div>
 
-                {channels.map((ch) => {
+                {channels.map((ch, idx) => {
                   const open = !collapsed[ch.channelId]; // 원본은 기본 열림
                   const toggle = () => setCollapsed((p) => ({ ...p, [ch.channelId]: !p[ch.channelId] }));
                   const rule = channelRules[`youtube:${ch.channelId}`];
@@ -781,7 +784,10 @@ export default function PublishChannelsPage() {
                         className={`${ROW_GRID} px-3 cursor-pointer hover:bg-[var(--color-bg-input)]/40 rounded-xl py-1.5 transition-colors`}
                       >
                         <div className="flex items-center gap-3 min-w-0">
-                          <div className="w-8 h-8 rounded-full bg-red-600 text-white font-bold flex items-center justify-center text-xs shrink-0 overflow-hidden">
+                          {/* 원본은 채널마다 다른 색 원 + 머리글자다(D:1042·1127·1212) — 목에
+                              이미지가 없어서다. 실제 썸네일이 있으면 그걸 쓰고, 없을 때만
+                              원본의 색 원으로 떨어진다(색은 채널 순서로 원본 팔레트를 돈다). */}
+                          <div className={`w-8 h-8 rounded-full ${AVATAR_BG[idx % AVATAR_BG.length]} text-white font-bold flex items-center justify-center text-xs shrink-0 overflow-hidden`}>
                             {ch.thumbnail ? (
                               // eslint-disable-next-line @next/next/no-img-element
                               <img src={ch.thumbnail} alt={ch.channelName} className="w-full h-full object-cover" />

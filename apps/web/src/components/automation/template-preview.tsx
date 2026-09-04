@@ -85,7 +85,7 @@ export function TemplatePreview({ template, accent, layout, frameSrc, subtitlesO
   const timeboxFs = boxH * 66 / 1920;     // 시간박스 22px(설계) × scale 3 = 66px 출력
   return (
     <div className="relative shrink-0 overflow-hidden rounded-md border"
-      style={{ width, aspectRatio: "9/16", background: "#000", borderColor: "var(--sd-border)" }}>
+      style={{ width, aspectRatio: "9/16", background: "#000", borderColor: "var(--color-border-subtle)" }}>
       {/* 영상 영역 — 사용자의 최근 회차 프레임(있으면). 없으면 회색 그라디언트 폴백. */}
       <div className="absolute overflow-hidden" style={{
         left: `${video.x}%`, top: `${video.y}%`, width: `${video.w}%`, height: `${video.h}%`,
@@ -159,67 +159,87 @@ export function LayoutSliders({ layout, onChange, className, subtitlesOn, onSubt
   subtitlesOn?: boolean;
   onSubtitlesChange?: (on: boolean) => void;
 }) {
+  /** 원본 슬라이더는 채운 만큼 파랑이다(D:1361) — 값에서 비율을 직접 만든다. */
+  const track = (v: number, min: number, max: number) =>
+    `linear-gradient(to right, #1C60FF 0%, #1C60FF ${((v - min) / (max - min)) * 100}%, #E2E8F0 ${((v - min) / (max - min)) * 100}%, #E2E8F0 100%)`;
+
   return (
-    <div className={className} style={{ color: "var(--sd-fg-dim)" }}>
-      {/* 요소 표시 — 고객마다 로고·시간박스·제목·자막을 뺄 수 있다(사용자 2026-08-24).
+    <div className={className}>
+      {/* Checkboxes Row — 요소 표시. 고객마다 로고·시간박스·제목·자막을 뺄 수 있다(2026-08-24).
           체크 해제 = 미리보기에서 즉시 사라지고, 저장 시 rule.layout 플래그로 렌더에도 빠진다. */}
-      <div className="flex flex-wrap gap-x-3 gap-y-1 pb-1">
+      <div className="flex items-center gap-4 flex-wrap text-xs font-bold text-[var(--color-text-primary)]">
         {([["title", "제목"], ["logo", "로고"], ["timebox", "시간박스"]] as const).map(([key, label]) => (
-          <label key={key} className="flex cursor-pointer items-center gap-1">
+          <label key={key} className="flex items-center gap-1.5 cursor-pointer">
             <input
               type="checkbox" checked={layout[key] !== false}
               onChange={(e) => onChange({ ...layout, [key]: e.target.checked })}
+              className="w-4 h-4 rounded text-[#1C60FF] accent-[#1C60FF]"
             />
-            {label}
+            <span>{label}</span>
           </label>
         ))}
         {onSubtitlesChange && (
-          <label className="flex cursor-pointer items-center gap-1">
+          <label className="flex items-center gap-1.5 cursor-pointer">
             <input
               type="checkbox" checked={subtitlesOn !== false}
               onChange={(e) => onSubtitlesChange(e.target.checked)}
+              className="w-4 h-4 rounded text-[#1C60FF] accent-[#1C60FF]"
             />
-            자막
+            <span>자막</span>
           </label>
         )}
       </div>
-      {([
-        // [라벨, 키, min, max, step, 단위, 소수자리]
-        ["제목 위치", "titleY", 3, 30, 0.5, "%", 0],
-        ["로고 위치", "channelIconY", 60, 92, 0.5, "%", 0],
-        ["시간박스 위치", "channelBoxY", 62, 94, 0.5, "%", 0],
-        ["로고 크기", "channelIconSize", 20, 90, 0.5, "px", 0],
-        // 자막 — 위치(하단 기준 %)·크기(화면 높이 %). 서버 렌더와 같은 축이라 그대로 결과물에 반영된다.
-        ["자막 위치", "subtitleY", 4, 40, 0.5, "%", 0],
-        ["자막 크기", "subtitleSize", 2.5, 7, 0.1, "%", 1],
-      ] as const).map(([label, key, min, max, step, unit, digits]) => (
-        <label key={key} className="block">
-          {label} <span className="opacity-70">{layout[key].toFixed(digits)}{unit}</span>
-          <input
-            type="range" min={min} max={max} step={step} value={layout[key]}
-            onChange={(e) => onChange({ ...layout, [key]: Number(e.target.value) })}
-            className="w-full"
-          />
-        </label>
-      ))}
-      {/* 제목 강조색 — 렌더 titleLines 강조 줄 색(편집기·factory titleAccent 와 같은 축). */}
-      <label className="flex items-center gap-2">
-        제목 색 <span className="opacity-70">{layout.titleColor}</span>
-        <input
-          type="color" value={layout.titleColor}
-          onChange={(e) => onChange({ ...layout, titleColor: e.target.value })}
-          className="ml-auto h-5 w-8 cursor-pointer"
-        />
-      </label>
-      {/* 자막 색 — 슬라이더가 아니라 색상 선택. 서버 렌더의 captionColor(자막 색)로 옮겨진다. */}
-      <label className="flex items-center gap-2">
-        자막 색 <span className="opacity-70">{layout.subtitleColor}</span>
-        <input
-          type="color" value={layout.subtitleColor}
-          onChange={(e) => onChange({ ...layout, subtitleColor: e.target.value })}
-          className="ml-auto h-5 w-8 cursor-pointer"
-        />
-      </label>
+
+      <div className="space-y-2.5">
+        {([
+          // [라벨, 키, min, max, step, 단위, 소수자리]
+          ["제목 위치", "titleY", 3, 30, 0.5, "%", 0],
+          ["로고 위치", "channelIconY", 60, 92, 0.5, "%", 0],
+          ["시간박스 위치", "channelBoxY", 62, 94, 0.5, "%", 0],
+          ["로고 크기", "channelIconSize", 20, 90, 0.5, "px", 0],
+          // 자막 — 위치(하단 기준 %)·크기(화면 높이 %). 서버 렌더와 같은 축이라 그대로 결과물에 반영된다.
+          ["자막 위치", "subtitleY", 4, 40, 0.5, "%", 0],
+          ["자막 크기", "subtitleSize", 2.5, 7, 0.1, "%", 1],
+        ] as const).map(([label, key, min, max, step, unit, digits]) => (
+          <div key={key} className="space-y-0.5">
+            <div className="flex justify-between text-[11px] text-[var(--color-text-muted)] font-semibold">
+              <span>{label} {layout[key].toFixed(digits)}{unit}</span>
+            </div>
+            <input
+              type="range" min={min} max={max} step={step} value={layout[key]}
+              onChange={(e) => onChange({ ...layout, [key]: Number(e.target.value) })}
+              style={{ background: track(layout[key], min, max), boxShadow: "none" }}
+              className="w-full accent-[#1C60FF] cursor-pointer appearance-none border-none outline-none focus:outline-none h-1.5 rounded-full"
+            />
+          </div>
+        ))}
+      </div>
+
+      <div className="space-y-3 pt-2">
+        {/* 제목 강조색 — 렌더 titleLines 강조 줄 색(편집기·factory titleAccent 와 같은 축).
+            자막 색은 서버 렌더의 captionColor 로 옮겨진다. */}
+        {([["제목 색", "titleColor"], ["자막 색", "subtitleColor"]] as const).map(([label, key]) => (
+          <div key={key} className="flex items-center justify-between text-xs font-semibold">
+            <span className="text-[var(--color-text-muted)] flex items-center gap-2">
+              <span>{label}</span>
+              <strong className="text-[var(--color-text-primary)] font-mono">{layout[key]}</strong>
+            </span>
+            <div className="relative">
+              <input
+                type="color" id={`layout-${key}`} value={layout[key]}
+                onChange={(e) => onChange({ ...layout, [key]: e.target.value })}
+                className="sr-only"
+              />
+              <label
+                htmlFor={`layout-${key}`}
+                aria-label={label}
+                style={{ backgroundColor: layout[key] }}
+                className="w-8 h-4 block rounded border border-white/20 cursor-pointer shadow-none"
+              />
+            </div>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
@@ -270,7 +290,7 @@ export function TemplatePreviewDialog({ template, accent, layout, frameSrc, subt
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/55" onClick={onClose} aria-hidden />
       <div
-        className="sd-modal relative flex max-h-[92vh] flex-wrap items-start gap-4 overflow-y-auto bg-[var(--sd-card)] p-4"
+        className="relative flex max-h-[92vh] flex-wrap items-start gap-4 overflow-y-auto rounded-2xl border border-[var(--color-border-card)] bg-[var(--color-bg-card)] p-4 shadow-2xl"
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
@@ -281,15 +301,19 @@ export function TemplatePreviewDialog({ template, accent, layout, frameSrc, subt
             높이에 맞춰 늘어나고, mt-auto 닫기 버튼이 그 바닥까지 밀려 컨트롤과 버튼 사이에 거대한
             빈 공간이 생긴다(사용자 2026-08-21 "왜 이래 ㅋㅋ"). 프리뷰 위쪽에 정렬(items-start)해 붙인다. */}
         <div className="flex min-w-[200px] max-w-[240px] flex-col gap-2">
-          <h2 className="sd-serif text-[14px] font-semibold" style={{ color: "var(--sd-fg)" }}>
+          <h2 className="text-base font-bold text-[var(--color-text-primary)]">
             {template?.title || template?.name || "템플릿 미리보기"}
           </h2>
-          <p className="text-[10.5px] leading-relaxed" style={{ color: "var(--sd-mut)" }}>
+          <p className="text-[11px] leading-relaxed text-[var(--color-text-muted)]">
             실제 렌더와 같은 % 좌표로 그립니다 — 슬라이더를 움직이면 저장될 위치가 그대로 바뀝니다.
           </p>
-          <LayoutSliders layout={layout} onChange={onLayoutChange} className="space-y-2 text-[10.5px]"
+          <LayoutSliders layout={layout} onChange={onLayoutChange} className="space-y-3.5 text-[11px]"
             subtitlesOn={subtitlesOn} onSubtitlesChange={onSubtitlesChange} />
-          <button type="button" className="sd-btn mt-3 self-start" onClick={onClose}>
+          <button
+            type="button"
+            onClick={onClose}
+            className="mt-3 self-start px-3.5 py-1.5 rounded-full bg-[var(--color-bg-input)] hover:bg-[var(--color-bg-card-hover)] text-xs text-[var(--color-text-primary)] border border-[var(--color-border-subtle)] font-medium cursor-pointer transition-colors shadow-none"
+          >
             닫기 (ESC)
           </button>
         </div>

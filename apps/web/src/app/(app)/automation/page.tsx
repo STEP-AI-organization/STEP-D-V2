@@ -39,7 +39,7 @@
  *    갈아끼울 때 이 화면의 자동화 상태도 함께 다시 읽는다(아래 useEffect).
  */
 import Link from "next/link";
-import { Info, Play } from "lucide-react";
+import { Clock, Info, Play } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Footer } from "@/components/layout/footer";
@@ -56,7 +56,7 @@ import {
 } from "@server-pure/pipeline/automation";
 // 배치 라벨·기하는 편집기 프리셋에서 읽는다(라벨을 여기 다시 적지 않는다 — 편집기와
 // 자동배포가 같은 배치를 다른 이름으로 부르면 실무자가 둘을 같은 것으로 못 본다).
-import { ASPECT_PRESETS, getAspectPreset } from "@/lib/editor/aspect-presets";
+import { ASPECT_PRESETS } from "@/lib/editor/aspect-presets";
 import {
   LayoutSliders,
   SUBTITLE_DEFAULTS,
@@ -1368,8 +1368,8 @@ export default function AutomationPage() {
             꺼냈다(사용자 2026-08-24: "자동배포를 두 가지로 나눠줘"). 어떤 계획인지가 곧 이
             선택이라, 접힘 속에 있으면 사용자는 기본값(승인 배포)이 전부인 줄 안다. */}
         <div>
-          <div className="mb-1 text-[11px]" style={{ color: "var(--color-text-muted)" }}>배포 방식</div>
-          <div className="grid gap-2 sm:grid-cols-2">
+          <label className="block text-xs font-semibold text-[var(--color-text-muted)] mb-2">배포 방식</label>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <GateCard
               on={approveFirst} onClick={() => setApproveFirst(true)}
               title="승인 배포"
@@ -1387,8 +1387,8 @@ export default function AutomationPage() {
             순방 matchesMediaKind 필터) 고급 설정 select 에 묻혀 있었다(사용자 2026-08-25:
             "진짜로 배선" — 보이게 꺼내는 게 배선의 완성이다). */}
         <div>
-          <div className="mb-1 text-[11px]" style={{ color: "var(--color-text-muted)" }}>어떤 영상을 내보낼까</div>
-          <div className="grid gap-2 sm:grid-cols-3">
+          <label className="block text-xs font-semibold text-[var(--color-text-muted)] mb-2">어떤 영상을 내보낼까</label>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <GateCard
               on={mediaKind === "short"} onClick={() => setMediaKind("short")}
               title="숏폼만"
@@ -1569,57 +1569,59 @@ export default function AutomationPage() {
                 하한은 쇼츠 점수 분포상 계획 전량을 막아 세우는 함정이었고(서버 주석 참조),
                 화면의 "점수 80 이상" 배지는 그 사실을 사용자에게 설명해 주지도 못했다. */}
 
-            {/* 세로 영상 배치 — 편집기 프리셋 4종 그대로(라벨·기하 동일). 클립(가로) 전용
-                계획엔 의미가 없어 흐리게 처리한다. 미지정 계획은 레터박스로 나가고 있었다. */}
-            <div style={mediaKind === "clip" ? { opacity: 0.65, pointerEvents: "none" } : undefined}>
-              <div className="text-[11px]" style={{ color: "var(--color-text-muted)" }}>
+            {/* 세로 영상 배치 — 원본 마크업·도해 그대로(automation D:1005–1116).
+                라벨·설명은 편집기 프리셋(aspect-presets.ts)에서 읽는데, **원본 문구와 이미
+                글자까지 같다** — 편집기와 자동배포가 같은 배치를 다른 이름으로 부르면
+                실무자가 둘을 같은 것으로 못 보므로 정본은 계속 프리셋이다.
+                클립(가로) 전용 계획엔 의미가 없어 흐리게 처리한다. */}
+            <div className="space-y-2" style={mediaKind === "clip" ? { opacity: 0.65, pointerEvents: "none" } : undefined}>
+              <label className="block font-bold text-xs text-[var(--color-text-primary)]">
                 세로 영상 배치
-              </div>
+              </label>
+
+              {/* Option 1: Top Full Width Option (자동 (영상 템플릿 기본)) */}
               {/* 자동 = 영상 템플릿이 가진 영상창 그대로(지금까지의 동작). 템플릿 셀렉터의
                   '자동'과 같은 뜻 — 고른 적 없는 계획은 저장해도 결과물이 안 바뀐다. */}
-              <button
-                type="button"
+              <div
                 onClick={() => setAspect("")}
-                className="mt-1 flex w-full items-center gap-2.5 rounded-xl px-3 py-2 text-left transition"
-                style={{
-                  border: `1px solid ${!aspect ? "var(--color-border-subtle)" : "var(--color-border-subtle)"}`,
-                  background: !aspect ? "var(--color-bg-input)" : "var(--color-bg-card)",
-                }}
+                style={{ boxShadow: "none" }}
+                className={`p-3.5 rounded-xl cursor-pointer transition-all flex items-center gap-3 shadow-none ${
+                  !aspect
+                    ? "border-2 border-[#1C60FF] bg-[#1C60FF]/5 dark:bg-[#1C60FF]/10"
+                    : "border border-slate-200 dark:border-stone-700/80 bg-white dark:bg-stone-800 hover:border-slate-400"
+                }`}
               >
-                <span aria-hidden className="shrink-0 rounded-[2px]"
-                  style={{ width: 18, height: 32, background: "var(--color-bg-input)", border: "1px dashed var(--color-border-subtle)" }} />
-                <span className="min-w-0">
-                  <span className="block text-[12px] font-medium" style={{ color: !aspect ? "#1C60FF" : "var(--color-text-primary)" }}>
-                    자동 (영상 템플릿 기본)
-                  </span>
-                  <span className="block text-[11px] leading-snug" style={{ color: "var(--color-text-muted)" }}>템플릿이 정한 영상창을 그대로 사용</span>
-                </span>
-              </button>
-              <div className="mt-2 grid grid-cols-2 gap-2">
-                {ASPECT_PRESETS.filter((p) => (RULE_ASPECTS as readonly string[]).includes(p.id)).map((p) => {
-                  const active = aspect === p.id;
-                  return (
-                    <button
-                      key={p.id}
-                      type="button"
-                      onClick={() => setAspect(p.id as RuleAspect)}
-                      className="flex items-center gap-2.5 rounded-xl px-3 py-2 text-left transition"
-                      style={{
-                        border: `1px solid ${active ? "var(--color-border-subtle)" : "var(--color-border-subtle)"}`,
-                        background: active ? "var(--color-bg-input)" : "var(--color-bg-card)",
-                      }}
-                    >
-                      <AspectGlyph id={p.id} active={active} />
-                      <span className="min-w-0">
-                        <span className="block text-[12px] font-medium"
-                          style={{ color: active ? "#1C60FF" : "var(--color-text-primary)" }}>{p.label}</span>
-                        <span className="block text-[11px] leading-snug" style={{ color: "var(--color-text-muted)" }}>{p.hint}</span>
-                      </span>
-                    </button>
-                  );
-                })}
+                <div className="w-6 h-8 rounded border border-dashed border-slate-400 dark:border-stone-500 bg-stone-900/60 shrink-0" />
+                <div>
+                  <h5 className="font-bold text-xs text-[var(--color-text-primary)]">자동 (영상 템플릿 기본)</h5>
+                  <p className="text-[11px] text-[var(--color-text-muted)] mt-0.5 leading-relaxed">
+                    템플릿이 정한 영상창을 그대로 사용
+                  </p>
+                </div>
               </div>
-              <p className="mt-1 text-[11px]" style={{ color: "var(--color-text-muted)" }}>
+
+              {/* Options 2 ~ 5: 2-Column Grid */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {ASPECT_PRESETS.filter((p) => (RULE_ASPECTS as readonly string[]).includes(p.id)).map((p) => (
+                  <div
+                    key={p.id}
+                    onClick={() => setAspect(p.id as RuleAspect)}
+                    style={{ boxShadow: "none" }}
+                    className={`p-3.5 rounded-xl cursor-pointer transition-all flex items-center gap-3 shadow-none ${
+                      aspect === p.id
+                        ? "border-2 border-[#1C60FF] bg-[#1C60FF]/5 dark:bg-[#1C60FF]/10"
+                        : "border border-slate-200 dark:border-stone-700/80 bg-white dark:bg-stone-800 hover:border-slate-400"
+                    }`}
+                  >
+                    <AspectGlyph id={p.id} />
+                    <div>
+                      <h5 className="font-bold text-xs text-[var(--color-text-primary)]">{p.label}</h5>
+                      <p className="text-[11px] text-[var(--color-text-muted)] mt-0.5 leading-relaxed">{p.hint}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <p className="text-[11px] text-[var(--color-text-muted)] font-medium pt-1">
                 원본 영상이 세로 화면에 어떻게 앉을지 정합니다 — 편집기의 같은 이름 배치와 결과가 동일합니다
               </p>
             </div>
@@ -1627,11 +1629,15 @@ export default function AutomationPage() {
             {/* AI 리프레임 — 수동 채택 다이얼로그(adopt-dialog)와 같은 선택지·라벨.
                 숏폼(세로) 전용 옵션이다: 클립(가로)은 크롭이 없고, "둘 다"는 방향이 추천마다
                 달라 orientation 을 못 정한다(서버가 portrait 에서만 AI 허용) — 흐리게 + none 강제. */}
-            <div style={mediaKind !== "short" ? { opacity: 0.65, pointerEvents: "none" } : undefined}>
-              <div className="text-[11px]" style={{ color: "var(--color-text-muted)" }}>
+            {/* 2. AI 스마트 리프레임 (원본 D:1118–1123 — pt-5 mt-5 구분선) */}
+            <div
+              className="pt-5 mt-5 space-y-2 border-t border-[var(--color-border-subtle)]/60"
+              style={mediaKind !== "short" ? { opacity: 0.65, pointerEvents: "none" } : undefined}
+            >
+              <label className="block font-bold text-xs text-[var(--color-text-primary)] mb-1.5">
                 AI 리프레임 (숏폼 9:16)
-              </div>
-              <div className="mt-1 grid grid-cols-2 gap-2">
+              </label>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 {([
                   ["ai", "AI 리프레임 ON", "beat별 얼굴 추적 자동 크롭"],
                   ["none", "OFF", "중앙 고정 크롭"],
@@ -1715,16 +1721,21 @@ export default function AutomationPage() {
             {/* 미리보기 + 위치 조절 — 저장되는 렌더 기하와 같은 % 좌표를 그대로 그린다.
                 소형 카드 클릭 = 대형 다이얼로그(같은 TemplatePreview, width 만 다름). */}
             {layout && (
-              <div className="flex gap-3">
-                <div className="flex shrink-0 flex-col gap-1">
+              /* 5. 템플릿 화면 요소 배치 (원본 D:1245–1246 — pt-6 mt-6 구분선 + 좌 미리보기 / 우 컨트롤) */
+              <div className="pt-6 mt-6 border-t border-[var(--color-border-subtle)]/60 space-y-5">
+                <div className="flex flex-col md:flex-row gap-5 items-start">
+                <div className="flex flex-col items-center select-none space-y-2 shrink-0 group">
                   <button
                     type="button"
-                    className="cursor-zoom-in"
+                    className="cursor-pointer rounded-lg group-hover:ring-2 group-hover:ring-[#1C60FF] transition-all"
                     onClick={() => setTplPreviewOpen(true)}
                     aria-label="템플릿 미리보기 크게 보기"
                     title="클릭하면 크게 봅니다"
                   >
+                    {/* 원본 프레임 폭은 w-32(128px). 미리보기는 **실제 렌더와 같은 % 좌표**로
+                        그리므로 목업의 고정 슬롯(min-h-*)이 아니라 좌표가 자리를 정한다. */}
                     <TemplatePreview
+                      width={128}
                       template={templates.find((t) => t.name === effectiveTemplate) ?? null}
                       accent={(TEMPLATE_SEED_UI[effectiveTemplate] ?? TEMPLATE_SEED_UI["broadcast-standard"]).accent}
                       layout={layout}
@@ -1735,12 +1746,13 @@ export default function AutomationPage() {
                       aspect={aspect}
                     />
                   </button>
-                  <span className="text-center text-[10px]" style={{ color: "var(--color-text-muted)" }}>
+                  <div className="text-[10px] text-[var(--color-text-muted)] group-hover:text-[#1C60FF] font-medium transition-colors">
                     클릭해 크게 보기
-                  </span>
+                  </div>
                 </div>
-                <LayoutSliders layout={layout} onChange={setLayout} className="flex-1 space-y-2 text-[11px]"
+                <LayoutSliders layout={layout} onChange={setLayout} className="flex-1 space-y-3.5 w-full"
                   subtitlesOn={subtitles} onSubtitlesChange={setSubtitles} />
+                </div>
               </div>
             )}
 
@@ -1756,16 +1768,16 @@ export default function AutomationPage() {
 
         {/* 진행 패널 — 단계별 사실만(개수·상태). 스토어 폴링 + 편승 재조회가 갱신한다. */}
         {selProgram && progress && (
-          <div className="flex flex-col gap-2 rounded-xl p-3" style={{ background: "var(--color-bg-input)", border: "1px solid var(--color-border-subtle)" }}>
-            <div className="flex items-baseline justify-between gap-2">
-              <h4 className="text-xs font-semibold" style={{ color: "var(--color-text-primary)" }}>배포 대기 목록</h4>
-              <span className="text-[11px]" style={{ color: "var(--color-text-muted)" }}>분석 → 클립 선정 → 렌더 → 배포</span>
+          <div className="py-4 my-2 space-y-3 border-t border-[var(--color-border-subtle)]/60">
+            <div className="flex items-center justify-between">
+              <h4 className="font-bold text-sm text-[var(--color-text-primary)]">배포 대기 목록</h4>
+              <span className="text-[11px] font-mono text-[var(--color-text-muted)]">분석 ➔ 클립 선정 ➔ 렌더 ➔ 배포</span>
             </div>
-            <div className="grid gap-2 [grid-template-columns:repeat(auto-fit,minmax(180px,1fr))]">
+            <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
             {/* 1) 분석 */}
-            <div className="rounded-xl p-2.5" style={{ border: "1px solid var(--color-border-subtle)" }}>
-              <div className="text-[11px] font-semibold" style={{ color: "var(--color-text-muted)" }}>1 · 분석</div>
-              <div className="mt-1 text-xs leading-relaxed" style={{ color: "var(--color-text-primary)" }}>
+            <div className="p-3.5 rounded-xl bg-[var(--color-bg-input)]/60 border border-[var(--color-border-subtle)] space-y-1">
+              <div className="font-bold text-xs text-[var(--color-text-primary)]">1 · 분석</div>
+              <div className="text-[11px] text-[var(--color-text-muted)]">
                 {progress.analysis.total === 0
                   ? "회차 없음"
                   : `완료 ${progress.analysis.done} · 진행 ${progress.analysis.running} · 대기 ${progress.analysis.waiting}` +
@@ -1774,25 +1786,25 @@ export default function AutomationPage() {
               </div>
             </div>
             {/* 2) 클립 자동 선정 — rule_run media_created */}
-            <div className="rounded-xl p-2.5" style={{ border: "1px solid var(--color-border-subtle)" }}>
-              <div className="text-[11px] font-semibold" style={{ color: "var(--color-text-muted)" }}>2 · 클립 자동 선정</div>
-              <div className="mt-1 text-xs leading-relaxed" style={{ color: "var(--color-text-primary)" }}>
+            <div className="p-3.5 rounded-xl bg-[var(--color-bg-input)]/60 border border-[var(--color-border-subtle)] space-y-1">
+              <div className="font-bold text-xs text-[var(--color-text-primary)]">2 · 클립 자동 선정</div>
+              <div className="text-[11px] text-[var(--color-text-muted)]">
                 {progress.rule
                   ? `자동 생성 클립 ${progress.createdCount}건`
                   : "설정 없음 — 자동배포 시작을 누르면 만들어집니다"}
               </div>
             </div>
             {/* 3) 렌더 — 클립 rendered */}
-            <div className="rounded-xl p-2.5" style={{ border: "1px solid var(--color-border-subtle)" }}>
-              <div className="text-[11px] font-semibold" style={{ color: "var(--color-text-muted)" }}>3 · 렌더</div>
-              <div className="mt-1 text-xs leading-relaxed" style={{ color: "var(--color-text-primary)" }}>
+            <div className="p-3.5 rounded-xl bg-[var(--color-bg-input)]/60 border border-[var(--color-border-subtle)] space-y-1">
+              <div className="font-bold text-xs text-[var(--color-text-primary)]">3 · 렌더</div>
+              <div className="text-[11px] text-[var(--color-text-muted)]">
                 {progress.createdCount === 0 ? "대상 없음" : `렌더 완료 ${progress.rendered} / ${progress.createdCount}건`}
               </div>
             </div>
             {/* 4) 배포 — clip.distributions 상태 */}
-            <div className="rounded-xl p-2.5" style={{ border: "1px solid var(--color-border-subtle)" }}>
-              <div className="text-[11px] font-semibold" style={{ color: "var(--color-text-muted)" }}>4 · 배포</div>
-              <div className="mt-1 text-xs leading-relaxed" style={{ color: "var(--color-text-primary)" }}>
+            <div className="p-3.5 rounded-xl bg-[var(--color-bg-input)]/60 border border-[var(--color-border-subtle)] space-y-1">
+              <div className="font-bold text-xs text-[var(--color-text-primary)]">4 · 배포</div>
+              <div className="text-[11px] text-[var(--color-text-muted)]">
                 {progress.createdCount === 0 && progress.heldCount === 0
                   ? "대상 없음"
                   : `게시 ${progress.published} · 진행 ${progress.pending} · 기록 ${progress.recorded}` +
@@ -1822,8 +1834,8 @@ export default function AutomationPage() {
           {(hasEnabledRules || paused) && (
             <button
               type="button"
-              className="py-1.5 rounded-full bg-[var(--color-bg-input)] hover:bg-[var(--color-bg-card-hover)] text-xs text-[var(--color-text-primary)] border border-[var(--color-border-subtle)] font-medium cursor-pointer transition-colors shadow-none disabled:opacity-50 disabled:cursor-not-allowed min-h-10 px-5 text-xs font-semibold"
-              style={{ borderColor: "rgb(244 63 94 / 0.35)", color: "#E11D48" }}
+              style={{ boxShadow: "none" }}
+              className="flex items-center gap-2 px-4 py-2.5 rounded-full bg-transparent hover:bg-rose-500/10 text-rose-600 dark:text-rose-400 text-xs font-bold border border-rose-500/30 hover:border-rose-500/60 cursor-pointer transition-all shadow-none"
               onClick={togglePause}
             >
               {paused ? "▶ 자동배포 재시작" : "■ 자동배포 중단"}
@@ -2010,7 +2022,10 @@ export default function AutomationPage() {
                     {" · "}
                     하루 {monthlyPublishEstimate(r).perDay}개
                   </span>
-                  <span className="px-2.5 py-0.5 rounded-full bg-slate-200/80 dark:bg-stone-700 text-slate-700 dark:text-stone-300 font-bold text-[11px] border-none shadow-none">
+                  <span
+                    style={{ boxShadow: "none" }}
+                    className="px-2.5 py-1 rounded-full bg-slate-50 dark:bg-stone-800/80 border border-[var(--color-border-subtle)] shadow-none text-[var(--color-text-primary)] font-mono text-[11px]"
+                  >
                     {r.slots?.length ? ruleSlots(r).map(slotLabel).join(" ") : (isAllDayWindow(r) ? "24시간" : `${r.activeStart ?? 0}~${r.activeEnd ?? 24}시`)}
                   </span>
                   <span className="px-2.5 py-0.5 rounded-full bg-slate-200/80 dark:bg-stone-700 text-slate-700 dark:text-stone-300 font-bold text-[11px] border-none shadow-none">월 예상 {monthlyPublishEstimate(r).perMonth}건</span>
@@ -2100,12 +2115,15 @@ export default function AutomationPage() {
             onClick={() => setShowActivity((v) => !v)}
             aria-expanded={showActivity}
           >
-            <h4 className="text-[14px] font-semibold" style={{ color: "var(--color-text-primary)" }}>
-              {showActivity ? "▾" : "▸"} ⏳ 배포 대기
-              <span className="ml-1.5 text-[11px] font-normal" style={{ color: "var(--color-text-muted)" }}>
+            <span className="text-sm font-bold text-[var(--color-text-muted)]">
+              {showActivity ? "▾" : "▸"}
+            </span>
+            <h3 className="text-base font-bold text-[var(--color-text-primary)] flex items-center gap-2">
+              <span>배포 대기</span>
+              <span className="px-2 py-0.5 rounded-full bg-slate-200 dark:bg-stone-800 text-xs font-mono text-[var(--color-text-primary)] font-bold">
                 {recentProcessRuns.length}건
               </span>
-            </h4>
+            </h3>
           </button>
           <span className="text-[11px]" style={{ color: "var(--color-text-muted)" }}>
             분석·렌더·업로드 시작·대기·실패를 시간순으로 봅니다
@@ -2152,14 +2170,18 @@ export default function AutomationPage() {
                 }
               }
               return (
-                <div key={run.id} className="bg-[var(--color-bg-card)] border-none rounded-2xl shadow-md shadow-slate-900/5 dark:shadow-none flex flex-wrap items-center gap-3 px-3 py-2">
+                <div key={run.id} className="p-3.5 rounded-xl bg-[var(--color-bg-input)]/50 border border-[var(--color-border-subtle)] flex flex-wrap items-center gap-3">
                   <span className="font-mono shrink-0 text-[11px]" style={{ color: "var(--color-text-muted)" }}>
                     {run.at?.slice(0, 16).replace("T", " ")}
                   </span>
                   <span className="min-w-[160px] flex-1 truncate text-[12px] font-medium" style={{ color: "var(--color-text-primary)" }}>
                     {clip?.title || run.clipId || "—"}
                   </span>
-                  {platform && <span className="px-2.5 py-0.5 rounded-full bg-slate-200/80 dark:bg-stone-700 text-slate-700 dark:text-stone-300 font-bold text-[11px] border-none shadow-none shrink-0">{channelLabel(platform)}</span>}
+                  {platform && (
+                    <span className="px-3 py-0.5 rounded-full bg-stone-800 text-slate-300 font-mono text-[11px] font-bold border-none shadow-none shrink-0">
+                      {channelLabel(platform)}
+                    </span>
+                  )}
                   <span className={cn("shrink-0", tag)}>{label}</span>
                   {originLabel && <span className="px-2.5 py-0.5 rounded-full bg-slate-200/80 dark:bg-stone-700 text-slate-700 dark:text-stone-300 font-bold text-[11px] border-none shadow-none shrink-0">{originLabel}</span>}
                   {ytId && (
@@ -2180,9 +2202,10 @@ export default function AutomationPage() {
                       수동
                     </Link>
                   )}
-                  {/* 사유("안 보냄" 등)는 잘리면 읽을 수 없다 — 둘째 줄 전체 폭. */}
+                  {/* 사유("안 보냄" 등)는 잘리면 읽을 수 없다 — 둘째 줄 전체 폭.
+                      Requirement 3: Failure Reason Box (No shadow, no outer stroke, gray background) */}
                   {reason && (
-                    <span className="basis-full text-[11px] leading-relaxed" style={{ color: "var(--color-text-muted)" }}>
+                    <span className="basis-full text-[11px] text-[var(--color-text-muted)] font-mono leading-relaxed bg-slate-100 dark:bg-stone-800/80 p-3 rounded-xl border-none shadow-none">
                       {reason}
                     </span>
                   )}
@@ -2293,43 +2316,42 @@ export default function AutomationPage() {
  * (색은 STEP D 토큰 그대로다 — AENA 의 zinc 클래스를 옮기면 다크 테마가 깨진다.)
  */
 /**
- * 배치 미니 도해 — 세로 프레임 안에서 **영상이 실제로 앉는 자리**를 그린다.
+ * 배치 미니 도해 — **원본 그대로**(automation D:1020·1040·1061·1082).
  *
- * 라벨만으로는 "전체 담기"와 "위 자막띠"가 어떻게 다른지 안 와닿는다(같은 이유로 편집기도
- * 프리셋을 그림으로 보여준다). 좌표는 프리셋의 `rect` 를 캔버스 비율로 환산해 쓰므로
- * 프리셋이 바뀌면 도해도 따라간다 — 여기 숫자를 따로 적지 않는다.
+ * 예전엔 프리셋 `rect` 를 캔버스 비율로 환산해 그렸다(기하가 늘 맞는 대신 원본과 다른 그림).
+ * 디자인 존중이 원칙이라 원본 도해를 쓴다 — 대신 **프리셋 4종이 고정**이라는 전제가 붙는다.
+ * `RULE_ASPECTS` 에 배치가 늘거나 `rect` 가 바뀌면 여기 도해도 같이 고쳐야 한다.
  */
-function AspectGlyph({ id, active }: { id: string; active: boolean }) {
-  const p = getAspectPreset(id);
-  const W = 18, H = 32; // 9:16 미니 프레임(px)
-  // 영상 영역(프레임 대비 %). contain 은 16:9 원본 기준 레터박스, cover 는 꽉 참.
-  const area = (() => {
-    if (!p) return { top: 0, height: 100 };
-    if (p.fill === "rect" && p.rect) {
-      return { top: (p.rect.y / p.canvasH) * 100, height: (p.rect.h / p.canvasH) * 100 };
-    }
-    if (p.fill === "cover") return { top: 0, height: 100 };
-    // contain — 16:9 원본이 1080 폭에 맞으면 높이 607.5 → 세로 중앙 정렬.
-    const h = ((1080 * 9 / 16) / p.canvasH) * 100;
-    return { top: (100 - h) / 2, height: h };
-  })();
-  return (
-    <span
-      aria-hidden
-      className="relative shrink-0 overflow-hidden rounded-[2px]"
-      style={{ width: W, height: H, background: "var(--color-bg-input)", border: "1px solid var(--color-border-subtle)" }}
-    >
-      <span
-        className="absolute left-0 right-0"
-        style={{
-          top: `${area.top}%`,
-          height: `${area.height}%`,
-          background: active ? "#1C60FF" : "var(--color-text-muted)",
-          opacity: active ? 0.85 : 0.45,
-        }}
-      />
-    </span>
-  );
+const GLYPH_BOX = "w-6 h-8 rounded shrink-0 p-1 flex";
+function AspectGlyph({ id }: { id: string }) {
+  switch (id) {
+    case "9:16-letterbox": // 세로 · 전체 담기 — 위·아래 레터박스 띠
+      return (
+        <div className={`${GLYPH_BOX} bg-indigo-950 flex-col items-center justify-between border border-indigo-700/50`}>
+          <div className="w-full h-1 bg-[#1C60FF] rounded-xs" />
+          <div className="w-full h-1 bg-[#1C60FF] rounded-xs" />
+        </div>
+      );
+    case "9:16-crop-full": // 세로 · 꽉 채우기 — 여백 없이 꽉 참
+      return (
+        <div className={`${GLYPH_BOX} bg-stone-800 items-center justify-center border border-stone-700`}>
+          <div className="w-full h-full bg-stone-600 rounded-xs" />
+        </div>
+      );
+    case "9:16-crop-main": // 세로 · 위 자막띠 — 위 띠 1개
+      return (
+        <div className={`${GLYPH_BOX} bg-stone-900 flex-col justify-between border border-stone-700`}>
+          <div className="w-full h-2 bg-stone-600 rounded-xs" />
+        </div>
+      );
+    default: // 9:16-crop-sub — 세로 · 위아래 띠
+      return (
+        <div className={`${GLYPH_BOX} bg-stone-900 flex-col justify-between border border-stone-700`}>
+          <div className="w-full h-1.5 bg-stone-600 rounded-xs" />
+          <div className="w-full h-1.5 bg-stone-600 rounded-xs" />
+        </div>
+      );
+  }
 }
 
 /** 원본 단계 머리말(D:417–423) — 제목 옆에 설명이 한 줄로 붙는다. */
@@ -2403,57 +2425,183 @@ function chansOf(keys: string[]): { platform: string; accountId: string }[] {
  */
 function SlotPicker({ slots, onChange }: { slots: RuleSlot[]; onChange: (v: RuleSlot[]) => void }) {
   const [adding, setAdding] = useState(false);
-  const [value, setValue] = useState("18:00");
+  const [clockOpen, setClockOpen] = useState(false);
+  const [period, setPeriod] = useState<"오전" | "오후">("오후");
+  const [hour, setHour] = useState("06");
+  const [minute, setMinute] = useState("00");
+  const boxRef = useRef<HTMLDivElement>(null);
+
+  // 원본은 바깥 클릭으로 피커를 닫는다(D:150–160).
+  useEffect(() => {
+    if (!adding) return;
+    const onDown = (e: MouseEvent) => {
+      if (boxRef.current && !boxRef.current.contains(e.target as Node)) {
+        setAdding(false);
+        setClockOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [adding]);
 
   const setCount = (time: string, count: number) =>
-    onChange(slots.map((s) => (s.time === time ? { ...s, count: Math.max(1, Math.min(20, count)) } : s)));
+    onChange(slots.map((x) => (x.time === time ? { ...x, count: Math.max(1, Math.min(20, count)) } : x)));
 
+  /** 원본 피커는 12시간 표기, 서버 계약은 24시간 "HH:MM" 이다 — 저장 직전에 변환한다. */
   function add() {
-    if (!/^\d{2}:\d{2}$/.test(value)) return;
-    if (!slots.some((s) => s.time === value)) {
-      onChange([...slots, { time: value, count: 1 }].sort((a, b) => a.time.localeCompare(b.time)));
+    const h12 = Number(hour);
+    if (!Number.isFinite(h12) || h12 < 0 || h12 > 12) return;
+    const h24 = period === "오전" ? (h12 === 12 ? 0 : h12) : (h12 === 12 ? 12 : h12 + 12);
+    const time = `${String(h24).padStart(2, "0")}:${minute.padStart(2, "0")}`;
+    if (!slots.some((x) => x.time === time)) {
+      onChange([...slots, { time, count: 1 }].sort((a, b) => a.time.localeCompare(b.time)));
     }
     setAdding(false);
+    setClockOpen(false);
   }
 
   return (
-    <div className="flex flex-wrap items-center gap-1.5">
-      {slots.map((s) => (
+    <div className="flex items-center gap-2 flex-wrap" ref={boxRef}>
+      {/* Added configured times pills — 원본 pill 안에 **시각당 개수**를 넣었다.
+          원본은 시각만 담는데, 하루 발행 수 = 개수 합이라 개수를 정할 자리가 필요하다(perDayCount). */}
+      {slots.map((x) => (
         <span
-          key={s.time}
-          className="inline-flex h-7 items-center gap-1 rounded-xl px-2 text-xs"
-          style={{ border: "1px solid var(--color-border-subtle)", color: "var(--color-text-primary)" }}
+          key={x.time}
+          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-[var(--color-bg-card)] border border-[var(--color-border-subtle)] text-xs font-bold text-[var(--color-text-primary)] shadow-none"
         >
-          {s.time}
-          <button type="button" aria-label={`${s.time} 개수 줄이기`} disabled={s.count <= 1}
-            onClick={() => setCount(s.time, s.count - 1)}
-            className="px-0.5" style={{ color: "var(--color-text-muted)", opacity: s.count <= 1 ? 0.35 : 1 }}>−</button>
-          <span className="font-mono">{s.count}개</span>
-          <button type="button" aria-label={`${s.time} 개수 늘리기`}
-            onClick={() => setCount(s.time, s.count + 1)}
-            className="px-0.5" style={{ color: "var(--color-text-muted)" }}>＋</button>
-          <button type="button" aria-label={`${s.time} 삭제`}
-            onClick={() => onChange(slots.filter((x) => x.time !== s.time))}
-            className="ml-0.5" style={{ color: "var(--color-text-muted)" }}>×</button>
+          {slotLabel(x)}
+          <button
+            type="button" aria-label={`${x.time} 개수 줄이기`} disabled={x.count <= 1}
+            onClick={() => setCount(x.time, x.count - 1)}
+            className="text-[var(--color-text-muted)] hover:text-[#1C60FF] text-xs cursor-pointer border-none bg-transparent disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            −
+          </button>
+          <span className="font-mono">{x.count}개</span>
+          <button
+            type="button" aria-label={`${x.time} 개수 늘리기`}
+            onClick={() => setCount(x.time, x.count + 1)}
+            className="text-[var(--color-text-muted)] hover:text-[#1C60FF] text-xs cursor-pointer border-none bg-transparent"
+          >
+            ＋
+          </button>
+          <button
+            type="button" aria-label={`${x.time} 삭제`}
+            onClick={() => onChange(slots.filter((y) => y.time !== x.time))}
+            className="text-[var(--color-text-muted)] hover:text-rose-500 text-xs cursor-pointer border-none bg-transparent"
+          >
+            ✕
+          </button>
         </span>
       ))}
-      {adding ? (
-        <span className="inline-flex items-center gap-1">
-          <input
-            type="time" value={value} autoFocus
-            onChange={(e) => setValue(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter") add(); if (e.key === "Escape") setAdding(false); }}
-            className="px-4 rounded-full bg-[var(--color-bg-input)] border border-[var(--color-border-subtle)] focus:border-[#1C60FF] text-xs text-[var(--color-text-primary)] placeholder-[var(--color-text-muted)] focus:outline-none transition-colors h-7 w-[92px]"
-          />
-          <button type="button" onClick={add} className="py-1.5 rounded-full bg-[var(--color-bg-input)] hover:bg-[var(--color-bg-card-hover)] text-xs text-[var(--color-text-primary)] border border-[var(--color-border-subtle)] font-medium cursor-pointer transition-colors shadow-none disabled:opacity-50 disabled:cursor-not-allowed h-7 px-2 text-[11px]">추가</button>
-        </span>
-      ) : (
-        <button type="button" onClick={() => setAdding(true)}
-          className="h-7 text-xs" style={{ color: "var(--color-text-muted)" }}>+ 시간 추가</button>
+
+      {/* Inline Time Input Trigger Box (LEFT of + 시간 추가 button) */}
+      {adding && (
+        <div className="relative flex items-center gap-2">
+          <div className="flex items-center gap-1 px-3.5 py-1.5 rounded-full bg-[var(--color-bg-card)] border border-[#1C60FF] text-xs font-bold text-[var(--color-text-primary)] shadow-none">
+            {/* Toggleable AM/PM */}
+            <button
+              type="button"
+              onClick={() => setPeriod((v) => (v === "오후" ? "오전" : "오후"))}
+              onKeyDown={(e) => {
+                if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+                  e.preventDefault();
+                  setPeriod((v) => (v === "오후" ? "오전" : "오후"));
+                }
+              }}
+              className="hover:text-[#1C60FF] cursor-pointer font-bold border-none bg-transparent p-0 select-none mr-1"
+              title="클릭 또는 화살표 키로 오전/오후 변경"
+            >
+              {period}
+            </button>
+
+            <input
+              type="text" maxLength={2} value={hour} aria-label="시"
+              onChange={(e) => {
+                const v = e.target.value.replace(/[^0-9]/g, "");
+                if (v === "" || (Number(v) >= 0 && Number(v) <= 12)) setHour(v);
+              }}
+              onBlur={() => setHour((v) => (v === "" ? "06" : v.padStart(2, "0")))}
+              className="w-5 text-center bg-transparent border-none p-0 font-bold focus:outline-none focus:text-[#1C60FF]"
+            />
+            <span>:</span>
+            <input
+              type="text" maxLength={2} value={minute} aria-label="분"
+              onChange={(e) => {
+                const v = e.target.value.replace(/[^0-9]/g, "");
+                if (v === "" || (Number(v) >= 0 && Number(v) <= 59)) setMinute(v);
+              }}
+              onBlur={() => setMinute((v) => (v === "" ? "00" : v.padStart(2, "0")))}
+              className="w-5 text-center bg-transparent border-none p-0 font-bold focus:outline-none focus:text-[#1C60FF]"
+            />
+
+            {/* Clock Dropdown Icon */}
+            <button
+              type="button"
+              onClick={() => setClockOpen((v) => !v)}
+              className="ml-1.5 text-[#1C60FF] hover:opacity-80 cursor-pointer border-none bg-transparent p-0 flex items-center justify-center"
+              title="시간 선택 드롭다운 열기"
+            >
+              <Clock className="w-3.5 h-3.5" />
+            </button>
+          </div>
+
+          <button
+            type="button"
+            onClick={add}
+            className="px-3.5 py-1.5 rounded-full bg-[#1C60FF] hover:bg-blue-600 text-white text-xs font-bold transition-colors cursor-pointer border-none shadow-none"
+          >
+            추가
+          </button>
+
+          {/* STEP D Time Picker Dropdown Overlay (With outside click auto-close) */}
+          {clockOpen && (
+            <div className="absolute top-full left-0 mt-2 bg-[var(--color-bg-card)] border border-[var(--color-border-subtle)] rounded-2xl p-2 shadow-2xl z-50 flex gap-1 animate-in fade-in duration-150 ring-1 ring-slate-200 dark:ring-stone-700">
+              {/* Column 1: 오전 / 오후 */}
+              <div className="w-16 flex flex-col gap-1 max-h-48 overflow-y-auto p-1">
+                {(["오후", "오전"] as const).map((v) => (
+                  <button key={v} type="button" onClick={() => setPeriod(v)} className={PICK_CELL(period === v)}>
+                    {v}
+                  </button>
+                ))}
+              </div>
+              {/* Column 2: Hours (00 ~ 12) */}
+              <div className="w-14 flex flex-col gap-1 max-h-48 overflow-y-auto p-1 border-l border-r border-[var(--color-border-subtle)]/40">
+                {Array.from({ length: 13 }, (_, i) => String(i).padStart(2, "0")).map((h) => (
+                  <button key={h} type="button" onClick={() => setHour(h)} className={PICK_CELL(hour === h)}>
+                    {h}
+                  </button>
+                ))}
+              </div>
+              {/* Column 3: Minutes */}
+              <div className="w-14 flex flex-col gap-1 max-h-48 overflow-y-auto p-1">
+                {["00", "05", "10", "15", "20", "25", "30", "35", "40", "45", "50", "55"].map((m) => (
+                  <button key={m} type="button" onClick={() => setMinute(m)} className={PICK_CELL(minute === m)}>
+                    {m}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
       )}
+
+      <button
+        type="button"
+        onClick={() => setAdding((v) => !v)}
+        className="px-3.5 py-1.5 rounded-full bg-[var(--color-bg-card)] hover:bg-[var(--color-bg-card-hover)] text-xs font-semibold text-[var(--color-text-primary)] border border-[var(--color-border-subtle)] cursor-pointer shadow-none [box-shadow:none]"
+      >
+        + 시간 추가
+      </button>
     </div>
   );
 }
+
+/** 시간 피커 셀 (원본 D:836·854·872). */
+const PICK_CELL = (on: boolean) =>
+  `w-full py-1.5 rounded-lg text-xs font-bold transition-colors border-none cursor-pointer ${
+    on ? "bg-[#1C60FF] text-white shadow-xs" : "bg-transparent text-[var(--color-text-primary)] hover:bg-[var(--color-bg-input)]"
+  }`;
 
 /**
  * 월 예상 발행 — **순방 판정과 같은 함수**(`monthlyPublishEstimate`)로 낸다.
@@ -2480,21 +2628,22 @@ function PublishEstimate({ weekdays, slots, dailyQuota, channels }: {
   // 고르지도 않은 채널의 예상 건수를 보여 주게 된다.
   if (channels.length === 0) {
     return (
-      <div className="rounded-xl p-2.5 text-[11px]"
-        style={{ border: "1px solid var(--color-border-subtle)", color: "var(--color-text-muted)" }}>
+      <div className="p-4 rounded-2xl bg-[#1C60FF]/5 dark:bg-[#1C60FF]/10 border-none mt-1 shadow-none text-xs font-bold text-[var(--color-text-muted)]">
         채널을 선택하면 월 예상 발행 건수가 표시됩니다.
       </div>
     );
   }
 
   return (
-    <div className="rounded-xl p-2.5" style={{ border: "1px solid var(--color-border-subtle)" }}>
-      <div className="flex items-baseline justify-between">
-        <span className="text-[11px]" style={{ color: "var(--color-text-muted)" }}>월 예상 발행</span>
-        <span className="text-[15px] font-semibold" style={{ color: "var(--color-text-primary)" }}>{perMonth}건</span>
+    <div className="p-4 rounded-2xl bg-[#1C60FF]/5 dark:bg-[#1C60FF]/10 border-none flex items-center justify-between mt-1 shadow-none">
+      <div>
+        <div className="text-xs font-bold text-[var(--color-text-muted)]">월 예상 발행</div>
+        <div className="text-xs font-bold text-[var(--color-text-primary)] mt-1">
+          {formatWeekdays(weekdays)} · 하루 {est.perDay}건 · 채널 {est.channels}개 ➔ 주당 {perWeek}건
+        </div>
       </div>
-      <div className="mt-1 text-[11px]" style={{ color: "var(--color-text-muted)" }}>
-        {formatWeekdays(weekdays)} · 하루 {est.perDay}건 · 채널 {est.channels}개 → 주당 {perWeek}건
+      <div className="text-2xl font-extrabold text-[var(--color-text-primary)] font-mono tracking-tight">
+        {perMonth}건
       </div>
     </div>
   );
