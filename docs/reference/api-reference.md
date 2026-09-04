@@ -427,17 +427,25 @@ API 키(`api-keys.ts`). **화이트리스트(`API_KEY_ROUTES`)에 올린 라우�
 | 메서드·경로 | 설명 |
 |---|---|
 | `GET /api/harvest/sources` | 목록 + 진행률(`made`·`remaining`·`credits`·`days`). 숫자는 수확기와 **같은 함수**가 계산한다 |
-| `POST /api/harvest/sources` | `{ sourceChannelUrl, programId?, dailyCap?, minDurationSec?, backfill? }`. 핸들(`@이름`)은 등록 시점에 `UC…` 로 해석해 못박는다 |
+| `POST /api/harvest/sources` | `{ sourceChannelUrl, programId?, minDurationSec?, backfill?, publish? }`. 핸들(`@이름`)은 등록 시점에 `UC…` 로 해석해 못박는다. **프로그램과 자동배포 계획을 같이 만든다** — `publish: { channels[], slots?, weekdays?, templateId? }` (자동배포 화면과 같은 값 체계) |
+| `POST /api/harvest/run` | **지금 한 번 수확한다**(새벽 2시를 기다리지 않는다). 상한은 그대로라 연타해도 사유만 돌아온다. 등록 직후·화면 버튼이 부른다 |
 | `PATCH /api/harvest/sources/:id` | 일시정지·재개·상한 변경. **승인(blocked→active)은 여기서 못 한다** |
 | `DELETE /api/harvest/sources/:id` | 해지. 이미 만든 회차·영상은 남는다 |
 | `POST /api/superadmin/harvest/:id/approve` | 운영자 승인. `reason` 필수(저작권 판단이라 근거가 남아야 한다) |
 
 동작 규칙:
 - **연결된 채널만 바로 돈다.** 그 밖의 채널은 `blocked` 로 들어가고 운영자 승인이 필요하다.
-- **새벽 2시(KST) 하루 한 번** `channel.harvest` 가 돈다. 수집원마다 **최대 한 편**.
-- **배포 재고가 충분하면 분석을 안 돌린다** — 그 프로그램의 하루 배포 물량 × 2일치가 이미
+- **새벽 2시(KST) 하루 한 번** `channel.harvest` 가 돈다. 수집원마다 **최대 한 편** —
+  순회가 하루 한 번이라 `dailyCap` 을 올려도 **하루 1편이 실질 상한**이다(`MAX_PER_DAY`).
+  예상 소요일도 그 페이스로 낸다(`effectiveDailyCap`).
+- **배포할 계획이 없으면 아무것도 가져오지 않는다**(`no_plan`). 회차를 만드는 순간 내려받기와
+  분석이 한 줄로 묶여 나가므로, 계획 없이 도는 것은 곧 **채널 전체를 하루 한 편씩 받아 두는
+  것**이다. 계획을 **멈춘** 경우도 같다 — 배포를 멈췄는데 내려받기가 계속되면 안 된다.
+- **배포 재고가 충분해도 안 가져온다** — 그 프로그램의 하루 배포 물량 × 2일치가 이미
   대기 중이면 건너뛴다. 수천 편짜리 채널에서 크레딧이 새는 것을 막는 브레이크다.
-- 하루 상한(기본 2편) · 동시 진행 1편 · 롱폼 하한(기본 180초) · 크레딧 부족 시 정지.
+- 동시 진행 1편 · 롱폼 하한(기본 180초) · 크레딧 부족 시 정지.
+- ⚠️ **게이트는 전부 회차 생성 앞에 있다.** 그래서 막히면 분석뿐 아니라 **내려받기 자체가
+  안 일어난다**(사용자 2026-09-04: "다운로드조차도").
 
 ⚠️ 내려받기는 **윈도우2 전용 레인**(`youtube.download`)이다. 그 PC 가 꺼져 있으면 회차만
 만들어지고 바이트는 안 내려온다.

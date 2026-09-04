@@ -361,6 +361,7 @@ import { buyerFor, mailHtml, receiptExtrasFor, sendInvoiceEmail } from "./billin
 import { toKstIso } from "./kst.ts";
 import { commitAndInherit } from "./pipeline/adopt.ts";
 import { runAutomationCycle } from "./pipeline/automation-cycle.ts";
+import { runHarvestCycle } from "./pipeline/harvest-cycle.ts";
 import {
   ROOT as ASSET_ROOT,
   canMoveFolder,
@@ -12770,6 +12771,22 @@ app.patch("/api/harvest/sources/:id", async (c) => {
   if (!(await updateHarvestSource(id, patch))) return c.json({ error: "no_change" }, 400);
   return c.json({ source: await harvestView(await getHarvestSource(id)) });
 });
+
+/**
+ * **지금 한 번 돈다** — 새벽 2시를 기다리지 않는다.
+ *
+ * 등록 직후와 화면의 "지금 가져오기" 가 이걸 부른다. 등록해 놓고 하루를 기다려야 무슨 일이
+ * 일어나는지 알 수 있으면 사용자는 기능이 고장 났다고 판단한다 — 이 리포 최빈 실패모드가
+ * "켜 놨는데 아무것도 안 나감" 이다.
+ *
+ * ⚠️ **상한은 그대로다.** 버튼은 순회 **시각**만 앞당길 뿐, 무엇을 몇 편 집을지는 손대지
+ * 않는다(진행 중 1편 · 하루 1편 · 계획 없으면 정지 · 재고 충분하면 정지 · 크레딧).
+ * 그래서 연타해도 두 번째부터는 사유만 돌아온다 — 눌러서 넘길 수 있으면 상한이 아니다.
+ *
+ * 순회는 몇 초짜리다(업로드 목록 조회 + 회차 1건 생성). 잡으로 미루지 않고 바로 돌려
+ * **결과를 그 자리에서 돌려준다** — 왜 안 가져왔는지가 사용자가 알아야 하는 값이다.
+ */
+app.post("/api/harvest/run", async (c) => c.json(await runHarvestCycle()));
 
 /**
  * 해지. **이미 만든 회차·영상은 남는다** — 지우면 크레딧을 쓴 결과물이 사라진다.

@@ -28,6 +28,19 @@ import {
 
 /** 하루에 몇 편까지 집을지. 60분 1편 = 60크레딧이라 이 기본값이 곧 월 청구액을 정한다. */
 export const DEFAULT_DAILY_CAP = 2;
+/**
+ * **하루에 실제로 집히는 최대 편수 — 수집원당 1편.**
+ *
+ * 수확 순회는 하루 한 번(KST 02시 · `fanOutHarvestCycles` 가 날짜 dedupeKey 로 보장)이고,
+ * 한 순회에서 수집원마다 **한 편만** 집는다. 그래서 `dailyCap` 을 3 으로 올려도 실제로는
+ * 1편이다 — 그 사실을 코드에 적어 두지 않으면 화면이 "하루 3편 · 104일" 이라 약속하고
+ * 실제로는 312일이 걸린다(사용자가 정한 수가 조용히 안 지켜지는, 이 리포 최빈 사고).
+ *
+ * ⚠️ **이 상한은 분석이 아니라 다운로드에도 걸린다** — 회차를 만드는 순간 다운로드(youtube.download)
+ * 와 분석(content.analyze)이 한 줄로 묶여 나가기 때문이다(사용자 2026-09-04: "다운로드조차도").
+ * 그래서 게이트는 **회차를 만들기 전에** 있어야 하고, 실제로 `pickNext` 가 전부 그 앞에 있다.
+ */
+export const MAX_PER_DAY = 1;
 /** 롱폼 판정 하한(초). 3분보다 짧으면 숏폼으로 쓸 구간이 안 나온다. */
 export const DEFAULT_MIN_DURATION_SEC = 180;
 /** 동시에 진행할 수 있는 편수. 앞 편이 분석을 마쳐야 다음을 집는다. */
@@ -80,7 +93,7 @@ export const HARVEST_HOUR_KST = 2;
 /** 왜 안 집었는지 — 화면과 로그가 같은 어휘를 쓴다. */
 export type SkipCode =
   | "paused" | "blocked"
-  | "in_flight" | "daily_cap" | "stocked"
+  | "in_flight" | "daily_cap" | "no_plan" | "stocked"
   | "no_candidate" | "insufficient_credits";
 
 export type HarvestVerdict =
@@ -92,6 +105,7 @@ export const SKIP_REASON: Record<SkipCode, string> = {
   blocked: "연결되지 않은 채널이라 운영자 승인이 필요합니다.",
   in_flight: "앞 영상이 아직 처리 중입니다.",
   daily_cap: "오늘 몫을 다 채웠습니다.",
+  no_plan: "배포할 곳이 없습니다 — 자동배포 계획을 먼저 만드세요.",
   stocked: "배포할 영상이 이미 충분합니다.",
   no_candidate: "새로 가져올 롱폼이 없습니다.",
   insufficient_credits: "크레딧이 모자랍니다.",
@@ -116,21 +130,32 @@ export interface PickInput {
   stock: number;
   /**
    * 이 프로그램의 하루 배포 물량 — **수요**. 걸린 계획들의 하루 발행 수 합.
-   * 0 이면 배포할 계획이 없다는 뜻이고, 그때는 재고 판정을 하지 않는다
-   * (계획을 아직 안 만든 사용자의 수집을 막으면 "등록했는데 아무 일도 안 남" 이 된다).
+   * 0 이면 배포할 계획이 없다는 뜻이고, 그러면 **아무것도 집지 않는다**(아래 no_plan).
    */
   dailyDemand: number;
 }
 
 /**
- * 재고가 충분한가 — **분석을 더 돌릴 이유가 있는지**를 정한다.
+ * 재고가 충분한가 — **더 가져올 이유가 있는지**를 정한다.
  *
- * 수요가 0 이면(배포 계획이 없으면) 막지 않는다. 계획을 나중에 만드는 순서도 정상이고,
- * 여기서 막으면 "채널을 등록했는데 아무것도 안 생긴다" 가 된다 — 그 침묵이 더 나쁘다.
+ * 수요가 0 인 경우는 여기서 판정하지 않는다 — 그건 "재고가 충분하다" 가 아니라 "배포할 곳이
+ * 없다" 는 다른 사실이고, `pickNext` 가 그 앞에서 `no_plan` 으로 멈춘다.
  */
 export function enoughStock(stock: number, dailyDemand: number, bufferDays = STOCK_BUFFER_DAYS): boolean {
   if (!(dailyDemand > 0)) return false;
   return stock >= dailyDemand * bufferDays;
+}
+
+/**
+ * 이 수집원이 **하루에 실제로 가져오는 편수.** 사용자가 정한 상한과 구조적 상한 중 작은 쪽.
+ *
+ * 화면의 예상 소요일과 순회의 실제 페이스가 **같은 함수**에서 나와야 한다. 예전엔 예상치가
+ * `dailyCap` 을 그대로 나눠서, 하루 편수를 3 으로 올리면 "104일" 이라 적어 놓고 실제로는
+ * 312일 걸렸다 — 화면이 지키지도 못할 약속을 하는 형태의 사고다.
+ */
+export function effectiveDailyCap(source: Pick<HarvestSource, "dailyCap">): number {
+  const cap = source.dailyCap > 0 ? source.dailyCap : DEFAULT_DAILY_CAP;
+  return Math.min(cap, MAX_PER_DAY);
 }
 
 /**
@@ -160,13 +185,25 @@ export function pickNext(input: PickInput): HarvestVerdict {
     return { pick: null, code: "in_flight", reason: SKIP_REASON.in_flight };
   }
 
-  const cap = source.dailyCap > 0 ? source.dailyCap : DEFAULT_DAILY_CAP;
+  const cap = effectiveDailyCap(source);
   if (input.madeToday >= cap) {
     return { pick: null, code: "daily_cap", reason: `${SKIP_REASON.daily_cap} (하루 ${cap}편)` };
   }
 
-  // **재고 게이트.** 배포 스케줄이 낼 몫을 이미 갖고 있으면 분석을 더 돌리지 않는다 —
-  // 수천 편짜리 채널에서 이게 없으면 안 나갈 영상을 계속 만들며 크레딧만 태운다.
+  // **배포할 곳이 없으면 아무것도 가져오지 않는다** (사용자 2026-09-04: "다 다운로드하거나
+  // 그러면 안 돼 — 다운로드조차도"). 회차를 만드는 순간 다운로드와 분석이 한 줄로 묶여
+  // 나가므로, 계획 없이 도는 것은 곧 **채널 전체를 하루 한 편씩 받아 두는 것**이다.
+  //
+  // 예전엔 여기서 막지 않았다 — "계획을 나중에 만드는 순서도 정상" 이라는 이유였는데,
+  // 그 대가가 "안 나갈 영상을 무한정 받는다" 였다. 지금은 수집원을 등록할 때 계획도 같이
+  // 만들어지고(POST /api/harvest/sources), 안 만든 경우엔 화면이 경고로 알린다.
+  // 계획을 **멈춘** 경우도 여기로 떨어진다 — 배포를 멈췄는데 다운로드가 계속되면 안 된다.
+  if (!(input.dailyDemand > 0)) {
+    return { pick: null, code: "no_plan", reason: SKIP_REASON.no_plan };
+  }
+
+  // **재고 게이트.** 배포 스케줄이 낼 몫을 이미 갖고 있으면 더 가져오지 않는다 —
+  // 수천 편짜리 채널에서 이게 없으면 안 나갈 영상을 계속 받으며 크레딧만 태운다.
   if (enoughStock(input.stock, input.dailyDemand)) {
     return {
       pick: null,
@@ -232,7 +269,9 @@ export interface HarvestEstimate {
 export function estimate(input: Pick<PickInput, "source" | "videos" | "alreadyMade">): HarvestEstimate {
   const list = candidates(input);
   const credits = list.reduce((sum, v) => sum + billableMinutes(v.durationSec), 0);
-  const cap = input.source.dailyCap > 0 ? input.source.dailyCap : DEFAULT_DAILY_CAP;
+  // **실제 페이스**로 나눈다(effectiveDailyCap) — `dailyCap` 을 그대로 쓰면 화면이 지키지도
+  // 못할 소요일을 약속한다. 재고 게이트로 더 느려질 수는 있어도 빨라지지는 않는다.
+  const cap = effectiveDailyCap(input.source);
   return { remaining: list.length, credits, days: Math.ceil(list.length / cap) };
 }
 

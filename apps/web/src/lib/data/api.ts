@@ -3425,6 +3425,24 @@ export async function updateHarvestSource(id: string, patch: {
   return out.source;
 }
 
+/** 한 수집원의 순회 결과 한 줄. `picked` 가 null 이면 `note` 가 안 가져온 이유다. */
+export interface HarvestOutcome {
+  sourceId: string;
+  sourceChannelId: string;
+  picked: string | null;
+  note: string;
+}
+
+/**
+ * **지금 한 번 수확한다** — 새벽 2시를 기다리지 않는다.
+ *
+ * 상한은 그대로다(하루 1편 · 진행 중 1편 · 계획 없으면 정지 · 재고 · 크레딧). 이 호출은
+ * 순회 시각만 앞당긴다 — 연타해도 두 번째부터는 사유만 돌아온다.
+ */
+export async function runHarvest(): Promise<{ sources: number; made: number; outcomes: HarvestOutcome[] }> {
+  return json(await fetch(`${API_BASE}/harvest/run`, { method: "POST", credentials: "include" }));
+}
+
 export async function deleteHarvestSource(id: string): Promise<void> {
   const res = await fetch(`${API_BASE}/harvest/sources/${id}`, {
     method: "DELETE", credentials: "include",

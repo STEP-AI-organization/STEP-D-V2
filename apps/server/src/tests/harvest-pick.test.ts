@@ -8,8 +8,10 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
-  DEFAULT_DAILY_CAP, DEFAULT_MIN_DURATION_SEC, HARVEST_HOUR_KST, MAX_IN_FLIGHT, STOCK_BUFFER_DAYS,
-  candidates, clampCap, clampMinDuration, enoughStock, estimate, isHarvestWindow, parseChannelRef,
+  DEFAULT_DAILY_CAP, DEFAULT_MIN_DURATION_SEC, HARVEST_HOUR_KST, MAX_IN_FLIGHT, MAX_PER_DAY,
+  STOCK_BUFFER_DAYS,
+  candidates, clampCap, clampMinDuration, effectiveDailyCap, enoughStock, estimate, isHarvestWindow,
+  parseChannelRef,
   pickNext, publishSummary, type ChannelVideo, type HarvestSource,
 } from "../pipeline/harvest.ts";
 import type { AutomationRule } from "../pipeline/automation.ts";
@@ -70,10 +72,11 @@ describe("후보 고르기", () => {
 });
 
 describe("한 편만 집는다", () => {
-  // 재고 0 · 수요 0 = 재고 게이트를 끈 상태(수요가 없으면 판정하지 않는다).
+  // 재고 0 · 하루 3편 배포 = 가져올 이유가 있는 상태. **수요 0 은 이제 아예 안 집는다**
+  // (no_plan) — 배포할 곳이 없으면 다운로드조차 하지 않는다.
   const base = {
     videos: VIDEOS, alreadyMade: new Set<string>(), madeToday: 0, inFlight: 0,
-    creditBalance: NO_CREDIT_LIMIT, stock: 0, dailyDemand: 0,
+    creditBalance: NO_CREDIT_LIMIT, stock: 0, dailyDemand: 3,
   };
 
   it("가장 최신 롱폼 하나를 집고, 필요한 크레딧을 함께 알려 준다", () => {
@@ -89,11 +92,13 @@ describe("한 편만 집는다", () => {
     assert.equal(v.code, "in_flight");
   });
 
-  it("오늘 몫을 채웠으면 안 집는다", () => {
-    const v = pickNext({ source: source({ dailyCap: 2 }), ...base, madeToday: 2 });
+  it("오늘 한 편을 이미 가져왔으면 안 집는다 — 상한을 올려도 하루 1편이다", () => {
+    const v = pickNext({ source: source({ dailyCap: 20 }), ...base, madeToday: 1 });
     assert.equal(v.pick, null);
     assert.equal(v.code, "daily_cap");
-    assert.match(v.reason, /하루 2편/);
+    // 순회가 하루 한 번이라 dailyCap 을 20 으로 올려도 실제로는 1편이다. 사유 문구가
+    // **실제 상한**을 말해야 한다 — "하루 20편" 이라 적으면 사용자는 19편을 기다린다.
+    assert.match(v.reason, /하루 1편/);
   });
 
   it("일시정지·미승인은 각각 다른 사유로 멈춘다", () => {
@@ -142,7 +147,9 @@ describe("등록 전 예상치", () => {
     const e = estimate({ source: source({ dailyCap: 2 }), videos: VIDEOS, alreadyMade: new Set() });
     assert.equal(e.remaining, 3, "롱폼 3편");
     assert.equal(e.credits, 60 + 45 + 90, "3600·2700·5400초");
-    assert.equal(e.days, 2, "3편 ÷ 하루 2편 = 2일");
+    // **실제 페이스로 센다.** dailyCap 2 를 그대로 나누면 2일이라 적히는데, 순회가 하루
+    // 한 번이라 실제로는 3일이다 — 화면이 지키지도 못할 소요일을 약속하면 안 된다.
+    assert.equal(e.days, 3, "3편 ÷ 하루 1편 = 3일");
   });
 
   it("후보와 같은 기준을 쓴다 — 화면 숫자와 실제 수확이 어긋나면 그 숫자는 거짓말이다", () => {
@@ -212,9 +219,16 @@ describe("재고 게이트", () => {
     assert.ok(v.pick, "6편 미만인데 안 만들었다");
   });
 
-  it("배포 계획이 없으면(수요 0) 재고로 막지 않는다 — 계획을 나중에 만드는 순서도 정상이다", () => {
-    const v = pickNext({ source: source(), ...base, stock: 999, dailyDemand: 0 });
-    assert.ok(v.pick, "계획이 없다고 수집을 막으면 '등록했는데 아무 일도 안 남' 이 된다");
+  it("배포 계획이 없으면(수요 0) **아무것도 가져오지 않는다** — 다운로드조차도", () => {
+    const v = pickNext({ source: source(), ...base, stock: 0, dailyDemand: 0 });
+    assert.equal(v.pick, null, "배포할 곳이 없는데 받아 두면 채널 전체를 하루 한 편씩 받게 된다");
+    if (v.pick === null) assert.equal(v.code, "no_plan");
+  });
+
+  it("계획을 멈춘 것도 같은 자리다 — 배포를 멈췄는데 다운로드가 계속되면 안 된다", () => {
+    // 순방은 멈춘 계획을 하루 발행 수에서 빼므로(dailyDemandFor), 여기엔 수요 0 으로 온다.
+    const v = pickNext({ source: source(), ...base, stock: 2, dailyDemand: 0 });
+    if (v.pick === null) assert.equal(v.code, "no_plan");
   });
 
   it("기준은 하루치가 아니라 며칠치다", () => {
@@ -227,6 +241,28 @@ describe("재고 게이트", () => {
   it("상한·정지가 재고보다 먼저다 — 싼 판정을 앞에 둔다", () => {
     const v = pickNext({ source: source({ status: "paused" }), ...base, stock: 0, dailyDemand: 3 });
     if (v.pick === null) assert.equal(v.code, "paused");
+  });
+});
+
+/**
+ * 하루 실질 상한 — **다운로드가 쌓이지 않는 근거.**
+ *
+ * 회차를 만드는 순간 다운로드와 분석이 한 줄로 묶여 나간다. 그래서 "하루 몇 편을 집는가" 가
+ * 곧 "하루 몇 편을 받는가" 다. 순회가 하루 한 번이고 순회당 한 편이라 답은 1편이고,
+ * 화면의 예상 소요일도 그 수로 나와야 한다.
+ */
+describe("하루 실질 상한", () => {
+  it("수집원당 하루 1편이다", () => {
+    assert.equal(MAX_PER_DAY, 1);
+  });
+
+  it("사용자가 상한을 올려도 실질 상한을 못 넘는다", () => {
+    assert.equal(effectiveDailyCap({ dailyCap: 20 }), 1);
+    assert.equal(effectiveDailyCap({ dailyCap: 2 }), 1);
+  });
+
+  it("빈 값·0 은 기본값으로 떨어지고, 그래도 실질 상한을 못 넘는다", () => {
+    assert.equal(effectiveDailyCap({ dailyCap: 0 }), 1);
   });
 });
 

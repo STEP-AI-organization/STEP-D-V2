@@ -31,7 +31,7 @@
  */
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { AlertTriangle, Loader2, Pause, Play, Plus, Trash2 } from "lucide-react";
+import { AlertTriangle, Loader2, Pause, Play, Plus, RefreshCw, Trash2 } from "lucide-react";
 
 import { Footer } from "@/components/layout/footer";
 import { Header } from "@/components/layout/header";
@@ -43,7 +43,7 @@ import {
 } from "@server-pure/pipeline/automation";
 import {
   createHarvestSource, deleteHarvestSource, fetchHarvestSources, fetchShortsTemplates,
-  fetchYouTubeChannels, updateHarvestSource,
+  fetchYouTubeChannels, runHarvest, updateHarvestSource,
   type FrameTemplate, type HarvestSource, type YouTubeChannelInfo,
 } from "@/lib/data/api";
 
@@ -69,9 +69,12 @@ export default function FullAutoPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [url, setUrl] = useState("");
-  const [cap, setCap] = useState(2);
   const [backfill, setBackfill] = useState(true);
   const [busy, setBusy] = useState(false);
+  // 순회 결과 — "왜 안 가져왔는지" 가 사용자가 알아야 하는 값이다. 조용히 끝내면
+  // "눌렀는데 아무 일도 안 남" 이 되고, 그때 사람은 기능이 고장 났다고 판단한다.
+  const [running, setRunning] = useState(false);
+  const [runNotes, setRunNotes] = useState<string[] | null>(null);
 
   // 배포 설정 — 자동 배포 화면과 같은 값 체계. 기본은 그 화면의 새 계획 기본과 맞춘다:
   // 요일 비움 = 매일, 슬롯 비움 = 할당량 방식(하루 3개), 템플릿 비움 = 장르 자동.
@@ -107,14 +110,39 @@ export default function FullAutoPage() {
   /** 하루 몇 개가 나가는지 — **서버 순방과 같은 함수**로 낸다(화면이 곱하지 않는다). */
   const perDay = useMemo(() => perDayCount({ slots, dailyQuota: 3 }), [slots]);
 
+  /**
+   * 수확 순회를 **지금** 돌린다. 상한은 그대로다 — 이 버튼은 시각만 앞당긴다.
+   * 결과(무엇을 가져왔는지 · 왜 안 가져왔는지)를 그대로 화면에 남긴다.
+   */
+  const run = useCallback(async () => {
+    if (running) return;
+    setRunning(true);
+    setError(null);
+    setRunNotes(null);
+    try {
+      const report = await runHarvest();
+      setRunNotes(
+        report.outcomes.length === 0
+          ? ["등록된 수집 채널이 없습니다."]
+          : report.outcomes.map((o) => (o.picked ? `가져왔습니다 — ${o.note}` : o.note)),
+      );
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "지금 가져오지 못했습니다.");
+    } finally {
+      setRunning(false);
+    }
+  }, [running, load]);
+
   const add = useCallback(async () => {
     const v = url.trim();
     if (!v || busy) return;
     setBusy(true);
     setError(null);
+    setRunNotes(null);
     try {
       await createHarvestSource({
-        sourceChannelUrl: v, dailyCap: cap, backfill,
+        sourceChannelUrl: v, backfill,
         // 배포 채널을 안 골랐으면 계획을 만들지 않는다 — 그 상태는 목록에서 경고로 보인다.
         ...(selChannels.length
           ? { publish: { channels: selChannels, slots, weekdays, ...(templateId ? { templateId } : {}) } }
@@ -122,6 +150,10 @@ export default function FullAutoPage() {
       });
       setUrl("");
       await load();
+      // **등록하면 그 자리에서 한 번 돈다.** 새벽 2시까지 기다려야 아무 일이 일어나는지
+      // 알 수 있으면 사용자는 기능이 고장 났다고 판단한다. 상한은 그대로라 여기서
+      // 가져오는 것도 한 편뿐이다.
+      await run();
     } catch (e) {
       // 서버가 사람 말로 준 사유를 그대로 — "핸들을 못 찾았다", "이미 등록됐다" 가
       // 화면에서 사라지면 사용자는 무엇을 고쳐야 할지 모른다.
@@ -129,7 +161,7 @@ export default function FullAutoPage() {
     } finally {
       setBusy(false);
     }
-  }, [url, cap, backfill, selChannels, slots, weekdays, templateId, busy, load]);
+  }, [url, backfill, selChannels, slots, weekdays, templateId, busy, load, run]);
 
   const patch = useCallback(async (id: string, p: Parameters<typeof updateHarvestSource>[1]) => {
     setError(null);
@@ -164,9 +196,10 @@ export default function FullAutoPage() {
             채널</b>에 올립니다. 프로그램은 <b className="text-[var(--color-text-primary)]">수집 채널
             이름</b>으로 자동으로 만들어집니다.
             <br />
-            분석에는 크레딧이 듭니다 — 60분짜리 한 편이 60크레딧입니다. 그래서
-            <b className="text-[var(--color-text-primary)]"> 하루 상한</b>을 두고 천천히 가져오고,
-            배포 예정 물량이 이미 충분하면 그날은 가져오지 않습니다.
+            내려받기와 분석에는 크레딧이 듭니다 — 60분짜리 한 편이 60크레딧입니다. 그래서
+            채널에 영상이 수천 개 있어도 <b className="text-[var(--color-text-primary)]">하루 한 편씩</b>만
+            가져옵니다. 배포 예정 물량이 이미 충분하거나 배포할 채널이 없으면
+            <b className="text-[var(--color-text-primary)]"> 내려받기 자체를 하지 않습니다.</b>
           </div>
 
           {/* 등록 — ① 수집 채널 · ② 배포 설정 순서. 사람이 정하는 것을 위에서 아래로 둔다. */}
@@ -182,13 +215,11 @@ export default function FullAutoPage() {
                   className={FIELD}
                 />
               </div>
-              <div className="w-28">
-                <label className={LABEL}>하루 편수</label>
-                <input
-                  type="number" min={1} max={20} value={cap}
-                  onChange={(e) => setCap(Number(e.target.value))}
-                  className={FIELD}
-                />
+              {/* 하루 편수는 **고르는 값이 아니다.** 수확 순회가 하루 한 번이라 실제로는
+                  언제나 1편이고(harvest.ts MAX_PER_DAY), 입력칸을 두면 3 을 넣은 사람이
+                  하루 3편을 기대하게 된다 — 지키지도 못할 약속이다. 사실만 적는다. */}
+              <div className={`text-xs pb-2.5 ${MUTED}`}>
+                하루 <b className="text-[var(--color-text-primary)]">1편</b>씩 가져옵니다
               </div>
               <label className={`flex items-center gap-2 text-xs pb-2.5 ${MUTED} cursor-pointer`}>
                 <input type="checkbox" checked={backfill} onChange={(e) => setBackfill(e.target.checked)} />
@@ -324,6 +355,33 @@ export default function FullAutoPage() {
             <div className={`${CARD} p-4 text-xs text-rose-500`}>{error}</div>
           )}
 
+          {/* 지금 가져오기 — 새벽 2시를 기다리지 않는다. 상한은 그대로라 눌러도 한 편이다. */}
+          <div className={`${CARD} p-4 flex flex-wrap items-center justify-between gap-3`}>
+            <div className={`text-[11px] leading-relaxed ${MUTED} flex-1 min-w-[260px]`}>
+              평소에는 <b className="text-[var(--color-text-primary)]">매일 새벽 2시</b>에 한 번
+              확인합니다. 지금 바로 확인하려면 오른쪽 버튼을 누르세요 — 눌러도 가져오는 양은
+              같습니다(채널당 한 편).
+            </div>
+            <button
+              onClick={() => { void run(); }}
+              disabled={running || busy}
+              className="px-4 py-2 rounded-full bg-[var(--color-bg-input)] hover:bg-[var(--color-bg-card-hover)] text-xs text-[var(--color-text-primary)] border border-[var(--color-border-subtle)] font-bold transition-colors cursor-pointer flex items-center gap-1.5 shadow-md shadow-slate-900/5 dark:shadow-none disabled:cursor-not-allowed disabled:opacity-70"
+            >
+              {running
+                ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                : <RefreshCw className="w-3.5 h-3.5" />}
+              <span>지금 가져오기</span>
+            </button>
+          </div>
+
+          {/* 순회 결과 — 안 가져왔으면 **그 이유**가 여기 남는다. */}
+          {runNotes && (
+            <div className={`${CARD} p-4 text-[11px] leading-relaxed ${MUTED} space-y-1`}>
+              <b className="text-[var(--color-text-primary)]">방금 확인한 결과</b>
+              {runNotes.map((n, i) => <div key={i}>· {n}</div>)}
+            </div>
+          )}
+
           {/* 목록 */}
           {loading ? (
             <div className={`${CARD} p-10 text-center text-xs ${MUTED}`}>불러오는 중…</div>
@@ -382,7 +440,7 @@ export default function FullAutoPage() {
                       <Stat
                         label="예상 소요"
                         value={s.remaining === 0 ? "—" : `${s.days.toLocaleString("ko-KR")}일`}
-                        note={`하루 ${s.dailyCap}편`}
+                        note="하루 1편"
                       />
                     </div>
                   </div>
@@ -407,8 +465,11 @@ export default function FullAutoPage() {
 }
 
 /**
- * 배포 계획 한 줄. **계획이 없으면 경고**다 — 이 조합(가져오고 만들지만 안 나감)은
- * 크레딧만 쓰고 결과물이 아무 데도 안 가는, 이 기능의 최악 상태다.
+ * 배포 계획 한 줄. **계획이 없으면 수집이 멈춰 있다는 뜻**이다.
+ *
+ * 예전엔 계획이 없어도 계속 가져왔고, 그건 곧 안 나갈 영상을 채널이 빌 때까지 받아 두는
+ * 것이었다. 지금은 아예 안 가져온다(harvest.ts `no_plan`) — 그러니 이 경고는 "결과물이
+ * 안 나간다" 가 아니라 **"아무것도 안 돌고 있다"** 로 읽혀야 한다.
  */
 function PublishLine({ publish }: { publish: HarvestSource["publish"] }) {
   if (!publish) {
@@ -416,10 +477,10 @@ function PublishLine({ publish }: { publish: HarvestSource["publish"] }) {
       <div className="mt-3 flex items-start gap-2 rounded-xl px-3 py-2.5 text-[11px] leading-relaxed bg-amber-500/10 text-[var(--color-text-primary)]">
         <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5 text-amber-500" />
         <span>
-          <b>배포 채널이 없습니다</b> — 숏폼을 만들기만 하고 아무 데도 올리지 않습니다(크레딧은
-          그대로 듭니다).{" "}
+          <b>배포 채널이 없어 멈춰 있습니다</b> — 올릴 곳이 없으면 영상을 내려받지도 않습니다
+          (크레딧을 쓰지 않습니다).{" "}
           <Link href="/automation" className="underline">자동 배포</Link> 화면에서 이 프로그램의
-          계획을 만들어 주세요.
+          계획을 만들면 그때부터 돕니다.
         </span>
       </div>
     );
