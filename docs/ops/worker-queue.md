@@ -51,7 +51,7 @@ Cloud Run은 **응답이 끝나는 순간 CPU를 throttle**하고 요청을 **60
 | **크래시 복구** | 워커가 죽어 `running`으로 잠긴 잡은 30분 뒤 `requeueStale()`이 회수한다 (기동 시 + 15분 tick마다). |
 | **후속 잡** | 핸들러가 `FollowUp`을 반환하면 현재 잡이 `done`이 된 **뒤에** enqueue한다. 자기 재큐 잡(hotwatch)이 아직 `running`인 자기 자신과 dedupe 충돌하지 않게 하기 위한 장치다. |
 
-## 잡 타입 27종
+## 잡 타입 28종
 
 `queue.ts`의 `JobType` 정의와 `worker.ts`의 `handle()` switch가 처리한다.
 새 잡 타입(렌더링 등)이 들어올 자리도 이 switch다.

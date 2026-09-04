@@ -47,6 +47,7 @@ export const SCREENS: Screen[] = [
   { href: "/thumbnails", label: "썸네일 생성", what: "대상을 고르고 문구를 넣어 썸네일 3안을 만들고 대표를 지정한다" },
   { href: "/automation", label: "자동 배포", what: "프로그램·채널·요일·시간대를 정해 두면 분석부터 배포까지 알아서 돈다" },
   { href: "/commerce", label: "상품 링크", what: "영상에서 찾은 상품 링크를 검토한다. 승인한 것만 발행 설명란에 붙는다" },
+  { href: "/full-auto", label: "완전자동화", what: "수집할 유튜브 채널을 지정하면 긴 영상을 자동으로 가져와 숏폼으로 만들어 배포한다" },
   { href: "/trends", label: "유튜브 트렌드", what: "국가·카테고리별 인기 급상승 영상 — 기획 참고용" },
   { href: "/business", label: "사업 운영", what: "추천·클립·배포 결과를 프로그램/IP 단위로 모아 부서 공유용으로 본다" },
   { href: "/ops", label: "운영 진단", what: "작업 대기열이 어떻게 도는지, 어디서 막혔는지 진단한다" },

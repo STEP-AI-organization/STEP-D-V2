@@ -4557,6 +4557,188 @@ export async function markTopupPaid(paymentId: string, status: "paid" | "failed"
   return (r.rowCount ?? 0) > 0;
 }
 
+// ── 완전자동화 수집원 (harvest_source · 0054) ──────────────────────────────────
+//
+// 판정은 `pipeline/harvest.ts` 가 한다(순수). 여기는 **읽고 쓰기만** 한다.
+
+export interface HarvestSourceRow {
+  id: string;
+  /** 어느 회사 것인가 — 운영자가 남의 회사 수집원을 승인할 때 사유를 강제하는 근거. */
+  tenantId: string;
+  sourceChannelId: string;
+  sourceChannelTitle: string;
+  programId: string;
+  status: "active" | "paused" | "blocked";
+  approvedBy: string | null;
+  dailyCap: number;
+  minDurationSec: number;
+  backfill: boolean;
+  lastRunAt: number | null;
+  createdAt: number;
+}
+
+const HARVEST_COLS = `id, tenant_id AS "tenantId", source_channel_id AS "sourceChannelId",
+  source_channel_title AS "sourceChannelTitle", program_id AS "programId", status,
+  approved_by AS "approvedBy", daily_cap AS "dailyCap", min_duration_sec AS "minDurationSec",
+  backfill, last_run_at AS "lastRunAt", created_at AS "createdAt"`;
+
+function harvestRow(r: any): HarvestSourceRow {
+  return {
+    ...r,
+    dailyCap: Number(r.dailyCap), minDurationSec: Number(r.minDurationSec),
+    backfill: Boolean(r.backfill),
+    lastRunAt: r.lastRunAt == null ? null : Number(r.lastRunAt),
+    createdAt: Number(r.createdAt),
+  };
+}
+
+export async function listHarvestSources(): Promise<HarvestSourceRow[]> {
+  const { rows } = await pool.query(
+    `SELECT ${HARVEST_COLS} FROM harvest_source ORDER BY created_at DESC`,
+  );
+  return rows.map(harvestRow);
+}
+
+export async function getHarvestSource(id: string): Promise<HarvestSourceRow | null> {
+  const { rows } = await pool.query(`SELECT ${HARVEST_COLS} FROM harvest_source WHERE id = $1`, [id]);
+  return rows[0] ? harvestRow(rows[0]) : null;
+}
+
+export async function insertHarvestSource(r: {
+  id: string; sourceChannelId: string; sourceChannelTitle: string; programId: string;
+  status: "active" | "blocked"; dailyCap: number; minDurationSec: number; backfill: boolean;
+}): Promise<void> {
+  await pool.query(
+    `INSERT INTO harvest_source
+       (id, source_channel_id, source_channel_title, program_id, status,
+        daily_cap, min_duration_sec, backfill, created_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+    [r.id, r.sourceChannelId, r.sourceChannelTitle, r.programId, r.status,
+     r.dailyCap, r.minDurationSec, r.backfill, Date.now()],
+  );
+}
+
+/** 부분 수정. `approvedBy` 는 승인할 때만 함께 들어온다 — 누가 열어 줬는지가 근거로 남는다. */
+export async function updateHarvestSource(id: string, patch: {
+  status?: "active" | "paused" | "blocked";
+  approvedBy?: string | null;
+  dailyCap?: number;
+  minDurationSec?: number;
+  backfill?: boolean;
+  lastRunAt?: number;
+}): Promise<boolean> {
+  const sets: string[] = [];
+  const vals: unknown[] = [];
+  const put = (col: string, v: unknown) => { vals.push(v); sets.push(`${col} = $${vals.length + 1}`); };
+  if (patch.status !== undefined) put("status", patch.status);
+  if (patch.approvedBy !== undefined) put("approved_by", patch.approvedBy);
+  if (patch.dailyCap !== undefined) put("daily_cap", patch.dailyCap);
+  if (patch.minDurationSec !== undefined) put("min_duration_sec", patch.minDurationSec);
+  if (patch.backfill !== undefined) put("backfill", patch.backfill);
+  if (patch.lastRunAt !== undefined) put("last_run_at", patch.lastRunAt);
+  if (!sets.length) return false;
+
+  const r = await pool.query(`UPDATE harvest_source SET ${sets.join(", ")} WHERE id = $1`, [id, ...vals]);
+  return (r.rowCount ?? 0) > 0;
+}
+
+export async function deleteHarvestSource(id: string): Promise<boolean> {
+  const r = await pool.query(`DELETE FROM harvest_source WHERE id = $1`, [id]);
+  return (r.rowCount ?? 0) > 0;
+}
+
+/**
+ * 이 채널에서 **이미 회차로 만든** videoId 집합. `pipeline/harvest.ts` 의 커서 역할을 한다.
+ *
+ * `sourceVideoId`·`sourceChannelId` 는 `/api/media/from-youtube` 가 회차에 심는 값이다
+ * (index.ts). 수확기도 같은 라우트를 쓰므로 같은 자리에 남는다 — 두 경로가 다른 곳에
+ * 기록하면 중복 수확이 난다.
+ */
+export async function harvestedVideoIds(sourceChannelId: string): Promise<Set<string>> {
+  const { rows } = await pool.query(
+    `SELECT DISTINCT data->>'sourceVideoId' AS vid
+       FROM entities
+      WHERE kind = 'episode'
+        AND data->>'sourceChannelId' = $1
+        AND COALESCE(data->>'sourceVideoId', '') <> ''`,
+    [sourceChannelId],
+  );
+  return new Set(rows.map((r: any) => String(r.vid)));
+}
+
+/**
+ * 오늘(KST) 이 채널에서 만든 편수 · 아직 분석이 안 끝난 편수.
+ *
+ * "진행 중" 을 `content_analysis` 유무로 본다 — 잡 큐를 세면 재시도·중복 큐잉에 흔들리는데,
+ * 분석 결과는 **한 미디어에 한 행**이라 흔들리지 않는다.
+ */
+export async function harvestCounts(sourceChannelId: string, sinceMs: number): Promise<{
+  madeToday: number; inFlight: number;
+}> {
+  const { rows } = await pool.query(
+    `SELECT
+       COUNT(*) FILTER (WHERE m.createdAt >= $2)::int AS made_today,
+       COUNT(*) FILTER (
+         WHERE NOT EXISTS (SELECT 1 FROM content_analysis ca WHERE ca.mediaId = m.id)
+       )::int AS in_flight
+       FROM media m
+       JOIN entities e ON e.kind = 'episode' AND e.id = m.episodeId
+      WHERE e.data->>'sourceChannelId' = $1`,
+    [sourceChannelId, sinceMs],
+  );
+  return {
+    madeToday: Number(rows[0]?.made_today ?? 0),
+    inFlight: Number(rows[0]?.in_flight ?? 0),
+  };
+}
+
+/**
+ * **재고** — 이 프로그램에서 아직 배포되지 않은 클립·숏폼 수.
+ *
+ * "배포됐다" 의 기준은 `distributions` 에 `published`·`recorded` 가 하나라도 있는 것이다.
+ * 예약(`scheduled`)·대기(`pending`)는 아직 안 나간 것이라 **재고로 센다** — 그것들이
+ * 오늘·내일 나갈 몫이고, 재고 판정이 물어보는 게 정확히 그 물량이다.
+ */
+export async function pendingClipCount(programId: string): Promise<number> {
+  // ⚠️ 클립의 `programId` 는 **선택 필드**다 — 분석에서 나온 클립은 회차를 거쳐야 프로그램을
+  //    안다(직접 업로드 클립만 programId 를 직접 갖는다). 하나만 보면 재고를 통째로 놓치고,
+  //    그러면 재고 게이트가 늘 "부족" 이라 판정해 분석이 무한정 돈다 — 이 게이트의 존재
+  //    이유가 정확히 그걸 막는 것이라, 여기서 틀리면 기능이 없는 것과 같다.
+  const { rows } = await pool.query(
+    `SELECT COUNT(*)::int AS n
+       FROM entities c
+      WHERE c.kind = 'clip'
+        AND (
+          c.data->>'programId' = $1
+          OR EXISTS (
+            SELECT 1 FROM entities e
+             WHERE e.kind = 'episode' AND e.id = c.data->>'episodeId'
+               AND e.data->>'programId' = $1
+          )
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM jsonb_array_elements(COALESCE(c.data->'distributions', '[]'::jsonb)) d
+           WHERE d->>'status' IN ('published', 'recorded')
+        )`,
+    [programId],
+  );
+  return Number(rows[0]?.n ?? 0);
+}
+
+/** 수확 판정에 필요한 만큼의 업로드 목록 (`channel_videos` 는 채널당 최대 500행). */
+export async function listChannelVideosForHarvest(channelId: string): Promise<
+  { videoId: string; title: string; publishedAt: string; durationSec: number }[]
+> {
+  const { rows } = await pool.query(
+    `SELECT videoid AS "videoId", title, publishedat AS "publishedAt",
+            durationsec AS "durationSec"
+       FROM channel_videos WHERE channelId = $1
+      ORDER BY publishedAt DESC`,
+    [channelId],
+  );
+  return rows.map((r: any) => ({ ...r, durationSec: Number(r.durationSec ?? 0) }));
+}
+
 // ── cleanup ────────────────────────────────────────────────────────────────────
 
 export async function closeDb(): Promise<void> {

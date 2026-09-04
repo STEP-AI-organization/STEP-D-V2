@@ -1,6 +1,6 @@
 # @stepd/server HTTP API 레퍼런스
 
-> 실측: **2026-08-31 · 라우트 254개** (GET 116 · POST 97 · DELETE 24 · PATCH 13 · PUT 7) · `apps/server/src/index.ts` 기준 — 라우트 추가 시 이 문서도 갱신.
+> 실측: **2026-09-04 · 라우트 275개** (GET 126 · POST 102 · DELETE 26 · PATCH 14 · PUT 7) · `apps/server/src/index.ts` 기준 — 라우트 추가 시 이 문서도 갱신.
 > 프론트 대응 함수는 `apps/web/src/lib/data/api.ts` 기준. 데이터 구조는 [data-model.md](data-model.md),
 > 큐·워커 동작은 [../ops/worker-queue.md](../ops/worker-queue.md) 참고.
 
@@ -418,6 +418,59 @@ API 키(`api-keys.ts`). **화이트리스트(`API_KEY_ROUTES`)에 올린 라우�
 - **500** — OAuth env 미설정(`OAuth not configured`), 외부 API·인코딩 실패 등.
 - **502** — 외부 LLM 호출 실패 (`autofill failed` · `profile generation failed` · `no titles generated`).
 - **503** — ffmpeg 없음 (`GET /api/media/:id/frame`).
+
+## 완전자동화 수집원 (2026-09-04)
+
+수집 유튜브 채널을 지정하면 롱폼을 받아 회차로 만든다. 그 뒤(분석 → 채택 → 렌더 → 배포)는
+**기존 경로가 그대로** 완주한다 — 배포 대상은 자동배포 계획이 정하므로 여기 없다.
+
+| 메서드·경로 | 설명 |
+|---|---|
+| `GET /api/harvest/sources` | 목록 + 진행률(`made`·`remaining`·`credits`·`days`). 숫자는 수확기와 **같은 함수**가 계산한다 |
+| `POST /api/harvest/sources` | `{ sourceChannelUrl, programId?, dailyCap?, minDurationSec?, backfill? }`. 핸들(`@이름`)은 등록 시점에 `UC…` 로 해석해 못박는다 |
+| `PATCH /api/harvest/sources/:id` | 일시정지·재개·상한 변경. **승인(blocked→active)은 여기서 못 한다** |
+| `DELETE /api/harvest/sources/:id` | 해지. 이미 만든 회차·영상은 남는다 |
+| `POST /api/superadmin/harvest/:id/approve` | 운영자 승인. `reason` 필수(저작권 판단이라 근거가 남아야 한다) |
+
+동작 규칙:
+- **연결된 채널만 바로 돈다.** 그 밖의 채널은 `blocked` 로 들어가고 운영자 승인이 필요하다.
+- **새벽 2시(KST) 하루 한 번** `channel.harvest` 가 돈다. 수집원마다 **최대 한 편**.
+- **배포 재고가 충분하면 분석을 안 돌린다** — 그 프로그램의 하루 배포 물량 × 2일치가 이미
+  대기 중이면 건너뛴다. 수천 편짜리 채널에서 크레딧이 새는 것을 막는 브레이크다.
+- 하루 상한(기본 2편) · 동시 진행 1편 · 롱폼 하한(기본 180초) · 크레딧 부족 시 정지.
+
+⚠️ 내려받기는 **윈도우2 전용 레인**(`youtube.download`)이다. 그 PC 가 꺼져 있으면 회차만
+만들어지고 바이트는 안 내려온다.
+
+## 챗봇 · 보고 리포트 (2026-09-03)
+
+**세션 필수**(`requireUser`). API 키로는 열리지 않는다 — 두 기능 모두 **그 사람**의
+워크스페이스 상태를 읽어 답하고, 대화·리포트도 사람 단위로 남기 때문이다.
+회사 격리는 RLS, 사람 격리는 쿼리 조건이 한다(같은 회사 동료의 대화도 안 보인다).
+
+> ⚠️ **프롬프트 순서를 바꾸지 말 것** (`chatbot/agent.ts` SYSTEM 주석). 고정 시스템 지시
+> (규칙 + 화면 목록 · 실측 1,225토큰)가 앞, 변동값(현황·도움말·질문)이 맨 뒤다. flash-lite
+> 암시적 캐시는 **1,024토큰 미만이면 아예 안 걸리고**, 앞쪽에 변동값이 하나만 섞여도 매 요청
+> 캐시가 깨진다. 그 고정부는 회사를 가로질러 공유되므로 **워크스페이스 값을 넣으면 유출**이다.
+
+| 메서드·경로 | 설명 |
+|---|---|
+| `POST /api/chatbot/message` | `{ threadId?, message, screen? }` → `{ threadId, reply, links[], usedDocs[], report? }`. 스레드를 주면 이어서 답한다. 답변 링크는 화면 화이트리스트를 통과한 것만 나간다 |
+| `GET /api/chatbot/threads` | 내 대화 최근 20개 |
+| `GET /api/chatbot/threads/:id` | 대화 + 메시지 전체 |
+| `DELETE /api/chatbot/threads/:id` | 내 대화만 삭제(메시지는 CASCADE) |
+| `POST /api/reports` | `{ request, threadId? }` → `{ reportId, spec, markdown, warnings[] }` |
+| `GET /api/reports` | 최근 20건 (본문·집계 원본은 안 싣는다) |
+| `GET /api/reports/:id` | 본문 + 집계 원본(`data`) |
+| `GET /api/reports/:id/export?format=md\|html` | 첨부 다운로드 |
+| `POST /api/reports/:id/email` | `{ to[] }` — SMTP 설정이 있을 때만 |
+
+오류:
+- **429** `rate_limited` — 분당 10회 / 일 200회 상한.
+- **409** `thread_full` — 한 대화에 메시지 200개.
+- **409** `crosscheck_failed` — **표 합계와 헤드라인이 어긋난 리포트는 파일로 안 나간다.**
+  화면에서는 보인다(무엇이 어긋났는지 알아야 고친다). 막는 것은 첨부파일이 되는 경로다.
+- **409** `mail_not_configured` — SMTP 미설정. 보낸 척하지 않는다.
 
 ## 웹 미사용 라우트 요약
 

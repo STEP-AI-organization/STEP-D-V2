@@ -249,6 +249,14 @@ import {
 import { geminiGenerate, parseJsonLoose } from "./ai/gemini.ts";
 import { ask as chatbotAsk, ChatbotError } from "./chatbot/agent.ts";
 import {
+  candidates as harvestCandidates, clampCap, clampMinDuration, estimate as harvestEstimate,
+  parseChannelRef,
+} from "./pipeline/harvest.ts";
+import {
+  deleteHarvestSource, getHarvestSource, harvestedVideoIds, insertHarvestSource,
+  listChannelVideosForHarvest, listHarvestSources, updateHarvestSource,
+} from "./db-pg.ts";
+import {
   deleteThread as chatDeleteThread, getThread as chatGetThread,
   listMessages as chatListMessages, listThreads as chatListThreads,
 } from "./chatbot/store.ts";
@@ -278,6 +286,7 @@ import { renderTextLayerPng, overlayCanvasAvailable, measureOverlayImage, FONT_F
 import { patchTitleMogrt, inspectMogrt, layersFromOverlayItems, colorToInt, type MogrtTextLayer } from "./media/mogrt.ts";
 import {
   syncChannelVideos,
+  resolveChannelIdByHandle,
   classifyShorts,
   fetchChannelAnalytics,
   fetchPopularVideos,
@@ -12557,6 +12566,168 @@ app.delete("/api/youtube/videos/:videoId", async (c) => {
   await deleteChannelVideo(c.req.param("videoId"));
   return c.json({ ok: true });
 });
+// ── 완전자동화 수집원 (harvest_source · 0054) ─────────────────────────────────
+//
+// 사람이 하는 일은 **채널 지정 한 번**이다. 그 뒤는 수확기(`channel.harvest`)가 회차를 만들고,
+// 자동배포 계획이 그걸 집어 배포한다. 여기 라우트는 그 "한 번" 을 받는 자리다.
+//
+// ⚠️ **권리 게이트가 이 문에 있다.** 연결된 채널이 아니면 `blocked` 로 들어가고, 운영자가
+//    승인해야 돈다. 남의 영상을 받아 재배포하는 것은 저작권 사고라, 실패 방향을
+//    "안 돌아감" 으로 잡는다.
+
+/** 목록·예상치가 같이 쓰는 조회 — 화면 숫자와 실제 수확이 같은 기준을 보게 한다. */
+async function harvestView(row: Awaited<ReturnType<typeof getHarvestSource>>) {
+  if (!row) return null;
+  const [videos, alreadyMade] = await Promise.all([
+    listChannelVideosForHarvest(row.sourceChannelId),
+    harvestedVideoIds(row.sourceChannelId),
+  ]);
+  const source = {
+    id: row.id, sourceChannelId: row.sourceChannelId, programId: row.programId,
+    status: row.status, dailyCap: row.dailyCap, minDurationSec: row.minDurationSec,
+    backfill: row.backfill, createdAt: row.createdAt,
+  };
+  return {
+    ...row,
+    made: alreadyMade.size,
+    ...harvestEstimate({ source, videos, alreadyMade }),
+  };
+}
+
+app.get("/api/harvest/sources", async (c) => {
+  const rows = await listHarvestSources();
+  const sources = [];
+  for (const r of rows) sources.push(await harvestView(r));
+  return c.json({ sources });
+});
+
+/**
+ * 수집원 등록. 채널 주소 하나가 입력의 전부다.
+ *
+ * 핸들(`@이름`)은 **등록 시점에 한 번 해석해 `UC…` 로 못박는다** — 핸들은 주인이 바꿀 수
+ * 있어서, 그대로 저장하면 바뀐 날 엉뚱한 채널을 수확한다.
+ */
+app.post("/api/harvest/sources", async (c) => {
+  const body = await c.req.json().catch(() => ({}) as Record<string, unknown>);
+  const ref = parseChannelRef(String(body.sourceChannelUrl ?? ""));
+  if (!ref) {
+    return c.json({
+      error: "bad_channel",
+      message: "유튜브 채널 주소를 확인해 주세요 (예: youtube.com/@이름 또는 /channel/UC…).",
+    }, 400);
+  }
+
+  // 연결된 채널 목록은 두 가지에 쓰인다 — 핸들 해석용 토큰을 빌리고, 권리 게이트를 판정한다.
+  const connected = await listYouTubeChannels();
+  let channelId = "";
+  if (ref.kind === "id") {
+    channelId = ref.id;
+  } else {
+    const lender = connected.find((ch) => ch.status !== "disconnected" && ch.refreshToken);
+    if (!lender || !GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET) {
+      return c.json({
+        error: "handle_unresolved",
+        message: "핸들을 채널 주소로 바꾸려면 연결된 유튜브 채널이 하나 필요합니다. " +
+          "배포 채널을 먼저 연결하거나, /channel/UC… 형태의 주소를 넣어 주세요.",
+      }, 400);
+    }
+    const resolved = await withAccessToken(
+      GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, lender, persistTokensFor(lender),
+      (token) => resolveChannelIdByHandle(token, ref.handle),
+    ).catch(() => null);
+    if (!resolved) {
+      return c.json({ error: "handle_unresolved", message: `채널을 찾지 못했습니다: @${ref.handle}` }, 404);
+    }
+    channelId = resolved;
+  }
+
+  // 프로그램 — 주면 검증하고, 없으면 채널 이름으로 하나 만든다(사용자는 채널만 지정한다).
+  let programId = typeof body.programId === "string" ? body.programId.trim() : "";
+  const owned = connected.find((ch) => ch.channelId === channelId && ch.status !== "disconnected");
+  const channelTitle = String(body.title ?? owned?.channelName ?? "").trim() || channelId;
+  if (programId) {
+    if (!(await getEntity("program", programId))) return c.json({ error: "program_not_found" }, 404);
+  } else {
+    programId = newId("p");
+    await prependEntity("program", programId, {
+      id: programId, title: channelTitle, section: "예능", targetAge: 0,
+      cast: [], episodeCount: 0, status: "active" as const,
+    });
+  }
+
+  const id = newId("hv");
+  try {
+    await insertHarvestSource({
+      id, sourceChannelId: channelId, sourceChannelTitle: channelTitle, programId,
+      // **연결된 채널만 바로 돈다.** 나머지는 운영자 승인 대기.
+      status: owned ? "active" : "blocked",
+      dailyCap: clampCap(body.dailyCap),
+      minDurationSec: clampMinDuration(body.minDurationSec),
+      backfill: body.backfill !== false,
+    });
+  } catch (e) {
+    if (isUniqueViolation(e)) {
+      return c.json({ error: "already_registered", message: "이미 등록된 채널입니다." }, 409);
+    }
+    throw e;
+  }
+
+  return c.json({ source: await harvestView(await getHarvestSource(id)) }, 201);
+});
+
+app.patch("/api/harvest/sources/:id", async (c) => {
+  const id = c.req.param("id");
+  const row = await getHarvestSource(id);
+  if (!row) return c.json({ error: "not_found" }, 404);
+
+  const body = await c.req.json().catch(() => ({}) as Record<string, unknown>);
+  const patch: Parameters<typeof updateHarvestSource>[1] = {};
+
+  // **승인은 여기서 못 한다.** blocked → active 는 운영자 전용 문으로만 지난다(아래 superadmin).
+  if (body.status === "paused") patch.status = "paused";
+  if (body.status === "active" && row.status === "paused") patch.status = "active";
+
+  if (body.dailyCap !== undefined) patch.dailyCap = clampCap(body.dailyCap);
+  if (body.minDurationSec !== undefined) patch.minDurationSec = clampMinDuration(body.minDurationSec);
+  if (body.backfill !== undefined) patch.backfill = body.backfill !== false;
+
+  if (!(await updateHarvestSource(id, patch))) return c.json({ error: "no_change" }, 400);
+  return c.json({ source: await harvestView(await getHarvestSource(id)) });
+});
+
+/** 해지. **이미 만든 회차·영상은 남는다** — 지우면 크레딧을 쓴 결과물이 사라진다. */
+app.delete("/api/harvest/sources/:id", async (c) => {
+  const ok = await deleteHarvestSource(c.req.param("id"));
+  if (!ok) return c.json({ error: "not_found" }, 404);
+  return c.json({ ok: true });
+});
+
+/**
+ * 운영자 승인 — 연결하지 않은 채널을 열어 준다.
+ *
+ * 고객사가 스스로 못 여는 이유: 이 문은 **저작권 판단**이다. 계약된 MCN·제작사 채널인지를
+ * 아는 것은 우리(STEPAI)이고, 그 판단을 한 사람의 이름이 `approved_by` 에 남아야 한다.
+ */
+app.post("/api/superadmin/harvest/:id/approve", async (c) => {
+  const actor = requireSuperadmin(c);
+  const id = c.req.param("id");
+  const body = await c.req.json().catch(() => ({}) as Record<string, unknown>);
+  return asSystem(async () => {
+    const row = await getHarvestSource(id);
+    if (!row) return c.json({ error: "not_found" }, 404);
+    // 사유를 남긴다. 이 문은 **저작권 판단**이라 "누가 왜 열어 줬나" 가 기록의 본체다.
+    const reason = requireReason(actor, row.tenantId, body.reason);
+    await updateHarvestSource(id, { status: "active", approvedBy: actor.email });
+    await audit(actor, {
+      action: "harvest.approve",
+      targetTenant: row.tenantId,
+      reason,
+      detail: { sourceId: id, channelId: row.sourceChannelId, channelTitle: row.sourceChannelTitle },
+    }, clientIp(c));
+    return c.json({ ok: true, approvedBy: actor.email });
+  });
+});
+
 // ── 챗봇 (업무 도우미) ────────────────────────────────────────────────────────
 //
 // 세션이 있어야 한다(`requireUser`) — 챗봇은 **그 사람의 워크스페이스 상태**를 읽어 답하고,

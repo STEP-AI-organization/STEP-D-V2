@@ -16,6 +16,14 @@ export type JobType =
   // 네이버 TV 업로드 — 공개 API 가 없어 브라우저 자동화. `naver` 레인(사무실 PC) 전용.
   | "naver.publish"
   | "channel.analyze"
+  /**
+   * 완전자동화 수확 — 등록된 수집 채널을 보고 **회차를 한 편** 만든다(0052 · harvest.ts).
+   *
+   * `channel.analyze`(우리 채널의 지표 수집)와 이름이 비슷하지만 하는 일이 다르다:
+   * 저쪽은 **우리 채널을 재는 것**, 이쪽은 **남의(또는 우리) 채널에서 원본을 가져오는 것**이다.
+   * youtube 레인에 둔다 — 유튜브 API 와 DB 만 쓰고 짧다.
+   */
+  | "channel.harvest"
   | "video.analyze"
   | "video.hotwatch"
   | "video.comments"

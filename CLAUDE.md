@@ -64,13 +64,13 @@ docs/          ops(현황·운영) / plans(계획) / reference / research / prot
 
 ## 백엔드 — apps/server
 
-Hono 단일 진입점(index.ts, **~12,300줄, 라우트 264개**) + 별도 워커 프로세스 구조.
+Hono 단일 진입점(index.ts, **~12,300줄, 라우트 275개**) + 별도 워커 프로세스 구조.
 (2026-08-25 실측 갱신)
 
 | 파일 | 역할 |
 |------|------|
 | `src/index.ts` | 모든 HTTP 라우트. 여기 한 파일에 유지. **Cloud Run은 잡을 큐잉만 한다.** |
-| `src/worker.ts` | **워커 프로세스 진입점.** 잡 27종 · 레인 7개 · drain 모드 (아래 참조) |
+| `src/worker.ts` | **워커 프로세스 진입점.** 잡 28종 · 레인 7개 · drain 모드 (아래 참조) |
 | `src/pipeline/queue.ts` | Postgres job_queue (FOR UPDATE SKIP LOCKED · dedupeKey · 지수 백오프 · 5분 하트비트) |
 | `src/pipeline/channel-pipeline.ts` | channel.analyze — 업로드 동기화 + 채널 애널리틱스/일별 수익 백필 |
 | `src/pipeline/content-pipeline.ts` | content.analyze — `python -m core.analyze` 스폰, 진행률 파싱(@@PROGRESS→episode.pipeline), 결과+프레임 영구 저장, 추천 배선. 미디어별 고정 작업 디렉토리로 재시도 시 체크포인트 재개 |
@@ -84,13 +84,14 @@ Hono 단일 진입점(index.ts, **~12,300줄, 라우트 264개**) + 별도 워�
 | `src/ai/gemini.ts` · `ai/cast.ts` · `ai/profile.ts` · `media/thumbnail-assets.ts` | Gemini 호출 · 캐스트 · 프로그램 프로필 · 썸네일 레퍼런스 |
 | `src/seed.ts` | **의도적으로 전부 빈 배열** — 프로덕션은 데모 콘텐츠 없이 시작 |
 | `src/chatbot/` | **업무 도우미 챗봇** (2026-09-03) — 제품 사용법 안내 + 워크스페이스 **읽기**. 지식은 `docs/help/*.md` 뿐이고, 링크는 `catalog.ts` 화이트리스트를 통과한 것만 나간다. 실행 기능 없음 |
+| `src/pipeline/harvest.ts` · `harvest-cycle.ts` | **완전자동화** (2026-09-04) — 수집 유튜브 채널을 지정하면 롱폼을 받아 회차로 만든다. 그 뒤는 기존 분석·자동배포 계획이 그대로 완주한다. **새벽 2시 하루 한 번**(`channel.harvest`) · 배포 재고가 충분하면 분석을 안 돌린다 · 연결 안 된 채널은 운영자 승인 필요 |
 | `src/report/` | **보고 리포트 생성** (2026-09-03) — 자연어 → 스펙(모델) → 집계(SQL) → 서술(모델) → md/HTML. **숫자는 집계만 낳는다**(narrate.ts 가 지어낸 수를 잡아 서술을 버린다) |
 | `src/<도메인>/` | **2026-09-01 정리** — 74개가 평평하던 것을 묶었다: `ai` `auth` `billing` `chatbot` `commerce` `media` `naver` `pipeline` `publish` `report` `social` `tests`. 최상위엔 진입점(index·worker)과 공용(db-pg·config·ids·kst·mailer·seed·youtube)만 남는다 |
 | `schema.sql` | 테이블 정의 — 단 **job_queue·content_analysis·channel_analytics·search_segments·meta_accounts·tiktok_accounts는 여기 없고 코드가 런타임 생성** (queue.ts·db-pg.ts). 상세: [docs/reference/data-model.md](docs/reference/data-model.md) |
 
 `src/ids.ts`(구 pipeline.ts)는 `newId` 헬퍼만 export한다(구 sqlite `db.ts`·`storage.ts`, 휴리스틱 `buildRecommendations()`는 정리 완료). 실제 추천은 core/ AI 파이프라인이 만든다.
 
-### 워커 — 잡 27종 · 레인 7개 · drain 모드
+### 워커 — 잡 28종 · 레인 7개 · drain 모드
 
 프로세스 하나가 다 처리하지 않는다. `WORKER_JOBS` 로 **레인을 갈라** 서로 굶기지 않게 한다.
 
@@ -162,7 +163,7 @@ rights · dialogue · chyron · summary · emb_dialogue vector(768) · emb_summa
 `search-embed.ts`(RETRIEVAL_QUERY). Vertex 실패 시 **키워드축(pg_trgm) 단독 폴백** — 한국어는
 키워드 매칭이 강해서 벡터 없이도 검색이 성립한다.
 
-**주요 라우트** — 총 264개 (전체: [docs/reference/api-reference.md](docs/reference/api-reference.md))
+**주요 라우트** — 총 275개 (전체: [docs/reference/api-reference.md](docs/reference/api-reference.md))
 ```
 GET  /health · /api/state · /api/search        # 검색 = 하이브리드(벡터+키워드)
 POST /api/media/upload-init → finalize   # 브라우저→GCS 직접 resumable 업로드 (대용량 표준 경로)

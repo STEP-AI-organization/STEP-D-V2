@@ -325,35 +325,65 @@ export interface SyncResult {
  * through (this can page through 500 videos) is refreshed and the call retried,
  * instead of failing halfway.
  */
+/**
+ * 채널 하나의 업로드 목록(최대 500).
+ *
+ * **토큰 주인과 대상 채널이 같을 필요가 없다.** 업로드 목록은 공개 데이터라, 유효한 토큰
+ * 하나면 남의 채널도 읽힌다. 완전자동화의 수집원이 그 경우다 — 우리가 연결하지 않은
+ * 채널을 보고 있어야 하는데, 그 채널의 토큰은 당연히 없다(운영자가 승인한 예외).
+ *
+ * 그래서 `syncChannelVideos` 안쪽에 있던 것을 그대로 꺼냈다. 동작은 바뀌지 않는다 —
+ * 호출부가 대상 채널을 **명시**하게 됐을 뿐이다.
+ */
+/**
+ * `@핸들` → 채널 id(UC…).
+ *
+ * 핸들은 **주인이 바꿀 수 있다.** 그래서 등록 시점에 한 번 해석해 `UC…` 로 못박고, 그 뒤로는
+ * id 로만 다룬다 — 핸들을 저장해 두면 주인이 바꾼 날 엉뚱한 채널을 수확하게 된다.
+ * 못 찾으면 null. 여기서 추측해 만들어내지 않는다.
+ */
+export async function resolveChannelIdByHandle(accessToken: string, handle: string): Promise<string | null> {
+  const h = handle.startsWith("@") ? handle : `@${handle}`;
+  const url = `https://www.googleapis.com/youtube/v3/channels?part=id&forHandle=${encodeURIComponent(h)}`;
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+  if (!res.ok) return null;
+  const data = (await res.json()) as { items?: { id?: string }[] };
+  const id = data.items?.[0]?.id;
+  return typeof id === "string" && id.startsWith("UC") ? id : null;
+}
+
+export async function fetchChannelUploads(accessToken: string, channelId: string): Promise<YtVideoItem[]> {
+  const uploadsPlaylistId = await getUploadsPlaylistId(accessToken, channelId);
+  const playlistItems = await fetchPlaylistItems(accessToken, uploadsPlaylistId);
+  if (playlistItems.length === 0) return [];
+
+  const statsMap = await fetchVideosBatch(accessToken, playlistItems.map((p) => p.videoId));
+
+  return playlistItems.map<YtVideoItem>((p) => {
+    const stats = statsMap.get(p.videoId);
+    const thumb = p.snippet.thumbnails?.high?.url ?? p.snippet.thumbnails?.default?.url ?? null;
+    return {
+      videoId: p.videoId,
+      title: p.snippet.title,
+      description: p.snippet.description,
+      publishedAt: p.snippet.publishedAt,
+      durationSec: stats?.durationSec ?? 0,
+      thumbnail: thumb,
+      viewCount: stats?.viewCount ?? 0,
+      likeCount: stats?.likeCount ?? 0,
+      commentCount: stats?.commentCount ?? 0,
+    };
+  });
+}
+
 export async function syncChannelVideos(
   clientId: string,
   clientSecret: string,
   channel: ChannelTokens,
   persist: PersistTokens,
 ): Promise<SyncResult> {
-  const videos = await withAccessToken(clientId, clientSecret, channel, persist, async (accessToken) => {
-    const uploadsPlaylistId = await getUploadsPlaylistId(accessToken, channel.channelId);
-    const playlistItems = await fetchPlaylistItems(accessToken, uploadsPlaylistId);
-    if (playlistItems.length === 0) return [];
-
-    const statsMap = await fetchVideosBatch(accessToken, playlistItems.map((p) => p.videoId));
-
-    return playlistItems.map<YtVideoItem>((p) => {
-      const stats = statsMap.get(p.videoId);
-      const thumb = p.snippet.thumbnails?.high?.url ?? p.snippet.thumbnails?.default?.url ?? null;
-      return {
-        videoId: p.videoId,
-        title: p.snippet.title,
-        description: p.snippet.description,
-        publishedAt: p.snippet.publishedAt,
-        durationSec: stats?.durationSec ?? 0,
-        thumbnail: thumb,
-        viewCount: stats?.viewCount ?? 0,
-        likeCount: stats?.likeCount ?? 0,
-        commentCount: stats?.commentCount ?? 0,
-      };
-    });
-  });
+  const videos = await withAccessToken(clientId, clientSecret, channel, persist,
+    (accessToken) => fetchChannelUploads(accessToken, channel.channelId));
 
   return { videos };
 }

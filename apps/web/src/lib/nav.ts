@@ -16,6 +16,7 @@ import {
   LayoutDashboard,
   LayoutGrid,
   Radio,
+  Repeat,
   Scissors,
   Search,
   Send,
@@ -89,6 +90,9 @@ export const NAV_GROUPS: NavGroup[] = [
   {
     label: "실험실",
     items: [
+      // 완전자동화 — 수집 채널을 지정하면 롱폼을 받아 숏폼으로 만들어 배포한다.
+      // **크레딧이 저절로 나가는** 기능이라 본 메뉴가 아니라 여기서 시작한다(2026-09-04).
+      { href: "/full-auto", label: "완전자동화", icon: Repeat },
       { href: "/program-analytics", label: "프로그램 분석", icon: Activity },
       { href: "/channel-analytics", label: "채널 분석", icon: TrendingUp },
       { href: "/thumbnails", label: "썸네일 생성", icon: ImageIcon },
@@ -126,6 +130,7 @@ export const SCREEN_META: Record<string, { title: string; subtitle: string }> = 
   // 어느 화면인지 제목이 알려주지 못한다(/episodes/:id 는 prefix 매칭으로 걸린다).
   "/episodes": { title: "회차", subtitle: "원본 · 추천 구간 · 파이프라인 진행" },
   "/credits": { title: "크레딧", subtitle: "잔액 · 충전 · 사용 내역" },
+  "/full-auto": { title: "완전자동화", subtitle: "수집 채널 → 숏폼 → 배포 채널까지 사람 없이" },
   "/clips": { title: "클립", subtitle: "구 클립 목록 — 미디어 화면으로 대체됨" },
   "/analytics": { title: "성과 (구)", subtitle: "구 성과 화면 — 성과·프로그램/채널 분석으로 대체됨" },
   "/automation": { title: "자동 배포", subtitle: "프로그램·채널·일정·템플릿을 한곳에서 설정" },

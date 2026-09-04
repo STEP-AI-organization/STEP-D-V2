@@ -61,6 +61,9 @@ import { initQueue, claimJob, completeJob, failJob, requeueStale, heartbeatJob, 
 import { runWithTenant, runAsSystem, DEFAULT_TENANT_ID } from "./auth/tenant.ts";
 import { recordAutoPublishForReport, recordAutoPublishFailureForReport } from "./publish/publish-notify.ts";
 import { runAutomationCycle } from "./pipeline/automation-cycle.ts";
+import { runHarvestCycle } from "./pipeline/harvest-cycle.ts";
+import { isHarvestWindow } from "./pipeline/harvest.ts";
+import { kstDayKey } from "./billing/credits.ts";
 import { runChannelPipeline, shouldSweepChannel } from "./pipeline/channel-pipeline.ts";
 import { runClipReframe, runContentAnalyze, runReframeCompare, newestMtimeMs } from "./pipeline/content-pipeline.ts";
 import {
@@ -162,7 +165,7 @@ const JOB_LANES: Record<"content" | "youtube" | "gebd" | "naver" | "download" | 
   // 짧고, 배포(distribution.publish)와 같은 레인에 있어야 순서가 자연스럽다.
   // automation.cycle 도 youtube 레인 — 순방 한 바퀴는 DB 를 훑고 dispatchPublish 를 부르는
   // 게 전부라 짧고, 그 결과가 distribution.publish 로 이어지므로 같은 레인이 자연스럽다.
-  youtube: ["channel.analyze", "video.analyze", "video.hotwatch", "video.comments",
+  youtube: ["channel.analyze", "channel.harvest", "video.analyze", "video.hotwatch", "video.comments",
             "distribution.publish", "distribution.updatemeta", "factory.orchestrate",
             "factory.publicize", "automation.cycle", "youtube.reconcile"],
   // naver 는 **사무실 상시 PC 전용 lane**. 네이버는 공개 업로드 API 가 없어 브라우저
@@ -337,6 +340,7 @@ async function handle(job: Job): Promise<FollowUp | void> {
     case "match.learn": return handleMatchLearn(job);
     case "gebd.detect": return handleGebdDetect(job);
     case "automation.cycle": return handleAutomationCycle(job);
+    case "channel.harvest": return handleChannelHarvest(job);
     case "youtube.reconcile": return handleYoutubeReconcile(job);
     case "factory.orchestrate": return handleFactoryOrchestrate(job);
     case "factory.publicize": return handleFactoryPublicize(job);
@@ -1237,6 +1241,27 @@ async function handleAutomationCycle(job: Job): Promise<void> {
   }
 }
 
+/**
+ * 완전자동화 수확 — 수집원마다 회차를 **최대 한 편** 만든다.
+ *
+ * 자동 배포 순방과 같은 이유로 **던지지 않는다**: 실패해서 큐 백오프를 타면 같은 채널을
+ * 반복 평가하게 되고, 그동안 다른 수집원이 뒤로 밀린다. 다음 순회에 다시 보면 되는 일이다.
+ *
+ * ⚠️ 여기서 만든 회차의 다운로드(`youtube.download`)는 **윈도우2 전용 레인**이다
+ * (유튜브가 데이터센터 IP 를 봇으로 판정 — CLAUDE.md). 그 PC 가 꺼져 있으면 회차만 쌓이고
+ * 바이트는 안 내려온다. 수확 자체는 성공이라 이 로그로는 안 보인다 — 화면이 알려야 한다.
+ */
+async function handleChannelHarvest(job: Job): Promise<void> {
+  try {
+    const report = await runHarvestCycle();
+    if (report.sources > 0) {
+      console.log(`[worker] channel.harvest ${job.tenantId}:`, JSON.stringify(report));
+    }
+  } catch (e) {
+    console.error(`[worker] channel.harvest ${job.tenantId} 실패(다음 순회에 재시도):`, e);
+  }
+}
+
 // ── youtube.reconcile — 예약 게시 확인 (AENA youtube-reconcile.job.ts 이식) ───────
 //
 // 우리는 예약(publishAt)으로 올린 뒤 배포 행을 'scheduled' 로 적고 **다시 확인하지 않았다.**
@@ -1361,6 +1386,45 @@ async function handleYoutubeReconcile(_job: Job): Promise<void> {
  * *안에서* 잡을 넣는다. 잡 행의 tenant_id 가 그때 정해지고, 워커가 그걸로 다시 컨텍스트를
  * 세운다. 순방 자체를 시스템 스코프로 돌리면 A 의 규칙이 B 의 채널을 볼 수 있다.
  */
+/**
+ * 완전자동화 수확 팬아웃 — **하루 한 번, KST 새벽 2시대**(사용자 결정 2026-09-04).
+ *
+ * ## 왜 순방(15분)과 같이 안 도나
+ *
+ * 수확은 **분석을 시작시키는 일**이고, 분석은 회차당 16분·60크레딧짜리다. 15분마다 판정을
+ * 돌리면 재고가 한 편 빌 때마다 즉시 새 분석이 붙어, 수천 편짜리 채널에서는 사실상 종일
+ * 돈다. 하루 한 번이면 "오늘 낼 몫이 있나" 를 하루 단위로 보게 되고, 그게 배포 스케줄의
+ * 단위와 같다.
+ *
+ * 새벽인 이유: 분석이 낮의 편집·렌더와 워커를 다투지 않는다.
+ *
+ * ## 한 시간 창인 이유
+ *
+ * 정각에 깨어난다는 보장이 없다 — 프로덕션(drain)은 Cloud Scheduler 가 깨울 때만 돈다.
+ * 그래서 2시대에 들어온 실행이 팬아웃하고, `dedupeKey` 가 중복을 막는다. 큐의 dedupe 는
+ * **진행 중인 것**에만 걸리므로, 날짜를 키에 넣어 하루 한 번을 확실히 한다.
+ */
+export async function fanOutHarvestCycles(): Promise<number> {
+  if (!isHarvestWindow()) return 0;
+  const tenants = await runAsSystem(async () => {
+    const { rows } = await getRawPool().query("SELECT id FROM tenants");
+    return rows.map((r: { id: string }) => r.id);
+  });
+
+  let n = 0;
+  for (const tenantId of tenants) {
+    // 날짜를 키에 넣는다 — 큐의 dedupe 는 pending·running 에만 걸려서, 오늘 이미 끝난 잡이
+    // 있어도 2시대에 또 깨어나면 한 번 더 들어간다. 그러면 "하루 한 번" 이 아니게 된다.
+    const id = await runWithTenant({ scope: tenantId, via: "system" }, () =>
+      enqueue("channel.harvest", {}, {
+        dedupeKey: `channel.harvest:${tenantId}:${kstDayKey()}`, maxAttempts: 1,
+      }),
+    );
+    if (id) n += 1;
+  }
+  return n;
+}
+
 export async function fanOutAutomationCycles(): Promise<number> {
   const tenants = await runAsSystem(async () => {
     const { rows } = await getRawPool().query("SELECT id FROM tenants");
@@ -3257,6 +3321,14 @@ async function loop(): Promise<void> {
       } catch (err) {
         console.error("[worker] 순방 팬아웃 실패(다음 주기에 재시도)", err);
       }
+      // 수확은 순방과 **독립**이다 — 순방이 실패해도 수집은 돌아야 하고, 그 반대도 같다.
+      // 실제로 도는 것은 새벽 2시대뿐이다(fanOutHarvestCycles 가 스스로 판정한다).
+      try {
+        const n = await fanOutHarvestCycles();
+        if (n > 0) console.log(`[worker] 완전자동화 수확 ${n}개 테넌트 큐잉`);
+      } catch (err) {
+        console.error("[worker] 수확 팬아웃 실패(다음 주기에 재시도)", err);
+      }
       try {
         await fanOutYoutubeReconcile();
       } catch (err) {
@@ -3443,6 +3515,12 @@ async function main(): Promise<void> {
       if (n > 0) console.log(`[worker] drain 기동 자동 배포 순방 팬아웃 — ${n}개 테넌트`);
     } catch (err) {
       console.error("[worker] drain 순방 팬아웃 실패(다음 기동에 재시도)", err);
+    }
+    try {
+      const n = await fanOutHarvestCycles();
+      if (n > 0) console.log(`[worker] drain 기동 완전자동화 수확 팬아웃 — ${n}개 테넌트`);
+    } catch (err) {
+      console.error("[worker] drain 수확 팬아웃 실패(다음 기동에 재시도)", err);
     }
     // 예약 게시 확인도 같이 — 순방과 독립이라 순방이 실패해도 돈다(catch 를 따로 둔 이유).
     try {

@@ -3328,3 +3328,78 @@ export async function deleteChatbotThread(id: string): Promise<void> {
   });
   if (!res.ok) throw new ApiError(res.status, await errorMessageOf(res));
 }
+
+// ── 완전자동화 수집원 (/api/harvest/*) ────────────────────────────────────────
+//
+// 사람이 하는 일은 채널 지정 한 번이다. 목록의 `remaining`·`credits`·`days` 는 **서버가
+// 수확기와 같은 함수로 계산한 값**이다(pipeline/harvest.ts) — 화면이 따로 세면 숫자가
+// 실제 수확과 어긋나고, 그 순간 그 숫자는 거짓말이 된다.
+
+export type HarvestStatus = "active" | "paused" | "blocked";
+
+export interface HarvestSource {
+  id: string;
+  sourceChannelId: string;
+  sourceChannelTitle: string;
+  programId: string;
+  status: HarvestStatus;
+  approvedBy: string | null;
+  dailyCap: number;
+  minDurationSec: number;
+  backfill: boolean;
+  lastRunAt: number | null;
+  createdAt: number;
+  /** 이미 회차로 만든 편수. */
+  made: number;
+  /** 아직 안 가져온 롱폼 편수. */
+  remaining: number;
+  /** 남은 것을 다 처리하는 데 드는 크레딧. */
+  credits: number;
+  /** 지금 상한으로 며칠 걸리는지. */
+  days: number;
+}
+
+export async function fetchHarvestSources(): Promise<HarvestSource[]> {
+  const out = await json<{ sources: HarvestSource[] }>(
+    await fetch(`${API_BASE}/harvest/sources`, { cache: "no-store", credentials: "include" }),
+  );
+  return out.sources ?? [];
+}
+
+export async function createHarvestSource(input: {
+  sourceChannelUrl: string;
+  programId?: string;
+  dailyCap?: number;
+  minDurationSec?: number;
+  backfill?: boolean;
+}): Promise<HarvestSource> {
+  const out = await json<{ source: HarvestSource }>(await fetch(`${API_BASE}/harvest/sources`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify(input),
+  }));
+  return out.source;
+}
+
+export async function updateHarvestSource(id: string, patch: {
+  status?: "active" | "paused";
+  dailyCap?: number;
+  minDurationSec?: number;
+  backfill?: boolean;
+}): Promise<HarvestSource> {
+  const out = await json<{ source: HarvestSource }>(await fetch(`${API_BASE}/harvest/sources/${id}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify(patch),
+  }));
+  return out.source;
+}
+
+export async function deleteHarvestSource(id: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/harvest/sources/${id}`, {
+    method: "DELETE", credentials: "include",
+  });
+  if (!res.ok) throw new ApiError(res.status, await errorMessageOf(res));
+}
