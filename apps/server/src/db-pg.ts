@@ -4599,6 +4599,20 @@ export async function listHarvestSources(): Promise<HarvestSourceRow[]> {
   return rows.map(harvestRow);
 }
 
+/**
+ * **승인 대기 수집원 — 회사 구분 없이 전부.** 어드민(운영자)의 인박스가 읽는다.
+ *
+ * ⚠️ 이 조회는 **`asSystem` 안에서만** 불러야 한다(RLS 를 벗어나는 자리). 승인은 저작권
+ * 판단이라 우리(STEPAI)가 하는 일이고, 고객사는 자기 것을 스스로 열 수 없다 —
+ * 그래서 목록도 회사 경계를 넘어야 한다. 부르는 곳은 `/api/superadmin/harvest/pending` 하나뿐.
+ */
+export async function listBlockedHarvestSources(): Promise<HarvestSourceRow[]> {
+  const { rows } = await pool.query(
+    `SELECT ${HARVEST_COLS} FROM harvest_source WHERE status = 'blocked' ORDER BY created_at DESC`,
+  );
+  return rows.map(harvestRow);
+}
+
 export async function getHarvestSource(id: string): Promise<HarvestSourceRow | null> {
   const { rows } = await pool.query(`SELECT ${HARVEST_COLS} FROM harvest_source WHERE id = $1`, [id]);
   return rows[0] ? harvestRow(rows[0]) : null;

@@ -72,6 +72,18 @@ export interface AdminUser {
 export type JobCause =
   | "quota" | "not_found" | "auth" | "credits" | "timeout"
   | "ffmpeg" | "missing_file" | "config" | "vendor_5xx" | "unknown";
+/** 승인 대기 수집원 한 줄 — 완전자동화에서 아직 안 도는 채널. */
+export interface HarvestPending {
+  id: string;
+  tenantId: string;
+  sourceChannelId: string;
+  sourceChannelTitle: string;
+  programId: string;
+  createdAt: number;
+  /** 승인 전에 **직접 열어 확인**할 수 있게 서버가 만들어 준다. */
+  channelUrl: string;
+}
+
 export interface AdminJob {
   id: string; type: string; status: string; attempts: number;
   tenantId: string; error: string | null; createdAt: number; updatedAt: number;
@@ -288,6 +300,17 @@ export const api = {
   adjustCredits: (tenantId: string, body: { delta: number; kind: string; note: string; reason?: string }) =>
     post<{ ok: true; delta: number; balance: number }>(
       `/api/superadmin/tenants/${encodeURIComponent(tenantId)}/credits`, body),
+
+  /**
+   * 완전자동화 **승인 대기 수집원** — 우리가 연결하지 않은 채널이라 운영자 판단이 필요한 것.
+   *
+   * 고객사는 스스로 못 연다. 이 문은 **저작권 판단**이고, 계약된 MCN·제작사 채널인지를 아는
+   * 것은 우리다 — 그 판단을 한 사람의 이름이 `approved_by` 와 감사 로그에 남는다.
+   */
+  harvestPending: () => get<{ sources: HarvestPending[] }>("/api/superadmin/harvest/pending"),
+  approveHarvest: (id: string, reason: string) =>
+    post<{ ok: true; approvedBy: string }>(
+      `/api/superadmin/harvest/${encodeURIComponent(id)}/approve`, { reason }),
 
   jobs: (tenant?: string) =>
     get<{ jobs: AdminJob[] }>(

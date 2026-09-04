@@ -254,7 +254,7 @@ import {
 } from "./pipeline/harvest.ts";
 import {
   deleteHarvestSource, getHarvestSource, harvestedVideoIds, insertHarvestSource,
-  listChannelVideosForHarvest, listHarvestSources, updateHarvestSource,
+  listBlockedHarvestSources, listChannelVideosForHarvest, listHarvestSources, updateHarvestSource,
 } from "./db-pg.ts";
 import {
   deleteThread as chatDeleteThread, getThread as chatGetThread,
@@ -12801,6 +12801,33 @@ app.delete("/api/harvest/sources/:id", async (c) => {
   return c.json({
     ok: true,
     notice: "새 영상은 더 가져오지 않습니다. 이미 만든 회차와 자동배포 계획은 그대로 남습니다 — 배포까지 멈추려면 자동 배포 화면에서 계획을 멈추세요.",
+  });
+});
+
+/**
+ * **승인 대기 목록** — 어드민 인박스가 읽는다.
+ *
+ * 이게 없으면 승인 라우트는 있는데 **누를 곳이 없다**(2026-09-04 실사용에서 그대로 걸렸다:
+ * 화면엔 "승인 대기" 가 뜨는데 운영자가 그걸 볼 자리가 없었다). 이 리포 최빈 실패모드가
+ * "기능은 있는데 출력이 소비처에 미도달" 이고, 승인 문은 그 전형이다 — 만드는 쪽(고객사
+ * 화면)과 처리하는 쪽(어드민)이 다른 앱이라 한쪽만 만들기 쉽다.
+ *
+ * 회사 경계를 넘는 조회라 `asSystem` 안에서 돈다. 열람 자체도 감사에 남긴다.
+ */
+app.get("/api/superadmin/harvest/pending", async (c) => {
+  const actor = requireSuperadmin(c);
+  return asSystem(async () => {
+    const rows = await listBlockedHarvestSources();
+    // 열람도 기록한다 — 이 목록은 **여러 회사의 데이터**를 한 화면에 모은다(superadmin-guard).
+    await audit(actor, { action: "harvest.list", detail: { pending: rows.length } }, clientIp(c));
+    return c.json({
+      sources: rows.map((r) => ({
+        id: r.id, tenantId: r.tenantId,
+        sourceChannelId: r.sourceChannelId, sourceChannelTitle: r.sourceChannelTitle,
+        programId: r.programId, createdAt: r.createdAt,
+        channelUrl: `https://www.youtube.com/channel/${r.sourceChannelId}`,
+      })),
+    });
   });
 });
 
