@@ -4686,23 +4686,40 @@ export async function harvestedVideoIds(sourceChannelId: string): Promise<Set<st
  * "진행 중" 을 `content_analysis` 유무로 본다 — 잡 큐를 세면 재시도·중복 큐잉에 흔들리는데,
  * 분석 결과는 **한 미디어에 한 행**이라 흔들리지 않는다.
  */
-export async function harvestCounts(sourceChannelId: string, sinceMs: number): Promise<{
-  madeToday: number; inFlight: number;
-}> {
+/**
+ * 이 수집원의 오늘 실적과 **진행 중 / 멈춘** 편수.
+ *
+ * ⚠️ **진행 중과 멈춘 것을 갈라야 한다.** `content_analysis` 행은 분석에 **성공해야** 생긴다 —
+ * 다운로드나 분석이 죽은 회차는 영원히 "분석 없음" 이라, 예전엔 그게 통째로 `in_flight` 로
+ * 세어졌다. `MAX_IN_FLIGHT=1` 이므로 그 수집원은 **다시는 돌지 않는다**(프로덕션에서 4일째
+ * 멈춘 미디어가 실제로 그 상태였다). 자동화가 조용히 죽는 형태의 사고다.
+ *
+ * 그래서 `stuckBeforeMs`(생성 시각 기준) 보다 오래된 미완은 `stuck` 으로 따로 센다.
+ * 판정은 `harvest.ts` 가 한다 — 여기는 세기만 한다.
+ */
+export async function harvestCounts(
+  sourceChannelId: string, sinceMs: number, stuckBeforeMs: number,
+): Promise<{ madeToday: number; inFlight: number; stuck: number }> {
   const { rows } = await pool.query(
     `SELECT
        COUNT(*) FILTER (WHERE m.createdAt >= $2)::int AS made_today,
        COUNT(*) FILTER (
          WHERE NOT EXISTS (SELECT 1 FROM content_analysis ca WHERE ca.mediaId = m.id)
-       )::int AS in_flight
+           AND m.createdAt >= $3
+       )::int AS in_flight,
+       COUNT(*) FILTER (
+         WHERE NOT EXISTS (SELECT 1 FROM content_analysis ca WHERE ca.mediaId = m.id)
+           AND m.createdAt < $3
+       )::int AS stuck
        FROM media m
        JOIN entities e ON e.kind = 'episode' AND e.id = m.episodeId
       WHERE e.data->>'sourceChannelId' = $1`,
-    [sourceChannelId, sinceMs],
+    [sourceChannelId, sinceMs, stuckBeforeMs],
   );
   return {
     madeToday: Number(rows[0]?.made_today ?? 0),
     inFlight: Number(rows[0]?.in_flight ?? 0),
+    stuck: Number(rows[0]?.stuck ?? 0),
   };
 }
 

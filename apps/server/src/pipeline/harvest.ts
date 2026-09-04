@@ -46,6 +46,21 @@ export const DEFAULT_MIN_DURATION_SEC = 180;
 /** 동시에 진행할 수 있는 편수. 앞 편이 분석을 마쳐야 다음을 집는다. */
 export const MAX_IN_FLIGHT = 1;
 /**
+ * 이만큼 지나도 분석이 안 끝났으면 **진행 중이 아니라 멈춘 것**으로 본다(기본 24시간).
+ *
+ * ⚠️ 이 상수가 없으면 자동화가 조용히 죽는다. 분석 완료 표시(`content_analysis` 행)는
+ * **성공해야** 생기므로, 다운로드나 분석이 죽은 회차는 영원히 미완으로 남는다. 그걸
+ * 진행 중으로 세면 `MAX_IN_FLIGHT=1` 에 걸려 그 수집원은 **다시는 돌지 않는다**
+ * (프로덕션 실측 2026-09-04: 4일째 멈춘 미디어 하나가 수집원 하나를 통째로 세우고 있었다).
+ *
+ * 24시간인 이유: 60분 회차의 정상 분석이 ~19분이다(CLAUDE.md 실측). 다운로드가 밀리는
+ * 최악(윈도우2가 반나절 꺼짐)을 더해도 한참 못 미치므로 **정상 파이프라인은 절대 안 걸린다.**
+ *
+ * 멈춘 편은 **막지 않는다.** 막으면 지금 버그와 같아진다 — 대신 사유 문구로 크게 알린다
+ * (`stuckWarning`). 하루 상한이 있어 그 사이에도 하루 1편을 넘지 않는다.
+ */
+export const STUCK_AFTER_MS = 24 * 60 * 60 * 1000;
+/**
  * 채널 하나에서 볼 수 있는 업로드 수의 실질 상한.
  * 유튜브 업로드 목록이 50개 × 10페이지에서 끊긴다(`youtube.ts` fetchPlaylistItems).
  * 그보다 오래된 영상은 애초에 우리 눈에 안 들어온다 — 사람이 URL 로 직접 넣어야 한다.
@@ -97,8 +112,21 @@ export type SkipCode =
   | "no_candidate" | "insufficient_credits";
 
 export type HarvestVerdict =
-  | { pick: ChannelVideo; needCredits: number }
-  | { pick: null; code: SkipCode; reason: string };
+  | { pick: ChannelVideo; needCredits: number; warning?: string }
+  | { pick: null; code: SkipCode; reason: string; warning?: string };
+
+/**
+ * 멈춘 편이 있으면 그 사실을 **사람 말로**. 사유와 별개로 붙는다 — 수확은 계속 되지만
+ * 앞서 만든 회차가 죽어 있다는 건 사람이 손대야 하는 상태다.
+ *
+ * 예전엔 4일 멈춘 것도 "앞 영상이 아직 처리 중입니다" 로 나와서 **일시적인 일로 읽혔다.**
+ * 그 문구가 곧 "기다리면 된다" 는 뜻이라, 아무도 윈도우2 를 확인하지 않았다.
+ */
+export function stuckWarning(stuck: number): string | undefined {
+  if (!(stuck > 0)) return undefined;
+  const hours = Math.round(STUCK_AFTER_MS / 3_600_000);
+  return `${stuck}편이 ${hours}시간 넘게 멈춰 있습니다 — 다운로드 워커(사무실 PC)가 켜져 있는지 확인하세요.`;
+}
 
 export const SKIP_REASON: Record<SkipCode, string> = {
   paused: "일시정지 상태입니다.",
@@ -119,8 +147,13 @@ export interface PickInput {
   alreadyMade: ReadonlySet<string>;
   /** 오늘(KST) 이 수집원이 만든 편수. */
   madeToday: number;
-  /** 아직 분석이 안 끝난 편수. */
+  /** 아직 분석이 안 끝났고 **아직 기다릴 만한** 편수(생성 후 `STUCK_AFTER_MS` 이내). */
   inFlight: number;
+  /**
+   * 분석이 안 끝난 채 `STUCK_AFTER_MS` 를 넘긴 편수 — **멈춘 것**.
+   * 진행 중으로 세지 않는다(세면 수집원이 영영 안 돈다). 사유 문구로만 드러낸다.
+   */
+  stuck: number;
   /** 크레딧 잔액. null 이면 이 축은 판정하지 않는다(조회 실패 시 막지 않는다). */
   creditBalance: number | null;
   /**
@@ -181,13 +214,17 @@ export function pickNext(input: PickInput): HarvestVerdict {
   if (source.status === "paused") return { pick: null, code: "paused", reason: SKIP_REASON.paused };
   if (source.status !== "active") return { pick: null, code: "blocked", reason: SKIP_REASON.blocked };
 
+  // 멈춘 편은 **판정을 막지 않는다** — 막으면 죽은 회차 하나가 수집원을 영영 세운다
+  // (STUCK_AFTER_MS 주석의 실사고). 대신 어떤 결론에도 이 경고를 함께 실어 보낸다.
+  const warning = stuckWarning(input.stuck);
+
   if (input.inFlight >= MAX_IN_FLIGHT) {
-    return { pick: null, code: "in_flight", reason: SKIP_REASON.in_flight };
+    return { pick: null, code: "in_flight", reason: SKIP_REASON.in_flight, warning };
   }
 
   const cap = effectiveDailyCap(source);
   if (input.madeToday >= cap) {
-    return { pick: null, code: "daily_cap", reason: `${SKIP_REASON.daily_cap} (하루 ${cap}편)` };
+    return { pick: null, code: "daily_cap", reason: `${SKIP_REASON.daily_cap} (하루 ${cap}편)`, warning };
   }
 
   // **배포할 곳이 없으면 아무것도 가져오지 않는다** (사용자 2026-09-04: "다 다운로드하거나
@@ -199,7 +236,7 @@ export function pickNext(input: PickInput): HarvestVerdict {
   // 만들어지고(POST /api/harvest/sources), 안 만든 경우엔 화면이 경고로 알린다.
   // 계획을 **멈춘** 경우도 여기로 떨어진다 — 배포를 멈췄는데 다운로드가 계속되면 안 된다.
   if (!(input.dailyDemand > 0)) {
-    return { pick: null, code: "no_plan", reason: SKIP_REASON.no_plan };
+    return { pick: null, code: "no_plan", reason: SKIP_REASON.no_plan, warning };
   }
 
   // **재고 게이트.** 배포 스케줄이 낼 몫을 이미 갖고 있으면 더 가져오지 않는다 —
@@ -209,11 +246,12 @@ export function pickNext(input: PickInput): HarvestVerdict {
       pick: null,
       code: "stocked",
       reason: `${SKIP_REASON.stocked} (대기 ${input.stock}편 · 하루 ${input.dailyDemand}편 배포)`,
+      warning,
     };
   }
 
   const pick = candidates(input)[0];
-  if (!pick) return { pick: null, code: "no_candidate", reason: SKIP_REASON.no_candidate };
+  if (!pick) return { pick: null, code: "no_candidate", reason: SKIP_REASON.no_candidate, warning };
 
   const needCredits = billableMinutes(pick.durationSec);
   if (input.creditBalance != null && input.creditBalance < needCredits) {
@@ -221,10 +259,11 @@ export function pickNext(input: PickInput): HarvestVerdict {
       pick: null,
       code: "insufficient_credits",
       reason: `${SKIP_REASON.insufficient_credits} (필요 ${needCredits} · 보유 ${input.creditBalance})`,
+      warning,
     };
   }
 
-  return { pick, needCredits };
+  return { pick, needCredits, warning };
 }
 
 /**

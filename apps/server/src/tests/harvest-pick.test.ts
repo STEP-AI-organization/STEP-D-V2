@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   DEFAULT_DAILY_CAP, DEFAULT_MIN_DURATION_SEC, HARVEST_HOUR_KST, MAX_IN_FLIGHT, MAX_PER_DAY,
-  STOCK_BUFFER_DAYS,
+  STOCK_BUFFER_DAYS, STUCK_AFTER_MS, stuckWarning,
   candidates, clampCap, clampMinDuration, effectiveDailyCap, enoughStock, estimate, isHarvestWindow,
   parseChannelRef,
   pickNext, publishSummary, type ChannelVideo, type HarvestSource,
@@ -75,7 +75,7 @@ describe("한 편만 집는다", () => {
   // 재고 0 · 하루 3편 배포 = 가져올 이유가 있는 상태. **수요 0 은 이제 아예 안 집는다**
   // (no_plan) — 배포할 곳이 없으면 다운로드조차 하지 않는다.
   const base = {
-    videos: VIDEOS, alreadyMade: new Set<string>(), madeToday: 0, inFlight: 0,
+    videos: VIDEOS, alreadyMade: new Set<string>(), madeToday: 0, inFlight: 0, stuck: 0,
     creditBalance: NO_CREDIT_LIMIT, stock: 0, dailyDemand: 3,
   };
 
@@ -201,7 +201,7 @@ describe("채널 주소 해석", () => {
  */
 describe("재고 게이트", () => {
   const base = {
-    videos: VIDEOS, alreadyMade: new Set<string>(), madeToday: 0, inFlight: 0,
+    videos: VIDEOS, alreadyMade: new Set<string>(), madeToday: 0, inFlight: 0, stuck: 0,
     creditBalance: null as number | null,
   };
 
@@ -350,5 +350,52 @@ describe("배포 계획 요약", () => {
   it("요일은 정규화해서 준다 — 비면 null(= 매일)", () => {
     assert.equal(publishSummary("p1", [rule()])?.weekdays, null);
     assert.deepEqual(publishSummary("p1", [rule({ weekdays: [5, 1, 1] })])?.weekdays, [1, 5]);
+  });
+});
+
+/**
+ * 멈춘 편 — **자동화가 조용히 죽는 자리.**
+ *
+ * 분석 완료 표시는 성공해야 생긴다. 그래서 다운로드나 분석이 죽은 회차는 영원히 미완이고,
+ * 그걸 "진행 중" 으로 세면 MAX_IN_FLIGHT=1 에 걸려 수집원이 다시는 안 돈다
+ * (프로덕션 실측 2026-09-04: 4일째 멈춘 미디어 하나가 수집원 하나를 세우고 있었다).
+ */
+describe("멈춘 편", () => {
+  const base = {
+    videos: VIDEOS, alreadyMade: new Set<string>(), madeToday: 0, inFlight: 0, stuck: 0,
+    creditBalance: NO_CREDIT_LIMIT, stock: 0, dailyDemand: 3,
+  };
+
+  it("멈춘 편은 수확을 막지 않는다 — 막으면 수집원이 영영 안 돈다", () => {
+    const v = pickNext({ source: source(), ...base, stuck: 1 });
+    assert.ok(v.pick, "멈춘 편 하나가 수집원을 통째로 세웠다");
+  });
+
+  it("멈췄다는 사실은 결론과 함께 나온다 — 조용히 넘어가지 않는다", () => {
+    const v = pickNext({ source: source(), ...base, stuck: 2 });
+    assert.match(v.warning ?? "", /2편이 24시간 넘게 멈춰/);
+    assert.match(v.warning ?? "", /사무실 PC/, "무엇을 확인해야 하는지가 문구에 있어야 한다");
+  });
+
+  it("안 집는 경우에도 경고가 붙는다", () => {
+    const v = pickNext({ source: source(), ...base, stuck: 1, madeToday: 1 });
+    assert.equal(v.pick, null);
+    if (v.pick === null) assert.equal(v.code, "daily_cap");
+    assert.match(v.warning ?? "", /멈춰 있습니다/);
+  });
+
+  it("멈춘 게 없으면 경고도 없다 — 없는 문제를 말하지 않는다", () => {
+    assert.equal(stuckWarning(0), undefined);
+    assert.equal(pickNext({ source: source(), ...base }).warning, undefined);
+  });
+
+  it("진짜 진행 중은 여전히 막는다 — 상한이 사라지면 안 된다", () => {
+    const v = pickNext({ source: source(), ...base, inFlight: MAX_IN_FLIGHT, stuck: 3 });
+    assert.equal(v.pick, null);
+    if (v.pick === null) assert.equal(v.code, "in_flight");
+  });
+
+  it("임계값은 정상 파이프라인이 절대 못 넘는 값이다 — 60분 분석이 ~19분", () => {
+    assert.equal(STUCK_AFTER_MS, 24 * 60 * 60 * 1000);
   });
 });

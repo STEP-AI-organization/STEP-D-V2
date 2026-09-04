@@ -3304,6 +3304,12 @@ async function sweepDueChannels(): Promise<void> {
  * (Cloud Scheduler 로만 돌리고 싶을 때).
  */
 const CYCLE_EVERY_MS = Number(process.env.AUTOMATION_CYCLE_MS ?? 10 * 60 * 1000);
+/**
+ * 팬아웃 타이머 간격(상시 모드). **`AUTOMATION_CYCLE_MS=0` 에도 멈추지 않는다** — 그 env 는
+ * 문서상 "자동 배포 순방만 끈다" 인데, 타이머까지 같이 끄면 완전자동화 수확과 예약 게시
+ * 확인이 조용히 죽는다. env 하나가 문서에 없는 기능 둘을 끄는 형태의 사고를 여기서 막는다.
+ */
+const FANOUT_TICK_MS = CYCLE_EVERY_MS > 0 ? CYCLE_EVERY_MS : 10 * 60 * 1000;
 
 async function loop(): Promise<void> {
   const startedAt = Date.now();
@@ -3313,13 +3319,16 @@ async function loop(): Promise<void> {
     // 순방 팬아웃 — 테넌트마다 잡을 하나씩 넣는다. dedupeKey 로 겹쳐 쌓이지 않는다.
     // drain 모드에서는 만들지 않는다: 큐를 비우고 끝나야 하는데 스스로 일을 늘리면 안 끝난다.
     // 순방 잡은 youtube 레인이 집는다 — 그 레인을 안 도는 워커가 만들면 아무도 안 집는다.
-    if (RUNS_SWEEP && !DRAIN_MODE && CYCLE_EVERY_MS > 0 && Date.now() - lastFanOut > CYCLE_EVERY_MS) {
+    if (RUNS_SWEEP && !DRAIN_MODE && Date.now() - lastFanOut > FANOUT_TICK_MS) {
       lastFanOut = Date.now();
-      try {
-        const n = await fanOutAutomationCycles();
-        if (n > 0) console.log(`[worker] 자동 배포 순방 ${n}개 테넌트 큐잉`);
-      } catch (err) {
-        console.error("[worker] 순방 팬아웃 실패(다음 주기에 재시도)", err);
+      // 자동 배포 순방만 `AUTOMATION_CYCLE_MS=0` 으로 끌 수 있다 — 아래 둘은 그 env 와 무관하다.
+      if (CYCLE_EVERY_MS > 0) {
+        try {
+          const n = await fanOutAutomationCycles();
+          if (n > 0) console.log(`[worker] 자동 배포 순방 ${n}개 테넌트 큐잉`);
+        } catch (err) {
+          console.error("[worker] 순방 팬아웃 실패(다음 주기에 재시도)", err);
+        }
       }
       // 수확은 순방과 **독립**이다 — 순방이 실패해도 수집은 돌아야 하고, 그 반대도 같다.
       // 실제로 도는 것은 새벽 2시대뿐이다(fanOutHarvestCycles 가 스스로 판정한다).
@@ -3516,13 +3525,19 @@ async function main(): Promise<void> {
     } catch (err) {
       console.error("[worker] drain 순방 팬아웃 실패(다음 기동에 재시도)", err);
     }
+  }
+
+  // ⚠️ **수확·예약확인은 `CYCLE_EVERY_MS` 게이트 밖이다.** `AUTOMATION_CYCLE_MS=0` 은
+  //    문서상 "자동 배포 순방만 끈다" 인데, 안에 있으면 완전자동화와 예약 게시 확인까지
+  //    같이 죽는다 — env 하나가 문서에 없는 기능 둘을 조용히 끄는 형태의 사고다.
+  //    셋은 서로 독립이라 catch 도 따로 둔다(하나가 실패해도 나머지는 돈다).
+  if (RUNS_SWEEP && DRAIN_MODE) {
     try {
       const n = await fanOutHarvestCycles();
       if (n > 0) console.log(`[worker] drain 기동 완전자동화 수확 팬아웃 — ${n}개 테넌트`);
     } catch (err) {
       console.error("[worker] drain 수확 팬아웃 실패(다음 기동에 재시도)", err);
     }
-    // 예약 게시 확인도 같이 — 순방과 독립이라 순방이 실패해도 돈다(catch 를 따로 둔 이유).
     try {
       const n = await fanOutYoutubeReconcile();
       if (n > 0) console.log(`[worker] drain 기동 예약 게시 확인 팬아웃 — ${n}개 테넌트`);

@@ -27,7 +27,7 @@ import {
 import { perDayCount, rulePrograms, type AutomationRule } from "./automation.ts";
 import { fetchChannelUploads, withAccessToken } from "../youtube.ts";
 import { apiBase, internalHeaders } from "./factory.ts";
-import { pickNext, type ChannelVideo, type HarvestSource } from "./harvest.ts";
+import { STUCK_AFTER_MS, pickNext, type ChannelVideo, type HarvestSource } from "./harvest.ts";
 
 /** 하루 경계는 KST 다 — "오늘 몇 편" 이 사람이 보는 달력과 같아야 한다. */
 function kstDayStartMs(now = Date.now()): number {
@@ -172,7 +172,7 @@ export async function runHarvestCycle(): Promise<HarvestReport> {
     const [videos, alreadyMade, counts, balance, stock] = await Promise.all([
       listChannelVideosForHarvest(row.sourceChannelId),
       harvestedVideoIds(row.sourceChannelId),
-      harvestCounts(row.sourceChannelId, kstDayStartMs()),
+      harvestCounts(row.sourceChannelId, kstDayStartMs(), Date.now() - STUCK_AFTER_MS),
       creditBalance().catch(() => null),
       pendingClipCount(row.programId),
     ]);
@@ -183,6 +183,7 @@ export async function runHarvestCycle(): Promise<HarvestReport> {
       alreadyMade,
       madeToday: counts.madeToday,
       inFlight: counts.inFlight,
+      stuck: counts.stuck,
       creditBalance: balance,
       stock,
       dailyDemand: dailyDemandFor(rules as AutomationRule[], row.programId),
@@ -190,11 +191,15 @@ export async function runHarvestCycle(): Promise<HarvestReport> {
 
     await updateHarvestSource(row.id, { lastRunAt: Date.now() });
 
+    // 멈춘 편 경고는 **결론과 무관하게** 앞에 붙인다. 이건 "왜 안 집었나" 가 아니라
+    // "앞서 만든 게 죽어 있다" 는 별개의 사실이고, 사람이 손대야 하는 쪽이다.
+    const withWarning = (note: string) => (verdict.warning ? `${verdict.warning} · ${note}` : note);
+
     if (!verdict.pick) {
       // 후보가 없는데 갱신도 실패했다면, 진짜 사유는 갱신 실패다. "새 영상 없음" 으로
       // 덮으면 사람이 채널을 잘못 등록했다고 오해한다.
       const note = verdict.code === "no_candidate" && refreshNote ? refreshNote : verdict.reason;
-      outcomes.push({ ...base, picked: null, note });
+      outcomes.push({ ...base, picked: null, note: withWarning(note) });
       continue;
     }
 
@@ -212,7 +217,10 @@ export async function runHarvestCycle(): Promise<HarvestReport> {
     }
 
     made += 1;
-    outcomes.push({ ...base, picked: verdict.pick.videoId, note: `${verdict.pick.title} — ${verdict.needCredits}크레딧` });
+    outcomes.push({
+      ...base, picked: verdict.pick.videoId,
+      note: withWarning(`${verdict.pick.title} — ${verdict.needCredits}크레딧`),
+    });
   }
 
   return { sources: sources.length, made, outcomes };
