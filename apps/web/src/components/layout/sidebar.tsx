@@ -7,7 +7,7 @@
  *
  * | 원본(목업)                     | 이식본 |
  * |---|---|
- * | `SIDEBAR_SECTIONS`(mockData)   | `NAV_GROUPS`(`lib/nav.ts`) — 라벨·순서 19/19 일치 확인 |
+ * | `SIDEBAR_SECTIONS`(mockData)   | `NAV_GROUPS`(`lib/nav.ts`) — 항목 19개 동일 |
  * | `routeMap[item.id]`            | `item.href` (nav.ts 가 이미 경로를 들고 있다) |
  * | `iconMap[item.iconName]`       | **디자이너 아이콘 유지** — 아래 `DESIGNER_ICON` 참조 |
  * | 크레딧 `455`                   | `fetchCredits()` + 60초 폴링 + `stepd:credits-changed` |
@@ -21,6 +21,11 @@
  * 디자이너 `Zap`, 프로그램: `LayoutGrid` vs `Grid` …). "디자인 그대로" 가 원칙이므로
  * 경로별로 디자이너가 고른 아이콘을 여기서 덮는다. 구조(순서·라벨·href)는 nav.ts 가 정본이다 —
  * 그래야 메뉴 정본이 둘로 갈리지 않는다.
+ *
+ * ## 그룹 구성은 원본과 갈렸다 (2026-09-04)
+ * 원본 목업은 `분석`·`생성`·`도구` 3그룹인데, 사용자 판단으로 **예비 기능 셋**(프로그램 분석 ·
+ * 채널 분석 · 썸네일 생성)을 `실험실` 그룹으로 내렸다. 마크업은 그대로고 `NAV_GROUPS` 만
+ * 바뀐다 — 이 컴포넌트는 그룹을 통째로 map 하므로 손댈 곳이 없다.
  *
  * ## '예정' 배지를 그대로 옮기지 않은 이유
  * 원본은 **채널 분석**에 `badge: '예정'` 이 붙어 있는데, 그건 목 데이터가 만들어진 시점의

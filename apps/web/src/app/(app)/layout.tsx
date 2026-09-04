@@ -1,5 +1,4 @@
 import { AuthGuard } from "@/components/shell/auth-guard";
-import { ChatbotWidget } from "@/components/chatbot/chatbot-widget";
 import { ThemeProvider } from "@/components/theme-provider";
 import { Sidebar } from "@/components/layout/sidebar";
 import { LegacyFrame } from "@/components/layout/legacy-frame";
@@ -41,8 +40,10 @@ export default function AppGroupLayout({ children }: { children: React.ReactNode
             <LegacyFrame>{children}</LegacyFrame>
           </div>
         </div>
-        {/* 도우미는 (app) 그룹에만. 풀스크린 편집기(editor)는 작업 화면이라 덮지 않는다. */}
-        <ChatbotWidget />
+        {/* 업무 도우미 챗봇은 **화면에서 내렸다** (2026-09-04 · 사용자 판단 "아직 애매하다").
+            지운 게 아니라 안 띄우는 것이다 — `components/chatbot/chatbot-widget.tsx` 와
+            `lib/data/api.ts` 의 chatbot 함수들, 서버 `/api/chatbot/*` 는 그대로 있다.
+            되살릴 땐 여기서 `<ChatbotWidget />` 한 줄만 다시 넣으면 된다. */}
       </ThemeProvider>
     </AuthGuard>
   );

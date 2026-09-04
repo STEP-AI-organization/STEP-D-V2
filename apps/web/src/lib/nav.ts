@@ -66,29 +66,30 @@ export const NAV_GROUPS: NavGroup[] = [
     ],
   },
   {
-    label: "분석",
-    items: [
-      { href: "/program-analytics", label: "프로그램 분석", icon: Activity },
-      { href: "/channel-analytics", label: "채널 분석", icon: TrendingUp },
-    ],
-  },
-  {
     label: "생성",
     items: [
-      { href: "/thumbnails", label: "썸네일 생성", icon: ImageIcon },
       { href: "/automation", label: "자동 배포", icon: Workflow },
       // 찾은 상품과 **실제로 붙는** 상품을 가르는 자리. 승인 전에는 어디에도 안 나간다.
       { href: "/commerce", label: "상품 링크", icon: ShoppingBag },
     ],
   },
   /**
-   * FLOWS 재설계 밖의 화면들. **지우지 않고 남긴다** — 재설계가 대체하지 못한 일을
-   * 실제로 하고 있고(트렌드 조사·큐 진단·사업 관리), 숨기면 "있는데 못 찾는" 상태가 된다.
-   * 옛 디자인 그대로라 그룹을 나눠 그 사실이 드러나게 뒀다.
+   * 실험실 — **아직 예비 기능**이거나 FLOWS 재설계 밖에 있는 화면들.
+   *
+   * 지우지 않고 남긴다: 재설계가 대체하지 못한 일을 실제로 하고 있고(트렌드 조사·큐 진단·
+   * 사업 관리), 숨기면 "있는데 못 찾는" 상태가 된다. 다만 **본 메뉴와 같은 자리에 두면
+   * 완성된 기능으로 읽힌다** — 그래서 한 그룹으로 묶어 그 사실이 드러나게 한다.
+   *
+   * 2026-09-04 사용자 판단으로 `프로그램 분석`·`채널 분석`·`썸네일 생성` 이 여기로 내려왔고
+   * (셋 다 예비 기능), 그룹 이름도 `도구` → `실험실` 로 바꿨다. 화면·경로·데이터는 그대로다 —
+   * 메뉴에서의 자리만 옮겼다.
    */
   {
-    label: "도구",
+    label: "실험실",
     items: [
+      { href: "/program-analytics", label: "프로그램 분석", icon: Activity },
+      { href: "/channel-analytics", label: "채널 분석", icon: TrendingUp },
+      { href: "/thumbnails", label: "썸네일 생성", icon: ImageIcon },
       { href: "/trends", label: "유튜브 트렌드", icon: TrendingUp },
       { href: "/business", label: "사업 운영", icon: Boxes },
       { href: "/ops", label: "운영 진단", icon: Activity },
