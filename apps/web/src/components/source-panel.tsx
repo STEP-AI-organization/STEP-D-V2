@@ -156,10 +156,24 @@ export function SourcePanel({ episodeId }: { episodeId: string }) {
     <>
       {/* Full-width Compact Video Player Container matching AI Timeline width
           (원본 episodes/e_1293d2f1/page.tsx D:485–533) */}
-      <div className="w-full space-y-2.5">
-        <div className="w-full bg-black rounded-2xl overflow-hidden relative border border-slate-200/80 dark:border-slate-800 shadow-md">
+      {/* 원본은 플레이어가 `h-[400px]` 고정이다 — 목업은 좁은 뷰포트 기준이라 괜찮았지만,
+          넓은 화면에서는 16:9 영상이 높이에 맞춰지면서 **양옆에 검은 기둥**이 남는다.
+          상자를 원본 영상의 실제 비율에 맞추고 높이만 70vh 로 묶는다: 가로 영상엔 여백이
+          안 생기고, 세로 영상도 화면을 넘기지 않는다. 아래 메타 바도 같은 폭으로 맞춘다. */}
+      <div
+        className="mx-auto w-full space-y-2.5"
+        style={{
+          maxWidth: master.width && master.height
+            ? `calc(70vh * ${master.width} / ${master.height})`
+            : "calc(70vh * 16 / 9)",
+        }}
+      >
+        <div
+          className="w-full bg-black rounded-2xl overflow-hidden relative border border-slate-200/80 dark:border-slate-800 shadow-md"
+          style={{ aspectRatio: master.width && master.height ? `${master.width} / ${master.height}` : "16 / 9" }}
+        >
           {/* Player Area with Letterboxing support */}
-          <div className="relative w-full h-[400px] bg-black flex items-center justify-center">
+          <div className="absolute inset-0 bg-black flex items-center justify-center">
             {videoSrc ? (
               <video
                 ref={videoRef}

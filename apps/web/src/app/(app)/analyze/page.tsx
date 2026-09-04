@@ -339,8 +339,20 @@ function EpisodeAnalysis({
   return (
     <>
       {/* 1. HTML5 Video Player Container */}
-      <div className="w-full bg-black rounded-xl overflow-hidden relative shadow-md shadow-slate-900/5 dark:shadow-none">
-        <div className="relative aspect-video bg-black flex items-center justify-center">
+      {/* 상자를 원본 비율에 맞추고 높이만 묶는다 — 고정 높이 + w-full 이면 넓은 화면에서
+          양옆에 검은 기둥이 남는다(회차 상세와 같은 처리). */}
+      <div
+        className="mx-auto w-full bg-black rounded-xl overflow-hidden relative shadow-md shadow-slate-900/5 dark:shadow-none"
+        style={{
+          maxWidth: master?.width && master?.height
+            ? `calc(62vh * ${master.width} / ${master.height})`
+            : "calc(62vh * 16 / 9)",
+        }}
+      >
+        <div
+          className="relative bg-black flex items-center justify-center"
+          style={{ aspectRatio: master?.width && master?.height ? `${master.width} / ${master.height}` : "16 / 9" }}
+        >
           {videoSrc ? (
             <video
               ref={videoRef}
