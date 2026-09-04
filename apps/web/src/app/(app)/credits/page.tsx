@@ -413,8 +413,12 @@ export default function CreditsPage() {
                 <label className="text-sm font-bold text-[var(--color-text-primary)] block mb-1">
                   결제 알림 이메일
                 </label>
+                {/* 수신자가 여기 등록한 사람뿐이라는 사실을 등록하는 자리에서 말한다 —
+                    비워 두면 결제해도 영수증 메일이 아무에게도 안 간다(2026-09-04). */}
                 <div className="text-xs text-[var(--color-text-muted)] mb-2">
                   인보이스(결제 완료)와 자동 결제 실패 알림을 받을 담당자 — 쉼표로 여러 명(최대 5명).
+                  <br />
+                  <b className="text-[var(--color-text-primary)]">여기 등록한 사람에게만</b> 갑니다. 비우면 메일을 보내지 않습니다 — 인보이스는 아래 &lsquo;인보이스 보기&rsquo;에서 PDF로 받을 수 있습니다.
                 </div>
                 <div className="flex items-center gap-2">
                   <input

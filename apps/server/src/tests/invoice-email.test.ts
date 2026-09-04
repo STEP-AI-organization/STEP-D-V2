@@ -13,7 +13,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
 
-import { invoiceFromTopup, resolveRecipient, smtpConfigured, supplierFromEnv } from "../billing/invoice.ts";
+import { invoiceFromTopup, smtpConfigured, supplierFromEnv } from "../billing/invoice.ts";
 
 const SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const read = (f: string) => fs.readFileSync(path.join(SRC, f), "utf-8");
@@ -60,15 +60,37 @@ describe("결제 건별 인보이스 — 결정적이고 원장과 일치한다"
   });
 });
 
-describe("수신자 — 결제창 이메일이 1순위", () => {
-  it("우선순위: 결제 이메일 → 구매자(사업자/청구) 이메일", () => {
-    assert.equal(resolveRecipient({ paymentEmail: "pay@a.kr", buyerEmail: "biz@a.kr" }), "pay@a.kr");
-    assert.equal(resolveRecipient({ paymentEmail: "", buyerEmail: "biz@a.kr" }), "biz@a.kr");
-    assert.equal(resolveRecipient({ paymentEmail: null, buyerEmail: null }), null);
+/**
+ * 수신자 규칙 — **결제 알림에 등록된 사람들만** (2026-09-04 사용자 지정).
+ *
+ * 예전엔 결제창 이메일(포트원 customer.email)과 구매자 이메일을 1순위로 얹어서,
+ * **카드를 등록한 계정 주인에게도 영수증이 갔다.** 그러면 담당자 목록을 따로 두는 뜻이
+ * 없어진다. 순수 함수로 증명할 수 없는 규칙이라(발송 경로 전체가 I/O) 원문을 스캔한다.
+ */
+describe("수신자 — 등록된 담당자뿐", () => {
+  const SRC = fs.readFileSync(
+    path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "billing", "invoice-email.ts"),
+    "utf-8",
+  );
+  const FN = "export async function sendInvoiceEmail";
+  const sendBlock = SRC.slice(SRC.indexOf(FN), SRC.indexOf(FN) + 2600);
+
+  it("발송 경로를 읽을 수 있다 — 못 읽으면 아래 검사가 무의미하다", () => {
+    assert.ok(sendBlock.length > 200, "sendInvoiceEmail 본문을 못 찾았다 — 정규식이 깨졌다");
   });
 
-  it("이메일 형식이 아니면 다음 후보로 넘어간다", () => {
-    assert.equal(resolveRecipient({ paymentEmail: "not-an-email", buyerEmail: "ok@b.kr" }), "ok@b.kr");
+  it("수신자는 결제 알림 목록에서만 나온다", () => {
+    assert.match(sendBlock, /getBillingNotifyEmails\(\)/,
+      "등록된 담당자 목록을 안 읽는다");
+    assert.doesNotMatch(sendBlock, /paymentEmail/,
+      "결제창 이메일이 수신자로 되살아났다 — 카드 등록한 계정에도 영수증이 간다");
+    assert.doesNotMatch(sendBlock, /buyerEmail|buyerFor\(/,
+      "구매자 이메일이 수신자로 되살아났다");
+  });
+
+  it("목록이 비면 다른 주소로 폴백하지 않고 안 보낸다", () => {
+    assert.match(sendBlock, /recipients\.length === 0[\s\S]{0,300}?return;/,
+      "빈 목록에서 조용히 다른 주소로 나갈 수 있다");
   });
 });
 

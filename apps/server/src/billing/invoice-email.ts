@@ -23,14 +23,12 @@
 import { asSystem, getBillingNotifyEmails, getBusinessProfile, getTopup } from "../db-pg.ts";
 import {
   invoiceFromTopup,
-  resolveRecipient,
   smtpConfigured,
   supplierFromEnv,
   type InvoiceParty,
   type PaymentInvoice,
 } from "./invoice.ts";
 import { sendMail } from "../mailer.ts";
-import { getPayment } from "./portone.ts";
 
 /** 구매자 — 사업자정보(business_profile)가 정본, 없으면 워크스페이스 이름만. */
 export async function buyerFor(tenantId: string): Promise<InvoiceParty> {
@@ -265,22 +263,21 @@ export async function sendInvoiceEmail(paymentId: string, tenantId: string): Pro
       return;
     }
 
-    // 결제창/빌링키 요청에 넣었던 "영수증 받을 이메일" — 포트원 단건 조회로 되찾는다.
-    let paymentEmail: string | null = null;
-    try {
-      const p = await getPayment(paymentId) as
-        { payment?: { customer?: { email?: string } }; customer?: { email?: string } };
-      paymentEmail = p?.payment?.customer?.email ?? p?.customer?.email ?? null;
-    } catch { /* 조회 실패 시 폴백 이메일로 */ }
-
-    const buyer = await buyerFor(tenantId);
     const supplier = supplierFromEnv();
-    // 수신자 = 결제창 이메일(1순위) + 결제 알림 수신자 목록(B2B 담당자 여러 명 · 결제 화면에서 등록).
-    const primary = resolveRecipient({ paymentEmail, buyerEmail: buyer.email });
-    const extra = await getBillingNotifyEmails().catch(() => [] as string[]);
-    const recipients = [...new Set([primary, ...extra].filter(Boolean))] as string[];
+
+    // ── 수신자 = **결제 알림 이메일에 등록된 사람뿐** (2026-09-04 사용자 지정) ──────────
+    //
+    // 예전에는 여기에 결제창 이메일(포트원 customer.email)과 구매자 이메일(사업자·청구
+    // 연락처)을 1순위로 얹었다. 그래서 **카드를 등록한 계정 주인에게도 영수증이 갔고**,
+    // 담당자 목록을 따로 관리하는 뜻이 없어졌다. 이제 목록이 정본이다 —
+    // 받을 사람은 결제 화면(`/credits` → 결제 알림 이메일)에서 등록한다.
+    //
+    // ⚠️ 목록이 비면 **아무에게도 안 간다.** "등록한 사람들만" 이라는 규칙의 당연한 귀결이라
+    // 몰래 다른 주소로 폴백하지 않는다. 영수증 자체는 사라지지 않는다 — 인보이스는 서버에
+    // 남고 `/credits` → 인보이스 보기에서 PDF 로 받을 수 있다.
+    const recipients = await getBillingNotifyEmails().catch(() => [] as string[]);
     if (recipients.length === 0) {
-      console.warn(`[invoice] 수신자 이메일 없음 — 메일 안 보냄 (${paymentId})`);
+      console.warn(`[invoice] 결제 알림 수신자가 등록돼 있지 않아 메일을 보내지 않습니다 (${paymentId})`);
       return;
     }
     const to = recipients.join(", ");

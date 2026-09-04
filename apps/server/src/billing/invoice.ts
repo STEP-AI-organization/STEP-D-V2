@@ -273,20 +273,12 @@ export function supplierFromEnv(env: NodeJS.ProcessEnv = process.env): InvoicePa
   };
 }
 
-/**
- * 메일 수신자 우선순위 — **결제창에 넣은 이메일이 1순위다** ("영수증 받을 이메일"로 받았다).
- * 없으면 사업자정보/워크스페이스 청구 이메일. 형식이 아니면 다음 후보로 넘어간다.
+/*
+ * `resolveRecipient` 는 2026-09-04 에 지웠다 — 인보이스 수신자를 **결제 알림에 등록된
+ * 사람들만**으로 정하면서(사용자 지정) 결제창 이메일·구매자 이메일을 수신자로 쓰지
+ * 않게 됐다. 쓰는 곳 없이 테스트만 남으면 그 테스트는 영영 초록인 채 아무것도 안 지킨다.
+ * 지금 규칙을 지키는 테스트는 invoice-email.test.ts 의 "수신자는 등록된 담당자뿐" 이다.
  */
-export function resolveRecipient(candidates: {
-  paymentEmail?: string | null;
-  buyerEmail?: string | null;
-}): string | null {
-  for (const v of [candidates.paymentEmail, candidates.buyerEmail]) {
-    const s = String(v ?? "").trim();
-    if (/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(s)) return s;
-  }
-  return null;
-}
 
 /**
  * Gmail XOAUTH2 — 비밀번호(SMTP_PASS) 대신 OAuth 3종으로 인증한다.
