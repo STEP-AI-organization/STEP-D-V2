@@ -3436,6 +3436,10 @@ def recommend_narrative_first(
             scenes, n, genre, on_progress, profile, channels, transcript,
             cast_registry, narrative, faces, ppl_detections, video_path,
             beats or [],
+            # ⚠️ 이 인자를 빠뜨리면 impl 안의 `title_refs` 가 NameError 로 터진다.
+            # beat 경로가 표준이라 **모든 분석이 죽는다**(2026-09-04 프로덕션 실측:
+            # 8b25eb9 이후 content.analyze 가 마지막 단계에서 전량 실패).
+            title_refs,
         )
     finally:
         _CURRENT_PROGRAM_CTX = _prev_ctx
@@ -4438,6 +4442,10 @@ def _recommend_narrative_first_impl(
     ppl_detections: list[dict] | None,
     video_path: str | None,
     beats: list[dict],
+    # 실제로 터진 제목 표본 — 오버레이 자막의 말투를 여기서 가져온다(8b25eb9).
+    # 기본값을 두는 이유: 이 함수를 부르는 곳이 래퍼 하나뿐이지만, 빠뜨렸을 때
+    # NameError 로 파이프라인 전체가 죽는 것보다 조용히 없는 편이 낫다.
+    title_refs: list[str] | None = None,
 ) -> dict:
     client = genai.Client(vertexai=True, project=PROJECT, location=LOCATION)
 

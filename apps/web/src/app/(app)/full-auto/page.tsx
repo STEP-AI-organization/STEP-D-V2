@@ -215,19 +215,6 @@ export default function FullAutoPage() {
 
       <main className="flex-1 p-6 overflow-y-auto">
         <div className="space-y-4 max-w-5xl">
-          {/* 무엇이 일어나는지 — 크레딧이 저절로 나가는 기능이라 먼저 말한다. */}
-          <div className={`${CARD} p-4 text-xs leading-relaxed ${MUTED}`}>
-            수집 채널을 등록하면 그 채널의 <b className="text-[var(--color-text-primary)]">긴 영상</b>을
-            자동으로 가져와 분석하고, 숏폼을 만들어 <b className="text-[var(--color-text-primary)]">배포
-            채널</b>에 올립니다. 프로그램은 <b className="text-[var(--color-text-primary)]">수집 채널
-            이름</b>으로 자동으로 만들어집니다.
-            <br />
-            내려받기와 분석에는 크레딧이 듭니다 — 60분짜리 한 편이 60크레딧입니다. 그래서
-            채널에 영상이 수천 개 있어도 <b className="text-[var(--color-text-primary)]">하루 한 편씩</b>만
-            가져옵니다. 배포 예정 물량이 이미 충분하거나 배포할 채널이 없으면
-            <b className="text-[var(--color-text-primary)]"> 내려받기 자체를 하지 않습니다.</b>
-          </div>
-
           {/* 등록 — ① 수집 채널 · ② 배포 설정 순서. 사람이 정하는 것을 위에서 아래로 둔다. */}
           <div className={`${CARD} p-4 space-y-4`}>
             <div className="flex flex-wrap items-end gap-3">
