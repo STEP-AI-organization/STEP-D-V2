@@ -10,14 +10,14 @@
  *
  *  1. **등록 전 예상 소모.** "312편 · 18,700크레딧 · 156일" 을 누르기 전에 봐야 한다.
  *     이걸 안 보여주면 채널 하나 등록에 잔액이 사라지고, 사용자는 무엇이 그랬는지도 모른다.
- *  2. **왜 안 도는지.** 확인 필요 · 크레딧 부족 · 일시정지가 각각 다른 말로 보여야 한다.
+ *  2. **왜 안 도는지.** 크레딧 부족 · 일시정지 · 계획 없음이 각각 다른 말로 보여야 한다.
  *  3. **어디로 나가는지.** 배포 채널이 없으면 아무것도 가져오지 않는다 — 그 상태를 크게 알린다.
  *
- * ## 권리 확인도 여기서 한다 (2026-09-04 사용자 결정)
+ * ## 권리 확인 게이트는 없앴다 (2026-09-04 사용자 결정)
  *
- * 처음엔 STEPAI 어드민에서만 열 수 있게 했다. 그런데 그 채널과 어떤 계약을 맺었는지 아는
- * 것은 **쓰는 쪽**이다 — 우리가 심사하는 척하면 심사는 형식이 되고, 고객은 채널 하나
- * 추가할 때마다 사람을 기다린다. 대신 **누가 확인했는지는 기록에 남는다**(owner·admin만).
+ * 어드민 → 이 화면 → 제거. 문을 어디에 두든 **판단하는 사람이 곧 등록하는 사람**이라,
+ * 막아 주는 것 없이 등록을 두 단계로 늘리기만 했다(확인 전에 자동 수확이 먼저 돌아
+ * 헛도는 사고까지 났다). 등록하면 바로 돈다 — 대신 그 사실을 폼에 적는다.
  *
  * ## 입력은 둘이다 (2026-09-04)
  *
@@ -36,7 +36,7 @@
  */
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { AlertTriangle, Check, Loader2, Pause, Play, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { AlertTriangle, Loader2, Pause, Play, Plus, RefreshCw, Trash2 } from "lucide-react";
 
 import { Footer } from "@/components/layout/footer";
 import { Header } from "@/components/layout/header";
@@ -47,7 +47,7 @@ import {
   formatWeekdays, perDayCount, slotLabel, type RuleSlot,
 } from "@server-pure/pipeline/automation";
 import {
-  approveHarvestSource, createHarvestSource, deleteHarvestSource, fetchHarvestSources,
+  createHarvestSource, deleteHarvestSource, fetchHarvestSources,
   fetchShortsTemplates, fetchYouTubeChannels, previewHarvestChannel, runHarvest, updateHarvestSource,
   type FrameTemplate, type HarvestPreview, type HarvestSource, type YouTubeChannelInfo,
 } from "@/lib/data/api";
@@ -62,11 +62,6 @@ const LABEL = `block text-[11px] font-bold mb-1.5 ${MUTED}`;
 const STATE: Record<HarvestSource["status"], { label: string; hint: string; tone: string }> = {
   active: { label: "수집 중", hint: "새 영상이 올라오면 자동으로 가져옵니다.", tone: "text-emerald-500" },
   paused: { label: "일시정지", hint: "다시 시작하기 전까지 아무것도 가져오지 않습니다.", tone: "text-amber-500" },
-  blocked: {
-    label: "확인 필요",
-    hint: "우리가 연결한 채널이 아닙니다 — 이 채널 영상을 쓸 권리가 있는지 확인해 주세요. 확인 전에는 아무것도 가져오지 않습니다.",
-    tone: "text-rose-500",
-  },
 };
 
 export default function FullAutoPage() {
@@ -203,35 +198,6 @@ export default function FullAutoPage() {
       setError(e instanceof Error ? e.message : "바꾸지 못했습니다.");
     }
   }, [load]);
-
-  /**
-   * 권리 확인 — 이 채널 영상을 쓸 권리가 있다고 확정한다.
-   *
-   * 확인하면 **그 채널 영상을 내려받아 숏폼으로 만들어 배포 채널에 올린다.** 남의 영상이면
-   * 저작권 사고라, 되돌릴 수 없는 쪽에 서기 전에 무슨 일이 일어나는지 그대로 적어 묻는다.
-   */
-  const approve = useCallback(async (s: HarvestSource) => {
-    const ok = window.confirm(
-      [
-        `"${s.sourceChannelTitle || s.sourceChannelId}" 의 영상을 사용합니다.`,
-        "",
-        "이 채널의 영상을 내려받아 숏폼으로 만들어 배포 채널에 올립니다.",
-        "이 채널 영상을 사용할 권리가 있습니까? (확인한 사람이 기록에 남습니다)",
-      ].join("\n"),
-    );
-    if (!ok) return;
-    setError(null);
-    try {
-      await approveHarvestSource(s.id);
-      await load();
-      // **확인 직후 한 번 돈다.** 등록 직후의 자동 실행은 이 채널에겐 언제나 헛돈다 —
-      // 그때는 아직 '확인 필요' 라 첫 관문에서 튕긴다(2026-09-04 실측 9ms). 확인이 곧
-      // "이제 돌아도 된다" 는 뜻이므로, 순회를 다시 돌릴 자리는 여기다.
-      await run();
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "확인하지 못했습니다.");
-    }
-  }, [load, run]);
 
   const remove = useCallback(async (id: string) => {
     setError(null);
@@ -416,8 +382,8 @@ export default function FullAutoPage() {
             </div>
 
             <p className={`text-[11px] ${MUTED}`}>
-              우리가 연결한 채널이 아니면 <b>확인 필요</b> 상태로 등록됩니다 — 남의 영상을 재배포하는
-              것은 저작권 문제라, 그 채널 영상을 쓸 권리가 있는지 확인해야 돕니다(관리자만).
+              등록하면 <b>바로 돕니다.</b> 남의 채널을 넣으면 그 영상을 받아 숏폼으로 만들어
+              배포하니, 쓸 권리가 있는 채널인지 확인하고 등록하세요.
             </p>
           </div>
 
@@ -477,28 +443,15 @@ export default function FullAutoPage() {
                       </div>
 
                       <div className="flex items-center gap-1.5 shrink-0">
-                        {/* 확인은 **여기**서 한다(2026-09-04 사용자 결정) — 예전엔 STEPAI 어드민에서만
-                            열 수 있었는데, 그 채널과 어떤 계약을 맺었는지 아는 건 쓰는 쪽이다. */}
-                        {s.status === "blocked" && (
-                          <button
-                            onClick={() => { void approve(s); }}
-                            className="px-3 py-1.5 rounded-full bg-[var(--color-bg-input)] hover:bg-[var(--color-bg-card-hover)] border border-[var(--color-border-subtle)] text-[11px] font-bold text-[var(--color-text-primary)] transition-colors cursor-pointer flex items-center gap-1"
-                          >
-                            <Check className="w-3.5 h-3.5" />
-                            <span>권리 확인</span>
-                          </button>
-                        )}
-                        {s.status !== "blocked" && (
-                          <button
-                            onClick={() => { void patch(s.id, { status: s.status === "paused" ? "active" : "paused" }); }}
-                            className="p-2 rounded-full bg-[var(--color-bg-input)] hover:bg-[var(--color-bg-card-hover)] border border-[var(--color-border-subtle)] transition-colors cursor-pointer"
-                            aria-label={s.status === "paused" ? "다시 시작" : "일시정지"}
-                          >
-                            {s.status === "paused"
-                              ? <Play className="w-3.5 h-3.5 text-[var(--color-text-muted)]" />
-                              : <Pause className="w-3.5 h-3.5 text-[var(--color-text-muted)]" />}
-                          </button>
-                        )}
+                        <button
+                          onClick={() => { void patch(s.id, { status: s.status === "paused" ? "active" : "paused" }); }}
+                          className="p-2 rounded-full bg-[var(--color-bg-input)] hover:bg-[var(--color-bg-card-hover)] border border-[var(--color-border-subtle)] transition-colors cursor-pointer"
+                          aria-label={s.status === "paused" ? "다시 시작" : "일시정지"}
+                        >
+                          {s.status === "paused"
+                            ? <Play className="w-3.5 h-3.5 text-[var(--color-text-muted)]" />
+                            : <Pause className="w-3.5 h-3.5 text-[var(--color-text-muted)]" />}
+                        </button>
                         <button
                           onClick={() => { void remove(s.id); }}
                           className="p-2 rounded-full bg-[var(--color-bg-input)] hover:bg-[var(--color-bg-card-hover)] border border-[var(--color-border-subtle)] transition-colors cursor-pointer"

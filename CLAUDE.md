@@ -84,7 +84,7 @@ Hono 단일 진입점(index.ts, **~12,300줄, 라우트 275개**) + 별도 워�
 | `src/ai/gemini.ts` · `ai/cast.ts` · `ai/profile.ts` · `media/thumbnail-assets.ts` | Gemini 호출 · 캐스트 · 프로그램 프로필 · 썸네일 레퍼런스 |
 | `src/seed.ts` | **의도적으로 전부 빈 배열** — 프로덕션은 데모 콘텐츠 없이 시작 |
 | `src/chatbot/` | **업무 도우미 챗봇** (2026-09-03) — 제품 사용법 안내 + 워크스페이스 **읽기**. 지식은 `docs/help/*.md` 뿐이고, 링크는 `catalog.ts` 화이트리스트를 통과한 것만 나간다. 실행 기능 없음 |
-| `src/pipeline/harvest.ts` · `harvest-cycle.ts` | **완전자동화** (2026-09-04) — 수집 유튜브 채널과 배포 채널을 지정하면 롱폼을 받아 회차로 만든다(프로그램·자동배포 계획도 등록할 때 같이 만들어진다). 그 뒤는 기존 분석·자동배포 계획이 그대로 완주한다. **새벽 2시 하루 한 번**(`channel.harvest`) + 화면의 "지금 가져오기"(`POST /api/harvest/run`) · **수집원당 하루 1편이 실질 상한**(순회가 하루 한 번) · **배포 계획이 없거나 멈췄으면 내려받기조차 안 한다** · 배포 재고가 2일치면 안 가져온다 · 연결 안 된 채널은 운영자 승인 필요 |
+| `src/pipeline/harvest.ts` · `harvest-cycle.ts` | **완전자동화** (2026-09-04) — 수집 유튜브 채널과 배포 채널을 지정하면 롱폼을 받아 회차로 만든다(프로그램·자동배포 계획도 등록할 때 같이 만들어진다). 그 뒤는 기존 분석·자동배포 계획이 그대로 완주한다. **새벽 2시 하루 한 번**(`channel.harvest`) + 화면의 "지금 가져오기"(`POST /api/harvest/run`) · **수집원당 하루 1편이 실질 상한**(순회가 하루 한 번) · **배포 계획이 없거나 멈췄으면 내려받기조차 안 한다** · 배포 재고가 2일치면 안 가져온다 · **권리 확인 게이트 없음**(2026-09-04 제거 — 등록하면 바로 돈다) |
 | `src/report/` | **보고 리포트 생성** (2026-09-03) — 자연어 → 스펙(모델) → 집계(SQL) → 서술(모델) → md/HTML. **숫자는 집계만 낳는다**(narrate.ts 가 지어낸 수를 잡아 서술을 버린다) |
 | `src/<도메인>/` | **2026-09-01 정리** — 74개가 평평하던 것을 묶었다: `ai` `auth` `billing` `chatbot` `commerce` `media` `naver` `pipeline` `publish` `report` `social` `tests`. 최상위엔 진입점(index·worker)과 공용(db-pg·config·ids·kst·mailer·seed·youtube)만 남는다 |
 | `schema.sql` | 테이블 정의 — 단 **job_queue·content_analysis·channel_analytics·search_segments·meta_accounts·tiktok_accounts는 여기 없고 코드가 런타임 생성** (queue.ts·db-pg.ts). 상세: [docs/reference/data-model.md](docs/reference/data-model.md) |

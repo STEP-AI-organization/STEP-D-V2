@@ -4568,7 +4568,7 @@ export interface HarvestSourceRow {
   sourceChannelId: string;
   sourceChannelTitle: string;
   programId: string;
-  status: "active" | "paused" | "blocked";
+  status: "active" | "paused";
   approvedBy: string | null;
   dailyCap: number;
   minDurationSec: number;
@@ -4585,6 +4585,9 @@ const HARVEST_COLS = `id, tenant_id AS "tenantId", source_channel_id AS "sourceC
 function harvestRow(r: any): HarvestSourceRow {
   return {
     ...r,
+    // 모르는 상태값은 **active 로 읽는다.** 권리 게이트를 없애면서(0055) 옛 `blocked` 행을
+    // 전부 풀었지만, 마이그레이션 전에 들어온 행이 남아 있으면 영영 안 도는 수집원이 된다.
+    status: r.status === "paused" ? "paused" : "active",
     dailyCap: Number(r.dailyCap), minDurationSec: Number(r.minDurationSec),
     backfill: Boolean(r.backfill),
     lastRunAt: r.lastRunAt == null ? null : Number(r.lastRunAt),
@@ -4606,7 +4609,7 @@ export async function getHarvestSource(id: string): Promise<HarvestSourceRow | n
 
 export async function insertHarvestSource(r: {
   id: string; sourceChannelId: string; sourceChannelTitle: string; programId: string;
-  status: "active" | "blocked"; dailyCap: number; minDurationSec: number; backfill: boolean;
+  status: "active" | "paused"; dailyCap: number; minDurationSec: number; backfill: boolean;
 }): Promise<void> {
   await pool.query(
     `INSERT INTO harvest_source
@@ -4620,7 +4623,7 @@ export async function insertHarvestSource(r: {
 
 /** 부분 수정. `approvedBy` 는 승인할 때만 함께 들어온다 — 누가 열어 줬는지가 근거로 남는다. */
 export async function updateHarvestSource(id: string, patch: {
-  status?: "active" | "paused" | "blocked";
+  status?: "active" | "paused";
   approvedBy?: string | null;
   dailyCap?: number;
   minDurationSec?: number;

@@ -67,7 +67,12 @@ export const STUCK_AFTER_MS = 24 * 60 * 60 * 1000;
  */
 export const CHANNEL_VIDEO_LIMIT = 500;
 
-export type HarvestStatus = "active" | "paused" | "blocked";
+/**
+ * 수집원 상태. **`blocked`(권리 확인 대기)는 2026-09-04 에 없앴다** — 문을 어디에 두든
+ * 판단하는 사람이 곧 등록하는 사람이라, 막아 주는 것 없이 단계만 늘렸다(0055 주석).
+ * 옛 행은 마이그레이션이 전부 active 로 풀었고, 읽는 쪽도 모르는 값을 active 로 본다.
+ */
+export type HarvestStatus = "active" | "paused";
 
 export interface HarvestSource {
   id: string;
@@ -107,7 +112,7 @@ export const HARVEST_HOUR_KST = 2;
 
 /** 왜 안 집었는지 — 화면과 로그가 같은 어휘를 쓴다. */
 export type SkipCode =
-  | "paused" | "blocked"
+  | "paused"
   | "in_flight" | "daily_cap" | "no_plan" | "stocked"
   | "no_candidate" | "insufficient_credits";
 
@@ -130,7 +135,6 @@ export function stuckWarning(stuck: number): string | undefined {
 
 export const SKIP_REASON: Record<SkipCode, string> = {
   paused: "일시정지 상태입니다.",
-  blocked: "연결되지 않은 채널이라 운영자 승인이 필요합니다.",
   in_flight: "앞 영상이 아직 처리 중입니다.",
   daily_cap: "오늘 몫을 다 채웠습니다.",
   no_plan: "배포할 곳이 없습니다 — 자동배포 계획을 먼저 만드세요.",
@@ -211,8 +215,8 @@ export function isHarvestWindow(now: Date = new Date(), hour = HARVEST_HOUR_KST)
 export function pickNext(input: PickInput): HarvestVerdict {
   const { source } = input;
 
-  if (source.status === "paused") return { pick: null, code: "paused", reason: SKIP_REASON.paused };
-  if (source.status !== "active") return { pick: null, code: "blocked", reason: SKIP_REASON.blocked };
+  // 멈춤이 유일한 상태 게이트다 — 권리 확인(blocked)은 없앴다(0055).
+  if (source.status !== "active") return { pick: null, code: "paused", reason: SKIP_REASON.paused };
 
   // 멈춘 편은 **판정을 막지 않는다** — 막으면 죽은 회차 하나가 수집원을 영영 세운다
   // (STUCK_AFTER_MS 주석의 실사고). 대신 어떤 결론에도 이 경고를 함께 실어 보낸다.

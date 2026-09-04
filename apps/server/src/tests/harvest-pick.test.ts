@@ -101,23 +101,12 @@ describe("한 편만 집는다", () => {
     assert.match(v.reason, /하루 1편/);
   });
 
-  it("일시정지·미승인은 각각 다른 사유로 멈춘다", () => {
+  it("멈춘 수집원은 안 집는다 — 상태 게이트는 이제 이것 하나뿐이다", () => {
     const paused = pickNext({ source: source({ status: "paused" }), ...base });
-    const blocked = pickNext({ source: source({ status: "blocked" }), ...base });
     assert.equal(paused.pick, null);
-    assert.equal(blocked.pick, null);
     // `pick: null` 을 먼저 확인해야 타입이 좁혀진다 — 판정 결과는 둘 중 하나이고,
     // 그걸 코드로 강제하는 것이 이 유니온의 존재 이유다.
     if (paused.pick === null) assert.equal(paused.code, "paused");
-    if (blocked.pick === null) assert.equal(blocked.code, "blocked");
-  });
-
-  it("승인 안 된 채널은 **어떤 경우에도** 안 집는다 — 저작권 사고의 자리다", () => {
-    const v = pickNext({
-      source: source({ status: "blocked" }), ...base,
-      madeToday: 0, inFlight: 0, creditBalance: 999_999,
-    });
-    assert.equal(v.pick, null);
   });
 
   it("크레딧이 모자라면 안 집는다 — 분석을 돌리고 나서 알면 이미 늦다", () => {
@@ -241,6 +230,13 @@ describe("재고 게이트", () => {
   it("상한·정지가 재고보다 먼저다 — 싼 판정을 앞에 둔다", () => {
     const v = pickNext({ source: source({ status: "paused" }), ...base, stock: 0, dailyDemand: 3 });
     if (v.pick === null) assert.equal(v.code, "paused");
+  });
+
+  it("권리 확인 게이트는 없다 — 등록하면 바로 돈다(2026-09-04)", () => {
+    // 상태는 active·paused 둘뿐이다. 예전 `blocked` 는 마이그레이션 0055 가 전부 풀었고,
+    // db-pg 의 행 파서가 모르는 값을 active 로 읽어 옛 행도 멈추지 않는다.
+    const v = pickNext({ source: source(), ...base, stock: 0, dailyDemand: 3 });
+    assert.ok(v.pick, "등록만 해도 도는 것이 지금 계약이다");
   });
 });
 

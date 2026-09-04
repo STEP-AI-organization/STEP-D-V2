@@ -12574,9 +12574,9 @@ app.delete("/api/youtube/videos/:videoId", async (c) => {
 // 사람이 하는 일은 **채널 지정 한 번**이다. 그 뒤는 수확기(`channel.harvest`)가 회차를 만들고,
 // 자동배포 계획이 그걸 집어 배포한다. 여기 라우트는 그 "한 번" 을 받는 자리다.
 //
-// ⚠️ **권리 게이트가 이 문에 있다.** 연결된 채널이 아니면 `blocked` 로 들어가고, 운영자가
-//    승인해야 돈다. 남의 영상을 받아 재배포하는 것은 저작권 사고라, 실패 방향을
-//    "안 돌아감" 으로 잡는다.
+// ⚠️ **권리 확인 게이트는 2026-09-04 에 없앴다**(마이그레이션 0055). 등록한 채널은 전부
+//    바로 돈다 — 남의 채널을 넣으면 그 영상을 받아 숏폼으로 만들어 재배포한다.
+//    저작권 책임은 등록한 워크스페이스에 있다. 되돌리려면 그 마이그레이션 주석을 볼 것.
 
 /** 목록·예상치가 같이 쓰는 조회 — 화면 숫자와 실제 수확이 같은 기준을 보게 한다. */
 async function harvestView(
@@ -12765,8 +12765,10 @@ app.post("/api/harvest/sources", async (c) => {
   try {
     await insertHarvestSource({
       id, sourceChannelId: channelId, sourceChannelTitle: channelTitle, programId,
-      // **연결된 채널만 바로 돈다.** 나머지는 운영자 승인 대기.
-      status: owned ? "active" : "blocked",
+          // **항상 바로 돈다.** 권리 확인 게이트는 2026-09-04 에 없앴다(마이그레이션 0055 주석) —
+      // 문을 어디에 두든 판단하는 사람이 곧 등록하는 사람이라, 막아 주는 것 없이 단계만
+      // 늘렸다. 저작권 책임은 등록한 워크스페이스에 있다.
+      status: "active",
       dailyCap: clampCap(body.dailyCap),
       minDurationSec: clampMinDuration(body.minDurationSec),
       backfill: body.backfill !== false,
@@ -12866,36 +12868,19 @@ app.delete("/api/harvest/sources/:id", async (c) => {
 });
 
 /**
- * **권리 확인** — 연결하지 않은 채널을 이 워크스페이스에서 쓰겠다고 확정한다.
+ * 해지. **이미 만든 회차·영상은 남는다** — 지우면 크레딧을 쓴 결과물이 사라진다.
  *
- * ## 왜 어드민이 아니라 여기인가 (2026-09-04 사용자 결정)
- *
- * 처음엔 STEPAI 운영자(superadmin)만 열 수 있게 만들었다. "저작권 판단은 우리가 한다" 는
- * 생각이었는데, 실제로는 **우리가 그 답을 모른다** — 고객사가 그 채널과 어떤 계약을 맺었는지
- * 아는 것은 고객사다. 우리가 심사하는 척하면 심사는 형식이 되고, 그 사이 고객은 채널 하나
- * 추가할 때마다 사람을 기다린다. 그래서 문을 **쓰는 사람 쪽**으로 옮겼다.
- *
- * 대신 **기록은 그대로 남긴다.** 누가·언제 "이 채널을 쓸 권리가 있다" 고 확정했는지가
- * `approved_by` 와 감사 로그에 남는다 — 이 확인의 값어치는 그 기록이다.
- *
- * 아무나 못 한다: **owner·admin 만**(`requireManager`). 권리 확인은 회사를 대표하는 결정이라
- * 팀원이 혼자 눌러서는 안 된다.
+ * 같은 이유로 **배포 계획도 남긴다.** 이미 채택된 클립이 그 계획으로 나가는 중일 수 있고,
+ * 계획을 지우는 것은 자동배포 화면의 일이다. 대신 남는다는 사실을 응답으로 알린다 —
+ * 조용히 남으면 "해지했는데 왜 아직 올라가지" 가 된다.
  */
-app.post("/api/harvest/sources/:id/approve", async (c) => {
-  const actor = requireManager(c);
-  const id = c.req.param("id");
-  // 자기 워크스페이스 것만 보인다(RLS) — 남의 수집원은 여기서 애초에 조회되지 않는다.
-  const row = await getHarvestSource(id);
-  if (!row) return c.json({ error: "not_found" }, 404);
-  if (row.status !== "blocked") return c.json({ error: "not_pending", message: "승인 대기 상태가 아닙니다." }, 400);
-
-  await updateHarvestSource(id, { status: "active", approvedBy: actor.email });
-  await audit(actor, {
-    action: "harvest.approve",
-    targetTenant: row.tenantId,
-    detail: { sourceId: id, channelId: row.sourceChannelId, channelTitle: row.sourceChannelTitle },
-  }, clientIp(c));
-  return c.json({ source: await harvestView(await getHarvestSource(id)), approvedBy: actor.email });
+app.delete("/api/harvest/sources/:id", async (c) => {
+  const ok = await deleteHarvestSource(c.req.param("id"));
+  if (!ok) return c.json({ error: "not_found" }, 404);
+  return c.json({
+    ok: true,
+    notice: "새 영상은 더 가져오지 않습니다. 이미 만든 회차와 자동배포 계획은 그대로 남습니다 — 배포까지 멈추려면 자동 배포 화면에서 계획을 멈추세요.",
+  });
 });
 
 // ── 챗봇 (업무 도우미) ────────────────────────────────────────────────────────
