@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { Header } from "@/components/layout/header";
 import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import {
@@ -60,9 +61,9 @@ async function fileToDataUrl(
 }
 
 const inputCls =
-  "h-9 w-full rounded-md border border-border bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring";
+  "h-9 w-full rounded-md border border-[var(--color-border-subtle)] bg-[var(--color-bg-input)] px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring";
 const textareaCls =
-  "w-full rounded-md border border-border bg-background px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring";
+  "w-full rounded-md border border-[var(--color-border-subtle)] bg-[var(--color-bg-input)] px-3 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring";
 
 export default function ProgramDetailPage() {
   const params = useParams<{ id: string }>();
@@ -76,13 +77,13 @@ export default function ProgramDetailPage() {
   );
 
   if (loading && !program) {
-    return <div className="p-8 text-sm text-muted-foreground">불러오는 중…</div>;
+    return <div className="p-8 text-sm text-[var(--color-text-muted)]">불러오는 중…</div>;
   }
   if (!program) {
     return (
       <div className="p-8">
-        <div className="text-sm text-muted-foreground">프로그램을 찾을 수 없어요.</div>
-        <Link href="/programs" className="mt-2 inline-flex items-center gap-1 text-sm text-primary hover:underline">
+        <div className="text-sm text-[var(--color-text-muted)]">프로그램을 찾을 수 없어요.</div>
+        <Link href="/programs" className="mt-2 inline-flex items-center gap-1 text-sm text-[var(--color-bg-active)] hover:underline">
           <ArrowLeft className="size-4" /> 프로그램 목록
         </Link>
       </div>
@@ -459,12 +460,15 @@ function ProgramDetailInner({
   }
 
   return (
+    <>
+      <Header title="프로그램 설정" subtitle="포스터 · 출연자 · 썸네일 스타일 · 권리" />
+      <main className="flex-1 p-6 overflow-y-auto">
     <div className="mx-auto max-w-5xl space-y-6 pb-24">
       {/* 상단 액션 바 */}
-      <div className="sticky top-0 z-20 -mx-6 flex items-center gap-3 border-b border-border bg-background/95 px-6 py-3 backdrop-blur">
+      <div className="sticky top-0 z-20 -mx-6 flex items-center gap-3 border-b border-[var(--color-border-subtle)] bg-[var(--color-bg-card)]/95 px-6 py-3 backdrop-blur">
         <Link
           href={`/programs/${program.id}`}
-          className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
+          className="inline-flex items-center gap-1 text-sm text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"
         >
           <ArrowLeft className="size-4" /> 프로그램 홈
         </Link>
@@ -484,7 +488,7 @@ function ProgramDetailInner({
           variant="outline"
           onClick={runDelete}
           disabled={deleting || busy}
-          className="text-status-error hover:bg-status-error/10"
+          className="text-rose-600 dark:text-rose-400 hover:bg-status-error/10"
           title={episodeCount > 0 ? `이 프로그램과 회차 ${episodeCount}개(추천·클립·GCS 파일 포함) 완전 삭제` : "이 프로그램을 완전 삭제"}
         >
           {deleting ? <Loader2 className="animate-spin" /> : <Trash2 />}
@@ -511,23 +515,23 @@ function ProgramDetailInner({
 
       {/* 마지막 자동 채움 결과 · 근거 URL 노출 */}
       {lastAutofill && autofillResolved && (
-        <section className="rounded-lg border border-border bg-muted/20 px-4 py-3">
+        <section className="rounded-lg border border-[var(--color-border-subtle)] bg-muted/20 px-4 py-3">
           <div className="flex items-center justify-between">
-            <div className="text-xs font-semibold text-muted-foreground">
+            <div className="text-xs font-semibold text-[var(--color-text-muted)]">
               AI 자동 채움 결과 · 적용 {autofillApplied.length}개
               {autofillApplied.length === 0 && " (이미 채워진 필드는 덮어쓰지 않습니다)"}
               {lastAutofill.dropped.length > 0 && ` · 근거 없어 제외 ${lastAutofill.dropped.length}개`}
             </div>
             <button
               onClick={() => { setLastAutofill(null); setAutofillApplied([]); setAutofillResolved(false); }}
-              className="text-muted-foreground hover:text-foreground"
+              className="text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"
               title="닫기"
             >
               <X className="size-3.5" />
             </button>
           </div>
           {autofillApplied.length > 0 && (
-            <div className="mt-1.5 text-[11px] text-muted-foreground">
+            <div className="mt-1.5 text-[11px] text-[var(--color-text-muted)]">
               적용: {autofillApplied.join(" · ")}
             </div>
           )}
@@ -546,7 +550,7 @@ function ProgramDetailInner({
                       href={s.url}
                       target="_blank"
                       rel="noreferrer noopener"
-                      className="text-primary hover:underline"
+                      className="text-[var(--color-bg-active)] hover:underline"
                       title={s.url}
                     >
                       {s.title || s.url}
@@ -569,13 +573,13 @@ function ProgramDetailInner({
           />
           {/* 쇼츠 브랜딩 아이콘 — 자동 렌더 하단(프로그램명 위)에 원형으로 들어간다 */}
           <div>
-            <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">쇼츠 아이콘</div>
+            <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">쇼츠 아이콘</div>
             <div className="flex items-center gap-3">
-              <label className="group relative flex size-16 cursor-pointer items-center justify-center overflow-hidden rounded-full border border-border bg-muted transition-colors hover:border-primary/50">
+              <label className="group relative flex size-16 cursor-pointer items-center justify-center overflow-hidden rounded-full border border-[var(--color-border-subtle)] bg-[var(--color-bg-input)] transition-colors hover:border-primary/50">
                 {brandIconDataUrl ? (
                   <img src={brandIconDataUrl} alt="쇼츠 아이콘" className="size-full object-cover" />
                 ) : (
-                  <Camera className="size-5 text-muted-foreground" />
+                  <Camera className="size-5 text-[var(--color-text-muted)]" />
                 )}
                 <input
                   type="file"
@@ -588,11 +592,11 @@ function ProgramDetailInner({
                   }}
                 />
               </label>
-              <div className="text-[11px] text-muted-foreground">
+              <div className="text-[11px] text-[var(--color-text-muted)]">
                 자동 쇼츠 하단 브랜딩(원형)
                 {brandIconDataUrl && (
                   <button onClick={() => setBrandIconDataUrl("")}
-                    className="ml-2 text-status-error hover:underline">제거</button>
+                    className="ml-2 text-rose-600 dark:text-rose-400 hover:underline">제거</button>
                 )}
               </div>
             </div>
@@ -600,14 +604,14 @@ function ProgramDetailInner({
         </div>
         <div className="min-w-0 space-y-3">
           <div>
-            <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">제목</div>
+            <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">제목</div>
             <input
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               placeholder="예: 나는 SOLO"
               className={cn(inputCls, "h-12 text-xl font-semibold", titleError && "border-status-error focus-visible:ring-status-error")}
             />
-            {titleError && <div className="mt-1 text-[11px] text-status-error">제목은 비울 수 없습니다.</div>}
+            {titleError && <div className="mt-1 text-[11px] text-rose-600 dark:text-rose-400">제목은 비울 수 없습니다.</div>}
           </div>
           <div className="flex flex-wrap gap-2">
             <Badge variant="muted">{section}</Badge>
@@ -637,7 +641,7 @@ function ProgramDetailInner({
           {moods.length > 0 && (
             <div className="flex flex-wrap gap-1.5">
               {moods.map((m) => (
-                <span key={m} className="rounded-full border border-border bg-muted/40 px-2 py-0.5 text-[11px] text-muted-foreground">
+                <span key={m} className="rounded-full border border-[var(--color-border-subtle)] bg-[var(--color-bg-input)]/40 px-2 py-0.5 text-[11px] text-[var(--color-text-muted)]">
                   #{m}
                 </span>
               ))}
@@ -768,7 +772,7 @@ function ProgramDetailInner({
           </Field>
         </div>
         {naverCatErr && (
-          <p className="mt-2 text-[11px] text-[var(--sd-danger-strong,#e5484d)]">
+          <p className="mt-2 text-[11px] text-rose-600 dark:text-rose-400">
             네이버 카테고리 목록을 불러오지 못했습니다 ({naverCatErr}) — 저장해도 값이 비어
             장르에서 유도됩니다.
           </p>
@@ -792,7 +796,7 @@ function ProgramDetailInner({
             />
           </Field>
         </div>
-        <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground/70">
+        <p className="mt-2 text-[11px] leading-relaxed text-[var(--color-text-muted)]">
           만료일이 지나도 배포가 자동으로 막히지는 않습니다 — 여기 값은 경고 표시까지입니다.
         </p>
       </Card>
@@ -838,12 +842,12 @@ function ProgramDetailInner({
             {moods.map((m) => (
               <span
                 key={m}
-                className="inline-flex items-center gap-1 rounded-full border border-border bg-muted/40 px-2.5 py-0.5 text-xs"
+                className="inline-flex items-center gap-1 rounded-full border border-[var(--color-border-subtle)] bg-[var(--color-bg-input)]/40 px-2.5 py-0.5 text-xs"
               >
                 #{m}
                 <button
                   onClick={() => setMoods(moods.filter((x) => x !== m))}
-                  className="text-muted-foreground hover:text-status-warn"
+                  className="text-[var(--color-text-muted)] hover:text-status-warn"
                   title="삭제"
                 >
                   <X className="size-3" />
@@ -891,7 +895,7 @@ function ProgramDetailInner({
         </div>
 
         {cast.length === 0 ? (
-          <div className="mt-3 rounded-md border border-dashed border-border px-3 py-6 text-center text-xs text-muted-foreground">
+          <div className="mt-3 rounded-md border border-dashed border-[var(--color-border-subtle)] px-3 py-6 text-center text-xs text-[var(--color-text-muted)]">
             아직 등록된 출연자가 없어요. 위에 이름을 입력하고 Enter.
           </div>
         ) : (
@@ -920,8 +924,8 @@ function ProgramDetailInner({
         <div className="space-y-4">
           <div>
             <div className="mb-1.5">
-              <span className="text-xs font-semibold text-muted-foreground">제목 프롬프트</span>
-              <p className="mt-0.5 text-[11px] text-muted-foreground/70">
+              <span className="text-xs font-semibold text-[var(--color-text-muted)]">제목 프롬프트</span>
+              <p className="mt-0.5 text-[11px] text-[var(--color-text-muted)]">
                 쇼츠·클립 제목을 만들 때 이 프로그램에만 적용할 추가 지시.
                 예: 출연자 실명을 반드시 넣기 · 스포일러 금지
               </p>
@@ -936,8 +940,8 @@ function ProgramDetailInner({
           </div>
           <div>
             <div className="mb-1.5">
-              <span className="text-xs font-semibold text-muted-foreground">추천 프롬프트</span>
-              <p className="mt-0.5 text-[11px] text-muted-foreground/70">
+              <span className="text-xs font-semibold text-[var(--color-text-muted)]">추천 프롬프트</span>
+              <p className="mt-0.5 text-[11px] text-[var(--color-text-muted)]">
                 장면(BEAT)을 이어붙여 추천 구간을 만들 때 적용할 추가 지시.
                 예: 요리 완성 장면 우선 · 게스트 단독 구간 제외
               </p>
@@ -952,7 +956,7 @@ function ProgramDetailInner({
           </div>
         </div>
         {/* 거짓 즉시성 금지 — 저장해도 이미 분석된 회차에는 소급되지 않는다는 걸 명시 */}
-        <p className="mt-3 text-[11px] leading-relaxed text-muted-foreground/70">
+        <p className="mt-3 text-[11px] leading-relaxed text-[var(--color-text-muted)]">
           저장 후 <b>다음 분석부터</b> 적용됩니다 (이미 분석된 회차는 재분석 필요).
         </p>
       </Card>
@@ -962,7 +966,7 @@ function ProgramDetailInner({
 
 
       {/* 하단 저장 바 (스크롤 편의) */}
-      <div className="flex items-center justify-end gap-2 border-t border-border pt-4">
+      <div className="flex items-center justify-end gap-2 border-t border-[var(--color-border-subtle)] pt-4">
         <Button variant="outline" size="sm" onClick={onDone} disabled={busy}>
           닫기
         </Button>
@@ -972,6 +976,8 @@ function ProgramDetailInner({
         </Button>
       </div>
     </div>
+      </main>
+    </>
   );
 }
 
@@ -986,10 +992,10 @@ function useHydratedRef(programId: string) {
 
 function Card({ title, hint, children }: { title: string; hint?: string; children: React.ReactNode }) {
   return (
-    <section className="rounded-xl border border-border bg-card p-5">
+    <section className="rounded-xl border border-[var(--color-border-subtle)] bg-[var(--color-bg-card)] p-5">
       <div className="mb-4">
         <h3 className="text-sm font-semibold">{title}</h3>
-        {hint && <p className="mt-0.5 text-[11px] text-muted-foreground">{hint}</p>}
+        {hint && <p className="mt-0.5 text-[11px] text-[var(--color-text-muted)]">{hint}</p>}
       </div>
       {children}
     </section>
@@ -1000,8 +1006,8 @@ function Field({ label, hint, children }: { label: string; hint?: string; childr
   return (
     <div>
       <div className="mb-1.5 flex items-baseline gap-2">
-        <span className="text-xs font-semibold text-muted-foreground">{label}</span>
-        {hint && <span className="text-[11px] text-muted-foreground/70">{hint}</span>}
+        <span className="text-xs font-semibold text-[var(--color-text-muted)]">{label}</span>
+        {hint && <span className="text-[11px] text-[var(--color-text-muted)]">{hint}</span>}
       </div>
       {children}
     </div>
@@ -1021,8 +1027,8 @@ function PosterUpload({
     <div className="space-y-2">
       <label
         className={cn(
-          "group relative flex aspect-[2/3] w-full cursor-pointer items-center justify-center overflow-hidden rounded-xl border border-border bg-linear-to-br from-primary/20 to-primary/5 transition-colors hover:border-primary/50",
-          !value && "bg-muted",
+          "group relative flex aspect-[2/3] w-full cursor-pointer items-center justify-center overflow-hidden rounded-xl border border-[var(--color-border-subtle)] bg-linear-to-br from-primary/20 to-primary/5 transition-colors hover:border-primary/50",
+          !value && "bg-[var(--color-bg-input)]",
         )}
       >
         {value ? (
@@ -1036,9 +1042,9 @@ function PosterUpload({
           </>
         ) : (
           <div className="flex flex-col items-center gap-2 text-center">
-            <Camera className="size-8 text-muted-foreground" />
-            <div className="text-xs text-muted-foreground">
-              <div className="font-semibold text-foreground">포스터 업로드</div>
+            <Camera className="size-8 text-[var(--color-text-muted)]" />
+            <div className="text-xs text-[var(--color-text-muted)]">
+              <div className="font-semibold text-[var(--color-text-primary)]">포스터 업로드</div>
               <div className="mt-0.5 text-[10px]">2:3 비율 · 최대 1MB</div>
             </div>
           </div>
@@ -1058,7 +1064,7 @@ function PosterUpload({
         <button
           type="button"
           onClick={onClear}
-          className="w-full text-[11px] text-muted-foreground hover:text-status-warn"
+          className="w-full text-[11px] text-[var(--color-text-muted)] hover:text-status-warn"
         >
           포스터 제거
         </button>
@@ -1081,12 +1087,12 @@ function CastCard({
   onRemove: () => void;
 }) {
   return (
-    <div className="flex flex-col items-center gap-2 rounded-xl border border-border bg-muted/20 p-3">
-      <label className="group relative flex aspect-[3/4] w-24 cursor-pointer items-center justify-center overflow-hidden rounded-md border border-border bg-muted transition-colors hover:border-primary/50">
+    <div className="flex flex-col items-center gap-2 rounded-xl border border-[var(--color-border-subtle)] bg-muted/20 p-3">
+      <label className="group relative flex aspect-[3/4] w-24 cursor-pointer items-center justify-center overflow-hidden rounded-md border border-[var(--color-border-subtle)] bg-[var(--color-bg-input)] transition-colors hover:border-primary/50">
         {photoDataUrl ? (
           <img src={photoDataUrl} alt={name} className="size-full object-cover" />
         ) : (
-          <UserRound className="size-10 text-muted-foreground" />
+          <UserRound className="size-10 text-[var(--color-text-muted)]" />
         )}
         <div className="absolute inset-0 flex items-center justify-center bg-black/50 opacity-0 transition-opacity group-hover:opacity-100">
           <Camera className="size-5 text-white" />
@@ -1104,13 +1110,13 @@ function CastCard({
       </label>
       <div className="text-center">
         <div className="text-sm font-semibold">{name}</div>
-        <div className="mt-0.5 text-[10px] text-muted-foreground">최대 256KB</div>
+        <div className="mt-0.5 text-[10px] text-[var(--color-text-muted)]">최대 256KB</div>
       </div>
       <div className="flex items-center gap-1.5">
         {photoDataUrl && (
           <button
             onClick={onClearPhoto}
-            className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+            className="rounded p-1 text-[var(--color-text-muted)] hover:bg-muted hover:text-[var(--color-text-primary)]"
             title="사진 제거"
           >
             <X className="size-3.5" />
@@ -1118,7 +1124,7 @@ function CastCard({
         )}
         <button
           onClick={onRemove}
-          className="rounded p-1 text-muted-foreground hover:bg-muted hover:text-status-warn"
+          className="rounded p-1 text-[var(--color-text-muted)] hover:bg-muted hover:text-status-warn"
           title="출연자 삭제"
         >
           <Trash2 className="size-3.5" />
@@ -1166,15 +1172,15 @@ function AutofillQuestionsDialog({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onCancel} aria-hidden />
-      <div className="relative flex max-h-[92vh] w-full max-w-xl flex-col rounded-2xl border border-input bg-popover shadow-2xl">
-        <div className="flex items-center justify-between border-b border-border px-4 py-3">
+      <div className="relative flex max-h-[92vh] w-full max-w-xl flex-col rounded-2xl border border-[var(--color-border-subtle)] bg-popover shadow-2xl">
+        <div className="flex items-center justify-between border-b border-[var(--color-border-subtle)] px-4 py-3">
           <div>
             <h2 className="text-sm font-semibold">AI 자동 채움 · 확인 필요</h2>
-            <p className="mt-0.5 text-[11px] text-muted-foreground">
+            <p className="mt-0.5 text-[11px] text-[var(--color-text-muted)]">
               {title} · 확인된 필드 {Object.keys(result.draft).length}개 · 확인 필요 {result.questions.length}개
             </p>
           </div>
-          <button onClick={onCancel} className="text-muted-foreground hover:text-foreground">
+          <button onClick={onCancel} className="text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]">
             <X className="size-4" />
           </button>
         </div>
@@ -1183,7 +1189,7 @@ function AutofillQuestionsDialog({
           {result.questions.map((q) => {
             const s = state[q.field] || { picked: "__skip__", otherText: "" };
             return (
-              <div key={q.field} className="space-y-2 rounded-md border border-border bg-muted/20 p-3">
+              <div key={q.field} className="space-y-2 rounded-md border border-[var(--color-border-subtle)] bg-muted/20 p-3">
                 <div className="text-sm font-semibold">{q.question}</div>
                 <div className="space-y-1.5">
                   {q.suggestions.map((sg) => (
@@ -1219,7 +1225,7 @@ function AutofillQuestionsDialog({
                       </div>
                     </label>
                   )}
-                  <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <label className="flex items-center gap-2 text-xs text-[var(--color-text-muted)]">
                     <input
                       type="radio"
                       name={`ans-${q.field}`}
@@ -1233,14 +1239,14 @@ function AutofillQuestionsDialog({
             );
           })}
           {result.sources.length > 0 && (
-            <div className="rounded-md border border-border bg-muted/10 p-3">
-              <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+            <div className="rounded-md border border-[var(--color-border-subtle)] bg-muted/10 p-3">
+              <div className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-[var(--color-text-muted)]">
                 검색 근거 · {result.sources.length}개
               </div>
               <ul className="space-y-0.5">
                 {result.sources.map((s, i) => (
                   <li key={i} className="text-[11px]">
-                    <a href={s.url} target="_blank" rel="noreferrer noopener" className="text-primary hover:underline" title={s.url}>
+                    <a href={s.url} target="_blank" rel="noreferrer noopener" className="text-[var(--color-bg-active)] hover:underline" title={s.url}>
                       {s.title || s.url}
                     </a>
                   </li>
@@ -1250,7 +1256,7 @@ function AutofillQuestionsDialog({
           )}
         </div>
 
-        <div className="flex items-center justify-end gap-2 border-t border-border px-4 py-3">
+        <div className="flex items-center justify-end gap-2 border-t border-[var(--color-border-subtle)] px-4 py-3">
           <Button variant="outline" size="sm" onClick={onCancel}>취소</Button>
           <Button size="sm" onClick={submit}>답변 반영</Button>
         </div>
@@ -1357,26 +1363,26 @@ function ThumbnailEngineCard({
     >
       <div className="grid gap-5">
         <div>
-          <div className="mb-2 text-xs font-medium text-muted-foreground">채널 스타일</div>
+          <div className="mb-2 text-xs font-medium text-[var(--color-text-muted)]">채널 스타일</div>
           {loading ? (
-            <div className="text-sm text-muted-foreground">불러오는 중…</div>
+            <div className="text-sm text-[var(--color-text-muted)]">불러오는 중…</div>
           ) : style ? (
-            <div className="rounded-lg border border-border bg-muted/20 p-3 text-sm">
+            <div className="rounded-lg border border-[var(--color-border-subtle)] bg-muted/20 p-3 text-sm">
               <div className="mb-1 flex items-center gap-2">
                 <Badge>학습됨</Badge>
-                <span className="text-xs text-muted-foreground">
+                <span className="text-xs text-[var(--color-text-muted)]">
                   {String(agg.sampleSize ?? "?")}장 분석
                 </span>
               </div>
-              <div className="text-xs text-muted-foreground">
+              <div className="text-xs text-[var(--color-text-muted)]">
                 자막 {first("captionPosition")} {first("captionLines")}줄 ·{" "}
                 {first("borderDesc") || "테두리 없음"} · 로고 {first("logoPosition")} ·{" "}
                 {first("tone")}
               </div>
-              <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">{style.prompt}</p>
+              <p className="mt-2 text-[11px] leading-relaxed text-[var(--color-text-muted)]">{style.prompt}</p>
               {refNames.length > 0 && (
                 <div className="mt-3">
-                  <div className="mb-1.5 text-[11px] font-medium text-muted-foreground">
+                  <div className="mb-1.5 text-[11px] font-medium text-[var(--color-text-muted)]">
                     대표 썸네일 — 이 채널의 전형으로 뽑힌 {refNames.length}장
                   </div>
                   <div className="flex flex-wrap gap-2">
@@ -1385,7 +1391,7 @@ function ThumbnailEngineCard({
                         key={n}
                         src={thumbnailStyleImageUrl(programId, n)}
                         alt={n}
-                        className="aspect-video w-44 rounded-md border border-border object-cover"
+                        className="aspect-video w-44 rounded-md border border-[var(--color-border-subtle)] object-cover"
                       />
                     ))}
                   </div>
@@ -1393,7 +1399,7 @@ function ThumbnailEngineCard({
               )}
               {restThumbs.length > 0 && (
                 <div className="mt-3">
-                  <div className="mb-1.5 text-[11px] font-medium text-muted-foreground">
+                  <div className="mb-1.5 text-[11px] font-medium text-[var(--color-text-muted)]">
                     학습에 쓴 수집 썸네일 {(style.thumbs ?? []).length}장
                     {restThumbs.length > 12 ? " · 12장만 표시" : ""}
                   </div>
@@ -1403,7 +1409,7 @@ function ThumbnailEngineCard({
                         key={n}
                         src={thumbnailStyleImageUrl(programId, n)}
                         alt={n}
-                        className="aspect-video w-full rounded border border-border object-cover"
+                        className="aspect-video w-full rounded border border-[var(--color-border-subtle)] object-cover"
                       />
                     ))}
                   </div>
@@ -1411,7 +1417,7 @@ function ThumbnailEngineCard({
               )}
             </div>
           ) : (
-            <div className="text-sm text-muted-foreground">아직 학습하지 않았습니다.</div>
+            <div className="text-sm text-[var(--color-text-muted)]">아직 학습하지 않았습니다.</div>
           )}
 
           <div className="mt-3 flex gap-2">
@@ -1425,13 +1431,13 @@ function ThumbnailEngineCard({
               {training ? "요청 중…" : style ? "다시 학습" : "스타일 학습"}
             </Button>
           </div>
-          <div className="mt-1 text-[11px] text-muted-foreground">
+          <div className="mt-1 text-[11px] text-[var(--color-text-muted)]">
             재생목록 URL을 권합니다. 채널 전체는 다른 프로그램이 섞여 톤이 뭉개집니다.
           </div>
         </div>
 
         <div>
-          <div className="mb-2 text-xs font-medium text-muted-foreground">
+          <div className="mb-2 text-xs font-medium text-[var(--color-text-muted)]">
             출연자 사진 · 썸네일에 들어갈 인물
           </div>
           <div className="mb-2 text-[11px] leading-relaxed text-muted-foreground/80">
@@ -1440,19 +1446,19 @@ function ThumbnailEngineCard({
             {programCast.length > 0 && ` (출연진 명단 ${programCast.length}명: ${programCast.join(", ")})`}
           </div>
           {cast.length === 0 ? (
-            <div className="text-sm text-muted-foreground">
+            <div className="text-sm text-[var(--color-text-muted)]">
               썸네일용으로 등록된 사진이 없습니다. 등록하지 않으면 썸네일 생성이 중단됩니다.
             </div>
           ) : (
             <div className="flex flex-wrap gap-2">
               {cast.map((c) => (
                 <span key={c.name}
-                  className="inline-flex items-center gap-2 rounded-full border border-border px-3 py-1 text-xs">
+                  className="inline-flex items-center gap-2 rounded-full border border-[var(--color-border-subtle)] px-3 py-1 text-xs">
                   {c.name}
-                  <span className="text-muted-foreground">{c.photos}장</span>
+                  <span className="text-[var(--color-text-muted)]">{c.photos}장</span>
                   <button
                     onClick={() => void onDeleteCast(c.name)}
-                    className="text-muted-foreground hover:text-status-error"
+                    className="text-[var(--color-text-muted)] hover:text-status-error"
                     aria-label={`${c.name} 삭제`}
                   >×</button>
                 </span>
@@ -1468,7 +1474,7 @@ function ThumbnailEngineCard({
               className={cn(inputCls, "flex-1")}
             />
             <label className={cn(
-              "inline-flex cursor-pointer items-center rounded-md border border-border px-3 py-2 text-sm",
+              "inline-flex cursor-pointer items-center rounded-md border border-[var(--color-border-subtle)] px-3 py-2 text-sm",
               !castName.trim() && "pointer-events-none opacity-70",
             )}>
               사진 추가
@@ -1484,7 +1490,7 @@ function ThumbnailEngineCard({
               />
             </label>
           </div>
-          <div className="mt-1 text-[11px] text-muted-foreground">
+          <div className="mt-1 text-[11px] text-[var(--color-text-muted)]">
             1인당 1~3장 · 얼굴이 크게 나온 사진. 이름은 폴더명이자 매칭 키입니다.
           </div>
         </div>

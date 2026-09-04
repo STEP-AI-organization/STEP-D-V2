@@ -53,6 +53,11 @@ const MIGRATED: string[] = [
   "/credits",             // 2026-09-03 · W5
   "/publish-channels",    // 2026-09-03 · W5
   "/automation",          // 2026-09-03 · W5
+  "/programs",            // 2026-09-04 · 목록·상세·설정·하이라이트 전부
+  "/episodes",            // 2026-09-04 · 회차 상세
+  "/channel-analytics",   // 2026-09-04 · 원본이 빈 껍데기 — 우리 화면을 같은 언어로만 맞췄다
+  "/clips",               // 2026-09-04 · 이동 안내(원본 없음)
+  "/analytics",           // 2026-09-04 · 이동 안내(원본 없음)
 ];
 
 /**
@@ -64,8 +69,8 @@ const MIGRATED: string[] = [
  * 하위까지 다 옮기면 여기서 빼고 `MIGRATED` 로 올린다.
  */
 const MIGRATED_EXACT: (string | RegExp)[] = [
-  "/programs",              // 2026-09-03 · W5 (목록)
-  /^\/programs\/[^/]+$/,     // 2026-09-04 · W5 (상세 — settings·highlights 는 제외)
+  // 2026-09-04: `/programs` 는 목록·상세·설정·하이라이트가 전부 이식돼 `MIGRATED` 로 올라갔다.
+  // 하위 일부만 남았을 때 쓰는 자리다 — 지금은 비어 있고, 그런 상황이 오면 여기 넣는다.
 ];
 
 export function LegacyFrame({ children }: { children: React.ReactNode }) {

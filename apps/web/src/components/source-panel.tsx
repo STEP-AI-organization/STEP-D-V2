@@ -2,7 +2,6 @@
 
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { FileVideo, Loader2 } from "lucide-react";
-import { Card } from "@/components/ui/card";
 import { getStreamUrl } from "@/lib/data/api";
 import { useAppData } from "@/lib/data/store";
 import { useMediaAnalysisPoll } from "@/lib/data/use-media-analysis";
@@ -69,6 +68,14 @@ export function SourcePanel({ episodeId }: { episodeId: string }) {
 
   const durationSec = master?.durationSec ?? 0;
 
+  /** 현재 시각에 걸리는 자막 한 줄 — 분석 JSON 은 이미 위에서 받아 둔 것을 쓴다(추가 요청 0). */
+  const caption = useMemo(() => {
+    const segs = analysis?.data?.transcript;
+    if (!segs?.length) return null;
+    const hit = segs.find((x) => currentTime >= x.start && currentTime < (x.end ?? x.start + 4));
+    return hit?.text?.trim() || null;
+  }, [analysis, currentTime]);
+
   // Recommendations are minted 1:1 from the analysis shorts (server recFromShort), so drawing
   // both would double every segment. Prefer the recs — they carry the real score fields —
   // and fall back to the raw shorts only before the board has been wired up.
@@ -127,98 +134,121 @@ export function SourcePanel({ episodeId }: { episodeId: string }) {
 
     const lanes: TimelineLane[] = [];
     if (shortsBlocks.length)
-      lanes.push({ key: "shorts", label: "쇼츠 후보", color: "#8b7cf6", blocks: shortsBlocks });
+      // 색은 원본 트랙과 같게 — 쇼츠 후보 indigo-500, 분석 구간 blue-500(원본 D:598·623).
+      lanes.push({ key: "shorts", label: "쇼츠 후보", color: "#6366f1", blocks: shortsBlocks });
     if (pplBlocks.length)
       lanes.push({ key: "ppl", label: "PPL·브랜드", color: "#f5a524", blocks: pplBlocks });
     if (sceneBlocks.length)
-      lanes.push({ key: "analysis", label: "분석 구간", color: "#5e9bff", blocks: sceneBlocks });
+      lanes.push({ key: "analysis", label: "분석 구간", color: "#3b82f6", blocks: sceneBlocks });
     return lanes;
   }, [allMarkers, analysis?.data?.scenes, analysis?.data?.ppl?.detections]);
 
   if (!master) {
     return (
-      <Card className="flex h-64 flex-col items-center justify-center gap-3">
-        <FileVideo className="size-10 text-muted-foreground" />
-        <p className="text-sm text-muted-foreground">업로드된 영상이 없습니다</p>
-      </Card>
+      <div className="bg-[var(--color-bg-card)] border-none shadow-md shadow-slate-900/5 dark:shadow-none rounded-2xl h-64 flex flex-col items-center justify-center gap-3">
+        <FileVideo className="w-10 h-10 text-[var(--color-text-muted)]" />
+        <p className="text-xs text-[var(--color-text-muted)]">업로드된 영상이 없습니다</p>
+      </div>
     );
   }
 
   return (
-    <div className="space-y-3">
-      {/* Video player */}
-      <Card className="overflow-hidden p-0">
-        <div className="flex items-center gap-2 border-b border-border px-4 py-2.5 text-sm font-semibold">
-          <FileVideo className="size-4" /> {master.filename}
+    <>
+      {/* Full-width Compact Video Player Container matching AI Timeline width
+          (원본 episodes/e_1293d2f1/page.tsx D:485–533) */}
+      <div className="w-full space-y-2.5">
+        <div className="w-full bg-black rounded-2xl overflow-hidden relative border border-slate-200/80 dark:border-slate-800 shadow-md">
+          {/* Player Area with Letterboxing support */}
+          <div className="relative w-full h-[400px] bg-black flex items-center justify-center">
+            {videoSrc ? (
+              <video
+                ref={videoRef}
+                key={videoSrc}
+                src={videoSrc}
+                controls
+                playsInline
+                onTimeUpdate={onTimeUpdate}
+                className="max-w-full max-h-full object-contain"
+              >
+                <track kind="captions" />
+              </video>
+            ) : (
+              /* 못 불러오면 검은 사각형만 남기지 않는다 — 왜 안 나오는지 적는다. */
+              <div className="px-6 py-10 text-center text-xs text-slate-400">
+                {videoError ?? "원본을 불러오는 중…"}
+              </div>
+            )}
+
+            {/* Subtitle Overlay (Bottom Center of Video) — 원본은 문자열 리터럴이다.
+                진짜 자막은 이미 받아 둔 분석 JSON 에 있으니 현재 시각에 걸리는 것만 그린다. */}
+            {caption && (
+              <div className="absolute bottom-12 left-1/2 -translate-x-1/2 bg-black/85 px-4 py-1.5 rounded-xl text-white text-xs font-medium border border-white/10 pointer-events-none z-10 shadow-lg">
+                {caption}
+              </div>
+            )}
+          </div>
         </div>
-        <div className="bg-black">
-          {videoSrc ? (
-            <video
-              ref={videoRef}
-              key={videoSrc}
-              src={videoSrc}
-              controls
-              playsInline
-              onTimeUpdate={onTimeUpdate}
-              className="mx-auto max-h-[50vh] w-full object-contain"
-            />
-          ) : (
-            <div className="grid min-h-40 place-items-center px-6 py-10 text-center text-xs text-muted-foreground">
-              {videoError ?? "원본을 불러오는 중…"}
-            </div>
-          )}
+
+        {/* Video Metadata & File Name Bar (Positioned below the video) */}
+        <div className="flex items-center gap-6 px-2 text-[12px] text-[var(--color-text-muted)] font-medium flex-wrap">
+          <div className="flex items-center gap-1.5 font-bold text-[var(--color-text-primary)] min-w-0">
+            <FileVideo className="w-4 h-4 text-[var(--color-bg-active)] shrink-0" />
+            <span className="truncate">{master.filename}</span>
+          </div>
+          <span className="opacity-30">|</span>
+          <div>해상도 <strong className="text-[var(--color-text-primary)]">{master.width}×{master.height}</strong></div>
+          <div>길이 <strong className="text-[var(--color-text-primary)]">{formatTimecode(durationSec)}</strong></div>
+          <div>코덱 <strong className="text-[var(--color-text-primary)]">{master.codec || "—"}</strong></div>
+          <div>오디오 <strong className="text-[var(--color-text-primary)]">{master.hasAudio ? "있음" : "없음"}</strong></div>
+          <div>용량 <strong className="text-[var(--color-text-primary)]">{(master.size / 1024 / 1024).toFixed(1)}MB</strong></div>
         </div>
-        {/* Video metadata */}
-        <div className="flex flex-wrap gap-x-6 gap-y-1 px-4 py-2 text-xs text-muted-foreground">
-          <span>해상도 <span className="tabular-nums text-foreground">{master.width}×{master.height}</span></span>
-          <span>길이 <span className="tabular-nums text-foreground">{formatTimecode(durationSec)}</span></span>
-          <span>코덱 <span className="text-foreground">{master.codec || "—"}</span></span>
-          <span>오디오 <span className="text-foreground">{master.hasAudio ? "있음" : "없음"}</span></span>
-          <span>용량 <span className="tabular-nums text-foreground">{(master.size / 1024 / 1024).toFixed(1)}MB</span></span>
-        </div>
-      </Card>
+      </div>
 
       {/* Analysis still loading — the player above stays usable meanwhile. */}
       {loading && !analysis && (
-        <Card className="flex items-center justify-center gap-2 py-3 text-xs text-muted-foreground">
-          <Loader2 className="size-3.5 animate-spin" /> 분석 로딩 중…
-        </Card>
-      )}
-
-      {/* Multi-lane highlight timeline (쇼츠 / PPL / 분석) — visual layer; needs a
-          duration to scale the tracks to. 검출이 하나도 없으면 아예 그리지 않는다. */}
-      {durationSec > 0 && timelineLanes.length > 0 && (
-        <ReviewTimeline
-          durationSec={durationSec}
-          currentTime={currentTime}
-          onSeek={seekTo}
-          lanes={timelineLanes}
-        />
-      )}
-
-      {/* Quick stats — Vision 점수 칩은 뺐다: 현재 파이프라인(run_scenes)은 vision_score 를
-          산출하지 않아 항상 "—" 였다. 근거 없는 지표 자리를 남기지 않는다. */}
-      {analysis?.data && (
-        <div className="grid grid-cols-3 gap-2 text-xs">
-          <StatChip label="쇼츠 추천" value={(analysis.data.shorts ?? []).length} tone="warn" />
-          <StatChip label="장면" value={(analysis.data.scenes ?? []).length} tone="muted" />
-          <StatChip label="자막" value={(analysis.data.transcript ?? []).length} tone="muted" />
+        <div className="flex items-center justify-center gap-2 py-3 text-xs text-[var(--color-text-muted)]">
+          <Loader2 className="w-3.5 h-3.5 animate-spin" /> 분석 로딩 중…
         </div>
       )}
-    </div>
+
+      {/* AI 타임라인 · 하이라이트 (No outer BG, No shadow, Full Width) — 시각 레이어라
+          길이가 있어야 트랙을 그린다. 검출이 하나도 없으면 아예 그리지 않는다. */}
+      {durationSec > 0 && timelineLanes.length > 0 && (
+        <div className="w-full space-y-3">
+          <ReviewTimeline
+            durationSec={durationSec}
+            currentTime={currentTime}
+            onSeek={seekTo}
+            lanes={timelineLanes}
+          />
+        </div>
+      )}
+
+      {/* Horizontal Dividing Line Below AI Timeline */}
+      <div className="border-b border-slate-200 dark:border-slate-800/80 my-5" />
+
+      {/* Single Background Container with Vertical Divider Lines for 쇼츠 추천 / 장면 / 자막.
+          Vision 점수 칩은 뺐다: 현재 파이프라인(run_scenes)은 vision_score 를 산출하지 않아
+          항상 "—" 였다. 근거 없는 지표 자리를 남기지 않는다. */}
+      {analysis?.data && (
+        <div className="bg-[var(--color-bg-card)] border border-slate-200/70 dark:border-slate-800 shadow-md shadow-slate-900/5 dark:shadow-none rounded-2xl p-4 grid grid-cols-3 divide-x divide-slate-200 dark:divide-slate-800">
+          <CountCell label="쇼츠 추천" value={(analysis.data.shorts ?? []).length} accent />
+          <CountCell label="장면" value={(analysis.data.scenes ?? []).length} />
+          <CountCell label="자막" value={(analysis.data.transcript ?? []).length} />
+        </div>
+      )}
+    </>
   );
 }
 
-function StatChip({ label, value, tone }: { label: string; value: number | string; tone: "done" | "warn" | "muted" }) {
-  const colorMap = {
-    done: "text-status-done",
-    warn: "text-status-warn",
-    muted: "text-muted-foreground",
-  };
+/** 원본 3분할 개수 셀 (D:658–675). 쇼츠 추천만 파란 숫자다. */
+function CountCell({ label, value, accent }: { label: string; value: number; accent?: boolean }) {
   return (
-    <Card className="p-2 text-center">
-      <div className={`text-base font-bold ${colorMap[tone]}`}>{value}</div>
-      <div className="text-[10px] text-muted-foreground">{label}</div>
-    </Card>
+    <div className="flex items-center justify-between px-6 py-1">
+      <span className="font-bold text-sm text-slate-700 dark:text-slate-300">{label}</span>
+      <span className={`text-xl font-bold ${accent ? "text-[var(--color-bg-active)]" : "text-[var(--color-text-primary)]"}`}>
+        {value}
+      </span>
+    </div>
   );
 }

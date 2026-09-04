@@ -97,39 +97,34 @@ export function DerivativesPanel({
 
   return (
     <div className="flex h-full flex-col">
-      {/* Tab bar — Review OS underline tabs */}
-      <div className="mb-4 flex gap-1 border-b border-border">
-        {TABS.map((t) => {
-          const Icon = t.icon;
-          const active = tab === t.key;
-          const count =
-            t.key === "recommend"
-              ? shorts.length
-              : t.key === "clips"
-                ? clips.length
-                : undefined;
-
-          return (
-            <button
-              key={t.key}
-              onClick={() => setTab(t.key)}
-              className={cn(
-                "-mb-px flex items-center gap-1.5 border-b-2 px-3 py-2.5 text-[13px] font-semibold transition-colors",
-                active
-                  ? "border-brand text-foreground"
-                  : "border-transparent text-muted-foreground hover:text-foreground",
-              )}
-            >
-              <Icon className="size-3.5" />
-              {t.label}
-              {typeof count === "number" && count > 0 && (
-                <span className="ml-0.5 rounded-md bg-brand/15 px-1.5 py-0.5 text-[10px] font-bold tabular-nums text-brand">
-                  {count}
-                </span>
-              )}
-            </button>
-          );
-        })}
+      {/* STEP D Tab Navigation Bar (Pill Capsule Tab Style, Center Aligned, No Stroke, No Shadow)
+          — 원본 episodes/e_1293d2f1/page.tsx D:679–704. 원본 탭 라벨은 `추천 N`·`클립 N` 처럼
+          개수를 라벨 안에 넣는다(별도 배지 없음). */}
+      <div className="mt-8 mb-4 flex justify-center select-none">
+        <div className="bg-slate-200 dark:bg-[var(--color-bg-capsule)] p-1 rounded-full shadow-none border-none inline-flex items-center gap-1 text-[14px]">
+          {TABS.map((t) => {
+            const active = tab === t.key;
+            const count =
+              t.key === "recommend"
+                ? shorts.length
+                : t.key === "clips"
+                  ? clips.length
+                  : undefined;
+            return (
+              <button
+                key={t.key}
+                onClick={() => setTab(t.key)}
+                className={`h-9 px-5 rounded-full text-[14px] font-bold transition-all cursor-pointer flex items-center justify-center ${
+                  active
+                    ? "bg-[var(--color-bg-active)] text-white font-bold shadow-none border-none"
+                    : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white font-medium border-none"
+                }`}
+              >
+                <span>{typeof count === "number" && count > 0 ? `${t.label} ${count}` : t.label}</span>
+              </button>
+            );
+          })}
+        </div>
       </div>
 
       {/* Panel content */}
@@ -184,7 +179,7 @@ function RecommendTab({
     return <EmptyState icon={Sparkles} compact title="분석할 영상이 없어요" />;
   }
   if (loading) {
-    return <Card className="p-6 text-center text-sm text-muted-foreground">추천 정보를 불러오는 중…</Card>;
+    return <Card className="p-6 text-center text-sm text-[var(--color-text-muted)]">추천 정보를 불러오는 중…</Card>;
   }
   if (shorts.length === 0) {
     return (
@@ -221,8 +216,8 @@ function RecommendTab({
         <div key={g.key} className="space-y-2">
           <div className="flex items-baseline gap-2 border-b border-border/60 pb-1">
             <h3 className="text-base font-semibold">{g.label}</h3>
-            <span className="text-xs text-muted-foreground">{g.badge}</span>
-            <span className="ml-auto text-xs text-muted-foreground">{g.items.length}건</span>
+            <span className="text-xs text-[var(--color-text-muted)]">{g.badge}</span>
+            <span className="ml-auto text-xs text-[var(--color-text-muted)]">{g.items.length}건</span>
           </div>
           <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
             {g.items.map((s, i) => (
@@ -308,7 +303,7 @@ function ClipsTab({
                     </div>
                   </button>
                 ) : (
-                  <div className="flex aspect-video w-full items-center justify-center text-muted-foreground">
+                  <div className="flex aspect-video w-full items-center justify-center text-[var(--color-text-muted)]">
                     <Clapperboard className="size-6" />
                   </div>
                 )}
@@ -319,7 +314,7 @@ function ClipsTab({
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">
                     <div className="line-clamp-2 text-[13px] font-semibold leading-snug">{clip.title}</div>
-                    <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[10.5px] text-muted-foreground">
+                    <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[10.5px] text-[var(--color-text-muted)]">
                       <Badge>{CLIP_TYPES[clip.clipType]}</Badge>
                       <span>{ASPECT_RATIOS[clip.aspectRatio]}</span>
                       <span>· {formatDuration(clip.durationSec)}</span>
@@ -347,7 +342,7 @@ function ClipsTab({
                 <div className="mt-auto flex items-center gap-2 pt-1">
                   <Link
                     href={`/editor/${clip.id}`}
-                    className="text-[11.5px] font-semibold text-brand underline-offset-2 hover:underline"
+                    className="text-[11.5px] font-semibold text-[var(--color-bg-active)] underline-offset-2 hover:underline"
                   >
                     {rendered ? "편집기 · 재렌더" : "편집기 열기 →"}
                   </Link>
@@ -355,7 +350,7 @@ function ClipsTab({
                     <a
                       href={previewSrc}
                       download={`${clip.title}.mp4`}
-                      className="text-[11.5px] font-medium text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+                      className="text-[11.5px] font-medium text-[var(--color-text-muted)] underline-offset-2 hover:text-foreground hover:underline"
                     >
                       다운로드
                     </a>
@@ -372,7 +367,7 @@ function ClipsTab({
 
 /** Vision score → color class */
 function scoreColorClass(v: number): string {
-  return v >= 70 ? "text-status-done" : v >= 45 ? "text-status-warn" : "text-muted-foreground";
+  return v >= 70 ? "text-emerald-600 dark:text-emerald-400" : v >= 45 ? "text-amber-600 dark:text-amber-400" : "text-[var(--color-text-muted)]";
 }
 
 type AnalyzeView = "scenes" | "script" | "narrative" | "cast" | "ppl";
@@ -449,7 +444,7 @@ function AnalyzeTab({ episodeId }: { episodeId: string }) {
     return <EmptyState icon={Search} compact title="분석할 영상이 없어요" />;
   }
   if (loading && !analysis) {
-    return <Card className="p-6 text-center text-sm text-muted-foreground">분석 정보를 불러오는 중…</Card>;
+    return <Card className="p-6 text-center text-sm text-[var(--color-text-muted)]">분석 정보를 불러오는 중…</Card>;
   }
   if (analysis?.status === "failed") {
     return (
@@ -505,8 +500,8 @@ function AnalyzeTab({ episodeId }: { episodeId: string }) {
   return (
     <div className="space-y-2">
       {/* 재분석 바 — cast 바꾼 뒤 트리거하면 지문 바뀐 스테이지만 재실행 */}
-      <div className="flex items-center gap-1.5 rounded-lg border border-border bg-muted/30 px-2.5 py-1.5">
-        <span className="flex-1 text-[11px] text-muted-foreground">파이프라인 재실행 · cast·프로파일 바꾼 뒤 트리거</span>
+      <div className="flex items-center gap-1.5 rounded-lg border border-[var(--color-border-subtle)] bg-muted/30 px-2.5 py-1.5">
+        <span className="flex-1 text-[11px] text-[var(--color-text-muted)]">파이프라인 재실행 · cast·프로파일 바꾼 뒤 트리거</span>
         <Button size="xs" variant="outline" onClick={() => retryAnalysis(true)} disabled={!!retrying}>
           {retrying === "fast" ? "요청 중…" : "빠른 재분석"}
         </Button>
@@ -514,7 +509,7 @@ function AnalyzeTab({ episodeId }: { episodeId: string }) {
           {retrying === "full" ? "요청 중…" : "정밀 재분석"}
         </Button>
       </div>
-      <div className="flex rounded-lg border border-border p-0.5">
+      <div className="flex rounded-lg border border-[var(--color-border-subtle)] p-0.5">
         {subTabs.map((t) => {
           const Icon = t.icon;
           return (
@@ -523,7 +518,7 @@ function AnalyzeTab({ episodeId }: { episodeId: string }) {
               onClick={() => setView(t.key)}
               className={cn(
                 "flex flex-1 items-center justify-center gap-1 rounded-md px-2 py-1.5 text-[11px] font-medium",
-                view === t.key ? "bg-muted text-foreground" : "text-muted-foreground hover:text-foreground",
+                view === t.key ? "bg-[var(--color-bg-input)] text-[var(--color-text-primary)]" : "text-[var(--color-text-muted)] hover:text-foreground",
               )}
             >
               <Icon className="size-3" /> {t.label} · {t.count}
@@ -644,7 +639,7 @@ function ScriptView({
     <div className="flex flex-col gap-2">
       {fallbackSpeakers.length > 0 && (
         <div className="rounded-md border border-brand/25 bg-brand/5 p-2.5">
-          <div className="mb-1.5 flex items-center gap-2 text-[11px] text-brand">
+          <div className="mb-1.5 flex items-center gap-2 text-[11px] text-[var(--color-bg-active)]">
             <span className="flex-1 font-semibold">
               화자 이름 지정 · {fallbackSpeakers.length}명
               <span className="ml-1 font-normal text-brand/70">
@@ -669,10 +664,10 @@ function ScriptView({
               return (
                 <div
                   key={sp}
-                  className="flex items-center gap-1.5 rounded border border-border bg-background px-1.5 py-1"
+                  className="flex items-center gap-1.5 rounded border border-[var(--color-border-subtle)] bg-[var(--color-bg-input)] px-1.5 py-1"
                   style={isPending ? { borderColor: "var(--color-brand)" } : undefined}
                 >
-                  <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] font-bold text-muted-foreground">
+                  <span className="shrink-0 rounded bg-[var(--color-bg-input)] px-1.5 py-0.5 text-[10px] font-bold text-[var(--color-text-muted)]">
                     {sp}
                   </span>
                   <input
@@ -680,7 +675,7 @@ function ScriptView({
                     value={currentValue}
                     placeholder="이름"
                     onChange={(e) => setPendingMap((prev) => ({ ...prev, [sp]: e.target.value }))}
-                    className="w-full min-w-0 rounded border border-input bg-background px-1.5 py-0.5 text-[11px]"
+                    className="w-full min-w-0 rounded border border-[var(--color-border-subtle)] bg-[var(--color-bg-input)] px-1.5 py-0.5 text-[11px]"
                   />
                   <datalist id={`speaker-cast-${sp}`}>
                     {programCast.map((n) => (
@@ -695,7 +690,7 @@ function ScriptView({
       )}
 
       <Card className="max-h-[60vh] overflow-y-auto">
-        <ul className="divide-y divide-border">
+        <ul className="divide-y divide-[var(--color-border-subtle)]">
           {transcript.map((s, i) => {
             const rawSp = s.speaker ?? "";
             // pending 우선, 없으면 saved, 그것도 없으면 원본 라벨.
@@ -708,7 +703,7 @@ function ScriptView({
                 onClick={() => seek?.seekTo(s.start)}
                 title={`▶ ${formatTimecode(s.start)}부터 재생`}
               >
-                <span className="shrink-0 pt-0.5 tabular-nums text-[11px] text-muted-foreground">
+                <span className="shrink-0 pt-0.5 tabular-nums text-[11px] text-[var(--color-text-muted)]">
                   {formatTimecode(s.start)}
                   {s.end != null && (
                     <span className="text-muted-foreground/60">
@@ -722,8 +717,8 @@ function ScriptView({
                     className={cn(
                       "shrink-0 rounded px-1.5 py-0.5 text-[10px] font-bold",
                       isFallback
-                        ? "bg-muted text-muted-foreground"
-                        : "bg-brand/15 text-brand",
+                        ? "bg-[var(--color-bg-input)] text-[var(--color-text-muted)]"
+                        : "bg-[var(--color-bg-active)]/15 text-[var(--color-bg-active)]",
                     )}
                     title={isFallback ? "폴백 라벨 · 위에서 이름 지정 가능" : "실명 라벨"}
                   >
@@ -753,24 +748,24 @@ function ScenesView({ scenes }: { scenes: AnalysisScene[] }) {
 
   return (
     <Card className="overflow-hidden">
-      <div className="flex flex-wrap items-center gap-2 border-b border-border px-3 py-2">
-        <div className="flex rounded-md border border-border p-0.5">
+      <div className="flex flex-wrap items-center gap-2 border-b border-[var(--color-border-subtle)] px-3 py-2">
+        <div className="flex rounded-md border border-[var(--color-border-subtle)] p-0.5">
           <button
             onClick={() => setSort("time")}
-            className={cn("rounded px-2 py-1 text-[11px] transition", sort === "time" ? "bg-muted text-foreground" : "text-muted-foreground hover:text-foreground")}
+            className={cn("rounded px-2 py-1 text-[11px] transition", sort === "time" ? "bg-[var(--color-bg-input)] text-[var(--color-text-primary)]" : "text-[var(--color-text-muted)] hover:text-foreground")}
           >시간순</button>
           <button
             onClick={() => setSort("score")}
-            className={cn("rounded px-2 py-1 text-[11px] transition", sort === "score" ? "bg-muted text-foreground" : "text-muted-foreground hover:text-foreground")}
+            className={cn("rounded px-2 py-1 text-[11px] transition", sort === "score" ? "bg-[var(--color-bg-input)] text-[var(--color-text-primary)]" : "text-[var(--color-text-muted)] hover:text-foreground")}
           >시각점수순</button>
         </div>
         <button
           onClick={() => setSilentOnly((v) => !v)}
-          className={cn("rounded-md border border-border px-2 py-1 text-[11px] transition", silentOnly ? "bg-muted text-foreground" : "text-muted-foreground hover:text-foreground")}
+          className={cn("rounded-md border border-[var(--color-border-subtle)] px-2 py-1 text-[11px] transition", silentOnly ? "bg-[var(--color-bg-input)] text-[var(--color-text-primary)]" : "text-[var(--color-text-muted)] hover:text-foreground")}
         >무음만</button>
-        <span className="text-[11px] text-muted-foreground">시각채점 {scored}/{scenes.length}</span>
+        <span className="text-[11px] text-[var(--color-text-muted)]">시각채점 {scored}/{scenes.length}</span>
       </div>
-      <ul className="divide-y divide-border">
+      <ul className="divide-y divide-[var(--color-border-subtle)]">
         {list.map((s, i) => (
           <li
             key={s.index ?? i}
@@ -779,30 +774,30 @@ function ScenesView({ scenes }: { scenes: AnalysisScene[] }) {
             title={`▶ ${formatTimecode(s.start)}부터 재생`}
           >
             <div className="flex flex-wrap items-center gap-2">
-              <span className="tabular-nums text-[11px] text-muted-foreground">
+              <span className="tabular-nums text-[11px] text-[var(--color-text-muted)]">
                 {formatTimecode(s.start)}{s.end != null ? `–${formatTimecode(s.end)}` : ""}
               </span>
               {typeof s.vision_score === "number" && (
                 <span className={cn("tabular-nums text-[11px] font-bold", scoreColorClass(s.vision_score))}>{s.vision_score}</span>
               )}
-              <span className={cn("rounded-full px-1.5 py-0.5 text-[9px]", s.has_dialogue ? "bg-status-done/10 text-status-done" : "bg-status-warn/10 text-status-warn")}>
+              <span className={cn("rounded-full px-1.5 py-0.5 text-[9px]", s.has_dialogue ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400" : "bg-amber-500/10 text-amber-600 dark:text-amber-400")}>
                 {s.has_dialogue ? "대사" : "무음"}
               </span>
               {s.on_screen_names && s.on_screen_names.length > 0 && (
                 <span className="ml-auto flex flex-wrap gap-1">
                   {s.on_screen_names.slice(0, 3).map((t) => (
-                    <Badge key={t} className="text-muted-foreground">🏷 {t}</Badge>
+                    <Badge key={t} className="text-[var(--color-text-muted)]">🏷 {t}</Badge>
                   ))}
                 </span>
               )}
             </div>
             {(s.vision_reason || s.text) && (
-              <p className="mt-1 line-clamp-2 text-[11px] text-muted-foreground">{s.vision_reason || s.text}</p>
+              <p className="mt-1 line-clamp-2 text-[11px] text-[var(--color-text-muted)]">{s.vision_reason || s.text}</p>
             )}
             {s.vision_tags && s.vision_tags.length > 0 && (
               <div className="mt-1 flex flex-wrap gap-1">
                 {s.vision_tags.map((t) => (
-                  <Badge key={t} className="text-muted-foreground">{t}</Badge>
+                  <Badge key={t} className="text-[var(--color-text-muted)]">{t}</Badge>
                 ))}
               </div>
             )}
@@ -852,7 +847,7 @@ function DistributeTab({
           <div className="text-[13px] font-medium">{clip.title}</div>
           <div className="mt-2 flex flex-wrap items-center gap-1.5">
             {clip.distributions.length === 0 && (
-              <span className="text-[11px] text-muted-foreground">미배포</span>
+              <span className="text-[11px] text-[var(--color-text-muted)]">미배포</span>
             )}
             {clip.distributions.map((d) => (
               <StatusBadge key={d.channel} tone={DIST_TONE[d.status] ?? "idle"}>
@@ -906,10 +901,10 @@ function FaceClustersView({
   }
   return (
     <div className="flex flex-col gap-2">
-      <div className="flex flex-wrap items-center gap-2 rounded-md border border-brand/25 bg-brand/5 px-2.5 py-2 text-[11px] text-brand">
+      <div className="flex flex-wrap items-center gap-2 rounded-md border border-brand/25 bg-brand/5 px-2.5 py-2 text-[11px] text-[var(--color-bg-active)]">
         <span className="flex-1">
           {Object.keys(clusters).length}개 인물 그룹 · {faces.labeled_segments ?? 0} 세그먼트 라벨링. 매핑 저장 시 refined.speaker 전체 rename.
-          {programCast.length === 0 && <span className="mt-1 block text-status-warn">⚠ 프로그램에 등록된 cast가 없어요 — 프로그램 편집에서 출연자부터 넣어주세요.</span>}
+          {programCast.length === 0 && <span className="mt-1 block text-amber-600 dark:text-amber-400">⚠ 프로그램에 등록된 cast가 없어요 — 프로그램 편집에서 출연자부터 넣어주세요.</span>}
         </span>
         <Button size="xs" onClick={onSave} disabled={pendingCount === 0 || savingMap}>
           {savingMap ? "저장 중…" : pendingCount > 0 ? `${pendingCount}개 매핑 저장` : "저장할 매핑 없음"}
@@ -925,15 +920,15 @@ function FaceClustersView({
               <Card key={label} className="p-2.5" style={isPending ? { borderColor: "var(--color-brand)" } : undefined}>
                 <div className="mb-1.5 flex items-center gap-1.5">
                   <span className="rounded-md px-1.5 py-0.5 text-[11px] font-bold" style={{ background: meta.gender_hint === "M" ? "rgba(94,155,255,.15)" : "rgba(245,165,36,.15)", color: meta.gender_hint === "M" ? "#5e9bff" : "#f5a524" }}>{label}</span>
-                  <span className="text-[10.5px] text-muted-foreground">{meta.count}회</span>
-                  <span className="ml-auto text-[10px] text-muted-foreground/70">{meta.gender_hint === "M" ? "남" : "여"}</span>
+                  <span className="text-[10.5px] text-[var(--color-text-muted)]">{meta.count}회</span>
+                  <span className="ml-auto text-[10px] text-[var(--color-text-muted)]">{meta.gender_hint === "M" ? "남" : "여"}</span>
                 </div>
                 <div className="mb-1.5 grid grid-cols-3 gap-1">
                   {meta.representative_frames.map((fp) => {
                     const name = fp.split("/").pop() ?? fp;
                     const url = `${apiBase}/media/${mediaId}/analysis/faces/${name}`;
                     return (
-                      <div key={fp} className="relative aspect-square overflow-hidden rounded border border-border bg-muted">
+                      <div key={fp} className="relative aspect-square overflow-hidden rounded border border-[var(--color-border-subtle)] bg-[var(--color-bg-input)]">
                         <img src={url} alt={label} loading="lazy" className="absolute inset-0 size-full object-cover" />
                       </div>
                     );
@@ -957,7 +952,7 @@ function FaceClustersView({
                       (e.target as HTMLInputElement).blur();
                     }
                   }}
-                  className="w-full rounded border border-input bg-background px-2 py-1 text-[11.5px]"
+                  className="w-full rounded border border-[var(--color-border-subtle)] bg-[var(--color-bg-input)] px-2 py-1 text-[11.5px]"
                 />
                 <datalist id={`cast-suggest-${label}`}>
                   {programCast.map((n) => (
@@ -965,10 +960,10 @@ function FaceClustersView({
                   ))}
                 </datalist>
                 {savedMap[label] && !isPending && (
-                  <div className="mt-1 text-[10.5px] text-status-done">✓ 저장됨 · {savedMap[label]}</div>
+                  <div className="mt-1 text-[10.5px] text-emerald-600 dark:text-emerald-400">✓ 저장됨 · {savedMap[label]}</div>
                 )}
                 {isPending && (
-                  <div className="mt-1 text-[10.5px] text-brand">● 저장 대기 · {pendingMap[label] || "(삭제)"}</div>
+                  <div className="mt-1 text-[10.5px] text-[var(--color-bg-active)]">● 저장 대기 · {pendingMap[label] || "(삭제)"}</div>
                 )}
               </Card>
             );

@@ -1,5 +1,3 @@
-import { Check } from "lucide-react";
-import { cn } from "@/lib/utils";
 import { PIPELINE_STAGES, PIPELINE_STAGE_LABELS, type PipelineStage } from "@/lib/constants";
 import type { EpisodePipeline } from "@/lib/types";
 
@@ -35,54 +33,23 @@ function stripIndexOf(stage: PipelineStage): number {
 export function PipelineStrip({ pipeline }: { pipeline: EpisodePipeline }) {
   const currentIdx = stripIndexOf(pipeline.stage);
 
-  function stateOf(idx: number): "done" | "current" | "todo" {
-    if (idx < currentIdx) return "done";
-    if (idx === currentIdx) return "current";
-    return "todo";
-  }
-
   return (
-    <div className="flex items-center overflow-x-auto">
-      {STRIP_STAGES.map((stage: PipelineStage, idx) => {
-        const state = stateOf(idx);
-        return (
-          <div key={stage} className="flex flex-none items-center">
-            <div className="flex min-w-13 flex-col items-center gap-1.5">
-              <div
-                className={cn(
-                  "flex size-6.5 items-center justify-center rounded-full text-[11px] font-bold tabular-nums",
-                  state === "done" && "border border-status-done/40 bg-status-done/15 text-status-done",
-                  state === "current" && "bg-primary text-primary-foreground",
-                  state === "todo" && "border border-input bg-card text-muted-foreground/50",
-                )}
-              >
-                {state === "done" ? <Check className="size-3.5" strokeWidth={3} /> : idx + 1}
-              </div>
-              <span
-                className={cn(
-                  "whitespace-nowrap text-[11px] font-semibold",
-                  state === "current"
-                    ? "text-brand"
-                    : state === "todo"
-                      ? "text-muted-foreground/50"
-                      : "text-muted-foreground",
-                )}
-              >
-                {PIPELINE_STAGE_LABELS[stage]}
-              </span>
-            </div>
-            {idx < STRIP_STAGES.length - 1 && (
-              <span
-                aria-hidden
-                className={cn(
-                  "mb-5 h-0.5 w-6 flex-none rounded-full",
-                  idx < currentIdx ? "bg-status-done/50" : "bg-border",
-                )}
-              />
-            )}
-          </div>
-        );
-      })}
+    // Step Progress Bar Container — 원본 캡슐(episodes/e_1293d2f1/page.tsx D:458–474).
+    // 원본은 `STEP 3 추천` 이 파랗게 **고정**이라 어느 회차를 열어도 같은 그림이다.
+    <div className="h-[38px] bg-slate-200 dark:bg-[var(--color-bg-capsule)] p-1 rounded-full shadow-none border-none inline-flex items-center gap-1 text-xs select-none">
+      {STRIP_STAGES.map((stage: PipelineStage, idx) => (
+        <div
+          key={stage}
+          title={idx < currentIdx ? "완료" : idx === currentIdx ? "진행 중" : "대기"}
+          className={
+            idx === currentIdx
+              ? "px-3.5 py-1.5 rounded-full bg-[var(--color-bg-active)] text-white font-bold text-[12px] border-none shadow-none"
+              : "px-3.5 py-1.5 rounded-full text-slate-600 dark:text-slate-400 font-medium text-[12px] border-none shadow-none"
+          }
+        >
+          STEP {idx + 1} {PIPELINE_STAGE_LABELS[stage]}
+        </div>
+      ))}
     </div>
   );
 }

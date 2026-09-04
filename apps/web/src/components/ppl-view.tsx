@@ -14,15 +14,15 @@ import { formatTimecode } from "@/lib/utils";
 import { cn } from "@/lib/utils";
 
 const CATEGORY_TONE: Record<string, string> = {
-  음식: "bg-status-warn/15 text-status-warn",
-  음료: "bg-status-warn/15 text-status-warn",
-  의류: "bg-brand/15 text-brand",
-  전자: "bg-brand/15 text-brand",
+  음식: "bg-amber-500/15 text-amber-600 dark:text-amber-400",
+  음료: "bg-amber-500/15 text-amber-600 dark:text-amber-400",
+  의류: "bg-[var(--color-bg-active)]/15 text-[var(--color-bg-active)]",
+  전자: "bg-[var(--color-bg-active)]/15 text-[var(--color-bg-active)]",
   화장품: "bg-purple-500/15 text-purple-300",
   자동차: "bg-cyan-500/15 text-cyan-300",
-  생활용품: "bg-status-done/15 text-status-done",
-  서비스: "bg-muted text-muted-foreground",
-  기타: "bg-muted text-muted-foreground",
+  생활용품: "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400",
+  서비스: "bg-[var(--color-bg-input)] text-[var(--color-text-muted)]",
+  기타: "bg-[var(--color-bg-input)] text-[var(--color-text-muted)]",
 };
 
 export function PplView({
@@ -68,17 +68,17 @@ export function PplView({
               return (
                 <div key={brand} className="flex items-center gap-2 text-[11.5px]">
                   <span className="w-24 shrink-0 truncate font-semibold">{brand}</span>
-                  <div className="relative h-3 flex-1 overflow-hidden rounded-sm bg-muted">
-                    <div className="absolute inset-y-0 left-0 bg-brand" style={{ width: `${Math.max(2, pct)}%` }} />
+                  <div className="relative h-3 flex-1 overflow-hidden rounded-sm bg-[var(--color-bg-input)]">
+                    <div className="absolute inset-y-0 left-0 bg-[var(--color-bg-active)]" style={{ width: `${Math.max(2, pct)}%` }} />
                   </div>
-                  <span className="w-16 shrink-0 text-right tabular-nums text-muted-foreground">
+                  <span className="w-16 shrink-0 text-right tabular-nums text-[var(--color-text-muted)]">
                     {sec.toFixed(1)}s
                   </span>
                 </div>
               );
             })}
           </div>
-          <div className="mt-2 text-[10.5px] text-muted-foreground">
+          <div className="mt-2 text-[10.5px] text-[var(--color-text-muted)]">
             검출 구간 {detections.length}개 · 스캔 프레임 {ppl.total_frames_scanned ?? 0}장
             {ppl.sample_sec ? ` · ${ppl.sample_sec}s 간격` : ""}
           </div>
@@ -89,7 +89,7 @@ export function PplView({
       <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
         {detections.map((d, i) => {
           const src = d.frame_ref ? pplFrameUrl(apiBase, mediaId, d.frame_ref) : undefined;
-          const catTone = CATEGORY_TONE[d.category ?? ""] ?? "bg-muted text-muted-foreground";
+          const catTone = CATEGORY_TONE[d.category ?? ""] ?? "bg-[var(--color-bg-input)] text-[var(--color-text-muted)]";
           return (
             <Card key={i} className="overflow-hidden p-0">
               <button
@@ -107,7 +107,7 @@ export function PplView({
                     onError={(e) => { (e.currentTarget as HTMLImageElement).style.opacity = "0"; }}
                   />
                 ) : (
-                  <div className="flex size-full items-center justify-center text-muted-foreground">
+                  <div className="flex size-full items-center justify-center text-[var(--color-text-muted)]">
                     <ShoppingBag className="size-8" />
                   </div>
                 )}
@@ -138,13 +138,13 @@ export function PplView({
                 </div>
                 {/* 어디에·어떻게 노출됐는지 = 위치 + notes 결합. "좌하 · 출연자 티셔츠 로고" */}
                 {(d.position || d.notes) && (
-                  <p className="line-clamp-2 text-[10.5px] leading-relaxed text-muted-foreground">
+                  <p className="line-clamp-2 text-[10.5px] leading-relaxed text-[var(--color-text-muted)]">
                     {[d.position, d.notes].filter(Boolean).join(" · ")}
                   </p>
                 )}
                 {typeof d.frames_hit === "number" && d.frames_hit > 1 && (
                   <div className="flex items-center gap-1">
-                    <Badge className="text-[10px] text-muted-foreground">{d.frames_hit} 프레임</Badge>
+                    <Badge className="text-[10px] text-[var(--color-text-muted)]">{d.frames_hit} 프레임</Badge>
                   </div>
                 )}
               </div>

@@ -30,7 +30,7 @@ function renderInline(text: string, onSeek: ((sec: number) => void) | undefined)
     if (m.index > last) out.push(text.slice(last, m.index));
     if (m[1] != null) {
       out.push(
-        <strong key={idx++} className="font-semibold text-foreground">
+        <strong key={idx++} className="font-semibold text-[var(--color-text-primary)]">
           {m[1]}
         </strong>,
       );
@@ -42,7 +42,7 @@ function renderInline(text: string, onSeek: ((sec: number) => void) | undefined)
         <button
           key={idx++}
           type="button"
-          className="tabular-nums text-status-warn hover:underline"
+          className="tabular-nums text-amber-600 dark:text-amber-400 hover:underline"
           onClick={onSeek ? () => onSeek(sec) : undefined}
           title={`▶ ${fmt(sec)}부터 재생`}
         >
@@ -79,7 +79,7 @@ function SummaryMarkdown({
     const items = listBuf;
     listBuf = [];
     nodes.push(
-      <ul key={key++} className="list-disc space-y-1 pl-5 text-sm leading-relaxed text-muted-foreground">
+      <ul key={key++} className="list-disc space-y-1 pl-5 text-sm leading-relaxed text-[var(--color-text-muted)]">
         {items.map((it, i) => (
           <li key={i}>{renderInline(it, onSeek)}</li>
         ))}
@@ -91,7 +91,7 @@ function SummaryMarkdown({
     const joined = paraBuf.join(' ');
     paraBuf = [];
     nodes.push(
-      <p key={key++} className="text-sm leading-relaxed text-muted-foreground">
+      <p key={key++} className="text-sm leading-relaxed text-[var(--color-text-muted)]">
         {renderInline(joined, onSeek)}
       </p>,
     );
@@ -145,7 +145,7 @@ export function NarrativeView({ narrative }: { narrative: NarrativeData | null |
 
   if (!narrative) {
     return (
-      <div className="flex items-center justify-center h-48 text-muted-foreground text-sm">
+      <div className="flex items-center justify-center h-48 text-[var(--color-text-muted)] text-sm">
         서사 분석 데이터가 없습니다
       </div>
     );
@@ -157,12 +157,12 @@ export function NarrativeView({ narrative }: { narrative: NarrativeData | null |
     <div className="space-y-6 p-4">
       {/* ── 전체분석 ── */}
       <section>
-        <h3 className="text-sm font-semibold text-primary mb-2">📖 전체 서사 요약</h3>
+        <h3 className="text-sm font-semibold text-[var(--color-bg-active)] mb-2">📖 전체 서사 요약</h3>
         <div className="bg-muted/50 rounded-lg p-4">
           {full_summary ? (
             <SummaryMarkdown text={full_summary} onSeek={(s) => seek?.seekTo(s)} />
           ) : (
-            <p className="text-sm text-muted-foreground">전체 요약 정보가 없습니다.</p>
+            <p className="text-sm text-[var(--color-text-muted)]">전체 요약 정보가 없습니다.</p>
           )}
         </div>
       </section>
@@ -170,7 +170,7 @@ export function NarrativeView({ narrative }: { narrative: NarrativeData | null |
       {/* ── 구간별분석 ── */}
       {segments && segments.length > 0 && (
         <section>
-          <h3 className="text-sm font-semibold text-primary mb-3">📑 구간별 분석</h3>
+          <h3 className="text-sm font-semibold text-[var(--color-bg-active)] mb-3">📑 구간별 분석</h3>
           <div className="space-y-3">
             {segments.map((seg) => (
               <div key={seg.block_index} className="bg-muted/50 rounded-lg p-3">
@@ -181,27 +181,27 @@ export function NarrativeView({ narrative }: { narrative: NarrativeData | null |
                   title={`▶ ${fmt(seg.start)}부터 재생`}
                 >
                   <div className="flex items-start justify-between mb-1">
-                    <h4 className="text-sm font-medium text-foreground">{seg.title}</h4>
-                    <span className="text-xs text-muted-foreground shrink-0 ml-2 tabular-nums">
+                    <h4 className="text-sm font-medium text-[var(--color-text-primary)]">{seg.title}</h4>
+                    <span className="text-xs text-[var(--color-text-muted)] shrink-0 ml-2 tabular-nums">
                       {fmt(seg.start)} ~ {fmt(seg.end)}
                     </span>
                   </div>
                 </button>
-                <p className="text-xs text-muted-foreground mb-2">{seg.summary}</p>
+                <p className="text-xs text-[var(--color-text-muted)] mb-2">{seg.summary}</p>
 
                 {/* Pass3 chip 라인: 정서 톤·장소·브랜드 */}
                 {(seg.emotional_tone || (seg.locations && seg.locations.length > 0) || (seg.brands && seg.brands.length > 0)) && (
                   <div className="flex flex-wrap items-center gap-1 mb-2">
                     {seg.emotional_tone && (
-                      <span className="px-1.5 py-0.5 bg-status-warn/15 rounded text-[10px] font-medium text-status-warn">
+                      <span className="px-1.5 py-0.5 bg-amber-500/15 rounded text-[10px] font-medium text-amber-600 dark:text-amber-400">
                         tone: {seg.emotional_tone}
                       </span>
                     )}
                     {seg.locations?.map((l) => (
-                      <span key={l} className="px-1.5 py-0.5 bg-brand/15 rounded text-[10px] text-brand">📍 {l}</span>
+                      <span key={l} className="px-1.5 py-0.5 bg-[var(--color-bg-active)]/15 rounded text-[10px] text-[var(--color-bg-active)]">📍 {l}</span>
                     ))}
                     {seg.brands?.map((b) => (
-                      <span key={b} className="px-1.5 py-0.5 bg-status-done/15 rounded text-[10px] text-status-done">🏷 {b}</span>
+                      <span key={b} className="px-1.5 py-0.5 bg-emerald-500/15 rounded text-[10px] text-emerald-600 dark:text-emerald-400">🏷 {b}</span>
                     ))}
                   </div>
                 )}
@@ -214,7 +214,7 @@ export function NarrativeView({ narrative }: { narrative: NarrativeData | null |
                         <button
                           key={i}
                           type="button"
-                          className="block w-full text-left text-xs text-status-warn hover:underline"
+                          className="block w-full text-left text-xs text-amber-600 dark:text-amber-400 hover:underline"
                           onClick={() => seek?.seekTo(t ?? seg.start)}
                           title={t != null ? `▶ ${fmt(t)}` : `▶ ${fmt(seg.start)}`}
                         >
@@ -227,7 +227,7 @@ export function NarrativeView({ narrative }: { narrative: NarrativeData | null |
                 {seg.characters && seg.characters.length > 0 && (
                   <div className="flex flex-wrap gap-1 mt-1.5">
                     {seg.characters.map((c) => (
-                      <span key={c} className="px-1.5 py-0.5 bg-muted rounded text-[10px] text-muted-foreground">
+                      <span key={c} className="px-1.5 py-0.5 bg-[var(--color-bg-input)] rounded text-[10px] text-[var(--color-text-muted)]">
                         {c}
                       </span>
                     ))}
@@ -242,15 +242,15 @@ export function NarrativeView({ narrative }: { narrative: NarrativeData | null |
       {/* ── 인물분석 ── */}
       {characters && characters.length > 0 && (
         <section>
-          <h3 className="text-sm font-semibold text-primary mb-3">👤 인물 분석</h3>
+          <h3 className="text-sm font-semibold text-[var(--color-bg-active)] mb-3">👤 인물 분석</h3>
           <div className="grid gap-3">
             {characters.map((c) => (
               <div key={c.name} className="bg-muted/50 rounded-lg p-3">
                 <div className="flex items-center gap-2 mb-1">
-                  <span className="text-sm font-medium text-foreground">{c.name}</span>
-                  {c.role && <span className="text-[10px] text-muted-foreground">({c.role})</span>}
+                  <span className="text-sm font-medium text-[var(--color-text-primary)]">{c.name}</span>
+                  {c.role && <span className="text-[10px] text-[var(--color-text-muted)]">({c.role})</span>}
                   {c.total_screen_sec > 0 && (
-                    <span className="text-[10px] text-muted-foreground ml-auto tabular-nums">
+                    <span className="text-[10px] text-[var(--color-text-muted)] ml-auto tabular-nums">
                       {fmt(c.total_screen_sec)}
                     </span>
                   )}
@@ -258,7 +258,7 @@ export function NarrativeView({ narrative }: { narrative: NarrativeData | null |
                 {c.personality_traits && c.personality_traits.length > 0 && (
                   <div className="flex flex-wrap gap-1 mb-1">
                     {c.personality_traits.map((t) => (
-                      <span key={t} className="px-1.5 py-0.5 bg-muted rounded text-[10px] text-muted-foreground">
+                      <span key={t} className="px-1.5 py-0.5 bg-[var(--color-bg-input)] rounded text-[10px] text-[var(--color-text-muted)]">
                         {t}
                       </span>
                     ))}
@@ -267,7 +267,7 @@ export function NarrativeView({ narrative }: { narrative: NarrativeData | null |
                 {c.key_relationships && c.key_relationships.length > 0 && (
                   <div className="space-y-0.5">
                     {c.key_relationships.map((r) => (
-                      <div key={r} className="text-[10px] text-muted-foreground">🔗 {r}</div>
+                      <div key={r} className="text-[10px] text-[var(--color-text-muted)]">🔗 {r}</div>
                     ))}
                   </div>
                 )}
@@ -280,10 +280,10 @@ export function NarrativeView({ narrative }: { narrative: NarrativeData | null |
       {/* ── 갈등분석 ── */}
       {key_conflicts && key_conflicts.length > 0 && (
         <section>
-          <h3 className="text-sm font-semibold text-primary mb-3">⚡ 주요 갈등 / 핵심 사건</h3>
+          <h3 className="text-sm font-semibold text-[var(--color-bg-active)] mb-3">⚡ 주요 갈등 / 핵심 사건</h3>
           <div className="space-y-3">
             {key_conflicts.map((cf, i) => (
-              <div key={i} className="bg-muted/50 rounded-lg p-3 border-l-2 border-status-warn/40">
+              <div key={i} className="bg-muted/50 rounded-lg p-3 border-l-2 border-amber-500/40">
                 <button
                   type="button"
                   className="w-full text-left"
@@ -291,26 +291,26 @@ export function NarrativeView({ narrative }: { narrative: NarrativeData | null |
                   title={cf.time_range ? `▶ ${fmt(cf.time_range.start)}부터 재생` : ''}
                 >
                   <div className="flex items-start justify-between mb-1">
-                    <h4 className="text-sm font-medium text-foreground">{cf.title}</h4>
+                    <h4 className="text-sm font-medium text-[var(--color-text-primary)]">{cf.title}</h4>
                     {cf.time_range && (
-                      <span className="text-xs text-muted-foreground shrink-0 ml-2 tabular-nums">
+                      <span className="text-xs text-[var(--color-text-muted)] shrink-0 ml-2 tabular-nums">
                         {fmt(cf.time_range.start)} ~ {fmt(cf.time_range.end)}
                       </span>
                     )}
                   </div>
                 </button>
-                <p className="text-xs text-muted-foreground mb-1">{cf.description}</p>
+                <p className="text-xs text-[var(--color-text-muted)] mb-1">{cf.description}</p>
                 {cf.participants && cf.participants.length > 0 && (
                   <div className="flex flex-wrap gap-1 mb-1">
                     {cf.participants.map((p) => (
-                      <span key={p} className="px-1.5 py-0.5 bg-status-error/10 rounded text-[10px] text-status-error">
+                      <span key={p} className="px-1.5 py-0.5 bg-rose-500/10 rounded text-[10px] text-rose-600 dark:text-rose-400">
                         {p}
                       </span>
                     ))}
                   </div>
                 )}
                 {cf.resolution && (
-                  <div className="text-[10px] text-muted-foreground italic">{cf.resolution}</div>
+                  <div className="text-[10px] text-[var(--color-text-muted)] italic">{cf.resolution}</div>
                 )}
               </div>
             ))}

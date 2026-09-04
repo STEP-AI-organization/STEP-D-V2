@@ -9,15 +9,27 @@
  */
 import Link from "next/link";
 
+import { Footer } from "@/components/layout/footer";
+import { Header } from "@/components/layout/header";
+
 export function MovedNotice({ title, body, href }: { title: string; body: string; href: string }) {
   return (
-    <div className="sd-card mx-auto max-w-[560px] p-6">
-      <div className="sd-eb mb-2" style={{ color: "var(--sd-label)" }}>화면 이동</div>
-      <h2 className="sd-serif mb-2 text-[16px] font-semibold" style={{ color: "var(--sd-fg)" }}>
-        {title}
-      </h2>
-      <p className="mb-4 text-[12.5px] leading-relaxed" style={{ color: "var(--sd-mut)" }}>{body}</p>
-      <Link href={href} className="sd-btn sd-btn-primary">바로 가기</Link>
-    </div>
+    <>
+      <Header title={title} subtitle="이 화면은 다른 곳으로 합쳐졌습니다" />
+      <main className="flex-1 p-6 flex flex-col justify-between overflow-y-auto">
+        <div className="bg-[var(--color-bg-card)] border-none rounded-2xl shadow-md shadow-slate-900/5 dark:shadow-none mx-auto max-w-[560px] w-full p-6">
+          <div className="text-[11px] font-bold text-[var(--color-text-muted)] mb-2">화면 이동</div>
+          <h2 className="font-bold text-base text-[var(--color-text-primary)] mb-2">{title}</h2>
+          <p className="mb-4 text-xs leading-relaxed text-[var(--color-text-muted)]">{body}</p>
+          <Link
+            href={href}
+            className="inline-flex px-3.5 py-1.5 rounded-full bg-[var(--color-bg-active)] hover:bg-[#0D1EB8] text-white text-xs font-bold border-none cursor-pointer transition-colors shadow-none"
+          >
+            바로 가기
+          </Link>
+        </div>
+        <Footer />
+      </main>
+    </>
   );
 }

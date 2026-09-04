@@ -18,6 +18,8 @@
  * 없는 값은 **0 이 아니라 "—"** 다(F9 ⊘). 수집 전과 실제 0 은 다르다.
  */
 import Link from "next/link";
+import { Footer } from "@/components/layout/footer";
+import { Header } from "@/components/layout/header";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import {
@@ -175,207 +177,216 @@ export default function ChannelAnalyticsPage() {
   };
 
   return (
-    <div className="mx-auto flex max-w-[1240px] flex-col gap-[14px]">
-      {/* 채널 고르기 */}
-      <div className="flex flex-wrap items-center gap-[3px]">
-        {channels.length === 0 ? (
-          <span className="text-[11.5px]" style={{ color: "var(--sd-mut)" }}>
-            {err ? `채널을 불러오지 못했습니다 (${err})` : "연결된 채널이 없습니다"} —{" "}
-            <Link href="/publish-channels" className="underline" style={{ color: "var(--sd-accent)" }}>
-              배포채널 연동
-            </Link>
-          </span>
-        ) : (
-          channels.map((c) => (
-            <button
-              key={c.channelId}
-              type="button"
-              className={cn("sd-btn", pickedChannel === c.channelId && "sd-btn--on")}
-              onClick={() => setPickedChannel(c.channelId)}
-            >
-              {c.channelName}
-              {c.status !== "active" && (
-                /* 끊긴 채널도 **읽을 수는 있다** — 다만 새로 안 쌓이니 그 사실을 이름 옆에 적는다. */
-                <span className="ml-1.5 text-[10px]" style={{ opacity: 0.7 }}>연결 끊김</span>
-              )}
-            </button>
-          ))
-        )}
-      </div>
+    <>
+      <Header title="채널 분석" subtitle="채널 단위 성과" />
 
-      {channel && channel.status !== "active" && (
-        <p className="text-[11.5px]" style={{ color: "var(--sd-mut)" }}>
-          이 채널은 연결이 끊겨 있습니다 — 아래는 <b>연결돼 있던 동안 모아 둔 값</b>이고, 새로 쌓이지는
-          않습니다.{" "}
-          <Link href="/publish-channels" className="underline" style={{ color: "var(--sd-accent)" }}>
-            다시 연결
-          </Link>
-          하면 이어서 수집합니다.
-        </p>
-      )}
-
-      {pickedChannel && videos.length === 0 && (
-        <p className="text-[11.5px]" style={{ color: "var(--sd-mut)" }}>
-          이 채널에서 수집된 영상이 없습니다 —{" "}
-          <Link href="/trends" className="underline" style={{ color: "var(--sd-accent)" }}>유튜브 트렌드</Link>
-          에서 채널 동기화를 먼저 돌려 주세요.
-        </p>
-      )}
-
-      {videos.length > 0 && (
-        <div className="flex flex-col gap-[14px] lg:flex-row">
-          {/* 영상 목록 */}
-          <div className="sd-card flex max-h-[560px] w-full shrink-0 flex-col overflow-y-auto p-2 lg:w-[300px]">
-            {videos.map((v) => (
+      <main className="flex-1 p-6 flex flex-col justify-between overflow-y-auto space-y-6">
+      <div className="mx-auto flex max-w-[1240px] flex-col gap-[14px]">
+        {/* 채널 고르기 */}
+        <div className="flex flex-wrap items-center gap-[3px]">
+          {channels.length === 0 ? (
+            <span className="text-[11.5px]" style={{ color: "var(--color-text-muted)" }}>
+              {err ? `채널을 불러오지 못했습니다 (${err})` : "연결된 채널이 없습니다"} —{" "}
+              <Link href="/publish-channels" className="underline" style={{ color: "#1C60FF" }}>
+                배포채널 연동
+              </Link>
+            </span>
+          ) : (
+            channels.map((c) => (
               <button
-                key={v.videoId}
+                key={c.channelId}
                 type="button"
-                onClick={() => setPickedVideo(v.videoId)}
-                className={cn(
-                  "flex flex-col gap-0.5 rounded-[4px] px-2.5 py-2 text-left",
-                  pickedVideo === v.videoId && "sd-btn--on",
+                className={cn("px-3.5 py-1.5 rounded-full bg-[var(--color-bg-input)] hover:bg-[var(--color-bg-card-hover)] text-xs text-[var(--color-text-primary)] border border-[var(--color-border-subtle)] font-medium cursor-pointer transition-colors shadow-none disabled:opacity-50 disabled:cursor-not-allowed", pickedChannel === c.channelId && "bg-[var(--color-bg-active)] text-white border-transparent font-bold")}
+                onClick={() => setPickedChannel(c.channelId)}
+              >
+                {c.channelName}
+                {c.status !== "active" && (
+                  /* 끊긴 채널도 **읽을 수는 있다** — 다만 새로 안 쌓이니 그 사실을 이름 옆에 적는다. */
+                  <span className="ml-1.5 text-[10px]" style={{ opacity: 0.7 }}>연결 끊김</span>
                 )}
-              >
-                <span className="line-clamp-2 text-[11.5px]" style={{ color: "var(--sd-fg)" }}>{v.title}</span>
-                <span className="text-[10.5px]" style={{ color: "var(--sd-mut)" }}>
-                  {v.publishedAt ? String(v.publishedAt).slice(0, 10) : "—"}
-                </span>
               </button>
-            ))}
-          </div>
+            ))
+          )}
+        </div>
 
-          {/* 고른 영상의 속 */}
-          <div className="flex min-w-0 flex-1 flex-col gap-[14px]">
-            {busy && <p className="text-[11.5px]" style={{ color: "var(--sd-mut)" }}>불러오는 중…</p>}
+        {channel && channel.status !== "active" && (
+          <p className="text-[11.5px]" style={{ color: "var(--color-text-muted)" }}>
+            이 채널은 연결이 끊겨 있습니다 — 아래는 <b>연결돼 있던 동안 모아 둔 값</b>이고, 새로 쌓이지는
+            않습니다.{" "}
+            <Link href="/publish-channels" className="underline" style={{ color: "#1C60FF" }}>
+              다시 연결
+            </Link>
+            하면 이어서 수집합니다.
+          </p>
+        )}
 
-            {err && !busy && (
-              <div
-                className="flex flex-wrap items-center gap-2 rounded-[4px] px-3 py-2 text-[11.5px]"
-                style={{ border: "1px solid var(--sd-danger-border)", background: "var(--sd-danger-bg)", color: "var(--sd-danger-strong)" }}
-              >
-                <span>상세를 불러오지 못했습니다 ({err}) — 0 이 아니라 <b>알 수 없음</b>입니다.</span>
-                <button type="button" className="sd-btn" onClick={() => void load()}>다시 조회</button>
-              </div>
-            )}
+        {pickedChannel && videos.length === 0 && (
+          <p className="text-[11.5px]" style={{ color: "var(--color-text-muted)" }}>
+            이 채널에서 수집된 영상이 없습니다 —{" "}
+            <Link href="/trends" className="underline" style={{ color: "#1C60FF" }}>유튜브 트렌드</Link>
+            에서 채널 동기화를 먼저 돌려 주세요.
+          </p>
+        )}
 
-            {data && !busy && (
-              <>
-                <div className="flex items-baseline justify-between gap-3">
-                  <h2 className="sd-serif min-w-0 truncate text-[14px] font-semibold" style={{ color: "var(--sd-fg)" }}>
-                    {video?.title ?? data.video?.title ?? "영상"}
-                  </h2>
-                  {/* ⚠️ 라이브가 아니다 — 언제 모은 값인지 항상 붙인다. */}
-                  <span className="shrink-0 text-[10.5px]" style={{ color: "var(--sd-mut)" }}>
-                    {collectedAt(data.fetchedAt)}
+        {videos.length > 0 && (
+          <div className="flex flex-col gap-[14px] lg:flex-row">
+            {/* 영상 목록 */}
+            <div className="bg-[var(--color-bg-card)] border-none rounded-2xl shadow-md shadow-slate-900/5 dark:shadow-none flex max-h-[560px] w-full shrink-0 flex-col overflow-y-auto p-2 lg:w-[300px]">
+              {videos.map((v) => (
+                <button
+                  key={v.videoId}
+                  type="button"
+                  onClick={() => setPickedVideo(v.videoId)}
+                  className={cn(
+                    "flex flex-col gap-0.5 rounded-[4px] px-2.5 py-2 text-left",
+                    pickedVideo === v.videoId && "bg-[var(--color-bg-active)] text-white border-transparent font-bold",
+                  )}
+                >
+                  <span className="line-clamp-2 text-[11.5px]" style={{ color: "var(--color-text-primary)" }}>{v.title}</span>
+                  <span className="text-[10.5px]" style={{ color: "var(--color-text-muted)" }}>
+                    {v.publishedAt ? String(v.publishedAt).slice(0, 10) : "—"}
                   </span>
+                </button>
+              ))}
+            </div>
+
+            {/* 고른 영상의 속 */}
+            <div className="flex min-w-0 flex-1 flex-col gap-[14px]">
+              {busy && <p className="text-[11.5px]" style={{ color: "var(--color-text-muted)" }}>불러오는 중…</p>}
+
+              {err && !busy && (
+                <div
+                  className="flex flex-wrap items-center gap-2 rounded-[4px] px-3 py-2 text-[11.5px]"
+                  style={{ border: "1px solid rgb(244 63 94 / 0.35)", background: "rgb(244 63 94 / 0.10)", color: "#E11D48" }}
+                >
+                  <span>상세를 불러오지 못했습니다 ({err}) — 0 이 아니라 <b>알 수 없음</b>입니다.</span>
+                  <button type="button" className="px-3.5 py-1.5 rounded-full bg-[var(--color-bg-input)] hover:bg-[var(--color-bg-card-hover)] text-xs text-[var(--color-text-primary)] border border-[var(--color-border-subtle)] font-medium cursor-pointer transition-colors shadow-none disabled:opacity-50 disabled:cursor-not-allowed" onClick={() => void load()}>다시 조회</button>
                 </div>
+              )}
 
-                <div className="flex flex-wrap gap-[14px]">
-                  <Stat label="조회수" value={s?.views != null ? NUM(s.views) : "—"} />
-                  <Stat
-                    label="평균 시청 시간"
-                    value={s?.averageViewDuration != null ? dur(s.averageViewDuration) : "—"}
-                  />
-                  <Stat
-                    label="평균 시청률"
-                    value={s?.averageViewPercentage != null ? PCT(s.averageViewPercentage) : "—"}
-                  />
-                  <Stat
-                    label="시청 시간(분)"
-                    value={s?.estimatedMinutesWatched != null ? NUM(s.estimatedMinutesWatched) : "—"}
-                  />
-                </div>
+              {data && !busy && (
+                <>
+                  <div className="flex items-baseline justify-between gap-3">
+                    <h2 className="min-w-0 truncate text-[14px] font-semibold" style={{ color: "var(--color-text-primary)" }}>
+                      {video?.title ?? data.video?.title ?? "영상"}
+                    </h2>
+                    {/* ⚠️ 라이브가 아니다 — 언제 모은 값인지 항상 붙인다. */}
+                    <span className="shrink-0 text-[10.5px]" style={{ color: "var(--color-text-muted)" }}>
+                      {collectedAt(data.fetchedAt)}
+                    </span>
+                  </div>
 
-                <Section title="유입 경로" empty={traffic.length === 0}>
-                  {traffic.map((t) => (
-                    <Bar
-                      key={t.source}
-                      label={TRAFFIC_LABEL[t.source] ?? t.source}
-                      ratio={t.share}
-                      right={`${NUM(t.views)}회 · ${PCT(t.share * 100)}`}
+                  <div className="flex flex-wrap gap-[14px]">
+                    <Stat label="조회수" value={s?.views != null ? NUM(s.views) : "—"} />
+                    <Stat
+                      label="평균 시청 시간"
+                      value={s?.averageViewDuration != null ? dur(s.averageViewDuration) : "—"}
                     />
-                  ))}
-                </Section>
-
-                <Section title="시청자" empty={demo.length === 0}>
-                  {demo.map((d, i) => (
-                    <Bar
-                      key={`${d.ageGroup}-${d.gender}-${i}`}
-                      label={`${String(d.ageGroup ?? "").replace("age", "")} · ${GENDER_LABEL[String(d.gender)] ?? d.gender ?? "—"}`}
-                      ratio={(d.percentage ?? 0) / 100}
-                      right={d.percentage != null ? PCT(d.percentage) : "—"}
+                    <Stat
+                      label="평균 시청률"
+                      value={s?.averageViewPercentage != null ? PCT(s.averageViewPercentage) : "—"}
                     />
-                  ))}
-                </Section>
+                    <Stat
+                      label="시청 시간(분)"
+                      value={s?.estimatedMinutesWatched != null ? NUM(s.estimatedMinutesWatched) : "—"}
+                    />
+                  </div>
 
-                <Section title="시청 지속" empty={(data.retention ?? []).length === 0}>
-                  {/* 곡선 하나에 라이브러리를 들이지 않는다 — 막대 100개면 충분히 읽힌다. */}
-                  <div className="flex h-[90px] items-end gap-px">
-                    {(data.retention ?? []).map((p, i) => (
-                      <div
-                        key={i}
-                        title={`${PCT(p.ratio * 100)} 지점 · ${PCT(p.watchRatio * 100)} 시청`}
-                        className="flex-1 rounded-t-[1px]"
-                        style={{
-                          height: `${Math.max(2, Math.min(100, p.watchRatio * 100))}%`,
-                          background: "var(--sd-accent)",
-                          opacity: 0.75,
-                        }}
+                  <Section title="유입 경로" empty={traffic.length === 0}>
+                    {traffic.map((t) => (
+                      <Bar
+                        key={t.source}
+                        label={TRAFFIC_LABEL[t.source] ?? t.source}
+                        ratio={t.share}
+                        right={`${NUM(t.views)}회 · ${PCT(t.share * 100)}`}
                       />
                     ))}
-                  </div>
-                  <div className="mt-1 flex justify-between text-[10.5px]" style={{ color: "var(--sd-mut)" }}>
-                    <span>시작</span><span>영상 길이 기준 위치</span><span>끝</span>
-                  </div>
-                </Section>
+                  </Section>
 
-                <Section
-                  title="상위 댓글"
-                  empty={(data.comments ?? []).length === 0}
-                  emptyText="수집된 댓글이 없습니다 — 업로드 7일이 지난 영상은 자동 수집 대상이 아닙니다."
-                  action={
-                    <button type="button" className="sd-btn" onClick={() => void onRefreshComments()} disabled={queuing}>
-                      {queuing ? "요청 중…" : "댓글 다시 수집"}
-                    </button>
-                  }
-                >
-                  <ul className="flex flex-col gap-2">
-                    {(data.comments ?? []).map((c) => (
-                      <li key={c.id} className="flex flex-col gap-0.5">
-                        <span className="text-[11px]" style={{ color: "var(--sd-mut)" }}>
-                          {c.author} · 좋아요 {NUM(c.likeCount)}
-                        </span>
-                        <span className="text-[12px] leading-relaxed" style={{ color: "var(--sd-fg)" }}>{c.text}</span>
-                      </li>
+                  <Section title="시청자" empty={demo.length === 0}>
+                    {demo.map((d, i) => (
+                      <Bar
+                        key={`${d.ageGroup}-${d.gender}-${i}`}
+                        label={`${String(d.ageGroup ?? "").replace("age", "")} · ${GENDER_LABEL[String(d.gender)] ?? d.gender ?? "—"}`}
+                        ratio={(d.percentage ?? 0) / 100}
+                        right={d.percentage != null ? PCT(d.percentage) : "—"}
+                      />
                     ))}
-                  </ul>
-                </Section>
+                  </Section>
 
-                {notice && (
-                  <p className="text-[11.5px]" style={{ color: "var(--sd-mut)" }}>{notice}</p>
-                )}
-              </>
-            )}
+                  <Section title="시청 지속" empty={(data.retention ?? []).length === 0}>
+                    {/* 곡선 하나에 라이브러리를 들이지 않는다 — 막대 100개면 충분히 읽힌다. */}
+                    <div className="flex h-[90px] items-end gap-px">
+                      {(data.retention ?? []).map((p, i) => (
+                        <div
+                          key={i}
+                          title={`${PCT(p.ratio * 100)} 지점 · ${PCT(p.watchRatio * 100)} 시청`}
+                          className="flex-1 rounded-t-[1px]"
+                          style={{
+                            height: `${Math.max(2, Math.min(100, p.watchRatio * 100))}%`,
+                            background: "#1C60FF",
+                            opacity: 0.75,
+                          }}
+                        />
+                      ))}
+                    </div>
+                    <div className="mt-1 flex justify-between text-[10.5px]" style={{ color: "var(--color-text-muted)" }}>
+                      <span>시작</span><span>영상 길이 기준 위치</span><span>끝</span>
+                    </div>
+                  </Section>
+
+                  <Section
+                    title="상위 댓글"
+                    empty={(data.comments ?? []).length === 0}
+                    emptyText="수집된 댓글이 없습니다 — 업로드 7일이 지난 영상은 자동 수집 대상이 아닙니다."
+                    action={
+                      <button type="button" className="px-3.5 py-1.5 rounded-full bg-[var(--color-bg-input)] hover:bg-[var(--color-bg-card-hover)] text-xs text-[var(--color-text-primary)] border border-[var(--color-border-subtle)] font-medium cursor-pointer transition-colors shadow-none disabled:opacity-50 disabled:cursor-not-allowed" onClick={() => void onRefreshComments()} disabled={queuing}>
+                        {queuing ? "요청 중…" : "댓글 다시 수집"}
+                      </button>
+                    }
+                  >
+                    <ul className="flex flex-col gap-2">
+                      {(data.comments ?? []).map((c) => (
+                        <li key={c.id} className="flex flex-col gap-0.5">
+                          <span className="text-[11px]" style={{ color: "var(--color-text-muted)" }}>
+                            {c.author} · 좋아요 {NUM(c.likeCount)}
+                          </span>
+                          <span className="text-[12px] leading-relaxed" style={{ color: "var(--color-text-primary)" }}>{c.text}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </Section>
+
+                  {notice && (
+                    <p className="text-[11.5px]" style={{ color: "var(--color-text-muted)" }}>{notice}</p>
+                  )}
+                </>
+              )}
+            </div>
           </div>
-        </div>
-      )}
+        )}
 
-      <p className="text-[11px]" style={{ color: "var(--sd-mut)" }}>
-        채널 합계는{" "}
-        <Link href="/performance" className="underline" style={{ color: "var(--sd-accent)" }}>성과</Link>
-        에서 봅니다. 이 화면은 워커가 <b>모아 둔</b> 값이라 라이브 조회와 시점이 다를 수 있습니다.
-      </p>
-    </div>
+        <p className="text-[11px]" style={{ color: "var(--color-text-muted)" }}>
+          채널 합계는{" "}
+          <Link href="/performance" className="underline" style={{ color: "#1C60FF" }}>성과</Link>
+          에서 봅니다. 이 화면은 워커가 <b>모아 둔</b> 값이라 라이브 조회와 시점이 다를 수 있습니다.
+        </p>
+      </div>
+
+        {/* Footer */}
+        <Footer />
+      </main>
+    </>
   );
 }
 
 function Stat({ label, value }: { label: string; value: string }) {
   return (
-    <div className="sd-card min-w-[150px] flex-1 p-4">
-      <div className="sd-eb" style={{ color: "var(--sd-label)" }}>{label}</div>
+    <div className="bg-[var(--color-bg-card)] border-none rounded-2xl shadow-md shadow-slate-900/5 dark:shadow-none min-w-[150px] flex-1 p-4">
+      <div className="text-[11px] font-bold text-[var(--color-text-muted)]" style={{ color: "var(--color-text-muted)" }}>{label}</div>
       <div
-        className="sd-mono mt-1 text-[22px] leading-none"
-        style={{ color: value === "—" ? "var(--sd-mut)" : "var(--sd-fg)" }}
+        className="font-mono mt-1 text-[22px] leading-none"
+        style={{ color: value === "—" ? "var(--color-text-muted)" : "var(--color-text-primary)" }}
       >
         {value}
       </div>
@@ -394,13 +405,13 @@ function Section({
   action?: React.ReactNode;
 }) {
   return (
-    <div className="sd-card p-4">
+    <div className="bg-[var(--color-bg-card)] border-none rounded-2xl shadow-md shadow-slate-900/5 dark:shadow-none p-4">
       <div className="mb-2.5 flex items-center justify-between gap-3">
-        <div className="sd-eb" style={{ color: "var(--sd-label)" }}>{title}</div>
+        <div className="text-[11px] font-bold text-[var(--color-text-muted)]" style={{ color: "var(--color-text-muted)" }}>{title}</div>
         {action}
       </div>
       {empty
-        ? <p className="text-[11.5px]" style={{ color: "var(--sd-mut)" }}>{emptyText ?? "아직 수집된 값이 없습니다."}</p>
+        ? <p className="text-[11.5px]" style={{ color: "var(--color-text-muted)" }}>{emptyText ?? "아직 수집된 값이 없습니다."}</p>
         : children}
     </div>
   );
@@ -409,14 +420,14 @@ function Section({
 function Bar({ label, ratio, right }: { label: string; ratio: number; right: string }) {
   return (
     <div className="mb-1.5 flex items-center gap-2.5">
-      <span className="w-[110px] shrink-0 truncate text-[11.5px]" style={{ color: "var(--sd-fg)" }}>{label}</span>
-      <span className="h-[6px] flex-1 overflow-hidden rounded-[3px]" style={{ background: "var(--sd-ph, #2a2a2a)" }}>
+      <span className="w-[110px] shrink-0 truncate text-[11.5px]" style={{ color: "var(--color-text-primary)" }}>{label}</span>
+      <span className="h-[6px] flex-1 overflow-hidden rounded-[3px]" style={{ background: "var(--color-bg-input)" }}>
         <span
           className="block h-full rounded-[3px]"
-          style={{ width: `${Math.max(1, Math.min(100, ratio * 100))}%`, background: "var(--sd-accent)" }}
+          style={{ width: `${Math.max(1, Math.min(100, ratio * 100))}%`, background: "#1C60FF" }}
         />
       </span>
-      <span className="sd-mono w-[130px] shrink-0 text-right text-[11px]" style={{ color: "var(--sd-mut)" }}>{right}</span>
+      <span className="font-mono w-[130px] shrink-0 text-right text-[11px]" style={{ color: "var(--color-text-muted)" }}>{right}</span>
     </div>
   );
 }
