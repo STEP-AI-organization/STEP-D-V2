@@ -117,7 +117,7 @@ const renderStatusTag = (status: "pending" | "running" | "done" | "failed" | "ып
     default:
       return (
         <span className="px-2.5 py-0.5 rounded-full text-[10.5px] bg-rose-500/15 text-rose-700 dark:bg-rose-500/20 dark:text-rose-400 font-medium border-none inline-flex items-center gap-1.5">
-          <span className="w-1.5 h-1.5 rounded-full bg-rose-500 shrink-0" />
+          <span className="w-1.5 h-1.5 rounded-full bg-rose-600 dark:bg-rose-400 shrink-0" />
           <span>failed</span>
         </span>
       );

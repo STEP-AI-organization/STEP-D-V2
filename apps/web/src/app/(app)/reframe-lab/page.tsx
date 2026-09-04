@@ -53,6 +53,14 @@ const LAYOUTS: { id: string; label: string; hint: string; y: number; h: number; 
 ];
 const layoutMeta = (id: string) => LAYOUTS.find((l) => l.id === id);
 
+/** 배치마다 라벨 색이 다르다 — 원본이 네 카드를 색으로 구분한다(파랑·초록·앰버·로즈). */
+const LAYOUT_ACCENT: Record<string, string> = {
+  "9:16-letterbox": "text-[#1C60FF]",
+  "9:16-crop-sub": "text-emerald-400",
+  "9:16-crop-main": "text-amber-400",
+  "9:16-crop-full": "text-rose-400",
+};
+
 /** 세로 클립인가 — 평가 대상은 9:16 계열만(가로 제외). */
 const isVertical = (aspect: unknown) => typeof aspect === "string" && aspect.startsWith("9:16");
 
@@ -417,7 +425,7 @@ function LayoutCard({
       {/* Metadata */}
       <div className="text-xs space-y-1 px-1">
         <div className="flex items-center gap-2">
-          <span className="text-[#1C60FF] font-bold">{layout.label}</span>
+          <span className={`font-bold ${LAYOUT_ACCENT[layout.id] ?? "text-[#1C60FF]"}`}>{layout.label}</span>
           {isAiPick && (
             <span className="px-2 py-0.5 rounded-full bg-[#1C60FF]/20 text-[#1C60FF] text-[10px] font-bold border-none">
               AI 추천

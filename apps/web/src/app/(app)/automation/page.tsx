@@ -39,6 +39,7 @@
  *    갈아끼울 때 이 화면의 자동화 상태도 함께 다시 읽는다(아래 useEffect).
  */
 import Link from "next/link";
+import { Info, Play } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { Footer } from "@/components/layout/footer";
@@ -1448,19 +1449,17 @@ export default function AutomationPage() {
                 자기가 바꾼 값이 어디로 합쳐지는지 보이지 않았다. 개수의 출처(슬롯)와 결과를
                 붙여 두면 두 컨트롤(시각 · 고급의 할당량) 중 뭐가 이기는지 물을 일이 없다.
                 판정은 서버와 **같은 함수**(perDayCount) — 화면이 따로 곱하지 않는다. */}
-            <div
-              className="mt-1.5 flex flex-wrap items-baseline justify-between gap-x-2 gap-y-1 rounded-xl px-2 py-1.5"
-              style={{ background: "var(--color-bg-input)" }}
-            >
-              <span className="text-[11px]" style={{ color: "var(--color-text-muted)" }}>채널당 하루 발행</span>
-              <span className="text-[11px]" style={{ color: "var(--color-text-primary)" }}>
-                <b className="font-mono">{perDayCount({ slots, dailyQuota })}개</b>
-                <span className="ml-1.5 text-[11px]" style={{ color: "var(--color-text-muted)" }}>
+            {/* 채널당 하루 발행 Full Width Bar (원본 897–903) */}
+            <div className="p-3.5 rounded-xl bg-slate-100 dark:bg-stone-800/60 border-none shadow-none flex flex-wrap items-center justify-between gap-x-2 gap-y-1 text-xs mt-3">
+              <span className="text-xs text-[var(--color-text-primary)] font-bold">채널당 하루 발행</span>
+              <div className="flex items-center gap-2">
+                <span className="font-extrabold text-sm text-[#1C60FF]">{perDayCount({ slots, dailyQuota })}개</span>
+                <span className="text-xs text-[var(--color-text-muted)] font-medium">
                   {slots.length
                     ? "시각당 개수의 합 — 할당량은 쓰지 않습니다"
                     : (allDay ? "할당량 방식 · 24시간" : `할당량 방식 · ${activeStart}시~${activeEnd}시(KST) 안에서`)}
                 </span>
-              </span>
+              </div>
             </div>
           </div>
         </div>
@@ -1980,7 +1979,7 @@ export default function AutomationPage() {
             {loading ? "불러오는 중…" : error ? "상태를 불러오지 못했습니다" : "저장된 자동배포가 없습니다 — 위에서 프로그램과 채널을 선택해 시작하세요"}
           </div>
         ) : (
-          <div className="flex flex-col gap-1.5">
+          <div className="bg-[var(--color-bg-card)] border-none rounded-2xl p-4 text-xs shadow-md shadow-slate-900/5 dark:shadow-none divide-y divide-[var(--color-border-subtle)]/60">
             {rules.map((r) => {
               const pids = programsOf(r);
               const chans = channelsOf(r);
@@ -1989,19 +1988,19 @@ export default function AutomationPage() {
               // 실업로드 채널이 있어도 게이트가 전부 꺼져 있으면 "실행 중"은 착시다 — 기록만.
               const uploadLive = uploadChans.some((c) => !gateOff(c.platform, c.accountId));
               return (
-                <div key={r.id} className="bg-[var(--color-bg-card)] border-none rounded-2xl shadow-md shadow-slate-900/5 dark:shadow-none flex flex-wrap items-center gap-2 px-3 py-2.5">
+                <div key={r.id} className="py-4 first:pt-1 last:pb-1 flex flex-wrap items-center gap-2">
                   <span className="text-xs font-medium" style={{ color: "var(--color-text-primary)" }}>
                     {firstProgram?.title ?? pids[0]}{pids.length > 1 ? ` 외 ${pids.length - 1}개` : ""} → 채널 {chans.length}곳
                   </span>
-                  <span className={!r.enabled ? "px-2.5 py-0.5 rounded-full text-[10px] font-semibold border-none bg-slate-200/80 text-slate-700 dark:bg-[#282B35] dark:text-slate-200" : uploadChans.length > 0 && uploadLive ? "px-2.5 py-0.5 rounded-full text-[10px] font-semibold border-none bg-emerald-500/15 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-400" : "px-2.5 py-0.5 rounded-full text-[10px] font-semibold border-none bg-slate-200/80 text-slate-700 dark:bg-[#282B35] dark:text-slate-200"}>
+                  <span className={!r.enabled ? "px-2.5 py-0.5 rounded-full bg-slate-200/80 dark:bg-stone-700 text-slate-700 dark:text-stone-300 font-bold text-[11px] border-none shadow-none" : uploadChans.length > 0 && uploadLive ? "px-2.5 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-bold text-[11px] border-none shadow-none" : "px-2.5 py-0.5 rounded-full bg-slate-200/80 dark:bg-stone-700 text-slate-700 dark:text-stone-300 font-bold text-[11px] border-none shadow-none"}>
                     {!r.enabled ? "멈춤" : uploadChans.length > 0 && uploadLive ? "실행 중" : "기록만"}
                   </span>
-                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-semibold border-none bg-slate-200/80 text-slate-700 dark:bg-[#282B35] dark:text-slate-200">{KIND_LABEL[r.mediaKind]}</span>
-                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-semibold border-none bg-amber-500/15 text-amber-600 dark:text-amber-400">
+                  <span className="px-2.5 py-0.5 rounded-full bg-slate-200/80 dark:bg-stone-700 text-slate-700 dark:text-stone-300 font-bold text-[11px] border-none shadow-none">{KIND_LABEL[r.mediaKind]}</span>
+                  <span className="px-2.5 py-0.5 rounded-full bg-amber-500/10 text-amber-600 dark:text-amber-400 font-bold text-[11px] border-none shadow-none">
                     {r.gatePolicy === "approve_first" ? "승인 배포 — 사람이 확정해야 게시" : "승인 없이 배포"}
                   </span>
-                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-semibold border-none bg-slate-200/80 text-slate-700 dark:bg-[#282B35] dark:text-slate-200">하루 {monthlyPublishEstimate(r).perDay}개/채널</span>
-                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-semibold border-none bg-slate-200/80 text-slate-700 dark:bg-[#282B35] dark:text-slate-200">{formatWeekdays(r.weekdays)}</span>
+                  <span className="px-2.5 py-0.5 rounded-full bg-slate-200/80 dark:bg-stone-700 text-slate-700 dark:text-stone-300 font-bold text-[11px] border-none shadow-none">하루 {monthlyPublishEstimate(r).perDay}개/채널</span>
+                  <span className="px-2.5 py-0.5 rounded-full bg-slate-200/80 dark:bg-stone-700 text-slate-700 dark:text-stone-300 font-bold text-[11px] border-none shadow-none">{formatWeekdays(r.weekdays)}</span>
                   <span className="basis-full text-[11px]" style={{ color: "var(--color-text-muted)" }}>
                     발행 계획: <strong style={{ color: "var(--color-text-primary)" }}>{formatWeekdays(r.weekdays)}</strong>
                     {" · "}
@@ -2011,18 +2010,18 @@ export default function AutomationPage() {
                     {" · "}
                     하루 {monthlyPublishEstimate(r).perDay}개
                   </span>
-                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-semibold border-none bg-slate-200/80 text-slate-700 dark:bg-[#282B35] dark:text-slate-200">
+                  <span className="px-2.5 py-0.5 rounded-full bg-slate-200/80 dark:bg-stone-700 text-slate-700 dark:text-stone-300 font-bold text-[11px] border-none shadow-none">
                     {r.slots?.length ? ruleSlots(r).map(slotLabel).join(" ") : (isAllDayWindow(r) ? "24시간" : `${r.activeStart ?? 0}~${r.activeEnd ?? 24}시`)}
                   </span>
-                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-semibold border-none bg-slate-200/80 text-slate-700 dark:bg-[#282B35] dark:text-slate-200">월 예상 {monthlyPublishEstimate(r).perMonth}건</span>
-                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-semibold border-none bg-slate-200/80 text-slate-700 dark:bg-[#282B35] dark:text-slate-200">{r.templateId ? `템플릿 ${r.templateId}` : "템플릿 자동"}</span>
+                  <span className="px-2.5 py-0.5 rounded-full bg-slate-200/80 dark:bg-stone-700 text-slate-700 dark:text-stone-300 font-bold text-[11px] border-none shadow-none">월 예상 {monthlyPublishEstimate(r).perMonth}건</span>
+                  <span className="px-2.5 py-0.5 rounded-full bg-slate-200/80 dark:bg-stone-700 text-slate-700 dark:text-stone-300 font-bold text-[11px] border-none shadow-none">{r.templateId ? `템플릿 ${r.templateId}` : "템플릿 자동"}</span>
                   {/* 오늘 게시 수 — 서버가 publishedToday 를 내려줄 때만(구버전은 숨김). */}
                   {r.publishedToday &&
                     chans.map((c) => {
                       const n = r.publishedToday?.[`${c.platform}:${c.accountId}`];
                       if (typeof n !== "number") return null;
                       return (
-                        <span key={`${c.platform}:${c.accountId}`} className="px-2.5 py-0.5 rounded-full text-[10px] font-semibold border-none bg-slate-200/80 text-slate-700 dark:bg-[#282B35] dark:text-slate-200">
+                        <span key={`${c.platform}:${c.accountId}`} className="px-2.5 py-0.5 rounded-full bg-slate-200/80 dark:bg-stone-700 text-slate-700 dark:text-stone-300 font-bold text-[11px] border-none shadow-none">
                           {/* 분모는 **서버 판정과 같은 함수**로 낸다(perDayCount). 예전엔 r.dailyQuota
                               를 직접 읽어, 발행 시간(슬롯)을 쓰는 계획에서 늘 틀린 수가 떴다 —
                               15:00×20 계획인데 "0/3" (2026-08-27 사용자 신고). 슬롯이 있으면
@@ -2142,11 +2141,11 @@ export default function AutomationPage() {
               // 큐잉 시점의 published 는 "업로드 시작"일 뿐이다 — 실제 완료/실패는
               // 클립의 배포 상태에서 온다(있으면 덮어쓴다).
               let label = RESULT_LABEL[run.result] ?? run.result;
-              let tag = RESULT_TAG[run.result] ?? "px-2.5 py-0.5 rounded-full text-[10px] font-semibold border-none bg-slate-200/80 text-slate-700 dark:bg-[#282B35] dark:text-slate-200";
+              let tag = RESULT_TAG[run.result] ?? "px-2.5 py-0.5 rounded-full bg-slate-200/80 dark:bg-stone-700 text-slate-700 dark:text-stone-300 font-bold text-[11px] border-none shadow-none";
               let reason = run.detail;
               if (run.result === "published") {
                 if (dist?.status === "published") {
-                  label = "게시함"; tag = "px-2.5 py-0.5 rounded-full text-[10px] font-semibold border-none bg-emerald-500/15 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-400";
+                  label = "게시함"; tag = "px-2.5 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-bold text-[11px] border-none shadow-none";
                 } else if (dist?.status === "failed") {
                   label = "실패"; tag = "px-2.5 py-0.5 rounded-full text-[10px] font-semibold border-none bg-rose-500/15 text-rose-600 dark:text-rose-400";
                   reason = dist.error || run.detail;
@@ -2160,9 +2159,9 @@ export default function AutomationPage() {
                   <span className="min-w-[160px] flex-1 truncate text-[12px] font-medium" style={{ color: "var(--color-text-primary)" }}>
                     {clip?.title || run.clipId || "—"}
                   </span>
-                  {platform && <span className="px-2.5 py-0.5 rounded-full text-[10px] font-semibold border-none bg-slate-200/80 text-slate-700 dark:bg-[#282B35] dark:text-slate-200 shrink-0">{channelLabel(platform)}</span>}
+                  {platform && <span className="px-2.5 py-0.5 rounded-full bg-slate-200/80 dark:bg-stone-700 text-slate-700 dark:text-stone-300 font-bold text-[11px] border-none shadow-none shrink-0">{channelLabel(platform)}</span>}
                   <span className={cn("shrink-0", tag)}>{label}</span>
-                  {originLabel && <span className="px-2.5 py-0.5 rounded-full text-[10px] font-semibold border-none bg-slate-200/80 text-slate-700 dark:bg-[#282B35] dark:text-slate-200 shrink-0">{originLabel}</span>}
+                  {originLabel && <span className="px-2.5 py-0.5 rounded-full bg-slate-200/80 dark:bg-stone-700 text-slate-700 dark:text-stone-300 font-bold text-[11px] border-none shadow-none shrink-0">{originLabel}</span>}
                   {ytId && (
                     <a
                       href={`https://www.youtube.com/watch?v=${ytId}`}
@@ -2203,7 +2202,7 @@ export default function AutomationPage() {
             {loading ? "불러오는 중…" : error ? "상태를 불러오지 못했습니다" : "아직 배포 완료된 영상이 없습니다"}
           </div>
         ) : (
-          <div className="flex flex-col gap-1">
+          <div className="bg-[var(--color-bg-card)] border-none rounded-2xl p-4 text-xs shadow-md shadow-slate-900/5 dark:shadow-none divide-y divide-[var(--color-border-subtle)]/60">
             {completedRuns.map((run) => {
               const clip = clips.find((item) => item.id === run.clipId);
               const platform = run.accountKey?.split(":")[0] ?? "";
@@ -2212,10 +2211,19 @@ export default function AutomationPage() {
                 ? `https://www.youtube.com/watch?v=${dist.externalId}`
                 : null;
               return (
-                <div key={run.id} className="flex flex-wrap items-center gap-3 rounded-lg px-3 py-3"
-                  style={{ background: "var(--color-bg-input)", borderLeft: "3px solid #059669" }}>
-                  <div className="grid size-10 shrink-0 place-items-center rounded-lg text-[16px]"
-                    style={{ background: "var(--color-bg-card)" }} aria-hidden>▶</div>
+                <div key={run.id} className="flex flex-wrap items-center gap-3 py-3 first:pt-1 last:pb-1">
+                  {/* 16:9 Ratio Video Thumbnail Box (원본 1819–1830) */}
+                  <div className="w-16 sm:w-20 aspect-[16/9] rounded-lg overflow-hidden bg-stone-900 border border-slate-700/60 relative flex items-center justify-center shrink-0 group">
+                    {clip && clipThumbSrc(clip) && (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={clipThumbSrc(clip)} alt="" loading="lazy" className="w-full h-full object-cover" />
+                    )}
+                    <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
+                      <div className="w-5 h-5 rounded-full bg-black/60 text-white flex items-center justify-center">
+                        <Play className="w-2.5 h-2.5 fill-current ml-0.5" />
+                      </div>
+                    </div>
+                  </div>
                   <div className="min-w-[180px] flex-1">
                     <div className="truncate text-xs font-semibold" style={{ color: "var(--color-text-primary)" }}>
                       {clip?.title || run.clipId || "자동배포 영상"}
@@ -2224,8 +2232,8 @@ export default function AutomationPage() {
                       {run.at?.slice(0, 16).replace("T", " ")}{platform ? ` · ${channelLabel(platform)}` : ""}
                     </div>
                   </div>
-                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-semibold border-none bg-emerald-500/15 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-400">배포됨</span>
-                  {externalUrl && <a href={externalUrl} target="_blank" rel="noreferrer" className="px-3.5 py-1.5 rounded-full bg-[var(--color-bg-input)] hover:bg-[var(--color-bg-card-hover)] text-xs text-[var(--color-text-primary)] border border-[var(--color-border-subtle)] font-medium cursor-pointer transition-colors shadow-none disabled:opacity-50 disabled:cursor-not-allowed">열기</a>}
+                  <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 font-bold text-[11px] border-none shadow-none">배포됨</span>
+                  {externalUrl && <a href={externalUrl} target="_blank" rel="noreferrer" className="px-3.5 py-1.5 rounded-full bg-[var(--color-bg-card)] hover:bg-rose-50 hover:text-rose-600 hover:border-rose-200 dark:hover:bg-rose-950/60 dark:hover:text-rose-400 text-xs text-[var(--color-text-primary)] border border-[var(--color-border-subtle)] font-medium cursor-pointer transition-colors shadow-none disabled:opacity-50 disabled:cursor-not-allowed">열기</a>}
                 </div>
               );
             })}
@@ -2260,6 +2268,13 @@ export default function AutomationPage() {
           onClose={() => setTplPreviewOpen(false)}
         />
       )}
+          {/* Requirement 3: Bottom Notice Banner (Matching '승인 없이 배포' tag background bg-amber-500/10) */}
+          <div className="p-3.5 rounded-xl bg-amber-500/10 dark:bg-amber-950/30 border-none shadow-none text-xs text-amber-900 dark:text-amber-200 font-medium leading-relaxed flex items-start gap-2.5">
+            <Info className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+            <div>
+              <strong className="font-bold text-amber-950 dark:text-amber-100">승인 대기 미디어는 저절로 나가지 않습니다.</strong> 승인 대기에 들어온 건은 사람이 승인해야 다음 확인 때 게시됩니다. 실제 업로드 잠금(운영 설정)은 이것과 별개입니다 — 잠겨 있으면 승인해도 기록만 남습니다.
+            </div>
+          </div>
         </div>
 
         {/* Footer */}

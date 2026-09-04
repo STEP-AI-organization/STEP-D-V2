@@ -260,6 +260,18 @@ export default function PerformancePage() {
               </button>
             </div>
           )}
+          {/* Note text with links */}
+          <p className="text-xs text-[var(--color-text-muted)] pt-1">
+            프로그램 단위·채널 단위 상세는{" "}
+            <Link href="/program-analytics" className="text-[var(--color-text-accent)] hover:underline font-medium">
+              프로그램 분석
+            </Link>{" "}
+            ·{" "}
+            <Link href="/channel-analytics" className="text-[var(--color-text-accent)] hover:underline font-medium">
+              채널 분석
+            </Link>
+            에서 봅니다.
+          </p>
         </div>
 
         {/* Footer */}

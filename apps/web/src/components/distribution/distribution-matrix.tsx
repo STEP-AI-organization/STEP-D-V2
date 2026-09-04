@@ -25,7 +25,7 @@
  *  - 유튜브에 나간 행 → '제목수정' 으로 **올라간 영상의 제목/설명을 고쳐 반영**(재발행 아님).
  */
 import type { ReactNode } from "react";
-import { Film, Plus, Send, ArrowUpRight, RotateCw } from "lucide-react";
+import { Check, Film, Plus, Send, ArrowUpRight, RotateCw } from "lucide-react";
 
 import { DISTRIBUTION_CHANNELS, type DistributionChannel } from "@/lib/constants";
 import { EDIT_KIND_LABEL, type Clip } from "@/lib/types";
@@ -263,7 +263,7 @@ function Cell({
     ) : (
       <span title={title} className={cls}>
         <span className="hidden sm:inline">{label}</span>
-        <span className="sm:hidden">·</span>
+        <Check className="w-3 h-3 stroke-[2.5] inline sm:hidden" />
       </span>
     );
   }
@@ -297,7 +297,7 @@ function Cell({
       className={`${PILL} ${d.status === "published" ? TONE.published : TONE.pending}`}
     >
       <span className="hidden sm:inline">{label}</span>
-      <span className="sm:hidden">·</span>
+      <Check className="w-3 h-3 stroke-[2.5] inline sm:hidden" />
     </span>
   );
 }
