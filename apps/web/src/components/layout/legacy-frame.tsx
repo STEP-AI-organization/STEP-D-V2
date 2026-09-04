@@ -58,18 +58,20 @@ const MIGRATED: string[] = [
 /**
  * **그 경로 하나만** 이식이 끝난 곳 — 하위 경로는 아직 옛 마크업이라 틀이 필요하다.
  *
- * `/programs` 가 그 경우다: 목록은 옮겼지만 `/programs/:id`·`/:id/settings`·`/:id/highlights`
- * 는 아직 옛 화면이라 `MIGRATED` 에 넣으면 **상단바도 스크롤도 없는 화면**이 된다.
- * 하위까지 다 옮기면 이 배열에서 빼고 위로 올린다.
+ * `/programs` 가 그 경우다: 목록과 상세(`/programs/:id`)는 옮겼지만
+ * `/:id/settings`·`/:id/highlights` 는 아직 옛 화면이라 `MIGRATED`(접두사 매칭)에 넣으면
+ * 그 둘이 **상단바도 스크롤도 없는 화면**이 된다. 정규식은 그 경계를 정확히 긋는다.
+ * 하위까지 다 옮기면 여기서 빼고 `MIGRATED` 로 올린다.
  */
-const MIGRATED_EXACT: string[] = [
-  "/programs",            // 2026-09-03 · W5 (목록만 · 상세는 아직)
+const MIGRATED_EXACT: (string | RegExp)[] = [
+  "/programs",              // 2026-09-03 · W5 (목록)
+  /^\/programs\/[^/]+$/,     // 2026-09-04 · W5 (상세 — settings·highlights 는 제외)
 ];
 
 export function LegacyFrame({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const migrated =
-    MIGRATED_EXACT.includes(pathname) ||
+    MIGRATED_EXACT.some((m) => (typeof m === "string" ? m === pathname : m.test(pathname))) ||
     MIGRATED.some((p) => pathname === p || pathname.startsWith(`${p}/`));
 
   if (migrated) return <>{children}</>;
