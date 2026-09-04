@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { api, type AdminJob, type HarvestPending } from "../api";
+import { api, type AdminJob } from "../api";
 import { Avatar, Panel, State, useLoad, when } from "./common";
 import { TenantName, useTenantNames } from "./tenant-name";
 
@@ -69,10 +69,6 @@ export function Operations() {
   return <>
     <h1>운영 작업</h1>
     <p className="sub">완료 기록이 아니라 <b>사람의 결정이 남은 것</b>만 모읍니다. 원인이 같으면 한 줄로 묶습니다.</p>
-
-    {/* 승인 대기가 인박스 맨 위다 — 잡 실패와 달리 **아무도 재시도해 주지 않는다.**
-        운영자가 누르기 전까지 그 고객사의 완전자동화는 통째로 멈춰 있다. */}
-    <HarvestApprovals />
 
 
     <div className="cards">
@@ -179,101 +175,6 @@ function causeDot(cause: string, retryable: boolean): string {
  * ⚠️ 묶음의 `retryable` 은 **전부 재시도 가능할 때만** true 다. 하나라도 아니면 벌크 버튼을
  *    숨긴다 — 섞인 묶음에서 "전부 재시도" 를 누르면 안 되는 것까지 나간다.
  */
-/**
- * 완전자동화 **수집 채널 승인** — 우리가 연결하지 않은 채널을 열어 주는 자리.
- *
- * ## 왜 어드민에 있나
- *
- * 고객사 화면에는 "승인 대기" 라고만 뜬다. 스스로 못 여는 이유는 이 문이 **저작권 판단**
- * 이기 때문이다 — 계약된 MCN·제작사 채널인지를 아는 것은 우리(STEPAI)이고, 그 판단을 한
- * 사람의 이름이 `approved_by` 와 감사 로그에 남아야 한다.
- *
- * ⚠️ **승인 전에 채널을 직접 열어 볼 것.** 승인하면 그 채널의 롱폼을 내려받아 숏폼으로
- * 만들어 **고객사 유튜브 채널에 올린다.** 남의 영상이면 저작권 사고다. 그래서 사유를
- * 4자 이상 받고(다른 회사 데이터라 `requireReason` 이 강제한다), 채널 링크를 같이 준다.
- *
- * 잡 실패와 달리 **아무도 재시도해 주지 않는다** — 누를 때까지 그 고객사의 완전자동화는
- * 통째로 멈춰 있다. 그래서 인박스 맨 위에 둔다.
- */
-function HarvestApprovals() {
-  const { names } = useTenantNames();
-  const [working, setWorking] = useState<string | null>(null);
-  const { data, busy, error, reload } = useLoad(() => api.harvestPending(), []);
-  const rows = data?.sources ?? [];
-
-  async function approve(row: HarvestPending) {
-    const reason = window.prompt(
-      `"${row.sourceChannelTitle}" 를 승인합니다.\n\n`
-      + "승인하면 이 채널의 영상을 내려받아 숏폼으로 만들어 고객사 채널에 올립니다.\n"
-      + "채널을 열어 확인하셨습니까? 승인 사유를 적어 주세요 (4자 이상 · 감사 로그에 남습니다).",
-      "",
-    );
-    // 취소는 조용히 — 사유가 짧으면 서버가 400 으로 막는다(같은 잣대를 두 벌로 두지 않는다).
-    if (reason === null) return;
-    setWorking(row.id);
-    try {
-      const r = await api.approveHarvest(row.id, reason);
-      alert(`승인했습니다 — ${r.approvedBy}`);
-      await reload();
-    } catch (e) {
-      alert(e instanceof Error ? e.message : String(e));
-    } finally {
-      setWorking(null);
-    }
-  }
-
-  // 대기가 없으면 **아무것도 그리지 않는다.** 빈 패널은 인박스에서 잡음이다.
-  if (!busy && !error && rows.length === 0) return null;
-
-  return (
-    <Panel
-      title="수집 채널 승인 대기"
-      actions={<button onClick={reload}>새로고침</button>}
-    >
-      <State busy={busy} error={error} empty={!rows.length}>
-        <div className="inbox">
-          <section className="ibox">
-            <div className="ibox-head">
-              <span className="ibox-dot" style={{ background: "#f59e0b" }} />
-              <h2>운영자 승인이 필요합니다</h2>
-              <span className="ibox-count">{rows.length}건</span>
-              <span className="ibox-note">승인 전까지 그 회사의 완전자동화는 돌지 않습니다</span>
-            </div>
-            {rows.map((r) => (
-              <div className="ibox-row" key={r.id}>
-                <Avatar id={r.tenantId} name={names[r.tenantId] ?? r.tenantId} size={26} />
-                <div className="ibox-main">
-                  <div className="ibox-title">
-                    {r.sourceChannelTitle || r.sourceChannelId}
-                    <span className="muted"> · </span>
-                    <TenantName id={r.tenantId} plain />
-                  </div>
-                  <div className="ibox-meta">
-                    등록 {when(r.createdAt)} · <span className="mono">{r.sourceChannelId}</span>
-                  </div>
-                </div>
-                <div className="ibox-act">
-                  {/* 확인 없이 누르는 것을 막는 가장 싼 방법 — 채널을 먼저 열어 보게 한다. */}
-                  <a href={r.channelUrl} target="_blank" rel="noreferrer">
-                    <button>채널 열기</button>
-                  </a>
-                  <button
-                    className="primary"
-                    disabled={working === r.id}
-                    onClick={() => void approve(r)}
-                  >
-                    {working === r.id ? "승인 중…" : "승인"}
-                  </button>
-                </div>
-              </div>
-            ))}
-          </section>
-        </div>
-      </State>
-    </Panel>
-  );
-}
-
 function groupJobs(jobs: AdminJob[], by: GroupBy): Group[] {
   const map = new Map<string, Group>();
   for (const j of jobs) {

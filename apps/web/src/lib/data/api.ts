@@ -3425,6 +3425,21 @@ export async function updateHarvestSource(id: string, patch: {
   return out.source;
 }
 
+/**
+ * **권리 확인** — 우리가 연결하지 않은 채널을 이 워크스페이스에서 쓰겠다고 확정한다.
+ *
+ * owner·admin 만 할 수 있다(서버가 강제). 누가·언제 확정했는지가 기록에 남는다 —
+ * 이 확인의 값어치는 그 기록이다.
+ */
+export async function approveHarvestSource(id: string): Promise<HarvestSource> {
+  const out = await json<{ source: HarvestSource }>(
+    await fetch(`${API_BASE}/harvest/sources/${id}/approve`, {
+      method: "POST", credentials: "include",
+    }),
+  );
+  return out.source;
+}
+
 /** 한 수집원의 순회 결과 한 줄. `picked` 가 null 이면 `note` 가 안 가져온 이유다. */
 export interface HarvestOutcome {
   sourceId: string;

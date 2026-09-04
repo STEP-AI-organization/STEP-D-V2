@@ -254,7 +254,7 @@ import {
 } from "./pipeline/harvest.ts";
 import {
   deleteHarvestSource, getHarvestSource, harvestedVideoIds, insertHarvestSource,
-  listBlockedHarvestSources, listChannelVideosForHarvest, listHarvestSources, updateHarvestSource,
+  listChannelVideosForHarvest, listHarvestSources, updateHarvestSource,
 } from "./db-pg.ts";
 import {
   deleteThread as chatDeleteThread, getThread as chatGetThread,
@@ -12805,56 +12805,36 @@ app.delete("/api/harvest/sources/:id", async (c) => {
 });
 
 /**
- * **승인 대기 목록** — 어드민 인박스가 읽는다.
+ * **권리 확인** — 연결하지 않은 채널을 이 워크스페이스에서 쓰겠다고 확정한다.
  *
- * 이게 없으면 승인 라우트는 있는데 **누를 곳이 없다**(2026-09-04 실사용에서 그대로 걸렸다:
- * 화면엔 "승인 대기" 가 뜨는데 운영자가 그걸 볼 자리가 없었다). 이 리포 최빈 실패모드가
- * "기능은 있는데 출력이 소비처에 미도달" 이고, 승인 문은 그 전형이다 — 만드는 쪽(고객사
- * 화면)과 처리하는 쪽(어드민)이 다른 앱이라 한쪽만 만들기 쉽다.
+ * ## 왜 어드민이 아니라 여기인가 (2026-09-04 사용자 결정)
  *
- * 회사 경계를 넘는 조회라 `asSystem` 안에서 돈다. 열람 자체도 감사에 남긴다.
+ * 처음엔 STEPAI 운영자(superadmin)만 열 수 있게 만들었다. "저작권 판단은 우리가 한다" 는
+ * 생각이었는데, 실제로는 **우리가 그 답을 모른다** — 고객사가 그 채널과 어떤 계약을 맺었는지
+ * 아는 것은 고객사다. 우리가 심사하는 척하면 심사는 형식이 되고, 그 사이 고객은 채널 하나
+ * 추가할 때마다 사람을 기다린다. 그래서 문을 **쓰는 사람 쪽**으로 옮겼다.
+ *
+ * 대신 **기록은 그대로 남긴다.** 누가·언제 "이 채널을 쓸 권리가 있다" 고 확정했는지가
+ * `approved_by` 와 감사 로그에 남는다 — 이 확인의 값어치는 그 기록이다.
+ *
+ * 아무나 못 한다: **owner·admin 만**(`requireManager`). 권리 확인은 회사를 대표하는 결정이라
+ * 팀원이 혼자 눌러서는 안 된다.
  */
-app.get("/api/superadmin/harvest/pending", async (c) => {
-  const actor = requireSuperadmin(c);
-  return asSystem(async () => {
-    const rows = await listBlockedHarvestSources();
-    // 열람도 기록한다 — 이 목록은 **여러 회사의 데이터**를 한 화면에 모은다(superadmin-guard).
-    await audit(actor, { action: "harvest.list", detail: { pending: rows.length } }, clientIp(c));
-    return c.json({
-      sources: rows.map((r) => ({
-        id: r.id, tenantId: r.tenantId,
-        sourceChannelId: r.sourceChannelId, sourceChannelTitle: r.sourceChannelTitle,
-        programId: r.programId, createdAt: r.createdAt,
-        channelUrl: `https://www.youtube.com/channel/${r.sourceChannelId}`,
-      })),
-    });
-  });
-});
-
-/**
- * 운영자 승인 — 연결하지 않은 채널을 열어 준다.
- *
- * 고객사가 스스로 못 여는 이유: 이 문은 **저작권 판단**이다. 계약된 MCN·제작사 채널인지를
- * 아는 것은 우리(STEPAI)이고, 그 판단을 한 사람의 이름이 `approved_by` 에 남아야 한다.
- */
-app.post("/api/superadmin/harvest/:id/approve", async (c) => {
-  const actor = requireSuperadmin(c);
+app.post("/api/harvest/sources/:id/approve", async (c) => {
+  const actor = requireManager(c);
   const id = c.req.param("id");
-  const body = await c.req.json().catch(() => ({}) as Record<string, unknown>);
-  return asSystem(async () => {
-    const row = await getHarvestSource(id);
-    if (!row) return c.json({ error: "not_found" }, 404);
-    // 사유를 남긴다. 이 문은 **저작권 판단**이라 "누가 왜 열어 줬나" 가 기록의 본체다.
-    const reason = requireReason(actor, row.tenantId, body.reason);
-    await updateHarvestSource(id, { status: "active", approvedBy: actor.email });
-    await audit(actor, {
-      action: "harvest.approve",
-      targetTenant: row.tenantId,
-      reason,
-      detail: { sourceId: id, channelId: row.sourceChannelId, channelTitle: row.sourceChannelTitle },
-    }, clientIp(c));
-    return c.json({ ok: true, approvedBy: actor.email });
-  });
+  // 자기 워크스페이스 것만 보인다(RLS) — 남의 수집원은 여기서 애초에 조회되지 않는다.
+  const row = await getHarvestSource(id);
+  if (!row) return c.json({ error: "not_found" }, 404);
+  if (row.status !== "blocked") return c.json({ error: "not_pending", message: "승인 대기 상태가 아닙니다." }, 400);
+
+  await updateHarvestSource(id, { status: "active", approvedBy: actor.email });
+  await audit(actor, {
+    action: "harvest.approve",
+    targetTenant: row.tenantId,
+    detail: { sourceId: id, channelId: row.sourceChannelId, channelTitle: row.sourceChannelTitle },
+  }, clientIp(c));
+  return c.json({ source: await harvestView(await getHarvestSource(id)), approvedBy: actor.email });
 });
 
 // ── 챗봇 (업무 도우미) ────────────────────────────────────────────────────────
