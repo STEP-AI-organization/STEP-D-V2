@@ -349,14 +349,7 @@ export default function FullAutoPage() {
                 </div>
               </div>
 
-              <div className="flex flex-wrap items-center justify-between gap-3">
-                <p className={`text-[11px] leading-relaxed ${MUTED} flex-1 min-w-[280px]`}>
-                  등록하면 이 설정으로 <b className="text-[var(--color-text-primary)]">자동 배포 계획</b>이
-                  같이 만들어집니다 — 이후 수정은{" "}
-                  <Link href="/automation" className="underline text-[var(--color-text-primary)]">자동 배포</Link>{" "}
-                  화면에서 하세요. 완전자동화는 <b className="text-[var(--color-text-primary)]">사람 승인
-                  없이</b> 바로 올립니다.
-                </p>
+              <div className="flex flex-wrap items-center justify-end gap-3">
                 <button
                   onClick={() => { void add(); }}
                   disabled={busy || !url.trim()}
@@ -367,11 +360,6 @@ export default function FullAutoPage() {
                 </button>
               </div>
             </div>
-
-            <p className={`text-[11px] ${MUTED}`}>
-              등록하면 <b>바로 돕니다.</b> 남의 채널을 넣으면 그 영상을 받아 숏폼으로 만들어
-              배포하니, 쓸 권리가 있는 채널인지 확인하고 등록하세요.
-            </p>
           </div>
 
           {error && (
@@ -469,14 +457,6 @@ export default function FullAutoPage() {
               })}
             </div>
           )}
-
-          {/* 아는 함정을 미리 적는다 — 이걸 모르면 "수집은 됐는데 영상이 안 온다" 에서 막힌다. */}
-          <div className={`${CARD} p-4 text-[11px] leading-relaxed ${MUTED}`}>
-            <b className="text-[var(--color-text-primary)]">알아 두실 것</b> · 영상 내려받기는 사무실
-            전용 PC 에서 돕니다. 그 PC 가 꺼져 있으면 회차만 만들어지고 영상은 나중에 내려옵니다.
-            크레딧이 부족하면 새 영상을 가져오지 않습니다 — 충전하면 다음 순회부터 다시 돕니다.
-            해지해도 이미 만든 회차와 배포 계획은 남습니다.
-          </div>
         </div>
 
         <Footer />
