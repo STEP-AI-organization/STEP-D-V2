@@ -92,6 +92,36 @@
 | [core-pipeline-reference.md](reference/core-pipeline-reference.md) | core/ 파이썬 파이프라인 모듈·출력 스키마·디버깅·admin Lab |
 | [patent-new-figures-14-17-technical-brief.md](reference/patent-new-figures-14-17-technical-brief.md) | 변리사 회신용 신규 도면(도 14~17) 기술 설명 — 서사 앵커·역매칭·체크포인트·레이어 썸네일 |
 
+## help/ — 사용자용 도움말 (고객이 읽는 글)
+
+`docs/help/*.md` 는 다른 폴더와 성격이 다르다. **제품 안의 챗봇이 이 문서만 읽고 답한다**
+(`apps/server/src/chatbot/help.ts`). 즉 여기 적힌 것이 곧 고객에게 나가는 말이다.
+
+- 화면 단위 12편 + FAQ. 프런트매터(`screen`·`title`·`keywords`)가 검색·화면 매칭의 입력이다.
+- **내부 사실을 쓰지 않는다** — 원가·마진·인프라·모델 이름·다른 고객사. 문서 자체가 방어선이고,
+  `apps/server/src/tests/chatbot-help.test.ts` 가 금지어와 프런트매터를 검사한다.
+- 이 폴더는 서버 이미지에 함께 실린다(`apps/server/Dockerfile` 의 `COPY docs/help`).
+  그 줄이 빠지면 **로컬은 멀쩡하고 프로덕션만** 챗봇이 제품을 모른 채 답한다.
+
+## eval/ — 챗봇 평가셋 (품질을 재는 자)
+
+`docs/eval/chatbot-evalset.xlsx` 는 **"이렇게 물으면 이렇게 답해야 한다"** 를 적어 둔 표다.
+챗봇 답은 자유 문장이라 글자 대조가 안 되므로, 채점 가능한 축(필수·금지 링크 · 참고 문서 ·
+도구 호출 · 필수어 · 금칙어)과 사람이 읽을 축(기대 동작)을 나눠 적는다.
+
+```
+pnpm --filter @stepd/server eval:make          씨앗 표 생성 (이미 있으면 --force 필요)
+pnpm --filter @stepd/server eval:run -- --dry  표만 점검 (모델 호출 없음 · 무료)
+pnpm --filter @stepd/server eval:run           실제로 돌려 채점 → docs/eval/result-<날짜>.md
+```
+
+- **엑셀이 정본이다.** 표를 채우는 사람은 개발자가 아니라 제품을 아는 사람이고, 실제로 고객이
+  물은 말을 행으로 옮기는 것이 이 표를 키우는 방법이다. `eval:make` 는 사람이 채운 표를
+  덮어쓰지 않는다(`--force` 없이는 거절).
+- **이 표는 재는 자이지 학습 데이터가 아니다.** 답의 근거는 `docs/help/*.md` 라서, 점수를
+  올리는 일은 대개 **문서를 고치는 것**으로 끝난다. 파인튜닝은 그다음에 생각할 일이다.
+- 리포트 시트(자연어 → 스펙)는 출력이 구조화돼 있어 **자동 채점이 100%** 다.
+
 ## research/ · prototypes/ · archive/
 
 - [archive/object-detection-research.md](archive/object-detection-research.md) — 객체인식·비전 기술 선정 조사 (아카이브)

@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>STEP-D 설치형 앱 + 프리미어 플러그인 — TO-BE</title>
+<style>
+  :root{
+    --ink:#1c1c1e; --sub:#6b6862; --line:#e4e2dc; --line2:#f2f0eb;
+    --bg:#ffffff; --wash:#faf9f7; --deep:#14161c;
+    --blue:#1f4fd8; --blue-bg:#edf2ff; --blue-line:#bfcffa;
+    --warn:#96690c; --warn-bg:#fdf6e5; --warn-line:#e8cf95;
+    --ok:#1c7a52; --ok-bg:#e9f6f0; --ok-line:#a9d9c4;
+    --sans:"Pretendard",-apple-system,BlinkMacSystemFont,"Segoe UI","Malgun Gothic",sans-serif;
+    --serif:"Noto Serif KR",ui-serif,Georgia,serif;
+    --mono:ui-monospace,"JetBrains Mono",Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--ink);font-family:var(--sans);font-size:15px;line-height:1.72}
+  .wrap{max-width:960px;margin:0 auto;padding:0 28px}
+
+  /* ── hero ── */
+  .hero{background:var(--deep);color:#fff;padding:72px 0 64px;margin-bottom:8px}
+  .hero .eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;
+    color:#8b93a7;margin-bottom:18px}
+  .hero h1{font-family:var(--serif);font-size:38px;line-height:1.28;font-weight:800;letter-spacing:-.01em}
+  .hero h1 em{font-style:normal;color:#8fa6ff}
+  .hero p{margin-top:20px;font-size:16.5px;color:#c9cdd8;max-width:660px}
+  .hero .meta{margin-top:30px;display:flex;gap:26px;flex-wrap:wrap;font-size:12.5px;color:#8b93a7;
+    font-family:var(--mono)}
+
+  /* ── sections ── */
+  section{padding:56px 0;border-bottom:1px solid var(--line2)}
+  .num{font-family:var(--mono);font-size:11.5px;color:var(--blue);letter-spacing:.1em;margin-bottom:10px}
+  h2{font-family:var(--serif);font-size:25px;font-weight:800;letter-spacing:-.01em;line-height:1.35}
+  h2 + .lede{margin-top:14px;font-size:16px;color:#4a4740;max-width:720px}
+  h3{font-family:var(--serif);font-size:17.5px;font-weight:700;margin-top:38px}
+  h4{font-size:14px;font-weight:700;margin-top:24px}
+  p{margin-top:14px}
+  p.tight{margin-top:8px}
+  strong{font-weight:700}
+  .muted{color:var(--sub)}
+  .small{font-size:13.5px}
+
+  ul{margin-top:14px;padding-left:20px}
+  li{margin-bottom:8px}
+  li::marker{color:#b8b4ac}
+
+  /* ── 카드 ── */
+  .cards{display:grid;gap:16px;margin-top:24px}
+  .c3{grid-template-columns:repeat(3,1fr)}
+  .c2{grid-template-columns:repeat(2,1fr)}
+  @media(max-width:820px){.c3,.c2{grid-template-columns:1fr}}
+  .card{border:1px solid var(--line);border-radius:12px;padding:20px 22px;background:var(--bg)}
+  .card .k{font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;color:var(--sub);
+    text-transform:uppercase;margin-bottom:8px}
+  .card h5{font-size:15.5px;font-weight:700;margin-bottom:8px}
+  .card p{margin-top:6px;font-size:14px;color:#4a4740}
+  .card.hl{border-color:var(--blue-line);background:var(--blue-bg)}
+  .card.hl h5{color:var(--blue)}
+
+  /* ── 다이어그램 ── */
+  .diagram{margin-top:28px;border:1px solid var(--line);border-radius:14px;padding:28px 24px;
+    background:var(--wash)}
+  .lane{display:grid;grid-template-columns:112px 1fr;gap:18px;align-items:start;
+    padding:16px 0;border-bottom:1px dashed var(--line)}
+  .lane:last-child{border-bottom:none;padding-bottom:0}
+  .lane:first-child{padding-top:0}
+  .lane .where{font-family:var(--mono);font-size:11px;color:var(--sub);letter-spacing:.06em;
+    padding-top:12px;text-align:right}
+  .boxes{display:flex;gap:10px;flex-wrap:wrap}
+  .box{border:1px solid var(--line);background:var(--bg);border-radius:10px;padding:11px 14px;
+    font-size:13.5px;min-width:120px}
+  .box b{display:block;font-size:13.5px;font-weight:700}
+  .box span{display:block;font-size:11.5px;color:var(--sub);margin-top:3px;line-height:1.5}
+  .box.blue{border-color:var(--blue-line);background:var(--blue-bg)}
+  .box.blue b{color:var(--blue)}
+  .box.new::after{content:"신규";float:right;font-family:var(--mono);font-size:9.5px;
+    color:var(--blue);background:#fff;border:1px solid var(--blue-line);border-radius:3px;
+    padding:0 4px;margin-left:6px}
+  .flow{margin-top:18px;font-family:var(--mono);font-size:12px;color:var(--sub);line-height:2}
+
+  /* ── 표 ── */
+  table{width:100%;border-collapse:collapse;font-size:14px;margin-top:20px}
+  th{font-size:12px;color:var(--sub);font-weight:600;text-align:left;padding:10px 12px;
+    border-bottom:1px solid var(--line);white-space:nowrap}
+  td{padding:12px;border-bottom:1px solid var(--line2);vertical-align:top}
+  td:first-child{font-weight:600;white-space:nowrap}
+  tr.done td:first-child{color:var(--ok)}
+
+  /* ── 강조 블록 ── */
+  .note{margin-top:22px;border-left:3px solid var(--blue);background:var(--blue-bg);
+    border-radius:0 10px 10px 0;padding:16px 20px;font-size:14.5px}
+  .note b{color:var(--blue)}
+  .warn{margin-top:22px;border:1px solid var(--warn-line);background:var(--warn-bg);
+    border-radius:10px;padding:16px 20px;font-size:14.5px;color:#5d4708}
+  .warn b{color:var(--warn)}
+  .ok{margin-top:22px;border:1px solid var(--ok-line);background:var(--ok-bg);
+    border-radius:10px;padding:16px 20px;font-size:14.5px;color:#155c3e}
+
+  code{font-family:var(--mono);font-size:12.5px;background:var(--wash);border:1px solid var(--line);
+    border-radius:4px;padding:1px 5px}
+
+  /* ── 단계 ── */
+  .steps{margin-top:26px;counter-reset:s}
+  .step{display:grid;grid-template-columns:34px 1fr;gap:16px;padding:18px 0;
+    border-top:1px solid var(--line2)}
+  .step:first-child{border-top:none}
+  .step .n{width:26px;height:26px;border-radius:999px;background:var(--ink);color:#fff;
+    display:grid;place-items:center;font-family:var(--mono);font-size:12px;margin-top:2px}
+  .step.done .n{background:var(--ok)}
+  .step.now .n{background:var(--blue)}
+  .step h5{font-size:15.5px;font-weight:700}
+  .step p{margin-top:6px;font-size:14px;color:#4a4740}
+  .tag{display:inline-block;font-family:var(--mono);font-size:10px;letter-spacing:.06em;
+    border:1px solid var(--line);border-radius:4px;padding:1px 6px;margin-left:8px;color:var(--sub);
+    vertical-align:2px}
+  .tag.done{color:var(--ok);border-color:var(--ok-line);background:var(--ok-bg)}
+  .tag.now{color:var(--blue);border-color:var(--blue-line);background:var(--blue-bg)}
+
+  footer{padding:44px 0 72px;color:var(--sub);font-size:13px}
+
+  @media print{.hero{background:#fff;color:#000}.hero h1 em{color:#1f4fd8}
+    .hero p,.hero .meta{color:#555}section{break-inside:avoid}}
+</style>
+</head>
+<body>
+
+<div class="hero">
+  <div class="wrap">
+    <div class="eyebrow">TO-BE · 2026-09-03</div>
+    <h1>편집자가 프리미어에서<br>한 발짝도 안 나가게 한다.</h1>
+    <p>
+      STEP-D 는 지금 웹에서 돈다. 그런데 실제로 영상을 만드는 사람은 하루 종일 프리미어 안에 있다.
+      그 둘 사이를 오가는 왕복 — 파일 찾기, 브라우저 열기, 드래그, 기다리기 — 이 편집자의 시간을
+      가장 많이 먹는다. <strong style="color:#fff">설치형 앱</strong>과
+      <strong style="color:#fff">프리미어 플러그인</strong>은 그 왕복을 없애기 위한 두 조각이다.
+    </p>
+    <div class="meta">
+      <span>대상 · 방송사 편집자</span>
+      <span>플랫폼 · Windows / Premiere Pro 25.6+</span>
+      <span>상태 · 1단계 동작 · 실기기 검증 남음</span>
+    </div>
+  </div>
+</div>
+
+<div class="wrap">
+
+<!-- ════════════════════════════════════════════ -->
+<section>
+  <div class="num">01 — 한 장 요약</div>
+  <h2>세 갈래가 하나의 흐름이 된다</h2>
+  <p class="lede">
+    지금은 웹 하나뿐이다. 여기에 두 개를 더 붙이는데, <strong>기능을 세 벌 만드는 것이 아니다.</strong>
+    분석·추천·배포는 서버에 그대로 두고, <strong>사람이 있는 자리마다 창구만 하나씩 낸다.</strong>
+  </p>
+
+  <div class="cards c3">
+    <div class="card">
+      <div class="k">기존</div>
+      <h5>웹 (stepd.stepai.kr)</h5>
+      <p>분석 결과 확인, 추천 채택, 편집, 배포, 성과. <strong>결정하는 자리</strong>다.
+      브라우저만 있으면 어디서든 열린다.</p>
+    </div>
+    <div class="card hl">
+      <div class="k">신규 ①</div>
+      <h5>설치형 앱 (Windows)</h5>
+      <p>수십 GB짜리 방송 원본을 <strong>끊겨도 이어서</strong> 올린다.
+      창을 닫아도 트레이에서 계속 올라간다. <strong>파일을 옮기는 자리</strong>다.</p>
+    </div>
+    <div class="card hl">
+      <div class="k">신규 ②</div>
+      <h5>프리미어 패널 (UXP)</h5>
+      <p>추천 구간을 마커로 받고, 완성본을 그 자리에서 올린다.
+      <strong>영상을 만드는 자리</strong>다.</p>
+    </div>
+  </div>
+
+  <div class="note">
+    <b>설계의 한 줄.</b> 세 창구가 <strong>같은 서버·같은 계정·같은 기록</strong>을 본다.
+    어디서 시작하든 결과는 한곳에 쌓인다 — 웹에서 채택한 구간이 프리미어에 마커로 뜨고,
+    프리미어에서 올린 완성본이 웹의 배포 화면에 나타난다.
+  </div>
+</section>
+
+<!-- ════════════════════════════════════════════ -->
+<section>
+  <div class="num">02 — 지금 (AS-IS)</div>
+  <h2>편집자의 하루에서 무엇이 새고 있나</h2>
+  <p class="lede">
+    기능이 없어서가 아니다. <strong>있는 기능들이 서로 다른 창에 흩어져 있어서</strong>,
+    사람이 그 사이를 걸어 다니며 메우고 있다.
+  </p>
+
+  <table>
+    <thead><tr><th style="width:190px">언제</th><th>지금 벌어지는 일</th><th style="width:150px">새는 것</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>원본을 올릴 때</td>
+        <td>수십 GB짜리 방송 원본을 브라우저로 올린다. 창을 닫으면 처음부터. 네트워크가 한 번 끊기면 처음부터.</td>
+        <td>시간 · 반복 노동</td>
+      </tr>
+      <tr>
+        <td>추천을 볼 때</td>
+        <td>웹에서 추천 구간을 확인하고, 시각을 <strong>손으로 받아 적어</strong> 프리미어에서 다시 찾는다.</td>
+        <td>정확도 · 집중</td>
+      </tr>
+      <tr>
+        <td>편집을 마쳤을 때</td>
+        <td>렌더 → 탐색기에서 파일 찾기 → 브라우저 → 회차 고르기 → 드래그 → 업로드 대기.
+        <strong>하루 두 번</strong> 반복한다.</td>
+        <td>왕복 그 자체</td>
+      </tr>
+      <tr>
+        <td>배포할 때</td>
+        <td>다시 웹으로 가서 채널·공개범위·예약을 정한다.</td>
+        <td>맥락 전환</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <p>
+    이 표에서 중요한 건 <strong>마지막 열</strong>이다. 새는 것이 "기능"이 아니라 <strong>시간과 정확도</strong>다.
+    그래서 해법도 새 기능이 아니라 <strong>자리를 옮기는 것</strong>이 된다.
+  </p>
+</section>
+
+<!-- ════════════════════════════════════════════ -->
+<section>
+  <div class="num">03 — 아키텍처</div>
+  <h2>무엇이 어디서 도는가</h2>
+  <p class="lede">
+    개발 얘기를 빼고 보면 구조는 단순하다. <strong>사람이 만지는 것 세 개</strong>,
+    <strong>보이지 않게 도는 것 두 개</strong>. 그게 전부다.
+  </p>
+
+  <div class="diagram">
+    <div class="lane">
+      <div class="where">사람이<br>만지는 곳</div>
+      <div class="boxes">
+        <div class="box"><b>웹 브라우저</b><span>추천 확인 · 채택 · 배포 · 성과</span></div>
+        <div class="box blue new"><b>설치형 앱</b><span>원본 업로드 · 트레이 상주</span></div>
+        <div class="box blue new"><b>프리미어 패널</b><span>마커 · 완성본 업로드</span></div>
+      </div>
+    </div>
+
+    <div class="lane">
+      <div class="where">회사 서버<br>(클라우드)</div>
+      <div class="boxes">
+        <div class="box"><b>STEP-D 서버</b><span>계정 · 회차 · 추천 · 배포 기록. 세 창구가 전부 여기로 온다</span></div>
+        <div class="box"><b>영상 저장소</b><span>원본과 완성본이 실제로 담기는 곳</span></div>
+      </div>
+    </div>
+
+    <div class="lane">
+      <div class="where">보이지 않게<br>도는 곳</div>
+      <div class="boxes">
+        <div class="box"><b>AI 분석</b><span>받아쓰기 · 장면 나누기 · 구간 고르기</span></div>
+        <div class="box"><b>배포 처리</b><span>유튜브·인스타 등으로 실제 게시</span></div>
+      </div>
+    </div>
+
+    <div class="flow">
+      원본 ──▶ 설치형 앱 ──▶ 저장소 ──▶ AI 분석 ──▶ 추천<br>
+      추천 ──▶ 웹에서 채택 ──▶ <b style="color:var(--blue)">프리미어에 마커로</b> ──▶ 편집<br>
+      완성본 ──▶ <b style="color:var(--blue)">패널이 바로 업로드</b> ──▶ 배포 ──▶ 성과
+    </div>
+  </div>
+
+  <h3>파일은 서버를 거치지 않는다</h3>
+  <p>
+    비개발자에게 가장 자주 오해받는 지점이라 따로 적는다. 수십 GB짜리 영상이
+    <strong>우리 서버를 통과하지 않는다.</strong> 설치형 앱과 프리미어 패널은 저장소로
+    <strong>파일을 직접</strong> 보내고, 서버는 "누가 무엇을 올렸다"는 <strong>기록만</strong> 받는다.
+  </p>
+  <p class="tight muted small">
+    그래서 파일이 커져도 서버가 느려지지 않고, 업로드가 끊겨도 서버는 멀쩡하다.
+    끊긴 지점부터 이어 올리는 것도 앱과 저장소 둘이서 한다.
+  </p>
+</section>
+
+<!-- ════════════════════════════════════════════ -->
+<section>
+  <div class="num">04 — 설치형 앱</div>
+  <h2>큰 파일을 사람이 지키지 않아도 되게</h2>
+  <p class="lede">
+    설치형 앱의 존재 이유는 하나다. <strong>브라우저는 수십 GB짜리 파일을 감당하지 못한다.</strong>
+    창을 닫으면 끝나고, 잠자기에 들어가면 끊기고, 다시 하려면 처음부터다.
+  </p>
+
+  <div class="cards c2">
+    <div class="card">
+      <h5>이어 올리기</h5>
+      <p>네트워크가 끊기거나, 앱을 껐거나, PC를 재부팅해도
+      <strong>올라간 지점부터</strong> 이어서 간다.</p>
+    </div>
+    <div class="card">
+      <h5>트레이 상주</h5>
+      <p>업로드가 남아 있으면 창을 닫아도 트레이로 내려가 계속 올린다.
+      Windows 로그인 시 알아서 재개한다.</p>
+    </div>
+    <div class="card">
+      <h5>한 번에 하나씩</h5>
+      <p>여러 개를 동시에 밀면 서로 느려진다. 줄을 세워 <strong>한 파일씩</strong> 확실히 올린다.</p>
+    </div>
+    <div class="card">
+      <h5>프리미어 실행</h5>
+      <p>웹에서 "프리미어에서 편집"을 누르면 설치된 프리미어를 앱이 대신 띄운다.</p>
+    </div>
+  </div>
+
+  <div class="note">
+    <b>웹은 그대로 둔다.</b> 앱을 안 깔아도 웹의 기존 업로드는 계속 동작한다.
+    앱은 <strong>큰 파일을 자주 다루는 사람에게만</strong> 필요한 도구다 — 전원이 설치할 이유가 없다.
+  </div>
+</section>
+
+<!-- ════════════════════════════════════════════ -->
+<section>
+  <div class="num">05 — 프리미어 플러그인</div>
+  <h2>프리미어를 대체하지 않는다. 그 안에 들어간다.</h2>
+  <p class="lede">
+    편집·색보정·오디오는 프리미어가 압도적으로 잘한다. 우리가 할 일은 그걸 흉내내는 게 아니라,
+    프리미어가 <strong>모르는 것</strong>을 옆에서 알려 주는 것이다 —
+    어느 구간이 볼 만한지, 이 영상이 어느 회차인지, 다 만들면 어디로 보내야 하는지.
+  </p>
+
+  <h3>패널이 하는 일 네 가지</h3>
+  <table>
+    <thead><tr><th style="width:150px">기능</th><th>편집자가 겪는 것</th></tr></thead>
+    <tbody>
+      <tr class="done"><td>완성본 업로드</td>
+        <td>렌더한 MP4를 패널에서 고르면 바로 올라가고 배포 대상이 된다.
+        탐색기·브라우저를 안 거친다. <strong>가장 먼저 만든 기능</strong>이다 — 하루 두 번 반복되던 왕복이라서.</td></tr>
+      <tr class="done"><td>원본 반입</td>
+        <td>웹에서 "프리미어에서 편집"을 누르면, 그 회차 원본이 프로젝트에 들어와 있다.
+        프로젝트가 없으면 만들어 준다.</td></tr>
+      <tr class="done"><td>제목·자막 소재</td>
+        <td>제목 그래픽과 자막 베이스가 프로젝트에 함께 등록된다.
+        편집자가 매번 만들던 것이다.</td></tr>
+      <tr><td>추천 마커</td>
+        <td>AI가 고른 구간이 <strong>타임라인 마커</strong>로 찍힌다. 시각을 받아 적을 일이 없어진다.
+        <span class="tag">다음 단계</span></td></tr>
+    </tbody>
+  </table>
+
+  <h3>여기서 한 가지 제약이 설계를 갈랐다</h3>
+  <p>
+    브라우저에서 버튼을 눌렀을 때, <strong>프리미어 안에 떠 있는 패널에 값을 직접 건네줄 방법이 없다.</strong>
+    Adobe 가 그 문을 열어 두지 않았다. 그래서 둘로 나눴다.
+  </p>
+  <div class="cards c2">
+    <div class="card">
+      <div class="k">① 실행</div>
+      <h5>프리미어를 띄운다</h5>
+      <p>웹이 <code>stepd://</code> 라는 주소를 열면 설치형 앱이 받아서 프리미어를 실행하거나
+      앞으로 가져온다.</p>
+    </div>
+    <div class="card">
+      <div class="k">② 맥락</div>
+      <h5>"어느 회차인지"를 전한다</h5>
+      <p>웹이 그 정보를 <strong>서버에 잠깐 남기고</strong>, 패널이 그걸 집어간다.
+      5분이 지나면 사라지고, 한 번 집어가면 지워진다.</p>
+    </div>
+  </div>
+  <p class="tight muted small">
+    이 분리 덕에 <strong>프리미어가 이미 켜져 있으면 설치형 앱 없이도 동작한다.</strong>
+    패널이 스스로 확인하기 때문이다. 두 개를 억지로 묶지 않은 값이 여기서 나온다.
+  </p>
+
+  <h3>1프레임도 어긋나면 안 된다</h3>
+  <p>
+    STEP-D 는 시간을 <strong>파일 맨 앞을 0초로</strong> 센다. 프리미어는 <strong>촬영 당시 타임코드</strong>로 센다.
+    이 둘이 다르면 "12분 30초 구간"이 프리미어에서 엉뚱한 데를 가리킨다.
+    그래서 영상을 받을 때 초당 프레임 수와 시작 타임코드를 <strong>같이 저장해 두고</strong> 환산한다.
+  </p>
+  <p class="tight muted small">목표는 오차 <strong>1프레임 이내</strong>. 방송에서 그보다 크면 쓸 수 없다.</p>
+</section>
+
+<!-- ════════════════════════════════════════════ -->
+<section>
+  <div class="num">06 — 설계에서 정한 것</div>
+  <h2>왜 이렇게 만들었나</h2>
+  <p class="lede">
+    나중에 "왜 저렇게 했지" 라는 질문이 반드시 나온다. 되돌리기 어려운 결정 넷을 미리 적어 둔다.
+  </p>
+
+  <div class="steps">
+    <div class="step"><div class="n">1</div><div>
+      <h5>패널을 웹 화면으로 만들지 않았다</h5>
+      <p>프리미어 패널 안에 웹페이지를 띄우는 방법도 있었다. 그랬다면 웹 화면을 재사용할 수 있다.
+      대신 <strong>웹이 죽으면 패널도 죽고</strong>, 로그인 상태를 두 세계 사이로 넘기는 위험한 다리가 생긴다.
+      화면이 입력 세 개뿐이라 <strong>패널이 직접 그리는 쪽</strong>이 짧고 안전했다.</p>
+    </div></div>
+
+    <div class="step"><div class="n">2</div><div>
+      <h5>서버 기능을 복제하지 않았다</h5>
+      <p>업로드·클립 생성·배포는 <strong>웹이 쓰던 그 창구를 그대로</strong> 쓴다.
+      플러그인용 API를 따로 만들면 규칙이 두 벌이 되고, 한쪽만 고쳐지는 날이 온다.
+      배포 게이트·크레딧 차감 같은 <strong>돈과 안전에 걸린 판단이 문 하나</strong>를 지나야 한다.</p>
+    </div></div>
+
+    <div class="step"><div class="n">3</div><div>
+      <h5>원본은 MXF 그대로, 게시본은 MP4로</h5>
+      <p>방송 원본(MXF)은 편집용으로 손대지 않고 두고, 채널에 올라가는 최종본만 MP4로 만든다.
+      한때 원본을 변환하려다 <strong>원본을 덮어쓸 뻔한</strong> 경로가 있었고, 그건 막았다.</p>
+    </div></div>
+
+    <div class="step"><div class="n">4</div><div>
+      <h5>세션이 끊겨도 패널이 스스로 푼다</h5>
+      <p>30분짜리 업로드를 마친 뒤 마지막 한 줄에서 로그인이 만료돼 전부 날아가는 것이
+      가장 뼈아프다. 그래서 자격증명을 <strong>OS 금고</strong>에 두고, 만료되면 한 번 다시 로그인해
+      그 요청을 이어서 한다.</p>
+    </div></div>
+  </div>
+</section>
+
+<!-- ════════════════════════════════════════════ -->
+<section>
+  <div class="num">07 — 단계</div>
+  <h2>지금 어디까지 왔고, 다음은 무엇인가</h2>
+
+  <div class="steps">
+    <div class="step done"><div class="n">✓</div><div>
+      <h5>준비 — 프레임 정합 · 원본 보호 <span class="tag done">완료</span></h5>
+      <p>영상마다 초당 프레임 수·시작 타임코드·오디오 트랙 수를 저장하고, MXF 원본이
+      덮이지 않게 막았다. 마커가 정확히 찍히려면 이게 먼저다.</p>
+    </div></div>
+
+    <div class="step done"><div class="n">✓</div><div>
+      <h5>설치형 앱 v1 <span class="tag done">완료 · 검증 남음</span></h5>
+      <p>업로드 큐·이어 올리기·트레이·프리미어 실행까지 동작한다.
+      다만 <strong>실제 방송 원본으로 인수 테스트를 못 했다</strong>(아래 참조).</p>
+    </div></div>
+
+    <div class="step done"><div class="n">✓</div><div>
+      <h5>패널 1단계 — 완성본 업로드 <span class="tag done">완료</span></h5>
+      <p>파일 선택 → 업로드 → 배포용 클립 생성. 하루 두 번의 왕복이 사라지는 지점이다.</p>
+    </div></div>
+
+    <div class="step done"><div class="n">✓</div><div>
+      <h5>패널 2단계 — 원본 반입 · 제목/자막 소재 <span class="tag done">완료</span></h5>
+      <p>웹에서 넘기면 프리미어에 그 회차 원본이 들어오고, 제목 그래픽과 자막 베이스가 함께 등록된다.</p>
+    </div></div>
+
+    <div class="step now"><div class="n">▶</div><div>
+      <h5>패널 3단계 — 추천 마커 <span class="tag now">다음</span></h5>
+      <p>AI가 고른 구간을 타임라인 마커로 찍는다. 이름·점수·추천 이유가 마커에 붙는다.
+      <strong>편집자가 시각을 받아 적는 마지막 수작업</strong>이 여기서 없어진다.</p>
+    </div></div>
+
+    <div class="step"><div class="n">5</div><div>
+      <h5>내보내기 자동화</h5>
+      <p>패널에서 버튼 하나로 활성 시퀀스를 정해진 규격으로 렌더하고, 끝나면 바로 업로드까지 잇는다.
+      지금은 편집자가 렌더를 직접 걸고 파일을 고른다.</p>
+    </div></div>
+
+    <div class="step"><div class="n">6</div><div>
+      <h5>파일럿 배포</h5>
+      <p>서명한 설치 파일로 실제 편집자에게 배포하고 한 주 돌린다. 그다음에 Adobe 마켓플레이스 등록을 검토한다.</p>
+    </div></div>
+  </div>
+
+  <div class="ok">
+    <b>성공 기준은 숫자로 둔다.</b> 완성본 업로드·게시 성공률 95% 이상 ·
+    타임코드 오차 1프레임 이하 · <strong>프리미어 밖으로 나가는 왕복 0회</strong>.
+  </div>
+</section>
+
+<!-- ════════════════════════════════════════════ -->
+<section>
+  <div class="num">08 — 정직하게</div>
+  <h2>아직 확인하지 못한 것</h2>
+  <p class="lede">
+    코드가 돌아간다는 것과 현장에서 버틴다는 것은 다른 말이다. 지금 모르는 것을 적어 둔다 —
+    이걸 안 적으면 계획이 실제보다 단단해 보인다.
+  </p>
+
+  <div class="warn">
+    <b>실제 방송 원본으로 한 번도 못 돌려 봤다.</b>
+    수십 GB짜리 파일을 올리다 네트워크를 끊고, 앱을 죽이고, PC를 재부팅했을 때
+    <strong>정말로 이어서 올라가는지</strong> 아무도 확인하지 못했다.
+    이어 올리기는 이 앱의 존재 이유인데, 그 경로가 미검증이다.
+    <br><br>
+    같은 이유로 <strong>MXF 파일도 실물이 아직 없다</strong>. 원본 보호 장치를 만들어 뒀지만
+    진짜 MXF 로 통과시켜 본 적이 없다.
+  </div>
+
+  <p><strong>필요한 것은 하나다 — 실제 방송 원본 한 편.</strong>
+  그걸 받는 순간 하루면 끝나는 검증이고, 그 전까지는 이 두 줄을 계획서에 계속 적어 둘 것이다.</p>
+
+  <h3>그 밖의 제약</h3>
+  <ul>
+    <li><strong>Premiere Pro 25.6 이상</strong>이어야 한다. 그 아래 버전은 플러그인을 못 얹는다.</li>
+    <li>자막을 타임라인에 자동 배치하는 것은 <strong>약속하지 않는다</strong> — Adobe 가 아직 그 문을 안 열었다.
+      자막 파일을 프로젝트에 넣어 주는 데까지만 한다.</li>
+    <li>설치형 앱은 <strong>Windows 먼저</strong>다. 편집실 대부분이 Windows 라서다.</li>
+  </ul>
+</section>
+
+<!-- ════════════════════════════════════════════ -->
+<section style="border-bottom:none">
+  <div class="num">09 — 범위</div>
+  <h2>하지 않는 것</h2>
+  <p class="lede">
+    무엇을 안 할지를 적어 두지 않으면, 나중에 전부 해야 할 것처럼 읽힌다.
+  </p>
+  <div class="cards c3">
+    <div class="card">
+      <h5>편집 기능</h5>
+      <p>자르기·색보정·오디오는 프리미어가 한다. 우리가 다시 만들지 않는다.</p>
+    </div>
+    <div class="card">
+      <h5>범용 영상 검색</h5>
+      <p>프리미어에 이미 있다. 우리는 <strong>한국어 방송 문맥</strong>(출연자·장면·회차)에만 집중한다.</p>
+    </div>
+    <div class="card">
+      <h5>결제·계정 관리</h5>
+      <p>웹에 그대로 둔다. 플러그인은 <strong>이미 연결된 채널만</strong> 보여준다.</p>
+    </div>
+  </div>
+</section>
+
+<footer>
+  이 문서는 계획을 사람 말로 옮긴 것이다. 기술 상세는
+  <code>docs/plans/active/premiere-plugin-plan.md</code> ·
+  <code>docs/ops/native-desktop.md</code> 에 있고, 숫자와 결정의 근거도 거기 있다.
+</footer>
+
+</div>
+</body>
+</html>
