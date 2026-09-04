@@ -52,7 +52,6 @@ import { Header } from "@/components/layout/header";
 import { useToast } from "@/components/ui/toast";
 import { useSession } from "@/lib/auth";
 import {
-  createTopupOrder,
   fetchAutoTopup,
   fetchCredits,
   fetchInvoices,
@@ -64,17 +63,8 @@ import {
   type SavedCard,
 } from "@/lib/data/api";
 import { downloadInvoicePdf } from "@/lib/billing/invoice-pdf";
-import { SavedCardChargeButton, SavedCardManager } from "@/components/billing/saved-card";
+import { SavedCardManager } from "@/components/billing/saved-card";
 import { BillingDialog } from "@/components/billing/billing-ui";
-import { cn } from "@/lib/utils";
-
-/** 자주 쓰는 충전량. 시간 단위로 생각하는 게 자연스럽다(1크레딧=1분). */
-const PRESETS = [
-  { credits: 60, label: "1시간" },
-  { credits: 300, label: "5시간" },
-  { credits: 600, label: "10시간" },
-  { credits: 1800, label: "30시간" },
-];
 
 const WON = (n: number) => `₩${n.toLocaleString("ko-KR")}`;
 
@@ -110,7 +100,7 @@ function autoChargeAmounts(
 }
 
 /** 열려 있는 다이얼로그 — 한 번에 하나만. */
-type DialogKind = "topup" | "ledger" | "card" | "settings" | "invoices" | null;
+type DialogKind = "ledger" | "card" | "settings" | "invoices" | null;
 
 const ROLE_KO: Record<string, string> = {
   owner: "소유자", admin: "관리자", member: "구성원", superadmin: "슈퍼관리자",
@@ -119,7 +109,6 @@ const ROLE_KO: Record<string, string> = {
 export default function CreditsPage() {
   const { toast } = useToast();
   const session = useSession();
-  const actor = session.user.name;
   // 결제수단·결제는 owner/admin 만. 화면에서 숨기는 건 편의고 경계는 서버다(403).
   const canManageBilling =
     session.user.workspaceRole === "owner" ||
@@ -128,7 +117,6 @@ export default function CreditsPage() {
 
   const [state, setState] = useState<CreditState | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [credits, setCredits] = useState(600);
   // 카드 상태는 셋이 같이 본다 — 구매 다이얼로그의 저장카드 결제 버튼 · 결제수단 다이얼로그
   // (등록·삭제) · 자동충전 게이트. 한 번만 조회해 같은 스냅샷을 나눠 준다(따로 조회하면 어긋난다).
   const [card, setCard] = useState<SavedCard | null>(null);
@@ -144,11 +132,6 @@ export default function CreditsPage() {
   // **이름도 필수다** (PC·모바일 공통). 세션에 있으면 채우되, 없으면 사람이 넣는다 —
   // 세션 이름에만 기대면 로그인 없는 지금 빈 값으로 나가 결제창이 안 뜬다.
   const [buyerName, setBuyerName] = useState("");
-  const [busy, setBusy] = useState(false);
-  // 저장카드 결제 in-flight — 구매 다이얼로그의 닫기 차단이 일반결제(busy)만 보면
-  // 이 경로에서 진행 중 unmount 가 가능해진다 (멱등키가 이중결제는 막지만 피드백이 유실).
-  const [cardCharging, setCardCharging] = useState(false);
-  const [awaiting, setAwaiting] = useState<string | null>(null);
   const [dialog, setDialog] = useState<DialogKind>(null);
   // 인보이스 — 결제 완료 건마다 하나. PDF 는 브라우저가 그린다(폰트 로드 때문에 건별 busy).
   const [invoiceList, setInvoiceList] = useState<InvoiceList | null>(null);
@@ -226,82 +209,6 @@ export default function CreditsPage() {
   // KG이니시스 PC 일반결제 필수 3종: fullName · email · phoneNumber (공식 문서 확인, 2026-08-11).
   // 모바일은 email·phone 이 선택이지만, 어느 기기로 열든 되게 셋 다 받는다.
   const canPay = emailOk && phoneOk && nameOk;
-
-  async function topup() {
-    if (busy || credits <= 0 || !canPay) return;
-    setBusy(true);
-    try {
-      // 1) 서버가 주문을 만든다 — paymentId 와 금액이 여기서 확정된다.
-      const order = await createTopupOrder(credits, actor);
-
-      // 2) 결제창. SDK 는 브라우저에서만 동작하므로 이 시점에 동적 로드한다.
-      const PortOne = await import("@portone/browser-sdk/v2");
-      const res = await PortOne.requestPayment({
-        storeId: order.storeId,
-        channelKey: order.channelKey,
-        paymentId: order.paymentId,
-        orderName: order.orderName,
-        totalAmount: order.amountKrw,
-        currency: "CURRENCY_KRW",
-        payMethod: "CARD",
-        // 이니시스 V2 일반결제는 구매자 이메일이 **필수**다. 빠지면 결제창 호출 자체가 실패한다.
-        customer: {
-          fullName: buyerName.trim(),
-          email: email.trim(),
-          phoneNumber: phoneDigits,
-        },
-      });
-
-      if (res?.code) {
-        // 사용자가 닫았거나 PG 가 거절했다. 서버 주문은 pending 으로 남고, 웹훅이 오면
-        // 그때 확정된다 — 여기서 실패로 단정하지 않는다.
-        toast({ title: "결제가 완료되지 않았습니다", description: res.message ?? res.code, tone: "warn" });
-        return;
-      }
-
-      // 3) **여기서 크레딧을 올리지 않는다.** 웹훅이 확정한다.
-      setAwaiting(order.paymentId);
-      toast({
-        title: "결제 확인 중",
-        description: "결제 승인을 서버가 확인하면 잔액에 반영됩니다. 잠시 걸릴 수 있습니다.",
-        tone: "progress",
-      });
-      // 결제창은 끝났다 — 남은 건 웹훅 확인뿐이라 다이얼로그를 닫는다. 안 닫으면 사용자가
-      // 폴링(최대 ~20초) 동안 갇히고, 히어로의 "결제 확인 중…" 태그도 가려져 죽은 UI 가 된다.
-      // 폴링은 화면 상태로 계속 돌고, 완료/미반영 토스트가 결과를 알린다.
-      setDialog(null);
-      await pollUntilCredited(order.paymentId);
-    } catch (err) {
-      toast({ title: "충전 실패", description: err instanceof Error ? err.message : String(err), tone: "error" });
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  /** 웹훅이 반영될 때까지 잔액을 다시 본다. 못 봐도 실패로 단정하지 않는다. */
-  async function pollUntilCredited(paymentId: string) {
-    for (let i = 0; i < 10; i += 1) {
-      await new Promise((r) => setTimeout(r, 2000));
-      try {
-        const next = await fetchCredits();
-        setState(next);
-        if (next.ledger.some((l) => l.paymentId === paymentId)) {
-          setAwaiting(null);
-          // 사이드바 잔액도 즉시 따라오게 한다.
-          window.dispatchEvent(new Event("stepd:credits-changed"));
-          toast({ title: "충전 완료", description: `${credits} 크레딧이 들어왔습니다.`, tone: "done" });
-          return;
-        }
-      } catch { /* 다음 회차에 다시 본다 */ }
-    }
-    // 웹훅이 늦을 수 있다. "실패"라고 말하지 않는다 — 결제는 됐을 수 있다.
-    setAwaiting(null);
-    toast({
-      title: "아직 반영되지 않았습니다",
-      description: "결제는 승인됐을 수 있습니다. 잠시 후 새로고침해 보고, 계속 안 보이면 결제 내역과 함께 문의하세요.",
-      tone: "warn",
-    });
-  }
 
   const close = () => setDialog(null);
   const recent = state?.ledger.slice(0, 5) ?? [];
@@ -386,12 +293,6 @@ export default function CreditsPage() {
             <div className="space-y-1">
               <div className="text-xs text-[var(--color-text-muted)] font-semibold flex items-center gap-2">
                 <span>크레딧 잔액</span>
-                {/* 결제 승인은 났는데 서버 반영을 기다리는 중 — 원본엔 없는 상태다. */}
-                {awaiting && (
-                  <span className="px-2 py-0.5 rounded-full text-[10px] bg-amber-500/15 text-amber-600 dark:bg-amber-500/20 dark:text-amber-400 font-bold">
-                    결제 확인 중…
-                  </span>
-                )}
               </div>
               <div className="flex items-baseline gap-2 flex-wrap">
                 <span className="text-4xl font-extrabold text-[var(--color-text-primary)]">
@@ -458,18 +359,6 @@ export default function CreditsPage() {
               <p className="text-[11px] text-[var(--color-text-muted)] leading-relaxed pt-2">
                 {state?.unit ?? "크레딧 1개 = 분석 1분"} · 선불 결제이며, 승인 후 서버 확인이 끝나야 잔액에 반영됩니다. 크레딧은 분석에 쓰인 분과 배포한 영상×채널만큼 차감됩니다 (배포 실패 시 되돌려 드립니다).
               </p>
-            </div>
-
-            <div className="pt-2">
-              {/* ⚠️ 원본 버튼에는 onClick 이 **없다** — 그대로 옮기면 이 제품은 돈을 못 받는다. */}
-              <button
-                type="button"
-                onClick={() => setDialog("topup")}
-                className="w-full h-10 rounded-full bg-[var(--color-bg-active)] hover:bg-[#0D1EB8] text-white text-xs font-bold transition-colors cursor-pointer shadow-md shadow-slate-900/5 dark:shadow-none flex items-center justify-center gap-1.5"
-              >
-                <CreditCard className="w-4 h-4" />
-                <span>크레딧 구매하기</span>
-              </button>
             </div>
           </div>
 
@@ -742,137 +631,6 @@ export default function CreditsPage() {
       {/* ══ 다이얼로그들 ══════════════════════════════════════════════════════ */}
 
       {/* 크레딧 구매 — 프리셋·수량·구매자 3필드·결제 2종. 결제 진행 중엔 닫기를 막는다. */}
-      {dialog === "topup" && (
-        <BillingDialog
-          title="크레딧 구매"
-          subtitle="크레딧 1개 = 분석 1분 · 선불 · 승인 후 서버 확인이 끝나야 잔액에 반영됩니다."
-          onClose={close}
-          // 저장카드 결제도 in-flight 동안 닫히면 안 된다 — 진행 피드백이 사라진다.
-          closeDisabled={busy || cardCharging}
-          footer={
-            price != null ? (
-              <>
-                <button
-                  type="button"
-                  className="sd-btn sd-btn-primary"
-                  disabled={busy || credits <= 0 || !canPay}
-                  title={canPay ? undefined : "KG이니시스는 이름·이메일·휴대폰번호가 모두 필요합니다"}
-                  onClick={topup}
-                >
-                  {busy ? "진행 중…" : `결제창으로 ${WON(chargeAmounts(credits, price)?.total ?? credits * price)} 결제`}
-                </button>
-                <SavedCardChargeButton
-                  card={card}
-                  canManage={canManageBilling}
-                  credits={credits}
-                  // **실제 청구액**을 넘긴다 — 저장카드는 결제창이 없어서 이 버튼 라벨과
-                  // confirm 이 유일한 금액 확인 관문이다. 공급가액을 넘기면 사용자가 본
-                  // 금액과 카드에 긁히는 금액이 다르다(부가세 별도 · 2026-08-27).
-                  amountKrw={chargeAmounts(credits, price)?.total ?? 0}
-                  onCharged={load}
-                  onBusyChange={setCardCharging}
-                  // 구 카드(구매자 정보 미저장) 폴백 — 화면의 구매자 입력값으로 결제하고
-                  // 서버가 성공 시 카드에 백필한다.
-                  buyer={{ fullName: buyerName.trim(), email: email.trim(), phoneNumber: phoneDigits }}
-                />
-              </>
-            ) : undefined
-          }
-        >
-          {price == null ? (
-            <p className="text-[11.5px]" style={{ color: "var(--sd-warn)" }}>
-              크레딧 단가가 설정되지 않아 결제를 시작할 수 없습니다 (서버 <code>CREDIT_PRICE_KRW</code>).
-            </p>
-          ) : (
-            <>
-              <div className="flex flex-wrap gap-[3px]">
-                {PRESETS.map((p) => (
-                  <button
-                    key={p.credits}
-                    type="button"
-                    className={cn("sd-btn", credits === p.credits && "sd-btn--on")}
-                    onClick={() => setCredits(p.credits)}
-                  >
-                    {p.label}
-                    <span className="sd-mono ml-1.5 text-[10.5px]" style={{ opacity: 0.7 }}>
-                      {p.credits}
-                    </span>
-                  </button>
-                ))}
-              </div>
-
-              {/* 수량 + 금액 — 아래 결제 버튼 두 개가 모두 이 금액을 긁는다. */}
-              <div className="flex flex-wrap items-center gap-2">
-                <input
-                  value={credits}
-                  onChange={(e) => setCredits(Number(e.target.value.replace(/\D/g, "")) || 0)}
-                  inputMode="numeric"
-                  className="sd-input w-[120px]"
-                  aria-label="충전할 크레딧"
-                />
-                <span className="text-[11.5px]" style={{ color: "var(--sd-mut)" }}>크레딧</span>
-                {/* 큰 숫자는 **실제로 긁히는 금액**이어야 한다 — 단가가 부가세 별도라
-                    `크레딧 × 단가` 는 공급가액일 뿐이다(2026-08-27). 그 숫자를 버튼에
-                    띄우면 카드 명세서와 달라 문의가 된다. 내역은 바로 옆에 적는다. */}
-                <span className="sd-mono text-[15px]" style={{ color: "var(--sd-fg)" }}>
-                  {WON(chargeAmounts(credits, price)?.total ?? 0)}
-                </span>
-                <span className="text-[10.5px]" style={{ color: "var(--sd-mut)" }}>
-                  (크레딧당 {WON(price)} · 부가세 별도 — 공급가액{" "}
-                  {WON(chargeAmounts(credits, price)?.supply ?? 0)} + 부가세{" "}
-                  {WON(chargeAmounts(credits, price)?.vat ?? 0)})
-                </span>
-              </div>
-
-              {/* 구매자 정보 — PG(KG이니시스) 필수 3종. 설정 다이얼로그와 같은 값을 편집한다. */}
-              <div className="flex flex-wrap items-center gap-2">
-                <input
-                  value={buyerName}
-                  onChange={(e) => setBuyerName(e.target.value)}
-                  placeholder="구매자 이름 (필수)"
-                  className="sd-input w-[140px]"
-                  aria-label="구매자 이름"
-                />
-                <input
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="영수증 받을 이메일 (필수)"
-                  className="sd-input min-w-[200px] flex-1"
-                  aria-label="구매자 이메일"
-                />
-                <input
-                  type="tel"
-                  value={phone}
-                  onChange={(e) => setPhone(e.target.value)}
-                  placeholder="휴대폰번호 (필수)"
-                  className="sd-input w-[160px]"
-                  aria-label="구매자 휴대폰번호"
-                />
-              </div>
-              {/* PG 가 요구하는 항목이라 여기서 막는다 — 결제창까지 가서 알게 하지 않는다. */}
-              {(buyerName || email || phone) && !canPay && (
-                <p className="text-[10.5px]" style={{ color: "var(--sd-danger-strong)" }}>
-                  {!nameOk
-                    ? "구매자 이름을 입력하세요."
-                    : !emailOk
-                      ? "이메일 형식을 확인하세요."
-                      : "휴대폰번호를 확인하세요 — 010으로 시작하는 휴대폰만 등록됩니다 (예: 01012345678)."}
-                </p>
-              )}
-
-              <p
-                className="text-[11px]"
-                style={{ color: "var(--sd-mut)" }}
-                title="결제 승인 후 서버가 포트원 웹훅으로 확인을 마쳐야 잔액에 반영됩니다 — 결제창이 닫힌 직후에는 바로 보이지 않을 수 있습니다."
-              >
-                승인 후 서버 확인이 끝나야 잔액에 반영됩니다 · 크레딧은 분석에 쓰인 분과 배포한 영상×채널만큼 차감됩니다.
-              </p>
-            </>
-          )}
-        </BillingDialog>
-      )}
-
       {/* 거래 전체 내역 — 서버가 주는 최근 50건 그대로. */}
       {dialog === "ledger" && (
         <BillingDialog title="크레딧 내역" subtitle="최근 거래 목록입니다." onClose={close} maxWidth={640}>
