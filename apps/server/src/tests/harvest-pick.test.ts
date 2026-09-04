@@ -10,8 +10,9 @@ import { describe, it } from "node:test";
 import {
   DEFAULT_DAILY_CAP, DEFAULT_MIN_DURATION_SEC, HARVEST_HOUR_KST, MAX_IN_FLIGHT, STOCK_BUFFER_DAYS,
   candidates, clampCap, clampMinDuration, enoughStock, estimate, isHarvestWindow, parseChannelRef,
-  pickNext, type ChannelVideo, type HarvestSource,
+  pickNext, publishSummary, type ChannelVideo, type HarvestSource,
 } from "../pipeline/harvest.ts";
+import type { AutomationRule } from "../pipeline/automation.ts";
 
 const REGISTERED = Date.parse("2026-06-01T00:00:00Z");
 
@@ -241,5 +242,77 @@ describe("수확 시각", () => {
     assert.equal(HARVEST_HOUR_KST, 2);
     assert.equal(isHarvestWindow(new Date("2026-09-03T17:00:00Z")), true);
     assert.equal(isHarvestWindow(new Date("2026-09-03T17:59:59Z")), true);
+  });
+});
+
+/**
+ * 배포 계획 요약 — **"만들기만 하고 안 나간다" 를 화면이 말할 수 있는가.**
+ *
+ * 이 판정이 틀리면 사용자는 계획이 있는 줄 알고 기다리는데 아무것도 안 나가거나, 반대로
+ * 멀쩡히 도는 계획을 없다고 표시해 계획을 하나 더 만들게 된다(그러면 두 배로 나간다).
+ */
+describe("배포 계획 요약", () => {
+  const rule = (over: Partial<AutomationRule> = {}): AutomationRule => ({
+    id: "ar_1", programId: "p1", platform: "youtube", accountId: "UCpub1",
+    mediaKind: "short", gatePolicy: "hold_on_issue", window: "수시", enabled: true, ...over,
+  });
+
+  it("계획이 없으면 null — 이 상태가 곧 '아무 데도 안 나감' 이다", () => {
+    assert.equal(publishSummary("p1", []), null);
+  });
+
+  it("멈춘 계획은 없는 것으로 본다", () => {
+    assert.equal(publishSummary("p1", [rule({ enabled: false })]), null);
+  });
+
+  it("다른 프로그램 계획은 내 것이 아니다", () => {
+    assert.equal(publishSummary("p1", [rule({ programId: "p2" })]), null);
+  });
+
+  it("채널 이름을 붙인다 — 모르는 id 는 id 그대로 남긴다", () => {
+    const s = publishSummary("p1", [rule({ accountId: "UCpub1" })], [
+      { channelId: "UCpub1", channelName: "우리 숏폼 채널" },
+    ]);
+    assert.deepEqual(s?.channels, [{ accountId: "UCpub1", name: "우리 숏폼 채널" }]);
+
+    const unknown = publishSummary("p1", [rule({ accountId: "UCpub9" })], []);
+    assert.equal(unknown?.channels[0].name, "UCpub9");
+  });
+
+  it("하루 발행 수는 슬롯 개수의 합 — 순방(perDayCount)과 같은 함수여야 한다", () => {
+    const s = publishSummary("p1", [rule({ slots: [{ time: "07:00", count: 2 }, { time: "19:00", count: 3 }] })]);
+    assert.equal(s?.perDay, 5);
+    assert.deepEqual(s?.slots.map((x) => x.time), ["07:00", "19:00"]);
+  });
+
+  it("슬롯이 없으면 할당량 방식 기본값(3)", () => {
+    assert.equal(publishSummary("p1", [rule()])?.perDay, 3);
+  });
+
+  it("계획이 여러 개면 하루 발행 수를 합친다", () => {
+    const s = publishSummary("p1", [
+      rule({ id: "ar_1", accountId: "UCa", slots: [{ time: "07:00", count: 2 }] }),
+      rule({ id: "ar_2", accountId: "UCb", slots: [{ time: "19:00", count: 1 }] }),
+    ]);
+    assert.equal(s?.perDay, 3);
+    assert.deepEqual(s?.channels.map((c) => c.accountId), ["UCa", "UCb"]);
+  });
+
+  it("같은 채널이 두 계획에 있어도 한 번만 센다", () => {
+    const s = publishSummary("p1", [rule({ id: "ar_1" }), rule({ id: "ar_2", programId: "p1" })]);
+    assert.equal(s?.channels.length, 1);
+  });
+
+  it("유튜브가 아닌 채널은 배포처로 말하지 않는다 — 완전자동화는 유튜브→유튜브다", () => {
+    const s = publishSummary("p1", [rule({
+      platform: "youtube", accountId: "UCa",
+      channels: [{ platform: "instagram", accountId: "ig1" }, { platform: "youtube", accountId: "UCa" }],
+    })]);
+    assert.deepEqual(s?.channels.map((c) => c.accountId), ["UCa"]);
+  });
+
+  it("요일은 정규화해서 준다 — 비면 null(= 매일)", () => {
+    assert.equal(publishSummary("p1", [rule()])?.weekdays, null);
+    assert.deepEqual(publishSummary("p1", [rule({ weekdays: [5, 1, 1] })])?.weekdays, [1, 5]);
   });
 });

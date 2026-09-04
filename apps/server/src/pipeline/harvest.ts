@@ -21,6 +21,10 @@
  * 아카이브 작업이다. 그래서 **최신순**으로 집고 과거로 내려간다.
  */
 import { billableMinutes } from "../billing/billing.ts";
+import {
+  perDayCount, rulePrograms, ruleSlots, ruleWeekdays,
+  type AutomationRule, type RuleSlot,
+} from "./automation.ts";
 
 /** 하루에 몇 편까지 집을지. 60분 1편 = 60크레딧이라 이 기본값이 곧 월 청구액을 정한다. */
 export const DEFAULT_DAILY_CAP = 2;
@@ -263,4 +267,59 @@ export function parseChannelRef(input: string): { kind: "id"; id: string } | { k
   if (handle) return { kind: "handle", handle };
 
   return null;
+}
+
+/**
+ * 이 프로그램의 **배포 계획 요약** — 만든 숏폼이 어디로, 얼마나 나가는지.
+ *
+ * ⚠️ **`null` 은 "안 나간다" 는 뜻이다.** 계획이 없으면 수집·분석·숏폼 생성까지 다 돌고
+ * 배포에서 멈춘다 — 크레딧은 그대로 나가는데 결과물이 아무 데도 안 간다. 게다가 하루 배포
+ * 물량이 0 이라 **재고 브레이크도 안 걸린다**(`enoughStock` 은 수요 0 이면 false) — 상한까지
+ * 매일 가져오면서 하나도 안 나가는 조합이 된다. 이 기능의 최악 상태라 화면이 크게 알린다.
+ *
+ * 순수 함수로 두는 이유는 이 파일의 나머지와 같다 — 화면이 읽는 숫자(하루 몇 개)가 순방의
+ * 판정과 **같은 함수**(`perDayCount`)에서 나와야 하고, 그걸 DB 없이 검증할 수 있어야 한다.
+ */
+export interface PublishSummary {
+  ruleId: string;
+  channels: { accountId: string; name: string }[];
+  /** 하루 몇 개 나가는지 — 걸린 계획들의 합. */
+  perDay: number;
+  slots: RuleSlot[];
+  weekdays: number[] | null;
+  templateId: string | null;
+}
+
+export function publishSummary(
+  programId: string,
+  rules: AutomationRule[],
+  channels: { channelId: string; channelName?: string | null }[] = [],
+): PublishSummary | null {
+  // 멈춘 계획은 안 나가는 것과 같다 — 세면 "하루 3개 나갑니다" 라고 적어 놓고 0개가 나간다.
+  const mine = rules.filter((r) => r.enabled !== false && rulePrograms(r).includes(programId));
+  if (!mine.length) return null;
+
+  const seen = new Set<string>();
+  const out: { accountId: string; name: string }[] = [];
+  for (const r of mine) {
+    const list = r.channels?.length ? r.channels : [{ platform: r.platform, accountId: r.accountId }];
+    for (const ch of list) {
+      // 유튜브만 — 완전자동화는 유튜브 → 유튜브다. 다른 플랫폼 계획이 같은 프로그램에
+      // 붙어 있어도 이 화면이 그걸 자기 배포처인 양 말하면 안 된다.
+      if (ch.platform !== "youtube" || !ch.accountId || seen.has(ch.accountId)) continue;
+      seen.add(ch.accountId);
+      const known = channels.find((x) => x.channelId === ch.accountId);
+      out.push({ accountId: ch.accountId, name: known?.channelName || ch.accountId });
+    }
+  }
+
+  const first = mine[0];
+  return {
+    ruleId: first.id,
+    channels: out,
+    perDay: mine.reduce((sum, r) => sum + perDayCount(r), 0),
+    slots: ruleSlots(first),
+    weekdays: ruleWeekdays(first),
+    templateId: first.templateId ?? null,
+  };
 }

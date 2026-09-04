@@ -3357,6 +3357,21 @@ export interface HarvestSource {
   credits: number;
   /** 지금 상한으로 며칠 걸리는지. */
   days: number;
+  /**
+   * 만든 숏폼이 **어디로 나가는지** — 걸린 자동배포 계획의 요약.
+   *
+   * ⚠️ `null` 이면 계획이 없다는 뜻이고, 그건 **가져와서 만들기만 하고 아무 데도 안 나간다**는
+   * 뜻이다. 크레딧은 그대로 나가므로 화면이 이 상태를 크게 알려야 한다.
+   */
+  publish: {
+    ruleId: string;
+    channels: { accountId: string; name: string }[];
+    /** 하루 몇 개 나가는지 (서버가 순방과 같은 함수로 낸 값). */
+    perDay: number;
+    slots: { time: string; count: number }[];
+    weekdays: number[] | null;
+    templateId: string | null;
+  } | null;
 }
 
 export async function fetchHarvestSources(): Promise<HarvestSource[]> {
@@ -3366,12 +3381,25 @@ export async function fetchHarvestSources(): Promise<HarvestSource[]> {
   return out.sources ?? [];
 }
 
+/**
+ * 수집원 등록. `publish` 를 같이 주면 **자동배포 계획도 함께 만들어진다** — 안 주면
+ * 가져오기만 하고 아무 데도 안 나간다(그 상태는 목록의 `publish: null` 로 보인다).
+ * 시간대·요일·템플릿은 자동배포 화면과 **같은 값 체계**다(서버가 같은 함수로 정규화한다).
+ */
 export async function createHarvestSource(input: {
   sourceChannelUrl: string;
   programId?: string;
   dailyCap?: number;
   minDurationSec?: number;
   backfill?: boolean;
+  publish?: {
+    /** 배포할 유튜브 채널 id — 연결된 채널만 받는다. */
+    channels: string[];
+    slots?: { time: string; count: number }[];
+    weekdays?: number[];
+    /** 빈 값 = 프로그램 장르 자동 선택. */
+    templateId?: string;
+  };
 }): Promise<HarvestSource> {
   const out = await json<{ source: HarvestSource }>(await fetch(`${API_BASE}/harvest/sources`, {
     method: "POST",

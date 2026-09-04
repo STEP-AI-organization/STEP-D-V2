@@ -250,7 +250,7 @@ import { geminiGenerate, parseJsonLoose } from "./ai/gemini.ts";
 import { ask as chatbotAsk, ChatbotError } from "./chatbot/agent.ts";
 import {
   candidates as harvestCandidates, clampCap, clampMinDuration, estimate as harvestEstimate,
-  parseChannelRef,
+  parseChannelRef, publishSummary,
 } from "./pipeline/harvest.ts";
 import {
   deleteHarvestSource, getHarvestSource, harvestedVideoIds, insertHarvestSource,
@@ -395,6 +395,7 @@ import {
   ruleCreatedNotice,
   ruleWeekdays,
   ruleSlots,
+  type AutomationRule,
   type RuleSlotInput,
   monthlyPublishEstimate,
 } from "./pipeline/automation.ts";
@@ -12576,11 +12577,16 @@ app.delete("/api/youtube/videos/:videoId", async (c) => {
 //    "안 돌아감" 으로 잡는다.
 
 /** 목록·예상치가 같이 쓰는 조회 — 화면 숫자와 실제 수확이 같은 기준을 보게 한다. */
-async function harvestView(row: Awaited<ReturnType<typeof getHarvestSource>>) {
+async function harvestView(
+  row: Awaited<ReturnType<typeof getHarvestSource>>,
+  ctx?: { rules: AutomationRule[]; channels: { channelId: string; channelName?: string | null }[] },
+) {
   if (!row) return null;
-  const [videos, alreadyMade] = await Promise.all([
+  const [videos, alreadyMade, rules, channels] = await Promise.all([
     listChannelVideosForHarvest(row.sourceChannelId),
     harvestedVideoIds(row.sourceChannelId),
+    ctx ? ctx.rules : (listAutomationRules() as Promise<unknown> as Promise<AutomationRule[]>),
+    ctx ? ctx.channels : listYouTubeChannels(),
   ]);
   const source = {
     id: row.id, sourceChannelId: row.sourceChannelId, programId: row.programId,
@@ -12591,21 +12597,41 @@ async function harvestView(row: Awaited<ReturnType<typeof getHarvestSource>>) {
     ...row,
     made: alreadyMade.size,
     ...harvestEstimate({ source, videos, alreadyMade }),
+    // 배포 계획 요약 — `null` 이면 **만들기만 하고 안 나간다**(harvest.ts publishSummary 주석).
+    publish: publishSummary(row.programId, rules, channels),
   };
 }
 
 app.get("/api/harvest/sources", async (c) => {
-  const rows = await listHarvestSources();
+  // 계획·채널은 **한 번만** 읽어 모든 수집원이 나눠 쓴다 — 행마다 다시 읽으면 목록 하나에
+  // 쿼리가 N배로 늘고, 프로덕션 웹은 그 바이트·시간이 그대로 과금된다.
+  const [rows, rules, channels] = await Promise.all([
+    listHarvestSources(),
+    listAutomationRules() as Promise<unknown> as Promise<AutomationRule[]>,
+    listYouTubeChannels(),
+  ]);
+  const ctx = { rules, channels };
   const sources = [];
-  for (const r of rows) sources.push(await harvestView(r));
+  for (const r of rows) sources.push(await harvestView(r, ctx));
   return c.json({ sources });
 });
 
 /**
- * 수집원 등록. 채널 주소 하나가 입력의 전부다.
+ * 수집원 등록. **입력은 둘이다 — 수집 채널과 배포 채널.**
  *
  * 핸들(`@이름`)은 **등록 시점에 한 번 해석해 `UC…` 로 못박는다** — 핸들은 주인이 바꿀 수
  * 있어서, 그대로 저장하면 바뀐 날 엉뚱한 채널을 수확한다.
+ *
+ * ## 배포 계획을 여기서 같이 만든다 (2026-09-04)
+ *
+ * 프로그램은 채널 이름으로 자동 생성되지만, **자동배포 계획은 자동으로 안 생겼다.** 그래서
+ * 채널만 등록하면 수집·분석·숏폼 생성까지 돌고 배포에서 멈췄다 — 크레딧은 나가는데 결과물이
+ * 아무 데도 안 가는 상태다. 사용자가 말한 "수집 채널·배포 채널만 지정" 의 나머지 절반을
+ * 이 문에서 닫는다.
+ *
+ * 계획의 값(시간대·요일·템플릿)은 **자동배포 화면과 같은 것**을 받는다. 정규화도 같은 순수
+ * 함수(`ruleSlots`·`ruleWeekdays`)로 한다 — 두 화면이 다른 잣대로 저장하면 같은 설정이 다르게
+ * 돈다. 만든 뒤 수정·삭제는 자동배포 화면에서 한다(계획을 두 곳에서 편집하게 두지 않는다).
  */
 app.post("/api/harvest/sources", async (c) => {
   const body = await c.req.json().catch(() => ({}) as Record<string, unknown>);
@@ -12641,6 +12667,24 @@ app.post("/api/harvest/sources", async (c) => {
     channelId = resolved;
   }
 
+  // 배포 설정 — **부수효과를 내기 전에 전부 검증한다.** 프로그램·수집원을 만든 뒤에 여기서
+  // 400 을 내면 계획 없는 수집원이 남고, 그건 "가져오기만 하고 안 나가는" 상태다.
+  const pub = (body.publish ?? null) as {
+    channels?: unknown; slots?: unknown; weekdays?: unknown; templateId?: unknown;
+  } | null;
+  const publishChannels = Array.isArray(pub?.channels)
+    ? [...new Set((pub.channels as unknown[]).map((v) => String(v ?? "").trim()).filter(Boolean))]
+    : [];
+  const unknownChannels = publishChannels.filter(
+    (id) => !connected.some((ch) => ch.channelId === id && ch.status !== "disconnected"),
+  );
+  if (unknownChannels.length) {
+    return c.json({
+      error: "unknown_publish_channel",
+      message: `연결된 배포 채널이 아닙니다: ${unknownChannels.join(", ")} — 배포채널 화면에서 먼저 연결하세요.`,
+    }, 400);
+  }
+
   // 프로그램 — 주면 검증하고, 없으면 채널 이름으로 하나 만든다(사용자는 채널만 지정한다).
   let programId = typeof body.programId === "string" ? body.programId.trim() : "";
   const owned = connected.find((ch) => ch.channelId === channelId && ch.status !== "disconnected");
@@ -12672,6 +12716,38 @@ app.post("/api/harvest/sources", async (c) => {
     throw e;
   }
 
+  // 배포 계획 — 배포 채널을 고른 경우에만. 안 골랐으면 만들지 않고, 목록의 `publish: null`
+  // 이 그 사실을 드러낸다. 여기서 임의의 채널을 고르는 편의는 두지 않는다 — 어느 채널로
+  // 나갈지는 추측하면 안 되는 값이다.
+  if (publishChannels.length) {
+    const channels = publishChannels.map((accountId) => ({ platform: "youtube", accountId }));
+    await upsertAutomationRule({
+      id: newId("ar"),
+      programId,
+      // 단수 컬럼은 첫 채널(UNIQUE 기준·구버전 호환) · 배열이 정본. 자동배포 화면과 같은 규칙.
+      platform: channels[0].platform,
+      accountId: channels[0].accountId,
+      channels,
+      // 완전자동화는 **숏폼만** 만든다 — 롱폼을 받아 숏폼으로 바꾸는 것이 이 기능의 정의다.
+      mediaKind: "short",
+      criterion: "top3",
+      // ⚠️ **승인 없이 즉시 발행.** "사람 없이" 가 이 기능의 전제라 approve_first 면 매번
+      //    사람이 승인해야 해서 자동화가 아니게 된다. 화면이 이 사실을 그대로 알린다.
+      gatePolicy: "hold_on_issue",
+      window: "수시",
+      enabled: true,
+      weekdays: ruleWeekdays({ weekdays: (pub?.weekdays ?? []) as number[] }),
+      slots: ruleSlots({ slots: (pub?.slots ?? []) as RuleSlotInput[] }),
+      // 세로 — 숏폼 계획이라 방향은 고정이다(수동 채택과 같은 값 체계).
+      orientation: "portrait",
+      ...(typeof pub?.templateId === "string" && pub.templateId.trim()
+        ? { templateId: pub.templateId.trim() } : {}),
+      // `AutomationRuleRow.slots` 는 아직 구형 `string[]`(시각만) 로 좁혀져 있는데 실제 저장은
+      // JSONB 라 `{time,count}` 도 그대로 들어간다(automation.ts ruleSlots 가 두 꼴을 다 읽는다).
+      // 자동배포 라우트도 같은 이유로 캐스트한다 — 좁은 쪽은 타입이지 DB 가 아니다.
+    } as unknown as Parameters<typeof upsertAutomationRule>[0]);
+  }
+
   return c.json({ source: await harvestView(await getHarvestSource(id)) }, 201);
 });
 
@@ -12695,11 +12771,20 @@ app.patch("/api/harvest/sources/:id", async (c) => {
   return c.json({ source: await harvestView(await getHarvestSource(id)) });
 });
 
-/** 해지. **이미 만든 회차·영상은 남는다** — 지우면 크레딧을 쓴 결과물이 사라진다. */
+/**
+ * 해지. **이미 만든 회차·영상은 남는다** — 지우면 크레딧을 쓴 결과물이 사라진다.
+ *
+ * 같은 이유로 **배포 계획도 남긴다.** 이미 채택된 클립이 그 계획으로 나가는 중일 수 있고,
+ * 계획을 지우는 것은 자동배포 화면의 일이다. 대신 남는다는 사실을 응답으로 알린다 —
+ * 조용히 남으면 "해지했는데 왜 아직 올라가지" 가 된다.
+ */
 app.delete("/api/harvest/sources/:id", async (c) => {
   const ok = await deleteHarvestSource(c.req.param("id"));
   if (!ok) return c.json({ error: "not_found" }, 404);
-  return c.json({ ok: true });
+  return c.json({
+    ok: true,
+    notice: "새 영상은 더 가져오지 않습니다. 이미 만든 회차와 자동배포 계획은 그대로 남습니다 — 배포까지 멈추려면 자동 배포 화면에서 계획을 멈추세요.",
+  });
 });
 
 /**
