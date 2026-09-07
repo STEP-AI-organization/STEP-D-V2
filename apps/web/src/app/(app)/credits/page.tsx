@@ -649,31 +649,38 @@ export default function CreditsPage() {
               {state ? "아직 내역이 없습니다" : "불러오는 중…"}
             </div>
           ) : (
-            /* 원본은 줄마다 테두리를 두르지 않고 **구분선 목록**이다(divide-y · font-mono).
-               박스로 두르면 같은 다이얼로그 안 인보이스 목록과도 모양이 갈린다. */
-            <div className="divide-y divide-[var(--color-border-subtle)]/40 font-mono">
+            /* 원본(credits MODAL 2) 그대로 — 구분선 목록(divide-y · font-mono)에 행 hover.
+               ⚠️ 원본은 금액을 `{tx.price && …}` 로 조건부 렌더하는데, **목 데이터엔 금액이
+               항상 있어서** 문제가 안 보인다. 실제 원장엔 금액 없는 행(분석 차감 등)이 섞여
+               있어 그대로 두면 줄마다 오른쪽 컬럼이 어긋난다 — 그래서 칸은 항상 그리고
+               값만 비운다. 보이는 모양은 원본과 같다. */
+            <div className="divide-y divide-[var(--color-border-subtle)] font-mono">
               {state.ledger.map((l) => (
-                <div key={l.id} className="flex flex-wrap items-center gap-3 py-2.5">
-                  <span className="w-[108px] shrink-0 text-[11px] text-[var(--color-text-muted)]">
-                    {l.occurredAt?.slice(0, 16).replace("T", " ")}
-                  </span>
-                  <span className="min-w-[160px] flex-1 truncate font-sans text-xs font-medium text-[var(--color-text-primary)]">
-                    {reasonLabel(l.reason)}
-                    {l.note ? ` · ${l.note}` : ""}
-                  </span>
-                  {/* 금액·크레딧은 항상 같은 폭의 칸에 우측 정렬 — 조건부로 빼면 줄마다 컬럼이 어긋난다. */}
-                  <span className="w-[88px] shrink-0 text-right text-[11px] font-bold text-[var(--color-text-muted)]">
-                    {l.amountKrw != null ? WON(l.amountKrw) : ""}
-                  </span>
-                  <span
-                    className={`w-[56px] shrink-0 text-right text-xs font-bold ${
-                      l.delta >= 0
-                        ? "text-emerald-600 dark:text-emerald-400"
-                        : "text-[var(--color-text-primary)]"
-                    }`}
-                  >
-                    {l.delta >= 0 ? "+" : ""}{l.delta.toLocaleString("ko-KR")}
-                  </span>
+                <div
+                  key={l.id}
+                  className="py-3 flex items-center justify-between gap-3 hover:bg-[var(--color-bg-input)]/40 transition-colors px-2 rounded-lg"
+                >
+                  <div className="flex items-center gap-3 min-w-0">
+                    <span className="text-[var(--color-text-muted)] text-[11px] shrink-0">
+                      {l.occurredAt?.slice(0, 16).replace("T", " ")}
+                    </span>
+                    <span className="font-sans font-medium text-[var(--color-text-primary)] truncate text-xs">
+                      {reasonLabel(l.reason)}
+                      {l.note ? ` · ${l.note}` : ""}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-3 shrink-0">
+                    <span className="w-[76px] text-right text-xs text-[var(--color-text-muted)] font-bold">
+                      {l.amountKrw != null ? WON(l.amountKrw) : ""}
+                    </span>
+                    <span
+                      className={`w-[56px] text-right font-extrabold text-xs ${
+                        l.delta >= 0 ? "text-emerald-500" : "text-rose-500"
+                      }`}
+                    >
+                      {l.delta >= 0 ? "+" : ""}{l.delta.toLocaleString("ko-KR")}
+                    </span>
+                  </div>
                 </div>
               ))}
             </div>
@@ -776,7 +783,7 @@ export default function CreditsPage() {
           footer={
             <button
               type="button"
-              className="ml-auto px-5 py-2.5 rounded-full bg-[#1C60FF] hover:bg-blue-600 text-white text-xs font-bold transition-colors cursor-pointer border-none"
+              className="ml-auto px-5 py-2.5 rounded-full bg-[#1C60FF] hover:bg-[#0D1EB8] text-white text-xs font-bold shadow-md shadow-[#1C60FF]/25 transition-colors cursor-pointer border-none"
               onClick={close}
             >
               완료
