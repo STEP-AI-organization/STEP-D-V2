@@ -46,6 +46,7 @@ from core.analyze_utils import (
 from core.analyze_stages import (
     run_fast_mode, load_viewer_signals, index_search_segments, dump_usage,
     run_stt, run_refine, run_chyron_per_seg, run_speaker_postproc, run_translate,
+    run_translate_out,
     run_detect_genre,
     join_ppl, run_scenes, run_cast_timeline, run_timeline, run_narrative,
     run_shot_boundary, run_scene_type, run_beats, run_beat_signals, run_beat_annot,
@@ -197,6 +198,14 @@ def analyze(
     # 여기서 바꾸면 transcript 저장 → 번인 자막·훅·제목·검색까지 전부 한국어로 흐른다.
     refined = run_translate(
         refined=refined, out_dir=out_dir, step=step, timed=timed,
+    )
+
+    # 2.7) 해외 배포용 자막 — 한국어 최종본을 대상 언어로 내보낸다(refined.{lang}.json).
+    # 2.6 **뒤에** 둔다: 외국어 줄이 한국어로 통일된 최종 텍스트를 번역해야 원문이 일관된다.
+    # 원본 refined 는 건드리지 않으므로 이후 스테이지(beat·추천·검색)는 종전과 완전히 같다.
+    run_translate_out(
+        refined=refined, out_dir=out_dir, step=step, timed=timed,
+        cast_registry=cast_registry,
     )
 
     # 2.5) 얼굴 검출·클러스터링 (2026-07-22 신설 · 2026-07-29 STT 후 병렬).

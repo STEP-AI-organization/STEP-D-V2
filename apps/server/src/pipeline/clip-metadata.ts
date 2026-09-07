@@ -26,6 +26,8 @@
  * 모델에게 이름을 지어내게 두면 방송 콘텐츠에서 바로 사고가 된다.
  */
 
+import { type CaptionLang, isForeign, langOf } from "../media/caption-lang.ts";
+
 /** 메타데이터를 만들 수 있는 채널. `DISTRIBUTION_CHANNELS`(웹)·`publish-guard`(서버)와 같은 id. */
 export type MetaChannel =
   | "youtube" | "navertv" | "naverclip" | "instagram" | "facebook" | "tiktok";
@@ -216,6 +218,17 @@ export interface MetaSource {
    * 아무 영향이 없어야 한다(`commerce.test.ts` 가 이걸 잠근다).
    */
   wantProductQueries?: boolean;
+  /**
+   * 출력 언어 코드 (기본 `ko`). 다국어 배포용 — 2026-09-07.
+   *
+   * **번역이 아니라 생성이다.** 한국어 메타를 만든 뒤 옮기지 않고, 처음부터 그 언어로 뽑는다.
+   * 어그로 제목은 언어마다 관용이 달라서(한국어의 `?!·경악·인용문` 톤을 직역하면 안 먹힌다)
+   * 번역보다 재생성이 품질이 높다. **추가 호출이 없으므로 원가도 그대로다.**
+   *
+   * 사실·규칙·장르팩 블록은 한국어로 유지한다 — 모델은 한국어로 지시받고 대상 언어로
+   * 출력하면 되고, 그래야 기존 프롬프트 자산(장르팩·운영자 지시)을 언어마다 복제하지 않는다.
+   */
+  lang?: string;
 }
 
 /** 값이 있는 블록만 `\n\n` 으로 잇는다. AENA 의 조립 방식. */
@@ -249,6 +262,33 @@ const PRODUCT_QUERY_BLOCK =
   "- 의약품·주류·담배·의료기기·성인용품은 뽑지 마라(광고 규제 대상).";
 
 /**
+ * 출력 언어 지시 (한국어가 아닐 때만 프롬프트에 들어간다).
+ *
+ * 프롬프트 **맨 뒤**에 둔다 — 앞쪽(역할·장르팩·사실 블록)은 클립이 바뀌어도 대체로 같아서
+ * 프롬프트 캐시가 먹는 구간이고, 언어 지시를 앞에 끼우면 그 캐시를 깬다.
+ *
+ * 세 가지가 이 블록의 핵심이다:
+ *  - **고유명사는 그대로.** 프로그램명·등록 출연자 이름은 위 블록의 표기를 옮기지 않는다.
+ *    검색 유입이 그 이름으로 걸리고, 음차하면 표기가 매번 달라진다.
+ *  - **직역 금지.** 한국 예능의 말맛을 그 나라 시청자가 쓰는 표현으로 바꾼다.
+ *  - **제목 길이는 언어 폭 기준.** 한국어 40자와 같은 표시폭이 되도록 언어별로 다르게 준다.
+ */
+function langBlock(lang: CaptionLang): string {
+  return (
+    `## 출력 언어 — ${lang.nameKo} (${lang.nameNative})\n` +
+    `위 블록들은 한국어로 적혀 있지만, **출력(title·description·tags·hashtags)은 전부 ` +
+    `${lang.nameKo}로 쓴다.**\n` +
+    "- 한국어 표현을 직역하지 마라. 예능의 말맛(놀람·과장·리액션)은 그 나라 시청자가 " +
+    "실제로 쓰는 표현으로 옮긴다.\n" +
+    "- **인명·프로그램명은 위 [등록 출연자]·[프로그램] 표기를 그대로 쓴다** — 번역도 음차도 " +
+    "하지 마라. 시청자가 그 이름으로 검색한다.\n" +
+    `- hashtags 는 ${lang.nameKo} 키워드를 기본으로 하되, 고유명사 태그는 원문 표기를 그대로 쓴다 ` +
+    "(그 이름으로 검색하는 사람과 만나야 한다).\n" +
+    "- 자막·대사 인용이 필요하면 뜻을 옮겨 쓴다(한국어를 그대로 붙여 넣지 마라)."
+  );
+}
+
+/**
  * 메타데이터 생성 프롬프트.
  *
  * **채널별로 나눠 묻지 않는다.** 한 번에 "바탕" 한 벌을 만들고, 채널 규격은
@@ -261,6 +301,7 @@ export function buildMetadataPrompt(src: MetaSource): string {
   const people = (src.people ?? []).filter(Boolean);
   const caps = (src.captions ?? []).filter(Boolean).slice(0, 40);
   const isShort = src.isShort ?? true;
+  const lang = langOf(src.lang);
 
   // 해시태그·태그 규칙은 쇼츠/클립에서 다르다. 쇼츠는 **넓게** — 유튜브 추천 유입축이라
   // 핵심 태그 + 같은 주제군의 인접 확장 태그를 2겹으로 많이 단다(레퍼런스: 경제 쇼츠 20여 개).
@@ -340,13 +381,16 @@ export function buildMetadataPrompt(src: MetaSource): string {
     // ⑧.7 커머스 — 게이트가 켜졌을 때만. 같은 호출에 얹어서 추가 원가가 없다.
     src.wantProductQueries ? PRODUCT_QUERY_BLOCK : null,
 
+    // ⑧.8 출력 언어 — 한국어면 블록 자체가 없다(프롬프트가 종전과 한 바이트도 다르지 않다).
+    isForeign(lang) ? langBlock(lang) : null,
+
     // ⑨ 출력 형식 — ⚠️ response_schema 를 쓰지 않는다(잘림 복구를 위해)
     "아래 JSON 만 출력한다. 설명·마크다운·코드펜스 금지.\n" +
     (src.wantProductQueries
       ? '{"title":"제목 한 줄","description":"설명","tags":["태그","태그"],"hashtags":["#태그","#태그"],' +
         '"productQueries":[{"query":"검색어","reason":"장면 근거"}]}\n'
       : '{"title":"제목 한 줄","description":"설명","tags":["태그","태그"],"hashtags":["#태그","#태그"]}\n') +
-    "- title: 가장 강한 한 줄. 40자 이내로 쓴다(채널별 축약은 시스템이 한다).\n" +
+    `- title: 가장 강한 한 줄. ${lang.titleMaxChars}자 이내로 쓴다(채널별 축약은 시스템이 한다).\n` +
     descLineGuide + "\n" +
     tagsGuide + "\n" +
     hashtagGuide +

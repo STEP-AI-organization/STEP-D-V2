@@ -10,6 +10,8 @@
  * caption-chunk.test.ts 가 동작을 고정한다.
  */
 
+import { langOf } from "./caption-lang.ts";
+
 export type CaptionWord = { word: string; start: number; end: number };
 export type Caption = { start: number; end: number; text: string; words?: CaptionWord[] };
 
@@ -162,8 +164,19 @@ export function chunkCaption(cap: Caption, maxChars: number): Caption[] {
   return merged;
 }
 
-/** editorState.captionMaxChars 오버라이드 → 유효한 상한. 오타·빈값·과소는 기본값으로. */
+/**
+ * editorState 에서 유효한 한 화면 상한을 뽑는다. 우선순위:
+ *   1. `captionMaxChars` 오버라이드 (사용자 슬라이더) — 오타·빈값·과소는 무시
+ *   2. `lang` 의 언어별 기본값
+ *
+ * ⚠️ **글자수 상한은 언어마다 다르다.** 11자는 한국어 폭(11 × 0.864em = 9.5em) 기준이고,
+ * 베트남어는 글자가 0.585em 이라 같은 폭이 16자다 — 11자로 두면 화면 폭의 44% 만 쓰고
+ * 자막이 쓸데없이 여러 조각으로 쪼개진다(실측: `docs/plans/active/multilang-captions-plan.md` §3.5).
+ * `lang` 이 없거나 모르는 값이면 한국어로 떨어지므로 **기존 동작은 그대로다.**
+ */
 export function captionMaxCharsOf(es: unknown): number {
-  const v = es && typeof es === "object" ? (es as { captionMaxChars?: unknown }).captionMaxChars : undefined;
-  return Number.isFinite(v) && Number(v) >= 6 ? Math.round(Number(v)) : CAPTION_CHUNK_MAX_CHARS;
+  const o = es && typeof es === "object" ? (es as { captionMaxChars?: unknown; lang?: unknown }) : undefined;
+  const v = o?.captionMaxChars;
+  if (Number.isFinite(v) && Number(v) >= 6) return Math.round(Number(v));
+  return langOf(typeof o?.lang === "string" ? o.lang : undefined).captionMaxChars;
 }

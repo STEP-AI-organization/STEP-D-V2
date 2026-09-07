@@ -70,18 +70,49 @@ ROLE_STYLES: dict[str, dict] = {
 }
 
 
+# 언어별 폰트 대체표
+""" — 그 언어를 못 덮는 폰트를 덮는 폰트로 갈아끼운다 (2026-09-07).
+
+⚠️ **Pillow 는 libass 와 달리 폴백을 안 한다.** 글리프가 없으면 두부(□)를 그대로 그린다.
+베트남어는 성조가 이중으로 쌓이는 U+1EA0–1EF9 를 쓰는데, 번들 12종 중 검은고딕·도현·
+주아·구기는 이 구간이 **0%** 다(cmap 실측). 대체는 **굵기를 최대한 지켜** 고른다 —
+헤드라인(main)이 얇아지면 썸네일 톤이 통째로 달라진다.
+"""
+LANG_FONT_FALLBACK: dict[str, dict[str, str]] = {
+    "vi": {
+        "BlackHanSans-Regular.ttf": "NotoSansKR-Black.otf",   # 헤드라인 — 가장 굵은 대체
+        "Jua-Regular.ttf": "GothicA1-Black.ttf",
+        "DoHyeon-Regular.ttf": "GothicA1-Black.ttf",
+        "Gugi-Regular.ttf": "GothicA1-Black.ttf",
+        # GowunBatang-Bold · Pretendard-* · GothicA1-* · NotoSans*/Serif* 는 100% 라 그대로 둔다
+    },
+}
+
+
+def _font_for(name: str, lang: str | None) -> pathlib.Path:
+    """역할 폰트 이름 → 실제 경로. 언어가 못 덮는 폰트면 대체표로 갈아끼운다."""
+    name = LANG_FONT_FALLBACK.get(lang or "", {}).get(name, name)
+    p = FONT_DIR / name
+    if not p.exists():
+        p = FONT_DIR / DEFAULT_FONT
+    return p
+
+
 def render_captions(
     img_bytes: bytes,
     captions: list[dict],
+    lang: str | None = None,
 ) -> bytes:
     """이미지 위에 자막 계층 여러 개 렌더 → PNG bytes.
 
     captions: list of {text, role, position, size}
     role 별 폰트·색·배경 pill 자동 적용.
+    lang: 자막 언어 코드(예 "vi"). 지정하면 그 언어를 못 덮는 폰트를 대체한다.
+          미지정(한국어)이면 **기존 동작 그대로** — 대체표를 안 탄다.
     """
     img = Image.open(io.BytesIO(img_bytes)).convert("RGBA")
     for cap in captions or []:
-        _render_one(img, cap)
+        _render_one(img, cap, lang)
     out = io.BytesIO()
     img.convert("RGB").save(out, format="PNG", optimize=True)
     return out.getvalue()
@@ -112,7 +143,7 @@ def _strip_emoji(text: str) -> str:
     return _EMOJI_RE.sub("", text).strip()
 
 
-def _render_one(img: Image.Image, cap: dict) -> None:
+def _render_one(img: Image.Image, cap: dict, lang: str | None = None) -> None:
     """캡션 하나 렌더 (in-place · RGBA 이미지 위에).
 
     cap 좌표 우선순위:
@@ -133,10 +164,7 @@ def _render_one(img: Image.Image, cap: dict) -> None:
         bx, by, bw, bh = xywh
         box_w = max(20, int(W * bw)); box_h = max(20, int(H * bh))
         font_size = max(16, int(box_h * 0.55))
-        font_path = FONT_DIR / style["font"]
-        if not font_path.exists():
-            font_path = FONT_DIR / DEFAULT_FONT
-        font = ImageFont.truetype(str(font_path), font_size)
+        font = ImageFont.truetype(str(_font_for(style["font"], lang)), font_size)
         display = text
         if style.get("quote_wrap") and not (display.startswith('"') or display.startswith("“")):
             display = f'"{display}"'
@@ -154,9 +182,7 @@ def _render_one(img: Image.Image, cap: dict) -> None:
     # legacy · 9슬롯 앵커
     position = cap.get("position", "bottom-left")
     size = cap.get("size", "L")
-    font_path = FONT_DIR / style["font"]
-    if not font_path.exists():
-        font_path = FONT_DIR / DEFAULT_FONT
+    font_path = _font_for(style["font"], lang)
     boost = style.get("size_boost", 1.0)
     font_size = max(16, int(H * SIZE_RATIO.get(size, SIZE_RATIO["L"]) * boost))
     font = ImageFont.truetype(str(font_path), font_size)

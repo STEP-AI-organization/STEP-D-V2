@@ -120,8 +120,24 @@ describe("제목 — 지마켓 산스 + 레퍼런스 강조색", () => {
   });
 
   it("제목 줄 기본 글꼴이 지마켓 — 계획에서 고른 게 있으면 그게 이긴다", () => {
-    assert.match(factory, /font: titleFont \|\| "gmarket",/,
+    assert.match(factory, /titleFont \|\| "gmarket"/,
       "기본값을 지우면 레지스트리 기본(프리텐다드)으로 조용히 돌아간다");
+  });
+
+  it("제목 글꼴이 언어 스냅을 거친다 — 지마켓은 베트남어를 1% 밖에 안 덮는다", () => {
+    // libass 는 글리프가 없으면 **오류 없이 다른 폰트로 대체한다**(cmap 실측 2026-09-07:
+    // 지마켓 1% · 검은고딕 0% · Pretendard/GothicA1 100%). 스냅이 빠지면 베트남어 배포에서
+    // 자막은 정상인데 **제목만 얇은 폴백 폰트**로 나가고, 발행되기 전에는 아무도 모른다.
+    assert.match(factory, /font: snapFont\(titleFont \|\| "gmarket", lang\)/,
+      "제목 글꼴이 snapFont 를 안 거친다 — 언어가 못 덮는 폰트가 그대로 렌더로 흘러간다");
+
+    const lang = read("apps/server/src/media/caption-lang.ts");
+    // 허용 목록에 실제로 덮는 것만 있어야 한다. 여기 지마켓·검은고딕이 들어가면 스냅이 무의미하다.
+    const vi = lang.slice(lang.indexOf("const VI"), lang.indexOf("export const CAPTION_LANGS"));
+    assert.match(vi, /allowFonts: \["pretendard", "gothica1"\]/,
+      "베트남어 허용 글꼴이 바뀌었다 — cmap 으로 100% 를 실측하고 바꿀 것");
+    assert.doesNotMatch(vi, /gmarket|blackhansans|jua|dohyeon/,
+      "베트남어를 못 덮는 글꼴이 허용 목록에 들어갔다");
   });
 
   it("그 id 가 폰트 레지스트리에 있고 Bold(700) 를 갖는다 — 렌더가 800 을 요청해도 700 으로 스냅된다", () => {

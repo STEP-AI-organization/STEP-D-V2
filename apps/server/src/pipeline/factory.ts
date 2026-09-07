@@ -28,6 +28,7 @@ import { newId } from "../ids.ts";
 import { enqueue } from "./queue.ts";
 import { basicReframeState } from "../media/reframe.ts";
 import { FONT_FAMILIES } from "../media/overlay-canvas.ts";
+import { type CaptionLang, DEFAULT_LANG, isForeign, langOf, snapFont } from "../media/caption-lang.ts";
 import { SHORTFORM_MAX_SEC, autoRenderChannel, shortformSegmentTooLong } from "../publish/channel-rules.ts";
 
 const TRUTHY = new Set(["1", "true", "yes", "on"]);
@@ -618,11 +619,18 @@ export function cleanOverlayText(raw: string): string {
     .trim();
 }
 
-export function wrapAutoTitle(raw: string): { lines: string[]; size: number } {
+/**
+ * 제목을 화면 폭에 맞춰 한/두 줄로 접는다.
+ *
+ * ⚠️ **글자수 기준은 언어마다 다르다.** 14·16 은 한국어 폭(0.864em/자) 기준이고, 베트남어는
+ * 0.585em/자라 같은 폭이 21·24 자다 — 한국어 기준을 그대로 쓰면 제목이 불필요하게 2줄로
+ * 접힌다. `lang` 을 안 주면 한국어로 떨어지므로 **기존 호출은 동작이 그대로다.**
+ */
+export function wrapAutoTitle(raw: string, lang: CaptionLang = DEFAULT_LANG): { lines: string[]; size: number } {
   const text = String(raw ?? "").replace(/\s+/g, " ").trim();
   if (!text) return { lines: [], size: 32 };
-  if (text.length <= 14) return { lines: [text], size: 34 };
-  const budget = 16;
+  if (text.length <= lang.titleWrapAt) return { lines: [text], size: 34 };
+  const budget = lang.titleWrapBudget;
   // 중간에 가장 가까운 공백에서 자른다 — 단어 중간 절단 방지.
   const cut = (() => {
     const mid = Math.min(budget, Math.ceil(text.length / 2));
@@ -635,7 +643,8 @@ export function wrapAutoTitle(raw: string): { lines: string[]; size: number } {
   let l1 = text.slice(0, cut).trim();
   let l2 = text.slice(cut).trim();
   if (l2.length > budget + 4) l2 = `${l2.slice(0, budget + 3).trim()}…`;
-  return { lines: [l1, l2], size: text.length > 24 ? 28 : 30 };
+  // 크기 축소 임계도 폭 기준 — 한국어 24자와 같은 폭에서 줄인다.
+  return { lines: [l1, l2], size: text.length > lang.titleWrapBudget * 1.5 ? 28 : 30 };
 }
 
 /**
@@ -695,10 +704,19 @@ export function autoEditorState(
     titleFont?: string; captionFont?: string;
     /** 방영시간 박스 배경색(#RRGGBB). */
     channelBoxColor?: string;
+    /**
+     * 배포 언어 코드 (기본 `ko` · 2026-09-07 다국어 배포).
+     *
+     * 제목 줄바꿈 폭·자막 한 화면 글자수·**허용 글꼴**이 전부 여기서 갈린다.
+     * 특히 글꼴이 중요하다 — 기본값 `gmarket` 은 베트남어를 1% 밖에 안 덮는데
+     * libass 는 **오류 없이 다른 폰트로 조용히 대체**한다. 아래 snapFont 가 그걸 막는다.
+     */
+    lang?: string;
   },
   // 자동배포 규칙이 정한 최종 aspect. 없으면 공장 기본(short=세로, clip=가로)을 쓴다.
   forcedAspect?: string,
 ): Record<string, unknown> {
+  const lang = langOf(layoutOverride?.lang);
   // 화면에 얹는 줄은 **부호를 털고** 시작한다 (cleanOverlayText · 고객 피드백 2026-09-03).
   // 길이 판정(훅 30자·wrap 14자)보다 **먼저** 털어야 한다 — 나중에 털면 부호까지 세어
   // 줄을 접어 놓고 정작 화면에는 짧은 줄이 뜬다.
@@ -706,7 +724,8 @@ export function autoEditorState(
   const line1 = cleanOverlayText(rec.titleLine1);
   const line2 = cleanOverlayText(rec.titleLine2);
   // 훅 치환 의도 보존: 짧고 강한 훅이 있으면 headline 을 훅으로 대체한다(기존 동작 그대로).
-  const useHook = !!hook && hook.length <= 30;
+  // 훅 길이 상한도 폭 기준 — 한국어 30자와 같은 폭(베트남어는 44자).
+  const useHook = !!hook && hook.length <= Math.round(30 * DEFAULT_LANG.widthEm / lang.widthEm);
   // 제목 줄 구성 (D):
   //  · 훅 치환 → 훅 한 줄(길면 wrapAutoTitle 이 접는다) — 예전과 동일.
   //  · line1·line2 둘 다 있으면 **시맨틱 2줄 분할을 존중**해 그대로 쓴다(폭 기준 재분할 금지).
@@ -715,11 +734,11 @@ export function autoEditorState(
   //  · 그 외(line2 없음) → 예전처럼 line1(없으면 title)을 wrapAutoTitle 로 접는다.
   let lines: string[];
   if (useHook) {
-    ({ lines } = wrapAutoTitle(hook));
+    ({ lines } = wrapAutoTitle(hook, lang));
   } else if (line1 && line2) {
     lines = [line1, line2];
   } else {
-    ({ lines } = wrapAutoTitle(line1 || cleanOverlayText(rec.title)));
+    ({ lines } = wrapAutoTitle(line1 || cleanOverlayText(rec.title), lang));
   }
   // 채널 아이콘 기본값 = 프로그램 이미지(F). 브랜딩 아이콘(쇼츠 전용) 우선, 없으면 대표
   // 이미지(포스터), 둘 다 없으면 미설정(에디터는 'CH' 플레이스홀더 · 렌더는 아이콘 생략).
@@ -769,6 +788,9 @@ export function autoEditorState(
     bgType: "solid",
     bg: "#000000",
     templateId,
+    // 배포 언어 — 렌더가 이걸 보고 자막 원문(refined.{lang}.json)과 한 화면 글자수를 고른다
+    // (captionMaxCharsOf). **한국어면 필드를 안 심는다** — 기존 editorState JSON 이 그대로다.
+    ...(isForeign(lang) ? { lang: lang.code } : {}),
     // 한 줄이면 통째 강조색, 두 줄이면 둘째 줄만 (표준 강조색 = 금빛 #F3AF4F · 고객사 레퍼런스에서 샘플링).
     // ⚠️ id 를 반드시 넣는다. 없으면 편집기에서 setLine 이 l.id === undefined 로 **두 줄을 다**
     //    매칭해 한 줄로 붕괴하고, React key 도 undefined 로 겹친다(2026-08-12 발견).
@@ -781,7 +803,9 @@ export function autoEditorState(
       // (고객사 지정 2026-08-28). overlay-canvas 가 줄마다 이 값을 읽어 등록된 패밀리로
       // 그린다(familyById) — 모르는 id 는 거기서 기본(Pretendard)으로 접힌다.
       // 렌더는 weight 800 을 요청하는데 지마켓은 Medium(500)·Bold(700) 뿐이라 700=Bold 로 스냅된다.
-      font: titleFont || "gmarket",
+      // ⚠️ 언어가 못 덮는 글꼴은 여기서 갈아끼운다. 기본 지마켓은 베트남어를 1% 밖에 안 덮는데
+      // libass 는 오류 없이 다른 폰트로 대체해 **제목만 딴 글꼴로 발행된다**(자막은 Pretendard).
+      font: snapFont(titleFont || "gmarket", lang),
     })),
     titleX: 50,
     titleY: seed.titleY,
@@ -828,8 +852,11 @@ export function autoEditorState(
       ? { captionColor: layoutOverride.subtitleColor } : {}),
     // 자막 글꼴 — 카탈로그 id. ASS Fontname 으로 옮기는 건 index.ts(captionAssStyle)가 한다
     // (패밀리명은 폰트 파일이 신고하는 이름이어야 해서 한 곳에서만 매핑한다).
+    // 언어가 못 덮는 글꼴이면 스냅한다(제목과 같은 이유). 한국어는 allowFonts 가 비어 있어
+    // 종전대로 카탈로그에 있는 값만 통과하고, 없으면 필드 자체를 안 실어 렌더 기본을 쓴다.
     ...(FONT_FAMILIES.some((f) => f.id === layoutOverride?.captionFont)
-      ? { captionFont: String(layoutOverride?.captionFont) } : {}),
+      ? { captionFont: snapFont(String(layoutOverride?.captionFont), lang) }
+      : isForeign(lang) ? { captionFont: lang.allowFonts[0] } : {}),
     // 방영시간 박스 색 — 렌더(index.ts BoxLabel)가 es.channelBoxColor 를 읽는데 자동배포
     // 경로에서만 전달이 빠져 있었다(화면에서 고를 수 없던 이유).
     ...(layoutOverride && typeof layoutOverride.channelBoxColor === "string"

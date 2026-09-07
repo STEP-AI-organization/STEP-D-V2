@@ -23,6 +23,7 @@
  * worker's venv (core/.venv/bin/python); locally it defaults to core/.venv310.
  */
 import { spawn } from "node:child_process";
+import { CAPTION_LANGS, DEFAULT_LANG } from "../media/caption-lang.ts";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -93,6 +94,7 @@ const WORK_DIR_TTL_MS = 48 * 60 * 60 * 1000;
 // 워커가 GCS 로 왕복시키는 체크포인트. 여기 빠지면 재실행 때 그 스테이지를 다시 돈다 —
 // chyron.json 은 재생성이 회당 ₩150 이라 특히 중요. (signals/genre 는 ₩0 이지만 일관성 위해 포함)
 const CHECKPOINT_FILES = ["analysis.json", "scenes.json", "cast.json", "timeline.json", "narrative.json", "shorts.json", "refined.json", "faces.json", "ppl.json", "stt.json", "manifest.json", "comments.json", "viewer_signals.json", "beats.json", "boundaries.json", "shots.json", "scene_type.json", "signals.json", "genre.json", "chyron.json",
+  "refined.vi.json",
   // 스테이지가 아니라 **원가 증빙**이다. 여기 넣어야 ① 작업 디렉토리가 날아가도 누적 원가가
   // 살아남고(재개 회차가 과소계상되지 않는다) ② 나중에 "그 편이 왜 비쌌나" 를 되짚을 수 있다.
   "usage.json"];
@@ -1424,6 +1426,26 @@ function readCheckpoint<T>(work: string, name: string): T | undefined {
 }
 
 /**
+ * core 가 남긴 해외 배포용 자막(`refined.{lang}.json`)을 언어별로 걷는다 — 2026-09-07.
+ *
+ * `run_translate_out`(core/analyze_stages.py)이 `TRANSLATE_OUT_LANGS` 에 지정된 언어마다
+ * 한 벌씩 남긴다. **언어를 안 켰으면 파일이 없고, 그러면 빈 객체가 나와 저장 형태가 종전과
+ * 같다.** 한 언어가 실패해도 나머지와 한국어 원본은 그대로 간다(파일 단위로 독립).
+ *
+ * ⚠️ 파일 목록을 스캔하지 않고 **알려진 언어 코드만** 확인한다 — 작업 디렉토리에 뭐가 있든
+ * 모르는 언어가 DB 로 새어 들어가지 않게. 소비처(`langOf`)가 아는 코드와 같은 집합이다.
+ */
+function collectI18nTranscripts(work: string): Record<string, unknown[]> {
+  const out: Record<string, unknown[]> = {};
+  for (const code of Object.keys(CAPTION_LANGS)) {
+    if (code === DEFAULT_LANG.code) continue;         // 한국어는 transcript 본체가 정본이다
+    const rows = readCheckpoint<unknown[]>(work, `refined.${code}.json`);
+    if (Array.isArray(rows) && rows.length) out[code] = rows;
+  }
+  return out;
+}
+
+/**
  * On failure, salvage whatever stages DID finish into content_analysis so partial
  * work (a full transcript, scored scenes) is visible and never silently lost —
  * the checkpoints also stay on disk for the retry to resume from.
@@ -1810,10 +1832,14 @@ export async function runContentAnalyze(
     // Persist frames + stage outputs before anything can throw them away — they power
     // the Lab/editor views and let a future re-analysis start from stored stages.
     const stored = await persistArtifacts(work, mediaId);
+    const i18n = collectI18nTranscripts(work);
     await saveContentAnalysis(mediaId, {
       data: {
         ...analysis,
         ...(stored ? { framesBase: stored.base, framesStored: stored.frames > 0 } : { framesStored: false }),
+        // 해외 배포용 자막. **키가 하나도 없으면 필드 자체를 안 넣는다** — 다국어를 안 켠
+        // 워크스페이스의 content_analysis JSON 이 종전과 한 바이트도 다르지 않게.
+        ...(Object.keys(i18n).length ? { transcriptI18n: i18n } : {}),
       },
     });
 

@@ -114,6 +114,21 @@ export interface AutomationRule {
     title?: boolean;
     logo?: boolean;
     timebox?: boolean;
+    /** 글꼴(카탈로그 id · overlay-canvas FONT_FAMILIES) — 제목·자막 각각(2026-08-28). */
+    titleFont?: string;
+    captionFont?: string;
+    /**
+     * 배포 언어 코드 (기본 `ko` · 2026-09-07 다국어 배포). 예: `vi`.
+     *
+     * **이 한 값이 계획의 산출물 전체를 바꾼다** — 자막 원문(`refined.{lang}.json`)·한 화면
+     * 글자수·제목 줄바꿈 폭·**허용 글꼴**·메타(제목/설명/태그) 생성 언어·유튜브 캡션 트랙.
+     * 자동배포 계획 단위로 두는 이유: 같은 프로그램을 국내 채널엔 한국어로, 해외 채널엔
+     * 베트남어로 내보내는 게 계획을 두 개 만드는 것으로 표현되기 때문이다.
+     *
+     * ⚠️ 켜기 전에 회차 분석이 `TRANSLATE_OUT_LANGS` 로 그 언어 번역을 만들어 뒀어야 한다.
+     * 없으면 **한국어 자막이 그대로 나간다**(조용히 — 발행을 막지는 않는다).
+     */
+    lang?: string;
   };
   // ── 다중 확장 (2026-08-12) — 배열이 있으면 배열이 정본, 없으면 단수 폴백 ──
   /** 여러 프로그램. 없으면 [programId]. */

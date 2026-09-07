@@ -467,6 +467,13 @@ export interface VideoUploadMeta {
   publishAt?: string | null;
   /** COPPA self-declaration — default false. */
   madeForKids?: boolean;
+  /**
+   * 영상의 기본 언어(BCP-47 · 예 `vi`). `snippet.defaultLanguage`·`defaultAudioLanguage` 로 간다.
+   *
+   * 이걸 넣어야 유튜브가 제목·설명이 무슨 언어인지 알고, **자동 번역 대상**으로 삼는다.
+   * 안 넣으면 베트남어 제목을 한국어로 오인해 검색·추천 매칭이 어긋난다.
+   */
+  language?: string | null;
 }
 
 /**
@@ -493,6 +500,11 @@ export async function uploadVideoResumable(
     categoryId: meta.categoryId ?? "22",
   };
   if (meta.tags?.length) snippet.tags = meta.tags.slice(0, 30);
+  // 언어 선언 — 유튜브가 제목·설명의 언어를 알아야 검색 매칭과 자동번역이 맞는다.
+  if (meta.language) {
+    snippet.defaultLanguage = meta.language;
+    snippet.defaultAudioLanguage = meta.language;
+  }
 
   const status: Record<string, unknown> = {
     privacyStatus: meta.publishAt ? "private" : meta.privacyStatus,
@@ -535,6 +547,70 @@ export async function uploadVideoResumable(
   const data = (await putRes.json()) as { id?: string };
   if (!data.id) throw new Error("YouTube upload: response had no video id");
   return { videoId: data.id };
+}
+
+/**
+ * 자막 트랙 업로드 (`captions.insert`) — 다국어 배포의 소프트섭 경로 (2026-09-07).
+ *
+ * **재동의가 필요 없다.** 이 엔드포인트가 요구하는 스코프가 `youtube.force-ssl` 인데,
+ * 발행용 동의(`YT_PUBLISH_SCOPES`)에 이미 들어 있다 — 고객사 재연동 없이 바로 된다.
+ *
+ * 번인(하드섭)과 역할이 다르다: 하드섭은 쇼츠·네이버·틱톡처럼 트랙 API 가 없는 면을 위한
+ * 것이고, 이건 **롱폼에서 시청자가 언어를 골라 켜는** 자막이다. 렌더를 하나도 안 늘린다.
+ *
+ * multipart/related 로 올린다 — 메타(snippet)와 자막 본문을 한 요청에 실어야 한다.
+ * 실패해도 **영상 발행은 되돌리지 않는다**(영상은 이미 올라가 있다). 썸네일과 같은 계약으로
+ * 호출부가 사유만 남기고 진행하게 던진다.
+ *
+ * @param name 트랙 이름 — 시청자 자막 메뉴에 뜬다. 빈 문자열이면 유튜브가 언어명을 쓴다.
+ */
+export async function insertCaptionTrack(
+  accessToken: string,
+  videoId: string,
+  language: string,
+  body: string,
+  name = "",
+): Promise<void> {
+  assertUploadEnabled();
+
+  const boundary = `stepd-${Math.random().toString(36).slice(2)}`;
+  const meta = JSON.stringify({
+    snippet: {
+      videoId,
+      language,
+      name,
+      // 자동 동기화를 끈다 — 우리 자막은 이미 STT 타임코드라 유튜브가 다시 맞출 이유가 없다.
+      // 켜면 유튜브가 음성과 재정렬하는데, 번역 자막은 원문 음성과 안 맞아 오히려 어긋난다.
+      isDraft: false,
+    },
+  });
+  const payload = Buffer.concat([
+    Buffer.from(
+      `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${meta}\r\n` +
+      `--${boundary}\r\nContent-Type: text/vtt; charset=UTF-8\r\n\r\n`,
+      "utf-8",
+    ),
+    Buffer.from(body, "utf-8"),
+    Buffer.from(`\r\n--${boundary}--\r\n`, "utf-8"),
+  ]);
+
+  const res = await fetch(
+    "https://www.googleapis.com/upload/youtube/v3/captions?uploadType=multipart&part=snippet",
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": `multipart/related; boundary=${boundary}`,
+      },
+      body: payload,
+    },
+  );
+  if (!res.ok) {
+    throw new YouTubeApiError(
+      res.status,
+      `captions.insert 실패 (${res.status}): ${(await res.text()).slice(0, 300)}`,
+    );
+  }
 }
 
 /**

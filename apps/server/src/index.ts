@@ -56,6 +56,7 @@ import {
   captionMaxCharsOf, chunkCaption,
   type Caption as CaptionT, type CaptionWord as CaptionWordT,
 } from "./media/caption-chunk.ts";
+import { isForeign, langOf } from "./media/caption-lang.ts";
 import {
   API_SCOPES, bearerKey, checkRoute, generateKey, hashKey, keyBlockReason, keyPrefix,
   normalizeScopes, shouldTouchLastUsed,
@@ -3840,7 +3841,20 @@ app.patch("/api/media/:id/faces/mapping", async (c) => {
  */
 async function resolveTranscript(
   mediaId: string,
+  langCode?: string | null,
 ): Promise<{ segments: unknown[]; updatedAt: number; source: "transcript" | "content_analysis" | "none" }> {
+  // 해외 배포용 자막은 `content_analysis.data.transcriptI18n` 에만 있다 — 정본 transcript
+  // 테이블은 한국어 한 벌이다(원문이 검색·분석의 기준이라 갈래를 만들지 않는다).
+  // ⚠️ 번역이 아직 없거나 실패했으면 **한국어로 떨어진다.** 자막이 통째로 사라지는 것보다
+  //    원문이 나가는 쪽이 안전하다 — core 의 degrade 방향(실패 시 원문 유지)과 같은 원칙.
+  const lang = langOf(langCode);
+  if (isForeign(lang)) {
+    const ca = await getContentAnalysis(mediaId);
+    const rows = (ca?.data as any)?.transcriptI18n?.[lang.code];
+    if (Array.isArray(rows) && rows.length) {
+      return { segments: rows, updatedAt: ca?.updatedAt ?? 0, source: "content_analysis" };
+    }
+  }
   const t = await getTranscript(mediaId);
   if (t && Array.isArray(t.segments) && t.segments.length) {
     return { segments: t.segments, updatedAt: t.updatedAt, source: "transcript" };
@@ -6173,6 +6187,12 @@ app.post("/api/automation/rules", async (c) => {
           ? { captionFont: l.captionFont } : {}),
         ...(typeof l.channelBoxColor === "string" && /^#[0-9a-fA-F]{6}$/.test(l.channelBoxColor)
           ? { channelBoxColor: l.channelBoxColor } : {}),
+        // 배포 언어 (2026-09-07) — 자막·제목·메타·글꼴이 전부 이 값을 따른다.
+        // **아는 언어만** 통과시킨다: 오타(`vn`)를 저장하면 langOf 가 한국어로 떨어뜨려
+        // "베트남어로 설정했는데 한국어가 나가는" 상태가 조용히 굳는다. 한국어는 기본값이라
+        // 저장하지 않는다 — 이미 돌던 계획의 layout JSON 이 그대로 유지된다(무회귀).
+        ...(typeof l.lang === "string" && isForeign(langOf(l.lang))
+          ? { lang: langOf(l.lang).code } : {}),
       };
       return Object.keys(layout).length ? { layout } : {};
     })()),
@@ -7790,7 +7810,8 @@ async function recCaptionLines(rec: any, esn: any): Promise<Caption[]> {
   const mediaId = String(rec.mediaId ?? "");
   if (!mediaId) return [];
   if (esn && esn.captionsOn === false) return [];
-  const resolved = await resolveTranscript(mediaId).catch(() => null);
+  // 미리보기도 렌더와 **같은 언어**를 읽는다 — 다르면 편집 화면에서 본 자막과 결과물이 다르다.
+  const resolved = await resolveTranscript(mediaId, esn?.lang).catch(() => null);
   if (!resolved?.segments) return [];
   const win = windowCaptions(resolved.segments, Number(rec.startTime) || 0, Number(rec.endTime) || 0);
   // 렌더와 같은 글자수 규칙(captionMaxCharsOf) — 다르면 프리미어에서 한 줄인 게 결과물에선 두 줄이다.
@@ -9330,6 +9351,9 @@ app.post("/api/clips/:id/generate-metadata", async (c) => {
     // 프로그램별 운영자 커스텀 제목 지시 — PATCH /api/programs/:id 로 저장된 것.
     titlePrompt: typeof program?.titlePrompt === "string" ? program.titlePrompt : undefined,
     isShort: isShortClip,
+    // 출력 언어 — 클립의 배포 언어를 따른다. 근거 자막·사실 블록은 **한국어 원문**이고
+    // 출력만 이 언어로 나간다(번역이 아니라 생성 · clip-metadata.ts langBlock).
+    lang: (clip.editorState as any)?.lang,
     // 커머스 게이트가 켜졌을 때만 상품 쿼리를 같이 뽑는다 — **같은 호출**이라 추가 원가가 없다.
     // 꺼져 있으면 프롬프트가 종전과 완전히 동일하다(메타 품질에 영향 없음).
     wantProductQueries: commerceLinksEnabled(),
@@ -9787,11 +9811,13 @@ app.post("/api/clips/:id/export", async (c) => {
   // we window them to the render range below. Read from the canonical transcript table
   // (fallback: the analysis blob for pre-table rows). A fingerprint (count + updatedAt) goes
   // into the revision hash so a re-transcribe invalidates the cached render.
+  const renderLang = langOf((clip.editorState as any)?.lang);
   const resolved = clip.sourceMediaId
-    ? await resolveTranscript(clip.sourceMediaId)
+    ? await resolveTranscript(clip.sourceMediaId, renderLang.code)
     : { segments: [] as unknown[], updatedAt: 0, source: "none" as const };
   const transcript = resolved.segments;
-  const captionsFp = { n: transcript.length, u: resolved.updatedAt };
+  // 언어를 해시에 넣는다 — 같은 클립의 다른 언어판이 서로의 캐시된 렌더를 재사용하면 안 된다.
+  const captionsFp = { n: transcript.length, u: resolved.updatedAt, l: renderLang.code };
 
   // 첫 3초 hook 프리롤 요청 여부 — 에디터 "첫 3초 훅" 토글(editorState.hookOn) ON + clip 에
   // hookTimeSec 이 있을 때만. 토글/시각이 바뀌면 revision 이 달라져 캐시가 자동 무효화되도록 해시에 포함.

@@ -48,6 +48,7 @@ import {
   type YouTubeChannel,
   appendGateAudit,
   getRawPool,
+  getContentAnalysis,
 } from "./db-pg.ts";
 import { checkCredits } from "./billing/credits.ts";
 import { topupAndRecheck } from "./billing/auto-topup.ts";
@@ -57,6 +58,8 @@ import {
   prepareProgramAssets, publishStyleProfile, publishThumbnails, tempAssetRoot, pullPrefix,
 } from "./media/thumbnail-assets.ts";
 import { uploadFile, uploadPath, thumbPath, promoteUpload } from "./media/storage-gcs.ts";
+import { isForeign, langOf } from "./media/caption-lang.ts";
+import { clipCues, toWebVtt } from "./media/caption-vtt.ts";
 import { initQueue, claimJob, completeJob, failJob, requeueStale, heartbeatJob, enqueue, lastDoneJobAt, pruneDoneJobs, queueStats, type Job, type JobType } from "./pipeline/queue.ts";
 import { runWithTenant, runAsSystem, DEFAULT_TENANT_ID } from "./auth/tenant.ts";
 import { recordAutoPublishForReport, recordAutoPublishFailureForReport } from "./publish/publish-notify.ts";
@@ -72,6 +75,7 @@ import {
   fetchVideosBatch,
   fetchVideoComments,
   uploadVideoResumable,
+  insertCaptionTrack,
   setVideoThumbnail,
   updateVideoPrivacy,
   updateVideoMetadata,
@@ -2215,6 +2219,43 @@ async function publishChannelLabel(channel: string, accountId: string): Promise<
 }
 
 /**
+ * 이 클립의 자막을 유튜브 캡션 트랙으로 올린다 (2026-09-07 · 다국어 소프트섭).
+ *
+ * **번인과 별개다.** 번인은 영상에 굽는 것이라 쇼츠·네이버·틱톡처럼 트랙 API 가 없는 면을
+ * 위한 것이고, 이건 롱폼에서 시청자가 켜서 보는 자막이다. 렌더를 하나도 안 늘린다.
+ *
+ * 언어는 `clip.editorState.lang` 을 따른다 — 렌더가 자막을 고를 때 쓰는 값과 같아서
+ * "번인은 베트남어인데 트랙은 한국어" 같은 어긋남이 안 생긴다.
+ *
+ * 자막이 없거나(대사 없는 리액션 클립) 구간 정보가 없으면 **조용히 건너뛴다** —
+ * 자막 트랙은 부속물이고, 없다고 발행을 막을 이유가 없다.
+ */
+async function uploadCaptionTrack(ch: YouTubeChannel, clip: any, videoId: string): Promise<void> {
+  const mediaId = String(clip?.sourceMediaId ?? "");
+  const start = Number(clip?.startTime ?? 0);
+  const end = Number(clip?.endTime ?? 0);
+  if (!mediaId || !(end > start)) return;
+
+  const lang = langOf((clip?.editorState as any)?.lang);
+  // 한국어 트랙은 굽지 않는다 — 번인 자막이 이미 화면에 있어 트랙까지 켜면 두 벌이 겹친다.
+  // 트랙의 값어치는 "원문을 못 읽는 시청자" 에게 있다(다국어 배포).
+  if (!isForeign(lang)) return;
+
+  const ca = await getContentAnalysis(mediaId).catch(() => null);
+  const rows = (ca?.data as any)?.transcriptI18n?.[lang.code];
+  if (!Array.isArray(rows) || !rows.length) {
+    console.warn(`[worker] 자막 트랙 건너뜀 ${clip?.id} — ${lang.nameKo} 번역이 없다`);
+    return;
+  }
+  const cues = clipCues(rows, start, end);
+  if (!cues.length) return;
+
+  const vtt = toWebVtt(cues);
+  await withChannelToken(ch, (token) => insertCaptionTrack(token, videoId, lang.code, vtt));
+  console.log(`[worker] youtube 자막 트랙 ${clip?.id} → ${videoId} (${lang.code} · ${cues.length}줄)`);
+}
+
+/**
  * 이 클립으로 유튜브에 올릴 썸네일을 고른다.
  *
  * 우선순위 — **사람이 고른 것 → AI 생성물 → 렌더 프레임**.
@@ -3211,6 +3252,10 @@ async function runDistributionPublish(job: Job): Promise<void> {
           ...meta,
           privacyStatus: privacy,
           publishAt,
+          // 제목·설명이 무슨 언어인지 유튜브에 알린다 — 안 알리면 베트남어 메타를 한국어로
+          // 오인해 검색·추천 매칭이 어긋난다. 한국어면 undefined 라 종전 요청과 같다.
+          language: isForeign(langOf((clip.editorState as any)?.lang))
+            ? langOf((clip.editorState as any)?.lang).code : undefined,
         },
       ),
     );
@@ -3228,6 +3273,16 @@ async function runDistributionPublish(job: Job): Promise<void> {
       }
     } catch (e) {
       console.warn(`[worker] youtube 썸네일 설정 실패 ${clipId}:`,
+        e instanceof Error ? e.message.slice(0, 200) : e);
+    }
+
+    // 자막 트랙(소프트섭) — 시청자가 켜서 보는 자막. 번인과 별개다(2026-09-07).
+    // 렌더를 늘리지 않고, 재동의도 필요 없다(youtube.force-ssl 이 이미 발행 스코프에 있다).
+    // 썸네일과 같은 계약: **업로드는 이미 끝났으므로 여기서 실패해도 배포를 실패로 안 돌린다.**
+    try {
+      await uploadCaptionTrack(ch, clip, videoId);
+    } catch (e) {
+      console.warn(`[worker] youtube 자막 트랙 실패 ${clipId} — 영상은 정상 발행됨:`,
         e instanceof Error ? e.message.slice(0, 200) : e);
     }
 
