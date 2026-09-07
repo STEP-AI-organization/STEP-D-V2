@@ -27,6 +27,16 @@ export interface WorkspaceOverview {
   ffmpeg: string | null;
 }
 
+/** `update/policy.ts` 의 `UpdateState` 와 같은 모양. 렌더러는 타입만 알면 된다. */
+export interface UpdateStatus {
+  stage: "idle" | "checking" | "available" | "downloading" | "ready" | "error";
+  currentVersion: string;
+  newVersion: string | null;
+  progress: number;
+  message: string | null;
+  lastCheckedAt: number;
+}
+
 export interface WorkspaceBridge {
   readonly version: 1;
   overview(): Promise<WorkspaceOverview>;
@@ -34,6 +44,19 @@ export interface WorkspaceBridge {
   subscribeUploads(listener: (jobs: NativeUploadJob[]) => void): () => void;
   /** 탐색기에서 연다. 경로는 **메인 프로세스가 작업 공간 안인지 다시 본다.** */
   reveal(target: string): Promise<void>;
+  /**
+   * 자동 업데이트 상태. **이 창에만 있다** — 업데이트는 이 PC 의 일이고, 웹 화면은
+   * 모든 PC 에서 같아야 한다. 웹에 노출하면 "이 화면이 어느 PC 얘기냐" 가 흐려진다.
+   */
+  update(): Promise<UpdateStatus | null>;
+  subscribeUpdate(listener: (state: UpdateStatus) => void): () => void;
+  /** 새 버전을 확인한다(주기 무시). */
+  checkUpdate(): Promise<UpdateStatus | null>;
+  /**
+   * "지금 재시작". 지금 못 깔면 **예약**되고 사유가 담겨 돌아온다 —
+   * 굽는 중이면 사용자가 눌러도 안 깐다(끝나면 자동으로).
+   */
+  installUpdate(): Promise<UpdateStatus | null>;
 }
 
 const bridge: WorkspaceBridge = {
@@ -46,6 +69,14 @@ const bridge: WorkspaceBridge = {
     return () => ipcRenderer.removeListener("native:upload:changed", handler);
   },
   reveal: (target: string) => ipcRenderer.invoke("native:workspace:reveal", target),
+  update: () => ipcRenderer.invoke("native:update:state"),
+  subscribeUpdate(listener) {
+    const handler = (_e: Electron.IpcRendererEvent, state: UpdateStatus) => listener(state);
+    ipcRenderer.on("native:update:changed", handler);
+    return () => ipcRenderer.removeListener("native:update:changed", handler);
+  },
+  checkUpdate: () => ipcRenderer.invoke("native:update:check"),
+  installUpdate: () => ipcRenderer.invoke("native:update:install"),
 };
 
 contextBridge.exposeInMainWorld("stepdWorkspace", bridge);

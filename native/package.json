@@ -18,7 +18,8 @@
     "dist": "pnpm fetch:ffmpeg && pnpm build && electron-builder --win nsis",
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test \"src/**/*.test.ts\"",
-    "fetch:ffmpeg": "node scripts/fetch-ffmpeg.mjs"
+    "fetch:ffmpeg": "node scripts/fetch-ffmpeg.mjs",
+    "publish:update": "node scripts/publish-update.mjs"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
@@ -65,8 +66,9 @@
     ],
     "protocols": [
       {
-        "name": "STEP-D Protocol",
+        "name": "STEPAISTUDIO Protocol",
         "schemes": [
+          "stepaistudio",
           "stepd"
         ]
       }
@@ -83,7 +85,18 @@
       "allowElevation": false,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "artifactName": "STEPAISTUDIO-Setup-${version}.${ext}"
-    }
+      "artifactName": "STEPAISTUDIO-Setup-${version}.${ext}",
+      "differentialPackage": true
+    },
+    "publish": [
+      {
+        "provider": "generic",
+        "url": "https://stepd.stepai.kr/api/desktop",
+        "channel": "latest"
+      }
+    ]
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.9"
   }
 }

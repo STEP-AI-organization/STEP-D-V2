@@ -1,6 +1,6 @@
 # @stepd/server HTTP API 레퍼런스
 
-> 실측: **2026-09-04 · 라우트 275개** (GET 126 · POST 102 · DELETE 26 · PATCH 14 · PUT 7) · `apps/server/src/index.ts` 기준 — 라우트 추가 시 이 문서도 갱신.
+> 실측: **2026-09-07 · 라우트 278개** (GET 128 · POST 102 · DELETE 27 · PATCH 14 · PUT 7) · `apps/server/src/index.ts` 기준 — 라우트 추가 시 이 문서도 갱신.
 > 프론트 대응 함수는 `apps/web/src/lib/data/api.ts` 기준. 데이터 구조는 [data-model.md](data-model.md),
 > 큐·워커 동작은 [../ops/worker-queue.md](../ops/worker-queue.md) 참고.
 
@@ -310,6 +310,7 @@ API 키(`api-keys.ts`). **화이트리스트(`API_KEY_ROUTES`)에 올린 라우�
 | `GET`·`DELETE /api/naver/accounts/:id/credentials` | 있다/없다·상태 조회 · 삭제 | 아이디는 `ha9***85` 로 마스킹 | `fetchNaverCredentials` |
 | `POST /api/naver/accounts/:id/relogin` | 자격증명으로 재로그인 큐잉 | 세션 만료 시 사람을 안 부르고 워커가 되살린다 | `requestNaverRelogin` |
 | `GET /api/naver/login-tool` | 편집자용 로그인 exe 내려받기 | GCS 서명 URL | — |
+| `GET /api/desktop/:file` | **데스크톱 앱 자동 업데이트 피드** — `latest.yml` 은 직접, 설치본은 GCS 서명 URL 로 302. 세션 불필요(로그인 전에도 받아야 한다) | 비공개 객체 + 서명 URL | — |
 
 **카테고리는 1차·2차 둘 다 필수**다(안 고르면 등록 버튼이 활성화되지 않는다). 값이 정해지는
 순서는 **발행 페이로드 → 프로그램 기본값(`program.naverCategory`) → 장르 유도**(드라마 →

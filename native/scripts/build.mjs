@@ -5,7 +5,10 @@ const shared = {
   platform: "node",
   target: "node24",
   sourcemap: true,
-  external: ["electron"],
+  // ⚠️ electron-updater 는 **번들하지 않는다.** 런타임에 app-update.yml 을 찾고
+  //    asar 밖 경로를 계산하는 코드가 있어, 번들되면 그 경로 추정이 깨진다.
+  //    electron-builder 가 node_modules 채로 패키징한다(그래서 dependencies 다).
+  external: ["electron", "electron-updater"],
   logLevel: "info",
 };
 

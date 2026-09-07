@@ -11286,6 +11286,55 @@ app.delete("/api/tiktok/accounts/:publicId", async (c) => {
  *
  * 계정 검증은 여기서 한다 — 없는/남의 계정 키가 파일명에 박히면 도우미가 엉뚱한 데 올린다.
  */
+/**
+ * ── 데스크톱 앱 자동 업데이트 피드 ────────────────────────────────────────────
+ *
+ * STEPAISTUDIO(Electron)가 electron-updater 로 여기를 본다. `latest.yml` 을 읽어
+ * 새 버전이 있으면 그 안에 적힌 설치본을 받는다.
+ *
+ * **왜 GCS 를 직접 안 보게 하나.** 두 버킷 다 Public Access Prevention 이 켜져 있다
+ * (공개 객체 금지 · docs/ops/infra.md). 공개 버킷을 새로 파는 대신, 이미 있는 구조를
+ * 그대로 쓴다 — `/api/naver/login-tool` 과 같다: **비공개 객체 + 서명 URL 로 302.**
+ * 리다이렉트라 **설치본 바이트는 Cloud Run 을 안 지난다**(GCS→편집자 PC 직행).
+ * 100MB 넘는 파일을 서버로 흘리면 그게 그대로 egress 청구서다.
+ *
+ * 세션을 요구하지 않는다. 업데이트는 **앱이 로그인 전에도** 받아야 하고(로그인 화면이
+ * 깨진 버전을 고치는 게 업데이트의 목적일 수 있다), 파일 이름을 알아야 받을 수 있다.
+ */
+const DESKTOP_PREFIX = "desktop/";
+
+/** 피드가 내주는 파일 이름 — **경로를 못 벗어나게** 여기서 좁힌다. */
+function desktopObject(name: string): string | null {
+  const n = String(name ?? "").trim();
+  // `latest.yml` · `STEPAISTUDIO-Setup-0.3.0.exe` · `*.blockmap`(차등 업데이트) 만.
+  // 경로 구분자·`..` 은 이 정규식을 통과하지 못한다.
+  if (!/^[A-Za-z0-9._-]+\.(yml|exe|blockmap|zip)$/.test(n)) return null;
+  return DESKTOP_PREFIX + n;
+}
+
+app.get("/api/desktop/:file", async (c) => {
+  const obj = desktopObject(c.req.param("file"));
+  if (!obj) return c.json({ error: "bad_name" }, 400);
+  if (!useGcs() || !(await fileExists(obj))) {
+    // ⚠️ 404 여야 한다. electron-updater 는 404 를 "업데이트 없음" 으로 조용히 넘기지만
+    //    5xx 는 오류로 시끄럽게 남긴다 — 아직 아무것도 발행 안 한 상태가 오류는 아니다.
+    return c.json({ error: "not_published" }, 404);
+  }
+  /**
+   * `latest.yml` 은 **작아서 그냥 흘려보낸다**(1KB 남짓). 302 로 넘기면 electron-updater 가
+   * 서명 URL 을 캐시해 두었다가 만료 뒤 다시 부르며 헛도는 경우가 있다. 큰 파일만 302.
+   */
+  if (obj.endsWith(".yml")) {
+    const body = await readFile(obj);
+    return c.body(body, 200, {
+      "content-type": "text/yaml; charset=utf-8",
+      // 편집자가 새 버전을 늦게 보는 것보다, 매번 확인하는 편이 싸다(파일이 1KB 다).
+      "cache-control": "no-cache",
+    });
+  }
+  return c.redirect(await signedReadUrl(obj, 30 * 60_000, obj.slice(DESKTOP_PREFIX.length)));
+});
+
 app.get("/api/naver/login-tool", async (c) => {
   const obj = "tools/stepd-naver-login.exe";
   if (!useGcs() || !(await fileExists(obj))) {

@@ -86,12 +86,19 @@ test("preload 는 신뢰 origin 에서만 브리지를 노출한다", () => {
   assert.match(preload, /contextBridge\.exposeInMainWorld\("stepdNative", bridge\)/);
 });
 
-test("자동 업데이트가 없다는 사실이 문서와 일치한다", () => {
-  // 이게 생기면 위 경계 규칙의 무게가 달라진다 — 문서를 같이 고쳐야 한다.
+/**
+ * 이 테스트는 원래 **"자동 업데이트가 없다"** 를 지켰다. 2026-09-07 에 도입하면서
+ * 뒤집었다 — 그때 이 테스트가 정확히 제 일을 했다: `build.publish` 를 넣자마자 빨개지며
+ * "문서의 '재설치' 서술을 고치라" 고 시켰고, 그래서 `native/CLAUDE.md` 가 같이 갱신됐다.
+ *
+ * 지금 지키는 것은 반대 방향이다: **설정과 문서가 같은 말을 하는가.** 둘이 갈리면
+ * 처음 보는 사람이 "고치면 편집자 PC 를 다 돌아야 한다" 는 낡은 전제로 일한다.
+ */
+test("자동 업데이트가 있다는 사실이 문서와 일치한다", () => {
   const pkg = JSON.parse(read("../../package.json")) as { build?: { publish?: unknown } };
   const doc = read("../../CLAUDE.md");
-  const hasPublish = pkg.build?.publish != null;
-  assert.equal(hasPublish, false,
-    "build.publish 가 생겼다 — 자동 업데이트를 도입했다면 native/CLAUDE.md 의 '재설치' 서술을 고칠 것");
-  assert.match(doc, /자동 업데이트가 없다/);
+  assert.ok(pkg.build?.publish != null,
+    "build.publish 가 사라졌다 — 업데이트를 뗐다면 native/CLAUDE.md 의 서술도 되돌릴 것");
+  assert.match(doc, /자동 업데이트가 있다/);
+  assert.ok(!/자동 업데이트가 없다/.test(doc), "문서에 낡은 서술이 남아 있다");
 });

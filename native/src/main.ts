@@ -27,6 +27,7 @@ import { ElectronTransferNetwork } from "./transfer/network-electron.js";
 import { EncryptionUnavailableError } from "./transfer/errors.js";
 import { TransferEngine } from "./transfer/engine.js";
 import { validateJobId, validateUploadInput, validateVideoPath } from "./transfer/validation.js";
+import { Updater } from "./update/updater.js";
 
 const PRODUCT_URL = "https://stepd.stepai.kr";
 const PARTITION = "persist:stepd";
@@ -41,6 +42,7 @@ let closeWhenIdle = false;
 let loginItemEnabled: boolean | null = null;
 let networkTimer: NodeJS.Timeout | null = null;
 let previousStates = new Map<string, NativeUploadJob["status"]>();
+let updater: Updater | null = null;
 
 const singleInstance = app.requestSingleInstanceLock();
 if (!singleInstance) app.quit();
@@ -160,7 +162,10 @@ async function openPremiere(): Promise<void> {
 function handleProtocol(raw: string): void {
   let url: URL;
   try { url = new URL(raw); } catch { return; }
-  if (url.protocol !== "stepd:") return;
+  // ⚠️ **둘 다 받는다.** 등록(PROTOCOLS)은 새 이름·옛 이름을 다 하는데 여기서 옛 이름만
+  //    통과시키면, `stepaistudio://app/...` 딥링크가 OS 를 거쳐 앱까지 와서 **조용히 버려진다**
+  //    (눌러도 아무 일이 안 일어난다). 개명이 반쯤만 된 자리였다.
+  if (!isOurProtocol(url.protocol.replace(/:$/, "") + "://")) return;
   if (url.hostname === "open") {
     void openPremiere();
     return;
@@ -327,8 +332,25 @@ function rebuildTrayMenu(): void {
       click: () => void Promise.all(paused.map((job) => engine!.resume(job.id))),
     },
     { type: "separator" },
+    ...updateMenuItems(),
     { label: "완전 종료", click: () => { quitting = true; app.quit(); } },
   ]));
+}
+
+/**
+ * 트레이에 업데이트를 노출한다 — **준비됐을 때만.**
+ *
+ * 항상 "업데이트 확인" 을 띄우지 않는 이유: 이 앱은 자동으로 받는다. 늘 보이는 메뉴는
+ * "내가 눌러야 하나?" 를 묻게 만들고, 실제로는 누를 필요가 없다. 준비된 순간에만
+ * 나타나면 그 자체가 알림이 된다.
+ */
+function updateMenuItems(): Electron.MenuItemConstructorOptions[] {
+  const s = updater?.snapshot;
+  if (!s || s.stage !== "ready") return [];
+  return [
+    { label: `새 버전 ${s.newVersion} 준비됨 — 지금 재시작`, click: () => { updater?.requestInstall(); } },
+    { type: "separator" },
+  ];
 }
 
 function syncLoginItem(): void {
@@ -351,6 +373,9 @@ function handleJobChanges(jobs: NativeUploadJob[]): void {
       new Notification({ title: "STEPAISTUDIO 전송 확인 필요", body: job.errorMessage ?? `${job.filename} 전송을 확인해 주세요.` }).show();
     }
   }
+  // 전송이 끝나면 예약해 둔 업데이트가 여기서 걸린다 — "전송이 끝나면 재시작합니다"
+  // 라고 말해 놓고 안 하면 그 문구가 거짓말이 된다.
+  updater?.onBusyChanged();
   previousStates = new Map(jobs.map((job) => [job.id, job.status]));
   if (closeWhenIdle && engine && !engine.hasUnfinishedJobs()) {
     closeWhenIdle = false;
@@ -448,6 +473,32 @@ function registerIpc(): void {
       ffmpeg: process.env.STEPD_FFMPEG ?? null,
     };
   });
+  /**
+   * 업데이트 상태 — **읽기 전용.** 내 작업공간 창만 본다.
+   * 웹에는 안 준다: 업데이트는 이 PC 의 일이고, 웹 화면은 모든 PC 에서 같아야 한다.
+   */
+  ipcMain.handle("native:update:state", (event) => {
+    assertTrusted(event, true);
+    return updater?.snapshot ?? null;
+  });
+
+  /**
+   * "지금 재시작". 지금 못 깔면 **예약**된다(굽는 중·전송 중) — 그 사유가 응답에 담겨
+   * 나가므로 화면이 왜 아직인지 말할 수 있다. 아무 응답 없이 조용히 무시하면
+   * 버튼이 고장 난 것처럼 보인다.
+   */
+  ipcMain.handle("native:update:install", (event) => {
+    assertTrusted(event, true);
+    return updater?.requestInstall() ?? null;
+  });
+
+  /** 사용자가 직접 확인 — 주기를 무시한다. */
+  ipcMain.handle("native:update:check", async (event) => {
+    assertTrusted(event, true);
+    await updater?.check(true);
+    return updater?.snapshot ?? null;
+  });
+
   ipcMain.handle("native:workspace:reveal", async (event, target: unknown) => {
     assertTrusted(event, true);
     const p = String(target ?? "");
@@ -519,6 +570,26 @@ void app.whenReady().then(async () => {
   registerIpc();
   mainWindow = createWindow(browserSession);
   createTray();
+
+  /**
+   * 자동 업데이트. **엔진이 뜬 뒤에** 시작한다 — `busy()` 가 전송 상태를 봐야 하는데,
+   * 그 전에 켜면 "안 바쁘다" 로 읽혀 첫 확인 직후 바로 재시작할 수 있다.
+   */
+  updater = new Updater({
+    busy: () => ({
+      transfers: engine?.hasUnfinishedJobs() ?? false,
+      // 로컬 렌더는 아직 배선 전이다. 붙는 순간 여기만 바꾸면 "굽는 중엔 안 깐다" 가
+      // 그대로 걸린다 — 판정은 policy.ts 가 이미 하고 있고 테스트도 돼 있다.
+      rendering: false,
+    }),
+    onChange: (state) => {
+      if (workspaceWindow && !workspaceWindow.isDestroyed()) {
+        workspaceWindow.webContents.send("native:update:changed", state);
+      }
+      rebuildTrayMenu();
+    },
+  });
+  updater.start();
 
   browserSession.cookies.on("changed", (_event, cookie, cause, removed) => {
     if (cookie.name === "stepd_session" && !removed && cause !== "expired") {

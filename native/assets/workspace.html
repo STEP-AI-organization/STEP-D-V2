@@ -71,6 +71,19 @@
     <ul id="jobs"></ul>
   </div>
 
+  <div class="card">
+    <div class="row">
+      <span class="k">버전</span>
+      <span id="ver" class="v">—</span>
+    </div>
+    <div id="upmsg" class="k" style="margin-top:6px">확인 중…</div>
+    <div id="upbar" class="bar" hidden><i style="width:0"></i></div>
+    <div style="margin-top:12px">
+      <button id="upcheck">업데이트 확인</button>
+      <button id="upgo" hidden>지금 재시작</button>
+    </div>
+  </div>
+
 <script>
   const $ = (id) => document.getElementById(id);
   const gb = (n) => (n / 1024 ** 3).toFixed(1) + "GB";
@@ -108,6 +121,45 @@
     $("open").onclick = () => api.reveal(o.rootPath);
     paint(await api.uploads());
     api.subscribeUploads(paint);
+
+    // ── 자동 업데이트 ────────────────────────────────────────────────────────
+    paintUpdate(await api.update());
+    api.subscribeUpdate(paintUpdate);
+    $("upcheck").onclick = async () => {
+      $("upmsg").textContent = "확인하고 있습니다…";
+      paintUpdate(await api.checkUpdate());
+    };
+    // 눌러도 못 깔 수 있다(굽는 중·전송 중). 그때는 **응답에 사유가 담겨 온다** —
+    // 아무 일도 안 일어나면 버튼이 고장 난 것처럼 보이므로 그걸 그대로 보여준다.
+    $("upgo").onclick = async () => paintUpdate(await api.installUpdate());
+  }
+
+  /** 상태 문구는 여기서 조립하지 않는다 — 메인 프로세스가 준 stage 를 그대로 읽는다. */
+  const UP_TEXT = {
+    checking: (s) => "새 버전을 확인하고 있습니다…",
+    available: (s) => "새 버전 " + s.newVersion + " 이 있습니다 — 받는 중…",
+    downloading: (s) => "새 버전 " + s.newVersion + " 을 받는 중 " + Math.round(s.progress * 100) + "%",
+    ready: (s) => "새 버전 " + s.newVersion + " 준비됨 — 재시작하면 적용됩니다.",
+    error: (s) => s.message || "업데이트를 확인하지 못했습니다.",
+    idle: (s) => "최신 버전입니다.",
+  };
+
+  function paintUpdate(s) {
+    if (!s) {
+      // 개발 중(패키징 안 됨)에는 업데이터가 아예 안 뜬다 — 그 사실을 사실대로 적는다.
+      $("ver").textContent = "—";
+      $("upmsg").textContent = "개발 모드에서는 업데이트를 확인하지 않습니다.";
+      $("upcheck").hidden = true;
+      return;
+    }
+    $("ver").textContent = s.currentVersion;
+    // 사유(message)가 있으면 그게 우선이다 — "굽는 중입니다" 같은, 지금 왜 아직인지.
+    $("upmsg").textContent = (s.stage === "ready" && s.message) ? s.message : UP_TEXT[s.stage](s);
+
+    const downloading = s.stage === "downloading";
+    $("upbar").hidden = !downloading;
+    if (downloading) $("upbar").firstElementChild.style.width = Math.round(s.progress * 100) + "%";
+    $("upgo").hidden = s.stage !== "ready";
   }
 
   function paint(jobs) {
