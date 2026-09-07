@@ -23,7 +23,7 @@ export function BillingDialog({
   onClose,
   children,
   footer,
-  maxWidth = 520,
+  maxWidth = 512,   // = max-w-lg (원본 MODAL 1 기본)
   closeDisabled,
 }: {
   title: string;
@@ -32,6 +32,14 @@ export function BillingDialog({
   children: React.ReactNode;
   /** 하단 고정 영역 — 상단 보더로 분리된다. 결제 버튼처럼 "마지막 행동"이 들어간다. */
   footer?: React.ReactNode;
+  /**
+   * 패널 최대 폭(px). **디자이너 원본의 Tailwind 값과 같은 숫자를 쓴다** —
+   * `max-w-md` 448 · `max-w-lg` 512 · `max-w-xl` 576 · `max-w-2xl` 672.
+   *
+   * 원본은 클래스로 잡는데 여기는 style 로 받으므로, 어림수(440·520·640)를 쓰면
+   * 모달마다 8~64px 씩 어긋난다 — 실제로 그래서 "가로 너비가 약간 다르다" 는 지적이
+   * 나왔다(2026-09-07). 새 다이얼로그를 넣을 때도 위 네 숫자 중에서 고를 것.
+   */
   maxWidth?: number;
   /** 진행 중(결제 등)에는 닫기를 막는다 — 오버레이·ESC·버튼 공통. */
   closeDisabled?: boolean;
