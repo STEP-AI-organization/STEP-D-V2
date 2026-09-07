@@ -643,7 +643,7 @@ export default function CreditsPage() {
       {/* 크레딧 구매 — 프리셋·수량·구매자 3필드·결제 2종. 결제 진행 중엔 닫기를 막는다. */}
       {/* 거래 전체 내역 — 서버가 주는 최근 50건 그대로. */}
       {dialog === "ledger" && (
-        <BillingDialog title="크레딧 내역" subtitle="최근 거래 목록입니다." onClose={close} maxWidth={640}>
+        <BillingDialog title="크레딧 내역" subtitle="최근 거래 목록입니다." onClose={close} maxWidth={576}>
           {!state || state.ledger.length === 0 ? (
             <div className="grid min-h-[100px] place-items-center rounded-xl px-6 text-center text-xs text-[var(--color-text-muted)] bg-[var(--color-bg-input)]/60">
               {state ? "아직 내역이 없습니다" : "불러오는 중…"}
@@ -694,6 +694,7 @@ export default function CreditsPage() {
           title="결제 수단"
           subtitle="카드 번호는 포트원으로 직접 전달되며 우리 서버에는 저장되지 않습니다."
           onClose={close}
+          maxWidth={512}
         >
           {/* ⚠️ **구매자 정보는 이 화면 안에 있어야 한다.**
               예전엔 이 입력칸이 '구매'·'설정' 다이얼로그에만 있고 여기엔 없었다. 다이얼로그는
@@ -779,7 +780,7 @@ export default function CreditsPage() {
           title="설정"
           subtitle="구매자 정보는 결제창(KG이니시스)이 필수로 요구하는 항목입니다."
           onClose={close}
-          maxWidth={440}
+          maxWidth={448}
           footer={
             <button
               type="button"
@@ -841,7 +842,7 @@ export default function CreditsPage() {
           title="인보이스"
           subtitle="결제 완료된 충전 건마다 발급됩니다 · 세금계산서가 아닌 결제 내역 확인용 문서입니다."
           onClose={close}
-          maxWidth={640}
+          maxWidth={672}
         >
           {!invoiceList || invoiceList.invoices.length === 0 ? (
             <div className="grid min-h-[100px] place-items-center rounded-xl px-6 text-center text-xs text-[var(--color-text-muted)] bg-[var(--color-bg-input)]/60">
