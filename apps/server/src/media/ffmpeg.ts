@@ -78,6 +78,29 @@ let lastProbeAt = 0;
  *
  * ⚠️ 값이 갈리는 건 **바이너리 위치 하나뿐**이다. 필터그래프·코덱·프리셋은 같은 코드가 만든다.
  */
+/**
+ * `ass` 필터에 붙일 **글꼴 폴더 옵션**. 없으면 빈 문자열이라 지금까지와 같은 명령이 나간다.
+ *
+ * ## 왜 필요한가
+ *
+ * 서버 이미지는 글꼴을 `/usr/share/fonts` 에 깔고 `fc-cache` 를 돌려서 libass 가 이름으로
+ * 찾는다. 편집자 PC 에는 그게 없다 — Windows 용 ffmpeg 은 fontconfig 대신 DirectWrite 를
+ * 쓰고, 우리 글꼴은 설치돼 있지도 않다. 그대로 두면 libass 가 **조용히 다른 글꼴로
+ * 대체**한다. 에러가 안 나서 아무도 모르고, 그 상태로 고객 채널에 나간다.
+ *
+ * 그래서 앱이 동봉 글꼴 폴더를 `STEPD_FONTS_DIR` 로 넘기고 여기서 `fontsdir` 로 실어 준다.
+ * libass 가 그 폴더를 직접 훑으므로 글꼴을 설치할 필요가 없다.
+ *
+ * ⚠️ **서버는 이 값을 안 준다** → 빈 문자열 → 명령이 한 글자도 안 바뀐다(무회귀).
+ */
+function assFontsDirOpt(): string {
+  const dir = (process.env.STEPD_FONTS_DIR ?? "").trim();
+  if (!dir) return "";
+  // 필터그래프 이스케이프는 assPath 와 같은 규칙이다(역슬래시·콜론·따옴표).
+  const esc = escapeAssPath(dir);
+  return `:fontsdir='${esc}'`;
+}
+
 export function ffmpegBin(): string {
   return (process.env.STEPD_FFMPEG ?? "").trim() || "ffmpeg";
 }
@@ -705,7 +728,7 @@ function renderShortWithPreroll(opts: RenderShortOpts & { hookPreroll: NonNullab
   if (videoFilters) { vf += `;${last}${videoFilters}[bcg]`; last = "[bcg]"; }
   if (assPath) {
     const esc = assPath.replace(/\\/g, "\\\\").replace(/:/g, "\\:").replace(/'/g, "\\'");
-    vf += `;${last}ass='${esc}'[bca]`; last = "[bca]";
+    vf += `;${last}ass='${esc}'${assFontsDirOpt()}[bca]`; last = "[bca]";
   }
   if (speed !== 1) { vf += `;${last}setpts=PTS/${speed}[bcs]`; last = "[bcs]"; }
   // 본문 fps/sar 정규화 (xfade 호환).
@@ -1142,7 +1165,7 @@ export function renderShort(opts: RenderShortOpts): Promise<void> {
   if (assPath) {
     // Escape the path for the filtergraph (backslash, colon, single-quote).
     const esc = assPath.replace(/\\/g, "\\\\").replace(/:/g, "\\:").replace(/'/g, "\\'");
-    vf += `;${last}ass='${esc}'[vout]`;
+    vf += `;${last}ass='${esc}'${assFontsDirOpt()}[vout]`;
     last = "[vout]";
   }
   // 브랜딩 아이콘 — ASS 뒤에 얹는다(자막·타이틀과 같은 레이어 감각). 이미지 입력은 1프레임이라
@@ -1263,7 +1286,7 @@ export function renderStaticOverlayPng(opts: {
   }
   if (opts.assPath) {
     const esc = opts.assPath.replace(/\\/g, "\\\\").replace(/:/g, "\\:").replace(/'/g, "\\'");
-    vf += `;${last}ass='${esc}'[vass]`;
+    vf += `;${last}ass='${esc}'${assFontsDirOpt()}[vass]`;
     last = "[vass]";
   }
   if (opts.badge) {

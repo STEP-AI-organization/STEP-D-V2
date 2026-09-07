@@ -77,3 +77,26 @@ describe("ffmpeg 바이너리 주입", () => {
     }
   });
 });
+
+describe("글꼴 폴더 주입 (fontsdir)", () => {
+  /**
+   * ⚠️ 이게 없으면 편집자 PC 렌더에서 **libass 가 조용히 다른 글꼴로 대체**한다.
+   * 에러가 안 나서 그대로 고객 채널에 나간다 — 이 리포에 같은 유형의 사고 기록이 있다.
+   */
+  it("ass 필터 세 곳 전부 fontsdir 를 싣는다", () => {
+    const uses = [...FFMPEG.matchAll(/ass='\$\{esc\}'(\$\{assFontsDirOpt\(\)\})?/g)];
+    assert.ok(uses.length >= 3, `ass 필터를 ${uses.length}곳 찾았다 — 3곳 이상이어야 한다`);
+    for (const m of uses) {
+      assert.ok(m[1], "fontsdir 옵션이 빠진 ass 필터가 있다 — 그 경로만 글꼴이 대체된다");
+    }
+  });
+
+  it("서버에는 안 준다 — 값이 없으면 명령이 한 글자도 안 바뀐다(무회귀)", () => {
+    assert.match(FFMPEG, /const dir = \(process\.env\.STEPD_FONTS_DIR \?\? ""\)\.trim\(\);/);
+    assert.match(FFMPEG, /if \(!dir\) return "";/);
+  });
+
+  it("이스케이프를 두 벌로 쓰지 않는다 — assPath 와 같은 함수를 쓴다", () => {
+    assert.match(FFMPEG, /const esc = escapeAssPath\(dir\);/);
+  });
+});

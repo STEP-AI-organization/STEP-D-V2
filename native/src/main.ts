@@ -21,6 +21,7 @@ import {
 
 import { isNativeImportTarget, type NativeUploadJob } from "./contract.js";
 import { WorkspaceManager } from "./workspace/manager.js";
+import { applyBundledRenderEnv, resolveBundled } from "./render/bundled-ffmpeg.js";
 import { JobStore, type SecretCodec } from "./transfer/job-store.js";
 import { ElectronTransferNetwork } from "./transfer/network-electron.js";
 import { EncryptionUnavailableError } from "./transfer/errors.js";
@@ -407,6 +408,11 @@ void app.whenReady().then(async () => {
     return;
   }
   app.setAppUserModelId("kr.stepai.stepd");
+  // 동봉한 ffmpeg·글꼴을 env 로 심는다. **렌더 코드는 서버 것을 그대로 쓰고**, 갈리는 값은
+  // 바이너리·글꼴 위치 둘뿐이다(render/bundled-ffmpeg.ts 주석). 개발 중에는 아무것도 안 한다.
+  const bundled = resolveBundled(process.resourcesPath, app.isPackaged);
+  applyBundledRenderEnv(bundled);
+  console.log(`[render] ffmpeg=${process.env.STEPD_FFMPEG ?? "(PATH)"} fonts=${process.env.STEPD_FONTS_DIR ?? "(없음)"}`);
   if (app.isPackaged) app.setAsDefaultProtocolClient("stepd");
 
   const browserSession = session.fromPartition(PARTITION, { cache: true });
