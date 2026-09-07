@@ -5,7 +5,7 @@ import { ASPECTS, defaultElementSize, filterCss, fontFamilyCss, outScale, output
 import { getAspectPreset } from "@/lib/editor/aspect-presets";
 import { Movable, SnapGuides, InlineText, type Guides } from "@/components/editor/editor-overlay";
 import { frameUrl, frameOverlaySrc, overlayPngSrc, type FrameTemplate } from "@/lib/data/api";
-import { useOverlayPng } from "@/components/editor/use-overlay-png";
+import { useOverlayPng, pngMatchesContent } from "@/components/editor/use-overlay-png";
 import { sampleReframeFrame } from "@/lib/editor/reframe";
 import type { ClipReframe } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -217,11 +217,18 @@ export function EditorPreview({
   // (사용자 2026-08-19: "타이핑 반응이 굼뜸"). 편집을 끝내면 다시 PNG(결과물 픽셀)로 — half-leading
   // translateY 보정이 있어 전환이 튀지 않는다. idle·비편집 줄·채널은 그대로 PNG(WYSIWYG 유지).
   const editingTitle = editing != null && editing.startsWith("title:");
+  // ⚠️ **PNG 가 지금 텍스트의 것일 때만** 보여준다(pngMatchesContent).
+  // 이 검사가 없으면 편집을 끝낸 직후 editingTitle 이 false 가 되는 순간 **옛 텍스트 PNG** 를
+  // 현재 것처럼 띄우고 CSS 를 투명 처리해서, 새 PNG 가 올 때까지 수백ms 동안 방금 지운 글자가
+  // 도로 보였다 — 사용자가 말한 "글자가 번뜩인다" 가 이거다(2026-09-07).
+  // 위치(x/y)만 다른 건 여기서 걸러지지 않는다 — 그건 아래 translate 로 즉시 따라간다.
   const showTitlePng =
-    !!clipId && !!overlayPng.title.hash && overlayPng.title.aspect === String(state.aspect) &&
+    !!clipId && pngMatchesContent(overlayPng.title, "title", state) &&
+    overlayPng.title.aspect === String(state.aspect) &&
     !aiMode && allTitlesStatic && !editingTitle;
   const showChannelPng =
-    !!clipId && !!overlayPng.channel.hash && overlayPng.channel.aspect === String(state.aspect) &&
+    !!clipId && pngMatchesContent(overlayPng.channel, "channel", state) &&
+    overlayPng.channel.aspect === String(state.aspect) &&
     !aiMode && state.showChannel;
   // 디바운스 중에는 직전의 **정확한 픽셀**을 현재 앵커로 즉시 이동시킨다.
   // 제목·채널을 별도 전체프레임 PNG로 받았기 때문에 다른 레이어는 끌려가지 않는다.
