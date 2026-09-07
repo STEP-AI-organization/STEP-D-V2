@@ -18,7 +18,7 @@ export const WORKSPACE_FOLDERS = ["source", "proxy", "project", "export", "deliv
 export type WorkspaceFolder = (typeof WORKSPACE_FOLDERS)[number];
 
 /** 작업 공간 루트의 기본 이름. 정책이 없을 때 쓴다. */
-export const DEFAULT_WORKSPACE_DIR = "STEP-D Workspace";
+export const DEFAULT_WORKSPACE_DIR = "STEPAISTUDIO Workspace";
 
 /**
  * 서버가 주는 회사별 정책. 4단계에서 API 를 붙이기 전까지는 기본값으로 돈다 —
@@ -154,4 +154,47 @@ export function isInsideRoot(root: string, child: string, caseInsensitive = proc
 export function extensionAllowed(policy: WorkspacePolicy, filePath: string): boolean {
   if (!policy.allowedExtensions.length) return true;
   return policy.allowedExtensions.includes(path.extname(filePath).toLowerCase());
+}
+
+// ── 어느 드라이브에 둘 것인가 ────────────────────────────────────────────────
+
+/**
+ * 작업 공간을 두기 전에 요구하는 최소 여유(바이트). 60분 원본이 수 GB 이고 **복사해서**
+ * 들이므로(원본 유지), 이보다 적은 디스크를 고르면 몇 회차 만에 막힌다.
+ */
+export const MIN_WORKSPACE_FREE_BYTES = 50 * 1024 ** 3;   // 50GB
+
+export interface DriveInfo {
+  /** `C:\` 처럼 루트 경로. */
+  root: string;
+  freeBytes: number;
+  totalBytes: number;
+}
+
+/**
+ * 콘텐츠를 둘 드라이브를 고른다 — **여유가 가장 큰 고정 디스크**.
+ *
+ * ## 왜 홈 디렉토리가 아닌가
+ *
+ * 앱은 C: 에 깔리는 게 맞다(관리자 권한 없이 · 표준). 하지만 **영상은 다르다.**
+ * 편집자 PC 는 보통 시스템 C: 와 미디어용 큰 디스크가 갈려 있고, 실측(2026-09-07 개발 PC)
+ * C: 72GB 여유 · D: 3,678GB 여유였다. 홈(C:)에 두면 회차 몇 개로 시스템 디스크가 찬다 —
+ * 시스템 디스크가 차면 앱이 아니라 **PC 가 망가진다.**
+ *
+ * 동률이면 먼저 온 것을 쓴다(호출부가 드라이브 문자 순으로 준다) — 실행마다 자리가
+ * 바뀌면 큐에 박힌 절대경로가 죽는다.
+ *
+ * 아무것도 기준을 못 넘으면 `null` — 그때는 홈으로 떨어지고, 화면이 그 사실을 말한다.
+ * 조용히 꽉 찬 디스크를 고르는 것보다 낫다.
+ */
+export function pickWorkspaceDrive(
+  drives: readonly DriveInfo[],
+  minFree = MIN_WORKSPACE_FREE_BYTES,
+): DriveInfo | null {
+  let best: DriveInfo | null = null;
+  for (const d of drives) {
+    if (!(d.freeBytes >= minFree)) continue;
+    if (!best || d.freeBytes > best.freeBytes) best = d;
+  }
+  return best;
 }

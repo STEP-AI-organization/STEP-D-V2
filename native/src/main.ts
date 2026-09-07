@@ -117,7 +117,7 @@ async function loadWeb(route = ""): Promise<void> {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   const normalized = route && route.startsWith("/") ? route : "";
   await mainWindow.loadURL(`${webUrl()}${normalized}`).catch(async (error) => {
-    console.error("[native] STEP-D 웹 로드 실패", error);
+    console.error("[native] STEPAISTUDIO 웹 로드 실패", error);
     if (mainWindow && !mainWindow.isDestroyed()) await mainWindow.loadFile(offlinePath());
   });
 }
@@ -142,9 +142,9 @@ async function openPremiere(): Promise<void> {
   }
   const result = await dialog.showMessageBox({
     type: "warning",
-    title: "STEP-D",
+    title: "STEPAISTUDIO",
     message: "Adobe Premiere Pro가 이 PC에 없습니다.",
-    detail: "STEP-D 패널은 Premiere Pro 25.6 이상에서 동작합니다. 설치 페이지를 열까요?",
+    detail: "STEPAISTUDIO 패널은 Premiere Pro 25.6 이상에서 동작합니다. 설치 페이지를 열까요?",
     buttons: ["설치 페이지 열기", "취소"],
     defaultId: 0,
     cancelId: 1,
@@ -170,8 +170,23 @@ function handleProtocol(raw: string): void {
   mainWindow?.focus();
 }
 
+/**
+ * 우리가 받는 URL 스킴. **새 이름이 정본이고 옛 이름은 계속 받는다.**
+ *
+ * ⚠️ `stepd://` 를 그냥 버리면 안 된다 — 이미 등록된 편집자 PC 와 웹의 "프리미어에서 편집"
+ * 버튼, `packages/premiere/launcher/install.ps1` 이 그 스킴을 쓴다. 웹·런처가 전부 새 이름으로
+ * 넘어가기 전에 앱만 바꾸면 그날로 딥링크가 죽는다(눌러도 아무 일이 안 일어난다 — 브라우저는
+ * 미등록 스킴을 조용히 무시한다). 둘 다 받으면 순서를 안 맞춰도 된다.
+ */
+const PROTOCOLS = ["stepaistudio", "stepd"] as const;
+
+function isOurProtocol(url: string): boolean {
+  const u = url.toLowerCase();
+  return PROTOCOLS.some((p) => u.startsWith(`${p}://`));
+}
+
 function protocolArg(argv: string[]): string | undefined {
-  return argv.find((arg) => arg.toLowerCase().startsWith("stepd://"));
+  return argv.find((arg) => isOurProtocol(arg));
 }
 
 function createWindow(browserSession: Electron.Session): BrowserWindow {
@@ -207,13 +222,13 @@ function createWindow(browserSession: Electron.Session): BrowserWindow {
       closeWhenIdle = true;
       win.hide();
       new Notification({
-        title: "STEP-D 전송 계속 중",
+        title: "STEPAISTUDIO 전송 계속 중",
         body: "창을 닫아도 업로드를 계속합니다. 완료되면 자동으로 종료합니다.",
       }).show();
     }
   });
   const guardNavigation = (event: { preventDefault(): void }, destination: string) => {
-    if (destination.startsWith("stepd://")) {
+    if (isOurProtocol(destination)) {
       event.preventDefault();
       handleProtocol(destination);
       return;
@@ -231,7 +246,7 @@ function createWindow(browserSession: Electron.Session): BrowserWindow {
     return { action: "deny" };
   });
   void win.loadURL(webUrl()).catch(async (error) => {
-    console.error("[native] STEP-D 웹 로드 실패", error);
+    console.error("[native] STEPAISTUDIO 웹 로드 실패", error);
     if (!win.isDestroyed()) await win.loadFile(offlinePath());
   });
   return win;
@@ -240,7 +255,7 @@ function createWindow(browserSession: Electron.Session): BrowserWindow {
 function createTray(): void {
   const image = nativeImage.createFromPath(iconPath()).resize({ width: 20, height: 20 });
   tray = new Tray(image);
-  tray.setToolTip("STEP-D");
+  tray.setToolTip("STEPAISTUDIO");
   tray.on("double-click", () => {
     mainWindow?.show();
     mainWindow?.focus();
@@ -253,9 +268,9 @@ function rebuildTrayMenu(): void {
   const jobs = engine.list();
   const active = jobs.filter((job) => ["queued", "initializing", "uploading", "finalizing"].includes(job.status));
   const paused = jobs.filter((job) => job.status === "paused");
-  tray.setToolTip(active.length ? `STEP-D · 전송 ${active.length}건` : "STEP-D");
+  tray.setToolTip(active.length ? `STEPAISTUDIO · 전송 ${active.length}건` : "STEPAISTUDIO");
   tray.setContextMenu(Menu.buildFromTemplate([
-    { label: "STEP-D 열기", click: () => { mainWindow?.show(); mainWindow?.focus(); } },
+    { label: "STEPAISTUDIO 열기", click: () => { mainWindow?.show(); mainWindow?.focus(); } },
     { type: "separator" },
     {
       label: "모든 전송 일시정지",
@@ -287,15 +302,15 @@ function handleJobChanges(jobs: NativeUploadJob[]): void {
   for (const job of jobs) {
     const previous = previousStates.get(job.id);
     if (previous && previous !== job.status && job.status === "completed") {
-      new Notification({ title: "STEP-D 업로드 완료", body: `${job.filename} 전송과 등록이 끝났습니다.` }).show();
+      new Notification({ title: "STEPAISTUDIO 업로드 완료", body: `${job.filename} 전송과 등록이 끝났습니다.` }).show();
     } else if (previous && previous !== job.status && ["failed", "needs_attention"].includes(job.status)) {
-      new Notification({ title: "STEP-D 전송 확인 필요", body: job.errorMessage ?? `${job.filename} 전송을 확인해 주세요.` }).show();
+      new Notification({ title: "STEPAISTUDIO 전송 확인 필요", body: job.errorMessage ?? `${job.filename} 전송을 확인해 주세요.` }).show();
     }
   }
   previousStates = new Map(jobs.map((job) => [job.id, job.status]));
   if (closeWhenIdle && engine && !engine.hasUnfinishedJobs()) {
     closeWhenIdle = false;
-    new Notification({ title: "STEP-D 전송 완료", body: "대기 중인 전송을 모두 마쳐 앱을 종료합니다." }).show();
+    new Notification({ title: "STEPAISTUDIO 전송 완료", body: "대기 중인 전송을 모두 마쳐 앱을 종료합니다." }).show();
     quitting = true;
     app.quit();
   }
@@ -403,17 +418,19 @@ app.on("window-all-closed", () => {
 
 void app.whenReady().then(async () => {
   if (process.platform !== "win32") {
-    dialog.showErrorBox("STEP-D", "현재 데스크톱 앱은 Windows 10/11만 지원합니다.");
+    dialog.showErrorBox("STEPAISTUDIO", "현재 데스크톱 앱은 Windows 10/11만 지원합니다.");
     app.quit();
     return;
   }
-  app.setAppUserModelId("kr.stepai.stepd");
+  // ⚠️ appId(package.json build.appId)와 **같은 값**이어야 알림이 앱 이름으로 뜬다.
+  app.setAppUserModelId("kr.stepai.stepaistudio");
   // 동봉한 ffmpeg·글꼴을 env 로 심는다. **렌더 코드는 서버 것을 그대로 쓰고**, 갈리는 값은
   // 바이너리·글꼴 위치 둘뿐이다(render/bundled-ffmpeg.ts 주석). 개발 중에는 아무것도 안 한다.
   const bundled = resolveBundled(process.resourcesPath, app.isPackaged);
   applyBundledRenderEnv(bundled);
   console.log(`[render] ffmpeg=${process.env.STEPD_FFMPEG ?? "(PATH)"} fonts=${process.env.STEPD_FONTS_DIR ?? "(없음)"}`);
-  if (app.isPackaged) app.setAsDefaultProtocolClient("stepd");
+  // 둘 다 등록한다 — 새 이름이 정본, 옛 이름은 이미 깔린 웹·런처를 위해.
+  if (app.isPackaged) for (const p of PROTOCOLS) app.setAsDefaultProtocolClient(p);
 
   const browserSession = session.fromPartition(PARTITION, { cache: true });
   browserSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));

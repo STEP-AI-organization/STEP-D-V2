@@ -137,6 +137,6 @@ describe("정책", () => {
 
   it("기본 정책은 자동 들여오기가 켜져 있다 — 꺼진 채로 배포되면 아무도 못 올린다", () => {
     assert.equal(DEFAULT_POLICY.autoImportExternal, true);
-    assert.equal(DEFAULT_POLICY.rootDirName, "STEP-D Workspace");
+    assert.equal(DEFAULT_POLICY.rootDirName, "STEPAISTUDIO Workspace");
   });
 });

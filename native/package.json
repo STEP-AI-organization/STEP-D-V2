@@ -1,5 +1,5 @@
 {
-  "name": "@stepd/native",
+  "name": "stepaistudio",
   "version": "0.2.0",
   "private": true,
   "author": "STEPAI",
@@ -29,8 +29,8 @@
     "typescript": "^5.7.2"
   },
   "build": {
-    "appId": "kr.stepai.stepd",
-    "productName": "STEP-D",
+    "appId": "kr.stepai.stepaistudio",
+    "productName": "STEPAISTUDIO",
     "asar": true,
     "directories": {
       "output": "release"
@@ -83,7 +83,7 @@
       "allowElevation": false,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "artifactName": "STEP-D-Setup-${version}.${ext}"
+      "artifactName": "STEPAISTUDIO-Setup-${version}.${ext}"
     }
   }
 }

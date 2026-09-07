@@ -62,7 +62,7 @@ STEP D 프론트 기술스택
 | `tw-animate-css` | 애니메이션 유틸 (globals.css 에서 import) |
 | `@portone/browser-sdk` | 결제창 |
 | `exceljs` · `jspdf` | 내보내기 |
-| `@stepd/native` | Electron 브리지 타입 (`workspace:*`) |
+| `stepaistudio` | Electron 브리지 타입 (`workspace:*`) |
 
 ---
 

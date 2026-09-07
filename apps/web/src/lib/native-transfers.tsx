@@ -4,7 +4,7 @@ import type {
   NativeUploadJob,
   NativeUploadRequest,
   StepdNativeBridge,
-} from "@stepd/native/contract";
+} from "stepaistudio/contract";
 import {
   createContext,
   useCallback,

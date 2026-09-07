@@ -60,8 +60,8 @@ pnpm dev:native
 ## 검증과 설치 파일
 
 ```powershell
-pnpm --filter @stepd/native typecheck
-pnpm --filter @stepd/native test
+pnpm --filter stepaistudio typecheck
+pnpm --filter stepaistudio test
 pnpm build:native
 pnpm dist:native
 ```

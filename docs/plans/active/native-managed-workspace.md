@@ -289,7 +289,7 @@ apps/web/src/lib/native-transfers.tsx   enqueueUpload 안에서 들여오기를 
 ### 배포 순서 — 반드시 앱 먼저
 
 ```
-1) 앱 빌드·배포 (pnpm --filter @stepd/native dist → 편집자 PC 재설치)
+1) 앱 빌드·배포 (pnpm --filter stepaistudio dist → 편집자 PC 재설치)
 2) 그 다음 웹 배포
 ```
 뒤집으면 아직 안 깐 PC 에서 웹이 `importToWorkspace` 를 못 찾는다 — 다만 그 경우도
