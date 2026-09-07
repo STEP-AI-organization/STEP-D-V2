@@ -29,6 +29,38 @@ describe("업데이트 피드 설정", () => {
       `updater.ts 의 기본 피드가 package.json(${url})과 다르다`);
   });
 
+  /**
+   * **주소가 맞아도 그 자리에 아무도 없으면 소용없다.**
+   *
+   * 실제로 그럴 뻔했다: 피드를 `https://stepd.stepai.kr/api/desktop` 으로 두었는데 그
+   * 도메인의 `/api/*` 는 Next.js 가 받고, 서버(Cloud Run)는 IAM 으로 잠겨 있다. 앱은
+   * 404 만 받으며 **영원히 조용히** 갱신을 안 한다 — 오류도 안 뜨고, 편집자는 지금까지도
+   * 수동 설치였으니 이상함도 못 느낀다. 배포 직전에 curl 로 잡았다.
+   *
+   * 그래서 세 곳이 같은 경로를 말하는지 본다: 피드 주소 · 웹 라우트 · 서버 라우트.
+   */
+  it("**피드 경로를 실제로 서빙하는 곳이 있다** — 주소만 맞고 아무도 없으면 조용히 안 는다", () => {
+    const url = new URL(String(pkg.build.publish[0].url));
+    const seg = url.pathname.replace(/^\/|\/$/g, "").split("/");   // ["api","desktop"]
+    const repo = path.resolve(NATIVE, "..");
+
+    // ① 웹(도메인 주인)이 그 경로를 받는가
+    const webRoute = path.join(repo, "apps", "web", "src", "app", ...seg, "[file]", "route.ts");
+    assert.ok(fs.existsSync(webRoute),
+      `웹에 ${url.pathname}/[file] 라우트가 없다 — 앱이 404 만 받는다: ${webRoute}`);
+
+    // ② 그 라우트가 서버로 넘기는가 (자기가 답하고 끝나면 파일이 없다)
+    const web = fs.readFileSync(webRoute, "utf-8");
+    assert.match(web, /CLOUD_RUN_URL/, "웹 라우트가 서버로 넘기지 않는다");
+    assert.match(web, /redirect: "manual"/,
+      "302 를 따라가 버린다 — 100MB 설치본이 Vercel 대역폭으로 청구된다");
+
+    // ③ 서버에 그 라우트가 있는가
+    const server = fs.readFileSync(path.join(repo, "apps", "server", "src", "index.ts"), "utf-8");
+    assert.ok(server.includes(`app.get("/${seg.join("/")}/:file"`),
+      `서버에 /${seg.join("/")}/:file 라우트가 없다`);
+  });
+
   it("**종료 시 자동 설치를 끈다** — 이 앱의 종료는 하필 제일 바쁜 순간에 온다", () => {
     // 전송을 다 마치면 앱이 스스로 꺼진다(closeWhenIdle). 기본값이면 그때 설치가 걸린다.
     assert.match(read("src", "update", "updater.ts"), /autoUpdater\.autoInstallOnAppQuit = false/);
