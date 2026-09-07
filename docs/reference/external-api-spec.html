@@ -205,7 +205,7 @@ PostgreSQL RLS로 워크스페이스 격리를 강제합니다. 키는 "누구 �
 <div class="note">길이를 알 수 없을 때(초=0)는 사전 게이트가 막지 않고 완료 후 실제 길이로 차감합니다.
 이미 소비된 비용은 실재하므로 잔액이 음수가 될 수 있습니다.</div>
 <h4>레이트 리밋</h4>
-<p>전역 레이트 리밋은 없습니다. 팩토리에만: 시간당 개시 상한 <span class="mono">FACTORY_HOURLY_LIMIT</span>(기본 20 → 초과 429),
+<p>전역 레이트 리밋은 없습니다. 팩토리에만: 시간당 개시 상한 20건(초과 429),
 일일 발행 상한(기본 5). 프레임/세그먼트 추출은 서버 내부 동시성 2로 제한됩니다(테넌트별 아님).</p>
 </section>
 
@@ -362,7 +362,7 @@ GCS 모드 전용입니다. finalize 뒤 서울 스테이징→운영 버킷 이
 
 <div class="endpoint">
   <span class="method m-post">POST</span> <span class="path">/api/factory/ingest</span> <span class="badge scope">factory:write</span>
-  <p>전자동 파이프라인 실행(즉시 반환). <b>킬스위치</b> <code>FACTORY_ENABLED</code> 꺼지면 503.</p>
+  <p>전자동 파이프라인 실행(즉시 반환). API 키에 <code>factory:write</code> 스코프가 없으면 403 <code>scope_denied</code>.</p>
   <table>
     <tr><th>본문 필드</th><th>설명</th></tr>
     <tr><td class="mono">sourceUrl, programId</td><td><b>필수</b></td></tr>

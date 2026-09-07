@@ -134,7 +134,8 @@ YouTube URL이 아니라 AENA가 가진 영상 파일은 아래 순서로 넣는
 
 ## 신규 고객사(워크스페이스) 온보딩 런북 — 운영자용
 
-전제: 프로덕션 env 에 `AUTH_REQUIRED=1` · `CREDIT_PRICE_KRW` · `FACTORY_ENABLED=1` · PortOne 키 4종.
+전제: 프로덕션 env 에 `AUTH_REQUIRED=1` · `CREDIT_PRICE_KRW` · PortOne 키 4종.
+(공장은 API 키의 `factory:write` 스코프만 있으면 된다 — 켜는 env 가 없다.)
 
 1. **회사 개설** — admin 콘솔(admin.stepd.stepai.kr) 또는 `POST /api/superadmin/tenants`:
    이름·owner 이메일·초기 테스트 크레딧 grant. 임시 비밀번호 전달.

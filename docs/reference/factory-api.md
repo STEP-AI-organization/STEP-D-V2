@@ -159,8 +159,7 @@ content-type: application/json
 | 코드 | 뜻 | 대응 |
 |---|---|---|
 | `401 unauthorized` | 키 불일치 | 키 확인 |
-| `503 factory_key_unset` | 서버에 키 미설정 | 운영 문의 |
-| `503 factory_disabled` | `FACTORY_ENABLED` off | 운영 문의 (킬 스위치) |
+| `403 scope_denied` | 키에 `factory:write` 스코프가 없음 | 운영 문의 (스코프 부여) |
 | `400 invalid_target` | 채널 미연동·권한없음·미지원 | `problems` 배열에 채널별 사유 |
 | `400 bad_request` | 필수 필드 누락 | |
 | `404 program_not_found` | | |
@@ -265,13 +264,21 @@ x-factory-key: ...
 
 | env | 기본 | 설명 |
 |---|---|---|
-| `FACTORY_API_KEY` | — | **없으면 API 가 닫힌다** |
-| `FACTORY_ENABLED` | off | 킬 스위치. truthy 일 때만 ingest 수락 |
-| `FACTORY_DAILY_CAP` | 5 | 프로그램당 하루 자동 배포 상한 |
-| `FACTORY_HOURLY_LIMIT` | 20 | 시간당 ingest 상한 |
-| `FACTORY_PUBLICIZE_DELAY_MIN` | 10 | private → public 전환 유예(분) |
 | `FACTORY_ALLOWED_ORIGIN` | — | 브라우저에서 직접 부를 때만 필요 (CORS) |
 | `FACTORY_RETURN_ORIGINS` | — | 채널 연결 후 돌아갈 외부 오리진 allowlist (쉼표 구분) |
 | `INTERNAL_API_BASE` | `PUBLIC_URL` | 워커가 렌더 라우트를 부를 주소 |
+
+**env 로 켜고 끄는 스위치는 없다** (2026-09-07 정리). 인증은 **워크스페이스 API 키의
+`factory:write` 스코프**가 하고(구 `FACTORY_API_KEY`·`x-factory-key` 는 없어졌다),
+동작 값은 아래가 정본이다:
+
+| 값 | 기본 | 요청마다 덮는 법 |
+|---|---|---|
+| 프로그램당 하루 배포 상한 | 5 | `policy.dailyCap` |
+| private → public 유예(분) | 10 | `policy.publicizeDelayMin` (**0 = 즉시 공개**) |
+| 시간당 ingest 상한 | 20 | 고정 (사고 방지) |
+
+기본값은 서버의 `FACTORY_DEFAULTS`(factory.ts)다. 예전엔 이 셋이 env 였는데,
+제품 동작을 env 로 두면 값이 어디 있는지 알기 어렵고 바꾸려면 재배포가 필요했다.
 
 관련: [../plans/active/factory-api-plan.md](../plans/active/factory-api-plan.md)
