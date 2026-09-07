@@ -363,22 +363,22 @@ export function PublishDialog({
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/55" onClick={busy ? undefined : onClose} aria-hidden />
       <div
-        className="sd-modal relative flex max-h-[88vh] w-full max-w-[560px] flex-col bg-[var(--sd-card)]"
+        className="rounded-2xl border border-[var(--color-border-card)] shadow-2xl overflow-hidden relative flex max-h-[88vh] w-full max-w-[560px] flex-col bg-[var(--color-bg-card)]"
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
       >
-        <div className="flex items-center justify-between gap-3 px-4 py-3" style={{ borderBottom: "1px solid var(--sd-border)" }}>
+        <div className="flex items-center justify-between gap-3 px-4 py-3" style={{ borderBottom: "1px solid var(--color-border-subtle)" }}>
           <div>
-            <h2 className="sd-serif text-[14px] font-semibold" style={{ color: "var(--sd-fg)" }}>
+            <h2 className="text-[14px] font-semibold" style={{ color: "var(--color-text-primary)" }}>
               배포 · 클립 {clipIds.length}건
             </h2>
-            <p className="text-[11px]" style={{ color: "var(--sd-mut)" }}>
+            <p className="text-[11px]" style={{ color: "var(--color-text-muted)" }}>
               채널을 골라 한 번에 배포 — 하나만 골라도, 여러 개 골라도 됩니다.
             </p>
           </div>
           {selectable.length > 0 && (
-            <button type="button" className="sd-btn text-[11.5px]" onClick={toggleAll} disabled={busy}>
+            <button type="button" className="px-3.5 py-1.5 rounded-full bg-[var(--color-bg-input)] hover:bg-[var(--color-bg-card-hover)] text-xs text-[var(--color-text-primary)] border border-[var(--color-border-subtle)] font-medium cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-[11.5px]" onClick={toggleAll} disabled={busy}>
               {allOn ? "모두 해제" : "모두 선택"}
             </button>
           )}
@@ -386,14 +386,14 @@ export function PublishDialog({
 
         <div className="flex-1 space-y-3.5 overflow-y-auto p-4">
           {loadErr && (
-            <p className="text-[11.5px]" style={{ color: "var(--sd-danger-strong)" }}>
+            <p className="text-[11.5px]" style={{ color: "#E11D48" }}>
               채널 정보를 불러오지 못했습니다 ({loadErr}).
             </p>
           )}
 
           {/* 서버가 연결된 채널을 안전 기본값과 함께 돌려주므로, 비어 있으면 연결 자체가 없는 것이다. */}
           {empty && (
-            <p className="text-[11.5px]" style={{ color: "var(--sd-mut)" }}>
+            <p className="text-[11.5px]" style={{ color: "var(--color-text-muted)" }}>
               보낼 수 있는 채널이 없습니다 — 배포 채널 화면에서 채널을 먼저 연결하세요.
               연결된 채널은 안전한 기본 설정으로 배포됩니다.
             </p>
@@ -402,10 +402,10 @@ export function PublishDialog({
           {groups.map((g) => (
             <div key={g.platform} className="flex flex-col gap-1.5">
               <div className="flex items-center gap-2">
-                <span className="sd-eb" style={{ color: "var(--sd-label)" }}>
+                <span className="text-[11px] font-bold text-[var(--color-text-muted)]" style={{ color: "var(--color-text-muted)" }}>
                   {PLATFORM_LABEL[g.platform] ?? g.platform}
                 </span>
-                <span className="text-[10.5px]" style={{ color: "var(--sd-mut)" }}>
+                <span className="text-[10.5px]" style={{ color: "var(--color-text-muted)" }}>
                   {g.items.length}개
                 </span>
               </div>
@@ -421,9 +421,9 @@ export function PublishDialog({
                       aria-checked={on}
                       disabled={blocked}
                       onClick={() => toggle(t.key)}
-                      className={cn("flex items-start gap-2.5 rounded-[5px] px-3 py-2 text-left", on && "sd-btn--on")}
+                      className={cn("flex items-start gap-2.5 rounded-[5px] px-3 py-2 text-left", on && "border-[#1C60FF] bg-[#1C60FF]/10")}
                       style={{
-                        border: `1px solid ${on ? "var(--sd-accent-border)" : "var(--sd-border)"}`,
+                        border: `1px solid ${on ? "var(--color-border-subtle)" : "var(--color-border-subtle)"}`,
                         opacity: blocked ? 0.6 : 1,
                         cursor: blocked ? "not-allowed" : "pointer",
                       }}
@@ -432,33 +432,33 @@ export function PublishDialog({
                         aria-hidden
                         className="mt-[2px] flex h-[15px] w-[15px] shrink-0 items-center justify-center rounded-[3px] text-[10px] font-bold"
                         style={{
-                          border: `1.5px solid ${on ? "var(--sd-accent-border)" : "var(--sd-border-strong, var(--sd-border))"}`,
-                          background: on ? "var(--sd-accent-border)" : "transparent",
-                          color: on ? "var(--sd-on-accent)" : "transparent",
+                          border: `1.5px solid ${on ? "var(--color-border-subtle)" : "var(--color-border-subtle)"}`,
+                          background: on ? "var(--color-border-subtle)" : "transparent",
+                          color: on ? "#fff" : "transparent",
                         }}
                       >
                         ✓
                       </span>
                       <span className="flex min-w-0 flex-1 flex-col gap-1">
                         <span className="flex flex-wrap items-center gap-1.5">
-                          <span className="text-[12.5px] font-medium" style={{ color: "var(--sd-fg)" }}>
+                          <span className="text-[12.5px] font-medium" style={{ color: "var(--color-text-primary)" }}>
                             {t.label}
                           </span>
-                          {modeTag && <span className="sd-tag">{modeTag}</span>}
+                          {modeTag && <span className="px-2.5 py-0.5 rounded-full text-[10px] font-semibold border-none bg-slate-200/80 text-slate-700 dark:bg-[#282B35] dark:text-slate-200">{modeTag}</span>}
                           {t.badges.map((b) => (
-                            <span key={b} className="sd-tag" title={b === "기본 설정" ? "채널의 안전한 기본 설정으로 나갑니다" : undefined}>
+                            <span key={b} className="px-2.5 py-0.5 rounded-full text-[10px] font-semibold border-none bg-slate-200/80 text-slate-700 dark:bg-[#282B35] dark:text-slate-200" title={b === "기본 설정" ? "채널의 안전한 기본 설정으로 나갑니다" : undefined}>
                               {b}
                             </span>
                           ))}
                           {t.meta.map((m) => (
-                            <span key={m} className="sd-tag sd-mono">
+                            <span key={m} className="px-2.5 py-0.5 rounded-full text-[10px] font-semibold border-none bg-slate-200/80 text-slate-700 dark:bg-[#282B35] dark:text-slate-200 font-mono">
                               {m}
                             </span>
                           ))}
                         </span>
                         {/* 못 고르는 이유를 반드시 적는다 (F4-2). */}
                         {blocked && (
-                          <span className="text-[11px]" style={{ color: "var(--sd-danger-strong)" }}>
+                          <span className="text-[11px]" style={{ color: "#E11D48" }}>
                             {t.blocked}
                           </span>
                         )}
@@ -469,27 +469,27 @@ export function PublishDialog({
                     {t.naver && on && (
                       <div
                         className="ml-[26px] flex flex-col gap-2 rounded-[5px] p-3"
-                        style={{ background: "var(--sd-card-sub)", border: "1px solid var(--sd-border)" }}
+                        style={{ background: "var(--color-bg-input)", border: "1px solid var(--color-border-subtle)" }}
                       >
-                        <label className="text-[11.5px]" style={{ color: "var(--sd-fg)" }}>
-                          설명 <span style={{ color: "var(--sd-mut)" }}>(10자 이상 필수)</span>
+                        <label className="text-[11.5px]" style={{ color: "var(--color-text-primary)" }}>
+                          설명 <span style={{ color: "var(--color-text-muted)" }}>(10자 이상 필수)</span>
                           <textarea
                             value={naverForm(t.key).description}
                             onChange={(e) => patchNaver(t.key, { description: e.target.value })}
                             rows={2}
                             placeholder="영상 설명을 입력하세요"
-                            className="sd-input mt-1 w-full"
+                            className="h-9 px-4 rounded-full bg-[var(--color-bg-input)] border border-[var(--color-border-subtle)] focus:border-[#1C60FF] text-xs text-[var(--color-text-primary)] placeholder-[var(--color-text-muted)] focus:outline-none transition-colors mt-1 w-full"
                           />
                         </label>
                         {naverForm(t.key).description.trim().length < 10 && (
-                          <p className="text-[10.5px]" style={{ color: "var(--sd-danger-strong)" }}>
+                          <p className="text-[10.5px]" style={{ color: "#E11D48" }}>
                             네이버 클립은 설명이 10자 이상이어야 등록됩니다 (현재 {naverForm(t.key).description.trim().length}자).
                           </p>
                         )}
                         {/* 1차를 고르면 2차 목록이 그 1차의 것으로 바뀐다. 자유입력이던 시절엔
                             목록에 없는 값이 그대로 넘어가 엉뚱한 분류로 발행됐다. */}
                         <div className="grid grid-cols-2 gap-2">
-                          <label className="text-[11.5px]" style={{ color: "var(--sd-fg)" }}>
+                          <label className="text-[11.5px]" style={{ color: "var(--color-text-primary)" }}>
                             카테고리 1차
                             <select
                               value={naverForm(t.key).primary}
@@ -499,7 +499,7 @@ export function PublishDialog({
                                 // 같은 조합이 되고, 그건 발행 직전에야 거부된다.
                                 secondary: subsOf(e.target.value)[0]?.name ?? "",
                               })}
-                              className="sd-input mt-1 w-full"
+                              className="h-9 px-4 rounded-full bg-[var(--color-bg-input)] border border-[var(--color-border-subtle)] focus:border-[#1C60FF] text-xs text-[var(--color-text-primary)] placeholder-[var(--color-text-muted)] focus:outline-none transition-colors mt-1 w-full"
                               disabled={!categories.length}
                             >
                               {categories.map((c) => (
@@ -507,12 +507,12 @@ export function PublishDialog({
                               ))}
                             </select>
                           </label>
-                          <label className="text-[11.5px]" style={{ color: "var(--sd-fg)" }}>
+                          <label className="text-[11.5px]" style={{ color: "var(--color-text-primary)" }}>
                             카테고리 2차
                             <select
                               value={naverForm(t.key).secondary}
                               onChange={(e) => patchNaver(t.key, { secondary: e.target.value })}
-                              className="sd-input mt-1 w-full"
+                              className="h-9 px-4 rounded-full bg-[var(--color-bg-input)] border border-[var(--color-border-subtle)] focus:border-[#1C60FF] text-xs text-[var(--color-text-primary)] placeholder-[var(--color-text-muted)] focus:outline-none transition-colors mt-1 w-full"
                               disabled={!categories.length}
                             >
                               {subsOf(naverForm(t.key).primary).map((s) => (
@@ -523,12 +523,12 @@ export function PublishDialog({
                         </div>
                         {/* 목록을 못 받아오면 셀렉트가 사유 없이 비어 보인다 — 이유를 적는다. */}
                         {catErr && (
-                          <p className="text-[10.5px]" style={{ color: "var(--sd-danger-strong)" }}>
+                          <p className="text-[10.5px]" style={{ color: "#E11D48" }}>
                             카테고리 목록을 불러오지 못했습니다 ({catErr}) — 발행을 진행하면
                             기본값(엔터/엔터)으로 올라갑니다.
                           </p>
                         )}
-                        <p className="text-[10.5px]" style={{ color: "var(--sd-mut)" }}>
+                        <p className="text-[10.5px]" style={{ color: "var(--color-text-muted)" }}>
                           사무실 워커 PC 가 이 계정의 로그인 세션으로 실제 업로드합니다.
                         </p>
                       </div>
@@ -543,9 +543,9 @@ export function PublishDialog({
           {chosen.length > 0 && (
             <div
               className="flex flex-col gap-2 rounded-[5px] p-3"
-              style={{ background: "var(--sd-card-sub)", border: "1px solid var(--sd-border)" }}
+              style={{ background: "var(--color-bg-input)", border: "1px solid var(--color-border-subtle)" }}
             >
-              <label className="flex items-center gap-2 text-[11.5px]" style={{ color: "var(--sd-fg)" }}>
+              <label className="flex items-center gap-2 text-[11.5px]" style={{ color: "var(--color-text-primary)" }}>
                 <input
                   type="checkbox"
                   checked={scheduled}
@@ -555,7 +555,7 @@ export function PublishDialog({
                     if (on && !reserveDate) setReserveDate(nowDatetimeLocal());
                   }}
                 />
-                예약 발행 <span style={{ color: "var(--sd-mut)" }}>(선택한 {chosen.length}개 채널 공통)</span>
+                예약 발행 <span style={{ color: "var(--color-text-muted)" }}>(선택한 {chosen.length}개 채널 공통)</span>
               </label>
               {scheduled && (
                 <>
@@ -564,34 +564,34 @@ export function PublishDialog({
                     min={nowDatetimeLocal()}
                     value={reserveDate}
                     onChange={(e) => setReserveDate(e.target.value)}
-                    className="sd-input w-full"
+                    className="h-9 px-4 rounded-full bg-[var(--color-bg-input)] border border-[var(--color-border-subtle)] focus:border-[#1C60FF] text-xs text-[var(--color-text-primary)] placeholder-[var(--color-text-muted)] focus:outline-none transition-colors w-full"
                   />
                   {/* 서버와 같은 판정(isFutureReserve)으로 예약/즉시를 미리 보여 준다 — 화면이 결과와 어긋나지 않게. */}
                   {isFutureReserve(reserveDate) ? (
                     <>
                       {/* 오전/오후를 말로 못 박고 "몇 시간 뒤"를 같이 준다 — 오전 12시(자정)를
                           정오로 착각하는 12시간 오차가 여기서 바로 드러난다. */}
-                      <p className="text-[11px]" style={{ color: "var(--sd-fg)" }}>
+                      <p className="text-[11px]" style={{ color: "var(--color-text-primary)" }}>
                         예약: <b>{humanReserveVerbose(reserveDate)}</b>{" "}
-                        <span style={{ color: "var(--sd-mut)" }}>· {untilReserve(reserveDate)}</span>
+                        <span style={{ color: "var(--color-text-muted)" }}>· {untilReserve(reserveDate)}</span>
                       </p>
                       {isLateNightReserve(reserveDate) && (
                         <p
                           role="alert"
                           className="rounded-md px-2 py-1.5 text-[10.5px] leading-relaxed"
-                          style={{ color: "var(--sd-warn)", background: "var(--sd-warn-bg)", border: "1px solid var(--sd-warn-border)" }}
+                          style={{ color: "#D97706", background: "rgb(245 158 11 / 0.10)", border: "1px solid rgb(245 158 11 / 0.35)" }}
                         >
                           <b>새벽 시간대입니다.</b> 낮 12시를 원하셨다면 시각 선택에서 <b>오후</b>를 골라야 합니다 —
                           <b>오전 12시는 자정(00:00)</b>입니다.
                         </p>
                       )}
-                      <p className="text-[10.5px]" style={{ color: "var(--sd-mut)" }}>
+                      <p className="text-[10.5px]" style={{ color: "var(--color-text-muted)" }}>
                         YouTube·네이버·Facebook 은 플랫폼이 그 시각에 공개(네이티브 예약),
                         Instagram·TikTok 은 그 시각까지 대기했다가 자동 게시합니다.
                       </p>
                     </>
                   ) : (
-                    <p className="text-[10.5px]" style={{ color: "var(--sd-warn)" }}>
+                    <p className="text-[10.5px]" style={{ color: "#D97706" }}>
                       시각이 비었거나 과거예요 — 이대로 배포하면 <b>즉시 발행</b>됩니다.
                     </p>
                   )}
@@ -601,7 +601,7 @@ export function PublishDialog({
               {gateChosen.length > 0 && (
                 <p
                   className="rounded-[4px] px-2.5 py-2 text-[11px] leading-relaxed"
-                  style={{ border: "1px solid var(--sd-warn-border)", background: "var(--sd-warn-bg)", color: "var(--sd-warn)" }}
+                  style={{ border: "1px solid rgb(245 158 11 / 0.35)", background: "rgb(245 158 11 / 0.10)", color: "#D97706" }}
                 >
                   <b>{gateChosen.map((t) => PLATFORM_LABEL[t.platform] ?? t.platform).filter((v, i, a) => a.indexOf(v) === i).join(" · ")}</b>{" "}
                   는 업로드 게이트가 켜져 있을 때만 실제 게시됩니다. 꺼져 있으면 <b>기록됨</b> 상태만 남습니다
@@ -612,15 +612,15 @@ export function PublishDialog({
           )}
         </div>
 
-        <div className="flex items-center justify-between gap-2 px-4 py-3" style={{ borderTop: "1px solid var(--sd-border)" }}>
-          <span className="text-[11.5px]" style={{ color: "var(--sd-mut)" }}>
+        <div className="flex items-center justify-between gap-2 px-4 py-3" style={{ borderTop: "1px solid var(--color-border-subtle)" }}>
+          <span className="text-[11.5px]" style={{ color: "var(--color-text-muted)" }}>
             {chosen.length > 0 ? `${chosen.length}개 채널 선택됨` : "채널을 선택하세요"}
           </span>
           <div className="flex items-center gap-2">
-            <button type="button" className="sd-btn" onClick={onClose} disabled={busy}>
+            <button type="button" className="px-3.5 py-1.5 rounded-full bg-[var(--color-bg-input)] hover:bg-[var(--color-bg-card-hover)] text-xs text-[var(--color-text-primary)] border border-[var(--color-border-subtle)] font-medium cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed" onClick={onClose} disabled={busy}>
               취소
             </button>
-            <button type="button" className="sd-btn sd-btn-primary" disabled={!canSubmit} onClick={submit}>
+            <button type="button" className="px-3.5 py-1.5 rounded-full bg-[#1C60FF] hover:bg-[#0D1EB8] text-white text-xs font-bold border-none cursor-pointer transition-colors shadow-md shadow-[#1C60FF]/25 disabled:opacity-50 disabled:cursor-not-allowed" disabled={!canSubmit} onClick={submit}>
               {busy ? "보내는 중…" : chosen.length === 0 ? "배포" : scheduled ? `${chosen.length}곳 예약 배포` : `${chosen.length}곳에 배포`}
             </button>
           </div>

@@ -185,27 +185,27 @@ export function ClipDetail({
       />
       <div
         className="relative ml-auto flex h-full w-full max-w-[980px] flex-col overflow-y-auto"
-        style={{ background: "var(--sd-bg, #fff)", borderLeft: "1px solid var(--sd-border)" }}
+        style={{ background: "var(--color-bg-card)", borderLeft: "1px solid var(--color-border-subtle)" }}
       >
         {/* 머리 */}
         <div
           className="sticky top-0 z-10 flex items-center gap-3 px-5 py-3"
-          style={{ background: "var(--sd-bg, #fff)", borderBottom: "1px solid var(--sd-border)" }}
+          style={{ background: "var(--color-bg-card)", borderBottom: "1px solid var(--color-border-subtle)" }}
         >
           <div className="min-w-0">
-            <div className="truncate text-[14px] font-semibold" style={{ color: "var(--sd-fg)" }}>
+            <div className="truncate text-[14px] font-semibold" style={{ color: "var(--color-text-primary)" }}>
               {clip.title || "무제 클립"}
             </div>
-            <div className="truncate text-[11.5px]" style={{ color: "var(--sd-mut)" }}>
+            <div className="truncate text-[11.5px]" style={{ color: "var(--color-text-muted)" }}>
               {programTitle ? `${programTitle} · ` : ""}
               {Math.round(clip.durationSec ?? 0)}초 · {clip.aspectRatio}
             </div>
           </div>
           <div className="ml-auto flex items-center gap-2">
             {onPublish && clip.rendered && (
-              <button type="button" className="sd-btn sd-btn-primary" onClick={onPublish}>배포</button>
+              <button type="button" className="px-3.5 py-1.5 rounded-full bg-[#1C60FF] hover:bg-[#0D1EB8] text-white text-xs font-bold border-none cursor-pointer transition-colors shadow-md shadow-[#1C60FF]/25 disabled:opacity-50 disabled:cursor-not-allowed" onClick={onPublish}>배포</button>
             )}
-            <button type="button" className="sd-btn" onClick={onClose}>닫기 (Esc)</button>
+            <button type="button" className="px-3.5 py-1.5 rounded-full bg-[var(--color-bg-input)] hover:bg-[var(--color-bg-card-hover)] text-xs text-[var(--color-text-primary)] border border-[var(--color-border-subtle)] font-medium cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed" onClick={onClose}>닫기 (Esc)</button>
           </div>
         </div>
 
@@ -223,14 +223,14 @@ export function ClipDetail({
           ) : (
             <div
               className="grid place-items-center rounded-[6px] px-6 py-14 text-center text-[12.5px]"
-              style={{ background: "var(--sd-ph-bg, #f4f3f0)", color: "var(--sd-mut)" }}
+              style={{ background: "var(--color-bg-input)", color: "var(--color-text-muted)" }}
             >
               <div>
-                <b style={{ color: "var(--sd-fg)" }}>아직 렌더되지 않았습니다.</b>
+                <b style={{ color: "var(--color-text-primary)" }}>아직 렌더되지 않았습니다.</b>
                 <div className="mt-1">
                   발행되는 파일은 편집기에서 확정(렌더)한 결과물입니다 — 목록 썸네일은 원본 프레임입니다.
                 </div>
-                <a href={`/editor/${clip.id}`} className="sd-btn mt-3 inline-block">편집기로 이동</a>
+                <a href={`/editor/${clip.id}`} className="px-3.5 py-1.5 rounded-full bg-[var(--color-bg-input)] hover:bg-[var(--color-bg-card-hover)] text-xs text-[var(--color-text-primary)] border border-[var(--color-border-subtle)] font-medium cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed mt-3 inline-block">편집기로 이동</a>
               </div>
             </div>
           )}
@@ -239,15 +239,15 @@ export function ClipDetail({
         {/* 메타데이터 */}
         <div className="px-5 py-4">
           <div className="mb-2 flex flex-wrap items-center gap-2">
-            <h3 className="text-[13px] font-semibold" style={{ color: "var(--sd-fg)" }}>
+            <h3 className="text-[13px] font-semibold" style={{ color: "var(--color-text-primary)" }}>
               업로드 메타데이터
             </h3>
-            <span className="text-[11px]" style={{ color: "var(--sd-mut)" }}>
+            <span className="text-[11px]" style={{ color: "var(--color-text-muted)" }}>
               채널마다 규격이 다릅니다 — 그대로 올라갈 문구입니다
             </span>
             <button
               type="button"
-              className="sd-btn ml-auto"
+              className="px-3.5 py-1.5 rounded-full bg-[var(--color-bg-input)] hover:bg-[var(--color-bg-card-hover)] text-xs text-[var(--color-text-primary)] border border-[var(--color-border-subtle)] font-medium cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed ml-auto"
               onClick={generate}
               disabled={busy !== null}
             >
@@ -257,13 +257,13 @@ export function ClipDetail({
 
           {note && (
             <div className="mb-2 rounded-[6px] px-3 py-2 text-[12px]"
-                 style={{ background: "var(--sd-ok-bg, #eef7ee)", color: "var(--sd-fg)" }}>
+                 style={{ background: "rgb(5 150 105 / 0.12)", color: "var(--color-text-primary)" }}>
               {note}
             </div>
           )}
           {err && (
             <div className="mb-2 rounded-[6px] px-3 py-2 text-[12px]"
-                 style={{ background: "var(--sd-danger-bg, #fdecec)", color: "var(--sd-danger-strong, #a11)" }}>
+                 style={{ background: "rgb(244 63 94 / 0.10)", color: "#E11D48" }}>
               {err}
             </div>
           )}
@@ -271,7 +271,7 @@ export function ClipDetail({
           {Object.keys(meta).length === 0 ? (
             <div
               className="rounded-[6px] px-4 py-8 text-center text-[12.5px]"
-              style={{ background: "var(--sd-ph-bg, #f4f3f0)", color: "var(--sd-mut)" }}
+              style={{ background: "var(--color-bg-input)", color: "var(--color-text-muted)" }}
             >
               아직 만들어진 메타데이터가 없습니다. 위 버튼을 누르면 채널별로 한 벌씩 만듭니다.
             </div>
@@ -289,14 +289,14 @@ export function ClipDetail({
                       onClick={() => setTab(ch)}
                       className="rounded-[6px] px-2.5 py-1 text-[12px]"
                       style={{
-                        border: "1px solid var(--sd-border)",
-                        background: tab === ch ? "var(--sd-fg)" : "transparent",
-                        color: tab === ch ? "var(--sd-on-accent)" : "var(--sd-fg)",
+                        border: "1px solid var(--color-border-subtle)",
+                        background: tab === ch ? "var(--color-text-primary)" : "transparent",
+                        color: tab === ch ? "#fff" : "var(--color-text-primary)",
                       }}
                     >
                       {CHANNEL_LABEL[ch]}
                       {m?.edited && <span title="직접 수정함"> ✎</span>}
-                      {bad && <span title="규격 확인 필요" style={{ color: tab === ch ? "#ffb4b4" : "var(--sd-danger-strong)" }}> ●</span>}
+                      {bad && <span title="규격 확인 필요" style={{ color: tab === ch ? "#ffb4b4" : "#E11D48" }}> ●</span>}
                     </button>
                   );
                 })}
@@ -306,7 +306,7 @@ export function ClipDetail({
               {problems.length > 0 && (
                 <ul
                   className="mb-3 list-disc rounded-[6px] py-2 pl-8 pr-3 text-[12px]"
-                  style={{ background: "var(--sd-warn-bg, #fff4e5)", color: "var(--sd-warn-fg, #7a4a00)" }}
+                  style={{ background: "rgb(245 158 11 / 0.10)", color: "#D97706" }}
                 >
                   {problems.map((p, i) => <li key={i}>{p}</li>)}
                 </ul>
@@ -315,24 +315,24 @@ export function ClipDetail({
               <div className="flex flex-col gap-3">
                 {HAS_TITLE[tab] ? (
                   <label className="flex flex-col gap-1">
-                    <span className="text-[11.5px]" style={{ color: "var(--sd-mut)" }}>
+                    <span className="text-[11.5px]" style={{ color: "var(--color-text-muted)" }}>
                       제목 {tab === "youtube" && "· 프로그램 해시태그가 유입 축입니다"}
                     </span>
                     <input
                       value={draft.title}
                       onChange={(e) => setDraft((d) => ({ ...d, title: e.target.value }))}
-                      className="sd-input rounded-[6px] px-2.5 py-1.5 text-[13px]"
-                      style={{ border: "1px solid var(--sd-border)" }}
+                      className="h-9 px-4 rounded-full bg-[var(--color-bg-input)] border border-[var(--color-border-subtle)] focus:border-[#1C60FF] text-xs text-[var(--color-text-primary)] placeholder-[var(--color-text-muted)] focus:outline-none transition-colors rounded-[6px] px-2.5 py-1.5 text-[13px]"
+                      style={{ border: "1px solid var(--color-border-subtle)" }}
                     />
                   </label>
                 ) : (
-                  <div className="text-[11.5px]" style={{ color: "var(--sd-mut)" }}>
+                  <div className="text-[11.5px]" style={{ color: "var(--color-text-muted)" }}>
                     이 채널에는 <b>제목 필드가 없습니다</b> — 설명 하나가 전부입니다.
                   </div>
                 )}
 
                 <label className="flex flex-col gap-1">
-                  <span className="text-[11.5px]" style={{ color: "var(--sd-mut)" }}>
+                  <span className="text-[11.5px]" style={{ color: "var(--color-text-muted)" }}>
                     설명 · {draft.description.length}자
                   </span>
                   <textarea
@@ -340,26 +340,26 @@ export function ClipDetail({
                     onChange={(e) => setDraft((d) => ({ ...d, description: e.target.value }))}
                     rows={6}
                     className="rounded-[6px] px-2.5 py-1.5 text-[13px]"
-                    style={{ border: "1px solid var(--sd-border)", background: "transparent", color: "var(--sd-fg)" }}
+                    style={{ border: "1px solid var(--color-border-subtle)", background: "transparent", color: "var(--color-text-primary)" }}
                   />
                 </label>
 
                 <label className="flex flex-col gap-1">
-                  <span className="text-[11.5px]" style={{ color: "var(--sd-mut)" }}>
+                  <span className="text-[11.5px]" style={{ color: "var(--color-text-muted)" }}>
                     태그 · 쉼표로 구분
                   </span>
                   <input
                     value={draft.tags}
                     onChange={(e) => setDraft((d) => ({ ...d, tags: e.target.value }))}
                     className="rounded-[6px] px-2.5 py-1.5 text-[13px]"
-                    style={{ border: "1px solid var(--sd-border)", background: "transparent", color: "var(--sd-fg)" }}
+                    style={{ border: "1px solid var(--color-border-subtle)", background: "transparent", color: "var(--color-text-primary)" }}
                   />
                 </label>
 
                 <div className="flex flex-wrap items-center gap-2">
                   <button
                     type="button"
-                    className={tab === "youtube" && live ? "sd-btn" : "sd-btn sd-btn-primary"}
+                    className={tab === "youtube" && live ? "px-3.5 py-1.5 rounded-full bg-[var(--color-bg-input)] hover:bg-[var(--color-bg-card-hover)] text-xs text-[var(--color-text-primary)] border border-[var(--color-border-subtle)] font-medium cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed" : "px-3.5 py-1.5 rounded-full bg-[#1C60FF] hover:bg-[#0D1EB8] text-white text-xs font-bold border-none cursor-pointer transition-colors shadow-md shadow-[#1C60FF]/25 disabled:opacity-50 disabled:cursor-not-allowed"}
                     onClick={save}
                     disabled={busy !== null}
                   >
@@ -368,7 +368,7 @@ export function ClipDetail({
                   {tab === "youtube" && live && (
                     <button
                       type="button"
-                      className="sd-btn sd-btn-primary"
+                      className="px-3.5 py-1.5 rounded-full bg-[#1C60FF] hover:bg-[#0D1EB8] text-white text-xs font-bold border-none cursor-pointer transition-colors shadow-md shadow-[#1C60FF]/25 disabled:opacity-50 disabled:cursor-not-allowed"
                       onClick={saveAndSync}
                       disabled={busy !== null}
                       title="이미 올라간 영상의 제목·설명·태그를 고칩니다 — 재업로드가 아니라 기존 영상 수정이라 새 영상이 생기지 않습니다."
@@ -377,7 +377,7 @@ export function ClipDetail({
                     </button>
                   )}
                   {current?.edited && (
-                    <span className="text-[11.5px]" style={{ color: "var(--sd-mut)" }}>
+                    <span className="text-[11.5px]" style={{ color: "var(--color-text-muted)" }}>
                       직접 수정한 채널입니다 — 다시 만들어도 덮어쓰지 않습니다.
                     </span>
                   )}
@@ -413,11 +413,11 @@ function LiveSyncStatus({ rows }: { rows: (DistributionState & { externalId: str
             key={d.externalId}
             className="rounded-[6px] px-3 py-2 text-[11.5px]"
             style={{
-              background: failed ? "var(--sd-danger-bg, #fdecec)" : "var(--sd-card-sub, #f7f6f3)",
-              color: failed ? "var(--sd-danger-strong, #a11)" : "var(--sd-mut)",
+              background: failed ? "rgb(244 63 94 / 0.10)" : "var(--color-bg-input)",
+              color: failed ? "#E11D48" : "var(--color-text-muted)",
             }}
           >
-            <span style={{ color: failed ? undefined : "var(--sd-fg)" }}>
+            <span style={{ color: failed ? undefined : "var(--color-text-primary)" }}>
               {failed
                 ? `유튜브 반영 실패 — ${d.metaSyncError ?? "사유 없음"}`
                 : pending
@@ -436,7 +436,7 @@ function LiveSyncStatus({ rows }: { rows: (DistributionState & { externalId: str
               target="_blank"
               rel="noreferrer"
               className="mt-0.5 inline-block underline"
-              style={{ color: "var(--sd-mut)" }}
+              style={{ color: "var(--color-text-muted)" }}
             >
               유튜브에서 열기 ↗
             </a>
