@@ -69,8 +69,9 @@ const PILL =
   + " hover:bg-[var(--color-bg-card-hover)] text-[var(--color-text-primary)] text-xs font-semibold"
   + " cursor-pointer transition-colors disabled:opacity-60 disabled:cursor-not-allowed";
 const PILL_PRIMARY =
-  "px-5 py-2.5 rounded-full bg-[#1C60FF] hover:bg-blue-600 text-white text-xs font-bold"
-  + " cursor-pointer transition-colors border-none disabled:opacity-60 disabled:cursor-not-allowed";
+  "px-5 py-2.5 rounded-full bg-[#1C60FF] hover:bg-[#0D1EB8] text-white text-xs font-bold"
+  + " shadow-md shadow-[#1C60FF]/25 cursor-pointer transition-colors border-none"
+  + " disabled:opacity-60 disabled:cursor-not-allowed";
 const PILL_DANGER =
   "px-5 py-2.5 rounded-full bg-white dark:bg-slate-900 hover:bg-rose-500/10 text-rose-600"
   + " dark:text-rose-400 text-xs font-bold transition-colors cursor-pointer border border-rose-500/30"
@@ -261,8 +262,13 @@ export function SavedCardManager({
 }
 
 /**
- * 저장된 카드를 실제 카드 모양으로 보여준다. 카드번호 원본은 우리에게 없으므로
- * **마스킹**해서 끝 4자리만 — 나머지는 •로 채운다. 브랜드/발급사는 포트원 조회값.
+ * 저장된 카드를 실제 카드 모양으로 보여준다 — **디자이너 원본(credits MODAL 1) 그대로.**
+ *
+ * 카드번호 원본은 우리에게 없다(포트원이 직접 받는다). 그래서 앞 3그룹은 `• • • •` 로 두고
+ * 끝 4자리만 보여준다. 브랜드·발급일은 포트원 조회값.
+ *
+ * ⚠️ 마크업을 손볼 땐 원본과 나란히 두고 볼 것 — 예전엔 인라인 gradient·`sd-mono`(옛 토큰)·
+ * 고정 300px 로 그려서 같은 화면 안에서 이 카드만 다른 디자인이었다(2026-09-07 지적).
  */
 function CardVisual({
   brand,
@@ -274,34 +280,31 @@ function CardVisual({
   createdAt?: string | null;
 }) {
   return (
-    <div
-      className="relative w-full max-w-[300px] overflow-hidden rounded-[12px] p-4 text-white shadow-md"
-      style={{ background: "linear-gradient(135deg, #33344a 0%, #1c1d2b 100%)", aspectRatio: "1.586 / 1" }}
-    >
-      <div className="flex items-start justify-between">
-        <span className="text-[10.5px] tracking-wide opacity-70">등록된 결제수단</span>
-        <span className="text-[11.5px] font-semibold">{brand || "카드"}</span>
+    <div className="bg-gradient-to-br from-slate-900 via-slate-800 to-stone-900 text-white p-5 rounded-2xl border border-slate-700/60 space-y-4 shadow-lg relative overflow-hidden">
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-bold text-slate-300">등록된 결제수단</span>
+        <span className="text-xs font-extrabold font-mono tracking-wider text-amber-400">
+          {brand || "카드"}
+        </span>
       </div>
 
-      {/* 칩 */}
-      <div
-        className="mt-3 h-6 w-9 rounded-[4px]"
-        style={{ background: "linear-gradient(135deg, #f0d68a 0%, #b8952f 100%)" }}
-        aria-hidden
-      />
-
-      {/* 마스킹된 카드번호 — 끝 4자리만 보인다 */}
-      <div className="sd-mono mt-3 text-[16px] tracking-[0.18em]">
-        •••• •••• •••• {last4 || "••••"}
+      {/* Gold Chip */}
+      <div className="w-10 h-7 bg-amber-400/80 rounded-md border border-amber-300/50 shadow-xs flex items-center justify-center">
+        <div className="w-6 h-4 border-t border-b border-amber-600/40" />
       </div>
 
-      <div className="mt-2 flex items-end justify-between">
-        <span className="text-[9.5px] uppercase tracking-wide opacity-60">STEP-D · 정기결제</span>
-        {createdAt && (
-          <span className="text-[9.5px] opacity-70">
-            {new Date(createdAt).toLocaleDateString("ko-KR")} 등록
-          </span>
-        )}
+      {/* Masked Card Number — 앞 3그룹은 마스킹, 끝 4자리만 실제 값 */}
+      <div className="font-mono tracking-widest text-sm font-bold pt-1 flex items-center justify-between text-slate-200">
+        <span>• • • •</span>
+        <span>• • • •</span>
+        <span>• • • •</span>
+        <span>{last4 || "• • • •"}</span>
+      </div>
+
+      {/* Card Footer */}
+      <div className="flex items-center justify-between text-[11px] text-slate-400 pt-1 border-t border-slate-700/50">
+        <span>STEP-D · 정기결제</span>
+        {createdAt && <span>{new Date(createdAt).toLocaleDateString("ko-KR")} 등록</span>}
       </div>
     </div>
   );

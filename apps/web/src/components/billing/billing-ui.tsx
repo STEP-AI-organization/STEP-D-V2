@@ -8,63 +8,10 @@
  * 반복되는 카드 껍데기(BillingCard)와 다이얼로그(BillingDialog)도 여기 모은다.
  *
  * 오버레이·패널·헤더/본문/푸터 3단과 ESC 닫기는 리포의 공용 모달 관용구를 따른다.
- * 새 라이브러리 없이 sd-* 토큰만 쓴다.
+ * 마크업은 디자이너 원본(credits MODAL 1·2)을 따른다 — 새 라이브러리는 쓰지 않는다.
  */
 import { useEffect } from "react";
-
-import { cn } from "@/lib/utils";
-
-/** sd-card + 오버라인 제목 + 하단 액션 슬롯. 그리드에서 높이를 맞추려 flex-col 로 늘린다. */
-export function BillingCard({
-  title,
-  children,
-  action,
-  className,
-}: {
-  title?: string;
-  children: React.ReactNode;
-  /** 카드 하단 액션 — CardAction 을 넣는다. 없으면 하단 보더도 없다. */
-  action?: React.ReactNode;
-  className?: string;
-}) {
-  return (
-    <div className={cn("sd-card flex flex-col overflow-hidden", className)}>
-      <div className="flex flex-1 flex-col gap-2.5 p-4">
-        {title && (
-          <div className="sd-eb" style={{ color: "var(--sd-label)" }}>{title}</div>
-        )}
-        {children}
-      </div>
-      {action}
-    </div>
-  );
-}
-
-/** 카드 하단 액션 — 상단 보더로 본문과 분리된 중앙 정렬 액센트 텍스트 버튼. */
-export function CardAction({
-  label,
-  onClick,
-  disabled,
-  title,
-}: {
-  label: string;
-  onClick: () => void;
-  disabled?: boolean;
-  title?: string;
-}) {
-  return (
-    <button
-      type="button"
-      className="w-full px-4 py-2.5 text-center text-[12px] font-medium transition-colors hover:bg-[var(--sd-accent-bg)] disabled:opacity-70 disabled:hover:bg-transparent"
-      style={{ borderTop: "1px solid var(--sd-divider)", color: "var(--sd-accent)" }}
-      onClick={onClick}
-      disabled={disabled}
-      title={title}
-    >
-      {label}
-    </button>
-  );
-}
+import { X } from "lucide-react";
 
 /**
  * 결제 화면 다이얼로그 껍데기. 오버레이 클릭·ESC·닫기 버튼으로 닫힌다 —
@@ -99,37 +46,44 @@ export function BillingDialog({
   }, [onClose, closeDisabled]);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-black/55" onClick={closeDisabled ? undefined : onClose} aria-hidden />
+    // 껍데기도 **디자이너 원본(credits MODAL 1·2)** 그대로. 2026-09-07 이전엔 여기만
+    // 옛 시스템(`sd-modal`·`--sd-card`·`--sd-border`·`sd-serif`)이라, 내용은 새 디자인인데
+    // 감싸는 창은 옛 디자인인 상태였다 — 같은 화면에서 디자인이 갈려 보이는 정체가 이거였다.
+    <div
+      className="fixed inset-0 z-50 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4 cursor-pointer"
+      onClick={closeDisabled ? undefined : onClose}
+    >
       <div
-        className="sd-modal relative flex max-h-[88vh] w-full flex-col bg-[var(--sd-card)]"
+        className="w-full bg-[var(--color-bg-card)] border border-[var(--color-border-card)] rounded-2xl shadow-2xl overflow-hidden flex flex-col animate-in fade-in zoom-in-95 duration-150 select-none text-xs cursor-default"
         style={{ maxWidth }}
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
       >
-        <div
-          className="flex items-start justify-between gap-3 px-4 py-3"
-          style={{ borderBottom: "1px solid var(--sd-border)" }}
-        >
-          <div>
-            <h2 className="sd-serif text-[14px] font-semibold" style={{ color: "var(--sd-fg)" }}>{title}</h2>
+        {/* Header */}
+        <div className="p-4 px-6 border-b border-[var(--color-border-subtle)] flex items-center justify-between">
+          <div className="space-y-0.5">
+            <h2 className="text-base font-bold text-[var(--color-text-primary)]">{title}</h2>
             {subtitle && (
-              <p className="mt-0.5 text-[11px]" style={{ color: "var(--sd-mut)" }}>{subtitle}</p>
+              <p className="text-xs text-[var(--color-text-muted)] font-medium">{subtitle}</p>
             )}
           </div>
-          <button type="button" className="sd-btn shrink-0" onClick={onClose} disabled={closeDisabled}>
-            닫기
+          {/* 원본은 텍스트 "닫기" 가 아니라 X 아이콘 버튼이다. */}
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={closeDisabled}
+            aria-label="닫기"
+            className="p-1.5 rounded-lg text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)] hover:bg-[var(--color-bg-input)] transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+          >
+            <X className="w-4 h-4" />
           </button>
         </div>
 
-        <div className="flex-1 space-y-3 overflow-y-auto p-4">{children}</div>
+        <div className="p-6 max-h-[70vh] overflow-y-auto space-y-3">{children}</div>
 
         {footer && (
-          <div
-            className="flex flex-wrap items-center gap-2 px-4 py-3"
-            style={{ borderTop: "1px solid var(--sd-border)" }}
-          >
+          <div className="p-4 px-6 border-t border-[var(--color-border-subtle)] flex flex-wrap items-center justify-end gap-2.5 bg-[var(--color-bg-card)]">
             {footer}
           </div>
         )}
