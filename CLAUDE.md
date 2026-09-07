@@ -315,14 +315,23 @@ core/ 쪽 스위치(파이썬): `RUN_FACES`·`RUN_PPL`·`RUN_REFINE`·`RUN_CHYRO
 
 ## 작업 규칙
 
-- **배포는 명시적 요청 시에만.** "ㄱㄱ", "배포해줘" 없이 git push·Cloud Build 실행 금지.
+> **2026-09-07: 사람이 늘었다.** 협업 규칙은 [CONTRIBUTING.md](CONTRIBUTING.md),
+> 합류자 권한은 [docs/ops/onboarding-access.md](docs/ops/onboarding-access.md) 로 옮겼다.
+> `main` 은 **보호돼 있다** — 직접 푸시가 거부되고 PR + CI 초록이어야 머지된다.
+
+- **배포는 명시적 요청 시에만.** "ㄱㄱ", "배포해줘" 없이 Cloud Build 실행 금지.
+  (머지 ≠ 배포다. 웹만 `main` 푸시로 자동 배포된다.)
 - **`.env*`, `gcp-keys/` 절대 커밋 금지.** (2026-07-14 개인키 공개 리포 유출 사고 — 커밋 전 `git status` 확인)
 - 서버 라우트는 `apps/server/src/index.ts` 한 파일에 유지 — 분리하지 말 것.
 - 프론트 API 함수 추가: `apps/web/src/lib/data/api.ts`에 타입 + 함수 함께.
 - 새 화면 추가: `src/app/(app)/<route>/page.tsx` + `src/lib/nav.ts`의 `NAV` 배열에 항목 추가.
 - 핵심 AI 파이프라인 코드는 `core/`에 (파이썬). 서버에서는 content-pipeline.ts로만 접점 유지.
-- **검증: `pnpm check`** — 전 패키지 타입체크 + 네이티브/서버 테스트. **커밋 전에 이거 하나면 된다.**
-  (CI 는 없다. 아무도 자동으로 안 돌리므로 사람이 돌려야 한다.)
+- **검증: `pnpm check`** — 전 패키지 타입체크 + 네이티브/서버 테스트 + **core 파이썬 테스트(103)**.
+  **커밋 전에 이거 하나면 된다.**
+  (2026-09-07 부터 **CI 가 같은 걸 돌린다** — `.github/workflows/ci.yml`. PR 이 초록이어야
+  머지된다. 로컬에서 먼저 보는 게 빠를 뿐 관문은 CI 다.)
+  ⚠️ core 테스트는 **파이썬이 없으면 로컬에선 조용히 건너뛴다**(웹·서버만 하는 사람을 막지
+  않으려고). CI 는 `--required` 로 올려 건너뛰지 못하게 한다.
   - 개별: `apps/server` `npx tsc --noEmit` · `node --import tsx --test "src/**/*.test.ts"` ·
     `apps/web` `npx next build` · `native` `pnpm test` · `pnpm dist`
   - `pnpm lint`(웹 eslint)는 **아직 기존 오류가 있어 `check` 에서 뺐다** — 프론트 개편이

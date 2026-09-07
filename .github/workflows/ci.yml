@@ -1,0 +1,78 @@
+# CI — main 으로 들어오는 모든 변경을 여기서 막는다.
+#
+# 2026-09-07 신설. 그전엔 CI 가 없어서 "사람이 pnpm check 를 돌린다" 는 규율에 의존했다.
+# 혼자일 땐 됐지만 사람이 늘면 안 지켜진다 — 그리고 안 지켜진 걸 아무도 모른다.
+#
+# ## 무엇을 넣고 무엇을 뺐나
+#
+# **넣은 것은 지금 초록인 것뿐이다.** 빨간 관문은 사람이 무시하게 되고(CLAUDE.md 원칙),
+# 그러면 관문 전체가 무의미해진다. 그래서 `pnpm lint`(웹 eslint)는 **일부러 뺐다** —
+# 기존 오류가 30개 남아 있다. 0 으로 만든 뒤에 이 파일에 추가할 것.
+#
+# 도는 것: 전 패키지 typecheck · 서버 테스트(1671) · 네이티브 테스트 · core 파이썬(103) · 웹 빌드
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# 같은 PR 에 연달아 푸시하면 앞 실행을 취소한다 — 어차피 최신 커밋만 의미가 있다.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: 타입체크 · 테스트
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      # core 테스트는 순수 함수만 본다(Vertex·GCS 안 탄다) — requirements-dev 만 깔면 된다.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r core/requirements-dev.txt
+
+      - run: pnpm install --frozen-lockfile
+
+      # 로컬 `pnpm check` 와 **같은 명령**이다. 갈라지면 "내 컴에선 되는데" 가 시작된다.
+      # 다만 core 는 --required 로 올려 CI 에서 조용히 건너뛰지 못하게 한다.
+      - name: 전 패키지 typecheck
+        run: pnpm -r typecheck
+      - name: 서버 테스트
+        run: pnpm --filter @stepd/server test
+      - name: 네이티브 테스트
+        run: pnpm --filter @stepd/native test
+      - name: core 파이썬 테스트
+        run: node scripts/test-core.mjs --required
+
+  web-build:
+    name: 웹 빌드
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      # `tsc --noEmit` 만으로는 부족하다 — 프리렌더가 여기서 걸린다(apps/web/CLAUDE.md).
+      # useSearchParams 를 Suspense 로 안 감싼 페이지 같은 건 빌드에서만 드러난다.
+      # 빌드타임에 서버를 부르지 않으므로 실제 API 주소는 필요 없다.
+      - name: next build
+        run: pnpm --filter @stepd/web build
+        env:
+          NEXT_PUBLIC_API_URL: /api/proxy/api

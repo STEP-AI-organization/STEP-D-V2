@@ -77,6 +77,8 @@ core/.venv310/Scripts/pip install -r core/requirements.txt   # macOS/Linux: core
 | | |
 |---|---|
 | **리포 전체 컨텍스트** | [CLAUDE.md](CLAUDE.md) — 구조·함정·작업 규칙 (**여기부터**) |
+| **협업 규칙** | [CONTRIBUTING.md](CONTRIBUTING.md) — 브랜치·PR·검증·커밋 메시지 |
+| **합류자 권한** | [docs/ops/onboarding-access.md](docs/ops/onboarding-access.md) — 무엇이 필요하고 없으면 무슨 증상인지 |
 | **문서 전체 지도** | [docs/README.md](docs/README.md) — 현황(ops) / 계획(plans) / 레퍼런스 |
 | **로컬 개발** | [docs/ops/local-dev.md](docs/ops/local-dev.md) — `dev.ps1` 하나로 웹+서버+Postgres |
 | **배포** | [docs/ops/deploy.md](docs/ops/deploy.md) — 표준은 `bash deploy/cloud.sh <target>` |
