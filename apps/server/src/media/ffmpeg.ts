@@ -66,13 +66,33 @@ function normalizeHexColor(input: string | undefined, fallback: string): string 
 // 동기 블로킹된다 — 그래서 실패 쪽만 간격을 둔다.
 let ffmpegOk = false;
 let lastProbeAt = 0;
+/**
+ * ffmpeg·ffprobe **실행 파일 경로.** 기본은 PATH 의 `ffmpeg` — 서버 이미지는 apt 로 깔아 둔다.
+ *
+ * ## 왜 상수가 아니라 함수인가 (2026-09-07)
+ *
+ * 편집자 PC 가 클립을 직접 굽는다(로컬 렌더). 그 PC 에는 PATH 에 ffmpeg 이 없고, 앱이
+ * **동봉한 바이너리**를 써야 한다. 이 파일은 import 가 `child_process`·`fs` 뿐이라
+ * 네이티브가 **그대로 가져다 쓸 수 있고**, 그래서 렌더 구현이 한 벌로 남는다 —
+ * 인자 조립을 복제하면 같은 클립이 굽는 곳마다 몇 픽셀씩 달라지고 아무도 눈치 못 챈다.
+ *
+ * ⚠️ 값이 갈리는 건 **바이너리 위치 하나뿐**이다. 필터그래프·코덱·프리셋은 같은 코드가 만든다.
+ */
+export function ffmpegBin(): string {
+  return (process.env.STEPD_FFMPEG ?? "").trim() || "ffmpeg";
+}
+
+export function ffprobeBin(): string {
+  return (process.env.STEPD_FFPROBE ?? "").trim() || "ffprobe";
+}
+
 export function hasFfmpeg(): boolean {
   if (ffmpegOk) return true;
   const now = Date.now();
   if (now - lastProbeAt < 30_000) return false;
   lastProbeAt = now;
   try {
-    const out = execFileSync("ffmpeg", ["-version"], { timeout: 5000, encoding: "utf8", stdio: "pipe" });
+    const out = execFileSync(ffmpegBin(), ["-version"], { timeout: 5000, encoding: "utf8", stdio: "pipe" });
     ffmpegOk = out.includes("ffmpeg version");
   } catch {
     ffmpegOk = false;
@@ -88,7 +108,7 @@ export function probe(filePath: string): Promise<ProbeResult> {
       return reject(new Error(`File not found: ${filePath}`));
     }
     execFile(
-      "ffprobe",
+      ffprobeBin(),
       [
         "-v", "quiet",
         "-print_format", "json",
@@ -171,7 +191,7 @@ export function captureThumbnail(
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     execFile(
-      "ffmpeg",
+      ffmpegBin(),
       [
         "-y",
         "-ss", String(timeOffset),
@@ -201,7 +221,7 @@ export function captureThumbnail(
 export function remuxFaststart(input: string, outputPath: string): Promise<void> {
   return new Promise((resolve, reject) => {
     execFile(
-      "ffmpeg",
+      ffmpegBin(),
       ["-y", "-i", input, "-c", "copy", "-movflags", "+faststart", "-f", "mp4", outputPath],
       { timeout: 300_000, maxBuffer: FF_MAXBUF },
       (err) => {
@@ -315,7 +335,7 @@ export function normalizeToMp4(
   const timeout = opts.timeoutMs
     ?? Math.min(3 * 3600_000, Math.max(10 * 60_000, Math.round(p.durationSec * 3) * 1000));
   return new Promise((resolve, reject) => {
-    execFile("ffmpeg", args, { timeout, maxBuffer: FF_MAXBUF }, (err) => {
+    execFile(ffmpegBin(), args, { timeout, maxBuffer: FF_MAXBUF }, (err) => {
       if (err) return reject(err);
       if (!fs.existsSync(outputPath)) return reject(new Error("normalize output not produced"));
       resolve();
@@ -347,7 +367,7 @@ function srtCueCount(file: string): number {
 
 function runFfmpeg(args: string[], timeout: number): Promise<void> {
   return new Promise((resolve, reject) => {
-    execFile("ffmpeg", args, { timeout, maxBuffer: FF_MAXBUF }, (err) => (err ? reject(err) : resolve()));
+    execFile(ffmpegBin(), args, { timeout, maxBuffer: FF_MAXBUF }, (err) => (err ? reject(err) : resolve()));
   });
 }
 
@@ -617,7 +637,7 @@ export function circleCrop(srcPath: string, dstPath: string, size: number): Prom
     `geq=a='if(lte((X-W/2)*(X-W/2)+(Y-H/2)*(Y-H/2),(W/2)*(W/2)),alpha(X,Y),0)'` +
     `:r='r(X,Y)':g='g(X,Y)':b='b(X,Y)'`;
   return new Promise((resolve, reject) => {
-    execFile("ffmpeg", ["-y", "-i", srcPath, "-vf", vf, "-frames:v", "1", dstPath],
+    execFile(ffmpegBin(), ["-y", "-i", srcPath, "-vf", vf, "-frames:v", "1", dstPath],
       { timeout: 30_000 }, (err) => {
         if (err) return reject(err);
         if (!fs.existsSync(dstPath)) return reject(new Error("circleCrop output not produced"));
@@ -733,7 +753,7 @@ function renderShortWithPreroll(opts: RenderShortOpts & { hookPreroll: NonNullab
   ];
 
   return new Promise((resolve, reject) => {
-    execFile("ffmpeg", args, { timeout: 300_000, maxBuffer: FF_MAXBUF }, (err) => {
+    execFile(ffmpegBin(), args, { timeout: 300_000, maxBuffer: FF_MAXBUF }, (err) => {
       if (err) return reject(err);
       if (!fs.existsSync(outputPath)) return reject(new Error("Preroll render output not produced"));
       resolve();
@@ -955,7 +975,7 @@ function renderDynamicShort(opts: RenderShortOpts): Promise<void> {
     opts.outputPath,
   ];
   return new Promise((resolve, reject) => {
-    execFile("ffmpeg", args, { timeout: 300_000, maxBuffer: FF_MAXBUF }, (err) => {
+    execFile(ffmpegBin(), args, { timeout: 300_000, maxBuffer: FF_MAXBUF }, (err) => {
       if (err) return reject(err);
       if (!fs.existsSync(opts.outputPath)) return reject(new Error("AI reframe output not produced"));
       resolve();
@@ -1013,7 +1033,7 @@ function renderDynamicShortWithPreroll(
     opts.outputPath,
   ];
   return new Promise((resolve, reject) => {
-    execFile("ffmpeg", args, { timeout: 300_000, maxBuffer: FF_MAXBUF }, (err) => {
+    execFile(ffmpegBin(), args, { timeout: 300_000, maxBuffer: FF_MAXBUF }, (err) => {
       if (err) return reject(err);
       if (!fs.existsSync(opts.outputPath)) return reject(new Error("AI reframe preroll output not produced"));
       resolve();
@@ -1164,7 +1184,7 @@ export function renderShort(opts: RenderShortOpts): Promise<void> {
   ];
 
   return new Promise((resolve, reject) => {
-    execFile("ffmpeg", args, { timeout: 300_000, maxBuffer: FF_MAXBUF }, (err) => {
+    execFile(ffmpegBin(), args, { timeout: 300_000, maxBuffer: FF_MAXBUF }, (err) => {
       if (err) return reject(err);
       if (!fs.existsSync(outputPath)) return reject(new Error("Render output not produced"));
       resolve();
@@ -1184,7 +1204,7 @@ export function trimEncode(
       return reject(new Error("Invalid trim duration"));
     }
     execFile(
-      "ffmpeg",
+      ffmpegBin(),
       [
         "-y",
         "-ss", String(startTime),
@@ -1255,7 +1275,7 @@ export function renderStaticOverlayPng(opts: {
 
   const args = ["-y", ...inputs, "-filter_complex", vf, "-map", last, "-frames:v", "1", opts.outputPath];
   return new Promise((resolve, reject) => {
-    execFile("ffmpeg", args, { timeout: 60_000, maxBuffer: FF_MAXBUF }, (err) => {
+    execFile(ffmpegBin(), args, { timeout: 60_000, maxBuffer: FF_MAXBUF }, (err) => {
       if (err) return reject(err);
       if (!fs.existsSync(opts.outputPath)) return reject(new Error("overlay png not produced"));
       resolve();
@@ -1283,7 +1303,7 @@ export function transcodeToH264(inputPath: string, outputPath: string): Promise<
   ];
   return new Promise((resolve, reject) => {
     // 긴 회차(2시간)도 통과해야 한다 — 실측 8~9배속이라 2시간물이 ~15분.
-    execFile("ffmpeg", args, { timeout: 3_600_000, maxBuffer: FF_MAXBUF }, (err) => {
+    execFile(ffmpegBin(), args, { timeout: 3_600_000, maxBuffer: FF_MAXBUF }, (err) => {
       if (err) return reject(err);
       if (!fs.existsSync(outputPath)) return reject(new Error("transcode output not produced"));
       resolve();
