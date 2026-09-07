@@ -108,3 +108,26 @@ describe("피드의 응답 규칙", () => {
     assert.match(route.slice(0, 1600), /obj\.endsWith\("\.yml"\)/);
   });
 });
+
+/**
+ * **세션 없이 통과하는가.**
+ *
+ * 라우트를 만들어 놓고 PUBLIC_PATHS 에 안 넣어서 실제 배포에서 401 이 났다. 앱에는
+ * 세션이 있을 수 없다 — 업데이트는 로그인 전에도 받아야 하고(로그인 화면이 깨진 버전을
+ * 고치는 게 목적일 수 있다), 그 401 은 업데이터에게 "업데이트 없음" 과 구별되지 않는다.
+ */
+describe("피드는 세션을 요구하지 않는다", () => {
+  it("PUBLIC_PATHS 에 들어 있다 — 없으면 401 로 조용히 막힌다", () => {
+    const list = INDEX.slice(INDEX.indexOf("const PUBLIC_PATHS"), INDEX.indexOf("function isPublicPath"));
+    // 정규식 리터럴 안의 정규식을 또 정규식으로 찾지 않는다 — 이스케이프가 두 겹이 되면
+    // 테스트가 헛돌거나 파싱이 깨진다(실제로 한 번 깨졌다). 문자열로 본다.
+    assert.ok(list.includes("/api\\/desktop\\/"),
+      "PUBLIC_PATHS 에 /api/desktop 이 없다 — 배포하면 앱이 401 만 받는다");
+  });
+
+  it("공개 경로는 **파일 하나**까지만 연다 — 하위 경로를 열면 범위가 넓어진다", () => {
+    const list = INDEX.slice(INDEX.indexOf("const PUBLIC_PATHS"), INDEX.indexOf("function isPublicPath"));
+    assert.ok(list.includes("[^/]+$"),
+      "공개 경로가 하위 경로까지 연다 — /api/desktop/a/b 같은 것도 세션 없이 통과한다");
+  });
+});

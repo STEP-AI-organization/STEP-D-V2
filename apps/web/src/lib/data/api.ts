@@ -1699,6 +1699,13 @@ export interface InvoiceRow {
   /** 표시용 번호 — 12자 랜덤형 토큰(결제마다 고정 · 날짜·내부 ID 미노출) — 결제 데이터에서 결정적으로 만든다. */
   number: string;
   paidAt: string;
+  /** 영수증 번호 `RC-YYYYMMDD-XXXXXX`. **결제 영수증 메일과 같은 값** — PDF 가 그걸 그대로 쓴다. */
+  receiptNumber: string;
+  /**
+   * 그 충전 **직후**의 크레딧 잔액. 지금 잔액이 아니다 — 서버가 원장에서 되짚어 준다.
+   * 모르면 null 이고, 그러면 PDF 는 잔액 블록을 통째로 뺀다(메일 템플릿과 같은 규칙).
+   */
+  balanceAfter: number | null;
   credits: number;
   /** 부가세 포함 총액. supply/vat 는 서버가 역산해 준다 — 화면이 다시 계산하지 않는다. */
   amountKrw: number;

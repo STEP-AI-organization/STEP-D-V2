@@ -4544,6 +4544,40 @@ export async function listPaidTopups(
   return rows as (TopupRow & { createdAt: string; settledAt: string | null })[];
 }
 
+/**
+ * 결제별 **충전 직후 잔액.** 결제 영수증 메일이 보여주는 "충전 후 잔액" 과 같은 값을,
+ * 나중에 받는 PDF 도 말할 수 있게 하려고 만들었다.
+ *
+ * ⚠️ **지금 잔액을 쓰면 안 된다.** 메일은 적립 직후에 나가므로 "지금 = 충전 후" 가
+ * 성립하지만, 몇 달 뒤 내려받는 PDF 에서 그렇게 하면 **그 영수증에 없는 사실**을 적는
+ * 셈이다. 원장 id 는 단조증가하므로 그 충전 행까지의 누계가 곧 그때의 잔액이다.
+ *
+ * 결제 하나에 원장 행이 여럿일 수 없지만(dedupe_key), 혹시 있으면 **마지막 것**을 기준
+ * 삼는다 — 그게 "충전이 끝난 뒤" 다.
+ */
+export async function topupBalancesAfter(paymentIds: string[]): Promise<Record<string, number>> {
+  if (paymentIds.length === 0) return {};
+  const { rows } = await pool.query(
+    `WITH anchor AS (
+       SELECT payment_id, MAX(id) AS ledger_id
+         FROM credit_ledger
+        WHERE payment_id = ANY($1::text[]) AND reason = 'topup'
+        GROUP BY payment_id
+     )
+     SELECT a.payment_id AS "paymentId",
+            (SELECT COALESCE(SUM(l.delta), 0)::int
+               FROM credit_ledger l
+              WHERE l.id <= a.ledger_id) AS "balanceAfter"
+       FROM anchor a`,
+    [paymentIds],
+  );
+  const out: Record<string, number> = {};
+  for (const r of rows as { paymentId: string; balanceAfter: number }[]) {
+    out[r.paymentId] = Number(r.balanceAfter);
+  }
+  return out;
+}
+
 /** 결제 확정. 이미 paid 면 false — 웹훅이 여러 번 와도 한 번만 처리된다. */
 /**
  * 충전 주문의 최종 상태를 찍는다.

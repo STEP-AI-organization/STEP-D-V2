@@ -127,6 +127,7 @@ import {
   createTopup,
   getTopup,
   listPaidTopups,
+  topupBalancesAfter,
   markTopupPaid,
   withTenantLock,
   getBillingCard,
@@ -543,6 +544,13 @@ const PUBLIC_PATHS: RegExp[] = [
   /^\/api\/(youtube|meta|instagram|tiktok|canva)\/oauth\/callback/,
   // 포트원 웹훅 — 세션이 없다. 대신 **서명으로 인증**한다(verifyWebhook).
   /^\/api\/billing\/portone\/webhook$/,
+  /**
+   * 데스크톱 앱 업데이트 피드 — **세션이 있을 수 없다.**
+   * 업데이트는 로그인 전에도 받아야 한다(로그인 화면이 깨진 버전을 고치는 것이 그
+   * 업데이트의 목적일 수 있다). 대신 파일 이름을 좁혀 잠근다(`desktopObject`) —
+   * 웹 라우트와 서버 두 겹에서 같은 정규식으로 막는다.
+   */
+  /^\/api\/desktop\/[^/]+$/,
 ];
 
 function isPublicPath(path: string): boolean {
@@ -7039,9 +7047,21 @@ app.post("/api/billing/invoice/test-email", async (c) => {
  */
 app.get("/api/credits/invoices", async (c) => {
   const rows = await listPaidTopups(100);
+  /**
+   * 충전 후 잔액을 같이 준다 — **결제 영수증 메일과 같은 문서를 만들기 위해서다.**
+   * 메일은 적립 직후에 나가니 "지금 잔액 = 충전 후" 지만, PDF 는 몇 달 뒤에 받는다.
+   * 그래서 그 시점 잔액을 원장에서 되짚는다(`topupBalancesAfter`) — 지금 잔액을 적으면
+   * 그 영수증에 없는 사실을 적는 셈이다.
+   */
+  const balances = await topupBalancesAfter(rows.map((r) => r.paymentId))
+    .catch(() => ({} as Record<string, number>));
   // 빌더는 invoice.ts 하나다 — 이메일 발송과 화면이 같은 번호·역산 값을 쓴다.
   return c.json({
-    invoices: rows.map(invoiceFromTopup),
+    invoices: rows.map((r) => ({
+      ...invoiceFromTopup(r),
+      // 모르면 null — 받는 쪽이 그 줄을 통째로 뺀다(메일 템플릿과 같은 규칙).
+      balanceAfter: balances[r.paymentId] ?? null,
+    })),
     supplier: supplierFromEnv(),
     buyer: await buyerFor(currentTenantId()),
   });
