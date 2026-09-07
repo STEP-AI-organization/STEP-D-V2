@@ -83,18 +83,41 @@ async function refreshUploads(sourceChannelId: string): Promise<{ ok: true } | {
   const clientSecret = process.env.GOOGLE_CLIENT_SECRET ?? "";
   if (!clientId || !clientSecret) return { ok: false, note: "유튜브 연동이 설정되지 않았습니다." };
 
-  const lender: YouTubeChannel | undefined = (await listYouTubeChannels())
-    .find((c) => c.status !== "disconnected" && c.refreshToken);
-  if (!lender) {
+  // 토큰을 **여러 개 준비한다.** 예전엔 조건에 맞는 첫 채널 하나만 골랐는데, 그 채널의
+  // 토큰이 폐기(revoked)돼 있으면 매 순회가 같은 채널로 실패해 수집이 영영 멈췄다.
+  // `active` 를 앞에 세우고, 실패하면 다음 채널로 넘어간다 — 하나만 살아 있으면 돈다.
+  const lenders: YouTubeChannel[] = (await listYouTubeChannels())
+    .filter((c) => c.status !== "disconnected" && c.refreshToken)
+    .sort((a, b) => Number(b.status === "active") - Number(a.status === "active"));
+  if (!lenders.length) {
     return { ok: false, note: "연결된 유튜브 채널이 없어 목록을 읽을 수 없습니다. 배포 채널을 먼저 연결하세요." };
   }
 
-  try {
-    const videos = await withAccessToken(
-      clientId, clientSecret, lender,
-      ({ accessToken, expiresAt }) => updateYouTubeTokens(lender.channelId, accessToken, expiresAt),
-      (accessToken) => fetchChannelUploads(accessToken, sourceChannelId),
-    );
+  let lastErr: unknown = null;
+  for (const lender of lenders) {
+    try {
+      const videos = await withAccessToken(
+        clientId, clientSecret, lender,
+        ({ accessToken, expiresAt }) => updateYouTubeTokens(lender.channelId, accessToken, expiresAt),
+        (accessToken) => fetchChannelUploads(accessToken, sourceChannelId),
+      );
+      await storeUploads(sourceChannelId, videos);
+      return { ok: true };
+    } catch (e) {
+      // 이 채널로는 못 읽었다 — 다음 채널로. 전부 실패하면 아래에서 사유를 돌려준다.
+      lastErr = e;
+    }
+  }
+  // 채널이 비공개거나 없어졌을 수 있고, 빌릴 토큰이 전부 죽었을 수도 있다. 수확을 멈추되
+  // 수집원은 살려 둔다 — 다음 순회에 다시 시도하고, 계속 실패하면 화면의 사유로 사람이 안다.
+  return { ok: false, note: `업로드 목록을 읽지 못했습니다: ${String(lastErr).slice(0, 120)}` };
+}
+
+/** 읽어 온 업로드를 `channel_videos` 에 적재한다. 조회와 저장을 갈라 두면 재시도가 단순해진다. */
+async function storeUploads(
+  sourceChannelId: string, videos: Awaited<ReturnType<typeof fetchChannelUploads>>,
+): Promise<void> {
+  {
     for (const v of videos) {
       const existing = await getChannelVideoByVideoId(v.videoId);
       await upsertChannelVideo({
@@ -112,11 +135,6 @@ async function refreshUploads(sourceChannelId: string): Promise<{ ok: true } | {
         lastSynced: Date.now(),
       });
     }
-    return { ok: true };
-  } catch (e) {
-    // 채널이 비공개거나 없어졌을 수 있다. 수확을 멈추되 수집원은 살려 둔다 —
-    // 다음 순회에 다시 시도하고, 계속 실패하면 화면의 사유로 사람이 안다.
-    return { ok: false, note: `업로드 목록을 읽지 못했습니다: ${String(e).slice(0, 120)}` };
   }
 }
 

@@ -10,6 +10,9 @@ import pg from "pg";
 import { seed } from "./seed.ts";
 import { ALL_TENANTS, DEFAULT_TENANT_ID, currentScope, runAsSystem, runWithTenant } from "./auth/tenant.ts";
 import { installKstTimestampParser } from "./kst.ts";
+// 수확 상한 하나만 가져온다. `harvest.ts` 는 순수 모듈이고(그 위로 billing·automation 도
+// import 0개), 여기서 들여와도 순환이 생기지 않는다 — 숫자를 두 벌로 두는 것보다 낫다.
+import { CHANNEL_VIDEO_LIMIT } from "./pipeline/harvest.ts";
 // 자동 충전 알림의 **모양·사유 목록·유효기간은 credits.ts(순수)가 정본**이다 — 여기선 저장만 한다.
 import { AUTO_TOPUP_CODES, liveAutoTopupAlert, type AutoTopupAlert } from "./billing/credits.ts";
 
@@ -4754,7 +4757,12 @@ export async function pendingClipCount(programId: string): Promise<number> {
         AND NOT EXISTS (
           SELECT 1 FROM jsonb_array_elements(COALESCE(c.data->'distributions', '[]'::jsonb)) d
            WHERE d->>'status' IN ('published', 'recorded')
-        )`,
+        )
+        -- 순방이 **실제로 낼 수 있는** 것만 재고다. 자동 순방은 automationRuleId 가 붙은
+        -- 클립만 집으므로(automation-cycle 의 mine 필터), 사람이 손으로 채택한 클립은
+        -- 어떤 순방도 게시하지 않는다. 그걸 재고로 세면 "배포할 게 충분하다" 고 판정해
+        -- **수확이 조용히 멈춘다** — 정작 그 클립들은 영영 안 나가는데.
+        AND COALESCE(c.data->>'automationRuleId', '') <> ''`,
     [programId],
   );
   return Number(rows[0]?.n ?? 0);
@@ -4768,8 +4776,9 @@ export async function listChannelVideosForHarvest(channelId: string): Promise<
     `SELECT videoid AS "videoId", title, publishedat AS "publishedAt",
             durationsec AS "durationSec"
        FROM channel_videos WHERE channelId = $1
-      ORDER BY publishedAt DESC`,
-    [channelId],
+      ORDER BY publishedAt DESC
+      LIMIT $2`,
+    [channelId, CHANNEL_VIDEO_LIMIT],
   );
   return rows.map((r: any) => ({ ...r, durationSec: Number(r.durationSec ?? 0) }));
 }

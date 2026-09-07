@@ -390,6 +390,14 @@ export default function FullAutoPage() {
             <div className={`${CARD} p-4 text-[11px] leading-relaxed ${MUTED} space-y-1`}>
               <b className="text-[var(--color-text-primary)]">방금 확인한 결과</b>
               {runNotes.map((n, i) => <div key={i}>· {n}</div>)}
+              {/* 가져왔는데 갈 곳이 없으면 사용자는 그다음 무엇을 봐야 할지 모른다. */}
+              <div className="pt-1">
+                가져온 영상은{" "}
+                <Link href="/programs" className="underline text-[var(--color-text-primary)]">콘텐츠</Link>
+                {" "}화면의 회차로 들어가고, 분석이 끝나면{" "}
+                <Link href="/automation" className="underline text-[var(--color-text-primary)]">자동 배포</Link>
+                {" "}계획이 이어받습니다.
+              </div>
             </div>
           )}
 
@@ -415,6 +423,11 @@ export default function FullAutoPage() {
                           <span className={`text-[11px] font-bold ${st.tone}`}>{st.label}</span>
                         </div>
                         <p className={`mt-1 text-[11px] ${MUTED}`}>{st.hint}</p>
+                        {/* "돌고는 있나?" 가 이 화면의 첫 질문이다. 서버가 lastRunAt 을 주는데
+                            화면이 안 쓰고 있었다 — 사용자는 멈춘 건지 조용한 건지 구분 못 한다. */}
+                        <p className={`mt-0.5 text-[10.5px] ${MUTED}`}>
+                          마지막 확인 {sinceText(s.lastRunAt)} · 매일 새벽 2시에 자동 확인
+                        </p>
                       </div>
 
                       <div className="flex items-center gap-1.5 shrink-0">
@@ -557,6 +570,21 @@ function ChannelPreview({ busy, preview, error, show }: {
       <span className={`text-[10.5px] shrink-0 ${MUTED}`}>이 채널이 맞습니까?</span>
     </div>
   );
+}
+
+/**
+ * "3시간 전" — 절대 시각보다 **얼마나 됐는지**가 이 화면의 질문에 맞는 답이다.
+ * 하루가 넘어가면 날짜를 같이 보여준다(이틀 넘게 안 돌면 그게 사고다).
+ */
+function sinceText(ms: number | null): string {
+  if (!ms) return "아직 없음";
+  const min = Math.floor((Date.now() - ms) / 60000);
+  if (min < 1) return "방금";
+  if (min < 60) return `${min}분 전`;
+  const hr = Math.floor(min / 60);
+  if (hr < 24) return `${hr}시간 전`;
+  const day = Math.floor(hr / 24);
+  return `${day}일 전 (${new Date(ms).toLocaleDateString("ko-KR", { month: "numeric", day: "numeric" })})`;
 }
 
 function Stat({ label, value, note }: { label: string; value: string; note?: string }) {
