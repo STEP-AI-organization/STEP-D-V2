@@ -336,6 +336,9 @@ async function migrate(): Promise<void> {
     CREATE TABLE IF NOT EXISTS channel_videos (
       id           TEXT PRIMARY KEY,
       channelId    TEXT NOT NULL,
+      -- 이 전역 UNIQUE 는 **0057 이 지운다**(회사 단위 인덱스 uq_channel_videos_tenant_video 로
+      -- 대체). 새로 만든 DB 도 마이그레이션이 곧 이어 돌아 같은 상태가 된다 — 여기서 빼면
+      -- 마이그레이션 전 짧은 구간에 유니크가 아예 없어져 upsert 가 가리킬 대상을 잃는다.
       videoId      TEXT UNIQUE NOT NULL,
       title        TEXT NOT NULL,
       description  TEXT NOT NULL DEFAULT '',
@@ -1801,7 +1804,11 @@ export async function upsertChannelVideo(v: ChannelVideo): Promise<void> {
   await pool.query(
     `INSERT INTO channel_videos (id, channelId, videoId, title, description, publishedAt, durationSec, thumbnail, viewCount, likeCount, commentCount, lastSynced)
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
-     ON CONFLICT (videoId) DO UPDATE SET
+     -- ⚠️ 충돌 기준은 **회사 단위**다(0056 인덱스 · 0057 이 옛 전역 제약을 지웠다).
+     -- 전역 UNIQUE 였을 때는 두 워크스페이스가 같은 유튜브 채널을 보면 뒤쪽이 RLS 로
+     -- 안 보이는 앞 회사 행을 노려 upsert 가 조용히 실패했다 — 그 회사만 영영 업로드
+     -- 목록이 안 채워지고 "새로 가져올 롱폼이 없습니다" 만 떴다.
+     ON CONFLICT (tenant_id, videoId) DO UPDATE SET
        title = EXCLUDED.title,
        description = EXCLUDED.description,
        durationSec = EXCLUDED.durationSec,
