@@ -107,3 +107,53 @@ describe("렌더 계획 — 경로 자산", () => {
       "계획이 원본 다운로드 URL 을 준다 — 그러면 로컬 렌더가 대역폭을 아끼지 못한다");
   });
 });
+
+/**
+ * **계획 요청이 진짜 렌더가 되어 버리는 구멍.**
+ *
+ * `renderClipMedia` 에는 굽는 경로가 둘이다 — `renderShort`(자막·오버레이가 있을 때)와
+ * `trimEncode`(아무것도 없는 순수 16:9 트림). 계획 모드를 `renderShort` 쪽에만 달았더니,
+ * 단순 클립은 그대로 빠른 경로로 새서 **굽고·올리고·미디어 행까지 만들고** 돌아왔다.
+ * 편집자가 보기엔 "계획만 물었는데 클립이 생겼다" 다.
+ *
+ * 실제로 그렇게 만들었다가 잡은 것이라, 되돌아오지 못하게 여기 고정한다.
+ */
+describe("계획 모드는 굽지 않는다", () => {
+  /** `renderClipMedia` 본문. */
+  function renderClipMedia(): string {
+    const start = INDEX.indexOf("async function renderClipMedia(");
+    assert.ok(start > 0, "renderClipMedia 를 못 찾았다");
+    const end = INDEX.indexOf("\n}\n", start);
+    assert.ok(end > start, "함수의 끝을 못 찾았다");
+    return INDEX.slice(start, end);
+  }
+
+  it("**굽는 경로마다 planOnly 를 먼저 본다** — 하나라도 빠지면 조용히 렌더된다", () => {
+    const body = renderClipMedia();
+    const bakes = [...body.matchAll(/^\s*await (trimEncode|renderShort)\(/gm)];
+    assert.ok(bakes.length >= 2, `굽는 호출을 ${bakes.length}개만 찾았다 — 스캔이 깨졌다`);
+
+    for (const m of bakes) {
+      // 그 호출 앞 900자 안에 planOnly 판정이 있어야 한다. 창을 넉넉히 잡는 이유:
+      // 좁으면 주석 한 줄 늘어난 날 멀쩡한 코드가 빨개진다 — 사람이 무시하는 관문이 된다.
+      const before = body.slice(Math.max(0, m.index! - 900), m.index!);
+      assert.match(before, /opts\.planOnly/,
+        `\`await ${m[1]}(\` 앞에 planOnly 판정이 없다 — 계획을 물었는데 진짜로 굽는다.`);
+    }
+  });
+
+  it("임시 파일 청소는 '계획을 요청했나' 가 아니라 **'실제로 넘겼나'** 로 가른다", () => {
+    const body = renderClipMedia();
+    assert.ok(body.includes("if (!handedOffTemps)"),
+      "청소 조건이 handedOffTemps 가 아니다 — 계획을 못 준 경우까지 '남긴다' 로 묶여 /tmp 에 쌓인다");
+    // 넘겼다고 표시하는 곳은 계획을 실제로 반환하는 그 자리 하나뿐이어야 한다.
+    const marks = [...body.matchAll(/handedOffTemps = true/g)];
+    assert.equal(marks.length, 1, `handedOffTemps 를 ${marks.length}곳에서 켠다 — 한 곳이어야 한다`);
+  });
+
+  it("계획을 못 주면 라우트가 굽지 않고 사유를 낸다", () => {
+    assert.ok(INDEX.includes('"planUnavailable" in rendered'),
+      "라우트가 planUnavailable 을 안 본다 — 못 준 계획이 정상 export 응답으로 나간다");
+    assert.match(INDEX, /error: "plan_unavailable"/);
+  });
+});

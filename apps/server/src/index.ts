@@ -5709,6 +5709,8 @@ async function renderClipMedia(opts: {
   | { clipMediaId: string; clipStored: string; thumbStored: string | null;
       cmeta: { durationSec: number; width: number; height: number; codec: string; hasAudio: boolean; fps?: number; startTimecode?: string; audioStreams?: number } }
   | { plan: Parameters<typeof renderShort>[0]; clipMediaId: string; clipObjPath: string; temps: string[] }
+  /** 계획을 달라고 했지만 이 클립은 `renderShort` 로 표현되지 않는다(순수 트림 경로). */
+  | { planUnavailable: "fast_path" }
   | null
 > {
   const { master, episodeId, startTime, endTime, title } = opts;
@@ -5868,11 +5870,19 @@ async function renderClipMedia(opts: {
     if (ass) fs.writeFileSync(assTmp, ass, "utf-8");
   }
 
+  /** 계획을 실제로 넘겼나 — 넘겼으면 임시 파일의 주인이 부르는 쪽으로 넘어간다. */
+  let handedOffTemps = false;
   try {
     if (!dynamicReframe && !ass && !overlayPngActive && !videoFilters && !audioFilter && speed === 1 && aspect === "16:9" && !hookPreroll) {
       // Fast path only when there's genuinely nothing to bake (no ASS overlays, no static
       // overlay PNG, no grade, no volume change, no speed change, native 16:9, no hook
       // preroll). Any edit — including a canvas-PNG static overlay — routes through renderShort.
+      //
+      // ⚠️ **계획 모드는 여기서 못 나온다.** 이 경로는 `renderShort` 가 아니라 `trimEncode` 라
+      //    `RenderShortOpts` 로 표현되지 않는다. 그냥 흘려보내면 계획을 달라는 요청이 조용히
+      //    **진짜 렌더**를 해 버린다(굽고·올리고·미디어 행까지 만든다). 안 굽고 사유를 준다.
+      //    로컬 렌더로 아낄 것도 거의 없는 경로다 — 자막도 오버레이도 없는 순수 트림이다.
+      if (opts.planOnly) return { planUnavailable: "fast_path" as const };
       await trimEncode(srcPath, startTime, endTime, tmpPath);
     } else {
       // 채움/크롭 결정 — **종횡비 enum(aspect) 이 정본.** aspect-presets.ts 프리셋 하나가
@@ -5942,6 +5952,7 @@ async function renderClipMedia(opts: {
       // 계획만 원하면 **여기서 멈춘다.** 조립된 것이 곧 계획이라, 서버가 굽든 편집자 PC 가
       // 굽든 같은 값에서 출발한다(위 planOnly 주석).
       if (opts.planOnly) {
+        handedOffTemps = true;   // ← finally 가 안 지우게. **여기서만** 참이 된다.
         return {
           plan: shortOpts,
           clipMediaId,
@@ -5978,10 +5989,12 @@ async function renderClipMedia(opts: {
   } finally {
     // /tmp is RAM-backed on Cloud Run — always clear the temps.
     //
-    // ⚠️ 계획 모드에서는 **남긴다** — 부르는 쪽이 그 파일들을 읽어 올려야 한다.
-    //    `if (planOnly) return;` 으로 쓰면 안 된다: finally 의 return 은 **try 의 반환값을
-    //    덮어써서** 계획이 undefined 로 나간다(타입 검사가 이걸 잡았다). 조건으로 감싼다.
-    if (!opts.planOnly) {
+    // ⚠️ 계획을 **실제로 넘긴 경우에만** 남긴다 — 부르는 쪽이 그 파일들을 읽어 올려야 한다.
+    //    조건이 `!opts.planOnly` 면 안 된다: 계획을 요청했지만 못 준 경우(fast_path)나
+    //    중간에 던진 경우까지 "남긴다" 로 묶여 /tmp 에 쓰레기가 쌓인다.
+    //    `if (planOnly) return;` 도 안 된다: finally 의 return 은 **try 의 반환값을 덮어써서**
+    //    계획이 undefined 로 나간다(타입 검사가 이걸 잡았다). 조건으로 감싼다.
+    if (!handedOffTemps) {
       try { fs.unlinkSync(tmpPath); } catch {}
       try { fs.unlinkSync(thumbTmp); } catch {}
       try { fs.unlinkSync(assTmp); } catch {}
@@ -10103,6 +10116,18 @@ app.post("/api/clips/:id/export", async (c) => {
   if ("plan" in rendered) {
     const out = await serializeRenderPlan(rendered, { clipId, revision, master });
     return c.json(out);
+  }
+  /**
+   * 계획을 달라고 했는데 못 주는 경우 — **아무것도 안 굽고** 사유를 낸다.
+   * 여기서 그냥 넘어가면 계획 요청이 조용히 진짜 렌더가 되어(굽고·올리고·미디어 행까지)
+   * 편집자는 "계획만 물었는데 클립이 생겼다" 를 보게 된다.
+   */
+  if ("planUnavailable" in rendered) {
+    return c.json({
+      error: "plan_unavailable",
+      reason: rendered.planUnavailable,
+      message: "이 클립은 편집자 PC 에서 구울 수 없습니다 — 서버가 굽습니다.",
+    }, 409);
   }
 
   // Merge onto the LATEST row, not the pre-render snapshot: the render takes up to minutes,
