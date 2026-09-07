@@ -74,6 +74,27 @@ describe("렌더 계획 — 경로 자산", () => {
     assert.ok(found.includes("assPath") && found.includes("ttsPath"), `표본이 이상하다: ${found}`);
   });
 
+  /**
+   * `render-plan-roundtrip.test.ts` 는 서버 직렬화의 **사본**으로 왕복을 증명한다.
+   * 사본이 진짜와 어긋나면 그 증명이 통째로 헛돈다 — 어긋나는 방식은 거의 항상 하나,
+   * **여기서 기본값을 채우는 것**이다(`?? null`, `?? 0`, `?? false`).
+   *
+   * `RenderShortOpts` 는 `undefined`("안 정했다")와 `null`("없음")을 다르게 읽는다.
+   * 직렬화가 그걸 통일하면 편집자 PC 만 다른 기하로 굽는다. 실제로 타입이 한 번 잡았고,
+   * 타입이 못 잡는 자리(`speed ?? 1` 처럼 같은 타입으로 떨어지는 것)를 이게 잡는다.
+   */
+  it("**계획을 만들며 값을 손보지 않는다** — 기본값을 채우면 서버가 안 한 판단이 된다", () => {
+    const body = serializer();
+    const block = body.slice(body.indexOf("render: {"), body.indexOf("assets: {"));
+    assert.ok(block.length > 100, "render 블록을 못 떼어냈다 — 스캔이 깨졌다");
+
+    const coercions = [...block.matchAll(/^\s*(\w+):.*\?\?\s*(?!undefined)(\S+?),?\s*$/gm)]
+      .map((m) => `${m[1]} ?? ${m[2]}`);
+    assert.deepEqual(coercions, [],
+      `직렬화가 기본값을 채운다: ${coercions.join(", ")}\n` +
+      "→ undefined 와 null 이 섞이면 편집자 PC 가 서버와 다른 기하로 굽는다. 그대로 실을 것.");
+  });
+
   it("임시 파일을 치운다 — planOnly 는 renderClipMedia 가 안 지우고 넘긴 것이다", () => {
     const body = serializer();
     assert.ok(/finally\s*\{[\s\S]*unlinkSync/.test(body),

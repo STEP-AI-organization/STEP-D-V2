@@ -76,6 +76,23 @@ describe("ffmpeg 바이너리 주입", () => {
       );
     }
   });
+
+  /**
+   * `render-plan.ts` 도 네이티브가 통째로 가져간다(계획 → RenderShortOpts 조립).
+   * 실측: `esbuild --bundle native/src/render/runner.ts` 의 입력이 **3개뿐**이다 —
+   * runner + ffmpeg.ts + render-plan.ts. 그 셋이 로컬 렌더의 전부다.
+   *
+   * 여기는 ffmpeg.ts 보다 더 엄격하다 — node 내장조차 안 쓴다. 순수 변환이라 쓸 일이
+   * 없고, 없어야 "값만으로 왕복을 증명" 하는 테스트가 성립한다.
+   */
+  it("render-plan.ts 는 타입 말고 아무것도 안 들인다", () => {
+    const PLAN = fs.readFileSync(path.join(SRC, "media", "render-plan.ts"), "utf-8");
+    const imports = [...PLAN.matchAll(/^import\s+(type\s+)?.*?from\s+"([^"]+)";/gm)];
+    assert.ok(imports.length > 0, "import 를 하나도 못 찾았다 — 정규식을 확인할 것");
+    for (const [, isType, spec] of imports) {
+      assert.ok(isType, `render-plan.ts 가 ${spec} 를 값으로 들였다 — 순수해야 한다`);
+    }
+  });
 });
 
 describe("글꼴 폴더 주입 (fontsdir)", () => {

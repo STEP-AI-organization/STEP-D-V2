@@ -230,6 +230,7 @@ import {
   type SearchEventKind,
 } from "./db-pg.ts";
 import { hasFfmpeg, probe, captureThumbnail, circleCrop, trimEncode, remuxFaststart, renderShort, renderStaticOverlayPng } from "./media/ffmpeg.ts";
+import { type RenderPlan } from "./media/render-plan.ts";
 import { issueOAuthState, consumeOAuthState, HANDOFF_TTL_MS } from "./auth/oauth-state.ts";
 import { synthesizeHookNarration } from "./media/tts.ts";
 import { embedQuery } from "./ai/search-embed.ts";
@@ -9808,7 +9809,7 @@ app.post("/api/clips/:id/regenerate-hook", async (c) => {
 async function serializeRenderPlan(
   rendered: { plan: Parameters<typeof renderShort>[0]; clipMediaId: string; clipObjPath: string; temps: string[] },
   ctx: { clipId: string; revision: string; master: MediaRow },
-): Promise<Record<string, unknown>> {
+): Promise<RenderPlan> {
   const { plan, clipMediaId, clipObjPath, temps } = rendered;
   const readText = (p?: string | null) => {
     if (!p || !fs.existsSync(p)) return null;
@@ -9842,21 +9843,29 @@ async function serializeRenderPlan(
         durationSec: ctx.master.durationSec,
       },
       /** renderShort 가 그대로 받는 값들. 경로만 받는 쪽이 채운다. */
+      /**
+       * ⚠️ **값을 손보지 않는다.** `?? null` 로 기본값을 채우고 싶어지지만, 그건 서버가
+       * 안 한 판단을 여기서 하는 것이다 — `RenderShortOpts` 는 이 필드들을 `undefined` 로
+       * 두면 "안 정했다", `null` 이면 "없음" 으로 서로 다르게 읽는다. 여기서 통일하면
+       * 편집자 PC 만 다른 기하로 굽는다. (타입이 이걸 잡아 준다 — 실제로 잡혔다.)
+       */
       render: {
         startTime: plan.startTime, endTime: plan.endTime,
         width: plan.width, height: plan.height,
-        videoFilters: plan.videoFilters ?? null,
-        audioFilter: plan.audioFilter ?? null,
-        speed: plan.speed ?? 1,
-        bgType: plan.bgType ?? null, bgColor: plan.bgColor ?? null,
-        fit: plan.fit ?? null, cropRect: plan.cropRect ?? null,
-        frame: plan.frame ? { video: plan.frame.video, bands: plan.frame.bands, overlayRegions: plan.frame.overlayRegions } : null,
-        reframePlan: plan.reframePlan ?? null,
+        videoFilters: plan.videoFilters,
+        audioFilter: plan.audioFilter,
+        speed: plan.speed,
+        bgType: plan.bgType, bgColor: plan.bgColor,
+        fit: plan.fit, cropRect: plan.cropRect,
+        frame: plan.frame
+          ? { video: plan.frame.video, bands: plan.frame.bands, overlayRegions: plan.frame.overlayRegions }
+          : null,
+        reframePlan: plan.reframePlan,
         hookPreroll: plan.hookPreroll
           ? { startTime: plan.hookPreroll.startTime, durationSec: plan.hookPreroll.durationSec,
-              hasAudio: plan.hookPreroll.hasAudio ?? false }
+              hasAudio: plan.hookPreroll.hasAudio }
           : null,
-        badge: plan.badge ? { y: plan.badge.y, h: plan.badge.h, x: plan.badge.x ?? null } : null,
+        badge: plan.badge ? { y: plan.badge.y, h: plan.badge.h, x: plan.badge.x } : null,
       },
       assets: {
         ass: readText(plan.assPath),
