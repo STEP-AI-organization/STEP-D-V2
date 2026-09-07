@@ -30,6 +30,6 @@ else
 fi
 
 echo "==> Running worker-vm.sh (idempotent provision)"
-bash "$APP_DIR/deploy/worker-vm.sh"
+bash "$APP_DIR/deploy/worker-vm/vm.sh"
 
 echo "==== stepd-worker startup-script done $(date -u +%FT%TZ) ===="

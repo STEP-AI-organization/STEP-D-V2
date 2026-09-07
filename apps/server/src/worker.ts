@@ -364,7 +364,7 @@ async function handle(job: Job): Promise<FollowUp | void> {
  *   2. GEBD Docker 컨테이너 실행 (mmaction2 + CUDA · nvidia-container-toolkit)
  *   3. boundaries.json 결과를 workdirGcsPrefix/boundaries.json 에 업로드
  *   4. content.analyze 재개 트리거 (dedupeKey 로 재큐)
- * VM 은 idle 10분 후 auto-shutdown (deploy/gebd-vm.sh 참고).
+ * VM 은 idle 10분 후 auto-shutdown (deploy/gebd/vm.sh 참고).
  */
 async function handleGebdDetect(job: Job): Promise<void> {
   const { spawnSync } = await import("node:child_process");
@@ -946,7 +946,7 @@ function runYtDlp(args: string[]): Promise<void> {
     child.stderr.on("data", (d) => { stderr += String(d); });
     child.on("error", (err: NodeJS.ErrnoException) => {
       reject(err.code === "ENOENT"
-        ? new Error("yt-dlp가 설치되어 있지 않습니다 — worker VM에서 deploy/worker-pipeline-setup.sh를 재실행하세요")
+        ? new Error("yt-dlp가 설치되어 있지 않습니다 — worker VM에서 deploy/worker-vm/pipeline-setup.sh를 재실행하세요")
         : err);
     });
     child.on("close", (code) => {

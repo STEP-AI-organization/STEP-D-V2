@@ -3,11 +3,11 @@
 목적: 프로그램별 실 유튜브 톤 학습용 참고 이미지. Planner few-shot 첨부.
 
 사용:
-  python scripts/fetch_thumbnail_benchmark.py --channel-url <url> --out assets/thumbnail-benchmark/<name>/ --limit 20
+  python scripts/fetch_thumbnail_benchmark.py --channel-url <url> --out assets/thumbnail/benchmark/<name>/ --limit 20
   또는 alias로:
   python scripts/fetch_thumbnail_benchmark.py --preset variety-korean --limit 30
 
-기본 프리셋 (수집 후 assets/thumbnail-benchmark/<preset>/에 저장):
+기본 프리셋 (수집 후 assets/thumbnail/benchmark/<preset>/에 저장):
   - envouno: 환승연애 공식 (티빙)
   - tvn_offical: tvN 예능
   - jtbc_ent: JTBC 예능
@@ -60,7 +60,7 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--channel-url", help="유튜브 채널/재생목록 URL")
     ap.add_argument("--preset", choices=list(CHANNEL_PRESETS), help="사전 정의 채널 프리셋")
-    ap.add_argument("--out", default="", help="출력 폴더 (기본: assets/thumbnail-benchmark/<preset|custom>/)")
+    ap.add_argument("--out", default="", help="출력 폴더 (기본: assets/thumbnail/benchmark/<preset|custom>/)")
     ap.add_argument("--limit", type=int, default=20)
     ap.add_argument("--list-presets", action="store_true")
     args = ap.parse_args()
@@ -72,10 +72,10 @@ def main() -> int:
 
     if args.preset:
         url = CHANNEL_PRESETS[args.preset]
-        default_out = pathlib.Path("assets/thumbnail-benchmark") / args.preset
+        default_out = pathlib.Path("assets/thumbnail/benchmark") / args.preset
     elif args.channel_url:
         url = args.channel_url
-        default_out = pathlib.Path("assets/thumbnail-benchmark/custom")
+        default_out = pathlib.Path("assets/thumbnail/benchmark/custom")
     else:
         print("--preset 또는 --channel-url 필요. --list-presets 로 목록", file=sys.stderr)
         return 1

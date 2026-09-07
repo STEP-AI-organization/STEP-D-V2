@@ -12169,7 +12169,7 @@ app.get("/api/queue/stats", async (c) => {
 /**
  * On-demand VM 부팅 · Cloud Scheduler 가 매 3분 호출.
  * pending content/youtube 잡 있으면 stepd-worker VM start (idempotent · 이미 RUNNING 이면 no-op).
- * GEBD 잡은 별 VM (stepd-gebd · deploy/gebd-vm.sh · 별 라우트) 이라 여기서 제외.
+ * GEBD 잡은 별 VM (stepd-gebd · deploy/gebd/vm.sh · 별 라우트) 이라 여기서 제외.
  *
  * 인증: Cloud Scheduler OIDC 또는 admin token 헤더 (Cloud Run IAM 으로 게이팅).
  * 필요 IAM: Cloud Run SA 에 roles/compute.instanceAdmin.v1 부여 (VM start 권한).

@@ -137,7 +137,7 @@ printf 'postgresql://USER:PASS@127.0.0.1:5432/DBNAME' | \
 
 # 3) 프로비저닝
 gcloud compute ssh stepd-worker --zone us-central1-a
-sudo bash /opt/stepd/deploy/worker-vm.sh   # (스크립트를 먼저 scp 하거나 repo clone 후 실행)
+sudo bash /opt/stepd/deploy/worker-vm/vm.sh   # (스크립트를 먼저 scp 하거나 repo clone 후 실행)
 ```
 
 VM 서비스계정에 필요한 권한:
