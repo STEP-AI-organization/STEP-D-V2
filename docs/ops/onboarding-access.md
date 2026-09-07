@@ -10,31 +10,41 @@
 | 1. 코드 | GitHub 리포 write | PR 을 못 연다 |
 | 2. 로컬 실행 | `.env` 값 (팀에게 받는다) | 서버가 안 뜬다 |
 | 3. 프로덕션 조회 | Cloud SQL·로그 읽기 | 장애 조사를 못 한다 |
-| 4. 배포 | Vercel 팀 + GCP deployer | **아래 ⚠️ 를 반드시 읽을 것** |
+| 4. 배포 | GCP deployer (Vercel 시트는 **유료 — 기본 안 줌**) | **아래 ⚠️ 를 반드시 읽을 것** |
 
 ---
 
-## ⚠️ 가장 먼저 — Vercel author 함정
+## ⚠️ 가장 먼저 — 웹 배포와 Vercel 시트
 
-**웹 배포는 커밋 author 이메일이 Vercel 팀 멤버일 때만 된다.**
-아니면 `Git author must have access` 로 **조용히 차단**된다 — 에러가 안 나고
-빌드가 영원히 안 시작되는 것처럼 보인다(2026-07-16 실측).
+**Vercel 팀 시트는 유료다.** 그래서 합류자를 팀에 넣지 않고도 웹이 배포되게 해야 한다.
 
-PR 워크플로에서 이게 왜 중요한가: **squash 머지는 원 커밋의 author 를 유지한다.**
-즉 새 합류자의 PR 이 머지되면 `main` 의 그 커밋 author 가 그 사람이 되고,
-**그 사람이 Vercel 팀에 없으면 웹 배포가 그 시점부터 멈춘다.** 서버는 영향 없고
-웹만 낡은 채로 남으므로 한참 뒤에야 알아차린다.
+### 실측으로 확인한 것 (2026-09-07 · PR #14 머지)
 
-→ **합류자가 `apps/web` 을 건드릴 예정이면 Vercel 팀 초대를 먼저 한다.**
+- Vercel 은 **커밋 이메일이 아니라 GitHub 계정 연결**을 본다.
+  머지 커밋 author 가 `ha983885@snu.ac.kr` 이었는데도 정상 빌드됐다
+  (Vercel 이 `contact-4523` 계정 소행으로 인식 — 그 GitHub 계정이 팀에 연결돼 있어서).
+- **squash 머지 커밋의 author 는 "머지를 실행한 사람"이다.** PR 작성자가 아니다.
+
+### 그래서 돈 안 드는 규칙
+
+> **합류자의 PR 은 팀 시트를 가진 사람이 머지한다.**
+
+머지 실행자가 author 가 되므로 `main` 커밋은 항상 팀 멤버 소행이 되고, 웹 배포가 안 막힌다.
+합류자는 PR 만 열면 되고 Vercel 시트가 필요 없다.
+
+**만약 합류자가 직접 머지하게 되면**: 그 시점부터 웹 배포가 조용히 멈춘다
+(`Git author must have access` · 에러 없이 빌드가 시작되지 않는다 · 2026-07-16 실측).
+서버는 멀쩡해서 한참 뒤에야 안다.
 
 확인:
 ```bash
-# 최근 main 커밋들의 author 가 전부 Vercel 팀 멤버인지
+# main 최근 커밋들이 팀 계정 소행인지
 git log --format='%ae  %s' -10 origin/main
+npx vercel ls step-d --scope step-ai      # Username 열이 contact-4523 이면 정상
 ```
 
-관련: `deploy/deploy-web.ps1` 이 로컬 배포 시 author 를 `contact@stepai.kr` 로 강제한다
-(그 스크립트를 쓸 땐 안전하지만, **GitHub 머지 경로는 그 보호를 안 탄다**).
+막혔을 때 우회: `.\deploy\deploy-web.ps1` 이 author 를 `contact@stepai.kr` 로 강제해서
+푸시한다 — 로컬 배포 경로는 이 보호를 탄다(GitHub 머지 경로는 안 탄다).
 
 ---
 
@@ -84,11 +94,14 @@ DB 조회 방법은 [prod-db 조회 절차](#) 참고 — **접속 후 `set_conf
 
 ## 4단계 — 배포 권한
 
-### Vercel (웹)
+### Vercel (웹) — **기본은 주지 않는다**
 
-1. Vercel 팀 `step-ai` 에 멤버 초대
-2. **그 사람의 git 커밋 author 이메일**이 팀 계정 이메일과 같아야 한다
-   (다르면 위 ⚠️ 함정에 그대로 걸린다)
+시트가 유료다. 위 §"돈 안 드는 규칙" 대로 **팀 시트를 가진 사람이 머지**하면 합류자는
+Vercel 계정 없이도 웹이 배포된다.
+
+정말 합류자가 직접 웹을 배포해야 할 때만:
+1. Vercel 팀 `step-ai` 에 멤버 초대 (**유료 시트 1개 증가**)
+2. 그 사람의 **GitHub 계정**이 그 Vercel 계정에 연결돼 있어야 한다
 3. 프로젝트: `stepd-web`(프로덕션) · `stepd-admin`(어드민 — **`step-d-admin` 은 버려진 것**)
 
 ### GCP (서버·워커)
@@ -134,7 +147,7 @@ bash deploy/cloud.sh status     # 배포 안 하고 상태만 본다 — 권한 
 
 ```
 [ ] GitHub write · main 보호 확인(직접 푸시가 거부되는지)
-[ ] git config user.email 이 Vercel 팀 계정과 같은가  ← apps/web 만질 예정이면 필수
+[ ] 첫 PR 은 **팀 시트를 가진 사람이 머지**한다 (Vercel 웹 배포가 안 막히게)
 [ ] pnpm install && pnpm setup:check 통과
 [ ] .env 값 수령 (보관되는 경로로)
 [ ] pnpm check 초록
