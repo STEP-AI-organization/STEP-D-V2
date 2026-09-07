@@ -4685,6 +4685,19 @@ export async function harvestedVideoIds(sourceChannelId: string): Promise<Set<st
  *
  * 그래서 `stuckBeforeMs`(생성 시각 기준) 보다 오래된 미완은 `stuck` 으로 따로 센다.
  * 판정은 `harvest.ts` 가 한다 — 여기는 세기만 한다.
+ *
+ * ## ⚠️ 원본(master)만 센다 (2026-09-07 프로덕션 실사고)
+ *
+ * 회차에는 우리가 렌더한 숏폼(`role='clip'`)도 **같은 episodeId 로** 매달린다. 분석 완료
+ * 표시(`content_analysis`)는 원본에만 붙으므로 클립은 영원히 "분석 안 끝난 미디어" 다.
+ * role 을 안 가리면 클립 하나하나가 회차로 세어져서:
+ *   · `inFlight` 에 걸려 `MAX_IN_FLIGHT=1` 로 **배포한 날 밤 수확이 통째로 막힌다**
+ *     (실측: 09-04 밤 4회 전부 "앞 영상이 아직 처리 중입니다" · 그날 수확 0편)
+ *   · 24시간 뒤엔 `stuck` 으로 넘어가 **"11편이 멈춰 있습니다 — 사무실 PC를 확인하세요"**
+ *     라는 거짓 경고를 매일 찍는다. 그 PC 는 멀쩡했다 — 사람을 엉뚱한 기계로 보낸다.
+ *   · `madeToday` 도 부풀어 하루 상한을 잘못 채운다.
+ * 세 증상이 전부 "조용히 안 도는" 쪽이라, 경고를 믿으면 원인을 영영 못 찾는다.
+ * `harvest-counts-role.test.ts` 가 이 필터를 고정한다.
  */
 export async function harvestCounts(
   sourceChannelId: string, sinceMs: number, stuckBeforeMs: number,
@@ -4702,7 +4715,9 @@ export async function harvestCounts(
        )::int AS stuck
        FROM media m
        JOIN entities e ON e.kind = 'episode' AND e.id = m.episodeId
-      WHERE e.data->>'sourceChannelId' = $1`,
+      WHERE e.data->>'sourceChannelId' = $1
+        -- 원본만 센다 — 이유는 위 주석에. 지우면 자동화가 조용히 멈춘다.
+        AND (m.role IS NULL OR m.role = 'master')`,
     [sourceChannelId, sinceMs, stuckBeforeMs],
   );
   return {
