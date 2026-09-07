@@ -23,6 +23,15 @@ export type OverlayPngLayer = {
   y: number;
   aspect: string;
   sizes: number[];
+  /**
+   * 이 PNG에 **그려진 내용**(텍스트·크기·색·글꼴). 위치는 빼고 픽셀에 굽히는 것만 담는다.
+   *
+   * 소비처가 "지금 상태의 PNG 인가" 를 판정하는 데 쓴다. 이게 없으면 편집을 끝낸 직후
+   * **옛 텍스트 PNG 를 현재 것처럼 보여준다** — 새 PNG 가 올 때까지 수백ms 동안
+   * 지운 글자가 도로 보이는 "번쩍임" 의 정체였다(2026-09-07).
+   * 위치를 빼는 이유: x/y 만 바뀐 건 transform 으로 즉시 따라가므로 PNG 를 숨길 이유가 없다.
+   */
+  contentKey: string;
 };
 
 export type OverlayPngLayers = {
@@ -30,12 +39,13 @@ export type OverlayPngLayers = {
   channel: OverlayPngLayer;
 };
 
-const EMPTY_LAYER: OverlayPngLayer = { hash: null, x: 0, y: 0, aspect: "", sizes: [] };
+const EMPTY_LAYER: OverlayPngLayer = { hash: null, x: 0, y: 0, aspect: "", sizes: [], contentKey: "" };
 
-function titleKey(s: EditorState): string {
+/** PNG 픽셀에 구워지는 것만 — 위치(x/y)는 뺀다. 소비처의 "최신인가" 판정 기준. */
+function titleContentKey(s: EditorState): string {
   return JSON.stringify({
     aspect: s.aspect,
-    x: s.titleX, y: s.titleY, align: s.titleAlign,
+    align: s.titleAlign,
     lines: (s.titleLines ?? []).map((l) => ({
       t: l.text, sz: l.size, c: l.color,
       f: l.font ?? null,
@@ -46,15 +56,24 @@ function titleKey(s: EditorState): string {
   });
 }
 
-function channelKey(s: EditorState): string {
+/** 재요청 트리거용 — 위치까지 포함한다(위치가 PNG 에 구워져 있어서 결국 다시 그려야 한다). */
+function titleKey(s: EditorState): string {
+  return JSON.stringify({ c: titleContentKey(s), x: s.titleX, y: s.titleY });
+}
+
+function channelContentKey(s: EditorState): string {
   return JSON.stringify({
     aspect: s.aspect,
-    show: s.showChannel, name: s.channelName, y: s.channelY,
+    show: s.showChannel, name: s.channelName,
     labelSize: s.channelLabelSize, layout: s.channelLayout,
     iconSize: s.channelIconSize, iconOff: s.channelIconOff,
     extras: (s.channelExtraLines ?? []).map((l) => ({ t: l.text, sz: l.size })),
     coordBasis: s.coordBasis,
   });
+}
+
+function channelKey(s: EditorState): string {
+  return JSON.stringify({ c: channelContentKey(s), y: s.channelY });
 }
 
 function layerBasis(layer: "title" | "channel", s: EditorState): Omit<OverlayPngLayer, "hash"> {
@@ -64,13 +83,23 @@ function layerBasis(layer: "title" | "channel", s: EditorState): Omit<OverlayPng
         y: s.titleY ?? 0,
         aspect: String(s.aspect),
         sizes: (s.titleLines ?? []).map((l) => Number(l.size) || 0),
+        contentKey: titleContentKey(s),
       }
     : {
         x: 50,
         y: s.channelY ?? 0,
         aspect: String(s.aspect),
         sizes: [Number(s.channelLabelSize) || 0, Number(s.channelIconSize) || 0],
+        contentKey: channelContentKey(s),
       };
+}
+
+/** 이 PNG 가 **지금 상태의 내용**인가 — 소비처는 이게 true 일 때만 PNG 를 보여야 한다. */
+export function pngMatchesContent(
+  layer: OverlayPngLayer, which: "title" | "channel", s: EditorState,
+): boolean {
+  return !!layer.hash
+    && layer.contentKey === (which === "title" ? titleContentKey(s) : channelContentKey(s));
 }
 
 function preload(src: string): Promise<void> {
