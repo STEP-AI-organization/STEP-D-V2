@@ -53,7 +53,12 @@ RUN curl -fsSL https://github.com/denoland/deno/releases/latest/download/deno-x8
 
 ENV PNPM_HOME=/pnpm
 ENV PATH="$PNPM_HOME:$PATH"
-RUN npm install -g pnpm@latest
+# ⚠️ **버전을 못박는다.** `pnpm@latest` 였는데, pnpm 12 가 나온 날 빌드가 통째로 깨졌다
+# (2026-09-07: `pnpm rebuild esbuild` 가 ERR_PNPM_IGNORED_BUILDS 로 거절 — 12 부터
+# 빌드 스크립트를 명시 승인해야 한다). 이미지가 오늘 npm 에 뭐가 올라왔는지에 따라
+# 달라지면 그건 빌드가 아니라 복권이다. 리포가 선언한 값(package.json packageManager)과
+# 같은 버전을 쓴다 — 올릴 때는 두 곳을 같이 올릴 것.
+RUN npm install -g pnpm@10.33.2
 
 # ── node deps (캐시) ─────────────────────────────────────────────────────────
 FROM base AS deps
