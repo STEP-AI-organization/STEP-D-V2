@@ -9791,6 +9791,91 @@ app.post("/api/clips/:id/regenerate-hook", async (c) => {
   }
 });
 
+/**
+ * 렌더 계획을 **편집자 PC 가 쓸 수 있는 꼴**로 바꾼다.
+ *
+ * 서버가 만든 것은 전부 `/tmp` 절대경로다 — 그 경로는 편집자 PC 에 없다. 그래서
+ *   · 자막(ASS)은 **본문 그대로** 싣는다. 텍스트라 작고, 파일로 만드는 건 받는 쪽 몫이다.
+ *   · 그림(오버레이·배지·프레임)은 GCS 에 올려 **읽기 URL** 로 준다. 1080×1920 PNG 가
+ *     수 MB 라 JSON 에 base64 로 실으면 응답이 그만큼 커진다 —
+ *     프로덕션 웹은 `/api/proxy` 를 거쳐 **보내는 바이트가 그대로 과금**된다.
+ *   · 원본은 **주지 않는다.** 편집자 PC 에는 이미 작업 공간에 있고, 그걸 쓰는 게 이 설계의
+ *     목적이다(바이트를 안 옮긴다). 어느 파일인지 알아볼 값만 준다.
+ *
+ * ⚠️ 임시 파일은 여기서 **치운다.** `planOnly` 는 renderClipMedia 가 안 지우고 넘긴 것이라,
+ *    안 치우면 Cloud Run 의 RAM 디스크(/tmp)에 계속 쌓인다.
+ */
+async function serializeRenderPlan(
+  rendered: { plan: Parameters<typeof renderShort>[0]; clipMediaId: string; clipObjPath: string; temps: string[] },
+  ctx: { clipId: string; revision: string; master: MediaRow },
+): Promise<Record<string, unknown>> {
+  const { plan, clipMediaId, clipObjPath, temps } = rendered;
+  const readText = (p?: string | null) => {
+    if (!p || !fs.existsSync(p)) return null;
+    try { return fs.readFileSync(p, "utf-8"); } catch { return null; }
+  };
+  /** 파일을 GCS 에 올리고 읽기 URL 을 준다. 실패하면 null — 받는 쪽이 서버 렌더로 떨어진다. */
+  const putAsset = async (p: string | null | undefined, name: string): Promise<string | null> => {
+    if (!p || !fs.existsSync(p)) return null;
+    try {
+      const obj = `render-plan/${clipMediaId}/${name}`;
+      await uploadFile(obj, p);
+      return useGcs() ? await signedReadUrl(obj) : obj;
+    } catch (e) {
+      console.warn("[render-plan] 이미지 업로드 실패:", String(e).slice(0, 120));
+      return null;
+    }
+  };
+
+  try {
+    return {
+      clipId: ctx.clipId,
+      revision: ctx.revision,
+      clipMediaId,
+      /** 결과 mp4 를 올릴 자리. 편집자 PC 가 다 구우면 여기로 올린다. */
+      output: { objectPath: clipObjPath },
+      /** 어느 원본인가 — 편집자 PC 가 자기 작업 공간에서 찾는 근거. 바이트는 안 보낸다. */
+      source: {
+        mediaId: ctx.master.id,
+        filename: ctx.master.filename,
+        size: ctx.master.size,
+        durationSec: ctx.master.durationSec,
+      },
+      /** renderShort 가 그대로 받는 값들. 경로만 받는 쪽이 채운다. */
+      render: {
+        startTime: plan.startTime, endTime: plan.endTime,
+        width: plan.width, height: plan.height,
+        videoFilters: plan.videoFilters ?? null,
+        audioFilter: plan.audioFilter ?? null,
+        speed: plan.speed ?? 1,
+        bgType: plan.bgType ?? null, bgColor: plan.bgColor ?? null,
+        fit: plan.fit ?? null, cropRect: plan.cropRect ?? null,
+        frame: plan.frame ? { video: plan.frame.video, bands: plan.frame.bands, overlayRegions: plan.frame.overlayRegions } : null,
+        reframePlan: plan.reframePlan ?? null,
+        hookPreroll: plan.hookPreroll
+          ? { startTime: plan.hookPreroll.startTime, durationSec: plan.hookPreroll.durationSec,
+              hasAudio: plan.hookPreroll.hasAudio ?? false }
+          : null,
+        badge: plan.badge ? { y: plan.badge.y, h: plan.badge.h, x: plan.badge.x ?? null } : null,
+      },
+      assets: {
+        ass: readText(plan.assPath),
+        captionAss: readText(plan.captionAssPath),
+        decorationAss: readText(plan.decorationAssPath),
+        hookCaptionAss: readText(plan.hookPreroll?.captionAssPath),
+        overlayPngUrl: await putAsset(plan.overlayPngPath, "overlay.png"),
+        framePngUrl: await putAsset(plan.frame?.overlayPath, "frame.png"),
+        badgePngUrl: await putAsset(plan.badge?.path, "badge.png"),
+        // 훅 내레이션 — 이걸 빠뜨리면 편집자 PC 가 구운 것에만 목소리가 없다.
+        // 자막(ASS)과 달리 조용히 어긋나는 축이라 반드시 같이 싣는다.
+        hookTtsUrl: await putAsset(plan.hookPreroll?.ttsPath, "hook.mp3"),
+      },
+    };
+  } finally {
+    for (const f of temps) { try { fs.unlinkSync(f); } catch { /* 이미 없으면 그만 */ } }
+  }
+}
+
 // ── export/render a clip → the single expensive render (plan §2.4) ────────────
 //
 // The ONLY place ffmpeg bakes the deliverable. Idempotent: a render-revision hash of
@@ -9837,7 +9922,16 @@ app.post("/api/clips/:id/export", async (c) => {
 
   // F3: the destination this render is for. Body `channel` lets the operator export the same
   // adopted segment once per destination; absent that, the clip's own target.
-  const body = await c.req.json<{ channel?: string }>().catch(() => ({} as { channel?: string }));
+  const body = await c.req.json<{ channel?: string; plan?: boolean }>()
+    .catch(() => ({} as { channel?: string; plan?: boolean }));
+  /**
+   * **계획만 받고 굽지는 않는다** — 편집자 PC 로컬 렌더용(B2).
+   *
+   * 별도 라우트를 두지 않는 이유: 이 위로 180줄이 **무엇을 어떻게 구울지 정하는 결정**이다
+   * (프리셋·자막·스냅·리비전·훅 프리롤·리프레임). 그걸 복제하면 서버와 편집자 PC 가 다른
+   * 결정을 하게 되고, 같은 클립이 굽는 곳마다 달라진다. 분기 하나로 끝낸다.
+   */
+  const planOnly = body.plan === true;
   const preset = resolveRenderPreset(body.channel, clip);
 
   // STT transcript for the master (spoken subtitles). Segments are master-timeline seconds;
@@ -9986,15 +10080,21 @@ app.post("/api/clips/:id/export", async (c) => {
     }
   }
 
-  // planOnly 를 안 주므로 항상 렌더 결과다 — 타입만 좁힌다(아래 cmeta 사용).
   const rendered = await renderClipMedia({
     master, episodeId: clip.episodeId,
     startTime: snappedStart, endTime: snappedEnd,
     title: clip.title, editorState: es, aspect, captions,
     hookPreroll,
     reframePlan,
+    planOnly,
   });
-  if (!rendered || !("cmeta" in rendered)) return c.json({ error: "render failed" }, 500);
+  if (!rendered) return c.json({ error: "render failed" }, 500);
+
+  // 계획 모드 — 조립된 것을 편집자 PC 가 쓸 수 있는 꼴로 바꿔 돌려준다.
+  if ("plan" in rendered) {
+    const out = await serializeRenderPlan(rendered, { clipId, revision, master });
+    return c.json(out);
+  }
 
   // Merge onto the LATEST row, not the pre-render snapshot: the render takes up to minutes,
   // and an editor save (PATCH /:id/editor) landing meanwhile must survive this write. If the
