@@ -95,7 +95,7 @@ def _ffmpeg_frame(video: Path, t_sec: float, out: Path, width: int = 640) -> boo
 # 워커 이미지에 한국어 폰트(assets/)가 없어도 위치 매핑이 성립하도록. 사진이 없으면 None →
 # 기존과 동작·비용 완전 동일(회당 추가 콜 0). 이미지는 회차 내내 동일하므로 청크 안에서
 # 프롬프트 캐시 접두로 재사용된다(비용 사실상 회차당 1장).
-_FONT_DIR = Path(__file__).resolve().parents[2] / "assets" / "thumbnail-fonts"
+_FONT_DIR = Path(__file__).resolve().parents[2] / "assets" / "fonts"
 _PHOTO_EXTS = (".jpg", ".jpeg", ".png", ".webp")
 
 
@@ -127,7 +127,7 @@ def _resolve_cast_photos(cast_photos_dir: Path, names: list[str]) -> list[tuple[
 
 def _board_font(size: int):
     from PIL import ImageFont
-    for f in ("Pretendard-Bold.otf", "NotoSansKR-Black.otf", "BlackHanSans-Regular.ttf"):
+    for f in ("Pretendard-Bold.otf", "Pretendard-Black.otf", "BlackHanSans-Regular.ttf"):
         fp = _FONT_DIR / f
         if fp.exists():
             try:

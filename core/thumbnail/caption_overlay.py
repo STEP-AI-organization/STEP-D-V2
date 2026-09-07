@@ -13,7 +13,15 @@ from typing import Optional
 
 from PIL import Image, ImageDraw, ImageFont
 
-FONT_DIR = pathlib.Path(__file__).resolve().parents[2] / "assets" / "thumbnail-fonts"
+# 폰트는 **`assets/fonts/` 한 곳**이다 (2026-09-07 통합).
+#
+# 예전엔 `assets/thumbnail-fonts/` 가 따로 있었는데 두 가지가 잘못돼 있었다:
+#   ① 리포에 없었다(gitignore · 76MB) — 그런데 **Dockerfile.worker 가 그 폴더를 복사하지도
+#      않아서** 프로덕션 워커엔 폰트가 아예 없었다. AUTO_THUMBNAIL 이 기본 0 이라 안 드러났을 뿐.
+#   ② 13개 중 9개가 assets/fonts/ 와 **중복**이었다.
+# 합치면서 Noto 3종(56MB)을 버렸다 — 베트남어 대체용으로 넣었던 건데 이미 리포에 있는
+# Pretendard-Black/Bold 가 베트남어를 100% 덮는다(cmap 실측). 새로 담은 건 GowunBatang 하나.
+FONT_DIR = pathlib.Path(__file__).resolve().parents[2] / "assets" / "fonts"
 DEFAULT_FONT = "BlackHanSans-Regular.ttf"
 
 # 9 슬롯 좌표 앵커 (x_frac, y_frac, h_anchor, v_anchor)
@@ -80,14 +88,12 @@ ROLE_STYLES: dict[str, dict] = {
 """
 LANG_FONT_FALLBACK: dict[str, dict[str, str]] = {
     "vi": {
-        "BlackHanSans-Regular.ttf": "NotoSansKR-Black.otf",   # 헤드라인 — 가장 굵은 대체
-        "Jua-Regular.ttf": "NotoSansKR-Bold.otf",
-        "DoHyeon-Regular.ttf": "NotoSansKR-Bold.otf",
-        "Gugi-Regular.ttf": "NotoSansKR-Bold.otf",
-        "GowunBatang-Bold.ttf": "NotoSerifKR-Black.otf",   # 세리프 느낌을 지킨다
-        # ⚠️ 대체 대상은 **download-fonts.ps1 이 실제로 받는 6종 안에서만** 고른다.
-        #    로컬에 있다고 쓰면(예: GothicA1) 그 파일을 안 받는 환경에서 두부(□)가 된다.
-        #    받는 6종은 Pretendard 3 · NotoSansKR 2 · NotoSerifKR 1 이고 전부 베트남어 100%.
+        # 검은고딕·주아·도현은 베트남어를 **0%** 덮는다(cmap 실측) → 두부(□).
+        # 대체는 굵기를 최대한 지켜 고른다 — 헤드라인이 얇아지면 썸네일 톤이 통째로 달라진다.
+        "BlackHanSans-Regular.ttf": "Pretendard-Black.otf",   # 헤드라인 — 가장 굵은 대체(900)
+        "Jua-Regular.ttf": "Pretendard-Bold.otf",
+        "DoHyeon-Regular.ttf": "Pretendard-Bold.otf",
+        # GowunBatang-Bold(quote)·Pretendard-*·GothicA1-* 은 베트남어 100% 라 그대로 둔다.
     },
 }
 
