@@ -26,7 +26,7 @@
 #
 # Run ON the VM. NOT as root: it sudo's only where it must, matching worker-vm.sh's style
 # (gcloud then runs as the invoking user, with that user's ADC, exactly as before):
-#   bash /opt/stepd/deploy/worker-env.sh
+#   bash /opt/stepd/deploy/worker-vm/env.sh
 #
 # To add a NEW worker variable, add one add_var/add_secret line below — that is the only place
 # it needs to exist. worker-vm.sh calls this script, so provisioning and drift-repair can never
@@ -34,7 +34,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# Derived from this script's own location (<APP_DIR>/deploy/worker-env.sh) so the install path
+# Derived from this script's own location (<APP_DIR>/deploy/worker-vm/env.sh) so the install path
 # is not hardcoded a second time here. worker-vm.sh passes APP_DIR in explicitly.
 APP_DIR="${APP_DIR:-$(dirname "$SCRIPT_DIR")}"
 

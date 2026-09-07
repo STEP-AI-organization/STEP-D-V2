@@ -415,7 +415,7 @@ def generate_plan(
 
     # 벤치마크 이미지 (실 유튜브 방송사 썸네일) few-shot 첨부
     benchmark_parts: list[types.Part] = []
-    bench_root = pathlib.Path(__file__).resolve().parents[2] / "assets" / "thumbnail-benchmark"
+    bench_root = pathlib.Path(__file__).resolve().parents[2] / "assets" / "thumbnail" / "benchmark"
     if bench_root.exists():
         # 각 채널 폴더에서 2장씩 · 최대 8장 (토큰 관리)
         picks: list[pathlib.Path] = []

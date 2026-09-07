@@ -10,7 +10,7 @@
 # - Cloud Run SA 에 compute.instanceAdmin.v1 부여 (VM wake 라우트가 gcloud start 호출)
 #
 # 실행:
-#   bash deploy/gebd-vm-create.sh
+#   bash deploy/gebd/vm-create.sh
 #
 # 확인:
 #   gcloud compute instances describe stepd-gebd --zone=asia-northeast3-c
@@ -39,11 +39,11 @@ gcloud compute instances create "$INSTANCE" \
   --service-account="$SA_EMAIL" \
   --scopes=cloud-platform \
   --metadata="enable-oslogin=TRUE,gebd-image=${GEBD_IMAGE}" \
-  --metadata-from-file=startup-script=deploy/gebd-startup.sh \
+  --metadata-from-file=startup-script=deploy/gebd/vm-bootstrap.sh \
   --tags=stepd-gebd
 
 echo
 echo "==> stepd-gebd 인스턴스 생성 완료."
-echo "    다음: startup-script 가 자동으로 gebd-vm.sh 실행 (5-10분)"
+echo "    다음: startup-script(vm-bootstrap.sh)가 자동으로 vm.sh 실행 (5-10분)"
 echo "    로그 확인:  gcloud compute instances get-serial-port-output ${INSTANCE} --zone=${ZONE}"
 echo "    SSH:      gcloud compute ssh ${INSTANCE} --zone=${ZONE}"

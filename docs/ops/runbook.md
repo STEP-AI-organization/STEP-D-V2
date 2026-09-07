@@ -140,7 +140,7 @@ IAM에 반영되지 않아 실효가 없지만(익명 403 실측), 배포 SA에 
 ```powershell
 printf '<새값>' | gcloud secrets versions add <시크릿이름> --data-file=- --project step-d
 # ① Cloud Run: :latest 바인딩은 리비전 생성 시점에 고정된다 → 재배포(`bash deploy/cloud.sh server`) 필요
-# ② 워커 VM: 시크릿이 프로비저닝 때 /etc/stepd/worker.env에 박제된다(deploy/worker-vm.sh)
+# ② 워커 VM: 시크릿이 프로비저닝 때 /etc/stepd/worker.env에 박제된다(deploy/worker-vm/vm.sh)
 #    → SSH해서 worker-vm.sh의 "Secrets" 블록 재실행(또는 worker.env 수동 갱신) 후 systemctl restart stepd-worker
 ```
 

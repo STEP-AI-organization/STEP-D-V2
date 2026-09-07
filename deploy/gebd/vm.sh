@@ -7,11 +7,11 @@
 #
 # 왜 별도 VM 인가:
 # - Cloud Run: GPU 미지원
-# - 기존 worker VM (deploy/worker-vm.sh): 2-lane CPU 워커 · GPU 없음 · nvidia-driver 미설치
+# - 기존 worker VM (deploy/worker-vm/vm.sh): 2-lane CPU 워커 · GPU 없음 · nvidia-driver 미설치
 # - GEBD 는 하루 20-80분만 필요 → spot T4 로 만들어 idle 시 STOP → 월 $6-10 목표
 #
 # 실행 순서 (한 번만):
-#   1. `bash deploy/gebd-vm-create.sh`  ← spot T4 인스턴스 생성 (startup-script 로 이 파일 자동 실행)
+#   1. `bash deploy/gebd/vm-create.sh`  ← spot T4 인스턴스 생성 (startup-script 로 이 파일 자동 실행)
 #   2. 인스턴스 부팅 완료 후 · 자동으로 gebd lane 서비스 등록
 #   3. 이후: 큐 트리거 (POST /api/admin/gebd-vm/wake) 로만 부팅
 #
@@ -94,7 +94,7 @@ pnpm install --filter @stepd/server... --frozen-lockfile --ignore-scripts
 pnpm rebuild esbuild
 
 echo "==> Secrets + config → /etc/stepd/worker.env"
-APP_DIR="$APP_DIR" bash "$APP_DIR/deploy/worker-env.sh"
+APP_DIR="$APP_DIR" bash "$APP_DIR/deploy/worker-vm/env.sh"
 
 echo "==> Pull GEBD Docker image"
 sudo gcloud auth configure-docker asia-northeast3-docker.pkg.dev --quiet || true

@@ -20,8 +20,8 @@
 - `apps/server/src/pipeline/content-pipeline.ts` · 분석 실행·결과 저장·추천/썸네일 생성 연결
 - `apps/server/src/index.ts` · media/frame/thumb/analysis/faces/recommendation/clip API
 - `apps/web/src/components/thumbnail-picker.tsx` · 썸네일 선택 UI
-- `assets/thumbnail-benchmark/` · MBC/JTBC/Netflix Korea 벤치마크
-- `assets/thumbnail-fonts/` · 한글 폰트
+- `assets/thumbnail/benchmark/` · MBC/JTBC/Netflix Korea 벤치마크
+- `assets/thumbnail/fonts/` · 한글 폰트
 - `assets/thumbnail-reference/` · 스타일 학습용 참고 이미지 (2026-07-27 추가)
 
 ## 3. 현재 구현 요약 (2026-07-28 기준)

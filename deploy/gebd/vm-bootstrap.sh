@@ -3,7 +3,7 @@
 #
 # 흐름:
 #   1. 최신 소스 pull (git reset --hard origin/main)
-#   2. gebd-vm.sh 재실행 (Docker · systemd 유닛 재적용)
+#   2. vm.sh 재실행 (Docker · systemd 유닛 재적용)
 #   3. gebd worker + auto-shutdown daemon 상시 실행
 #
 # 로그는 /var/log/gebd-startup.log 와 시리얼 콘솔에 남는다.
@@ -35,7 +35,7 @@ else
   git -C "$APP_DIR" reset --hard origin/main
 fi
 
-echo "==> Running gebd-vm.sh (idempotent provision)"
-bash "$APP_DIR/deploy/gebd-vm.sh"
+echo "==> Running deploy/gebd/vm.sh (idempotent provision)"
+bash "$APP_DIR/deploy/gebd/vm.sh"
 
 echo "==== GEBD startup-script done $(date -u +%FT%TZ) ===="

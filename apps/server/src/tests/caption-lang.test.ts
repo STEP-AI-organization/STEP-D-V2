@@ -132,21 +132,21 @@ describe("다국어 — 허용 글꼴이 그 언어를 실제로 덮는가 (cmap
     //
     // 대신 **이름이 목록에 있는지는 항상 검사한다.** 오타나 없는 파일명을 대체표에 적으면
     // Pillow 가 두부(□)를 그리는데, 그건 폰트가 깔린 환경에서도 안 잡히는 종류의 실수다.
-    const readme = read("assets/thumbnail-fonts/README.md");
+    const readme = read("assets/thumbnail/fonts/README.md");
     for (const f of targets) {
       assert.ok(readme.includes(f),
-        `대체 폰트 ${f} 가 assets/thumbnail-fonts/README.md 의 다운로드 목록에 없다 — ` +
+        `대체 폰트 ${f} 가 assets/thumbnail/fonts/README.md 의 다운로드 목록에 없다 — ` +
         "받아지지 않는 파일을 가리키면 Pillow 가 두부(□)를 그린다");
     }
 
-    const present = targets.filter((f) => fs.existsSync(path.join(ROOT, "assets/thumbnail-fonts", f)));
+    const present = targets.filter((f) => fs.existsSync(path.join(ROOT, "assets/thumbnail/fonts", f)));
     if (present.length === 0) {
       t.skip("썸네일 폰트가 로컬에 없다 (gitignore · download-fonts.ps1 로 받는다) — cmap 검사 생략");
       return;
     }
     const chars = charsFor("vi");
     for (const f of present) {
-      const cov = coverage(fs.readFileSync(path.join(ROOT, "assets/thumbnail-fonts", f)));
+      const cov = coverage(fs.readFileSync(path.join(ROOT, "assets/thumbnail/fonts", f)));
       const missing = chars.filter((c) => !cov.has(c));
       assert.equal(missing.length, 0, `썸네일 대체 폰트 ${f} 가 베트남어 ${missing.length}자를 못 그린다 — 두부(□)가 찍힌다`);
     }

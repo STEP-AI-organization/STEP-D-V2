@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    썸네일 엔진용 한글 폰트 다운로드 (assets/thumbnail-fonts/).
+    썸네일 엔진용 한글 폰트 다운로드 (assets/thumbnail/fonts/).
 
 .DESCRIPTION
     docs/plans/thumbnail-engine-plan.md §3.2 참고.
@@ -14,7 +14,7 @@
 
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot
-$Dir = Join-Path $Root "assets\thumbnail-fonts"
+$Dir = Join-Path $Root "assets\thumbnail\fonts"
 if (-not (Test-Path $Dir)) { New-Item -ItemType Directory -Path $Dir -Force | Out-Null }
 
 $fonts = @(

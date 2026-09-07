@@ -8,7 +8,7 @@
 # NO key to install. This VM (e2-small, no GPU) can therefore run the whole thing.
 #
 # Run ON the VM after worker-vm.sh:
-#   gcloud compute ssh stepd-worker --zone us-central1-a --command "sudo bash /opt/stepd/deploy/worker-pipeline-setup.sh"
+#   gcloud compute ssh stepd-worker --zone us-central1-a --command "sudo bash /opt/stepd/deploy/worker-vm/pipeline-setup.sh"
 set -euo pipefail
 
 APP_DIR="${APP_DIR:-/opt/stepd}"

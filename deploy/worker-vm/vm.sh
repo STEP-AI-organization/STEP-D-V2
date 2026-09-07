@@ -21,7 +21,7 @@ IDLE_SHUTDOWN_SEC="${IDLE_SHUTDOWN_SEC:-600}"
 REPO_URL="${REPO_URL:-https://github.com/STEP-AI-organization/STEP-D-V2.git}"
 APP_DIR="${APP_DIR:-/opt/stepd}"
 # NOTE: worker.env values (PROJECT / GCS_BUCKET / VERTEX_LOCATION / STT_PROVIDER / CORE_PYTHON,
-# and the secret names) are defined ONLY in deploy/worker-env.sh — deliberately not repeated
+# and the secret names) are defined ONLY in deploy/worker-vm/env.sh — deliberately not repeated
 # here, so provisioning and drift-repair can never disagree. Overrides still pass through as
 # env vars, e.g. `GCS_BUCKET=other bash worker-vm.sh`.
 
@@ -82,7 +82,7 @@ echo "==> Secrets + config → /etc/stepd/worker.env"
 # Delegated to worker-env.sh, which owns these definitions and is also what the deploy path
 # runs on every deploy — one source of truth, so a provisioned VM and a deployed VM agree.
 # It only ADDS missing variables, so re-running this provisioner never clobbers a live value.
-APP_DIR="$APP_DIR" bash "$APP_DIR/deploy/worker-env.sh"
+APP_DIR="$APP_DIR" bash "$APP_DIR/deploy/worker-vm/env.sh"
 
 echo "==> Worker services (two lanes on one VM: youtube + content)"
 # Two processes so a heavy content.analyze (STT/vision, minutes) never blocks the flood of
@@ -125,7 +125,7 @@ sudo systemctl restart stepd-worker-youtube.service stepd-worker-content.service
 
 # On-demand 모드 (IDLE_SHUTDOWN_SEC > 0) · pending 잡 == 0 이 지속되면 VM shutdown.
 # Cloud Scheduler → /api/admin/worker-vm/wake → gcloud compute instances start 로 재부팅.
-# gebd.detect 는 별 VM (GPU · deploy/gebd-vm.sh) · content/youtube 잡만 감시.
+# gebd.detect 는 별 VM (GPU · deploy/gebd/vm.sh) · content/youtube 잡만 감시.
 if [ "${IDLE_SHUTDOWN_SEC}" != "0" ]; then
   echo "==> Auto-shutdown daemon (idle ${IDLE_SHUTDOWN_SEC}s)"
   sudo tee /usr/local/bin/worker-idle-shutdown.sh >/dev/null <<'EOF'

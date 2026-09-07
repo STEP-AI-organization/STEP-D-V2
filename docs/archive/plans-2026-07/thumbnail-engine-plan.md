@@ -295,7 +295,7 @@ core/thumbnail/                          # NEW · 패키지 (파일 여러 개)
   ├── contrast.py                        # WCAG 대비 계산·자동 보정
   └── __main__.py                        # CLI: python -m core.thumbnail --recommendation-id X
 
-assets/thumbnail-fonts/                  # ✓ 완료 · Pretendard/Noto Sans/Serif KR
+assets/thumbnail/fonts/                  # ✓ 완료 · Pretendard/Noto Sans/Serif KR
 assets/thumbnail-stickers/               # NEW · SVG 스티커 라이브러리 (Phase 3)
 apps/server/src/content-pipeline.ts      # 편집 · thumbnail 스테이지 추가
 apps/server/src/index.ts                 # 편집 · POST /api/recommendations/:id/thumbnails/regenerate
@@ -462,7 +462,7 @@ interface ThumbnailVariant {
 
 Phase 1 착수 전 확인 필요:
 - [x] 로컬 워커 GPU 상태 확인 (rembg CPU/DirectML 결정 · CUDA 대신 DML 확인 완료)
-- [x] `assets/thumbnail-fonts/` 폰트 파일 다운로드 (61MB · gitignore + 다운스크립트)
+- [x] `assets/thumbnail/fonts/` 폰트 파일 다운로드 (61MB · gitignore + 다운스크립트)
 - [x] 로컬 워커 rembg 설치 · 179MB 모델 캐시 완료 (~/.u2net/)
 - [ ] `stepd-media` GCS 경로 규칙 확정 (제안: `analysis/{mediaId}/thumbnails/{shortId}/{variantId}_{ratio}.png`)
 - [ ] Web 클립 카드 레이아웃 (기존 프레임 스냅샷 자리 확보)

@@ -56,7 +56,9 @@ admin/         STEP D Admin — 플랫폼 관리 콘솔 (Vite+React SPA). 회사
                → Vercel 독립 배포 · admin.stepd.stepai.kr · superadmin 세션 필수
                (구 STEP D Lab 은 2026-08-10 제거 — /api/lab/* 라우트도 함께 삭제)
 deploy/        cloud.sh(표준 배포: status|server|worker|gebd|migrate|all) · deploy-web.ps1(Vercel)
-               · gebd/(Dockerfile.slim · vm-startup.sh · run_long_v3.sh) · worker-vm.sh
+               · **머신별 폴더**(2026-09-07): gebd/(GPU VM) · worker-vm/(GCE CPU VM)
+                 · naver-pc/(윈도우2) — 어느 스크립트가 어느 머신 건지 이름만으로 안 갈렸다.
+                 지도는 [deploy/README.md](deploy/README.md)
 docs/          ops(현황·운영) / plans(계획) / reference / research / prototypes / archive
 ```
 
