@@ -645,34 +645,32 @@ export default function CreditsPage() {
       {dialog === "ledger" && (
         <BillingDialog title="크레딧 내역" subtitle="최근 거래 목록입니다." onClose={close} maxWidth={640}>
           {!state || state.ledger.length === 0 ? (
-            <div
-              className="sd-ph grid min-h-[100px] place-items-center rounded-[6px] px-6 text-center"
-              style={{ border: "1px dashed var(--sd-border)" }}
-            >
+            <div className="grid min-h-[100px] place-items-center rounded-xl px-6 text-center text-xs text-[var(--color-text-muted)] bg-[var(--color-bg-input)]/60">
               {state ? "아직 내역이 없습니다" : "불러오는 중…"}
             </div>
           ) : (
-            <div className="flex flex-col gap-1">
+            /* 원본은 줄마다 테두리를 두르지 않고 **구분선 목록**이다(divide-y · font-mono).
+               박스로 두르면 같은 다이얼로그 안 인보이스 목록과도 모양이 갈린다. */
+            <div className="divide-y divide-[var(--color-border-subtle)]/40 font-mono">
               {state.ledger.map((l) => (
-                <div
-                  key={l.id}
-                  className="flex flex-wrap items-center gap-3 rounded-[4px] px-2 py-1.5"
-                  style={{ border: "1px solid var(--sd-border)" }}
-                >
-                  <span className="sd-mono w-[108px] shrink-0 text-[10.5px]" style={{ color: "var(--sd-mut)" }}>
+                <div key={l.id} className="flex flex-wrap items-center gap-3 py-2.5">
+                  <span className="w-[108px] shrink-0 text-[11px] text-[var(--color-text-muted)]">
                     {l.occurredAt?.slice(0, 16).replace("T", " ")}
                   </span>
-                  <span className="min-w-[160px] flex-1 truncate text-[11.5px]" style={{ color: "var(--sd-fg)" }}>
+                  <span className="min-w-[160px] flex-1 truncate font-sans text-xs font-medium text-[var(--color-text-primary)]">
                     {reasonLabel(l.reason)}
                     {l.note ? ` · ${l.note}` : ""}
                   </span>
                   {/* 금액·크레딧은 항상 같은 폭의 칸에 우측 정렬 — 조건부로 빼면 줄마다 컬럼이 어긋난다. */}
-                  <span className="sd-mono w-[88px] shrink-0 text-right text-[10.5px]" style={{ color: "var(--sd-mut)" }}>
+                  <span className="w-[88px] shrink-0 text-right text-[11px] font-bold text-[var(--color-text-muted)]">
                     {l.amountKrw != null ? WON(l.amountKrw) : ""}
                   </span>
                   <span
-                    className="sd-mono w-[56px] shrink-0 text-right text-[12.5px]"
-                    style={{ color: l.delta >= 0 ? "var(--sd-ok)" : "var(--sd-fg)" }}
+                    className={`w-[56px] shrink-0 text-right text-xs font-bold ${
+                      l.delta >= 0
+                        ? "text-emerald-600 dark:text-emerald-400"
+                        : "text-[var(--color-text-primary)]"
+                    }`}
                   >
                     {l.delta >= 0 ? "+" : ""}{l.delta.toLocaleString("ko-KR")}
                   </span>
@@ -698,10 +696,10 @@ export default function CreditsPage() {
           {canManageBilling && (
             <div className="mb-3 flex flex-col gap-2">
               <div>
-                <div className="text-[11.5px] font-medium" style={{ color: "var(--sd-label)" }}>
+                <div className="text-xs font-bold text-[var(--color-text-primary)]">
                   구매자 정보
                 </div>
-                <p className="mt-0.5 text-[11px]" style={{ color: "var(--sd-mut)" }}>
+                <p className="mt-0.5 text-[11px] leading-relaxed text-[var(--color-text-muted)]">
                   카드사(KG이니시스)가 결제할 때마다 요구하는 값입니다 — 카드와 함께 저장되어
                   다음부터는 다시 입력하지 않습니다.
                 </p>
@@ -776,7 +774,11 @@ export default function CreditsPage() {
           onClose={close}
           maxWidth={440}
           footer={
-            <button type="button" className="sd-btn sd-btn-primary ml-auto" onClick={close}>
+            <button
+              type="button"
+              className="ml-auto px-5 py-2.5 rounded-full bg-[#1C60FF] hover:bg-blue-600 text-white text-xs font-bold transition-colors cursor-pointer border-none"
+              onClick={close}
+            >
               완료
             </button>
           }
@@ -786,7 +788,7 @@ export default function CreditsPage() {
               value={buyerName}
               onChange={(e) => setBuyerName(e.target.value)}
               placeholder="구매자 이름 (필수)"
-              className="sd-input w-full"
+              className={PILL_INPUT}
               aria-label="구매자 이름"
             />
           </SettingField>
@@ -796,7 +798,7 @@ export default function CreditsPage() {
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               placeholder="영수증 받을 이메일 (필수)"
-              className="sd-input w-full"
+              className={PILL_INPUT}
               aria-label="구매자 이메일"
             />
           </SettingField>
@@ -806,12 +808,12 @@ export default function CreditsPage() {
               value={phone}
               onChange={(e) => setPhone(e.target.value)}
               placeholder="휴대폰번호 (필수)"
-              className="sd-input w-full"
+              className={PILL_INPUT}
               aria-label="구매자 휴대폰번호"
             />
           </SettingField>
           {(buyerName || email || phone) && !canPay && (
-            <p className="text-[10.5px]" style={{ color: "var(--sd-danger-strong)" }}>
+            <p className="text-[10.5px] text-rose-600 dark:text-rose-400">
               {!nameOk
                 ? "구매자 이름을 입력하세요."
                 : !emailOk
@@ -819,7 +821,7 @@ export default function CreditsPage() {
                   : "휴대폰번호를 확인하세요 — 010으로 시작하는 휴대폰만 등록됩니다 (예: 01012345678)."}
             </p>
           )}
-          <p className="text-[11px]" style={{ color: "var(--sd-mut)" }}>
+          <p className="text-[11px] text-[var(--color-text-muted)]">
             크레딧 단가: {price != null ? `${WON(price)} · 부가세 별도` : "미설정"} — 단가는 서버 설정
             (<code>CREDIT_PRICE_KRW</code>)이라 여기서 바꿀 수 없습니다.
           </p>
@@ -835,36 +837,31 @@ export default function CreditsPage() {
           maxWidth={640}
         >
           {!invoiceList || invoiceList.invoices.length === 0 ? (
-            <div
-              className="sd-ph grid min-h-[100px] place-items-center rounded-[6px] px-6 text-center"
-              style={{ border: "1px dashed var(--sd-border)" }}
-            >
+            <div className="grid min-h-[100px] place-items-center rounded-xl px-6 text-center text-xs text-[var(--color-text-muted)] bg-[var(--color-bg-input)]/60">
               아직 결제된 내역이 없습니다
             </div>
           ) : (
-            <div className="flex flex-col gap-1">
+            /* 크레딧 내역과 **같은 꼴**이다(divide-y · font-mono) — 원본이 두 목록을 같은
+               언어로 그린다. 한쪽만 박스로 두르면 다이얼로그를 오갈 때 모양이 튄다. */
+            <div className="divide-y divide-[var(--color-border-subtle)]/40 font-mono">
               {invoiceList.invoices.map((inv) => (
-                <div
-                  key={inv.id}
-                  className="flex flex-wrap items-center gap-3 rounded-[4px] px-2 py-1.5"
-                  style={{ border: "1px solid var(--sd-border)" }}
-                >
-                  <span className="sd-mono w-[76px] shrink-0 text-[10.5px]" style={{ color: "var(--sd-mut)" }}>
+                <div key={inv.id} className="flex flex-wrap items-center gap-3 py-2.5">
+                  <span className="w-[76px] shrink-0 text-[11px] text-[var(--color-text-muted)]">
                     {inv.paidAt.slice(0, 10)}
                   </span>
-                  <span className="sd-mono w-[150px] shrink-0 truncate text-[11px]" style={{ color: "var(--sd-fg)" }} title={inv.number}>
+                  <span className="w-[150px] shrink-0 truncate text-[11px] font-bold text-[var(--color-text-primary)]" title={inv.number}>
                     {inv.number}
                   </span>
-                  <span className="min-w-[120px] flex-1 truncate text-[11.5px]" style={{ color: "var(--sd-fg)" }}>
+                  <span className="min-w-[120px] flex-1 truncate font-sans text-xs font-medium text-[var(--color-text-primary)]">
                     {inv.description}
                     {inv.origin === "auto" ? " · 자동 충전" : ""}
                   </span>
-                  <span className="sd-mono w-[80px] shrink-0 text-right text-[11.5px]" style={{ color: "var(--sd-fg)" }}>
+                  <span className="w-[80px] shrink-0 text-right text-xs font-bold text-[var(--color-text-primary)]">
                     {WON(inv.amountKrw)}
                   </span>
                   <button
                     type="button"
-                    className="sd-btn shrink-0"
+                    className="shrink-0 px-4 py-1.5 rounded-full border border-[var(--color-border-subtle)] bg-[var(--color-bg-input)] hover:bg-[var(--color-bg-card-hover)] text-[var(--color-text-primary)] text-[11px] font-semibold cursor-pointer transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
                     disabled={pdfBusy !== null}
                     onClick={() => void savePdf(inv.id)}
                   >
@@ -897,7 +894,7 @@ function Banner({ title, hint }: { title: string; hint?: string }) {
 function SettingField({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div>
-      <div className="mb-1 text-[10.5px] font-medium" style={{ color: "var(--sd-mut)" }}>{label}</div>
+      <div className="mb-1 text-[11px] font-bold text-[var(--color-text-muted)]">{label}</div>
       {children}
     </div>
   );
