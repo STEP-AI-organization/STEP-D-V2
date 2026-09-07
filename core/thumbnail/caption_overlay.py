@@ -81,10 +81,13 @@ ROLE_STYLES: dict[str, dict] = {
 LANG_FONT_FALLBACK: dict[str, dict[str, str]] = {
     "vi": {
         "BlackHanSans-Regular.ttf": "NotoSansKR-Black.otf",   # 헤드라인 — 가장 굵은 대체
-        "Jua-Regular.ttf": "GothicA1-Black.ttf",
-        "DoHyeon-Regular.ttf": "GothicA1-Black.ttf",
-        "Gugi-Regular.ttf": "GothicA1-Black.ttf",
-        # GowunBatang-Bold · Pretendard-* · GothicA1-* · NotoSans*/Serif* 는 100% 라 그대로 둔다
+        "Jua-Regular.ttf": "NotoSansKR-Bold.otf",
+        "DoHyeon-Regular.ttf": "NotoSansKR-Bold.otf",
+        "Gugi-Regular.ttf": "NotoSansKR-Bold.otf",
+        "GowunBatang-Bold.ttf": "NotoSerifKR-Black.otf",   # 세리프 느낌을 지킨다
+        # ⚠️ 대체 대상은 **download-fonts.ps1 이 실제로 받는 6종 안에서만** 고른다.
+        #    로컬에 있다고 쓰면(예: GothicA1) 그 파일을 안 받는 환경에서 두부(□)가 된다.
+        #    받는 6종은 Pretendard 3 · NotoSansKR 2 · NotoSerifKR 1 이고 전부 베트남어 100%.
     },
 }
 

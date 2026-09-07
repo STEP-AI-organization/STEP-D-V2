@@ -113,13 +113,39 @@ describe("다국어 — 허용 글꼴이 그 언어를 실제로 덮는가 (cmap
     }
   }
 
-  it("썸네일 대체표가 가리키는 폰트도 베트남어를 덮는다 (Pillow 는 폴백을 안 한다)", () => {
+  it("썸네일 대체표가 가리키는 폰트도 베트남어를 덮는다 (Pillow 는 폴백을 안 한다)", (t) => {
     const py = read("core/thumbnail/caption_overlay.py");
     const block = py.slice(py.indexOf("LANG_FONT_FALLBACK"), py.indexOf("def _font_for"));
-    const targets = [...block.matchAll(/:\s*"([\w-]+\.(?:ttf|otf))"/g)].map((m) => m[1]);
-    assert.ok(targets.length >= 3, "베트남어 대체표가 비었다 — 검은고딕·주아가 그대로 나간다");
+    // 베트남어를 0% 덮는 폰트(cmap 실측)는 **전부** 대체표에 있어야 한다.
+    // 개수를 세는 것보다 이게 정확한 불변식이다 — 하나라도 빠지면 그 프리셋만 두부가 된다.
+    for (const bad of ["BlackHanSans-Regular.ttf", "Jua-Regular.ttf", "DoHyeon-Regular.ttf", "Gugi-Regular.ttf"]) {
+      assert.ok(block.includes(`"${bad}"`),
+        `${bad} 가 베트남어 대체표에 없다 — 이 폰트는 베트남어를 0% 덮어 두부(□)가 찍힌다`);
+    }
+    const targets = [...new Set([...block.matchAll(/:\s*"([\w-]+\.(?:ttf|otf))"/g)].map((m) => m[1]))];
+    assert.ok(targets.length > 0, "대체 대상 폰트를 못 찾았다 — 대체표 형식이 바뀌었나");
+
+    // ⚠️ 썸네일 폰트는 **일부러 gitignore 돼 있다**(61MB · .gitignore:25). 로컬에서
+    // `scripts/ops/download-fonts.ps1` 로 받는 구조라 CI 체크아웃에는 파일이 없다.
+    // 그래서 파일이 있을 때만 cmap 을 검사한다 — 없다고 CI 를 빨갛게 만들면
+    // 사람이 관문 전체를 무시하게 된다(CLAUDE.md 원칙).
+    //
+    // 대신 **이름이 목록에 있는지는 항상 검사한다.** 오타나 없는 파일명을 대체표에 적으면
+    // Pillow 가 두부(□)를 그리는데, 그건 폰트가 깔린 환경에서도 안 잡히는 종류의 실수다.
+    const readme = read("assets/thumbnail-fonts/README.md");
+    for (const f of targets) {
+      assert.ok(readme.includes(f),
+        `대체 폰트 ${f} 가 assets/thumbnail-fonts/README.md 의 다운로드 목록에 없다 — ` +
+        "받아지지 않는 파일을 가리키면 Pillow 가 두부(□)를 그린다");
+    }
+
+    const present = targets.filter((f) => fs.existsSync(path.join(ROOT, "assets/thumbnail-fonts", f)));
+    if (present.length === 0) {
+      t.skip("썸네일 폰트가 로컬에 없다 (gitignore · download-fonts.ps1 로 받는다) — cmap 검사 생략");
+      return;
+    }
     const chars = charsFor("vi");
-    for (const f of new Set(targets)) {
+    for (const f of present) {
       const cov = coverage(fs.readFileSync(path.join(ROOT, "assets/thumbnail-fonts", f)));
       const missing = chars.filter((c) => !cov.has(c));
       assert.equal(missing.length, 0, `썸네일 대체 폰트 ${f} 가 베트남어 ${missing.length}자를 못 그린다 — 두부(□)가 찍힌다`);
