@@ -14,18 +14,61 @@
  *    렌더러가 IPC 를 직접 쳐서 우회한다 — 설계 문서의 "신뢰 경계" 절 참조.
  */
 import { constants, type Dirent } from "node:fs";
-import { access, copyFile, mkdir, readdir, realpath, rename, rm, stat, statfs } from "node:fs/promises";
+import {
+  access, copyFile, mkdir, readFile, readdir, realpath, rename, rm, stat, statfs, writeFile,
+} from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 
 import { fingerprintFile, fingerprintsMatch, type FileFingerprint } from "../transfer/fingerprint.js";
 import {
-  DEFAULT_POLICY, clampSegment, isInsideRoot, pathTooLong, resolveFolder,
-  type TargetRef, type WorkspacePolicy,
+  DEFAULT_POLICY, MIN_WORKSPACE_FREE_BYTES, clampSegment, isInsideRoot, pathTooLong,
+  pickWorkspaceDrive, resolveFolder,
+  type DriveInfo, type TargetRef, type WorkspacePolicy,
 } from "./policy.js";
 
 /** 복사 중인 파일이 사는 곳. 이름으로 알아볼 수 있어야 기동 시 청소가 된다. */
 const TMP_DIR = ".stepd-tmp";
+
+/** 앱이 고른 자리를 적어 두는 파일. 사용자 프로필에 둔다(몇 바이트다). */
+const CHOICE_FILE = path.join(".stepd", "workspace.json");
+
+/**
+ * 고정 디스크 목록. **PowerShell 로 종류까지 본다**(`DriveType=3` = 로컬 고정 디스크).
+ *
+ * 드라이브 문자를 A~Z 훑는 방법도 있지만 그러면 **USB·네트워크 드라이브가 섞인다** —
+ * 거기에 작업 공간을 만들면 뽑는 순간 회차가 통째로 사라지고, 네트워크면 렌더가 기어간다.
+ * 종류를 정확히 가르는 값이 필요해서 한 번의 PowerShell 호출을 감수한다(기동 시 1회).
+ *
+ * 실패하면 빈 배열 — 부르는 쪽이 홈으로 떨어진다. 조회 실패로 앱이 안 뜨면 안 된다.
+ */
+export async function listFixedDrives(): Promise<DriveInfo[]> {
+  if (process.platform !== "win32") return [];
+  try {
+    const { execFile } = await import("node:child_process");
+    const out = await new Promise<string>((resolve, reject) => {
+      execFile("powershell", [
+        "-NoProfile", "-NonInteractive", "-Command",
+        "Get-CimInstance Win32_LogicalDisk -Filter 'DriveType=3'"
+        + " | Select-Object DeviceID,FreeSpace,Size | ConvertTo-Json -Compress",
+      ], { timeout: 10_000, windowsHide: true }, (err, stdout) => (err ? reject(err) : resolve(stdout)));
+    });
+    const raw = JSON.parse(out.trim() || "[]");
+    const rows = Array.isArray(raw) ? raw : [raw];
+    return rows
+      .filter((r) => r && typeof r.DeviceID === "string")
+      .map((r) => ({
+        // `C:` → `C:\` — 루트 경로 꼴로 맞춘다(path.join 이 뒤를 이어 붙인다).
+        root: path.join(String(r.DeviceID), path.sep),
+        freeBytes: Number(r.FreeSpace ?? 0),
+        totalBytes: Number(r.Size ?? 0),
+      }))
+      // 드라이브 문자 순 — 동률일 때 실행마다 자리가 바뀌지 않게(pickWorkspaceDrive 주석).
+      .sort((a, b) => a.root.localeCompare(b.root));
+  } catch {
+    return [];
+  }
+}
 
 export interface WorkspaceInfo {
   rootPath: string;
@@ -47,15 +90,65 @@ export class WorkspaceManager {
   private readonly rootBase: string;
   /** realpath 로 푼 루트. 판정의 기준점이라 한 번만 구해 캐시한다. */
   private realRoot: string | null = null;
+  /** 고른(또는 기억한) 콘텐츠 디스크. null 이면 아직 안 골랐다 = 홈. */
+  private chosenBase: string | null = null;
+  /** 드라이브 조회 — 테스트가 갈아끼운다(실제 PowerShell 을 안 부르게). */
+  private readonly drives: () => Promise<DriveInfo[]>;
 
-  constructor(policy: WorkspacePolicy = DEFAULT_POLICY, homeDir = os.homedir()) {
+  constructor(
+    policy: WorkspacePolicy = DEFAULT_POLICY,
+    homeDir = os.homedir(),
+    drives: () => Promise<DriveInfo[]> = listFixedDrives,
+  ) {
     this.policy = policy;
     this.rootBase = homeDir;
+    this.drives = drives;
   }
 
   /** 루트 절대경로(아직 안 만들어졌을 수도 있다). */
   get rootPath(): string {
-    return path.join(this.rootBase, this.policy.rootDirName);
+    return path.join(this.chosenBase ?? this.rootBase, this.policy.rootDirName);
+  }
+
+  /**
+   * 콘텐츠를 둘 자리를 정한다. **한 번 정하면 기억한다.**
+   *
+   * ## 왜 기억하나
+   *
+   * 자리를 매번 다시 고르면, 나중에 더 큰 디스크를 꽂았을 때 작업 공간이 통째로 옮겨진
+   * 것처럼 보인다 — 그런데 전송 큐는 **절대경로**를 들고 있어서(job-store) 전부 죽는다.
+   * 편집자가 보기엔 "어제 올리던 게 다 사라졌다" 다. 그래서 첫 판단만 하고 적어 둔다.
+   *
+   * ## 순서
+   *   1. env(`STEPD_WORKSPACE_ROOT`) — 사람이 정했으면 그게 이긴다
+   *   2. 적어 둔 자리 — 있으면 그대로
+   *   3. **여유가 가장 큰 고정 디스크** — 앱은 C: 에 깔리지만 영상은 아니다.
+   *      실측(2026-09-07): C: 여유 72GB · D: 여유 3,678GB. 홈에 두면 회차 몇 개로
+   *      시스템 디스크가 차고, 그러면 앱이 아니라 PC 가 망가진다.
+   *   4. 아무것도 기준(50GB)을 못 넘으면 홈 — 그 사실은 화면이 말한다
+   */
+  async chooseBase(): Promise<{ base: string; reason: "env" | "remembered" | "drive" | "home" }> {
+    const fromEnv = (process.env.STEPD_WORKSPACE_ROOT ?? "").trim();
+    if (fromEnv) { this.chosenBase = fromEnv; return { base: fromEnv, reason: "env" }; }
+
+    const memo = path.join(this.rootBase, CHOICE_FILE);
+    try {
+      const saved = JSON.parse(await readFile(memo, "utf8")) as { base?: string };
+      if (saved?.base && typeof saved.base === "string") {
+        this.chosenBase = saved.base;
+        return { base: saved.base, reason: "remembered" };
+      }
+    } catch { /* 없으면 처음이다 */ }
+
+    const best = pickWorkspaceDrive(await this.drives());
+    const base = best?.root ?? this.rootBase;
+    this.chosenBase = base;
+    // 적어 둔다. 실패해도 계속 간다 — 다음 기동에 다시 고르면 되고, 그 사이 동작은 같다.
+    try {
+      await mkdir(path.dirname(memo), { recursive: true });
+      await writeFile(memo, JSON.stringify({ base, chosenAt: new Date().toISOString() }, null, 2), "utf8");
+    } catch { /* 기록 실패는 치명적이지 않다 */ }
+    return { base, reason: best ? "drive" : "home" };
   }
 
   /**
@@ -75,6 +168,7 @@ export class WorkspaceManager {
    * 미리 다 만들면 안 쓰는 빈 폴더가 회차 수만큼 쌓인다.
    */
   async ensureRoot(): Promise<WorkspaceInfo> {
+    if (!this.chosenBase) await this.chooseBase();
     const root = this.rootPath;
     await mkdir(root, { recursive: true });
     this.realRoot = await realpath(root);

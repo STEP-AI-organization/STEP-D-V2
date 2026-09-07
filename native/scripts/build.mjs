@@ -24,6 +24,12 @@ await Promise.all([
   }),
   build({
     ...shared,
+    entryPoints: ["src/workspace-preload.ts"],
+    outfile: "dist/workspace-preload.cjs",
+    format: "cjs",
+  }),
+  build({
+    ...shared,
     entryPoints: ["src/contract.ts"],
     outfile: "dist/contract.js",
     format: "esm",

@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8" />
+<meta http-equiv="Content-Security-Policy"
+      content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src data:;" />
+<title>내 작업공간 · STEPAISTUDIO</title>
+<style>
+  /* 원격 자산을 하나도 안 쓴다 — 이 화면의 존재 이유가 "인터넷이 없어도 뜬다" 이기 때문이다.
+     폰트도 시스템 것만 쓴다(웹폰트를 부르면 오프라인에서 글자가 늦게 뜬다). */
+  :root {
+    --bg: #14161c; --card: #1b1e26; --line: #2a2e39;
+    --fg: #e8eaf0; --mut: #9aa1b1; --accent: #4d7cff; --ok: #34d399; --warn: #fbbf24;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 13px/1.6 "Malgun Gothic", "맑은 고딕", system-ui, sans-serif;
+    padding: 20px;
+  }
+  h1 { font-size: 16px; margin: 0 0 2px; }
+  .sub { color: var(--mut); font-size: 12px; margin-bottom: 16px; }
+  .card { background: var(--card); border-radius: 12px; padding: 14px 16px; margin-bottom: 12px; }
+  .row { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; }
+  .k { color: var(--mut); font-size: 11.5px; }
+  .v { font-weight: 700; }
+  .path {
+    font-family: Consolas, "D2Coding", monospace; font-size: 12px;
+    word-break: break-all; color: var(--fg);
+  }
+  .bar { height: 6px; background: #2a2e39; border-radius: 99px; overflow: hidden; margin-top: 8px; }
+  .bar > i { display: block; height: 100%; background: var(--accent); }
+  .tag { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 99px; }
+  .ok { background: rgba(52,211,153,.15); color: var(--ok); }
+  .warn { background: rgba(251,191,36,.15); color: var(--warn); }
+  button {
+    background: #242833; color: var(--fg); border: 1px solid var(--line);
+    border-radius: 99px; padding: 6px 14px; font-size: 12px; font-weight: 700; cursor: pointer;
+  }
+  button:hover { background: #2c313e; }
+  ul { list-style: none; margin: 0; padding: 0; }
+  li { padding: 8px 0; border-top: 1px solid var(--line); font-size: 12px; }
+  li:first-child { border-top: 0; }
+  .empty { color: var(--mut); font-size: 12px; padding: 10px 0; }
+</style>
+</head>
+<body>
+  <h1>내 작업공간</h1>
+  <div class="sub">이 PC 의 상태입니다 — 인터넷이 끊겨도 보입니다.</div>
+
+  <div class="card">
+    <div class="row">
+      <span class="k">파일이 저장되는 곳</span>
+      <span id="reason" class="tag ok">—</span>
+    </div>
+    <div id="root" class="path" style="margin-top:6px">불러오는 중…</div>
+    <div id="disk"></div>
+    <div style="margin-top:12px"><button id="open">폴더 열기</button></div>
+  </div>
+
+  <div class="card">
+    <div class="row">
+      <span class="k">이 PC 에서 렌더</span>
+      <span id="render" class="tag warn">확인 중</span>
+    </div>
+    <div id="ffmpeg" class="k" style="margin-top:6px"></div>
+  </div>
+
+  <div class="card">
+    <div class="row"><span class="k">전송</span><span id="qcount" class="v">—</span></div>
+    <ul id="jobs"></ul>
+  </div>
+
+<script>
+  const $ = (id) => document.getElementById(id);
+  const gb = (n) => (n / 1024 ** 3).toFixed(1) + "GB";
+  const REASON = {
+    drive: ["여유가 가장 큰 디스크", "ok"],
+    remembered: ["처음 정한 자리", "ok"],
+    env: ["직접 지정함", "ok"],
+    // 홈으로 떨어졌다는 건 기준(50GB)을 넘는 디스크가 없었다는 뜻 — 사실대로 알린다.
+    home: ["여유 디스크 없음 · 시스템 드라이브", "warn"],
+  };
+
+  async function load() {
+    const api = window.stepdWorkspace;
+    if (!api) { $("root").textContent = "앱 브리지를 찾을 수 없습니다."; return; }
+
+    const o = await api.overview();
+    $("root").textContent = o.rootPath;
+    const [label, tone] = REASON[o.reason] ?? ["—", "ok"];
+    $("reason").textContent = label;
+    $("reason").className = "tag " + tone;
+
+    if (o.disk) {
+      const used = o.disk.totalBytes - o.disk.freeBytes;
+      const pct = o.disk.totalBytes ? Math.round((used / o.disk.totalBytes) * 100) : 0;
+      $("disk").innerHTML =
+        '<div class="row" style="margin-top:10px"><span class="k">여유 ' + gb(o.disk.freeBytes) +
+        " / 전체 " + gb(o.disk.totalBytes) + '</span><span class="k">' + pct + '% 사용</span></div>' +
+        '<div class="bar"><i style="width:' + pct + '%"></i></div>';
+    }
+
+    $("render").textContent = o.canRender ? "가능" : "서버가 굽습니다";
+    $("render").className = "tag " + (o.canRender ? "ok" : "warn");
+    $("ffmpeg").textContent = o.ffmpeg ? o.ffmpeg : "동봉 ffmpeg 을 찾지 못했습니다 — 렌더는 서버가 맡습니다.";
+
+    $("open").onclick = () => api.reveal(o.rootPath);
+    paint(await api.uploads());
+    api.subscribeUploads(paint);
+  }
+
+  function paint(jobs) {
+    const live = jobs.filter((j) => !["completed", "canceled"].includes(j.status));
+    $("qcount").textContent = live.length ? live.length + "건 진행 중" : "없음";
+    $("jobs").innerHTML = live.length
+      ? live.map((j) =>
+          "<li>" + esc(j.filename) + " — " + Math.round(j.progress * 100) + "% · " + esc(j.status) + "</li>").join("")
+      : '<li class="empty">대기 중인 전송이 없습니다.</li>';
+  }
+
+  /** 파일명이 화면을 깨지 않게. 이 창은 CSP 로 스크립트를 막아 두지만 그것과 별개다. */
+  function esc(s) {
+    return String(s).replace(/[&<>"']/g, (c) =>
+      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  }
+
+  load().catch((e) => { $("root").textContent = "상태를 읽지 못했습니다: " + e; });
+</script>
+</body>
+</html>

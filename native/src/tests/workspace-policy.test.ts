@@ -11,8 +11,9 @@ import path from "node:path";
 import { describe, it } from "node:test";
 
 import {
-  DEFAULT_POLICY, MAX_PATH, WORKSPACE_FOLDERS,
-  clampSegment, extensionAllowed, isInsideRoot, pathTooLong, resolveFolder, safeSegment,
+  DEFAULT_POLICY, MAX_PATH, MIN_WORKSPACE_FREE_BYTES, WORKSPACE_FOLDERS,
+  clampSegment, extensionAllowed, isInsideRoot, pathTooLong, pickWorkspaceDrive,
+  resolveFolder, safeSegment,
 } from "../workspace/policy.js";
 
 describe("이름 정규화", () => {
@@ -138,5 +139,42 @@ describe("정책", () => {
   it("기본 정책은 자동 들여오기가 켜져 있다 — 꺼진 채로 배포되면 아무도 못 올린다", () => {
     assert.equal(DEFAULT_POLICY.autoImportExternal, true);
     assert.equal(DEFAULT_POLICY.rootDirName, "STEPAISTUDIO Workspace");
+  });
+});
+
+describe("콘텐츠 디스크 고르기", () => {
+  const GB = 1024 ** 3;
+  const d = (root: string, freeGB: number, totalGB = freeGB * 2) =>
+    ({ root, freeBytes: freeGB * GB, totalBytes: totalGB * GB });
+
+  it("**여유가 가장 큰 고정 디스크**를 고른다 — 앱은 C: 지만 영상은 아니다", () => {
+    // 개발 PC 실측 모양: C: 72GB · D: 3,678GB
+    const best = pickWorkspaceDrive([d("C:\\", 72), d("D:\\", 3678)]);
+    assert.equal(best?.root, "D:\\", "시스템 디스크를 골랐다 — 회차 몇 개로 C: 가 찬다");
+  });
+
+  it("기준(50GB)에 못 미치면 아무것도 안 고른다 — 조용히 꽉 찬 디스크를 고르지 않는다", () => {
+    assert.equal(pickWorkspaceDrive([d("C:\\", 10), d("D:\\", 30)]), null);
+    assert.equal(pickWorkspaceDrive([]), null);
+  });
+
+  it("경계값을 포함한다 — 딱 50GB 면 쓸 수 있다", () => {
+    assert.equal(pickWorkspaceDrive([d("E:\\", 50)])?.root, "E:\\");
+    assert.equal(pickWorkspaceDrive([d("E:\\", 49)]), null);
+  });
+
+  it("동률이면 앞의 것 — 실행마다 자리가 바뀌면 큐의 절대경로가 죽는다", () => {
+    // 호출부가 드라이브 문자 순으로 준다. 같은 여유일 때 순서가 흔들리면
+    // 어제 올리던 작업이 "파일 없음" 으로 떨어진다.
+    const a = pickWorkspaceDrive([d("D:\\", 500), d("E:\\", 500)]);
+    assert.equal(a?.root, "D:\\");
+  });
+
+  it("기준을 인자로 낮출 수 있다 — 시험·소형 PC 용", () => {
+    assert.equal(pickWorkspaceDrive([d("C:\\", 10)], 5 * GB)?.root, "C:\\");
+  });
+
+  it("기본 기준은 50GB 다 — 60분 원본을 복사해 들이므로 이보다 적으면 몇 회차에 막힌다", () => {
+    assert.equal(MIN_WORKSPACE_FREE_BYTES, 50 * GB);
   });
 });

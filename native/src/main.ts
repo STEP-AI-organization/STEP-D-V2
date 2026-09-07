@@ -20,8 +20,8 @@ import {
 } from "electron";
 
 import { isNativeImportTarget, type NativeUploadJob } from "./contract.js";
-import { WorkspaceManager } from "./workspace/manager.js";
-import { applyBundledRenderEnv, resolveBundled } from "./render/bundled-ffmpeg.js";
+import { WorkspaceManager, listFixedDrives } from "./workspace/manager.js";
+import { applyBundledRenderEnv, canRenderLocally, resolveBundled } from "./render/bundled-ffmpeg.js";
 import { JobStore, type SecretCodec } from "./transfer/job-store.js";
 import { ElectronTransferNetwork } from "./transfer/network-electron.js";
 import { EncryptionUnavailableError } from "./transfer/errors.js";
@@ -59,7 +59,12 @@ function trustedOrigin(): string {
   return new URL(webUrl()).origin;
 }
 
-function assertTrusted(event: IpcMainInvokeEvent): void {
+function assertTrusted(event: IpcMainInvokeEvent, allowWorkspaceWindow = false): void {
+  // 내 작업공간 창은 `file://` 이라 origin 검사를 통과하지 못한다. 그렇다고 origin 규칙을
+  // 느슨하게 하면 **웹뷰 방어가 같이 약해진다** — 대신 그 창의 webContents 인지 **동일성**으로
+  // 본다. 흉내 낼 수 없는 비교다. 읽기 채널에서만 켠다(쓰기 채널은 여전히 웹 전용).
+  if (allowWorkspaceWindow && workspaceWindow && !workspaceWindow.isDestroyed()
+      && event.sender === workspaceWindow.webContents) return;
   const senderUrl = event.senderFrame?.url || event.sender.getURL();
   let origin = "";
   try { origin = new URL(senderUrl).origin; } catch { /* rejected below */ }
@@ -189,6 +194,44 @@ function protocolArg(argv: string[]): string | undefined {
   return argv.find((arg) => isOurProtocol(arg));
 }
 
+/**
+ * **내 작업공간 창** — 웹뷰와 갈라진 자리. 존재 이유는 하나다:
+ * **인터넷이 끊겨도 내 PC 상태를 볼 수 있어야 한다.**
+ *
+ * 지금 앱은 화면을 원격(프로덕션 웹)에서 받아 오므로 네트워크가 끊기면 아무것도 안 뜬다 —
+ * 업로드는 로컬에서 계속 도는데 편집자는 볼 방법이 없어 "멈췄나?" 하고 앱을 끈다.
+ * 그래서 이 화면은 **앱 안에 든 로컬 HTML** 이고 원격 자산을 하나도 안 쓴다.
+ *
+ * 웹뷰용 preload 를 재사용하지 않는다 — 그건 신뢰 origin 에서만 브리지를 여는데 이 창은
+ * `file://` 이다. 대신 **읽기 전용 표면**(workspace-preload)만 따로 준다.
+ */
+let workspaceWindow: BrowserWindow | null = null;
+
+function openWorkspaceWindow(): void {
+  if (workspaceWindow && !workspaceWindow.isDestroyed()) {
+    workspaceWindow.show();
+    workspaceWindow.focus();
+    return;
+  }
+  workspaceWindow = new BrowserWindow({
+    width: 560,
+    height: 720,
+    title: "내 작업공간 · STEPAISTUDIO",
+    backgroundColor: "#14161c",
+    webPreferences: {
+      preload: path.join(__dirname, "workspace-preload.cjs"),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+  workspaceWindow.setMenuBarVisibility(false);
+  // 이 창은 **우리 로컬 파일만** 띄운다. 어디로도 못 나간다.
+  workspaceWindow.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  workspaceWindow.webContents.on("will-navigate", (event) => event.preventDefault());
+  void workspaceWindow.loadFile(path.join(app.getAppPath(), "assets", "workspace.html"));
+  workspaceWindow.on("closed", () => { workspaceWindow = null; });
+}
+
 function createWindow(browserSession: Electron.Session): BrowserWindow {
   const win = new BrowserWindow({
     width: 1440,
@@ -271,6 +314,7 @@ function rebuildTrayMenu(): void {
   tray.setToolTip(active.length ? `STEPAISTUDIO · 전송 ${active.length}건` : "STEPAISTUDIO");
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: "STEPAISTUDIO 열기", click: () => { mainWindow?.show(); mainWindow?.focus(); } },
+    { label: "내 작업공간", click: () => openWorkspaceWindow() },
     { type: "separator" },
     {
       label: "모든 전송 일시정지",
@@ -338,7 +382,8 @@ ${info.rootPath} 안으로 먼저 가져와야 합니다.`,
 
 function registerIpc(): void {
   ipcMain.handle("native:upload:list", (event) => {
-    assertTrusted(event);
+    // 읽기 채널 — 내 작업공간 창도 본다(그 창의 존재 이유가 이것이다).
+    assertTrusted(event, true);
     return engine!.list();
   });
   ipcMain.handle("native:upload:enqueue", async (event, input: unknown) => {
@@ -387,6 +432,34 @@ function registerIpc(): void {
     await assertManagedPath(relinkPath);
     return engine!.relink(id, relinkPath);
   });
+  ipcMain.handle("native:workspace:overview", async (event) => {
+    assertTrusted(event, true);
+    const chosen = await workspace!.chooseBase();
+    const info = await workspace!.info();
+    const disk = (await listFixedDrives())
+      .find((d) => info.rootPath.toLowerCase().startsWith(d.root.toLowerCase())) ?? null;
+    return {
+      rootPath: info.rootPath,
+      ready: info.ready,
+      reason: chosen.reason,
+      folders: info.folders,
+      disk: disk ? { freeBytes: disk.freeBytes, totalBytes: disk.totalBytes } : null,
+      canRender: canRenderLocally(),
+      ffmpeg: process.env.STEPD_FFMPEG ?? null,
+    };
+  });
+  ipcMain.handle("native:workspace:reveal", async (event, target: unknown) => {
+    assertTrusted(event, true);
+    const p = String(target ?? "");
+    // ⚠️ **다시 본다.** 창이 우리 것이라도 렌더러가 보낸 값은 입력이다 — 작업 공간 밖을
+    //    열어 주면 탐색기로 아무 폴더나 여는 통로가 된다.
+    const info = await workspace!.info();
+    if (p !== info.rootPath && !(await workspace!.isManaged(p))) {
+      throw new Error("작업 공간 밖은 열 수 없습니다.");
+    }
+    shell.showItemInFolder(p);
+  });
+
   ipcMain.handle("native:upload:clear-completed", (event) => {
     assertTrusted(event);
     return engine!.clearCompleted();
