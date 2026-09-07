@@ -69,6 +69,7 @@ def analyze(
     program_context: dict | None = None,
     media_id: str = "",
     title_refs: list[str] | None = None,
+    translate_langs: list[str] | None = None,
 ) -> dict:
     """Run all stages (skipping checkpointed ones). Returns the analysis dict.
     `cast_registry` (프로그램 출연자 목록) normalizes on-screen name captions into a
@@ -205,7 +206,7 @@ def analyze(
     # 원본 refined 는 건드리지 않으므로 이후 스테이지(beat·추천·검색)는 종전과 완전히 같다.
     run_translate_out(
         refined=refined, out_dir=out_dir, step=step, timed=timed,
-        cast_registry=cast_registry,
+        cast_registry=cast_registry, langs=translate_langs,
     )
 
     # 2.5) 얼굴 검출·클러스터링 (2026-07-22 신설 · 2026-07-29 STT 후 병렬).

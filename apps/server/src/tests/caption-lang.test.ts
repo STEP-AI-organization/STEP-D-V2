@@ -251,16 +251,26 @@ describe("다국어 — 번역 게이트와 원문 보존", () => {
   const stages = read("core/analyze_stages.py");
   const translateOut = read("core/stt/translate_out.py");
 
-  it("TRANSLATE_OUT_LANGS 미설정이면 아무것도 안 한다 (게이트 기본 OFF)", () => {
+  it("언어의 정본은 자동배포 계획이다 — env 스위치를 쓰지 않는다", () => {
+    // 켜는 곳이 둘이면 반드시 한쪽만 켜지고 그 실패가 조용하다("번역만 쌓이고 안 쓰임"
+    // 또는 "계획은 베트남어인데 한국어가 나감"). 계획이 곧 스위치면 그 어긋남이 성립 안 한다.
     const fn = stages.slice(stages.indexOf("def run_translate_out"), stages.indexOf("def run_fast_mode"));
-    assert.match(fn, /TRANSLATE_OUT_LANGS/);
-    assert.match(fn, /if not raw:\s*\n\s*return \{\}/,
-      "빈값에서 즉시 반환하지 않으면 안 시킨 번역이 돈다 (회차마다 ₩20 × 언어)");
+    assert.doesNotMatch(fn, /os\.environ/, "번역이 다시 env 스위치로 갔다");
+    assert.match(fn, /if not langs:\s*\n\s*return \{\}/,
+      "빈 목록에서 즉시 반환하지 않으면 안 시킨 번역이 돈다 (회차마다 ₩20 × 언어)");
+
+    const pipeline = read("apps/server/src/pipeline/content-pipeline.ts");
+    assert.match(pipeline, /async function resolveTranslateLangs/,
+      "서버가 계획에서 언어를 모으지 않으면 core 에 넘길 값이 없다");
+    assert.match(pipeline, /if \(\(r as any\)\.enabled === false\) continue;/,
+      "꺼진 계획까지 세면 안 돌 계획 때문에 회차마다 번역비를 쓴다");
+    assert.match(pipeline, /args\.push\("--translate-langs"/);
   });
 
   it("모르는 언어 코드는 걸러진다 — 오타가 LLM 호출로 이어지지 않게", () => {
     const fn = stages.slice(stages.indexOf("def run_translate_out"), stages.indexOf("def run_fast_mode"));
-    assert.match(fn, /c for c in codes if c in LANGS/);
+    assert.match(fn, /if c in LANGS/,
+      "모르는 코드를 안 거르면 오타가 그대로 LLM 호출로 간다");
   });
 
   it("나가는 번역은 원본 세그먼트를 mutate 하지 않는다", () => {

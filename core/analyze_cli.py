@@ -17,6 +17,7 @@ def main() -> None:
         print("Usage: python -m core.analyze <video> [--out <dir>] [--shorts N] "
               "[--genre auto|variety|talk|drama|sports|news|music|documentary] "
               "[--profile <profile.json>] [--cast <registry.json>] [--title-refs <titles.json>] "
+              "[--translate-langs vi] "
               "[--channels youtube_shorts,instagram_reels,smr] [--no-resume] [--fast]")
         sys.exit(1)
 
@@ -66,6 +67,14 @@ def main() -> None:
         except Exception as e:
             print(f"   (말투 참조 로드 실패, 무시: {str(e)[:80]})")
 
+    # 해외 배포용 자막 (--translate-langs vi[,ja]) — **자동배포 계획이 정한 언어**를 서버가
+    # 넘긴다(env 스위치가 아니다 · content-pipeline.resolveTranslateLangs). 인자가 없으면
+    # 번역을 아예 안 한다. 모르는 코드는 run_translate_out 이 걸러낸다.
+    translate_langs = None
+    if "--translate-langs" in sys.argv:
+        translate_langs = [c.strip() for c in
+                           sys.argv[sys.argv.index("--translate-langs") + 1].split(",") if c.strip()]
+
     # Optional destination filter (--channels a,b) → per-channel fit matrix. Default: all.
     channels = None
     if "--channels" in sys.argv:
@@ -84,7 +93,8 @@ def main() -> None:
 
     result = analyze(video, out_dir, shorts_n=n, genre=genre, resume=resume, profile=profile,
                      cast_registry=cast_registry, channels=channels, fast=fast,
-                     program_context=program_context, media_id=media_id, title_refs=title_refs)
+                     program_context=program_context, media_id=media_id, title_refs=title_refs,
+                     translate_langs=translate_langs)
     cast = result.get("cast") or {}
     print(f"\n=== 요약 ===")
     print(f"  {len(result['transcript'])} 자막 · {len(result['scenes'])} 장면 · {len(result['shorts'])} 쇼츠 · "

@@ -317,26 +317,25 @@ def run_translate_out(
     step: Callable[[str], None],
     timed: Callable[[str, float], None],
     cast_registry: list[dict] | None = None,
+    langs: list[str] | None = None,
 ) -> dict[str, int]:
     """한국어 자막을 해외 배포용 언어로 내보낸다 — `refined.{lang}.json` 을 언어마다 낳는다
     (2026-09-07 · 1차 베트남어). run_translate 와 방향이 반대이고, **원본을 치환하지 않는다.**
 
-    env `TRANSLATE_OUT_LANGS` 로 대상 언어를 지정한다(쉼표 구분 · 예 `vi`).
-    **미설정이면 아무것도 안 한다** — 게이트 기본 OFF. 오타·빈값도 전부 OFF.
+    `langs` 는 **자동배포 계획이 정한 언어**를 서버가 넘긴 것이다(`--translate-langs`).
+    env 스위치가 아니다 — 켜는 곳이 둘이면 반드시 한쪽만 켜지고 그 실패가 조용하다.
+    비어 있으면 아무것도 안 한다.
 
     이미 만들어 둔 파일이 있고 세그먼트 수가 맞으면 재사용한다(체크포인트 재개 시 LLM 콜 0회).
     한 언어가 실패해도 나머지 언어와 한국어 원본은 그대로 간다.
     """
-    import os
-    raw = (os.environ.get("TRANSLATE_OUT_LANGS") or "").strip()
-    if not raw:
+    if not langs:
         return {}
     from core.stt.translate_out import LANGS, load_existing, translate_out
 
-    codes = [c.strip() for c in raw.split(",") if c.strip()]
-    codes = [c for c in codes if c in LANGS]
+    codes = [c for c in dict.fromkeys(str(c).strip() for c in langs) if c in LANGS]
     if not codes:
-        step(f"  (해외 자막: 지원하지 않는 언어 지정 '{raw}' — 건너뜀)")
+        step(f"  (해외 자막: 지원하지 않는 언어 {langs} — 건너뜀)")
         return {}
 
     names = [

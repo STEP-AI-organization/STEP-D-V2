@@ -14,10 +14,16 @@
  * — 다음 폴링에서 이어서 본다.
  *
  * ## 전자동의 안전장치 (승인 절차가 아니라 '손 뗄 수 있는 장치')
- *   1. FACTORY_ENABLED  명시적 truthy 일 때만 ingest 를 받는다
+ *   1. API 키 스코프    factory:write 없는 키는 라우트에 못 들어온다 (api-keys.ts)
  *   2. dryRun           클립까지 만들고 업로드는 안 한다
- *   3. 일일 상한        프로그램당 하루 N개 (기본 5) — 같은 영상 20번 올라가는 사고 방지
+ *   3. 일일·시간당 상한  프로그램당 하루 5개·시간당 ingest 20건 — 같은 영상이 수백 번
+ *                       들어오는 사고 방지 (FACTORY_DEFAULTS · policy 로 덮을 수 있다)
  *   4. private 업로드   → 유예 후 공개 전환 (factory.publicize). 되돌리기 = 전환 취소
+ *   5. YOUTUBE_UPLOAD_ENABLED  실업로드 자체를 막는 최종 게이트(upload-gate.ts)
+ *
+ * 예전엔 여기 `FACTORY_ENABLED` 킬 스위치가 하나 더 있었는데, API 키가 이미 같은 일을
+ * 하고(키 없으면 503) 실업로드는 업로드 게이트가 막으므로 **중복이었다** — 켜야 할 env 가
+ * 많을수록 "하나만 켜서 안 도는" 실패가 늘어난다(2026-09-07 정리).
  */
 import { creditBalance, getEntity, putEntity, listEntities, listMedia } from "../db-pg.ts";
 import { checkCredits } from "../billing/credits.ts";
@@ -31,31 +37,41 @@ import { FONT_FAMILIES } from "../media/overlay-canvas.ts";
 import { type CaptionLang, DEFAULT_LANG, isForeign, langOf, snapFont } from "../media/caption-lang.ts";
 import { SHORTFORM_MAX_SEC, autoRenderChannel, shortformSegmentTooLong } from "../publish/channel-rules.ts";
 
-const TRUTHY = new Set(["1", "true", "yes", "on"]);
+/**
+ * 공장 기본 정책 — 예전엔 `FACTORY_DAILY_CAP`·`FACTORY_PUBLICIZE_DELAY_MIN` env 였다.
+ *
+ * **env 는 시크릿과 인프라 위치에만 쓴다**(사용자 2026-09-07). 제품 동작을 env 로 두면
+ * 값이 어디 있는지 아무도 모르고, 프로덕션에서 바꾸려면 재배포가 필요하며, 오타의
+ * 실패 모드가 조용하다. 하루 상한·유예 시간은 **잡마다 policy 로 넘길 수 있다**
+ * (`FactoryPolicy` · ingest 요청 본문) — 그게 값이 실제로 사는 자리다.
+ */
+export const FACTORY_DEFAULTS = {
+  /** 프로그램당 하루 자동 배포 상한 — 같은 영상이 20번 올라가는 사고를 막는 값. */
+  dailyCap: 5,
+  /** private 업로드 후 공개 전환까지 유예(분). 이 사이엔 URL 이 있어도 남이 못 본다. */
+  publicizeDelayMin: 10,
+  /** 시간당 ingest 상한 — 붙이는 쪽 루프 버그로 같은 영상이 수백 번 들어오는 것을 막는다. */
+  hourlyIngestLimit: 20,
+} as const;
 
-/** 킬 스위치. 잘못된 env 의 실패 모드가 "안 돌아감"이지 "실수로 배포됨"이 아니다. */
-export function factoryEnabled(): boolean {
-  return TRUTHY.has(String(process.env.FACTORY_ENABLED ?? "").trim().toLowerCase());
-}
-
-/** 프로그램당 하루 몇 개까지 자동 배포할 것인가. */
-export function dailyCap(): number {
-  const n = Number(process.env.FACTORY_DAILY_CAP);
-  return Number.isFinite(n) && n > 0 ? n : 5;
+/** 이 잡의 하루 상한. policy 로 준 값이 있으면 그게 이긴다. */
+export function dailyCap(policy?: FactoryPolicy): number {
+  const v = policy?.dailyCap;
+  return typeof v === "number" && Number.isFinite(v) && v > 0 ? v : FACTORY_DEFAULTS.dailyCap;
 }
 
 /**
- * private 업로드 후 공개 전환까지 유예(ms). 이 사이엔 URL 이 있어도 남이 못 본다.
+ * private → public 전환 유예(ms). policy 로 준 값이 있으면 그게 이긴다.
  *
- * ⚠️ 빈 문자열을 그냥 Number() 에 넣으면 0 이 되어 **유예가 사라진다**(즉시 공개).
- * 안전장치가 조용히 없어지는 방향이라, 빈값·공백은 미설정과 같게 기본값으로 되돌린다.
- * 명시적인 "0" 은 그대로 존중한다 — 유예 없음은 의도할 수 있는 선택이다.
+ * ⚠️ **명시적인 0 은 존중한다**(유예 없음은 의도할 수 있는 선택). 다만 undefined·빈값·문자열은
+ * 기본값으로 되돌린다 — 안전장치가 조용히 사라지는 방향으로 실패하면 안 된다.
  */
-export function publicizeDelayMs(): number {
-  const raw = String(process.env.FACTORY_PUBLICIZE_DELAY_MIN ?? "").trim();
-  if (raw === "") return 10 * 60_000;
-  const n = Number(raw);
-  return (Number.isFinite(n) && n >= 0 ? n : 10) * 60_000;
+export function publicizeDelayMs(policy?: FactoryPolicy): number {
+  // ⚠️ `Number(null)` 은 0 이다 — 그냥 Number() 에 넣으면 null 이 **"즉시 공개"** 가 된다.
+  // 안전장치가 조용히 사라지는 방향이라 숫자 타입일 때만 값으로 인정한다.
+  const v = policy?.publicizeDelayMin;
+  const n = typeof v === "number" && Number.isFinite(v) && v >= 0 ? v : FACTORY_DEFAULTS.publicizeDelayMin;
+  return n * 60_000;
 }
 
 export type FactoryState =
@@ -92,6 +108,10 @@ export interface FactoryPolicy {
   publishPublic?: boolean;
   /** 렌더 템플릿 강제 지정 (자동배포 화면에서 선택). 미지정이면 장르 자동 선택. */
   templateId?: string;
+  /** 프로그램당 하루 배포 상한. 미지정 = FACTORY_DEFAULTS.dailyCap(5). */
+  dailyCap?: number;
+  /** private → public 전환 유예(분). **0 이면 즉시 공개**(의도적 선택으로 존중). */
+  publicizeDelayMin?: number;
 }
 
 export interface FactoryJob {
@@ -456,7 +476,7 @@ export async function advance(factoryJobId: string): Promise<{ job: FactoryJob; 
 
     // ── 쇼츠 선별 → 자동 채택 ────────────────────────────────────────────────
     case "adopting": {
-      const cap = dailyCap();
+      const cap = dailyCap(job.policy);
       const already = await publishedToday(job.programId);
       if (already >= cap) {
         // 상한은 실패가 아니다 — 사람이 보고 풀 수 있게 hold 로 남긴다.
@@ -577,7 +597,7 @@ export async function advance(factoryJobId: string): Promise<{ job: FactoryJob; 
       job = await save({ ...job, state: "publicizing" });
 
       await enqueue("factory.publicize", { factoryJobId: job.id },
-        { dedupeKey: `factory.publicize:${job.id}`, delayMs: publicizeDelayMs() });
+        { dedupeKey: `factory.publicize:${job.id}`, delayMs: publicizeDelayMs(job.policy) });
       return { job, retryInMs: null };
     }
 

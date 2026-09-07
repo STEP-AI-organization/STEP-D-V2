@@ -7,44 +7,33 @@
  */
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import { afterEach, describe, it } from "node:test";
+import path from "node:path";
+import { describe, it } from "node:test";
 
-import { autoEditorState, dailyCap, factoryEnabled, mediaNeedsPreparation, publicizeDelayMs } from "../pipeline/factory.ts";
+import { autoEditorState, dailyCap, FACTORY_DEFAULTS, mediaNeedsPreparation, publicizeDelayMs } from "../pipeline/factory.ts";
 
-const KEYS = ["FACTORY_ENABLED", "FACTORY_DAILY_CAP", "FACTORY_PUBLICIZE_DELAY_MIN"] as const;
-const original = Object.fromEntries(KEYS.map((k) => [k, process.env[k]]));
+describe("공장은 env 로 켜지 않는다", () => {
+  // 2026-09-07: FACTORY_ENABLED 를 없앴다. API 키가 이미 같은 일을 하고(키 없으면 503)
+  // 실업로드는 upload-gate 가 막으므로 중복이었다 — 켜야 할 env 가 많을수록
+  // "하나만 켜서 안 도는" 실패가 늘어난다. env 는 시크릿·인프라 위치에만 쓴다.
+  const src = fs.readFileSync(
+    path.join(import.meta.dirname, "..", "pipeline", "factory.ts"), "utf-8");
 
-afterEach(() => {
-  for (const k of KEYS) {
-    const v = original[k];
-    if (v === undefined) delete process.env[k];
-    else process.env[k] = v;
-  }
-});
-
-function setEnv(key: (typeof KEYS)[number], value: string | undefined): void {
-  if (value === undefined) delete process.env[key];
-  else process.env[key] = value;
-}
-
-describe("공장 킬 스위치", () => {
-  it("미설정이면 꺼져 있다", () => {
-    setEnv("FACTORY_ENABLED", undefined);
-    assert.equal(factoryEnabled(), false);
+  it("factory.ts 가 제품 동작을 env 에서 읽지 않는다", () => {
+    assert.doesNotMatch(src, /process\.env\.FACTORY_/,
+      "공장 동작이 다시 env 로 갔다 — 하루 상한·유예는 FACTORY_DEFAULTS·policy 가 정본이다");
   });
 
-  it("명시적 truthy 에서만 켜진다", () => {
-    for (const v of ["1", "true", "yes", "on", "TRUE", " On "]) {
-      setEnv("FACTORY_ENABLED", v);
-      assert.equal(factoryEnabled(), true, `${JSON.stringify(v)} 는 ON`);
-    }
-  });
-
-  it("오타·유사값은 꺼진다 — 실수로 자동 배포가 도는 쪽으로 기울지 않는다", () => {
-    for (const v of ["", " ", "ture", "y", "enabled", "0", "false", "off", "no"]) {
-      setEnv("FACTORY_ENABLED", v);
-      assert.equal(factoryEnabled(), false, `${JSON.stringify(v)} 는 OFF`);
-    }
+  it("라우트에도 킬 스위치가 남아 있지 않다", () => {
+    const index = fs.readFileSync(
+      path.join(import.meta.dirname, "..", "index.ts"), "utf-8");
+    assert.doesNotMatch(index, /factoryEnabled\(\)|FACTORY_ENABLED/);
+    // 대신 **워크스페이스 API 키 스코프**가 방어선이다(구 x-factory-key 를 대체했다).
+    const keys = fs.readFileSync(
+      path.join(import.meta.dirname, "..", "auth", "api-keys.ts"), "utf-8");
+    assert.ok(
+      keys.includes('/^\\/api\\/factory\\/ingest$/, scope: "factory:write"'),
+      "ingest 가 API 키 스코프를 안 요구하면 킬 스위치를 없앤 만큼 구멍이 된다");
   });
 });
 
@@ -95,70 +84,39 @@ describe("무편집 렌더 기본 프리셋", () => {
   });
 });
 
-describe("일일 상한", () => {
-  it("미설정이면 5", () => {
-    setEnv("FACTORY_DAILY_CAP", undefined);
-    assert.equal(dailyCap(), 5);
+describe("일일 상한 — policy 가 정본", () => {
+  it("policy 없으면 기본값", () => {
+    assert.equal(dailyCap(), FACTORY_DEFAULTS.dailyCap);
+    assert.equal(dailyCap({}), FACTORY_DEFAULTS.dailyCap);
   });
 
-  it("숫자를 그대로 쓴다", () => {
-    setEnv("FACTORY_DAILY_CAP", "12");
-    assert.equal(dailyCap(), 12);
+  it("policy 숫자를 그대로 쓴다", () => {
+    assert.equal(dailyCap({ dailyCap: 12 }), 12);
   });
 
   it("0·음수·비숫자는 기본값으로 되돌린다 — 상한 없음으로 해석되면 안 된다", () => {
-    // "0" 을 '무제한'으로 읽는 순간 사고가 무한히 커진다. 기본값(5)로 떨어뜨린다.
-    for (const v of ["0", "-1", "abc", "", " "]) {
-      setEnv("FACTORY_DAILY_CAP", v);
-      assert.equal(dailyCap(), 5, `${JSON.stringify(v)} 는 기본값이어야 한다`);
+    // "0" 을 '무제한'으로 읽는 순간 사고가 무한히 커진다.
+    for (const v of [0, -1, NaN, "abc", null, undefined]) {
+      assert.equal(dailyCap({ dailyCap: v as never }), FACTORY_DEFAULTS.dailyCap,
+        `${JSON.stringify(v)} 는 기본값이어야 한다`);
     }
   });
 });
 
-describe("공개 전환 유예", () => {
-  it("미설정이면 10분", () => {
-    setEnv("FACTORY_PUBLICIZE_DELAY_MIN", undefined);
-    assert.equal(publicizeDelayMs(), 10 * 60_000);
+describe("공개 전환 유예 — policy 가 정본", () => {
+  it("policy 없으면 10분", () => {
+    assert.equal(publicizeDelayMs(), FACTORY_DEFAULTS.publicizeDelayMin * 60_000);
+    assert.equal(publicizeDelayMs({}), FACTORY_DEFAULTS.publicizeDelayMin * 60_000);
   });
 
   it("0 은 허용한다 — '유예 없음'은 의도할 수 있는 선택이다", () => {
-    setEnv("FACTORY_PUBLICIZE_DELAY_MIN", "0");
-    assert.equal(publicizeDelayMs(), 0);
+    assert.equal(publicizeDelayMs({ publicizeDelayMin: 0 }), 0);
   });
 
   it("음수·비숫자는 기본값으로 — 과거 시각으로 즉시 공개되는 일이 없어야 한다", () => {
-    for (const v of ["-5", "abc", ""]) {
-      setEnv("FACTORY_PUBLICIZE_DELAY_MIN", v);
-      assert.equal(publicizeDelayMs(), 10 * 60_000, `${JSON.stringify(v)} 는 기본값`);
+    for (const v of [-5, NaN, "abc", null]) {
+      assert.equal(publicizeDelayMs({ publicizeDelayMin: v as never }),
+        FACTORY_DEFAULTS.publicizeDelayMin * 60_000, `${JSON.stringify(v)} 는 기본값`);
     }
-  });
-});
-
-describe("외부 API 원본 준비 대기", () => {
-  it("AENA가 finalize 직후 ingest해도 duration=0 placeholder는 분석하지 않는다", () => {
-    assert.equal(mediaNeedsPreparation({
-      path: "gs://stepd-upload-seoul/uploads/m_aena.mp4",
-      durationSec: 0,
-    }), true);
-  });
-
-  it("YouTube 다운로드 중인 원본도 같은 ingest 대기 상태를 쓴다", () => {
-    assert.equal(mediaNeedsPreparation({
-      path: "youtube:https://youtu.be/example",
-      durationSec: 3600,
-    }), true);
-  });
-
-  it("media.prepare가 길이와 운영 경로를 채우면 공장 분석을 진행할 수 있다", () => {
-    assert.equal(mediaNeedsPreparation({
-      path: "gs://stepd-media/uploads/m_aena.mp4",
-      durationSec: 3598.4,
-    }), false);
-  });
-
-  it("공장 배선이 준비 전 분석 대신 media.prepare를 복구 큐잉한다", () => {
-    const source = fs.readFileSync(new URL("../pipeline/factory.ts", import.meta.url), "utf8");
-    assert.match(source, /if \(mediaNeedsPreparation\(existing as any\)\)[\s\S]*?enqueue\("media\.prepare"/);
-    assert.match(source, /case "ingesting":[\s\S]*?mediaNeedsPreparation\(media\)[\s\S]*?enqueue\("media\.prepare"/);
   });
 });

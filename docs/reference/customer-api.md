@@ -119,13 +119,16 @@ YouTube URL이 아니라 AENA가 가진 영상 파일은 아래 순서로 넣는
 |---|---|---|
 | `AUTH_REQUIRED` | off | 다테넌트면 **반드시 1** (아니면 기동 시 503) |
 | `CREDIT_PRICE_KRW` | — | 크레딧 단가. 미설정이면 충전 결제창이 안 열린다 |
-| `FACTORY_ENABLED` | off | 공장 킬 스위치 |
-| `FACTORY_DAILY_CAP` | 5 | 프로그램당 하루 자동 배포 상한 |
-| `FACTORY_HOURLY_LIMIT` | 20 | 워크스페이스당 시간당 ingest 상한 |
-| `FACTORY_PUBLICIZE_DELAY_MIN` | 10 | private → public 전환 유예(분) |
 | `FACTORY_RETURN_ORIGINS` | — | 채널 연결 후 복귀 오리진 allowlist |
 
-(구 `FACTORY_API_KEY` 는 제거됐다 — 남아 있어도 아무 효과 없다.)
+**공장 동작은 env 가 아니다** (2026-09-07). 하루 상한(5)·공개 유예(10분)·시간당 ingest
+상한(20)은 `factory.ts` 의 `FACTORY_DEFAULTS` 가 정본이고, 잡마다 ingest 요청의
+`policy.dailyCap`·`policy.publicizeDelayMin` 으로 덮을 수 있다. env 는 시크릿과 인프라
+위치에만 쓴다 — 제품 동작을 env 로 두면 값이 어디 있는지 아무도 모르고 바꾸려면 재배포가 필요하다.
+
+(구 `FACTORY_API_KEY`·`FACTORY_ENABLED` 는 제거됐다. 인증은 **워크스페이스 API 키 스코프**
+`factory:write` 가 하고, 실업로드는 `YOUTUBE_UPLOAD_ENABLED` 게이트가 막는다 —
+킬 스위치가 그 둘과 중복이었다.)
 
 ---
 

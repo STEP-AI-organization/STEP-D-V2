@@ -23,7 +23,7 @@
  * worker's venv (core/.venv/bin/python); locally it defaults to core/.venv310.
  */
 import { spawn } from "node:child_process";
-import { CAPTION_LANGS, DEFAULT_LANG } from "../media/caption-lang.ts";
+import { CAPTION_LANGS, DEFAULT_LANG, isForeign, langOf } from "../media/caption-lang.ts";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -35,7 +35,7 @@ import {
   getMedia, getContentAnalysis, saveContentAnalysis, saveTranscript, saveEpisodeCast, listProgramCast,
   listHookTitleRefs,
   getChannelPointProfile, listVideoComments,
-  getPool, getEntity, putEntity, upsertSearchSegments,
+  getPool, getEntity, putEntity, upsertSearchSegments, listAutomationRules,
   recordUsage,
   addCreditEntry,
   creditBalance,
@@ -594,6 +594,7 @@ function runAnalyze(
   genre?: string,
   mediaId?: string,
   titleRefsPath?: string,
+  translateLangs?: string[],
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     const args = ["-u", "-m", "core.analyze", videoPath, "--out", outDir];
@@ -610,6 +611,9 @@ function runAnalyze(
     // 있어 사용자가 EditProgramDialog에서 지정하는 게 정답. 씬 청크·shot 임계·recommend 팩 결정.
     if (genre === "variety" || genre === "drama") args.push("--genre", genre);
     if (fast) args.push("--fast");  // 자막만으로 빠른 추천 (시각 분석 스킵)
+    // 해외 배포용 자막 — **자동배포 계획이 정한다.** 이 회차를 쓰는 계획들의 layout.lang 을
+    // 모아 넘긴다(env 스위치가 아니다). 계획에 언어가 없으면 인자 자체가 없어 번역이 안 돈다.
+    if (translateLangs?.length) args.push("--translate-langs", translateLangs.join(","));
     // 2026-07-23: Windows에서 python native crash(0xC0000005) 가 tsx 워커 프로세스까지 kill
     // 하는 문제 관찰 (job object 공유로 인한 cascade). detached:true 로 별도 process group
     // 만들어 격리. stderr도 inherit → pipe로 signal 전파 차단.
@@ -1426,10 +1430,42 @@ function readCheckpoint<T>(work: string, name: string): T | undefined {
 }
 
 /**
+ * 이 회차를 해외로 내보내는 자동배포 계획들이 요구하는 언어 — 2026-09-07.
+ *
+ * **언어의 정본은 자동배포 계획(`automation_rule.layout.lang`)이다.** 분석은 그걸 읽어
+ * 필요한 번역만 만든다. 전역 env 스위치를 두지 않는 이유: 켜는 곳이 둘이 되면 반드시
+ * 한쪽만 켜지고, 그 실패가 조용하다("번역만 쌓이고 안 쓰임" 또는 "계획은 베트남어인데
+ * 한국어가 나감"). 계획이 곧 스위치면 그 어긋남이 성립하지 않는다.
+ *
+ * 꺼진 계획(`enabled=false`)은 세지 않는다 — 안 돌 계획 때문에 회차마다 번역비를 쓸 이유가 없다.
+ */
+async function resolveTranslateLangs(episodeId: unknown): Promise<string[]> {
+  const epId = String(episodeId ?? "");
+  if (!epId) return [];
+  const episode = await getEntity<any>("episode", epId);
+  const programId = String(episode?.programId ?? "");
+  if (!programId) return [];
+
+  const rules = await listAutomationRules();
+  const langs = new Set<string>();
+  for (const r of rules) {
+    if ((r as any).enabled === false) continue;
+    // 다중 프로그램(programIds)이 정본이고, 없으면 단수(programId) 폴백 — 계획 저장과 같은 규칙.
+    const programs: string[] = Array.isArray((r as any).programIds) && (r as any).programIds.length
+      ? (r as any).programIds.map(String)
+      : [String((r as any).programId ?? "")];
+    if (!programs.includes(programId)) continue;
+    const lang = langOf((r as any).layout?.lang);
+    if (isForeign(lang)) langs.add(lang.code);
+  }
+  return [...langs];
+}
+
+/**
  * core 가 남긴 해외 배포용 자막(`refined.{lang}.json`)을 언어별로 걷는다 — 2026-09-07.
  *
- * `run_translate_out`(core/analyze_stages.py)이 `TRANSLATE_OUT_LANGS` 에 지정된 언어마다
- * 한 벌씩 남긴다. **언어를 안 켰으면 파일이 없고, 그러면 빈 객체가 나와 저장 형태가 종전과
+ * `run_translate_out`(core/analyze_stages.py)이 `--translate-langs` 로 받은 언어마다 한 벌씩
+ * 남긴다. **해외 배포 계획이 없으면 파일이 없고, 그러면 빈 객체가 나와 저장 형태가 종전과
  * 같다.** 한 언어가 실패해도 나머지와 한국어 원본은 그대로 간다(파일 단위로 독립).
  *
  * ⚠️ 파일 목록을 스캔하지 않고 **알려진 언어 코드만** 확인한다 — 작업 디렉토리에 뭐가 있든
@@ -1811,9 +1847,23 @@ export async function runContentAnalyze(
       console.warn(`[worker] content.analyze ${mediaId}: 말투 참조 조회 실패, 무시:`, e);
     }
 
+    // 해외 배포용 자막을 어느 언어로 만들지는 **자동배포 계획이 정한다**(env 스위치가 아니다).
+    // 이 회차의 프로그램을 쓰는 살아있는 계획들의 layout.lang 을 모은다 — 계획이 베트남어로
+    // 내보내게 돼 있으면 분석이 알아서 베트남어 자막을 같이 만들어 둔다.
+    //
+    // 이렇게 두면 설정할 곳이 **계획 하나**다. 예전엔 env 로 번역을 따로 켜야 해서
+    // 한쪽만 켜면 "번역만 쌓이고 안 쓰이거나"·"계획은 베트남어인데 한국어가 나가거나" 였다.
+    const translateLangs = await resolveTranslateLangs(media.episodeId).catch((e) => {
+      console.warn(`[worker] content.analyze ${mediaId}: 배포 언어 조회 실패, 한국어만:`, e);
+      return [] as string[];
+    });
+    if (translateLangs.length) {
+      console.log(`[worker] content.analyze ${mediaId}: 해외 자막 ${translateLangs.join(",")} (자동배포 계획이 요구)`);
+    }
+
     const runStartedAt = Date.now();
     try {
-      await runAnalyze(videoPath, work, onProgress, profilePath, castPath, fast, programContextPath, pipelineGenre, mediaId, titleRefsPath);
+      await runAnalyze(videoPath, work, onProgress, profilePath, castPath, fast, programContextPath, pipelineGenre, mediaId, titleRefsPath, translateLangs);
     } catch (e) {
       const analysisPath = path.join(work, "analysis.json");
       if (!fs.existsSync(analysisPath)) throw e;

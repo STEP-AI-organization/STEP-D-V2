@@ -433,7 +433,7 @@ import {
   createJob as createFactoryJob,
   findByIdempotencyKey as findFactoryJobByKey,
   validateTargets as validateFactoryTargets,
-  factoryEnabled,
+  FACTORY_DEFAULTS,
   TERMINAL_STATES,
 } from "./pipeline/factory.ts";
 
@@ -11828,7 +11828,7 @@ app.options("/api/factory/*", (c) => {
  * 같은 영상이 수백 번 들어오면 API 비용과 채널이 같이 망가진다.
  */
 async function ingestRateExceeded(): Promise<boolean> {
-  const limit = Number(process.env.FACTORY_HOURLY_LIMIT) || 20;
+  const limit = FACTORY_DEFAULTS.hourlyIngestLimit;
   const since = Date.now() - 60 * 60 * 1000;
   const jobs = await listEntities<any>("factoryJob");
   return jobs.filter((j) => (j.createdAt ?? 0) >= since).length >= limit;
@@ -11836,14 +11836,6 @@ async function ingestRateExceeded(): Promise<boolean> {
 
 /** 진입. 즉시 202 로 jobId 만 준다 — 완주까지 수십 분 걸리므로 붙잡지 않는다. */
 app.post("/api/factory/ingest", async (c) => {
-  // 킬 스위치. 잘못된 env 의 실패 모드가 "안 돌아감"이지 "실수로 배포됨"이 아니게.
-  if (!factoryEnabled()) {
-    return c.json({
-      error: "factory_disabled",
-      message: "FACTORY_ENABLED 가 켜져 있지 않습니다.",
-    }, 503);
-  }
-
   const b = await c.req.json<{
     sourceUrl?: string; programId?: string; targets?: string[];
     policy?: Record<string, unknown>; idempotencyKey?: string;
@@ -11880,7 +11872,7 @@ app.post("/api/factory/ingest", async (c) => {
   if (await ingestRateExceeded()) {
     return c.json({
       error: "rate_limited",
-      message: "시간당 ingest 상한에 걸렸습니다 (FACTORY_HOURLY_LIMIT).",
+      message: "시간당 ingest 상한에 걸렸습니다.",
     }, 429);
   }
 
@@ -11932,9 +11924,6 @@ app.get("/api/factory/targets", async (c) => {
  * 사고는 내부에서 난다.
  */
 app.post("/api/media/:id/factory-run", async (c) => {
-  if (!factoryEnabled()) {
-    return c.json({ error: "factory_disabled", message: "FACTORY_ENABLED 가 꺼져 있습니다." }, 503);
-  }
   const mediaId = c.req.param("id");
   const media = await getMedia(mediaId);
   if (!media) return c.json({ error: "media_not_found" }, 404);

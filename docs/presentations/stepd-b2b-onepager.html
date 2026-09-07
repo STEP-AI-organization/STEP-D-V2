@@ -200,10 +200,10 @@ queued → ingesting → analyzing(실측 16분) → adopting → rendering
 <table>
   <thead><tr><th>장치</th><th>env / 파라미터</th><th>기본</th><th>막는 사고</th></tr></thead>
   <tbody>
-    <tr><td>킬 스위치</td><td><code>FACTORY_ENABLED</code></td><td class="warn">off</td><td>잘못된 env의 실패 방향이 "안 돌아감"이지 "실수로 배포됨"이 아니게</td></tr>
+    <tr><td>API 키 스코프</td><td><code>factory:write</code></td><td class="warn">없으면 403</td><td>스코프 없는 키는 라우트에 못 들어온다 — 외부 연동의 방어선</td></tr>
     <tr><td>드라이런</td><td><code>policy.dryRun</code></td><td>false</td><td>클립까지 만들고 업로드 안 함 — <strong>첫 연동은 이걸로 검증</strong></td></tr>
-    <tr><td>일일 상한</td><td><code>FACTORY_DAILY_CAP</code></td><td>5 / 프로그램</td><td>버그로 같은 영상이 20번 올라가는 사고</td></tr>
-    <tr><td>유예 공개</td><td><code>FACTORY_PUBLICIZE_DELAY_MIN</code></td><td>10분</td><td>private 업로드 후 유예 — 그 사이가 되돌릴 시간</td></tr>
+    <tr><td>일일 상한</td><td><code>policy.dailyCap</code></td><td>5 / 프로그램</td><td>버그로 같은 영상이 20번 올라가는 사고</td></tr>
+    <tr><td>유예 공개</td><td><code>policy.publicizeDelayMin</code></td><td>10분</td><td>private 업로드 후 유예 — 그 사이가 되돌릴 시간</td></tr>
   </tbody>
 </table>
 <p style="font-size:13.5px"><strong>배포 채널은 YouTube만 실동작.</strong> Meta·TikTok은 앱 심사 대기(일정을 우리가 못 정함), 네이버는 한국 IP가 필요해 사무실 상시 PC 전용. <strong>ENA 제안 시 YouTube로 한정해서 말할 것.</strong></p>
@@ -231,7 +231,7 @@ queued → ingesting → analyzing(실측 16분) → adopting → rendering
 <h2><span class="n">07</span> ENA 온보딩 체크리스트</h2>
 <div class="callout"><strong>순서가 중요하다.</strong> env(1번)를 건너뛰고 워크스페이스를 만들면 <code>AUTH_REQUIRED</code> 검사에 걸려 <strong>서버가 503으로 죽는다.</strong> 프로그램·채널(4번)을 건너뛰고 키를 주면 공장이 <code>programId</code>가 없어 404를 낸다.</div>
 <ol class="steps">
-  <li><strong>프로덕션 env 선행 확인</strong> — <code>AUTH_REQUIRED=1</code> · <code>CREDIT_PRICE_KRW</code> · <code>FACTORY_ENABLED=1</code> · <code>FACTORY_RETURN_ORIGINS</code>에 AENA 오리진 · PortOne 키 4종 · <code>YOUTUBE_UPLOAD_ENABLED</code> 시점 결정</li>
+  <li><strong>프로덕션 env 선행 확인</strong> — <code>AUTH_REQUIRED=1</code> · <code>CREDIT_PRICE_KRW</code> · <code>FACTORY_RETURN_ORIGINS</code>에 AENA 오리진 · PortOne 키 4종 · <code>YOUTUBE_UPLOAD_ENABLED</code> 시점 결정</li>
   <li><strong>회사 개설</strong> — admin 콘솔: 이름 <code>KT ENA</code> · kind <code>api</code> · owner 이메일 · 초기 테스트 크레딧 (한 트랜잭션)</li>
   <li><strong>결제 수단</strong> — owner 세션으로 웹 로그인 → 카드 등록 → 충전 <span style="color:var(--dim)">(API 키로는 불가, 의도)</span></li>
   <li><strong>프로그램·채널 준비</strong> — ENA 워크스페이스 <em>안에서</em> 프로그램 생성(캐스트 등록 포함) + YouTube 채널 연결(<strong>게시 모드</strong>)</li>
