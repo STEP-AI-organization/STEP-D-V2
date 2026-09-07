@@ -284,8 +284,17 @@ API 키(`api-keys.ts`). **화이트리스트(`API_KEY_ROUTES`)에 올린 라우�
 | `GET /api/tiktok/accounts` | 연결된 TikTok 계정 목록 | → `{ accounts }` | `fetchTikTokAccounts` |
 | `DELETE /api/tiktok/accounts/:publicId` | 계정 연결 해제 | → `{ ok }` | `deleteTikTokAccount` |
 
-> TikTok 연동 3대 함정: 미승인 앱은 **sandbox 자격증명**을 써야 하고, `username` 필드를 스코프에
-> 넣으면 스코프 전체가 깨지며, 시크릿은 v1=prod / v2=sandbox로 갈린다.
+> **2026-09-07 최종 승인 → 프로덕션 자격증명으로 전환.** `stepd-tiktok-client-key`/`-secret` 의
+> `latest`(=v3)가 프로덕션이고 sandbox 버전(v2)은 비활성이다. 프로덕션 키는 `aw`, sandbox 키는
+> `sb` 로 시작해 **접두사만 봐도 갈린다**(값 전체를 찍을 필요 없다).
+>
+> ⚠️ 전환으로 **sandbox 시절 발급된 토큰은 전부 무효다** — 갱신이 `TikTokTokenRevokedError` 로
+> 떨어져 계정이 `disconnected` 로 파킹되고, 사용자가 화면에서 다시 연결해야 한다.
+> 리다이렉트 URI(`https://stepd.stepai.kr/api/proxy/api/tiktok/oauth/callback`)는 **앱마다 따로**
+> 등록한다 — sandbox 앱에 등록한 것이 프로덕션 앱으로 따라오지 않는다.
+>
+> 남은 함정: `username` 필드는 `user.info.profile` 스코프 전용이라 `user.info.basic` 토큰으로
+> 같이 요청하면 그 필드만 빠지는 게 아니라 **응답 전체가 `scope_not_authorized` 로 실패한다.**
 
 ## 네이버 클립 — 계정 · 세션 · 자격증명 · 카테고리
 
