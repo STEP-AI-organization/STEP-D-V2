@@ -41,7 +41,7 @@ interface NativeTransferContextValue {
 const NativeTransferContext = createContext<NativeTransferContextValue | null>(null);
 
 export function NativeTransferProvider({ children }: { children: ReactNode }) {
-  const { refresh } = useAppData();
+  const { refresh, programs } = useAppData();
   const { toast } = useToast();
   const [available, setAvailable] = useState(false);
   const [jobs, setJobs] = useState<NativeUploadJob[]>([]);
@@ -92,19 +92,53 @@ export function NativeTransferProvider({ children }: { children: ReactNode }) {
     return fn(bridge);
   }, []);
 
+  /**
+   * **작업 공간을 거쳐 올린다** (관리형 작업 공간 3단계).
+   *
+   * 외부 파일(다운로드 폴더·바탕화면 등)은 앱이 작업 공간으로 **복사한 뒤** 그 경로로
+   * 큐에 넣는다. 원본은 그대로 둔다. 이미 작업 공간 안이면 복사하지 않는다.
+   *
+   * ⚠️ **구버전 앱을 안 깨뜨린다.** `importToWorkspace` 가 없는 앱(아직 재설치 안 한 PC)
+   * 에서는 예전처럼 파일을 바로 큐에 넣는다 — 계약 `version` 을 안 올린 이유가 이것이다.
+   * 새 흐름은 앱을 먼저 깔아야 돈다(native/CLAUDE.md 의 배포 순서).
+   *
+   * ⚠️ 폴더 이름은 **프로그램 이름**이다(id 가 아니라). `p_37bd8872` 로 만들면 사람이
+   * 탐색기에서 찾을 수 없고, 그러면 이 기능의 목적이 사라진다.
+   */
+  const enqueueViaWorkspace = useCallback(
+    async (bridge: StepdNativeBridge, file: File, request: NativeUploadRequest): Promise<string> => {
+      if (typeof bridge.importToWorkspace === "function") {
+        const program = programs.find((p) => p.id === request.programId);
+        const episode = request.kind === "episode" && request.episodeNumber
+          ? `${request.episodeNumber}회`
+          : undefined;
+        // 회차 원본은 source/, 완성본은 delivery/ — 같은 폴더에 섞으면 무엇이 원본인지 모른다.
+        const folder = request.kind === "episode" ? "source" : "delivery";
+        await bridge.importToWorkspace(file, {
+          program: program?.title || request.programId,
+          episode,
+          folder,
+        });
+      }
+      const { jobId } = await bridge.enqueueUpload(file, request);
+      return jobId;
+    },
+    [programs],
+  );
+
   const value = useMemo<NativeTransferContextValue>(() => ({
     available,
     jobs,
     activeCount: jobs.filter((job) =>
       ["queued", "initializing", "uploading", "paused", "finalizing", "needs_attention"].includes(job.status)).length,
-    enqueueUpload: (file, request) => call((bridge) => bridge.enqueueUpload(file, request).then((r) => r.jobId)),
+    enqueueUpload: (file, request) => call((bridge) => enqueueViaWorkspace(bridge, file, request)),
     pauseUpload: (id) => call((bridge) => bridge.pauseUpload(id)),
     resumeUpload: (id) => call((bridge) => bridge.resumeUpload(id)),
     cancelUpload: (id) => call((bridge) => bridge.cancelUpload(id)),
     retryUpload: (id) => call((bridge) => bridge.retryUpload(id)),
     relinkUpload: (id, file) => call((bridge) => bridge.relinkUpload(id, file)),
     clearCompleted: () => call((bridge) => bridge.clearCompleted()),
-  }), [available, jobs, call]);
+  }), [available, jobs, call, enqueueViaWorkspace]);
 
   return <NativeTransferContext.Provider value={value}>{children}</NativeTransferContext.Provider>;
 }

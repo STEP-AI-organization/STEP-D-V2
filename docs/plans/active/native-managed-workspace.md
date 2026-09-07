@@ -1,6 +1,6 @@
 # NATIVE 관리형 작업 공간 — 설계
 
-> 상태: **설계 · 미착수** (2026-09-07)
+> 상태: **1~3단계 구현 완료 · 미배포** (2026-09-07) · 4단계부터 미착수
 > 대상: `native/` · `apps/server/src/index.ts` · `admin/` · `packages/premiere`
 > 관련: [native/CLAUDE.md](../../../native/CLAUDE.md) · [docs/ops/infra.md](../../ops/infra.md)
 
@@ -209,9 +209,9 @@ importToWorkspace(file: File, target: {
 
 | # | 무엇 | 배포 대상 | 사람이 체감하는 변화 |
 |---|---|---|---|
-| 1 | 관리형 루트 계산 · 표준 폴더 생성 · `getWorkspaceInfo` | 앱 | 없음(폴더만 생김) |
-| 2 | 경로 탈출 차단 · 들여오기(복사·지문·원자성) · `importToWorkspace` | 앱 | 없음(웹이 아직 안 부름) |
-| 3 | 웹 업로드를 들여오기 경유로 | 웹 | 외부 파일이 복사된 뒤 올라간다 |
+| 1 | ✅ 관리형 루트 계산 · 표준 폴더 생성 · `getWorkspaceInfo` | 앱 | 없음(폴더만 생김) |
+| 2 | ✅ 경로 탈출 차단 · 들여오기(복사·지문·원자성) · `importToWorkspace` | 앱 | 없음(웹이 아직 안 부름) |
+| 3 | ✅ 웹 업로드를 들여오기 경유로 | 웹 | 외부 파일이 복사된 뒤 올라간다 |
 | 4 | 정책 API + 어드민 설정 | 서버·어드민·앱 | 회사별 규칙이 먹는다 |
 | 5 | 프리미어 렌더 → `export/` | 프리미어 플러그인 | 렌더 결과를 찾을 필요가 없다 |
 | 6 | 다운로드·프록시·프로젝트 파일 관리 | 웹·앱 | 받은 파일이 회차 폴더로 |
@@ -259,3 +259,38 @@ importToWorkspace(file: File, target: {
 - NAS·다중 저장소 (1차 안정화 뒤)
 - 렌더러에 경로 대신 핸들만 주는 계약 개편
 - macOS (지금 `platform: "win32"` 고정)
+
+---
+
+## 구현 메모 (1~3단계 · 2026-09-07)
+
+```
+native/src/workspace/policy.ts    순수 판정 — 이름 정규화 · 경로 해석 · 루트 안인가
+native/src/workspace/manager.ts   배선 — realpath · 복사 · 지문 · 임시파일 청소
+native/src/main.ts                assertManagedPath() ← **신뢰 경계는 여기 하나뿐**
+native/src/preload.ts             경로를 전달만 한다(판단 없음)
+apps/web/src/lib/native-transfers.tsx   enqueueUpload 안에서 들여오기를 먼저 부른다
+```
+
+**설계대로 지킨 것:**
+- 판정은 `main.ts` 의 `assertManagedPath` 하나뿐이다. `enqueueUpload` 와 **`relink` 둘 다**
+  통과한다 — relink 를 빼면 "다시 선택" 으로 밖의 파일을 밀어넣을 수 있다.
+- 임시 파일은 대상 폴더 안 `.stepd-tmp/` 에 만든다(다른 드라이브에서도 rename 이 원자적).
+- 계약 `version` 은 1 그대로. 웹이 `typeof bridge.importToWorkspace === "function"` 으로 본다.
+
+**실측으로 확인한 것:** 이 PC 는 관리자도 개발자 모드도 아니라 **심볼릭 링크를 못 만든다**
+(그 테스트는 skip 된다). 대신 **정션(junction)은 권한 없이 만들어지고**, 그게 실전의 우회다 —
+루트 안에 정션을 만들어 밖을 가리키게 한 뒤 `isManaged` 가 거절하는 것을 확인했다.
+편집자 PC 도 같은 조건이라, 그 테스트가 실제로 도는 유일한 탈출 검증인 경우가 많다.
+
+**테스트:** 순수 20건(`workspace-policy.test.ts`) + 디스크 13건(`workspace-manager.test.ts`).
+네이티브 전체 53건 중 52 통과 · 1 skip(심링크 권한).
+
+### 배포 순서 — 반드시 앱 먼저
+
+```
+1) 앱 빌드·배포 (pnpm --filter @stepd/native dist → 편집자 PC 재설치)
+2) 그 다음 웹 배포
+```
+뒤집으면 아직 안 깐 PC 에서 웹이 `importToWorkspace` 를 못 찾는다 — 다만 그 경우도
+**옛 경로로 그냥 올라간다**(존재 검사를 하므로). 깨지지는 않고 새 흐름만 안 돈다.
