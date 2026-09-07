@@ -19,7 +19,9 @@ import {
   type IpcMainInvokeEvent,
 } from "electron";
 
-import type { NativeUploadJob } from "./contract.js";
+import { isNativeImportTarget, type NativeUploadJob } from "./contract.js";
+import { WorkspaceManager } from "./workspace/manager.js";
+import { applyBundledRenderEnv, resolveBundled } from "./render/bundled-ffmpeg.js";
 import { JobStore, type SecretCodec } from "./transfer/job-store.js";
 import { ElectronTransferNetwork } from "./transfer/network-electron.js";
 import { EncryptionUnavailableError } from "./transfer/errors.js";
@@ -32,6 +34,7 @@ const PARTITION = "persist:stepd";
 let mainWindow: BrowserWindow | null = null;
 let tray: Tray | null = null;
 let engine: TransferEngine | null = null;
+let workspace: WorkspaceManager | null = null;
 let quitting = false;
 let shutdownComplete = false;
 let closeWhenIdle = false;
@@ -114,7 +117,7 @@ async function loadWeb(route = ""): Promise<void> {
   if (!mainWindow || mainWindow.isDestroyed()) return;
   const normalized = route && route.startsWith("/") ? route : "";
   await mainWindow.loadURL(`${webUrl()}${normalized}`).catch(async (error) => {
-    console.error("[native] STEP-D 웹 로드 실패", error);
+    console.error("[native] STEPAISTUDIO 웹 로드 실패", error);
     if (mainWindow && !mainWindow.isDestroyed()) await mainWindow.loadFile(offlinePath());
   });
 }
@@ -139,9 +142,9 @@ async function openPremiere(): Promise<void> {
   }
   const result = await dialog.showMessageBox({
     type: "warning",
-    title: "STEP-D",
+    title: "STEPAISTUDIO",
     message: "Adobe Premiere Pro가 이 PC에 없습니다.",
-    detail: "STEP-D 패널은 Premiere Pro 25.6 이상에서 동작합니다. 설치 페이지를 열까요?",
+    detail: "STEPAISTUDIO 패널은 Premiere Pro 25.6 이상에서 동작합니다. 설치 페이지를 열까요?",
     buttons: ["설치 페이지 열기", "취소"],
     defaultId: 0,
     cancelId: 1,
@@ -167,8 +170,23 @@ function handleProtocol(raw: string): void {
   mainWindow?.focus();
 }
 
+/**
+ * 우리가 받는 URL 스킴. **새 이름이 정본이고 옛 이름은 계속 받는다.**
+ *
+ * ⚠️ `stepd://` 를 그냥 버리면 안 된다 — 이미 등록된 편집자 PC 와 웹의 "프리미어에서 편집"
+ * 버튼, `packages/premiere/launcher/install.ps1` 이 그 스킴을 쓴다. 웹·런처가 전부 새 이름으로
+ * 넘어가기 전에 앱만 바꾸면 그날로 딥링크가 죽는다(눌러도 아무 일이 안 일어난다 — 브라우저는
+ * 미등록 스킴을 조용히 무시한다). 둘 다 받으면 순서를 안 맞춰도 된다.
+ */
+const PROTOCOLS = ["stepaistudio", "stepd"] as const;
+
+function isOurProtocol(url: string): boolean {
+  const u = url.toLowerCase();
+  return PROTOCOLS.some((p) => u.startsWith(`${p}://`));
+}
+
 function protocolArg(argv: string[]): string | undefined {
-  return argv.find((arg) => arg.toLowerCase().startsWith("stepd://"));
+  return argv.find((arg) => isOurProtocol(arg));
 }
 
 function createWindow(browserSession: Electron.Session): BrowserWindow {
@@ -204,13 +222,13 @@ function createWindow(browserSession: Electron.Session): BrowserWindow {
       closeWhenIdle = true;
       win.hide();
       new Notification({
-        title: "STEP-D 전송 계속 중",
+        title: "STEPAISTUDIO 전송 계속 중",
         body: "창을 닫아도 업로드를 계속합니다. 완료되면 자동으로 종료합니다.",
       }).show();
     }
   });
   const guardNavigation = (event: { preventDefault(): void }, destination: string) => {
-    if (destination.startsWith("stepd://")) {
+    if (isOurProtocol(destination)) {
       event.preventDefault();
       handleProtocol(destination);
       return;
@@ -228,7 +246,7 @@ function createWindow(browserSession: Electron.Session): BrowserWindow {
     return { action: "deny" };
   });
   void win.loadURL(webUrl()).catch(async (error) => {
-    console.error("[native] STEP-D 웹 로드 실패", error);
+    console.error("[native] STEPAISTUDIO 웹 로드 실패", error);
     if (!win.isDestroyed()) await win.loadFile(offlinePath());
   });
   return win;
@@ -237,7 +255,7 @@ function createWindow(browserSession: Electron.Session): BrowserWindow {
 function createTray(): void {
   const image = nativeImage.createFromPath(iconPath()).resize({ width: 20, height: 20 });
   tray = new Tray(image);
-  tray.setToolTip("STEP-D");
+  tray.setToolTip("STEPAISTUDIO");
   tray.on("double-click", () => {
     mainWindow?.show();
     mainWindow?.focus();
@@ -250,9 +268,9 @@ function rebuildTrayMenu(): void {
   const jobs = engine.list();
   const active = jobs.filter((job) => ["queued", "initializing", "uploading", "finalizing"].includes(job.status));
   const paused = jobs.filter((job) => job.status === "paused");
-  tray.setToolTip(active.length ? `STEP-D · 전송 ${active.length}건` : "STEP-D");
+  tray.setToolTip(active.length ? `STEPAISTUDIO · 전송 ${active.length}건` : "STEPAISTUDIO");
   tray.setContextMenu(Menu.buildFromTemplate([
-    { label: "STEP-D 열기", click: () => { mainWindow?.show(); mainWindow?.focus(); } },
+    { label: "STEPAISTUDIO 열기", click: () => { mainWindow?.show(); mainWindow?.focus(); } },
     { type: "separator" },
     {
       label: "모든 전송 일시정지",
@@ -284,18 +302,38 @@ function handleJobChanges(jobs: NativeUploadJob[]): void {
   for (const job of jobs) {
     const previous = previousStates.get(job.id);
     if (previous && previous !== job.status && job.status === "completed") {
-      new Notification({ title: "STEP-D 업로드 완료", body: `${job.filename} 전송과 등록이 끝났습니다.` }).show();
+      new Notification({ title: "STEPAISTUDIO 업로드 완료", body: `${job.filename} 전송과 등록이 끝났습니다.` }).show();
     } else if (previous && previous !== job.status && ["failed", "needs_attention"].includes(job.status)) {
-      new Notification({ title: "STEP-D 전송 확인 필요", body: job.errorMessage ?? `${job.filename} 전송을 확인해 주세요.` }).show();
+      new Notification({ title: "STEPAISTUDIO 전송 확인 필요", body: job.errorMessage ?? `${job.filename} 전송을 확인해 주세요.` }).show();
     }
   }
   previousStates = new Map(jobs.map((job) => [job.id, job.status]));
   if (closeWhenIdle && engine && !engine.hasUnfinishedJobs()) {
     closeWhenIdle = false;
-    new Notification({ title: "STEP-D 전송 완료", body: "대기 중인 전송을 모두 마쳐 앱을 종료합니다." }).show();
+    new Notification({ title: "STEPAISTUDIO 전송 완료", body: "대기 중인 전송을 모두 마쳐 앱을 종료합니다." }).show();
     quitting = true;
     app.quit();
   }
+}
+
+/**
+ * **관리형 경로만 통과시킨다.** 이 함수를 부르는 자리가 곧 신뢰 경계다.
+ *
+ * ⚠️ 반드시 **메인 프로세스**에서만 부른다. preload(렌더러 문맥)에 두면 웹이
+ * `ipcRenderer.invoke` 를 직접 쳐서 지나간다 — 검사가 아니라 장식이 된다.
+ *
+ * 판정은 `WorkspaceManager.isManaged` 가 `fs.realpath` 로 링크·정션을 푼 뒤에 한다.
+ * 문자열 비교만으로는 `mklink /J` 한 줄에 뚫린다.
+ */
+async function assertManagedPath(filePath: string): Promise<void> {
+  if (!workspace) throw new Error("작업 공간이 아직 준비되지 않았습니다. 잠시 후 다시 시도해 주세요.");
+  if (await workspace.isManaged(filePath)) return;
+  const info = await workspace.info();
+  throw new Error(
+    `작업 공간 밖의 파일은 바로 올릴 수 없습니다.
+
+${info.rootPath} 안으로 먼저 가져와야 합니다.`,
+  );
 }
 
 function registerIpc(): void {
@@ -307,7 +345,26 @@ function registerIpc(): void {
     assertTrusted(event);
     const value = input as { filePath?: unknown; request?: unknown };
     const validated = validateUploadInput(value?.filePath, value?.request);
+    // ⚠️ **관리형 경로만 올린다** (3단계). 이 검사는 **여기에만** 있어야 한다 —
+    // preload 에 두면 렌더러가 ipcRenderer 를 직접 쳐서 지나간다. 밖의 파일은 웹이
+    // importToWorkspace 로 먼저 들여온 뒤 그 경로로 다시 부른다.
+    await assertManagedPath(validated.filePath);
     return { jobId: await engine!.enqueue(validated.filePath, validated.request) };
+  });
+
+  // ── 관리형 작업 공간 (1~3단계) ──
+  ipcMain.handle("native:workspace:info", async (event) => {
+    assertTrusted(event);
+    return workspace!.info();
+  });
+  ipcMain.handle("native:workspace:import", async (event, input: unknown) => {
+    assertTrusted(event);
+    const value = input as { filePath?: unknown; target?: unknown };
+    const filePath = validateVideoPath(value?.filePath);
+    if (!isNativeImportTarget(value?.target)) {
+      throw new Error("어느 프로그램·폴더로 들여올지 정해야 합니다.");
+    }
+    return workspace!.importFile(filePath, value.target);
   });
   for (const [channel, action] of [
     ["pause", (id: string) => engine!.pause(id)],
@@ -325,7 +382,10 @@ function registerIpc(): void {
     const value = input as { jobId?: unknown; filePath?: unknown };
     const id = validateJobId(value?.jobId);
     if (typeof value?.filePath !== "string") throw new Error("파일을 다시 선택해 주세요.");
-    return engine!.relink(id, validateVideoPath(value.filePath));
+    // 재연결도 같은 문을 지난다 — 안 그러면 "다시 선택" 으로 밖의 파일을 밀어넣을 수 있다.
+    const relinkPath = validateVideoPath(value.filePath);
+    await assertManagedPath(relinkPath);
+    return engine!.relink(id, relinkPath);
   });
   ipcMain.handle("native:upload:clear-completed", (event) => {
     assertTrusted(event);
@@ -358,17 +418,27 @@ app.on("window-all-closed", () => {
 
 void app.whenReady().then(async () => {
   if (process.platform !== "win32") {
-    dialog.showErrorBox("STEP-D", "현재 데스크톱 앱은 Windows 10/11만 지원합니다.");
+    dialog.showErrorBox("STEPAISTUDIO", "현재 데스크톱 앱은 Windows 10/11만 지원합니다.");
     app.quit();
     return;
   }
-  app.setAppUserModelId("kr.stepai.stepd");
-  if (app.isPackaged) app.setAsDefaultProtocolClient("stepd");
+  // ⚠️ appId(package.json build.appId)와 **같은 값**이어야 알림이 앱 이름으로 뜬다.
+  app.setAppUserModelId("kr.stepai.stepaistudio");
+  // 동봉한 ffmpeg·글꼴을 env 로 심는다. **렌더 코드는 서버 것을 그대로 쓰고**, 갈리는 값은
+  // 바이너리·글꼴 위치 둘뿐이다(render/bundled-ffmpeg.ts 주석). 개발 중에는 아무것도 안 한다.
+  const bundled = resolveBundled(process.resourcesPath, app.isPackaged);
+  applyBundledRenderEnv(bundled);
+  console.log(`[render] ffmpeg=${process.env.STEPD_FFMPEG ?? "(PATH)"} fonts=${process.env.STEPD_FONTS_DIR ?? "(없음)"}`);
+  // 둘 다 등록한다 — 새 이름이 정본, 옛 이름은 이미 깔린 웹·런처를 위해.
+  if (app.isPackaged) for (const p of PROTOCOLS) app.setAsDefaultProtocolClient(p);
 
   const browserSession = session.fromPartition(PARTITION, { cache: true });
   browserSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
   browserSession.setPermissionCheckHandler(() => false);
 
+  workspace = new WorkspaceManager();
+  // 루트를 미리 만들어 둔다 — 첫 업로드에서 만들면 그 한 번이 느리고, 실패해도 그때 안다.
+  void workspace.ensureRoot().catch((err) => console.error("[workspace] 루트 준비 실패", err));
   const store = new JobStore(path.join(app.getPath("userData"), "transfer-queue"), new DpapiCodec());
   engine = new TransferEngine(store, new ElectronTransferNetwork(browserSession, apiBase()));
   await engine.init();

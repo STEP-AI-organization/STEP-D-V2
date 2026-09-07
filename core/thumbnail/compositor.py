@@ -99,10 +99,15 @@ class ThumbnailCompositor:
         """캡션 레이어 재렌더링 (새 색상/아웃라인 적용)."""
         from PIL import ImageDraw, ImageFont
 
-        FONT_ROOT = pathlib.Path(__file__).resolve().parents[2] / "assets" / "thumbnail-fonts"
+        FONT_ROOT = pathlib.Path(__file__).resolve().parents[2] / "assets" / "fonts"
+        # ⚠️ **리포에 담긴 폰트만 쓴다**(assets/fonts). 2026-09-07 이전엔 Noto 3종을
+        # 가리켰는데 그 폴더가 gitignore 였고 Dockerfile 도 안 복사해서, 프로덕션에선
+        # 아래 exists() 검사에 걸려 **캡션 재렌더가 조용히 통째로 스킵**됐다.
+        #   variety(굵은 임팩트) NotoSansKR-Black → Pretendard-Black(900)
+        #   drama(감성 세리프)   NotoSerifKR-Black → GowunBatang-Bold(세리프)
         FONT_PRESETS = {
-            "variety": "NotoSansKR-Black.otf",
-            "drama": "NotoSerifKR-Black.otf",
+            "variety": "Pretendard-Black.otf",
+            "drama": "GowunBatang-Bold.ttf",
             "news": "Pretendard-ExtraBold.otf",
             "documentary": "Pretendard-Bold.otf",
             "_default": "Pretendard-Black.otf",
@@ -116,6 +121,8 @@ class ThumbnailCompositor:
         font_path = FONT_ROOT / font_file
 
         if not font_path.exists():
+            # 조용히 스킵하면 "캡션 색이 안 바뀌는데 이유를 모르는" 상태가 된다.
+            print(f"[compositor] 폰트 없음 {font_path.name} — 캡션 재렌더 건너뜀")
             return
 
         font = ImageFont.truetype(str(font_path), size_px)

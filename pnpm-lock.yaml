@@ -93,9 +93,6 @@ importers:
       '@portone/browser-sdk':
         specifier: ^0.1.9
         version: 0.1.9
-      '@stepd/native':
-        specifier: workspace:*
-        version: link:../../native
       class-variance-authority:
         specifier: ^0.7.1
         version: 0.7.1
@@ -129,6 +126,9 @@ importers:
       recharts:
         specifier: ^3.9.2
         version: 3.9.2(@types/react@19.0.2)(react-dom@19.2.3(react@19.2.3))(react-is@16.13.1)(react@19.2.3)(redux@5.0.1)
+      stepaistudio:
+        specifier: workspace:*
+        version: link:../../native
       tailwind-merge:
         specifier: ^3.5.0
         version: 3.6.0

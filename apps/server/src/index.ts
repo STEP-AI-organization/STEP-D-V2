@@ -5690,9 +5690,24 @@ async function renderClipMedia(opts: {
   reframePlan?: ReframePlan | null;
   /** 첫 3초 hook 프리롤 (편집자가 "첫 3초 훅" 토글 ON + clip.hookTimeSec 있을 때만). */
   hookPreroll?: { startTime: number; durationSec: number; hasAudio?: boolean; caption?: string; captionAssPath?: string | null } | null;
+  /**
+   * **계획만 만들고 굽지 않는다** (로컬 렌더 · 2026-09-07).
+   *
+   * 편집자 PC 가 클립을 구우려면 서버가 정한 것을 **그대로** 받아야 한다 — 자막 ASS,
+   * 오버레이 PNG, 필터, 기하. 그 준비는 DB 조회·서명 URL·캔버스·probe 가 얽혀 있어
+   * 서버에서만 된다. 준비를 네이티브로 옮기면 두 벌이 되고, 그 순간 같은 클립이 굽는
+   * 곳마다 달라진다.
+   *
+   * 그래서 **같은 코드가 렌더 직전에 멈춰** 조립된 것을 돌려준다. 준비 코드는 글자 그대로
+   * 한 벌이다.
+   *
+   * ⚠️ 이 모드에서는 임시 파일을 **지우지 않는다** — 부르는 쪽이 읽어 올린 뒤 치운다.
+   */
+  planOnly?: boolean;
 }): Promise<
   | { clipMediaId: string; clipStored: string; thumbStored: string | null;
       cmeta: { durationSec: number; width: number; height: number; codec: string; hasAudio: boolean; fps?: number; startTimecode?: string; audioStreams?: number } }
+  | { plan: Parameters<typeof renderShort>[0]; clipMediaId: string; clipObjPath: string; temps: string[] }
   | null
 > {
   const { master, episodeId, startTime, endTime, title } = opts;
@@ -5910,7 +5925,7 @@ async function renderClipMedia(opts: {
             overlayRegions: tpl.overlayRegions,
           }
         : null;
-      await renderShort({
+      const shortOpts = {
         inputPath: srcPath, startTime, endTime, outputPath: tmpPath, width: W, height: H,
         assPath: dynamicReframe ? null : ass ? assTmp : null,
         captionAssPath: captionAss ? captionAssTmp : null,
@@ -5922,7 +5937,19 @@ async function renderClipMedia(opts: {
         bgType, bgColor, fit, cropRect, frame,
         hookPreroll,
         badge,
-      });
+      };
+      // 계획만 원하면 **여기서 멈춘다.** 조립된 것이 곧 계획이라, 서버가 굽든 편집자 PC 가
+      // 굽든 같은 값에서 출발한다(위 planOnly 주석).
+      if (opts.planOnly) {
+        return {
+          plan: shortOpts,
+          clipMediaId,
+          clipObjPath,
+          temps: [assTmp, captionAssTmp, decorationAssTmp, hookCaptionAssTmp,
+                  iconRawTmp, iconTmp, overlayPngTmp].filter((f) => fs.existsSync(f)),
+        };
+      }
+      await renderShort(shortOpts);
     }
     const cmeta = await probe(tmpPath).catch(() => ({
       durationSec: Math.max(1, endTime - startTime), width: W, height: H, codec: "h264", hasAudio: true,
@@ -5949,13 +5976,19 @@ async function renderClipMedia(opts: {
     return null;
   } finally {
     // /tmp is RAM-backed on Cloud Run — always clear the temps.
-    try { fs.unlinkSync(tmpPath); } catch {}
-    try { fs.unlinkSync(thumbTmp); } catch {}
-    try { fs.unlinkSync(assTmp); } catch {}
-    try { fs.unlinkSync(captionAssTmp); } catch {}
-    try { fs.unlinkSync(decorationAssTmp); } catch {}
-    try { fs.unlinkSync(iconRawTmp); } catch {}
-    try { fs.unlinkSync(iconTmp); } catch {}
+    //
+    // ⚠️ 계획 모드에서는 **남긴다** — 부르는 쪽이 그 파일들을 읽어 올려야 한다.
+    //    `if (planOnly) return;` 으로 쓰면 안 된다: finally 의 return 은 **try 의 반환값을
+    //    덮어써서** 계획이 undefined 로 나간다(타입 검사가 이걸 잡았다). 조건으로 감싼다.
+    if (!opts.planOnly) {
+      try { fs.unlinkSync(tmpPath); } catch {}
+      try { fs.unlinkSync(thumbTmp); } catch {}
+      try { fs.unlinkSync(assTmp); } catch {}
+      try { fs.unlinkSync(captionAssTmp); } catch {}
+      try { fs.unlinkSync(decorationAssTmp); } catch {}
+      try { fs.unlinkSync(iconRawTmp); } catch {}
+      try { fs.unlinkSync(iconTmp); } catch {}
+    }
   }
 }
 
@@ -9953,6 +9986,7 @@ app.post("/api/clips/:id/export", async (c) => {
     }
   }
 
+  // planOnly 를 안 주므로 항상 렌더 결과다 — 타입만 좁힌다(아래 cmeta 사용).
   const rendered = await renderClipMedia({
     master, episodeId: clip.episodeId,
     startTime: snappedStart, endTime: snappedEnd,
@@ -9960,7 +9994,7 @@ app.post("/api/clips/:id/export", async (c) => {
     hookPreroll,
     reframePlan,
   });
-  if (!rendered) return c.json({ error: "render failed" }, 500);
+  if (!rendered || !("cmeta" in rendered)) return c.json({ error: "render failed" }, 500);
 
   // Merge onto the LATEST row, not the pre-render snapshot: the render takes up to minutes,
   // and an editor save (PATCH /:id/editor) landing meanwhile must survive this write. If the

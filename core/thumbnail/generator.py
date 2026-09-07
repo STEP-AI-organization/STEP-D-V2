@@ -19,7 +19,7 @@ from .contrast import ensure_min_contrast, sample_bg_color
 from .presets import get_preset
 
 
-FONT_ROOT = pathlib.Path(__file__).resolve().parents[2] / "assets" / "thumbnail-fonts"
+FONT_ROOT = pathlib.Path(__file__).resolve().parents[2] / "assets" / "fonts"
 
 FONT_PRESETS: dict[str, str] = {
     # 예능 · 리얼리티 · 임팩트 (검은고딕 · 통통 · 붓)

@@ -66,13 +66,56 @@ function normalizeHexColor(input: string | undefined, fallback: string): string 
 // 동기 블로킹된다 — 그래서 실패 쪽만 간격을 둔다.
 let ffmpegOk = false;
 let lastProbeAt = 0;
+/**
+ * ffmpeg·ffprobe **실행 파일 경로.** 기본은 PATH 의 `ffmpeg` — 서버 이미지는 apt 로 깔아 둔다.
+ *
+ * ## 왜 상수가 아니라 함수인가 (2026-09-07)
+ *
+ * 편집자 PC 가 클립을 직접 굽는다(로컬 렌더). 그 PC 에는 PATH 에 ffmpeg 이 없고, 앱이
+ * **동봉한 바이너리**를 써야 한다. 이 파일은 import 가 `child_process`·`fs` 뿐이라
+ * 네이티브가 **그대로 가져다 쓸 수 있고**, 그래서 렌더 구현이 한 벌로 남는다 —
+ * 인자 조립을 복제하면 같은 클립이 굽는 곳마다 몇 픽셀씩 달라지고 아무도 눈치 못 챈다.
+ *
+ * ⚠️ 값이 갈리는 건 **바이너리 위치 하나뿐**이다. 필터그래프·코덱·프리셋은 같은 코드가 만든다.
+ */
+/**
+ * `ass` 필터에 붙일 **글꼴 폴더 옵션**. 없으면 빈 문자열이라 지금까지와 같은 명령이 나간다.
+ *
+ * ## 왜 필요한가
+ *
+ * 서버 이미지는 글꼴을 `/usr/share/fonts` 에 깔고 `fc-cache` 를 돌려서 libass 가 이름으로
+ * 찾는다. 편집자 PC 에는 그게 없다 — Windows 용 ffmpeg 은 fontconfig 대신 DirectWrite 를
+ * 쓰고, 우리 글꼴은 설치돼 있지도 않다. 그대로 두면 libass 가 **조용히 다른 글꼴로
+ * 대체**한다. 에러가 안 나서 아무도 모르고, 그 상태로 고객 채널에 나간다.
+ *
+ * 그래서 앱이 동봉 글꼴 폴더를 `STEPD_FONTS_DIR` 로 넘기고 여기서 `fontsdir` 로 실어 준다.
+ * libass 가 그 폴더를 직접 훑으므로 글꼴을 설치할 필요가 없다.
+ *
+ * ⚠️ **서버는 이 값을 안 준다** → 빈 문자열 → 명령이 한 글자도 안 바뀐다(무회귀).
+ */
+function assFontsDirOpt(): string {
+  const dir = (process.env.STEPD_FONTS_DIR ?? "").trim();
+  if (!dir) return "";
+  // 필터그래프 이스케이프는 assPath 와 같은 규칙이다(역슬래시·콜론·따옴표).
+  const esc = escapeAssPath(dir);
+  return `:fontsdir='${esc}'`;
+}
+
+export function ffmpegBin(): string {
+  return (process.env.STEPD_FFMPEG ?? "").trim() || "ffmpeg";
+}
+
+export function ffprobeBin(): string {
+  return (process.env.STEPD_FFPROBE ?? "").trim() || "ffprobe";
+}
+
 export function hasFfmpeg(): boolean {
   if (ffmpegOk) return true;
   const now = Date.now();
   if (now - lastProbeAt < 30_000) return false;
   lastProbeAt = now;
   try {
-    const out = execFileSync("ffmpeg", ["-version"], { timeout: 5000, encoding: "utf8", stdio: "pipe" });
+    const out = execFileSync(ffmpegBin(), ["-version"], { timeout: 5000, encoding: "utf8", stdio: "pipe" });
     ffmpegOk = out.includes("ffmpeg version");
   } catch {
     ffmpegOk = false;
@@ -88,7 +131,7 @@ export function probe(filePath: string): Promise<ProbeResult> {
       return reject(new Error(`File not found: ${filePath}`));
     }
     execFile(
-      "ffprobe",
+      ffprobeBin(),
       [
         "-v", "quiet",
         "-print_format", "json",
@@ -171,7 +214,7 @@ export function captureThumbnail(
 ): Promise<void> {
   return new Promise((resolve, reject) => {
     execFile(
-      "ffmpeg",
+      ffmpegBin(),
       [
         "-y",
         "-ss", String(timeOffset),
@@ -201,7 +244,7 @@ export function captureThumbnail(
 export function remuxFaststart(input: string, outputPath: string): Promise<void> {
   return new Promise((resolve, reject) => {
     execFile(
-      "ffmpeg",
+      ffmpegBin(),
       ["-y", "-i", input, "-c", "copy", "-movflags", "+faststart", "-f", "mp4", outputPath],
       { timeout: 300_000, maxBuffer: FF_MAXBUF },
       (err) => {
@@ -315,7 +358,7 @@ export function normalizeToMp4(
   const timeout = opts.timeoutMs
     ?? Math.min(3 * 3600_000, Math.max(10 * 60_000, Math.round(p.durationSec * 3) * 1000));
   return new Promise((resolve, reject) => {
-    execFile("ffmpeg", args, { timeout, maxBuffer: FF_MAXBUF }, (err) => {
+    execFile(ffmpegBin(), args, { timeout, maxBuffer: FF_MAXBUF }, (err) => {
       if (err) return reject(err);
       if (!fs.existsSync(outputPath)) return reject(new Error("normalize output not produced"));
       resolve();
@@ -347,7 +390,7 @@ function srtCueCount(file: string): number {
 
 function runFfmpeg(args: string[], timeout: number): Promise<void> {
   return new Promise((resolve, reject) => {
-    execFile("ffmpeg", args, { timeout, maxBuffer: FF_MAXBUF }, (err) => (err ? reject(err) : resolve()));
+    execFile(ffmpegBin(), args, { timeout, maxBuffer: FF_MAXBUF }, (err) => (err ? reject(err) : resolve()));
   });
 }
 
@@ -617,7 +660,7 @@ export function circleCrop(srcPath: string, dstPath: string, size: number): Prom
     `geq=a='if(lte((X-W/2)*(X-W/2)+(Y-H/2)*(Y-H/2),(W/2)*(W/2)),alpha(X,Y),0)'` +
     `:r='r(X,Y)':g='g(X,Y)':b='b(X,Y)'`;
   return new Promise((resolve, reject) => {
-    execFile("ffmpeg", ["-y", "-i", srcPath, "-vf", vf, "-frames:v", "1", dstPath],
+    execFile(ffmpegBin(), ["-y", "-i", srcPath, "-vf", vf, "-frames:v", "1", dstPath],
       { timeout: 30_000 }, (err) => {
         if (err) return reject(err);
         if (!fs.existsSync(dstPath)) return reject(new Error("circleCrop output not produced"));
@@ -685,7 +728,7 @@ function renderShortWithPreroll(opts: RenderShortOpts & { hookPreroll: NonNullab
   if (videoFilters) { vf += `;${last}${videoFilters}[bcg]`; last = "[bcg]"; }
   if (assPath) {
     const esc = assPath.replace(/\\/g, "\\\\").replace(/:/g, "\\:").replace(/'/g, "\\'");
-    vf += `;${last}ass='${esc}'[bca]`; last = "[bca]";
+    vf += `;${last}ass='${esc}'${assFontsDirOpt()}[bca]`; last = "[bca]";
   }
   if (speed !== 1) { vf += `;${last}setpts=PTS/${speed}[bcs]`; last = "[bcs]"; }
   // 본문 fps/sar 정규화 (xfade 호환).
@@ -733,7 +776,7 @@ function renderShortWithPreroll(opts: RenderShortOpts & { hookPreroll: NonNullab
   ];
 
   return new Promise((resolve, reject) => {
-    execFile("ffmpeg", args, { timeout: 300_000, maxBuffer: FF_MAXBUF }, (err) => {
+    execFile(ffmpegBin(), args, { timeout: 300_000, maxBuffer: FF_MAXBUF }, (err) => {
       if (err) return reject(err);
       if (!fs.existsSync(outputPath)) return reject(new Error("Preroll render output not produced"));
       resolve();
@@ -955,7 +998,7 @@ function renderDynamicShort(opts: RenderShortOpts): Promise<void> {
     opts.outputPath,
   ];
   return new Promise((resolve, reject) => {
-    execFile("ffmpeg", args, { timeout: 300_000, maxBuffer: FF_MAXBUF }, (err) => {
+    execFile(ffmpegBin(), args, { timeout: 300_000, maxBuffer: FF_MAXBUF }, (err) => {
       if (err) return reject(err);
       if (!fs.existsSync(opts.outputPath)) return reject(new Error("AI reframe output not produced"));
       resolve();
@@ -1013,7 +1056,7 @@ function renderDynamicShortWithPreroll(
     opts.outputPath,
   ];
   return new Promise((resolve, reject) => {
-    execFile("ffmpeg", args, { timeout: 300_000, maxBuffer: FF_MAXBUF }, (err) => {
+    execFile(ffmpegBin(), args, { timeout: 300_000, maxBuffer: FF_MAXBUF }, (err) => {
       if (err) return reject(err);
       if (!fs.existsSync(opts.outputPath)) return reject(new Error("AI reframe preroll output not produced"));
       resolve();
@@ -1122,7 +1165,7 @@ export function renderShort(opts: RenderShortOpts): Promise<void> {
   if (assPath) {
     // Escape the path for the filtergraph (backslash, colon, single-quote).
     const esc = assPath.replace(/\\/g, "\\\\").replace(/:/g, "\\:").replace(/'/g, "\\'");
-    vf += `;${last}ass='${esc}'[vout]`;
+    vf += `;${last}ass='${esc}'${assFontsDirOpt()}[vout]`;
     last = "[vout]";
   }
   // 브랜딩 아이콘 — ASS 뒤에 얹는다(자막·타이틀과 같은 레이어 감각). 이미지 입력은 1프레임이라
@@ -1164,7 +1207,7 @@ export function renderShort(opts: RenderShortOpts): Promise<void> {
   ];
 
   return new Promise((resolve, reject) => {
-    execFile("ffmpeg", args, { timeout: 300_000, maxBuffer: FF_MAXBUF }, (err) => {
+    execFile(ffmpegBin(), args, { timeout: 300_000, maxBuffer: FF_MAXBUF }, (err) => {
       if (err) return reject(err);
       if (!fs.existsSync(outputPath)) return reject(new Error("Render output not produced"));
       resolve();
@@ -1184,7 +1227,7 @@ export function trimEncode(
       return reject(new Error("Invalid trim duration"));
     }
     execFile(
-      "ffmpeg",
+      ffmpegBin(),
       [
         "-y",
         "-ss", String(startTime),
@@ -1243,7 +1286,7 @@ export function renderStaticOverlayPng(opts: {
   }
   if (opts.assPath) {
     const esc = opts.assPath.replace(/\\/g, "\\\\").replace(/:/g, "\\:").replace(/'/g, "\\'");
-    vf += `;${last}ass='${esc}'[vass]`;
+    vf += `;${last}ass='${esc}'${assFontsDirOpt()}[vass]`;
     last = "[vass]";
   }
   if (opts.badge) {
@@ -1255,7 +1298,7 @@ export function renderStaticOverlayPng(opts: {
 
   const args = ["-y", ...inputs, "-filter_complex", vf, "-map", last, "-frames:v", "1", opts.outputPath];
   return new Promise((resolve, reject) => {
-    execFile("ffmpeg", args, { timeout: 60_000, maxBuffer: FF_MAXBUF }, (err) => {
+    execFile(ffmpegBin(), args, { timeout: 60_000, maxBuffer: FF_MAXBUF }, (err) => {
       if (err) return reject(err);
       if (!fs.existsSync(opts.outputPath)) return reject(new Error("overlay png not produced"));
       resolve();
@@ -1283,7 +1326,7 @@ export function transcodeToH264(inputPath: string, outputPath: string): Promise<
   ];
   return new Promise((resolve, reject) => {
     // 긴 회차(2시간)도 통과해야 한다 — 실측 8~9배속이라 2시간물이 ~15분.
-    execFile("ffmpeg", args, { timeout: 3_600_000, maxBuffer: FF_MAXBUF }, (err) => {
+    execFile(ffmpegBin(), args, { timeout: 3_600_000, maxBuffer: FF_MAXBUF }, (err) => {
       if (err) return reject(err);
       if (!fs.existsSync(outputPath)) return reject(new Error("transcode output not produced"));
       resolve();

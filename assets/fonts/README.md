@@ -1,6 +1,6 @@
 # assets/fonts — 렌더 글꼴 (리포에 **담겨 있다**)
 
-`thumbnail-fonts/`(gitignore)와 달리 여기 파일은 커밋돼 있다. Dockerfile 이
+**글꼴은 전부 여기 하나다**(2026-09-07 통합 — 구 `thumbnail-fonts/` 를 합쳤다). Dockerfile 이
 `/usr/share/fonts/opentype/pretendard` 와 `assets/fonts` 두 곳으로 COPY 하고 `fc-cache` 를
 돌린다 — 빠지면 libass 가 **오류 없이 Noto 로 대체**해 글꼴만 다른 결과물이 조용히 나간다.
 
@@ -38,3 +38,5 @@
 
 제목 줄은 항상 `weight: 800` 으로 그린다(`index.ts`). 나머지 웨이트는 스냅으로 밀려나 쓰이지
 않으므로, 디스플레이 글꼴은 가장 굵은 한 종만 담아 이미지 크기를 아낀다.
+
+- `GowunBatang-Bold.ttf` — 썸네일 quote 역할(세리프 감성). SIL OFL. 2026-09-07 통합 시 추가.

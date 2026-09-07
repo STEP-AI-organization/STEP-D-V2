@@ -1,4 +1,4 @@
-# native/ — STEP-D 데스크톱 셸 (Electron · Windows)
+# native/ — STEPAISTUDIO 데스크톱 셸 (Electron · Windows)
 
 **웹을 감싸는 껍데기가 아니라, 웹이 못 하는 일만 하는 얇은 층이다.** 화면은 전부
 프로덕션 웹(`https://stepd.stepai.kr`)이고, 이 앱은 브라우저에 없는 능력만 얹는다.
@@ -111,23 +111,23 @@ if (!bridge || bridge.version !== 1) return;   // → available=false → 브라
 ## 빌드·배포
 
 ```bash
-pnpm --filter @stepd/native build     # TS → dist/*.cjs
-pnpm --filter @stepd/native dist      # electron-builder → release/STEP-D-Setup-<ver>.exe
-pnpm --filter @stepd/native test      # 계약·전송엔진 단위 테스트
+pnpm --filter stepaistudio build     # TS → dist/*.cjs
+pnpm --filter stepaistudio dist      # electron-builder → release/STEPAISTUDIO-Setup-<ver>.exe
+pnpm --filter stepaistudio test      # 계약·전송엔진 단위 테스트
 ```
 
 - NSIS `oneClick: true` · `perMachine: false` → **사용자 폴더에 설치**(관리자 권한 불필요).
-  실제 경로는 `%LOCALAPPDATA%\Programs\@stepdnative\STEP-D.exe` — 폴더 이름이 제품명이
-  아니라 **패키지명 기준**이라, 설치 여부를 볼 때 `Programs\STEP-D` 를 찾으면 못 찾는다.
+  실제 경로는 `%LOCALAPPDATA%\Programs\stepaistudio\STEPAISTUDIO.exe` — 폴더 이름은 **패키지명**에서
+  나온다(`package.json` 의 `name`). 2026-09-07 개명 전에는 `@stepdnative` 였다.
 - 버전은 `native/package.json` 의 `version`. 올리면 설치 파일 이름도 따라 바뀐다.
 
 ---
 
 ## 함정
 
-- **`stepd://` 주인은 하나다.** 이 앱이 설치되면 스킴을 가져간다(`setAsDefaultProtocolClient`).
+- **URL 스킴 주인은 하나다.** 앱은 `stepaistudio://`(정본)와 `stepd://`(하위호환) 둘 다 등록한다. 이 앱이 설치되면 스킴을 가져간다(`setAsDefaultProtocolClient`).
   `packages/premiere/launcher/install.ps1` 을 같은 PC 에서 돌리면 덮어써서 앱 딥링크
-  (`stepd://app/...`)가 죽는다. 앱이 이미 `stepd://open` 으로 프리미어를 띄우므로 런처는
+  (`stepaistudio://app/...`)가 죽는다. 앱이 이미 `stepd://open` 으로 프리미어를 띄우므로 런처는
   **앱을 안 쓰는 PC** 전용이다.
 - **창 닫기는 종료가 아니다.** 미완료 전송이 있으면 숨기고 계속한다(`closeWhenIdle`).
   창을 다시 열면 그 예약을 **반드시** 푼다 — 안 그러면 사용자가 메타데이터를 입력하는

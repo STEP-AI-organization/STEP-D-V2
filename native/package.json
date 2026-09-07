@@ -1,6 +1,6 @@
 {
-  "name": "@stepd/native",
-  "version": "0.1.0",
+  "name": "stepaistudio",
+  "version": "0.2.0",
   "private": true,
   "author": "STEPAI",
   "type": "module",
@@ -15,9 +15,10 @@
   "scripts": {
     "build": "node scripts/build.mjs",
     "dev": "pnpm build && electron .",
-    "dist": "pnpm build && electron-builder --win nsis",
+    "dist": "pnpm fetch:ffmpeg && pnpm build && electron-builder --win nsis",
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test \"src/**/*.test.ts\""
+    "test": "node --import tsx --test \"src/**/*.test.ts\"",
+    "fetch:ffmpeg": "node scripts/fetch-ffmpeg.mjs"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
@@ -28,8 +29,8 @@
     "typescript": "^5.7.2"
   },
   "build": {
-    "appId": "kr.stepai.stepd",
-    "productName": "STEP-D",
+    "appId": "kr.stepai.stepaistudio",
+    "productName": "STEPAISTUDIO",
     "asar": true,
     "directories": {
       "output": "release"
@@ -41,18 +42,39 @@
     ],
     "extraResources": [
       {
-        "from": "../apps/web/public/brand/stepd-icon-192.png",
-        "to": "icons/stepd.png"
+        "from": "vendor/ffmpeg",
+        "to": "ffmpeg",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "../assets/fonts",
+        "to": "fonts",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "../assets/invoice-fonts",
+        "to": "fonts",
+        "filter": [
+          "**/*"
+        ]
       }
     ],
     "protocols": [
       {
         "name": "STEP-D Protocol",
-        "schemes": ["stepd"]
+        "schemes": [
+          "stepd"
+        ]
       }
     ],
     "win": {
-      "target": ["nsis"],
+      "target": [
+        "nsis"
+      ],
       "icon": "../apps/web/src/app/favicon.ico"
     },
     "nsis": {
@@ -61,7 +83,7 @@
       "allowElevation": false,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "artifactName": "STEP-D-Setup-${version}.${ext}"
+      "artifactName": "STEPAISTUDIO-Setup-${version}.${ext}"
     }
   }
 }

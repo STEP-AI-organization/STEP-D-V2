@@ -21,12 +21,13 @@ from .canvas import (
 from .contrast import ensure_min_contrast, sample_bg_color
 from . import image_gen
 
-FONT_ROOT = pathlib.Path(__file__).resolve().parents[2] / "assets" / "thumbnail-fonts"
+FONT_ROOT = pathlib.Path(__file__).resolve().parents[2] / "assets" / "fonts"
 
 # font_role → 파일 (§3.2, §14.3)
+# ⚠️ **리포에 담긴 폰트만** (assets/fonts · 2026-09-07 통합). compositor.FONT_PRESETS 와 같은 표다.
 FONT_PRESETS: dict[str, str] = {
-    "variety":     "NotoSansKR-Black.otf",
-    "drama":       "NotoSerifKR-Black.otf",
+    "variety":     "Pretendard-Black.otf",
+    "drama":       "GowunBatang-Bold.ttf",
     "news":        "Pretendard-ExtraBold.otf",
     "documentary": "Pretendard-Bold.otf",
     "_default":    "Pretendard-Black.otf",

@@ -62,6 +62,14 @@ test("브리지 표면이 예상 목록과 같다 — 늘리면 앱 재설치가
     "cancelUpload",
     "clearCompleted",
     "enqueueUpload",
+    // ── 관리형 작업 공간 (2026-09-07) ──
+    // 웹으로 못 하는 이유: 브라우저는 로컬 파일을 **복사**할 수도, 실제 경로를 알 수도,
+    // 심볼릭 링크/정션을 풀 수도 없다. 작업 공간 판정 자체가 OS 파일시스템 질의다.
+    // ⚠️ 이 둘은 **선택적**이다 — 웹이 `typeof bridge.getWorkspaceInfo === "function"` 으로
+    //    보고, 없으면 지금 동작(외부 경로 직접 업로드)을 그대로 쓴다. 그래서 앱을 아직
+    //    안 깐 PC 도 안 깨진다. 다만 **앱을 먼저 깔아야** 새 흐름이 돈다.
+    "getWorkspaceInfo",
+    "importToWorkspace",
     "listUploads",
     "pauseUpload",
     "relinkUpload",

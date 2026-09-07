@@ -1,6 +1,8 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron";
 
-import type { NativeUploadJob, NativeUploadRequest, StepdNativeBridge } from "./contract.js";
+import type {
+  NativeImportTarget, NativeUploadJob, NativeUploadRequest, StepdNativeBridge,
+} from "./contract.js";
 
 const origin = location.origin;
 const trusted = origin === "https://stepd.stepai.kr"
@@ -35,6 +37,15 @@ if (trusted) {
     },
     clearCompleted() {
       return ipcRenderer.invoke("native:upload:clear-completed");
+    },
+    // ⚠️ **여기서 경로를 판단하지 않는다.** preload 는 렌더러 문맥이라 웹이 ipcRenderer 를
+    // 직접 쳐서 우회할 수 있다 — 관리형 경로 판정은 메인 프로세스에만 둔다(설계 문서 참조).
+    getWorkspaceInfo() {
+      return ipcRenderer.invoke("native:workspace:info");
+    },
+    importToWorkspace(file: File, target: NativeImportTarget) {
+      const filePath = webUtils.getPathForFile(file);
+      return ipcRenderer.invoke("native:workspace:import", { filePath, target });
     },
     subscribeUploads(listener: (jobs: NativeUploadJob[]) => void) {
       const handler = (_event: Electron.IpcRendererEvent, jobs: NativeUploadJob[]) => listener(jobs);
