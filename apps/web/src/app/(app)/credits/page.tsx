@@ -68,6 +68,12 @@ import { BillingDialog } from "@/components/billing/billing-ui";
 
 const WON = (n: number) => `₩${n.toLocaleString("ko-KR")}`;
 
+/** 디자이너 모달의 알약 입력(원본 MODAL 1). 옛 `sd-input` 은 이 화면 언어가 아니다. */
+const PILL_INPUT =
+  "w-full bg-[var(--color-bg-input)] border border-[var(--color-border-subtle)] px-4 py-2.5"
+  + " rounded-full text-xs font-semibold text-[var(--color-text-primary)]"
+  + " focus:outline-none focus:border-[#1C60FF] shadow-none";
+
 /**
  * 자동 결제 정책 문구 — **한 곳에서만 만든다.**
  *
@@ -704,7 +710,7 @@ export default function CreditsPage() {
                 value={buyerName}
                 onChange={(e) => setBuyerName(e.target.value)}
                 placeholder="구매자 이름 (필수)"
-                className="sd-input w-full"
+                className={PILL_INPUT}
                 aria-label="구매자 이름"
               />
               <input
@@ -712,7 +718,7 @@ export default function CreditsPage() {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="영수증 받을 이메일 (필수)"
-                className="sd-input w-full"
+                className={PILL_INPUT}
                 aria-label="구매자 이메일"
               />
               <input
@@ -720,12 +726,12 @@ export default function CreditsPage() {
                 value={phone}
                 onChange={(e) => setPhone(e.target.value)}
                 placeholder="휴대폰번호 (필수 · 01012345678)"
-                className="sd-input w-full"
+                className={PILL_INPUT}
                 aria-label="구매자 휴대폰번호"
               />
               {/* 어느 칸이 왜 막는지 **누르기 전에** 말한다 — 400 토스트로 알게 하지 않는다. */}
               {!canPay && (
-                <p className="text-[10.5px]" style={{ color: "var(--sd-danger-strong)" }}>
+                <p className="text-[10.5px] text-rose-600 dark:text-rose-400">
                   {!nameOk
                     ? "구매자 이름을 입력하세요."
                     : !emailOk
@@ -735,10 +741,9 @@ export default function CreditsPage() {
               )}
               {/* ⚠️ **동의 시점의 고지.** 자동 재결제는 고정 정책이라 등록하는 순간 켜진다 —
                   그 사실을 등록 버튼 바로 위에서 말하지 않으면 "언제 300,000원이 나갔지" 가 된다. */}
-              <p
-                className="rounded-[4px] px-2.5 py-2 text-[11px]"
-                style={{ border: "1px solid var(--sd-border)", background: "var(--sd-subtle, rgba(127,127,127,.06))", color: "var(--sd-fg)" }}
-              >
+              {/* 원본 MODAL 1 의 "자동 재결제 안내 박스" 와 같은 모양. 돈이 나가는 고지라
+                  화면 안에서 가장 눈에 띄어야 하는데, 옛 토큰으로는 회색 글 한 줄이었다. */}
+              <p className="p-4 rounded-xl bg-slate-100 dark:bg-stone-800/60 border-none text-[11px] leading-relaxed text-[var(--color-text-primary)] shadow-none">
                 {/* **동의 시점의 고지** — 금액을 총액 하나로만 말하면 안 된다. 단가가
                     부가세 별도라, 공급가액만 보여주면 카드 명세서 금액과 달라진다. */}
                 카드를 등록하면 <b>{autoChargeSentence(auto?.policy ?? null)}</b>

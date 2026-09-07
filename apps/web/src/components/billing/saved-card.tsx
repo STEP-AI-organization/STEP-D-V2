@@ -1,14 +1,14 @@
 "use client";
 
 /**
- * 저장 카드(결제수단) — 회사 실무자가 직접 등록·삭제하고, 등록해 두면 버튼 한 번으로 충전한다.
+ * 저장 카드(결제수단) — 회사 실무자가 직접 등록·삭제한다. **등록이 곧 자동 결제 동의**다.
  *
- * ## 결제 버튼과 관리 화면을 갈랐다 (2026-08-14)
- * 저장카드 결제 버튼이 금액 입력과 다른 자리에 있어 "이 버튼이 무슨 금액을 긁는지"가 안
- * 보였다. 그래서 결제 버튼(SavedCardChargeButton)은 크레딧 구매 다이얼로그의 금액 바로
- * 옆으로, 등록·삭제(SavedCardManager)는 "결제 수단 관리" 다이얼로그 본문으로 분리했다
- * (껍데기는 다이얼로그가 그린다 — 여기는 내용만). 카드 조회는 부모(page)가 한 번 해서
- * 둘에 같은 스냅샷을 나눠 준다.
+ * ## 결제 버튼은 없앴다 (2026-09-04 · 자동 결제 단일 정책)
+ * 예전엔 저장 카드로 직접 긁는 버튼(`SavedCardChargeButton`)이 크레딧 구매 다이얼로그에
+ * 있었다. 수동 구매를 없애면서 그 다이얼로그가 사라졌고, 버튼도 부르는 곳이 없어져 함께
+ * 지웠다 — 안 불리는 결제 코드를 남겨 두면 다음 사람이 그게 살아 있는 경로라고 믿는다.
+ * 지금 여기 남은 것은 **등록·삭제뿐**이고, 긁는 일은 서버가 잔액 소진 시점에 한다.
+ * 껍데기는 다이얼로그가 그린다(여기는 내용만) · 카드 조회는 부모(page)가 한다.
  *
  * ## 카드 번호는 우리에게 오지 않는다
  * 브라우저 SDK(`requestIssueBillingKey`)가 카드 정보를 **포트원으로 직접** 보내고, 우리는
@@ -61,106 +61,20 @@ function rotateIdemKey(): string {
 }
 
 /**
- * 저장 카드 결제 버튼 — 크레딧 구매 다이얼로그의 **금액 입력 옆**에 놓는다. 무슨 금액을
- * 긁는지 그 자리에서 보이게 하기 위한 분리다. 등록 카드가 없거나 권한이 없으면 아무것도
- * 그리지 않는다(등록 유도는 "결제 수단 관리" 다이얼로그 몫).
+ * 디자이너 모달 푸터의 알약 버튼(원본 MODAL 1). 이 화면 나머지가 전부 그 언어라,
+ * 여기만 옛 `sd-btn` 을 쓰면 같은 다이얼로그 안에서 디자인이 갈린다.
  */
-export function SavedCardChargeButton({
-  card,
-  canManage,
-  credits,
-  amountKrw,
-  onCharged,
-  onBusyChange,
-  buyer,
-}: {
-  /** 부모(page)가 조회한 저장 카드 — 결제수단 패널과 같은 스냅샷을 본다. */
-  card: SavedCard | null;
-  canManage: boolean;
-  /** 충전할 크레딧 — 충전 카드의 입력값 그대로. */
-  credits: number;
-  /** 청구될 원화 총액 — 저장 카드는 결제창이 없어서 버튼 라벨이 금액 확인의 첫 관문이다. */
-  amountKrw: number;
-  onCharged: () => void | Promise<void>;
-  /** 결제 요청 in-flight 를 부모에 알린다 — 다이얼로그가 진행 중 닫힘(ESC·오버레이)을 막는 데 쓴다. */
-  onBusyChange?: (busy: boolean) => void;
-  /** 구매자 3종(이니시스 필수) — 구 카드(미저장)의 폴백. 화면의 구매자 입력값 그대로. */
-  buyer?: { fullName: string; email: string; phoneNumber: string };
-}) {
-  const { toast } = useToast();
-  const [busy, setBusyState] = useState(false);
-  const setBusy = (b: boolean) => { setBusyState(b); onBusyChange?.(b); };
-  const [idemKey, setIdemKey] = useState<string>(() =>
-    // SSR 프리렌더에는 sessionStorage 가 없다 — DOM 에 안 그려지는 값이라 서버/클라 불일치는 무해.
-    typeof window === "undefined" ? crypto.randomUUID() : restoreOrCreateIdemKey(),
-  );
-
-  if (!card?.registered || !card.available || !canManage) return null;
-
-  async function charge() {
-    if (busy || credits <= 0) return;
-    // 저장 카드는 결제창이 없어서 이 confirm 이 유일한 금액 확인 관문이다 — 클릭 즉시 과금 방지.
-    if (
-      !window.confirm(
-        `₩${amountKrw.toLocaleString("ko-KR")} 이 저장 카드로 즉시 결제됩니다.\n\n크레딧 ${credits.toLocaleString("ko-KR")}개 충전을 진행할까요?`,
-      )
-    )
-      return;
-    setBusy(true);
-    try {
-      // 저장 카드는 결제창이 없다 — 서버가 긁고 승인까지 확인한 뒤 응답한다.
-      // 그래서 일반결제와 달리 웹훅을 기다리지 않고 바로 반영된 잔액이 온다.
-      const r = await topupWithCard(credits, idemKey, buyer);
-      // 성공 — 이 키의 일은 끝났다. 지금 갈아야 다음 충전이 "중복"으로 무시되지 않는다.
-      setIdemKey(rotateIdemKey());
-      toast({
-        title: `크레딧 ${r.credits.toLocaleString("ko-KR")}개 충전 완료`,
-        description: `₩${r.amountKrw.toLocaleString("ko-KR")} 결제 · 잔액 ${r.balance.toLocaleString("ko-KR")}`,
-        tone: "done",
-      });
-      await onCharged();
-      // 사이드바 잔액도 즉시 따라오게 한다 — 일반결제 웹훅 반영과 같은 신호.
-      window.dispatchEvent(new Event("stepd:credits-changed"));
-    } catch (err) {
-      // 전부 "결제 실패"로 뭉개면 안 된다 — "확인 중"(돈이 나갔을 수 있음)에서 실패로 읽은
-      // 사용자가 재결제해 이중 청구가 된다. topupWithCard 는 자체 fetch 라 ApiError 가 아닐 수
-      // 있으므로(status 유실) 상태코드가 있으면 함께 보고, 없으면 서버 메시지 문구로 가른다.
-      const m = msg(err);
-      const status = err instanceof ApiError ? err.status : undefined;
-      if ((status === 409 || status === undefined) && /확인 중|정산/.test(m)) {
-        // 승인됐을 수 있다 — 키를 유지한 채(새로고침에도 sessionStorage 가 지킨다) 웹훅 정산을 기다린다.
-        toast({
-          title: "결제 확인 중",
-          description: `${m} 재결제하지 마세요 — 같은 요청으로 다시 시도해도 두 번 긁히지 않습니다.`,
-          tone: "warn",
-        });
-      } else if (/idempotency|요청 키|이미 사용됐/.test(m)) {
-        // 같은 키가 다른 금액의 주문에 이미 묶였다(실패 후 금액 바꿔 재클릭). 서버가 **긁기 전에**
-        // 거절하는 경로라 새 키가 안전하고, 키가 새로고침을 살아남는 지금은 여기서 갈아 줘야
-        // 막다른 길에서 빠져나올 수 있다.
-        setIdemKey(rotateIdemKey());
-        toast({ title: "요청이 겹쳤습니다 — 새로고침 후 재시도", description: m, tone: "warn" });
-      } else {
-        toast({ title: "결제 실패", description: m, tone: "error" });
-      }
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <button
-      type="button"
-      className="sd-btn"
-      disabled={busy || credits <= 0}
-      title={`등록된 카드(끝 ${card.last4 ?? "····"})로 결제창 없이 즉시 결제합니다`}
-      onClick={charge}
-    >
-      {/* 청구액을 버튼에 그대로 박는다 — 얼마가 나가는지 모르고 누르는 일이 없게. */}
-      {busy ? "결제 중…" : `저장 카드로 ₩${amountKrw.toLocaleString("ko-KR")} 결제`}
-    </button>
-  );
-}
+const PILL =
+  "px-5 py-2.5 rounded-full border border-[var(--color-border-subtle)] bg-[var(--color-bg-input)]"
+  + " hover:bg-[var(--color-bg-card-hover)] text-[var(--color-text-primary)] text-xs font-semibold"
+  + " cursor-pointer transition-colors disabled:opacity-60 disabled:cursor-not-allowed";
+const PILL_PRIMARY =
+  "px-5 py-2.5 rounded-full bg-[#1C60FF] hover:bg-blue-600 text-white text-xs font-bold"
+  + " cursor-pointer transition-colors border-none disabled:opacity-60 disabled:cursor-not-allowed";
+const PILL_DANGER =
+  "px-5 py-2.5 rounded-full bg-white dark:bg-slate-900 hover:bg-rose-500/10 text-rose-600"
+  + " dark:text-rose-400 text-xs font-bold transition-colors cursor-pointer border border-rose-500/30"
+  + " disabled:opacity-60 disabled:cursor-not-allowed";
 
 export function SavedCardManager({
   canManage,
@@ -199,10 +113,10 @@ export function SavedCardManager({
   if (!card) {
     if (!loadFailed) {
       // 다이얼로그 안이라 빈 화면이 더 어색하다 — 조회 중임을 말한다.
-      return <p className="text-[11.5px]" style={{ color: "var(--sd-mut)" }}>불러오는 중…</p>;
+      return <p className="text-[11px] text-[var(--color-text-muted)]">불러오는 중…</p>;
     }
     return (
-      <p className="text-[11.5px]" style={{ color: "var(--sd-mut)" }}>
+      <p className="text-[11px] text-[var(--color-text-muted)]">
         결제수단 정보를 불러오지 못했습니다.{" "}
         <button type="button" className="underline" onClick={() => void onReload()}>
           다시 시도
@@ -212,7 +126,7 @@ export function SavedCardManager({
   }
   if (!card.available) {
     return (
-      <p className="text-[11.5px]" style={{ color: "var(--sd-mut)" }}>
+      <p className="text-[11px] text-[var(--color-text-muted)]">
         카드 저장이 아직 준비되지 않았습니다. {card.unavailableReason ?? ""}
       </p>
     );
@@ -287,17 +201,18 @@ export function SavedCardManager({
           <CardVisual brand={card.brand} last4={card.last4} createdAt={card.createdAt} />
           {canManage && (
             <div className="flex flex-wrap items-center gap-2">
-              {/* 결제 버튼은 여기 없다 — 크레딧 구매 다이얼로그(금액 옆)의 SavedCardChargeButton 이 긁는다. */}
+              {/* 결제 버튼은 없다 — 수동 구매를 없앴다(자동 결제 단일 정책 · 2026-09-04).
+                  카드는 등록만 하고, 소진되면 서버가 알아서 긁는다. */}
               <button
                 type="button"
-                className="sd-btn ml-auto"
+                className={`${PILL} ml-auto`}
                 disabled={busy !== null || buyerReady === false}
                 title={buyerReady === false ? "위 구매자 정보를 먼저 채워 주세요" : undefined}
                 onClick={register}
               >
                 {busy === "register" ? "등록 중…" : "카드 변경"}
               </button>
-              <button type="button" className="sd-btn" disabled={busy !== null} onClick={remove}>
+              <button type="button" className={PILL_DANGER} disabled={busy !== null} onClick={remove}>
                 {busy === "delete" ? "삭제 중…" : "삭제"}
               </button>
             </div>
@@ -305,24 +220,25 @@ export function SavedCardManager({
         </div>
       ) : (
         <div className="flex flex-col gap-2">
-          <span className="text-[11.5px]" style={{ color: "var(--sd-mut)" }}>
+          <span className="text-[11px] text-[var(--color-text-muted)]">
             등록된 카드가 없습니다. 등록해 두면 결제창 없이 버튼 한 번으로 충전합니다.
             <br />
-            {/* carduse bypass 로 카드 종류를 창에 고정하므로(2026-08-12) 이제 화면에서 먼저 고른다.
-                무기명(공용) 법인카드는 카드사 정책상 정기결제 등록이 막힐 수 있는데, 그때도
-                일반결제(충전 카드의 결제창 버튼)는 법인카드로 정상 결제된다 — 상세는 title 로. */}
+            {/* ⚠️ **문구를 고쳤다** (2026-09-07). 예전엔 "등록이 막혀도 일반결제는 가능합니다"
+                라고 안내했는데, 수동 크레딧 구매를 없애면서(자동 결제 단일 정책) **그 대안이
+                사라졌다.** 없는 기능을 퇴로로 안내하면 사용자는 그걸 찾아 헤맨다 —
+                지금은 등록이 막히면 다른 카드를 쓰는 것 말고 방법이 없고, 그렇게 적는다. */}
             <span
-              style={{ color: "var(--sd-warn)" }}
-              title="무기명(공용) 법인카드는 카드사 정책상 정기결제(빌링키) 등록이 막힐 수 있습니다. 그 경우에도 충전 카드의 일반결제(결제창)는 법인카드로 정상 결제됩니다."
+              className="text-amber-600 dark:text-amber-400"
+              title="무기명(공용) 법인카드는 카드사 정책상 정기결제(빌링키) 등록이 막힐 수 있습니다. 기명 카드나 다른 카드로 등록해 주세요."
             >
-              ⚠ 무기명(공용) 법인카드는 등록이 막힐 수 있습니다 — 일반결제는 가능합니다.
+              ⚠ 무기명(공용) 법인카드는 등록이 막힐 수 있습니다 — 기명 카드로 등록해 주세요.
             </span>
           </span>
           {canManage && (
             <div className="flex flex-wrap items-center gap-2">
               <button
                 type="button"
-                className="sd-btn sd-btn-primary ml-auto"
+                className={`${PILL_PRIMARY} ml-auto`}
                 disabled={busy !== null || buyerReady === false}
                 title={buyerReady === false ? "위 구매자 정보를 먼저 채워 주세요" : undefined}
                 onClick={register}
@@ -336,7 +252,7 @@ export function SavedCardManager({
 
       {!canManage && (
         // 왜 버튼이 없는지 말해 준다 — 없으면 "고장났나" 로 읽힌다.
-        <p className="text-[10.5px]" style={{ color: "var(--sd-mut)" }}>
+        <p className="text-[10.5px] text-[var(--color-text-muted)]">
           결제수단 등록·삭제와 결제는 워크스페이스 owner·admin 만 할 수 있습니다.
         </p>
       )}
