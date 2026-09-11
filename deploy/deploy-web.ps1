@@ -6,9 +6,16 @@
   Vercel 은 main 푸시를 감지해 자동 빌드한다. 이 스크립트는 그 앞뒤를 책임진다:
   ① 배포 author 강제  ② 로컬 next build 검증  ③ push  ④ Vercel 빌드 감시  ⑤ 라이브 확인.
 
-  ⚠️ 함정(2026-07-16): Vercel git 배포는 커밋 author 이메일이 Vercel 팀 멤버여야 빌드된다.
-     ha983885@snu.ac.kr(hakyungjin) author 커밋은 "Git author must have access"로 조용히
-     UNKNOWN 차단(에러도 없이 무한 대기처럼 보임). → author 를 contact@stepai.kr 로 강제한다.
+  ⚠️ 함정: Vercel git 배포는 커밋의 주인이 **Vercel 팀 계정에 연결돼** 있어야 빌드된다.
+     아니면 "Git author must have access" 로 조용히 차단된다(에러 없이 무한 대기처럼 보임).
+
+     단 **판정 기준은 커밋 이메일이 아니라 GitHub 계정 연결이다.** 2026-07-16 에는 여기에
+     "ha983885@snu.ac.kr(hakyungjin) author 커밋은 차단된다" 고 적혀 있었는데, 2026-09-11
+     실측에서 그 author 의 머지 커밋 4건이 전부 정상 배포됐다 — Vercel 이 팀 유일 멤버
+     contact-4523 소행으로 기록했다(그 GitHub 계정이 팀에 연결돼 있어서). 팀 시트는 1개다.
+     아래 author 강제는 그래도 남겨 둔다: 이 스크립트로 올리는 경로에서는 확실히 안전하고,
+     비용이 0 이다. 하지만 **GitHub 머지 경로는 이 보호를 안 탄다** — 거기서 지켜야 할 규칙은
+     "이메일을 맞춘다" 가 아니라 **"팀 시트에 연결된 사람이 머지한다"** 이다(CONTRIBUTING).
 
 .EXAMPLE
   .\deploy\deploy-web.ps1              # author 강제 → 검증 → 푸시 → 배포 확인

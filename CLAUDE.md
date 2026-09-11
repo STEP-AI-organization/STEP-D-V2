@@ -283,8 +283,18 @@ core/ 쪽 스위치(파이썬): `RUN_FACES`·`RUN_PPL`·`RUN_REFINE`·`RUN_CHYRO
 - **표준 경로 — `bash deploy/cloud.sh <target>`** (`status`|`server`|`worker`|`gebd`|`migrate`|`all`).
   비대화형 Bash + deployer SA 로 돌아서 PowerShell stderr 오탐·재인증 함정을 피한다.
   `/deploy` 스킬(`.claude/skills/deploy/`)이 같은 스크립트를 감싼다.
-- **웹**: `.\deploy\deploy-web.ps1` — Vercel. **커밋 author가 contact@stepai.kr이어야 배포됨**
-  (Vercel git-author 차단, 스크립트가 강제). 프로덕션 = https://stepd.stepai.kr
+- **웹**: Vercel **git 자동배포**다 — `apps/web` 을 건드린 커밋이 `main` 에 들어가면 그 즉시
+  프로덕션에 나간다(**머지 = 배포**). 프로젝트 `step-d` · rootDirectory `apps/web` ·
+  `createDeployments: enabled` (2026-09-11 실측). `apps/web` 을 안 건드린 커밋은 빌드를 건너뛴다.
+  `.\deploy\deploy-web.ps1` 은 배포 **수단이 아니라 래퍼**다 — 배포를 일으키는 건 그 안의
+  `git push origin HEAD:main` 하나이고, `gcp-keys/vercel-token.txt` 는 그 뒤 `vercel ls` 로
+  빌드를 **감시**하는 데만 쓴다(토큰이 없으면 경고만 하고 `exit 0`). 프로덕션 = https://stepd.stepai.kr
+  ⚠️ **판정 기준은 커밋 이메일이 아니라 GitHub 계정 연결이다.** 여기 오래 "커밋 author가
+  contact@stepai.kr이어야 배포됨" 이라 적혀 있었는데 **틀렸다** — 2026-09-11 실측에서 author 가
+  `ha983885@snu.ac.kr` 인 머지 커밋 4건이 전부 정상 배포됐고, Vercel 은 그걸 팀 유일 멤버
+  `contact-4523` 소행으로 기록했다(그 GitHub 계정이 팀에 연결돼 있어서). **시트는 1개뿐이다.**
+  그래서 규칙은 "이메일을 맞춘다"가 아니라 **"팀 시트에 연결된 사람이 머지한다"** 이다
+  (CONTRIBUTING §브랜치와 PR). 이메일만 바꿔서 될 거라 믿으면 조용히 안 나간다.
 - **어드민**: `cd admin && npx vercel deploy --prod --scope step-ai` — **git 자동배포가 아니다.**
   푸시해도 안 나가므로 손으로 올려야 한다(2026-09-03: 그래서 21일치가 밀려 있었다).
   ⚠️ Vercel 에 **이름이 비슷한 프로젝트가 둘** 있다:
