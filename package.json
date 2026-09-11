@@ -6,6 +6,7 @@
   "scripts": {
     "setup:check": "node scripts/setup-check.mjs",
     "check": "pnpm -r typecheck && pnpm --filter stepaistudio test && pnpm --filter @stepd/server test && node scripts/test-core.mjs",
+    "ci:local": "node scripts/ci-local.mjs",
     "dev": "pnpm -r --parallel dev",
     "dev:web": "pnpm --filter @stepd/web dev",
     "dev:server": "pnpm --filter @stepd/server dev",
