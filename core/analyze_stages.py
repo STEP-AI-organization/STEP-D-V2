@@ -1110,10 +1110,16 @@ def run_recommend(
     반환: {"shorts": [...], "genre": ...}"""
     import os
     from core.recommend.recommend import recommend, recommend_narrative_first
+    from core.recommend.title_names import title_cast, guard_title_result
 
     ts = time.time()
     rec = load_json(out_dir / "shorts.json")
-    if not (isinstance(rec, dict) and isinstance(rec.get("shorts"), list) and rec.get("shorts")):
+    title_policy = title_cast(program_context)
+    # 배우 대응표를 새로 만들거나 고쳤다면 제목 프롬프트가 바뀐 것이다. 재분석 시 기존
+    # shorts 체크포인트를 재사용하면 영원히 옛 극중 이름이 남으므로 추천 단계만 다시 산다.
+    title_policy_changed = bool(title_policy) and (
+        not isinstance(rec, dict) or rec.get("_titleCast") != title_policy)
+    if not (isinstance(rec, dict) and isinstance(rec.get("shorts"), list) and rec.get("shorts")) or title_policy_changed:
         step("쇼츠 추천…")
         progress("recommend", 85, "쇼츠 추천 중")
         mode = os.environ.get("RECOMMEND_MODE") or "narrative_first"
@@ -1141,9 +1147,13 @@ def run_recommend(
                 on_progress=lambda done, total: progress(
                     "recommend", 85 + 10 * done / max(1, total), f"후보 추출 {done}/{total} 구간"),
             )
+        if title_policy:
+            rec["_titleCast"] = title_policy
+        rec = guard_title_result(rec, program_context)
         save_json(out_dir / "shorts.json", rec)
     else:
         step(f"쇼츠 추천 — 체크포인트 재사용 ({len(rec['shorts'])}개)")
+        rec = guard_title_result(rec, program_context)
     shorts = rec["shorts"]
     step(f"  {len(shorts)} 쇼츠 (장르: {rec.get('genre')})")
     timed("recommend", ts)

@@ -148,6 +148,9 @@ function ProgramDetailInner({
   // AI 프롬프트 2종 — 저장 시 trim 해서 보내고, 빈 값은 "" 그대로 → 서버가 필드를 삭제한다
   // (pipelineGenre 와 같은 시맨틱). 반영은 다음 분석부터라 화면에 그렇게 말해 준다.
   const [titlePrompt, setTitlePrompt] = useState(program.titlePrompt ?? "");
+  const [titleCastText, setTitleCastText] = useState(
+    (program.titleCast ?? []).map((m) => `${m.characterNames.join(", ")} = ${m.actorName}`).join("\n"),
+  );
   const [recommendPrompt, setRecommendPrompt] = useState(program.recommendPrompt ?? "");
   const [moods, setMoods] = useState<string[]>(program.moods ?? []);
   const [newMood, setNewMood] = useState("");
@@ -217,6 +220,7 @@ function ProgramDetailInner({
     setSpinoff(program.spinoff ?? "");
     setAwards(program.awards ?? "");
     setTitlePrompt(program.titlePrompt ?? "");
+    setTitleCastText((program.titleCast ?? []).map((m) => `${m.characterNames.join(", ")} = ${m.actorName}`).join("\n"));
     setRecommendPrompt(program.recommendPrompt ?? "");
     setMoods(program.moods ?? []);
     setCast(program.cast ?? []);
@@ -227,7 +231,7 @@ function ProgramDetailInner({
     program.rightsUntil, program.rightsNote, program.endedDate,
     program.synopsis, program.broadcaster, program.schedule, program.firstAiredDate,
     program.currentInfo, program.director, program.spinoff, program.awards,
-    program.titlePrompt, program.recommendPrompt,
+    program.titlePrompt, program.recommendPrompt, program.titleCast,
     program.moods, program.cast, program.castPhotos, program.posterImageDataUrl,
     program.naverCategory,
     hydratedRef,
@@ -441,6 +445,13 @@ function ProgramDetailInner({
         // AI 프롬프트 — 빈 값도 "" 로 보낸다. 서버 PATCH 가 "" 를 받으면 필드를 제거해
         // "지시 없음" 상태로 되돌아간다(안 보내면 기존 값이 병합 유지돼 못 지운다).
         titlePrompt: titlePrompt.trim(),
+        titleCast: titleCastText.split(/\r?\n/).filter((line) => line.trim()).map((line) => {
+          const parts = line.split("=");
+          if (parts.length !== 2 || !parts[0].trim() || !parts[1].trim()) {
+            throw new Error("배우 대응표는 한 줄에 '극중 이름 = 배우명' 형식으로 입력해 주세요.");
+          }
+          return { actorName: parts[1].trim(), characterNames: parts[0].split(",").map((name) => name.trim()) };
+        }),
         recommendPrompt: recommendPrompt.trim(),
         moods,
         // 원본을 못 받았으면 **보내지 않는다** — 빈 문자열은 서버에서 삭제로 읽힌다.
@@ -912,6 +923,25 @@ function ProgramDetailInner({
             ))}
           </div>
         )}
+      </Card>
+
+      <Card title="오버레이 제목의 배우명" hint="극중 이름 대신 시청자에게 알려진 배우 활동명을 사용합니다.">
+        <label htmlFor="title-cast" className="mb-1.5 block text-xs font-semibold text-[var(--color-text-muted)]">
+          극중 이름 = 배우명 (한 줄에 한 배우)
+        </label>
+        <textarea
+          id="title-cast"
+          value={titleCastText}
+          onChange={(e) => setTitleCastText(e.target.value)}
+          rows={5}
+          placeholder={"극중 이름, 다른 호칭 = 배우명"}
+          className={textareaCls}
+        />
+        <p className="mt-2 text-[11px] leading-relaxed text-[var(--color-text-muted)]">
+          등록하면 새로 생성하는 오버레이 제목과 제목 재생성에 적용됩니다. 대사 자막은 원문을 유지합니다.
+          같은 역할의 아역·성인역은 구분된 극중 이름으로 입력해 주세요. 인물이 불확실하면 이름을 생략합니다.
+          비우고 저장하면 기존 표기로 돌아갑니다. 이미 저장·렌더된 제목은 자동으로 바뀌지 않습니다.
+        </p>
       </Card>
 
       {/* AI 프롬프트 — 제목·추천 생성에 이 프로그램만의 추가 지시. 별도 저장 버튼 없이

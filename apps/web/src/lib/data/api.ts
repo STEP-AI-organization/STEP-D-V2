@@ -418,6 +418,8 @@ export interface CreateProgramInput {
   // ── AI 프롬프트 — 프로그램별 추가 지시 (다음 분석부터 반영) ─────────────
   /** 제목 생성 추가 지시. ""를 보내면 서버가 필드를 삭제한다(pipelineGenre 와 같은 시맨틱). */
   titlePrompt?: string;
+  /** 오버레이 제목의 배우 대응표. []는 설정 해제. */
+  titleCast?: Array<{ actorName: string; characterNames: string[] }>;
   /** 추천(BEAT 조합) 추가 지시. "" = 필드 삭제(지시 없음 복귀). */
   recommendPrompt?: string;
   // ── 편성 상태 · 담당 · 권리 윈도우 (FLOWS F10 · 2026-08-10) ──────────────
