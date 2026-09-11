@@ -692,7 +692,7 @@ export default function CreditsPage() {
       {dialog === "card" && (
         <BillingDialog
           title="결제 수단"
-          subtitle="카드 번호는 포트원으로 직접 전달되며 우리 서버에는 저장되지 않습니다."
+          subtitle="카드를 한 번 등록하면 안내된 조건에 따라 자동결제됩니다."
           onClose={close}
           maxWidth={512}
         >

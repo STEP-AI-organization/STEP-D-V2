@@ -8,6 +8,7 @@
 import { serve } from "@hono/node-server";
 import { Hono, type Context } from "hono";
 import { HTTPException } from "hono/http-exception";
+import { bodyLimit } from "hono/body-limit";
 import { cors } from "hono/cors";
 import { compress } from "hono/compress";
 import { getCookie, setCookie, deleteCookie } from "hono/cookie";
@@ -357,7 +358,8 @@ import {
   topupPaymentId,
 } from "./billing/credits.ts";
 import { billableMinutes, portoneConfigured } from "./billing/billing.ts";
-import { chargeWithBillingKey, getBillingKeyInfo, getPayment, verifyWebhook } from "./billing/portone.ts";
+import { CardIssueError, issueBillingKey, chargeWithBillingKey, getBillingKeyInfo, getPayment, verifyWebhook } from "./billing/portone.ts";
+import { checkCardCredential } from "./billing/card-credential.ts";
 // 자동 충전 알림 해제는 **이 한 함수**로만 한다 — 라우트마다 db-pg 의 저장 함수를 직접
 // 부르면 반드시 한 자리가 빠진다(실제로 직접 충전 경로가 빠져 있었다).
 import { clearAutoTopupAlert, maybeAutoTopup, topupAndRecheck } from "./billing/auto-topup.ts";
@@ -6557,8 +6559,60 @@ app.delete("/api/assets", async (c) => {
 
 // ── 저장 카드(빌링키) ─────────────────────────────────────────────────────────
 // 매번 카드를 다시 넣지 않고 버튼 한 번으로 충전한다.
-// 카드 번호는 브라우저 → 포트원으로 직접 가고 우리 서버엔 오지 않는다. 우리가 받는 건
-// 빌링키 문자열뿐이지만, 그게 곧 "이 카드로 긁을 권한"이라 회사 스코프 안에서만 다룬다.
+// 자체 입력창의 카드정보는 /issue에서만 일시적으로 받아 포트원에 전달한다.
+// DB에는 빌링키·표시정보·구매자만 저장한다. 기존 SDK 클라이언트용 경로도 유지한다.
+
+app.use("/api/billing/card/issue", bodyLimit({ maxSize: 4096 }));
+
+/** 자체 카드 입력창: 발급·저장을 서버에서 끝내고 빌링키를 브라우저에 보내지 않는다. */
+app.post("/api/billing/card/issue", async (c) => {
+  const actor = requireManager(c).email;
+  c.header("Cache-Control", "no-store");
+  if (!c.req.header("content-type")?.toLowerCase().startsWith("application/json")) {
+    return c.json({ error: "json_required", message: "카드 등록 요청 형식이 올바르지 않습니다." }, 415);
+  }
+  const cfg = billingConfig();
+  if (!cfg.ok || !String(process.env.PORTONE_API_SECRET ?? "").trim()) {
+    return c.json({ error: "billing_unconfigured", message: "카드 등록 설정을 확인해 주세요." }, 503);
+  }
+  // 이 경로의 예외는 전역 onError로 보내지 않는다. DB·PG 예외에 카드 원문/키가 있을 수 있다.
+  try {
+    const body = await c.req.json<Record<string, unknown>>().catch(() => null);
+    if (!body || body.autoChargeConsent !== true) {
+      return c.json({ error: "consent_required", message: "자동결제 안내에 동의해 주세요." }, 400);
+    }
+    const checked = checkCardCredential(body.credential);
+    if (!checked.ok) return c.json({ error: "invalid_card", message: checked.message }, 400);
+    const saved = await getBillingCard();
+    const buyer = (body.buyer ?? {}) as Record<string, unknown>;
+    const who = checkCustomer({
+      fullName: String(buyer.fullName ?? "").trim() || saved?.buyerName || "",
+      email: String(buyer.email ?? "").trim() || saved?.buyerEmail || "",
+      phoneNumber: String(buyer.phoneNumber ?? "").trim() || saved?.buyerPhone || "",
+    });
+    if (!who.ok) return c.json({ error: "customer_required", message: who.message }, 400);
+    const billingKey = await issueBillingKey({
+      ...cfg.config, customerId: currentTenantId(), customer: who.customer, credential: checked.credential,
+    });
+    let display: { brand: string | null; last4: string | null } = {
+      brand: null, last4: checked.credential.number.slice(-4),
+    };
+    try {
+      const found = extractCardDisplay(await getBillingKeyInfo(billingKey));
+      display = { brand: found.brand, last4: found.last4 ?? display.last4 };
+    } catch { /* 카드 표시정보 조회 실패는 발급 성공을 뒤집지 않는다. 원문 로그 금지. */ }
+    await saveBillingCard({
+      billingKey, cardBrand: display.brand, cardLast4: display.last4, issuedBy: actor, buyer: who.customer,
+    });
+    try { await clearAutoTopupAlert("card-register"); } catch { /* 저장 성공 후 재등록을 유도하지 않는다. */ }
+    return c.json({ ok: true });
+  } catch (err) {
+    if (err instanceof CardIssueError) {
+      return c.json({ error: "card_issue_failed", message: err.message }, 502);
+    }
+    return c.json({ error: "card_registration_failed", message: "카드 등록 결과를 확인하지 못했습니다. 결제수단을 다시 조회해 등록 상태를 확인해 주세요." }, 503);
+  }
+});
 
 /** 카드 등록 준비 — 브라우저 SDK 에 넘길 값. 설정·필수정보가 없으면 창을 아예 안 띄운다. */
 app.post("/api/billing/card/prepare", async (c) => {

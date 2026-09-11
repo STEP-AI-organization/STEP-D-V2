@@ -14,6 +14,8 @@
  * (portone.test.ts). 나중에 SDK 로 갈아탈 거면 verifyWebhook 만 바꾸면 된다.
  */
 import crypto from "node:crypto";
+import type { CardCredential } from "./card-credential.ts";
+import type { CustomerInfo } from "./billing-card.ts";
 
 const API_BASE = "https://api.portone.io";
 
@@ -30,7 +32,7 @@ function apiSecret(): string {
   return s;
 }
 
-async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
+async function call<T>(method: string, path: string, body?: unknown, signal?: AbortSignal): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
     method,
     headers: {
@@ -39,6 +41,7 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
       ...(body ? { "Content-Type": "application/json" } : {}),
     },
     ...(body ? { body: JSON.stringify(body) } : {}),
+    ...(signal ? { signal } : {}),
   });
 
   const text = await res.text();
@@ -51,6 +54,40 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
 
 function safeJson(text: string): unknown {
   try { return JSON.parse(text); } catch { return { raw: text }; }
+}
+
+/** 원문 요청/PG 오류가 로그·브라우저로 새지 않게 발급 경계에서 정제한다. */
+export class CardIssueError extends Error {
+  constructor() {
+    super("카드 등록을 완료하지 못했습니다. 카드 정보와 추가 확인정보를 확인해 주세요. 계속 실패하면 다른 카드로 등록하거나 관리자에게 문의해 주세요.");
+    this.name = "CardIssueError";
+  }
+}
+
+/** 카드 등록만 수행한다. 결제금액이나 결제 API는 이 요청에 포함하지 않는다. */
+export async function issueBillingKey(input: {
+  storeId: string; channelKey: string; customerId: string;
+  customer: CustomerInfo; credential: CardCredential;
+}): Promise<string> {
+  try {
+    const result = await call<{ billingKeyInfo?: { billingKey?: unknown } }>("POST", "/billing-keys", {
+      storeId: input.storeId,
+      channelKey: input.channelKey,
+      customer: {
+        id: input.customerId,
+        name: { full: input.customer.fullName },
+        email: input.customer.email,
+        phoneNumber: input.customer.phoneNumber,
+      },
+      method: { card: { credential: input.credential } },
+    }, AbortSignal.timeout(20_000));
+    const key = result?.billingKeyInfo?.billingKey;
+    if (typeof key !== "string" || !key.trim()) throw new CardIssueError();
+    return key;
+  } catch {
+    // PortOneError.body에는 카드정보가 에코될 수 있다. cause·원문을 보존하지 않는다.
+    throw new CardIssueError();
+  }
 }
 
 // ── 빌링키 결제 (§4-2) ───────────────────────────────────────────────────────────
