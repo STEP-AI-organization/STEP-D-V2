@@ -65,14 +65,9 @@ import {
 import { downloadInvoicePdf } from "@/lib/billing/invoice-pdf";
 import { SavedCardManager } from "@/components/billing/saved-card";
 import { BillingDialog } from "@/components/billing/billing-ui";
+import { MODAL_W, PILL_INPUT } from "@/components/ui/tokens";
 
 const WON = (n: number) => `₩${n.toLocaleString("ko-KR")}`;
-
-/** 디자이너 모달의 알약 입력(원본 MODAL 1). 옛 `sd-input` 은 이 화면 언어가 아니다. */
-const PILL_INPUT =
-  "w-full bg-[var(--color-bg-input)] border border-[var(--color-border-subtle)] px-4 py-2.5"
-  + " rounded-full text-xs font-semibold text-[var(--color-text-primary)]"
-  + " focus:outline-none focus:border-[#1C60FF] shadow-none";
 
 /**
  * 자동 결제 정책 문구 — **한 곳에서만 만든다.**
@@ -643,7 +638,7 @@ export default function CreditsPage() {
       {/* 크레딧 구매 — 프리셋·수량·구매자 3필드·결제 2종. 결제 진행 중엔 닫기를 막는다. */}
       {/* 거래 전체 내역 — 서버가 주는 최근 50건 그대로. */}
       {dialog === "ledger" && (
-        <BillingDialog title="크레딧 내역" subtitle="최근 거래 목록입니다." onClose={close} maxWidth={576}>
+        <BillingDialog title="크레딧 내역" subtitle="최근 거래 목록입니다." onClose={close} maxWidth={MODAL_W.xl}>
           {!state || state.ledger.length === 0 ? (
             <div className="grid min-h-[100px] place-items-center rounded-xl px-6 text-center text-xs text-[var(--color-text-muted)] bg-[var(--color-bg-input)]/60">
               {state ? "아직 내역이 없습니다" : "불러오는 중…"}
@@ -694,7 +689,7 @@ export default function CreditsPage() {
           title="결제 수단"
           subtitle="카드를 한 번 등록하면 안내된 조건에 따라 자동결제됩니다."
           onClose={close}
-          maxWidth={512}
+          maxWidth={MODAL_W.lg}
         >
           {/* ⚠️ **구매자 정보는 이 화면 안에 있어야 한다.**
               예전엔 이 입력칸이 '구매'·'설정' 다이얼로그에만 있고 여기엔 없었다. 다이얼로그는
@@ -780,7 +775,7 @@ export default function CreditsPage() {
           title="설정"
           subtitle="구매자 정보는 결제창(KG이니시스)이 필수로 요구하는 항목입니다."
           onClose={close}
-          maxWidth={448}
+          maxWidth={MODAL_W.md}
           footer={
             <button
               type="button"
@@ -842,7 +837,7 @@ export default function CreditsPage() {
           title="인보이스"
           subtitle="결제 완료된 충전 건마다 발급됩니다 · 세금계산서가 아닌 결제 내역 확인용 문서입니다."
           onClose={close}
-          maxWidth={672}
+          maxWidth={MODAL_W["2xl"]}
         >
           {!invoiceList || invoiceList.invoices.length === 0 ? (
             <div className="grid min-h-[100px] place-items-center rounded-xl px-6 text-center text-xs text-[var(--color-text-muted)] bg-[var(--color-bg-input)]/60">

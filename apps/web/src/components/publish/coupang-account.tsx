@@ -25,6 +25,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { Download } from "lucide-react";
+import { BTN, BTN_DEL, BTN_PRIMARY } from "@/components/ui/tokens";
 import {
   fetchCommerceAccount,
   saveCommerceAccount,
@@ -41,11 +42,6 @@ function cmdTargets(): { api: string; web: string } {
   if (base.startsWith("http")) return { api: base.replace(/\/api$/, ""), web: origin };
   return { api: `${origin}${base.replace(/\/api$/, "")}`, web: origin };
 }
-
-/** 원본 알약 버튼 (publish-channels D:544·550·264). */
-const BTN = "px-3 py-1.5 rounded-full bg-[var(--color-bg-input)] hover:bg-[var(--color-bg-card-hover)] text-xs text-[var(--color-text-primary)] border border-[var(--color-border-subtle)] font-medium cursor-pointer shadow-none disabled:opacity-50 disabled:cursor-not-allowed";
-const BTN_DEL = "px-3 py-1.5 rounded-full bg-[var(--color-bg-card)] hover:bg-rose-50 hover:text-rose-600 hover:border-rose-200 dark:hover:bg-rose-950/60 dark:hover:text-rose-400 dark:hover:border-rose-900 text-xs text-[var(--color-text-primary)] border border-[var(--color-border-subtle)] font-medium cursor-pointer transition-colors shadow-none";
-const BTN_PRIMARY = "px-3.5 py-2 rounded-full bg-[#222222] hover:bg-black text-white dark:bg-stone-700 dark:hover:bg-stone-600 text-xs font-bold transition-colors cursor-pointer shadow-none border-none disabled:opacity-50 disabled:cursor-not-allowed";
 
 function when(ts: number | null): string {
   if (!ts) return "";
