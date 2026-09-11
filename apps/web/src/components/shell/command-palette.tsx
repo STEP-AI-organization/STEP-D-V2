@@ -144,7 +144,7 @@ export function CommandPalette() {
         className="relative w-full max-w-xl overflow-hidden rounded-xl border border-border bg-popover shadow-2xl"
       >
         <div className="flex items-center gap-2 border-b border-border px-4">
-          <Search className="size-4 text-muted-foreground" />
+          <Search className="size-4 text-[var(--color-text-muted)]" />
           <input
             ref={inputRef}
             value={query}
@@ -153,13 +153,13 @@ export function CommandPalette() {
             placeholder="이동하거나 검색… (회차·클립·화면)"
             className="h-12 w-full bg-transparent text-sm outline-none placeholder:text-muted-foreground"
           />
-          <kbd className="rounded border border-border bg-muted px-1.5 text-[10px] text-muted-foreground">
+          <kbd className="rounded border border-border bg-muted px-1.5 text-[10px] text-[var(--color-text-muted)]">
             ESC
           </kbd>
         </div>
         <ul className="max-h-80 overflow-y-auto p-2">
           {filtered.length === 0 && (
-            <li className="px-3 py-6 text-center text-sm text-muted-foreground">결과 없음</li>
+            <li className="px-3 py-6 text-center text-sm text-[var(--color-text-muted)]">결과 없음</li>
           )}
           {filtered.map((cmd, idx) => (
             <li key={cmd.id}>
@@ -168,14 +168,14 @@ export function CommandPalette() {
                 onClick={() => runAt(idx)}
                 className={cn(
                   "flex w-full items-center justify-between gap-2 rounded-md px-3 py-2 text-left text-sm",
-                  idx === active ? "bg-accent text-accent-foreground" : "text-foreground",
+                  idx === active ? "bg-accent text-accent-foreground" : "text-[var(--color-text-primary)]",
                 )}
               >
                 <span className="flex items-center gap-2">
-                  <span className="text-xs text-muted-foreground">{cmd.group}</span>
+                  <span className="text-xs text-[var(--color-text-muted)]">{cmd.group}</span>
                   <span>{cmd.label}</span>
                 </span>
-                {idx === active && <CornerDownLeft className="size-3.5 text-muted-foreground" />}
+                {idx === active && <CornerDownLeft className="size-3.5 text-[var(--color-text-muted)]" />}
               </button>
             </li>
           ))}

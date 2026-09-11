@@ -17,7 +17,7 @@ export function ThumbnailPicker({
 }) {
   if (!thumbnails || thumbnails.length === 0) {
     return (
-      <div className="flex items-center justify-center p-4 text-[12px] text-muted-foreground border rounded-md border-dashed">
+      <div className="flex items-center justify-center p-4 text-[12px] text-[var(--color-text-muted)] border rounded-md border-dashed">
         등록된 썸네일 변형이 없습니다.
       </div>
     );
@@ -25,7 +25,7 @@ export function ThumbnailPicker({
 
   return (
     <div className="flex flex-col gap-2 mt-2">
-      <div className="text-[11px] font-semibold text-muted-foreground mb-1">
+      <div className="text-[11px] font-semibold text-[var(--color-text-muted)] mb-1">
         썸네일 후보 (AI 디자인)
       </div>
       <div className="grid grid-cols-3 gap-2">
@@ -53,7 +53,7 @@ export function ThumbnailPicker({
                 {src ? (
                   <img src={src} alt="" className="h-full w-full object-cover" loading="lazy" />
                 ) : (
-                  <div className="flex h-full items-center justify-center text-[10px] text-muted-foreground">No image</div>
+                  <div className="flex h-full items-center justify-center text-[10px] text-[var(--color-text-muted)]">No image</div>
                 )}
               </div>
               

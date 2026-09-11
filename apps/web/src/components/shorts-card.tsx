@@ -245,7 +245,7 @@ export function ShortsCard({
               {short.hook_intro_caption || short.hook_quote}
             </div>
             {short.hook_intro_caption && short.hook_quote && (
-              <p className="mt-0.5 line-clamp-1 text-[10px] italic text-muted-foreground" title={short.hook_quote}>
+              <p className="mt-0.5 line-clamp-1 text-[10px] italic text-[var(--color-text-muted)]" title={short.hook_quote}>
                 “{short.hook_quote}”
               </p>
             )}
@@ -272,14 +272,14 @@ export function ShortsCard({
           )
         )}
         {short.reason && (
-          <p className="line-clamp-2 text-[10.5px] leading-relaxed text-muted-foreground">
+          <p className="line-clamp-2 text-[10.5px] leading-relaxed text-[var(--color-text-muted)]">
             {short.reason}
           </p>
         )}
         {short.tags && short.tags.length > 0 && (
           <div className="flex flex-wrap gap-1">
             {short.tags.slice(0, 4).map((t) => (
-              <Badge key={t} className="text-[10px] text-muted-foreground">
+              <Badge key={t} className="text-[10px] text-[var(--color-text-muted)]">
                 {t}
               </Badge>
             ))}
@@ -353,7 +353,7 @@ export function ShortsCard({
                 />
               )}
               {multiSegment && (
-                <p className="text-[10px] leading-relaxed text-muted-foreground">
+                <p className="text-[10px] leading-relaxed text-[var(--color-text-muted)]">
                   {short.segments?.length}개 구간 · {MULTI_SEGMENT_REASON}
                 </p>
               )}
@@ -368,12 +368,12 @@ export function ShortsCard({
             </Link>
           )}
           {status === "rejected" && (
-            <div className="rounded-md bg-muted py-1.5 text-center text-[10.5px] text-muted-foreground">
+            <div className="rounded-md bg-muted py-1.5 text-center text-[10.5px] text-[var(--color-text-muted)]">
               반려됨{rec?.rejectReason ? ` · ${rec.rejectReason}` : ""}
             </div>
           )}
           {status === "unregistered" && (
-            <div className="rounded-md border border-dashed border-border py-1.5 text-center text-[10.5px] text-muted-foreground">
+            <div className="rounded-md border border-dashed border-border py-1.5 text-center text-[10.5px] text-[var(--color-text-muted)]">
               추천 보드 미등록 · 표시 전용
             </div>
           )}
@@ -409,8 +409,8 @@ function AxisChip({ label, value }: { label: string; value: number | undefined }
     value >= 8
       ? "bg-status-warn/20 text-status-warn"
       : value >= 5
-        ? "bg-muted text-foreground"
-        : "bg-muted/60 text-muted-foreground";
+        ? "bg-muted text-[var(--color-text-primary)]"
+        : "bg-muted/60 text-[var(--color-text-muted)]";
   return (
     <span className={cn("rounded px-1.5 py-0.5 font-semibold", tone)}>
       {label} {value}
