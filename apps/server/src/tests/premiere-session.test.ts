@@ -17,7 +17,20 @@ import { describe, it } from "node:test";
 
 const SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const REPO = path.resolve(SRC, "../../..");
-const read = (p: string) => fs.readFileSync(path.resolve(REPO, p), "utf-8");
+/**
+ * 소스를 읽되 **줄바꿈을 LF 로 정규화한다.**
+ *
+ * ⚠️ 이게 없으면 소스 스캔 테스트가 **윈도우에서만** 깨진다. `.gitattributes` 에 `.tsx`·`.ts`
+ * 규칙이 없어서 `core.autocrlf=true` 인 윈도우 체크아웃은 CRLF 가 되는데, 줄바꿈이 1바이트씩
+ * 늘면 아래 `slice(0, 400)` 같은 **고정 길이 창**이 밀린다.
+ *
+ * 실측(2026-09-11): `media/page.tsx` 의 `programId,` 는 LF 에서 386, CRLF 에서 393 에 있다.
+ * 토큰 길이가 10 이라 CRLF 에서는 403 까지 뻗어 400 자 창에 `programI` 까지만 들어간다 →
+ * 정규식이 안 맞는다. **리눅스 CI 는 LF 라 초록이고 윈도우 개발자만 빨갛다** — 관문이
+ * "내 컴에서만 빨간" 상태가 되면 사람이 무시하게 된다(CONTRIBUTING 의 원칙).
+ */
+const read = (p: string) =>
+  fs.readFileSync(path.resolve(REPO, p), "utf-8").replace(/\r\n/g, "\n");
 
 const index = read("apps/server/src/index.ts");
 const panel = read("packages/premiere/main.js");
@@ -753,7 +766,8 @@ describe("패널 — 주 동선: 원본 받고 마커", () => {
   it("웹이 programId 를 함께 넘긴다 — 없으면 패널이 남의 프로그램을 본다", () => {
     // 패널은 추천을 **프로그램 기준**으로 부른다(loadRecs). episodeId 만 오면 패널이
     // 마지막에 보던 프로그램을 그대로 써서, 그 회차 추천이 목록에 아예 없을 수 있다.
-    const page = fs.readFileSync(path.join(SRC, "../../web/src/app/(app)/media/page.tsx"), "utf-8");
+    // 위 `read` 를 쓴다 — 직접 readFileSync 하면 줄바꿈 정규화를 건너뛰어 윈도우에서만 깨진다.
+    const page = read("apps/web/src/app/(app)/media/page.tsx");
     const call = page.slice(page.indexOf("await openInPremiere({"));
     assert.ok(call.length > 50, "openInPremiere 호출부를 못 찾았다");
     assert.match(call.slice(0, 400), /programId,/, "핸드오프에 programId 가 빠졌다");
