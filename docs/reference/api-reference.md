@@ -86,7 +86,7 @@ API 키(`api-keys.ts`). **화이트리스트(`API_KEY_ROUTES`)에 올린 라우�
 | `POST /api/programs` | 프로그램 생성 (업로드 전 필수 콘텐츠 루트) | `{ title(필수), section, targetAge, cast, programCode, category, weekdays }` → `{ program }`. SMR 필드는 `smr` 블롭으로 저장 | `createProgram` |
 | `GET /api/programs` | 프로그램 목록 (id·제목·상태만) | → `{ programs: [{ id, title, status }] }`. 드롭다운 하나 채우면 되는 클라이언트(프리미어 패널)용 — `/api/state` 전체를 받지 않게 | (웹은 `fetchState` 사용) |
 | `GET /api/programs/:id` | 프로그램 1개 (이해 프로필 포함) | → `{ program }` / 404 | (`fetchState`로 대체) |
-| `PATCH /api/programs/:id` | 부분 병합 수정 — **body에 있는 필드만** 바뀐다 | `{ title, section, targetAge, cast, castPhotos, category, weekdays, programCode, moods, pipelineGenre, posterImageDataUrl }` → `{ program }` | `updateProgram` |
+| `PATCH /api/programs/:id` | 부분 병합 수정 — **body에 있는 필드만** 바뀐다 | `{ title, section, targetAge, cast, titleCast: [{ actorName, characterNames }], castPhotos, category, weekdays, programCode, moods, pipelineGenre, posterImageDataUrl }` → `{ program }`. `titleCast`는 오버레이 제목 전용 극중 이름→배우 활동명 대응표이며 `[]`로 해제 | `updateProgram` |
 | `POST /api/programs/:id/autofill` | 제목만으로 나머지 필드 자동 채움 (Gemini + google_search 그라운딩, 2단계: 검색·수집 → 팩트체크) | → `{ draft }`. **저장하지 않는다** — 사용자가 UI에서 확인 후 저장. 출연자·SMR은 안 채움. 실패 502 | `autofillProgram` |
 | `POST /api/programs/:id/autofill/chat` | 대화형 자동 채움 (stateless · history 전체를 클라이언트가 전송) | `{ history, draft, sources }` → `{ message, action, draft }`. **[사용 안 함 · 참고용]** | (웹 미사용) |
 | `POST /api/programs/profile/generate` | 이해 프로필 생성 — `mode: direct`(프로그램명/장르/설명) · `websearch`(프로그램명→웹검색+sources) · `planning`(기획정보) | `{ mode, input(필수) }` → `{ mode, profile }`. 정규화만 하고 저장은 안 한다 · 실패 502 | (웹 미사용) |

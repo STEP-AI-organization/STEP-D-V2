@@ -48,6 +48,7 @@ import { probe } from "../media/ffmpeg.ts";
 import { autoTopupNeedsAttention, checkCredits, usageDedupeKey as creditUsageKey } from "../billing/credits.ts";
 import { maybeAutoTopup, topupAndRecheck } from "../billing/auto-topup.ts";
 import { toCoreRegistry, timelineToRows } from "../ai/cast.ts";
+import { titleCastOf } from "../ai/title-names.ts";
 import { createReadStream, parseObjectPath, readFile, uploadFile, useGcs } from "../media/storage-gcs.ts";
 import { enqueue } from "./queue.ts";
 import { newId } from "../ids.ts";
@@ -1771,6 +1772,8 @@ export async function runContentAnalyze(
       // 채워져 있으면 program_context.json 로 넘겨 AI 프롬프트에 반영.
       if (program) {
         const ctx: Record<string, unknown> = {};
+        const titleCast = titleCastOf(program);
+        if (titleCast.length) ctx.titleCast = titleCast;
         for (const k of [
           "title", "section", "synopsis", "broadcaster", "schedule",
           "firstAiredDate", "currentInfo", "director", "spinoff", "awards",

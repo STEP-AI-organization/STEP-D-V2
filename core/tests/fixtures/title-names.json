@@ -1,0 +1,17 @@
+{
+  "program": {"titleCast": [
+    {"actorName": "김도현", "characterNames": ["강민준", "민준"]},
+    {"actorName": "이서연", "characterNames": ["윤하린", "하린"]},
+    {"actorName": "배수지", "characterNames": ["수지"]}
+  ]},
+  "titles": [
+    {"text": "김도현의 눈빛 연기", "valid": true},
+    {"text": "강민준의 선택", "valid": false},
+    {"text": "민준이가 돌아왔다", "valid": false},
+    {"text": "“하린아 기다려”", "valid": false},
+    {"text": "김도현과 이서연의 명장면", "valid": true},
+    {"text": "배수지의 눈빛", "valid": true},
+    {"text": "배수지가 연기한 수지", "valid": false},
+    {"text": "엇갈리는 두 사람", "valid": true}
+  ]
+}

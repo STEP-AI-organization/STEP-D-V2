@@ -43,6 +43,7 @@ from google import genai
 from google.genai import types
 
 from core.common.retry import call_with_retry
+from core.recommend.title_names import title_names_prompt, guard_title_result
 from core.scenes.shots import detect_shots, nearest_shot
 
 PROJECT = os.environ.get("GOOGLE_CLOUD_PROJECT") or "step-d"
@@ -410,13 +411,15 @@ def _operator_prompt_block(ctx: dict | None, key: str, usage: str) -> str:
     if not isinstance(ctx, dict):
         return ""
     v = str(ctx.get(key) or "").strip()
+    names = title_names_prompt(ctx) if key == "titlePrompt" else ""
     if not v:
-        return ""
+        return names
     # 1000자 컷 — 운영자 입력이라 길이 통제가 없다. 프롬프트 낭비 방지.
     return (
         f"\n\n## 프로그램별 운영자 지시 — {usage}\n"
         + v[:1000]
         + "\n(위 지시는 이 프로그램 운영자가 직접 입력했다. 기본 톤·금지 규칙은 유지한 채 추가로 반영하라.)"
+        + names
     )
 
 
@@ -2055,9 +2058,10 @@ def recommend(
     _prev_ctx = _CURRENT_PROGRAM_CTX
     _CURRENT_PROGRAM_CTX = program_context
     try:
-        return _recommend_impl(scenes, n, genre, on_progress, profile, channels, transcript,
+        result = _recommend_impl(scenes, n, genre, on_progress, profile, channels, transcript,
                                cast_registry, narrative_segments, key_conflicts, cast_people,
                                ppl_detections, program_context)
+        return guard_title_result(result, program_context)
     finally:
         _CURRENT_PROGRAM_CTX = _prev_ctx
 
@@ -3432,7 +3436,7 @@ def recommend_narrative_first(
     _prev_ctx = _CURRENT_PROGRAM_CTX
     _CURRENT_PROGRAM_CTX = program_context
     try:
-        return _recommend_narrative_first_impl(
+        result = _recommend_narrative_first_impl(
             scenes, n, genre, on_progress, profile, channels, transcript,
             cast_registry, narrative, faces, ppl_detections, video_path,
             beats or [],
@@ -3441,6 +3445,7 @@ def recommend_narrative_first(
             # 8b25eb9 이후 content.analyze 가 마지막 단계에서 전량 실패).
             title_refs,
         )
+        return guard_title_result(result, program_context)
     finally:
         _CURRENT_PROGRAM_CTX = _prev_ctx
 
