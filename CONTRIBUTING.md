@@ -56,13 +56,24 @@ libass 는 오류 없이 다른 폰트로 대체한다 — 발행 뒤에야 안�
 
 ---
 
-## 검증 — `pnpm check` 하나면 된다
+## 검증 — 평소엔 `pnpm check`, PR 전엔 `pnpm ci:local`
 
 ```bash
-pnpm check
+pnpm check              # 빠른 확인 (타입체크 + 테스트)
+pnpm ci:local           # CI 가 도는 것을 그대로 — PR 올리기 전
+pnpm ci:local --fast    # 웹빌드·e2e 빼고
 ```
 
-전 패키지 타입체크 + 서버 테스트(1733) + 네이티브 테스트(106) + **core 파이썬 테스트(103)** 를 돈다.
+`pnpm check` 는 전 패키지 타입체크 + 서버 테스트(1733) + 네이티브 테스트(106) +
+**core 파이썬 테스트(103)** 를 돈다.
+
+⚠️ **`pnpm check` 에는 웹 빌드와 e2e 가 없다.** `pnpm -r typecheck` 는 `tsc --noEmit` 이라
+Next 프리렌더 오류를 못 잡고, e2e 는 Postgres 가 필요하다. 그래서 CI 에서 처음 빨개지는
+일이 생긴다 — `pnpm ci:local` 은 그 둘까지 **CI 와 같은 명령으로** 돌린다(Postgres 는
+알아서 docker 로 띄운다). 자세히는 `/check` 스킬(`.claude/skills/check/`).
+
+⚠️ **`pnpm ci` 가 아니라 `pnpm ci:local` 이다.** `ci` 는 pnpm 내장 명령이라 스크립트로
+덮어쓸 수 없다.
 
 ⚠️ 네이티브 테스트 106개는 **2026-09-07~09-11 나흘간 CI 에서 한 번도 안 돌았다.** ci.yml 의
 필터 이름이 틀렸는데(`@stepd/native` · 실제는 `stepaistudio`) pnpm 이 그걸 **exit 0** 으로
