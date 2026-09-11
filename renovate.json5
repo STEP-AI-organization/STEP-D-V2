@@ -1,0 +1,130 @@
+/**
+ * Renovate — 의존성 업데이트 봇. (2026-09-11 신설)
+ *
+ * ## 왜 넣었나
+ *
+ * 혼자 개발할 땐 "필요할 때 올린다"로 됐다. 사람이 늘면 **아무도 안 올린다** — 각자 자기
+ * 기능만 보고, 보안 패치는 누구의 일도 아니게 된다. 그러다 한 번에 올리면 무엇이 깨뜨렸는지
+ * 가려낼 수 없다. 조금씩 자주 올리는 편이 싸다.
+ *
+ * ## 이 리포에서 주의할 것 — **짝으로 움직여야 하는 핀이 있다**
+ *
+ * 1. **pnpm 버전은 세 곳**: `package.json` 의 `packageManager` + Dockerfile 2개의
+ *    `npm install -g pnpm@…`. 하나만 올라가면 `docker-pnpm-pin.test.ts` 가 CI 를 빨갛게 한다.
+ *    → 아래 customManager + groupName 으로 **한 PR 에 묶는다.**
+ *
+ * 2. **파이썬은 `requirements.txt` 와 `requirements.lock.txt` 가 쌍이다.** lock 은 컨테이너에서
+ *    풀어서 다시 떠야 하고(사람 손), 워커 이미지 빌드타임 스모크(cv2 4.x contrib · mediapipe
+ *    detector)를 통과해야 한다. 봇이 txt 만 고치면 **둘이 어긋난 채 머지될 수 있다.**
+ *    → 자동으로 PR 을 열지 않고 **대시보드에서 사람이 승인할 때만** 연다.
+ *
+ * ## 켜는 법
+ *
+ * 이 파일만으론 안 돈다. GitHub 에서 Renovate 앱을 리포에 설치해야 한다(1회):
+ *   https://github.com/apps/renovate  →  Configure  →  이 리포 선택
+ * 설치하면 Renovate 가 "Dependency Dashboard" 이슈를 하나 만든다 — 대기 중인 업데이트가
+ * 거기 모인다. 무엇을 올릴지는 그 이슈의 체크박스로 고른다.
+ */
+{
+  $schema: "https://docs.renovatebot.com/renovate-schema.json",
+
+  extends: [
+    "config:recommended",
+    // 취약점 경보는 스케줄·동시성 제한을 무시하고 바로 올라온다.
+    ":enableVulnerabilityAlertsWithLabel(security)",
+    // 봇 PR 도 커밋 규칙을 따른다 — `chore(deps): …`
+    ":semanticCommitTypeAll(chore)",
+  ],
+
+  timezone: "Asia/Seoul",
+
+  // 월요일 새벽에만 연다. 주중 내내 PR 이 튀어나오면 사람이 목록을 안 보게 된다.
+  schedule: ["* 0-6 * * 1"],
+
+  // ⚠️ 동시에 열린 PR 수를 묶어 둔다. 이 리포는 CI 가 PR 마다 e2e(Postgres)까지 돌리므로
+  // 봇 PR 10개가 한꺼번에 열리면 러너를 통째로 점유한다.
+  prConcurrentLimit: 3,
+  prHourlyLimit: 2,
+
+  // 릴리스 당일 것은 안 받는다. 공급망 사고는 대개 올라온 직후 며칠 안에 드러난다.
+  minimumReleaseAge: "5 days",
+
+  labels: ["dependencies"],
+  // 무엇이 왜 열렸는지 한 이슈에 모인다. 봇을 끄지 않고도 전체를 볼 수 있는 창구다.
+  dependencyDashboard: true,
+  dependencyDashboardTitle: "의존성 업데이트 대시보드",
+
+  // pnpm-lock.yaml 을 주기적으로 갱신한다(트랜지티브 보안 패치가 여기로 들어온다).
+  lockFileMaintenance: {
+    enabled: true,
+    schedule: ["* 0-6 1 * *"], // 매달 1일 새벽
+  },
+
+  // ── Dockerfile 안의 핀들을 Renovate 가 보게 한다 ─────────────────────────────
+  // 기본 docker 매니저는 `FROM node:22-bookworm-slim` 은 보지만, RUN 줄에 박힌
+  // `pnpm@10.33.2` · `pip==26.2.1` 은 못 본다. 정규식으로 알려 준다.
+  customManagers: [
+    {
+      customType: "regex",
+      managerFilePatterns: ["/^apps/server/Dockerfile(\\.worker)?$/"],
+      matchStrings: ["npm install -g pnpm@(?<currentValue>\\d+\\.\\d+\\.\\d+)"],
+      depNameTemplate: "pnpm",
+      datasourceTemplate: "npm",
+    },
+    {
+      customType: "regex",
+      managerFilePatterns: ["/^apps/server/Dockerfile\\.worker$/"],
+      matchStrings: ["pip==(?<currentValue>\\d+\\.\\d+(\\.\\d+)?)"],
+      depNameTemplate: "pip",
+      datasourceTemplate: "pypi",
+    },
+  ],
+
+  packageRules: [
+    // ① pnpm — package.json 과 Dockerfile 2개를 **한 PR 로**.
+    //    따로 올라가면 docker-pnpm-pin.test.ts 가 막는다(막는 건 옳지만, 애초에 같이 올리는 게 맞다).
+    //    메이저는 사람이 판단한다: pnpm 12 가 빌드 스크립트 정책을 바꿔 배포를 통째로
+    //    세운 적이 있다(2026-09-07 · ERR_PNPM_IGNORED_BUILDS).
+    {
+      matchPackageNames: ["pnpm"],
+      groupName: "pnpm 버전 (package.json + Dockerfile 2개)",
+      dependencyDashboardApproval: true,
+    },
+
+    // ② 파이썬 — lock 을 사람이 다시 떠야 하므로 자동으로 열지 않는다.
+    //    대시보드에서 체크해야 PR 이 생긴다. 절차는 core/requirements.lock.txt 헤더에 있다.
+    {
+      matchManagers: ["pip_requirements"],
+      dependencyDashboardApproval: true,
+      groupName: "core 파이썬 의존성 (lock 재생성 필요)",
+    },
+
+    // ③ Node 메이저는 사람이. .nvmrc · Dockerfile · ci.yml 이 같이 움직여야 하고,
+    //    Cloud Run 런타임과도 맞아야 한다.
+    {
+      matchPackageNames: ["node", "docker.io/library/node", "node:22-bookworm-slim"],
+      matchUpdateTypes: ["major"],
+      dependencyDashboardApproval: true,
+    },
+
+    // ④ 모든 메이저 업데이트는 따로 본다 — 묶으면 무엇이 깨뜨렸는지 못 가린다.
+    {
+      matchUpdateTypes: ["major"],
+      labels: ["dependencies", "major"],
+    },
+
+    // ⑤ 타입 정의·린트·빌드 도구 같은 개발 의존성의 minor/patch 는 한 PR 로 묶는다.
+    //    런타임에 안 들어가므로 개별로 볼 값어치가 낮다.
+    {
+      matchDepTypes: ["devDependencies"],
+      matchUpdateTypes: ["minor", "patch"],
+      groupName: "개발 의존성 (minor·patch)",
+    },
+
+    // ⑥ GitHub Actions 는 묶어서 한 PR 로. 대부분 v4→v5 같은 태그 이동이다.
+    {
+      matchManagers: ["github-actions"],
+      groupName: "GitHub Actions",
+    },
+  ],
+}

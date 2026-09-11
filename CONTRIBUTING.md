@@ -62,7 +62,11 @@ libass 는 오류 없이 다른 폰트로 대체한다 — 발행 뒤에야 안�
 pnpm check
 ```
 
-전 패키지 타입체크 + 서버 테스트(1671) + 네이티브 테스트 + **core 파이썬 테스트(103)** 를 돈다.
+전 패키지 타입체크 + 서버 테스트(1733) + 네이티브 테스트(106) + **core 파이썬 테스트(103)** 를 돈다.
+
+⚠️ 네이티브 테스트 106개는 **2026-09-07~09-11 나흘간 CI 에서 한 번도 안 돌았다.** ci.yml 의
+필터 이름이 틀렸는데(`@stepd/native` · 실제는 `stepaistudio`) pnpm 이 그걸 **exit 0** 으로
+넘겼기 때문이다. 지금은 `--fail-if-no-match` 와 `workspace-filters.test.ts` 가 같이 막는다.
 
 개별로 돌리려면:
 
@@ -92,6 +96,57 @@ pnpm check
 
 테스트는 `apps/server/src/tests/` 에 모은다. 그 안에서 소스를 스캔할 때 쓰는 `SRC` 같은
 상수는 `".."` 가 붙어 `src/` 를 가리키므로 그대로 쓰면 된다.
+
+### e2e — 진짜 DB · 진짜 서버 (2026-09-11 신설)
+
+`pnpm check` 에는 **안 들어간다.** DB 가 필요해서 따로 돈다(CI 는 PR 마다 별도 job 으로 돌린다).
+
+```bash
+# Postgres 가 없으면 먼저 (⚠️ 그냥 postgres:16 은 안 된다 — 마이그레이션이 pgvector 를 쓴다)
+docker run --rm -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres --name stepd-e2e-pg pgvector/pgvector:pg16
+
+pnpm test:e2e
+```
+
+빈 DB 생성 → 마이그레이션 → superadmin 부트스트랩 → 서버 기동 → HTTP 로 검증 → 정리까지
+`apps/server/scripts/e2e.mts` 하나가 다 한다. **CI 는 Postgres 를 띄워 주기만 한다** — 그래야
+로컬과 CI 가 같은 것을 돌린다.
+
+**여기엔 DB 없이는 증명 못 하는 것만 넣는다.** 지금은 인증과 **워크스페이스 격리(RLS)** 다.
+격리는 소스를 아무리 읽어도 증명이 안 된다 — 정책이 `current_setting('app.tenant_id')` 를
+읽는데 그게 안 세워지면 **에러가 아니라 빈 결과**가 나오기 때문이다. 실제로 2026-08-11 에
+그 모양으로 API 키가 프로덕션에서 통째로 안 도는 채 나갔다(순수·소스 테스트는 전부 통과했다).
+
+⚠️ e2e 파일은 `*.e2e.ts` 다. `*.test.ts` 로 만들면 `pnpm check` 가 집어가서 **DB 없이 돌다
+전부 실패한다.**
+
+⚠️ e2e 용 DB 역할은 일부러 **NOSUPERUSER·NOBYPASSRLS** 다. superuser 로 붙으면 RLS 가 통째로
+무시돼 격리 테스트가 **거짓 통과**한다(`assertRlsEnforced` 는 localhost 면 경고만 하고 넘어간다).
+그 역할 설정을 건드리지 말 것 — 검증해 뒀다: superuser 로 바꾸면 격리 테스트 2개가 실패한다.
+
+---
+
+## 의존성 — 버전은 리포가 정한다, 그날의 npm/PyPI 가 아니라
+
+**같은 커밋은 같은 것을 깔아야 한다.** 안 그러면 "어제는 됐는데" 가 빌드마다 생긴다.
+
+| 무엇 | 어디서 고정 | 규칙 |
+|---|---|---|
+| node 패키지 | `pnpm-lock.yaml` | 이미지도 `--frozen-lockfile` 로 깐다. `--no-frozen-lockfile` 금지 |
+| pnpm 자체 | `package.json` `packageManager` + Dockerfile 2개 | **세 곳을 같이** 올린다 (`docker-pnpm-pin.test.ts` 가 강제) |
+| core 파이썬 | `core/requirements.lock.txt` | 이미지는 이걸로 깐다. `requirements.txt` 는 사람이 읽는 직접 선언분 |
+| 파이썬 테스트 도구 | `core/requirements-dev.txt` | `==` 로 핀 — 도구가 바뀌어 CI 가 빨개지는 걸 막는다 |
+
+- **새 워크스페이스 패키지를 추가하면** Dockerfile 두 개에 `COPY <dir>/package.json` 도
+  넣어야 한다. `--frozen-lockfile` 이 lockfile importer 를 전부 대조하므로 하나만 빠져도
+  **빌드가 죽는다.** `docker-lockfile.test.ts` 가 미리 잡아 준다.
+- **파이썬 버전을 올리려면** `requirements.txt` 의 `==` 를 고치고 → lock 을 재생성하고
+  (절차는 `core/requirements.lock.txt` 헤더에) → **워커 이미지를 빌드해** 빌드타임 스모크를
+  통과시킨다. 스모크는 `cv2` 가 4.x contrib 인지와 mediapipe detector 가 뜨는지를 본다.
+  ⚠️ opencv 는 둘이 깔린다(scenedetect→`opencv-python`, mediapipe→`opencv-contrib-python`).
+  같은 `cv2` 를 덮어써서 **나중에 깔린 쪽이 이긴다** — 그래서 스모크가 있다. 지우지 말 것.
+- **업데이트는 Renovate 가 PR 로 가져온다**(`renovate.json5`). 월요일 새벽, 동시 3개까지.
+  pnpm 과 파이썬은 짝을 맞춰야 해서 **대시보드에서 사람이 승인할 때만** PR 이 열린다.
 
 ---
 

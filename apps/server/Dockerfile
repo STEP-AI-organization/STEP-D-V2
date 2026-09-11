@@ -27,11 +27,29 @@ ENV PATH="$PNPM_HOME:$PATH"
 RUN npm install -g pnpm@10.33.2
 
 # ── deps layer (cached) ──────────────────────────────────────────────────────
+# ⚠️ **lockfile 로 깐다.** 2026-09-11 이전엔 `COPY apps/server/package.json` +
+# `pnpm install --no-frozen-lockfile` 이었다 — `pnpm-lock.yaml` 을 **복사조차 안 했다.**
+# apps/server 의존성 16개가 전부 `^` 범위라(정확히 핀된 것 0개), 이미지가 깔던 hono·
+# google-auth-library·jspdf 버전은 **그날 npm 에 뭐가 올라와 있었는지**가 정했다.
+# CI 는 `--frozen-lockfile` 로 검증하는데 배포물은 그 lockfile 을 안 보는 상태였다.
+#
+# 바로 위에서 pnpm 버전을 못박은 이유("빌드가 아니라 복권이다")가 정작 **패키지 본체에는
+# 적용이 안 돼 있던 셈**이다. 같은 원칙을 여기까지 끌고 온다.
+#
+# 워크스페이스 package.json 을 전부 복사하는 이유: `--frozen-lockfile` 은 lockfile 의
+# importer 5개(`.` · admin · apps/server · apps/web · native)를 **전부** 대조한다.
+# 하나라도 없으면 lockfile 이 낡았다고 보고 ERR_PNPM_OUTDATED_LOCKFILE 로 거절한다.
+# 소스는 안 넣고 package.json 만 넣으므로 레이어 캐시는 사실상 그대로다.
 FROM base AS deps
-WORKDIR /app/apps/server
-COPY apps/server/package.json ./
-# Install deps — ignore build scripts, then only rebuild esbuild (the only one that needs it)
-RUN pnpm install --no-frozen-lockfile --ignore-scripts && pnpm rebuild esbuild
+WORKDIR /app
+COPY pnpm-lock.yaml pnpm-workspace.yaml package.json ./
+COPY admin/package.json admin/
+COPY apps/server/package.json apps/server/
+COPY apps/web/package.json apps/web/
+COPY native/package.json native/
+# 빌드 스크립트는 건너뛰고 esbuild 만 다시 만든다(그것만 네이티브 바이너리가 필요하다).
+RUN pnpm install --frozen-lockfile --filter @stepd/server --ignore-scripts \
+ && pnpm rebuild --filter @stepd/server esbuild
 
 # ── runtime ──────────────────────────────────────────────────────────────────
 FROM base AS runtime
@@ -74,7 +92,11 @@ COPY assets/fonts assets/fonts
 # 인보이스 PDF 폰트 — jsPDF 는 TTF 만 임베드한다(Pretendard OTF 는 CFF 라 못 쓴다).
 # invoice.ts 가 리포 상대경로(assets/invoice-fonts)로 읽는다 — 빼먹으면 메일 발송만 조용히 실패.
 COPY assets/invoice-fonts assets/invoice-fonts
-# Overwrite server node_modules from deps layer
+# deps 레이어의 node_modules 를 가져온다.
+# ⚠️ **두 줄이 세트다.** pnpm 워크스페이스는 패키지 실물을 `/app/node_modules/.pnpm` 에 두고
+# 앱 폴더엔 거기로 향하는 상대 심링크(`../../node_modules/.pnpm/hono@…`)만 남긴다.
+# 하나만 복사하면 전부 깨진 심링크가 되고, 증상은 빌드가 아니라 **런타임 MODULE_NOT_FOUND** 다.
+COPY --from=deps /app/node_modules /app/node_modules
 COPY --from=deps /app/apps/server/node_modules /app/apps/server/node_modules
 
 EXPOSE 4000
