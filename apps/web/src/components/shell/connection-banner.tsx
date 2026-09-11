@@ -23,9 +23,9 @@ export function ConnectionBanner() {
       role="status"
       className="flex flex-wrap items-center gap-x-2 gap-y-1 px-5 py-2 text-[11.5px]"
       style={{
-        background: "var(--sd-warn-bg, #fff4e5)",
-        color: "var(--sd-warn-fg, #7a4a00)",
-        borderBottom: "1px solid var(--sd-border)",
+        background: "rgb(245 158 11 / 0.10)",
+        color: "#D97706",
+        borderBottom: "1px solid var(--color-border-subtle)",
       }}
     >
       <b>서버에 연결할 수 없습니다.</b>

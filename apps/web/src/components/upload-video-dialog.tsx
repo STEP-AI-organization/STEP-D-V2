@@ -49,7 +49,7 @@ export function UploadVideoButton({
     <>
       <button
         type="button"
-        className={className ?? "sd-btn"}
+        className={className ?? "px-3.5 py-1.5 rounded-full bg-[var(--color-bg-input)] hover:bg-[var(--color-bg-card-hover)] text-xs text-[var(--color-text-primary)] border border-[var(--color-border-subtle)] font-medium cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed"}
         onClick={() => setOpen(true)}
         disabled={!serverConnected}
         title={serverConnected ? undefined : "서버에 연결되지 않았습니다"}
@@ -290,23 +290,22 @@ export function UploadDialog({
         aria-hidden
       />
       <div
-        className="sd-modal relative flex max-h-[90vh] w-full max-w-[520px] flex-col bg-[var(--sd-card)]"
+        className="rounded-2xl border border-[var(--color-border-card)] shadow-2xl overflow-hidden relative flex max-h-[90vh] w-full max-w-[520px] flex-col bg-[var(--color-bg-card)]"
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
       >
-        <div className="px-4 py-3" style={{ borderBottom: "1px solid var(--sd-border)" }}>
-          <h2 className="sd-serif text-[14px] font-semibold" style={{ color: "var(--sd-fg)" }}>
+        <div className="px-4 py-3" style={{ borderBottom: "1px solid var(--color-border-subtle)" }}>
+          <h2 className="text-[14px] font-semibold" style={{ color: "var(--color-text-primary)" }}>
             회차 영상 업로드
           </h2>
         </div>
 
         <div className="flex-1 space-y-3.5 overflow-y-auto p-4">
-          {/* 소스 — 파일 / 유튜브 링크 */}
-          <div
-            className="grid grid-cols-2 gap-1 rounded-[5px] p-1 text-[11.5px] font-medium"
-            style={{ background: "var(--sd-card-sub)" }}
-          >
+          {/* 소스 — 파일 / 유튜브 링크.
+              원본(automation 업로드 모달)은 **알약 트랙**이다 — 흰 배경 트랙 위에 선택된 쪽만
+              파란 알약. 옛 구현은 네모 그리드(rounded-[5px])라 같은 화면의 다른 요소와 언어가 달랐다. */}
+          <div className="w-full bg-white dark:bg-slate-800 p-1 rounded-full flex items-center border border-slate-200 dark:border-slate-700 shadow-xs">
             {(["file", "youtube"] as const).map((m) => (
               <button
                 key={m}
@@ -314,13 +313,15 @@ export function UploadDialog({
                 onClick={() => !busy && setMode(m)}
                 disabled={busy}
                 className={cn(
-                  "flex items-center justify-center gap-1.5 rounded-[4px] px-3 py-1.5",
-                  mode === m ? "bg-[var(--sd-card)] shadow-sm" : "opacity-75",
+                  "flex-1 py-2 px-4 rounded-full transition-all cursor-pointer flex items-center justify-center gap-1.5 text-xs font-bold",
+                  mode === m
+                    ? "bg-[#1C60FF] text-white shadow-md shadow-[#1C60FF]/25"
+                    : "text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white font-medium bg-transparent",
+                  busy && "opacity-60 cursor-not-allowed",
                 )}
-                style={{ color: "var(--sd-fg)" }}
               >
-                {m === "file" ? <Upload className="size-3.5" /> : <Youtube className="size-3.5" />}
-                {m === "file" ? "파일 업로드" : "유튜브 링크"}
+                {m === "file" ? <Upload className="w-3.5 h-3.5" /> : <Youtube className="w-3.5 h-3.5" />}
+                <span>{m === "file" ? "파일 업로드" : "유튜브 링크"}</span>
               </button>
             ))}
           </div>
@@ -330,7 +331,7 @@ export function UploadDialog({
               value={programId}
               onChange={(e) => setProgramId(e.target.value)}
               disabled={busy}
-              className="sd-input w-full"
+              className="h-9 px-4 rounded-full bg-[var(--color-bg-input)] border border-[var(--color-border-subtle)] focus:border-[#1C60FF] text-xs text-[var(--color-text-primary)] placeholder-[var(--color-text-muted)] focus:outline-none transition-colors w-full"
             >
               {programs.length === 0 && <option value="">등록된 프로그램이 없습니다</option>}
               {programs.map((p) => (
@@ -355,7 +356,7 @@ export function UploadDialog({
                   onChange={(e) => setUrl(e.target.value)}
                   disabled={busy}
                   placeholder="https://www.youtube.com/watch?v=…"
-                  className="sd-input w-full"
+                  className="h-9 px-4 rounded-full bg-[var(--color-bg-input)] border border-[var(--color-border-subtle)] focus:border-[#1C60FF] text-xs text-[var(--color-text-primary)] placeholder-[var(--color-text-muted)] focus:outline-none transition-colors w-full"
                 />
               </L>
               <L label="제목 (선택)">
@@ -363,7 +364,7 @@ export function UploadDialog({
                   value={title}
                   onChange={(e) => setTitle(e.target.value)}
                   disabled={busy}
-                  className="sd-input w-full"
+                  className="h-9 px-4 rounded-full bg-[var(--color-bg-input)] border border-[var(--color-border-subtle)] focus:border-[#1C60FF] text-xs text-[var(--color-text-primary)] placeholder-[var(--color-text-muted)] focus:outline-none transition-colors w-full"
                 />
               </L>
               <Notice>
@@ -392,24 +393,24 @@ export function UploadDialog({
                   busy ? "cursor-not-allowed opacity-60" : "cursor-pointer",
                 )}
                 style={{
-                  border: `2px dashed ${dragOver ? "var(--sd-accent)" : "var(--sd-border)"}`,
-                  background: dragOver ? "var(--sd-accent-bg)" : "transparent",
+                  border: `2px dashed ${dragOver ? "#1C60FF" : "var(--color-border-subtle)"}`,
+                  background: dragOver ? "var(--color-bg-input)" : "transparent",
                 }}
               >
-                <Film className="size-6" style={{ color: "var(--sd-idle)" }} />
+                <Film className="size-6" style={{ color: "var(--color-text-muted)" }} />
                 {file ? (
                   <div>
-                    <div className="text-[12.5px] font-medium" style={{ color: "var(--sd-fg)" }}>
+                    <div className="text-[12.5px] font-medium" style={{ color: "var(--color-text-primary)" }}>
                       {file.name}
                     </div>
-                    <div className="sd-mono text-[11px]" style={{ color: "var(--sd-mut)" }}>
+                    <div className="font-mono text-[11px]" style={{ color: "var(--color-text-muted)" }}>
                       {fmtSize(file.size)}
                     </div>
                   </div>
                 ) : (
-                  <div className="text-[12.5px]" style={{ color: "var(--sd-mut)" }}>
+                  <div className="text-[12.5px]" style={{ color: "var(--color-text-muted)" }}>
                     영상 파일을 끌어다 놓거나{" "}
-                    <span style={{ color: "var(--sd-accent)" }}>클릭해서 선택</span>
+                    <span style={{ color: "#1C60FF" }}>클릭해서 선택</span>
                     {/* 지원 형식은 **정확히** 적는다 — MXF 를 안 적으면 방송 편집자가 못 올린다고
                         판단하고, 적기만 하고 변환을 안 알리면 "왜 원본과 다르냐"가 된다
                         (2026-08-27 MXF 대응 · 변환은 worker media.prepare 가 한다). */}
@@ -440,7 +441,7 @@ export function UploadDialog({
                     disabled={busy}
                     inputMode="numeric"
                     placeholder="예: 12"
-                    className="sd-input w-full"
+                    className="h-9 px-4 rounded-full bg-[var(--color-bg-input)] border border-[var(--color-border-subtle)] focus:border-[#1C60FF] text-xs text-[var(--color-text-primary)] placeholder-[var(--color-text-muted)] focus:outline-none transition-colors w-full"
                   />
                 </L>
                 <L label="방영일">
@@ -449,7 +450,7 @@ export function UploadDialog({
                     value={broadDate}
                     onChange={(e) => setBroadDate(e.target.value)}
                     disabled={busy}
-                    className="sd-input w-full"
+                    className="h-9 px-4 rounded-full bg-[var(--color-bg-input)] border border-[var(--color-border-subtle)] focus:border-[#1C60FF] text-xs text-[var(--color-text-primary)] placeholder-[var(--color-text-muted)] focus:outline-none transition-colors w-full"
                   />
                 </L>
               </div>
@@ -458,9 +459,9 @@ export function UploadDialog({
                 <div
                   className="rounded-[4px] px-3 py-2 text-[11.5px]"
                   style={{
-                    border: "1px solid var(--sd-danger-border)",
-                    background: "var(--sd-danger-bg)",
-                    color: "var(--sd-danger-strong)",
+                    border: "1px solid rgb(244 63 94 / 0.35)",
+                    background: "rgb(244 63 94 / 0.10)",
+                    color: "#E11D48",
                   }}
                 >
                   {dupError}
@@ -480,7 +481,7 @@ export function UploadDialog({
                   value={track}
                   onChange={(e) => setTrack(e.target.value as "" | "variety" | "drama")}
                   disabled={busy}
-                  className="sd-input w-full"
+                  className="h-9 px-4 rounded-full bg-[var(--color-bg-input)] border border-[var(--color-border-subtle)] focus:border-[#1C60FF] text-xs text-[var(--color-text-primary)] placeholder-[var(--color-text-muted)] focus:outline-none transition-colors w-full"
                 >
                   <option value="">선택하세요</option>
                   <option value="variety">예능</option>
@@ -494,13 +495,13 @@ export function UploadDialog({
                   onChange={(e) => setTitle(e.target.value)}
                   disabled={busy}
                   placeholder={file?.name ?? "비우면 파일명"}
-                  className="sd-input w-full"
+                  className="h-9 px-4 rounded-full bg-[var(--color-bg-input)] border border-[var(--color-border-subtle)] focus:border-[#1C60FF] text-xs text-[var(--color-text-primary)] placeholder-[var(--color-text-muted)] focus:outline-none transition-colors w-full"
                 />
               </L>
 
               {/* 자막 — 지금은 항상 음성 인식이다. 끌 수 없는 체크박스를 두지 않고 사실만 적는다. */}
               <Notice>
-                <b style={{ color: "var(--sd-fg)" }}>자막 파일은 아직 받지 않습니다.</b> 자막 유무와 관계없이
+                <b style={{ color: "var(--color-text-primary)" }}>자막 파일은 아직 받지 않습니다.</b> 자막 유무와 관계없이
                 음성 인식(STT)으로 대본을 만듭니다.
               </Notice>
 
@@ -519,18 +520,18 @@ export function UploadDialog({
               {busy && (
                 <div className="space-y-2">
                   <div className="flex items-center justify-between text-[11.5px]">
-                    <span style={{ color: "var(--sd-mut)" }}>
+                    <span style={{ color: "var(--color-text-muted)" }}>
                       {pct < 100 ? "업로드 중…" : "서버 처리 중 (프로브·썸네일)…"}
                     </span>
-                    <span className="sd-mono" style={{ color: "var(--sd-fg)" }}>{pct}%</span>
+                    <span className="font-mono" style={{ color: "var(--color-text-primary)" }}>{pct}%</span>
                   </div>
-                  <div className="sd-progress">
+                  <div className="h-1.5 rounded-full bg-[var(--color-bg-input)] overflow-hidden">
                     <span style={{ width: `${Math.max(2, pct)}%` }} />
                   </div>
                   {pct < 100 && file && (
                     <div
-                      className="sd-mono flex items-center justify-between text-[10.5px]"
-                      style={{ color: "var(--sd-mut)" }}
+                      className="font-mono flex items-center justify-between text-[10.5px]"
+                      style={{ color: "var(--color-text-muted)" }}
                     >
                       <span>{fmtSize(uploadedBytes)} / {fmtSize(file.size)}</span>
                       <span>{speed > 0 ? `${fmtSize(speed)}/s · 남은 시간 ${fmtEta(etaSec)}` : "속도 측정 중…"}</span>
@@ -549,19 +550,19 @@ export function UploadDialog({
 
         <div
           className="flex items-center justify-end gap-2 px-4 py-3"
-          style={{ borderTop: "1px solid var(--sd-border)" }}
+          style={{ borderTop: "1px solid var(--color-border-subtle)" }}
         >
           {mode === "file" && !busy && missing.length > 0 && (
-            <span className="mr-auto text-[11px]" style={{ color: "var(--sd-mut)" }}>
+            <span className="mr-auto text-[11px]" style={{ color: "var(--color-text-muted)" }}>
               {missing.join(" · ")} 이(가) 필요합니다
             </span>
           )}
-          <button type="button" className="sd-btn" onClick={onClose} disabled={busy}>
+          <button type="button" className="px-3.5 py-1.5 rounded-full bg-[var(--color-bg-input)] hover:bg-[var(--color-bg-card-hover)] text-xs text-[var(--color-text-primary)] border border-[var(--color-border-subtle)] font-medium cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed" onClick={onClose} disabled={busy}>
             취소
           </button>
           <button
             type="button"
-            className="sd-btn sd-btn-primary"
+            className="px-3.5 py-1.5 rounded-full bg-[#1C60FF] hover:bg-[#0D1EB8] text-white text-xs font-bold border-none cursor-pointer transition-colors shadow-md shadow-[#1C60FF]/25 disabled:opacity-50 disabled:cursor-not-allowed"
             onClick={mode === "file" ? submit : submitYoutube}
             disabled={busy || !canSubmit}
           >
@@ -590,12 +591,12 @@ function L({
   return (
     <div>
       <div className="mb-1 flex items-baseline gap-1.5">
-        <span className="text-[11.5px] font-semibold" style={{ color: "var(--sd-fg)" }}>
+        <span className="text-[11.5px] font-semibold" style={{ color: "var(--color-text-primary)" }}>
           {label}
         </span>
-        {required && <span style={{ color: "var(--sd-danger)" }}>*</span>}
+        {required && <span style={{ color: "#E11D48" }}>*</span>}
         {hint && (
-          <span className="text-[10.5px]" style={{ color: "var(--sd-mut)" }}>
+          <span className="text-[10.5px]" style={{ color: "var(--color-text-muted)" }}>
             {hint}
           </span>
         )}
@@ -611,9 +612,9 @@ function Notice({ children, tone }: { children: React.ReactNode; tone?: "warn" }
     <div
       className="flex items-start gap-2 rounded-[4px] px-3 py-2 text-[11.5px] leading-relaxed"
       style={{
-        border: `1px solid ${warn ? "var(--sd-warn-border)" : "var(--sd-border)"}`,
-        background: warn ? "var(--sd-warn-bg)" : "var(--sd-card-sub)",
-        color: warn ? "var(--sd-warn)" : "var(--sd-mut)",
+        border: `1px solid ${warn ? "rgb(245 158 11 / 0.35)" : "var(--color-border-subtle)"}`,
+        background: warn ? "rgb(245 158 11 / 0.10)" : "var(--color-bg-input)",
+        color: warn ? "#D97706" : "var(--color-text-muted)",
       }}
     >
       {warn ? (

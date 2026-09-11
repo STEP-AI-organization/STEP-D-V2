@@ -24,14 +24,14 @@ export function Topbar({ breadcrumb }: { breadcrumb?: React.ReactNode }) {
   return (
     <header
       className="sticky top-0 z-20 flex h-[54px] items-center justify-between gap-4 px-5"
-      style={{ background: "var(--sd-card)", borderBottom: "1px solid var(--sd-border)" }}
+      style={{ background: "var(--color-bg-card)", borderBottom: "1px solid var(--color-border-subtle)" }}
     >
       <div className="min-w-0">
-        <h1 className="sd-serif truncate text-[17px] leading-[1.3] font-semibold" style={{ color: "var(--sd-fg)" }}>
+        <h1 className="truncate text-[17px] leading-[1.3] font-semibold" style={{ color: "var(--color-text-primary)" }}>
           {breadcrumb ?? meta.title}
         </h1>
         {meta.subtitle && (
-          <p className="truncate text-[11.5px]" style={{ color: "var(--sd-mut)" }}>
+          <p className="truncate text-[11.5px]" style={{ color: "var(--color-text-muted)" }}>
             {meta.subtitle}
           </p>
         )}
@@ -42,22 +42,22 @@ export function Topbar({ breadcrumb }: { breadcrumb?: React.ReactNode }) {
         {/* 커맨드 팔레트가 이 이벤트를 듣고 열린다 — 단축키 말고도 손으로 열 수 있게. */}
         <button
           type="button"
-          className="sd-btn flex items-center gap-1.5"
+          className="px-3.5 py-1.5 rounded-full bg-[var(--color-bg-input)] hover:bg-[var(--color-bg-card-hover)] text-xs text-[var(--color-text-primary)] border border-[var(--color-border-subtle)] font-medium cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
           onClick={() => window.dispatchEvent(new Event("open-command-palette"))}
           title="화면·회차·클립 검색 (Ctrl/⌘ + K)"
         >
           <Search className="size-[13px]" aria-hidden />
           <span>검색</span>
           <kbd
-            className="sd-mono rounded-[3px] px-1 text-[9.5px]"
-            style={{ background: "var(--sd-card-sub)", color: "var(--sd-mut)" }}
+            className="font-mono rounded-[3px] px-1 text-[9.5px]"
+            style={{ background: "var(--color-bg-input)", color: "var(--color-text-muted)" }}
           >
             Ctrl K
           </kbd>
         </button>
 
         {/* 주간 리포트는 자동 발송이 없다 — 사람이 눌러서 만든다 (README §15). */}
-        <button type="button" className="sd-btn" onClick={() => setReportOpen(true)}>
+        <button type="button" className="px-3.5 py-1.5 rounded-full bg-[var(--color-bg-input)] hover:bg-[var(--color-bg-card-hover)] text-xs text-[var(--color-text-primary)] border border-[var(--color-border-subtle)] font-medium cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed" onClick={() => setReportOpen(true)}>
           주간 리포트
         </button>
       </div>
