@@ -68,7 +68,7 @@
 /* 이식한 화면이 디자이너 의도대로 렌더되게 하는 서체 스택.
    디자이너 globals.css 의 `--font-base` 와 **같은 순서**다(영문 Outfit → 한글 Spoqa).
    순서를 바꾸면 한글이 Outfit 의 폴백으로 떨어져 자간이 달라진다. */
-@utility sd-ui-font {
+@utility ui-font {
   font-family: "Outfit", "Spoqa Han Sans Neo", -apple-system, "Apple SD Gothic Neo",
     "Malgun Gothic", sans-serif;
 }
@@ -505,7 +505,7 @@ html.dark {
      디자이너 산출물을 **픽셀까지 그대로** 두기 위한 블록이다(사용자 지시: "그냥 다 그대로").
      디자이너 프로젝트에는 `@layer base` 가 아예 없고 Tailwind preflight 만 있다. 반면 위의
      우리 base 규칙들은 앱 전체에 걸려서, 클래스가 같아도 렌더가 미묘하게 달라진다.
-     그래서 이식 화면(`sd-ui-font` 를 단 루트) 안에서만 원본 기준으로 되돌린다.
+     그래서 이식 화면(`ui-font` 를 단 루트) 안에서만 원본 기준으로 되돌린다.
 
      **범위를 한정한 이유**: 아직 안 옮긴 화면 23개는 여전히 우리 디자인이다. 전역으로
      지우면 거기서 포커스 링이 사라져 접근성이 퇴행한다. 화면이 전부 교체되면 이 블록을
@@ -516,7 +516,7 @@ html.dark {
 
      ⚠️ 포커스 링 제거는 접근성 손실이다. 원본에 그 상태가 없어서 맞춘 것이고,
      사용자에게 알린 뒤의 결정이다(2026-09-03). 되돌리려면 이 블록에서 :focus-visible 만 빼면 된다. */
-  .sd-ui-font {
+  .ui-font {
     /* 디자이너 `layout.tsx` 의 `<body className="antialiased">` 와 **같은 값**이다
        (Tailwind `antialiased` = 아래 두 줄). 2026-09-03 최초 작성 때 "우리만 거는 힌트"로
        오판해 `auto` 로 되돌렸다가, 디자이너 layout 을 읽고 바로잡았다 — 되돌리는 쪽이
@@ -531,12 +531,12 @@ html.dark {
   }
   /* Tailwind preflight 기본값(currentColor)으로. 위 `*` 규칙이 우리 토큰 색을 넣고 있어서,
      테두리 색을 명시 안 한 요소가 원본과 다른 색으로 나온다. */
-  .sd-ui-font *,
-  .sd-ui-font ::before,
-  .sd-ui-font ::after {
+  .ui-font *,
+  .ui-font ::before,
+  .ui-font ::after {
     border-color: currentColor;
   }
-  .sd-ui-font :focus-visible {
+  .ui-font :focus-visible {
     outline: none;
     outline-offset: 0;
   }

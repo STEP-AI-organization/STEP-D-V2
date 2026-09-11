@@ -34,25 +34,13 @@ import { CardRegistrationForm } from "./card-registration-form";
 // 그 경로에서는 카드번호가 브라우저→포트원으로 직접 가서 우리 인프라를 안 거친다.
 
 import { useToast } from "@/components/ui/toast";
+import { PILL, PILL_DANGER, PILL_PRIMARY } from "@/components/ui/tokens";
 import {
   deleteSavedCard,
   registerCard,
   type CardCredentialInput,
   type SavedCard,
 } from "@/lib/data/api";
-
-/**
- * 디자이너 모달 푸터의 알약 버튼(원본 MODAL 1). 이 화면 나머지가 전부 그 언어라,
- * 여기만 옛 `sd-btn` 을 쓰면 같은 다이얼로그 안에서 디자인이 갈린다.
- */
-const PILL =
-  "px-5 py-2.5 rounded-full border border-[var(--color-border-subtle)] bg-[var(--color-bg-input)]"
-  + " hover:bg-[var(--color-bg-card-hover)] text-[var(--color-text-primary)] text-xs font-semibold"
-  + " cursor-pointer transition-colors disabled:opacity-60 disabled:cursor-not-allowed";
-const PILL_DANGER =
-  "px-5 py-2.5 rounded-full bg-white dark:bg-slate-900 hover:bg-rose-500/10 text-rose-600"
-  + " dark:text-rose-400 text-xs font-bold transition-colors cursor-pointer border border-rose-500/30"
-  + " disabled:opacity-60 disabled:cursor-not-allowed";
 
 export function SavedCardManager({
   canManage,
@@ -163,7 +151,7 @@ export function SavedCardManager({
           replacing={card.registered} onRegister={register} onCancel={() => setEditing(false)} />
       )}
       {!canManage && (
-        <p className="text-xs text-muted-foreground">
+        <p className="text-xs text-[var(--color-text-muted)]">
           결제수단 등록·삭제는 워크스페이스 owner·admin만 할 수 있습니다.
         </p>
       )}
