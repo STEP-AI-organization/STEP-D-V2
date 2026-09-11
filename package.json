@@ -15,6 +15,7 @@
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm --filter stepaistudio test && pnpm --filter @stepd/server test",
+    "test:e2e": "pnpm --filter @stepd/server --fail-if-no-match test:e2e",
     "start": "pnpm -r --parallel start",
     "worker:naver": "pnpm --filter @stepd/server worker:naver",
     "lint": "pnpm --filter @stepd/web lint",

@@ -1,4 +1,4 @@
-# core/ — AI 파이프라인 파이썬 의존성
+# core/ — AI 파이프라인 파이썬 의존성 (**직접 선언분**)
 #
 #   python -m venv core/.venv310            (Python 3.11 권장 · 3.10+ 필요)
 #   core/.venv310/Scripts/pip install -r core/requirements.txt
@@ -6,19 +6,40 @@
 # ⚠️ 여기 있는 건 **기본 경로에 필요한 것 전부**다. 아래 "선택" 블록은 기본 off 인 기능용이라
 #    설치하지 않아도 파이프라인이 돈다 — 전부 lazy import 라 안 켜면 불러오지도 않는다.
 #    (torch 계열은 수 GB 라 기본에 넣지 않는다.)
+#
+# ## 이 파일 vs requirements.lock.txt (2026-09-11)
+#
+# **이미지는 이 파일이 아니라 `requirements.lock.txt` 로 깐다.** 여기는 "우리가 무엇을 왜
+# 쓰는가"를 적는 자리(사람이 읽는 목록)고, 저기는 전이 의존성까지 포함한 **재현용 전체 목록**이다.
+#
+# 왜 나눴나: 예전엔 이 파일 하나였고 mediapipe 빼고 전부 `>=` 였다. 그래서 워커 이미지를
+# 다시 빌드할 때마다 opencv·rembg·google-genai 버전이 달라졌다 — node 쪽에서 lockfile 을
+# 안 쓰던 것과 **정확히 같은 문제**다(apps/server/Dockerfile 주석 참조).
+#
+# 버전을 올리려면: 여기 `==` 를 고치고 → 아래 "다시 만드는 법"으로 lock 을 재생성 → 워커
+# 이미지를 빌드해 **빌드타임 스모크가 통과하는지** 확인(Dockerfile.worker 가 cv2·mediapipe 를 검사한다).
 
 # ── 기본 (항상 필요) ──────────────────────────────────────────────────────────
-google-genai>=1.0.0        # Vertex Gemini — 주석·추천·정제
-openai>=1.50.0             # 썸네일 이미지 생성
-scenedetect>=0.6           # shot 경계
-# MediaPipe가 contrib 패키지를 직접 요구한다. opencv-python과 둘 다 설치하면
-# 동일 cv2 파일을 서로 덮어쓰므로 contrib 하나로 통일한다. OpenCV 5는 아직 제외.
-opencv-contrib-python>=4.8,<5  # 프레임 추출·이미지 처리
-mediapipe==0.10.35        # AI 다중 구도 리프레임 — CPU FaceDetector (video mode)
-yt-dlp>=2024.0             # YouTube 원본 수집
-requests>=2.31
-rembg>=2.0.69              # 인물 세그먼테이션 (썸네일 합성)
-Pillow>=10.0               # 자막 오버레이 (한글 오타 회피 — nano banana 대신 Pillow)
+# 버전은 2026-09-11 기준 **프로덕션 워커 이미지에서 실측**한 값이다
+# (stepd-server:content-20260911-1110 의 /opt/corevenv). 지어낸 값이 아니라 도는 조합이다.
+google-genai==2.23.0       # Vertex Gemini — 주석·추천·정제
+openai==3.13.0             # 썸네일 이미지 생성
+scenedetect==0.7.1         # shot 경계
+# ⚠️ **opencv 가 두 개 깔린다. 의도한 게 아니라 막지 못하는 것이다.**
+#    mediapipe 는 `opencv-contrib-python` 을, scenedetect 는 `opencv-python` 을 요구한다
+#    (둘 다 버전 제약 없이). 그래서 "contrib 하나로 통일한다" 던 아래 원래 주석은
+#    **지켜진 적이 없다** — 2026-09-11 프로덕션 실측에서 opencv-python==5.0.0.93 이
+#    같이 깔려 있었다. 둘은 같은 `cv2` 디렉토리를 쓰므로 **나중에 깔린 쪽이 이긴다.**
+#    지금은 contrib(4.14.0)이 이겨서 정상이지만, 그건 순서 운이지 보장이 아니다.
+#    → 그래서 ① lock 으로 조합을 고정하고 ② Dockerfile.worker 가 빌드타임에
+#      `cv2.__version__` 이 4.x 이고 contrib 전용 모듈이 살아 있는지 **검사한다.**
+#      OpenCV 5 로 올릴 준비가 되기 전까지 그 스모크를 지우지 말 것.
+opencv-contrib-python==4.14.0.94  # 프레임 추출·이미지 처리
+mediapipe==0.10.35         # AI 다중 구도 리프레임 — CPU FaceDetector (video mode)
+yt-dlp==2026.8.19          # YouTube 원본 수집
+requests==2.34.2
+rembg==2.0.84              # 인물 세그먼테이션 (썸네일 합성)
+Pillow==12.3.0             # 자막 오버레이 (한글 오타 회피 — nano banana 대신 Pillow)
 
 # 폰트는 리포에 없다(61MB). 썸네일을 돌리려면:
 #   pwsh scripts/ops/download-fonts.ps1

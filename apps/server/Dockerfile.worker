@@ -61,21 +61,45 @@ ENV PATH="$PNPM_HOME:$PATH"
 RUN npm install -g pnpm@10.33.2
 
 # ── node deps (캐시) ─────────────────────────────────────────────────────────
+# ⚠️ **lockfile 로 깐다** — 이유는 `apps/server/Dockerfile` 의 같은 자리 주석에 길게 적었다.
+# 요약: 예전엔 pnpm-lock.yaml 을 복사조차 안 하고 `--no-frozen-lockfile` 로 깔아서,
+# `^` 범위 16개가 빌드하는 날의 최신으로 풀렸다(= CI 가 검증한 트리 ≠ 배포되는 트리).
+# 워크스페이스 package.json 5개를 다 복사하는 것도 같은 이유다(lockfile importer 대조).
 FROM base AS deps
-WORKDIR /app/apps/server
-COPY apps/server/package.json ./
-RUN pnpm install --no-frozen-lockfile --ignore-scripts && pnpm rebuild esbuild
+WORKDIR /app
+COPY pnpm-lock.yaml pnpm-workspace.yaml package.json ./
+COPY admin/package.json admin/
+COPY apps/server/package.json apps/server/
+COPY apps/web/package.json apps/web/
+COPY native/package.json native/
+RUN pnpm install --frozen-lockfile --filter @stepd/server --ignore-scripts \
+ && pnpm rebuild --filter @stepd/server esbuild
 
 # ── python deps (캐시) ───────────────────────────────────────────────────────
-# requirements.txt 만 먼저 복사해 레이어를 캐시한다 — core/ 소스가 바뀌어도 재설치 안 하도록.
+# requirements 만 먼저 복사해 레이어를 캐시한다 — core/ 소스가 바뀌어도 재설치 안 하도록.
+#
+# ⚠️ **`requirements.txt` 가 아니라 `requirements.lock.txt` 로 깐다.** 전자는 사람이 읽는
+# 직접 선언분이고, 후자가 전이 의존성까지 고정한 재현용 목록이다. 2026-09-11 이전엔 전자로
+# 깔았고 mediapipe 빼고 전부 `>=` 였다 — 같은 커밋을 다시 빌드해도 opencv·rembg·google-genai
+# 가 달라졌다는 뜻이다(node 쪽 lockfile 을 안 쓰던 것과 정확히 같은 문제).
+#
+# pip 자체도 못박는다. 위 pnpm 과 같은 이유다 — 도구가 오늘 뭐가 올라왔느냐로 바뀌면
+# 그건 빌드가 아니다. (pip 26.2.1 = 프로덕션 워커 이미지 실측값)
+#
+# yt-dlp 는 lock 에 들어 있다(youtube.download 잡의 필수 바이너리 · 없으면 유튜브 가져오기가
+# 전건 실패한다 — 2026-08-14 실측). 아래 ENV YT_DLP 가 이 venv 안의 경로를 고정한다.
 FROM base AS pydeps
-COPY core/requirements.txt /tmp/requirements.txt
+COPY core/requirements.lock.txt /tmp/requirements.lock.txt
 RUN python3 -m venv /opt/corevenv \
- && /opt/corevenv/bin/pip install --no-cache-dir --upgrade pip \
- && /opt/corevenv/bin/pip install --no-cache-dir -r /tmp/requirements.txt \
- # yt-dlp — youtube.download 잡의 필수 바이너리. 없으면 유튜브 가져오기가 전건 실패한다
- # (2026-08-14 실측: "yt-dlp가 설치되어 있지 않습니다"). venv 에 넣고 YT_DLP 로 경로 고정.
- && /opt/corevenv/bin/pip install --no-cache-dir yt-dlp
+ && /opt/corevenv/bin/pip install --no-cache-dir --upgrade "pip==26.2.1" \
+ && /opt/corevenv/bin/pip install --no-cache-dir -r /tmp/requirements.lock.txt \
+ && /opt/corevenv/bin/python -c "\
+import cv2, sys; \
+v = cv2.__version__; \
+sys.exit('cv2 가 %s 다 — OpenCV 5 는 아직 준비 안 됐다(requirements.txt 주석 참조)' % v) if not v.startswith('4.') else None; \
+sys.exit('cv2 에 contrib 모듈(ximgproc)이 없다 — opencv-python 이 contrib 를 덮어썼다') if not hasattr(cv2, 'ximgproc') else None; \
+print('cv2 smoke: ok (%s, contrib)' % v)" \
+ && /opt/corevenv/bin/yt-dlp --version > /dev/null && echo "yt-dlp smoke: ok"
 
 # ── runtime ─────────────────────────────────────────────────────────────────
 FROM base AS runtime
@@ -83,6 +107,9 @@ WORKDIR /app
 COPY package.json ./
 COPY apps/server apps/server
 COPY core core
+# ⚠️ **두 줄이 세트다.** pnpm 워크스페이스는 패키지 실물을 `/app/node_modules/.pnpm` 에 두고
+# 앱 폴더엔 상대 심링크만 남긴다 — 하나만 복사하면 런타임에 MODULE_NOT_FOUND 로 죽는다.
+COPY --from=deps /app/node_modules /app/node_modules
 COPY --from=deps /app/apps/server/node_modules /app/apps/server/node_modules
 COPY --from=pydeps /opt/corevenv /opt/corevenv
 # MediaPipe's model is intentionally not committed. The downloader verifies the pinned
