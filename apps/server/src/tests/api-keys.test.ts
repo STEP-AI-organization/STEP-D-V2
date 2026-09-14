@@ -210,6 +210,16 @@ describe("라우트 화이트리스트 — 기본값은 닫힘", () => {
     assert.equal(checkRoute("POST", "/api/programs/p_1/autofill/chat", all).ok, false);
   });
 
+  it("굽힌 제목은 좁은 라우트로만 고친다 — editorState 통째 PATCH 는 막힌다", () => {
+    // 제목 줄만 바꾸고 재렌더를 예약하는 좁은 라우트.
+    assert.equal(checkRoute("PATCH", "/api/clips/c_1/overlay-title", all).ok, true);
+    // ⚠️ `/editor` 는 editorState 를 **통째로 덮는다** — 콘솔이 안 들고 있는 트랙·리프레임·
+    //    아이콘이 사라진다. 편하다고 이걸 열면 데이터 손실이 조용히 난다.
+    assert.equal(checkRoute("PATCH", "/api/clips/c_1/editor", all).ok, false);
+    // 렌더를 직접 트리거하는 길도 안 연다 — 재렌더는 rendered:false 로 순방이 집어 간다.
+    assert.equal(checkRoute("POST", "/api/clips/c_1/export", all).ok, false);
+  });
+
   it("스코프가 없으면 열린 라우트도 못 부른다", () => {
     const r = checkRoute("POST", "/api/media/m_1/analyze", ["search:read"]);
     assert.equal(r.ok, false);

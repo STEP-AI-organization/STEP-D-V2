@@ -813,6 +813,10 @@ type Short = {
   title_line1?: string;
   title_line2?: string;
   title_line2_color?: string;  // blue|red|yellow|green
+  /** 대안 오버레이 문구 — 운영자가 고를 목록(2026-09-14 · 기본 1 + 대안 2 = 최소 3).
+   *  **만들 때 같이** 뽑는다. 나중에 다시 부르면 그때마다 Gemini 호출이 붙고, 같은 장면인데
+   *  실행마다 결이 달라진다. 구형 추천엔 이 키가 없으므로 읽는 쪽은 항상 기본값을 깔 것. */
+  title_alts?: { title_line1?: string; title_line2?: string }[];
   /** 처음 제목 생성 단계(_retitle_final_windows)에서 뽑힌 대체 제목 후보들.
    *  기본 title을 포함할 수도 있고 아닐 수도 있음 — 프론트는 dedupe 처리. */
   title_candidates?: string[];
@@ -875,6 +879,16 @@ function recFromShort(episodeId: string, s: Short) {
     // 사라지고 항상 파랑으로 굳는다 — 줄만 살리고 색을 버리면 같은 종류의 누락이 남는다.
     titleLine2Color: typeof s.title_line2_color === "string" && s.title_line2_color.trim()
       ? s.title_line2_color.trim().toLowerCase() : undefined,
+    // 대안 오버레이 문구 — 두 줄 제목과 **같은 이유로** 여기서 실어야 한다. 안 실으면
+    // 추천엔 있는데 클립엔 없어서 화면이 고를 목록을 못 그린다(위 titleLine1/2 누락과 같은 모양).
+    titleAlts: Array.isArray(s.title_alts)
+      ? s.title_alts
+        .map((a) => ({
+          titleLine1: typeof a?.title_line1 === "string" ? a.title_line1.trim() : "",
+          titleLine2: typeof a?.title_line2 === "string" ? a.title_line2.trim() : "",
+        }))
+        .filter((a) => a.titleLine1 || a.titleLine2)
+      : undefined,
     appeal: Math.max(1, Math.min(5, appeal)),
     // 신규 스코어(있으면 그대로 전달). 프론트 카드가 score100 우선 표시.
     score100: typeof s.score100 === "number" ? s.score100 : undefined,

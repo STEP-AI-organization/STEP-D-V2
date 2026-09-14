@@ -909,6 +909,9 @@ async function adoptRecommendation(rec: any, job: FactoryJob): Promise<string | 
     title: rec.title,
     titleLine1: rec.titleLine1,
     titleLine2: rec.titleLine2,
+    // 대안 오버레이 문구 — 운영자가 나갈 문구를 고를 목록. 추천에만 두면 채택 뒤에는
+    // 고를 데가 없다(화면이 보는 건 클립이다).
+    titleAlts: rec.titleAlts,
     hookQuote: rec.hookQuote,
     hookTimeSec: rec.hookTimeSec,
     hookIntroCaption: rec.hookIntroCaption,

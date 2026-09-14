@@ -89,6 +89,27 @@ jobs:
         env:
           NEXT_PUBLIC_API_URL: /api/proxy/api
 
+      # ── 스모크 — 진짜 크롬이 진짜 프로덕션 빌드를 연다 ──────────────────────────
+      #
+      # 빌드는 타입과 프리렌더만 본다. 브라우저에서 실제로 무슨 일이 벌어지는지는 아무도
+      # 안 봤고, 그 공백이 사고를 낸 기록이 있다(워커의 `page.evaluate` 에 esbuild `__name`
+      # 이 딸려가 브라우저에서 전량 실패 — 유닛으로는 안 잡혔다).
+      #
+      # 여기서 고정하는 것: 미들웨어 리다이렉트(엣지 런타임은 빌드해야만 돈다) ·
+      # 스토어가 부팅/폴링에서 **어느 엔드포인트를 부르는가** · 304 를 받아도 안 무너지는가.
+      # 화면의 글자·DOM 은 일부러 안 본다(프론트 개편 중 — 셀렉터에 걸면 매주 빨개진다).
+      #
+      # ⚠️ `pnpm smoke` 가 자기 빌드를 한 번 더 한다(위 next build 와 중복 ~1분).
+      #    갈라 두는 게 낫다 — 빌드가 깨진 건지 브라우저에서 깨진 건지 이름으로 갈린다.
+      # ⚠️ **`pnpm --filter` 로 그 패키지의 playwright 를 쓴다.** 루트에서 `npx playwright` 로
+      #    깔았더니 다른 버전이 잡혀 **엉뚱한 리비전**에 설치됐고, 테스트는
+      #    `chromium_headless_shell-1234 가 없다` 로 죽었다(2026-09-14 CI 실측).
+      #    로컬은 이미 브라우저가 깔려 있어 안 걸린다 — CI 에서만 드러나는 종류다.
+      - name: playwright 크롬 설치
+        run: pnpm --filter @stepd/web --fail-if-no-match exec playwright install --with-deps chromium
+      - name: 웹 스모크 (실브라우저)
+        run: pnpm --filter @stepd/web --fail-if-no-match smoke
+
   # ── e2e — 진짜 Postgres 에 진짜 서버를 띄우고 HTTP 로 묻는다 ────────────────────
   #
   # 왜 넣었나: 서버 테스트 1671개가 **전부** 순수 함수이거나 소스 스캔이라, DB 를 켜고

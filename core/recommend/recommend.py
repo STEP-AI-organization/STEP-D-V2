@@ -3487,6 +3487,19 @@ _SHORTS_FROM_BEATS_SCHEMA = {
                     "title_line1": {"type": "STRING"},  # 상단 · 상황·주어 (기본 톤 · 흰색/검정)
                     "title_line2": {"type": "STRING"},  # 하단 · 핵심 폭로·반전 (컬러 강조)
                     "title_line2_color": {"type": "STRING"},  # blue|red|yellow|green (기본 blue)
+                    # 대안 오버레이 문구 (2026-09-14 · 최소 3개 확보).
+                    # 운영자가 나갈 문구를 고를 수 있게 **만들 때 같이** 뽑는다 — 나중에 다시
+                    # 부르면 그때마다 Gemini 호출이 붙고, 같은 장면인데 실행마다 결이 달라진다.
+                    "title_alts": {
+                        "type": "ARRAY",
+                        "items": {
+                            "type": "OBJECT",
+                            "properties": {
+                                "title_line1": {"type": "STRING"},
+                                "title_line2": {"type": "STRING"},
+                            },
+                        },
+                    },
                     "hook": {"type": "STRING"},
                     # 2026-07-31 · 쇼츠 첫 3초 hook intro (docs/plans/shorts-hook-intro-3sec.md).
                     # 목적: retention · 스크롤 정지 · 시청자 이탈 방지. 3필드:
@@ -3727,6 +3740,14 @@ title 은 폴백용 한 줄 · **title_line1 + title_line2** 를 필수로 뽑�
 
 title (폴백) 은 두 줄 합쳐 한 줄로 자연스럽게.
 
+**⭐ 대안 문구 (title_alts · 필수 2개) ⭐**:
+운영자가 나갈 문구를 **고를 수 있어야** 한다. title_line1/line2 말고 **다른 각도로 2쌍**을 더 뽑아
+title_alts 에 담는다 (기본 1 + 대안 2 = 최소 3개).
+- 길이 규칙은 기본과 **똑같이** 적용한다 (line1·line2 각 최대 12자 · 목표 8-11자).
+- **각도를 바꿔라.** 같은 말을 조사만 바꾼 것은 후보가 아니다 —
+  예: ① 반전 강조 ② 인물의 감정 ③ 질문형 처럼 접근을 달리한다.
+- 근거는 똑같이 이 쇼츠 구간 안에 있어야 한다. 지어내지 마라.
+
 **⭐ 첫 3초 Hook Intro (docs/plans/shorts-hook-intro-3sec.md) ⭐**:
 쇼츠에 들어와서 시청자가 바로 이탈하지 않게 · 첫 3초 attention 을 사로잡을 hook 3필드:
 
@@ -3742,6 +3763,8 @@ title (폴백) 은 두 줄 합쳐 한 줄로 자연스럽게.
 {{"shorts":[
   {{"beat_ids":[3,4], "title":"헬스장 사장인 줄 알았는데 한마디에 스튜디오가 얼어붙었다",
     "title_line1":"헬스장 사장인 줄", "title_line2":"한마디에 얼어붙음", "title_line2_color":"yellow",
+    "title_alts":[{{"title_line1":"한의사였다고?", "title_line2":"스튜디오 정적"}},
+                  {{"title_line1":"자기소개 한마디", "title_line2":"모두 표정 굳음"}}],
     "hook":"반전",
     "hook_quote":"저 사실 한의사예요", "hook_time_sec":2.4, "hook_intro_caption":"충격 고백!",
     "tags":["직업공개","한의사"],
@@ -3946,6 +3969,25 @@ title (폴백) 은 두 줄 합쳐 한 줄로 자연스럽게.
             title_line2 = title_line2[:_MAX_LINE_LEN].rstrip(" ,·.-") + "…"
         # 컬러 고정: 파란색 (2026-07-29 사용자 요구 · AI 판단 불필요)
         title_line2_color = "blue"
+
+        # 대안 문구 (2026-09-14) — 운영자가 고를 수 있게 **만들 때 같이** 뽑는다.
+        # 기본과 **같은 길이 컷**을 적용한다. 여기서 안 자르면 화면에서만 잘려, 고른 문구가
+        # 미리보기와 다르게 나간다.
+        def _cut(v: object) -> str:
+            t = (str(v) if v is not None else "").strip()
+            return (t[:_MAX_LINE_LEN].rstrip(" ,·.-") + "…") if len(t) > _MAX_LINE_LEN else t
+
+        title_alts: list[dict[str, str]] = []
+        _seen_alt = {(title_line1, title_line2)}   # 기본과 같은 쌍은 후보가 아니다
+        for alt in (s.get("title_alts") or [])[:5]:
+            if not isinstance(alt, dict):
+                continue
+            a1, a2 = _cut(alt.get("title_line1")), _cut(alt.get("title_line2"))
+            # 두 줄 다 비면 쓸 수 없다. 한 줄만 있는 건 허용 — 렌더가 한 줄로 그린다.
+            if not (a1 or a2) or (a1, a2) in _seen_alt:
+                continue
+            _seen_alt.add((a1, a2))
+            title_alts.append({"title_line1": a1, "title_line2": a2})
         # 폴백: line1/2 없으면 title 로 자동 분할 (·|?|! 기준)
         if not (title_line1 and title_line2) and title:
             import re as _re_t
@@ -3991,6 +4033,9 @@ title (폴백) 은 두 줄 합쳐 한 줄로 자연스럽게.
             "title_line1": title_line1,
             "title_line2": title_line2,
             "title_line2_color": title_line2_color,
+            # 대안 오버레이 문구 — 운영자가 고를 목록. 빈 배열이면 화면이 후보를 안 그린다
+            # (구형 추천은 이 키가 아예 없으니 호출부는 항상 기본값을 깔 것).
+            "title_alts": title_alts,
             "reason": reason[:400],
             "story_synopsis": reason[:400],
             "why": (s.get("why") or "").strip()[:200],

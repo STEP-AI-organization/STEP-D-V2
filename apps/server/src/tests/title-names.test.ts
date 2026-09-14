@@ -58,6 +58,23 @@ describe("배우 표기 배선", () => {
     assert.match(index, /next\.titleCast = normalizeTitleCast\(body\.titleCast\)/);
     assert.match(index, /titleNamesPrompt\(programForPrompt\)/);
     assert.match(index, /!isActorTitle\(v, programForPrompt\)/);
+    // 로스터(program_cast)를 고치면 **AI 가 읽는 대응표(titleCast)도 따라가야 한다.**
+    // 이 고리가 없으면 출연자를 등록해도 제목에 실명이 안 나오고, 지워도 계속 나온다 —
+    // 화면은 됐다고 하는데 결과물만 그대로인 모양이라 아무도 원인을 못 찾는다.
+    // (저장소 합치기 2026-09-14: 로스터가 정본 · titleCast 는 투영)
+    assert.match(index, /async function reprojectTitleCast/);
+    for (const route of [
+      /app\.post\("\/api\/programs\/:id\/cast"/,
+      /app\.patch\("\/api\/programs\/:id\/cast\/:castId"/,
+      /app\.delete\("\/api\/programs\/:id\/cast\/:castId"/,
+    ]) {
+      const at = index.search(route);
+      assert.notEqual(at, -1, `라우트를 못 찾음: ${route}`);
+      assert.match(index.slice(at, at + 1400), /reprojectTitleCast\(programId\)/,
+        `이 라우트가 titleCast 를 되투영하지 않는다: ${route}`);
+    }
+    // 합치기 이전 프로그램의 대응표가 첫 편집에 지워지지 않게 끌어올린다(1회·멱등).
+    assert.match(index, /async function seedRosterFromTitleCast/);
     assert.match(read("apps/server/src/pipeline/content-pipeline.ts"), /ctx\.titleCast = titleCast/);
     const castSync = index.slice(index.indexOf("const previousCast ="), index.indexOf("// cast에서 사라진 이름"));
     assert.match(castSync, /previousCast\.some/);
