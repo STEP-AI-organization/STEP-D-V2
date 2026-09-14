@@ -76,6 +76,26 @@ describe("웹 화면 언어 — 옛 디자인 시스템이 다시 새지 않는�
     assert.deepEqual(hits, [],
       "옛 sd-* 토큰이 다시 들어왔다. components/ui/tokens.ts 또는 var(--color-*) 로 바꿀 것");
   });
+
+  /**
+   * **글자색으로 쓰는 파란색은 테마마다 다르다.** globals.css 가 `--text-accent` 를
+   * 라이트 `#1C60FF` · 다크 `#3B82F6` 으로 나눠 두는데, 그걸 무시하고 hex 를 박으면
+   * 다크(우리 **기본 테마**)에서 카드 위 대비가 3.31:1 로 떨어진다 — AA 본문 기준 4.5 미달.
+   * 변수를 쓰면 4.53:1 이다. 2026-09-14 에 48곳이 이 상태였다.
+   *
+   * 배경·테두리(`bg-[#1C60FF]`)는 **막지 않는다** — 그 값은 두 테마가 같아서 틀릴 수가 없다.
+   * 규칙은 "hex 를 쓰지 마라" 가 아니라 **"테마마다 달라지는 걸 고정하지 마라"** 다.
+   */
+  it("파란 글자색을 hex 로 박지 않는다 (테마마다 값이 다르다)", () => {
+    const BLUE_TEXT = /(?:^|[\s"'`{:])(?:[a-z-]+:)*text-\[#(?:1C60FF|3B82F6|60A5FA)\]/i;
+    const hits: string[] = [];
+    for (const f of FILES) {
+      if (BLUE_TEXT.test(code(f.src))) hits.push(f.rel);
+    }
+    assert.deepEqual(hits, [],
+      "파란 글자색은 text-[var(--text-accent)] (배지 안이면 --badge-text) 를 쓸 것 — " +
+      "hex 를 박으면 다크에서 대비가 3.31:1 로 떨어진다");
+  });
 });
 
 describe("웹 화면 언어 — 조합은 한 곳에서 가져다 쓴다", () => {

@@ -173,11 +173,11 @@ function AnalyzeInner() {
                         onClick={() => go({ episode: ep.id })}
                         className={`p-2.5 rounded-lg transition-all cursor-pointer text-xs ${
                           isSelected
-                            ? "bg-[#1C60FF]/10 text-[#1C60FF] font-bold"
+                            ? "bg-[#1C60FF]/10 text-[var(--text-accent)] font-bold"
                             : "text-[var(--color-text-muted)] hover:bg-[var(--color-bg-input)] hover:text-[var(--color-text-primary)] font-medium"
                         }`}
                       >
-                        <h4 className={`text-xs mb-0.5 ${isSelected ? "font-bold text-[#1C60FF]" : "font-bold text-[var(--color-text-primary)]"}`}>
+                        <h4 className={`text-xs mb-0.5 ${isSelected ? "font-bold text-[var(--text-accent)]" : "font-bold text-[var(--color-text-primary)]"}`}>
                           회차 {ep.episodeNumber}
                         </h4>
                         <div className="text-[10px] opacity-80">
@@ -553,7 +553,7 @@ function RecommendationRow({ rec, onSeek }: { rec: Recommendation; onSeek: (sec:
             type="button"
             onClick={() => onSeek(rec.startTime)}
             title="이 지점부터 재생"
-            className="font-bold text-[#1C60FF] dark:text-[#60A5FA] font-mono text-xs pr-1 cursor-pointer underline-offset-2 hover:underline"
+            className="font-bold text-[var(--badge-text)] font-mono text-xs pr-1 cursor-pointer underline-offset-2 hover:underline"
           >
             {fmtTime(rec.startTime)} - {fmtTime(rec.endTime)}
           </button>

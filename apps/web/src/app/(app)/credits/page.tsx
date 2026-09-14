@@ -351,7 +351,7 @@ export default function CreditsPage() {
                 <button
                   type="button"
                   onClick={() => setDialog("card")}
-                  className="text-xs font-bold text-[#1C60FF] hover:underline cursor-pointer"
+                  className="text-xs font-bold text-[var(--text-accent)] hover:underline cursor-pointer"
                 >
                   결제 수단 관리
                 </button>
@@ -492,7 +492,7 @@ export default function CreditsPage() {
                 type="button"
                 onClick={() => setDialog("ledger")}
                 disabled={!state}
-                className="w-full h-9 rounded-full bg-[var(--color-bg-input)] hover:bg-[var(--color-bg-card-hover)] text-[#1C60FF] text-xs font-bold transition-colors cursor-pointer border border-[var(--color-border-subtle)] disabled:opacity-50 disabled:cursor-not-allowed"
+                className="w-full h-9 rounded-full bg-[var(--color-bg-input)] hover:bg-[var(--color-bg-card-hover)] text-[var(--text-accent)] text-xs font-bold transition-colors cursor-pointer border border-[var(--color-border-subtle)] disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 거래 보기
               </button>
@@ -540,7 +540,7 @@ export default function CreditsPage() {
               <button
                 type="button"
                 onClick={() => setDialog("card")}
-                className="w-full h-9 rounded-full bg-[var(--color-bg-input)] hover:bg-[var(--color-bg-card-hover)] text-[#1C60FF] text-xs font-bold transition-colors cursor-pointer border border-[var(--color-border-subtle)]"
+                className="w-full h-9 rounded-full bg-[var(--color-bg-input)] hover:bg-[var(--color-bg-card-hover)] text-[var(--text-accent)] text-xs font-bold transition-colors cursor-pointer border border-[var(--color-border-subtle)]"
               >
                 결제 수단 관리
               </button>
@@ -582,7 +582,7 @@ export default function CreditsPage() {
                 type="button"
                 onClick={() => setDialog("invoices")}
                 disabled={!invoiceList || invoiceList.invoices.length === 0}
-                className="w-full h-9 rounded-full bg-[var(--color-bg-input)] hover:bg-[var(--color-bg-card-hover)] text-[#1C60FF] text-xs font-bold transition-colors cursor-pointer border border-[var(--color-border-subtle)] disabled:opacity-50 disabled:cursor-not-allowed"
+                className="w-full h-9 rounded-full bg-[var(--color-bg-input)] hover:bg-[var(--color-bg-card-hover)] text-[var(--text-accent)] text-xs font-bold transition-colors cursor-pointer border border-[var(--color-border-subtle)] disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 인보이스 보기
               </button>
@@ -621,7 +621,7 @@ export default function CreditsPage() {
               <button
                 type="button"
                 onClick={() => setDialog("settings")}
-                className="w-full h-9 rounded-full bg-[var(--color-bg-input)] hover:bg-[var(--color-bg-card-hover)] text-[#1C60FF] text-xs font-bold transition-colors cursor-pointer border border-[var(--color-border-subtle)]"
+                className="w-full h-9 rounded-full bg-[var(--color-bg-input)] hover:bg-[var(--color-bg-card-hover)] text-[var(--text-accent)] text-xs font-bold transition-colors cursor-pointer border border-[var(--color-border-subtle)]"
               >
                 설정 관리
               </button>

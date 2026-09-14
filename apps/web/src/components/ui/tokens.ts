@@ -87,3 +87,57 @@ export const BTN_DEL = `${SMALL_BASE} bg-[var(--color-bg-card)] text-[var(--colo
 export const BTN_PRIMARY = "px-3.5 py-2 rounded-full bg-[#222222] hover:bg-black text-white"
   + " dark:bg-stone-700 dark:hover:bg-stone-600 text-xs font-bold transition-colors"
   + " cursor-pointer shadow-none border-none disabled:opacity-50 disabled:cursor-not-allowed";
+
+// ── 다이얼로그 껍데기 ──────────────────────────────────────────────────────────
+//
+// 원본의 모달은 **흐린 오버레이 + 확대되며 등장**한다. 2026-09-14 이전엔 `BillingDialog`
+// 하나만 그랬고 나머지(채택·발행·리포트·대형 미리보기)는 `bg-black/55` 에 애니메이션이
+// 없어 툭 나타났다 — 같은 제품에서 모달마다 등장이 다르면 조립한 티가 난다.
+
+/**
+ * 오버레이. 투명도는 자리마다 다를 수 있다(원본도 40~70 을 섞어 쓴다) — 더 옅게 하려면
+ * `MODAL_OVERLAY.replace("/70", "/40")` 이 아니라 뒤에 `bg-black/40` 을 덧붙여 덮을 것.
+ */
+export const MODAL_OVERLAY =
+  "fixed inset-0 z-50 bg-black/70 backdrop-blur-xs flex items-center justify-center p-4";
+
+/**
+ * 패널에 **덧붙이는** 등장 효과. 크기·레이아웃은 모달마다 다르므로 여기 넣지 않는다 —
+ * 이 상수는 "어떻게 나타나는가" 만 정한다.
+ */
+export const MODAL_ENTER = "animate-in fade-in zoom-in-95 duration-150";
+
+// ── 글자 역할 ─────────────────────────────────────────────────────────────────
+//
+// 원본 전체에서 글자 조합의 빈도를 세 보니(2026-09-14) **여덟 가지**로 수렴한다.
+// 크기·무게·색이 제각각인 게 아니라, 역할이 정해져 있고 그 역할마다 값이 고정돼 있다:
+//
+//     제목  font-bold + text-primary + (xl 16회 · base 41 · sm 39 · xs 37)
+//     보조  text-muted           + (xs 24 · 11px 13 · 10px 13) · 무게는 medium/normal
+//
+// 우리 값은 대조해 보니 **이미 원본과 같았다** — 그래서 기존 코드를 치환하지 않았다.
+// (86곳을 바꿔도 화면은 1px 도 안 변한다. 위험만 남는 작업이다.)
+// 여기 모은 건 **앞으로 적을 때 매번 고르지 않기 위해서**다. 새 코드는 여기서 가져다 쓸 것.
+//
+// ⚠️ 레이아웃 유틸(`flex items-center gap-2` 등 41회)은 **일부러 안 모았다.**
+// `ROW` 같은 이름으로 감싸면 클래스만 보면 알던 걸 정의를 찾아가야 알게 된다 —
+// Tailwind 를 쓰는 이유를 없앤다. 모으는 기준은 반복이 아니라 **디자인 결정을 담았는가**다.
+
+export const T = {
+  /** 화면·모달 제목 */
+  title: "text-xl font-bold text-[var(--color-text-primary)]",
+  /** 카드·섹션 제목 — 원본에서 가장 흔하다 */
+  section: "text-base font-bold text-[var(--color-text-primary)]",
+  /** 소제목 · 목록 행의 주 텍스트 */
+  sub: "text-sm font-bold text-[var(--color-text-primary)]",
+  /** 강조 라벨 — 통계 수치 위의 이름 등 */
+  label: "text-xs font-bold text-[var(--color-text-primary)]",
+  /** 보조 설명 */
+  muted: "text-xs text-[var(--color-text-muted)]",
+  /** 보조 설명 · 살짝 강조 */
+  mutedStrong: "text-xs font-medium text-[var(--color-text-muted)]",
+  /** 더 작은 보조 — 메타 정보(시각·개수) */
+  meta: "text-[11px] text-[var(--color-text-muted)]",
+  /** 가장 작은 보조 — 배지 안, 캡션 */
+  caption: "text-[10px] text-[var(--color-text-muted)]",
+} as const;

@@ -72,6 +72,8 @@ Electron에서 열리면 영상 업로드 다이얼로그는 브라우저 XHR �
 ## 규칙
 
 - **스타일:** Tailwind 클래스. 인라인 style 객체 금지. 색은 CSS 변수(`var(--color-*)`, `globals.css`).
+- **조합은 `components/ui/tokens.ts` 에서 가져다 쓴다** — 모달 폭·알약 버튼·모달 껍데기·글자 역할(`T.section`·`T.muted` 등). 원본 빈도를 실측해 모은 것이라 직접 적는 것보다 정확하다. 레이아웃 유틸(`flex items-center gap-2`)은 일부러 안 모았다 — 이름으로 감싸면 클래스만 보고 알던 걸 정의를 찾아가야 한다.
+- **파란색을 글자에 쓸 땐 hex 금지**, `text-[var(--text-accent)]`(배지 안이면 `--badge-text`). 이 값은 **테마마다 다르다**(라이트 `#1C60FF` · 다크 `#3B82F6`) — 박아두면 다크(기본 테마)에서 대비가 3.31:1 로 떨어진다. 배경·테두리는 두 테마가 같은 값이라 hex 여도 된다. `web-design-tokens.test.ts` 가 막는다.
 - **프리미티브 우선:** 새 카드/배지/빈 상태를 직접 만들지 말고 `components/ui/*`를 쓴다.
 - **아이콘:** `lucide-react`. `EmptyState`의 `icon` prop은 **컴포넌트**(`icon={Youtube}`)를 받는다 — JSX 엘리먼트 아님.
 - **경로 별칭:** `@/*` → `./src/*`.

@@ -102,11 +102,11 @@ export default function ProgramAnalysisPage() {
                         onClick={() => setSelectedProgramId(prog.id)}
                         className={`p-2.5 rounded-lg transition-all cursor-pointer text-xs ${
                           isSelected
-                            ? "bg-[#1C60FF]/10 text-[#1C60FF] font-bold"
+                            ? "bg-[#1C60FF]/10 text-[var(--text-accent)] font-bold"
                             : "text-[var(--color-text-muted)] hover:bg-[var(--color-bg-input)] hover:text-[var(--color-text-primary)] font-medium"
                         }`}
                       >
-                        <h4 className={`text-xs mb-0.5 ${isSelected ? "font-bold text-[#1C60FF]" : "font-bold text-[var(--color-text-primary)]"}`}>
+                        <h4 className={`text-xs mb-0.5 ${isSelected ? "font-bold text-[var(--text-accent)]" : "font-bold text-[var(--color-text-primary)]"}`}>
                           {prog.title}
                         </h4>
                         <p className="text-[10px] opacity-80">

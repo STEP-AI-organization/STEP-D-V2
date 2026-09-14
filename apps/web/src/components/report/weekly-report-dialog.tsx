@@ -113,9 +113,9 @@ export function WeeklyReportDialog({ onClose }: { onClose: () => void }) {
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-black/55" onClick={onClose} aria-hidden />
+      <div className="absolute inset-0 bg-black/70 backdrop-blur-xs" onClick={onClose} aria-hidden />
       <div
-        className="rounded-2xl border border-[var(--color-border-card)] shadow-2xl overflow-hidden relative flex max-h-[88vh] w-full max-w-[480px] flex-col bg-[var(--color-bg-card)]"
+        className="rounded-2xl border border-[var(--color-border-card)] shadow-2xl overflow-hidden relative flex max-h-[88vh] w-full max-w-[480px] flex-col bg-[var(--color-bg-card)] animate-in fade-in zoom-in-95 duration-150"
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"

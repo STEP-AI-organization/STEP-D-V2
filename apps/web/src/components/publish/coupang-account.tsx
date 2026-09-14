@@ -278,7 +278,7 @@ export function CoupangAccount() {
                     href={`${process.env.NEXT_PUBLIC_API_URL ?? "/api"}/commerce/login-tool`}
                     className="flex w-fit items-center gap-2 px-4 py-2.5 rounded-full bg-[var(--color-bg-input)] hover:bg-[var(--color-bg-card-hover)] text-xs text-[#222222] dark:text-slate-200 font-bold border border-[var(--color-border-subtle)] cursor-pointer transition-colors shadow-none"
                   >
-                    <Download className="w-4 h-4 text-[#1C60FF]" />
+                    <Download className="w-4 h-4 text-[var(--text-accent)]" />
                     <span>쿠팡 로그인 도우미 다운로드 (Windows)</span>
                   </a>
                 </div>

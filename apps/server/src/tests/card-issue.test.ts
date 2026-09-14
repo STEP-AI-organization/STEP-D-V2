@@ -90,20 +90,82 @@ describe("포트원 서버 발급", () => {
   });
 });
 
+/**
+ * 카드 등록의 권한·민감정보 경계.
+ *
+ * ⚠️ 2026-09-14: 발급 오케스트레이션이 `billing/card-register.ts` 로 빠졌다 — 어드민
+ * (`POST /api/superadmin/tenants/:id/card`)이 **같은 한 벌**을 쓰게 하려고. 불변식은
+ * 그대로고 사는 곳만 둘로 갈렸으니, 스캔 범위도 둘로 넓힌다:
+ *   · 라우트(index.ts)  — **누가** 부를 수 있나(세션 권한) · 캐시 금지
+ *   · registerCard      — **무엇을** 검증하고 어디로 보내나(동의·원문·구매자)
+ * 한쪽만 보면 "라우트에 검증이 없다" 며 빨개지거나(지금 이 일), 더 나쁘게는 검증이
+ * 통째로 사라져도 초록이 된다.
+ */
 describe("카드 등록의 권한·민감정보 경계", () => {
   const source = fs.readFileSync(fileURLToPath(new URL("../index.ts", import.meta.url)), "utf8");
-  const route = /app\.post\("\/api\/billing\/card\/issue",[\s\S]*?\n\}\);/.exec(source)?.[0] ?? "";
-  it("세션 관리자·동의·입력 검증을 발급보다 먼저 수행한다", () => {
-    const issue = route.indexOf("await issueBillingKey(");
-    assert.ok(issue > 0);
-    for (const check of ["requireManager(c)", "body.autoChargeConsent !== true", "checkCardCredential(", "checkCustomer("]) {
-      assert.ok(route.indexOf(check) >= 0 && route.indexOf(check) < issue, check);
+  const register = fs.readFileSync(
+    fileURLToPath(new URL("../billing/card-register.ts", import.meta.url)), "utf8");
+  const route = /app\.post\("\/api\/billing\/card\/issue",[\s\S]*?\}\);/.exec(source)?.[0] ?? "";
+
+  it("세션 관리자 확인은 **라우트**에 있다 — 위임 함수는 권한을 모른다", () => {
+    assert.ok(route.length > 0, "제품 카드 등록 라우트를 못 찾았다");
+    const call = route.indexOf("registerCard(");
+    assert.ok(call > 0, "라우트가 registerCard 로 위임하지 않는다");
+    assert.ok(route.indexOf("requireManager(c)") >= 0 && route.indexOf("requireManager(c)") < call,
+      "권한 확인이 위임보다 뒤이거나 없다");
+  });
+
+  it("동의·입력 검증을 발급보다 먼저 수행한다", () => {
+    const issue = register.indexOf("await issueBillingKey(");
+    assert.ok(issue > 0, "registerCard 에서 발급 호출을 못 찾았다");
+    for (const check of ["autoChargeConsent !== true", "checkCardCredential(", "checkCustomer("]) {
+      const at = register.indexOf(check);
+      assert.ok(at >= 0 && at < issue, `${check} 가 발급보다 먼저가 아니다`);
     }
   });
+
+  it("제품 경로는 자동결제 동의를 **면제하지 않는다**", () => {
+    assert.match(route, /requireConsent: true/,
+      "제품에서 동의 없이 카드가 등록된다 — 동의가 곧 자동결제 동의다");
+  });
+
   it("카드 원문은 저장하지 않고, 응답·로그·결제 API에 싣지 않는다", () => {
-    assert.match(route, /await saveBillingCard\(\{\s* billingKey, cardBrand: display.brand, cardLast4: display.last4, issuedBy: actor, buyer: who.customer,\s*\}\)/);
-    assert.match(route, /return c.json\(\{ ok: true \}\)/);
-    assert.doesNotMatch(route, /console\.|chargeWithBillingKey\(|throw err|JSON.stringify/);
+    assert.match(register, /await saveBillingCard\(\{\s*billingKey, cardBrand: display\.brand, cardLast4: display\.last4,\s*issuedBy: input\.actor, buyer: who\.customer,\s*\}\)/);
+    // 응답은 `{ ok: true }` 뿐이다 — 카드 정보를 되비추지 않는다(부르는 쪽이 다시 조회한다).
+    assert.match(register, /body: \{ ok: true \}/);
+    assert.doesNotMatch(register, /chargeWithBillingKey\(|throw err|JSON\.stringify/);
     assert.match(route, /Cache-Control", "no-store/);
+  });
+
+  /**
+   * **로그를 통째로 막지는 않는다 — 무엇을 찍는지를 막는다.**
+   *
+   * 원래 이 파일은 `console.` 자체를 금지했다. 의도는 옳았지만 대가가 컸다:
+   * 2026-09-14 에 등록이 503 으로 실패했을 때 **로그가 한 줄도 없어서** 원인을 못 찾았다
+   * (실제로는 없는 회사 id 라 DB 외래키에서 터진 것이었고, 그 사이 포트원에는 빌링키가
+   * 발급돼 있었다). "아무것도 안 남긴다" 는 안전이 아니라 **눈을 가리는 것**이었다.
+   *
+   * 그래서 규칙을 바꾼다: 로그는 허용하되 **예외의 name·message 말고는 못 싣는다.**
+   * 카드 원문이 들어 있는 값(credential·body·number·billingKey)을 찍으면 실패한다.
+   */
+  it("로그에 카드 원문이 실릴 수 있는 값을 넣지 않는다", () => {
+    const calls = [...register.matchAll(/console\.\w+\(([\s\S]*?)\);/g)].map((m) => m[1]);
+    assert.ok(calls.length > 0,
+      "등록 실패를 하나도 안 남긴다 — 503 이 나도 원인을 못 찾는다(그 상태로 한 번 막혔다)");
+    for (const args of calls) {
+      for (const bad of ["credential", "input.body", "billingKey", "checked.", "who.customer", "number"]) {
+        assert.ok(!args.includes(bad), `로그에 ${bad} 가 실린다: ${args.slice(0, 80)}`);
+      }
+      // 길이 상한이 없으면 긴 PG 응답이 통째로 흘러갈 수 있다.
+      assert.match(args, /\.slice\(0,\s*\d+\)/, `로그 길이 상한이 없다: ${args.slice(0, 80)}`);
+    }
+  });
+
+  it("**어드민 경로도 같은 규칙을 받는다** — 권한만 다르고 나머지는 한 벌이다", () => {
+    const admin = /app\.post\("\/api\/superadmin\/tenants\/:id\/card",[\s\S]*?\}\);/.exec(source)?.[0] ?? "";
+    assert.ok(admin.length > 0, "어드민 카드 등록 라우트를 못 찾았다");
+    assert.match(admin, /requireSuperadmin\(c\)/, "운영자 전용이 아니다");
+    assert.match(admin, /Cache-Control", "no-store/);
+    assert.match(admin, /registerCard\(/, "어드민이 자기 발급 절차를 따로 갖고 있다");
   });
 });

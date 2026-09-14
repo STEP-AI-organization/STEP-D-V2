@@ -183,6 +183,32 @@ export interface Performance {
 
 // ── 호출 ───────────────────────────────────────────────────────────────────────
 
+/** 저장된 카드 + **PG 에 그 빌링키가 실제로 있는지** 대조 결과. */
+export interface BillingCardCheck {
+  registered: boolean;
+  reason?: string;
+  stored?: { brand: string | null; last4: string | null; registeredAt: string };
+  buyer?: { hasName: boolean; hasEmail: boolean; hasPhone: boolean };
+  /** PG 쪽이 말하는 카드. 조회 실패면 null 이고 pgError 에 사유가 온다. */
+  pg?: { brand: string | null; last4: string | null } | null;
+  pgError?: string | null;
+  /** 우리 DB 와 PG 의 끝 4자리가 같은가. 어긋나면 "등록은 됐는데 결제만 안 되는" 상태다. */
+  matches?: boolean | null;
+  blocked?: string | null;
+}
+
+export interface TestChargeResult {
+  ok: true;
+  duplicate?: boolean;
+  paymentId: string;
+  credits: number;
+  amountKrw: number;
+  supplyKrw?: number;
+  vatKrw?: number;
+  balance: number;
+  card?: { brand: string | null; last4: string | null };
+}
+
 export const api = {
   me: () => get<{ user: Me | null; authRequired: boolean }>("/api/auth/me"),
   login: (email: string, password: string) => post<{ user: Me }>("/api/auth/login", { email, password }),
@@ -288,6 +314,25 @@ export const api = {
   adjustCredits: (tenantId: string, body: { delta: number; kind: string; note: string; reason?: string }) =>
     post<{ ok: true; delta: number; balance: number }>(
       `/api/superadmin/tenants/${encodeURIComponent(tenantId)}/credits`, body),
+
+  // ── 결제 시험 (PG 결제창 없이 빌링키로) ───────────────────────────────────────
+  //
+  // ⚠️ **진짜 돈이 나간다.** 시험 전용 가짜 경로가 아니라 제품과 같은 결제 함수를 탄다 —
+  // 가짜로 만들면 정작 운영 경로를 검증하지 못한다. 금액 상한은 서버가 못박는다.
+  billingCard: (tenantId: string) =>
+    get<BillingCardCheck>(`/api/superadmin/tenants/${encodeURIComponent(tenantId)}/card`),
+  registerBillingCard: (tenantId: string, body: {
+    credential: { number: string; expiryMonth: string; expiryYear: string;
+                  birthOrBusinessRegistrationNumber?: string; passwordTwoDigits?: string };
+    buyer: { fullName: string; email: string; phoneNumber: string };
+    /** 남의 회사를 바꾸는 일이라 서버가 4자 이상 사유를 요구한다. */
+    reason: string;
+  }) =>
+    post<{ ok: true }>(
+      `/api/superadmin/tenants/${encodeURIComponent(tenantId)}/card`, body),
+  testCharge: (tenantId: string, body: { credits: number; nonce: string; reason: string }) =>
+    post<TestChargeResult>(
+      `/api/superadmin/tenants/${encodeURIComponent(tenantId)}/test-charge`, body),
 
   jobs: (tenant?: string) =>
     get<{ jobs: AdminJob[] }>(

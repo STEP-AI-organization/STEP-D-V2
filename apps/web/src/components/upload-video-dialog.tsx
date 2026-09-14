@@ -16,7 +16,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { AlertTriangle, Film, Info, Loader2, Upload, Youtube } from "lucide-react";
+import { Film, Loader2, Upload, Youtube } from "lucide-react";
 
 import { useToast } from "@/components/ui/toast";
 import { DuplicateEpisodeError } from "@/lib/data/api";
@@ -608,21 +608,29 @@ function L({
 
 function Notice({ children, tone }: { children: React.ReactNode; tone?: "warn" }) {
   const warn = tone === "warn";
+  // 원본(automation 업로드 모달)의 안내 박스 — 주석까지 그대로 옮기면
+  // "Line-only i circle, Amber color, Gray font text, No outer stroke".
+  // ⚠️ **글자는 회색이고 amber 는 아이콘에만** 쓴다. 옛 구현은 글자까지 amber 라
+  // 안내문이 경고처럼 읽혔다(테두리도 있었다).
   return (
     <div
-      className="flex items-start gap-2 rounded-[4px] px-3 py-2 text-[11.5px] leading-relaxed"
-      style={{
-        border: `1px solid ${warn ? "rgb(245 158 11 / 0.35)" : "var(--color-border-subtle)"}`,
-        background: warn ? "rgb(245 158 11 / 0.10)" : "var(--color-bg-input)",
-        color: warn ? "#D97706" : "var(--color-text-muted)",
-      }}
-    >
-      {warn ? (
-        <AlertTriangle className="mt-px size-3.5 shrink-0" />
-      ) : (
-        <Info className="mt-px size-3.5 shrink-0" />
+      className={cn(
+        "p-4 rounded-2xl border-none flex items-start gap-3",
+        warn ? "bg-[#FFFBEB] dark:bg-[#282218]" : "bg-[var(--color-bg-input)]",
       )}
-      <span>{children}</span>
+    >
+      <span
+        className={cn(
+          "w-4 h-4 mt-px shrink-0 rounded-full border flex items-center justify-center text-[10px] font-bold",
+          warn ? "border-amber-500 text-amber-500" : "border-[var(--color-text-muted)] text-[var(--color-text-muted)]",
+        )}
+        aria-hidden
+      >
+        i
+      </span>
+      <div className="text-xs text-slate-600 dark:text-slate-400 font-medium leading-relaxed">
+        {children}
+      </div>
     </div>
   );
 }

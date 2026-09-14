@@ -119,7 +119,7 @@ export function TransferCenter() {
                   <article key={job.id} className="bg-[var(--color-bg-card)] border-none rounded-2xl shadow-md shadow-slate-900/5 dark:shadow-none p-3">
                     <div className="flex items-start gap-2">
                       <div className="mt-0.5">
-                        {running ? <Loader2 className="size-4 animate-spin text-[#1C60FF]" />
+                        {running ? <Loader2 className="size-4 animate-spin text-[var(--text-accent)]" />
                           : job.status === "completed" ? <CheckCircle2 className="size-4 text-[#059669]" />
                             : ["failed", "needs_attention"].includes(job.status) ? <AlertTriangle className="size-4 text-[#E11D48]" />
                               : <UploadCloud className="size-4 text-[var(--color-text-muted)]" />}
