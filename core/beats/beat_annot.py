@@ -276,16 +276,72 @@ def build_prior_context(beats: list[dict], upto: int) -> str:
     return "[지금까지의 흐름 — 앞 beat 들의 확정 결과]\n" + "\n".join(lines) + "\n"
 
 
-def build_prompt_head(program_ctx_str: str, prior_ctx: str = "",
-                      cast_board_names: Optional[list[str]] = None) -> str:
-    """**호출 간 동일한** 부분만 모은 프롬프트 앞머리 = 프롬프트 캐시의 접두.
+# ── 고정 지시문 ────────────────────────────────────────────────────────────────
+# ⚠️ **여기 있는 것은 전부 호출 간 한 글자도 안 변해야 한다.** beat 별 값이 섞이는 순간
+# 캐시 접두가 매 호출 깨진다.
+#
+# 2026-09-14 이전에는 이 블록이 `build_prompt_tail` 안, 즉 **변동부(시각·발화) 뒤**에
+# 있었다. 그래서 고정 접두가 [프로그램 정보]+[명찰판 안내] 뿐이었고 실측 **304자
+# ≈276토큰** — Gemini 암묵 캐시 최소치(~1,024토큰)에 한참 미달했다. 결과: 프로덕션
+# 18회차 중 **9회차가 캐시 적중 정확히 0%**, 전체 평균 9.4%.
+# 이 블록(1,441자 ≈1,310토큰)을 앞으로 옮기면 명찰판 사진이 없는 프로그램도 접두가
+# 1,586토큰이 되어 최소치를 넘는다.
+#
+# 지시어("아래 …")는 이 순서를 전제한다:
+#   [고정 지시문] → [명찰판 이미지] → [지금까지의 흐름] → [beat 프레임] → [Beat 정보]
+_TASK_INSTRUCTIONS = (
+    "\n[요청]\n"
+    "**아래에 주어지는** beat (프레임 + [Beat 안 발화] + 프로그램 배경) 를 종합해 아래 스키마로 JSON.\n"
+    "(env BEAT_ANNOT_FRAMES=3 일 때만 start/mid/end 3장 · default 1장 = mid 만)\n"
+    "\n"
+    "**프레임 안 그래픽 자막(화면 위 CG · chyron · 하단바 · 팝업)을 최우선 근거로 활용**하라.\n"
+    "예능 화면 자막은 편집자가 이미 그 순간의 훅·핵심을 정리해둔 신호. 대사·비주얼과 충돌하면\n"
+    "화면 자막을 더 신뢰해서 title/hook 판단. 인물 이름·상황 요약·팝업 quote 다 포함.\n"
+    "\n"
+    "- title: 프로그램 문법 안에서 이 beat 의 서사 순간 (30자 이내 · 이모지 X)\n"
+    "  · 화면 자막이 있으면 그 표현 톤·핵심어를 반영\n"
+    "  · 예능/연애: '직업 공개 첫 리액션' '이별 회상하며 감정 흔들리는 순간'\n"
+    "  · 금지: '여성이 앉아 대화한다' 같은 일반 관찰\n"
+    "- summary: 이 beat 안에서 실제로 일어난 일 1-2문장 (누가·무엇을·어떤 반응)\n"
+    "  · 화면 자막에 핵심 정보 있으면 반드시 포함\n"
+    "- scene_summary: 시작 프레임 → 끝 프레임 시각 변화·전환 (없으면 '같은 컷 유지')\n"
+    "  · 자막이 등장/변화하는 순간도 시각 변화로 기록\n"
+    f"- hook: 다음 중 하나 · {' / '.join(HOOK_ENUM)}\n"
+    "  · 화면 자막이 명시적으로 '반전' '충격' '폭소' 등 유도하면 그걸 따름\n"
+    "- characters: 이 beat 실질 등장 인물\n"
+    "  · 프로그램 정보의 '등록 인물' 이나 화면 자막/명찰에서 이름이 확인되면 **실명 사용** (예: '원규')\n"
+    "  · 확실치 않으면 익명 라벨 (예: '여성 참가자 1', '남성 게스트')\n"
+    "  · 자막에 직업·직책 표기가 있으면 그 신호도 반영 (예: '한의사 원규')\n"
+    "- on_screen_captions: 프레임에서 읽힌 그래픽 자막 원문 배열 (오탈자 없이 · 없으면 빈 배열)\n"
+    "\n"
+    "정지 관찰형 caption 절대 금지 · 프로그램 서사 프레임 + 화면 자막 신호로."
+)
+
+_CONTEXT_RULES = (
+    "\n\n[맥락 이어붙이기 — 중요]\n"
+    "**아래** '지금까지의 흐름' 은 같은 회차의 **앞 장면들**이다. 이 beat 을 그 흐름의 다음 칸으로 읽어라.\n"
+    "- 인물: 앞에서 쓴 라벨을 **그대로** 쓴다. 같은 사람을 새 라벨로 부르지 말 것\n"
+    "  (앞에 '여성 참가자 1' 이 있으면 계속 '여성 참가자 1'). 이름이 새로 확인되면 그때만 실명으로 바꾼다\n"
+    "- 상황: 앞에서 시작된 사건·갈등·목표가 이 beat 에서 어떻게 되는지로 서술한다\n"
+    "  (예: '앞서 신고를 미뤘던 인물이 결국 직접 현장으로 향한다')\n"
+    "- 반복 금지: 앞 beat 과 똑같은 title/summary 를 다시 쓰지 말 것. 이 beat 에서 **새로 일어난 것**만\n"
+    "- 단 프레임과 대사가 흐름과 어긋나면 **눈앞의 프레임·대사를 우선**한다 (장면이 바뀐 것일 수 있다)"
+)
+
+
+def build_prompt_head(program_ctx_str: str,
+                      cast_board_names: Optional[list[str]] = None,
+                      has_prior: bool = False) -> str:
+    """**회차 내내 한 글자도 안 변하는** 부분만 모은 프롬프트 앞머리 = 캐시 접두의 본체.
 
     ⚠️ 이게 요청의 **맨 앞** 파트여야 한다. 예전에는 이미지 파트를 먼저 넣었는데,
     그러면 호출마다 접두(=서로 다른 프레임)가 달라져 **캐시가 한 번도 안 걸린다.**
-    순서는 [head 텍스트] → [명찰판 이미지] → [beat 프레임] → [beat 별 꼬리 텍스트].
 
-    명찰판 안내는 회차 내내 고정이라 prior_ctx **앞**(프로그램 정보 바로 뒤)에 둔다 —
-    prior_ctx 는 청크마다 늘지만 그 앞은 안 변해 접두가 유지된다.
+    ⚠️ **`prior_ctx` 는 여기 넣지 않는다** (2026-09-14). 예전엔 넣었는데, prior_ctx 는
+    CTX_RECENT 블록이 넘어갈 때 바뀌므로 그 뒤에 오는 것은 전부 접두 밖으로 밀려난다.
+    그래서 **1,806토큰짜리 명찰판 이미지가 접두에 못 들어가** 블록 경계마다 캐시가 통째로
+    빗나갔다(실측 2026-09-14 · 18회차에서 캐시 적중이 콜의 14.9% 뿐 · 9회차는 정확히 0%).
+    순서의 정본은 `build_parts()` 하나다 — 거기 불변식 주석과 테스트가 있다.
     """
     body = ""
     if program_ctx_str:
@@ -301,17 +357,64 @@ def build_prompt_head(program_ctx_str: str, prior_ctx: str = "",
             "실명을 그대로 쓴다(추정 라벨 '여성 참가자 1' 대신). 명찰판에 없거나 동일인 확신이\n"
             "없으면 익명 라벨을 유지한다. 얼굴이 가려지거나 안 보이면 명찰판을 근거로 쓰지 않는다.\n\n"
         )
-    if prior_ctx:
-        body += prior_ctx + "\n"
+    # 고정 지시문을 접두 안으로. has_prior 는 beat 0 에서만 False 라 head 가 2종뿐이고,
+    # False 판이 True 판의 **접두**라 캐시가 깨지지 않는다(맨 뒤에 붙이므로).
+    body += _TASK_INSTRUCTIONS
+    if has_prior:
+        body += _CONTEXT_RULES
     return body
 
 
+def build_parts(head: str, cast_board: Optional[bytes], prior_ctx: str,
+                frames: list[bytes], tail: str) -> list:
+    """Gemini 요청 파트를 **캐시 접두가 최대가 되는 순서**로 조립한다.
+
+        [head 텍스트]      회차 내내 고정        ─┐ 여기까지가 모든 호출의 공통 접두.
+        [명찰판 이미지]     회차 내내 고정        ─┘ 이미지는 해상도 무관 1,806토큰이라
+                                                   이것만으로 암묵 캐시 최소치(~1,024)를 넘는다.
+        [prior_ctx 텍스트]  블록 안에서 append-only · 블록 경계에서 바뀜
+        [beat 프레임]       beat 마다 다름
+        [tail 텍스트]       beat 마다 다름
+
+    **변하는 것은 반드시 안 변하는 것 뒤에 온다.** 이 순서가 깨지면 캐시가 조용히 0 이
+    되는데, 결과는 멀쩡해서 아무도 눈치채지 못한다 — 그래서 테스트로 고정한다
+    (`core/tests/test_beat_annot_cache.py`).
+    """
+    parts: list = []
+    if head:
+        parts.append(types.Part.from_text(text=head))
+    if cast_board:
+        try:
+            parts.append(types.Part.from_bytes(data=cast_board, mime_type="image/jpeg"))
+        except Exception:
+            pass
+    if prior_ctx:
+        parts.append(types.Part.from_text(text=prior_ctx + "\n"))
+    for fb in frames:
+        try:
+            parts.append(types.Part.from_bytes(data=fb, mime_type="image/jpeg"))
+        except Exception:
+            pass
+    parts.append(types.Part.from_text(text=tail))
+    return parts
+
+
 def _build_prompt(beat: dict, program_ctx_str: str = "", prior_ctx: str = "") -> str:
-    """head + tail 합본. 디버그 dump 용 (실제 호출은 둘을 나눠 보낸다)."""
-    return build_prompt_head(program_ctx_str, prior_ctx) + build_prompt_tail(beat, bool(prior_ctx))
+    """head + prior_ctx + tail 합본. 디버그 dump 용 (실제 호출은 파트로 나눠 보낸다).
+
+    실제 전송 순서와 같은 순서로 잇는다 — dump 가 전송본과 다르면 캐시 진단이 어긋난다.
+    """
+    head = build_prompt_head(program_ctx_str, None, bool(prior_ctx))
+    ctx = (prior_ctx + "\n") if prior_ctx else ""
+    return head + ctx + build_prompt_tail(beat)
 
 
-def build_prompt_tail(beat: dict, has_prior: bool = False) -> str:
+def build_prompt_tail(beat: dict) -> str:
+    """**beat 마다 달라지는 값만.** 고정 지시문은 `_TASK_INSTRUCTIONS` 로 head 에 있다.
+
+    ⚠️ 여기에 고정 문구를 되돌려 놓지 말 것 — 접두 밖으로 나가 캐시가 통째로 죽는다
+    (2026-09-14 이전이 그 상태였다 · `_TASK_INSTRUCTIONS` 주석 참조).
+    """
     st = float(beat["start"]); en = float(beat["end"])
     dur = en - st
     stt = (beat.get("transcript") or "").strip()
@@ -326,44 +429,6 @@ def build_prompt_tail(beat: dict, has_prior: bool = False) -> str:
         body += f"- 감지된 화자: {' · '.join(chars[:4])}\n"
     if stt:
         body += f"\n[Beat 안 발화]\n{stt[:1200]}\n"
-    body += (
-        "\n[요청]\n"
-        "이 beat (프레임 + 위 대사 + 프로그램 배경) 를 종합해 아래 스키마로 JSON.\n"
-        "(env BEAT_ANNOT_FRAMES=3 일 때만 start/mid/end 3장 · default 1장 = mid 만)\n"
-        "\n"
-        "**프레임 안 그래픽 자막(화면 위 CG · chyron · 하단바 · 팝업)을 최우선 근거로 활용**하라.\n"
-        "예능 화면 자막은 편집자가 이미 그 순간의 훅·핵심을 정리해둔 신호. 대사·비주얼과 충돌하면\n"
-        "화면 자막을 더 신뢰해서 title/hook 판단. 인물 이름·상황 요약·팝업 quote 다 포함.\n"
-        "\n"
-        "- title: 프로그램 문법 안에서 이 beat 의 서사 순간 (30자 이내 · 이모지 X)\n"
-        "  · 화면 자막이 있으면 그 표현 톤·핵심어를 반영\n"
-        "  · 예능/연애: '직업 공개 첫 리액션' '이별 회상하며 감정 흔들리는 순간'\n"
-        "  · 금지: '여성이 앉아 대화한다' 같은 일반 관찰\n"
-        "- summary: 이 beat 안에서 실제로 일어난 일 1-2문장 (누가·무엇을·어떤 반응)\n"
-        "  · 화면 자막에 핵심 정보 있으면 반드시 포함\n"
-        "- scene_summary: 시작 프레임 → 끝 프레임 시각 변화·전환 (없으면 '같은 컷 유지')\n"
-        "  · 자막이 등장/변화하는 순간도 시각 변화로 기록\n"
-        f"- hook: 다음 중 하나 · {' / '.join(HOOK_ENUM)}\n"
-        "  · 화면 자막이 명시적으로 '반전' '충격' '폭소' 등 유도하면 그걸 따름\n"
-        "- characters: 이 beat 실질 등장 인물\n"
-        "  · 프로그램 정보의 '등록 인물' 이나 화면 자막/명찰에서 이름이 확인되면 **실명 사용** (예: '원규')\n"
-        "  · 확실치 않으면 익명 라벨 (예: '여성 참가자 1', '남성 게스트')\n"
-        "  · 자막에 직업·직책 표기가 있으면 그 신호도 반영 (예: '한의사 원규')\n"
-        "- on_screen_captions: 프레임에서 읽힌 그래픽 자막 원문 배열 (오탈자 없이 · 없으면 빈 배열)\n"
-        "\n"
-        "정지 관찰형 caption 절대 금지 · 프로그램 서사 프레임 + 화면 자막 신호로."
-    )
-    if has_prior:
-        body += (
-            "\n\n[맥락 이어붙이기 — 중요]\n"
-            "위 '지금까지의 흐름' 은 같은 회차의 **앞 장면들**이다. 이 beat 을 그 흐름의 다음 칸으로 읽어라.\n"
-            "- 인물: 앞에서 쓴 라벨을 **그대로** 쓴다. 같은 사람을 새 라벨로 부르지 말 것\n"
-            "  (앞에 '여성 참가자 1' 이 있으면 계속 '여성 참가자 1'). 이름이 새로 확인되면 그때만 실명으로 바꾼다\n"
-            "- 상황: 앞에서 시작된 사건·갈등·목표가 이 beat 에서 어떻게 되는지로 서술한다\n"
-            "  (예: '앞서 신고를 미뤘던 인물이 결국 직접 현장으로 향한다')\n"
-            "- 반복 금지: 앞 beat 과 똑같은 title/summary 를 다시 쓰지 말 것. 이 beat 에서 **새로 일어난 것**만\n"
-            "- 단 프레임과 대사가 흐름과 어긋나면 **눈앞의 프레임·대사를 우선**한다 (장면이 바뀐 것일 수 있다)"
-        )
     return body
 
 
@@ -404,27 +469,17 @@ def _annotate_one(idx: int, beat: dict, video: Path, out_dir: Path,
     if not frames_available:
         return {"idx": idx, "error": "no frames extracted"}
 
-    # ⚠️ 파트 순서가 프롬프트 캐시를 좌우한다: [안정 헤드 텍스트] → [이미지] → [beat 별 꼬리].
-    # 예전에는 이미지를 **맨 앞**에 넣어서, 호출마다 접두가 서로 다른 프레임으로 시작했다
-    # → 공통 접두가 0바이트라 캐시가 한 번도 안 걸렸다. 헤드(프로그램 정보 + 누적 맥락)는
-    # 한 청크 안에서 완전히 동일하고 다음 청크에선 몇 줄만 늘어나므로 접두 재사용이 된다.
-    head = build_prompt_head(program_ctx_str, prior_ctx, cast_board_names)
-    tail = build_prompt_tail(beat, bool(prior_ctx))
-    parts: list = []
-    if head:
-        parts.append(types.Part.from_text(text=head))
-    # 참조 인물 명찰판 = **첫 이미지** (head 안내가 "첫 번째"라고 지목). 회차 내내 동일.
-    if cast_board:
-        try:
-            parts.append(types.Part.from_bytes(data=cast_board, mime_type="image/jpeg"))
-        except Exception:
-            pass
+    # ⚠️ 파트 순서가 프롬프트 캐시를 좌우한다. 조립 규칙과 근거는 build_parts() 에 있다.
+    head = build_prompt_head(program_ctx_str, cast_board_names, bool(prior_ctx))
+    tail = build_prompt_tail(beat)
+    frame_bytes: list[bytes] = []
     for p, _ in frames_available:
         try:
-            parts.append(types.Part.from_bytes(data=p.read_bytes(), mime_type="image/jpeg"))
+            frame_bytes.append(p.read_bytes())
         except Exception:
             pass
-    prompt_text = head + tail
+    parts = build_parts(head, cast_board, prior_ctx, frame_bytes, tail)
+    prompt_text = head + ((prior_ctx + "\n") if prior_ctx else "") + tail
     # RECOMMEND_DEBUG_DUMP · beat_annot 프롬프트도 첫 beat 만 파일에 dump (참고용)
     _dump_dir = os.environ.get("BEAT_ANNOT_DEBUG_DUMP")
     if _dump_dir:
@@ -435,7 +490,6 @@ def _annotate_one(idx: int, beat: dict, video: Path, out_dir: Path,
             _p.write_text(f"# beat_annot · beat #{idx}\n# frames: {[p.name for p, ok in frames_available]}\n\n{prompt_text}", encoding="utf-8")
         except Exception:
             pass
-    parts.append(types.Part.from_text(text=tail))
 
     # Gemini 2.5+ 는 thinking tokens 도 max_output_tokens 에 포함 · 1024 는 thinking 에 다 소진.
     # (1) max_output_tokens 대폭 증가 · (2) thinking 끔 (schema JSON 이라 reasoning 불필요).
