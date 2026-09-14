@@ -101,8 +101,12 @@ jobs:
       #
       # ⚠️ `pnpm smoke` 가 자기 빌드를 한 번 더 한다(위 next build 와 중복 ~1분).
       #    갈라 두는 게 낫다 — 빌드가 깨진 건지 브라우저에서 깨진 건지 이름으로 갈린다.
+      # ⚠️ **`pnpm --filter` 로 그 패키지의 playwright 를 쓴다.** 루트에서 `npx playwright` 로
+      #    깔았더니 다른 버전이 잡혀 **엉뚱한 리비전**에 설치됐고, 테스트는
+      #    `chromium_headless_shell-1234 가 없다` 로 죽었다(2026-09-14 CI 실측).
+      #    로컬은 이미 브라우저가 깔려 있어 안 걸린다 — CI 에서만 드러나는 종류다.
       - name: playwright 크롬 설치
-        run: npx playwright install --with-deps chromium
+        run: pnpm --filter @stepd/web exec playwright install --with-deps chromium
       - name: 웹 스모크 (실브라우저)
         run: pnpm --filter @stepd/web --fail-if-no-match smoke
 

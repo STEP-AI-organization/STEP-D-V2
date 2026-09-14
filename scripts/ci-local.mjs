@@ -49,7 +49,7 @@ export const STEPS = [
   // 실브라우저 스모크. `pnpm smoke` 가 자기 빌드를 하므로 위 "웹 빌드" 와 중복되지만,
   // 갈라 둬야 "빌드가 깨진 것" 과 "브라우저에서 깨진 것" 이 이름으로 갈린다.
   // ⚠️ 로컬에 크롬이 없으면 `npx playwright install chromium` 먼저.
-  { group: "web-build", name: "playwright 크롬 설치", cmd: "npx playwright install --with-deps chromium" },
+  { group: "web-build", name: "playwright 크롬 설치", cmd: "pnpm --filter @stepd/web exec playwright install --with-deps chromium" },
   { group: "web-build", name: "웹 스모크 (실브라우저)", cmd: "pnpm --filter @stepd/web --fail-if-no-match smoke" },
   { group: "e2e", name: "e2e (Postgres + 진짜 서버)", cmd: "pnpm test:e2e", needsPostgres: true },
 ];
