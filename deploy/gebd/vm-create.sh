@@ -39,7 +39,10 @@ gcloud compute instances create "$INSTANCE" \
   --service-account="$SA_EMAIL" \
   --scopes=cloud-platform \
   --metadata="enable-oslogin=TRUE,gebd-image=${GEBD_IMAGE}" \
-  --metadata-from-file=startup-script=deploy/gebd/vm-bootstrap.sh \
+  `# ⚠️ 프로덕션 VM 에 실제로 들어가 있는 건 vm-startup.sh 다 (2026-09-14 메타데이터 실측).` \
+  `# 예전엔 여기가 vm-bootstrap.sh 였는데, 그러면 새로 만든 VM 이 프로덕션과 다르게 동작한다.` \
+  `# 고친 뒤엔 vm-push-startup.sh 로 기존 VM 에도 올릴 것 — 메타데이터는 복사본이라 안 따라간다.` \
+  --metadata-from-file=startup-script=deploy/gebd/vm-startup.sh \
   --tags=stepd-gebd
 
 echo
