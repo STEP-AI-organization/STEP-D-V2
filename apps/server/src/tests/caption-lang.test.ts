@@ -80,11 +80,21 @@ function coverage(d: Buffer): Set<number> {
 
 /** 그 언어가 실제로 쓰는 문자 전부. */
 function charsFor(code: string): number[] {
-  if (code !== "vi") return [];
-  const out: number[] = [];
-  for (const ch of "ÀÁÂÃÈÉÊÌÍÒÓÔÕÙÚÝàáâãèéêìíòóôõùúýĂăĐđĨĩŨũƠơƯư") out.push(ch.codePointAt(0)!);
-  for (let c = 0x1ea0; c <= 0x1ef9; c++) out.push(c);   // Latin Extended Additional (베트남어 전용)
-  return out;
+  if (code === "vi") {
+    const out: number[] = [];
+    for (const ch of "ÀÁÂÃÈÉÊÌÍÒÓÔÕÙÚÝàáâãèéêìíòóôõùúýĂăĐđĨĩŨũƠơƯư") out.push(ch.codePointAt(0)!);
+    for (let c = 0x1ea0; c <= 0x1ef9; c++) out.push(c);   // Latin Extended Additional (베트남어 전용)
+    return out;
+  }
+  // 인도네시아어·영어는 표준 철자에 발음기호가 없다 — 라틴 기본 문자와 자막에 실제로 쓰는
+  // 문장부호만 본다. (고유명사의 한글은 번들이 전부 한국어 폰트라 따로 볼 필요가 없다.)
+  if (code === "id" || code === "en") {
+    return [...("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789" +
+      " .,!?'\"-:;()")].map((c) => c.codePointAt(0)!);
+  }
+  // 한국어는 **일부러 비워 둔다.** 번들 글꼴 상당수가 상용 2,350자만 덮어서 한글 전체를
+  // 요구하면 기존 글꼴이 통째로 탈락한다 — 기존 동작을 깨뜨리는 검사가 된다.
+  return [];
 }
 
 /** 카탈로그 글꼴 id → 실제 파일. `ASS_FONT_BY_ID`(index.ts)와 같은 축이다. */
@@ -111,6 +121,38 @@ describe("다국어 — 허용 글꼴이 그 언어를 실제로 덮는가 (cmap
           " — libass 는 오류 없이 다른 폰트로 대체하므로 발행 전엔 아무도 모른다");
       });
     }
+  }
+
+  // `allowFonts: []` 는 "제한 없음" 이 아니라 **"카탈로그 글꼴 전부가 이 언어를 덮는다"는
+  // 주장**이다. 그 주장이 틀리면 사용자가 편집기에서 글꼴을 바꾸는 순간 자막이 두부(□)가
+  // 되는데, libass 는 오류를 안 내므로 발행 뒤에야 안다.
+  //
+  // 위 루프는 `if (!lang.allowFonts.length) continue` 로 이 경우를 **건너뛴다** — 빈 배열이
+  // 검사 면제로 쓰이고 있었다. 여기서 그 구멍을 막는다: 빈 배열이면 오히려 **더 넓게**,
+  // 번들 전체를 검사한다. (한국어는 charsFor 가 빈 목록이라 자동으로 빠진다 — 그 이유는 거기 적었다.)
+  for (const [code, lang] of Object.entries(CAPTION_LANGS)) {
+    if (lang.allowFonts.length) continue;
+    const chars = charsFor(code);
+    if (!chars.length) continue;
+
+    it(`${lang.nameKo}: allowFonts 가 비었으니 **번들 글꼴 전부**가 덮어야 한다`, () => {
+      const dir = path.join(ROOT, "assets/fonts");
+      const files = fs.readdirSync(dir).filter((f) => /\.(ttf|otf)$/i.test(f));
+      assert.ok(files.length >= 8, `번들 글꼴을 ${files.length}개밖에 못 찾았다 — 경로가 바뀌었나`);
+
+      const broken: string[] = [];
+      for (const f of files) {
+        const cov = coverage(fs.readFileSync(path.join(dir, f)));
+        const missing = chars.filter((c) => !cov.has(c));
+        if (missing.length) {
+          broken.push(`${f}(${missing.length}자 없음: ${missing.slice(0, 5).map((c) => String.fromCodePoint(c)).join("")})`);
+        }
+      }
+      assert.deepEqual(broken, [],
+        `${lang.nameKo} 의 allowFonts 가 비어 있는데 못 덮는 글꼴이 있다.\n` +
+        `  둘 중 하나를 해야 한다 — allowFonts 에 덮는 글꼴만 나열하거나, 그 글꼴을 번들에서 빼거나.\n` +
+        `  그냥 두면 사용자가 그 글꼴을 고르는 순간 자막이 통째로 깨진다(libass 는 조용하다).`);
+    });
   }
 
   it("썸네일 대체표가 가리키는 폰트도 베트남어를 덮는다 (Pillow 는 폴백을 안 한다)", () => {
@@ -192,6 +234,44 @@ describe("다국어 — 언어 해석은 모르는 값을 조용히 한국어로
 });
 
 // ── 한 화면 글자수 ─────────────────────────────────────────────────────────────
+
+describe("다국어 — 화면 픽커가 서버 표와 같은 언어를 보여준다", () => {
+  const page = read("apps/web/src/app/(app)/automation/page.tsx");
+
+  /** 자동배포 화면의 `PUBLISH_LANGS_UI` 에서 코드만 뽑는다. */
+  function uiCodes(): string[] {
+    const block = /const PUBLISH_LANGS_UI: \{ code: string; label: string \}\[\] = \[([\s\S]*?)\n\];/.exec(page);
+    assert.ok(block, "자동배포 화면에서 PUBLISH_LANGS_UI 를 못 찾았다 — 이름이나 형식이 바뀌었나");
+    return [...block![1].matchAll(/code:\s*"([\w-]+)"/g)].map((m) => m[1]);
+  }
+
+  it("픽커의 코드 집합이 CAPTION_LANGS 와 같다", () => {
+    // 갈라지는 방향마다 증상이 다르고 **둘 다 조용하다**:
+    //  · 화면에만 있는 코드 → 서버 langOf 가 한국어로 떨어뜨린다. 고객은 인도네시아어를
+    //    골랐는데 한국어가 나가고, 오류는 안 난다.
+    //  · 서버에만 있는 코드 → 만들어 둔 언어를 아무도 못 고른다(기능이 있는데 미도달).
+    assert.deepEqual(uiCodes().sort(), Object.keys(CAPTION_LANGS).sort(),
+      "자동배포 화면의 언어 목록과 서버 CAPTION_LANGS 가 어긋난다");
+  });
+
+  it("픽커 기본값과 저장값 복원이 한국어로 떨어진다 — 모르는 값이 그대로 남지 않게", () => {
+    assert.match(page, /useState\("ko"\)/, "언어 기본값이 한국어가 아니다 — 기존 계획의 동작이 바뀐다");
+    assert.match(page, /PUBLISH_LANGS_UI\.some\(\(l\) => l\.code === r\.layout\?\.lang\)/,
+      "저장된 값을 검증 없이 복원하면 화면엔 남고 서버는 한국어로 떨어뜨려 둘이 어긋난다");
+  });
+
+  it("언어가 계획에 실제로 저장된다 — layout.lang 으로 라운드트립", () => {
+    assert.match(page, /layout: layout \? \{ \.\.\.layout, subtitles, lang \} : \{ subtitles, lang \}/,
+      "저장 payload 에 lang 이 없으면 화면에서 고른 언어가 아무 데도 안 간다");
+  });
+
+  it("비한국어를 고르면 '재분석 필요' 를 알린다", () => {
+    // 이미 분석이 끝난 회차엔 번역 자산이 없어 한국어 자막이 그대로 나간다(발행도 안 막힌다).
+    // 이 경고가 없으면 "언어를 골랐는데 왜 한국어지" 를 한참 찾게 된다.
+    assert.match(page, /다시 분석해야 언어가 붙습니다/,
+      "재분석 안내가 사라졌다 — 이 기능의 가장 흔한 오해다");
+  });
+});
 
 describe("다국어 — 한 화면 글자수는 언어 폭을 따른다", () => {
   it("언어 미지정이면 종전 상수 그대로 (무회귀)", () => {
@@ -320,6 +400,23 @@ describe("다국어 — 번역 게이트와 원문 보존", () => {
     assert.match(translateOut, /\[≤\{_max_chars\(text, lang\)\}자\]/,
       "줄마다 허용 글자수를 안 주면 9:16 에서 2줄이 3줄로 넘친다");
     assert.match(translateOut, /\[≤N자\] 를 반드시 지킨다/);
+  });
+
+  it("목표 언어를 **사용자 메시지 맨 뒤에도** 박는다 — 안 그러면 외국 이야기 구간에서 밀린다", () => {
+    // 2026-09-14 실측. system_instruction 에만 목표 언어를 두면 긴 입력 뒤쪽에서 잊힌다.
+    // 특히 **본문이 외국어·외국을 다루는 구간**에서 그렇다 — 같은 60줄("프랑스어 배우기")을
+    // 반복 호출했더니 flash-lite 가 4번 중 3번을 **영어로** 번역했다. 다른 내용 구간
+    // (offset 120·240)은 3번씩 전부 정상이었으니 모델 고장이 아니라 그 입력이 목표 언어를 덮은 것.
+    //
+    // **실패가 조용하다** — 오류도 없고 refined.{lang}.json 이 그대로 저장되며, 유튜브엔
+    // defaultLanguage=id 로 영어 자막이 올라간다. 발행 뒤에야 안다.
+    //
+    // 맨 뒤에 한 줄 박으니 같은 입력에서 0/5 로 떨어졌고, 회차 전체도 6/6 배치 정상이 됐다.
+    // 캐싱도 안 깨진다(고정부=system 그대로 · 이 줄은 변동부 맨 뒤).
+    assert.match(translateOut, /출력 언어는 \{lang\.name_ko\} 다/,
+      "목표 언어 재확인 줄이 사라졌다 — 외국을 다루는 구간이 통째로 다른 언어로 나갈 수 있다");
+    assert.match(translateOut, /본문이 다른 나라·다른 언어를 이야기하더라도/,
+      "무엇이 목표 언어를 덮는지 모델에게 말해주지 않으면 그 구간에서 다시 밀린다");
   });
 
   it("core 의 번역 길이 예산과 서버의 한 화면 글자수가 같은 값이다 (쌍둥이)", () => {

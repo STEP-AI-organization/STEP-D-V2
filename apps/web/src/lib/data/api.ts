@@ -1051,6 +1051,15 @@ export interface AutomationRule {
     subtitleColor?: string;
     /** 자막 켜기 — 기본 true. false 면 자동 클립을 자막 없이 렌더. */
     subtitles?: boolean;
+    /**
+     * 배포 언어(BCP-47 기본 서브태그 · 기본 "ko").
+     *
+     * **이 계획의 스위치다** — 자막·제목·메타·글꼴·유튜브 캡션트랙이 전부 이 값을 따르고,
+     * 분석이 이 값을 보고 해당 언어 번역 자산을 같이 만든다(env 스위치가 아니다).
+     * 서버가 아는 코드는 `caption-lang.ts` 의 CAPTION_LANGS 뿐이고, 모르는 값은
+     * **조용히 한국어로** 떨어진다.
+     */
+    lang?: string;
     /** 요소 표시 여부 — 미지정 = 표시. 고객마다 제목·로고·시간박스를 뺄 수 있다. */
     title?: boolean;
     logo?: boolean;

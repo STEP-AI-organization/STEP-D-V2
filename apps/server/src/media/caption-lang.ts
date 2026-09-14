@@ -79,7 +79,42 @@ const VI: CaptionLang = {
   thumbnailFont: "Pretendard-Bold.otf",
 };
 
-export const CAPTION_LANGS: Record<string, CaptionLang> = { ko: KO, vi: VI };
+/**
+ * 인도네시아어. **표준 철자에 발음기호가 없다** — a–z 만 쓴다(고유명사 제외).
+ *
+ * 그래서 베트남어와 달리 **글꼴 제한이 필요 없다.** 번들 11종 cmap 실측(2026-09-14)에서
+ * 전부 100% 덮었다 — 검은고딕·주아·도현처럼 베트남어를 0% 덮던 것들까지 포함해서다.
+ * `allowFonts` 를 비워 두면 편집기에서 어떤 글꼴을 골라도 안 깨진다(= 한국어와 같은 취급).
+ * 썸네일 대체표(`caption_overlay.py LANG_FONT_FALLBACK`)에 항목이 없는 것도 같은 이유다.
+ */
+const ID: CaptionLang = {
+  code: "id",
+  nameKo: "인도네시아어",
+  nameNative: "Bahasa Indonesia",
+  widthEm: 0.535,        // Pretendard-ExtraBold hmtx 실측 — 실제 자막 문장 221자 가중평균
+  captionMaxChars: 18,   // 9.5em / 0.535 — 한국어 11자와 같은 폭
+  titleMaxChars: 65,     // 40 × 0.864 / 0.535
+  titleWrapAt: 23,       // 14 × 0.864 / 0.535
+  titleWrapBudget: 26,
+  allowFonts: [],        // 빈 배열 = 제한 없음 (번들 11종 전부 100%)
+  thumbnailFont: "BlackHanSans-Regular.ttf",  // 한국어와 같은 헤드라인 글꼴 — 라틴 100% 덮는다
+};
+
+/** 영어. 인도네시아어와 같은 이유로 글꼴 제한이 없다(라틴 기본 문자만). */
+const EN: CaptionLang = {
+  code: "en",
+  nameKo: "영어",
+  nameNative: "English",
+  widthEm: 0.524,        // 실제 자막 문장 186자 가중평균
+  captionMaxChars: 18,   // 9.5em / 0.524
+  titleMaxChars: 66,     // 40 × 0.864 / 0.524
+  titleWrapAt: 23,
+  titleWrapBudget: 26,
+  allowFonts: [],
+  thumbnailFont: "BlackHanSans-Regular.ttf",
+};
+
+export const CAPTION_LANGS: Record<string, CaptionLang> = { ko: KO, vi: VI, id: ID, en: EN };
 
 /** 기본(한국어). 언어 미지정·미지원 값은 전부 여기로 떨어진다 — 기존 동작이 그대로 유지된다. */
 export const DEFAULT_LANG = KO;
