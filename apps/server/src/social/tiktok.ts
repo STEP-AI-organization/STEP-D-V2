@@ -290,12 +290,20 @@ async function initDirectPost(
     }),
   });
   const body = await res.text();
-  // 미심사(샌드박스) 앱의 정책 벽 — 이 에러는 조치가 명확해서 사람 말로 바꾼다(2026-08-26
-  // 실측: 매트릭스 실패 칸에 영어 원문이 떠서 무엇을 해야 하는지 알 수 없었다).
+  /**
+   * **미심사 클라이언트**의 정책 벽. 이 에러는 조치가 명확해서 사람 말로 바꾼다
+   * (2026-08-26 실측: 매트릭스 실패 칸에 영어 원문이 떠서 무엇을 해야 하는지 알 수 없었다).
+   *
+   * ⚠️ 예전엔 이걸 "샌드박스 앱" 이라고 불렀는데 **틀린 말이었다.** 틱톡 승인은 두 겹이다:
+   *   ① 앱 승인(Login Kit·스코프) — 2026-09-07 통과, 프로덕션 자격증명으로 전환 완료
+   *   ② **Content Posting API 의 Direct Post 심사** — 이건 별도다
+   * ②를 아직 안 통과했으면 프로덕션 앱이라도 여기서 막힌다. "샌드박스라서" 라고 적어 두면
+   * 프로덕션으로 옮긴 뒤 이 에러를 만났을 때 원인을 엉뚱한 데서 찾게 된다.
+   */
   if (body.includes("unaudited_client_can_only_post_to_private_accounts")) {
     throw new Error(
-      "틱톡 미심사(샌드박스) 앱은 **비공개 계정**에만 바로 게시할 수 있습니다 — "
-      + "틱톡 앱에서 이 계정을 비공개 계정으로 전환(설정→개인정보)하거나, 앱 심사를 통과해야 합니다.",
+      "틱톡 Direct Post 심사를 통과하지 않은 앱은 **비공개 계정**에만 바로 게시할 수 있습니다 — "
+      + "틱톡 앱에서 이 계정을 비공개로 전환(설정→개인정보)하거나, Direct Post 심사를 통과해야 합니다.",
     );
   }
   if (!res.ok) throw new Error(`TikTok direct init failed (${res.status}): ${body}`);
@@ -369,9 +377,10 @@ const CREATOR_INFO_URL = "https://open.tiktokapis.com/v2/post/publish/creator_in
 
 /**
  * 게시 전 크리에이터 정보 조회 — 틱톡이 다이렉트 게시 전에 **요구하는** 호출이고,
- * 허용된 공개범위 목록(privacy_level_options)이 여기서 나온다. 미심사(샌드박스) 앱은
- * SELF_ONLY 만 허용되는데, 그때 PUBLIC 을 하드코딩해 보내면 init 이 통째로 거부된다 —
- * 목록에서 고르면 샌드박스(SELF_ONLY)→심사 후(PUBLIC) 전환이 코드 수정 없이 따라온다.
+ * 허용된 공개범위 목록(privacy_level_options)이 여기서 나온다. Direct Post 심사를 아직
+ * 통과하지 않은 앱은 SELF_ONLY 만 허용되는데, 그때 PUBLIC 을 하드코딩해 보내면 init 이
+ * 통째로 거부된다 — 목록에서 고르면 **심사 전(SELF_ONLY) → 심사 후(PUBLIC) 전환이 코드
+ * 수정 없이** 따라온다. 그래서 2026-09-07 프로덕션 전환 때 여기는 손댈 게 없었다.
  */
 async function queryCreatorPrivacyOptions(accessToken: string): Promise<string[]> {
   const res = await fetch(CREATOR_INFO_URL, {
