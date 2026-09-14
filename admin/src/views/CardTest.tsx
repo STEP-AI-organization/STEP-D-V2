@@ -42,8 +42,17 @@ export function CardTest() {
   const [buyerPhone, setBuyerPhone] = useState("");
 
   const [credits, setCredits] = useState(1);
-  // 서버가 4자 이상을 요구한다 — 남의 회사를 바꾸는 모든 운영자 행위의 공통 규칙이다.
-  const [reason, setReason] = useState("");
+  /**
+   * 사유는 **미리 채워 둔다.**
+   *
+   * 서버가 4자 이상을 요구하는데(`requireReason`), 그건 이 화면만의 규칙이 아니라 **남의
+   * 회사를 바꾸는 모든 superadmin 쓰기의 공통 관문**이고 `superadmin-guard.test.ts` 가
+   * 강제한다 — 누가 왜 남의 회사 카드를 긁었는지가 남아야 하기 때문이다.
+   *
+   * 그래서 규칙을 빼는 대신 **칠 일을 없앴다.** 기본값으로 버튼이 바로 열리고, 다른 사유가
+   * 필요하면 고쳐 쓰면 된다. 시험을 반복할 때 매번 같은 문장을 치는 게 이 칸의 목적은 아니다.
+   */
+  const [reason, setReason] = useState("결제 시험");
 
   const tid = tenantId.trim();
   const fail = (e: unknown) => setErr(e instanceof ApiError ? e.message : String(e));
@@ -97,7 +106,7 @@ export function CardTest() {
   const missingFor = (what: "register" | "charge"): string[] => {
     const need: (string | false)[] = [
       !tid && "회사 선택",
-      reason.trim().length < 4 && "사유(4자 이상)",
+      reason.trim().length < 4 && "사유(비우지 마세요)",
     ];
     if (what === "register") {
       need.push(
@@ -158,7 +167,7 @@ export function CardTest() {
               회사 목록을 불러오지 못했습니다: {tenantErr}
             </div>
           )}
-          <Field label="사유 (4자 이상 · 감사 로그에 남습니다)">
+          <Field label="사유 (감사 로그에 남습니다 · 기본값 그대로 써도 됩니다)">
             <input placeholder="예: 신규 PG 채널 결제 확인" value={reason}
                    onChange={(e) => setReason(e.target.value)} />
           </Field>
