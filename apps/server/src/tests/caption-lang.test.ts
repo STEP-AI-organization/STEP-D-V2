@@ -79,22 +79,34 @@ function coverage(d: Buffer): Set<number> {
 }
 
 /** 그 언어가 실제로 쓰는 문자 전부. */
-function charsFor(code: string): number[] {
-  if (code === "vi") {
+/**
+ * 언어별 폰트 검사 문자셋. **언어를 추가하면 여기도 추가해야 한다.**
+ *
+ * ⚠️ 2026-09-14 이전엔 이게 `charsFor` 안의 if 문이었고 **모르는 코드에 빈 배열**을
+ * 돌려줬다. 그러면 아래 폰트 커버리지 루프와 빈-allowFonts 가드가 **둘 다 조용히
+ * 건너뛴다** — 일본어처럼 번들 대부분이 0% 덮는 언어를 추가해도 아무 경고가 없었다.
+ * 안전망에 난 구멍이라, 아래 "검사 문자셋이 선언돼 있다" 테스트로 강제한다.
+ */
+const LANG_TEST_CHARS: Record<string, number[]> = {
+  vi: (() => {
     const out: number[] = [];
     for (const ch of "ÀÁÂÃÈÉÊÌÍÒÓÔÕÙÚÝàáâãèéêìíòóôõùúýĂăĐđĨĩŨũƠơƯư") out.push(ch.codePointAt(0)!);
     for (let c = 0x1ea0; c <= 0x1ef9; c++) out.push(c);   // Latin Extended Additional (베트남어 전용)
     return out;
-  }
+  })(),
   // 인도네시아어·영어는 표준 철자에 발음기호가 없다 — 라틴 기본 문자와 자막에 실제로 쓰는
   // 문장부호만 본다. (고유명사의 한글은 번들이 전부 한국어 폰트라 따로 볼 필요가 없다.)
-  if (code === "id" || code === "en") {
-    return [...("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789" +
-      " .,!?'\"-:;()")].map((c) => c.codePointAt(0)!);
-  }
+  id: [...("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 .,!?'\"-:;()")]
+    .map((c) => c.codePointAt(0)!),
+  en: [...("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789 .,!?'\"-:;()")]
+    .map((c) => c.codePointAt(0)!),
   // 한국어는 **일부러 비워 둔다.** 번들 글꼴 상당수가 상용 2,350자만 덮어서 한글 전체를
   // 요구하면 기존 글꼴이 통째로 탈락한다 — 기존 동작을 깨뜨리는 검사가 된다.
-  return [];
+  ko: [],
+};
+
+function charsFor(code: string): number[] {
+  return LANG_TEST_CHARS[code] ?? [];
 }
 
 /** 카탈로그 글꼴 id → 실제 파일. `ASS_FONT_BY_ID`(index.ts)와 같은 축이다. */
@@ -102,6 +114,41 @@ const FONT_FILES: Record<string, string> = {
   pretendard: "assets/fonts/Pretendard-ExtraBold.otf",
   gothica1: "assets/fonts/GothicA1-Black.ttf",
 };
+
+describe("다국어 — 안전망에 구멍이 없다", () => {
+  it("표의 모든 언어가 폰트 검사 문자셋을 갖는다", () => {
+    // 이게 없으면 `charsFor` 가 빈 배열을 돌려주고, 그 언어는 **폰트 검사 전부를
+    // 조용히 건너뛴다**(허용 글꼴 커버리지 · 빈-allowFonts 가드 · 썸네일 대체표).
+    // 일본어처럼 번들 대부분이 0% 덮는 언어를 추가해도 아무도 못 잡는다.
+    const missing = Object.keys(CAPTION_LANGS).filter((c) => !(c in LANG_TEST_CHARS));
+    assert.deepEqual(missing, [],
+      `CAPTION_LANGS 에 있는데 LANG_TEST_CHARS 에 없는 언어: ${missing.join(", ")}\n` +
+      "  그 언어를 반드시 쓰는 문자(그 언어 전용 구간 위주)를 LANG_TEST_CHARS 에 선언할 것.\n" +
+      "  덮지 않아도 되는 언어라면 빈 배열을 **명시적으로** 넣고 왜인지 적을 것(한국어처럼).");
+  });
+
+  it("체크포인트 목록이 언어 표에서 파생된다 — 손으로 적으면 재시도마다 번역을 다시 산다", () => {
+    // 2026-09-14 실측 버그. `CHECKPOINT_FILES` 에 `"refined.vi.json"` 이 손으로 적혀 있어서,
+    // 인도네시아어·영어를 표에 추가했을 때 여기만 빠졌다. 그 파일이 체크포인트에 안 실리면
+    // GCS 왕복에서 빠지고, 재시도 때 core 의 `load_existing` 이 재사용할 파일을 못 찾아
+    // **번역을 다시 산다**(회차·언어당 ₩13~90). 같은 파일의 `collectI18nTranscripts` 는
+    // 이미 CAPTION_LANGS 를 순회하고 있었다 — 한쪽만 손으로 적힌 비대칭이었다.
+    const src = read("apps/server/src/pipeline/content-pipeline.ts");
+    const decl = src.slice(src.indexOf("const CHECKPOINT_FILES"), src.indexOf("STALL_TIMEOUT_MS"));
+    assert.doesNotMatch(decl, /"refined\.[a-z]{2}\.json"/,
+      "언어별 체크포인트를 손으로 적었다 — 언어를 늘리면 반드시 빠진다. 표에서 파생시킬 것");
+    assert.match(decl, /\.\.\.I18N_CHECKPOINTS/,
+      "CHECKPOINT_FILES 가 언어 표에서 파생되지 않는다");
+    assert.match(src, /const I18N_CHECKPOINTS[\s\S]{0,200}Object\.keys\(CAPTION_LANGS\)/,
+      "I18N_CHECKPOINTS 가 CAPTION_LANGS 를 순회하지 않는다");
+  });
+
+  it("검사 문자셋이 비어 있는 언어는 한국어뿐이다 — 나머지는 실제로 검사돼야 한다", () => {
+    const empty = Object.keys(CAPTION_LANGS).filter((c) => (LANG_TEST_CHARS[c] ?? []).length === 0);
+    assert.deepEqual(empty, [DEFAULT_LANG.code],
+      "비한국어인데 검사 문자셋이 비었다 — 그 언어는 폰트 검사를 통째로 건너뛴다");
+  });
+});
 
 describe("다국어 — 허용 글꼴이 그 언어를 실제로 덮는가 (cmap 실측)", () => {
   for (const [code, lang] of Object.entries(CAPTION_LANGS)) {
@@ -155,31 +202,72 @@ describe("다국어 — 허용 글꼴이 그 언어를 실제로 덮는가 (cmap
     });
   }
 
-  it("썸네일 대체표가 가리키는 폰트도 베트남어를 덮는다 (Pillow 는 폴백을 안 한다)", () => {
+  // ── 썸네일 대체표 — **언어마다 cmap 으로 판정한다** ─────────────────────────
+  //
+  // 2026-09-14 이전엔 이 검사가 베트남어 전용이었고, 못 덮는 폰트 목록이 **손으로**
+  // 적혀 있었다("BlackHanSans, Jua, DoHyeon"). 언어를 늘려도 그 언어는 검사되지 않았고,
+  // 폰트를 갈아끼워도 목록은 그대로였다. 목록을 적는 대신 **재서** 판정한다.
+  //
+  // 불변식: 썸네일 역할 글꼴(ROLE_STYLES)이 그 언어를 못 덮으면 **반드시** 대체표에
+  // 있어야 하고, 대체 대상은 그 언어를 덮으면서 리포에 실재해야 한다.
+  // Pillow 는 libass 와 달리 폴백조차 안 한다 — 그냥 두부(□)를 그린다.
+  {
     const py = read("core/thumbnail/caption_overlay.py");
-    const block = py.slice(py.indexOf("LANG_FONT_FALLBACK"), py.indexOf("def _font_for"));
+    const rolesBlock = py.slice(py.indexOf("ROLE_STYLES"), py.indexOf("LANG_FONT_FALLBACK"));
+    const fbBlock = py.slice(py.indexOf("LANG_FONT_FALLBACK"), py.indexOf("def _font_for"));
+    const roleFonts = [...new Set(
+      [...rolesBlock.matchAll(/"font":\s*"([\w-]+\.(?:ttf|otf))"/g)].map((m) => m[1]),
+    )];
 
-    // 베트남어를 0% 덮는 폰트(cmap 실측)는 **전부** 대체표에 있어야 한다.
-    // 개수를 세는 것보다 이게 정확한 불변식이다 — 하나라도 빠지면 그 프리셋만 두부가 된다.
-    for (const bad of ["BlackHanSans-Regular.ttf", "Jua-Regular.ttf", "DoHyeon-Regular.ttf"]) {
-      assert.ok(block.includes(`"${bad}"`),
-        `${bad} 가 베트남어 대체표에 없다 — 이 폰트는 베트남어를 0% 덮어 두부(□)가 찍힌다`);
+    /** `"vi": { "A.ttf": "B.otf", ... }` 에서 그 언어의 대체 표를 뽑는다. */
+    const fallbackFor = (code: string): Record<string, string> => {
+      const start = fbBlock.indexOf(`"${code}": {`);
+      if (start < 0) return {};
+      const end = fbBlock.indexOf("}", start);
+      const body = fbBlock.slice(start, end);
+      return Object.fromEntries(
+        [...body.matchAll(/"([\w-]+\.(?:ttf|otf))":\s*"([\w-]+\.(?:ttf|otf))"/g)].map((m) => [m[1], m[2]]),
+      );
+    };
+    const covers = (file: string, chars: number[]): boolean => {
+      const p = path.join(ROOT, "assets/fonts", file);
+      if (!fs.existsSync(p)) return false;
+      const cov = coverage(fs.readFileSync(p));
+      return chars.every((c) => cov.has(c));
+    };
+
+    for (const [code, lang] of Object.entries(CAPTION_LANGS)) {
+      const chars = charsFor(code);
+      if (!chars.length) continue;   // 한국어(의도적으로 빈 목록)
+
+      it(`썸네일: ${lang.nameKo} 를 못 덮는 역할 글꼴은 전부 대체표에 있다`, () => {
+        assert.ok(roleFonts.length >= 4, "역할 글꼴을 못 찾았다 — ROLE_STYLES 형식이 바뀌었나");
+        const fb = fallbackFor(code);
+        const problems: string[] = [];
+
+        for (const f of roleFonts) {
+          if (covers(f, chars)) continue;             // 그대로 써도 안전
+          const repl = fb[f];
+          if (!repl) {
+            problems.push(`${f} → 대체표에 없다(이 글꼴은 ${lang.nameKo}를 못 그린다)`);
+            continue;
+          }
+          // 대체 대상은 **리포에 담긴** 폰트여야 한다. 2026-09-07 이전엔 gitignore 된
+          // 폴더를 가리켜 폰트를 안 받은 환경(=프로덕션 워커)에서 통째로 깨졌다.
+          if (!fs.existsSync(path.join(ROOT, "assets/fonts", repl))) {
+            problems.push(`${f} → ${repl} 인데 assets/fonts 에 그 파일이 없다`);
+          } else if (!covers(repl, chars)) {
+            problems.push(`${f} → ${repl} 인데 그 대체본도 ${lang.nameKo}를 못 덮는다`);
+          }
+        }
+
+        assert.deepEqual(problems, [],
+          `${lang.nameKo} 썸네일이 두부(□)로 나갈 자리가 있다.\n` +
+          `  Pillow 는 libass 와 달리 **폴백을 안 한다** — 오류 없이 네모가 찍히고 발행 뒤에 안다.\n` +
+          `  caption_overlay.py 의 LANG_FONT_FALLBACK["${code}"] 에 대체를 넣을 것.`);
+      });
     }
-
-    // 대체 대상은 **리포에 담긴 폰트**여야 한다. 2026-09-07 이전엔 gitignore 된 폴더를
-    // 가리켜서, 폰트를 안 받은 환경(=프로덕션 워커)에서 통째로 깨졌다.
-    const targets = [...new Set([...block.matchAll(/:\s*"([\w-]+\.(?:ttf|otf))"/g)].map((m) => m[1]))];
-    assert.ok(targets.length > 0, "대체 대상 폰트를 못 찾았다 — 대체표 형식이 바뀌었나");
-
-    const chars = charsFor("vi");
-    for (const f of targets) {
-      const p = path.join(ROOT, "assets/fonts", f);
-      assert.ok(fs.existsSync(p),
-        `대체 폰트 ${f} 가 assets/fonts 에 없다 — Pillow 는 폴백을 안 하고 두부(□)를 그린다`);
-      const missing = chars.filter((c) => !coverage(fs.readFileSync(p)).has(c));
-      assert.equal(missing.length, 0, `${f} 가 베트남어 ${missing.length}자를 못 그린다`);
-    }
-  });
+  }
 
   it("썸네일 역할 기본 글꼴도 전부 리포에 있다 (프로덕션 워커에 그대로 실린다)", () => {
     const py = read("core/thumbnail/caption_overlay.py");
