@@ -230,6 +230,10 @@ export const API_KEY_ROUTES: RouteRule[] = [
   { method: "POST", path: /^\/api\/clips\/[^/]+\/generate-metadata$/, scope: "factory:write" },
   { method: "POST", path: /^\/api\/clips\/[^/]+\/regenerate-titles$/, scope: "factory:write" },
   { method: "PATCH", path: /^\/api\/clips\/[^/]+\/metadata\/[^/]+$/, scope: "factory:write" },
+  // 화면에 굽히는 제목 줄 — 고치면 `rendered:false` 가 되어 순방이 다시 굽는다.
+  // ⚠️ **`/clips/:id/editor` 는 열지 않는다.** 그건 editorState 를 통째로 덮어, 콘솔이
+  //    안 들고 있는 트랙·리프레임·아이콘을 지운다. 좁은 이 라우트만 연다.
+  { method: "PATCH", path: /^\/api\/clips\/[^/]+\/overlay-title$/, scope: "factory:write" },
 
   // 결제 수단 **등록만** (2026-08-20). 카드번호는 브라우저 → 포트원으로 직행하고 우리는
   // 빌링키만 받는다. 아래 셋 외의 결제 경로는 전부 세션 전용으로 남는다 —

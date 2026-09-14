@@ -3000,6 +3000,14 @@ app.patch("/api/programs/:id", async (c) => {
   //  않는 한, 쓰지 않는 필드를 저장 때마다 삭제하면 되돌릴 수 없다.)
 
   await putEntity("program", id, next);
+  // 이 라우트도 `body.cast` 로 로스터를 갈아엎는다 — 그러면 AI 가 읽는 대응표(titleCast)도
+  // 같이 따라가야 한다. 안 그러면 "출연진을 지웠는데 제목엔 계속 나온다" 가 된다.
+  // ⚠️ putEntity **뒤에** 부른다. 앞에서 부르면 위 저장이 방금 쓴 titleCast 를 덮는다.
+  // 본문이 titleCast 를 직접 보냈으면 그 뜻을 존중하고 되투영하지 않는다.
+  if (Array.isArray(body.cast) && body.titleCast === undefined) {
+    const warning = await reprojectTitleCast(id);
+    if (warning) console.warn(`[cast] ${id} titleCast 되투영 건너뜀: ${warning}`);
+  }
   return c.json({ program: next });
 });
 
@@ -3054,10 +3062,69 @@ app.patch("/api/programs/:id/profile", async (c) => {
 // analyzes exactly as before, with every detected name left as an unmatched candidate.
 
 app.get("/api/programs/:id/cast", async (c) => {
+  // 합치기 이전 프로그램은 여기서 로스터로 올라온다(1회·멱등). 화면을 열기만 해도
+  // 기존 titleCast 가 보이므로, 사람이 "출연진이 사라졌다"고 다시 입력할 일이 없다.
+  await seedRosterFromTitleCast(c.req.param("id")).catch(() => undefined);
   const program = await getEntity<Record<string, unknown>>("program", c.req.param("id"));
   if (!program) return c.json({ error: "program not found" }, 404);
   return c.json({ cast: await listProgramCast(c.req.param("id")) });
 });
+
+/**
+ * 출연자 저장소를 **하나로 합친다** — 로스터(`program_cast`)가 정본, `program.titleCast` 는
+ * 파이프라인이 읽는 투영이다 (고객 지시 2026-09-14 "2개를 합치는 게 좋을 듯").
+ *
+ * ## 왜 투영이 필요한가
+ * 제목·자막의 실명은 `titleCastOf(program)` **하나만** 본다(ai/title-names.ts →
+ * titleNamesPrompt · isActorTitle). 로스터에 넣기만 하고 여기를 안 채우면 **등록해도
+ * 제목에 안 나온다** — 화면은 됐다고 하고 결과물은 그대로인, 이 리포가 반복해서 밟은 모양이다.
+ *
+ * ## 왜 titleCastOf 를 로스터 조회로 바꾸지 않았나
+ * 그건 동기 함수고 프롬프트 조립·제목 검증 여러 곳에서 program 객체만 들고 불린다.
+ * DB 조회로 바꾸면 그 호출부가 전부 async 가 된다 — 얻는 것보다 회귀 위험이 크다.
+ *
+ * 검증에 걸리면 **titleCast 를 건드리지 않고** 사유를 돌려준다. 깨진 값을 쓰면
+ * `titleCastOf` 가 try/catch 로 [] 를 돌려줘 실명이 **조용히 꺼진다**.
+ */
+async function reprojectTitleCast(programId: string): Promise<string | null> {
+  const roster = await listProgramCast(programId);
+  const rows = roster.map((m) => ({
+    actorName: m.name,
+    // 극중 이름이 없으면 배우명 자체를 넣는다 — 치환은 무의미해도 제목 검증에는 등록된다.
+    characterNames: (m.aliases ?? []).filter(Boolean).length ? m.aliases : [m.name],
+  }));
+  let normalized: ReturnType<typeof normalizeTitleCast>;
+  try { normalized = normalizeTitleCast(rows); }
+  catch (e) { return String((e as Error)?.message ?? e); }
+  const program = await getEntity<any>("program", programId);
+  if (!program) return null;
+  await putEntity("program", programId, { ...program, titleCast: normalized });
+  return null;
+}
+
+/**
+ * 합치기 이전에 `titleCast` 로만 등록해 둔 프로그램을 로스터로 끌어올린다(1회).
+ * 이걸 안 하면 첫 로스터 편집이 기존 대응표를 **덮어 지운다** — 합치는 순간 데이터가
+ * 사라지는 셈이다. 로스터가 비어 있을 때만 돈다(멱등).
+ */
+async function seedRosterFromTitleCast(programId: string): Promise<void> {
+  const roster = await listProgramCast(programId);
+  if (roster.length > 0) return;
+  const program = await getEntity<any>("program", programId);
+  let prior: ReturnType<typeof normalizeTitleCast>;
+  try { prior = normalizeTitleCast(program?.titleCast ?? []); }
+  catch { return; }
+  if (!prior.length) return;
+  for (const m of prior) {
+    await upsertCastMember({
+      castId: newId("cast"), programId, name: m.actorName,
+      // 배우명만 있던 행(치환 대상 없음)은 별칭을 비워 둔다 — 되투영 때 다시 배우명으로 채워진다.
+      aliases: m.characterNames.filter((n) => n !== m.actorName),
+      role: "", season: "", note: "", imageUrl: "",
+    }).catch(() => undefined);
+  }
+  console.log(`[cast] ${programId}: titleCast ${prior.length}행을 로스터로 이관했다(합치기 1회 마이그레이션)`);
+}
 
 app.post("/api/programs/:id/cast", async (c) => {
   const programId = c.req.param("id");
@@ -3065,6 +3132,8 @@ app.post("/api/programs/:id/cast", async (c) => {
   if (!program) return c.json({ error: "program not found" }, 404);
   const input = normalizeCastInput(await c.req.json().catch(() => ({})));
   if (!input) return c.json({ error: "name is required" }, 400);
+  // ⚠️ **먼저 끌어올린다.** 안 그러면 첫 등록의 되투영이 기존 titleCast 를 덮어 지운다.
+  await seedRosterFromTitleCast(programId);
   const castId = newId("cast");
   try {
     await upsertCastMember({ castId, programId, ...input });
@@ -3073,7 +3142,8 @@ app.post("/api/programs/:id/cast", async (c) => {
     if (e?.code === "23505") return c.json({ error: "이미 등록된 출연자입니다 (프로그램+이름+기수)" }, 409);
     throw e;
   }
-  return c.json({ member: await getCastMember(castId) }, 201);
+  const warning = await reprojectTitleCast(programId);
+  return c.json({ member: await getCastMember(castId), ...(warning ? { warning } : {}) }, 201);
 });
 
 app.patch("/api/programs/:id/cast/:castId", async (c) => {
@@ -3090,7 +3160,8 @@ app.patch("/api/programs/:id/cast/:castId", async (c) => {
     if (e?.code === "23505") return c.json({ error: "이미 등록된 출연자입니다 (프로그램+이름+기수)" }, 409);
     throw e;
   }
-  return c.json({ member: await getCastMember(castId) });
+  const warning = await reprojectTitleCast(programId);
+  return c.json({ member: await getCastMember(castId), ...(warning ? { warning } : {}) });
 });
 
 app.delete("/api/programs/:id/cast/:castId", async (c) => {
@@ -3099,7 +3170,8 @@ app.delete("/api/programs/:id/cast/:castId", async (c) => {
   if (!existing || existing.programId !== programId) return c.json({ error: "cast member not found" }, 404);
   // Past timelines keep their findings (they're evidence); they just lose the roster link.
   await deleteCastMember(castId);
-  return c.json({ ok: true, castId });
+  const warning = await reprojectTitleCast(programId);
+  return c.json({ ok: true, castId, ...(warning ? { warning } : {}) });
 });
 
 // ── hard delete: media / episode / program (cascade — see admin/reset for the pattern) ──
@@ -10121,6 +10193,54 @@ async function serializeRenderPlan(
     for (const f of temps) { try { fs.unlinkSync(f); } catch { /* 이미 없으면 그만 */ } }
   }
 }
+
+/**
+ * 화면에 굽히는 제목 줄만 고친다 — **좁은 라우트다.**
+ *
+ * ## 왜 editorState 통째 PATCH 가 아닌가
+ * `PATCH /api/clips/:id/editor` 는 editorState 를 **통째로 덮는다**. 고객사 콘솔은 트랙·
+ * 리프레임·아이콘 같은 나머지를 들고 있지 않으므로, 거기로 제목만 보내면 그 전부가
+ * 사라진다(그 라우트 주석의 아이콘 손실 사고와 같은 모양). 그래서 `.text` 만 바꾼다.
+ *
+ * ## 재렌더는 사람이 관리할 일이 아니다
+ * 제목을 바꾸면 굽힌 글자가 달라지므로 다시 구워야 한다. 사용자에게 "다시 구우세요" 를
+ * 시키지 않는다(고객 지시 2026-09-14: "내부에서는 렌더가 돌겠지만 사용자는 바꿨구나 하고
+ * 끝나면 된다"). `rendered:false` 로 내려 두면 **순방의 not_rendered 분기**가 다음 틱에
+ * 알아서 다시 굽는다 — 새 조율 로직을 만들지 않는다. `/export` 는 revision 캐시가 있어
+ * 실제로 글자가 안 바뀌었으면 재인코딩 없이 돌아온다.
+ *
+ * 줄 수가 바뀌면 마지막 줄의 스타일(크기·색·글꼴)을 복제해 새 줄에 입힌다 — 스타일을
+ * 비우면 렌더가 기본값으로 떨어져 "글자만 바꿨는데 서식이 달라졌다" 가 된다.
+ */
+app.patch("/api/clips/:id/overlay-title", async (c) => {
+  const clipId = c.req.param("id");
+  const clip = await getEntity<any>("clip", clipId);
+  if (!clip) return c.json({ error: "clip_not_found", message: "클립을 찾을 수 없습니다." }, 404);
+
+  const b = await c.req.json<{ lines?: unknown }>().catch(() => null);
+  if (!b || !Array.isArray(b.lines)) {
+    return c.json({ error: "bad_request", message: "lines 배열이 필요합니다." }, 400);
+  }
+  // 빈 줄은 버린다 — 빈 문자열을 그대로 두면 렌더가 빈 줄 자리를 잡아 제목이 밀린다.
+  const lines = b.lines.map((t) => String(t ?? "").trim()).filter(Boolean).slice(0, 3);
+
+  const es = (clip.editorState ?? {}) as Record<string, unknown>;
+  const prev = Array.isArray(es.titleLines) ? (es.titleLines as Record<string, unknown>[]) : [];
+  const style = prev[prev.length - 1] ?? {};
+  const nextLines = lines.map((text, i) => ({
+    ...(prev[i] ?? style),      // 있던 줄은 그 스타일, 새 줄은 마지막 줄 스타일을 물려받는다
+    id: `t${i}`,
+    text,
+  }));
+
+  await putEntity("clip", clipId, {
+    ...clip,
+    editorState: { ...es, titleLines: nextLines },
+    // 다시 구워야 한다는 표시. 순방이 집어 간다 — 사용자는 아무것도 안 한다.
+    rendered: false,
+  });
+  return c.json({ ok: true, titleLines: nextLines, rerender: true });
+});
 
 // ── export/render a clip → the single expensive render (plan §2.4) ────────────
 //
