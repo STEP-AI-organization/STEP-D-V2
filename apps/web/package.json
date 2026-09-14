@@ -9,7 +9,8 @@
     "typecheck": "tsc --noEmit",
     "test": "node --import tsx --test \"src/**/*.test.ts\"",
     "smoke": "node --import tsx scripts/smoke.mts",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "preview:receipt": "node --import tsx scripts/preview-receipt.mjs"
   },
   "dependencies": {
     "stepaistudio": "workspace:*",
