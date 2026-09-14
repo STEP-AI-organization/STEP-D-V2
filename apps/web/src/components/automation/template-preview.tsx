@@ -84,8 +84,10 @@ export function TemplatePreview({ template, accent, layout, frameSrc, subtitlesO
   const titleFs = boxH * 106 / 1920;      // factory 시드 첫 줄 106px 출력과 동일 비율
   const timeboxFs = boxH * 66 / 1920;     // 시간박스 22px(설계) × scale 3 = 66px 출력
   return (
-    <div className="relative shrink-0 overflow-hidden rounded-md border"
-      style={{ width, aspectRatio: "9/16", background: "#000", borderColor: "var(--color-border-subtle)" }}>
+    // 원본은 **테두리 없는** 검은 9:16 카드(`rounded-lg border-none`)다.
+    // 옛 구현은 `rounded-md border` 라 어두운 배경에서 카드가 한 겹 더 있어 보였다.
+    <div className="relative shrink-0 overflow-hidden rounded-lg border-none"
+      style={{ width, aspectRatio: "9/16", background: "#000" }}>
       {/* 영상 영역 — 사용자의 최근 회차 프레임(있으면). 없으면 회색 그라디언트 폴백. */}
       <div className="absolute overflow-hidden" style={{
         left: `${video.x}%`, top: `${video.y}%`, width: `${video.w}%`, height: `${video.h}%`,
@@ -288,9 +290,9 @@ export function TemplatePreviewDialog({ template, accent, layout, frameSrc, subt
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-black/55" onClick={onClose} aria-hidden />
+      <div className="absolute inset-0 bg-black/70 backdrop-blur-xs" onClick={onClose} aria-hidden />
       <div
-        className="relative flex max-h-[92vh] flex-wrap items-start gap-4 overflow-y-auto rounded-2xl border border-[var(--color-border-card)] bg-[var(--color-bg-card)] p-4 shadow-2xl"
+        className="relative flex max-h-[92vh] flex-wrap items-start gap-4 overflow-y-auto rounded-2xl border border-[var(--color-border-card)] bg-[var(--color-bg-card)] p-4 shadow-2xl animate-in fade-in zoom-in-95 duration-150"
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
