@@ -1825,6 +1825,19 @@ app.get("/api/superadmin/payments", async (c) => {
 
 /** 한 회사의 크레딧 원장 + 잔액. 잔액은 **원장 합계**다 — 따로 저장하지 않는다. */
 /**
+ * 대상 회사가 **실제로 있는지** 먼저 본다.
+ *
+ * ⚠️ 없는 회사 id 로 카드 등록을 돌리면 **포트원에는 빌링키가 발급되는데 우리 저장이
+ * 외래키에서 터진다** — PG 에는 키가 생기고 우리한테는 기록이 없는, 제일 나쁜 상태다
+ * (2026-09-14 실측: `tenants/test/card` → 503 인데 웹훅은 `BillingKey.Issued` 로 도착).
+ * 그래서 **PG 를 건드리기 전에** 막는다.
+ */
+async function requireTenantExists(tenantId: string): Promise<boolean> {
+  const { rows } = await getRawPool().query("SELECT 1 FROM tenants WHERE id = $1", [tenantId]);
+  return rows.length > 0;
+}
+
+/**
  * ── 운영자 결제 시험 (어드민 · superadmin 전용) ──────────────────────────────────
  *
  * 목적 하나: **PG 결제창(SDK) 없이** 카드 원문으로 빌링키를 받고, 그 빌링키로 실제
@@ -1851,6 +1864,9 @@ app.post("/api/superadmin/tenants/:id/card", async (c) => {
   const body = await c.req.json<Record<string, unknown>>().catch(() => null);
   // 남의 회사 결제수단을 만드는 일이다 — 왜 했는지가 남아야 한다(superadmin-guard 가 강제).
   const reason = requireReason(actor, tenantId, body?.reason);
+  if (!(await requireTenantExists(tenantId))) {
+    return c.json({ error: "tenant_not_found", message: `회사 '${tenantId}' 가 없습니다 — 회사 id 를 확인해 주세요.` }, 404);
+  }
   await audit(actor, { action: "billing.card.register", targetTenant: tenantId, reason }, clientIp(c));
   // **그 회사 스코프로 들어가서** 등록한다 — 빌링키·카드는 RLS 표라 스코프 밖에서는 못 쓴다.
   // requireConsent 는 false: 동의는 고객이 제품 화면에서 누르는 것이고, 여기는 운영자가
@@ -1864,6 +1880,9 @@ app.post("/api/superadmin/tenants/:id/card", async (c) => {
 app.get("/api/superadmin/tenants/:id/card", async (c) => {
   const actor = requireSuperadmin(c);
   const tenantId = c.req.param("id");
+  if (!(await requireTenantExists(tenantId))) {
+    return c.json({ error: "tenant_not_found", message: `회사 '${tenantId}' 가 없습니다 — 회사 id 를 확인해 주세요.` }, 404);
+  }
   await audit(actor, { action: "billing.card.view", targetTenant: tenantId }, clientIp(c));
   return await runWithTenant({ scope: tenantId, via: "internal" }, async () => {
     const card = await getBillingCard();
@@ -1906,6 +1925,9 @@ app.post("/api/superadmin/tenants/:id/test-charge", async (c) => {
   }
   // 남의 회사 카드에서 실제로 돈이 나간다 — 사유 없이는 못 누른다.
   const reason = requireReason(actor, tenantId, body.reason);
+  if (!(await requireTenantExists(tenantId))) {
+    return c.json({ error: "tenant_not_found", message: `회사 '${tenantId}' 가 없습니다 — 회사 id 를 확인해 주세요.` }, 404);
+  }
   await audit(actor, {
     action: "billing.test-charge", targetTenant: tenantId, reason, detail: { credits },
   }, clientIp(c));

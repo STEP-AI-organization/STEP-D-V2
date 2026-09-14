@@ -104,6 +104,18 @@ export async function registerCard(input: CardRegisterInput): Promise<CardRegist
     if (err instanceof CardIssueError) {
       return { status: 502, body: { error: "card_issue_failed", message: err.message } };
     }
+    /**
+     * ⚠️ **여기 도달했다는 건 보통 "PG 에는 키가 생겼는데 우리 저장이 실패" 다.**
+     * `issueBillingKey` 는 `CardIssueError` 만 던지므로(위 분기), 이 아래로 오는 예외는
+     * 발급 **이후**의 DB 쓰기일 확률이 높다. 2026-09-14 에 실제로 그랬다 — 없는 회사 id 로
+     * 등록을 돌려 외래키에서 터졌고, 포트원 웹훅은 `BillingKey.Issued` 로 도착했다.
+     *
+     * 그때 **로그가 한 줄도 없어서** 원인을 찾는 데 로그·웹훅을 교차 대조해야 했다.
+     * 카드 원문은 못 남기지만 **예외 이름과 메시지는 남긴다** — DB 오류 메시지에는
+     * 카드 정보가 아니라 제약 이름이 들어간다. 그마저도 길이를 자른다.
+     */
+    console.error("[billing] 카드 등록 실패(발급 이후 단계일 수 있음):",
+      err instanceof Error ? `${err.name}: ${err.message}`.slice(0, 300) : "알 수 없는 오류");
     return {
       status: 503,
       body: {
