@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { api, ApiError, type BillingCardCheck, type TestChargeResult } from "../api";
-import { Panel } from "./common";
+import { Panel, useLoad } from "./common";
 
 /**
  * 결제 시험 — **PG 결제창(SDK) 없이** 카드가 등록되고 실제로 긁히는지 끝까지 확인한다.
@@ -16,6 +16,15 @@ import { Panel } from "./common";
  * 화면 어디에도 다시 그리지 않는다.
  */
 export function CardTest() {
+  /**
+   * 회사는 **고르게 한다. 타이핑하게 두지 않는다.**
+   *
+   * 처음엔 id 를 직접 입력받았는데, 그 칸이 패널 헤더에 있어 좁은 화면에서 잘렸고 결국
+   * 없는 id(`test`)가 들어갔다. 그러면 **포트원에는 빌링키가 발급되는데 우리 저장은
+   * 외래키에서 터진다** — PG 에만 결제수단이 남는, 되돌리기 번거로운 상태다(2026-09-14 실측).
+   * 서버도 이제 404 로 막지만, 애초에 틀린 값을 넣을 수 없게 하는 편이 낫다.
+   */
+  const { data: tenantList, error: tenantErr } = useLoad(() => api.tenants(), []);
   const [tenantId, setTenantId] = useState("");
   const [busy, setBusy] = useState<"" | "check" | "register" | "charge">("");
   const [err, setErr] = useState("");
@@ -40,14 +49,14 @@ export function CardTest() {
   const fail = (e: unknown) => setErr(e instanceof ApiError ? e.message : String(e));
 
   async function check() {
-    if (!tid) return setErr("회사 id 를 입력하세요.");
+    if (!tid) return setErr("회사를 먼저 고르세요.");
     setBusy("check"); setErr(""); setCharged(null);
     try { setCard(await api.billingCard(tid)); } catch (e) { setCard(null); fail(e); }
     finally { setBusy(""); }
   }
 
   async function register() {
-    if (!tid) return setErr("회사 id 를 입력하세요.");
+    if (!tid) return setErr("회사를 먼저 고르세요.");
     setBusy("register"); setErr("");
     try {
       await api.registerBillingCard(tid, {
@@ -67,7 +76,7 @@ export function CardTest() {
   }
 
   async function charge() {
-    if (!tid) return setErr("회사 id 를 입력하세요.");
+    if (!tid) return setErr("회사를 먼저 고르세요.");
     setBusy("charge"); setErr(""); setCharged(null);
     try {
       // nonce 가 포트원 멱등키의 재료다 — 버튼을 누를 때마다 새로 만든다. 같은 값으로 두 번
@@ -87,7 +96,7 @@ export function CardTest() {
    */
   const missingFor = (what: "register" | "charge"): string[] => {
     const need: (string | false)[] = [
-      !tid && "회사 id",
+      !tid && "회사 선택",
       reason.trim().length < 4 && "사유(4자 이상)",
     ];
     if (what === "register") {
@@ -123,19 +132,32 @@ export function CardTest() {
           그 상태로 없는 id 를 넣어 발급이 터졌다(2026-09-14). 본문으로 내린다. */}
       <Panel title="대상 회사">
         <div style={{ padding: "12px 16px", display: "grid", gap: 10, maxWidth: 420 }}>
-          <Field label="회사 id — 실제로 있는 워크스페이스여야 합니다">
+          <Field label="회사">
             <div className="row">
-              <input
-                placeholder="예: t_default"
+              <select
                 value={tenantId}
-                onChange={(e) => setTenantId(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter") void check(); }}
-              />
+                onChange={(e) => { setTenantId(e.target.value); setCard(null); setCharged(null); setErr(""); }}
+                style={{ minWidth: 260 }}
+              >
+                <option value="">— 회사를 고르세요 —</option>
+                {(tenantList?.tenants ?? []).map((t) => (
+                  // id 도 같이 보여준다 — 같은 이름이 둘일 수 있고, 로그·결제 기록은 id 로 남는다.
+                  <option key={t.id} value={t.id}>
+                    {t.name} ({t.id}){t.status !== "active" ? ` · ${t.status}` : ""}
+                  </option>
+                ))}
+              </select>
               <button onClick={() => void check()} disabled={busy !== "" || !tid}>
                 {busy === "check" ? "조회 중…" : "카드 확인"}
               </button>
             </div>
           </Field>
+          {tenantErr && (
+            // 목록을 못 불러오면 고를 수가 없다 — 빈 드롭다운을 "회사가 없다" 로 오해하지 않게.
+            <div className="muted" style={{ fontSize: 12, color: "var(--danger, #d66)" }}>
+              회사 목록을 불러오지 못했습니다: {tenantErr}
+            </div>
+          )}
           <Field label="사유 (4자 이상 · 감사 로그에 남습니다)">
             <input placeholder="예: 신규 PG 채널 결제 확인" value={reason}
                    onChange={(e) => setReason(e.target.value)} />
