@@ -52,3 +52,26 @@ pnpm --filter @stepd/server user:create --email you@stepai.kr --role superadmin
 Vercel 프로젝트를 이 디렉터리에 연결하고 도메인을 `admin.stepd.stepai.kr` 로 지정한다.
 `vercel.json` 이 `/api/*` 를 `stepd.stepai.kr/api/proxy/api/*` 로 넘긴다(ID 토큰 프록시 경유).
 `public: false` 이며 `index.html` 에 `noindex` 를 넣어 두었다.
+
+## 결제 시험 탭 (2026-09-14)
+
+PG 결제창(SDK) 없이 **카드 원문 → 빌링키 발급 → 카드 대조 → 소액 결제**를 한 화면에서
+끝까지 확인한다. 회사 id 를 골라 그 회사의 결제수단으로 돈다.
+
+> ⚠️ **진짜 결제다.** 시험용 가짜 경로가 아니라 제품과 같은 서버 함수를 탄다 — 가짜로
+> 만들면 정작 운영 경로를 검증하지 못한다. 크레딧도 실제로 올라간다.
+
+막아 둔 것:
+
+- **금액 상한을 서버가 강제한다** — 10크레딧(₩660)까지. 기본은 1개(₩66).
+  화면의 `max` 는 방어가 아니라서 서버에서도 본다(`MAX_TEST_CREDITS`).
+- **사유 4자 이상**이 필수다(`requireReason`). 누가 왜 남의 회사 카드를 긁었는지가
+  감사 로그에 남는다. 다른 superadmin 쓰기와 같은 규칙이다.
+- 시험 결제는 `requestedBy` 가 `superadmin-test:<운영자>` 라 자동충전 상한 집계에 안 섞인다.
+
+"카드 확인" 은 우리 DB 와 **포트원 쪽 빌링키를 대조**한다. DB 에만 있고 PG 에 없으면
+결제는 실패하는데, "등록은 됐는데 결제만 안 되는" 상태의 원인이 보통 거기다.
+
+⚠️ **카드 원문이 Vercel 을 두 번 지난다** — 브라우저 → `admin.stepd.stepai.kr` →
+`stepd.stepai.kr/api/proxy` → Cloud Run. 제품 경로(한 번)보다 한 홉 많다. 프록시가 본문을
+로깅하지는 않지만(코드 확인), PCI 범위를 따질 때 이 사실이 들어간다.
