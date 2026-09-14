@@ -1,4 +1,10 @@
 #!/usr/bin/env bash
+# ⚠️ **이 스크립트는 프로덕션에 쓰이지 않는다 (2026-09-14 메타데이터 실측).**
+#
+# 프로덕션 GEBD VM 의 startup-script 는 `vm-startup.sh` 다. 둘 다 "부팅 스크립트" 라
+# 오래 헷갈렸는데(deploy/README.md 참조), 메타데이터를 직접 읽어 확인했다.
+# 이 파일은 systemd 기반의 **다른 설계**다 — 참고용으로 남겨 두지만 따라가지 말 것.
+# 프로덕션을 고치려면 `vm-startup.sh` 를 고치고 `vm-push-startup.sh` 로 올린다.
 # GEBD VM 부팅 시 자동 실행 (startup-script). 매 부팅마다 재실행됨 · idempotent 유지 필수.
 #
 # 흐름:

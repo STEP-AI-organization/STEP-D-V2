@@ -48,11 +48,12 @@ bash deploy/cloud.sh all        # server + worker + migrate
 
 | | |
 |---|---|
-| `vm-create.sh` | **인스턴스 생성 (한 번만).** startup-script 로 `vm-bootstrap.sh` 를 심는다 |
-| `vm-bootstrap.sh` | **부팅마다 자동 실행** — git pull → `vm.sh` 재실행 → 워커·자동종료 데몬 |
+| `vm-startup.sh` | **프로덕션 VM 의 startup-script 본체** — 부팅마다 실행(리포 갱신 → 워커 → 유휴 종료) |
+| `vm-push-startup.sh` | ⚠️ **`vm-startup.sh` 를 고쳤으면 반드시 실행.** 메타데이터는 복사본이라 리포만 고치면 VM 에 안 닿는다 |
+| `vm-create.sh` | **인스턴스 생성 (한 번만).** startup-script 로 `vm-startup.sh` 를 심는다 |
 | `vm.sh` | 프로비저닝 본체 (Docker · NVIDIA · systemd) · idempotent |
 | `Dockerfile.slim` · `cloudbuild-gebd.yaml` | mmaction2 이미지 |
-| `vm-startup.sh` | ⚠️ **아래 "정리 안 된 것" 참조** |
+| `vm-bootstrap.sh` | ⚠️ **프로덕션에 안 쓰인다** — 아래 참조 |
 
 깨우기: `POST /api/admin/gebd-vm/wake` — 잡을 소진하면 **스스로 종료**한다(spot 비용).
 
@@ -75,15 +76,33 @@ bash deploy/cloud.sh all        # server + worker + migrate
 
 ---
 
-## 정리 안 된 것 (2026-09-07 발견)
+## 정리됨 (2026-09-07 제기 → 2026-09-14 확인)
 
-**`gebd/vm-startup.sh` 와 `gebd/vm-bootstrap.sh` 가 둘 다 "GEBD VM 부팅 스크립트" 다.**
+**`gebd/vm-startup.sh` 와 `gebd/vm-bootstrap.sh` 가 둘 다 "GEBD VM 부팅 스크립트" 였다.**
+2026-09-07 엔 어느 쪽이 실제로 심겨 있는지 몰라 둘 다 남겨 뒀다. 메타데이터를 직접 읽어
+**답을 확인했다: `vm-startup.sh` 다.**
 
-- 실제 배선은 `vm-bootstrap.sh` 다 — `vm-create.sh` 가 startup-script 로 이걸 심는다.
-- 그런데 **문서(CLAUDE.md · docs/ops/infra.md · index.ts 주석)는 `vm-startup.sh` 를 가리킨다.**
-- 어느 쪽이 프로덕션 VM 에 실제로 들어가 있는지는 GCP 메타데이터를 봐야 안다:
-  ```bash
-  gcloud compute instances describe <VM> --zone <ZONE> --project step-d \
-    --format='value(metadata.items.filter(key:startup-script).extract(value))' | head -20
-  ```
-- 확인 전까지 **둘 다 지우지 말 것.**
+```bash
+gcloud compute instances describe stepd-gebd-vm --zone us-central1-b --project step-d \
+  --format='value(metadata.items.filter("key:startup-script").extract("value"))' | head -20
+```
+
+그래서 `vm-create.sh` 도 `vm-startup.sh` 를 심도록 고쳤다 — 예전엔 `vm-bootstrap.sh` 를 심어서
+**새로 만든 VM 이 프로덕션과 다르게 동작**했을 것이다. `vm-bootstrap.sh` 는 프로덕션 경로가
+아니다(systemd 기반의 다른 설계). 지우지는 않았지만 **따라가지 말 것.**
+
+### ⚠️ 이 조사에서 드러난 진짜 문제 — 메타데이터는 복사본이다
+
+`vm-startup.sh` 는 GCE 메타데이터에 **스냅샷으로** 들어간다. 리포 파일을 고쳐도 VM 은
+예전 것으로 계속 부팅하고, **그 사실이 어디에도 안 드러난다.**
+
+실제로 갈라져 있었다 — 리포는 `pnpm install --frozen-lockfile || …` 인데 VM 메타데이터는
+`--no-frozen-lockfile` 이었다. 그 상태로 VM 은 리포 갱신(git checkout)에 실패해 **낡은 코드에
+고정**됐고, 워커가 1초 만에 죽어 **GEBD 가 한 달 넘게 한 건도 처리하지 못했다**
+(`gebd.detect` done 0건 · pending 12건). 고칠 코드는 리포에 있었지만 VM 에 닿는 길이 없었다.
+
+**`vm-startup.sh` 를 고쳤으면 반드시:**
+
+```bash
+bash deploy/gebd/vm-push-startup.sh     # 적용은 다음 부팅부터
+```

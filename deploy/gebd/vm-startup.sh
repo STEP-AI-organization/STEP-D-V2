@@ -89,9 +89,31 @@ else
   # (실측 2026-08-08: 이것 때문에 VM 이 24분간 켜져 있으면서 잡을 하나도 claim 하지 않았다).
   # FETCH_HEAD 를 쓰면 브랜치를 바꿔도 확실히 최신을 집는다.
   echo "[gebd-vm] 리포 갱신 ($REPO_BRANCH)"
-  git -C "$REPO_DIR" fetch --depth 1 origin "$REPO_BRANCH" \
-    && git -C "$REPO_DIR" checkout -B "$REPO_BRANCH" FETCH_HEAD \
-    || echo "[gebd-vm] ⚠️ 리포 갱신 실패 — 기존 체크아웃으로 진행"
+  # ⚠️ **갱신 실패를 경고만 하고 넘어가면 안 된다.** 예전엔 `|| echo 경고` 였고, 그래서
+  # checkout 이 한 번 실패한 뒤로 **낡은 코드에 영구히 고정**됐다 — 그 낡은 코드의
+  # seedIfEmpty 가 kv RLS 를 위반해 워커가 1초 만에 죽었고, GEBD 가 한 달 넘게 죽어
+  # 있었다(2026-09-14 조사). 고정된 커밋이 하필 "VM 이 리포 갱신에 실패해…" 를 고치려던
+  # 커밋이었다는 게 이 실패 모드의 성격을 말해준다 — **조용하고, 스스로 낫지 않는다.**
+  #
+  # 그래서 3단으로 간다: ① 평소 경로 ② 실패하면 **통째로 재클론**(자가치유)
+  # ③ 그것도 실패하면 **크게 실패한다**. 낡은 코드로 계속 도는 것보다 안 도는 게 낫다 —
+  # 어차피 낡은 코드는 잡을 못 집으면서 VM 요금만 태운다.
+  #
+  # dirty 트리가 checkout 을 막는 게 가장 흔한 원인이라 reset·clean 을 먼저 태운다.
+  if git -C "$REPO_DIR" fetch --depth 1 origin "$REPO_BRANCH" \
+     && git -C "$REPO_DIR" reset --hard >/dev/null 2>&1 \
+     && git -C "$REPO_DIR" clean -fd >/dev/null 2>&1 \
+     && git -C "$REPO_DIR" checkout -B "$REPO_BRANCH" FETCH_HEAD; then
+    :
+  else
+    echo "[gebd-vm] ⚠️ 리포 갱신 실패 — 재클론한다 (낡은 코드로 진행하지 않는다)"
+    rm -rf "$REPO_DIR"
+    git clone --depth 1 --branch "$REPO_BRANCH" "$REPO_URL" "$REPO_DIR" || {
+      echo "[gebd-vm] ⚠️ 재클론도 실패 — 중단한다. 낡은 코드로 도는 것보다 안 도는 게 낫다"
+      echo "[gebd-vm] ⚠️ repo-url 메타데이터·디스크 용량(df -h)·네트워크를 확인할 것"
+      df -h "$(dirname "$REPO_DIR")" || true
+      exit 1; }
+  fi
 fi
 echo "[gebd-vm] HEAD: $(git -C "$REPO_DIR" rev-parse --short HEAD 2>/dev/null) $(git -C "$REPO_DIR" log -1 --format=%s 2>/dev/null | cut -c1-50)"
 
@@ -141,23 +163,40 @@ fi
 # drain 모드라 큐가 비면 워커가 끝난다. 잠깐 기다렸다가 한 번 더 확인하고,
 # 계속 비어 있으면 VM 을 정지한다. 새 잡이 오면 Cloud Scheduler/서버가 다시 켠다.
 IDLE=0
+CRASHES=0
 while [ "$IDLE" -lt "$IDLE_SHUTDOWN_MIN" ]; do
   cd "$REPO_DIR/apps/server"
   BEFORE=$(date +%s)
   npx tsx src/worker.ts --drain
   RC=$?
   ELAPSED=$(( $(date +%s) - BEFORE ))
-  # 워커가 즉시 죽으면(의존성·DB·env 문제) 조용히 유휴로 세다 종료해 버린다 —
-  # 그럼 "잡을 하나도 안 집었다"는 사실이 로그에 안 남는다. 명시적으로 찍는다.
-  [ "$RC" -ne 0 ] && echo "[gebd-vm] ⚠️ 워커 비정상 종료 (exit $RC · ${ELAPSED}s)"
+
   if [ "$ELAPSED" -lt 30 ]; then
     IDLE=$((IDLE + 1))
-    echo "[gebd-vm] 처리할 잡 없음 (${IDLE}/${IDLE_SHUTDOWN_MIN}분)"
+    # ⚠️ **크래시와 유휴를 절대 같은 문구로 찍지 말 것.**
+    # 예전엔 둘 다 "처리할 잡 없음" 이었다. 워커가 1초 만에 죽어도 `ELAPSED < 30` 이라
+    # 유휴로 세어졌고, 로그에는 "할 일이 없다" 고만 남았다 — 실제로는 큐에 12건이
+    # 밀려 있었는데도. 그 한 줄 때문에 GEBD 가 **한 달 넘게 죽어 있는 걸 아무도 몰랐다**
+    # (2026-09-14 조사). 실패를 "정상" 처럼 적는 로그는 없느니만 못하다.
+    if [ "$RC" -ne 0 ]; then
+      CRASHES=$((CRASHES + 1))
+      echo "[gebd-vm] ⚠️ 워커가 즉시 죽었다 — **유휴가 아니다** (exit $RC · ${ELAPSED}s · ${CRASHES}회째)"
+      echo "[gebd-vm] ⚠️ 큐의 gebd.detect 는 그대로 남는다. 위 스택트레이스를 볼 것."
+    else
+      echo "[gebd-vm] 처리할 잡 없음 (${IDLE}/${IDLE_SHUTDOWN_MIN}분)"
+    fi
     sleep 60
   else
-    IDLE=0   # 실제로 일했다 — 카운터 리셋
+    IDLE=0       # 실제로 일했다 — 카운터 리셋
+    CRASHES=0
   fi
 done
 
-echo "[gebd-vm] ${IDLE_SHUTDOWN_MIN}분간 유휴 — VM 정지"
+if [ "$CRASHES" -gt 0 ]; then
+  # 유휴가 아니라 **고장**으로 내려간다는 사실을 마지막 줄에 남긴다. 여기가 로그의
+  # 끝이라 사람이 제일 먼저 보는 자리다 — "유휴 정지" 로 끝나면 고장이 묻힌다.
+  echo "[gebd-vm] ⚠️ 정지한다 — 유휴가 아니라 워커가 ${CRASHES}회 연속 죽었기 때문이다"
+else
+  echo "[gebd-vm] ${IDLE_SHUTDOWN_MIN}분간 유휴 — VM 정지"
+fi
 shutdown -h now
