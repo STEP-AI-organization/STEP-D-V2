@@ -44,6 +44,17 @@ let networkTimer: NodeJS.Timeout | null = null;
 let previousStates = new Map<string, NativeUploadJob["status"]>();
 let updater: Updater | null = null;
 
+/**
+ * 진행 중인 작업 공간 복사 건수.
+ *
+ * ⚠️ **전송 큐가 이걸 모른다.** `importFile` 은 큐에 들어가기 **전에** 도는 순수 파일
+ * 복사라(60분 마스터면 수십 GB · 수 분), 그 사이 `engine.hasUnfinishedJobs()` 는 false 다.
+ * 그대로 두면 업데이트가 "지금 노는 중" 으로 보고 복사 한가운데서 앱을 재시작한다 —
+ * 편집자에겐 이유 없이 앱이 꺼졌다 켜지고 파일은 안 들어온 것으로 보인다.
+ * (`.part` 잔해는 다음 기동에 치워지므로 복구는 되지만, 몇 분을 버린다.)
+ */
+let importsInFlight = 0;
+
 const singleInstance = app.requestSingleInstanceLock();
 if (!singleInstance) app.quit();
 
@@ -434,7 +445,15 @@ function registerIpc(): void {
     if (!isNativeImportTarget(value?.target)) {
       throw new Error("어느 프로그램·폴더로 들여올지 정해야 합니다.");
     }
-    return workspace!.importFile(filePath, value.target);
+    // 복사가 도는 동안은 "바쁘다" — 업데이트가 이 한가운데서 앱을 끄지 않게.
+    importsInFlight += 1;
+    try {
+      return await workspace!.importFile(filePath, value.target);
+    } finally {
+      importsInFlight -= 1;
+      // 마지막 복사가 끝난 순간이 곧 "이제 깔아도 되는" 순간이다 — 예약된 설치를 깨운다.
+      if (importsInFlight === 0) updater?.onBusyChanged();
+    }
   });
   for (const [channel, action] of [
     ["pause", (id: string) => engine!.pause(id)],
@@ -577,9 +596,13 @@ void app.whenReady().then(async () => {
    */
   updater = new Updater({
     busy: () => ({
-      transfers: engine?.hasUnfinishedJobs() ?? false,
-      // 로컬 렌더는 아직 배선 전이다. 붙는 순간 여기만 바꾸면 "굽는 중엔 안 깐다" 가
-      // 그대로 걸린다 — 판정은 policy.ts 가 이미 하고 있고 테스트도 돼 있다.
+      // 전송 큐 + **큐에 들어가기 전의 복사**. 둘 다 세야 "노는 중" 이 사실이 된다.
+      transfers: (engine?.hasUnfinishedJobs() ?? false) || importsInFlight > 0,
+      // 로컬 렌더는 아직 main.ts 에 배선 전이라 지금은 이게 사실이다.
+      // ⚠️ `render/runner.ts` 를 여기로 들이는 날 **반드시 같이 고칠 것** —
+      //    안 고치면 "굽는 중엔 안 깐다" 는 약속이 조용히 거짓이 된다(policy.ts 는
+      //    제대로 판정하는데 입력이 거짓이므로 테스트도 안 깨진다).
+      //    `update-packaging.test.ts` 가 그날 빨개지도록 걸어 뒀다.
       rendering: false,
     }),
     onChange: (state) => {

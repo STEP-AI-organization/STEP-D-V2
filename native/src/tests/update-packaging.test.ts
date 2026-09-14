@@ -122,3 +122,47 @@ describe("URL 스킴 — 등록한 것을 실제로 처리하나", () => {
     assert.match(fn, /isOurProtocol\(/, "handleProtocol 이 등록 목록을 안 본다");
   });
 });
+
+/**
+ * **"바쁨" 판정이 사실인가** — 업데이트는 그 한 값만 보고 앱을 껐다 켠다.
+ *
+ * `policy.ts` 는 "굽는 중엔 안 깐다 · 전송 중엔 기다린다" 를 정확히 판정하고 테스트도 돼
+ * 있다. 그런데 **입력이 거짓이면 그 판정이 전부 무의미하다** — 그리고 그때 테스트는 하나도
+ * 안 깨진다(판정 자체는 맞으니까). 이 리포가 제일 자주 당하는 실패 모양이다.
+ *
+ * 그래서 입력 쪽을 여기서 붙잡는다.
+ */
+describe("업데이트가 보는 '바쁨' 이 실제와 맞나", () => {
+  const main = read("src", "main.ts");
+  const busy = main.slice(main.indexOf("busy: () => ({"), main.indexOf("onChange:"));
+
+  it("**큐에 들어가기 전 복사도 바쁨에 센다** — 안 세면 복사 도중 앱이 재시작된다", () => {
+    assert.ok(busy.includes("importsInFlight"),
+      "busy() 가 전송 큐만 본다 — importFile 은 큐 진입 **전**에 도는 수 분짜리 복사라,\n" +
+      "그 사이 '노는 중' 으로 읽혀 업데이트가 복사 한가운데서 앱을 끈다.");
+  });
+
+  it("복사가 끝나면 예약된 설치를 깨운다 — 안 깨우면 다음 확인까지 최대 1시간 논다", () => {
+    const handler = main.slice(main.indexOf('ipcMain.handle("native:workspace:import"'));
+    const body = handler.slice(0, handler.indexOf("\n  });"));
+    assert.match(body, /importsInFlight \+= 1/, "복사 시작을 안 센다");
+    assert.match(body, /finally[\s\S]*importsInFlight -= 1/, "실패해도 카운터가 내려가야 한다 — finally 가 없다");
+    assert.match(body, /onBusyChanged\(\)/, "복사가 끝나도 예약된 설치를 안 깨운다");
+  });
+
+  /**
+   * **지뢰 제거.** 지금은 로컬 렌더가 main.ts 에 안 붙어 있어서 `rendering: false` 가
+   * 사실이다. 붙이는 날 이 줄을 같이 안 고치면, "굽는 중엔 안 깐다"(policy.ts 가 지키고
+   * 테스트도 있는 그 약속)가 **조용히 거짓**이 된다 — 편집자가 50~90초짜리 렌더를
+   * 날리고도 왜 그랬는지 모른다.
+   *
+   * 그래서 `render/runner.ts` 를 main.ts 가 import 하는 순간 이 테스트가 빨개진다.
+   */
+  it("로컬 렌더를 배선하면 rendering 하드코딩이 잡힌다 (지뢰 제거)", () => {
+    const wired = /from "\.\/render\/runner\.js"/.test(main);
+    const hardcoded = /rendering:\s*false/.test(busy);
+    assert.ok(!(wired && hardcoded),
+      "main.ts 가 render/runner 를 들였는데 busy().rendering 이 아직 false 고정이다 —\n" +
+      "굽는 중에도 업데이트가 앱을 끈다. 실제 렌더 상태를 넘길 것.");
+  });
+});
