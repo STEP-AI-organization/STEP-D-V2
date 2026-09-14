@@ -79,6 +79,34 @@ export function CardTest() {
     finally { setBusy(""); }
   }
 
+  /**
+   * **왜 못 누르는지**를 계산한다.
+   *
+   * 처음엔 `disabled` 만 걸어 뒀는데, 그러면 화면이 아무 말도 안 해서 버튼이 고장 난 것처럼
+   * 보인다(실제로 그 보고를 받았다). 조건을 줄이는 대신 **빠진 항목을 이름으로** 말한다.
+   */
+  const missingFor = (what: "register" | "charge"): string[] => {
+    const need: (string | false)[] = [
+      !tid && "회사 id",
+      reason.trim().length < 4 && "사유(4자 이상)",
+    ];
+    if (what === "register") {
+      need.push(
+        !num.trim() && "카드번호",
+        (!mm.trim() || !yy.trim()) && "유효기간(MM/YY)",
+        // 이니시스 빌링키 결제의 필수 3종 — 없이 발급하면 결제 단계에서 거절된다.
+        !buyerName.trim() && "구매자 이름",
+        !buyerEmail.trim() && "구매자 이메일",
+        !buyerPhone.trim() && "구매자 휴대폰",
+      );
+    } else {
+      need.push(!card?.registered && "등록된 카드 (먼저 ①)");
+    }
+    return need.filter(Boolean) as string[];
+  };
+  const missRegister = missingFor("register");
+  const missCharge = missingFor("charge");
+
   const won = (n: number) => `₩${n.toLocaleString("ko-KR")}`;
   // 서버의 buildTopup 과 같은 계산(공급가 60원 + 부가세 10%) — 누르기 전에 얼마인지 보인다.
   const preview = won(Math.round(credits * 60 * 1.1));
@@ -91,26 +119,26 @@ export function CardTest() {
         <strong> 진짜 결제입니다</strong> — 제품과 같은 서버 경로를 타고, 크레딧도 실제로 올라갑니다.
       </p>
 
-      <Panel
-        title="대상 회사"
-        actions={
-          <div className="row">
-            <input
-              placeholder="회사 id (예: t_default)"
-              value={tenantId}
-              onChange={(e) => setTenantId(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter") void check(); }}
-            />
-            <button onClick={() => void check()} disabled={busy !== ""}>
-              {busy === "check" ? "조회 중…" : "카드 확인"}
-            </button>
-          </div>
-        }
-      >
-        <div style={{ padding: "12px 16px" }}>
+      {/* ⚠️ 회사 id 를 패널 헤더(actions)에 두었더니 좁은 화면에서 **잘려서 안 보였고**,
+          그 상태로 없는 id 를 넣어 발급이 터졌다(2026-09-14). 본문으로 내린다. */}
+      <Panel title="대상 회사">
+        <div style={{ padding: "12px 16px", display: "grid", gap: 10, maxWidth: 420 }}>
+          <Field label="회사 id — 실제로 있는 워크스페이스여야 합니다">
+            <div className="row">
+              <input
+                placeholder="예: t_default"
+                value={tenantId}
+                onChange={(e) => setTenantId(e.target.value)}
+                onKeyDown={(e) => { if (e.key === "Enter") void check(); }}
+              />
+              <button onClick={() => void check()} disabled={busy !== "" || !tid}>
+                {busy === "check" ? "조회 중…" : "카드 확인"}
+              </button>
+            </div>
+          </Field>
           <Field label="사유 (4자 이상 · 감사 로그에 남습니다)">
             <input placeholder="예: 신규 PG 채널 결제 확인" value={reason}
-                   onChange={(e) => setReason(e.target.value)} style={{ maxWidth: 380 }} />
+                   onChange={(e) => setReason(e.target.value)} />
           </Field>
         </div>
         {err && <div style={{ padding: "12px 16px", color: "var(--danger, #d66)" }}>{err}</div>}
@@ -148,11 +176,13 @@ export function CardTest() {
             <input placeholder="01012345678" value={buyerPhone} onChange={(e) => setBuyerPhone(e.target.value)} />
           </Field>
           <div>
-            <button onClick={() => void register()} disabled={busy !== "" || !tid || reason.trim().length < 4}>
+            <button onClick={() => void register()} disabled={busy !== "" || missRegister.length > 0}>
               {busy === "register" ? "발급 중…" : "빌링키 발급"}
             </button>
             <span className="muted" style={{ fontSize: 12, marginLeft: 10 }}>
-              발급에 성공하면 카드번호는 화면에서 지워집니다.
+              {missRegister.length
+                ? `남은 항목: ${missRegister.join(" · ")}`
+                : "발급에 성공하면 카드번호는 화면에서 지워집니다."}
             </span>
           </div>
         </div>
@@ -170,10 +200,12 @@ export function CardTest() {
               <div className="muted" style={{ fontSize: 12 }}>청구 금액(부가세 포함)</div>
               <div style={{ fontSize: 18, fontWeight: 600 }}>{preview}</div>
             </div>
-            <button onClick={() => void charge()}
-                    disabled={busy !== "" || !tid || !card?.registered || reason.trim().length < 4}>
+            <button onClick={() => void charge()} disabled={busy !== "" || missCharge.length > 0}>
               {busy === "charge" ? "결제 중…" : "결제 실행"}
             </button>
+            {missCharge.length > 0 && (
+              <span className="muted" style={{ fontSize: 12 }}>남은 항목: {missCharge.join(" · ")}</span>
+            )}
           </div>
           <div className="muted" style={{ fontSize: 12 }}>
             서버가 10크레딧(₩660)까지로 막아 둡니다 — 회사를 골라 그 회사 카드를 긁는 자리라,
@@ -198,8 +230,10 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 /** 등록 상태 — **DB 와 PG 가 같은 카드를 말하는지**가 핵심이다. */
 function CardState({ card }: { card: BillingCardCheck }) {
   if (!card.registered) {
+    // 서버가 준 사유가 이미 완결된 문장이다 — 앞에 같은 말을 덧붙이면 두 번 나온다
+    // ("등록된 카드가 없습니다 — 등록된 카드가 없습니다." 가 실제로 떴다).
     return <div style={{ padding: "12px 16px" }} className="muted">
-      등록된 카드가 없습니다{card.reason ? ` — ${card.reason}` : ""}.
+      {card.reason || "등록된 카드가 없습니다."}
     </div>;
   }
   const buyerMissing = card.buyer

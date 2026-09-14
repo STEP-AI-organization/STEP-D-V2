@@ -64,6 +64,31 @@ export class CardIssueError extends Error {
   }
 }
 
+/**
+ * PG 실패에서 **사유만** 뽑는다 — 서버 로그 전용.
+ *
+ * 왜 필요한가: 발급 실패가 `CardIssueError` 하나로 뭉개져서 **아무도 원인을 몰랐다.**
+ * 사용자 문구는 고정이고 cause 도 안 남기니, 채널키가 틀린 건지 카드사가 거절한 건지
+ * 구분할 방법이 없었다(2026-09-14 실제로 여기서 막혔다).
+ *
+ * 그렇다고 body 를 통째로 찍으면 안 된다 — 요청이 에코될 수 있어 카드 원문이 로그에 남는다.
+ * 그래서 **허용한 필드만**(type·message·pgCode·pgMessage) 꺼내고, 그마저도 카드번호처럼
+ * 보이는 긴 숫자열은 가린다. 둘 다 하는 이유는 한쪽만으로 부족해서다 — 허용목록은 새 필드가
+ * 생기면 새고, 마스킹만으로는 이름 같은 다른 값을 못 막는다.
+ */
+function pgReason(e: unknown): string {
+  const mask = (v: string) => v.replace(/\d[\d -]{11,21}\d/g, "[카드번호로 보이는 값]");
+  if (!(e instanceof PortOneError)) {
+    return e instanceof Error ? mask(e.message).slice(0, 200) : "알 수 없는 오류";
+  }
+  const b = (e.body ?? {}) as Record<string, unknown>;
+  const pick = ["type", "message", "pgCode", "pgMessage"]
+    .map((k) => (typeof b[k] === "string" && b[k] ? `${k}=${mask(b[k] as string)}` : ""))
+    .filter(Boolean)
+    .join(" · ");
+  return `${e.status} ${pick || "(사유 필드 없음)"}`.slice(0, 300);
+}
+
 /** 카드 등록만 수행한다. 결제금액이나 결제 API는 이 요청에 포함하지 않는다. */
 export async function issueBillingKey(input: {
   storeId: string; channelKey: string; customerId: string;
@@ -84,8 +109,11 @@ export async function issueBillingKey(input: {
     const key = result?.billingKeyInfo?.billingKey;
     if (typeof key !== "string" || !key.trim()) throw new CardIssueError();
     return key;
-  } catch {
-    // PortOneError.body에는 카드정보가 에코될 수 있다. cause·원문을 보존하지 않는다.
+  } catch (e) {
+    // PortOneError.body 에는 카드정보가 에코될 수 있다 — cause·원문은 **보존하지 않는다.**
+    // 다만 **사유는 서버 로그에 남긴다**(pgReason 이 허용목록 + 마스킹을 건다).
+    // 안 남기면 실패했을 때 우리가 할 수 있는 말이 "다른 카드로 해보세요" 밖에 없다.
+    console.warn(`[billing] 빌링키 발급 실패: ${pgReason(e)}`);
     throw new CardIssueError();
   }
 }
