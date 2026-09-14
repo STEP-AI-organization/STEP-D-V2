@@ -61,7 +61,7 @@ baseline/런타임 안전망과 `apps/server/migrations/`를 함께 봐야 한�
 
 | kind | 웹 타입 | 생성/갱신 주체 | 비고 |
 |------|---------|---------------|------|
-| `program` | `Program` (+`smr?: ProgramSmrConfig`) | `POST /api/programs` | smr = SMR 피드용 programCode/category/weekdays (프로그램당 1회 입력) |
+| `program` | `Program` (+`smr?: ProgramSmrConfig`) | `POST /api/programs` | `titleCast[{ actorName, characterNames }]` = 오버레이 제목 전용 극중 이름→배우 활동명 대응표. 대사·분석 이름은 유지. smr = SMR 피드용 programCode/category/weekdays (프로그램당 1회 입력) |
 | `episode` | `Episode` (`pipeline: EpisodePipeline`) | 업로드 시 자동 생성(index.ts `buildEpisodeAndMedia`) | `pipeline.stage/stageStatus/progress/note`를 워커가 실시간 갱신(content-pipeline.ts `setEpisodePipeline`) |
 | `recommendation` | `Recommendation` | 워커 `content.analyze` → `recFromShort()`(content-pipeline.ts L66) | AI 쇼츠(core/recommend.py) → `kind:"short"`, `appeal = 6 - rank`(1위→5). 재실행 시 해당 에피소드 추천 전부 삭제 후 재삽입(멱등). ⚠️ 서버가 쓰는 `thumbnailCandidates[].time`이 웹 타입의 `atTime`과 필드명이 어긋나 있음 |
 | `clip` | `Clip` | 추천 채택(`POST /api/recommendations/:id/adopt`) | ffmpeg 트림 성공 시 `mediaId`/`videoUrl`/`sourceMediaId` 채워짐. 추가 서버 전용 필드: `publishedVideoId`(link-video 라우트 — channel_videos와의 수동 조인 키, 웹 타입에 없음), `editorState`(에디터 저장 blob) |

@@ -794,6 +794,7 @@ export function AppDataProvider({
             if (patch.section != null) merged.section = patch.section;
             if (patch.targetAge != null) merged.targetAge = patch.targetAge as Program["targetAge"];
             if (patch.cast != null) merged.cast = patch.cast;
+            if (patch.titleCast != null) merged.titleCast = patch.titleCast;
             return merged;
           }),
         }));

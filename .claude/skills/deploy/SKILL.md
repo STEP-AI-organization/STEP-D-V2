@@ -39,7 +39,12 @@ bash deploy/cloud.sh all        # server + worker + migrate
 2. 스크립트가 `apps/server`·`core` 의 미커밋 변경을 경고한다 —
    `gcloud builds submit` 은 **작업 트리를 그대로** 올리므로 미완성 코드가 나갈 수 있다.
    비대화형에선 y/N 프롬프트가 EOF → 중단(exit 0)이니 본문 확인 필수(철칙 4).
-3. 커밋 author 는 `contact@stepai.kr` 여야 한다 (웹 배포 시 Vercel 이 다른 author 를 막는다).
+3. 웹 배포는 **커밋 이메일이 아니라 GitHub 계정 연결**을 본다. 여기 오래 "author 가
+   `contact@stepai.kr` 여야 한다" 고 적혀 있었는데 **틀렸다** — 2026-09-11 실측에서 author 가
+   `ha983885@snu.ac.kr` 인 머지 커밋 4건이 전부 정상 배포됐고, Vercel 은 팀 유일 멤버
+   `contact-4523` 소행으로 기록했다(그 GitHub 계정이 팀에 연결돼 있어서). 시트는 1개다.
+   → 지켜야 할 규칙은 **"팀 시트에 연결된 사람이 머지한다"** 이다(CONTRIBUTING).
+   `deploy-web.ps1` 의 author 강제는 그 경로에서만 유효한 추가 안전장치다.
 4. **새 마이그레이션이 있으면 순서가 생명**: `migrate` 는 서버 `:latest` **이미지 안의**
    마이그레이션을 돌린다 → server 빌드가 먼저다(`all` 이 이 순서). 반대로 서버만 먼저
    내보내고 migrate 를 미루면 새 코드 × 옛 스키마로 500 이 난다(2026-08-13 실측) —

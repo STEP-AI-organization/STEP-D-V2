@@ -245,6 +245,7 @@ import {
   type GenerateMode,
 } from "./ai/profile.ts";
 import { normalizeCastInput } from "./ai/cast.ts";
+import { normalizeTitleCast, titleNamesPrompt, isActorTitle } from "./ai/title-names.ts";
 import {
   youtubeUploadEnabled, UPLOAD_DISABLED_CODE, UPLOAD_DISABLED_MESSAGE, tiktokUploadEnabled,
   tiktokDirectPostEnabled,
@@ -2677,6 +2678,10 @@ app.patch("/api/programs/:id", async (c) => {
   const body = await c.req.json().catch(() => ({}) as Record<string, unknown>);
 
   const next: Record<string, unknown> = { ...program };
+  if (Object.hasOwn(body, "titleCast")) {
+    try { next.titleCast = normalizeTitleCast(body.titleCast); }
+    catch (e) { return c.json({ error: "invalid_title_cast", message: (e as Error).message }, 400); }
+  }
   if (typeof body.title === "string" && body.title.trim()) next.title = body.title.trim();
   if (typeof body.section === "string" && body.section.trim()) next.section = body.section.trim();
   if (typeof body.targetAge === "number") next.targetAge = body.targetAge;
@@ -2774,14 +2779,16 @@ app.patch("/api/programs/:id", async (c) => {
   }
   if (Array.isArray(body.cast)) {
     next.cast = body.cast.filter((x: unknown): x is string => typeof x === "string");
-    // 2026-07-23: entities.data.cast → program_cast 테이블 sync. 파이프라인(listProgramCast)이
-    // program_cast에서 읽으므로 UI가 program_cast API 안 써도 여기서 sync. 기존 목록 전부
-    // 삭제 후 새로 insert (덮어쓰기 시맨틱).
-    const pool = getPool();
-    await pool.query("DELETE FROM program_cast WHERE programid = $1", [id]);
+    // 이름 목록만 저장해도 별칭·사진·castId가 유지돼야 다음 분석의 인물 근거가 사라지지 않는다.
+    const previousCast = await listProgramCast(id);
+    const keptNames = new Set((next.cast as string[]).map((name) => name.trim()).filter(Boolean));
+    for (const member of previousCast) {
+      if (!keptNames.has(member.name)) await deleteCastMember(member.castId);
+    }
     for (const name of next.cast as string[]) {
       const trimmed = name.trim();
       if (!trimmed) continue;
+      if (previousCast.some((member) => member.name === trimmed)) continue;
       const castId = newId("cast");
       try {
         await upsertCastMember({ 
@@ -9270,7 +9277,7 @@ app.post("/api/clips/:id/regenerate-titles", async (c) => {
     ? `\n\n[사용자 추가 요청 — 위 규칙과 충돌하면 사용자 요청을 우선]\n${extra}`
     : "";
   const prompt =
-    `${systemBase}${programBlock}${extraBlock}\n\n` +
+    `${systemBase}${programBlock}${extraBlock}${titleNamesPrompt(programForPrompt)}\n\n` +
     `[기존 제목(참고만)]\n${old}\n\n` +
     `[클립 자막]\n${shown}\n\n` +
     'Return ONLY a valid JSON object like {"titles": ["...", "...", "...", "...", "..."]}. ' +
@@ -9295,7 +9302,7 @@ app.post("/api/clips/:id/regenerate-titles", async (c) => {
     const titles: string[] = [];
     for (const t of raw) {
       const v = String(t ?? "").trim();
-      if (!v || seen.has(v)) continue;
+      if (!v || seen.has(v) || !isActorTitle(v, programForPrompt)) continue;
       seen.add(v);
       titles.push(v);
       if (titles.length >= 5) break;
