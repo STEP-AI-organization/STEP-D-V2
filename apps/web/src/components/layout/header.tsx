@@ -226,7 +226,7 @@ export function Header({ title = "대시보드", subtitle = "" }: HeaderProps) {
                       onClick={() => setScope(item as "전사" | "내 담당")}
                       className={`w-full py-2.5 px-4 rounded-full text-xs font-semibold cursor-pointer transition-all duration-200 flex items-center justify-start gap-2.5 border select-none ${
                         isSelected
-                          ? "border-[#1C60FF] dark:border-blue-500 text-[#1C60FF] dark:text-blue-400 bg-[#1C60FF]/8 dark:bg-blue-500/15 font-bold shadow-none"
+                          ? "border-[#1C60FF] dark:border-blue-500 text-[var(--badge-text)] bg-[#1C60FF]/8 dark:bg-blue-500/15 font-bold shadow-none"
                           : "border-slate-200 dark:border-white text-slate-600 dark:text-white bg-slate-50/50 dark:bg-transparent hover:border-slate-300 dark:hover:border-white font-medium shadow-none"
                       }`}
                     >
@@ -263,7 +263,7 @@ export function Header({ title = "대시보드", subtitle = "" }: HeaderProps) {
                       }
                       className={`w-full py-2.5 px-4 rounded-full text-xs font-semibold cursor-pointer transition-all duration-200 flex items-center justify-start gap-2.5 border select-none ${
                         isSelected
-                          ? "border-[#1C60FF] dark:border-blue-500 text-[#1C60FF] dark:text-blue-400 bg-[#1C60FF]/8 dark:bg-blue-500/15 font-bold shadow-none"
+                          ? "border-[#1C60FF] dark:border-blue-500 text-[var(--badge-text)] bg-[#1C60FF]/8 dark:bg-blue-500/15 font-bold shadow-none"
                           : "border-slate-200 dark:border-white text-slate-600 dark:text-white bg-slate-50/50 dark:bg-transparent hover:border-slate-300 dark:hover:border-white font-medium shadow-none"
                       }`}
                     >

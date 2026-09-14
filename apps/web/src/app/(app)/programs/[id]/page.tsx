@@ -329,7 +329,7 @@ export default function ProgramHomePage() {
                         <span className="text-[10px] text-slate-400">사진 없음</span>
                       )}
                     </div>
-                    <span className="text-xs font-bold text-[var(--color-text-primary)] group-hover:text-[#1C60FF] transition-colors">
+                    <span className="text-xs font-bold text-[var(--color-text-primary)] group-hover:text-[var(--text-accent)] transition-colors">
                       {name}
                     </span>
                   </div>
@@ -521,7 +521,7 @@ function EpisodeCard({ episode, thumbMediaId }: { episode: Episode; thumbMediaId
     p?.stageStatus === "error"
       ? "bg-rose-500/15 text-rose-600 dark:text-rose-400"
       : p?.stageStatus === "progress"
-        ? "bg-[#1C60FF]/10 text-[#1C60FF] dark:text-[#60A5FA]"
+        ? "bg-[#1C60FF]/10 text-[var(--badge-text)]"
         : "bg-slate-100 text-slate-700 dark:bg-[#282B35] dark:text-slate-200";
 
   return (
@@ -550,7 +550,7 @@ function EpisodeCard({ episode, thumbMediaId }: { episode: Episode; thumbMediaId
 
         {/* Bottom Right Arrow */}
         <div className="flex justify-end pt-1">
-          <div className="w-6 h-6 rounded-full bg-[var(--color-bg-input)] flex items-center justify-center text-[var(--color-text-muted)] group-hover:text-[#1C60FF] group-hover:bg-[#1C60FF]/10 transition-colors shrink-0">
+          <div className="w-6 h-6 rounded-full bg-[var(--color-bg-input)] flex items-center justify-center text-[var(--color-text-muted)] group-hover:text-[var(--text-accent)] group-hover:bg-[#1C60FF]/10 transition-colors shrink-0">
             <ArrowRight className="w-3.5 h-3.5" />
           </div>
         </div>

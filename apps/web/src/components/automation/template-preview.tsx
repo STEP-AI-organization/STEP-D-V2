@@ -175,7 +175,7 @@ export function LayoutSliders({ layout, onChange, className, subtitlesOn, onSubt
             <input
               type="checkbox" checked={layout[key] !== false}
               onChange={(e) => onChange({ ...layout, [key]: e.target.checked })}
-              className="w-4 h-4 rounded text-[#1C60FF] accent-[#1C60FF]"
+              className="w-4 h-4 rounded text-[var(--text-accent)] accent-[#1C60FF]"
             />
             <span>{label}</span>
           </label>
@@ -185,7 +185,7 @@ export function LayoutSliders({ layout, onChange, className, subtitlesOn, onSubt
             <input
               type="checkbox" checked={subtitlesOn !== false}
               onChange={(e) => onSubtitlesChange(e.target.checked)}
-              className="w-4 h-4 rounded text-[#1C60FF] accent-[#1C60FF]"
+              className="w-4 h-4 rounded text-[var(--text-accent)] accent-[#1C60FF]"
             />
             <span>자막</span>
           </label>

@@ -97,7 +97,7 @@ export function NaverCredentials({
         ? ["자동 로그인 켜짐", "bg-emerald-500/15 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-400"]
         : state.status === "failed"
           ? ["자동 로그인 실패", "bg-rose-500/15 text-rose-600 dark:bg-rose-500/20 dark:text-rose-400"]
-          : ["확인 중", "bg-[#1C60FF]/10 text-[#1C60FF] dark:text-[#60A5FA]"];
+          : ["확인 중", "bg-[#1C60FF]/10 text-[var(--badge-text)]"];
     return <span className={`px-2 py-0.5 rounded text-[10px] font-medium ${cls}`}>{text}</span>;
   };
 

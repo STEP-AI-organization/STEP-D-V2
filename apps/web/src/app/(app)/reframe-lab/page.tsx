@@ -55,7 +55,7 @@ const layoutMeta = (id: string) => LAYOUTS.find((l) => l.id === id);
 
 /** 배치마다 라벨 색이 다르다 — 원본이 네 카드를 색으로 구분한다(파랑·초록·앰버·로즈). */
 const LAYOUT_ACCENT: Record<string, string> = {
-  "9:16-letterbox": "text-[#1C60FF]",
+  "9:16-letterbox": "text-[var(--text-accent)]",
   "9:16-crop-sub": "text-emerald-400",
   "9:16-crop-main": "text-amber-400",
   "9:16-crop-full": "text-rose-400",
@@ -425,9 +425,9 @@ function LayoutCard({
       {/* Metadata */}
       <div className="text-xs space-y-1 px-1">
         <div className="flex items-center gap-2">
-          <span className={`font-bold ${LAYOUT_ACCENT[layout.id] ?? "text-[#1C60FF]"}`}>{layout.label}</span>
+          <span className={`font-bold ${LAYOUT_ACCENT[layout.id] ?? "text-[var(--text-accent)]"}`}>{layout.label}</span>
           {isAiPick && (
-            <span className="px-2 py-0.5 rounded-full bg-[#1C60FF]/20 text-[#1C60FF] text-[10px] font-bold border-none">
+            <span className="px-2 py-0.5 rounded-full bg-[#1C60FF]/20 text-[var(--text-accent)] text-[10px] font-bold border-none">
               AI 추천
             </span>
           )}
@@ -441,7 +441,7 @@ function LayoutCard({
         disabled={disabled}
         className="w-full py-2 rounded-full bg-[var(--color-bg-input)] hover:bg-[var(--color-bg-card-hover)] text-xs text-[var(--color-text-primary)] border border-slate-300 dark:border-slate-700 font-bold transition-all cursor-pointer flex items-center justify-center gap-1 disabled:cursor-not-allowed disabled:opacity-70"
       >
-        {isSaved && <Check className="w-3.5 h-3.5 text-[#1C60FF]" />}
+        {isSaved && <Check className="w-3.5 h-3.5 text-[var(--text-accent)]" />}
         <span>{isSaved ? "이 레이아웃 (정답)" : "이 레이아웃으로"}</span>
       </button>
     </div>

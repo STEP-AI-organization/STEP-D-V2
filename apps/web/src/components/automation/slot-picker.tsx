@@ -65,7 +65,7 @@ export function SlotPicker({ slots, onChange }: { slots: RuleSlot[]; onChange: (
           <button
             type="button" aria-label={`${x.time} 개수 줄이기`} disabled={x.count <= 1}
             onClick={() => setCount(x.time, x.count - 1)}
-            className="text-[var(--color-text-muted)] hover:text-[#1C60FF] text-xs cursor-pointer border-none bg-transparent disabled:opacity-40 disabled:cursor-not-allowed"
+            className="text-[var(--color-text-muted)] hover:text-[var(--text-accent)] text-xs cursor-pointer border-none bg-transparent disabled:opacity-40 disabled:cursor-not-allowed"
           >
             −
           </button>
@@ -73,7 +73,7 @@ export function SlotPicker({ slots, onChange }: { slots: RuleSlot[]; onChange: (
           <button
             type="button" aria-label={`${x.time} 개수 늘리기`}
             onClick={() => setCount(x.time, x.count + 1)}
-            className="text-[var(--color-text-muted)] hover:text-[#1C60FF] text-xs cursor-pointer border-none bg-transparent"
+            className="text-[var(--color-text-muted)] hover:text-[var(--text-accent)] text-xs cursor-pointer border-none bg-transparent"
           >
             ＋
           </button>
@@ -101,7 +101,7 @@ export function SlotPicker({ slots, onChange }: { slots: RuleSlot[]; onChange: (
                   setPeriod((v) => (v === "오후" ? "오전" : "오후"));
                 }
               }}
-              className="hover:text-[#1C60FF] cursor-pointer font-bold border-none bg-transparent p-0 select-none mr-1"
+              className="hover:text-[var(--text-accent)] cursor-pointer font-bold border-none bg-transparent p-0 select-none mr-1"
               title="클릭 또는 화살표 키로 오전/오후 변경"
             >
               {period}
@@ -114,7 +114,7 @@ export function SlotPicker({ slots, onChange }: { slots: RuleSlot[]; onChange: (
                 if (v === "" || (Number(v) >= 0 && Number(v) <= 12)) setHour(v);
               }}
               onBlur={() => setHour((v) => (v === "" ? "06" : v.padStart(2, "0")))}
-              className="w-5 text-center bg-transparent border-none p-0 font-bold focus:outline-none focus:text-[#1C60FF]"
+              className="w-5 text-center bg-transparent border-none p-0 font-bold focus:outline-none focus:text-[var(--text-accent)]"
             />
             <span>:</span>
             <input
@@ -124,14 +124,14 @@ export function SlotPicker({ slots, onChange }: { slots: RuleSlot[]; onChange: (
                 if (v === "" || (Number(v) >= 0 && Number(v) <= 59)) setMinute(v);
               }}
               onBlur={() => setMinute((v) => (v === "" ? "00" : v.padStart(2, "0")))}
-              className="w-5 text-center bg-transparent border-none p-0 font-bold focus:outline-none focus:text-[#1C60FF]"
+              className="w-5 text-center bg-transparent border-none p-0 font-bold focus:outline-none focus:text-[var(--text-accent)]"
             />
 
             {/* Clock Dropdown Icon */}
             <button
               type="button"
               onClick={() => setClockOpen((v) => !v)}
-              className="ml-1.5 text-[#1C60FF] hover:opacity-80 cursor-pointer border-none bg-transparent p-0 flex items-center justify-center"
+              className="ml-1.5 text-[var(--text-accent)] hover:opacity-80 cursor-pointer border-none bg-transparent p-0 flex items-center justify-center"
               title="시간 선택 드롭다운 열기"
             >
               <Clock className="w-3.5 h-3.5" />
