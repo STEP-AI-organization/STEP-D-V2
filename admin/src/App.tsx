@@ -14,17 +14,20 @@ import { Companies, CompanyPage } from "./views/Companies";
 import { Operations } from "./views/Operations";
 import { Users } from "./views/Users";
 import { Payments } from "./views/Payments";
+import { CardTest } from "./views/CardTest";
 import { Audit } from "./views/Audit";
 import { MetaEdits } from "./views/MetaEdits";
 import { TenantNames } from "./views/tenant-name";
 
-type Tab = "overview" | "tenants" | "users" | "payments" | "jobs" | "metaEdits" | "audit";
+type Tab = "overview" | "tenants" | "users" | "payments" | "cardTest" | "jobs" | "metaEdits" | "audit";
 
 const TABS: { id: Tab; label: string }[] = [
   { id: "overview", label: "개요" },
   { id: "tenants", label: "회사" },
   { id: "users", label: "사용자" },
   { id: "payments", label: "결제" },
+  // 결제 로그 바로 아래 — "안 긁힌다" 를 확인하는 자리는 로그 옆이어야 한다.
+  { id: "cardTest", label: "결제 시험" },
   { id: "jobs", label: "잡" },
   { id: "metaEdits", label: "메타 수정" },
   { id: "audit", label: "감사 로그" },
@@ -108,6 +111,7 @@ export default function App() {
           {tab === "tenants" && <Companies onOpen={openCompany} />}
           {tab === "users" && <Users />}
           {tab === "payments" && <Payments />}
+          {tab === "cardTest" && <CardTest />}
           {tab === "jobs" && <Operations />}
           {tab === "metaEdits" && <MetaEdits />}
           {tab === "audit" && <Audit />}

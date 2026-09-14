@@ -360,6 +360,8 @@ import {
 } from "./billing/credits.ts";
 import { billableMinutes, portoneConfigured } from "./billing/billing.ts";
 import { CardIssueError, issueBillingKey, chargeWithBillingKey, getBillingKeyInfo, getPayment, verifyWebhook } from "./billing/portone.ts";
+import { registerCard } from "./billing/card-register.ts";
+import { runTestCharge } from "./billing/card-test-charge.ts";
 import { checkCardCredential } from "./billing/card-credential.ts";
 // 자동 충전 알림 해제는 **이 한 함수**로만 한다 — 라우트마다 db-pg 의 저장 함수를 직접
 // 부르면 반드시 한 자리가 빠진다(실제로 직접 충전 경로가 빠져 있었다).
@@ -1822,6 +1824,96 @@ app.get("/api/superadmin/payments", async (c) => {
 });
 
 /** 한 회사의 크레딧 원장 + 잔액. 잔액은 **원장 합계**다 — 따로 저장하지 않는다. */
+/**
+ * ── 운영자 결제 시험 (어드민 · superadmin 전용) ──────────────────────────────────
+ *
+ * 목적 하나: **PG 결제창(SDK) 없이** 카드 원문으로 빌링키를 받고, 그 빌링키로 실제
+ * 소액이 긁히는지 끝까지 확인하는 것. 셋이 한 흐름이다.
+ *
+ *   POST .../card         카드 원문 → 빌링키 발급 → 저장      (제품과 **같은 함수**)
+ *   GET  .../card         저장된 카드 + **PG 에 그 키가 실제로 있는지** 대조
+ *   POST .../test-charge  그 카드로 소액 결제 (기본 1크레딧 = ₩66 · 상한 10)
+ *
+ * ⚠️ **진짜 돈이 나간다.** 시험 전용 가짜 경로가 아니다 — 가짜로 만들면 정작 운영 경로를
+ * 검증하지 못한다. 그래서 금액 상한을 코드에 못박고(MAX_TEST_CREDITS), 세 라우트 모두
+ * 감사 로그를 남긴다.
+ *
+ * ⚠️ 카드 원문이 지나는 경로다. 제품 경로와 같은 규칙을 지킨다 — no-store · 전역 onError
+ * 안 탐(registerCard 가 던지지 않는다) · 응답에 입력값 되비추지 않음.
+ */
+app.post("/api/superadmin/tenants/:id/card", async (c) => {
+  const actor = requireSuperadmin(c);
+  const tenantId = c.req.param("id");
+  c.header("Cache-Control", "no-store");
+  if (!c.req.header("content-type")?.toLowerCase().startsWith("application/json")) {
+    return c.json({ error: "json_required", message: "카드 등록 요청 형식이 올바르지 않습니다." }, 415);
+  }
+  const body = await c.req.json<Record<string, unknown>>().catch(() => null);
+  // 남의 회사 결제수단을 만드는 일이다 — 왜 했는지가 남아야 한다(superadmin-guard 가 강제).
+  const reason = requireReason(actor, tenantId, body?.reason);
+  await audit(actor, { action: "billing.card.register", targetTenant: tenantId, reason }, clientIp(c));
+  // **그 회사 스코프로 들어가서** 등록한다 — 빌링키·카드는 RLS 표라 스코프 밖에서는 못 쓴다.
+  // requireConsent 는 false: 동의는 고객이 제품 화면에서 누르는 것이고, 여기는 운영자가
+  // 우리 카드로 레일을 확인하는 자리다(대신 위 감사 로그가 누가 했는지 남긴다).
+  const r = await runWithTenant({ scope: tenantId, via: "internal" }, () =>
+    registerCard({ body, actor: actor.email, customerId: tenantId, requireConsent: false }));
+  return c.json(r.body, r.status);
+});
+
+/** 저장된 카드 — **PG 에 그 빌링키가 실제로 있는지까지** 본다. DB 에만 있고 PG 에 없으면 못 긁는다. */
+app.get("/api/superadmin/tenants/:id/card", async (c) => {
+  const actor = requireSuperadmin(c);
+  const tenantId = c.req.param("id");
+  await audit(actor, { action: "billing.card.view", targetTenant: tenantId }, clientIp(c));
+  return await runWithTenant({ scope: tenantId, via: "internal" }, async () => {
+    const card = await getBillingCard();
+    if (!card?.billingKey) {
+      return c.json({ registered: false, reason: cardBlockReason(card) ?? "등록된 카드가 없습니다." });
+    }
+    // 우리 DB 가 "있다" 고 해도 PG 쪽에서 삭제·만료됐으면 결제는 실패한다. 그 괴리를 여기서 본다.
+    let pg: { brand: string | null; last4: string | null } | null = null;
+    let pgError: string | null = null;
+    try {
+      pg = extractCardDisplay(await getBillingKeyInfo(card.billingKey));
+    } catch (e) {
+      pgError = e instanceof Error ? e.message.slice(0, 200) : "빌링키 조회 실패";
+    }
+    return c.json({
+      registered: true,
+      stored: { brand: card.cardBrand ?? null, last4: card.cardLast4 ?? null, registeredAt: card.createdAt },
+      buyer: {
+        hasName: !!card.buyerName, hasEmail: !!card.buyerEmail, hasPhone: !!card.buyerPhone,
+      },
+      pg, pgError,
+      // 둘이 어긋나면 그대로 알린다 — "등록은 됐는데 결제만 안 되는" 상태의 원인이 보통 여기다.
+      matches: pg ? (pg.last4 ?? null) === (card.cardLast4 ?? null) : null,
+      blocked: cardBlockReason(card),
+    });
+  });
+});
+
+/** 소액 결제 시험. **진짜로 긁힌다.** 기본 1크레딧(₩66) · 상한 10크레딧(₩660). */
+app.post("/api/superadmin/tenants/:id/test-charge", async (c) => {
+  const actor = requireSuperadmin(c);
+  const tenantId = c.req.param("id");
+  const body = await c.req.json<Record<string, unknown>>().catch(() => ({}) as Record<string, unknown>);
+  const credits = body.credits ?? 1;
+  // nonce 가 포트원 멱등키의 재료다 — 같은 값으로 두 번 누르면 두 번 안 긁힌다.
+  // 호출부(어드민)가 버튼마다 새로 만들고, 실패 후 재시도에는 새 값을 쓴다.
+  const nonce = String(body.nonce ?? "");
+  if (!/^[A-Za-z0-9_-]{8,40}$/.test(nonce) || /^auto/i.test(nonce)) {
+    return c.json({ error: "bad_request", message: "nonce 형식이 올바르지 않습니다 (영숫자·-·_ 8~40자, 'auto' 시작 금지)." }, 400);
+  }
+  // 남의 회사 카드에서 실제로 돈이 나간다 — 사유 없이는 못 누른다.
+  const reason = requireReason(actor, tenantId, body.reason);
+  await audit(actor, {
+    action: "billing.test-charge", targetTenant: tenantId, reason, detail: { credits },
+  }, clientIp(c));
+  const r = await runWithTenant({ scope: tenantId, via: "internal" }, () =>
+    runTestCharge({ tenantId, actor: actor.email, credits, nonce }));
+  return c.json(r.body, r.status);
+});
+
 app.get("/api/superadmin/tenants/:id/credits", async (c) => {
   const actor = requireSuperadmin(c);
   const tenantId = c.req.param("id");
@@ -6578,47 +6670,12 @@ app.post("/api/billing/card/issue", async (c) => {
   if (!c.req.header("content-type")?.toLowerCase().startsWith("application/json")) {
     return c.json({ error: "json_required", message: "카드 등록 요청 형식이 올바르지 않습니다." }, 415);
   }
-  const cfg = billingConfig();
-  if (!cfg.ok || !String(process.env.PORTONE_API_SECRET ?? "").trim()) {
-    return c.json({ error: "billing_unconfigured", message: "카드 등록 설정을 확인해 주세요." }, 503);
-  }
-  // 이 경로의 예외는 전역 onError로 보내지 않는다. DB·PG 예외에 카드 원문/키가 있을 수 있다.
-  try {
-    const body = await c.req.json<Record<string, unknown>>().catch(() => null);
-    if (!body || body.autoChargeConsent !== true) {
-      return c.json({ error: "consent_required", message: "자동결제 안내에 동의해 주세요." }, 400);
-    }
-    const checked = checkCardCredential(body.credential);
-    if (!checked.ok) return c.json({ error: "invalid_card", message: checked.message }, 400);
-    const saved = await getBillingCard();
-    const buyer = (body.buyer ?? {}) as Record<string, unknown>;
-    const who = checkCustomer({
-      fullName: String(buyer.fullName ?? "").trim() || saved?.buyerName || "",
-      email: String(buyer.email ?? "").trim() || saved?.buyerEmail || "",
-      phoneNumber: String(buyer.phoneNumber ?? "").trim() || saved?.buyerPhone || "",
-    });
-    if (!who.ok) return c.json({ error: "customer_required", message: who.message }, 400);
-    const billingKey = await issueBillingKey({
-      ...cfg.config, customerId: currentTenantId(), customer: who.customer, credential: checked.credential,
-    });
-    let display: { brand: string | null; last4: string | null } = {
-      brand: null, last4: checked.credential.number.slice(-4),
-    };
-    try {
-      const found = extractCardDisplay(await getBillingKeyInfo(billingKey));
-      display = { brand: found.brand, last4: found.last4 ?? display.last4 };
-    } catch { /* 카드 표시정보 조회 실패는 발급 성공을 뒤집지 않는다. 원문 로그 금지. */ }
-    await saveBillingCard({
-      billingKey, cardBrand: display.brand, cardLast4: display.last4, issuedBy: actor, buyer: who.customer,
-    });
-    try { await clearAutoTopupAlert("card-register"); } catch { /* 저장 성공 후 재등록을 유도하지 않는다. */ }
-    return c.json({ ok: true });
-  } catch (err) {
-    if (err instanceof CardIssueError) {
-      return c.json({ error: "card_issue_failed", message: err.message }, 502);
-    }
-    return c.json({ error: "card_registration_failed", message: "카드 등록 결과를 확인하지 못했습니다. 결제수단을 다시 조회해 등록 상태를 확인해 주세요." }, 503);
-  }
+  // ⚠️ 이 경로의 예외는 전역 onError 로 보내지 않는다 — DB·PG 예외에 카드 원문/키가 실릴 수
+  // 있다. `registerCard` 는 **던지지 않고** 값으로 돌려주므로 그 규칙이 함수 안에 들어가 있다.
+  // 어드민의 운영자 등록 경로도 같은 함수를 쓴다(두 곳이 갈라지면 "어드민에선 되는데" 가 난다).
+  const body = await c.req.json<Record<string, unknown>>().catch(() => null);
+  const r = await registerCard({ body, actor, customerId: currentTenantId(), requireConsent: true });
+  return c.json(r.body, r.status);
 });
 
 /** 카드 등록 준비 — 브라우저 SDK 에 넘길 값. 설정·필수정보가 없으면 창을 아예 안 띄운다. */
