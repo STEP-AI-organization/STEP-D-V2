@@ -46,7 +46,7 @@ const TONE = {
   published: "bg-[#ECFDF5] text-[#059669] dark:bg-emerald-500/20 dark:text-emerald-400",
   scheduled: "bg-amber-500/15 text-amber-600 dark:bg-amber-500/20 dark:text-amber-400",
   past: "bg-slate-200/80 text-slate-600 dark:bg-[#282B35] dark:text-slate-300",
-  pending: "bg-[#1C60FF]/10 text-[#1C60FF] dark:bg-[#1C60FF]/20 dark:text-[#60A5FA]",
+  pending: "bg-[#1C60FF]/10 text-[var(--badge-text)] dark:bg-[#1C60FF]/20",
   failed: "bg-rose-500/15 text-rose-500 dark:bg-rose-500/20 dark:text-rose-400",
 } as const;
 
@@ -213,7 +213,7 @@ function Cell({
         type="button"
         onClick={() => onPublish(clip, channel)}
         title={`${SHORT[channel] ?? channel} 로 배포`}
-        className="w-7 h-7 rounded-lg border border-dashed border-[var(--color-border-subtle)] hover:border-[#1C60FF] hover:bg-[#1C60FF]/10 text-[var(--color-text-muted)] hover:text-[#1C60FF] inline-flex items-center justify-center transition-colors cursor-pointer"
+        className="w-7 h-7 rounded-lg border border-dashed border-[var(--color-border-subtle)] hover:border-[#1C60FF] hover:bg-[#1C60FF]/10 text-[var(--color-text-muted)] hover:text-[var(--text-accent)] inline-flex items-center justify-center transition-colors cursor-pointer"
       >
         <Plus className="w-3.5 h-3.5" />
       </button>

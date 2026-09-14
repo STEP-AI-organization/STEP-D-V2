@@ -191,7 +191,7 @@ export default function BizOpPage() {
             <button
               onClick={() => { void onExport(); }}
               disabled={busy}
-              className="flex items-center gap-1.5 px-4 py-1.5 rounded-full bg-[var(--color-bg-card)] border border-[var(--color-border-subtle)] hover:text-[#1C60FF] text-xs text-[var(--color-text-primary)] transition-all cursor-pointer font-semibold shadow-none disabled:cursor-not-allowed disabled:opacity-70"
+              className="flex items-center gap-1.5 px-4 py-1.5 rounded-full bg-[var(--color-bg-card)] border border-[var(--color-border-subtle)] hover:text-[var(--text-accent)] text-xs text-[var(--color-text-primary)] transition-all cursor-pointer font-semibold shadow-none disabled:cursor-not-allowed disabled:opacity-70"
             >
               {busy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Download className="w-3.5 h-3.5" />}
               <span>엑셀 내보내기</span>
@@ -243,7 +243,7 @@ export default function BizOpPage() {
                       <tr key={row.program.id}>
                         <td className="py-3 font-bold text-[var(--color-text-primary)]">
                           {/* 원본은 정적 <td> 였다 — 이 화면은 "어디를 봐야 하나" 를 알려 주는 자리라 링크가 목적물이다. */}
-                          <Link href={`/programs/${row.program.id}`} className="hover:text-[#1C60FF] transition-colors">
+                          <Link href={`/programs/${row.program.id}`} className="hover:text-[var(--text-accent)] transition-colors">
                             {row.program.title}
                           </Link>
                           <span className="block font-normal text-[10.5px] text-[var(--color-text-muted)] mt-0.5">
@@ -424,7 +424,7 @@ export default function BizOpPage() {
                 <Megaphone className="w-5 h-5 text-[#222222] dark:text-slate-200" />
               </div>
               <div>
-                <h4 className="font-bold text-[var(--color-text-primary)] text-sm group-hover:text-[#1C60FF] transition-colors">홍보팀</h4>
+                <h4 className="font-bold text-[var(--color-text-primary)] text-sm group-hover:text-[var(--text-accent)] transition-colors">홍보팀</h4>
                 <p className="text-xs text-[var(--color-text-muted)] mt-0.5">
                   즉시 쓸 수 있는 소재 {formatCount(salesReadyClips)}개
                 </p>
@@ -439,7 +439,7 @@ export default function BizOpPage() {
                 <Building2 className="w-5 h-5 text-[#222222] dark:text-slate-200" />
               </div>
               <div>
-                <h4 className="font-bold text-[var(--color-text-primary)] text-sm group-hover:text-[#1C60FF] transition-colors">광고영업</h4>
+                <h4 className="font-bold text-[var(--color-text-primary)] text-sm group-hover:text-[var(--text-accent)] transition-colors">광고영업</h4>
                 <p className="text-xs text-[var(--color-text-muted)] mt-0.5">
                   공유 가능 IP {formatCount(shareablePrograms)}개
                 </p>
@@ -486,7 +486,7 @@ type Tone = "ok" | "progress" | "idle" | "warn" | "danger";
 function Pill({ tone, label }: { tone: Tone; label: string }) {
   const map: Record<Tone, [string, string]> = {
     ok: ["bg-emerald-500/15 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-400", "bg-emerald-600 dark:bg-emerald-400"],
-    progress: ["bg-[#1C60FF]/15 text-[#1C60FF] dark:text-blue-400", "bg-[#1C60FF]"],
+    progress: ["bg-[#1C60FF]/15 text-[var(--badge-text)]", "bg-[#1C60FF]"],
     idle: ["bg-slate-200/80 dark:bg-stone-800 text-slate-600 dark:text-slate-400", "bg-slate-400 dark:bg-stone-500"],
     warn: ["bg-amber-500/15 text-amber-700 dark:bg-amber-500/20 dark:text-amber-400", "bg-amber-500 dark:bg-amber-400"],
     danger: ["bg-rose-500/15 text-rose-700 dark:bg-rose-500/20 dark:text-rose-400", "bg-rose-500"],

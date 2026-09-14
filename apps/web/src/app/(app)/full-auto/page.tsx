@@ -340,7 +340,7 @@ export default function FullAutoPage() {
                   <div className="w-full p-3 rounded-xl bg-slate-100 dark:bg-stone-800/60 flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
                     <span className="text-xs font-bold text-[var(--color-text-primary)]">채널당 하루 발행</span>
                     <div className="flex items-center gap-2">
-                      <span className="font-extrabold text-sm text-[#1C60FF]">{perDay}개</span>
+                      <span className="font-extrabold text-sm text-[var(--text-accent)]">{perDay}개</span>
                       <span className={`text-[11px] ${MUTED}`}>
                         {slots.length ? "시각당 개수의 합" : "시간 미지정 · 24시간 안에서"}
                       </span>

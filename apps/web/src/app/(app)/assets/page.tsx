@@ -293,9 +293,9 @@ export default function AssetsPage() {
               {/* + 새 폴더 Active Button */}
               <button
                 onClick={() => setIsNewFolderModalOpen(true)}
-                className="w-full h-10 px-4 rounded-xl bg-[var(--color-bg-card)] text-xs text-[var(--color-text-primary)] hover:text-[#1C60FF] font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer border-none shadow-md shadow-slate-900/5 dark:shadow-none active:scale-[0.98]"
+                className="w-full h-10 px-4 rounded-xl bg-[var(--color-bg-card)] text-xs text-[var(--color-text-primary)] hover:text-[var(--text-accent)] font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer border-none shadow-md shadow-slate-900/5 dark:shadow-none active:scale-[0.98]"
               >
-                <Plus className="w-4 h-4 text-[#1C60FF]" />
+                <Plus className="w-4 h-4 text-[var(--text-accent)]" />
                 <span>새 폴더</span>
               </button>
 
@@ -312,7 +312,7 @@ export default function AssetsPage() {
                   }}
                   className={`flex items-center gap-1.5 text-xs font-bold cursor-pointer transition-colors select-none ${
                     folder === ROOT
-                      ? "text-[#1C60FF] font-extrabold"
+                      ? "text-[var(--text-accent)] font-extrabold"
                       : "text-[var(--color-text-muted)] hover:text-[var(--color-text-primary)]"
                   }`}
                 >

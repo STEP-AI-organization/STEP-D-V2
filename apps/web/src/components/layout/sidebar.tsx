@@ -229,7 +229,7 @@ export function Sidebar() {
               className="p-2 rounded-full bg-[#1A1E29] text-white hover:bg-white/20 transition-colors cursor-pointer border !border-white/10"
             >
               {theme === "dark" ? (
-                <Moon className="w-3.5 h-3.5 text-[#1C60FF]" />
+                <Moon className="w-3.5 h-3.5 text-[var(--text-accent)]" />
               ) : (
                 <Sun className="w-3.5 h-3.5 text-amber-400" />
               )}
@@ -305,7 +305,7 @@ function CreditLine() {
       className="flex items-center justify-between px-2 py-1.5 rounded-full hover:bg-white/10 text-xs transition-colors cursor-pointer group"
     >
       <span className="text-slate-400 group-hover:text-slate-200 transition-colors">크레딧</span>
-      <span className="font-bold text-white group-hover:text-[#1C60FF] transition-colors">
+      <span className="font-bold text-white group-hover:text-[var(--text-accent)] transition-colors">
         {balance === null ? "—" : balance.toLocaleString("ko-KR")}
       </span>
     </Link>
