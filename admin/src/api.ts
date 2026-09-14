@@ -324,7 +324,8 @@ export const api = {
   registerBillingCard: (tenantId: string, body: {
     credential: { number: string; expiryMonth: string; expiryYear: string;
                   birthOrBusinessRegistrationNumber?: string; passwordTwoDigits?: string };
-    buyer: { fullName: string; email: string; phoneNumber: string };
+    /** 이메일은 안 보낸다 — PG 알림 주소는 서버가 우리 것으로 고정한다. */
+    buyer: { fullName: string; phoneNumber: string };
     /** 남의 회사를 바꾸는 일이라 서버가 4자 이상 사유를 요구한다. */
     reason: string;
   }) =>

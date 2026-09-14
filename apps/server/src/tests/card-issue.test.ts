@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import { checkCardCredential } from "../billing/card-credential.ts";
+import { pgNotifyEmail } from "../billing/billing-card.ts";
 import { CardIssueError, issueBillingKey } from "../billing/portone.ts";
 
 const credential = { number: "4242424242424242", expiryMonth: "09", expiryYear: "30" };
@@ -39,7 +40,8 @@ describe("자체 입력창 카드 검증", () => {
 describe("포트원 서버 발급", () => {
   const input = {
     storeId: "store-test", channelKey: "billing-channel-test", customerId: "workspace-test",
-    customer: { fullName: "테스트", email: "test@example.com", phoneNumber: "01012345678" }, credential,
+    // ↓ 소비자 주소를 일부러 넣는다 — 이게 PG 로 새면 테스트가 잡아야 한다.
+    customer: { fullName: "테스트", email: "consumer-should-not-receive@example.com", phoneNumber: "01012345678" }, credential,
   };
 
   it("빌링 채널과 구매자를 보내고 공식 응답의 billingKeyInfo에서 키를 읽는다", async (t) => {
@@ -58,10 +60,19 @@ describe("포트원 서버 발급", () => {
     assert.equal(request.storeId, input.storeId);
     assert.equal(request.channelKey, input.channelKey);
     assert.deepEqual(request.method, { card: { credential } });
+    /**
+     * ⚠️ **email 은 부르는 쪽이 준 값이 아니라 우리 주소다** (2026-09-14).
+     * 이니시스는 이 주소로 자기 결제완료 메일을 보낸다 — 소비자 주소를 실으면 한 결제에
+     * 메일이 두 통 간다(이니시스 것 + 우리 영수증). 역할을 갈랐다:
+     * 이니시스 = 판매자(우리) 확인용 · 영수증 = 우리 서버가 고객에게.
+     * 배선 정본: `docs/ops/billing-emails.md`
+     */
     assert.deepEqual(request.customer, {
       id: input.customerId, name: { full: input.customer.fullName },
-      email: input.customer.email, phoneNumber: input.customer.phoneNumber,
+      email: pgNotifyEmail(), phoneNumber: input.customer.phoneNumber,
     });
+    assert.notEqual(request.customer.email, "consumer-should-not-receive@example.com",
+      "소비자 주소가 PG 로 나간다");
     assert.equal(request.amount, undefined, "등록은 결제를 실행하지 않는다");
     assert.ok(requests[0].init?.signal, "발급 요청에는 타임아웃이 필요하다");
   });
