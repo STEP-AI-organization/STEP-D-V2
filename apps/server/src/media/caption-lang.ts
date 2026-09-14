@@ -43,9 +43,15 @@ export interface CaptionLang {
    * 한글도 같이 덮어야 한다 — 프로그램명·등록 인물명은 번역하지 않고 원문으로 남는다.
    */
   allowFonts: FontId[];
-  /** 썸네일 오버레이(Pillow)용 폰트 파일. Pillow 는 폴백을 안 해 두부(□)를 그대로 그린다. */
-  thumbnailFont: string;
 }
+
+// ⚠️ **`thumbnailFont` 을 여기 다시 넣지 말 것 (2026-09-14 제거).**
+// 필드는 있었는데 **읽는 곳이 0이었다.** 언어를 추가하는 사람이 값을 채우고 "썸네일도
+// 처리했다" 고 믿게 되는데, 실제 제어는 파이썬 쪽 `core/thumbnail/caption_overlay.py` 의
+// `LANG_FONT_FALLBACK`(역할 글꼴 → 대체 글꼴 매핑)이다. 개념도 다르다 — 여기 있던 건
+// "이 언어의 기본 글꼴", 저기 있는 건 "못 덮는 글꼴을 무엇으로 바꾸나" 다.
+// 썸네일 두부(□)는 `caption-lang.test.ts` 의 "썸네일: … 대체표에 있다" 가 언어마다
+// cmap 으로 검사한다.
 
 /** 한국어 — 기존 동작의 기준값. 여기 숫자를 바꾸면 기존 렌더가 바뀐다. */
 const KO: CaptionLang = {
@@ -58,7 +64,6 @@ const KO: CaptionLang = {
   titleWrapAt: 14,
   titleWrapBudget: 16,
   allowFonts: [],        // 빈 배열 = 제한 없음 (모든 카탈로그 글꼴이 한글을 덮는다)
-  thumbnailFont: "BlackHanSans-Regular.ttf",
 };
 
 /**
@@ -76,10 +81,42 @@ const VI: CaptionLang = {
   titleWrapAt: 21,       // 14 × 0.864 / 0.585
   titleWrapBudget: 24,
   allowFonts: ["pretendard", "gothica1"],
-  thumbnailFont: "Pretendard-Bold.otf",
 };
 
-export const CAPTION_LANGS: Record<string, CaptionLang> = { ko: KO, vi: VI };
+/**
+ * 인도네시아어. **표준 철자에 발음기호가 없다** — a–z 만 쓴다(고유명사 제외).
+ *
+ * 그래서 베트남어와 달리 **글꼴 제한이 필요 없다.** 번들 11종 cmap 실측(2026-09-14)에서
+ * 전부 100% 덮었다 — 검은고딕·주아·도현처럼 베트남어를 0% 덮던 것들까지 포함해서다.
+ * `allowFonts` 를 비워 두면 편집기에서 어떤 글꼴을 골라도 안 깨진다(= 한국어와 같은 취급).
+ * 썸네일 대체표(`caption_overlay.py LANG_FONT_FALLBACK`)에 항목이 없는 것도 같은 이유다.
+ */
+const ID: CaptionLang = {
+  code: "id",
+  nameKo: "인도네시아어",
+  nameNative: "Bahasa Indonesia",
+  widthEm: 0.535,        // Pretendard-ExtraBold hmtx 실측 — 실제 자막 문장 221자 가중평균
+  captionMaxChars: 18,   // 9.5em / 0.535 — 한국어 11자와 같은 폭
+  titleMaxChars: 65,     // 40 × 0.864 / 0.535
+  titleWrapAt: 23,       // 14 × 0.864 / 0.535
+  titleWrapBudget: 26,
+  allowFonts: [],        // 빈 배열 = 제한 없음 (번들 11종 전부 100%)
+};
+
+/** 영어. 인도네시아어와 같은 이유로 글꼴 제한이 없다(라틴 기본 문자만). */
+const EN: CaptionLang = {
+  code: "en",
+  nameKo: "영어",
+  nameNative: "English",
+  widthEm: 0.524,        // 실제 자막 문장 186자 가중평균
+  captionMaxChars: 18,   // 9.5em / 0.524
+  titleMaxChars: 66,     // 40 × 0.864 / 0.524
+  titleWrapAt: 23,
+  titleWrapBudget: 26,
+  allowFonts: [],
+};
+
+export const CAPTION_LANGS: Record<string, CaptionLang> = { ko: KO, vi: VI, id: ID, en: EN };
 
 /** 기본(한국어). 언어 미지정·미지원 값은 전부 여기로 떨어진다 — 기존 동작이 그대로 유지된다. */
 export const DEFAULT_LANG = KO;

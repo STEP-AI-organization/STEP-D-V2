@@ -94,8 +94,22 @@ const WORK_DIR_TTL_MS = 48 * 60 * 60 * 1000;
 /** Stage outputs core/analyze.py checkpoints into the work dir (upload order). */
 // 워커가 GCS 로 왕복시키는 체크포인트. 여기 빠지면 재실행 때 그 스테이지를 다시 돈다 —
 // chyron.json 은 재생성이 회당 ₩150 이라 특히 중요. (signals/genre 는 ₩0 이지만 일관성 위해 포함)
+/**
+ * 해외 배포 자막(`refined.{lang}.json`) — **언어 표에서 파생한다.**
+ *
+ * 2026-09-14 이전엔 `"refined.vi.json"` 이 손으로 적혀 있었다. 그래서 인도네시아어·영어를
+ * 표에 추가했을 때 여기만 빠졌고, 그 언어들은 체크포인트에 안 실려 **재시도마다 번역을
+ * 다시 샀다**(회차·언어당 ₩13~90). 바로 아래 `collectI18nTranscripts` 는 같은 파일 안에서
+ * 이미 `CAPTION_LANGS` 를 순회하고 있었다 — 한쪽만 손으로 적힌 비대칭이었다.
+ *
+ * 목록을 손으로 적으면 언어를 늘릴 때 **반드시** 빠진다. 표에서 뽑는다.
+ */
+const I18N_CHECKPOINTS = Object.keys(CAPTION_LANGS)
+  .filter((code) => code !== DEFAULT_LANG.code)   // 한국어는 refined.json 본체가 정본
+  .map((code) => `refined.${code}.json`);
+
 const CHECKPOINT_FILES = ["analysis.json", "scenes.json", "cast.json", "timeline.json", "narrative.json", "shorts.json", "refined.json", "faces.json", "ppl.json", "stt.json", "manifest.json", "comments.json", "viewer_signals.json", "beats.json", "boundaries.json", "shots.json", "scene_type.json", "signals.json", "genre.json", "chyron.json",
-  "refined.vi.json",
+  ...I18N_CHECKPOINTS,
   // 스테이지가 아니라 **원가 증빙**이다. 여기 넣어야 ① 작업 디렉토리가 날아가도 누적 원가가
   // 살아남고(재개 회차가 과소계상되지 않는다) ② 나중에 "그 편이 왜 비쌌나" 를 되짚을 수 있다.
   "usage.json"];

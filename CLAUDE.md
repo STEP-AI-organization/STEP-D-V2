@@ -213,6 +213,14 @@ EMBED_MODEL / EMBED_DIM                   검색 임베딩 (기본 text-multilin
 GEMINI_SUPPORT_MODEL / GEMINI_SUPPORT_LOCATION
                       챗봇·리포트 모델 (기본 gemini-2.5-flash-lite · global). **둘은 세트다** —
                       asia-northeast3 에서 flash-lite 는 404 라 리전을 안 바꾸면 죽는다(ai/models.ts)
+GEMINI_TRANSLATE_MODEL   해외 배포 자막 번역 (core/stt/translate_out.py · 비면 GEMINI_MODEL).
+                      실측 2026-09-14(같은 회차·같은 입력 · 925줄 환산): flash **₩90** vs
+                      flash-lite **₩13** — 7배. **언어 수만큼 곱해지는 비용**이라 다른
+                      스테이지보다 이 선택이 크게 작용한다.
+                      ⚠️ flash-lite 는 **본문이 외국어·외국을 다루는 구간**에서 목표 언어를
+                      놓치기 쉽다(같은 60줄 4회 중 3회 영어). 배치 끝에 목표 언어를 다시
+                      박는 수정이 translate_out.py 에 있고, **그게 실린 워커 이미지가 배포된
+                      뒤에만** 이 값을 내릴 것 — 순서가 바뀌면 영어 자막이 id 라벨로 나간다
 WORKER_JOBS           content | youtube | gebd | naver,download | commerce | all(기본)  ← 레인 선택
 WORKER_MODE           drain 이면 큐 비는 즉시 종료 / DRAIN_MAX_MS(기본 50분)
 YOUTUBE_UPLOAD_ENABLED   실업로드 게이트. 미설정·오타·빈값 = OFF

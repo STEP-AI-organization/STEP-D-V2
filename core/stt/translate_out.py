@@ -63,8 +63,18 @@ class Lang:
 
 
 # 지원 언어. 추가할 때 width_em 은 **폰트에서 실측**할 것 — 짐작하면 자막이 넘치거나 짧아진다.
+#
+# ⚠️ 이 표는 서버 `caption-lang.ts` 의 CAPTION_LANGS 와 **쌍둥이**다. width_em 과
+# screen_chars 가 갈라지면 core 가 "≤N자" 로 번역을 묶는 기준과 서버가 자막을 접는 폭이
+# 달라진다 — 매번 2줄로 접히거나, 뜻을 깎고도 화면 폭이 남는다.
+# `caption-lang.test.ts` 의 "쌍둥이" 검사가 두 값 일치를 강제한다(모든 언어 순회).
 LANGS: dict[str, Lang] = {
     "vi": Lang("vi", "베트남어", "Tiếng Việt", 0.585, 16),
+    # 인도네시아어·영어는 표준 철자에 발음기호가 없어 폭이 베트남어보다 좁다
+    # (성조 부호가 advance 를 키우지 않는다). 2026-09-14 Pretendard-ExtraBold hmtx 실측:
+    # 실제 자막 문장의 글자 구성비로 가중평균 — 인니 221자 표본 0.535 · 영 186자 표본 0.524.
+    "id": Lang("id", "인도네시아어", "Bahasa Indonesia", 0.535, 18),
+    "en": Lang("en", "영어", "English", 0.524, 18),
 }
 
 _HANGUL_SYL = re.compile(r"[가-힣]")
@@ -203,7 +213,19 @@ def translate_out(
         for j, i in enumerate(idxs):
             text = str(out[i]["text"])
             lines.append(f"{j + 1}. [≤{_max_chars(text, lang)}자] {text}")
-        numbered = "\n".join(lines)
+        # ⚠️ **목표 언어를 맨 뒤에 한 번 더 박는다.** system_instruction 에만 두면 긴 입력
+        # 뒤쪽에서 밀린다 — 특히 **본문이 외국어·외국을 다루는 구간**에서 그렇다.
+        # 실측(2026-09-14 · 같은 60줄 배치 반복): "프랑스어 배우기" 구간에서
+        # flash-lite 가 4번 중 3번을 **영어로** 번역했다. 다른 내용 구간(offset 120·240)은
+        # 3번씩 전부 정상이었으니 모델 고장이 아니라 **그 입력이 목표 언어를 덮은 것**이다.
+        # 오류가 안 나고 refined.{lang}.json 이 그대로 저장되므로 발행 뒤에야 안다.
+        #
+        # 캐싱은 안 깨진다 — 고정부(system)는 그대로고 이 줄은 변동부(user) 맨 뒤다.
+        numbered = (
+            "\n".join(lines)
+            + f"\n\n위 {len(lines)}줄을 전부 **{lang.name_ko}({lang.name_en})** 로 옮겨라."
+            + f" 본문이 다른 나라·다른 언어를 이야기하더라도 출력 언어는 {lang.name_ko} 다."
+        )
         try:
             resp = call_with_retry(lambda: client.models.generate_content(
                 model=MODEL,
