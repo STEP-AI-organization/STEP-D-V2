@@ -28,7 +28,7 @@ export function Sidebar() {
   return (
     <aside
       className="fixed inset-y-0 left-0 z-30 flex w-[206px] flex-col border-r"
-      style={{ background: "var(--sd-sidebar-bg)", borderColor: "var(--sd-sidebar-border)", padding: "14px 10px" }}
+      style={{ background: "var(--color-bg-card)", borderColor: "var(--color-border-subtle)", padding: "14px 10px" }}
     >
       <Link href="/dashboard" className="mb-3 flex items-center gap-2 px-2">
         {/* 랜딩·로그인과 같은 브랜드 마크 — 글자 "D" 배지는 브랜드 아이콘으로 교체(2026-08-13). */}
@@ -40,7 +40,7 @@ export function Sidebar() {
           draggable={false}
           className="size-[18px] rounded-[4px]"
         />
-        <span className="sd-serif text-[13px] font-semibold" style={{ color: "var(--sd-fg)" }}>
+        <span className="text-[13px] font-semibold" style={{ color: "var(--color-text-primary)" }}>
           STEP-D
         </span>
       </Link>
@@ -49,7 +49,7 @@ export function Sidebar() {
         {NAV_GROUPS.map((group, gi) => (
           <div key={group.label ?? `g${gi}`} className={gi > 0 ? "mt-4" : undefined}>
             {group.label && (
-              <div className="sd-eb px-2 pb-1.5" style={{ color: "var(--sd-label)" }}>
+              <div className="text-[11px] font-bold text-[var(--color-text-muted)] px-2 pb-1.5" style={{ color: "var(--color-text-muted)" }}>
                 {group.label}
               </div>
             )}
@@ -62,7 +62,7 @@ export function Sidebar() {
                     <Link
                       href={item.href}
                       aria-current={active ? "page" : undefined}
-                      className={cn("sd-nav-item", active && "sd-nav-item--active")}
+                      className={cn("flex items-center gap-2 rounded-lg px-2.5 py-2 text-xs font-medium text-[var(--color-text-muted)] hover:bg-[var(--color-bg-input)] transition-colors", active && "bg-[var(--color-bg-active)] text-white")}
                     >
                       <Icon className="size-[13px] shrink-0" aria-hidden />
                       <span className="truncate">{item.label}</span>
@@ -73,8 +73,8 @@ export function Sidebar() {
                           title="화면 준비 중 — 무엇이 올 자리인지만 표시됩니다"
                           style={
                             active
-                              ? { background: "rgba(255,255,255,.22)", color: "var(--sd-on-accent)" }
-                              : { background: "var(--sd-card-sub)", color: "var(--sd-mut)" }
+                              ? { background: "rgba(255,255,255,.22)", color: "#fff" }
+                              : { background: "var(--color-bg-input)", color: "var(--color-text-muted)" }
                           }
                         >
                           예정
@@ -130,11 +130,11 @@ function CreditBalance() {
     <Link
       href="/credits"
       className="mt-3 flex items-center gap-1.5 px-2 py-1 text-[10.5px]"
-      style={{ color: low ? "var(--sd-danger-strong)" : "var(--sd-mut)" }}
+      style={{ color: low ? "#E11D48" : "var(--color-text-muted)" }}
       title={balance === null ? "잔액을 읽지 못했습니다 — 크레딧 화면에서 확인하세요" : "크레딧 1개 = 분석 1분"}
     >
       <span>크레딧</span>
-      <span className="sd-mono ml-auto">
+      <span className="font-mono ml-auto">
         {balance === null ? "—" : balance.toLocaleString("ko-KR")}
       </span>
     </Link>
@@ -156,11 +156,11 @@ function NavBadge({ badgeKey, active }: { badgeKey?: "gateHold" | "distributionF
 
   return (
     <span
-      className="sd-mono ml-auto shrink-0 rounded-full px-1.5 text-[10px]"
+      className="font-mono ml-auto shrink-0 rounded-full px-1.5 text-[10px]"
       style={
         active
-          ? { background: "rgba(255,255,255,.22)", color: "var(--sd-on-accent)" }
-          : { background: "var(--sd-danger-bg)", color: "var(--sd-danger-strong)" }
+          ? { background: "rgba(255,255,255,.22)", color: "#fff" }
+          : { background: "rgb(244 63 94 / 0.10)", color: "#E11D48" }
       }
     >
       {n}
@@ -184,18 +184,18 @@ function CurrentUser() {
       <div className="min-w-0 flex-1">
         {/* 워크스페이스(회사) 이름 — 로그인 후 "어느 회사 것인지" 바로 알게(사용자 2026-08-20). 없으면 생략. */}
         {session.workspaceName ? (
-          <div className="truncate text-[11.5px] font-semibold" style={{ color: "var(--sd-fg)" }} title={`워크스페이스: ${session.workspaceName}`}>
+          <div className="truncate text-[11.5px] font-semibold" style={{ color: "var(--color-text-primary)" }} title={`워크스페이스: ${session.workspaceName}`}>
             {session.workspaceName}
           </div>
         ) : null}
-        <div className="truncate text-[10.5px]" style={{ color: "var(--sd-mut)" }}>
+        <div className="truncate text-[10.5px]" style={{ color: "var(--color-text-muted)" }}>
           {session.user.name} · {roleOf(session.user.role).label}
         </div>
       </div>
       <button
         type="button"
         className="shrink-0 text-[10.5px] underline-offset-2 hover:underline"
-        style={{ color: "var(--sd-mut)" }}
+        style={{ color: "var(--color-text-muted)" }}
         onClick={async () => {
           await logout();
           // 전체 리로드 — 안 그러면 SessionProvider 가 여전히 로그인 상태를 들고 있어
@@ -266,12 +266,12 @@ function ConnectionStatus() {
   }, []);
 
   const label = ok === null ? "연결 확인 중…" : ok ? "서버 연결됨" : "서버 미연결";
-  const color = ok === null ? "var(--sd-idle)" : ok ? "var(--sd-ok)" : "var(--sd-danger)";
+  const color = ok === null ? "var(--color-text-muted)" : ok ? "#059669" : "#E11D48";
 
   return (
-    <div className="mt-3 flex items-center gap-1.5 px-2 pt-2" style={{ borderTop: "1px solid var(--sd-sidebar-border)" }}>
+    <div className="mt-3 flex items-center gap-1.5 px-2 pt-2" style={{ borderTop: "1px solid var(--color-border-subtle)" }}>
       <span className="size-[7px] shrink-0 rounded-full" style={{ background: color }} aria-hidden />
-      <span className="truncate text-[10.5px]" style={{ color: "var(--sd-mut)" }}>{label}</span>
+      <span className="truncate text-[10.5px]" style={{ color: "var(--color-text-muted)" }}>{label}</span>
     </div>
   );
 }

@@ -112,10 +112,10 @@ function SummaryMarkdown({
       const content = h[2];
       const cls =
         level === 1
-          ? 'text-base font-semibold text-foreground'
+          ? 'text-base font-semibold text-[var(--color-text-primary)]'
           : level === 2
             ? 'text-sm font-semibold text-primary'
-            : 'text-sm font-medium text-foreground';
+            : 'text-sm font-medium text-[var(--color-text-primary)]';
       // 헤딩 태그를 동적으로 결정 (h1/h2/h3)
       const Tag = (`h${level}` as unknown) as keyof React.JSX.IntrinsicElements;
       nodes.push(

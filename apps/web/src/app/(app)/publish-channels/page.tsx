@@ -33,6 +33,7 @@ import {
 import { NaverAccounts } from "@/components/publish/naver-accounts";
 import { CoupangAccount } from "@/components/publish/coupang-account";
 import { ChannelAnalysis } from "@/components/channel-analysis";
+import { BTN, BTN_DEL, BTN_PRIMARY } from "@/components/ui/tokens";
 import {
   DISTRIBUTION_CHANNELS,
   type DistributionChannel,
@@ -99,13 +100,8 @@ const AVATAR_BG = ["bg-red-600", "bg-emerald-600", "bg-indigo-600", "bg-blue-700
 const LIST_CARD = "bg-[var(--color-bg-card)] border-none rounded-2xl p-4 shadow-md shadow-slate-900/5 dark:shadow-none divide-y divide-[var(--color-border-subtle)]/60 text-xs";
 /** 원본 4분할 행 (D:588·596). */
 const ROW_GRID = "grid grid-cols-1 sm:grid-cols-[38%_16%_22%_24%] items-center gap-2 sm:gap-0";
-/** 원본 보조 버튼 / 삭제 버튼 (D:626·633). */
-const BTN = "px-3 py-1.5 rounded-full bg-[var(--color-bg-input)] hover:bg-[var(--color-bg-card-hover)] text-xs text-[var(--color-text-primary)] border border-[var(--color-border-subtle)] font-medium cursor-pointer shadow-none";
-const BTN_DEL = "px-3 py-1.5 rounded-full bg-[var(--color-bg-card)] hover:bg-rose-50 hover:text-rose-600 hover:border-rose-200 dark:hover:bg-rose-950/60 dark:hover:text-rose-400 dark:hover:border-rose-900 text-xs text-[var(--color-text-primary)] border border-[var(--color-border-subtle)] font-medium cursor-pointer transition-colors shadow-none";
 /** 원본 액션 배너 (D:568). */
 const ACTION_CARD = "bg-[var(--color-bg-card)] border-none p-3.5 rounded-2xl flex items-center justify-between text-xs shadow-md shadow-slate-900/5 dark:shadow-none";
-const BTN_PRIMARY = "px-3.5 py-2 rounded-full bg-[#222222] hover:bg-black text-white dark:bg-stone-700 dark:hover:bg-stone-600 text-xs font-bold cursor-pointer shadow-none border-none transition-colors";
-
 /** 원본 상태 배지는 초록 '활성' 하나뿐이다(D:612). 톤만 갈랐다. */
 function StatusPill({ label, tone }: { label: string; tone: "ok" | "warn" | "idle" }) {
   const cls =

@@ -32,7 +32,7 @@ export default function AppGroupLayout({ children }: { children: React.ReactNode
       {/* ThemeProvider 는 사이드바의 Dark/Light 필이 요구한다. 첫 페인트 테마는 루트
           layout.tsx 의 무플래시 스크립트가 정한다 — 키·기본값이 같아 충돌하지 않는다. */}
       <ThemeProvider>
-        <div className="sd-ui-font flex h-screen w-screen overflow-hidden bg-[var(--color-bg-dark)]">
+        <div className="ui-font flex h-screen w-screen overflow-hidden bg-[var(--color-bg-dark)]">
           <Sidebar />
 
           {/* Right Content View Area */}

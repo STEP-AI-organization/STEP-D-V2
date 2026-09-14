@@ -102,7 +102,7 @@ function LoginInner() {
   };
 
   return (
-    <div className="sd-ui-font relative min-h-screen w-screen bg-[#05060A] text-slate-100 select-none overflow-hidden flex">
+    <div className="ui-font relative min-h-screen w-screen bg-[#05060A] text-slate-100 select-none overflow-hidden flex">
       {/* Background image: login_background_image1.jpg from public folder with blur 15 */}
       <div
         className="absolute inset-0 w-full h-full bg-cover bg-center pointer-events-none z-0 opacity-90 blur-[15px] scale-105"

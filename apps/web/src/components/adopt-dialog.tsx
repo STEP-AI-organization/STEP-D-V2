@@ -38,15 +38,15 @@ export function AdoptDialog({
       onClick={() => { if (!busy) onClose(); }}
     >
       <div
-        className="w-full max-w-md rounded-lg border bg-background p-5 shadow-lg"
+        className="w-full max-w-md rounded-lg border bg-[var(--color-bg-input)] p-5 shadow-lg"
         onClick={(e) => e.stopPropagation()}
       >
         <h3 className="text-sm font-semibold">채택 — {title || "쇼츠 후보"}</h3>
-        <p className="mt-1 text-xs text-muted-foreground">어떤 형태로 가져올지 고르세요.</p>
+        <p className="mt-1 text-xs text-[var(--color-text-muted)]">어떤 형태로 가져올지 고르세요.</p>
 
         {/* ① 방향 */}
         <div className="mt-4">
-          <div className="text-[11px] font-semibold text-muted-foreground">① 방향</div>
+          <div className="text-[11px] font-semibold text-[var(--color-text-muted)]">① 방향</div>
           <div className="mt-2 grid grid-cols-2 gap-2">
             <Choice
               active={orientation === "portrait"}
@@ -66,7 +66,7 @@ export function AdoptDialog({
         {/* ② AI 리프레임 — 세로형일 때만 (가로는 크롭이 없어 무의미) */}
         {orientation === "portrait" && (
           <div className="mt-4">
-            <div className="text-[11px] font-semibold text-muted-foreground">② AI 리프레임</div>
+            <div className="text-[11px] font-semibold text-[var(--color-text-muted)]">② AI 리프레임</div>
             <div className="mt-2 grid grid-cols-2 gap-2">
               <Choice
                 active={reframe === "ai"}
@@ -81,7 +81,7 @@ export function AdoptDialog({
                 sub="중앙 고정 크롭"
               />
             </div>
-            <p className="mt-1.5 text-[10px] leading-relaxed text-muted-foreground">
+            <p className="mt-1.5 text-[10px] leading-relaxed text-[var(--color-text-muted)]">
               ON은 채택 직후 얼굴 추적 분석을 시작합니다(잠깐 소요). 에디터에서 나중에 켤 수도 있습니다.
             </p>
           </div>
@@ -129,7 +129,7 @@ function Choice({
       )}
     >
       <div className="text-[12.5px] font-medium">{title}</div>
-      <div className="text-[10.5px] text-muted-foreground">{sub}</div>
+      <div className="text-[10.5px] text-[var(--color-text-muted)]">{sub}</div>
     </button>
   );
 }

@@ -1770,6 +1770,30 @@ export async function fetchSavedCard(): Promise<SavedCard> {
   return json(await fetch(`${API_BASE}/billing/card`, { cache: "no-store", credentials: "include" }));
 }
 
+/** 카드 원문은 이 요청에만 사용한다. 전역 스토어·브라우저 저장소에 보관하지 않는다. */
+export interface CardCredentialInput {
+  number: string;
+  expiryMonth: string;
+  expiryYear: string;
+  birthOrBusinessRegistrationNumber?: string;
+  passwordTwoDigits?: string;
+}
+
+export async function registerCard(input: {
+  credential: CardCredentialInput;
+  buyer: { fullName: string; email: string; phoneNumber: string };
+  autoChargeConsent: true;
+}): Promise<void> {
+  const res = await fetch(`${API_BASE}/billing/card/issue`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    cache: "no-store",
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) throw new ApiError(res.status, await errorMessageOf(res));
+}
+
 export interface CardIssuePrep {
   storeId: string;
   channelKey: string;

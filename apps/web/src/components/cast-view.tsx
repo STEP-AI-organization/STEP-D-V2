@@ -74,7 +74,7 @@ export function CastView({ mediaId }: { mediaId: string | undefined }) {
 
   if (loading && !data) {
     return (
-      <Card className="p-6 text-center text-sm text-muted-foreground">
+      <Card className="p-6 text-center text-sm text-[var(--color-text-muted)]">
         인물 정보를 불러오는 중…
       </Card>
     );
@@ -85,7 +85,7 @@ export function CastView({ mediaId }: { mediaId: string | undefined }) {
       <Card className="space-y-2 p-4 text-center">
         <AlertTriangle className="mx-auto size-4 text-status-error" />
         <div className="text-sm font-semibold">인물 정보를 불러오지 못했습니다</div>
-        <div className="text-[11px] text-muted-foreground">{error}</div>
+        <div className="text-[11px] text-[var(--color-text-muted)]">{error}</div>
         <Button size="xs" variant="outline" onClick={() => setNonce((n) => n + 1)}>
           다시 시도
         </Button>
@@ -106,7 +106,7 @@ export function CastView({ mediaId }: { mediaId: string | undefined }) {
 
   return (
     <div className="space-y-2">
-      <div className="text-[11px] font-semibold text-muted-foreground">
+      <div className="text-[11px] font-semibold text-[var(--color-text-muted)]">
         감지된 인물 {data.people.length}명 (매칭 {data.matchedCount}명)
       </div>
       {data.people.map((p) => (
@@ -161,7 +161,7 @@ function PersonCard({
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-sm font-bold">{person.name}</span>
         {person.role && (
-          <span className="text-[11px] text-muted-foreground">{person.role}</span>
+          <span className="text-[11px] text-[var(--color-text-muted)]">{person.role}</span>
         )}
         {meta && (
           <StatusBadge tone={meta.tone} className="ml-auto">
@@ -170,7 +170,7 @@ function PersonCard({
         )}
       </div>
 
-      <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+      <div className="mt-1 flex flex-wrap items-center gap-2 text-[11px] text-[var(--color-text-muted)]">
         <span>
           {person.sceneCount ?? 0}개 장면 · 총 {Math.round(person.totalSec ?? 0)}초
         </span>
@@ -184,7 +184,7 @@ function PersonCard({
           {person.appearances.map((a, i) => (
             <span
               key={i}
-              className="rounded-md bg-muted px-1.5 py-0.5 text-[10px] tabular-nums text-muted-foreground"
+              className="rounded-md bg-muted px-1.5 py-0.5 text-[10px] tabular-nums text-[var(--color-text-muted)]"
             >
               {formatTimecode(a.start)}~{formatTimecode(a.end)}
             </span>

@@ -39,7 +39,7 @@ export function UploadClipButton({
     <>
       <button
         type="button"
-        className={className ?? "sd-btn"}
+        className={className ?? "px-3.5 py-1.5 rounded-full bg-[var(--color-bg-input)] hover:bg-[var(--color-bg-card-hover)] text-xs text-[var(--color-text-primary)] border border-[var(--color-border-subtle)] font-medium cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed"}
         onClick={() => setOpen(true)}
         disabled={!serverConnected}
         title={serverConnected ? undefined : "서버에 연결되지 않았습니다"}
@@ -149,16 +149,16 @@ function UploadClipDialog({
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/55" onClick={busy ? undefined : onClose} aria-hidden />
       <div
-        className="sd-modal relative flex max-h-[90vh] w-full max-w-[520px] flex-col bg-[var(--sd-card)]"
+        className="rounded-2xl border border-[var(--color-border-card)] shadow-2xl overflow-hidden relative flex max-h-[90vh] w-full max-w-[520px] flex-col bg-[var(--color-bg-card)]"
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
       >
-        <div className="px-4 py-3" style={{ borderBottom: "1px solid var(--sd-border)" }}>
-          <h2 className="sd-serif text-[14px] font-semibold" style={{ color: "var(--sd-fg)" }}>
+        <div className="px-4 py-3" style={{ borderBottom: "1px solid var(--color-border-subtle)" }}>
+          <h2 className="text-[14px] font-semibold" style={{ color: "var(--color-text-primary)" }}>
             완성 영상 업로드
           </h2>
-          <p className="mt-0.5 text-[11px]" style={{ color: "var(--sd-mut)" }}>
+          <p className="mt-0.5 text-[11px]" style={{ color: "var(--color-text-muted)" }}>
             이미 편집을 끝낸 영상을 올려 바로 배포합니다 — 분석 파이프라인을 거치지 않습니다.
           </p>
         </div>
@@ -169,7 +169,7 @@ function UploadClipDialog({
               value={programId}
               onChange={(e) => setProgramId(e.target.value)}
               disabled={busy}
-              className="sd-input w-full"
+              className="h-9 px-4 rounded-full bg-[var(--color-bg-input)] border border-[var(--color-border-subtle)] focus:border-[#1C60FF] text-xs text-[var(--color-text-primary)] placeholder-[var(--color-text-muted)] focus:outline-none transition-colors w-full"
             >
               {programs.length === 0 && <option value="">등록된 프로그램이 없습니다</option>}
               {programs.map((p) => (
@@ -193,7 +193,7 @@ function UploadClipDialog({
                 disabled={busy}
                 inputMode="numeric"
                 placeholder="예: 3 (모르면 비움)"
-                className="sd-input w-full"
+                className="h-9 px-4 rounded-full bg-[var(--color-bg-input)] border border-[var(--color-border-subtle)] focus:border-[#1C60FF] text-xs text-[var(--color-text-primary)] placeholder-[var(--color-text-muted)] focus:outline-none transition-colors w-full"
               />
             </L>
             <L label="유형" required>
@@ -203,7 +203,7 @@ function UploadClipDialog({
                     key={k}
                     type="button"
                     disabled={busy}
-                    className={cn("sd-btn flex-1", editKind === k && "sd-btn--on")}
+                    className={cn("px-3.5 py-1.5 rounded-full bg-[var(--color-bg-input)] hover:bg-[var(--color-bg-card-hover)] text-xs text-[var(--color-text-primary)] border border-[var(--color-border-subtle)] font-medium cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex-1", editKind === k && "border-[#1C60FF] bg-[#1C60FF]/10")}
                     onClick={() => setEditKind(k)}
                   >
                     {EDIT_KIND_LABEL[k]}
@@ -233,19 +233,19 @@ function UploadClipDialog({
               busy ? "cursor-not-allowed opacity-60" : "cursor-pointer",
             )}
             style={{
-              border: `2px dashed ${dragOver ? "var(--sd-accent)" : "var(--sd-border)"}`,
-              background: dragOver ? "var(--sd-accent-bg)" : "transparent",
+              border: `2px dashed ${dragOver ? "#1C60FF" : "var(--color-border-subtle)"}`,
+              background: dragOver ? "var(--color-bg-input)" : "transparent",
             }}
           >
-            <Film className="size-6" style={{ color: "var(--sd-idle)" }} />
+            <Film className="size-6" style={{ color: "var(--color-text-muted)" }} />
             {file ? (
               <div>
-                <div className="text-[12.5px] font-medium" style={{ color: "var(--sd-fg)" }}>{file.name}</div>
-                <div className="sd-mono text-[11px]" style={{ color: "var(--sd-mut)" }}>{fmtSize(file.size)}</div>
+                <div className="text-[12.5px] font-medium" style={{ color: "var(--color-text-primary)" }}>{file.name}</div>
+                <div className="font-mono text-[11px]" style={{ color: "var(--color-text-muted)" }}>{fmtSize(file.size)}</div>
               </div>
             ) : (
-              <div className="text-[12.5px]" style={{ color: "var(--sd-mut)" }}>
-                완성 영상을 끌어다 놓거나 <span style={{ color: "var(--sd-accent)" }}>클릭해서 선택</span>
+              <div className="text-[12.5px]" style={{ color: "var(--color-text-muted)" }}>
+                완성 영상을 끌어다 놓거나 <span style={{ color: "#1C60FF" }}>클릭해서 선택</span>
                 {/* 완성본 업로드 — 게시본은 MP4 가 정본이다. MXF 도 받아 변환하지만
                     "완성 영상" 자리에선 MP4 를 권하는 게 맞다(재인코딩 없이 그대로 나간다). */}
                 <div className="text-[11px]">MP4 권장 · MOV · MXF 도 가능(자동으로 MP4 변환) · 세로/가로는 원본대로 유지</div>
@@ -266,28 +266,28 @@ function UploadClipDialog({
               onChange={(e) => setTitle(e.target.value)}
               disabled={busy}
               placeholder={file?.name ?? "비우면 파일명"}
-              className="sd-input w-full"
+              className="h-9 px-4 rounded-full bg-[var(--color-bg-input)] border border-[var(--color-border-subtle)] focus:border-[#1C60FF] text-xs text-[var(--color-text-primary)] placeholder-[var(--color-text-muted)] focus:outline-none transition-colors w-full"
             />
           </L>
 
           <Notice>
-            올린 영상은 <b style={{ color: "var(--sd-fg)" }}>있는 그대로</b> 클립이 됩니다 — 자막·리프레임을
+            올린 영상은 <b style={{ color: "var(--color-text-primary)" }}>있는 그대로</b> 클립이 됩니다 — 자막·리프레임을
             다시 입히지 않습니다. 세로/가로는 원본 비율로 판정됩니다.
           </Notice>
 
           {busy && (
             <div className="space-y-2">
               <div className="flex items-center justify-between text-[11.5px]">
-                <span style={{ color: "var(--sd-mut)" }}>
+                <span style={{ color: "var(--color-text-muted)" }}>
                   {pct < 100 ? "업로드 중…" : "서버 처리 중 (프로브·썸네일)…"}
                 </span>
-                <span className="sd-mono" style={{ color: "var(--sd-fg)" }}>{pct}%</span>
+                <span className="font-mono" style={{ color: "var(--color-text-primary)" }}>{pct}%</span>
               </div>
-              <div className="sd-progress">
+              <div className="h-1.5 rounded-full bg-[var(--color-bg-input)] overflow-hidden">
                 <span style={{ width: `${Math.max(2, pct)}%` }} />
               </div>
               {pct < 100 && file && (
-                <div className="sd-mono text-[10.5px]" style={{ color: "var(--sd-mut)" }}>
+                <div className="font-mono text-[10.5px]" style={{ color: "var(--color-text-muted)" }}>
                   {fmtSize(uploadedBytes)} / {fmtSize(file.size)}
                 </div>
               )}
@@ -302,17 +302,17 @@ function UploadClipDialog({
 
         <div
           className="flex items-center justify-end gap-2 px-4 py-3"
-          style={{ borderTop: "1px solid var(--sd-border)" }}
+          style={{ borderTop: "1px solid var(--color-border-subtle)" }}
         >
           {!busy && missing.length > 0 && (
-            <span className="mr-auto text-[11px]" style={{ color: "var(--sd-mut)" }}>
+            <span className="mr-auto text-[11px]" style={{ color: "var(--color-text-muted)" }}>
               {missing.join(" · ")} 이(가) 필요합니다
             </span>
           )}
-          <button type="button" className="sd-btn" onClick={onClose} disabled={busy}>취소</button>
+          <button type="button" className="px-3.5 py-1.5 rounded-full bg-[var(--color-bg-input)] hover:bg-[var(--color-bg-card-hover)] text-xs text-[var(--color-text-primary)] border border-[var(--color-border-subtle)] font-medium cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed" onClick={onClose} disabled={busy}>취소</button>
           <button
             type="button"
-            className="sd-btn sd-btn-primary"
+            className="px-3.5 py-1.5 rounded-full bg-[#1C60FF] hover:bg-[#0D1EB8] text-white text-xs font-bold border-none cursor-pointer transition-colors shadow-md shadow-[#1C60FF]/25 disabled:opacity-50 disabled:cursor-not-allowed"
             onClick={submit}
             disabled={!canSubmit}
           >
@@ -337,8 +337,8 @@ function L({
   return (
     <div>
       <div className="mb-1 flex items-baseline gap-1.5">
-        <span className="text-[11.5px] font-semibold" style={{ color: "var(--sd-fg)" }}>{label}</span>
-        {required && <span style={{ color: "var(--sd-danger)" }}>*</span>}
+        <span className="text-[11.5px] font-semibold" style={{ color: "var(--color-text-primary)" }}>{label}</span>
+        {required && <span style={{ color: "#E11D48" }}>*</span>}
       </div>
       {children}
     </div>
@@ -351,9 +351,9 @@ function Notice({ children, tone }: { children: React.ReactNode; tone?: "warn" }
     <div
       className="flex items-start gap-2 rounded-[4px] px-3 py-2 text-[11.5px] leading-relaxed"
       style={{
-        border: `1px solid ${warn ? "var(--sd-warn-border)" : "var(--sd-border)"}`,
-        background: warn ? "var(--sd-warn-bg)" : "var(--sd-card-sub)",
-        color: warn ? "var(--sd-warn)" : "var(--sd-mut)",
+        border: `1px solid ${warn ? "rgb(245 158 11 / 0.35)" : "var(--color-border-subtle)"}`,
+        background: warn ? "rgb(245 158 11 / 0.10)" : "var(--color-bg-input)",
+        color: warn ? "#D97706" : "var(--color-text-muted)",
       }}
     >
       {warn ? <AlertTriangle className="mt-px size-3.5 shrink-0" /> : <Info className="mt-px size-3.5 shrink-0" />}

@@ -12,6 +12,7 @@
  */
 import { useEffect } from "react";
 import { X } from "lucide-react";
+import { MODAL_W } from "@/components/ui/tokens";
 
 /**
  * 결제 화면 다이얼로그 껍데기. 오버레이 클릭·ESC·닫기 버튼으로 닫힌다 —
@@ -23,7 +24,7 @@ export function BillingDialog({
   onClose,
   children,
   footer,
-  maxWidth = 512,   // = max-w-lg (원본 MODAL 1 기본)
+  maxWidth = MODAL_W.lg,
   closeDisabled,
 }: {
   title: string;

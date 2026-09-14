@@ -115,18 +115,18 @@ export function WeeklyReportDialog({ onClose }: { onClose: () => void }) {
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-black/55" onClick={onClose} aria-hidden />
       <div
-        className="sd-modal relative flex max-h-[88vh] w-full max-w-[480px] flex-col bg-[var(--sd-card)]"
+        className="rounded-2xl border border-[var(--color-border-card)] shadow-2xl overflow-hidden relative flex max-h-[88vh] w-full max-w-[480px] flex-col bg-[var(--color-bg-card)]"
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
       >
-        <div className="px-4 py-3" style={{ borderBottom: "1px solid var(--sd-border)" }}>
-          <h2 className="sd-serif text-[14px] font-semibold" style={{ color: "var(--sd-fg)" }}>주간 리포트</h2>
+        <div className="px-4 py-3" style={{ borderBottom: "1px solid var(--color-border-subtle)" }}>
+          <h2 className="text-[14px] font-semibold" style={{ color: "var(--color-text-primary)" }}>주간 리포트</h2>
         </div>
 
         <div className="flex-1 space-y-3 overflow-y-auto p-4">
           <div>
-            <div className="mb-1 text-[11.5px] font-semibold" style={{ color: "var(--sd-fg)" }}>범위</div>
+            <div className="mb-1 text-[11.5px] font-semibold" style={{ color: "var(--color-text-primary)" }}>범위</div>
             <div className="flex flex-wrap gap-[3px]">
               {([["all", "전사"], ["mine", "내 담당"]] as const).map(([k, label]) => {
                 // vendor·pd 는 전사 범위를 못 본다(F9 scope).
@@ -135,7 +135,7 @@ export function WeeklyReportDialog({ onClose }: { onClose: () => void }) {
                   <button
                     key={k}
                     type="button"
-                    className={cn("sd-btn", scope === k && "sd-btn--on")}
+                    className={cn("px-3.5 py-1.5 rounded-full bg-[var(--color-bg-input)] hover:bg-[var(--color-bg-card-hover)] text-xs text-[var(--color-text-primary)] border border-[var(--color-border-subtle)] font-medium cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed", scope === k && "border-[#1C60FF] bg-[#1C60FF]/10")}
                     disabled={blocked}
                     title={blocked ? "전사 범위를 볼 권한이 없습니다" : undefined}
                     onClick={() => setScope(k)}
@@ -148,7 +148,7 @@ export function WeeklyReportDialog({ onClose }: { onClose: () => void }) {
           </div>
 
           <div>
-            <div className="mb-1 text-[11.5px] font-semibold" style={{ color: "var(--sd-fg)" }}>섹션</div>
+            <div className="mb-1 text-[11.5px] font-semibold" style={{ color: "var(--color-text-primary)" }}>섹션</div>
             <div className="flex flex-col gap-1.5">
               {SECTIONS.map((s) => {
                 const blocked = s.needsRevenue && !caps.revenue;
@@ -156,7 +156,7 @@ export function WeeklyReportDialog({ onClose }: { onClose: () => void }) {
                   <label
                     key={s.key}
                     className="flex items-start gap-2 text-[11.5px]"
-                    style={{ color: blocked ? "var(--sd-mut)" : "var(--sd-fg)" }}
+                    style={{ color: blocked ? "var(--color-text-muted)" : "var(--color-text-primary)" }}
                   >
                     <input
                       type="checkbox"
@@ -168,7 +168,7 @@ export function WeeklyReportDialog({ onClose }: { onClose: () => void }) {
                     <span>
                       {s.label}
                       {blocked && (
-                        <span style={{ color: "var(--sd-mut)" }}>
+                        <span style={{ color: "var(--color-text-muted)" }}>
                           {" "}— 수익 지표 권한이 없어 이 섹션은 빠집니다
                         </span>
                       )}
@@ -181,10 +181,10 @@ export function WeeklyReportDialog({ onClose }: { onClose: () => void }) {
 
           <div
             className="flex flex-col gap-1 rounded-[5px] p-3 text-[11.5px]"
-            style={{ background: "var(--sd-card-sub)", border: "1px solid var(--sd-border)" }}
+            style={{ background: "var(--color-bg-input)", border: "1px solid var(--color-border-subtle)" }}
           >
-            <div className="sd-eb" style={{ color: "var(--sd-label)" }}>이번 범위의 숫자</div>
-            <span style={{ color: "var(--sd-fg)" }}>
+            <div className="text-[11px] font-bold text-[var(--color-text-muted)]" style={{ color: "var(--color-text-muted)" }}>이번 범위의 숫자</div>
+            <span style={{ color: "var(--color-text-primary)" }}>
               프로그램 {inScope.length} (방영 중 {inScope.filter((p) => normalizeProgramStatus(p.status) === "airing").length})
               {" · "}회차 {scopedEpisodes.length}
               {" · "}미디어 {scopedClips.length}
@@ -192,18 +192,18 @@ export function WeeklyReportDialog({ onClose }: { onClose: () => void }) {
             </span>
           </div>
 
-          <p className="text-[11px] leading-relaxed" style={{ color: "var(--sd-mut)" }}>
-            <b style={{ color: "var(--sd-fg)" }}>자동 발송은 없습니다.</b> 누를 때만 만들어집니다.
-            리포트 <b style={{ color: "var(--sd-fg)" }}>파일 생성·전송은 아직 서버에 없어서</b>, 고른 섹션을
+          <p className="text-[11px] leading-relaxed" style={{ color: "var(--color-text-muted)" }}>
+            <b style={{ color: "var(--color-text-primary)" }}>자동 발송은 없습니다.</b> 누를 때만 만들어집니다.
+            리포트 <b style={{ color: "var(--color-text-primary)" }}>파일 생성·전송은 아직 서버에 없어서</b>, 고른 섹션을
             토스트 요약으로만 보여줍니다.
           </p>
         </div>
 
-        <div className="flex items-center justify-end gap-2 px-4 py-3" style={{ borderTop: "1px solid var(--sd-border)" }}>
-          <button type="button" className="sd-btn" onClick={onClose}>닫기</button>
+        <div className="flex items-center justify-end gap-2 px-4 py-3" style={{ borderTop: "1px solid var(--color-border-subtle)" }}>
+          <button type="button" className="px-3.5 py-1.5 rounded-full bg-[var(--color-bg-input)] hover:bg-[var(--color-bg-card-hover)] text-xs text-[var(--color-text-primary)] border border-[var(--color-border-subtle)] font-medium cursor-pointer transition-colors disabled:opacity-50 disabled:cursor-not-allowed" onClick={onClose}>닫기</button>
           <button
             type="button"
-            className="sd-btn sd-btn-primary"
+            className="px-3.5 py-1.5 rounded-full bg-[#1C60FF] hover:bg-[#0D1EB8] text-white text-xs font-bold border-none cursor-pointer transition-colors shadow-md shadow-[#1C60FF]/25 disabled:opacity-50 disabled:cursor-not-allowed"
             disabled={lines.length === 0}
             title={lines.length === 0 ? "섹션을 하나 이상 고르세요" : undefined}
             onClick={generate}

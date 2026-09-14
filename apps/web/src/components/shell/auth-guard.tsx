@@ -30,8 +30,8 @@ export function AuthGuard({ children }: { children: ReactNode }) {
   // 판정 전에는 아무것도 그리지 않는다. 잠깐 보였다 사라지는 화면이 더 헷갈린다.
   if (session.loading || needsLogin) {
     return (
-      <div className="grid min-h-screen place-items-center" style={{ background: "var(--sd-app-bg)" }}>
-        <span className="text-[12px]" style={{ color: "var(--sd-mut)" }}>
+      <div className="grid min-h-screen place-items-center" style={{ background: "var(--color-bg-input)" }}>
+        <span className="text-[12px]" style={{ color: "var(--color-text-muted)" }}>
           {session.loading ? "확인 중…" : "로그인 화면으로 이동합니다…"}
         </span>
       </div>
